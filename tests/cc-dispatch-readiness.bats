@@ -164,7 +164,7 @@ make_lib() {
   {
     echo 'set -uo pipefail'
     for f in now_iso die3 is_uint resolve_bin conf_repo project_repo \
-             ready_trunk_sha ready_last_sha ready_paths ready_moved ready_relabel \
+             ready_trunk_sha ready_last_sha ready_paths ready_moved ready_rule_moved ready_relabel \
              readiness_verdict idl idl_readiness ready_rate_pct venue_label_new; do
       extract "$src" "$f" || { echo "make_lib: $f not found in $src" >&2; return 1; }
     done
@@ -176,6 +176,7 @@ READY_GATE="\${CC_DISPATCH_READY_GATE:-advisory}"
 READY_MAX=6
 READY_CHECKED=0; READY_VOID=0; READY_UNKNOWN=0
 PROJECTS_CONF="\${CC_DISPATCH_PROJECTS_CONF}"
+VENUE_RULE_PATHS="\${CC_DISPATCH_VENUE_RULE_PATHS:-\$(printf 'bin/cc-venue\nbin/cc-eligible\nbin/cc-premise')}"
 _self="${src}"
 GLOBALS
   } > "$out"
@@ -494,4 +495,108 @@ NOW_TS() { date -u +%Y-%m-%dT%H:%M:%SZ; }
   # absence above is about the labeller, not about cc-venue being unreachable in this mode.
   [ "$(rec ' and .id=="new1" and .reason=="venue-unlabelled"')" -eq 1 ] || false
   grep -q '^label new1$' "$C/venue.log" || false
+}
+
+# ── THE RULE'S OWN LANDING AS AN INVALIDATION BASIS (cases 31-37) ─────────────────────────────────
+#
+# WHAT THESE EXIST FOR. Every arm above asks a question about the ITEM — does it cite anything, did
+# trunk move under what it cites. None asks about the VERDICT, and a classifier cannot reach its own
+# output through a per-item basis: a landed change to the producer moves no item's cited paths, so
+# the label it just replaced stays authoritative until `cc-venue run`'s 6 h timer happens to fire.
+#
+# MEASURED, not hypothesised. `fc7f4ac1` — question 1b, written so that an item whose DoD is on no
+# commit stops being promoted off-box — landed at 2026-08-25T01:18:11Z. Item 4ce239d21d67, the row
+# it was written for, was dispatched off-box AGAIN 3 h 04 m later still carrying the pre-fix `cloud`
+# label. The third such dispatch, and the second to be spent re-deriving a conclusion that already
+# existed. Chain: docs/research/venue-dod-offtrunk-2026-08-24.md § 7.
+#
+# CASE 34 IS THE ONE THIS SECTION EXISTS FOR — the ORDERING. The incident row's premise text cites
+# nothing (`dodRef` is folded to a separate field, cc-premise:500), so it short-circuits at
+# `cites-nothing`, which is deliberately NOT repairable. An arm placed below the path arms would be
+# unreachable for exactly the rows it was written to rescue. Case 32 is the per-site mutant, so a
+# green 31 credits the arm rather than the fixture (memory: per-site-mutation-attributes-coverage).
+
+@test "31 THE INCIDENT: a landing under the ROUTING RULE voids a settled label — and the repair re-derives it" {
+  lib "idl_readiness i1 ready '' $BASE0 proj"
+  land bin/cc-venue                                   # the producer itself changes on trunk
+  STUB_PATHS="bin/alpha.sh" run lib 'readiness_verdict i1 proj cloud ""'
+  [[ "$output" == void* ]] || false
+  [[ "$output" == *venue-rule-moved* ]] || false
+  grep -q '^label i1$' "$C/venue.log" || false        # …and re-running the producer IS the cure
+}
+
+@test "32 MUTANT for case 31: delete the arm and the same fixture keeps its stale label — the arm is what voids it" {
+  MUT="$C/mutant-rule.sh"
+  sed 's/elif ready_rule_moved "\$repo" "\$prior"; then/elif false; then/' "$LIB" > "$MUT"
+  ! cmp -s "$LIB" "$MUT" || { echo "mutation did not apply — the control is inert" >&2; false; }
+  lib "idl_readiness i1 ready '' $BASE0 proj"
+  land bin/cc-venue
+  STUB_PATHS="bin/alpha.sh" run bash -c "STUB_PATHS='bin/alpha.sh'; . '$MUT'; readiness_verdict i1 proj cloud ''"
+  [[ "$output" != *venue-rule-moved* ]] || false
+  [[ "$output" == ready* ]] || false                  # the pre-change reading: stale, and confident
+  [ ! -s "$C/venue.log" ] || false                    # no repair, so the cloud label survives
+}
+
+@test "33 SCOPED: a landing that is NOT under the rule does not convict — this is not 'trunk moved at all'" {
+  lib "idl_readiness i1 ready '' $BASE0 proj"
+  land scripts/other.sh
+  [ "$(git -C "$C/work" rev-parse origin/main)" != "$BASE0" ] || false   # trunk really did move
+  STUB_PATHS="bin/alpha.sh" run lib 'readiness_verdict i1 proj cloud ""'
+  [[ "$output" != *venue-rule-moved* ]] || false
+  [[ "$output" == ready* ]] || false
+}
+
+@test "34 THE ORDERING: the arm reaches a row whose path set is EMPTY — below cites-nothing it would be dead" {
+  # The incident row's exact shape: a settled label, and a premise text citing nothing at all.
+  lib "idl_readiness i1 ready '' $BASE0 proj"
+  land bin/cc-venue
+  STUB_PATHS="" run lib 'readiness_verdict i1 proj cloud ""'
+  [[ "$output" == *venue-rule-moved* ]] || false
+  [[ "$output" != *cites-nothing* ]] || false
+  grep -q '^label i1$' "$C/venue.log" || false
+  # …and case 15's guarantee is UNTOUCHED where the rule did not move: cites-nothing still wins,
+  # still unrepaired. The new arm did not launder the empty-set trap into a repairable state.
+  fresh; lib "idl_readiness i2 ready '' $(git -C "$C/work" rev-parse origin/main) proj"
+  STUB_PATHS="" run lib 'readiness_verdict i2 proj cloud ""'
+  [[ "$output" == *cites-nothing* ]] || false
+  [ ! -s "$C/venue.log" ] || false
+}
+
+@test "35 FAIL-OPEN: with no basis to measure against the arm does not convict — an unaskable question is not a verdict" {
+  land bin/cc-venue                                   # the rule moved, but this row has no prior
+  STUB_PATHS="bin/alpha.sh" run lib 'readiness_verdict i1 proj cloud ""'
+  [[ "$output" != *venue-rule-moved* ]] || false
+  [[ "$output" == *no-prior-verdict* ]] || false      # the incumbent self-repairing arm still owns it
+}
+
+@test "36 SELF-LIMITING: the repair advances the basis, so the next pass does not re-void on the same landing" {
+  lib "idl_readiness i1 ready '' $BASE0 proj"
+  land bin/cc-venue
+  STUB_PATHS="bin/alpha.sh" run lib 'readiness_verdict i1 proj cloud ""'
+  [[ "$output" == *venue-rule-moved* ]] || false
+  NEW="$(git -C "$C/work" rev-parse origin/main)"
+  [[ "$output" == *"$NEW"* ]] || false                # basis rolled to today — not a treadmill
+  # replay at the advanced basis: same landing, same rule, and now silent.
+  fresh; lib "idl_readiness i1 ready '' $NEW proj"
+  STUB_PATHS="bin/alpha.sh" run lib 'readiness_verdict i1 proj cloud ""'
+  [[ "$output" != *venue-rule-moved* ]] || false
+  [[ "$output" == ready* ]] || false
+}
+
+@test "37 the off switch must be SPELLED — the word off disarms the arm, an EMPTY value does not" {
+  # The asymmetry is the assertion. `off` and `''` differ by characters that are easy to type by
+  # accident, and only one of those accidents may be allowed to restore the stale-label bug — so the
+  # empty half falls back to the default and the guard survives it. Written after the first draft of
+  # this arm used `${VAR:-…}` while its own env doc promised "empty ⇒ never convicts": the two
+  # disagreed, and this case is what caught it.
+  lib "idl_readiness i1 ready '' $BASE0 proj"
+  land bin/cc-venue
+  STUB_PATHS="bin/alpha.sh" CC_DISPATCH_VENUE_RULE_PATHS=off run lib 'readiness_verdict i1 proj cloud ""'
+  [[ "$output" != *venue-rule-moved* ]] || false
+  STUB_PATHS="bin/alpha.sh" CC_DISPATCH_VENUE_RULE_PATHS="" run lib 'readiness_verdict i1 proj cloud ""'
+  [[ "$output" == *venue-rule-moved* ]] || false     # a stray empty assignment does NOT disarm it
+  # …and the SAME fixture convicts unconfigured, so the absence above is the switch and not a broken
+  # probe (memory: absence-alarm-needs-existence-evidence).
+  STUB_PATHS="bin/alpha.sh" run lib 'readiness_verdict i1 proj cloud ""'
+  [[ "$output" == *venue-rule-moved* ]] || false
 }
