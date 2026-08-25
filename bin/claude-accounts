@@ -137,6 +137,8 @@ concurrent callers (handoff waves, statuslines, sessions) produce one endpoint s
 both oauth endpoints rate-limit under load.
 """
 import fcntl
+import glob
+import gzip
 import json
 import os
 import random
@@ -1874,35 +1876,220 @@ def _su_projected(r, R):
     return min(1.0, su + b * ahead)
 
 
-def _util_tail(path=None, max_bytes=131072):
-    """Newest slice of the utilization series (record_utilization's product), parsed and
-    time-stamped. Bounded tail read so a long series never taxes a route; after a mid-file seek
-    the first line is dropped as a probable fragment. Stale rows (inherited/errored sweeps) are
-    dropped — a rate needs two MEASUREMENTS, not a measurement and an echo."""
+def _reset_key(stamp):
+    """Minute-ROUNDED reset-stamp key. The stamp jitters sub-second and STRADDLES the minute
+    boundary (measured second-of-minute over 4,000 records: 00:1880 · 59:1427 · 01:13 · 17:1),
+    so a string prefix or a truncation splits one window into two on 46.0% of adjacent pairs and
+    the roll branch then injects an ABSOLUTE level as a delta. Rounding flips on 1.0% and agrees
+    with ground truth (reset shift > 1 h) on 99 of 99. None means NO WINDOW OPEN — a distinct
+    state, not missing data (15.0% of rows; 1,789 of 1,790 have session_pct == 0)."""
+    if not stamp:
+        return None
+    try:
+        t = datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
+        return None
+    return round(t / 60.0)
+
+
+def _rolled(a, b, stamp_field, pct_field):
+    """True when the window between two samples RESET. Two independent witnesses, OR'd: the
+    rounded key changed, or the meter went backwards. Neither alone is sufficient — a key
+    comparison is blind to a same-key reset, and a pct decrease is blind to a reset that
+    lands on the same value. A None key never counts as a roll: no window open is a state."""
+    ka, kb = _reset_key(a.get(stamp_field)), _reset_key(b.get(stamp_field))
+    if ka is not None and kb is not None and ka != kb:
+        return True
+    pa, pb = a.get(pct_field), b.get(pct_field)
+    return pa is not None and pb is not None and pb < pa
+
+
+UTIL_TAIL_SEED_B = 131072       # first tail slice; doubled until the SPAN is covered
+UTIL_TAIL_MAX_B = 33554432      # 32 MiB — past the 25 MiB rotation bound, so never a real cap
+
+
+def _util_tail(path=None, hours=48.0, max_bytes=None):
+    """Newest `hours` of the utilization series (record_utilization's product), parsed and
+    time-stamped, as `(rows, achieved_span_h)`.
+
+    SELECTION IS BY TIME, NOT BY BYTES. The prior signature was `max_bytes=131072` and
+    `apply_burn` called it with no argument, so the span was whatever 128 KiB happened to buy:
+    against the live file (3,675,531 B, mean record 292.4 B) that is **407 rows spanning
+    12.16 h** while the docstring claimed 48 h, and M2's 48 h lookback was unreachable. The
+    coupling was undocumented and INVERTED — adding any field to the record silently SHORTENS
+    the window. The byte seek survives only as a cheap pre-filter, doubled until the requested
+    span is actually covered, so a record-size change can no longer move the window.
+
+    RETURNS THE ACHIEVED SPAN, and every consumer's abstain rule is written against it. A
+    consumer that asks for 48 h and receives 12 h must SEE 12 h and abstain on its own rule —
+    it must never be told it got 48 (L2: abstain, never impute).
+
+    Rotation: `config/store-bounds.manifest:47` rotates this file at 25 MiB and at 237 KiB/day
+    that lands ~2026-12-11. Readers that open only the live path would silently drop to a series
+    of length ~0 the day it rotates, so the `.gz` siblings are read newest-first until the
+    requested span is covered.
+
+    Stale rows (inherited/errored sweeps) are dropped — a rate needs two MEASUREMENTS, not a
+    measurement and an echo."""
     path = path or UTIL_PATH
+    cutoff = time.time() - max(0.0, hours) * 3600.0
+
+    def _parse(lines, out):
+        for ln in lines:
+            try:
+                e = json.loads(ln)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if e.get("stale"):
+                continue
+            try:
+                t = datetime.fromisoformat(str(e.get("ts")).replace("Z", "+00:00")).timestamp()
+            except (ValueError, TypeError):
+                continue
+            if t < cutoff:
+                continue
+            e["_t"] = t
+            out.append(e)
+
     out = []
     try:
         size = os.path.getsize(path)
-        with open(path) as f:
-            if size > max_bytes:
-                f.seek(size - max_bytes)
-                f.readline()
-            lines = f.readlines()
     except OSError:
-        return out
-    for ln in lines:
+        size = 0
+    if size:
+        want = max_bytes if isinstance(max_bytes, int) and max_bytes > 0 else UTIL_TAIL_SEED_B
+        while True:
+            rows = []
+            try:
+                with open(path) as f:
+                    if size > want:
+                        f.seek(size - want)
+                        f.readline()          # drop the probable fragment after a mid-file seek
+                    _parse(f.readlines(), rows)
+            except OSError:
+                rows = []
+            out = rows
+            # Covered when we either reached back past the cutoff or read the whole file. A
+            # FIXED byte cap cannot know which of those it hit; that is the defect being cured.
+            if want >= size or want >= UTIL_TAIL_MAX_B or max_bytes:
+                break
+            if rows and min(r["_t"] for r in rows) <= cutoff + 60:
+                break
+            want *= 2
+
+    # Still short of the requested span (or the live file is gone): walk the rotations.
+    if not out or min(r["_t"] for r in out) > cutoff + 60:
         try:
-            e = json.loads(ln)
-        except json.JSONDecodeError:
+            sibs = sorted(glob.glob(path + ".*"),
+                          key=lambda p: (os.path.getmtime(p), p), reverse=True)
+        except OSError:
+            sibs = []
+        for sib in sibs:
+            try:
+                if sib.endswith(".gz"):
+                    with gzip.open(sib, "rt") as f:
+                        _parse(f.readlines(), out)
+                else:
+                    with open(sib) as f:
+                        _parse(f.readlines(), out)
+            except (OSError, EOFError, UnicodeDecodeError):
+                continue
+            if out and min(r["_t"] for r in out) <= cutoff + 60:
+                break
+        out.sort(key=lambda e: e["_t"])
+
+    span = ((max(r["_t"] for r in out) - min(r["_t"] for r in out)) / 3600.0) if len(out) >= 2 else 0.0
+    return out, span
+
+
+K_FROZEN = 0.192              # pooled, 2026-08-10..25, n=11,026 pairs (Sds=4047, Sdw=779) -> 0.1925
+K_MIN_SDS = 300.0             # session pp of movement below which the trailing fit is too thin
+K_SANE = (0.175, 0.210)       # outside this the PLAN changed (or the meter did) -> abstain
+
+
+def exchange_rate(samples, hours=168.0):
+    """weekly pp per session pp, fitted on the trailing window. Ratio-of-sums over adjacent
+    non-rolling pairs (dt <= 0.5 h) -- NEVER a mean-of-ratios (quantization biases that upward at
+    small windows: 0.158 below 5 session pp vs 0.192 above 30) and NEVER binned by burn intensity
+    (that is K's own denominator; a simulation with K exactly 0.192 reproduces the whole apparent
+    trend). Returns (K, sum_ds, 'live'|'frozen'|None).
+
+    WHY IT IS FITTED AND NOT A LITERAL. Re-fitting on trailing slices already reads 0.2000
+    (from 08-21) and 0.2012 (from 08-22), ABOVE the shipped band's 0.198 ceiling, on Sds of
+    1,350 and 1,019. A permutation test on the late-vs-early difference gives p = 0.0948 — so it
+    is not proven to be a real change, and a FROZEN literal has no path to learn that it became
+    one. Abstaining outside K_SANE is the only reading that stays honest under both hypotheses:
+    a silently widened band launders a plan change into a number."""
+    now = time.time()
+    cutoff = now - max(0.0, hours) * 3600.0
+    by = {}
+    for e in samples or []:
+        if e.get("_t") is not None and e["_t"] >= cutoff:
+            by.setdefault(e.get("acct"), []).append(e)
+    sum_ds = sum_dw = 0.0
+    for ss in by.values():
+        ss = sorted(ss, key=lambda e: e["_t"])
+        for a, b in zip(ss, ss[1:]):
+            dh = (b["_t"] - a["_t"]) / 3600.0
+            if not (0 < dh <= 0.5):
+                continue
+            if _rolled(a, b, "session_reset_at", "session_pct"):
+                continue
+            if _rolled(a, b, "weekly_reset_at", "weekly_pct"):
+                continue
+            sp_a, sp_b = a.get("session_pct"), b.get("session_pct")
+            wp_a, wp_b = a.get("weekly_pct"), b.get("weekly_pct")
+            if None in (sp_a, sp_b, wp_a, wp_b):
+                continue
+            ds, dw = sp_b - sp_a, wp_b - wp_a
+            if ds < 0 or dw < 0:
+                continue
+            sum_ds += ds
+            sum_dw += dw
+    if sum_ds < K_MIN_SDS:
+        return K_FROZEN, sum_ds, "frozen"
+    k = sum_dw / sum_ds
+    if not (K_SANE[0] <= k <= K_SANE[1]):
+        return None, sum_ds, None
+    return k, sum_ds, "live"
+
+
+WEEKLY_TAIL_GAP_H = 3.0       # a window is "observed to its end" only if a sample lands this close
+
+
+def completed_weekly_windows(samples, now=None):
+    """Every weekly window in the series that has actually CLOSED and was observed to its close.
+
+    Two conditions, and the second one is the whole point: the reset must be in the PAST, and the
+    last sample must land within WEEKLY_TAIL_GAP_H of it. The synthesis's rule was the gap alone,
+    which ADMITS THE CURRENTLY-LIVE WINDOW — a live window's newest sample is always some hours
+    before its own reset. Measured at 2026-08-25T09:47:41Z the naive rule reported 51 pp over 9
+    account-weeks (admitting next3's live window at 92%); the fixed rule reports 43 pp over 8,
+    which is the baseline every weekly figure in USAGE_TELEMETRY_100P §5 rests on.
+
+    The class is `gap-IS-the-mechanism`: a detector for "the window ended" that fires DURING the
+    window. n = 8 is the binding limit on every weekly-side figure; it grows ~3.7/week."""
+    now = time.time() if now is None else now
+    by = {}
+    for e in samples or []:
+        if e.get("_t") is None or e.get("weekly_pct") is None:
             continue
-        if e.get("stale"):
+        key = _reset_key(e.get("weekly_reset_at"))
+        if key is None:
+            continue                      # no window open is a state, not a window
+        by.setdefault((e.get("acct"), key), []).append(e)
+    out = []
+    for (acct, key), ss in by.items():
+        reset_t = key * 60.0
+        if reset_t >= now:                # LIVE window — its reset has not happened yet
             continue
-        try:
-            t = datetime.fromisoformat(str(e.get("ts")).replace("Z", "+00:00")).timestamp()
-        except (ValueError, TypeError):
-            continue
-        e["_t"] = t
-        out.append(e)
+        last = max(ss, key=lambda e: e["_t"])
+        gap = reset_t - last["_t"]
+        if not (0 <= gap <= WEEKLY_TAIL_GAP_H * 3600.0):
+            continue                      # the series lost the window before it closed
+        out.append({"acct": acct, "reset_t": reset_t, "final_pct": last["weekly_pct"],
+                    "strand": max(0.0, 100.0 - last["weekly_pct"])})
+    out.sort(key=lambda w: w["reset_t"])
     return out
 
 
@@ -1915,7 +2102,7 @@ def apply_burn(rows, cfg, samples=None):
     A negative delta is a window that ROLLED between samples — a reset crossing, not negative
     burn — and reads as unknown. Fail-soft: a thin series leaves the fields absent, which is
     bit-for-bit the pre-M7 behavior."""
-    samples = _util_tail() if samples is None else samples
+    samples = _util_tail()[0] if samples is None else samples
     if not samples:
         return
     now = time.time()
@@ -1939,7 +2126,18 @@ def apply_burn(rows, cfg, samples=None):
         wk = [e for e in ss
               if now - e["_t"] <= 48.0 * 3600 and e.get("weekly_pct") is not None]
         if len(wk) >= 2:
-            a, b = wk[0], wk[-1]
+            # ROLL-AWARE ANCHOR, and it lands in the SAME change as _util_tail's time selection
+            # by necessity, not by preference. The widest-pair form takes wk[0] as its anchor;
+            # while the byte cap held the series to ~12 h that pair rarely straddled a weekly
+            # reset, but at a TRUE 48 h span it straddles one for the whole first stretch of
+            # every weekly window, `d < 0` leaves the field absent, and the estimator goes blind
+            # exactly when the week's plan is set. Restoring the span alone is therefore a
+            # REGRESSION (§5.5). Walking the anchor forward to the newest roll shortens the
+            # window instead of discarding it: the same estimator, over the post-roll segment.
+            i = len(wk) - 1
+            while i > 0 and not _rolled(wk[i - 1], wk[i], "weekly_reset_at", "weekly_pct"):
+                i -= 1
+            a, b = wk[i], wk[-1]
             dh = (b["_t"] - a["_t"]) / 3600.0
             if dh >= 6.0:
                 d = b["weekly_pct"] - a["weekly_pct"]
