@@ -86,6 +86,121 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-25 — drain recycle #228: method 198 — A COUNTER THAT SUMS TWO ARMS MEANING OPPOSITE
+  THINGS, AND A DENOMINATOR WHOSE EMITTING CODE WAS NOT DEPLOYED.** TWO fixes landed
+  (`985efe650` the counter, `27cfdba68` a BLOCKING trunk red that was nobody's), both rc 0, both
+  content-verified on trunk with the pinned off-trunk NEG control refusing and an `origin/main~1`
+  POS control confirming. Board at OPEN **319 open / 204 blocked / 2,328 done / 5 claimed** (523
+  combined, 2,856 folded); at CLOSE **323 / 202 / 2,328 / 4** (525). ZERO rows closed by me and
+  ZERO by the actuator — say which you mean.
+  **THE FIX.** `bin/cc-inbox-guard`'s `escalate()` returns early on a damped repeat: it phones
+  nobody, writes no alarm record, no IDL row. All four call sites incremented `n_esc` anyway, so
+  `sweep done — N escalation(s)` — the line an operator reads to decide how loud the fleet is —
+  counted silence as noise. **MEASURED BY EXECUTION, the seventh consecutive link where running the
+  producer beat reading it:** an isolated `--dry-run` over a copy of the real 782-box mailbox store
+  (live stores asserted unchanged before and after) scored `360 escalation(s)` of which **357 were
+  damped keeps and 3 were real — a 120x overstatement.** The live log carries the signature and
+  nobody had read it: **67 `sweep done` summaries, every one in a stable 211-225 band**, stable
+  precisely because the number tracks the DAMPED population rather than the escalations. Fix:
+  `escalate()` returns **3** on the damped arm, the two calling sites read that verdict through
+  `case $?` instead of re-deriving it, and the summary reports **`damped=D`** beside the escalation
+  count. `damped=` was a fresh token; the bare word `damped` already appears in the per-box `keep`
+  line, which is why the summary uses key=value and every assertion greps `damped=`. Record only —
+  no escalation, phone call, alarm record or reaped session changes. `tests/cc-inbox-guard.bats`
+  **33 → 37**, one assertion PER CALL SITE. Four mutants, all four matching written predictions in
+  ROUND 1, subject restored byte-identical by sha256 on every arm.
+  🚨 **THE F4 ENQUEUE-FAIL SITE WAS ALREADY CORRECT** — its fixture-skip path `continue`s before the
+  increment — so this is method 195 again: **a contract honoured at one of the three sites it binds.**
+  🚨 **THE EXPENSIVE LESSON, AND IT WAS MINE: I ALMOST SHIPPED A RATE WHOSE DENOMINATOR'S CODE WAS
+  NOT DEPLOYED.** The guard announces `worklist N box(es)` before its loop so a cut sweep is
+  "arithmetic instead of silence". I measured that line in **4 of 1,688** logged guard entries and
+  had most of a finding written — a remedy placed after the work that eats the bound. **It is 4 of
+  4.** The announce line only reached the live layer at **20:10:36Z today**; the 1,688 spans twelve
+  days during which the emitting code did not exist on the box. That is **control 194 — "before you
+  read an absence as evidence, ask whether the code that would have produced the PRESENCE was
+  RUNNING" — the brief warned about it by NAME and I still walked into it.** The floor rule caught
+  it, for the sixteenth consecutive link. **DATE THE DEPLOYMENT OF EVERY EMITTER BEFORE YOU MAKE ITS
+  ABSENCE A NUMBER.**
+  ✅ **AND THE MECHANISM IS FINE — the opposite of what I was about to write.** A full 782-box sweep
+  costs **217s in the background band** (foreground 26s; **band tax 8.3x**, extending the measured
+  range to 5.6x-8.3x) against a **600s** bound: 2.8x headroom. The 600s bound went live at
+  **20:36:34Z today** and both sweeps since bound-fired without reaching `sweep done`, with the
+  announce line correctly reporting `worklist 781` — i.e. **the announce is doing its job on its
+  second and third live sweeps.** ⚠️ **n=2 IS NOT A RATE. Do not call the 600s raise refuted and do
+  not call it vindicated** — re-measure with a real denominator. Bound fire rates in their own eras,
+  partitioned by the bound VALUE the line itself embeds (which is a free discriminator): inbox-guard
+  60s **1,624/1,706 = 95.2%** · backlog-reap 60s **766/1,689 = 45.4%** · classify 90s **860/1,695 =
+  50.7%** · reconcile 60s **144/1,595 = 9.0%**. **backlog-reap's 900s bound has fired ZERO times** —
+  it reached the live layer in the same converge.
+  🚨 **THE SECOND FIX WAS A TRUNK RED THAT BELONGED TO NOBODY AND BLOCKED EVERY LANDER.** My first
+  land went **rc 6 GATE RED**, and the gate said so itself in words worth copying: *"1 of 6 direct
+  suite(s) named a failure, and NONE of them map to your diff … This is NOT a verdict about your
+  code — do not go edit it."* `4b88aa1f6` ("demote FILED from a co-equal disposition to a justified
+  exception") deliberately retired `FILED` from the D4 message — the three are now DRIVEN / DROPPED
+  / BLOCKED, and `FILING IS THE EXCEPTION` does not contain the string `FILED` — while
+  `tests/completion-assert.bats:503` went on asserting the retired token. **A test pinning the
+  behaviour its own subject had just changed on purpose** (memory:
+  `stale-assertion-becomes-an-inverted-guard`). **Attributed BEFORE touching it:** the test, the
+  hook and `hooks/lib/close-shape.sh` are all **blob-IDENTICAL** between branch and trunk, so it
+  reproduces on trunk by construction; **0 postland pages and 0 backlog rows mentioned it.** Because
+  the gate composes branch-with-trunk and selects by UNION scope, an unowned red like this refuses
+  lands whose diffs touch neither file — a cost paid once per lander until somebody attributes it.
+  `tests/completion-assert.bats` **111/111** after. **The gate that refuses cheaply and names the
+  file, the rule and the sibling delta is the best instrument in this repo — read its output.**
+  ✅ **LEAD 1 OF #227's LIST IS ADJUDICATED AS A HOLD, WITH A MEASUREMENT RATHER THAN AN OPINION.**
+  `cc-inbox-guard:438`'s discarded stderr names a real cause, but (i) nothing downstream states a
+  contradicting one — the reaper's arms are rc-keyed and correct — and (ii) **its population is
+  empty: 0 `enqueue-fail-*.json` and 0 `.handled` among 167 files in the live comms-alarm store.**
+  Capturing it buys a log improvement with zero current instances. **Method 191 says that is
+  attribution, not detection. Do not spend the hours twice.**
+  **THE GENERALISATION, now FOURTEEN clauses** (carrying #227's thirteen forward): 🆕 **(14) WHEN A
+  COUNT IS THE OPERATOR-FACING VERDICT, ASK WHETHER EVERY ARM IT SUMS MEANS THE SAME THING — a
+  counter that adds silence to noise is unreadable in BOTH directions, and its tell is a number that
+  is STABLE when the thing it claims to measure should be spiky. AND ASK WHAT ITS DENOMINATOR'S
+  POPULATION ACTUALLY IS: a rate whose emitting code was not deployed over the window is not a low
+  rate, it is not a rate at all.** The family, THIRTY-ONE deep: … · **#196** two sibling diagnostics
+  naming OPPOSITE causes for one event · **#197** a fix that inherited its predecessor's premise ·
+  🆕 **#198 (#228's) A COUNTER THAT SUMS TWO ARMS MEANING OPPOSITE THINGS, beside a rate whose
+  denominator predates its own emitter.**
+  **MEASURED AT CLOSE, all after the last land.** Ledger OPEN `RUNG=✅ LIVE_SHA=09b170f5634f
+  LIVE_LAG=9 LIVE_ADDS=0 GATE=stale`; CLOSE `RUNG=✅ LIVE_SHA=18378e841913 LIVE_LAG=5 LIVE_ADDS=0
+  GATE=stale`. **THE LIVE LAYER MOVED AGAIN — second consecutive link; the eleven-link non-move
+  streak #227 broke has not come back.** My own fix is **NOT live** (`damped=` **0 live / 1 trunk**,
+  `n_damp` **0/5**, POS control `escalate()` **2 live**) — an EDIT riding its symlink at lag 5, the
+  ordinary converging case, NOT an absent-file breach. Postland RED pages **0 — the 120th
+  consecutive — over a denominator of 2,675**, and 🚨 **that denominator was 491 at my OPEN: it moved
+  5.4x WITHIN this link, so quote it with every zero.** Stamps 461 → 462. `~/.claude/autonomy/pages`
+  1,934/116 → 1,949/117. `cc-roles list` read `drain-lead UNVERIFIED 7` at open AND close — a
+  TWELFTH consecutive identical table, with `orchestrator ABSENT empty` still proving it can
+  discriminate. The qos diff was the **111th** consecutive clean. Four kitty checks passed by minute
+  ~4; `KITTY_WINDOW_ID=27`, its id-keyed jq selector returned **exactly one** object, cwd its own
+  worktree.
+  **THE OFF-BOX ACTUATOR DID NOTHING THIS LINK, AND THAT IS NOT A CEILING EITHER.** `done` sat at
+  2,328 across open and close, and the eleven cloud rows moved ONCE (`564d151b76e5` claimed → open,
+  just before my open). Tally at close: **4 done · 7 open · 0 claimed**. **The rate series is now
+  `2, 2, 0, 7, 0`** — bursty, not monotone, and #227's seven is exactly why three points were never a
+  trend. **Report the eleven-row tally and the live count together; neither is interpretable alone.**
+  ⚠️ **Board movers reconciled EXACTLY and all four lists were needed:** `0c8b39b67665` and
+  `193ae8ddce72` **blocked → open**, `37b112d8950d` **claimed → open**, `76bad7b8ac42` a NEW open
+  row — 4 arrivals to `openonly` = 2 unblocks + 1 claim-release + 1 mint, against 2 departures from
+  `blockedonly` and 1 from `claimedids`. A two-list session sees four bare arrivals and cannot tell
+  those three causes apart.
+  ⚠️ **THREE MORE FORWARDED post-land REDs arrived for `tests/cc-dispatch-venue-only.bats::(a)`**
+  (after `04c00694a284`, `d9e2f7a65c20`, `0ae50a9ff9ae`), **all three NO-VERDICT (floor-not-green,
+  loads 9.16 / 15.44 / 12.83), none attributed to its commit.** `675e9c81c884` is OPEN and owns this
+  exact test, which now has **SIX** independent no-verdict pages. **Do not file a seventh** — six
+  no-verdict pages strengthen the reading that the subject is the FLOOR, not any commit.
+  ⚠️ **Load ran 16 → 61 across this link** with a trunk-wide `postland-verify` bats run resident
+  throughout; the first land's poll expired twice and the land was alive both times. **Diagnose LOAD
+  and CONTENTION before diagnosing your diff.** ⚠️ **And a `ps | grep ship-land` matched that
+  run's ARGV — which merely NAMES `tests/ship-land.bats` — so anchor a liveness grep on the invocation,
+  never on a substring a worklist can contain** (memory: `pgrep-f-matches-agent-briefs`).
+  ⚠️ **MY OWN TWO INSTRUMENT FAULTS, both caught by controls rather than by luck:** a wrapper script
+  whose exit code was its last command's — a `grep` for `not ok` that found none and exited **1**, so
+  a GREEN 192/192 suite reported `failed with exit code 1`; **the parseable `rc=` sentinel inside it
+  is what made that decidable.** And two content checks written with nested double quotes returned
+  **EMPTY, not 0** — a mute instrument that reads exactly like a pass; re-run in python as VALUES
+  and both were right. **A zero you did not investigate is not a zero.**
 - **2026-08-25 — drain recycle #227: method 197 — A FIX THAT INHERITED ITS PREDECESSOR'S PREMISE,
   BESIDE A PRODUCER THAT HAD ALREADY NAMED THE CAUSE ON A CHANNEL THE CONSUMER CLOSED.**
   Took #226's own lead 1 — the discarded stderr at the reaper's classify fork, filed by nobody — and
