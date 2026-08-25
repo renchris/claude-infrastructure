@@ -5,249 +5,343 @@ non-net-positive against a moved-on HEAD, (b) whether the 24/7 local and cloud d
 progress to zero or are a treadmill, and (c) whether a days/weeks/one-month timeline to zero is
 reachable.
 
----
-
-## THE ANSWER
-
-**The pool is 6–8 days of work, and it has not shrunk in 18 days.** Drain *capacity* was never the
-constraint — at the measured completion rate the entire 494-item pool clears in 6.3 days (14-day
-rate) or 8.4 days (7-day rate), and the agent-actionable part in 3.8–5.0 days. It does not clear
-because the machine files new work at almost exactly the rate it completes work, and **80% of what
-it files is about its own machinery**.
-
-So: the operator's worry (b) is **confirmed, and it is structural, not a matter of effort**. Worry
-(a) — staleness — is **real as exposure but is not the binding constraint**; the binding constraint
-is the arrival rate. A days-to-weeks timeline is reachable, but only by changing what gets filed,
-not by draining harder.
+**Method.** Direct folds of `~/.claude/autonomy/backlog.jsonl` (14,249 records, 0 malformed) plus a
+23-agent fan-out (12 recon axes → 10 adversarial verifiers → synthesis; 4.07 M tokens). Every
+verified claim was attacked by a fresh-context verifier whose default was REFUTED. **Ten of ten
+survived-into-verification claims were refuted or re-scoped** — §7 records them, because those
+failures are the most useful part of this document.
 
 ---
 
-## The measurements
+## 1. THE ANSWER
 
-All from `~/.claude/autonomy/backlog.jsonl` (14,173 records, 0 malformed, 2,781 distinct ids,
-2026-07-18 → 2026-08-25) and `git` on this checkout. Scripts:
-`scratchpad/{fold,trend,drift}.py` (this session).
+**Roughly half the drain's output is not net-positive: 40–55% of the 2,294 closures match a verbatim
+no-op disposition (already-landed, auto-retracted, duplicate, refuted, superseded).** And the
+operator's staleness intuition is confirmed as a **dose-response** — a row closed after a week is
+closed as premise-dead 23.4% of the time versus 4.2% under a day.
 
-### Fold — the current state
+**It is not converging, and the honest word is *unmeasurable*, not *slow*:** the pool's trend slope
+flips sign with the fitting window (+12.95/day over 30 d, −4.68/day over 14 d, +14.21/day over 7 d).
+The agent-facing board specifically sat at **287 ± 38 for 19 days while 1,635 items were closed
+inside it** — sixteen hundred closures moved the actionable board **+40, in the wrong direction**.
 
-State is the fold of the `event` field, last transition wins:
-
-| state | count |
-|---|---|
-| done | 2,288 |
-| open | 291 |
-| blocked | 197 |
-| claimed | 6 |
-| **NOT-DONE** | **494** |
-
-Event totals: `add` 2,781 · `claim` 2,779 · `done` 2,441 · `block` 1,784 · `reopen` 1,764 ·
-`venue` 934 · `link` 837 · `falsify` 403 · `unblock` 395 · `update` 55.
-
-⚠️ **`reopen` is lease churn, not rework.** 1,764 reopen events looks like massive re-do, but only
-**17 ids** were ever `done` and later reopened. `reopen` is what a lease release emits when a claim
-expires without completion. Anyone reading 1,764/2,441 as a rework rate has mis-folded the ledger.
-
-### Worry (b), THE TREADMILL — confirmed by an experiment the system already ran on itself
-
-The pool has been flat since Aug 7:
-
-| date | NOT-DONE | done (cum) |
-|---|---|---|
-| Aug 7 | 405 | 857 |
-| Aug 9 | **460** | 1,020 |
-| Aug 11 | 515 | 1,363 |
-| Aug 12 | 541 | 1,430 |
-| Aug 16 | 445 | 1,767 |
-| Aug 18 | 403 | 1,965 |
-| Aug 23 | 508 | 2,206 |
-| **Aug 25** | **494** | **2,288** |
-
-**The experiment.** On 2026-08-09 the pool stood at exactly **460**. A full-corpus triage ran against
-precisely that population — `docs/plans/backlog-consolidation-2026-08-09/verdicts.json` holds exactly
-**460** verdicts (task #152 names "all 460 open items"). Its dispositions:
-
-| verdict | n | share |
-|---|---|---|
-| KEEP | 220 | 47.8% |
-| PRUNE | 117 | 25.4% |
-| UPDATE | 78 | 17.0% |
-| MERGE | 45 | 9.8% |
-
-**It was applied** — all 117 PRUNE and all 45 MERGE ids fold to `done` in the ledger today (verified;
-0 of the 460 ids are missing from the ledger). So 162 items (35.2% of the entire pool) were disposed
-of as work that should never have been done.
-
-**Sixteen days and 1,268 completions later the pool is 494 — larger than the 460 it started from.**
-
-That is the answer to worry (b), and it is not a projection: the single most aggressive intervention
-available (triage the whole corpus, prune a third of it) was executed in full and bought nothing.
-A pool that returns to its starting size after being cut by 35% is not draining.
-
-**Rates.** The two windows disagree in *sign*, which is itself the finding:
-
-| window | adds/day | dones/day | net |
-|---|---|---|---|
-| last 14 days | 74.1 | 78.5 | −62 |
-| last 7 days | 62.9 | 59.0 | **+27** |
-
-No convergence is measurable. Any time-to-zero quoted from the 14-day window is noise at the 7-day
-window, where the pool *grows*.
-
-### Why the rates match: filing is coupled to draining by construction
-
-`bin/cc-backlog:5821` — **"S5 KICK-ON-WRITE"**:
-
-> `add` is the ONLY moment new work enters the ledger, so the writer kicking one decision pass is
-> what removes the average wait from the 5-minute decision bound.
-
-**Filing an item fires a dispatch pass that starts a session to work it.** The loop closes: a drain
-session works an item → discovers defects in the machinery while working → files them → each filing
-kicks the dispatcher → more sessions → more discoveries. Arrival rate and completion rate are not
-independent quantities that happen to be equal; they are mechanically coupled. Kill switch exists:
-`CC_BACKLOG_KICK=off`.
-
-### What is being filed: the machine maintaining the machine
-
-| measure | share of adds |
-|---|---|
-| `project == claude-infrastructure` (filer's own label — the honest floor) | 1,782 / 2,782 = **64.1%** |
-| title matches agent-machinery vocabulary, last 7 days | 355 / 441 = **80.5%** |
-| title matches agent-machinery vocabulary, last 14 days | 885 / 1,038 = **85.3%** |
-
-The keyword regex is broad and over-matches; the project label is the conservative instrument. Both
-agree in direction: **the large majority of filed work is the agent infrastructure repairing itself**,
-not work with a consumer outside this machine.
-
-The `add` sources make the generator structure visible:
-
-| source | n | what it is |
-|---|---|---|
-| `needs` | 711 | operator-owned steps filed at session close |
-| `plan-open` | 458 | harvested from open plan-doc sections |
-| *(blank)* | 338 | **the drain sessions' own discoveries** |
-| `postland-verify` | 129 | daemon |
-| `desk-observed` | 43 | daemon |
-| everything else | ~1,100 | one-off session ids |
-
-The blank-source bucket is the self-feeding one, and it is **accelerating**: 0–1 filings/day around
-Aug 14–16, rising to 34 on Aug 23 and 16 on Aug 24. Sampled titles from the Aug 24–25 overnight run
-are all about the drain apparatus itself — *"THE DRAIN CHAIN'S SUCCESSION ARTIFACT LIVES IN /tmp,
-WHICH A REBOOT WIPES"*, *"THE SUCCESSION BRIEF HAS OUTGROWN THE ARGV PATH THAT handoff-fire ITSELF
-COMPOSES"*, *"unattended-path-lint's launchd half SILENTLY EXEMPTS 2 of 26 shipped plists"*.
-
-### Worry (a), STALENESS — real exposure, not the binding constraint
-
-**Latency, add → first done** (n = 2,296):
-
-| p50 | p75 | p90 | p95 | p99 | max |
-|---|---|---|---|---|---|
-| 13.5 h | 108 h | 223 h (9.3 d) | 313 h | 464 h | 758 h (31.6 d) |
-
-45.1% of completions took >24 h; 31.1% >72 h; 15.9% >1 week.
-
-**Tree movement during that window.** `origin/main` took 3,439 commits in the 40-day period (~86/day),
-so the drift per item is large:
-
-| commits landing between filing and completion | |
-|---|---|
-| p25 | 2 |
-| p50 | **61** |
-| p75 | 450 |
-| p90 | 885 |
-| p99 | 1,822 |
-| max | 2,912 |
-
-Only **5.8%** of completed items completed against an unchanged tree. 45.4% completed after >100
-commits had landed; 39.1% after >200.
-
-This confirms the operator's *exposure* claim exactly. It does **not** by itself establish harm — an
-item survives 885 commits if none of them touched its subject, and the ledger has a `falsify` verb
-(403 events) that attaches a re-run probe and refuses to store a probe that already exits 0. Whether
-that mechanism actually covers the open pool is the one thing the fan-out is still measuring; it is
-recorded as an open question below rather than asserted.
-
-**The reason staleness is not the binding constraint:** even if every stale item were free to
-complete, the pool would still not shrink, because the arrival rate would be unchanged. Staleness
-raises the *cost per item*; the arrival rate sets the *destination*.
-
-### The floor: 197 blocked rows, 184 with no recorded reason
-
-| | |
-|---|---|
-| blocked | 197 |
-| age since block: p50 / p90 / max | 7 d / 17 d / 36 d |
-| blocked >7 d | 52 |
-| blocked >14 d | 31 |
-| **blocker reason unrecorded** | **184 of 197 (93.4%)** |
-| blocked by `cc-backlog-reap` (machine, not a human gate) | 13 |
-
-Open-item ages, for comparison: p50 4 d, p90 15 d, max 34 d; 99 open >7 d, 41 open >14 d.
-
-93.4% of blocked rows record no blocker. A premise that was never written down cannot be
-re-validated, so these rows can only ever be re-read by a human — this is the repo's own
-*"stale ask outlives premise"* lesson realised at scale.
-
-### Cloud lane yield: 79 commits stranded off trunk
-
-Task #174 currently reads *"Recover the 153 stranded cloud commits across 113 claude/fire-* branches"*
-— that is the **commit-count** oracle, and it overstates, because a rebasing land rewrites objects so
-`rev-list origin/main..<branch>` counts content that did land.
-
-Re-measured by **content** (patch-id against the last 6,000 trunk commits, 3,615 distinct patch-ids):
-
-| | branches | commits |
-|---|---|---|
-| scanned (`origin/claude/*`, `origin/fire-*`) | 114 | — |
-| fully landed by content | 8 | — |
-| unlanded by content — **Aug 24–25, still in flight** | 38 | 55 |
-| unlanded by content — **older, genuinely stranded** | **68** | **79** |
-
-So the real stranded figure is **79 commits across 68 branches**, not 153/113. It is still a direct
-net-positivity loss: cloud sessions that ran, produced commits, and whose value never reached trunk.
-
-### Time to zero if filing stopped
-
-| completion rate | agent-actionable (297) | full pool (494) |
-|---|---|---|
-| 78.5/day (14-day) | **3.8 days** | **6.3 days** |
-| 59.0/day (7-day) | **5.0 days** | **8.4 days** |
-
-This is the number that reframes the whole question. **The backlog is not large.** It is a bit over a
-week of work at the throughput the machine already demonstrates. It only looks like a forever-thing
-because roughly 70 items/day are added while roughly 70 items/day are completed.
+**Days/weeks/a-month is NOT reachable for "the backlog" as one number, and no intervention makes it
+so.** It becomes reachable only by splitting the board: the **303 agent-reachable rows can plausibly
+hit zero by mid-to-late September**; the **198 blocked rows have no agent path at all** and will sit
+until the operator spends 3–7 sittings on them.
 
 ---
 
-## Open questions the fan-out is still measuring
+## 2. Worry (a) — STALENESS
 
-These are recorded as unknown rather than guessed:
+**VERDICT: REAL and dose-responsive. It degrades the value of a completion; it usually does not
+destroy the target.**
 
-- **Falsifier coverage.** 403 `falsify` events exist; how many *currently open* rows carry a probe is
-  not yet measured. This decides whether staleness is mitigated or merely nameable.
-- **Boundedness of `needs` and `plan-open`** (1,169 adds between them). If the plan corpus keeps
-  growing, `plan-open` never exhausts.
-- **How much of the 494 is duplicate or already-fixed-but-still-open.** The Aug 9 triage found 35.2%
-  PRUNE/MERGE; if that rate still holds, ~174 of today's pool is not real work.
-- **Whether cloud runs bill the same weekly meter** (task #175, open).
+### The number that settles it
+
+Refutation rate at close by residence time, over all 2,294 completed rows (strict regex, uppercase
+verdict tokens only):
+
+| residence time | n | closed as premise-dead | rate |
+|---|---:|---:|---:|
+| < 24 h | 1,261 | 53 | **4.2%** |
+| 24–72 h | 321 | 30 | **9.3%** |
+| 72–168 h | 348 | 42 | **12.1%** |
+| > 168 h (1 week) | 364 | 85 | **23.4%** |
+
+Monotone, **5.6× across the range**. A wider regex gives 19.3% → 38.5%, still monotone. Only 68 of
+2,294 closures are unclassifiable, so the instrument is not blind.
+
+**Staleness = (tree velocity) × (queue residence). Tree velocity is exogenous; residence is ours.**
+`cc-backlog freshness` reports p50 **415 commits** of trunk movement since filing across the 501 live
+rows (max 3,253). Independent check on completed rows: commits landing between filing and completion
+run p50 61 / p90 885 / max 2,912, with only **5.8% completing against an unchanged tree**.
+
+### The live pool is already in the expensive band
+
+Age of the 501 live rows: p50 5.8 d, p90 17.9 d, max 36.3 d. **230 rows (45.9%) are already older
+than 7 days**; 119 (23.8%) older than 14. Applying the measured >168 h rate projects **~54 (strict)
+to ~89 (wide) rows that will close as premise-dead rather than fixed** — a projection from closed
+rows, not a measurement of live ones (§7).
+
+### The mitigation is built and 91% unapplied
+
+`cc-backlog freshness` reads **`never validated: 457 of 501 live rows`**. Only 47 live rows carry a
+falsifier probe at all. When the sweep does run it works: the 2026-08-24T07:59Z pass marked 4 rows
+falsified and all 4 closed within 3 minutes. **This is a scheduling problem, not a design problem.**
+
+### What refutes the strong form
+
+The ticket usually still points at a real artifact. All 20 sampled files from the >72 h population
+still exist at HEAD (20/20). Of 291 file:line anchors, only **6.1% had vanished** at claim time;
+58.8% had merely **moved within the same file**. **The line number and the premise rot; the file does
+not** — so a stale row is usually cheap to revalidate, which is exactly why L1 below is the top
+intervention.
+
+The sharpest instance is recorded in the repo's own code, `scripts/ship-land.sh:1020-1024`: *"censused
+2026-08-12, 24 of the 25 `re-land …` rows … were false — the work had landed under a different sha —
+and actioning four of them would have REVERTED trunk."*
 
 ---
 
-## What follows
+## 3. Worry (b) — TREADMILL and NET-POSITIVITY
 
-The intervention that matches the diagnosis is **admission control, not more throughput**. Ranked by
-effect per unit of effort, with the arithmetic each rests on:
+**VERDICT: CONFIRMED at the ledger and commit level. PARTIALLY REFUTED at the work level — the drain
+is *not* primarily eating its own tail; it is absorbing a large exogenous inflow it cannot outrun.**
 
-1. **Stop the drain from filing into its own queue.** The blank-source bucket (338 adds, accelerating
-   to ~16–34/day) is the self-feeding loop. Machinery defects discovered *while draining* should land
-   in a separate register that is not dispatch-kicked. Effect: removes the coupling that makes
-   arrival ≈ completion.
-2. **Set the target to a bounded WIP, not zero.** "Zero" is unreachable by construction while
-   generators are unbounded, and a target that cannot be hit reads as "forever". A reachable
-   restatement: *zero agent-actionable items older than 14 days*, which today means clearing 41 rows.
-3. **Re-run the Aug 9 triage rate against today's pool.** If 35.2% still prunes, that is ~174 items
-   off 494 for one pass — but note the Aug 9 experiment proves this alone does not hold.
-4. **Record a blocker reason on every `block`.** 184 unrecoverable rows is the permanent floor;
-   without a reason field there is no path to ever re-validating them.
-5. **Land or delete the 79 stranded cloud commits.** Work already paid for that currently yields zero.
+### The number that settles it
 
-Items 1 and 2 are the only ones that change the *destination*; 3–5 change the *level*.
+Over the last 19 days the **agent-facing board (open + claimed) went 263 → 303, OLS +0.29/day**,
+mean 287, min 261, max 337 — while **1,635 items were closed and 1,679 filed inside that window.**
+
+### Net-positivity: 40–55% of closures changed nothing
+
+Unambiguous machine-generated no-op dispositions cover **858 of 2,294 closures = 37.4%**
+(C2-flood retraction 387 · consolidation prune/merge 159 · auto-retracted 99 · landed-by-content 86 ·
+cc-premise auto-close 46 · drain-recycle close 41 · "no longer holds" 40). Widening to include
+duplicate/REFUTED/SUPERSEDED gives **1,171 = 51.0%**. An independent hand-count (n=45) gave 55.6%,
+95% CI [41.0, 70.1] — overlapping. **Honest band: 40–55%.**
+
+### The experiment the system already ran on itself
+
+On 2026-08-09 the pool stood at exactly **460**. A full-corpus triage ran against precisely that
+population — `docs/plans/backlog-consolidation-2026-08-09/verdicts.json` holds exactly **460**
+verdicts — and disposed of **162 (35.2%) as PRUNE or MERGE**. It was applied: all 117 PRUNE and all
+45 MERGE ids fold to `done` today, 0 of the 460 missing from the ledger. **Sixteen days and 1,268
+completions later the pool was larger than the 460 it started from.** The most aggressive intervention
+available was executed in full and bought nothing.
+
+### What the machine commits
+
+Last 14 days on `origin/main`: **1,130 commits; 460 (40.7%) touch ONLY `docs/`; 1,044 (92.4%) touch
+only `bin|hooks|scripts|docs|tests|commands|skills`.** The drain lane's own artifact
+`docs/plans/BACKLOG_DRAIN_24_7.md` is **1,756,936 bytes / 20,469 lines**, grew **+19,234 / −68 lines
+in 7 days** (99.6% pure append), and has minted **187 numbered "methods" with no retirement
+mechanism**.
+
+### Cost
+
+252 drain sessions over 12 days billed **4.07 billion tokens** — ~18.8 M tokens per row closed,
+~$243/day inferred at Opus list prices (a token measurement; the Max plan is a quota meter, not a
+dollar meter). The lane runs **25.5 recycles/day at a median of 1 row closed per recycle**.
+
+### 🚨 Where the treadmill hypothesis is NOT supported — and this corrects my own first read
+
+The adversarial pass refuted the strongest self-feeding claims, and I believe it:
+
+- **`source=needs`, the largest generator, is 78.2% drained** — 560 done / 151 blocked / **5 open**.
+  A generator with five open items is not a treadmill.
+- **The `re-land` family** — 327 rows, my flagship treadmill evidence — is **92.7% done, 0 open,
+  self-retracting at filing (median true life 34 seconds)**, and contributes 24 of 501 live rows
+  (4.8%). Deleting every re-land row moves the pool 501 → 477. It changes nothing.
+- **The drain self-feeds only ~7 of the ~64 adds/day.** ~89% of inflow is **exogenous**, filed by
+  ~15 concurrent producers, not by the drain.
+
+**So the correct diagnosis is not "the machine invents work for itself." It is: the machine files
+faster than it can honestly finish, and 40–55% of what it finishes was already finished or was never
+real.**
+
+---
+
+## 4. The generator structure
+
+| generator | live rows (of 501) | rate | bounded? | note |
+|---|---:|---:|---|---|
+| **`cc-backlog needs`** | **157** (152 blocked) | ~25/day | **UNBOUNDED** | Rows are born `blocked` (`bin/cc-backlog:2802`) and `cc-dispatch` selects `status=="open"` only (`bin/cc-dispatch:1512,1522`) — **this generator writes straight into the operator's inbox and no agent is ever dispatched onto one.** Coerced by Stop-hook blocks naming the verb verbatim (`hooks/completion-assert.sh:946/947/948`, `hooks/session-continue.sh:938`). Agent-authored slice +3.1/day. |
+| ↳ `ship-land.sh:1000` re-land trap | 24 | ~4/day | in principle | 330 ids for 134 branches (max 41 for one). Already throttled **8.6×** (37.0→4.3/day) by `aa1886a5e` + `017650872`. **A largely fixed defect.** |
+| **agent free-text, `--source` omitted** | **102** | ~35/day | **unreachable by policy** | `--source` defaults to `""` (`bin/cc-backlog:1365`). Second-largest live slice; no per-source rule can touch it. |
+| **`plan-open`** | 17 | **0 adds in ~86 hourly runs** | **BOUNDED, SATURATED** | Ceiling = 46 live plan docs, all already carry a row, headroom 0. But it rides an unbounded input: 83 plan docs added in 30 days, retirement manual-only. ⚠️ Its telemetry **lies upward**. |
+| **`postland-verify`** | ~4 | ~4/week | **CURED** | Condition-keying landed. Now the *stalest* class: p50 57.5 h. |
+| deploy-live · autonomy-sweep · desk-observed | ~5 | 5 of 480 adds in 7 d (1.0%) | negligible | `desk-observed`/`close-integrity` have **no code that files them** — agent-typed labels. |
+
+### The structural fact underneath all of it
+
+**Only 148 of 2,782 adds (5.3%) carry a `--condition` key. Where used, deduplication is perfect —
+148 condition groups → 148 ids, max 1 distinct id per group.** The other 94.7% are title-hashed, so a
+recurring problem mints a fresh row every recurrence. Consequence: **466 of 2,782 adds (16.8%) are
+surplus rows sharing a near-identical normalized title, 67.2% machine-authored. The mechanism that
+fixes this is built, correct, and unused.**
+
+### The second structural fact — the split is ~2:1 against the operator
+
+Last 7 days: 493 adds → **315 born `open` (45.0/day, agent-facing)** and **178 born `blocked`
+(25.4/day, operator-facing)**. The operator stream has no agent exit by design and grows ~+3/day net.
+
+### Filing is coupled to draining by construction
+
+`bin/cc-backlog:5821` — **"S5 KICK-ON-WRITE"**: every `add` fires a dispatch pass that starts a
+session to work it. Kill switch: `CC_BACKLOG_KICK=off`. This is why arrival and completion track each
+other at ~70/day; they are not independent quantities that happen to match.
+
+---
+
+## 5. THE TIMELINE
+
+### There is no measurable convergence — the slope flips sign by window
+
+| window | pool OLS slope | net flow | implied date to zero |
+|---|---:|---:|---|
+| 30 days | **+12.95/day** | +9.8/day | never — passes 1,000 ≈ 2026-11-16 |
+| 18 days | −0.30/day | — | ~4.6 years |
+| 14 days | **−4.68/day** | −1.4/day | 107 d (slope) / 358 d (flow) |
+| 7 days | **+14.21/day** | −3.4/day | never (slope) / 147 d (flow) |
+
+The 7-day slope and 7-day flow **disagree in sign with each other**. Level series: Jul 28 = 125 →
+Aug 8 = 405 → Aug 16 = 578 → Aug 19 = 403 → Aug 25 = 501.
+
+> **Any "days to zero" figure quoted so far — including the drain lane's own 25 days — is
+> window-shopping.** That figure was fitted over 23 board readings inside roughly one day.
+
+### Scenarios
+
+| # | scenario | effect on the 501 | date pool = 0 | confidence |
+|---|---|---|---|---|
+| **A** | **do nothing** | slope indeterminate | **UNKNOWN — sign flips by window** | none |
+| **B** | bulk-falsify the 457 unvalidated rows | **−54 to −89, one-time** | still none — a level shift, not a slope change | projection |
+| **C** | B + generator cuts (inflow 64→57/day) | net ≈ −10/day | ≈ 43 days → **2026-10-07** | **low** — outflow is itself 40–55% no-ops |
+| **D** | **C scored on the AGENT BOARD only (303 rows)** | agent inflow 45/day vs agent closure | **≈ 3–5 weeks → mid-to-late September** | **the only defensible date** |
+| **E** | D + operator clears the floor | blocked 198 → ~60 | agent board mid-Sept; floor in 1–2 weeks of *operator* time, in parallel | medium |
+| F | add drain capacity (2× recycles) | — | **no effect on the date; ~$243 → ~$486/day** | measured |
+
+**The only row yielding a defensible date is D, and it gets there by changing the *target*, not the
+throughput.** "Drain the backlog to zero" has no date because it conflates two populations with
+different owners.
+
+---
+
+## 6. WHAT TO ACTUALLY DO — ranked by effect per effort
+
+**L1 · Run the falsifier sweep across all 457 unvalidated live rows — AGENT, ~1 day.**
+`cc-premise sweep --record` / `cc-backlog falsify` over every live row lacking a probe, then
+`--close-falsified`. Retires an estimated **54–89 rows with no work done**, and converts ~400 more
+from *unknown freshness* to *known*. Existence proof: the 2026-08-24 pass falsified 4 rows, all
+closed within 3 minutes. **#1 because it attacks residence-time decay directly and makes every later
+decision cheaper.**
+
+**L2 · Adopt `--condition` at the four uncured mint sites — AGENT, ~half a day.**
+`scripts/ship-land.sh:1000`, `scripts/postland-verify.sh:793-797`, `scripts/deploy-live.sh:725,870`,
+`scripts/autonomy-sweep.sh:381`. Prospectively removes ~**5–8 adds/day**. The pattern is proven twice
+in this repo (postland ~10×, re-land 8.6×).
+
+**L3 · Decide the operator-gated blocked rows — OPERATOR ONLY, 3–7 sittings.**
+Run L1 against the blocked pool *first*: a hand-check of 16 mechanically-verifiable blocked rows found
+**8 dead outright, 1 partly dead (56%)** — including three separate filings of "plug the MacBook into
+AC power" against a machine `pmset -g ps` reports is on AC and charged. Honest sizing: **45–135 rows**
+are genuinely un-performable by any agent. **This is the only lever that touches the floor.**
+
+**L4 · Stop the Stop-hook coercion filing into the operator inbox — AGENT + one config decision.**
+Either raise the filing bar (require a falsifier) or route agent-capable steps to `cc-backlog add`
+(open) rather than `needs` (blocked). −3.1/day permanent inflow into the floor. The store carries its
+own proof the misfiling is real: id `3f174ae7f254`, closed *"Refiled as AGENT work — this was
+mislabeled operator-owned."*
+
+**L5 · Split the board and stop reporting one number — OPERATOR DECISION, 5 minutes.**
+Define zero as **two** targets: agent board (303) and operator floor (198). Converts an unmeasurable
+date into a measurable one at zero engineering cost, and removes the ledger's biggest distortion —
+**the whole-pool series is flat only because a falling agent board and a rising operator floor
+cancel.**
+
+**L6 · Cap the drain lane's own document generator — AGENT, ~2 h.** Rotate
+`docs/plans/BACKLOG_DRAIN_24_7.md` (1.76 MB) and retire the 187 methods. **Effect on the date: ZERO.**
+Listed last deliberately — do not let it displace L1–L3.
+
+**Explicitly NOT recommended: adding drain capacity.** The lane already closes ~42% of everything
+closed fleet-wide, runs 25.5 recycles/day, and the agent board did not move in 19 days.
+
+---
+
+## 6a. The cloud lane, separately: it cannot be the answer
+
+Reported by the cloud axis and **independently re-checked by me** on the return ledger:
+
+- **Only 5.7% of the pool is cloud-eligible** — `cc-eligible sweep` refuses 466 of 494, with 191
+  refused as `ineligible-box` (local-only state a VM cannot see). **3 items are actually claimable.**
+  This ceiling is a property of the work, not a tuning parameter.
+- **The land arm is dead.** Verified-returned lands by day: Aug 11=3, 12=4, 14=25, 15=13, 16=59,
+  17=18, **then zero through Aug 22, one on Aug 23, zero since** (51 distinct ids ever). Corroborated
+  in-tree at `scripts/cloud-reconcile.sh:281`.
+- **Refused items retry forever**: 2,189 return events over 107 ids (mean 20.5, max 124 on one id);
+  last-wins terminal state shows **59 of 107 (55%) never reach success**. Dominant cause is the land
+  pipeline's own crash debris (rc 70 = 738 events) which the repo documents as recurring *"once per
+  pass, forever, because nothing reaps the debris."*
+- **Stranded content**: 246 commits across 106 branches not on trunk by patch-id, 88 minted on
+  Aug 25 alone. (My own first pass said 79/68 — it scanned only remote refs, missing 105 local
+  `refs/heads/claude/*`, and wrongly excluded Aug 24–25 as "in flight" when the land arm was dead.)
+- **Cloud is not free capacity** — the A/B (`docs/research/cloud-local-cost-ab-2026-08-11.md`) shows
+  it bills the same Max-quota meter at 0.81× local, inside the noise. **This answers task #175.**
+
+---
+
+## 7. WHAT WE GOT WRONG — and where measurement is still blind
+
+**All ten claims that reached adversarial verification were refuted or re-scoped.** The pattern is
+worth naming: **every one failed the same way — a real number attached to the wrong denominator, the
+wrong population, or the wrong conclusion. The counts were fine; the *folds* were not.**
+
+1. **"6 automated `needs` mint sites ⇒ treadmill."** Site census correct. **Bearing wrong** —
+   `needs` is 78.2% drained with 5 open. The launchd evidence leg was a **blind instrument**:
+   `grep -l <script> ~/Library/LaunchAgents/*.plist` returns nothing for four of five scripts;
+   reachability is real but only transitive.
+2. **"326 re-land rows = 45.9% of `needs`."** Arithmetic reproduces; **denominator wrong** —
+   `land_failure_inbox` was born 2026-08-10, so 178 of 713 `needs` adds predate the generator.
+   Corrected: 61.1% within its lifetime, **4.8% of the live pool**.
+3. **"153 auto-retracted rows, median life 36 minutes."** Actually **98 rows / 163 events, median
+   true life 34 SECONDS**. The 36-minute figure measured the gap between separate land failures on a
+   re-filed id. **Bearing inverted** — zero `claim` events across all 98 ids, so no drain capacity was
+   ever consumed. This is a containment test firing correctly.
+4. **"144 not-done `needs` rows have no agent-reachable exit."** Count right, inference refuted:
+   **530 of 563 completed `needs` rows (94.1%) closed straight out of `blocked`**.
+5. **"80 of 117 blocked rows are physical/decision gates."** Population is **152, not 117**; physical
+   is **11 rows / 9 distinct acts**, not 28 (three are the same AC-power step filed thrice).
+6. **"Agent-authored `needs` +6/day."** Corrected to **+3.1/day** — +6.1 is the *maximum* slope
+   obtainable across all 24 candidate start dates.
+7. **"1,104 blocks over 711 ids proves a recurrence brake."** `cmd_needs` writes a `block`
+   unconditionally on first filing, so baseline is 1 block/mint.
+
+**My own corrections, made during this session:**
+
+- **`reopen` is lease churn, not rework.** 1,764 reopen events, but only **17 ids** were ever
+  done-then-reopened. Reading 1,764/2,441 as a rework rate mis-folds the ledger.
+- **"54 of 91 open rows point at a vanished path"** was a wrong-population artifact — dodRefs from
+  *other* repos resolved against this checkout. Corrected via `git ls-tree origin/main`: **7 of 44
+  (15.9%)** for claude-infrastructure, and ≥3 of those 7 are not file paths at all. True target-drift
+  is under ~10%.
+- **The stranded-cloud count** (79/68 → 246/106), see §6a.
+- **"The pool is flat"** is true over 18 days and false over 30 (125 → 501). The load-bearing flat
+  series is the **agent board** (+0.29/day over 19 d), not the whole pool.
+
+### Still blind — say "unknown", not a number
+
+1. **Live staleness is projected, not measured.** The 54–89 figure applies *closed-row* rates to
+   *live* rows. **The true live rate is UNKNOWN until L1 runs.**
+2. **The `project` field records the worktree directory basename, not the repo.** ~100 rows are filed
+   under slugs like `.desk-land-claude-fire-…`. **Every per-project census here undercounts
+   claude-infrastructure by an unknown margin** — including my own 64.1% machinery figure.
+3. **Value classification is keyword-based, hand-checked error rate 16.7%** (n=30). My 80.5% /
+   85.3% machinery figures carry roughly ±3pp and over-count in the product direction.
+4. **No shipped command reads a session's narrative back** — a fleet-wide transcript grep timed out
+   at 120 s across 2,846 transcripts, so "how much re-work does a stale row cause" rests on
+   completing sessions' own written verdicts.
+5. **Cost is inferred, not billed.** The 4.07 B token count is measured; the dollar figure is list
+   pricing applied to it.
+6. **`~/.claude-next` holds 0 transcripts** while four other account roots hold 713/831/729/573.
+   Unexplained; any fleet-wide transcript census may be missing a stratum.
+
+---
+
+## 8. Reproduction
+
+```
+wc -l ~/.claude/autonomy/backlog.jsonl                 → 14,249
+jq -c . ~/.claude/autonomy/backlog.jsonl >/dev/null    → rc 0 (0 malformed)
+bin/cc-backlog list --blocked | grep -c '^blocked'     → 198
+bin/cc-backlog freshness                               → never validated 457 of 501; commits since filing p50 415, max 3253
+bin/cc-eligible sweep                                  → 494 non-done; eligible 28; ineligible-box 191
+```
+
+Folds are state-set by `add|reopen|unblock|claim|done|block` **only** — `falsify|link|venue|update`
+are **not** states, and folding on the raw last event is the documented trap
+(`bin/cc-backlog:5347`). Scripts: `scratchpad/{fold,trend,drift}.py` (this session).
+
+Workflow run `wf_63410424-45d` — 12 recon axes, 10 adversarial verifiers, 1 synthesis; 23 agents,
+4,133,060 subagent tokens, 817 tool uses. Journal: `subagents/workflows/wf_63410424-45d/journal.jsonl`.
