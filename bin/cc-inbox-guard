@@ -450,11 +450,54 @@ sweep() {
   fi
 
   [ -d "$MBOX_DIR" ] || { echo "cc-inbox-guard: no mailbox dir — $n_esc escalation(s)"; return 0; }
-  local f u lines acked unacked
-  for f in "$MBOX_DIR"/*.md; do
+
+  # ── WORKLIST — SIZED BEFORE THE LOOP, AND ORDERED BY STARVATION ────────────────────────────────
+  # This sweep is a RIDE-ALONG under cc-reaper's 60s bound (cc-reaper:1909). Measured 2026-08-25:
+  # `bound-fired inbox-guard` fired on 123 of 123 ticks in 24h, and only 65 of 1621 sweeps in the
+  # log's 12-day span ever reached the summary line at the end of this function — so ~96% are cut
+  # MID-LOOP. A cut is not graceful degradation when the worklist ORDER IS FIXED: the old
+  # `for f in "$MBOX_DIR"/*.md` iterated the glob's lexicographic permutation, identical every
+  # tick, so the same prefix was re-swept every five minutes and the same suffix was never reached
+  # AT ALL. Scored against an isolated sweep of the same store (which names the 362 boxes that must
+  # escalate), 142 of them — 39.2% — were not named once in 123 production sweeps: every box that
+  # did emit ranked <= 543 of 802, while the starved median rank was 650. Not unlucky: structurally
+  # unreachable. A subsystem whose entire contract is fail-loud was silently skipping 39% of its own
+  # caseload, and the ratchet is that more starved boxes means more owed work means an earlier cut.
+  #
+  # TWO HALVES, AND THE ORDER OF THE HALVES IS THE POINT (ff4e6cbead11's lesson):
+  #   (1) ANNOUNCE the size BEFORE the work, so a cut run is ARITHMETIC instead of silence. The
+  #       summary below is the FIRST thing a SIGTERM eats, which is precisely why the one line that
+  #       could have reported this shortfall was the one line that never survived to report it.
+  #   (2) ORDER by last-escalation mtime, oldest first (never-escalated sorts as 0, so it leads),
+  #       turning permanent exclusion into BOUNDED DELAY. (1) is what makes (2) checkable.
+  # The same free property the cure sweep found falls out here: a recently-escalated box takes the
+  # `keep` (damped) branch, which is the cheapest and least urgent work in the loop — so oldest-first
+  # front-loads every box that could still produce a NEW escalation and lets the cut land on the
+  # ones that would have produced nothing anyway.
+  local wlist n_work f u lines acked unacked _k _mt
+  wlist="$(
+    for f in "$MBOX_DIR"/*.md; do
+      [ -e "$f" ] || continue
+      u="$(basename "$f" .md)"
+      valid_key "$u" || continue
+      # key the staleness on the SAME marker escalate() damps against, derived the same way.
+      _k="$(printf '%s' "$u" | tr -c 'A-Za-z0-9._-' '_')"
+      _mt="$(stat -f '%m' "$STATE_DIR/$_k.escalated" 2>/dev/null || true)"
+      printf '%s\t%s\n' "${_mt:-0}" "$u"
+    done | sort -n -k1,1
+  )"
+  # awk, not `grep -c` — grep -c EXITS 1 on a zero count, which under `set -o pipefail` would turn
+  # an empty mailbox dir into a failed assignment rather than a worklist of 0.
+  n_work="$(printf '%s' "$wlist" | awk 'NF{n++} END{print n+0}')"
+  echo "cc-inbox-guard: worklist $n_work box(es), oldest-escalated first — a bounded sweep that is cut stops partway down THIS list, and this count is what makes that arithmetic instead of silence"
+
+  # a here-doc (NOT a pipe) so the loop runs in THIS shell and n_esc survives — the same reason the
+  # scan_window consumer below uses one. Both fields are whitespace-free by construction (the mtime
+  # is numeric, and valid_key admits only [A-Za-z0-9._-]), so default IFS cannot collapse a field.
+  while read -r _mt u; do
+    [ -n "${u:-}" ] || continue
+    f="$MBOX_DIR/$u.md"
     [ -e "$f" ] || continue
-    u="$(basename "$f" .md)"
-    valid_key "$u" || continue
     lines="$(mailbox_lines "$u")"; acked="$(mailbox_acked "$u")"
     # `lines - acked` IS mailbox_unacked_count, computed from the two values already in hand (P3).
     # Calling the helper re-derived both cursors from scratch — mailbox_acked → mailbox_seen →
@@ -502,8 +545,12 @@ SCANEOF
                   "inbox $u: $unacked undelivered ${oldest_age}s, liveness unknown — fail-loud escalate" ;;
     esac
     n_esc=$((n_esc+1))
-  done
-  echo "cc-inbox-guard: sweep done — $n_esc escalation(s)$([ "$DRY" = 1 ] && echo ' (dry-run: none fired)')"
+  done <<WLEOF
+$wlist
+WLEOF
+  # Reaching this line means the whole worklist was examined. Its ABSENCE from a log entry is now
+  # readable against the announce above: worklist N, no "sweep done" ⇒ cut before all N.
+  echo "cc-inbox-guard: sweep done — all $n_work box(es) examined, $n_esc escalation(s)$([ "$DRY" = 1 ] && echo ' (dry-run: none fired)')"
   return 0
 }
 
