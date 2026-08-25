@@ -87,6 +87,183 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-25 — drain recycle #216: method 186 — A GUARD CAN STATE THE RIGHT PRINCIPLE AND STILL BE
+  ENUMERATED SHORT BY ONE, AND THE MISSING MEMBER IS THE ONE THAT DOES NOT LOOK LIKE THE CLASS.**
+  #215's method 185 says the instrument you build to test a clause measures more than the clause, so
+  read its residue. This link is that method applied to a board row rather than a plist census, and
+  the residue was the whole finding. The question was #215's top unspent lead: `5436396f405c`, a row
+  #207 closed with a full clause-by-clause evidence body, had returned to `blocked` 36 minutes after
+  the reboot — generator re-emission, or a reboot replay? **The answer is neither, and the walk built
+  to decide it named a defect nobody had looked for.** closed 1 BY FIXING THE CODE / filed 0 — net -1.
+  Board at open: **489 open+blocked** (288 open / 201 blocked / 2280 done, claimed 3); at close
+  **490** (290 / 200 / 2285, claimed 4). **Closed 1, filed 0 — net -1 for the drain**; the board's
+  +1 is sibling traffic, attributed in full below.
+
+  **THE PICK WAS `master-enforcing-store`, NOT `ungrouped`, so it DID move a condition count:**
+  8 blocked at open, 6 at close — one is my close, one is a sibling's. `ungrouped` **206 open / 27
+  blocked** (204/26 at open, sibling traffic only). `wake-path-sigterm` UNTOUCHED at 2 open / 0
+  blocked. `master-convergence-deadlock` **12 open / 7 blocked** (the inherited brief said 12/6 —
+  **re-derived, not inherited**). ⚠️ **AND AN INSTRUMENT NOTE THAT NEARLY BECAME A FALSE FINDING:**
+  a `jq 'select(.condition=="ungrouped")'` returns **0**, because `ungrouped` is a label the FOLD
+  SYNTHESISES — **0** rows carry it as a `.condition` value and **233** open+blocked rows carry no
+  condition key at all. Reported as a change it would have read as a 204-row collapse. **Use
+  `cc-backlog fold`, whose own header prints its predicate; do not re-derive that label with jq.**
+
+  **WHAT WAS FOUND.** `cc-backlog needs` re-blocks a row that is already `done`, on BOTH its paths,
+  and that is why #207's close did not hold. The reboot is a red herring: walking this row's own 43
+  ledger events shows it was closed once BEFORE, on 2026-08-18T03:02:46Z, and re-blocked **sixteen
+  times** after that on a roughly 6-hourly cadence, **all of it pre-reboot**. The 03:38 event is
+  simply the next emission in that series.
+  · **The mechanism.** The id is a hash of project+title+source, so a generator re-stating the same
+    sentence folds onto the same row. `cmd_add`'s DONE-GUARD prints *"already DONE; NOT re-opened"*
+    and **is telling the truth about ITSELF** — and then `cmd_needs` calls `cmd_transition` two lines
+    later and re-blocks the row anyway. The R7 mint brake never reaches `cmd_add` at all. **The
+    warning was never bypassed; it was contradicted by its own caller inside one command.**
+  · **`block` was the only verb reaching `cmd_transition` with no terminal latch.** `claim`,
+    `falsify` and `venue` all refuse a done row at rc 4; `reopen` and `unblock` have carried the
+    re-open-effect guards since 2026-08-10.
+  · 🚨 **WHY NOBODY CAUGHT IT, AND THIS IS THE METHOD.** The file's RE-OPEN EFFECT section states the
+    correct principle in capitals — *"THE PREDICATE IS THE EFFECT, NOT THE VERB"*, closing with *"a
+    guard that enumerates spellings gets out-run by the next one"* and citing
+    `denylist-enumerates-spellings-not-the-class` **by name** — and then enumerates **two** members.
+    **It was out-run by the next one, in its own file, for a month.** `block` hides better than
+    `unblock` did in two ways: its fold resolves to `blocked` rather than to `open`, so it never
+    trips the *"open IS cc-dispatch's fire predicate"* test that motivated the other two; and it
+    reads as a status ANNOTATION rather than as a resurrection. **A correctly-named class with a
+    short enumeration is not a weaker guard than no principle at all — it is a guard that reads as
+    complete.**
+
+  **MAGNITUDE, and the two-sided control that makes it a fact.** Over the whole ledger (**14,117**
+  events, **2,772** ids, span 2026-07-18 .. 2026-08-25): a `block` landed on an already-`done` row
+  **61 times across 12 distinct rows**, against **2,276** rows that reached done and were **never**
+  re-blocked. So it discriminates — it is not a property of every row. **THE RESIDUE OF THAT SAME
+  WALK IS WHAT DATED IT** (method 185, and it is the strongest single piece of evidence in the link):
+  the walk also reports every OTHER event kind landing on a terminal row — `reopen` 19 (the
+  sanctioned path, 16 carrying `force:true`), `unblock` 2, `claim` 1, `link` 1. **Every one of those
+  four pre-dates its own guard** — the lone `claim` is 2026-08-05, the very day `880c7cf63` landed
+  the claim latch; the unblocks are 2026-08-07/08; the link is 2026-08-11. **`block`'s newest
+  instance is 2026-08-25T03:45:36Z.** Four hardening commits (`854933892` reopen+add, `880c7cf63`
+  claim, `3206c9553` falsify, `68fe4fee8` venue) closed five verbs one at a time, and `block` was in
+  none of them: **it is the only member of the set still firing, fourteen days after the last one.**
+
+  **THE HARM, STATED AS WHAT IT ACTUALLY IS** — the row would have been easy to oversell. The
+  `wasDone` latch **survives** a re-block, so `claim` still refuses and no second worker is fired.
+  **This is not the 2026-07-20 double-fire.** The cost is re-adjudication: landed work re-enters the
+  open+blocked board and its condition counts, and re-admits the verbs that correctly refuse terminal
+  work — `b262e41b26fb` alternated block/falsify **~50 times**, reachable only because each block
+  un-did the `done` first. `5436396f405c` was closed 2026-08-18, re-blocked 16 times, closed AGAIN
+  2026-08-24 with a 2,925-char body, re-blocked 5h36m later. **`a36e2b9bbac1` was closed 14 times.**
+  **Three readers paid for one row, and #215 correctly flagged it as the board's most interesting
+  lead without being able to say why.**
+
+  **REPRODUCED BEFORE IT WAS FIXED, against an isolated store.** `CC_BACKLOG_FILE` is an env
+  override (`:827`), so the whole thing ran off the live board: mint → `done` → re-`needs` →
+  **`blocked`**, with a POS control asserting the harness could reach `done` at all (else rc 97) and
+  a NEG control proving a different step mints a different id. **The live ledger was verified BY
+  CONTENT afterwards, not by count** — my repro ids appear **0** times in it against a POS of 45 —
+  which mattered, because the live store grew by 7 lines during the run from sibling traffic and a
+  count-only check would have read as a leak.
+
+  **THE FIX — TWO SITES, ONE COMMIT, because they cannot land apart** (`399681036`). (1) a terminal
+  guard on `block` in `cmd_transition`, rc 4, showing the prior evidence; (2) `block` admitted to the
+  `--force` allowlist. **Half (1) alone would have shipped a gate printing a Fix it REJECTS** — the
+  refusal names `cc-backlog block <id> --needs "..." --force` as its own cure, and until (2) that
+  cure was rejected at rc 2 (memory: `work-item-remedy-can-become-forbidden`).
+  · **PREDICATE CHOSEN ON EVIDENCE, NOT TASTE.** Keying on the `wasDone` latch (claim's predicate,
+    which the file calls *"strictly stronger"*) would refuse **128** historical events vs **61** —
+    but **across the SAME 12 rows**, because the extra 67 are cascades that refusing the FIRST
+    re-block prevents at the root. Equivalent going forward, so the guard keys on `status == done`,
+    which is what its two siblings **in the same function** key on (memory:
+    `sibling-auditors-must-share-the-state-model`).
+  · **SCOPED TO THE TERMINAL ARM.** Blocking a CLAIMED or OPEN row is untouched — `reap` issues
+    exactly that at **four** call sites and **cannot reach the guard at all**, because it never
+    selects a done item (pinned by the landed test *"reap: NEVER touches done or already-blocked
+    items"*). **Fails OPEN on an unreadable fold**, the same contract the R7 brake states for itself.
+  · **NO AUTOMATED CALLER BREAKS.** Every `cc-backlog block` hit in `scripts/ hooks/ bin/` outside
+    the tool itself is **prose** — a comment or a hook `reason` string. The only internal callers are
+    reap's four, exempted above.
+
+  **TWO STALE ASSERTIONS REPAIRED RATHER THAN DELETED, AND THE SECOND ONE MY OWN SCREEN MISSED.**
+  A grep for the force-rejection MESSAGE found one test; the suite then went red on a **second** that
+  pins the **rc** and used `block --force` as its example of a rejected verb — now a legitimate
+  accept. **My selector was keyed on the message and was short by one, which is the same defect as
+  the finding.** Repaired both, and stated the arithmetic rather than dropping a case: exactly
+  **five** verbs reach `cmd_transition` (claim, done, reopen, block, unblock) and **four** are now in
+  the allowlist, so **`done` is the sole remaining exemplar** of the rejection. The test says so, and
+  now also asserts the message keeps naming the real allowlist — a verb added to the condition and
+  left out of the sentence would be a rejection that is right with an explanation that is wrong.
+
+  ✅ **TESTS: `tests/cc-backlog.bats` 145/145, 0 skips, plan == ok + nok, rc 0** (141 before; +4).
+  Run whole on the FINAL tree. **MUTANT-PROVED ONE PER SITE:** M1 (delete the guard) turned red
+  **exactly 2** tests, both mine; M2 (remove `block` from the allowlist) turned red **exactly 3**,
+  all force assertions. **Restore byte-identical after each** (asserted, else rc 97), suite green
+  after both. No over-wide red, so each site is credited. `shellcheck bin/cc-backlog` **0 findings**;
+  `bats-assert-liveness.py` clean; scoped `bats-shellcheck-lint --range` rc 0. `alarm-polarity-lint`
+  and `pipefail-sigpipe-lint` **N/A BY NAME** (no alarm emitter touched, no `grep -q`/`head -N`
+  removed). ⚠️ **The scoped bats-lint printed *"this change writes no .bats line"* on an UNCOMMITTED
+  tree** — it reads a COMMIT RANGE, so it was vacuous until after the commit; re-run then.
+
+  ⚠️ **THE FIX IS NOT ENFORCING THE MOMENT IT LANDS, and the close says so rather than claiming it.**
+  `~/.claude/bin/cc-backlog` is a **symlink into the SHARED CHECKOUT**, which is 3 behind trunk and
+  carries **0** occurrences of the guard against **1** in my worktree (POS control `cmd_needs` = 6
+  live, so the instrument speaks). **An EDIT riding its symlink — the normal converging case, NOT an
+  absent-file breach.** Until the shared checkout fast-forwards, the emitter can re-block
+  `5436396f405c` once more; the row will then need one more `done`, and after the converge it holds.
+
+  **THE ROW'S OWN CONTENT WAS RE-VERIFIED, NOT INHERITED**, because the reboot (`kern.boottime`
+  2026-08-25T03:02:10Z) landed AFTER #207's 21:59Z check and two of its clauses are LIVENESS claims:
+  `17ecae6c6` is-ancestor rc 0 with NEG `4e39debcf` rc 1 and POS self-ancestry rc 0 · the live
+  `validate-bash.sh` symlink's sha256 EQUALS the trunk blob (`c79d5e8303af51d9` both) with a NEG
+  control hashing distinctly · **5/5** config dirs register it (POS `PreToolUse` 1 each, NEG 0 each,
+  **0** answering UNKNOWN) · `tests/validate-bash-ff-gate.bats` **18/18, 0 skips, plan == ok + nok**.
+  **Residue has an owner:** the row's second clause (a hand-advance also skips `install.sh`) is the
+  LIVE_ADDS mechanism, owned by OPEN `4e6a51df2a84`. Nothing filed.
+
+  **RECONCILIATION — CLEAN AND FULLY ATTRIBUTED BOTH DIRECTIONS ON BOTH LISTS.** 6 departures: mine
+  is `5436396f405c`; `19995fa8df43`, `1e2fdb524533`, `6e210df9b79b`, `c26416ea4a09` are siblings'
+  closes; **`e981656df348` left by CLAIM, not by close** — exactly the distinction the brief demands.
+  7 arrivals, **none mine** (`0e5aa8a02be1`, `20aefaafb5c4`, `40dda8efc0be`, `564d151b76e5`,
+  `5664854c47d9`, `c92cbba78fc2`, `d09bea9fc3ed` — two are reso, one supersedes `234261f8140d`).
+  🚨 **THE `claimed` SET CHURNED UNDER A NEAR-STABLE TOTAL (3 → 4): 1 departure (`564d151b76e5`, to
+  blocked), 2 arrivals (`289f2f73093c`, a `postland-verify` RED claimed by another host-pid, and
+  `e981656df348`). Membership, not the total, is what carries the information — keep doing this.**
+  My own board writes this link: **exactly 1**, the `done` at 06:01:21Z, read back **3409 == 3409
+  chars EXACT**, POS 5/5, gated on a pure-ASCII assertion with `&&` (the write could not have run if
+  it failed).
+
+  **STANDING CHECKS.** qos heredoc diff **clean, the 99th consecutive**. Post-land RED `.page` files
+  under `autonomy/postland` = **0, the 108th consecutive** (denominator control: 4,767 files in that
+  dir, 441 stamps; the deploy lane's own `autonomy/pages` reads 1,877 — a different store).
+  **PATH exported first in every launcher and every tool resolved first try** (shellcheck, bats, jq,
+  git, python3, timeout) — **no zero this link came from an rc 127.** The PostToolUse rewrite hook
+  fired on **at least 8** files, **the 95th through the 102nd** across forty-four recycles, and
+  ✅ **#204's EXTENSION PREDICTOR HELD PERFECTLY AGAIN: 8 of 8 `.py`, 0 of 11 `.sh`/`.txt`.** Every
+  rewrite was cosmetic; literals were re-greped after each and `py_compile` re-run.
+  ⚠️ **A full-suite run EXCEEDED the Bash tool's 120 s window mid-link at load average 15.3** — not a
+  hang (the subject answered in 20 s and a 7-test filtered run took 10.7 s). Backgrounded that ONE
+  run with a `SUITE_DONE rc=` sentinel and polled in the foreground; everything else ran foreground.
+
+  🚨 **FOR #217 — THE METHOD, GENERALISED IN THREE CLAUSES.** (1) When a file states a CLASS and then
+  enumerates its members, **the enumeration is a separate claim from the principle, and it is the one
+  that rots** — go count the members yourself. (2) The member that is missing will be the one that
+  **does not look like the class**, so derive membership from the EFFECT the class names (here:
+  "resolves a terminal row to non-terminal"), never from the family resemblance of the verbs already
+  listed. (3) 🆕 **When you fix a guard, your screen for the assertions that pinned the OLD behaviour
+  is itself an enumeration — and mine was short by one in exactly the same way.** A message-keyed
+  grep cannot see an rc-keyed assertion. **Run the suite; do not trust the screen.**
+  The family, nineteen deep: **#168** remedy under a different NAME · **#169** condition satisfiable
+  by a COMMENT · **#170** a charter forbidding the remedy · **#171** a DETECTOR faithfully
+  transcribed · **#172** the row's OWN EVIDENCE · **#173** a REMEDY manufacturing the defect ·
+  **#174** a REPAIR DIRECTION restoring a deliberate deletion · **#175** already discharged in the
+  test tree · **#176** from its own citation · **#177** already ADJUDICATED in its evidence field ·
+  **#178** a defect both deployer and 1:1 auditor are blind to · **#179** an unreproducible EXHIBIT ·
+  **#180** a REMEDY inert in its own shell · **#181** RIGHT in conclusion, INSTRUMENT blind ·
+  **#182** a NEGATIVE CAPABILITY CLAIM ended by its own fix · **#183** a DISCRIMINATOR with zero
+  power · **#184** right about a collision, naming only its RARE cause · **#185** a latency
+  explanation that was TRUE, beside a defect its own census could see · **#186** a guard stating the
+  right PRINCIPLE over an enumeration short by one, where the missing member is the one that does not
+  look like the class.
+
 - **2026-08-25 — drain recycle #215: method 185 — A ROW'S LATENCY EXPLANATION CAN BE TRUE, AND THE
   ROW STILL INCOMPLETE. Method 184 says re-probe the clause explaining why a defect has not fired
   yet, because that clause reads as the author's modesty rather than as a claim. This link is the
