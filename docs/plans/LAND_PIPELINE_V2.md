@@ -977,6 +977,42 @@ trunk-red on `emitted` because trunk-red names the failing suites. The row's fil
 was refuted by its own consolidation pass — the daemon is loaded and running; what stops is the
 certification, not the job — so the fix is an alarm, never a `launchctl`.
 
+**§4.4 VERIFICATION DISCHARGED (2026-08-25, same row `01ab05685857` re-dispatched):** the alarm above
+landed at **`1f5bd304`** carrying a stated hole in its own evidence — *"bats and BSD date(1)/stat(1)
+are absent in this container, so each body was mirrored 1:1 through a Linux harness"* and *"shellcheck
+is not installed here and was not run"*. A hand-mirror is a re-implementation of the thing under test,
+and the one defect it structurally cannot catch is a mistake shared between the mirror and the
+original — which for an ALARM is the whole risk, since a sensor that looks wired and is not is the
+exact pathology this row is about. That hole is now closed on the ORIGINAL suite, not a mirror:
+
+- **`tests/cc-blockers.bats` 104/105 under `scripts/bsd-compat.sh`**, all ten `green-starved` cases
+  green (fires · silent inside the budget · silent with no land on top · fail-OPEN with the land
+  sensor absent · defers to trunk-red · defers to verifier-inert/STALE · fires mid-run · disjoint
+  from never-green · live budget with a garbage override · renders in the table).
+- **The single residue is platform, not code:** `M8 POSITIVE CONTROL … sensors 5/5 readable` reads
+  `4/5 (stamps:ok launchctl:x ps:ok fleet:ok board:ok)` because Linux has no `launchctl`. Named here
+  so it is never re-diagnosed as a defect.
+- **shellcheck 0.11.0 `-x` clean** on `bin/cc-blockers`, `bash -n` clean.
+
+**Why it could not be run before, and what now makes it runnable.** 68 files under `bin/ scripts/
+tests/` reach for `date -v` or `stat -f %m`; on Linux those die at the first fixture — 63 of 105 cases
+in this suite, every one of them BEFORE any assertion ran. A dispatched cloud session therefore does
+not see red, it sees **nothing**, and then lands carrying a verified claim it could not make.
+`scripts/bsd-compat.sh` (+ `scripts/lib/bsd-compat/{date,stat}`, `--selftest` 15/15) translates the
+two utilities and nothing else. It is wired into **no gate, no plist, no hook** deliberately, prints a
+SHIMMED banner on every run, and both shims **exit 64 on any adjustment or format they cannot
+translate exactly** rather than approximating — a fixture aged `-30H` that silently landed on `now`
+would make a staleness alarm read fresh, i.e. green for precisely the reason it should be red. Cite
+results as *"N/M under bsd-compat, <residue> platform-absent"*, never as the native gate.
+
+**AND THE ROW'S PREMISE IS LIVE, MEASURED ON PRISTINE `origin/main` THIS SESSION.** Three gate lints
+are RED on trunk right now, in a clean worktree with nothing of this diff in it:
+`unattended-path-lint` (11 sites drifted out of a shrink-only ratchet), `typed-send-lint` (1 site),
+`moving-ref-control-lint` (10 suites replaying a pre-fix control from a moving ref). That is the row's
+"3 red suites went unnoticed" clause, still true and still unsurfaced — and it is exactly the state
+`green-starved` exists to put on the board. The alarm is the right fix and it is now proven to fire;
+**the three reds themselves are a separate, unowned condition** and are not this row's to close.
+
 **§4.1 DESIGN ADDITION (2026-07-28, found at integration):** the smoke's direct list must
 ALSO exclude scripts/host-suites.manifest entries (read from the tree being landed; missing
 ⇒ no filter). A host suite arriving as a DIRECT suite of a diff reds the land for a

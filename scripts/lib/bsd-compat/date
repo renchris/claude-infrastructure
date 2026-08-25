@@ -1,0 +1,88 @@
+#!/bin/bash
+# BSD date(1) `-v` over GNU date — a SHIM, deliberately not on any gate path. See ../../bsd-compat.sh
+# for why this exists, what it may be used for, and what a green run under it is NOT allowed to mean.
+#
+# TRANSLATION, and the one thing that makes it faithful rather than approximate: BSD accepts MANY
+# `-v` adjustments in one call and applies them LEFT TO RIGHT, each against the result of the last.
+# GNU's `-d` accepts a compound relative expression and does the same, so the adjustments are
+# accumulated in order into a single `-d "now <adj> <adj> …"` rather than translated one at a time.
+# A per-adjustment loop would re-anchor on `now` at every step and silently drop all but the last.
+#
+# SCOPE — the units this corpus actually uses, and nothing else. An unknown unit EXITS NONZERO with
+# a named reason; it never falls through to a plain `date`, because a silently-ignored adjustment is
+# the failure this whole file exists to avoid (a fixture aged "30H" that lands on `now` makes a
+# staleness alarm read fresh, i.e. green for the exact reason it should be red).
+#
+# NOT SUPPORTED, on purpose: BSD's `-f <fmt>` input parsing and `-r <epoch>`. No suite here uses
+# either, and guessing at a translation nothing exercises is how a shim acquires a lie.
+set -uo pipefail
+
+args=()
+rel=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -v)
+      # `-v +1d` — adjustment in the NEXT argv slot.
+      if [ $# -lt 2 ]; then
+        echo "bsd-compat/date: -v given with no adjustment" >&2
+        exit 64
+      fi
+      adj="$2"
+      shift
+      ;;
+    -v*)
+      # `-v+1d` — adjustment fused to the flag, which is the form this corpus writes.
+      adj="${1#-v}"
+      ;;
+    *)
+      args+=("$1")
+      shift
+      continue
+      ;;
+  esac
+
+  # BSD treats a BARE offset as an absolute SET ("-v 12H" sets the hour to 12), not an add. That is
+  # a different operation with no GNU `-d` equivalent, and tests/cc-blockers.bats:1319 already
+  # records the trap in its own words. Refuse it rather than quietly adding.
+  case "$adj" in
+    +*) sign="+"; body="${adj#+}" ;;
+    -*) sign="-"; body="${adj#-}" ;;
+    *)
+      echo "bsd-compat/date: unsigned adjustment '$adj' — BSD SETS the field rather than adding to it;" >&2
+      echo "                 this shim refuses instead of guessing. Write +$adj or -$adj." >&2
+      exit 64
+      ;;
+  esac
+
+  n="${body%[a-zA-Z]}"
+  u="${body##*[!a-zA-Z]}"
+  case "$n" in
+    ''|*[!0-9]*)
+      echo "bsd-compat/date: non-numeric magnitude in adjustment '$adj'" >&2
+      exit 64
+      ;;
+  esac
+
+  case "$u" in
+    S) unit=seconds ;;
+    M) unit=minutes ;;
+    H) unit=hours   ;;
+    d) unit=days    ;;
+    w) unit=weeks   ;;
+    m) unit=months  ;;
+    y) unit=years   ;;
+    *)
+      echo "bsd-compat/date: unsupported unit '$u' in adjustment '$adj'" >&2
+      exit 64
+      ;;
+  esac
+
+  rel="$rel $sign$n $unit"
+  shift
+done
+
+if [ -n "$rel" ]; then
+  exec /usr/bin/date -d "now$rel" "${args[@]}"
+fi
+exec /usr/bin/date "${args[@]}"

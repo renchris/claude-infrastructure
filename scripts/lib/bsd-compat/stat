@@ -1,0 +1,38 @@
+#!/bin/bash
+# BSD stat(1) `-f` over GNU stat — a SHIM, deliberately not on any gate path. See ../../bsd-compat.sh.
+#
+# Only the format strings this corpus actually issues are translated, and an untranslated one EXITS
+# NONZERO rather than falling through. The reason is the same asymmetry as in the date shim, and it
+# is sharper here: bin/cc-blockers:300 is `stat -f %m "$1" 2>/dev/null || true`, i.e. an unreadable
+# mtime is a DELIBERATE fail-open — the sensor abstains. A shim that answered an unknown format with
+# garbage, or with a silent empty string, would drive every consumer down its fail-open branch and
+# produce a board that is silent for a reason that has nothing to do with the machine. Silence that
+# looks like health is the precise defect the alarm under test exists to remove.
+set -uo pipefail
+
+if [ "${1:-}" = "-f" ]; then
+  if [ $# -lt 2 ]; then
+    echo "bsd-compat/stat: -f given with no format" >&2
+    exit 64
+  fi
+  fmt="$2"
+  shift 2
+  # Only formats with an EXACT GNU counterpart are translated. Measured over bin/ scripts/ tests/
+  # hooks/ the corpus issues six: %m (87 sites), %z (5), %i (1), %Sm (1), %Mp%Lp (1), %Lp (1). The
+  # first three are exact; the last three are NOT, and are refused rather than approximated —
+  # BSD's %Sm is a formatted date string whose default layout GNU has no single-token equivalent
+  # for, and %Lp/%Mp render mode in octal where GNU's nearest field (%f) is hex. A translation that
+  # is close is worse here than one that is absent: absent exits 64 and names itself, close returns
+  # a plausible number and is believed.
+  case "$fmt" in
+    %m) exec /usr/bin/stat -c '%Y' "$@" ;;   # mtime, seconds since epoch
+    %z) exec /usr/bin/stat -c '%s' "$@" ;;   # size in bytes
+    %i) exec /usr/bin/stat -c '%i' "$@" ;;   # inode number
+    *)
+      echo "bsd-compat/stat: unsupported format '$fmt' — refusing rather than answering wrongly" >&2
+      exit 64
+      ;;
+  esac
+fi
+
+exec /usr/bin/stat "$@"
