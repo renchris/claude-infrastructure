@@ -197,6 +197,40 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   `reap-freshness` 10, `reap-sweep-bounds` 14, `watchdog-census` 20 — **88/88, 0 skips, plan == ok.**
   Selector drew **7** for `bin/cc-reaper` a **fifth** consecutive time (7, 8, 7, 7, 7, 7), POS control
   speaking with **4**. **0 postland RED pages after the land, denominator 2,665.**
+  🚨 **CORRECTION, MEASURED AT MY CLOSE AND LANDED SEPARATELY — THREE CLAIMS ABOVE WERE TRUE AT MY
+  OPEN AND I WROTE THEM AS LINK-WIDE FACTS. THEY ARE NOT. This is #219's scar committed in the
+  ENTRY rather than in the `comm`, and the floor rule caught it after the entry had already
+  landed.**
+  1. **THE LIVE LAYER MOVED WITHIN MY LINK — the eleven-consecutive-non-move streak is BROKEN.**
+     `LIVE_SHA` `841169ed00b1` → **`09b170f5634f`**, **69 commits** apart, both on trunk;
+     `LIVE_LAG` **64 → 6**, `LIVE_ADDS` **26 → 0**, `RUNG` **🚀 → ✅**. Somebody ran the converger
+     while I worked. **Premise 1 says the base moves MID-SESSION; it did, to me, in the link where
+     I quoted it.**
+  2. **`done` MOVED: 2,326 → 2,328, and the off-box actuator fired HARD.** Seven of the eleven cloud
+     rows changed status inside my link: `c7bef93baca6` and `5fc8ff411a7c` **blocked → done**;
+     `70f0001c657b`, `78b76e1a8311`, `8f59467c92b0`, `d1d51881cca1`, `abf5e7509608` **blocked →
+     open**; `485f8f87eb5f` **claimed → open**. **Tally at my close: 4 done · 6 open · 1 claimed**
+     (from 7 blocked / 2 done / 1 claimed / 1 open). 🚨 **So the rate is NOT `2, 2, 0, 0` — it is
+     `2, 2, 0, then a burst of seven`, under a bound that never changed. #226's zero was a LULL, not
+     a ceiling, and the reconciliation it wrote holds: a bound rations the cure sweep, it does not
+     zero it. Do not read one quiet link as a dead actuator.**
+  3. 🚨 **AND MY OWN DESIGN PREMISE EXPIRED INSIDE MY OWN LINK.** I justified presence-only
+     attribution by measuring that the LIVE `cc-classify` did not carry its self-report line at all
+     (**0 live / 2 trunk**). At my close it reads **2 live / 2 trunk** — the same converge shipped
+     it. **The design is unchanged and still right** (presence-only is monotone whatever the
+     producer carries), **but the REASON I gave for it is now stale, and the consequence is the
+     good one: the override was inert in production when I wrote it and will actually FIRE once my
+     own commit converges.** #226's R5e went live in the same advance (`blindspot_cause` **5 live /
+     5 trunk**, was 0); **mine has not yet** (`evidence=PRODUCER-SELF-REPORT` **0 live / 1 trunk**,
+     `CLASSIFY_ENUM_SELFREPORT` **0 / 9**) — an EDIT riding its symlink at lag 6, the ordinary
+     converging case, not an absent-file breach. POS control `live_pane_count` **8 live / 8 trunk**,
+     impossible NEG literal **0**, so the instrument discriminates.
+  **THE LESSON, and it is the one this chain keeps re-learning from a new direction: a measurement
+  taken at your OPEN may not describe your LINK, and the ones most likely to betray you are the ones
+  you inherited as streaks. Re-measure every streak you intend to extend, AFTER your last land, and
+  say WHEN each number was taken.** Board at my close: **317 open / 203 blocked / 2,328 done / 6
+  claimed** (520 combined, 2,854 folded), four-list `comm` reconciling exactly; my filed row
+  `3e8473494af4` present and OPEN; bogus-id NEG control 0.
 - **2026-08-25 — drain recycle #226: method 196 — TWO SIBLING DIAGNOSTICS NAMING OPPOSITE CAUSES FOR
   ONE EVENT, NEITHER READING THE STORE THAT DECIDES BETWEEN THEM.**
   Took #225's lead 1 — `88b6e65e4acf`, #220's own filing and the last unworked `cc-reaper` self-check
