@@ -108,6 +108,15 @@ assert bp is not None, bp
 assert bp["never"] is True, bp
 assert bp["pct"] is None, bp
 assert ca.fmt_burst(bp) == "needs more than it has EVER burned in 3h", ca.fmt_burst(bp)
+# ...and the refusal holds AT THE STRING, which is the half that shipped broken. A demand
+# sitting exactly at the observed maximum is not `never` — it scores 99.96 — and %.0f rounds
+# that to the literal "p100". Live on 2026-08-25 next3 rendered exactly that. A reader cannot
+# tell that string from the extrapolation this abstain exists to prevent.
+atmax = {"pct": 99.96, "h": 3.0, "n": 2576, "need_pph": 5.0, "never": False}
+assert ca.fmt_burst(atmax) == "p99 of its own 3h burns", ca.fmt_burst(atmax)
+assert "p100" not in ca.fmt_burst(atmax), ca.fmt_burst(atmax)
+assert ca.fmt_burst({"pct": 95.6, "h": 3.0, "n": 9, "need_pph": 1.0,
+                     "never": False}) == "p96 of its own 3h burns"   # the cap does NOT bind here
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }

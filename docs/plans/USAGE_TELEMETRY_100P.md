@@ -1685,6 +1685,15 @@ stamped and L3's single renderer is intact.
 above the account's observed maximum there is no evidence at all, and a rendered `p100` reads as
 a rate that HAS been achieved.
 
+**…and it shipped half-done, caught on the live surface, not by a test.** The refusal held at the
+NUMBER and leaked at the STRING. A demand sitting exactly AT the observed maximum is not `never`
+— it scores 99.96 — and `:.0f` rounds that to the literal `p100`. On 2026-08-25 next3 rendered
+`p100 of its own 1h burns`, which a reader cannot distinguish from the extrapolation the abstain
+exists to prevent. `fmt_burst` now caps the rendered percentile at 99, with a case pinning both
+arms (99.96 → `p99`; 95.6 → `p96`, so the cap is not a blanket). **Class:** an abstain rule is
+only as strong as its rendering — checking the guard in the producer and the format string in the
+renderer are two different checks, and RP-19 was only ever the first.
+
 #### S3 · M2 + M3a — the nowcast — LANDED
 
 `bin/claude-accounts`: `burn_wk_ewma_ph(samples_for_acct, now, weekly_reset_h) → (value|None,
