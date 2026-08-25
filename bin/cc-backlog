@@ -5793,6 +5793,86 @@ cmd_reap() {
       "$(printf '%s\n' "$cure_rows" | grep -c .)" "$cured"
   fi
 
+  # ── THE LOCAL STRAND — the cure sweep's blind side, REPORTED, NEVER ACTED ON ──────────────────
+  # The sweep directly above cures the machine's own blocks on ONE axis: `venue != local`. That
+  # scope is correct for what it DOES (its adjudicator is cc-cloud, which can only speak about
+  # off-box work), but it silently divides the reap's own blocks into a cured half and a stranded
+  # half — and the stranded half is the LARGER one, because ~79% of this backlog's rows name THIS
+  # MACHINE as the work's subject (BACKLOG_DRAIN_24_7 §2).
+  #
+  # MEASURED HERMETICALLY 2026-08-25 (drain recycle #213, backlog 3595c391fc71), six reap-authored
+  # blocks in one store. `unreswt000006` (venue local) and `cloudabst007` (venue cloud) carry the
+  # SAME SENTENCE, written by the SAME emitter — "the worktree occupancy oracle could not be
+  # RESOLVED past the …s ceiling" — and both match the cure select's own regex. The cloud row was
+  # re-adjudicated and UNBLOCKED; the local row stayed blocked through every later tick. One clause
+  # of one select, `select(.venue != "local")`, is the entire difference, and nothing anywhere
+  # printed a word about the row it excluded.
+  #
+  # WHY THIS IS A REPORT AND NOT A CURE — the distinction the whole oracle stack turns on. The
+  # actuator these rows want is `unblock`, whose fold is "open", which is cc-dispatch's FIRE
+  # predicate: an auto-cure that misjudges a wedged-live-worker fires a SECOND peer onto live work
+  # (a60d62a215f1 → 6488617). Two of the four decayable classes below (`wedged live worker`,
+  # `wedged owned wait`) are blocks written BECAUSE a worker was alive, so curing them is exactly
+  # that risk; and unlike the reopen path, an unblock→claim→block cycle is bounded by NOTHING here
+  # (rule B counts adjacent claim→reopen pairs, and MAX_ATTEMPTS is OR'd, not AND'd, into the
+  # starvation arm — a starved row re-blocks at any attempt count). So the cure needs a bound this
+  # function does not have and a live population this measurement did not have. Filed as a decision
+  # rather than guessed at.
+  #
+  # WHAT IS REPORTED IS THE DECAYABLE CLASS ONLY, which is the whole point: a reap block is NOT the
+  # residue of a worker dying (that verdict REOPENS — see rule A). It is one of two kinds of claim.
+  #   · About the WORK, and PERMANENT: `persistent thrash` (N fast claim→reopen cycles — the worker
+  #     cannot land) and `dead-worker stall` (N dispatch attempts exhausted). Re-asking changes
+  #     nothing; these are correctly a human's. DELIBERATELY EXCLUDED, and the bats suite pins that
+  #     both sentences fail this regex.
+  #   · About a LIVENESS or ORACLE STATE, and therefore with a HALF-LIFE: a live claimer, an
+  #     occupied worktree, a registry that gave no answer, a probe that never ran. Every one is a
+  #     present-tense assertion nothing re-checks (method 182), and a pid observed live on 08-18 says
+  #     nothing about 08-25. Those are the four below.
+  #
+  # Joined on PROSE because the block record persists only {by,event,id,needs,ts} — there is no
+  # token field — which is the same join the cure sweep uses and the same one that drifted on it
+  # (fixed 2026-08-23, after matching 0 rows for five days). tests/cc-backlog-local-strand.bats
+  # therefore renders all six sentences out of THIS file's own printfs and runs this regex against
+  # them, four POS and two NEG, so a rewording fails the suite instead of silently emptying the
+  # report (memory: control-calibrated-to-implementation-decays).
+  #
+  # Printed in BOTH modes, and modelled verb-for-verb on the self-release reporter below it: a
+  # number nobody can see is a number nobody acts on, and a detector with no owner is not an
+  # actuator (memory: detector-with-no-owner-is-not-an-actuator).
+  local strand_rows strand_n
+  strand_rows="$(valid_records | jq -s -r '
+    def st($e): if $e=="done" then "done" elif $e=="block" then "blocked"
+      elif $e=="unblock" then "open" elif $e=="claim" then "claimed"
+      elif $e=="reopen" then "open" else "open" end;
+    group_by(.id)
+    | map((sort_by(.ts)) as $g
+        | ([$g[] | select(.event=="done" or .event=="block" or .event=="unblock"
+                          or .event=="claim" or .event=="reopen")] | last) as $lastSt
+        | ([$g[] | select(.event=="block")] | last) as $lastB
+        | { id: $g[0].id,
+            status: (if $lastSt == null then "open" else st($lastSt.event) end),
+            by: (($lastB.by) // ""), needs: (($lastB.needs) // ""),
+            venue: ([$g[] | select(.event=="claim")] | last | .venue // "local") })
+    | .[]
+    | select(.status == "blocked")
+    | select(.venue == "local")
+    | select(.by == "cc-backlog-reap")
+    | select(.needs | test("wedged live worker past the|wedged owned wait past the|could not be RESOLVED past the"))
+    | .id
+  ')"
+  strand_n="$(printf '%s\n' "$strand_rows" | grep -c . || true)"
+  if [ "${strand_n:-0}" -gt 0 ]; then
+    # The id list is CAPPED and the cap is STATED — a truncated list that says nothing about its
+    # truncation reads as the whole population (memory: zero-claim-must-name-its-excluded-strata).
+    local strand_show strand_rest
+    strand_show="$(printf '%s\n' "$strand_rows" | head -12 | tr '\n' ' ')"
+    strand_rest=$((strand_n - 12))
+    printf 'cc-backlog reap: %s LOCAL reap-authored block(s) rest on a premise that has DECAYED (a live claimer, an occupied worktree, or an oracle that never answered) — the cure sweep above is scoped `venue != local` and cannot reach them; they are NOT thrash/stall, which stay a human'"'"'s: %s%s\n' \
+      "$strand_n" "$strand_show" \
+      "$([ "$strand_rest" -gt 0 ] && printf '(+%s more, list capped at 12)' "$strand_rest")"
+  fi
+
   # SELF-RELEASES ARE REPORTED, NEVER ACTED ON. They are excluded from the block predicate because
   # they are evidence about the machine and not about the item — but a number nobody can see is a
   # number nobody acts on, and the machine-side condition they measure (a fire the capacity gate

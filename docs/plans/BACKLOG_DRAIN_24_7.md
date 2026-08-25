@@ -87,6 +87,151 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-25 — drain recycle #214: method 184 — A MACHINE-AUTHORED STATE CARRIES THE AUTHOR'S
+  NAME, NOT THE AUTHOR'S REASON. A row convicted by `.by == <sweep>` invites its reader to take the
+  SWEEP'S NAME as the premise; but a sweep's name is one token and its premises are plural, and the
+  refutation is usually that the premise the NAME advertises is the one that path does NOT produce.
+  `cc-backlog-reap` is "the dead-worker sweep", so 17 reap-authored blocks read as "residue of a
+  worker dying" — and a death is the one verdict reap answers with `reopen`, never `block`. filed 0 /
+  closed 1 (close deferred to the desk: this link ran in the CLOUD lane, which has no store).**
+  Ran in **Claude Cloud** — no `~/.claude/autonomy/`, no `cc-backlog` on PATH, no live fleet. So
+  **no board count is claimed here, in either direction**, and the `comm`-both-ways membership check
+  every local link runs was IMPOSSIBLE rather than skipped. What the lane CAN do is read trunk and
+  run the tool hermetically, which is what this link is made of. Stated up front because a link that
+  reports no numbers looks like a link that forgot to.
+
+  **THE ROW: `3595c391fc71`** — *"17 of 190 BLOCKED rows were blocked by cc-backlog-reap, not by a
+  human gate — structurally unreachable residue of a WORKER DYING; expect most to be plain reopens."*
+  Its measurement (17/190 by `.by`) is CORRECT and is not disputed. Its *mechanism*, its
+  *prescription*, and half of its *unreachability claim* are all refuted, by one hermetic run.
+
+  🚨 **THE PRESCRIPTION WAS THE UNSAFE ACT, and the row's own subject says so.** "Expect most to be
+  plain reopens" is not merely wrong: `reopen`/`unblock` fold to `open`, which is **cc-dispatch's
+  fire predicate**, and two of the five block classes are written BECAUSE a worker is alive. The
+  wedged-live-worker block carries its own refutation in its `needs`: *"NOT reopened: the worker is
+  alive, so a reopen would fire a SECOND peer onto live work."* That is incident
+  `a60d62a215f1 → 6488617`. Acting on this row as written re-runs it 17 times.
+
+  **MEASURED HERMETICALLY** (harness: 6 reap-authored rows, one store, `HOME`/`CC_BACKLOG_FILE`/
+  `CC_BACKLOG_IDL`/`CC_CLOUD_STATE` all overridden; a real `sleep` pid as the LIVE positive control
+  and a verified-absent pid as the DEAD negative control — the same two-sided shape
+  `claimer_live`'s own header uses). One `cc-backlog reap`:
+
+  | seeded premise | reap's verb | so the block's premise is |
+  |---|---|---|
+  | dead claimer, worktree empty, 1 attempt | **REOPEN** | — *the death path does not block at all* |
+  | 2 fast claim→reopen cycles (rule B) | BLOCK `thrash` | the worker cannot LAND — about the WORK |
+  | claimer is a **LIVE** pid past the ceiling | BLOCK `wedged-live-worker` | a worker that is ALIVE |
+  | dead claimer, 3 attempts (≥ MAX_ATTEMPTS) | BLOCK `dead-worker-stall` | N attempts exhausted |
+  | claimer opaque, no registry | BLOCK `unresolvable-claimer` | *"no answer is not proof of death"* |
+  | worktree root absent | BLOCK `unresolvable-worktree-oracle` | a probe that NEVER RAN |
+
+  So: **three of the five block classes are the sweep declining to reach a verdict, one is a LIVE
+  wedge, one is a bound exhausted — and the single case where reap does convict a death, it
+  REOPENS** (`bin/cc-backlog:5648`, rule A). "Residue of a worker dying" describes the one outcome
+  that is not in the blocked pile. Rule B is sharper still: it fired on a row folded to **open**,
+  with **both oracles never asked** (its own comment: *"rule B fires on the TRAIL SHAPE alone,
+  before any liveness probe runs"*) — a reap block need not involve a worker at all.
+
+  **The answer to the row's actual question, for all 17 at once.** The row asked to list them and ask
+  per-row whether the reap premise bears on whether the WORK is blocked. The store is unreachable
+  from this lane, but every one of the 17 is in one of exactly five classes, and the classes split
+  two ways — which is a stronger answer than an enumeration, because it does not decay:
+  · `thrash` and `dead-worker-stall` — the premise is about the WORK and is **PERMANENT**. Correctly
+    a human's; re-asking changes nothing. These are the classes cc-dispatch's own churn generates
+    most, so they are likely the majority of the 17.
+  · `wedged-live-worker`, `wedged-owned-wait`, `unresolvable-claimer`, `unresolvable-worktree-oracle`
+    — the premise is a **LIVENESS or ORACLE STATE, with a half-life**. This is method 182 exactly one
+    week on: a present-tense assertion (*"claimer vm-10466 is still LIVE"*) that nothing re-checks.
+    A pid observed live on 08-18 says nothing about 08-25.
+
+  🆕 **THE REAL DEFECT, which the row smelled and mis-located: the curer already MATCHES the local
+  row and one clause throws it away.** The row's "nothing ever revisits a blocked row" is **false
+  since 2026-08-23** — the CURE SWEEP (`bin/cc-backlog:5701-5762`) scans `blocked`, selects the
+  reap's own blocks, and re-adjudicates them; in the harness `cloudabst007` went blocked → **open**
+  with no human. But it is scoped on three axes and the third is `select(.venue != "local")`.
+  Two rows in that run — `unreswt000006` (local) and `cloudabst007` (cloud) — carry the **same
+  sentence from the same emitter**, *"the worktree occupancy oracle could not be RESOLVED past the
+  21600s ceiling"*, and **both match the cure select's regex**. The cloud one was cured. The local
+  one stayed blocked through every later tick, and nothing printed a word about it. `venue` is the
+  entire difference, and **~79% of this backlog is structurally local** (§2). The local abstention
+  block is not exotic either: the source names its own batch producer — *"a mistyped/unmounted
+  `CC_BACKLOG_WT_ROOT`, or a launchd sweep with no HOME"* — which strands every dispatched item at
+  once, exactly like the 78-row off-box batch the cure sweep was built for.
+
+  **SHIPPED: the report, deliberately NOT the cure.** `bin/cc-backlog` cmd_reap now counts and NAMES
+  the local reap-authored blocks whose premise is in the decayable set, every sweep, in both modes —
+  modelled verb-for-verb on the self-release reporter beside it (*"a number nobody can see is a
+  number nobody acts on"*; memory: `detector-with-no-owner-is-not-an-actuator`). It writes nothing.
+  **Why the actuator was NOT written here, stated rather than hidden:** the actuator is `unblock`,
+  whose fold is the fire predicate, and an unblock→claim→block cycle is bounded by **nothing** in
+  this function — rule B counts adjacent claim→reopen pairs, and `MAX_ATTEMPTS` is OR'd (not AND'd)
+  into the starvation arm, so a starved row re-blocks at ANY attempt count. That needs a bound this
+  function does not have and a live population this lane cannot see. Filed as a decision, not
+  guessed at (F2/F3 FAIL on the Follow-On Gate; the report is the F1-F4 PASS).
+
+  **The join is PROSE, and that is the known hazard, so the test pins it behaviourally.** A block
+  record persists only `{by,event,id,needs,ts}` — no token field — which is why the cure sweep
+  joined on a sentence and why that join drifted (matched **0 rows for five days**, fixed 08-23).
+  `tests/cc-backlog-local-strand.bats` therefore hard-codes no sentence: it renders all six out of
+  cc-backlog's own assignments and lifts the shipped regex out of the file, then runs 4 POS / 2 NEG.
+  Reword any emitter and the suite goes red instead of silently emptying the report
+  (memory: `control-calibrated-to-implementation-decays`).
+
+  🚨 **MY OWN CONTROLS WERE INERT — TWICE — AND MY FIX FOR THE FIRST ONE WAS MEASURED ON THE WRONG
+  BASH.** Written first as `! echo "$output" | grep -q <id>`, all four negative assertions were
+  **no-ops**: bats runs bodies under `set -eET`, and bash exempts a `!`-negated command from errexit
+  (SC2314). Proved, not assumed — flipping one to assert the SUBJECT id was ABSENT still reported
+  `ok`, i.e. the suite was green over an assertion it had just contradicted two lines above.
+  · **Then the second round.** I rewrote them as `[[ … != … ]]` and re-proved it with the same
+  mutant: the flip now failed, so the fix looked confirmed. **It was confirmed on the wrong
+  interpreter.** This lane is Linux with **bash 5.2.21**; the suite's deployment target is the
+  operator's **macOS system bash 3.2**, which exempts the `[[` and `((` KEYWORDS from errexit too
+  (`scripts/bats-assert-liveness.py` header; grid in `BATS_DEAD_ASSERTIONS_2026-07-25.md`). The
+  mutant could not see it because the exemption is not in the assertion, it is in the shell running
+  it. So `[[ != ]]` is dead on the box the suite actually runs on, and my green mutant was a **false
+  all-clear bought with real evidence**.
+  · **The gate caught it, not me** — `ship-land.sh`'s dead-assertion ratchet went RED on 5 lines and
+  named the class of each: 4 × `cond-keyword` plus one I had not even suspected, `and-absorbed`
+  (`[ -n "$a" ] && [ -n "$b" ]` — a failing LEFT operand is a non-last element of an `&&` list, so
+  errexit skips it and the guard passes on an empty `$a`). Revived with the sanctioned
+  `scripts/bats-assert-liveness-fix.py` (appends `|| false`, which puts a live simple command last),
+  then re-verified with **four** mutants, all biting: flip a NEG to a present id · empty a required
+  render · reword the tool's report sentence · delete the report arm entirely.
+  **The generalizable half, and it is the load-bearing one:** *a behavioural claim is only true of
+  the runtime you measured it on*, and a cross-platform test suite has two runtimes — the one you
+  ran and the one it ships to. A mutant proves liveness **on this interpreter only**. This repo's
+  whole discipline is two-sided controls, and on the deployment bash the two most natural spellings
+  of a negative control are both the spellings that do not work.
+
+  **Verification, all run this turn.** New suite 3/3 green; **RED-PROOF** against `origin/main`
+  `dc8300df` via `CC_TEST_BIN_DIR` — tests 1 and 2 FAIL pre-fix, test 3 is green in both directions
+  BY DESIGN (it pins "report-only, never writes", which must hold before and after). Regression:
+  `cc-backlog.bats` + `cure-sweep` + `blocked-producers` + `venue` + `fold-agreement` + `mechanical`
+  → 190 ok, and the **14 failures are byte-identically the same set on a clean `origin/main`
+  worktree** (all lsof-cwd-dependent; this container's lsof cannot report process CWD) — 0
+  introduced, attributed by running the baseline rather than by assertion. shellcheck: the finding
+  multiset over `bin/cc-backlog` is **identical** pre- and post-diff, and the new `.bats` is clean.
+  Lints: kill-guard clean (537 suites), testname-eval clean (537), shim-parity NOT-ACTIVE (healthy
+  default), bats-shellcheck-lint clean. Land gate: moving-ref-control clean, git-identity clean
+  (807 files), utc-stamp clean, pipefail-sigpipe clean, dead-assertion clean **after** the revival
+  above (RED on the first attempt — see the bash-3.2 paragraph; that RED is the reason this entry
+  has a second round in it).
+
+  **A NON-VERDICT CAUGHT AND THEN RESOLVED, both halves recorded.** Run before the commit,
+  `bats-shellcheck-lint.sh` inferred its range as `origin/main...HEAD`, saw **0 changed .bats
+  line(s)**, and reported *"this change writes no .bats line, so nothing can block"* — a clean
+  verdict over an EMPTY SET, true only because the new suite was still untracked. That is the shape
+  of an instrument that reads healthy because it never looked (method 181's family). Re-run after
+  the commit it reports **143 changed .bats line(s), 1 suite scanned, 0 blocking findings** — a real
+  verdict about a real population. Kept in the record because the first reading is the one a future
+  reader would have quoted.
+
+  **Screen for successors, measured:** the reap's own five block sentences are the enumeration —
+  grep blocked rows' `needs` for `persistent thrash|dead-worker stall after` (PERMANENT, a human's)
+  vs `wedged live worker past the|wedged owned wait past the|could not be RESOLVED past the`
+  (DECAYED, agent-actionable). Once landed, `cc-backlog reap --dry-run` prints the second list by
+  id every sweep — the first thing the next reader should run, from a box that has the store.
 - **2026-08-25 — drain recycle #213: method 183 — A ROW'S PRESCRIBED DISCRIMINATOR CAN HAVE ZERO
   POWER BETWEEN THE VERY CLASSES IT EXISTS TO SEPARATE, AND ITS FAILURE DIRECTION IS THE
   COMFORTABLE ONE. A row whose every finding is true can still prescribe a test that returns the
