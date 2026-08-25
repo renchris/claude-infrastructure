@@ -956,14 +956,22 @@ PARITY_ASSERT="${CC_DEPLOY_PARITY_ASSERT-$DEPLOY_REPO/scripts/deploy-parity-asse
 # pages that share the slot. Signature-keyed, so a CHANGE in the drift set re-pages immediately.
 COPYDRIFT_TTL_S="${CC_DEPLOY_COPYDRIFT_TTL_S:-86400}"
 copy_drift_notice() { # <assert stdout> — never fails, never mutates the live layer
-  local out="$1" n names sig marker prev now=0
-  n="$(printf '%s\n' "$out" | grep -cE '^  (STALE|COPYMISS|COPYSTALE|CLAUDEMD) ' 2>/dev/null || true)"
+  local out="$1" n names sig marker prev now=0 ahead_n ahead_names
+  n="$(printf '%s\n' "$out" | grep -cE '^  (STALE|COPYMISS|COPYSTALE|COPYAHEAD|CLAUDEMD) ' 2>/dev/null || true)"
   case "$n" in ''|*[!0-9]*) n=0 ;; esac
   [ "$n" -gt 0 ] || return 0
-  names="$(printf '%s\n' "$out" | grep -E '^  (STALE|COPYMISS|COPYSTALE|CLAUDEMD) ' \
+  names="$(printf '%s\n' "$out" | grep -E '^  (STALE|COPYMISS|COPYSTALE|COPYAHEAD|CLAUDEMD) ' \
              | awk '{print $2}' | sort -u | tr '\n' ' ' 2>/dev/null || true)"
   names="${names% }"
-  sig="$n:$names"
+  # THE LIVE-AHEAD SUBSET IS THE ONE THE REMEDY MUST NOT BE APPLIED TO. Counted separately, and it
+  # is in the SIGNATURE, so a set that merely changes direction re-pages instead of staying damped
+  # under an identical name list.
+  ahead_n="$(printf '%s\n' "$out" | grep -cE '^  COPYAHEAD ' 2>/dev/null || true)"
+  case "$ahead_n" in ''|*[!0-9]*) ahead_n=0 ;; esac
+  ahead_names="$(printf '%s\n' "$out" | grep -E '^  COPYAHEAD ' \
+                   | awk '{print $2}' | sort -u | tr '\n' ' ' 2>/dev/null || true)"
+  ahead_names="${ahead_names% }"
+  sig="$n:$names:ahead=$ahead_names"
   marker="$POSTLAND_DIR/deploy-copydrift.sig"
   prev="$(cat "$marker" 2>/dev/null || true)"
   now="$(date +%s 2>/dev/null || echo 0)"
@@ -977,15 +985,32 @@ copy_drift_notice() { # <assert stdout> — never fails, never mutates the live 
      && [ -z "$(find "$marker" -mmin "+$((COPYDRIFT_TTL_S / 60))" 2>/dev/null)" ]; then
     return 0
   fi
-  say "copy-drift: $n copy-class file(s) DIFFER from this checkout — $names — and NOTHING on this path can repair them (link_refresh owns symlink classes only; install.sh is the sole repairer and refuses from a behind-trunk checkout)"
+  if [ "$ahead_n" -gt 0 ]; then
+    say "copy-drift: $n copy-class file(s) DIFFER from this checkout — $names — and $ahead_n of them are LIVE-AHEAD ($ahead_names): the live bytes are in NO tracked revision, so install.sh would DESTROY them. Land those first; the rest are ordinary live-stale drift and install.sh is their (operator-cadence) repair."
+  else
+    say "copy-drift: $n copy-class file(s) DIFFER from this checkout — $names — all live-STALE (their live bytes are past revisions), and NOTHING on this path can repair them (link_refresh owns symlink classes only; install.sh is the sole repairer and refuses from a behind-trunk checkout)"
+  fi
   mkdir -p "$PAGES_DIR" "$POSTLAND_DIR" 2>/dev/null || true
   { echo "$now"
-    printf 'deploy-live: COPY-class drift — %s file(s) live-stale: %s\n' "$n" "$names"
-    printf 'the live layer is NOT running this checkout for these files, and no automatic path repairs them.\n'
-    printf 'link_refresh repairs SYMLINK classes only; install.sh is the only copy repairer and it\n'
-    printf 'refuses a global install from a behind-trunk checkout — the state deploy-live creates by\n'
-    printf 'design while a landing chain runs (it deploys the newest GREEN commit, not the tip).\n'
-    printf 'fix: reconcile the shared checkout, then run install.sh there by hand.\n'
+    printf 'deploy-live: COPY-class drift — %s file(s) DIFFER from the checkout: %s\n' "$n" "$names"
+    if [ "$ahead_n" -gt 0 ]; then
+      printf '\n!! %s of these are LIVE-AHEAD: %s\n' "$ahead_n" "$ahead_names"
+      printf '   Their live bytes are NOT in this checkout history — either unlanded live edits, or a\n'
+      printf '   newer landed revision this checkout has not fetched (deploy-live runs from the newest\n'
+      printf '   GREEN commit, so the live layer CAN legitimately be ahead of it). Either way this is\n'
+      printf '   not staleness, and install.sh copies repo->live unconditionally, so running it would\n'
+      printf '   REGRESS the live layer. Land the live content, or fetch this checkout, FIRST.\n'
+      printf '   (Measured 2026-08-24: CLAUDE.md sat in exactly this state, carrying an\n'
+      printf '   operator-authored rule that had never been tracked, and was reported as "live-stale"\n'
+      printf '   alongside a plist whose drift ran the other way.)\n\n'
+    fi
+    printf 'the remaining files are live-STALE: the live layer is NOT running this checkout for them,\n'
+    printf 'and no automatic path repairs them. link_refresh repairs SYMLINK classes only;\n'
+    printf 'install.sh is the only copy repairer and it refuses a global install from a\n'
+    printf 'behind-trunk checkout — the state deploy-live creates by design while a landing chain\n'
+    printf 'runs (it deploys the newest GREEN commit, not the tip).\n'
+    printf 'fix: land any LIVE-AHEAD content first, then reconcile the shared checkout and run\n'
+    printf 'install.sh there by hand.\n'
   } > "$PAGES_DIR/deploy-copy-drift.page" 2>/dev/null || true
   printf '%s\n' "$sig" > "$marker" 2>/dev/null || true
   return 0

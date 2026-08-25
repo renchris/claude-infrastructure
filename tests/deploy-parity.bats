@@ -1256,3 +1256,57 @@ _filefix() {   # a stub cc-backlog that records its argv; nothing here can reach
   [[ "$output" != *"ORPHAN"* ]] || false                # `|| false`: a mid-test [[ ]] is dead otherwise
   [ -L "$CC_PARITY_LIVE/hooks/lib/not-added-yet.sh" ]   # and it is still there to be linked
 }
+
+# ── COPYAHEAD: "DIFFERS" never said WHICH SIDE, and the remedy needed it (2026-08-24) ─────────────
+# backlog 20aefaafb5c4. deploy-live reported CLAUDE.md and a launchd plist as ONE condition with ONE
+# remedy (run install.sh). They drifted OPPOSITE ways: the plist's checkout was ahead (repair
+# correct), while CLAUDE.md's LIVE copy was ahead by an operator-authored rule that had never been
+# tracked — and install.sh copies repo->live, so the prescribed repair would have DELETED it.
+#
+# The discriminator is git: hash the LIVE bytes, ask whether that blob is anywhere in the tracked
+# path's history. These cases need real COMMITS — _track only STAGES, and a path with no history is
+# deliberately UNKNOWN, not `ahead` (an empty search space is not a finding).
+_commitfix() {   # give the fixture repo a real history for one copy-class path
+  git -C "$CC_PARITY_REPO" -c user.email=t@t -c user.name=t commit -qm "fixture" >/dev/null 2>&1 || true
+}
+
+@test "copy AHEAD: live bytes absent from the path's history ⇒ COPYAHEAD, never COPYSTALE" {
+  _copyfix
+  _commitfix
+  printf 'statusline BYTES THAT WERE NEVER COMMITTED\n' > "$CC_PARITY_LIVE/statusline.sh"
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"COPYAHEAD"* ]] || { echo "expected COPYAHEAD:"; echo "$output"; false; }
+  [[ "$output" == *"statusline.sh"* ]] || false
+  # THE LOAD-BEARING HALF: it must not ALSO wear staleness's token for this file, because that token
+  # is what carries "run ./install.sh" — the command that destroys these bytes.
+  [[ "$(printf '%s\n' "$output" | grep 'statusline.sh')" != *"COPYSTALE"* ]] || false
+  [[ "$output" != *"MISSING: ln -sf"* ]]
+}
+
+@test "copy BEHIND: live bytes ARE a past revision ⇒ COPYSTALE, and install.sh stays the remedy" {
+  # The control that makes the case above mean something: same fixture, same diff, opposite
+  # direction. If this reported COPYAHEAD too, the probe would just be a rename of COPYSTALE.
+  _copyfix
+  _commitfix
+  cp "$CC_PARITY_REPO/statusline.sh" "$BATS_TEST_TMPDIR/v1"      # the committed bytes
+  printf 'statusline v2\n' > "$CC_PARITY_REPO/statusline.sh"     # repo moves on…
+  _track; _commitfix
+  cp "$BATS_TEST_TMPDIR/v1" "$CC_PARITY_LIVE/statusline.sh"      # …live still holds the OLD revision
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"COPYSTALE"* ]] || { echo "expected COPYSTALE:"; echo "$output"; false; }
+  [[ "$output" != *"COPYAHEAD"* ]] || { echo "a PAST revision must not read as ahead:"; echo "$output"; false; }
+  [[ "$output" == *"run ./install.sh"* ]] || false
+}
+
+@test "copy UNKNOWN: a tracked path with NO history cannot claim a direction" {
+  # _track stages without committing, so git has nothing to search. "No past revision matches" is
+  # then an artefact of an empty search space, not evidence — it must not fire the loud branch.
+  _copyfix
+  printf 'statusline edited, and the repo has no commits at all\n' > "$CC_PARITY_LIVE/statusline.sh"
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"COPYAHEAD"* ]] || { echo "no history ⇒ must not claim ahead:"; echo "$output"; false; }
+  [[ "$output" == *"direction UNKNOWN"* ]] || { echo "expected an explicit UNKNOWN:"; echo "$output"; false; }
+}
