@@ -5463,11 +5463,24 @@ if [ "${1:-}" = "__recycle" ]; then
         cr)
           hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;;
         retype)
+          # ROUTED THROUGH THE SANCTIONED HELPER — the last raw typed send in this tree, and the
+          # standing typed-send-lint RED that kept every postland sweep's verdict non-green (a grep
+          # over the tree is deterministic, so it survived the retry ladder into a red stamp every
+          # time; backlog 01ab05685857). It was never a blind send: it pasted `/exit`, slept, read
+          # the composer back and sent the CR only on an exact match — i.e. it hand-rolled
+          # it2_paste_submit_verified's own three-step contract against the same surface, which is
+          # why the lint's fix instruction and this code already agreed on the mechanism.
+          # The helper is strictly stronger on all three legs: it re-proves the composer EMPTY
+          # (recycle_nudge_decision's `retype` verdict is one composer_content stale by the time
+          # this arm acts on it, and a draft that arrived in between is exactly the merge the nudge
+          # gate exists to refuse), it gates on composer_owned first, and its read-back accepts the
+          # PLACEHOLDER form as well as the literal, so a CC that renders `[Pasted text #N]` no
+          # longer reads as MANGLED. Every non-zero rc leaves the text UNSUBMITTED and says so; the
+          # loop then falls through to the 600s refusal with the session alive, which is the
+          # recoverable outcome this whole gate is built around.
           if [ "$waited" = 60 ]; then
-            hf_bounded "$IT2" session send -s "$RSID" "/exit" >/dev/null 2>&1 || true
-            sleep 1
-            nc="$(composer_content "$IT2" "$RSID")" || nc=""
-            if [ "$nc" = "/exit" ]; then hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true; fi
+            it2_paste_submit_verified "$IT2" "$RSID" "/exit" || \
+              echo "→ nudge@${waited}s retype NOT submitted (rc $?) — /exit is unsubmitted in pane $RSID; holding to the 600s refusal"
           fi ;;
         *)
           echo "→ nudge@${waited}s HELD ($nd): composer is not a stranded /exit — a CR here would submit someone else's buffer"
