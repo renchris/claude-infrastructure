@@ -87,6 +87,107 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-25 — drain recycle #220: method 190 — A ROW CAN NAME A REAL DEFECT, PRESCRIBE A REAL
+  FALSIFIER, AND STILL POINT ITS REMEDY AT A MECHANISM THAT IS NOT THE ONE FIRING, BECAUSE THE
+  FAILURE EXITS 0.** Took #219's own filing `ee743fad3674` and its named cleanest half — the
+  rc-124-only classify branch in `bin/cc-reaper`. The row is right that the branch is too narrow,
+  right that 189 sweeps end unexplained, and its prescribed falsifier (*"stub `CLASSIFY_BIN` to exit
+  127"*) really does reproduce a silent path. **But the remedy that falsifier implies — widen the rc
+  branch — has ZERO POWER over the mode that actually fires in production, and the row could not
+  see that because it never ran the producer.**
+  **THE MECHANISM.** `bin/cc-classify:951` reads `all="$("$SESSIONS_BIN" --json 2>/dev/null || echo
+  '[]')"` and `cmd_all` then `return 0`. The enumerator fails **OPEN**, two layers below the call
+  the reaper bounds. So the producer does not fail — **it succeeds emptily**, and `crc` is 0.
+  **THE THREE-ARM A/B, real binary, one input moved:** arm A real `cc-sessions` ⇒ **rc 0, 8
+  entries**; arm B `cc-sessions` stubbed to exit 3 ⇒ **rc 0, `[]`, ZERO bytes of stderr**; arm B2
+  `cc-sessions` emitting non-JSON at rc 0 ⇒ **rc 0, `[]`**. A healthy run and a failed one are
+  **indistinguishable by rc**, so no rc branch however wide can separate them. Arm C (the row's own
+  falsifier) confirmed rc 127 is silent too — real, but a different and rarer path.
+  **THE PRODUCTION CENSUS, and the discriminator the row did not have.** `cc-classify --all --json`
+  emits one entry per LIVE session including cause `active`, so `0 classified` on a populated box is
+  not an idle sweep, it is a blind one. Over the summarised sweeps in `~/.claude/logs/cc-reaper.out.log`,
+  **1,145 ended `0 classified` and ALL 1,145 had live>0 — median 17, max 54. A legitimately-empty
+  classification has never once been observed on this box.** In the reaper's own log, 480 sweeps end
+  `0 classified` against **291** carrying the logged double-timeout, leaving **189 that name
+  nothing** — reproducing #219's 189 from a second, independent store.
+  **THE SIGNAL IS THE LENGTH, NOT THE rc — and it is only readable against something the rc cannot
+  reach.** `bin/cc-reaper` already owns that something: `live_pane_count()`, deliberately NOT
+  registry-derived (its own header says so). **THE FIX (`0e398ab9`), two arms, both RECORD-ONLY:**
+  **R5b** — a non-124 `crc` is the child's own failure and now says so distinctly from the bound
+  (`_rp_bounded`'s own comment already demanded rc 124 *"stay distinguishable from the child's own
+  failure"* and defended only one direction); **R5c** — `n==0` is cross-checked against
+  `live_pane_count`, and a populated box makes it a **named NO VERDICT**. **Neither changes what the
+  sweep DOES** — `n` is already 0, so nothing was going to be reaped either way. **Being blind and
+  saying so nowhere was the entire defect.** `live_pane_count` is called only on the `n==0` path, so
+  the ~80% of sweeps that classify successfully pay nothing.
+  **PROVEN.** `tests/cc-reaper.bats` **171 → 174**, full suite **174/174, plan == ok + nok, 0
+  skips**. **One mutant per SITE, each redding EXACTLY ONE test of three**, subject restored
+  byte-identical by sha256 on every arm: M1 delete R5b ⇒ only the R5b test reds; M2 delete R5c ⇒
+  only the R5c test reds; M3 drop R5c's `live>0` gate ⇒ **only the CONTROL reds, which is how that
+  control earned its place** rather than being assumed. `shellcheck bin/cc-reaper` rc 0 / 0
+  findings; `bats-assert-liveness` rc 0.
+  **THE SECOND FINDING, FILED NOT DRIVEN — `88b6e65e4acf`.** The only alarm that ever fired on a
+  blind sweep is the P0-12b self-check, and **it names a cause its own sweep already refutes**:
+  it pages *"a spawn mode isn't registering in cc-registry"*, while `cc-sessions` enumerates
+  `~/.claude/cc-registry/*.json` and `cc-classify` reads `cc-sessions` — so a registered row is one
+  classify should see. **863 of the 1,145 carried a `cc-reconcile` line in the SAME sweep reporting
+  present>0** (median 13, max 51). The verbatim exhibit: `19 live · 8 present … (no-pane 11)`, then
+  `0 classified`, then `Δ19 blind spot`. Registry non-registration explains the 11; **it cannot
+  explain the 8.** Second and separable: `self_check` re-pages only when the delta **strictly
+  grows**, and re-arms the watermark only when the delta falls back inside tolerance — so a
+  persistent blind spot that never worsens is announced once and damped forever. **The live persist
+  counter read 863 and then 864 inside one session**, monotone across its last twelve values. The
+  damping is DELIBERATE (*"re-paging a desk-less fleet each sweep is the storm"*), which is exactly
+  why this is filed for design and not fixed on a drive-by — and R5c already removes its monopoly,
+  since the enumerator-failed-open case now gets its own named line at the point it happens.
+  **INSTRUMENT FAILURES, both caught by their own controls.** (1) My board-write verification grepped
+  `strictly grows` against a title I had written in CAPITALS — **my own pattern could not match text I
+  wrote five minutes earlier**, the class this brief names every link; the row was intact and the
+  other seven literals plus a NEG control at 0 proved it. (2) **Two summary regexes of different
+  tightness gave denominators of 5,424 and 5,818** (rate 21.1% vs 19.7%) — I state both rather than
+  pick one, because the parser-independent invariant is what the finding rests on: **1,145
+  zero-classified sweeps, every one with live>0.** ⚠️ **And `cc-reaper.out.log` carries NO
+  timestamps at all**, so none of its counts can be dated or bounded to a window — unlike
+  `cc-reaper.log`, which spans 2026-08-13T01:03:37Z .. 2026-08-25T11:48:43Z. **A LOOKED-FOR
+  COINCIDENCE, REFUTED RATHER THAN REPORTED:** two independent counts both read 863, which is the
+  shape that indicts a harness — the persist counter had simply advanced to 864 between reads, the
+  populations differ in size (2,564 vs 863) and intersect at 735, so it was never a shared count.
+  **THE CONVERGER — RE-RAN, NOT INHERITED, AND #219'S DESCRIPTION STILL HOLDS.** `deploy-live.sh
+  --auto` from the shared checkout, **rc captured directly to a file, not through a pipe**:
+  **rc=1**, the LOUD degraded banner (*"none of the 46 commit(s) above it has verified … authorised
+  by 46 commit(s) behind trunk (budget 25)"*), and **`LIVE_SHA` did not move — `841169ed` for a
+  FOURTH consecutive link** while the lag ran 15 → 25 → 28 → **46** and `LIVE_ADDS` reached **26**.
+  A new first line appeared that #219 did not see — `copy-drift: 1 copy-class file(s) DIFFER …
+  launchd/*.plist` — which `20aefaafb5c4` already owns; not re-filed. **`799ec26e3a74` owns the
+  refusal and its own text forbids closing it with another `--force`.** **The nine starved rows are
+  ALL still `blocked`, and that is NOT a finding:** `d7b3989d4` is still not an ancestor of the live
+  head (rc 1; POS control against trunk rc 0, NEG control on a pinned off-trunk sha rc 1) and the
+  live `cc-backlog` still carries **0** `sort_by(.bts)` against trunk's 1 (POS control `cmd_reap`
+  = 13, NEG 0). **Asked by FILE, as the standing rule requires, not by the lag number.**
+  **STANDING CHECKS.** The `qos-rewrite.sh` diff was clean — the **103rd** consecutive. `.page`
+  files under `~/.claude/autonomy/postland` = **0**, the **112th** consecutive; ⚠️ its denominator
+  control **collapsed 4,780 → 480** as a GC ran, and `stamps` read **449**, so the 0 still stands
+  over a real population but a much smaller one. All four KITTY-aware pre-fire checks PASSED by
+  minute ~4: `cc-in-kitty` rc 0, `KITTY_WINDOW_ID` **27**, `kitty @ ls` naming this pane with cwd =
+  **the worktree**, `cc-notify --self` ⇒ 27, synthetic `ITERM_SESSION_ID=w0t0p0:27` (`CC_TERM`
+  unset, as at #219). `cc-roles list` reads **`drain-lead UNVERIFIED 7`** — unchanged from #219,
+  with `desk` and `docs-lead` also UNVERIFIED and `orchestrator ABSENT empty` proving the table can
+  still discriminate. **No new peer mail**: box 27 holds exactly one message, #217's, already
+  consumed by #218. The PostToolUse hook fired on **2 of 2** `.py` files and **0 of** the `.sh`,
+  `.md` and `.txt` files written — a **fifth** data point for the extension prior, still a FLOOR and
+  still not a law; every literal was re-verified after each notice and all survived.
+  **BOARD.** At my open **307 open / 206 blocked / 2315 done / 6 claimed** (**513** open+blocked).
+  Against #219's close snapshot: **TWO arrivals, ZERO departures** on open+blocked — `698b3c154763`
+  and `a2ddd2e052dd`, **both `blocked`, both `master-operator-gated`, both `981a403a05fa` re-land
+  emissions and neither adopted** — and **ZERO churn in either direction on the claimed set**.
+  **I declared a MOVE and delivered a MOVE: one fix landed, one row filed, ZERO rows closed** — and
+  `ee743fad3674` is deliberately LEFT OPEN, because I discharged only its rc-124 half and its two
+  sibling-bound halves still want the two-arm A/B the row itself asks for. **Per #201's rule the
+  residue has a named owner: the row itself.** The closing set-difference is taken AFTER the land
+  and recorded in #221's brief — **a `comm` taken before the land is a mid-link measurement wearing
+  a close's label, and it fails in the flattering direction** (#219's scar, paid for with a second
+  land).
+
 - **2026-08-25 — drain recycle #219: method 187, THIRD INSTANCE — THE BOUND WAS NOT TOO SMALL FOR
   THE WORK, IT WAS SIZED IN A DIFFERENT SCHEDULING BAND THAN THE ONE THE JOB RUNS IN.**
   Took #218's named strongest unspent lead — the `classify` bound, the last unexamined of
