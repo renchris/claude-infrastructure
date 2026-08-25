@@ -2268,12 +2268,19 @@ def burst_percentile(r, samples):
 
 
 def fmt_burst(bp):
-    """The one rendering of burst_percentile, so the abstain states cannot be spelled two ways."""
+    """The one rendering of burst_percentile, so the abstain states cannot be spelled two ways.
+
+    THE 99 CAP IS THE SENTINEL'S OTHER HALF, and it is not cosmetic. `burst_percentile` refuses
+    to extrapolate a p100 — above the observed maximum it returns the `never` state instead —
+    but a demand sitting exactly AT the maximum scores 99.96, and `:.0f` rounds that to the
+    literal string `p100`. Live on 2026-08-25 that is what next3 rendered. A reader cannot tell
+    that string from the extrapolation the abstain exists to prevent, and it reads as a rate the
+    account HAS achieved. The refusal has to hold at the string, not only at the number."""
     if not bp:
         return None
     if bp["never"]:
         return f"needs more than it has EVER burned in {bp['h']:.0f}h"
-    return f"p{bp['pct']:.0f} of its own {bp['h']:.0f}h burns"
+    return f"p{min(99.0, bp['pct']):.0f} of its own {bp['h']:.0f}h burns"
 
 
 WEEK_H = 168.0          # the weekly bucket's span; reset stamps are exactly 7 d apart
