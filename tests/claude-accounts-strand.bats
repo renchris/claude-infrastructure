@@ -230,7 +230,7 @@ r = {"acct": "next", "weekly_pct": 52, "weekly_reset_h": 114.0, "burn_wk_ewma_ph
 st = ca.wk_strand_pp(r)
 assert st == 0.0, st
 line = ca.pace_line([r])
-assert "wall trajectory" in line, line
+assert "⚠ WALL trajectory" in line, line
 assert "248" not in line, line
 assert "231" not in line, line
 assert "154" not in line, line

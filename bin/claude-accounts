@@ -2435,7 +2435,11 @@ def pace_line(rows):
             p = f"{r['acct']} strand unknown ({why})"
         elif s < 0.5:
             if ratio is not None and proj >= 100.0:
-                p = f"{r['acct']} no strand — {ratio:.2f}× burn, wall trajectory"
+                # The ⚠ WALL flag survives (§5.2) — an account that reaches 100% is DOWN until
+                # reset (next3 sat at exactly 100% for 11.2 h on 2026-08-11), and dropping a
+                # warning glyph off a warning is a strict loss. What does NOT survive is
+                # rendering the >100 PROJECTION as a number. 100% is the WALL, not the target.
+                p = f"{r['acct']} no strand — {ratio:.2f}× burn, ⚠ WALL trajectory"
             elif ratio is not None:
                 p = f"{r['acct']} no strand — {ratio:.2f}× burn, on pace to fill the window"
             else:

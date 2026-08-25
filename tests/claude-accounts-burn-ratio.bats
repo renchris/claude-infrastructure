@@ -88,8 +88,19 @@ run_wp() { export WP_PCT="$1" WP_H="$2"; run wp; }
 @test "the footer no longer frames 100% as the target" {
   # 100% is the WALL — an account that reaches it is down until reset. The old caption read
   # 'pace to 100%', which named the failure mode as the goal.
-  grep -q 'lands exactly at the 100% wall' "$SUT"
+  #
+  # ASSERTION UPDATED IN PLACE, invariant unchanged (USAGE_TELEMETRY_100P §5.2 S3). This case
+  # used to grep for the literal caption 'lands exactly at the 100% wall'. That string was the
+  # PREVIOUS remedy for this defect and S3 replaced the caption it lived in: the footer is now
+  # a per-account drain block headed 'pp that DIE at reset'. Greping a spelling rather than the
+  # invariant is how a live assertion becomes a tripwire on its own subject's next fix — the
+  # caption changed, the defect did not come back, and only the string moved. So the arms below
+  # pin what the case is FOR: the header must name the loss, the wall flag must survive, and
+  # neither the old target-framing nor a raw >100 projection may return.
+  grep -q 'pp that DIE at reset' "$SUT"
+  grep -q '⚠ WALL trajectory' "$SUT"
   ! grep -q '"pace to 100%: "' "$SUT" || false
+  ! grep -q 'lands exactly at the 100% wall' "$SUT" || false
 }
 
 @test "the derived fields are exported for machine consumers, not just rendered" {

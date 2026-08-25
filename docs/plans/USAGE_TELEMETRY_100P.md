@@ -1732,6 +1732,29 @@ rates`. That fixture holds three samples for next3, which cannot clear either th
 6.8 h measured-span floor, so extending it in place would have meant loosening the floor to make
 a test pass. New fixture instead: 24 h at 6 min spacing.
 
+**Deviation 6 — a SPEC CONFLICT, resolved, and it was found by a red rather than by reading.**
+§5.3 declares `tests/claude-accounts-burn-ratio.bats` *"Unchanged, deliberately: all 8 cases"*,
+and §5.2 says the `⚠ WALL` flag *"survives unchanged"*. But that suite's case *"the footer no
+longer frames 100% as the target"* greps the source for the literal caption `lands exactly at the
+100% wall` — the very caption §5.2's own AFTER block replaces — and §5.4's mock row reads
+`wall trajectory` with no glyph. The two instructions cannot both be obeyed literally.
+
+Resolved without weakening either: the glyph is **restored** (`⚠ WALL trajectory` — dropping a
+warning glyph off a warning is a strict loss, and §5.2 is explicit that the flag survives), and
+the burn-ratio case is **updated in place with its invariant intact and strengthened**. It now
+pins what the case is FOR rather than one spelling of it: the header must name the loss
+(`pp that DIE at reset`), the wall flag must be present, and BOTH the old target-framing and the
+old caption must be absent. Greping a spelling rather than the invariant is how a live assertion
+becomes a tripwire on its own subject's next fix — the caption changed, the defect did not come
+back, and only the string moved. §5.4's mock differs by one glyph, which is not structure.
+
+⚠️ **How it was found matters more than the fix.** `scripts/ship-land.sh` exhausted its 120 s
+smoke budget after 7 suites and attested `smoke:"partial"`, so this red did not block the land;
+it surfaced on a full local re-run afterwards. `burn_wk_ppd` was audited the same way and is
+**fine** — `bin/cc-wave-plan:492-505` consumes it and S1/S3 deliberately keep it populated
+(`tests/cc-wave-plan.bats` 21/21). The lesson is that a footer string is a consumed surface:
+grep the whole tree for every literal a render change deletes, not only the suite you are editing.
+
 **What is NOT claimed.** No lead time, anywhere — not in the caption, the docstrings, or the
 commit messages. §5.1 LB-2's four kills stand and the estimator is sold as what it is: a good
 nowcaster precisely because it converges as the horizon closes, which is what makes it a bad
