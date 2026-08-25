@@ -45,6 +45,15 @@ cd "$repo_root" || exit 2
 echo "branch-prune-landed: trunk=origin/$TRUNK  min-age=${MIN_AGE_H}h  dry-run=$DRY"
 git fetch origin --prune --quiet || { echo "fetch failed" >&2; exit 1; }
 
+# An epoch → UTC instant, on BOTH date implementations. BSD `date -r <epoch>` reads its argument as
+# an epoch; GNU `date -r <file>` reads it as a FILENAME — so under GNU this printed
+# `date: <epoch>: No such file or directory` once per branch and left last_commit_utc EMPTY. That
+# column is part of the restore record (it is how a reader judges whether a deleted branch was live
+# work), and this script runs on Linux in every cloud session. Same fallback idiom the suites use.
+iso_utc() {
+  date -u -r "$1" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -d "@$1" '+%Y-%m-%dT%H:%M:%SZ'
+}
+
 now=$(date +%s)
 safe=(); held_strand=0; held_young=0; stranded_commits=0
 
@@ -72,7 +81,7 @@ while read -r ref; do
   fi
 
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$b" "$sha" "$s" "$d" "$(date -u -r "$ts" '+%Y-%m-%dT%H:%M:%SZ')" "$verdict" >> "$MANIFEST"
+    "$b" "$sha" "$s" "$d" "$(iso_utc "$ts")" "$verdict" >> "$MANIFEST"
 done < <(git branch -r --format='%(refname:short)' | grep -v '^origin/HEAD')
 
 echo "manifest: $MANIFEST"
