@@ -337,6 +337,7 @@ calibration.
   burns tokens for no quality gain. Verify because the task's risk earns it — never as ceremony.
   (Distinct from a fresh-context reviewer of a *teammate's* output, which is a real second pair of
   eyes, not self-recheck.)
+- **Messages you DRAFT for him to send** (text/email/DM to a third party) are governed tighter than your own prose — one message one job, read the thread first and cut every question the record already answers, anchor don't open, no invented justifications. Full rule → the **outbound-drafting** skill, which auto-loads before any such draft.
 
 ## Session Close Protocol (All Projects)
 
