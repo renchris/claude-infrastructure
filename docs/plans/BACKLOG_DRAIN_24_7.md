@@ -86,6 +86,108 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-25 — item `70f0001c657b` ("advance BACKLOG_DRAIN_24_7") WAS DISPATCHED TO A CLOUD VM AND
+  THE VENUE IS REFUTED. NO CODE WAS WRITTEN, NO ROW WAS CLOSED, AND THAT IS THE DELIVERABLE.**
+  A Claude-Code-on-the-web session, Linux container, fresh shallow clone at `/home/user/claude-
+  infrastructure`, was fired against this plan with the ordinary drain brief. **It cannot advance
+  this plan, and the refutation is STRUCTURAL rather than incidental — four independent arms, each
+  measured in this container, any ONE of which is sufficient.** Recording it here because the
+  ledger is the one store this venue cannot write and the plan is the one it can.
+  🚨 **ARM 1 — THE ENFORCING STORE IS ABSENT, AND IT READS AS EMPTY RATHER THAN AS MISSING.**
+  `~/.claude/autonomy/backlog.jsonl` does not exist on this box. ⚠️ **Stated with the instrument's
+  own drift, because it moved UNDER the measurement and that is worth more than the tidy version:**
+  at first read `~/.claude/` held 13 harness entries and **no `autonomy/` directory at all**; twelve
+  minutes later it held 15, `autonomy/dod` and `logs/handoffs.jsonl` having been minted **by this
+  session's own hooks**, not by any drain. The load-bearing fact is unchanged and was re-checked
+  after the drift — **`backlog.jsonl` itself is still absent** — but a later reader finding an
+  `autonomy/` directory here should not read it as a store. *A probe that creates the thing it is
+  probing for is method 194's cousin: date the creation before you read the presence.*
+  `cc-backlog list` returns **rc 0 with zero rows**
+  — `bin/cc-backlog:1064` is `[ -f "$BACKLOG" ] || return 0`, so an ABSENT store and a DRAINED store
+  are byte-identical on stdout and rc. **That is §1 root-cause 1 reproduced in a second venue**, and
+  it is clause 14 of the running generalisation almost verbatim: *a count whose population was never
+  readable is not a low count, it is not a count at all.* `cc-eligible check 70f0001c657b` is honest
+  where the shell is not — `verdict=unknown-store`, rc 0, `ledger unreadable ([Errno 2] …)` — because
+  it fails open **with a token that NAMES the uncertainty**, which is the shape the shell arm lacks.
+  Consequence for this item: it cannot be read, `done`, `block`ed or `reopen`ed from here. Every
+  `cc-backlog` write would create a store on an EPHEMERAL container filesystem and be reclaimed with
+  the box — **a write that reports success and reaches nothing.**
+  🚨 **ARM 2 — THE REPO'S OWN VENUE ORACLE REFUSES TO CERTIFY THIS VENUE, RUN HERE, THIS HOUR.**
+  `HistoryOracle("/home/user/claude-infrastructure").certify()` returns **`shallow`**;
+  `git rev-parse --is-shallow-repository` is **true** at **50 commits**. `bin/cc-eligible`'s own
+  `HISTORY_NOTE` states the consequence: *"the measuring clone is ITSELF shallow, so its horizon is
+  its whole visible history and every sha would read reachable — it cannot certify."* And
+  `bin/cc-venue`'s guard is keyed on exactly this effect: **"a cloud label may only be written from a
+  certification, and a shallow clone cannot certify"** — a cloud VM must never decide its own
+  admission. 🚨 **AND THE RAIL IS NOT MISSING, WHICH IS THE PART A READER WILL WANT TO ASSUME AND
+  MUST NOT.** `bin/cc-venue` exists as the producer and `bin/cc-dispatch` is wired to it — a venue
+  arm, `CC_DISPATCH_VENUE_ONLY`, `venuePlan`/`venueWhy` through `cc-backlog venue` as the one writer,
+  and a rule-path readiness check (`cc-dispatch:209,217,1162,1643`). **So the open question is not
+  "why is there no rail" but "why did a row reach a cloud VM ACROSS one", and THIS VENUE CANNOT
+  ANSWER IT** — the answer lives in the row's `venuePlan`/`venueWhy`, and arm 1 is precisely that the
+  store is unreadable here. **Stated as unresolved rather than guessed:** a local session should read
+  `cc-backlog show 70f0001c657b` and ask whether the row carried a `venuePlan` at all (`cc-dispatch:
+  1504` selects open rows whose `venuePlan` is `""`, and §2 counts **195 rows unlabelled — venue
+  backfill needed**), whether `cc-venue` had ever run against it (`cc-dispatch:1474` records that
+  `cc-venue run` shipped with **zero automatic callers**), or whether this dispatch bypassed the
+  admission seam entirely. **Three candidate causes, one store, and it is not this one.**
+  🚨 **ARM 3 — THE SUBJECT IS THIS MACHINE, BY THE REPO'S OWN INVENTORY.** Counted here:
+  **85** files call BSD `stat -f` (invalid on Linux, where `-f` means *filesystem status*), **78**
+  reference `kitty`, **42** `osascript`, **39** `launchctl`. §2's *"79% of labelled refusals name
+  THIS MACHINE as the work's subject — structurally local"* is not a soft majority for this item, it
+  is a description of it: the drain's subject is panes, launchd jobs, quota accounts and the live
+  `~/.claude` symlink layer, **none of which exist in a container.**
+  🚨 **ARM 4 — THE LAND GATE IS RED ON A CLEAN TRUNK TREE HERE, SO NO LAND IS REACHABLE WITHOUT A
+  BYPASS.** `scripts/ship-land.sh --precheck --working` on an unmodified `origin/main` runs most of
+  the ratchet corpus green (utc-stamp, pipefail/SIGPIPE, self-path, pane-spawn-coverage all clean)
+  and then reds on ONE arm: `unattended-path-lint --selftest FAILED (11 of 42)`. **A land from here
+  could only happen by bypassing a red gate, which is forbidden, so `📦`→`✅` is unreachable by
+  construction and "finished-verified-landed" was never available to this venue.**
+  ✅ **AND ARM 4 IS AN ENVIRONMENT ARTEFACT, NOT A TRUNK RED — ATTRIBUTED BEFORE IT COULD BE FILED,
+  WHICH IS THE ONLY REASON THIS ENTRY IS NOT A FALSE BUG REPORT.** The lint asks *"is this binary
+  reachable on the stock PATH a hook may inherit?"* and answers it against **the filesystem of the
+  box it runs on**, with `STOCK_PATH="/usr/bin:/bin:/usr/sbin:/sbin"` — *macOS's* floor. Resolved
+  here: `tmux` **/usr/bin/tmux** · `yq` **/usr/bin/yq** · `sysctl` **/usr/sbin/sysctl** · `lsof`
+  **/usr/bin/lsof** — all four ABSENT from that floor on macOS and PRESENT on it here, while
+  `shellcheck`, `md5` and `bats` are absent on both. So the detector's verdict INVERTS per binary
+  with the host. Proven by execution, not by reading: selftest arm 1 (`shellcheck` inside `"$( )"`)
+  **fires correctly**, arm 2 (`tmux` at command position) **does not fire** — same detector, same
+  tree, same embedded inventory, opposite verdicts, and the discriminator is `/usr/bin/tmux`. The
+  same mechanism explains `tests/cc-inbox-guard.bats` **33/37** here: `bin/cc-inbox-guard:499` sorts
+  the worklist by `stat -f '%m'`, which returns nothing on Linux, so W2's ordering assertion and the
+  three W3 counter assertions — **the very assertions recycle #228 landed hours ago** — read red in
+  a container and green on the box. **A #228 REGRESSION IS THE FIRST THING THIS LOOKED LIKE AND IT
+  IS NOT ONE.** Scoped rather than left as an anecdote: a deterministic every-9th-file sample of the
+  corpus (`ls tests/*.bats | awk 'NR%9==1'`, 61 of 546 suites, 60 s bound each) reads **45 PASS / 16
+  FAIL = 26.2% red** here — `land-lock`, `git-identity-guard`, `dispatch-assert`, `occupancy-probe`,
+  `assignee-pane-residency` and eleven more. ⚠️ **NONE of those 16 is filed and none should be:
+  attribution is the host, not the diff, and a worker that filed sixteen rows from this venue would
+  have manufactured the purest possible instance of the inflow §1 root-cause 3 is about** — 70% of
+  filing is model-filed, pumped by close gates. **THE CORRECT NUMBER OF ROWS TO FILE FROM A VENUE
+  THAT CANNOT RUN THE SUITE IS ZERO.**
+  🚨 **THE LEAD, AND WHY IT IS DELIBERATELY NOT FIXED FROM HERE.** `unattended-path-lint --selftest`
+  is not hermetic: it models a foreign PATH but resolves against the local one, so its *"the detector
+  still discriminates"* claim is host-dependent. The seam to fix it already exists —
+  `CC_UNATTENDED_INVENTORY` is honoured, so the design intent for a fixtured corpus is present; what
+  is missing is the matching seam for **stock-PATH RESOLUTION**. **This is work for a LOCAL session
+  and it is left as a lead, not taken.** Writing a macOS-PATH model from a Linux VM that cannot
+  observe macOS is the anti-goal `bin/cc-eligible` names by name: *"a wrong ELIGIBLE puts a worker in
+  a VM that CANNOT do the work at all and cannot tell you so — it will improvise something plausible
+  against state it cannot see."* **The correct output of a worker in the wrong venue is a refusal
+  carrying its measurements, not a plausible diff.** Method 194 in a new place: *before you read a
+  failure as a defect, ask whether the code that would have produced the PASS could run here.*
+  ⚠️ **WHAT THIS ENTRY DOES NOT DO.** It closes NO row (it cannot reach the store). It changes no
+  `bin/`, `hooks/` or `scripts/` file. It does not land on trunk — the change is committed on the
+  dispatched branch `claude/fire-20260825T222131Z-79287-1` and pushed there, because an uncertified
+  shallow clone landing on `main` is the same error as a cloud VM writing its own venue label.
+  **`70f0001c657b` remains OPEN and is for a LOCAL worker; it is not cloud-eligible and no future
+  dispatch of it off-box will do better.**
+  **THE GENERALISATION, a fifteenth clause: (15) A VENUE IS PART OF AN ITEM'S PREMISE, AND IT IS THE
+  ONE PART THE WORKER IS ALWAYS INSIDE OF AND THEREFORE LEAST ABLE TO SEE. When the enforcing store
+  is unreachable, `done` is not merely unavailable — every close-time sensor reads CLEAN, because
+  absence and completion share a representation.** The family, THIRTY-TWO deep: … · **#198** a
+  counter that sums two arms meaning opposite things · **#199 (this one) A WORKER DISPATCHED INTO A
+  VENUE THAT CANNOT REACH ITS OWN LEDGER, WHERE THE REFUSAL IS THE ONLY HONEST OUTPUT.**
 - **2026-08-25 — drain recycle #228: method 198 — A COUNTER THAT SUMS TWO ARMS MEANING OPPOSITE
   THINGS, AND A DENOMINATOR WHOSE EMITTING CODE WAS NOT DEPLOYED.** TWO fixes landed
   (`985efe650` the counter, `27cfdba68` a BLOCKING trunk red that was nobody's), both rc 0, both
