@@ -400,7 +400,12 @@ cmd_up() {
   # a flag rather than as "leave it blank" so an UNMANAGED fire is a decision in the argv rather
   # than an accident of environment.
   if [ "$UP_UNMANAGED" = 0 ] && [ -z "$UP_NOTIFY_BACK" ]; then
-    UP_NOTIFY_BACK="${ITERM_SESSION_ID##*:}"
+    # `${ITERM_SESSION_ID:-}` and NOT a bare `${…##*:}`: this file runs under `set -u`, where the
+    # suffix form on an UNSET variable is a fatal error rather than an empty string. The three lines
+    # below are written for exactly that case ("no pane to wake (ITERM_SESSION_ID is unset)"), so
+    # the unset branch was unreachable and every `up` outside iTerm — a cron fire, a launchd sweep,
+    # a hook, a cloud VM — died here with `ITERM_SESSION_ID: unbound variable` before any create.
+    UP_NOTIFY_BACK="${ITERM_SESSION_ID:-}"; UP_NOTIFY_BACK="${UP_NOTIFY_BACK##*:}"
   fi
   if [ "$UP_UNMANAGED" = 1 ]; then UP_NOTIFY_BACK=''
   elif [ -z "$UP_NOTIFY_BACK" ]; then
