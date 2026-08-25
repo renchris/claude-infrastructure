@@ -207,6 +207,34 @@ post-land RED faithfully, so an inherited green is worth nothing:
 work, and this VM still has no `~/.claude/autonomy/`, so the §5.3 `cc-backlog add` remains unfiled
 from here. One item is added:
 
+### Correction to §5.3 — the ledger call does not fail, it succeeds into nothing
+
+§5.3 says the contract's `cc-backlog add … 4ce239d21d67` "could not be written". **Measured here, that
+is wrong in mechanism, and the true mechanism is worse.** `bin/cc-backlog` ships *in the repo*, so a
+cloud worker has the binary; what it lacks is `~/.claude/autonomy/`. Probed in an isolated `HOME`:
+
+| Call | rc | Effect |
+|---|---|---|
+| `cc-backlog add --project … --title …` | **0** | prints a well-formed id (`7de6dbc73870`) and **creates** `$HOME/.claude/autonomy/backlog.jsonl` |
+| `cc-backlog done 4ce239d21d67 --evidence …` | 3 | `unknown id` — correct refusal |
+| `cc-backlog block 4ce239d21d67 --needs …` | 3 | `unknown id` — correct refusal |
+
+The verbs that need an **existing row** cannot be faked: the empty store has no such id and they exit
+3. But `add` — **the one verb the dispatch contract names for writing a disproof back** ("write it
+back into the store (`cc-backlog add`, naming this item's id)") — has no row to miss. It exits 0,
+returns a plausible id, and silently mints a **phantom store** that dies with the container. A worker
+that follows the contract literally gets every signal of success and files nothing.
+
+So the disproof-filing half of the dispatch contract is not merely unavailable off-box; it is
+**unavailable while reporting success**. Landing the disproof on trunk instead is not a workaround
+for a missing tool — it is the only write from this venue that leaves a trace, which is why §5.3's
+`cc-backlog add` stays an operator step and this document is its evidence.
+
+*(Caveat on the measurement: `bin/cc-backlog list --all --json` also returns `[]` at rc 0 against the
+absent store — an empty ledger and a missing one are indistinguishable to a caller. Both readings
+above were re-taken without a pipe after a first pass read `$?` from `head` and mis-scored the two
+rc-3 refusals as rc 0.)*
+
 5. **Item `4ce239d21d67` must not be dispatched a third time.** With question 1b on trunk the
    producer now refuses it by itself (`venueWhy: ineligible-dod-offtrunk`), so no operator action is
    needed to *stop* the loop. What remains is the disposition: either commit
