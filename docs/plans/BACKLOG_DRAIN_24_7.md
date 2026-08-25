@@ -288,6 +288,32 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
     classify (C) correctly** — frozen sender beat ⇒ benign teardown, advancing ⇒ the arming session
     is alive and you are deaf. Decidable today. The lead's dispatch of it was refused by the same
     anchor guard, so it is **PARKED, not abandoned.**
+  · 🚨🚨 **THE SUCCESSION BRIEF HAS OUTGROWN THE ARGV PATH `handoff-fire` ITSELF COMPOSES, AND THE
+    OPERATOR'S RESTART IS WHAT PROVED IT.** Filed as **`53a84321b11a`**. `--recycle` composes and
+    types the literal `claude3 "$(cat <brief-path>)"`, inlining the WHOLE brief as one argv word.
+    #215's brief is **97,868 bytes**; the composed command was actually run and zsh rejected it with
+    **`(eval):2: command too long`**, no session started. ⚠️ **`ARG_MAX` is 1,048,576, so this is
+    NOT the execve limit and cannot be predicted from it** — it is zsh's own eval limit, far lower.
+    🚨 **THE ORDERING IS WHAT MAKES IT LETHAL: `--recycle` types `/exit` FIRST**, so a brief over the
+    limit fails *after the predecessor is already gone* and the chain dies in the gap. This link only
+    escaped that because it had already declined to fire for the pane reason, so the failure
+    surfaced in a manual restart instead. **The chain's briefs grow monotonically, so this is a
+    threshold crossed once and never un-crossed.** Working shape: a **short pointer** prompt
+    (`Read <path> in full, then follow it as your brief`) — the file is durable at both ends, so
+    nothing is lost by pointing at it.
+    ⚠️ **A SECOND, INDEPENDENT FAULT in the same failure, not the same bug:** `claude3` is a shell
+    FUNCTION from a Claude Code shell snapshot, and there its helpers were undefined
+    (`command not found: _cc_sync_account`, `_claude_pinned`) while the real definitions live in
+    `~/.zshrc`; **all three resolve in a fresh interactive shell** (`zsh -ic`, verified). **A
+    snapshot shell can carry a launcher's NAME without its dependencies** — the same shape as this
+    link's PATH loss, on a different mechanism.
+    🚨 **META-LESSON, and it cost a filed row: A FILED `--run` COMMAND IS A CLAIM THAT THE COMMAND
+    WORKS.** `072f1d7f1b9d` was filed with the inline form and never executed; the operator's run
+    revealed both faults, and it was closed as **superseded by `c446beb6ad28`**, which carries the
+    pointer form. **Exercise the command shape, or state plainly that it is untested.**
+    ✅ **And control 16 earned its keep one message later:** the ASCII gate on the follow-up filing
+    was written with `&&` instead of `;` and **refused the write at rc 90 on 5 em-dashes**, which is
+    exactly the defect this addendum had just recorded against itself.
   · 🚨 **THE PATH LOSS REACHED THE LAND GATE, AND THERE IT PRINTED A CONFIDENT WRONG CURE — the
     third instance of one failure in an hour, and the only one that was actively misleading.** This
     addendum's own first land returned **`rc=9`, `⛔ ship-land: GATE-KILLED — the gate died without
