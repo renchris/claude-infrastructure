@@ -472,6 +472,37 @@ SC
   [[ "$output" =~ \"argv0\":\"\" ]] || false           # present and empty, not absent, not guessed
 }
 
+@test "(xxxviii) an UNREADABLE argv keeps its parens — it must not collide with the .exe session family" {
+  # Backlog 810d59da926a. When ps cannot read argv it substitutes p_comm and MARKS that substitution
+  # by parenthesising it. The sanitising gsub deletes every non-alphanumeric, so the marker was the
+  # one character class guaranteed to be stripped, and the row landed as a bare `claude.exe`.
+  #
+  # That is not a cosmetic loss, because `claude.exe` is a REAL argv[0] on this box: sessions launch
+  # under two disjoint spellings and `claude-code/bin/claude.exe` is one of them. Both arms below
+  # therefore render the same six characters unless the parens survive — which is why this test
+  # asserts the two arms DIFFER rather than only asserting the new spelling.
+  mk_stubs
+  mk_top_stub 900 claude.exe
+
+  # ARM 1 — ps could not read argv: the parenthesised comm form.
+  printf '  501 (claude.exe)\n' > "$STUBS/argv0.txt"
+  run env PATH="$STUBS:$PATH" /bin/bash "$ALARM" --json --no-append
+  [ "$status" -eq 0 ] || false
+  [[ "$output" =~ \"argv0\":\"\(claude.exe\)\" ]] || false   # marker survives the gsub
+  local unreadable="$output"
+
+  # ARM 2 — a GENUINE session under the .exe spelling, argv fully readable.
+  printf '  501 /U/.claude-220/node_modules/@anthropic-ai/claude-code/bin/claude.exe --model x\n' \
+    > "$STUBS/argv0.txt"
+  run env PATH="$STUBS:$PATH" /bin/bash "$ALARM" --json --no-append
+  [ "$status" -eq 0 ] || false
+  [[ "$output" =~ \"argv0\":\"claude.exe\" ]] || false        # basename, flags dropped
+  [[ ! "$output" =~ \"argv0\":\"\(claude.exe\)\" ]] || false  # and NOT marked unreadable
+
+  # THE DISCRIMINATION ITSELF: the two causes must not produce one string.
+  [ "$unreadable" != "$output" ] || false
+}
+
 @test "(xxxvii) the ps-rss fallback rows carry argv0 too — the schema does not depend on the producer" {
   # If argv0 appeared only on the top(1) path, its ABSENCE would be ambiguous between "the fallback
   # ran" and "the lookup failed", and no reader could tell those apart after the fact.
