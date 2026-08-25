@@ -26,6 +26,10 @@ setup() {
   export CC_JETSAM_DIRS="$BATS_TEST_TMPDIR/jetsam"
   export CC_TEARDOWN_DIR="$BATS_TEST_TMPDIR/teardown"
   export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/registry"
+  # handoff log (arm 1.6's pane-recovery source). PINNED for the same reason as the dirs above: its
+  # default is the LIVE ~/.claude/logs/handoffs.jsonl, so leaving it unset would let 1,000+ real rows
+  # decide a test's verdict. Absent-by-default here — the arm must degrade cleanly with no log.
+  export CC_HANDOFF_LOG="$BATS_TEST_TMPDIR/handoffs.jsonl"
   mkdir -p "$CC_ACCOUNT_BASES/projects/proj" "$CC_JETSAM_DIRS" "$CC_TEARDOWN_DIR" "$CC_REGISTRY_DIR"
 }
 
@@ -154,6 +158,62 @@ mk_jetsam() { # $1=name-suffix $2=epoch its report was written
     > "$CC_TEARDOWN_DIR/PANE-OWN.json"
   [ "$(cls s_own)" = "RECYCLE" ]
   [ "$(cause s_own)" = "deliberate-teardown" ]
+}
+
+# ── arm 1.6: HANDOFF-LOG PANE RECOVERY (2026-08-25) ───────────────────────────────────────────────
+# The registry is SINGLE-SLOT PER PANE, so an in-place `--recycle` overwrites the dead session's row
+# with the SUCCESSOR's — destroying the only sid→pane mapping arm 1.5 has, for exactly the case the
+# pane-keyed marker exists to cover. Measured on classify_death with one variable moved (the registry
+# owner), the marker byte-identical in both: registry→PREDECESSOR ⇒ RECYCLE, registry→SUCCESSOR ⇒
+# CRASH. So the EMPTY SID was never the cause. ~/.claude/logs/handoffs.jsonl is append-only and its
+# recycle-engaged rows carry prev_sid + target_pane (measured: 158/158 UUID-shaped, 158 distinct,
+# 0 mapping to more than one pane), so the fact survives the overwrite.
+
+@test "1.6: pane-keyed marker after an in-place recycle is recovered via the handoff log → RECYCLE" {
+  mk_tx s_rec "mid-tool output, nothing conclusive here"
+  # the registry row for this pane now names the SUCCESSOR — s_rec is unresolvable there
+  printf '{"paneUUID":"PANE-HL","session_id":"s_next"}\n' > "$CC_REGISTRY_DIR/PANE-HL.json"
+  printf '{"key_kind":"pane","pane":"PANE-HL","sid":"","mode":"recycle"}\n' \
+    > "$CC_TEARDOWN_DIR/PANE-HL.json"
+  printf '{"ts":"2026-08-25T22:23:12Z","class":"recycle-engaged","target_pane":"PANE-HL","prev_sid":"s_rec"}\n' \
+    > "$CC_HANDOFF_LOG"
+  [ "$(cls s_rec)" = "RECYCLE" ]
+  [ "$(cause s_rec)" = "deliberate-teardown" ]
+}
+
+@test "1.6: with NO handoff log the same case still degrades to CRASH (the log is what recovers it)" {
+  # CONTROL for the test above: identical fixture minus the log row. Without this, a green could be
+  # crediting the registry arm or the freshness window rather than the recovery under test.
+  mk_tx s_norec "mid-tool output, nothing conclusive here"
+  printf '{"paneUUID":"PANE-NL","session_id":"s_next"}\n' > "$CC_REGISTRY_DIR/PANE-NL.json"
+  printf '{"key_kind":"pane","pane":"PANE-NL","sid":"","mode":"recycle"}\n' \
+    > "$CC_TEARDOWN_DIR/PANE-NL.json"
+  [ ! -f "$CC_HANDOFF_LOG" ]
+  [ "$(cls s_norec)" = "CRASH" ]
+  [ "$(cause s_norec)" = "abrupt-unknown" ]
+}
+
+@test "1.6: a handoff row for ANOTHER session does NOT absolve this one → CRASH" {
+  # The recovery is keyed on the DEAD sid, so it can never reach a marker belonging to someone else.
+  mk_tx s_mine "mid-tool output, nothing conclusive here"
+  printf '{"paneUUID":"PANE-OT","session_id":"s_next"}\n' > "$CC_REGISTRY_DIR/PANE-OT.json"
+  printf '{"key_kind":"pane","pane":"PANE-OT","sid":"","mode":"recycle"}\n' \
+    > "$CC_TEARDOWN_DIR/PANE-OT.json"
+  printf '{"ts":"2026-08-25T22:23:12Z","class":"recycle-engaged","target_pane":"PANE-OT","prev_sid":"s_other"}\n' \
+    > "$CC_HANDOFF_LOG"
+  [ "$(cls s_mine)" = "CRASH" ]
+  [ "$(cause s_mine)" = "abrupt-unknown" ]
+}
+
+@test "1.6: a handoff row alone, with NO teardown marker, does NOT absolve → CRASH" {
+  # The log resolves a PANE; it is not itself evidence of a deliberate teardown. Without this, arm 1.6
+  # could be read as "any recycled session is absolved", which is the silent-miss this ladder forbids.
+  mk_tx s_nomark "mid-tool output, nothing conclusive here"
+  printf '{"paneUUID":"PANE-NM","session_id":"s_next"}\n' > "$CC_REGISTRY_DIR/PANE-NM.json"
+  printf '{"ts":"2026-08-25T22:23:12Z","class":"recycle-engaged","target_pane":"PANE-NM","prev_sid":"s_nomark"}\n' \
+    > "$CC_HANDOFF_LOG"
+  [ "$(cls s_nomark)" = "CRASH" ]
+  [ "$(cause s_nomark)" = "abrupt-unknown" ]
 }
 
 @test "pane-keyed marker with an EMPTY sid is still honoured → RECYCLE (2026-07-23 self-close shape)" {
