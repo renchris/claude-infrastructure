@@ -275,6 +275,19 @@ SELFCHECK_MIN_PERSIST="${CC_REAPER_SELFCHECK_MIN_PERSIST:-2}"          # delta m
 # to compute it — live_pane_count stays registry-independent (see its header). Same spelling as
 # cc-sessions:51 so a test that isolates one isolates both.
 REG_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
+# R5f (2026-08-25, recycle #227): the classify producer's OWN verdict on its own enumerator, read
+# from the stderr the two classify call sites used to discard. THREE states, and the difference
+# between the last two is the whole point:
+#   1        — cc-classify SAID its session enumerator failed. Authoritative; overrides arithmetic.
+#   0        — classify ran and did not say so. NOT evidence the enumerator is healthy (see below).
+#   unknown  — we never got to look (no capture, or the bound killed the child before it printed).
+# Only 1 acts. A `0` is deliberately inert because the LIVE ~/.claude/bin/cc-classify is a symlink
+# into the shared checkout and does not carry the emitting line at all (measured 2026-08-25:
+# `session enumerator FAILED` reads 0 live / 2 trunk, POS control `cmd_all()` 1 in both) — so
+# reading absence as "the enumerator answered" would be a confident wrong answer on every live
+# sweep, which is the exact failure this arm exists to remove. Presence-only ⇒ MONOTONE: this can
+# add attribution, never withdraw it.
+CLASSIFY_ENUM_SELFREPORT="${CC_REAPER_CLASSIFY_ENUM_SELFREPORT:-unknown}"
 PS_BIN="${CC_REAPER_PS_BIN:-/bin/ps}"
 # cc-notify must resolve under launchd's bare default PATH — env override → beside-script bin → ~/.claude/bin
 # → PATH (mirrors lead-supervisor's resolve order; the reaper's own NOTIFY_BIN seam is added for tests).
@@ -941,6 +954,15 @@ live_pane_count(){
 # WHY THIS DOES NOT COMPROMISE live_pane_count's DELIBERATE REGISTRY-INDEPENDENCE: the truth signal
 # is still ps. The registry is consulted only to say WHICH of two causes the gap belongs to, which is
 # a question about the registry — asking it of the registry is the point, not a leak.
+#
+# ── R5f (2026-08-25, recycle #227): AND THE PARTITION ABOVE HAS A PREMISE OF ITS OWN — that `enum`
+# is a MEASUREMENT. It is not, when cc-classify's enumerator fails: that returns [] at rc 0, so the
+# value is the producer's FALLBACK and every term computed from it is arithmetic over a non-number.
+# Measured by execution: an enumerator exiting 3 and one truthfully returning [] are BYTE-IDENTICAL
+# on stdout and rc, and this helper answered `cause=REGISTRATION … a spawn mode is not registering`
+# for BOTH — the same shape R5e was written to remove, inherited one premise down. The third
+# diagnostic that settles it is the PRODUCER'S OWN (cc-classify:998, on stderr), and the two call
+# sites discarded it. CLASSIFY_ENUM_SELFREPORT now carries it, and it outranks the arithmetic.
 registry_row_count() { # → row count, or -1 for UNKNOWN. A probe that cannot find its store must say
                        # UNKNOWN, never 0: an absent dir and an empty one want OPPOSITE words here.
   [ -d "$REG_DIR" ] || { printf '%s\n' -1; return 0; }
@@ -951,23 +973,42 @@ registry_row_count() { # → row count, or -1 for UNKNOWN. A probe that cannot f
 
 blindspot_cause() { # <live> <enum> <delta> → one clause naming the cause(s) the numbers SUPPORT
   local live="$1" enum="$2" delta="$3" reg unreg unenum
+  # ── R5f (2026-08-25, recycle #227): THE PRODUCER'S OWN VERDICT OUTRANKS THE ARITHMETIC.
+  # Everything below this branch infers the cause from the registry, and that inference assumes
+  # `enum` is a MEASUREMENT. When cc-classify's enumerator fails it returns [] at rc 0 — the value
+  # is its FALLBACK, not a count — so the partition (live−reg)+(reg−enum) is arithmetic over a
+  # non-number and the "unregistered" term is manufactured. Measured by execution against the real
+  # binary with its CC_CLASSIFY_SESSIONS_BIN seam pinned: an enumerator exiting 3 and one truthfully
+  # returning [] are BYTE-IDENTICAL on stdout and rc, and this file reported `cause=REGISTRATION —
+  # … a spawn mode is not registering` for BOTH. The only discriminator is cc-classify:998's own
+  # stderr line, which the two classify call sites discarded with 2>/dev/null.
+  # This is R5e's defect one layer up: R5e stopped two of THIS file's diagnostics contradicting each
+  # other and inherited their shared premise; the third diagnostic is the producer's, it is
+  # authoritative, and it was free.
+  # The `evidence=` axis is ORTHOGONAL to `cause=` on purpose — a consumer keying on cause= is
+  # unaffected, and every arm carries one, because a field only some rows have is not a flag.
+  # No token is a substring of another (control 11), across BOTH axes.
+  if [ "${CLASSIFY_ENUM_SELFREPORT:-unknown}" = 1 ]; then
+    printf 'cause=ENUMERATION evidence=PRODUCER-SELF-REPORT — cc-classify reported that its own session enumerator FAILED, so the empty classification is that producer'"'"'s FALLBACK and not a count of %d live pane(s); the registry partition does not apply and no spawn mode is implicated' "$live"
+    return 0
+  fi
   reg="$(registry_row_count)"; case "$reg" in ''|*[!0-9-]*) reg=-1 ;; esac
   # Each arm leads with a PARSEABLE token before the prose. The four tokens are mutually
   # non-substring on purpose: the first draft of this used the prose itself, and "a registration gap"
   # is a substring of "NOT a registration gap", so a grep for one matched the other and two opposite
   # arms were indistinguishable to every consumer — including this file's own tests.
   if [ "$reg" -lt 0 ]; then
-    printf 'cause=UNATTRIBUTED — no readable cc-registry at %s, so neither a registration gap nor an enumeration failure can be ruled out' "$REG_DIR"
+    printf 'cause=UNATTRIBUTED evidence=UNREADABLE-STORE — no readable cc-registry at %s, so neither a registration gap nor an enumeration failure can be ruled out' "$REG_DIR"
     return 0
   fi
   unreg=$(( live - reg )); [ "$unreg" -lt 0 ] && unreg=0; [ "$unreg" -gt "$delta" ] && unreg="$delta"
   unenum=$(( delta - unreg ))
   if [ "$unreg" = 0 ]; then
-    printf 'cause=ENUMERATION — cc-registry holds %d row(s) for %d live pane(s), so all %d unseen are registered-but-unenumerated; the enumerator is the subject, NOT a spawn mode failing to register' "$reg" "$live" "$unenum"
+    printf 'cause=ENUMERATION evidence=REGISTRY-ARITHMETIC — cc-registry holds %d row(s) for %d live pane(s), so all %d unseen are registered-but-unenumerated; the enumerator is the subject, NOT a spawn mode failing to register' "$reg" "$live" "$unenum"
   elif [ "$unenum" = 0 ]; then
-    printf 'cause=REGISTRATION — cc-registry holds %d row(s) for %d live pane(s), so all %d unseen are unregistered; a spawn mode is not registering' "$reg" "$live" "$unreg"
+    printf 'cause=REGISTRATION evidence=REGISTRY-ARITHMETIC — cc-registry holds %d row(s) for %d live pane(s), so all %d unseen are unregistered; a spawn mode is not registering' "$reg" "$live" "$unreg"
   else
-    printf 'cause=BOTH — cc-registry holds %d row(s) for %d live pane(s), so the gap splits: %d unregistered (a spawn mode is not registering) + %d registered-but-unenumerated (the enumerator)' "$reg" "$live" "$unreg" "$unenum"
+    printf 'cause=BOTH evidence=REGISTRY-ARITHMETIC — cc-registry holds %d row(s) for %d live pane(s), so the gap splits: %d unregistered (a spawn mode is not registering) + %d registered-but-unenumerated (the enumerator)' "$reg" "$live" "$unreg" "$unenum"
   fi
 }
 
@@ -1603,8 +1644,22 @@ sweep() {
   #    it by whatever the reconcile call cost, i.e. time that elapsed BEFORE the evidence existed and
   #    so cannot be part of its age). sweep_t0 is left untouched — the Gap-3 suspend guard below is
   #    calibrated to it, and both spans are logged so neither number is hidden by the other.
-  local cj crc classify_t0
-  cj="$(_rp_bounded "${CC_REAPER_CLASSIFY_TIMEOUT_S:-90}" "$CLASSIFY_BIN" --all --json 2>/dev/null)"; crc=$?
+  local cj crc classify_t0 cerr
+  # R5f (2026-08-25, recycle #227): CAPTURE the producer's stderr instead of discarding it.
+  # cc-classify:998 already prints `session enumerator FAILED (rc=… from …) — the empty
+  # classification below is a FALLBACK, not a verdict` whenever its enumerator did not answer, and
+  # both call sites here threw that away and then GUESSED the same fact from the registry. The
+  # redirection is at the CALL SITE, not inside _rp_bounded, so this changes nothing for the four
+  # bounded forks that share that helper — verified by executing both spellings against the real
+  # binary (stdout byte-identical, stderr recovered). Degrade, never regress: if no temp file can be
+  # made we keep today's behaviour exactly, and CLASSIFY_ENUM_SELFREPORT stays `unknown`, which is
+  # inert.
+  cerr="$(mktemp "${TMPDIR:-/tmp}/rp-classify-err.XXXXXX" 2>/dev/null)" || cerr=""
+  if [ -n "$cerr" ]; then
+    cj="$(_rp_bounded "${CC_REAPER_CLASSIFY_TIMEOUT_S:-90}" "$CLASSIFY_BIN" --all --json 2>"$cerr")"; crc=$?
+  else
+    cj="$(_rp_bounded "${CC_REAPER_CLASSIFY_TIMEOUT_S:-90}" "$CLASSIFY_BIN" --all --json 2>/dev/null)"; crc=$?
+  fi
   if [ "$crc" = 124 ]; then
     # BOUND-FIT-THE-BAND (2026-08-07): 90s was sized on a healthy box. Under exactly the overload
     # a sweep exists to relieve, a fixed bound is a PERMANENT non-verdict — every sweep of the
@@ -1612,8 +1667,32 @@ sweep() {
     # relieve pressure was disabled BY the pressure. One retry at 3× keeps the fail-closed
     # contract (still never a partial verdict) while giving the producer a band-fitted budget.
     log "bound-fired classify: exceeded ${CC_REAPER_CLASSIFY_TIMEOUT_S:-90}s — retrying once at 3x"
-    cj="$(_rp_bounded $(( ${CC_REAPER_CLASSIFY_TIMEOUT_S:-90} * 3 )) "$CLASSIFY_BIN" --all --json 2>/dev/null)"; crc=$?
+    # Same capture on the retry — this is the attempt whose stderr survives, so it is the one that
+    # must be read. Truncating rather than appending is deliberate: the first attempt was killed by
+    # the bound, so anything it managed to print is a partial line about a run that has no verdict.
+    if [ -n "$cerr" ]; then
+      cj="$(_rp_bounded $(( ${CC_REAPER_CLASSIFY_TIMEOUT_S:-90} * 3 )) "$CLASSIFY_BIN" --all --json 2>"$cerr")"; crc=$?
+    else
+      cj="$(_rp_bounded $(( ${CC_REAPER_CLASSIFY_TIMEOUT_S:-90} * 3 )) "$CLASSIFY_BIN" --all --json 2>/dev/null)"; crc=$?
+    fi
   fi
+  # R5f: read the producer's own verdict out of the captured stderr, once both attempts are done.
+  # An explicit CC_REAPER_CLASSIFY_ENUM_SELFREPORT (the test seam) WINS: pinning the state directly
+  # is how the three arms are exercised without a real producer, and a computed value silently
+  # overriding a set-but-different one is exactly how a harness collapses the states under test
+  # (memory: harness-default-collapses-the-states-under-test).
+  if [ -z "${CC_REAPER_CLASSIFY_ENUM_SELFREPORT+set}" ]; then
+    if [ -n "$cerr" ] && [ -s "$cerr" ]; then
+      local _sr; _sr="$(grep -c 'session enumerator FAILED' "$cerr" 2>/dev/null | head -1)"
+      case "$_sr" in ''|*[!0-9]*) _sr=0 ;; esac
+      [ "$_sr" -gt 0 ] && CLASSIFY_ENUM_SELFREPORT=1 || CLASSIFY_ENUM_SELFREPORT=0
+    elif [ -n "$cerr" ]; then
+      CLASSIFY_ENUM_SELFREPORT=0      # classify ran and printed nothing — inert, NOT a clean bill
+    else
+      CLASSIFY_ENUM_SELFREPORT=unknown
+    fi
+  fi
+  [ -n "$cerr" ] && { rm -f "$cerr" 2>/dev/null || true; }
   if [ "$crc" = 124 ]; then
     # The evidence producer itself wedged, twice. There is no verdict this sweep, so there is nothing
     # to act on — a bounded classify must yield an EMPTY candidate set, never a partial one a reap
