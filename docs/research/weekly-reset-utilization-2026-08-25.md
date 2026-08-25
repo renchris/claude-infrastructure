@@ -111,13 +111,27 @@ Mean absolute error **46 pp at day 3**; still **35 pp at day 5**. The sign is sy
 under-projects whenever the account is mid-week and behind linear (3 of 4), and over-projects a
 `⚠ WALL` that never arrived for the one that was ahead.
 
-**Consequence, and it has already cost us once.** `docs/plans/USAGE_TELEMETRY_100P.md` opens with
-*"on 2026-08-16 three of four windows sat at 1–3% with 6+ days left and every `pace to 100%` line
-read BEHIND. **Under-use is the primary defect**"* — and made that the frozen scope of a 13-agent
-research wave. Those three windows closed at **91%, 92%, 85%**. The premise was an artifact of the
-linear model reading a normal back-loaded trajectory as under-use. The plan's own §1 diagnosed the
-adjacent bug (window phase) and shipped the abstain floor for it; the shape bug survived because
-correcting for phase *looks* like it corrects for both.
+**The prior plan got half of this, and the half it got is the interesting one.**
+`docs/plans/USAGE_TELEMETRY_100P.md` is quotable for its frozen-scope line — *"three of four windows
+sat at 1–3% with 6+ days left and every `pace to 100%` line read BEHIND. **Under-use is the primary
+defect**"*. Read only that and you would conclude the plan was founded on a false premise. It was
+not. Its **§1 retracts that reading inside the same document**, under a callout headed *"THE READING
+ABOVE IS CORRECT AND ITS OBVIOUS INTERPRETATION IS FALSE"*: it names the previous complete windows
+at 91/92/100/85%, concludes *"the fleet is near-saturating its weekly allowance, not idling"*, and
+inverts the design target to *"land in the high-90s without any account hitting 100"*. Only the
+scope header was never updated to match, so the two halves disagree and the **retracted** half is
+the one that gets cited.
+
+**What §1 got wrong is its remedy — that is what this doc adds.** §1 prescribes the fix as *"report
+against the window's **elapsed fraction** … the primitive is a **burn ratio** `weekly_pct ÷
+elapsed_fraction_of_window` (1.0 = on pace to finish at 100%)"* and asserts *"every account above
+reads ~1.0 on that measure"*. That primitive shipped, as `wall_projection()`. But dividing by
+elapsed fraction removes the *phase* error only if burn is **linear**, and it is not: the empirical
+median reads **0.49×** at day 3, not ~1.0, and the backtest above errs by a mean 46 pp. The
+2026-08-16 sample read ~1.0 because it was taken at day ~0–1, where linear and empirical have not
+yet diverged (−7 pp at day 1); the gap opens from day 2 and peaks at day 4 (−27 pp). So the plan
+correctly diagnosed phase-dominance, correctly built a phase correction, and the **shape** error
+survived underneath it — precisely because a phase fix looks like it corrects for both.
 
 ---
 
@@ -140,9 +154,17 @@ The one real cost in view is `next3`'s ~8 pp, and with 3.8 h left that is essent
 
 ## §5 What is genuinely still dark
 
-1. **Everything before 2026-08-10.** The ledger starts there; the pre-ledger state was
-   single-slot-overwrite (`/tmp/claude-accounts-cache.json`, depth one). Whether transcripts can
-   reconstruct any of it is being checked separately.
+1. **Everything before 2026-08-10, and transcripts cannot recover it.** The ledger starts there; the
+   pre-ledger state was single-slot-overwrite (`/tmp/claude-accounts-cache.json`, depth one).
+   Transcripts were checked as the only candidate pre-ledger source: across all four config roots
+   (6,749 `*.jsonl`), the literal `Claude usage limit reached` appears in **6** files — and one of
+   those six is *this session's own transcript*, contaminated by the grep that searched for it, so
+   the real count is **5**, dated 08-09 / 08-10 / 08-11 / 08-16. Transcripts therefore record the
+   rare *exhaustion event*, never the running percentage. **EXISTS + INSUFFICIENT.**
+   ⚠️ The first cut of this probe used a broader regex (`weekly limit|rate_limit|resets at`) and
+   matched **92%** of all transcripts — because that vocabulary is in `CLAUDE.md`, which is echoed
+   into every transcript. A limit-telemetry probe over transcripts must match a limit *event*
+   string, not limit *vocabulary*, or it measures the resident prompt.
 2. **N is small and the window is short.** 8 completed windows, 4 with day-1 coverage, spanning
    ~2 weeks. The empirical curve in §3 rests on **4 windows**. Read it as "the linear model is
    refuted", which 4 windows are ample for, **not** as "the S-curve is calibrated", which they are
