@@ -742,6 +742,64 @@ fi
 # deployment can turn off a class that does not apply to it rather than read a false miss):
 #   CC_PARITY_GITHOOKS — colon-separated hook dirs (default: the checkout's own + ~/.git-template)
 #   CC_PARITY_LAUNCHD  — LaunchAgents dir (default: ~/Library/LaunchAgents)
+# ── WHICH SIDE IS AHEAD — the question "DIFFERS" does not answer, and the one the REMEDY needs ────
+# MEASURED 2026-08-24. deploy-live reported "2 copy-class file(s) DIFFER from this checkout —
+# CLAUDE.md launchd/*.plist" as ONE condition with ONE remedy (run install.sh). Inspected, the two
+# drifted OPPOSITE ways: the plist's checkout was ahead and live stale (repair correct), while for
+# CLAUDE.md the LIVE file was ahead by an operator-authored rule that had never been tracked — and
+# install.sh copies repo→live unconditionally, so the prescribed repair would have SILENTLY DELETED
+# it. `diff` answers "are these the same", never "which one is the original", so every caller that
+# turned a difference into "repo edits are NOT live" was asserting a direction it had not measured.
+#
+# THE DISCRIMINATOR IS GIT, and it is the only thing on hand that knows what the file HAS been.
+# Hash the LIVE bytes and ask whether that blob appears anywhere in the tracked path's history:
+#   reachable   ⇒ live is a PAST revision of this file — genuinely BEHIND, and repair is safe.
+#   unreachable ⇒ repo→live would REGRESS the live layer, so it must not wear staleness's token.
+#
+# READ `ahead` EXACTLY: "these bytes are not in THIS CHECKOUT'S history", which is narrower than
+# "never tracked anywhere". It covers two states, and lumping them would repeat this row's own
+# mistake, so say both: (1) UNLANDED EDITS — someone edited the live copy and never landed it (the
+# CLAUDE.md case above); (2) A NEWER LANDED REVISION the checkout has not fetched — real on this
+# machine, because deploy-live deliberately runs from the newest GREEN commit while trunk moves on,
+# so the live layer can legitimately be ahead of the checkout asking the question. Verified both
+# 2026-08-24 against the live pair. They differ in remedy — land the edits vs. fetch the checkout —
+# but they agree on the only thing this token has to protect: do NOT copy repo→live over it.
+#
+# A file that is both behind AND locally edited also matches nothing, so it reports `ahead` — again
+# the safe direction, because the claim that matters is "do not blindly copy over this".
+#
+# THREE PROCESSES REGARDLESS OF HISTORY DEPTH: one `log` to name every commit that touched the path,
+# piped into ONE `cat-file --batch-check` to resolve them all. The naive shape (a `rev-parse` per
+# commit) forks once per commit and this runs on files with hundreds.
+#
+# `grep -c`, NEVER `grep -q`: this file is `set -o pipefail`, and an early-exiting consumer SIGPIPEs
+# `cat-file`, so the pipeline would report FAILURE on exactly the input it just matched.
+#
+# FAILS TO `unknown`, never to a direction. No git, an untracked path, an unreadable file — each
+# means we cannot say which side is original, and the caller must then warn rather than prescribe.
+copy_direction() {   # <repo src> <live dest> → behind | ahead | unknown. Never fails, never mutates.
+  local src="$1" dest="$2" rel h hits
+  case "$src" in "$REPO"/*) rel="${src#"$REPO"/}" ;; *) printf 'unknown'; return 0 ;; esac
+  command -v git >/dev/null 2>&1 || { printf 'unknown'; return 0; }
+  [ -r "$dest" ] || { printf 'unknown'; return 0; }
+  h="$(git -C "$REPO" hash-object -- "$dest" 2>/dev/null || true)"
+  case "$h" in ''|*[!0-9a-f]*) printf 'unknown'; return 0 ;; esac
+  git -C "$REPO" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1 || { printf 'unknown'; return 0; }
+  # NO COMMITS ⇒ UNKNOWN, never `ahead`. A path can be TRACKED (staged) yet have no history at all —
+  # a fresh checkout, a file added but not yet committed. Git then knows nothing about what this file
+  # HAS been, and "no past revision matches" would be an artefact of an empty search space rather
+  # than a finding. Reporting `ahead` there would fire the loud branch on every such file.
+  local commits
+  commits="$(git -C "$REPO" log --format="%H:$rel" -- "$rel" 2>/dev/null || true)"
+  [ -n "$commits" ] || { printf 'unknown'; return 0; }
+  hits="$(printf '%s\n' "$commits" \
+            | git -C "$REPO" cat-file --batch-check='%(objectname)' 2>/dev/null \
+            | grep -cxF "$h" 2>/dev/null || true)"
+  case "$hits" in ''|*[!0-9]*) hits=0 ;; esac
+  if [ "$hits" -gt 0 ]; then printf 'behind'; else printf 'ahead'; fi
+  return 0
+}
+
 copy_verdict() {   # <label> <src> <dest> — reports, sets drift/noverdict. Never emits an ln -sf line.
   local label="$1" src="$2" dest="$3"
   [ -f "$src" ] || return 0                 # not in this checkout ⇒ nothing to assert
@@ -752,7 +810,16 @@ copy_verdict() {   # <label> <src> <dest> — reports, sets drift/noverdict. Nev
   same_file "$src" "$dest"
   case $? in
     0) cls_row "$label" live ;;
-    1) report "COPYSTALE" "$label" "copy DIFFERS from repo — repo edits are NOT live → run ./install.sh"
+    1) case "$(copy_direction "$src" "$dest")" in
+         behind)
+           report "COPYSTALE" "$label" "copy DIFFERS from repo — repo edits are NOT live → run ./install.sh" ;;
+         ahead)
+           # A DIFFERENT CONDITION WITH A DIFFERENT REMEDY, so it gets its own token. install.sh
+           # copies repo→live, so prescribing it here is prescribing the deletion.
+           report "COPYAHEAD" "$label" "the LIVE copy carries bytes NOT in this checkout's history (unlanded live edits, or a newer landed revision this checkout has not fetched) — install.sh copies repo->live and would REGRESS it → land the live edits or fetch this checkout FIRST" ;;
+         *)
+           report "COPYSTALE" "$label" "copy DIFFERS from repo, direction UNKNOWN (git could not answer) — verify which side is original BEFORE running ./install.sh" ;;
+       esac
        cls_row "$label" miss; drift=1 ;;
     *) report "NOVERDICT" "$label" "diff could not run (3 tries) — no claim either way"
        cls_row "$label" live; noverdict=1 ;;

@@ -1042,16 +1042,47 @@ copydrift() { # <token> <subject> — one copy-class verdict line, exactly as re
   grep -q "install.sh is the only copy repairer" "$PAGES/deploy-copy-drift.page"
 }
 
-@test "every copy token the producer emits is seen — STALE · COPYMISS · COPYSTALE · CLAUDEMD" {
+@test "every copy token the producer emits is seen — STALE · COPYMISS · COPYSTALE · COPYAHEAD · CLAUDEMD" {
+  # THIS CASE IS THE ENUM GUARD. A token the producer emits and this grep does not list is not a
+  # degraded report, it is an INVISIBLE one — the new state would be silently dropped on the floor,
+  # which is strictly worse than the miscategorisation COPYAHEAD was added to fix.
   seed_parity 1
   copydrift COPYMISS  githooks/pre-commit
   copydrift COPYSTALE statusline.sh
+  copydrift COPYAHEAD CLAUDE.md
   copydrift CLAUDEMD  CLAUDE.md
   copydrift STALE     claude-latest
   stamp HEAD
   run dlp
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q "copy-drift: 4 copy-class file(s) DIFFER"
+  echo "$output" | grep -q "copy-drift: 5 copy-class file(s) DIFFER"
+}
+
+@test "COPYAHEAD is called out separately and NEVER carries the install.sh prescription" {
+  # The whole point of the token: install.sh copies repo->live, so telling the operator to run it
+  # over a live-ahead file is telling them to destroy it.
+  seed_parity 1
+  copydrift COPYAHEAD CLAUDE.md
+  copydrift COPYSTALE statusline.sh
+  stamp HEAD
+  run dlp
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "1 of them are LIVE-AHEAD"
+  echo "$output" | grep -q "CLAUDE.md"
+  [ -f "$PAGES/deploy-copy-drift.page" ]
+  grep -q "LIVE-AHEAD" "$PAGES/deploy-copy-drift.page"
+  grep -q "would" "$PAGES/deploy-copy-drift.page"
+}
+
+@test "CONTROL: with no COPYAHEAD, the line keeps its plain all-stale wording" {
+  # An always-firing alarm says as little as one that cannot. The loud branch must be the EXCEPTION.
+  seed_parity 1
+  copydrift COPYSTALE statusline.sh
+  stamp HEAD
+  run dlp
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "all live-STALE"
+  [[ "$output" != *"LIVE-AHEAD"* ]] || { echo "loud branch fired with no COPYAHEAD present"; false; }
 }
 
 @test "copy drift is REPORTED, never REPAIRED — no copy-class file is ever linked" {
