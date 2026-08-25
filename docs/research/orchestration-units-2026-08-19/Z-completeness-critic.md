@@ -274,7 +274,15 @@ and classify every unmatched claude process before adopting the registry.
 
 ---
 
-## G15 — N7 ends "needs a filed decision" and no decision was filed
+## G15 — N7 ends "needs a filed decision" and no decision was filed — ✅ CLOSED 2026-08-25
+
+> **Closed exactly as this probe specified** (backlog `564d151b76e5`): `:36` and `:150` are struck at
+> the source, the §5 P2 standing-policy bullet is retired, §6.4's first lever is retired in the axis
+> file, and a correction note under §2 records the decision — **`exchange-rate.md` governs**, because
+> the 68% is a share of API-list dollars (a method axis 07 stamped INFERRED at `07-accounts-api.md:78`)
+> and the plan meter is not denominated in them. Reciprocal pointers now run both ways, plus into the
+> four docs that carried the claim onward. Wall 4's capacity corrects from ~3.9 to **~9–12**.
+
 
 `scaling-bottlenecks-2026-08-09.md:36,150` still carries *"68% of quota cost is cache-read ⇒ halving
 context ≈ +50% active capacity"* into **standing policy**, and `exchange-rate.md:223` gives the

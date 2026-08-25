@@ -218,6 +218,19 @@ single-feature per-account fits are not.
 
 ## Recommendations
 
+> **R1 is DONE, 2026-08-25 — and here is the standing policy it overturned.** When this file was
+> written it did not name the document it contradicts. That document is
+> `docs/research/scaling-bottlenecks-2026-08-09.md` `:36`/`:150`, which published *"68% of quota cost
+> is cache-read at median ~200K contexts ⇒ halving context ≈ +50% active capacity"* and carried it
+> into **standing policy** — the exact incentive R1 says to remove. The 68% is a share of **API-list
+> dollars** (its axis file self-labels the method INFERRED at
+> `scaling-bottlenecks-2026-08-09/07-accounts-api.md:78`), not of the plan meter this file fits.
+> Both rows are now struck at the source with a correction note, and that doc's wall-4 capacity
+> figure corrects from ~3.9 to **~9–12** concurrent active. Raised as N7 in
+> `orchestration-units-2026-08-19.md:233`; decided as backlog `564d151b76e5`. **Also carry §5's own
+> caveat forward:** `corr(out, cr) = 0.936` means cache-read here is a **bound, not a point**
+> (`:145`) — the retirement holds anyway, on the model-free convergence recorded in that note.
+
 | # | Action | Expected effect (quantified) | Quality risk | Effort |
 |---|---|---|---|---|
 | R1 | **Stop treating long cached context as quota-expensive.** Publish finding #8 as an operating fact: cache-READ is ≤ 1/750 of an output token against the weekly limit; context *re-reads* are ~free, context *growth* (cache-creation) costs 1/12 of an output token, and only OUTPUT is expensive. | Removes the standing incentive to trim context. On `next`'s 80 pp cycle, 5.44B of 6.47B tokens (84%) were cache-read — i.e. **84% of the fleet's token volume is in the class the limit barely charges for**. Any "shrink the context" saving targets ≤ 16% of volume and buys ≤ 1/12-weight tokens. | **NONE** — it authorises *more* context, which is the quality-positive direction | 1 h (doc + CLAUDE.md line) |

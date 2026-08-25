@@ -476,8 +476,15 @@ process-level instruments.** Recording it so no one else re-derives it and over-
 3. **Two repo documents give opposite advice on context size and neither cites the other.**
    `scaling-bottlenecks-2026-08-09.md:36,150` ("68% of quota cost is cache-read ⇒ halving context ≈
    +50% capacity", carried into standing policy) vs `exchange-rate.md:45,223` ("cache-READ is ≤1/750
-   of an output token… it authorises MORE context"). One of them is live guidance and wrong. This
-   needs a filed decision, not another measurement.
+   of an output token… it authorises MORE context"). One of them is live guidance and wrong. ~~This
+   needs a filed decision, not another measurement.~~ ✅ **RESOLVED 2026-08-25** (backlog
+   `564d151b76e5`): `exchange-rate.md` governs — the 68% is a share of **API-list dollars**, a method
+   axis 07 self-stamped INFERRED (`07-accounts-api.md:78`), while the plan meter is a different unit.
+   `:36`/`:150` are struck at the source with a correction note, §6.4's first lever retired, and
+   reciprocal pointers added in both directions. **§C6's caveat is carried into that note, not
+   dropped:** cache-read remains a *bound, not a point*; the retirement rests instead on the
+   model-free convergence §C6 itself supplies — the 68% model predicts 3.9 concurrent-active and
+   three independent derivations measure ~9–12.
 4. **The finder's `RMSE=1.73` and its published 17.7 pp residual cannot both be true** (§C5).
    Whichever way that resolves, the 5-hour exchange rate should be published with an interval and a
    condition number, and the repo should pick one of the two competing fits (the `USAGE_TELEMETRY_100P`

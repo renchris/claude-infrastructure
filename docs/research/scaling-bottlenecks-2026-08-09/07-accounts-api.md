@@ -112,7 +112,11 @@ cap is the budget. Any policy that optimises the 5h number is optimising the wro
 | per-turn context (in+cw+cr) | 199,628 tok | — | — | — |
 
 **Cost composition: cache-read 68.0% · cache-write 18.0% · output 14.0% · fresh input 0.0%.**
-This is the single most actionable number in the file — see §6.4.
+~~This is the single most actionable number in the file — see §6.4.~~ 🚨 **Read this as what it is: a
+composition of API-list DOLLARS (§2a, self-stamped INFERRED at `:78`), not of the plan meter.**
+Against the meter the shares invert — Opus-5 cache-read is **0.000 pp/Mtok** and output is the
+expensive class — so this row supports no conclusion about quota burn. §6.4, which spent it as one,
+is retired; see the note there (2026-08-25, backlog `564d151b76e5`).
 
 Model mix by $eq this weekly window: `next` opus 426 / sonnet 1.5 · `next4` opus 227 · `next3`
 opus 2104 / **fable 80.5** / haiku 0.0 · `next2` opus 406 / fable 1.0 / haiku 0.3. Effectively an
@@ -287,7 +291,22 @@ constraints on top:
   relogin or account rebuild that clusters the resets would convert four independent budgets into
   one synchronized one.
 
-### 6.4 · The largest quota lever is context, not accounts
+### 6.4 · ~~The largest quota lever is context, not accounts~~ — 🚨 REFUTED 2026-08-25
+
+> **The first lever below is dead; the second (model down-tier) survives and is still unspent.**
+> "68% of every quota dollar" is a share of **API-list dollars** — the §2a method this file itself
+> stamps **INFERRED** at `:78`, and which §2b was built to avoid depending on. The **weekly plan
+> limit is a different unit**: fitted straight against `~/.claude/logs/account-utilization.jsonl`
+> (265 intervals, NNLS, R² = 0.82), Opus-5 cache-read costs **0.000 pp/Mtok** (p95 ≤ 0.0017 over
+> ≥590M tokens) while OUTPUT costs **1.282** — so re-reading a large cached context is ~free against
+> the limit and halving it buys nothing. Sources and the model-free cross-check that makes this
+> hold even under the fit's collinearity caveat: `usage-telemetry-100p-2026-08-16/exchange-rate.md`
+> `:45`/`:145`/`:223`, `orchestration-units-2026-08-19/A6-VERIFY-quota-economics.md` §C6, and the
+> correction note under §2 of the parent doc. Decision filed as backlog `564d151b76e5`.
+> **Consequence for §5b/§6:** wall 4's "~3.9 concurrent active 24/7" was priced with the same 68%
+> and corrects to `3.9 / 0.32 =` **12.2**, converging with an independently measured 6.2–11.0.
+> CLAUDE.md § Context Stewardship reverts to what it always was — a **quality and survival** policy
+> (context rot; the hard `Prompt is too long` refusal) — and is **not** a capacity policy.
 
 **68% of every quota dollar is cache-read**, and cache-read scales linearly with per-turn context
 (median **199,628 tokens**). Halving working context ≈ **−34% quota draw ≈ +50% sustainable active
@@ -333,9 +352,11 @@ so this lever is entirely unspent.
    10 s timeout at 150 sessions. Measured — it does not (§6.5). The scaling risk there is the
    fail-open *direction*, not the budget.
 5. **Axis I nearly assumed irrelevant:** per-minute rate limits. They are irrelevant *at the design
-   point* (§5b) — but only because cache reads are ITPM-exempt while being 68% of quota cost. That
+   point* (§5b) — but only because cache reads are ITPM-exempt while being ~~68% of quota cost~~
+   **[re-priced 2026-08-25: 68% of API-list *dollars*; against the plan meter, ~0]**. That
    asymmetry is the reason quota and rate-limits give opposite answers, and it is the single fact
-   that makes 150 resident affordable at all.
+   that makes 150 resident affordable at all — **and the correction only strengthens it**: cache
+   reads are now exempt on *both* meters at once, so §5b's conclusion stands a fortiori.
 
 ---
 

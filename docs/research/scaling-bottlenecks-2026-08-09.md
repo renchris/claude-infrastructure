@@ -33,8 +33,44 @@ of the render floor" was a ratio between two emulators, one absent).
 | 1c | └ toolchain bursts (the crash igniter) | D3's 15% segment bar = **19.9 GB of anon at panic packing** — the entire S6.2 remainder; and S6.2's "19 GB left for bursts" recomputes to **−4 GB** at the corrected constant | ~1 cold compile | 05, 01 |
 | 2 | **Active-session load** (the felt daily ceiling) | **2.5–5 runnable threads per genuinely-active session** (measured 27→44 load at 9 active), not 1.6 (a mixed-fleet average) | **~4–8 concurrent active** on the load-20 gate — matches the felt ~12–15-session pain and all 127/127 historic gate refusals | 09 |
 | 3 | **Fleet-self-imposed caps** | router `KMAX=8` × 4 accounts — **refuses the 33rd session** (proven on the shipped binary; `handoff-fire.sh:5266` turns rc 2 into HALT). oauth refresh herd: one credential/expiry instant per ~37 sessions, rotating tokens ⇒ a losing racer logs out the whole account, and `heal()` refuses to run while sessions are live ⇒ can never fire at 150. git shared store crosses `gc.auto` (6700 loose) within hours at 15×. `.claude.json`: 171 KB whole-file rewrite, no lockfile. | 32 · any refresh instant · hours · races now | 07, 08 |
-| 4 | **Account quota (active half only)** | residency ≈ free; 4 Max accounts sustain **~3.9 concurrent active 24/7** (~654 active-h/week); 10 active affordable ~39% of the week. **68% of quota cost is cache-read at median ~200K contexts ⇒ halving context ≈ +50% active capacity** — bigger than a fifth account. | active work, not residency | 07 |
+| 4 | **Account quota (active half only)** | residency ≈ free; 4 Max accounts sustain ~~**~3.9 concurrent active 24/7**~~ → **CORRECTED 2026-08-25 to ~9–12** (~654 active-h/week); 10 active affordable ~~~39%~~ → most of the week. ~~**68% of quota cost is cache-read at median ~200K contexts ⇒ halving context ≈ +50% active capacity** — bigger than a fifth account.~~ 🚨 **REFUTED — see the correction note directly below this table, and §5 P2's retired standing-policy bullet.** The quota lever is **OUTPUT**, not context size. | active work, not residency | 07 |
 | — | **NOT walls** (each with evidence) | render (idle panes 0.001 cores; occluded windows free; unit = drawn OS window ~0.05 cores; corrected wall 226–440 all-visible-all-active panes; sane 150-topology = 0.4–0.6 cores) · ptys (~30%, 1/pane+16 static) · pid-wrap (REFUTED: 923 pids/s ⇒ wrap every 108 s, live-observed; the panic correlation was a 2%-prior coincidence) · Mach ports (incident #0 re-explained as WindowServer CPU serialization — amplifier gone under kitty) · fd/kqueue/logd/disk/Spotlight/FS | — | 02, 08, 09 |
+
+### 🚨 Correction to wall 4, filed 2026-08-25 — the context lever is REFUTED, and wall 4 moves to ~9–12
+
+*Decision (backlog `564d151b76e5`, raised as N7 in `orchestration-units-2026-08-19.md:233`): where this
+doc and `usage-telemetry-100p-2026-08-16/exchange-rate.md` disagree about what the weekly limit
+charges for, **exchange-rate.md governs.** Neither doc cited the other; this note and the reciprocal
+pointer at `exchange-rate.md`'s R1 close that.*
+
+**What was wrong.** Wall 4's cost composition (cache-read 68.0% / cache-write 18.0% / output 14.0%,
+`07-accounts-api.md:114`) is a composition of **API-list dollars** — it applies Anthropic's published
+per-token prices, cache-read at 0.10× of input, to this fleet's token counts. Axis 07 labelled that
+method **INFERRED** at `:78` and deliberately built its §2b invariant not to depend on it; §6.4 then
+spent it anyway as "the largest quota lever is context." **The weekly plan limit is not denominated
+in API-list dollars.** Fitted directly against the meter — 265 intervals of the fleet's own
+`~/.claude/logs/account-utilization.jsonl` joined to 140,928 transcript usage records, NNLS,
+R² = 0.82 — Opus-5 costs **1.282 pp/Mtok of OUTPUT**, **0.105** of cache-creation, and **0.000** of
+cache-read (p95 ≤ 0.0017, over ≥590M tokens), replicated on the disjoint 5-hour bucket
+(`exchange-rate.md:45`).
+
+**Why the identifiability caveat does not rescue the old number.** `exchange-rate.md:145` is honest
+that `corr(out, cr) = 0.936` leaves cache-read *bounded, not pinned* — both the free and the
+list-priced hypotheses fit (R² 0.813 vs 0.797), a point `A6-VERIFY-quota-economics.md` §C6 presses
+correctly. **The decision is invariant to it**, on a model-free check: if cache-read really were 68%
+of the meter, this fleet would sustain the **~3.9** concurrent-active sessions wall 4 published.
+Divide out the mispriced 68% and wall 4's own figure becomes `3.9 / 0.32 =` **12.2** — which lands
+inside the **6.2–11.0** that `A6-VERIFY` measured with no token model at all, and beside a third
+independent derivation. Three routes converge on **~9–12 working units fleet-wide**; only the 68%
+model predicts 3.9, and the fleet observably sustains ~3× that.
+
+**What replaces the lever.** OUTPUT is the expensive class, cache-creation is 1/12 its weight, and
+re-reading a large cached context is ~free — so the quota levers are **emitting fewer tokens** and
+**model down-tiering** (§6.4's second lever, which that section already called entirely unspent and
+which survives this correction intact). Trimming a context that is only being re-read buys nothing
+against the plan limit. **§6.4's first lever, and the P2 standing-policy bullet that carried it, are
+retired** — see §5 P2. Context stewardship itself is unaffected: it stands on context rot and the
+hard `Prompt is too long` refusal, never on quota.
 
 **Felt lag, precisely (12):** turn-end lag is **3.7 s p50 / 7.7 s p90** and 92% of it is ONE call —
 `cc-backlog list --blocked --json` (2.1 MB store, ~60 jq forks) inside the Stop readout. Chronic CPU
@@ -147,8 +183,22 @@ already exists, not render work.
   closes the F3 half that a SPAWN gate can close and no more** — axis 10's thundering-herd path is
   a *wake* of existing residents, which no spawn gate sees by construction, so wake-side damping
   remains open and unowned.
-- Standing policy: **context stewardship IS capacity** — median turn context ~200K, 68% of quota
-  cost is cache-read; halving context ≈ +50% sustainable active work (07).
+- ~~Standing policy: **context stewardship IS capacity** — median turn context ~200K, 68% of quota
+  cost is cache-read; halving context ≈ +50% sustainable active work (07).~~
+  🚨 **REFUTED and RETIRED as standing policy 2026-08-25** (decision below; backlog `564d151b76e5`).
+  This bullet priced quota in **API-list dollars**, where cache-read is 0.10× of input and works out
+  to 68% of spend. The **plan meter is not denominated in API-list dollars**: fitted against the
+  fleet's own `account-utilization.jsonl` series, Opus-5 cache-read costs **0.000 pp/Mtok**
+  (p95 ≤ 0.0017; ≥590M tokens) — `usage-telemetry-100p-2026-08-16/exchange-rate.md:45`, whose R1
+  (`:223`) gives the **opposite** instruction: *"Stop treating long cached context as
+  quota-expensive… it authorises MORE context."* **What replaces it:** the expensive class is
+  **OUTPUT** (1.282 pp/Mtok) and, at 1/12 its weight, **cache-creation** — so the quota levers are
+  emitting fewer tokens and **model down-tiering** (§6.4's unspent second lever), never trimming a
+  context that is merely being re-read. **Context stewardship survives untouched on its own
+  grounds** — context rot, and the hard `Prompt is too long` refusal with no safety net at the
+  ceiling (global `CLAUDE.md` § Context Stewardship) — but it is a *quality and survival* policy,
+  **not** a capacity policy, and the `/handoff`-at-35%-idle threshold must never again be justified
+  by quota.
 
 **P3 — prove it (only after P1+P2):** D1 ramp 19→40→80→150 with the fixed abort sensors;
 D8 re-specified (cold compile at ≥80 needs its synthetic-spawn contradiction resolved, 05);
@@ -167,6 +217,13 @@ oauth/KMAX/gc watched at each stage per 08's flip conditions.
 5. The felt-lag replay rig must pin `CLAUDE_CONFIG_DIR` (not `$HOME`) — sessions here run
    config-rooted at `~/.claude-tertiary` (04); and `relay-verbatim.sh` false-fires on greps that
    merely contain `cc-do` (12).
+6. **(Added 2026-08-25, this doc's own defect.)** **API-list dollars are not the plan meter's unit,
+   and a cost composition computed in the first says nothing about burn in the second.** Wall 4
+   priced quota with Anthropic's list prices (cache-read 0.10×), got "68% of cost is cache-read,"
+   and published a context lever from it; the meter, fitted directly, charges cache-read **0.000
+   pp/Mtok**. Axis 07 knew — it stamped the method **INFERRED** (`:78`) and built §2b to be
+   pricing-free — and the headline spent it regardless. **The rule: an inferred unit may not carry a
+   standing policy.** Full note under §2's table; supersession in §5 P2.
 
 ## 7 · Filed / opened this session
 
