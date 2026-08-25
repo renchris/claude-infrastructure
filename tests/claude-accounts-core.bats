@@ -1784,38 +1784,80 @@ print("OK")'
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
-@test "router M7: pace line — need per account soonest-first, recent rate only when measured" {
+@test "router M7 + S3: apply_burn attaches the new weekly keys under their OWN names, in %/h" {
+  # RP-27. THE UNIT IS THE HAZARD, and it is why this case exists separately from the assertions
+  # on the incumbent keys above. burn_5h_ph is consumed by _su_projected as a FRACTION per hour
+  # (su + b * ahead, su in [0,1]), so a %/h value written onto that key saturates the projection
+  # to 1.0 on every row and reads as "every account is under 5h pressure" — a 100x error wearing
+  # a plausible face. The weekly EWMA therefore ships under its OWN key, in %/h, and the
+  # incumbent burn_wk_ppd stays populated beside it rather than being overwritten.
   run python3 -c "$LOAD"'
-n3 = row(acct="next3", weekly_pct=81, weekly_reset_h=27.8)
-n2 = row(acct="next2", weekly_pct=13, weekly_reset_h=122.8, burn_wk_ppd=9.0)
-line = ca.pace_line([n2, n3])
-assert line.startswith("weekly burn (1.00× = lands exactly at the 100% wall): next3 "), line  # soonest reset first, regardless of input order
-assert "next2 burn 0.48× → ~48% by reset, needs 17%/d over 5d" in line, line   # ratio + projection, and the %/day figure is the FALLBACK: it renders
-                                                         # only where burst_percentile ABSTAINED, which is this fixture (no series).
-# M5 (S2): where the percentile IS available it REPLACES that bare rate. `needs 17%/d over 5d`
-# quotes a rate in a unit longer than the window it must happen in and says nothing about whether
-# the account has ever burned that fast; the percentile is that missing fact. Both spellings are
-# pinned here because the fallback is what keeps an abstention from rendering as a missing clause.
-m5 = row(acct="next2", weekly_pct=13, weekly_reset_h=122.8,
-         burst={"pct": 64.7, "h": 24.0, "n": 2448, "need_pph": 0.71, "never": False})
-assert "p65 of its own 24h burns to close 87pp in 5d" in ca.pace_line([m5]), ca.pace_line([m5])
-assert "needs 17%/d" not in ca.pace_line([m5]), ca.pace_line([m5])
-# above the observed maximum there is NO evidence at all, so it says so rather than render p100
-nv = row(acct="next3", weekly_pct=92, weekly_reset_h=27.8,
-         burst={"pct": None, "h": 3.0, "n": 2576, "need_pph": 25.0, "never": True})
-assert "needs more than it has EVER burned in 3h" in ca.pace_line([nv]), ca.pace_line([nv])
-assert "p100" not in ca.pace_line([nv]), ca.pace_line([nv])
-assert "(recent 9%/d)" in line, line                     # a measured series still renders...
-assert "BEHIND" not in line, line                        # ...but WITHOUT the old flag. 47ddbf47c DELETED it as a defect: on 2026-08-16 three
-                                                         # freshly-reset windows each read BEHIND, which is correct and reads as gross
-                                                         # under-utilisation. Restoring it to satisfy this test would re-introduce that.
-assert "recent" not in line.split("·")[0], line          # no series span for next3 ⇒ no claim
-# the signal that REPLACED BEHIND, and it has the OPPOSITE polarity: over-utilisation, not under
-wall = ca.pace_line([row(acct="next4", weekly_pct=60, weekly_reset_h=84.0)])
-assert "next4 burn 1.20× → ~120% by reset ⚠ WALL, needs 11%/d over 3d" in wall, wall
-# below MIN_ELAPSED_FRAC ⇒ ABSTAIN, rather than projecting 1% at 1 h elapsed out to 168%
-assert "next2 too early to project" in ca.pace_line([row(acct="next2", weekly_pct=1, weekly_reset_h=166.0)])
-# no data ⇒ no line (a pace line over nothing would render at every error state)
+import json, os
+from datetime import datetime, timezone, timedelta
+p = os.path.join(os.environ["BATS_TEST_TMPDIR"], "util-ewma.jsonl")
+now = datetime.now(timezone.utc)
+wra = (now + timedelta(hours=100)).isoformat()
+with open(p, "w") as f:
+    for i in range(240, -1, -1):                  # 24 h at 6 min, weekly 26 -> 40 = 0.583 %/h
+        f.write(json.dumps({"ts": (now - timedelta(minutes=i * 6)).isoformat(),
+                            "acct": "next3", "session_pct": 10, "weekly_pct": 26 + (240 - i) * 0.0583,
+                            "session_reset_at": None, "weekly_reset_at": wra}) + "\n")
+rows = [row(acct="next3", weekly_pct=40, weekly_reset_h=100.0)]
+samples, span = ca._util_tail(path=p, hours=48.0)
+ca.apply_burn(rows, cfg, samples=samples)
+r = rows[0]
+assert "burn_wk_ewma_ph" in r, r
+assert 0.45 < r["burn_wk_ewma_ph"] < 0.75, r      # ~0.583 %/h — NOT 0.0058 and NOT 14
+assert "burn_wk_ppd" in r, r                      # the incumbent is NOT overwritten
+assert 12.0 < r["burn_wk_ppd"] < 16.0, r          # ~14 %/day, i.e. the same rate in its own unit
+assert "burn_wk_span_h" in r and r["burn_wk_span_h"] > 6.8, r
+assert "wk_strand_pp" in r, r
+assert 0.0 < r["wk_strand_pp"] < 5.0, r           # 40 + 0.583*100 = 98.3 -> ~1.7 pp die
+assert "burn_5h_ewma_ph" not in r, r              # S7 is a LATER wave and was not built here
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router M7 + S3: the weekly-drain block sorts by pp AT RISK, and a zero-strand row still renders" {
+  # UPDATED IN PLACE (USAGE_TELEMETRY_100P §5.3 RP-25/RP-26/RP-27), not rewritten. This case used
+  # to assert `soonest-first` and the bare `needs N%/d` rate. BOTH were the defect:
+  #   * soonest-first led with the 5 pp account and TRAILED the pair holding 119.5 pp with four
+  #     days of runway. Reset proximity is urgency; pp at risk is the loss. The fleet stranded
+  #     43 pp over 8 completed account-weeks and no surface named who was losing it.
+  #   * `needs 17%/d over 5d` quotes a rate in a unit longer than its own window (S2/M5).
+  # Restoring either spelling to satisfy an older assertion re-introduces what they cost.
+  run python3 -c "$LOAD"'
+# live shapes measured 2026-08-25T09:47:41Z; strand = 100 - (weekly_pct + ewma * reset_h)
+n4 = row(acct="next4", weekly_pct=14, weekly_reset_h=119.2, burn_wk_ewma_ph=0.186)
+n2 = row(acct="next2", weekly_pct=17, weekly_reset_h=97.2, burn_wk_ewma_ph=0.281)
+n3 = row(acct="next3", weekly_pct=92, weekly_reset_h=2.21, burn_wk_ewma_ph=1.140,
+         burst={"pct": 95.6, "h": 3.0, "n": 2576, "need_pph": 3.62, "never": False})
+n1 = row(acct="next", weekly_pct=52, weekly_reset_h=114.21, burn_wk_ewma_ph=1.725)
+line = ca.pace_line([n3, n1, n2, n4])          # deliberately NOT in the expected order
+assert line.startswith("weekly drain — pp that DIE at reset"), line
+assert "nowcast at the last 48h of pace" in line, line   # a NOWCAST: no lead-time claim, §5.1 LB-2
+# RP-25 — sorted by pp at risk, descending: 64 / 56 / 5, then the zero-strand row
+assert line.index("next4") < line.index("next2") < line.index("next3") < line.index("next "), line
+assert "next4 strand ~64pp of 86" in line, line
+assert "next2 strand ~56pp of 83" in line, line
+assert "next3 strand ~5pp of 8" in line, line
+# M5 rides the strand row: how much dies, and whether the demand is routine or a stunt
+assert "next3 strand ~5pp of 8 · p96 of its own 3h burns" in line, line
+# RP-26 — a zero-strand account still RENDERS, and renders LAST. A sorted() over a list filtered
+# on strand > 0 passes RP-25 and drops this row silently.
+assert "next no strand" in line, line
+assert "wall trajectory" in line, line
+assert line.rstrip().split(chr(10))[-1].strip().startswith("next no strand"), line
+# ...and its burn RATIO survives unchanged, while the >100 PROJECTION does not render as a number
+assert "1.62× burn" in line, line
+assert "162" not in line and "163" not in line, line     # the RATIO, never the ~162% projection
+assert "BEHIND" not in line, line                        # 47ddbf47c DELETED it: on 2026-08-16 three freshly-reset windows each read
+                                                         # BEHIND, which is correct and reads as gross under-utilisation.
+# an abstention renders as the WORD plus its reason, never as a zero (L2)
+ab = ca.pace_line([row(acct="next2", weekly_pct=13, weekly_reset_h=122.8, burn_wk_span_h=4.1)])
+assert "next2 strand unknown (span 4.1h < 6.8h)" in ab, ab
+# no data ⇒ no block (a drain block over nothing would render at every error state)
 assert ca.pace_line([row(weekly_pct=None), row(weekly_reset_h=None)]) == ""
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
