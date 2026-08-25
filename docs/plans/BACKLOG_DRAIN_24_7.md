@@ -86,6 +86,112 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-25 — drain recycle #226: method 196 — TWO SIBLING DIAGNOSTICS NAMING OPPOSITE CAUSES FOR
+  ONE EVENT, NEITHER READING THE STORE THAT DECIDES BETWEEN THEM.**
+  Took #225's lead 1 — `88b6e65e4acf`, #220's own filing and the last unworked `cc-reaper` self-check
+  claim — and reached it by way of an acquittal. `live_pane_count`'s header states a contract in
+  general terms (*"this MUST stay in lockstep with the register/reconcile process-identity
+  definition"*), so per method 195 I counted the sites it binds and ran each against the live fleet
+  rather than reading them: **`bin/cc-reaper live_pane_count` and `bin/cc-reconcile
+  live_claude_pids` AGREE EXACTLY** — 18 vs 18, identical argv0 multisets, each awk program run
+  verbatim with only its terminal action changed, NEG control 0 and POS control 1 through the same
+  pipeline. The field offsets differ by one only because reconcile's `ps` carries a pid column, and
+  both marker scans span all of argv. **That contract holds; the third site
+  (`hooks/session-register.sh:58`) is a genuinely different clause over `comm` rather than argv, but
+  no live process exercises the divergence.** The payoff was the code immediately around it, exactly
+  as #224 and #225 predicted it would be.
+  🚨 **THE DEFECT: `self_check` asserted "a spawn mode isn't registering in cc-registry" for EVERY
+  positive delta, and R5c asserted "the enumerator failed open" for EVERY empty classification at
+  rc 0. Those are OPPOSITE causes for the same observation, both stated unconditionally, and when
+  enum is 0 with live panes present BOTH FIRE IN THE SAME SWEEP.** Measured read-only before writing
+  anything: **live 18 · cc-registry 16 rows · `cc-classify --all --json` 7 at rc 0**, and all 7
+  enumerated paneUUIDs are a strict SUBSET of the registry's 16. **So 9 of the 11-pane delta are
+  registered AND unenumerated — the self-check's sole asserted cause is wrong about 9 of 11**, and
+  has been for at least 676 consecutive sweeps (`self-check page REFUSED: live=29 enum=0 delta=29
+  (persisted 676 sweep(s))`, 2026-08-23T21:03:10Z).
+  🚨 **THE DISCRIMINATOR IS FREE, LOCAL, AND PARTITIONS THE DELTA EXACTLY:** `(live − enum) == (live
+  − reg) + (reg − enum)`, i.e. `11 == 2 + 9`. **R5e (`ad754a58b`, landed)** adds
+  `registry_row_count()` + `blindspot_cause()` and routes all three claim sites through the ONE
+  helper, so the two diagnostics can no longer contradict each other. `tests/cc-reaper.bats`
+  **180 → 185.**
+  ⚠️ **FOUR THINGS IT DELIBERATELY DOES NOT DO,** because each was a live temptation: it does not
+  touch `live_pane_count` (the truth signal stays ps-derived; the registry is consulted only to
+  ATTRIBUTE, which is a question *about* the registry); it does not report an absent registry as
+  zero rows (`-1` = UNKNOWN, because a bare `find | wc -l` renders absent and empty identically and
+  would turn *"I cannot tell"* into a confident *"everything is unregistered"* — the very failure
+  being fixed, one layer down); it does not widen the alarm (`delta ≤ tol` untouched); and it does
+  **not** address the row's SECOND half — the damping re-arms only on a strictly growing delta, and
+  since damping is deliberate (*"re-paging a desk-less fleet each sweep is the storm"*) the remedy is
+  not "page more" and needs design. 🚨 **`88b6e65e4acf` therefore STAYS OPEN and that residue is
+  where it lives** (premise 3: if you cannot name where the residue lives after your close, do not
+  close). **#217–#226 have now all closed nothing.**
+  ✅ **MUTANTS: FIVE, one per site plus a polarity control, every anchor asserted to occur exactly
+  once and the subject restored byte-identical by sha256 on every arm.** M1 arm-selector → `[2,3,5]`
+  · M2 absent-registry-as-zero → `[4]` · M3a R5c `say()` → `[5]` · M3b R5c `log()` → `[5]` ·
+  M4 CONTROL, self-check fires at `delta ≤ tol` → spoke with `[2]`. **All matched — but only in
+  round 2, and round 1's two mismatches were the informative part.** M1 predicted `[2,3,4]`: wrong,
+  because the UNATTRIBUTED arm RETURNS EARLY, upstream of the selector the mutant breaks, and
+  because test 5 reds too now that R5c shares the helper — **the prediction was under-specified, the
+  code was right.** M3 predicted `[5]` and observed `[]`: **that one was a real hole in my own test.
+  R5c emits at TWO independent seams and the single mutant hit `say()`, which the test asserted
+  nothing about.** The test now pins both seams on R5c's own line, and the M3a/M3b split is what
+  proves it closed. 🆕 **GENERALISATION CLAUSE (12): a diagnostic that emits at more than one seam
+  needs one mutant PER SEAM — a single mutant can hit the seam your test ignores and return a
+  green that means nothing.**
+  🚨 **INSTRUMENT FAULTS OF MY OWN, THREE.** (1) **My inserter's idempotence guard REFUSED ITS OWN
+  FIRST RUN**, keyed on `recycle #226` / `R5e:` — text my *own sibling edit* to the suite's setup
+  block already carried. **A guard must key on its own subject, not on any text the same change
+  happens to write elsewhere.** (2) **A substring collision inside my own assertions:** the first
+  draft named the arms in prose, and `a registration gap` is a substring of `NOT a registration
+  gap`, so a grep for one matched the other and **two opposite arms were indistinguishable to every
+  consumer, including the tests meant to tell them apart.** Fixed by emitting mutually non-substring
+  tokens — **`cause=ENUMERATION` · `cause=REGISTRATION` · `cause=BOTH` · `cause=UNATTRIBUTED`**, each
+  verified = 1 on trunk. (3) **A stray non-ASCII character typed into a source comment**, caught by
+  re-reading the block I had just written.
+  ⚠️ **HERMETICITY WAS THE REAL COST OF THIS FIX, not the logic.** The suite never set
+  `CC_REGISTRY_DIR`, so an unguarded registry read would have made every self-check assertion in
+  **180 existing tests** depend on the operator's live fleet size at the moment the suite ran.
+  `setup` now points it at `$D` and leaves it ABSENT, which makes the default the honest UNATTRIBUTED
+  arm — itself the no-store branch, exercised explicitly. **Before adding a read to a subject, ask
+  what its suite does NOT isolate.**
+  **BOARD** at my OPEN **308 open / 210 blocked / 2,326 done / 6 claimed** (518 combined; 2,850
+  folded) — **byte-identical to #225's close, and all four `comm`s read 0 departures / 0 arrivals,
+  including claimed.** A second consecutive quiet claimed set, and the first fully quiet link across
+  all four lists. **`done` did NOT move (2,326), breaking the #224/#225 streak of one actuator close
+  per link.**
+  **THE ELEVEN ROWS at my open: 7 blocked · 2 done · 1 claimed · 1 open — identical to #225's close,
+  so ZERO actuations this link**, against 2 at #224 and 2 at #225. Live `CC_REAPER_BACKLOG_TIMEOUT_S`
+  still reads **`:-900` = 0 / `:-60` = 2** (POS control `bound-fired backlog-reap` = 1, NEG 0), so
+  the bound has not converged and the drain rate now has a THIRD data point that is **0, not 2**.
+  🚨 **Report the eleven-row tally and the live `:-900` count together; a rate of 2, 2, 0 across
+  three links under an unchanged bound says the bound is not obviously the binding constraint.**
+  **CONVERGER, re-run not inherited:** `deploy-live.sh --auto` from the shared checkout, rc captured
+  to a file — **rc=1, output ONE line, `deploy-migrations: migrate: 0 applied, 14 staged
+  (operator-owned), 0 pending`** — #221–#225's shape reproduced a SIXTH time; #220's DEGRADED banner
+  still not reached. Cause re-verified and unchanged: the shared tree is dirty, **23 entries, the
+  blocking one `hooks/enforce-email-formatting.py` (` M`)**, 22 untracked. **`42243203fb31` owns it;
+  do not touch that file.**
+  **STANDING READS:** postland RED pages **0, the 118th consecutive**, denominator **2,668 at open**
+  (unmoved from #225's close) and stamps **456 → 456 at open** — a SECOND consecutive non-move.
+  `~/.claude/autonomy/pages` **1,937 / 123** at open, again refuting #224's monotone-shrinkage
+  projection. `cc-roles list` a **TENTH** identical table (`desk UNVERIFIED 5 | docs-lead UNVERIFIED
+  450 | drain-lead UNVERIFIED 7 | orchestrator ABSENT empty`). Mailbox `27.md` **4,059 bytes, 1
+  line**, a TENTH identical reading. **Peer mail DID arrive**: a forwarded post-land RED for
+  `tests/cc-dispatch-venue-only.bats::(a)` after `d9e2f7a65c20`, no bisect verdict, floor-not-green
+  at load 15.44, explicitly unattributed. **That is now a THIRD no-verdict page on one test**
+  (`acf0c16b45b1`, `04c00694a284`, `d9e2f7a65c20`; 645/644/644 bytes, all present) — and
+  **`675e9c81c884` had already re-titled itself to the newest one at 17:20:02Z, so no filing was
+  needed and none was made.** Three independent no-verdict pages strengthen the reading that the
+  subject is the FLOOR, not any commit.
+  **GATES:** shellcheck `bin/cc-reaper` rc 0 / **0 findings** · `bash -n` rc 0 ·
+  `bats-assert-liveness.py` rc 0 · scoped `bats-shellcheck-lint --range` rc 0, clean, 1 suite, 0
+  blocking, 2 pre-existing advisory · **`alarm-polarity-lint` DECLARED NOT-RUN** (mute on three
+  independent subjects, `e07dc5e09f83` OPEN — its green is a non-verdict, never report it).
+  **273 tests run in the FOREGROUND before landing**: `cc-reaper` **185/185** (392s at load 12–25)
+  plus the selector's other six — `handoff-lifecycle-record` 15, `headless-address-consumers` 13,
+  `lstart-dialect-bin` 16, `reap-freshness` 10, `reap-sweep-bounds` 14, `watchdog-census` 20 —
+  **88/88, 0 skips, plans summing to 88.** Selector drew **7** for `bin/cc-reaper` a fourth time
+  (7, 8, 7, 7, 7), POS control speaking with 3 every run.
 - **2026-08-25 — drain recycle #225: method 195 — A GENERAL CONTRACT HONOURED AT ONE OF THE FOUR
   SITES IT BINDS, WHERE THE MISSING ARM IS ALSO THE ONLY THING THAT COULD EVER HAVE COUNTED ITS OWN
   ABSENCES.**
