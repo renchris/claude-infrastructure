@@ -190,3 +190,24 @@ The one real cost in view is `next3`'s ~8 pp, and with 3.8 h left that is essent
 
 **Reproduce:** the analysis scripts are in this session's scratchpad; the one-command version of
 the retrospective is `python3 scripts/desk-strand-replay.py`.
+
+---
+
+## §7 Every other candidate source, ruled out
+
+Asked so the answer is "we have the telemetry" rather than "we have *a* telemetry". Each verdict is
+from execution or from reading the parsing code, not from a doc's claim.
+
+| Source | Verdict | Evidence |
+|---|---|---|
+| `~/.claude/logs/account-utilization.jsonl` | **EXISTS + USABLE** — the answer | §1 |
+| The OAuth `/api/oauth/usage` body | **EXISTS + FULLY HARVESTED** | `pick()` (`bin/claude-accounts:846-853`) reads `percent` + `resets_at` from each `limits[]` entry, keyed on `kind` ∈ {`session`, `weekly_all`, `weekly_scoped`}, plus `extra_usage.{is_enabled,used_credits}`. Those are exactly the fields the ledger persists — we drop nothing we read. `pool-floor.sh` records the measured fact that the endpoint carries **no entitlement figure** (so absolute token budgets are unobtainable, which is why only *floors* publish). |
+| …but the **raw body is never retained** | **minor gap** | `/tmp/claude-accounts-cache.json` holds only the 24 parsed row keys; `raw upstream body retained? False`. So if the vendor adds a field, no stored artifact would show it — the schema is only ever seen through `pick()`. |
+| Native OpenTelemetry | **ABSENT, and would not help** | `CLAUDE_CODE_ENABLE_TELEMETRY` / any `OTEL_*` key is set in **none** of `~/.claude{,-secondary,-tertiary,-quaternary}/settings.json`, and none is in the live env. Independently: CC's OTel emits **token counts**, which are not limit %. Enabling it would not answer this question. |
+| Transcripts | **EXISTS + INSUFFICIENT** | §5.1 — 5 real limit-hit events, no running percentage. |
+| `~/.claude/logs/auth-timeseries.jsonl` | **not this axis** | auth/login-cliff state, not quota. |
+
+**So the store we have is the only one, and it is the right one.** The single improvement available
+on the collection side is retaining the raw `limits[]` body alongside the parsed fields, which would
+cost nothing (the sweep already has it in memory) and would make a vendor schema change visible
+instead of silent. Filed as a note here rather than as work, because nothing today depends on it.
