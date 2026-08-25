@@ -686,6 +686,30 @@ TORN
   }
 
   echo "nightly-regression --selftest:"
+
+  # "COULD NOT TEST" IS NOT "TEST FAILED", AND THIS FILE OF ALL FILES MUST NOT CONFLATE THEM.
+  # Every red-path arm below asks "does a deliberately-broken suite make the detector page?".
+  # Answering that requires bats to actually RUN the broken fixture. When bats does not resolve,
+  # :468 SKIPS the bats check entirely — correct behaviour there, a skip is not a RED — so the
+  # fixture never runs, no page is written, and SEVEN assertions report the detector broken when
+  # the truth is that nothing was ever exercised. Measured 2026-08-24: from a shell with neither
+  # ~/.claude/bin nor /opt/homebrew/bin on PATH this printed `60 passed, 7 failed`, byte-identical
+  # to the deferral signature and to a genuine red — and it refused an activation for a detector
+  # that returned 67/0 five times out of five the moment bats was on PATH.
+  #
+  # So this abstains LOUDLY and non-zero rather than scoring the arms. Non-zero because the
+  # caller is a gate (22-nightly-regression-activate.sh) that must not arm on an untested
+  # detector; loud because a silent skip here is the same defect one level up. This is the same
+  # grammar as the rc-75 DEFERRAL the runner already honours: nothing ran, so nothing is claimed.
+  if ! command -v bats >/dev/null 2>&1; then
+    echo "  ABSTAIN: \`bats\` does not resolve on PATH, so the red-path fixtures cannot run." >&2
+    echo "           This is NOT a detector failure and must not be read as one — the arms were" >&2
+    echo "           never exercised. Put bats on PATH (brew install bats-core, or use the" >&2
+    echo "           plist's own PATH) and re-run." >&2
+    echo "nightly-regression --selftest: ABSTAINED — bats unavailable, 0 assertions scored."
+    return 2
+  fi
+
   # green path: good bats + good plist + no gates → no page, exit 0
   run_inv "$d/pages" "$d/green.log" "$d/goodtests" "$d/plists/good.plist"; local grc=$?
   [ "$grc" -eq 0 ] && okp "green: exit 0" || badp "green: exit $grc (want 0)"
