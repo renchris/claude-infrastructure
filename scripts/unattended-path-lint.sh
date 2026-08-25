@@ -417,9 +417,52 @@ die2() { echo "unattended-path-lint: $*" >&2; exit 2; }
 # stdin: nothing. argv: shell files. stdout: "<file>\t<line>\t<word>" for every unquoted word in
 # command position. Quote state is tracked; `$(...)` and backticks re-open command position even
 # inside double quotes; single quotes and heredoc bodies are opaque; comments are dropped.
+# ── The language guard ───────────────────────────────────────────────────────────────────────────
+# A file whose SHEBANG names python is not shell, and scanning it as shell reads its PROSE as code.
+# Measured 2026-08-24 on bin/claude-accounts (4,605 lines, `#!/usr/bin/env python3`): of 62 bare-word
+# `claude` occurrences, python's own tokenize classifies 40 as string/docstring, 22 as comment and
+# 0 as CODE — most are path segments inside `~/.claude/...` in prose. The two findings it actually
+# emitted were `:17`, a docstring quoting `claude auth login`, and `:203`, the literal text
+# `def log_event(msg):` — i.e. a python function PARAMETER read as a bare invocation of `msg`. A
+# "binary unreachable on PATH" finding that a parameter rename erases was never about a binary.
+#
+# THE GUARD LIVES HERE, at the one chokepoint all three halves funnel through (hooks :1077, launchd
+# targets :1124, bats corpus :1158), and not at the three call sites. A language test that held for
+# one population and not the others would be exactly the silent per-population asymmetry this lint
+# exists to end — and the file has been bitten by that shape before (see the sed-BRE note above
+# plist_target_scripts, where the launchd half scanned NOTHING while reporting a clean corpus).
+#
+# KEYED ON THE SHEBANG, NEVER ON THE EXTENSION. bin/ ships python wearing no suffix — bin/claude-accounts
+# is the motivating case — so an extension test would miss precisely the population that prompted this.
+# A file with NO shebang is still scanned: dropping those would silently exempt the 2 tracked
+# hooks/*.sh that carry none, which is a widening this guard has no business making.
+#
+# LATENT, NOT LIVE, and deliberately landed anyway. Censused on this tree at fix time: 0 of the 24
+# in-tree launchd targets, 0 of 101 tracked hooks/*.sh and 0 of 536 tests/*.bats carry a python
+# shebang, and 0 of the 35 resolvable EMBEDDED_ALLOWLIST sites sit in a python file — so this changes
+# no verdict today and cannot strand a ratchet entry. It goes live the moment any plist names a
+# python script, and the latent surface is the 50 python-shebang files under bin/ + scripts/.
+is_python_shebang() { # $1=file -> 0 when its shebang names a python interpreter
+  local first=""
+  IFS= read -r first < "$1" 2>/dev/null || return 1
+  case "$first" in
+    '#!'*python*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 scan_shell() {
   [ -x "$PY" ] || die2 "$PY is not executable — the scanner cannot run (NON-VERDICT)"
-  "$PY" - "$@" <<'PY'
+  local shell_files=() f
+  for f in "$@"; do
+    is_python_shebang "$f" && continue
+    shell_files+=("$f")
+  done
+  # Every argument was python. That is a clean "no shell here", not a NON-VERDICT: the caller's
+  # population is genuinely empty of the language this scanner reads, and exit 2 would convert a
+  # correct abstention into an unusable-tree verdict.
+  [ "${#shell_files[@]}" -eq 0 ] && return 0
+  "$PY" - "${shell_files[@]}" <<'PY'
 import sys
 
 KEYWORDS = {
@@ -1654,8 +1697,54 @@ Y=/bin/ls
     ( unset CC_UNATTENDED_OWN; "$SELF" "$ROOT" >/dev/null 2>&1 ); expect 0 "$?" 'the real tree is not clean under the shipped allowlist'
   fi
 
+  # 20. THE LANGUAGE GUARD, both directions. The two files below are byte-identical except for their
+  #     SHEBANG, so the only thing either arm can be measuring is the shebang — a one-armed GREEN
+  #     here would be satisfied by a scanner that had simply stopped reporting, which is the failure
+  #     this pair exists to exclude.
+  #
+  #     The body replays the real false positive verbatim in shape: `def log_event(yq):` puts `yq`
+  #     inside what a SHELL scanner reads as a subshell, i.e. at command position, which is exactly
+  #     why bin/claude-accounts:203 rendered a python parameter as an unreachable binary.
+  pybody='#!/usr/bin/env python3
+yq = 1
+def log_event(yq):
+    return yq'
+  shbody='#!/bin/bash
+yq = 1
+def log_event(yq):
+    return yq'
+
+  mkplist() { # $1=tree $2=target-relpath — a plist whose own PATH cannot reach Homebrew
+    cat > "$d/$1/launchd/com.test.j.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.test.j</string>
+  <key>ProgramArguments</key><array>
+    <string>/bin/bash</string><string>-c</string>
+    <string>export PATH="/usr/bin:/bin"; exec "\$HOME/$2"</string>
+  </array>
+</dict></plist>
+PLIST
+  }
+
+  # 20a. RED CONTROL — the identical body under a BASH shebang must still be reported. Without this
+  #      the GREEN below proves nothing: it would pass just as well on a lint that scanned nothing.
+  newtree t20a; mk t20a scripts/j.sh "$shbody"; mkplist t20a scripts/j.sh
+  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t20a" >/dev/null 2>&1 ); expect 1 "$?" 'the RED control for the language guard did not fire — a shell file with the same body must still be reported'
+
+  # 20b. GREEN — the same bytes under a PYTHON shebang are prose, not command positions.
+  newtree t20b; mk t20b scripts/j.py "$pybody"; mkplist t20b scripts/j.py
+  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t20b" >/dev/null 2>&1 ); expect 0 "$?" 'a python-shebang file was scanned as shell and its prose reported as a bare binary'
+
+  # 20c. GREEN — a file with NO shebang is still scanned as shell. The guard must skip python, never
+  #      widen into "anything I cannot positively identify as shell", which would silently exempt the
+  #      tracked hooks/*.sh that carry no shebang at all.
+  newtree t20c; mk t20c scripts/j.sh 'yq eval .a "$f"'; mkplist t20c scripts/j.sh
+  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t20c" >/dev/null 2>&1 ); expect 1 "$?" 'a shebang-less file stopped being scanned — the guard widened past python'
+
   if [ "$fails" -eq 0 ]; then
-    echo "unattended-path-lint --selftest: $checks/$checks — RED on a bare binary inside \"\$( )\" (the shape a greedy tokenizer missed), on a bare binary at command position, on a stuck ratchet entry, on a plist whose INLINE export PATH cannot reach the binary, on a /sbin-only binary in the bats corpus under a runner whose PATH stops at /bin, on that binary reached through bats' own \`run\` wrapper, on a bare binary inside a case BODY (invisible to this lint for its whole life, until the label state landed) and on one after a REAL pipe (so the label fix was not bought by blinding the scanner to piped invocations); GREEN on a case LABEL in EITHER arity — the shape that minted two allowlist rows and contorted a real test into \`[ = ] || [ = ]\`, and whose one-arm form was wrongly believed already handled — on an absolute path, a name inside a single-quoted regex, a name in a comment, a heredoc body, a stock binary, a grandfathered site, a plist whose inline PATH does reach, the same corpus file under a runner whose PATH carries /sbin, and prose following an arithmetic expansion nested in a command substitution (the desync that minted two allowlist rows out of nothing); LOUD on a missing root, a root with no governed layers, and a corpus with no runner plist; own-scope blocks INSIDE / advises OUTSIDE across all three arity states; GREEN on the real tree."
+    echo "unattended-path-lint --selftest: $checks/$checks — RED on a bare binary inside \"\$( )\" (the shape a greedy tokenizer missed), on a bare binary at command position, on a stuck ratchet entry, on a plist whose INLINE export PATH cannot reach the binary, on a /sbin-only binary in the bats corpus under a runner whose PATH stops at /bin, on that binary reached through bats' own \`run\` wrapper, on a bare binary inside a case BODY (invisible to this lint for its whole life, until the label state landed) and on one after a REAL pipe (so the label fix was not bought by blinding the scanner to piped invocations); GREEN on a case LABEL in EITHER arity — the shape that minted two allowlist rows and contorted a real test into \`[ = ] || [ = ]\`, and whose one-arm form was wrongly believed already handled — on an absolute path, a name inside a single-quoted regex, a name in a comment, a heredoc body, a stock binary, a grandfathered site, a plist whose inline PATH does reach, the same corpus file under a runner whose PATH carries /sbin, and prose following an arithmetic expansion nested in a command substitution (the desync that minted two allowlist rows out of nothing); LOUD on a missing root, a root with no governed layers, and a corpus with no runner plist; own-scope blocks INSIDE / advises OUTSIDE across all three arity states; GREEN on a python-shebang file whose prose sits where a shell scanner reads command position, against a RED control of the SAME BYTES under a bash shebang and a RED control on a shebang-less file (so the language guard is keyed on the shebang and did not widen into scanning nothing); GREEN on the real tree."
     exit 0
   fi
   echo "unattended-path-lint --selftest: FAILED ($fails of $checks) — the detector does not discriminate."
