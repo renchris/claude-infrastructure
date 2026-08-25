@@ -86,6 +86,46 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-25 — `f85fce7c26f5` ("the cloud return/land arm died 2026-08-17T09:12:05Z") WAS ALREADY
+  CURED WHEN IT WAS RE-DISPATCHED. Closed on the landed sha, not re-derived. NO CODE CHANGE.**
+  The cure is **`a42f107aaca68da83345e1c8f95f283a35f4f13a`** (2026-08-24, `fix(cc-cloud): deletion is
+  the last step of a successful session, and the probe read it as failure`), which carries
+  `Refs: cc-backlog f85fce7c26f5` in its own trailer. Verified on trunk rather than in a stale tree,
+  per the anti-revert rule (`6110fc45141e`): `HEAD..origin/main` = 0, **zero commits touch
+  `bin/cc-cloud` or `scripts/branch-prune-landed.sh` after it**, and all three arms read intact on
+  `origin/main`. Gates re-run this session: **`tests/cc-cloud.bats` 31/31**, `cc-cloud --selftest`
+  **24/24**. The four tests that pin this row's exact claim are green — 8 (*a LANDED session stays
+  LANDED after its branch is pruned*), 9 (*the inverse guard: no ref and no evidence is still
+  NOT-STARTED even when the declared path is already on trunk*), 10 (*a ref that vanished after a
+  push is UNKNOWN, never NOT-STARTED*), 12 (*a path set filled BEFORE the prune keeps the session
+  LANDED after it*).
+  **The row's own diagnosis was right and its headline was wrong: no arm died.** `cc-cloud`'s state
+  function asked *"is there a remote ref?"* before *"is the content on trunk?"*, so a session that
+  pushed, landed, and had its branch pruned scored **C1 NOT-STARTED — byte-identical to one that
+  never booted**. `scripts/cloud-return.sh:273` adopts that verdict verbatim at step 1 ("HAS IT
+  PUSHED?") and answers *"NOT-STARTED; nothing to return"*, which is the arm the row saw die; and
+  `cc-backlog`'s `cloud_map` sends NOT-STARTED → open, which re-opened finished items into the wave.
+  `docs/research/branch-prune-manifest-2026-08-19.tsv` confirms the confounder on trunk — **55
+  DELETED, 41 HOLD-stranded, 1 HOLD-young** in one pass — which is why a rate over these states steps
+  down at a prune with no change in the fleet at all (81% through 08-16, 33% from 08-18). The row's
+  own exculpation of the create/fire path (frozen since 08-11) was therefore correct *and* was the
+  clue: a step with no upstream change is a step in the **instrument**.
+  ⚠️ **THE FIX IS PROSPECTIVE, AND THAT IS NOT A HOLE.** ARM 3 makes `branch-prune-landed.sh` fill
+  path sets *before* it deletes, so future prunes preserve the evidence — but the 55 branches already
+  deleted on 08-19 destroyed the only input `fill-paths` has, and their commits are unreachable. **The
+  historical 81%→33% step is explained, not repaired**, and any rate re-derived across that boundary
+  is still confounded. The declared limit stands: a **fast-forwarded** land stays UNKNOWN because
+  `fill-paths` bounds its range at the merge-base and that range is empty for a true ancestor — rare
+  here (`--merged` finds 1 of 97 against `git cherry`'s 56, because ship-land rebases).
+  🚨 **THE RESIDUE, AND IT IS THIS ROW'S OWN ARC: THE ITEM SURVIVED ITS OWN CURE.** The session that
+  landed `a42f107a` could not close it, because **closing is the laptop's job by design** —
+  `cloud-return.sh:395`, *"the VM cannot reach the backlog store at all"*; in a cloud container
+  `~/.claude/autonomy/backlog.jsonl` is a 0-byte stub and `cc-backlog done` answers `unknown id`. So
+  the row was re-dispatched to a second worker one day later, and this log already records the
+  oscillation it produced — **open → claimed** (§2.1 recycle #222 board), **claimed → open** (#221
+  board). **A cloud worker whose correct verdict is "nothing to build" must still PUSH**, or its own
+  session scores C1 NOT-STARTED, `cloud-return` says *"nothing to return"*, and the row re-cycles a
+  third time: the very loop `a42f107a` fixed one level up. This entry is that push.
 - **2026-08-25 — drain recycle #226: method 196 — TWO SIBLING DIAGNOSTICS NAMING OPPOSITE CAUSES FOR
   ONE EVENT, NEITHER READING THE STORE THAT DECIDES BETWEEN THEM.**
   Took #225's lead 1 — `88b6e65e4acf`, #220's own filing and the last unworked `cc-reaper` self-check
