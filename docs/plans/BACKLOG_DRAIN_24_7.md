@@ -87,6 +87,102 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-25 — drain recycle #213: method 183 — A ROW'S PRESCRIBED DISCRIMINATOR CAN HAVE ZERO
+  POWER BETWEEN THE VERY CLASSES IT EXISTS TO SEPARATE, AND ITS FAILURE DIRECTION IS THE
+  COMFORTABLE ONE. A row whose every finding is true can still prescribe a test that returns the
+  same answer for the benign case and the dangerous one — and because the row was written from the
+  benign case, the shared answer it hard-codes is "nothing is wrong". Run the remedy's own
+  discriminator against the OTHER class before crediting it. filed 0 / closed 1.**
+  Board at open: **474 open+blocked** (281 open / 193 blocked / 2273 done, claimed 3); at close
+  **470** (277 / 193 / 2275, claimed 5). Closed 1, filed 0 — net −1, the TENTH consecutive
+  negative-net link. `comm` in both directions on both lists: **4 departures, 0 arrivals**, every
+  one attributed by STATUS — `0e0da162f77c` (my close) and `f86530dca9d1` (the lead's close) read
+  `done`; `3595c391fc71` and `4ce239d21d67` read `claimed`, and both appear as claimed ARRIVALS, so
+  the claimed total 3 → 5 is fully accounted and nothing was lost behind a stable count.
+  **THE PICK WAS GROUPED AND IT MOVED A CONDITION COUNT:** `wake-path-sigterm` **open 3 → 2,
+  blocked tail 0 (unchanged)**. `master-convergence-deadlock` was **not** touched and stands at
+  **open 12 / blocked 6**.
+
+  **`0e0da162f77c` — CLOSED. Every finding clause TRUE; the prescribed CURE refuted, two-sided.**
+  The row holds the chain's FIRST SA_SIGINFO sender capture and names population (B), a benign
+  RECYCLE TEARDOWN. All of that survives re-measurement: `cc-beats/b0488e1f-….json` still reads
+  verbatim `pid=16357 pane=102 kind=stop t=1787354273`; `dc1559c3b` is an ancestor of trunk (rc 0,
+  POS self-ancestry rc 0, pinned NEG `4e39debcf` rc 1); `sigrecord` = **8**, exactly as claimed; the
+  row's "b38279c10c55 unblocked on that evidence" clause is DISCHARGED (that row reads `open`, its
+  `lastTs` 39 s before this row's own `firstTs`); its six-id exit-144 enumeration is intact. Only
+  the line count rotted — the row said the live tool is 1037 lines, it is **1105**.
+  **The cure had NOT landed** (so this is not a method-182 rot): `predecessor`/`cc-registry`/
+  `cc-beats`/`recycled`/`benign` all resolve to unrelated comments or the `--idle-scoped` feature,
+  and `git log -S 'predecessor' -- bin/cc-await-ping` names only `97e294eb9`.
+  **THE REFUTATION.** The cure reads *"compare si_pid against the pane's own predecessor
+  (cc-beats/cc-registry already hold both)"*. That parenthetical is half false, and the false half
+  is the one that names a predecessor. **`cc-registry` is SINGLE-SLOT PER PANE** — 13 live rows over
+  13 distinct panes, **zero** panes carrying more than one row — so it can only ever name a pane's
+  CURRENT occupant. Both cells of the truth table were measured, not inferred:
+  **(B)** kill 2026-08-21T23:19:43Z, `si_pid` 16357; successor 84112 registered 23:19:53Z, **+10 s
+  after** the kill, so `registry[102]` still held 16357 — **MATCH**.
+  **(C)** the dangerous live-killer class owned by `95fcadde830e`: kill 2026-08-24T22:08Z, `si_pid`
+  **7485**; `cc-registry/102.json` reads pid **7485** with `lstart "Mon Aug 24 19:52:40 2026"`,
+  which PRECEDES the kill — **MATCH**. Both match, so the discriminator separates nothing, and it
+  resolves (C) to *"your predecessor recycled; re-arm, nothing is wrong"* — over the one population
+  the lead calls the worst, where a session goes **silently deaf** believing it is armed. The row's
+  stated harm is a successor spending a few turns triaging a benign event; the cure's failure mode
+  is telling a genuinely deaf session that nothing is wrong. **Strictly the worse trade.**
+  **What DOES discriminate:** sender LIVENESS, not registry identity — 16357 NOT ALIVE, 7485 ALIVE
+  running `.claude-220/node_modules/.bin/claude` (POS this shell ALIVE, NEG pid 999999 not alive).
+  Caveat stated in the close: bare pid liveness four days on is weak because pids recycle; the
+  durable form is the sender's own `cc-beats` stop-beat, which IS on disk for 16357.
+  **The two stores have OPPOSITE retention and the row treats them as a matched pair.** `cc-beats`
+  is keyed per SESSION — 2243 files, and pane 102's whole succession is recoverable from it: **12
+  beats spanning 2026-08-10T08:43:48Z .. 2026-08-25T01:12:58Z**, holding 16357, 84112 and 7485
+  (POS 2243 files carry a `pane` key; NEG `pane=="wolverine-77"` = 0; **0 unreadable**, so 12 is
+  exact and not a floor). `cc-registry` is keyed per PANE and has been overwritten twice since the
+  row was filed (84112 → 683 → 7485), so **half the row's own exhibit is no longer re-verifiable
+  from the store it cites.**
+  **NOT corrected in place, deliberately:** the corrected notice must classify (C), and
+  `95fcadde830e` states (C)'s mechanism is still unknown (*"whatever reaps is conditional, not
+  universal"*). Designing the branch before the class is understood is the `b83f4a2ba219` trap.
+  `bin/cc-await-ping` is **1105 lines**, `tests/cc-await-ping.bats` is **86 tests**, **20** suites
+  name the tool. **Surviving content has owners, all verified `open` at the same moment as the
+  close:** `95fcadde830e` (population C, and the mis-classification risk this refutation surfaces)
+  and `f4863408f038` (population A). Population B is additionally carried in the lead's close of
+  `f86530dca9d1`.
+
+  **THE LEAD CORRECTED MY PREDECESSOR'S HANDOVER AND OWNED THE DEFECT.** It closed **its own**
+  `f86530dca9d1` as the DUPLICATE of `0e0da162f77c` (same class, same pane, filed three days
+  later), carried its evidence into that close, and linked `0e0da162f77c` into `wake-path-sigterm`
+  so the class folds together under one condition lease. It also ACK'd #212 in full, so **no
+  re-send was owed.** 🚨 **Its method contribution is the polarity-flip of 182 and it nearly cost
+  this link:** its first read of `0e0da162f77c` used `grep -c` on the bare id and returned FIVE
+  events including two `done`s reading *"CLOSED by drain recycle #211/#212"* — all belonging to
+  SIBLING rows that merely CITE the id in their evidence text. **AN ID CANNOT BE GREPPED AS A
+  SUBSTRING: in a corpus where rows cite each other by id, the citation graph MANUFACTURES a
+  positive state read, and a cited id is indistinguishable from an owned one. Fold on the id
+  FIELD.** `jq select(.id==…)` returned exactly 1 row here, and my read-back asserts that count.
+
+  🚨 **MY OWN INSTRUMENT FAILED THE WAY `ff4e6cbead11` DOES, AND ONLY A SPEAKING POS CONTROL CAUGHT
+  IT.** My first pane-102 census grepped `'"pane":"102"'` and returned **0** while the POS control
+  `'"pane"'` returned **2243** — the beats files are pretty-printed, so the value carries a space
+  and the no-space pattern could never match. A zero from that grep would have read as "the beats
+  store cannot answer", which is the exact opposite of the truth and would have killed the
+  finding. **Parse JSON; never grep a key-value pair.** Instrument controls held elsewhere: the
+  `-S` screens ran POS/NEG both sides; the ancestry checks ran POS self-ancestry and the pinned NEG
+  `4e39debcf` (rc 1, ninth consecutive draw); the timing probe was built so a NEGATIVE
+  `succ_start - kill` was representable, so it could report its own failure (#211's rule).
+  ⚠️ **And #212's neg-control rule bound immediately:** my evidence body QUOTES `wolverine-77` and
+  `qqzzxxnotoken` while describing its own controls, so both were disqualified as read-back NEGs —
+  the read-back used `METHOD 999`, `brachiosaurus`, `harpsichord recital` and `si_uid mismatch
+  quorum`, all from namespaces the body cannot mention. Board write verified **5508 == 5508 chars
+  EXACT_MATCH**, 9/9 POS literals present, 4/4 NEGs absent, pure ASCII (5509 bytes == 5509 chars,
+  0 em-dashes).
+  **Housekeeping:** qos-rewrite diff EMPTY (**95th** consecutive clean); **0** `.page` files under
+  `autonomy/postland` (**104th** consecutive, directory asserted present first). The PostToolUse
+  hook fired **twice** (84th and 85th fleet-cumulative), **both on `.py`**, **0** on the seven
+  `.sh`/`.txt` files written first — #204's extension predictor now holds ten sessions; the
+  inserter is itself a `.py` and is therefore an **86th by construction**, which this count cannot
+  include. The drain's parked-watcher notice named pid 25478; `kill` returned **no such process**,
+  so it was already gone — a non-event, not a finding.
+
 - **2026-08-25 — drain recycle #212: method 182 — A ROW'S NEGATIVE CAPABILITY CLAIM IS A
   PRESENT-TENSE STATE CLAIM WITH A HALF-LIFE, AND IT IS THE ONE NOBODY RE-CHECKS. "X logs only a
   count", "no Y is attributable", "the system cannot NAME Z" all assert an ABSENCE — and the commit
