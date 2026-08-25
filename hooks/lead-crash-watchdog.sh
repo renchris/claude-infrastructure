@@ -66,6 +66,42 @@ fi
 readonly WATCHDOG_DIR="$HOME/.claude/watchdog"
 readonly LOG_FILE="$HOME/.claude/logs/lead-crash-watchdog.log"
 
+# ── THE DEATH PAGE (2026-08-25, RECYCLE_SIGTERM_INCIDENT). This watchdog had the RIGHT verdict —
+# `class=CRASH cause=external-sigterm` for session d075006b, 25 s after the kill — and the operator
+# was never told. Two independent reasons, and the fix has to close BOTH:
+#
+#   1. The only alert on this path is an `osascript display notification`, which is transient: it
+#      lands in Notification Center, is dismissed by the next one, and is gone by the time anybody
+#      reads the pane. It also carries eight characters of sid and nothing about what was LOST.
+#   2. The structured branch that does more — CRASH_REPORT.md, shutdown_requests, the bell on
+#      /dev/tty — is reached only when the dead lead OWNED A TEAM. A lead running a Dynamic
+#      Workflow owns no team (workflow agents are in-process subagents, not team members), so the
+#      loudest case on this box takes the `no teams affected` early-return and stops.
+#
+# A SIGTERM'd `claude` also leaves its parent shell alive, so the pane renders EXACTLY like a
+# deliberate `/exit` — same "Resume this session with:" line, same prompt. There is no pixel on
+# screen that distinguishes a killed session from a closed one. The operator cannot be expected to
+# infer the difference; something has to say it.
+#
+# So: page a LIVE SIBLING through the fleet's own durable transport (`cc-notify`), which appends to
+# an inbox the target drains at its next safe boundary. Durable beats transient — an inbox line
+# survives until it is read, and `--role` re-resolves the address at SEND time so a recycled pane
+# is followed rather than paged into the void (cc-notify's own guidance for automated pagers).
+#
+# 🚨 POLARITY — this fires on CRASH ONLY, never on RECYCLE. An alarm that fires at every session
+# close carries exactly as many bits as one that never fires (MEMORY.md alarm-polarity). Deliberate
+# recycles are the overwhelming majority of deaths in claude-crashes.jsonl (28 of 32 rows on the
+# incident day); paging on those would train the operator to ignore the channel that matters.
+#
+# FAIL-OPEN, BOUNDED, AND NEVER THE CAUSE OF A SECOND FAILURE: the pager is bounded by timeout(1),
+# every step is `|| true`, and a missing/failing pager degrades to a log line — the pre-fix
+# behaviour — rather than delaying or breaking the death handler it hangs off.
+# Seams: CC_DEATH_PAGE=0 (kill switch) · CC_DEATH_PAGER (stub the transport) · CC_DEATH_PAGE_ROLE.
+CC_DEATH_PAGE="${CC_DEATH_PAGE:-1}"
+CC_DEATH_PAGE_ROLE="${CC_DEATH_PAGE_ROLE:-desk}"
+CC_DEATH_PAGER="${CC_DEATH_PAGER:-$HOME/.claude/bin/cc-notify}"
+CC_DEATH_PAGE_TIMEOUT_S="${CC_DEATH_PAGE_TIMEOUT_S:-10}"
+
 mkdir -p "$WATCHDOG_DIR" "$(dirname "$LOG_FILE")" 2>/dev/null || true
 
 log() {
@@ -749,6 +785,107 @@ fi
 # Test/debug entrypoint (CC never passes args to this SessionStart hook): classify a
 # session id (+ optional pid, to join its close-record) and exit, without spawning the
 # daemon or reading stdin.
+# ── death_loss_facts <sid> <transcript-path> ────────────────────────────────────────────────────
+# Emits `goal=<live|none|unknown>\twf=<N|?>` — the two facts that make an external death URGENT
+# rather than merely notable, and the two the incident's page had to invent from scratch.
+#
+# The goal answer comes from hooks/lib/goal-state.sh — the ONE arbiter for the goal_status record
+# dictionary. Re-deriving `met`/`failed`/`sentinel` here is exactly how two readers of the same
+# records start disagreeing (MEMORY.md make-the-actuator-the-arbiter), and this reader has no claim
+# to a second opinion. Unreadable ⇒ `unknown`, never `none`: `none` is the POSITIVE finding "this
+# session never armed a goal", and a read that did not happen must not launder into it
+# (the same absence-vs-zero split wrap-ledger.sh draws at its GOAL_SRC="error").
+death_loss_facts() {
+  local sid="$1" tpath="${2:-}" goal="unknown" wf="?" lib tsv state wfdir
+  if [[ -n "$tpath" && -f "$tpath" ]]; then
+    lib="$(dirname "${BASH_SOURCE[0]}")/lib/goal-state.sh"
+    [[ -f "$lib" ]] || lib="$HOME/.claude/hooks/lib/goal-state.sh"
+    if [[ -f "$lib" ]]; then
+      # `timeout` takes a COMMAND, not a shell function, so the read runs in a child that sources
+      # the lib itself. Single quotes are the point: $1/$2 are the CHILD's positional parameters,
+      # so no value is ever re-parsed as script text.
+      tsv=$(lcw_bounded "${LCW_PROBE_TIMEOUT_S:-5}" bash -c '. "$1"; goal_liveness "$2"' _ "$lib" "$tpath" 2>/dev/null || true)
+      state=$(printf '%s' "$tsv" | cut -f1)
+      # The vocabulary is READ OUT OF THE LIB (goal-state.sh:99 — `failed` / `cleared` / `live`),
+      # not guessed. Guessing it cost a red test here: the obvious spelling for an achieved goal is
+      # "met", the lib emits "cleared", and a `*)`-arm default would have silently rendered every
+      # achieved goal as "unknown" — a fail-open that looks like data.
+      case "$state" in
+        live)            goal="live" ;;
+        cleared|failed)  goal="none" ;;
+        *)
+          # The lib returns rc 1 for BOTH "unreadable" and "no goal was ever armed", so its silence
+          # cannot separate them. Use its own cheap pre-filter to do it: a readable transcript with
+          # no goal_status attachment anywhere is the POSITIVE finding "never armed one".
+          if grep -q 'goal_status' "$tpath" 2>/dev/null; then goal="unknown"; else goal="none"; fi ;;
+      esac
+    fi
+    # In-flight Dynamic Workflows. Their agents are IN-PROCESS, so every one of them died with the
+    # lead — this count is the size of the loss, and it is the fact the team-scan branch structurally
+    # cannot see (a workflow is not a team, which is why the incident took the early return).
+    wfdir="$(dirname "$tpath")/$sid/subagents/workflows"
+    if [[ -d "$wfdir" ]]; then
+      wf=$(find "$wfdir" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+      case "$wf" in ''|*[!0-9]*) wf="?" ;; esac
+    else
+      wf=0
+    fi
+  fi
+  printf '%s\t%s\n' "$goal" "$wf"
+}
+
+# ── death_page_line <sid> <pid> <cause> <exit> <signal> <transcript> ────────────────────────────
+# The page itself: ONE line, because cc-notify collapses newlines to keep its cursor counting
+# messages rather than physical lines. It leads with the fact that changes what the operator does —
+# a session was KILLED, it did not exit — then the loss, then where to read the rest. The sid is
+# given in full: an 8-char prefix is not greppable against a transcript path, and the incident's
+# notification proved that the hard way.
+death_page_line() {
+  local sid="$1" pid="$2" cause="$3" ec="${4:-}" sig="${5:-}" tpath="${6:-}" facts goal wf what
+  facts=$(death_loss_facts "$sid" "$tpath")
+  goal=$(printf '%s' "$facts" | cut -f1)
+  wf=$(printf '%s' "$facts" | cut -f2)
+  case "$cause" in
+    external-sigterm) what="was KILLED by an external SIGTERM (exit ${ec:-143}, signal ${sig:-15}) — it did NOT exit" ;;
+    jetsam-oom)       what="was KILLED by the OOM killer (jetsam)" ;;
+    *)                what="died abruptly (cause: $cause${ec:+, exit $ec}${sig:+, signal $sig})" ;;
+  esac
+  printf 'SESSION DEATH — %s %s. Lost: /goal=%s, in-flight workflow dir(s)=%s. Its pane is still open at a live shell and looks EXACTLY like a clean /exit, so nothing on screen says this happened. Evidence: ~/.claude/logs/claude-crashes.jsonl (pid %s) + ~/.claude/logs/close-records/%s-*.json\n' \
+    "$sid" "$what" "$goal" "$wf" "$pid" "$pid"
+}
+
+# ── surface_death <sid> <pid> <class> <cause> [transcript] ──────────────────────────────────────
+# Deliver the page. Returns 0 = delivered, 1 = suppressed by polarity/kill-switch, 2 = the transport
+# failed (which is LOGGED — a pager that silently fails is the same defect one layer down; MEMORY.md
+# fail-loud-into-a-log-nobody-reads is about where that log goes, and this one goes to the same file
+# the verdict does, so a delivery failure is at least joinable to the death it belongs to).
+surface_death() {
+  local sid="$1" pid="$2" class="$3" cause="$4" tpath="${5:-}" line rc=0
+  [[ "${CC_DEATH_PAGE:-1}" == "1" ]] || { log "[watchdog $sid] death page SUPPRESSED (CC_DEATH_PAGE=0)"; return 1; }
+  # POLARITY: a deliberate recycle is not news. See the block comment at the top of this file.
+  [[ "$class" == "CRASH" ]] || return 1
+  line=$(death_page_line "$sid" "$pid" "$cause" "${6:-}" "${7:-}" "$tpath")
+  if [[ ! -x "$CC_DEATH_PAGER" ]]; then
+    log "[watchdog $sid] death page UNDELIVERED — no pager at $CC_DEATH_PAGER: $line"
+    return 2
+  fi
+  lcw_bounded "${CC_DEATH_PAGE_TIMEOUT_S:-10}" "$CC_DEATH_PAGER" --role "$CC_DEATH_PAGE_ROLE" "$line" >/dev/null 2>&1 || rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    log "[watchdog $sid] death page DELIVERED to role=$CC_DEATH_PAGE_ROLE: $line"
+    return 0
+  fi
+  log "[watchdog $sid] death page FAILED (rc=$rc) to role=$CC_DEATH_PAGE_ROLE: $line"
+  return 2
+}
+
+# Debug/test entrypoint: build + deliver a death page. Prints the page line on stdout so a test can
+# assert CONTENT without a live transport, and still runs the delivery so the transport is covered.
+if [[ "${1:-}" == "--surface-death" ]]; then
+  death_page_line "${2:-}" "${3:-}" "${5:-}" "${6:-}" "${7:-}" "${8:-}"
+  surface_death "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${8:-}" "${6:-}" "${7:-}" >/dev/null 2>&1 || true
+  exit 0
+fi
+
 if [[ "${1:-}" == "--classify" ]]; then
   # $4 = death epoch (optional; omitted ⇒ now). cc-crash-report --backfill passes the timestamp of the
   # watchdog-log line that recorded the death, so a historical death is judged against ITS OWN moment.
@@ -1066,6 +1203,13 @@ trap '' HUP
     if [[ "$class" == "CRASH" ]]; then
       lcw_osa osascript -e "display notification \"Session ${sid:0:8} crashed — ${cause}. See claude-crashes.jsonl\" with title \"Claude Crash\" sound name \"Basso\"" 2>/dev/null || true
     fi
+
+    # THE DEATH PAGE — deliberately placed HERE, above the team scan, not inside it. This is the
+    # whole fix: the incident's session reached the `no teams affected` early-return below and
+    # stopped, because a Dynamic Workflow's agents are in-process subagents and own no team config.
+    # A durable page must not be reachable only through the branch that structurally cannot see the
+    # loudest case. Best-effort by construction — see the block comment at the top of this file.
+    surface_death "$sid" "$pid" "$class" "$cause" "$tpath" "${cr_exit:-}" "${cr_sig:-}" || true
 
     # Which teams had this session as lead? Scan ALL team roots — CC writes
     # $CLAUDE_CONFIG_DIR/teams/<team>/, so *2/*3-launcher leads (claude-next2 /
