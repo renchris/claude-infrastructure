@@ -217,3 +217,80 @@ green · `shellcheck` clean · `bash -n` clean · `scripts/test-hermeticity-lint
 0 new leaks) · sampler smoke-run end-to-end on the host it was written on, correctly refusing a
 9-second quiet window with all three controls FAIL. Trunk evidence read at
 `origin/main` = `ec43e046`.
+
+---
+
+## 9 · 2026-08-25 — the instrument re-verifies; the citation is purged; §6 is the only thing left
+
+This item was re-dispatched on 2026-08-25 and driven off-box again. Three things came out of it, and
+the first is the one that decides the item's state.
+
+**§6 remains unrun, and it is not runnable anywhere but the box.** This dispatch landed in a Linux
+container: `uname` Linux, **4 cores**, **one** `claude` process, no Darwin, no fleet. `capacity-marginal.sh`
+needs `sysctl vm.loadavg`, a `ps` census with real Claude ancestry, and `cc_sp_active` moving through
+≥3 levels. None of those exist here, so no window run from this environment could clear C1, C2 or C3 —
+and one that appeared to would be measuring the container, which is exactly the class of error §3
+exists to refuse. **The coefficient is therefore operator-gated, not agent-gated**, and the backlog item
+is parked on that step rather than reopened.
+
+**The instrument itself re-verified clean, in a tree that had never seen it.** `bats
+tests/capacity-marginal.bats` → **15/15 green** on a fresh clone at `origin/main`, including the two
+rows that carry the DoD's actual requirement: the POSITIVE CONTROL (the flat 19–20-across-2.2×-load
+census is REFUSED by C2, naming the correlation) and the NEGATIVE CONTROL (a planted 0.325 recovered as
+0.333 with all three PASS). **The DoD clause "sampler must pass a correlation control" is met** — the
+control exists, it is C2, and it has been watched failing for its own reason. What is outstanding is
+the coefficient, never the instrument.
+
+**The disqualified value was still live in THREE places, not the two §2 and §6 name.** §2's closing
+paragraph and §6 both list `capacity-admit.sh` and `agent-teams-enforce.sh`; a repo-wide grep of
+`scripts hooks bin commands skills` found a third — `scripts/lib/spawn-presence.sh`, in the header that
+defines the ACTIVE population itself, i.e. the very census `capacity-marginal.sh` was built to replace.
+(The two line numbers had also drifted: `capacity-admit.sh:698` → `:723`, `agent-teams-enforce.sh:220`
+→ `:235`.) All three are now purged. The other three values (`0.172`, `0.566`, `1.89`) occur nowhere in
+live code — only inside `capacity-marginal.sh`'s own header, correctly labelled as disqualified.
+
+🚨 **The purge asserts NO coefficient, and that is deliberate.** §6 says update these sites to the
+measured value *once the window has run* — "not before, and not to one of the other three." Replacing a
+refuted number with a *number* would break that rule; replacing it with the refutation does not. So each
+site now states that the per-active-session cost is UNMEASURED, names this doc and the backlog id, and
+says what may not be done with the gap:
+
+| site | was | now |
+|---|---|---|
+| `scripts/lib/capacity-admit.sh` (ACTIVE-CONCURRENCY term) | "8 is the top of the measured band. Axis 09: **2.5-5** runnable threads per genuinely-ACTIVE session…" | 8 restated as an **operating** ceiling standing on the direction of the evidence and the 127/127 refusal history, **not** on a coefficient; all four values named as unrepairable; `capacity-marginal.sh` named as the replacement; "re-derive before moving it" |
+| `scripts/lib/spawn-presence.sh` (THE ACTIVE POPULATION) | "…i.e. **2.5-5** runnable threads per genuinely ACTIVE session against the 1.6 that a MIXED fleet averages to" | the qualitative claim kept (an active session costs real runnable load, a resident one costs almost none — which is all this census needs), the per-session arithmetic removed as an aggregate/N |
+| `hooks/agent-teams-enforce.sh` (the `active` refusal message an agent actually reads) | "…but **2.5-5** runnable threads arrive with every ACTIVE session" | "…but real runnable load arrives with every ACTIVE session", plus an explicit *do not quote one, and do not raise the ceiling from one* |
+
+The third row is the one that mattered most operationally: it is the only site of the three that an
+agent **reads at refusal time**, so it was the path by which a disqualified number could be quoted back
+into a decision to widen a fan-out.
+
+**`CC_ADMIT_ACTIVE_CEILING=8` is unchanged**, in value and in behaviour. This is a comment-and-message
+diff; no term, threshold or control moved.
+
+### Gate evidence for this increment
+
+`bash -n` clean on all three files · the `agent-teams-enforce.sh` jq refusal program extracted and run
+under `jq -n`, parsing and rendering the new sentence (a message edit inside a jq string literal is the
+one way a comment-shaped diff can break at runtime) · `bats` green on every suite covering the three
+files: `capacity-marginal` 15/15, `capacity-admit-active` 22/22, `capacity-admit-coverage` 15/15,
+`agent-teams-enforce` 24/24. `capacity-admit` (12 fail), `spawn-presence` (6 fail) and
+`handoff-fire-capacity-gate` (3 fail) fail **identically, test-name for test-name, on a pristine
+`origin/main` worktree in the same container** — Darwin-only rows (`/usr/sbin/sysctl`, `vm_stat`)
+that cannot pass on Linux. Baselining them was not optional: a post-land RED reproduces faithfully in
+an environment that was never able to go green, and mistaking one for a regression is how a diff ends
+up reverting trunk. **`shellcheck` could not be run here** — the proxy returns 403 on the binary
+download and no distro package is reachable — so it is owed on the box; the diff adds no code, only
+comment lines and one string literal.
+
+### What remains — one operator command, no judgment in it
+
+```sh
+bash scripts/capacity-marginal.sh sample --window-s 3600 --interval-s 60 --out /tmp/marg.tsv
+bash scripts/capacity-marginal.sh analyze --in /tmp/marg.tsv
+```
+
+Run it on the 10-core Darwin box, in a session not doing heavy work, across a dispatch wave rather
+than a lull (C3 wants ≥3 ACTIVE levels; §6). On a PASS, quote the coefficient **with its standard
+error and its window** and update the three sites in the table above — which are now the complete set,
+grep-verified, rather than the two previously believed.

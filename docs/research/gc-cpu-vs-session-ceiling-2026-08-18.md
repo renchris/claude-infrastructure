@@ -197,6 +197,12 @@ qualifies on ~2026-08-24** under this repo's own 2.1.220 precedent if no success
   the coefficient itself still wants one ~1 h on-box window (§6 of that doc). **Until it exists, none
   of the four may be quoted** — including by `scripts/lib/capacity-admit.sh:698` and
   `hooks/agent-teams-enforce.sh:220`, which both still carry `2.5–5`.
+  **Purged 2026-08-25** (§9 of that doc): the live citations are gone from all **three** sites — the
+  two named here plus `scripts/lib/spawn-presence.sh`, which this bullet missed and which defines the
+  ACTIVE census itself. Each now states the cost is UNMEASURED rather than carrying a number, so no
+  coefficient is asserted ahead of the run. `CC_ADMIT_ACTIVE_CEILING=8` is unchanged; the instrument
+  re-verified 15/15 on a clean tree. **The ~1 h on-box window is the whole remainder** and is
+  operator-gated — it is unrunnable off the 10-core Darwin fleet.
 - **Whether load average means anything as a capacity signal at all.** At constant N=15–16 the box
   read **11.21 → 36.07**; one instrumentation run alone moved it 19 → 36 with session count unchanged.
 - **Whether automated fires retry after a capacity refusal** — decides whether raising the ceiling
