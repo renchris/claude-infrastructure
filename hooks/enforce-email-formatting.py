@@ -75,6 +75,37 @@ _WS_RE = re.compile(r"\s+")
 FRESH_SEND_TOOLS = {"mcp__ms365__send-mail", "mcp__ms365__create-draft-email"}
 _REPLY_SUBJECT_RE = re.compile(r"^\s*(re|fw|fwd)\s*:", re.IGNORECASE)
 
+# Reply/forward tools: Graph auto-quotes the prior message ONLY when you pass Comment.
+# Passing Message.body REPLACES that auto-quote, so the chain threads correctly at the
+# protocol level (In-Reply-To/References are still set) but arrives VISUALLY ORPHANED —
+# the recipient sees a bare note with no history. Cost a real defect 2026-08-24: an
+# A to Z reply went out threaded but with no visible chain, and the operator caught it
+# in Outlook, not here. The pre-existing guard only inspected FRESH_SEND_TOOLS, so a
+# reply carrying Message.body was never checked at all.
+REPLY_TOOLS = {
+    "mcp__ms365__reply-mail-message",
+    "mcp__ms365__reply-all-mail-message",
+    "mcp__ms365__create-reply-draft",
+    "mcp__ms365__create-reply-all-draft",
+    "mcp__ms365__create-forward-draft",
+    "mcp__ms365__forward-mail-message",
+}
+# Any ONE of these in the body means a quoted chain was deliberately appended.
+_QUOTE_MARKERS = (
+    "<blockquote",
+    "divrplyfwdmsg",           # Outlook's own reply/forward separator div
+    "-----original message-----",
+    "________________________________",  # Outlook's horizontal rule above a quote
+    "wrote:",
+    "from:",                   # a quoted header block
+)
+
+
+def has_quoted_chain(content: str) -> bool:
+    """True if the body appears to carry the prior message's text."""
+    low = (content or "").lower()
+    return any(m in low for m in _QUOTE_MARKERS)
+
 
 # Injected into context on EVERY matched ms365 write call, so the model never has to
 # recall it. Each rule below cost a real defect: the threading rule 2026-06-12 (a "RE:"
@@ -89,6 +120,20 @@ RECIPE = """ms365 email recipe (auto-injected — settled, do not re-derive):
    reply-all-mail-message with its messageId. NEVER send-mail or create-draft-email with a
    "RE:"/"FW:" subject — that makes a detached message with no In-Reply-To/References and
    silently breaks the chain.
+
+1b. WHICH FIELD — this is the one that bites. Graph auto-quotes the original ONLY when you
+   pass **Comment**. Passing **Message.body REPLACES that auto-quote**, so the reply threads
+   correctly but arrives with NO VISIBLE HISTORY — it reads to the recipient as a brand-new
+   email. So: **short reply (<=300 visible chars) -> use Comment.** Longer or formatted ->
+   Message.body AND append the quote yourself (rule 3).
+   Hook-enforced: a reply tool passing Message.body with no quote block is now DENIED.
+   ⚠️ **Comment INHERITS the ORIGINAL SENDER'S <body> styling** — Graph drops your text inside
+   their body tag. Vendor HTML templates routinely set color/font there (Montway's confirmation
+   carries `color:red`, so a Comment reply to it renders ENTIRELY RED — caught 2026-08-24).
+   Invisible when replying to a plain-text or plainly-styled sender; loud when replying to a
+   marketing template. **If appearance matters on a templated original, use Message.body + an
+   appended quote and set the Calibri style yourself.** To check first: grep the original's
+   text/html part from get-mail-message-mime for `<body` and look for color/font-family.
 
 2. FORMATTING. Pass Message.body {contentType:"html"} wrapped in an inline
    font-family:Calibri,Arial,sans-serif;font-size:11pt style, with real <p>/<ul>/<ol>.
@@ -257,6 +302,51 @@ def main():
     if not isinstance(tool_input, dict):
         allow()
 
+    # Quote guard: a reply tool passing Message.body silently REPLACES Graph's auto-quote,
+    # producing a message that threads but shows no history. Comment keeps the auto-quote.
+    if tool_name in REPLY_TOOLS:
+        body = tool_input.get("body")
+        if isinstance(body, dict):
+            content = dig(body, "Message", "body", "content")
+            comment = body.get("Comment")
+            if isinstance(content, str) and content.strip() and not has_quoted_chain(content):
+                visible = len(re.sub(r"<[^>]+>", "", content)).__int__()
+                short_hint = (
+                    "This reply is SHORT — the one-line fix is to drop Message.body entirely and "
+                    "pass Comment instead; Graph then auto-quotes the original for you and you "
+                    "need no MIME fetch at all. "
+                    if visible <= MIN_LEN else
+                    "This reply is long enough that Comment would collapse its newlines, so keep "
+                    "Message.body AND append the quote. "
+                )
+                deny(
+                    "BLOCKED: "
+                    + tool_name.split("__")[-1]
+                    + " with Message.body and NO quoted chain. Passing Message.body REPLACES "
+                    "Graph's auto-quote, so this threads correctly (In-Reply-To/References are "
+                    "still set) but the recipient sees a bare note with NO visible history — it "
+                    "reads as a brand-new email. Caught in Outlook, not here, on 2026-08-24. "
+                    + short_hint
+                    + "To append the quote: get-mail-message-mime on the ORIGINAL messageId, "
+                    "parse with Python's email module, walk to the text/html part, strip the "
+                    "html/head/body/meta wrappers, and append it below your text inside a "
+                    "<blockquote>. NEVER take the quote from get-mail-message — that returns "
+                    "text/plain and pasting it into HTML collapses the whole chain into one wall. "
+                    "Override for a deliberately quote-free reply: "
+                    "CLAUDE_EMAIL_FORMAT_GATE_DISABLED=1."
+                )
+            if isinstance(comment, str) and len(comment) > MIN_LEN:
+                deny(
+                    "BLOCKED: Comment is "
+                    + str(len(comment))
+                    + " chars (>"
+                    + str(MIN_LEN)
+                    + "). Graph strips newlines from Comment into one unreadable paragraph at "
+                    "this length. Use Message.body contentType:'html' instead — and then you "
+                    "MUST append the quoted chain yourself, because Message.body replaces the "
+                    "auto-quote."
+                )
+
     # Threading guard: a fresh-send tool carrying a reply/forward subject would start a
     # detached message instead of continuing the thread. Steer to a reply tool.
     if tool_name in FRESH_SEND_TOOLS:
@@ -272,7 +362,7 @@ def main():
                 f"References headers, so it will NOT continue the thread — it starts a detached "
                 f"message (this broke the UBC Sleep Clinic chain 2026-06-12). To continue the "
                 f"conversation, reply on the ORIGINAL message via create-reply-draft / "
-                f"reply-mail-message, passing the body as Message.body contentType:'html' "
+                f"reply-mail-message, passing a SHORT reply as Comment (Graph auto-quotes for you) or a long one as Message.body contentType:'html' WITH the quote appended "
                 f"(threads AND keeps formatting). "
                 f"(Override for a genuine new thread: set env CLAUDE_EMAIL_FORMAT_GATE_DISABLED=1.)"
             )
