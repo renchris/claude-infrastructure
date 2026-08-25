@@ -345,3 +345,69 @@ are **not** states, and folding on the raw last event is the documented trap
 
 Workflow run `wf_63410424-45d` — 12 recon axes, 10 adversarial verifiers, 1 synthesis; 23 agents,
 4,133,060 subagent tokens, 817 tool uses. Journal: `subagents/workflows/wf_63410424-45d/journal.jsonl`.
+
+---
+
+## 9. CORRECTION — the generator is agent judgment, not the machinery (2026-08-25, later)
+
+The operator refuted §3's framing in one sentence: *"work from who? we are the only ones working…
+if you are outputting more work 'for later' than you are completing, that's a behavioral problem."*
+
+He is right, and §3's "~89% of inflow is EXOGENOUS" was a **reference-frame error**. That figure was
+measured relative to *the drain lane*, so "exogenous" meant "filed by some other Claude session."
+From the operator's frame there is no exogenous inflow at all.
+
+**Measured: 2,854 `add` records, ZERO human-authored.** No field on any record names a human, and
+every path into `cmd_add` is a hook, a script, or an agent session. So ρ ≈ 1 is not a constraint
+discovered in the world — it is the output of a filing policy the machine controls.
+
+### What actually accumulates
+
+Only the LIVE pool accumulates, and it decomposes by *what filed it*:
+
+| what filed it | live | share | median age |
+|---|---:|---:|---:|
+| AGENT free-text, labelled | 230 | 43.7% | 5 d |
+| AGENT free-text, no source label | 101 | 19.2% | 4 d |
+| AGENT filed at session close (`needs`) | 101 | 19.2% | 9 d |
+| ship-land re-land trap | 40 | 7.6% | 1 d |
+| deploy-live converger | 33 | 6.3% | 5 d |
+| plan-doc auto-harvest | 16 | 3.0% | 13 d |
+| daemons | 5 | 0.9% | — |
+
+**AGENT-AUTHORED: 432 of 526 = 82.1%. Machine/auto: 94 = 17.9%.**
+
+### Two of my own fixes were refuted before shipping — both by measurement
+
+1. **"Require a falsifier at birth."** Replayed retroactively over all 2,854 filings it would refuse
+   98.1% and block **1,403 rows that closed as real work** — precision 38.9%. A blunt instrument.
+   The only precise gate measured is "no filing at session close" (66.5%), and even that costs 197
+   real rows. Stopping the plan-doc harvest is actively harmful: precision **2.5%**.
+2. **"Pre-check the re-land trap before filing."** Cosmetic. `ship-land.sh:1035-1049` already
+   auto-retracts on `falsify` rc 5 — the row is filed, the oracle runs, and it closes within seconds
+   (median true life **34 seconds**). Those 366 rows inflate the *filing and closure counts* — which
+   is how they polluted the 40–55% no-op figure in §3 — but they contribute 40 of 526 live rows and
+   do not accumulate. Fixing it cleans the ledger and changes the backlog by ~nothing.
+
+**The generalisable lesson: a count-based waste metric double-counts self-retracting rows.** Score a
+generator by what it leaves LIVE, never by how often it fires.
+
+### Where this leaves "drain to zero"
+
+**Reachable — and §5's advice to retire the goal is WITHDRAWN.** It rested on the exogenous-inflow
+premise, and that premise is dead. 82.1% of accumulation is a session deciding to write something
+down instead of fixing it or dropping it, and that is a behavior, not a queueing law.
+
+The Aug-9 experiment still stands but its lesson inverts: a level cut against a *live generator* is
+forgotten, which is why triage alone failed four times. Fix the generator **and then** cut the level
+and the cut holds. Neither alone works.
+
+**The enforcing surface is the close protocol, not any script.** `CLAUDE.md` § Session Close Protocol
+lists three co-equal dispositions — DRIVEN · FILED · BLOCKED — which makes FILED a first-class
+choice, and the Follow-On Gate's "On FAIL: name + backlog" instructs the mint directly. Stop hooks
+then *block a close* until the session files (`hooks/completion-assert.sh:946/947/948`,
+`hooks/session-continue.sh:938`), making filing the cheapest route to being allowed to stop.
+
+The change that matches the diagnosis is to demote FILED: **fix it now or drop it; filing is the
+exception and carries the burden of proof.** That edits the rules the agent runs under, so it is a
+C10 self-modification and the operator's call, not the agent's.
