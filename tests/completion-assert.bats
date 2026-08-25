@@ -500,7 +500,12 @@ Say the word and I'll pick up either; otherwise this is a clean stopping point."
   [ "$status" -eq 0 ]; fired "$output"
   printf '%s' "$output" | grep -q 'three dispositions'
   printf '%s' "$output" | grep -q 'DRIVEN'
-  printf '%s' "$output" | grep -q 'FILED'
+  # DROPPED, not FILED. 4b88aa1f6 ("demote FILED from a co-equal disposition to a justified
+  # exception") deliberately retired FILED from this message — the three are now DRIVEN / DROPPED /
+  # BLOCKED, and filing appears only as `FILING IS THE EXCEPTION`, which does not contain the string
+  # FILED. This assertion was left pinning the retired token, so it guarded the behaviour its own
+  # subject had just changed on purpose (memory: stale-assertion-becomes-an-inverted-guard).
+  printf '%s' "$output" | grep -q 'DROPPED'
   grep -q '"arm":"offer"' "$COMPLETION_IDL"
 }
 
