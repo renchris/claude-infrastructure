@@ -86,6 +86,84 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-25 — drain recycle #225: method 195 — A GENERAL CONTRACT HONOURED AT ONE OF THE FOUR
+  SITES IT BINDS, WHERE THE MISSING ARM IS ALSO THE ONLY THING THAT COULD EVER HAVE COUNTED ITS OWN
+  ABSENCES.**
+  Took #224's lead 1 — `reconcile`, the last never-band-measured bound in `bin/cc-reaper` — expecting
+  a fourth foreground-sized constant. **The band A/B refuted that too, and this time the acquittal is
+  the smaller half of the result.** `cc-reconcile` A/B'd against an ISOLATED registry copy
+  (`CC_REGISTRY_DIR` + `CC_RECONCILE_LOG` to a `mktemp` store; the live registry's sha256 **identical
+  either side**; all six runs emitting **byte-identical** summaries), 3 reps per arm at load ~6:
+  **foreground 0.59 / 0.69 / 0.69 s (17/17 samples PRI 31) · `taskpolicy -c background` 3.72 / 3.89 /
+  4.11 s (98/98 samples PRI 4)** — a **5.6x band tax**, this box's **FOURTH** independent
+  reproduction after 6.6x (inbox-guard, #219), 6.4x (backlog-reap, #223) and 6.2x (classify, #224).
+  **60s is ~15x healthy IN-BAND cost — the most generous of the four bounds, and never a foreground
+  number. IT IS SOUND. DO NOT WIDEN IT:** a reconcile past 60s is the box 15x beyond its own
+  background-band cost, and the 139 fires are that wedge, faithfully detected. **That closes the last
+  cell of the four-bound table: two were broken and are fixed (#219, #223), two are measured sound
+  (#224, this one).**
+  **THE DEFECT IS AGAIN ONE BRANCH AWAY, AND AGAIN IT IS A PREDECESSOR'S OWN.** `_rp_bounded`'s
+  contract comment says rc 124 *"MUST stay distinguishable from the child's own failure … Callers log
+  124 explicitly"*. There are **FOUR** bounded foreign forks in this file. **R5b (#220) honoured that
+  at the classify fork and nowhere else — and its own comment said so in general terms, that the prior
+  code *"defended only one direction of that"*.** The other three branch on 124 alone, with stderr to
+  `/dev/null` and a summary `say` that is skipped because a producer which died printed nothing. **A
+  subsystem that did not run was byte-identical in the log to one that ran quietly** — and for
+  inbox-guard it read BETTER than healthy, because the bound-fired line that accompanies that fork on
+  96% of sweeps would simply be **absent**, and absence there reads as *the bound did not need to
+  fire*.
+  **THE MEASUREMENT ARGUES AGAINST OVERCLAIMING IT, AND IS THE POINT.** Per-sweep census of
+  `~/.claude/logs/cc-reaper.log`: **137,415 raw lines → 21,506 bracketed entries** (partition asserted:
+  stamped + continuations + pre-first-stamp == raw), segmented into sweeps — **1,687 starts = 1,670
+  REAP + 17 DRY-RUN** (asserted) — and scoped to the **1,662 COMPLETED REAP sweeps** of 2026-08-13..25:
+  `reconcile` output_only **1523** · bound_only **139** · bound+output **0**; `backlog-reap` **922 /
+  579 / 161**; `inbox-guard` **65 / 5 / 1592**. **SILENT = 0 of 1,662 for all three, on every one of
+  the 13 days.** So the arm has **never fired** and the fix is **LATENT**.
+  **IT IS WRITTEN ANYWAY, AND THE REASON IS THE NAMED SHAPE: THAT ZERO COULD NOT HAVE COME OUT ANY
+  OTHER WAY.** The missing arm is the only code that would ever have written the record its own
+  absence is being measured by, so the census returns 0 in **every possible world** — a non-verdict
+  wearing a clean bill, exactly #224's method 194 but with the code never written rather than merely
+  not deployed. And it is **reachable**: `cc-inbox-guard` exits **2** at its own `:53` and `:95`
+  dependency guards, and `:95` sources `hooks/lib/mailbox-pending.sh` — a path class where the live
+  layer already carries **3 absent files out of 78**.
+  **THE FIX (`dc2a90f5b`, landed, rc 0, fast-forward, sha SURVIVED, content-verified per path AND per
+  literal with a POS control at 1 and an off-trunk NEG control correctly refused):** an R5d arm at each
+  of the three forks. **`tests/cc-reaper.bats` 176 → 180.**
+  **TWO HYPOTHESES DIED ON THE WAY, BOTH TO RUNNING THE PRODUCER INSTEAD OF READING IT.**
+  (a) `cc-reconcile:110` fails **OPEN** on a missing `jq` — `exit 0`, no output, and the guard sits
+  **ABOVE its own `log()` at :112**, so that path cannot even write to `cc-reconcile.log` — while its
+  three siblings fail closed at rc 1 or 2. A real polarity inconsistency, and **unreachable**: Apple
+  ships **jq 1.7.1 at `/usr/bin/jq`**, which resolves on a bare `PATH=/usr/bin:/bin`. (b) Even were it
+  reachable, **an rc-based arm at the CALLER would have had zero power over it, because it exits 0** —
+  the #190 shape, caught before it was written rather than after.
+  **INSTRUMENT FAULT OF MY OWN, CAUGHT BY ITS CONTROL:** my exit-code census anchored on
+  `^[[:space:]]*exit <N>` and its **POSITIVE control read 0** — in these files every exit is **INLINE**,
+  after a `||` or inside a `case` arm, never at line start. A zero-tolerant version would have reported
+  *"these producers have no nonzero exits"*, which is the opposite of true.
+  **`alarm-polarity-lint.sh` IS DECLARED NOT-RUN, NOT GREEN — AND THIS IS ITS THIRD INDEPENDENT
+  SUBJECT.** Inverting this very predicate in a scratch copy (`rc != 0` → `rc = 0`, an unambiguously
+  wrong polarity) still returns *"clean — 0 inverted alarm predicates"*, after #222's
+  `idl-abstain-alarm.sh` and #224's R5c live-pane guard. **`e07dc5e09f83` owns it; NOT re-filed.**
+  **MUTANTS 4/4, one per SITE plus one for the control**, predictions recorded before running: M1 drop
+  the reconcile arm → reds exactly [1]; M2 backlog-reap → [2]; M3 inbox-guard → [3]; **M4 widen
+  reconcile to fire at rc 0 as well → [4]**, which is what proves the arm is not an always-firing
+  alarm. Anchor uniqueness asserted at 1 before every mutation; subject restored **byte-identical by
+  sha256** on every arm and again at the end.
+  **THE LAND'S SMOKE WENT GATE-KILLED ON `tests/cc-reaper.bats` (cut by the 420s budget, exit 124,
+  ZERO `not ok`) — A NON-VERDICT, NOT A RED**, and it cost nothing because the selector's **whole
+  direct set of 7 suites / 268 tests was run in the FOREGROUND first: 268/268, 0 skips,
+  `plan == ok + not_ok` on every one.** That is what converts a gate-killed column into a known.
+  **STATE AT MY OPEN:** board **307 open / 211 blocked / 2,325 done / 6 claimed** (518 combined;
+  `open + blocked == combined` asserted) — **identical to #224's close, so nothing moved between the
+  links.** The eleven-row cloud cluster: **9 still blocked, `4ce239d21d67` done, `485f8f87eb5f`
+  claimed**, matchcount 1 each with a bogus-id NEG control at 0 — **unchanged from #224's close**, and
+  the live `:-900` count is **still 0** (`:-60` = 2; POS control `bound-fired backlog-reap` = 1, NEG 0),
+  so the two actuations #224 saw remain the whole of the drain. `LIVE_SHA=841169ed00b1` — **an EIGHTH
+  consecutive non-move**, `LIVE_LAG=60`, `LIVE_ADDS=26`, `DIRTY_N=0`, `GATE=stale`. Postland RED pages
+  **0** over a denominator of **2,668** (the **117th** consecutive), stamps **455** (454 → 455, moving
+  again after #224's first non-move). ⚠️ **`~/.claude/autonomy/pages` read 1,937 total / 122 `.page` —
+  byte-for-byte the same as #224's close, so the monotone shrinkage #224 flagged has STOPPED; do not
+  inherit its ~5/hour pruning rate as current.**
 - **2026-08-25 — drain recycle #224: method 194 — AN EXONERATION THAT HOLDS, AND THE DIAGNOSTIC
   BESIDE IT THAT ANSWERS A QUESTION ALREADY ANSWERED.**
   Took #223's lead 2, the untouched `classify` half of `ee743fad3674`, and went in expecting a
