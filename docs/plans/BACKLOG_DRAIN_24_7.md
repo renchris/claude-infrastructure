@@ -86,6 +86,109 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-25 — drain recycle #221: method 191 — THE SAME FAIL-OPEN DEPENDENCY, WITH THE OPPOSITE
+  EXIT SHAPE, NEEDS THE OPPOSITE REMEDY: HERE THE FAILURE IS VISIBLE AND NAMES THE WRONG CAUSE.**
+  Took #220's own lead 1 — `bin/cc-classify:942`, the SECOND `|| echo '[]'` in the file #220 was
+  reading, in `cmd_classify` (the single-target path) rather than `cmd_all`. #220 proved the
+  mechanism at `:951` and fixed its CALLER in `cc-reaper`, because there the failure exits 0 and is
+  therefore invisible. **At `:942` the failure exits 2 — it is visible, and that is exactly why it
+  is worse: it is reported to the caller as a FACT ABOUT THEIR TARGET.**
+  **THE FOUR-ARM A/B, real binary, one input moved** (the `CC_CLASSIFY_SESSIONS_BIN` seam at
+  `bin/cc-classify:43`; `--json` writes nothing, so no isolation copy was needed): arm A real
+  `cc-sessions`, a LIVE pane ⇒ **rc 0, 453 bytes, empty stderr**; arm A2 real `cc-sessions`, a pane
+  that never existed ⇒ **rc 2, `no live session matches '<T>'`**; arm B `cc-sessions` stubbed to
+  exit 3, the SAME LIVE pane ⇒ **rc 2, `no live session matches '<T>'`**; arm B2 `cc-sessions`
+  emitting non-JSON at **rc 0** ⇒ the same again. **B and A2 were BYTE-IDENTICAL once the target
+  name is normalised out**, and pane 13 had been classified successfully by arm A seconds earlier —
+  **the tool reported a live session as absent.** A lookup MISS rendered as ABSENCE.
+  ⚠️ **Arm B2 is the one that decides the remedy's shape: the enumerator exits 0 there, so anything
+  keyed on a return code would miss it.** What discriminates is not the rc but **whether a parseable
+  array came back at all** — which is why the fix reads the enumerator's TYPE as a value, never as
+  an exit status.
+  **THE FIX (`7eb0eb0b6`), RECORD-ONLY, one helper serving both sites.** `enumerate_sessions()`
+  keeps the value fail-open on purpose — a caller must never crash because the enumerator is sick,
+  and `cc-reaper`'s bounded `--all --json` call depends on getting an array back — and additionally
+  records WHY the list is empty in `ENUM_OK` / `ENUM_RC` / `ENUM_N`. `cmd_classify` now says
+  *"session enumerator FAILED (rc=N from '<bin>') — NO VERDICT about '<target>'; this is not a
+  finding that the session is gone"* when the enumerator did not answer, and gives the genuine
+  no-match its DENOMINATOR — *"(enumerated N live session(s))"* — when it did. `cmd_all` gains ONE
+  stderr line saying the empty classification is a FALLBACK, not a verdict; **stdout and rc are
+  untouched, so the reaper's `--all --json 2>/dev/null` parse is unaffected.**
+  🚨 **The helper sets GLOBALS and must not be called through `$( )`** — an assignment inside a
+  command substitution runs in a subshell and never escapes it. The call sites read `ENUM_JSON`
+  after a bare call, and the comment in the file says why, because this is the trap that would
+  silently restore the old behaviour on the next edit.
+  **MUTANT-PROVED, one per site, baseline asserted GREEN FIRST (3/3):** M1 deletes the
+  `cmd_classify` failure arm ⇒ reds EXACTLY the enumerator-failed test; M2 deletes the `cmd_all`
+  stderr note ⇒ reds EXACTLY the `--all` test; **M3 reverts the absent-target message to its OLD
+  blanket form ⇒ reds EXACTLY the CONTROL** — which is the arm that proves the control CAN fail, and
+  without it the fix could have replaced one blanket message with another and every other arm would
+  still have been green. Each anchor asserted to occur exactly once before mutating; subject restored
+  byte-identical by sha256 on every arm and again at the end.
+  **THE CENSUS THAT RETIRES #220'S LEAD RATHER THAN LEAVING IT DANGLING.** #220 wrote *"There are
+  more"* of this class and pointed the grep at `|| echo`. Run over `bin/` and `scripts/` with a NEG
+  control at 0 and a POS at 218: **210 code lines** (8 of the 218 are comments documenting the
+  shape). **But the class is not one class, and the partition is the finding: 161 are `|| echo 0`,
+  46 are `|| echo ""`, and only 3 are `|| echo '[]'` — the COLLECTION claim, where emptiness is an
+  assertion about a POPULATION rather than a numeric default.** All three adjudicated by reading
+  them: `bin/cc-teardown:960` is **inside a heredoc building a MOCK `cc-sessions` for the selftest**
+  — a fixture, not an instance; `bin/cc-blockers:1341` is **already guarded**, because
+  `BOARD_ABSENT` separates the missing-store case in its own branch above it; and
+  `scripts/team-orphan-reaper.sh:347` **fails in the SAFE direction** — its caller does
+  `count=$(… jq 'length' … || echo 0)` then `[[ "$count" == "0" ]] && continue`, so a failed parse
+  makes the auto-denier DECLINE TO ACT, and the residual cost is silence, in a job whose plist is on
+  disk but which `launchctl list` does not show as loaded.
+  🚨 **So the honest verdict is: in the COLLECTION-CLAIM shape the class is now closed in this tree,
+  and I did NOT file the third site — a row minted on a dormant, safe-direction path is an item
+  whose premise is already rotting.** ⚠️ **I did NOT clear the 161 `|| echo 0` sites; I checked the
+  partition, not the members.** The known live instance of THAT shape is the lead's `ff4e6cbead11`
+  (`grep -c` printing 0 and exiting 1), already owned.
+  **BOARD at my open: 309 open / 213 blocked / 2320 done / 5 claimed (522 open+blocked).** Against
+  #220's CLOSE snapshot: **ONE arrival, ONE departure, and the departure is a CLAIM, not a close** —
+  `0c8b39b67665` went **open → claimed** (it had gone claimed → open during #220's land, so it has
+  now rotted back; it is NOT available), which is the entire claimed 4 → 5 delta; and
+  `42243203fb31` arrived **blocked**, a sibling's, `master-operator-gated`. `done` is **UNCHANGED at
+  2320** — zero closes by anyone between #220's close and my open.
+  **THE CONVERGER, re-run from the SHARED CHECKOUT with the rc captured to a FILE:** `rc=1`, and
+  🚨 **the failure has MOVED SINCE #220 — it now dies EARLIER and prints ONE line**,
+  `deploy-migrations: migrate: 0 applied, 14 staged (operator-owned), 0 pending`, with #220's
+  DEGRADED banner and its copy-drift line no longer reached at all. The cause is the dirty tree in
+  the shared checkout — `hooks/enforce-email-formatting.py` carries uncommitted local changes,
+  confirmed by `git status --porcelain`. **`42243203fb31` is OPEN(blocked) and owns this by name,
+  filed by a sibling at 12:51Z today: do NOT re-file, and do NOT stash or discard that file — the
+  lane deliberately never does, and neither did I.** `799ec26e3a74` still owns the older refusal.
+  ⚠️ **`wrap-ledger.sh --machine` reported `LIVE_SRC=skip` from my worktree, i.e. it computed NO live
+  lag at all — so #220's `LIVE_ADDS=26 / LIVE_LAG=46` are NOT re-derived here and must not be quoted
+  forward as current.** `DIRTY_N=0`, `MIG_FAILED=0`, `GATE=stale` (not mine to drive).
+  **`cc-roles list` read `drain-lead UNVERIFIED 7` — UNCHANGED across #219, #220 and #221**, with
+  `desk` (5) and `docs-lead` (450) also UNVERIFIED and `orchestrator ABSENT empty`, which is what
+  proves the table can still discriminate. **Mailbox `~/.claude/mailbox/27.md` holds the same single
+  #217 message, already consumed — no new mail.**
+  **THE SELECTOR'S OWN LESSON THIS LINK.** A `bin/cc-classify` edit is NAMED by 14 suites, and the
+  historical commit I used for the POS control drew **9**; **my own committed diff drew only 3** —
+  `cc-classify-origin-unify` · `cc-classify` · `headless-address-consumers`. **I ran the 9 anyway:
+  353/353, 0 skips, `plan == ok + nok` asserted per suite** (`cc-reaper` 174 · `cc-classify` 83 ·
+  `watchdog-census` 20 · `lstart-dialect-bin` 16 · `handoff-lifecycle-record` 15 ·
+  `headless-address-consumers` 13 · `reap-sweep-bounds` 12 · `cc-classify-origin-unify` 10 ·
+  `reap-freshness` 10). ⚠️ **The direct set of a HISTORICAL commit is not the direct set of YOUR
+  diff — it is an upper bound, and the difference was 9 vs 3.** ⚠️ **And on an UNCOMMITTED tree the
+  selector printed EMPTY at rc 0, which is the documented vacuous shape and NOT a mute instrument —
+  proven by a range that spoke with a real list.**
+  **DECLARED A MOVE AND DELIVERED A MOVE — one fix landed, ZERO rows closed, ZERO filed, and one
+  inherited lead RETIRED by measurement rather than left dangling.** Nothing was closed because
+  nothing on the board named `:942`; the residue lives in the code and in this entry.
+  **THE GENERALISATION, now SEVEN clauses** (carrying #220's six forward): (1) a bound plus a
+  deterministic order is a silent permanent exclusion; (2) the count that would expose a truncation
+  must be emitted BEFORE the work; (3) a bounded actuator whose cost scales with its own backlog is
+  a RATCHET; (4) the cost need not exceed the bound at all; (5) ask WHICH BAND the number was
+  measured in; (6) ask HOW THE FAILURE EXITS, because a remedy keyed on a return code is blind to a
+  dependency that fails open; 🆕 **(7) once you know how it exits, that answer CHOOSES THE REMEDY,
+  and the two exits want opposite ones. A failure that exits 0 is INVISIBLE and needs an independent
+  cross-check from OUTSIDE the failing chain — which is what #220 built. A failure that exits
+  NON-ZERO is visible and needs no new signal at all: the caller already knows something went wrong
+  and is merely being told the wrong reason, so the whole fix is to separate two causes the code can
+  already distinguish. Finding a second instance of a class is not the same as finding a second
+  instance of a BUG — ask what the caller can already see before you build it a new sensor.**
 
 - **2026-08-25 — drain recycle #220: method 190 — A ROW CAN NAME A REAL DEFECT, PRESCRIBE A REAL
   FALSIFIER, AND STILL POINT ITS REMEDY AT A MECHANISM THAT IS NOT THE ONE FIRING, BECAUSE THE
