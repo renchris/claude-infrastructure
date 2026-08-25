@@ -283,3 +283,42 @@ accepted architecture; it is simply scoped to one activity.**
 - **Always-on risk.** The rung must stay newsworthy. Working↔idle genuinely varies turn to turn,
   unlike a close certificate, but that is an argument, not a measurement — it needs the same
   edge-not-level treatment `copy_drift_notice` uses.
+
+### D8 addendum — the sensor prototyped, and the naive form FALSIFIED (2026-08-24)
+
+Run before building, on this worktree, against known ground truth.
+
+**Positive control (a land in flight):** the cwd-scoped predicate — physical path, self+ancestor
+exclusion, `claude` sessions excluded because a session is not a job — returned **11**, sample
+`/bin/bash scripts/ship-land.sh`. Correct.
+
+**Negative control (the land exited): 9, not 0.** The naive predicate is therefore **useless as
+written**: a count that is never zero cannot answer "are we working or idling", and would have
+shipped as a permanently-on light (MEMORY: `alarm-polarity-and-attention-budget`,
+`orphanhood-is-not-a-discriminating-signal` — key the alarm on an axis the HEALTHY population
+lacks).
+
+The residual 9, enumerated rather than guessed:
+
+```
+cc-await-ping × 2 (armed watchers)   + their python SA_SIGINFO side-cars × 2
+mailbox-wake-arm.sh × 2              lead-crash-watchdog.sh
+caffeinate -i -t 300                 a zsh shell-snapshot process
+```
+
+Every one is **wake/watchdog infrastructure** — i.e. precisely the `IDLE-ARMED` state, not work.
+So the three states in the design are not a nicety; without them the sensor reads BUSY forever.
+
+**Candidate discriminator, structural rather than a spelling list:** work executes a path under the
+WORKTREE (`scripts/ship-land.sh`, `tests/*.bats`); infrastructure executes a path under
+`~/.claude/` (`bin/cc-await-ping`, `hooks/mailbox-wake-arm.sh`). A denylist of infrastructure names
+would rot as hooks are added (MEMORY: `denylist-enumerates-spellings-not-the-class`), and an
+allowlist of work-names would miss novel jobs — failing toward "idle", the wrong direction.
+
+**Unresolved, and the reason this wants a fresh context rather than the tail of this one:** test
+runners break the rule. `bats-exec-test` has argv[0] under `/opt/homebrew` with the suite path as
+an operand, so the worktree path appears at an argv POSITION that is not argv[0..1] — and widening
+to a substring scan over argv is the exact defect `gate-cleanup`'s `is_gate_exec` header documents
+(a Claude session's argv embeds its whole prompt; a substring match once selected a live peer for
+`SIGKILL`). `claude` sessions are already excluded here, which weakens but does not remove the
+hazard. **Resolve this before writing the lib, not after.**
