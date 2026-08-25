@@ -140,15 +140,26 @@ measuring rather than asserting.)
 Run this on the box; it answers the whole hypothesis in one line:
 
 ```bash
-launchctl print gui/$UID/com.chrisren.autonomy-sweep 2>/dev/null | grep -i claude_config_dir; \
-/bin/zsh -lc 'echo "CLAUDE_CONFIG_DIR=[$CLAUDE_CONFIG_DIR] HOME=[$HOME]"'; \
-jq -r 'select(.probe=="cloud-return") | "\(.ts) \(.cloud_return_rc)"' \
-  ~/.claude/autonomy/idl.jsonl 2>/dev/null | tail -20
+jq -r 'select(.disposition=="cloud-return") | "\(.ts) \(.cloud_return_rc)"' \
+  ~/.claude/autonomy/idl.jsonl | tail -20
 ```
 
-A tail of `skipped-not-deployed` starting on 08-17 confirms it. A tail of `0` refutes it, and the
-next place to look is `return.jsonl`'s per-session outcomes — the sweep rc says only that the pass
-*ran*, never that anything landed.
+The key is **`.disposition`**, not `.probe` — `log_idl` (`scripts/autonomy-sweep.sh:166-180`) writes
+the arm's name into `disposition` and merges the arm's own object in beside it, so `cloud_return_rc`
+is top-level. Getting that wrong returns **empty**, and an empty result here reads as "the arm never
+ran" — the same absence-is-evidence inversion this whole item is about, one layer up in the query.
+
+A tail of `skipped-not-deployed` starting on 08-17 **confirms** the gate hypothesis; then read
+`CLAUDE_CONFIG_DIR` as the sweep sees it:
+
+```bash
+/bin/zsh -lc 'echo "CLAUDE_CONFIG_DIR=[$CLAUDE_CONFIG_DIR] HOME=[$HOME] 0=[$0]"'
+```
+
+A tail of `0` **refutes** it — the pass was running — and the next place to look is
+`return.jsonl`'s per-session outcomes, because the sweep rc says only that the pass *ran*, never
+that anything landed. `4` is another pass holding the lock and `124` is the bound cutting the pass;
+neither is a failure, and a run of either is its own finding.
 
 **The gate has no test for the path its one real caller actually invokes.** The behavioural arm in
 `tests/autonomy-sweep.bats` runs `bash "$deployed/autonomy-sweep.sh"` with `CLAUDE_CONFIG_DIR`
