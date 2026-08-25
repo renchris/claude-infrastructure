@@ -565,7 +565,46 @@ cmd_up_api() {
         || note "cc-offload: custody could not be opened for $sid — the close-integrity arm is NOT armed for it."
     fi
 
-    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$(cat "$pf")" >/dev/null 2>&1
+    # 🚨 THE BOOT BEACON GOES IN FRONT OF THE BRIEF (backlog 0c8b39b67665). The declare above
+    # started a boot budget against `$br`, and docs/plans/CLOUD_OBSERVABILITY.md §4.1 is what makes
+    # the resulting absence readable: "the session's brief requires its FIRST ACT to be pushing that
+    # branch — an empty commit is enough". Until this block, THIS lane sent `$(cat "$pf")` and
+    # nothing else: no beacon, and no push instruction of any kind. The branch is authorised at
+    # create here (cloud-create-api.py's `outcomes.git_info.branches`), so the VM *may* push — it
+    # was simply never told to, and never told to do it first. cc-cloud's C1 arm then fires at
+    # declared_at + boot_s (default 900 s, bin/cc-cloud:154) over sessions that are running fine,
+    # and its verdict — "re-fire, or check entitlement" — is the actionable one.
+    #
+    # The sibling lane carries the same block at its own only opportunity: scripts/handoff-fire.sh's
+    # CLOUD_PAYLOAD. Implementing the contract on one of two live fire paths would have left it
+    # prose-only on the other, which is the state this item exists to end.
+    #
+    # `switch -c … || switch …` rather than a bare `switch -c`, and the difference is this lane's:
+    # `reuse_outcome_branches` means the VM may already hold the branch the create authorised, and a
+    # bare `switch -c` fails on an existing name — a first act that errors is not a first act.
+    local beacon
+    beacon="── DO THIS FIRST — BEFORE THE TASK BELOW, BEFORE ANY OTHER TOOL CALL ──
+Run these commands now, as your very first action:
+
+    git switch -c $br || git switch $br
+    git commit --allow-empty -m \"boot: $br\"
+    git push -u origin HEAD
+
+This is a boot beacon, not the delivery of your work. The firing side assigned that branch name,
+declared it, and started a boot budget against it. It has no other way to see you: there is no
+inbound channel to this VM, so a branch that has not appeared by the time the budget expires is
+read as \"this session never started\", and the recovery taken is to re-fire or to go investigate
+the account's entitlement. If you do the task first and push at the end, a session that is
+merely SLOW is indistinguishable from one that never booted, and the wrong recovery is taken over
+a session that is running perfectly well. The empty commit costs one second and is the only
+evidence anything outside this VM will ever have that you booted at all.
+
+Push to that same branch again whenever you have work, and before you finish even if the work is
+incomplete — it is your ONLY channel home. A local reconciler (scripts/cloud-reconcile.sh)
+discovers it and lands it.
+
+"
+    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$beacon$(cat "$pf")" >/dev/null 2>&1
     local drc=$?
     if [ "$drc" != 0 ]; then
       note "cc-offload: $sid created+declared but the brief did NOT queue (cc-notify exit $drc)."

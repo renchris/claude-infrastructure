@@ -162,6 +162,20 @@ prescribed recovery is "re-fire, or check entitlement", raised over a session th
 perfectly well. That is the same shape of defect §4.2 is written against: a confident verdict
 computed from evidence that does not bear on the question.
 
+**There are TWO live fire paths, and the contract has to hold on both.** `bin/cc-offload up --via
+cli` delegates to `scripts/handoff-fire.sh --cloud`, so it inherits the fix below. `up --via api`
+does not: it creates through `scripts/cloud-create-api.py` and delivers the brief separately, as
+`cc-notify --cloud "$sid" "$(cat "$pf")"` — which was the operator's task file **verbatim**, with no
+beacon and no `git push` instruction of any kind. It declares the branch and starts the same boot
+budget, so it carried the identical defect from a different verb. A contract implemented on one of
+two live paths is still prose-only on the other, so both now carry the beacon and both are covered.
+The API lane spells it `git switch -c <b> || git switch <b>`: `reuse_outcome_branches` means the VM
+may already hold the branch the create authorised, and a bare `switch -c` fails on an existing name
+— a first act that errors is not a first act. It is prepended to the **delivered message**, not to
+the create body, because that lane creates with `events: []` deliberately (§13.3 — the acceptance
+pair is checked between create and brief, so a half-right session costs a create and never a brief),
+which makes the delivery the only place a first act can be stated.
+
 The producer is the **boot beacon**, prepended to the cloud payload at
 `scripts/handoff-fire.sh` (the `CLOUD_PAYLOAD` assignment, above the `--dry-run` exit):
 
@@ -178,7 +192,9 @@ before push, and the push before the brief's own text — because every substrin
 payload that mentions the push anywhere at all. Case 17 stays green on both trees, and that is the
 point of keeping the two: 17 asserts the branch is *created before it is pushed*, which is a
 different property from the push being *first*, and is why 17 could pass while this contract had no
-producer.
+producer. `tests/cc-offload.bats` carries the same pair of assertions for the API lane, plus one
+that the beacon names the **same** branch the declare keyed the budget on — a beacon pushed to any
+other name is watched by nothing, which is §10.2c's hazard with the sign flipped.
 
 ⚠️ **The corollary lands in `scripts/cloud-reconcile.sh`, and it is not optional.** A session that
 boots and then dies now leaves a **beacon-only branch** on the remote — a candidate shape the
@@ -826,9 +842,10 @@ Before any cloud session is fired, in this order:
    an undeclared cloud session is unobservable, and `declare` refuses without `--id`/`--branch`.
 2. The session's brief must require **pushing the declared branch as its first act**, so that
    absence past the boot budget means something (§4.1). ✅ **IMPLEMENTED 2026-08-25** as the boot
-   beacon prepended to `CLOUD_PAYLOAD` in `scripts/handoff-fire.sh`; nothing is left for the
-   operator to do at fire time. It was prose-only until then — see §4.1a for what that cost and
-   for the reconciler corollary it forced.
+   beacon prepended to `CLOUD_PAYLOAD` in `scripts/handoff-fire.sh` and to the delivered brief in
+   `bin/cc-offload`'s API lane — **both** live fire paths; nothing is left for the operator to do at
+   fire time. It was prose-only until then — see §4.1a for what that cost and for the reconciler
+   corollary it forced.
 3. §5.2 must be wired first — otherwise `com.claude.team-orphan-reaper` may archive the team
    while the session is healthy.
 4. On completion, `cc-cloud retire --id <id>` — or let C3 `LANDED` render it silent, which it does

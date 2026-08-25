@@ -622,3 +622,74 @@ EOF
     [[ "$output" == *"cc-offload $v"* ]] || false
   done
 }
+
+# ══ THE BOOT BEACON ON THE API LANE — backlog 0c8b39b67665 ══════════════════════════════════════
+# docs/plans/CLOUD_OBSERVABILITY.md §4.1: absence only becomes informative by CONTRACT — the fire
+# declares a branch and a boot budget, and "the session's brief requires its FIRST ACT to be pushing
+# that branch — an empty commit is enough". `cmd_up_api` declares the branch and starts the budget,
+# and until this case it delivered `$(cat "$pf")` verbatim: no beacon, and no push instruction of
+# ANY kind. cc-cloud's C1 arm then fires at declared_at + boot_s (default 900 s, bin/cc-cloud:154)
+# with the verdict "re-fire, or check entitlement" — over sessions that are working fine.
+#
+# THE SIBLING LANE IS COVERED SEPARATELY (tests/handoff-fire-cloud.bats case 20), and both are kept
+# because a contract implemented on one of two live fire paths is still prose-only on the other —
+# which is precisely the state the item names.
+#
+# RED-PROOF (re-runnable): replay against `git show <pre-fix sha>:bin/cc-offload` via CC_OFFLOAD_SUT
+# if the suite exposes it, else in a scratch tree. Both cases go RED — the pre-fix delivery contains
+# no `--allow-empty` and no `git push` at all, so the first assertion of each fails on absence.
+
+api_lane() {   # stubs cmd_up_api's create + a message-recording cc-notify
+  export MSG="$BATS_TEST_TMPDIR/brief.txt"; : > "$MSG"
+  cat >"$STUBDIR/create-api.py" <<'PY'
+import sys
+print("session_01APILANE")
+PY
+  export CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py"
+  # Records the MESSAGE verbatim, not a flattened argv: the property under test is the ORDER of
+  # lines inside that one argument, which `echo "$*"` would still show but only by accident.
+  cat >"$STUBDIR/cc-notify" <<'EOF'
+#!/usr/bin/env bash
+echo "cc-notify $1 $2" >>"$CALLS"
+printf '%s\n' "$3" > "$MSG"
+exit "${NOTIFY_RC:-0}"
+EOF
+  chmod +x "$STUBDIR/cc-notify"
+  # repo_slug is derived from origin, so the fixture repo needs one or `up` dies before delivering.
+  git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null || true
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git 2>/dev/null || true
+  export TASKF="$BATS_TEST_TMPDIR/task.txt"
+  printf 'TASK — the api-lane brief body.\n' > "$TASKF"
+}
+
+@test "up --via api puts the BOOT BEACON in front of the brief — the absence contract's first act" {
+  api_lane
+  run "$SUT" up --via api --task "$TASKF" --account next3 --unmanaged
+  [ "$status" -eq 0 ]
+  [ -s "$MSG" ]
+  local beacon push task
+  beacon="$(grep -n -- 'git commit --allow-empty' "$MSG" | head -1 | cut -d: -f1)"
+  push="$(grep -n -- 'git push -u origin HEAD' "$MSG" | head -1 | cut -d: -f1)"
+  task="$(grep -n -- 'the api-lane brief body' "$MSG" | head -1 | cut -d: -f1)"
+  [ -n "$beacon" ] || { echo "the delivered brief never instructs the empty boot commit (§4.1)"; false; }
+  [ -n "$push" ] || { echo "the delivered brief never instructs a push at all"; false; }
+  [ -n "$task" ] || { echo "the operator's own brief is missing from the delivery"; false; }
+  # FIRST ACT is a claim about ORDER, so it is asserted as one. A beacon appended after the task
+  # satisfies every substring check and none of the property.
+  [ "$beacon" -lt "$push" ] || { echo "the empty commit must precede the push (beacon=$beacon push=$push)"; false; }
+  [ "$push" -lt "$task" ] || { echo "the beacon must precede the BRIEF, or it is not a first act (push=$push task=$task)"; false; }
+}
+
+@test "…and it names the SAME branch the declare keyed the boot budget on" {
+  # A beacon pushed to any other name is watched by nothing, and the budget expires against a ref
+  # that was never going to appear — a permanent false NOT-STARTED (§10.2c's hazard).
+  api_lane
+  run "$SUT" up --via api --task "$TASKF" --account next3 --unmanaged
+  [ "$status" -eq 0 ]
+  local br
+  br="$(/usr/bin/grep -o -- '--branch [^ ]*' "$CALLS" | head -1 | cut -d' ' -f2)"
+  [ -n "$br" ] || { echo "no declare recorded, so there is no budget to key against"; false; }
+  /usr/bin/grep -q -- "git switch -c $br" "$MSG" \
+    || { echo "the beacon does not name the declared branch '$br'"; cat "$MSG"; false; }
+  /usr/bin/grep -q -- "boot: $br" "$MSG" || false
+}
