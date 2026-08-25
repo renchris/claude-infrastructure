@@ -144,6 +144,71 @@ measurement (load1 delta across N all-active sessions) and set the ceiling from 
 point. That is a two-arm experiment, not a config edit, and it is the only thing that can legitimately
 move a capacity constant.
 
+### 3.1 AMENDMENT (2026-08-25) — the finding stands; the prescription above is REFUTED, and this section falsifies itself
+
+Backlog `e981656df348` was filed from the paragraph immediately above, parked on "the marginal-load
+measurement", and re-dispatched on 2026-08-25. Driving it produced a disproof rather than a
+derivation. **The item closes as refuted, not as done** — this subsection is that disproof, and the
+prescription above is left standing verbatim because it is what the item was filed from.
+
+**The finding is confirmed and has already landed at the literal.** 2.0/core was never derived. Read
+on trunk while amending: §9.5 (`MACHINE_CAPACITY_V2.md:741`) is a retraction of a *permanent-outage
+projection*, and contains no derivation of any ceiling; the origin commit `0fc3a3d3` measured its
+motivating incident at **2.72/core** and picked 2.0 with no stated rule, so the shipped ceiling sits
+**below the only incident that produced it**. `e89918f2` (2026-08-25, on trunk) replaced the false
+provenance string at the literal itself, where the next reader of the constant meets it —
+`scripts/lib/capacity-admit.sh` now carries the whole objection above `CC_HW_DEFAULT_MAX_LOAD_PER_CORE`
+(the literal moved to `:161`; **the `:134` cited above is stale**). Comment only; the literal is
+untouched at 2.0, deliberately.
+
+**The prescription is refuted on three independent grounds, and the first is inside this section.**
+
+1. **This section falsifies its own remedy, four paragraphs apart.** The block quote at `:128-130`
+   states that the survived population *contains* the fatal value — fatal 2.53/core against 13
+   consecutive survived samples spanning 2.92–5.98/core — and `:133` draws the conclusion in the
+   repo's own words: *an axis that provably cannot separate fatal from survived*. "Set the ceiling
+   from a measured failure point" then asks for a failure point **on that same axis**. It does not
+   exist. This is not a subtle contradiction: the premise and the prescription are two and four
+   paragraphs apart. `scripts/capacity-alarm.sh:145` reaches the same verdict independently and in
+   its own words: *"load-per-core does not separate fatal from survived, and no setting of these two
+   numbers can make it"* — "these two numbers" being that instrument's own 1.5/2.5 warn/alarm floors,
+   which is the point: a *second*, independently chosen pair of thresholds on this axis fails for the
+   same reason ours does, so the defect is the axis and not either calibration. It pins 5.98/core as
+   a known false ALARM in its own selftest (`:1207`), so the refutation is executable, not merely
+   written.
+2. **The prescribed instrument is itself unidentified on this box.** The remedy names a specific
+   experiment — *"re-run the axis-09-style measurement (load1 delta across N all-active sessions)"*.
+   `bc89d511` (2026-08-19, on trunk) adjudicated exactly that instrument and disqualified it:
+   `load1` regressed on session count is unidentified here, because 87.3% of the load numerator is
+   not-Claude across an 8.35→46.39 daily range and a direct probe watched load **fall** while a unit
+   was added. Its verdict is already recorded in §5 of this same document, where the axis-09 pair's
+   own coefficient (`1.89`) is listed among the arithmetically disqualified values. The remedy asks
+   for a re-run of a measurement this document elsewhere rules unquotable.
+3. **The gate has already stopped keying on the term, so no value of the literal can be right.** An
+   additional *resident* session moves the 1-min runnable count by ~0 — load1 counts runnable and
+   uninterruptible, and live sessions sit in S/Ss — so a spawn gate keyed on it cannot move with the
+   spawn it gates. The input is wrong, not the number. Verified on trunk in the code rather than by
+   sha: `scripts/handoff-fire.sh:4931` reads `"${CC_FIRE_LOAD_TERM:-off}"` — **the load term defaults
+   off**, with `segments` and `active` carrying its intent because those do move with a spawn.
+   (`e89918f2`'s body cites `f944d6e3` for this and calls it an ancestor of trunk; that sha is beyond
+   the horizon of a depth-50 clone and was not confirmable here, which is why the fact is cited to the
+   line it is readable on. Same discipline this section exists to enforce.)
+
+**The named blocker could not have discharged the item either.** Marginal delta-load per active
+session is a *capacity-in-sessions* coefficient: it converts a ceiling into a session count. It cannot
+locate a failure boundary, which is the quantity the remedy asked for — so the item was parked behind
+a measurement that answers a different question, and would have stayed parked after it succeeded. Note
+that the sampler is landed and its controls are proven able to fail (`scripts/capacity-marginal.sh`,
+`tests/capacity-marginal.bats`, still wanting one ~1 h on-box window); that work remains worth
+finishing **for §5's four-values problem**, and is simply not this item's discharge.
+
+**What is actually left on this axis, if anything.** Not a better number — a discriminator that
+separates the fatal 2026-08-05 sample from the 13 survived ones, which by construction cannot be
+load-per-core. `capacity-alarm.sh:539` already names the two §6 discriminators that did separate fatal
+from survived across all three deaths. Any future work here starts there, and **any proposal to derive
+or raise `CC_HW_DEFAULT_MAX_LOAD_PER_CORE` should be closed against this subsection rather than
+re-run**: three grounds, all readable on trunk, and one of them is this section's own block quote.
+
 ## 4 · If 2.1.234 is adopted, adopt it on other grounds — and set one env var first
 
 The upgrade is defensible for 33 releases of unrelated fixes, never for capacity. Two items gate it:
