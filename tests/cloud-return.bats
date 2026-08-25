@@ -79,7 +79,16 @@ echo "reconcile confirm=${CONFIRM:-UNSET} $*" >>"$CALLS"
 [ "${LAND_EMPTY:-0}" = 1 ] && { echo "stub: reported success and landed NOTHING"; exit 0; }
 b="$2"
 tree="$(git -C "$WORK" rev-parse "refs/heads/$b^{tree}")"
-new="$(git -C "$WORK" commit-tree "$tree" -p refs/heads/trunkref -m "landed by a re-author")"
+# IDENTITY ON THE COMMAND, like every other commit this suite makes. setup() fixtures $HOME for
+# hermeticity, so an ambient ~/.gitconfig is invisible here — and `commit-tree` is the ONE writer
+# in this file that was left to find an identity anyway. On any box without a global user.email
+# (a cloud VM, a fresh CI runner) it died with "unable to auto-detect email address", trunkref
+# never received the tree, and SIX cases went red on the content-verify leg — which reads exactly
+# like the return rail being broken and is not. Measured 2026-08-25 while diagnosing f85fce7c26f5:
+# the reds reproduced identically against pristine trunk, i.e. a red that convicts the subject of
+# the environment's defect (memory: cannot-look-is-not-nothing-found, one layer up in the harness).
+new="$(git -C "$WORK" -c user.email=lander@t -c user.name=lander \
+       commit-tree "$tree" -p refs/heads/trunkref -m "landed by a re-author")"
 git -C "$WORK" update-ref refs/heads/trunkref "$new"
 echo "✓ $b — landed via stub"
 EOF
