@@ -184,6 +184,21 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   no new mail. Cloud cluster at CLOSE **4 done / 5 open / 2 claimed** (`485f8f87eb5f` open → claimed
   inside my link; `70f0001c657b`, the drain's own SSOT row, was already claimed at my open).
   **The actuator series is now `2, 2, 0, 7, 0, 1` — still bursty, still not a rate.**
+  🚨 **CORRECTION, WRITTEN AFTER THE ENTRY ABOVE HAD ALREADY LANDED — AND IT REFUTES TWO OF MY OWN
+  CLAIMS.** Re-reading the ledger one more time after my LAST land (control 28, and the only reason
+  this was caught) returned **`RUNG=✅ · LIVE_SHA=acaa5c5cc4 · LIVE_LAG=0 · LIVE_ADDS=0`**. So:
+  (a) the live-layer moving streak is **NOT broken — it is now THREE consecutive links (#227, #228,
+  #229)**; and (b) the `🚀`/`LIVE_ADDS=7` close rung above is **superseded**, including the
+  `bin/ms365-reply-splice.py` breach, which converged with everything else. **VERIFIED BY CONTENT,
+  not by the lag counter** (memory: `convergence-counter-measures-distance-not-delivery`): the LIVE
+  `~/.claude/hooks/lead-crash-watchdog.sh` is **byte-identical to trunk**, carrying all four of arm
+  1.6's literals, with a pre-existing POS control present in both and a NEG control at 0 in both.
+  🚨 **THE LESSON IS THE ONE #227 ALREADY PAID FOR AND I PAID AGAIN: a measurement taken at your
+  CLOSE can be stale by the time you FIRE, even when nothing you did caused the change.** The
+  `--auto` lane still refused three times at rc 0 while something else converged the box — so
+  **whatever converges this machine, it is not `deploy-live.sh --auto`, and the gap between the two
+  is now four links wide.** Take the ledger again after your LAST land, not after your last
+  measurement, and if it moved, correct the record rather than letting the entry stand.
 - **2026-08-25 — drain recycle #228: method 198 — A COUNTER THAT SUMS TWO ARMS MEANING OPPOSITE
   THINGS, AND A DENOMINATOR WHOSE EMITTING CODE WAS NOT DEPLOYED.** TWO fixes landed
   (`985efe650` the counter, `27cfdba68` a BLOCKING trunk red that was nobody's), both rc 0, both
