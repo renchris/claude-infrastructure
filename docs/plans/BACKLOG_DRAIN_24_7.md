@@ -87,6 +87,111 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-25 — drain recycle #212: method 182 — A ROW'S NEGATIVE CAPABILITY CLAIM IS A
+  PRESENT-TENSE STATE CLAIM WITH A HALF-LIFE, AND IT IS THE ONE NOBODY RE-CHECKS. "X logs only a
+  count", "no Y is attributable", "the system cannot NAME Z" all assert an ABSENCE — and the commit
+  that ends that absence is filed under the SYMPTOM it fixed, never under the absence, so no event
+  is ever addressed to the row. filed 0 / closed 1.**
+  Board at open: **473 open+blocked** (282 open / 191 blocked / 2272 done, claimed 5); at close
+  **472** (281 / 191 / 2273, claimed 5). Closed 1, filed 0 — net −1, the NINTH consecutive
+  negative-net link. `comm` in both directions on both lists: **exactly ONE departure**
+  (`ac1afe12ff0e`, reading `done` — my own close), **zero arrivals, zero claimed churn** (claimed
+  5 → 5, membership identical). Contrast #211, where two of three departures were CLAIMS visible
+  only as `claimed` arrivals; this link had no such ambiguity, and the check that would have caught
+  it was run anyway.
+  🆕 **THE PICK WAS GROUPED, AND IT MOVED A CONDITION COUNT — the first in four links.**
+  `master-convergence-deadlock` went **open 13 → 12, blocked tail 6 (unchanged)**. #209, #210 and
+  #211 all picked from `ungrouped` and moved no condition count; this one did. The blocked tail is
+  stated rather than hidden because a "12 open" that silently drops 6 blocked reads as closer to
+  done than it is (memory: `zero-claim-must-name-its-excluded-strata`).
+
+  **THE ROW: `ac1afe12ff0e`** — *"postland cannot NAME who SIGKILLs/SIGTERMs its corpus runs (14
+  cuts): capture the evidence instead of guessing."* Its one surviving suspect was stated as
+  **"NOT closed: bin/cc-reaper's garbage arm — shape matches exactly (TERM -> 3s -> KILL) but it
+  logs only a COUNT, building and discarding `$termed` at bin/cc-reaper:376-390, so no sweep is
+  attributable."** Every clause was run separately, two-sided.
+  · **The blocking clause is FALSE today.** `termed` = **0** occurrences in `bin/cc-reaper` (POS
+    controls `garbage_sweep`=3, `kill`=62; NEG `zzqqxx`=0), and `:376-390` is now an unrelated
+    `timeout(1)` PATH-resolution comment block. **The cited SPAN and the cited VARIABLE both
+    rotted, in the same commit that fixed the defect.**
+  · **Fix half 2 ("make cc-reaper log its victims not just a count") ALREADY LANDED, VERBATIM,
+    UNDER A DIFFERENT SUBJECT.** `a87f32c66` *"fix(reaper): the garbage arm was killing every land
+    on the box"*, **2026-08-16T02:55:06-07:00 — four days AFTER the row's `lastTs` of
+    2026-08-12T11:53:09Z**. Its DIFF removes `local nA=0 nkill=0 termed=""` and
+    `termed="$termed $pid:$re"`, and ADDS at `:616`
+    `log "garbage: TERM $cls pid=$pid age=${age}s argv=<$argsig>"` under a comment at `:611-615`
+    stating the row's own thesis: *"An arm that signals in anger must name what it signalled, or
+    its log cannot answer 'who killed this'."* Found with `git log -S termed -- bin/cc-reaper`
+    (POS `-S garbage_sweep` = 1, NEG `-S zzqqxxneverpresent` = 0), then **READ AS A DIFF** — the
+    commit SUBJECT names a different symptom entirely and would have misled
+    (memory: `read-the-diff-not-the-commit-subject`).
+  · **On trunk and demonstrably producing attribution.** `HEAD:bin/cc-reaper` blob ==
+    `origin/main:` blob (`2754b8df822e17e11ab570d1a470deb0b0287ef9`) ⇒ reproduces on trunk by
+    construction. Trunk blob: per-victim TERM log = 1, `termed=` = 0 (POS `garbage_sweep`=3,
+    NEG 0). Live `~/.claude/logs/cc-reaper.log` (11,643,698 bytes): **2456 per-victim TERM lines,
+    677 naming class `stuck-wrapper`** (POS any-garbage-line = 4094, NEG 0). Sample at
+    **2026-08-25T00:42:26Z**: `garbage: TERM stuck-wrapper pid=20594 age=2110s argv=<bash .../bats
+    tests/account-cliff-routing.bats ...>` — **a bats corpus run named in the act, in exactly the
+    log line the row asserts cannot exist.**
+  · **The unclosed suspect was CONVICTED, using this row's own fix.** `b83f4a2ba219` (OPEN,
+    verified same-moment) confirmed `bin/cc-reaper:581` adversarially with no root: the
+    `stuck-wrapper` predicate matches an UNANCHORED substring of the whole argv, postland passes
+    all 534 suite paths on one command line, and the `wl` whitelist NAMING postland-verify is
+    consulted only inside the `if (parent[p]==1)` block ending at `:580`. **Its 24.4x correlation
+    lift at lag [60,180]s was computable ONLY BECAUSE fix half 2 had already landed.** So the row
+    prescribed instrumentation to make attribution possible, the instrumentation landed, a sibling
+    used it to convict — and the row went on asserting the absence for nine more days.
+  · **Fix half 1 is unbuilt and no longer needed.** `pgrep -P` = **0** in
+    `scripts/postland-verify.sh` (POS `bats`=158). Its purpose was *"capture the evidence instead
+    of guessing"*; the evidence is captured SENDER-side and sufficed to convict.
+    `postland-verify.sh:1538` calls that evidence *"filed, not guessed at here"* — the filing is
+    THIS row, now discharged rather than orphaned.
+  · **Every surviving true clause has an OPEN owner** (#201's rule), all verified same-moment:
+    culprit + remedy design → `b83f4a2ba219` (its own text: both obvious fixes REFUTED, the remedy
+    *"needs design, not a one-liner"*); the `timeout -k 10` one-sender NOTE is independently stated
+    there; the magnitude *"14 cuts"* is superseded there (172 kill events, ~61% of exposed runs)
+    and by #211's census (241 cut / 437 stamps = 55.1%). `782607797fc5`, the row this class
+    blocked, is **DONE** as of 2026-08-24T09:25:15Z.
+
+  🚨 **THE INSTRUMENT LESSON THIS LINK ADDS — DO NOT DRAW A NEGATIVE-CONTROL TOKEN FROM THE
+  VOCABULARY YOUR OWN ARTIFACT USES TO DESCRIBE ITS CONTROLS.** The board read-back verified
+  **EXACT_MATCH, 5247 == 5247 chars**, 7/7 POS literals present — and **1 of 3 NEG controls FAILED**:
+  `zzqqxxneverpresent` read `present=True`, because the evidence body I was checking **quotes that
+  very token** while describing the `git log -S` control it used. The other two NEGs (`METHOD 999`,
+  `dtrace root required`) read False, so the instrument does discriminate and the verdict stands —
+  but the failing control proved nothing, and had all three been drawn that way the read-back would
+  have been vacuous. Same family as #206 (a token surviving its own fix as DATA), one level more
+  self-referential: **the checker's control vocabulary leaked into the checked text.** Pick NEG
+  tokens from a namespace the artifact cannot mention.
+
+  **NON-VERDICT, stated rather than hidden:** a grep of the postland stamp store for a named sender
+  returned **0**, but its own POS control (`rc`) **also returned 0**, so that instrument was **MUTE**
+  and its zero says nothing (#211's scar exactly; the sha is the stamp FILENAME, not its content).
+  It is used nowhere in the adjudication.
+
+  🆕 **THE METHOD-182 SCREEN, RUNNABLE AND MEASURED.** Grep `title`/`evidence`/`condition`/`source`/
+  `needs` for
+  `logs only|only a count|only the aggregate|not attributable|cannot NAME|cannot answer|no way to|discards|building and discarding|NOT closed|has no record|keeps no record|is blind to|nothing records`
+  — **13 hits over 219 open/blocked claude-infrastructure rows** (POS `the` = 174, NEG = 0), so it
+  discriminates at ~6%. **Unread hits worth a successor's time:** **`0e0da162f77c`** (*FIRST
+  SA_SIGINFO SENDER CAPTURE — names a RECYCLE TEARDOWN class no wake-path row models*; it is also
+  on the strongest-leads list and is now the best remaining thread in this cluster) ·
+  `7000e1a81125` (cc-await-ping SIGTERM'd from OUTSIDE, 2x in one session) · `62599dd76a60`
+  (BLOCKED — postland discards the corpus TAP on every exit) · `b82a4060b00f` (⚠️ 59 direct suites).
+  **The screen pairs with #211's:** #211 found POSITIVE state claims rot (*"mitigation in force"*);
+  this one finds NEGATIVE capability claims rot the same way and are **strictly harder to catch**,
+  because an absence generates no event and nothing ever prompts the re-check.
+
+  Standing checks: qos-rewrite `diff` **EMPTY — 94th consecutive clean recycle**; postland `.page`
+  count **0 — 103rd consecutive**, directory asserted present first via `find`, not a glob.
+  PostToolUse hook firings: **0 across six `.sh`/`.txt` writes before the insert** — and the
+  inserter is a `.py`, so #204's extension predictor (2/2 `.py`, 0/6 non-`.py` at #211) predicts a
+  firing, which **this count cannot include by construction**. Board writes verified BY CONTENT,
+  chars to chars; evidence body **5248 bytes == 5248 chars, 0 non-ASCII, 0 em-dashes** — the
+  pure-ASCII streak #211 restored is held. The lead **ACK'd #211 in full**, independently
+  reconciling the board at 282/191/2272/claimed 5 and adopting both of #211's control principles,
+  so **no re-send was owed**.
+
 - **2026-08-25 — drain recycle #211: method 181 — CROSS-MULTIPLY A ROW'S OWN CLAUSES. A row can be
   RIGHT IN ITS CONCLUSION, have that conclusion VINDICATED BY A ROUTE IT NEVER NAMES, and still
   prescribe an INSTRUMENT that is documented blind to the subject's signal shape — with both halves
