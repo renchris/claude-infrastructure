@@ -8,6 +8,19 @@ That file cannot be read, edited, or landed from here, so the item was not attem
 This is the 107th instance of the class `bin/cc-eligible` documents at `CROSS_REPO` — but it is
 **not** the shape that arm refuses, which is why it got through.
 
+> 🚨 **2026-08-25 — this item was re-fired into the identical VM shape ~24 hours after this file
+> landed, and a second session reached this same refusal independently.** §4's remedy below is
+> therefore recorded as *unexecuted*: it names a `cc-backlog block` that no cloud VM can run, so it
+> could only ever be discharged by a reader who never arrives. **Nothing in the dispatch chain reads
+> `docs/research/`** — verified, not assumed: `bin/cc-offload`'s only `docs/research` hit is a comment
+> about TSV field collapse, and `bin/cc-dispatch`'s two are citations. Filing a conclusion in the
+> venue-family directory, in a file titled with the item's id, buys a record and not a park. The
+> second occurrence, the ledger row, the third member of the residual `subject-foreign` class, and a
+> scope gap in `M-reso-1` that leaves this check undetectable by that effort's falsifier are all in
+> `venue-foreign-repo-recurrence-2026-08-17.md` § 2026-08-25. **§3's pre-derived fix is unchanged and
+> still endorsed** — but it is now 15 days since the last direct measurement of reso's trunk, so the
+> on-box session must re-run the first step before writing the diff.
+
 ## 1. Why the cross-repo arm passed it
 
 `cross_repo(project)` (bin/cc-eligible:724) keys on the item's **`project` field**, resolves it

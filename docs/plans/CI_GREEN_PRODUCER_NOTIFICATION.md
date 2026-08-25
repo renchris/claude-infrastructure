@@ -200,7 +200,7 @@ mechanically incapable of emailing). Ranked by failed runs/day:
 | `lakehouse-lecture` pages-build-deployment | 1.57 | GitHub's own Pages Liquid parser on literal `{%…%}` | filed `54d7aff8ed8d` |
 | `doc_classifier` nightly | 1.07 | 15/15 red, `make scale-run SCALE_POINT=proving` | filed `9333991e4544` |
 | `reso` soketi-image-cve-scan | 0.14 | **TRUE positive** — green until 2026-06-29, red since on unpatched CVE-2026-59874 | filed `e3f988b489c3`; should stay red until patched |
-| `reso` tenant-drift | 0.14 | dies at `pnpm/action-setup`; **has never once reached its own check** since 2026-05-24 | filed `485f8f87eb5f`; cloud dispatch refused on venue 2026-08-24 — fix pre-derived in `docs/research/tenant-drift-venue-refusal-2026-08-24.md`, needs an on-box session |
+| `reso` tenant-drift | 0.14 | dies at `pnpm/action-setup`; **has never once reached its own check** since 2026-05-24 | filed `485f8f87eb5f`; cloud dispatch refused on venue **twice** (2026-08-24, 2026-08-25 — the second ~24h after the first was documented) — fix pre-derived in `docs/research/tenant-drift-venue-refusal-2026-08-24.md` §3, recurrence in `docs/research/venue-foreign-repo-recurrence-2026-08-17.md` § 2026-08-25. **Needs an on-box session; batch with `6e86209ae6bc` + `b384effb4100`.** Do not re-fire to cloud — the subject repo is unreachable there by construction |
 
 `hermetic` alone was more than every other workflow combined, which is why the perceived cadence was
 "every 30 minutes". The reso `tenant-drift` row is the one worth reading twice: a config-drift check

@@ -32,6 +32,8 @@ prediction moving from argued to observed, on the project that had not yet been 
 | 08-17 | `38de29ec5e59` | `doc_classifier` | label-foreign — **second cloud burn of the same item** (§ below) |
 | 08-18 | `5ab3327ed0c8` | `reso-management-app` | label-foreign — **second cloud burn**, the day after § The fifth adjudicated it (§ below) |
 | 08-23 | `616d58ac42df` | `reso-management-app` | label-foreign — after a **5-day quiet gap**; cause re-verified UNSHIPPED on trunk (§ below) |
+| 08-24 | `485f8f87eb5f` | `claude-infrastructure` | subject-foreign — recorded in its own file (`tenant-drift-venue-refusal-2026-08-24.md`), not here |
+| 08-25 | `485f8f87eb5f` | `claude-infrastructure` | subject-foreign — **second cloud burn**, 1 day after a venue-family doc adjudicated it by name (§ below) |
 
 The 08-17 `reso-management-app` row is a **repeat of the 08-14/08-16 route**, not a fifth route. The class has stopped producing
 new spellings and is now producing recurrences on a known mechanism — which is why nothing about the
@@ -704,3 +706,189 @@ against history it cannot read, and reports success."*
 **The ledger was NOT updated by this session** — both rails returned rc 3, and the
 `/root/.claude/autonomy/backlog.jsonl` this session's probe created is empty and dies at teardown.
 This branch is the notification.
+
+---
+
+# 2026-08-25 — a doc filed to stop a re-dispatch did not stop it, and the residual class gets its third member
+
+**Backlog item `485f8f87eb5f`, project `claude-infrastructure`**, fired into a `--venue cloud`
+session whose one attached repository is `renchris/claude-infrastructure`. Its subject is
+`renchris/reso-management-app` → `.github/workflows/tenant-drift.yml`. **Ninth dispatch, seventh
+distinct item — and the second burn of an item that a venue-family doc adjudicated by name, one day
+earlier.**
+
+Nothing about the discriminator, the cause, the rails or the standing refusals is re-derived; all of
+it is settled above and holds. Three facts are new.
+
+## New fact 1 — the residual class now has three members, and it is the class BOTH filed remedies pass
+
+This row is **subject-foreign**, not label-foreign: `project = claude-infrastructure` is *accurate* —
+the item was filed by this repo's own CI-census work (`CI_GREEN_PRODUCER_NOTIFICATION.md` §5) — and
+the target repo appears only in the prose. `cross_repo()` (`bin/cc-eligible:724`) keys on the
+`project` field, resolves it through `repo_for()`, compares origins against the lane, and correctly
+returns *reachable*. The gate was consulted and was right on its own terms.
+
+So neither shape of the open 08-16 decision stops this row. **(b) route by `item.project`** would
+attach `claude-infrastructure` — which is what already happened, twice. **(a) fail closed at fire
+time**, as filed, certifies on the same field and passes it equally. This file already ruled exactly
+that for `8f59467c92b0`: *"both §3 options PASS that row, since its `project` label is accurate and
+only the plan BODY names the foreign trees."* That ruling now has a third member — `9333991e4544`
+(08-15), `8f59467c92b0` (08-15/08-17), `485f8f87eb5f` (08-24/08-25) — and it is the class with the
+**worst** recurrence rate in the table: every one of the three has burned at least two sessions.
+
+The portable form: **`project` is a proxy for reachability, not a measurement of it.** Six of the
+nine dispatches are fixed by making the label authoritative; three are not, because the label is
+already right and the *brief* is what points elsewhere. A remedy keyed on the field cannot see them.
+
+## New fact 2 — 🚨 a `docs/research/` venue-family doc, titled with the item id, does not stop a re-dispatch either
+
+This is the fact worth the commit. The 08-15 row established that *"nothing in the dispatch chain
+reads plan prose"* — the disproof was written into the item's own DoD-ref plan, the most on-topic
+location then available, and bought two days. The obvious escape from that finding is **location**:
+maybe a plan file is simply the wrong shelf, and a note filed in the `venue-*` research family, named
+for the item, would be read.
+
+It is not, and that escape is now closed. `docs/research/tenant-drift-venue-refusal-2026-08-24.md`
+was filed on trunk, in this directory, with the item's id in its first line, stating the item is
+cloud-ineligible and naming the exact `cc-backlog block` that parks it. **The item was re-fired into
+the identical VM shape within ~24 hours.** Re-verified from inside this session:
+
+| what | value |
+|---|---|
+| `bin/cc-offload:84` | `REPO="${CC_OFFLOAD_REPO:-$ROOT}"` — **unchanged**, nine days after the 08-16 session located it |
+| a `(item.project, attached_repo)` pair arm in `bin/cc-eligible` | **absent** — `grep` for `attached`/`item.project`/`foreign` hits one prose comment (`:410`) |
+| anything in the dispatch chain reading `docs/research/` | **nothing** — `bin/cc-offload` has one hit, a comment about TSV field collapse; `bin/cc-dispatch`'s two are citations in comments |
+
+The generalisation, which is the reason to record this rather than a ninth tally mark: **a document
+is not a store.** Shelf, title and specificity make no difference, because no reader exists on the
+path that would have to consult one. Every future session that reaches this venue should file its
+conclusion where a reader already looks, or accept that the conclusion buys nothing but a record —
+which is what this file is, honestly labelled.
+
+## New fact 3 — the item is not covered by `M-reso-1`'s falsifier, though it is the purest instance of that effort's own theme
+
+`docs/plans/backlog-consolidation-2026-08-09/OUT-reso.md` builds one master reso item, **`M-reso-1` —
+*"every reso gate and monitor either measures what it claims, or says it cannot"***, and gives it a
+six-conjunct falsifier (`:197`) whose exit 0 means the effort is no longer needed. That falsifier
+greps `.github/workflows/` for `fabricated\|menu-guard` only. **Nothing in it asserts that
+`tenant-drift.yml` ever runs.**
+
+A gate that has not executed once since 2026-05-24 while continuing to appear in the workflow list is
+the strongest possible member of *"measures what it claims, or says it cannot"* — it does neither, and
+it is the only member of that theme the effort cannot detect. `M-reso-1` could be driven to exit 0
+with this check still dead for three months.
+
+**This is not a defect in the consolidation.** `485f8f87eb5f` was filed 2026-08-15, six days *after*
+`OUT-reso.md` froze its falsifier; the consolidator could not have covered an item that did not exist.
+The transferable defect is structural and belongs to the effort format: **a falsifier is frozen at
+authoring time, and nothing re-opens one when a later item lands inside its file footprint.** This
+item's footprint (`.github/workflows/`) is named verbatim in `M-reso-1`'s own disjointness argument
+(`:281`).
+
+Its correct home is that sequence, and the sequence already has the slot: step 5 (`b384effb4100`) is
+`.github/workflows/`-owned, and step 6 (`6e86209ae6bc`) is the same file family
+(`scripts/checks/tenant-drift.ts`) — which is independently what
+`tenant-drift-venue-refusal-2026-08-24.md` §3 recommends batching with. **One reso session, three
+items, one owner.**
+
+## The premise — the cited path is RESOLVED, from two dated repo-resident measurements
+
+The brief flags `tenant-drift.yml` as a cited name with no directory component and no carrier on
+`origin/main`, and asks that the location be resolved before the absence is read as evidence. It
+resolves here, without reaching reso:
+
+| source | date | what it says |
+|---|---|---|
+| `OUT-reso.md:28` | 2026-08-09 | reso's `.github/workflows/` holds `grafana-validate(.disabled)`, `security-scan`, `soketi-image-cve-scan`, **`tenant-drift`** — an on-disk listing in reso |
+| `ci-notification-flap-2026-08-15/A-crossrepo-census.md:140` | 2026-08-10 | run `31401486855`, failure verbatim, located in the **setup step, before the drift check itself ever runs** |
+
+So the file is `renchris/reso-management-app` → `.github/workflows/tenant-drift.yml`, it existed 16
+days ago, and its absence from `origin/main` here is **correct and expected** — this repo is not the
+carrier, which the 08-24 doc also confirmed. Nothing in the premise is refuted. The one clause that
+remains unverifiable from any cloud VM is whether the cure has landed on reso's trunk in the 15 days
+since the last direct measurement; reso's trunk is the oracle and it is unreachable here.
+
+## Measured from inside this session
+
+| what | value |
+|---|---|
+| clone | `git rev-list --count HEAD` → **50**, `.git/shallow` present |
+| `HEAD..origin/main` | **0** — this tree IS trunk for the `claude-infrastructure` half |
+| `/Users`, `/root/Development` | both absent |
+| `~/.claude/autonomy/` | absent |
+| `cc-backlog`, `cc-eligible`, `cc-venue` on `PATH` | none — present in the checkout, not installed |
+| GitHub scope | `renchris/claude-infrastructure`, one repository |
+| the cited file | 0 hits over the checkout outside the two prose citations above |
+
+## The rails were NOT probed, deliberately — new fact 3 of the 08-18 section, applied
+
+This session ran **no** `cc-backlog` verb. That is a change in posture, not an omission, and the
+reason is this file's own 08-18 finding: `ensure_file()` creates the store as a side effect of any
+probe, after which `cc-backlog needs` succeeds completely — exit 0, a well-formed id, a row that reads
+`blocked` — on a tmpfs that dies at teardown. Every earlier session in this family probed first and
+documented the wreckage second.
+
+**Two corrections to that finding's citation, both verified on today's trunk.** It has drifted to
+`bin/cc-backlog:994-997`, not `:908-911` — the 08-18 line numbers now point at `OPERATOR_CONDITION`,
+so a future session checking the reference would find nothing and might read the whole finding as
+stale. And the body is
+
+```sh
+ensure_file() {
+  mkdir -p "$(dirname "$BACKLOG")" 2>/dev/null || true
+  [ -f "$BACKLOG" ] || : > "$BACKLOG"
+}
+```
+
+— the `mkdir -p` is unconditional but the truncation is **guarded by `[ -f ]`**, so "does `mkdir -p` +
+`: > "$BACKLOG"` unconditionally" overstates it. The consequence the 08-18 section drew is unaffected
+and stands: on a VM where `~/.claude/autonomy/` is absent, a probe creates both the directory and an
+empty store, and every later verb then reports success against it.
+
+The store's absence was therefore established by `ls` alone, which is non-destructive and sufficient.
+**The ledger was NOT updated by this session, and no phantom row was created.** This branch is the
+notification.
+
+## Operator actions
+
+The 08-16 decision — **(a) fail closed at fire time vs (b) route by `item.project`** — is unchanged,
+**nine days open, carrying nine dispatches of cost**, and per new fact 1 it does **not** cover this
+row or the two others in its class. A third shape is now needed alongside it: *certify against the
+item's cited paths, not its label* — `cc-venue paths <id>` already computes exactly that path set,
+so the input exists and is unread by the fire path.
+
+This item's ledger disposition needs the Mac:
+
+```
+cc-backlog block 485f8f87eb5f --needs "re-dispatch on-box: subject is renchris/reso-management-app/.github/workflows/tenant-drift.yml, unreachable from a cloud VM. Fix pre-derived (drop the `version:` input from pnpm/action-setup@v4) in docs/research/tenant-drift-venue-refusal-2026-08-24.md §3; batch with 6e86209ae6bc and b384effb4100 as M-reso-1 steps 5-6. Premise NOT refuted; reso trunk unverified since 2026-08-10."
+```
+
+`block` rather than `reopen`: the item is blocked on **where it was sent**, not on information or a
+judgment call. **Verify the block took rather than assuming it** — the standing warning from new fact
+1 of the 08-18 section, which this session had no way to run.
+
+## Not fixed here, deliberately
+
+All three standing refusals re-measured, and all three still bind. `bin/cc-venue`'s guard is the
+binding one for the fix this row argues for: *"a cloud VM must never build or run the venue rule: it
+would be deciding its own admission, and its 50-commit clone cannot read the history that justifies
+the exclusions."* Widening the certification to the cited-path set **is** authoring an exclusion, and
+this clone is 50 commits with `.git/shallow` present — so `HistoryOracle.certify()` returns `shallow`
+by construction and the guard's mechanical arm is active, not merely its prose. `bin/cc-eligible`'s
+`OFFBOX_LANE` class states the same of the lane. And `bats`/`shellcheck` are absent, so the repo's
+gate cannot be run on a change to `bin/cc-offload`, which fires **paid** sessions.
+
+Two sessions have now independently reached this refusal on this item. That agreement is itself the
+argument for moving the work rather than re-dispatching it a tenth time.
+
+## The item itself — NOT adjudicated
+
+No claim is made about `tenant-drift.yml`'s current state on reso's trunk, and none should be
+inferred. The pre-derived fix in the 08-24 doc §3 is endorsed as *reasoning* and was not verified
+here — the file returns 0 hits over this checkout. The brief's mandated first step (*read what this
+item cites on TRUNK*) is unrunnable for the strongest reason available: there is no tree, stale or
+otherwise. Its companion clause — *if the cure is already on trunk, the item is DONE* — is equally
+unrunnable, and 15 days have passed since the last direct measurement, so the on-box session must
+re-run it before writing a diff. Deciding it from the brief's prose is the anti-goal `bin/cc-venue`
+§5 names — *"a wrongly-routed item improvises a plausible answer against history it cannot read, and
+reports success."*
