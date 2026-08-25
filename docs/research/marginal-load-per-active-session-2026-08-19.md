@@ -183,6 +183,38 @@ On a PASS, quote the coefficient **with its standard error and its window**, upd
 `scripts/lib/capacity-admit.sh:698` and `hooks/agent-teams-enforce.sh:220` (both currently carry
 2.5–5), and close `193ae8ddce72` with the landed sha.
 
+### 6a · The citation purge — landed 2026-08-25, ahead of the run
+
+The "none of the four may be quoted" rule was stated here and in the DoD's §5, and then not carried
+out: three live sites still asserted `2.5–5` as a per-active-session cost. That half of the item does
+not need the box, so it landed first. **The line numbers this doc gave above were already stale, and
+there was a third site neither doc named** — recorded here because a wrong pointer is how the next
+session re-derives instead of reading:
+
+| site | was | now |
+|---|---|---|
+| `scripts/lib/capacity-admit.sh` (cited `:698`, actually `:723`) | "8 is the top of the measured band. Axis 09: 2.5-5 runnable threads per genuinely-ACTIVE session … ⇒ ~4-8 concurrent actives, which is also what all 127/127 historic gate refusals correspond to." | the retraction, with `CC_ADMIT_ACTIVE_CEILING=8` **held, not moved** |
+| `hooks/agent-teams-enforce.sh` (cited `:220`, actually `:235`) | "2.5-5 runnable threads arrive with every ACTIVE session, so this is the ceiling the whole design point rests on" — inside the operator-facing refusal reason | "HOW MANY IS UNMEASURED, so 8 is a held constant, not a derived one" |
+| `scripts/lib/spawn-presence.sh:222` — **named by neither doc** | "i.e. 2.5-5 runnable threads per genuinely ACTIVE session against the 1.6 that a MIXED fleet averages to" | the 27.4 → 44.4 observation kept, the conversion retracted, the residency-vs-activity argument restated so it no longer depends on the number |
+
+Two things the purge established that §2 did not:
+
+- **The `~4–8` band and the `127/127` match are not corroboration.** Both are computed *through* the
+  2.5–5 conversion (`scaling-bottlenecks-2026-08-09.md:34` shows the chain in one row), so they
+  inherit the defect rather than checking it. The 127/127 figure additionally carries a population
+  defect already on trunk: it is handoff-fire's sibling `capacity_gate()` ledger, not
+  `capacity-admit`'s IDL (`jcode-due-diligence-2026-08-11/bottleneck-audit.md` §3). A retraction that
+  left those two standing would have left the constant still looking derived.
+- **A retracted derivation is not a licence to move the constant.** `8` is unchanged and now says so
+  in its own comment. The DoD's §3 makes the identical ruling for
+  `CC_HW_DEFAULT_MAX_LOAD_PER_CORE=2.0`: *derive the number, not move it.* The sampler is the only
+  thing that may move either.
+
+**What still blocks the coefficient: the §6 window must run on the 10-core Darwin box.** It cannot be
+run off-box — a Linux container has no fleet, so C3 (IDENTIFY) refuses on a census whose ACTIVE count
+never leaves zero, and a `NO-ATTRIBUTION` from an empty box measures nothing about a busy one. The
+item is parked on that run, not on any judgment in it.
+
 ---
 
 ## 7 · What this does not do

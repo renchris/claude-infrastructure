@@ -195,8 +195,11 @@ qualifies on ~2026-08-24** under this repo's own 2.1.220 precedent if no success
   load FALL while a unit was added. The sampler this bullet asks for is landed
   (`scripts/capacity-marginal.sh`, controls proven able to fail in `tests/capacity-marginal.bats`);
   the coefficient itself still wants one ~1 h on-box window (§6 of that doc). **Until it exists, none
-  of the four may be quoted** — including by `scripts/lib/capacity-admit.sh:698` and
-  `hooks/agent-teams-enforce.sh:220`, which both still carry `2.5–5`.
+  of the four may be quoted.** *(Carried out 2026-08-25: the three live sites that did quote `2.5–5`
+  as a per-session cost — `scripts/lib/capacity-admit.sh:723`, `hooks/agent-teams-enforce.sh:235` and
+  `scripts/lib/spawn-presence.sh:222`, the last named by neither doc — now carry the retraction, with
+  `CC_ADMIT_ACTIVE_CEILING=8` **held rather than moved**, per §6a of that doc. This bullet's own
+  pointers `:698` / `:220` were stale when written. The coefficient remains unmeasured.)*
 - **Whether load average means anything as a capacity signal at all.** At constant N=15–16 the box
   read **11.21 → 36.07**; one instrumentation run alone moved it 19 → 36 with session count unchanged.
 - **Whether automated fires retry after a capacity refusal** — decides whether raising the ceiling

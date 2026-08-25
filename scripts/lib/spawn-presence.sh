@@ -219,9 +219,18 @@ cc_sp_load_beat() { # → 0 when cb_* is available, 1 otherwise. Idempotent.
 # WHY RESIDENCY IS THE WRONG DENOMINATOR FOR A SPAWN CEILING. cc_sp_trees counts RESIDENT sessions,
 # and residency is close to free: axis 01 measured static residency at 0.22% of the segment limit
 # with swap 0. What the box binds on is ACTIVITY — axis 09 measured load1 27.4 -> 44.4 across nine
-# sessions all-active, i.e. 2.5-5 runnable threads per genuinely ACTIVE session against the 1.6 that
-# a MIXED fleet averages to. At the program's design mix (150 resident / ~10 active) that puts the
-# load ceiling at ~4-8 concurrent actives and says nothing at all about the other 140. A ceiling
+# sessions all-active. THE PER-SESSION CONVERSION OF THAT PAIR IS RETRACTED: this comment used to
+# read "i.e. 2.5-5 runnable threads per genuinely ACTIVE session against the 1.6 that a MIXED fleet
+# averages to ... that puts the load ceiling at ~4-8 concurrent actives". 2.5-5 is an aggregate over
+# N — a ratio, not a marginal — and the subtraction it skipped gives 1.89 from its own pair, which
+# is a two-point delta with n=2 and no computable control. Four published values span 30x
+# (0.172 / 0.566 / 1.89 / 2.5-5), none repairable; NONE MAY BE QUOTED until
+# `scripts/capacity-marginal.sh` returns a coefficient (backlog 193ae8ddce72,
+# docs/research/marginal-load-per-active-session-2026-08-19.md). The 27.4 -> 44.4 observation
+# survives; only what it was divided by does not. THE ARGUMENT DOES NOT DEPEND ON THE NUMBER: an
+# active session costs runnable threads and a resident one costs ~nothing, so at the program's
+# design mix (150 resident / ~10 active) the binding population is the actives and the ceiling says
+# nothing at all about the other 140 — whatever the coefficient turns out to be. A ceiling
 # charged on residency cannot express that; and charging it on loadavg instead re-commits the proxy
 # §8.5.2 retracted (dominated by the TUI renderer, WindowServer and macOS scanning; §8.5.7 measured
 # it swinging 2.05x at CONSTANT session count).

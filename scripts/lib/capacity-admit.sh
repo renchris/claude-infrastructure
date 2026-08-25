@@ -720,11 +720,29 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
   # deprioritises"), and axis 10's F3 is the failure it produces — a fleet-wide wake turns 140 idle
   # residents into 140 concurrent turns, which no spawn gate keyed on residency can even see.
   #
-  # 8 is the top of the measured band. Axis 09: 2.5-5 runnable threads per genuinely-ACTIVE session
-  # (load1 27.4 -> 44.4 at 9 all-active) against the load-20 gate ⇒ ~4-8 concurrent actives, which is
-  # also what all 127/127 historic gate refusals correspond to. The TOP of the band is deliberate:
-  # this term refuses real work, so it must bind where the evidence is unambiguous, and the load and
-  # segment terms above already cover the middle of the band from their own directions.
+  # 8 IS A HELD CONSTANT, NOT A DERIVED ONE — and this paragraph used to claim otherwise (backlog
+  # 193ae8ddce72, docs/research/marginal-load-per-active-session-2026-08-19.md). It read: "8 is the
+  # top of the measured band. Axis 09: 2.5-5 runnable threads per genuinely-ACTIVE session (load1
+  # 27.4 -> 44.4 at 9 all-active) against the load-20 gate ⇒ ~4-8 concurrent actives, which is also
+  # what all 127/127 historic gate refusals correspond to."
+  #
+  # Every step of that chain is now retracted. `2.5-5` is an aggregate over N — a RATIO, not a
+  # marginal — and its own source pair gives 1.89 under the subtraction it skipped; the ~4-8 band is
+  # that ratio divided into the load-20 gate, so it inherits the defect rather than corroborating it;
+  # and the 127/127 match is computed THROUGH the same conversion, so it is not an independent check
+  # (its population is also handoff-fire's sibling `capacity_gate()` ledger, not this gate's IDL —
+  # docs/research/jcode-due-diligence-2026-08-11/bottleneck-audit.md §3).
+  #
+  # THE MARGINAL IS UNMEASURED. Four published values span 30x (0.172 / 0.566 / 1.89 / 2.5-5); none
+  # is repairable, and the instrument behind all four (load1 regressed on session count) is
+  # UNIDENTIFIED on this box — 87.3% of the load numerator is not Claude, over 3x the range of the
+  # treatment. NONE OF THE FOUR MAY BE QUOTED, here or anywhere. The sampler that can answer is
+  # `scripts/capacity-marginal.sh` (controls proven able to fail in tests/capacity-marginal.bats); it
+  # wants one ~1 h on-box window, and until that returns a coefficient with its standard error, 8
+  # stands as the status quo this term shipped with. It is deliberately NOT moved on a retraction:
+  # a constant with no derivation is a reason to derive it, never a licence to raise or lower it.
+  # The direction is at least the safe one — the census below is a proven lower bound, so this term
+  # under-refuses; and the load and segment terms above bind from their own directions regardless.
   #
   # THE CENSUS IS A PROVEN LOWER BOUND (scripts/lib/spawn-presence.sh § THE ACTIVE POPULATION), so
   # this term under-refuses rather than refusing on unproven activity — the same direction rule the
