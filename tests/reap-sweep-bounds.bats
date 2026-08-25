@@ -302,3 +302,67 @@ EOF
   [ -n "$low" ]
   [ "$low" -ge 300 ]
 }
+
+@test "SIZING: the backlog-reap bound clears the measured background-band cost of a HEALTHY reap" {
+  # THE SIBLING OF THE TEST ABOVE, and it exists because that test's own change ACQUITTED this
+  # bound in the same breath. The R5 SIZING note recorded "backlog-reap 42.9% ... tracking load,
+  # i.e. behaving like detectors" — a 12-day AGGREGATE, while the conviction beside it was a
+  # PER-DAY series. Re-derived per day (2026-08-25, recycle #223; predicate: fires / (fires +
+  # completions), both patterns POS-controlled against the same log), backlog-reap does not track
+  # load: 6.7% on 08-15 climbing monotonically to 100.0% on 08-25 — 76 fires and ZERO completions.
+  #
+  # MEASURED, live 14.4k-line ledger copied to a mktemp store with BOTH write seams redirected
+  # (CC_BACKLOG_FILE + CC_BACKLOG_IDL); the live ledger's sha256 was byte-identical before and
+  # after, so isolation is proven by content, not asserted. Non-dry, both arms clearing the
+  # IDENTICAL 11 rows and writing 12 verdict rows — one input moved, the scheduling band:
+  #     foreground                     PRI 31 (32/32 samples)     96s
+  #     taskpolicy -c background       PRI  4 (78/78 samples)    617s   <- ProcessType Background
+  # PRI 4 is unreachable without taskpolicy (nice alone leaves 31), so the arm demonstrably moved.
+  # The READ-ONLY half is 18s foreground / 41s in-band, so 68% of a 60s budget went before the
+  # first write: in this band the reap affords ZERO writes inside 60s.
+  #
+  # WHAT THE OLD BOUND COST: cmd_reap runs the off-box cure sweep LAST, so the cut always lands
+  # there. Eleven blocked rows were all adjudicated curable by the sweep's own dry run (7 STALLED
+  # 7-20h, 4 LANDED with content on origin/main) while the newest COMPLETED cure sweep in the log
+  # was 23.5h old — three have ever completed, against 732 bound-fires.
+  #
+  # A FLOOR over EVERY site, not an equality pin — a later re-derivation may raise the shipped
+  # value, and a partial edit that drops any one site back under the measured healthy cost must
+  # red. 700 clears the 617s healthy run with margin and sits well under the shipped 900, so
+  # honest re-tuning is not tripwired.
+  total="$(grep -cE 'CC_REAPER_BACKLOG_TIMEOUT_S:-[0-9]+' "$REPO/bin/cc-reaper")"
+  [ "$total" -ge 2 ]
+  # strip THROUGH the ':-' — 's/.*://' leaves the '-' and yields a negative, which reds on a
+  # perfectly good constant (the scar the sibling test above records).
+  low="$(grep -oE 'CC_REAPER_BACKLOG_TIMEOUT_S:-[0-9]+' "$REPO/bin/cc-reaper" | sed 's/.*:-//' | sort -n | head -1)"
+  [ -n "$low" ]
+  [ "$low" -ge 700 ]
+}
+
+@test "the backlog-reap bound message does not attribute the cut to the claim sweep alone" {
+  # ATTRIBUTION, not detection: the failure was already visible — 732 log lines said so — and every
+  # one of them named "claim-ledger sweep INCOMPLETE". cmd_reap is claim sweep THEN cure sweep, so
+  # the stage actually truncated is systematically the LAST one, and the log named the stage that
+  # had usually already finished. An operator reading those lines learns the wrong subsystem.
+  run grep -c 'bound-fired backlog-reap: exceeded' "$REPO/bin/cc-reaper"
+  [ "$status" -eq 0 ]
+  [ "$output" -ge 1 ]
+
+  # ASSERT ON THE EMITTING LINE, NOT ON THE FILE. The retired phrase deliberately survives in the
+  # comment that documents why it was retired, so a file-wide `grep -c ... -eq 0` reds on its own
+  # documentation (memory: a token can survive its own fix as data — grep the CODE LINE). This
+  # assertion caught exactly that on its first run.
+  #
+  # POSITIVE CONTROL FIRST, through the SAME pattern prefix: if `log "bound-fired backlog-reap.*`
+  # could not match at all, the zero below would be vacuous rather than a verdict.
+  run grep -c 'log "bound-fired backlog-reap.*reap INCOMPLETE this cadence' "$REPO/bin/cc-reaper"
+  [ "$status" -eq 0 ]
+  [ "$output" -ge 1 ]
+  # ...and only now is the absence meaningful: no EMITTED message still blames the claim ledger.
+  [ "$(grep -c 'log "bound-fired backlog-reap.*claim-ledger sweep INCOMPLETE' "$REPO/bin/cc-reaper")" -eq 0 ]
+
+  # and the replacement must NAME the cure sweep as the stage the bound cuts first
+  run grep -c 'cure sweep, which runs LAST' "$REPO/bin/cc-reaper"
+  [ "$status" -eq 0 ]
+  [ "$output" -ge 1 ]
+}

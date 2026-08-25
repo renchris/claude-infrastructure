@@ -390,6 +390,17 @@ fi
 # ride-along block near the end of this file: the same work costs 38s foreground and 249s under
 # `taskpolicy -c background`, a 6.6x band tax, against a 60s bound. GUARD raised 60 -> 600 there.
 #
+# 2026-08-25 (recycle #223) — THE BACKLOG-REAP ACQUITTAL IN THE PARAGRAPH ABOVE DOES NOT HOLD, and
+# the defect is in the INSTRUMENT'S RESOLUTION rather than in its data. inbox-guard was convicted on
+# a PER-DAY series ("82-100% on every single day"); its three siblings were acquitted on a 12-day
+# AGGREGATE. Re-derived per day, backlog-reap is not tracking load at all — it climbs monotonically
+# 6.7% (08-15) to 100.0% (08-25, 76 fires and ZERO completions) and saturates. 42.9% is the mean of
+# that curve. A discriminator applied at one resolution to the convicted and a coarser one to the
+# acquitted cannot separate them, and the coarser reading is the flattering one.
+# BACKLOG raised 60 -> 900 at its own block, on its own two-arm band A/B (96s foreground vs 617s
+# under taskpolicy -c background, 6.4x — the 6.6x above, reproduced on a second subject).
+# The rule this file states was right BOTH times; only one constant was re-derived the first time.
+#
 # AND THE SECOND CLAUSE ("far below the 300s interval") NO LONGER HOLDS AS WRITTEN, for a reason
 # that postdates it: the single-instance sweep lock (below) SKIPs a tick that finds a live sweep
 # rather than queueing it, which is what made an overrunning sweep safe. 46.2% of sweeps already
@@ -1947,10 +1958,52 @@ sweep() {
   # ride the reaper's cadence (that part was always the point), but they can no longer delay a
   # decision or the act that follows it. Both are append-only/idempotent and self-damping, so running
   # them after the loop changes nothing about what they do.
+  # BOUND SIZED TO THE BAND (2026-08-25, recycle #223) — the SIBLING of the note below, fixed the
+  # same way and for the same reason, one block later. #219 raised GUARD 60 -> 600 and ACQUITTED
+  # this one in the same breath: the SIZING note above recorded "backlog-reap 42.9% ... tracking
+  # load, i.e. behaving like detectors". That number is reproducible (44.3% all-time re-derived
+  # here, predicate: fires / (fires + completions)) and the conclusion drawn from it is wrong,
+  # because the acquittal was computed as a 12-day AGGREGATE while the conviction next to it was
+  # computed PER DAY. Per day this bound does not track load — it is a monotone ratchet:
+  #     08-13  17.9%   08-16   8.5%   08-19  51.1%   08-22  81.7%   08-25  100.0%
+  #     08-14   8.5%   08-17  17.2%   08-20  54.7%   08-23  87.5%   (76 fires, 0 completions)
+  #     08-15   6.7%   08-18  47.2%   08-21  64.2%   08-24  92.5%
+  # Load oscillates; this climbs and saturates. The aggregate is the mean of that curve, and it is
+  # the resolution difference — not the data — that separated the two forks.
+  #
+  # A/B, live 14.4k-line ledger copied to a mktemp store (CC_BACKLOG_FILE + CC_BACKLOG_IDL both
+  # redirected; the live ledger's sha256 was identical before and after, so isolation is proven by
+  # content), non-dry, BOTH arms clearing the IDENTICAL 11 rows and writing 12 verdict rows — one
+  # input moved, the scheduling band:
+  #     foreground                  PRI 31 (32/32 samples)     96s
+  #     taskpolicy -c background    PRI  4 (78/78 samples)    617s   <- ProcessType Background
+  # A 6.4x band tax, independently reproducing the 6.6x the GUARD note below measured on a
+  # different subject. The READ-ONLY half alone (--dry-run) is 18s foreground and 41s in-band, so
+  # 68% of a 60s budget was spent before the first write. In this band the reap affords ZERO
+  # writes inside 60s, and a bound that cannot fit the read half of healthy work can only fire.
+  #
+  # WHAT IT COST, measured the same day: `cmd_reap` runs the off-box CURE SWEEP as its LAST stage,
+  # so the truncation always lands there. Eleven blocked rows were each adjudicated curable by the
+  # sweep's own dry run — 7 WOULD-UNBLOCK (workers STALLED 7-20h) and 4 WOULD-CLOSE (workers
+  # LANDED, content present on origin/main) — while the newest completed cure sweep in the log was
+  # 23.5h old and only three have EVER completed. Finished work sat blocked for a day because the
+  # stage that releases it is the stage the bound always cuts.
+  #
+  # 900s is ~1.5x the measured healthy in-band cost, and that 617s was measured under a concurrent
+  # trunk-wide bats run (load 18-21); at ordinary load the band ratio puts a healthy run nearer
+  # 220s, so this is ~4x. Still a genuine WEDGE cut — the 5-day gate blockage came from an
+  # UNBOUNDED fork and that must stay impossible — but far enough above healthy work to carry
+  # information again. The same trade the block below already accepted, and for the same stated
+  # reasons: this fork is off the decision path, runs last, is append-only/idempotent, and the
+  # single-instance sweep lock SKIPs rather than queues.
   if [ "$reap" = 1 ] && [ -n "$BACKLOG_BIN" ]; then
     local bout brc
-    bout="$(_rp_bounded "${CC_REAPER_BACKLOG_TIMEOUT_S:-60}" "$BACKLOG_BIN" reap 2>/dev/null)"; brc=$?
-    [ "$brc" = 124 ] && log "bound-fired backlog-reap: exceeded ${CC_REAPER_BACKLOG_TIMEOUT_S:-60}s — claim-ledger sweep INCOMPLETE this cadence"
+    bout="$(_rp_bounded "${CC_REAPER_BACKLOG_TIMEOUT_S:-900}" "$BACKLOG_BIN" reap 2>/dev/null)"; brc=$?
+    # NAME THE STAGE HONESTLY. `cmd_reap` is claim sweep -> cure sweep, and the cut lands on
+    # whichever was running — systematically the LAST one. Saying "claim-ledger sweep INCOMPLETE"
+    # attributed 732 cuts to the stage that had usually already finished, so the log reported the
+    # wrong subsystem every time (memory: wrong-cause-corroborated-by-true-metric).
+    [ "$brc" = 124 ] && log "bound-fired backlog-reap: exceeded ${CC_REAPER_BACKLOG_TIMEOUT_S:-900}s — reap INCOMPLETE this cadence (claim sweep and/or the off-box cure sweep, which runs LAST and is therefore cut first)"
     [ -n "$bout" ] && { say "$bout"; log "backlog-reap: $bout"; }
   fi
   # BOUND SIZED TO THE BAND (2026-08-25, recycle #219). This default was 60s and fired on
