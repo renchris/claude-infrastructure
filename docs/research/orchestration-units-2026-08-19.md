@@ -176,10 +176,75 @@ without that factor is wrong by ~3×.
 | **1** | **Our own load gate** — `CC_FIRE_MAX_LOAD_PER_CORE=2.0 × 10 = load1 20.0` | **~4–8 *mid-turn* sessions** (2.5–5 runnable threads per genuinely-active session) — and **the ambient alone already exceeds it**: non-Claude load measured **20.19** with zero Claude units | 19 real refusals in 9 days, all `under_test:false` (8.6% of production evaluations). Worst: `load 118.95 on 10 cores = 11.89/core`. Counter-evidence that it is *not* a residency cap: at load 22.70 the box carried **20 resident trees with only 3 mid-turn** |
 | **2** | **Quota — the weekly meter** | **crossover at 26 resident panes (17–30)** | Model-free: weekly-meter slope ÷ mean `k_work`, 5 account-windows ⇒ **6.08 %/day per working unit** vs a 14.29 %/day allowance ⇒ **9.4 working units fleet (6.2–11.0)** ⇒ 9.4 ÷ 0.36 = **26 panes**. Cross-check: predicts `next` at 109%/reset; the readout independently renders **111%** |
 | **3** | **Terminal panes** | **~30** (iTerm2 froze at ~30 concurrent CC panes — prior repo work) | kitty currently carries 11–13 panes; untested at 30 in this wave |
-| **4** | **Memory** | **~70 sessions / ~70 pane agents** (26.6 GB available ÷ ~375–382 MB) | `vm_stat`: free 366,838 + inactive 1,224,126 + purgeable 31,621 pages × 16 KiB. **Swap 0.00 MB** — the failure mode is compressor exhaustion / watchdog panic, not OOM; 8.0–9.6 GB was already in the compressor at 92% memory use |
+| **4** | **Memory** | **~70 sessions / ~70 pane agents** (26.6 GB available ÷ ~375–382 MB) | `vm_stat`: free 366,838 + inactive 1,224,126 + purgeable 31,621 pages × 16 KiB. **Swap 0.00 MB**; 8.0–9.6 GB already in the compressor at 92% memory use. **This is a RAM-bytes wall and nothing else.** The compressor-segment failure mode this cell used to name here is not a residency term and does not belong in this ordering — §5a |
 
 ⇒ **Ordered: load gate (~4–8 active / felt ~15) < quota (26 panes) < terminal (~30) < memory (~70).**
-The prior repo ranking "memory > active-load" does **not** reproduce at today's numbers.
+The prior repo ranking "memory > active-load" does **not** reproduce at today's numbers. The axis that
+actually kills this box is in **§5a**, and it is not in this ordering at all.
+
+### 5a. The segment axis is not a residency wall — per-unit is measured ~0, not unmeasured
+
+Wall #4's evidence cell used to end *"the failure mode is compressor exhaustion / watchdog panic, not
+OOM"*. True of the box, wrong in this table: naming a failure mode inside a **resident-capacity**
+ordering implies a per-unit segment cost that could be divided into `vm.compressor_segment_limit`
+the way 26.6 GB was divided into 375 MB. **No such quotient exists, and that is a measurement, not a
+gap.**
+
+**MEASURED — the per-unit resident segment cost of all seven units is ~0.**
+`session-capacity-ceiling-2026-08-09.md:409-411` states it as a property of the term:
+*"it is **not** a session-capacity term — at steady state a session compresses nothing, so `seg_pct`
+stays ~0 regardless of session count. It is a burst guard, and it produces no session capacity
+number."* Three independent readings on this box agree, against a limit of **1,629,615** segments:
+
+| Fleet state | Segments | % of limit | Source |
+|---|---|---|---|
+| ~20 sessions · 90 Claude procs · 9.7 GB Claude RSS · 45–47 G used · swap 0 | 106,060 in-core | **6.5%** | `machine-lag-and-kitty-2026-08-06.md:43` |
+| armed daemon, ordinary fleet, 9 h uptime | `"seg":0,"lim":1629615,"pct":0.00` | **0.00%** | `session-capacity-ceiling-2026-08-09.md:404` |
+| the quiet box, both gate terms side by side | `segs_in_core 0 + segs_swapped 0` | **0.00%** | ibid. `:391` |
+
+⇒ **A resident unit compresses nothing, so it consumes no segments.** Even charging the *entire*
+segment stock of the 08-06 anchor to Claude — the most hostile apportionment available — puts the
+stock-term wall at 1,629,615 ÷ 106,060 × 20 = **~307 sessions**, looser than memory's ~70 and looser
+than every wall above it. That is the arithmetic's own way of reporting that the axis does not bind
+on residency. The decisive datum is that segments **drain when the burst exits**: at panic #6 the
+sentinel logged a peak of **88.5%** that *self-recovered to 3.4%* when one wave left, before a second
+wave killed the box 4 minutes later (`crash-rootcause-2026-08-09.md:58`). A residency term does not
+do that.
+
+**What the axis is.** An **ignition** wall, measured six times: *"hundreds of 60–180 MB near-idle
+`node` interpreters appearing in 1–3 minutes"* — 18→372 procs in 90 s; 700 procs / 38.9 GB; 736 /
+44.7 GB — flooding the compressor until it exhausts segment structures at **~28% mean fill**, while
+the compressed-pages gauge reads 31–32% "OK" and the kernel's own `memoryPressure` reads **False**
+(`crash-rootcause-2026-08-09.md:20-26`). Ignition is *"never CC residency"* and is
+**harness-independent** (`jcode-due-diligence-2026-08-11.md:54`). For the record the class is **six
+panics, 5 of 8 ledgered events** — panic #2 (07-31) was an unrelated spinlock timeout and incident #0
+a WindowServer mach-port freeze.
+
+**The per-unit number that DOES discriminate the seven units is a burst-ignition surface**, not a
+segment count. A unit can ignite the measured storm only if it can run a repo's dev toolchain — which
+needs a tool-call path and a repo cwd. Read straight off §2's own rows:
+
+| Unit | Ignition surface | Why |
+|---|---|---|
+| **4.** Dispatched pane session | **full** | own process, own repo cwd, full hooks |
+| **5.** Backgrounded `--bg` | **full, and unbounded** | full hooks; no cap of any kind |
+| **6.** Headless `claude -p` | **full** | own process, routable cwd |
+| **2.** Named teammate | **full** | own process, own worktree cwd |
+| **1.** Plain subagent | **full, charged to the parent** | no process of its own, but its Bash calls run in the parent's cwd |
+| **3.** Workflow agent | **full, charged to the parent** | same execution path as col. 1 |
+| **7.** Cloud | **none** — zero local segments | runs off-box |
+
+⇒ **Six of seven units carry the full ignition surface, and the two cheapest ones (§2 cols. 1 and 3)
+carry it at zero marginal footprint.** So **L1 buys nothing on the axis that kills the box**: moving
+fan-out from named teammates to workflow agents moves 382 MB → 0.6–11 MB of *bytes* and leaves the
+*toolchain bursts* exactly where they were — now behind **zero** of our seven admission gates (§7).
+That is §1's asymmetry restated on the failure mode that actually fires.
+
+**Nothing per-unit needs adding to the meter.** `compressor-sentinel.sh` computes
+`(segs_in_core + segs_swapped) ÷ vm.compressor_segment_limit` every 10 s from cheap sysctls and trips
+on **level AND rate** (>15% of limit *and* >600 segments/s), deliberately far below the ceiling, on
+the way up. Because the term is a burst term, the **rate** arm is the load-bearing half — a
+level-only guard on a quantity that idles at 0.00% would never fire.
 
 ### For an in-process agent (workflow / plain subagent)
 
@@ -210,7 +275,7 @@ magnitude.** That is the asymmetry the whole document turns on.
 
 | # | Lever | What it buys (measured) | Risk | Available today? |
 |---|---|---|---|---|
-| **L1** | **Stop using named teammates for fan-out; use Workflow agents or unnamed subagents** | Per agent: **382 MB → 0.6–11 MB**, **1 pane → 0**, **18 threads → ~1.5**. The observed 11-teammate wave (**11 panes / 198 threads / ~4.2 GB**) becomes ~0.1 GB, 0 panes, +17 threads | 🚨 **A running Workflow has NO abort path in anything we own** — no pane (so no `cc-teardown`), no `shutdown_request` (not a teammate), no `claude stop` (not a bg job), no registry row, no mailbox. Our largest historical run is **229 agents / 7.2 h / 39 pp**; if one goes wrong the only lever is killing the parent session, which takes the operator's context with it. **Bound it with `budget.total` at author time — that is the only brake that exists.** Also loses **all 7** of our Agent-tool gates for workflow agents (§ L8 is the mitigation); caps at 8 (workflow) / 20 (subagent); breaks the "one teammate = one pane you can look at" operating model | **YES — zero config** |
+| **L1** | **Stop using named teammates for fan-out; use Workflow agents or unnamed subagents** | Per agent: **382 MB → 0.6–11 MB**, **1 pane → 0**, **18 threads → ~1.5**. The observed 11-teammate wave (**11 panes / 198 threads / ~4.2 GB**) becomes ~0.1 GB, 0 panes, +17 threads | 🚨 **A running Workflow has NO abort path in anything we own** — no pane (so no `cc-teardown`), no `shutdown_request` (not a teammate), no `claude stop` (not a bg job), no registry row, no mailbox. Our largest historical run is **229 agents / 7.2 h / 39 pp**; if one goes wrong the only lever is killing the parent session, which takes the operator's context with it. **Bound it with `budget.total` at author time — that is the only brake that exists.** Also loses **all 7** of our Agent-tool gates for workflow agents (§ L8 is the mitigation); caps at 8 (workflow) / 20 (subagent); breaks the "one teammate = one pane you can look at" operating model. 🚨 **And it buys nothing on the axis that kills the box** — a workflow agent's Bash calls run in the parent's cwd, so it keeps the *full* toolchain-burst ignition surface at zero marginal footprint (§5a) | **YES — zero config** |
 | **L2** | **Route fan-out work as dispatched sessions across the 4 accounts** | **4× on quota** (four 100-pp meters instead of one) **and 4× on the OAuth-refresh herd** (≈3 contenders per lock instead of 12) | Costs a real pane + ~423 MB per unit — the expensive unit. Only worth it for work that runs long enough to amortise | **YES** |
 | **L3** | **`claude --cloud "<task>"`** | **Zero local slots, zero local memory, zero panes**, and QUOTED: *"no separate compute charge for the cloud VM"*. Proven live on this account: `RemoteTrigger list` → HTTP 200, cloud env `env_017yBYRpWo1riDX3bs6h7fkV`, one job already fired | 2.1.220 **refuses `--print` and requires a TTY** — fire it *into a pane*; `handoff-fire` already does this. The cloud VM clones the **GitHub remote at your current branch, not your local checkout** (unpushed work invisible unless `CCR_FORCE_BUNDLE=1`). `--teleport` is one-way (cloud→terminal). `claude -p "msg" --cloud <id>` is exempt from the TTY rule and IS scriptable | **YES** |
 | **L4** | **Non-Claude backends — Codex CLI, Pi·Codex** | The **only** units in this wave that consume **neither** ceiling: no Claude pane, no Claude meter. Both render `✅ routable` on a ChatGPT Plus plan | **No axis in this wave owns them** — capability, cost and fidelity are unmeasured here | **YES, already routable** |
@@ -359,6 +424,9 @@ Meanwhile the ~15 you feel is not a Claude budget — the load gate that produce
 ceiling from non-Claude background alone, all fourteen Claude units together supply 30% of the
 numerator, and 15 is simply the fleet's median pane count. The real ordered walls are: our load gate
 (~4–8 mid-turn), quota (crossover at **26** resident panes), the terminal (~30), then memory (~70).
+The thing that actually *kills* the box — compressor-segment exhaustion — is in none of those,
+because it is an ignition wall, not a residency one: a resident unit compresses nothing and the
+measured per-unit segment cost of all seven is **~0** (§5a).
 The cheapest correct move is to stop expressing fan-out as named teammates — but do it knowing that
 the Workflow path passes through **zero** of our seven admission gates, and that every rail we own
 (pane census, reaper, mailbox wake, close ledger, account router) was built assuming one session =
