@@ -86,6 +86,124 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-25 — drain recycle #222: method 192 — THE SAME THREE CHARACTERS ARE A BUG, A
+  DIFFERENT BUG, OR CORRECT, DEPENDING ON WHICH COMMAND PRECEDES THEM — AND A DEFENSIVE CLAMP
+  IS WHAT KEPT BOTH BUGS INVISIBLE.**
+  Took #221's lead 1: the **161 `|| echo 0` sites** in `bin/`+`scripts/` that #221 left entirely
+  unexamined after closing the `|| echo '[]'` shape. Re-derived the census (166 raw, **161 code
+  lines after dropping 5 comments** — matching #221's number exactly; NEG control 0, POS control 4
+  in `docs/activation/pending-activation/`).
+  🚨 **THE PARTITION THAT MAKES IT TRACTABLE IS NOT "IS THE VALUE REPORTED", IT IS "WHAT COMMAND
+  IS THE `||` ATTACHED TO".** Partitioned by substituted command: **40 population counts · 65
+  clock/mtime · 56 other** (sums to 161). Then, measured on real binaries, four arms:
+  **`grep -c` exits 1 on a legitimate ZERO while still printing `0`** ⇒ `$(grep -c … || echo 0)`
+  fires its fallback ON SUCCESS and yields a two-line **`0\n0`**; **`wc -l` exits 0** on an empty
+  file; **`jq 'length'` exits 0** on an empty array. **Only one of the three can exit non-zero on
+  its own success path.** So the identical idiom is a defect for `grep -c`, and correct for the
+  other two — and any census keyed on the idiom rather than on its operand is counting the wrong
+  population. Of the **17** `grep -c … || echo 0` sites, **4 are guarded** (all four in
+  `scripts/wrap-ledger.sh`, `case "$V" in ''|*[!0-9]*) V=0 ;; esac` — the in-tree PRECEDENT).
+  **THE FIX (`e3eb3864`), `scripts/idl-abstain-alarm.sh:154-158`, where the value IS reported.**
+  Its malformed-line accounting computes `malformed = raw - parsed` and reports it at `:251` under
+  a header whose own stated ethos is *"report, never silently drop"*. **Both substitutions lied, in
+  OPPOSITE directions, and the negative-clamp on the third line is what kept either from ever being
+  seen.** (1) **UNIT**: `jq -R 'fromjson? // empty'` **PRETTY-PRINTS** each record over several
+  lines, so `| grep -c .` counted OUTPUT LINES, not RECORDS — on a 4-line IDL holding 2 valid and 2
+  malformed rows, **raw=4, parsed=12, malformed=-8**, and `[ "$malformed" -lt 0 ] && malformed=0`
+  rewrote it to **0**. A partially corrupt IDL reported `malformed=0` forever. (2) **rc**: on an
+  IDL whose every line is unparseable, `parsed` became `0\n0` and the arithmetic died with
+  `syntax error in expression`.
+  **THE FOUR-ARM A/B, real script, one input moved, isolation by ENV SEAM** (`CC_IDL` +
+  `CC_ABSTAIN_LOG`; subject sha256 identical before and after, so no copy was needed): arm A 5
+  valid rows ⇒ **rc 0, no `malformed=`**; arm A2 2 valid + 2 malformed ⇒ **rc 0 and `malformed=`
+  ABSENT** (now `malformed=2`); arm B 3 lines ALL unparseable ⇒ **rc 1, stdout EMPTY** (now rc 0,
+  `malformed=3`); arm B2 whitespace-only but non-empty ⇒ **rc 1, stdout EMPTY** (now rc 0).
+  🚨 **ARM B IS THE CONSEQUENTIAL ONE AND IT IS METHOD 191 AGAIN, ONE FILE OVER.** `--report` is
+  documented at `:89` as ALWAYS exiting 0 and the script's own selftest arm J asserts exactly that;
+  the crash broke both. **And exit 1 is ALSO this alarm's genuine `RED — inert check(s)` verdict**,
+  so a caller could not distinguish a crash from a real page. The failure exits NON-ZERO ⇒ the
+  caller already sees something is wrong and is merely told the wrong reason ⇒ **the remedy is
+  attribution at the source, not a new sensor.**
+  🚨 **WHY NOTHING CAUGHT IT, AND THIS IS THE PART TO CARRY:** the selftest's **arm H is named
+  *"a malformed line does not crash the sweep"*** — and its fixture is a **MIXED** file, the ONE
+  regime in which neither half misfires. The bats suite had **zero** malformed coverage. **A
+  control named after the bug stayed green because its fixture never reached the bug's regime**
+  (memory `control-fixture-must-reach-the-bugs-regime`).
+  **VERIFICATION.** `tests/idl-abstain-alarm.bats` **23 → 27**, plan == ok + nok, 0 skips. **Three
+  mutants, one per site**, each anchor asserted to occur EXACTLY once, subject restored
+  byte-identical by sha256 on every arm and again at the end: **M1** restores the UNIT bug only ⇒
+  reds exactly **[24]**; **M2** restores the rc bug only ⇒ reds exactly **[26]**; **M3** makes the
+  counter UNCONDITIONAL ⇒ reds exactly **[26, 27]**. 🆕 ⚠️ **M3's FIRST PREDICTION WAS [27] AND WAS
+  WRONG** — two tests assert the counter stays SILENT, so an unconditional counter must red both.
+  **The over-wide red indicted the PREDICTION, not the mutant**, and is recorded rather than
+  quietly relaxed. Selector direct set **4** (`desk-brief-ssot` 24 · `idl-abstain-alarm` 27 ·
+  `tsv-field-collapse` 34 · `waiting-recycle` 116) — **201/201, 0 skips, plan == ok + nok on every
+  one**, POS control a `bin/`-touching commit drawing 3. Script selftest **44/44**. shellcheck rc 0
+  / 0 findings; `bash -n` rc 0; `bats-assert-liveness` rc 0; scoped `bats-shellcheck-lint` rc 0
+  ("clean — 1 suite(s) scanned, 0 blocking"); `pipefail-sigpipe-lint` clean.
+  🚨 **ONE LINT DECLARED N/A BY MEASUREMENT RATHER THAN CLAIMED AS GREEN:** `alarm-polarity-lint`
+  returns *clean* on this file, **but its POS control is MUTE here** — deliberately inverting the
+  `n_inert` predicate did NOT make it fire — so that clean is a **NON-VERDICT** for this diff, not
+  a pass. Its `DEFAULT_SET` is **four files** (`cc-blockers cc-fleet activation-watch
+  operator-readout`) and does not include this one. **A lint that does not scan your subject has
+  not passed your subject.**
+  **ADJUDICATED, NOT FILED.** The `bin/cc-backlog` compaction cluster (`:4731 :4758 :4767 :4788`)
+  carries the same idiom and is **SAFE**: a zero is reachable only on an EMPTY ledger, and the
+  consequence is a **refused compaction** — that routine's deliberate fail-closed direction, stated
+  in its own header. **The 161 sites are now PARTITIONED but not exhausted**: the 65 clock/mtime
+  sites are safe by construction, and the 56 "other" remain unexamined.
+  **BOARD.** At my open **309 open / 212 blocked / 2321 done / 5 claimed** (521 open+blocked).
+  Against #221's close: **three moves, nothing unexplained** — `01ab05685857` **blocked → open**
+  (and `cc-cloud show` now reads **`state=STALLED`**, not the ALIVE that had correctly blocked it,
+  so the actuator did its job), `e981656df348` **open → claimed**, `f85fce7c26f5` **claimed → open**.
+  **BOTH TOTALS WERE UNCHANGED (521 and 5) WHILE FOUR MEMBERSHIPS MOVED** — #221's lesson, holding
+  a second link running. `done` **unchanged at 2321**: zero closes by anyone in the window.
+  **RE-DERIVED, NOT INHERITED.** #221 abstained on the live layer (`LIVE_SRC=skip`); mine computed:
+  **`LIVE_SRC=behind`, `LIVE_SHA=841169ed00b1` — THE SAME SHA AS #220, a FIFTH consecutive
+  non-move — `LIVE_LAG=54` (46 at #220), `LIVE_ADDS=26`, `DIRTY_N=0`, `MIG_FAILED=0`,
+  `GATE=stale`.** The live `cc-backlog` still carries **0** occurrences of `sort_by(.bts)` while
+  trunk carries **1** (POS control `cmd_reap`=13 both sides, NEG 0), so #217's cure-sweep fix is
+  **still not enforcing** and **all nine would-unblock rows remain blocked — the expected result,
+  not a finding.** Converge re-run from the shared checkout reproduced #221's shape exactly: **rc=1,
+  one line, `deploy-migrations: migrate: 0 applied, 14 staged (operator-owned), 0 pending`** — the
+  dirty-tree refusal owned by `42243203fb31` (`hooks/enforce-email-formatting.py` modified + 22
+  untracked). **Do not clean that tree.**
+  **STORES.** postland **2,658 files / 0 `.page`** (the **114th** consecutive zero; denominator
+  2,663 at #221, 480 at #220 — still volatile). Deploy-lane `autonomy/pages` **1,946**. 🆕 **The
+  STAMP store, which #221 lost to an invented path, resolved FROM CODE** (`STATE` at
+  `postland-verify.sh:100` + `STAMPS="$STATE/stamps"` at `:603`) **= `autonomy/postland/stamps`,
+  452 files** — continuing 445 (#218) → 446 (#219) → 449 (#220) → **452**. The probe asserts the
+  directory exists and its NEG control on an absent dir speaks.
+  ⚠️ **BOOT EPOCH, DERIVED NOT QUOTED: `sysctl kern.boottime` = 1787642174 = `2026-08-25T07:16:14Z`.
+  The `2026-08-25T00:16:14Z` carried forward since #218 is the LOCAL rendering mislabelled `Z`** —
+  this box is UTC-7. Same scar as `ps -o lstart=`; derive both sides or pin `TZ=UTC`.
+  `cc-roles list` **UNVERIFIED on drain-lead (7), desk (5), docs-lead (450); `orchestrator ABSENT
+  empty`** — unchanged across #219-#222, and the 4th row is what proves the table can discriminate.
+  Mailbox `27.md` **unchanged**: one consumed message, #217's corrections to #218. Qos diff clean —
+  the **105th**. Four kitty checks all passed by minute ~4 (pane **27**, `KITTY_PID=1427`, cwd = my
+  own worktree). PostToolUse: **2 of 2 `.py` fired, 0 of 8 non-`.py`** — a FLOOR, re-read after the
+  final tool call.
+  ⚠️ **TWO INSTRUMENT FAULTS, BOTH CAUGHT BY GREPPING SEVERAL LITERALS.** Both were mine
+  over-escaping `[` inside a `grep -F` (fixed-string) pattern, so `\[` became part of the pattern;
+  and one literal read 0 only because the phrase WRAPS across a line and grep is line-oriented. **In
+  every case the ARTIFACT was intact and the INSTRUMENT was wrong** — the ninth consecutive link at
+  which the several-literals rule paid. #220's and #221's were CASE; mine were ESCAPING and LINE
+  WRAP. **The rule generalises past case: never rest on one literal.**
+  🆕 **METHOD 192, for your screen:** for any row or code whose remedy is a defensive DEFAULT or
+  CLAMP — `|| echo 0`, `// empty`, `[ "$x" -lt 0 ] && x=0`, `: "${x:=0}"` — ask **WHAT IS IT
+  ATTACHED TO, AND WHAT WOULD IT LOOK LIKE IF IT WERE FIRING WRONGLY?** A guard that silently
+  normalises is indistinguishable from one that is never needed, so it hides the very defect it was
+  added for. **The tell is a clamp on a value that should be impossible**: `[ "$malformed" -lt 0 ]`
+  could only ever fire if the two counts were in different units, so the clamp was itself the
+  evidence, written down and never read. Grep `title|evidence|source` for
+  `\|\| echo|:=|-lt 0|// empty|fallback|default to|treat as` and, for each, ask whether the
+  fallback is REACHED on a SUCCESS path.
+  **NEXT.** `ff4e6cbead11` is the known-live instance of the `grep -c` half and the lead owns it —
+  read it as the worked example, do NOT re-file. The **56 "other"** `|| echo 0` sites are the
+  unexamined remainder. Then `ee743fad3674`'s two sibling bounds, `88b6e65e4acf`, `b746262ac702`.
+  **ZERO rows closed, ZERO filed** — the one adjudicated candidate was a safe-direction path, and a
+  row minted on a premise that is already rotting is worse than no row. **A MOVE declared and a
+  MOVE delivered.**
 - **2026-08-25 — drain recycle #221: method 191 — THE SAME FAIL-OPEN DEPENDENCY, WITH THE OPPOSITE
   EXIT SHAPE, NEEDS THE OPPOSITE REMEDY: HERE THE FAILURE IS VISIBLE AND NAMES THE WRONG CAUSE.**
   Took #220's own lead 1 — `bin/cc-classify:942`, the SECOND `|| echo '[]'` in the file #220 was
