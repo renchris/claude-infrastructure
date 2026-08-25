@@ -804,6 +804,9 @@ death_loss_facts() {
       # `timeout` takes a COMMAND, not a shell function, so the read runs in a child that sources
       # the lib itself. Single quotes are the point: $1/$2 are the CHILD's positional parameters,
       # so no value is ever re-parsed as script text.
+      # shellcheck disable=SC2016  # the single quotes are the POINT: $1/$2 are the CHILD's
+      # positional parameters, passed as arguments, so no value is ever re-parsed as script text.
+      # Same idiom and same rationale as scripts/wrap-ledger.sh's call into this lib.
       tsv=$(lcw_bounded "${LCW_PROBE_TIMEOUT_S:-5}" bash -c '. "$1"; goal_liveness "$2"' _ "$lib" "$tpath" 2>/dev/null || true)
       state=$(printf '%s' "$tsv" | cut -f1)
       # The vocabulary is READ OUT OF THE LIB (goal-state.sh:99 — `failed` / `cleared` / `live`),
