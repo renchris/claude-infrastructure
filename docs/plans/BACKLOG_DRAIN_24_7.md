@@ -86,6 +86,90 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-25 — drain recycle #224: method 194 — AN EXONERATION THAT HOLDS, AND THE DIAGNOSTIC
+  BESIDE IT THAT ANSWERS A QUESTION ALREADY ANSWERED.**
+  Took #223's lead 2, the untouched `classify` half of `ee743fad3674`, and went in expecting a
+  fourth foreground-sized bound. **The band A/B refuted that in 41 seconds.** `cc-classify --all
+  --json` (read-only; its one write path is gated on the tests-only
+  `CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE`), both arms returning an identical **7** entries at load
+  ~10: **foreground 5s at PRI 31 (19/19 samples over two runs) · `taskpolicy -c background` 31s at
+  PRI 4 (60/60)** — a **6.2x band tax**, this box's THIRD independent reproduction after 6.6x
+  (inbox-guard, #219) and 6.4x (backlog-reap, #223). **90s is 2.9x healthy IN-BAND cost**, so unlike
+  both siblings this constant was never a foreground number. **#219's acquittal of classify HOLDS.
+  DO NOT WIDEN IT** — a classify past 90s is 3x healthy in-band, past 270s is 8.7x, a genuine wedge
+  either way. The 291 total-loss sweeps are the box wedging, faithfully detected.
+  **TWO CORRECTIONS TO HOW 68.7% WAS COMPUTED, NEITHER CHANGING THE VERDICT.** (a) **It MERGES TWO
+  ARMS THAT MEAN OPPOSITE THINGS**: of **1,144** `bound-fired classify` lines over **1,679** sweeps,
+  **853** are arm 1 (the 90s bound — after which the 3x retry **RESCUES 65.9%** of them) and **291**
+  are arm 2 (the retry fired too: no verdict at all, `cj='[]'`). Arm 1 is the design working; arm 2
+  is a total loss. A census grepping `bound-fired classify` **cannot separate them** — anchor on
+  `: exceeded` versus `: retry exceeded`. (b) **Per day arm 2 OSCILLATES 1.8%-49.5% with 4 direction
+  changes over 13 days**, against backlog-reap's monotone 6.7% → 100.0%. It tracks load; it is not a
+  ratchet. **So clause 9 is real but not a licence: an exoneration ROTS, it does not EXPIRE — and
+  the way to tell is to re-run it, not to assume.**
+  **THE DEFECT THE RE-SCREEN FOUND IS ONE BRANCH AWAY AND IT IS #220's OWN.** R5c ("an empty
+  classification is only credible if the box is empty") is right in every clause and its predicate
+  is **too wide**: gated on `n == 0` ALONE, and **every** path into it sets `cj='[]'` first —
+  including the two directly above that have **already named their own cause**. Reproduced by
+  execution, not read off the source:
+  `bound-fired classify: retry exceeded 3s — sweep yields NO candidates (fail-closed)` followed by
+  `classify EMPTY-BUT-POPULATED: 0 enumerated vs 4 live pane(s) — enumerator failed open at rc=124`.
+  **rc 124 is `timeout(1)`'s "the bound fired" code, so the line contradicts the field it prints in
+  its own text**, and the `say()` beside it tells the operator the enumerator "failed open" when the
+  enumerator was never given a chance to answer — it was **killed**. The same fires on R5b's
+  producer-error arm at rc 127. **The remedy R5c explicitly REJECTED ("widen the rc branch") had
+  zero power over the mode that fires; the guard built instead had power over MORE than the mode it
+  targeted — it overshot in the opposite direction from the one it rejected.**
+  **WHY IT READ CLEAN, AND THIS IS THE PART TO CARRY: ZERO occurrences in 1,673 sweeps — because
+  the emitting code IS NOT DEPLOYED.** `~/.claude/bin/cc-reaper` is a symlink into the shared
+  checkout, **58 commits behind**; `EMPTY-BUT-POPULATED` counts **0** there and **1** on trunk (POS
+  control `bound-fired classify` = 3 in the live file, NEG 0). **An absence measured against a store
+  the code never wrote to is not a clean bill — it is a NON-VERDICT wearing one.** The defect is
+  **LATENT** and arrives in full at convergence: **289 of those sweeps (17.3%)** took the rc-124 arm
+  with live panes present, each of which would have carried the wrong subsystem's name exactly once.
+  **THE FIX (`d9e2f7a65`, landed):** `[ "$n" = 0 ] && [ "$crc" = 0 ]`. An enumerator that fails OPEN
+  returns rc 0, so scoping to a **succeeding producer** removes nothing R5c can detect and only
+  stops it re-answering. `tests/cc-reaper.bats` **174 → 176**: #220's two arms both pin rc 0
+  (empty/live>0, empty/live==0), which is exactly why a predicate this wide passed — the two new
+  arms are the missing nonzero-crc half. **Mutants, one per site, all three predictions stated
+  before measuring and all three MATCHED** (unlike #222's and #223's): M1 drop the `crc==0` scope →
+  reds exactly [3,4]; M2 change the R5c log spelling → [1]; M3 silence the bound's own log line →
+  [3]. Subject restored **byte-identically by sha256** on every arm and again at the end.
+  **A PER-SWEEP JOIN WORTH INHERITING** (segment the log start→end, not per-day): P(the
+  backlog-reap bound fires) is **18.8%** when classify is quiet, **58.6%** on arm 1, **86.9%** on
+  arm 2; median sweep duration **136s → 403s → 560s**, and **100%** of arm-2 sweeps exceed the 300s
+  `StartInterval`. It survives within-day stratification (**+58.2 pp** pooled, 12 of 13 strata) and
+  survives holding an UPSTREAM load reading fixed (reconcile-quiet sweeps: 18.9% vs 80.0%). **But
+  `_rp_bounded` gives every fork its OWN budget, so classify cannot mechanically consume
+  backlog-reap's — the honest reading is a shared cause (a slow box), not starvation.** Recorded as
+  an association, deliberately not as a mechanism.
+  **INSTRUMENT FAULTS OF MY OWN, both caught by controls rather than by luck.** (1) My first entry
+  parser anchored the stamp at `^\d{4}-`; the log's stamp is **BRACKETED** `[…Z] `, so it matched
+  **0 of 136,688 lines** and reported `entries=0` — the positive control is what turned a confident
+  zero into an instrument fault. (2) My first per-day denominator was `sweep start mode=REAP`
+  (1,662) and it produced rates of **101.2%** — **an impossible value is the tell**; the true
+  denominator is **1,662 REAP + 17 DRY-RUN = 1,679 == the `sweep end` count exactly**. (3) The
+  `/bin/bash` 3.2.57 multi-variable `local` scar cost one A/B run outright.
+  🚨 **`alarm-polarity-lint.sh` IS MUTE ON A SECOND SUBJECT.** Fed `bin/cc-reaper` with the live-pane
+  guard deliberately INVERTED (`-gt 0` → `-le 0`), it still returned *"clean — 1 file(s) scanned; 0
+  inverted alarm predicates"*. **#222 found this on its own subject; that makes two.** Declared
+  **NOT-RUN** rather than claiming its green.
+  **GREEN:** 7 direct suites / **264 tests / 0 skips / `plan == ok + nok` on every one**, in the
+  FOREGROUND before landing — `cc-reaper` 176 (448s) · `watchdog-census` 20 · `lstart-dialect-bin`
+  16 · `handoff-lifecycle-record` 15 · `reap-sweep-bounds` 14 · `headless-address-consumers` 13 ·
+  `reap-freshness` 10. **The direct set MOVED again: 8 at #223, 7 at #224, on the same file.**
+  shellcheck rc 0 / 0 findings · `bash -n` rc 0 · `bats-assert-liveness` rc 0 · scoped bats-lint rc 0
+  (1 suite, 0 blocking).
+  **THE ELEVEN-ROW EXPERIMENT, reported with its other half as required: all ELEVEN still `blocked`,
+  and the live `:-900` count is 0 (trunk 2; POS control 1, NEG 0).** The live layer has not advanced
+  past `bb86dd9dc`, so this is the **EXPECTED** branch and NOT a finding about the fix.
+  **METHOD 194, the generalisation:** when a mechanism reports an absence, ask **whether the code
+  that would have produced the presence WAS RUNNING**. A landed-not-live remedy makes its own
+  defects unobservable in exactly the store you would check them in, so the log reads clean and the
+  bug is simply queued behind the converger. **And the sibling clause: a predicate gated on a
+  SYMPTOM fires on every cause of that symptom, including the ones a branch above already
+  diagnosed — so ask, of any diagnostic, WHICH CAUSES CAN REACH IT, not merely which one it was
+  written for.**
 - **2026-08-25 — drain recycle #223: method 193 — THE ACQUITTALS GOT A WEAKER INSTRUMENT THAN THE
   CONVICTION, SO THE ONE THAT WAS STILL BROKEN WALKED.**
   Took #222's lead 1, the four "correctly blocked (cc-cloud reads ALIVE)" rows, and it paid
