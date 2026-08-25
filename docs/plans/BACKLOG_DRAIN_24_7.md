@@ -87,6 +87,143 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-25 — drain recycle #215: method 185 — A ROW'S LATENCY EXPLANATION CAN BE TRUE, AND THE
+  ROW STILL INCOMPLETE. Method 184 says re-probe the clause explaining why a defect has not fired
+  yet, because that clause reads as the author's modesty rather than as a claim. This link is the
+  first where it held in BOTH halves — and the census built to verify it surfaced a SECOND defect the
+  row never mentions. THE INSTRUMENT YOU BUILD TO TEST A CLAIM MEASURES MORE THAN THE CLAIM: read
+  its residue, not only its verdict. The row asked "are any plist targets python?" (no, 0 of 24). The
+  same enumeration also answered "did every plist resolve a target at all?" — a question nobody
+  asked, and the answer is no for 2 of 26. closed 1 BY FIXING THE CODE / filed 1 — net 0.**
+  Board at open: **482 open+blocked** (283 open / 199 blocked / 2279 done, claimed 5); at close
+  **483** (283 / 200 / 2280, claimed 5). Closed 1, filed 1 — **net 0**; #214's post-crash addendum
+  had already ended the negative-net streak at ten, and this link does not restart it.
+  `comm` in both directions on both lists, every mover attributed by STATUS (`by` is null on recent
+  events — #211): **1 departure** — `522cba3f1f7b`, my close, reads `done`. **2 arrivals** —
+  `40ea16f5821b`, my own filing, and `234261f8140d` (`blocked`, "converge the live layer:
+  deploy-live.sh refuses because…"), filed by another session and **not drain work**. The `claimed`
+  set is the clean case this time: **0 departures, 0 arrivals**, total AND membership both stable at
+  5 — unlike #214, where a stable total of 5 hid four matched movers.
+  🚨 **THE PICK WAS UNGROUPED, so this close moves NO condition count** — `ungrouped` reads 200 open
+  / 26 blocked at both ends, because my close and my filing cancel inside it exactly.
+  `wake-path-sigterm` UNTOUCHED at **2 open / 0 blocked**; `master-convergence-deadlock` **12 open /
+  6 blocked** (it read 13/6 in the inherited brief — re-derived, not inherited).
+
+  **THE ROW: `522cba3f1f7b`, open since 2026-08-24, CLOSED BY FIXING THE CODE** (commit
+  `fix(unattended-path-lint): a python-shebang file is prose, not shell — guard the scanner at its
+  chokepoint`). `scan_shell()` read every file handed to it as shell, so pointed at a python file it
+  read PROSE as code.
+  · **CLAIM 1 — "NO shebang/language guard": TRUE.** `shebang` = 0 occurrences in the 1,673-line
+    lint (POS `plist` = 68; NEG 0). The only interpreter mention is `PY="/usr/bin/python3"` at
+    `:135`, the scanner's OWN interpreter, not a guard on the target.
+  · **CLAIM 2 — "matches PROSE on a python file": TRUE, via the row's OWN stored falsifier**, which
+    read exactly the 2 it predicted: `bin/claude-accounts:17` (a docstring quoting `claude auth
+    login`) and `:203` (the literal text `def log_event(msg):`). **The mechanism the row never spells
+    out: `(` opens a subshell to a shell scanner, so a python function PARAMETER lands at command
+    position.** That is precisely why renaming the parameter erased the finding — and why "a binary
+    unreachable on PATH" was never about a binary.
+  · 🆕 **CLAIM 3 — THE LATENCY EXPLANATION, run as a claim in its own right: TRUE IN BOTH HALVES.**
+    Censused with the **lint's own instrument** (`plist_arg_strings` + `plist_target_scripts` copied
+    verbatim from `:925-977`), never a hand-rolled one: 26 `launchd/*.plist`, **23** yielding an
+    in-tree target, **24** targets (`teammate-reap-alarm` names two), **24 of 24 SHELL**, **PYTHON =
+    0** against a POS of 24 so the instrument speaks. Latent surface re-derived independently: **50**
+    python-shebang files under `bin/` + `scripts/`, matching the row's 50 exactly. **After #214 found
+    its row's latency clause dead in both halves, the natural prior was that this one would be too.
+    It was not. The clause is a claim, and a claim can be RIGHT.**
+  · **THE SAFETY ARGUMENT WAS MEASURED, NOT ASSUMED.** The guard only ever REMOVES findings, so it
+    has exactly two ways to harm: **(a)** an allowlisted site inside a python file stops violating
+    and goes STUCK, turning the lint RED — `EMBEDDED_ALLOWLIST` **35 entries, 35 RESOLVED, 0
+    unresolved, 0 python**, and the non-zero resolved denominator is what makes that 0 a finding
+    rather than a parse failure; **(b)** a scanned population member that is python — **0 of 24**
+    launchd targets, **0 of 101** tracked `hooks/*.sh`, **0 of 536** `tests/*.bats`. My first parse
+    said 38 entries; the second said 35 with a stated resolution rate. **Re-deriving is what turned a
+    number into a control.**
+  · **THE FIX** is `is_python_shebang()` plus a filter inside `scan_shell()` — at the ONE chokepoint
+    all three halves funnel through (hooks `:1077`, launchd `:1124`, bats `:1158`), not at the three
+    call sites, because a language test holding for one population and not the others is the same
+    silent per-population asymmetry this file was already bitten by. **Keyed on the SHEBANG, never
+    the extension** — `bin/` ships python wearing no suffix, which IS the motivating population. A
+    file with **no** shebang is still scanned; widening into "anything I cannot prove is shell" would
+    have silently exempted the 2 tracked `hooks/*.sh` that carry none.
+  · **DELIBERATELY NOT DONE: the row's second half** (widen the plist population, then grandfather).
+    Its own text says REMEDY ORDER MATTERS. Residue has an owner — `3f5ea840b296` prescribed the
+    widening and was CLOSED rather than executed at #203 *because the guard did not exist*. It does
+    now, so that work is unblocked and its owner is that closed row's own text.
+
+  🆕 **THE SECOND DEFECT, FILED AS `40ea16f5821b` (ungrouped) — and it is the method.** The census
+  above walks every plist. Its verdict answered the row. **Its residue answered a question nobody
+  asked:** 28 extracted target strings resolve to no file. 26 are the interpreter path itself
+  (`/bin/bash`, `/bin/zsh` matching `/(scripts|bin|hooks)/`) and are noise. **The other two are real
+  jobs the launchd half has never scanned:**
+  · **`com.chrisren.cc-reaper.plist`** runs `cc-reaper sweep --reap` as a **BARE NAME** after an
+    inline `export PATH="$HOME/.claude/bin:$PATH"`. `plist_target_scripts` requires a literal
+    `/(scripts|bin|hooks)/` segment, so it extracts NOTHING and **`bin/cc-reaper` (2,365 lines) has
+    never been scanned by this half.** 🚨 **Note the shape: a lint whose entire purpose is catching
+    bare-name invocations is blinded by one.**
+  · **`com.claude.auth-timeseries.plist`** names `$HOME/.claude/scripts/auth-timeseries.sh` →
+    extracts as `scripts/auth-timeseries.sh` → but the REPO keeps that file at
+    **`tools/auth/auth-timeseries.sh`** (the live symlink points there), so `[ -f "$root/$tgt" ]` at
+    `:1123` is false and the job is skipped. **The live layer's directory is not the repo's.**
+  · **CONTROL, and it is why the remedy needs design:** `com.claude.session-search-backfill.plist`
+    names a script belonging to a **different repo** (`claude-session-search`) and is CORRECTLY
+    skipped. "Report every unresolvable target" fires a false LOUD on a legitimate case, and this
+    lint's exit 2 is a NON-VERDICT that blocks the gate. **Do not widen the report on a drive-by.**
+  · 🚨 **WHY NO EXISTING CONTROL CATCHES IT — AN AGGREGATE POSITIVE CONTROL CANNOT SEE A PER-MEMBER
+    ZERO.** The file's own comment at `:966-971` records the near-identical catastrophe (a BRE/sed
+    bug under which the launchd half *"scanned NOTHING while reporting a clean corpus"*) and says it
+    was caught *"only by the plist positive control"*. **That control is sized to the CORPUS**, so it
+    can only ever catch a TOTAL zero. 23 of 26 resolving makes it speak loudly and confidently while
+    two jobs go unscanned. **This is the same generator as #214's top-3-by-memory selector: the
+    reason a defect is invisible lives in the SELECTOR, and no row's prose mentions its selector.**
+
+  **INSTRUMENT NOTES.** My first plist census was a hand-rolled `plistlib` parser and it returned **12
+  UNPARSEABLE / 18 no-target out of 32** — a uniform failure that indicts the HARNESS, not the
+  subject (these plists carry XML comments before `<plist>`, and I was globbing `**/*.plist` including
+  `staged/`, which the lint does not scan). **Switching to the lint's own extractor was not tidiness;
+  it is the only way the population under test is the population the subject uses.** The `git archive
+  HEAD` discipline the row prescribes for its falsifier is load-bearing: a minimal synthetic root
+  trips the STUCK-RATCHET arm and exits before the plist scan ever runs.
+  **The ASCII gate FIRED and DID ITS JOB — this is #214's scar closing.** #214 sequenced its
+  pure-ASCII check with `;` beside the write, so the check was decoration and the streak broke with
+  nothing stopping it. Mine was sequenced with `&&`: it **exited 90 on 5 `·` middle-dots and the
+  `cc-backlog done` never ran.** Fixed, re-run, wrote clean. **Both board writes are pure ASCII —
+  streak restored.**
+  ⚠️ **AND I CONTAMINATED MY OWN NEG CONTROL, exactly as #213 did one step downstream.** My close's
+  read-back read `NEG absent 2/3` because I had *named* the token `zzqx215nonce` inside the evidence
+  body itself. Re-asserted with four fresh tokens drawn from a namespace the artifact cannot mention,
+  **AFTER** it existed: **4/4 absent, POS 3/3**. **A NEG token you publish into the artifact you are
+  checking is not a control, it is a POS you mislabelled.**
+
+  **VERIFICATION, two-sided throughout.** The row's own falsifier post-fix reads **0 against a POS of
+  2** on the same synthetic tree with the pre-fix lint — a one-sided 0 would have proved nothing.
+  `--selftest` **42/42 rc 0** (was 39): new arm 20 is a **three-way** — 20a RED control (**the SAME
+  BYTES under a bash shebang must still be reported**), 20b GREEN (python shebang), 20c RED (a
+  shebang-less file is still scanned, so the guard did not widen into scanning nothing). The 20a/20b
+  bodies are byte-identical except the shebang, **so the only thing either arm can measure is the
+  shebang.** **MUTANTS, one per site: M1 revert-the-site turned EXACTLY ONE test red — the one I
+  wrote, which is what crediting a site looks like; M2 invert-the-site turned 20 red including 17
+  PRE-EXISTING across all three halves.** Restore diff empty after each. `tests/unattended-path-lint.bats`
+  **18/18** and `tests/unattended-sysctl-path.bats` **10/10**, 0 skips — and the former invokes
+  `--selftest` **7 times**, so the new arms ship covered by the shipped suite rather than needing a
+  new one. shellcheck **0 findings**, `bash -n` rc 0, real tree still clean (0 findings, rc 0).
+
+  **STANDING CHECKS.** Post-land RED pages **0** — the **107th** consecutive (`find` under
+  `$HOME/.claude/autonomy/postland`, directory asserted present first; stamps **440**; the deploy
+  lane's own `pages` store reads 141 and is a different store). The `qos-rewrite.sh` heredoc diff was
+  **empty — the 98th** consecutive clean recycle. **PATH was exported before anything**, per #214's
+  crash lesson: `shellcheck`, `bats`, `jq`, `git`, `python3` and `timeout` all resolved on the first
+  try and no zero this link came from an rc 127.
+  🆕 **THE PostToolUse REWRITER FIRED 5 TIMES — the 90th through 94th across forty-two consecutive
+  recycles — and #204's EXTENSION PREDICTOR IS RESTORED.** #214 was the first counter-example in
+  eleven sessions (3 of 4 `.py`). This link: **5 of 5 `.py` fired, 0 of 16 `.sh`/`.txt`/`.md` fired.**
+  ⚠️ **The 94th was the INSERTER ITSELF, written after this paragraph's first draft said "4".** #214
+  hit the identical trap and edited its entry before inserting; I did the same. **A self-referential
+  count is not safe as a floor alone — the artifact that writes it is itself a countable event.**
+  Every rewrite was quote-style only (`'` → `"`); `py_compile` rc 0 and `/usr/bin/grep -nE` on the
+  specific constants confirmed **no constant, exit code or operator changed in any of them**.
+  ⚠️ **Extension remains the best available predictor and #214 remains a real counter-example — one
+  clean link does not retire it.**
+
 - **2026-08-25 — drain recycle #214: method 184 — WHEN A ROW SAYS "X IS INDISTINGUISHABLE FROM Y",
   MEASURE HOW MANY WAYS THERE ARE TO BE X. A row can be RIGHT that two things collide, name the
   collision's rare cause, miss the dominant one entirely, and still prescribe a fix that works —
