@@ -43,6 +43,13 @@ setup() {
   unset CLAUDE_EMAIL_FORMAT_GATE_DISABLED
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export TMPDIR="$BATS_TEST_TMPDIR/tmp"; mkdir -p "$TMPDIR"
+  # R4 (pre-write freshness, 2026-08-25) denies a draft write unless the session has listed
+  # RECEIVED mail recently. These fixtures are single calls with no session history, so without
+  # this stamp every ALLOW control below would go red for a reason that has nothing to do with
+  # R1 or R2 — and, worse, the DENY cases would go green for the wrong reason. Same reasoning as
+  # the note in email-reply-quote-guard.bats: R4's own behaviour is covered in its own suite
+  # (tests/email-freshness-gate.bats), not smuggled in here.
+  touch "$TMPDIR/cc-ms365-inbound-bats" "$TMPDIR/cc-ms365-inbound-bats-ctx"
 }
 
 # decision <gate> <tool_name> <tool_input-json> -> prints allow | deny.
