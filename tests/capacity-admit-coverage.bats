@@ -215,8 +215,22 @@ calls_gate() { grep -qE '^[^#]*[^_a-zA-Z]cc_capacity_admit[[:space:]]' "$1"; }
   # mention it in prose.
   callers="$(grep -rlE '^[^#]*(RESUME_ONE|reso-resume-one)' "$REPO/scripts" "$REPO/bin" 2>/dev/null \
              | grep -v 'lr-fire-resume.sh\|lr-preseed-env.sh\|lr-select.py\|bin/reso-resume-one' || true)"
-  [ "$callers" = "$REPO/scripts/boot-resume-launch.sh" ] \
-    || { echo "a NEW in-repo invoker appeared, and it is not the gated launcher: $callers"; false; }
+  # TWO gated invokers as of 2026-08-24. bin/cc-resume-layout.sh joined boot-resume-launch.sh when
+  # /resume-sessions grew a per-monitor layout: it fires a BATCH, which is precisely the shape this
+  # gate exists to bound. It was landed UNGATED, this case caught it, and the post-land verifier
+  # auto-reverted the commit — the ratchet working exactly as designed. So the entry is added WITH
+  # its own gating asserted immediately below, never by loosening the census.
+  expected_callers="$(printf '%s\n%s\n' "$REPO/scripts/boot-resume-launch.sh" \
+                                        "$REPO/bin/cc-resume-layout.sh" | sort)"
+  [ "$(printf '%s\n' "$callers" | sort)" = "$expected_callers" ] \
+    || { echo "a NEW in-repo invoker appeared, and it is not a gated launcher: $callers"; false; }
+  # The batch caller must gate the way the launcher does — admit ONCE, then hand the engine
+  # CC_ADMIT_DONE so it does not evaluate again and double-spend the shared consecutive-refusal
+  # budget. Without both halves the census entry above is a hole rather than a record.
+  grep -q 'cc_capacity_admit ' "$REPO/bin/cc-resume-layout.sh" \
+    || { echo "cc-resume-layout invokes the engine but never admits — the batch is ungated"; false; }
+  grep -q 'CC_ADMIT_DONE=1' "$REPO/bin/cc-resume-layout.sh" \
+    || { echo "cc-resume-layout does not mark its admission — the engine will gate twice per spawn"; false; }
   # The launcher must MARK its admission, or the engine's new gate double-evaluates on every
   # in-repo resume and double-spends the shared consecutive-refusal budget. This pins the pairing
   # from the launcher's side; tests/reso-resume-one.bats pins the engine's side of the same handshake.
