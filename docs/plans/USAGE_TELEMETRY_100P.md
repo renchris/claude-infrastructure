@@ -1652,3 +1652,35 @@ green and vacuous, which is the failure §5.5 names.
 **Deviation 3 — `tests/claude-accounts-core.bats:1768` updated in place**, not rewritten:
 `_util_tail` is now a 2-tuple, and the case additionally asserts the achieved span, because that
 span is what every abstain rule below it is written against.
+
+#### S2 · M5 `burst_percentile` — LANDED
+
+`bin/claude-accounts`: `burst_percentile(r, samples)` + `fmt_burst(bp)` beside `pace_need_ppd`,
+constants `BURST_LOOKBACK_H` / `BURST_H_GRID` / `BURST_MIN_WINDOWS` / `BURST_MIN_RESET_H` /
+`BURST_SPAN_LO,HI`. Suite `tests/claude-accounts-burst.bats` (RP-17..RP-20 + RP-20b), **5/5 RED**
+pre-change; the render case inside core's `pace line` test is a sixth RED.
+
+**Live, all four accounts, none abstained:**
+
+```
+next3 burn 0.94× → ~94% by reset, p97 of its own 1h burns to close 7pp in 1.4h (recent 31%/d) ·
+next2 burn 0.40× → ~40% by reset, p71 of its own 24h burns to close 83pp in 4d (recent 6%/d) ·
+next  burn 1.63× → ~163% by reset ⚠ WALL, p37 of its own 24h burns to close 47pp in 4d (recent 24%/d) ·
+next4 burn 0.47× → ~47% by reset, p94 of its own 24h burns to close 86pp in 4d (recent 6%/d)
+```
+
+**Return shape** is a dict — `{"pct": float|None, "h", "n", "need_pph", "never"}` — not the bare
+float §5.3 RP-17 sketches, because `never` and `pct` are different states and a float cannot
+carry both. `pct is None with never True` is the sentinel; there is no p100.
+
+**Deviation — `apply_burn` now reads `BURST_LOOKBACK_H = 336 h`, not 48.** The ranking needs
+`BURST_MIN_WINDOWS = 200` windows of the account's own history, which 48 h cannot supply at any
+grid point above 6 h. Every consumer still filters to its own span, so no rate changed, and the
+read is nearly free: measured on the live 3.6 MB series, 48 h parses in 66 ms and 336 h in 73 ms
+(the doubling seek amortises; the parse dominates). Attach point is `apply_burn`, not `pace_line`
+— it is the one place holding both the rows and the series — so `pace_line` still renders what is
+stamped and L3's single renderer is intact.
+
+**The abstain that carries the most weight is RP-19**, and it is why the return is not a float:
+above the account's observed maximum there is no evidence at all, and a rendered `p100` reads as
+a rate that HAS been achieved.
