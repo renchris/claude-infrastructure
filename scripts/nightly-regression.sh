@@ -661,8 +661,23 @@ TORN
   # *function* call persists in the caller afterwards (bash, non-POSIX), and wrapping each call in a
   # subshell to contain that is what makes shellcheck read every one of them as an SC2030/SC2031
   # lost-modification pair. Positionals have neither problem and state the fixture at the call site.
+  # THE ADMISSION BOUND IS PINNED OFF FOR THE FIXTURES, AND THAT IS NOT A BYPASS. cc-bats DEFERS
+  # (rc 75) when live bats roots >= CC_BATS_MAX_ROOTS *and* 1-min load/core >= CC_BATS_MAX_LOAD_PER_CORE,
+  # and the runner correctly scores that deferral as a NON-VERDICT — which is exactly right at 04:00
+  # and exactly wrong here. Every red-path assertion below asks "does a FAILING suite page?", so a
+  # deferred fixture answers a different question and is scored as a FAIL: the detector is reported
+  # broken because the box was busy. Measured 2026-08-24 on a freshly-rebooted box at load/core 1.92
+  # against the 2.0 default — 60 passed / 7 failed, every failure on the red-bats and red-torn arms;
+  # re-run at load 18.16 with both bounds raised, 67 passed / 0 failed, no other variable changed.
+  # That flake is not cosmetic: 22-nightly-regression-activate.sh gates activation on this selftest,
+  # so a busy box made the operator's activation refuse for a defect that did not exist.
+  # These fixtures are hermetic one-test stubs — they are not the contention the bound exists to
+  # shed — so the honest value here is "do not count me", NOT a relaxation of the real bound, which
+  # every non-selftest caller still gets. Both terms are pinned because the refusal is a conjunction:
+  # leaving either live would let the flake back in the moment the other one flipped.
   run_inv() {
     env CC_NIGHTLY_NOTIFY=/usr/bin/true CC_NIGHTLY_NEVERSTUCK=/usr/bin/true CC_NIGHTLY_ABSTAIN=/usr/bin/true \
+        CC_BATS_MAX_ROOTS=999999 CC_BATS_MAX_LOAD_PER_CORE=999999 \
         CC_NIGHTLY_POSTLAND_DIR="$d/nopostland" \
         CC_NIGHTLY_POSTLAND_VERIFY="${5:-/usr/bin/true}" POSTLAND_VERIFY="${7:-on}" \
         CC_NIGHTLY_GATE_GLOB="$d/emptygl/*.sh" CC_NIGHTLY_LINT_GLOB="$d/emptygl/*.sh" \
