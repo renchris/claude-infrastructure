@@ -214,6 +214,13 @@
 #   CC_DISPATCH_READY_MAX    (default: 6)     hard bound on readiness checks per pass — past it the
 #                                             verdict is UNKNOWN, which never blocks
 #   CC_DISPATCH_READY_SCAN   (default: 4000)  IDL tail lines scanned for a prior `readyAt`
+#   CC_DISPATCH_VENUE_RULE_PATHS  (default: bin/cc-venue, bin/cc-eligible, bin/cc-premise —
+#                            newline-separated) the ROUTING RULE's own surface. A landing under any
+#                            of these voids a venue label as `venue-rule-moved` and re-derives it,
+#                            so a cure reaches the rows it was written for on the next pass instead
+#                            of on `cc-venue run`'s 6 h timer. `off` ⇒ the arm never convicts; an
+#                            EMPTY value falls back to the default, so the guard cannot be disabled
+#                            by a stray assignment — turning it off has to be spelled.
 #   CC_DISPATCH_VENUE_ONLY   (default: unset) cloud|local ⇒ admit ONLY items whose venuePlan is
 #                                           this venue; everything else is PARKED and counted in
 #                                           the IDL. The migration lever — DECIDE_ONLY stops every
@@ -1037,6 +1044,20 @@ READY_MAX="${CC_DISPATCH_READY_MAX:-6}"
 is_uint "$READY_MAX" || die3 "CC_DISPATCH_READY_MAX must be a non-negative integer (got '$READY_MAX')"
 READY_CHECKED=0; READY_VOID=0; READY_UNKNOWN=0   # → the summary record's would-block rate
 
+# THE ROUTING RULE'S OWN SURFACE — the paths whose landing invalidates a venue label (see
+# `ready_rule_moved`). All three are named because the decision is not one file's: `cc-venue` asks
+# the four questions, `cc-eligible` owns the spelling classes and the history horizon behind
+# question 1, and `cc-premise` owns the path extractor behind the `dodRef` arm. A change in any of
+# them can flip a verdict, so a basis that watched only `cc-venue` would still go stale silently.
+# Newline-separated because that is `ready_moved`'s input contract.
+#
+# `:-` NOT `-`, AND THE OFF SWITCH IS THE WORD `off`. An empty string falls back to the default on
+# purpose: the two spellings differ only in a character that is easy to type by accident, and the
+# fail-direction is not symmetric — an accidental empty value would silently restore exactly the
+# stale-label bug this arm exists to close, with every sensor still reading green. Disabling a guard
+# should have to be SPELLED, so it is (and case 37 of the readiness suite pins both halves).
+VENUE_RULE_PATHS="${CC_DISPATCH_VENUE_RULE_PATHS:-$(printf 'bin/cc-venue\nbin/cc-eligible\nbin/cc-premise')}"
+
 # ready_trunk_sha <repo> → origin/main's sha, or "" when git could not be asked.
 # NEVER a fabricated or defaulted value: every arm below treats this as a real point in history, and
 # a made-up one would make "trunk moved under this item" answerable against nothing.
@@ -1098,6 +1119,44 @@ ready_moved() {
   return 1
 }
 
+# ready_rule_moved <repo> <basis-sha> → 0 the ROUTING RULE itself landed a change since this item's
+# basis · 1 it did not, or the question is unaskable.
+#
+# 🚨 THE INVALIDATION BASIS WAS PER-ITEM ONLY, AND A CLASSIFIER CANNOT REACH ITS OWN OUTPUT THROUGH
+# IT. `ready_moved` asks "did trunk move under the paths THIS ITEM cites" — a question about the
+# item's subject matter. A landed change to the PRODUCER changes no item's cited paths, so a rule
+# that starts convicting a row can never invalidate the label it already wrote. Its blast radius
+# reaches unlabelled rows at once (`venue_label_new`) and settled rows only on `cc-venue run`'s 6 h
+# timer (scripts/autonomy-sweep.sh § 2b-i) — so a landed cure has an up-to-6 h window in which the
+# dispatcher goes on acting on the verdict it just replaced.
+#
+# MEASURED, and this arm is named after the incident that produced it: `fc7f4ac1` (question 1b,
+# "an item whose DoD is on no commit must not be promoted off-box") landed on trunk at
+# 2026-08-25T01:18:11Z, and item 4ce239d21d67 — the row that fix was written for — was dispatched
+# off-box AGAIN at 04:22:38Z, 3 h 04 m later, still carrying the `cloud` label the pre-fix producer
+# had written. The third such dispatch. Full chain: docs/research/venue-dod-offtrunk-2026-08-24.md §7.
+#
+# WHY IT REUSES `ready_moved` RATHER THAN STAMPING THE LABEL. A `venueAt` field on the row would be
+# the direct encoding, and it would need a schema change in the ledger's one writer plus a fold in
+# every reader. The basis sha this gate ALREADY pins per item answers the same question — "has the
+# rule landed anything since this item was last certified" — against machinery that is already
+# tested, and it advances on repair for free, so the arm is self-limiting rather than a permanent
+# re-derivation treadmill.
+#
+# FAIL-OPEN, AND ONLY rc 0 CONVICTS. `ready_moved` has three answers and `unknown` is not a verdict
+# about the item (memory: lookup-miss-is-not-absence): an unreadable repo, an absent basis or a
+# missing rule path all fall through to the arms below UNCHANGED, exactly as this file's own law
+# requires of a dead sensor. It is also SCOPED BY CONSTRUCTION rather than by a project test — the
+# rule paths exist only in this repo, so an item in any other project diffs an absent path, reads
+# "did not move", and is never convicted by a rule that does not govern it.
+ready_rule_moved() {
+  local r="$1" sha="$2"
+  [ "$VENUE_RULE_PATHS" = off ] && return 1
+  [ -n "$r" ] && [ -n "$sha" ] || return 1
+  ready_moved "$r" "$sha" "$VENUE_RULE_PATHS" || return 1
+  return 0
+}
+
 # ready_relabel <id> — THE REPAIR, and cc-venue's second missing caller (W1 item 5b). A void venue
 # verdict is RE-DERIVED IN PLACE: the producer re-runs its four questions against today's tree and
 # rewrites `venuePlan`/`venueWhy` through `cc-backlog venue`, which is the one writer.
@@ -1148,6 +1207,20 @@ readiness_verdict() {
 
   if [ -z "$vplan" ]; then
     state=void; reason="venue-unlabelled"
+  elif ready_rule_moved "$repo" "$prior"; then
+    # THE LABEL IS STALE AGAINST ITS OWN PRODUCER — ordered HERE, above the item-path arms, because
+    # it is a fact about the VERDICT rather than about the item. Below them it would be unreachable
+    # for precisely the rows that need it most: an item whose whole specification is its `dodRef`
+    # cites nothing in its premise text (cc-premise:500 folds `dodRef` to a separate field), so it
+    # short-circuits at `cites-nothing` — which is deliberately NOT repairable — and its label could
+    # never be refreshed here at all. Executed on the incident row: `cc-venue paths 4ce239d21d67`
+    # → `{"paths": []}` at rc 0.
+    #
+    # NOT FOLDED INTO `cites-nothing`, and the distinction is load-bearing. Adding the rule paths to
+    # the item's path set would make every row cite something and destroy that signal outright —
+    # laundering a void into a ready, which is the fail-open trap case 7 of the readiness suite
+    # exists to pin. This is a separate reason with a separate cure.
+    state=void; reason="venue-rule-moved"
   elif [ "$csrc" = inferred ]; then
     # An INFERRED multi-row cluster: this dispatcher believes N rows are one effort and nobody has
     # declared it. `--condition` rows are the resolved case — a filer DECLARED them one piece of
@@ -1175,7 +1248,9 @@ readiness_verdict() {
     fi
   fi
 
-  # THE REPAIR RUNS ON THE TWO REASONS A RE-DERIVATION CAN ACTUALLY CURE. `cites-nothing` and
+  # THE REPAIR RUNS ON THE THREE REASONS A RE-DERIVATION CAN ACTUALLY CURE — `venue-rule-moved` is
+  # the third and the most literal of them: the producer CHANGED, so re-running the producer is not
+  # merely a cure for that reason, it is the definition of one. `cites-nothing` and
   # `cluster-unresolved` are not among them: re-running the producer cannot make an item cite a
   # file, and it cannot decide that five rows are one effort. Reporting a repair that could not have
   # worked is the claimed-vs-checked defect, so those two are journalled void and left alone.
@@ -1186,7 +1261,7 @@ readiness_verdict() {
   # the void it FOUND, which is exactly what a reader of a dry run wants to see anyway.
   if [ "$may_repair" -eq 1 ]; then
     case "$reason" in
-      venue-unlabelled|trunk-moved) ready_relabel "$id" "$repo" && repaired=1 ;;
+      venue-unlabelled|trunk-moved|venue-rule-moved) ready_relabel "$id" "$repo" && repaired=1 ;;
     esac
   fi
 
