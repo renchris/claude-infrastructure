@@ -477,7 +477,9 @@ would weigh · **F2 well-researched** — grounded in THIS session's disk-truth 
 shipping stays inside the repo's sanctioned flow (G3; a repo may grant standing-land in its
 project CLAUDE.md) · **F4 bounded** — each item gets the full finish→gate→commit discipline;
 runaway bound = `CLAUDE_CONTINUE_MAX` + the kill-switch. On PASS: append
-`Scope (grown): +<item>` and execute. On FAIL: name + backlog (STOP-ASK only for a genuine
+`Scope (grown): +<item>` and execute. On FAIL: **drop it** — name it in one line and let it go —
+**unless it passes the FILED test** in § Three dispositions (why-not-now · why-still-true ·
+who-for); a FAIL is not a licence to mint (STOP-ASK only for a genuine
 fork/escalation). Asking the user to re-affirm an F1-F4 PASS is itself a defect
 (deference-fishing); so is laundering a FAIL through as a PASS (scope-metastasis). The
 kill-switch ("just do X", "…and stop") suspends the gate for that turn, like all
@@ -772,7 +774,7 @@ currently overflow one pane.** This is the bound the word cap was reaching for a
 | | Disposition | What it looks like in the close |
 |---|---|---|
 | **DRIVEN** | you did it this turn | S4, past tense, with its receipt in S5 |
-| **FILED** | it is in a store, so a renderer surfaces it | `cc-backlog needs "<step>"` for an operator-only step (`--run "<cmd>"` when one exists) · `cc-backlog add` for agent work. The STANDING pile then renders as ONE counted line in the `OPERATOR ▸` block — never as your prose. An item THIS SESSION filed is still named, in S2 or S6 |
+| **FILED** | 🚨 **the EXCEPTION — it carries the burden of proof, and it is NOT co-equal with DRIVEN** | The default for anything you notice is **fix it now, or drop it.** Mint a row only if you can answer all three, in the close: **(a) why not now** — the specific reason THIS session could not do it ("out of scope" alone is not a reason) · **(b) why it will still be true** — the condition keeping it real after a p90 of 9.3 days in the queue, ideally as a `--falsifier` so it self-retracts · **(c) who it is for** — `cc-backlog needs "<step>"` for an operator-only gate (`--run "<cmd>"` when one exists), `cc-backlog add` for genuine agent work. **Cannot answer all three ⇒ DROP IT.** An unanswerable row is noise a future session pays to re-derive. Filing something you could have fixed this turn is the defect this rule exists to prevent. When you do file, the STANDING pile renders as ONE counted line in the `OPERATOR ▸` block — never as your prose — and an item THIS SESSION filed is still named, in S2 or S6 |
 | **BLOCKED** | a genuine operator-only gate — credential · sudo · destructive migration · a real value fork | it IS S1's rung (`⛔`), stated as the one decision you need |
 
 **Offering is the defect** (operator ruling 2026-08-01): *"the answer will always be yes — the job is
