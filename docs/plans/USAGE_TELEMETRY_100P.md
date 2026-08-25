@@ -550,3 +550,1058 @@ incident history. Filed rather than decided.
 | commit | what |
 |---|---|
 | `7c9f36316` | `fix(cache-expiry-warning)` — TTL 300s→3600s (77.3% of its fires were false) and the `/clear`//`/compact` advice removed, because against the weekly limit it converted a free `cache_read` into a paid `cache_creation`. Verified with a positive control. |
+
+## §5 The weekly-drain planner — implementation spec
+
+> **INTEGRATION NOTE — this is a NEW section to be APPENDED after §4.1 of
+> `docs/plans/USAGE_TELEMETRY_100P.md`.** That file is 552 lines and INTEGRATE-never-overwrite
+> binds: do **not** rewrite it, do **not** touch §0–§4.1, and do **not** re-number the existing
+> sections. Append this whole block as `## §5` and leave everything above it byte-identical.
+> §3.3's design laws (L1–L4) and §3.2's forbidden metric shapes bind everything below and are not
+> restated except where a decision turns on one.
+
+**Verdict first.** The synthesis shipped five metrics on the claim that a **strand forecast with
+~20 h of lead time** is the product. Adversarial verification refuted that claim on four
+independent grounds, and refuted the 5h sub-cap's dismissal as well. What survives is smaller,
+sound, and still worth building: **the fleet strands 43 pp per 8 completed account-weeks, and
+nothing today names which account is losing it.** The planner ships as a **nowcast + a start-time
+constraint + a burst-feasibility read**, with the forecast's lead-time claim withdrawn and replaced
+by a falsifiable scoring harness that must run before any alarm is trusted.
+
+Every number in this section was re-measured for this spec by scripts in
+`scratchpad/SPEC_{roll,core,win2,live,burst,next3}.py` against
+`~/.claude/logs/account-utilization.jsonl` — **12,581 records, 0 parse failures**, 4 accounts,
+`2026-08-10T05:58Z → 2026-08-25T09:47Z` (15.16 d). Where a figure is carried from the synthesis or
+from a verifier rather than re-measured here, it is marked *(carried)*.
+
+---
+
+### §5.1 Amended design — what changed against the synthesis, and why
+
+| # | Synthesis claim | Verdict | What ships instead |
+|---|---|---|---|
+| LB-1 | `K = 0.192` weekly-pp per session-pp, band [0.185, 0.198], is a **plan constant** | **SURVIVES** the value; the *justification* is struck | `K` ships, **re-fit on read** with a band guard (§5.2 S1c). The words "plan constant" are deleted. |
+| LB-2 | The strand forecast called 4/4 strands with **median ~20 h lead**, 0/4 false positives | **REFUTED — fatally** | The forecast becomes a **nowcast** (M3a). The lead-time claim is withdrawn entirely. A causal, **≤12 h-capped** rescue alarm (M3b) ships only after the scoring harness (M3c) clears it. |
+| LB-3 | The 5h sub-cap **cannot bind**; M4 ships as a **veto** | **REFUTED for the planner's span** | M4 as specified is **deleted**. Replaced by M4′ `burst_start_by_h`, a **trigger** and a **start-time constraint**, sized on the burst denominator. |
+| LB-4 | Replacing `burn_5h_ph` changes the **router's exclusions** | **REFUTED — structurally impossible** | M1 ships as a **correctness + availability** fix with the exclusion claim deleted and its regime blind spot named. Ranked last, not first. |
+
+#### LB-1 — K survives; two amendments ride with it
+
+I re-derived K independently rather than accept it: **adjacent non-rolling pairs, dt ≤ 0.5 h,
+minute-ROUNDED roll keys on both meters → K = 0.1925** (n = 11,026 pairs, Σ Δsession = 4,047 pp,
+Σ Δweekly = 779 pp). That is the third independent reproduction (synthesis 0.1927, verifier 0.1923
+telescoping / 0.1924 pairs) and it lands inside the shipped band.
+
+**Amendment 1 — strike the justification, keep the number.** The verifier showed the pooled
+ratio-of-sums structurally averages mix away: jittering per-window K by ±30% leaves the pooled
+estimate at 0.1922 and in-band on 85% of trials. So the pooled fit carries almost no information
+about workload-invariance, and only the stratified tests can see it — at a minimum detectable mix
+shift of ~4–5% (Fable-gained, `s1 ≥ 90`) to ~11% (`w0 ≥ 80`). **The defensible statement is:**
+
+> *No workload effect larger than roughly 5–11% exists in the mix dimensions this log records.
+> A shift common to every recorded dimension is untestable here.*
+
+**Amendment 2 (NEW — measured for this spec) — the band is already breached by the trailing
+window, so K may not be a frozen literal.** Re-fitting on trailing slices:
+
+| trailing from | Σ Δsession pp | K |
+|---|---|---|
+| 2026-08-19 | 1,771 | 0.1982 |
+| 2026-08-20 | 1,510 | 0.1987 |
+| 2026-08-21 | 1,350 | **0.2000** |
+| 2026-08-22 | 1,019 | **0.2012** |
+
+The last two sit **above** the shipped band's ceiling of 0.198. The verifier saw the same drift
+(Aug 22–25 window-level 0.2000 [0.1947, 0.2060]; permutation test on late-vs-early diff +0.0065,
+**p = 0.0948**, not significant at 0.05). It is not proven to be a real change — but a frozen
+literal has no path to learn that it became one. This is MEMORY.md
+`resident-policy-must-not-restate-perishable-facts` and `published-figure-decays-with-its-source`
+applied to a coefficient: **ship K as a live fit with a fallback and an abstain**, per §5.2 S1c.
+
+**Amendment 3 — record the trap, so no future session re-reports it as a finding.** Binning K by
+burn intensity produces a spectacular apparent workload dependence (observed by Δsession bin:
+0.1245 / 0.1774 / 0.1824 / 0.1926). It is entirely an instrument artifact — burn intensity is
+Δsession/Δt, so binning on it is **binning on K's own denominator**. A simulation with K set to
+*exactly* 0.192 reproduces the same monotone pattern (0.1463 / 0.1751 / 0.1866 / 0.1916).
+*(carried, verifier)*. This is `positive-control-the-denominator.md` and
+`proxy-must-be-independent-of-what-it-supplements.md`. **Anyone re-testing K will hit this. It is
+not a finding.**
+
+#### LB-2 — the forecast is dead as a forecast; it survives as a nowcast
+
+The synthesis's headline — *"this lead time IS the product"* — is withdrawn. Four independent
+kills *(carried, verifier; I did not re-run the 504-config sweep)*:
+
+1. **The score was a tautology.** The fire rule ("projected strand holds ≥ 4 pp and never retracts
+   thereafter") is non-empty only at the window's **last** sample, where `reset_h → 0` (median
+   0.03 h) and the projection therefore converges to `100 − weekly_pct` — **the true strand**. The
+   rule fires iff the true strand ≥ 4 pp; verified to agree with the identity function on 8/8
+   windows. Recall 4/4 and FP 0/4 are guaranteed for *any* estimator of this form. A control that
+   cannot fail is not a control (`gate-must-not-key-on-its-own-signal.md`).
+2. **Scoring it causally destroys the FP record.** Per-instant, the three windows that closed at
+   98 / 99 / 100% fire on 28.8% / 66.6% / 91.7% of their evaluable instants. next2's 08-22 window
+   closed at **exactly 100%** — the operator's stated goal — and was forecast to strand up to
+   100.0 pp for two-thirds of its life.
+3. **The temporal split fails.** Parameters fixed, week-1 resets score 3/3 recall + 0/1 FP;
+   held-out week-2 resets fire on **4 of 4** windows, FP 3/3.
+4. **No long-horizon causal rule exists.** Across 504 causal configurations (floor 2–30 pp × dwell
+   0–24 h × horizon cap 6–168 h), exactly 18 achieve 4/4 + 0 FP, and **every one caps the horizon
+   at ≤ 12 h**. Maximum lead achievable by any clean causal rule: **11.96 h**.
+
+**The operator's "planned hours/days ahead" requirement is therefore NOT met by this data, and the
+spec says so plainly rather than shipping a number that cannot support it.** What ships:
+
+- **M3a — the nowcast.** Same arithmetic, honest framing: *"at the pace of the last 48 h, this
+  window lands at X% and Y pp die at reset."* No lead-time claim, no alarm semantics.
+- **M3c — the scoring harness** (`--strand-score`). Horizon-stratified signed error per
+  (window, horizon bucket ∈ {96, 48, 24, 12, 6} h). ~45 scored cells today against 8 binary
+  outcomes. **This instrument can fail.** It is a prerequisite, not a nicety.
+- **M3b — the ≤12 h rescue alarm**, on probation, gated behind M3c showing it survives a temporal
+  split. In-sample it is 4/4 + 0 FP across 18 settings (floor 2–5 pp, dwell 1–8 h), which largely
+  dissolves the in-sample-floor objection at short horizon — but it is still a 3-parameter fit on
+  n = 8 and **the temporal split was never run on it**.
+
+**One correction to the refutation, measured for this spec.** The verifier's *"BONUS METHOD
+DEFECT"* — that the spec's minute-rounded roll key flips on ~42% of adjacent pairs and collapses
+recall to 0/4 — is **itself an implementation error**, and it matters because it would have sent an
+implementer chasing a non-existent defect. My measurement over 9,777 adjacent pairs (dt ≤ 1 h):
+
+| roll-key spelling | key changes | rate | agrees with ground truth (reset shift > 1 h)? |
+|---|---|---|---|
+| string prefix `s[:16]` (**truncation**) | 4,498 | **46.0%** | no — 4,399 spurious |
+| **`round(epoch/60)`** | **99** | **1.0%** | **yes — 99 of 99, exact** |
+| ground truth: reset stamp moved > 1 h | 99 | 1.0% | — |
+| cross-check: `session_pct` decreased | 98 | 1.0% | — |
+
+Weekly stamp, same test: truncation 5,136 of 11,310 (45.4%); **rounding 3, ground truth 3.** The
+stamp's second-of-minute distribution is `00: 1,880 · 59: 1,427 · 01: 13 · 17: 1` — it straddles
+the boundary, which is exactly why truncation fails and rounding does not. **Rounding is correct
+and the verifier's kills 1–4 stand without it.** *(This also retires the verifier's inference that
+M1's MAE win "must have been measured with a roll rule other than the one documented" — it was not;
+the second verifier independently reproduced the win using rounding.)*
+
+#### LB-3 — the sub-cap is a planning constraint after all; M4 is deleted
+
+The synthesis's M4 is **unshippable on its own evidence** and is removed rather than weakened:
+
+- Recomputed over the whole series it reads `REACHABLE` on **10,556 of 10,623** evaluable samples
+  = **99.37%**, so `P(4/4 REACHABLE | null instrument) = 0.9937⁴ = 97.5%` — the "4/4 historical
+  strands" evidence carries ~0.04 bits. *(carried, verifier)*
+- During the **five wall episodes it exists to detect** — the exact event — it reads `REACHABLE` on
+  **100% of 74 samples** and never once flips. `reach_pp` and `need` are both monotone in
+  `(weekly_pct, hours-remaining)`, so the comparison is near-algebraically fixed. The synthesis's
+  own §1.4 wrote *"a capability metric can never be the alarm"* and then cited the same 4/4 as
+  evidence **for** M4. One observation, used in both directions.
+
+**The stratification that kills the dismissal, reproduced exactly by me:**
+
+| 5h segments by peak `session_pct` | n | walled | rate |
+|---|---|---|---|
+| idle < 10 | 130 | 0 | 0.0% |
+| light 10–30 | 76 | 0 | 0.0% |
+| moderate 30–50 | 27 | 0 | 0.0% |
+| heavy 50–80 | 11 | 0 | 0.0% |
+| **BURST ≥ 80** | **8** | **5** | **62.5%** |
+| total | 252 | 5 | 1.98% |
+
+Fisher exact two-sided **p = 6.9e-09** *(carried)*. The 1.98% headline averages over a population
+that is overwhelmingly idle — 130 of 252 segments never passed 10%. **The operator's entire goal is
+to convert idle windows into burst windows**, and in the regime the planner *creates*, the cap
+binds 5 times in 8. `count-the-population-the-remedy-acts-on.md`,
+`control-fixture-must-reach-the-bugs-regime.md`.
+
+**The 6.5× headroom is a 168-hour average and decays with the horizon** — 1.00× at 5 h remaining,
+0.60× at 3 h. Empirically the BINDS verdict fires on 0.0% of samples beyond 12 h remaining and on
+14.0–16.7% inside the final 6 h *(carried)*.
+
+**And the loss is not inside the window — it is the frozen tail.** All 8 burst windows delivered
+13–20 weekly pp regardless of walling. The damage is the freeze that follows. Measured, the 8 burst
+windows:
+
+| acct | window start | peak 5h% | weekly gain | fill h | session-pp/h | wall | wall h |
+|---|---|---|---|---|---|---|---|
+| next3 | 08-10 07:20Z | 100 | 20 | 1.40 | 71.66 | **WALL** | 3.53 |
+| next4 | 08-11 08:03Z | 85 | 13 | 4.87 | 17.46 | — | — |
+| next3 | 08-16 20:06Z | 100 | 20 | 3.45 | 28.40 | **WALL** | 1.42 |
+| next | 08-17 19:55Z | 100 | 19 | 4.42 | 22.64 | **WALL** | 0.31 |
+| next3 | 08-18 00:33Z | 100 | 19 | 4.33 | 23.09 | **WALL** | 0.55 |
+| next3 | 08-18 05:38Z | 100 | 19 | 2.37 | 41.39 | **WALL** | 2.45 |
+| next4 | 08-22 20:34Z | 99 | 19 | 4.83 | 20.50 | — | — |
+| next3 | 08-23 21:16Z | 86 | 17 | 4.85 | 17.12 | — | — |
+
+**Shipped burst constants** (all from this table): `P_WALL = 5/8 = 0.625` ·
+`BURST_SPPH` (median sustained fill) = **22.87 session-pp/h** = 4.39 weekly pp/h at K = 0.192 ·
+`MEAN_WALL_H = 1.653` (median 1.425) · **expected freeze per burst window = 1.033 h**.
+
+⚠️ **`P_WALL` is a LOWER bound.** Inter-sample gaps are p50 6.4 min / p90 7.8 / p99 12.4, and a
+≥2-sample wall detector cannot see a freeze shorter than ~13 min *(carried)*.
+
+**The forward arithmetic the design must absorb:** closing the measured 19.9 pp/week fleet strand
+needs **1.04 extra full 5h windows/week**. At the burst wall rate that moves fleet walls
+2.31 → 2.96/week, i.e. **1.72% → 2.20% of all 5h windows — past the 2% inversion trigger the
+original claim named, before the planner is even built** *(carried)*.
+
+#### LB-4 — M1 keeps its accuracy, loses its story, and drops to last
+
+- **The exclusion claim is CODE-FALSE and must be deleted from the spec.** `_excluded()` computes
+  `su = r["session_pct"] / 100.0` at `bin/claude-accounts:2045` — the **raw** meter. `_su_projected`
+  is read only at `:1372` (inside `_soft`) and `:2197` (inside `desk_keys`). `_soft` returns
+  `SF*KF*CF` with `SF ≥ SF_FLOOR = 0.05`, so it is floored at 0.0025 > 0 and can never trip
+  `_rank_pass`'s `s > 0` gate. **No value of `burn_5h_ph` can ever change an exclusion.** Proven
+  with a positive control rather than asserted: feeding an absurd `burn_5h_ph = 5.0` across 11,530
+  rows changed **score values on 10,489 rows and desk tiers on 11,200 — and exclusions on 0**.
+  *(carried, verifier)*
+- **Its measured effect is small and absent where the goal lives.** rank[0] flips: 46/3,011 (1.5%)
+  general, 64/3,011 (2.1%) desk, 139/11,479 (1.2%) desk-tier — but **0 of 64 general flips** in the
+  `weekly_reset ≤ 6 h AND session_pct ≥ 50` stratum, which is precisely the end-of-window regime
+  the operator's goal names. *(carried)*
+- **It inverts in the burst regime.** Scored against realised `session_pct` 1 h later (n = 4,017),
+  EWMA wins overall (MAE 0.0282 vs 0.0388, **−27.3%**, paired t = 11.6) but **loses at
+  `session_pct ≥ 40`** (n = 133): incumbent 0.0617, EWMA 0.0797, EWMA over-projecting by +0.0355.
+  *(carried)*. Direction note: `_su_projected` is soften-only, so over-projection at high load is
+  **fail-safe for routing** — it makes a loaded account less attractive. It is still wrong as a
+  measurement and M1's abstain rule must not pretend otherwise.
+
+So M1 ships as a **correctness + availability fix** (non-inert on 93.5% of rows against the
+incumbent's 20.7%), ranked **last**, with the honest action line: *"feeds the SF multiplier in
+`_soft` (score-ranking only, floored so it can never exclude) and the desk lane's
+`DESK_5H_FLOOR` tier key in `desk_keys`."*
+
+#### What is now the product
+
+> **Name the account that is about to lose quota, say how much, say whether it can still be spent,
+> and say by when the spending must start.** Four facts, none of which any surface renders today.
+> The synthesis promised a fifth — *how early you could have known* — and the data does not carry
+> it beyond ~12 h.
+
+---
+
+### §5.2 The shippable change list, ranked by value / effort
+
+Ranking is against **the operator's goal**, not against instrument quality. M1 is the best-measured
+change in the list and ranks last because it provably does not move the goal.
+
+| rank | id | what | blocks / blocked by | effort |
+|---|---|---|---|---|
+| **S1** | data fixes | roll-key rounding · `_util_tail` by time · live-window exclusion · live-K fit | **blocks everything below** | S |
+| **S2** | M5 | `burst_percentile` — is the demand physically routine or a p95 stunt? | S1 | S |
+| **S3** | M3a + M2 | `wk_strand_pp` nowcast on a roll-aware weekly EWMA | S1 | M |
+| **S4** | M4′ | `burst_start_by_h` — the start-time constraint | S1, S2 | M |
+| **S5** | M3c | `--strand-score` — the falsifiable scoring harness | S3 | M |
+| **S6** | M3b | `wk_strand_alarm` ≤12 h, latching, causal | **S5 must clear it first** | S |
+| **S7** | M1 | `burn_5h_ewma_ph` — correctness/availability only | S1 | S |
+
+**L3 (one renderer) is held.** Every live metric renders through `readout_lines`
+(`bin/claude-accounts:3141`) via `pace_line` (`:2006`, called at `:3375` and `:3696`). No new live
+surface. The one new flag, `--strand-score` (S5), is argued as an exception in its own entry.
+
+---
+
+#### S1 · Data fixes — these land FIRST, in one commit, and nothing below is trustworthy until they do
+
+##### S1a — the roll key must ROUND, never truncate
+
+**Change.** Add a module-level helper beside `_util_tail` (`bin/claude-accounts:1877`):
+
+```python
+def _reset_key(stamp):
+    """Minute-ROUNDED reset-stamp key. The stamp jitters sub-second and STRADDLES the minute
+    boundary (measured second-of-minute over 4,000 records: 00:1880 · 59:1427 · 01:13 · 17:1),
+    so a string prefix or a truncation splits one window into two on 46.0% of adjacent pairs and
+    the roll branch then injects an ABSOLUTE level as a delta. Rounding flips on 1.0% and agrees
+    with ground truth (reset shift > 1 h) on 99 of 99. None means NO WINDOW OPEN — a distinct
+    state, not missing data."""
+    if not stamp:
+        return None
+    try:
+        t = datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
+        return None
+    return round(t / 60.0)
+
+
+def _rolled(a, b, stamp_field, pct_field):
+    """True when the window between two samples RESET. Two independent witnesses, OR'd: the
+    rounded key changed, or the meter went backwards. Neither alone is sufficient — a key
+    comparison is blind to a same-key reset, and a pct decrease is blind to a reset that
+    lands on the same value."""
+    ka, kb = _reset_key(a.get(stamp_field)), _reset_key(b.get(stamp_field))
+    if ka is not None and kb is not None and ka != kb:
+        return True
+    pa, pb = a.get(pct_field), b.get(pct_field)
+    return pa is not None and pb is not None and pb < pa
+```
+
+**Arithmetic.** `key = round(epoch_seconds / 60)`. A roll is `key_a != key_b` **OR**
+`pct_b < pct_a`.
+
+**Abstain.** `_reset_key(None) → None`, and a `None` key **never** counts as a roll — it means no
+window is open (15.0% of rows; 1,789 of 1,790 have `session_pct == 0`).
+
+**Replaces.** Nothing today — `apply_burn` currently infers a roll only from `d < 0`
+(`:1930`, `:1943`), which is blind to a same-value reset and is why `burn_wk_ppd` discards every
+window that crosses a reset.
+
+##### S1b — `_util_tail` must select by TIME, not by bytes
+
+**Change.** `_util_tail` at `bin/claude-accounts:1877`, signature
+`_util_tail(path=None, max_bytes=131072)`, called with **no argument** by `apply_burn` at `:1918`.
+
+**The defect, re-verified against the live file:** 3,675,531 B, mean record 292.4 B → the 128 KiB
+tail parses **407 rows spanning 12.16 h** against a docstring claiming 48 h *(carried; the byte
+figures are the synthesis's, the coupling is structural)*. **M2's 48 h lookback is unreachable
+today.** Worse, the coupling is undocumented and inverted: adding any field to the record (e.g.
+`k_agents`, task #171) silently *shortens* the window.
+
+**Arithmetic.** Keep the byte seek as a cheap pre-filter but size it from the requirement:
+`max_bytes = max(131072, int(hours * 3600 / median_interval_s * mean_record_b * 1.5))`, then
+**filter the parsed rows by `now - _t <= hours*3600`** and, critically, **assert the achieved
+span**. New signature: `_util_tail(path=None, hours=48.0, max_bytes=None)`.
+
+**Abstain.** Return the rows **and** the achieved span; every consumer's abstain rule is written
+against the achieved span, never the requested one. A consumer asking for 48 h and receiving 12 h
+must see 12 h and abstain on its own rule — it must not be told it got 48.
+
+**Also fix (same commit, cheap):** the rotation cliff. `config/store-bounds.manifest:47` rotates
+this file at 25 MiB; at 237 KiB/day that lands ~2026-12-11, and **all readers open only the live
+path**, so at rotation every burn estimate silently drops to a series of length ~0. Glob the `.gz`
+siblings newest-first until the requested span is covered.
+
+##### S1c — K is fitted live, with a fallback and an abstain
+
+**Change.** New module-level function beside `apply_burn`:
+
+```python
+K_FROZEN   = 0.192      # pooled, 2026-08-10..25, n=11,026 pairs (Sds=4047, Sdw=779) -> 0.1925
+K_MIN_SDS  = 300.0      # session pp of movement below which the trailing fit is too thin to use
+K_SANE     = (0.175, 0.210)   # outside this the PLAN changed (or the meter did) -> abstain
+
+def exchange_rate(samples, hours=168.0):
+    """weekly pp per session pp, fitted on the trailing window. Ratio-of-sums over adjacent
+    non-rolling pairs (dt <= 0.5 h) -- NEVER a mean-of-ratios (quantization biases that upward at
+    small windows: 0.158 below 5 session pp vs 0.192 above 30) and NEVER binned by burn intensity
+    (that is K's own denominator; a simulation with K exactly 0.192 reproduces the whole apparent
+    trend). Returns (K, sum_ds, 'live'|'frozen'|None)."""
+```
+
+**Arithmetic.** `K = Σ Δweekly / Σ Δsession` over adjacent pairs where **neither** meter rolled
+(`_rolled` on both), `0 < dt ≤ 0.5 h`, both deltas ≥ 0.
+
+**Abstain (L2), three-way:**
+
+| condition | result |
+|---|---|
+| `Σ Δsession < K_MIN_SDS` | fall back to `K_FROZEN`, source `"frozen"` |
+| fit outside `K_SANE` = [0.175, 0.210] | **return `None`** — every K-consuming metric abstains |
+| otherwise | the live fit, source `"live"` |
+
+**Why the guard and not a wider band.** Trailing-from 08-21 already reads 0.2000 and 08-22 reads
+0.2012, above the shipped ceiling of 0.198, on Σ Δsession of 1,350 and 1,019 respectively. That is
+either drift or noise (permutation p = 0.0948) — but a *frozen* literal cannot tell the difference
+and a *silently widened* band launders a plan change into a number. Abstaining is the only reading
+that stays honest under both hypotheses.
+
+##### S1d — a completed weekly window requires its reset to be in the PAST
+
+**This one I hit myself while writing this spec, and it would have corrupted the acceptance test.**
+The synthesis's completed-window rule is *"reset observed with the last sample ≤ 3 h before it."*
+That rule **admits the currently-live window**, because a live window's newest sample is always
+some hours before its own reset. Measured, at `NOW = 2026-08-25T09:47:41Z`:
+
+| detector | result |
+|---|---|
+| naive (`0 ≤ gap ≤ 3 h` only) | **51 pp over 9 account-weeks** — admits next3's live 08-25 window at 92% |
+| **fixed (`reset < now` AND `0 ≤ gap ≤ 3 h`)** | **43 pp over 8 account-weeks** ✅ matches the synthesis exactly |
+
+The baseline is therefore confirmed at **43 pp / 8 completed account-weeks = 5.4 pp per
+account-week = 19.9 pp/week fleet-wide**, median 8 pp among the 4 that stranded ≥ 4 pp:
+
+```
+next3  reset 08-11 12:00Z  final=100%  strand= 0pp
+next2  reset 08-15 11:00Z  final= 92%  strand= 8pp
+next   reset 08-16 04:00Z  final= 91%  strand= 9pp
+next4  reset 08-16 09:00Z  final= 85%  strand=15pp
+next3  reset 08-18 12:00Z  final= 98%  strand= 2pp
+next2  reset 08-22 11:00Z  final=100%  strand= 0pp
+next   reset 08-23 04:00Z  final= 99%  strand= 1pp
+next4  reset 08-23 09:00Z  final= 92%  strand= 8pp
+```
+
+**n = 8 is the binding limit on every weekly-side figure in this spec.** It grows by ~3.7 completed
+account-weeks per week. The class is `gap-IS-the-mechanism` — a detector for "the window ended"
+that fires during the window.
+
+---
+
+#### S2 · M5 · `burst_percentile` — replaces the *rendering* of `weekly_need_pct_per_day`
+
+**Ranked first among metrics because it is the only one no refutation touched, and it answers
+failure mode (3) directly.**
+
+**Function.** New `burst_percentile(r, samples)` beside `pace_need_ppd`
+(`bin/claude-accounts:1962`). Consumed by `pace_line` (`:2006`).
+
+**Arithmetic.** Required rate `need_pph = (100 − weekly_pct) / weekly_reset_h`, in weekly pp/h.
+Express it as its percentile within **this account's own** distribution of realised H-hour weekly
+burn rates, where `H` = the nearest of `{1, 3, 6, 12, 24}` h to `weekly_reset_h` **on a log scale**.
+The distribution is every rolling H-hour window inside one weekly window with span coverage
+0.9–1.15 × H.
+
+**Abstain (L2).** Null when fewer than **200** qualifying windows exist for that account; null when
+`weekly_reset_h < 0.5 h`. When `need_pph` exceeds every observed window, render
+**"never once achieved"** — never extrapolate a p100.
+
+**Replaces.** Not the field — `weekly_need_pct_per_day` (`pace_need_ppd`, `:1962`) stays, because
+it still answers *"how hard would I have to push."* M5 replaces its **rendering as a bare rate**.
+The defect it cures: `needs 88%/d over 2.2h` quotes a rate in a unit **11× longer than the window
+it must happen in**, which is uninterpretable.
+
+**Live confirmation, and it is out-of-sample.** At 09:27Z the synthesis measured next3 at
+**p95.5** (H = 3 h, n = 2,618) to close 8 pp. next3 did **not** perform the p95 burst — it went
+92% → 92% over the following 2.2 h and its window closed short. **M5 said "this is a p95 stunt"
+and the stunt did not happen.** That is one live case, not a validation, but it is the right
+polarity and it is the first out-of-sample datum this design has.
+
+---
+
+#### S3 · M3a + M2 · `wk_strand_pp` on `burn_wk_ewma_ph` — the nowcast
+
+**Functions.** `burn_wk_ewma_ph(samples_for_acct, now, weekly_reset_h)` and `wk_strand_pp(r)`, both
+beside `wall_projection` (`bin/claude-accounts:1977`); attached to rows in `apply_burn` (`:1909`)
+alongside the existing `burn_ratio` / `proj_end_pct` block at `:1950-1960`.
+
+**M2 arithmetic.** Roll-aware EWMA over `weekly_pct`, in **%/h**. Over adjacent pairs `(a,b)` in
+the trailing 48 h with `weekly_pct` present on both and `0 < dt ≤ 1 h`:
+
+```
+rolled = _rolled(a, b, "weekly_reset_at", "weekly_pct")        # S1a
+d      = b.weekly_pct  if rolled  else  max(0, b.weekly_pct - a.weekly_pct)
+w      = 2 ** ( -((now - b._t)/3600) / hl )
+value  = Σ(w·d) / Σ(w·dt_h)
+hl     = 4.0  if weekly_reset_h <= 6  else  8.0
+```
+
+**M2 abstain (L2).** Null when the **raw measured span** (Σ dt over usable pairs — *not* the
+weighted span, and *not* the requested lookback) is < **6.8 h**, the span below which ±1 pp
+quantization exceeds 25% of the weekly meter's realised mean of 0.592 %/h. Null when fewer than
+2 usable pairs exist. **Never** abstain on a roll — reconstruct post-roll accrual as a lower bound.
+**Refuse the horizon licence:** any consumer with a horizon > 12 h must use the `hl = 8` form; the
+`hl = 4` form may never be extrapolated past 12 h.
+
+**M2 replaces `burn_wk_ppd`** (`apply_burn:1940-1949`) — the widest-pair-inside-48 h estimator.
+**It ships on availability and roll-awareness, not on accuracy** (live: incumbent 43.79 / 7.96 /
+29.85 / 3.98 %/day vs EWMA×24 = 38.0 / 6.9 / 29.3 / 4.6 — close). Its win is that the incumbent
+discards **every** window reset and is therefore blind for the first 12 h of every weekly window —
+exactly when the week's plan is set. That reasoning is independent of LB-2 and the verifier
+affirmed it survives.
+
+**M3a arithmetic.** `wk_strand_pp = max(0, 100 − (weekly_pct + burn_wk_ewma_ph × weekly_reset_h))`.
+
+The clamp is load-bearing, not cosmetic. It discards the **overshoot** regime where every projector
+measured here is badly wrong (on `next` at phase 0.32 the incumbent renders 154.6% and the EWMA
+renders **231.4%** against a truth near 100% — the "better" estimator is *worse* on that figure)
+and keeps the **shortfall** regime, where the arithmetic is a nowcast of a quantity that actually
+converges.
+
+**M3a abstain (L2).** Null whenever M2 abstains. Null when `weekly_reset_h ∉ (0, 168]`. Never
+clamp a negative strand into a positive one. **Never render a weekly `proj_end_pct` above 100 as a
+number** — report the strand, and separately that the account is on a wall trajectory.
+
+**M3a replaces the weekly half of `proj_end_pct` / `wall_risk`** (`wall_projection`, `:1977`).
+`wall_projection` itself **stays** — the 5h `burn_ratio` render is the one raw-percentage figure
+§3.3 L1 permits, and `tests/claude-accounts-burn-ratio.bats` continues to pin it unchanged.
+
+🚨 **Framing constraint, and it is the whole amendment.** M3a is rendered as a **nowcast**:
+*"at the pace of the last 48 h."* It carries **no lead-time claim** and **no alarm semantics**. The
+synthesis's `4/4 recall / 0 FP / median ~20 h lead` line is withdrawn and must not appear in the
+plan doc, the docstring, the footer, or a commit message. Rationale: the estimator converges to
+truth as the horizon closes, which makes it a **good nowcaster and a bad forecaster** — and the
+synthesis published the nowcast accuracy as if it were forecast accuracy.
+
+**What the nowcast is worth today** (my measurement, `NOW = 09:47:41Z`):
+
+| acct | weekly% | reset h | `burn_wk_ewma_ph` | `wk_strand_pp` |
+|---|---|---|---|---|
+| next | 52 | 114.21 | 1.725 (hl 8) | **0.0** — wall trajectory |
+| next2 | 17 | 97.20 | 0.281 (hl 8) | **55.7** |
+| next3 | 92 | 2.21 | 1.140 (hl 4) | **5.5** |
+| next4 | 14 | 119.20 | 0.186 (hl 8) | **63.8** |
+
+**119.5 pp sits on next2 and next4 with four days of runway, against 5.5 pp on the account the
+router is alarmed about.** That inversion is the gain, and it does not depend on any lead-time
+claim.
+
+---
+
+#### S4 · M4′ · `burst_start_by_h` — the start-time constraint (replaces the deleted M4)
+
+**Function.** New `burst_start_by(r, K)` beside `pace_need_ppd` (`:1962`), consumed by `pace_line`
+(`:2006`). **M4 `wk_reach_pp` as specified in the synthesis is not implemented.**
+
+**The primitive is a START TIME, not a capacity verdict.** All 8 burst windows delivered 13–20
+weekly pp whether or not they walled, so the wall is not loss *within* the window — the loss is the
+frozen tail. The shippable constraint is: *begin the endgame burst early enough that the burn plus
+the expected freeze plus the 5h grid still fit inside the weekly window.*
+
+**Arithmetic.** Constants from the burst table in §5.1: `BURST_SPPH = 22.87`, `P_WALL = 0.625`,
+`MEAN_WALL_H = 1.653`.
+
+```
+deficit_wk = max(0, 100 - weekly_pct)
+need_spp   = deficit_wk / K                       # session pp to buy it   (K from S1c)
+
+# walk the 5h grid: you cannot open window N+1 before window N resets.
+t = 0.0 ; rem = need_spp ; windows = 0
+avail = 100 - session_pct                          # the OPEN window's remainder
+if avail > 0:
+    burn_h = min(avail, rem) / BURST_SPPH
+    burn_h = min(burn_h, session_reset_h)          # the window may die first
+    took   = burn_h * BURST_SPPH
+    rem   -= took ; t += burn_h ; windows += 1 if took > 0 else 0
+    if rem > 0:
+        t = session_reset_h                        # wait out the roll
+while rem > 0:
+    take = min(100.0, rem)
+    t   += take / BURST_SPPH
+    rem -= take ; windows += 1
+    if rem > 0:
+        t += 5.0 - (100.0 / BURST_SPPH)            # wait for the next roll
+
+freeze        = windows * P_WALL * MEAN_WALL_H
+t_needed      = t + freeze
+burst_start_by_h = weekly_reset_h - t_needed       # <= 0  =>  ALREADY LATE
+```
+
+**Verdicts.** `burst_start_by_h > 12` → `SLACK` · `0 < burst_start_by_h ≤ 12` → `START SOON` ·
+`≤ 0` → `LATE`, and report the floor: `unrecoverable_pp = deficit_wk − K × BURST_SPPH ×
+max(0, weekly_reset_h − freeze)`.
+
+**Abstain (L2).** Null when `K` is None (S1c abstained). Null when `session_pct` or
+`session_reset_at` is null — a null stamp means **no window is open**, a distinct state that must
+not collapse to zero. Null when `deficit_wk ≤ 0`. Null when `weekly_reset_h ∉ (0, 168]`.
+
+🚨 **Its threshold is sized on the BURST denominator (5/8), never the all-windows one (5/252)**,
+and `P_WALL` is a **lower bound** (walls under ~13 min are invisible to the detector). Ships **on
+probation**: n = 8 burst windows is the entire evidence base, and the monitoring plan (§5.5) re-runs
+the burst-stratified wall rate on every completed weekly window rather than waiting for the
+planner.
+
+**Live** (`NOW = 09:47:41Z`, K = 0.192):
+
+| acct | deficit | need session-pp | windows | burn h | freeze h | t_needed | reset h | `burst_start_by_h` | verdict |
+|---|---|---|---|---|---|---|---|---|---|
+| next3 | 8 | 41.7 | 1 | 1.82 | 1.03 | **2.86** | 2.21 | **−0.65** | **LATE** — floor **2.83 pp** unrecoverable |
+| next2 | 83 | 432.3 | 6 | 21.41 | 6.20 | 27.61 | 97.20 | +69.59 | SLACK |
+| next4 | 86 | 447.9 | 6 | 22.10 | 6.20 | 28.29 | 119.20 | +90.91 | SLACK |
+| next | 48 | 250.0 | 3 | 11.69 | 3.10 | 14.79 | 114.21 | +99.42 | SLACK (no strand — wall trajectory) |
+
+The unrecoverable floor for next3 is computed as stated: freeze 1.03 h of the 2.21 h remaining
+leaves 1.18 h of usable burn = `K × BURST_SPPH × 1.18` = **5.17 weekly pp** of the 8 needed, so
+**2.83 pp cannot be saved even by a perfect burst starting this instant.**
+
+**This is the metric doing the job the deleted M4 could not.** The synthesis's M4 read next3
+`16.9 pp reach vs 8 needed — REACHABLE, 2.1× margin`. M4′ reads **LATE by 0.65 h with a 2.83 pp
+floor** — and next3 in fact stranded. The difference is that M4 asked a *capacity* question, which
+is nearly algebraically fixed, and M4′ asks a *rate-and-freeze-against-the-clock* question, which
+can come out either way.
+
+---
+
+#### S5 · M3c · `--strand-score` — the instrument that CAN fail
+
+**Function.** New `strand_score(samples, buckets=(96,48,24,12,6))` beside `_util_tail`, plus a
+branch in `main()` (`bin/claude-accounts:4166`) placed **before** `load_cfg()`, exactly like the
+`--agents` branch at `:4178` — it must answer without a sweep, without the keychain, and without a
+config.
+
+**L3 exception, argued.** L3 governs the *live state* surface: there is one renderer of "what are
+the accounts doing now," and `--strand-score` does not touch it. It renders **history** — scored
+past windows — reads only the series, and **nothing routes on it**. It is the mutation-test of the
+planner, not a second opinion about the fleet. Shipping it as a flag on the same binary (not a new
+`scripts/*.sh`) also rides the existing `~/.claude/bin/claude-accounts` symlink, so it converges on
+the trunk fast-forward instead of landing as an ADD the live layer cannot reach (the `LIVE_ADDS`
+trap).
+
+**Arithmetic.** For each completed weekly window (S1d rule) and each horizon bucket `H`, take the
+last evaluable sample with `weekly_reset_h ≥ H`, compute `projected_strand` from M3a at that
+instant, and score **`signed_error = projected_strand − realised_strand`**. Report per bucket:
+n, mean signed error (bias), MAE, and the sign-agreement rate.
+
+**Why this replaces the refuted score.** The old rule produced **8 binary cells** evaluated at the
+horizon's close, where the projection has already converged to truth — a tautology. This produces
+**~45 (window, horizon) cells** at fixed distances from the reset, where it can be, and will be,
+wrong. `control-must-replay-the-real-artifact.md` and `verification-harness-vacuous-pass-traps.md`.
+
+**Abstain.** A (window, bucket) cell with no evaluable sample at `weekly_reset_h ≥ H` reports
+`n=0` and is **excluded from the aggregate** — never imputed, never counted as a hit.
+
+---
+
+#### S6 · M3b · `wk_strand_alarm` — the ≤12 h rescue alarm, gated behind S5
+
+**Do not build this until S5 has run and been read.** If the horizon-stratified bias at the 12 h
+bucket is not near zero, this alarm is not shippable at any parameter setting.
+
+**Function.** `wk_strand_alarm(r, state)` beside `wk_strand_pp`; latched per (account, weekly
+window key) in the existing route-records store, not in memory.
+
+**Arithmetic.** Causal, latching: fire when `wk_strand_pp ≥ FLOOR` has held continuously for
+`DWELL` **and** `weekly_reset_h ≤ HORIZON_CAP`. Once fired it stays fired for that window.
+Shipped defaults: `FLOOR = 4 pp`, `DWELL = 2 h`, `HORIZON_CAP = 12 h`.
+
+**Why exactly these.** The 504-config causal sweep found 18 clean settings (4/4 recall, 0 FP) and
+**every one caps the horizon at ≤ 12 h**; the clean region spans `FLOOR ∈ [2, 5] pp` and
+`DWELL ∈ [1, 8] h`, so the choice is robust and the in-sample-floor objection largely dissolves at
+short horizon. Maximum lead any clean causal rule achieves is **11.96 h** *(carried)*.
+
+**Abstain.** Null whenever M3a abstains. **Never fire beyond `HORIZON_CAP`** — an uncapped version
+of this exact rule fires on 3 of the 4 windows that closed at 98–100%, including the one that
+closed at exactly 100%.
+
+**What it must be sold as, in the docstring and the footer alike:** *a late-window rescue alarm,
+not a weekly planner.* It buys ≤ 12 h, not the ~20 h median / 93 h maximum the synthesis claimed.
+
+---
+
+#### S7 · M1 · `burn_5h_ewma_ph` — correctness and availability only
+
+**Functions.** Producer: new branch in `apply_burn` (`bin/claude-accounts:1909`, replacing the
+`burn_5h_ph` block at `:1925-1939`). Consumer: `_su_projected` (`:1860`), which reads
+`r.get("burn_5h_ph")` at `:1866`.
+
+**Arithmetic.** Roll-aware EWMA over `session_pct`, trailing 6 h, `hl = 1.0 h`, `0 < dt ≤ 1 h`:
+
+```
+rolled = _rolled(a, b, "session_reset_at", "session_pct")      # S1a
+d      = b.session_pct if rolled else max(0, b.session_pct - a.session_pct)
+w      = 2 ** ( -((now - b._t)/3600) / 1.0 )
+value  = Σ(w·d) / Σ(w·dt_h)          #  %/h
+```
+
+**Abstain (L2).** Null when the **raw measured span** inside the 6 h lookback is < **1.3 h** — the
+span below which ±1 pp quantization exceeds 25% of the 5h meter's realised mean — or when fewer
+than 2 usable pairs exist. **Never** null on a roll.
+
+🚨 **Two implementation hazards, both of which silently produce a plausible wrong number:**
+
+1. **UNIT.** The formula emits **%/h**; `burn_5h_ph` is consumed by `_su_projected` as
+   **fraction/h** (`:1874`, `su + b * ahead` where `su ∈ [0,1]`). Ship under the **new key**
+   `burn_5h_ewma_ph` in %/h and divide by 100 at the consumer, **or** `_su_projected` saturates to
+   1.0 on every row — a 100× error that looks like "every account is under 5h pressure."
+2. **ROLL SPELLING.** Must be `_reset_key` (rounding, S1a). Under truncation the roll branch fires
+   on 46.0% of pairs and injects an absolute level as a delta: MAE degrades 0.0282 → **0.2110**,
+   i.e. **5.4× worse than the incumbent it replaces** *(carried)*.
+
+**Replaces `burn_5h_ph`** (`apply_burn:1930-1939`). Keep the old key populated for one release so
+nothing that reads it breaks silently.
+
+**The honest action line — this replaces the synthesis's, which was code-false:**
+
+> *Feeds the `SF` multiplier in `_soft` (`:1372-1380`) — score-ranking only, floored at
+> `SF_FLOOR = 0.05` so it can never exclude — and the desk lane's `DESK_5H_FLOOR` tier key in
+> `desk_keys` (`:2197`). It does **not** reach `_excluded`, which reads the raw meter at `:2045`.*
+
+**Named blind spot, which must ship in the docstring:** at `session_pct ≥ 40` the **incumbent is
+more accurate** (MAE 0.0617 vs 0.0797; the EWMA over-projects by +3.6 pp). That is the burst
+regime — the one the planner creates. The over-projection direction is soften-only and therefore
+fail-safe for routing, but the metric is wrong there and must not be quoted as accurate. §5.6 Q3
+names the measurement that would fix it.
+
+---
+
+#### The renderer — literal before / after
+
+**L3: one renderer.** All of the above lands in `pace_line` (`bin/claude-accounts:2006`), rendered
+by `readout_lines` at `:3375` (chat) and `:3696` (board). No second surface.
+
+**BEFORE** — the live footer, reproduced verbatim from `claude-accounts --readout` at 09:47Z:
+
+```
+weekly burn (1.00× = lands exactly at the 100% wall): next3 burn 0.93× → ~93% by reset, needs 88%/d over 2.2h (recent 28%/d) · next2 burn 0.40× → ~40% by reset, needs 20%/d over 4d (recent 8%/d) · next burn 1.62× → ~162% by reset ⚠ WALL, needs 10%/d over 4d (recent 48%/d) · next4 burn 0.48× → ~48% by reset, needs 17%/d over 4d (recent 4%/d)
+```
+
+Three defects, each measured above: it is **sorted by soonest reset**, so the 5.5 pp account leads
+and the 119.5 pp pair trails; `needs 88%/d over 2.2h` quotes a rate in a unit 11× longer than its
+own window; and nothing on the line says whether the demand is **physically reachable**.
+
+**AFTER** — sorted by pp at risk, descending. One row per account, four facts each:
+
+```
+weekly drain — pp that DIE at reset (K=0.192 live · nowcast at the last 48h of pace):
+  next4   strand ~64pp of 86 · p87 of its own 24h burns · start by T−28h (91h slack)
+  next2   strand ~56pp of 83 · p65 of its own 24h burns · start by T−28h (70h slack)
+  next3   strand ~5pp of 8   · p96 of its own 3h bursts · ⚠ LATE by 0.7h — 2.8pp already unrecoverable
+  next    no strand — 1.62× burn, wall trajectory · 114h left
+```
+
+Each row answers, left to right: **how much dies** (M3a) · **is the demand routine or a stunt**
+(M5) · **by when must it start** (M4′). Abstentions render as the word, never as a zero — a null
+M2 prints `strand unknown (span 4.1h < 6.8h)`, a null K prints
+`K unfitted (trailing 0.201 outside [0.175,0.210]) — no strand figures this sweep`.
+
+The `⚠ WALL` flag and the `burn N.NN×` ratio survive **unchanged** for accounts with no strand —
+that is `wall_projection`'s existing render, it is pinned by
+`tests/claude-accounts-burn-ratio.bats`, and nothing here touches it.
+
+**When S6 ships,** a fired alarm prepends one line above the block:
+
+```
+⚠ next3 — 5pp will die in 2.2h and the burst window to save it closed 0.6h ago.
+```
+
+---
+
+### §5.3 RED-proof cases
+
+**House rules, from the repo's recorded traps — every case below obeys all four.**
+
+1. **A negated assertion under `errexit` is dead unless final.** No case uses a mid-test
+   `! cmd`. Every case asserts on an explicit captured `status` / `output`.
+2. **A fixture that references a symbol the fix ADDS will SKIP pre-fix, and bats renders a skip as
+   `ok`.** In these Python-module cases, calling `ca.new_function(...)` pre-fix raises
+   `AttributeError`, the interpreter exits non-zero, and `[ "$status" -eq 0 ]` fails — a genuine
+   RED. **Never guard with `hasattr`**, and never `skip` on a missing symbol; that is precisely how
+   a vacuous green is minted.
+3. **Every red-proof is paired with a CONTROL that pins the opposite branch**, so an
+   always-failing subject cannot be mistaken for a passing test.
+4. **Fixtures are hermetic**: `HOME` and `CLAUDE_CONFIG_DIR` into `BATS_TEST_TMPDIR`, series passed
+   explicitly via `path=` / `samples=`, following `tests/claude-accounts-core.bats:34-45`.
+
+The module-load preamble is the existing one (`tests/claude-accounts-core.bats:70-74`); the
+env-in-not-argv pattern is `tests/claude-accounts-burn-ratio.bats:26-38` (the subject parses
+`sys.argv` at import, so any argv we pass is read by IT).
+
+---
+
+#### File: `tests/claude-accounts-roll-key.bats` — NEW (S1a)
+
+**RP-1 · a sub-second stamp jitter across a minute boundary is NOT a roll**
+
+*Fixture* — two samples 6 min apart, `session_pct` 40 → 44, reset stamps straddling the boundary
+exactly as the live series does:
+
+```
+a: ts=T-6m  session_pct=40  session_reset_at=2026-08-25T11:59:59.900Z
+b: ts=T     session_pct=44  session_reset_at=2026-08-25T12:00:00.100Z
+```
+
+*Assert* `ca._rolled(a, b, "session_reset_at", "session_pct") is False`.
+
+*Fails before:* `_rolled` does not exist → `AttributeError` → status 1. With the truncation
+spelling in place it returns `True`. Either way RED.
+*Passes after:* rounding maps both stamps to the same minute key and `44 > 40`, so no roll.
+
+**RP-2 · CONTROL: a real roll IS detected** — same pair, but `b.session_reset_at` = `T+5h` and
+`b.session_pct = 3`. Assert `is True`. *This is the case that can fail if someone "fixes" RP-1 by
+stubbing `_rolled` to always return `False`.*
+
+**RP-3 · CONTROL: a same-key reset is caught by the second witness** — `b.session_reset_at`
+identical to `a`'s, `session_pct` 40 → 3. Assert `is True`. Pins that the `OR` has two live arms;
+a key-only implementation passes RP-1 and RP-2 and fails this.
+
+**RP-4 · a null stamp is NOT a roll** — `b.session_reset_at = None`, `session_pct` 40 → 44.
+Assert `is False` **and** `ca._reset_key(None) is None`. Pins S1a's "no window open ≠ missing data."
+
+**RP-5 · corpus-level: the rounded key agrees with ground truth** — 200 synthetic pairs, 4 of them
+real rolls (reset moves > 1 h), the other 196 jittering ±0.4 s across a minute boundary. Assert
+exactly **4** rolls detected. *Pre-fix (truncation) this detects ~100 and the test is RED by a
+factor of 25.* This is the case that would have caught the live defect.
+
+---
+
+#### File: `tests/claude-accounts-util-tail.bats` — NEW (S1b)
+
+**RP-6 · `_util_tail` honours a TIME span, not a byte cap**
+
+*Fixture* — a series of 4,000 records for one account, one every 6 min (spanning 400 h), each
+padded with a filler field to ~292 B so the file exceeds 128 KiB by ~9×.
+
+*Assert* `rows, span = ca._util_tail(path=p, hours=48.0)` yields `span >= 47.0` and
+`min(r["_t"]) <= now - 47*3600`.
+
+*Fails before:* the current signature has no `hours` parameter → `TypeError` → status 1. Called
+with the current default the tail parses ~450 rows ≈ 45 h **only because this fixture's record is
+small**; the case therefore also asserts the returned `span`, which today's function does not
+return at all.
+*Passes after:* time-filtered, span asserted.
+
+**RP-7 · CONTROL: a genuinely short series reports its SHORT span and does not lie**
+— 20 records spanning 2 h. Assert `span < 3.0` **and** `len(rows) == 20`. Pins that S1b returns the
+*achieved* span, which is what every abstain rule downstream is written against. A implementation
+that returns the *requested* 48.0 passes RP-6 and fails this.
+
+**RP-8 · CONTROL: rotation — a `.gz` sibling is read when the live file is short**
+— live file holds 3 h; `util.jsonl.1.gz` holds the prior 60 h. Assert `span >= 47.0`.
+*Fails before:* readers open only the live path, so span ≈ 3 h.
+
+---
+
+#### File: `tests/claude-accounts-strand.bats` — NEW (S1c, S1d, S3)
+
+**RP-9 · a completed weekly window requires its reset to be in the PAST**
+
+*Fixture* — two windows for one account: (i) reset 24 h ago, last sample 0.1 h before it,
+`weekly_pct = 90`; (ii) reset **2 h in the future**, last sample now, `weekly_pct = 92`.
+
+*Assert* the completed-window helper returns **exactly one** window, with `strand == 10`.
+
+*Fails before:* the naive `0 ≤ gap ≤ 3 h` rule returns **two** windows and a total strand of 18.
+*Passes after:* `reset < now` excludes the live window.
+**This is the exact defect I hit while writing this spec** (naive: 51 pp / 9 windows; correct:
+43 pp / 8). It is not hypothetical.
+
+**RP-10 · `exchange_rate` abstains when the trailing fit leaves the sane band**
+
+*Fixture* — 400 adjacent pairs with Δsession summing to 2,000 pp and Δweekly to 460 pp
+(K = 0.230, outside `K_SANE`'s ceiling of 0.210).
+
+*Assert* `ca.exchange_rate(samples)` returns `(None, ..., None)`.
+*Fails before:* `exchange_rate` does not exist → status 1.
+*Passes after:* the sanity guard fires.
+
+**RP-11 · CONTROL: a healthy fit is USED, not abstained** — same shape, Δweekly = 385 pp
+(K = 0.1925). Assert `abs(K - 0.1925) < 0.002` and source `== "live"`. *An implementation that
+abstains unconditionally passes RP-10 and fails this — this is the arm that makes RP-10 a control
+rather than a stub.*
+
+**RP-12 · CONTROL: a thin fit FALLS BACK to the frozen constant** — Δsession = 100 pp, below
+`K_MIN_SDS = 300`. Assert `K == 0.192` and source `== "frozen"`. Pins that the three-way abstain
+has three live arms, not two.
+
+**RP-13 · `burn_wk_ewma_ph` crosses a weekly roll instead of discarding it**
+
+*Fixture* — 20 samples over 10 h at 6-min spacing; the weekly window rolls at the midpoint
+(`weekly_pct` 96 → 2, `weekly_reset_at` +168 h). Post-roll accrual is 2 → 8 pp over 5 h.
+
+*Assert* the EWMA is non-null and `> 0.8 %/h`.
+*Fails before:* the incumbent `burn_wk_ppd` computes `d = b - a < 0` and leaves the field **absent**
+— assert `"burn_wk_ppd" not in row` pre-fix, which is the same blindness stated positively.
+*Passes after:* the roll branch substitutes the post-roll level as the increment.
+
+**RP-14 · CONTROL: M3a abstains below the 6.8 h measured-span floor** — 6 samples spanning 0.6 h.
+Assert `wk_strand_pp(row) is None`. Paired with **RP-15 · CONTROL: it projects above the floor** —
+90 samples spanning 9 h. Assert not None. *Without RP-15, RP-14 is satisfied by a function that
+returns `None` always.*
+
+**RP-16 · M3a never renders an overshoot as a number** — `weekly_pct = 52`, `reset_h = 114`,
+EWMA = 1.725 %/h → raw projection 248.7%. Assert `wk_strand_pp == 0.0` **and** that the rendered
+`pace_line` output contains `"wall trajectory"` and does **not** contain `"248"` or `"%"` adjacent
+to a 3-digit projection. Pins the clamp as behaviour, not as a comment.
+
+---
+
+#### File: `tests/claude-accounts-burst.bats` — NEW (S2, S4)
+
+**RP-17 · `burst_percentile` reports a p95 demand as a p95, not as a rate**
+
+*Fixture* — one account, 2,600 rolling 3 h windows synthesised so that a demand of 3.14 weekly pp/h
+sits at the 95th percentile of its own history; `weekly_pct = 92`, `weekly_reset_h = 2.55`.
+
+*Assert* `94 <= burst_percentile(row, samples) <= 97` and `H == 3`.
+*Fails before:* the function does not exist → status 1.
+
+**RP-18 · CONTROL: a routine demand reports low** — `weekly_pct = 17`, `reset_h = 97` (demand
+0.854 pp/h) against the same account's 24 h distribution. Assert the percentile is `< 75` and
+`H == 24`. *Pins that the metric discriminates; a constant-p95 stub passes RP-17 and fails here.*
+
+**RP-19 · CONTROL: "never once achieved" rather than an extrapolated p100** — demand set to 3× the
+account's observed maximum. Assert the returned marker is the sentinel, not `100.0`.
+
+**RP-20 · CONTROL: abstains below 200 qualifying windows** — 150 windows. Assert `None`.
+
+**RP-21 · `burst_start_by` returns LATE for next3's live shape**
+
+*Fixture* — the measured live row: `weekly_pct=92, weekly_reset_h=2.21, session_pct=13,
+session_reset_h=3.37`, `K=0.192`.
+
+*Assert* `-1.0 < burst_start_by(row, K) < 0.0` (measured **−0.65**) and the verdict string is
+`"LATE"`.
+
+*Fails before:* the function does not exist → status 1. **And this is the case that separates M4′
+from the deleted M4:** a same-shaped assertion against the synthesis's `wk_reach_pp` formula yields
+`16.9 pp vs 8 needed → REACHABLE`, i.e. the opposite verdict, on the account that in fact stranded.
+Add that as an explicit comment in the test so the deletion is recorded where an implementer reads
+it.
+
+**RP-22 · CONTROL: an account with days of runway returns SLACK** — next2's live shape
+(`weekly_pct=17, weekly_reset_h=97.2, session_pct=8, session_reset_h=0.54`). Assert
+`burst_start_by > 60.0` and verdict `"SLACK"` (measured **+69.59**). *Without this, RP-21 is satisfied
+by a function that returns LATE always — which is exactly the degeneracy that killed M4.*
+
+**RP-23 · CONTROL: the freeze term is LIVE, not decorative** — run RP-21's fixture twice, once with
+`P_WALL = 0.625` and once with `P_WALL = 0.0` (injected via the module constant). Assert the two
+`burst_start_by` values differ by **1.033 h** (± 0.01) — the executed value, not a guess. *Pins that the wall-freeze term actually
+participates. This is the mutant that a purely arithmetic implementation would survive.*
+
+**RP-24 · CONTROL: no window open ⇒ abstain, not zero** — `session_reset_at = None`,
+`session_pct = None`. Assert `burst_start_by(...) is None`.
+
+---
+
+#### File: `tests/claude-accounts-core.bats` — EXTEND (do not rewrite)
+
+Two existing cases change and must be updated **in place** with the reason recorded beside them,
+per the file's own convention at `:1783-1797`:
+
+**RP-25 · the footer sorts by pp at risk, not by soonest reset** — extend
+`"router M7: pace line — …"` (`tests/claude-accounts-core.bats:1780`). Fixture: `next3`
+(strand 5, reset 2.2 h) and `next4` (strand 64, reset 119 h). Assert the rendered line names
+`next4` **before** `next3`.
+*Fails before:* `pace_line` sorts on `weekly_reset_h` at `:2015`, so `next3` leads.
+*Passes after:* sorted by `wk_strand_pp` descending.
+
+**RP-26 · CONTROL: an account with no strand still renders, and renders LAST** — add `next`
+(wall trajectory, strand 0) to RP-25's fixture. Assert it appears, and appears last. *Pins that the
+re-sort does not silently drop the zero-strand rows — a `sorted(..., key=strand)` over a list
+filtered on `strand > 0` passes RP-25 and fails this.*
+
+**RP-27 · `apply_burn` attaches the new keys under their own names** — extend
+`"router M7: apply_burn derives rates …"` (`:1749`). Assert `burn_5h_ewma_ph` and
+`burn_wk_ewma_ph` are present **and in %/h** (`burn_5h_ewma_ph ≈ 60.0` for a 10→40 move over
+30 min, **not** 0.6). *Fails before:* keys absent. **This is the unit hazard as a test** — an
+implementation that reuses the `burn_5h_ph` key in fraction/h passes every other case in this
+suite and fails here.
+
+**RP-28 · CONTROL: `_su_projected` consumes the new key at the right SCALE** — row with
+`burn_5h_ewma_ph = 60.0` (%/h), `session_pct = 20`, `session_reset_h = 2.0`,
+`PROJ_LOOKAHEAD_H = 1.0`. Assert `_su_projected(row, R) ≈ 0.80`, **not** `1.0`. *A missing ÷100
+saturates to 1.0 and is caught only here.*
+
+**Unchanged, deliberately:** `tests/claude-accounts-burn-ratio.bats` (all 8 cases). `wall_projection`
+and its 5% abstain floor are untouched by this spec; the 5h `burn_ratio` render survives as the one
+raw-percentage figure L1 permits.
+
+---
+
+### §5.4 Acceptance
+
+**The operator's ONE command:**
+
+```
+▶ Run this:
+
+`claude-accounts --readout`
+```
+
+**What proves it works — the footer answers, for every account, all three questions the goal
+names.** Expected shape (values are the live measurement at `2026-08-25T09:47:41Z`; a later run
+will differ in numbers, not in structure):
+
+```
+weekly drain — pp that DIE at reset (K=0.192 live · nowcast at the last 48h of pace):
+  next4   strand ~64pp of 86 · p87 of its own 24h burns · start by T−28h (91h slack)
+  next2   strand ~56pp of 83 · p65 of its own 24h burns · start by T−28h (70h slack)
+  next3   strand ~5pp of 8   · p96 of its own 3h bursts · ⚠ LATE by 0.7h — 2.8pp already unrecoverable
+  next    no strand — 1.62× burn, wall trajectory · 114h left
+```
+
+| the goal's question | where it is answered | for next3, live |
+|---|---|---|
+| **how much will strand?** | M3a `strand ~Npp of M` | ~5 pp of the 8 remaining |
+| **does the 5h cap bind?** | M4′ `start by T−Nh` / `LATE` | **yes** — LATE by 0.65 h, 2.83 pp unrecoverable |
+| **what single action changes it?** | M5 percentile + M4′ verdict | nothing on next3; **route the work to next4** (64 pp, 92 h slack, p87 = routine) |
+
+**The implementer's acceptance, three commands, all of which must be green before the land:**
+
+1. `bash tests/run.sh claude-accounts-roll-key claude-accounts-util-tail claude-accounts-strand claude-accounts-burst claude-accounts-core`
+   → every RP case above passes, **and each was demonstrated RED at the commit before its fix.**
+   A case that was never seen red does not count as coverage.
+2. `claude-accounts --strand-score` → prints the horizon-stratified table (S5). **Acceptance is not
+   "it is accurate" — it is that the table has non-zero `n` in at least the 24 h, 12 h and 6 h
+   buckets and reports a bias that could have been non-zero.** A harness whose every cell reads 0.0
+   is the tautology all over again.
+3. `claude-accounts --readout | grep -c 'strand'` → 3 or 4, i.e. the footer renders per account and
+   did not silently abstain fleet-wide.
+
+**The falsification the operator can run at the next weekly reset**, and it is the real acceptance:
+after next2's or next4's window closes, `claude-accounts --strand-score` must show the realised
+strand for that window inside the error band the 24 h bucket published **before** it closed. If it
+does not, S6 does not ship and §5.6 Q1 becomes the priority.
+
+---
+
+### §5.5 What is NOT built, and why — carried forward so no future session re-proposes it
+
+#### Killed by this spec's verification
+
+| proposal | status | why it must not come back |
+|---|---|---|
+| **M4 `wk_reach_pp` as a veto** | **DELETED** | Reads `REACHABLE` on 99.37% of the series and on **100% of the 74 samples inside the 5 wall episodes it was written to catch**. `reach_pp` and `need` are both monotone in `(weekly_pct, hours-remaining)` — an algebraic restatement of what it supplements. Replaced by M4′, which is a trigger keyed on rate-and-freeze. |
+| **"~20 h median lead, 4.5–93 h range"** | **WITHDRAWN** | The score was the identity function on true strand (8/8 agreement). Causally scored, the same rule fires on 3 of 4 windows closing at 98–100%. No causal configuration of any parameter setting exceeds **11.96 h** of lead. |
+| **"the 5h sub-cap is a same-day guard, not a planning constraint"** | **WITHDRAWN** | True of the 168 h span it was computed on, false of the span the planner acts on. Conditional on a window being driven hard it walls **5 in 8 (62.5%)** against **0 of 244** elsewhere. |
+| **"M1 changes the router's exclusions"** | **DELETED from the spec** | `_excluded` reads the raw meter at `:2045`; `_soft` is floored at 0.0025 > 0. Proven by positive control: `burn_5h_ph = 5.0` changed 10,489 scores and 11,200 desk tiers and **0** exclusions. |
+| **K as a frozen "plan constant"** | **WEAKENED** | The pooled ratio-of-sums averages mix away (±30% per-window jitter moves the pooled mean by 0.0003). Only the stratified tests can see workload dependence, at 4–11% minimum detectable shift. And the trailing fit already reads 0.2012, above the shipped band. |
+| **Binning K by burn intensity** | **BANNED — it is an instrument artifact** | Burn intensity is K's own denominator. A simulation with K exactly 0.192 reproduces the entire apparent trend. Anyone re-testing K will rediscover this; it is not a finding. |
+| **"the spec's minute-rounded roll key is broken"** | **REFUTED (by me, this spec)** | Rounding flips 1.0% of pairs and agrees with ground truth 99/99; the 46% figure is the **truncation** spelling. Do not "fix" a working roll key. |
+
+#### Rejected by the synthesis, still rejected
+
+| proposal | why not |
+|---|---|
+| `k_required` / "fire k ≥ 15 on next3" | Pane units, not session units. The `k` 11.5–19.5 band rests on **14.4 h** of observation and the band above it is **slower** (0.782 vs 3.397 wk-pp/h). |
+| `burn_pp_per_session_hour`, `sessions_needed`, `k_intensity_ratio` | Requiring `k_src == "work"` across a 3 h block leaves **9 blocks / 25 h / 1 weekly pp** in the entire series. Revisit after task #171. |
+| Per-account or per-regime K | Pooled K beat the per-account model out of sample (MAE 0.435 vs 0.480 pp). |
+| Shape-corrected weekly projector `weekly_pct / S(phase)` | Self-refuted by its own author: leave-one-out MAE 54.1 vs 39.5 pp for plain linear. |
+| Theil-Sen slope estimators | Lose at every horizon on both meters — median-of-slopes suppresses the burst, and the burst is the signal. |
+| `instrument_confidence` three-state label | Redundant once every metric carries its own abstain rule; a parallel label invites reading a number *and* a caveat, which is how the caveat gets dropped. |
+| `pace_target_5h_pct` (the "pace car") | Genuinely good render, but it is M3a ÷ windows-remaining and changes no routing decision. Recommend only as an alternative *rendering* of M3a if "56 pp" proves less actionable than "fill each window to 21%". |
+| Widening `burn_5h_ph`'s pair to ≥ 1 h | Cures quantization by reintroducing staleness. |
+| "Restore the 48 h tail" alone | Correct to fix the byte cap, but the estimator must become roll-aware in the same change or it gets worse: at a true 48 h span the widest-pair form abstains 100% of the first 36 h of every weekly window. |
+| Any absolute-token calibration as a prerequisite | Not needed. K makes the two meters commensurable in percentage space, which is all the planner uses. |
+
+#### Previously refuted in this plan doc — do not re-propose (§2.8, §3.4)
+
+- **The Fable 50% arbitrage.** Refuted twice; Fable draws **1.79× Opus per list dollar**
+  (90% CI [1.67, 1.90], P(ratio < 0.75) = 0.000). There is no discounted lane.
+- **Effort downgrades as a cost lever.** Open, not settled — and not a lever until it is.
+- **Recycling / context-shrinking as a cost lever.** `cache_read` weighs ≤ 0.018–0.049 weekly-pp
+  per Mtok; shrinking context converts a free `cache_read` into a paid `cache_creation`.
+- **Cutting telemetry to save tokens.** It is 0.6–1.2% of throughput.
+- **Any Q3 metric shape** — quality-per-token, cost-per-finding, tokens-per-commit. Every metric
+  in §5.2 is structurally incapable of expressing one: there is no token, dollar, or output
+  denominator anywhere in the series, so each can only ever argue for spending **more** quota (Q2)
+  or spending it on a **different account** (Q1). Noted, per §3.3, that this is forced rather than
+  virtuous.
+
+---
+
+### §5.6 Open questions the data genuinely cannot answer
+
+**Q1 — Does the strand nowcast have any real skill at 24–96 h, or only at the horizon's close?**
+Unknown. Every published accuracy figure was scored where the projection has already converged to
+truth. **Measurement that answers it:** S5's `--strand-score`, read at the 96 / 48 / 24 h buckets
+across ≥ 20 completed account-weeks (~5 more weeks of data). Until it reads non-degenerate at 24 h,
+M3a is a nowcast and S6 does not ship.
+
+**Q2 — Is K drifting, or is 0.2012 noise?** The permutation test gives p = 0.0948 — suggestive,
+not significant. **Measurement:** re-run `exchange_rate` weekly and keep a dated series of the
+trailing-7d fit. Three consecutive weekly fits above 0.198 is a drift; a single one is not. S1c's
+abstain guard makes the wrong answer safe in the meantime.
+
+**Q3 — Why does the 5h EWMA invert above `session_pct` 40, and can a single estimator serve both
+regimes?** n = 133 in the high stratum, which is too thin to fit a switch without over-fitting.
+**Measurement:** score both estimators against realised next-hour burn on ≥ 500 samples at
+`session_pct ≥ 40`. That stratum grows only when the fleet bursts — so it is a by-product of the
+planner working, and cannot be forced. Do **not** ship a fitted regime switch on n = 133.
+
+**Q4 — What actually dispatches the work?** Structurally unanswerable from this series. `k` explains
+**52%** of 24 h burn variance and the other 48% is per-session intensity, which the log cannot see
+(`next` ran 1.35 weekly pp per pane-hour while next3 ran 0.256 at 2.8× the panes). **The planner
+names the account and the deficit and cannot promise that dispatching N sessions closes it.**
+**Measurement:** task #171 (`k_agents` — `k_work` is non-null on 70.1% of fielded rows and misses
+46.7% of live writers where present, anti-correlated with load), then OTel per-session token
+counters (§4 M6). Both are prerequisites, neither is on this critical path.
+
+**Q5 — Is `P_WALL = 0.625` the real burst wall rate?** n = 8, and it is a **lower** bound (walls
+under ~13 min are invisible at the 6.4 min median sampling cadence). **Measurement:** raise the
+sweep cadence inside a driven window, or instrument the wall directly from the API's own 429/limit
+response rather than inferring it from `session_pct == 100`. Until then M4′'s freeze term is the
+weakest number in the spec, and RP-23 exists so that at least its *participation* is pinned.
+
+**Q6 — Does the planner's own success invert its assumptions?** The end-of-window acceleration
+(2.3× in the last 30% of the window) is a record of the behaviour this planner exists to
+**replace**. If it works, the shape flattens and any estimator fitted to it drifts toward
+complacency. M1–M5 are deliberately fitted to **rates**, never to window shape, for this reason —
+but the acceptance test must be **re-run after several weekly windows**, not assumed. The forward
+arithmetic already predicts one inversion: closing the 19.9 pp/week strand needs 1.04 extra full 5h
+windows/week, carrying the fleet wall rate 1.72% → 2.20%.
