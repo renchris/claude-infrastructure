@@ -400,7 +400,15 @@ cmd_up() {
   # a flag rather than as "leave it blank" so an UNMANAGED fire is a decision in the argv rather
   # than an accident of environment.
   if [ "$UP_UNMANAGED" = 0 ] && [ -z "$UP_NOTIFY_BACK" ]; then
-    UP_NOTIFY_BACK="${ITERM_SESSION_ID##*:}"
+    # TWO expansions, not one, and the split is `set -u`'s doing rather than style. `${VAR##*:}` on
+    # an UNSET var is an unbound-variable error under `set -u`, so `up` died at this line — exit 1,
+    # "cc-offload: line 403: ITERM_SESSION_ID: unbound variable" — on every surface that is not an
+    # iTerm pane: a fired session, a hook, launchd, cron, and the suite itself, which unsets it
+    # deliberately so a kitty branch cannot read a live terminal. The branch immediately below is
+    # the proof this was never the intent: it exists to NOTE that ITERM_SESSION_ID is unset and
+    # downgrade the fire to fire-and-forget, and it was unreachable.
+    UP_NOTIFY_BACK="${ITERM_SESSION_ID:-}"
+    UP_NOTIFY_BACK="${UP_NOTIFY_BACK##*:}"
   fi
   if [ "$UP_UNMANAGED" = 1 ]; then UP_NOTIFY_BACK=''
   elif [ -z "$UP_NOTIFY_BACK" ]; then
