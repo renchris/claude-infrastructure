@@ -4,6 +4,11 @@
 Cure: `bin/cc-venue` question 1b (`ineligible-dod-offtrunk`), tests `cc-venue.bats` 23-29.
 ⚠️ **That cure sat UNLANDED for 7h28m and the same mis-route recurred — see §6, written by the
 second cloud session, which is what actually carried both commits onto trunk.**
+⚠️ **Then it recurred a THIRD time, 3h04m AFTER question 1b was on trunk — see §7.** A landed
+classifier cannot re-decide a row it has already labelled, so the cure could not reach the row it
+was written for. Second cure: `ready_rule_moved` in `bin/cc-dispatch`, tests
+`cc-dispatch-readiness.bats` 31-37. Per §6's own rule, this header does not certify either cure's
+landedness — only `git merge-base --is-ancestor` does.
 
 This is the fifth entry in the `venue-*` family and the first whose defect is not about *which
 repo* an item names. It is about whether the item's **own specification** exists anywhere a VM can
@@ -241,3 +246,136 @@ rc-3 refusals as rc 0.)*
    `docs/plans/RATIFY_DECISIONS_TRIAGE.md` so the item becomes workable anywhere, or leave it
    uncommitted and work the item locally. Until one of those happens the RATIFY triage itself —
    the 18 not-DONE sections — has been touched by nobody, twice.
+
+---
+
+## 7. It WAS dispatched a third time — the cure landed and could not reach the row it was written for
+
+*Added 2026-08-25 by the THIRD cloud session dispatched against this same item.*
+*Cure: `037144e0` — `ready_rule_moved` / `venue-rule-moved` in `bin/cc-dispatch`, tests*
+*`cc-dispatch-readiness.bats` 31-37.*
+
+§6 closed on a prediction, and it is the one thing in this document that was wrong:
+
+> **Item `4ce239d21d67` must not be dispatched a third time.** With question 1b on trunk the
+> producer now refuses it by itself, so no operator action is needed to *stop* the loop.
+
+**REFUTED, by this session's own existence.** Question 1b was on trunk. The producer did not refuse
+it. The measurement:
+
+| Event | Time (UTC) | Evidence |
+|---|---|---|
+| Question 1b landed on trunk | 2026-08-25 **01:18:11** | `fc7f4ac1`, `git merge-base --is-ancestor fc7f4ac1 origin/main` → **true** |
+| **Same item dispatched a THIRD time** | 2026-08-25 **04:22:38** | this session's branch, `claude/fire-20260825T042238Z-7446-1` |
+
+**3 h 04 m after the cure landed, and it went off-box anyway.** §6 was right that a cure which never
+lands is invisible; it did not consider that a cure which HAS landed can still be invisible to the
+rows it was written for.
+
+### 7.1 Why the landed producer never spoke
+
+Not because it was wrong. Executed here, from a fresh clone standing on trunk, the landed classifier
+decides this row correctly:
+
+```
+cc-venue label 4ce239d21d67   →   local
+```
+
+The producer was simply **never asked again**. Nothing re-derives a settled label inside the window,
+and each of the three arms that could have was verified by executing it, not by reading it:
+
+| Arm | Why it did not fire |
+|---|---|
+| `venue_label_new` — label on write (cc-dispatch:1429) | selects `(.venuePlan // "") == ""` **and** a 900 s recency window. This row is labelled and old; it is in neither population. |
+| the admission-time repair (cc-dispatch:1189) | fires only on `venue-unlabelled` or `trunk-moved`. Not the first — the row has a label. Not the second — see 7.2. |
+| `cc-venue run --apply` — the 6 h pass (autonomy-sweep.sh:694) | `CC_VENUE_PASS_EVERY_S` defaults to **21600**. 3 h 04 m < 6 h, so it need not have run at all. |
+
+That the row still carried `cloud` at 04:22 is not inferred: the live dispatcher runs
+`CC_DISPATCH_VENUE_ONLY=cloud` (cc-dispatch:2496, read from launchd argv), and that filter is an
+**element-exact** match on `venuePlan`. A row labelled `local` cannot reach the cloud lane. This
+session reached it.
+
+### 7.2 The generalisable defect: staleness is measured per-ITEM, never per-RULE
+
+`ready_moved` asks *"did trunk move under the paths THIS ITEM cites"*. That is a question about the
+item's **subject matter**. A landed change to the **classifier** moves no item's cited paths — so a
+rule that starts convicting a row **can never invalidate the label it already wrote**. The cure's own
+landing is structurally invisible to the machinery that would propagate it.
+
+Its blast radius therefore reaches unlabelled rows at once and settled rows only on a 6 h timer, and
+in between the dispatcher goes on acting with full confidence on the verdict that was just replaced.
+
+**For THIS class of row the admission repair could never have helped, at any cadence** — and that is
+the sharper half. Executed:
+
+```
+cc-venue paths 4ce239d21d67   →   {"paths": [], "repo": …}   rc 0
+```
+
+An empty path set, because the premise text is `title + needs + evidence` (cc-premise:500) and
+`dodRef` is folded to a **separate field** — the same asymmetry §3 found in the decision path,
+reappearing in the invalidation path. So `readiness_verdict` short-circuits at `cites-nothing`,
+which is **deliberately not repairable**. The rows whose whole specification is a `dodRef` — exactly
+the rows question 1b exists to convict — are precisely the rows whose labels the admission seam
+structurally cannot refresh.
+
+### 7.3 The cure
+
+`ready_rule_moved` adds the **routing rule's own surface** (`bin/cc-venue`, `bin/cc-eligible`,
+`bin/cc-premise`) as an invalidation basis: if any of them landed a change since this item's basis
+sha, the label reads `venue-rule-moved` and is re-derived. It joins the repair list as its most
+literal member — the cure for *"the producer changed"* is to re-run the producer.
+
+Four properties, each pinned by a case:
+
+- **Ordered ABOVE the item-path arms** (case 34). Below them it would be dead for exactly the rows it
+  rescues, which reach `cites-nothing` first.
+- **Not folded into `cites-nothing`** by adding the rule paths to the item's own set — that would
+  make every row cite something and destroy the empty-set signal, laundering a void into a ready
+  (the trap case 7 exists to pin).
+- **Fail-open** (case 35): only rc 0 convicts, so an unreadable repo or an absent basis falls through
+  unchanged. Scoped by construction — the rule paths exist only in this repo, so an item in another
+  project diffs an absent path and is never convicted by a rule it does not run (case 33).
+- **Self-limiting** (case 36): the repair advances the basis, so one landing costs one re-derivation
+  per row rather than a treadmill.
+
+Effect on the loop: the window between a landed routing cure and the rows it governs falls from **up
+to 6 h** to **one dispatch pass**.
+
+⚠️ **Case 37 was written against this diff's own first draft and failed it.** The arm used
+`${VAR:-…}` while its env doc promised *"empty ⇒ the arm never convicts"* — so the off switch it
+documented did not exist. The switch is now the word `off`, and an empty value deliberately falls
+back to the default: the two spellings differ by a character easy to type by accident, and only one
+of those accidents may be allowed to silently restore the bug this arm closes.
+
+### 7.4 What this session verified before landing
+
+- **37/37** on `cc-dispatch-readiness.bats`, including the per-site mutant (case 32: delete the arm
+  and the same fixture keeps its stale label).
+- **20 direct suites** from `gate-select.sh --direct`. Four carry reds — `cc-dispatch-fire-evidence`
+  (2), `cc-dispatch-projects` (1), `operator-readout` (43), `cc-venue` (1) — and **all four
+  reproduce identically with trunk's own `bin/cc-dispatch` restored in place**, so none is from this
+  change. They are the container artifacts this family already documents: BSD `stat -f` on Linux, and
+  `chmod 000` fixtures that a uid-0 session reads anyway.
+- `assert-liveness` **0 dead** · `testname-eval` clean · `hermeticity` clean ·
+  `shellcheck -S error` clean.
+
+### 7.5 What is STILL open, and who owns it
+
+§5's items stand, **unchanged and still local**. The cure stops the mis-route; it does not do the
+RATIFY work, and no session in this venue can:
+
+1. **`docs/plans/RATIFY_DECISIONS_TRIAGE.md` is still on no commit reachable from any ref.** Re-probed
+   from this clone standing on trunk: `git log --all --oneline -- '*RATIFY*'` → zero commits;
+   `grep -rn "below 90% conviction"` over the repo → zero hits. The 18 not-DONE sections have now
+   been touched by nobody, **three times**.
+2. **The item is not closed by this session either.** Its premise about the *work* remains untested
+   from here; what was refuted, again, is its premise about the *venue*.
+3. **The disproof is still not in the ledger** — no `~/.claude/autonomy/` exists in a cloud
+   container, and per §6's correction `cc-backlog add` would exit 0 into a phantom store. Trunk
+   remains the only durable store this venue can reach.
+
+The disposition has not changed since §5 wrote it, and is now overdue: **either commit the plan so
+the item becomes workable anywhere, or work the item locally.** What HAS changed is that the
+dispatcher will no longer keep choosing for you — with `037144e0` on trunk the stale `cloud` label is
+re-derived on the next pass rather than on a 6 h timer, so the fourth dispatch does not happen.
