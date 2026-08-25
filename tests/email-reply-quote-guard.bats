@@ -31,6 +31,17 @@
 # a quoted chain (case `marker_wrote_is_accepted`). That is a real false-negative surface, pinned here
 # so that tightening it later is a visible, deliberate change rather than an unnoticed one.
 #
+# 2026-08-25 — RE-POINTED ONTO THE DRAFT TOOLS, and the reason matters more than the edit. R1
+# (drafts-only, see tests/email-drafts-only-and-alias.bats) now DENIES send-mail, reply-mail-message,
+# reply-all-mail-message and forward-mail-message before the quote guard is ever consulted. Every
+# fixture below used to run through those tools, which had two effects: the four ALLOW controls went
+# red, and — the dangerous half — the three red-proof DENY cases went green for the WRONG REASON.
+# They would have stayed green with the entire quote guard deleted, which is precisely the vacuity
+# the note above says this suite exists to prevent. Each fixture is therefore re-pointed at the
+# draft tool that does the same composition (reply-mail-message -> create-reply-draft, etc.), where
+# the quote guard still genuinely runs. The DECISIONS asserted are unchanged; only the door the
+# fixture knocks on moved. R1's own behaviour is covered in its own suite, not smuggled in here.
+#
 # Harness laws (inherited from curl-gate-decide.bats): L1 fixtures are literal PreToolUse payloads run
 # through the REAL entrypoint, so main()'s tool scoping and JSON emission are covered too; L2
 # assertions key on the permissionDecision value; L3 plain `[ ]` only — no negated assertions, which
@@ -99,18 +110,18 @@ long_body() {
   # The 2026-08-24 shape exactly: brief enough that Comment was the right field, sent via Message.body,
   # so Graph's auto-quote was replaced by nothing. Pre-fix this fell straight through the MIN_LEN
   # short-circuit and was never inspected.
-  run decision "$GATE" mcp__ms365__reply-mail-message "$(tin_message "$SHORT_BODY")"
+  run decision "$GATE" mcp__ms365__create-reply-draft "$(tin_message "$SHORT_BODY")"
   [ "$output" = "deny" ]
 }
 
 @test "a long reply carrying Message.body with no quoted chain is refused" {
-  run decision "$GATE" mcp__ms365__reply-all-mail-message "$(tin_message "$(long_body)")"
+  run decision "$GATE" mcp__ms365__create-reply-all-draft "$(tin_message "$(long_body)")"
   [ "$output" = "deny" ]
 }
 
 @test "a forward carrying Message.body with no quoted chain is refused" {
   # Forwards lose history the same way, and are the case most likely to be read as "not a reply".
-  run decision "$GATE" mcp__ms365__forward-mail-message "$(tin_message "$SHORT_BODY")"
+  run decision "$GATE" mcp__ms365__create-forward-draft "$(tin_message "$SHORT_BODY")"
   [ "$output" = "deny" ]
 }
 
@@ -125,12 +136,12 @@ long_body() {
 
 @test "a short reply carrying Comment is allowed" {
   # Comment is the CORRECT field for a short reply: Graph auto-quotes the original for you.
-  run decision "$GATE" mcp__ms365__reply-mail-message "$(tin_comment 'Thanks - Tuesday works.')"
+  run decision "$GATE" mcp__ms365__create-reply-draft "$(tin_comment 'Thanks - Tuesday works.')"
   [ "$output" = "allow" ]
 }
 
 @test "a reply carrying Message.body WITH an appended quote is allowed" {
-  run decision "$GATE" mcp__ms365__reply-mail-message \
+  run decision "$GATE" mcp__ms365__create-reply-draft \
     "$(tin_message "${SHORT_BODY}<blockquote><p>Original note.</p></blockquote>")"
   [ "$output" = "allow" ]
 }
@@ -138,7 +149,7 @@ long_body() {
 @test "marker_wrote_is_accepted: a bare 'wrote:' counts as a quoted chain" {
   # Pinning the loose end named in SCOPE above: this is accepted today. If the marker list is ever
   # tightened, this case goes red and the change becomes visible instead of silent.
-  run decision "$GATE" mcp__ms365__reply-mail-message \
+  run decision "$GATE" mcp__ms365__create-reply-draft \
     "$(tin_message "${SHORT_BODY}<p>On Mon, Ann wrote:</p>")"
   [ "$output" = "allow" ]
 }
@@ -148,23 +159,23 @@ long_body() {
   # from a long Comment into one unreadable paragraph — the original 2026-06-12 defect.
   local long_comment
   long_comment="$(python3 -c 'print("word " * 80)')"
-  run decision "$GATE" mcp__ms365__reply-mail-message "$(tin_comment "$long_comment")"
+  run decision "$GATE" mcp__ms365__create-reply-draft "$(tin_comment "$long_comment")"
   [ "$output" = "deny" ]
 }
 
-@test "a fresh send-mail carrying Message.body is untouched by the reply guard" {
-  # The scoping control. send-mail has no prior message to quote, so the new arm must not reach it —
+@test "a fresh create-draft-email carrying Message.body is untouched by the reply guard" {
+  # The scoping control. A fresh draft has no prior message to quote, so the new arm must not reach it —
   # if REPLY_TOOLS ever grows to include a fresh-send tool, this goes red.
-  run decision "$GATE" mcp__ms365__send-mail "$(tin_message "$SHORT_BODY")"
+  run decision "$GATE" mcp__ms365__create-draft-email "$(tin_message "$SHORT_BODY")"
   [ "$output" = "allow" ]
 }
 
 @test "the fresh-send threading guard still fires on a RE: subject" {
   # Pre-existing behaviour the salvage patch also touched (its guidance text). The DECISION must be
-  # unchanged: a fresh send with a reply subject has no In-Reply-To/References and breaks the chain.
+  # unchanged: a fresh draft with a reply subject has no In-Reply-To/References and breaks the chain.
   local tin
   tin="$(python3 -c 'import json; print(json.dumps({"body":{"message":{"subject":"RE: parking permit"}}}))')"
-  run decision "$GATE" mcp__ms365__send-mail "$tin"
+  run decision "$GATE" mcp__ms365__create-draft-email "$tin"
   [ "$output" = "deny" ]
 }
 
@@ -185,13 +196,13 @@ long_body() {
   run grep -c REPLY_TOOLS "$pre"
   [ "$output" = "0" ]
 
-  run decision "$pre" mcp__ms365__reply-mail-message "$(tin_message "$SHORT_BODY")"
+  run decision "$pre" mcp__ms365__create-reply-draft "$(tin_message "$SHORT_BODY")"
   [ "$output" = "allow" ]
 
-  run decision "$pre" mcp__ms365__reply-all-mail-message "$(tin_message "$(long_body)")"
+  run decision "$pre" mcp__ms365__create-reply-all-draft "$(tin_message "$(long_body)")"
   [ "$output" = "allow" ]
 
-  run decision "$pre" mcp__ms365__forward-mail-message "$(tin_message "$SHORT_BODY")"
+  run decision "$pre" mcp__ms365__create-forward-draft "$(tin_message "$SHORT_BODY")"
   [ "$output" = "allow" ]
 
   run decision "$pre" mcp__ms365__create-reply-draft "$(tin_message "$SHORT_BODY" Message)"
