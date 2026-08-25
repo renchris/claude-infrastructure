@@ -2148,11 +2148,48 @@ recycle_nudge_decision() { # $1=it2-bin $2=sid
 #   otherwise, 0 newlines                   [Pasted text #1]              [Pastedtext#1]
 #   otherwise, N>0 newlines                 [Pasted text #1 +N lines]     [Pastedtext#1+Nlines]
 #
-# THIS REFUTES THE "tail-anchored multi-line read-back" this function was asked for (backlog
-# a771a1611d28): there is no tail on screen to anchor to. `+N lines` is the newline COUNT, not the
-# line count (CC counts /\r\n|\r|\n/g), and the `paste again to expand` hint renders BELOW the
-# bottom border, i.e. outside composer_content's box — so the placeholder is the composer's WHOLE
-# content and an anchored match on it is exact.
+# ⚠ THAT TABLE IS WIDTH-DEPENDENT AND THE 120-COLUMN MEASUREMENT COULD NOT SEE IT (2026-08-25).
+# Row 1 says "the text itself" — but the composer is height-capped (~10 body rows) and scrolls to
+# the CURSOR, which after a bracketed paste sits at the END. So "the text itself" holds only while
+# the text FITS. At 120 cols an 800-char payload is ~7 rows and always fits, which is why five
+# pastes at that width never exposed it. In the panes this actually fires into it does not fit:
+# a split-right agent pane is FORTY columns, ~37 usable, so anything past ~370 chars scrolls its
+# head off screen and composer_content — which reads the box, i.e. the VIEWPORT — can only ever
+# return a TAIL. Byte-equality then rejects a pristine paste, every time, for the whole population.
+#
+#   ≤800 chars, ≤2 newlines, and TALLER than the box   the last ~10 rows      a SUFFIX of the text
+#
+# MEASURED on the live failure, not derived: fire 2026-08-25T21:30:18Z into pane 49 (40 cols),
+# `--goal` condition 443 chars ⇒ 449-char payload. Read-back began mid-word at raw offset 85
+# (~2.3 rows of 37) and verdict=mangled withheld the CR. The operator submitted the composer by
+# hand and the goal that landed — read back out of that session's own transcript — is byte-identical
+# to the condition we pasted, 443 chars. The paste was pristine; the ORACLE was blind. Same shape
+# at 21:31:31Z (pane 25), and 5 earlier rows in ~/.claude/logs/handoffs.jsonl carry it too: 7
+# mangled against 154 set, and every `set` in that window is the ONE wide desk pane.
+#
+# WHY A SUFFIX AND NOT A SUBSTRING — the rule has to keep separating the two truncations, because
+# they fail in opposite directions and only one of them is benign:
+#   · DISPLAY truncation (this bug) drops the HEAD — the viewport follows the cursor at the end.
+#   · TRANSPORT truncation (bytes lost in flight) drops the TAIL — the head is what arrived.
+# A tail-anchored match accepts the first and still rejects the second, so the CR is still withheld
+# from a payload that genuinely did not land whole. A plain "is a substring" rule would accept both
+# and quietly submit a half-pasted brief.
+#
+# THE HYBRID SHAPE THIS EXISTS TO CATCH IS STILL CAUGHT. `<operator draft><our text>` is not a
+# suffix of our text — it is LONGER than it — so it fails on length before the comparison. The one
+# residual is a draft typed into the ~0.5 s between the pre-paste empty proof and the read: the
+# viewport would then show a tail of `draft+text`, which is a suffix of the text and would be
+# accepted. It is bounded by that window, the pre-paste gate already proved the composer empty
+# entering it, and on the goal path the post-submit oracle (goal_armed_for_pane) matches the
+# condition EXACTLY — so the worst case is a `unverified` verdict, never a false `set`.
+#
+# THIS DOES NOT REVIVE THE "tail-anchored multi-line read-back" the placeholder rows refuted
+# (backlog a771a1611d28). That ask was about a BRIEF, where CC swaps in a placeholder and there is
+# genuinely no tail on screen to anchor to; the rows above still own that regime and the tail form
+# below cannot reach it (a placeholder is not a suffix of the brief). `+N lines` is the newline
+# COUNT, not the line count (CC counts /\r\n|\r|\n/g), and the `paste again to expand` hint renders
+# BELOW the bottom border, i.e. outside composer_content's box — so the placeholder is the
+# composer's WHOLE content and an anchored match on it is exact.
 #
 # WHY THE UNION AND NOT CC's OWN BRANCH. Both renderings are accepted for any text rather than
 # predicting which one CC will pick. Deliberate: the 800 is a constant inside a binary that can
@@ -2171,14 +2208,26 @@ _paste_newlines() { # $1=text → stdout: newline count, \r\n|\r|\n each counted
 
 paste_readback_expect() { # $1=text → stdout: the read-back forms a human should look for
   local nl; nl="$(_paste_newlines "${1-}")"
-  if [ "$nl" -gt 0 ]; then printf 'the text itself, or [Pasted text #N +%s lines]' "$nl"
-  else printf 'the text itself, or [Pasted text #N]'; fi
+  if [ "$nl" -gt 0 ]; then printf 'the text itself (or its scrolled TAIL), or [Pasted text #N +%s lines]' "$nl"
+  else printf 'the text itself (or its scrolled TAIL), or [Pasted text #N]'; fi
 }
 
+# The floor under the tail form. A short tail proves little — `sectionW2` is a suffix of half the
+# briefs this repo writes — so a match under it is treated as no match at all. 64 stripped chars is
+# ~1.7 rows of a 40-column composer, i.e. always well inside what the viewport shows.
+PASTE_TAIL_MIN="${PASTE_TAIL_MIN:-64}"
+
 paste_readback_ok() { # $1=pasted-text $2=space-stripped read-back → rc 0 proven / 1 mismatch
-  local text="${1-}" got="${2-}" nl want ere
+  local text="${1-}" got="${2-}" nl want ere min="${PASTE_TAIL_MIN:-64}"
   want="$(printf '%s' "$text" | LC_ALL=C tr -cd '[:print:]' | LC_ALL=C tr -d '[:space:]')"
   [ -n "$want" ] && [ "$got" = "$want" ] && return 0            # inline form (short, ≤2 newlines)
+  # Scrolled-tail form: the composer is height-capped and follows the cursor, so a payload taller
+  # than the box shows only its END. Tail-anchored on purpose — see the truncation-direction note
+  # above; a HEAD match (transport truncation) must stay a mismatch.
+  if [ -n "$want" ] && [ "${#got}" -ge "$min" ] && [ "${#got}" -lt "${#want}" ] \
+     && [ "${want: -${#got}}" = "$got" ]; then
+    return 0
+  fi
   nl="$(_paste_newlines "$text")"
   if [ "$nl" -gt 0 ]; then ere="^\[Pastedtext#[0-9][0-9]*[+]${nl}lines\]$"
   else                     ere="^\[Pastedtext#[0-9][0-9]*\]$"; fi
