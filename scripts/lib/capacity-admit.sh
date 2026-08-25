@@ -154,10 +154,27 @@
 # `segments` and `active` carry its intent because they DO move with the spawn. The literal stays at
 # 2.0 on purpose — C18: a fix moves a TERM SWITCH, never a ceiling — and raising it is the lazy
 # design docs/plans/LOAD_INSENSITIVE_VERIFY_V2.md:156 exists to reject. It still binds only where
-# `cc_capacity_admit` leaves the term on: the two unattended recovery callers
-# (scripts/boot-resume-launch.sh, scripts/limit-recover/lr-fire-resume.sh), DELIBERATELY — see the
-# load-term block below, which prices that imprecision at a delayed resume, and both are
-# budget-released after CC_ADMIT_BUDGET consecutive refusals.
+# `cc_capacity_admit` leaves the term on, and that is THREE callers, not two — every one of them
+# DELIBERATE, all budget-released after CC_ADMIT_BUDGET consecutive refusals:
+#   · scripts/boot-resume-launch.sh:266 and scripts/limit-recover/lr-fire-resume.sh:318 — the two
+#     unattended recovery paths. The load-term block below prices their imprecision correctly, at a
+#     DELAYED RESUME: each gates one session, so a false refusal costs that one session some latency.
+#   · bin/cc-resume-layout.sh:284 — added 2026-08-24 by `fix(resume): gate the per-monitor batch
+#     through capacity admission, and re-land it` (1e5ce070). It sets no CC_ADMIT_LOAD_TERM, so the
+#     term is on by default here too, but the price is NOT a delayed resume: a refusal there SHEDS
+#     THE REST OF THE BATCH (`break`, then "N session(s) NOT launched"), because capacity does not
+#     recover inside a loop. So a false refusal driven by this uncalibrated literal costs N-idx
+#     sessions, not one — read that call site before treating the delayed-resume pricing as covering
+#     every caller.
+#
+# THE THIRD CALLER WAS MISSING FROM THIS PARAGRAPH FOR A REASON WORTH KEEPING. The paragraph was
+# authored (17ba81f0) against a tree where bin/cc-resume-layout.sh contained ZERO cc_capacity_admit
+# references — verified, not inferred — and 1e5ce070 added the call concurrently. The land rebased
+# this comment on top of it. The two commits touch different files, so there was no textual conflict
+# to resolve and nothing anywhere reported that a factual claim had just gone false. That is the
+# class: A REBASE CAN FALSIFY A COMMENT'S ENUMERATION WITHOUT PRODUCING A CONFLICT, and only a
+# predicate over the real call sites can catch it — re-derive this list with
+# `git grep -n 'cc_capacity_admit ' -- '*.sh'` before citing it, never from this paragraph.
 CC_HW_DEFAULT_MAX_LOAD_PER_CORE=2.0
 CC_HW_DEFAULT_MIN_HEADROOM_GB=4
 
