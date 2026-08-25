@@ -937,19 +937,65 @@ emit_one() { # <entry-json> <all-json> <json?>
   fi
 }
 
+# ── THE ENUMERATION, WITH ITS OWN FAILURE MADE REPRESENTABLE ───────────────────────────────────
+# `$SESSIONS_BIN --json` is this file's ONLY source of sessions, and both call sites used to spell
+# it `|| echo '[]'`. That fallback is a fail-open: it converts the enumerator's failure into a
+# valid-looking EMPTY LIST at rc 0, so nothing downstream can tell a dead enumerator from a box
+# with no live sessions. Downstream then states the empty list as a FACT — at cmd_all "0
+# classified", at cmd_classify "no live session matches '<target>'" — i.e. a lookup MISS rendered
+# as ABSENCE (memory: lookup-miss-is-not-absence). Measured on the real binary with the enumerator
+# stubbed to exit 3: cmd_classify's stderr for a LIVE pane was byte-identical, once the target name
+# is normalised out, to its stderr for a pane that has never existed.
+#
+# The VALUE stays fail-open on purpose — a caller must never crash because the enumerator is sick,
+# and cc-reaper's bounded call depends on getting an array back. What changes is that the reason is
+# now RECORDED: ENUM_OK distinguishes "the enumerator answered" from "the enumerator did not", so a
+# caller that wants to tell the two apart can. This is record-only; no caller's rc or stdout moves.
+#
+# ⚠️ It sets GLOBALS and must NOT be called through `$( )` — an assignment inside a command
+# substitution runs in a subshell and never escapes it (memory:
+# assignment-inside-command-substitution-never-escapes). Call it bare, then read ENUM_JSON.
+ENUM_JSON='[]'   # the sessions array — ALWAYS a valid JSON array, even when the enumerator failed
+ENUM_RC=-1       # the enumerator's own exit code; -1 ⇒ enumerate_sessions has not run
+ENUM_OK=0        # 1 ⇒ it exited 0 AND produced a parseable JSON array; 0 ⇒ the '[]' is a FALLBACK
+ENUM_N=0         # length of ENUM_JSON (0 when ENUM_OK=0, and that 0 means nothing)
+enumerate_sessions() {
+  local raw t
+  raw="$("$SESSIONS_BIN" --json 2>/dev/null)"; ENUM_RC=$?
+  # rc through a pipe is the PIPE's, so read the type as a VALUE rather than as an exit code.
+  t="$(printf '%s' "$raw" | jq -r 'type' 2>/dev/null)"
+  if [ "$ENUM_RC" -eq 0 ] && [ "$t" = "array" ]; then
+    ENUM_JSON="$raw"; ENUM_OK=1
+    ENUM_N="$(printf '%s' "$raw" | jq 'length' 2>/dev/null)"; ENUM_N="${ENUM_N:-0}"
+  else
+    ENUM_JSON='[]'; ENUM_OK=0; ENUM_N=0
+  fi
+}
+
 cmd_classify() { # <target> [--json]
   local target="$1" json="${2:-}"
-  local all; all="$("$SESSIONS_BIN" --json 2>/dev/null || echo '[]')"
+  enumerate_sessions
+  local all="$ENUM_JSON"
   local e
   e="$(printf '%s' "$all" | jq -c --arg t "$target" '.[] | select(.paneUUID==$t or .session_id==$t or .sessionId==$t or .name==$t)' 2>/dev/null | head -1)"
-  [ -n "$e" ] || die "no live session matches '$target'"
+  if [ -z "$e" ]; then
+    # A no-match is only a fact about the TARGET when the enumerator actually answered. When it did
+    # not, this is a NO VERDICT and says nothing about whether that session is alive.
+    [ "$ENUM_OK" = 1 ] || die "session enumerator FAILED (rc=$ENUM_RC from '$SESSIONS_BIN') — NO VERDICT about '$target'; this is not a finding that the session is gone"
+    die "no live session matches '$target' (enumerated $ENUM_N live session(s))"
+  fi
   emit_one "$e" "$all" "$json"
 }
 
 cmd_all() { # [--json]
   local json="${1:-}"
-  local all; all="$("$SESSIONS_BIN" --json 2>/dev/null || echo '[]')"
-  local n; n="$(printf '%s' "$all" | jq 'length' 2>/dev/null || echo 0)"
+  enumerate_sessions
+  local all="$ENUM_JSON"
+  local n="$ENUM_N"
+  # An empty classification is reported by every consumer as "0 sessions". Say, once, on stderr,
+  # when that emptiness is the fallback rather than the answer. stdout and rc are untouched, so the
+  # reaper's `--all --json 2>/dev/null` parse is unaffected — this is for whoever reads the error.
+  [ "$ENUM_OK" = 1 ] || printf 'cc-classify: session enumerator FAILED (rc=%s from %s) — the empty classification below is a FALLBACK, not a verdict\n' "$ENUM_RC" "$SESSIONS_BIN" >&2
   [ "$json" = "--json" ] && printf '['
   local first=1 i
   for ((i=0; i<n; i++)); do

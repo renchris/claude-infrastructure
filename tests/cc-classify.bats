@@ -3,6 +3,8 @@
 # mock ps + temp git). SAFETY properties under test: an active / rate-limited / waiting session is
 # NEVER labeled reapable; the two reapable causes require positive evidence.
 
+bats_require_minimum_version 1.5.0   # `run --separate-stderr` in the enumerator-failure arms
+
 setup() {
   # M11 (MACHINE_CAPACITY_V2 §11.3) — a test's environment is PINNED, not ambient. handoff-fire.sh's
   # capacity_gate reads the box's live loadavg AND (M10) its memory headroom, exiting 9 when either is
@@ -893,4 +895,47 @@ tx_loop() { local sid="$1" n="$2" ago="$3" step="$4"; shift 4
   tx_loop sidFl 10 10 6 "same line" "other line"
   run env CC_CLASSIFY_LIVELOCK_SPAN_S=0 "$C" PANE-A --json
   [ "$(printf '%s' "$output" | jq -r '.cause')" = active ]
+}
+
+# ── THE ENUMERATOR'S OWN FAILURE (2026-08-25) ──────────────────────────────────────────────────
+# Both call sites read the session list as `$SESSIONS_BIN --json || echo '[]'`. That fallback made a
+# DEAD enumerator indistinguishable from an EMPTY box, and the single-target path then stated the
+# empty list as a fact about the caller's target: measured on the real binary with cc-sessions
+# stubbed to exit 3, the stderr for a LIVE pane was byte-identical (target name normalised out) to
+# the stderr for a pane that has never existed. These three pin the separation. The value stays
+# fail-open — only the RECORD changes.
+
+@test "ENUMERATOR-FAILED: a dead enumerator is NOT reported as 'this session is gone'" {
+  reg PANE-A "$LIVE" /repo sidEF "$(boot_ago 20000)"
+  printf '#!/bin/bash\nexit 3\n' > "$D/bin/sessions-fail"; chmod +x "$D/bin/sessions-fail"
+  run env CC_CLASSIFY_SESSIONS_BIN="$D/bin/sessions-fail" "$C" PANE-A
+  [ "$status" -eq 2 ]
+  [ "$(printf '%s' "$output" | grep -cF 'session enumerator FAILED')" -ge 1 ]
+  [ "$(printf '%s' "$output" | grep -cF 'NO VERDICT about')" -ge 1 ]
+  [ "$(printf '%s' "$output" | grep -cF 'rc=3')" -ge 1 ]
+  # THE point of the test: it must NOT make the absent-target claim about a pane that is alive.
+  [ "$(printf '%s' "$output" | grep -cF 'no live session matches')" -eq 0 ]
+}
+
+@test "ENUMERATOR-OK CONTROL: a genuinely absent target still gets the absent-target answer" {
+  # The control that can fail. Without it the fix could have replaced one blanket message with
+  # another, and every arm above would still be green. A healthy enumerator with one registered
+  # session must keep saying 'no live session matches', and must NOT blame the enumerator.
+  reg PANE-A "$LIVE" /repo sidOK "$(boot_ago 20000)"
+  run "$C" PANE-NOSUCH
+  [ "$status" -eq 2 ]
+  [ "$(printf '%s' "$output" | grep -cF 'no live session matches')" -ge 1 ]
+  [ "$(printf '%s' "$output" | grep -cF 'enumerated 1 live session')" -ge 1 ]
+  [ "$(printf '%s' "$output" | grep -cF 'session enumerator FAILED')" -eq 0 ]
+}
+
+@test "--all keeps its rc and stdout when the enumerator fails; only stderr gains the FALLBACK note" {
+  # cc-reaper calls `--all --json 2>/dev/null` and parses stdout, so this arm must be record-only:
+  # a valid empty array at rc 0, exactly as before, with the reason on the channel it discards.
+  printf '#!/bin/bash\nexit 3\n' > "$D/bin/sessions-fail"; chmod +x "$D/bin/sessions-fail"
+  run --separate-stderr env CC_CLASSIFY_SESSIONS_BIN="$D/bin/sessions-fail" "$C" --all --json
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r 'type')" = array ]
+  [ "$(printf '%s' "$output" | jq -r 'length')" -eq 0 ]
+  [ "$(printf '%s' "$stderr" | grep -cF 'FALLBACK, not a verdict')" -ge 1 ]
 }
