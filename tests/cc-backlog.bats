@@ -330,14 +330,16 @@ st_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)
   id=$(bash "$CB" needs "$step" --project /r)
   [ -n "$id" ]
   bash "$CB" "done" "$id" --evidence "closed with a clause-by-clause body" >/dev/null
-  [ "$(st_of "$id")" = done ]
+  # `done` is quoted on every comparison too, not just on the verb: unquoted at this position it
+  # parses as the loop keyword and shellcheck raises SC1010, which the .bats gate blocks on.
+  [ "$(st_of "$id")" = "done" ]
   run bash "$CB" needs "$step" --project /r
   [ "$status" -eq 4 ]
-  [ "$(st_of "$id")" = done ]                              # the close SURVIVES the re-emission
+  [ "$(st_of "$id")" = "done" ]                            # the close SURVIVES the re-emission
   # …and the same holds with the R7 mint brake disabled, which is the path that never reaches cmd_add.
   CC_BACKLOG_NEEDS_BRAKE=off run bash "$CB" needs "$step" --project /r
   [ "$status" -eq 4 ]
-  [ "$(st_of "$id")" = done ]
+  [ "$(st_of "$id")" = "done" ]
 }
 
 @test "unblock of a LIVE claim is REFUSED (rc 4) — the double-dispatch bug, other spelling" {
