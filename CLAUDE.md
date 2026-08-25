@@ -824,6 +824,14 @@ not appear at all** — not marked, not bare. (One close showed a command and ha
 Reference-only commands stay in inline backticks **mid-sentence, never alone on their own line** — the
 marker plus a lone span is what makes a command an instruction, so the discriminator is position, not
 styling. Never in the closing block either way.
+🚨 **The marker is LITERAL, and its payload must be EXECUTABLE AS TYPED.** `▶ Run this:` is the whole
+marker — never vary the verb (`▶ Open this:`, `▶ See this:`, `▶ Check this:`). Everything above is
+about how the span *renders*; this is about what it *is*. The operator selects it and pastes it into
+a shell, so a bare path, URL or filename under the marker gets **executed**, not opened — a `.md`
+path returns `permission denied`. To point at a file, give the command that opens it:
+`cursor <path>`, never `<path>`. *(Measured 2026-08-25: `▶ Open this:` over a bare doc path cost a
+round trip on a time-critical afternoon. The verb was invented, and inventing it is what made the
+payload stop being a command.)*
 **Opt-in detail** (`/wrap --full` / on request) appends the dense per-field ledger — never the default:
 
 ```text
