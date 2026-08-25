@@ -493,3 +493,62 @@ EOF
   [[ "$output" == *"CUT by a bound"* ]] || false
   [ ! -f "$CC_CLOUD_STATE/session_test.land-refused" ]
 }
+
+# ══ A REFUSAL IS EARNED ONCE PER BRANCH HEAD ════════════════════════════════════════════════════
+# Measured 2026-08-25 on the live ledger: 980 land-refused rows, 45 sessions, 93 attempts against
+# ONE of them, because every 300 s tick re-ran a verdict that could not have changed. The refusal
+# artifact had recorded `seen_sha=` the whole time and nothing read it back.
+
+# Advance the VM branch, which is the ONLY thing that can legitimately change a refusal's answer.
+push_new_vm_commit() {
+  git -C "$WORK" checkout -q claude/vm
+  printf 'another turn\n' >>"$WORK/docs/vm.md"
+  git -C "$WORK" add -A
+  git -C "$WORK" -c user.email=vm@anthropic -c user.name=vm commit -q -m "vm second turn"
+  git -C "$WORK" checkout -q trunkref
+  push_vm
+}
+reconcile_calls() { grep -c '^reconcile ' "$CALLS" 2>/dev/null || printf '0'; }
+
+@test "a refusal already earned on this exact branch head is NOT re-run on the next sweep" {
+  declare_managed
+  seen_at 1
+  LAND_RC=5 CC_RETURN_NOW=999999 run "$SUT" --sweep
+  [ "$status" -eq 0 ]
+  [ -f "$CC_CLOUD_STATE/session_test.land-refused" ]
+  [ "$(reconcile_calls)" -eq 1 ]
+  # Second tick, nothing about the branch changed. Pre-fix this called the lander again — and again,
+  # 93 times on one session. The count, not the prose, is the assertion: a message can be added
+  # while the wasteful call still happens.
+  LAND_RC=5 CC_RETURN_NOW=999999 run "$SUT" --sweep
+  [ "$status" -eq 0 ]
+  [ "$(reconcile_calls)" -eq 1 ]
+  [[ "$output" == *"already REFUSED"* ]] || false
+}
+
+@test "the skip does NOT latch — a new push re-earns the attempt with no expiry or sweeper" {
+  declare_managed
+  seen_at 1
+  LAND_RC=5 CC_RETURN_NOW=999999 run "$SUT" --sweep
+  [ "$(reconcile_calls)" -eq 1 ]
+  # The VM pushed again: the branch head differs, so the prior verdict is about a tree that no
+  # longer exists and the lander must be asked afresh. This is the whole falsifier — without it the
+  # fix would be a permanent block wearing a cache's clothes.
+  push_new_vm_commit
+  seen_at 1
+  LAND_RC=0 CC_RETURN_NOW=999999 run "$SUT" --sweep
+  [ "$status" -eq 0 ]
+  [ "$(reconcile_calls)" -eq 2 ]
+}
+
+@test "CC_RETURN_RETRY_REFUSED=1 forces the re-ask, for the conflict a branch-head key cannot see" {
+  declare_managed
+  seen_at 1
+  LAND_RC=5 CC_RETURN_NOW=999999 run "$SUT" --sweep
+  [ "$(reconcile_calls)" -eq 1 ]
+  # A rebase conflict is a function of the branch AND of trunk. Keying the skip on trunk would
+  # re-open the loop (trunk moves many times a day), so the escape is explicit and human-driven.
+  CC_RETURN_RETRY_REFUSED=1 LAND_RC=0 CC_RETURN_NOW=999999 run "$SUT" --sweep
+  [ "$status" -eq 0 ]
+  [ "$(reconcile_calls)" -eq 2 ]
+}

@@ -316,6 +316,47 @@ handle() { # <row-json> → prints outcome lines
     ledger "$id" dry-run "$(jq -cn --arg b "$branch" '{branch:$b}')"; return 0
   fi
 
+  # 3b. A REFUSAL ALREADY EARNED ON THIS EXACT SHA IS NOT RE-EARNED EVERY 300 s.
+  #
+  # The lander's refusals are FINDINGS ABOUT THE TREE, and desk-land says so in its own words —
+  # "NOT retrying blindly … 9 and 75 are statements about the MACHINE, not findings about the tree:
+  # those two ARE the retryable ones". Everything else (2 dirty · 3 escalation-PARK · 5 rebase-
+  # conflict · 6 gate-red · 7 push non-ff · 8 verify-fail) is a fact about a branch that has not
+  # moved, so re-running it produces the identical verdict — and this sweep ran it again anyway on
+  # the next 300 s tick, forever.
+  #
+  # Measured 2026-08-25 on the live ledger: 980 land-refused rows over 45 distinct sessions —
+  # rc 70 ×741, rc 65 ×236 — with 93 attempts against ONE session, and 19 of the 45 branches no
+  # longer on origin at all. Each attempt re-fetched, re-authored, re-rebased and left a rebase in
+  # progress; the recorded rerere preimages are conflicts nobody ever resolved. The verdicts were
+  # right every single time. The waste was asking again.
+  #
+  # THE ARTIFACT ALREADY CARRIED THE ANSWER. The refusal file this code writes below has recorded
+  # `seen_sha=` since it was introduced — the branch head the verdict was earned against — and
+  # nothing ever read it back. That is this repo's own recurring shape (detection ships, actuation
+  # waits), and the fix is the read, not a new store.
+  #
+  # WHY THIS CANNOT LATCH SHUT, which is the failure mode a skip like this must not have:
+  #   * the key is the BRANCH HEAD. The moment the VM pushes again, `seen_sha` differs and the next
+  #     pass lands normally — the natural falsifier, and it needs no expiry, no TTL and no sweeper.
+  #   * a land-CUT is not a refusal and files no artifact (see the bound/SIGTERM arm below), so a
+  #     killed land is still resumed on the next tick exactly as before.
+  #   * CC_RETURN_RETRY_REFUSED=1 forces one full re-attempt, for the case this key cannot see: a
+  #     rebase conflict is a function of the branch AND of trunk, so a human or a wave that has
+  #     resolved the conflict re-runs with it set. Keying on trunk instead would re-open the loop,
+  #     because trunk moves many times a day and every move would re-ask all 45.
+  if [ "$state" != LANDED ] && [ "${CC_RETURN_RETRY_REFUSED:-0}" != 1 ] && [ -n "$seen_sha" ]; then
+    local prior_sha prior_rc
+    prior_sha="$(sed -n 's/^seen_sha=//p' "$STATE/$id.land-refused" 2>/dev/null | head -1)"
+    prior_rc="$(sed -n 's/^rc=//p' "$STATE/$id.land-refused" 2>/dev/null | head -1)"
+    if [ -n "$prior_sha" ] && [ "$prior_sha" = "$seen_sha" ]; then
+      say "· $id — already REFUSED (exit ${prior_rc:-?}) on this exact branch head; not re-asking until it moves. Artifact: $STATE/$id.land-refused · force with CC_RETURN_RETRY_REFUSED=1"
+      ledger "$id" land-refused-cached "$(jq -cn --arg b "$branch" --arg rc "${prior_rc:-}" --arg s "$seen_sha" \
+        '{branch:$b, prior_rc:$rc, seen_sha:$s, note:"verdict already earned on this head — skipped, not re-run"}')"
+      return 0
+    fi
+  fi
+
   # 4. LAND. Delegated whole — the lock, the identity re-author, the gate and the content-verify all
   # live in the sanctioned lander and re-implementing any of them here would be a second, weaker
   # envelope.
