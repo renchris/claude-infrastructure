@@ -220,6 +220,87 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   `bats-shellcheck-lint` rc 1 (a census over inherited debt, attributed to NOBODY). **No memory row
   written**, consistent with #115–#213.
 
+  🚨 **POST-CRASH ADDENDUM (appended after the fact — the machine hard-crashed at
+  2026-08-25T03:02:10Z, `kern.boottime`, between this entry's land and the fire of #215).** Two
+  numbers above are now STALE and this addendum is the correction, not a rewrite: **"filed 0" and
+  "net −1, the ELEVENTH consecutive negative-net link" were true when written and are now false.**
+  The post-crash tally is **closed 1, filed 1, NET 0**, and the negative-net streak ends at ten. The
+  filing is `e7d646a6687a`, and it exists because the crash demonstrated the defect on this chain's
+  own body.
+  · **EVERYTHING DURABLE SURVIVED, VERIFIED FROM DISK ON RESUME:** both commits on trunk
+    (`824bff829`, `e76f4612d`, re-resolved BY SUBJECT), tree clean, `AHEAD=0`, and the close of
+    `810d59da926a` intact at **`status=done`, evidence 5963 chars, exactly 1 row matching on `.id`**.
+  · 🚨 **THE ONLY THING LOST WAS THE SUCCESSION BRIEF, AND IT IS THE ONE LOSS THAT STOPS THE CHAIN.**
+    `--prompt-file` points into `/tmp`, so the artifact necessarily sits UNFIRED across the whole
+    window between "brief written" and "fire executed", and `/tmp` does not survive a reboot.
+    Measured: **0 of 7 pre-boot `/tmp/fire-*.txt` survived.** Mine was one; the other six are
+    `253aaa52412e`'s parked docs-consolidation wave briefs, which are that OPEN row's entire recorded
+    work product and are held by no git object. The single `fire-*.txt` present now
+    (`fire-austin-move.txt`) is **not a survivor** — mtime `2026-08-25T03:21:51Z`, **19 minutes AFTER
+    boot**. POS control: `/tmp` is readable and writable in the same session (probe written, read
+    back, removed), so these are real absences, not a mount failure.
+  · ✅ **APPLIED TO MYSELF IMMEDIATELY:** #215's brief was rewritten from transcript and written to
+    **`~/.claude/autonomy/fire-drain-recycle215.txt`** — the durable store this loop already trusts,
+    the same one that just carried `backlog.jsonl` through the crash intact — and fired from there.
+    **`--prompt-file` takes any path; nothing ever required `/tmp`.** ⚠️ **Successors: write your
+    brief there, not in `/tmp`.** The location has to live in the contract because a successor that
+    has lost its context cannot be told where to look by a file it cannot find.
+  · ⚠️ **THE LEAD IS ALIVE; ITS ADDRESS IS DEAD. Those are different facts and this entry's first
+    draft conflated them.** `claude-infrastructure-102` no longer resolves — `cc-notify --role
+    drain-lead` returns `verdict=mailbox-only reason=target-not-live`, the registry row for pane 102
+    (pid 7485) reads **ALIVE=False**, and `~/.claude/cc-roles/drain-lead` still contains the stale
+    `102` with no `desk` role to reroute to, so mail sent there **sits in a box nothing drains**.
+    But the lead SURVIVED and messaged this session post-crash under the label `claude-tertiary`,
+    from a pane in no registry row. #214's pre-crash ping WAS `enqueued=1` (line 232), so invariant
+    7 was satisfied; assume the body unread — though the lead's own message shows it had already
+    re-derived everything independently.
+  · 🚨 **AND THE FIRST READ OF THAT FACT WAS A LIE:** bare `cc-sessions` returned **rc 127, command
+    not found**, rendering as `exact=0` — a MUTE instrument reading exactly like a real absence,
+    control 2 reproduced live. It was *partly* true, which is what made it dangerous. Re-run with
+    `$HOME/.claude/bin/cc-sessions` (rc 0) before believing any zero. **The lead hit the identical
+    failure the same hour** — its `cc-notify` was not on PATH either. **A resumed session does not
+    inherit the PATH you remember.**
+  · 🚨 **THE CHAIN IS STALLED: #215 WAS NOT FIRED, AND NOT FIRING WAS THE CORRECT ACT.** Measured,
+    in this order: `cc-notify --self` returns `verdict=unresolvable reason=no-iterm-session` (a
+    resumed-after-crash session is **not in an iTerm2 pane**) · `--recycle --dry-run` nonetheless
+    exits **rc 0** and resolves `surface: (recycle — this pane: 3)` while **pane 3 appears in NO
+    registry row** (13 rows, none is `3`), warning only `in-flight-subagent check SKIPPED — no CC
+    session id for this pane` · the drain's own **pane 449 (`recycle-11-449`, cwd = this worktree)
+    is DEAD** (pid 91821 ALIVE=False) · only **4 of 13** rows are alive (panes 1, 14, 2, 580; POS
+    control 887 live pids, NEG pid 999999 absent), and per the lead those survivors are
+    **operator-owned**. `handoff-fire.sh:1810` names the consequence itself — a recycle *"would type
+    /exit AND a launcher command into a DIFFERENT live session's composer — killing their turn"* —
+    and the lead's own dispatch hit the matching guard at **rc=4, "Refusing to anchor a headless
+    fire on a pane the operator is using."** **So the fire was withheld rather than aimed at a
+    human's live session, and no workaround was attempted.** Filed as an operator step.
+    ⚠️ **THE TRANSFERABLE LESSON: the anchor did NOT fail loud. A dry run exited 0 and named a pane
+    that does not exist.** Before any future fire, require three things and not one: `cc-notify
+    --self` resolves · the registry row for your cwd is ALIVE · the dry-run's `this pane:` value
+    MATCHES a real registry row.
+  · 🆕 **THE LEAD'S POST-CRASH CENSUS SETTLES THE WAKE-PATH `kind` QUESTION AT n=1021 AND PARTLY
+    LIFTS ITS OWN "BUILD NOTHING" ORDER.** Over **2248 beat files** split on the boot epoch: frozen
+    BEFORE boot (all dead) = **1226 `kind=stop` + 1010 `kind=prompt`**; after boot (live fleet) =
+    **11 `prompt`, 1 `stop`**. **1010 dead sessions and 11 live ones carry the identical
+    `kind=prompt`** — so `kind` is refuted at three orders of magnitude above #213's n=3. Freshness
+    separated perfectly (2236 vs 12, zero crossovers) **but a reboot is a PRIVILEGED ANCHOR ordinary
+    operation does not give you**; what is proven is the PRINCIPLE, and the operational form still
+    needs the second time-separated sample. **The unlock: you do not need (C)'s MECHANISM to
+    classify (C) correctly** — frozen sender beat ⇒ benign teardown, advancing ⇒ the arming session
+    is alive and you are deaf. Decidable today. The lead's dispatch of it was refused by the same
+    anchor guard, so it is **PARKED, not abandoned.**
+  · ✅ **THE CONVERGER WAS NEVER STUCK — IT WAS NOT DUE.** The lead measured live HEAD `fd60f868b`
+    authored 22:05:11Z: at 03:21Z that is **5 h 16 m against the 6 h budget and 14 commits against
+    25, BOTH inside**, so T2's third precondition is unset and the degrade path was not eligible
+    until ~04:05Z. **"The lag did not move" was correct behaviour, not a refusal.** ⚠️ And the same
+    symlink fact bites twice: `~/.claude/bin/cc-backlog` points into the shared checkout, so the
+    landed ladder fix `362ce1444` is **INERT in the live file** — 5 occurrences of
+    `CLAUDE_CODE_SESSION_ID` in the trunk blob, **0** in the live one.
+  · ⚠️ **HONEST BLEMISH: `e7d646a6687a`'s title carries 4 em-dashes, so #214 BROKE the chain's
+    pure-ASCII board-write streak.** The round-trip was verified byte-exact anyway (3258 == 3258
+    chars, POS 5/5, NEG 3/3), so nothing is corrupted — but the convention exists so a later read
+    can never be, and the assertion that should have blocked the write was sequenced after it rather
+    than gating it. **Gate the write on the ASCII check, do not merely run it beside the write.**
+
 - **2026-08-25 — drain recycle #213: method 183 — A ROW'S PRESCRIBED DISCRIMINATOR CAN HAVE ZERO
   POWER BETWEEN THE VERY CLASSES IT EXISTS TO SEPARATE, AND ITS FAILURE DIRECTION IS THE
   COMFORTABLE ONE. A row whose every finding is true can still prescribe a test that returns the
