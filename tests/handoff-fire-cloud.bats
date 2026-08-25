@@ -461,3 +461,39 @@ EOF
   [ -s "$CLOUD_DECL_LOG" ]
   [ ! -f "$BATS_TEST_TMPDIR/pf-off.log" ]                # the override SKIPS the probe, not just its verdict
 }
+
+# ── THE ABSENCE CONTRACT — backlog 0c8b39b67665 ─────────────────────────────────────────────────
+# docs/plans/CLOUD_OBSERVABILITY.md §4.1 and §8 step 2 require the cloud session's FIRST act to be
+# pushing the declared branch ("an empty commit is enough"), because that is the ONLY thing that
+# makes the absence of a ref informative: without it, no-ref means "has not finished yet" and
+# cc-cloud's C1 arm (declared_at + boot_s, default 900 s — bin/cc-cloud:154) raises NOT-STARTED
+# over a session that is merely twenty minutes into its work. That contract existed only as prose
+# in the design document; nothing in the fire path produced it.
+#
+# RED-PROOF (re-runnable): replay this case against `git show <pre-fix sha>:scripts/handoff-fire.sh`
+# in a scratch tree. It goes RED on the `--allow-empty` assertion — the pre-fix payload's only push
+# instruction was the return-channel block, whose own words are "push whatever you have BEFORE YOU
+# FINISH", i.e. a push at the END. Case 17 stays green on both trees: it asserts the branch is
+# CREATED before it is pushed, which is a different property from the push being the FIRST ACT, and
+# that is exactly why 17 could pass while the contract had no producer at all.
+@test "20 the payload makes the push the session's FIRST ACT — the boot beacon, not the return push" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: t" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ -s "$BATS_TEST_TMPDIR/create.log" ]
+  local beacon task push
+  # The beacon itself: an empty commit, which is what §4.1 names as sufficient.
+  beacon="$(grep -n -- 'git commit --allow-empty' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$beacon" ] || { echo "the payload never instructs the empty boot commit (§4.1)"; false; }
+  # FIRST ACT is a claim about ORDER, so it is asserted as one: the beacon push must precede the
+  # brief. A payload that appended "and push first" after the task would satisfy every substring
+  # check and none of the property.
+  push="$(grep -n -- 'git push -u origin HEAD' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  task="$(grep -n -- 'cloud venue gate fixture payload' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$push" ] || { echo "the payload never instructs the push"; false; }
+  [ -n "$task" ] || { echo "the brief itself is missing from the payload"; false; }
+  [ "$beacon" -lt "$push" ] || { echo "the empty commit must precede the push (beacon=$beacon push=$push)"; false; }
+  [ "$push" -lt "$task" ] || { echo "the beacon push must precede the BRIEF, or it is not a first act (push=$push task=$task)"; false; }
+  # And the beacon is on the DECLARED branch — a beacon pushed anywhere else is watched by nothing.
+  grep -q -- 'git switch -c claude/fire-' "$BATS_TEST_TMPDIR/create.log"
+}

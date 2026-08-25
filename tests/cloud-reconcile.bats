@@ -848,3 +848,82 @@ dead_pid() {
   [[ "$output" == *"NOT filled"* ]] || false   # … but the non-verdict is NAMED
   grep -q '^paths=$' "$CC_CLOUD_STATE/nofill.decl"
 }
+
+# ── THE BOOT BEACON'S COROLLARY — backlog 0c8b39b67665 ──────────────────────────────────────────
+# scripts/handoff-fire.sh now implements CLOUD_OBSERVABILITY.md §4.1's absence contract: a cloud
+# session's FIRST act is an empty commit pushed to the declared branch, so that no-ref past the
+# boot budget means "never started" instead of "has not finished yet". That creates a branch shape
+# this reconciler had never seen — a session that boots and then dies leaves a branch on the remote
+# carrying a beacon and nothing else. `candidates()` discovers it, `classify()` reads ELIGIBLE (its
+# declared paths are not on trunk, because it produced none), and before this guard the lander was
+# invoked: an empty commit rebased onto trunk and pushed, per failed cloud fire.
+#
+# RED-PROOF (re-runnable): replay these three against `git show <pre-fix sha>:scripts/cloud-
+# reconcile.sh` via CLOUD_RECONCILE_SUBJECT_ROOT. The first two go RED — the pre-fix subject hands
+# `claude/beacon` to the lander. The third is GREEN on both trees by design: it is the
+# non-discrimination control proving the guard is keyed on THE BRANCH'S OWN RANGE and not on "cc-cloud
+# fill-paths could not derive a path set", which returns the same rc 4 for a delete-only branch
+# (bin/cc-cloud:311) — real work, whose tree differs, and which must still land.
+
+  push_beacon() {  # $1=branch — one EMPTY commit on main, pushed; the beacon and nothing else
+    local b="$1" w
+    w="$D/w-$(printf '%s' "$b" | tr / -)"
+    git -C "$REPO" worktree add -q -b "$b" "$w" main
+    git -C "$w" -c user.email=t@e.com -c user.name=tester commit -q --allow-empty -m "boot: $b"
+    git -C "$w" push -q origin "HEAD:refs/heads/$b"
+    git -C "$REPO" worktree remove --force "$w"
+    git -C "$REPO" branch -q -D "$b"
+    rm -rf "$w"
+    true
+  }
+
+  push_deletion() {  # $1=branch — a DELETE-ONLY range: the tree DIFFERS, but no path is added
+    local b="$1" w
+    w="$D/w-$(printf '%s' "$b" | tr / -)"
+    git -C "$REPO" worktree add -q -b "$b" "$w" main
+    git -C "$w" rm -q already/landed.txt
+    git -C "$w" -c user.email=t@e.com -c user.name=tester commit -q -m "remove a file"
+    git -C "$w" push -q origin "HEAD:refs/heads/$b"
+    git -C "$REPO" worktree remove --force "$w"
+    git -C "$REPO" branch -q -D "$b"
+    rm -rf "$w"
+    true
+  }
+
+@test "a BEACON-ONLY branch is skipped by --all, and its working sibling in the same run is landed" {
+  push_beacon claude/beacon
+  push_branch claude/real 1
+  decl beacon claude/beacon
+  decl real claude/real
+  run env CONFIRM=1 bash "$CR" --all
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"boot beacon and nothing else"* ]] || false
+  # The discrimination, asserted on the LANDER'S OWN argv rather than on the report: the guard has
+  # to stop the land, not merely describe it.
+  run landed_branches
+  [[ "$output" == *"claude/real"* ]] || { echo "the working sibling was not landed: $output"; false; }
+  [[ "$output" != *"claude/beacon"* ]] || { echo "the beacon reached the lander: $output"; false; }
+}
+
+@test "--land NAMES the beacon rather than silently succeeding — and still calls no lander" {
+  push_beacon claude/beacon
+  decl beacon claude/beacon
+  run env CONFIRM=1 bash "$CR" --land claude/beacon
+  [ "$status" -eq 0 ]                                  # not a failure: there is simply nothing to land
+  [[ "$output" == *"boot beacon and nothing else"* ]] || false
+  run landed_branches
+  [[ "$output" != *"claude/beacon"* ]] || { echo "the beacon reached the lander: $output"; false; }
+}
+
+@test "CONTROL — a DELETE-ONLY branch still lands: the guard reads the RANGE, not path-derivability" {
+  # Green on both trees by design (the two cases above are the discriminating half). It exists so a
+  # future widening of the guard into "skip anything whose path set cannot be derived" cannot pass:
+  # a delete-only range makes fill-paths abstain exactly as a beacon does, and it is real work.
+  push_deletion claude/deleteonly
+  decl deleteonly claude/deleteonly
+  run env CONFIRM=1 bash "$CR" --land claude/deleteonly
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"boot beacon"* ]] || { echo "a delete-only branch was mistaken for a beacon"; false; }
+  run landed_branches
+  [[ "$output" == *"claude/deleteonly"* ]] || { echo "real work was skipped: $output"; false; }
+}

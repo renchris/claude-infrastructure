@@ -150,6 +150,55 @@ session's brief requires its **first act** to be pushing that branch — an empt
 Absence then becomes informative: no ref inside the budget is `BOOTING` (expected); no ref past it
 is `NOT-STARTED` (actionable — re-fire, or check entitlement).
 
+#### 4.1a The contract now has a producer — it was PROSE-ONLY until 2026-08-25 (backlog `0c8b39b67665`)
+
+Everything above was true and unimplemented. The fire path declared the branch and started the boot
+budget, but the payload's only push instruction was the return-channel block, whose own words were
+*"push whatever you have **before you finish**"* — a push at the **end** of the work. So the ref's
+absence measured *"has not finished yet"*, not *"never started"*, and §4.3's C1 arm fires at
+`declared_at + boot_s` with `boot_s` defaulting to **900 s** (`bin/cc-cloud:154`). A healthy cloud
+session twenty minutes into its task therefore read `C1 NOT-STARTED` — the *actionable* arm, whose
+prescribed recovery is "re-fire, or check entitlement", raised over a session that was running
+perfectly well. That is the same shape of defect §4.2 is written against: a confident verdict
+computed from evidence that does not bear on the question.
+
+The producer is the **boot beacon**, prepended to the cloud payload at
+`scripts/handoff-fire.sh` (the `CLOUD_PAYLOAD` assignment, above the `--dry-run` exit):
+
+```text
+    git switch -c <the declared branch>
+    git commit --allow-empty -m "boot: <the declared branch>"
+    git push -u origin HEAD
+```
+
+It is **prepended, not appended**, because "first act" is the whole property: a brief that ends with
+"and by the way, push first" is a brief whose first act is the task. `tests/handoff-fire-cloud.bats`
+case 20 asserts the ORDER as an effect on the argv actually handed to the create — beacon commit
+before push, and the push before the brief's own text — because every substring check passes on a
+payload that mentions the push anywhere at all. Case 17 stays green on both trees, and that is the
+point of keeping the two: 17 asserts the branch is *created before it is pushed*, which is a
+different property from the push being *first*, and is why 17 could pass while this contract had no
+producer.
+
+⚠️ **The corollary lands in `scripts/cloud-reconcile.sh`, and it is not optional.** A session that
+boots and then dies now leaves a **beacon-only branch** on the remote — a candidate shape the
+reconciler had never seen. `candidates()` discovers it and `classify()` reads `ELIGIBLE` (its
+declared paths are not on trunk, because it produced none), so the lander was invoked: an empty
+commit rebased onto trunk and pushed, plus a gate run and a land lock, for every cloud fire that
+failed to boot into real work. `beacon_only()` skips it, keyed on the branch's **own range**
+(`trunk...branch`, bounded at the merge-base) being empty. Two narrower points, both refuted by the
+suite before they shipped:
+
+- **Not tree-identity against trunk's tip.** The first cut asked "is the branch's tree identical to
+  the trunk's?" and swallowed a branch whose content merely *coincides* with trunk — a sibling
+  landed the same file, or the trunk moved under it. That made the guard a statement about the
+  trunk's motion rather than about the session. `landed()` already owns the different question of
+  whether the work reached trunk.
+- **Not "the path set could not be derived".** `cc-cloud fill-paths` returns the same rc 4 for a
+  **delete-only** branch (`bin/cc-cloud:311`), which is real work with a non-empty range and must
+  still land. `tests/cloud-reconcile.bats` carries that as an explicit non-discrimination control,
+  green on both trees.
+
 ### 4.2 The discriminator the whole design rests on
 
 Measured, not assumed:
@@ -776,7 +825,10 @@ Before any cloud session is fired, in this order:
 1. `cc-cloud declare --id <id> --branch <b> --paths <what it will land> --url <session url>` —
    an undeclared cloud session is unobservable, and `declare` refuses without `--id`/`--branch`.
 2. The session's brief must require **pushing the declared branch as its first act**, so that
-   absence past the boot budget means something (§4.1).
+   absence past the boot budget means something (§4.1). ✅ **IMPLEMENTED 2026-08-25** as the boot
+   beacon prepended to `CLOUD_PAYLOAD` in `scripts/handoff-fire.sh`; nothing is left for the
+   operator to do at fire time. It was prose-only until then — see §4.1a for what that cost and
+   for the reconciler corollary it forced.
 3. §5.2 must be wired first — otherwise `com.claude.team-orphan-reaper` may archive the team
    while the session is healthy.
 4. On completion, `cc-cloud retire --id <id>` — or let C3 `LANDED` render it silent, which it does

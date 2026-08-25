@@ -383,6 +383,58 @@ diff_size() {  # <repo> <trunk-ref> <branch> → changed-file count (large senti
   case "$n" in ''|*[!0-9]*) printf '999999' ;; *) printf '%s' "$n" ;; esac
 }
 
+# ── THE BOOT BEACON'S COROLLARY — a branch can now exist and carry nothing ────────────────────
+# CLOUD_OBSERVABILITY.md §4.1's absence contract is implemented at scripts/handoff-fire.sh (backlog
+# 0c8b39b67665): a cloud session's FIRST act is `git commit --allow-empty` + push, so that no-ref
+# past the boot budget means "never started" instead of "has not finished yet". That contract
+# creates a branch shape this reconciler had never seen — a session that boots and then dies leaves
+# a beacon-only branch on the remote, which `candidates()` discovers and `classify()` calls
+# ELIGIBLE (its declared paths are not on trunk, because it produced none). Landing it would rebase
+# an empty commit onto trunk and push it: a gate run, a lock, and a content-free commit on trunk
+# for every cloud fire that failed to boot into real work.
+#
+# THE TEST IS THE BRANCH'S OWN RANGE — `trunk...branch`, THREE dots, bounded at the merge-base —
+# and each half of that is load-bearing.
+#
+# CONTENT, NOT COMMIT COUNT: a count is a statement about history and says nothing about what a
+# branch holds — `rev-list --count` reads 0 after a sibling rebase and proves nothing (the header's
+# own note, scripts/land-verify.sh:6-11). An empty diff over the range is a statement about
+# content: the session added, changed and deleted nothing after forking, so there is no work to
+# lose by skipping it. That is exactly "booted and produced nothing", which is the question.
+#
+# THE RANGE, NOT A TWO-DOT COMPARISON AGAINST TRUNK'S TIP. The first cut of this asked "is the
+# branch's tree identical to the trunk's?", and the suite refuted it in two places: a branch whose
+# content happens to COINCIDE with trunk (a sibling landed the same file, or the trunk moved under
+# it) is not a beacon — it produced real work — and reading it as one made this guard a statement
+# about the trunk's motion rather than about the session. The merge-base bound asks only what the
+# session itself did, which is the property being detected and the only one it is safe to skip on.
+# `landed()` above already owns the different question of whether that work is on trunk.
+#
+# It is also deliberately NOT keyed on `paths` being underivable: `cc-cloud fill-paths` returns the
+# same rc 4 for a DELETE-ONLY branch (bin/cc-cloud:311), and a delete-only branch is real work
+# whose range is non-empty and which must still land.
+#
+# Failure direction: `git diff --quiet` exits 1 on differences and >1 on error (an unresolvable ref
+# or no merge-base), so anything that is not a clean, positive "this range changes nothing" leaves
+# the branch on the landing path exactly as before. The guard errs toward landing, never toward
+# skipping.
+#   → 0  the branch's range against its merge-base with trunk is empty ⇒ it produced nothing
+#   → 1  it produced something, or the question could not be answered ⇒ treat as landable
+beacon_only() {  # <repo> <trunk-ref> <branch>
+  local rc=0
+  "$GIT_BIN" -C "$1" rev-parse --verify --quiet "refs/heads/$3" >/dev/null 2>&1 || return 1
+  "$GIT_BIN" -C "$1" rev-parse --verify --quiet "$2" >/dev/null 2>&1 || return 1
+  "$GIT_BIN" -C "$1" diff --quiet "$2...refs/heads/$3" >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || return 1
+  return 0
+}
+
+# A function, not a global: $REMOTE is parsed from argv further down, so a top-level string would
+# capture it before it is set and print an empty remote name.
+beacon_detail() {
+  printf '%s' "carries a boot beacon and nothing else — its range against '$C_TRUNK' adds, changes and deletes no file, so it has no content to land. The session booted (the branch exists) and then produced nothing; landing it would put an empty commit on the trunk. Left on '$REMOTE' for cc-cloud to age out (C4 STALLED / C6 ABANDONED), not landed."
+}
+
 # ── the identity translation (see "THE IDENTITY WALL" in the header) ─────────────────────────
 git_ident_email() {  # <repo> → the author email git ITSELF would use (empty ⇒ none resolvable)
   # `git var GIT_AUTHOR_IDENT`, never `git config user.email`: the same arbiter githooks/pre-commit
@@ -686,6 +738,12 @@ EOF
   rc=0; fetch_branch "$C_REPO" "$TARGET" || rc=$?
   [ "$rc" -eq 0 ] || die 65 "could not bring '$TARGET' into $C_REPO as a local head — $FETCH_DETAIL"
   [ -n "$FETCH_DETAIL" ] && echo "→ $TARGET — $FETCH_DETAIL"
+  # The tree-identity guard, AFTER the fetch because it needs a local head to read. Named
+  # explicitly with --land, so the operator hears the reason rather than a silent success.
+  if beacon_only "$C_REPO" "$C_TRUNK" "$TARGET"; then
+    echo "· $TARGET — $(beacon_detail)"
+    exit 0
+  fi
   derive_paths "$C_ID"
   rc=0; reauthor_branch "$C_REPO" "$C_TRUNK" "$TARGET" "$C_ID" || rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -724,6 +782,12 @@ while IFS= read -r b || [ -n "$b" ]; do
     continue
   fi
   [ -n "$FETCH_DETAIL" ] && echo "→ $b — $FETCH_DETAIL"
+  # Same guard as --land, and it sits BEFORE reauthor_branch on purpose: re-authoring rewrites the
+  # branch's history, and rewriting a beacon that will never be landed is work done to no end.
+  if beacon_only "$C_REPO" "$C_TRUNK" "$b"; then
+    echo "· $b — skipped: $(beacon_detail)"
+    continue
+  fi
   derive_paths "$C_ID"
   rc=0; reauthor_branch "$C_REPO" "$C_TRUNK" "$b" "$C_ID" || rc=$?
   if [ "$rc" -ne 0 ]; then

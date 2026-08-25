@@ -7781,12 +7781,66 @@ if [ "$CLOUD" = 1 ]; then
   # there the name is authorised AT CREATE. cc_cloud_create's signature is `cfg cwd prompt`
   # (scripts/lib/cloud-create.sh:185): the CLI leg has NO branch parameter at all, so the payload
   # is the only place the branch can be established, and establishing it is a real `switch -c`.
-  CLOUD_PAYLOAD="$(cat "$PROMPT_FILE")
-"'
+  #
+  # 🚨 THE BEACON BLOCK COMES FIRST, AND IT IS THE ABSENCE CONTRACT ITSELF (backlog 0c8b39b67665).
+  # CLOUD_OBSERVABILITY.md §4.1 is the load-bearing sentence of that whole document: absence is
+  # ambiguous — a session that never booted, one that died at boot, one refused entitlement and one
+  # that is merely still working all read as "no ref" — and it "can only be resolved by CONTRACT:
+  # the fire declares a branch and a boot budget, and the session's brief requires its FIRST ACT to
+  # be pushing that branch — an empty commit is enough". §8 step 2 restates it as fire-time
+  # protocol. Neither had a producer: until this block, the ONLY push instruction in the payload
+  # was the return-channel one below, whose own words are "push whatever you have BEFORE YOU
+  # FINISH". That is a push at the END of the work, so the ref's absence measured "has not finished
+  # yet", not "never started" — and §4.3's C1 arm fires at declared_at + boot_s, default 900 s
+  # (bin/cc-cloud:154). A healthy cloud session doing twenty minutes of work therefore read C1
+  # NOT-STARTED: the actionable arm ("re-fire, or check entitlement") raised over a session that
+  # was running fine, which is the precise failure the document is organised against. With the
+  # beacon the ref appears in the first seconds, C1 means what §4.1 says it means, and every later
+  # arm keys off a ref that exists (C4 STALLED / C6 ABANDONED become the arms that describe a
+  # session that booted and stopped).
+  #
+  # It is PREPENDED, not appended, because "first act" is the entire property being bought. A brief
+  # ending in "and by the way, push first" is a brief whose first act is the task. The block is
+  # deliberately short and states the cost of skipping it, because the VM has no way to be told
+  # twice — there is no inbound channel to correct a session that read past it.
+  #
+  # WHY AN EMPTY COMMIT rather than a bare push of the clone's HEAD (both would make the ref
+  # appear): the beacon is then self-identifying in the log and distinguishable from the trunk sha
+  # it forked off, which is what lets the local side tell "booted and produced nothing" from
+  # "booted and produced work" without re-deriving it from paths. It is also exactly what §4.1
+  # says, and implementing the contract as written is the point of this change.
+  #
+  # THE COROLLARY IS HANDLED IN scripts/cloud-reconcile.sh, NOT HERE: a session that boots and dies
+  # now leaves a beacon-only branch on the remote, which is a reconciler candidate that did not
+  # exist before this change. See the tree-identity guard at :land — an empty tree diff against
+  # trunk can contribute nothing to trunk, so it is skipped rather than landed.
+  CLOUD_PAYLOAD='── DO THIS FIRST — BEFORE THE TASK BELOW, BEFORE ANY OTHER TOOL CALL ──
+Run these three commands now, as your very first action:
+
+    git switch -c '"$CLOUD_BRANCH"'
+    git commit --allow-empty -m "boot: '"$CLOUD_BRANCH"'"
+    git push -u origin HEAD
+
+This is a boot beacon, not the delivery of your work. The firing side assigned that branch name,
+declared it, and started a boot budget against it. It has no other way to see you: there is no
+inbound channel to this VM, so a branch that has not appeared by the time the budget expires is
+read as "this session never started", and the recovery taken is to re-fire or to go investigate
+the account'"'"'s entitlement. If you do the task first and push at the end, a session that is
+merely SLOW is indistinguishable from one that never booted, and the wrong recovery is taken over
+a session that is running perfectly well. The empty commit costs one second and is the only
+evidence anything outside this VM will ever have that you booted at all.
+
+'"$(cat "$PROMPT_FILE")"'
+
 ── HOW TO RETURN YOUR WORK (this session runs off-box; read this before you finish) ──
 You are running in an Anthropic-managed VM. Nothing on the operator'"'"'s machine can see your
 filesystem, your processes or your terminal, and you cannot run this repo'"'"'s /ship. Your ONLY
-channel back is a git push, and it must go to exactly this branch — CREATE IT FIRST, then push it:
+channel back is a git push, and it must go to exactly this branch — the one you created and pushed
+as your boot beacon above:
+
+    git push -u origin HEAD
+
+If the beacon did not run for any reason, create the branch now and push it, then carry on:
 
     git switch -c '"$CLOUD_BRANCH"'
     git push -u origin HEAD
