@@ -343,6 +343,45 @@ classify_death() {
       printf 'RECYCLE\tdeliberate-teardown\t%s\t%s' "${kb:-0}" "${recs:-0}"; return 0
     fi
   fi
+  # 1.6) HANDOFF-LOG PANE RECOVERY — the arm above is UNREACHABLE for the exact case the pane-keyed
+  #      marker exists to cover. The registry is SINGLE-SLOT PER PANE, so an in-place `--recycle`
+  #      OVERWRITES the dead session's row with the SUCCESSOR's the moment the successor registers,
+  #      destroying the only sid→pane mapping arm 1.5 has. Both arms then need a sid that nothing
+  #      still maps: 1.5a keys the marker FILENAME on it, 1.5b keys the registry lookup on it.
+  #      Measured 2026-08-25 on the real classify_death with isolated stores — one variable moved,
+  #      the registry owner, marker byte-identical in both cells:
+  #        pane-keyed marker, empty sid, registry→PREDECESSOR ⇒ RECYCLE/deliberate-teardown
+  #        pane-keyed marker, empty sid, registry→SUCCESSOR   ⇒ CRASH/abrupt-unknown
+  #      So the EMPTY SID is not the cause and marker_owns_sid's fail-open is working as documented
+  #      (:126-129); the lost sid→pane mapping is. ~/.claude/logs/handoffs.jsonl is APPEND-ONLY and
+  #      its `recycle-engaged` rows carry prev_sid + target_pane — the same fact, durably. Measured
+  #      over the live log: 158/158 prev_sid values UUID-shaped, 158 distinct, 0 resolving to more
+  #      than one pane. (`firing_sid` is NOT usable here despite its name: 0 of 270 are UUID-shaped,
+  #      it holds a PANE id.)
+  #      This is a RECOVERY, not a widening: it is keyed on the DEAD sid itself, so it can never
+  #      reach a marker belonging to another session, and marker_owns_sid still guards what it finds.
+  if [[ -z "$pane" ]]; then
+    local hlog="${CC_HANDOFF_LOG:-$HOME/.claude/logs/handoffs.jsonl}"
+    local hrow want
+    want="\"prev_sid\":\"$sid\""
+    if [[ -f "$hlog" ]]; then
+      # newest row wins; `|| true` because a no-match grep must not trip set -e/pipefail here
+      hrow=$(grep -F "$want" "$hlog" 2>/dev/null | tail -1) || true
+      if [[ -n "${hrow:-}" ]]; then
+        pane=$(printf '%s' "$hrow" | grep -oE '"target_pane":"[^"]*"' | head -1) || true
+        pane=${pane#*:}; pane=${pane#\"}; pane=${pane%\"}
+      fi
+    fi
+    # `grep . >/dev/null`, NOT `grep -q .`: under `set -o pipefail` an early-exiting consumer
+    # SIGPIPEs its producer, so the pipeline can read FALSE on the very input it just matched.
+    # (The two arms above predate the pipefail ratchet and are grandfathered at their current count;
+    # this arm is new, so it uses the drained form.)
+    if [[ -n "$pane" ]] \
+       && find "$tdir" -maxdepth 1 -name "$pane.json" -mmin -30 2>/dev/null | grep . >/dev/null \
+       && marker_owns_sid "$tdir/$pane.json" "$sid"; then
+      printf 'RECYCLE\tdeliberate-teardown\t%s\t%s' "${kb:-0}" "${recs:-0}"; return 0
+    fi
+  fi
   # 2) DELIBERATE RECYCLE — the disposition/self-close phrases and the successor-brief
   #    text a session emits when it CHOOSES to recycle (incl. the brief written into the
   #    trailing last-prompt record). Bare "handoff-fire"/"self-close" are excluded —
