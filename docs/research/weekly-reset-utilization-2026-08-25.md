@@ -154,13 +154,19 @@ The one real cost in view is `next3`'s ~8 pp, and with 3.8 h left that is essent
 
 ## §5 What is genuinely still dark
 
-1. **Everything before 2026-08-10, and transcripts cannot recover it.** The ledger starts there; the
+1. 🚨 **SUPERSEDED BY §8.2 — read that instead.** This item concluded pre-2026-08-10 was
+   unrecoverable. It is not: the series is reconstructable to 2026-07-24 at ±1.5 pp from transcript
+   token records × the fitted exchange rate, plus 50 exact captured readings as anchors. The item is
+   kept below because *how* it reached the wrong answer is the reusable part — it searched
+   transcripts for limit **events** when what they actually carry is the **numerator**.
+
+   ~~**Everything before 2026-08-10, and transcripts cannot recover it.**~~ The ledger starts there; the
    pre-ledger state was single-slot-overwrite (`/tmp/claude-accounts-cache.json`, depth one).
    Transcripts were checked as the only candidate pre-ledger source: across all four config roots
    (6,749 `*.jsonl`), the literal `Claude usage limit reached` appears in **6** files — and one of
    those six is *this session's own transcript*, contaminated by the grep that searched for it, so
-   the real count is **5**, dated 08-09 / 08-10 / 08-11 / 08-16. Transcripts therefore record the
-   rare *exhaustion event*, never the running percentage. **EXISTS + INSUFFICIENT.**
+   the real count is ~~**5**~~ **0 — every one of the 11 records is meta; see §8.2**. Transcripts do
+   not record exhaustion events here at all. **ABSENT**, not EXISTS + INSUFFICIENT.
    ⚠️ The first cut of this probe used a broader regex (`weekly limit|rate_limit|resets at`) and
    matched **92%** of all transcripts — because that vocabulary is in `CLAUDE.md`, which is echoed
    into every transcript. A limit-telemetry probe over transcripts must match a limit *event*
@@ -201,13 +207,101 @@ from execution or from reading the parsing code, not from a doc's claim.
 | Source | Verdict | Evidence |
 |---|---|---|
 | `~/.claude/logs/account-utilization.jsonl` | **EXISTS + USABLE** — the answer | §1 |
-| The OAuth `/api/oauth/usage` body | **EXISTS + FULLY HARVESTED** | `pick()` (`bin/claude-accounts:846-853`) reads `percent` + `resets_at` from each `limits[]` entry, keyed on `kind` ∈ {`session`, `weekly_all`, `weekly_scoped`}, plus `extra_usage.{is_enabled,used_credits}`. Those are exactly the fields the ledger persists — we drop nothing we read. `pool-floor.sh` records the measured fact that the endpoint carries **no entitlement figure** (so absolute token budgets are unobtainable, which is why only *floors* publish). |
-| …but the **raw body is never retained** | **minor gap** | `/tmp/claude-accounts-cache.json` holds only the 24 parsed row keys; `raw upstream body retained? False`. So if the vendor adds a field, no stored artifact would show it — the schema is only ever seen through `pick()`. |
+| The OAuth `/api/oauth/usage` body | **EXISTS + INSUFFICIENT** (see §8.1 — this row was wrong when first written) | It carries **no history field of any kind** — every bucket is a single current `utilization` + `resets_at`. That is what settles it for this question, and it is unaffected by how much of the body we read. |
+| …and we read only **5 of ~40** returned fields | **real gap, §8.1** | `pick()` (`bin/claude-accounts:846-853`) takes `percent` + `resets_at` from `limits[]`, plus `extra_usage.{is_enabled,used_credits}`. §8.1 names what is dropped and why two of them matter. |
 | Native OpenTelemetry | **ABSENT, and would not help** | `CLAUDE_CODE_ENABLE_TELEMETRY` / any `OTEL_*` key is set in **none** of `~/.claude{,-secondary,-tertiary,-quaternary}/settings.json`, and none is in the live env. Independently: CC's OTel emits **token counts**, which are not limit %. Enabling it would not answer this question. |
-| Transcripts | **EXISTS + INSUFFICIENT** | §5.1 — 5 real limit-hit events, no running percentage. |
-| `~/.claude/logs/auth-timeseries.jsonl` | **not this axis** | auth/login-cliff state, not quota. |
+| Transcripts — limit messages | **ABSENT** (§5.1 said "5 real events"; **corrected in §8.2 — the real count is 0**) | All 11 canonical-string records across 6 files are meta. |
+| Transcripts — captured `--json` readings | **EXISTS + USABLE, sparse** — §8.2 | 50 pre-08-10 readings, 2026-07-25 → 08-09, all four accounts, median error **0 pp** against the ledger on overlap. |
+| Transcripts — token records × exchange rate | **EXISTS + USABLE — recovers the pre-ledger series** — §8.2 | 715,076 usage records back to 2026-07-11; out-of-sample **R² 0.700, RMSE 1.54 pp**. |
+| `/insights` (shipped in the binary) | **EXISTS + UNTRIED** | Local-history-derived so retro-capable, but approximate, and running it spends quota. Never run here. |
+| claude.ai web Usage panel | **UNVERIFIED** | Not probed — the one place server-side history could exist. |
+| `ccusage` / `claude-monitor` | **ABSENT** | Not installed by any path, and both are strictly weaker instruments. |
+| `~/.claude/logs/auth-timeseries.jsonl` + 10 sibling stores | **ABSENT** | `weekly_pct` count = 0 in every one but the ledger. |
 
-**So the store we have is the only one, and it is the right one.** The single improvement available
-on the collection side is retaining the raw `limits[]` body alongside the parsed fields, which would
-cost nothing (the sweep already has it in memory) and would make a vendor schema change visible
-instead of silent. Filed as a note here rather than as work, because nothing today depends on it.
+---
+
+## §8 CORRECTION — a second pass refutes two claims above
+
+An independent read-only sweep of the alternative sources (full findings:
+`docs/research/weekly-reset-utilization-2026-08-25/C-alt-sources.md`) overturned two things §5 and
+§7 asserted. Both are corrected in place above; the reasoning is kept here rather than deleted,
+because in each case *how* the first pass got it wrong is the reusable part.
+
+### §8.1 "The OAuth body is fully harvested" — WRONG, and wrong in a specific way
+
+The claim rested on a true premise and a false inference: we persist everything `pick()` reads
+(true), therefore we drop nothing (false). **`pick()` reads 5 fields; the body returns ~40.** A
+verbatim HTTP-200 payload is already committed at
+`docs/research/usage-telemetry-100p-2026-08-16/exchange-rate.md:66-98`, so this was checkable
+without a network call — the first pass simply read the *parser* and inferred the *schema* from it,
+which can only ever reproduce the parser's own blind spots.
+
+Two dropped fields are load-bearing:
+
+- **`seven_day_opus` / `seven_day_sonnet`** — per-model weekly sub-caps. `null` today, but the live
+  2.1.220 binary carries both strings (8 and 10 occurrences), so the client knows about them. If a
+  sub-cap is ever switched on it lands in a field nothing here reads, and **the first symptom is an
+  unexplained refusal**.
+- **`limits[].severity`** — the vendor's own escalation verdict. We re-derive urgency from `percent`
+  + `resets_at` instead of reading what the server already decided.
+
+Also dropped: `limit_dollars`/`used_dollars` (the fields that would *name the unit* and make an
+absolute weekly allowance readable — `null` on Max today), `spend.exponent: 2` (the authoritative
+statement that credits are cents), `extra_usage.{spend_limit_reached,disabled_reason}`, and
+`nimbus_quill` — a bucket that is **not null**, live at zero, and rendered nowhere.
+
+**The sharper structural finding.** The binary and `claude-accounts` read **disjoint halves** of the
+same payload: string-scan of the 2.1.220 Mach-O gives `seven_day` 23, `five_hour` 18, `utilization`
+32 — but **`weekly_all` 0**. The binary reads the top-level bucket map; our tool reads the `limits[]`
+array. So a schema change on either side is invisible to the other, and `pick()` fails **silently to
+`(None, None)`**, which `_excluded()` then treats as a correctly-excluded row. **A renamed `kind`
+would read as a quiet outage, not an error.**
+
+**But none of this changes §7's verdict for this question.** There is no history field anywhere in
+the payload — no series, no sparkline, no previous-window value. Un-dropping all ~40 fields would
+still not answer "what was it last Tuesday".
+
+### §8.2 "Pre-2026-08-10 is dark" — WRONG; the series is reconstructable to 2026-07-24
+
+§5.1 concluded transcripts were EXISTS + INSUFFICIENT because they carry limit *events*, not the
+running percentage. That searched for the wrong thing. Three layers exist, and the third answers:
+
+1. **Limit messages — genuinely ABSENT, and my count was too high.** §5.1 said "5 real events". The
+   real number is **0**: all 11 canonical-string records across 6 files are meta — 9 are agents
+   grepping for the string or quoting the prior wave's finding, and 2 are an alternation pipe inside
+   a hook's regex (`…|usage limit reached|…`), where the `|` is regex syntax, not the epoch
+   separator. My own self-contamination catch was right in kind and understated in degree. *The
+   fleet has never hit a usage wall in the recorded corpus* — so the pre-ledger series has no
+   censoring at 100% to model.
+2. **Captured `claude-accounts --json` readings — sparse but EXACT.** Sessions that ran it left
+   parsed rows in a `tool_result`. **50 pre-08-10 readings**, 2026-07-25 → 08-09, all four accounts,
+   across 11 distinct days. Cross-validated on the 08-10→08-25 overlap: the 27 own-ts "echo" rows
+   match the ledger **27/27 at 0 pp**. Density ~0.9 readings/account-day against the ledger's ~228 —
+   enough to *anchor* a reconstruction, far too sparse to *be* one.
+3. **Token records × the already-fitted exchange rate — this is the answer.** Every assistant record
+   carries `message.usage`. **715,076 records over 2026-07-11 → 2026-08-25**, of which **382,477 are
+   pre-08-10 carrying 389.7M output tokens**. Applying `exchange-rate.md`'s coefficients and testing
+   on **2026-08-17 → 08-25 — a window disjoint from the 08-10→16 interval they were fitted on** —
+   over 272 within-cycle intervals ≥3 h: **R² 0.700, RMSE 1.54 pp**, with a systematic **+10.5%**
+   over-prediction (per-account: next 0.99, next3 1.08, next4 1.19, next2 1.22).
+
+**What that buys:** hourly weekly-utilization for all four accounts back to **2026-07-24** solidly
+(2026-07-11 with holes at 07-13→18 and 07-21→23), at ±1.5 pp — roughly 17 account-days per account
+that no store on this box contains.
+
+**Honest limits, and they are real.** (i) The reconstruction yields **Δpp within a cycle, not
+absolute level** — pinning the origin needs a reset boundary or one direct anchor per cycle, and
+layer 2 supplies those unevenly (next2 has only 5 pre-08-10 readings). (ii) Coefficients were fitted
+on the 08-10→16 model mix; July carried more `claude-opus-4-8` (5,320 records) whose weight was
+never fitted and is folded into "opus". (iii) Any claude.ai web/mobile usage on the same account is
+invisible to transcripts and biases the reconstruction **low**, in exactly the period we cannot
+check. So: use it to answer *"was July's utilization broadly like August's"*, not to publish a
+per-window "% at reset" table for July alongside §2's measured one.
+
+### §8.3 A correction to the prior wave's positive control
+
+The 2026-08-16 research asserted "0 canonical hits, **positive control**: 25 `rate_limit_error`
+records". The 0 replicates and is right; the control does not — those `rate_limit_error` records are
+the CC binary's own error enum being dumped by agents reading its strings, i.e. meta too. **The
+scan's proof that it could find anything was itself an artifact.** Use
+`cache_read_input_tokens` (present in 6,497 of 6,749 transcripts) as the control instead.
