@@ -86,6 +86,104 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-25 — drain recycle #229: method 199 — A FALLBACK KEYED ON A MAPPING ITS OWN TRIGGERING
+  EVENT DESTROYS.** ONE fix landed (`ac7cbc5c2`), rc 0, content-verified on trunk with the pinned
+  off-trunk NEG control refusing (rc 1) and an `origin/main~1` POS control confirming (rc 0); ten
+  load-bearing literals read back out of the landed blobs, each exactly once, both NEG controls 0.
+  Board at OPEN **328 open / 204 blocked / 2,328 done / 2 claimed** (532 combined, 2,862 rows); at
+  CLOSE **324 / 207 / 2,329 / 6** (531 combined, 2,866). ZERO rows closed BY ME; the off-box actuator
+  closed **ONE** (`86f4d1273727`, open → done — a row that was itself MINTED during this same link).
+  **THE FIX.** `hooks/lead-crash-watchdog.sh`'s `classify_death` has two ways to find a
+  deliberate-teardown marker and BOTH need the dead session's sid to still resolve to a pane: arm
+  1.5a keys the marker FILENAME on it, arm 1.5b looks the pane up in `cc-registry`. The registry is
+  **SINGLE-SLOT PER PANE** (measured: 22 rows, 9 fields, one `session_id` each, no lineage field of
+  any kind), so an in-place `handoff-fire --recycle` OVERWRITES the dead session's row with the
+  SUCCESSOR's the moment the successor registers — destroying the only sid→pane mapping arm 1.5b
+  has, **for exactly the shape `--recycle` writes**. The marker sits on disk, fresh and correct, and
+  nothing can reach it; the session is classified `CRASH/abrupt-unknown`. Every planned recycle in
+  this chain has been mislabelling itself as a death.
+  **MEASURED BY EXECUTION, the eighth consecutive link where running the producer beat reading it.**
+  The real `classify_death` through its `--classify` entrypoint over isolated stores, ONE variable
+  moved — the registry owner — with the marker byte-identical in both cells:
+  pane-keyed marker, empty sid, registry→PREDECESSOR ⇒ **RECYCLE/deliberate-teardown**;
+  registry→SUCCESSOR ⇒ **CRASH/abrupt-unknown**.
+  🚨 **THAT SINGLE-VARIABLE CONTRAST CORRECTS THE MECHANISM NAMED IN THE FILED ROW.**
+  `teardown-marker-empty-sid` (one of five rows minted into my open by a sibling forensics session)
+  attributes the miss to `cc_sid_for_pane` returning an EMPTY sid. **The empty sid is not the cause:**
+  `marker_owns_sid` accepts it exactly as its own comment at `:126-129` documents, and the cell above
+  proves it — same empty sid, RECYCLE. The row's SECOND falsifier ("when the watchdog falls back to
+  the pane key") is **already satisfied in code and does not help**, because that fallback is keyed
+  on a mapping the recycle has already destroyed. A row can name a real defect, prescribe a remedy
+  that would work, and still name the wrong mechanism — and the wrong mechanism is what sends the
+  next session to the expensive file (`scripts/handoff-fire.sh`, 80 direct suites) instead of the
+  cheap one.
+  **THE REMEDY — arm 1.6, a RECOVERY, not a widening.** `~/.claude/logs/handoffs.jsonl` is
+  APPEND-ONLY and its `recycle-engaged` rows carry `prev_sid` + `target_pane`: the same fact the
+  registry overwrote, durably. Measured over the live log: **158/158 `prev_sid` values UUID-shaped,
+  158 distinct, 0 resolving to more than one pane**, and 12/12 sampled resolve to a real transcript
+  on disk. ⚠️ **`firing_sid` is UNUSABLE here despite its name — 0 of 270 are UUID-shaped, it holds
+  a PANE id** (the field name lies; that was the NEG control that saved the key choice). The arm
+  runs only when the registry could not resolve, is keyed on the DEAD sid so it can never reach
+  another session's marker, and `marker_owns_sid` still guards whatever it finds — each of those
+  three properties pinned by its own test, because a false RECYCLE is swallowed where a false CRASH
+  pages. `tests/lead-crash-watchdog.bats` **31 → 35**, and its setup now PINS `CC_HANDOFF_LOG` into
+  `BATS_TEST_TMPDIR` (its default is the LIVE log — leaving it unset would let 1,000+ real rows
+  decide a verdict; the live log is asserted byte-unchanged by a full suite run).
+  **Mutants, one per SITE, ALL FOUR matching their written predictions in ROUND 1**, baseline 0,
+  subject restored byte-identical by sha256 on every arm and at the end: M1 log lookup dead ⇒ reds
+  the recovery test only; M2 key is `firing_sid` ⇒ reds it only; M3 1.6 drops the marker requirement
+  ⇒ reds "log alone must not absolve"; M4 key matches ANY `prev_sid` ⇒ reds "another session must not
+  absolve". No mutant reded nothing.
+  🚨 **THE FIRST LAND WENT rc 6 AND — UNLIKE #228's — IT WAS MINE.** The pipefail-SIGPIPE ratchet
+  caught `hooks/lead-crash-watchdog.sh` at **7 where the allowlist grandfathers 6**: I had copied the
+  neighbouring `find … | grep -q .` idiom, which under `set -o pipefail` SIGPIPEs its producer and
+  can read FALSE on the very input it just matched. **Copying a grandfathered idiom is how a ratchet
+  gets tripped by a correct-looking change.** The drained form `grep . >/dev/null` returns it to 6;
+  the two older siblings are left alone, since lowering their count is a different change with a
+  different red-proof. Re-ran the eight-cell table after the idiom swap — all eight still matched.
+  **PRE-LAND I RAN THE SELECTOR'S WHOLE SET MYSELF: 12 suites / 422 tests / 0 failures / 0 skips /
+  plan == ok on every one** (`cc-reaper` **192/192 in 484s** at load ~22 — compare #228's 556s at
+  load ~40). ⚠️ **The set MOVED between my two lands — 11 suites, then 12**, because trunk advanced
+  and `tests/lead-crash-surface.bats` appeared; I ran the newcomer separately (12/12). At the land
+  the smoke went **PARTIAL** — `cc-reaper` cut at the 420s budget, **exit 124 with ZERO `not ok`** —
+  which the gate itself names a NON-VERDICT, and which my own foreground run had already converted
+  into a known.
+  🚨 **THE CONVERGER'S INHERITED rc HAS FLIPPED, AND THE FLIP IS THE WRONG DIRECTION.** #221–#227 all
+  measured `deploy-live.sh --auto` at **rc=1** with a one-line output. I measured **rc=0** — three
+  times, same single line (`deploy-migrations: migrate: 0 applied, 14 staged (operator-owned), 0
+  pending`), **and no advance whatsoever**: `LIVE_SHA=18378e841913` unchanged all link while
+  `LIVE_LAG` ran 6 → 13. The cause of the flip is visible in the shared checkout: the blocking dirty
+  TRACKED file is **GONE** — 22 entries now, **all untracked**, no ` M hooks/enforce-email-formatting.py`.
+  So `42243203fb31`'s premise is dead while the lane still refuses. **A truthful refusal became a
+  silent success, which is strictly worse: rc=1 was actionable, rc=0 reads as healthy to any caller
+  keyed on it.** ⚠️ **Do NOT re-file — `799ec26e3a74` (OPEN) owns the refusal and `42243203fb31`
+  (BLOCKED) owns the dirty tree. Re-verify the rc yourself; do not inherit MINE either.**
+  ⚠️ **The live-layer two-link moving streak (#227, #228) is BROKEN — `LIVE_SHA` did not move at all.**
+  Close rung is **🚀 with `LIVE_ADDS=7`, and NONE of the 7 are mine** (my commit adds 0; POS control
+  reads 1 and NEG control 0, so the instrument speaks). Six are `tests/`/`docs/` adds — the known
+  false positive `4e6a51df2a84` — and **one, `bin/ms365-reply-splice.py` (sibling `fea855e1f`), is a
+  GENUINE breach** that no budget covers. Not mine to drive, and already owned; named, not re-filed.
+  **My own instrument faults, all caught before they became findings.** (1) A combined
+  `ls -la scripts/ bin/ hooks/` piped to grep **lost the directory attribution**, so I looked for
+  `lead-crash-watchdog.sh` in `scripts/` where it lives in `hooks/`. (2) My FIRST truth table returned
+  a **UNIFORM `CRASH/no-transcript` in all four cells including the POS control** — a harness verdict,
+  not a finding: `classify_death` short-circuits at `:277` before the teardown ladder when no
+  transcript resolves. **A POS control that does not SPEAK invalidates the whole table** — the fix
+  was `CC_ACCOUNT_BASES` and a fixture transcript. (3) I guessed `~/.claude/watchdog/handoffs.jsonl`;
+  the real path is **`~/.claude/logs/handoffs.jsonl`** (`drain-chain-assert.sh:171`) — the FIFTH
+  guessed-path instance in this chain, and the probe's `ABSENT ⇒ UNKNOWN, not 0` discipline is the
+  only reason it cost nothing. (4) A `show()` helper that both printf'd and echoed had its printf
+  **eaten by its own `$( … )`**, blanking the per-row cloud detail while the tally stayed right.
+  **Stores at CLOSE:** postland RED pages **0** over a denominator of **2,682** (the 121st consecutive
+  zero; 2,675 at my open — it moved WITHIN the link again, though only slightly, against #228's 5.4x).
+  Stamps **462 → 463**. `~/.claude/autonomy/pages` **1,951/114 → 1,968/117** (total UP 17, `.page` UP
+  3 — at my OPEN it read `.page` **114** against #228's close of 117, so it fell and then recovered:
+  **six links, six different behaviours**). inbox-guard `.escalated` **482 → 484**.
+  `cc-roles list` read `drain-lead UNVERIFIED 7` at OPEN and CLOSE — a **THIRTEENTH** consecutive
+  identical table. Mailbox 27 unchanged at **4,059 bytes / 1 line**, a THIRTEENTH identical reading —
+  no new mail. Cloud cluster at CLOSE **4 done / 5 open / 2 claimed** (`485f8f87eb5f` open → claimed
+  inside my link; `70f0001c657b`, the drain's own SSOT row, was already claimed at my open).
+  **The actuator series is now `2, 2, 0, 7, 0, 1` — still bursty, still not a rate.**
 - **2026-08-25 — drain recycle #228: method 198 — A COUNTER THAT SUMS TWO ARMS MEANING OPPOSITE
   THINGS, AND A DENOMINATOR WHOSE EMITTING CODE WAS NOT DEPLOYED.** TWO fixes landed
   (`985efe650` the counter, `27cfdba68` a BLOCKING trunk red that was nobody's), both rc 0, both
