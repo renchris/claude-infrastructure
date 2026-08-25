@@ -124,7 +124,21 @@ moving_ref_shows() { # $1=file
       sub(/^[^[:alnum:]_-]?show[[:space:]]+/, "", tok)
       ref = tok; sub(/:.*$/, "", ref)
       # PINNED: 7+ hex characters, an abbreviated or full sha. Everything else moves.
-      if (ref ~ /^[0-9a-f]{7,40}$/) next
+      #
+      # 🚨 SPELLED OUT RATHER THAN `{7,40}`, AND THAT IS A PORTABILITY FIX, NOT STYLE. mawk 1.3.4 —
+      # the default awk on Debian/Ubuntu, i.e. on every Linux container the cloud sessions this repo
+      # fires actually run in — evaluates `[0-9a-f]{7,40}` as NO MATCH against a real sha. Measured
+      # 2026-08-25 on mawk 1.3.4 20240123: `e6e5a4355` scores 1 against `^[0-9a-f]+$` and against
+      # `^[0-9a-f]{9}$`, and 0 against `{7,40}`, `{7,20}` and `{7,9}` alike — the bound with m>1 is
+      # what breaks, not intervals in general (`^a{7,40}$` and `^[ab]{3}$` both match).
+      #
+      # THE FAILURE DIRECTION IS THE WHOLE PROBLEM: every correctly-PINNED control reads as MOVING,
+      # so this ratchet convicts exactly the suites that already did what it asks. It blocked a land
+      # on 10 suites, naming tests/cloud-reconcile.bats — whose control replays a literal sha and
+      # asserts a marker, which is the prescribed fix printed by the guidance text below. Nothing on
+      # the operator box could see it (BSD awk is fine, and hermetic.yml runs macOS deliberately),
+      # so the verdict silently inverted by platform.
+      if (ref ~ /^[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]+$/ && length(ref) <= 40) next
       src = $0; sub(/^[[:space:]]+/, "", src)
       printf "%d:%s:%s\n", NR, (ref == "" ? "<unreadable expansion>" : ref), src
     }
