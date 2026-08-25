@@ -150,6 +150,47 @@ session's brief requires its **first act** to be pushing that branch — an empt
 Absence then becomes informative: no ref inside the budget is `BOOTING` (expected); no ref past it
 is `NOT-STARTED` (actionable — re-fire, or check entitlement).
 
+#### 4.1a The contract is now EMITTED BY THE FIRE PATH — it was prose only until 2026-08-25
+
+✅ **Implemented — `cc_cloud_return_contract()` in `scripts/lib/cloud-create.sh`** (backlog
+`0c8b39b67665`). The paragraph above is the sentence the entire absence design rests on, and for the
+lifetime of this document **no fire lane implemented it.** What each lane actually sent:
+
+| Lane | What the brief said about pushing | Effect on §4.3 C1 |
+| --- | --- | --- |
+| CLI — `handoff-fire.sh --cloud` | *"read this before you **finish**"*, then `switch -c` + push of the WORK | a push that carries no information about boot |
+| API — `cc-offload up --via api` | **nothing**; the task file was delivered verbatim | the branch was *authorised* at create and never *pushed to* |
+
+So "no ref" stayed the four-way conflation this section opens with, and C1 fired on all four past
+`boot_s`. Three of those are the actionable verdict it claims. The fourth — **booted fine, still
+working** — is a live healthy session convicted as never-started, whose `recover_cmd` tells the
+operator to re-fire it and spend a second account's quota on work already in flight. The arm was not
+silent on that case; it was **confidently wrong**, the same shape as reading a lookup miss as an
+absence.
+
+With the boot push made, the sensor is total in the direction the design needs — `ref present` ⇒ it
+booted (C4/C5/C6 discriminate what happened after), `ref absent` ⇒ it did not — and "no ref" stops
+meaning "nothing to commit yet". The empty commit suffices **because the signal is the ref, not the
+content**: the push is a boot beacon and the work rides the same branch behind it.
+
+**One producer, two lanes, by construction.** The two transports have nothing in common, and a
+contract written twice drifts — the CLI lane's half-copy beside the API lane's zero-copy *is* that
+drift. The text lives in exactly one function; both lanes call it, and `--branch` in the API create
+body authorises the branch without instructing a push, so that lane needs the trailer just as much.
+
+**The honest limit:** nothing local can make a VM run its first line. What is enforceable is that
+every fire *carries* the instruction, which is what `tests/handoff-fire-cloud.bats` 20/21 and the two
+`tests/cc-offload.bats` API-lane cases assert — as an **order** (the boot commit precedes the work
+push), because an empty commit made after the work is not a beacon at all. A declaration whose fire
+did not carry the contract leaves C1 unfounded for that session; that is why the text is emitted by
+the fire path rather than left to whoever writes a brief.
+
+*Found while implementing, fixed in the same change:* `cc-offload up` died at
+`UP_NOTIFY_BACK="${ITERM_SESSION_ID##*:}"` — an unbound-variable error under `set -u` — on **every
+surface that is not an iTerm pane** (a fired session, a hook, launchd, cron, its own suite). The
+branch two lines below it exists to note that `ITERM_SESSION_ID` is unset and downgrade the fire to
+fire-and-forget, and was unreachable. 11 of `tests/cc-offload.bats`' 46 cases were red on that alone.
+
 ### 4.2 The discriminator the whole design rests on
 
 Measured, not assumed:

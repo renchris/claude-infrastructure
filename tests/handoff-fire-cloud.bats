@@ -461,3 +461,54 @@ EOF
   [ -s "$CLOUD_DECL_LOG" ]
   [ ! -f "$BATS_TEST_TMPDIR/pf-off.log" ]                # the override SKIPS the probe, not just its verdict
 }
+
+# ── 20 + 21 — the BOOT CONTRACT (backlog 0c8b39b67665; CLOUD_OBSERVABILITY.md §4.1) ─────────────
+# §4.1 is the load-bearing sentence of the whole absence design: "the session's brief requires its
+# FIRST ACT to be pushing that branch — an empty commit is enough". It was prose only. The payload
+# this file already asserts on (case 17) instructed a push, but the push of the WORK, at the end,
+# under a heading that said "read this before you finish" — which carries no information about
+# boot. So a healthy session that was still working and a session that never started were the same
+# observation (`ls-remote` rc=0, empty stdout), and §4.3's C1 arm convicts both as NOT-STARTED once
+# boot_s expires, handing the operator a `recover_cmd` that re-fires a session already in flight.
+#
+# The assertion is ORDER, not presence, and that is the point: an empty commit that happens after
+# the work is not a boot beacon at all. Case 20 pins the order in the payload actually handed to
+# the create; case 21 is the non-vacuity control — the contract is not a static blob, it names THIS
+# fire's assigned branch, so a producer that emitted a fixed string would pass 20 and fail 21.
+#
+# RED-PROOF: replay against `git show <pre-fix sha>:scripts/handoff-fire.sh` with this file
+# unchanged — 20 goes red on the missing `--allow-empty` line, 21 goes red with it.
+
+@test "20 the payload's FIRST instruction is the boot push — an empty commit, before any work" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: t" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ -s "$BATS_TEST_TMPDIR/create.log" ]
+  local sw boot push
+  sw="$(grep -n 'git switch -c claude/fire-'  "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  boot="$(grep -n 'git commit --allow-empty'  "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  push="$(grep -n 'git push -u origin HEAD'   "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$boot" ] || { echo "the payload never instructs the boot commit — §4.1 is still prose"; false; }
+  [ -n "$sw" ] && [ -n "$push" ] || { echo "the branch/push instructions vanished"; false; }
+  [ "$sw" -lt "$boot" ] || { echo "the boot commit must land ON the assigned branch (sw=$sw boot=$boot)"; false; }
+  [ "$boot" -lt "$push" ] || { echo "the boot commit must PRECEDE the push (boot=$boot push=$push)"; false; }
+  # …and it must be framed as the FIRST act, not as a closing step. The pre-fix heading is the
+  # exact string that made a late push look compliant.
+  grep -q 'FIRST ACT' "$BATS_TEST_TMPDIR/create.log"
+  ! grep -q 'read this before you finish' "$BATS_TEST_TMPDIR/create.log"
+}
+
+@test "21 CONTROL — the boot contract names THIS fire's branch, not a fixed string" {
+  cloud_acct; cloud_ccloud
+  # A create that yields a real id, so the fire reaches the DECLARE — the branch has to be read
+  # back from the declaration rather than recomputed here, or the test would assert self-agreement.
+  cloud_claude "$(printf 'Created cloud session: t\x1b[8GView: https://claude.ai/code/session_01TESTTESTTESTTESTTESTT?from=cli')" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ "$status" -eq 0 ]
+  local br
+  br="$(grep -o 'claude/fire-[0-9TZ]*-[0-9]*' "$BATS_TEST_TMPDIR/create.log" | head -1)"
+  [ -n "$br" ] || { echo "no assigned branch appears in the payload at all"; false; }
+  # The declaration and the brief must agree, or the fire watches a branch nobody was told to push.
+  grep -q -- "--branch $br" "$CLOUD_DECL_LOG"
+  grep -q "git commit --allow-empty -m 'chore: cloud session boot $br'" "$BATS_TEST_TMPDIR/create.log"
+}

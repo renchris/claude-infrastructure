@@ -490,6 +490,56 @@ EOF
     "$(grep -n 'cc-notify --cloud' "$CALLS" | head -1 | cut -d: -f1)" ] || false
 }
 
+# ── the BOOT CONTRACT on this lane (backlog 0c8b39b67665; CLOUD_OBSERVABILITY.md §4.1) ──────────
+# This lane delivered the task file VERBATIM, so it told the VM nothing about pushing at all — and
+# `--branch` in the create body AUTHORISES a branch rather than instructing a push. The declare it
+# makes two lines earlier then publishes a NOT-STARTED verdict it has no evidence for, on a session
+# that may be working perfectly. The CLI lane at least carried half the contract; this one carried
+# none, which is the same drift with one copy at zero — hence ONE producer, called by both.
+@test "up --via api delivers the boot contract with the brief, naming the branch it declared" {
+  echo "brief" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git
+  printf '#!/usr/bin/env python3\nprint("session_apitest")\n' >"$STUBDIR/create-api.py"
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+  # The brief still carries the operator's own task — the contract is an ADDITION, never a swap.
+  grep -q 'brief' "$CALLS"
+  grep -q 'FIRST ACT' "$CALLS" || { echo "the API lane's brief carries no boot contract"; false; }
+  # …and it names the SAME branch the declare watches, or the fire watches a ref nobody was told
+  # to push. Read the branch back from the declare rather than recomputing it here.
+  local br
+  br="$(sed -n 's/.*cc-cloud declare .*--branch \([^ ]*\).*/\1/p' "$CALLS" | head -1)"
+  [ -n "$br" ] || { echo "no --branch in the declare"; false; }
+  grep -q "git switch -c $br" "$CALLS"
+  grep -q "git commit --allow-empty -m 'chore: cloud session boot $br'" "$CALLS"
+}
+
+@test "up --via api REFUSES before the create when the contract producer is unreachable" {
+  # Fail-closed, and BEFORE the quota is spent: a brief without the boot push makes the declaration
+  # that follows unfounded from the instant it is written. The positive control is the test above —
+  # same fixture, reachable library, exit 0 and a create — so this is a discriminating refusal and
+  # not a lane that is simply broken.
+  echo "brief" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+import sys
+print("create was REACHED", file=sys.stderr)
+print("session_apitest")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" \
+    CC_OFFLOAD_CLOUD_LIB="$BATS_TEST_TMPDIR/no-such-lib.sh" \
+    run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"boot contract"* ]] || false
+  ! grep -q 'cc-cloud declare' "$CALLS" || false        # nothing was declared …
+  ! grep -q 'cc-notify --cloud' "$CALLS" || false       # … and no brief went out
+}
+
 @test "up --via api derives owner/name portably (no GNU-only lazy quantifier)" {
   # The first implementation used `sed -E 's#…([^/]+/[^/]+?)…'`, which BSD sed rejects outright
   # with "repetition-operator operand invalid" — green on Linux CI, dead on every Mac that runs it.

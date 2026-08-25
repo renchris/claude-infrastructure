@@ -516,6 +516,26 @@ cmd_up_api() {
   local api="${CC_OFFLOAD_CREATE_API:-$ROOT/scripts/cloud-create-api.py}"
   [ -f "$api" ] || { note "cc-offload: missing $api"; return 3; }
 
+  # ── THE BOOT CONTRACT (CLOUD_OBSERVABILITY.md §4.1; backlog 0c8b39b67665) ─────────────────────
+  # The brief this lane delivers is the task file VERBATIM and nothing else — so until now the API
+  # lane told the VM nothing about pushing at all. `--branch` in the create body AUTHORISES a
+  # branch (`outcomes.git_info.branches`); it does not instruct a push, and a branch nobody pushes
+  # to reads C1 NOT-STARTED forever. The declare below then publishes a verdict about a session the
+  # verdict has no evidence for. So the contract is APPENDED here, from the same producer the CLI
+  # lane uses — one text, two transports, no drift.
+  #
+  # FAIL-CLOSED, before a create spends the account's quota: a fire whose brief lacks the boot push
+  # is a fire whose declaration is unfounded from the instant it is written, and this lane's whole
+  # ordering discipline (create → declare → deliver) exists to avoid exactly that class.
+  local clib="${CC_OFFLOAD_CLOUD_LIB:-$ROOT/scripts/lib/cloud-create.sh}"
+  if [ ! -f "$clib" ]; then
+    note "cc-offload: REFUSING — $clib is unreachable, so the brief would carry no boot contract"
+    note "  and every declaration made from it would read NOT-STARTED on a healthy session."
+    return 3
+  fi
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  . "$clib" || { note "cc-offload: $clib failed to source — no boot contract, refusing"; return 3; }
+
   # The router is the arbiter — never re-rank accounts here.
   if [ "$account" = auto ]; then
     [ -n "$ACCOUNTS_BIN" ] && account="$("$ACCOUNTS_BIN" --route general 2>/dev/null)"
@@ -573,7 +593,12 @@ cmd_up_api() {
         || note "cc-offload: custody could not be opened for $sid — the close-integrity arm is NOT armed for it."
     fi
 
-    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$(cat "$pf")" >/dev/null 2>&1
+    # The brief the VM actually receives = the task file + the boot/return contract for THIS fire's
+    # branch. `$br` is the same name the create authorised and the declare above watches, so the
+    # three agree by construction rather than by a reader remembering to keep them aligned.
+    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" \
+      "$(cat "$pf")
+$(cc_cloud_return_contract "$br")" >/dev/null 2>&1
     local drc=$?
     if [ "$drc" != 0 ]; then
       note "cc-offload: $sid created+declared but the brief did NOT queue (cc-notify exit $drc)."
