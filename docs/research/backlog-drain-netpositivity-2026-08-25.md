@@ -411,3 +411,40 @@ then *block a close* until the session files (`hooks/completion-assert.sh:946/94
 The change that matches the diagnosis is to demote FILED: **fix it now or drop it; filing is the
 exception and carries the burden of proof.** That edits the rules the agent runs under, so it is a
 C10 self-modification and the operator's call, not the agent's.
+
+---
+
+## 10. THE BASELINE — frozen at the rule change, so the fix is falsifiable
+
+The FILED demotion (`4b88aa1f6`) is a **rule, not a gate**. Nothing refuses a `cc-backlog add`; the
+mechanical gate was deliberately NOT built because every version of it, replayed retroactively,
+blocks ~62% real work (§9). So whether it worked is an empirical question, and this is the baseline
+it must be scored against.
+
+**Frozen at 2026-08-25T13:40Z — the moment `4b88aa1f6` landed:**
+
+| window (pre-change) | filed/day | closed/day | filed per closed |
+|---|---:|---:|---:|
+| last 7 days | 71.9 | 65.9 | **1.09** |
+| last 14 days | 75.4 | 80.8 | 0.93 |
+
+**Live pool at baseline: 529** (open 323 · claimed 4 · blocked 202).
+**Agent-authored share of the live pool: 82.1%** (432 of 526).
+
+### The test
+
+Re-fold the ledger over the days SINCE 2026-08-25T13:40Z. The rule took **only if both** hold:
+
+1. **filed/day falls below 71.9** (7-day) / **75.4** (14-day), and
+2. **the live pool falls below 529.**
+
+Either one alone is not enough — a filing drop with a flat pool means work moved rather than
+stopped, and a pool drop with flat filing is another one-shot sweep (0-for-4 historically, §5).
+
+### The known coverage gap — state it, do not discover it later
+
+The hook arm (`completion-assert.sh` D4) fires **only at close**. But 43.7% of the live pool is
+agent free-text filed **mid-session**, which no hook reaches — only the `CLAUDE.md` rule governs it,
+and that is advisory. So mechanical coverage is roughly the close-time third; the rest rides on the
+rule being read and followed. **If the test above fails, look here first** before concluding the
+diagnosis was wrong.
