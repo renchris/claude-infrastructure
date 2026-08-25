@@ -720,11 +720,29 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
   # deprioritises"), and axis 10's F3 is the failure it produces — a fleet-wide wake turns 140 idle
   # residents into 140 concurrent turns, which no spawn gate keyed on residency can even see.
   #
-  # 8 is the top of the measured band. Axis 09: 2.5-5 runnable threads per genuinely-ACTIVE session
-  # (load1 27.4 -> 44.4 at 9 all-active) against the load-20 gate ⇒ ~4-8 concurrent actives, which is
-  # also what all 127/127 historic gate refusals correspond to. The TOP of the band is deliberate:
-  # this term refuses real work, so it must bind where the evidence is unambiguous, and the load and
-  # segment terms above already cover the middle of the band from their own directions.
+  # 8 IS PROVISIONAL AND ITS DERIVATION IS WITHDRAWN — the constant stands, the arithmetic under it
+  # does not. This comment used to read "8 is the top of the measured band. Axis 09: 2.5-5 runnable
+  # threads per genuinely-ACTIVE session (load1 27.4 -> 44.4 at 9 all-active) against the load-20
+  # gate ⇒ ~4-8 concurrent actives". That divisor is an aggregate/N — a ratio, not a marginal — and
+  # it is one of FOUR published values for marginal load per ACTIVE session spanning 30x
+  # (0.172 / 0.566 / 1.89 / 2.5-5), every one of which was adjudicated unrepairable on 2026-08-19:
+  # docs/research/marginal-load-per-active-session-2026-08-19.md §2. A band derived by dividing the
+  # load-20 gate by a disqualified divisor is not a measured band, so the "~4-8" and the "top of it"
+  # go with it, and the honest statement of where 8 comes from is: it is the value this term has
+  # been running at, and 127/127 historic gate refusals are consistent with it.
+  #
+  # WHAT WOULD REPLACE IT, AND WHY IT IS NOT REPLACED HERE. `scripts/capacity-marginal.sh run` is
+  # the instrument built for exactly this divisor; it emits a coefficient ONLY when three named
+  # controls pass and NO-ATTRIBUTION when they do not, so the number that lands here will be one
+  # that cleared a control rather than one that survived a citation chain. Until that run exists,
+  # NONE of the four may be quoted — including by this comment, which is why it no longer does.
+  # 🚨 Do NOT "restore" a figure here from an older doc, and do NOT move the 8 on the strength of
+  # one: the whole point of the adjudication is that the archive cannot supply this number. The
+  # direction the term rests on is untouched and is what justifies charging ACTIVITY at all —
+  # residency is nearly free, activity is what the box binds on (scripts/lib/spawn-presence.sh
+  # § THE ACTIVE POPULATION). The TOP of the range is still the deliberate choice: this term refuses
+  # real work, so it must bind where the evidence is unambiguous, and the load and segment terms
+  # above already cover the middle from their own directions.
   #
   # THE CENSUS IS A PROVEN LOWER BOUND (scripts/lib/spawn-presence.sh § THE ACTIVE POPULATION), so
   # this term under-refuses rather than refusing on unproven activity — the same direction rule the

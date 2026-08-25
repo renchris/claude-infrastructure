@@ -158,6 +158,31 @@ A control nobody has watched fail is a rubber stamp. `tests/capacity-marginal.ba
 On the box, in a session that is not itself doing heavy work (the sampler costs one `ps` per minute):
 
 ```sh
+bash scripts/capacity-marginal.sh run --out /tmp/marg.tsv
+```
+
+**Amended 2026-08-25 — `run` replaces the two-command protocol, and this section is what it
+implements.** What follows below described a loop (`sample`, `analyze`, extend, judge whether the
+refusal has settled) that a human was expected to drive for an hour or more. Everything in it is a
+stopping rule over `analyze`'s own output, so a person babysitting it added no judgment and one
+opportunity to stop in the wrong place; §1 said the run had "no operator judgment in it" and that
+was true of the decisions but not of the labour. `run` samples a chunk (`--chunk-s`, default 1800),
+re-analyzes the **whole accumulated file**, and repeats until it can terminate for one of exactly
+three reasons — `PASS` (exit 0, the coefficient), `SETTLED` (exit 1, the same control(s) refusing
+across `--repeat-k` consecutive *decidable* windows), or `UNDECIDED` (exit 1, `--max-s` spent).
+The two-command form still works and remains the right shape for inspecting a single window.
+
+🚨 **A round counts toward `SETTLED` only once `n_eff ≥ CC_MARG_MIN_N`.** A short window fails every
+control for the trivial reason that it is short, so a streak counted over short windows would settle
+on an artifact of the chunk size and retire a working instrument — B3's defect, committed by the
+harness this time instead of the analysis. Short rounds extend the window and reset the streak.
+Pinned by `tests/capacity-marginal.bats` rows 16–19 (SETTLED · UNDECIDED-never-settles · stops at
+first PASS · usage), which drive the stopping rule through `CC_MARG_ROUND_HOOK` so the subject is
+the rule rather than the operator's load average.
+
+The equivalent long form, for one window at a time:
+
+```sh
 bash scripts/capacity-marginal.sh sample --window-s 3600 --interval-s 60 --out /tmp/marg.tsv
 bash scripts/capacity-marginal.sh analyze --in /tmp/marg.tsv
 ```
@@ -177,11 +202,29 @@ decidable too, and both are ordinary operating conditions on this box rather tha
 the window until the verdict stops being `NO-ATTRIBUTION` **or** the refusal repeats with the same
 term across several windows — which would itself be the finding (the process-unit census is not the
 right instrument, and the thread-unit refinement in §7 becomes the next increment rather than a
-nicety).
+nicety). *That paragraph is now executable; it is `run`'s loop, above.*
 
-On a PASS, quote the coefficient **with its standard error and its window**, update
-`scripts/lib/capacity-admit.sh:698` and `hooks/agent-teams-enforce.sh:220` (both currently carry
-2.5–5), and close `193ae8ddce72` with the landed sha.
+On a PASS, quote the coefficient **with its standard error and its window**, update the three sites
+listed below, and close `193ae8ddce72` with the landed sha.
+
+### The citation sites — struck 2026-08-25, and why they were struck rather than left
+
+§2 closed with *"none of the four may be quoted"* and then left the live code quoting one of them,
+which is the gap this section had. `2.5–5` was carried by **three** code sites, not the two §2 named
+(the third is `scripts/lib/spawn-presence.sh` § THE ACTIVE POPULATION, the very comment
+`capacity-admit.sh` defers to for its "proven lower bound" claim). All three now strike the number,
+name this adjudication, and point at `capacity-marginal.sh run`; none invents a replacement, per §2's
+*"not before, and not to one of the other three"*:
+
+| site | was | now |
+|---|---|---|
+| `scripts/lib/spawn-presence.sh` | "i.e. 2.5-5 runnable threads per genuinely ACTIVE session" | number withdrawn; the axis-09 pair and the qualitative direction (activity binds, residency is free) are kept, because that is what the pair actually shows |
+| `scripts/lib/capacity-admit.sh` | "8 is the top of the measured band. Axis 09: 2.5-5 … ⇒ ~4-8 concurrent actives" | `CC_ADMIT_ACTIVE_CEILING=8` **unchanged**; its derivation marked withdrawn and provisional, with an explicit instruction not to restore a figure from an older doc nor move the 8 on the strength of one |
+| `hooks/agent-teams-enforce.sh` | the deny message's "2.5-5 runnable threads arrive with every ACTIVE session" | "ACTIVITY is what the box binds on", plus a clause telling a refused agent not to argue past the term by quoting one of the four |
+
+**The constant did not move and must not move on this diff.** Striking a bad derivation is not
+evidence for a different number; it restores the ceiling to what it honestly is — a provisional
+value with a refusal history — and that is the state §6's run exists to end.
 
 ---
 

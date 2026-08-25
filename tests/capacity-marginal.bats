@@ -276,3 +276,107 @@ EOF
   run bash "$M" sample --interval-s 0 --window-s 1 --out "$D/x.tsv"
   [ "$status" -eq 2 ]
 }
+
+# ── `run`: THE §6 PROTOCOL, AND ITS STOPPING RULE ───────────────────────────────────────────────
+# The DoD's remaining step was prose — "sample, analyze, and extend the window until the verdict
+# stops being NO-ATTRIBUTION or the refusal repeats with the same term across several windows" —
+# i.e. a loop with a stopping rule that a human was expected to run by hand for an hour or more.
+# These rows pin the three ways it may terminate. CC_MARG_ROUND_HOOK replaces the sampling step so
+# the subject is the RULE and not the operator's load average; the sampling it replaces is already
+# pinned by the rows above.
+
+# Writes the flat 19-20 census (the shape that killed the wave's headline) at 60 s spacing: C2
+# refuses it on correlation, and n_eff clears the floor, so it is a DECIDABLE refusal.
+_flat_round() { # <out> <round>
+  local f="$1" r="$2" i ts base
+  base=$(( 1000000 + (r - 1) * 3000 ))
+  [ -s "$f" ] || printf '#ts\tload1\tunit\ttotal_run\tclaude_run\tactive\tresident\n' > "$f"
+  for i in $(seq 0 39); do
+    ts=$(( base + i * 60 ))
+    printf '%s\t%s\tproc\t%s\t%s\t%s\t14\n' "$ts" \
+      "$(awk -v i="$i" 'BEGIN { printf "%.2f", 12 + 14 * i / 39 }')" \
+      "$(( 19 + i % 2 ))" "$(( 2 + i % 3 ))" "$(( 3 + i % 4 ))" >> "$f"
+  done
+}
+export -f _flat_round
+
+@test "run: SETTLED after --repeat-k identical DECIDABLE refusals, and says it is a finding" {
+  run env CC_MARG_ROUND_HOOK="_flat_round" bash "$M" run \
+    --out "$D/run-settled.tsv" --repeat-k 2 --max-s 600 --chunk-s 1 --interval-s 1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"streak 1/2"* ]] || false
+  [[ "$output" == *"streak 2/2"* ]] || false
+  [[ "$output" == *"SETTLED"* ]] || false
+  [[ "$output" == *"c2"* ]] || false
+  # A settled refusal is the §7.3 finding, not a silent give-up — and it stays unquotable.
+  [[ "$output" == *"thread-unit census is the next increment"* ]] || false
+  [[ "$output" != *"VERDICT: MARGINAL"* ]]
+}
+
+# A window too SHORT to refute anything: near-perfect correlation at 5 s spacing, n_eff ~4 against a
+# floor of 20. This is B3's own defect, and a streak that counted it would retire the instrument
+# over the chunk size rather than over the box.
+# CONTIGUOUS in time across rounds, deliberately: the span is what n_eff is computed from, so a
+# fixture that jumped the clock between rounds would become decidable through the gap rather than
+# through anything it sampled — the same "extra n is not extra information" error the control exists
+# to refuse, committed by the test instead of the code.
+_short_round() { # <out> <round>
+  local f="$1" r="$2" i ts base
+  base=$(( 1000000 + (r - 1) * 20 ))
+  [ -s "$f" ] || printf '#ts\tload1\tunit\ttotal_run\tclaude_run\tactive\tresident\n' > "$f"
+  for i in $(seq 0 3); do
+    ts=$(( base + i * 5 ))
+    printf '%s\t%s\tproc\t%s\t%s\t%s\t14\n' "$ts" "$(( 10 + i ))" "$(( 10 + i ))" "$(( 2 + i ))" "$(( 3 + i ))" >> "$f"
+  done
+}
+export -f _short_round
+
+@test "run: an UNDECIDABLE window never settles, and spends the budget instead — n_eff, not n" {
+  # --max-s 0 buys exactly one round, which is what makes this deterministic: the assertion is that
+  # a round failing every control for the trivial reason that it is SHORT resets the streak rather
+  # than advancing it, so `run` can only ever exit UNDECIDED here, never SETTLED. A streak that
+  # counted short windows would retire the instrument over the chunk size (B3's defect, by name).
+  run env CC_MARG_ROUND_HOOK="_short_round" bash "$M" run \
+    --out "$D/run-short.tsv" --repeat-k 2 --max-s 0 --chunk-s 1 --interval-s 1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"window too short to refute"* ]] || false
+  [[ "$output" == *"UNDECIDED"* ]] || false
+  [[ "$output" != *"streak"* ]] || false
+  [[ "$output" != *"SETTLED"* ]] || false
+  [[ "$output" != *"VERDICT: MARGINAL"* ]]
+}
+
+# Round 1 refuses (flat census); round 2 REPLACES the file with a window carrying a planted
+# coefficient over a moving ambient — the NEGATIVE CONTROL's shape. Replacing rather than appending
+# is a fixture convenience, not a claim about `sample`, which always appends: the subject here is
+# solely that `run` stops the instant the controls clear rather than spending its whole budget.
+_pass_round() { # <out> <round>
+  local f="$1" r="$2" i ts act cl tot load
+  [ -s "$f" ] || printf '#ts\tload1\tunit\ttotal_run\tclaude_run\tactive\tresident\n' > "$f"
+  if [ "$r" = 1 ]; then _flat_round "$f" 1; return 0; fi
+  : > "$f"; printf '#ts\tload1\tunit\ttotal_run\tclaude_run\tactive\tresident\n' > "$f"
+  for i in $(seq 0 59); do
+    ts=$(( 2000000 + i * 60 ))
+    act=$(( 2 + i % 9 ))
+    cl="$(awk -v a="$act" 'BEGIN { printf "%.0f", 3 + 0.25 * a }')"
+    tot="$(awk -v i="$i" -v c="$cl" 'BEGIN { printf "%.0f", c + 8 + 6 * (i % 7) }')"
+    load="$(awk -v t="$tot" 'BEGIN { printf "%.2f", t * 1.3 }')"
+    printf '%s\t%s\tproc\t%s\t%s\t%s\t14\n' "$ts" "$load" "$tot" "$cl" "$act" >> "$f"
+  done
+}
+export -f _pass_round
+
+@test "run: stops at the FIRST PASS and emits the coefficient" {
+  run env CC_MARG_ROUND_HOOK="_pass_round" bash "$M" run \
+    --out "$D/run-pass.tsv" --repeat-k 5 --max-s 600 --chunk-s 1 --interval-s 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"round 2 — PASS"* ]] || false
+  [[ "$output" == *"VERDICT: MARGINAL"* ]] || false
+  [[ "$output" == *"load units per ACTIVE session"* ]]
+}
+
+@test "run: rejects a chunk shorter than its own sampling interval" {
+  run bash "$M" run --chunk-s 5 --interval-s 60 --out "$D/x.tsv"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--chunk-s"* ]]
+}

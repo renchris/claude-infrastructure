@@ -85,6 +85,29 @@
 # Usage:
 #   capacity-marginal.sh sample  [--window-s N] [--interval-s N] [--out FILE]
 #   capacity-marginal.sh analyze [--in FILE] [--json]
+#   capacity-marginal.sh run     [--out FILE] [--interval-s N] [--chunk-s N] [--max-s N]
+#                                [--repeat-k N] [--json]
+#
+# `run` is the whole of the DoD's §6 protocol as ONE command, and it exists because that protocol
+# was the last judgment call standing between this instrument and the number. Its wording —
+# "sample, analyze, and extend the window until the verdict stops being NO-ATTRIBUTION OR the
+# refusal repeats with the same term across several windows, which would itself be the finding" —
+# is a loop with a stopping rule, not a decision, so a human babysitting it adds nothing but the
+# chance of stopping at the wrong place. `run` samples a chunk, analyzes the WHOLE accumulated
+# file, and repeats until one of three things is true:
+#
+#   PASS            all three controls cleared      -> the coefficient, exit 0
+#   SETTLED         the same control(s) failed for --repeat-k consecutive DECIDABLE rounds
+#                                                   -> exit 1, and this is a FINDING (§7.3: the
+#                                                      process-unit census is not the instrument;
+#                                                      the thread-unit refinement becomes next)
+#   UNDECIDED       --max-s elapsed first           -> exit 1, nothing quotable
+#
+# A ROUND ONLY COUNTS TOWARD `SETTLED` ONCE IT IS DECIDABLE — n_eff >= CC_MARG_MIN_N. This is the
+# same distinction C2 already draws in its own message ("uninformative, not refuting") and it is
+# load-bearing here: a short window fails every control for the trivial reason that it is short, so
+# a streak counted over short windows would "settle" on an artifact of the chunk size and retire a
+# working instrument. Rounds below the floor extend the window and reset the streak.
 #
 # Exit: 0 coefficient emitted (all controls passed) · 1 NO-ATTRIBUTION (a control failed) ·
 #       2 usage error · 3 NO-DATA (nothing sampled / file unreadable).
@@ -99,6 +122,10 @@
 #   CC_MARG_MIN_ACTIVE_LEVELS(3)    distinct active levels required by C3
 #   CC_MARG_EXEC_RE                 regex matching a session's executable path (comm), default below
 #   CC_MARG_OUT                     default sample output path
+#   CC_MARG_CHUNK_S(1800)           `run`: seconds sampled before each re-analysis
+#   CC_MARG_MAX_S(14400)            `run`: total wall-clock budget before UNDECIDED
+#   CC_MARG_REPEAT_K(3)             `run`: consecutive DECIDABLE identical refusals that mean SETTLED
+#   CC_MARG_ROUND_HOOK              TEST SEAM ONLY — command replacing `run`'s sampling step
 set -uo pipefail
 
 CC_MARG_TAU="${CC_MARG_TAU:-60}"
@@ -112,6 +139,9 @@ CC_MARG_MIN_ACTIVE_LEVELS="${CC_MARG_MIN_ACTIVE_LEVELS:-3}"
 # `.claude-NNN/node_modules` form is the versioned launcher every interactive session runs.
 CC_MARG_EXEC_RE="${CC_MARG_EXEC_RE:-\\.claude-[0-9]+/node_modules/|claude\\.exe$}"
 CC_MARG_OUT="${CC_MARG_OUT:-${TMPDIR:-/tmp}/capacity-marginal.tsv}"
+CC_MARG_CHUNK_S="${CC_MARG_CHUNK_S:-1800}"
+CC_MARG_MAX_S="${CC_MARG_MAX_S:-14400}"
+CC_MARG_REPEAT_K="${CC_MARG_REPEAT_K:-3}"
 
 SCHEMA='#ts	load1	unit	total_run	claude_run	active	resident'
 
@@ -379,9 +409,105 @@ cmd_analyze() {
     }' "$in"
 }
 
+# ── the §6 protocol, executed ───────────────────────────────────────────────────────────────────
+# Reads the three control verdicts and n_eff out of `analyze --json`. Deliberately parsed with awk
+# and not jq: this is the one path whose whole job is to run unattended on a box for hours, and a
+# missing interpreter discovered in hour three is a lost window. The fields are anchored literals
+# emitted by this same file's printf a few lines above, so the coupling is local and visible.
+_marg_json_field() { # <json> <key> -> value ('' if absent)
+  printf '%s' "$1" | awk -v k="$2" '
+    { if (match($0, "\"" k "\":(true|false|-?[0-9.]+)")) {
+        s = substr($0, RSTART, RLENGTH); sub("^\"" k "\":", "", s); print s } }'
+}
+
+cmd_run() {
+  local out="$CC_MARG_OUT" interval="$CC_MARG_TAU" chunk="$CC_MARG_CHUNK_S"
+  local maxs="$CC_MARG_MAX_S" repeatk="$CC_MARG_REPEAT_K" json=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --out)        out="${2:-}"; shift 2 ;;
+      --interval-s) interval="${2:-}"; shift 2 ;;
+      --chunk-s)    chunk="${2:-}"; shift 2 ;;
+      --max-s)      maxs="${2:-}"; shift 2 ;;
+      --repeat-k)   repeatk="${2:-}"; shift 2 ;;
+      --json)       json=1; shift ;;
+      *) die "run: unknown argument '$1'" ;;
+    esac
+  done
+  case "$interval$chunk$maxs$repeatk" in *[!0-9]*) die "run: --interval-s/--chunk-s/--max-s/--repeat-k must be integers" ;; esac
+  [ "$interval" -ge 1 ] || die "run: --interval-s must be >= 1"
+  [ "$chunk" -ge "$interval" ] || die "run: --chunk-s ($chunk) must be >= --interval-s ($interval)"
+  [ "$repeatk" -ge 1 ] || die "run: --repeat-k must be >= 1"
+
+  local start deadline round=0 streak=0 last_sig="" j rc sig neff decidable
+  start="$(date +%s)"; deadline=$(( start + maxs ))
+  printf 'capacity-marginal: run — chunk %ss, interval %ss, budget %ss, settle after %d identical decidable refusals -> %s\n' \
+    "$chunk" "$interval" "$maxs" "$repeatk" "$out" >&2
+
+  while :; do
+    round=$(( round + 1 ))
+    # CC_MARG_ROUND_HOOK IS A TEST SEAM, and it is here for the same reason CC_MARG_PS_OVERRIDE is:
+    # the thing worth checking in this verb is the STOPPING RULE, and a stopping rule exercised only
+    # against the live box is a rule nobody has watched decide. The hook replaces the sampling step
+    # with a command receiving the output path and the round number, so a suite can hand successive
+    # rounds fixtures that PASS, that settle, and that never settle. Unset in every real run.
+    if [ -n "${CC_MARG_ROUND_HOOK:-}" ]; then
+      # shellcheck disable=SC2086
+      $CC_MARG_ROUND_HOOK "$out" "$round"
+    else
+      cmd_sample --window-s "$chunk" --interval-s "$interval" --out "$out" --quiet
+    fi
+
+    j="$(cmd_analyze --in "$out" --json)"; rc=$?
+    if [ "$rc" -eq 0 ]; then
+      printf 'capacity-marginal: round %d — PASS\n' "$round" >&2
+      if [ -n "$json" ]; then printf '%s\n' "$j"; else cmd_analyze --in "$out"; fi
+      return 0
+    fi
+
+    if [ "$rc" -eq 3 ]; then
+      # NO-DATA never settles anything: the file is unreadable or too short to have measured.
+      streak=0; last_sig=""
+      printf 'capacity-marginal: round %d — NO-DATA, extending\n' "$round" >&2
+    else
+      sig=""
+      [ "$(_marg_json_field "$j" c1_level)"    = false ] && sig="${sig}c1,"
+      [ "$(_marg_json_field "$j" c2_dynamics)" = false ] && sig="${sig}c2,"
+      [ "$(_marg_json_field "$j" c3_identify)" = false ] && sig="${sig}c3,"
+      sig="${sig%,}"
+      neff="$(_marg_json_field "$j" n_eff)"; [ -n "$neff" ] || neff=0
+      # DECIDABLE, not merely failed — see the header. awk, not [ ], because n_eff is fractional.
+      decidable="$(awk -v a="$neff" -v b="$CC_MARG_MIN_N" 'BEGIN{print (a+0 >= b+0) ? 1 : 0}')"
+      if [ "$decidable" != 1 ]; then
+        streak=0; last_sig=""
+        printf 'capacity-marginal: round %d — NO-ATTRIBUTION [%s], n_eff %s < %s (window too short to refute), extending\n' \
+          "$round" "$sig" "$neff" "$CC_MARG_MIN_N" >&2
+      else
+        if [ "$sig" = "$last_sig" ]; then streak=$(( streak + 1 )); else streak=1; last_sig="$sig"; fi
+        printf 'capacity-marginal: round %d — NO-ATTRIBUTION [%s], decidable, streak %d/%d\n' \
+          "$round" "$sig" "$streak" "$repeatk" >&2
+        if [ "$streak" -ge "$repeatk" ]; then
+          printf 'capacity-marginal: SETTLED — [%s] refused across %d consecutive decidable windows. This is the finding, not a failure to measure: the process-unit census cannot answer here (see docs/research/marginal-load-per-active-session-2026-08-19.md §7.3 — the thread-unit census is the next increment).\n' \
+            "$sig" "$repeatk" >&2
+          if [ -n "$json" ]; then printf '%s\n' "$j"; else cmd_analyze --in "$out"; fi
+          return 1
+        fi
+      fi
+    fi
+
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      printf 'capacity-marginal: UNDECIDED — %ss budget spent over %d round(s) without a PASS or a settled refusal. Nothing is quotable. Re-run across a dispatch wave rather than a lull (§6).\n' \
+        "$maxs" "$round" >&2
+      if [ -n "$json" ]; then printf '%s\n' "$j"; else cmd_analyze --in "$out"; fi
+      return 1
+    fi
+  done
+}
+
 case "${1:-}" in
   sample)  shift; cmd_sample "$@" ;;
   analyze) shift; cmd_analyze "$@" ;;
+  run)     shift; cmd_run "$@" ;;
   -h|--help|'') sed -n '/^# Usage:/,/^#       2 usage/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
-  *) die "unknown subcommand '$1' (sample | analyze)" ;;
+  *) die "unknown subcommand '$1' (sample | analyze | run)" ;;
 esac

@@ -219,9 +219,23 @@ cc_sp_load_beat() { # → 0 when cb_* is available, 1 otherwise. Idempotent.
 # WHY RESIDENCY IS THE WRONG DENOMINATOR FOR A SPAWN CEILING. cc_sp_trees counts RESIDENT sessions,
 # and residency is close to free: axis 01 measured static residency at 0.22% of the segment limit
 # with swap 0. What the box binds on is ACTIVITY — axis 09 measured load1 27.4 -> 44.4 across nine
-# sessions all-active, i.e. 2.5-5 runnable threads per genuinely ACTIVE session against the 1.6 that
-# a MIXED fleet averages to. At the program's design mix (150 resident / ~10 active) that puts the
-# load ceiling at ~4-8 concurrent actives and says nothing at all about the other 140. A ceiling
+# sessions all-active.
+#
+# 🚨 THE PER-SESSION FIGURE THAT USED TO STAND HERE IS WITHDRAWN, and the direction is not.
+# This comment read "i.e. 2.5-5 runnable threads per genuinely ACTIVE session". That is an
+# aggregate/N — a RATIO, not a marginal — and it is one of four published values for the same
+# quantity spanning 30x (0.172 / 0.566 / 1.89 / 2.5-5). All four were adjudicated unrepairable on
+# 2026-08-19 (docs/research/marginal-load-per-active-session-2026-08-19.md §2: three are
+# arithmetically disqualified, and 0.172/0.566 have no committed derivation anywhere on trunk), and
+# NONE of them may be quoted until the instrument built for it clears its controls —
+# `scripts/capacity-marginal.sh run`, whose coefficient is withheld by construction when they do
+# not. The QUALITATIVE claim above survives all of that untouched, because it is what the axis-09
+# pair actually shows: activity moves the load and residency does not. The number attached to it
+# did not, so it is gone rather than softened, and the ceiling below stands on the direction plus
+# its own refusal history — provisionally, and saying so — until the measurement exists.
+#
+# So: at the program's design mix (150 resident / ~10 active) the binding population is the ~10, and
+# a bound on it says nothing at all about the other 140. A ceiling
 # charged on residency cannot express that; and charging it on loadavg instead re-commits the proxy
 # §8.5.2 retracted (dominated by the TUI renderer, WindowServer and macOS scanning; §8.5.7 measured
 # it swinging 2.05x at CONSTANT session count).
