@@ -152,9 +152,40 @@ sweep() {
   cutoff="$(( now - LOOKBACK_DAYS * 86400 ))"
 
   # malformed-line accounting (plan ethos: report, never silently drop)
+  #
+  # BOTH substitutions below used to lie, in OPPOSITE directions, and the clamp on the third
+  # line is what kept either from ever being seen:
+  #
+  #   1. UNIT. `jq -R 'fromjson? // empty'` PRETTY-PRINTS each parsed record over several
+  #      lines, so `| grep -c .` counted OUTPUT LINES, not RECORDS. Measured on a 4-line IDL
+  #      holding 2 valid records and 2 malformed ones: raw=4, parsed=12, malformed=-8 — and
+  #      `[ "$malformed" -lt 0 ] && malformed=0` then rewrote it to 0. A partially corrupt IDL
+  #      therefore reported malformed=0 forever, which is the exact silent-drop this block's
+  #      own header forbids. The clamp was not a safety net; it was the thing hiding the bug.
+  #
+  #   2. rc. `grep -c` EXITS 1 on a legitimate zero count while still printing "0", so
+  #      `$(grep -c … || echo 0)` fired its fallback on success and yielded "0\n0". On an IDL
+  #      whose every line is unparseable, `parsed` became "0\n0" and the arithmetic below died
+  #      with `syntax error in expression` — taking the whole sweep with it: no report, and
+  #      exit 1. Exit 1 is ALSO this alarm's genuine "RED — inert check(s)" verdict (see the
+  #      return below), so a caller could not distinguish a crash from a real page, and
+  #      `--report`, documented above as never failing, failed. The selftest's arm H is named
+  #      "a malformed line does not crash the sweep" and its fixture is a MIXED file — the one
+  #      regime in which neither half misfires — so it stayed green over both.
+  #
+  # The fix is to make each substitution report its own unit and exit 0 on an honest zero,
+  # rather than to add a check downstream: the failure was always visible (rc 1, a stderr
+  # line), it was merely attributed to the wrong cause.
+  # memory: count-the-population-the-remedy-acts-on - control-fixture-must-reach-the-bugs-regime
   local raw parsed malformed
-  raw="$(grep -cve '^[[:space:]]*$' "$IDL" 2>/dev/null || echo 0)"
-  parsed="$(jq -R 'fromjson? // empty' "$IDL" 2>/dev/null | grep -c . || echo 0)"
+  # `|| true` (not `|| echo 0`): grep already printed the count, including a correct "0".
+  raw="$(grep -cve '^[[:space:]]*$' "$IDL" 2>/dev/null || true)"
+  case "$raw" in ''|*[!0-9]*) raw=0 ;; esac
+  # One integer, one RECORD per input line, exit 0 even when nothing parses.
+  parsed="$(jq -Rrn '[inputs | (fromjson? // empty)] | length' < "$IDL" 2>/dev/null || true)"
+  case "$parsed" in ''|*[!0-9]*) parsed=0 ;; esac
+  # Retained as a floor, but now unreachable by construction: `parsed` counts a SUBSET of the
+  # lines `raw` counts, so the difference cannot go negative unless one of them lies again.
   malformed="$(( raw - parsed ))"; [ "$malformed" -lt 0 ] && malformed=0
 
   # one jq pass → one TSV row per hook: hook total abstained productive failed blind

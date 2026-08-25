@@ -299,3 +299,60 @@ reap_producer() { # <n-items> <mode: unresolved|owned> → writes $IDL via the r
   [ "$status" -ne 0 ]
   printf '%s' "$output" | grep -q 'not a literal token'
 }
+
+# ── MALFORMED-LINE ACCOUNTING ───────────────────────────────────────────────────────────────
+# The script's own selftest arm H is named "a malformed line does not crash the sweep" and its
+# fixture is a MIXED file — valid rows alongside broken ones. That is the ONE regime in which the
+# accounting worked, so arm H stayed green while the accounting was wrong in two opposite ways:
+#
+#   partial corruption → `parsed` counted jq's PRETTY-PRINTED output LINES rather than records,
+#                        so `raw - parsed` went negative and the clamp rewrote it to 0. Silent.
+#   total corruption   → `grep -c` exits 1 on its own legitimate zero, so `|| echo 0` appended a
+#                        second zero and the arithmetic died, taking the whole sweep with it.
+#
+# These four cases pin both regimes plus the control. memory: control-fixture-must-reach-the-bugs-regime
+badline() { printf '%s\n' "$1" >> "$IDL"; }
+
+@test "malformed accounting: a PARTIALLY corrupt IDL reports the EXACT malformed count" {
+  # Pre-fix this printed no malformed= at all: parsed(12) exceeded raw(4), the difference went
+  # negative, and the clamp turned the silent-drop this block forbids into a permanent zero.
+  emit 2 partial-hook passed ok
+  badline 'THIS IS NOT JSON AT ALL'
+  badline '{broken json'
+  run alarm --report
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'malformed=2'
+}
+
+@test "malformed accounting: an IDL where EVERY line is unparseable does not crash the sweep" {
+  # The regime arm H is named after and never reaches. Pre-fix: bash died at the `$(( ))` with
+  # "syntax error in expression", stdout was EMPTY and the exit was 1 — and 1 is ALSO this
+  # alarm's genuine "RED — inert check(s)" verdict, so a caller could not tell a crash from a page.
+  badline 'NOT JSON ONE'
+  badline 'NOT JSON TWO'
+  badline '{still broken'
+  run alarm --report
+  [ "$status" -eq 0 ]
+  [ -n "$output" ]
+  printf '%s' "$output" | grep -q 'malformed=3'
+  [ "$(printf '%s' "$output" | grep -c 'syntax error')" -eq 0 ]
+}
+
+@test "malformed accounting: a whitespace-only IDL is non-empty but counts zero, without crashing" {
+  # `[ ! -s "$IDL" ]` lets this through as non-empty, but it holds zero NON-BLANK lines, so `raw`
+  # took the same grep -c exit-1 path that killed the parsed side.
+  printf '   \n\t\n   \n' > "$IDL"
+  run alarm --report
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | grep -c 'syntax error')" -eq 0 ]
+  [ "$(printf '%s' "$output" | grep -c 'malformed=')" -eq 0 ]
+}
+
+@test "malformed accounting CONTROL: a fully valid IDL reports NO malformed count" {
+  # Without this the three assertions above are satisfiable by a sweep that reports a malformed
+  # count unconditionally. This is the arm that must go RED if the counter ever becomes a constant.
+  emit 3 clean-hook passed ok
+  run alarm --report
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | grep -c 'malformed=')" -eq 0 ]
+}
