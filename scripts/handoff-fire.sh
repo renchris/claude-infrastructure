@@ -5496,7 +5496,13 @@ if [ "${1:-}" = "__recycle" ]; then
   cc_alive() { [ "$(pane_cc_state "$TTY_PATH")" = cc ]; }
   at_shell() { [ "$(pane_cc_state "$TTY_PATH")" = shell ]; }
   waited=0
-  while [ "$waited" -lt 600 ] && ! at_shell; do
+  # The bound is a SEAM so the terminal recycle-dead arm below is executable in a test rather than
+  # only assertable by reading the source. Default 600 — unchanged; nothing about the live gate
+  # moves, and the seam can only make the watcher give up SOONER, never type onto a pane it has
+  # not confirmed.
+  rcy_wait_max="${HF_RECYCLE_SHELL_WAIT_S:-600}"
+  case "$rcy_wait_max" in ''|*[!0-9]*) rcy_wait_max=600 ;; esac
+  while [ "$waited" -lt "$rcy_wait_max" ] && ! at_shell; do
     sleep 3; waited=$((waited+3))
     case "$waited" in 60|150|300)
       # NUDGE GATE (recycle-100p 2026-08-22): this used to be a BLIND CR — and a blind CR is what
@@ -5529,8 +5535,28 @@ if [ "${1:-}" = "__recycle" ]; then
     # window emitted ZERO outcome rows — a failed recycle was ledger-invisible, provable only by
     # intent-gap analysis over self-deleting TMPDIR logs. Every terminal watcher failure now
     # writes its recycle-dead row before exiting.
-    emit_recycle_event recycle-dead "" "$RSID" "never reached a confirmed shell in ${waited}s (verdict: $(pane_cc_state "$TTY_PATH"))" || true
-    echo "!! pane $RSID never reached a CONFIRMED shell prompt in ${waited}s (probe verdict: $(pane_cc_state "$TTY_PATH")) — NOT typing onto an unconfirmed pane. Relaunch manually: $(cat "$CMDFILE")" >&2
+    rcy_dead_verdict="$(pane_cc_state "$TTY_PATH")"
+    emit_recycle_event recycle-dead "" "$RSID" "never reached a confirmed shell in ${waited}s (verdict: $rcy_dead_verdict)" || true
+    # ESCALATE, don't just log (2026-08-25, RECYCLE_SIGTERM_INCIDENT deliverable 3). This is the
+    # TERMINAL failure of a recycle: the /exit already landed, so the predecessor is GONE and the
+    # successor was never typed — the pane holds no claude at all and the session's remaining work
+    # is stranded with it. Its SIBLING terminal failure (recycle-relaunch-failed, ~30 lines below)
+    # has alarmed since it was written; this arm only ever emitted a ledger row, so the WORSE of
+    # the two outcomes was the quieter one. Measured: pane 30 on 2026-08-25 burned 600 s
+    # (21:36:05Z → 21:46:16Z) across three `decision=unknown` holds and nothing told anyone.
+    #
+    # 🚨 THE VERDICT IS AN ABSTENTION AND THE MESSAGE MUST NOT LAUNDER IT INTO A FINDING.
+    # `unknown` is returned from SEVEN branches of pane_cc_state (:2863, 2874, 2884, 2890, 2892,
+    # 2898, 2903) and every one means "this pane could not be READ" — an unreadable tty, an empty
+    # tpgid, or (:2898) merely a non-shell process sharing the foreground process group. NOT ONE
+    # of them means "there is no shell here". So `unknown` cannot distinguish "the shell never
+    # appeared" from "a shell appeared and the probe could not certify it", and the operator must
+    # be told WHICH question is open rather than handed the stronger claim (MEMORY.md
+    # lookup-miss-is-not-absence). The refusal itself stays correct and stays fail-safe: typing a
+    # relaunch onto a pane that might still hold a live session is the one outcome worse than a
+    # stranded pane.
+    hf_alarm recycle-dead "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-DEAD: pane $RSID — the /exit landed but no relaunch was typed, so this pane now holds NO claude and its work is stranded. Probe verdict after ${waited}s: $rcy_dead_verdict$([ "$rcy_dead_verdict" = unknown ] && printf '%s' ' (this is an ABSTENTION, not a finding: the probe could not read the pane, which does NOT establish that no shell appeared)'). Relaunch manually in that pane: $(cat "$CMDFILE")" || true
+    echo "!! pane $RSID never reached a CONFIRMED shell prompt in ${waited}s (probe verdict: $rcy_dead_verdict) — NOT typing onto an unconfirmed pane. Relaunch manually: $(cat "$CMDFILE")" >&2
     exit 1
   fi
   echo "→ pane $RSID CONFIRMED at a shell prompt after ${waited}s — typing relaunch"
