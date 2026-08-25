@@ -1,0 +1,34 @@
+# Merge attributes for append-only research ledgers.
+#
+# WHY THIS FILE EXISTS (2026-08-25). The cloud drain lane strands its output on
+# `claude/fire-*` branches until `cc-offload land` brings it home. A full `land --all` pass
+# over 113 branches was measured on 2026-08-25: of the branches it reached, 7 landed, 1
+# went gate-red, and **16 failed on rebase conflict — every one of them in a single file**,
+# `docs/research/venue-foreign-repo-recurrence-2026-08-17.md`. The complement was checked
+# explicitly and is the load-bearing half of the diagnosis: ZERO branches that do not touch
+# that file failed. The rail is healthy; one document was jamming it.
+#
+# WHY UNION IS THE CORRECT RESOLUTION AND NOT A SHORTCUT. That document is a chronological
+# append log — each cloud session appends a new numbered section ("§ The fifth", "The
+# sixth", "the seventh") recording one more occurrence of the same recurring dispatch bug.
+# 21 of the stranded branches append to it. Every conflict is therefore two different new
+# sections arriving at the same end-of-file hunk, with no competing edit to the same
+# sentence: taking BOTH sides is what a human resolving it by hand would do every time.
+#
+# WHY NOT rerere, WHICH IS ALREADY ENABLED. `rerere.enabled=true` here with 219 recorded
+# resolutions, and it does NOT fire on this conflict — it recorded a preimage and stopped.
+# rerere replays a conflict it has seen before; each session writes DIFFERENT prose into
+# the tail, so every one of the 21 is a first-time conflict with nothing to replay. A
+# resolution recorded by hand would clear exactly one branch out of twenty-one.
+#
+# PROVEN, NOT ASSUMED. Red/green on the real artifact, not a fixture: cherry-picking the
+# real failing commit 5b7023912 onto origin/main WITHOUT this file reproduces
+# `CONFLICT (content)` in that document (rc=1); with this file the same cherry-pick applies
+# clean. The control fails, so the test can fail.
+#
+# SCOPE IS DELIBERATELY ONE FILE. `docs/plans/BACKLOG_DRAIN_24_7.md` also conflicted (once)
+# and is NOT listed: a plan doc carries structure and accumulated decisions, and this
+# repo's INTEGRATE-never-overwrite rule makes a blind concatenation the wrong answer there.
+# Union is right for an append-only occurrence log, not for prose that argues with itself.
+# Add a file here only after checking it has that same shape.
+docs/research/venue-foreign-repo-recurrence-2026-08-17.md merge=union
