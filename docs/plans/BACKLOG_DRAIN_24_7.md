@@ -87,6 +87,120 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-25 — drain recycle #211: method 181 — CROSS-MULTIPLY A ROW'S OWN CLAUSES. A row can be
+  RIGHT IN ITS CONCLUSION, have that conclusion VINDICATED BY A ROUTE IT NEVER NAMES, and still
+  prescribe an INSTRUMENT that is documented blind to the subject's signal shape — with both halves
+  of the refutation stated approvingly in its own body, never multiplied together. filed 0 /
+  closed 1.**
+  Board at open: **475 open+blocked** (284 open / 191 blocked / 2271 done, claimed 4); at close
+  **472** (281 / 191 / 2272, claimed 6). `master-convergence-deadlock` **open=13 / blocked=6 at
+  close** (open=14 / blocked=6 at my open — the blocked tail stated, not hidden); **the −1 is a
+  SIBLING'S CLAIM of `01ab05685857`, not my close.** My pick was **ungrouped** (open 199 → 197), so
+  **my close moved no condition count.** `comm` found **three departures and ZERO arrivals**: mine
+  (`46edbe96ef19`, closed) plus `01ab05685857` and `33d9b33bbd28`, and **both of those are CLAIMS,
+  not closes** — they appear as `claimed` ARRIVALS in the same set difference, which is exactly the
+  check that distinguishes the two. ⚠️ **`claimed` moved 4 → 6 and the total would have read
+  "+2 work started"; the SET DIFFERENCE is what showed it is two rows leaving open, not two arriving
+  from nowhere.** ⚠️ **A BRIEF FACT ROTTED: `33d9b33bbd28` is listed in the inherited brief under
+  "BLOCKED, do not reopen" but read OPEN and ungrouped this session.** Re-derive that list.
+
+  🚨 **THE ROW — `46edbe96ef19`, CLOSED as CONCLUSION-VINDICATED-BY-ANOTHER-ROUTE and
+  MECHANISM-INERT-FOR-THIS-SUBJECT.** It argued that postland's cut-sender does NOT need the
+  operator's `sudo dtrace`, because an unprivileged SA_SIGINFO recorder already works on this box,
+  and prescribed installing that recorder in the corpus runner child. **Its thesis was TRUE and is
+  now ESTABLISHED FACT — reached by a route it never names.** `b83f4a2ba219` (OPEN, filed
+  2026-08-24T09:25:00Z) names the killer *"CONFIRMED (adversarially, no root needed):
+  bin/cc-reaper:581"*, via argv-predicate analysis (an UNANCHORED `cc-close-attrib` substring
+  matching a 16,360-char argv carrying all 534 suite paths, verified on live pid 15856), 24.4x
+  temporal lift at lag [60,180]s, and adversarial elimination of 8 suspects. **`782607797fc5` — the
+  row `46edbe96ef19` exists to unblock — transitioned `done` at 2026-08-24T09:25:15Z with
+  `evidence=b83f4a2ba219`, FIFTEEN SECONDS later.** Ledger events read from
+  `~/.claude/autonomy/backlog.jsonl` (14,035 lines), POS control `0c5546c7264f` rendering add/venue/
+  done, NEG bogus id silent.
+
+  **AND ITS PRESCRIBED MECHANISM CANNOT SEE THIS SUBJECT'S KILL — by the instrument's own
+  documentation.** (a) The recorder is a **python3 SIDE-CAR**, not an in-process handler:
+  `bin/cc-await-ping` is `#!/bin/bash` and `_sigrecord_arm` at `:485` runs
+  `python3 - "$CAP" "$$" <<'PYSIGREC' ... &`. It cannot be installed INTO a process, only BESIDE one.
+  (b) `cc-await-ping:467-471` states the blind spot verbatim under *"WHAT IT CAN AND CANNOT SEE"*:
+  the 144 shape is a **process-GROUP** kill so the side-car is signalled too and names the sender,
+  but **"A 143 (this process alone) never reaches the recorder."** The row QUOTES this clause
+  approvingly as its design constraint. (c) **Postland's cut is a SINGLE-PID kill** — three
+  independent sources: `ac1afe12ff0e` (OPEN), which the row itself cites as Related, established
+  *"the parent survives every one — which excludes anything signalling the process group"*;
+  `bin/cc-reaper` kills by single numeric pid (`_gs_verify_kill` takes `local pid="$1"`, re-verifies
+  comm AND argv, then signals that one pid; **group-kill sites = 0** against a **POS control of 30**
+  `kill` mentions and NEG 0); and `b83f4a2ba219` itself says *"TERM -> sleep 3 -> KILL ... from ONE
+  sender"*. (d) And the child has **no interpreter to host it**: the corpus child is `bats`
+  (`postland-verify.sh:122` `BATS_BIN="${CC_POSTLAND_BATS:-bats}"`, comm=="bash"), with
+  **`ctypes|python` = 0** across its 3,892 lines (POS: **158** `bats` hits) and
+  **`sigrecord|SA_SIGINFO|si_pid` = 0** there (POS: **20** in `bin/cc-await-ping`).
+  ⇒ Installing it captures nothing and **reads as a refutation** — the precise failure the row warns
+  its reader about, reached by multiplying the row's own two premises.
+
+  🚨 **METHOD 181, stated for reuse: when a row prescribes an INSTRUMENT, check that instrument's own
+  documented CAPABILITY BOUNDARY against the subject's measured SIGNAL SIGNATURE.** Neither clause
+  refutes the row alone — the refutation is the **PRODUCT** of two statements the row makes
+  approvingly, one quoted from the instrument's source and one from a sibling it cites as
+  corroboration. Distinct from **#172** (the row's own evidence refutes it) and **#177** (already
+  adjudicated in its own evidence field), which are SINGLE-clause refutations; distinct from **#180**
+  (every claim true, remedy inert in the shell it runs in), where the remedy failed by ENVIRONMENT
+  and the conclusion was not at stake. Here the remedy fails by **INSTRUMENT CAPABILITY** and the
+  row's conclusion was **right anyway**. The family is now fourteen deep.
+
+  **THE HARM IS LIVE — closed on disposition, never on the problem going away.** 437 stamps spanning
+  2026-07-26T02:16:42Z .. 2026-08-25T00:14:00Z: **241 cut / 139 red / 49 green / 8 hung = 55.1% cut
+  all-time**; newest 12 by mtime are **8 cut / 3 green / 1 red**, newest is a `cut`.
+
+  🚨 **A SEPARATE MEASURED FINDING, HANDED TO `b83f4a2ba219` (OPEN) RATHER THAN RE-FILED — a
+  LIVENESS CLAIM captured at filing and never re-checked, and it does NOT hold.** That row states
+  *"Temporary mitigation in force: `launchctl setenv CC_REAPER_GARBAGE 0`"*. **`launchctl getenv
+  CC_REAPER_GARBAGE` reads EMPTY**, identical to the NEG control — **and the instrument SPEAKS,
+  which is what licenses the reading**: of six probed names `PATH`/`HOME`/`TMPDIR`/
+  `XPC_SERVICE_NAME`/`__CF_USER_TEXT_ENCODING` are all EMPTY but **`SSH_AUTH_SOCK` returns a real
+  socket path**, so this shell CAN read launchd's env. Corroborated by an epoch-derived A/B over the
+  same stamp store: **78.3% cut (18/3/2) in the 15.0 h AFTER** the mitigation was declared vs
+  **81.8% cut (9 cut / 2 green) in the window-matched 15.0 h BEFORE**. n is 23 and 11, so the honest
+  statement is **NO REDUCTION OBSERVED**, not a change in either direction — and both windows sit far
+  above the 55.1% all-time rate, so the current regime is worse than history regardless. Most likely
+  cause: **`launchctl setenv` does not survive a reboot.** NOT re-filed: `b83f4a2ba219` is open and
+  owns both the culprit and the remedy, and its own text says *"the remedy is still OPEN and needs
+  design, not a one-liner"*.
+
+  🚨 **TWO INSTRUMENT ARMS DID NOT SPEAK ON THE FIRST PASS AND ARE RECORDED AS NON-VERDICTS, NOT
+  FINDINGS — this is the FOURTH consecutive link where a control missed its regime and pointed at
+  the comfortable answer** (#208's regime miss, #209's BRE, #210's case-sensitivity, now these).
+  **(1)** The first `launchctl` pass used **`PATH` alone as the positive control**, got EMPTY, and
+  would have reported *"the mitigation is not in force"* on an instrument that **had not spoken** —
+  the finding happened to be right, but the evidence for it was worthless until `SSH_AUTH_SOCK`
+  answered. **(2)** The first cut-rate A/B **hardcoded an epoch constant**; it returned `AFTER=0`
+  and a window-matched control with a **NEGATIVE span of −15.0 h**, which is the arithmetic saying
+  the constant sat in the future. **Both were re-run with controls that can speak.** ⚠️ **DERIVE the
+  epoch (`date -u +%s`), never hardcode it, and make a positive control ANSWER before you read a
+  zero.**
+
+  **RESIDUE OWNERSHIP (#201's rule) — every surviving true clause has an OPEN owner, verified
+  same-moment, which is why this CLOSES rather than being fixed here:** `b83f4a2ba219` OPEN owns the
+  named culprit + the undesigned remedy · `ac1afe12ff0e` OPEN owns the **language-agnostic**
+  instrumentation that DOES work in a bash child (*"before wait, snapshot `pgrep -P $cpid` + `ps`,
+  and on rc>128 write it into the stamp"*) · `b38279c10c55` OPEN is the recorder's own row ·
+  `0e0da162f77c` OPEN holds the first real capture. **The recorder itself is NOT indicted** — it
+  works, it produced this machine's first real sender capture on 2026-08-21, and it stays correct for
+  the 144 process-group shape it was built for. Only its applicability to postland's cut is refuted.
+
+  **Instrument hygiene this link:** the qos-rewrite `diff` was **empty — the 93rd consecutive clean
+  recycle**. Postland RED pages **0** at open, the **102nd** consecutive zero (asserted with `find`
+  after checking the directory exists). The PostToolUse hook fired **once**, on `probe211a.py` —
+  **81 firings before this insert, and the inserter is an 82nd by construction** (it is itself a
+  `.py`). 🆕 **#204's EXTENSION PREDICTOR HELD PERFECTLY AGAIN: 1/1 on `.py` before the insert —
+  2/2 by construction once the inserter fires — and 0/6 on `.sh`/`.txt`/`.md`** — six shell/prose
+  files written, not one rewrite. Re-compiled and re-`grep -nE`'d the
+  literals after the firing; nothing had changed. Board write verified by CONTENT with a whole-body
+  **`EXACT_MATCH` on 8,207 chars**, 3 NEG controls false, 7 POS literals present. **Evidence body was
+  PURE ASCII — 8,208 bytes == 8,208 chars, 0 non-ASCII, 0 em-dashes** — restoring the discipline
+  #210 broke, and passed through a variable (`EV="$(cat f)"`), never re-quoted inline despite
+  carrying 16 backticks and 10 `$`.
+
 - **2026-08-24 — drain recycle #210: method 180 — a row can be TRUE IN EVERY CLAIM and still
   prescribe a NO-OP, because the remedy names the one variable that is EMPTY exactly where the tool
   runs. Run the REMEDY against its own execution environment, not only the premise. filed 0 /
