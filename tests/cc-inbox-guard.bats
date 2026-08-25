@@ -542,3 +542,52 @@ assert_headless_fixture() { # <inbox key> <sid>
   echo "$output" | grep -q 'INDETERMINATE'
   refute_match "$output" 'LIVE session'
 }
+
+# ── TRUNCATION LEGIBILITY + STARVATION ORDER ────────────────────────────────────────────────────
+# This sweep is a ride-along under cc-reaper's 60s bound (cc-reaper:1909) and is cut ~96% of the
+# time — measured 2026-08-25: `bound-fired inbox-guard` fired on 123 of 123 ticks in 24h, and only
+# 65 of 1621 sweeps in the log's 12-day span ever reached the summary. Under a FIXED glob order that
+# cut is a PERMANENT exclusion of a fixed suffix, not graceful degradation: scored against an
+# isolated sweep of the same store, 142 of the 362 boxes that must escalate were not examined once
+# in 24h. Two guarantees follow, and the first is what makes the second checkable.
+mkbox() {   # $1 = key — a box holding one 2h-old unacked message, i.e. always overdue
+  local ts
+  ts="$(date -u -r "$((NOW - 7200))" +%Y-%m-%dT%H:%M:%S+0000 2>/dev/null || date -u -d "@$((NOW - 7200))" +%Y-%m-%dT%H:%M:%S+0000)"
+  printf '%s [reaper] undelivered\n' "$ts" > "$CC_MAILBOX_DIR/$1.md"
+}
+
+@test "W1: the worklist size is ANNOUNCED BEFORE the loop, so a cut sweep is arithmetic not silence" {
+  mkbox aaa; mkbox bbb; mkbox ccc
+  run "$G" sweep
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'worklist 3 box(es)'
+  # ORDER OF EMISSION is the property under test, not mere presence: the summary at the end of
+  # sweep() is the FIRST thing a SIGTERM eats, which is why the count has to precede the work.
+  # Separate statements, never an `&&` list — set -e sees only the command after the final `&&`.
+  ann="$(printf '%s\n' "$output" | grep -n 'worklist 3 box(es)' | head -1 | cut -d: -f1)"
+  first="$(printf '%s\n' "$output" | grep -nE '^  (ESCALATE|keep|ok) ' | head -1 | cut -d: -f1)"
+  [ -n "$ann" ]
+  [ -n "$first" ]
+  [ "$ann" -lt "$first" ]
+  # a COMPLETED sweep still says so, so announce and summary are directly comparable in the log
+  echo "$output" | grep -q 'sweep done — all 3 box(es) examined'
+}
+
+@test "W2: the worklist is ordered OLDEST-ESCALATED FIRST, not lexicographically" {
+  # The fixture INVERTS marker age against lexicographic order, so the two candidate orderings are
+  # exact REVERSES of one another. An ordering test whose two candidate orders agree proves nothing.
+  for k in aaa bbb ccc ddd eee; do mkbox "$k"; done
+  mkdir -p "$CC_INBOX_GUARD_STATE_DIR"
+  n=0
+  for k in eee ddd ccc bbb aaa; do            # eee oldest … aaa newest
+    n=$((n + 1))
+    printf '0:1' > "$CC_INBOX_GUARD_STATE_DIR/$k.escalated"
+    touch -t "202${n}01010000" "$CC_INBOX_GUARD_STATE_DIR/$k.escalated"
+  done
+  run "$G" sweep
+  [ "$status" -eq 0 ]
+  order="$(printf '%s\n' "$output" | grep -oE '^  (ESCALATE|keep|ok) +[^ ]+' | awk '{print $2}' | tr '\n' ' ')"
+  [ "$order" = "eee ddd ccc bbb aaa " ]
+  # stated explicitly, so a regression to the pre-fix order is unambiguous rather than merely "not equal"
+  [ "$order" != "aaa bbb ccc ddd eee " ]
+}
