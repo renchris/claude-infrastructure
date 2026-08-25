@@ -426,3 +426,73 @@ calls_gate() { grep -qE '^[^#]*[^_a-zA-Z]cc_capacity_admit[[:space:]]' "$1"; }
     fi
   done
 }
+
+@test "30 the ceiling's OWN caller list is DERIVED from the tree, not written down (item e981656df348)" {
+  # WHY THIS CASE EXISTS. The 2.0/core block in capacity-admit.sh argues that an underived ceiling is
+  # TOLERABLE, and its whole warrant is the size of the blast radius: "it still binds only where
+  # cc_capacity_admit leaves the term on". Until 2026-08-25 that sentence said TWO callers and the
+  # tree had FOUR — both misses in bin/, both added by later lands that never touched this comment,
+  # so nothing conflicted and the argument silently understated itself by 2x. A hand-maintained
+  # census decays exactly this way (memory `scan-revision-predates-the-fix`); case 20 already pins
+  # ONE such sentence, and this is the same ratchet for the one that prices the underived literal.
+  #
+  # DERIVED IN BOTH DIRECTIONS. A caller that GAINS the term must appear in the comment, and a
+  # caller that LOSES it (or is deleted) must leave — a one-way check would let the list rot in the
+  # other direction, which is how the original defect survived. The population is the same one
+  # `calls_gate` defines, minus two non-callers by construction:
+  #   · the library itself, which DEFINES cc_capacity_admit rather than calling it;
+  #   · scripts/test-hermeticity-lint.sh, whose matches are embedded @test fixtures, not spawns
+  #     (memory `caller-census-keyed-on-path-misses-the-name` cuts the other way here — the token is
+  #     right and the SUBJECT is wrong, so the exclusion is by file, and it is named not blanket).
+  #
+  # THE OFF-MARKER IS FILE-SCOPED ON PURPOSE. hooks/agent-teams-enforce.sh sets CC_ADMIT_LOAD_TERM=off
+  # on the `if !` line and calls the gate on the NEXT line, so a line-scoped test would read the
+  # Agent-tool path as binding. CC_ADMIT_LOAD_TERM defaults to `on`, so absence of the marker IS the
+  # binding condition — the same default the load-term block below the comment documents.
+  #
+  # RED-PROOFED IN BOTH DIRECTIONS, 2026-08-25, and re-runnable:
+  #   UNDERCOUNT — replayed against the pristine pre-fix tree (`git archive HEAD` before the comment
+  #     was corrected, i.e. the "the two unattended recovery callers" sentence): RED on
+  #     bin/cc-resume-layout.sh. That is the original defect, caught.
+  #   OVERCOUNT  — appending `· hooks/agent-teams-enforce.sh` to the list line on an otherwise
+  #     unmodified tree: RED on the stale-entry arm. A caller that LATER gains CC_ADMIT_LOAD_TERM=off
+  #     travels the identical path, so that direction is covered by the same proof.
+  # The other 15 cases in this file are unaffected by the correction and stay GREEN on both trees.
+  binds=""
+  while read -r f; do
+    [ -n "$f" ] || continue
+    grep -q 'CC_ADMIT_LOAD_TERM=off' "$REPO/$f" || binds="$binds $f"
+  done <<< "$(cd "$REPO" && grep -rlE '^[^#]*[^_a-zA-Z]cc_capacity_admit[[:space:]]' scripts bin hooks 2>/dev/null \
+                | grep -v '^scripts/lib/capacity-admit\.sh$' \
+                | grep -v '^scripts/test-hermeticity-lint\.sh$' | sort)"
+
+  [ -n "$binds" ] || { echo "no caller binds the load term at all — if that is now true the comment must SAY so, and this case must be rewritten to assert the new shape (the case-25 discriminator), not deleted"; false; }
+
+  # the comment must name every binding caller ...
+  for f in $binds; do
+    grep -qF "$f" "$LIB" \
+      || { echo "$f binds the underived 2.0/core ceiling and the block that prices it does not name it — update the WHERE IT STILL BINDS list in $LIB"; false; }
+  done
+
+  # ... and must name NOTHING ELSE as binding. Scoped TWICE, because the block's own prose names the
+  # one caller that is exempt: `hooks/agent-teams-enforce.sh` appears three lines above the list as
+  # the file that passes CC_ADMIT_LOAD_TERM=off, and a range-only read convicts the comment for
+  # explaining itself — the same `guard-proxy-fails-in-both-directions` shape case 20 documents.
+  # Indentation is the discriminator: the LIST is the continuation lines (`#` + 3 spaces), the prose
+  # around it is `#` + 1. So the second filter is load-bearing, not tidying.
+  listed="$(awk '/^# WHERE IT STILL BINDS/,/^# DELIBERATELY/' "$LIB" | grep '^#   ' \
+              | grep -oE '(scripts|bin|hooks)/[A-Za-z0-9_/.-]+' | sort -u)"
+  [ -n "$listed" ] || { echo "the WHERE IT STILL BINDS block lost its shape — case 30 can no longer read the list it ratchets"; false; }
+  for f in $listed; do
+    case " $binds " in
+      *" $f "*) ;;
+      *) echo "$LIB lists $f as binding the load term, but the tree says it does not (deleted, or it now passes CC_ADMIT_LOAD_TERM=off) — a stale list overstates the ceiling's reach just as the old one understated it"; false ;;
+    esac
+  done
+
+  # AND THE DERIVATION ITSELF STAYS REFUTED. e981656df348 was filed as "blocked on the marginal-load
+  # measurement"; that blocker is a slope and a ceiling wants a failure point. If someone re-files it
+  # as merely pending, this line reds and they have to argue with the paragraph instead of the id.
+  grep -qF 'e981656df348' "$LIB" \
+    || { echo "the refutation of e981656df348's premise left $LIB — a future reader will re-file the ceiling as 'blocked on 193ae8ddce72', which is the loop this case closes"; false; }
+}
