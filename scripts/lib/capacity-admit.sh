@@ -129,8 +129,35 @@
 # other two.
 
 # The ONE literal for each term. Both gates expand these; neither may carry a number of its own
-# (tests/capacity-admit-coverage.bats case 26 is the ratchet). 2.0/core is §9.5's measured ceiling;
-# 4 GB is M10's reclaimable floor.
+# (tests/capacity-admit-coverage.bats case 26 is the ratchet). 4 GB is M10's reclaimable floor.
+#
+# 🚨 2.0/core WAS NEVER DERIVED, AND NO DERIVATION IS REACHABLE ON THIS AXIS. This line used to read
+# "2.0/core is §9.5's measured ceiling". §9.5 contains no derivation: it records the gate ADMITTING
+# at 1.55/core and REFUSING at 4.0/core — a demonstration that a threshold thresholds — and its own
+# closing paragraph then says the gate keys on a quantity that is NOT session-attributable, i.e. the
+# section undercuts the term it was cited as justifying. The origin commit (`feat(handoff-fire):
+# machine-capacity admission gate at the spawn chokepoint`, 2026-07-29 — cite by SUBJECT, a land
+# rebases) measured its motivating incident at 2.72/core and picked 2.0 with no stated rule, so the
+# shipped ceiling sits BELOW the only incident that produced it.
+#
+# The missing derivation cannot be supplied later, either: scripts/capacity-alarm.sh's rung-7 header
+# records that THE SURVIVED POPULATION CONTAINS THE FATAL VALUE — fatal 2026-08-05 at 2.53/core
+# against 13 consecutive survived samples spanning 2.92-5.98/core, plus 42 h at 2.5/core with no
+# panic — so "set the ceiling from a measured failure point" has no solution on this axis. That is
+# that file's own conclusion, executable in its selftest (5.98/core pinned as a known false ALARM).
+#
+# 🚨 THIS IS NOT A CASE TO RAISE THE NUMBER. `fix(fire-gate): load1 does not move with the spawn it
+# was gating` (f944d6e3, 2026-08-20, ancestor of trunk) established the stronger fact: an additional
+# RESIDENT session moves the 1-min runnable count by ~0, so NO value of this literal can make the
+# term correct — the INPUT is wrong, not the number. The load term therefore DEFAULTS OFF in
+# capacity_gate() (CC_FIRE_LOAD_TERM) and has been off on the Agent-tool path since Wave D;
+# `segments` and `active` carry its intent because they DO move with the spawn. The literal stays at
+# 2.0 on purpose — C18: a fix moves a TERM SWITCH, never a ceiling — and raising it is the lazy
+# design docs/plans/LOAD_INSENSITIVE_VERIFY_V2.md:156 exists to reject. It still binds only where
+# `cc_capacity_admit` leaves the term on: the two unattended recovery callers
+# (scripts/boot-resume-launch.sh, scripts/limit-recover/lr-fire-resume.sh), DELIBERATELY — see the
+# load-term block below, which prices that imprecision at a delayed resume, and both are
+# budget-released after CC_ADMIT_BUDGET consecutive refusals.
 CC_HW_DEFAULT_MAX_LOAD_PER_CORE=2.0
 CC_HW_DEFAULT_MIN_HEADROOM_GB=4
 
