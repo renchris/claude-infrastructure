@@ -709,14 +709,34 @@ read_top_procs() { # → lines "<pid> <mb> <cmd>"
 # every ~65 s. `cut -c1-200` bounds the read before awk sees it, and only the BASENAME of argv[0] is
 # kept: ~10 bytes per process against ~823 bytes per row today. The field is additive and readers
 # that never heard of it are unaffected.
+#
+# THE PARENTHESISED COMM FORM IS KEPT PARENTHESISED, and that is Property 1 of this rung, not a
+# cosmetic choice. When ps cannot read a process's argv it does not fail — it SUBSTITUTES p_comm and
+# marks the substitution by wrapping it in parens, `(claude.exe)`. The sanitising gsub below deletes
+# every non-alphanumeric, so without this guard the marker is exactly what gets stripped and the row
+# lands as argv0:"claude.exe" — re-asserting the very name this field exists to correct.
+#
+# IT COLLIDES WITH A REAL SESSION, MEASURED (2026-08-25, drain recycle #214, backlog 810d59da926a).
+# `claude.exe` is not a hypothetical string here: sessions launch under TWO disjoint spellings and
+# `.../claude-code/bin/claude.exe` is one of them (see the disjoint-family note above), so a genuine
+# argv-READABLE session renders the identical basename. In compressor-sentinel-snap.log that is 3816
+# readable `.exe` rows against 11 parenthesised ones — a 347:1 ratio — so a reader who saw the
+# stripped form could not tell an unmeasurable process from the session family that dominates the
+# field. Keeping the parens separates them: `claude.exe` now means a real session under the .exe
+# spelling, `(claude.exe)` means ps could not read argv and this is the image name, not the work.
+#
+# RESIDUAL, stated rather than hidden: p_comm is truncated to 16 chars and may contain a space, in
+# which case $2 holds only its first word (`(Google`) and the anchored test below does not fire. That
+# row renders as it did before this change — no regression, and no false parenthesised claim either.
 read_argv0() { # $1 = comma-separated pids → lines "<pid> <argv0-basename>"
   [ -n "${1:-}" ] || return 0
   "${CC_CAP_PS:-ps}" -o pid=,command= -p "$1" 2>/dev/null \
     | cut -c1-200 \
     | awk 'NF >= 2 && $1 ~ /^[0-9]+$/ {
              n = split($2, a, "/"); v = a[n]
+             unreadable = (v ~ /^\(.*\)$/)
              gsub(/[^A-Za-z0-9._-]/, "", v)
-             if (v != "") print $1, v }'
+             if (v != "") print $1, (unreadable ? "(" v ")" : v) }'
 }
 
 TOP_PROCS="$(read_top_procs || true)"
