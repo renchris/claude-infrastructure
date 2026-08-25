@@ -1684,3 +1684,68 @@ stamped and L3's single renderer is intact.
 **The abstain that carries the most weight is RP-19**, and it is why the return is not a float:
 above the account's observed maximum there is no evidence at all, and a rendered `p100` reads as
 a rate that HAS been achieved.
+
+#### S3 · M2 + M3a — the nowcast — LANDED
+
+`bin/claude-accounts`: `burn_wk_ewma_ph(samples_for_acct, now, weekly_reset_h) → (value|None,
+measured_span_h)` and `wk_strand_pp(r)` beside `wall_projection`; both attached in `apply_burn`;
+`pace_line` restructured into the `PACE_HEAD` block, **sorted by pp at risk, descending**.
+Cases RP-13..RP-16 + RP-16b in `tests/claude-accounts-strand.bats` and RP-25..RP-27 in
+`tests/claude-accounts-core.bats` — **7/7 RED** against the S2 binary, 111/111 green after.
+
+**Live, and the inversion is the whole gain:**
+
+```
+weekly drain — pp that DIE at reset (nowcast at the last 48h of pace):
+  next4 strand ~66pp of 86 · p94 of its own 24h burns · 4d left
+  next2 strand ~58pp of 83 · p71 of its own 24h burns · 4d left
+  next3 strand ~6pp of 7 · p98 of its own 1h burns · 1.3h left
+  next no strand — 1.63× burn, wall trajectory · 4d left
+```
+
+124 pp sits on next4 and next2 with four days of runway, against 6 pp on the account the router
+is alarmed about. The old line sorted by soonest reset and led with the 6 pp.
+
+**Deviation 1 — the header carries NO `K=… live` clause, and the strand does NOT gate on K.**
+§5.4's mock header reads `(K=0.192 live · nowcast …)` and its abstain text says a null K prints
+`no strand figures this sweep`. But M3a is pure weekly-space arithmetic and consumes no K at
+all; the first K consumer is **S4** `burst_start_by`. Gating the strand on a coefficient it does
+not use would be a fabricated dependency, and rendering a number nothing consumes is the metric
+shape §3.2 forbids. `exchange_rate` is built, tested and live (K = 0.1969, source `live`); the
+header clause enters with S4.
+
+**Deviation 2 — `burst_start_by` / the `start by T−Nh` clause is absent**, by scope. S4 is a
+later wave. Every row therefore answers two of the goal's three questions — how much dies, and
+whether the demand is routine — and not the third.
+
+**Deviation 3 — `pace_line` COMPUTES the strand rather than reading its own stamp**, exactly as
+it already calls `wall_projection` instead of reading `burn_ratio`. A renderer that reads a
+stamp renders nothing at all when `apply_burn` has not run, which is a silent failure. The
+`wk_strand_pp` / `burn_wk_ewma_ph` / `burn_wk_span_h` stamps exist for other consumers.
+
+**Deviation 4 — `(recent N%/d)` is no longer rendered**; `burn_wk_ppd` stays populated (and
+keeps S1's roll-aware anchor) so nothing reading it breaks. The EWMA supersedes it on the
+surface: the two agree closely and the EWMA is the one that survives a reset.
+
+**Deviation 5 — RP-27 is its own case**, not an extension of `router M7: apply_burn derives
+rates`. That fixture holds three samples for next3, which cannot clear either the 2-pair or the
+6.8 h measured-span floor, so extending it in place would have meant loosening the floor to make
+a test pass. New fixture instead: 24 h at 6 min spacing.
+
+**What is NOT claimed.** No lead time, anywhere — not in the caption, the docstrings, or the
+commit messages. §5.1 LB-2's four kills stand and the estimator is sold as what it is: a good
+nowcaster precisely because it converges as the horizon closes, which is what makes it a bad
+forecaster. **S5 (`--strand-score`) is still the prerequisite for S6**, and nothing here
+shortens that.
+
+#### Acceptance status against §5.4
+
+| command | status |
+|---|---|
+| the bats suites (roll-key · util-tail · strand · burst · core) | **111/111 green**, every case shown RED at the commit before its fix |
+| `claude-accounts --readout` renders the drain block for all four accounts | **yes** — see above |
+| `claude-accounts --readout \| grep -c 'strand'` → 3 or 4 | **4** |
+| `claude-accounts --strand-score` | **not in this wave** — that flag is S5 |
+
+⚠️ `bash tests/run.sh …`, named in §5.4, **does not exist in this repo**. The suites are run with
+`bats tests/<name>.bats`; `scripts/ship-land.sh` selects and runs them at the land.

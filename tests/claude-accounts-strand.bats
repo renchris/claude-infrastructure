@@ -152,3 +152,106 @@ print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
+
+# ---- S3: burn_wk_ewma_ph (M2) and wk_strand_pp (M3a) ------------------------------------------
+
+@test "RP-13: burn_wk_ewma_ph CROSSES a weekly roll instead of discarding it" {
+  # 20 h of samples, the weekly window rolling at the midpoint (96 -> 2 pp, stamp +168 h), then
+  # 2 -> 8 pp over the following 10 h. The incumbent widest-pair estimator computes d = b - a < 0
+  # across that roll and leaves the field ABSENT — so it is blind for the first stretch of every
+  # weekly window, which is exactly when the week's plan is set. Stated positively: the roll
+  # branch takes the new window's LEVEL as the increment, a lower bound, never a discard.
+  run python3 -c "$LOAD"'
+OLD, NEW = NOW + 1 * 3600, NOW + 168 * 3600
+sam = []
+for i in range(100):                                  # 20 h .. 10 h ago, pre-roll, 86 -> 96
+    sam.append(s(20.0 - i * 0.1, wp=86 + i * 0.1, wra=OLD))
+for i in range(101):                                  # 10 h .. now, post-roll, 2 -> 8
+    sam.append(s(10.0 - i * 0.1, wp=2 + i * 0.06, wra=NEW))
+v, span = ca.burn_wk_ewma_ph(sam, NOW, 24.0)
+assert v is not None, (v, span)
+assert span > 15.0, span
+assert v > 0.8, v
+# and the incumbent, over the same series, is blind — the blindness stated as an assertion
+r = {"acct": "next3", "weekly_pct": 8, "weekly_reset_h": 24.0}
+ca.apply_burn([r], {}, samples=sam)
+assert "burn_wk_ewma_ph" in r, r
+assert "wk_strand_pp" in r, r
+assert "burn_wk_ppd" in r, r          # S1 kept the incumbent field populated beside the EWMA
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-14: wk_strand_pp ABSTAINS below the 6.8h measured-span floor" {
+  # 6 samples spanning 0.6 h. Below WK_EWMA_MIN_SPAN_H a +-1 pp quantization step exceeds 25% of
+  # the weekly meter's realised mean of 0.592 %/h, so the number would be reading its own
+  # rounding. The floor is on the RAW MEASURED span — not the weighted span, not the requested
+  # lookback — because those two can both be large while the evidence is not.
+  run python3 -c "$LOAD"'
+WRA = NOW + 100 * 3600
+sam = [s(0.6 - i * 0.1, wp=40 + i * 0.1, wra=WRA) for i in range(6)]
+v, span = ca.burn_wk_ewma_ph(sam, NOW, 100.0)
+assert v is None, (v, span)
+assert span < 6.8, span
+r = {"acct": "next3", "weekly_pct": 40, "weekly_reset_h": 100.0}
+assert ca.wk_strand_pp(r) is None, ca.wk_strand_pp(r)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-15 CONTROL: above the floor it PROJECTS — without this, RP-14 is an always-None stub" {
+  # 90 samples spanning 9 h at a steady 0.5 %/h, 40% used with 100 h left. 40 + 0.5*100 = 90,
+  # so ~10 pp die at reset. The arithmetic is a nowcast of the shortfall, nothing more.
+  run python3 -c "$LOAD"'
+WRA = NOW + 100 * 3600
+sam = [s(9.0 - i * 0.1, wp=35.5 + i * 0.05, wra=WRA) for i in range(91)]
+v, span = ca.burn_wk_ewma_ph(sam, NOW, 100.0)
+assert v is not None, (v, span)
+assert span >= 6.8, span
+assert abs(v - 0.5) < 0.05, v
+r = {"acct": "next3", "weekly_pct": 40, "weekly_reset_h": 100.0, "burn_wk_ewma_ph": v}
+st = ca.wk_strand_pp(r)
+assert st is not None and 8.0 < st < 12.0, st
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-16: an OVERSHOOT is never rendered as a number — the clamp is behaviour, not a comment" {
+  # next at phase 0.32 on 2026-08-25: weekly_pct 52, 114 h left, EWMA 1.725 %/h -> a raw
+  # projection of 248.7%. In that regime EVERY projector measured here is badly wrong (the
+  # incumbent renders 154.6%, this EWMA 231.4%, against a truth near 100%), so the clamp keeps
+  # the shortfall regime -- where the arithmetic converges -- and discards the overshoot. The
+  # account is reported as on a WALL TRAJECTORY, which is true and actionable; "248%" is neither.
+  run python3 -c "$LOAD"'
+r = {"acct": "next", "weekly_pct": 52, "weekly_reset_h": 114.0, "burn_wk_ewma_ph": 1.725}
+st = ca.wk_strand_pp(r)
+assert st == 0.0, st
+line = ca.pace_line([r])
+assert "wall trajectory" in line, line
+assert "248" not in line, line
+assert "231" not in line, line
+assert "154" not in line, line
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-16b CONTROL: a NEGATIVE strand is clamped to zero, never flipped into a positive one" {
+  # The other side of the clamp. max(0, ...) must not become abs(...): an account projected to
+  # overshoot by 20 pp has NO strand, and rendering 20 pp at risk would invert the decision.
+  run python3 -c "$LOAD"'
+r = {"acct": "next", "weekly_pct": 90, "weekly_reset_h": 10.0, "burn_wk_ewma_ph": 3.0}
+assert ca.wk_strand_pp(r) == 0.0, ca.wk_strand_pp(r)
+r2 = {"acct": "next", "weekly_pct": 90, "weekly_reset_h": 10.0, "burn_wk_ewma_ph": 0.2}
+assert abs(ca.wk_strand_pp(r2) - 8.0) < 1e-9, ca.wk_strand_pp(r2)
+# and the abstain arms: a reset stamp outside the bucket is bad data, not a signal
+assert ca.wk_strand_pp({"weekly_pct": 50, "weekly_reset_h": 200.0, "burn_wk_ewma_ph": 0.5}) is None
+assert ca.wk_strand_pp({"weekly_pct": 50, "weekly_reset_h": 0.0, "burn_wk_ewma_ph": 0.5}) is None
+assert ca.wk_strand_pp({"weekly_pct": None, "weekly_reset_h": 10.0, "burn_wk_ewma_ph": 0.5}) is None
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}

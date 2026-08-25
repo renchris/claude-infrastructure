@@ -2163,6 +2163,21 @@ def apply_burn(rows, cfg, samples=None):
         if bp is not None:
             r["burst"] = bp
 
+    # M2 + M3a: the roll-aware weekly EWMA and the strand nowcast it feeds. The span is stamped
+    # beside the value because it is the ABSTAIN's reason, and a null that cannot say why reads
+    # as a missing measurement rather than as a refusal.
+    for r in rows:
+        ss = by.get(r.get("acct"))
+        if not ss:
+            continue
+        v, span = burn_wk_ewma_ph(ss, now, r.get("weekly_reset_h"))
+        r["burn_wk_span_h"] = span
+        if v is not None:
+            r["burn_wk_ewma_ph"] = v
+        s = wk_strand_pp(r)
+        if s is not None:
+            r["wk_strand_pp"] = s
+
     for r in rows:
         ratio, proj = wall_projection(r)
         if ratio is not None:
@@ -2294,43 +2309,144 @@ def wall_projection(r):
     return (wp / 100.0) / frac, wp / frac
 
 
-def pace_line(rows):
-    """One footer line, soonest reset first. Reports each account's BURN RATIO against elapsed
-    window and where the window is projected to land — with `⚠ WALL` when that projection reaches
-    100%, because an account that hits its weekly limit is DOWN until reset (next3 sat at exactly
-    100% for 11.2 h on 2026-08-11). The older `%/day needed` figure is retained beside it: it
-    still answers "how hard would I have to push", which the ratio does not.
+WK_EWMA_LOOKBACK_H = 48.0    # the pace the nowcast speaks for: "at the pace of the last 48 h"
+WK_EWMA_MIN_SPAN_H = 6.8     # below this, +-1 pp quantization exceeds 25% of the realised mean
+WK_EWMA_HL_NEAR = 4.0        # weekly_reset_h <= 12: weight the last hours hard
+WK_EWMA_HL_FAR = 8.0         # beyond 12 h the hl=4 form may NEVER be extrapolated
+WK_EWMA_NEAR_H = 12.0
 
-    NB 100% is the WALL, not the target. This line used to be captioned `pace to 100%`, which
-    framed the failure mode as the goal."""
-    parts = []
-    for r in sorted((x for x in rows if pace_need_ppd(x) is not None),
-                    key=lambda x: x.get("weekly_reset_h") or float("inf")):
-        need = pace_need_ppd(r)
-        ratio, proj = wall_projection(r)
-        if ratio is None:
-            p = (f"{r['acct']} too early to project "
-                 f"({fmt_h(r['weekly_reset_h'], narrow=True)} left)")
+
+def burn_wk_ewma_ph(samples_for_acct, now, weekly_reset_h):
+    """Roll-aware EWMA of the weekly meter, in %/h, as (value|None, measured_span_h).
+
+    IT SHIPS ON AVAILABILITY AND ROLL-AWARENESS, NOT ON ACCURACY. Against the incumbent
+    `burn_wk_ppd` the two agree closely (live: 43.79 / 7.96 / 29.85 / 3.98 %/day against
+    38.0 / 6.9 / 29.3 / 4.6). The win is that the incumbent's widest-pair form DISCARDS every
+    window that crosses a reset, so it is blind for the first stretch of every weekly window —
+    exactly when the week's plan is set. Here a roll is not a discard: post-roll accrual is
+    reconstructed as a LOWER BOUND by taking the new window's level as the increment.
+
+    ABSTAIN (L2) on the RAW MEASURED SPAN — the sum of dt over usable pairs, never the weighted
+    span and never the requested lookback. Below WK_EWMA_MIN_SPAN_H a +-1 pp quantization step
+    exceeds 25% of the weekly meter's realised mean of 0.592 %/h, so the number would be reading
+    its own rounding. Never abstain on a roll.
+
+    THE HORIZON LICENCE IS REFUSED: hl is picked from weekly_reset_h, so a consumer projecting
+    past WK_EWMA_NEAR_H cannot get the hl=4 form. That form is fitted to the end-of-window
+    acceleration and extrapolating it across four days manufactures a wall."""
+    if not isinstance(weekly_reset_h, (int, float)):
+        return None, 0.0
+    hl = WK_EWMA_HL_NEAR if weekly_reset_h <= WK_EWMA_NEAR_H else WK_EWMA_HL_FAR
+    ss = sorted((e for e in samples_for_acct or []
+                 if e.get("weekly_pct") is not None and e.get("_t") is not None
+                 and now - e["_t"] <= WK_EWMA_LOOKBACK_H * 3600.0),
+                key=lambda e: e["_t"])
+    num = den = span = 0.0
+    pairs = 0
+    for a, b in zip(ss, ss[1:]):
+        dt_h = (b["_t"] - a["_t"]) / 3600.0
+        if not (0 < dt_h <= 1.0):
+            continue
+        if _rolled(a, b, "weekly_reset_at", "weekly_pct"):
+            d = b["weekly_pct"]                       # the new window's level, a LOWER bound
         else:
-            p = f"{r['acct']} burn {ratio:.2f}× → ~{proj:.0f}% by reset"
-            if proj >= 100.0:
-                p += " ⚠ WALL"
-            # M5 REPLACES THE RENDERING, not the field. `needs 88%/d over 2.2h` quotes a rate in
-            # a unit 11x longer than the window it must happen in, and says nothing about whether
-            # the account has ever burned that fast. The percentile answers that; the bare rate
-            # survives only where the percentile abstains, so an abstention never renders as a
-            # silently missing clause.
-            b = fmt_burst(r.get("burst"))
-            if b:
-                p += f", {b} to close {max(0.0, 100.0 - r['weekly_pct']):.0f}pp in " \
-                     f"{fmt_h(r['weekly_reset_h'], narrow=True)}"
+            d = max(0.0, b["weekly_pct"] - a["weekly_pct"])
+        w = 2.0 ** (-((now - b["_t"]) / 3600.0) / hl)
+        num += w * d
+        den += w * dt_h
+        span += dt_h
+        pairs += 1
+    if pairs < 2 or span < WK_EWMA_MIN_SPAN_H or den <= 0:
+        return None, span
+    return num / den, span
+
+
+def wk_strand_pp(r):
+    """M3a — the weekly pp that DIE at this window's reset at the pace of the last 48 h.
+    None when the nowcast cannot speak.
+
+    THIS IS A NOWCAST AND CARRIES NO LEAD-TIME CLAIM. The synthesis published
+    `4/4 recall / 0 FP / median ~20 h lead` for this arithmetic; that was refuted on four
+    independent grounds and is withdrawn — most simply, the fire rule was non-empty only at the
+    window's LAST sample, where the projection has already converged to `100 - weekly_pct`, i.e.
+    to the true strand, so it agreed with the identity function on 8/8 windows. The estimator is
+    a good NOWCASTER for exactly the reason it is a bad forecaster. Alarm semantics arrive with
+    S6 and only after S5's scoring harness has been run and read.
+
+    THE CLAMP IS LOAD-BEARING, not cosmetic. It discards the OVERSHOOT regime, where every
+    projector measured here is badly wrong (on `next` at phase 0.32 the incumbent renders 154.6%
+    and this EWMA renders 231.4% against a truth near 100% — the better estimator is worse on
+    that figure), and keeps the SHORTFALL regime, where the arithmetic nowcasts a quantity that
+    actually converges. A weekly projection above 100 is therefore never rendered as a number;
+    the account is reported as being on a wall trajectory instead."""
+    wp, wrh = r.get("weekly_pct"), r.get("weekly_reset_h")
+    b = r.get("burn_wk_ewma_ph")
+    if wp is None or not isinstance(wrh, (int, float)) or not (0 < wrh <= WEEK_H):
+        return None
+    if not isinstance(b, (int, float)):
+        return None
+    return max(0.0, 100.0 - (wp + b * wrh))
+
+
+PACE_HEAD = "weekly drain — pp that DIE at reset (nowcast at the last 48h of pace):"
+
+
+def pace_line(rows):
+    """The weekly-drain block: one row per account, SORTED BY pp AT RISK, descending.
+    Returns a newline-joined string (the header plus one row per account), or "".
+
+    WHAT IT ANSWERS, AND WHY IT WAS RE-SORTED. The old line was sorted by SOONEST RESET, so on
+    2026-08-25 it led with next3 — 5 pp at risk — and trailed the pair holding 119.5 pp with four
+    days of runway. Reset proximity is urgency; pp at risk is the loss. Sorting on the first
+    buried the second, and the fleet stranded 43 pp across 8 completed account-weeks with no
+    surface naming which account was losing it. That inversion is this block's whole gain.
+
+    Each row, left to right: how much dies (M3a `wk_strand_pp`), and whether the demand is
+    routine for this account or a stunt it has never pulled (M5 `burst_percentile`).
+
+    NOWCAST, NOT FORECAST — the caption says `at the last 48h of pace` and there is deliberately
+    no lead-time claim anywhere on this surface. §5.1 LB-2.
+
+    ZERO-STRAND ROWS STILL RENDER, and render last. `wall_projection`'s burn RATIO survives
+    unchanged on them, because an account on a wall trajectory has no strand and is still the
+    most important thing on the line; what does NOT survive is rendering a weekly projection
+    ABOVE 100 as a number, which is the regime where every projector measured here is wrong by
+    50-130 pp. An abstention renders as the word plus its reason, never as a zero."""
+    def _strand(x):
+        # Computed here, not read off the stamp, for the same reason wall_projection is called
+        # rather than read off `burn_ratio`: the renderer must not silently render nothing when
+        # apply_burn has not run. The stamp exists for OTHER consumers, not for this one.
+        return wk_strand_pp(x)
+
+    def _key(x):
+        s = _strand(x)
+        return -(s if s is not None else -1.0)      # positive desc, then 0, then unknown LAST
+
+    parts = []
+    for r in sorted((x for x in rows if pace_need_ppd(x) is not None), key=_key):
+        left = fmt_h(r["weekly_reset_h"], narrow=True)
+        deficit = max(0.0, 100.0 - r["weekly_pct"])
+        ratio, proj = wall_projection(r)
+        s = _strand(r)
+        if s is None:
+            span = r.get("burn_wk_span_h")
+            why = (f"span {span:.1f}h < {WK_EWMA_MIN_SPAN_H}h"
+                   if isinstance(span, (int, float)) and span > 0 else "no usable pairs")
+            p = f"{r['acct']} strand unknown ({why})"
+        elif s < 0.5:
+            if ratio is not None and proj >= 100.0:
+                p = f"{r['acct']} no strand — {ratio:.2f}× burn, wall trajectory"
+            elif ratio is not None:
+                p = f"{r['acct']} no strand — {ratio:.2f}× burn, on pace to fill the window"
             else:
-                p += f", needs {need:.0f}%/d over {fmt_h(r['weekly_reset_h'], narrow=True)}"
-        b = r.get("burn_wk_ppd")
-        if isinstance(b, (int, float)):
-            p += f" (recent {b:.0f}%/d)"
-        parts.append(p)
-    return ("weekly burn (1.00× = lands exactly at the 100% wall): " + " · ".join(parts)) if parts else ""
+                p = f"{r['acct']} no strand — on pace to fill the window"
+        else:
+            p = f"{r['acct']} strand ~{s:.0f}pp of {deficit:.0f}"
+        b = fmt_burst(r.get("burst"))
+        if b and s is not None and s >= 0.5:
+            p += f" · {b}"
+        parts.append(f"  {p} · {left} left")
+    return "\n".join([PACE_HEAD] + parts) if parts else ""
 
 
 def _excluded(r, R, cliff=True, k_of=None):
@@ -3675,7 +3791,10 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
         out.append(f"➤ general → **{pick_g or 'none'}** · ➤ fable → **{pick_f or 'none'}**")
     pl = pace_line(rows)
     if pl:
-        out.extend(_wrap_narrow(_demark(pl)) if narrow else [pl])
+        # S3: the weekly-drain block is now one row PER ACCOUNT, sorted by pp at risk. Still one
+        # renderer (L3) — pace_line owns every word of it; this splits what it produced.
+        for _pln in pl.split("\n"):
+            out.extend(_wrap_narrow(_demark(_pln)) if narrow else [_pln])
     if win.get("permanent"):
         # permanent means NO expiry — never quote a countdown off the sentinel `end` date
         wl = "Fable window: **permanent** (no expiry)."
@@ -3996,7 +4115,8 @@ def render_table(rows, cfg, win, cached, prev=None):
     # answered. Same 82-col budget: one line, soonest reset first.
     pl = pace_line(rows)
     if pl:
-        print("  " + c(pl, GRAY))
+        for _pln in pl.split("\n"):          # S3: one row per account, sorted by pp at risk
+            print("  " + c(_pln, GRAY))
     # A winner whose LOGIN dies inside the warn window is still the correct routing answer —
     # it genuinely has the headroom, and quota is what the scorer is for. But a session fired
     # onto it now can outlive its own credentials. The alert above states the fact; this
