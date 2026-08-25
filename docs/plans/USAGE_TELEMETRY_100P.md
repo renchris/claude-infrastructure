@@ -1605,3 +1605,50 @@ complacency. M1–M5 are deliberately fitted to **rates**, never to window shape
 but the acceptance test must be **re-run after several weekly windows**, not assumed. The forward
 arithmetic already predicts one inversion: closing the 19.9 pp/week strand needs 1.04 extra full 5h
 windows/week, carrying the fleet wall rate 1.72% → 2.20%.
+
+---
+
+### §5.7 Implementation record — what actually landed, and where it deviated from the spec
+
+Wave 1 = **S1 + S2 + S3 only**. S4–S7 are unbuilt and unchanged; S5 still gates S6.
+
+#### S1 · data fixes — LANDED
+
+`bin/claude-accounts`: `_reset_key` / `_rolled` (:1877), `_util_tail(path, hours=48.0,
+max_bytes=None) → (rows, achieved_span_h)`, `exchange_rate` + `K_FROZEN` / `K_MIN_SDS` /
+`K_SANE`, `completed_weekly_windows` + `WEEKLY_TAIL_GAP_H`.
+Suites: `tests/claude-accounts-roll-key.bats` (RP-1..RP-5),
+`tests/claude-accounts-util-tail.bats` (RP-6..RP-8 + RP-8b/RP-8c),
+`tests/claude-accounts-strand.bats` (RP-9..RP-12 + RP-9b/RP-12b). **16/16 proven RED against the
+pre-change binary** (`git stash push -- bin/claude-accounts`, run, pop), 16/16 green after.
+
+**Live confirmation, out of the spec's own numbers.** `_util_tail()` now returns span **47.86 h**
+against the byte cap's 12.16 h (1,613 rows, 65 ms). `completed_weekly_windows` over a 400 h tail
+reproduces §5.1 S1d **exactly** — 8 windows, 43 pp, and the same eight per-account rows. Live
+`exchange_rate` reads **K = 0.1969, source `live`, Σ Δsession = 1,889** — in band, and above the
+0.192 literal, which is the drift Amendment 2 predicted and the reason K is fitted rather than
+frozen.
+
+**Deviation 1 — how the S1b trap was discharged, and it is not what §5.2 S1b implies.** S1b's
+sizing formula (`max_bytes` derived from a median interval and a mean record size) was **not
+implemented**: it re-creates the exact coupling it cures, because both constants drift with the
+record. Shipped instead: the byte seek **doubles** (`UTIL_TAIL_SEED_B` 128 KiB →
+`UTIL_TAIL_MAX_B` 32 MiB) until the requested span is actually reached or the file is exhausted,
+then the parsed rows are time-filtered and the **achieved** span returned. A record that gains a
+field now costs one extra read, not a silently shorter window.
+
+**Deviation 2 — the roll-aware estimator that rides in the SAME commit is the INCUMBENT's, not
+M2's.** §5.5 is literal that restoring the span alone is a regression: at a true 48 h span the
+widest-pair `burn_wk_ppd` anchors on a pre-reset sample, reads `d < 0`, and abstains for the
+whole first stretch of every weekly window. Merging S3 into S1 to satisfy that would have
+short-circuited the ranking. Shipped instead: `apply_burn`'s weekly anchor **walks forward to the
+newest roll** (`_rolled`, S1a) so the same estimator measures the post-roll segment. It abstains
+below its own pre-existing 6 h floor and nowhere else. `tests/claude-accounts-util-tail.bats`
+**RP-8b** is that proof — 48 h of samples with a weekly roll 30 h back, `burn_wk_ppd` absent
+pre-change and 14.4 %/d after — and **RP-8c** is its control, pinning that with no roll in the
+span the anchor still reaches the oldest sample. Without that pair the suite would have been
+green and vacuous, which is the failure §5.5 names.
+
+**Deviation 3 — `tests/claude-accounts-core.bats:1768` updated in place**, not rewritten:
+`_util_tail` is now a 2-tuple, and the case additionally asserts the achieved span, because that
+span is what every abstain rule below it is written against.

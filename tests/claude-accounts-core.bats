@@ -1765,7 +1765,15 @@ w(0, "next2", 10, 50)               # 5h fell 80→10: the window ROLLED — no 
 w(30, "next4", 10, 10, stale=True)  # stale rows carry no measurement
 w(0, "next4", 40, 10)
 rows = [dict(acct="next3"), dict(acct="next2"), dict(acct="next4")]
-ca.apply_burn(rows, cfg, samples=ca._util_tail(path=p))
+samples, span = ca._util_tail(path=p, hours=48.0)   # S1b: (rows, ACHIEVED span), selected by
+                                                    # TIME. The old byte-capped signature returned
+                                                    # rows alone and its span was whatever 128 KiB
+                                                    # bought — 12.16 h against the live file, under
+                                                    # a docstring claiming 48. Every abstain rule
+                                                    # below is written against the achieved span,
+                                                    # so it has to be returned, not assumed.
+assert span > 23.0, span
+ca.apply_burn(rows, cfg, samples=samples)
 r3, r2, r4 = rows
 assert abs(r3["burn_5h_ph"] - 0.6) < 0.05, r3
 assert abs(r3["burn_wk_ppd"] - 15.0) < 1.0, r3
