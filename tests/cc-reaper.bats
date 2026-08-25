@@ -2972,3 +2972,68 @@ EOF
   # and it must NOT be mislabelled as the timeout path
   [ "$(grep -c 'bound-fired classify' "$CC_REAPER_LOG")" -eq 0 ]
 }
+
+# ─── recycle #225 ────────────────────────────────────────────────────────────────────────────────
+# R5b named the child's own rc at the classify fork. _rp_bounded's contract comment binds EVERY
+# caller ("rc 124 ... MUST stay distinguishable from the child's own failure"), and there are FOUR
+# bounded foreign forks in this file; three of them still branched on 124 alone. Their stderr goes to
+# /dev/null and their summary `say` is skipped when a dead producer prints nothing, so the subsystem
+# not running was byte-identical in the log to it running quietly.
+#
+# Measured before writing this: over the live log's 1,662 completed REAP sweeps (2026-08-13..25),
+# every one of the three left evidence on every sweep — SILENT = 0/1662 for all three. So this arm is
+# LATENT. It is written anyway because it is reachable (cc-inbox-guard exits 2 at its own dependency
+# guards) and because an absence measured against a store whose producer has no emitting line is a
+# NON-VERDICT, not a clean bill — the census above could only have said "0" either way.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+@test "R5d: a non-124 reconcile rc is the CHILD's own failure and is NAMED, not silent" {
+  cat > "$D/bin/reconcile" <<'EOF'
+#!/bin/bash
+exit 127
+EOF
+  chmod +x "$D/bin/reconcile"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'reconcile FAILED: rc=127 — producer error, NOT the bound' "$CC_REAPER_LOG")" -eq 1 ]
+  # and it must NOT be mislabelled as the bound, which is the one cause it is definitely not
+  [ "$(grep -c 'bound-fired reconcile' "$CC_REAPER_LOG")" -eq 0 ]
+}
+
+@test "R5d: a non-124 backlog-reap rc is the CHILD's own failure and is NAMED, not silent" {
+  cat > "$D/bin/backlog" <<'EOF'
+#!/bin/bash
+exit 3
+EOF
+  chmod +x "$D/bin/backlog"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'backlog-reap FAILED: rc=3 — producer error, NOT the bound' "$CC_REAPER_LOG")" -eq 1 ]
+  [ "$(grep -c 'bound-fired backlog-reap' "$CC_REAPER_LOG")" -eq 0 ]
+}
+
+@test "R5d: a non-124 inbox-guard rc is the CHILD's own failure and is NAMED, not silent" {
+  # rc 2 is the guard's OWN spelling at its :53/:95 dependency checks — the reachable mode.
+  cat > "$D/bin/guard" <<'EOF'
+#!/bin/bash
+exit 2
+EOF
+  chmod +x "$D/bin/guard"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'inbox-guard FAILED: rc=2 — producer error, NOT the bound' "$CC_REAPER_LOG")" -eq 1 ]
+  [ "$(grep -c 'bound-fired inbox-guard' "$CC_REAPER_LOG")" -eq 0 ]
+}
+
+@test "R5d CONTROL: a HEALTHY producer trio names no failure — this is not an always-firing alarm" {
+  # The polarity arm. Without it, an arm that fired unconditionally would pass all three tests above
+  # and say exactly as much as one that could never fire (memory: alarm-polarity-and-attention-budget).
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'reconcile FAILED: rc=' "$CC_REAPER_LOG")" -eq 0 ]
+  [ "$(grep -c 'backlog-reap FAILED: rc=' "$CC_REAPER_LOG")" -eq 0 ]
+  [ "$(grep -c 'inbox-guard FAILED: rc=' "$CC_REAPER_LOG")" -eq 0 ]
+  # POSITIVE control through the SAME pipeline: the healthy stubs really did run and really did log,
+  # so the three zeros above are verdicts rather than a sweep that never reached these forks.
+  [ "$(grep -c 'reconcile: cc-reconcile: mock 0 backfilled' "$CC_REAPER_LOG")" -eq 1 ]
+}

@@ -1532,6 +1532,16 @@ sweep() {
     local rout rrc
     rout="$(_rp_bounded "${CC_REAPER_RECONCILE_TIMEOUT_S:-60}" "$RECONCILE_BIN" 2>/dev/null)"; rrc=$?
     [ "$rrc" = 124 ] && log "bound-fired reconcile: exceeded ${CC_REAPER_RECONCILE_TIMEOUT_S:-60}s — registry backfill INCOMPLETE this sweep"
+    # R5d (2026-08-25, recycle #225): _rp_bounded's own contract (see its comment above) is that rc 124
+    # "MUST stay distinguishable from the child's own failure". R5b honoured that at the classify call
+    # and NOWHERE ELSE — this fork, and the two ride-alongs below, branched on 124 alone, so a child
+    # that died of its own accord left NO line at all: rc discarded, stderr sent to /dev/null, and the
+    # summary `say` below skipped because a dead producer printed nothing. Measured over the log's
+    # 1,662 completed REAP sweeps, this arm has fired ZERO times, so it is LATENT, not active — but it
+    # is reachable (cc-inbox-guard:95 exits 2 when hooks/lib/mailbox-pending.sh is unusable, and the
+    # live layer already carries 3 absent files under hooks/), and an arm that cannot speak cannot be
+    # measured either: a census of a store whose producer has no emitting line is a NON-VERDICT.
+    [ "$rrc" != 0 ] && [ "$rrc" != 124 ] && log "reconcile FAILED: rc=$rrc — producer error, NOT the bound; registry backfill did NOT run this sweep"
     [ -n "$rout" ] && { say "$rout"; log "reconcile: $rout"; }
   fi
   # ── THE DECISION begins here. classify_t0 is the instant the evidence every reap rests on was
@@ -2048,6 +2058,8 @@ sweep() {
     # attributed 732 cuts to the stage that had usually already finished, so the log reported the
     # wrong subsystem every time (memory: wrong-cause-corroborated-by-true-metric).
     [ "$brc" = 124 ] && log "bound-fired backlog-reap: exceeded ${CC_REAPER_BACKLOG_TIMEOUT_S:-900}s — reap INCOMPLETE this cadence (claim sweep and/or the off-box cure sweep, which runs LAST and is therefore cut first)"
+    # R5d (recycle #225) — the same one-directional guard as the reconcile fork above; see there.
+    [ "$brc" != 0 ] && [ "$brc" != 124 ] && log "backlog-reap FAILED: rc=$brc — producer error, NOT the bound; the claim and cure sweeps did NOT run this cadence"
     [ -n "$bout" ] && { say "$bout"; log "backlog-reap: $bout"; }
   fi
   # BOUND SIZED TO THE BAND (2026-08-25, recycle #219). This default was 60s and fired on
@@ -2075,6 +2087,12 @@ sweep() {
     local gout grc
     gout="$(_rp_bounded "${CC_REAPER_GUARD_TIMEOUT_S:-600}" "$GUARD_BIN" sweep 2>/dev/null)"; grc=$?
     [ "$grc" = 124 ] && log "bound-fired inbox-guard: exceeded ${CC_REAPER_GUARD_TIMEOUT_S:-600}s — mail escalation INCOMPLETE this cadence"
+    # R5d (recycle #225) — the same one-directional guard again, and this is the fork where the arm is
+    # actually REACHABLE: cc-inbox-guard exits 2 at its own :53/:95 dependency guards (jq, and the
+    # mailbox lib it sources out of hooks/lib/). Until now that exit produced a sweep that was
+    # byte-identical in this log to a healthy one — and BETTER-looking than a healthy one, because the
+    # bound-fired line that normally accompanies this fork on 96% of sweeps would simply be absent.
+    [ "$grc" != 0 ] && [ "$grc" != 124 ] && log "inbox-guard FAILED: rc=$grc — producer error, NOT the bound; mail escalation did NOT run this cadence"
     [ -n "$gout" ] && log "inbox-guard: $gout"
   fi
 
