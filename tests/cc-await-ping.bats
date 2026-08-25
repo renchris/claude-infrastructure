@@ -763,6 +763,37 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
   [[ "$output" == *"verdict=stood-down"* ]] || false
 }
 
+@test "idle-scoped: the WAKE FLOOR's own arm turn survives — a STOP-kind baseline is still an arm turn" {
+  # THE FIELD DEFECT (backlog b60eb29e97dd, 2/2, thresholds `seq > 3` and `seq > 6`). The wake floor
+  # is the ONE call site that instructs this mode, and it instructs it from a Stop-hook BLOCK — so
+  # the turn that arms is entered as that block's feedback and the newest boundary the arm gate can
+  # sample is the PREVIOUS turn's Stop, not a prompt beat. The allowance used to be spent only on a
+  # prompt-kind baseline, so this shape armed with threshold = baseline and then cancelled on the arm
+  # turn's OWN trailing Stop at baseline+1, on the first poll, every time. The mode's only actuator
+  # therefore demanded an arm that deterministically no-opped.
+  beat 3 stop
+  ( sleep 1; beat 4 stop ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 4
+  wait "$writer" 2>/dev/null || true
+  [[ "$output" == *"beat seq > 4"* ]] || false           # the allowance was spent, whatever the kind
+  [ "$status" -eq 2 ]                                    # still watching → ran its term
+  [[ "$output" != *"stood-down"* ]] || false
+}
+
+@test "idle-scoped: a STOP-kind baseline still cancels at baseline+2 (the fix is one boundary, not a hole)" {
+  # The companion to the test above: widening the allowance to cover the arm turn's tail must not
+  # widen it any further, or the starvation pole re-enters through the oracle for exactly the shape
+  # the wake floor produces.
+  beat 3 stop
+  ( sleep 1; beat 5 stop ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down"* ]] || false
+}
+
 @test "idle-scoped C1: MAIL still wins — a ping is delivered, never traded for a silent stand-down" {
   beat 5 prompt
   # both events land inside ONE poll interval, and the mail check runs first within an iteration:

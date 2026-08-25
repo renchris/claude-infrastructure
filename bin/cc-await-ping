@@ -73,7 +73,11 @@
 #   C1 exit-on-mail   unchanged — the wake half of 2-way comms.
 #   C2 exit-on-turn   a UserPromptSubmit-kind beat newer than the baseline taken at arm ⇒ the session
 #                     was woken by something else, so this awaiter's job is over: exit 0 SILENTLY
-#                     (verdict=stood-down), leaving the next natural Stop registry-quiet.
+#                     (verdict=stood-down), leaving the next natural Stop registry-quiet. ONE boundary
+#                     of tolerance is always spent on the ARM TURN'S OWN trailing Stop, whatever kind
+#                     of beat the arm sampled — the turn the wake floor creates writes no prompt beat
+#                     of its own, so a kind-conditional allowance made this mode cancel itself on the
+#                     first poll at its only call site (backlog b60eb29e97dd; see THE ALLOWANCE).
 #   C3 single-instance   refuse while a live sibling watcher claims any key of the keyset.
 #   C4 refuse-on-pending refuse while mail is already pending — mail waiting means you have work, and
 #                     arming would defer the judgment of state you ALREADY hold.
@@ -416,7 +420,28 @@ if [ "$IDLE_SCOPED" = 1 ]; then
   # baseline PROVES a prompt beat occurred in between, whether or not we sampled it. The offset says
   # exactly that: the arm turn's own trailing Stop (baseline+1) is excluded, and nothing else is.
   # Erring toward standing down early costs one bounce turn; erring the other way costs the goal.
-  [ "$(_beat_field "$SID" '.kind')" = "prompt" ] && BEAT_STOP_ALLOWANCE=1
+  #
+  # 🚨 UNCONDITIONAL, and the `kind = prompt` guard it replaces was the mode's whole inertness
+  # (backlog b60eb29e97dd; measured 2/2 in the field, thresholds `seq > 3` and `seq > 6`). That guard
+  # spent the allowance only when the arm-time beat was a PROMPT beat — i.e. it assumed the turn that
+  # arms this watcher always contributed one. The turn the WAKE FLOOR creates does not: the floor
+  # blocks at Stop (hooks/session-continue.sh § WAKE FLOOR) and instructs the arm as that block's
+  # feedback, so the newest boundary this gate can sample is the PREVIOUS turn's Stop. Allowance 0,
+  # threshold = baseline, and then the arm turn's own trailing Stop lands at baseline+1 and trips C2
+  # on the very first poll. The one call site the mode exists for therefore demanded an arm that
+  # deterministically no-ops — and because the stand-down removes the .watching heartbeat before the
+  # floor's next look, the floor re-blocked, re-instructed, and burned its whole CC_WAKE_FLOOR_MAX=2
+  # budget on two watchers that were already dead, leaving the session deaf and unarmed.
+  #
+  # THE OFFSET IS RIGHT; THE CONDITION WAS THE BUG. The arm turn's trailing Stop is at baseline+1 in
+  # BOTH readings, not just the prompt one — the baseline is either that turn's own prompt beat (its
+  # stop is the next boundary) or the previous turn's stop (this turn wrote no prompt beat, so its
+  # stop is again the next boundary). One boundary of tolerance is exactly the arm turn's own tail,
+  # whatever the arm turn looked like, so the kind of the baseline carries no information here. The
+  # sampling-hole closure above is untouched: baseline+2 and beyond still cancel, and a `prompt`-kind
+  # beat at baseline+1 is still caught by the second clause of _turn_moved (a prompt beat can only
+  # follow the arm turn's stop, never precede it, so at baseline+1 it proves that stop was skipped).
+  BEAT_STOP_ALLOWANCE=1
   # (C4) MAIL ALREADY PENDING = you have work. Arming here would defer the judgment of state the
   #      session already holds, which is the deferral this mode exists to make impossible.
   for _k in $(_keys); do
