@@ -30,11 +30,34 @@
 #   Mark done:  touch <this file>.done
 # ───────────────────────────────────────────────────────────────────────────────────────────────────
 set -uo pipefail
+
+# THE SELFTEST BELOW MUST RUN IN THE JOB'S ENVIRONMENT, NOT THE CALLER'S — this line is the
+# whole reason the gate is trustworthy. The plist hardens PATH to exactly this value because
+# launchd hands a job `/usr/bin:/bin` and nothing else; this script did not, so it validated
+# whatever PATH the operator's shell happened to have. Measured 2026-08-24: invoked from a
+# shell carrying neither ~/.claude/bin nor /opt/homebrew/bin, `bats` did not resolve,
+# nightly-regression.sh:468 SKIPPED the bats check by design, the deliberately-failing fixture
+# therefore never ran, and every red-path assertion scored FAIL — 60 passed / 7 failed. The
+# activation then refused to arm a detector that was in fact fine, and the same command run
+# with Homebrew on PATH returned 67/0 five times out of five. A gate that fails on the
+# caller's PATH is testing the caller, not the job. Keep this identical to the plist's PATH.
+export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+
 REPO="${CC_REPO:-$HOME/Development/claude-infrastructure}"
 LABEL="com.claude.nightly-regression"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 SRC="$REPO/scripts/nightly-regression.sh"
 UID_N="$(id -u)"
+
+# Fail LOUD on the tool whose absence is otherwise silent. bats missing is not a detector
+# defect and must never again be reported as seven failed assertions.
+command -v bats >/dev/null 2>&1 || {
+  echo "✗ REFUSING to activate: \`bats\` does not resolve on the hardened PATH above." >&2
+  echo "  nightly-regression.sh SKIPS the bats check when bats is absent, and a skip is not a" >&2
+  echo "  RED — so the selftest's red-path arms would fail for a reason that is not a defect." >&2
+  echo "  Install it (brew install bats-core) and re-run; do not 'fix' the selftest." >&2
+  exit 1
+}
 
 echo "== 22-nightly-regression =="
 
