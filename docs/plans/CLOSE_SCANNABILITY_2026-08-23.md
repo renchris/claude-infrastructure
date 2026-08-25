@@ -202,3 +202,84 @@ real hook with the same ledger, session and substance — only the act's placeme
   so that fixture reaches two arms at once; it passed or failed on whether the ledger memo handed it
   a cached `✅`. Pinning the axis is the suite's existing technique, not a weakening — the conviction
   it would have produced is asserted in `D7 END-TO-END`.
+
+---
+
+## D8 — THE QUESTION IS NOT ASKED AT A CLOSE (2026-08-24)
+
+Operator, unprompted, after this doc's work had landed: *"we should probably distill this into a
+skill since I ask this a lot if we can't make this incredibly apparent with our CLAUDE.md return
+communication / stop hook behavior. Ideally we do that but we haven't gotten this to work in months
+of trying."*
+
+The question, verbatim and recurring: **"what are our current tasks and decisions; are we working or
+are we idling; are we 100% good to complete with no loose-ends or follow-on work remaining?"**
+
+### The measurement that explains the months
+
+`hooks/operator-readout.sh:1389` already quotes this operator's phrasing almost exactly and exists
+to answer it. It is not broken. It fires **only on a `✅` write-turn close** — deliberately, because
+"a certificate that fired on every close would carry exactly as many bits as one that never fires."
+
+Both times the question was asked in the wake-path session, **no close was happening.** Work was
+in flight, the model was emitting `🔧 Unchanged.` one-liners, and the certificate was correctly
+silent. The same file names the cost of that silence: *"silence is not an answer; it is
+indistinguishable from 'the hook didn't run', 'the model forgot', and 'nobody looked'."*
+
+**Every close-side improvement is therefore off-target by construction.** That is the whole answer
+to "months of trying": the surface being tuned is not the surface the question arrives on.
+
+### Coverage, measured per axis
+
+| axis of the question | renderer today |
+|---|---|
+| tasks & decisions | PARTIAL — `cc-backlog` holds *filed* rows; a decision the agent makes autonomously is in no store until filed |
+| **working vs idling** | **NONE — 0 of `wrap-ledger`'s 33 machine fields, 0 `pgrep`/`ps` in either renderer** |
+| good to close | YES — but only at `✅` closes |
+
+The uncovered axis is the one the operator names **first**. It is also the one they cannot obtain
+for themselves: background tasks are invisible to them, so `🔧 Unchanged.` is indistinguishable
+from a 20-minute gate and from a stuck poll loop. That is a **missing sensor**, not a discipline
+failure, and no amount of close-message doctrine can supply it.
+
+### The precedent that makes it small
+
+`scripts/wrap-ledger.sh:991` already renders `📦 Land IN FLIGHT (pid …, …s) — do NOT fire a second
+/ship`, sourced from `hooks/lib/land-inflight.sh` under an explicit "ONE reader for the predicate,
+shared with the producer — never a second copy" rule. **Liveness as a ledger field is already
+accepted architecture; it is simply scoped to one activity.**
+
+### Design
+
+1. **`hooks/lib/session-busy.sh`** — `session_busy_live <dir>` → `<n> <sample-argv>` or empty.
+   Three states, because they have different answers: **BUSY** (a job of mine is executing),
+   **IDLE-ARMED** (nothing executing, wake path armed), **IDLE-DEAF** (nothing executing, no wake
+   path). Collapsing the last two re-creates the wake-floor blindness.
+2. **`wrap-ledger`** consumes it as ordinary machine fields, beside `LANDING`.
+3. **`operator-readout`** renders it **where it is silent today** — the inverse of the current gate.
+   The certificate is untouched.
+4. **`/wrap`** renders all three axes from that same code, so the typed fallback and the automatic
+   line cannot drift.
+
+### Rejected, with reasons
+
+- **A new skill/command.** It would be a *second renderer* for a question that already has one,
+  against this repo's own "ONE renderer" rule — two answers to reconcile instead of one to trust.
+  A thin caller of the same renderer is fine; a parallel implementation is not.
+- **Reusing `gate-cleanup.sh --dry-run --quiet` as the arbiter.** Tempting (it is the actuator, and
+  its contract is clean: pids on stdout, diagnostics on stderr) but its selection is *gate execs +
+  descendants*, so it reads **idle while `deploy-live` runs**. That fails toward "idle", which is
+  precisely the wrong direction for this question.
+
+### Open, and deliberately not decided here
+
+- **The scoping helpers must not be copied.** `gate-cleanup.sh:69-92` holds `ps_all` / `cwd_of` /
+  `under_worktree` / self+ancestor exclusion, carrying two hard-won properties: physical paths
+  (`pwd -P`; macOS `/tmp`→`/private/tmp` silently matches nothing otherwise) and **argv-POSITION
+  matching**, because a Claude session's argv embeds its whole prompt and a substring match once
+  selected a live peer for `SIGKILL`. The correct build extracts these into the shared lib and has
+  `gate-cleanup` source them. That is a refactor of a kill-scoping script and needs its own
+  regression run — it is the first step of the build, not a footnote.
+- **Always-on risk.** The rung must stay newsworthy. Working↔idle genuinely varies turn to turn,
+  unlike a close certificate, but that is an argument, not a measurement — it needs the same
+  edge-not-level treatment `copy_drift_notice` uses.
