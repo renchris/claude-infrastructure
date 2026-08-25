@@ -203,6 +203,31 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   removed). ⚠️ **The scoped bats-lint printed *"this change writes no .bats line"* on an UNCOMMITTED
   tree** — it reads a COMMIT RANGE, so it was vacuous until after the commit; re-run then.
 
+  🚨 **THE SELECTOR NAMED *SIXTY* DIRECT SUITES, AND TWO INSTRUMENT FAULTS HAD TO BE CLEARED FIRST.**
+  (1) It is `scripts/gate-select.sh`, **not** `gate-selector.sh` — the wrong name returned **rc 127**
+  on BOTH arms, and only the POS control made that legible as a MUTE INSTRUMENT rather than as
+  "no suites". (2) The range is **POSITIONAL** (`<base..head>`), not `--range`; passing the flag
+  printed `FULL <- unknown-option:--range` — a fail-closed ABSTENTION that reads exactly like a
+  verdict. **Both arms agreeing is what exposed it: a uniform answer across independent inputs
+  indicts the harness.** Run correctly, my range printed a REAL LIST of **60** while the POS control
+  (`92608b867^..92608b867`) printed `FULL` — so the list is a verdict. `--selftest` **9/9 GREEN**.
+  All 60 are `<- literal:bin/cc-backlog`, i.e. selected because a 5,900-line tool is a literal path
+  in their executable text, not because this diff reaches them. **60 suites cannot fit the 420 s
+  smoke budget** (#210's 9 already blew it), so the reachable set was DERIVED FROM THE EFFECT rather
+  than guessed: my change alters ONE verb under ONE precondition, so the suites that can reach it are
+  those whose executable text invokes `block` or `needs`. **16 suites, 545 tests — ALL RUN, ALL
+  GREEN: 545 ok, 0 nok, 0 skips, `plan == ok + nok` asserted per suite, 0 suites failing**
+  (`cc-backlog` 145, `completion-assert` 111, `cc-do` 34, `cc-venue` 29, `cc-backlog-falsify` 26,
+  `cc-backlog-needs` 25, `backlog-freshness` 25, `cc-backlog-link-plan` 24, `dispatch-assert` 21,
+  `drain-chain-assert` 21, `backlog-grouping` 19, `cc-backlog-project-dispatch` 15,
+  `cc-backlog-mechanical` 14, `cc-backlog-condition` 20, `backlog-blocked-producers` 8,
+  `cc-backlog-add-update` 8). **I did NOT run the other 44 and am not claiming them.**
+  ⚠️ **AND MY OWN IMPLICATED-SET SELECTOR WAS SHORT ON ITS FIRST DRAFT — the same defect as the
+  finding, a third time.** The pattern `\$CB[[:space:]]+block` cannot match `"$CB" block`, because a
+  closing quote sits between them; it reported **4** suites and scored `cc-backlog.bats` itself at
+  ONE invocation, which is absurd on its face and is what gave it away. Corrected to `\$CB"?`, with a
+  POS control run on a literal known line (1/1) and a NEG on a `claim` line (0): **16**, not 4.
+
   ⚠️ **THE FIX IS NOT ENFORCING THE MOMENT IT LANDS, and the close says so rather than claiming it.**
   `~/.claude/bin/cc-backlog` is a **symlink into the SHARED CHECKOUT**, which is 3 behind trunk and
   carries **0** occurrences of the guard against **1** in my worktree (POS control `cmd_needs` = 6
