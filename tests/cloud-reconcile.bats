@@ -927,3 +927,38 @@ dead_pid() {
   run landed_branches
   [[ "$output" == *"claude/deleteonly"* ]] || { echo "real work was skipped: $output"; false; }
 }
+
+@test "the boot beacon is DROPPED from what lands — a rebase would have carried it onto the trunk" {
+  # The beacon's other end. Measured, not assumed: `git rebase` KEEPS an already-empty commit, so
+  # without this every landed cloud branch puts one content-free `boot: …` commit on the trunk.
+  # RED-PROOF: replay against the pre-fix subject — the replayed range is 2 commits, not 1.
+  local w="$D/w-beaconwork"
+  git -C "$REPO" worktree add -q -b claude/beaconwork "$w" main
+  git -C "$w" -c user.email="$VM_EMAIL" -c user.name=cloud commit -q --allow-empty -m "boot: claude/beaconwork"
+  echo real > "$w/produced.txt"
+  git -C "$w" add -A
+  git -C "$w" -c user.email="$VM_EMAIL" -c user.name=cloud commit -q -m "the work itself"
+  git -C "$w" push -q origin HEAD:refs/heads/claude/beaconwork
+  git -C "$REPO" worktree remove --force "$w"; git -C "$REPO" branch -q -D claude/beaconwork; rm -rf "$w"
+
+  decl beaconwork claude/beaconwork
+  run env CONFIRM=1 bash "$CR" --land claude/beaconwork
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"empty commit(s) were dropped"* ]] || { echo "the drop was not reported: $output"; false; }
+  # The rewritten head is what the lander was handed, so assert on the ref itself, not the report.
+  run git -C "$REPO" log --format=%s origin/main..refs/heads/claude/beaconwork
+  [[ "$output" == *"the work itself"* ]] || { echo "the real work was lost: $output"; false; }
+  [[ "$output" != *"boot: claude/beaconwork"* ]] || { echo "the beacon survived into the landed range: $output"; false; }
+  [ "$(git -C "$REPO" rev-list --count origin/main..refs/heads/claude/beaconwork)" -eq 1 ]
+}
+
+@test "CONTROL — a branch with NO empty commit is replayed whole and reports no drop" {
+  # The non-discrimination half: the drop must be keyed on emptiness, not applied to the first
+  # commit of every range.
+  push_branch_as claude/twowork 2 "$VM_EMAIL"
+  decl twowork claude/twowork
+  run env CONFIRM=1 bash "$CR" --land claude/twowork
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"empty commit(s) were dropped"* ]] || { echo "a non-empty range reported a drop: $output"; false; }
+  [ "$(git -C "$REPO" rev-list --count origin/main..refs/heads/claude/twowork)" -eq 1 ]
+}

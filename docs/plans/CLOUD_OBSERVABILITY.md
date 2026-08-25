@@ -215,6 +215,16 @@ suite before they shipped:
   still land. `tests/cloud-reconcile.bats` carries that as an explicit non-discrimination control,
   green on both trees.
 
+⚠️ **And the beacon must not LAND either.** `git rebase` keeps an already-empty commit — measured,
+not assumed: a scratch rebase of beacon-plus-work onto a moved trunk replays **both**. The land rail
+rebases (`scripts/ship-land.sh`; it does not squash), so without a second guard every landed cloud
+branch would put one content-free `boot: …` commit on the trunk, forever. `reauthor_branch()` drops
+it: that replay already rewrites the whole range with `git commit-tree`, so a commit whose tree
+equals its parent's is simply not replayed. Same test as `beacon_only`, applied per commit instead
+of per branch, and it cannot lose work by construction — the replay carries trees, and such a
+commit's tree is already what the previous one wrote. The beacon is a signal to the firing side, not
+a change to the repository, and it has finished its whole job before a land is possible.
+
 ### 4.2 The discriminator the whole design rests on
 
 Measured, not assumed:

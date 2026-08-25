@@ -510,7 +510,7 @@ strip_trailer_block() {  # <repo> <msg-file> → 0 the final paragraph WAS the t
 REAUTH_DETAIL=""
 reauthor_branch() {  # <repo> <trunk-ref> <branch> <decl-id> → 0 ok (rewritten OR not needed) · 1 no
   local repo="$1" trunk="$2" b="$3" id="$4"
-  local want base sha ae ce tree new f n=0 total=0 stripped=0 date
+  local want base sha ae ce tree ptree new f n=0 total=0 stripped=0 dropped=0 date
   REAUTH_DETAIL=""
 
   want="$(git_ident_email "$repo")" || want=""
@@ -575,6 +575,27 @@ EOF
       REAUTH_DETAIL="could not read the tree of $sha."
       rm -f "$f"; return 1
     fi
+    # DROP AN EMPTY COMMIT — the boot beacon's other end (backlog 0c8b39b67665). Every cloud
+    # session's FIRST act is now `git commit --allow-empty` + push (CLOUD_OBSERVABILITY.md §4.1),
+    # so every cloud branch that reaches this replay carries one commit whose tree equals its
+    # parent's. `git rebase` KEEPS an already-empty commit — measured, not assumed: a scratch
+    # rebase of beacon+work onto a moved trunk replays both — so without this, ONE EMPTY COMMIT
+    # PER CLOUD LAND accumulates on the trunk, each saying nothing about any change. The beacon is
+    # a signal to the firing side, not a change to the repository, and it has already done its
+    # whole job by the time a land is possible.
+    #
+    # The test is the same one `beacon_only` uses one level up — a tree identical to its parent's
+    # contributes nothing — applied per commit rather than per branch, so it also drops an empty
+    # commit a session made for any other reason. Skipping it cannot lose work by construction:
+    # the replay carries trees, and this commit's tree is already what the previous one wrote.
+    #
+    # A BEACON-ONLY branch can never reach here (`beacon_only` skips it at both call sites, before
+    # this function), which is what keeps the `total -eq 0` refusal below meaning what it says.
+    ptree="$("$GIT_BIN" -C "$repo" rev-parse --verify --quiet "$new^{tree}" 2>/dev/null)" || ptree=""
+    if [ -n "$ptree" ] && [ "$tree" = "$ptree" ]; then
+      dropped=$((dropped + 1))
+      continue
+    fi
     if ! "$GIT_BIN" -C "$repo" log -1 --format=%B "$sha" > "$f" 2>/dev/null; then
       REAUTH_DETAIL="could not read the commit message of $sha."
       rm -f "$f"; return 1
@@ -621,6 +642,7 @@ EOF
   fi
   REAUTH_DETAIL="re-authored $total commit(s) as <$want> ($n of them were unattributable); provenance in Cloud-session / Original-commit / Original-branch trailers, and '$REMOTE' still holds the originals."
   [ "$stripped" -gt 0 ] && REAUTH_DETAIL="$REAUTH_DETAIL On $stripped of them the VM's OWN attribution trailer block was dropped — this repo's commit-msg hook refused it — and the provenance trailers re-express it in a form the hook allows."
+  [ "$dropped" -gt 0 ] && REAUTH_DETAIL="$REAUTH_DETAIL $dropped empty commit(s) were dropped — the boot beacon and any other commit whose tree matched its parent's; a rebase would have carried them onto the trunk saying nothing."
   return 0
 }
 
