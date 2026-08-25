@@ -306,6 +306,63 @@ phased_hf_bounded() {
   [ "$status" -ne 0 ]
 }
 
+# ── 4c. the SCROLLED-TAIL regime the 120-column measurement could not see (2026-08-25) ────────
+# The composer is height-capped (~10 body rows) and scrolls to the cursor, which after a bracketed
+# paste sits at the END. At 120 cols an 800-char payload fits and the head stays on screen; in the
+# FORTY-column split-right panes these fires actually target it does not, so composer_content can
+# only ever return a TAIL and byte-equality rejected a pristine paste for that whole population.
+#
+# The fixture is the REAL failing payload, not an invented one: the `--goal` condition of the fire
+# at 2026-08-25T21:30:18Z into pane 49 (`goal-arm verdict=mangled`, CR withheld). The operator
+# submitted the composer by hand and the goal that landed is byte-identical to it, so the paste was
+# pristine and the oracle was blind. The read-back began at stripped offset 76, measured off the
+# MANGLED line's own 80-char excerpt.
+_hf_goal_payload_20260825() {
+  printf '%s' "/goal docs/research/SPATIAL_CV_TOOLING.md is landed on origin/main carrying a scored comparison and exactly one recommendation, including an explicit verdict on whether anything beats Opus 5 plus a screenshot — proven by printing the scored table and running git merge-base --is-ancestor HEAD origin/main; do not modify any tracked file outside docs/research/; full brief in the prompt above, DoD at docs/plans/HUMAN_SEO_VISUAL_REBUILD.md section W2"
+}
+_hf_strip() { printf '%s' "$1" | LC_ALL=C tr -cd '[:print:]' | LC_ALL=C tr -d '[:space:]'; }
+
+@test "readback: the pane-49 payload shown as its SCROLLED TAIL verifies (RED before the fix)" {
+  local text want got
+  text="$(_hf_goal_payload_20260825)"; want="$(_hf_strip "$text")"
+  got="${want:76}"                                   # the head scrolled off, exactly as measured
+  [ "${got:0:12}" = "comparisonan" ]                 # pins the fixture to the logged excerpt
+  run paste_readback_ok "$text" "$got"
+  [ "$status" -eq 0 ]
+}
+
+@test "readback: TRANSPORT truncation drops the TAIL, and that stays a MISMATCH" {
+  # The opposite truncation direction: bytes lost in flight leave the HEAD on screen. Accepting it
+  # would submit a half-pasted payload, which is why the tail form is anchored and not a substring.
+  local text want
+  text="$(_hf_goal_payload_20260825)"; want="$(_hf_strip "$text")"
+  run paste_readback_ok "$text" "${want:0:200}"
+  [ "$status" -ne 0 ]
+}
+
+@test "readback: a draft PREPENDED to the payload is still a mismatch under the tail form" {
+  local text want
+  text="$(_hf_goal_payload_20260825)"; want="$(_hf_strip "$text")"
+  run paste_readback_ok "$text" "alsofixthemargin${want}"        # longer than want ⇒ no tail match
+  [ "$status" -ne 0 ]
+}
+
+@test "readback: a tail shorter than the floor proves nothing and is a mismatch" {
+  local text want
+  text="$(_hf_goal_payload_20260825)"; want="$(_hf_strip "$text")"
+  run paste_readback_ok "$text" "${want: -20}"
+  [ "$status" -ne 0 ]
+  PASTE_TAIL_MIN=8 run paste_readback_ok "$text" "${want: -20}"  # …and the floor is what refuses it
+  [ "$status" -eq 0 ]
+}
+
+@test "readback: a long tail of a DIFFERENT payload is a mismatch" {
+  local text
+  text="$(_hf_goal_payload_20260825)"
+  run paste_readback_ok "$text" "$(_hf_strip 'some entirely different brief that happens to be comfortably longer than the sixty-four character floor')"
+  [ "$status" -ne 0 ]
+}
+
 @test "readback: newlines are counted CC's way — \\r\\n and lone \\r each count ONCE" {
   run _paste_newlines "$(printf 'a\nb')"; [ "$output" = 1 ]
   run _paste_newlines "a"$'\r\n'"b"$'\r'"c"; [ "$output" = 2 ]
