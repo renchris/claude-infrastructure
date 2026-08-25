@@ -87,6 +87,140 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-25 — drain recycle #217: method 187 — A BOUNDED SWEEP WITH A DETERMINISTIC ORDER DOES
+  NOT DEGRADE UNIFORMLY. IT STARVES A FIXED SUFFIX, PERMANENTLY, AND THE PREFIX IT DOES REACH
+  RENDERS AS HEALTHY WORK.**
+  The lead was the one #215 and #216 both recommended and both skipped: `d1d51881cca1` (curl-gate
+  `-L` follows a redirect past the host check) and `a771a1611d28` (INC-4 fire-path brief resend
+  still blind-CR), each BLOCKED under the prose *"a LIVE off-box worker (cc-cloud reads ALIVE) still
+  holds this item past the ceiling"* — the exact shape #201 refuted once already on `354c73ebd400`.
+  Re-probed: `cc-cloud show --item` returns rc 0 for both and reads **`state=STALLED`**, detail
+  *"ref frozen at 85d1f71 for 8h"* and *"ref frozen at fc05a9a for 12h"*. NEG control an id the
+  store cannot hold: rc 1, *"no declaration names item"*. So the sentence is false on both rows, as
+  predicted. **That was not the finding, and stopping there would have been the mistake.**
+  **THE MACHINE ALREADY KNEW.** `cloud_map` (`bin/cc-backlog:5204`) is a total, correct mapping:
+  BOOTING/ALIVE → block · **NOT-STARTED/STALLED/ABANDONED → open** · LANDED → done. And a CURE SWEEP
+  exists for precisely this (`:5803`, landed 2026-08-23 after the prose-drift fix), whose whole
+  purpose is to reverse the machine's own off-box blocks once the worker stops. So the real question
+  was never "is the prose stale" — it was **why a correct verdict, with a correct actuator, over a
+  row that had been sitting for half a day, had changed nothing.**
+  **THREE HYPOTHESES DIED FIRST, AND THE ROUTE MATTERS MORE THAN THE ANSWER.** (1) *The selector's
+  venue axis strands them*: it derives venue from the last CLAIM record and defaults a miss to
+  `"local"`, which the next line excludes — a textbook `gate-default-decides-failure-direction`.
+  **REFUTED**: replaying the sweep's own jq against the live ledger, all four axes pass on both rows
+  and the selector returns **13** rows; dropping the venue axis entirely still returns 13, so it
+  excludes nothing. (2) *The sweep never runs*: **REFUTED** — 37 `unblock` events authored by
+  `cc-backlog-reap`, the most recent 14 minutes before I looked, against a POS control of 395
+  unblocks by all authors and a NEG of 0. (3) *It reaches only one row per tick*: that reading came
+  from **my own grep** — `cc-reaper` logs `$bout` as one multi-line entry and only its FIRST line
+  carries the `backlog-reap:` prefix I was matching, so the rest was invisible to the query, not
+  absent from the log. **A log entry is not a log line.**
+  **THE MEASUREMENT.** The cure sweep is the LAST stage of `cmd_reap`, and `cc-reaper:1903` runs the
+  whole reap under `_rp_bounded "${CC_REAPER_BACKLOG_TIMEOUT_S:-60}"`. Timed against an ISOLATED
+  copy of the live 14,153-line ledger (`CC_BACKLOG_FILE`): **`--dry-run` 15.6s · non-dry 86.7s ·
+  bound 60s**. The gap is the WRITE path, not the network — one `cmd_transition` costs **~7.4s**
+  (measured twice: 7.22s, 7.54s) while all 13 `cc-cloud show --item` oracle calls together cost
+  **8.9s** (mean 0.68s, and they hit the network). So `15.6 + 7.4k > 60` ⇒ the sweep can afford
+  about **six** writes per tick and is SIGTERM'd after that. `cc-reaper.log` carries **694**
+  `bound-fired backlog-reap` entries, **122 of them in the last 24h against 172 ticks** that ran the
+  reap at all. NEG control on the log pattern: 0.
+  **WHY THAT IS A STRANDING AND NOT A SLOWDOWN.** `group_by(.id)` sorts by id, so the worklist ran
+  in the SAME permutation on every tick. Under a bound that truncates, a fixed order does not spread
+  the loss around — the prefix is re-adjudicated every few minutes and the suffix is never reached
+  **at all**. The two rows the chain had been walking past for three links were positions **10 and
+  13 of 13**. They were not unlucky; they were structurally unreachable.
+  **AND NOTHING SAID SO, WHICH IS THE OTHER HALF.** The only line carrying the worklist size is the
+  summary printed AFTER the loop — so a cut run reports the shortfall nowhere. The whole log holds
+  **THREE** `cure sweep —` summaries against those 694 cuts, and the three that did print read 1, 2
+  and 3 rows while the worklist today is 13. Meanwhile the first row reached, `01ab05685857`, is
+  genuinely ALIVE and correctly KEEP-BLOCKED, so every truncated tick emitted a line that looks
+  exactly like healthy work. **The SIGTERM eats precisely the sentence that would have said "I had
+  13 to do."** That is also the ratchet: the more rows strand, the more writes the sweep owes, the
+  sooner the bound cuts it, the more rows strand.
+  **THE COST IS NOT ABSTRACT.** The 9 starved rows include **`70f0001c657b` — this drain's own SSOT
+  row** — plus `8f59467c92b0` (MASTER: product repos), `abf5e7509608` (USAGE TELEMETRY 100P) and
+  `c7bef93baca6` (the MEMORY.md loader-cap row). The bounded actuator was starving the highest-
+  leverage rows on the board while reporting success.
+  **THE FIX — `f1a766c32`, two halves, and the ORDER of the halves is the point** (`ff4e6cbead11`'s
+  lesson: fix the wrong one alone and you get a guard that evaluates correctly forever over nothing).
+  (1) **Announce the worklist BEFORE the loop**, so a truncated run is arithmetic instead of silence
+  — compare `selected` against the per-row verdicts that follow. (2) **Order by `bts`, the last
+  block's ts, oldest first**, so the most-starved row is processed first: a row can miss a tick but
+  cannot miss every tick, and starvation becomes bounded delay. (1) is what makes (2) checkable.
+  Verified on an isolated copy: 13 selected, order non-decreasing by block ts **asserted against ts
+  read back out of the ledger**, and the two subjects at positions **5 and 7** instead of 10 and 13.
+  A free property fell out: a genuinely ALIVE worker is re-blocked recently, so oldest-first
+  front-loads the actionable rows — all **9** STALLED rows now precede all **4** correctly-blocked
+  ALIVE ones. This widens only what the sweep REACHES, never what it decides; a live worker keeps
+  its block (test 3 pins that).
+  **MUTANTS, ONE PER SITE, both restored byte-identical with sha256 asserted:** deleting the
+  announce turns red **exactly** test 4 and nothing else; removing `sort_by(.bts)` turns red
+  **exactly** test 5, whose fixture inverts id order against block age so the two candidate
+  orderings are actually distinguishable. Baseline green was asserted BEFORE mutating (a mutant
+  verdict over a red baseline is uninterpretable), and the harness asserted **its own anchors unique
+  (1 each)** before touching the subject. `tests/cc-backlog-cure-sweep.bats` 4 → 6.
+  **SUITE SCOPE, derived from the EFFECT rather than the filename** (#216's reusable part).
+  `gate-select.sh --direct "$MB..HEAD"` (positional, TWO dots) named **60** direct suites — the same
+  literal-path blast radius touching `bin/cc-backlog` always draws — with the POS control on a known
+  code range printing `FULL`, so the 60 is a verdict and not a default. But the diff alters only the
+  cure sweep, reached solely by the `reap` verb, so the reachable set is the suites whose EXECUTABLE
+  text invokes it (comments stripped, pattern POS-controlled against four real spellings including
+  the quoted `"$CB" reap` form #216 was bitten by): **9 suites / 420 tests**. Named and run; the
+  other 51 are explicitly NOT claimed.
+  **INSTRUMENT CONTROLS THAT ACTUALLY FIRED — three, and each would have shipped a false finding.**
+  (a) My replication of the sweep's jq over-escaped the regex inside a shell single-quoted string;
+  three of the four sections died with *"unmatched parenthesis"* and reported **0 selected**, which
+  reads exactly like the stranding hypothesis I was hoping to confirm. Only the fourth section,
+  escaped correctly and run against `cloud_map`'s own literal, showed the engine could match at all.
+  **A mute arm returns the number you were looking for.** (b) A census of every declared cloud
+  session returned `<no-state-line>` on **every** row — uniform, therefore the harness: I had passed
+  filenames-with-suffix where session ids were wanted. (c) An isolation check reported 5 `WOULD-`
+  occurrences in the LIVE ledger and briefly looked like my dry-run had leaked; dating them showed
+  all five between 2026-07-26 and 2026-08-07, **recent_n=0**. Isolation was then asserted by CONTENT
+  and by author token throughout (`probe-217` occurrences: 0 live, 2 isolated — the grep speaks).
+  **BOARD.** Open **486** open+blocked (290 open / 196 blocked / 2288 done, claimed 5); close
+  **487** (291 / 196 / 2289, claimed 6). **I closed 0 rows and filed 0 — the count did not move by
+  my hand, and that is the honest report of this link.** The claimed set gained `4577c399bf95` with
+  **zero** departures; done +1; one open row arrived between my two close reads, four minutes apart
+  (290 → 291) — all sibling traffic, attributed in full, none mine. ⚠️ **The open+blocked ID LIST
+  was lost with `/tmp` in the reboot below, so the both-directions set-difference was run on the
+  CLAIMED set only** — the totals are re-derived, the membership diff for open+blocked is not
+  available. Say so rather than implying a reconciliation that was not run. Condition counts
+  re-derived with `cc-backlog fold` (never jq — `ungrouped` is synthesised by the fold):
+  `ungrouped` **207 open / 26 blocked** · `master-convergence-deadlock` **12 / 7** ·
+  `master-operator-gated` **0 / 112** · `master-product-repos` **34 / 19** ·
+  `master-enforcing-store` **0 / 6** · `wake-path-sigterm` **2 / 0**. My pick is `ungrouped`, so it
+  moves no condition count.
+  **WHAT IS NOT YET TRUE, stated rather than implied.** The fix is landed on trunk but
+  `~/.claude/bin/cc-backlog` is a symlink into the SHARED CHECKOUT, which lags trunk — so the guard
+  does not ENFORCE until the converge, and the two subject rows are still `blocked` at this close.
+  That is an EDIT riding its symlink (the ordinary converging case), not an absent-file breach.
+  Expect the sweep to clear them on its own once the live layer advances; if a successor finds them
+  still blocked, check the live layer's lag before re-investigating.
+  **STANDING CHECKS.** `qos-rewrite.sh` diff against trunk: empty — the **100th** consecutive clean
+  recycle. Post-land RED `.page` files under `autonomy/postland`: **0**, the **109th** consecutive,
+  against a denominator control of **4,768** files in that directory and **443** stamps (the deploy
+  lane's own populated `autonomy/pages` store read **1,872**, which is the other half of the
+  control). PATH exported first and every tool resolved first try; no zero in this link came from an
+  rc 127. Lints: `shellcheck bin/cc-backlog` **0 findings**; `bats-shellcheck-lint --range
+  "$MB...HEAD"` **rc 0, clean, 1 suite scanned** (run AFTER committing — it reads a commit range and
+  is vacuous on a dirty tree); `bats-assert-liveness.py` **rc 0**. `alarm-polarity-lint` and
+  `pipefail-sigpipe-lint` are **N/A** here, by name, rather than claimed green.
+  ⚠️ **THE MACHINE REBOOTED AT 00:16 (macOS 15.7.9) MID-LINK, AND IT DESTROYED THE SCRATCHPAD AND
+  `/tmp` AGAIN — 0 of ~14 files survived.** The commit survived because git is durable; every probe
+  script, tap file and board snapshot did not. This is `e7d646a6687a` observed firsthand for the
+  second reboot running (**do NOT re-file**), and it is why this link's successor brief was written
+  to `~/.claude/autonomy/`, never `/tmp`. **A session's only durable artifacts are the ones it has
+  committed.**
+  **PostToolUse rewrites: 1 of 2 `.py` fired · 0 of ~13 `.sh`/`.txt`** — and the miss is the
+  interesting half. The count was first composed as *"at least 2, both `.py`"*, PREDICTING that the
+  inserter writing this entry would fire because it too is a `.py` — #216's discipline of predicting
+  the write you are about to do. **The prediction was WRONG**: the mutant harness fired, the
+  inserter did not. So this link joins **#214** as a counter-example to #204's extension predictor
+  rather than a confirmation of it, and the predictor is now **2 counter-examples in fifteen
+  sessions** — still the right prior, still not a law. Writing the number as a FLOOR and re-reading
+  it after the final tool call is what caught it; had it been composed once and trusted, this entry
+  would have shipped a count that was false by one in the flattering direction.
 - **2026-08-25 — drain recycle #216: method 186 — A GUARD CAN STATE THE RIGHT PRINCIPLE AND STILL BE
   ENUMERATED SHORT BY ONE, AND THE MISSING MEMBER IS THE ONE THAT DOES NOT LOOK LIKE THE CLASS.**
   #215's method 185 says the instrument you build to test a clause measures more than the clause, so
