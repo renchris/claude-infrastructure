@@ -3,7 +3,10 @@
 or was already AT-REST when the power died. Only the interrupted ones may be re-engaged.
 
     Usage:  ... | cc-resume-classify.py [--boot-epoch SECS] [--explain]
-            reads lr-select.py's TSV on stdin:  account <TAB> worktree <TAB> session-id <TAB> branch
+            reads lr-select.py's TSV on stdin:  account <TAB> session-id <TAB> worktree <TAB> branch
+            (THE SID IS FIELD 2. lr-select.py:434 emits acct/sid/cwd/branch and boot-resume.sh:293
+             reads it back in that order. This file and cc-resume-layout.sh both shipped reading
+             field 3 as the sid, which is the WORKTREE PATH — see THE FIELD-ORDER TRAP below.)
             writes the same rows with a 5th column: INTERRUPTED | AT-REST | UNKNOWN
 
 WHY THIS EXISTS (operator ruling, 2026-08-24)
@@ -222,13 +225,30 @@ def _ago(seconds):
 SELFTEST_CASES = [
     # (name, records, expected) — records are (offset_seconds_before_boot, type, kind)
     # kind: "text" = assistant utterance · "tool_use" · "tool_result" · None = housekeeping payload
-    ("settled_recently", [(600, "assistant", "text"), (200, "system", None),
-                          (190, "attachment", None)], "AT-REST"),
-    ("cut_mid_tool", [(600, "assistant", "text"), (200, "assistant", "tool_use")], "INTERRUPTED"),
-    ("owed_reply", [(600, "assistant", "text"), (300, "assistant", "tool_use"),
-                    (200, "user", "tool_result")], "INTERRUPTED"),
-    ("mid_turn_but_stale", [(90000, "assistant", "text"), (86400, "assistant", "tool_use")],
-     "AT-REST"),
+    (
+        "settled_recently",
+        [(600, "assistant", "text"), (200, "system", None), (190, "attachment", None)],
+        "AT-REST",
+    ),
+    (
+        "cut_mid_tool",
+        [(600, "assistant", "text"), (200, "assistant", "tool_use")],
+        "INTERRUPTED",
+    ),
+    (
+        "owed_reply",
+        [
+            (600, "assistant", "text"),
+            (300, "assistant", "tool_use"),
+            (200, "user", "tool_result"),
+        ],
+        "INTERRUPTED",
+    ),
+    (
+        "mid_turn_but_stale",
+        [(90000, "assistant", "text"), (86400, "assistant", "tool_use")],
+        "AT-REST",
+    ),
     ("settled_long_ago", [(90000, "assistant", "text")], "AT-REST"),
 ]
 
@@ -248,24 +268,35 @@ def _selftest():
     for name, recs, expected in SELFTEST_CASES:
         with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as fh:
             for off, rtype, kind in recs:
-                ts = (boot - datetime.timedelta(seconds=off)).isoformat().replace("+00:00", "Z")
+                ts = (
+                    (boot - datetime.timedelta(seconds=off))
+                    .isoformat()
+                    .replace("+00:00", "Z")
+                )
                 rec = {"type": rtype, "timestamp": ts}
                 if kind == "text":
                     rec["message"] = {"content": [{"type": "text", "text": "done."}]}
                 elif kind == "tool_use":
                     rec["message"] = {"content": [{"type": "tool_use", "id": "t1"}]}
                 elif kind == "tool_result":
-                    rec["message"] = {"content": [{"type": "tool_result", "tool_use_id": "t1"}]}
+                    rec["message"] = {
+                        "content": [{"type": "tool_result", "tool_use_id": "t1"}]
+                    }
                 fh.write(json.dumps(rec) + "\n")
             path = fh.name
         got, why, _ = classify(path, boot, 900.0)
         os.unlink(path)
         ok = got == expected
         failures += 0 if ok else 1
-        print(f"{'ok  ' if ok else 'FAIL'} {name:<20} expected={expected:<12} got={got:<12} ({why})",
-              file=sys.stderr)
-    print(f"cc-resume-classify --selftest: {len(SELFTEST_CASES) - failures}/{len(SELFTEST_CASES)} "
-          f"passed", file=sys.stderr)
+        print(
+            f"{'ok  ' if ok else 'FAIL'} {name:<20} expected={expected:<12} got={got:<12} ({why})",
+            file=sys.stderr,
+        )
+    print(
+        f"cc-resume-classify --selftest: {len(SELFTEST_CASES) - failures}/{len(SELFTEST_CASES)} "
+        f"passed",
+        file=sys.stderr,
+    )
     return 1 if failures else 0
 
 
@@ -278,7 +309,9 @@ def main():
         help="crash anchor in epoch seconds (default: kern.boottime)",
     )
     ap.add_argument(
-        "--selftest", action="store_true", help="run the built-in classification cases and exit"
+        "--selftest",
+        action="store_true",
+        help="run the built-in classification cases and exit",
     )
     ap.add_argument(
         "--alive-window",
@@ -313,6 +346,7 @@ def main():
         )
 
     counts = {"INTERRUPTED": 0, "AT-REST": 0, "UNKNOWN": 0}
+    notfound = 0  # UNKNOWNs caused by a transcript lookup MISS, not by an unreadable transcript
     for raw in sys.stdin:
         row = raw.rstrip("\n")
         if not row or row.startswith("#"):
@@ -324,9 +358,10 @@ def main():
                 file=sys.stderr,
             )
             return 2
-        sid = cols[2]
+        sid = cols[1]
         path = find_transcript(sid)
         if path is None:
+            notfound += 1
             verdict, why, last = (
                 "UNKNOWN",
                 "transcript not found in any account store",
@@ -337,7 +372,7 @@ def main():
         counts[verdict] += 1
         print(row + "\t" + verdict)
         if args.explain:
-            label = cols[1].rstrip("/").split("/")[-1] or cols[1]
+            label = cols[2].rstrip("/").split("/")[-1] or cols[2]
             print(f"  {label:<28} {sid[:8]}  {verdict:<12} ({why})", file=sys.stderr)
             if verdict == "AT-REST" and last.strip():
                 tail = " ".join(last.strip().split())[-160:]
@@ -349,6 +384,28 @@ def main():
         f"{counts['UNKNOWN']} UNKNOWN (treat as AT-REST)",
         file=sys.stderr,
     )
+
+    # ── TOTAL-MISS ALARM (2026-08-25). The fail-safe polarity above has one blind spot, and it
+    # cost a whole recovery: if EVERY row misses the transcript lookup, every verdict is UNKNOWN,
+    # every caller correctly treats UNKNOWN as AT-REST, and the run nudges NOBODY — which is
+    # exactly what a healthy planned-restart recovery looks like ("expect few or zero nudges").
+    # So a broken instrument is indistinguishable from a quiet fleet, and stays broken forever.
+    # Measured: this file shipped reading the SID from field 3 while lr-select.py emits it in
+    # field 2, so it looked up the WORKTREE PATH as a session id — 164 rows in, 164/164 UNKNOWN,
+    # 0 nudges, no error. A uniform miss indicts the INSTRUMENT, never the population: a real
+    # fleet always has some readable transcript. Say so, and exit nonzero so a caller that checks
+    # its status can tell "nothing to nudge" apart from "I could not read anything".
+    total = sum(counts.values())
+    if total and notfound == total:
+        print(
+            f"cc-resume-classify: INSTRUMENT FAILURE — all {total} row(s) missed the transcript "
+            "lookup, so every verdict is UNKNOWN and this run would nudge NOBODY. A uniform miss "
+            "is never a property of the fleet. Check the input field order FIRST: this tool wants "
+            "account<TAB>session-id<TAB>worktree<TAB>branch, i.e. lr-select.py's own "
+            "acct/sid/cwd/branch, and reads the SID from FIELD 2.",
+            file=sys.stderr,
+        )
+        return 3
     return 0
 
 

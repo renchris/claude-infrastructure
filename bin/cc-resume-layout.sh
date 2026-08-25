@@ -4,7 +4,7 @@
 #
 #   Usage: cc-resume-layout.sh [--per-window N] [--stagger SECS] [--use-all-screens] [--dry-run]
 #          ... reading a TSV on stdin (or --file PATH):
-#              account <TAB> worktree <TAB> session-id <TAB> branch [<TAB> label]
+#              account <TAB> session-id <TAB> worktree <TAB> branch [<TAB> label]
 #          i.e. lr-select.py's own output, with an optional 5th label column.
 #
 # ── WHY THIS EXISTS (2026-08-24, operator ruling during a post-crash recovery) ────────────────────
@@ -268,9 +268,14 @@ while [ "$g" -lt "$NGROUPS" ]; do
     idx=$(( start + k ))
     [ "$idx" -ge "$N" ] && break
     row="${ROWS[$idx]}"
+    # FIELD ORDER: lr-select.py:434 emits acct/SID/cwd/branch — the sid is FIELD 2, the worktree
+    # FIELD 3 — and boot-resume.sh:293 reads its winners back in exactly that order. This file
+    # shipped with f2/f3 swapped, so it handed reso-resume-one the SID as its worktree argument
+    # and the PATH as its session-id (`--cwd <a uuid>`), i.e. the documented one-liner
+    # `lr-select.py … | cc-resume-layout.sh` could never have launched anything. Fixed 2026-08-25.
     acct="$(printf '%s' "$row" | cut -f1)"
-    wt="$(printf '%s' "$row" | cut -f2)"
-    sid="$(printf '%s' "$row" | cut -f3)"
+    sid="$(printf '%s' "$row" | cut -f2)"
+    wt="$(printf '%s' "$row" | cut -f3)"
     br="$(printf '%s' "$row" | cut -f4)"
 
     # ADMIT before spawning. A refusal SHEDS the rest of the batch rather than this one item:
