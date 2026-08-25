@@ -40,7 +40,11 @@ setup() {
   export CC_BACKLOG_KICK_BIN="$BATS_TEST_TMPDIR/no-such-dispatch"
   # `session` falls back to the ambient env. Unset in setup() (never per-test) so a test asserting
   # ABSENCE cannot pass or fail on whether the operator's own shell happened to export one.
-  unset CLAUDE_SESSION_ID CC_SESSION_ID
+  # CLAUDE_CODE_SESSION_ID joined this list with the ladder rung that reads it: it is the ONE of the
+  # three a Claude tool-call shell actually has, so leaving it ambient would make every absence
+  # assertion below pass under CI and fail when the suite is run from a session — the same trap
+  # tests/cc-decide.bats:17 and tests/completion-assert.bats:23 unset for.
+  unset CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID CC_SESSION_ID
   P=/repo/needs-suite
 }
 
@@ -155,16 +159,69 @@ blocked_json() { bash "$CB" list --blocked --json | jq -c --arg i "$1" 'map(sele
   [ "$(blocked_json "$id" | jq -r '.run')" = 'claude-accounts --relogin next3 --wait 30' ]
 }
 
-@test "session resolution order: --session > CLAUDE_SESSION_ID > CC_SESSION_ID > omitted" {
+@test "session resolution order: --session > CLAUDE_SESSION_ID > CLAUDE_CODE_SESSION_ID > CC_SESSION_ID > omitted" {
   # CC_SESSION_ID alone
   id=$(CC_SESSION_ID=from-cc bash "$CB" needs "step cc" --project "$P")
   [ "$(blocked_json "$id" | jq -r '.session')" = from-cc ]
   # CLAUDE_SESSION_ID wins over CC_SESSION_ID
   id=$(CC_SESSION_ID=from-cc CLAUDE_SESSION_ID=from-claude bash "$CB" needs "step claude" --project "$P")
   [ "$(blocked_json "$id" | jq -r '.session')" = from-claude ]
-  # an explicit --session beats BOTH — a caller filing on another session's behalf can say so
-  id=$(CC_SESSION_ID=from-cc CLAUDE_SESSION_ID=from-claude bash "$CB" needs "step flag" --session from-flag --project "$P")
+  # an explicit --session beats ALL — a caller filing on another session's behalf can say so
+  id=$(CC_SESSION_ID=from-cc CLAUDE_SESSION_ID=from-claude CLAUDE_CODE_SESSION_ID=from-code \
+       bash "$CB" needs "step flag" --session from-flag --project "$P")
   [ "$(blocked_json "$id" | jq -r '.session')" = from-flag ]
+}
+
+# ══ THE RUNG THAT WAS MISSING ══════════════════════════════════════════════════════════════════
+# The contract above used to name only CLAUDE_SESSION_ID and CC_SESSION_ID. Neither is ever set in
+# a Claude tool-call shell — the only shell an agent runs `cc-backlog needs` in — and
+# CLAUDE_CODE_SESSION_ID, which IS set there, occurred ZERO times in bin/cc-backlog. So every
+# unflagged `needs` an agent filed recorded an EMPTY session, and scripts/wrap-ledger.sh:691
+# (`select((.session // "") == $sid)`, with :684 returning YOURS=0 on an empty $SID) could match it
+# in neither branch: the 👤 rung went uncounted and a close could render ✅ over an operator step.
+# Same shape as the ⛔ hole one store over, fixed in b96a513bc. These pin each rung SEPARATELY so a
+# green suite credits a specific site (MEMORY.md per-site-mutation-attributes-coverage).
+
+@test "CLAUDE_CODE_SESSION_ID alone resolves — the rung a tool-call shell actually has" {
+  # Guards the exact no-op a ladder ending at CLAUDE_SESSION_ID would have been: unset at every
+  # real agent call site, so the fix would resolve "" and ship the identical bug, green.
+  id=$(CLAUDE_CODE_SESSION_ID=from-code bash "$CB" needs "step from a tool-call shell" --project "$P")
+  [ "$(blocked_json "$id" | jq -r '.session')" = from-code ]
+}
+
+@test "CLAUDE_SESSION_ID outranks CLAUDE_CODE_SESSION_ID — it stays the FIRST env rung" {
+  id=$(CLAUDE_SESSION_ID=from-claude CLAUDE_CODE_SESSION_ID=from-code \
+       bash "$CB" needs "first env rung" --project "$P")
+  [ "$(blocked_json "$id" | jq -r '.session')" = from-claude ]
+}
+
+@test "CLAUDE_CODE_SESSION_ID outranks CC_SESSION_ID — it is the SECOND env rung, not the last" {
+  id=$(CLAUDE_CODE_SESSION_ID=from-code CC_SESSION_ID=from-cc \
+       bash "$CB" needs "second env rung" --project "$P")
+  [ "$(blocked_json "$id" | jq -r '.session')" = from-code ]
+}
+
+@test "with NO session variable set the key stays ABSENT — the ladder's fail direction is monotone" {
+  # The property that makes this safe to land: unresolvable ⇒ byte-identical to the behaviour
+  # replaced, never a wrong attribution. setup() already unset all three.
+  id=$(bash "$CB" needs "nothing to resolve" --project "$P")
+  blocked_json "$id" | jq -e 'has("session") | not'
+  jq -cs '.[1]' "$CC_BACKLOG_FILE" | jq -e 'has("session") | not'
+  # POSITIVE CONTROL — the same query DOES see the key when a rung resolves, so "absent" above is a
+  # real omission and not a query that can never find anything.
+  id2=$(CLAUDE_CODE_SESSION_ID=ctl bash "$CB" needs "something to resolve" --project "$P")
+  blocked_json "$id2" | jq -e '.session == "ctl"'
+}
+
+@test "the id does NOT depend on the session — a re-file from another session FOLDS onto the row" {
+  # Unlike cc-decide's mk_id (class+sid+what), `session` is not an input to cmd_add: it rides only
+  # the block record. That is what keeps the event-keyed fold that migrations/README.md:69 and the
+  # four unflagged automated callers depend on (deploy-migrations.sh:297, deploy-live.sh:505,
+  # deploy-parity-assert.sh:203, custody-deathwatch.sh:355) working across differing environments.
+  a=$(CLAUDE_CODE_SESSION_ID=sid-one bash "$CB" needs "converge the live layer" --project "$P")
+  b=$(CLAUDE_CODE_SESSION_ID=sid-two bash "$CB" needs "converge the live layer" --project "$P")
+  [ "$a" = "$b" ]
+  [ "$(bash "$CB" list --blocked --json | jq -r 'length')" = 1 ]
 }
 
 @test "omitting --run/--session leaves the keys ABSENT, not empty-string (consumer can tell)" {

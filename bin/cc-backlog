@@ -719,9 +719,13 @@
 # through the fold to `list --blocked --json`):
 #   run     — the EXACT runnable command (`--run`), so cc-do can offer it verbatim rather
 #             than the operator reconstructing it from prose. Omitted when absent.
-#   session — the filing session (`--session` > $CLAUDE_SESSION_ID > $CC_SESSION_ID),
-#             so a step can be attributed back to the close that raised it. Omitted when
-#             none resolves.
+#   session — the filing session (`--session` > $CLAUDE_SESSION_ID > $CLAUDE_CODE_SESSION_ID
+#             > $CC_SESSION_ID), so a step can be attributed back to the close that raised
+#             it. Omitted when none resolves. $CLAUDE_CODE_SESSION_ID is the rung that
+#             actually fires: it is the only one of the three a tool-call shell has, and
+#             without it every unflagged `needs` recorded an empty session and the 👤 rung
+#             (scripts/wrap-ledger.sh:691) could not see the step. See the ladder in
+#             cmd_needs for the full account.
 # Both are OMITTED, never emitted empty: a consumer must be able to tell "no command" from
 # "an empty command".
 #
@@ -2666,9 +2670,38 @@ cmd_needs() {
     } >&2
     return 2
   }
-  # Session resolution order is a CONTRACT (--session > CLAUDE_SESSION_ID > CC_SESSION_ID > omitted):
-  # an explicit flag beats the ambient env so a caller filing on another session's behalf can say so.
+  # ── SESSION RESOLUTION — a CONTRACT, and the rung that was missing from it ────────────────────
+  # Order: --session > CLAUDE_SESSION_ID > CLAUDE_CODE_SESSION_ID > CC_SESSION_ID > omitted.
+  # An explicit flag beats the ambient env so a caller filing on another session's behalf can say so.
+  #
+  # THE CONTRACT AS WRITTEN NAMED ONLY VARIABLES THAT ARE NEVER SET HERE. $CLAUDE_SESSION_ID is NOT
+  # exported to a tool-call shell — this repo says so in three places (hooks/log-bash.sh:9 and
+  # hooks/validate-bash.sh:1266 both cite D-9; commands/wrap.md:23 "verified 2026-08-01") — and a
+  # tool-call shell is the only shell an agent ever runs `cc-backlog needs` in. Nothing in the repo
+  # exports $CC_SESSION_ID either (grep over scripts/ hooks/ bin/ migrations/, 2026-08-24: 0 sites).
+  # $CLAUDE_CODE_SESSION_ID IS set there, and before this change it occurred ZERO times in this
+  # whole file. So every unflagged `needs` recorded an EMPTY session, and the rung the contract was
+  # written to serve could not fire.
+  #
+  # WHY IT MATTERS: scripts/wrap-ledger.sh:691 computes the 👤 rung by selecting
+  # `(.session // "") == $sid`, and :684 returns YOURS=0 when $SID is itself empty — so an
+  # unattributed row matches in NEITHER branch. An operator-only step an agent filed at close was
+  # therefore uncounted, and the close could render "✅ SAFE TO CLOSE" over it. Identical shape to
+  # the ⛔ rung's hole one store over, fixed in b96a513bc (bin/cc-decide).
+  #
+  # FAIL DIRECTION IS MONOTONE: with none of the three set, session stays "" — byte-identical to
+  # the behaviour this replaces. The change can be a no-op; it can never attribute a row to the
+  # wrong session, because these are per-session uuids that cannot collide.
+  #
+  # NOTE THE ID IS UNAFFECTED, unlike cc-decide's. `session` is not an input to `cmd_add` below —
+  # it rides only the `block` record — so the event-keyed id that lets a re-file FOLD onto the same
+  # row (migrations/README.md:69, and the four unflagged automated callers: deploy-migrations.sh:297,
+  # deploy-live.sh:505, deploy-parity-assert.sh:203, custody-deathwatch.sh:355) is untouched. Those
+  # four run under launchd, whose plists set no session variable, so they resolve "" exactly as
+  # before; run from a tool-call shell they now stamp the sid, which is the attribution the 👤 rung
+  # wants. Checked before editing, because a remedy runs in an environment its premise does not.
   [ -n "$session" ] || session="${CLAUDE_SESSION_ID:-}"
+  [ -n "$session" ] || session="${CLAUDE_CODE_SESSION_ID:-}"
   [ -n "$session" ] || session="${CC_SESSION_ID:-}"
 
   # ── PLACEHOLDER WARN (2026-08-22) — the EARLIEST point this defect can be told to its author ───
