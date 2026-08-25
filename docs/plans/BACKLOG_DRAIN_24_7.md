@@ -169,6 +169,23 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   ✅ **Both set-differences ran in BOTH directions on BOTH lists, every row attributed: ZERO
   departures, TWO arrivals** — `ee743fad3674` (**mine**) and `508f8c161f48` (**blocked, a
   sibling's, not adopted**). **The claimed set was 6 → 6 with ZERO churn in either direction.**
+  🚨 **CORRECTED BY #219 ITSELF, POST-LAND — THE PARAGRAPH ABOVE IS STALE AND IS LEFT STANDING SO
+  THE TRAP IS LEGIBLE.** Those numbers were taken BEFORE the land and were true when written; the
+  ACTUAL close, re-`comm`'d after `b3516be03` reached trunk, is **307 open / 204 blocked / 2314 done
+  / 6 claimed = 511 open+blocked**, with **ONE departure** (`a36e2b9bbac1` → **done**, a sibling's —
+  a `981a403a05fa` re-land emission) and **SEVEN arrivals** (`ee743fad3674` **mine, open**;
+  `508f8c161f48` · `62fec5a1bcd4` · `6dee50cd65db` · `8a182940b7f0` · `cfb7f4512de5` ·
+  `f526558625b0`, **all blocked, all siblings', none adopted**). `done` moved **2307 → 2314**: seven
+  rows closed by other sessions DURING my land, none by me. **The claimed set was still 6 → 6 with
+  ZERO churn in either direction, now verified at the real close rather than mid-link.**
+  **THE LESSON IS PREMISE 3'S, AND IT COST NOTHING ONLY BECAUSE THE FLOOR WAS RE-READ:** a land on
+  this box takes ~20 minutes under load, and the board is written by siblings throughout it, so a
+  set-difference taken before the land is not a close measurement — it is a mid-link one wearing a
+  close's label, and it fails in the FLATTERING direction (it under-reports churn). **Re-`comm` AFTER
+  the land lands, not before you write the entry.** ⚠️ **Same window, same reason: `LIVE_LAG` went
+  28 → **43** and `LIVE_ADDS` 9 → **23** (none of the 23 mine — my commits add 0 files, asserted
+  per-sha), and the `autonomy/postland` denominator control fell **4,780 → 2,658** as a GC ran.
+  **Every number in a close is perishable; date them or re-take them.**
   **Declared a HOLD at the outset and delivered a HOLD** — the count did not move by my hand; the
   remedy landed as code, which premise 3 names the cleanest discharge. **CLOSED NOTHING.**
   ⚠️ **`cc-roles list` reads `drain-lead UNVERIFIED 7` — CHANGED from #218's `LIVE 7`, and the
