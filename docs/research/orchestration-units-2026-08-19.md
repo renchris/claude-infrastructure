@@ -73,6 +73,7 @@ table makes.
 | **MCP servers?** | shares parent's | **own** — `ms-365-mcp-server` measured as a direct child of pid 17602, **102 MB** | shares parent's | own, 101–103 MB | **UNMEASURED** — both verifier probes ran in `/tmp`, neither spawned one; this is the single number that flips §5's bg verdict ±20% | own, 101–107 MB | n/a locally |
 | **hooks?** | tool hooks only, under the **parent's** session id | **full lifecycle incl. SessionStart** — own `mailbox-wake-arm.sh` child | tool hooks only, under the parent's sid | full | **full — measured**: our own Stop block rendered *inside* the bg worker | full — Stop hooks fired | n/a locally |
 | **marginal footprint** | **0.6–11 MB** (2-point parent delta; no process to footprint) | **280 MB proc + 102 MB MCP ≈ 382 MB** | **0.6–11 MB**, same bound | fresh **143.6 MB** (no MCP) → **423 MB tree** @40 min → **449 MB** @5 d | **+302 MB / job** marginal, on a **300.1 MB fixed pool** (daemon 117.8 + spare 97.5 + its pty-host 84.8) | **185–199 MB + ~101 MB MCP ≈ 295 MB** | **0 local** |
+| **compressor-segment cost** (DERIVED, upper bound — §5-bis) | ≤**176** segs = **0.011%** of the 1,629,615-slot pool | ≤**6,112** segs = **0.375%**; **480** segs = **0.029%** charging only the ~30 MB JS heap (§8 Q1: 86–91% of the footprint is `IOAccelerator`, not compressible anon) | ≤**176** segs = **0.011%**, same bound | ≤**7,184** segs = **0.441%** @5 d | ≤**4,832** segs = **0.297%** / job | ≤**4,720** segs = **0.290%** | **0 local** |
 | **threads** | ~**+1.5 each** (+12 threads for 8 agents, vs an 18-thread fresh-session baseline) | **18** | ~**+1.5 each**, same measurement | 16–19 fresh, 28–30 mature | **+25.5 / job** (fixed pool 23) | 15 | 0 local |
 | **runnable-thread cost** | 0.315 R-procs ≈ **0.489 load units** while actively tool-calling | **0.020–0.088** R-procs API-blocked; **UNMEASURED mid-turn** (never caught one working) | same as col. 1 — same execution path | 0.041 idle / 0.216 working R-procs | `NI=5` but **`PRI=31`** — same QoS band as foreground; observed state `RN`, i.e. **in the load numerator** | **0.97–1.30 R-procs ≈ 1.5–2.0 load units** — the most load-dense unit measured | 0 local |
 | **billed to** | **the parent's account, always** | **the parent's account, always** | **the parent's account, always** | **whichever account was chosen at launch — the ONLY routable unit** | the daemon's `CLAUDE_CONFIG_DIR` | routable at launch | same subscription meters; **QUOTED**: "no separate compute charge for the cloud VM" |
@@ -176,10 +177,97 @@ without that factor is wrong by ~3×.
 | **1** | **Our own load gate** — `CC_FIRE_MAX_LOAD_PER_CORE=2.0 × 10 = load1 20.0` | **~4–8 *mid-turn* sessions** (2.5–5 runnable threads per genuinely-active session) — and **the ambient alone already exceeds it**: non-Claude load measured **20.19** with zero Claude units | 19 real refusals in 9 days, all `under_test:false` (8.6% of production evaluations). Worst: `load 118.95 on 10 cores = 11.89/core`. Counter-evidence that it is *not* a residency cap: at load 22.70 the box carried **20 resident trees with only 3 mid-turn** |
 | **2** | **Quota — the weekly meter** | **crossover at 26 resident panes (17–30)** | Model-free: weekly-meter slope ÷ mean `k_work`, 5 account-windows ⇒ **6.08 %/day per working unit** vs a 14.29 %/day allowance ⇒ **9.4 working units fleet (6.2–11.0)** ⇒ 9.4 ÷ 0.36 = **26 panes**. Cross-check: predicts `next` at 109%/reset; the readout independently renders **111%** |
 | **3** | **Terminal panes** | **~30** (iTerm2 froze at ~30 concurrent CC panes — prior repo work) | kitty currently carries 11–13 panes; untested at 30 in this wave |
-| **4** | **Memory** | **~70 sessions / ~70 pane agents** (26.6 GB available ÷ ~375–382 MB) | `vm_stat`: free 366,838 + inactive 1,224,126 + purgeable 31,621 pages × 16 KiB. **Swap 0.00 MB** — the failure mode is compressor exhaustion / watchdog panic, not OOM; 8.0–9.6 GB was already in the compressor at 92% memory use |
+| **4** | **Memory** | **~70 sessions / ~70 pane agents** (26.6 GB available ÷ ~375–382 MB) | `vm_stat`: free 366,838 + inactive 1,224,126 + purgeable 31,621 pages × 16 KiB. **Swap 0.00 MB** — the failure mode is compressor exhaustion / watchdog panic, not OOM; 8.0–9.6 GB was already in the compressor at 92% memory use. ⚠️ **That named failure mode is a different quantity from this row's arithmetic, and it is now priced separately in §5-bis — it does not bind here** |
+| **5** | **Compressor segments** — `vm.compressor_segment_limit` = **1,629,615** slots, the thing that actually killed the box five times | **≥227 units**, and by two independent methods (**≥289** empirically). **Unreachable**: at the *last* other wall's binding point (memory, ~70 units) segments sit at **30.9%**, half the sentinel's own 60% cliff | §5-bis. Charges each unit's **entire** physical footprint as compressible anon at the **worst packing ever observed on this box** — an upper bound twice over, and it still lands 3.2× beyond memory |
 
-⇒ **Ordered: load gate (~4–8 active / felt ~15) < quota (26 panes) < terminal (~30) < memory (~70).**
-The prior repo ranking "memory > active-load" does **not** reproduce at today's numbers.
+⇒ **Ordered: load gate (~4–8 active / felt ~15) < quota (26 panes) < terminal (~30) < memory (~70) < compressor segments (≥227).**
+The prior repo ranking "memory > active-load" does **not** reproduce at today's numbers. **Nor does the
+tempting successor ranking "segments before memory"** — §5-bis prices it and it is last, by 3.2×.
+
+### 5-bis. The compressor-segment wall, priced per unit — and why it is not a unit-count wall at all
+
+*(Added 2026-08-25, backlog `33d9b33bbd28`. The row above named compressor exhaustion as the failure
+mode and then ranked a wall computed from free RAM ÷ footprint — a different quantity. This section
+supplies the missing one for all 7 units. Constants are MEASURED off this box's own sysctls; the
+per-unit numbers are DERIVED from the §2 footprints; the conclusion is checked twice by methods that
+share no assumptions.)*
+
+**The pool and the conversion.** `vm.compressor_segment_limit` = **1,629,615** × 64 KiB =
+**99.5 GiB of trackable compressed data, RAM + disk** — it counts swapped-out segments un-subtracted
+(`panic-compressor-2026-08-05.md` §4a, read against xnu-11417.140.69), which is why the box can die
+at ~31% RAM-equivalent occupancy with the disk idle. A unit's cost is
+`anon-pages ÷ packing`, and packing is bracketed by three measured points:
+
+| packing | pages per 64 KiB segment | where it comes from |
+|---|---|---|
+| **16** | provisioned 4:1 | `vm.compressor_segment_pages_compressed_limit` 26,073,840 ÷ 1,629,615 = 16.0 exactly |
+| **5.3** | thrash fragmentation | panic #5's own header arithmetic — 33% of the pages limit spread over 100% of the segments |
+| **4** | the floor | the codec stores an **incompressible** page RAW at 16 KiB (08-05 §4a) — 4 raw pages per buffer |
+
+**Per unit, at all three packings** (MB = the §2 marginal footprint; "wall" = units to fill the pool):
+
+| unit | MB | segs @16 | segs @5.3 | segs @4 | **wall @4 (worst)** |
+|---|---|---|---|---|---|
+| 1 plain subagent (high bound) | 11 | 44 | 133 | 176 | **9,259** |
+| 2 named teammate | 382 | 1,528 | 4,613 | 6,112 | **267** |
+| 2 named teammate, JS heap only | 30 | 120 | 362 | 480 | **3,395** |
+| 3 workflow agent (high bound) | 11 | 44 | 133 | 176 | **9,259** |
+| 4 dispatched session @40 min | 423 | 1,692 | 5,108 | 6,768 | **241** |
+| 4 dispatched session @5 d | 449 | 1,796 | 5,422 | 7,184 | **227** |
+| 5 backgrounded, marginal / job | 302 | 1,208 | 3,647 | 4,832 | **337** |
+| 6 headless `-p` | 295 | 1,180 | 3,562 | 4,720 | **345** |
+| 7 cloud | 0 local | 0 | 0 | 0 | **∞** |
+
+Every cell charges the unit's **entire physical footprint** as compressible anon at the **worst
+packing ever observed here**. Both halves are known-false in the conservative direction: §8 Q1
+measures 86–91% of every `claude.exe` footprint as private `IOAccelerator`, with a JS heap of ~30 MB
+— the teammate row's honest figure is the 480-segment one, and the wall it implies is **3,395**.
+
+**Second method, no shared assumptions.** At the 11:26 healthy baseline before panic #5, the sentinel
+read **4.5%** of the segment limit = 73,333 segments with **13 `claude.exe` alive**. Charge *every one
+of those segments* to the 13 sessions — ignoring the 10.9-day `kalloc.1024` leak, 73 swapfiles, and
+10 GB of browser — and a session costs ≤5,641 segments, putting the wall at **≥289 sessions**. No
+packing model, no footprint, no compression ratio. It agrees with the arithmetic's 227–345.
+
+⇒ **The static segment wall is last, and it is unreachable by construction.** At the binding point of
+every other wall, segments are nearly empty: **11.5%** at the quota wall (26 panes), **13.2%** at the
+terminal wall (~30), **30.9%** at the memory wall (~70) — the last of these still half the sentinel's
+own `CLIFF_PCT` of 60, the level below which "no benign workload sits". 227 mature dispatched
+sessions would also need ~100 GB of resident footprint on a 64 GB box, so the box is gone long before
+the pool is. *(This is also why the sentinel's trip predicate is a **conjunction** of level and rate:
+a fully-maxed resident fleet sits above the 15% level arm with zero rate, and must not trip.)*
+
+**What the wall actually is: a RATE, on a different axis from unit count.** Panic #5 measured the two
+populations separately and they are three orders of magnitude apart. Across the whole storm the
+fleet's own `claude.exe` set went **13 → 16 processes and 4.7 → 6.8 GB — flat**; `node` went
+**22 → 747 and 4.0 → 128.4 GB**, 85.9% of all process memory. The orchestration unit contributed
+essentially nothing *itself*; what it contributed was a **spawner** — a reso `next-server (v16.2.6)`
+turbopack `process_pool` under a QA team's teammates, minting ~344 workers/min:
+
+| observed segment rate | % of the pool per second | pool full from empty in |
+|---|---|---|
+| 22,781 seg/s (TRIP 3) | 1.398% | **71.5 s** |
+| 17,190 seg/s (TRIP 1) | 1.055% | 94.8 s |
+| ~9,650 seg/s (wave 1 sustained, 7% → 78% in ~2 min) | 0.592% | 168.9 s |
+
+**One spawner exhausts in ~72 seconds what 227 resident units cannot exhaust at all.** So per-unit
+segment cost is the wrong denominator for this failure mode, and adding a "segment wall = N units"
+row to §5 without this section would have been a *worse* error than the omission: it would have
+priced the killer on the axis it does not travel on.
+
+**The one genuine per-unit segment effect is PINNING, not volume.** `c_seg_free_locked` asserts
+`c_slots_used == 0` — a slot returns to the pool only when its segment is **completely** empty, so a
+single live page pins 64 KiB forever (08-05 §4a). A long-lived, never-referenced-again process is
+therefore the worst per-unit shape for segments even while its *volume* is negligible, and it maps
+directly onto our long-resident panes. The 08-05 model inversion (4.96 pages/segment ≈ 1.25:1
+effective) has two candidate mechanisms — raw-store vs sparse holes — with different remedies, and
+that discriminator is still open, so the pinning term is **INFERRED, unquantified**. It is the only
+part of this section that could still move the ranking; §8 Q12 is the probe.
+
+**What this does and does not license.** It closes the "is memory really the 4th wall" question — yes,
+and segments are the 5th, not a hidden 1st. It does **not** license running spawner-bearing work
+under fan-out: the guard is now the only thing between a dev-server config bug and the sixth panic,
+and its cost model is per-spawner, not per-unit.
 
 ### For an in-process agent (workflow / plain subagent)
 
@@ -187,6 +275,7 @@ The prior repo ranking "memory > active-load" does **not** reproduce at today's 
 |---|---|
 | memory | **~2,400** (26.6 GB ÷ ~11 MB) |
 | load, all simultaneously mid-tool-call | **~37** (18 available load units ÷ 0.489) |
+| **compressor segments** | **~9,259** (§5-bis, worst packing, 11 MB charged whole) — the *least* binding wall on the cheapest unit |
 | **the product's own cap** | **8** (workflow, per run) / **20** (plain subagent, per session) |
 
 ⇒ **The binding wall for the cheap unit is the cap, not any resource — by one to two orders of
@@ -325,6 +414,20 @@ fan-out is structurally two levels deep because of one un-commented line.
 and no axis in this wave measured them. Probe: run one real task on each and compare wall-clock,
 fidelity, and whether our rails can see them at all.
 
+**Q12 — the one term in §5-bis that could still move the ranking.** How many segments does a
+**long-resident, idle** unit *pin*, as opposed to occupy? Volume is bounded above and lands at wall
+≥227; pinning is unbounded by volume, because `c_seg_free_locked` frees a slot only at
+`c_slots_used == 0`. The 08-05 model inversion (4.96 pages/segment) has two mechanisms with opposite
+remedies — incompressible raw-store vs sparse holes from thrash — and the sentinel already samples
+the live discriminator (`Δinput_bytes / Δcompressed_bytes`, `CBU`/`CMP`/`DCMP` in its tick rows).
+Probe, and it needs no new instrument: take `SEG_EST` from
+`~/.claude/logs/compressor-sentinel.jsonl` across a window in which pane count changes by ≥5 with no
+build running, regress segments on resident `claude.exe` count, and read the slope. A slope near the
+§5-bis volume figure means no pinning term; a slope well above it means long residency is a segment
+cost of its own kind and §5-bis's ranking needs re-deriving at the observed slope, not at the
+footprint. **Do it on a fresh boot** — the 10.9-day `kalloc.1024` leak confounds any window that
+straddles one.
+
 ---
 
 ## 9. WHERE FINDER AND VERIFIER DISAGREED, AND WHICH I TOOK
@@ -358,7 +461,10 @@ calls queue through an 8-wide semaphore: 231 tool calls in our whole history, no
 Meanwhile the ~15 you feel is not a Claude budget — the load gate that produces it is already at its
 ceiling from non-Claude background alone, all fourteen Claude units together supply 30% of the
 numerator, and 15 is simply the fleet's median pane count. The real ordered walls are: our load gate
-(~4–8 mid-turn), quota (crossover at **26** resident panes), the terminal (~30), then memory (~70).
+(~4–8 mid-turn), quota (crossover at **26** resident panes), the terminal (~30), then memory (~70),
+and — last, priced in §5-bis — the compressor segment table at **≥227**, which is the thing that has
+actually panicked this box five times and which no number of *resident* units can reach: at the
+memory wall it is 30.9% full, while one unfixed dev-server spawner fills it in **72 seconds**.
 The cheapest correct move is to stop expressing fan-out as named teammates — but do it knowing that
 the Workflow path passes through **zero** of our seven admission gates, and that every rail we own
 (pane census, reaper, mailbox wake, close ledger, account router) was built assuming one session =
