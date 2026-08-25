@@ -65,6 +65,22 @@
   wrote pages that nothing could act on in the 5-minute storm window; detection alone saved
   nothing in four consecutive panics. Full evidence: docs/research/crash-rootcause-2026-08-09.md.)
 
+  PANIC #5 (2026-08-24 20:01) REVISED THE ACTUATION POLICY — the freeze-only design panicked the
+  box while working exactly as written (docs/research/panic-2026-08-24-fifth-watchdog.md): the
+  sentinel froze both storm waves in time, then its release arm SIGCONT'd the wave-2 spawner at
+  71.8% of the segment limit on a one-tick rate lull, and the resumed pool drove segments to 100%.
+  Riding the SAME CC_SENTINEL_ACT=stop arming (the parent-breaker's opt-out precedent, and the
+  operator's standing post-panic directive of 2026-08-24 to make the applicable changes), the
+  sentinel now also: refuses to release a frozen SPAWNER except on sustained calm (level
+  hysteresis, never a rate lull); re-freezes released spawners on the first breach inside the
+  probation window; enters a fast minimal-evidence CLIFF mode above 60% of the segment limit; and
+  — the one genuinely new power — SIGKILLs its OWN frozen custody (never anything it did not
+  already freeze under the claude/mcp exclusions; a re-check runs at kill time) when the freeze is
+  demonstrably losing: a re-trip over held debt, or level >= 60% and still climbing. Worker EXIT is
+  the only segment reclaim ever observed across five panics; SIGSTOP alone returns zero segments.
+  Opt-outs: CC_SENTINEL_KILL=off disables the kill rung alone; CC_SENTINEL_ACT unset disarms all
+  actuation as before.
+
   Kill switches after load: CC_SENTINEL=off in the wrapper, or
   `launchctl bootout gui/$UID/com.claude.compressor-sentinel`.
 -->

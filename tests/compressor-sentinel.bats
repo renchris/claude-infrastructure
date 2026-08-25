@@ -77,6 +77,7 @@ run_fn() { # <fn> <args...>
   run env \
     TRIP_SEG_PCT="${TRIP_SEG_PCT:-15}"   TRIP_SEG_RATE="${TRIP_SEG_RATE:-600}" \
     TRIP_CBU_MB="${TRIP_CBU_MB:-640}"    TRIP_SWAP_MB="${TRIP_SWAP_MB:-1024}" \
+    CLIFF_PCT="${CLIFF_PCT:-60}" \
     INTERVAL="${INTERVAL:-10}" \
     bash -c '. "$1"; shift; f="$1"; shift; "$f" "$@"' _ "$D/lib.sh" "$@"
 }
@@ -302,6 +303,10 @@ rows() { [ -f "$LOG" ] && wc -l < "$LOG" | tr -d ' ' || echo 0; }
 
 @test "a single spike does NOT trip — one breaching tick is not a ramp" {
   # Segments jump once (tick 2), then hold. Tick 2 breaches, tick 3 has Δ=0 and clears the streak.
+  # SUB-CLIFF by intent: 2.4M pages = 600K segs = exactly 60% of the stub limit, which since panic
+  # #5 is the CLIFF (level-only, one-tick trip). Pin the cliff out so this keeps testing the regime
+  # it was written for; §8 owns the other one.
+  export CC_SENTINEL_CLIFF_PCT=101
   mkstubs "$(printf '800000\n2400000\n2400000\n2400000')" 0 0
   run_daemon 4
   [ "$status" -eq 0 ] || false
@@ -338,6 +343,9 @@ rows() { [ -f "$LOG" ] && wc -l < "$LOG" | tr -d ' ' || echo 0; }
 @test "cooldown suppresses a second trip inside the window" {
   # Six ticks of unbroken ramp. Without a cooldown this trips on ticks 3, 4, 5 and 6; with the 60 s
   # cooldown (and the post-trip streak reset) exactly one TRIP line may appear in a ~6 s run.
+  # Sub-cliff by intent (the ramp crests 80% of the stub limit) — §8 proves the cooldown is
+  # deliberately NOT honoured up there.
+  export CC_SENTINEL_CLIFF_PCT=101
   mkstubs "$(printf '800000\n1200000\n1600000\n2000000\n2400000\n2800000\n3200000')" 0 0
   run_daemon 6
   [ "$(echo "$output" | grep -c 'TRIP why=')" = "1" ] || false
@@ -1353,6 +1361,7 @@ BOOTSTAMP=202608132242    # the same instant, in touch's format
 mkcohort() { # <psmap>  — TAB-separated "pid<TAB>lstart" rows. A pid ABSENT from the map is gone.
   PSMAP="$D/psmap"; printf '%s\n' "$1" > "$PSMAP"
   FDB="$D/frozen.tsv"; : > "$FDB"
+  PROBDB="$D/probation.tsv"; : > "$PROBDB"
   KILLLOG="$D/kill.calls"; : > "$KILLLOG"
   cat > "$STUB/ps" <<'SH'
 #!/bin/bash
@@ -1376,24 +1385,30 @@ have_arm() { # <fn>
   grep -q "^$1() {" "$D/lib.sh" || false
 }
 
-run_rel() { # <now-epoch> <mode>
+run_rel() { # <now-epoch> <mode> [<parent_ok 0|1>] [<cliff 0|1>]
   run env PATH="$STUB:$PATH" PSMAP="$PSMAP" FROZEN_DB="$FDB" SNAP="$SNAPLOG" KILLLOG="$KILLLOG" \
       HOLD_MIN_S="${HOLD_MIN_S:-60}" HOLD_MAX_S="${HOLD_MAX_S:-600}" \
-      bash -c 'kill() { printf "%s\n" "$*" >> "$KILLLOG"; }; . "$1"; release_frozen "$2" "$3"' \
-      _ "$D/lib.sh" "$1" "$2"
+      PARENT_HOLD_MIN_S="${PARENT_HOLD_MIN_S:-600}" PROBATION_DB="$PROBDB" \
+      bash -c 'kill() { printf "%s\n" "$*" >> "$KILLLOG"; }; . "$1"; release_frozen "$2" "$3" "$4" "$5"' \
+      _ "$D/lib.sh" "$1" "$2" "${3:-0}" "${4:-0}"
 }
 
-@test "unfreeze: the breach clearing after the minimum hold SIGCONTs the cohort" {
+@test "unfreeze: the breach clearing after the minimum hold SIGCONTs the WORKERS — never the spawner" {
   have_arm release_frozen
+  # This case used to expect released=2 — worker AND parent on one clear tick. That expectation WAS
+  # panic #5: the one-tick clear released the primed wave-2 spawner at 71.81% of the segment limit
+  # (SIGCONT pid=39672 held_s=68) and the resumed pool drove 72% → 100%. The parent now rides its
+  # own certificate (§8c); a test pinning the old behaviour would be an inverted guard
+  # (memory: stale-assertion-becomes-an-inverted-guard).
   mkcohort "$(printf '4001\tMon 18 Aug 04:00:00 2026\n4002\tMon 18 Aug 04:00:01 2026')"
   ledger 4001 "Mon 18 Aug 04:00:00 2026" proc 1000 node
   ledger 4002 "Mon 18 Aug 04:00:01 2026" parent 1000 bash
   run_rel 1100 clear                                  # age 100 >= HOLD_MIN_S 60
   [ "$status" -eq 0 ] || false
-  [ "$output" = "released=2 held=0 stale=0" ] || false
+  [ "$output" = "released=1 held=1 stale=0" ] || false
   [ "$(grep -cF -- '-CONT 4001' "$KILLLOG")" -eq 1 ] || false
-  [ "$(grep -cF -- '-CONT 4002' "$KILLLOG")" -eq 1 ] || false
-  [ ! -s "$FDB" ] || false                            # ledger drained: nothing still owed
+  [ "$(grep -cF -- '-CONT 4002' "$KILLLOG")" -eq 0 ] || false
+  [ "$(cut -f1 < "$FDB")" = "4002" ] || false          # the spawner is what stays owed
 }
 
 @test "unfreeze: mode=clear does NOT release inside the minimum hold, and keeps the row owed" {
@@ -1505,4 +1520,280 @@ run_rel() { # <now-epoch> <mode>
   obs="$(printf '%s\n' "$actuator" | grep -A2 'ACT" = "observe"')"
   [ -n "$obs" ] || false                           # control: the observe branch is still there
   [ "$(printf '%s\n' "$obs" | grep -cF 'record_frozen')" -eq 0 ] || false
+}
+
+# ══ 8. PANIC #5 (2026-08-24) — the cliff regime, the release split, probation, and the kill rung ═══
+# docs/research/panic-2026-08-24-fifth-watchdog.md. The guard detected and froze BOTH storm waves in
+# time — then its release arm, whose "breach over" test was the single-tick negation of the AND'd
+# trip predicate, SIGCONTd the primed wave-2 spawner at 71.81% of the segment limit on one swapout
+# lull (srate 536 < 600, held_s 68), and the resumed pool drove segments 72% → 100% in ~2 minutes.
+# TRIP 4's actuation never reached disk (ticks stretched to 146 s under census+snapshot load).
+# Each case below pins one limb of the repair; the fatal tick itself is replayed by number.
+
+# ── 8a. the cliff arm of the trip predicate ───────────────────────────────────────────────────────
+
+@test "cliff arm: level ALONE above CLIFF_PCT breaches at zero rate — and the fatal tick now trips" {
+  run_fn classify_breach 610000 1000000 0 0 0
+  [ "$status" -eq 0 ] || false
+  [ "$output" = "cliff" ] || false
+  # THE FATAL TICK, replayed by number: 71.81% at srate 536.2 read "clear" pre-fix and released the
+  # spawner. It must now read as a breach.
+  run_fn classify_breach 718100 1000000 536 0 0
+  [ "$output" = "cliff" ] || false
+  # SUB-CLIFF CONTROL: the same zero-rate sample below the cliff stays clear — the AND regime holds.
+  run_fn classify_breach 590000 1000000 0 0 0
+  [ "$status" -ne 0 ] || false
+  [ -z "$output" ] || false
+}
+
+@test "cliff arm: CLIFF_PCT is a seam that moves the verdict, and composes with the seg arm" {
+  CLIFF_PCT=50 run_fn classify_breach 550000 1000000 0 0 0
+  [ "$output" = "cliff" ] || false
+  CLIFF_PCT=50 run_fn classify_breach 550000 1000000 700 0 0
+  [ "$output" = "seg+cliff" ] || false
+  CLIFF_PCT=0 run_fn classify_breach 550000 1000000 0 0 0     # 0 disables the arm outright
+  [ "$status" -ne 0 ] || false
+}
+
+# ── 8b. cliff loop behaviour ──────────────────────────────────────────────────────────────────────
+
+@test "cliff: ONE breach tick trips, the snapshot goes minimal, and no follow-up spawns" {
+  # Tick 2 jumps straight to 65% — a single spike, which BELOW the cliff must not trip (§3's first
+  # case, with the cliff pinned out). Above it, one tick is all the warning there is.
+  mkstubs "$(printf '800000\n2600000\n2600000')" 0 0
+  run_daemon 3
+  echo "$output" | grep -q 'TRIP why=' || false
+  grep -q '═══ TRIP' "$SNAPLOG" || false
+  # The minimal form: attribution skipped AND the skip is printed — never an empty section that
+  # reads as an idle box. vm_stat (cheap, carries the free-page count) stays.
+  grep -q 'cliff regime: attribution SKIPPED' "$SNAPLOG" || false
+  ! grep -q -- '--- top 30 by RSS' "$SNAPLOG" || false
+  grep -q -- '--- vm_stat ---' "$SNAPLOG" || false
+  # No follow-up sweeps up there: 12 more ps passes were exactly the load that stretched trip 4's
+  # tick past its own actuation.
+  ! grep -q -- '--- follow-up' "$SNAPLOG" || false
+}
+
+@test "cliff: the cooldown does NOT gate re-trips — wave 2 re-ignited inside the 60 s window" {
+  mkstubs "$(printf '800000\n2600000\n2800000\n3000000\n3200000')" 0 0
+  run_daemon 5
+  [ "$(echo "$output" | grep -c 'TRIP why=')" -ge 2 ] || false
+  [ "$(grep -c '═══ TRIP' "$SNAPLOG")" -ge 2 ] || false
+}
+
+@test "cliff + armed: the INTENT line reaches disk BEFORE the signals (write-ahead)" {
+  # TRIP 4 of panic #5 actuated — or did not — with nothing ever reaching disk. The intent line is
+  # what makes a mid-flight death distinguishable from an actuation that never ran.
+  mkstubs "$(printf '800000\n2600000\n2600000')" 0 0
+  printf '999901 1 900000 /opt/homebrew/bin/node w.js\n' > "$PS_ACT"
+  printf '999901 1 900000 /opt/homebrew/bin/node\n' > "$PS_CENSUS"
+  CENSUS_EVERY=99 ACT=stop run_daemon 3
+  grep -qF 'actuator: INTENT SIGSTOP cohort_n=1 cliff=1' "$SNAPLOG" || false
+  intent_ln="$(grep -n 'actuator: INTENT' "$SNAPLOG" | head -1 | cut -d: -f1)"
+  done_ln="$(grep -n 'actuator: SIGSTOPped' "$SNAPLOG" | head -1 | cut -d: -f1)"
+  [ -n "$intent_ln" ] && [ -n "$done_ln" ] && [ "$intent_ln" -lt "$done_ln" ] || false
+}
+
+# ── 8c. the release split: a spawner is not a worker ──────────────────────────────────────────────
+
+@test "unfreeze/panic5: a clear tick NEVER releases a spawner — the fatal SIGCONT, replayed and refused" {
+  have_arm release_frozen
+  mkcohort "$(printf '5001\tMon 24 Aug 19:56:46 2026')"
+  ledger 5001 "Mon 24 Aug 19:56:46 2026" parent 1000 'next-server_(v16.2.6)'
+  run_rel 1068 clear                                  # held 68 s — the exact fatal hold
+  [ "$output" = "released=0 held=1 stale=0" ] || false
+  [ ! -s "$KILLLOG" ] || false
+  # POSITIVE CONTROL: the sustained-calm certificate + the parent's own hold DOES release — and the
+  # released spawner is stamped onto probation.
+  run_rel 1700 clear 1 0                              # age 700 >= PARENT_HOLD_MIN_S 600, parent_ok=1
+  [ "$output" = "released=1 held=0 stale=0" ] || false
+  [ "$(grep -cF -- '-CONT 5001' "$KILLLOG")" -eq 1 ] || false
+  [ "$(grep -c '^5001	' "$PROBDB")" -eq 1 ] || false
+}
+
+@test "unfreeze/panic5: the certificate alone is not enough — the parent hold still binds" {
+  have_arm release_frozen
+  mkcohort "$(printf '5001\tMon 24 Aug 19:56:46 2026')"
+  ledger 5001 "Mon 24 Aug 19:56:46 2026" parent 1000 next-server
+  run_rel 1300 clear 1 0                              # parent_ok=1 but age 300 < 600
+  [ "$output" = "released=0 held=1 stale=0" ] || false
+  [ ! -s "$KILLLOG" ] || false
+}
+
+@test "unfreeze/panic5: the ceiling never releases a spawner — that case belongs to the kill rung" {
+  have_arm release_frozen
+  mkcohort "$(printf '5001\tMon 24 Aug 19:56:46 2026\n5002\tMon 24 Aug 19:56:47 2026')"
+  ledger 5001 "Mon 24 Aug 19:56:46 2026" parent 1000 next-server
+  ledger 5002 "Mon 24 Aug 19:56:47 2026" proc 1000 node
+  run_rel 1700 ceiling                                # age 700 >= HOLD_MAX_S 600 for both
+  # The WORKER releases at its ceiling (the pre-#5 rule, kept); the SPAWNER does not.
+  [ "$output" = "released=1 held=1 stale=0" ] || false
+  [ "$(grep -cF -- '-CONT 5002' "$KILLLOG")" -eq 1 ] || false
+  [ "$(grep -cF -- '-CONT 5001' "$KILLLOG")" -eq 0 ] || false
+}
+
+@test "unfreeze/panic5: in the cliff regime NOTHING releases — not even a ceiling-aged worker" {
+  have_arm release_frozen
+  mkcohort "$(printf '5002\tMon 24 Aug 19:56:47 2026')"
+  ledger 5002 "Mon 24 Aug 19:56:47 2026" proc 1000 node
+  run_rel 1700 ceiling 0 1                            # cliff=1: resuming spends the frozen margin
+  [ "$output" = "released=0 held=1 stale=0" ] || false
+  [ ! -s "$KILLLOG" ] || false
+  # POSITIVE CONTROL: the identical call off-cliff releases, so the hold above is the cliff working.
+  run_rel 1700 ceiling 0 0
+  [ "$output" = "released=1 held=0 stale=0" ] || false
+}
+
+@test "unfreeze/panic5: exit releases spawners too, and writes NO probation stamp" {
+  # A stranded SIGSTOP with no living SIGCONT sender is strictly worse than a released spawner —
+  # and a stamp the exiting daemon can never consume would be litter for a successor to trip on.
+  have_arm release_frozen
+  mkcohort "$(printf '5001\tMon 24 Aug 19:56:46 2026')"
+  ledger 5001 "Mon 24 Aug 19:56:46 2026" parent 1000 next-server
+  run_rel 1000 exit
+  [ "$output" = "released=1 held=0 stale=0" ] || false
+  [ "$(grep -cF -- '-CONT 5001' "$KILLLOG")" -eq 1 ] || false
+  [ ! -s "$PROBDB" ] || false
+}
+
+# ── 8d. probation: a released spawner has not proven anything yet ─────────────────────────────────
+
+run_prob() { # <now-epoch>
+  run env PATH="$STUB:$PATH" PSMAP="$PSMAP" FROZEN_DB="$FDB" PROBATION_DB="$PROBDB" \
+      SNAP="$SNAPLOG" KILLLOG="$KILLLOG" PROBATION_S="${PROBATION_S:-300}" \
+      bash -c 'kill() { printf "%s\n" "$*" >> "$KILLLOG"; }; . "$1"; probation_refreeze "$2"' \
+      _ "$D/lib.sh" "$1"
+}
+
+@test "probation: a breach inside the window re-freezes the spawner; reuse and expiry never signal" {
+  have_arm probation_refreeze
+  mkcohort "$(printf '5001\tMon 24 Aug 19:58:00 2026\n5002\tMon 24 Aug 19:58:01 2026')"
+  printf '5001\tMon 24 Aug 19:58:00 2026\t900\tnext-server\n'  > "$PROBDB"   # released 100 s ago
+  printf '5002\tMon 24 Aug 11:11:11 2026\t900\tnext-server\n' >> "$PROBDB"   # pid recycled: lstart differs
+  printf '5003\tMon 24 Aug 19:58:02 2026\t100\tnext-server\n' >> "$PROBDB"   # expired: 900 s > 300 s window
+  run_prob 1000
+  [ "$output" = "refroze=1" ] || false
+  [ "$(grep -cF -- '-STOP 5001' "$KILLLOG")" -eq 1 ] || false
+  [ "$(grep -cF -- '-STOP 5002' "$KILLLOG")" -eq 0 ] || false
+  [ "$(grep -cF -- '-STOP 5003' "$KILLLOG")" -eq 0 ] || false
+  grep -q '^5001	' "$FDB" || false                    # back in custody, under the parent rules
+  grep -q 'parent' "$FDB" || false
+  [ ! -s "$PROBDB" ] || false                          # refrozen, recycled and expired all leave the file
+}
+
+# ── 8e. the kill rung: custody converts when the freeze is losing ─────────────────────────────────
+
+run_kd() { # <pct> <srate> <trip_now> <debt_n>
+  run env KILL_PCT="${KILL_PCT:-60}" \
+      bash -c '. "$1"; kill_due "$2" "$3" "$4" "$5"' _ "$D/lib.sh" "$1" "$2" "$3" "$4"
+}
+
+@test "kill_due: fires on a re-trip over held debt and on climbing at altitude — never without debt" {
+  have_arm kill_due
+  run_kd 30 100 1 2;    [ "$output" = "retrip-over-debt" ] || false
+  run_kd 70 500 0 2;    [ "$output" = "climbing-at-60pct" ] || false
+  # Falling at altitude is reclaim under way — killing then would spend custody on a recovery.
+  run_kd 70 -1200 0 2;  [ "$status" -ne 0 ] || false
+  # No debt ⇒ nothing to escalate, whatever the level says: the rung converts CUSTODY, it is not a
+  # general-purpose killer.
+  run_kd 30 9000 0 0;   [ "$status" -ne 0 ] || false
+  run_kd 95 9000 1 0;   [ "$status" -ne 0 ] || false
+  run_kd 59 100 0 2;    [ "$status" -ne 0 ] || false   # below the line, no trip: the freeze is holding
+}
+
+run_ke() { # <now-epoch> <reason>
+  run env PATH="$STUB:$PATH" PSMAP="$PSMAP" FROZEN_DB="$FDB" SNAP="$SNAPLOG" KILLLOG="$KILLLOG" \
+      KILL_MIN_HOLD_S="${KILL_MIN_HOLD_S:-30}" \
+      bash -c 'kill() { printf "%s\n" "$*" >> "$KILLLOG"; }; . "$1"; kill_escalate "$2" "$3"' \
+      _ "$D/lib.sh" "$1" "$2"
+}
+
+@test "kill_escalate: kills only ledger-verified custody — the young, the claude-shaped and the recycled survive" {
+  have_arm kill_escalate
+  mkcohort "$(printf '6001\tMon 24 Aug 19:56:46 2026\n6002\tMon 24 Aug 19:59:00 2026\n6003\tMon 24 Aug 19:56:00 2026')"
+  ledger 6001 "Mon 24 Aug 19:56:46 2026" parent 1000 'next-server_(v16.2.6)'  # age 100 >= 30 → killed
+  ledger 6002 "Mon 24 Aug 19:59:00 2026" proc 1085 node                        # age 15 < 30 → spared, kept
+  ledger 6003 "Mon 24 Aug 19:56:00 2026" proc 1000 claude.exe                  # belt: never, whatever the ledger says
+  ledger 6004 "Mon 24 Aug 19:56:00 2026" parent 1000 next-server               # absent from ps → dropped, no signal
+  run_ke 1100 test-reason
+  [ "$output" = "killed=1 spared=2" ] || false
+  [ "$(grep -cF -- '-KILL 6001' "$KILLLOG")" -eq 1 ] || false
+  [ "$(grep -cF -- '-KILL 6002' "$KILLLOG")" -eq 0 ] || false
+  [ "$(grep -cF -- '-KILL 6003' "$KILLLOG")" -eq 0 ] || false
+  [ "$(grep -cF -- '-KILL 6004' "$KILLLOG")" -eq 0 ] || false
+  [ "$(wc -l < "$FDB" | tr -d ' ')" -eq 2 ] || false   # the spared stay owed; the killed and gone are dropped
+  # WRITE-AHEAD: the intent line precedes the first SIGKILL confirmation in the snap log.
+  intent_ln="$(grep -n 'KILL-INTENT' "$SNAPLOG" | head -1 | cut -d: -f1)"
+  kill_ln="$(grep -n 'SIGKILL pid=6001' "$SNAPLOG" | head -1 | cut -d: -f1)"
+  [ -n "$intent_ln" ] && [ -n "$kill_ln" ] && [ "$intent_ln" -lt "$kill_ln" ] || false
+}
+
+@test "panic5 wiring: the loop consults every new arm (locator, one per call site)" {
+  # Structural, for test 106's reason: each invariant lives in a CALL, and an absent call is
+  # invisible to every behavioural assertion about the function it would have reached.
+  grep -qF 'KREASON="$(kill_due' "$S" || false
+  grep -qF 'kill_escalate "$NOW" "$KREASON"' "$S" || false
+  grep -qF 'probation_refreeze "$NOW"' "$S" || false
+  grep -qF '[ "$CLIFF" = "0" ] && [ $((TICK % CENSUS_EVERY)) -eq 0 ]' "$S" || false
+  grep -qF 'release_frozen "$NOW" "$RELMODE" "$PARENT_OK" "$CLIFF"' "$S" || false
+  grep -qF 'snapshot_trip "$TS" "$WHY" "$HEAD_LINE" "$CLIFF"' "$S" || false
+}
+
+# ── 8f. the panic reader's dotfile shadow, the boot-jitter dedupe, and the mutex ──────────────────
+
+@test "panic reader: .contents.panic never shadows the dated report — the hole panic #5 fell into" {
+  # macOS stages the live panic text as `.contents.panic` beside the dated report, SAME basename
+  # every panic. On 2026-08-18 it won the newest-file race; the basename-keyed idempotency check
+  # then read every later panic's staging file as already-recorded, and panic #5 got NO ledger row.
+  panic_fixture_base "$D/panics" "panic-base+socd-2026-08-24-200410.000.panic"
+  sleep 1
+  panic_fixture_base "$D/panics" ".contents.panic"     # newer mtime — pre-fix, this wins the race
+  run scan
+  [ "$status" -eq 0 ] || false
+  jq -e '.report == "panic-base+socd-2026-08-24-200410.000.panic"' "$D/panic.jsonl" >/dev/null || false
+  ! grep -qF '".contents.panic"' "$D/panic.jsonl" || false
+  # ...and a directory holding ONLY the dotfile is genuinely "none", never a recorded dotfile.
+  rm -f "$D/panics/panic-base+socd-2026-08-24-200410.000.panic" "$D/panic.jsonl"
+  run scan
+  [ "$status" -eq 0 ] || false
+  [ ! -f "$D/panic.jsonl" ] || false
+}
+
+@test "freeze reader: the boot dedupe tolerates kern.boottime's ±1 s jitter (the double-record)" {
+  # The live ledger holds the proof: boot 1786686149 was re-recorded eight days later as 1786686150.
+  have_arm freeze_boot_already
+  printf '{"kind":"freeze","boot":1786686149}\n' > "$D/pl.jsonl"
+  run env PANIC_LEDGER="$D/pl.jsonl" bash -c '. "$1"; freeze_boot_already 1786686150' _ "$D/lib.sh"
+  [ "$status" -eq 0 ] || false                         # 1 s off ⇒ the same boot
+  run env PANIC_LEDGER="$D/pl.jsonl" bash -c '. "$1"; freeze_boot_already 1786686200' _ "$D/lib.sh"
+  [ "$status" -ne 0 ] || false                         # 51 s off ⇒ genuinely another boot
+  # End to end: the same freeze re-scanned with a jittered boot writes ONE row, not two.
+  mkstubs 100000 0 0
+  mkfreezestubs "$BOOTS" "force_off"
+  mkresetcounter "ResetCounter-x.diag" "btn_rst force_off" "$BOOTSTAMP"
+  fz >/dev/null 2>&1
+  mkfreezestubs "$((BOOTS + 1))" "force_off"
+  fz >/dev/null 2>&1
+  [ "$(grep -c . "$D/fz.jsonl")" -eq 1 ] || false
+}
+
+@test "single instance: a live duplicate exits 0 before the loop; --ticks runs skip the mutex" {
+  # SIX live sentinels were observed minutes after the panic-#5 reboot — six actuators racing one
+  # freeze ledger. Identity is (pid,lstart), the same compare every signal path uses, so a STALE
+  # pidfile (dead pid, or a reused pid with a different lstart) can never block a start — that
+  # branch is the lstart mismatch already proven throughout §8c/§8e.
+  mkstubs 800000 0 0
+  mkcohort "$(printf '7001\tMon 24 Aug 20:00:00 2026')"          # ps -p map for proc_lstart
+  printf '7001\nMon 24 Aug 20:00:00 2026\n' > "$D/cs.pid"        # PIDFILE derives from LOG
+  run timeout 10 env PATH="$STUB:$PATH" PSMAP="$PSMAP" CC_SENTINEL_LOG="$LOG" \
+      CC_PANIC_SCAN=off CC_FREEZE_SCAN=off bash "$S"             # TICKS=0: the daemon path
+  [ "$status" -eq 0 ] || false                                   # a 124 here = the mutex did NOT fire
+  echo "$output" | grep -q 'another live instance' || false
+  [ "$(rows)" = "0" ] || false
+  # CONTROL: a bounded run (the smoke, this suite) skips the mutex and proceeds under the same
+  # pidfile — refusing hand-runs while the daemon lives would make every smoke read as broken.
+  run env PATH="$STUB:$PATH" PSMAP="$PSMAP" CC_SENTINEL_LOG="$LOG" \
+      CC_PANIC_SCAN=off CC_FREEZE_SCAN=off bash "$S" --ticks 1
+  [ "$status" -eq 0 ] || false
+  [ "$(rows)" = "1" ] || false
 }

@@ -36,12 +36,20 @@
 # FIRST, then the children. Same signal, same reversibility, same exclusions (never claude/mcp-shaped,
 # never pid ≤ 1, never this daemon or its launcher).
 #
-# WHY NO KILL PATH EXISTS ANYWHERE IN HERE (§4a). macOS ships CONFIG_JETSAM off; the release-kernel
-# compressor-exhaustion branch can only harvest IDLE-band processes (measured: ~2 MB of Apple
-# daemons), and no_paging_space_action needs ONE process holding >50% of the whole compressor
-# (>66 GiB) — structurally untrippable by a fleet of 200 MB workers. Nothing above us will act. That
-# is why this exists, and it is also why it must never SIGKILL: we are the only actor, so we must be
-# the reversible one.
+# WHY A KILL RUNG NOW EXISTS (panic #5, 2026-08-24 — docs/research/panic-2026-08-24-fifth-watchdog.md).
+# The original §4a rule was "never SIGKILL: we are the only actor, so we must be the reversible one"
+# — macOS ships CONFIG_JETSAM off; the release-kernel compressor-exhaustion branch can only harvest
+# IDLE-band processes (measured: jetsam killed 3,109 daemons over 10.9 days for 9.28 GB while the
+# storm held 128 GB at band 180), and no_paging_space_action needs ONE process holding >50% of the
+# whole compressor — structurally untrippable by a fleet of 200 MB workers. Nothing above us will
+# act. Panic #5 measured the missing half of that argument: SIGSTOP stops the RAMP but returns ZERO
+# segments (wave-2's frozen pool rode 43.66% → 71.81% on its own already-committed pages), and the
+# only observed segment reclaim in five panics was mass worker EXIT (78% → 8% in ~90 s). So freeze
+# buys time and only exit gives it back — reversibility preserved to the end is what panicked the
+# box. The rung is bounded exactly by custody: SIGKILL is sent ONLY to pids this daemon already
+# froze (they passed every exclusion at selection time, verified again by (pid,lstart) at kill
+# time), only while ACT=stop, and only when the freeze is demonstrably losing (kill_due). A killed
+# dev worker costs a dev-server restart; the alternative cost five kernel panics.
 #
 # THE INSTRUMENT'S OWN FAILURE MODES, handled explicitly rather than assumed away:
 #   · An unreadable trip-bearing sysctl SKIPS THE TICK — no row. It never renders as 0. This is the
@@ -72,7 +80,11 @@
 #         (on — the parent-breaker's OPT-OUT; it rides CC_SENTINEL_ACT=stop, see below) ·
 #         CC_SENTINEL_ACT_PARENT_MIN (3) · CC_SENTINEL_ACT_PARENT_CAP (4) ·
 #         CC_SENTINEL_SNAP_TOPN (30) · CC_SENTINEL_SNAP_TOPN_FUP (10) · CC_SENTINEL_SNAP_ARGV_MAX
-#         (400) · CC_SENTINEL_SNAP_AGG_N (15)
+#         (400) · CC_SENTINEL_SNAP_AGG_N (15) · CC_SENTINEL_CLIFF_PCT (60) ·
+#         CC_SENTINEL_REL_PARENT_PCT (15) · CC_SENTINEL_REL_PARENT_TICKS (3) ·
+#         CC_SENTINEL_PARENT_HOLD_MIN_S (600) · CC_SENTINEL_PROBATION_S (300) ·
+#         CC_SENTINEL_KILL (on — rides ACT=stop, opt-out) · CC_SENTINEL_KILL_PCT (60) ·
+#         CC_SENTINEL_KILL_MIN_HOLD_S (30)
 set -uo pipefail
 
 INTERVAL="${CC_SENTINEL_INTERVAL:-10}"
@@ -91,6 +103,10 @@ SNAP="${CC_SENTINEL_SNAP:-${LOG%.jsonl}-snap.log}"
 # that redirected the JSONL but not the ledger would append the operator's live cohort with its
 # fixtured pids, and the next real release would then skip them as pid-reuse mismatches.
 FROZEN_DB="${CC_SENTINEL_FROZEN_DB:-${LOG%.jsonl}-frozen.tsv}"
+# The probation ledger DERIVES from FROZEN_DB for the same reason FROZEN_DB derives from LOG: it
+# records which released SPAWNERS are still inside their re-freeze window, and a test that
+# redirected the freeze ledger but not this one would probe the operator's live release history.
+PROBATION_DB="${CC_SENTINEL_PROBATION_DB:-${FROZEN_DB%.tsv}-probation.tsv}"
 PAGES_DIR="${CC_PAGES_DIR:-$HOME/.claude/autonomy/pages}"
 PAGE="$PAGES_DIR/compressor-sentinel.page"
 ACT="${CC_SENTINEL_ACT:-off}"
@@ -111,6 +127,31 @@ ACT_PARENT_CAP="${CC_SENTINEL_ACT_PARENT_CAP:-4}"   # most spawners frozen per t
 # freeze is treated as the incident rather than the remedy (see the release policy above the arm).
 HOLD_MIN_S="${CC_SENTINEL_HOLD_MIN_S:-60}"
 HOLD_MAX_S="${CC_SENTINEL_HOLD_MAX_S:-600}"
+# ── PANIC #5's SEAMS (2026-08-24: the guard froze both waves in time, then SIGCONT'd the wave-2
+# spawner at 71.8% of the segment limit on ONE rate-lull tick, and the resumed pool drove 72%→100%
+# in ~2 minutes — docs/research/panic-2026-08-24-fifth-watchdog.md). Four mechanisms, one lesson
+# each:
+#   · CLIFF_PCT — above this level the box is in the death regime whatever the rate says: the trip
+#     predicate grows a LEVEL-ONLY arm (the §7.7 OR form, scoped high), census/heavy snapshots are
+#     skipped (ticks stretched 10 s → 121-146 s under actuation and trip-4's actuation never
+#     reached disk), the cooldown no longer gates re-trips, and one breach tick suffices.
+#   · REL_PARENT_* / PARENT_HOLD_MIN_S — a SPAWNER's release is a different decision from a
+#     worker's. Workers release on the old clear rule (their exit IS the reclaim); a parent
+#     releases only on sustained LOW LEVEL (pct < REL_PARENT_PCT for REL_PARENT_TICKS consecutive
+#     clear ticks — level subsumes swap, since swapped segments are half of SEG_EST) after
+#     PARENT_HOLD_MIN_S. Never on a one-tick rate lull: srate 536 < 600 at 71.81% full read as
+#     "breach over" and released the primed spawner (held 68 s) into a 72%-full compressor.
+#   · PROBATION_S — a released parent stays on probation: the FIRST breach tick inside the window
+#     re-freezes it immediately, before streak or cooldown are consulted.
+#   · KILL_* — the escalation rung (see the header). kill_due says when; custody says whom.
+CLIFF_PCT="${CC_SENTINEL_CLIFF_PCT:-60}"
+REL_PARENT_PCT="${CC_SENTINEL_REL_PARENT_PCT:-15}"
+REL_PARENT_TICKS="${CC_SENTINEL_REL_PARENT_TICKS:-3}"
+PARENT_HOLD_MIN_S="${CC_SENTINEL_PARENT_HOLD_MIN_S:-600}"
+PROBATION_S="${CC_SENTINEL_PROBATION_S:-300}"
+KILL="${CC_SENTINEL_KILL:-on}"
+KILL_PCT="${CC_SENTINEL_KILL_PCT:-60}"
+KILL_MIN_HOLD_S="${CC_SENTINEL_KILL_MIN_HOLD_S:-30}"
 FOLLOWUP_N="${CC_SENTINEL_FOLLOWUP_N:-12}"       # 12 x 5 s = the 60 s cooldown, by construction
 FOLLOWUP_SEC="${CC_SENTINEL_FOLLOWUP_SEC:-5}"
 SNAP_TOPN="${CC_SENTINEL_SNAP_TOPN:-30}"         # trip snapshot: how many RSS ranks carry full argv
@@ -354,7 +395,7 @@ segs_swapped() { # <swap_used_bytes> <segment_buffer_size>
 classify_breach() { # <seg_est> <seg_limit> <seg_rate_per_s> <dcbu_bytes_per_s> <dswap_bytes_per_s>
   awk -v seg="$1" -v lim="$2" -v rate="$3" -v dcbu="$4" -v dswap="$5" \
       -v pct="$TRIP_SEG_PCT" -v rmin="$TRIP_SEG_RATE" -v cmb="$TRIP_CBU_MB" -v smb="$TRIP_SWAP_MB" \
-      -v iv="$INTERVAL" '
+      -v cliff="$CLIFF_PCT" -v iv="$INTERVAL" '
     BEGIN {
       if (iv <= 0) exit 1
       n = 0; why = ""
@@ -364,6 +405,14 @@ classify_breach() { # <seg_est> <seg_limit> <seg_rate_per_s> <dcbu_bytes_per_s> 
       if (lim > 0 && seg > lim * pct / 100 && rate > rmin) { why = "seg"; n++ }
       if (dcbu  > cmb * 1048576 / iv) { why = why (n ? "+" : "") "cbu";  n++ }
       if (dswap > smb * 1048576 / iv) { why = why (n ? "+" : "") "swap"; n++ }
+      # THE CLIFF ARM — level ALONE, no rate term, above CLIFF_PCT (panic #5). The AND above is the
+      # right discriminator on the way UP; it is wrong at altitude, where a swapout lull read
+      # srate 536 < 600 at 71.81% full, manufactured a "clear" tick mid-incident, and the release
+      # arm SIGCONTd the primed spawner. Above the cliff the box is in the death regime whatever
+      # this tick s rate says: no benign workload SITS at 60% of the segment limit (10.9 days of
+      # chronic-pressure baseline never idled above ~8%), so level alone discriminates here in a
+      # way it cannot at 15%. This is §7.7 s OR form, scoped to where OR is true.
+      if (lim > 0 && cliff > 0 && seg >= lim * cliff / 100) { why = why (n ? "+" : "") "cliff"; n++ }
       if (n == 0) exit 1
       print why
     }'
@@ -654,10 +703,19 @@ render_attribution() { # <top_n> <argv_max_chars> <agg_n>
   fi
 }
 
-snapshot_trip() { # <ts> <why> <headline>
+snapshot_trip() { # <ts> <why> <headline> [<cliff 0|1>]
   {
     printf '\n═══ TRIP %s  why=%s ═══\n%s\n' "$1" "$2" "$3"
-    render_attribution "$SNAP_TOPN" "$SNAP_ARGV_MAX" "$SNAP_AGG_N"
+    if [ "${4:-0}" = "1" ]; then
+      # CLIFF: the attribution is skipped, and the skip is PRINTED so an empty section can never be
+      # read as an idle box. Panic #5 measured the cost of the full snapshot at exactly the wrong
+      # moment: ticks stretched 10 s → 121-146 s under actuation+storm, and TRIP 4's actuation
+      # never reached disk. Above the cliff the actuator's speed IS the evidence budget; vm_stat
+      # stays (one cheap read, and it carries the free-page count the postmortem needs).
+      printf '(cliff regime: attribution SKIPPED to keep the tick fast — see the last full trip above)\n'
+    else
+      render_attribution "$SNAP_TOPN" "$SNAP_ARGV_MAX" "$SNAP_AGG_N"
+    fi
     printf '\n--- vm_stat ---\n'
     vm_stat 2>/dev/null
   } >> "$SNAP" 2>/dev/null || true
@@ -709,16 +767,32 @@ write_page() { # <ts> <why> <headline> <detail>
 # box rebooting.
 #
 # THE RELEASE POLICY, stated explicitly because the row demands one and because an implicit policy
-# here is indistinguishable from the bug:
-#   clear   — the breach is over (no trip this tick) AND the freeze has been held HOLD_MIN_S. This
-#             is the normal path; the minimum matches the cooldown so we never resume into the ramp
-#             we just interrupted.
-#   ceiling — held HOLD_MAX_S, released EVEN IF STILL IN BREACH. A freeze that outlives its own
-#             emergency has stopped being a guard and become the incident; at that point the honest
-#             move is to give the box back and say so loudly.
-#   exit    — the sentinel is going away (TERM/INT). Unconditional. Without this arm a daemon
-#             restart strands the whole cohort permanently, which is the row's failure mode with
-#             extra steps.
+# here is indistinguishable from the bug. PANIC #5 REWROTE IT (2026-08-24): the first shape of this
+# arm reused the trip predicate's single-tick negation as "breach over" and released EVERYTHING held
+# ≥ HOLD_MIN_S, spawners included — so one swapout-lull tick (srate 536 < 600) at 71.81% of the
+# segment limit SIGCONTd the primed wave-2 spawner (held 68 s), whose resumed pool drove segments
+# 72% → 100% in ~2 minutes and panicked the box. The policy now splits BY KIND, because the two
+# kinds fail in opposite directions: a released WORKER exits — worker exit is the only segment
+# reclaim ever observed (78% → 8% in ~90 s) — while a released SPAWNER re-mints its pool. And it
+# splits by REGIME: above the cliff nothing releases at all, because resuming anything into a
+# nearly-full compressor spends the margin the freeze bought.
+#   clear   — WORKERS (kind=proc): no trip this tick AND held ≥ HOLD_MIN_S. The normal path,
+#             unchanged: the minimum matches the cooldown so we never resume into the ramp we just
+#             interrupted. (A "clear" tick can no longer exist above the cliff — the cliff arm of
+#             classify_breach keeps WHY non-empty there by construction.)
+#   parent  — SPAWNERS (kind=parent) release ONLY when the caller certifies sustained calm
+#             (<parent_ok>: pct < REL_PARENT_PCT for REL_PARENT_TICKS consecutive clear ticks —
+#             level, not rate; level subsumes swap since swapped segments are half of SEG_EST) AND
+#             the freeze has been held ≥ PARENT_HOLD_MIN_S (the observed multi-wave horizon is
+#             ~10 min; 68 s was the fatal hold). A released spawner goes on PROBATION.
+#   ceiling — WORKERS ONLY, held HOLD_MAX_S, released even if still in breach — but never in the
+#             cliff regime. A frozen worker past its ceiling on a calm-enough box is the guard
+#             outliving its emergency; the same worker at 80% full is stored margin, and the
+#             escalation rung (kill_due) owns that case, not a resume.
+#   exit    — the sentinel is going away (TERM/INT). Unconditional, all kinds. Without this arm a
+#             daemon restart strands the whole cohort permanently — and a stranded SIGSTOP with no
+#             living SIGCONT sender is strictly worse than a released spawner, because nothing can
+#             ever fix it.
 #
 # WHAT MAKES THIS SAFE TO RUN UNATTENDED: we resume ONLY what we froze. Every release is gated on
 # (pid, lstart) matching the ledger, TZ-pinned on BOTH sides because ps renders lstart in the
@@ -739,8 +813,9 @@ record_frozen() { # <pid> <kind> <comm> — ledger one REAL SIGSTOP so it can be
   printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$ls" "$2" "$(date +%s)" "$3" >> "$FROZEN_DB" 2>/dev/null || true
 }
 
-release_frozen() { # <now-epoch> <mode: clear|ceiling|exit> → "released=N held=N stale=N"
-  local now="$1" mode="$2" keep rel=0 held=0 stale=0 pid ls kind at comm cur age due
+release_frozen() { # <now-epoch> <mode: clear|ceiling|exit> [<parent_ok 0|1>] [<cliff 0|1>] → "released=N held=N stale=N"
+  local now="$1" mode="$2" parent_ok="${3:-0}" cliff="${4:-0}"
+  local keep rel=0 held=0 stale=0 pid ls kind at comm cur age due
   [ -s "$FROZEN_DB" ] || { printf 'released=0 held=0 stale=0'; return 0; }
   keep="$(mktemp -t cc-sentinel-frozen)" || { printf 'released=0 held=0 stale=0'; return 0; }
   while IFS="$(printf '\t')" read -r pid ls kind at comm; do
@@ -750,14 +825,34 @@ release_frozen() { # <now-epoch> <mode: clear|ceiling|exit> → "released=N held
     if [ -z "$cur" ] || [ "$cur" != "$ls" ]; then stale=$((stale + 1)); continue; fi
     age=$((now - at))
     due=0
-    [ "$mode" = "exit" ] && due=1
-    [ "$age" -ge "$HOLD_MAX_S" ] && due=1
-    [ "$mode" = "clear" ] && [ "$age" -ge "$HOLD_MIN_S" ] && due=1
+    if [ "$mode" = "exit" ]; then
+      due=1
+    elif [ "$kind" = "parent" ]; then
+      # A spawner never rides the worker rules: not clear-mode (one lull tick is how panic #5
+      # happened), not the ceiling (a still-loaded spawner past its ceiling is kill_due's case).
+      # Only the caller's sustained-calm certificate, after the parent's own longer minimum hold.
+      [ "$parent_ok" = "1" ] && [ "$age" -ge "$PARENT_HOLD_MIN_S" ] && due=1
+    else
+      # Never resume anything in the cliff regime — a resumed worker allocates into a compressor
+      # that has no room to hold the margin the freeze bought.
+      if [ "$cliff" != "1" ]; then
+        [ "$age" -ge "$HOLD_MAX_S" ] && due=1
+        [ "$mode" = "clear" ] && [ "$age" -ge "$HOLD_MIN_S" ] && due=1
+      fi
+    fi
     if [ "$due" -eq 1 ]; then
       kill -CONT "$pid" 2>/dev/null
       rel=$((rel + 1))
       printf 'SIGCONT pid=%s held_s=%s kind=%s comm=%s\n' "$pid" "$age" "$kind" "$comm" \
         >> "$SNAP" 2>/dev/null || true
+      # A released spawner is on probation: the first breach tick inside PROBATION_S re-freezes it
+      # without waiting for streak or cooldown (probation_refreeze). Exit-mode releases are exempt —
+      # the daemon leaving has no later tick to act on the stamp, and a stale stamp would then
+      # convict the pid s successor after reuse (the lstart gate already forecloses that, but a
+      # stamp nothing can consume is still litter).
+      if [ "$kind" = "parent" ] && [ "$mode" != "exit" ]; then
+        printf '%s\t%s\t%s\t%s\n' "$pid" "$ls" "$now" "$comm" >> "$PROBATION_DB" 2>/dev/null || true
+      fi
     else
       held=$((held + 1))
       printf '%s\t%s\t%s\t%s\t%s\n' "$pid" "$ls" "$kind" "$at" "$comm" >> "$keep"
@@ -765,6 +860,97 @@ release_frozen() { # <now-epoch> <mode: clear|ceiling|exit> → "released=N held
   done < "$FROZEN_DB"
   mv -f "$keep" "$FROZEN_DB" 2>/dev/null || rm -f "$keep" 2>/dev/null
   printf 'released=%s held=%s stale=%s' "$rel" "$held" "$stale"
+}
+
+# ── PROBATION: a released spawner has not proven anything yet ─────────────────────────────────────
+# The stamp is written by release_frozen above; this consumes it. Called only on a BREACH tick
+# (WHY non-empty), BEFORE the streak and cooldown gates — those exist to debounce the DETECTOR, and
+# a spawner released two minutes ago breaching again is not a detection question, it is the release
+# being proven wrong. Same custody discipline as every signal here: (pid,lstart) must match the
+# stamp, or the row is dropped without a signal. Expired and stale rows are pruned on every pass so
+# the file cannot grow without bound.
+probation_refreeze() { # <now-epoch> → "refroze=N" on stdout; re-ledgers each refrozen pid
+  local now="$1" keep n=0 pid ls at comm cur
+  [ -s "$PROBATION_DB" ] || { printf 'refroze=0'; return 0; }
+  keep="$(mktemp -t cc-sentinel-probation)" || { printf 'refroze=0'; return 0; }
+  while IFS="$(printf '\t')" read -r pid ls at comm; do
+    [ -n "$pid" ] || continue
+    [ $((now - at)) -le "$PROBATION_S" ] || continue          # window over: stamp expires silently
+    cur="$(proc_lstart "$pid")"
+    if [ -z "$cur" ] || [ "$cur" != "$ls" ]; then continue; fi # gone or recycled: never signal
+    if kill -STOP "$pid" 2>/dev/null; then
+      n=$((n + 1))
+      record_frozen "$pid" parent "$comm"
+      printf 'SIGSTOP probation pid=%s comm=%s (breach inside %ss of release)\n' \
+        "$pid" "$comm" "$PROBATION_S" >> "$SNAP" 2>/dev/null || true
+      # Refrozen ⇒ off probation: it is back in FROZEN_DB under the parent rules.
+    else
+      printf '%s\t%s\t%s\t%s\n' "$pid" "$ls" "$at" "$comm" >> "$keep"
+    fi
+  done < "$PROBATION_DB"
+  mv -f "$keep" "$PROBATION_DB" 2>/dev/null || rm -f "$keep" 2>/dev/null
+  printf 'refroze=%s' "$n"
+}
+
+# ── THE ESCALATION RUNG: when the freeze is losing, custody converts to a kill ────────────────────
+# kill_due is the PREDICATE, pure so the suite can drive it (same contract as classify_breach). The
+# freeze is losing exactly when (a) a NEW trip fires while frozen debt is already held — the storm
+# is outrunning the freeze (wave 2 landed on top of wave 1's debt) — or (b) the box is above
+# KILL_PCT and still climbing (srate > 0) with debt held: the frozen pool's already-committed pages
+# are riding the compressor toward the ceiling on their own, which is precisely how 43.66% became
+# 71.81% with every storm process SIGSTOPped. Prints the reason; rc 1 when the freeze is holding.
+kill_due() { # <pct> <srate> <trip_now 0|1> <debt_n> → reason | rc 1
+  awk -v pct="${1:-0}" -v srate="${2:-0}" -v trip="${3:-0}" -v debt="${4:-0}" -v kpct="$KILL_PCT" '
+    BEGIN {
+      if (debt + 0 < 1) exit 1
+      if (trip + 0 == 1) { print "retrip-over-debt"; exit 0 }
+      if (pct + 0 >= kpct + 0 && srate + 0 > 0) { print "climbing-at-" kpct "pct"; exit 0 }
+      exit 1
+    }'
+}
+
+# kill_escalate ACTS. The blast radius is bounded by CUSTODY, not by a name list: SIGKILL goes only
+# to pids already in FROZEN_DB — they passed select_stop_targets / select_break_parents exclusions
+# (never claude/claude.exe, never mcp-shaped, never this daemon or its launcher) at freeze time and
+# must STILL match the ledger s (pid,lstart) here, so a recycled pid is untouchable. The comm test
+# is re-applied as a belt: a ledger row whose comm now reads claude-shaped is skipped outright.
+# WRITE-AHEAD: the intent line is flushed to the snap log BEFORE the first signal — trip 4 of panic
+# #5 actuated (or not) with nothing ever reaching disk, and an unevidenced actuation cannot be
+# adjudicated afterwards. Killing the whole frozen set, workers included, is deliberate: worker
+# exit is the only observed reclaim, and a frozen worker at kill time is exactly the storm cohort
+# the selectors chose under their exclusions. Age-gated (KILL_MIN_HOLD_S) so the freeze always gets
+# its chance first on the very trip that created the debt.
+kill_escalate() { # <now-epoch> <reason> → "killed=N spared=N" on stdout
+  local now="$1" reason="$2" keep killed=0 spared=0 pid ls kind at comm cur age
+  [ -s "$FROZEN_DB" ] || { printf 'killed=0 spared=0'; return 0; }
+  printf 'actuator: KILL-INTENT reason=%s debt=%s (write-ahead: signals follow this line)\n' \
+    "$reason" "$(wc -l < "$FROZEN_DB" 2>/dev/null | tr -d ' ' || echo '?')" >> "$SNAP" 2>/dev/null || true
+  keep="$(mktemp -t cc-sentinel-frozen)" || { printf 'killed=0 spared=0'; return 0; }
+  while IFS="$(printf '\t')" read -r pid ls kind at comm; do
+    [ -n "$pid" ] || continue
+    cur="$(proc_lstart "$pid")"
+    if [ -z "$cur" ] || [ "$cur" != "$ls" ]; then continue; fi   # gone/recycled: drop, never signal
+    age=$((now - at))
+    case "$comm" in
+      claude*|*mcp*)
+        # Belt over the selectors suspenders: nothing claude/mcp-shaped should ever have been
+        # ledgered, but an escalation that can kill must re-check rather than inherit.
+        spared=$((spared + 1))
+        printf '%s\t%s\t%s\t%s\t%s\n' "$pid" "$ls" "$kind" "$at" "$comm" >> "$keep"
+        continue ;;
+    esac
+    if [ "$age" -lt "$KILL_MIN_HOLD_S" ]; then
+      spared=$((spared + 1))
+      printf '%s\t%s\t%s\t%s\t%s\n' "$pid" "$ls" "$kind" "$at" "$comm" >> "$keep"
+      continue
+    fi
+    kill -KILL "$pid" 2>/dev/null
+    killed=$((killed + 1))
+    printf 'SIGKILL pid=%s held_s=%s kind=%s comm=%s reason=%s\n' \
+      "$pid" "$age" "$kind" "$comm" "$reason" >> "$SNAP" 2>/dev/null || true
+  done < "$FROZEN_DB"
+  mv -f "$keep" "$FROZEN_DB" 2>/dev/null || rm -f "$keep" 2>/dev/null
+  printf 'killed=%s spared=%s' "$killed" "$spared"
 }
 
 # ── panic attribution: read the kernel's own verdict before it is rotated away ────────────────────
@@ -784,12 +970,18 @@ panic_newest() { # → path of the most recently modified *.panic across PANIC_D
   # `find` + an explicit mtime sort rather than `ls -1t` (SC2012; the gate lints at info severity).
   # `stat -f '%m %N'` is BSD, `-c` is GNU — both are tried so this is not silently Darwin-only.
   # Sorting numerically descending on the epoch reproduces `ls -t` exactly, without parsing ls.
+  # `! -name '.*'` — DOTFILES ARE EXCLUDED, and this exclusion has a body count. macOS stages the
+  # live panic text as `.contents.panic` beside the dated report, SAME basename every panic. On
+  # 2026-08-18 it won this newest-file race, the ledger recorded report:".contents.panic" — and
+  # because the idempotency key is the basename, every later panic's staging file read as "already
+  # recorded". Panic #5 (2026-08-24) therefore has NO ledger row despite three sentinel restarts:
+  # the instrument built to make the next death attributable was blinded by a filename, forever.
   local d rows=""
   for d in ${PANIC_DIRS//:/ }; do
     [ -d "$d" ] || continue
     rows="$rows$(
-      { find "$d" -maxdepth 1 -type f -name '*.panic' -exec stat -f '%m %N' {} + \
-          || find "$d" -maxdepth 1 -type f -name '*.panic' -exec stat -c '%Y %n' {} + ; } 2>/dev/null
+      { find "$d" -maxdepth 1 -type f -name '*.panic' ! -name '.*' -exec stat -f '%m %N' {} + \
+          || find "$d" -maxdepth 1 -type f -name '*.panic' ! -name '.*' -exec stat -c '%Y %n' {} + ; } 2>/dev/null
     )
 "
   done
@@ -890,6 +1082,16 @@ freeze_boot_epoch() {
   printf '%s' "$raw"
 }
 
+# rc 0 when a freeze row for (approximately) this boot already exists. TOLERANT (±5 s), not exact:
+# kern.boottime is clock-adjusted after boot, and the live ledger holds the proof — boot
+# 1786686149 was re-recorded eight days later as 1786686150 (one second off), turning one incident
+# into two rows. An exact-match key on a jittering identity is a dedupe that cannot dedupe.
+freeze_boot_already() { # <boot_epoch>
+  [ -f "$PANIC_LEDGER" ] || return 1
+  grep '"kind":"freeze"' "$PANIC_LEDGER" 2>/dev/null | jq -r '.boot // empty' 2>/dev/null \
+    | awk -v b="$1" 'BEGIN{hit=1} { d = $1 - b; if (d < 0) d = -d; if (d <= 5) hit=0 } END{exit hit}'
+}
+
 freeze_shutdown_reason() {
   local v
   v="$(sysctl -n kern.shutdownreason 2>/dev/null)" || return 1
@@ -943,8 +1145,8 @@ freeze_scan() {
   fi
 
   # Idempotent on the boot, not on a filename: the artifacts here are re-derived every start.
-  if [ -f "$PANIC_LEDGER" ] && grep -qF "\"boot\":$boot," "$PANIC_LEDGER" 2>/dev/null; then
-    printf 'freeze-scan: already recorded (boot %s)\n' "$boot" >&2
+  if freeze_boot_already "$boot"; then
+    printf 'freeze-scan: already recorded (boot %s, ±5s)\n' "$boot" >&2
     return 0
   fi
 
@@ -1060,6 +1262,27 @@ fi
 [ "$PANIC_SCAN" = "off" ] || panic_scan || true
 [ "$FREEZE_SCAN" = "off" ] || freeze_scan || true
 
+# ── single instance ───────────────────────────────────────────────────────────────────────────────
+# SIX live sentinels were observed minutes after the panic-#5 reboot (kernel-zone axis of the
+# postmortem). Six concurrent actuators over one freeze ledger is six writers racing one TSV and up
+# to six SIGSTOP/SIGCONT senders disagreeing about custody. Identity is (pid, lstart) — the same
+# compare every signal path here uses — so a stale pidfile from a dead instance can never block a
+# start. Bounded runs (--ticks/--once: the smoke and the suite) skip the mutex: they are not the
+# daemon, and refusing them while the daemon lives would make every hand-run read as broken.
+if [ "$TICKS" -eq 0 ]; then
+  PIDFILE="${LOG%.jsonl}.pid"
+  _mx_pid="$(sed -n 1p "$PIDFILE" 2>/dev/null)"
+  _mx_ls="$(sed -n 2p "$PIDFILE" 2>/dev/null)"
+  if [ -n "$_mx_pid" ] && [ -n "$_mx_ls" ] && [ "$_mx_pid" != "$$" ] \
+     && [ "$(proc_lstart "$_mx_pid")" = "$_mx_ls" ]; then
+    printf 'compressor-sentinel: another live instance owns the loop (pid %s) — exiting 0\n' \
+      "$_mx_pid" >&2
+    exit 0
+  fi
+  mkdir -p "$(dirname "$PIDFILE")" 2>/dev/null || true
+  printf '%s\n%s\n' "$$" "$(proc_lstart "$$")" > "$PIDFILE" 2>/dev/null || true
+fi
+
 # ── main loop ─────────────────────────────────────────────────────────────────────────────────────
 mkdir -p "$(dirname "$LOG")" "$(dirname "$SNAP")" 2>/dev/null || true
 
@@ -1076,6 +1299,7 @@ cleanup() {
     printf '%s compressor-sentinel: RELEASE-ON-EXIT %s\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(release_frozen "$(date +%s)" exit)" >&2
   fi
+  [ -n "${PIDFILE:-}" ] && rm -f "$PIDFILE" 2>/dev/null
   exit 0
 }
 trap cleanup TERM INT
@@ -1087,7 +1311,7 @@ PREV_T=""; PREV_SEG=""; PREV_CBU=""; PREV_SWAP=""; PREV_CMP=""; PREV_DCMP=""
 # sessions":?`) and the identical reason it survived review: a regex test for one field never
 # requires the surrounding document to parse. Caught here by a 3-tick smoke, not by reading.
 CENSUS_PIDS=""; CENSUS_N="null"; CENSUS_ORPH="null"; CENSUS_RSS="null"
-STREAK=0; COOLDOWN_UNTIL=0; TICK=0; ROWS=0
+STREAK=0; CLEAR_STREAK=0; COOLDOWN_UNTIL=0; TICK=0; ROWS=0
 
 while :; do
   TICK=$((TICK + 1))
@@ -1106,8 +1330,9 @@ while :; do
     printf '%s compressor-sentinel: SKIP tick %s — unreadable %s (no row emitted; not a 0)\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$TICK" "$SKIP" >&2
     # A gap breaks consecutiveness and invalidates every baseline: the next delta would span two
-    # intervals and the next streak would be asserted across a hole.
-    PREV_T=""; PREV_SEG=""; PREV_CBU=""; PREV_SWAP=""; PREV_CMP=""; PREV_DCMP=""; STREAK=0
+    # intervals and the next streak would be asserted across a hole. CLEAR_STREAK equally — three
+    # calm ticks asserted across a blind spot would certify a spawner release over a gap.
+    PREV_T=""; PREV_SEG=""; PREV_CBU=""; PREV_SWAP=""; PREV_CMP=""; PREV_DCMP=""; STREAK=0; CLEAR_STREAK=0
     [ "$TICKS" -gt 0 ] && [ "$TICK" -ge "$TICKS" ] && break
     sleep "$INTERVAL"
     continue
@@ -1128,6 +1353,15 @@ while :; do
   fi
   SEG_EST=$((SEG_I + SEG_S))
   SEG_PCT="$(awk -v a="$SEG_EST" -v b="$SEG_LIMIT" 'BEGIN{ if (b <= 0) exit 1; printf "%.2f", 100*a/b }')" || SEG_PCT=""
+
+  # THE CLIFF REGIME (panic #5). Above CLIFF_PCT every cost the instrument pays for its own
+  # evidence comes out of the actuation window: census + full snapshot stretched ticks 10 s →
+  # 121-146 s and TRIP 4's actuation never reached disk. In cliff: no census, minimal snapshot, no
+  # follow-up spawn, no cooldown gate, one breach tick trips, and nothing is ever released.
+  CLIFF=0
+  if [ -n "$SEG_PCT" ]; then
+    awk -v p="$SEG_PCT" -v c="$CLIFF_PCT" 'BEGIN{ exit (p + 0 >= c + 0) ? 0 : 1 }' && CLIFF=1
+  fi
 
   # Diagnostic-only sysctls. These do NOT gate the tick: they discriminate WHICH mechanism is running
   # (§4a — incompressible raw-store vs sparse-segment fragmentation), which decides the remedy but
@@ -1157,8 +1391,10 @@ while :; do
     HAVE_RATES=1
   fi
 
-  # ── census every CENSUS_EVERY ticks ─────────────────────────────────────────────────────────────
-  if [ $((TICK % CENSUS_EVERY)) -eq 0 ]; then
+  # ── census every CENSUS_EVERY ticks — never in the cliff regime ─────────────────────────────────
+  # A stale CENSUS_PIDS in cliff only WIDENS the cohort ("new since the last census" excludes fewer
+  # pids), which is the safe direction there.
+  if [ "$CLIFF" = "0" ] && [ $((TICK % CENSUS_EVERY)) -eq 0 ]; then
     CRAW="$(census)"
     if [ -n "$CRAW" ]; then
       CENSUS_PIDS="${CRAW#*|}"
@@ -1169,8 +1405,43 @@ while :; do
     fi
   fi
 
-  # ── the row ─────────────────────────────────────────────────────────────────────────────────────
+  # ── breach → streak, BEFORE the row so `strk` is THIS tick's verdict ────────────────────────────
+  # (The pre-#5 shape wrote the row first, so every logged strk was the PREVIOUS sample's — the
+  # off-by-one cost the postmortem an instrument-verification detour, synthesis open question 8.)
+  WHY=""
+  if [ "$HAVE_RATES" = 1 ]; then
+    WHY="$(classify_breach "$SEG_EST" "$SEG_LIMIT" "$SEG_RATE" "$CBU_RATE" "$SWAP_RATE")" || WHY=""
+  else
+    # No baseline ⇒ no rates — but the CLIFF arm is a LEVEL test and must not wait a tick for one:
+    # the first readable tick after a gap at 85% full is exactly the tick that cannot be spent
+    # rebuilding a baseline. Zero rates keep every rate arm silent by construction.
+    WHY="$(classify_breach "$SEG_EST" "$SEG_LIMIT" 0 0 0)" || WHY=""
+  fi
+  if [ -n "$WHY" ]; then STREAK=$((STREAK + 1)); else STREAK=0; fi
+  # The spawner-release certificate: consecutive ticks that are clear AND calm (level below
+  # REL_PARENT_PCT). Distinct from mere !WHY — a rate-lull tick at 71.81% was "clear" by the old
+  # test and is precisely what may never again certify a spawner release.
+  if [ -z "$WHY" ] && [ -n "$SEG_PCT" ] \
+     && awk -v p="$SEG_PCT" -v t="$REL_PARENT_PCT" 'BEGIN{ exit (p + 0 < t + 0) ? 0 : 1 }'; then
+    CLEAR_STREAK=$((CLEAR_STREAK + 1))
+  else
+    CLEAR_STREAK=0
+  fi
+
   TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  # ── probation: a breach tick re-freezes recently-released spawners FIRST ────────────────────────
+  # Before streak and cooldown — those debounce the DETECTOR; a spawner released minutes ago
+  # breaching again is not a detection question, it is the release being proven wrong.
+  if [ -n "$WHY" ] && [ "$ACT" = "stop" ] && [ -s "$PROBATION_DB" ]; then
+    PROBV="$(probation_refreeze "$NOW")"
+    case "$PROBV" in
+      refroze=0) : ;;
+      *) printf '%s compressor-sentinel: PROBATION %s (why=%s)\n' "$TS" "$PROBV" "$WHY" >&2 ;;
+    esac
+  fi
+
+  # ── the row ─────────────────────────────────────────────────────────────────────────────────────
   ROW="$(printf '{"ts":"%s","t":%s,"el":%s,"seg":%s,"segi":%s,"segs":%s,"lim":%s,"pct":%s,"dseg":%s,"srate":%s,"cbu":%s,"dcbu":%s,"crate":%s,"swap":%s,"dswap":%s,"wrate":%s,"dcmp":%s,"ddec":%s,"inb":%s,"cpb":%s,"fail":%s,"n":%s,"orph":%s,"nrss":%s,"strk":%s}' \
     "$TS" "$TICK" "$ELAPSED" "$SEG_EST" "$SEG_I" "$SEG_S" "$SEG_LIMIT" "${SEG_PCT:-null}" \
     "$D_SEG" "$SEG_RATE" "$CBU" "$D_CBU" "$CBU_RATE" "$SWAP_B" "$D_SWAP" "$SWAP_RATE" \
@@ -1179,18 +1450,18 @@ while :; do
   printf '%s\n' "$ROW" >> "$LOG" 2>/dev/null || true
   ROWS=$((ROWS + 1))
 
-  # ── breach → streak → trip ──────────────────────────────────────────────────────────────────────
-  WHY=""
-  if [ "$HAVE_RATES" = 1 ]; then
-    WHY="$(classify_breach "$SEG_EST" "$SEG_LIMIT" "$SEG_RATE" "$CBU_RATE" "$SWAP_RATE")" || WHY=""
-  fi
-  if [ -n "$WHY" ]; then STREAK=$((STREAK + 1)); else STREAK=0; fi
-
-  if [ -n "$WHY" ] && [ "$STREAK" -ge 2 ] && [ "$NOW" -ge "$COOLDOWN_UNTIL" ]; then
+  # ── trip ────────────────────────────────────────────────────────────────────────────────────────
+  # In cliff: ONE breach tick suffices (the two-tick streak debounces false positives on the way
+  # up; at 60%+ a false positive costs a snapshot, a miss costs the box) and the cooldown no longer
+  # gates — the 60 s cooldown was a spawner's whole working day at the measured rate, and wave 2
+  # re-ignited inside it.
+  TRIP_FIRED=0
+  STREAK_REQ=2; [ "$CLIFF" = "1" ] && STREAK_REQ=1
+  if [ -n "$WHY" ] && [ "$STREAK" -ge "$STREAK_REQ" ] && { [ "$CLIFF" = "1" ] || [ "$NOW" -ge "$COOLDOWN_UNTIL" ]; }; then
     HEAD_LINE="$(printf 'segments %s of %s (%s%%) · %s seg/s · compressor +%s B/s · swap +%s B/s' \
       "$SEG_EST" "$SEG_LIMIT" "${SEG_PCT:-?}" "$SEG_RATE" "$CBU_RATE" "$SWAP_RATE")"
     printf '%s compressor-sentinel: TRIP why=%s — %s\n' "$TS" "$WHY" "$HEAD_LINE" >&2
-    snapshot_trip "$TS" "$WHY" "$HEAD_LINE"
+    snapshot_trip "$TS" "$WHY" "$HEAD_LINE" "$CLIFF"
     write_page "$TS" "$WHY" "$HEAD_LINE" "$ROW"
 
     if [ "$ACT" = "stop" ] || [ "$ACT" = "observe" ]; then
@@ -1209,6 +1480,11 @@ while :; do
       TARGETS="$(printf '%s\n' "$PSTABLE" | select_stop_targets "$EXEF" "$CENSUS_PIDS" "$ACT_RSS_KB" "$ACT_CAP")"
       COHORT="$(printf '%s\n' "$TARGETS" | awk '$1 ~ /^[0-9]+$/ { printf "%s ", $1 }')"
       COHORT_N="$(printf '%s' "$COHORT" | wc -w | tr -d ' ')"   # derived from COHORT so they cannot disagree
+      # WRITE-AHEAD (panic #5, trip 4): the intent reaches disk BEFORE the first signal, so an
+      # actuation the storm kills mid-flight is distinguishable from one that never ran. The
+      # per-signal lines that follow are the confirmations.
+      printf 'actuator: INTENT %s cohort_n=%s cliff=%s (write-ahead; signals follow)\n' \
+        "$ACTVERB" "$COHORT_N" "$CLIFF" >> "$SNAP" 2>/dev/null || true
 
       # THE SPAWNER GOES FIRST, and the order is the mechanism rather than a preference. Freezing
       # the cohort is up to <cap> kill(2) calls; a spawner left running mints throughout that window
@@ -1271,13 +1547,32 @@ while :; do
       printf 'actuator: DISARMED (CC_SENTINEL_ACT=%s) — detection only\n' "$ACT" >> "$SNAP" 2>/dev/null || true
     fi
 
-    # One follow-up run at a time; it self-terminates in 60 s, which is the cooldown.
-    if [ -z "$FOLLOWUP_PID" ] || ! kill -0 "$FOLLOWUP_PID" 2>/dev/null; then
+    # One follow-up run at a time; it self-terminates in 60 s, which is the cooldown. Not in cliff:
+    # 12 more ps sweeps on a box at 60%+ spend the actuation window on evidence (trip 4's lesson).
+    if [ "$CLIFF" != "1" ] && { [ -z "$FOLLOWUP_PID" ] || ! kill -0 "$FOLLOWUP_PID" 2>/dev/null; }; then
       snapshot_followup &
       FOLLOWUP_PID=$!
     fi
     COOLDOWN_UNTIL=$((NOW + COOLDOWN))
+    TRIP_FIRED=1
     STREAK=0
+  fi
+
+  # ── the escalation rung: custody converts to a kill when the freeze is losing ───────────────────
+  # Rides ACT=stop with an opt-out (CC_SENTINEL_KILL=off) for the parent-breaker's reason: a
+  # separately-defaulted-off flag ships the mechanism inert on the one box it was written for.
+  # DEBT_ELIG counts only rows past KILL_MIN_HOLD_S, so the trip that CREATES the debt never kills
+  # on the same tick — the freeze always gets its chance first, and the intent line cannot fire
+  # over a set that would be wholly spared.
+  if [ "$ACT" = "stop" ] && [ "$KILL" = "on" ] && [ -s "$FROZEN_DB" ]; then
+    DEBT_ELIG="$(awk -F'\t' -v now="$NOW" -v min="$KILL_MIN_HOLD_S" \
+      'NF >= 4 && ($4 + 0) > 0 && (now - $4) >= min { n++ } END { print n + 0 }' "$FROZEN_DB" 2>/dev/null || echo 0)"
+    KREASON="$(kill_due "${SEG_PCT:-0}" "${SEG_RATE:-0}" "$TRIP_FIRED" "$DEBT_ELIG")" || KREASON=""
+    if [ -n "$KREASON" ]; then
+      KV="$(kill_escalate "$NOW" "$KREASON")"
+      printf '%s compressor-sentinel: KILL-ESCALATE reason=%s %s\n' "$TS" "$KREASON" "$KV" >&2
+      printf 'actuator: kill-escalate reason=%s %s\n' "$KREASON" "$KV" >> "$SNAP" 2>/dev/null || true
+    fi
   fi
 
   # THE RELEASE RUNS ON EVERY TICK, INCLUDING THE QUIET ONES, and that placement is the mechanism
@@ -1287,7 +1582,13 @@ while :; do
   # the quiet box that is the normal case after the actuator has done its job.
   if [ "$ACT" = "stop" ] && [ -s "$FROZEN_DB" ]; then
     if [ -z "$WHY" ]; then RELMODE=clear; else RELMODE=ceiling; fi
-    RELV="$(release_frozen "$NOW" "$RELMODE")"
+    # The spawner-release certificate travels separately from the mode: clear-mode still releases
+    # WORKERS after HOLD_MIN_S, but a PARENT needs CLEAR_STREAK ticks of clear-AND-calm plus its
+    # own longer hold (release_frozen's parent branch — panic #5's fatal SIGCONT is the case this
+    # split exists for).
+    PARENT_OK=0
+    [ "$CLEAR_STREAK" -ge "$REL_PARENT_TICKS" ] && PARENT_OK=1
+    RELV="$(release_frozen "$NOW" "$RELMODE" "$PARENT_OK" "$CLIFF")"
     case "$RELV" in
       released=0\ *) : ;;   # nothing came due this tick; the trip block reports the standing debt
       *)
