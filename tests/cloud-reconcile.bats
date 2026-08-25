@@ -195,6 +195,27 @@ STUB
     true
   }
 
+  # A branch carrying ONLY the boot commit — the state CLOUD_OBSERVABILITY.md §4.1's contract
+  # creates and nothing else in this suite can produce. The commit is replayed VERBATIM from the
+  # payload scripts/handoff-fire.sh emits ("STEP 1 — YOUR FIRST ACT"), authored as a VM, so the
+  # fixture is the real artifact rather than an approximation of it.
+  # shellcheck disable=SC2317
+  #   Same structural falsehood the file header records for SC2329: this body is invoked from @test
+  #   subshells, which shellcheck does not parse as call sites, so every line in it reads unreachable.
+  push_boot_branch() {  # $1=branch  [$2=author/committer email]
+    local b="$1" em="${2:-$VM_EMAIL}" w
+    w="$D/w-$(printf '%s' "$b" | tr / -)"
+    git -C "$REPO" worktree add -q -b "$b" "$w" main
+    GIT_COMMITTER_EMAIL="$em" GIT_COMMITTER_NAME=cloud \
+      git -C "$w" -c user.email="$em" -c user.name=cloud \
+        commit -q --allow-empty -m "chore: cloud session boot"
+    git -C "$w" push -q origin "HEAD:refs/heads/$b"
+    git -C "$REPO" worktree remove --force "$w"
+    git -C "$REPO" branch -q -D "$b"
+    rm -rf "$w"
+    true
+  }
+
   # The REAL githooks/commit-msg, installed where git would look for it. The strip arm exists to
   # clear THAT predicate, so a fixture stand-in would prove the mechanism and not the outcome.
   install_real_msg_hook() {
@@ -847,4 +868,65 @@ dead_pid() {
   [ "$status" -eq 0 ]                       # the land itself succeeded and is not retracted …
   [[ "$output" == *"NOT filled"* ]] || false   # … but the non-verdict is NAMED
   grep -q '^paths=$' "$CC_CLOUD_STATE/nofill.decl"
+}
+
+# ── "BOOTED, PRODUCED NOTHING" — the state the boot-push contract creates (backlog 0c8b39b67665) ──
+# CLOUD_OBSERVABILITY.md §4.1 buys an informative absence by requiring the session's FIRST act to be
+# a push of its declared branch, an empty commit being enough. scripts/handoff-fire.sh now emits
+# that contract, and the price is a branch that can exist carrying a boot commit and no work.
+#
+# Before this guard such a branch was ELIGIBLE like any other: fetched, re-authored, handed to the
+# lander, reported `✓ landed` for a session that produced nothing — and `fill-paths` would derive an
+# EMPTY path set from its commits, which `landed()` reads as "not landed" BY DESIGN, so every later
+# sweep re-attempted the same branch forever. The whole reason absence was made informative is
+# defeated if the boot signal is then mistaken for a result.
+@test "a branch carrying ONLY the boot commit is NOT landed — booted is not a result" {
+  push_boot_branch claude/booted
+  push_branch claude/worked 1
+  decl cloud-booted claude/booted
+  decl cloud-worked claude/worked
+
+  CONFIRM=1 run cr --all
+  [ "$status" -eq 0 ]
+  # POSITIVE CONTROL, in the same run and off the same fixture: the sibling that produced content
+  # IS landed, so "booted is absent from the log" is evidence and not a grep over nothing.
+  landed_branches | /usr/bin/grep -q '^claude/worked$'
+  landed_branches | /usr/bin/grep -qv '^claude/booted$' || false
+  [[ "$output" == *"booted, produced nothing"* ]] || false
+}
+
+@test "…and --land names it the same way, without calling the lander, and does not fail the caller" {
+  push_boot_branch claude/booted2
+  decl cloud-booted2 claude/booted2
+
+  CONFIRM=1 run cr --land claude/booted2
+  # exit 0, DELIBERATELY. A land refusal here would file a W3 artifact and wake the originator
+  # (scripts/cloud-return.sh:345) about a lander that was never asked to run — a second alarm for
+  # one fault, blaming the wrong component. The fault itself is cc-cloud's to row, from the sha
+  # movement it already watches (C4 STALLED / C6 ABANDONED).
+  [ "$status" -eq 0 ]
+  [ ! -s "$LAND_STUB_LOG" ]
+  [[ "$output" == *"booted, produced nothing"* ]] || false
+
+  # POSITIVE CONTROL: the identical invocation on a branch with content DOES reach the lander, so
+  # the empty log above is this guard and not a broken fixture.
+  push_branch claude/worked2 1
+  decl cloud-worked2 claude/worked2
+  CONFIRM=1 run cr --land claude/worked2
+  [ "$status" -eq 0 ]
+  [ -s "$LAND_STUB_LOG" ]
+  landed_branches | /usr/bin/grep -q '^claude/worked2$'
+}
+
+@test "--list still reads it ELIGIBLE — content is not answerable over a remote-only ref" {
+  # Pinned so the honest limit is not later read as a bug and 'fixed' by making --list fetch.
+  # classify() runs against `git ls-remote` output; the branch is not a local head at that point,
+  # so no content question can be asked of it. --list reports what it CAN know (a live declaration
+  # names this branch) and the guard runs where the answer exists — after fetch_branch, in the
+  # acting verbs. A --list that fetched would turn a read-only sensor into a mutator of the repo.
+  push_boot_branch claude/booted3
+  decl cloud-booted3 claude/booted3
+  run cr --list
+  [ "$status" -eq 0 ]
+  echo "$output" | /usr/bin/grep -q 'claude/booted3.*ELIGIBLE'
 }

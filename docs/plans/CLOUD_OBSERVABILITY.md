@@ -150,6 +150,61 @@ session's brief requires its **first act** to be pushing that branch — an empt
 Absence then becomes informative: no ref inside the budget is `BOOTING` (expected); no ref past it
 is `NOT-STARTED` (actionable — re-fire, or check entitlement).
 
+#### 4.1a ✅ The contract is EMITTED as of 2026-08-25 — until then this section was prose only
+
+> 🚨 **The paragraph above is the sentence the entire design rests on, and for two and a half weeks
+> nothing implemented it** (backlog `0c8b39b67665`). Every payload `scripts/handoff-fire.sh` had ever
+> emitted asked for the push **at the end** — *"Push whatever you have before you finish"* — which is
+> the opposite contract. Under it `C1 NOT-STARTED` is not a verdict about booting at all: a session
+> that booted normally, cloned, read its brief and started working has pushed nothing, so it reads
+> exactly like the four cases this section opens by distinguishing. And it is not an edge case —
+> `cc-cloud`'s boot budget defaults to **900 s** (`bin/cc-cloud:190`), well inside the first unit of
+> real work, so the false `NOT-STARTED` was the *common* outcome and its cure (re-fire, or go check
+> entitlement) was actively wrong: it re-fires a session that is running.
+
+**What now emits it** (`scripts/handoff-fire.sh`, the cloud-payload block). The trailer is two
+numbered steps instead of one paragraph, and step 1 is demanded *before the session reads anything
+else in the repo*:
+
+```text
+STEP 1 — YOUR FIRST ACT, BEFORE ANY WORK.
+    git switch -c <branch>
+    git commit --allow-empty -m "chore: cloud session boot"
+    git push -u origin HEAD
+STEP 2 — BEFORE YOU FINISH.
+    git push origin HEAD
+```
+
+The empty commit is what makes the demand *satisfiable at boot*: a VM has nothing to commit before
+it works, so any contract that waits for content cannot be a boot signal. `--allow-empty` costs one
+commit object and turns "no ref past the budget" into a single honest fact — this session never got
+far enough to run three git commands. Step 2 is unchanged and is not replaced by step 1; the payload
+says so, because a boot push that is mistaken for a result is the failure mode below.
+
+**The state this buys, and where it is handled.** A `claude/*` branch can now carry a boot commit and
+no work. That is a real state — *booted, produced nothing* — and it is exactly the one the old
+`no ref` reading conflated with *never started*. It must not reach the lander: unguarded it would be
+fetched, re-authored and reported `✓ landed` for a session that produced nothing, and `fill-paths`
+would derive an **empty** path set from its commits, which `landed()` reads as "not landed" by
+design, so every later sweep would re-attempt the same branch forever (§5.1's post-hoc fill, one
+level down). `scripts/cloud-reconcile.sh` skips it — `no_content()`, an empty three-dot diff against
+the trunk, checked after the fetch in both acting verbs.
+
+⚠️ **The skip is by CONTENT, never by matching the boot commit's message.** A grep for the subject
+would make the payload's exact wording a cross-file contract that fails *silently* the first time
+either side is reworded, and it would still miss a VM that boots with a non-empty no-op commit. It
+is also **not an alarm and deliberately exits 0**: "booted then produced nothing" is a real fault,
+but it is `cc-cloud`'s to row from the sha movement it already watches (C4 `STALLED` / C6
+`ABANDONED`). Raising it as a *land refusal* would file a W3 artifact and wake the originator
+(`scripts/cloud-return.sh:345`) about a lander that was never asked to run — a second alarm for one
+fault, blaming the wrong component.
+
+`--list` still reports such a branch `ELIGIBLE`, and that is the honest limit rather than a hole:
+`classify()` runs against `git ls-remote` output, where the branch is not a local head and no content
+question can be asked of it. Pinned by a test, so it is not later "fixed" by making a read-only
+sensor fetch. Tests: `tests/handoff-fire-cloud.bats:20` (the payload demands the boot push first,
+read as an *effect* — the bytes handed to the create) and `tests/cloud-reconcile.bats:32-34`.
+
 ### 4.2 The discriminator the whole design rests on
 
 Measured, not assumed:
@@ -776,7 +831,10 @@ Before any cloud session is fired, in this order:
 1. `cc-cloud declare --id <id> --branch <b> --paths <what it will land> --url <session url>` —
    an undeclared cloud session is unobservable, and `declare` refuses without `--id`/`--branch`.
 2. The session's brief must require **pushing the declared branch as its first act**, so that
-   absence past the boot budget means something (§4.1).
+   absence past the boot budget means something (§4.1). ✅ **Built 2026-08-25** — `handoff-fire.sh`
+   emits it as "STEP 1 — YOUR FIRST ACT" with an `--allow-empty` boot commit; it was prose only
+   until then, and §4.1a records what that cost and what the boot-only branch it creates now
+   costs downstream.
 3. §5.2 must be wired first — otherwise `com.claude.team-orphan-reaper` may archive the team
    while the session is healthy.
 4. On completion, `cc-cloud retire --id <id>` — or let C3 `LANDED` render it silent, which it does

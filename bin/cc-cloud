@@ -107,6 +107,18 @@
 #   C5 ALIVE        ref exists and advanced inside the budget                               no row
 #   C6 ABANDONED    ref exists, not landed, past life_s                                       ROW
 #
+# ── C1 IS ONLY A VERDICT ABOUT BOOTING BECAUSE THE FIRE DEMANDS A BOOT PUSH ──────────────────────
+# C1 says "never started". Nothing this program can observe says that: no-ref is equally consistent
+# with a session that booted fine and has simply not pushed yet. The claim is bought entirely by the
+# contract in CLOUD_OBSERVABILITY.md §4.1 — the brief's FIRST act is `git switch -c <branch>` + an
+# `--allow-empty` commit + `git push -u`, so a booted session has a ref within seconds and absence
+# past the budget is a fact about booting rather than about progress.
+# THE PRODUCER IS scripts/handoff-fire.sh (the cloud-payload block, "STEP 1 — YOUR FIRST ACT").
+# Until 2026-08-25 it existed only as that prose (backlog 0c8b39b67665) and every payload asked for
+# the push at the END, under which C1 fires on healthy sessions ~15 min in. Named here because this
+# file is where the verdict is read: a reader who does not know a producer exists cannot tell whether
+# C1 means "never booted" or "has not pushed", and the two have opposite cures.
+#
 # ── ORDERING: C3 PRECEDES C1, because a branch ref is DELETED on the way to being landed ─────────
 # A raw branch-presence probe scores a landed-then-pruned session identically to one that never
 # booted: both are `ls-remote` rc=0 with empty stdout. That is not a hypothetical. This repo's own

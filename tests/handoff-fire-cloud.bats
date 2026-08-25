@@ -461,3 +461,49 @@ EOF
   [ -s "$CLOUD_DECL_LOG" ]
   [ ! -f "$BATS_TEST_TMPDIR/pf-off.log" ]                # the override SKIPS the probe, not just its verdict
 }
+
+# ── 20 — the BOOT-PUSH contract (backlog 0c8b39b67665) ─────────────────────────────────────────
+# CLOUD_OBSERVABILITY.md §4.1 is the sentence the whole absence contract rests on: the brief's FIRST
+# act is a push of the declared branch, an empty commit being enough, so that "no ref past the boot
+# budget" is a fact about BOOTING. It was prose only. Every payload this file emitted before
+# 2026-08-25 asked for the push at the END ("push whatever you have before you finish"), under which
+# a healthy session that is simply still working is indistinguishable from one that never booted —
+# and `cc-cloud`'s 900 s default budget (bin/cc-cloud:190) expires well inside the first unit of real
+# work, so C1 NOT-STARTED fired on WORKING sessions and its cure (re-fire) was actively wrong.
+#
+# Read as an EFFECT — the bytes handed to the create — never as a string in the source, for the same
+# reason case 17 is: the payload is assembled at fire time and a source grep would pass on a block
+# that never reaches `claude --cloud`.
+#
+# RED-PROOF: replay against `git show <pre-fix sha>:scripts/handoff-fire.sh` in a scratch tree. This
+# case goes RED there (`--allow-empty` occurs nowhere in the file, so `commit` is empty and the
+# ordering assertion cannot even be evaluated); case 17 stays GREEN there, which is what makes 17 the
+# control proving the payload was reaching the create all along and only its CONTENT changed.
+@test "20 the payload demands the boot push as the FIRST act — an empty commit, before any work" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: t" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ -s "$BATS_TEST_TMPDIR/create.log" ]
+  local sw commit push
+  sw="$(grep -n 'git switch -c claude/fire-' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  commit="$(grep -n 'git commit --allow-empty' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  push="$(grep -n 'git push -u origin HEAD' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$commit" ] || { echo "the payload never instructs the BOOT COMMIT — absence past the boot budget means nothing"; false; }
+  [ -n "$sw" ] || { echo "the payload never creates the branch the boot commit lands on"; false; }
+  [ -n "$push" ] || { echo "the payload never instructs the boot push"; false; }
+  # switch -c → commit --allow-empty → push -u, in that order. Any other order is not a boot signal:
+  # a commit before the branch exists lands on the default branch, and a push before the commit has
+  # nothing to carry.
+  [ "$sw" -lt "$commit" ] || { echo "the boot commit must FOLLOW the branch create (sw=$sw commit=$commit)"; false; }
+  [ "$commit" -lt "$push" ] || { echo "the boot commit must PRECEDE the push (commit=$commit push=$push)"; false; }
+  # …and the boot push must be demanded BEFORE the work, not merely present. The end-of-session push
+  # is a separate, later instruction; if the only push instruction sat under the finishing step the
+  # ordering above would still pass while the contract was unimplemented.
+  local first_act finish
+  first_act="$(grep -n 'FIRST ACT' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  finish="$(grep -n 'BEFORE YOU FINISH' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$first_act" ] || { echo "the payload never marks the boot push as the session's first act"; false; }
+  [ -n "$finish" ] || { echo "the payload lost its end-of-session push — step 1 is not a substitute for step 2"; false; }
+  [ "$first_act" -lt "$finish" ] || { echo "the boot push must be demanded BEFORE the finishing push (first=$first_act finish=$finish)"; false; }
+  [ "$first_act" -lt "$sw" ] || { echo "the three boot commands must sit UNDER the first-act heading"; false; }
+}

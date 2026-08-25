@@ -7812,7 +7812,8 @@ if [ "$CLOUD" = 1 ]; then
   CLOUD_BRANCH="$(cc_cloud_branch_name)"
   CLOUD_CWD="$PWD"; [ -d "$CLOUD_CWD" ] || CLOUD_CWD="$REPO"
 
-  # The payload = the brief, plus the ONE instruction that makes the result reachable. A cloud VM
+  # The payload = the brief, plus the two instructions that make the session OBSERVABLE (the boot
+  # push) and its result REACHABLE (the final push). A cloud VM
   # has no ~/.claude, no cc-notify and no /ship (§1, G6), so the local trailers below — the
   # back-channel ping, the self-retire, the pane bookkeeping — are all unrunnable there. Its push
   # IS its back-channel: scripts/cloud-reconcile.sh discovers `claude/*` on the remote and hands it
@@ -7833,20 +7834,63 @@ if [ "$CLOUD" = 1 ]; then
   # there the name is authorised AT CREATE. cc_cloud_create's signature is `cfg cwd prompt`
   # (scripts/lib/cloud-create.sh:185): the CLI leg has NO branch parameter at all, so the payload
   # is the only place the branch can be established, and establishing it is a real `switch -c`.
+  #
+  # 🚨 AND THE PUSH IS DEMANDED TWICE — AT BOOT AND AT THE END — BECAUSE ONLY THE BOOT ONE MAKES
+  # ABSENCE MEAN ANYTHING (backlog 0c8b39b67665; CLOUD_OBSERVABILITY.md §4.1, §8 step 2).
+  # §4.1 is the load-bearing sentence of the whole observability design: *"the session's brief
+  # requires its FIRST act to be pushing that branch — an empty commit is enough. Absence then
+  # becomes informative."* It was PROSE ONLY. Every payload this file has ever emitted asked for the
+  # push at the END ("push whatever you have before you finish"), which is the opposite contract,
+  # and under it `C1 NOT-STARTED` is not a verdict about booting at all: a session that booted
+  # normally, cloned, read its brief and spent twenty minutes working has pushed nothing, so it
+  # reads exactly like one that never started, one that died at boot, and one that was refused
+  # entitlement — the four-way ambiguity §4.1 opens with, unresolved by the very sentence written to
+  # resolve it. `cc-cloud`'s boot budget defaults to 900 s (bin/cc-cloud:190), well inside the first
+  # unit of real work, so the false NOT-STARTED is the COMMON case rather than an edge one, and its
+  # cure is actionable and wrong: re-fire a session that is running.
+  #
+  # The empty commit is what makes the demand satisfiable at boot. A VM has nothing to commit before
+  # it works, so any contract that waits for content cannot be a BOOT signal; `--allow-empty` costs
+  # one commit object and converts "no ref past the budget" into a single, honest fact — this
+  # session never got far enough to run three git commands.
+  #
+  # The consequence is deliberate and is handled at the other end rather than argued away: a branch
+  # can now carry a boot commit and no work. That is a REAL state (booted, produced nothing) and it
+  # is distinguishable from the states it used to be conflated with, which is the entire point.
+  # scripts/cloud-reconcile.sh skips it by CONTENT (empty diff against trunk), never by matching
+  # this message — a cross-file string contract would fail silently the first time either side was
+  # reworded, and the content test also catches a VM that boots with a non-empty no-op commit.
   CLOUD_PAYLOAD="$(cat "$PROMPT_FILE")
 "'
-── HOW TO RETURN YOUR WORK (this session runs off-box; read this before you finish) ──
+── HOW TO RETURN YOUR WORK (this session runs off-box; read this BEFORE you start) ──
 You are running in an Anthropic-managed VM. Nothing on the operator'"'"'s machine can see your
 filesystem, your processes or your terminal, and you cannot run this repo'"'"'s /ship. Your ONLY
-channel back is a git push, and it must go to exactly this branch — CREATE IT FIRST, then push it:
+channel back is a git push, and it must go to exactly this branch:
+
+    '"$CLOUD_BRANCH"'
+
+STEP 1 — YOUR FIRST ACT, BEFORE ANY WORK. Run these three commands now, before you read anything
+else in the repo:
 
     git switch -c '"$CLOUD_BRANCH"'
+    git commit --allow-empty -m "chore: cloud session boot"
     git push -u origin HEAD
 
-That branch name was assigned by the firing side and is already declared as the one thing watched
-for your progress — a push anywhere else is invisible and your work will strand. Push whatever you
-have before you finish, even if the work is incomplete; an unpushed cloud session leaves no trace
-of any kind. A local reconciler (scripts/cloud-reconcile.sh) discovers the branch and lands it.'
+That push is the only evidence this box will ever have that you booted at all. The firing side
+declared that branch and watches it on a boot budget; if the ref is still absent when the budget
+expires you are recorded as NOT-STARTED and the work is re-fired to someone else, while you are
+still running. Do NOT wait until you have something worth showing: from here, "has not booted" and
+"has nothing to commit yet" are the same observation, and the empty commit is what tells them
+apart. It is expected, it is cheap, and it is not a substitute for step 2.
+
+STEP 2 — BEFORE YOU FINISH. Push whatever you have, even if the work is incomplete:
+
+    git push origin HEAD
+
+A push anywhere else is invisible and your work will strand; an unpushed cloud session leaves no
+trace of any kind. A local reconciler (scripts/cloud-reconcile.sh) discovers the branch and lands
+it — a branch carrying only the boot commit is read as "booted, produced nothing" and is not
+landed, so step 1 can never be mistaken for a result.'
 
   if [ "$DRY" = 1 ]; then
     echo "-- DRY RUN: cloud fire (no create issued, no quota spent)"

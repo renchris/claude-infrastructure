@@ -383,6 +383,36 @@ diff_size() {  # <repo> <trunk-ref> <branch> → changed-file count (large senti
   case "$n" in ''|*[!0-9]*) printf '999999' ;; *) printf '%s' "$n" ;; esac
 }
 
+# ── "BOOTED, PRODUCED NOTHING" — the state the boot-push contract creates ─────────────────────
+# CLOUD_OBSERVABILITY.md §4.1 makes a cloud session's FIRST act a push of its declared branch, an
+# empty commit being enough, so that "no ref past the boot budget" means *never booted* instead of
+# meaning nothing in particular (backlog 0c8b39b67665 — the contract was prose until
+# scripts/handoff-fire.sh emitted it). That trade is what this guard pays for: absence became
+# informative, and in exchange a `claude/*` branch can now exist carrying a boot commit and no work.
+#
+# Such a branch must not reach the lander. Left alone it would be fetched, re-authored and handed to
+# desk-land, which would report `✓ landed` for a session that produced nothing — and `fill-paths`
+# would derive an EMPTY path set from its commits, so `landed()` returns "not landed" by design
+# (see the post-hoc fill below) and every subsequent sweep re-attempts the same branch forever. Both
+# halves are the failure this file exists to prevent, arriving through the front door.
+#
+# TESTED BY CONTENT, NEVER BY MESSAGE. The obvious implementation greps for the boot commit's
+# subject, which makes the payload's exact wording a load-bearing cross-file contract that fails
+# SILENTLY the first time either side is reworded — and it would still miss a VM that boots with a
+# non-empty but no-op commit. An empty three-dot diff against the trunk is the same question asked
+# of the artifact: this branch adds no content, so there is nothing to land, whatever its commits
+# say. `diff_size` returns its 999999 sentinel when the answer is undecidable, so an unreadable
+# range is never mistaken for an empty one — no sensor, no verdict.
+#
+# NOT AN ALARM, AND DELIBERATELY exit 0. "Booted and then produced nothing" is a real fault, but it
+# is cc-cloud's to row (C4 STALLED / C6 ABANDONED, from sha movement it already watches) and the
+# operator hears it once from there. Reporting it here as a land REFUSAL would file a W3 artifact
+# and wake the originator about a lander that was never even asked to run
+# (scripts/cloud-return.sh:345), i.e. a second alarm for one fault, blaming the wrong component.
+no_content() {  # <repo> <trunk-ref> <branch> → 0 iff the branch adds no content to the trunk
+  [ "$(diff_size "$1" "$2" "$3")" = 0 ]
+}
+
 # ── the identity translation (see "THE IDENTITY WALL" in the header) ─────────────────────────
 git_ident_email() {  # <repo> → the author email git ITSELF would use (empty ⇒ none resolvable)
   # `git var GIT_AUTHOR_IDENT`, never `git config user.email`: the same arbiter githooks/pre-commit
@@ -686,6 +716,12 @@ EOF
   rc=0; fetch_branch "$C_REPO" "$TARGET" || rc=$?
   [ "$rc" -eq 0 ] || die 65 "could not bring '$TARGET' into $C_REPO as a local head — $FETCH_DETAIL"
   [ -n "$FETCH_DETAIL" ] && echo "→ $TARGET — $FETCH_DETAIL"
+  # Asked only now, because it needs a LOCAL head: classify() runs against a remote-only ref and
+  # cannot see content at all, which is why --list reports no such state.
+  if no_content "$C_REPO" "$C_TRUNK" "$TARGET"; then
+    echo "· $TARGET — booted, produced nothing: no content against $C_TRUNK (the boot commit is not a result). Nothing to land."
+    exit 0
+  fi
   derive_paths "$C_ID"
   rc=0; reauthor_branch "$C_REPO" "$C_TRUNK" "$TARGET" "$C_ID" || rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -724,6 +760,11 @@ while IFS= read -r b || [ -n "$b" ]; do
     continue
   fi
   [ -n "$FETCH_DETAIL" ] && echo "→ $b — $FETCH_DETAIL"
+  # As in --land: content is only answerable once the branch is a local head.
+  if no_content "$C_REPO" "$C_TRUNK" "$b"; then
+    echo "· $b — skipped: booted, produced nothing — no content against $C_TRUNK (the boot commit is not a result)."
+    continue
+  fi
   derive_paths "$C_ID"
   rc=0; reauthor_branch "$C_REPO" "$C_TRUNK" "$b" "$C_ID" || rc=$?
   if [ "$rc" -ne 0 ]; then
