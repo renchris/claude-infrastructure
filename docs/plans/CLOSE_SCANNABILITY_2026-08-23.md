@@ -322,3 +322,34 @@ to a substring scan over argv is the exact defect `gate-cleanup`'s `is_gate_exec
 (a Claude session's argv embeds its whole prompt; a substring match once selected a live peer for
 `SIGKILL`). `claude` sessions are already excluded here, which weakens but does not remove the
 hazard. **Resolve this before writing the lib, not after.**
+
+### D8 addendum 2 — the open fork, RESOLVED: there is no single clean discriminator (2026-08-24)
+
+The previous addendum left one thing to settle before writing the lib: how to classify
+`bats-exec-test` as work without substring-scanning argv. Measured against the live population, and
+the answer is that **every single-rule candidate fails on a nameable member** — so the rule is a
+composition, and what actually matters is choosing its fail direction on purpose.
+
+| candidate | fails on |
+|---|---|
+| argv[0..1] resolves under the WORKTREE | `bats-exec-test` — argv0 is `/opt/homebrew/…`, argv1 is `--dummy-flag`, and the suite path sits at argv[2+]. **False NEGATIVE.** |
+| argv[0..1] under `~/.claude` ⇒ infrastructure | classifies `lead-crash-watchdog.sh` correctly; `caffeinate -i -t 300` (a harness-spawned utility at `/usr/bin`) reads as **WORK**. False positive. |
+| parentage (descends from a hook vs from the tool shell) | backgrounded work is reparented to pid 1, so parentage is not discriminating at all (MEMORY: `orphanhood-is-not-a-discriminating-signal`) |
+| widening to a substring scan over argv | the defect `gate-cleanup`'s `is_gate_exec` header exists to prevent |
+
+**Resolution.** Compose two structural rules, then fail deliberately:
+
+1. `INFRA` if argv[0..1] is under `~/.claude/` — structural, and *new hooks install there too*, so it
+   covers the growing population instead of rotting like a name list.
+2. `INFRA` if argv0 is a harness-spawned session utility (`caffeinate` today). This one IS a list,
+   and is written down as such: short, stable, and to be re-checked when it grows.
+3. Otherwise **`WORK`** — the unknown case reads BUSY, not idle.
+
+**Why the fail direction is toward BUSY, and why that is safe only with the sample attached.** A
+false IDLE is silent and actively misleading — it tells the operator nothing is happening while a
+gate runs, which is the confusion this whole row exists to end. A false BUSY is self-diagnosing
+*provided the renderer always names the sample process*: the operator sees `caffeinate` and knows
+instantly it is noise. So `session_busy_live` MUST return `<n> <sample-argv>`, never a bare count —
+the sample is not a nicety, it is what makes the chosen fail direction correctable.
+
+The build in `a3eaa0dc1be2` is now unblocked: its one open design question is answered here.
