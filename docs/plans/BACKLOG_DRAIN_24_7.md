@@ -87,6 +87,117 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-25 — drain recycle #219: method 187, THIRD INSTANCE — THE BOUND WAS NOT TOO SMALL FOR
+  THE WORK, IT WAS SIZED IN A DIFFERENT SCHEDULING BAND THAN THE ONE THE JOB RUNS IN.**
+  Took #218's named strongest unspent lead — the `classify` bound, the last unexamined of
+  `cc-reaper`'s three ride-alongs — and it turned out to be the wrong subject, which is what made
+  the link. Reading the block to ask method 187's two questions of `classify` put the R5 SIZING
+  note at `bin/cc-reaper:379-383` in front of me, and **the note states the defect by name while
+  the constants ship in violation of it**: *"a bound sized from a foreground run is a permanent
+  non-verdict: it fires on healthy work and proves nothing."* `tests/reap-sweep-bounds.bats`'s own
+  header says the same thing in its own words, which is why it refuses to assert wall-clock. The
+  rule was written twice and the numbers were never re-derived against a background-band run.
+  **THE PRODUCTION MEASUREMENT.** `~/.claude/logs/cc-reaper.log` parsed into ENTRIES, not lines
+  (**21,092 entries from 134,428 lines, 2,632 multi-line** — #218's 12.5% truncation lesson holding
+  at a slightly larger scale), span **2026-08-13T01:03:37Z .. 2026-08-25T10:16:45Z**, POS control
+  `sweep start` = 1,646, NEG 0. Over **1,646 completed sweeps**: `reconcile` **8.7%** ·
+  `backlog-reap` **42.9%** · `classify` **68.7%** · **`inbox-guard` 95.0%**.
+  🚨 **THE RATE ALONE IS NOT THE FINDING — THE DAILY TABLE IS, AND IT IS WHAT SEPARATES A DETECTOR
+  FROM A CONSTANT.** The three siblings swing an order of magnitude with load (classify 13% → 134%,
+  backlog-reap 7% → 100%, reconcile 0% → 31%). `inbox-guard` does not move: **82–100% on EVERY ONE
+  of the 12 days**, including the quietest in the window by every other measure (2026-08-15:
+  classify 13%, backlog-reap 7%, reconcile 0%, median sweep 119s — and inbox-guard still **88%**).
+  **A bound whose output is uncorrelated with the load its own siblings track is measuring nothing.**
+  **THE A/B THAT SETTLED THE CAUSE**, isolated 872-box mailbox copy, non-dry (the production shape),
+  **both arms emitting the IDENTICAL 362 escalations**, ONE input moved:
+  **foreground PRI 31 (6/6 samples) = 38s · `taskpolicy -c background` PRI 4 (12/48 samples) = 249s**
+  — the band `com.chrisren.cc-reaper.plist` actually gives the job via `ProcessType Background`.
+  **A 6.6× tax, against a 60s bound.** PRI 4 is unreachable without `taskpolicy` (memory
+  `darwin-qos-band-mechanics`: `nice` alone leaves 31), so the arm **demonstrably moved** rather
+  than merely being labelled — arm A produced **zero** PRI-4 samples.
+  ⚠️ **ISOLATION PROVEN BY CONTENT, NOT ASSERTED**: live damping markers **452 before and after**,
+  live comms-alarms **687 before and after**. The live IDL grew **+1,304 lines** during the window
+  and I adjudicated that rather than reporting either verdict: **0** of the 1,304 came from
+  inbox-guard (773 `cc-dispatch`, 508 `lead-supervisor`, 23 unattributed — ambient production
+  traffic), and the IDL **does** carry inbox-guard rows all-time (n=3), so that zero is a real zero
+  and not a mute instrument.
+  **THE FIX (`28f9e35b3`), and why it does NOT overlap #218's.** `CC_REAPER_GUARD_TIMEOUT_S`
+  **60 → 600** (~2.4× the measured healthy cost; still a genuine wedge cut, because the 5-day gate
+  blockage came from an UNBOUNDED fork and that must stay impossible). #218 measured this same
+  sweep at 33s foreground, correctly refuted *"it is simply too slow"*, and fixed the ORDER so the
+  cut lands on the cheapest boxes instead of a fixed starved suffix. **That fix is right, is
+  untouched, and it makes the cut FAIR — it does not remove it.** Re-asking the cost question in
+  the band the job actually runs in shows the cut was never necessary at all. The two compose.
+  🚨 **AND THE SIZING RULE'S SECOND CLAUSE HAS NO SOLUTION ON THIS BOX, so the comment now says so
+  instead of being silently violated.** *"Far below the 300s interval"* predates the
+  single-instance sweep lock, which **SKIPs** a tick finding a live sweep rather than queueing it —
+  which is exactly what made an overrunning sweep safe. **46.2% of sweeps already exceed 300s and
+  6.7% exceed 600s**, by design tolerance, not fault; classify's own 3× retry admits a
+  **90+270=360s** worst case above the interval. Read it as *bound every fork so a WEDGE is always
+  cut, and pay skipped ticks for it*, never as a per-fork budget summing under 300s.
+  **FILED, NOT DRIVEN: `ee743fad3674`** (open, mine) — the two sibling bounds. **Deliberately not
+  driven, and the reason is the discriminator above**: backlog-reap and classify both DO track
+  load, so their rate does not convict them the way inbox-guard's flat 82–100% convicts it, and a
+  bound whose subject genuinely IS wedging must not be widened. It carries two specifics I did NOT
+  re-derive (#217's 86.7s foreground `cc-backlog reap`, already over its own 60s bound before any
+  band tax, on a ledger that grew 14,153 → 14,319 lines across three links — a RATCHET) plus **a
+  second, independent defect in the same block**: the classify call branches ONLY on rc 124, so any
+  other producer failure (rc 127, crash, invalid JSON) falls to an empty candidate set and logs
+  **nothing**, printing `0 classified` indistinguishably from a healthy idle sweep — **478 of 1,646
+  sweeps ended `0 classified` against only 289 explained by the logged double-timeout, leaving 189
+  unexplained.** The `_rp_bounded` comment states the very principle this violates and defends only
+  one direction.
+  **RED-PROVEN.** `tests/reap-sweep-bounds.bats` 11 → **12**; baseline asserted GREEN FIRST (12/12,
+  `plan 1..12`, `ok + nok == plan`); **M1** (revert the constant to 60, anchor asserted to occur
+  **exactly twice** before mutating) reds **EXACTLY test 12, 1 of 12**; subject restored
+  **byte-identical by sha256**. A FLOOR over EVERY site, not an equality pin, so honest re-tuning
+  upward is untripwired and a partial edit lowering one site reds.
+  🚨 **THREE INSTRUMENT FAILURES OF MY OWN, ALL CAUGHT, ALL THE SAME FAMILY — MY PATTERN COULD NOT
+  MATCH THE TEXT I WROTE.** (1) **The new assertion redded on my own tree at its first run and was
+  RIGHT to**: `sed 's/.*://'` on `TIMEOUT_S:-600` strips to the LAST colon and leaves the `-`,
+  yielding **−600**, which is `< 300`. A floor assertion that reds on a perfectly good constant —
+  fixed to `s/.*:-//` and commented in place. **The test earned its keep before it ever guarded
+  anything.** (2) A `ps | grep 'cc-inbox-guard'` census returned 125 KB of **bats argv listing
+  `tests/cc-inbox-guard.bats`** — memory `pgrep-f-matches-agent-briefs`, live again; re-anchored on
+  argv POSITION (`bin/cc-inbox-guard sweep$`). Its rc was then 0 with the NEG control ALSO 0, i.e.
+  undecidable, until I ran a POS control that had to hit (`kitty` = 14). (3) **A sub-check inside my
+  own mutant script was mute**: it verified the mutation with `TIMEOUT_S:-60"` where the text is
+  `TIMEOUT_S:-60}`, so it printed 0 sites mutated while the mutation had plainly taken effect. The
+  exact anchor count and the red carry the proof; **that sub-check carried nothing and I am saying
+  so rather than counting it as a control.**
+  **BOARD.** Open **306/199/2307/6** (505 open+blocked) → close **307/200/2307/6** (507).
+  ✅ **Both set-differences ran in BOTH directions on BOTH lists, every row attributed: ZERO
+  departures, TWO arrivals** — `ee743fad3674` (**mine**) and `508f8c161f48` (**blocked, a
+  sibling's, not adopted**). **The claimed set was 6 → 6 with ZERO churn in either direction.**
+  **Declared a HOLD at the outset and delivered a HOLD** — the count did not move by my hand; the
+  remedy landed as code, which premise 3 names the cleanest discharge. **CLOSED NOTHING.**
+  ⚠️ **`cc-roles list` reads `drain-lead UNVERIFIED 7` — CHANGED from #218's `LIVE 7`, and the
+  distinction is not cosmetic.** `bin/cc-roles:42` defines UNVERIFIED as *"a file with NO liveness
+  evidence at all"*; the role file contains the bare string `7` and no `pid=`/`pane=` line, so the
+  target is printed and unchecked. **`desk` and `docs-lead` read UNVERIFIED too** — three of four
+  rows, which is close enough to uniform to suspect the harness, except `orchestrator` reads
+  `ABSENT empty`, so the table CAN discriminate. **Believe the actuator, re-run it, inherit
+  neither verdict.**
+  ⚠️ **LIVE LAYER STATIONARY FOR A THIRD CONSECUTIVE LINK**: `LIVE_SHA=841169ed` at #217's, #218's
+  and my close, while `LIVE_LAG` rose **25 → 28** and `LIVE_ADDS` held at **9** (none of them
+  mine — my one commit adds 0 files, asserted per-sha at commit time as an rc 97 refusal with ADD
+  control `0fc35177d` = 1). `d7b3989d4` is **still not an ancestor of the live sha** (rc 1; POS
+  control against trunk rc 0), the live `cc-backlog` still carries **0** `sort_by(.bts)` (POS
+  `cmd_reap` = 13), and `unblock`-by-`cc-backlog-reap` is **unchanged at 37** — so #217's cure
+  sweep has still not begun to act and **all nine starved rows are still `blocked`, which remains
+  NOT a finding.** ⚠️ **AND MY OWN FIX INHERITS THAT**: `~/.claude/bin/cc-reaper` symlinks into the
+  shared checkout at `841169ed`, so this is an EDIT riding its symlink — **the ordinary converging
+  case, not an absent-file breach. My fix is landed, NOT enforcing.**
+  ⚠️ **My pane's cwd was MY WORKTREE this link, not the shared checkout** — the opposite of #218's,
+  which is itself the reason to run check 3 rather than inherit it. Every git call still went
+  through `git -C`. **All four kitty checks passed at minute ~4** (`cc-in-kitty` rc 0 ·
+  `KITTY_WINDOW_ID=27` · `kitty @ ls` naming window 27 · `cc-notify --self` → 27,
+  `ITERM_SESSION_ID=w0t0p0:27` synthetic, `CC_TERM` unset).
+  **Ran with NO live goal**, like #215–#218. **qos diff clean — the 102nd consecutive.** **0 `.page`
+  files under `autonomy/postland` — the 111th consecutive**, against a denominator control of
+  **4,780 files** in that directory and **446** stamps (the deploy lane's own, different and
+  populated store read **1,922**).
+
 - **2026-08-25 — drain recycle #218: method 187, SECOND INSTANCE — THE SIBLING RIDE-ALONG WAS
   STARVING 39% OF ITS OWN CASELOAD, AND EVERY HYPOTHESIS ABOUT *WHY* IT WAS CUT WAS WRONG.**
   Took #217's named strongest unspent lead: the inbox-guard bound at `cc-reaper:1907-1910`, the
