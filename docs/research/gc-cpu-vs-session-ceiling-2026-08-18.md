@@ -187,6 +187,15 @@ qualifies on ~2026-08-24** under this repo's own 2.1.220 precedent if no success
   `1.89` (delta-marginal from the cited axis-09 pair), `2.5–5` (published, an aggregate÷N).
   `CC_ADMIT_ACTIVE_CEILING=8`, the felt ~15 wall, `MACHINE_CAPACITY_V2`'s whole model and every
   "+N sessions" figure above all divide by it.
+  **↳ INSTRUMENT LANDED 2026-08-25** (item `193ae8ddce72`) — `scripts/session-load-marginal.sh`,
+  derivation at [`marginal-load-per-session-2026-08-25.md`](marginal-load-per-session-2026-08-25.md).
+  The spread is now explained rather than merely recorded: refitting a series whose marginal is
+  **planted at 1.00** the way `0.172` was produced returns a level-OLS 95% interval of
+  **[−0.479, 2.476]** — which contains *every* incumbent, at r² = 0.004. The four values are draws
+  from an estimator with a ~3-load-point interval, none of which was quoted with one. The
+  first-difference fit on the same series recovers **0.891 [0.361, 1.422]**, excluding `0.172`,
+  `1.89` and `2.5–5`. **Still no measured value for this box** — the recorder has not run on it;
+  budget ~7 h of sampling to separate `0.566` from `1.89`, ~47 h to pin it to ±0.2.
 - **Whether load average means anything as a capacity signal at all.** At constant N=15–16 the box
   read **11.21 → 36.07**; one instrumentation run alone moved it 19 → 36 with session count unchanged.
 - **Whether automated fires retry after a capacity refusal** — decides whether raising the ceiling
