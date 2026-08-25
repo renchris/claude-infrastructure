@@ -150,6 +150,26 @@ session's brief requires its **first act** to be pushing that branch — an empt
 Absence then becomes informative: no ref inside the budget is `BOOTING` (expected); no ref past it
 is `NOT-STARTED` (actionable — re-fire, or check entitlement).
 
+> 🚨 **CORRECTED 2026-08-25 (backlog `f85fce7c26f5`). The four causes enumerated above are all the
+> same cause.** "Pushed nothing", "never started", "died at boot", "refused entitlement" differ in
+> their repair and not in their observable: every one of them is a session that **never pushed**,
+> and the contract above resolves all four together. The list is therefore not an enumeration of
+> the ways to read "no ref" — it is one entry, subdivided. **A fifth way was missing and it is the
+> one that inverts the verdict: the session pushed, its work LANDED, and the branch was then
+> PRUNED.** That is a *success* wearing the byte pattern of a *failure*, and because C1 was
+> evaluated before C3, cc-cloud read it as `NOT-STARTED`. Measured on this remote: **54 landed
+> branches were pruned on 2026-08-19**, and each one flipped from `LANDED` to `NOT-STARTED` at that
+> instant — a state machine running backward. `bin/cc-backlog`'s `cloud_map` maps `NOT-STARTED` to
+> **`open`** ("nobody is working this, so it returns to the wave") and `LANDED` to `done`, so a
+> pruned success was **re-dispatched**: a fresh cloud slot and real quota spent redoing work that
+> was already on trunk. And since C3 is only reachable while the ref still exists, after a prune
+> `done` was **structurally unreachable** for that session, forever.
+>
+> The generalisable form (drain method 184): *when a row says "X is indistinguishable from Y",
+> count how many ways there are to be X.* A row is written from the one path its author observed,
+> so the paragraph above listed four spellings of the path it saw and none of the path it did not.
+> The fix is C7 below, and it needed no new sensor — both discriminators were already on disk.
+
 ### 4.2 The discriminator the whole design rests on
 
 Measured, not assumed:
@@ -178,8 +198,9 @@ exactly one row and `bin/cc-blockers` can consume it unchanged.
 | **C4 STALLED** | ref exists, sha unchanged past `stall_s` — **sidecar history required** | ROW |
 | **C5 ALIVE** | ref exists and advanced inside the budget | no row |
 | **C6 ABANDONED** | ref exists, not landed, past `life_s` | ROW |
+| **C7 VANISHED** | **no ref now, but one was OBSERVED before** — pushed, then the branch went away, and its content is not on trunk | ROW |
 
-Two orderings are load-bearing:
+Three orderings are load-bearing:
 
 - **C3 precedes C4.** A finished session stops pushing *on purpose*. STALLED-first would alarm
   forever on every successful cloud session — an alarm that always fires carries exactly as many
@@ -187,6 +208,36 @@ Two orderings are load-bearing:
 - **C4 requires history, and abstains without it.** The sidecar records "sha X was first seen at
   T"; only `cc-cloud poll` writes it. With no history there is no evidence the sha ever differed,
   so no verdict is available and none is invented.
+- **C3 and C7 precede C1** *(added 2026-08-25, `f85fce7c26f5`)*. The absent-ref arm must ask both
+  discriminators before it may convict a session of never having started. See §4.4.
+
+### 4.4 C7 — the two discriminators for an absent ref, both of which were already on disk
+
+Neither of these needed a new sensor. C1 was simply returning a verdict before either was asked.
+
+| | Discriminator | Separates | Why it is durable |
+| --- | --- | --- | --- |
+| **D1** | content on the trunk ref — `landed()`, i.e. `git ls-tree <trunk> -- <path>` per declared path | the **landed-then-pruned** session | It is the same evidence C3 uses. `landed()` returns *not landed* on an empty path set, so it cannot pass vacuously for a session whose `paths=` was never filled. |
+| **D2** | the heartbeat sidecar `<id>.seen` | **pushed** from **never pushed** | `cc-cloud poll` writes it only from a ref it actually read, and **leaves it untouched on a no-ref pass** — so a recorded sha outlives the branch it came from. |
+
+**D2 carries one guard, and it is load-bearing.** On a re-used branch name the only sha ever
+observed can be the *fire-time* one, which proves the **branch** existed and says nothing about
+this **session**. A sidecar equal to `base_sha` (when `base_probe=ok`) therefore does not count as
+evidence of a push, and that case stays C1. `bin/cc-cloud --selftest` asserts the pair off one
+deletion at one clock: the session that genuinely pushed reads `VANISHED`, the re-used declaration
+beside it reads `NOT-STARTED`.
+
+**D2 without D1 is C7, and it is a ROW** — "a VM pushed and its branch is gone" is precisely the
+event that must not be silent, because the work may be lost. The detail keeps the two sensor states
+apart rather than flattening them: `not on trunk` when `landed()` answered, `trunk unread` when it
+could not run (the no-sensor-no-verdict law, one level down).
+
+⚠️ **`VANISHED` is deliberately unmapped by every consumer, and that is the safe half of the fix,
+not an oversight.** `cc-backlog`'s `cloud_state`, `custody-deathwatch`'s `peer_disposition` and
+`cc-offload`'s palette each route an unmodelled token to *cannot tell* and abstain — which stops
+the false reopen without inventing a false close. What `VANISHED` should MEAN to the reap (park as
+blocked? re-dispatch? close on other evidence?) is a separate decision with a real cost in both
+directions, and it is not settled here.
 
 `--json` / `--table` / `--check` are pure reads; `declare` / `retire` / `poll` are the only
 mutators, and they write only under `CC_CLOUD_STATE`. Nothing fetches, and nothing writes a git ref.

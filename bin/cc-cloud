@@ -101,6 +101,37 @@
 #   C4 STALLED      ref exists, sha unchanged for > stall_s (sidecar evidence REQUIRED)       ROW
 #   C5 ALIVE        ref exists and advanced inside the budget                               no row
 #   C6 ABANDONED    ref exists, not landed, past life_s                                       ROW
+#   C7 VANISHED     no ref NOW, but one was OBSERVED before — pushed, then the branch went     ROW
+#                   away, and its content is not on trunk. Work that may be lost.
+#
+# ── 🚨 C7, AND WHY "NO REF" WAS NEVER ONE FACT (backlog f85fce7c26f5, 2026-08-25) ────────────────
+# `sha == ""` is an AMBIGUOUS value and this file used to read exactly one of its causes. Enumerate
+# every way to produce it (method 184 — a row that says "X is indistinguishable from Y" is written
+# from the ONE path its author observed, so count the paths):
+#   P1 the VM never booted, or booted and pushed nothing            ⇒ genuinely NOT-STARTED
+#   P2 it pushed, the work LANDED, and the branch was then PRUNED   ⇒ the session SUCCEEDED
+#   P3 it pushed, the branch was deleted, nothing reached trunk     ⇒ the work is LOST
+#   P4 the remote could not be read                                 ⇒ U0, already discriminated by rc
+# P1 and P2 are the SAME BYTES on the wire. Measured here: 54 landed branches were pruned on
+# 2026-08-19, and every one of them flipped from LANDED to NOT-STARTED at that instant — which is a
+# state machine running BACKWARD, and it is not cosmetic. `cc-backlog`'s cloud_map reads
+# NOT-STARTED as `open` ("nobody is working this, so it returns to the wave") and LANDED as `done`,
+# so a pruned success is RE-DISPATCHED: a fresh cloud slot and real quota spent re-doing work that
+# is already on trunk. Worse, the LANDED arm below is only reachable while the ref still exists, so
+# after a prune `done` is STRUCTURALLY UNREACHABLE for that session, forever.
+# THE TWO DISCRIMINATORS, and both were already on disk before this arm used them:
+#   D1 content on the trunk ref (`landed()`)  — separates P2. It is the same evidence C3 uses; it
+#      was simply being asked AFTER the absent-ref arm had already returned a verdict.
+#   D2 the heartbeat sidecar `<id>.seen`      — `poll` writes it only from a ref it actually read,
+#      and NEVER clears it on a no-ref pass, so a recorded sha is durable positive proof that the
+#      branch once existed. Guarded against the re-used-branch case: a sidecar holding the
+#      FIRE-TIME sha proves the branch existed, not that this session pushed, so it does not count.
+# D2 without D1 is C7 VANISHED — a row, because "a VM pushed and the branch is gone" is precisely
+# the event that must not be silent. VANISHED is deliberately NOT mapped by any consumer yet: every
+# one of them (cc-backlog's cloud_state, custody-deathwatch's peer_disposition, cc-offload's
+# palette) already routes an unmodelled token to "cannot tell" and abstains, which is the fail-SAFE
+# direction and, for cc-backlog, is the whole point — it stops the false reopen without inventing a
+# close. What VANISHED should MEAN to the reap is a separate decision with a real cost either way.
 #
 # ── BASELINE: why C1/C2 also fire on a ref that EXISTS (migrated from cc-cloud-watch `record`) ────
 # `declare` probes the remote once and records the sha the branch held BEFORE the fire. Without it,
@@ -124,7 +155,7 @@
 # ── row schema (matches bin/cc-fleet's FROZEN shape so cc-blockers can consume it unchanged) ─────
 # {"kind":"cloud-session","state":"<S>","detail":"<ascii, <=44 bytes>","subject":"<id>",
 #  "recover_cmd":"<paste-ready>","ts":<epoch>}
-# state ∈ NOT-STARTED|STALLED|ABANDONED.  `detail` is ASCII-only and <=44 bytes: the board's
+# state ∈ NOT-STARTED|STALLED|ABANDONED|VANISHED.  `detail` is ASCII-only and <=44 bytes: the board's
 # renderer pads by BYTES, so one em-dash silently shifts the column.
 #
 # READ-ONLY against the network and against the git repo. `git ls-remote` performs no fetch and
@@ -446,7 +477,7 @@ trailer_supported() { # <claude-binary> → 0 yes, 1 no, 2 cannot tell
 classify() { # <id>
   local id="$1" f="$STATE/$1.decl" seen="$STATE/$1.seen"
   local branch remote repo paths trunk url dat boot stall life
-  local sha rc n age url_cmd first_seen sha_age base_sha base_probe
+  local sha rc n age url_cmd first_seen sha_age base_sha base_probe lrc last_sha
 
   branch="$(dfield "$f" branch)"
   remote="$(dfield "$f" remote)"
@@ -473,6 +504,34 @@ classify() { # <id>
   fi
 
   if [ -z "$sha" ]; then
+    # THE REF IS ABSENT, AND THERE IS MORE THAN ONE WAY TO BE ABSENT — see C7 in the header. Ask
+    # both discriminators BEFORE convicting the session of never having started, because "never
+    # pushed" and "pushed, landed, pruned" are the same empty string on the wire.
+    # D1 — content on trunk. Identical evidence to C3 below; only its POSITION was wrong. `landed()`
+    # returns 1 on an empty path set, so this cannot pass vacuously for a session whose paths were
+    # never filled.
+    landed "$repo" "$trunk" "$paths"; lrc=$?
+    if [ "$lrc" -eq 0 ]; then
+      printf 'LANDED\tcontent on %s; branch since pruned\t-\n' "$trunk"; return 0
+    fi
+    # D2 — the heartbeat sidecar. `poll` writes it only from a ref it read, and leaves it untouched
+    # on a no-ref pass, so a recorded sha OUTLIVES the branch. The base_sha guard is load-bearing:
+    # on a re-used branch name the only sha ever observed can be the FIRE-TIME one, which proves the
+    # branch existed and says nothing about this session — that case is P1, not P3.
+    last_sha=""
+    [ -f "$seen" ] && last_sha="$(dfield "$seen" sha)"
+    base_probe="$(dfield "$f" base_probe)"
+    base_sha="$(dfield "$f" base_sha)"
+    if [ -n "$last_sha" ] && ! { [ "$base_probe" = "ok" ] && [ "$last_sha" = "$base_sha" ]; }; then
+      # Two spellings, because rc 2 is "the trunk sensor could not run", never "not landed" — the
+      # no-sensor-no-verdict law one level down, kept visible in the detail the board renders.
+      if [ "$lrc" -eq 2 ]; then
+        printf 'VANISHED\tref %.7s pushed, gone; trunk unread\t%s\n' "$last_sha" "$url_cmd"
+      else
+        printf 'VANISHED\tref %.7s pushed, gone, not on trunk\t%s\n' "$last_sha" "$url_cmd"
+      fi
+      return 0
+    fi
     if [ "$age" -gt "$boot" ]; then
       printf 'NOT-STARTED\tno ref after %s (boot budget %s)\t%s\n' "$(dur "$age")" "$(dur "$boot")" "$url_cmd"
     else
@@ -531,7 +590,7 @@ emit_rows() {
     state="${line%%	*}"; line="${line#*	}"
     detail="${line%%	*}"; rcmd="${line#*	}"
     case "$state" in
-      NOT-STARTED|STALLED|ABANDONED) ;;
+      NOT-STARTED|STALLED|ABANDONED|VANISHED) ;;
       *) continue ;;
     esac
     printf '{"kind":"cloud-session","state":"%s","detail":"%s","subject":"%s","recover_cmd":"%s","ts":%s}\n' \
@@ -1143,6 +1202,51 @@ do_selftest() {
   _st_expect "before the fill, a finished session reads ALIVE forever (paths empty ⇒ not assertable)" ALIVE landedcheck
   cmd_fill_paths --id landedcheck >/dev/null 2>&1
   _st_expect "after the fill, its content on the trunk ref reads LANDED" LANDED landedcheck
+
+  # ── C7: A PRUNED BRANCH IS NOT A BRANCH THAT NEVER EXISTED (backlog f85fce7c26f5) ──────────────
+  # Every arm below runs off ONE deletion each, at ONE clock, so the only axis that moves is the
+  # thing under test. `neverpushed` is declared here rather than reused from `boot`, because `boot`
+  # is about to acquire a sidecar and the control has to be a declaration that never had one.
+  cmd_declare --id neverpushed --branch feat/absent --remote "$_ST_D/remote.git" --repo "" >/dev/null 2>&1
+
+  # The sidecar is the second discriminator and it needs a writer. `poll` is that writer, and it
+  # records only refs it actually READ — so this both arms the test and asserts the precondition.
+  cmd_poll >/dev/null 2>&1
+
+  # V1 — THE 54. `landedcheck`'s content is on its trunk ref and its paths are filled. Deleting the
+  # branch removes NOTHING that made it LANDED, so the verdict must not move. Pre-fix this read
+  # NOT-STARTED, i.e. cc-backlog would have reopened a finished item and burned a second VM.
+  "$GIT_BIN" -C "$_ST_D/work" push -q --delete "$_ST_D/remote.git" refs/heads/claude/fill >/dev/null 2>&1
+  CC_CLOUD_NOW=$((2000000000 + 5000))
+  _st_expect "a LANDED session whose branch was PRUNED still reads LANDED" LANDED landedcheck
+
+  # V2/V3 — THE DISCRIMINATOR PAIR, off ONE deletion of feat/x at ONE clock. `boot` was declared
+  # before feat/x existed (base_sha empty) and its sidecar holds the sha it really pushed ⇒ the ref
+  # existed and is gone ⇒ VANISHED. `reused` was declared onto feat/x AFTER it existed, so the only
+  # sha ever observed for it is its own fire-time baseline ⇒ that is evidence about the BRANCH, not
+  # about the session ⇒ still NOT-STARTED. Without this pair the new arm would be satisfied by a
+  # rule that simply calls every absent ref VANISHED.
+  "$GIT_BIN" -C "$_ST_D/work" push -q --delete "$_ST_D/remote.git" refs/heads/feat/x >/dev/null 2>&1
+  _st_expect "a session that PUSHED and whose branch then vanished reads VANISHED" VANISHED boot
+  _st_expect "a sidecar holding only the FIRE-TIME sha is not evidence of a push" NOT-STARTED reused
+
+  # V4 — THE NEGATIVE CONTROL, same clock, same code path: no ref, no sidecar, nothing on trunk.
+  # This is the one case the old arm was right about, and it must stay right.
+  _st_expect "control: a ref that never existed at all is still NOT-STARTED" NOT-STARTED neverpushed
+
+  # V5 — the row schema. A VANISHED session must reach the board; a state that is invisible to
+  # `--json` is a verdict nobody acts on (memory: alarm-polarity-and-attention-budget).
+  # CAPTURE, THEN MATCH IN THE SHELL — no pipe on either leg. `emit_rows | grep -q …` is the
+  # pipefail/SIGPIPE class this repo ratchets on: the early-exit consumer kills the producer, the
+  # pipeline adopts the producer's non-zero, and the condition reads FALSE on a MATCH. Caught here
+  # by scripts/ship-land.sh's own pipefail-sigpipe arm before this ever landed.
+  _v5="$(emit_rows)"
+  case "$_v5" in
+    *'"state":"VANISHED","detail":"ref '*'"subject":"boot"'*)
+      _ST_PASS=$((_ST_PASS + 1)); printf 'ok   VANISHED emits a board row, not just a table cell\n' ;;
+    *) _ST_FAIL=$((_ST_FAIL + 1)); printf 'FAIL VANISHED emitted no row for boot (got: %s)\n' "$_v5" ;;
+  esac
+  CC_CLOUD_NOW=2000000000
 
   printf '%s\n' "--- $_ST_PASS passed, $_ST_FAIL failed"
   [ "$_ST_FAIL" -eq 0 ]
