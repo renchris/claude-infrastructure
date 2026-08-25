@@ -222,14 +222,22 @@ st_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)
   [ "$(st_of "$id2")" = open ]
 }
 
-@test "--force is rejected on any event other than reopen/unblock/claim (never silently ignored)" {
+@test "--force is rejected on any event other than reopen/unblock/block/claim (never silently ignored)" {
   guard_env
   id=$(bash "$CB" add --project /r --title T --source S)
   run bash "$CB" done "$id" --evidence ref:1 --force
   [ "$status" -eq 2 ]
   echo "$output" | grep -q -- '--force'
-  run bash "$CB" block "$id" --needs "operator: x" --force
-  [ "$status" -eq 2 ]
+  # `done` is now the ONLY exemplar this rejection has. Exactly five verbs reach cmd_transition
+  # (claim, done, reopen, block, unblock) and four of them are in the allowlist since block joined it
+  # with its terminal guard (2026-08-25) — so the second exemplar this test used to carry, `block`,
+  # is a legitimate accept today and is pinned as one in the lease test below. Stating the arithmetic
+  # rather than quietly dropping a case: if a sixth transition verb is ever added, it belongs here.
+  #
+  # The other half is that the MESSAGE must keep naming the real allowlist. A verb can be added to
+  # the condition and left out of the sentence, which reads to the caller as though the flag simply
+  # does not exist for it — the rejection would then be right and its explanation wrong.
+  echo "$output" | grep -q 'reopen, unblock, block and claim'
 }
 
 # ── THE RE-OPEN EFFECT: unblock is the other spelling of reopen (backlog d6d8b259235d + 62daeb7d4463)
@@ -267,6 +275,69 @@ st_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)
   run bash "$CB" unblock "$id" --force
   [ "$status" -eq 0 ]
   [ "$(st_of "$id")" = open ]
+}
+
+# THE THIRD SPELLING (2026-08-25, drain recycle #216). The RE-OPEN EFFECT doctrine says "THE
+# PREDICATE IS THE EFFECT, NOT THE VERB" and then enumerates reopen and unblock. `block` is the third
+# member and was unguarded for a month: measured over the whole ledger, a block landed on an already
+# `done` row 61 times across 12 rows, against a control of 2,276 rows that reached done and were
+# never re-blocked. `cmd_add` prints "already DONE; NOT re-opened" and means it — and `cmd_needs`
+# then calls the transition anyway, on both its paths, so the warning was contradicted by its own
+# caller inside one command. These pin all three directions: the refusal, its own cure, and the
+# scope, because a guard that also stopped blocking a CLAIMED row would break reap's four call sites.
+
+@test "block of a DONE item is REFUSED (rc 4), appends NOTHING, stays done — the 5436396f405c shape" {
+  guard_env
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" "done" "$id" --evidence "a974aeeb6 landed + content-verified" >/dev/null
+  before="$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')"
+  run bash "$CB" block "$id" --needs "an operator step already discharged"
+  [ "$status" -eq 4 ]
+  echo "$output" | grep -qi 'terminal'
+  echo "$output" | grep -q 'a974aeeb6'         # the refusal SHOWS what already landed
+  echo "$output" | grep -q -- '--force'        # …and names the deliberate override
+  echo "$output" | grep -q 'cc-backlog block'  # …naming the verb ACTUALLY attempted
+  [ "$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')" -eq "$before" ]   # append-only ledger untouched
+  [ "$(st_of "$id")" = "done" ]
+}
+
+@test "block --force DOES re-block a done item (the guard allows its own cure)" {
+  guard_env
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" "done" "$id" --evidence ref:1 >/dev/null
+  run bash "$CB" block "$id" --needs "it genuinely applies again" --force
+  [ "$status" -eq 0 ]
+  [ "$(st_of "$id")" = blocked ]
+}
+
+@test "block of a CLAIMED item is UNAFFECTED — the guard is scoped to the terminal arm only" {
+  # The over-reach control. reap issues `cmd_transition block` at four sites against live claims;
+  # a guard keyed on the verb rather than on terminality would refuse all four. Only `done` refuses.
+  guard_env
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" claim "$id" --by "$HOST-$$" >/dev/null       # $$ is alive
+  run bash "$CB" block "$id" --needs "a live off-box worker still holds this"
+  [ "$status" -eq 0 ]
+  [ "$(st_of "$id")" = blocked ]
+}
+
+@test "needs over an already-discharged step does not un-complete it (both paths reach the guard)" {
+  # The consumer defect end to end: `needs` re-states a step whose row is already done. The id is a
+  # hash of project+title+source, so the re-file folds onto the SAME row — and before the guard, the
+  # transition two lines below cmd_add's "NOT re-opened" warning silently re-blocked it.
+  guard_env
+  step="authenticate the widget service in the console"
+  id=$(bash "$CB" needs "$step" --project /r)
+  [ -n "$id" ]
+  bash "$CB" "done" "$id" --evidence "closed with a clause-by-clause body" >/dev/null
+  [ "$(st_of "$id")" = done ]
+  run bash "$CB" needs "$step" --project /r
+  [ "$status" -eq 4 ]
+  [ "$(st_of "$id")" = done ]                              # the close SURVIVES the re-emission
+  # …and the same holds with the R7 mint brake disabled, which is the path that never reaches cmd_add.
+  CC_BACKLOG_NEEDS_BRAKE=off run bash "$CB" needs "$step" --project /r
+  [ "$status" -eq 4 ]
+  [ "$(st_of "$id")" = done ]
 }
 
 @test "unblock of a LIVE claim is REFUSED (rc 4) — the double-dispatch bug, other spelling" {
@@ -2139,13 +2210,13 @@ lease_pristine() {
   [ "$(status_of lease00000a7)" = claimed ]
 }
 
-@test "lease: --force is still rejected on every verb but reopen, unblock and claim" {
+@test "lease: --force is still rejected on every verb but reopen, unblock, block and claim" {
   rec '{"id":"lease00000a8","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"L8"}'
   # `done` is quoted for the same reason cc-backlog's own dispatch table quotes it: unquoted, it
   # parses as the loop keyword and shellcheck aborts on the construct (SC1010).
   run bash "$CB" "done" lease00000a8 --evidence sha --force
   [ "$status" -eq 2 ]
-  printf '%s' "$output" | grep -q 'force applies only to reopen, unblock and claim'
+  printf '%s' "$output" | grep -q 'force applies only to reopen, unblock, block and claim'
 
   # BOTH DIRECTIONS, deliberately. The rejection half alone cannot tell a correctly-grown allowlist
   # from one that grew by accident: `unblock` joined it when unblock learned the re-open-effect
@@ -2155,6 +2226,14 @@ lease_pristine() {
   rec '{"id":"lease00000a9","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"L9"}'
   rec '{"id":"lease00000a9","ts":"2026-01-01T00:01:00Z","event":"block","needs":"an operator step"}'
   run bash "$CB" unblock lease00000a9 --force
+  [ "$status" -eq 0 ]
+
+  # `block` joined the allowlist the same way and on the same terms, in the commit that gave it the
+  # terminal guard — its refusal prints `block <id> --needs "…" --force` as the cure, so a rejection
+  # here would be a gate printing a Fix it refuses (memory: work-item-remedy-can-become-forbidden).
+  rec '{"id":"lease00000b1","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"L10"}'
+  rec '{"id":"lease00000b1","ts":"2026-01-01T00:01:00Z","event":"done","evidence":"sha:1"}'
+  run bash "$CB" block lease00000b1 --needs "an operator step" --force
   [ "$status" -eq 0 ]
 }
 

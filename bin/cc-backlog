@@ -161,6 +161,42 @@
 # duplicate unblock from two peers servicing the same ticket is benign, and turning it into an error
 # would spend a refusal on a no-op.
 #
+# ── THE THIRD SPELLING: `done → blocked` (2026-08-25, drain recycle #216) ───────────────────────
+# The paragraph above ends by naming the right principle — key on the EFFECT, because "a guard that
+# enumerates spellings gets out-run by the next one" — and then this section enumerated two
+# spellings. It was out-run by the next one, in its own file, for a month.
+#
+# `block` over a DONE item is the third. It hides better than `unblock` did, in two ways. Its fold
+# resolves to "blocked" rather than to "open", so it never trips the "open IS cc-dispatch's fire
+# predicate" test that motivated the other two; and it reads as a status ANNOTATION rather than as a
+# resurrection, so nobody classified it as one. Measured over the whole ledger before it was fixed
+# (14,117 events / 2,772 ids / 2026-07-18..2026-08-25): 61 blocks landed on an already-done row
+# across 12 rows, against 2,276 rows that reached done and were never re-blocked. Every other verb
+# that touched a terminal row in that walk pre-dates its own guard (claim once on the very day
+# 880c7cf63 landed the claim latch; unblock twice; link once) — `block` was the only one still
+# firing, its newest instance 2026-08-25T03:45:36Z.
+#
+# THE HARM IS NOT THE DISPATCH WAVE, and saying so precisely is what keeps this guard honest. The
+# `wasDone` latch survives a re-block, so `claim` still refuses and no second worker is fired; this
+# is not the 2026-07-20 double-fire. The cost is re-adjudication: landed work re-enters the
+# open+blocked board and its condition counts, and re-admits the verbs that correctly refuse
+# terminal work (b262e41b26fb alternated block/falsify ~50 times, reachable only because each block
+# un-did the done first). 5436396f405c was closed with an evidence body on 2026-08-18, re-blocked 16
+# times, closed AGAIN on 2026-08-24 with a 2,925-char clause-by-clause body, and re-blocked 5h36m
+# later. a36e2b9bbac1 was closed 14 times. Three readers paid for one row.
+#
+# WHY `cmd_add`'s DONE-GUARD DID NOT COVER IT: it prints "already DONE; NOT re-opened" and is telling
+# the truth about ITSELF — `cmd_needs` then calls the transition two lines later and re-blocks the
+# row anyway, on both its paths (the mint path through cmd_add, and the R7 brake, which never reaches
+# cmd_add at all). The warning was never bypassed; it was contradicted by its own caller inside one
+# command. So the guard is at the transition, the event that IS the act, and NOT at the caller
+# (memory: enforcement-must-live-at-the-chokepoint).
+#
+# WHAT IS DELIBERATELY NOT GUARDED HERE, for the same reason as `blocked → open` above: blocking a
+# CLAIMED or OPEN row. reap issues exactly that at four call sites, and it cannot reach the guard at
+# all — it never selects a done item (pinned by "reap: NEVER touches done or already-blocked items").
+# The guard is scoped to the terminal arm only, and `block --force` is its own cure.
+#
 # ── VENUE (2026-08-07, backlog 191d4d056c98) ────────────────────────────────────────────────────
 # A claim may carry `--venue local|cloud`. It names WHERE the worker runs, and it exists for exactly
 # one reason: it decides WHICH ORACLES ARE ENTITLED TO A VERDICT about that claim.
@@ -1703,13 +1739,19 @@ cmd_transition() {
   if [ "$event" = block ] && [ -z "$needs" ]; then
     printf 'cc-backlog block: --needs "<operator-only step>" is required\n' >&2; return 2
   fi
-  # --force overrides the re-open-effect guards (reopen AND unblock), the claim LEASE and the claim
-  # DONE-GUARD, and nothing else — on any other event it is an ERROR, never silently ignored (a flag
-  # that no-ops reads as though it worked). `unblock` is in the list because it now carries those
+  # --force overrides the re-open-effect guards (reopen, unblock AND block), the claim LEASE and the
+  # claim DONE-GUARD, and nothing else — on any other event it is an ERROR, never silently ignored (a
+  # flag that no-ops reads as though it worked). `unblock` is in the list because it now carries those
   # guards; a guard with no escape hatch is one the operator can only route around by hand-editing
   # the ledger, which is the one thing this store must never invite.
-  if [ "$force" -eq 1 ] && [ "$event" != reopen ] && [ "$event" != unblock ] && [ "$event" != claim ]; then
-    printf 'cc-backlog %s: --force applies only to reopen, unblock and claim\n' "$event" >&2; return 2
+  #
+  # `block` JOINS THE LIST FOR EXACTLY THAT REASON, and it must join in the SAME commit that gives it
+  # the terminal guard below. The guard prints `cc-backlog block <id> --needs "…" --force` as its own
+  # cure, and until this line changed that cure was rejected at rc 2 — a gate printing a Fix it then
+  # refuses (memory: work-item-remedy-can-become-forbidden). The two halves are one change.
+  if [ "$force" -eq 1 ] && [ "$event" != reopen ] && [ "$event" != unblock ] \
+     && [ "$event" != claim ] && [ "$event" != block ]; then
+    printf 'cc-backlog %s: --force applies only to reopen, unblock, block and claim\n' "$event" >&2; return 2
   fi
   # --venue is claim-only and CLOSED-SET. Both halves matter. Claim-only, because the venue is a
   # property of the worker that took the item, and the only record naming a worker is the claim.
@@ -1786,6 +1828,72 @@ cmd_transition() {
         printf '  a self-release SUPPRESSES reap'"'"'s thrash counter, so asserting one over another\n'
         printf '  worker'"'"'s claim would hide the exact trail shape that counter exists to see.\n'
         printf '  Reopen it without the flag:  cc-backlog reopen %s --by %s\n' "$id" "$by"
+      } >&2
+      return 4
+    fi
+  fi
+  # THE THIRD SPELLING — `block` over a DONE item (2026-08-25, drain recycle #216).
+  #
+  # The RE-OPEN EFFECT section below states the correct principle in capitals — "THE PREDICATE IS THE
+  # EFFECT, NOT THE VERB" — and then enumerates two members, reopen and unblock. `block` is the third
+  # member of that class and walked past both guards for a month, because it does not LOOK like a
+  # resurrection: it reads as a status annotation, and its fold resolves to "blocked" rather than to
+  # cc-dispatch's "open". So the class was named correctly and the enumeration was short by one
+  # (memory: denylist-enumerates-spellings-not-the-class, which this file already cites at the reap
+  # exemption one screen down).
+  #
+  # MEASURED BEFORE IT WAS WRITTEN, over the whole ledger (14,117 events, 2,772 ids, span
+  # 2026-07-18 .. 2026-08-25): a `block` landed on a row whose fold was already `done` 61 times
+  # across 12 distinct rows, against a two-sided control of 2,276 rows that reached done and were
+  # never re-blocked — so this discriminates, it is not a property of every row. The other verbs that
+  # touched a terminal row in the same walk are all HISTORICAL and all pre-date their own guards
+  # (claim once, 2026-08-05, the day 880c7cf63 landed the claim latch; unblock twice, 2026-08-07/08;
+  # link once, 2026-08-11). `block`'s newest instance is 2026-08-25T03:45:36Z — this defect is the
+  # only one of the set still firing, fourteen days after the last hardening commit.
+  #
+  # WHAT IT COSTS, stated as what it actually is rather than as the reopen guard's harm. The
+  # `wasDone` latch SURVIVES a re-block, so `claim` still refuses and no worker is re-dispatched —
+  # this is not the 2026-07-20 double-fire. The cost is that landed work re-enters the open+blocked
+  # board and its condition counts, and re-admits the verbs that correctly refuse a done row
+  # (b262e41b26fb alternated block/falsify ~50 times, reachable only because each block un-did the
+  # done first). It is paid in re-adjudication: 5436396f405c was closed on 2026-08-18 with an
+  # evidence body, re-blocked 16 times, closed AGAIN on 2026-08-24 with a 2,925-char clause-by-clause
+  # body, and re-blocked 5h36m later. a36e2b9bbac1 was closed 14 times.
+  #
+  # WHY IT REACHES HERE AND NOT `cmd_add`. `cmd_add`'s DONE-GUARD prints "already DONE; NOT
+  # re-opened" and is telling the truth about ITSELF — and then `cmd_needs` calls this function two
+  # lines later and re-blocks the row anyway, on BOTH its paths (the mint path through cmd_add, and
+  # the R7 mint brake, which never reaches cmd_add at all). The warning was never bypassed; it was
+  # contradicted by its own caller inside one command. So the guard belongs at the transition, which
+  # is the event that IS the act (memory: enforcement-must-live-at-the-chokepoint).
+  #
+  # SCOPED TO THE TERMINAL ARM ONLY, deliberately: blocking a CLAIMED row is legitimate and is what
+  # reap does four times in this file. Reap cannot reach this guard at all — it never selects a done
+  # item (pinned by tests/cc-backlog.bats "reap: NEVER touches done or already-blocked items"), so
+  # the blast radius is `cmd_needs` and a hand-run `block`, which is exactly the population measured.
+  #
+  # FAIL-OPEN ON AN UNREADABLE ROW, the same contract the R7 brake states for itself: a guard that
+  # cannot ask must not answer "yes". An unreadable fold falls through to the ordinary block, because
+  # losing an operator step over a broken read is the one outcome worse than a duplicate row
+  # (memory: lookup-miss-is-not-absence).
+  if [ "$event" = block ] && [ "$force" -eq 0 ]; then
+    local bcur bstatus bev bts
+    bcur="$(item_json "$id")"
+    bstatus="$(printf '%s' "$bcur" | jq -r '.status // ""' 2>/dev/null)"
+    if [ "$bstatus" = "done" ]; then
+      bev="$(printf '%s' "$bcur" | jq -r 'if (.evidence // "") == "" then "<none>" else .evidence end' 2>/dev/null)"
+      bts="$(printf '%s' "$bcur" | jq -r '.lastTs // "?"' 2>/dev/null)"
+      { printf 'cc-backlog block: REFUSED — %s is TERMINAL (done %s)\n' "$id" "$bts"
+        printf '  evidence: %s\n' "$bev"
+        printf '  A block folds the item back onto the open+blocked board and re-admits the verbs\n'
+        printf '  that correctly refuse terminal work, so a generator re-stating a step that has\n'
+        printf '  already been discharged silently un-completes it — and the next reader pays to\n'
+        printf '  adjudicate it again (5436396f405c was closed twice and re-blocked 16 times).\n'
+        printf '  If the operator step genuinely applies AGAIN, say so explicitly:\n'
+        printf '      cc-backlog block %s --needs "<step>" --force\n' "$id"
+        printf '  If the completed work itself regressed, re-open it instead — that clears the\n'
+        printf '  done latch, which a forced block deliberately does not:\n'
+        printf '      cc-backlog reopen %s --force\n' "$id"
       } >&2
       return 4
     fi
