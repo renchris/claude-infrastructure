@@ -720,11 +720,27 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
   # deprioritises"), and axis 10's F3 is the failure it produces — a fleet-wide wake turns 140 idle
   # residents into 140 concurrent turns, which no spawn gate keyed on residency can even see.
   #
-  # 8 is the top of the measured band. Axis 09: 2.5-5 runnable threads per genuinely-ACTIVE session
-  # (load1 27.4 -> 44.4 at 9 all-active) against the load-20 gate ⇒ ~4-8 concurrent actives, which is
-  # also what all 127/127 historic gate refusals correspond to. The TOP of the band is deliberate:
-  # this term refuses real work, so it must bind where the evidence is unambiguous, and the load and
-  # segment terms above already cover the middle of the band from their own directions.
+  # 8 IS AN OPERATING CEILING, AND THE COEFFICIENT IT USED TO CITE IS REFUTED. It was picked as the
+  # top of a "measured band": axis 09's 2.5-5 runnable threads per genuinely-ACTIVE session (load1
+  # 27.4 -> 44.4 at 9 all-active) against the load-20 gate ⇒ ~4-8 concurrent actives, which is also
+  # what all 127/127 historic gate refusals correspond to.
+  #
+  # 🚨 DO NOT QUOTE 2.5-5 HERE OR ANYWHERE, AND DO NOT SUBSTITUTE ONE OF ITS SIBLINGS. It is an
+  # aggregate/N — a RATIO, not a marginal — and its own source pair yields 1.89, not 2.5-5. All four
+  # published values (0.172 pooled OLS · 0.566 in-band bucket median · 1.89 two-point delta · 2.5-5
+  # ratio) were adjudicated unrepairable in docs/research/marginal-load-per-active-session-2026-08-19.md
+  # (backlog 193ae8ddce72): three are arithmetically disqualified, and 0.172/0.566 have no committed
+  # derivation anywhere on trunk. The instrument behind all four — load1 regressed on session count —
+  # is UNIDENTIFIED on this box: 87.3% of the load numerator is not-Claude across an 8.35 -> 46.39
+  # daily range, and the direct probe watched load FALL while a unit was added.
+  #
+  # WHAT REPLACES IT: scripts/capacity-marginal.sh, which fits the Claude-ATTRIBUTED runnable census
+  # on the ACTIVE count and carries three controls proven able to fail (tests/capacity-marginal.bats).
+  # It wants one ~1 h window on the live 10-core Darwin fleet (§6 of that doc); nothing off-box can
+  # supply it. UNTIL THAT WINDOW IS RUN, 8 STANDS ON THE DIRECTION OF THE EVIDENCE AND THE REFUSAL
+  # HISTORY, NOT ON A COEFFICIENT. The TOP of the band is still deliberate: this term refuses real
+  # work, so it must bind where the evidence is unambiguous, and the load and segment terms above
+  # already cover the middle of the band from their own directions. Re-derive before moving it.
   #
   # THE CENSUS IS A PROVEN LOWER BOUND (scripts/lib/spawn-presence.sh § THE ACTIVE POPULATION), so
   # this term under-refuses rather than refusing on unproven activity — the same direction rule the
