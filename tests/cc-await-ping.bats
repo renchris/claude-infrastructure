@@ -1489,7 +1489,17 @@ sender_spawn() { # <victim pid> <linger-seconds> → sender pid on stdout
   # until the child exits, while the child is itself blocked waiting for a go-file the caller can
   # only write AFTER the substitution returns. Measured: a clean deadlock that hangs the whole suite
   # on its first case. Detaching the child's descriptors is what makes the pid readable at all.
-  bash -c 'while [ ! -f "$3" ]; do sleep 0.1; done
+  # THE WAIT IS BOUNDED, and that is not defensive dressing — MEASURED: 9 of these were found spinning
+  # after a run was killed mid-case, each waiting forever on a go-file in a BATS_TEST_TMPDIR that had
+  # already been removed. An unbounded wait makes every interrupted run leak a process that nothing
+  # will ever release. 600 iterations at 0.1s is ~60s, far longer than any case here needs to fire,
+  # and it exits WITHOUT signalling — a helper that timed out must never fire a stale group kill at a
+  # pgid the OS may since have reassigned.
+  bash -c 'i=0
+           while [ ! -f "$3" ]; do
+             i=$((i + 1)); [ "$i" -gt 600 ] && exit 3
+             sleep 0.1
+           done
            kill -TERM -"$1" 2>/dev/null || true
            [ "$2" -gt 0 ] && sleep "$2"
            exit 0' _ "$vpg" "$linger" "$go" >/dev/null 2>&1 </dev/null &
