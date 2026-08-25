@@ -159,23 +159,56 @@ Resume-from-summary runs `/compact`, then leaves each session **idle** (empty bo
 1. **Clear the gibberish** (per pane, windows ≠ yours): send Escape + Ctrl-U (chars 27, 21). For a
    stubborn multiline block, send Ctrl-C (char 3). Verify the input tail no longer contains `[<35;` /
    `[?27` / `[I[`.
-2. **Re-engage each** with a continue-prompt via the reliable keystroke API — for each idle pane
-   (skip any at an approval prompt: content has "Tab to amend"/"ctrl+e to explain"; skip working panes:
-   "esc to interrupt"):
+2. 🚨 **CLASSIFY FIRST — re-engage ONLY the sessions the crash INTERRUPTED. A session that was
+   already idle before the crash must be restored and LEFT ALONE.** Run the classifier on the
+   winners and nudge only the `INTERRUPTED` rows:
+
+   ```
+   python3 ~/.claude/scripts/limit-recover/lr-select.py --scan --allow-missing-cwd \
+     | ~/Development/claude-infrastructure/bin/cc-resume-classify.py --explain
+   ```
+
+   It appends a 5th column — `INTERRUPTED` / `AT-REST` / `UNKNOWN` — and `--explain` prints the
+   evidence plus each at-rest session's own last words, which is what makes a wrong call visible
+   before it costs anything. **`UNKNOWN` is treated as `AT-REST`.**
+
+   **Why this is a rule** (operator ruling 2026-08-24). A recovery nudged all ten resumed sessions
+   with "continue autonomously". Five had not been interrupted at all — they had stopped at a
+   deliberate pause point, and the nudge sent them off doing work nobody had signed off. Their own
+   closing words: *"…which is yours to authorise"* · *"still up for your feel check"* · *"Nothing
+   open on my side. What would you like to work on?"* Operator: *"often already idle sessions are
+   stopped at a good pausepoint waiting on a decision that needs more thought."*
+
+   **The rule is `mid-turn AND alive-at-crash`, and both halves are load-bearing** — on the measured
+   batch each one alone gets a real row wrong, in opposite directions. `wt-pool-6` finished its turn
+   3.0 min before the crash, so the CLOCK alone convicts it (it was parked, awaiting a look).
+   `wt-pool-8` was mid-turn but had been so for 2.8 DAYS, so the TAIL alone convicts it (it died
+   days earlier; this crash interrupted nothing). Rationale, the fail-safe polarity, and a
+   `--selftest` whose cases fail if either signal is dropped are in the script's header.
+
+   ⚠️ **Phase 4's keepalive re-nudges on a timer, so it must be scoped the same way** — pass only
+   the INTERRUPTED worktrees in `CC_KEEPALIVE_MARKERS`, or it re-pokes every parked session every
+   240 s forever, which is the same defect on a loop.
+
+3. **Re-engage the INTERRUPTED ones** with a continue-prompt via the reliable keystroke API — for
+   each idle pane (skip any at an approval prompt: content has "Tab to amend"/"ctrl+e to explain";
+   skip working panes: "esc to interrupt"):
    ```
    it2 session send -s <session-id> "<continue directive>"
    it2 session send -s <session-id> $'\r'     # Ink Enter = CR; send twice (belt-and-suspenders)
    ```
    Directive template: *"Continue autonomously with your goal: do your next task, commit it, and keep
    going. Stop only when genuinely done or blocked on auth/destructive-migration/undecidable."*
-3. **Verify it took**: fresh `git log -1` commits in the worktrees are the ground-truth proof of work
+4. **Verify it took**: fresh `git log -1` commits in the worktrees are the ground-truth proof of work
    (the TUI "working" flag is a fast-moving snapshot). Expect bursty task→commit→pause.
 
 ## Phase 4 — Perpetual autonomy (keep them going)
 
 Because the Stop-hook is gone, sessions pause between tasks. Start the keepalive watcher, which
 re-nudges ONLY idle panes — it leaves working ones alone, skips decision-prompts, and skips a pane
-that is legitimately awaiting its own armed watcher:
+that is legitimately awaiting its own armed watcher. 🚨 **Scope `CC_KEEPALIVE_MARKERS` to the
+INTERRUPTED worktrees from Phase 3 only** — the watcher cannot tell a parked session from a stalled
+one, so an unscoped marker list re-pokes every deliberately-parked session on a 240 s timer:
 
 ```
 CC_KEEPALIVE_MARKERS="wt-a wt-b" nohup ~/.reso/bin/reso-keepalive 240 >>~/.reso/keepalive.out 2>&1 & disown
