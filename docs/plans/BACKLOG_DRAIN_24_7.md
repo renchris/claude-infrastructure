@@ -221,6 +221,44 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   sessions** — still the right prior, still not a law. Writing the number as a FLOOR and re-reading
   it after the final tool call is what caught it; had it been composed once and trusted, this entry
   would have shipped a count that was false by one in the flattering direction.
+  **CLOSE-TIME ADDENDUM (#217) — THE CHAIN DID NOT SELF-FIRE, AND THE LEAD'S ADDRESS FAILED IN A
+  NEW WAY THAT READS HEALTHY.** Written after the land, because both facts only became knowable then.
+  **(1) #217 COULD NOT FIRE #218 AND ABSTAINED.** The 00:16 reboot restarted this session, and a
+  restarted session loses its terminal identity: `ITERM_SESSION_ID` UNSET · `TERM_PROGRAM` UNSET ·
+  `cc-notify --self` → `verdict=unresolvable enqueued=0 reason=no-iterm-session` · **0 live panes
+  cwd'd to this worktree**, against a POS control of **6** panes matching the shared checkout, which
+  is what proved the query spoke. The pre-reboot registry row `449.json` survived but pane 449 is not
+  among the live panes. **All three pre-fire checks failed, so the fire was ABSTAINED** — #214's
+  disposition, for a different cause: `handoff-fire.sh:1810` warns a mis-anchored recycle types
+  `/exit` AND a launcher into a DIFFERENT live session's composer, and `--recycle --dry-run` returns
+  **rc 0 with a confident WRONG pane** rather than failing loud. Filed as **`897b58baa9fb`** (verified
+  by CONTENT: 495 == 495 chars on both `title` and `needs`, POS 3/3, NEG 0), and the successor brief
+  is durable at `~/.claude/autonomy/fire-drain-recycle218.txt` (93,020 bytes, 4,848 under the 97,868
+  zsh eval limit). **No `--run` was filed with it: the only command that discharges it is the fire
+  itself, which #217 could not execute, and a filed `--run` is a claim that the command WORKS.**
+  **(2) THE LEAD ROLE FAILED IN A NEW AND MORE DECEPTIVE WAY.** `~/.claude/cc-roles/drain-lead` no
+  longer names dead pane 102 (#214–#216); it names **pane 7, claimed 2026-08-25T07:48:12Z, pid
+  46842**, and `claude-infrastructure-7` genuinely IS live in `cc-sessions`. #217 read the file,
+  cross-checked the pane, and wrote into its successor brief that the role was fixed. **It was not.**
+  `cc-roles list` reports **`drain-lead ABSENT dead-pid`** and `cc-notify --role` refuses with
+  `reason=role-unset`, *"its claimant is dead"*: **the pane NUMBER outlived the claiming PROCESS.**
+  🚨 **This is `make-the-actuator-the-arbiter` caught in the act — a hand-rolled liveness predicate
+  returned the OPPOSITE verdict from the tool that decides, and the wrong answer had already been
+  written into the next link's brief before the actuator was asked.** The brief was corrected in
+  place. ⚠️ **#217's own control was broken too, in the standing way:** `ps -p "$PID" … | head -2`
+  yields the PIPE's rc, so an EMPTY `ps` result reported `rc=0` and read as proof of life —
+  instrument rule 6 firing on the session that keeps writing it down. **The ping was re-sent to pane
+  `7` BY UUID and DELIVERED** (`verdict=delivered enqueued=1 unacked=1 reason=wake-path-armed`);
+  **delivered is not read — proof is `acked>=2`.**
+  ⚠️ **AND WITH THE ROLE DOWN THERE IS NO PATH TO THE OPERATOR AT ALL:** `cc-notify` reports
+  `fallback=phone-unwired — push-send is INERT (PUSHOVER_TOKEN/PUSHOVER_USER unset)`, declaring of
+  itself that this is push-send's exit 3, **not** a role failure, and that the channel has **never**
+  been wired. **Not filed — it is a standing, self-declaring condition, not a #217 discovery.**
+  **(3) BOARD, RE-READ AT THE ACTUAL CLOSE** (the earlier figures in this entry were taken before the
+  land): **299 open / 200 blocked / 2296 done / 6 claimed = 499 open+blocked**, against 486 at open.
+  **Of that +13, exactly ONE is mine** — `897b58baa9fb`, the stall above. The rest is sibling traffic
+  in a single hour (done +8, blocked +4, open +9). **Re-read your board AFTER the land, not before:
+  #217's mid-link snapshot was already stale by the time it closed.**
 - **2026-08-25 — drain recycle #216: method 186 — A GUARD CAN STATE THE RIGHT PRINCIPLE AND STILL BE
   ENUMERATED SHORT BY ONE, AND THE MISSING MEMBER IS THE ONE THAT DOES NOT LOOK LIKE THE CLASS.**
   #215's method 185 says the instrument you build to test a clause measures more than the clause, so
