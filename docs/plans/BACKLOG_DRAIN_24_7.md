@@ -87,9 +87,87 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-25 — drain recycle #218: method 187, SECOND INSTANCE — THE SIBLING RIDE-ALONG WAS
+  STARVING 39% OF ITS OWN CASELOAD, AND EVERY HYPOTHESIS ABOUT *WHY* IT WAS CUT WAS WRONG.**
+  Took #217's named strongest unspent lead: the inbox-guard bound at `cc-reaper:1907-1910`, the
+  sibling of the cure sweep, same 60s shape, same ride-along block, unexamined.
+  **THE MEASUREMENT.** Parsing `~/.claude/logs/cc-reaper.log` into ENTRIES rather than lines
+  (21,062 entries, **2,629 of them multi-line** — a prefix-grep truncates 12.5% of the store, which
+  is #217's lesson holding at scale): `bound-fired inbox-guard` = **1561** all-time and **123 of 123
+  ticks in the last 24h — 100%**, against backlog-reap's 114/123. Of **1621** sweeps, only **65
+  (4.0%)** ever reached the summary line. So ~96% are cut MID-LOOP. ⚠️ **My first read of one
+  sampled entry said "it dies before a single mailbox" — WRONG, and the distribution refuted it:
+  header-only is 79/1621 = 4.9%, and entries run up to 314 lines.** One sample is not a distribution.
+  **WHY THAT IS A STRANDING.** The worklist was `for f in "$MBOX_DIR"/*.md` — the glob's
+  lexicographic permutation, identical every tick — so the same prefix was re-swept every five
+  minutes and the same suffix was never reached at all. **Killing the silence confound is what makes
+  this a finding**: a box with no unacked mail emits nothing, so "absent from the log" is not "not
+  reached". An ISOLATED sweep over a COPY of the same 802-box store names exactly the **362** boxes
+  that MUST emit; intersecting that oracle with 24h of production sweeps gives **142 of 362 (39.2%)
+  never named once**. The separation is structural: every box that emitted ranked **≤543 of 802**,
+  starved median rank **650**, starved max **801**. A subsystem whose entire contract is fail-loud on
+  undelivered mail was silently skipping 39% of its own caseload.
+  **THREE HYPOTHESES DIED FIRST, AND THE ROUTE IS THE LESSON.** (1) *the sweep is too slow* —
+  **REFUTED**, on an isolated copy it runs **23s dry / 33s cold non-dry (362 escalations + 362
+  pushes) / 28s warm**, all inside 60s. (2) *production runs an older, slower binary, since the live
+  layer lags trunk* — **REFUTED**, `~/.claude/bin/cc-inbox-guard` symlinks into the shared checkout
+  and is **byte-identical** to the worktree copy (`diff` rc 0, both 557 lines). (3) *the 8s cap on
+  its `cc-reconcile` fork degrades to UNBOUNDED under launchd's minimal PATH, where `timeout(1)` is
+  homebrew-only* — **REFUTED**, both `cc-inbox-guard` and `cc-reaper` carry the identical
+  absolute-path fallback list including `/opt/homebrew/bin/timeout`, and the comment at `:125-130`
+  anticipates that exact failure by name. 🚨 **The cost model was never the story. The ORDER was.**
+  **THE FIX (`58c0e1633`), two halves, order deliberate** (`ff4e6cbead11`'s lesson): **(1) announce
+  the worklist size BEFORE the loop**, so a cut run is arithmetic instead of silence; **(2) order by
+  last-escalation mtime, oldest first** (never-escalated sorts as 0 and leads), turning permanent
+  exclusion into bounded delay. **(1) is what makes (2) checkable.** The same free property the cure
+  sweep found falls out: a recently-escalated box takes the `keep` (damped) branch — the cheapest,
+  least urgent work in the loop — so oldest-first front-loads every box that can still produce a NEW
+  escalation and lets the cut land on the ones that would have produced nothing.
+  **BEHAVIOUR PRESERVED BY SET EQUALITY**: against the pre-fix binary from `git show HEAD:`, same
+  isolated store, **both yield the IDENTICAL 362-box escalation set** (diff empty, both non-empty so
+  the comparison is not vacuous). Only order and the announce change.
+  **TESTS** `tests/cc-inbox-guard.bats` **31 → 33**, mutant-proven ONE PER SITE with the baseline
+  asserted GREEN first: **M1** (delete the announce) reds EXACTLY W1; **M2** (remove
+  `sort -n -k1,1`) reds EXACTLY W2; both restored byte-identical (sha256 `92299ef8…`).
+  ⚠️ **W2's first fixture was VACUOUS and I caught it only by looking**: it gave the
+  lexicographically-FIRST boxes the oldest mtimes, so both candidate orderings agreed — #217's
+  "an ordering test whose two candidate orders agree proves nothing", reproduced by the session
+  reading it. The shipped fixture INVERTS age against name so the two orders are exact reverses
+  (`eee ddd ccc bbb aaa` vs `aaa bbb ccc ddd eee`), and the pre-fix binary on that same fixture
+  stays lexicographic — the control discriminates in both directions.
+  **GATES.** Selector `--direct` named a **REAL LIST of 3** (`cc-comms-alarm-sweep` ·
+  `cc-inbox-guard` · `comms-drain-activate`) with the POS control on another range printing `FULL`,
+  so the list is a verdict not a default — and unlike #216/#217's 60, **the whole direct set was run:
+  71/71, 0 skips, plan == ok+nok on each.** `shellcheck bin/cc-inbox-guard` 0 findings ·
+  `bats-shellcheck-lint --range "$MB...HEAD"` clean, 1 suite, 0 blocking · `bats-assert-liveness`
+  rc 0 · `--selftest` 3/3. `alarm-polarity-lint` and `pipefail-sigpipe-lint` N/A by name.
+  **VERIFIED #217's FIX RATHER THAN ASSUMING IT** (its own recommendation 1): all nine starved rows
+  still `blocked`, and the discriminator is NOT the lag number but the FILE — the live
+  `cc-backlog` resolves into the shared checkout, which is **18 behind trunk**, and `d7b3989d4` is
+  an ancestor of `origin/main` but **NOT of the live sha** (rc 1, NEG control rc 1). `unblock`-by-
+  `cc-backlog-reap` is unchanged at **37**. So: converging, not defective — exactly as #217 predicted.
+  **CONVERGE.** `deploy-live.sh --auto` from the shared checkout: **rc 0, no advance**, the
+  documented silent steady state — **0 of 19 commits above the live head carry a stamp** (POS 1 from
+  a sha lifted off a real stamp filename asserted len 40; NEG 0; 445 stamps). Nothing to file.
+  **BOARD** at open **306 open / 198 blocked / 2302 done / 6 claimed** (504 open+blocked).
+  **PRE-FIRE: all four kitty-aware checks PASSED** — `cc-in-kitty` rc 0, `KITTY_WINDOW_ID=27`,
+  `kitty @ ls` confirms window 27 with my own title, synthetic `ITERM_SESSION_ID=w0t0p0:27` set.
+  ⚠️ **`cc-roles list` now reads `drain-lead LIVE 7`** — changed from #217's `ABSENT dead-pid`;
+  the actuator is the arbiter, so believe it and re-resolve rather than inheriting either verdict.
+  ⚠️ **My pane's cwd is the SHARED CHECKOUT, not the worktree** — every git call went through
+  `git -C`, and `cd` only inside script files.
+  **NOTHING FILED, NOTHING CLOSED** — the remedy landed as code, which is the cleanest discharge.
+
 - **2026-08-25 — drain recycle #217: method 187 — A BOUNDED SWEEP WITH A DETERMINISTIC ORDER DOES
   NOT DEGRADE UNIFORMLY. IT STARVES A FIXED SUFFIX, PERMANENTLY, AND THE PREFIX IT DOES REACH
   RENDERS AS HEALTHY WORK.**
+  🚨 **CORRECTED BY #218 (2026-08-25):** this entry's claim that the reboot *stripped its terminal
+  identity* is FALSE. The box is **kitty**, not iTerm2; #217 had pane 6 with the right cwd and title
+  the whole time, and `cc-in-kitty` returns rc 0. What was missing was only the rc-block exports
+  (`CC_TERM`, and the synthetic `ITERM_SESSION_ID` that `kitty-setup.sh:255` writes inside kitty),
+  which a RESUMED shell never sources — so `self_pane_id()` fell to the iTerm branch and returned
+  empty. **Three agreeing nulls, one common cause**, and not one was evidence that a pane was absent.
+  #218's own pre-fire checks all PASSED on the kitty-aware path and it fired normally.
   The lead was the one #215 and #216 both recommended and both skipped: `d1d51881cca1` (curl-gate
   `-L` follows a redirect past the host check) and `a771a1611d28` (INC-4 fire-path brief resend
   still blind-CR), each BLOCKED under the prose *"a LIVE off-box worker (cc-cloud reads ALIVE) still
