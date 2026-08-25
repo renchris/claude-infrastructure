@@ -5858,16 +5858,40 @@ cmd_reap() {
         | { id: $g[0].id,
             status: (if $lastSt == null then "open" else st($lastSt.event) end),
             by: (($lastB.by) // ""), needs: (($lastB.needs) // ""),
+            # bts — WHEN this row was last blocked. Carried only to ORDER the worklist; see the
+            # starvation note below. ISO-8601 sorts lexicographically == chronologically.
+            bts: (($lastB.ts) // ""),
             venue: ([$g[] | select(.event=="claim")] | last | .venue // "local") })
+    | map(select(.status == "blocked")
+          | select(.venue != "local")
+          | select(.by == "cc-backlog-reap")
+          | select(.needs | test("worker runs off-box \\(venue|the worktree occupancy oracle could not be RESOLVED|a LIVE off-box worker \\(cc-cloud reads")))
+    # OLDEST BLOCK FIRST — and the reason is that this sweep is REGULARLY CUT OFF MID-LOOP.
+    # `group_by(.id)` sorts by id, so until this line the worklist ran in id order: a FIXED
+    # permutation, identical on every tick. Under a bound that truncates, a fixed order does not
+    # degrade uniformly — it starves a fixed SUFFIX permanently while re-adjudicating the prefix
+    # every few minutes. Measured 2026-08-25 on the live store: 13 rows selected, and the two the
+    # chain had been walking past for days were positions 10 and 13 of 13. Ordering by block age
+    # puts the most-starved row FIRST, so a row can miss a tick but cannot miss every tick —
+    # starvation becomes bounded delay. (memory: threshold-gated-monitor-is-blind-below-its-
+    # threshold — the same shape one axis over: a bounded actuator has a silent region, and here it
+    # was a fixed SET OF ROWS rather than a fixed range of values.)
+    | sort_by(.bts)
     | .[]
-    | select(.status == "blocked")
-    | select(.venue != "local")
-    | select(.by == "cc-backlog-reap")
-    | select(.needs | test("worker runs off-box \\(venue|the worktree occupancy oracle could not be RESOLVED|a LIVE off-box worker \\(cc-cloud reads"))
     | [.id, .venue] | join("\u001f")
   ')"
   if [ -n "$cure_rows" ]; then
     local cid cvenue cst cverb ctoken cmsg
+    # ANNOUNCE THE WORKLIST BEFORE THE LOOP — and this is the half that makes the other half
+    # CHECKABLE. The only line that ever carried this count is the summary printed AFTER the loop,
+    # so on a truncated run it never printed at all: the SIGTERM eats exactly the sentence that
+    # would have said "I had 13 to do". Measured 2026-08-25 in cc-reaper.log: 694 `bound-fired
+    # backlog-reap` entries against THREE `cure sweep —` summaries in the whole log, so for weeks
+    # the shortfall was reported by nothing at all, while a per-tick KEEP-BLOCKED line on the first
+    # row rendered as healthy work. One line up front turns a silent truncation into an arithmetic
+    # one — compare `selected` against the per-row verdict lines that follow it.
+    printf 'cc-backlog reap: cure sweep — %s off-box block(s) selected (oldest block first)\n' \
+      "$(printf '%s\n' "$cure_rows" | grep -c .)"
     while IFS=$'\037' read -r cid cvenue; do
       [ -n "$cid" ] || continue
       if ! cst="$(cloud_state "$cid")" || ! cloud_map "$cst" "$cid" >/dev/null; then

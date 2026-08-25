@@ -125,6 +125,79 @@ status_of() {  # $1=id → the folded state
   [ "$(status_of cure0002abcd)" = "blocked" ]
 }
 
+# ── THE SECOND DEFECT (measured 2026-08-25): THE SWEEP IS REGULARLY CUT OFF MID-LOOP ─────────────
+# The sweep above is the LAST stage of `cmd_reap`, and cc-reaper runs the whole reap under a 60s
+# bound (`_rp_bounded "${CC_REAPER_BACKLOG_TIMEOUT_S:-60}"`). Measured cost on the live 14k-line
+# ledger: the reap is 15.6s with no writes and 86.7s with 9 unblocks, because ONE `cmd_transition`
+# costs ~7.4s — so the sweep can afford about six writes per tick and is SIGTERM'd after that.
+# cc-reaper.log carried 694 `bound-fired backlog-reap` entries.
+#
+# That alone would be tolerable if the truncation were fair and visible. It was neither:
+#   * `group_by(.id)` made the order a FIXED permutation, so the SAME suffix was cut every tick.
+#     The two rows the drain chain had walked past for days were positions 10 and 13 of 13.
+#   * the only line carrying the worklist size printed AFTER the loop, so a cut run reported the
+#     shortfall nowhere — three `cure sweep —` summaries in the entire log against those 694 cuts,
+#     while a KEEP-BLOCKED line on the first row rendered every tick as healthy work.
+# These two tests pin the two halves. They are separable on purpose: the ordering fix alone would
+# be unverifiable, and the announce alone would leave the starvation in place.
+
+seed_blocked_offbox_at() {  # $1=id  $2=needs  $3=block ts — APPENDS, so several rows can coexist
+  local id="$1" needs="$2" ts="$3"
+  {
+    jq -cn --arg id "$id" '{ts:"2026-08-17T09:00:00Z",id:$id,event:"add",title:"cloud lane fixture row",condition:"master-fixture"}'
+    jq -cn --arg id "$id" '{ts:"2026-08-17T09:20:00Z",id:$id,event:"claim",venue:"cloud"}'
+    jq -cn --arg id "$id" --arg n "$needs" --arg t "$ts" '{ts:$t,id:$id,event:"block",by:"cc-backlog-reap",needs:$n}'
+  } >> "$CC_BACKLOG_FILE"
+}
+
+@test "the worklist size is ANNOUNCED before the loop, so a truncated run is still legible" {
+  install_subject "$REPO/bin/cc-backlog" STALLED
+  : > "$CC_BACKLOG_FILE"
+  msg="$(render_cloud_map_msg "$REPO/bin/cc-backlog" cure0aaa1111)"
+  [ -n "$msg" ]
+  seed_blocked_offbox_at cure0aaa1111 "$msg" 2026-08-20T12:00:00Z
+  seed_blocked_offbox_at cure0bbb2222 "$msg" 2026-08-19T12:00:00Z
+
+  run "$BINDIR/cc-backlog" reap
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" > "$BATS_TEST_TMPDIR/out.txt"
+
+  # the announce exists and carries the COUNT
+  [ "$(grep -c 'cure sweep — 2 off-box block(s) selected' "$BATS_TEST_TMPDIR/out.txt")" -eq 1 ]
+
+  # and it PRECEDES the first per-row verdict — which is the entire property, because a SIGTERM
+  # arrives from the end. A count printed after the loop is the one line a cut run cannot emit.
+  ann="$(grep -n 'selected (oldest block first)' "$BATS_TEST_TMPDIR/out.txt" | head -1 | cut -d: -f1)"
+  first="$(grep -nE 'UNBLOCK|KEEP-BLOCKED' "$BATS_TEST_TMPDIR/out.txt" | head -1 | cut -d: -f1)"
+  [ -n "$ann" ]
+  [ -n "$first" ]
+  [ "$ann" -lt "$first" ]
+}
+
+@test "the worklist is ordered OLDEST BLOCK FIRST, so a bounded run cannot starve a fixed suffix" {
+  install_subject "$REPO/bin/cc-backlog" STALLED
+  : > "$CC_BACKLOG_FILE"
+  msg="$(render_cloud_map_msg "$REPO/bin/cc-backlog" cure0aaa1111)"
+  [ -n "$msg" ]
+  # id order and block-age order are EXACTLY INVERTED here, so the two orderings are
+  # distinguishable — an ordering test whose two candidate orders agree proves nothing.
+  seed_blocked_offbox_at cure0aaa1111 "$msg" 2026-08-20T12:00:00Z   # newest block, FIRST by id
+  seed_blocked_offbox_at cure0bbb2222 "$msg" 2026-08-19T12:00:00Z
+  seed_blocked_offbox_at cure0ccc3333 "$msg" 2026-08-18T12:00:00Z   # oldest block, LAST by id
+
+  run "$BINDIR/cc-backlog" reap
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -oE 'UNBLOCK cure0[a-z0-9]+' | awk '{print $2}' > "$BATS_TEST_TMPDIR/order.txt"
+
+  # all three were adjudicated (else the assertion below could pass on a short list)
+  [ "$(grep -c . "$BATS_TEST_TMPDIR/order.txt")" -eq 3 ]
+
+  # oldest block first — the exact REVERSE of the id order the sweep used before
+  [ "$(sed -n 1p "$BATS_TEST_TMPDIR/order.txt")" = "cure0ccc3333" ]
+  [ "$(sed -n 2p "$BATS_TEST_TMPDIR/order.txt")" = "cure0bbb2222" ]
+  [ "$(sed -n 3p "$BATS_TEST_TMPDIR/order.txt")" = "cure0aaa1111" ]
+}
+
 @test "scope: a block by ANY other author is untouched, even with the same sentence" {
   install_subject "$REPO/bin/cc-backlog" STALLED
   msg="$(render_cloud_map_msg "$REPO/bin/cc-backlog" cure0003abcd)"
