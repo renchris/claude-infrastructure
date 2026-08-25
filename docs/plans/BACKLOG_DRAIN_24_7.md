@@ -288,6 +288,25 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
     classify (C) correctly** — frozen sender beat ⇒ benign teardown, advancing ⇒ the arming session
     is alive and you are deaf. Decidable today. The lead's dispatch of it was refused by the same
     anchor guard, so it is **PARKED, not abandoned.**
+  · 🚨 **THE PATH LOSS REACHED THE LAND GATE, AND THERE IT PRINTED A CONFIDENT WRONG CURE — the
+    third instance of one failure in an hour, and the only one that was actively misleading.** This
+    addendum's own first land returned **`rc=9`, `⛔ ship-land: GATE-KILLED — the gate died without
+    earning a verdict, so this is NOT a red and NOT evidence about your tree. Nothing pushed;
+    gate-green untouched`**, advising *"The usual cause is that shellcheck is not installed on this
+    host… Install shellcheck and re-land."* **False.** shellcheck was installed at
+    `/opt/homebrew/bin/shellcheck` 0.11.0, and so was `bats`; **`/opt/homebrew/bin` was simply absent
+    from the resumed session's PATH**, which held only kitty, `/usr/bin`, `/bin`, `/usr/sbin`,
+    `/sbin` and a plugin dir. Following the printed cure would have meant `brew install`-ing a
+    package already present. **The fix is to make the dependency REACHABLE — which is what the gate
+    asked for — never to bypass the gate:** export
+    `PATH="/opt/homebrew/bin:$HOME/.claude/bin:$PATH"` and assert `command -v shellcheck` *before*
+    spending a land. The re-land printed
+    `preflight: shellcheck=/opt/homebrew/bin/shellcheck bats=/opt/homebrew/bin/bats` and went
+    **rc 0, `✓ ship-land: LANDED d9c887400 → origin/main; content-verified; sweep=clean`, 0 red
+    markers.** ⚠️ **`rc=9` is a FOURTH non-red outcome**, distinct from `rc=2` (refusal) and `rc=6`
+    (gate red): *no verdict earned*, nothing pushed, `gate-green` untouched. ⚠️ **A sibling landed
+    mid-recovery** — trunk moved `e76f4612d` → `ee2e3a0d6` and this commit rebased onto it, which is
+    the cite-by-SUBJECT rule earning its keep for the second time in one link.
   · ✅ **THE CONVERGER WAS NEVER STUCK — IT WAS NOT DUE.** The lead measured live HEAD `fd60f868b`
     authored 22:05:11Z: at 03:21Z that is **5 h 16 m against the 6 h budget and 14 commits against
     25, BOTH inside**, so T2's third precondition is unset and the degrade path was not eligible
