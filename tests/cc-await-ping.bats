@@ -1440,3 +1440,253 @@ wake_down_line() { # <uuid-it-was-armed-for>
   [[ "$output" == *"verdict=ping"* ]] \
     || { echo "expected pre-fix verdict=ping — the defect did not reproduce: $output"; false; }
 }
+
+# ══ (B) vs (C): DOES ANYTHING RE-ARM? (2026-08-24) ═══════════════════════════════════════════════
+# backlog 95fcadde830e (C, the dangerous class) · 0e0da162f77c (B, the benign one).
+# "Your watcher died" is two events. (B) is the arming session's own RECYCLE EXIT — a successor is
+# coming up and will re-arm, so nothing is wrong. (C) is a sender that is STILL ALIVE and still
+# taking turns — nothing re-arms, and the session is DEAF from that moment while every counter reads
+# healthy. The notice used to classify both identically.
+#
+# THE THREE REFUTED DISCRIMINATORS ARE NOT RE-TESTED HERE BECAUSE THEY ARE NOT IN THE SUBJECT:
+# registry identity (cc-registry is single-slot per pane — BOTH truth-table cells matched), "did the
+# sender beat after the kill" (a cc-beats file is one row per session, so the answer is structurally
+# 0 for everyone), and the beat `kind` field (n=1021: 1,010 dead sessions and 11 live ones all read
+# kind=prompt). What survives is BEAT FRESHNESS across TWO READS SEPARATED IN TIME, which is why
+# every case below drives CC_AWAIT_CLASS_DELAY_S and moves state INSIDE that window.
+#
+# WHICH MUTANT REDS WHICH CASE — one per site, each applied alone and the subject restored
+# byte-identically (sha-compared) between applications:
+#   M1 (drop the beat-advance arm)                       → W1
+#   M2 (drop the sender-process-survived arm)            → W2
+#   M3 (make the survived arm's condition unconditional) → W3
+#   M4 (drop the `sid` empty guard, i.e. UNDETERMINED)   → W4
+#   M5 (drop the pending-classification clause)          → W5
+#   M6 (classify INLINE instead of in the detached child)→ W6
+#   M7 (drop WAKE-PATH-CLASS from _own_wake_down_line)   → W7
+#   M8 (ignore CC_AWAIT_CLASSIFY)                        → W8
+
+# THE CONTROLLED SENDER. si_pid is the pid of whatever ran `kill`, so a case that must choose between
+# "the sender exited" and "the sender is still running" has to OWN that process. This hands its pid
+# back BEFORE it fires, which is what lets the pid→sid beat fixture be written first. It carries
+# group_term()'s safety gate verbatim: it refuses to signal any group that is ours.
+sender_go() { printf '%s/sender.go' "$BATS_TEST_TMPDIR"; }   # DERIVED, never a variable the spawn
+# sets: sender_spawn runs inside a command substitution, so anything it assigns dies in that
+# subshell — the caller would then fire on an empty path and every case would red on the helper
+# rather than on the subject. BATS_TEST_TMPDIR is per-case, so this cannot collide across tests.
+
+sender_spawn() { # <victim pid> <linger-seconds> → sender pid on stdout
+  local v="$1" linger="$2" vpg ourpg go
+  vpg="$(ps -o pgid= -p "$v" 2>/dev/null | tr -d ' ')"
+  ourpg="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
+  [ -n "$vpg" ] || return 1
+  [ -n "$ourpg" ] || return 1
+  [ "$vpg" != "$ourpg" ] || return 1
+  go="$(sender_go)"
+  rm -f "$go"
+  # >/dev/null 2>&1 </dev/null IS LOAD-BEARING, not tidiness. This helper is called inside a command
+  # substitution, and a background child INHERITS that substitution's stdout pipe — so `$(…)` blocks
+  # until the child exits, while the child is itself blocked waiting for a go-file the caller can
+  # only write AFTER the substitution returns. Measured: a clean deadlock that hangs the whole suite
+  # on its first case. Detaching the child's descriptors is what makes the pid readable at all.
+  bash -c 'while [ ! -f "$3" ]; do sleep 0.1; done
+           kill -TERM -"$1" 2>/dev/null || true
+           [ "$2" -gt 0 ] && sleep "$2"
+           exit 0' _ "$vpg" "$linger" "$go" >/dev/null 2>&1 </dev/null &
+  printf '%s' "$!"
+}
+sender_fire() { : > "$(sender_go)"; }
+
+# `jq -n` WITHOUT `-c`, exactly like hooks/session-beat.sh: the real store is PRETTY-PRINTED, so a
+# fixture written compact would let a `grep '"pid":<n>'` implementation pass a test the live store
+# would fail. The fixture has to be able to catch that.
+beat_for_pid() { # <sid> <pid> <seq> [age-seconds]
+  jq -n --arg s "$1" --argjson p "$2" --argjson q "$3" \
+        --argjson t "$(( $(date +%s) - ${4:-0} ))" \
+    '{sid:$s,pane:"pW",cwd:"/tmp",pid:$p,lstart:"x",t:$t,kind:"prompt",who:"auto",operatorT:null,seq:$q}' \
+    > "$CC_BEAT_DIR/$1.json"
+}
+
+# ANCHORED AT LINE START, never a bare substring. The corpse notice ANNOUNCES the follow-up ("a
+# WAKE-PATH-CLASS line lands in this box in ~Ns"), so a substring match fires on the announcement
+# itself: measured, and it made every wait return instantly and every "no class line yet" assertion
+# vacuously true. A line IS a message on this substrate, so the marker only counts where a message
+# starts. class_lines is the ONE reader; nothing below greps for the token by hand.
+class_lines() { # <box> → how many real WAKE-PATH-CLASS messages the box holds
+  grep -cE '^[^ ]+ \[cc-await-ping\] WAKE-PATH-CLASS:' "$1" 2>/dev/null || true
+}
+class_body() { # <box> → the class message(s) only, never the corpse notice that names them
+  grep -E '^[^ ]+ \[cc-await-ping\] WAKE-PATH-CLASS:' "$1" 2>/dev/null || true
+}
+await_class() { # <box> → 0 once a real class message exists; 1 after ~25s
+  local i
+  for i in $(seq 1 25); do
+    [ "$(class_lines "$1")" -gt 0 ] 2>/dev/null && return 0
+    sleep 1
+  done
+  return 1
+}
+# The sender is spawned inside a command substitution, so it is a child of THAT subshell and this
+# shell can never `wait` for it — a bare `wait` returns instantly and an immediate `kill -0` then
+# reads the still-exiting process as alive. Poll for the death instead of asserting it.
+await_gone() { # <pid> → 0 once the pid is gone; 1 after ~15s
+  local i
+  for i in $(seq 1 15); do
+    kill -0 "$1" 2>/dev/null || return 0
+    sleep 1
+  done
+  return 1
+}
+
+@test "W1: a sender that TOOK A TURN after the kill is (C) DEAF, on the beat advance" {
+  local u="CLASS-W1-$$" cap="$BATS_TEST_TMPDIR/w1.out" v s box="$CC_MAILBOX_DIR/CLASS-W1-$$.md"
+  export CC_AWAIT_CLASS_DELAY_S=5
+  v="$(spawn_isolated "$u" "$cap")" || false
+  assert_victim "$v"
+  # ALIVE across the whole window on purpose: both (C) arms are then true, and asserting the REASON
+  # is what attributes the verdict to the beat advance rather than to mere process survival.
+  s="$(sender_spawn "$v" 12)" || false
+  beat_for_pid "sidW1" "$s" 7
+  sender_fire
+  sleep 2
+  beat_for_pid "sidW1" "$s" 8            # …a turn taken AFTER it killed the watcher
+  await_class "$box" || { echo "no class line landed"; cat "$cap"; false; }
+  class_body "$box" | grep -qF 'verdict=C-DEAF reason=sender-beat-advanced-after-the-kill' \
+    || { echo "wrong verdict:"; class_body "$box"; false; }
+  class_body "$box" | grep -qF 'seq 7→8' || false     # the evidence, not just the label
+  kill "$s" 2>/dev/null || true
+}
+
+@test "W2: a sender STILL RUNNING after the kill is (C) DEAF even with a frozen beat" {
+  local u="CLASS-W2-$$" cap="$BATS_TEST_TMPDIR/w2.out" v s box="$CC_MAILBOX_DIR/CLASS-W2-$$.md"
+  export CC_AWAIT_CLASS_DELAY_S=5
+  v="$(spawn_isolated "$u" "$cap")" || false
+  assert_victim "$v"
+  s="$(sender_spawn "$v" 12)" || false
+  beat_for_pid "sidW2" "$s" 3            # frozen for the whole window — the beat says nothing
+  sender_fire
+  await_class "$box" || { echo "no class line landed"; cat "$cap"; false; }
+  class_body "$box" | grep -qF 'verdict=C-DEAF reason=sender-process-survived-its-own-kill' \
+    || { echo "wrong verdict:"; class_body "$box"; false; }
+  class_body "$box" | grep -qF 'Re-arm before you go idle' || false   # a dangerous verdict acts
+  kill "$s" 2>/dev/null || true
+}
+
+@test "W3: a sender that EXITED with a frozen beat is (B) BENIGN — and demands no act" {
+  local u="CLASS-W3-$$" cap="$BATS_TEST_TMPDIR/w3.out" v s box="$CC_MAILBOX_DIR/CLASS-W3-$$.md"
+  export CC_AWAIT_CLASS_DELAY_S=5
+  v="$(spawn_isolated "$u" "$cap")" || false
+  assert_victim "$v"
+  s="$(sender_spawn "$v" 0)" || false     # fires and exits: the recycle-teardown shape
+  beat_for_pid "sidW3" "$s" 3
+  sender_fire
+  await_gone "$s" || { echo "anti-vacuity: the sender never exited, so this is not the B case"; false; }
+  await_class "$box" || { echo "no class line landed"; cat "$cap"; false; }
+  class_body "$box" | grep -qF 'verdict=B-BENIGN reason=sender-session-exited-beat-frozen' \
+    || { echo "wrong verdict:"; class_body "$box"; false; }
+  # THE POINT OF THE WHOLE ROW: the one branch where "nothing is wrong" is earned is also the one
+  # branch that must not tell a session to act. An alarm that fires identically on both classes says
+  # as little as one that never fires.
+  ! class_body "$box" | grep -qF 'Re-arm before you go idle' || false
+}
+
+@test "W4: a sender that binds to NO session beat is UNDETERMINED, and fails toward DEAF" {
+  local u="CLASS-W4-$$" cap="$BATS_TEST_TMPDIR/w4.out" v s box="$CC_MAILBOX_DIR/CLASS-W4-$$.md"
+  export CC_AWAIT_CLASS_DELAY_S=5
+  v="$(spawn_isolated "$u" "$cap")" || false
+  assert_victim "$v"
+  s="$(sender_spawn "$v" 0)" || false
+  # A NON-EMPTY store that does NOT hold this sender. An empty CC_BEAT_DIR would make the scan skip
+  # without ever running, and the case would pass over an unexercised lookup.
+  beat_for_pid "sidW4other" 1 3
+  sender_fire
+  await_class "$box" || { echo "no class line landed"; cat "$cap"; false; }
+  class_body "$box" | grep -qF 'verdict=UNDETERMINED reason=sender-binds-to-no-session-beat' \
+    || { echo "wrong verdict:"; class_body "$box"; false; }
+  class_body "$box" | grep -qF 'ASSUME YOU ARE DEAF' || false
+  kill "$s" 2>/dev/null || true
+}
+
+@test "W5: the WAKE-PATH-DOWN line announces the pending verdict and names the safe assumption" {
+  local u="CLASS-W5-$$" cap="$BATS_TEST_TMPDIR/w5.out" v s box="$CC_MAILBOX_DIR/CLASS-W5-$$.md"
+  export CC_AWAIT_CLASS_DELAY_S=20          # long: the corpse line must say this WITHOUT the verdict
+  v="$(spawn_isolated "$u" "$cap")" || false
+  assert_victim "$v"
+  s="$(sender_spawn "$v" 0)" || false
+  beat_for_pid "sidW5" "$s" 3
+  sender_fire
+  sleep 3
+  grep -qF 'WHETHER THIS IS BENIGN IS BEING SAMPLED RIGHT NOW' "$box" || false
+  grep -qF 'UNTIL THAT LINE ARRIVES, ASSUME (C)' "$box" || false
+  [ "$(class_lines "$box")" = "0" ] || false   # …and it says it WITHOUT the verdict it is promising
+  kill "$s" 2>/dev/null || true
+}
+
+@test "W5 CONTROL: a single-pid TERM captures no sender, and the line says THAT, not a false reason" {
+  # R5's shape: a 143 never reaches the SA_SIGINFO recorder. The advice is the same (assume deaf) but
+  # the REASON differs, and a line that blamed a missing si_pid for an operator's kill-switch — or
+  # vice versa — is what sends the next reader hunting a recorder failure that never happened.
+  local u="CLASS-W5C-$$" cap="$BATS_TEST_TMPDIR/w5c.out" v box="$CC_MAILBOX_DIR/CLASS-W5C-$$.md"
+  v="$(spawn_isolated "$u" "$cap")" || false
+  assert_victim "$v"
+  kill -TERM "$v" 2>/dev/null || true       # THIS PROCESS ALONE — deliberately not the group
+  sleep 3
+  grep -qF 'NO (B)-vs-(C) CLASSIFICATION IS POSSIBLE FOR THIS KILL' "$box" || false
+  grep -qF 'no si_pid was captured' "$box" || false
+  [ "$(class_lines "$box")" = "0" ] || false   # nothing to sample ⇒ no follow-up promised or written
+}
+
+@test "W6: the handler does NOT block for the sampling window" {
+  # The second read is the whole design, and it is also why the sampling cannot happen in the signal
+  # handler: the disarm and the corpse notice are the safety-critical half and a killer may follow
+  # with SIGKILL. The watcher must therefore be GONE while the window is still open.
+  local u="CLASS-W6-$$" cap="$BATS_TEST_TMPDIR/w6.out" v s i box="$CC_MAILBOX_DIR/CLASS-W6-$$.md"
+  export CC_AWAIT_CLASS_DELAY_S=20
+  v="$(spawn_isolated "$u" "$cap")" || false
+  assert_victim "$v"
+  s="$(sender_spawn "$v" 0)" || false
+  beat_for_pid "sidW6" "$s" 3
+  sender_fire
+  for i in 1 2 3 4 5 6 7 8; do kill -0 "$v" 2>/dev/null || break; sleep 1; done
+  run kill -0 "$v"
+  [ "$status" -ne 0 ] || { echo "the watcher was still alive inside the sampling window"; false; }
+  grep -qF 'WAKE-PATH-DOWN' "$box" || false     # the guaranteed half landed…
+  [ "$(class_lines "$box")" = "0" ] || false    # …while the sampled half is still, correctly, pending
+  kill "$s" 2>/dev/null || true
+}
+
+@test "W7: a re-arm does NOT read its own WAKE-PATH-CLASS line as the ping it awaits (F12)" {
+  # The classifier appends tens of seconds after the corpse notice — squarely inside the window where
+  # the REPLACEMENT watcher is already armed. Left out of the F12 suppressor this is the identical
+  # defect with a different marker: verdict=ping, exit 0, over a wake path never established.
+  printf '2026-08-24T10:00:00+0000 [cc-await-ping] WAKE-PATH-CLASS: verdict=C-DEAF reason=sender-process-survived-its-own-kill — follow-up to the WAKE-PATH-DOWN line above: the watcher armed for [%s] was killed by pid 123, and TWO reads say so.\n' "$UUID" > "$MB"
+  run "$AWAIT" "$UUID" --interval 1 --timeout 4
+  [ "$status" -eq 2 ] || { echo "expected timeout (kept watching), got $status: $output"; false; }
+  [[ "$output" == *"control line(s) of our own"* ]] || false
+}
+
+@test "W7 CONTROL: a FORWARDED WAKE-PATH-CLASS naming ANOTHER pane is real mail and still fires" {
+  # The suppressor is keyed on OUR OWN keyset, never on the marker text. A sibling telling us its
+  # wake path dropped is peer mail; a blanket marker skip would swallow it.
+  printf '2026-08-24T10:00:00+0000 [cc-await-ping] WAKE-PATH-CLASS: verdict=C-DEAF reason=sender-process-survived-its-own-kill — follow-up to the WAKE-PATH-DOWN line above: the watcher armed for [SOMEONE-ELSE-9999] was killed by pid 123.\n' > "$MB"
+  run "$AWAIT" "$UUID" --interval 1 --timeout 4
+  [ "$status" -eq 0 ] || { echo "expected a fire on a forwarded report, got $status: $output"; false; }
+  [[ "$output" == *"SOMEONE-ELSE-9999"* ]] || false
+}
+
+@test "W8 CONTROL: CC_AWAIT_CLASSIFY=0 samples nothing, and says so without inventing a reason" {
+  local u="CLASS-W8-$$" cap="$BATS_TEST_TMPDIR/w8.out" v s box="$CC_MAILBOX_DIR/CLASS-W8-$$.md"
+  export CC_AWAIT_CLASSIFY=0
+  export CC_AWAIT_CLASS_DELAY_S=3
+  v="$(spawn_isolated "$u" "$cap")" || false
+  assert_victim "$v"
+  s="$(sender_spawn "$v" 0)" || false
+  beat_for_pid "sidW8" "$s" 3
+  sender_fire
+  sleep 8
+  [ "$(class_lines "$box")" = "0" ] || false
+  grep -qF 'NO (B)-vs-(C) CLASSIFICATION WILL FOLLOW' "$box" || false
+  grep -qF 'CC_AWAIT_CLASSIFY=0' "$box" || false
+  grep -qF 'ASSUME THE DANGEROUS READING' "$box" || false
+  kill "$s" 2>/dev/null || true
+}

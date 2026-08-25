@@ -480,6 +480,10 @@ _turn_moved() {  # 0 iff this session has taken a new turn since the arm baselin
 # mapper, the same overcount master 2029c52b8a32 names for this box.
 SIGRECORD_PID=""
 SIGRECORD_CAP=""
+# The captured si_pid, kept as a global on purpose: _sigrecord_disarm `rm`s the capture file, and it
+# runs BETWEEN _sigrecord_sender and the notice writers. Re-reading the file later would find
+# nothing, and re-ordering the disarm would trade a diagnostic for the safety-critical cleanup.
+SENDER_PID=""
 
 # shellcheck disable=SC2329  # invoked indirectly — trap/startup only.
 _sigrecord_arm() {
@@ -567,6 +571,10 @@ _sigrecord_sender() {
   [ -n "$line" ] || return 0
   pid="$(printf '%s' "$line" | sed -n 's/.*si_pid=\([0-9][0-9]*\).*/\1/p')"
   [ -n "$pid" ] || return 0
+  # NO GLOBAL IS SET HERE, and the temptation to set one is the trap: this function's ONLY caller
+  # invokes it as `sender="$(_sigrecord_sender)"`, so every assignment it makes dies with that
+  # command-substitution subshell. It would look wired and read empty. _sig_verdict re-parses the pid
+  # out of the clause below instead — one source, and one that survives the subshell.
   cmd="$(ps -o command= -p "$pid" 2>/dev/null | head -n1 | cut -c1-120)"
   if [ -n "$cmd" ]; then
     printf ' SENDER IDENTIFIED: %s sender_cmd=[%s].' "$line" "$cmd"
@@ -660,18 +668,184 @@ _sigrecord_arm
 # (goal-state.sh header, FAIL DIRECTION) — a reader who treats rc 1 as a confident no re-creates the
 # E1 defect from the other side.
 #
+# ── (B) vs (C) (2026-08-24): "YOUR WATCHER DIED" IS TWO EVENTS, AND ONE OF THEM IS AN EMERGENCY ───
+# backlog 95fcadde830e (C, the dangerous class) and 0e0da162f77c (B, the benign one). The notice
+# above classifies every kill identically, and its (a)/(b) branches are about the /goal, not about
+# whether anything will re-arm. Two populations hide under one line:
+#
+#   (B) BENIGN — the watcher was torn down by its own arming session's RECYCLE EXIT. A successor is
+#       already coming up on this pane and will arm its own watcher. Nothing is wrong.
+#   (C) DANGEROUS — the arming session is STILL ALIVE and still taking turns, and its watcher died
+#       anyway. Nothing re-arms. The session believes it is armed, every counter reads healthy, and
+#       peer mail stops waking it. MEASURED on pane 102: SIGTERM at elapsed=770s of a 14400s budget,
+#       si_pid resolving to a process verified ALIVE with the right cwd.
+#
+# THREE DISCRIMINATORS ARE REFUTED AND MUST NOT COME BACK.
+#   1. REGISTRY IDENTITY (compare si_pid to the pane's own predecessor via cc-registry) — the cure
+#      0e0da162f77c itself prescribes, and it has ZERO power. cc-registry is single-slot per pane, so
+#      it only ever names the current occupant; both truth-table cells were measured and BOTH match
+#      (B matched because the successor registered 10s after the kill; C matched because the live
+#      arming session's own row precedes the kill). It hard-codes "nothing is wrong" for a match —
+#      i.e. it prints the reassuring branch over exactly the dangerous class.
+#   2. "DID THE SENDER BEAT AFTER THE KILL?" as a single question — structurally always 0 for
+#      everyone. A cc-beats file is ONE ROW PER SESSION (a current-state record, not an append log),
+#      so "count beats after t" reads BEFORE=1 AFTER=0 for a live sender and a dead one alike.
+#   3. BEAT `kind` — refuted at n=1021. The 2026-08-25T03:02:10Z reboot left 1,010 sessions frozen at
+#      kind=prompt (dead, killed without a clean stop) while 11 LIVE sessions also read kind=prompt.
+#      `stop` is sufficient for a clean end; its ABSENCE means nothing.
+#
+# WHAT SURVIVES IS BEAT FRESHNESS, AND IT NEEDS A SECOND SAMPLE. A live sender's beat `t`/`seq`
+# ADVANCES; a dead sender's is frozen. Two properties make it durable: the beat file is keyed by SID,
+# so pid reuse cannot forge it, and it needs no knowledge of HOW the session died. But freshness was
+# validated against a REBOOT — a privileged anchor ordinary operation does not give you — so the
+# operational form is TWO READS SEPARATED IN TIME, never a comparison against some epoch and never a
+# single read. That is what this code takes, and it is why the sampling cannot happen in the handler.
+#
+# WHY A DETACHED CHILD RATHER THAN THE SIGTERM HANDLER. The handler must not block: the disarm and
+# the corpse notice are the safety-critical work and a killer may follow with SIGKILL. A second
+# sample worth taking is tens of seconds away — a recycling `claude` is gone well inside that, a live
+# one is trivially still there — so the handler spawns and returns, and the child appends its verdict
+# when it has one. THE FAIL DIRECTION OF THAT CHOICE IS THE RIGHT WAY ROUND: in (B) the whole pane is
+# being torn down and the child may die with it, costing a classification nobody needed (the
+# successor re-arms regardless); in (C) the pane is alive by definition, which is exactly when the
+# child survives to speak. It holds no descriptor of the harness's task pipe (</dev/null >/dev/null),
+# so it can never keep a `run_in_background` arm reading non-terminal after the watcher is gone.
+#
+# WE DO NOT EXPLAIN THE REAP, AND DO NOT NEED TO. 95fcadde830e records (C)'s MECHANISM as unknown and
+# whatever reaps the watcher as conditional. That is a separate row. Classifying (C) needs no
+# mechanism at all: sender beat frozen and its process gone ⇒ (B); sender still alive, or beating
+# after it killed you ⇒ (C). The notice's job is to say the correct thing, not to say why.
+#
+# THE BINDING IS si_pid → A BEAT ROW'S `.pid`, DIRECTLY, AND ITS LIMIT IS NAMED RATHER THAN HIDDEN.
+# hooks/session-beat.sh records the CLAUDE-ANCESTOR pid, and the measured (C) case resolved si_pid to
+# exactly that — a session process verified alive with the right cwd — so direct binding covers the
+# population this row was opened on. A sender that is a mere DESCENDANT of a session (a hook shell, a
+# `run_in_background` child) binds to nothing and lands in UNDETERMINED. That is a real gap, it fails
+# toward deaf, and widening the binding by walking si_pid's ancestry is a separate row: the walk only
+# answers while the sender is still alive, so it would add power in exactly one direction and needs
+# its own evidence before it is trusted in the other.
+#
+# UNDETERMINED FAILS TOWARD DEAF. A sender that binds to no session beat cannot be told from a
+# recycle teardown, and a 143 never reaches the recorder at all. The cost of a false "nothing is
+# wrong" is a permanently deaf session; the cost of a false "you may be deaf" is one re-arm. So every
+# branch this code cannot decide reads as (C).
+CLASS_DELAY_S="${CC_AWAIT_CLASS_DELAY_S:-30}"
+case "$CLASS_DELAY_S" in ''|*[!0-9]*) CLASS_DELAY_S=30 ;; esac
+
+# shellcheck disable=SC2329  # invoked indirectly — the detached classifier is its only caller.
+_beat_sid_for_pid() {   # <pid> → sid of the freshest beat whose .pid is this pid; empty if none
+  local f b p t best="" best_t=0
+  [ -n "${1:-}" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  [ -d "$BEAT_DIR" ] || return 1
+  for f in "$BEAT_DIR"/*.json; do
+    [ -f "$f" ] || continue
+    # PARSED, never grepped. hooks/session-beat.sh writes with `jq -n` and no `-c`, so these files
+    # are PRETTY-PRINTED: a `grep '"pid":<n>'` returns 0 on a store that answers perfectly.
+    p="$(jq -r '.pid // empty' "$f" 2>/dev/null)"
+    [ "$p" = "$1" ] || continue
+    t="$(jq -r '.t // 0' "$f" 2>/dev/null)"; case "$t" in ''|*[!0-9]*) t=0 ;; esac
+    if [ "$t" -gt "$best_t" ] 2>/dev/null; then best_t="$t"; b="${f##*/}"; best="${b%.json}"; fi
+  done
+  [ -n "$best" ] || return 1
+  printf '%s' "$best"
+}
+
+# shellcheck disable=SC2329  # invoked indirectly — the detached classifier is its only caller.
+_pid_ident() {   # <pid> → its start time, TZ-PINNED; empty when the pid is gone
+  # TZ=UTC on BOTH samples, deliberately: `lstart` renders in the ambient zone, so an unpinned pair
+  # of reads straddling a DST flip would report the same process as a different one (memory
+  # process-start-time-renders-in-ambient-timezone). Comparing OUR OWN two reads — never the beat
+  # file's lstart, which some other process rendered in some other zone at some other time — is what
+  # makes "same pid, same process" a claim about identity rather than about the clock.
+  [ -n "${1:-}" ] || return 0
+  TZ=UTC ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//'
+}
+
+# shellcheck disable=SC2329  # invoked indirectly — the detached classifier is its only caller.
+_wake_class_line() {   # <sender pid> <key> — TWO reads CLASS_DELAY_S apart, then ONE verdict line
+  local pid="$1" key="$2" box sid t1 s1 t2 s2 i1 i2 v why says
+  box="$MAILBOX_DIR/${key}.md"
+  sid="$(_beat_sid_for_pid "$pid" 2>/dev/null || true)"
+  # ── SAMPLE 1 — taken now, milliseconds after the kill ──
+  i1="$(_pid_ident "$pid")"
+  t1="$(_beat_field "$sid" '.t'   2>/dev/null || true)"
+  s1="$(_beat_field "$sid" '.seq' 2>/dev/null || true)"
+  sleep "$CLASS_DELAY_S" 2>/dev/null || true
+  # ── SAMPLE 2 — the whole point; a single read cannot separate "exiting" from "alive" ──
+  i2="$(_pid_ident "$pid")"
+  t2="$(_beat_field "$sid" '.t'   2>/dev/null || true)"
+  s2="$(_beat_field "$sid" '.seq' 2>/dev/null || true)"
+  case "$t1" in ''|*[!0-9]*) t1=0 ;; esac; case "$t2" in ''|*[!0-9]*) t2=0 ;; esac
+  case "$s1" in ''|*[!0-9]*) s1=0 ;; esac; case "$s2" in ''|*[!0-9]*) s2=0 ;; esac
+
+  local act=" Re-arm before you go idle — UNLESS a /goal is live in this session, in which case do NOT (branch (b) of the line above states why)."
+  if [ -z "$sid" ]; then
+    v="UNDETERMINED"; why="sender-binds-to-no-session-beat"
+    says="pid $pid matches no cc-beats row, so it cannot be told from a recycle teardown. ASSUME YOU ARE DEAF: nothing is known to be coming to re-arm for you."
+  elif [ "$s2" -gt "$s1" ] || [ "$t2" -gt "$t1" ]; then
+    v="C-DEAF"; why="sender-beat-advanced-after-the-kill"
+    # ${s1} BRACED, and it is load-bearing: `$s1→` takes the multibyte arrow INTO the variable
+    # name, so it expands ${s1→} — unbound under `set -u`, which kills this whole child. It fails
+    # SILENTLY too, because the child writes to /dev/null by design, so the only symptom is a
+    # classification that never arrives. Found by running it, not by reading it.
+    says="session [$sid] took a TURN after it killed your watcher (seq ${s1}→${s2}, t ${t1}→${t2}). It did not recycle, so NOTHING will re-arm: this session is DEAF to peer mail from now on."
+  elif [ -n "$i2" ] && [ "$i2" = "$i1" ]; then
+    v="C-DEAF"; why="sender-process-survived-its-own-kill"
+    says="session [$sid] (pid $pid) is STILL RUNNING ${CLASS_DELAY_S}s after it killed your watcher — a recycle exit would be gone. NOTHING will re-arm: this session is DEAF to peer mail from now on."
+  else
+    v="B-BENIGN"; why="sender-session-exited-beat-frozen"
+    says="session [$sid] EXITED and its beat is frozen (seq $s1, t $t1, unchanged across both samples; pid $pid gone). That is a recycle teardown — the successor coming up on this pane arms its own watcher, and nothing here is wrong."
+    act=""   # the ONE branch where "nothing is wrong" is earned; it must not also demand an act
+  fi
+
+  mkdir -p "$MAILBOX_DIR" 2>/dev/null || return 0
+  printf '%s [cc-await-ping] WAKE-PATH-CLASS: verdict=%s reason=%s — follow-up to the WAKE-PATH-DOWN line above: the watcher armed for [%s] was killed by pid %s, and TWO reads of that sender %ss apart (never one read, and never the beat kind field) say: %s%s\n' \
+    "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$v" "$why" "$key" "$pid" "$CLASS_DELAY_S" "$says" "$act" \
+    >> "$box" 2>/dev/null || true
+  return 0
+}
+
+# shellcheck disable=SC2329  # invoked indirectly — its only caller, _sig_verdict, is itself trap-only.
+_wake_class_spawn() {   # fire-and-forget; MUST return instantly (we are inside a signal handler)
+  [ "${CC_AWAIT_CLASSIFY:-1}" = 0 ] && return 0
+  [ -n "${SENDER_PID:-}" ] || return 0
+  [ -n "${CUR_UUID:-}" ] || return 0
+  # `trap ''` so the teardown that is killing us cannot also take the sampler; </dev/null >/dev/null
+  # so the child holds no descriptor of the harness's task pipe and cannot keep a backgrounded arm
+  # reading non-terminal after the watcher is gone.
+  ( trap '' HUP TERM INT
+    _wake_class_line "$SENDER_PID" "$CUR_UUID"
+  ) </dev/null >/dev/null 2>&1 &
+  return 0
+}
+
 # ONE LINE, no embedded newline: the mailbox is line-oriented and a line IS a message.
 # shellcheck disable=SC2329  # invoked indirectly — its only caller, _sig_verdict, is itself trap-only.
 _wake_down_notice() {   # <signame> [<sender clause, already space-prefixed>]
-  local box="$MAILBOX_DIR/${CUR_UUID}.md"
+  local box="$MAILBOX_DIR/${CUR_UUID}.md" cls
   [ -n "${CUR_UUID:-}" ] || return 0
   mkdir -p "$MAILBOX_DIR" 2>/dev/null || return 0
+  # WHETHER THIS KILL IS BENIGN IS A FACT THAT DOES NOT EXIST YET — see the (B) vs (C) header above.
+  # It takes two reads separated in time, so this line can only announce the pending verdict and name
+  # the safe assumption to hold until it lands. Both texts fail toward DEAF.
+  # THREE STATES, NOT TWO. "Disabled" and "no sender" converge on the same advice and must still be
+  # told apart: a line that blames a missing si_pid for an operator's kill-switch is a false reason,
+  # and a false reason is what sends the next reader hunting for a recorder failure that never
+  # happened (the same defect the elapsed>=budget arm above was built to end).
+  if [ -z "${SENDER_PID:-}" ]; then
+    cls=" NO (B)-vs-(C) CLASSIFICATION IS POSSIBLE FOR THIS KILL: no si_pid was captured, so a benign recycle teardown cannot be told from a sender that is still alive and re-arms nothing. ASSUME THE DANGEROUS READING — you are deaf now."
+  elif [ "${CC_AWAIT_CLASSIFY:-1}" = 0 ]; then
+    cls=" NO (B)-vs-(C) CLASSIFICATION WILL FOLLOW: the sender IS known, but classification is switched off here (CC_AWAIT_CLASSIFY=0). ASSUME THE DANGEROUS READING — you are deaf now."
+  else
+    cls=" WHETHER THIS IS BENIGN IS BEING SAMPLED RIGHT NOW: a WAKE-PATH-CLASS line lands in this box in ~${CLASS_DELAY_S}s, classifying the kill as (B) your own arming session's RECYCLE EXIT — a successor is coming up and will re-arm, nothing is wrong — or (C) a sender that is STILL ALIVE and still taking turns, which re-arms nothing and leaves this session DEAF from now on. It decides on SENDER-BEAT FRESHNESS across two reads separated in time (registry identity, the beat kind field, and any single read are all measured-refuted discriminators). UNTIL THAT LINE ARRIVES, ASSUME (C): you are deaf now."
+  fi
   # BOTH improvements, deliberately: trunk's MEASURED slice (elapsed + budget, so a reader can size
   # how much of the arm was actually covered) AND this commit's goal-aware branch (which repair
   # applies at all). They were written against each other and neither subsumes the other.
-  printf '%s [cc-await-ping] WAKE-PATH-DOWN: the watcher armed for [%s] was TERMINATED from outside (SIG%s; %s budget=%ss — the MEASURED slice of the term it actually held) — it did NOT time out and consumed no ping.%s WHICH REPAIR APPLIES DEPENDS ON YOUR /goal, so check before you act. (a) NO live /goal → you are DEAF: nothing will wake this session on peer mail until you RE-ARM. Do it before you go idle: %s . (b) A /goal IS LIVE → do NOT re-arm. Claude Code skips /goal evaluation at every Stop where a non-terminal background Bash exists, so re-arming would silently disable the goal driving this session — hooks/validate-bash.sh denies that arm for exactly this reason. You are not deaf without it: the goal blocks your stops, so you keep taking turns and hooks/mailbox-drain.sh delivers peer mail at every boundary the goal forces. The goal-safe cross-turn lever is %s/.claude/hooks/session-continue.sh set "<next step>". THE CHECK, if you cannot tell which branch you are in: the drain that delivered this line re-evaluates goal-liveness at that same boundary, so the header above it IS the verdict — "no inbox wake path armed" is branch (a), and a nudge quoting your /goal condition is branch (b). To run the predicate yourself: . %s/.claude/hooks/lib/goal-state.sh && goal_live_condition <your transcript .jsonl> — it FAILS CLOSED, so rc 1 means "no live goal OR could not tell", never a confident no. Detail: docs/research/goal-safe-2way-comms-2026-08-13.md §8 E1; F5 in docs/research/handoff-high-value-capture-2026-08-19.md.\n' \
+  printf '%s [cc-await-ping] WAKE-PATH-DOWN: the watcher armed for [%s] was TERMINATED from outside (SIG%s; %s budget=%ss — the MEASURED slice of the term it actually held) — it did NOT time out and consumed no ping.%s WHICH REPAIR APPLIES DEPENDS ON YOUR /goal, so check before you act. (a) NO live /goal → you are DEAF: nothing will wake this session on peer mail until you RE-ARM. Do it before you go idle: %s . (b) A /goal IS LIVE → do NOT re-arm. Claude Code skips /goal evaluation at every Stop where a non-terminal background Bash exists, so re-arming would silently disable the goal driving this session — hooks/validate-bash.sh denies that arm for exactly this reason. You are not deaf without it: the goal blocks your stops, so you keep taking turns and hooks/mailbox-drain.sh delivers peer mail at every boundary the goal forces. The goal-safe cross-turn lever is %s/.claude/hooks/session-continue.sh set "<next step>". THE CHECK, if you cannot tell which branch you are in: the drain that delivered this line re-evaluates goal-liveness at that same boundary, so the header above it IS the verdict — "no inbox wake path armed" is branch (a), and a nudge quoting your /goal condition is branch (b). To run the predicate yourself: . %s/.claude/hooks/lib/goal-state.sh && goal_live_condition <your transcript .jsonl> — it FAILS CLOSED, so rc 1 means "no live goal OR could not tell", never a confident no. Detail: docs/research/goal-safe-2way-comms-2026-08-13.md §8 E1; F5 in docs/research/handoff-high-value-capture-2026-08-19.md.%s\n' \
     "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$CUR_UUID" "$1" "$(_elapsed_f)" "$TIMEOUT" "${2:-}" \
-    "$HOME/.claude/bin/cc-await-ping --timeout 14400 --interval 15" "$HOME" "$HOME" \
+    "$HOME/.claude/bin/cc-await-ping --timeout 14400 --interval 15" "$HOME" "$HOME" "$cls" \
     >> "$box" 2>/dev/null || true
   return 0
 }
@@ -722,8 +896,14 @@ _sig_verdict() {   # <signame> <signum>
   # _unbeat first: clearing the stale claim is the safety-critical half and is fast. The bounded
   # sender read comes after, which also gives the recorder those few extra milliseconds to land.
   sender="$(_sigrecord_sender)"
+  # The pid comes back through the CLAUSE, not through a global — see _sigrecord_sender's note. The
+  # capture file is gone one line below, so this is the last moment it can be read at all.
+  SENDER_PID="$(printf '%s' "$sender" | sed -n 's/.*si_pid=\([0-9][0-9]*\).*/\1/p')"
   _sigrecord_disarm
   _wake_down_notice "$1" "$sender"
+  # AFTER the notice, never before: the corpse line is the guaranteed half and must not wait on a
+  # spawn. This returns instantly — the sampling happens in the detached child.
+  _wake_class_spawn
   echo "cc-await-ping: verdict=killed signal=SIG$1 $(_elapsed_f) budget=${TIMEOUT}s uuid=${CUR_UUID} — this watcher was TERMINATED from outside; it did NOT time out and no ping was consumed. The wake path for [$CUR_UUID] is now DOWN and its .watching marker has been cleared, so nothing is still claiming it. A WAKE-PATH-DOWN line has also been written into this inbox, so the next boundary surfaces it as ordinary peer mail rather than leaving the verdict on a stream the harness labels 'failed'.${sender:- The sender was not captured: a kill of this process alone never reaches the recorder, and the recorder may also be disabled or unavailable — an exit code carries no sender either way.} If you are going idle, RE-ARM — UNLESS a /goal is live in this session, in which case do NOT (a parked background Bash makes CC skip goal evaluation at every Stop; the goal forces the turns that drain your mail). The inbox line states both branches." >&2
   exit $(( 128 + $2 ))
 }
@@ -944,10 +1124,17 @@ WOKEEOF
 # FAIL DIRECTION, deliberately OPEN: every uncertain branch below (unreadable box, empty window)
 # returns "real mail present", i.e. the pre-fix behaviour. This suppressor can only ever make the
 # watcher keep watching over lines it PROVED are its own; it can never swallow a delivery.
-_own_wake_down_line() {   # <line> → 0 iff this is a WAKE-PATH-DOWN notice armed for one of OUR keys
+# ITS FOLLOW-UP IS THE SAME KIND OF LINE. The (B)-vs-(C) classifier appends a WAKE-PATH-CLASS line
+# to the same box tens of seconds after the corpse notice — i.e. squarely inside the window where the
+# REPLACEMENT watcher is already armed. Left out of this suppressor it would be the identical defect
+# with a different marker: an arm meeting a control line WE wrote, firing `verdict=ping elapsed=0s`,
+# and reporting a wake path that was never established. It carries the same `armed for [<key>]`
+# clause, so the key-scoped rule below separates our own from a sibling's forwarded report unchanged.
+_own_wake_down_line() {   # <line> → 0 iff this is a wake-path control line armed for one of OUR keys
   local _k
   case "$1" in
     *"[cc-await-ping] WAKE-PATH-DOWN: the watcher armed for ["*) ;;
+    *"[cc-await-ping] WAKE-PATH-CLASS: "*"the watcher armed for ["*) ;;
     *) return 1 ;;
   esac
   for _k in $(_keys); do
