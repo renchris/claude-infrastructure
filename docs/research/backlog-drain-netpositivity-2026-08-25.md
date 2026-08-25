@@ -70,6 +70,43 @@ rows, not a measurement of live ones (§7).
 falsifier probe at all. When the sweep does run it works: the 2026-08-24T07:59Z pass marked 4 rows
 falsified and all 4 closed within 3 minutes. **This is a scheduling problem, not a design problem.**
 
+#### 🚨 CORRECTION 2026-08-25 (item `37b112d8950d`, the L1 dispatch) — THE SENTENCE ABOVE IS WRONG IN BOTH HALVES
+
+It is **not a scheduling problem**, and the number **is not a backlog of unrun probes**. Read off
+trunk code, not the store:
+
+1. **The sweep is already scheduled and already whole-store.** `scripts/autonomy-sweep.sh:732-820`
+   (§2b-iii, "THE CURRENCY PASS") runs `cc-premise sweep --json --record --limit 150
+   --close-falsified 5` on a 6 h gate (`CC_PREMISE_PASS_EVERY_S`, default 21600) inside a job that
+   fires every 300 s (`launchd/com.chrisren.autonomy-sweep.plist:12`). The 2026-08-24T07:59Z pass
+   cited above **is that job** — it is the mitigation running, not an existence proof of a
+   mitigation nobody runs. There is no additional pass to fire.
+2. **The 457 are the rows the sweep CANNOT ask, and refusing to stamp them is deliberate.**
+   `bin/cc-premise:2991-3000`: *"ONLY PROBED ROWS ARE STAMPED, and this is the line the whole wave
+   turns on… stamping [an unprobed row] as validated would drive the never-validated headline to
+   ZERO while ~400 of 564 rows had had nothing run against them. That is not a weaker metric than
+   none, it is a WORSE one."* `never_validated` is computed as live rows absent from the validated
+   snapshot (`bin/cc-backlog:4601,4606`), and only probed rows enter it. So **457 is a CAPABILITY
+   deficit, not an EXECUTION one** — precisely the distinction `cmd_validated`'s own header draws
+   (`bin/cc-backlog:4307`: *"Coverage is a claim about capability; this is the record of an ACT"*).
+   This document made exactly the conflation that header exists to prevent.
+3. **Therefore both of the item's projected effects are unreachable by running the sweep.**
+   "Converts ~400 rows from unknown to known freshness" is a no-op by construction — the pass
+   already visits every non-done row every time (`bin/cc-premise:3008-3010`: only the *probe* is
+   sharded, never the report) and stamps none of them, because nothing was measured. And the closer
+   takes only the `falsified` bucket (`bin/cc-premise:3087`), which only a stored or derived **probe**
+   can produce; a probe-less row can never enter it, so "retire 54–89 rows" cannot come from this
+   lever at any cadence.
+4. **`cc-backlog falsify` is one row, one hand-written probe.** `bin/cc-backlog:3349-3360` — it
+   exists precisely because `add --falsifier` cannot reach an existing row, and it attaches a single
+   `--probe "<sh one-liner>"` per invocation, running it first and refusing an exit-0 store. There is
+   no bulk generator. "Run `cc-backlog falsify` over every live row lacking a probe" is therefore
+   **457 authored shell predicates**, not a sweep.
+
+**Corrected L1 — see §6.** The 54–89 estimate itself is untouched by this correction; it was always a
+projection from closed-row rates (§7 "Still blind" item 1 says so), and it stays **UNMEASURED**,
+because the instrument that would measure it does not reach the population it was pointed at.
+
 ### What refutes the strong form
 
 The ticket usually still points at a real artifact. All 20 sampled files from the >72 h population
@@ -203,6 +240,13 @@ Aug 8 = 405 → Aug 16 = 578 → Aug 19 = 403 → Aug 25 = 501.
 | **E** | D + operator clears the floor | blocked 198 → ~60 | agent board mid-Sept; floor in 1–2 weeks of *operator* time, in parallel | medium |
 | F | add drain capacity (2× recycles) | — | **no effect on the date; ~$243 → ~$486/day** | measured |
 
+> ⚠️ **Scenario B is not executable as written** (correction, §2 and §6): "bulk-falsify the 457" has
+> no bulk form — the sweep cannot ask a probe-less row, and probes are attached one authored
+> predicate at a time. Its **−54 to −89** was a projection from closed-row rates, not a measurement,
+> and it does not survive as a costed intervention. Rows **C** and **E**, which take B as an input,
+> inherit that: their level-shift term is unfunded until L1′ is done. **D is unaffected** — it is
+> scored on the agent board's own flows and never depended on B.
+
 **The only row yielding a defensible date is D, and it gets there by changing the *target*, not the
 throughput.** "Drain the backlog to zero" has no date because it conflates two populations with
 different owners.
@@ -217,6 +261,30 @@ different owners.
 from *unknown freshness* to *known*. Existence proof: the 2026-08-24 pass falsified 4 rows, all
 closed within 3 minutes. **#1 because it attacks residence-time decay directly and makes every later
 decision cheaper.**
+
+> 🚨 **RETRACTED 2026-08-25 as written — see the CORRECTION in §2.** The sweep half is already
+> running unattended every 6 h and is already whole-store; the 457 rows are the ones it *cannot*
+> ask, because they carry no probe and `cc-premise` refuses to stamp a row it did not measure. No
+> re-run of any cadence moves that number, and the closer can only retire rows a probe falsified.
+>
+> **L1′ · Give the standing rows probes — AGENT, and it is per-row authoring, not a sweep.** The
+> lever that actually moves `never_validated` is `cc-backlog falsify <id> --probe "<sh one-liner>"`,
+> one authored predicate at a time (`bin/cc-backlog:3349`), against the ~457 probe-less live rows.
+> Sizing is therefore **hours per batch of rows, not ~1 day for the population** — and it should be
+> ordered by residence time, since §2's dose-response is what makes an old row worth a probe.
+> The prospective half is already solved and is L2: generators that emit `--falsifier` at filing
+> time cover new rows for free, which is why `add --falsifier` exists and why only rows minted
+> before those generators landed are in this pile.
+>
+> **L1″ · Give the prose verdicts an exit — AGENT, small, and it is the closest thing to the
+> "retire rows with no work done" this item promised.** Every pass already computes `superseded`
+> and `self-duplicate` over **every** non-done row, probe or not (`bin/cc-premise:3008-3010,
+> 3144-3145`), and reports them. Nothing closes them: `_close_falsified` is handed the `falsified`
+> bucket alone (`bin/cc-premise:3087`). Those two buckets are a retirement queue that is measured
+> four times a day and consumed never. ⚠️ Not a free change — `cc-premise`'s docstring argues at
+> length that refusal is reserved for the narrow whole-claim case, so an auto-closer over
+> `superseded` needs the same cap-and-re-ask discipline `_close_falsified` already carries, and
+> `corrected`/`suspect` must stay out of it.
 
 **L2 · Adopt `--condition` at the four uncured mint sites — AGENT, ~half a day.**
 `scripts/ship-land.sh:1000`, `scripts/postland-verify.sh:793-797`, `scripts/deploy-live.sh:725,870`,
@@ -310,10 +378,25 @@ wrong population, or the wrong conclusion. The counts were fine; the *folds* wer
 - **"The pool is flat"** is true over 18 days and false over 30 (125 → 501). The load-bearing flat
   series is the **agent board** (+0.29/day over 19 d), not the whole pool.
 
+**Correction made by the L1 dispatch itself (item `37b112d8950d`, 2026-08-25), and it is the
+eleventh instance of §7's own pattern — a right number folded onto the wrong population:**
+
+- **"The mitigation is built and 91% unapplied … a scheduling problem, not a design problem"
+  (§2) is REFUTED, and with it L1's two projected effects.** `never validated: 457` counts rows
+  **no probe can speak for**, not probes waiting to be run: the currency pass already runs every 6 h
+  unattended (`scripts/autonomy-sweep.sh:732`), already visits every non-done row, and
+  `bin/cc-premise:2991` refuses to stamp a row it did not measure *on purpose*, because stamping
+  unprobed rows would drive this very headline to zero while nothing had been checked. I read a
+  **capability** metric as an **execution** deficit — the exact conflation `bin/cc-backlog:4307`
+  warns about in the writer's own header. Full derivation and the corrected levers (L1′, L1″) are in
+  §2 and §6.
+
 ### Still blind — say "unknown", not a number
 
 1. **Live staleness is projected, not measured.** The 54–89 figure applies *closed-row* rates to
-   *live* rows. **The true live rate is UNKNOWN until L1 runs.**
+   *live* rows. **The true live rate is UNKNOWN until L1 runs** — and per the correction above, L1
+   as specified could never have measured it. It stays unknown until the ~457 probe-less rows are
+   given probes one at a time (L1′), which is a different and larger piece of work.
 2. **The `project` field records the worktree directory basename, not the repo.** ~100 rows are filed
    under slugs like `.desk-land-claude-fire-…`. **Every per-project census here undercounts
    claude-infrastructure by an unknown margin** — including my own 64.1% machinery figure.
