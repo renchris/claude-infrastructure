@@ -461,3 +461,50 @@ EOF
   [ -s "$CLOUD_DECL_LOG" ]
   [ ! -f "$BATS_TEST_TMPDIR/pf-off.log" ]                # the override SKIPS the probe, not just its verdict
 }
+
+# ── 20 · THE BOOT BEACON REACHES THE CREATE (backlog 0c8b39b67665) ─────────────────────────────
+# Case 17 above proved the payload CREATES the branch before pushing it. It could not prove WHEN the
+# push happens, and that is the half §4.1 actually rests on. The text 17 was written against said
+# "Push whatever you have BEFORE YOU FINISH" — a RETURN instruction — so this lane's first push
+# landed at the END of the work and "no ref past the boot budget" was the expected reading of a
+# session working perfectly. C1 NOT-STARTED then meant four things at once and was still consumed by
+# three oracles, one of them destructive (§5.2).
+#
+# RED-PROOF (re-runnable): replay against `git show 9e00181c:scripts/handoff-fire.sh` with the
+# pre-fix `git show 9e00181c:scripts/lib/cloud-create.sh` beside it. RED there — the payload carries
+# no `--allow-empty` at all. Case 17 stays GREEN on both trees, which is what makes it the control
+# for this one: establishing the branch and beaconing it are separate properties.
+@test "20 the payload reaching the create carries the BOOT BEACON, before the return push" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: t" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ -s "$BATS_TEST_TMPDIR/create.log" ]
+  grep -q -- '--allow-empty' "$BATS_TEST_TMPDIR/create.log" \
+    || { echo "the payload instructs no boot beacon — a healthy session still reads NOT-STARTED"; false; }
+  local beacon finish
+  beacon="$(grep -n -- '--allow-empty' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  finish="$(grep -n -i 'before you finish' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$finish" ] || { echo "the payload no longer asks for a return push"; false; }
+  [ "$beacon" -lt "$finish" ] || { echo "the beacon must precede the return push (beacon=$beacon finish=$finish)"; false; }
+}
+
+# ── 21 · THE TRAILER IS A PRECONDITION, NOT AN OPTIONAL EXTRA ──────────────────────────────────
+# The live layer is reached by PER-FILE symlinks, so "cloud-create.sh resolved, but it is an older
+# copy" is a real state on this box rather than a hypothetical. A create made against a lib with no
+# trailer function would spend an account's quota on a session that is unobservable BY CONSTRUCTION
+# — §4.1's whole point — so it is refused before the create, fail-closed, in the same direction as
+# the absent-library branch this suite's case 10 already pins.
+@test "21 a cloud-create lib with NO trailer function REFUSES before the create — no quota spent" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: this create must never be reached" 0
+  local stub="$BATS_TEST_TMPDIR/lib-no-trailer.sh"
+  # Everything the fire needs EXCEPT the trailer: the create itself must be reachable, or this case
+  # would pass on the absent-library refusal instead of the one it is about.
+  {
+    printf 'cc_cloud_branch_name() { printf %s; }\n' "'claude/fire-stub'"
+    printf 'cc_cloud_create() { printf %s; }\n' "'created\\tsession_stub\\tok'"
+  } > "$stub"
+  cfire CC_FIRE_CLOUD_LIB="$stub" CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ "$status" -eq 10 ]
+  [ ! -f "$BATS_TEST_TMPDIR/create.log" ] || { echo "the create was reached — quota spent on an unobservable session"; false; }
+}

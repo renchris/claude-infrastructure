@@ -133,6 +133,23 @@ STUB
     true
   }
 
+  # A BEACON-ONLY branch: exactly what CLOUD_OBSERVABILITY.md §4.1's boot contract puts on the
+  # remote when a session boots and then produces nothing. Real git, real push, real empty commit —
+  # not a branch that happens to be equal to main, but the shape the fired payload actually creates
+  # (scripts/lib/cloud-create.sh cc_cloud_offbox_trailer). It is deliberately NOT `push_branch <b> 0`:
+  # a zero-file `commit` without --allow-empty fails, and the fixture would be silently absent.
+  push_beacon() {  # $1=branch
+    local b="$1" w
+    w="$D/w-$(printf '%s' "$b" | tr / -)"
+    git -C "$REPO" worktree add -q -b "$b" "$w" main
+    git -C "$w" -c user.email=t@e.com -c user.name=tester commit -q --allow-empty -m "boot: cloud session is alive"
+    git -C "$w" push -q origin "HEAD:refs/heads/$b"
+    git -C "$REPO" worktree remove --force "$w"
+    git -C "$REPO" branch -q -D "$b"
+    rm -rf "$w"
+    true
+  }
+
   decl() {  # $1=id  $2=branch  [$3=paths]
     { printf 'id=%s\n' "$1"
       printf 'branch=%s\n' "$2"
@@ -847,4 +864,66 @@ dead_pid() {
   [ "$status" -eq 0 ]                       # the land itself succeeded and is not retracted …
   [[ "$output" == *"NOT filled"* ]] || false   # … but the non-verdict is NAMED
   grep -q '^paths=$' "$CC_CLOUD_STATE/nofill.decl"
+}
+
+# ── BEACON-ONLY BRANCHES (backlog 0c8b39b67665) ────────────────────────────────────────────────
+# CLOUD_OBSERVABILITY.md §4.1's contract — the session's FIRST act is an empty commit pushed to its
+# declared branch — was prose until it was implemented in scripts/lib/cloud-create.sh. Implementing
+# it changes what THIS file sees: "the session booted and produced nothing" used to arrive as
+# silence and now arrives as a real `claude/*` branch with nothing in it.
+#
+# Unhandled, every dud session becomes a permanent per-sweep failure: fetched, re-authored, handed
+# to ship-land, which finds an empty diff and refuses. One `✗ … lander exited N` per dud per sweep,
+# forever, and a non-zero reconcile exit assembled entirely out of sessions that did exactly as they
+# were told. That is the alarm-that-always-fires this repo keeps refusing to build.
+#
+# RED-PROOF (re-runnable, and RUN — 2026-08-25, against `git show 9e00181c:scripts/cloud-reconcile.sh`):
+# all three go RED, because the beacon branch reaches the lander there. The middle case is a control
+# in the WITHIN-tree sense rather than the cross-tree one: it fires a beacon-only branch and a
+# one-file branch through the SAME run, so a reconciler that skipped every one-commit branch — or
+# every branch — fails it while passing the other two. Count and content are indistinguishable on
+# this fixture by every predicate except the one the subject uses.
+
+@test "a BEACON-ONLY branch is never handed to the lander — it booted, it produced nothing" {
+  push_beacon claude/beaconed
+  decl cloud-beacon claude/beaconed
+
+  CONFIRM=1 run cr --all
+  [ "$status" -eq 0 ]
+  # The reason is STATED, not merely acted on: a silent skip and a broken discovery arm look
+  # identical in an empty lander log, and this line is what tells them apart. Its denominator
+  # control is the next case, which lands a sibling off the same fixture in the same run.
+  echo "$output" | /usr/bin/grep -q 'beacon only'
+  [ ! -s "$LAND_STUB_LOG" ]
+}
+
+@test "CONTROL — a one-file branch in the SAME run IS landed, so the skip is about CONTENT" {
+  # Without this the case above passes just as well on a reconciler that lands nothing at all, and
+  # on one that skips every branch with a single commit. A beacon-only branch and a one-commit
+  # branch that changes one file are indistinguishable by count and opposite by content.
+  push_beacon claude/nothing
+  push_branch claude/something 1
+  decl cloud-n claude/nothing
+  decl cloud-s claude/something
+
+  CONFIRM=1 run cr --all
+  [ "$status" -eq 0 ]
+  landed_branches | /usr/bin/grep -q '^claude/something$'
+  # `! … grep -q <the branch>` and NOT `grep -qv`: with two rows in the log, `-qv` is satisfied by
+  # the OTHER row and passes on a tree that landed both. The absence has to be asserted about the
+  # branch itself or this control controls nothing.
+  ! landed_branches | /usr/bin/grep -q '^claude/nothing$' || false
+}
+
+@test "--land names a beacon-only branch explicitly and STILL declines, with a reason, exit 0" {
+  # `--land <b>` is the operator overriding the sweep's judgment, and it must not become an override
+  # of arithmetic: there is no diff to land, so the honest answer is "nothing to land" and a clean
+  # exit — the same shape as the already-LANDED arm — not a lander invocation that refuses.
+  push_beacon claude/named
+  decl cloud-named claude/named
+
+  CONFIRM=1 run cr --land claude/named
+  [ "$status" -eq 0 ]
+  echo "$output" | /usr/bin/grep -q 'beacon only'
+  [ ! -s "$LAND_STUB_LOG" ]
 }

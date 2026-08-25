@@ -150,6 +150,11 @@ session's brief requires its **first act** to be pushing that branch — an empt
 Absence then becomes informative: no ref inside the budget is `BOOTING` (expected); no ref past it
 is `NOT-STARTED` (actionable — re-fire, or check entitlement).
 
+🚨 **That contract was PROSE ONLY until 2026-08-25** — it lived here and in §8 step 2 and in no
+executable text, on either fire lane, while every arm below was written on top of it. It is now
+`cc_cloud_offbox_trailer` (`scripts/lib/cloud-create.sh`); what it used to say instead, and what
+`C1` therefore meant, is §8.2.
+
 ### 4.2 The discriminator the whole design rests on
 
 Measured, not assumed:
@@ -776,7 +781,9 @@ Before any cloud session is fired, in this order:
 1. `cc-cloud declare --id <id> --branch <b> --paths <what it will land> --url <session url>` —
    an undeclared cloud session is unobservable, and `declare` refuses without `--id`/`--branch`.
 2. The session's brief must require **pushing the declared branch as its first act**, so that
-   absence past the boot budget means something (§4.1).
+   absence past the boot budget means something (§4.1). **Implemented 2026-08-25** —
+   `cc_cloud_offbox_trailer`, appended by both fire lanes and refused-before-create if absent;
+   until then this step was satisfied by nothing at all (§8.2).
 3. §5.2 must be wired first — otherwise `com.claude.team-orphan-reaper` may archive the team
    while the session is healthy.
 4. On completion, `cc-cloud retire --id <id>` — or let C3 `LANDED` render it silent, which it does
@@ -817,6 +824,57 @@ is the safe one. A reservation that never binds expires into `U0 UNKNOWN` (never
 finding** (§6.5). If the CLI create route ships a bundle of the local tree rather than cloning the
 remote, then the branch the VM pushes may not be the branch this box declared. Until one fire
 settles it, declare the branch the *brief* names and treat a mismatch as `U0`, not as absence.
+
+### 8.2 · Step 2 was PROSE for a fortnight, on both lanes — and §4.1 is the sentence it holds up
+
+*(2026-08-25, backlog `0c8b39b67665`. Written after the item read this document against the tree.)*
+
+§4.1 is the load-bearing sentence of everything above it: absence is ambiguous, there is no inbound
+channel to a cloud VM, and the **only** thing that resolves it is a contract — the session's *first*
+act is a push, "an empty commit is enough". Every arm of §4.3 is built on that, `C1 NOT-STARTED` is
+*read* as "never booted / died at boot / refused entitlement", and §5.2's three oracles — one of
+them the destructive `com.claude.team-orphan-reaper` — abstain on that reading.
+
+**It existed in §4.1 and in step 2 above and in no executable text.** `--allow-empty` across `bin/`
+`scripts/` `hooks/` `commands/` hit only test fixtures. What the two lanes actually shipped:
+
+| Lane | What the session was told | What `no ref at boot+15m` therefore meant |
+| --- | --- | --- |
+| CLI (`handoff-fire.sh --cloud`) | "Push whatever you have **before you finish**" — a RETURN instruction, first push at the END of the work | a healthy session mid-task, or a dead one — indistinguishable |
+| API (`cc-offload up --via api`) | nothing; `cc-notify --cloud "$sid" "$(cat "$pf")"` sent the brief RAW | same, plus: the work could be finished, committed and reclaimed with the container |
+
+So `C1` could not tell **never-started** from **nothing-to-commit-yet** — the same conflation §4.2
+refuses one level down for `ls-remote`'s exit code, restated at the level of the session. §11.4's
+terminal `NOT-STARTED` was correctly reported and is *unaffected* by this (that fire's `ls-remote`
+returned zero rows throughout, and the boot-budget reading was never what it rested on) — but the
+verdict's licence to mean what §4.1 says it means was not there.
+
+**Implemented** as `cc_cloud_offbox_trailer` in `scripts/lib/cloud-create.sh` — ONE trailer, both
+lanes, because two copies is how the lanes drifted in the first place. It instructs, in order: create
+the branch (`git switch -c <b> 2>/dev/null || git switch <b>`, correct whether this side names the
+branch or the API create already authorised it), an **empty boot commit**, a push — *then* the work,
+*then* the return push. It also states the consequence of skipping it, because a beacon that reads
+as ceremony is the one a capable agent optimises away. Both lanes now refuse **before** the create
+if the trailer function is unreachable: a create is quota, and spending it on a session that is
+unobservable by construction is the failure the venue exists to end.
+
+**One consequence, and it lands on §11.3's neighbour rather than on §11.3 itself.** "Booted and
+produced nothing" used to arrive as silence and now arrives as a real `claude/*` branch with nothing
+in it. Unhandled, `cloud-reconcile.sh` would fetch it, re-author it, hand it to `ship-land`, and
+collect an empty-diff refusal — once per dud session per sweep, forever. `beacon_only()` reads the
+emptiness **by content** (`diff --name-only trunk...branch`, never a commit count: a beacon-only
+branch and a squashed real one both hold exactly one commit) and skips it before the land is
+attempted, saying so. It **abstains** on an undecidable diff, so the failure direction is a wasted
+lander invocation and never a dropped result.
+
+⚠️ **`--list` still reads such a branch as `ELIGIBLE`**, and that is a deliberate limit rather than
+an oversight: emptiness is a fact about content, content needs a local head, and `--list` is a pure
+read that fetches nothing. The verdict is corrected at the point where it can be computed honestly
+— after `fetch_branch`, on both the `--all` and `--land` paths.
+
+Suites: `tests/cloud-create-lib.bats` 20-24, `tests/handoff-fire-cloud.bats` 20-21,
+`tests/cc-offload.bats` (two cases), `tests/cloud-reconcile.bats` (three). Each carries its
+re-runnable red-proof against `9e00181c`.
 
 ---
 

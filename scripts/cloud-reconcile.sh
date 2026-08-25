@@ -383,6 +383,35 @@ diff_size() {  # <repo> <trunk-ref> <branch> → changed-file count (large senti
   case "$n" in ''|*[!0-9]*) printf '999999' ;; *) printf '%s' "$n" ;; esac
 }
 
+# ── BEACON-ONLY: the branch a session pushes to prove it BOOTED, carrying no work ────────────────
+# CLOUD_OBSERVABILITY.md §4.1's contract is that a cloud session's FIRST act is an empty commit
+# pushed to its declared branch, so that a later absence is informative. That contract was prose
+# until backlog 0c8b39b67665 implemented it (scripts/lib/cloud-create.sh cc_cloud_offbox_trailer),
+# and implementing it changes what THIS file sees: "booted and produced nothing" used to arrive as
+# silence and now arrives as a real branch with nothing in it.
+#
+# Left alone, each such branch is fetched, re-authored, and handed to ship-land, which finds an empty
+# diff and refuses — one `✗ … lander exited N` per dud session per sweep, forever, and a non-zero
+# reconcile exit assembled entirely out of sessions that did exactly as they were told. So the
+# emptiness is read BEFORE the land is attempted.
+#
+# BY CONTENT, never by commit count. A beacon-only branch holds one commit and a squashed real branch
+# holds one too; `rev-list --count` reads 0 after a sibling rebase and proves nothing
+# (scripts/land-verify.sh:6-11). `diff --name-only trunk...branch` asks the only question that
+# decides landability: is there a single file this branch would change.
+#
+# IT ABSTAINS RATHER THAN SKIPS. An undecidable diff — missing trunk ref, no merge base, unreadable
+# repo — returns 1, "not provably empty", and the branch takes the ordinary path so the lander gets
+# its say. Reading "cannot tell" as "empty" would drop real work silently, which is the expensive
+# direction; the cheap one is a wasted lander invocation, which is what this already cost.
+beacon_only() {  # <repo> <trunk-ref> <branch> → 0 provably no content difference · 1 otherwise
+  local out
+  "$GIT_BIN" -C "$1" rev-parse --verify --quiet "$2" >/dev/null 2>&1 || return 1
+  "$GIT_BIN" -C "$1" rev-parse --verify --quiet "refs/heads/$3" >/dev/null 2>&1 || return 1
+  out="$("$GIT_BIN" -C "$1" diff --name-only "$2...refs/heads/$3" 2>/dev/null)" || return 1
+  [ -z "$out" ]
+}
+
 # ── the identity translation (see "THE IDENTITY WALL" in the header) ─────────────────────────
 git_ident_email() {  # <repo> → the author email git ITSELF would use (empty ⇒ none resolvable)
   # `git var GIT_AUTHOR_IDENT`, never `git config user.email`: the same arbiter githooks/pre-commit
@@ -686,6 +715,12 @@ EOF
   rc=0; fetch_branch "$C_REPO" "$TARGET" || rc=$?
   [ "$rc" -eq 0 ] || die 65 "could not bring '$TARGET' into $C_REPO as a local head — $FETCH_DETAIL"
   [ -n "$FETCH_DETAIL" ] && echo "→ $TARGET — $FETCH_DETAIL"
+  # Checked only now, because emptiness is a fact about CONTENT and content needs a local head — the
+  # remote sha `classify` had is not enough to answer it.
+  if beacon_only "$C_REPO" "$C_TRUNK" "$TARGET"; then
+    echo "· $TARGET — beacon only: it booted and pushed, and no file differs from $C_TRUNK. Nothing to land."
+    exit 0
+  fi
   derive_paths "$C_ID"
   rc=0; reauthor_branch "$C_REPO" "$C_TRUNK" "$TARGET" "$C_ID" || rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -724,6 +759,12 @@ while IFS= read -r b || [ -n "$b" ]; do
     continue
   fi
   [ -n "$FETCH_DETAIL" ] && echo "→ $b — $FETCH_DETAIL"
+  # Before re-authoring or sizing it: a beacon-only branch is a session that BOOTED and produced
+  # nothing, which is a true and useful observation and not a landing candidate.
+  if beacon_only "$C_REPO" "$C_TRUNK" "$b"; then
+    echo "· $b — skipped: beacon only — it booted and pushed, and no file differs from $C_TRUNK."
+    continue
+  fi
   derive_paths "$C_ID"
   rc=0; reauthor_branch "$C_REPO" "$C_TRUNK" "$b" "$C_ID" || rc=$?
   if [ "$rc" -ne 0 ]; then

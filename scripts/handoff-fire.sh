@@ -7861,6 +7861,18 @@ if [ "$CLOUD" = 1 ]; then
   . "$_CC_CC" || { echo "!! cloud fire: cloud-create.sh failed to source" >&2
     emit_fire_refusal cloud-lib-absent "scripts/lib/cloud-create.sh failed to source"; exit 10; }
 
+  # The trailer is a SEPARATE precondition from the create, because the live layer is reached by
+  # PER-FILE symlinks and a resolved-but-OLD cloud-create.sh is a real state, not a hypothetical one.
+  # A create made with a payload that carries no boot beacon produces exactly the session §4.1 says
+  # cannot be observed — one whose absence means nothing — so it is refused BEFORE any quota is
+  # spent, in the same fail-closed direction as the block above.
+  if ! command -v cc_cloud_offbox_trailer >/dev/null 2>&1; then
+    echo "!! cloud fire: REFUSING — $_CC_CC defines no cc_cloud_offbox_trailer, so the payload would carry" >&2
+    echo "   no boot beacon and the session would be structurally unobservable (CLOUD_OBSERVABILITY.md §4.1)." >&2
+    emit_fire_refusal cloud-lib-absent "cloud-create.sh lacks cc_cloud_offbox_trailer — payload would carry no boot beacon"
+    exit 10
+  fi
+
   # The account's config dir. `--launcher` bypasses account selection entirely and leaves CHOSEN as
   # a placeholder string, which cannot be routed — and an unrouted create would silently run as
   # whichever account this session happens to be, then be declared under a name that is not its
@@ -7912,20 +7924,16 @@ if [ "$CLOUD" = 1 ]; then
   # there the name is authorised AT CREATE. cc_cloud_create's signature is `cfg cwd prompt`
   # (scripts/lib/cloud-create.sh:185): the CLI leg has NO branch parameter at all, so the payload
   # is the only place the branch can be established, and establishing it is a real `switch -c`.
+  #
+  # 🚨 THE TRAILER IS NO LONGER WRITTEN HERE, and that move is the fix rather than tidying (backlog
+  # 0c8b39b67665). The text this file used to hold said "push whatever you have BEFORE YOU FINISH" —
+  # a RETURN instruction only. §4.1's contract is a FIRST-ACT one ("an empty commit is enough"), it
+  # is the sole basis for reading C1 NOT-STARTED as "never booted", and it had never been
+  # implemented on either lane. It now lives in ONE place, `cc_cloud_offbox_trailer`, because the
+  # sibling API lane (bin/cc-offload cmd_up_api) shipped its brief with NO push instruction at all
+  # and a second copy here is how the two lanes would drift again.
   CLOUD_PAYLOAD="$(cat "$PROMPT_FILE")
-"'
-── HOW TO RETURN YOUR WORK (this session runs off-box; read this before you finish) ──
-You are running in an Anthropic-managed VM. Nothing on the operator'"'"'s machine can see your
-filesystem, your processes or your terminal, and you cannot run this repo'"'"'s /ship. Your ONLY
-channel back is a git push, and it must go to exactly this branch — CREATE IT FIRST, then push it:
-
-    git switch -c '"$CLOUD_BRANCH"'
-    git push -u origin HEAD
-
-That branch name was assigned by the firing side and is already declared as the one thing watched
-for your progress — a push anywhere else is invisible and your work will strand. Push whatever you
-have before you finish, even if the work is incomplete; an unpushed cloud session leaves no trace
-of any kind. A local reconciler (scripts/cloud-reconcile.sh) discovers the branch and lands it.'
+$(cc_cloud_offbox_trailer "$CLOUD_BRANCH")"
 
   if [ "$DRY" = 1 ]; then
     echo "-- DRY RUN: cloud fire (no create issued, no quota spent)"

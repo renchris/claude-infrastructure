@@ -316,3 +316,84 @@ View: https://claude.ai/code/session_01REALREALREALREALREALR?from=cli&m=0"
   run git check-ref-format --branch "$a"
   [ "$status" -eq 0 ]
 }
+
+# ── 20-24 · THE OFF-BOX TRAILER, AND THE BOOT BEACON (backlog 0c8b39b67665) ────────────────────
+# CLOUD_OBSERVABILITY.md §4.1 is the sentence the whole observability design stands on: absence is
+# ambiguous, there is no inbound channel to a cloud VM, and the ONLY thing that resolves it is a
+# contract — the session's FIRST act is a push, an empty commit is enough. §4.3's C1 NOT-STARTED is
+# then readable as "never booted / died at boot / refused entitlement", and §5.2's three oracles —
+# one of them the DESTRUCTIVE team-orphan-reaper — abstain on that reading.
+#
+# THAT CONTRACT WAS PROSE FOR A FORTNIGHT. It appeared in §4.1 and §8 step 2 and in no executable
+# text: `--allow-empty` across bin/ scripts/ hooks/ commands/ hit only test fixtures. The CLI lane's
+# payload said "push whatever you have BEFORE YOU FINISH" — a RETURN instruction whose first push
+# lands at the END of the work — and the API lane shipped its brief with no push instruction at all.
+# Under both, "no ref at boot+15m" was the EXPECTED reading of a healthy session, so C1 could not
+# tell never-started from nothing-committed-yet.
+#
+# RED-PROOF (re-runnable, and RUN — 2026-08-25, against `git show 9e00181c:scripts/lib/cloud-create.sh`
+# in a scratch tree): all five go RED there, because the function does not exist at all. That is the
+# finding rather than a strong control, so the load-bearing red is INSIDE 20: its ordering assertion
+# fails on any trailer that only asks for a push before finishing, which is the shape the CLI lane
+# actually shipped. A return-only trailer passes 21, 22 and 23 and dies on 20 alone.
+#
+# 24 is the ABSTAIN direction of the new function rather than a cross-tree control: it pins that an
+# empty branch yields NO trailer, never one instructing a push onto a branch called "" — which would
+# look like a contract and observe nothing. A guard that refused everything would fail 20.
+
+@test "20 the trailer instructs an EMPTY COMMIT as the session's FIRST act, before any work" {
+  local t; t="$(cc_cloud_offbox_trailer claude/fire-test-1)"
+  # The beacon itself. Not "a commit" — an EMPTY one, which is what makes it runnable before the
+  # session has produced anything, which is what makes it a BOOT signal rather than a work signal.
+  [[ "$t" == *"commit --allow-empty"* ]] || { echo "no empty-commit beacon in the trailer"; false; }
+  # ORDER IS THE CONTRACT. The beacon push must be presented as the FIRST act; a trailer that only
+  # asks for a push before finishing is the exact pre-fix text, and it passes every check except
+  # this one.
+  local beacon finish
+  beacon="$(printf '%s\n' "$t" | grep -n -- '--allow-empty' | head -1 | cut -d: -f1)"
+  finish="$(printf '%s\n' "$t" | grep -n -i 'before you finish' | head -1 | cut -d: -f1)"
+  [ -n "$beacon" ] || false
+  [ -n "$finish" ] || { echo "the trailer no longer asks for a return push at all"; false; }
+  [ "$beacon" -lt "$finish" ] || { echo "the beacon must PRECEDE the return push (beacon=$beacon finish=$finish)"; false; }
+}
+
+@test "21 the beacon push targets the ASSIGNED branch, and the branch is established first" {
+  local t sw push
+  t="$(cc_cloud_offbox_trailer claude/fire-test-2)"
+  [[ "$t" == *"claude/fire-test-2"* ]] || false
+  sw="$(printf '%s\n' "$t" | grep -n 'git switch' | head -1 | cut -d: -f1)"
+  push="$(printf '%s\n' "$t" | grep -n 'git push -u origin HEAD' | head -1 | cut -d: -f1)"
+  [ -n "$sw" ]
+  [ -n "$push" ]
+  [ "$sw" -lt "$push" ] || { echo "the branch must be established before it is pushed"; false; }
+  # A push to a ref name this side INVENTED, from a HEAD attached to nothing, is the B1 defect
+  # (backlog 7c6ff16259a0). It must not come back through this file.
+  [[ "$t" != *"HEAD:claude/"* ]] || { echo "detached HEAD:<ref> push is back"; false; }
+}
+
+@test "22 the switch works on BOTH lanes — created here, or already created by the platform" {
+  # The API lane authorises the branch at create in `outcomes.git_info.branches`
+  # (scripts/cloud-create-api.py:357/411), so the platform may already hold it and a bare `switch -c`
+  # would fail there. One text has to be right on both lanes or they drift again.
+  local t; t="$(cc_cloud_offbox_trailer claude/fire-test-3)"
+  [[ "$t" == *"git switch -c claude/fire-test-3"* ]] || false
+  [[ "$t" == *"|| git switch claude/fire-test-3"* ]] || { echo "no fallback for a branch that already exists"; false; }
+}
+
+@test "23 the trailer says WHY, because a beacon that reads as ceremony is the one that gets skipped" {
+  local t; t="$(cc_cloud_offbox_trailer claude/fire-test-4)"
+  # The instruction is cheap to ignore and the cost of ignoring it is invisible from inside the VM:
+  # the session is reported NOT-STARTED and may be reaped while it works. That consequence has to be
+  # IN the text — a bare command list is an instruction a capable agent will optimise away.
+  [[ "$t" == *"NOT-STARTED"* ]] || { echo "the trailer never names the verdict a skipped beacon produces"; false; }
+}
+
+@test "24 ABSTAIN CONTROL — no branch means no trailer, never a trailer naming nothing" {
+  # A trailer built around an empty branch name would instruct `git push -u origin HEAD` onto a
+  # branch called "", which is worse than no trailer: it looks like a contract and observes nothing.
+  run cc_cloud_offbox_trailer ""
+  [ "$status" -eq 2 ]
+  [ -z "$output" ]
+  run cc_cloud_offbox_trailer
+  [ "$status" -eq 2 ]
+}
