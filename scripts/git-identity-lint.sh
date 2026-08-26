@@ -306,7 +306,14 @@ scan_file() {
 in_allowlist() {
   local rc
   for _ in 1 2 3; do
-    printf '%s\n' "$2" | grep -qxF "$1"; rc=$?
+    # DRAINED, not -q. Under the `set -uo pipefail` at the top of this file `grep -q` exits
+    # the instant it matches, the printf then takes SIGPIPE, and the PIPELINE rc becomes 141
+    # — neither 0 nor 1 — so a MATCH fell through to the retry and ended as CHECK_FAILED.
+    # Measured 2026-08-26 on this exact spelling: rc 0 at 51,032 bytes; rc 141 with the
+    # needle CONFIRMED present at 102,032 (the 64 KiB pipe buffer). This list is 15 bytes
+    # today, so it was latent — but a bare grep drains and keeps the SAME 0/1/>=2 ladder
+    # this retry reads, so the fix costs nothing. (pipefail-sigpipe-lint clause 4b.)
+    printf '%s\n' "$2" | grep -xF "$1" >/dev/null; rc=$?
     case "$rc" in
       0) return 0 ;;
       1) return 1 ;;

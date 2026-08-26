@@ -321,7 +321,21 @@ BEGIN { FS = "" }
   # the tree the moment this clause landed.
   amp = index(last, "\003")
   if (amp > 0) { pre_amp = substr(last, 1, amp - 1); if (pre_amp ~ /[;)]/) amp = 0 }
-  if (amp == 0 && !consumed(line, HASE)) next
+  # Clause 4b — a $? CAPTURE reads the status, errexit or not. Clause 4 asks whether anything READS
+  # this pipelines status, but answers it with `if (!hase) return 0`, i.e. only errexit or a
+  # control-flow position counts. `p | grep -q X; rc=$?` is the most DIRECT read of a pipelines
+  # status there is, and it was invisible: census 151 to 153. The two sites it hid are in_allowlist
+  # in test-walltime-lint.sh and git-identity-lint.sh — both RATCHET lints feeding postland-verifys
+  # verdict-affecting prelint, i.e. this lints own class of consumer.
+  #
+  # POSITIONAL, on `last`, and NOT a line regex — for the reason the header already gives. A $? on
+  # this line can belong to something that is not this pipeline: bin/cc-escalations:301 spells
+  # ( set +e; cmd; printf %s "$?" ) | grep -qx 5, where the $? is the PRODUCERs own. A first cut
+  # matching $? anywhere on the line flagged it (census 151 to 154, one false positive). Requiring
+  # the ASSIGNMENT form after the last stage separates them; g15/g16 pin both directions.
+  # (No apostrophes here: this is inside the single-quoted DETECT_AWK string.)
+  cap = (last ~ /;[ \t]*[A-Za-z_][A-Za-z0-9_]*=\$\?/)
+  if (amp == 0 && !cap && !consumed(line, HASE)) next
 
   printf "%s:%d:%s\n", FILE, FNR, line
 }'
@@ -593,6 +607,27 @@ EOF"
   expect g13 GREEN "\$( … ) as an ARGUMENT — the outer command's status wins"
   mk_noe g14 "{ strings -a \"\$bin\" 2>/dev/null || true; } | grep -q 'Claude-Session' && return 0"
   expect g14 GREEN "{ p || true; } NEUTRALISES the 141 and keeps the early exit"
+  # ── THE `$?` CAPTURE (2026-08-26) ────────────────────────────────────────────────────────────
+  # Clause 4 asks "does anything READ this pipeline's status?" — and, for a file with no errexit,
+  # answered a DIFFERENT question: `if (!hase) return 0`, i.e. "only a control-flow position or
+  # errexit counts". A `; rc=$?` immediately after the last stage is the most direct read there is,
+  # and it was invisible. Census 151 → 153; the two sites it hid are in_allowlist in
+  # scripts/test-walltime-lint.sh and scripts/git-identity-lint.sh — both RATCHET lints whose
+  # verdict feeds postland-verify's verdict-affecting prelint, i.e. exactly this lint's own class of
+  # consumer. Neither can invert TODAY (their lists are 15 bytes and empty against a 64 KiB pipe
+  # buffer, and both files convert a could-not-run into exit 2 anyway), so this closes a DETECTOR
+  # blind spot, not a live inversion — the next site in this shape may be neither so small nor so
+  # well defended.
+  mk_noe r14 "printf '%s\\n' \"\$2\" | grep -qxF \"\$1\"; rc=\$?"
+  expect r14 RED "a \$? capture reads the status with NO set -e (the in_allowlist shape)"
+  # ...and the two shapes that must NOT widen. Both are POSITIONAL, which is why the test is on the
+  # LAST stage rather than on the line: a `$?` on this line can belong to something that is not this
+  # pipeline. g15 is measured, not hypothetical — bin/cc-escalations:301 has exactly this form, and
+  # a first cut of this clause that matched `$?` anywhere on the line flagged it (census 151 → 154).
+  mk_noe g15 "( set +e; \"\$SELF\" ack x >/dev/null 2>&1; printf '%s' \"\$?\" ) | grep -qx 5"
+  expect g15 GREEN "a \$? INSIDE the producer is the inner command's, never the pipeline's"
+  mk_noe g16 "rc=\$?; git log --oneline | head -5"
+  expect g16 GREEN "a \$? capture BEFORE the pipeline reads the PREVIOUS command's status"
 
   local total=$((pass+fail))
   if [ "$fail" -gt 0 ]; then

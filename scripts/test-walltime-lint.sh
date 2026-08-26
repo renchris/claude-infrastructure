@@ -86,7 +86,16 @@ today_ymd() { printf '%s' "${CC_WALLTIME_TODAY:-$(date -u +%Y%m%d)}"; }
 in_own() {  # $1=basename · $2=own-set text · $3=1 if an own-set was supplied at all
   [ "${3:-0}" = "1" ] || return 0
   [ -n "$2" ] || return 1
-  printf '%s\n' "$2" | sed 's:.*/::' | grep -qxF "$1"
+  # DRAINED, not -q — and this site matters MORE than the in_allowlist one above, because
+  # this pipeline is the LAST statement of the function, so its rc IS the return value every
+  # caller reads (the scars own words at scripts/deploy-link-parity.sh:264). Under pipefail a
+  # MATCH SIGPIPEs the producer and returns 141, i.e. NOT-in-own-scope — which downgrades a
+  # real timebomb inside the landers own diff from BLOCKING to advisory. A fail-OPEN in a
+  # blocking land gate. Bounded by the own-set size (CC_WALLTIME_OWN, one path per line), so
+  # unlike the ratchet list this ceiling is a real operational quantity: ~1,600 paths.
+  # NOTE: pipefail-sigpipe-lint still cannot SEE this shape — a function-final pipeline is
+  # consumed by its caller, which clause 4 has no way to observe. Filed separately.
+  printf '%s\n' "$2" | sed 's:.*/::' | grep -xF "$1" >/dev/null
 }
 
 # ── COULD-NOT-CHECK is a THIRD state, never a verdict ─────────────────────────────────────────
@@ -115,7 +124,14 @@ CHECK_FAILED=0
 in_allowlist() { # 0 = allowlisted · 1 = not · sets CHECK_FAILED if grep could not RUN
   local rc
   for _ in 1 2 3; do
-    printf '%s\n' "$2" | grep -qxF "$1"; rc=$?
+    # DRAINED, not -q. Under the `set -uo pipefail` at the top of this file `grep -q` exits
+    # the instant it matches, the printf then takes SIGPIPE, and the PIPELINE rc becomes 141
+    # — neither 0 nor 1 — so a MATCH fell through to the retry and ended as CHECK_FAILED.
+    # Measured 2026-08-26 on this exact spelling: rc 0 at 51,032 bytes; rc 141 with the
+    # needle CONFIRMED present at 102,032 (the 64 KiB pipe buffer). This list is 15 bytes
+    # today, so it was latent — but a bare grep drains and keeps the SAME 0/1/>=2 ladder
+    # this retry reads, so the fix costs nothing. (pipefail-sigpipe-lint clause 4b.)
+    printf '%s\n' "$2" | grep -xF "$1" >/dev/null; rc=$?
     case "$rc" in
       0) return 0 ;;
       1) return 1 ;;
