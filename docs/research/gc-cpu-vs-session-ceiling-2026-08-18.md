@@ -195,8 +195,14 @@ qualifies on ~2026-08-24** under this repo's own 2.1.220 precedent if no success
   load FALL while a unit was added. The sampler this bullet asks for is landed
   (`scripts/capacity-marginal.sh`, controls proven able to fail in `tests/capacity-marginal.bats`);
   the coefficient itself still wants one ~1 h on-box window (§6 of that doc). **Until it exists, none
-  of the four may be quoted** — including by `scripts/lib/capacity-admit.sh:698` and
-  `hooks/agent-teams-enforce.sh:220`, which both still carry `2.5–5`.
+  of the four may be quoted.** ✅ **The ban is now enforced in code (2026-08-26, §6a of that doc):**
+  the citation sites were struck and labelled REFUTED, with **no value substituted**. There were
+  **three**, not the two named here — `scripts/lib/capacity-admit.sh`,
+  `hooks/agent-teams-enforce.sh` (a runtime deny message, not a comment) and
+  `scripts/lib/spawn-presence.sh`, the library that *defines* the ACTIVE population the coefficient
+  is denominated in. `CC_ADMIT_ACTIVE_CEILING=8` is **not** blocked on the measurement: it now
+  stands on the 127/127 refusal band, a count over refusals that needs no per-session divisor.
+  Re-grep at the PASS rather than working from any list of paths.
 - **Whether load average means anything as a capacity signal at all.** At constant N=15–16 the box
   read **11.21 → 36.07**; one instrumentation run alone moved it 19 → 36 with session count unchanged.
 - **Whether automated fires retry after a capacity refusal** — decides whether raising the ceiling
