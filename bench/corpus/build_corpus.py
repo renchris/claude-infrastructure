@@ -187,10 +187,11 @@ DEFECTS: list[Defect] = [
         id="optical-centering",
         klass="optical-alignment",
         summary=(
-            "The play glyph in the round button is geometrically centred but reads "
-            "left-heavy, because a triangle's visual mass sits behind its bounding box centre."
+            "The play glyph loses its optical compensation, so it is geometrically "
+            "centred and reads left-heavy -- a triangle's ink mass sits behind its "
+            "bounding-box centre."
         ),
-        css=".glyph-btn .glyph { /* geometrically centred by flexbox; no offset applied */ }",
+        css=".glyph-btn .glyph { transform: none; }",
         target=".glyph-btn .glyph",
         detectable_by="pixels",
         dom_blind_because=(
@@ -278,18 +279,22 @@ tr + tr td {{ border-top: 1px solid {TOKENS["gray200"]}; }}
 .actions {{ display: flex; gap: {TOKENS["gap"]}; align-items: center; margin-top: 24px; }}
 .btn-primary {{
   background: {TOKENS["blue700"]}; color: #FFFFFF; font-weight: 600; font-size: 14px;
-  border: none; border-radius: 8px; padding: 14px 20px; line-height: 16px; cursor: pointer;
+  border: none; border-radius: 8px; padding: 16px 20px; line-height: 16px; cursor: pointer;
 }}
 .btn-secondary {{
   background: #FFFFFF; color: {TOKENS["gray600"]}; font-weight: 400; font-size: 14px;
-  border: 1px solid {TOKENS["gray200"]}; border-radius: 8px; padding: 13px 20px;
+  border: 1px solid {TOKENS["gray200"]}; border-radius: 8px; padding: 15px 20px;
   line-height: 16px; cursor: pointer;
 }}
 .glyph-btn {{
   width: 44px; height: 44px; border-radius: 22px; background: {TOKENS["blue700"]};
   display: flex; align-items: center; justify-content: center;
 }}
-.glyph {{ color: #FFFFFF; font-size: 16px; line-height: 1; }}
+.glyph {{ color: #FFFFFF; font-size: 16px; line-height: 1;
+         /* Optical compensation: a triangle's ink mass sits behind its
+            bounding-box centre, so geometric centring reads as left-heavy.
+            Measured offset on this glyph at this size: 2.2px left, 1.9px up. */
+         transform: translate(2px, 2px); }}
 """
 
 BODY_HTML = """

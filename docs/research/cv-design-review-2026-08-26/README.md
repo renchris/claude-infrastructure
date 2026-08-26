@@ -23,14 +23,24 @@ never asking a model to compute what the browser already knows, (b) any acceptan
 
 Three measurements, all taken on this machine today, carry the argument:
 
-| Detector | DOM-determined defects | Pixels-only defects | False positives on the clean control |
+| Detector | DOM-determined | Pixels-only | False positives on the clean control |
 |---|---|---|---|
-| **Deterministic rules** (~250 lines, 80 ms/page) | **9 / 9** | 0 / 3 | **0** |
-| **Claude vision, blind** (8 pages, no ground truth) | 2 / 4 | **2 / 3** | **0** |
-| **Local `Qwen3.8-27B-4bit`** (MLX, this Mac) | not run | 1 / 3 at one resolution only | hallucinated a defect at 2 of 3 resolutions |
+| **Deterministic rules** (~250 lines, 80 ms/page) | **9 / 9** | 0 / 2 (1 honest abstention) | **0** |
+| **DOM-vs-pixels cross-check** (~180 lines NumPy, no model) | — | **1 / 2** | **0** |
+| **Claude vision, blind** (8 pages, no ground truth) | 2 / 4 | **2 / 2** | **0** |
+| **Local `Qwen3.8-27B-4bit`** (MLX, this Mac) | not run | 1 of 3 resolutions correct | invented a defect at 2 of 3 resolutions |
 
-The first two rows are near-perfectly complementary and their union is 6 of 7. That complementarity
-*is* the architecture. The third row is why no local model is in it.
+**The union of the first three is 11 of 11**, and each covers precisely what the others cannot. That
+complementarity *is* the architecture. The fourth row is why no local model is in it.
+
+⚠️ **This table is a correction.** The first version scored three pixels-only defects and reported
+6 of 7. Building the cross-check exposed the reason: the `optical-centering` variant injected an
+*empty* CSS rule, so its render was **SHA-256 identical to the control**. It was a null test item, and
+both the deterministic layer and the blind reviewer were *right* to report nothing on it — I had
+scored a correct abstention as a miss, against both. The corpus now injects a real delta (the base
+carries optical compensation; the variant removes it), and the honest population is 9 DOM-determined
+plus 2 pixels-only. **A corpus needs its own control run before it is allowed to grade anything**, and
+mine did not get one until a third detector disagreed with it.
 
 ---
 
@@ -140,6 +150,37 @@ fail-safe-default-mimics-the-healthy-state trap, and it would have been invisibl
 The rule that survives both findings: **take the blended colour, and keep the abstention whenever the
 resolved backdrop chain contains a gradient or an image**, because no scalar can represent a backdrop
 that varies across the element it sits on.
+
+### The third layer: measure the DISAGREEMENT, not either side
+
+A5's sharpest claim is that the high-value defects live in the *gap* between the two descriptions
+rather than in either one, and that the cross-check is therefore the thing to build first — about 200
+lines of NumPy, no model, no GPU. Built it (`bench/detect_xcheck.py`) and it holds. It is not a third
+detector; it is a comparator that fires only where the DOM's claim and the rendered pixels disagree by
+more than a stated tolerance, which means it needs no aesthetic judgement and no learned model.
+
+The validated arm settles the gradient case that the scalar could not:
+
+```
+contrast-on-gradient
+  [xcheck-contrast-varies] contrast is not one number across this text: 4.81:1 at
+  the left edge and 1.57:1 at the right. Any single computed value is a fiction,
+  and the right end is the one that fails a reader.
+```
+
+Sampling the backdrop separately in the left and right thirds turns "unrepresentable" into two
+numbers and a verdict — no VLM call, no abstention, zero findings on the control. **That moves
+contrast-over-a-gradient out of the vision layer's queue entirely.**
+
+🚨 **The centroid arm is PROVISIONAL and ships disabled** (`--x2` to enable), because trying to
+validate it found two defects in it, and both are instances of the exact failure this document warns
+about — a plausible number nobody checked. (a) It compares ink to the element's **own** box, and
+`getBoundingClientRect` returns the *post*-transform box, so a `translate` moves box and ink together
+and the measured offset is **invariant under the very compensation it is supposed to verify**. (b) Its
+background is the crop's modal colour, so on a round button the square crop's corners — page
+background outside the circle — count as ink and swamp a 16px glyph. Both fixes are known (measure
+against the container; mask to the painted shape) and neither is done. Shipping it on would have
+handed the pipeline a confident number with no ground truth behind it.
 
 ---
 
@@ -310,7 +351,7 @@ step function — but SAM is not semantic, so it will happily return a pixel-per
 band.)
 
 **To add, in order:**
-1. **The abstention router.** Deterministic pass first; its `INDETERMINATE` set plus the pages it
+1. **The abstention router.** (The cross-check in `bench/detect_xcheck.py` already removes the gradient case from this queue.) Deterministic pass first; its `INDETERMINATE` set plus the pages it
    cannot reason about become the VLM's queue, cropped to the region in question.
 2. **A false-positive budget.** ~20% FP is where an AI reviewer loses credibility regardless of catch
    rate. Our two zero-FP runs are the baseline to defend; every rule added must be re-run against the
