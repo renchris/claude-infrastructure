@@ -302,3 +302,228 @@ stated as a measured fact:** *"the secondary 'Learn more' link has 2.3× the vis
 primary CTA — it is larger, has higher contrast against its background, and sits in more
 whitespace."* No eye-tracking model needed, and every clause is a number you can point at on the
 overlay. Use UMSI/UEyes to *validate* this ranking, not to replace it.
+
+---
+
+## 5. The consolidated table
+
+Speeds are for **one 1440×2400 screenshot** on M1 Max / 64 GB / 32-core GPU. Figures marked *(est.)*
+are extrapolated from the nearest published Apple-Silicon measurement and should be re-measured
+before anyone depends on them.
+
+| Technique | CV task | Output type | Apple-Silicon feasibility | Speed | Design question it answers | Licence |
+|---|---|---|---|---|---|---|
+| **Connected components** (`connectedComponentsWithStats`) | segmentation of flat regions | boxes + centroids + areas | **Native** (NumPy/OpenCV, CPU) | **~5–20 ms** | *Where exactly is every element?* | BSD-3 (OpenCV) |
+| **Canny + contour tree** | edge detect + hierarchy | nested boxes | **Native** | ~10–30 ms | *What is the padding on each side, and does it match its siblings?* | BSD-3 |
+| **LSD / FastLineDetector / Hough** | line detection | segments + angles | **Native** (LSD present in OpenCV ≥4.5.4) | ~20–80 ms | *Do these six left edges share a column, or is one 3 px off?* | BSD-3 |
+| **Projection profiles** | 1-D layout analysis | gap/gutter series | **Native** (pure NumPy) | **~2 ms** | ***"These four cards have gaps of 16, 16, 16 and 23 px."*** | n/a |
+| **Distance transform + morphology** | whitespace field / grouping | float map, merge thresholds | **Native** | ~10–40 ms | *Is this label grouped with the right field? Is the whitespace rhythm consistent?* | BSD-3 |
+| **Template matching** (`TM_CCOEFF_NORMED`) | repeated-instance detection | locations + similarity | **Native** | ~30–150 ms/template | *Are all six instances of this component actually identical?* | BSD-3 |
+| **Phase cross-correlation** | sub-pixel registration | (dy, dx) to 0.01 px | **Native** (`skimage`) | ~10–50 ms | *Is this row offset by a fraction of a pixel?* | BSD-3 (scikit-image) |
+| **Lab k-means / median-cut quantization** | colour clustering | palette + share | **Native** | ~50–200 ms | *How many colours are actually painted? Which two are near-duplicates?* | BSD-3 / MIT-PIL |
+| **WCAG luminance ratio** (derived) | — | ratio per text region | **Native** | <1 ms | *Does body text pass 4.5:1?* | n/a |
+| **Vision.framework text recognition** | OCR / text bounds | word boxes + strings | **Native, Apple-optimised** | ~100–300 ms | *What is the real type scale and leading?* | Apple SDK |
+| **FFT / autocorrelation** | periodicity | dominant periods | **Native** | ~20–60 ms | *What base grid is this page actually on — 4 px or 8 px?* | n/a |
+| **Laplacian variance** | blur estimate | scalar/region | **Native** | ~5 ms | *Is that logo an upscaled 1× asset?* | BSD-3 |
+| **SSIM** (`structural_similarity`) | structural diff | per-pixel map | **Native** | ~50–150 ms | *What changed between breakpoints or states?* | BSD-3 |
+| **`cv2.saliency` spectral-residual / fine-grained** | bottom-up saliency | float map | **Native** | ~10–40 ms | *(control only)* — biased toward photos and texture | BSD-3 (contrib) |
+| **UMSI finetuned on UEyes** | UI saliency + **scanpath** | heatmap + fixation order | **Yes**, PyTorch+MPS, small CNN | **~0.2–0.8 s** *(est.)* | *Is the primary CTA the first fixation, or the fourth?* | research/academic — **check before commercial use** |
+| **SUM (Mamba)** | multi-domain saliency, web-page conditioned | heatmap | ⚠️ **Verify** — selective-scan is typically a CUDA kernel | unknown on MPS | *Saliency without the UI-only ceiling* | research (GitHub) |
+| **DINOv3 ViT-S/B** | dense self-supervised features | patch embeddings | **Yes**, PyTorch+MPS | ~0.2–0.6 s *(est.)* | *Are these regions the same component, without labels?* | DINOv3 licence (commercial-permitting) |
+| **CLIP / OpenCLIP image tower** | zero-shot crop classification / retrieval | embedding + text sim | **Yes** — MLX, or Core ML export | ~20–80 ms/crop | *Is this crop a button, an avatar, a logo?* | MIT |
+| **Florence-2** (0.23 B / 0.77 B) | caption / region proposal / grounding | text + boxes | **Yes — first-class in `mlx-vlm`** | ~0.3–2 s | *What is this region, in words?* | **MIT** |
+| **OmniParser V2** (YOLO detector + Florence-2) | screen parsing | interactable regions + captions | **Yes** (Ultralytics MPS + MLX) | ~0.5–1.5 s | *What are the interactive elements?* (39.5 % ScreenSpot-Pro) | mixed — **YOLO half is AGPL-adjacent** |
+| **MolmoPoint-GUI-8B** | pointing / GUI grounding | (x, y) points | **Yes** — Molmo in `mlx-vlm`, 8 B fits 64 GB | seconds (autoregressive) | *Where is the element I described in words?* (61.1 ScreenSpot-Pro) | Apache-2.0 |
+| **SAM 3 / 3.1** | promptable concept segmentation | pixel masks | ⚠️ **HF `transformers` route only** — official repo needs Triton (CUDA) | ~3–5 s *(est.)* | *What are the exact bounds of this soft-edged / gradient / overlapping thing?* | SAM licence |
+| **Grounding DINO (open, Swin-T/B)** | open-vocab detection | boxes + scores | **Yes**, PyTorch+MPS | ~1.5–4 s *(est.)* | *(weak on UI — prefer OmniParser)* | Apache-2.0 |
+| **OWLv2** | open-vocab detection | boxes + scores | **Yes**, HF+MPS | ~1–3 s *(est.)* | *(weak on UI)* | Apache-2.0 |
+| **YOLOE / YOLO-World** | real-time open-vocab detect+segment | boxes/masks | **Yes**, fast, Core ML export | tens of ms | *(capable, but)* | **AGPL-3.0 — the blocker** |
+| **Grounding DINO 1.5/1.6 Pro** | open-vocab detection | boxes | ❌ **API-only** | n/a | — | proprietary |
+
+### 5.1 Pipeline sketch — composing these into measurable design facts
+
+Seven stages. Note where the learned models sit: **stages 2 and 6 only**. Everything numeric is
+classical.
+
+```
+┌─ 0. CAPTURE ────────────────────────────────────────────────────────────────┐
+│  Deterministic screenshot at a pinned DPR + viewport (1440×2400 @2x).       │
+│  Simultaneously dump the DOM box tree (see §6) — they are cross-checks,     │
+│  not alternatives.                                                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+            │
+┌─ 1. PRIMITIVE EXTRACTION (classical, ~100 ms total) ────────────────────────┐
+│  C10 Vision.framework  → text boxes + strings                               │
+│  C1  connectedComponents (on ¬text mask) → graphical element boxes          │
+│  C2  Canny+contours    → containment tree                                   │
+│  C8  Lab k-means       → palette, per-element fg/bg pairs                   │
+│  ⇒ ELEMENT TABLE: {id, box, kind∈{text,graphic}, fg, bg, parent}            │
+└─────────────────────────────────────────────────────────────────────────────┘
+            │
+┌─ 2. SEMANTIC LABELLING (learned — the ONLY place a model touches geometry's │
+│     meaning, never its numbers) ────────────────────────────────────────────┐
+│  CLIP zero-shot over crops  → {button, input, avatar, logo, icon, card}     │
+│  Florence-2 (MLX) on ambiguous crops → caption / region grounding           │
+│  Optional: OmniParser V2 → interactable-region set as a second opinion      │
+│  Optional escape hatch: SAM 3 ONLY for soft-edged/overlapping elements      │
+│     that C1 merged or missed (gradients, blur backdrops, badge-on-avatar)   │
+└─────────────────────────────────────────────────────────────────────────────┘
+            │
+┌─ 3. STRUCTURE INFERENCE (classical) ────────────────────────────────────────┐
+│  C4 projection profiles → columns, rows, gutters                            │
+│  C12 autocorrelation    → the base grid unit (4? 8?) — DISCOVERED           │
+│  C3 line clustering     → the alignment rails actually in use               │
+│  C5 morphological closing sweep → proximity groups at each k                │
+│  ⇒ LAYOUT MODEL: {grid_unit, columns[], rails[], groups[]}                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+            │
+┌─ 4. MEASUREMENT (classical — this is where the numbers are born) ───────────┐
+│  gaps      = pairwise edge distances within each group      → [16,16,16,23] │
+│  alignment = |element.left − nearest_rail|                  → [0,0,0,3]     │
+│  padding   = parent.box ⊖ child.box, per side               → [16,16,16,12] │
+│  scale     = cluster(cap_heights)                           → [12,14,16,32] │
+│  palette   = |unique colours|, pairwise ΔE                  → 34 colours,   │
+│                                                                2 pairs <2ΔE │
+│  contrast  = WCAG ratio per text region                     → 3.8:1 ✗       │
+│  identity  = C6 template scores across repeated components  → [1.0,…,0.94]  │
+└─────────────────────────────────────────────────────────────────────────────┘
+            │
+┌─ 5. DEFECT PREDICATES (pure arithmetic — the falsifiable layer) ────────────┐
+│  uneven_spacing  : max(gaps) − min(gaps) > tolerance                        │
+│  off_grid        : any value mod grid_unit ≠ 0                              │
+│  misaligned      : alignment residual > 1 px                                │
+│  scale_sprawl    : |distinct type sizes| > 6                                │
+│  palette_sprawl  : |distinct colours| > 12, or any pair ΔE < 2              │
+│  component_drift : template score < 0.98 among nominal siblings             │
+│  contrast_fail   : WCAG ratio < 4.5 (body) / 3.0 (large)                    │
+│  Each emits: (defect, [element ids], measured value, expected value)        │
+└─────────────────────────────────────────────────────────────────────────────┘
+            │
+┌─ 6. HIERARCHY CRITIQUE (§4 — one learned map, one classical) ───────────────┐
+│  visual_weight ranking (§4.5, classical, attributable)                      │
+│  UMSI/UEyes scanpath → predicted fixation ORDER                             │
+│  Defect: rank inversion between visual weight and semantic importance       │
+└─────────────────────────────────────────────────────────────────────────────┘
+            │
+┌─ 7. NARRATION (the LLM's only job) ─────────────────────────────────────────┐
+│  Turn the defect tuples into prose. The model NEVER estimates a number;     │
+│  it only reads, ranks by severity, and explains. Every sentence it writes   │
+│  carries an id and a measurement that can be re-derived from the pixels.    │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**The load-bearing property of this pipeline:** stage 7 cannot hallucinate a measurement, because
+stage 4 is the only producer of numbers and stage 5 is the only producer of verdicts. The model is
+downstream of both. That is the whole reason to build a measurement layer at all.
+
+---
+
+## 6. Adversarial pass — "the DOM already has exact geometry, so none of this is needed"
+
+### 6.1 The strongest case against everything above
+
+Put honestly, because it is very strong, and a lot of it is simply correct.
+
+**A1 — The DOM is not an estimate; it is the ground truth the pixels were *generated from*.**
+Every number in §4 of the pipeline is being *recovered* from a rasterisation of data the browser
+already holds exactly. `element.getBoundingClientRect()` returns *"the smallest rectangle which
+contains the entire element, including its padding and border-width"*
+([MDN](https://developer.mozilla.org/en-US/docs/Web/API/Element/getBoundingClientRect)) as
+floating-point CSS pixels. There is no thresholding, no anti-aliasing ambiguity, no k-value to tune.
+Reconstructing that from pixels is an information-losing round trip performed for no reason. A
+connected-component bound is *inferred*; a DOMRect is *authoritative*.
+
+**A2 — It is free, instant, and exact.** One `document.querySelectorAll('*')` + `getBoundingClientRect`
+over a few thousand nodes runs in single-digit milliseconds and returns sub-pixel floats. The
+classical chain in §3 is "tens of milliseconds"; the learned chain is *seconds*. And the DOM's
+numbers are exact where the CV numbers carry ±1 px of anti-aliasing uncertainty on every edge.
+
+**A3 — It solves the exact stated problem, better.** *"These four cards have gaps of 16, 16, 16 and
+23 px"* is `rects[i+1].left − rects[i].right` on four nodes. Four subtractions. §3's projection
+profile has to first *find* the cards, and it will merge two cards whose gap is 0, split one card
+that contains a light divider, and be defeated entirely by a card with a `backdrop-filter`.
+
+**A4 — The DOM carries semantics *for free* that §1's models are being paid seconds per screenshot
+to guess badly at.** ScreenSpot-Pro says GPT-4o scores **under 2 %** at locating an element by
+description (§2.3). `querySelector('[data-testid="cta"]')` scores 100 %, in a microsecond. Role,
+tag, ARIA label, class list, `getComputedStyle`, the *design-token variable name* — the DOM has all
+of it. The entire §1 model list is an expensive, lossy, less accurate reimplementation of
+`getComputedStyle`.
+
+**A5 — Defect predicates get *better* inputs from the DOM.** Off-grid detection wants the declared
+`gap: 23px`, not a measured 23. Palette sprawl wants the set of `--color-*` custom properties
+actually resolved, not a k-means of the painted pixels, which will invent 40 "colours" out of
+anti-aliasing fringes and a JPEG hero. Type-scale sprawl wants `font-size`, not clustered
+cap-heights. **In each case the CV version is a noisy estimator of a value that is sitting right
+there as a string.**
+
+**A6 — And it is actionable.** "Card 3's gap is 23 px" is a finding. `.card-grid { gap: 23px }` at
+`styles/cards.css:47` is a **fix**. CV cannot produce the second, ever. A review that cannot name
+the selector has offloaded the hard half onto the human.
+
+**A7 — The prior art agrees.** The mature tooling in this space — accessibility linters, design-token
+auditors, visualisation linters like VizLinter and GeoLinter which check *specifications* against
+best practices ([arxiv 2310.13707](https://arxiv.org/pdf/2310.13707)) — all operate on the
+declarative source, not the render. Visual-regression tools that *do* use pixels use them for one
+narrow thing: **diffing against a baseline**, not measuring.
+
+**A8 — CV's own literature convicts it.** §2.2's headline number, `F1 = 0.438 at IoU > 0.9` for the
+best learned GUI detector, is not an argument for CV. It is an argument that *recovering element
+bounds from a screenshot is a hard, unsolved problem which the DOM makes trivially easy.*
+
+**A conscientious summary of A1–A8: for a web page you control, in a browser you drive, the DOM is
+strictly better for element bounds, spacing, padding, type scale, declared colour, and every fix
+suggestion. If the pipeline in §5 were justified only by those, it should not be built.**
+
+### 6.2 What the DOM cannot reveal
+
+Eleven classes. They divide cleanly into three kinds, and the third kind is the one that matters.
+
+---
+
+#### Kind 1 — "The DOM describes intent; only pixels record the outcome"
+
+**D1. Zero-ink elements.** A node with a DOMRect of `200×48` at a valid position may paint **nothing**:
+`opacity: 0`, `color` equal to its background, occluded by a higher `z-index` sibling, clipped by an
+ancestor's `overflow: hidden`, `transform: scale(0)`, `clip-path` to empty, a font that never loaded
+so the glyphs are invisible, or `content-visibility: hidden`. The DOM reports a healthy box for every
+one of these. **Only the rendered pixels can say the element is not there.** This is the single most
+important entry on the list, because it is a *silent* failure in exactly the direction a DOM-only
+reviewer is blind to: it reports a layout that is correct and a page that is broken.
+
+**D2. Occlusion and stacking.** DOM boxes overlap constantly and legitimately (a sticky header, a
+dropdown, a tooltip). Nothing in the box tree says *which one the user sees* — that requires
+resolving stacking contexts, `z-index`, paint order, and opacity together, which is the compositor's
+job, not a queryable one. "Is this text readable, or has a modal backdrop landed on top of it?" is a
+pixel question.
+
+**D3. Composited colour ≠ computed colour.** `getComputedStyle().color` returns the *declared,
+resolved* value — but `mix-blend-mode`, `filter`, `backdrop-filter`, `opacity` on an ancestor, and
+`background-blend-mode` are all applied **at the rendering stage, after style computation**
+([Sara Soueidan on compositing/blending](https://www.sarasoueidan.com/blog/compositing-and-blending-in-css/)
+· [MDN mix-blend-mode](https://developer.mozilla.org/en-US/docs/Web/CSS/mix-blend-mode)). So a
+contrast check computed from CSS is *wrong whenever any of those are in play* — a recognised
+limitation of standard contrast checkers, which evaluate base colour values without accounting for
+blend modes or filters. **A WCAG ratio is only trustworthy if it is sampled from the actual painted
+pixels.** This one is not a nuance; it is a correctness bug in every DOM-only accessibility audit of
+a page using modern compositing.
+
+**D4. Transforms lie about position — in the API's own return value.** If an element is moved with a
+transform, `getBoundingClientRect()` returns `left`/`top` from *before* the translation and `x`/`y`
+from *after* it. Scale, rotation and shear change the visual appearance without changing the
+starting position, and the DOMRect is only the axis-aligned bounding box of the transformed shape,
+not the shape ([MDN](https://developer.mozilla.org/en-US/docs/Web/API/Element/getBoundingClientRect)
+· [CSSOM transform interaction, W3C](https://lists.w3.org/Archives/Public/www-style/2010Aug/0615.html)).
+A rotated card's DOMRect describes a rectangle that does not exist on screen. Overflow bounds
+computed at end-of-layout can also *increase* from paint-level effects like transforms. Ask the DOM
+where a rotated element is and it will answer confidently and incorrectly.
+
+**D5. Rendered type ≠ specified type.** `font-size: 16px` with `font-family: Inter` tells you nothing
+about what was painted if Inter did not load. Fallback fonts have different **x-height and
+cap-height at the same font-size** — which is exactly why `font-size-adjust` exists
+([MDN](https://developer.mozilla.org/en-US/docs/Web/CSS/font-size-adjust) ·
+[Chrome's own guidance on visually-stable fallbacks](https://github.com/GoogleChrome/modern-web-guidance/blob/main/skills/modern-web-guidance/guides/visual-design/visually-stable-font-fallbacks.md)).
+The DOM's `font-size` is a specification; the **ink extent** of the glyphs is the design fact, and
+only OCR/CV measures it. Related: a DOMRect includes half-leading above and below the text, so a
+label that is *box-centred* is usually *optically low* — the DOM literally cannot see the
+discrepancy because it has no representation of the ink.
