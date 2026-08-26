@@ -26,12 +26,18 @@ Three measurements, all taken on this machine today, carry the argument:
 | Detector | DOM-determined | Pixels-only | False positives on the clean control |
 |---|---|---|---|
 | **Deterministic rules** (~250 lines, 80 ms/page) | **9 / 9** | 0 / 2 (1 honest abstention) | **0** |
-| **DOM-vs-pixels cross-check** (~180 lines NumPy, no model) | — | **1 / 2** | **0** |
+| **DOM-vs-pixels cross-check** (~180 lines NumPy, no model) | — | **2 / 2** ¹ | **0** |
 | **Claude vision, blind** (8 pages, no ground truth) | 2 / 4 | **2 / 2** | **0** |
 | **Local `Qwen3.8-27B-4bit`** (MLX, this Mac) | not run | 1 of 3 resolutions correct | invented a defect at 2 of 3 resolutions |
 
 **The union of the first three is 11 of 11**, and each covers precisely what the others cannot. That
 complementarity *is* the architecture. The fourth row is why no local model is in it.
+
+¹ **Was 1 / 2 when this was written.** The second arm was the provisional centroid check, which
+shipped disabled with both its defects named and neither fixed. Both are fixed now and it ships on;
+the row and §2's 🚨 both carry the measurement. The third pixels-only item, `hierarchy-inversion`,
+is not in this denominator at all and never will be — it is a judgement about which of two valid
+buttons should dominate, and no comparator reaches it.
 
 ⚠️ **This table is a correction.** The first version scored three pixels-only defects and reported
 6 of 7. Building the cross-check exposed the reason: the `optical-centering` variant injected an
@@ -67,6 +73,26 @@ keep before it ever saw an injected defect. (Fixed by moving to blue-700: 6.70:1
 drift on the primary button was suppressed because an unrelated `token-drift` finding already existed
 on that same element in the baseline. The key has to span the claim, not just its location — the
 `assertion-span-must-equal-its-subject` failure, reproduced live. It scored 0/1 until fixed, then 1/1.
+
+**The control was only clean on the machine that authored it, and that was invisible for the same
+reason as everything else here — nothing disagreed with it.** `build_corpus.py` opens by declaring
+its font "Pinned so a render is reproducible across machines and runs", and pins
+`Helvetica, 'Helvetica Neue', Arial, sans-serif` — a chain with **no member present on Linux**. The
+optical-centering item's compensation, `transform: translate(2px, 2px)`, was a constant measured
+against Helvetica's `▶` outline, so off macOS the *clean control* carried a 3.6px optical defect of
+its own, and the pixels-only item it exists to grade could not be scored there at all. Not a
+detector bug: the corpus was grading against a baseline that changed with the host's font cache.
+Fixed by drawing the mark with CSS borders instead of a font glyph, which makes its ink centroid
+exact arithmetic (base 16px, apex 14px right, centroid at h/3 ⇒ 2.33px left of centre) on every
+machine. **The reproducibility claim is now true rather than intended** — and the way to find the
+next one of these is to run the corpus somewhere it has never run.
+
+That change then knocked the *DOM* control noisy, which is the false-positive budget earning its
+keep on its first day: dropping one 16px text node took 16px out of the type-scale rule's inferred
+scale and put a false positive on the control's section heading — a heading at the page's own base
+size. The rule inferred the scale from text-bearing elements only, so a legitimate step vanished the
+moment it happened to have one text user. It now infers over every rendered element and reports only
+on the ones rendering text: two different populations, on purpose.
 
 **Claude's blind review found three real defects nobody injected and no rule was looking for:** a
 table caption promising grey rows that do not exist, an unlabelled icon button with the smallest hit
@@ -172,7 +198,7 @@ Sampling the backdrop separately in the left and right thirds turns "unrepresent
 numbers and a verdict — no VLM call, no abstention, zero findings on the control. **That moves
 contrast-over-a-gradient out of the vision layer's queue entirely.**
 
-🚨 **The centroid arm is PROVISIONAL and ships disabled** (`--x2` to enable), because trying to
+🚨 **The centroid arm was PROVISIONAL and shipped disabled** (`--x2` to enable), because trying to
 validate it found two defects in it, and both are instances of the exact failure this document warns
 about — a plausible number nobody checked. (a) It compares ink to the element's **own** box, and
 `getBoundingClientRect` returns the *post*-transform box, so a `translate` moves box and ink together
@@ -181,6 +207,36 @@ background is the crop's modal colour, so on a round button the square crop's co
 background outside the circle — count as ink and swamp a 16px glyph. Both fixes are known (measure
 against the container; mask to the painted shape) and neither is done. Shipping it on would have
 handed the pipeline a confident number with no ground truth behind it.
+
+✅ **Both fixes are now done and the arm ships ON** (`--no-x2` to disable). It measures against the
+container's painted shape — recovered from the container's own background colour by a per-row /
+per-column span fill, which no transform on the mark can move and which excludes everything outside
+the disc by construction. Measured on this corpus: **0 findings on the control, down from 2, and 1
+on `optical-centering`, down from 2.** That second pair of numbers is the one that matters. The arm
+had been firing on *every page including the clean one* with near-identical text, so its apparent
+"catch" was not a catch: it said the same thing everywhere and had **zero discrimination**. A number
+that does not vary with the defect is not a measurement of the defect, and the enabling flag was the
+only thing standing between that and a shipped finding.
+
+🚨 **A third defect of the same family was hiding in the arm this section calls validated, and it was
+invisible on the machine it was written on.** X3 took the **modal** colour of each third as the
+backdrop. But under a gradient *no backdrop colour repeats*, while antialiased text is one exact
+constant — so the mode can be the **foreground**. It then contrasts the text against itself, gets
+1.00:1 at both ends, finds no spread, and reports nothing. Measured 2026-08-26: on macOS/Helvetica
+the backdrop won the mode and the arm fired as documented below; on Linux/DejaVu the ink won and the
+*same arm on the same page went silent*. A detector whose verdict turns on a font fallback is not
+validated, and this one was carrying the load-bearing claim that contrast-over-a-gradient leaves the
+vision queue. Fixed by excluding ink first and taking the **median** of what remains, which is the
+statistic a varying backdrop actually has; the mode never was. It now reports 6.15:1 → 1.76:1 on the
+gradient page here, and stays silent on the control and on every solid backdrop.
+
+**The generalisable half:** all three defects are one shape — *a statistic chosen because it was
+convenient on one render, validated by looking at that same render*. The mode is the wrong estimator
+for a field that varies; the element's own box is the wrong frame for a transform under test; the
+crop's corners are the wrong population for ink. None of them announced itself, and each was found
+only when a **second, disagreeing** source of truth arrived — a third detector, a fixed corpus, a
+different font stack. That is the same argument this document makes for the three-substrate split,
+applied one level down, to the estimators inside a single arm.
 
 ---
 
@@ -328,7 +384,12 @@ Nothing in this list is a model purchase.
 - `capture.py` — screenshot + full layout/style snapshot in one browser pass, so a pixel finding and a
   DOM finding describe the same frame. sRGB pinned, LCD text off, reduced motion, fonts awaited.
 - `detect_dom.py` — nine general design-lint rules with an explicit `INDETERMINATE` verdict.
+- `detect_xcheck.py` — three NumPy comparator arms, all three now validated against the control.
+- `route.py` — the abstention router (item 1 below), and the crop cutter it feeds.
+- `weights.json` — per-app rule weightings, ordering only, floors on A and O.
+- `fp_budget.py` — the gate. Run this before shipping any rule; everything else only reports.
 - `bench_local_vlm.py` — the resolution/latency sweep.
+- `README.md` — how to run the five stages, and the three traps this corpus has already sprung.
 
 **How it reaches a session — a plain CLI, not an MCP server.** A11 checked the assumption and it was
 wrong in our favour: an MCP tool *can* return image content to Claude Code. But image data is charged
@@ -351,11 +412,32 @@ step function — but SAM is not semantic, so it will happily return a pixel-per
 band.)
 
 **To add, in order:**
-1. **The abstention router.** (The cross-check in `bench/detect_xcheck.py` already removes the gradient case from this queue.) Deterministic pass first; its `INDETERMINATE` set plus the pages it
-   cannot reason about become the VLM's queue, cropped to the region in question.
-2. **A false-positive budget.** ~20% FP is where an AI reviewer loses credibility regardless of catch
-   rate. Our two zero-FP runs are the baseline to defend; every rule added must be re-run against the
-   clean control before it ships.
+1. ✅ **The abstention router** — built, `bench/route.py`. Deterministic pass first; its
+   `INDETERMINATE` set plus the pages it cannot reason about become the VLM's queue, cropped to the
+   region in question. **The seam priced itself the moment it existed:** the cross-check settles both
+   of this corpus's abstentions with no model call, so the crop queue is **0**, and
+   `route.py --without-xcheck` re-runs the identical routing with that layer withheld and the queue
+   becomes **1**. That is what the cross-check is worth as a number rather than as a claim. What
+   remains is one blind gestalt look per page — the residue, which is exactly the capability §1 says
+   cannot be replaced. Every request carries its own prohibition ("do not state, estimate or compute
+   any number") and the plan carries `"never_gates": true` as a *field*, so wiring judgement into an
+   exit code means deleting a line that shows up in a diff.
+2. ✅ **A false-positive budget** — built, `bench/fp_budget.py`, and it is a gate rather than a
+   habit: exit 1 on any breach. ~20% FP is where an AI reviewer loses credibility regardless of catch
+   rate. Our zero-FP runs are the baseline to defend; every rule added must be re-run against the
+   clean control before it ships. It asserts four things — the control is silent, every finding is
+   attributable to the subtree the injected CSS actually touched, off-target findings stay under the
+   ceiling, and **no app profile can change what is detected** (below). Current: 0 on the control,
+   **0 / 19 off-target**, all four profiles content-identical.
+
+   🚨 **Its floor arm was born green and could never have gone red**, which is worth more than the
+   arm itself. It asserted that no profile weights accessibility below 1.0 — but the router *clamps*
+   a sub-floor weight up to 1.0 before returning it, so the assertion was checking a value the clamp
+   had already made true. Caught only by deliberately planting all four breaches to see the gate
+   fail; three did and this one passed. It now reads the **declared** weight and treats the clamp as
+   the repair rather than the proof. This is the fail-safe-default-mimics-the-healthy-state trap from
+   §2 again, and a gate is the worst possible place for it: nothing downstream ever questions a green
+   one. **Plant the failure before trusting the pass.**
 3. **Order-randomised comparison.** If we ever compare two designs, permute over 3–5 orderings —
    that recovers about two-thirds of the benefit of ten, and exact balancing buys essentially nothing.
    Report discrimination spread and swap-consistency, never mean agreement.
@@ -370,6 +452,30 @@ band.)
 template) is largely a marketing-aesthetics problem; `reso-management-app` (Next 16, React 19,
 Tailwind 4) is mostly design-system conformance, where the deterministic layer does nearly all the
 work; `reso-web-app` (Next 13) sits between. One review harness, three different rule weightings.
+
+✅ **Built, `bench/weights.json`**, and the design constraint turned out to matter more than the
+numbers. **A weight changes ORDER and SEVERITY; it never changes what is DETECTED.** Otherwise a
+profile is a way to make an app look clean by editing a JSON file, so `fp_budget.py` routes all four
+profiles and fails if their queues differ in content. Two floors follow from the same worry:
+accessibility and correctness may be weighted **up** by a profile and never down — marketing
+aesthetics is a reason to care *more* about hierarchy, never a reason to care less about a 2.5:1
+ratio on the surface most likely to be read by a stranger on a phone in daylight.
+
+The weightings themselves: landing weights token conformance almost out (**K 0.3** — drift against a
+purchased template measures the template's own vocabulary and calls it a defect) and the blind
+gestalt pass highest in the fleet (**V 1.6** — "does this land" is the actual question and no rule
+reaches it); management inverts both (**K 1.6**, **V 0.5**) because there is a declared system and
+leaving it is unambiguous; web-app is deliberately flat, because it has not been profiled against its
+own routes and a made-up weighting reads as a measurement.
+
+**One thing the weightings cannot express, and it is a K-family blocker rather than a weighting
+question.** `PIPELINE_SPEC` §1.0 measured **0 `@theme` blocks** in `reso-management-app`'s shell CSS,
+so its Tailwind 4 engine emits utilities from no declared token source and every Tailwind-authored
+colour is unattributable to a token *by construction*. Weighting K up on that app raises the priority
+of a family that owes `INDETERMINATE` — not `FAIL`, and not a silent pass — on an unknown share of
+its subjects. Encoding it needs the per-app token map only the surface stage can produce, read from
+the bytes in `node_modules` rather than a range in `package.json`. Recorded in `weights.json` as
+OPEN, next to the weights it qualifies, rather than left in a spec section nothing loads.
 
 ---
 
