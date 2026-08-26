@@ -130,12 +130,16 @@ TOTAL_LINES=$(wc -l < "$FILE" | tr -d ' ')
 #   Emitted with sentinel prefix "S:" so second awk pass can associate them
 #   with their enclosing section.
 # Fenced block detection: toggle state on ``` or ~~~ lines (at column 0).
+#
+# NO INTERVAL EXPRESSIONS in either awk program below (scripts/awk-interval-lint.sh). The heading
+# match was `/^#{1,6} /` and the sha scan `/[0-9a-f]{7,40}/`; the alternation and the explicit
+# character runs that replace them mean the same thing on every awk, which `{m,n}` does not.
 SCAN_OUT=$(awk '
   BEGIN { in_fence = 0 }
   /^```/   { in_fence = !in_fence; next }
   /^~~~/   { in_fence = !in_fence; next }
   in_fence { next }
-  /^#{1,6} / { printf "H:%d:%s\n", NR, $0; next }
+  /^(#|##|###|####|#####|######) / { printf "H:%d:%s\n", NR, $0; next }
   # Body status line — accepts canonical "**Status**:" and prefixed forms like
   # "**v1 Status**:", "**Phase 3 Status**:", plus bare "Status:" at line start.
   /^\*\*[^*]*[Ss]tatus\*\*:/ { printf "S:%d:%s\n", NR, $0; next }
@@ -159,7 +163,7 @@ trap "rm -f '$tmp_records'" EXIT
 # Avoids -v newline limitations that broke body-status passing.
 awk -v total="$TOTAL_LINES" '
   BEGIN { n = 0; bs_n = 0 }
-  /^H:[0-9]+:#{1,6} / {
+  /^H:[0-9]+:(#|##|###|####|#####|######) / {
     # Strip "H:" prefix — lines[n] holds "LINENUM:#### Title"
     lines[++n] = substr($0, 3)
   }
@@ -235,19 +239,29 @@ awk -v total="$TOTAL_LINES" '
         }
       }
 
-      # Commit-hash detection: 7+ lowercase hex chars, surrounded by backticks or word boundaries
-      # (Accept 7-40 to match short + long hashes. Exclude purely numeric strings.)
+      # Commit-hash detection: a MAXIMAL run of 7-40 lowercase hex chars. Purely numeric runs are
+      # rejected (dates, byte offsets), and a run LONGER than 40 is not a git object id at all.
+      #
+      # The run is spelled as six characters plus `+` rather than `{7,40}` on purpose. Under
+      # mawk 1.3.4 an `{m,n}` with m >= 2 matches EXACTLY m, so `{7,40}` took the first SEVEN
+      # characters of every run and re-entered the loop on the remainder — silently, and in three
+      # different directions on the same pass: `ce7651b02a17` was reported as `ce7651b`;
+      # `a1b2c3d4e5f6a7b8` became the two shas `a1b2c3d` and `4e5f6a7`, neither of which anyone
+      # wrote; and `1234567abcdef` vanished entirely, because its truncated head `1234567` is
+      # purely numeric and the 6-char tail is too short — which ALSO left the section reading
+      # PENDING, since the hash below is what flips it to DONE. The bound is a length() test now.
       hashes = ""
       t = title
-      while (match(t, /[0-9a-f]{7,40}/)) {
+      while (match(t, /[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]+/)) {
         h = substr(t, RSTART, RLENGTH)
+        t = substr(t, RSTART + RLENGTH)
+        if (length(h) > 40) continue
         # Reject if purely numeric (unlikely to be a real hash — e.g., dates)
         if (h !~ /^[0-9]+$/) {
           if (hashes == "") hashes = h; else hashes = hashes "," h
           # If heading contained a hash but no explicit DONE token, treat as DONE
           if (status == "PENDING") status = "DONE"
         }
-        t = substr(t, RSTART + RLENGTH)
       }
 
       # Phase 0 flag

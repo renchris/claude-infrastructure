@@ -2725,6 +2725,44 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── awk interval-expression ratchet (2026-08-26) ──────────────────────────────────────────────
+  # Same own-scope contract as the ratchets around it, for a class whose answer depends on WHICH awk
+  # runs the program and whose every wrong answer is SILENT. The rule is older than this gate — it
+  # is stated outright at scripts/typed-send-lint.sh:164 ("No interval expressions ({n,m}) anywhere
+  # in the program … a silently-unmatched pattern here is a false GREEN") — and living in one file's
+  # comment it bound one file: censused 2026-08-26, EIGHT sites across SIX others.
+  #
+  # Two of those were returning wrong answers under mawk 1.3.4, which accepts `{m,n}` and then
+  # matches EXACTLY m for m >= 2: moving-ref-control-lint.sh reported TEN correctly-pinned suites as
+  # MOVING refs, and plan-phase-scan.sh — the sensor a dispatch brief's PLAN-OPEN SNAPSHOT is built
+  # from — truncated `ce7651b02a17` to `ce7651b`, split `a1b2c3d4e5f6a7b8` into two shas nobody
+  # wrote, and lost `1234567abcdef` entirely along with its section's DONE status.
+  #
+  # It belongs HERE for the reason its siblings document: enforced only by its own suite it is
+  # post-hoc DETECTION, and gate-select maps that suite from exactly one edge — the lint — so
+  # WRITING a new interval never selects it (memory: enforcement-must-live-at-the-chokepoint).
+  # ~1 s over the whole tree, one awk pass, and it names file, line and the offending interval.
+  AWKINT_LINT="${SHIP_LAND_AWKINT_LINT:-scripts/awk-interval-lint.sh}"
+  if [[ -x "$AWKINT_LINT" ]]; then
+    local aown=""
+    if [[ "${SHIP_LAND_AWKINT_OWN_SCOPE:-on}" != "off" ]]; then
+      aown="$(git diff --name-only "$range" 2>/dev/null || true)"
+    fi
+    echo "→ gate: awk interval-expression ratchet (a {n,m} whose meaning depends on which awk runs)" >&2
+    own_run AWKINT CC_AWKINT_OWN "$aown" "$AWKINT_LINT" . >&2; local arc=$?
+    if [[ "$arc" -eq 2 ]]; then
+      echo "⛔ gate: awk-interval-lint could not RUN (exit 2) — a NON-VERDICT, not a claim about your tree." >&2
+      echo "  Nothing is wrong with your files. Re-run /ship when the box is quieter." >&2
+      GATE_KILLED=1
+      return 1
+    elif [[ "$arc" -ne 0 ]]; then
+      echo "✗ gate: AWK-INTERVAL RED — a file THIS LAND CHANGES uses {n,m} inside an awk program." >&2
+      echo "  It means one thing on your awk and another on the next one; the sites are named above." >&2
+      gate_red awkinterval
+      return 1
+    fi
+  fi
+
   # ── git-identity escape ratchet (2026-08-05) ──────────────────────────────────────────────────
   # Same own-scope contract as the two ratchets above, for a blocker class whose blast radius is the
   # widest of the three: `git -C ""` is a documented NO-OP, so a fixture doing

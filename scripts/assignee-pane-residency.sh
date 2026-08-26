@@ -246,7 +246,7 @@ join_resident() { # <members-file> <wins-file> <procs-file> <outfile>
 last_decisions() { # <log> → name\tepoch_seconds
   [ -r "$1" ] || return 0
   awk '
-    match($0, /^\[[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\]/) {
+    match($0, /^\[[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9]\]/) {
       ts = substr($0, 2, 19); rest = $0; sub(/^\[[^]]*\] ?/, "", rest)
       name = ""
       if (match(rest, /^defer [A-Za-z0-9_.-]+/)) {
@@ -272,7 +272,7 @@ our_closes_since() { # <log> <since_epoch> → pane\tname
   since_str="$(date -r "$2" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)" || return 0
   [ -n "$since_str" ] || return 0
   awk -v since="$since_str" '
-    match($0, /^\[[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\]/) {
+    match($0, /^\[[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9]\]/) {
       ts = substr($0, 2, 19)
       if (ts < since) next
       # Lexical compare on `YYYY-MM-DD HH:MM:SS` IS chronological — no per-line parsing, no locale.

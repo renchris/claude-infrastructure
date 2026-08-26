@@ -123,8 +123,12 @@ moving_ref_shows() { # $1=file
       tok = substr(t, RSTART, RLENGTH)
       sub(/^[^[:alnum:]_-]?show[[:space:]]+/, "", tok)
       ref = tok; sub(/:.*$/, "", ref)
-      # PINNED: 7+ hex characters, an abbreviated or full sha. Everything else moves.
-      if (ref ~ /^[0-9a-f]{7,40}$/) next
+      # PINNED: 7..40 hex characters, an abbreviated or full sha. Everything else moves.
+      # NO INTERVAL EXPRESSION — the bound is a length() test, per scripts/awk-interval-lint.sh.
+      # This line used to read `ref ~ /^[0-9a-f]{7,40}$/`, and under mawk 1.3.4 an `{m,n}` with
+      # m >= 2 matches EXACTLY m, so every correctly-pinned 8+-char sha in tests/ was reported as a
+      # MOVING ref — 10 suites, each told to "replay a LITERAL sha" it already replays.
+      if (ref ~ /^[0-9a-f]+$/ && length(ref) >= 7 && length(ref) <= 40) next
       src = $0; sub(/^[[:space:]]+/, "", src)
       printf "%d:%s:%s\n", NR, (ref == "" ? "<unreadable expansion>" : ref), src
     }

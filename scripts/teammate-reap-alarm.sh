@@ -139,7 +139,7 @@ measure() {
   # one — no parsing per line, and no locale dependence.
   local win
   win=$(awk -v cut="$cutoff" '
-    match($0, /^\[[0-9]{4}-[0-9]{2}-[0-9]{2}/) {
+    match($0, /^\[[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/) {
       d = substr($0, 2, 10)
       if (d >= cut) print
     }' "$log" 2>/dev/null)

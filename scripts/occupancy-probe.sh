@@ -156,7 +156,7 @@ classify_rows() { # <self_pid>
         # answer to a question nobody asked — 40 different hooks all render as one bucket otherwise.
         # It applies ONLY when the next field is a path, so `bash -c …`, `awk {…}` and a bare `node`
         # keep their own name: there is no script there to name.
-        if (base ~ /^(bash|sh|zsh|dash|ksh|python[0-9.]*|perl|ruby|osascript)$/ && nf >= 2 && f[2] ~ /^\.{0,2}\//) {
+        if (base ~ /^(bash|sh|zsh|dash|ksh|python[0-9.]*|perl|ruby|osascript)$/ && nf >= 2 && f[2] ~ /^\.?\.?\//) {
           c2 = split(f[2], q, "/"); base = q[c2]
         }
         # A parenthesised comm — `(bash)`, `(jq)` — is how macOS ps renders a process whose argv it
