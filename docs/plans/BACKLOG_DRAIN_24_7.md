@@ -208,8 +208,18 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   **30** · `wrap-ledger-memo` **23** · `operator-surface-scope` **21** · `dod-path` **14** ·
   `operator-readout-live-symlink` **3**. 🆕 **The land's own smoke then ran ALL NINE GREEN in 402 s
   against a 420 s budget — the first NON-partial smoke in six links, where #230-#234 each had
-  `tests/cc-reaper.bats` cut at exit 124.** ⚠️ **But the foreground run is still what made it
-  decidable, and the poll trap bit again: my first 550 s foreground poll expired with the sentinel
+  `tests/cc-reaper.bats` cut at exit 124.** 🚨 **CORRECTION TO THE SENTENCE ABOVE, caught by my own
+  pre-fire floor AFTER it had landed and stated here rather than left to be inherited: that is true
+  of LAND 1 ONLY, and it is a claim about a smoke, never about this link. `SHIP_LAND_SMOKE_BUDGET_S`
+  is exported on the FIRST land per §4.1 invariant 8, so LAND 2 ran at the 120 s DEFAULT and went
+  PARTIAL — `tests/completion-assert.bats` GATE-KILLED at exit 124 with ZERO `not ok` and the budget
+  SPENT, 2 of 9 suites attempted in 121 s. A non-verdict, not a red, and the foreground run had
+  already made that suite a known 111/111. **#233's sharpening is exactly what bit: a timestamp
+  protects a NUMBER, not a claim about a LINK — and "the first non-partial smoke in six links" is
+  the second shape, which is why it needed this correction and the numbers beside it did not.**
+  ⚠️ **#236: export the budget on EVERY land, not only the first, or expect a partial on your
+  second.** ⚠️ **And the foreground run is still what made it decidable, while the poll trap bit
+  again: my first 550 s foreground poll expired with the sentinel
   unwritten while the land was fine and finishing — the SEVENTH consecutive link to meet a poll that
   outlives its window. RE-READ THE LOG BEFORE DIAGNOSING ANYTHING.** `land-lock --status` read
   `holder: (free) waiters: 0` before the attempt, at load ~11.6. `ship-backup-reap` showed only the
