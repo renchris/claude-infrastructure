@@ -652,6 +652,59 @@ EOF
   grep -q '"red":"[^"]*smoke-sibling:tests/b.bats' "$LAND_LOG"
 }
 
+union_own_answer() {  # $1 = the shell body the OWN-range call (arity 2) runs instead of answering
+  # union_fixture's selector is ARITY-KEYED: `--direct <range>` is the OWN question and
+  # `--direct <range> <extra>` is the UNION one. This overrides only the OWN arm, so the union
+  # answer — and therefore the RUN-LIST — is byte-identical to union_fixture's. One variable moves.
+  union_fixture
+  cat > "$SEL" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/sel-argv"
+case "\$1" in lint) exit 0 ;; esac
+if [ "\$1" = "--direct" ] && [ -n "\${3:-}" ]; then printf 'tests/a.bats\ntests/b.bats\n'; else $1; fi
+EOF
+  chmod +x "$SEL"
+}
+
+@test "union: a DEAD own-range selector fails closed to 'everything is ours', never exonerating the smoke" {
+  # THE SECOND CONSUMER OF THE SAME SENSOR, FAILING THE OPPOSITE WAY — which is why one root needed
+  # two guards. `own` is the EXONERATION list, so an empty one means "none of this is yours" and
+  # clears every suite in the smoke. run_smoke's own comment already names that as the outcome an
+  # undecided selector "must never" be read as, and guards the FULL door; silence walked in the
+  # other one. a.bats is OURS and flakes once: with `own` recovered this is a FINDING (exit 6), and
+  # the inverse test 'the carve-out is keyed on the OWN range' proves the same shim exonerates when
+  # the suite genuinely is NOT ours — so this cannot pass by convicting everything.
+  union_own_answer 'exit 7'
+  union_bats '    tests/a.bats) if [ ! -f "$T/a-seen" ]; then : > "$T/a-seen"; echo "1..1"; echo "not ok 1 intermittent"; exit 1; fi ;;'
+  echo 1 > "$MOVER_ARMED"
+  our_branch feat/union-deadown union-deadown.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  [ "$(echo "$output" | grep -c "STALE GATE")" -ge 1 ]              # the union really did fire
+  [ "$(echo "$output" | grep -c "finding, not a flake")" -ge 1 ]
+  [ "$(echo "$output" | grep -c "EXONERATED")" -eq 0 ]
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- union-deadown.sh)" ]           # and it does NOT land
+}
+
+@test "union: an own-range selector answering FULL takes the SAME door as a dead one" {
+  # THE PRE-EXISTING HALF OF THAT GUARD, pinned beside its new sibling so a later refactor cannot
+  # drop either: two different causes (an abstention and a death) must reach one fail-closed
+  # outcome. Identical to the test above except for the own arm's answer.
+  union_own_answer 'echo FULL'
+  union_bats '    tests/a.bats) if [ ! -f "$T/a-seen" ]; then : > "$T/a-seen"; echo "1..1"; echo "not ok 1 intermittent"; exit 1; fi ;;'
+  echo 1 > "$MOVER_ARMED"
+  our_branch feat/union-fullown union-fullown.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  [ "$(echo "$output" | grep -c "finding, not a flake")" -ge 1 ]
+  [ "$(echo "$output" | grep -c "EXONERATED")" -eq 0 ]
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- union-fullown.sh)" ]
+}
+
 @test "P0 exit 42 attests: the stale re-round is a ROW, marked non-terminal, and lands once" {
   # THE STALENESS INSTRUMENT (land-architecture-100p §5 P0, §2.B). P(exit-42 | wait>0) — 49% over
   # 14d rising to 86% over 3d — had to be reconstructed by hand from the LOCK ledger, because the
