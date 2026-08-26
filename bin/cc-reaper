@@ -2357,15 +2357,53 @@ WD_CENSUS_LOG="${CC_WATCHDOG_LOG:-$HOME/.claude/logs/lead-crash-watchdog.log}"
 
 wd_lstart(){ ps -o lstart= -p "${1:-0}" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//'; }
 
-# 0 iff the pid is live AND is a claude binary. The command check is the whole point: a dead lead's
-# pid gets RECYCLED, and answering "is this session alive" with bare pid liveness is the exact defect
-# this census reports on — it must not commit that defect inside its own classifier.
+# 0 iff the pid is live AND the PROCESS ITSELF is a claude binary. The command check is the whole
+# point: a dead lead's pid gets RECYCLED, and answering "is this session alive" with bare pid
+# liveness is the exact defect this census reports on — it must not commit that defect inside its
+# own classifier.
+#
+# ANCHORED TO THE PROCESS, NOT TO ITS ARGUMENTS (2026-08-26). This check used to be an UNANCHORED
+# substring over the whole argv, which admits any live process that merely NAMES a claude binary in
+# its arguments — and on this box exactly one class does, systematically: bin/cc-close-attrib wraps
+# every session and carries that session's entire command line as its own arguments. Measured over
+# one 1,008-process snapshot at 2026-08-26T03:14Z: the unanchored form admits 11 processes, of which
+# 5 are cc-close-attrib wrappers and 6 are sessions; matching the IMAGE or argv[0] suffix-anchored
+# admits exactly those 6 and still matches 7 of 7 recorded live leads, so nothing is lost in the
+# direction with teeth. The wrapper population is not incidental — it is one wrapper per live
+# session, forked in the same instant, so wrapper pids sit ADJACENT to the session pids a recycle
+# draws from. A recycled lead pid landing on one reads `live-session` here, wd_classify leaves the
+# row alone, and a genuinely orphaned daemon becomes invisible: precisely the false-clean report
+# this command check exists to prevent.
+#
+# THE SAME LAW IS ALREADY STATED AND TESTED TWENTY LINES DOWN, for the other predicate:
+# wd_daemon_table matches the script token in the COMMAND position and never `pgrep -f`, because
+# "any process whose argv merely MENTIONS the path" is a false census — with a test carrying a decoy
+# to prove it. That law was never carried across to this, its sibling, even though this end fails
+# the QUIETER way: an over-matching enumerator prints a spurious `▶ kill` an operator will not run,
+# while an over-matching lead check prints a clean zero nobody investigates.
+#
+# TWO RENDERINGS, because they fail in opposite directions and neither is free: the IMAGE (`comm`)
+# cannot be forged by a process's arguments but is the INTERPRETER under a script-shebang launcher;
+# argv[0] survives that but is exactly what a wrapper controls. Union, both suffix-anchored — they
+# agreed on all 1,008 rows of that snapshot, and the union is what keeps this permissive if either
+# rendering changes shape.
+# ⚠️ `comm` must be the ONLY/LAST column: macOS ps truncates a non-final column to its default width
+# (16 chars), so `ps -axo pid=,comm=,command=` renders a long image path as "/Users/chrisren/" and
+# every suffix match silently fails. That is a real measurement, not a hypothetical — it read 0
+# matches where the per-pid form read 6.
+# Seam: CC_WATCHDOG_LEAD_PS_BIN — deliberately NOT the CC_WATCHDOG_PS_BIN the table enumerator uses.
+# That one is set suite-wide to an EMPTY-table stub for hermeticity, and sharing it here would blind
+# this check in every existing test — turning the recycled-pid defense below into a fixture that
+# cannot fail. wd_control_lead drives this seam instead.
 wd_lead_live(){
-  local p="${1:-}" c
+  local p="${1:-}" c a
   case "$p" in ''|*[!0-9]*) return 1 ;; esac
   kill -0 "$p" 2>/dev/null || return 1
-  c="$(ps -o command= -p "$p" 2>/dev/null)"
-  case "$c" in *claude.exe*|*node_modules/.bin/claude*) return 0 ;; esac
+  c="$("${CC_WATCHDOG_LEAD_PS_BIN:-ps}" -o comm= -p "$p" 2>/dev/null | sed 's/^ *//;s/ *$//')"
+  case "$c" in *claude.exe|*node_modules/.bin/claude) return 0 ;; esac
+  a="$("${CC_WATCHDOG_LEAD_PS_BIN:-ps}" -o command= -p "$p" 2>/dev/null)"
+  a="${a%% *}"
+  case "$a" in *claude.exe|*node_modules/.bin/claude) return 0 ;; esac
   return 1
 }
 
@@ -2567,18 +2605,70 @@ wd_control_untracked(){
   return 1
 }
 
+# FOURTH POSITIVE CONTROL — wd_lead_live's COMMAND check, which had no control of any kind while its
+# own comment called that check "the whole point". The three controls above cover the sid-keyed
+# classifier, the process-table enumerator and the cross-dialect arms; none of them touches this one.
+#
+# WHY ITS ABSENCE WAS INVISIBLE: the suite's recycled-pid defense feeds wd_lead_live the bats shell —
+# a live process sharing NO substring with either pattern — so it is satisfied identically by an
+# anchored check and by one matching anywhere in the argv. The single live class that separates them,
+# a wrapper carrying a session's own command line, was in no fixture. A control whose fixture is
+# drawn from the population that trivially satisfies the law cannot see the law being broken.
+#
+# ONE CELL PER ARM, because an arm with no cell has no control:
+#   image   — image is a claude path, argv[0] is NOT: only the `comm` arm can match it
+#   argv0   — image is the interpreter, argv[0] is a claude path: only the argv[0] arm can match it
+#   wrapper — a live non-session whose ARGUMENTS name a claude binary: must be REJECTED (this is the
+#             cell the pre-2026-08-26 predicate fails, and the only one that moved)
+#   plain   — a live non-session naming nothing: the baseline negative
+# Every cell renders a DIFFERENT process for the SAME real, live pid, so `kill -0` passes and only
+# the command check decides. The fixture is written here by hand and read back through the subject —
+# it shares no writer with the predicate it tests.
+wd_ctl_lead_cell(){ # <dir> <stub> <image> <argv> → wd_lead_live's verdict on a live pid it renders
+  printf '%s\n' "$3" > "$1/comm.txt"
+  printf '%s\n' "$4" > "$1/argv.txt"
+  CC_WATCHDOG_LEAD_PS_BIN="$2" wd_lead_live "$$"
+}
+
+wd_control_lead(){
+  local d stub rc=0 img a0 wrap plain
+  d="$(mktemp -d "${TMPDIR:-/tmp}/wd-ctl4.XXXXXX" 2>/dev/null)" || { printf 'control-lead=FAIL reason=no-tmpdir'; return 1; }
+  stub="$d/ps"
+  { printf '#!/bin/bash\n'
+    printf 'case "$*" in\n'
+    printf '  *"-o comm="*) cat %s/comm.txt ;;\n' "$d"
+    printf '  *)            cat %s/argv.txt ;;\n' "$d"
+    printf 'esac\n'
+  } > "$stub"
+  chmod +x "$stub" 2>/dev/null || true
+
+  if wd_ctl_lead_cell "$d" "$stub" '/x/.claude-220/node_modules/.bin/claude' '/x/bin/session-launcher --resume abc'; then img=OK; else img=FAIL; rc=1; fi
+  if wd_ctl_lead_cell "$d" "$stub" '/usr/local/bin/node' '/x/.claude-220/node_modules/.bin/claude --effort high'; then a0=OK; else a0=FAIL; rc=1; fi
+  if wd_ctl_lead_cell "$d" "$stub" 'bash' '/bin/bash /x/bin/cc-close-attrib /x/.claude-220/node_modules/.bin/claude --effort high'; then wrap=ADMITTED; rc=1; else wrap=REJECTED; fi
+  if wd_ctl_lead_cell "$d" "$stub" 'bash' '/bin/bash /x/scripts/unrelated-worker.sh'; then plain=ADMITTED; rc=1; else plain=REJECTED; fi
+  rm -rf "$d" 2>/dev/null || true
+
+  if [ "$rc" = 0 ]; then
+    printf 'control-lead=OK (image=%s argv0=%s wrapper=%s plain=%s — a live process is a session by its own image or argv[0], never by what its arguments name)' "$img" "$a0" "$wrap" "$plain"
+    return 0
+  fi
+  printf 'control-lead=FAIL (image=%s argv0=%s wrapper=%s plain=%s — the lead check is not discriminating; a recycled lead pid can read live-session and tracked-orphan below is an UNDERCOUNT)' "$img" "$a0" "$wrap" "$plain"
+  return 1
+}
+
 watchdog_census(){
   local json=0; [ "${1:-}" = "--json" ] && json=1
   if [ "${CC_WATCHDOG_CENSUS:-on}" = "off" ]; then
     say "cc-reaper watchdog-census: DISABLED (CC_WATCHDOG_CENSUS=off) — no census taken"; return 0
   fi
 
-  local ctl ctl_rc=0 ctl2 ctl2_rc=0 ctl3
+  local ctl ctl_rc=0 ctl2 ctl2_rc=0 ctl3 ctl4 ctl4_rc=0
   ctl="$(wd_control)" || ctl_rc=1
   ctl2="$(wd_control_untracked)" || ctl2_rc=1
   # No companion rc: unlike its two siblings this control's verdict is a STRING with four values
   # (OK / N/A / UNKNOWN / FAIL), and the rc would only be able to restate the FAIL one.
   ctl3="$(wd_control_dialect)" || true
+  ctl4="$(wd_control_lead)" || ctl4_rc=1
 
   # PASS 1 — every live daemon process, classified by whether a .daemon record still names it and by
   # whether the lead that record points at is really alive.
@@ -2693,10 +2783,11 @@ watchdog_census(){
     # control_dialect is a STRING, not a bool, on purpose: its N/A and UNKNOWN cells are non-verdicts
     # that a bool would launder into `true`, which is the exact laundering this control was added to
     # stop. Additive — every reader of this object is name-keyed.
-    printf '{"control_ok":%s,"control_untracked_ok":%s,"control_dialect":"%s",' \
+    printf '{"control_ok":%s,"control_untracked_ok":%s,"control_dialect":"%s","control_lead":%s,' \
       "$( [ "$ctl_rc" = 0 ] && printf true || printf false )" \
       "$( [ "$ctl2_rc" = 0 ] && printf true || printf false )" \
-      "$( printf '%s' "${ctl3#control-dialect=}" | cut -d' ' -f1 )"
+      "$( printf '%s' "${ctl3#control-dialect=}" | cut -d' ' -f1 )" \
+      "$( [ "$ctl4_rc" = 0 ] && printf true || printf false )"
     printf '"counts":{"tracked_live":%s,"tracked_orphan":%s,"untracked_orphan":%s,"stale_file":%s,"live_procs":%s},' \
       "$n_tlive" "$n_torph" "$n_untracked" "$n_stale" "$n_procs"
     printf '"log":{"spawned":%s,"clean_exit":%s,"superseded":%s,"crash_path":%s,"dedupe_skips":%s,"retired":%s,"expected_running":%s,"delta":%s},' \
@@ -2707,6 +2798,7 @@ watchdog_census(){
     say "  $ctl"
     say "  $ctl2"
     say "  $ctl3"
+    say "  $ctl4"
     say "  daemon procs : live=$n_procs  →  tracked-live=$n_tlive  tracked-orphan=$n_torph  UNTRACKED-orphan=$n_untracked"
     say "  pidfile-only : stale-file=$n_stale (no live daemon, no live lead — residue)"
     say "  log reconcile: spawned=$n_spawn  clean-exit=$n_gone  superseded=$n_sup  crash-path=$n_crash"
