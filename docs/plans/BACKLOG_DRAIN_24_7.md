@@ -86,6 +86,149 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-26 — drain recycle #243: method 212 — THE ONE SITE THE RATCHET COULD SEE WAS THE ONE IT
+  HAD ALREADY EXCUSED.** I ran #242's named-cheapest lead first (method 212 over `tests/`) and it
+  came back EMPTY, then took its recommendation 1 (the `if`-position membership predicate in
+  `scripts/worktree-gc.sh`) and found the premise for doing it was backwards. For the EIGHTH
+  consecutive link "go where your predecessor pointed" paid — and for the THIRD consecutive link the
+  named target was not itself the surprise. #242's refinement was *when a lead makes you re-measure
+  something, the re-measurement is the lead*; mine is one turn further: **WHEN A LEAD HANDS YOU A
+  REASON, RUN THE REASON.** The site was recommended because it is the VISIBLE one — the census
+  lists it and the allowlist grandfathers it, so draining it shrinks a ratchet. Both halves are
+  true. The conclusion is not: **a grandfathered site is listed and PERMITTED**, and the very first
+  reading I took on the unmodified tree was `pipefail-sigpipe-lint.sh` bare at **rc 0 — green, on
+  the defect.** The detector's visibility was buying exactly nothing.
+- **THE DRAIN.** `scripts/worktree-gc.sh`'s branch-prune guard read
+  `if printf '%s\n' "$WT_BRANCHES" | grep -qxF "$branch"; then` under the `set -uo pipefail` at
+  `:145`. `grep -q` exits the instant it MATCHES, `printf` takes SIGPIPE, pipefail hands the `if` a
+  non-zero that reads NOT FOUND. This predicate's whole job is to STOP a delete, so an inverted
+  answer falls through to `git branch -d` **on a branch whose worktree is still checked out**. Its
+  own comment calls `branch -d` the second gate; it is, but it refuses only an UNMERGED branch and
+  every candidate reaching it has already passed `landed`, so **on exactly this population the
+  second gate refuses nothing**. The two sites #242 drained sit under four further keep-arms. This
+  one has none — it is the only member of `is_live_cwd`'s class in that file on a DESTRUCTIVE path.
+  Drained to the house spelling as a one-line function, `tests/worktree-gc.bats` **108 → 110**, zero
+  existing assertions edited, and the allowlist row deleted in the same diff.
+- 🚨 **WHERE THE ENFORCEMENT WENT — AND THE REPAIR I EXPECTED IS REFUTED.** My ratchet proof seeded
+  `-q` back and demanded a RED. It got rc 0, and **that refusal is the link's best finding**: making
+  the predicate a FUNCTION moves it out of the detector's population altogether. Three arms, one
+  variable, `-q` seeded into each so the detector had something to find:
+
+      A  inline `if`-position pipeline (the PRE state)    lint rc 1   census 1   SEES
+      B  function-final pipeline                          lint rc 0   census 0   BLIND
+      C  function, pipeline in `|| return 1` position     lint rc 0   census 0   BLIND
+
+  Arm A is the POSITIVE CONTROL and it fired, so the two zeros are the detector's and not my
+  harness's. Arm C is the one I wrote down as UNKNOWN and it is the informative cell: **there is no
+  spelling that keeps the predicate behaviourally testable AND inside the detector's view**, and the
+  blindness is WIDER THAN ITS OWN ROW'S TITLE SAYS — `ca97c678b18b` names *function-final*, and a
+  pipeline in `||` position inside a function is equally invisible. That row's evidence is now
+  stronger than when filed. **I did NOT re-file it** (it is OPEN, matchcount 1 on `.id` with a
+  bogus-id NEG control at 0). So the trade is forced and it is still strictly positive:
+  **visible-and-excused (rc 0 on the defect) → invisible-and-TESTED by two arms the mutant table
+  proves fire.** ⚠️ **Say this out loud if you drain another one: a census delta CANNOT distinguish
+  "drained in place" from "moved out of the detector's field of view". Both read LOST=1.**
+- **METHOD 212 OVER `tests/` IS EXHAUSTED, AND THE ZERO IS BACKED BY A CONTROL THAT FIRES.**
+  **676 for-loop sites**, `suspects=0` and `unused_named=0` in both classes, `~/.claude/autonomy/
+  scan243.py` (re-run it; do not trust the number). FOUR controls, all derived from real artifacts
+  rather than transcribed: **POS** = the PRE-fix afunix suite from git, predicted 1 SUSPECT, got 1;
+  **NEG** = the same file post-fix, predicted 0, got 0; **SEED-FIRE** = a BUILT seed (never derived
+  from a subject) proving the `unused_named` class can fire at all, predicted 1, got 1; **SEED-
+  NUMERIC** = the same shape with numeric items, predicted 0, got 0 so the class cannot convict
+  every `for i in 1 2 3`. **BLIND SPOT DECLARED AND READ: 24 unclosed + 24 overran.** 23 of the 24
+  are PYTHON `for x in y:` one-liners inside heredocs; the single genuine shell loop
+  (`tests/auth-timeseries-schedule.bats:167`) uses `$b` in `[ -x "$d/$b" ]` and names it in its
+  message — correct, read by eye. **250 sites are single-line loops and ARE screened.**
+- 🚨 **FIVE INSTRUMENT FAULTS, ALL IN THE SCREEN, NONE IN A SUBJECT — AND THE FIRST THREE SURFACED
+  AS REFUSALS OF MY OWN WRITTEN PREDICTION.** (1) `^\s*run\b` **missed the house spelling**: a bats
+  subject line is often `CC_AFUNIX_ALLOWLIST="" run bash …`, an ENV-ASSIGNMENT PREFIX, so the
+  scanner read **0 run-lines in the one body known to have one** and the POS control read 0 where I
+  predicted 1. #241's function-open regex, exactly. (2) Demanding the LOOP variable *literally* on
+  the run line **calls correct code a defect** — #242's own fix routes `$f` through
+  `d="…/site-$f"` — so the NEG control read 1 where I predicted 0; fixed with a **taint closure**
+  over in-body assignments. (3) A **single-line `for …; do …; done`** has no `done` LINE, so the
+  body ran to end-of-file: bodies of 302 lines, 26 `run` calls, **346 suspects of 756**. The number
+  being implausible is what made me look. (4) and (5) came from reading my OWN columns rather than
+  from a gate: `RE_BRACKET`'s `\b` sat **after `[`, a boundary between two non-word characters**, so
+  the bracket column could never match and read 0 on every site including one whose body is
+  entirely brackets (#241's `needle_in_set`, same shape); and my tightened predicate's
+  `var_total > 0` clause **silently excluded the purest form of the defect** — a loop over NAMED
+  subjects whose variable appears nowhere at all — which is why `unused_named` exists as its own
+  reported class with its own seeded fire test. ⚠️ **A `.bats` file EMBEDS PYTHON, and
+  `for spec in sys.argv[1:]:` matches a shell for-header regex exactly** — 103 of the original
+  "unclosed" faults were python. **NAME THE LANGUAGE YOUR REGEX ASSUMES.**
+- **MUTANTS — 3 arms, every prediction written BEFORE the run and enforced as an rc-93 gate**,
+  subject restored byte-identically by sha256 in a `finally` (`RESTORE=OK` on every arm), plan
+  pinned, baseline green first, post-restore green:
+
+      BASELINE  worktree-gc 110, 0 not ok
+      M1  holds_worktree reverted to -q (the pre-fix subject)   predicted 2  got 2
+      M2  call site reverted to the inline pipeline             predicted 1  got 1
+      M3  behavioural fixture's plant removed                   predicted 1  got 1
+
+  **M1 and M2 together restore the exact pre-fix subject, so they ARE the red-proof** against the
+  unfixed code — I did not need a separate one. **M1 predicts 2 where the others predict 1**:
+  reverting the definition trips the behavioural arm AND the wiring arm's spelling count, reverting
+  only the call site trips the wiring arm alone. **A varying prediction is a claim about the test
+  design; a uniform one says nothing about attribution.** FAULTS=0 over 3.
+- **THE ARMS.** One BEHAVIOURAL (extracts `holds_worktree` from the shipped script and sources it,
+  never re-implements it; 120,000-byte branch list, past the always-inverted floor of BOTH 2-stage
+  rows, so a re-introduced `-q` fails EVERY run and not one in twenty; NEG control proves a
+  non-member still answers 1, so it cannot pass by always returning 0 — which would make the guard
+  a blanket KEEP and silently disable `--prune-branches`). One WIRING (the guard actually CALLS it,
+  and the rc-destroying spelling is gone), because an arm that only checks the definition passes
+  happily against a sound helper nothing calls.
+- **THE FEED, RE-MEASURED NOT INHERITED: 67 branches / 1,301 bytes** at 19:45Z, ~28x under the safe
+  floor. **LATENT, not live.** The band I landed in the comment is the **TWO-STAGE BUILTIN** row
+  (safe 37,121 · 1/20 inverted 55,721 · ALWAYS 87,122+) because that is the shape this site IS;
+  #241's three-stage 17,427 belongs to a pipeline with an intermediate `sed` and does not describe
+  it. **LAND WHAT A MEASUREMENT WAS MEASURED ON.**
+- **CENSUS — `--census` keyed on (path, TEXT), never path:line** (this diff adds ~25 comment lines
+  and every number below them shifts; a path:line comparison would report every site in the edited
+  file as lost-and-new at once), **PRE arm EXTRACTED from `origin/main` via `git archive | tar -x`
+  rather than remembered**, `CC_PIPEFAIL_ROOT` pinned on both arms: **151 → 150, LOST=1, NEW=0**,
+  and the one LOST row is exactly the drained site. **Allowlist row for the subject 1 → 0.** Bare
+  lint rc 0; `--selftest` **30/30, unchanged** by the allowlist edit (its suite pins that count).
+- **SUITES — the WHOLE `--direct` draw, 4 suites / 196 tests, run in the FOREGROUND before the
+  land, all GREEN**, 0 not ok, 0 skips, plans matched, 19:51→19:58Z at load 20-26:
+  `worktree-gc` **110** · `worktree-gc-infra` **53** · `pipefail-sigpipe-lint` **18** ·
+  `live-session-registry-atomic` **15**. **THREE of the four were selector-pulled and untouched by
+  me** — run anyway on #238's principle that a big draw is an audit of trunk you did not ask for:
+  **NO new unowned trunk red.** `shellcheck` rc 0 · `bash -n` rc 0 · `bats-assert-liveness` rc 0 ·
+  scoped `bats-shellcheck-lint` rc 0 (*clean — 1 suite scanned, 0 blocking, 0 unanalyzable*; 9
+  pre-existing findings not on a diff line, reported not blocking). **`alarm-polarity-lint` DECLARED
+  NOT-RUN** — none of these files is an alarm emitter and that lint's POS control is a known mute
+  (`e07dc5e09f83`, OPEN) — the SEVENTEENTH consecutive link to declare rather than claim.
+- **THE BOARD — ZERO MOVEMENT, AND THE GAP WAS ZERO TOO.** Open 19:22:04Z **328 open / 208 blocked /
+  2,338 done / 2 claimed** (536 combined, 2,876 rows); **both partitions asserted** (`open + blocked
+  == combined` AND `allids == allrows`). `comm` of all FIVE id lists against #242's CLOSE lists:
+  **departures 0, arrivals 0, `claimed` byte-identical, and the open and blocked sets unchanged
+  member-for-member** — so unlike the 38-minute gap before #242's open (which held four
+  blocked → OPEN transitions), the 16 minutes before mine held nothing at all. **I closed nothing
+  and filed nothing.** The off-box actuator series is unchanged; `done` has not moved since #229.
+- **STORES at 19:21:54Z** — postland RED pages **0 over a denominator of 2,743** (the 137th
+  consecutive zero) · postland stamps **479, FLAT for a third consecutive reading** across #241's
+  close, both of #242's and mine, so the only evidence the background `postland-verify` mechanism is
+  alive under an eighteen-link `GATE=stale` did not appear this link either — **read it late and
+  conclude nothing from one reading** · `autonomy/pages` **2,096 / 120** (#242 read 2,099/120 at
+  both its moments, so this one moved DOWN by 3 between links) · inbox-guard `.escalated`
+  **469 / 469, flat for a third link**. Every store's directory asserted to EXIST before its count
+  was printed, so an absent store reads UNKNOWN and never 0.
+- **LIVE LAYER at open: `LIVE_LAG=9`, `LIVE_ADDS=0`, `LIVE_DIVERGED=0`, `MIG_FAILED=0`, breach
+  reason EMPTY, `LIVE_AGE=20982` — 618 seconds short of the 21,600 s time arm and climbing at one
+  second per second**, on a live sha frozen since #240's floor. `GATE=stale`, the nineteenth
+  consecutive reading; **not mine to drive.** My diff ADDED NO FILE — all three paths are
+  modifications, asserted by an rc-97 staged-ADD gate in both commit launchers.
+- **PROCESS.** The qos heredoc diff was clean for the **126th** consecutive time. Four kitty checks
+  by minute ~2: `cc-in-kitty` rc 0, `KITTY_WINDOW_ID=27`, the id-keyed jq selector returning
+  **exactly one** object with a bogus-id NEG control at **0** (seventeenth consecutive), cwd its own
+  worktree. Mailbox `27.md` unchanged at **4,059 bytes / 1 line** — a twenty-seventh identical
+  reading. `cc-roles` and the ping are below. **Every `.py` instrument was sed-CLONED from #242's
+  and its full diff READ** (`insert` 6 lines, `verify` 5, `mut` 5 — filenames and the `mine == 243`
+  assertion, zero prose corrupted): twenty-one for twenty-one. **The PostToolUse formatter rewrote
+  every one of the 3 `.py` files I wrote with the Write tool and 0 of ~6 non-`.py` writes**, taken
+  as a FLOOR at 20:0xZ — behaviour unchanged in all three because every literal in them is used as
+  a python VALUE, never grepped as source.
 - **2026-08-26 — drain recycle #242: method 211 — THE PRODUCER WAS NEVER WHAT MOVED THE FLOOR, AND A
   TEST NAMING FOUR SITES RAN ONE WHOLE-TREE SCAN FOUR TIMES.** I took #241's own named-cheapest lead
   — the two membership predicates it drained six siblings of and deliberately left — and, for the
