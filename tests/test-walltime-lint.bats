@@ -144,8 +144,16 @@ _bomb_dir() {  # a fixture carrying one in-band future date → a REAL finding w
 @test "NON-VERDICT: an allowlist check that cannot RUN exits 2, never 1 — the fabricated-RED direction" {
   _bomb_dir
   mkdir -p "$FIX/stub2"
-  # fail ONLY in_allowlist's -qxF, so the date scan still answers and the allowlist arm is isolated
-  printf '#!/bin/bash\nfor a in "$@"; do [ "$a" = "-qxF" ] && exit 2; done\nexec /usr/bin/grep "$@"\n' \
+  # Fail ONLY the FIXED-STRING MEMBERSHIP predicates (in_allowlist, in_own), so the date scan —
+  # which greps -vE then -oE — still answers and the allowlist arm is isolated.
+  # KEYED ON THE MECHANISM (-xF = fixed-string membership), NOT on the early-exit spelling. It
+  # used to key on the -q form, which made it a control calibrated to the implementation:
+  # recycle #240 DRAINED both predicates to close a pipefail-SIGPIPE inversion, the stub
+  # silently stopped firing, and this test went RED reporting the bomb instead of the
+  # non-verdict. The flag SET is what distinguishes these two call sites from the date scan;
+  # whether they exit early is exactly the thing that may change again.
+  # (memory: control-calibrated-to-implementation-decays)
+  printf '#!/bin/bash\nfor a in "$@"; do [ "$a" = "-xF" ] && exit 2; done\nexec /usr/bin/grep "$@"\n' \
     > "$FIX/stub2/grep"; chmod +x "$FIX/stub2/grep"
   PATH="$FIX/stub2:$PATH" CC_WALLTIME_TODAY=$T run bash "$LINT" "$FIX/nv"
   [ "$status" -eq 2 ] || { echo "a failed allowlist check did not exit 2 (got $status): $output"; false; }
