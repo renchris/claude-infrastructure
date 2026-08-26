@@ -109,6 +109,18 @@ setup() {
   esac
 }
 
+# Control 4 covers wd_lead_live's COMMAND check, which had no control at all while its own comment
+# called that check "the whole point". Controls 1-3 cover the sid-keyed classifier, the process-table
+# enumerator and the cross-dialect arms; none of them touches this one. Its four cells render four
+# different processes for ONE real live pid, so kill -0 passes and only the command check decides —
+# and `wrapper=REJECTED` is the cell that moved: the pre-2026-08-26 predicate admitted it.
+@test "watchdog-census: control 4 proves the lead check reads the PROCESS, not its arguments" {
+  run "$REAPER" watchdog-census
+  [ "$status" -eq 0 ]
+  case "$output" in *"control-lead=OK"*) ;; *) echo "lead control did not pass: $output"; false ;; esac
+  case "$output" in *"wrapper=REJECTED"*) ;; *) echo "the wrapper cell did not reject: $output"; false ;; esac
+}
+
 # ── classification ──────────────────────────────────────────────────────────────────────────────
 @test "classify: dead lead + live pinned daemon = orphan, and its reap command is printed" {
   printf '%s\n' "$DEAD_PID" > "$CC_WATCHDOG_DIR/sid-a.pid"
@@ -133,6 +145,31 @@ setup() {
   run "$REAPER" watchdog-census --json
   [ "$status" -eq 0 ]
   case "$output" in *'"sid":"sid-c","class":"stale-file"'*) ;; *) echo "wrong-lstart record trusted: $output"; false ;; esac
+}
+
+# The lead-side twin of the enumerator decoy below, and the reason it was needed: the recycled-pid
+# defense above feeds wd_lead_live the bats shell, which shares no substring with either claude
+# pattern, so it passes whether the check is anchored or matches anywhere in the argv. The one live
+# class that separates those two readings is a wrapper carrying a session's OWN command line —
+# bin/cc-close-attrib, one per live session, forked in the same instant so its pid sits next to the
+# session pid a recycle draws from. Measured 2026-08-26 over 1,008 processes: the unanchored form
+# admitted 11, of which 5 were such wrappers. Read as live-session, an orphaned daemon goes unseen.
+@test "classify: a live wrapper whose ARGUMENTS name a claude binary is not a live session" {
+  stub="$D/ps-lead-wrapper"
+  {
+    printf '#!/bin/bash\n'
+    printf 'case "$*" in\n'
+    printf '  *"-o comm="*) printf "%%s\\n" "bash" ;;\n'
+    printf '  *)            printf "%%s\\n" "/bin/bash /x/bin/cc-close-attrib /x/.claude-220/node_modules/.bin/claude --effort high" ;;\n'
+    printf 'esac\n'
+  } > "$stub"
+  chmod +x "$stub"
+  # $$ is this bats shell: genuinely alive, so only the command check can decide the verdict.
+  printf '%s\n' "$$" > "$CC_WATCHDOG_DIR/sid-w.pid"
+  run env CC_WATCHDOG_LEAD_PS_BIN="$stub" "$REAPER" watchdog-census --json
+  [ "$status" -eq 0 ]
+  case "$output" in *'"sid":"sid-w","class":"stale-file"'*) ;; *) echo "a wrapper naming claude in its argv was called a live session: $output"; false ;; esac
+  case "$output" in *'"sid":"sid-w","class":"tracked-live"'*) echo "argv MENTION counted as a live lead: $output"; false ;; *) ;; esac
 }
 
 # ── the enumerator ──────────────────────────────────────────────────────────────────────────────
@@ -190,6 +227,15 @@ setup() {
   run "$REAPER" watchdog-census --json
   [ "$status" -eq 0 ]
   printf '%s' "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); v=d["control_dialect"]; assert v in ("OK","N/A","UNKNOWN","FAIL"), d; assert v != "FAIL", d'
+}
+
+# control_lead IS a bool, unlike control_dialect: all four of its cells are decided by a fixture this
+# control fully renders, so there is no unreachable arm for an N/A to name — the honest encoding is
+# the one that can only say true or false. Additive: every reader of this object is name-keyed.
+@test "census --json carries the lead control as a bool" {
+  run "$REAPER" watchdog-census --json
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["control_lead"] is True, d'
 }
 
 @test "census reconciles spawned vs exits from the daemon's own log" {
