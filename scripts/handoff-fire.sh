@@ -1908,6 +1908,43 @@ pane_proof() { # $1=it2 shim  $2=pane id  $3=label → 0 reachable, 1 unreachabl
   return 1
 }
 
+# ---- HAS THE PANE VANISHED? (2026-08-26 — pane-32 recycle strand) ------------------------------
+# pane_proof answers "can I reach this pane" ONCE, at arm time, and logs four lines doing it. The
+# recycle watcher needs the same question asked REPEATEDLY and QUIETLY, because a pane that is
+# DESTROYED mid-recycle is a decidable fact that the watcher currently cannot see: its only sensor
+# is pane_cc_state on the pane's tty, and a released pty has no processes, which that function
+# reports as `unknown` — an abstention meaning "could not read", indistinguishable from a shell it
+# merely failed to certify. So the watcher waited out its whole 600 s budget on pane 32 over a
+# question that `session list` could have settled in 36 ms.
+#
+# THREE STATES, and `absent` is the only one that may act. It requires a listing that SUCCEEDED and
+# enumerated at least one OTHER pane — an empty listing, a failed transport or a rendered table all
+# answer `unknown`, because absence of evidence is not evidence of absence (MEMORY.md
+# lookup-miss-is-not-absence, and pane_proof's own RENDERED-TABLE lesson two lines above). Callers
+# escalate on `absent` and keep waiting on `unknown`, so a flaky terminal API can only cost time,
+# never a false "your pane is gone".
+pane_enumerated() { # $1=it2 shim  $2=pane id → prints present|absent|unknown · ALWAYS exits 0
+  local it2="${1:-}" pane="${2:-}" out="" ids=""
+  [ -n "$pane" ] && [ -x "$it2" ] || { printf 'unknown'; return 0; }
+  out="$(hf_bounded "$it2" session list --json 2>/dev/null)" || { printf 'unknown'; return 0; }
+  [ -n "$out" ] || { printf 'unknown'; return 0; }
+  # NO separate rendered-table arm here, deliberately, and it is not an oversight — a `case` on
+  # │/┃/… was written and then DELETED after its mutant came back green. pane_proof needs one
+  # because it falls back to treating raw output as a bare id list; this function has no such
+  # fallback, so a rendered table yields zero id matches below and lands in the same `unknown` as
+  # every other unreadable payload. A guard whose removal changes no outcome is dead code, and a
+  # test standing over it asserts a property a SIBLING guard delivers (MEMORY.md
+  # sibling-guard-makes-the-fixture-vacuous). The rendered-table CASE is still pinned — it is a
+  # test over this function's behaviour, not over a line that no longer exists.
+  # grep -o, not sed: sed's greedy .* collapses a COMPACT single-line array to its LAST id.
+  ids="$(printf '%s\n' "$out" | grep -o '"id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"\([^"]*\)"$/\1/' || true)"
+  [ -n "$ids" ] || { printf 'unknown'; return 0; }
+  # No `grep -q` on a pipeline: under pipefail an early exit SIGPIPEs the producer and the verdict
+  # inverts precisely when it matches (MEMORY.md grep-q-kills-its-producer). A here-string has none.
+  if grep -qxF -e "$pane" <<<"$ids"; then printf 'present'; else printf 'absent'; fi
+  return 0
+}
+
 # ---- reliable launch-command injection (INC ttys018, 2026-07-19) ------------------------------
 # Typing a launch command into an interactive zsh as a raw async_send_text CHAR-STREAM races the
 # target shell's ZLE: zsh-autosuggestions + zsh-syntax-highlighting recompute per keystroke and
@@ -2951,6 +2988,63 @@ $group
 EOF
   [ "$shells" -gt 0 ] || { printf 'unknown'; return 0; }
   printf 'shell'
+}
+
+# ---- WILL THIS PANE SURVIVE ITS OWN /exit? (2026-08-26 — pane-32 recycle strand) ----------------
+# pane_cc_state answers "is a session running here", and a recycle needs a SECOND, independent
+# fact before it types /exit: is there a shell UNDER that session for the pane to fall back to?
+# The whole recycle contract is "/exit returns this pane to a prompt, then we type the relaunch
+# into it" — and in a pane whose ROOT process is the session's own launcher, there is no prompt to
+# return to. The launcher exits with the session, the terminal closes the window, and the relaunch
+# has nowhere to land.
+#
+# MEASURED, not derived. bin/cc-resume-layout.sh creates panes with
+# `kitty @ launch --type=os-window … -- "$RESUME_ONE" …`, so the pane's argv IS bin/reso-resume-one,
+# which used to `exec expect`. On 2026-08-26T06:21Z pane 32 recycled: the /exit landed, expect
+# exited, kitty destroyed the window and released /dev/ttys021, and the detached watcher then spent
+# 600 s polling a pty that no longer existed before writing recycle-dead. The session's successor
+# was never launched. reso-resume-one now falls through to an interactive shell, which removes that
+# ONE shape — this predicate is what stops the NEXT unmodelled launcher re-opening the class, the
+# same "fixing the instance is not fixing the class" argument the expect-probe suite already makes.
+#
+# THE TEST IS THE ROOT, not the closure. A pane's root processes are the ones whose parent is not
+# itself on this tty (the terminal emulator, or launchd for a detached helper). Exactly one of them
+# is the pane's argv. A SHELL there survives its children; anything else — expect, script, a
+# debugger, a bare binary — is the session's own wrapper and dies with it. Reading the closure
+# instead would be useless: `bash cc-close-attrib` is a shell INSIDE every CC and would answer yes
+# for every pane, including the ones that cannot survive.
+#
+# 🚨 IT REFUSES ONLY ON AFFIRMATIVE EVIDENCE, and that polarity is deliberate. `no` requires that
+# the roots were READ and that not one of them is a shell. An unreadable tty answers `unknown`,
+# and the caller treats `unknown` as permission to proceed — i.e. exactly today's behaviour. A
+# probe that refused whenever it could not see would convert working recycles into manual steps,
+# which tests/handoff-recycle-expect-probe.bats §B already names as just as broken as one that
+# always types. The destructive case here is POSITIVELY detectable, so it does not need the
+# fail-closed default that a "safe to type" question does.
+pane_shell_root() { # $1=pane tty (path or basename) → prints yes|no|unknown · ALWAYS exits 0
+  local ptty="${1:-}" rows onttys shells=0 seen=0 pid ppid comm
+  [ -n "$ptty" ] || { printf 'unknown'; return 0; }
+  ptty="${ptty##*/}"
+  rows="$(ps -o pid=,ppid=,comm= -t "$ptty" 2>/dev/null || true)"
+  [ -n "$rows" ] || { printf 'unknown'; return 0; }
+  # SPACE-separated, never newline-separated: BSD awk dies SILENTLY on an embedded newline in -v
+  # (the 2026-08-06 measurement recorded above pane_cc_state's own ps read).
+  onttys="$(printf '%s\n' "$rows" | awk 'NF { print $1 }' | tr '\n' ' ')"
+  while read -r pid ppid comm; do
+    [ -n "$pid" ] && [ -n "$comm" ] || continue
+    # A ROOT is a process whose parent is not itself on this tty.
+    case " $onttys " in *" $ppid "*) continue ;; esac
+    seen=$((seen + 1))
+    comm="${comm##*/}"; comm="${comm#-}"          # /bin/zsh and -zsh are both zsh
+    case "$comm" in
+      zsh|bash|sh|dash|ksh|fish|tcsh|csh|login) shells=$((shells + 1)) ;;
+    esac
+  done <<EOF
+$(printf '%s\n' "$rows")
+EOF
+  [ "$seen" -gt 0 ] || { printf 'unknown'; return 0; }
+  [ "$shells" -gt 0 ] && printf 'yes' || printf 'no'
+  return 0
 }
 
 # ---- RECYCLE-path ENGAGEMENT (audit row: birth ≠ engagement, still live on --recycle) -----------
@@ -5480,6 +5574,10 @@ if [ "${1:-}" = "__recycle" ]; then
   RSID="${2:?__recycle needs a session id}"
   TTY_PATH="${3:?__recycle needs the pane tty}"
   CMDFILE="${4:?__recycle needs the command file}"
+  # Parsed HERE rather than beside its positional siblings at :5686, because the pane-VANISHED arm
+  # that consumes it fires from inside the wait loop — above that line. Optional: an older watcher
+  # (deployed-copy skew mid-land) is handed 8 args and simply reports the brief as unrecorded.
+  RCY_PROMPT_FILE="${9:-}"
   IT2="$HOME/.claude/bin/it2"
   echo "→ armed: __recycle pid=$$ pgid=$(ps -o pgid= -p $$ | tr -d ' ') sid=$RSID tty=$TTY_PATH"
   pane_proof "$IT2" "$RSID" __recycle || exit 1
@@ -5502,8 +5600,21 @@ if [ "${1:-}" = "__recycle" ]; then
   # not confirmed.
   rcy_wait_max="${HF_RECYCLE_SHELL_WAIT_S:-600}"
   case "$rcy_wait_max" in ''|*[!0-9]*) rcy_wait_max=600 ;; esac
+  rcy_vanished=0
   while [ "$waited" -lt "$rcy_wait_max" ] && ! at_shell; do
     sleep 3; waited=$((waited+3))
+    # PANE-VANISHED CHECK (2026-08-26 — pane-32 strand). The loop above can only ask the pane's TTY,
+    # and a pane that was DESTROYED by the /exit has no tty left to ask: pane_cc_state reads no
+    # processes and returns `unknown`, which is an abstention. So the watcher's one terminal
+    # condition — "600 s elapsed" — was also its only way to notice a pane that had been gone since
+    # second three. Measured on pane 32: window destroyed within ~90 s of the /exit, watcher held at
+    # 60/150/300 s and gave up at 600 s, and the operator learned nothing for ten minutes.
+    # `session list` settles it in ~36 ms, so ask it every 15 s. Only `absent` acts (pane_enumerated
+    # requires a successful listing carrying other panes); `unknown` keeps waiting, so a flaky
+    # terminal API costs time and never mints a false "your pane is gone".
+    if [ "${CC_RECYCLE_VANISH_CHECK:-on}" != off ] && [ $((waited % 15)) -eq 0 ]; then
+      if [ "$(pane_enumerated "$IT2" "$RSID")" = absent ]; then rcy_vanished=1; break; fi
+    fi
     case "$waited" in 60|150|300)
       # NUDGE GATE (recycle-100p 2026-08-22): this used to be a BLIND CR — and a blind CR is what
       # SUBMITS a merged "draft+/exit" buffer (the ≥8 swallowed operator messages in the 24-day
@@ -5530,6 +5641,17 @@ if [ "${1:-}" = "__recycle" ]; then
       esac ;;
     esac
   done
+  if [ "$rcy_vanished" = 1 ]; then
+    # THE PANE ITSELF IS GONE — a FINDING, not an abstention, and it needs its own arm because the
+    # remedy below it is wrong here. The generic recycle-dead alarm says "relaunch manually in that
+    # pane"; there is no longer a pane to relaunch in, and on 2026-08-26 that is exactly the line an
+    # operator would have been handed for pane 32. Say what is true, and name the two things that
+    # can actually recover it: the brief the recycle was carrying, and the relaunch command.
+    emit_recycle_event recycle-dead "" "$RSID" "pane VANISHED after ${waited}s — destroyed by its own /exit (no shell under the session); successor never typed" || true
+    hf_alarm recycle-dead "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-DEAD (PANE GONE): pane $RSID no longer exists — 'session list' enumerates other panes but not this one, ${waited}s after the /exit. The pane had no shell under its session, so the /exit destroyed the window itself and the successor could never be typed. This session's continuation is STRANDED. Its brief: ${RCY_PROMPT_FILE:-<none recorded>}. Fire it into a NEW pane: scripts/handoff-fire.sh --prompt-file ${RCY_PROMPT_FILE:-<brief>} --split-right. Raw relaunch line: $(cat "$CMDFILE")" || true
+    echo "!! pane $RSID VANISHED ${waited}s after the /exit (enumerated by session list at arm time, absent now) — the pane had no shell under its session, so its own /exit closed it. Nothing was typed; the successor never started. Fire it into a NEW pane: scripts/handoff-fire.sh --prompt-file ${RCY_PROMPT_FILE:-<brief>} --split-right" >&2
+    exit 1
+  fi
   if ! at_shell; then
     # LEDGER COMPLETENESS (recycle-100p): both real recycle failures in the 3.5-day instrumented
     # window emitted ZERO outcome rows — a failed recycle was ledger-invisible, provable only by
@@ -9840,7 +9962,25 @@ recycle_fire() {
   rcy_state="$(pane_cc_state "$tty")"
   case "$rcy_state" in
     cc)
-      : ;;                                       # a live session — fall through to watcher + /exit
+      # SURVIVABILITY GATE (2026-08-26 — pane-32 strand). "A session is running here" does not imply
+      # "this pane will still exist once that session exits". A pane whose ROOT process is the
+      # session's own launcher (expect, script, a bare binary) is destroyed by the very /exit this
+      # recycle is about to type, and the relaunch then has nowhere to land — measured on pane 32,
+      # where the watcher spent 600 s polling a released pty and the successor never started.
+      # Refuses only on affirmative evidence (see pane_shell_root); `unknown` proceeds, so this can
+      # add refusals but can never remove a recycle that works today.
+      # Kill switch: CC_RECYCLE_SURVIVE_GATE=off.
+      if [ "${CC_RECYCLE_SURVIVE_GATE:-on}" != off ]; then
+        rcy_root="$(pane_shell_root "$tty")"
+        if [ "$rcy_root" = no ]; then
+          emit_recycle_event recycle-refused-no-shell "" "$SID" "pane root is not a shell (tty $tty) — /exit would destroy the pane" || true
+          echo "!! recycle REFUSED: pane $SID has NO shell under its session (tty $tty). Its root process IS the launcher that started this session, so the /exit a recycle types would close the pane itself — the relaunch would have nowhere to be typed and this session's work would be stranded, which is exactly what happened to pane 32 on 2026-08-26." >&2
+          echo "!!   Nothing was typed; the session stays alive. Use a HANDOFF instead of a recycle here: fire the successor into its own pane, then retire this one —" >&2
+          echo "!!   scripts/handoff-fire.sh --prompt-file <brief> --split-right   then   scripts/handoff-fire.sh self-close --successor <new-pane-uuid>" >&2
+          exit 1
+        fi
+      fi
+      ;;                                         # a live session — fall through to watcher + /exit
     shell)
       # POSITIVELY confirmed at a shell prompt: nothing to /exit — type the relaunch right now.
       it2_type_verified "$HOME/.claude/bin/it2" "$SID" "$CMD" \
@@ -9910,7 +10050,13 @@ recycle_fire() {
   # $LAUNCH_DIR, not $PWD: the evidence that matters is the dir the relaunch will cd INTO. For a
   # same-dir recycle LAUNCH_DIR *is* $PWD (byte-identical), but for a relocating recycle $PWD is the
   # dir being LEFT — naming it in a "cwd VANISHED" warning would accuse the wrong directory.
-  WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$LAUNCH_DIR" "$rcy_old_sid" "$RECYCLE_MARKER" "$FIRE_GOAL")"
+  # $9 is the CALLER-NAMED brief path, positional-last + optional like every argument above it (an
+  # older watcher from a deployed-copy skew ignores it). It exists for exactly one line: the
+  # pane-VANISHED alarm, whose only useful remedy is "fire this brief into a new pane" — and the
+  # watcher runs in a re-exec where _resolved_prompt_file is null by construction, so without this
+  # the alarm could only say `<none recorded>`. `${PROMPT_FILE_ORIG:-$PROMPT_FILE}` is the path the
+  # lead actually wrote (PROMPT_FILE is rewritten to a back-channel copy at :8543).
+  WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$LAUNCH_DIR" "$rcy_old_sid" "$RECYCLE_MARKER" "$FIRE_GOAL" "${PROMPT_FILE_ORIG:-$PROMPT_FILE}")"
   if ! await_armed "$log"; then
     kill "$WATCHER_PID" 2>/dev/null || true
     echo "!! recycle ABORTED: watcher heartbeat never appeared ($log) — /exit NOT typed, session stays alive. Run manually: $CMD" >&2
