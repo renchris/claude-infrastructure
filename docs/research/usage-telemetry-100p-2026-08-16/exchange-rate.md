@@ -246,7 +246,13 @@ to ≤ +16%, never +50%), and the corrected sustainable-active figure (A6 §C4's
 `orchestration-units-2026-08-19.md` N7 (REFUTED, *"needs a filed decision"*) →
 `orchestration-units-2026-08-19/A6-VERIFY-quota-economics.md` §C6 (found the live consequence, and
 correctly held this doc's cache-read result to *a bound, not a point*) →
-`orchestration-units-2026-08-19/Z-completeness-critic.md` G15 (no decision was filed) → §2a (filed).
+`orchestration-units-2026-08-19/Z-completeness-critic.md` G15 (no decision was filed) → §2a (filed)
+→ **§2a.1 (2026-08-26: propagated).** The 2026-08-24 ruling corrected the two documents named above
+and stopped there; the figure was still live and unmarked in **`scaling-bottlenecks-2026-08-09/07-accounts-api.md`
+— the axis file that computed the 68% in the first place** — and in five jcode-due-diligence decision
+surfaces, one of which ranks a lever #1 on it. Nine sites across five files are annotated as of
+2026-08-26. **If you cite this doc to refute something, sweep by `grep` on the figure, not by the
+file list in the ticket**: this one propagated two edges further than the item that reported it.
 
 ⚠️ **Read R1 as scoped to quota, which is all it ever measured.** It removes the *quota* reason to
 trim context. It says nothing about the context-window ceiling — a hard `Prompt is too long` refusal

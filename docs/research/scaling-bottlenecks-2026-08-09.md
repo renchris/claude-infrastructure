@@ -105,9 +105,61 @@ it cannot revive +50%, which both hypotheses already exclude.
 
 **Downstream carriers of the struck figure**, corrected or annotated with this block:
 `memory-econ-rearchitecture-2026-08-10/prior-art.md` row 55/56 (a LIVE-status ledger — flipped).
-Left as dated audit records of what was believed on their date, not corrected:
+~~Left as dated audit records of what was believed on their date, not corrected:
 `jcode-due-diligence-2026-08-11.md:53`, `jcode-due-diligence-2026-08-11/bottleneck-audit.md:73`,
-`jcode-due-diligence-2026-08-11/ranked-levers.md:36,:54`.
+`jcode-due-diligence-2026-08-11/ranked-levers.md:36,:54`.~~
+
+#### 2a.1 · Propagation completed 2026-08-26 — the sweep this block deferred, and the source it missed
+
+🚨 **The 2026-08-24 strike corrected the two docs the backlog item named and left the premise live in
+a third file it never checked: this doc's own axis 07.** `07-accounts-api.md` is where the 68%
+composition was *computed*, and §2a above cites it by name as the origin — yet it was not in the
+carrier list, so the full refuted derivation sat unmarked under the heading *"The largest quota lever
+is context, not accounts"*, with `:115` telling readers it was *"the single most actionable number in
+the file."* Annotated now at **`:114` (the composition), §6.4 (the lever), `:165` and `:355`** (two
+places that use "68% of quota cost" to support the ITPM-exemption argument). That argument's
+*conclusion* survives and strengthens — if the meter does not bill cache reads either, then cache
+reads are cheap on both limiters and 150-resident is more affordable, not less — but there is no
+read-vs-limiter *asymmetry*, which is the reason the text gave.
+
+**Reversing the "dated audit records" call on the four jcode sites, deliberately and for cause.**
+That call is right for prose that merely *describes* a past belief, and it is wrong here on three
+counts. (1) `ranked-levers.md:36` labels the figure **"MEASURED"** when it was *modelled* — token
+counts weighted by published multipliers — so the record is not just dated, it misstates its own
+instrument, and a reader has no way to discount it. (2) These are **live prescriptions**, not
+history: `jcode-due-diligence-2026-08-11.md:129` ranks **L7 context-cap as lever #1** partly on
+*"+~50% active capacity"*, and that row was never in the deferred list at all — the 2026-08-24 pass
+struck the supporting evidence file's sibling sites while leaving the ranked table that consumes them
+untouched. (3) The concern the call protects against is **fully met by the annotation convention this
+block already uses everywhere else**: strikethrough plus a dated marker leaves every original
+sentence readable, so nothing is erased and the date is preserved. Annotated, not rewritten:
+`jcode-due-diligence-2026-08-11.md:53,:95,:129` · `bottleneck-audit.md:73` ·
+`ranked-levers.md:36,:54,:108`. The `:95` and `:108` sites were in neither the 2026-08-24 carrier
+list nor its deferred list — `:95` is the **options-comparison table** that prices the whole
+"L7 + L1 + L2" path at *"+~50% quota-effective"*, and `:108` is the **Unknowns** section naming the
+cache-TTL probe as *"THE swing measurement for the whole ranking."* Both are decision surfaces, not
+history. `07-accounts-api.md:63` is deliberately **left alone**: the `0.10×` cache-read *multiplier*
+is documented API pricing and is not what was refuted — the refuted step is composing it into "68% of
+quota cost."
+
+⚠️ **The generalisable lesson, since this is the second sweep for one figure.** The 2026-08-24 pass
+corrected exactly the files the backlog item happened to name, and the item named the two docs whose
+*contradiction* was noticed — not the doc that *originated* the number. A refuted figure propagates
+along citation edges, so the sweep has to be `grep`-shaped over the figure itself, not
+inventory-shaped over the ticket. Nine sites across five files, from an item that named two.
+
+**One correction moves a conclusion rather than just voiding it.** `ranked-levers.md:54` priced idle
+eviction as *"a cold resume pays ~10× on ONE turn's input, repaid after ~10 subsequent turns"* — pure
+0.10×/68% arithmetic. Re-priced at the measured rates, re-reading is **free** and the real cost is one
+full-context **cache-creation** event, ~200K × 0.105 ≈ **0.021 pp per resume** *(DERIVED-HERE, a
+bound-check)*. There is no per-turn re-read cost for the payback to repay, so **L6 idle eviction is
+cheaper than it was ranked**, and the *quota* half of the 0.5-day measurement that blocks it is
+already answered from the meter — only the latency/TTL half remains.
+
+**Net effect on rankings, stated so it is not mistaken for a no-op:** L7 loses its second axis and is
+ranked #1 on resident memory alone (its `(18 × 0.95)/1 = 17.1` was never re-derived; the memory gain
+alone is 16), while L6 gets cheaper. Neither table is re-scored here — **re-rank before acting on
+either** — because that is a fresh judgment on the jcode wave's scope, not this item's.
 
 ---
 
