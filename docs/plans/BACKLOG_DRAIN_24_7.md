@@ -86,6 +86,196 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-26 — drain recycle #238: method 208 — A LAW ABOUT WHAT A PROGRAM PRINTS SAYS NOTHING
+  ABOUT A PROGRAM THAT IS NO LONGER RUNNING.** I took the single target #237 named as cheapest and
+  did not spend: `ship-land`'s smoke arm. 🚨 **NO LAND COUNT, NO SHA AND NO SMOKE VERDICT APPEARS IN
+  THIS ENTRY, AND THAT IS #237'S RULE APPLIED RATHER THAN RE-LEARNED** — an entry is always composed
+  BEFORE its own land, so every claim about that land is a PREDICTION wearing a measurement's
+  clothes. The store that holds those facts is `git log --oneline origin/main`; the commit subject
+  is `fix(ship-land): the smoke selector can DIE, and silence was read as a lint-only land`, and a
+  subject survives a rebase where a sha does not. **I also promise no paragraph below this one**
+  — #237's second extra land was bought by two "at my floor below" pointers with nothing below them.
+
+  **THE SUBJECT AND WHY IT QUALIFIED.** `scripts/ship-land.sh` is one of the most hardened files on
+  this box *specifically against going quiet*: a smoke wall budget, a twice-cut discriminator,
+  `GATE-KILLED` as a third state that is never RED, `record_gate_cut`, and a P0 §3 rewrite that
+  split a single `none` token into SEVEN causes because — its own words — *"five tests pinning five
+  different causes with one indistinguishable token"* meant *"the suite could not have caught a land
+  taking the WRONG no-smoke branch, because every branch attested the same string."* That is method
+  207's tell exactly: **the hardening tells you where the author's attention was, and therefore
+  which half nobody screened.** Every one of those arms watches for a run that was **CUT**. I asked
+  #237's question — what can a run that COMPLETES get wrong — and the answer was sitting in the
+  enumeration itself.
+
+  🚨 **THE FINDING, AND THE GENERALISABLE SHAPE (METHOD 208).** `scripts/gate-select.sh` states its
+  own contract in its header, in these words: *"THE LAW: any doubt fails CLOSED … every one of them
+  prints FULL"*, and *"EMPTY IS A VERDICT; `FULL` IS THE ABSTENTION … This selector abstains by
+  printing the literal token FULL (every fail_closed door and every internal error), **never by
+  silence**, so a consumer that needs to tell 'nothing to run' from 'I could not tell' reads FULL,
+  not emptiness."* ✅ **I MEASURED THAT LAW AND IT HOLDS — one variable moved (the range), every row
+  reporting literal stdout, byte count and rc so a silence is VISIBLE rather than inferred:**
+
+      POS 0782951ec~1..0782951ec       rc=0    bytes=53   LIST(3)
+      NEG HEAD..HEAD                   rc=0    bytes=0    SILENCE   <- empty IS the verdict here
+      DOUBT no range at all            rc=0    bytes=4    FULL
+      DOUBT unparseable range          rc=0    bytes=4    FULL
+      DOUBT unknown option             rc=0    bytes=4    FULL
+      DOUBT base sha does not exist    rc=0    bytes=4    FULL
+      DOUBT head sha does not exist    rc=0    bytes=4    FULL
+      DOUBT both shas bogus            rc=0    bytes=4    FULL
+      SIGTERM mid-run                  rc=143  bytes=0    SILENCE   <- the door the law cannot reach
+
+  ✅ **THE LAW HOLDS ON EVERY DOOR THE SELECTOR CAN WALK THROUGH. It cannot hold on the one door it
+  cannot reach.** A killed process — the reaper, an OOM, a `gate-cleanup` sweep — prints nothing and
+  exits non-zero. 🚨 **METHOD 208, and it is cheap: FOR ANY COMPONENT WHOSE CONTRACT IS STATED AS
+  "IT ALWAYS ANSWERS X ON FAILURE" — `grep -n` for `fail.closed`, `never by silence`, `abstains by`,
+  `always prints`, `every internal error`, `exit: always 0` — ASK WHAT THE CONSUMER DOES WITH AN
+  ANSWER IT NEVER GAVE AT ALL. The enumerated causes are the doors the program WALKS THROUGH; the
+  unenumerated one is the door where the program STOPS EXISTING, and no amount of care inside the
+  program reaches it.** ⚠️ **The consumer-side tell is mechanical: `x="$(prog … 2>/dev/null || true)"`
+  followed by a branch on the VALUE and never on the rc.** ✅ **And the sharper half, which is why
+  the enumeration was the blind spot rather than an oversight: the author had already asked "what
+  are all the ways this can fail" and answered it SEVEN TIMES. Every one of the seven is a decision
+  or an absence the program is present to report. Completeness about the doors you can walk through
+  reads exactly like completeness.**
+
+  🚨 **SITE 1 — THE SILENT DIRECTION.** `direct="$("$GATE_SELECT" --direct … 2>/dev/null || true)"`
+  discarded exactly that rc, so silence-from-death and the deliberate lint-only EMPTY became ONE
+  VALUE, and the emptiness check attested BOTH as `none-nodirect` — *"0 direct suite(s) map to this
+  range (lint-only land)"*. **A land whose INSTRUMENT DIED reported itself as the cheap path it
+  chose on purpose:** statics green, no suite run, exit 0, push. That is precisely the conflation
+  P0 §3 exists to prevent, arriving through the one cause the enumeration never named.
+
+  🚨 **SITE 2 — THE SAME SENSOR, THE OPPOSITE FAILURE VALUE, WHICH IS WHY ONE ROOT NEEDED TWO
+  GUARDS.** `own` is **not a run-list, it is the EXONERATION list**: `run_scoped_suite`'s carve-out
+  asks `printf '%s\n' "$own" | grep -qxF -- "$f"` to decide whether a pass-on-retry is *"intermittence
+  in code you are landing"* (a finding) or a flake. **An EMPTY `own` therefore means "none of this is
+  yours" and clears every suite in the smoke.** ⚠️ **And the file's own comment already names that
+  outcome as the one it must never take** — *"an undecided selector must never be read as 'none of
+  this is yours', which would exonerate the whole smoke"* — **so it guarded the `FULL` door and
+  silence walked in the other one.** ✅ **ONE sensor, THREE consumers, THREE directions:** site 1
+  under-runs silently; site 2 over-exonerates silently; the **v1 corpus call is the third and it
+  already fails SAFE** (empty there means *exonerate nothing*), so I left it alone deliberately and
+  name it here rather than change it.
+
+  ✅ **THE FIX, AND WHAT IT DELIBERATELY IS NOT.** `sel_rc`/`own_rc` are captured instead of
+  discarded. A dead selector at site 1 gets its own token `none-selfail` and a loud line naming the
+  rc; a dead own-selector at site 2 takes the **same door as `FULL`**, adding no new policy.
+  🚨 **NOT A WIDENING, and this mattered more than the fix:** v1 read a selector failure as FULL and
+  ran the corpus, which is the measured amplifier (`f8e40b4c577d`), and `tests/ship-land.bats` PINS
+  that inversion. A non-verdict must never block a land (R6/§4.1) and must never buy a corpus
+  either. **So the LAND behaviour at site 1 is unchanged — no smoke, exit 0 — and only the
+  ATTESTATION changes.** That is the whole point: the coverage ledger can now separate an instrument
+  outage from a deliberate cheap path. ✅ **ZERO existing tests churned** — `none-selfail` is a NEW
+  branch ABOVE the emptiness check, so every incumbent assertion still greps a string that is still
+  true, and the attest test's `none-[a-z]+` pattern already admits it. **Appending beat inverting
+  again.**
+
+  ## THE MUTANT TABLE — five arms, every prediction exact, zero instrument faults
+  Predictions written to `pred238.txt` BEFORE any run. Subject restored byte-identically by sha256
+  in a trap (`RESTORE=OK` on all six arms). Anchors EXTRACTED from the subject and asserted unique
+  at 1. The harness refuses **rc 9** non-unique anchor · **rc 8** no-op mutant · **rc 7** mutant
+  byte-identical to baseline · **rc 95** unparseable mutant · **rc 94** PLAN-MISMATCH. **None fired.**
+
+      BASELINE                                      ship-land 153/153 · cas 20/20 GREEN
+      M1  sel_rc never captured (rung unreachable)  predicted 2  got 2  (43,44)
+      M2  none-selfail renamed to none-nodirect     predicted 2  got 2  (43,44)
+      M3  the own_rc clause dropped                 predicted 1  got 1  (17)
+      M4  the own=FULL clause dropped instead       predicted 1  got 1  (18)
+      M5  pre-fix subject, `git show HEAD:<path>`   predicted 3  got 3  (43,44,17)
+
+  ✅ **M3 AND M4 RED EXACTLY ONE TEST EACH AND DIFFERENT ONES.** That is why both `land-gate-cas`
+  tests exist: neither door can be dropped silently, and a build that merely renamed one arm passes
+  the other test. **A per-site mutant is what attributes coverage; a green suite credits no site.**
+  🆕 ✅ **M5's FOURTH TEST STAYED GREEN AND THE ZERO WAS PREDICTED IN ADVANCE AS A NAMED LIMIT** —
+  the `own = FULL` door already existed pre-fix, so that test pins the SIBLING half and is **not
+  evidence for this link's change.** #237's M6 rule, second consecutive link: *a mutant predicted to
+  red nothing for a stated reason is a documented limit; one that merely turns out to red nothing is
+  a hole in your tests.* **Writing the zero down first costs one line.**
+
+  🆕 ⚠️ **MY OWN C4 SCAR, AND IT IS METHOD 207 TURNED ON ITS AUTHOR — the brief warned me in those
+  exact words and I did it anyway.** The new test's assertion `grep -c 'lint-only land' -eq 0` red on
+  its FIRST run **against the FIXED subject** — on MY OWN WORDING, not on the subject. The
+  `none-selfail` message legitimately contains *"not a lint-only land"*: it is the sentence that
+  tells the operator which cause this is. **A grep that counts a token matches the prose documenting
+  it, and here that prose was four minutes old and mine.** ✅ **Fixed by ANCHORING the assertion to
+  `map to this range`, which occurs only in the other branch's line — never by rewording the
+  message.** ⚠️ **My first POSITIVE CONTROL was also MUTE and said so:** `origin/main~1..origin/main`
+  is a sibling's prose-only range whose CORRECT answer is empty, so a control I had assumed would
+  draw a list drew SILENCE — #215's *"you assumed the POS subject had the property you were testing
+  for"*, live. **Re-drawn against a range that touches code, it drew 3.**
+
+  ⚠️ **HONEST LIMITS, stated rather than discovered by a successor.** **(1)** No live instance was
+  observed: the exposure is by construction and by fixture, pinned by M5 and by the SIGTERM row.
+  **(2)** The reachable production door is **signal death or OOM of the selector process**, not an
+  internal error — every internal-error path I measured correctly prints FULL, so this is NOT the
+  `|| echo 0` generator with a new face. **(3)** Site 1 changes attestation only, so a land whose
+  selector dies is still behaviorally ungated; **it is now ungated AND SAYS SO.** A successor who
+  thinks that balance is wrong should move it knowingly.
+
+  **LINTS — run, and the ones that did not apply are DECLARED, not claimed as green.** `shellcheck`
+  rc 0 (re-run INLINE as an rc-95 gate inside the commit launcher so a stale green could not ride
+  in) · `bash -n` rc 0 · `bats --count` **151 → 153** and **18 → 20**, also as rc-95 gates ·
+  `bats-assert-liveness` rc 0 on both suites · `pipefail-sigpipe-lint` bare rc 0 *"clean (allowlist
+  honoured)"*. ✅ **I added NO new `| grep -q` pipeline** — every absence assertion I wrote is
+  `[ "$(echo "$output" | grep -c 'X')" -eq 0 ]`, deliberately NOT the grandfathered idiom on the
+  lines beside mine. 🚨 **`alarm-polarity-lint` DECLARED NOT-RUN ON A MUTE POSITIVE CONTROL, measured
+  THIS link rather than inherited: a known alarm emitter (`scripts/idl-abstain-alarm.sh`) returns the
+  IDENTICAL *"clean — 0 explained suppression(s), 0 inverted alarm predicates"* as a file that emits
+  no alarm at all.** That is lead item `e07dc5e09f83`, already OPEN — **not re-filed**, and this is
+  the THIRTEENTH consecutive link to declare rather than claim.
+
+  ## THE BOARD, THE STORES AND THE LEDGER — every number carries the moment it was read
+  **Board at my OPEN (10:32:49Z): 324 open / 207 blocked / 2,338 done / 5 claimed** (531 combined,
+  2,874 rows), **both partitions asserted** (`open + blocked == combined` AND `allids == allrows`).
+  🚨 **`allids` departures 0, arrivals 1 against #237's floor** — `2f92e5b0452c`, filed 10:32:47Z,
+  **two seconds before my board read**, and it is a **reso** row (a `ConfirmDialog.test.tsx`
+  zag-js focus-trap flake from a Wave 4 merge gate) — **NOT drain work.** ✅ **The `claimed` set was
+  BYTE-IDENTICAL at both moments** — `193ae8ddce72` · `70f0001c657b` · `78b76e1a8311` · `8f59467c92b0`
+  · `e981656df348` — so on #237's own lesson I report the SET and not the count. **The off-box
+  actuator series gains a ninth zero, on closes AND on claims.**
+  ⚠️ **A single-row condition I had not seen named in a brief: `postland-red-cc-inbox-guard`, row
+  `4218bdea6601`, OPEN, firstTs 2026-08-24T21:15:34Z** — a post-land RED on `tests/cc-inbox-guard.bats::P2`
+  about a pre-1970 ts. **It PREDATES #237 and is not fallout from its clock fix**, which is exactly
+  why I checked its `firstTs` before feeling implicated. Read it before touching that file next.
+  **Stores at 10:33:28Z:** postland RED pages **0 over a denominator of 2,724** — the **131st
+  consecutive zero**, and the denominator is still the most volatile number in the brief (2,722 /
+  2,717 / 2,723 across #237's three moments) · postland **stamps 474** · `autonomy/pages`
+  **2,075 / 128** · inbox-guard **473 `.escalated` of 473 files** — dead flat against all three of
+  #237's readings.
+  🚀 **THE LEDGER READ `🚀` AT MY OPEN AND IT IS NOT MINE — attributed in one command, in about forty
+  seconds, exactly as #237 promised.** `wrap-ledger.sh --machine` at 10:34Z: `RUNG=🚀
+  LIVE_SHA=51bf8570c LIVE_LAG=7 LIVE_AGE=7396 LIVE_ADDS=14 LIVE_BREACH_WHY=adds LIVE_DIVERGED=0
+  MIG_FAILED=0 LIVE_SRC=behind GATE=stale`. ✅ **All fourteen adds enumerated per-path are a
+  SIBLING's `docs/research/cv-design-review-2026-08-26/*` — the documented false positive on
+  `4e6a51df2a84` (OPEN; NOT re-filed).** ✅ **And the converger says so itself** —
+  `deploy-live.sh --dry-run` from the SHARED CHECKOUT at 10:35Z: *"waiting — no GREEN tree is a
+  DESCENDANT of live HEAD 51bf8570cdd2 …; lag 7 commit(s) / 2h, inside the degrade budget (25 / 6h)
+  — no advance, and none is due yet"*, residency *"2 of 2 executing resident daemon(s) are running
+  current bytes · 1 exempt"*. **The lane is waiting on a green tree, which is `GATE=stale` seen from
+  the other side. Do not force it.** ⚠️ **`GATE=stale` at my open too — a THIRTEENTH reading, and
+  still not mine to drive.**
+  **Housekeeping:** the `qos-rewrite.sh` diff was clean (rc 0, 0 bytes) — the **121st consecutive**.
+  The four KITTY-aware pre-fire checks all passed by minute ~2: `cc-in-kitty` rc 0 · `KITTY_WINDOW_ID`
+  **27** · the id-keyed `jq` selector returned **EXACTLY ONE** object with cwd its own worktree and a
+  bogus-id NEG control at **0** — the **TWELFTH consecutive** link · `ITERM_SESSION_ID=w0t0p0:27`
+  with `CC_TERM` UNSET. My mailbox `~/.claude/mailbox/27.md` holds the same single 4,059-byte
+  message, unchanged — a **TWENTY-SECOND** identical reading — and I received the same forwarded
+  post-land REDs as #235-#237 (owner `675e9c81c884`, OPEN). **I filed NO new page-row, and neither
+  should you.** **I closed NO row and filed NONE** — deliberately, per premise 3.
+  🚨 **LOAD, because every timing above is worthless without it:** 15.49-19.49 at my open, **15.65 to
+  27.19 across the six suite runs**. `tests/ship-land.bats` (153) ran **281-300 s** and
+  `tests/land-gate-cas.bats` (20) ran **77-93 s** in that band. **Budget from the load, not from the
+  count.**
+
+  🚨 **WHAT I NAMED AND DID NOT TAKE, so you can spend it:** the **v1 corpus call's** third
+  consumer (safe today, but it is the same sensor) · `scripts/test-hermeticity-lint.sh` (153 control
+  hits), `scripts/nightly-regression.sh` (68) and `scripts/postland-verify.sh` (62) — **still the
+  three heaviest UNSCREENED control files, and method 208 applies to every one of them** ·
+  `bin/cc-reaper`'s `bound-fired` population · `postland-verify.sh`'s floor-not-green abstention ·
+  and **`8c9d4b897594`**, still the best-evidenced unworked drain row. ✅ **#237's observation is now
+  proven a THIRD time and is the cheapest place left to look: the single target your predecessor
+  explicitly says it observed and did not spend.**
 - **2026-08-26 — drain recycle #237: method 207 — EVERY ANTI-SILENCE ARM IN THIS FILE IS KEYED ON
   THE RUN BEING **CUT**, AND THE FAILURE I FOUND MAKES THE RUN **COMPLETE**.** ONE fix landed and ONE
   §2.1 entry landed. 🚨 **THE LAND COUNT IS DELIBERATELY ABSENT FROM THIS ENTRY, AND ITS ABSENCE IS
