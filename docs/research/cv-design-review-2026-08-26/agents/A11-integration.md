@@ -67,3 +67,282 @@ are text. A perception hook could therefore inject *findings JSON* into a turn, 
 inject the annotated overlay. That asymmetry matters for §5.
 
 ---
+
+## 2. The decisive question: which surface actually lets the model SEE the image?
+
+I expected to find that MCP could not return images to Claude Code and that this settled the design.
+**That expectation is wrong, and saying so is the most useful thing in this report.**
+
+### 2.1 MCP: yes, verified, with a named limit
+
+The protocol side is unambiguous. `tools/call` results carry a `content` array whose members may be
+`text`, **`image`**, `audio`, `resource_link`, or embedded `resource`
+([MCP spec 2025-06-18, Tools § Tool Result](https://modelcontextprotocol.io/specification/2025-06-18/server/tools)):
+
+```json
+{ "type": "image", "data": "base64-encoded-data", "mimeType": "image/png" }
+```
+
+The client side is what actually matters, and Claude Code's own documentation confirms it handles
+image-returning tools as a distinct, supported case rather than dropping them — it states the limit
+that governs them, twice, in the same section
+([code.claude.com/docs/en/mcp § MCP output limits and warnings](https://code.claude.com/docs/en/mcp)):
+
+> **"Tools that return image data are still subject to `MAX_MCP_OUTPUT_TOKENS`"**
+>
+> *(and in the warning callout)* **"The annotation has no effect on tools that return image content;
+> for those, raising `MAX_MCP_OUTPUT_TOKENS` is the only option."**
+
+A client that discarded image blocks would have no reason to carve out a rule for them, let alone to
+exempt them from the per-tool `_meta["anthropic/maxResultSizeChars"]` escape hatch. So: **an MCP
+perception tool can return both `structuredContent` (the findings JSON) and an `image` block (the
+annotated overlay) in a single call, and the model sees both.** That is the strongest architectural
+argument MCP has, and it is a real one — it is the only surface that delivers structured data and
+pixels *atomically*, with no possibility of the two drifting apart.
+
+Its price, stated precisely:
+
+- **25,000 tokens default, 10,000-token fixed warning threshold** for the whole tool result, images
+  included. A 2000×1250 annotated overlay is 3,240 visual tokens (§3), so ~7 overlays per call
+  before the default limit bites — comfortable for one page, tight for a 13-page corpus in one call.
+- **The per-tool escape hatch does not apply.** `anthropic/maxResultSizeChars` raises text limits up
+  to 500,000 chars but is explicitly inert for image content. The only lever is the session-wide env
+  var, which means *one* noisy MCP server elsewhere in the session shares the budget you raised.
+- **Stdio servers are not auto-reconnected.** *"If an HTTP or SSE server disconnects mid-session,
+  Claude Code automatically reconnects with exponential backoff… Stdio servers are local processes
+  and are not reconnected automatically."* A local CV server is a stdio server. When it dies
+  mid-session, its tools vanish from the list and the model has no signal that a capability it never
+  saw was supposed to be there. **This is the single worst property of the MCP route for our case**,
+  and §5 turns on it.
+
+### 2.2 Bash-invoked CLI: image only via a file the model then `Read`s
+
+Correct, and the constraint is structural rather than a limitation to be worked around. A `Bash`
+tool result is a text block: stdout, stderr, exit code. There is no path by which bytes printed to
+stdout become an image block. The only route to the model's eye is **write a file, return its path,
+let the model call `Read`**, which is the documented image-ingestion path and the one already
+governed by the clamp ladder A9 measured
+(`docs/research/cv-design-review-2026-08-26/agents/A9-capture-fidelity.md:24-38`).
+
+Three consequences, and the first two are advantages:
+
+1. **The CLI chooses the resolution, so the clamp never fires by surprise.** A9's R3 row
+   (`A9-capture-fidelity.md:96`) is that an image over 2000 px or 3.75 MiB is silently
+   Lanczos-downsampled or palette-quantised to 256 colours or JPEG'd at q80→q20, and the agent then
+   reports banding and soft edges the browser never produced. A tool that emits ≤2000×2000 by
+   construction is *immune* to that failure; an MCP tool base64-ing whatever it rendered is not
+   obviously safer, since the same client-side clamp applies to its image block.
+2. **The artifact persists.** The PNG and the JSON are on disk, re-readable by a successor session,
+   diffable across runs, and attachable to a plan doc. An MCP image block exists only inside one
+   conversation. For a repo whose close protocol turns on *"if the detail is not committed and not in
+   a doc, you have not dropped it, you have deleted it"*
+   (`/Users/chrisren/Development/claude-infrastructure/CLAUDE.md:749-751`), a disk artifact is the
+   native shape.
+3. **The cost is one extra tool round-trip** (`Bash` → `Read`), and the model can *choose* not to
+   pay it. That is the honest disadvantage — and, on inspection, the feature: the JSON comes back on
+   the `Bash` call for free, and the pixels are fetched only when the JSON is insufficient.
+
+### 2.3 The other three, briefly
+
+- **Skill** — cannot deliver an image; it delivers *instructions to obtain one*. Its job here is
+  discoverability, and it is the cheapest way to buy it.
+- **Hook** — text-only in both directions (§1), so it can inject findings and never pixels. It is
+  also the wrong occasion: design review is something the agent *decides* to do, not something that
+  happens on every `Write`.
+- **Subagent** — can `Read` images into its own window, which is genuinely useful for a 13-page
+  corpus (the >20-image-block ceiling is per request, so fanning pages across subagents sidesteps
+  it). But its report to the lead is prose, and A9's own corpus records what that costs: a claim
+  read inside an agent's file is not a report that was sent. Use subagents for **breadth**, never as
+  the delivery surface for the perception layer itself.
+
+---
+
+## 3. The data contract
+
+### 3.1 The invocation
+
+One executable, one call, three artifacts, all paths printed on stdout as the only structured
+output the `Bash` result needs to carry:
+
+```
+design-perceive <url|file> --out <dir> [--viewport 1440x900] [--dpr 2] [--clip <sel>]
+```
+
+```json
+{
+  "ok": true,
+  "schema": "design-perceive/1",
+  "screenshot": "/tmp/dp-a1b2/home@1440x900.png",
+  "overlay":    "/tmp/dp-a1b2/home@1440x900.annotated.png",
+  "snapshot":   "/tmp/dp-a1b2/home.layout.json",
+  "raster":     [2000, 1250],
+  "clamp_safe": true,
+  "findings":   [ /* §3.2 */ ]
+}
+```
+
+`clamp_safe` is not decoration. It is the assertion `w ≤ 2000 && h ≤ 2000 && bytes ≤ 3932160`,
+computed on the written file, which is A9's R3 remedy stated as a field rather than as a discipline
+(`A9-capture-fidelity.md:96`). **If it is `false`, the model must not treat what it sees as what the
+browser rendered**, and the tool should say so rather than let the client silently palette-quantise.
+
+### 3.2 One finding
+
+```json
+{
+  "id": "F07",
+  "rule": "contrast-ratio",
+  "layer": "dom",
+  "target": "main > section:nth-of-type(2) > button.primary",
+  "claim": "text 3.01:1 against blue-600 fill; WCAG AA body text requires 4.5:1",
+  "severity": "high",
+  "confidence": "determined",
+  "bbox_css": [24, 180, 312, 44],
+  "bbox_raster": [48, 360, 624, 88],
+  "observed": { "ratio": 3.01, "fg": "#DBEAFE", "bg": "#2563EB" },
+  "required": { "ratio": 4.5 },
+  "evidence": "computed-styles"
+}
+```
+
+Five fields carry design decisions worth defending:
+
+- **`layer`** ∈ `dom` | `pixel` | `judgement`. This is the corpus's central measurement made into a
+  schema field: the README's table shows deterministic rules at **9/9 on DOM-determined defects and
+  0/3 on pixels-only**, and blind Claude vision at **2/3 on pixels-only**. Tagging the layer lets
+  the judging model apply the right prior — a `dom` finding is *arithmetic* and is not up for
+  debate; a `judgement` finding is an opinion and may be overruled by the pixels.
+- **`confidence`** ∈ `determined` | `measured` | `suspected`. `determined` means the browser already
+  computed it and no model should be asked to re-derive it. This encodes the README's finding (a) —
+  *never ask a model to compute what the browser already knows*.
+- **`id` + `claim` together are the dedup key**, not `(rule, target)`. This is the bug the corpus
+  found live: `bench/detect_dom.py:338` builds its baseline set as
+  `{(c["rule"], c["target"], c["detail"])}` — it already spans the claim, and the README records
+  that keying on the shorter tuple silently swallowed a real colour-token drift because an unrelated
+  `token-drift` finding sat on the same element. **The key must span the claim, not just its
+  location.**
+- **`bbox_css` and `bbox_raster` are both present.** The model reasons in the coordinate space of
+  the image it was shown, which is the raster; a human or a follow-up automation acts in CSS px. Two
+  fields is cheaper than one wrong conversion.
+- **`evidence`** names *how* it was known (`computed-styles`, `pixel-diff`, `edge-detect`,
+  `model`), so a disputed finding can be re-argued against its source rather than re-litigated.
+
+### 3.3 How the pair is presented to the judging model
+
+**Default — one image, JSON as text, no overlay:**
+
+1. `Bash: design-perceive …` → the JSON above lands in the tool result as text. The `dom`-layer
+   findings are now *settled*; the model is told, in the skill's own words, not to re-check them.
+2. `Read: /tmp/dp-a1b2/home@1440x900.png` → the **clean** screenshot, unannotated.
+3. The model judges what no rule can reach — the README's third measured finding, where blind review
+   caught a caption promising grey rows that do not exist, an unlabelled icon button with the
+   smallest hit target, and left-aligned numeric columns. **None is a violation; each is a judgement
+   about whether the page makes sense.** Boxes drawn on the page would not have helped find any of
+   them, and would have occluded pixels while trying.
+
+**Arbitration only — the overlay is a second, conditional, cropped image.** It is fetched when and
+only when the model's blind judgement *contradicts* a `dom`-layer finding, or when two findings
+share a region and the model must say which element is meant. Then:
+
+4. `Read: /tmp/dp-a1b2/home@1440x900.annotated.png` — or better, a `--clip`ped re-run of the
+   disputed region at ≤1000×1000 CSS px @2, which A9 identifies as the only resample-free window
+   (`A9-capture-fidelity.md:86`: *"The real lever is cropping, not DPR"*).
+
+**The overlay's own rules**, because a badly drawn one corrupts the judgement it was meant to
+support: draw **outside** the bbox (1-px stroke on the outer edge, never a fill, never a
+translucent wash), label with the bare `id` in a gutter rather than over content, and use a hue no
+design system in the corpus uses. A design critic is being asked to assess visual quality; anything
+you paint on the page is a defect you injected.
+
+---
+
+## 4. Token economics for one realistic review iteration
+
+**Method.** Visual tokens are **exact**, from `⌈w/28⌉ × ⌈h/28⌉`
+([Anthropic Vision § Resolution and token cost](https://platform.claude.com/docs/en/build-with-claude/vision);
+the 28×28-patch rule and Opus 5's 2576-px / 4784-token tier are recorded at
+`A9-capture-fidelity.md:46-53`). Text tokens are **estimated** at ~1 token per 3.3 characters of
+compact JSON — labelled as an estimate, not a measurement.
+
+One iteration = **one page, one viewport (1440×900 @ DPR 2), 12 findings.**
+
+| Payload | Delivery | Size | Tokens | Notes |
+|---|---|---|---|---|
+| Findings JSON, compact shape (12 × 231 chars) | `Bash` stdout, text | 2.8 KB | **~840** *(est.)* | Free of any image ceiling |
+| Findings JSON, full shape of §3.2 (12 × 397 chars) | `Bash` stdout, text | 4.8 KB | **~1,440** *(est.)* | +600 tok for `observed`/`required`/`evidence` |
+| **Clean screenshot** 1440×900 @2 → clamped to 2000×1250 | `Read` | — | **3,240** *(exact)* | The clamp already fired: A9 measures eff **1.39×**, not 2× |
+| **Annotated overlay**, same dimensions | `Read` | — | **3,240** *(exact)* | **A full second image. The boxes are not the cost — the pixels under them are.** |
+| Arbitration crop 700×440 @2 = 1400×880 | `Read` | — | **1,600** *(exact)* | The cheap conditional second look |
+| Square region 1000×1000 @2 = 2000×2000 | `Read` | — | **5,184** *(exact)* | ⚠️ **over Opus 5's 4,784-token tier ceiling** — the API resizes on top of the client clamp |
+| Mobile 390×844 @3 → clamped to 924×2000 | `Read` | — | **2,376** *(exact)* | |
+| MCP tool schemas, if this were an MCP server | resident, every request | 3 tools | **~750-1,200** | Paid on every turn of the session, not per call |
+
+### The three conclusions the arithmetic forces
+
+**(1) Raw coordinates as text are ~4× cheaper than an annotated overlay, and the gap is the whole
+argument.** Twelve findings with bounding boxes cost ~840 tokens; the same twelve drawn onto the
+screenshot cost **3,240** — and cost it *in addition to* the clean screenshot the model still needs,
+because a critique cannot be run on an image with rectangles painted over the subject. Standing
+overlay delivery is therefore **~7,300 tokens per page against ~4,080**, a 79% increase, to buy
+attention-direction the JSON already provides via `bbox_raster`.
+
+**(2) The overlay earns its tokens only in arbitration, and then only cropped.** Its real value is
+disambiguation — *which* of four similar cards is `F07` about — and disambiguation is a
+region-scale question. The 700×440 @2 crop delivers it for **1,600 tokens**, half the cost of a
+full-page overlay, at the one moment it changes the verdict. That is the value-per-token case:
+conditional, cropped, and second.
+
+**(3) The >20-image-block rule is a hard architectural bound on batching, not a soft one.** A9
+records that beyond 20 image blocks in one request the per-image dimension cap tightens and
+oversized images are **rejected rather than downscaled** (`A9-capture-fidelity.md:58`). A 13-page
+corpus at one clean screenshot each is 13 blocks — fine. The *same* corpus with a standing overlay
+is 26 blocks — **over the line, and it fails by rejection**, which surfaces as a broken request
+rather than a degraded picture. Overlay-by-default is not merely expensive; at corpus scale it is
+the difference between a working review and an error.
+
+A note on the MCP row: 25,000 tokens is the default `MAX_MCP_OUTPUT_TOKENS` ceiling for a whole tool
+result, so ~7 full-page overlays fit in one call. The resident schema cost is the more interesting
+number — it is paid on **every request for the life of the session**, including the ~85% of turns
+that do no design review at all. A CLI's schema cost is zero because `Bash` is already loaded.
+
+---
+
+## 5. Lifecycle — keeping a local model server warm, this repo's way
+
+**First, the question behind the question.** A warm model server is only needed if a local model is
+in the design. The corpus says it is not: `mlx-community/Qwen3.8-27B-4bit` took **30.2 s at the one
+resolution where it was right** and hallucinated a defect at the two where it was wrong, at 16-19 GB
+resident (README § The local model, measured). So the honest lifecycle recommendation is **do not
+run a resident model server at all** — the deterministic layer is 80 ms and stateless, and the
+judging model is the session's own. Everything below is what to do *if* a resident component is ever
+justified (a CLIP/DINO embedding server for visual-regression diffing is the plausible candidate).
+
+**Second: this repo already has a daemon doctrine, and it is unusually well-argued. Follow it.**
+
+| Convention | Where it lives | What it obliges |
+|---|---|---|
+| **Repo is SSOT; live plist must match** | `scripts/launchd-parity-lint.sh:2-16` | Ship `launchd/com.claude.<name>.plist` in-repo. The lint exists because a 2026-07-25 audit found five plists rewritten in place and three silent repo-vs-live drifts, each of which *"would have CHANGED LIVE BEHAVIOUR on the next reinstall"*. Discoverability is by **Label**, not filename. |
+| **Declare the job in the fleet manifest** | `launchd/fleet.manifest:115-122` | Six `\|`-separated fields: `label \| expect \| interval_s \| evidence \| owner_row \| activate`. `expect` ∈ `run`/`staged`/`retired`; `evidence` names the durable artifact that proves execution, `auto` reading `StandardOutPath` from the live plist. **A job with no declaration is never activated** — `install.sh:844-848` treats an absent manifest row as "never activate", failing closed. |
+| **The agent never loads launchd** | `launchd/com.claude.dispatcher.plist:8-11` | Ship it `RunAtLoad=false` and *unloaded*, with an operator activation script at `docs/activation/pending-activation/NN-<name>-activate.sh`. Landing the plist is the agent's job; `launchctl bootstrap` is the operator's. |
+| **`/bin/bash -c`, never a bare `ProgramArguments` path** | `launchd/com.claude.deploy-live.plist:12-13` | *"launchd expands neither `~` nor `$HOME` inside ProgramArguments, and its PATH has no Homebrew — where git, bats and timeout(1) actually live. `Standard*Path` CANNOT take `$HOME` at all, hence the literal."* A Python/MLX server needs Homebrew and a venv on PATH; this is not optional. |
+| **Fall back from the live layer to the repo copy** | `launchd/com.claude.deploy-live.plist` ProgramArguments | `D="$HOME/.claude/scripts/x.sh"; [ -x "$D" ] \|\| D="$HOME/Development/claude-infrastructure/scripts/x.sh"`. The deploy-live header records **59 × `cannot execute: No such file or directory`** because the job's exec target was a symlink the job itself was responsible for creating. Any new daemon inherits that bootstrap circle. |
+| **Background QoS, low-priority IO** | 15 of 18 plists set `ProcessType=Background`, `LowPriorityIO`, `Nice` | And `MEMORY.md → darwin-qos-band-mechanics` records that `nice` alone does **not** demote (PRI stays 31) — only `taskpolicy -c background` reaches PRI 4. A 19 GB GPU-resident model at foreground QoS competes with the operator's own editor. |
+
+**Concretely, the shape a warm perception server would take here:**
+
+- **Not** `KeepAlive` alone. Seven jobs use it (`com.claude.caffeinate-floor`,
+  `compressor-sentinel`, `auth-timeseries`, `browser-spin-guard`, `lead-supervisor`,
+  `power-policy-verify`, `staged/lead-reconciler`), and it is the right primitive for a resident
+  process — but pair it with an **idle-unload timer inside the server**, because a 16-19 GB resident
+  model held for a review that happens twice a week is 25-30% of the machine's unified memory rented
+  permanently against a burst workload.
+- **Liveness is the server's own mutex or socket, never a log timestamp.** `MEMORY.md →
+  liveness-proxy-cannot-be-output-age` records that a stamp written at run *end* reads inert
+  mid-run. For a model server, "warm" means the socket accepts and returns a health JSON in <200 ms.
+- **`evidence` in the manifest must be a durable artifact**, not `-`. `fleet.manifest:115-116` shows
+  `-` used for jobs whose product is elsewhere, and the header states that with no sensor, **S5
+  STALLED is never claimed** — i.e. an evidence-less daemon can rot without ever producing a row.
+- **The CLI must work with the server down.** This is the §6 argument, and it is the reason the
+  server is an optimisation rather than a dependency.
+
+---
