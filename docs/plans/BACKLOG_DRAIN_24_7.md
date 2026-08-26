@@ -128,6 +128,17 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
     cases SKIP for want of history and the count read differently; re-measured on a real worktree
     at `51bf8570` it is 3 of 7. The commit body is left as written rather than rewritten — the
     branch is pushed — and this line is the correction of record.
+  - ✅ **THE WHOLE-DIFF REGRESSION VERDICT, apples-to-apples.** The 38 gate-selected suites present
+    in both trees, run on a full-history `origin/main` worktree and on this branch: **1,163 vs
+    1,165 cases · 171 vs 168 not-ok**, and the diff is FOUR lines wide with nothing else moved —
+    the three `moving-ref-control-lint.bats` cases go RED→green, and the two new
+    `tests/ship-land.bats` gate-arm cases are additions. Every one of the remaining 168 failures is
+    byte-identical on both sides: they are this Linux container's macOS-only paths (`ps` flags,
+    iTerm2, launchd plists, `date -r`), pre-existing on trunk and not this diff's. ⚠️ Two of them
+    are worth naming because an earlier, SHALLOW base clone made them look like regressions —
+    `tsv-field-collapse`'s cc-board WK-column case and `operator-readout`'s pre-rank RED-PROOF. Both
+    reproduce RED on the full-history trunk worktree. **A base tree missing objects is not a
+    control**: its skips read as passes and its passes were a different code path.
   - 🚨 **THE GENERALISABLE HALF: A RULE'S HOME DECIDES ITS BLAST RADIUS, AND A COMMENT'S HOME IS ONE
     FILE.** Nothing here was hidden — the rule is written down, in this repo, in plain language,
     with the right reason. It still failed, because the only mechanism carrying it was a reader who
