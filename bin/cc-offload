@@ -399,8 +399,16 @@ cmd_up() {
   # extra still gets the return path. `--unmanaged` is the deliberate opt-out, and it is spelled as
   # a flag rather than as "leave it blank" so an UNMANAGED fire is a decision in the argv rather
   # than an accident of environment.
+  # `:-` FIRST, and it is not style. This file runs under `set -u`, so a bare
+  # `${ITERM_SESSION_ID##*:}` is an UNBOUND VARIABLE wherever that variable is unset — and it is
+  # unset in exactly the callers this command exists for: a fired session, a hook, cron, launchd,
+  # CI. `cc-offload up` died there with `ITERM_SESSION_ID: unbound variable` before it validated a
+  # single argument, which is why the tests for its argument validation could only pass on a box
+  # with iTerm in the environment. Note the four lines below already handle the unset case and were
+  # therefore unreachable: the guard is what makes the FIRE-AND-FORGET branch a real branch.
   if [ "$UP_UNMANAGED" = 0 ] && [ -z "$UP_NOTIFY_BACK" ]; then
-    UP_NOTIFY_BACK="${ITERM_SESSION_ID##*:}"
+    UP_NOTIFY_BACK="${ITERM_SESSION_ID:-}"
+    UP_NOTIFY_BACK="${UP_NOTIFY_BACK##*:}"
   fi
   if [ "$UP_UNMANAGED" = 1 ]; then UP_NOTIFY_BACK=''
   elif [ -z "$UP_NOTIFY_BACK" ]; then
