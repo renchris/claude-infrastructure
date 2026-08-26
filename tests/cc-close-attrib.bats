@@ -129,6 +129,68 @@ rec() { ls -1t "$CC_CLOSE_RECORDS_DIR"/*.json 2>/dev/null | head -1; }
   grep -q '"signal":"15",'   "$(rec)"                  # 143 = 128 + SIGTERM(15)
 }
 
+# ── (ii-b) WHICH PROCESS THE SIGNAL WAS AIMED AT ────────────────────────────────────────────
+# The two arms below are the whole point of sig_reached_wrapper: BOTH die 143 / signal "15", so
+# every field that existed before this test agrees across them byte-for-byte, and only the new
+# one separates a kill aimed at the claude CHILD from one that reached the WRAPPER. The second
+# arm is the positive control, chosen to answer differently from the first — a pair whose cells
+# agreed would be measuring the harness rather than the field.
+#
+# This is the distinction docs/research/sigterm-forensics-2026-08-25.md had to reconstruct by
+# hand from the ABSENCE of co-victims (§ line 84) and which its § line 71 calls the fact that
+# "redirects the entire search". It is NOT si_pid: that doc's top recommendation asks for si_pid
+# in _forward(), which bash cannot reach at all — see the long note at bin/cc-close-attrib's
+# _forward() block for why, and for why the only implementable form of that request would have
+# been blind to the very kill it was written for.
+@test "record separates a signal aimed at the child from one that reached the wrapper" {
+  local sChild="$BATS_TEST_TMPDIR/sChild" sWrap="$BATS_TEST_TMPDIR/sWrap"
+  # child-alone TERM — the wrapper's trap never runs.
+  mk_stub "$sChild" 'kill -TERM $$'
+  # a TERM that reaches the WRAPPER, which forwards it, so the child still dies of TERM. The
+  # sleep is what makes the forward FALSIFIABLE: without a forward this stub exits 0, not 143.
+  mk_stub "$sWrap" 'kill -TERM $PPID' 'sleep 5' 'exit 0'
+
+  run bash "$WRAP" "$sChild"
+  [ "$status" -eq 143 ]
+  grep -q '"exit_code":143,'          "$(rec)"
+  grep -q '"signal":"15",'            "$(rec)"
+  grep -q '"sig_reached_wrapper":""'  "$(rec)"        # aimed at the child alone
+
+  run bash "$WRAP" "$sWrap"
+  [ "$status" -eq 143 ]                               # ...so the forward genuinely happened
+  grep -q '"exit_code":143,'              "$(rec)"    # every pre-existing field AGREES with arm 1
+  grep -q '"signal":"15",'                "$(rec)"
+  grep -q '"sig_reached_wrapper":"TERM"'  "$(rec)"    # ...and only the new field discriminates
+  true
+}
+
+@test "a REAL record carrying the new field stays valid JSON and shadows nothing" {
+  # Deliberately NOT a hand-written fixture. A fixture would assert a property of a string this
+  # test itself wrote, so no mutation of the WRITER could ever red it — it would be green by
+  # construction. This drives the real wrapper and reads its real record, so the printf that
+  # builds the JSON is the subject.
+  local stub="$BATS_TEST_TMPDIR/sJson"
+  mk_stub "$stub" 'echo "boom" >&2' 'kill -TERM $PPID' 'sleep 5' 'exit 0'
+  run bash "$WRAP" "$stub"
+  [ "$status" -eq 143 ]
+  local r; r="$(rec)"
+  [ -n "$r" ]
+
+  # (a) VALIDITY. The record is built by printf, never jq (bin/cc-close-attrib's "NO HARD
+  # DEPENDENCIES" rule), so a malformed separator in that format string is the standing hazard
+  # of editing it — and it would not show up in any single-field grep.
+  run python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$r"
+  [ "$status" -eq 0 ]
+
+  # (b) NO SHADOW. close_record_field greps an UNANCHORED "<key>": and takes head -1, so this is
+  # the assertion that the field NAME was chosen safely — not merely that the writer emits it.
+  local pid; pid="$(basename "$r" | cut -d- -f1)"
+  run bash "$HOOK" --close-fields "$pid"
+  [ "$(printf '%s' "$output" | cut -f1)" = "143" ]   # exit_code, not shadowed
+  [ "$(printf '%s' "$output" | cut -f2)" = "15" ]    # signal reads 15, NOT "TERM"
+  true
+}
+
 # ── (iii) stderr passthrough AND capture ────────────────────────────────────────────────────
 @test "stderr still reaches the caller's fd2 while the tail is captured" {
   local stub="$BATS_TEST_TMPDIR/stub"
