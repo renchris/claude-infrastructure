@@ -150,6 +150,11 @@ session's brief requires its **first act** to be pushing that branch — an empt
 Absence then becomes informative: no ref inside the budget is `BOOTING` (expected); no ref past it
 is `NOT-STARTED` (actionable — re-fire, or check entitlement).
 
+✅ **IMPLEMENTED 2026-08-26 — `scripts/lib/cloud-payload.sh`, both lanes** (backlog `0c8b39b67665`).
+This paragraph was PROSE ONLY for nineteen days, and it is the sole basis on which every other
+sentence in this document reads `C1 NOT-STARTED` as *"never booted"*. §14 has the record and the
+two lane-specific inversions it fixed.
+
 ### 4.2 The discriminator the whole design rests on
 
 Measured, not assumed:
@@ -776,7 +781,9 @@ Before any cloud session is fired, in this order:
 1. `cc-cloud declare --id <id> --branch <b> --paths <what it will land> --url <session url>` —
    an undeclared cloud session is unobservable, and `declare` refuses without `--id`/`--branch`.
 2. The session's brief must require **pushing the declared branch as its first act**, so that
-   absence past the boot budget means something (§4.1).
+   absence past the boot budget means something (§4.1). ✅ **This step is now automatic on both
+   lanes** — `scripts/lib/cloud-payload.sh` wraps every brief, so a caller cannot forget it and a
+   fire whose contract library is unreachable refuses rather than degrading (§14).
 3. §5.2 must be wired first — otherwise `com.claude.team-orphan-reaper` may archive the team
    while the session is healthy.
 4. On completion, `cc-cloud retire --id <id>` — or let C3 `LANDED` render it silent, which it does
@@ -1887,3 +1894,91 @@ link at all and the shared checkout is 8 commits behind. `deploy-live` refuses c
 tree descends live HEAD; `postland-verify` has the sha queued and emits ~0.17 greens/day). Until it
 converges, the launchd sweep runs the OLD script and returns nothing — filed `5354fffc4079`.
 
+
+---
+
+## 14 · §4.1's contract stops being prose — the first act is implemented (2026-08-26)
+
+Backlog `0c8b39b67665`. §4.1 has said since 2026-08-07 that absence "can only be resolved by
+contract: the session's brief requires its **first act** to be pushing that branch — an empty commit
+is enough". **Nothing implemented it, on either lane, for nineteen days** — and it is the sole
+basis on which `C1 NOT-STARTED` is readable as *never booted* anywhere in this document.
+
+### 14.1 · What each lane actually said, and why both were the same defect
+
+| Lane | What the session was told | What §4.3 then read |
+| --- | --- | --- |
+| CLI — `handoff-fire.sh --cloud` | a return block ending *"Push whatever you have **before you finish**"* — the push as a LAST act | a healthy session three hours into its brief has pushed nothing ⇒ **C1 NOT-STARTED** |
+| API — `cc-offload up --via api` | `cat "$brief"` **verbatim** — no return instruction of any kind | the same, and the session was never even told the branch existed |
+
+The API lane's silence is the more surprising half and worth stating plainly: the create authorises
+exactly one branch in `outcomes.git_info.branches` (`cloud-create-api.py:357/411`), so that lane
+looked complete. **Authorising a push and instructing one are different acts.** An authorised branch
+nobody pushes is exactly as invisible as an unauthorised one.
+
+**Why this is a real cost and not a cosmetic one.** `NOT-STARTED` is the arm whose cure is
+*re-firing*. Under the un-implemented contract that arm covers three worlds with opposite cures —
+the VM never booted (re-fire is right), the VM booted and has not committed yet (wait), the VM is
+deep in the brief (leave it alone) — so acting on it spends a second VM's rate limit duplicating a
+session that is already running. §11.4 terminated on precisely this ambiguity and says so in the
+same breath: NOT-STARTED "means the declared ref never appeared — **NOT** that the session did
+nothing", and this box "structurally cannot find out" which.
+
+### 14.2 · What was built
+
+`scripts/lib/cloud-payload.sh` — one owner of the contract text, sourced by both lanes, no side
+effects. Suite `tests/cloud-payload.bats` (11 tests).
+
+```
+cc_cloud_boot_block   <branch>              the FIRST ACT
+cc_cloud_return_block <branch>              the return block (unchanged in substance)
+cc_cloud_payload      <brief-file> <branch> boot · brief · return, in that order
+```
+
+The boot block leads the payload, because a model reads top-down and this is the one instruction
+whose entire value is being executed before anything else in the message. It carries its own WHY:
+a cloud session is a peer running this repo's standards, and an unexplained step is the first one
+dropped when the brief gets interesting — which is exactly when the observability matters.
+
+**One library, not two blocks of prose in two files.** §5.1 deleted `bin/cc-cloud-watch` because
+two tools reading one observable set drift and a caller cannot tell which is authoritative; two
+copies of the contract would drift the same way, and the branch name is the only thing that is
+per-caller.
+
+**`--allow-empty` is the mechanism, not a detail.** A branch cannot be pushed before a commit
+exists, and a session that has not written a file yet has none — so without it the "first act" is
+unsatisfiable until the work starts, which is the original failure with an extra step.
+
+**What the empty commit buys, read as the state function reads it.** The third row is new: before
+the boot push, a booted-then-wedged session was indistinguishable from a VM that never started, so
+`STALLED` was unreachable for any cloud session that had not yet pushed work.
+
+| observation | arm | what it now means |
+| --- | --- | --- |
+| no ref, inside boot budget | C2 BOOTING | expected — the VM is still coming up |
+| no ref, past boot budget | C1 NOT-STARTED | the VM never reached a shell — **re-fire is correct** |
+| ref exists, sha quiet past `stall_s` | C4 STALLED | it booted and then stopped — **do not re-fire** |
+
+**Both lanes refuse rather than degrade when the library is unreachable** — `handoff-fire.sh` exits
+10 with `cloud-payload-absent` (beside the existing `cloud-lib-absent`, same fail-closed reasoning),
+and `cc-offload up --via api` refuses with exit 3 **before the create**, on the same ordering rule
+the preflight follows: a refusal is only worth anything before an account's rate limit has been
+charged. Firing without the contract produces the exact state this venue's every refusal exists to
+prevent.
+
+### 14.3 · One thing found on the way, and it had made eleven tests unrunnable
+
+`bin/cc-offload:411` expanded `${ITERM_SESSION_ID##*:}` bare under `set -u`. Wherever that variable
+is unset — launchd, cron, a hook, a fired session, any terminal that is not iTerm — `up` **aborted
+outright**, two lines above the `note` that exists to handle exactly that case. The unset branch was
+therefore unreachable from the moment it was written.
+
+Its own suite could not see it: every case that reaches that line is red under any runner whose
+environment is not an iTerm pane, so on this box the suite was green and the bug was invisible.
+Measured here on the container that fixed it, `tests/cc-offload.bats` went **11 red → 0** on the
+one-token fix, with the rest of the cloud corpus unchanged (27 → 16 across all `handoff-fire-*`,
+`cloud-*`, `cc-cloud` and `cc-offload` suites; the 16 survivors are macOS-only cases —
+`hw.ncpu`, `vm_stat`, `osascript` — identical to the pre-change baseline).
+
+It is recorded here rather than filed because it is the same shape as the item it was found under:
+**a guard that reads as present and has never once executed.**

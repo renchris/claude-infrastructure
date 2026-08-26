@@ -85,6 +85,14 @@ REPO="${CC_OFFLOAD_REPO:-$ROOT}"
 # The create path is interactive-only and 2.1.114 has no --cloud at all; keep ONE default with
 # scripts/lib/cloud-create.sh rather than a second opinion about which binary can fire.
 CLOUD_CLAUDE="${CC_CLOUD_CREATE_BIN:-$HOME/.claude-220/node_modules/.bin/claude}"
+# The BRIEF contract — CLOUD_OBSERVABILITY.md §4.1's first act — is a library, sourced by both lanes.
+# The CLI lane gets it inside handoff-fire.sh; this file needs it directly because the API lane's
+# brief goes out over cc-notify and never passes through that script. Sourced at load and CHECKED at
+# use, so a missing library refuses `up` (the one verb that would fire an unobservable session)
+# without breaking `ls`, `say`, `land` or `gc`, none of which have anything to do with the contract.
+PAYLOAD_LIB="${CC_OFFLOAD_PAYLOAD_LIB:-$ROOT/scripts/lib/cloud-payload.sh}"
+# shellcheck disable=SC1090  # runtime-resolved source
+[ -f "$PAYLOAD_LIB" ] && . "$PAYLOAD_LIB"
 
 # ── colour: explicit truecolor only. NEVER SGR-2 — it collapses to invisible on dark themes, and
 #    this output is data the operator is hunting through (claude-accounts:1424, cc-where:48). ─────
@@ -514,6 +522,14 @@ cmd_up_api() {
   local pf="$1" n="$2" account="$3" dry="$4" i rc=0 fired=0
   local api="${CC_OFFLOAD_CREATE_API:-$ROOT/scripts/cloud-create-api.py}"
   [ -f "$api" ] || { note "cc-offload: missing $api"; return 3; }
+  # A precondition, refused BEFORE the create rather than discovered after it — the same ordering
+  # rule the preflight follows on the sibling lane: a refusal is only worth anything before an
+  # account's rate limit has been charged.
+  command -v cc_cloud_payload >/dev/null 2>&1 || {
+    note "cc-offload: the brief contract is unreachable ($PAYLOAD_LIB)."
+    note "  Refusing to create: the session could not be told to push its boot commit first, so it"
+    note "  would read NOT-STARTED for its whole life without that ever meaning it never booted."
+    return 3; }
 
   # The router is the arbiter — never re-rank accounts here.
   if [ "$account" = auto ]; then
@@ -572,7 +588,15 @@ cmd_up_api() {
         || note "cc-offload: custody could not be opened for $sid — the close-integrity arm is NOT armed for it."
     fi
 
-    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$(cat "$pf")" >/dev/null 2>&1
+    # THE BRIEF IS WRAPPED, NOT RAW — and until 0c8b39b67665 it was `cat "$pf"` verbatim, which is
+    # how this lane fired sessions that were never told the branch existed. The create authorises
+    # exactly one branch in `outcomes.git_info.branches` (cloud-create-api.py:357/411), but
+    # authorising a push and instructing one are different acts: a VM that pushes nothing is
+    # indistinguishable from a VM that never booted, and §4.3 resolves that tie as C1 NOT-STARTED —
+    # whose cure is a re-fire, on the same account's rate limit, of a session that is already
+    # running. cc_cloud_payload prepends the first-act boot commit and appends the return block.
+    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" \
+      "$(cc_cloud_payload "$pf" "$br")" >/dev/null 2>&1
     local drc=$?
     if [ "$drc" != 0 ]; then
       note "cc-offload: $sid created+declared but the brief did NOT queue (cc-notify exit $drc)."

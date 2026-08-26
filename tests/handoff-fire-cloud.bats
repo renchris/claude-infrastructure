@@ -461,3 +461,62 @@ EOF
   [ -s "$CLOUD_DECL_LOG" ]
   [ ! -f "$BATS_TEST_TMPDIR/pf-off.log" ]                # the override SKIPS the probe, not just its verdict
 }
+
+# ── the FIRST-ACT contract (backlog 0c8b39b67665) ───────────────────────────────────────────────
+# A DIFFERENT defect from B1's, on the same three lines of payload. B1 fixed WHERE the session
+# pushes; these fix WHEN. The block this leg shipped with ended "Push whatever you have before you
+# finish" — the push as a LAST act — so a healthy session three hours into its brief had put nothing
+# on the remote, and CLOUD_OBSERVABILITY.md §4.3's state function (which reads exactly one
+# observable) called that C1 NOT-STARTED: the arm whose cure is RE-FIRING, i.e. a second VM
+# duplicating a session that is already running, on the same account's rate limit. §4.1 fixed it in
+# prose two weeks earlier — "the session's brief requires its FIRST act to be pushing that branch —
+# an empty commit is enough" — and nothing implemented it.
+#
+# RED-PROOF (re-runnable): replay against `git show <pre-fix sha>:scripts/handoff-fire.sh` in a
+# scratch tree. 20 goes RED (no `--allow-empty` anywhere in the payload) and 21 goes RED (the
+# payload's own words put the push at the end). 22 is the non-discrimination control.
+
+@test "20 the payload's FIRST ACT is an empty commit pushed to the assigned branch" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: t" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ -s "$BATS_TEST_TMPDIR/create.log" ]
+  local sw ci push
+  sw="$(grep -n 'git switch -c claude/fire-' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  ci="$(grep -n 'git commit --allow-empty' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  push="$(grep -n 'git push -u origin HEAD' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$ci" ] || { echo "the payload never instructs a boot commit — absence stays ambiguous"; false; }
+  [ "$sw" -lt "$ci" ] || { echo "the branch must exist before the commit (sw=$sw ci=$ci)"; false; }
+  [ "$ci" -lt "$push" ] || { echo "the commit must exist before the push (ci=$ci push=$push)"; false; }
+}
+
+@test "21 the boot block PRECEDES the brief, and says what absence is otherwise read as" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: t" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  local first task
+  first="$(grep -n 'FIRST ACT' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  task="$(grep -n 'cloud venue gate fixture payload' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$first" ] || { echo "nothing in the payload marks the push as the first act"; false; }
+  [ -n "$task" ] || { echo "the brief itself is missing from the payload"; false; }
+  # A model reads top-down. An instruction whose entire value is being executed before anything
+  # else cannot sit under the task it is supposed to precede.
+  [ "$first" -lt "$task" ] || { echo "the boot contract must precede the brief (first=$first task=$task)"; false; }
+  grep -q 'NOT-STARTED' "$BATS_TEST_TMPDIR/create.log" \
+    || { echo "the session is never told what its silence is read as"; false; }
+}
+
+@test "22 an unreachable payload library REFUSES the fire — the quota is not spent" {
+  # The same fail-closed rule the create library already follows, and for a sharper reason: firing
+  # without the contract produces a session that spends an account's rate limit and can never be
+  # distinguished from one that never booted. That is the exact state this venue's every refusal
+  # exists to prevent, so an absent contract is a refusal and never a degraded fire.
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: this create must never be reached" 0
+  cfire CC_FIRE_CLOUD_PAYLOAD_LIB="$BATS_TEST_TMPDIR/no-such-payload-lib.sh" \
+        CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ "$status" -eq 10 ]
+  [[ "$output" == *"cloud-payload.sh is unreachable"* ]] || false
+  [ ! -f "$BATS_TEST_TMPDIR/create.log" ]                # nothing was created
+  [ ! -f "$CLOUD_DECL_LOG" ]                             # and nothing was declared
+}

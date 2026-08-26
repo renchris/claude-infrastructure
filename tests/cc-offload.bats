@@ -622,3 +622,67 @@ EOF
     [[ "$output" == *"cc-offload $v"* ]] || false
   done
 }
+
+# ── the FIRST-ACT contract on the API lane (backlog 0c8b39b67665) ────────────────────────────────
+# This lane delivered `cat "$brief"` VERBATIM. The create authorises exactly one branch in
+# `outcomes.git_info.branches`, but authorising a push and instructing one are different acts: the
+# session was never told the branch existed, so it pushed when (or if) it felt like it, and
+# CLOUD_OBSERVABILITY.md §4.3 — a state function over ONE observable — read the resulting silence as
+# C1 NOT-STARTED. That arm's cure is a re-fire, which spends a second VM on the same account's rate
+# limit duplicating a session that is already running. §4.1 specified the fix in prose and neither
+# lane implemented it.
+#
+# RED-PROOF (re-runnable): replay against `git show <pre-fix sha>:bin/cc-offload` in a scratch tree.
+# Both cases go RED — the first because the delivered brief is byte-identical to the task file, the
+# second because there was no contract to be missing.
+
+@test "up --via api wraps the brief in the FIRST-ACT boot contract, on the declared branch" {
+  echo "TASK — the brief body." >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+import sys
+print("session_apiboot")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+  # The empty commit is the mechanism: a branch cannot be pushed before a commit exists, and a
+  # session that has not written a file yet has none.
+  grep -q 'git commit --allow-empty' "$CALLS" || { echo "the delivered brief carries no boot commit"; false; }
+  # THE SAME branch the declaration watches — a contract naming a different ref is worse than none,
+  # because the declaration would then poll a name nothing will ever advance (§11.2).
+  local br
+  br="$(grep -o 'cc-cloud declare --id session_apiboot --branch [^ ]*' "$CALLS" | head -1 | awk '{print $NF}')"
+  [ -n "$br" ] || false
+  grep -q "git switch -c $br" "$CALLS" || { echo "the boot contract names a branch other than $br"; false; }
+  # And it leads: the brief body must come after the first act, not before it.
+  local first task
+  first="$(grep -n 'FIRST ACT' "$CALLS" | head -1 | cut -d: -f1)"
+  task="$(grep -n 'TASK — the brief body' "$CALLS" | head -1 | cut -d: -f1)"
+  [ -n "$first" ] && [ -n "$task" ] || { echo "first=$first task=$task"; false; }
+  [ "$first" -lt "$task" ] || { echo "the boot contract must precede the brief (first=$first task=$task)"; false; }
+}
+
+@test "up --via api REFUSES when the contract library is unreachable — before any create" {
+  # Ordering is the point, the same as the sibling lane's preflight: a refusal is only worth
+  # anything BEFORE an account's rate limit has been charged for an unobservable session.
+  echo "brief" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+import sys, os
+open(os.environ["CALLS"],"a").write("api "+" ".join(sys.argv[1:])+"\n")
+print("session_neverreached")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_PAYLOAD_LIB="$BATS_TEST_TMPDIR/no-such-lib.sh" \
+    CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" \
+    run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"brief contract is unreachable"* ]] || false
+  ! grep -q '^api ' "$CALLS" || { echo "a create was issued despite the refusal"; false; }
+  ! grep -q 'cc-notify --cloud' "$CALLS" || false
+}
