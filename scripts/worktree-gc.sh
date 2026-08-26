@@ -438,7 +438,12 @@ if [ "$DRY_RUN" = "0" ]; then
     LOCK_HELD=1
   else
     # Break a lock left behind by a crashed pass (>60 min), never a live one.
-    if [ -d "$LOCK_DIR" ] && [ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +60 2>/dev/null)" ]; then
+    # On the exemption marker below: $LOCK_DIR is this pass's own MUTEX, not supervisor-observed
+    # evidence, so the sweep-interval floor does not apply and would invert the intent — stretching
+    # 60 min to the 6000s floor keeps worktree GC locked out for a further 40 min after every crash
+    # while protecting nothing. Nothing reads this dir to detect failure; it is taken and released
+    # by cleanup() on the EXIT trap, and this arm is only the crashed-pass recovery.
+    if [ -d "$LOCK_DIR" ] && [ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +60 2>/dev/null)" ]; then  # reaper-horizon-lint:allow — own mutex, not evidence; a longer horizon only prolongs the lockout
       rmdir "$LOCK_DIR" 2>/dev/null
       mkdir "$LOCK_DIR" 2>/dev/null && LOCK_HELD=1
     fi

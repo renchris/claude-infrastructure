@@ -231,7 +231,27 @@ EVIDENCE_GREP='cc-telemetry|cc-registry|CC_TELEMETRY_DIR|CC_REGISTRY_DIR'
 # @anchor hooks/lib/peer-owned.sh _po_live_peer
 # @anchor scripts/deathwatch-watchfile.sh deathwatch-wl\.XXXXXX
 # @anchor scripts/deathwatch-watchfile.sh ^REG_DIR=
-DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify bin/cc-reaper bin/cc-value bin/cc-reconcile bin/cc-recover-safeguard hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh scripts/lead-reconciler.sh hooks/waiting-recycle.sh scripts/handoff-fire.sh hooks/lead-crash-watchdog.sh scripts/scratchpad-reaper.sh hooks/lib/context-econ.sh hooks/dispatch-assert.sh scripts/desk-invariant.sh bin/cc-await-ping bin/cc-queue scripts/cc-gc.sh hooks/lib/peer-owned.sh scripts/deathwatch-watchfile.sh'
+#
+# ── TWO REAL REAPERS, REVIEWED AND DECLARED 2026-08-26 ───────────────────────────────────────────
+# Both were §3's standing red on pristine origin/main alongside hooks/lib/mailbox-pending.sh, and
+# unlike that one they ARE reapers: each deletes an artifact it did not create, which is the whole
+# test. Neither is horizon-bearing — that is the point of writing the review down rather than
+# leaving the pair red, because a permanently-red gate is a gate nobody reads.
+#
+# bin/cc-inbox-guard — :507 and :514, `mv -f "$ef" "$ef.handled" … || rm -f "$ef"`. $ef is an
+#   enqueue-fail alarm record written by the comms chokepoint, so the delete is on someone else's
+#   evidence and this leg is right to see it. NO HORIZON APPLIES: it is not age-driven at all. The
+#   record is consumed exactly once, at the moment it has been acted on — escalated to the operator,
+#   or identified as a `test_origin` fixture that must never page (the 510-false-pages incident this
+#   arm exists to end). `rm -f` is only the FALLBACK for a failed rename; the intended terminal state
+#   is `.handled`, which retains the record. Deleting later, or on a clock, would be strictly worse.
+# scripts/worktree-gc.sh — :719, `rm -f -- "$path/$p"`, inside the dirty-worktree restore: for each
+#   `git status --porcelain` entry it resets, then either checks the path out of HEAD or — when HEAD
+#   has no such path, i.e. the file is UNTRACKED — removes it. NO HORIZON APPLIES: the predicate is
+#   git-tracked-ness, never age, and the caller has already proven the worktree is a GC candidate.
+#   Its other two sites are self-cleanup ($REMOVED_BR/$CWDS_WHY_FILE, `$$`-scoped) and $MAINT_LOCK,
+#   a git maintenance lock it takes and releases itself.
+DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify bin/cc-reaper bin/cc-value bin/cc-reconcile bin/cc-recover-safeguard hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh scripts/lead-reconciler.sh hooks/waiting-recycle.sh scripts/handoff-fire.sh hooks/lead-crash-watchdog.sh scripts/scratchpad-reaper.sh hooks/lib/context-econ.sh hooks/dispatch-assert.sh scripts/desk-invariant.sh bin/cc-await-ping bin/cc-queue scripts/cc-gc.sh hooks/lib/peer-owned.sh scripts/deathwatch-watchfile.sh bin/cc-inbox-guard scripts/worktree-gc.sh'
 
 viol=0
 say(){ printf '  %s\n' "$1"; }
@@ -242,6 +262,24 @@ bad(){ printf '  ⛔ %s\n' "$1"; viol=$((viol+1)); }
 # the prefix and test the actual source line. A check must observe the thing it guards, not prose about it.
 is_comment(){ case "$(printf '%s' "${1#*:*:}" | sed 's/^[[:space:]]*//')" in '#'*) return 0 ;; *) return 1 ;; esac; }
 
+# ── PER-LINE reviewed exemption: `reaper-horizon-lint:allow — <reason>` ──────────────────────────
+# The scorers below read EVERY `-mmin`/`-mtime` in a $DECLARED file, but the floor they enforce is
+# about ONE thing: an evidence artifact must outlive a supervisor sweep, or the supervisor reports
+# health into a fire. A declared file may hold an age test that is not about evidence at all, and
+# then the floor is not merely wrong, it is BACKWARDS — the remedy it prescribes (a longer horizon)
+# makes the system worse. Live case, and the reason this exists: scripts/worktree-gc.sh:441 breaks a
+# MUTEX left by a crashed pass at `-mmin +60`; stretching that to the 6000s floor would keep worktree
+# GC locked out for an extra 40 minutes after every crash, protecting nothing.
+#
+# THIS IS NOT THE RUBBER STAMP §1b CONDEMNS, and the difference is the unit. That one is a FILE
+# listed in an allowlist, which passes by being listed and takes every line in the file with it. This
+# is one LINE, carrying its reason at the site, with the rest of the file fully under jurisdiction —
+# and it goes visible the moment the line is edited or moved, which a file-level entry cannot. It is
+# the same shape the tree already uses for reviewed counter-examples (`typed-send-lint:allow — …`,
+# `pane-id-lint:allow`). The reason is MANDATORY: a bare token is not accepted, because an exemption
+# nobody had to justify is exactly the stamp above.
+horizon_exempt(){ case "$1" in *'reaper-horizon-lint:allow — '?*) return 0 ;; *) return 1 ;; esac; }
+
 echo "reaper-horizon-lint: floor = ${SUPERVISOR_SWEEP_MAX_S}s sweep × ${SAFETY} = ${MIN_HORIZON_S}s"
 
 # ── 1. every find-based deletion horizon on an evidence artifact ──────────────────────────────────
@@ -249,6 +287,7 @@ while IFS= read -r hit; do
   [ -n "$hit" ] || continue
   f="${hit%%:*}"; rest="${hit#*:}"; ln="${rest%%:*}"
   is_comment "$hit" && continue
+  horizon_exempt "$hit" && { say "exempt  ${hit%%:*}  reviewed non-evidence horizon (reaper-horizon-lint:allow)"; continue; }
   mins=$(printf '%s' "$hit" | sed -nE 's/.*-mmin \+([0-9]+).*/\1/p')
   [ -n "$mins" ] || continue
   secs=$(( mins * 60 ))
@@ -270,6 +309,7 @@ while IFS= read -r hit; do
   [ -n "$hit" ] || continue
   f="${hit%%:*}"; rest="${hit#*:}"; ln="${rest%%:*}"
   is_comment "$hit" && continue
+  horizon_exempt "$hit" && { say "exempt  ${hit%%:*}  reviewed non-evidence horizon (reaper-horizon-lint:allow)"; continue; }
   days=$(printf '%s' "$hit" | sed -nE 's/.*-mtime \+([0-9]+).*/\1/p')
   [ -n "$days" ] || continue
   secs=$(( days * 86400 ))
@@ -287,6 +327,7 @@ while IFS= read -r hit; do
   [ -n "$hit" ] || continue
   f="${hit%%:*}"; rest="${hit#*:}"; ln="${rest%%:*}"
   is_comment "$hit" && continue
+  horizon_exempt "$hit" && { say "exempt  ${hit%%:*}  reviewed non-evidence horizon (reaper-horizon-lint:allow)"; continue; }
   secs=$(printf '%s' "$hit" | sed -nE 's/.*MARKER_MAX_AGE_S:-([0-9]+).*/\1/p')
   [ -n "$secs" ] || continue
   if [ "$secs" -lt "$MIN_HORIZON_S" ]; then
@@ -301,6 +342,7 @@ while IFS= read -r hit; do
   [ -n "$hit" ] || continue
   f="${hit%%:*}"; rest="${hit#*:}"; ln="${rest%%:*}"
   is_comment "$hit" && continue
+  horizon_exempt "$hit" && { say "exempt  ${hit%%:*}  reviewed non-evidence horizon (reaper-horizon-lint:allow)"; continue; }
   hrs=$(printf '%s' "$hit" | sed -nE 's/.*RETAIN_H:-([0-9]+).*/\1/p')
   [ -n "$hrs" ] || continue
   secs=$(( hrs * 3600 ))
@@ -319,6 +361,7 @@ while IFS= read -r hit; do
   [ -n "$hit" ] || continue
   f="${hit%%:*}"; rest="${hit#*:}"; ln="${rest%%:*}"
   is_comment "$hit" && continue
+  horizon_exempt "$hit" && { say "exempt  ${hit%%:*}  reviewed non-evidence horizon (reaper-horizon-lint:allow)"; continue; }
   secs=$(printf '%s' "$hit" | sed -nE 's/.*CC_SUP_GC_S:-([0-9]+).*/\1/p')
   [ -n "$secs" ] || continue
   if [ "$secs" -lt "$MIN_HORIZON_S" ]; then
@@ -361,16 +404,52 @@ done < <(grep -rnE 'CC_SUP_GC_S:-[0-9]+' $DECLARED 2>/dev/null)
 # a cheaper fix, it is a false entry in the list every other section trusts.
 #
 # FAIL-CLOSED, and that direction is deliberate. A site is exonerated ONLY when every path it names
-# resolves to a variable this same file assigns from `mktemp`. A literal path, an unattributable
-# variable, or a delete naming no variable at all still convicts. A real reaper cannot slip through:
-# it deletes something it did not create, so it has at least one site this cannot attribute.
+# resolves to a variable this same file assigns to a PROCESS-PRIVATE scratch path. A literal path, an
+# unattributable variable, or a delete naming no variable at all still convicts. A real reaper cannot
+# slip through: it deletes something it did not create, so it has at least one site this cannot
+# attribute.
+#
+# `mktemp` IS NOT THE ONLY WAY TO MINT A PRIVATE SCRATCH PATH, and reading it as though it were left
+# this leg convicting the SAME class of non-reaper it was written to acquit (2026-08-26). The other
+# idiom in this tree is the `$$`-suffixed name — `tmp="$dir/.$(basename "$f").$$.tmp"`, written, then
+# `mv -f` into place, with `rm -f "$tmp"` ONLY on the failure arm of that atomic rename. It is the
+# same fact about the world as mktemp: `$$` is the live PID of the process doing the deleting, so the
+# path cannot name an artifact any other process created, which is the entire question this leg asks.
+# Measured on pristine origin/main: hooks/lib/mailbox-pending.sh was §3's whole standing red on that
+# ground, with all four of its delete sites (:212 :213 :483 :484) of exactly this shape. Declaring it
+# was NOT the cheaper fix — see the 🚨 above; a declaration is a review claim, and the file has no
+# reaper to review. Widening the exoneration to the idiom is what the 🚨 prescribes, and it opens no
+# false-negative hole for the reason the fail-closed note already gives: a real reaper deletes what it
+# did not create, and a path built from its OWN pid is unreachable to any such artifact.
 self_created_delete(){   # $1 = file · $2 = one comment-stripped delete line → 0 iff pure self-cleanup
-  local vars v
-  vars="$(printf '%s\n' "$2" | grep -oE '\$\{?[A-Za-z_][A-Za-z0-9_]*' | sed -E 's/^\$\{?//' | sort -u)"
+  local subj vars v
+  # THE SUBJECT IS THE DELETE, NOT THE LINE IT SITS ON — and reading the whole line was the other
+  # half of this leg's standing red (2026-08-26). The atomic-write idiom puts the delete on the
+  # FAILURE ARM of the command that created the file, so one physical line carries two commands:
+  #   printf '%s\n' "$n" > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+  # Harvesting `$`-names from all of it collects `n` — the payload being written, which is nobody's
+  # scratch file and never assigned from one — and the all-vars-must-be-scratch test then failed on
+  # a variable THE DELETE DOES NOT NAME. All four of mailbox-pending.sh's sites are that shape
+  # (:212 :213 via `$n`/`$f`, :483 :484 via `$new`/`$old`), so the widening above could not reach
+  # them on its own. Scope the harvest to the `rm` command's own argv and both halves land.
+  # `-delete` keeps the whole line deliberately: it is a find(1) PREDICATE whose target is the path
+  # BEFORE it, so there is no argv to its right to scope to, and narrowing there would exonerate by
+  # finding no variables at all — the one direction this fail-closed leg must never move.
+  # A `case` glob, not `printf | grep -q`: this file runs under `set -o pipefail`, where a `-q`
+  # consumer exits on its first match and SIGPIPEs the producer, so the pipeline status is non-zero
+  # and the `if` reads FALSE on a match — the exact defect scripts/pipefail-sigpipe-lint.sh names.
+  # The subject is already in a variable, so no process is needed to look at it.
+  case "$2" in
+    *-delete*) subj="$2" ;;
+    *)         subj="$(printf '%s\n' "$2" | grep -oE 'rm[[:space:]]+-[^;&|}]*' | tr '\n' ' ')" ;;
+  esac
+  vars="$(printf '%s\n' "$subj" | grep -oE '\$\{?[A-Za-z_][A-Za-z0-9_]*' | sed -E 's/^\$\{?//' | sort -u)"
   [ -n "$vars" ] || return 1
   while IFS= read -r v; do
     [ -n "$v" ] || continue
-    grep -qE "^[[:space:]]*(local[[:space:]]+|export[[:space:]]+)?$v=[^=]*mktemp" "$1" || return 1
+    # `[^=]*` still bars a second assignment from sneaking into the same line; the alternation is
+    # single-quoted so `\$\$` reaches ERE as a literal `$$` rather than an anchor pair.
+    grep -qE "^[[:space:]]*(local[[:space:]]+|export[[:space:]]+)?$v=[^=]*"'(mktemp|\$\$)' "$1" || return 1
   done <<EOF
 $vars
 EOF
