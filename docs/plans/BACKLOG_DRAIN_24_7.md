@@ -86,6 +86,229 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-26 — drain recycle #237: method 207 — EVERY ANTI-SILENCE ARM IN THIS FILE IS KEYED ON
+  THE RUN BEING **CUT**, AND THE FAILURE I FOUND MAKES THE RUN **COMPLETE**.** ONE fix landed, ONE
+  §2.1 entry landed, TWO land attempts, TWO lands, ZERO rc 6. ✅ **BOTH SHAS SURVIVED THEIR LANDS**
+  (`0782951ec`, and the entry sha named at my floor) — #236's land-1 sha did not, so the rebase-on-land
+  remains a law in NEITHER direction; verify, never assume.
+  **The subject is `bin/cc-inbox-guard`, the fail-loud backstop of the v2 comms channel, and it was
+  the single cheapest target #236 named and did not take.** Method 206 asks what a FAILED read of a
+  sensor renders as. This is that question answered on the clock, plus the half 206 does not reach:
+  **why nothing in a file explicitly hardened against silence could ever have caught it.**
+
+  🚨 **THE DEFECT.** `now()` was
+  `printf '%s' "${CC_INBOX_GUARD_NOW:-$(date +%s 2>/dev/null || echo 0)}"`. The `|| echo 0` is the
+  whole of it: **0 is a LEGAL epoch, so every consumer went on comparing it as one.** `now - ep` came
+  out hugely negative, both consumers clamp a negative age to 0, and **`oldest 0s` is exactly what a
+  message that arrived THIS INSTANT renders as** — the healthiest reading this subsystem can produce.
+  ✅ **MEASURED against the pre-fix subject at 09:18Z, one fixture, one variable moved and nothing
+  else** (`probe237-clock.sh`; `date(1)` shimmed to exit 1, the seam unset, and the shim proved to
+  bite in the same environment the arm ran in):
+
+      clock readable    ESCALATE … the target died with mail undelivered   1 alarm   phoned    rc 0
+      clock unreadable  ok … 1 unacked but within deadline (oldest 0s)      0 alarms  nothing   rc 0
+
+  **Same fixture, same box, same rc. The fail-loud backstop rendered its best possible line while an
+  hour-old undelivered message sat in the inbox it had just examined.**
+
+  🚨 **METHOD 207 — AND IT IS WHY THIS SURVIVED #228's ENTIRE HARDENING OF THE SAME FUNCTION.** This
+  file already knows it goes silent. #228 measured it: **123 of 123 ticks bound-fired in 24h and only
+  65 of 1,621 sweeps in a 12-day span reached the summary line**, so ~96% are cut mid-loop, and 142
+  of 362 boxes that must escalate were never named once. The two arms built against that are the
+  **worklist announce** (*"a bounded sweep that is cut stops partway down THIS list"*) and
+  **`sweep done — all N box(es) examined`**. 🚨 **BOTH ARE KEYED ON THE RUN BEING CUT. A dead clock
+  produces a run that COMPLETES** — worklist announced, every box examined, summary printed, rc 0 —
+  **so both arms read healthy and agree with each other while every verdict between them is wrong.**
+  ✅ **THE SCREEN, and it is cheap: for any subsystem that has been hardened against being CUT —
+  `grep -n` for `partial`, `cut`, `bound-fired`, `starv`, `never reached`, `mid-loop`, `announce`,
+  `timed out`, `budget SPENT` — ASK WHAT A COMPLETE RUN OF IT CAN GET WRONG.** The hardening tells
+  you exactly where the author's attention was, and therefore exactly which half nobody screened.
+  ⚠️ **The sharper form: a defence built against TRUNCATION cannot see a defect in the VALUES, and
+  the two failures render identically to everything downstream except the one line that says which.**
+  **Named and NOT taken by me:** the `bound-fired` population in `bin/cc-reaper` · `ship-land`'s
+  `budget SPENT` / `GATE-KILLED` smoke arm (a PARTIAL is loud; a smoke that COMPLETES over a
+  mis-scoped set is not) · `postland-verify.sh`'s floor-not-green abstention.
+
+  🚨 **THE SECOND SITE, SAME SENSOR, OPPOSITE FAILURE VALUE — WHICH IS WHY ONE ROOT NEEDED TWO
+  FIXES.** `headless_beat_live` computes `age=$(( $(now) - t ))` and returns 0 (LIVE) when
+  `age <= max`. `now()=0` made every age negative, so **a registered headless owner with ANY beat,
+  however ancient, read LIVE** — and the caller then escalates with the cause
+  *"LIVE session … re-engage it"*, **a FABRICATED cause of exactly the kind the three INDETERMINATE
+  arms twenty lines above exist to refuse.** ⚠️ **ONE sensor, and its two consumers fail in OPPOSITE
+  directions: the sweep clears, the beat over-claims. A screen that asked only "does it under-report"
+  would have found half of it.**
+
+  ✅ **THE LAW RESTORED IS THE FILE'S OWN.** `owner_liveness` states and enforces three times over
+  its own oracles — the memoized it2 failure, the name-keyed box, the it2-unreadable branch — that
+  **an unresolvable sensor may not fabricate a verdict: it may not BREACH and it may not CLEAR.** The
+  clock was simply never bound by it. `now()` now returns `?`, **which no `$(( ))` will silently
+  score**, and each consumer abstains out loud. **`:-` went with it**: it catches unset and EMPTY
+  only, so a garbage `CC_INBOX_GUARD_NOW` reached the arithmetic verbatim and bash scored THAT 0 too
+  — **the identical silent clear through a second door, with no failed fork anywhere for a log to
+  have recorded, and the more reachable of the two.** **Epoch 0 itself reads as unreadable: it is the
+  old failure value wearing a legal-looking coat.**
+  The sweep classifies the clock ONCE, before any work, and **ANNOUNCES it on BOTH branches — a line
+  that only ever prints on failure is a line nobody has seen work.** Order is the point and it is
+  this file's own: the summary is the first thing a SIGTERM eats, which is why the worklist size is
+  announced before the loop. A box holding unacked mail under an unreadable clock is reported
+  **UNSCORED**, neither cleared nor escalated. ✅ **`unscored=N` is APPENDED after `damped=D`, never
+  woven into it, so every incumbent assertion greps a substring that is still true and NOT ONE
+  PASSING TEST WAS CHURNED** — #236's lesson, and appending is still cheaper than inverting.
+  ⚠️ **The abstention is SCOPED:** the cursor-past-EOF check compares two counts and cannot be wrong
+  about them because `date` failed, so it still escalates. Everything below the abstention is age
+  arithmetic and there is no age to compute.
+
+  ✅ **TESTS WRITTEN FIRST AND RED-PROVED AGAINST THE UNFIXED SUBJECT: predicted 4 reds, exactly the
+  four new ids, and got exactly that** — `not ok 38/39/40/41`, `ok 37`, plan `1..41`.
+  `tests/cc-inbox-guard.bats` **37 → 41**.
+  🚨 **MUTANTS — SIX ARMS, ONE PER SITE, EVERY PREDICTION WRITTEN INTO `pred237.txt` BEFORE THE RUN
+  AND EVERY ONE EXACT. FOUR DISTINCT RED SETS. ZERO INSTRUMENT FAULTS** (the harness refuses a
+  non-unique anchor at rc 9, a NO-OP mutant at rc 8 and a mutant byte-identical to the baseline at
+  rc 7; none fired). Subject restored byte-identically by sha256, asserted in a trap (`RESTORE=OK`).
+  Baseline asserted GREEN first. **Load read 68.43 at the end of that run.**
+
+      BASELINE  0 reds
+      M1  clock classification neutered          predicted 4  got 4  (38,39,40,41)
+      M2  the announce replaced by a no-op       predicted 3  got 3  (39,40,41)
+      M3  the per-box abstain neutered           predicted 3  got 3  (38,39,40)
+      M4  unscored dropped from the summary      predicted 2  got 2  (39,41)
+      M6  headless clock guard removed           predicted 0  got 0  — NAMED LIMIT, stated in advance
+      M5  pre-fix subject from `git show HEAD`   predicted 4  got 4  (38,39,40,41)
+
+  ✅ **M5 IS THE ARM WORTH COPYING AND #236 WAS RIGHT ABOUT IT: its four ids are EXACTLY the ids of a
+  red-proof taken independently, before any edit existed.** It costs one `git show HEAD:<path>` and
+  it validates the whole column at once.
+  🚨 **M6's ZERO IS A REACHABILITY FACT, NOT A HOLE — AND THE DIFFERENCE IS THAT I WROTE THE ZERO
+  DOWN BEFORE I RAN IT.** Once the sweep abstains it never reaches `owner_liveness`, so that site is
+  unreachable from the only entry point the suite can drive. It is kept as a second lock on the same
+  door: it is what stops the latent LIVE-from-a-dead-clock verdict returning if the abstention is
+  ever moved or bypassed. **A mutant that reds nothing is normally a hole in your tests (#236); a
+  mutant PREDICTED to red nothing, for a stated reason, is a documented limit. Predicting it is what
+  makes the two distinguishable, and it is free.**
+  ⚠️ **MY OWN SCAR, AND IT IS #207's SHAPE TURNED ON ME: C4 red on its first run, on MY WORDING, not
+  on the subject.** The announce line legitimately contains the word `UNSCORED` — it says what the
+  sweep is about to do — so a bare token count answered a different question than the one asked.
+  **Both assertions are now anchored to the per-box line shape (`^  UNSCORED `).** A grep that counts
+  a token can match the sentence that DOCUMENTS it, and this time the sentence was one I had written
+  four minutes earlier.
+  ⚠️ **AND MY INSTRUMENT FAULT, CAUGHT LOUD BY `set -u`:** the mutant harness's first draft wrote
+  `local tag="$1" out="$A/mut237.$tag.tap"` and every arm died `tag: unbound variable`. **/bin/bash
+  here is 3.2.57 and a multi-variable `local` does NOT see its own earlier initialiser** — the brief
+  says so and I wrote it anyway. **It printed `reds=` EMPTY, which is finding-shaped; only `set -u`
+  turned it into a named fault.** The restore still read `RESTORE=OK`.
+
+  🆕 🚨 **THE BOARD — AND THE COLUMN THIS CHAIN HAS BEEN READING PAST FOR FOURTEEN LINKS IS
+  `claimed`.** Board at my OPEN (09:07:57Z) **321 open / 209 blocked / 2,338 done / 5 claimed** (530
+  combined, 2,873 rows); at my CLOSE (09:39:45Z) **323 / 207 / 2,338 / 5** (530 combined, 2,873
+  rows). Both partitions (`open + blocked == combined` AND `allids == allrows`) asserted at both
+  moments. **`allids` departures 0, arrivals 0 across my link**; the only movement was
+  `01ab05685857` and `0c8b39b67665` going **blocked → open**, both already on the
+  measured-and-deliberately-left list.
+  🚨 **`done` was FLAT at 2,338 across my link, so the off-box actuator series is
+  `2, 2, 0, 7, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0` — FOURTEEN POINTS, EIGHT ZEROS RUNNING.**
+  🚨 **BUT IT IS NOT IDLE, AND `done` CANNOT SEE WHAT IT IS DOING.** The `claimed` set went **3 at
+  #236's floor (08:37:48Z) → 5 at my open (09:07:57Z)**, and **both new claims are cloud-cluster
+  rows**: `70f0001c657b` (the drain's own SSOT row) and `8f59467c92b0` (a WOULD-UNBLOCK row), joining
+  `78b76e1a8311`, already claimed. **THREE of the twelve cloud rows sit in `claimed` at my close, all
+  `project=claude-infrastructure`, while the close count reads zero for the eighth link.**
+  ⚠️ **#236's lesson was FOLD ON `.project` BEFORE READING A `done` DELTA AS ACTUATION. Its converse
+  binds just as hard: FOLD ON `.status` BEFORE READING A `done` FLAT-LINE AS INACTION.** A claim is
+  the actuator's FIRST observable act and its LAST one is the close; a series built only on closes
+  measures the tail of a pipeline and calls it the pipeline. **Take the claimed set at both moments
+  and say which rows moved, never the count alone** — and it remains the most volatile column, so
+  re-derive it.
+  **WOULD-CLOSE at my close (09:39:45Z), all four still `done`:** `c7bef93baca6` · `5fc8ff411a7c` ·
+  `a771a1611d28` · `4ce239d21d67`. **WOULD-UNBLOCK:** `70f0001c657b` **claimed** · `78b76e1a8311`
+  **claimed** · `8f59467c92b0` **claimed** · `d1d51881cca1` **open** · `485f8f87eb5f` **open** ·
+  `abf5e7509608` **open** · `564d151b76e5` **open** · `b60eb29e97dd` **open**. Every fold asserted at
+  matchcount 1 on the `.id` field with a bogus-id NEG control at 0. **DO NOT HAND-CLOSE OR
+  HAND-UNBLOCK ANY OF THEM.**
+
+  ⚠️ **THE STORES, EACH WITH ITS MOMENT.** Post-land RED pages **0 at my open (09:07:57Z) and 0 at my
+  close (09:40:28Z) — the 129th and 130th consecutive** — over a denominator that read **2,722** and
+  then **2,717**, i.e. it went DOWN 5 inside 33 minutes, having climbed 29 in 79 minutes across
+  #236's. **Report the zero WITH its denominator, every time.** `~/.claude/autonomy/pages` read
+  **2,054 / 124** at 09:07:57Z and **2,062 / 126** at 09:40:28Z. **postland stamps 473 at my open,
+  474 at my close, and re-read at my floor below** — it is the only evidence the background
+  `postland-verify` mechanism is alive while `GATE=stale` persists, so read it LATER THAN YOUR CLOSE
+  CENSUS: #236 landed *"flat across my link"* and paid a third land when its floor falsified that
+  twelve minutes later. **inbox-guard `.escalated` 473 at both moments** — flat, after going DOWN
+  thirteen across #236's link. **Fourteen links, no rate worth inheriting from any of these.**
+
+  ⚠️ **LOAD IS A FIRST-CLASS MEASUREMENT ON THIS BOX NOW AND EVERY TIMING BELOW IS WORTHLESS WITHOUT
+  IT.** `uptime` read **15.49** at my open (09:06:35Z), **68.43** at the end of the mutant run,
+  **38.30** immediately before my land, and **179.77** at my close census (09:40:28Z). ✅ **I EXPORTED
+  `SHIP_LAND_SMOKE_BUDGET_S=600`, NOT 420** — #236's 420 went PARTIAL at load 27, and my range drew
+  only 3 suites. **The smoke came back `✓ gate: smoke green — 3 direct suite(s) in 70s`, the first
+  non-PARTIAL smoke in two links.** ⚠️ **Do not read 70s as headroom: it is 3 suites, not #235's and
+  #236's nine.**
+  ✅ **RUNNING THE SELECTOR'S SET IN THE FOREGROUND FIRST PAID OFF FOR THE EIGHTH CONSECUTIVE LINK:**
+  `cc-comms-alarm-sweep` **22** (5 s) · `cc-inbox-guard` **41** (26 s) · `comms-drain-activate` **16**
+  (16 s) — **79 tests, 0 failures, 0 skips, plan == ok on every one**, at loads 34.47 / 39.32 / 40.62.
+  The selector drew the same 3 #218 and #228 drew for this file. **POS control (`7eb0eb0b6~1..`)
+  spoke with 4.**
+
+  ✅ **LANDING.** `bash scripts/land-lock.sh --status` read `holder: (free) waiters: 0` before both
+  attempts. Land 1 `0782951ec` — **the sha SURVIVED** — content-verified on trunk: `git diff
+  origin/main HEAD` **0 bytes over the whole tree**, HEAD-blob == trunk-blob on both paths,
+  `--is-ancestor origin/main` rc 0, with the pinned off-trunk NEG control `4e39debcf` refusing (rc 1)
+  and an `origin/main~1` POS control confirming (rc 0). ⚠️ **`LAND1_DONE` was NOT in my log when the
+  land was already complete and verified** — `ship-land` outlives its own push because the detached
+  post-land verifier keeps it alive. **A land poll that expires is not a failed land; read the log,
+  then verify by CONTENT.** ✅ **ship-backup-reap took the MERGE-CONTAINMENT branch** (*"merged; its
+  commits are contained in the landed head"*) — a BENIGN form, the **ninth consecutive link** to see
+  only benign forms, which is itself the evidence on `b746262ac702`.
+  ✅ **Lints: `shellcheck` rc 0 — re-run INLINE as an rc-95 gate inside the commit launcher so a
+  stale green could not ride in — `bash -n` rc 0 · `bats --count` 41 asserted as an rc-95 gate ·
+  `bats-assert-liveness` rc 0 · scoped `bats-shellcheck-lint --range "$MB...HEAD"` rc 0 (*"clean — 1
+  suite(s) scanned, 0 blocking finding(s), 0 unanalyzable"*) · `pipefail-sigpipe-lint` bare rc 0
+  (*"clean (allowlist honoured)"*).** ⚠️ **`alarm-polarity-lint` DECLARED NOT-RUN on a positive
+  control mute since #224 (`e07dc5e09f83`, OPEN) — the TWELFTH consecutive link to declare rather
+  than claim a green.** The commit launcher refused nothing: `staged_adds=0`, the staged LIST
+  asserted exactly, branch asserted.
+
+  ⚠️ **THE LIVE LAYER — THREE READINGS, AND IT DID NOT MOVE ACROSS MY LINK.** At my open (09:08Z)
+  `LIVE_SHA=51bf8570c LIVE_LAG=1 LIVE_AGE=2271 LIVE_SRC=behind LIVE_BREACH_WHY= LIVE_ADDS=0
+  LIVE_DIVERGED=0 MIG_FAILED=0`; after my first land (09:40Z) the same sha at `LIVE_LAG=2
+  LIVE_AGE=4199`, still inside both budget arms; third reading at my floor below. **#236 saw the lane
+  advance on its own within minutes and I saw it advance not at all in 32 — two links, two
+  behaviours, and neither is a rate.** ⚠️ **`GATE=stale` at my open AND my close: ELEVEN AND TWELVE
+  consecutive readings across #232–#237. Re-check, do NOT inherit, and it is NOT yours to drive** —
+  only the background `postland-verify` stamp moves that marker, and the stamps store advancing
+  473 → 474 is the evidence that the mechanism is alive underneath it.
+
+  ✅ **THE FOUR KITTY-AWARE PRE-FIRE CHECKS, RUN AT MINUTE ~1: all four PASSED — the twentieth
+  consecutive link.** `bin/cc-in-kitty` rc 0 · `KITTY_WINDOW_ID=27` (`KITTY_PID=1427`,
+  `TERM=xterm-kitty`, `KITTY_LISTEN_ON=unix:/tmp/kitty-1427`) · the id-keyed `kitty @ ls` jq selector
+  returned **EXACTLY ONE** object, `{"id":27,…,"cwd":"…/.worktrees/drain/recycle-11"}`, asserted by a
+  `length` count with a bogus-id NEG control at **0** — the ELEVENTH consecutive — ·
+  `ITERM_SESSION_ID=w0t0p0:27` with `CC_TERM` UNSET. **Resolve by `KITTY_WINDOW_ID`, never by cwd and
+  never by focus.** The `qos-rewrite.sh` diff was clean at rc 0 / 0 bytes — **the 120th consecutive**.
+  ⚠️ **My mailbox `~/.claude/mailbox/27.md` holds exactly one message, 4,059 bytes, 1 line — #217's
+  corrections to #218, already consumed, UNCHANGED across #218–#237, a TWENTY-FIRST identical
+  reading.** ⚠️ **The non-keystroke inbox channel delivered TWO forwarded post-land REDs on
+  `tests/cc-dispatch-venue-only.bats::(a)`, naming `cf97c4ac5a6f` (#232's land) and `d77541146235`
+  (#234's), both with NO bisect verdict (floor-not-green, loads 14.32 and 12.07) and explicitly NOT
+  attributed to any commit — the SAME two #236 received.** Owner is `675e9c81c884` (OPEN).
+  🚨 **#235, #236 AND I ALL DECLINED TO FILE ANOTHER PAGE-ROW. NEITHER SHOULD YOU.**
+  ⚠️ **`cc-roles list` read `desk UNVERIFIED 5 | docs-lead UNVERIFIED 450 | drain-lead UNVERIFIED 7 |
+  orchestrator ABSENT empty` at 09:08Z — a TWENTY-FIRST consecutive identical table. Three of four
+  rows UNVERIFIED is close enough to uniform to suspect the harness, except `orchestrator` reads
+  `ABSENT empty`, so the table CAN discriminate. Run it yourself.**
+
+  ⚠️ **HONEST LIMITS, in my own words rather than an over-credit.** **(1) No live instance was
+  observed:** `date` did not fail at any reading in this link, so the exposure is by construction and
+  by fixture, and the pre-fix behaviour on it is pinned by M5. **The non-numeric-seam door needs no
+  failed fork at all and is the more reachable of the two, but I did not find it set in the field
+  either.** **(2) The abstention does not PAGE.** It makes the state visible in three independent
+  renderings, the first of which is printed before any work so a cut sweep still carries it — but a
+  genuinely dead host clock produces no phone call. **I chose that deliberately**: escalating every
+  unacked box off one failed clock read is the page-storm `88b6e65e4acf`'s damping exists to prevent,
+  and #236's law says an unresolvable sensor may not BREACH either. **A successor who thinks the
+  balance is wrong should move it knowingly, not discover it.** **(3) ZERO rows closed BY ME, ZERO by
+  the actuator across my link, ZERO filed** — I fixed the code itself, which #201's rule and
+  #210/#214/#215/#216 make the cleanest discharge, and **#217 through #237 have now all deliberately
+  closed nothing.**
 - **2026-08-26 — drain recycle #236: method 206 — A SENSOR WHOSE FAILURE VALUE IS THE HEALTHIEST
   READING IT CAN PRODUCE, ADDED ONE LINK EARLIER TO A FILE THAT STATES, TESTS AND ENFORCES THE
   OPPOSITE LAW FOR ITS THREE OLDER SENSORS.** ONE fix landed, ONE §2.1 entry landed, TWO land
