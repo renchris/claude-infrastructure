@@ -390,9 +390,35 @@ printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l\033[?1015l'
 export CC_RR_CFG="$cfg" CC_RR_BIN="$bin" CC_RR_MODEL="$model" CC_RR_EFFORT="$effort" CC_RR_SID="$sid"
 export CC_RR_NO_INTERACT="${CC_RESUME_NO_INTERACT:-}"
 export CC_RR_THRESHOLD="$RESUME_THRESHOLD"
+# ── THE PANE MUST OUTLIVE THE SESSION IN IT (2026-08-26) ─────────────────────────────────────────
+# This used to be `exec expect`, which made expect(1) the pane's TERMINAL process: nothing under it,
+# nothing after it. Every way a resumed CC can end — a crash, a usage limit, and above all the
+# `/exit` that `handoff-fire.sh --recycle` types — therefore ended the PANE too, because kitty
+# closes a window whose only child has exited.
+#
+# That made a self-recycle STRUCTURALLY IMPOSSIBLE in any pane this script launched, and it failed
+# in the worst available shape. Measured on pane 32, 2026-08-26T06:21Z: the reso undo session fired
+# `--recycle` to relocate itself out of a reaped worktree; the /exit landed, expect exited, kitty
+# destroyed window 32 and released /dev/ttys021. The detached `__recycle` watcher then polled a pty
+# that no longer existed — `pane_cc_state` answers `unknown` for a tty with no processes, which is
+# an ABSTENTION and not "no shell here" — so it held at 60/150/300 s and only gave up at 600 s. The
+# successor was never typed and the brief was never used. `lead-supervisor` read the exit as
+# `clean-completion-shipped-clean-worktree` and reaped the session, so nothing anywhere said a
+# recycle had failed.
+#
+# The remedy is bin/cc-pane-runner's, which already states it for the split path: "AFTER THE COMMAND,
+# THE PANE BECOMES AN ORDINARY SHELL". So run expect as a CHILD and, when it returns, exec an
+# interactive login shell — the pane survives, `pane_cc_state` reaches its affirmative `shell`
+# verdict, and the watcher types the relaunch exactly as it does in every other pane shape.
+#
+# `-l -i` is load-bearing, not cosmetic, and for the same reason cc-pane-runner records: ~/.zprofile
+# puts ~/.claude/shims on PATH and ~/.zshrc synthesizes ITERM_SESSION_ID from KITTY_WINDOW_ID, so a
+# non-login non-interactive shell yields a pane that is alive and unaddressable. The launcher names
+# a recycle relaunches with (`claude3`, `nocorrect claude3 …`) are zsh FUNCTIONS defined only in the
+# interactive rc, so without `-i` the relaunch would land as `command not found`.
 # shellcheck disable=SC2016  # single quotes REQUIRED: this is an expect(1) program and its
 #   $env(...) / $spawn_out references must reach expect uninterpreted.
-exec expect -c '
+expect -c '
   set timeout 240
   set cfg    $env(CC_RR_CFG)
   set bin    $env(CC_RR_BIN)
@@ -479,3 +505,19 @@ exec expect -c '
   }
   interact
 '
+rr_rc=$?
+
+# ── FALL THROUGH TO A SHELL, so the pane outlives the session (see the block above the expect) ────
+# Two callers must NOT get a shell, and both are identified by an AFFIRMATIVE fact rather than by
+# the absence of one:
+#   · CC_RR_NO_INTERACT — the headless test path, which asked expect not to `interact`. It is a
+#     harness, and exec'ing an interactive shell there would hang the suite forever.
+#   · stdin is not a tty — no controlling terminal, so there is no pane to keep alive and `zsh -i`
+#     would sit reading EOF in a loop.
+# Anything else IS a real pane, and a real pane must survive. The exit code is preserved on both
+# non-shell paths so a caller that reads it still reads expect's verdict.
+if [ -n "${CC_RR_NO_INTERACT:-}" ] || [ ! -t 0 ]; then
+  exit "$rr_rc"
+fi
+printf '\n[reso-resume-one] session ended (rc %s) — this pane is now an ordinary shell.\n' "$rr_rc" >&2
+exec "${SHELL:-/bin/zsh}" -l -i
