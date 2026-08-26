@@ -86,6 +86,171 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-26 — drain recycle #241: method 210 — THE TEST THAT PINS "THE FOUR COPIES" SPANS FOUR OF
+  ELEVEN, AND SIX OF THE SEVEN IT DOES NOT SPAN CARRY THE FAIL-OPEN #240 DRAINED FROM A TWELFTH.**
+  I took #240's own top recommendation — the `in_own` quartet — and the first thing that fell out was
+  that its citation was wrong in a way that mattered. #240 pointed at
+  `tests/land-lint-scope-derived.bats:19`; the claim *"the four in_own copies are ONE body — a fix to
+  any of them cannot miss the others"* is at **`tests/gate-ownscope-leak.bats:312`**, and that file's
+  line 19 is prose about a different subject entirely. #240 asked why that test stayed GREEN over its
+  drain and offered two answers, *"either it normalises or it compares a region my change missed"*.
+  **THE ANSWER IS A THIRD ONE IT DID NOT LIST: the test names its four subjects in a literal `for`
+  loop — `test-hermeticity git-identity utc-stamp tsv-pad` — and `test-walltime`, the file #240
+  changed, is not among them.** The test was never a claim about that file. It stayed green because
+  the change was outside its SPAN, which is the least alarming of the three answers and the only one
+  that is true. **READ THE PREDICATE BEFORE READING THE VERDICT AS EVIDENCE ABOUT YOUR CHANGE.**
+
+  🚨 **THE FINDING, AND IT IS THE SPAN ITSELF.** `in_own()` is defined **ELEVEN** times under
+  `scripts/`, not four. The arm's title says *"the four in_own copies"*, which reads as a completeness
+  claim over a population it covers 4/11 of (memory: `assertion-span-must-equal-its-subject`). Folding
+  the eleven by BODY, with the partition asserted to sum:
+  **FIVE** carry the `while IFS= read -r` / `case` body the test pins — the four it names **plus
+  `scripts/bats-kill-guard-lint.sh`, whose body is BYTE-IDENTICAL below the signature (sha256 agreed
+  across all five) and which sits outside the loop, so a drift there is invisible to the pin that
+  exists to catch drift** · **TWO** delegate to a quote-free `in_list` `case` (`self-path`,
+  `permission-gate`) and are structurally safe · **ONE** is the copy #240 drained (`test-walltime`) ·
+  and **THREE** end in `printf … | [sed …] | grep -qxF "$1"` as the **FUNCTION-FINAL** statement:
+  `moving-ref-control-lint.sh`, `test-afunix-path-lint.sh`, `bats-shellcheck-lint.sh`. 5+2+1+3 = 11.
+  **All three are wired into `ship-land.sh` as blocking own-scope gates** (`own_run AFUNIX`,
+  `own_run MOVINGREF`, `own_run BATS_SC`), so a wrong answer downgrades a finding THIS LAND WROTE from
+  BLOCKING to advisory — a fail-OPEN in a blocking land gate, the scar already written out at
+  `scripts/deploy-link-parity.sh:264`. **A grep for the sibling predicate found TWO MORE of the same
+  shape in one-line `in_allowlist()` bodies (`moving-ref-control`, `test-afunix-path`) and a THIRD in
+  `utc-stamp-lint.sh`. SIX SITES, FOUR FILES, ONE DEFECT.**
+
+  🚨 **METHOD 210 AGAIN, AND THE TELL WAS THE SAME ONE: `scripts/pipefail-sigpipe-lint.sh --census`
+  SEES 0 OF THE THREE `in_own` SITES, AND `scripts/pipefail-sigpipe-allow.txt` GRANDFATHERS NONE OF
+  THEM.** Absent from BOTH populations is not exempt — it is INVISIBLE, exactly the discriminator #240
+  named. The census's two `bats-shellcheck-lint.sh` hits are at `:216` and `:366`, both pipelines in
+  `if` position, and the allowlist row for that file reads `2` — it grandfathers precisely the two the
+  detector can see. The clause cannot observe a function-final pipeline because its status is read by
+  the CALLER, which is the documented limit #240 filed rather than bolted on; **that row already owns
+  the detector gap and I did not re-file it.**
+
+  🚨 **THE REGIME IS A PROPERTY OF THE PIPELINE'S SHAPE, AND THE PUBLISHED 64 KiB CONSTANT DESCRIBES
+  ONLY ONE OF THE TWO SHAPES IT IS BEING APPLIED TO.** #240 measured *"rc 0 at 51,032 bytes; rc 141 at
+  102,032 (the 64 KiB pipe buffer)"* on `in_allowlist`, a **TWO-stage** builtin pipeline
+  (`printf | grep -q`), and its honest-limits paragraph then reasoned about the `in_own` sites — which
+  are **THREE-stage** (`printf | sed | grep -q`) — from that same number. They are not the same
+  number. Measured 2026-08-26 at **20 trials per size, load ~13**, needle on line 1, second column
+  confirming the needle present in the NORMALISED set at every size:
+
+      2-stage  printf | grep -q         SAFE to 37,121 B · RACY 1/20 at 55,721 · ALWAYS 20/20 at 87,122+
+      3-stage  printf | sed | grep -q   SAFE to 17,427 B ·                        ALWAYS 20/20 at 23,227+
+
+  **The three-stage form is always inverted at ~2.8× LESS input than the two-stage form first fails at
+  all**, because an external `sed` writes line-by-line and cannot win the race against a `grep -q`
+  that exits on line 1, whereas a builtin `printf` issues one write that the 64 KiB buffer absorbs
+  whole. **The inverted rc also differs by shape — 141 for the external producer, 1 for the builtin,
+  whose write error bash reports itself — and BOTH read as NOT-IN-OWN-SCOPE.** ⚠️ **The transition is
+  a RACE WITH A BAND, not a step: a bisect landed on a size that inverted 1/5 and 3/5, and reporting
+  either as "the threshold" would have been a scalar sample of a varying quantity. The rate curve is
+  the honest instrument here** (memory: `scalar-sample-of-a-varying-quantity`).
+
+  ✅ **ONE OF THE SIX IS OPERATIONALLY LIVE AND FIVE ARE LATENT, AND THE DIFFERENCE IS THE FEED.**
+  `bats-shellcheck`'s own-set is `--own-lines`, **one `path:line` entry per CHANGED LINE**, bounded by
+  nothing but the diff: measured on this repo, `origin/main~60..origin/main` yields **2,689 lines /
+  95,164 bytes — already past the 87,122 always-inverted floor** (`~20..` = 14,439 B, safe; `~150..` =
+  227,781 B; `~400..` = 449,780 B). The other five are bounded under their floors — the two
+  path-fed `in_own` sites by the whole `.bats` corpus at **551 files / 16,945 bytes of paths**, under
+  even the last SAFE point of the three-stage curve, and the three `in_allowlist` sites by embedded
+  allowlists measuring **0 bytes**. **LATENT IS NOT SAFE: every one of those ceilings is an operational
+  quantity that only grows, and nothing announces the crossing.** This is the reachability question
+  #240 said it wished it had asked earlier of its own finding, asked first this time.
+
+  🚨 **THE INSTRUMENT FAULT THAT NEARLY SHIPPED A CONFIDENT WRONG POPULATION, AND ITS POS CONTROLS
+  CAUGHT IT.** My scanner for the class anchored function openings on `^name() {` with **end-of-line
+  after the brace** — and the house spelling in this tree is `in_own() {  # $1=…`, a trailing comment.
+  That single anchor hid **27 of 47 sites, including all three I was hunting**, and the scan printed
+  `function_final_early_exit_pipelines=20` with a straight face. **A scan whose count is plausible is
+  not a scan that ran correctly.** It was caught only because I had written three sites down BY EYE
+  before building it and made them POSITIVE CONTROLS that refuse the run at rc 94; with the anchor
+  fixed the population is **47** and the controls pass 3/3 with a NEG control absent.
+  ⚠️ **AND ONE MORE, IN THE SECOND COLUMN ITSELF — the exact fault #240 enumerated, one layer over.**
+  My first probe's column was labelled `needle_in_set` and computed *"the needle occurs as a whole
+  line of the UNSTRIPPED own-set"*, while two of three subjects `sed`-strip to basenames before
+  grepping. It read **0** on sets that genuinely contained the needle. **A LABEL IS A CLAIM ABOUT AN
+  INSTRUMENT; the column must normalise exactly as its subject normalises.** It read **0** on sets that
+  genuinely contained the needle.
+  ⚠️ **AND A THIRD, WHICH MY OWN COMMIT GATE CAUGHT ON ITSELF.** The launcher for this entry refuses
+  any claim about its own land, and one of its needles was the bare substring `land-verify` — which
+  **matched inside `postland-verify`**, a store this entry reads at its OPEN and which has nothing to
+  do with any land. **A too-wide gate is worth keeping until it has fired once, and the repair is to
+  ANCHOR, never to reword the subject** — the same rule this entry states two paragraphs above about
+  comment lines, spent for the third time in one link. ⚠️ **AND THE FIRST ANCHOR WAS NOT ENOUGH: a
+  lookbehind spelling then matched the very sentence documenting the anchor, which is the regress this
+  class always threatens. It ends by keying on what a land claim ACTUALLY LOOKS LIKE — the lander's own
+  output token followed by a colon — rather than on any word a description of the gate could contain.**
+  **All three faults surfaced as a refused prediction or a refusing gate, never as a hunch.**
+  ⚠️ **TWO of my four prediction sets were REFUSED by their own rc-93 gate and both corrections were
+  narrower than what I had claimed** — I predicted the three-stage shape inverts at any size (it does
+  not; 10 KB answers correctly) and that both transitions are DETERMINISTIC (neither is, at the band).
+  **The gate converting "I predicted N and got N" from a story into a refusal is worth its four lines
+  for the fifth consecutive link.**
+
+  ✅ **THE FIX — SIX SITES DRAINED, ZERO EXISTING ASSERTIONS EDITED, AND APPENDING BEAT INVERTING FOR
+  THE FIFTH LINK RUNNING.** Every site becomes `grep -xF "$1" >/dev/null`: no early exit, no SIGPIPE,
+  the same 0/1 ladder every caller already reads. **`pipefail-sigpipe-lint --census` 151 → 151 with
+  LOST=0 and NEW=0**, compared on `(path, TEXT)` rather than `path:line` because this diff adds comment
+  lines and every number below them shifts — a `path:line` comparison would have reported every site in
+  the four edited files as lost-and-new at once, with `CC_PIPEFAIL_ROOT` pinned on BOTH arms. Bare lint
+  rc 0. Three arms APPENDED to `tests/gate-ownscope-leak.bats` (**21 → 24**), the existing four-copy
+  arm untouched: a DERIVED class guard over every `in_own`/`in_allowlist` in `scripts/*-lint.sh` that
+  refuses a sweep finding fewer than 8 predicates and strips comment lines first (the drained sites each
+  carry a comment explaining the `-q` hazard, so a raw grep convicts the fixed file — **the repair is to
+  ANCHOR, never to reword**); a pin on the FIFTH identical copy the four-copy arm misses; and a
+  BEHAVIOURAL arm feeding the real extracted `in_own` a 120,000-byte own-set past the measured floor,
+  with a NEG control proving a non-member still answers 1, **so it cannot pass by always returning 0 and
+  it survives a rewording of the fix** (memory: `control-calibrated-to-implementation-decays`).
+
+  ✅ **RED-PROOF WRITTEN FIRST: predicted 2 red of 3, got 2 red of 3 at 17:00:57Z / load 11.06**, with
+  the third arm GREEN pre-fix because it pins rather than fixes, and all 21 incumbent arms green — which
+  is what makes the red attributable to the DEFECT and not to the test.
+  ✅ **SEVEN MUTANTS, ONE PER CHANGED SITE, ALL SEVEN PREDICTIONS EXACT ON THE FIRST RUN**, baseline
+  asserted GREEN first, subject restored byte-identically by sha256 in a `finally` (`RESTORE=OK` on
+  every arm), plan pinned at 24 across every arm, tree re-verified green after the table. **M1 is the
+  arm worth copying: it predicted 2 because reverting the LIVE site trips both the class guard and the
+  behavioural arm, while M2–M7 each predict 1 — the prediction encodes which arm owns which site.**
+  Mutants replace an exact substring in python with a uniqueness assert rather than `sed`, whose `.*`
+  swallows the rest of a line; the pairs live in their own `.txt` because every one contains BOTH quote
+  types, the single case #228 measured where "used as a value" does not protect a literal.
+
+  ✅ **GREEN AT 17:05:35Z / load 12.52, 6 suites / 101 tests, 0 skips, plan==ok on every one:**
+  `gate-ownscope-leak` **24** · `bats-shellcheck-lint` **27** · `moving-ref-control-lint` **7** ·
+  `test-afunix-path-lint` **18** · `utc-stamp-lint` **12** · `land-lint-scope-derived` **13**. Plus
+  `shellcheck` rc 0 and `bash -n` rc 0 on all four scripts, `--selftest` rc 0 on all four lints, and
+  `bats-assert-liveness` rc 0 on the edited suite.
+
+  ⚠️ **NAMED AND NOT TAKEN, and this is the cheapest continuation on the board.** The corrected scan's
+  47 sites are mostly `head -1` idioms with a different risk profile, but **two are membership
+  predicates of exactly this shape, outside the land-gate class: `scripts/worktree-gc.sh:491`
+  (`is_live_cwd`, feed = the worktree list, **3,939 bytes** at 17:02Z against an 87,122 floor) and
+  `scripts/stranded-sweep.sh:124` (`mine_match`, feed = the branch list).** Both are one-line drains;
+  I left them because their feeds are ~22× under the floor and each pulls its own suite into the draw,
+  and a wrong answer in `worktree-gc` decides whether a worktree is COLLECTED — worth the separate
+  link rather than a widened one. **`bin/cc-comms-alarm-sweep:92` (`is_legacy_uuid`) is the same shape
+  over a fixed literal and is genuinely bounded.**
+
+  **BOARD at 16:47:02Z: 325 open / 207 blocked / 2,338 done / 5 claimed** (532 combined, 2,875 rows),
+  both partitions asserted (`open + blocked == combined`, `allids == allrows`). Against #240's floor
+  (16:19:53Z) `allids` departures **0** and arrivals **0**, the `claimed` set BYTE-IDENTICAL at 5 rows,
+  and exactly **ONE** status transition in the ~27-minute gap: **`b60eb29e97dd` blocked → open**, one of
+  the cloud rows #240 watched the actuator move inside its own link. **I closed nothing and filed
+  nothing.** Stores at 16:47:10Z: postland RED pages **0** over a denominator of **2,738** (the 134th
+  consecutive zero) · postland stamps **478**, unmoved from #240's close AND floor · `autonomy/pages`
+  **2,091 / 118** · inbox-guard `.escalated` **469 of 469 files**, flat since #240's close. Ledger at my
+  open: `RUNG=✅ LIVE_LAG=4 LIVE_ADDS=0 LIVE_AGE=11785 LIVE_BREACH_WHY=` empty, `LIVE_DIVERGED=0`,
+  `MIG_FAILED=0` — **#240's inherited `🚀` had already cleared itself and I inherited a clean lane**, so
+  I ran no converge. `GATE=stale` for the SIXTEENTH consecutive reading; only the background
+  `postland-verify` stamp moves it and its store advanced across #240's link, so the mechanism is alive
+  underneath the marker and it is not mine to drive. `land-lock.sh --status` read `holder: (free)
+  waiters: 0`. The qos-rewrite diff was clean for the **124th** consecutive time (rc 0, 0 bytes), the
+  four kitty-aware checks all passed by minute ~3 with the `KITTY_WINDOW_ID` selector returning exactly
+  ONE object against a bogus-id NEG control at 0 (**fifteenth consecutive**), and `~/.claude/mailbox/27.md`
+  held the same **4,059 bytes / 1 line** for the twenty-fifth identical reading. The forwarded post-land
+  RED on `tests/cc-dispatch-venue-only.bats::(a)` arrived again as session-start context, naming shas
+  from earlier links and explicitly NOT attributed to them; its owner row is OPEN and **I did not file
+  another page-row**, the seventh consecutive link to decline.
 - **2026-08-26 — drain recycle #240: method 209 — THE CLAUSE THAT ASKS "DOES ANYTHING READ THIS
   PIPELINE'S STATUS?" ANSWERED A DIFFERENT QUESTION, AND THE GUARD FOR THIS EXACT CLASS COULD NOT
   SEE THREE SITES OF IT.** I took #239's own top recommendation — `scripts/postland-verify.sh`, named
