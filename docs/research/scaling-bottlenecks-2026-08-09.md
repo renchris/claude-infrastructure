@@ -106,8 +106,19 @@ it cannot revive +50%, which both hypotheses already exclude.
 **Downstream carriers of the struck figure**, corrected or annotated with this block:
 `memory-econ-rearchitecture-2026-08-10/prior-art.md` row 55/56 (a LIVE-status ledger — flipped).
 Left as dated audit records of what was believed on their date, not corrected:
-`jcode-due-diligence-2026-08-11.md:53`, `jcode-due-diligence-2026-08-11/bottleneck-audit.md:73`,
+`jcode-due-diligence-2026-08-11.md:53,:129`, `jcode-due-diligence-2026-08-11/bottleneck-audit.md:73`,
 `jcode-due-diligence-2026-08-11/ranked-levers.md:36,:54`.
+
+🚨 **UPSTREAM carrier, missed by the 2026-08-24 sweep and struck 2026-08-26:** this row's own source
+axis doc, **`scaling-bottlenecks-2026-08-09/07-accounts-api.md`** — the `07` in the Source column.
+It is not a dated audit record like the jcode family; it is the doc this row *cites*, so a reader
+chasing the citation from a struck row landed on the unstruck original, under the section heading
+*"The largest quota lever is context, not accounts"* (§6.4), which was its headline recommendation.
+It carried the figure at four sites (`:114` composition, `:165` ITPM contrast, `§6.4` prescription,
+`:336` finding 5); all four now carry this ruling. §6.4 also asserted that `CLAUDE.md` § Context
+Stewardship's thresholds are *"a capacity policy, not only a quality policy"* — the exact inference
+this block's ⚠️ paragraph refutes, and the only place in the repo where the struck lever had been
+written back into standing policy. Struck, not deleted, so inbound citations meet the correction.
 
 ---
 
