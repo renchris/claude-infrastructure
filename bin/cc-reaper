@@ -2370,10 +2370,23 @@ wd_lead_live(){
 }
 
 # 0 iff the .daemon record still names the process it recorded. Deliberately {pid, lstart} with NO
-# command check: this mirrors the watchdog's own daemon_alive predicate verbatim, so the census
-# answers the same question production asks — and the positive control below can therefore exercise
-# the real predicate instead of a lookalike. Unverifiable identity ⇒ not provably ours ⇒ not alive
-# (same bias as daemon_alive, which re-spawns rather than trust an unpinned pid).
+# command check, and with the same bias as the watchdog's own daemon_alive — unverifiable identity
+# ⇒ not provably ours ⇒ not alive (daemon_alive re-spawns rather than trust an unpinned pid).
+#
+# THE SHAPE MIRRORS daemon_alive; THE COMPARE DELIBERATELY DOES NOT, and the difference is the
+# DIALECT paragraph below. daemon_alive renders with a bare `ps -o lstart=` and compares for exact
+# string equality, because it reads a record its OWN process wrote. This end reads records written
+# by another program in another locale, so it accepts any dialect this fleet is measured to
+# produce — strictly MORE PERMISSIVE than daemon_alive, by construction and on purpose. Measured
+# 2026-08-26 on one live pid: a record in the C-at-local-TZ dialect and a record in the UTC/C
+# dialect are both ALIVE here and both a stranger to daemon_alive (2 of 3 cells disagree). Do not
+# "restore parity" by tightening this end — that is the bug backlog 7a00b5de1ec0 removed.
+#
+# WHICH CONTROL COVERS WHAT (all three are below, and the split is load-bearing): wd_control proves
+# the sid-keyed CLASSIFIER decides, and nothing more — it writes its fixture with wd_lstart and
+# reads it back through wd_lstart_matches, whose reader-ambient arm IS wd_lstart in the same shell,
+# so it matches by construction. Measured: deleting EITHER cross-dialect arm outright still leaves
+# wd_control printing OK. wd_control_dialect is what covers those arms.
 #
 # DIALECT (backlog 7a00b5de1ec0): the `.daemon` record is written by ANOTHER PROGRAM —
 # hooks/lead-crash-watchdog.sh — and read here, so the two ends can sit in different locales (a
@@ -2448,6 +2461,47 @@ wd_control(){
   return "$rc"
 }
 
+# THIRD POSITIVE CONTROL — the CROSS-DIALECT arms of wd_lstart_matches, which wd_control above
+# cannot reach. Its fixture is written by wd_lstart and read back through the reader-ambient arm,
+# which IS wd_lstart in the same shell, so that arm matches by construction and the other two are
+# exercised only as failing branches. Measured 2026-08-26: delete the UTC/C arm, or the
+# C-at-local-TZ arm, and wd_control still prints OK. That left the dialect tolerance backlog
+# 7a00b5de1ec0 added — the whole reason a record the watchdog wrote in one locale is still readable
+# here — with no control at all, and its failure mode is the quiet one: wd_daemon_live returns 1,
+# wd_classify says `stale-file` ("residue, nothing to reap") for a daemon that is genuinely running,
+# and the census reports a clean zero. That is the same false-clean report wd_control's own comment
+# exists to prevent.
+#
+# So write the record in a dialect this reader does NOT natively render, and require the predicate
+# to match it to its own live pid anyway. One cell per arm, because an arm with no cell has no
+# control. A reader whose ambient rendering already equals the pinned one cannot tell those two
+# apart — that cell says N/A by name rather than reporting a pass the fixture did not earn.
+wd_control_dialect(){
+  local pid=$$ amb pin cloc rc=0 r1 r3
+  amb="$(wd_lstart "$pid")"
+  pin="$(TZ=UTC LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  cloc="$(LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$amb" ] || { printf 'control-dialect=UNKNOWN (this reader cannot render its own lstart — no verdict, not a pass)'; return 0; }
+  if [ -z "$pin" ] || [ "$pin" = "$amb" ]; then r1='N/A'
+  elif wd_daemon_live "$pid" "$pin"; then r1='OK'
+  else r1='FAIL'; rc=1
+  fi
+  if [ -z "$cloc" ] || [ "$cloc" = "$amb" ]; then r3='N/A'
+  elif wd_daemon_live "$pid" "$cloc"; then r3='OK'
+  else r3='FAIL'; rc=1
+  fi
+  if [ "$rc" != 0 ]; then
+    printf 'control-dialect=FAIL (utc-pinned=%s c-local=%s — a foreign-dialect record of THIS live pid read as a stranger, so a daemon recorded in another locale classifies stale-file and tracked-orphan below is an UNDERCOUNT)' "$r1" "$r3"
+    return 1
+  fi
+  if [ "$r1" = 'N/A' ] && [ "$r3" = 'N/A' ]; then
+    printf 'control-dialect=N/A (this reader renders every measured dialect identically, so the fixture cannot discriminate here — the cross-dialect arms are UNPROVEN on this box, not proven good)'
+    return 0
+  fi
+  printf 'control-dialect=OK (utc-pinned=%s c-local=%s — a record in a dialect this reader does not natively produce was still matched to its own live pid)' "$r1" "$r3"
+  return 0
+}
+
 # wd_daemon_pids — the live daemon population, read from the PROCESS TABLE.
 #
 # THE ENUMERATION IS PROCESS-FIRST, NOT PIDFILE-FIRST, and that ordering is the whole design. A
@@ -2519,9 +2573,12 @@ watchdog_census(){
     say "cc-reaper watchdog-census: DISABLED (CC_WATCHDOG_CENSUS=off) — no census taken"; return 0
   fi
 
-  local ctl ctl_rc=0 ctl2 ctl2_rc=0
+  local ctl ctl_rc=0 ctl2 ctl2_rc=0 ctl3
   ctl="$(wd_control)" || ctl_rc=1
   ctl2="$(wd_control_untracked)" || ctl2_rc=1
+  # No companion rc: unlike its two siblings this control's verdict is a STRING with four values
+  # (OK / N/A / UNKNOWN / FAIL), and the rc would only be able to restate the FAIL one.
+  ctl3="$(wd_control_dialect)" || true
 
   # PASS 1 — every live daemon process, classified by whether a .daemon record still names it and by
   # whether the lead that record points at is really alive.
@@ -2633,9 +2690,13 @@ watchdog_census(){
   delta=$(( n_procs - expect ))
 
   if [ "$json" = 1 ]; then
-    printf '{"control_ok":%s,"control_untracked_ok":%s,' \
+    # control_dialect is a STRING, not a bool, on purpose: its N/A and UNKNOWN cells are non-verdicts
+    # that a bool would launder into `true`, which is the exact laundering this control was added to
+    # stop. Additive — every reader of this object is name-keyed.
+    printf '{"control_ok":%s,"control_untracked_ok":%s,"control_dialect":"%s",' \
       "$( [ "$ctl_rc" = 0 ] && printf true || printf false )" \
-      "$( [ "$ctl2_rc" = 0 ] && printf true || printf false )"
+      "$( [ "$ctl2_rc" = 0 ] && printf true || printf false )" \
+      "$( printf '%s' "${ctl3#control-dialect=}" | cut -d' ' -f1 )"
     printf '"counts":{"tracked_live":%s,"tracked_orphan":%s,"untracked_orphan":%s,"stale_file":%s,"live_procs":%s},' \
       "$n_tlive" "$n_torph" "$n_untracked" "$n_stale" "$n_procs"
     printf '"log":{"spawned":%s,"clean_exit":%s,"superseded":%s,"crash_path":%s,"dedupe_skips":%s,"retired":%s,"expected_running":%s,"delta":%s},' \
@@ -2645,6 +2706,7 @@ watchdog_census(){
     say "cc-reaper watchdog-census — CENSUS ONLY, nothing was killed"
     say "  $ctl"
     say "  $ctl2"
+    say "  $ctl3"
     say "  daemon procs : live=$n_procs  →  tracked-live=$n_tlive  tracked-orphan=$n_torph  UNTRACKED-orphan=$n_untracked"
     say "  pidfile-only : stale-file=$n_stale (no live daemon, no live lead — residue)"
     say "  log reconcile: spawned=$n_spawn  clean-exit=$n_gone  superseded=$n_sup  crash-path=$n_crash"
