@@ -91,7 +91,12 @@ in_own() {  # $1=path the lint knows · $2=own-set text · $3=1 if an own-set wa
   return 1
 }
 
-in_allowlist() { printf '%s\n' "$2" | grep -qxF "$1"; }
+# DRAINED, not -q. This body IS the pipeline, so its rc is the answer the caller reads; under the
+# `set -uo pipefail` above, `grep -q` exits on the first match, printf takes a write error, and
+# pipefail returns non-zero — an allowlisted file reading as NOT allowlisted. LATENT while the
+# embedded allowlist is small (the two-stage form is safe to 37,121 bytes, measured 2026-08-26),
+# but a ratchet list only grows and nothing here would announce the crossing.
+in_allowlist() { printf '%s\n' "$2" | grep -xF "$1" >/dev/null; }
 
 # lying_stamps <file> → "<line>:<text>" per violation.
 #

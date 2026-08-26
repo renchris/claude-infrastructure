@@ -452,3 +452,101 @@ PROBE
   [ "$status" -eq 0 ]
   [ "$output" = "UNSET" ]
 }
+
+# ── THE FAIL-OPEN PIPELINE IN THE MEMBERSHIP PREDICATES (drain recycle #241) ──────────────────────
+# One defect, six copies, and the guard that exists to catch it is structurally blind to all six.
+#
+# THE SHAPE. Every own-scope lint answers "may this finding BLOCK the land?" with a membership
+# predicate whose whole body is a pipeline: `printf '%s\n' "$2" | [sed …] | grep -qxF "$1"`. It is
+# the FUNCTION-FINAL statement, so its rc IS the return value the caller reads. Under the
+# `set -uo pipefail` every one of these lints sets, `grep -q` exits the instant it matches, the
+# producer takes SIGPIPE, and pipefail hands the caller 141 (external producer) or 1 (bash builtin)
+# — both of which mean NOT-IN-OWN-SCOPE. A MATCH therefore reads as "not in your diff", which
+# downgrades a real finding from BLOCKING to advisory and lets it land. A fail-OPEN in a blocking
+# land gate. scripts/deploy-link-parity.sh:264 wrote this scar out once already; #240 drained
+# test-walltime-lint's copy; these are the rest.
+#
+# WHY A TEST AND NOT A COMMENT. scripts/pipefail-sigpipe-lint.sh's clause 4 asks whether anything
+# READS the pipeline's status, and a function-final pipeline's status is read by the CALLER, which
+# the clause cannot observe. Measured: its --census sees 0 of the three in_own sites and the
+# allowlist grandfathers none of them, so they are not exempt — they are INVISIBLE. (backlog
+# ca97c678b18b owns that detector gap; this pins the sites so a fix cannot regress while it waits.)
+#
+# THE REGIME IS MEASURED, NOT ASSUMED (2026-08-26, load ~13, 20 trials per size). The transition is
+# a RACE with a band, not a step, and it differs by pipeline SHAPE — so the single 64 KiB constant
+# in the sibling comments describes only the two-stage form:
+#     2-stage  printf | grep -q        safe to 37,121 B · racy at 55,721 · ALWAYS inverted 87,122+
+#     3-stage  printf | sed | grep -q  safe to 17,427 B · ALWAYS inverted from 23,227 B
+# Only ONE of the six sites can reach its floor today: bats-shellcheck's own-set is one "path:line"
+# per CHANGED LINE, and a real 60-commit landing range on this repo already measures 95,164 bytes.
+# The other five are bounded under their floors by an empty embedded allowlist or by the whole .bats
+# corpus being 16,945 bytes of paths. LATENT, not safe: every one of those ceilings is an
+# operational quantity that grows.
+
+@test "no membership predicate in a land-blocking lint ends in an early-exit pipeline" {
+  # DERIVED population, never a hand-listed one: the sites this defect can hide in are exactly the
+  # membership predicates of the own-scope lints, and a list written by hand goes stale the day a
+  # lint is added. The count assertion below is what stops a broken extractor reporting a clean
+  # sweep over nothing (memory: probe-that-acts-on-absence-must-confirm-presence).
+  #
+  # COMMENT LINES ARE STRIPPED FIRST, and that is load-bearing rather than tidy: the drained sites
+  # each carry a comment EXPLAINING the -q hazard, so a grep over raw bodies matches the prose
+  # documenting the fix and convicts the fixed file (memory: enforce-at-chokepoint's scar, and the
+  # rule that the repair is to ANCHOR, never to reword).
+  local f n=0 bad="" body live
+  for f in "$REPO"/scripts/*-lint.sh; do
+    for pred in in_own in_allowlist; do
+      body="$(sed -n "/^$pred()/,/^}/p" "$f")"
+      [ -n "$body" ] || continue
+      n=$((n + 1))
+      live="$(printf '%s\n' "$body" | grep -v '^[[:space:]]*#')"
+      if [ "$(printf '%s\n' "$live" | grep -cE '\|[[:space:]]*(/usr/bin/)?grep[[:space:]]+-[A-Za-z]*q')" -ne 0 ]; then
+        bad="$bad$(basename "$f")'s $pred pipes into an early-exit grep -q
+"
+      fi
+    done
+  done
+  [ "$n" -ge 8 ] || { echo "extractor found only $n predicates — it has stopped matching" >&2; return 1; }
+  [ -z "$bad" ] || { printf '%s' "$bad" >&2; return 1; }
+}
+
+@test "bats-kill-guard carries a FIFTH copy of the shared in_own body, unpinned by the four-copy test" {
+  # The test above this block pins four copies byte-identical. There are ELEVEN in_own definitions
+  # under scripts/, and bats-kill-guard's is byte-identical to the pinned four while sitting outside
+  # their loop — so a drift there is invisible to the pin that exists to catch drift. Its title says
+  # "the four", which reads as a completeness claim over a population it does not span
+  # (memory: assertion-span-must-equal-its-subject). Pinned here rather than by widening that loop,
+  # so the existing arm keeps asserting exactly what its comment explains.
+  local a b
+  a="$(sed -n '/^in_own() {/,/^}/p' "$REPO/scripts/test-hermeticity-lint.sh" | sed '1d')"
+  b="$(sed -n '/^in_own() {/,/^}/p' "$REPO/scripts/bats-kill-guard-lint.sh" | sed '1d')"
+  [ -n "$a" ] || { echo "test-hermeticity in_own body not found — extractor stopped matching" >&2; return 1; }
+  [ -n "$b" ] || { echo "bats-kill-guard in_own body not found — extractor stopped matching" >&2; return 1; }
+  [ "$a" = "$b" ] || { echo "bats-kill-guard's in_own has drifted from the four pinned copies" >&2; return 1; }
+}
+
+@test "bats-shellcheck's in_own still answers IN-OWN on an own-set past the pipe-buffer regime" {
+  # THE BEHAVIOURAL ARM, and the only one of the three that survives a rewording of the fix. The two
+  # above pin a SPELLING; this one pins the MECHANISM, which is the property that may not change
+  # (memory: control-calibrated-to-implementation-decays — #240 lost a pre-land run to a stub keyed
+  # on the exact flag string its own correct fix removed).
+  #
+  # 120,000 bytes with the needle on line 1 is past the measured always-inverted floor of 87,122 for
+  # this two-stage shape, so a re-introduced `grep -q` fails this deterministically rather than one
+  # run in twenty. The function is EXTRACTED and sourced, never re-implemented, so this replays the
+  # real shipped artifact (memory: control-must-replay-the-real-artifact).
+  sed -n '/^in_own() {/,/^}/p' "$REPO/scripts/bats-shellcheck-lint.sh" > "$FIX/in_own.sh"
+  [ -s "$FIX/in_own.sh" ] || { echo "in_own body not found in bats-shellcheck-lint.sh" >&2; return 1; }
+  awk 'BEGIN{ printf "tests/zz-needle.bats:1\n";
+              for (i = 1; i <= 2600; i++) printf "tests/filler-%06d-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bats:%d\n", i, i }' \
+    > "$FIX/own.txt"
+  [ "$(wc -c < "$FIX/own.txt")" -ge 87122 ] || { echo "fixture is under the inverting floor — it cannot discriminate" >&2; return 1; }
+
+  # POSITIVE: a member answers 0. Under pipefail, a re-introduced -q returns 1 or 141 here.
+  run bash -c "set -uo pipefail; . '$FIX/in_own.sh'; own=\"\$(cat '$FIX/own.txt')\"; in_own 'tests/zz-needle.bats:1' \"\$own\" 1; echo rc=\$?"
+  [ "$output" = "rc=0" ] || { echo "member read as NOT-in-own: $output" >&2; return 1; }
+
+  # NEGATIVE: a non-member must still answer non-zero, so the arm cannot pass by always returning 0.
+  run bash -c "set -uo pipefail; . '$FIX/in_own.sh'; own=\"\$(cat '$FIX/own.txt')\"; in_own 'tests/absent-from-the-set.bats:9' \"\$own\" 1; echo rc=\$?"
+  [ "$output" = "rc=1" ] || { echo "non-member did not answer 1: $output" >&2; return 1; }
+}

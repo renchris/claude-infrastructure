@@ -89,10 +89,21 @@ EMBEDDED_ALLOWLIST=""
 in_own() {  # $1=basename · $2=own-set text · $3=1 if an own-set was supplied at all
   [ "${3:-0}" = "1" ] || return 0
   [ -n "$2" ] || return 1
-  printf '%s\n' "$2" | sed 's:.*/::' | grep -qxF "$1"
+  # DRAINED, not -q: this pipeline is the FUNCTION-FINAL statement, so its rc IS the answer every
+  # caller reads. Under the `set -uo pipefail` above, `grep -q` exits on the first match, `sed`
+  # takes SIGPIPE, and pipefail returns 141 — a MATCH reading as NOT-IN-OWN-SCOPE, which downgrades
+  # a finding this land actually wrote from BLOCKING to advisory. The three-stage form inverts far
+  # earlier than the two-stage one its siblings document: measured 2026-08-26 at 20 trials per size
+  # (load ~13), safe to 17,427 bytes and ALWAYS inverted from 23,227 — not the 64 KiB pipe buffer.
+  # LATENT here rather than live, because this own-set is CHANGED PATHS and the whole .bats corpus
+  # is 16,945 bytes of them; that ceiling is an operational quantity and it grows. Draining costs
+  # nothing and keeps the same 0/1 ladder the callers read. (backlog ca97c678b18b: pipefail-sigpipe
+  # -lint cannot SEE a function-final pipeline, so no ratchet would have caught this.)
+  printf '%s\n' "$2" | sed 's:.*/::' | grep -xF "$1" >/dev/null
 }
 
-in_allowlist() { printf '%s\n' "$2" | grep -qxF "$1"; }
+# DRAINED for the reason in in_own above — same shape, same pipefail, and this body IS the pipeline.
+in_allowlist() { printf '%s\n' "$2" | grep -xF "$1" >/dev/null; }
 
 # Moving-ref `git show` sites in one suite: "<lineno>:<ref>:<trimmed source>", one per line.
 moving_ref_shows() { # $1=file
