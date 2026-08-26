@@ -156,6 +156,34 @@ branch queue is empty or explicitly abandoned with reasons, the production deplo
 single-brained and audited, and doc_classifier's authorization holes are closed with tests.
 
 ## Status log
+- **2026-08-26 — THIRD fire of `8f59467c92b0`, and this time the landed remedy was MEASURED to miss
+  it.** Same VM shape as 08-15 and 08-17 (one checkout, GitHub scope of one repo, no
+  `~/Development`); R1-R4 untouched and still **open, correct as filed, and unstarted**. What is new
+  is that `ineligible-cross-repo` **landed on 2026-08-23** — so the 08-17 prediction that every
+  filed remedy would pass this row is now checkable against shipped code, and it holds. Measured
+  both directions in one fixture: the control row `b0be87487228` (project `reso-management-app`) is
+  refused `ineligible-cross-repo` **exit 3**, while this row is `eligible` **exit 0**, `refused :
+  (nothing fired)`. The control is the load-bearing half — the arm is healthy, it simply cannot see
+  this row, because `cross_repo()` (`bin/cc-eligible:766`) is a function of the **project label
+  alone** and this row's label is *correct*. `cc-venue` question 1b misses it too, and correctly:
+  the `dodRef` **is** on trunk. Every arm answers truthfully; **no arm asks the question.** The
+  08-23 arm closes the label-foreign class (106 of 133 sessions, the larger one) and leaves the
+  **subject-foreign** residual — precisely the discriminator
+  `venue-foreign-subject-repo-2026-08-15.md` asked to be restored as a conjunct, and was not.
+  Two further measurements: **(1)** 🚨 `cc-backlog block` from a VM prints `unknown id` and exits
+  **0** — confirmed directly, so a worker following the standard rails is *told the park succeeded*
+  when no store exists to write; this is why three fires have produced three disproofs and zero
+  parked rows. **(2)** the prose disproof bought **9 days** (08-17 → 08-26) against 2 days
+  (08-15 → 08-17) — real, bounded, and not a park.
+  **Not fixed here, and the two blockers are independent and both measured:** `bin/cc-venue`'s
+  header forbids a cloud VM building the venue rule *because its 50-commit clone cannot certify* —
+  this clone is shallow at exactly **50** commits, the case the guard names, not an analogue; and
+  `bats` + `shellcheck` are **both ABSENT**, so a rails change cannot be gated, which is the same
+  call `cloud-venue-project-repo-mismatch-2026-08-16.md` §3 made from the same tooling shape. The
+  four-mechanism list below is also unreachable from a VM: the plan index is
+  `~/.claude/plans-index.json`, absent here. Full measurement + the one-command reproduction →
+  `docs/research/venue-master-subject-foreign-2026-08-26.md`. **Disposition: `cc-backlog block`
+  (desk-side), and verify it took** — per (1), the command exits 0 either way.
 - **2026-08-17 — the SAME row was cloud-dispatched AGAIN, and the re-fire is the finding.**
   `8f59467c92b0` was fired into an identical VM shape (one checkout, GitHub scope of one repo, no
   `~/Development`) ~2 days after the 08-15 entry below wrote its disproof into THIS FILE. R1-R4 were
