@@ -1685,6 +1685,49 @@ EOF
   [ "$got" = "90202 90203 " ]
 }
 
+# ── THE STUCK-WRAPPER ARM MATCHED A MENTION (2026-08-26, backlog 01ab05685857). The predicate was an
+# UNANCHORED `args ~ /cc-close-attrib/`, and the one long-lived process on this box that
+# systematically NAMES that token without being it is the post-land verifier: postland-verify runs
+# the TREE corpus as ONE bats invocation carrying all ~550 suite paths, `tests/cc-close-attrib.bats`
+# among them, under comm `bash` (cc-bats) for 42 min–2.5 h — past the 1800 s floor every time. Every
+# corpus run was cut, so no GREEN stamp could ever exist and nothing re-proved trunk.
+#
+# ONE CELL PER ARM, in one closed world, because the two discriminations are different and were
+# conflated at the sibling site (d3614290): COMMAND POSITION separates the wrapper from a MENTION,
+# and the SUFFIX ANCHOR separates it from a LONGER NAME. Each arm carries its own pid so a mutant
+# reds the cell it breaks rather than one shared assertion.
+@test "garbage: stuck-wrapper is decided by COMMAND POSITION, not by an argv mention" {
+  mk_garbage_fixtures
+  cat > "$GA" <<'EOF'
+90301 90300 45:00 bash
+90302 90300 45:00 bash
+90303 90300 45:00 bash
+90304 90300 45:00 bash
+90305 90300 45:00 bash
+EOF
+  cat > "$GB" <<'EOF'
+90301 /bin/bash /Users/x/.claude/bin/cc-bats tests/cc-backlog.bats tests/cc-close-attrib.bats tests/postland-verify.bats
+90302 /opt/homebrew/bin/bats --tap tests/cc-close-attrib.bats
+90303 /bin/bash /Users/x/.claude/bin/cc-close-attrib.bak /Users/x/.claude-220/node_modules/.bin/claude
+90304 /bin/bash /Users/x/.claude/bin/cc-close-attrib /Users/x/.claude-220/node_modules/.bin/claude --model m
+90305 /Users/x/.claude/bin/cc-close-attrib /Users/x/.claude-220/node_modules/.bin/claude --model m
+EOF
+  run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  got="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
+  # mention  90301 — THE SUBJECT: the postland corpus, whose argv lists the suite. Must SURVIVE.
+  # mention  90302 — the same mention with the token LAST, so the rejection cannot be a field bound.
+  # longer   90303 — `cc-close-attrib.bak` at argv[1]: the ANCHOR arm, a separate discrimination.
+  # interp   90304 — the live wrapper shape (`/bin/bash <path>/cc-close-attrib …`). Must DIE.
+  # direct   90305 — a shebang exec putting the script at argv[0]. Must DIE.
+  # Every pid carries a non-1 parent deliberately: the `orphan-bash` arm sits above this one behind
+  # `parent[p]==1` and `continue`s, so a ppid of 1 would classify these cells before the predicate
+  # under test ever ran — the fixture would then assert a different arm and read green either way.
+  # The two survivors are gated by command position and the third by the anchor; 90304/90305 are the
+  # controls that prove the arm still collects, so this fix cannot widen into "nothing is collected".
+  [ "$got" = "90304 90305 " ]
+}
+
 # ── THE PID THAT CHANGED HANDS (2026-08-16). The kill-time re-verification checked `ucomm` only, and
 # orphan-bash / stuck-wrapper / dead-lead-watchdog all carry the ERE `^bash$` — so for the three
 # classes that dominate the candidate set it asked "is this a bash?" of a pid it had already decided

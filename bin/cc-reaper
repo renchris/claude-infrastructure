@@ -600,6 +600,21 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
     # truncation — and a longer signature only makes that re-identification MORE specific.
     function asig(p,  s) { s = (p in args) ? args[p] : ""; if (s=="") return "-"
       gsub(/\t/, " ", s); return substr(s, 1, 120) }
+    # is_wrapper(pid) — 1 iff this process IS a cc-close-attrib wrapper, decided by COMMAND POSITION
+    # rather than by an argv mention. See THE STUCK-WRAPPER ARM MATCHED A MENTION below for why the
+    # unanchored form emptied this box of its post-land net. The law is the one `wd_daemon_table`
+    # states in the watchdog census: argv[0] IS the token, or argv[0] is an interpreter and argv[1]
+    # is the token. Suffix-anchored on both arms, so a LONGER NAME (`cc-close-attrib.bak`) is not
+    # the wrapper either — that is the ANCHOR doing its own separate job, kept distinct from command
+    # position because conflating those two is exactly what d3614290 had to unpick at the sibling.
+    function is_wrapper(p,   n,t) {
+      if (!(p in args)) return 0
+      n = split(args[p], t)
+      if (n < 1) return 0
+      if (t[1] ~ /(^|\/)cc-close-attrib$/) return 1
+      if (n >= 2 && t[1] ~ /(^|\/)(bash|sh|zsh|dash|ksh)$/ && t[2] ~ /(^|\/)cc-close-attrib$/) return 1
+      return 0
+    }
     function esec(e,  d,a,n,hms) { d=0; if (index(e,"-")>0) { split(e,a,"-"); d=a[1]; e=a[2] }
       n=split(e,hms,":");
       if(n==3) return d*86400+hms[1]*3600+hms[2]*60+hms[3];
@@ -646,7 +661,31 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
           if (comm[p]=="zsh" && args[p] ~ /^(-zsh|zsh|\/bin\/zsh)( |$)/ && secs[p]>=600) { printf "orphan-zsh\t%s\t^zsh$\t%s\t%s\t-\n", p, secs[p], asig(p); continue }
           if (comm[p]=="bash" && args[p] !~ ("(" wl ")") && args[p] !~ /lead-crash-watchdog/ && secs[p]>=600) { printf "orphan-bash\t%s\t^bash$\t%s\t%s\t%s\n", p, secs[p], asig(p), substr(args[p],1,80); continue }
         }
-        if (comm[p]=="bash" && args[p] ~ /cc-close-attrib/ && secs[p]>=1800) printf "stuck-wrapper\t%s\t^bash$\t%s\t%s\t-\n", p, secs[p], asig(p)
+        # THE STUCK-WRAPPER ARM MATCHED A MENTION, AND THE THING IT KEPT KILLING WAS THE POST-LAND
+        # NET (2026-08-26, backlog 01ab05685857; killer CONFIRMED at this site by b83f4a2ba219).
+        # The predicate was `args[p] ~ /cc-close-attrib/` — an UNANCHORED substring over the whole
+        # argv — and on this box exactly one long-lived process systematically NAMES that token
+        # without being it: postland-verify runs the TREE corpus as ONE bats invocation
+        # (`postland-verify.sh:2928,2934` — `"$BATS_BIN" "${bargs[@]}"`), so its argv carries all
+        # ~550 suite paths, `tests/cc-close-attrib.bats` among them. `bats` PATH-resolves to
+        # bin/cc-bats, whose comm is `bash`, and a full corpus runs 42 min–2.5 h — past the 1800 s
+        # floor every single time. Nothing above saved it: this arm is OUTSIDE the `parent[p]==1`
+        # block, it never consulted `wl` (which lists `postland-verify`), and the run is
+        # launchd-parented so no live claude sits above it in `above`.
+        # MEASURED CONSEQUENCE, which is the whole reason this line is worth a paragraph: every
+        # corpus run was TERMed then KILLed mid-suite, postland recorded `cut` (the CORRECT verdict
+        # — it refuses to convict a tree on a truncated run), and `postland-verify.sh:1533` already
+        # spelled out where that ends: "With every run cut, NO GREEN STAMP CAN EVER EXIST, so
+        # deploy-live refuses forever." Last six stamps 5x cut + 1x hung, zero green; green
+        # production 0.17/day against ~63 commits/day; newest green stamp 46 h old against a 24 h
+        # staleness bound; three red suites reached trunk unnoticed because nothing was re-proving
+        # it. The runner reported only "killed by signal 15 from OUTSIDE this runner (sender
+        # unidentified)", which is why this survived so long as an unattributed kill.
+        # THE FIX IS STRICTLY NARROWING and loses no real wrapper: the live shape is
+        # `/bin/bash <path>/cc-close-attrib <session argv>` (interpreter arm), and a shebang exec
+        # puts the script at argv[0] (direct arm). The corpus is rejected because its argv[1] is
+        # cc-bats and the token sits at field 3+ — a MENTION, never the population this arm collects.
+        if (comm[p]=="bash" && is_wrapper(p) && secs[p]>=1800) printf "stuck-wrapper\t%s\t^bash$\t%s\t%s\t-\n", p, secs[p], asig(p)
       }
     }')"
   # lead-crash-watchdog daemons whose lead is DEAD — file-driven (the .pid file holds the lead pid,
