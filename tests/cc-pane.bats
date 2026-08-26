@@ -449,3 +449,46 @@ PY
   run "$CP" address "AAA"
   [ "$status" -eq 2 ]
 }
+
+# ── the enumeration's SIZE, which the two tests above cannot see ───────────────────────────
+# Both of those pin this exact contract and both stay GREEN over the defect this guards: measured
+# 2026-08-26T21:56Z, all 31 cases passed with drv_iterm2_address carrying `grep -qxF` in a
+# pipeline. Two independent reasons, and making the fixture bigger only fixes the first.
+#   (1) SCALE. Their lists are one and three ids; the SIGPIPE regime for that two-stage shape
+#       starts at 37,121 bytes and is unconditional from 87,122.
+#   (2) THE rc IS THE SAME ON BOTH SIDES. The inverted PRESENT case and the correct ABSENT case
+#       both return RC_NO. So `address ZZZ` is rc 1 whether the subject is fixed or broken, and
+#       the only assertion that discriminates is a PRESENT id at a size past the floor.
+# Sized from the measurement rather than from taste: 3,301 ids is ~122 KB of id feed, past the
+# always-inverted floor, so a re-introduced `grep -q` fails every run rather than one in twenty.
+# THIS ARM IS THE ONLY GUARD ON THAT LINE. pipefail-sigpipe-lint reads the last stage's own exit
+# and cannot observe a caller, so a pipeline in `||` position is in neither `--census` nor the
+# allowlist (both 0 rows for bin/cc-pane, measured 2026-08-26T21:52Z) — there is no ratchet here
+# to catch a revert.
+@test "address <id> answers PRESENT for a live pane even when the enumeration is past the SIGPIPE floor" {
+  local big="$BATS_TEST_TMPDIR/big-list.json"
+  local needle="AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
+  # Needle FIRST: grep exits on line 1, leaving the producer the largest possible unwritten
+  # remainder, which is the condition that raises SIGPIPE.
+  awk -v n="$needle" 'BEGIN{
+    printf "[{\"id\":\"%s\"}", n
+    for (i = 0; i < 3300; i++) printf ",{\"id\":\"F%011d-FFFF-FFFF-FFFF-FFFFFFFFFFFF\"}", i
+    printf "]\n"
+  }' > "$big"
+  [ -s "$big" ]
+  # The fixture must actually contain the needle, matched the way the subject matches it — a
+  # whole line of the extracted id list. Without this column a broken generator ships as data.
+  [ "$(jq -r '.[].id' "$big" | grep -cxF -e "$needle")" -eq 1 ]
+  [ "$(jq -r '.[].id' "$big" | wc -c | tr -d ' ')" -gt 87122 ]
+
+  fake "cat '$big'; exit 0"
+  run "$CP" address "$needle"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$needle" ]
+
+  # NEG control at the SAME size: a genuinely absent id must still be RC_NO, so this arm cannot
+  # pass by a subject that has stopped discriminating and always answers 0.
+  run "$CP" address "ZZZZZZZZ-ZZZZ-ZZZZ-ZZZZ-ZZZZZZZZZZZZ"
+  [ "$status" -eq 1 ]
+  true
+}

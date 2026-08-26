@@ -3,7 +3,6 @@
 # GAINS a violation and when it LOSES one without the count being lowered.
 # Regenerate: scripts/pipefail-sigpipe-lint.sh --regen > scripts/pipefail-sigpipe-allow.txt
 bin/cc-announce	5
-bin/cc-await-ping	1
 bin/cc-backlog	1
 bin/cc-blockers	1
 bin/cc-bus	3
@@ -11,9 +10,7 @@ bin/cc-classify	3
 bin/cc-cloud	1
 bin/cc-comms-alarm-sweep	1
 bin/cc-idl	1
-bin/cc-notify	1
 bin/cc-reaper	1
-bin/cc-teardown	1
 docs/activation/pending-activation/13-mailbox-gc-activate.sh	2
 docs/activation/pending-activation/32-cc-roles-kitty-normalise-activate.sh	2
 docs/activation/wiring-all.sh	2

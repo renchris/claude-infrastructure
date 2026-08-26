@@ -186,7 +186,19 @@ drv_iterm2_address() {
   local id="$1" ids rc
   ids="$(drv_iterm2_list)"; rc=$?
   [ "$rc" = "$RC_OK" ] || return "$rc"
-  printf '%s\n' "$ids" | grep -qxF "$id" || return "$RC_NO"
+  # DRAINED, not -q — and the comment four lines up is what this line was breaking. `grep -q` exits
+  # on the FIRST match, the producer takes SIGPIPE, `set -uo pipefail` (:39) promotes the 141, and
+  # the `||` arm fires: a pane the enumeration DID list returns RC_NO, "provably gone". Not on an
+  # indeterminate enumeration — on a perfectly successful one that is merely large. Measured on this
+  # subject 2026-08-26T21:56Z, 20 trials per size, needle on line 1: at a 120,003-byte id feed the
+  # answer is WRONG 20/20; at 4,014 bytes it is right 20/20. Two-stage bands: safe <=37,121 B, racy
+  # at 55,721, always inverted from 87,122.
+  # THIS SITE HAS NO RATCHET. pipefail-sigpipe-lint's clause reads the LAST stage's own exit and
+  # cannot observe a caller, so a pipeline in `||` position is absent from `--census` and from
+  # `pipefail-sigpipe-allow.txt` alike (both measured 0 rows for this file at 21:52Z) — invisible,
+  # not exempt (backlog ca97c678b18b). That is why the guard for this line is a behavioural arm in
+  # tests/cc-pane.bats and not an allowlist row.
+  printf '%s\n' "$ids" | grep -xF "$id" >/dev/null || return "$RC_NO"
   printf '%s\n' "$id"
 }
 

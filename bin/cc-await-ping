@@ -1001,7 +1001,15 @@ _it2_panes() {   # echo the live pane-id set; rc 1 = the transport could not ans
 _pane_gone() {   # 0 = CONFIRMED absent · 1 = PRESENT (alive) · 2 = cannot answer (UNKNOWN)
   local ids
   ids="$(_it2_panes)" || return 2
-  printf '%s\n' "$ids" | grep -qxF "$CUR_UUID" && return 1
+  # DRAINED, not -q. The rc map on the line above is what makes this the worst direction of the
+  # four: `&&` failing does not return "unknown", it falls through to `return 0` — CONFIRMED
+  # absent. So the one spelling that fails on a MATCH converts "this pane is alive" into the
+  # strongest possible claim that it is dead, about the very session doing the waiting.
+  # Two-stage, so the floor is 37,121 B; the feed here is the ALREADY-EXTRACTED id list, measured
+  # 37 B over 12 panes at 2026-08-26T21:53Z. Deeply latent — three orders of magnitude of margin —
+  # and drained anyway, because latency is a property of today's pane count, nothing announces the
+  # crossing, and the failure is unrecoverable in the direction it fails.
+  printf '%s\n' "$ids" | grep -xF "$CUR_UUID" >/dev/null && return 1
   return 0
 }
 
