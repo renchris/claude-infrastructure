@@ -2566,12 +2566,31 @@ wd_control_dialect(){
 # `ps -o lstart= | tr -s ' '` wrote into the .daemon file — the two must match textually or every
 # record reads stale.
 #
+# A DAEMON IS THE SCRIPT IT RUNS, NEVER A PROCESS THAT MERELY NAMES IT (2026-08-26). The scan used
+# to accept the script token at EITHER of the two arg fields, unconditionally. Field 8 is argv[0] and
+# field 9 is argv[1], so `shellcheck /w/hooks/lead-crash-watchdog.sh` and `vim <that path>` — argv[0]
+# a tool, argv[1] the script — were both enumerated as live daemons, named by no .daemon record,
+# classed UNTRACKED-orphan and printed as `▶ kill <pid>` against the operator's own editor or linter.
+# That is exactly the failure mode the paragraph above disclaims for `pgrep -f` ("matches any process
+# whose argv merely MENTIONS the path"); the bound `i <= 9` narrowed the window but did not close it,
+# because argv[1] is INSIDE that window and is where a one-argument tool puts its file.
+#
+# So the two fields are no longer interchangeable, and each carries its own law:
+#   argv[0] — the script IS the image: a bare exec, accepted on its own.
+#   argv[1] — accepted ONLY behind an interpreter at argv[0], which is what a shebang exec renders
+#             (`#!/bin/bash` ⇒ argv "/bin/bash <script>"). A non-interpreter at argv[0] means the
+#             process is operating ON the file, not running it.
+# The interpreter set is the shell family rather than `bash` alone: the shebang is the only producer
+# today, and widening the ACCEPT side cannot re-open the hole above — `shellcheck`, `vim` and
+# `claude` fail `sh$` anchored at a path boundary, which is what does the rejecting.
+#
 # Seam: CC_WATCHDOG_PS_BIN — lets the positive control drive a synthetic process table.
 wd_daemon_table(){
   "${CC_WATCHDOG_PS_BIN:-ps}" -axo pid,lstart,etime,args 2>/dev/null \
-    | awk '{ for (i = 8; i <= 9 && i <= NF; i++)
-               if ($i ~ /(^|\/)lead-crash-watchdog\.sh$/) {
-                 printf "%s\t%s %s %s %s %s\t%s\n", $1, $2, $3, $4, $5, $6, $7; break } }' \
+    | awk '{ hit = 0
+             if (NF >= 8 && $8 ~ /(^|\/)lead-crash-watchdog\.sh$/) hit = 1
+             else if (NF >= 9 && $9 ~ /(^|\/)lead-crash-watchdog\.sh$/ && $8 ~ /(^|\/)(ba|da|k|z)?sh$/) hit = 1
+             if (hit) printf "%s\t%s %s %s %s %s\t%s\n", $1, $2, $3, $4, $5, $6, $7 }' \
     | sort -u
 }
 wd_daemon_pids(){ wd_daemon_table | cut -f1; }
@@ -2579,12 +2598,31 @@ wd_daemon_pids(){ wd_daemon_table | cut -f1; }
 # SECOND POSITIVE CONTROL — the UNTRACKED leg (the one that matters most, and the one a file-keyed
 # census could not have had at all). wd_control above proves the sid-keyed classifier decides; it
 # says nothing about whether the process-table enumeration can SEE a daemon nobody recorded. Here a
-# stub `ps` emits a synthetic table containing one daemon pid that appears in no .daemon file, and
-# the enumerator must return it. If wd_daemon_pids' args-matching ever silently stops matching — a
-# `comm` truncation, a changed ps format, an over-anchored pattern — the live census would quietly
-# report zero orphans, which is exactly what "everything is fine" looks like.
+# stub `ps` emits a synthetic table and the enumerator's verdict on each row is read back. If
+# wd_daemon_pids' args-matching ever silently stops matching — a `comm` truncation, a changed ps
+# format, an over-anchored pattern — the live census would quietly report zero orphans, which is
+# exactly what "everything is fine" looks like.
+#
+# ONE CELL PER ARM, because an arm with no cell has no control (2026-08-26). The pre-2026-08-26
+# fixture was a single accept row plus two decoys, and asked which arm of the enumerator it made
+# reachable it answered only ONE: its accept row put the script at argv[1], so deleting the argv[0]
+# arm outright left this control printing OK — measured, a mutant it could not see. The two decoys
+# were no better than they looked: the not-the-watchdog row tests the ANCHOR, and the
+# `claude --print fix <path>` row was read as proving a mention is ignored when its mention sits at
+# field 11, OUTSIDE the scan window, so it is refused by the BOUND and every anchor mutant passes it.
+# The one place a mention can actually be ADMITTED — argv[1], where a one-argument tool puts its
+# file — had no cell at all, and that is the arm that was broken.
+#
+#   interp  — interpreter at argv[0], script at argv[1] (the shebang render): must be ENUMERATED
+#   argv0   — script IS argv[0], a bare exec: must be ENUMERATED (no cell before; mutant-invisible)
+#   mention — a TOOL at argv[0], the script at argv[1]: must be REJECTED (no cell before; the live
+#             false positive — this is the cell that moved)
+#   anchor  — a different script at argv[1]: must be REJECTED (the regex boundary)
+#   bound   — the script named past field 9: must be REJECTED (the scan window)
+# The fixture is written here by hand and read back through the subject — it shares no writer with
+# the predicate it tests, so no arm is reachable merely by construction.
 wd_control_untracked(){
-  local d stub out
+  local d stub out interp argv0 mention anchor bound rc=0
   d="$(mktemp -d "${TMPDIR:-/tmp}/wd-ctl2.XXXXXX" 2>/dev/null)" || { printf 'control-untracked=FAIL reason=no-tmpdir'; return 1; }
   stub="$d/ps"
   {
@@ -2593,15 +2631,25 @@ wd_control_untracked(){
     printf 'printf "%%s\\n" "424242 Wed 29 Jul 22:34:14 2026 01-02:03:04 /bin/bash /w/hooks/lead-crash-watchdog.sh"\n'
     printf 'printf "%%s\\n" "424243 Wed 29 Jul 22:34:14 2026 01-02:03:04 /bin/bash /w/hooks/not-the-watchdog.sh"\n'
     printf 'printf "%%s\\n" "424244 Wed 29 Jul 22:34:14 2026 01-02:03:04 /w/claude --print fix hooks/lead-crash-watchdog.sh"\n'
+    printf 'printf "%%s\\n" "424245 Wed 29 Jul 22:34:14 2026 01-02:03:04 /w/hooks/lead-crash-watchdog.sh"\n'
+    printf 'printf "%%s\\n" "424246 Wed 29 Jul 22:34:14 2026 01-02:03:04 shellcheck /w/hooks/lead-crash-watchdog.sh"\n'
   } > "$stub"
   chmod +x "$stub" 2>/dev/null || true
-  out="$(CC_WATCHDOG_PS_BIN="$stub" wd_daemon_pids)"
+  # Padded on both ends so every membership test below is a whole-token match, never a substring.
+  out=" $(CC_WATCHDOG_PS_BIN="$stub" wd_daemon_pids | tr '\n' ' ')"
   rm -rf "$d" 2>/dev/null || true
-  if [ "$out" = "424242" ]; then
-    printf 'control-untracked=OK (synthetic unrecorded daemon enumerated from the process table; both decoys ignored)'
+  case "$out" in *' 424242 '*) interp=OK      ;; *) interp=MISSED;   rc=1 ;; esac
+  case "$out" in *' 424245 '*) argv0=OK       ;; *) argv0=MISSED;    rc=1 ;; esac
+  case "$out" in *' 424246 '*) mention=ADMITTED; rc=1 ;; *) mention=REJECTED ;; esac
+  case "$out" in *' 424243 '*) anchor=ADMITTED;  rc=1 ;; *) anchor=REJECTED  ;; esac
+  case "$out" in *' 424244 '*) bound=ADMITTED;   rc=1 ;; *) bound=REJECTED   ;; esac
+  if [ "$rc" = 0 ]; then
+    printf 'control-untracked=OK (interp=%s argv0=%s mention=%s anchor=%s bound=%s — an unrecorded daemon is enumerated by either arm, and a process that merely NAMES the script is not one)' \
+      "$interp" "$argv0" "$mention" "$anchor" "$bound"
     return 0
   fi
-  printf 'control-untracked=FAIL (enumerator returned "%s", expected 424242 — the census CANNOT SEE untracked daemons; untracked_orphan=0 below means nothing)' "${out:-<empty>}"
+  printf 'control-untracked=FAIL (interp=%s argv0=%s mention=%s anchor=%s bound=%s; enumerator returned "%s" — a MISSED arm means the census cannot see untracked daemons and untracked_orphan=0 below means nothing; an ADMITTED decoy means the kill rows below name processes that are not daemons at all)' \
+      "$interp" "$argv0" "$mention" "$anchor" "$bound" "$(printf '%s' "$out" | tr -s ' ' | sed 's/^ //;s/ $//')"
   return 1
 }
 

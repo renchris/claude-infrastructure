@@ -194,6 +194,52 @@ setup() {
   case "$output" in *'"daemon_pid":"222"'*) echo "argv MENTION counted as a daemon (pgrep -f trap): $output"; false ;; *) ;; esac
 }
 
+# The two tests below are the cells the one above does not have, and its own title is why they were
+# missing (2026-08-26). It says "not a mere argv mention" and its decoy 222 puts that mention at
+# field 11 — OUTSIDE the enumerator's `NF >= 9` window — so 222 is refused by the scan BOUND and the
+# test passes identically however the anchor behaves. The place a mention is actually REACHABLE is
+# argv[1], which is exactly where a one-argument tool puts its file, and it had no cell anywhere:
+# measured 2026-08-26, `shellcheck <the hook path>` and `vim <the hook path>` were both enumerated as
+# live daemons, classed UNTRACKED-orphan (no .daemon record names an editor) and printed as
+# `▶ kill <pid>` against the operator's own process. The argv[0] arm had no cell either — neutralise
+# it and the pre-2026-08-26 control still printed OK.
+@test "enumerate: a TOOL that merely names the script at argv[1] is NOT a daemon" {
+  stub="$D/ps"
+  {
+    printf '#!/bin/bash\n'
+    printf 'printf "%%s\\n" "  PID STARTED                     ELAPSED ARGS"\n'
+    printf 'printf "%%s\\n" "111 Wed 29 Jul 22:34:14 2026 00:10 /bin/bash /x/hooks/lead-crash-watchdog.sh"\n'
+    printf 'printf "%%s\\n" "444 Wed 29 Jul 22:34:14 2026 00:10 shellcheck /x/hooks/lead-crash-watchdog.sh"\n'
+    printf 'printf "%%s\\n" "555 Wed 29 Jul 22:34:14 2026 00:10 /usr/bin/vim /x/hooks/lead-crash-watchdog.sh"\n'
+  } > "$stub"
+  chmod +x "$stub"
+  run env CC_WATCHDOG_PS_BIN="$stub" "$REAPER" watchdog-census --json
+  [ "$status" -eq 0 ]
+  # Effect read from the counts, not only from the row list: an over-count is what puts a `▶ kill`
+  # line on screen, and live_procs is the number those rows are drawn from.
+  printf '%s' "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["counts"]["live_procs"]==1, d["counts"]; assert d["counts"]["untracked_orphan"]==1, d["counts"]'
+  case "$output" in *'"daemon_pid":"111"'*) ;; *) echo "the real daemon was not enumerated: $output"; false ;; esac
+  case "$output" in *'"daemon_pid":"444"'*) echo "shellcheck was enumerated as a watchdog daemon: $output"; false ;; *) ;; esac
+  case "$output" in *'"daemon_pid":"555"'*) echo "an editor was enumerated as a watchdog daemon: $output"; false ;; *) ;; esac
+}
+
+@test "enumerate: a bare-exec daemon (the script IS argv[0]) is enumerated" {
+  # The other arm. A shebang exec renders "/bin/bash <script>", but the argv[0] arm is what the
+  # enumerator falls back on and nothing exercised it — the accept row of every prior fixture put
+  # the script at argv[1]. An arm with no cell has no control.
+  stub="$D/ps"
+  {
+    printf '#!/bin/bash\n'
+    printf 'printf "%%s\\n" "  PID STARTED                     ELAPSED ARGS"\n'
+    printf 'printf "%%s\\n" "666 Wed 29 Jul 22:34:14 2026 00:10 /x/hooks/lead-crash-watchdog.sh"\n'
+  } > "$stub"
+  chmod +x "$stub"
+  run env CC_WATCHDOG_PS_BIN="$stub" "$REAPER" watchdog-census --json
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["counts"]["live_procs"]==1, d["counts"]'
+  case "$output" in *'"daemon_pid":"666"'*) ;; *) echo "a bare-exec daemon was invisible to the census: $output"; false ;; esac
+}
+
 # ── the safety property: CENSUS ONLY ────────────────────────────────────────────────────────────
 @test "census kills NOTHING — the process it names as an orphan is still alive afterwards" {
   # Effect read, not a text scan: the fixture orphan names THIS test's own pid, so if the leg ever
