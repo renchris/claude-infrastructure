@@ -2060,6 +2060,148 @@ r7_famine() { # stamps dir exists, nothing green anywhere, commits stranded abov
   [[ "$output" == *"class=no-stamps-dir"* ]] || false
 }
 
+# ── D: THE PROBE'S THIRD ANSWER — "I could not run" (method 208) ──────────────────────────────────
+# refusal_culprit's own comment demands that famine be named "only when the wider probe AGREES", and
+# the code accepted the probe's SILENCE as that agreement. Silence is not agreement: the probe is
+# also silent when it never ran. The contrast is ten lines away in the same file — last_advance_hours
+# prints the literal "unknown" and says in its comment why (memory: lookup-miss-is-not-absence) —
+# so the file already knew the shape and blind_green_depth had no way to express it.
+#
+# The stub keys on `-lE`, which is the green scan's spelling and NOTHING else's in this script (the
+# is_green/is_red/is_offbox_green readers all use -qE). That is a source-text anchor and it WILL rot
+# at the next refactor, so every arm below asserts the stub actually FIRED: a stub that goes mute
+# must fail as a named instrument fault, never pass as data (#238's two mute positive controls).
+r7_stub_grep() { # <die|pass> — a grep that witnesses itself, then dies ONLY on the probe's call
+  R7_STUBS="$BATS_TEST_TMPDIR/stubs"; R7_WIT="$BATS_TEST_TMPDIR/grep.witness"
+  mkdir -p "$R7_STUBS"; rm -f "$R7_WIT"
+  { printf '#!/bin/bash\n'
+    printf 'case " $* " in *" -lE "*) printf x >> "%s"' "$R7_WIT"
+    [ "$1" = die ] && printf '; kill -TERM $$'
+    printf ' ;; esac\n'
+    printf 'exec /usr/bin/grep "$@"\n'
+  } > "$R7_STUBS/grep"
+  chmod +x "$R7_STUBS/grep"
+  R7_PATH="$R7_STUBS:/usr/bin:/bin"
+}
+r7_probe_fired() { [ -s "${R7_WIT:-/nonexistent}" ]; }
+
+@test "R7 THE DEFECT: a probe that RUNS AND DIES is read as agreement, and mints a FAMINE that is false" {
+  # PRE-FIX THIS IS RED. A green demonstrably exists 3 commits down, so "no GREEN tree anywhere in
+  # the newest 2000 commits" is not a mislabel, it is a positive falsehood — and its prescribed
+  # remedy is a dry-run that cannot fix it, in place of the CC_DEPLOY_SCAN raise that can.
+  r7_setup
+  advance_origin b c
+  stamp HEAD                                         # a green at depth 3 of origin/main…
+  R7_SCAN=2                                          # …outside the scan window ⇒ scan-window-blind
+  r7_stub_grep die
+  run dlr; run dlr; run dlr
+  r7_probe_fired || false                            # the anchor still selects the probe's own call
+  [[ "$output" == *"culprit=probe-unreadable"* ]] || false
+  [[ "$output" != *"famine"* ]] || false
+  [ "$(printf '%s\n' "$output" | grep -c 'green_depth=-')" -eq 1 ] || false
+  grep -q "could not run" "$CC_BACKLOG_LOG" || false
+  grep -q "not famine" "$PAGES/deploy-refusal-escalation-probe-unreadable.page" || false
+}
+
+@test "R7 CONTROL: the SAME fixture through the SAME stub, alive, is still SCAN-WINDOW-BLIND" {
+  # Feeds the control through the identical pipeline as the subject — same stub file, same PATH, one
+  # variable moved (whether it dies). Without this, "always blame the probe" would pass the test
+  # above and nothing would notice.
+  r7_setup
+  advance_origin b c
+  stamp HEAD
+  R7_SCAN=2
+  r7_stub_grep pass
+  run dlr; run dlr; run dlr
+  r7_probe_fired || false
+  [[ "$output" == *"culprit=scan-window-blind"* ]] || false
+  [[ "$output" == *"green_depth=3"* ]] || false
+  [[ "$output" != *"probe-unreadable"* ]] || false
+}
+
+@test "R7 POLARITY: a genuine famine with a LIVE probe stays FAMINE — the new arm is not a widening" {
+  # The other direction of the same guard. An arm that answered "unreadable" whenever it saw no
+  # green would have deleted the famine culprit entirely while looking like a fix.
+  # THE FIXTURE CARRIES A RED STAMP ON PURPOSE, and the first spelling did not. With an EMPTY stamps
+  # dir `find … -exec grep …` never invokes grep at all, so the stub could not fire and the arm
+  # asserted nothing about the probe — the red-proof caught it as a named fault rather than passing.
+  # A red stamp is the honest famine shape anyway: the scan RUNS and legitimately finds no green.
+  r7_setup; r7_famine
+  stamp origin/main red
+  R7_SCAN=2
+  r7_stub_grep pass
+  run dlr; run dlr; run dlr
+  r7_probe_fired || false
+  [[ "$output" == *"culprit=verifier-famine"* ]] || false
+  [[ "$output" != *"probe-unreadable"* ]] || false
+}
+
+@test "R7 THE INVERSION: on the SUCCESS path the probe's own rc is NON-ZERO, so output outranks rc" {
+  # THE FIX THAT LOOKS OBVIOUS AND IS WRONG. `git log | awk '…exit'` SIGPIPEs its producer the moment
+  # awk matches, so a probe that SUCCEEDS comes back rc 141 while an honest no-match comes back rc 0
+  # — exactly inverted. A fix that read the rc before the output would call every healthy probe dead.
+  #
+  # A 5-commit fixture cannot see this: git finishes writing before awk exits, so the success path
+  # reads rc 0 and the inversion is invisible by construction (memory: control-fixture-must-reach-
+  # the-bug's-regime).
+  #
+  # THE THRESHOLD IS THE PIPE BUFFER, AND NOTHING SMALLER IS STRUCTURAL. A 401-commit fixture emits
+  # ~16 KB, which FITS, so whether git exits before awk reads is a race — one that a 12-trial probe
+  # won 12/12 and this suite then lost on its first run. Above 64 KiB (>1598 lines of %T) the
+  # producer CANNOT finish, so the regime is structural rather than lucky: 1700 commits, measured
+  # 10/10 non-zero. The precondition is ASSERTED below rather than assumed, so a fixture that stops
+  # reaching the regime fails as a named instrument fault instead of passing vacuously.
+  #
+  # fast-import, not 1700 `git commit`s: ~1s against ~100s. `data N` is an exact BYTE COUNT — a
+  # 4-for-3 mismatch makes fast-import swallow the next line and crash, which cost one probe run.
+  r7_setup
+  local i base now
+  # `from` takes a mark, a full branch name or a 40-hex SHA-1 — NOT a rev-parse expression, so
+  # `refs/heads/main^0` is rejected and the whole import is a no-op. Resolve it here instead.
+  base="$(git -C "$SHARED" rev-parse HEAD)"
+  # THE COMMITTER DATE IS PART OF THE FIXTURE. A hardcoded epoch made every commit years old, which
+  # trips CC_DEPLOY_MAX_LAG_HOURS, which runs the T2 degrade path, which ADVANCES — so the lane never
+  # refused, never escalated, and the arm asserted nothing against an empty output.
+  now="$(date +%s)"
+  { printf 'blob\nmark :1\ndata 5\nseed\n\n'
+    for i in $(seq 1 1697); do
+      printf 'commit refs/heads/main\nmark :%s\ncommitter t <t@x> %s +0000\ndata 2\nc\n' \
+             "$(( i + 1 ))" "$(( now - 1700 + i ))"
+      if [ "$i" -eq 1 ]; then printf 'from %s\n' "$base"; else printf 'from :%s\n' "$i"; fi
+      printf 'M 100644 :1 p%s\n\n' "$i"          # a DISTINCT tree per commit, or %T repeats
+    done
+  } | git -C "$SHARED" fast-import --quiet
+  git -C "$SHARED" reset -q --hard refs/heads/main
+  # The import is the fixture. A silent no-op here would leave every assertion below vacuous.
+  [ "$(git -C "$SHARED" rev-list --count HEAD)" -ge 1698 ] \
+    || { echo "INSTRUMENT FAULT: fast-import produced $(git -C "$SHARED" rev-list --count HEAD) commits"; false; }
+  git -C "$SHARED" push -q origin main
+  stamp HEAD                                          # the green…
+  advance_origin b c                                  # …now at depth 3 of a 1700-commit trunk
+  # PRECONDITION, measured here with an independent instrument: the producer must still be running
+  # when awk exits, or this test asserts nothing about the inversion.
+  # PIPEFAIL IS PART OF THE INSTRUMENT. bats does not set it, and without it a pipeline's rc is the
+  # LAST stage's — awk's 0 — so the producer's SIGPIPE is invisible and this precondition reads 0
+  # forever, on a fixture that DOES reach the regime. The subject sets `-o pipefail` at its top, so
+  # the check has to be taken under the same flags the subject runs under.
+  local tgt prc
+  tgt="$(git -C "$SHARED" rev-parse 'origin/main^{tree}')"
+  # `|| prc=$?` and not a bare subshell: bats runs bodies under errexit, so a subshell that returns
+  # 141 aborts the test before the assignment and reports the PRECEDING line as the failure.
+  prc=0
+  ( set -o pipefail
+    git -C "$SHARED" log --format=%T -n 2000 origin/main 2>/dev/null \
+      | awk 'FNR==NR { if ($0 != "") m[$0]=1; next } m[$0] { print FNR; exit }' \
+            <(printf '%s\n' "$tgt") - >/dev/null 2>&1 ) || prc=$?
+  [ "$prc" -ne 0 ] || { echo "INSTRUMENT FAULT: fixture never reached the SIGPIPE regime (rc=$prc)"; false; }
+  R7_SCAN=2
+  run dlr; run dlr; run dlr
+  # The probe ANSWERED — a depth came back — so its non-zero rc must not be read as death.
+  [[ "$output" == *"culprit=scan-window-blind"* ]] || false
+  [[ "$output" == *"green_depth=3"* ]] || false
+  [[ "$output" != *"probe-unreadable"* ]] || false
+}
+
 @test "R7 the re-assertion is BOUNDED BOTH WAYS: damped inside the cool-off, loud again past it" {
   # Unbounded damping IS the bug being fixed, so an escalation that fired once and then went quiet
   # forever would have rebuilt it one level up. It must re-assert — and not 144x/day either.

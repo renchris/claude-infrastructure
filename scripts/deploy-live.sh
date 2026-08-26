@@ -337,15 +337,45 @@ damp_clear() { rm -f "$DAMP_FILE" "$REFUSALS_FILE" 2>/dev/null || true; }
 # deploy run is worse than the silence it replaces, so every command here is `|| true`-guarded, no
 # `die` is reachable from any of them, and they all return 0.
 
-# The GREEN tree shas the on-box store holds. Read with one `grep`, not one is_green fork per file:
-# this is a DIAGNOSIS, not the gate, and is_green's python3 path would be ~130 forks. `-exec … +` is
-# ARG_MAX-safe. It uses the same textual fallback is_green itself falls back to when python3 is
-# absent, so the two readers cannot disagree about what the word "green" is.
+# The GREEN tree shas the on-box store holds — and, since 2026-08-26, WHETHER THE SCAN HAPPENED AT
+# ALL. rc 0 = answered (an empty stdout is then a real "no greens"); rc 3 = could not answer.
+# Still ONE `grep`, not one is_green fork per file: this is a DIAGNOSIS, not the gate, and is_green's
+# python3 path would be ~130 forks. It uses the same textual fallback is_green itself falls back to
+# when python3 is absent, so the two readers cannot disagree about what the word "green" is.
+#
+# THE FILE LIST IS EXPANDED HERE INSTEAD OF BY `-exec … +`, AND THAT IS THE FIX, NOT A STYLE CHANGE.
+# BSD find collapses every non-zero exit of the utility it runs into its own rc 1, so a grep that was
+# SIGKILLed mid-scan and a legitimate "none of these is green" arrive as the SAME rc over the SAME
+# zero bytes — measured, both rc 1, with the dying grep witnessed so the row could not be mute. The
+# caller therefore had no way to tell a scan that found nothing from a scan that never ran, whatever
+# it did with the rc. Invoked directly, grep answers for itself: 0 matched · 1 no match · 2+ error ·
+# 137/143 killed. ARG_MAX is preserved by batching, not by find: the live store's 476 files spell
+# 45,220 bytes of argv against a 1,048,576 limit (23x headroom), and the batch keeps that true at any
+# store size, so the property `-exec … +` was here to provide is not being traded away for the rc.
 green_tree_shas() {
   [ -d "$STAMPS_DIR" ] || return 0
-  find "$STAMPS_DIR" -maxdepth 1 -name '*.json' \
-       -exec grep -lE '"verdict"[[:space:]]*:[[:space:]]*"green"' {} + 2>/dev/null \
-    | sed 's|.*/||; s|\.json$||' 2>/dev/null || true
+  local listing
+  listing="$(find "$STAMPS_DIR" -maxdepth 1 -name '*.json' 2>/dev/null)" || return 3
+  [ -n "$listing" ] || return 0            # an empty store is an ANSWER, and a correct one
+  local files=()
+  local f
+  while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done <<< "$listing"
+  # `"${a[@]}"` on an EMPTY array is an unbound-variable error under set -u on bash 3.2, which is the
+  # bash com.claude.deploy-live.plist actually execs — so the count is checked before any expansion.
+  [ "${#files[@]}" -gt 0 ] || return 0
+  local n="${#files[@]}"
+  local i=0
+  local out rc
+  while [ "$i" -lt "$n" ]; do
+    out="$(grep -lE '"verdict"[[:space:]]*:[[:space:]]*"green"' "${files[@]:$i:400}" 2>/dev/null)"; rc=$?
+    case "$rc" in
+      0) printf '%s\n' "$out" | sed 's|.*/||; s|\.json$||' ;;
+      1) : ;;                              # this batch legitimately held no green
+      *) return 3 ;;                       # killed or errored — this store was NOT scanned
+    esac
+    i=$(( i + 400 ))
+  done
+  return 0
 }
 
 # → the 1-based DEPTH in origin/main of the newest commit whose tree carries a green stamp, within
@@ -365,13 +395,27 @@ green_tree_shas() {
 # the blindness test now runs with PATH=/usr/bin:/bin.
 blind_green_depth() {
   local shas
-  shas="$(green_tree_shas)"
+  shas="$(green_tree_shas)" || return 3       # the store could not be scanned — do not guess for it
   [ -n "$shas" ] || return 0
   # Two-file awk: FNR==NR loads the green set from the first input, then FNR on the second IS the
   # depth. Portable to BWK awk, gawk and mawk alike, and it never puts data in the program text.
-  g log --format=%T -n "$BLIND_SCAN" origin/main 2>/dev/null \
-    | awk 'FNR==NR { if ($0 != "") m[$0]=1; next } m[$0] { print FNR; exit }' \
-          <(printf '%s\n' "$shas") - 2>/dev/null || true
+  local out
+  local rc=0
+  out="$(g log --format=%T -n "$BLIND_SCAN" origin/main 2>/dev/null \
+         | awk 'FNR==NR { if ($0 != "") m[$0]=1; next } m[$0] { print FNR; exit }' \
+               <(printf '%s\n' "$shas") - 2>/dev/null)" || rc=$?
+  # 🚨 OUTPUT OUTRANKS rc, AND THE ORDER IS THE ENTIRE GUARD — THE OBVIOUS SPELLING IS INVERTED.
+  # awk exits the instant it matches, so on the SUCCESS path git is SIGPIPEd and this pipeline
+  # returns 141 under pipefail, while an honest "no green inside the window" returns 0. Measured on
+  # this repo at match depths 1, 3 and 50: rc 141 every time, against rc 0 for the miss. A reader
+  # that consulted the rc before the output would therefore call every HEALTHY probe dead and every
+  # honest miss healthy — a control inverted in both directions at once. A fixture small enough that
+  # git finishes writing before awk exits reads rc 0 on the success path and cannot see any of this
+  # (memory: control-fixture-must-reach-the-bug's-regime); above the 64 KiB pipe buffer the producer
+  # structurally cannot finish, which is what tests/deploy-live.bats' 1700-commit arm pins.
+  if [ -n "$out" ]; then printf '%s' "$out"; return 0; fi
+  [ "$rc" -eq 0 ] || return 3                 # empty AND the pipeline broke ⇒ no answer was given
+  return 0                                    # empty at rc 0 ⇒ a real "no green in the window"
 }
 
 # → "<hours>" since our last sanctioned advance, or the literal "unknown". UNKNOWN IS REPORTED, NEVER
@@ -402,6 +446,16 @@ last_advance_hours() {
 #                      is not producing (0.17 greens/day vs ~142 commits/day is the measured shape).
 #   verifier-inert     the net is not active at all (no stamps dir).
 #   peer-wip-wedge     a peer session's uncommitted work in the shared checkout blocks every ff.
+#   probe-unreadable   the green scan could not be taken, so the culprit is UNKNOWN. NOT famine.
+#
+# THE LIST ABOVE IS A CLAIM THAT THE LIST IS COMPLETE, and for a year it was complete only over the
+# states the probe could REACH. Every original entry is a condition the probe observed and reported;
+# the one it could not name was the one where it never ran, and its silence there is byte-identical
+# to the silence of an honest "no green anywhere". The comment below already demanded that famine be
+# named "only when the wider probe agrees" — and the code was accepting SILENCE as that agreement.
+# Ten lines down, last_advance_hours does the same job correctly: it prints the literal "unknown" and
+# says why (memory: lookup-miss-is-not-absence). The file already knew the shape; the probe simply
+# had no way to express it, so the ladder had no third answer to read.
 #
 # verifier-lag AND verifier-famine ARE SEPARATE BECAUSE THEIR PROSE IS SEPARATE, and collapsing them
 # printed a falsehood — caught in the live replay before this landed. Against today's real store the
@@ -418,7 +472,8 @@ refusal_culprit() { # <class> → "<culprit> <green-depth|->"
     dirty-tree)    printf 'peer-wip-wedge -';  return 0 ;;
     trunk-red)     printf 'trunk-red -';       return 0 ;;
   esac
-  depth="$(blind_green_depth)"
+  local prc=0
+  depth="$(blind_green_depth)" || prc=$?
   case "${depth:-}" in ''|*[!0-9]*) depth="" ;; esac
   if [ -n "$depth" ] && [ "$depth" -gt "$SCAN_N" ]; then
     printf 'scan-window-blind %s' "$depth"; return 0
@@ -429,8 +484,12 @@ refusal_culprit() { # <class> → "<culprit> <green-depth|->"
   # saw none) may be read as famine, and then only when the wider probe agrees.
   case "$class" in
     green-at-head|green-behind) printf 'verifier-lag %s' "${depth:--}" ;;
-    *) if [ -n "$depth" ]; then printf 'verifier-lag %s' "$depth"
-       else                     printf 'verifier-famine -'; fi ;;
+    # ORDER IS LOAD-BEARING. A depth beats everything (the probe answered, so it cannot be
+    # unreadable); a failed probe beats famine (famine is a POSITIVE claim about BLIND_SCAN commits
+    # that an unrun scan has earned no right to make); famine is what is left, and only then.
+    *) if   [ -n "$depth" ];  then printf 'verifier-lag %s' "$depth"
+       elif [ "$prc" -ne 0 ]; then printf 'probe-unreadable -'
+       else                        printf 'verifier-famine -'; fi ;;
   esac
 }
 
@@ -459,6 +518,9 @@ refusal_escalate() { # <class> <msg> <n> <first-epoch> <now>
       run="git -C $DEPLOY_REPO status --porcelain" ;;
     verifier-lag)
       title="deploy lane refusing on repeat: the verifier is alive but nothing ABOVE the live layer has verified"
+      run="bash $DEPLOY_REPO/scripts/deploy-live.sh --dry-run --offline" ;;
+    probe-unreadable)
+      title="deploy lane refusing on repeat: the green scan could not run, so the culprit is UNKNOWN — not famine"
       run="bash $DEPLOY_REPO/scripts/deploy-live.sh --dry-run --offline" ;;
     *)
       title="deploy lane refusing on repeat: no GREEN tree is being produced fast enough to deploy (verifier famine)"
@@ -489,6 +551,13 @@ refusal_escalate() { # <class> <msg> <n> <first-epoch> <now>
       verifier-famine)
         printf 'No GREEN tree anywhere in the newest %s commits of trunk. The gate is not wrong, its\n' "$BLIND_SCAN"
         printf 'PRODUCER is not keeping up — measured shape: 0.17 greens/day against ~142 commits/day.\n' ;;
+      probe-unreadable)
+        printf 'THE SCAN ITSELF DID NOT COMPLETE, so this page names no culprit and is not famine.\n'
+        printf 'The stamps dir exists and the lane is refusing, but the read that would say whether a\n'
+        printf 'GREEN tree exists on trunk was killed or errored before it answered. Everything the\n'
+        printf 'famine page would have told you about the newest %s commits is UNKNOWN here, and\n' "$BLIND_SCAN"
+        printf 'saying famine anyway would be a positive claim this run has not earned. Re-run the\n'
+        printf 'dry-run below on a quieter box: if it answers, the real culprit appears with it.\n' ;;
       verifier-inert)
         printf 'No stamps dir at all: nothing has ever been able to verify. The net needs activating.\n' ;;
       peer-wip-wedge)
