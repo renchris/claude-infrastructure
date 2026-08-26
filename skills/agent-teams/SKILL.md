@@ -336,11 +336,46 @@ Good news, and it corrects the pessimism in [[shutdown-request-is-not-an-actuato
 `shutdown_request` **did** reap all five — three research agents and two teammates — every one
 ps-verified gone. Send it, then verify; do not assume it is inert.
 
+⚠️ **Refinement 2026-08-26 — the axis that paragraph could not see: the reap splits on the agent's
+STATE when the request arrives.** Measured on an 8-agent wave (two batches, all `Agent({name})`), and
+it split perfectly:
+
+| State when `shutdown_request` arrived | Reaped |
+|---|---|
+| **Mid-turn** (actively working) | **3 / 3** — each replied `shutdown_approved`, then `teammate_terminated` |
+| **Idle** (`idle_notification: available`) | **0 / 4** |
+
+The four idle survivors kept emitting `{"type":"idle_notification","idleReason":"available"}` for
+**20-40 minutes** with a queued shutdown they never processed; one had finished its work 40 minutes
+before it was still resident. `TaskStop` — the **bare agent name** as `task_id` — terminated all four
+instantly, each returning `task_type: in_process_teammate`, and `pgrep -f "agent-id <name>@"` was
+empty afterwards. The five above were presumably mid-work, which is the case that succeeds.
+
+The failure therefore lands on the **common** case: you tear an agent down precisely BECAUSE it has
+finished — i.e. it is idle — which is exactly the state where the cooperative path does not fire. So
+`shutdown_request` stays FIRST (it is the cooperative path, and it lets the agent checkpoint before it
+dies), but it is a request; **`TaskStop` is the authoritative actuator**. A sent request is never a
+teardown.
+
 **Shutdown Protocol:**
 1. Send `{"type": "shutdown_request"}` to EACH teammate individually (parallel OK)
 2. Plain text broadcasts do NOT close panes — only structured `shutdown_request` works
-3. Kill iTerm2 pane manually if needed: `killall -9 tmux` (pane dies; agent stays until timeout)
-4. Clean worktrees: `git worktree remove /tmp/worktree-<name>` (or `/tmp/wt-<team>-<name>`)
+3. **Escalate on silence** — if no `shutdown_approved` / `teammate_terminated` comes back within
+   ~60s, `TaskStop` it (bare agent name as `task_id`). An idle agent will never answer the request,
+   and no amount of waiting changes that; waiting only buys idle-notification turns.
+4. **ps-verify EVERY agent**: `pgrep -f "agent-id <name>@"` (empty ⇒ actually gone). Silence is not
+   death — [[shutdown-request-is-not-an-actuator]] measured `TaskStop` de-registering *without*
+   reaping, after which the task API is exhausted and only `kill -TERM <pid>` remains.
+5. Kill iTerm2 pane manually if needed: `killall -9 tmux` (pane dies; agent stays until timeout)
+6. Clean worktrees: `git worktree remove /tmp/worktree-<name>` (or `/tmp/wt-<team>-<name>`)
+
+🚨 **Never spawn a replacement wave until the previous one is ps-verified gone — a clean `git status`
+is NOT a liveness check.** That conflation is the root error in the incident above: the lead sent the
+shutdowns, saw a clean tree 30 seconds later, read it as reaped, and spawned a second batch into the
+SAME shared worktree, so both waves wrote to it. One second-batch agent detected live mtimes on its
+own files and correctly wrote nothing, so no work was lost — but the recovery cost more than the
+parallelism saved. A clean tree says only that nobody has written *yet*; the pid census is the only
+thing that says nobody *will*.
 
 **Liveness detection (pull-based, race-free):**
 - No packaged checker exists (`verify-team.sh` was a ghost pointer, removed 2026-07-18).
