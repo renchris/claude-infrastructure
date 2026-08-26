@@ -1907,7 +1907,7 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
   # escalated to GATE_KILLED, because a non-verdict must never block a land (R6/§4.1): the corpus
   # behind us will re-prove the tree, and turning "the box was busy" into a failed land is exactly
   # the kill→"RED"→re-block→retry runaway (f8e40b4c577d). It becomes smoke:"partial" and lands.
-  local range="$1" direct own budget start f n=0 red=0 cut=0 srv own_red=0
+  local range="$1" direct own budget start f n=0 red=0 cut=0 srv own_red=0 sel_rc=0 own_rc=0
   local -a redf=()          # the direct suites that named a failure — attested, not just counted
   # ---- P0 §3: `none` WAS FIVE CAUSES WEARING ONE TOKEN ------------------------------------------
   # (§2.B.) 83% of lands execute no test of their own diff, and until now the ledger could not say
@@ -1924,6 +1924,7 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
   #   none-locked      the in-lock fallback lane: bats is structurally banned under the mutex
   #   none-precheck    --precheck scope (never reaches land.log; the precheck writes no row)
   #   none-noselector  gate-select.sh missing / not executable
+  #   none-selfail     the selector RAN and DIED — no answer at all (the silence rung below)
   #   none-undecided   the selector answered FULL, its fail-closed "I cannot decide"
   #   none-nodirect    0 direct suites map to this range after the host-suite filter (lint-only)
   #
@@ -1984,9 +1985,37 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
   # no union (round 1, ~70% of lands), where own IS direct by construction and this costs nothing.
   own=""
   if [[ -n "$EXTRA_RANGE" ]]; then
-    own="$("$GATE_SELECT" --direct "$range" 2>/dev/null || true)"
+    own="$("$GATE_SELECT" --direct "$range" 2>/dev/null)" || own_rc=$?
   fi
-  direct="$("$GATE_SELECT" --direct "$range" ${EXTRA_RANGE:+"$EXTRA_RANGE"} 2>/dev/null || true)"
+  direct="$("$GATE_SELECT" --direct "$range" ${EXTRA_RANGE:+"$EXTRA_RANGE"} 2>/dev/null)" || sel_rc=$?
+  # ---- THE SILENCE RUNG: the selector RAN and DIED ----------------------------------------------
+  # gate-select.sh states its own law in its header: "any doubt fails CLOSED … every one of them
+  # prints FULL", and "EMPTY IS A VERDICT; FULL IS THE ABSTENTION … never by silence, so a consumer
+  # that needs to tell 'nothing to run' from 'I could not tell' reads FULL, not emptiness." That law
+  # holds on every door the selector can WALK THROUGH — measured on this tree: no range, unparseable
+  # range, unknown option and a base or head sha that does not exist all print FULL at exit 0. It
+  # cannot hold on the one door it cannot reach: a process that is KILLED (SIGTERM/SIGKILL from the
+  # reaper, an OOM, a gate-cleanup sweep) prints NOTHING and exits non-zero, and a law about what a
+  # program prints says nothing about a program that is no longer running.
+  #
+  # `|| true` used to discard exactly that rc, so silence-from-death and the deliberate lint-only
+  # EMPTY became the same value, and the emptiness check below attested BOTH as `none-nodirect` —
+  # "0 direct suite(s) map to this range (lint-only land)". A land whose INSTRUMENT DIED then
+  # reported itself as the cheap path it chose on purpose: statics green, no suite run, exit 0,
+  # push. That is precisely the conflation the P0 §3 split above exists to prevent, arriving through
+  # the one cause the enumeration never named — and it is invisible for the same reason the other
+  # five were (memory: sensor-default-off-makes-blindness-the-shipping-path).
+  #
+  # NOT A WIDENING, deliberately. v1 read a selector failure as FULL and ran the corpus; that is the
+  # measured amplifier (f8e40b4c577d) and tests/ship-land.bats pins the inversion. A non-verdict
+  # must never block a land (R6/§4.1) and must never buy a corpus either. So the LAND behaviour is
+  # unchanged — no smoke, exit 0 — and only the ATTESTATION changes, which is the whole point: the
+  # coverage ledger can now separate an instrument outage from a deliberate cheap path.
+  if [[ "$sel_rc" -ne 0 ]]; then
+    SMOKE_STATE="none-selfail"
+    echo "⚠ gate: selector '$GATE_SELECT' RAN and DIED (exit $sel_rc, no answer at all — not FULL, not a list) — no smoke this land, and this is an INSTRUMENT OUTAGE, not a lint-only land. Nothing has executed this diff; the post-land verifier is the only net and it trails trunk by hours." >&2
+    return 0
+  fi
   if [[ "$direct" = "FULL" ]]; then
     # FULL is the selector's own fail-closed answer ("I could not decide"). It can no longer mean
     # "run everything", so its honest v2 reading is "this selection is untrustworthy" ⇒ no smoke.
@@ -2006,7 +2035,16 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
   # (the safe direction — an undecided selector must never be read as "none of this is yours",
   # which would exonerate the whole smoke). Normalised identically, or the membership test below
   # would compare a filtered path against an unfiltered one and silently miss.
-  if [[ -z "$EXTRA_RANGE" || "$own" = "FULL" ]]; then
+  # …AND THE SAME SENSOR FAILS THE OPPOSITE WAY AT THIS SECOND CONSUMER, which is why one root
+  # needs two guards. `own` is not a run-list, it is the EXONERATION list: run_scoped_suite's
+  # carve-out asks `printf '%s\n' "$own" | grep -qxF -- "$f"` to decide whether a pass-on-retry is
+  # "intermittence in code you are landing" (a finding) or a flake. An EMPTY own therefore means
+  # "none of this is yours" and exonerates every suite in the smoke — the exact outcome the clause
+  # below already names as the one this must never take. It guarded the FULL door; silence walked
+  # in the other one. So a dead own-range selector now takes the SAME door as FULL, adding no new
+  # policy: over-claiming ownership costs a re-run of code that is not ours, while under-claiming
+  # it silently green-lights a real regression in code that is.
+  if [[ -z "$EXTRA_RANGE" || "$own" = "FULL" || "$own_rc" -ne 0 ]]; then
     own="$direct"
   else
     own="$(printf '%s\n' "$own" | grep -v '^[[:space:]]*$' || true)"

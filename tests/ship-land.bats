@@ -950,6 +950,23 @@ stub_selector() {  # $1=plain-call stdout, $2=--direct stdout (either may be emp
   export SHIP_LAND_GATE_SELECT="$sel"
 }
 
+stub_selector_dead() {  # $1=exit code — a selector that RUNS and DIES: no stdout, non-zero exit
+  # THE THIRD SHAPE, and the one gate-select.sh's own law cannot cover. Its header promises "any
+  # doubt fails CLOSED … never by silence" — true of every door it can WALK THROUGH (measured: no
+  # range, unparseable range, unknown option, a base or head sha that does not exist all print FULL
+  # at exit 0), and unreachable for a process that is KILLED. This stub is neither of the two shapes
+  # already fixtured: not `stub_selector "" ""` (RAN, answered EMPTY at exit 0 — a real verdict,
+  # the lint-only land) and not an ABSENT selector (never ran at all, `-x` catches it first).
+  local sel="$BATS_TEST_TMPDIR/gate-select.sh"
+  {
+    echo '#!/bin/bash'
+    echo 'case "$1" in lint) exit 0 ;; esac'
+    printf 'exit %s\n' "${1:-7}"
+  } > "$sel"
+  chmod +x "$sel"
+  export SHIP_LAND_GATE_SELECT="$sel"
+}
+
 landable() {  # $1=branch $2=shell file — a commit the gate always lints
   git checkout -q -b "$1" main
   printf '#!/usr/bin/env bash\necho ok\n' > "$2"
@@ -1026,6 +1043,60 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   echo "$output" | grep -q "cannot decide"
   [ ! -s "$BATS_ARGV" ]                                      # no corpus, no single suite, nothing
   grep -q '"smoke":"none-undecided"' "$LAND_LOG"
+}
+
+@test "smoke INVERSION: a selector that RAN and DIED attests none-selfail, never the lint-only token" {
+  # METHOD 207 TURNED ON THIS FILE'S OWN HARDENING. Every anti-blindness arm in the gate watches for
+  # a run that was CUT — the smoke budget, the twice-cut discriminator, GATE-KILLED. A selector that
+  # dies produces a run that COMPLETES: statics green, "0 direct suite(s)", exit 0, push. Both
+  # defences read healthy and AGREE WITH EACH OTHER, and the ledger recorded the cause as
+  # `none-nodirect` — the deliberate cheap path — for what is an INSTRUMENT OUTAGE. That is exactly
+  # the conflation P0 §3 split five ways, arriving through the one cause it never enumerated.
+  scope_fixture
+  stub_selector_dead 7
+  landable feat/smoke-selfail ssf.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]                                          # a non-verdict never blocks a land…
+  [ ! -s "$BATS_ARGV" ]                                        # …and never widens: ZERO bats runs
+  grep -q '"smoke":"none-selfail"' "$LAND_LOG"
+  [ "$(grep -c '"smoke":"none-nodirect"' "$LAND_LOG")" -eq 0 ]  # NOT the deliberate cheap path
+  [ "$(echo "$output" | grep -c 'RAN and DIED (exit 7')" -ge 1 ]     # the rc is named, not swallowed
+  [ "$(echo "$output" | grep -c 'INSTRUMENT OUTAGE')" -ge 1 ]
+  # ANCHORED ON THE OTHER BRANCH'S OWN SENTENCE, and this assertion red on its first run for the
+  # reason it now guards against: the selfail message legitimately contains the words "not a
+  # lint-only land" — it says which cause this is — so a bare `grep -c 'lint-only land'` matched
+  # the sentence DENYING it. A grep that counts a token matches the prose documenting the token,
+  # and here that prose was four minutes old and mine. `map to this range` occurs only in the
+  # none-nodirect line, so it discriminates the branches instead of the vocabulary.
+  [ "$(echo "$output" | grep -c 'map to this range')" -eq 0 ]
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- ssf.sh)" ]                # and the land completes
+}
+
+@test "smoke: a DEAD selector and an EMPTY one are two lands with two tokens, in ONE ledger" {
+  # THE DISCRIMINATOR, and it is what stops the test above being satisfiable by a collapse. Both
+  # shapes produce an empty `direct`, run zero suites and exit 0 — NOTHING about either land tells
+  # them apart, which is why the token is the only place the difference can live. Asserting both
+  # rows in one log means a build that merges the branches in EITHER direction reds here: one token
+  # would appear twice and the other not at all.
+  scope_fixture
+  stub_selector_dead 7
+  landable feat/two-tokens-dead ttd.sh
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+
+  git checkout -q main
+  stub_selector "tests/a.bats" ""            # RAN, answered EMPTY at exit 0 — a genuine verdict
+  landable feat/two-tokens-empty tte.sh
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+
+  [ "$(grep -c '"smoke":"none-selfail"' "$LAND_LOG")" -eq 1 ]
+  [ "$(grep -c '"smoke":"none-nodirect"' "$LAND_LOG")" -eq 1 ]
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- ttd.sh)" ]                # both land — behaviour is unchanged
+  [ -n "$(git ls-tree origin/main -- tte.sh)" ]
 }
 
 @test "smoke: HOST-manifest suites are excluded — the partition binds the land lane too" {
