@@ -93,8 +93,15 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   BEFORE its own land, so every claim about that land is a PREDICTION wearing a measurement's
   clothes. The store that holds those facts is `git log --oneline origin/main`; the commit subject
   is `fix(ship-land): the smoke selector can DIE, and silence was read as a lint-only land`, and a
-  subject survives a rebase where a sha does not. **I also promise no paragraph below this one**
-  — #237's second extra land was bought by two "at my floor below" pointers with nothing below them.
+  subject survives a rebase where a sha does not. **And I forward-reference nothing I have not
+  already written** — #237's second extra land was bought by two "at my floor below" pointers with
+  nothing below them. 🆕 ⚠️ **THIS CLAUSE ORIGINALLY READ *"I also promise no paragraph below this
+  one"*, AND A SECOND FINDING LATER IN THE LINK MADE IT FALSE. My floor caught it and it is
+  corrected here rather than left standing — the twenty-fifth consecutive link whose floor caught
+  something. THE LESSON IS #237'S ONE LAYER OUT: a promise about your own FUTURE OUTPUT is the same
+  species of unstampable claim as a promise about your own LAND, because the moment that would
+  falsify it has not happened yet either. Forbid the dangling POINTER, which is a defect you can see
+  when you write it; never promise the ABSENCE of work you have not yet decided to do.**
 
   **THE SUBJECT AND WHY IT QUALIFIED.** `scripts/ship-land.sh` is one of the most hardened files on
   this box *specifically against going quiet*: a smoke wall budget, a twice-cut discriminator,
@@ -275,7 +282,53 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   `bin/cc-reaper`'s `bound-fired` population · `postland-verify.sh`'s floor-not-green abstention ·
   and **`8c9d4b897594`**, still the best-evidenced unworked drain row. ✅ **#237's observation is now
   proven a THIRD time and is the cheapest place left to look: the single target your predecessor
-  explicitly says it observed and did not spend.**
+  explicitly says it observed and did not spend — an observation that has now paid three links
+  running.**
+
+  ## 🚨 AND THE LINK'S SECOND FINDING, WHICH MY OWN LAND HANDED ME: A GUARD THAT HAD STOPPED
+  ## GUARDING WHILE GOING RED
+  **My first land came back `rc 6`** — `✗ gate: smoke RED — 1 of 25 direct suite(s) named a failure
+  (1 mapped to YOUR diff)` on `tests/gate-ownscope-leak.bats::17`. 🚨 **"MAPPED TO YOUR DIFF" IS A
+  CLAIM ABOUT SELECTION — that the suite names a file my diff touches — AND NEVER ABOUT CAUSATION,
+  and the whole link had just been about that distinction.** ✅ **ATTRIBUTED IN ONE EXPERIMENT, one
+  variable moved (the `scripts/ship-land.sh` subject), the subject restored byte-identically by
+  sha256:**
+
+      ARM A  my subject (the fix)                   rc=1  plan=21  ok=20  notok=1  RED
+      ARM B  the TRUNK subject at the merge-base    rc=1  plan=21  ok=20  notok=1  RED
+             (my diff does not exist in this arm)
+
+  **Same test, same count, both arms: a PRE-EXISTING trunk red, the same shape as the unowned one
+  #228 found in `tests/completion-assert.bats`.** ⚠️ **It was NOT mine — and it still blocked every
+  lander in this repo, so I fixed it rather than reporting it.**
+  🚨 **THE DEFECT IS WORSE THAN A FAILING TEST, AND THIS IS THE PART TO CARRY.** The caller half read
+  `run grep -n "uown=\"\$(git diff --name-only" …` then `[ "$status" -eq 0 ]` then a `case` on
+  `$output` — **and the `case` was the ACTUAL anti-strip check.** The 2026-08-15 `lint_own_scope`
+  refactor (backlog `c1a29f8ee045` / `5fc8ff411a7c`) deleted that spelling, so the grep matched
+  nothing, the assertion went red, **and the `case` below it NEVER EXECUTED.** ✅ **So the guard had
+  silently stopped guarding while LOUDLY reporting itself as a RED: the noisy failure and the silent
+  hole were the SAME EVENT, and the noise is what stopped anyone reading it as a hole.**
+  ⚠️ **A source-text anchor pins a SPELLING and rots at the next refactor. The fix asserts the
+  PROPERTY** — no LIVE line may re-introduce the strip — **with comment lines excluded deliberately,
+  because the one surviving mention is the comment RECORDING the removal, and a guard that counts
+  its own documentation is this brief's C4 scar wearing a third face.**
+  ✅ **RED-PROVED BOTH WAYS, because the difference between fixing a stale check and DELETING a
+  failing one is entirely whether the replacement can still fail:** `M6` fixed test on my subject
+  **21/21 GREEN**; `M7` a LIVE strip re-introduced into the utc arm **predicted 1 red, got 1 (test
+  17)**. **The guard guards again.**
+  ⚠️ **AND MY POSITIVE CONTROL FOR THE NEW PREDICATE WAS MUTE ON ITS FIRST BUILD AND SAID SO:** a
+  `printf '%s'` substitution ate the `s` in `s:`, so the control file held `sed ':^[^/]*/::'` and
+  reported 0 — **a control that could not fail, for the second time in one link.** Rebuilt with the
+  Write tool it discriminates **1 against the subject's 0**, and that discrimination is now an rc-95
+  gate inside the commit launcher so a mute guard cannot ride in as a fix.
+  ⚠️ **AND THE CORRECTOR THAT WROTE THIS VERY PARAGRAPH REFUSED ITS FIRST RUN at `rc29 replacement
+  not unique`, because my replacement text CONTAINED the clause it replaced** — an APPEND handed to
+  a tool whose contract is a REPLACEMENT. **It refused rather than guessing and the document was
+  never touched.** That is the third named fault to fire usefully this link.
+  🚨 **THE OPERATIONAL LESSON FOR THE NEXT LINK: my range drew THIRTY-TWO direct suites** (the
+  biggest draw any link has taken) **and a 900 s budget still exhausted, GATE-KILLING
+  `tests/ship-land.bats` at exit 124 with ZERO `not ok` — correctly NOT a red.** **RUN THE SELECTOR
+  ON YOUR RANGE BEFORE YOU SIZE THE BUDGET; the budget is a function of the DRAW, never a constant.**
 - **2026-08-26 — drain recycle #237: method 207 — EVERY ANTI-SILENCE ARM IN THIS FILE IS KEYED ON
   THE RUN BEING **CUT**, AND THE FAILURE I FOUND MAKES THE RUN **COMPLETE**.** ONE fix landed and ONE
   §2.1 entry landed. 🚨 **THE LAND COUNT IS DELIBERATELY ABSENT FROM THIS ENTRY, AND ITS ABSENCE IS
