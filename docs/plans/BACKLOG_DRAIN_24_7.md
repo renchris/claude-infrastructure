@@ -86,6 +86,110 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-26 — drain recycle #241: method 211 — A SOURCED LIBRARY DOES NOT OWN ITS OWN
+  `pipefail`, SO A VERDICT IT READS OFF A PIPELINE HAS NO FIXED MEANING — THE SAME LINE LOST A
+  TASK UNDER ONE CALLER AND DID NOTHING UNDER ANOTHER.** I took #240's own named-cheapest —
+  `hooks/lib/task-helpers.sh:180`, *"a live `find -exec cat {} + | jq` whose `if` reads the
+  PIPELINE's rc … the cheapest 209 left"* — and the site is real, but **the mechanism is not the
+  one predicted, and the difference is the finding.**
+  ⚠️ **ENVIRONMENT, STATED FIRST BECAUSE IT BOUNDS EVERY NUMBER BELOW.** This link ran in a Claude
+  Code **cloud container**, not on the box: a fresh clone whose tree **IS** trunk (`HEAD..origin/main`
+  = 0, `origin/main..HEAD` = 0, at `415e8fc5`). There is **no `cc-backlog` on PATH and no
+  `~/.claude/autonomy` store**, so **this entry carries NO board census, NO postland denominator and
+  NO `.escalated` count** — the seventeen-point off-box series does not get an eighteenth from me.
+  Saying "0" for any of them would have been a reading of an absent store, not of the fleet. `bats`
+  and `shellcheck` were both absent and were installed (`apt-get`) before anything was called a
+  verdict — #240's fault (3) one layer out: **a suite that cannot run does not return green, and on
+  first run `task-quality-gate` test 45 was red for exactly that reason and went green on install.**
+  **THE DEFECT.** `regenerate_summary` spelled its read as `find … -exec cat {} + | jq -s … >
+  "$temp"` inside an `if`. The status that `if` tests is a PIPELINE's — and in a **sourced library
+  the shell options belong to whoever sourced it**, so `pipefail` (which decides whether that status
+  reports the READER or only the WRITER) is set by a caller the file cannot see. **The three callers
+  do not agree**: `task-completed-index.sh` runs `set -euo pipefail`; `task-mutation-index.sh` and
+  `setup-task-symlinks.sh` set neither.
+  🚨 **MEASURED, BOTH DIRECTIONS, CONTROLS GREEN ON BOTH ARMS** — 5 task files, 1 unreadable, run
+  under a dropped uid so the permission actually bites (root defeats `chmod 000`, which is why the
+  first fixture attempt proved nothing):
+  **pipefail OFF** (mutation-index + setup-task-symlinks) ⇒ summary **REWRITTEN at
+  `totalOnDisk=4` of 5** — a task silently vanishes from the board, **and the hot
+  TaskCreate/TaskUpdate PostToolUse path is the one that takes this branch.** **pipefail ON**
+  (completed-index) ⇒ summary **not written at all**, silently. **Both returned rc 0**, so no caller
+  could tell either outcome from success. Same input, opposite results, decided by a setting the
+  library cannot read.
+  🚨 **AND `pipefail` WAS NEVER THE PROTECTION IT LOOKED LIKE — THE HALF #240 COULD NOT HAVE SEEN
+  FROM THE LINE.** A task json that is present and readable but **EMPTY** (a torn write mid-
+  `TaskCreate`) makes `cat` **succeed** while `jq -s` slurps one element fewer, so the short board
+  **publishes under pipefail ON too** (measured: `rc=0 total=4`). `pipefail` only ever covered the
+  *unreadable* subpopulation; the `set -e` caller was exposed the whole time. **#240's "confidently
+  short" was right about the outcome and wrong about who was safe from it.**
+  ✅ **THE FIX REMOVES THE PIPELINE FROM THE VERDICT PATH** — `|| rc_read=$?` captures the READER's
+  own status, which has one meaning under every caller, and also keeps a failed read from aborting a
+  `set -e` caller before the verdict returns. A **second, independent** guard reconciles the count:
+  jq's `length` must equal the number of files `find` listed. **rc catches unreadable; the count
+  catches unaccounted-for.** On either, the PREVIOUS summary is left in place and **rc 2** is
+  returned — *stale beats wrong*, because a board that silently loses a task is worse than one that
+  stops advancing. rc 2 is not invented: it is `find_active_list`'s existing verdict convention
+  **in this same file**, and `task-completed-index.sh` now spells the call the way that convention's
+  own NOTE FOR CALLERS requires.
+  🚨 **THE TWO GUARDS ARE NOT REDUNDANT, AND IT TOOK A FIXTURE TO PROVE IT — I ALMOST SHIPPED A
+  GUARD NO MUTANT COULD KILL.** M1 (rc guard disabled) came back **green on every simple cell**, so
+  on that evidence the rc check was dead weight. The reason it survives is that **`want` counts
+  FILES while `got` counts OBJECTS**, so only an input where those diverge in *compensating*
+  directions can separate them: 5 files, task 3 unreadable (−1 object) and file 4 holding two
+  objects (+1). With the rc guard disabled that publishes **`["1","2","4","5","6"]` at a
+  healthy-looking `totalOnDisk=5` — task 3 silently gone and task 6 silently invented.** Both guards
+  intact: rc 2, board preserved. **A guard whose mutant is green has not been proven useless; it has
+  been proven that the fixture set cannot see it yet.**
+  ✅ **THREE MUTANTS, ONE PER ADDED GUARD, PREDICTIONS WRITTEN BEFORE THE RUN, subject restored
+  byte-identically by sha256 (`RESTORE=OK` on every arm).** M2 (count guard) red on both torn cells,
+  M3 (denominator) red on the **CONTROLS** — the sensitivity control that proves a green control is
+  *capable* of going red. M1 as documented above, its simple-cell zero **predicted with its reason**
+  rather than waved through.
+  🚨 **THE INSTRUMENT FAULT THAT MATTERED, AND IT IS #240's FOURTH VERBATIM IN MY HANDS.** My first
+  M1 was **refused as unattributable**: the sed matched `^        return 2$` — **three sites at that
+  indent**, not one — so the mutant neutered every refusal path at once and the run said `rc=0` for
+  a reason that had nothing to do with the guard I named. **The label named one guard; the expression
+  changed three.** The repair is a uniqueness assertion (`grep -cF` on the guard's CONDITION must be
+  1) plus a changed-line count of exactly 1, both gating at rc 93 before the arm runs. Two smaller
+  ones: the harness lived in a directory the dropped uid **could not read** (`Permission denied` on
+  the probe, not on the fixture — the giveaway was the error naming the *script*), and the very first
+  fixture used a **dangling symlink**, which `cat` fails on but which carries **no content**, so
+  "short" and "absent" were the same population and it could not have shown the defect at all.
+  ✅ **NOT A WIDENING:** `pipefail-sigpipe-lint --census` **151 → 151, zero sites lost**, bare lint
+  clean, selftest **30/30** untouched. 🔎 **AND METHOD 210 ANSWERED IN THE NEGATIVE, WHICH IS ALSO A
+  RESULT.** The site is in **neither** the census nor the 62-line allowlist — #240's tell for an
+  INVISIBLE site — **but the lint is RIGHT to skip it**: `jq -s` slurps, so there is no early-exit
+  consumer and no SIGPIPE. **This is the neighbouring mechanism in the same family, not a lint blind
+  spot, and calling it one would have been the easy wrong claim.**
+  ⚠️ **A RED THAT IS NOT MINE, AND I DID NOT DRIVE IT.** `tests/setup-task-symlinks.bats:106` — *"GC:
+  a week-old EMPTY dir is reaped"* — fails on the **PRISTINE tree** (change stashed, `dirty: 0`) and
+  identically with my change: the GC does not reap `old-empty`. Both arms run, one line of diff
+  between them, same single failure ⇒ **red on trunk, in the GC path, unrelated to
+  `regenerate_summary`.** Suites otherwise **52/53**. **It could not be filed** — no `cc-backlog` in
+  this container (see ENVIRONMENT) — so it is surfaced here and to the operator instead, which is
+  the honest disposition rather than a silent pass.
+  🔎 **WHAT I CLOSED: nothing.** **WHAT I FILED: nothing — not by choice but by absence of the
+  store**, stated plainly so the next link does not read a zero as a decision. The commit subject is
+  `fix(tasks): a sourced library read its verdict off a pipeline…`; land facts live in
+  `git log --oneline origin/main` and are deliberately not restated here.
+  **NOT CLAIMED: no live short board was found on disk.** Both failure modes are reachable-on-demand;
+  neither was observed in the wild, and the store that would have shown one was not reachable.
+  🚨 **METHOD 211 — MINE. TAKE THE CALLERS, NOT THE FILE, AS THE UNIT OF ANALYSIS FOR ANY `set -e` /
+  `pipefail` QUESTION IN A SOURCED LIBRARY.** A `lib/` file's shell options are *arguments passed by
+  whoever sourced it*, so a verdict it reads off a pipeline is a different verdict per caller — and
+  the bug is invisible while you read the library alone, which is exactly how this one survived. The
+  discriminator costs one command: `grep -l 'set -.*pipefail'` over the sourcers and see whether they
+  **agree**. **The tell is a library with more than one sourcer and at least one disagreement.**
+  **Named and NOT taken, in the order I would spend them:** the other two sourcers of this same
+  library, `task-mutation-index.sh` and `setup-task-symlinks.sh`, **set NO options at all** and were
+  screened only for `regenerate_summary` — every *other* pipeline they inherit is unexamined, and
+  method 211 says that population is now known-interesting · `scripts/nightly-regression.sh` (68
+  hits) and `scripts/test-hermeticity-lint.sh` (153) remain the two heaviest control files nobody has
+  opened on method 202's fixture-scope question · `bin/cc-backlog`'s **142** stderr sites remain the
+  biggest unscreened surface (method 197) · `scripts/handoff-fire.sh:3092` is still #239's site-A
+  shape on the chain's own succession path, **119 suites name that file** · and the **GC red above is
+  a live failing test on trunk with a fixture already written**, which is the cheapest red on the
+  board for whoever can file it.
 - **2026-08-26 — drain recycle #240: method 209 — THE CLAUSE THAT ASKS "DOES ANYTHING READ THIS
   PIPELINE'S STATUS?" ANSWERED A DIFFERENT QUESTION, AND THE GUARD FOR THIS EXACT CLASS COULD NOT
   SEE THREE SITES OF IT.** I took #239's own top recommendation — `scripts/postland-verify.sh`, named
