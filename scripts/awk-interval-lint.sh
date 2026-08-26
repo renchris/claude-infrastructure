@@ -58,6 +58,10 @@
 #     runtime and no literal appears in the file. Same class, out of a grep's reach.
 #   · A program body containing an escaped apostrophe cannot exist in shell single quotes, so the
 #     body always ends at the next `'`. That is what makes the extraction exact rather than a guess.
+#   · Only a WHOLE comment line is dropped, not a trailing one: `print $1  # was {2,3}` is flagged.
+#     Deliberately coarse, and in the safe direction — the alternative is a comment-stripper that
+#     has to know which `#` is inside a regex or a string, and getting THAT wrong drops real code.
+#     Put the note on its own line; that is the one-line fix, and it is cheaper than the stripper.
 #
 # Exit: 0 = clean · 1 = violation / stuck ratchet entry · 2 = bad usage or unreadable scan root
 #       (LOUD, never silent-green)

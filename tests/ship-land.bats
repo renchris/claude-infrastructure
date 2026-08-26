@@ -243,6 +243,45 @@ seed_herm() {   # $1 = exit code the stub lint returns
   [ -z "$(git ls-tree origin/main -- herm-stub.sh)" ]
 }
 
+# ── awk interval-expression ratchet (2026-08-26): the arm must BLOCK, not merely be wired ────────
+# tests/awk-interval-lint.bats asserts the wiring TEXT, which is where its sibling ratchet stops.
+# That assertion cannot tell a gate that fires from one that is unreachable — a guard above it, a
+# mis-ordered return, a seam name that is present and never read — which is the shape of an alarm
+# nobody has ever seen fire. These two drive the REAL gate through SHIP_LAND_AWKINT_LINT and read
+# the land's exit code, exactly as the hermeticity pair above does for its own arm.
+seed_awkint() {   # $1 = exit code the stub lint returns
+  printf '#!/bin/bash\necho "stub awk-interval lint: exiting %s" >&2\nexit %s\n' "$1" "$1" > awkint-stub.sh
+  chmod +x awkint-stub.sh
+  git add awkint-stub.sh && git commit -q -m "feat: awkint fixture"
+}
+
+@test "awk-interval gate: the lint's exit 1 is a REAL verdict → exit 6 GATE RED, trunk unchanged" {
+  git checkout -q -b feat/awkint-verdict main
+  seed_awkint 1
+
+  run env SHIP_LAND_AWKINT_LINT="$WORK/awkint-stub.sh" bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  echo "$output" | grep -q "AWK-INTERVAL RED" || false
+  ! echo "$output" | grep -q "GATE-KILLED" || false        # a verdict is never softened
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- awkint-stub.sh)" ]
+}
+
+@test "awk-interval gate: the lint's exit 2 is a NON-VERDICT → exit 9 GATE-KILLED, never a RED" {
+  # exit 2 is the lint saying it could not RUN. Collapsing that into 6 sends someone to fix a file
+  # the lint may never have read — the generic defect this file's non-verdict arm exists to stop.
+  git checkout -q -b feat/awkint-nonverdict main
+  seed_awkint 2
+
+  run env SHIP_LAND_AWKINT_LINT="$WORK/awkint-stub.sh" bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 9 ]
+  echo "$output" | grep -q "NON-VERDICT" || false
+  echo "$output" | grep -q "GATE-KILLED" || false
+  ! echo "$output" | grep -q "AWK-INTERVAL RED" || false   # never both, never the wrong one
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- awkint-stub.sh)" ]    # fail-closed either way: nothing landed
+}
+
 # ── .bats shellcheck ratchet: a MISSING shellcheck must be a loud non-verdict, never a silent skip ─
 # The defect (grok-wiki tests shard candidate 1, backlog 9ea31151dd94): the ratchet's applicability
 # condition carried `&& command -v shellcheck`, so on a host without the tool the whole gate
