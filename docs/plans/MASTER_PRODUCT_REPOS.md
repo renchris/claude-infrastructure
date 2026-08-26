@@ -65,6 +65,13 @@ work it"* — and its own master row is the counter-example to it.
 the real handles — they carry `reso-management-app` / `doc_classifier` and route correctly. The
 master row is a coordination header, not a unit of work; advancing it means advancing members.
 
+> ⚠️ **SUPERSEDED FOR MEMBER ROWS (measured 2026-08-26).** The `CROSS_REPO` arm has since shipped
+> (`bin/cc-eligible:430,766,857`) and, executed unmodified, **refuses** `reso-management-app` and
+> `doc_classifier` — so the block below is now the historical record of a fixed defect, not current
+> behaviour. It still holds for THIS master row, whose `claude-infrastructure` label resolves back
+> to the lane. See the 2026-08-26 Status log entry and
+> `docs/research/venue-foreign-master-postremedy-2026-08-26.md`.
+
 🚨 **CORRECTION (measured 2026-08-20): a correctly-projected member row misroutes too — the
 projection was never the load-bearing part.** A cloud fire of `b0be87487228` (project
 `reso-management-app`, "`--bs-cap` under-reserves the caption", naming `_lib/type.ts` and
@@ -156,6 +163,28 @@ branch queue is empty or explicitly abandoned with reasons, the production deplo
 single-brained and audited, and doc_classifier's authorization holes are closed with tests.
 
 ## Status log
+- **2026-08-26 — fourth dispatch; the remedy has LANDED, it closes the member rows, and it cannot
+  close this one.** `8f59467c92b0` fired into the same VM shape again (one checkout, GitHub scope of
+  one repo, no `~/Development`, no `cc-backlog`, no `~/.claude/autonomy/`), nine days after the
+  08-17 entry. R1-R4 untouched and still **open, correct as filed, unstarted** — premise NOT
+  refuted, only the venue. What is new, and what no earlier fire could measure: option (a)
+  *fail closed* from `cloud-venue-project-repo-mismatch-2026-08-16.md` §3 **shipped** as
+  `cc-eligible`'s `CROSS_REPO` arm (`bin/cc-eligible:430,766,857`). Executed unmodified against a
+  fixture reproducing the operator-box geometry, it **REFUSES** `reso-management-app` and
+  `doc_classifier` and **PASSES** `claude-infrastructure`. Two consequences:
+  **(1)** the 08-20 CORRECTION in Phase 0 — *"a correctly-projected member row misroutes too"* — is
+  now **stale**; `b0be87487228` would be refused today before burning a slot. Read it as history.
+  **(2)** this master row is the arm's residual **by construction**, not by omission: `repo_for()`
+  resolves its (accurate) `claude-infrastructure` label straight back to the lane, so
+  `realpath(item_repo) == realpath(lane)` and the arm returns silent at `:781`. The foreign trees
+  are named only in the plan BODY, which nothing in the chain reads — so widening `classify_all()`'s
+  spelling list cannot reach it either. The 08-17 prediction (*"both options of the filed remedy
+  PASS this row"*) is now confirmed in production. Remedy still needed: the **subject** discriminator,
+  or the ~0-cost `projectName` data entry the 08-17 entry identified (`find-plan.sh:73`, runtime
+  state, unreachable from a VM). Neither attempted here — `bin/cc-venue:55-56` forbids a cloud VM
+  from building or running the venue rule. Full measurement →
+  `docs/research/venue-foreign-master-postremedy-2026-08-26.md`. **Disposition unchanged:
+  `cc-backlog block`, not `reopen`** — and still unrunnable from this venue, so it is an operator step.
 - **2026-08-17 — the SAME row was cloud-dispatched AGAIN, and the re-fire is the finding.**
   `8f59467c92b0` was fired into an identical VM shape (one checkout, GitHub scope of one repo, no
   `~/Development`) ~2 days after the 08-15 entry below wrote its disproof into THIS FILE. R1-R4 were
