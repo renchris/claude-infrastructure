@@ -142,6 +142,12 @@ Report **null**, not a verdict, when any of:
 
 1. `elapsed_fraction < 0.05` — inherited verbatim from `wall_projection`'s floor. Same reason: at 1 h into
    a week the projection is noise. Fires on 0 of the 3 windows that were <25% elapsed in the backtest.
+   ⚠️ **THE INHERITED VALUE IS STALE — do not copy 0.05 into an implementation.** `wall_projection`'s
+   floor was widened to the window's last ~2 days on 2026-08-26 (`PROJ_SPEAK_H = 48.0`, i.e.
+   `elapsed_fraction < 0.714`), because dividing by elapsed fraction corrects for phase only under linear
+   burn and this fleet's burn is back-loaded — mean 46 pp error at day 3. See
+   `docs/research/weekly-reset-utilization-2026-08-25.md` §3/§6. If this planner ships, it inherits the
+   CURRENT floor, and its own weekly term needs re-scoring against the empirical envelope first.
 2. `session_pct` or `session_reset_at` absent (15.0% of samples lack `session_reset_at`) — the current
    window's remaining room is unknown, and the 5h term cannot be imputed.
 3. `weekly_reset_at` absent (1.4%), or `0 < weekly_reset_h ≤ 168` fails — bad data, not a signal.

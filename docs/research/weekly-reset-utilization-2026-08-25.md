@@ -194,6 +194,20 @@ The one real cost in view is `next3`'s ~8 pp, and with 3.8 h left that is essent
   uninformative, and speaks only in the last ~2 days where linear and empirical converge
   (day 6: −17 pp; day 7: −2 pp).
 
+  ✅ **SHIPPED 2026-08-26** (backlog item `70ed289c10fb`). `bin/claude-accounts` now carries
+  `PROJ_SPEAK_H = 48.0` and derives `MIN_ELAPSED_FRAC` from it (0.714), so `wall_projection()`
+  returns `(None, None)` for everything but the window's last ~2 days; the old 0.05 fresh-window
+  floor is subsumed, not deleted, and its reason is kept in the docstring. Consumers see the
+  widening as ABSENCE, the contract they already had: `apply_burn` stamps `burn_ratio` /
+  `proj_end_pct` / `wall_risk` only when the projection speaks, and `pace_line`'s zero-strand row
+  already rendered without a ratio — mid-week it now renders the bare `on pace to fill the window`
+  and no `⚠ WALL`, which is the false alarm the `next@08-23` row above measured. The **curve fit
+  was deliberately NOT taken**, for §5.2's reason: 4 windows refute linearity but cannot calibrate
+  a shape. `tests/claude-accounts-burn-ratio.bats` pins both sides of the new gate and carries the
+  four backtested day-3 rows as its abstain cases; RED-proved against two mutants (restoring
+  `0.05` reddens the mid-week and boundary cases; `PROJ_SPEAK_H = 0` reddens the control and all
+  three arithmetic cases, so neither arm is vacuous).
+
 **Reproduce:** the analysis scripts are in this session's scratchpad; the one-command version of
 the retrospective is `python3 scripts/desk-strand-replay.py`.
 

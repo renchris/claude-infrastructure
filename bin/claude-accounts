@@ -2152,9 +2152,10 @@ def apply_burn(rows, cfg, samples=None):
 
     # Window-phase view, exported so consumers ROUTE on it instead of re-deriving it from a raw
     # percentage (the governed dispatcher, USAGE_TELEMETRY_100P §4 M1, admits work against this).
-    # Absent keys mean "too early to say" — see wall_projection's abstain rule; a consumer that
-    # treats a missing burn_ratio as 0 would read a fresh window as idle, which is the exact
-    # inversion this metric exists to prevent.
+    # Absent keys mean "not honest to say" — see wall_projection's abstain rule, which since
+    # 2026-08-26 is silent for all but the window's last ~2 days, not merely its first 8 h. A
+    # consumer that treats a missing burn_ratio as 0 would read a fresh OR a mid-week window as
+    # idle, which is the exact inversion this metric exists to prevent.
     # M5: rank each account's REQUIRED rate inside its own realised history. Stamped here, beside
     # the other burn facts, because this is the one place that holds both the rows and the series;
     # pace_line renders what is stamped, so there is still exactly one renderer (L3).
@@ -2284,7 +2285,16 @@ def fmt_burst(bp):
 
 
 WEEK_H = 168.0          # the weekly bucket's span; reset stamps are exactly 7 d apart
-MIN_ELAPSED_FRAC = 0.05  # ~8.4 h — below this a projection is noise, so we ABSTAIN
+
+# THE ABSTAIN WINDOW. Expressed as REMAINING hours because that is the axis the convergence
+# evidence is indexed by (weekly-reset-utilization-2026-08-25 §3): the linear model's error runs
+# −22 pp at day 3 and −27 pp at day 4, and only closes to −17 pp at day 6 and −2 pp at day 7. So
+# the projection speaks inside the window's last ~2 days and is silent everywhere earlier.
+PROJ_SPEAK_H = 48.0
+# The elapsed-fraction form of the same rule, kept because the arithmetic below is in fractions.
+# 0.714 — it SUBSUMES the old 0.05 fresh-window floor rather than replacing its reason: a window
+# 1 h in is still abstained on, for the reason the docstring keeps.
+MIN_ELAPSED_FRAC = 1.0 - PROJ_SPEAK_H / WEEK_H
 
 
 def wall_projection(r):
@@ -2304,6 +2314,34 @@ def wall_projection(r):
     a 1% reading projects to 168%, so an un-floored projection would page on every fresh window —
     manufacturing the very false alarm the metric exists to remove. Returning None is the honest
     answer to "too early to say", per the repo's abstain-never-impute rule.
+
+    THE FLOOR IS THE LAST ~2 DAYS, NOT 5% ELAPSED (widened 2026-08-26, evidence in
+    `docs/research/weekly-reset-utilization-2026-08-25.md` §3/§6). Dividing by elapsed fraction
+    removes the PHASE error only if burn is linear, and this fleet's is not — it is heavily
+    back-loaded, so the empirical median reads 0.49× at day 3 where the linear model expects
+    ~1.0. Backtested against what the windows actually did, the shipped projection erred by a
+    mean 46 pp at day 3 and 35 pp at day 5:
+
+        next3@08-18  12% @ d3 -> projected  28%, closed  98%   (-70 pp)
+        next2@08-22  17% @ d3 -> projected  40%, closed 100%   (-60 pp)
+        next4@08-23  25% @ d3 -> projected  58%, closed  92%   (-34 pp)
+        next @08-23  51% @ d3 -> projected 119% ⚠WALL, closed 99%  (+20 pp)
+
+    Both failure directions are live: it under-projects the three that were behind linear, and
+    it flagged a ⚠ WALL that never arrived on the one that was ahead. The 5% floor could not
+    catch any of them — every row above sits far past it. The linear and empirical curves
+    converge only at the end of the window (-17 pp at day 6, -2 pp at day 7), so that tail is
+    the only stretch where this arithmetic is worth reading, and PROJ_SPEAK_H is the gate.
+
+    NOT a curve fit. Replacing the linear divisor with the empirical trajectory is the better
+    fix and is deliberately NOT taken here: that curve rests on 4 windows (§5.2), which refute
+    linearity but cannot calibrate a shape. Silence where the number is uninformative is the
+    move 4 windows do support. Re-derive after >=2 more full cycles.
+
+    CONSUMERS SEE THIS AS ABSENCE, which is the contract they already have: apply_burn stamps
+    burn_ratio / proj_end_pct / wall_risk only when this speaks, and pace_line's zero-strand row
+    already renders without a ratio. A consumer that reads a missing burn_ratio as 0 inverts the
+    metric — it always did, and now it does so mid-week too.
     """
     wp, wrh = r.get("weekly_pct"), r.get("weekly_reset_h")
     if wp is None or not isinstance(wrh, (int, float)):
@@ -2414,11 +2452,17 @@ def pace_line(rows):
     NOWCAST, NOT FORECAST — the caption says `at the last 48h of pace` and there is deliberately
     no lead-time claim anywhere on this surface. §5.1 LB-2.
 
-    ZERO-STRAND ROWS STILL RENDER, and render last. `wall_projection`'s burn RATIO survives
-    unchanged on them, because an account on a wall trajectory has no strand and is still the
-    most important thing on the line; what does NOT survive is rendering a weekly projection
-    ABOVE 100 as a number, which is the regime where every projector measured here is wrong by
-    50-130 pp. An abstention renders as the word plus its reason, never as a zero."""
+    ZERO-STRAND ROWS STILL RENDER, and render last. `wall_projection`'s burn RATIO survives on
+    them, because an account on a wall trajectory has no strand and is still the most important
+    thing on the line; what does NOT survive is rendering a weekly projection ABOVE 100 as a
+    number, which is the regime where every projector measured here is wrong by 50-130 pp. An
+    abstention renders as the word plus its reason, never as a zero.
+
+    THE RATIO CLAUSE IS NOW TAIL-ONLY. Since wall_projection's abstain widened to the window's
+    last ~2 days (2026-08-26), a mid-week zero-strand row renders the bare `on pace to fill the
+    window` and no `N.NN× burn` / `⚠ WALL` — by design: mid-week that flag was a false alarm
+    (`next` projected 119% at day 3 and closed at 99%). The `⚠ WALL` glyph is unchanged inside
+    the tail, which is the only stretch where it was ever load-bearing."""
     def _strand(x):
         # Computed here, not read off the stamp, for the same reason wall_projection is called
         # rather than read off `burn_ratio`: the renderer must not silently render nothing when
