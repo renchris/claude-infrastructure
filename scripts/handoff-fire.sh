@@ -5621,7 +5621,8 @@ if [ "${1:-}" = "__recycle" ]; then
       # corpus were fired by exactly this class of submit). A CR is now sent ONLY onto a composer
       # PROVEN to hold exactly the stranded /exit it exists to submit. An EMPTY composer with
       # claude still alive at the 60s checkpoint gets ONE gated retype of /exit (the typed-but-
-      # lost transport case), itself read back before its CR. Anything else — a draft, a merged
+      # lost transport case), itself read back before its CR — through it2_paste_submit_verified,
+      # which owns that read-back; see the retype arm. Anything else — a draft, a merged
       # buffer, an unreadable box — HOLDS: the recycle then fails loudly at the 600s refusal with
       # the session alive and the operator's text intact, which is the recoverable outcome.
       nd="$(recycle_nudge_decision "$IT2" "$RSID")"
@@ -5629,11 +5630,27 @@ if [ "${1:-}" = "__recycle" ]; then
         cr)
           hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;;
         retype)
+          # ROUTED THROUGH THE SANCTIONED HELPER, not hand-rolled (2026-08-26). This arm shipped
+          # with its own inline type→sleep→read-back→CR, which is the RIGHT SHAPE and was still a
+          # typed-send-lint violation — the one scripts/ship-land.sh:1368 names as a suite the
+          # post-land net stamps RED on trunk every sweep, deterministically (it is a grep over the
+          # tree, so no retry ladder can clear it), pinning the newest green stamp cold. That red is
+          # what backlog 01ab05685857 misread as "the verifier is INERT".
+          #
+          # it2_paste_submit_verified is not merely the lint-visible spelling, it is STRICTLY
+          # STRONGER on all four counts the hand-rolled version was weak on: it proves a live CC
+          # session owns the pane (composer_owned) before typing anything, it BRACKET-PASTES rather
+          # than raw-typing (the transport this lint exists to mandate), it accepts the placeholder
+          # read-back form `[Pasted text #N]` that a raw `[ "$nc" = "/exit" ]` would have read as a
+          # mismatch, and on a mangled paste it SAYS SO on stderr instead of failing silent. The
+          # empty-composer precondition it re-checks is already proven by recycle_nudge_decision's
+          # `retype`, so the re-check is a no-op here, and `/goal` is submitted through this same
+          # helper at the arm above — a slash command through a bracketed paste is precedented.
+          #
+          # `|| true` is preserved verbatim: a nudge that cannot type is not a recycle failure. The
+          # 600s refusal below is still the terminal condition, with the session alive either way.
           if [ "$waited" = 60 ]; then
-            hf_bounded "$IT2" session send -s "$RSID" "/exit" >/dev/null 2>&1 || true
-            sleep 1
-            nc="$(composer_content "$IT2" "$RSID")" || nc=""
-            if [ "$nc" = "/exit" ]; then hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true; fi
+            it2_paste_submit_verified "$IT2" "$RSID" "/exit" || true
           fi ;;
         *)
           echo "→ nudge@${waited}s HELD ($nd): composer is not a stranded /exit — a CR here would submit someone else's buffer"
