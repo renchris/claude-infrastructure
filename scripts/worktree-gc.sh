@@ -488,7 +488,17 @@ if [ "$ORACLES" = "0" ] && [ "$DRY_RUN" = "0" ]; then
   exit 3
 fi
 
-is_live_cwd() { printf '%s\n' "$LIVE_CWDS" | grep -qxF "$1"; }
+# NOT `grep -q`, and this is a correctness fix rather than a style one. This body is the
+# FUNCTION-FINAL statement, so its rc is exactly what the occupancy ladder's `elif is_live_cwd`
+# rung below reads. Under the `set -uo pipefail` this script sets, an early-exiting grep kills
+# printf with SIGPIPE and pipefail hands the caller 141 — measured 20/20 at 137,819 B on bash
+# 3.2.57, for a BUILTIN producer as well as an external one. 141 is not zero, so a MATCH would
+# read as NOT LIVE: the janitor would stop seeing the very session whose cwd it just found.
+# `grep -xF … >/dev/null` reads its input to the end and answers the question that was asked.
+# The feed is small today (the registered-session cwd list measured 545 B on 2026-08-26) and four
+# further keep-arms sit under this rung, so this is LATENT — but the feed only grows and nothing
+# announces the crossing. tests/worktree-gc.bats pins it behaviourally, past the measured floor.
+is_live_cwd() { printf '%s\n' "$LIVE_CWDS" | grep -xF "$1" >/dev/null; }
 
 registry_live() { # <basename> <canon-path> → 0 iff ANY registered session PID is still alive here
   local base="$1" path="$2" f row pid rcwd
@@ -528,11 +538,14 @@ registry_live() { # <basename> <canon-path> → 0 iff ANY registered session PID
 # blind to exactly the session this store exists to record. Reading the files decorrelates the
 # session signal from cc-notify's availability, from jq's, and from the it2 IPC hop.
 #
-# It also matches WIDER, which is the second half of the gap: `is_live_cwd` is `grep -qxF`, an
-# EXACT path equality, so a session registered at a SUBDIRECTORY of a worktree does not mark the
-# worktree occupied. That is not hypothetical — measured on the live box 2026-08-17, 1 of 11
-# registered cwds was a subdirectory of a repo another row already named. Here a registered cwd
+# It also matches WIDER, which is the second half of the gap: is_live_cwd is a whole-line fixed
+# match, an EXACT path equality, so a session registered at a SUBDIRECTORY of a worktree does not
+# mark the worktree occupied. That is not hypothetical — measured on the live box 2026-08-17, 1 of
+# 11 registered cwds was a subdirectory of a repo another row already named. Here a registered cwd
 # that IS the worktree or lies UNDER it is OCCUPIED, full stop; over-matching can only ever KEEP.
+# (This sentence named the flag `-qxF` until 2026-08-26, when that -q was drained as a fail-OPEN.
+# The claim it makes is about EXACTNESS, which is unchanged; the flag it quoted was not. A comment
+# that quotes its subject's spelling is a claim with a shorter half-life than the claim it makes.)
 #
 # Three outcomes, and the third is why this is not a boolean:
 #   0 → OCCUPIED (a live row's cwd is at or under <canon-path>), SESSION_OCC_WHY says so

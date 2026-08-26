@@ -120,8 +120,16 @@ mine_match() {  # $1=sha — an own-session land anchor reaches it, else the leg
   done <<EOF
 ${MINE_ANCHORS}
 EOF
+  # NOT `grep -q`. This pipeline is the FUNCTION-FINAL statement, so its rc is what the caller's
+  # `! mine_match "${sha}"` reads, and `pipefail` is declared load-bearing at the top of this file.
+  # An early-exiting grep kills `git show` with SIGPIPE and the caller is handed 141 — measured
+  # 20/20 at 137,819 B on bash 3.2.57 — which is not zero and therefore means NOT MINE. A MATCH
+  # would read as a peer's commit and be SILENTLY SKIPPED, which in `--mine` is the one outcome
+  # this mode exists to prevent: an own-session drop that goes unreported. Reading to the end costs
+  # nothing here (nothing writes these trailers today) and cannot invert.
+  # tests/stranded-sweep.bats pins it behaviourally, past the measured floor.
   git show -s --format='%(trailers:key=Session-Id,valueonly,separator=%x0A)%x0A%(trailers:key=Land-Session,valueonly,separator=%x0A)' "$1" 2>/dev/null \
-    | grep -qxF "${MINE}"
+    | grep -xF "${MINE}" >/dev/null
 }
 
 NL='
