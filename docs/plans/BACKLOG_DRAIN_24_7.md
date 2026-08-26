@@ -86,6 +86,162 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-26 — drain recycle #233: method 203 — A LAW A FILE STATES, TESTS AND ENFORCES AT ONE
+  SITE, WHILE ITS SIBLING PREDICATE — THE ONE WHOSE FAILURE IS QUIETER — VIOLATES IT, AND THAT
+  SIBLING'S ONLY FIXTURE IS DRAWN FROM THE POPULATION THAT TRIVIALLY SATISFIES IT.** ONE fix landed
+  (`f059e0e8b`, sha SURVIVED the land unchanged — as #231's and #232's did, while #230's fix-sha and
+  #229's doc-sha were rewritten, so verify rather than assume), ONE land attempt, ONE land, ZERO
+  rc 6, content-verified on trunk on both paths (`git diff origin/main HEAD` **0 bytes over the
+  whole tree** · HEAD blob == origin/main blob on each), with the pinned off-trunk NEG control
+  `4e39debcf` refusing (rc 1) and an `origin/main~1` POS control confirming (rc 0).
+
+  **THE FIND, by running #232's method 202 over the controls #232 itself named and left unspent.**
+  #232 asked, of ONE function, which arm of the predicate its positive control's fixture makes
+  reachable. Two targets were named in its own brief and not taken: `wd_control_untracked`, and
+  **`wd_lead_live`'s command check, which had NO control of any kind while its own comment called
+  that check "the whole point"**. The second is the one with teeth.
+
+  `wd_lead_live` decides the FIRST branch of `wd_classify` — is the recorded lead a live claude
+  session? Its comment is exactly right about why it exists: *"a dead lead's pid gets RECYCLED, and
+  answering 'is this session alive' with bare pid liveness is the exact defect this census reports
+  on — it must not commit that defect inside its own classifier."* The check was an **UNANCHORED
+  substring over the whole argv**, which admits any live process that merely NAMES a claude binary
+  in its arguments.
+
+  **MEASURED, not read** — one 1,008-process snapshot at 2026-08-26T03:14Z, one span, both of my
+  parsers reconciled: the shipped unanchored form admits **11** processes, of which **6 are
+  sessions and 5 are `bin/cc-close-attrib` wrappers**; argv[0] suffix-anchored admits **6**; the
+  process IMAGE (`comm`) suffix-anchored admits **6**; and all four candidates match **7 of 7**
+  recorded live leads, so nothing is lost in the direction with teeth. **The wrapper population is
+  not incidental: `cc-close-attrib` fronts EVERY session and carries that session's entire command
+  line as its own arguments, forked in the same instant — so wrapper pids sit ADJACENT to exactly
+  the session pids a recycle draws from.** A recycled lead pid landing on one reads `live-session`,
+  `wd_classify` leaves the row alone, and a genuinely orphaned daemon is invisible — the same
+  false-clean report the command check exists to prevent.
+
+  🚨 **THE SAME LAW WAS ALREADY STATED, TESTED AND ENFORCED TWENTY LINES DOWN, ON THE OTHER
+  PREDICATE.** `wd_daemon_table` matches the script token in the COMMAND position and never
+  `pgrep -f`, "which also matches any process whose argv merely MENTIONS the path", and
+  `tests/watchdog-census.bats` carries a decoy to prove it. The law was never carried across to its
+  sibling — **and the sibling is the end that fails the QUIETER way: an over-matching enumerator
+  prints a spurious kill line nobody runs; an over-matching lead check prints a clean zero nobody
+  investigates.** That asymmetry is why the tested site is the less dangerous of the two.
+
+  **WHY NO CONTROL SAW IT — THE METHOD-202 HALF.** The suite's recycled-pid defense
+  (`"a live pid that is NOT a claude binary is never called a live session"`) feeds `wd_lead_live`
+  the bats shell: a live process sharing NO substring with either pattern, therefore satisfied
+  IDENTICALLY by an anchored check and by one matching anywhere in the argv. The single live class
+  that separates those two readings was in no fixture. **A control whose fixture is drawn from the
+  population that trivially satisfies the law cannot see the law being broken** — #232's law was a
+  fixture and an assertion sharing a WRITER; this is its outward form, a fixture drawn from the
+  wrong POPULATION.
+
+  **THE FIX (`f059e0e8b`, landed and content-verified).** Match the PROCESS, not its arguments:
+  the IMAGE (`comm`) or argv[0], both suffix-anchored, union — two renderings because they fail in
+  opposite directions (the image cannot be forged by a process's arguments but is the INTERPRETER
+  under a script-shebang launcher; argv[0] survives that but is exactly what a wrapper controls).
+  They agreed on all 1,008 rows. Plus **`wd_control_lead`, the fourth positive control, ONE CELL
+  PER ARM because an arm with no cell has no control**: `image` (only the comm arm can match it),
+  `argv0` (only the argv[0] arm can match it), `wrapper` (must be REJECTED — **the one cell that
+  moved**), `plain`. ⚠️ Rendered as a **bool**, unlike #232's `control_dialect` string: every cell
+  is decided by a fixture this control fully renders, so no arm is unreachable and there is no
+  honest N/A for a bool to launder. **Naming an encoding honestly is now four links running.**
+
+  🚨 **A SEAM DECISION THAT WAS ITSELF A METHOD-202 TRAP.** The obvious wiring is to reuse
+  `CC_WATCHDOG_PS_BIN`, the seam `wd_daemon_table` already exposes "to let the positive control
+  drive a synthetic process table". **The suite exports that seam SUITE-WIDE as an EMPTY-table stub
+  for hermeticity** — so routing the lead check through it would have blinded `wd_lead_live` in
+  every existing test, turning the recycled-pid defense into a fixture that cannot fail. That is
+  the very defect being fixed, re-committed by the fix. A separate `CC_WATCHDOG_LEAD_PS_BIN`,
+  defaulting to `ps`, keeps every existing fixture meaning what it meant. **Before reusing a seam,
+  read what the SUITE sets it to.**
+
+  ⚠️ **INSTRUMENT NOTE, AND IT COST TWO CONTRADICTORY READINGS OF MY OWN: macOS `ps` TRUNCATES A
+  NON-FINAL COLUMN TO ITS DEFAULT WIDTH.** `ps -axo pid=,comm=,command=` renders a long image path
+  as `/Users/chrisren/` — **16 characters** — so every suffix match against it silently fails.
+  My per-pid probe read the image arm at 6 and my bulk probe read it at **0**; the 0 was my parser,
+  not the arm. `comm` must be the ONLY or the LAST column (`max_comm_len` 249 once it was last).
+  **Two of my own parsers disagreeing on a denominator is control 22, and it fired here.**
+
+  **MUTANTS — one per SITE, each GATED on its anchor occurring exactly once, subject restored
+  byte-identical by sha256 on every arm (asserted each time, 5 of 5):** M1 revert to the unanchored
+  whole-argv match ⇒ **3 red**, cells `image=FAIL wrapper=ADMITTED` · M2 delete the image arm ⇒
+  **2 red**, `image=FAIL` · M3 delete the argv[0] arm ⇒ **2 red**, `argv0=FAIL` · M4b remove the
+  `control_lead` JSON key WITH its argument ⇒ **1 red**, JSON still parses. **Each deleted arm
+  failed exactly its OWN cell, which is what "one cell per arm" has to mean.** THREE DISTINCT RED
+  SETS, which proves neither assertion rides the other.
+  🚨 **AND THE FLOOR CAUGHT A PREDICTION WRONG, THE TWENTIETH TIME RUNNING — IN THE UNFLATTERING
+  DIRECTION, WHICH IS THE USEFUL ONE.** My first M4 predicted 1 red and produced **5**. The mutant
+  deleted a `printf` FORMAT SPECIFIER and left its ARGUMENT behind, shifting every later field and
+  corrupting the whole object — it tested *malformed JSON*, not *a missing key*, and reded three
+  innocent sibling tests. **An over-wide red indicts the MUTANT.** M4b removed both together and
+  scored the predicted 1, with the object still parsing. **A printf mutant must delete the
+  specifier and its argument as one unit; deleting either alone is not the change you named.**
+
+  `tests/watchdog-census.bats` **22 → 25**, green 25/25, plan == ok, 0 skips.
+
+  **THE BOARD — A FOURTH FROZEN LINK BROKEN BY EXACTLY ONE MINT.** At my OPEN (03:09Z)
+  **324 open / 209 blocked / 2,329 done / 5 claimed** (533 combined, **2,867 rows**), partition
+  asserted `open + blocked == combined`. Against #232's close lists: `allids` **departures 0,
+  arrivals 1** — **`b95fd5f424a2`, the first genuine mint in four links** (a sibling's
+  `master-operator-gated` row asking the operator to run `/compact-memory`; NOT drain work, do not
+  re-file). Four status movers: `8f59467c92b0` **open → claimed** and `abf5e7509608` **open →
+  claimed** (both cloud WOULD-UNBLOCK rows), `e981656df348` **claimed → blocked**, `f85fce7c26f5`
+  **claimed → open**. 🚨 **`done` DID NOT MOVE — 2,329 at my open. The actuator series is now
+  `2, 2, 0, 7, 0, 1, 0, 0, 0, 0`: TEN points, still bursty, now FOUR zeros running.** **The claimed
+  set again held at 5 while two rows entered and two left — it remains the most volatile column.**
+
+  **STANDING NUMBERS, each with the moment I took it (#230's prophylactic, now proven four links).**
+  postland RED `.page` files **0 at my open over a denominator of 2,685, and 0 / 2,685 again after
+  my land — the 125th consecutive zero** (#232 saw that denominator move 2,683 → 2,688 → 2,682
+  WITHIN its link; mine did not move at all). `~/.claude/autonomy/pages` **1,982 total / 115
+  `.page`** at my open. postland `stamps` **468** at my open (#232 closed at 467 and re-read 468).
+  inbox-guard `.escalated` **482** at my open. `kern.boottime` `sec = 1787642174` — **the same
+  `sec` as #228–#232, so no reboot across SIX links.** `cc-roles list` read
+  `desk UNVERIFIED 5 | docs-lead UNVERIFIED 450 | drain-lead UNVERIFIED 7 | orchestrator ABSENT
+  empty` — a **SEVENTEENTH** consecutive identical table.
+
+  **THE LIVE LAYER — A THIRD CONSECUTIVE NON-MOVING LINK.** `LIVE_SHA a74e844377f8` at my open AND
+  after my land, exactly as at #231's and #232's; **LIVE_LAG 6 → 7**, `LIVE_ADDS 0`,
+  `LIVE_DIVERGED 0`, `MIG_FAILED 0`, `GATE=stale` at my open. Lag 7 is well inside the 25-commit
+  budget, so the rung stayed **✅** throughout and no converge was owed — I did not run `--dry-run`
+  and say so rather than quoting #231's reading as if it were mine.
+
+  **CONTROLS THAT SPOKE.** The `qos-rewrite.sh` diff was clean — the **116th** consecutive.
+  All four kitty-aware pre-fire checks passed by minute ~4: `cc-in-kitty` rc 0, `KITTY_WINDOW_ID`
+  **27**, the id-keyed `kitty @ ls` selector returning **exactly one** object (count asserted by a
+  jq `length`, bogus-id NEG control **0**, cwd its own worktree), `cc-notify --self` → 27 rc 0.
+  The selector's POS control (`7eb0eb0b6~1..7eb0eb0b6`) **spoke with 4** as predicted; my own
+  `--direct` set drew **7** suites. I ran that ENTIRE set in the foreground before landing —
+  **7 suites / 285 tests / 0 failures / 0 skips / plan == ok on every one**: `cc-reaper` **192**
+  (462 s at load ~9), `watchdog-census` **25**, `lstart-dialect-bin` 16, `handoff-lifecycle-record`
+  15, `reap-sweep-bounds` 14 (51 s), `headless-address-consumers` 13, `reap-freshness` 10.
+  🆕 **AND IT PAID OFF IMMEDIATELY FOR THE FOURTH CONSECUTIVE LINK: the land's smoke cut
+  `tests/cc-reaper.bats` at exit 124 with ZERO `not ok` and the budget SPENT — which the gate itself
+  names a NON-VERDICT and not evidence about the tree — and my foreground run had already converted
+  it into a known 192/192.** Lints: `shellcheck bin/cc-reaper` rc 0 · `bash -n` rc 0 · scoped
+  `bats-shellcheck-lint --range "$MB...HEAD"` rc 0 ("clean — 1 suite(s) scanned, 0 blocking
+  finding(s), 0 unanalyzable") · `bats-assert-liveness` rc 0 · `pipefail-sigpipe-lint` **bare**
+  rc 0 (I added a `| sed` pipeline, so it applied) · `alarm-polarity-lint` **DECLARED NOT-RUN** on
+  its mute positive control, never claimed green. `ship-backup-reap` again read only the BENIGN
+  form ("merged; its commits are contained in the landed head") — **a FIFTH consecutive link of
+  benign-only, which is itself evidence about `b746262ac702`.**
+
+  **UNSPENT AND NAMED, so the next link does not re-derive it:** `wd_control_untracked` is STILL
+  the unasked method-202 question — its fixture reaches the awk loop's **i=9** arm only (measured:
+  every one of the 7 real daemons on this box also lands at field 9, and the shipped `i<=9` bound
+  enumerated exactly as many as an UNBOUNDED scan, 7 = 7), **so the i=8 arm has neither a control
+  cell nor a live instance and nobody knows whether it works.** `wd_lead_live`'s own kill-switch and
+  the `wl` whitelist remain untouched. **Method 203's screen is cheap and general: when a file
+  proves a discrimination for ONE predicate, ask whether its SIBLING needs the same one — and
+  whether the sibling's fixture is drawn from a population that could ever fail it.** `grep -n` for
+  a law stated once (`not a mere argv mention`, `never pgrep -f`, `the COMMAND position`), then read
+  every OTHER predicate in the same file.
+
+  ZERO rows closed BY ME, ZERO by the actuator, ZERO filed. **#217 through #233 have all closed
+  nothing themselves, deliberately (premise 3): a row is closed only when its surviving true content
+  has another owner, and fixing the code is the cleanest discharge.**
+
 - **2026-08-26 — drain recycle #232: method 202 — A POSITIVE CONTROL WHOSE FIXTURE AND WHOSE
   ASSERTION SHARE A WRITER COVERS EXACTLY THE ONE ARM IT WROTE, AND ITS COMMENT CAN CLAIM THE
   OPPOSITE.** ONE fix landed (`050569c39`, sha SURVIVED the land unchanged — as #231's did, while
