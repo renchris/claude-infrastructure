@@ -85,6 +85,8 @@
 # Usage:
 #   capacity-marginal.sh sample  [--window-s N] [--interval-s N] [--out FILE]
 #   capacity-marginal.sh analyze [--in FILE] [--json]
+#   capacity-marginal.sh run     [--out FILE] [--interval-s N] [--first-window-s N]
+#                                [--extend-s N] [--budget-s N] [--repeat-k N] [--no-preflight]
 #
 # Exit: 0 coefficient emitted (all controls passed) · 1 NO-ATTRIBUTION (a control failed) ·
 #       2 usage error · 3 NO-DATA (nothing sampled / file unreadable).
@@ -98,7 +100,13 @@
 #   CC_MARG_MIN_ACTIVE_SPREAD(2)    max-min of the active count required by C3
 #   CC_MARG_MIN_ACTIVE_LEVELS(3)    distinct active levels required by C3
 #   CC_MARG_EXEC_RE                 regex matching a session's executable path (comm), default below
+#   CC_MARG_ACTIVE_OVERRIDE         stand-in for cc_sp_active (TEST SEAM — see read_active)
 #   CC_MARG_OUT                     default sample output path
+#   CC_MARG_RUN_FIRST(3600)         `run`: the first window, seconds — the doc's hour
+#   CC_MARG_RUN_EXTEND(900)         `run`: each extension after the first window, seconds
+#   CC_MARG_RUN_BUDGET(14400)       `run`: total wall-clock ceiling, seconds
+#   CC_MARG_RUN_REPEAT_K(3)         `run`: consecutive identical refusals that make the refusal the finding
+#   CC_MARG_SELF                    `run`: the sampler `run` shells out to (test seam)
 set -uo pipefail
 
 CC_MARG_TAU="${CC_MARG_TAU:-60}"
@@ -112,6 +120,10 @@ CC_MARG_MIN_ACTIVE_LEVELS="${CC_MARG_MIN_ACTIVE_LEVELS:-3}"
 # `.claude-NNN/node_modules` form is the versioned launcher every interactive session runs.
 CC_MARG_EXEC_RE="${CC_MARG_EXEC_RE:-\\.claude-[0-9]+/node_modules/|claude\\.exe$}"
 CC_MARG_OUT="${CC_MARG_OUT:-${TMPDIR:-/tmp}/capacity-marginal.tsv}"
+CC_MARG_RUN_FIRST="${CC_MARG_RUN_FIRST:-3600}"
+CC_MARG_RUN_EXTEND="${CC_MARG_RUN_EXTEND:-900}"
+CC_MARG_RUN_BUDGET="${CC_MARG_RUN_BUDGET:-14400}"
+CC_MARG_RUN_REPEAT_K="${CC_MARG_RUN_REPEAT_K:-3}"
 
 SCHEMA='#ts	load1	unit	total_run	claude_run	active	resident'
 
@@ -183,8 +195,15 @@ census_row() { # -> "<total_run> <claude_run> <resident>"
 # unavailable or unmeasurable census records `-`, never 0: `analyze` drops those rows from the C3
 # and slope arms and says how many it dropped. Manufacturing a 0 here would let a dead sensor look
 # like a quiet box, which is the exact failure cc_sp_active's own existence gate exists to refuse.
+#
+# CC_MARG_ACTIVE_OVERRIDE stands in for that census, and it is the seam `run`'s PREFLIGHT is tested
+# through — a preflight whose refusal arm can only be exercised on a box with no fleet is a preflight
+# whose test passes for the wrong reason off-box and fails on-box. It is the same kind of seam as
+# CC_MARG_PS_OVERRIDE and carries the same warning: a file sampled under either is FIXTURE DATA, not
+# a measurement, and must never be handed to `analyze` as if it were a window.
 read_active() {
   local lib v
+  if [ -n "${CC_MARG_ACTIVE_OVERRIDE:-}" ]; then printf '%s' "$CC_MARG_ACTIVE_OVERRIDE"; return 0; fi
   lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/spawn-presence.sh"
   if [ -r "$lib" ]; then
     # shellcheck source=/dev/null
@@ -379,9 +398,146 @@ cmd_analyze() {
     }' "$in"
 }
 
+# ── run: the measurement, driven ────────────────────────────────────────────────────────────────
+# WHY THIS EXISTS. `sample` + `analyze` are the instrument; the MEASUREMENT is a protocol over them,
+# and until this subcommand existed that protocol lived in prose
+# (docs/research/marginal-load-per-active-session-2026-08-19.md §6): sample an hour, analyze, and
+# "extend the window until the verdict stops being NO-ATTRIBUTION *or* the refusal repeats with the
+# same term across several windows — which would itself be the finding". That is a loop with a
+# stopping rule, i.e. a program, and handing it to a person as two commands plus a paragraph makes
+# the person the interpreter. This subcommand IS that paragraph, so the residue on the box is one
+# command that can be started and walked away from.
+#
+# THE PREFLIGHT IS THE POINT, not a nicety. The window this measures is an HOUR, and the one way to
+# spend it and learn nothing is to spend it against a sensor that was never going to answer:
+# `cc_sp_active` reads nothing off the fleet box, every row then records `-`, and C3 fails at the end
+# on "0 row(s) carry an ACTIVE count" — a verdict available in one second. So `run` takes ONE probe
+# read of all three inputs first and refuses immediately, naming the dead input. `--no-preflight`
+# exists for the case where the operator knows better; nothing else may skip it.
+#
+# THE ROUNDS SHARE HISTORY, DELIBERATELY, AND THAT IS WHAT "REPEATS" MEANS HERE. `analyze` is
+# cumulative over the growing file, so round N+1 is not an independent replication of round N — it
+# is the same window, longer. A failing term that survives K such extensions is therefore not K
+# coincidences; it is one accumulated window that keeps failing on that term while gaining
+# observations, which is exactly the condition §6 says is itself the finding (the process-unit
+# census is not the right instrument, and B3's thread-unit census becomes the next increment).
+# Reported as such, with the term named, and still exit 1 — a stable refusal is a result, never a
+# coefficient.
+#
+# NOTHING QUOTABLE ESCAPES A REFUSAL. `run` relays `analyze`'s own text verbatim and prints the
+# citation block ONLY on exit 0. The whole point of the instrument is that a failed window yields no
+# number; a driver that summarised one would re-open the hole the four published values came out of.
+cmd_run() {
+  local out="$CC_MARG_OUT" interval="$CC_MARG_TAU" first="$CC_MARG_RUN_FIRST"
+  local extend="$CC_MARG_RUN_EXTEND" budget="$CC_MARG_RUN_BUDGET" repeat_k="$CC_MARG_RUN_REPEAT_K"
+  local preflight=1
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --out)            out="${2:-}"; shift 2 ;;
+      --interval-s)     interval="${2:-}"; shift 2 ;;
+      --first-window-s) first="${2:-}"; shift 2 ;;
+      --extend-s)       extend="${2:-}"; shift 2 ;;
+      --budget-s)       budget="${2:-}"; shift 2 ;;
+      --repeat-k)       repeat_k="${2:-}"; shift 2 ;;
+      --no-preflight)   preflight=""; shift ;;
+      *) die "run: unknown argument '$1'" ;;
+    esac
+  done
+  case "$interval$first$extend$budget$repeat_k" in *[!0-9]*) die "run: window/interval/budget/--repeat-k must be integers" ;; esac
+  [ "$interval" -ge 1 ] || die "run: --interval-s must be >= 1"
+  [ "$first" -ge 1 ] || die "run: --first-window-s must be >= 1"
+  [ "$extend" -ge 1 ] || die "run: --extend-s must be >= 1"
+  [ "$repeat_k" -ge 1 ] || die "run: --repeat-k must be >= 1"
+  [ "$budget" -ge "$first" ] || die "run: --budget-s ($budget) is below --first-window-s ($first)"
+
+  local self="${CC_MARG_SELF:-${BASH_SOURCE[0]}}"
+
+  if [ -n "$preflight" ]; then
+    local p_load p_cen p_act
+    p_load="$(read_load1)" || {
+      printf 'CAPACITY-MARGINAL RUN: PREFLIGHT FAILED — load1 is unreadable on this host (no /proc/loadavg, no sysctl vm.loadavg). Nothing to apportion.\n'
+      return 3; }
+    p_cen="$(census_row)" || {
+      printf 'CAPACITY-MARGINAL RUN: PREFLIGHT FAILED — the process census returned nothing (`ps` unavailable or empty). Nothing to attribute.\n'
+      return 3; }
+    p_act="$(read_active)"
+    if [ "$p_act" = "-" ]; then
+      printf 'CAPACITY-MARGINAL RUN: PREFLIGHT FAILED — the ACTIVE census (cc_sp_active) reads nothing on this host.\n'
+      printf '  Every row would record `-`, C3 IDENTIFY would fail on "0 row(s) carry an ACTIVE count", and the\n'
+      printf '  window would be spent blind. This measurement has to run on the fleet box, in a live session.\n'
+      printf '  (probe: load1 %s · census %s · active -)\n' "$p_load" "$p_cen"
+      return 3
+    fi
+    printf 'capacity-marginal: preflight OK — load1 %s · census "%s" · active %s\n' "$p_load" "$p_cen" "$p_act" >&2
+  fi
+
+  local elapsed=0 round=0 win="$first" sig="" sig_prev="" sig_runs=0 txt rc rc_final=1 stop=""
+  while :; do
+    round=$(( round + 1 ))
+    printf 'capacity-marginal: round %d — sampling %ss (elapsed %ss of budget %ss)\n' \
+      "$round" "$win" "$elapsed" "$budget" >&2
+    bash "$self" sample --window-s "$win" --interval-s "$interval" --out "$out" --quiet
+    elapsed=$(( elapsed + win ))
+
+    txt="$(bash "$self" analyze --in "$out")"; rc=$?
+
+    if [ "$rc" -eq 0 ]; then
+      printf '%s\n' "$txt"
+      printf '\nCITATION — this is the first quotable value this repo has had for the denominator.\n'
+      printf '  Quote the VERDICT line above WITH its s.e. and its window (n / n_eff / span), and update:\n'
+      printf '    scripts/lib/capacity-admit.sh   — the ACTIVE-ceiling comment that carries 2.5-5\n'
+      printf '    hooks/agent-teams-enforce.sh    — the refusal message that carries 2.5-5\n'
+      printf '  Then close the item:  cc-backlog done 193ae8ddce72 --evidence "<landed sha>"\n'
+      return 0
+    fi
+    # NO-DATA IS TWO DIFFERENT STATES AND THEY TAKE DIFFERENT BRANCHES. `analyze` returns 3 for a
+    # file it cannot read and for one whose rows mix census units — neither of which more window
+    # fixes — but ALSO for "%d usable row(s)", which is nothing but a window that has not yet
+    # reached three rows, i.e. precisely the condition extending exists to cure. Collapsing the two
+    # aborts a run whose first window was short (or whose first samples were dropped for an
+    # unreadable load1) and reports it as if the file were broken. So the row-count form rejoins the
+    # ordinary refusal loop under its own term, and only the permanent forms stop here.
+    if [ "$rc" -ne 1 ]; then
+      case "$txt" in
+        *"usable row(s)"*) sig="NO-DATA(rows)"; rc_final=3 ;;
+        *) printf '%s\n' "$txt"
+           printf 'CAPACITY-MARGINAL RUN: stopping — analyze returned %d (NO-DATA), and no amount of window fixes this one.\n' "$rc"
+           return "$rc" ;;
+      esac
+    else
+      # rc == 1: a control refused. Which one(s)?
+      rc_final=1
+      sig="$(printf '%s\n' "$txt" | awk '/^ *C[123] /{ if ($3 == "FAIL") s = s (s ? "," : "") $1 } END { print s }')"
+      [ -n "$sig" ] || sig="?"
+    fi
+    if [ "$sig" = "$sig_prev" ]; then sig_runs=$(( sig_runs + 1 )); else sig_runs=1; sig_prev="$sig"; fi
+    printf 'capacity-marginal: round %d refused on %s (%d consecutive)\n' "$round" "$sig" "$sig_runs" >&2
+
+    if [ "$elapsed" -ge "$first" ] && [ "$sig_runs" -ge "$repeat_k" ]; then stop=stable; fi
+    if [ "$elapsed" -ge "$budget" ]; then stop="${stop:-budget}"; fi
+    if [ -n "$stop" ]; then
+      printf '%s\n' "$txt"
+      if [ "$stop" = stable ]; then
+        printf 'CAPACITY-MARGINAL RUN: STABLE REFUSAL — %s failed on %d consecutive extensions of one\n' "$sig" "$sig_runs"
+        printf '  accumulating window (%ss total). Per the protocol this IS the finding: the window is not the\n' "$elapsed"
+        printf '  problem, %s is. No coefficient is quotable, and none of the four published values may stand in.\n' "$sig"
+      else
+        printf 'CAPACITY-MARGINAL RUN: BUDGET EXHAUSTED — %ss sampled, still refused on %s.\n' "$elapsed" "$sig"
+        printf '  Re-run to extend the SAME file (%s); analyze is cumulative and the window keeps growing.\n' "$out"
+      fi
+      [ "$rc_final" -eq 3 ] && printf '  %ss of sampling produced fewer than three usable rows: the sampler is recording almost nothing, so check load1 and `ps` on this host before spending another window.\n' "$elapsed"
+      return "$rc_final"
+    fi
+
+    win="$extend"
+    [ $(( elapsed + win )) -le "$budget" ] || win=$(( budget - elapsed ))
+  done
+}
+
 case "${1:-}" in
   sample)  shift; cmd_sample "$@" ;;
   analyze) shift; cmd_analyze "$@" ;;
+  run)     shift; cmd_run "$@" ;;
   -h|--help|'') sed -n '/^# Usage:/,/^#       2 usage/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
-  *) die "unknown subcommand '$1' (sample | analyze)" ;;
+  *) die "unknown subcommand '$1' (sample | analyze | run)" ;;
 esac

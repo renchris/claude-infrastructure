@@ -2,7 +2,8 @@
 
 **Date:** 2026-08-19 · **Item:** backlog `193ae8ddce72`
 **DoD ref:** [`gc-cpu-vs-session-ceiling-2026-08-18.md`](gc-cpu-vs-session-ceiling-2026-08-18.md) §5
-**Ships:** `scripts/capacity-marginal.sh` · `tests/capacity-marginal.bats` (15 rows)
+**Ships:** `scripts/capacity-marginal.sh` (`sample` · `analyze` · `run`) ·
+`tests/capacity-marginal.bats` (15 rows 2026-08-19, 28 as of 2026-08-26)
 
 ---
 
@@ -158,9 +159,16 @@ A control nobody has watched fail is a rubber stamp. `tests/capacity-marginal.ba
 On the box, in a session that is not itself doing heavy work (the sampler costs one `ps` per minute):
 
 ```sh
-bash scripts/capacity-marginal.sh sample --window-s 3600 --interval-s 60 --out /tmp/marg.tsv
-bash scripts/capacity-marginal.sh analyze --in /tmp/marg.tsv
+bash scripts/capacity-marginal.sh run
 ```
+
+*(One command since 2026-08-26. It was two commands plus the extend-until paragraph below, which
+made the operator the interpreter of a loop with a stopping rule — the worksheet defect. `run` is
+that paragraph: it preflights all three inputs and refuses in one second if any is dead rather than
+spending the hour blind, samples the hour, analyzes, extends by `--extend-s` until the verdict
+becomes a coefficient, the same term refuses `--repeat-k` times running, or `--budget-s` is spent,
+and prints the citation block only on a PASS. Every default below is a flag. The two-command form
+still works and is what `run` calls.)*
 
 **One hour at 60 s gives `n_eff` = 60 against a floor of 20**, so C2 is decidable rather than
 undecided — the single thing B3's three windows could not buy. Two conditions make C1 and C3
@@ -177,7 +185,12 @@ decidable too, and both are ordinary operating conditions on this box rather tha
 the window until the verdict stops being `NO-ATTRIBUTION` **or** the refusal repeats with the same
 term across several windows — which would itself be the finding (the process-unit census is not the
 right instrument, and the thread-unit refinement in §7 becomes the next increment rather than a
-nicety).
+nicety). **`run` is that protocol** (`cmd_run`, 2026-08-26): the rounds share history deliberately,
+so a term surviving `--repeat-k` extensions is not K coincidences but one accumulating window that
+keeps failing on that term while gaining observations. It reports the stable refusal by name and
+still exits 1 — a stable refusal is a result, never a coefficient. `run` is also safe to re-run: it
+appends to the same file and `analyze` sees the whole of it, so an interrupted window is extended
+rather than restarted.
 
 On a PASS, quote the coefficient **with its standard error and its window**, update
 `scripts/lib/capacity-admit.sh:698` and `hooks/agent-teams-enforce.sh:220` (both currently carry
@@ -217,3 +230,49 @@ green · `shellcheck` clean · `bash -n` clean · `scripts/test-hermeticity-lint
 0 new leaks) · sampler smoke-run end-to-end on the host it was written on, correctly refusing a
 9-second quiet window with all three controls FAIL. Trunk evidence read at
 `origin/main` = `ec43e046`.
+
+---
+
+## 9 · 2026-08-26 — the run is one command, and the reason the item is still open is structural
+
+**The item was re-dispatched to a cloud Linux container**, which is the same place §7.1 says this was
+built: no Darwin, no fleet, and `cc_sp_active` reads nothing. Two things came out of that.
+
+**1 · The residue is now one command, and the hour cannot be spent blind.** §6 was two commands plus
+a paragraph describing a loop with a stopping rule, which makes the operator the interpreter of a
+program — the worksheet defect. `capacity-marginal.sh run` is that paragraph, and its preflight is
+the load-bearing half: it takes ONE probe read of `load1`, the process census and `cc_sp_active`
+before sampling anything and refuses immediately, naming the dead input, if any of the three cannot
+answer. Measured in this container:
+
+```
+CAPACITY-MARGINAL RUN: PREFLIGHT FAILED — the ACTIVE census (cc_sp_active) reads nothing on this host.
+  (probe: load1 0.15 · census 1 0 0 · active -)
+```
+
+That is the whole hour's verdict, available in one second. Without it the run samples 60 rows that
+all record `-` and C3 fails at the end on "0 row(s) carry an ACTIVE count" — the same answer, an
+hour later.
+
+**2 · Writing the driver found a defect in the protocol as documented.** `analyze` returns exit 3 for
+three different states, and only two of them are permanent: an unreadable file and a unit-mixed file
+are broken, but `%d usable row(s)` is nothing more than a window that has not reached three rows —
+exactly what extending cures. The prose protocol never had to distinguish them because a human
+reading "NO-DATA" would have kept sampling; a driver that collapsed them aborted a short first window
+and blamed the file. Caught by the end-to-end test on a 2-second window, before it could reach the
+box. `run` now rejoins the row-count form to the refusal loop under its own term and keeps exit 3
+when it persists, because "the controls refused" and "the sampler recorded almost nothing" send the
+operator to different places.
+
+**Still open, and still for the same reason as §7.1: the measurement wants the box.** The one command
+above, in a live session on the 10-core Darwin fleet, during a dispatch wave rather than a lull (§6's
+C3 condition). Nothing in this increment moves that, and nothing off-box can.
+
+**Verified this increment** (same container): `bats tests/capacity-marginal.bats` **28/28** green
+(13 new rows, all for `run`: both preflight arms, first-pass stop, extend-on-refusal, stable-refusal
+at exactly `--repeat-k`, moving-refusal spends the budget instead, no quotable number on any refusal
+path, both NO-DATA branches, append-not-truncate, budget-below-window usage error, and one that
+drives the REAL sampler end-to-end so a rendering change inside `analyze` cannot leave the driver
+blind while the suite stays green) · `shellcheck -S warning` clean · `bash -n` clean ·
+`scripts/test-hermeticity-lint.sh` clean (550 suites, 0 new leaks) · `bats-shellcheck-lint` and
+`bats-kill-guard-lint` clean on this suite. Trunk evidence read at `origin/main` = `050569c3`.

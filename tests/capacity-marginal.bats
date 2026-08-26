@@ -22,6 +22,11 @@ setup() {
   # Hermetic HOME: nothing here writes to it today, but `sample` resolves spawn-presence.sh, which
   # reads the operator's beat directory. A probe must never see the live fleet.
   export HOME="$D/home"; mkdir -p "$HOME/.claude"
+  # `run` drives the real sampler end-to-end, which reaches spawn-presence and through it the
+  # capacity gate — a gate that reads live load, memory and the session census and refuses above its
+  # thresholds. Leaving it armed makes this suite red-by-desk (how busy the operator is) rather than
+  # red-by-subject, which is the one input a gate corpus may never depend on.
+  export CC_ADMIT_GATE=off
   hdr() { printf '#ts\tload1\tunit\ttotal_run\tclaude_run\tactive\tresident\n' > "$1"; }
 }
 
@@ -275,4 +280,210 @@ EOF
 @test "a bad interval is a usage error, not a busy loop" {
   run bash "$M" sample --interval-s 0 --window-s 1 --out "$D/x.tsv"
   [ "$status" -eq 2 ]
+}
+
+# ── `run`: the PROTOCOL, not the instrument ─────────────────────────────────────────────────────
+#
+# WHAT THESE PIN. `sample` and `analyze` are the instrument and the tests above cover them. `run` is
+# the stopping rule from docs/research/marginal-load-per-active-session-2026-08-19.md §6 — "extend
+# the window until the verdict stops being NO-ATTRIBUTION *or* the refusal repeats with the same
+# term across several windows, which would itself be the finding" — and a stopping rule is a
+# property of the LOOP, not of any window. So these drive `run` against a STUB sampler whose verdict
+# per round is scripted, which is the only way to assert "stopped for reason X after N rounds"
+# without an hour of wall clock or a live fleet. One test at the end drives the real path.
+#
+# The stub speaks `analyze`'s text contract, because that contract is what `run` parses: a
+# `  C<n> <LABEL>  PASS|FAIL` line per control, and an exit code. If `analyze`'s rendering ever
+# changes shape, these fail — which is correct, because `run`'s term-parsing would have broken too.
+
+# plan(): one line per analyze round — `PASS`, `NODATA`, or a comma list of FAILING controls.
+plan() { printf '%s\n' "$@" > "$D/plan"; }
+
+stub() {
+  cat > "$D/stub.sh" <<'EOF'
+#!/bin/bash
+S="$(dirname "$0")"
+case "${1:-}" in
+  sample)  printf 'x\n' >> "$S/sampled"; exit 0 ;;
+  analyze)
+    n=$(( $(cat "$S/round" 2>/dev/null || echo 0) + 1 )); printf '%s' "$n" > "$S/round"
+    p="$(sed -n "${n}p" "$S/plan")"; [ -n "$p" ] || p="$(tail -1 "$S/plan")"
+    printf 'CAPACITY-MARGINAL  n=99  n_eff=60.0  span=3600s  unit=proc  load1 8.00..40.00 (5.00x)\n'
+    [ "$p" = NODATA ] && { printf 'CAPACITY-MARGINAL: NO-DATA — rows mix census units; refusing to pool them\n'; exit 3; }
+    [ "$p" = FEWROWS ] && { printf 'CAPACITY-MARGINAL: NO-DATA — 2 usable row(s)\n'; exit 3; }
+    for c in C1 C2 C3; do
+      case ",$p," in *",$c,"*) v=FAIL ;; *) v=PASS ;; esac
+      case "$c" in C1) l=LEVEL ;; C2) l=DYNAMICS ;; *) l=IDENTIFY ;; esac
+      printf '  %s %-9s %-4s  stub\n' "$c" "$l" "$v"
+    done
+    [ "$p" = PASS ] && {
+      printf 'VERDICT: MARGINAL 0.412 load units per ACTIVE session  (+/- 0.061, 1 s.e.; ratio 1.100 load/runnable-proc)\n'
+      exit 0; }
+    printf 'VERDICT: NO-ATTRIBUTION — a control failed; no coefficient is quotable from this window.\n'
+    printf '  (the fit that WOULD have been reported: 0.412 load units per ACTIVE session — withheld)\n'
+    exit 1 ;;
+esac
+exit 2
+EOF
+  chmod +x "$D/stub.sh"
+}
+
+@test "run PREFLIGHT refuses a blind ACTIVE sensor in one second, spending NO window" {
+  # The failure this exists to stop: an HOUR spent against a sensor that was never going to answer.
+  # Off the fleet box cc_sp_active reads nothing, every row records `-`, and C3 fails at the end on
+  # "0 row(s) carry an ACTIVE count" — a verdict available before the first sample. Asserting the
+  # sampler was never invoked is the whole test; a preflight that merely printed a warning and then
+  # sampled anyway would pass a message check and still burn the window.
+  stub; plan PASS
+  run env CC_MARG_ACTIVE_OVERRIDE="-" CC_MARG_SELF="$D/stub.sh" \
+    bash "$M" run --out "$D/pre.tsv" --first-window-s 1 --interval-s 1 --budget-s 1
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"PREFLIGHT FAILED"* ]] || false
+  [[ "$output" == *"cc_sp_active"* ]] || false
+  [ ! -e "$D/sampled" ]
+}
+
+@test "run PREFLIGHT passes through when all three inputs answer" {
+  # The other half: a preflight that refused everywhere would be indistinguishable from a broken
+  # script, and nothing above would catch it.
+  stub; plan PASS
+  run env CC_MARG_ACTIVE_OVERRIDE=7 CC_MARG_SELF="$D/stub.sh" \
+    bash "$M" run --out "$D/ok.tsv" --first-window-s 1 --interval-s 1 --budget-s 1
+  [ "$status" -eq 0 ]
+  [ -e "$D/sampled" ]
+}
+
+@test "run stops on the FIRST pass and hands over the citation sites" {
+  # §6: "On a PASS, quote the coefficient with its standard error and its window, update
+  # capacity-admit.sh and agent-teams-enforce.sh (both currently carry 2.5-5), and close the item."
+  # That list is the reason the run ends anywhere but a scrollback buffer.
+  stub; plan PASS
+  run env CC_MARG_SELF="$D/stub.sh" bash "$M" run --no-preflight \
+    --out "$D/r.tsv" --first-window-s 1 --interval-s 1 --budget-s 4
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$D/sampled")" -eq 1 ]
+  [[ "$output" == *"VERDICT: MARGINAL"* ]] || false
+  [[ "$output" == *"CITATION"* ]] || false
+  [[ "$output" == *"capacity-admit.sh"* ]] || false
+  [[ "$output" == *"agent-teams-enforce.sh"* ]] || false
+  [[ "$output" == *"193ae8ddce72"* ]]
+}
+
+@test "run EXTENDS a refused window rather than reporting from it" {
+  # The defect this forbids is a driver that samples once, sees NO-ATTRIBUTION and returns. The
+  # window IS the remedy for C2 (n_eff) and often for C1/C3, so one round is never an answer.
+  stub; plan C2 C2 PASS
+  run env CC_MARG_SELF="$D/stub.sh" bash "$M" run --no-preflight \
+    --out "$D/e.tsv" --first-window-s 1 --extend-s 1 --interval-s 1 --budget-s 9 --repeat-k 5
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$D/sampled")" -eq 3 ]
+  [[ "$output" == *"VERDICT: MARGINAL"* ]]
+}
+
+@test "run calls a REPEATED refusal the finding, and names the term" {
+  # §6's second exit: "or the refusal repeats with the same term across several windows — which
+  # would itself be the finding". Exactly --repeat-k identical refusals, then stop; the term is
+  # named because "we could not measure it" and "C3 never varied" are different results.
+  stub; plan C3 C3 C3 PASS
+  run env CC_MARG_SELF="$D/stub.sh" bash "$M" run --no-preflight \
+    --out "$D/s.tsv" --first-window-s 1 --extend-s 1 --interval-s 1 --budget-s 60 --repeat-k 3
+  [ "$status" -eq 1 ]
+  [ "$(wc -l < "$D/sampled")" -eq 3 ]
+  [[ "$output" == *"STABLE REFUSAL"* ]] || false
+  [[ "$output" == *"C3"* ]] || false
+  # It stopped for the RIGHT reason: the budget was 60s and only 3s was spent.
+  [[ "$output" != *"BUDGET EXHAUSTED"* ]]
+}
+
+@test "run does not call a MOVING refusal stable — it spends the budget instead" {
+  # The counterpart, and the reason `run` tracks the failing SET rather than a bare refusal count:
+  # a window whose failing term keeps changing is still converging, and stopping there would report
+  # "this is the finding" about an instrument that was still moving.
+  stub; plan C1 C3 C1 C3 C1
+  run env CC_MARG_SELF="$D/stub.sh" bash "$M" run --no-preflight \
+    --out "$D/m.tsv" --first-window-s 2 --extend-s 1 --interval-s 1 --budget-s 5 --repeat-k 3
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"BUDGET EXHAUSTED"* ]] || false
+  [[ "$output" != *"STABLE REFUSAL"* ]]
+}
+
+@test "run emits NOTHING quotable on any refusal path" {
+  # The invariant the whole instrument exists for, restated one layer up: a DRIVER that summarised a
+  # refused window would re-open the hole the four published values came out of. `run` relays
+  # `analyze` verbatim and prints the citation block only on exit 0.
+  stub; plan C2 C2 C2
+  run env CC_MARG_SELF="$D/stub.sh" bash "$M" run --no-preflight \
+    --out "$D/q.tsv" --first-window-s 1 --extend-s 1 --interval-s 1 --budget-s 60 --repeat-k 3
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"VERDICT: MARGINAL"* ]] || false
+  [[ "$output" != *"CITATION"* ]] || false
+  [[ "$output" == *"withheld"* ]]
+}
+
+@test "run stops on NO-DATA rather than extending a window that cannot become one" {
+  # NO-DATA is not a small window, it is an unreadable or unpoolable file. Extending it spends the
+  # budget to re-learn the same thing.
+  stub; plan NODATA
+  run env CC_MARG_SELF="$D/stub.sh" bash "$M" run --no-preflight \
+    --out "$D/n.tsv" --first-window-s 1 --extend-s 1 --interval-s 1 --budget-s 60
+  [ "$status" -eq 3 ]
+  [ "$(wc -l < "$D/sampled")" -eq 1 ]
+  [[ "$output" == *"NO-DATA"* ]]
+}
+
+@test "run EXTENDS a NO-DATA that is only a short window, and does not confuse it with a broken file" {
+  # `analyze` returns 3 for a file it cannot read, for one whose rows mix units, AND for "%d usable
+  # row(s)" — which is not a broken file at all, just a window that has not reached three rows yet.
+  # Collapsing the three aborts a run whose first window was short and blames the file. Caught by
+  # the end-to-end test below, which did exactly that on a 2-second first window.
+  stub; plan FEWROWS FEWROWS PASS
+  run env CC_MARG_SELF="$D/stub.sh" bash "$M" run --no-preflight \
+    --out "$D/few.tsv" --first-window-s 1 --extend-s 1 --interval-s 1 --budget-s 9 --repeat-k 5
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$D/sampled")" -eq 3 ]
+  [[ "$output" == *"VERDICT: MARGINAL"* ]]
+}
+
+@test "run that never reaches three rows exits NO-DATA, not NO-ATTRIBUTION" {
+  # ...and the two must not be laundered into each other: "the controls refused" and "the sampler
+  # recorded almost nothing" send the operator to different places, so the persistent row-count
+  # form keeps exit 3 and says to check load1 and `ps` rather than to buy more window.
+  stub; plan FEWROWS
+  run env CC_MARG_SELF="$D/stub.sh" bash "$M" run --no-preflight \
+    --out "$D/few2.tsv" --first-window-s 1 --extend-s 1 --interval-s 1 --budget-s 60 --repeat-k 3
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"NO-DATA(rows)"* ]] || false
+  [[ "$output" == *"fewer than three usable rows"* ]] || false
+  [[ "$output" != *"VERDICT: MARGINAL"* ]]
+}
+
+@test "run is re-runnable over a growing file — it never truncates the window it inherits" {
+  # §6's honest protocol is "sample, analyze, and extend"; a second invocation that started the file
+  # over would silently throw away the first hour, and the only symptom would be a verdict that
+  # never improves.
+  local f="$D/grow.tsv"; hdr "$f"; row "$f" 1000000 12.0 19 3 4
+  stub; plan PASS
+  run env CC_MARG_SELF="$D/stub.sh" bash "$M" run --no-preflight \
+    --out "$f" --first-window-s 1 --interval-s 1 --budget-s 1
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$f")" -eq 2 ]
+}
+
+@test "run refuses a budget smaller than its own first window, rather than silently shrinking it" {
+  run bash "$M" run --no-preflight --first-window-s 3600 --budget-s 600 --out "$D/b.tsv"
+  [ "$status" -eq 2 ]
+}
+
+@test "run drives the REAL sampler end-to-end, controls and all" {
+  # Every test above stubs the instrument to pin the loop. This one does not: it drives the shipped
+  # `sample` and `analyze` over the live process table with a seconds-long window, and asserts the
+  # thing that must be true of a real short window — it refuses, and it refuses through the same
+  # rendering `run` parses. Without this, a rename inside `analyze` would leave the suite green and
+  # the driver blind.
+  run env CC_MARG_ACTIVE_OVERRIDE=5 bash "$M" run \
+    --out "$D/real.tsv" --interval-s 1 --first-window-s 5 --extend-s 2 --budget-s 9 --repeat-k 9
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"NO-ATTRIBUTION"* ]] || false
+  [[ "$output" == *"BUDGET EXHAUSTED"* ]] || false
+  [[ "$output" != *"VERDICT: MARGINAL"* ]]
 }
