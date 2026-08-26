@@ -144,6 +144,60 @@ measurement (load1 delta across N all-active sessions) and set the ceiling from 
 point. That is a two-arm experiment, not a config edit, and it is the only thing that can legitimately
 move a capacity constant.
 
+### 3.1 · CORRECTION (2026-08-26) — the finding stands and has landed; the actionable above is REFUTED
+
+*The paragraph above is preserved verbatim as the record of what this wave concluded. It is wrong, and
+it stayed wrong long enough to re-dispatch its own backlog row (`e981656df348`) six days after the cure
+for its first half had landed. Both halves are settled below.*
+
+**The FINDING is confirmed and DISCHARGED on trunk.** `e89918f2` (`docs(capacity-admit): the ceiling
+cites a section that has no derivation, and the term it parameterises already defaults off`, ancestor
+of `origin/main`) replaced the false provenance in `scripts/lib/capacity-admit.sh` with the derivation
+record: §9.5 contains no derivation, the origin commit picked 2.0 with no stated rule, and the shipped
+ceiling sits below the only incident that produced it. Nothing about the finding needs re-deriving.
+
+**The ACTIONABLE is refuted on three independent grounds, and no run of the prescribed experiment can
+rescue it.**
+
+1. **It is refuted by the evidence quoted four paragraphs above it, in this same section.** "Set the
+   ceiling from a measured failure point" presupposes a failure point exists on this axis.
+   `capacity-alarm.sh` (still verbatim on trunk, now `:141-146`) says it does not — fatal at
+   2.53/core against 13 consecutive *survived* samples spanning 2.92–5.98/core, plus reso's 42 h at
+   2.5/core with no panic — and states the consequence in its own words: **"no setting of these two
+   numbers can make it"** separate fatal from survived. This section quotes that block and then
+   prescribes the experiment it forbids. That is precisely the self-falsifying citation the section's
+   own headline finding is *about*, reproduced one screen below the finding.
+2. **The input is wrong, not the number** — the stronger fact, and it landed 2026-08-20, two days
+   after this doc was written. `f944d6e3` (`fix(fire-gate): load1 does not move with the spawn it was
+   gating`, ancestor of `origin/main`) measured that an additional **resident** session moves the
+   1-minute runnable count by ~0, because load1 counts only runnable and uninterruptible while every
+   live `claude` process sits in S/Ss. A spawn gate whose input does not move with the spawn cannot be
+   fixed by any value of the literal it is compared against. The term therefore **defaults off** —
+   `scripts/handoff-fire.sh:5074`, `[ "${CC_FIRE_LOAD_TERM:-off}" != off ]` — and has been off on the
+   Agent-tool path since Wave D. Per C18 that fix moved a *term switch*, never a ceiling, which is
+   exactly why the stale provenance survived it and this row outlived its own cure.
+3. **The named blocker answers a different question.** This row was parked behind §5's "marginal load
+   per ACTIVE session". That coefficient is a capacity-**in-sessions** denominator: it converts a
+   ceiling into a session count. It cannot *locate* a failure boundary, so it could never have
+   discharged this row. §5's own adjudication (2026-08-19, `marginal-load-per-active-session-2026-08-19.md`,
+   backlog `193ae8ddce72`) goes further — the instrument behind all four candidate values, `load1`
+   regressed on session count, is **unidentified on this box** (87.3% of the numerator measured
+   not-Claude; a direct probe watched load *fall* while a unit was added). The prescribed two-arm
+   experiment runs on that same unidentified instrument.
+
+**Disposition.** The literal stays at **2.0**, deliberately and on the record — raising it is the lazy
+design `docs/plans/LOAD_INSENSITIVE_VERIFY_V2.md:156` exists to reject, and deriving it is unreachable
+on this axis. It now binds only where `cc_capacity_admit` leaves the load term on: the two unattended
+recovery callers `scripts/boot-resume-launch.sh` and `scripts/limit-recover/lr-fire-resume.sh`, both
+budget-released after `CC_ADMIT_BUDGET` consecutive refusals. What replaced the load term's *intent* is
+`segments` and `active` — terms that do move with the spawn.
+
+**Stale references in the paragraphs above, corrected here rather than edited into them:** the literal
+is at `scripts/lib/capacity-admit.sh:161`, not `:134` (`e89918f2` added the derivation record above
+it); the `capacity-alarm.sh` block is at `:141-146`, not `:139-147`. The origin commit `0fc3a3d33`
+still resolves, but cite it by **subject** — `feat(handoff-fire): machine-capacity admission gate at
+the spawn chokepoint` — because a land rebases and this repo's shas do move.
+
 ## 4 · If 2.1.234 is adopted, adopt it on other grounds — and set one env var first
 
 The upgrade is defensible for 33 releases of unrelated fixes, never for capacity. Two items gate it:
