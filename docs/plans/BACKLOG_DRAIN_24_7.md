@@ -86,6 +86,206 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-26 — drain recycle #235: method 205 — A TWO-ARMED BUDGET WHOSE SECOND ARM MEASURES A
+  DIFFERENT QUANTITY FROM THE SIBLING IT IS DOCUMENTED AS MIRRORING, IN A SENTENCE WHOSE TWO
+  CLAUSES ARE EACH ACCURATE ABOUT THEIR OWN HALF.** ONE fix landed, ONE correction to my OWN landed
+  comment, ONE §2.1 entry landed, TWO land attempts, TWO lands, ZERO rc 6 — shas and their survival
+  in the LANDING block below. ZERO rows closed by me, ZERO by the actuator, ZERO filed.
+
+  **THE FIND, by taking the method-200 target #234 measured and handed on without spending.** The
+  🚀 rung's converge budget is two-armed, and `scripts/wrap-ledger.sh`'s header states the second arm
+  in one sentence: `WRAP_LIVE_BUDGET_MIN` (60, *"measured from HEAD's commit time"*), *"whichever
+  trips FIRST — mirroring CC_DEPLOY_MAX_LAG_COMMITS / CC_DEPLOY_MAX_LAG_HOURS in deploy-live.sh"*.
+  **Both clauses were accurate about their own half and they name DIFFERENT quantities.**
+  `deploy-live.sh:1451-1452` reads `%ct` of the commit the LIVE LAYER IS ON, and its own comment says
+  why — *"the only clock that keeps ticking when trunk is quiet"*. `compute_live_layer` read
+  `git log -1 --format=%ct HEAD`: the age of the commit THIS SESSION is on, which trunk resets every
+  time it moves. The commit arm beside it is honest and says so at its own site (*"the same quantity
+  deploy-live.sh budgets on"*), which is exactly what makes the second arm read as checked.
+
+  🚨 **IT COULD ONLY FAIL IN ONE DIRECTION, AND IT IS THE DIRECTION THAT MATTERS.** Wherever this arm
+  decides at all, `LIVE_SHA` is an ancestor of HEAD — divergence breaches two branches up, an ADD one
+  branch up — so its committer date is the older of the two in any history git's own commands produce
+  (rebase and cherry-pick both restamp). The session-HEAD arm was therefore **strictly WEAKER** than
+  the one it was named after, with no false-positive half to trade against. **Its blind region is
+  exactly an ACTIVE session: every commit resets the clock to zero, so the more a session lands into
+  the undeployed backlog, the FURTHER its close sits from the budget whose whole job is to notice the
+  live layer standing still.**
+
+  **MEASURED, at 2026-08-26T05:43:03Z.** The live layer had been pinned on `a74e844377f8` for
+  **5h56m** across five consecutive drain links, lag climbing 2 → 4 → 6 → 8 → 10, `LIVE_ADDS` 0 and
+  `LIVE_DIVERGED` 0 throughout. The live commit read **21,386 s** old against deploy-live's 21,600 s
+  budget — 214 s short of its own trip — while my HEAD read **1,744 s** and the ledger rendered
+  `✅ Complete & landed — live layer converging (10 commit(s) behind; within the converge budget)`.
+  The live commit is an ancestor of my HEAD over that 10-commit range with **0 non-monotone
+  committer-date pairs**, which is the topology claim above measured rather than assumed.
+
+  **THE FIX (`6cac22b35`, landed and content-verified)** states the quantity: `%ct` of `$LIVE_SHA`,
+  read from the LIVE repo — its own HEAD is resolvable there by construction, the `rev-parse HEAD`
+  above having succeeded, whereas this repo may never have fetched it; the same asymmetry that
+  already puts `--is-ancestor` on the live side and the added-file diff on ours. Bounded like every
+  other live-side read, and a failed read leaves `ct=0` ⇒ age 0 ⇒ no time trip: **an unresolvable
+  sensor may not breach**, the same law as `LIVE_LAG=?` and `LIVE_ADDS=?`.
+
+  🚨 **THE DEFAULT MOVED WITH THE CLOCK AND MAY NOT MOVE SEPARATELY — this is the half a clock-only
+  fix gets wrong.** 60 minutes was calibrated for *"my landing is an hour old and still not live"*,
+  reasonable impatience about a session's OWN work. On the live-layer clock the sibling's calibrated
+  value for the same quantity is `CC_DEPLOY_MAX_LAG_HOURS=6`, so the default is now **360**.
+  Re-pointing the arm while leaving 60 would have fired 🚀 at **every** close on a lane that is
+  legitimately mid-converge — the alarm-polarity bound this rung's own header opens with — and
+  re-calibrating without re-pointing would only have made a blind arm blinder.
+
+  🚨 **THE ARM'S ONLY POSITIVE CONTROL PROVED THE WRONG CLOCK, WHICH IS WHY NOBODY HAD SEEN IT.**
+  `tests/wrap-ledger.bats`'s time-budget test aged THIS session's HEAD by 2h and left the live clone
+  on a base commit **seconds old**, then credited the pass to *"past the time budget"* — a fixture in
+  which the quantity deploy-live budgets on was **ZERO**. It is rewritten as a pair one variable apart
+  (WHICH commit carries the age) plus a calibration cell: **4** live layer ON a 7h-old commit, HEAD
+  fresh ⇒ 🚀 · **4b** HEAD 7h old, the live layer's commit fresh ⇒ ✅ (the old fixture with its
+  assertion INVERTED — that is what makes the change falsifiable) · **4c** live commit 2h old inside
+  the 6h default ⇒ ✅, and the same fixture at `WRAP_LIVE_BUDGET_MIN=60` ⇒ 🚀. Each pins `LIVE_LAG=1`,
+  `LIVE_ADDS=0` and `LIVE_DIVERGED=0`, so three arms are held OFF and only the one under test can
+  decide. `tests/wrap-ledger.bats` **81 → 83**.
+
+  **RED-PROOF AND MUTANTS — one mutant per SITE of the diff, predictions written first, the REAL
+  subject mutated in place and restored byte-identically by sha256 on every arm, anchor uniqueness
+  asserted at exactly 1 per mutant, 0 instrument faults:** red-proof (new tests vs the unfixed
+  subject) predicted 3, got 3 · **M1** revert the CLOCK predicted 3, got 3 `{4, 4b, 4c}` · **M2**
+  revert the DEFAULT 360 → 60 predicted 1, got 1 `{4c}` · **M3** delete the TIME ARM clause predicted
+  2, got 2 `{4, 4c}` · **M4** revert BOTH, i.e. the pre-#235 pairing, predicted 3, got 3
+  `{4, 4b, 4c}`. **Three distinct red SETS, so no assertion rides another.** 🚨 **M4 is the harness's
+  own control and is the cheapest one here to copy: it must reproduce the independently-obtained
+  red-proof number exactly, and it did — which is what licenses reading M1-M3 as facts about the
+  subject rather than about the rig.** **The INCUMBENT column had ONE distinct verdict across that
+  whole table** — the old single control passes only on the pre-#235 clock-and-default pairing and
+  fails on every mutant including the corrected subject, which is what a control tuned to an
+  implementation rather than to a law looks like from outside.
+
+  🚨 **THE FIX FIRED ON ITS OWN LANE WITHIN MINUTES OF LANDING, AND THAT IS THE PART TO CARRY.** At
+  2026-08-26T06:22:30Z, with the live commit **23,753 s (6h35m)** old, the ledger read
+  `🚀 Landed but NOT live — the live layer is 11 commit(s) behind and past its converge budget`.
+  The same state one hour earlier had rendered ✅. **This is not a hypothetical: the rung the operator
+  reads changed on the real box, on the exact lane that motivated the fix.**
+
+  🚨 **AND MY OWN FLOOR CAUGHT ME OVERSTATING IT — CORRECTED BY A SECOND COMMIT (`073d55f9`) RATHER
+  THAN LEFT IN A LANDED COMMENT.** `6cac22b35`'s comment ends *"the two auditors of this one question
+  now agree on both arms and both values"*, which a reader takes as *"they trip together"*. **They do
+  not, and the gap is up to an hour.** `deploy-live.sh:1452` computes
+  `LAG_HOURS=$(( (_now - _head_ts) / 3600 ))` — **INTEGER hours** — and trips on `-gt 6`, so its
+  effective threshold is **7h**; the corrected arm compares SECONDS against `360*60`, so its threshold
+  is **6h exactly**. The disagreement window is `age_s` in (21600, 25200]. 🚨 **NOT DERIVED —
+  MEASURED INSIDE IT: both readings at 06:22:30Z, same box, same commit, same second, and two
+  verdicts** — `wrap-ledger.sh --machine` said `RUNG=🚀` / *"past its converge budget"* while
+  `deploy-live.sh --dry-run` said *"lag 11 commit(s) / 6h, inside the degrade budget (25 / 6h)"*.
+  **The resolution is deliberately NOT matched:** these are not duplicate auditors of one decision —
+  this one REPORTS to a closing session that the machine is not running its work yet, that one
+  DECIDES when to force a degraded deploy. A reporter loud an hour early costs a true sentence early;
+  a reporter silent while the actuator degrades is the bug being fixed. **The lesson is #234's, one
+  level up: the sentence I had to correct was MINE, landed forty minutes earlier.**
+
+  **HONEST LIMITS, stated rather than engineered around.** (1) Tests 6, 7 and 10 load their fixtures
+  with `commit_aged 7200` and describe it as one of three loadings toward 🚀; that loading was inert
+  BEFORE this change and is inert after it, because `LIVE_SRC=n-a` and `unknown` return two branches
+  above the budget block — **no rewrite was needed and none was made**, naming the limit rather than
+  churning three passing tests. (2) `docs/plans/INERTNESS_FACES_3_4_DELTA.md` and
+  `docs/research/memory-econ-rearchitecture-2026-08-10/prior-art.md` record the 60 as it stood when
+  they were written; they are history and were left alone. `commands/wrap.md` said *"HEAD older
+  than"*, is the operator-facing statement of the predicate rather than history, and was corrected in
+  the same commit. (3) I did not touch the `--full` renderer's `behind_why`, which names only the
+  COMMIT budget (*"within budget (25)"*) even when the time arm is the one applying — a real
+  reporting gap, deliberately left out of a diff whose subject is the predicate. **It is the cheapest
+  unspent follow-on in this file.**
+
+  **A REFUTED WORRY, reported because running the producer is what killed it.** The two ledger
+  consumers — `tests/completion-assert.bats` (111) and `tests/operator-readout.bats` (104) — were the
+  obvious regression risk for a rung-changing diff. Both ran GREEN first try, as did all nine direct
+  suites.
+
+  **LANDING.** `bash scripts/gate-select.sh --direct "$MB..HEAD"` drew **9** direct suites for
+  `scripts/wrap-ledger.sh` (the same 9 #230 drew), POS control `7eb0eb0b6~1..7eb0eb0b6` speaking at
+  **4** on every invocation. **All nine run in the FOREGROUND before landing: 432 tests, 0 failures,
+  0 skips, plan == ok on every one** — `completion-assert` **111** (161 s) · `operator-readout`
+  **104** (71 s) · `wrap-ledger` **83** (104 s) · `boundary-handoff` **43** (46 s) · `dod-persist`
+  **30** · `wrap-ledger-memo` **23** · `operator-surface-scope` **21** · `dod-path` **14** ·
+  `operator-readout-live-symlink` **3**. 🆕 **The land's own smoke then ran ALL NINE GREEN in 402 s
+  against a 420 s budget — the first NON-partial smoke in six links, where #230-#234 each had
+  `tests/cc-reaper.bats` cut at exit 124.** ⚠️ **But the foreground run is still what made it
+  decidable, and the poll trap bit again: my first 550 s foreground poll expired with the sentinel
+  unwritten while the land was fine and finishing — the SEVENTH consecutive link to meet a poll that
+  outlives its window. RE-READ THE LOG BEFORE DIAGNOSING ANYTHING.** `land-lock --status` read
+  `holder: (free) waiters: 0` before the attempt, at load ~11.6. `ship-backup-reap` showed only the
+  BENIGN form again — **seven consecutive links** of that, which is itself evidence about
+  `b746262ac702`. Both shas SURVIVED the land unchanged; `git diff origin/main HEAD` **0 bytes over
+  the whole tree**, and HEAD-blob == trunk-blob on each of `scripts/wrap-ledger.sh`,
+  `tests/wrap-ledger.bats` and `commands/wrap.md`, with the pinned off-trunk NEG control `4e39debcf`
+  refusing (rc 1) and the `origin/main~1` POS control confirming (rc 0) on every check.
+  **Lints:** `shellcheck` rc 0 / 0 findings · `bash -n` rc 0 · `bats --count` 83 ·
+  `bats-assert-liveness` rc 0 · `bats-shellcheck-lint --range "$MB...HEAD"` rc 0 (*"clean — 1
+  suite(s) scanned, 0 blocking finding(s), 0 unanalyzable"*) · `pipefail-sigpipe-lint` bare rc 0
+  (*"clean (allowlist honoured)"*). **`alarm-polarity-lint` declared NOT-RUN on a mute positive
+  control** — `e07dc5e09f83`, OPEN — **the tenth consecutive link to declare it rather than claim its
+  green.** ⚠️ **I added no `grep -q` pipeline: every new absence assertion is
+  `[ "$(… grep -c 'X')" -eq 0 ]`, which is what kept the pipefail ratchet quiet on a suite edit.**
+
+  **THE BOARD, every number with the moment it was taken.** At my OPEN (05:36:41Z) **317 open / 215
+  blocked / 2,329 done / 6 claimed** (532 combined, 2,867 rows); at my CLOSE (06:21:46Z) **317 / 218 /
+  2,329 / 4** (535 combined, **2,868** rows). Partition asserted `open + blocked == combined` at both
+  ends. 🚨 **`allids` arrivals **1**, departures 0 — THE 0/0 STREAK IS OVER after five links.** The
+  arrival is **`d923bdafde21`**, folded on the `.id` FIELD with matchcount 1 and a bogus-id NEG
+  control at 0: **blocked, project `personal`, condition `master-operator-gated`** — a Facebook DYI
+  export ahead of a Thursday call. **Not drain work, and blocked on the operator.** Inside my link
+  `564d151b76e5` and `b60eb29e97dd` both went **claimed → blocked**; before my open `f85fce7c26f5`
+  went open → claimed and `70f0001c657b` (the drain's own SSOT row — report, do not work) went
+  **claimed → blocked**. **`done` DID NOT MOVE: the actuator series is now
+  `2, 2, 0, 7, 0, 1, 0, 0, 0, 0, 0, 0` — TWELVE points, SIX zeros running.**
+
+  **STORES, each with its directory asserted to exist first.** Post-land RED pages **0 at my open AND
+  my close — the 127th consecutive** — over a denominator that read **2,691 at 05:36 and 2,683 at
+  06:21**, i.e. −8 within my link after moving ~+210 between #233 and #234 and −210 back into my open.
+  🚨 **That denominator remains the most volatile number in this brief and it has now moved by two
+  orders of magnitude more BETWEEN links than WITHIN one — always report the zero WITH it.**
+  `~/.claude/autonomy/pages` **1,995 / 113** at my open, **2,002 / 114** at my close (+7 / +1) —
+  a twelfth link, a twelfth distinct behaviour. postland **stamps 470 at my open, 471 at my close**:
+  it ADVANCED across my link, so the background `postland-verify` mechanism is alive while
+  `GATE=stale` persists — ⚠️ **and note 470 was exactly #234's pre-fire re-read, confirming its
+  correction that the stamp moved after its close census rather than being stalled.** inbox-guard
+  `.escalated` **483 → 484**, moving again after two flat links. `cc-roles list` read
+  `desk UNVERIFIED 5 | docs-lead UNVERIFIED 450 | drain-lead UNVERIFIED 7 | orchestrator ABSENT empty`
+  at both ends — a **nineteenth** consecutive identical table. `kern.boottime` `sec = 1787642174` ⇒
+  **2026-08-25T07:16:14Z**, the same `sec` as #228-#234: **no reboot across seven links.**
+
+  **THE LIVE LAYER.** Opened at `a74e844377f8` LAG **10**, closed at `a74e844377f8` LAG **11** —
+  **the live head has now not moved for FIVE consecutive links** and the lag has climbed
+  MONOTONICALLY across five (2 → 4 → 6 → 8 → 10 → 11). `LIVE_ADDS` 0, `LIVE_DIVERGED` 0, `MIG_FAILED`
+  0 throughout; `GATE=stale` at both ends, not mine to drive. The converger's own dry-run at my close:
+  *"waiting — no GREEN tree is a DESCENDANT of live HEAD a74e844377f8 (the newest one, 18378e841913,
+  is BEHIND it — deploying that would report a deploy that never happened); lag 11 commit(s) / 6h,
+  inside the degrade budget (25 / 6h) — no advance, and none is due yet"*, plus *"residency: 2 of 2
+  executing resident daemon(s) are running current bytes · 1 exempt"* and *"migrate: 0 applied, 14
+  staged (operator-owned), 0 pending"*. 🚨 **I did NOT run `--force` and did NOT re-file: `799ec26e3a74`
+  is OPEN and owns the deploy-live refusal, and its own text forbids closing it that way.**
+
+  **THE GENERALISATION, now TWENTY-ONE clauses** (carrying #234's twenty forward): 🆕 **(21) WHEN A
+  COMMENT NAMES BOTH THE QUANTITY A CHECK MEASURES AND THE SIBLING IT MIRRORS, ASK WHETHER THOSE TWO
+  ARE THE SAME QUANTITY — a sentence can be true clause by clause and false as a conjunction, and
+  nothing in the file contradicts it, because each half has its own honest half of the code. The tell
+  is a check with TWO arms where only ONE of them names its source at its own site. And expect the
+  arm's positive control to have been written from the same sentence, so it will certify whichever
+  half its author had in mind — which is why a fixture, not a re-read, is what settles it.**
+
+  🚨 **WHAT I HAND #236, in order.** (1) 🆕 **METHOD 205 IS BRAND NEW, CHEAPEST ON THE LIST AND SPENT
+  ON EXACTLY ONE PAIR.** `grep -n` for `mirroring`, `same as`, `the same quantity`, `whichever trips
+  first`, `matching`, `as <file> does` in `scripts/` and `bin/`, then for each hit open the sibling
+  and ask what quantity IT reads. **The two-armed-check shape is the richest seam: `LIVE_BUDGET_*`,
+  the reaper's bounds, `DEADLINE_S`/`URGENT_S` in cc-inbox-guard, `CC_DEPLOY_REFUSE_MAX`/`COOLOFF`.**
+  (2) **The `--full` renderer's `behind_why` names only the commit budget** — named above, measured,
+  deliberately not taken, and a one-file change. (3) **Method 204 over the decoys is still nearly
+  untouched** — `tests/cc-reaper.bats` (192) and `tests/cc-backlog.bats` (145) are the two biggest
+  untouched decoy surfaces. (4) **Method 202 over the five heaviest control files #234 counted and
+  nobody has opened:** `scripts/test-hermeticity-lint.sh` (153 hits), `scripts/nightly-regression.sh`
+  (68), `scripts/postland-verify.sh` (62), `scripts/ship-land.sh` (47), `scripts/gate-select.sh` (25).
+  (5) **`8c9d4b897594`** (`reaper-wrapper-signature-tautology`) remains the best-evidenced unworked
+  drain row. ⚠️ **`tests/cc-reaper.bats` was NOT run this link — its 192 are inherited from #234, not
+  re-measured.**
 - **2026-08-26 — drain recycle #234: method 204 — A CONTROL'S DECOY REJECTED BY AN UNDOCUMENTED
   BOUND RATHER THAN BY THE DISCRIMINATION IT IS NAMED AFTER, SO THE LAW GOES UNTESTED AND IS IN
   FACT FALSE INSIDE THE RANGE THE BOUND ADMITS.** ONE fix landed, ONE §2.1 entry landed, TWO land
