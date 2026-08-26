@@ -726,6 +726,17 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
   # this term refuses real work, so it must bind where the evidence is unambiguous, and the load and
   # segment terms above already cover the middle of the band from their own directions.
   #
+  # 🚨 THAT DERIVATION IS RETRACTED AND THE CEILING IS NOT (2026-08-19, backlog 193ae8ddce72;
+  # docs/research/marginal-load-per-active-session-2026-08-19.md §2). `2.5-5` is an aggregate DIVIDED
+  # BY N — a ratio, not a marginal — and the arithmetic is the defect, so it cannot be repaired: its
+  # own source pair gives 1.89, and the repo's other two published values for this quantity (0.172,
+  # 0.566) have no committed derivation anywhere on trunk. Four values, 30x apart, none of which may
+  # be quoted, INCLUDING the one in the paragraph above. Nor may they stand in for each other.
+  # The 8 STAYS: it is a ceiling on the ACTIVE census itself, an integer this term reads directly,
+  # and it never divides by the marginal — only the sentence explaining WHERE 8 came from depended
+  # on the retracted number. When `capacity-marginal.sh run` clears its three controls on the box,
+  # quote the coefficient here WITH its s.e. and its window, and re-derive 8 from it.
+  #
   # THE CENSUS IS A PROVEN LOWER BOUND (scripts/lib/spawn-presence.sh § THE ACTIVE POPULATION), so
   # this term under-refuses rather than refusing on unproven activity — the same direction rule the
   # reserve follows. An unavailable library or an unreadable census is a NOTED blindness, not a
