@@ -241,8 +241,12 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   close (09:40:28Z) — the 129th and 130th consecutive** — over a denominator that read **2,722** and
   then **2,717**, i.e. it went DOWN 5 inside 33 minutes, having climbed 29 in 79 minutes across
   #236's. **Report the zero WITH its denominator, every time.** `~/.claude/autonomy/pages` read
-  **2,054 / 124** at 09:07:57Z and **2,062 / 126** at 09:40:28Z. **postland stamps 473 at my open,
-  474 at my close, and re-read at my floor below** — it is the only evidence the background
+  **2,054 / 124** at 09:07:57Z, **2,062 / 126** at 09:40:28Z and **2,063 / 124** at 10:09:16Z — the
+  `.page` count went UP TWO and then DOWN TWO inside 90 minutes, so it churns in both directions
+  WITHIN a link, not merely across links. **postland stamps 473 at my open (09:07:57Z), 474 at my
+  close (09:40:28Z) and 474 at my FLOOR (10:09:16Z)** — it advanced ONCE across my link, between my
+  open and my close, and was flat from my close to my floor 29 minutes later. ⚠️ **Read it LATER THAN
+  YOUR CLOSE CENSUS ANYWAY: it is the only evidence the background
   `postland-verify` mechanism is alive while `GATE=stale` persists, so read it LATER THAN YOUR CLOSE
   CENSUS: #236 landed *"flat across my link"* and paid a third land when its floor falsified that
   twelve minutes later. **inbox-guard `.escalated` 473 at both moments** — flat, after going DOWN
@@ -283,7 +287,20 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   ⚠️ **THE LIVE LAYER — THREE READINGS, AND IT DID NOT MOVE ACROSS MY LINK.** At my open (09:08Z)
   `LIVE_SHA=51bf8570c LIVE_LAG=1 LIVE_AGE=2271 LIVE_SRC=behind LIVE_BREACH_WHY= LIVE_ADDS=0
   LIVE_DIVERGED=0 MIG_FAILED=0`; after my first land (09:40Z) the same sha at `LIVE_LAG=2
-  LIVE_AGE=4199`, still inside both budget arms; third reading at my floor below. **#236 saw the lane
+  LIVE_AGE=4199`, still inside both budget arms; **at my FLOOR (10:08Z), after all three lands, still
+  `LIVE_SHA=51bf8570c` at `LIVE_LAG=5 LIVE_AGE=5930 LIVE_ADDS=14 LIVE_BREACH_WHY=adds MIG_FAILED=0`,
+  and the ledger's rung flipped to `🚀`.** 🚨 **THAT BREACH IS NOT MINE AND IT IS THE DOCUMENTED FALSE
+  POSITIVE (`4e6a51df2a84`, OPEN — do NOT re-file):** all fourteen adds are
+  `docs/research/cv-design-review-2026-08-26/*`, a SIBLING's (`67933debb`), and **each of my three
+  shas adds ZERO files, asserted PER-SHA with a control that can fail (`0fc35177d` adds 1,
+  `ae2f35853` adds 0).** ✅ **AND THE CONVERGER AGREES IT HAS NOTHING TO DO** — `deploy-live.sh
+  --dry-run` from the SHARED CHECKOUT at 10:11Z: *"waiting — no GREEN tree is a DESCENDANT of live
+  HEAD 51bf8570cdd2 (the newest one, 18378e841913, is BEHIND it — deploying that would report a
+  deploy that never happened); lag 5 commit(s) / 1h, inside the degrade budget (25 / 6h) — no
+  advance, and none is due yet"*, with residency `2 of 2 executing resident daemon(s) are running
+  current bytes · 1 exempt`. **The lane is WAITING ON A GREEN TREE, which is `GATE=stale` seen from
+  the other side — so do NOT force it and do NOT read the `🚀` as inertness you caused.** **#236 saw
+  the lane
   advance on its own within minutes and I saw it advance not at all in 32 — two links, two
   behaviours, and neither is a rate.** ⚠️ **`GATE=stale` at my open AND my close: ELEVEN AND TWELVE
   consecutive readings across #232–#237. Re-check, do NOT inherit, and it is NOT yours to drive** —
