@@ -218,10 +218,19 @@ cc_sp_load_beat() { # → 0 when cb_* is available, 1 otherwise. Idempotent.
 #
 # WHY RESIDENCY IS THE WRONG DENOMINATOR FOR A SPAWN CEILING. cc_sp_trees counts RESIDENT sessions,
 # and residency is close to free: axis 01 measured static residency at 0.22% of the segment limit
-# with swap 0. What the box binds on is ACTIVITY — axis 09 measured load1 27.4 -> 44.4 across nine
-# sessions all-active, i.e. 2.5-5 runnable threads per genuinely ACTIVE session against the 1.6 that
-# a MIXED fleet averages to. At the program's design mix (150 resident / ~10 active) that puts the
-# load ceiling at ~4-8 concurrent actives and says nothing at all about the other 140. A ceiling
+# with swap 0. What the box binds on is ACTIVITY, not residency — and that ASYMMETRY is the claim
+# this census rests on, which no per-session coefficient is needed to state.
+#
+# THE COEFFICIENT THAT USED TO BE QUOTED HERE IS REFUTED. This passage read "axis 09 measured load1
+# 27.4 -> 44.4 across nine sessions all-active, i.e. 2.5-5 runnable threads per genuinely ACTIVE
+# session against the 1.6 that a MIXED fleet averages to", and derived "~4-8 concurrent actives"
+# from it. 2.5-5 is an aggregate/N — a RATIO, not a marginal — and the very pair it cites yields
+# 1.89. All four published values (0.172 / 0.566 / 1.89 / 2.5-5) are adjudicated unrepairable and
+# unquotable in docs/research/marginal-load-per-active-session-2026-08-19.md §2 (backlog
+# 193ae8ddce72); the marginal is UNMEASURED until scripts/capacity-marginal.sh clears its controls
+# on the box (§6). The ~4-8 band survives on its own footing — 127/127 historic gate refusals land
+# there, a count over refusals rather than a division — and says nothing at all about the other 140.
+# A ceiling
 # charged on residency cannot express that; and charging it on loadavg instead re-commits the proxy
 # §8.5.2 retracted (dominated by the TUI renderer, WindowServer and macOS scanning; §8.5.7 measured
 # it swinging 2.05x at CONSTANT session count).

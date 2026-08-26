@@ -720,11 +720,23 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
   # deprioritises"), and axis 10's F3 is the failure it produces — a fleet-wide wake turns 140 idle
   # residents into 140 concurrent turns, which no spawn gate keyed on residency can even see.
   #
-  # 8 is the top of the measured band. Axis 09: 2.5-5 runnable threads per genuinely-ACTIVE session
-  # (load1 27.4 -> 44.4 at 9 all-active) against the load-20 gate ⇒ ~4-8 concurrent actives, which is
-  # also what all 127/127 historic gate refusals correspond to. The TOP of the band is deliberate:
-  # this term refuses real work, so it must bind where the evidence is unambiguous, and the load and
-  # segment terms above already cover the middle of the band from their own directions.
+  # 8 is the top of the measured band — and the BAND is what survives, not the per-session figure it
+  # used to be derived from. This comment read "Axis 09: 2.5-5 runnable threads per genuinely-ACTIVE
+  # session (load1 27.4 -> 44.4 at 9 all-active)". That figure is an aggregate/N — a RATIO, not a
+  # marginal — and its own cited pair yields 1.89, not 2.5-5. REFUTED and UNQUOTABLE: see
+  # docs/research/marginal-load-per-active-session-2026-08-19.md §2 (backlog 193ae8ddce72), which
+  # adjudicates all four published values (0.172 / 0.566 / 1.89 / 2.5-5) as unrepairable and bans
+  # quoting any of them until scripts/capacity-marginal.sh clears its three controls on the box (§6).
+  #
+  # WHAT STILL HOLDS, and why the ceiling is not blocked on that measurement: ~4-8 concurrent actives
+  # is what all 127/127 historic gate refusals correspond to. That is a COUNT OVER REFUSALS, derived
+  # without dividing by any per-session coefficient, so the adjudication does not touch it — it is
+  # the band 8 sits at the top of. The TOP of the band is deliberate: this term refuses real work, so
+  # it must bind where the evidence is unambiguous, and the load and segment terms above already
+  # cover the middle of the band from their own directions.
+  #
+  # DO NOT substitute another number here. §6 of that doc says update this site to the MEASURED value
+  # once the on-box window has been run — never to one of the other three.
   #
   # THE CENSUS IS A PROVEN LOWER BOUND (scripts/lib/spawn-presence.sh § THE ACTIVE POPULATION), so
   # this term under-refuses rather than refusing on unproven activity — the same direction rule the

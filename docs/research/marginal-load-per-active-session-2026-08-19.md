@@ -183,6 +183,42 @@ On a PASS, quote the coefficient **with its standard error and its window**, upd
 `scripts/lib/capacity-admit.sh:698` and `hooks/agent-teams-enforce.sh:220` (both currently carry
 2.5–5), and close `193ae8ddce72` with the landed sha.
 
+### 6a · The ban is now enforced in code — and there were THREE sites, not two (2026-08-26)
+
+The paragraph above splits this item cleanly in half, and only one half needs the box. The other
+half — §1's *"none of the four may be quoted"* — was **in force on trunk and violated by trunk**,
+and has now been discharged off-box. What landed:
+
+| site | what it said | what it says now |
+|---|---|---|
+| `scripts/lib/capacity-admit.sh` | *"Axis 09: 2.5-5 runnable threads per genuinely-ACTIVE session … ⇒ ~4-8 concurrent actives"* — the stated derivation of `CC_ADMIT_ACTIVE_CEILING=8` | the figure struck and labelled REFUTED with a pointer here; the ~4-8 band **retained on its surviving footing** |
+| `hooks/agent-teams-enforce.sh` | the same figure inside the **runtime `permissionDecisionReason`** string | same, in the deny message itself |
+| **`scripts/lib/spawn-presence.sh`** § THE ACTIVE POPULATION | the same figure, **and this doc did not know it existed** | same |
+
+**The third site is the finding.** §2 and §6 both name two sites; a `grep` over live code (excluding
+`docs/`) returns three. `spawn-presence.sh` is the library that *defines* `cc_sp_active` — the
+population the coefficient is denominated in and that both other sites consume — so the refuted
+figure was resident in the census's own header, one level below the two places anyone was told to
+look. A ban enumerated as a list of paths is a denylist of spellings, and this repo already has that
+lesson written down in `bin/cc-eligible`. **Re-grep at the PASS, do not work from this table.**
+
+**Nothing was substituted**, per the rule above: no site now carries 0.172, 0.566, 1.89 or 2.5–5.
+The ceiling is left standing on the one anchor the adjudication does not touch — **127/127 historic
+gate refusals landing at ~4-8 concurrent actives**, a count over refusals rather than a division by
+a per-session coefficient. That matters for sequencing: `CC_ADMIT_ACTIVE_CEILING=8` is **not blocked
+on §6**, so the measurement can take as long as it needs without leaving a gate justified by a
+number its own source pair refutes.
+
+**What remains is exactly §6 and nothing else** — one ~1 h window on the 10-core Darwin box during a
+dispatch wave, then the update-and-close. Verified this session, off-box: `bats
+tests/capacity-marginal.bats` **15/15**, plus `tests/agent-teams-enforce.bats` and
+`tests/capacity-admit-active.bats` green alongside them (61/61 total), `shellcheck` clean,
+`test-hermeticity-lint.sh` clean (551 suites, 0 new leaks), and the sampler smoke-run on Linux
+correctly refusing a 60 s quiet window — `C1 FAIL` (tertile swing 1.56× > 1.35×), `C2 FAIL`
+(`n_eff` 1.8 < 20, worded *uninformative, not refuting*), `C3 FAIL` (0 rows carry an ACTIVE count,
+6 unmeasurable), `VERDICT: NO-ATTRIBUTION`, exit 1, withheld fit labelled withheld. The instrument
+is ready; only the fleet is missing.
+
 ---
 
 ## 7 · What this does not do
