@@ -240,3 +240,56 @@ proven() {
           CC_PSC_MEMO=off CC_PSC_OWN="" bash "$CORPUS/scripts/pane-spawn-coverage-lint.sh" "$CORPUS" 2>&1 )"
   [[ "$out" != *"per-file memo"* ]]
 }
+
+# run the lint with the memo off and an explicit own-set, returning its rc through $status.
+run_lint_own() {
+  ( cd "$CORPUS" || exit 2
+    CC_PSC_MEMO=off CC_PSC_OWN="$1" bash "$CORPUS/scripts/pane-spawn-coverage-lint.sh" "$CORPUS" 2>&1 )
+}
+
+@test "🚨 own-scope still BLOCKS when the own-set is past the pipe-buffer regime" {
+  # THE MECHANISM ARM for the own-scope membership test. Every case above hands the lint an own-set
+  # of at most a few hundred bytes, so none of them can see the failure this pins: under
+  # `set -uo pipefail` a `grep -q` membership test exits at the first match, the producer takes
+  # SIGPIPE, pipefail returns non-zero, the leading `!` turns that into TRUE — and a file that IS in
+  # this land's own-set takes the ADVISORY branch. The finding stops blocking and the land proceeds.
+  # A fail-OPEN in a blocking land gate, silent in the direction that matters.
+  #
+  # 2,600 fillers put the set past the measured always-inverted floor of 87,122 bytes for this
+  # two-stage shape, with the needle on line 1, so a re-introduced -q fails every run rather than
+  # one in twenty. The size is asserted, never assumed.
+  #
+  # A PURPOSE-BUILT FIXTURE, not a file the copied slice happens to contain. Every finding the
+  # slice produces is TIER 2 — its files ARE instrumented — and tier 2 `continue`s BEFORE the
+  # own-scope branch, so a subject drawn from the slice cannot reach the predicate under test at
+  # all (measured while writing this: 2 notices, 0 advisory). This file carries a primitive and no
+  # logger call anywhere, which is the tier-1 shape the own-scope branch actually gates.
+  local rel="scripts/zz-uninstrumented-spawner.sh"
+  local own own_neg fillers
+  printf '#!/bin/bash\n# a spawner with no logger call anywhere in the file — tier 1 by construction\nkitty @ launch --type=os-window\n' \
+    > "$CORPUS/$rel"
+
+  # The fixture must REACH the branch before the arm can say anything about it: under a set-EMPTY
+  # own-set the finding has to print as ADVISORY at rc 0. If it does not, fail loudly rather than
+  # passing on a subject that was never judged.
+  run run_lint_own ""
+  [ "$status" -eq 0 ] || { echo "set-empty own-set did not stay rc 0 (rc=$status)" >&2; return 1; }
+  printf '%s\n' "$output" | grep -qE "^ADVISORY ${rel}:" || { echo "fixture never reached the tier-1 own-scope branch" >&2; return 1; }
+
+  fillers="$(awk 'BEGIN{ for (i = 1; i <= 2600; i++) printf "scripts/filler-%06d-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.sh\n", i }')"
+  own="$(printf '%s\n%s' "$rel" "$fillers")"
+  own_neg="$fillers"
+  [ "${#own}" -ge 87122 ] || { echo "own-set ${#own} B is under the inverting floor" >&2; return 1; }
+
+  # POSITIVE: the file IS in the own-set, so its finding must BLOCK, not print as advisory.
+  run run_lint_own "$own"
+  [ "$status" -eq 1 ] || { echo "past-floor own-set: an OWN file's finding did not block (rc=$status)" >&2; return 1; }
+  printf '%s\n' "$output" | grep -qE "^${rel}:[0-9]+: pane-spawn" || { echo "no BLOCKING line for $rel" >&2; return 1; }
+
+  # NEGATIVE: the same past-floor set without the needle must stay advisory at rc 0, so this arm
+  # cannot pass by blocking on any large own-set.
+  run run_lint_own "$own_neg"
+  [ "$status" -eq 0 ] || { echo "a file outside a past-floor own-set blocked (rc=$status)" >&2; return 1; }
+  printf '%s\n' "$output" | grep -qE "^ADVISORY ${rel}:" || { echo "$rel was not advisory outside the own-set" >&2; return 1; }
+  true
+}

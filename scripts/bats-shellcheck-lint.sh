@@ -227,7 +227,23 @@ EOF
     [ -n "$f" ] || continue
     # An aborted file is in your own-set if ANY of its lines is — you touched a file whose analysis
     # is dead, so every other finding in it is unreachable and the clean read is meaningless.
-    if [ "$own_scoped" = "1" ] && [ -n "$own" ] && printf '%s\n' "$own" | grep -q "^$f:"; then
+    # DRAINED, not -q — and this is the SECOND consumer of the own-set in this file. in_own() above
+    # was drained on 2026-08-26 with a comment naming this very feed as the one whose ceiling a real
+    # land already clears; this line reads the SAME `$own` variable, 92 lines below it, and was left
+    # with `grep -q`. Under the `set -uo pipefail` at the top, grep exits on the first match, the
+    # producer takes SIGPIPE, and pipefail hands the caller non-zero — so a file THIS LAND WROTE IN
+    # reads as NOT-own, falls to the `abort_other` arm, and its "shellcheck aborted, nothing in this
+    # file is checked" warning is downgraded from BLOCKING to a one-line advisory. A fail-OPEN in a
+    # blocking land gate, and the failure is silent in the direction that matters: the land proceeds.
+    #
+    # THE FEED IS NOT LATENT HERE. `$own` is own_lines output — one `path:line` per CHANGED LINE,
+    # bounded by nothing but the diff. Re-measured on this repo 2026-08-26T20:53Z, independently of
+    # the number in in_own's comment: `origin/main~20...origin/main` = 595 lines / 17,831 B (safe),
+    # `~60...` = 2,615 lines / 89,458 B, `~150...` = 226,697 B, `~400...` = 454,797 B. The
+    # two-stage shape here is safe to 37,121 B, racy at 55,721 and ALWAYS inverted from 87,122, so a
+    # sixty-commit landing range is already past it. Pinned behaviourally at 120,000 B in
+    # tests/bats-shellcheck-lint.bats, where a re-introduced -q fails every run, not one in twenty.
+    if [ "$own_scoped" = "1" ] && [ -n "$own" ] && printf '%s\n' "$own" | grep -e "^$f:" >/dev/null; then
       printf '  UNANALYZABLE %s — shellcheck aborted; findings in this file cannot be seen\n' "$f"
       abort_own=$((abort_own + 1))
     elif [ "$own_scoped" != "1" ]; then

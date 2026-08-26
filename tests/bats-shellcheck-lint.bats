@@ -252,6 +252,54 @@ mkrepo() {  # $1=dir → git tree with the lint at scripts/, dirty trunk suite, 
   echo "$output" | grep -qE 'no scanned suite|clean' || false
 }
 
+@test "an UNANALYZABLE own file still BLOCKS when the own-set is past the pipe-buffer regime" {
+  need_sc
+  # THE MECHANISM ARM for lint_files' own-scope predicate, and the sibling of the case above. That
+  # case pins the same behaviour with a ~30-byte own-set, and it stayed GREEN for as long as this
+  # line spelled its membership test `grep -q` — a fixture that never reaches the bug's regime
+  # cannot discriminate (memory: control-fixture-must-reach-the-bugs-regime). It pins the CONTRACT;
+  # this pins the MECHANISM, so it survives any rewording of the fix.
+  #
+  # WHY 120,000 AND NOT SOME OTHER NUMBER. `$own` is own_lines output — one `path:line` per CHANGED
+  # LINE, bounded by nothing but the diff. Measured on this repo 2026-08-26,
+  # `origin/main~60...origin/main` is 2,615 lines / 89,458 bytes and `~150...` is 226,697. The
+  # two-stage `printf | grep` shape is safe to 37,121 B, racy at 55,721 and ALWAYS inverted from
+  # 87,122, so a fixture past 87,122 fails a re-introduced -q on EVERY run rather than one in
+  # twenty. The needle is on line 1 so grep exits at the first record it reads.
+  mkb abort '# shellcheck + prose that opens with the tool name
+@test "x" {
+  foo= bar
+}'
+  local own own_neg
+  own_neg="$(awk 'BEGIN{ for (i = 1; i <= 2600; i++) printf "tests/filler-%06d-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bats:%d\n", i, i }')"
+  own="$(printf '%s:2\n%s' "$D/abort.bats" "$own_neg")"
+  [ "${#own}" -ge 87122 ] || { echo "fixture ${#own} B is under the inverting floor — it cannot discriminate" >&2; return 1; }
+  [ "${#own_neg}" -ge 87122 ] || { echo "neg fixture ${#own_neg} B is under the floor" >&2; return 1; }
+
+  # POSITIVE: the aborted file IS on a line this change wrote, so it must take the BLOCKING arm.
+  #
+  # AND THE ASSERTION MUST BE THE BLOCKING ARM'S OWN WORDS, not the rc and not the word
+  # "UNANALYZABLE". Measured 2026-08-26 against a deliberately reverted copy at 162,769 bytes: the
+  # inverted predicate still exits 1, and its advisory message reads "N file(s) UNANALYZABLE but
+  # not in your diff" — so BOTH `[ "$status" -eq 1 ]` and `grep -q UNANALYZABLE` hold in the broken
+  # state too. Those are the assertions the case above uses, which is a SECOND reason it could not
+  # see this and is independent of its fixture size (memory: fixture-makes-the-two-answers-agree).
+  # The two arms are distinguished only by which message is emitted, so both are asserted: the
+  # blocking one present, the advisory one ABSENT.
+  run env CC_BATS_SC_OWN="$own" "$L" "$D/abort.bats"
+  [ "$status" -eq 1 ] || { echo "past-floor own-set: an UNANALYZABLE own file did not block (rc=$status)" >&2; return 1; }
+  [ "$(printf '%s\n' "$output" | grep -c 'file(s) above abort shellcheck')" -ge 1 ] \
+    || { echo "past-floor own-set: the BLOCKING abort message is absent — the file was not read as own" >&2; return 1; }
+  [ "$(printf '%s\n' "$output" | grep -c 'UNANALYZABLE but not in your diff')" -eq 0 ] \
+    || { echo "past-floor own-set: an OWN file was reported as OUTSIDE the diff (the fail-OPEN)" >&2; return 1; }
+
+  # NEGATIVE: the same past-floor set with the needle REMOVED must not block, so this cannot pass by
+  # blocking on any large own-set.
+  run env CC_BATS_SC_OWN="$own_neg" "$L" "$D/abort.bats"
+  [ "$status" -eq 0 ] || { echo "a file outside a past-floor own-set blocked (rc=$status)" >&2; return 1; }
+  true
+}
+
 @test "the diff-proportional scope is real — an untouched suite is not even scanned" {
   need_sc
   # The cost property, asserted rather than assumed: a corpus where ONE suite is dirty and another
