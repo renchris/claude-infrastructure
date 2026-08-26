@@ -527,3 +527,192 @@ The DOM's `font-size` is a specification; the **ink extent** of the glyphs is th
 only OCR/CV measures it. Related: a DOMRect includes half-leading above and below the text, so a
 label that is *box-centred* is usually *optically low* — the DOM literally cannot see the
 discrepancy because it has no representation of the ink.
+
+---
+
+#### Kind 2 — "The DOM has no node for it"
+
+**D6. Content inside opaque leaves.** A `<canvas>`, a WebGL surface, a `<video>` frame, a rasterised
+chart, a cross-origin `<iframe>`, a PDF embed, a Lottie animation — each is **one DOM node with one
+box and no interior structure**. Every design fact inside it (is the chart legible? does the video
+poster frame have text baked into it at 2.9:1? is the map label clipped?) is invisible to the DOM
+and trivially visible to CV. Note that this class is *growing*: canvas-rendered UI (Figma, Google
+Docs, most data-grid libraries at scale) turns the whole surface into D6.
+
+**D7. Raster asset content.** The DOM knows an `<img>` occupies 320×180. It does not know the logo
+inside it is an upscaled 1× asset that is visibly soft on a 2× display (`cv2.Laplacian` variance,
+C13), that the subject is cropped through someone's forehead, that the photo's dominant colour
+clashes with the palette, or that white text was baked into a light region of the JPEG. To a
+DOM-only reviewer, every image is a grey rectangle.
+
+**D8. Pseudo-elements, decorations, and paint that extends past the box.** `::before` / `::after`
+have **no DOM node** and no `getBoundingClientRect`. `box-shadow`, `filter: drop-shadow`, `outline`,
+and `text-shadow` paint *outside* the border box and are excluded from the DOMRect entirely — yet a
+shadow is a major contributor to perceived spacing and visual weight. Two cards with identical
+DOMRects and different shadow spreads have different *perceived* gaps. The measurement the human eye
+makes includes the shadow; the measurement the DOM makes does not.
+
+---
+
+#### Kind 3 — "It is not a property of any node" *(the class that actually justifies the pipeline)*
+
+This is where the DOM is not merely incomplete but **categorically inapplicable**, and it is the
+answer to the question the whole exercise is about.
+
+**D9. Emergent, whole-image properties.** *"The page feels crowded."* *"The eye doesn't know where to
+go."* *"The hierarchy is flat."* *"There's no focal point."* These are properties of the **composited
+raster**, not of any element or any pair of elements. There is no node to query, and no amount of
+per-node data sums to them. Concretely:
+
+- **Whitespace as a field.** §3's `cv2.distanceTransform` measures the *shape and continuity of the
+  negative space* — the channels the eye actually travels. You cannot get that from boxes, because
+  whitespace is precisely what is between the boxes and belongs to none of them. "Crowded" is
+  quantifiable as ink-density and mean whitespace-channel width; both are image statistics.
+- **Visual weight and fixation order** (§4). Whether the primary CTA is the first thing seen is a
+  fact about the rendered image and a human visual system. UEyes exists because this is measurable —
+  and it measures screenshots, not DOMs.
+- **Gestalt grouping.** *Which* things read as a group is set by proximity, similarity and enclosure
+  in the render. The DOM's grouping is `<div>` nesting, which is a *code* structure that frequently
+  disagrees with the perceptual one — that disagreement is itself a common and important design
+  defect ("these look like one group but behave as two"), and detecting it **requires both
+  representations**. The perceptual-grouping literature for GUIs works this way for exactly this
+  reason ([arxiv 2206.10352](https://arxiv.org/pdf/2206.10352)).
+- **Optical vs geometric alignment.** A circular avatar and a square thumbnail with identical
+  DOMRects are *not* optically aligned; a triangular play-button glyph centred by box is visibly
+  right-of-centre. Optical correction is a real design practice, and its unit is ink centroid, not
+  box centre. `regionprops.centroid` (C1) computes it; the DOM cannot represent it.
+
+**D10. Cross-engine, cross-device, cross-state divergence.** The DOM is *identical* in Safari and
+Chrome and Firefox. The pixels are not — font smoothing, sub-pixel positioning, `1px` borders at
+fractional DPR (a 1 CSS-px hairline at DPR 1.5 rasterises to a blurred 2 device-px band), scrollbar
+gutters, and the OS text-rendering stack all differ. A design defect that exists only in one engine
+or at one DPR is **definitionally invisible to a DOM-only review**, because the DOM is the thing
+that is the same in both. The same argument covers print stylesheets, email HTML, and dark-mode
+forced-colors rendering.
+
+**D11. Surfaces where there is no DOM at all.** A competitor's product. A Figma export. A design
+mockup being compared to the built page. A stakeholder's screenshot in a ticket. A native app. A PDF.
+A video frame of the product. A DOM-only reviewer can review exactly one artifact — *your own page,
+in a browser you are driving, right now*. The CV layer reviews any image. For a design-review agent
+this is not an edge case; comparing the built page against the mockup is one of the primary jobs, and
+**one side of that comparison never has a DOM.**
+
+### 6.3 The synthesis — the actual division of labour
+
+The adversarial case wins on the *stated example* and loses on the *stated goal*.
+
+- **"Uneven spacing → 16, 16, 16, 23"** is genuinely a DOM job. Four subtractions, exact, with the
+  offending selector attached. §6.1 A3 is correct and should be conceded without qualification.
+- But *"the spacing looks uneven"* was an **impression**, and the class of impressions a design
+  reviewer must convert includes "crowded", "unbalanced", "no focal point", "these don't feel like
+  the same component", "the eye goes to the wrong place", "it looks broken on Safari". **The DOM can
+  measure the first impression and cannot even represent the rest.**
+
+The right architecture follows directly, and it is **not** "CV instead of DOM" or "DOM instead of
+CV". It is:
+
+> **The DOM is the primary measurement instrument. CV is the instrument that measures the
+> DOM's blind spots — and, more importantly, it is the *oracle that checks the DOM against
+> reality*.**
+
+That second role is the one no amount of DOM introspection can fill, and it is worth stating as a
+rule:
+
+**Every high-value finding in this document comes from a DISAGREEMENT between the two
+representations, not from either alone.**
+
+| DOM says | Pixels say | The defect |
+|---|---|---|
+| element at (120, 400), 200×48 | nothing painted there | **D1** — zero-ink: occluded, transparent, or clipped |
+| `color: #333` on `#fff` → 12.6:1 | sampled ratio 2.9:1 | **D3** — a blend mode / filter / ancestor opacity destroyed the contrast |
+| six siblings, same classes | template match 1.0, 1.0, 1.0, 1.0, 1.0, **0.94** | component drift in one instance |
+| `gap: 16px` uniformly | measured 16, 16, 16, **23** | a sibling has an unaccounted margin, shadow, or transform |
+| box-centred label | ink centroid 2 px low | **D5** — half-leading; optically misaligned |
+| `<div>` nesting says 2 groups | morphological closing merges at k=8 into 1 | **D9** — code structure ≠ perceptual structure |
+| h1 is the most important element | visual-weight rank puts it 4th | **D9** — hierarchy inversion |
+| identical DOM in Chrome and Safari | SSIM map differs in the nav | **D10** — engine-specific rendering defect |
+
+A finding in that table is *stronger than either source could produce alone*, because a disagreement
+between two independent instruments is evidence in a way a single reading never is. **That is the
+argument for building the CV layer, and it is the only argument that survives §6.1.**
+
+**Corollary — the cheapest useful version of this system.** If only one thing gets built, build the
+**cross-check**, not the pipeline: capture the DOM box tree and the screenshot together, rasterise
+each DOMRect's region, and assert (a) it has non-background ink, (b) its sampled fg/bg contrast
+matches the computed one, and (c) its ink centroid matches its box centre. That is perhaps 200 lines
+of NumPy, runs in milliseconds, needs no model whatsoever, and catches D1, D3 and D5 — three of the
+four defect classes that ship to production undetected today.
+
+---
+
+## 7. Recommendation
+
+### 7.1 Build order
+
+| Tier | What | Why here | Cost |
+|---|---|---|---|
+| **T0 — build first** | DOM box tree + screenshot, and the **three cross-check assertions** (ink present · sampled contrast · ink centroid) | Highest value per line of code in this entire document. Catches D1/D3/D5. No model, no GPU. | ~200 lines NumPy |
+| **T1** | Classical measurement chain C1–C5, C8, C10, C12 (§3) | Produces every number, on any image, DOM or not. ~100 ms/screenshot on one core. | a day or two |
+| **T2** | Defect predicates + the classical visual-weight ranking (§4.5, §5 stage 5) | Turns numbers into falsifiable verdicts with an attributable formula. | small |
+| **T3** | CLIP crop classification + **Florence-2 via `mlx-vlm`** | Semantics only. MIT, tiny, MLX-native — the only learned model with no adoption friction on this machine. | moderate |
+| **T4 — only if T0–T3 leave a real gap** | **SAM 3 via HF `transformers`** for soft-edged/overlapping elements; **UMSI finetuned on UEyes** for fixation order | Both are genuinely useful and both carry setup risk (Triton; licence). Do not start here. | high |
+| **Skip** | Grounding DINO (any version), OWLv2, YOLO-World/YOLOE, generalist VLM grounding | Natural-image priors, <2 % ScreenSpot-Pro class performance, or AGPL. Nothing they give you is worth the seconds. | — |
+
+### 7.2 The three findings that most change the design
+
+1. **Classical CV is not the fallback here — it is the primary measurement layer.** The best learned
+   GUI detector reaches `F1 = 0.438 at IoU > 0.9` (§2.2). A screenshot is the ideal case for
+   thresholding and connected components. Every pixel number should come from §3.
+2. **Only use learned models with screenshots in their training set.** GPT-4o scores **below 2 %** on
+   ScreenSpot-Pro; MolmoPoint-GUI-8B scores 61.1 because Ai2 rendered HTML to manufacture in-domain
+   data. Natural-image transfer to rendered UI does not happen — measured four different ways (§2).
+3. **"Open weights" ≠ "runs on this machine."** SAM 3's official repo is Triton-gated and therefore
+   dead on Apple Silicon; the HF `transformers` reimplementation is the only route. Check kernel
+   dependencies before licence.
+
+### 7.3 Open questions this agent could not settle
+
+- **SUM's Mamba selective-scan on MPS** — unverified. If it has a pure-PyTorch fallback it is the
+  best generalist saliency option; if not, it is a port, not an install.
+- **UEyes / UMSI weights licensing** for commercial use — the dataset and models are described as
+  publicly available, but the specific terms were not read.
+- **All latency figures marked *(est.)*** are extrapolations from an M2 Ultra SAM measurement and
+  general MPS behaviour. They should be benchmarked on the actual M1 Max before any of them is
+  quoted as a fact — this repo's own experience is that published performance figures go stale
+  within days.
+- **SAM 3.1 (2026-03-27) vs SAM 3 on Apple Silicon** — whether 3.1's changes affect the Triton
+  dependency was not verified.
+
+---
+
+## Sources
+
+- [ai.meta.com — SAM 3 / SAM 3.1 blog](https://ai.meta.com/blog/segment-anything-model-3/)
+- [ai.meta.com — SAM 3: Segment Anything with Concepts](https://ai.meta.com/research/publications/sam-3-segment-anything-with-concepts/)
+- [huggingface.co/facebook/sam3 — "Cannot run on Apple Silicon due to Triton"](https://huggingface.co/facebook/sam3/discussions/11)
+- [facebookresearch/sam2#687 — SAM2 on Apple Silicon](https://github.com/facebookresearch/sam2/issues/687)
+- [ultralytics#22954 — SAM3 MPS pin_memory failure](https://github.com/ultralytics/ultralytics/issues/22954)
+- [facebookresearch/segment-anything](https://github.com/facebookresearch/segment-anything)
+- [ai.meta.com — DINOv3](https://ai.meta.com/blog/dinov3-self-supervised-vision-model/) · [arxiv 2508.10104](https://arxiv.org/pdf/2508.10104)
+- [allenai.org — MolmoPoint](https://allenai.org/blog/molmopoint) · [arxiv 2603.28069](https://arxiv.org/html/2603.28069v1)
+- [arxiv 2405.10300 — Grounding DINO 1.5](https://arxiv.org/pdf/2405.10300)
+- [microsoft/OmniParser](https://github.com/microsoft/omniparser) · [OmniParser V2, Microsoft Research](https://www.microsoft.com/en-us/research/articles/omniparser-v2-turning-any-llm-into-a-computer-use-agent/)
+- [microsoft/Florence-2-large (MIT)](https://huggingface.co/microsoft/Florence-2-large)
+- [Blaizzy/mlx-vlm](https://github.com/Blaizzy/mlx-vlm) · [MLX-VLM compatibility report, Jan 2026](https://github.com/Blaizzy/mlx-vlm/issues/661)
+- [docs.ultralytics.com — YOLOE](https://docs.ultralytics.com/models/yoloe) · [YOLO-World](https://docs.ultralytics.com/models/yolo-world) · [arxiv 2401.17270](https://arxiv.org/abs/2401.17270)
+- [arxiv 2504.07981 — ScreenSpot-Pro](https://arxiv.org/abs/2504.07981)
+- [arxiv 2008.05132 — Object Detection for GUI: Old Fashioned or Deep Learning or a Combination?](https://arxiv.org/abs/2008.05132) · [MulongXie/UIED](https://github.com/MulongXie/UIED)
+- [arxiv 2408.03507 — GUI Element Detection Using SOTA YOLO Models](https://arxiv.org/pdf/2408.03507)
+- [arxiv 2206.10352 — Unsupervised Inference of Perceptual Groups of GUI Widgets](https://arxiv.org/pdf/2206.10352)
+- [UEyes, CHI '23](https://dl.acm.org/doi/10.1145/3544548.3581096) · [UEyes dataset, arxiv 2402.05202](https://arxiv.org/pdf/2402.05202)
+- [arxiv 2604.26352 — UIGaze: How Closely Can VLMs Approximate Human Visual Attention on UIs?](https://arxiv.org/pdf/2604.26352)
+- [Arhosseini77/SUM](https://github.com/Arhosseini77/SUM) · [arxiv 2406.17815](https://arxiv.org/html/2406.17815)
+- [OpenCV — StaticSaliencyFineGrained](https://docs.opencv.org/4.x/da/dd0/classcv_1_1saliency_1_1StaticSaliencyFineGrained.html) · [FastLineDetector](https://docs.opencv.org/3.3.1/df/d4c/classcv_1_1ximgproc_1_1FastLineDetector.html)
+- [opencv_contrib#2524 — Restore LineSegmentDetector, MIT-relicensed NFA](https://github.com/opencv/opencv_contrib/issues/2524) · [opencv#14576](https://github.com/opencv/opencv/issues/14576)
+- [PyImageSearch — OpenCV connected component labeling](https://pyimagesearch.com/2021/02/22/opencv-connected-component-labeling-and-analysis/) · [Data Carpentry — connected components](https://datacarpentry.github.io/image-processing/08-connected-components.html)
+- [scikit-image — registration / phase_cross_correlation](https://scikit-image.org/docs/stable/api/skimage.registration.html) · [image registration example](https://scikit-image.org/docs/stable/auto_examples/registration/plot_register_translation.html)
+- [MDN — getBoundingClientRect](https://developer.mozilla.org/en-US/docs/Web/API/Element/getBoundingClientRect) · [W3C CSSOM/transforms thread](https://lists.w3.org/Archives/Public/www-style/2010Aug/0615.html)
+- [MDN — mix-blend-mode](https://developer.mozilla.org/en-US/docs/Web/CSS/mix-blend-mode) · [Sara Soueidan — Compositing and Blending in CSS](https://www.sarasoueidan.com/blog/compositing-and-blending-in-css/)
+- [MDN — font-size-adjust](https://developer.mozilla.org/en-US/docs/Web/CSS/font-size-adjust) · [GoogleChrome/modern-web-guidance — visually-stable font fallbacks](https://github.com/GoogleChrome/modern-web-guidance/blob/main/skills/modern-web-guidance/guides/visual-design/visually-stable-font-fallbacks.md)
+- [Segment Anything on Apple Silicon M1/M2 — measured timings](https://geo-ai.medium.com/segment-anything-model-sam-on-apple-silicon-m1-and-m2-5cdb3f781b27)
+- [arxiv 2310.13707 — GeoLinter (design-linter prior art)](https://arxiv.org/pdf/2310.13707)

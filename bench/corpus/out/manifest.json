@@ -154,8 +154,8 @@
     {
       "id": "optical-centering",
       "klass": "optical-alignment",
-      "summary": "The play glyph in the round button is geometrically centred but reads left-heavy, because a triangle's visual mass sits behind its bounding box centre.",
-      "css": ".glyph-btn .glyph { /* geometrically centred by flexbox; no offset applied */ }",
+      "summary": "The play glyph loses its optical compensation, so it is geometrically centred and reads left-heavy -- a triangle's ink mass sits behind its bounding-box centre.",
+      "css": ".glyph-btn .glyph { transform: none; }",
       "target": ".glyph-btn .glyph",
       "detectable_by": "pixels",
       "magnitude": "ink centroid ~2px left of the geometric centre",

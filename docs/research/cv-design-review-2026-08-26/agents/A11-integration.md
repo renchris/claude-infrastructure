@@ -59,7 +59,7 @@ one markdown file rather than a daemon. So the strongest configuration is not "M
 
 **On hooks, specifically: a hook cannot show the model a picture.** The Stop-hook feedback channel
 is `hookSpecificOutput.additionalContext`, and this repo has already measured what it is and is not
-— `/Users/chrisren/Development/claude-infrastructure/CLAUDE.md:520-529` records that
+— `/Users/chrisren/Development/claude-infrastructure/CLAUDE.md:351-358` records that
 `additionalContext` *does* reach the model but is not advisory (it forces a turn and increments the
 consecutive-block counter capped by `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`), and that `systemMessage` is
 the only field that does not extend the turn and *"provably cannot reach the model"*. Both channels
@@ -136,7 +136,7 @@ Three consequences, and the first two are advantages:
    diffable across runs, and attachable to a plan doc. An MCP image block exists only inside one
    conversation. For a repo whose close protocol turns on *"if the detail is not committed and not in
    a doc, you have not dropped it, you have deleted it"*
-   (`/Users/chrisren/Development/claude-infrastructure/CLAUDE.md:749-751`), a disk artifact is the
+   (`/Users/chrisren/Development/claude-infrastructure/CLAUDE.md:762-763`), a disk artifact is the
    native shape.
 3. **The cost is one extra tool round-trip** (`Bash` → `Read`), and the model can *choose* not to
    pay it. That is the honest disadvantage — and, on inspection, the feature: the JSON comes back on
@@ -346,3 +346,170 @@ justified (a CLIP/DINO embedding server for visual-regression diffing is the pla
   server is an optimisation rather than a dependency.
 
 ---
+
+## 6. Failure behaviour: refuse the LAYER, never the review
+
+**The question as posed — degrade to the model's own vision, or refuse? — has a different answer per
+layer, and collapsing them is the actual defect.**
+
+### Refuse, loudly, for the `dom` layer
+
+The deterministic rules score **9/9 with 0 false positives** on DOM-determined defects; blind Claude
+vision scores **2/4** on the same set (README § The answer). Silently falling back therefore swaps a
+perfect, zero-FP instrument for one that misses half — **and the report reads identically either
+way.** That is the exact shape this repo has named and paid for repeatedly:
+
+- `MEMORY.md → fail-safe-default-mimics-the-healthy-state` — *"a fail-safe default matching the
+  healthy output is unfalsifiable; 164/164 UNKNOWN read as a calm restart."*
+- `MEMORY.md → suppressed-stderr-turns-a-failed-command-into-a-zero` — a failed command rendered as
+  a clean `0`.
+- `MEMORY.md → convergence-counter-measures-distance-not-delivery` — a number that improves while
+  the thing it stands for is still absent.
+
+A review that quietly dropped its arithmetic layer and returned a plausible-looking findings list is
+all three at once. **So: exit non-zero, name the layer, and let the agent say it lost one.**
+
+### There is nothing to degrade *to* for the `pixel` / `judgement` layer
+
+Blind Claude vision is **2/3 on pixels-only** defects and found three real defects nobody injected
+and no rule was looking for. It is not a fallback for the perception layer; it is the primary
+instrument for that layer, and the perception layer is the fallback-free part. If an embedding
+server or an overlay renderer is down, the honest degradation is *fewer receipts*, not *fewer
+findings* — the model still looks at the clean screenshot.
+
+### The envelope this implies
+
+```json
+{ "ok": false, "schema": "design-perceive/1", "exit": 3,
+  "layers": { "dom": "live", "pixel": "unavailable", "judgement": "n/a-caller" },
+  "unavailable_why": "perceive-server: connect ECONNREFUSED 127.0.0.1:8731",
+  "screenshot": "/tmp/dp-a1b2/home@1440x900.png", "clamp_safe": true,
+  "findings": [ /* the dom layer's real findings, complete */ ] }
+```
+
+Three properties, each earned by a named failure in this repo:
+
+1. **"Ran and found nothing" and "could not run" use different channels.** `findings: []` with
+   `ok: true` is a clean page; `ok: false` is an outage. `MEMORY.md →
+   null-result-must-not-use-the-error-channel`: *"an acquit-only producer must say 'nothing' as a
+   SKIPPED job; exit 1 is the inbox, exit 0 mints false greens."*
+2. **Partial success is reported per layer, not as a single boolean.** The DOM findings above are
+   still complete and still 9/9; throwing them away because the pixel layer died would be its own
+   defect.
+3. **The failure is visible to the model in the same turn.** This is where the surface choice stops
+   being aesthetic. A `Bash` non-zero exit plus stderr lands *in the tool result the model is
+   already reading*. A dead **stdio** MCP server does the opposite: its tools disappear from the
+   tool list, Claude Code *"Stdio servers are local processes and are not reconnected
+   automatically"* ([code.claude.com/docs/en/mcp](https://code.claude.com/docs/en/mcp)), and the
+   model cannot notice the absence of a capability it never saw. **An outage that presents as "the
+   tool was never offered" is indistinguishable from "there was nothing to check."** For a
+   perception layer whose whole job is to stop a model from guessing, that failure mode is
+   disqualifying on its own.
+
+### Who owns the refusal
+
+The **tool** refuses (exit code + envelope). The **skill** carries the instruction that the agent
+must surface a missing layer in its own review output rather than substituting its own eye for the
+arithmetic. Neither is a hook: a hook fires on a tool event, not on the occasion of a review, and
+`MEMORY.md → remedy-gate-must-cover-the-occasion` is exactly this mistake — *"a remedy gated on turn
+TYPE never fires on the occasion the problem arrives."*
+
+---
+
+## 7. Adversarial pass: every new integration surface here is a mistake
+
+Stating the opposing case as strongly as I can, because it very nearly wins.
+
+**A1. This fleet has already run the experiment, and the MCP server lost 0-3,504.** BrowserMCP was
+retired on 2026-08-11 with **0 invocations across 3,504 transcripts over 30 days**
+(`/Users/chrisren/Development/claude-infrastructure/CLAUDE.md:119`). That was a working, installed,
+discoverable MCP server offering exactly the capability class under discussion — drive a browser,
+take a screenshot — and in a month nobody, human or model, called it once. The replacement is a
+**CLI**. Any argument that "MCP wins on discoverability" has to explain that number first, and the
+theory of discoverability does not survive it.
+
+**A2. Revealed preference on this machine is near-total absence of MCP.** `~/.claude.json` carries
+**3** global servers (`motion`, `motion-plus`, `ms365`) and **0 of 48 projects** define a
+project-scoped server. Against that: **99 executables in `bin/` and 204 scripts in `scripts/`.** The
+native unit of capability in this repo is a script on PATH. A CV tool shipped as an MCP server would
+be a foreign body in a codebase with an emphatic, consistent house style.
+
+**A3. Perception is not the binding constraint, so any surface added to it is pure cost.** The
+README's own answer is *"Buy pixels and an eval, not models"*, and names the three real shortages:
+the discipline of not asking a model to compute what the browser knows, the absence of any
+acceptance test, and a lost decision about what the review is *for*. **None of those is fixed by an
+integration surface.** Building one is optimising the part that already works.
+
+**A4. Every surface has a failure mode the script does not.** MCP: a dead stdio server is silently
+absent and not auto-reconnected. Hook: fires on the wrong occasion, on every turn of every session.
+Skill: does not trigger, so the capability is never used, and nothing reports that. Subagent: report
+is prose. **The script's failure mode is a non-zero exit in the tool result the model is reading.**
+
+**A5. Even the Skill is arguably unnecessary.** A design review is a *named task the operator asks
+for*, not something the model must spontaneously discover. Naming the command in the plan doc — the
+place the reviewer is already reading — costs one line and no resident tokens.
+
+**A6. `Read`-a-PNG is already the fleet's working pattern.** `scripts/banner-review.py` is a
+generated single-page review surface built *"to be regenerated rather than edited"*
+(`scripts/banner-review.py:9`), and `agent-browser screenshot [path]` writes a file by design.
+The write-then-`Read` path is not a workaround; it is the established idiom, and it survived a
+design track that was rendering and judging images daily.
+
+### What would justify more than a script
+
+Three conditions, each falsifiable, none currently met:
+
+| Escalate to | Justified when | Falsifier / control |
+|---|---|---|
+| **A Skill** *(likely worth it now)* | The invocation carries a real decision, not just a command — which viewport, when to `--clip`, when to fetch the overlay. §3.3 shows it does; that judgement has to live somewhere, and one markdown file is the cheapest place. | If the skill's trigger phrases fire fewer than a handful of times a month, it was a plan-doc line. |
+| **An MCP server** | The perception call must fire during **ordinary feature work** the model was not told was a design review — i.e. discoverability is genuinely load-bearing — **or** JSON-image drift starts causing real errors, since MCP is the only surface delivering both atomically. | **BrowserMCP's 0/3,504 is the control.** Ship the CLI first and count invocations for 30 days. If it is used and the misses are "the model didn't think to run it", MCP has a case; if it is barely used at all, MCP would not have been used either. |
+| **A launchd daemon** | Measured cold-start dominates a review iteration. The one local-model number we have is **30.2 s** for a *single* correct answer at 16-19 GB resident — warmth would not save that, and the deterministic layer is 80 ms. | Measure end-to-end latency with and without warmth. If the delta is under ~2 s, a 19 GB resident process is renting a third of the machine's memory for nothing. |
+
+**The one thing the adversarial case does not defeat.** §2.1 stands: MCP *can* return
+`structuredContent` and an `image` block in one atomic result, and no other surface can. If the
+findings JSON and the image it annotates ever drift — different frame, different scroll position,
+stale overlay — that is the failure MCP structurally prevents and the file-pair does not. The
+mitigation on the CLI side is cheap and should be built in from the start: **write both artifacts in
+one browser pass and stamp both with the same capture id**, which is precisely what
+`bench/capture.py:4-8` already does — *"two artifacts come out of one browser pass, and keeping them
+in one pass is the point… so a pixel finding and a DOM finding can be argued against each other
+without any 'maybe the page moved' escape hatch."* With that, the atomicity argument is answered
+without a server.
+
+---
+
+## Sources
+
+**Documentation (fetched 2026-08-26)**
+- MCP spec 2025-06-18, Tools — tool result content types incl. `image`, `structuredContent`,
+  `outputSchema`, `isError`: <https://modelcontextprotocol.io/specification/2025-06-18/server/tools>
+- Claude Code — MCP: transports/scopes/tool naming, stdio reconnect policy, idle timeouts, and
+  **§ MCP output limits and warnings** (`MAX_MCP_OUTPUT_TOKENS` = 25,000 default, 10,000-token fixed
+  warning, `anthropic/maxResultSizeChars` inert for image content):
+  <https://code.claude.com/docs/en/mcp>
+- Claude Code — Hooks: JSON output fields (`hookSpecificOutput`, `additionalContext`,
+  `systemMessage`, `updatedInput`), all text: <https://code.claude.com/docs/en/hooks>
+- Anthropic — Vision: 28×28-patch token rule, resolution tiers:
+  <https://platform.claude.com/docs/en/build-with-claude/vision>
+
+**This machine (read today)**
+- `/Users/chrisren/Development/claude-infrastructure/CLAUDE.md:119` — BrowserMCP retired, 0/3,504
+- `/Users/chrisren/Development/claude-infrastructure/CLAUDE.md:351-358` — Stop-hook channels
+- `/Users/chrisren/Development/claude-infrastructure/CLAUDE.md:762-763` — the store-or-deleted rule
+- `/Users/chrisren/Development/claude-infrastructure/launchd/fleet.manifest:115-122`
+- `/Users/chrisren/Development/claude-infrastructure/launchd/com.claude.dispatcher.plist:8-11`
+- `/Users/chrisren/Development/claude-infrastructure/launchd/com.claude.deploy-live.plist:12-13`
+- `/Users/chrisren/Development/claude-infrastructure/scripts/launchd-parity-lint.sh:2-16`
+- `/Users/chrisren/Development/claude-infrastructure/install.sh:815-822, 841-848`
+- `/Users/chrisren/Development/claude-infrastructure/scripts/banner-review.py:9`
+- `~/.claude.json` — 3 global MCP servers, 0 of 48 projects with project-scoped servers
+- `agent-browser --help` — `screenshot [path]` writes a file (CLI on PATH via fnm shim)
+- `/Users/chrisren/Development/wt-cv-design-review/bench/detect_dom.py:127, 338`
+- `/Users/chrisren/Development/wt-cv-design-review/bench/capture.py:4-8`
+- Sibling: `agents/A9-capture-fidelity.md:24-38, 46-53, 58, 86, 96, 219`
+
+**Not verified.** I did not stand up a live MCP server returning an image block and observe Claude
+Code render it; the claim rests on the documentation quoting the limit that governs such tools,
+twice, which is strong but is not an execution. That probe would require writing a server and
+editing MCP config, both outside this task's read-only boundary. It is the one experiment that would
+close §2.1 completely, and it is cheap: a 30-line stdio server returning a 4×4 PNG.

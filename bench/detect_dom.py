@@ -30,6 +30,10 @@ GRID = 8
 CONTRAST_MIN = 4.5
 CONTRAST_MIN_LARGE = 3.0
 TARGET_MIN = 44.0
+# Rendered geometry is fractional and shifts with device-scale rounding. Without a
+# band, a control authored at exactly 44px flips to a defect when the capture
+# config changes -- measured: 44.0 unpinned vs 43.x with --force-device-scale-factor.
+TARGET_TOL = 0.75
 INTERACTIVE = {"button", "a", "input", "select", "textarea"}
 
 RGB_RE = re.compile(r"rgba?\(([^)]+)\)")
@@ -291,7 +295,7 @@ def find(snap: dict, tokens: dict) -> list[dict]:
         if not role:
             continue
         w, h = e["rect"]["w"], e["rect"]["h"]
-        if h < TARGET_MIN or w < TARGET_MIN:
+        if h < TARGET_MIN - TARGET_TOL or w < TARGET_MIN - TARGET_TOL:
             rep(
                 "touch-target",
                 e["path"],
