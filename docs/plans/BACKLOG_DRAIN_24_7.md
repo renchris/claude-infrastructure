@@ -86,6 +86,155 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-26 — drain recycle #240: method 209 — THE CLAUSE THAT ASKS "DOES ANYTHING READ THIS
+  PIPELINE'S STATUS?" ANSWERED A DIFFERENT QUESTION, AND THE GUARD FOR THIS EXACT CLASS COULD NOT
+  SEE THREE SITES OF IT.** I took #239's own top recommendation — `scripts/postland-verify.sh`, named
+  cheapest-and-not-taken for two links — screened it on 207/208/209, and found it SOUND: its bisect
+  guards fail safe on every rc I could reach, `sc_count`'s rc-laundering has zero consumers
+  (`shellcheck_advisory` is written and only ever tested for existence, whole-repo), and at `:2122`
+  the author already applies 209 by name, preferring a COUNTER to an rc because git reports its own
+  abort as 127. **Reading a careful thing and leaving it is a result; that file is now screened on
+  those three axes and should not be re-spent.** The defect was one layer out, in the LINT THAT
+  ENFORCES THIS CLASS.
+  **THE DEFECT.** `scripts/pipefail-sigpipe-lint.sh` detects early-exit pipe consumers under
+  pipefail — where `p | grep -q X` makes a MATCH return 141, so the healthiest input fails hardest.
+  Its clause 4 is commented *"does anything READ this pipelines status?"* and answers with
+  `if (!hase) return 0` — i.e. only errexit or a control-flow position counts. But `p | grep -q X;
+  rc=$?` reads the status outright, on the same line. **The question the comment asks and the
+  question the code answers are not the same question**, which is #239's fifth face one layer down:
+  there the comment stated the right rule and the code satisfied its words while violating its
+  meaning; here the comment states the right rule and the code answers a NARROWER one that happens
+  to coincide on most inputs.
+  **WHAT IT HID — measured against the live tree, `--census` 151 → 153 with ZERO sites lost:**
+  `scripts/test-walltime-lint.sh:118` and `scripts/git-identity-lint.sh:309`, both `in_allowlist`,
+  both spelled `printf '%s\n' "$2" | grep -qxF "$1"; rc=$?`. Neither was allowlisted; the detector
+  simply could not see them. **Both are RATCHET lints feeding `postland-verify`'s verdict-affecting
+  prelint — the blind spot sat inside this lint's own class of consumer.**
+  🚨 **AND A THIRD, WHICH IS THE ONE THAT MATTERS AND WHICH I FOUND ONLY BECAUSE AN OVER-BROAD
+  ASSERTION OF MINE REFUSED.** My first site-fix gate asserted the substring `grep -qxF "$1"` was
+  gone from the whole file; it fired, and the reason was a SECOND live instance at
+  `test-walltime-lint.sh:89` — `in_own()`, whose pipeline is the **LAST STATEMENT of the function**,
+  so its rc **IS** the return value `if in_own …` reads at `:176` and `:184`. Under pipefail a MATCH
+  returns 141 ⇒ *not in own scope* ⇒ a real timebomb inside the lander's own diff is downgraded from
+  BLOCKING to advisory. **A fail-OPEN in a blocking land gate** — and the identical scar is already
+  written out in this repo at `scripts/deploy-link-parity.sh:264`, in its own words, about its own
+  line. **A gate that is too wide is worth keeping until it has fired once.**
+  ⚠️ **REACHABILITY, STATED HONESTLY, AND IT IS THE HALF I MOST WANT THE NEXT LINK TO COPY.** The
+  inversion is ARITHMETIC, not luck (#239's fixture-regime lesson): measured on this exact spelling,
+  **rc 0 at 51,032 bytes and rc 141 with the needle CONFIRMED PRESENT at 102,032** — the 64 KiB pipe
+  buffer, with a second column counting the match so a crash could not ship as data. **Today's
+  inputs are nowhere near it**: `EMBEDDED_ALLOWLIST` is **15 bytes** in test-walltime-lint and
+  **EMPTY** in git-identity-lint, and both are ratchets that only shrink. So the two `in_allowlist`
+  sites were **LATENT, not live**, and even had they fired, `CHECK_FAILED` converts the run to
+  exit 2 — a non-verdict, the safe direction. **`in_own` is the one whose ceiling is a real
+  operational quantity**: its input is `CC_WALLTIME_OWN`, one changed path per line, ~1,600 paths.
+  **This closes a DETECTOR blind spot and drains three live sites. It does NOT claim to have caught
+  a live inversion, and I did not find one.**
+  ✅ **THE FIX IS POSITIONAL, AND THE FIRST CUT PROVED WHY.** Matching `$?` anywhere on the line
+  flagged `bin/cc-escalations:301` — `( set +e; cmd; printf '%s' "$?" ) | grep -qx 5`, where the
+  `$?` is the PRODUCER's own (census 151 → **154**, one false positive). The shipped clause tests the
+  ASSIGNMENT form on `last`, the final pipe segment, for the reason the file's own header gives: the
+  analysis is positional and a line-regex cannot see it.
+  ✅ **THREE SELFTEST ARMS, RED-PROVED BEFORE THE FIX: 1 red of 3 against a WRITTEN prediction of
+  1 of 3, with BOTH controls green pre-fix** — which is what makes the red attributable to the defect
+  rather than to the test. `r14` is the capture shape; `g15` pins the `$?`-inside-the-producer case
+  (measured, not hypothetical — it IS cc-escalations:301); `g16` pins a `$?` capture BEFORE the
+  pipeline. Selftest **27/27 → 30/30**, and `tests/pipefail-sigpipe-lint.bats:37/41` PINS that count
+  deliberately, so it was updated deliberately — **that tripwire fired on me and it was right to**.
+  ✅ **FIVE MUTANTS, ONE PER CHANGED SITE, predictions written BEFORE the run and enforced as an
+  rc-93 gate; subject restored byte-identically by sha256, `RESTORE=OK` on every arm.** Baseline
+  green on both probes. **M2's PREDICTION WAS WRONG FIRST TIME and the harness refused it at rc 93 —
+  I predicted 1 red (g15) and got 2, because g16's `$?` sits BEFORE the pipeline so a line-wide test
+  misreads it too.** The corrected prediction is the stronger claim, and **the harness found it, not
+  a re-reading afterwards.** **M5's ZERO IS PREDICTED WITH ITS REASON**, so it is a documented LIMIT
+  and not a hole: the detector STILL cannot see a function-final pipeline, because that rc is
+  consumed by the CALLER and clause 4 has no way to observe a caller. That is why `in_own` is drained
+  by hand here rather than caught by the lint, and it is filed rather than bolted on — closing it
+  needs function-body tracking in the awk plus a re-validation against all 151 incumbent sites.
+  ✅ **NOT A WIDENING, fourth consecutive link: census 151 → 153 with ZERO lost, then back to 151 with
+  the bare lint clean once the three sites are drained. All 27 incumbent selftest arms pass untouched
+  and ZERO existing assertions were edited** beyond the count pin the suite explicitly asks a human
+  to move.
+  🚨 **THE INSTRUMENT FAULTS I MADE, ALL FOUR CAUGHT BY A NAMED GATE OR A DISAGREEING SECOND COLUMN,
+  NEVER BY A HUNCH — and every one is #239's root cause, THE INSTRUMENT'S OWN EXECUTION ENVIRONMENT
+  IS PART OF THE INSTRUMENT.** (1) A `set -uo` in my no-pipefail CONTROL parses as `-u` then `-o`
+  **with no argument = PRINT THE OPTIONS TABLE**, so the control never disabled pipefail and
+  re-measured the pipefail-ON case while printing 27 lines of shell options; the giveaway was
+  `pipefail on` in its own output. (2) My patched lint copy lives OUTSIDE the worktree, so it derived
+  its own `ROOT` from `$SELF` and scanned a DIFFERENT TREE — `lost=151, new=156`, every path from
+  another repo; **the "lost must be 0" column is the only thing that caught it**, and the fix was to
+  pin `CC_PIPEFAIL_ROOT` on BOTH arms. (3) `bats $SUITES` in a Bash-tool call returned a 0-second
+  NON-VERDICT (rc 1, no plan, ok=0, not ok=0) because **zsh does not word-split an unquoted
+  parameter** — all 22 paths went as ONE argument; re-run from a `#!/bin/bash` file it worked.
+  (4) My arms-inserter asserted each arm name `appears exactly twice (one mk, one expect)` and
+  counted the RAW SUBSTRING, so a COMMENT citing `g15` made it 3 and the gate refused — **the label
+  named arms and the expression counted substrings** (#238's mislabelled-instrument scar, in my
+  hands). ⚠️ **AND ONE THE FILE ITSELF WARNED ME ABOUT AND I WALKED INTO ANYWAY: `DETECT_AWK` is a
+  SINGLE-QUOTED bash string, and `pipeline's` / `lint's` / `PRODUCER's` in my new comment each
+  TERMINATED it.** The file says so at `:262` and `:338`. **I now gate the fix text on
+  `"'" not in fix` before it is written.**
+  📋 **BOARD, every number with its moment.** Open 14:05:06Z **320 open / 214 blocked / 2,338 done /
+  2 claimed** (534 combined, 2,874 rows); close 15:17:10Z **326 / 208 / 2,338 / 2** (534, 2,874).
+  Both partitions asserted at both moments. **`allids` departures 0 and arrivals 0 — and NINE ROWS
+  CHANGED STATUS UNDERNEATH, the largest movement in the series.** SEVEN went **blocked → open** —
+  `0c8b39b67665` · `193ae8ddce72` · `564d151b76e5` · `70f0001c657b` · `8f59467c92b0` ·
+  `abf5e7509608` · `e981656df348` — **five of them the very rows #239 measured leaving `claimed` for
+  `blocked` in the sixteen minutes after its close census, so the actuator blocked them then and
+  UNBLOCKED them now.** One went **open → claimed** (`f85fce7c26f5`) and one **claimed → blocked**
+  (`b60eb29e97dd`). **`done` did not move by one.** So the off-box series is
+  `2, 2, 0, 7, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 9` — **seventeen points, and the last two are the
+  two largest.** 🚨 **BUT SAY WHICH YOU MEAN: this is an UNBLOCK burst, not nine closes.**
+  🚨 **THE POSTLAND DENOMINATOR FELL BY A FACTOR OF FIVE INSIDE MY LINK — 2,733 (14:05:06Z) → 505
+  (15:17:09Z).** RED pages **0** at both, the 133rd consecutive — **and that zero is worth exactly as
+  much as its denominator, which just moved 2,228 files.** `pages` 2,102/130 → 2,104/127 (up two,
+  dotpage DOWN three). inbox-guard `.escalated` **477 → 469 (DOWN EIGHT)**, every file in the store
+  still a marker so the two counts remain one number. ✅ **postland STAMPS 477 → 478 — it advanced
+  once across my link, which remains the only evidence the background `postland-verify` mechanism is
+  alive underneath a `GATE=stale` that has now read stale for FIFTEEN links.**
+  ⚠️ **THE LEDGER READ `🚀` AT MY OPEN AND IT IS NOT MINE**: `LIVE_LAG=13 LIVE_ADDS=14
+  LIVE_AGE=20101 LIVE_BREACH_WHY=adds LIVE_DIVERGED=0 MIG_FAILED=0`, and **all fourteen adds are one
+  sibling's `docs/research/cv-design-review-2026-08-26/*`, enumerated per-path** — the documented
+  false positive on `4e6a51df2a84`, OPEN, do NOT re-file, **for the FOURTH consecutive link.** And
+  the converger says so itself: `deploy-live.sh --dry-run` from the SHARED CHECKOUT at 14:07Z —
+  *"waiting — no GREEN tree is a DESCENDANT of live HEAD 51bf8570cdd2 … lag 13 commit(s) / 5h, inside
+  the degrade budget (25 / 6h) — no advance, and none is due yet"*, residency *"2 of 2 executing
+  resident daemon(s) are running current bytes · 1 exempt"*. **One command turns an unexplained `🚀`
+  into an attributed one in about forty seconds. Run it.**
+  🔎 **WHAT I CLOSED: NOTHING, deliberately** (premise 3) — I fixed code, which is the cleaner
+  discharge. **WHAT I FILED: one row, `ca97c678b18b`** (condition
+  `pipefail-lint-function-final-pipeline`), for the blind spot above, with its three answers.
+  🚨 **AND A FIFTH INSTRUMENT FAULT, IN THE FILING ITSELF, WORTH MORE THAN THE ROW: I SHIPPED AN
+  INVERTED FALSIFIER AND THE STORE TAUGHT ME THE REPAIR.** My first probe grepped `--census` for
+  `test-walltime-lint.sh:89` — **a site the SAME DIFF drains**, so it can never match and the row
+  could never self-retract (measured: the grep counts **0** immediately after filing). **A falsifier
+  must test the thing that would still be true, not the symptom you just removed.** The repair is
+  NOT a re-file: `cc-backlog add` REFUSED it — *"this is a CONDITION key, so the state RECURRED
+  rather than being re-filed … do NOT vary the condition to get a new id, that is the defect it
+  prevents"* — and named the move itself. **`cc-backlog` HAS a `falsify <id> --probe` verb** (it is
+  in `--help`; the brief's "no relabel/edit verb" is true of title and condition, **not** of the
+  falsifier, which *"keeps its own verb"*). So: `reopen --force`, then `falsify --probe`. ⚠️ **And
+  the probe I attached is DRAINED (`[ "$(… | grep -ci …)" -ge 1 ]`) rather than `| grep -qi`,
+  because a `-q` probe is the exact shape this link landed a fix for** — a falsifier is a filed
+  command and **a filed `--run`/`--probe` is a claim that the command works.** **The commit subject is `fix(lint): the clause that asks "does anything read this
+  pipeline's status" answered a different question…`; the land facts live in
+  `git log --oneline origin/main` and are deliberately not restated here.**
+  🚨 **METHOD 210 — MINE, AND IT IS THE CHEAPEST THING I FOUND. WHEN A FILE ENFORCES A RULE, RUN ITS
+  OWN DETECTOR OVER THE FILES THAT IMPLEMENT THE SAME RULE, AND WHEN IT SAYS CLEAN, ASK WHETHER IT
+  CAN SEE THEM AT ALL.** `--census` and the allowlist are different questions: a site absent from
+  BOTH is not grandfathered, it is INVISIBLE, and a lint reporting *"clean (allowlist honoured)"*
+  cannot tell you which. The discriminator costs one command — run the detector with the allowlist
+  ignored and `comm` the two populations. **The tell is a guard whose own class of consumer is
+  missing from its census.**
+  **Named and NOT taken, in the order I would spend them:** `scripts/nightly-regression.sh` (68 hits)
+  and `scripts/test-hermeticity-lint.sh` (153) are still the two heaviest control files NOBODY has
+  opened on method 202's fixture-scope question · `bin/cc-backlog`'s **142** stderr sites remain the
+  biggest unscreened surface on the box (method 197) · `hooks/lib/task-helpers.sh:180` is a live
+  `find -exec cat {} + | jq` whose `if` reads the PIPELINE's rc, so a partially-unreadable file set
+  yields a `totalOnDisk` that is confidently short — **2 direct suites, the cheapest 209 left** ·
+  and `scripts/handoff-fire.sh:3092` is #239's site-A shape verbatim (`find … -exec grep -lF … +`)
+  on **the chain's own succession path**, where arm (a) of `recycle_engaged` cannot say "I could not
+  run" and arm (b) leans on `cc_sid_for_pane`, which open row `96f9f9bbe9cd` says returns empty —
+  **two arms that can fail together; 119 suites name that file, so it is not a drive-by.**
 - **2026-08-26 — drain recycle #239: method 208 — A PROBE WITH NO WAY TO SAY "I COULD NOT RUN" HAS
   ITS SILENCE READ AS AN ANSWER, AND THE OBVIOUS FIX WAS INVERTED IN BOTH DIRECTIONS.** I took
   #238's own top recommendation — method 208 over `scripts/postland-verify.sh` and its consumers —
