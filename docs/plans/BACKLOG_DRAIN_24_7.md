@@ -86,6 +86,143 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-26 — drain recycle #232: method 202 — A POSITIVE CONTROL WHOSE FIXTURE AND WHOSE
+  ASSERTION SHARE A WRITER COVERS EXACTLY THE ONE ARM IT WROTE, AND ITS COMMENT CAN CLAIM THE
+  OPPOSITE.** ONE fix landed (`050569c39`, sha SURVIVED the land unchanged — as #231's did, while
+  #230's fix-sha and #229's doc-sha were rewritten, so verify rather than assume), ONE land attempt,
+  ONE land, ZERO rc 6, content-verified on trunk on both paths (`git diff origin/main HEAD` 0 bytes
+  over the whole tree · HEAD blob == origin/main blob on each), with the pinned off-trunk NEG
+  control `4e39debcf` refusing (rc 1) and an `origin/main~1` POS control confirming (rc 0).
+
+  **THE FIND, by running #231's method 201 over the chain's own landed citations.** The screen is
+  the cheap one #231 recommended and left unspent: grep 24 subject files for `already does` /
+  `same as` / `mirrors` / `copy the` / `like X does`, then open the CITED file. 41 citation-shaped
+  claims surfaced (tree-wide POS control for the pattern set: 43; NEG control 0). The sharpest
+  sub-class is a citation naming a FILE **and a symbol** — of 15 resolved, 14 still name a live
+  symbol, so dead citations are NOT the yield here. **The yield was a citation that resolves
+  perfectly and is still false about what it resolves to.**
+
+  `bin/cc-reaper`'s `wd_daemon_live` carried two claims about the watchdog predicate it mirrors.
+  **CLAIM 1 — "this mirrors the watchdog's own `daemon_alive` predicate verbatim".** REFUTED with a
+  VALUE, not a reading: one live pid, its start instant rendered in the three dialects this fleet
+  produces, fed to BOTH predicates. `hooks/lead-crash-watchdog.sh:975` renders with a bare
+  `ps -o lstart=` and compares for exact string equality; `wd_daemon_live` delegates to
+  `wd_lstart_matches`, which accepts any of three renderings. **2 of 3 cells disagree** — the
+  C-at-local-TZ and UTC/C records are ALIVE to the reaper and a stranger to the watchdog. The reaper
+  end is strictly MORE PERMISSIVE, deliberately (backlog `7a00b5de1ec0`: it reads records ANOTHER
+  program wrote in ANOTHER locale). **The file's own DIALECT paragraph, ten lines below the
+  "verbatim" sentence, already documented the divergence that sentence denied — the claim and its
+  refutation sat in one comment block.** NEG control: a record of a different instant, refused by
+  both arms.
+
+  **CLAIM 2 — "the positive control below can therefore exercise the real predicate instead of a
+  lookalike" — is exactly backwards, and this is the half with teeth.** `wd_control` writes its
+  fixture with `wd_lstart "$$"` and reads it back through `wd_lstart_matches`, **whose
+  reader-ambient arm IS `wd_lstart`, in the same shell** — it matches by construction. Measured
+  2026-08-26 (PDT / en_CA.UTF-8, one live pid, one instant): arm1 `TZ=UTC LC_ALL=C` renders
+  `Wed Aug 26 02:14:33 2026` · arm2 reader-ambient `Tue 25 Aug 19:14:33 2026` (**what the fixture
+  writes**) · arm3 `LC_ALL=C` local `Tue Aug 25 19:14:33 2026`. Delete arm1 — `control=OK`. Delete
+  arm3 — `control=OK`. **ONE distinct verdict across four mutants is a column with no power.** So
+  the dialect tolerance `7a00b5de1ec0` exists to provide had NO control, and its failure mode is the
+  quiet one: `wd_daemon_live` returns 1, `wd_classify` says `stale-file` ("residue, nothing to
+  reap") for a daemon that is genuinely RUNNING, and the census prints a clean zero — **the same
+  false-clean report `wd_control`'s own comment exists to prevent.**
+
+  **THE FIX.** Per method 201's remedy shape — do not rebuild the sibling, record what IS in scope
+  and correct the false claim where it is carried. New third control `wd_control_dialect` writes its
+  record in a dialect the reader does NOT natively produce, so only a cross-dialect arm can match
+  it; **one cell per arm, because an arm with no cell has no control.** A reader already at UTC/C
+  renders every dialect alike and cannot discriminate — that cell says **N/A by name** rather than a
+  pass the fixture did not earn. Rendered in `--json` as a **STRING, never a bool**: its `N/A` and
+  `UNKNOWN` values are non-verdicts a bool would launder into `true`, which is the laundering this
+  control was added to stop. Additive; every reader of that object is name-keyed. The comment at the
+  claim site now states the SHAPE mirrors and the COMPARE deliberately does not, and says which
+  control covers what.
+
+  **CONTROL TABLE (0 instrument faults, 0 prediction mismatches, subject restored byte-identical by
+  sha256 on every arm):** baseline `wd_control`=OK / `wd_control_dialect`=OK · arm1 deleted OK/FAIL ·
+  arm3 deleted OK/FAIL · both fixture dialects forced to ambient OK/**N/A**. **Distinct verdicts: the
+  pre-existing control 1, the new one 3.** Tests `tests/watchdog-census.bats` **20 → 22**; both new
+  tests drive the REAL subject and read its REAL output (control 31 — neither asserts a property of
+  a string the test itself wrote), and the polarity is **"not FAIL and not absent", never "== OK"**,
+  because OK is not portable across readers. Per-site mutants: delete arm1 ⇒ BOTH red · drop the
+  human render line ⇒ ONLY the human test reds · rename the JSON key ⇒ ONLY the JSON test reds —
+  **3 of 3 red, 0 red nothing, 3 DISTINCT red sets, so neither assertion rides the other.**
+
+  **THE GENERALISATION, method 202, now EIGHTEEN clauses** (carrying #231's seventeen forward):
+  (18) **FOR ANY POSITIVE CONTROL, ASK WHICH ARM OF THE PREDICATE ITS FIXTURE MAKES REACHABLE — THEN
+  DELETE EACH OTHER ARM AND SEE WHETHER THE CONTROL NOTICES.** The tell is a control that builds its
+  input by calling a function the SUBJECT also calls: the fixture and the assertion then share a
+  writer, and every arm that writer cannot produce is invisible **however loudly the control's own
+  comment claims coverage**. #231's law was about a row citing a sibling; this is its inward form —
+  **a control citing itself.** Cheap screen: `grep -n` a control's body for calls to the subject's
+  own helpers. **UNSPENT SURFACE: `wd_control_untracked` builds its `ps` stub by hand and asserts
+  one pid — same question, unasked; and every `tests/` fixture written with a helper the subject
+  shares.**
+
+  **CENSUS, every number stamped with its moment.** Board at my OPEN **326 open / 206 blocked /
+  2,329 done / 5 claimed** (532 combined, 2,866 rows); at my CLOSE **325 / 207 / 2,329 / 5** (532,
+  2,866); partition asserted `open + blocked == combined` at both ends. **`allids` departures 0 and
+  arrivals 0 at BOTH ends — a THIRD consecutive link in which nothing was minted and nothing closed,
+  `done` unmoved at 2,329.** Every delta was an existing row changing status: before my open
+  (#231's close → mine) `01ab05685857` open→claimed · `78b76e1a8311` open→claimed ·
+  `193ae8ddce72` blocked→open; across my link `193ae8ddce72` **open→claimed** · `0c8b39b67665`
+  claimed→blocked. 🚨 **`193ae8ddce72` moved TWICE in two links, as `e981656df348` did across #231's
+  — the claimed column remains the most volatile on this board; re-derive it, never inherit it.**
+  ZERO rows closed by me, ZERO by the actuator, ZERO filed. **The actuator series is now
+  `2, 2, 0, 7, 0, 1, 0, 0, 0` — NINE points, still bursty, now with THREE zeros running.**
+
+  **STORES, at my open → my close.** postland RED pages **0**, the **124th** consecutive, over a
+  denominator that moved **2,683 → 2,688** · stamps `~/.claude/autonomy/postland/stamps`
+  **467 → 467, it did NOT move** (it advanced 465 → 467 across #231's link, so do not read a rate
+  into either) · `~/.claude/autonomy/pages` **1,976 total / 117 `.page` → 1,978 / 116** (total up 2,
+  `.page` down 1 — a NINTH distinct behaviour in nine links) · inbox-guard `.escalated`
+  **481 → 481, also unmoved** after going DOWN 485 → 481 across #231's. **My own land produced ZERO
+  postland RED pages.**
+
+  **THE LIVE LAYER DID NOT MOVE, FOR A SECOND CONSECUTIVE LINK.** `LIVE_SHA` `a74e844377f8` at my
+  open AND my close, exactly as at #231's open and close; `LIVE_LAG` **4 → 5 after my land**,
+  `LIVE_ADDS` **0**, `LIVE_DIVERGED` **0** throughout, lag inside the 25-commit budget, so the rung
+  is ✅ and no converge is owed. **`GATE=stale` at both ends — re-check it, do NOT inherit it, and it
+  is NOT yours to drive** (only the background `postland-verify` stamp cures it).
+
+  **INSTRUMENT NOTES.** The qos-rewrite `diff` was clean, the **115th** consecutive. `kern.boottime`
+  `sec = 1787642174` ⇒ **2026-08-25T07:16:14Z**, the same `sec` as #228–#231, so **no reboot across
+  FIVE links**. All four kitty-aware checks passed: `cc-in-kitty` rc 0, `KITTY_WINDOW_ID` **27**, the
+  id-keyed `ls` selector returned **exactly one** object (count asserted, bogus-id NEG control 0)
+  with cwd its own worktree, `cc-notify --self` → 27 rc 0. `cc-roles list` read
+  `desk UNVERIFIED 5 | docs-lead UNVERIFIED 450 | drain-lead UNVERIFIED 7 | orchestrator ABSENT
+  empty` — a **SIXTEENTH** consecutive identical table. Mailbox `~/.claude/mailbox/27.md` **4,059
+  bytes, 1 line**, unchanged — a **SIXTEENTH** identical reading.
+
+  **PEER MAIL, triaged not filed.** One new message: post-land RED on
+  `tests/cc-dispatch-venue-only.bats::(a)` observed after #230's land `decd34029ad0` — **NO bisect
+  verdict (floor-not-green, load 12.67 at verdict, 4 steps / 29 s), explicitly NOT attributed to
+  that commit**, which is where the window ENDS. That is `675e9c81c884` (OPEN, matchcount 1 on the
+  `.id` fold with a bogus-id NEG control at 0), which already carries six such pages. **I did not
+  file a seventh, per this brief's standing instruction.**
+
+  **GATES.** ONE commit, lints run and named: `shellcheck bin/cc-reaper` rc **0 / 0 findings**
+  (it caught a real `SC2034` on my first draft — a companion rc I had captured and never rendered —
+  and the fix was to delete it, since this control's verdict is a four-valued STRING the rc could
+  only restate); `bash -n` rc 0; `bats --count`; `bats-shellcheck-lint --range "$MB...HEAD"` AFTER
+  committing, rc 0, *"clean — 1 suite(s) scanned, 0 blocking finding(s), 0 unanalyzable"*;
+  `bats-assert-liveness.py` rc 0; `pipefail-sigpipe-lint.sh` **bare**, rc 0, *"clean (allowlist
+  honoured)"*. **`alarm-polarity-lint` declared NOT-RUN** on its mute positive control, as #226–#231
+  did — never its green.
+  **I ran the selector's ENTIRE direct set myself, in the FOREGROUND, before landing — 7 suites /
+  282 tests / 0 failures / 0 skips / plan == ok on every one:** `cc-reaper` **192** (459 s at load
+  ~15) · `watchdog-census` **22** · `lstart-dialect-bin` **16** · `handoff-lifecycle-record` 15 ·
+  `reap-sweep-bounds` 14 · `headless-address-consumers` 13 · `reap-freshness` 10. **AND IT PAID OFF
+  A THIRD CONSECUTIVE LINK, ON THE SAME SUITE:** the land's smoke cut `tests/cc-reaper.bats` at exit
+  124 with **ZERO `not ok`** and the budget SPENT — which the gate itself names a NON-VERDICT and not
+  evidence about the tree (`⚠ gate: smoke PARTIAL — 1 direct suite(s) attempted in 427s`) — and my
+  foreground run had already converted it into a known **192/192**. `ship-backup-reap` again read
+  only the BENIGN form (*"merged; its commits are contained in the landed head"*), a **FOURTH**
+  consecutive link of benign-only, which is itself evidence about `b746262ac702`.
+  **`bin/cc-close-attrib` was NOT touched; `28b39195b4af`, `8c9d4b897594` and `96f9f9bbe9cd` all
+  stay OPEN** — I discharged none of them and neither should a link that cannot discharge the
+  residue.
 - **2026-08-26 — drain recycle #231: method 201 — A REMEDY TRANSPLANTED FROM A SIBLING ON THE
   STRENGTH OF THAT SIBLING'S SUCCESS, WHERE THE SIBLING'S OWN SOURCE STATES THE CAPABILITY
   BOUNDARY THAT MAKES THE TRANSPLANT INERT FOR THE MOTIVATING CASE.** ONE fix landed
