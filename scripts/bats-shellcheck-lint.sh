@@ -135,7 +135,21 @@ EXCLUDE_DEFAULT="SC2030,SC2031,SC2329,SC2016,SC2314,SC2315,SC1091"
 in_own() {  # $1=path:line · $2=own-set text · $3=1 if an own-set was supplied at all
   [ "${3:-0}" = "1" ] || return 0
   [ -n "$2" ] || return 1
-  printf '%s\n' "$2" | grep -qxF "$1"
+  # DRAINED, not -q, and of the six copies of this predicate in this tree THIS is the one whose
+  # ceiling a real land already clears. Under the `set -uo pipefail` above, `grep -q` exits on the
+  # first match, the producer takes SIGPIPE, and pipefail hands the caller a non-zero — so a MATCH
+  # reads as NOT-IN-OWN-SCOPE and a finding on a line THIS LAND WROTE is downgraded from BLOCKING
+  # to advisory. A fail-OPEN in a blocking land gate (scars: deploy-link-parity.sh:264, and
+  # test-walltime-lint.sh's own copy drained the day before this one).
+  #
+  # WHY THIS COPY AND NOT THE SIBLINGS. Their own-sets are CHANGED PATHS, bounded by the whole
+  # .bats corpus at 16,945 bytes. This one is `own_lines`, one entry per CHANGED LINE, bounded by
+  # nothing but the diff: measured 2026-08-26 on this repo, a 60-commit landing range yields
+  # 95,164 bytes. The two-stage form here is safe to 37,121 bytes, racy at 55,721 and ALWAYS
+  # inverted from 87,122 (20 trials per size, load ~13) — so that range is already past it.
+  # tests/gate-ownscope-leak.bats exercises this at 120,000 bytes, where a re-introduced -q fails
+  # every run rather than one in twenty.
+  printf '%s\n' "$2" | grep -xF "$1" >/dev/null
 }
 
 # own_lines <git-range> → "path:line" for every ADDED line of a tests/*.bats file in the range.
