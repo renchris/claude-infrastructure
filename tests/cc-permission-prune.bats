@@ -162,7 +162,28 @@ backups() { # count of backups made for the fixture
   # walk is rooted at HOME, which setup() has redirected into the test tmpdir.
   run python3 "$AUDIT" --prune
   [ "$status" -eq 0 ]
-  [[ "$output" == *"scope: 0 settings.local.json file(s)"* ]] || false
+  [[ "$output" == *"scope: 0 settings file(s)"* ]] || false
+}
+
+@test "discovery finds settings.json, not only settings.local.json — the 339-entry file" {
+  # The defect this arm pins: discovery matched `settings.local.json` ONLY, and the store
+  # census measured that NO settings.local.json exists in any config dir on this box — so a
+  # bare --prune reported `scope: 0` over the very file it was built to audit. Both names,
+  # across every `.claude*` config dir, or the all-clear is over an unexamined list.
+  mkdir -p "$HOME/.claude" "$HOME/.claude-next" "$HOME/.claude-secondary"
+  printf '%s\n' '{"permissions":{"allow":["Bash(git:*)","Bash(git status)"]}}' \
+    > "$HOME/.claude/settings.json"
+  printf '%s\n' '{"permissions":{"allow":["Bash(ls:*)"]}}' \
+    > "$HOME/.claude-next/settings.json"
+  printf '%s\n' '{"permissions":{"allow":["Bash(rg:*)"]}}' \
+    > "$HOME/.claude-secondary/settings.local.json"
+  run python3 "$AUDIT" --prune
+  [ "$status" -eq 0 ]
+  # 3 files, not 1 (settings.local.json only) and not 2 (settings.json only).
+  [[ "$output" == *"scope: 3 settings file(s)"* ]] || false
+  # …and it actually reaches INTO the main file: the shadowed entry is named.
+  [[ "$output" == *"Bash(git status)"* ]] || false
+  [[ "$output" == *"shadowed by Bash(git:*)"* ]] || false
 }
 
 @test "the plain report still works — --prune is additive, not a rewrite of the tool" {

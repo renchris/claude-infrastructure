@@ -134,6 +134,21 @@ Two smaller follow-ons, both filed rather than done here:
 * The 339 existing allow entries have never been audited against the auto-mode drop list;
   `cc-permission-audit --prune` already exists to find provably-dead ones.
 
+  **RESOLVED as a capability, 2026-08-26 (backlog `78b76e1a8311`) — the audit is now one
+  command, and two things had made it impossible rather than merely undone.** (1) No code
+  implemented the drop predicate; `--auto-drop` now transcribes `gsn`/`_sn`/`iSd`/`nSd`/`PHs`
+  from `permission-matcher-truth-2026-08-20.md`, and `--prune` runs it alongside the
+  redundancy audit, reporting and never removing (an auto-dropped rule is restored on leaving
+  auto mode, so it is dead *weight*, not a dead *entry*). (2) 🚨 **`--prune` could not reach
+  the file this row is about.** Discovery matched `settings.local.json` only, and
+  `permission-settings-store-2026-08-20.md` §1a measured that **no `settings.local.json`
+  exists in any config dir on this box** — so a bare `cc-permission-audit --prune` printed
+  `scope: 0 file(s)` over `~/.claude/settings.json` and read as an all-clear on an unexamined
+  list. Discovery now takes both names across every `.claude*` dir, so all five stores are in
+  scope. **Still owed: the RESULT.** The audit runs against the operator's live file, which no
+  cloud session can read; the count of the 339 that cannot fire is whatever that one command
+  prints.
+
 ## Deployment note
 
 Hooks reach all five accounts by per-file symlink into this checkout, and CC 2.1.220 ships a
