@@ -640,3 +640,83 @@ mkbox() {   # $1 = key — a box holding one 2h-old unacked message, i.e. always
   [ "$status" -eq 0 ]
   [ "$(printf '%s\n' "$output" | grep -c 'examined, 0 escalation(s), damped=1')" -eq 1 ]
 }
+
+# ── C1–C4: THE CLOCK IS A SENSOR, AND ITS FAILURE VALUE WAS ITS HEALTHIEST READING ────────────────
+# now() was `${CC_INBOX_GUARD_NOW:-$(date +%s 2>/dev/null || echo 0)}`. An unreadable clock therefore
+# scored 0, every `now - ep` came out negative, every negative age was clamped to 0 — and `oldest 0s`
+# is EXACTLY what a message that arrived this instant renders as. Nothing downstream could tell the
+# two apart. Measured against the unfixed subject: ONE fixture, ONE variable moved, and the verdict
+# inverted from `ESCALATE … the target died with mail undelivered` (1 alarm, phone fired) to
+# `ok … 1 unacked but within deadline (oldest 0s)` (0 alarms, nothing phoned) at rc 0 both times.
+#
+# Neither of this file's two anti-silence arms can see it, and the reason is structural: the worklist
+# announce and `sweep done — all N box(es) examined` are BOTH keyed on INCOMPLETENESS, and a dead
+# clock produces a sweep that is perfectly COMPLETE. The subsystem whose entire contract is fail-loud
+# reports its healthiest possible line while every overdue box in the fleet goes unpaged.
+#
+# The law this restores is the one owner_liveness already states and enforces three times over its
+# own oracles (`:258-260`, `:268-271`, `:292-296`): an unresolvable sensor may not fabricate a
+# verdict. It may not BREACH and it may not CLEAR — it abstains, loudly, and every sentence
+# downstream stops claiming a comparison it never made.
+broken_clock_path() {   # a PATH prefix in which date(1) fails and nothing else changes
+  mkdir -p "$BATS_TEST_TMPDIR/shim"
+  { printf '#!/bin/bash\n'; printf 'exit 1\n'; } > "$BATS_TEST_TMPDIR/shim/date"
+  chmod +x "$BATS_TEST_TMPDIR/shim/date"
+  printf '%s' "$BATS_TEST_TMPDIR/shim:$PATH"
+}
+
+@test "C1: an UNREADABLE clock neither CLEARS nor ESCALATES an overdue box — it is UNSCORED" {
+  mkbox aaa
+  run env -u CC_INBOX_GUARD_NOW PATH="$(broken_clock_path)" "$G" sweep
+  [ "$status" -eq 0 ]
+  # may not CLEAR — the unfixed subject scored this exact box `ok … within deadline (oldest 0s)`
+  [ "$(printf '%s\n' "$output" | grep -c 'within deadline')" -eq 0 ]
+  # may not BREACH either — an unreadable sensor is not evidence that a deadline was missed
+  [ "$(printf '%s\n' "$output" | grep -c 'ESCALATE')" -eq 0 ]
+  # ANCHORED to the per-box line. The announce line legitimately contains the word UNSCORED too (it
+  # says what the sweep is about to do), so a bare token count answers a different question than the
+  # one being asked — the failure mode that reds C4's negative control if you leave it unanchored.
+  [ "$(printf '%s\n' "$output" | grep -cE '^  UNSCORED aaa ')" -eq 1 ]
+  not_pushed
+  [ "$(n_alarms)" -eq 0 ]
+}
+
+@test "C2: the clock verdict is ANNOUNCED BEFORE the worklist, and the summary carries the count" {
+  mkbox aaa
+  run env -u CC_INBOX_GUARD_NOW PATH="$(broken_clock_path)" "$G" sweep
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c 'clock=UNREADABLE')" -eq 1 ]
+  # ORDER, not mere presence. The summary is the first thing a SIGTERM eats — which is precisely why
+  # the worklist size is announced BEFORE the loop — so the clock verdict has to precede it too.
+  a="$(printf '%s\n' "$output" | grep -n 'clock=UNREADABLE' | head -1 | cut -d: -f1)"
+  w="$(printf '%s\n' "$output" | grep -n 'worklist' | head -1 | cut -d: -f1)"
+  [ -n "$a" ]
+  [ -n "$w" ]
+  [ "$a" -lt "$w" ]
+  [ "$(printf '%s\n' "$output" | grep -c 'unscored=1')" -eq 1 ]
+}
+
+@test "C3: a NON-NUMERIC CC_INBOX_GUARD_NOW is UNREADABLE, not silently coerced to 0" {
+  # `:-` only catches unset/empty, so a garbage value reached the arithmetic verbatim and bash scored
+  # it 0 — the identical silent clear, through a second door, with no failed fork anywhere.
+  mkbox aaa
+  export CC_INBOX_GUARD_NOW="not-a-clock"
+  run "$G" sweep
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c 'within deadline')" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c 'clock=UNREADABLE')" -eq 1 ]
+  [ "$(printf '%s\n' "$output" | grep -cE '^  UNSCORED aaa ')" -eq 1 ]
+}
+
+@test "C4: the abstention is SCOPED to verdicts that needed the clock (negative control)" {
+  # Without this, a fix could pass C1–C3 by unscoring the whole worklist unconditionally. A fully
+  # consumed box never asks the clock anything, so it must stay silent exactly as it was.
+  mkbox aaa
+  printf '1\n' > "$CC_MAILBOX_DIR/aaa.seen"
+  printf '1\n' > "$CC_MAILBOX_DIR/aaa.acked"
+  run env -u CC_INBOX_GUARD_NOW PATH="$(broken_clock_path)" "$G" sweep
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -cE '^  UNSCORED ')" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c 'clock=UNREADABLE')" -eq 1 ]   # the announce still fires
+  [ "$(printf '%s\n' "$output" | grep -c 'unscored=0')" -eq 1 ]
+}
