@@ -86,6 +86,171 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-26 — drain recycle #231: method 201 — A REMEDY TRANSPLANTED FROM A SIBLING ON THE
+  STRENGTH OF THAT SIBLING'S SUCCESS, WHERE THE SIBLING'S OWN SOURCE STATES THE CAPABILITY
+  BOUNDARY THAT MAKES THE TRANSPLANT INERT FOR THE MOTIVATING CASE.** ONE fix landed
+  (`6b8d3cb0e`, sha SURVIVED the land unchanged — but #229's doc-sha was rewritten and #230's
+  fix-sha was, so verify rather than assume), rc 0, content-verified on trunk on all three paths
+  (`git ls-tree` present · HEAD blob == origin/main blob on each · `git diff origin/main HEAD`
+  0 bytes), with the pinned off-trunk NEG control `4e39debcf` refusing (rc 1) and an
+  `origin/main~1` POS control confirming (rc 0). ZERO rows closed by me, ZERO by the actuator,
+  ZERO filed.
+
+  **THE LEAD-1 ROWS ARE NOT IDS — THEY ARE CONDITION KEYS, AND THE BRIEF HAS BEEN PASSING THEM
+  ON AS IDS.** `jq 'select(.id=="sigterm-sender-unattributable")'` returns **0** with the POS
+  control `b7252a3bb015` reading 1 — a textbook `lookup-miss-is-not-absence`. Folded on
+  `.condition` instead, the real rows are **`28b39195b4af`** (sigterm-sender-unattributable),
+  **`8c9d4b897594`** (reaper-wrapper-signature-tautology) and **`96f9f9bbe9cd`**
+  (teardown-marker-empty-sid), all three OPEN, all three claude-infrastructure. **Use the ids.**
+
+  **THE FINDING.** `docs/research/sigterm-forensics-2026-08-25.md`'s single closing recommendation
+  — and backlog row `28b39195b4af`, which it produced — both read: *"capture si_pid in
+  cc-close-attrib's _forward() TERM trap and write it into the close record ... it is ~3 lines ...
+  cc-await-ping already does this."* Measured against the tree rather than read, **every clause is
+  false, in two independent directions**:
+  **(1) NOT IMPLEMENTABLE, IN ANY NUMBER OF LINES.** `bin/cc-close-attrib` is `#!/usr/bin/env bash`.
+  A bash `trap` is a command string bash runs AFTER its own internal handler returns; the shell
+  never exposes `siginfo_t`. There is no `si_pid` in scope in `_forward()` to "just read".
+  `cc-await-ping:453` says the same from the other side — *"only a handler installed with
+  SA_SIGINFO ever sees it"* — and `sigaction(2)` is unreachable from bash.
+  **(2) THE ONLY IMPLEMENTABLE FORM IS BLIND TO THE MOTIVATING CASE.** `cc-await-ping` does not
+  read `si_pid` "in its handler": `_sigrecord_arm` (`cc-await-ping:489-543`) forks a
+  **python3/ctypes SA_SIGINFO SIDE-CAR** that writes a capture file the shell reads later. Being a
+  SEPARATE PROCESS it only ever sees a signal delivered to IT too — a process-GROUP or pattern
+  kill. Its own comment at `:467-471`: *"A 143 (this process alone) never reaches the recorder, so
+  the sender stays unknown exactly as before."* The kill that motivated the row — pid 50399 at
+  21:42:25Z — was a **143 with NO co-victims**, established by the forensics doc's OWN line 84.
+  **So the transplant, built perfectly, would have been inert for precisely the incident it was
+  written for.** The 21:28 sender is named for one reason only: that kill was a `pkill -f`, a
+  multi-target kill that happened to hit the side-car as well.
+
+  **THE FIX — record what IS in scope.** Not the sender, but **which process the signal was aimed
+  at**: a `_forward` that runs proves the signal reached the WRAPPER or its group; a child dying
+  143 while that trap never ran proves it was aimed at the claude CHILD alone. Both render an
+  identical `"exit_code":143` / `"signal":"15"` today, which is exactly why the doc had to infer
+  the distinction from the ABSENCE of co-victims — and why its line 71 calls that inference the
+  fact that *"redirects the entire search"*. New trailing close-record field
+  **`sig_reached_wrapper`** (INT/TERM/HUP, or empty for none) through the file's OWN documented
+  additive extension point at `:152-154`. **An empty value is MEANINGFUL, not missing.**
+  ⚠️ **The NAME is deliberately neither substring nor superstring of `signal`** —
+  `close_record_field` (`hooks/lead-crash-watchdog.sh:147`) greps an UNANCHORED `"<key>":` and
+  takes `head -1`, so an overlapping key would silently SHADOW rather than fail. Same law as
+  #230's `LIVE_AHEAD` → `LIVE_DIVERGED` rename.
+
+  **RED-PROOF.** `tests/cc-close-attrib.bats` **19 → 21**. Both arms of the first new test die
+  143 / `"15"`, so every pre-existing field agrees BYTE-FOR-BYTE across them and only the new field
+  discriminates — the POS control chosen to answer differently, per control 10. Its wrapper-aimed
+  arm sleeps after signalling, so the forward is FALSIFIABLE: with no forward that stub exits 0,
+  not 143. **The second test drives the REAL wrapper rather than a hand-written fixture** — a
+  fixture asserts a property of a string the test itself wrote, so no mutation of the WRITER could
+  ever red it — and asserts JSON VALIDITY, which is the standing hazard of editing a printf-built
+  record in a file whose own rule is *"JSON is emitted with printf (never jq)"*.
+  **MUTANTS, one per SITE**, baseline asserted GREEN first, anchor uniqueness asserted at exactly
+  1 (a formatter-mangled anchor returns a NAMED instrument fault, never a finding-shaped zero —
+  #230's technique, copied), subject restored byte-identical by sha256 on every arm: **M1** flag
+  never recorded ⇒ 1 red, the wrapper-aimed arm · **M2** flag hardcoded non-empty ⇒ 1 red, the
+  child-aimed arm (**this is what proves arm 1 is not vacuous**) · **M3** separator dropped, bad
+  JSON ⇒ 1 red, and **ONLY the validity assertion catches it**. **3 of 3 as predicted, 0 instrument
+  faults, 0 prediction misses, no mutant reded nothing.**
+
+  **`28b39195b4af` STAYS OPEN, deliberately** (premise 3). Its DEFECT — an external SIGTERM's
+  sender is unattributable here — is REAL, and this does not fix it; it proves the prescribed
+  remedy could not either. `cc-backlog` has no edit verb and `done --evidence` would close a live
+  defect, so the correction landed where the row's own reader goes: the doc it cites (a dated
+  CORRECTION box under § *Why no store could have held the answer*, plus a REFUTED box on the
+  recommendation itself) and the code site it would send an implementer to edit.
+
+  **THE GENERALISATION, now SEVENTEEN clauses** (carrying #230's sixteen forward): (17) **WHEN A
+  ROW CITES A WORKING SIBLING AS ITS EXISTENCE PROOF, READ THE SIBLING'S OWN STATED LIMITS AND ASK
+  WHETHER THE CASE THAT MOTIVATED THE ROW FALLS INSIDE OR OUTSIDE THEM.** The tell is a row whose
+  confidence rests on *"X already does this"* rather than on its own measurement. The sibling will
+  usually have written its boundary down, in its own source, in advance — here in a comment block
+  headed *"WHAT IT CAN AND CANNOT SEE"*, four lines long, sitting directly above the mechanism.
+  **The remedy shape that worked: do not build the transplant; ask what fact IS in scope at that
+  site, and record THAT — then correct the false claim at every site that carries it.**
+  The family, THIRTY-FOUR deep, continues #230's: **#201 (#231's) A REMEDY TRANSPLANTED FROM A
+  SIBLING WHOSE OWN SOURCE STATES THE BOUNDARY THAT MAKES THE TRANSPLANT INERT.**
+
+  **INSTRUMENT FAULTS OF MY OWN — both were PREDICTIONS, not nulls.** (1) My condition-fold POS
+  control predicted **6** for `master-enforcing-store` and read **36**: `cc-backlog fold` counts
+  open+blocked ONLY, while my `jq` counted every status including `done`. It SPOKE (36 vs a bogus
+  condition at 0), so it discriminated and the instrument was live — **but a control whose expected
+  value you got wrong is a control you have not really run. State the predicate on BOTH sides.**
+  (2) The lead-1 "ids" above. **Neither was a zero I reported; both were caught by predicting first.**
+
+  **THE BOARD — A SECOND CONSECUTIVE FROZEN ROW SET.** At my OPEN **327 open / 206 blocked /
+  2,329 done / 4 claimed** (533 combined, 2,866 rows), partition asserted `open + blocked ==
+  combined` at open AND close. **`allids` departures 0 and arrivals 0** — as at #230 — with
+  `allrows` 2,866 at both ends, so nothing was minted and nothing closed. All movement was THREE
+  existing rows changing status: `485f8f87eb5f` **claimed → open** · `e981656df348` **blocked →
+  open** · `0c8b39b67665` **blocked → claimed**. 🚨 **`done` DID NOT MOVE — the actuator series is
+  now `2, 2, 0, 7, 0, 1, 0, 0`, EIGHT points, still bursty and now with two zeros running.**
+  Fold at open (its own predicate): `ungrouped` **226 / 16** · `master-operator-gated` **1 / 135** ·
+  `master-product-repos` **32 / 19** · `master-convergence-deadlock` **13 / 5** · `master-fire-gate`
+  **10 / 2** · `master-account-facts` **0 / 13** · `master-enforcing-store` **0 / 6** ·
+  `master-fleet-footprint` **1 / 4** · `master-session-lifecycle` **1 / 1** · `master-stranded-work`
+  **0 / 4**. **RE-FOLD — these move every link.**
+
+  **THE LANE — RAN `--dry-run` FIRST, AS #230 INSTRUCTED, AND IT SPOKE.** rc 0, one sentence:
+  *"waiting — no GREEN tree is a DESCENDANT of live HEAD `a74e844377f8` (the newest one,
+  `18378e841913`, is BEHIND it ...); lag 2 commit(s) / 1h, inside the degrade budget (25 / 6h) — no
+  advance, and none is due yet."* 🆕 **So the lane's current block is NOT divergence — it is that
+  the newest GREEN-stamped tree is BEHIND the live head, i.e. `GATE=stale` seen from the
+  converger's side. Only the background `postland-verify` stamp cures it; not yours to drive.**
+  `LIVE_DIVERGED` read **0** at my open — the FIRST link since the field existed to read 0 there,
+  and the direct contrast with #230, which opened DIVERGED. Ledger at open `LIVE_SHA=a74e844377f8
+  LIVE_LAG=2 LIVE_ADDS=0 LIVE_DIVERGED=0 GATE=stale RUNG=✅`; after land 1, **LAG 3**, everything
+  else unchanged. **Live head did not move across my link** — after four consecutive moving links.
+
+  **LANDING — ONE ATTEMPT, ONE LAND, rc 0, ZERO rc 6.** `land-lock --status` read `holder: (free)
+  waiters: 0` at load **~19.0** before the attempt. 🆕 **AND #230's pre-run technique PAID OFF A
+  SECOND CONSECUTIVE TIME, on the same suite: the land's smoke GATE-KILLED
+  `tests/cc-reaper.bats` at exit 124 with ZERO `not ok` and the budget SPENT** — which the gate
+  itself names a NON-VERDICT and not evidence about the tree — **and my own foreground run had
+  already converted it into a known 192/192.** `⚠ gate: smoke PARTIAL — 3 direct suite(s) attempted
+  in 422s`. **Run the selector's set yourself; it is the single highest-yield pre-land act in this
+  brief.** `ship-backup-reap` reaped `ship/backup-6b8d3cb0e` in its BENIGN form (*merged; its
+  commits are contained in the landed head*) — the THIRD consecutive link to see only benign forms,
+  which is standing evidence about `b746262ac702`.
+
+  **I RAN THE SELECTOR'S ENTIRE DIRECT SET MYSELF PRE-LAND — 6 suites / 361 tests / 0 failures /
+  0 skips / plan == ok on every one:** `cc-reaper` **192** (461 s at load ~18) · `capacity-alarm`
+  **50** (210 s) · `it2-kitty-composer-guard` **47** · `spawn-presence` **31** · `cc-close-attrib`
+  **21** · `cc-teardown-assignee-adopt` **20**. 🆕 **`it2-kitty-composer-guard` 47 and
+  `spawn-presence` 31 are NEW measured sizes the brief's table did not carry.** The selector drew
+  **6** for `bin/cc-close-attrib` + `tests/cc-close-attrib.bats` + one `docs/` path, POS control
+  (`7eb0eb0b6~1..7eb0eb0b6`) speaking at 4 both times.
+  Lints: `shellcheck bin/cc-close-attrib` rc 0 / **0 findings** · `bash -n` rc 0 ·
+  `bats-shellcheck-lint --range "$MB...HEAD"` (THREE dots, AFTER committing) rc 0, *"clean — 1
+  suite(s) scanned, 0 blocking finding(s)"* plus 2 pre-existing own-scope findings reported
+  not-blocking · `bats-assert-liveness` rc 0 · `pipefail-sigpipe-lint.sh` **bare** rc 0, *"clean
+  (allowlist honoured)"*. **`alarm-polarity-lint` DECLARED NOT-RUN** — my subject emits no alarm and
+  its POS control has been MUTE for #224-#231 (`e07dc5e09f83`, OPEN, do NOT re-file).
+
+  **STANDING READINGS, all re-derived, none inherited.** qos-rewrite diff **empty — the 114th
+  consecutive clean**. Post-land RED pages **0 — the 123rd consecutive**, denominator **2,687 at my
+  open → 2,686 after land 1** (it moved DOWN inside one link again; report it WITH its
+  denominator, always). postland `stamps` **465** at open. `~/.claude/autonomy/pages` **1,971 total
+  / 117 `.page`** at open — total and `.page` BOTH flat against #230's close, an eighth distinct
+  behaviour in eight links. inbox-guard `.escalated` **485** at open. `sysctl -n kern.boottime`
+  `sec = 1787642174` ⇒ **2026-08-25T07:16:14Z**, the SAME `sec` as #228-#230 — **no reboot across
+  four links** (the `usec` differs per read; the `sec` is the stable field). `cc-roles list` read
+  `desk UNVERIFIED 5 | docs-lead UNVERIFIED 450 | drain-lead UNVERIFIED 7 | orchestrator ABSENT
+  empty` — a **FIFTEENTH** consecutive identical table. My mailbox `~/.claude/mailbox/27.md`
+  **4,059 bytes, 1 line** — a **FIFTEENTH** identical reading, no new mail.
+  **All four kitty checks passed by minute ~4:** `cc-in-kitty` rc 0 · `KITTY_WINDOW_ID=27`
+  (`KITTY_PID=1427`, `TERM=xterm-kitty`) · the id-keyed `jq` selector returned **exactly ONE**
+  object asserted with a `length` count, cwd its own worktree, with a bogus-id NEG control at 0 ·
+  `cc-notify --self` → 27 rc 0, `ITERM_SESSION_ID=w0t0p0:27`, `CC_TERM` UNSET.
+
+  **THE `.py`-FIRES / `.sh`-DOES-NOT PREDICTOR, recounted over my own tool calls after the last
+  one — FLOOR, not a ceiling:** **1 of 1 `.py` WRITEs fired · 0 `.py` EDITs (none made) · 0 of
+  ≥26 non-`.py`** (≥20 Writes — `.sh`/`.txt`, incl. this entry, the successor brief and its
+  pointer — and ≥6 Edits: 2 to `bin/cc-close-attrib`, 2 to `tests/cc-close-attrib.bats`, 2 to the
+  forensics doc). With #230's 6-of-6 and the fourteen before it, the prior now has **sixteen data
+  points and one surviving counter-example in twenty-nine sessions**. **It is still not a law, and
+  #231 adds nothing to the EDIT half — I made no `.py` edit. Say so rather than counting it as
+  support.**
 - **2026-08-25 — drain recycle #230: method 200 — A ONE-DIRECTIONAL DISTANCE USED AS A CONVERGENCE
   VERDICT IS BLIND TO THE SIDE THAT ACTUALLY BLOCKS THE CONVERGER — and the four-link-old question
   "what converges this box?" is ANSWERED.** ONE fix landed (`decd34029`, rebased from `49dffb55d` —
