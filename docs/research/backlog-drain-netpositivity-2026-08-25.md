@@ -448,3 +448,149 @@ agent free-text filed **mid-session**, which no hook reaches — only the `CLAUD
 and that is advisory. So mechanical coverage is roughly the close-time third; the rest rides on the
 rule being read and followed. **If the test above fails, look here first** before concluding the
 diagnosis was wrong.
+
+---
+
+## 10. CORRECTION — L1 is a NO-OP as written, and §2's "scheduling problem" is refuted by trunk (2026-08-26)
+
+**Filed as backlog `37b112d8950d` ("run the falsifier sweep across all 457 unvalidated live rows,
+then close-falsified"), dispatched, and refuted before any sweep was run.** The refutation is read
+entirely off `origin/main` @ `867382ef` — no ledger access required, which matters because the
+session that found it had none (see §10c).
+
+### 10a. The claim that fails
+
+§2 says the mitigation is *"built and 91% unapplied"* and concludes: **"This is a scheduling problem,
+not a design problem."** Both halves are wrong, and the second one inverts the remedy.
+
+**The sweep is scheduled and running.** `scripts/autonomy-sweep.sh` (the `StartInterval 300` agent,
+`launchd/com.chrisren.autonomy-sweep.plist`) contains the CURRENCY PASS block, which invokes:
+
+```
+python3 bin/cc-premise sweep --json --record \
+        --limit "${CC_PREMISE_PASS_LIMIT:-150}" \
+        --close-falsified "${CC_PREMISE_CLOSE_CAP:-5}"
+```
+
+gated to one pass per `CC_PREMISE_PASS_EVERY_S` = **6 h**, with `--limit 150` deliberately sized
+*above* the probe-capable population so the shard does not bind. `--record` is unconditional and
+`--close-falsified` is already automated at cap 5. **L1's two prescribed actions are the two flags
+this scheduled call already passes.** Re-running it by hand changes nothing.
+
+§2 cited its own disproof and read it as support: *"the 2026-08-24T07:59Z pass marked 4 rows falsified
+and all 4 closed within 3 minutes."* That **was** the scheduled pass. A mechanism that fired
+yesterday and closed 4 rows is not "unapplied".
+
+### 10b. Why the 457 can never be swept — it is coverage, not cadence
+
+`never validated` and `never swept` are different populations, and the sweep refuses to conflate them
+**on purpose**. The chain, three files, all on trunk:
+
+1. `bin/cc-premise` `probe_capability()` returns one of `stored` · `derived-plan` · `derived-postland`
+   · **`none`** — a row carries a probe only if it has a stored `falsifier`, a `dodRef` to a live plan
+   doc, or is a `post-land RED:` row.
+2. `assess()` sets `out["probed"] = False`, `out["probe_kind"] = "none"` for a `none` row. No arm
+   speaks for it, so nothing executes.
+3. `cmd_sweep()` appends to `all_verdicts` **only** `if probe_out.get("probed")`, and stamps only
+   `all_verdicts`. Its own header states the rule: *"A currency stamp records a MEASUREMENT. No
+   measurement, no stamp."*
+
+So a row with no arm is **structurally unstampable**, on every pass, forever. It is not a row the
+sweep missed; it is a row the sweep has nothing to ask. The arithmetic in §2 already says so and was
+read past: **501 live − 47 carrying a falsifier = 454 ≈ the 457 never-validated.** The headline is
+measuring probe COVERAGE, and `cmd_sweep`'s header names this exact misreading as the reason the
+stamp is withheld — stamping unprobed rows *"would drive the never-validated headline to ZERO while
+~400 of 564 rows had had nothing run against them… not a weaker metric than none, but a WORSE one."*
+
+**The residual work is therefore ~450 acts of authorship — `cc-backlog falsify <id> --probe …`, one
+judgment per row — not one sweep invocation.** That is a different task with a different cost, a
+different owner, and it is *not* the ~1 day L1 was sized at.
+
+### 10c. And bulk probe-authoring is not obviously net-positive either
+
+Before anyone re-files L1 as "author 450 probes", `cmd_falsify`'s own censused header (2026-08-22,
+34 probes over 102 rows, re-run at a known-fixed trunk) is the measurement to read first:
+
+- **Of 12 rows closed by a landed fix, 5 probes (42%) fail to retract** — they are immortal, so the
+  row reads as covered and never closes.
+- **4 of those 5 are the same defect**: a probe that greps for a literal the actual cure never typed.
+  *"The probe then convicts the cure."* `f6b460816387` was cured "by a better design than prescribed"
+  and its probe still fails.
+- §9 already refuted the sibling proposal ("require a falsifier at birth") on replay: it would refuse
+  **98.1%** of filings and block **1,403 rows that closed as real work** — precision 38.9%.
+
+A probe authored in bulk, at distance, over a stale row is the anti-coverage shape `cmd_falsify` warns
+about: the row reads as checked, and the first claim that re-runs it is a false retraction. **Scenario
+B's "−54 to −89, one-time" is not purchasable by running the sweep, and may not be purchasable at the
+stated precision at all.** §7's own standing entry — *"Live staleness is projected, not measured. The
+true live rate is UNKNOWN until L1 runs"* — should now read: **UNKNOWN, and L1 as specified could
+never have measured it.**
+
+### 10d. The venue defect this dispatch exposed — `cc-eligible` has no spelling for the ledger
+
+`37b112d8950d` was dispatched to an **Anthropic cloud VM**, which has no `~/.claude`, hence no
+`~/.claude/autonomy/backlog.jsonl`. The item's entire subject is that file. It is textbook
+`ineligible-box` — *"anything about THIS BOX — local-only state a VM cannot see"* — and `cc-eligible`
+passed it:
+
+```
+classify(<item title>) → ('eligible', 'repo-only work — no local-only state named', [])
+```
+
+The `BOX` list carries `dot-claude` = `~/\.claude\b|\$HOME/\.claude\b`, which catches the **path** but
+not the **store's own vocabulary**: an item can say `cc-backlog`, `backlog rows`, `freshness`,
+`close-falsified` and never spell the path. `bin/cc-eligible`'s header calls this out as the instrument
+working — *"`sweep` prints the ELIGIBLE bucket, titles and all, because that is the bucket where a
+missed spelling does damage… Read it, and ADD the spelling you find"* — and §6a's measured
+repo-mismatch class is the same failure from the other side.
+
+**Deliberately NOT fixed here.** The same header forbids widening on a hunch (*"a word added because
+it 'sounds local' costs the cloud tap a whole class of real work"*) and every precedent entry was
+added only after measuring how many ELIGIBLE-bucket items it would newly refuse — a measurement that
+requires the ledger, i.e. it must be run **on-box**. Candidate spellings for whoever runs it:
+`\bbacklog\.jsonl\b` · `\bcc-backlog\b` · `\bautonomy/\b` · `\bnever validated\b` · `\bclose-falsified\b`.
+Note `\bcc-backlog\b` is the ambiguous one — editing `bin/cc-backlog` is ordinary repo work a VM can
+do — so it belongs in the same knowingly-included class as `hook`, or not at all. **Measure, then add.**
+
+### 10f. Why no cloud session can land — the land gate is red off-box by construction
+
+Found by running the rails rather than by reading: `scripts/ship-land.sh --precheck --trunk main`
+against a **one-markdown-file diff** exits **6 — GATE RED**, on the arm
+`unattended-path-lint --selftest` (11 of 42 assertions fail).
+
+The cause is platform, not trunk. `scripts/unattended-path-lint.sh` is macOS-specific by
+construction — it shells `/usr/libexec/PlistBuddy` to read launchd plists, and its stock-binary model
+is Darwin's (`md5` existing only at `/sbin/md5` is its founding case). On a Linux VM `PlistBuddy`,
+`launchctl` and `pmset` are all absent, so the detector stops discriminating and the selftest
+correctly refuses to certify itself. **The lint carries no `uname`/Darwin guard**, so it has no
+off-box mode — it simply fails.
+
+**And the selftest arm is diff-independent.** The gate's own-scope arms all fail open on a docs-only
+land (*"a docs-only land still yields an EMPTY own-set and blocks on nothing"*, four separate sites in
+`ship-land.sh`), but the selftest runs unconditionally. So the red is not reachable by making the diff
+smaller: **every land attempted from a non-macOS host reds, whatever it contains.**
+
+This is the mechanism behind §6a's measured *"the land arm is dead"* and its 246 stranded commits
+across 106 branches. Those sessions were not failing to do the work — a cloud session can commit and
+push a branch, and can never take the last step, because the gate that guards it cannot execute where
+it is running. **Nothing here says trunk is red on the operator's box**; this was not tested there,
+and the same arm may well be green on Darwin.
+
+Two consequences worth separating: a cloud session's honest terminal state is **`📦` on a pushed
+branch**, never `✅`, and expecting otherwise mislabels correct behaviour as failure; and if cloud
+lands are wanted, the fix is a platform guard on the Darwin-only arms (skip-with-a-reason, never
+skip-silently — a lint that quietly passes off-box is worse than one that reds), which is on-box work
+to measure and land.
+
+### 10e. Disposition
+
+**`37b112d8950d` should close as REFUTED, not done** — the prescribed action is already automated and
+the target population is unreachable by it. Nothing was run and nothing needed to be. The one action
+that follows from this section is 10d's measurement, on-box.
+
+*Method note, stated because §7 is this document's best section: every claim above is a read of
+`origin/main` @ `867382ef` (`scripts/autonomy-sweep.sh`, `bin/cc-premise`, `bin/cc-backlog`,
+`bin/cc-eligible`). **No number here was measured against the live ledger** — the session had no
+access to one, which is the finding in 10d. The 454 ≈ 457 reconciliation uses §2's own published
+counts, not a fresh fold. The clone was shallow (50 commits), so no landing sha is cited for the
+currency pass: only that trunk carries it today.*
