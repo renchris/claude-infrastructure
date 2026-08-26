@@ -790,8 +790,23 @@ LIVE_BUDGET_COMMITS="${WRAP_LIVE_BUDGET_COMMITS:-25}"
 # quantity the sibling's own calibrated value is 6h. The two moved together on purpose: re-pointing
 # the arm while leaving 60 would fire 🚀 at every close on a lane that is legitimately mid-converge
 # (the alarm-polarity bound the header block opens with), and re-calibrating without re-pointing
-# would only make a blind arm blinder. The two auditors of this one question now agree on both arms
-# and both values.
+# would only make a blind arm blinder.
+#
+# THEY AGREE ON THE QUANTITY AND THE NOMINAL VALUE, NOT ON THE RESOLUTION — and the difference is up
+# to an hour, so it is stated rather than implied (the first commit of this fix said "agree on both
+# arms and both values", which reads as "they trip together" and they do not). deploy-live.sh:1452
+# computes `LAG_HOURS=$(( (_now - _head_ts) / 3600 ))` — INTEGER hours — and trips on `-gt 6`, so its
+# effective threshold is 7h. This arm compares SECONDS against 360*60, so its threshold is 6h exactly.
+# There is therefore a one-hour window, age_s in (21600, 25200], where this ledger says PAST and the
+# converger says inside. MEASURED IN IT, both readings at 2026-08-26T06:22:30Z with the live commit
+# 23,753 s old: this ledger rendered "🚀 … past its converge budget" while deploy-live --dry-run
+# printed "lag 11 commit(s) / 6h, inside the degrade budget (25 / 6h)".
+#
+# THAT DIRECTION IS THE CORRECT ONE and it is why the resolution is not matched. These two are not
+# duplicate auditors: this one REPORTS to a closing session that the machine is not running its work
+# yet, and that one DECIDES when to force a degraded deploy. A reporter that goes loud slightly
+# before the actuator acts costs a true sentence an hour early; a reporter that stayed silent while
+# the actuator degraded would be the bug this whole fix is about.
 LIVE_BUDGET_MIN="${WRAP_LIVE_BUDGET_MIN:-360}"
 # A budget that is not a number is a budget nobody can reason about — and `[ 3 -gt "" ]` is a hard
 # error thrown from inside a Stop hook. Fall back to the default (deploy-live.sh:110-111 does the
