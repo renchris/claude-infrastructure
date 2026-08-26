@@ -112,6 +112,12 @@ own errors:
 
 ## 3 · The actionable finding, and it has nothing to do with the vendor
 
+> 🚨 **READ [§3a](#3a--the-prescription-above-is-refuted-by-this-sections-own-evidence--and-the-code-site-is-discharged-2026-08-26) BEFORE ACTING ON THIS SECTION.** The *finding* below stands and has
+> landed (`e89918f2`). The **prescription** in its closing paragraph — "derive the number … from a
+> measured failure point" — is **REFUTED by the evidence this section itself quotes**, and the
+> blocker it was parked behind answers a different question. Two of its citations are stale. Backlog
+> `e981656df348` closed on §3a; do not re-mint it from this section.
+
 **The constant that stops us was never derived from anything.**
 
 `CC_HW_DEFAULT_MAX_LOAD_PER_CORE = 2.0` (`scripts/lib/capacity-admit.sh:134`) is the number that
@@ -143,6 +149,83 @@ The honest actionable is therefore **to derive the number, not to move it**: re-
 measurement (load1 delta across N all-active sessions) and set the ceiling from a measured failure
 point. That is a two-arm experiment, not a config edit, and it is the only thing that can legitimately
 move a capacity constant.
+
+### 3a · The prescription above is refuted by this section's own evidence — and the code site is discharged (2026-08-26)
+
+**§3 splits in half, and only the first half survives.** Its *factual* finding is correct and has
+landed. Its *prescription* — the paragraph immediately above — cannot be run to completion, and the
+blocker it was parked behind answers a different question. Backlog `e981656df348` was minted from
+that prescription and has cycled `open → claimed → blocked → open` at least five times
+(`docs/plans/BACKLOG_DRAIN_24_7.md:440, 1427, 1716, 1798, 2747`). This subsection is why it closes
+rather than cycling a sixth.
+
+**The factual half stands, and is already discharged in code.** Verified verbatim on trunk:
+§9.5 (`docs/plans/MACHINE_CAPACITY_V2.md:741-763`) contains no derivation of 2.0/core — it records
+the gate ADMITTING at 1.55/core and REFUSING at 4.0/core, a demonstration that a threshold
+thresholds — and its own closing paragraph (`:815-818`) then states that *"the gate keys on a
+quantity that is **not** session-attributable … That criticism of the instrument stands."* The cited
+section undercuts the term it was cited as justifying. Landed by `docs(capacity-admit): the ceiling
+cites a section that has no derivation, and the term it parameterises already defaults off`
+(`e89918f2`, confirmed ancestor of `origin/main`): the stale provenance string is struck, and
+`scripts/lib/capacity-admit.sh:134-160` now carries the refutation inline, above the literal.
+
+⚠️ **Two citations in §3 above are now stale — do not re-quote them as written.**
+
+| §3 as written | corrected |
+|---|---|
+| `scripts/lib/capacity-admit.sh:134` | the literal sits at **`:161`**; `:134-160` is the refutation block that `e89918f2` inserted above it |
+| "§9.5 … shows only that the gate admits at 1.55 and **refuses at 2.92**" | §9.5's summarising sentence reads **4.0/core**. `2.92` is the low end of the *survived* band quoted two paragraphs later in that same section, not the refusal point. The conclusion is unaffected — neither number is a derivation — but the quote is wrong |
+
+**The prescription is refuted by the evidence §3 quotes three paragraphs above it.** §3 block-quotes
+*"THE SURVIVED POPULATION CONTAINS THE FATAL VALUE"*, correctly calls the axis one that *"provably
+cannot separate fatal from survived"* — and then prescribes setting the ceiling *"from a measured
+failure point"* **on that same axis**. There is no such point. Re-verified verbatim on trunk
+(`scripts/capacity-alarm.sh:139-157`): fatal 2026-08-05 at **2.53/core**, against **13 consecutive
+survived samples spanning 2.92–5.98/core — every one ABOVE the fatal reading** — plus 42 h at
+2.5/core with no panic. That file's own words: *"no setting of these two numbers can make it"*
+separate fatal from survived, and 5.98/core is pinned in its selftest as a known false ALARM, so the
+point argues with an executable control rather than with a paragraph. The two-arm experiment would
+terminate and return a number; the number would be uninterpretable, because the class boundary it is
+meant to locate does not exist on this axis.
+
+**The named blocker cannot discharge the row either.** The item was parked behind *marginal Δload per
+active session*. That coefficient is a **capacity-in-sessions** quantity — it translates a ceiling
+into a session count. It cannot locate a failure boundary, so no value of it, however well measured,
+bears on the row above. §5 of this same document records the rest: adjudicated 2026-08-19
+(`marginal-load-per-active-session-2026-08-19.md`, backlog `193ae8ddce72`) — all four published
+values arithmetically disqualified, and the instrument behind them (`load1` regressed on session
+count) *unidentified* on this box. **The row was blocked on a measurement that is both unavailable
+and irrelevant to it**, which is the mechanism that kept re-dispatching it.
+
+🚨 **And it is not a case to raise the number.** `fix(fire-gate): load1 does not move with the spawn
+it was gating` (`f944d6e3`, 2026-08-20, confirmed ancestor of `origin/main`) established the stronger
+fact: an additional RESIDENT session moves the 1-min runnable count by **~0**. The **input** is
+wrong, not the number — so no literal repairs the term. Accordingly the load term **defaults off** at
+the spawn chokepoint (`scripts/handoff-fire.sh:5074`, `"${CC_FIRE_LOAD_TERM:-off}"`) and has been off
+on the Agent-tool path since Wave D; `segments` and `active` carry its intent because they *do* move
+with the spawn. The literal stays at 2.0 deliberately — C18: a fix moves a TERM SWITCH, never a
+ceiling. It still binds only where `cc_capacity_admit` leaves the term on: the two unattended
+recovery callers, `scripts/boot-resume-launch.sh:266` and
+`scripts/limit-recover/lr-fire-resume.sh:318`, both released after `CC_ADMIT_BUDGET` consecutive
+refusals — which prices the residual imprecision at a *delayed* resume, never a lost one.
+
+**What §3 should be read as prescribing instead: nothing on this axis.** The disposition that
+survives is the one already shipped — the term is off where the spawn decision is made, the literal
+is fenced to two budget-released callers, and the axis is carried by an ALARM that refuses nothing
+(`capacity-alarm.sh` rung 7, uncalibrated and labelled so). **Re-opening this row requires a NEW
+axis** — a quantity that separates the 2026-08-05 fatal from the 13 survived samples — not a better
+measurement of the old one. The only candidate on record is the coalition's **total anon footprint**
+(139.50 GiB fatal vs a 28.18 GiB survived ceiling across every boot, 4.95× apart with an empty
+interval, `scripts/capacity-alarm.sh:246-249`), and it is n=1 fatal: an **ordering**, not yet a
+threshold, and it needs a per-coalition footprint instrument that does not exist.
+
+**The generalisable lesson, and it is this document's to own.** §3 quoted its own disqualifying
+evidence and then prescribed straight past it, in nine lines. A section that does that mints a
+backlog row *whose completion criterion is unsatisfiable* — and such a row cannot fail loudly, it can
+only cycle, because every worker who picks it up re-derives the same impossibility and puts it back.
+Five cycles is what that costs. **When a section establishes that an axis cannot discriminate, the
+actionable it owes is a different axis or an explicit `none` — never a better measurement of the axis
+it just disqualified.**
 
 ## 4 · If 2.1.234 is adopted, adopt it on other grounds — and set one env var first
 
