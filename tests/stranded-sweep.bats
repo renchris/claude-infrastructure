@@ -285,3 +285,59 @@ seed_anchor_strands() {
   echo "$output" | grep -q "$sha"
   echo "$output" | grep -q "fileZ.txt"
 }
+
+# ── THE FAIL-OPEN PIPELINE IN mine_match (drain recycle #242) ─────────────────────────────────────
+# The sibling of scripts/worktree-gc.sh's is_live_cwd, and the second of the two members of #241's
+# six-site class that its derived class guard cannot see (that guard's population is
+# scripts/*-lint.sh × {in_own, in_allowlist}; this is neither).
+#
+# THE SHAPE. mine_match's last arm is `git show -s --format='%(trailers:…)' | grep -qxF "${MINE}"`,
+# the FUNCTION-FINAL statement, so its rc is what the `! mine_match "${sha}" && return 0` at the
+# candidate verdict reads. Under the `set -uo pipefail` this script declares load-bearing, a MATCH
+# makes grep exit early, git show dies of SIGPIPE, and the caller is handed 141 — which reads as NOT
+# MINE. The direction matters here: --mine is the machine-decidable arm (exit 1 = YOUR content was
+# dropped), so an inverted answer SILENTLY DROPS the report of a genuinely stranded own commit,
+# which is the one thing this mode exists to surface.
+#
+# LATENT, and by a wider margin than its sibling: this feed is one commit's own trailer block, and
+# the header above records that NOTHING writes Session-Id/Land-Session (0 of the last 500 trunk
+# commits carry one). Today the producer emits approximately nothing. It is drained because a commit
+# message is not a bounded quantity and because the whole class is being closed out, not because a
+# real commit is near the floor.
+#
+# THE REGIME IS MEASURED ON THIS SHAPE, NOT BORROWED (2026-08-26, load ~14-16, 20 trials per size,
+# needle on line 1, second column counting the needle as the subject matches it):
+#     external producer  cat | grep -q   safe to 55,722 B · 19/20 inverted at 65,580 · ALWAYS 87,151+
+#     builtin producer   printf | grep -q (#241)  safe 37,121 · 1/20 at 55,721 · ALWAYS 87,122+
+# The two bands coincide. An external producer does NOT invert earlier than a builtin one; what
+# lowered the floor in #241's other row was the third STAGE, not the producer.
+
+@test "mine_match still answers MINE on a trailer block past the pipe-buffer regime" {
+  # THE BEHAVIOURAL ARM: the MECHANISM, not a spelling, so it survives a rewording of the fix. The
+  # function is EXTRACTED from the shipped script and sourced, never re-implemented, so this replays
+  # the real artifact (memory: control-must-replay-the-real-artifact). MINE_ANCHORS is empty on
+  # purpose — that is what routes the call past the anchor loop and onto the trailer pipeline this
+  # arm is about.
+  local f="$BATS_TEST_TMPDIR/mine_match.sh" msg="$BATS_TEST_TMPDIR/bigtrailers.txt" sha bytes
+  /usr/bin/sed -n '/^mine_match()/,/^}/p' "$SWEEP" > "$f"
+  [ -s "$f" ] || { echo "mine_match not found in stranded-sweep.sh — the extractor has stopped matching" >&2; return 1; }
+  { printf 'a commit whose trailer block exceeds the pipe buffer\n\n'
+    printf 'Session-Id: zz-the-needle-session\n'
+    awk 'BEGIN{ for (i = 1; i <= 2600; i++) printf "Session-Id: filler-%06d-aaaaaaaaaaaaaaaaaaaaaaaaaaaa\n", i }'
+  } > "$msg"
+  echo t > trailers.txt
+  git add trailers.txt
+  git commit -q -F "$msg"
+  sha="$(git rev-parse HEAD)"
+  bytes="$(git show -s --format='%(trailers:key=Session-Id,valueonly,separator=%x0A)' "$sha" | wc -c | tr -d ' ')"
+  [ "$bytes" -ge 87151 ] || { echo "the trailer block is $bytes B — under the inverting floor, so this cannot discriminate" >&2; return 1; }
+
+  # POSITIVE: the session named on line 1 of the block IS ours. A re-introduced -q answers 141 here.
+  run bash -c "set -uo pipefail; cd '$WORK'; . '$f'; MINE='zz-the-needle-session'; MINE_ANCHORS=''; mine_match '$sha'; echo rc=\$?"
+  [ "$output" = "rc=0" ] || { echo "our own session's trailer read as NOT MINE: $output" >&2; return 1; }
+
+  # NEGATIVE: a session absent from the block must still answer non-zero, so this cannot pass by
+  # always returning 0.
+  run bash -c "set -uo pipefail; cd '$WORK'; . '$f'; MINE='absent-from-this-commit'; MINE_ANCHORS=''; mine_match '$sha'; echo rc=\$?"
+  [ "$output" = "rc=1" ] || { echo "a peer session's sha did not answer 1: $output" >&2; return 1; }
+}

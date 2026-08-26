@@ -1747,3 +1747,57 @@ run_gc_lsof() {
   [ -e "$lk" ] || false
   [ "$(maint_field maint_lock)" = young ]
 }
+
+# ── THE FAIL-OPEN PIPELINE IN is_live_cwd (drain recycle #242) ────────────────────────────────────
+# The last two members of the class recycle #241 drained out of six own-scope lints, and the two its
+# derived class guard cannot see: that guard's population is scripts/*-lint.sh × {in_own,
+# in_allowlist} (tests/gate-ownscope-leak.bats), and this is neither a lint nor either name. Absent
+# from a detector's population is not exempt — it is invisible.
+#
+# THE SHAPE. is_live_cwd is a one-line function whose whole body is `printf … | grep -qxF "$1"`. It
+# is the FUNCTION-FINAL statement, so its rc is exactly what scripts/worktree-gc.sh's occupancy
+# ladder reads at its `elif is_live_cwd "$cpath"` rung. Under the `set -uo pipefail` this script
+# sets, `grep -q` exits the instant it matches, printf takes SIGPIPE, and the caller is handed a
+# non-zero that means NOT LIVE. A MATCH would read as "nobody is here" — in the janitor that REMOVES
+# worktrees. scripts/deploy-link-parity.sh:264 wrote this scar out once already.
+#
+# LATENT, NOT LIVE, AND THE DIFFERENCE IS THE HONEST PART. LIVE_CWDS is the registered-session cwd
+# list: measured 545 bytes on this box 2026-08-26T18:14Z, some 100x under the floor below. Four
+# further keep-arms sit beneath this rung (registry_live, session_occupancy_keep, recently_active,
+# lsof), so an inverted answer loses THIS arm rather than collecting an occupied worktree outright.
+# It is drained because that feed is an operational quantity that only grows and nothing announces
+# the crossing — not because it is failing today.
+#
+# THE REGIME IS MEASURED, NOT INHERITED (2026-08-26, load ~14-16, 20 trials per size, needle on line
+# 1, with a second column counting the needle in the set the subject actually sees):
+#     builtin producer   printf | grep -q    safe 37,121 · 1/20 inverted 55,721 · ALWAYS 87,122+
+#     external producer  cat    | grep -q    safe 55,722 · 19/20 inverted 65,580 · ALWAYS 87,151+
+# THE TWO AGREE, and that is a correction to how the first table reads. #241 measured the builtin
+# two-stage and an external THREE-stage form and landed both; read together they suggest the
+# producer's externality is what moves the floor. Re-run at #241's own grid points it does not: an
+# external producer is still safe at 55,722 where the builtin was already 1/20 racy. What moved the
+# floor in the three-stage row was the extra STAGE — an intermediate `sed` that writes line by line
+# and can never hand grep one buffer-sized write. Cite the STAGE COUNT, not the producer.
+
+@test "is_live_cwd still answers LIVE on a cwd list past the pipe-buffer regime" {
+  # THE BEHAVIOURAL ARM. It pins the MECHANISM rather than a spelling, so it survives any rewording
+  # of the fix (memory: control-calibrated-to-implementation-decays — #240 lost a run to a stub keyed
+  # on the exact flag string its own correct fix removed). The function is EXTRACTED from the shipped
+  # script and sourced, never re-implemented (memory: control-must-replay-the-real-artifact).
+  # 120,000 bytes is past the always-inverted floor of BOTH producer shapes above, so a re-introduced
+  # `grep -q` fails this on every run rather than one run in twenty.
+  local f="$BATS_TEST_TMPDIR/is_live_cwd.sh" s="$BATS_TEST_TMPDIR/cwds.txt"
+  /usr/bin/sed -n '/^is_live_cwd()/p' "$REPO/scripts/worktree-gc.sh" > "$f"
+  [ -s "$f" ] || { echo "is_live_cwd not found in worktree-gc.sh — the extractor has stopped matching" >&2; return 1; }
+  awk 'BEGIN{ printf "/Users/x/Development/.worktrees/zz-needle\n";
+              for (i = 1; i <= 2600; i++) printf "/Users/x/Development/.worktrees/filler-%06d-aaaaaaaaaaaaaaaaaa\n", i }' > "$s"
+  [ "$(wc -c < "$s")" -ge 87151 ] || { echo "fixture is under the inverting floor — it cannot discriminate" >&2; return 1; }
+
+  # POSITIVE: a registered cwd reads LIVE (rc 0). A re-introduced -q answers 1 or 141 here.
+  run bash -c "set -uo pipefail; . '$f'; LIVE_CWDS=\"\$(cat '$s')\"; is_live_cwd '/Users/x/Development/.worktrees/zz-needle'; echo rc=\$?"
+  [ "$output" = "rc=0" ] || { echo "a REGISTERED cwd read as NOT-LIVE: $output" >&2; return 1; }
+
+  # NEGATIVE: an unregistered cwd must still answer non-zero, so this cannot pass by always saying 0.
+  run bash -c "set -uo pipefail; . '$f'; LIVE_CWDS=\"\$(cat '$s')\"; is_live_cwd '/Users/x/Development/.worktrees/absent'; echo rc=\$?"
+  [ "$output" = "rc=1" ] || { echo "an UNREGISTERED cwd did not answer 1: $output" >&2; return 1; }
+}
