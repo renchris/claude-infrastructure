@@ -82,12 +82,45 @@
 # assuming one, so the coarser unit costs accuracy in the ratio, never validity in the verdict.
 # `analyze` REFUSES a file whose rows mix units.
 #
+# ══ THE RUN IS A LOOP WITH A STOP RULE, SO THE LOOP IS THE TOOL'S JOB ═══════════════════════════
+# The protocol this script exists to serve (marginal-load-per-active-session-2026-08-19.md §6) is
+# not two commands, it is a loop: sample, analyze, EXTEND the window, and stop on one of exactly
+# two outcomes — the controls pass, or the SAME control keeps failing as the window grows, which is
+# itself the finding (the process-unit census is not the instrument; §7's thread unit is the next
+# increment). Left to a human that loop is an hour of babysitting plus a judgment call already
+# written down; `run` executes it. Two properties make it honest rather than merely convenient:
+#
+#   · A REFUSAL ONLY COUNTS TOWARD THE STREAK IF THE WINDOW ACTUALLY GREW. Re-analyzing the same
+#     rows is the n_eff defect wearing a loop: reading one window three times is one observation of
+#     it, not three refusals. A chunk that adds no rows is reported and does not advance the streak.
+#   · AND ONLY IF THE REFUSAL WAS A REFUTATION. `analyze` classifies its own refusal as REFUTING or
+#     UNDECIDED, because most of these terms fail for reasons more evidence fixes (a window shorter
+#     than load1's time constant, a box too quiet to have a load range, an ACTIVE count that never
+#     moved). Extending is the remedy for those, so they RESET the streak. Without this a quiet
+#     night accumulates into "this census cannot measure this box" — a manufactured finding, the
+#     same class of error as the four values this file exists to refuse. Caught by the first live
+#     smoke run of this loop, which reported exactly that from two 12-second windows whose own text
+#     read "uninformative, not refuting".
+#   · IT NEVER MANUFACTURES A VERDICT. `run` only ever relays what `analyze` said; the only thing
+#     it adds is when to stop asking. On anything but a PASS the string `VERDICT: MARGINAL` is as
+#     absent from its output as it is from `analyze`'s.
+#
+# A collector that has stopped producing rows is therefore not a slow window but a broken
+# instrument, and `run` says so and stops rather than extending a file that never grows.
+#
 # Usage:
 #   capacity-marginal.sh sample  [--window-s N] [--interval-s N] [--out FILE]
 #   capacity-marginal.sh analyze [--in FILE] [--json]
+#   capacity-marginal.sh run     [--out FILE] [--chunk-s N] [--interval-s N] [--max-s N]
+#                                [--repeat-refusals N] [--notify]
 #
-# Exit: 0 coefficient emitted (all controls passed) · 1 NO-ATTRIBUTION (a control failed) ·
-#       2 usage error · 3 NO-DATA (nothing sampled / file unreadable).
+# Exit:
+#       0 coefficient emitted — all three controls passed
+#       1 NO-ATTRIBUTION — a control failed (for `run`: still undecided when --max-s ran out)
+#       2 usage error
+#       3 NO-DATA — nothing sampled / file unreadable
+#       4 STABLE REFUSAL — `run` only: the SAME control failed across --repeat-refusals successive
+#         GROWN windows. A finding, not a timeout: this census cannot apportion this box.
 #
 # Seams (all read with an explicit default; none may be empty):
 #   CC_MARG_TAU(60)                 load1 time constant, seconds — the independence spacing
@@ -99,6 +132,9 @@
 #   CC_MARG_MIN_ACTIVE_LEVELS(3)    distinct active levels required by C3
 #   CC_MARG_EXEC_RE                 regex matching a session's executable path (comm), default below
 #   CC_MARG_OUT                     default sample output path
+#   CC_MARG_RUN_CHUNK_S(3600)       `run`: seconds sampled between successive analyses
+#   CC_MARG_RUN_MAX_S(14400)        `run`: total wall clock after which an undecided window gives up
+#   CC_MARG_RUN_REPEAT(3)           `run`: identical refusals over GROWN windows that make a finding
 set -uo pipefail
 
 CC_MARG_TAU="${CC_MARG_TAU:-60}"
@@ -112,6 +148,9 @@ CC_MARG_MIN_ACTIVE_LEVELS="${CC_MARG_MIN_ACTIVE_LEVELS:-3}"
 # `.claude-NNN/node_modules` form is the versioned launcher every interactive session runs.
 CC_MARG_EXEC_RE="${CC_MARG_EXEC_RE:-\\.claude-[0-9]+/node_modules/|claude\\.exe$}"
 CC_MARG_OUT="${CC_MARG_OUT:-${TMPDIR:-/tmp}/capacity-marginal.tsv}"
+CC_MARG_RUN_CHUNK_S="${CC_MARG_RUN_CHUNK_S:-3600}"
+CC_MARG_RUN_MAX_S="${CC_MARG_RUN_MAX_S:-14400}"
+CC_MARG_RUN_REPEAT="${CC_MARG_RUN_REPEAT:-3}"
 
 SCHEMA='#ts	load1	unit	total_run	claude_run	active	resident'
 
@@ -236,6 +275,162 @@ cmd_sample() {
   return 0
 }
 
+# ── the run loop ────────────────────────────────────────────────────────────────────────────────
+# Usable rows in the sample file, i.e. what `analyze` will actually see. Used ONLY to answer "did
+# this window grow?", which is what separates three refusals from one refusal read three times.
+run_rows() { # <file>
+  [ -r "$1" ] || { printf 0; return 0; }
+  awk -F'\t' '/^#/ { next } NF >= 7 { n++ } END { printf "%d", n + 0 }' "$1"
+}
+
+# One chunk of evidence, appended to the sample file.
+#
+# CC_MARG_RUN_APPEND names a file standing in for the live sample, its blocks separated by lines
+# containing only `--`; iteration k appends block k, and when the blocks run out it appends nothing
+# (which is how a window that stops growing gets tested). It exists for the same reason
+# CC_MARG_PS_OVERRIDE does: the stop rule of a loop whose real windows are hours long would
+# otherwise be a rule nobody has ever watched execute, and this one decides whether a refusal is a
+# timeout or a finding.
+run_collect() { # <iter> <chunk_s> <interval_s> <out>
+  if [ -n "${CC_MARG_RUN_APPEND:-}" ]; then
+    [ -r "$CC_MARG_RUN_APPEND" ] || return 3
+    awk -v want="$1" 'BEGIN { blk = 1 } /^--$/ { blk++; next } blk == want { print }' \
+      "$CC_MARG_RUN_APPEND" >> "$4"
+    return 0
+  fi
+  cmd_sample --window-s "$2" --interval-s "$3" --out "$4" --quiet
+}
+
+# The REFUTING signature of an analysis, empty when the refusal was merely undecided. `analyze`
+# classifies its own refusal — a term that failed because the window was short or the box quiet is
+# not evidence about the census — so this reads that classification rather than re-deriving it from
+# the prose. "C1" and "C1+C2" are different findings; "C1" twice over two grown windows is one
+# finding seen twice, which is what a streak is counting.
+run_sig() { awk '/^ *REFUSAL: REFUTING/ { s = $3; gsub(/[()]/, "", s); print s; exit }'; }
+
+run_notify() { # <line>
+  [ -n "${RUN_NOTIFY:-}" ] || return 0
+  command -v cc-notify >/dev/null 2>&1 || return 0
+  cc-notify --role desk "$1" >/dev/null 2>&1 || true
+}
+
+cmd_run() {
+  local out="$CC_MARG_OUT" chunk="$CC_MARG_RUN_CHUNK_S" interval="$CC_MARG_TAU"
+  local max="$CC_MARG_RUN_MAX_S" repeat="$CC_MARG_RUN_REPEAT"
+  RUN_NOTIFY=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --out)              out="${2:-}"; shift 2 ;;
+      --chunk-s)          chunk="${2:-}"; shift 2 ;;
+      --interval-s)       interval="${2:-}"; shift 2 ;;
+      --max-s)            max="${2:-}"; shift 2 ;;
+      --repeat-refusals)  repeat="${2:-}"; shift 2 ;;
+      --notify)           RUN_NOTIFY=1; shift ;;
+      *) die "run: unknown argument '$1'" ;;
+    esac
+  done
+  case "$chunk$interval$max$repeat" in *[!0-9]*) die "run: --chunk-s/--interval-s/--max-s/--repeat-refusals must be integers" ;; esac
+  [ "$repeat" -ge 2 ] || die "run: --repeat-refusals must be >= 2 (one refusal is a window, not a pattern)"
+  [ -n "$out" ] || die "run: --out must name a file"
+
+  # An existing file is EXTENDED, never truncated: an interrupted run has already banked real
+  # minutes of a window that only gets decidable by growing.
+  [ -s "$out" ] || printf '%s\n' "$SCHEMA" > "$out" || die "run: cannot write '$out'"
+
+  local verdict_file="$out.verdict"
+  local start now iter=0 rc analysis sig last_sig="" streak=0 nodata=0 stall=0 rows_before rows_after
+  start="$(date +%s)"
+  printf 'capacity-marginal: run -> %s  (chunk %ss, interval %ss, give up after %ss, %s identical refusals = a finding)\n' \
+    "$out" "$chunk" "$interval" "$max" "$repeat" >&2
+
+  while :; do
+    iter=$(( iter + 1 ))
+    rows_before="$(run_rows "$out")"
+    run_collect "$iter" "$chunk" "$interval" "$out"
+    rows_after="$(run_rows "$out")"
+
+    analysis="$(cmd_analyze --in "$out" 2>&1)"; rc=$?
+    now="$(date +%s)"
+    printf '\n── window %d  (%d rows, +%d this chunk, %ds elapsed) ──\n' \
+      "$iter" "$rows_after" "$(( rows_after - rows_before ))" "$(( now - start ))"
+    printf '%s\n' "$analysis"
+
+    case "$rc" in
+      0)
+        printf '%s\n' "$analysis" > "$verdict_file"
+        printf '\nRUN: PASS after %d window(s), %ds. Verdict saved to %s\n' "$iter" "$(( now - start ))" "$verdict_file"
+        printf 'NEXT: quote the coefficient WITH its s.e. and this window, then re-grep the live tree\n'
+        printf '      (grep -rn --exclude-dir=docs --exclude-dir=.git "2\\.5-5\\|0\\.172\\|0\\.566" .) for the\n'
+        printf '      refuted-figure sites and update them from that grep, not from any list of paths.\n'
+        printf '      Then: cc-backlog done 193ae8ddce72 --evidence "<landed sha>"\n'
+        run_notify "capacity-marginal: PASS — $(printf '%s\n' "$analysis" | grep '^VERDICT:' | head -1)"
+        return 0
+        ;;
+      2) return 2 ;;
+      3)
+        streak=0; last_sig=""
+        nodata=$(( nodata + 1 ))
+        if [ "$nodata" -ge "$repeat" ]; then
+          printf '\nRUN: NO-DATA %d times running — the box is not sampleable (load1 or ps unreadable), which is\n' "$nodata"
+          printf '     a broken instrument, not a quiet box. Nothing is quotable.\n'
+          run_notify "capacity-marginal: NO-DATA x$nodata — the sampler cannot read this box"
+          return 3
+        fi
+        ;;
+      *)
+        nodata=0
+        sig="$(printf '%s\n' "$analysis" | run_sig)"
+        if [ "$rows_after" -le "$rows_before" ]; then
+          # The same rows re-read. Report it and DO NOT advance the streak — this is the n_eff
+          # lesson at loop scale, and it is also what stops a stalled sampler from manufacturing a
+          # finding out of one window.
+          stall=$(( stall + 1 ))
+          printf 'RUN: window did NOT grow this chunk — refusal not counted (same rows re-read, not a second observation)\n'
+          if [ "$stall" -ge "$repeat" ]; then
+            printf '\nRUN: the sampler stopped producing rows (%d chunks running). Extending a window that\n' "$stall"
+            printf '     does not grow buys nothing; fix the collector before re-running. Nothing is quotable.\n'
+            run_notify "capacity-marginal: sampler produced no rows for $stall chunks — collector is broken"
+            return 3
+          fi
+        elif [ -z "$sig" ]; then
+          # UNDECIDED, not refuting: the window is too short or the box too quiet for this term to
+          # mean anything yet. Extending is exactly the remedy, so it resets the streak rather than
+          # advancing it — a quiet night must never accumulate into "this census cannot measure
+          # this box".
+          stall=0; streak=0; last_sig=""
+          printf 'RUN: refusal is UNDECIDED, not a refutation — extending the window\n'
+        elif [ -n "$last_sig" ] && [ "$sig" = "$last_sig" ]; then
+          stall=0; streak=$(( streak + 1 ))
+        else
+          stall=0; streak=1
+        fi
+        [ "$rows_after" -le "$rows_before" ] || last_sig="$sig"
+        if [ "$streak" -ge "$repeat" ]; then
+          printf '\nRUN: STABLE REFUSAL — %s failed across %d successive GROWN windows (%d rows, %ds).\n' \
+            "$sig" "$streak" "$rows_after" "$(( now - start ))"
+          printf '     That is the finding, not a timeout: the process-unit census cannot apportion this box.\n'
+          printf '     NEXT: §7 of docs/research/marginal-load-per-active-session-2026-08-19.md — capture a\n'
+          printf '     ps -axM fixture and ship the thread-unit census; no coefficient is quotable meanwhile.\n'
+          printf '%s\n' "$analysis" > "$verdict_file"
+          run_notify "capacity-marginal: STABLE REFUSAL ($sig) over $streak grown windows — thread-unit census is the next increment"
+          return 4
+        fi
+        ;;
+    esac
+
+    now="$(date +%s)"
+    if [ "$(( now - start ))" -ge "$max" ]; then
+      printf '\nRUN: UNDECIDED after %ds (%d window(s), %d rows). Refuting term(s) so far: %s\n' \
+        "$(( now - start ))" "$iter" "$rows_after" "${last_sig:-none — every refusal was undecided}"
+      printf '     Not a finding and not a number — the window ran out before either. Re-run the same\n'
+      printf '     command with --out %s to keep extending it; the file is appended to, never reset.\n' "$out"
+      printf '%s\n' "$analysis" > "$verdict_file"
+      run_notify "capacity-marginal: undecided after ${max}s (last refusal ${last_sig:-none}) — re-run to extend"
+      return 1
+    fi
+  done
+}
+
 cmd_analyze() {
   local in="$CC_MARG_OUT" json=""
   while [ $# -gt 0 ]; do
@@ -287,7 +482,7 @@ cmd_analyze() {
       for (i = 2; i <= n; i++) { k = idx[i]; j = i - 1
         while (j >= 1 && L[idx[j]] > L[k]) { idx[j+1] = idx[j]; j-- }
         idx[j+1] = k }
-      c1_ok = 1; rmin = 0; rmax = 0; tert_desc = ""
+      c1_ok = 1; c1_dec = 0; c2_dec = 0; rmin = 0; rmax = 0; tert_desc = ""
       for (g = 0; g < 3; g++) {
         lo = int(g * n / 3) + 1; hi = int((g + 1) * n / 3)
         sl = 0; sc = 0; gn = 0
@@ -302,7 +497,7 @@ cmd_analyze() {
       if (ratio_swing == 0 || ratio_swing > ratiotol) c1_ok = 0
       # A window that never moved cannot have reproduced anything — C1 is vacuous there, so it FAILS.
       if (lspread < minspread) { c1_ok = 0; c1_why = sprintf("load span %.2fx < %.2fx required", lspread, minspread) }
-      else if (!c1_ok) c1_why = sprintf("tertile ratios %s swing %.2fx > %.2fx", tert_desc, ratio_swing, ratiotol)
+      else if (!c1_ok) { c1_dec = 1; c1_why = sprintf("tertile ratios %s swing %.2fx > %.2fx", tert_desc, ratio_swing, ratiotol) }
       else c1_why = sprintf("tertile ratios %s swing %.2fx", tert_desc, ratio_swing)
 
       # ── C2 DYNAMICS: corr(load1, census) over independent observations ───────────────────────
@@ -314,8 +509,8 @@ cmd_analyze() {
       rr = (sxx > 0 && syy > 0) ? sxy / sqrt(sxx * syy) : 0
       c2_ok = 1
       if (neff < minn) { c2_ok = 0; c2_why = sprintf("corr %.3f but n_eff %.1f < %d independent observations (span %ds / tau %ds) — uninformative, not refuting", rr, neff, minn, span, tau) }
-      else if (syy <= 0) { c2_ok = 0; c2_why = sprintf("census is CONSTANT at %.2f across a %.2fx load range — the instrument, not the box", my, lspread) }
-      else if (rr < minr) { c2_ok = 0; c2_why = sprintf("corr(load1, census) = %.3f < %.2f over n_eff %.1f — the census does not track the load it apportions", rr, minr, neff) }
+      else if (syy <= 0) { c2_ok = 0; c2_dec = 1; c2_why = sprintf("census is CONSTANT at %.2f across a %.2fx load range — the instrument, not the box", my, lspread) }
+      else if (rr < minr) { c2_ok = 0; c2_dec = 1; c2_why = sprintf("corr(load1, census) = %.3f < %.2f over n_eff %.1f — the census does not track the load it apportions", rr, minr, neff) }
       else c2_why = sprintf("corr(load1, census) = %.3f over n_eff %.1f", rr, neff)
 
       # ── C3 IDENTIFIABILITY: did the active count move? ───────────────────────────────────────
@@ -356,12 +551,39 @@ cmd_analyze() {
       }
 
       pass = (c1_ok && c2_ok && c3_ok)
+
+      # ── IS THIS REFUSAL A FINDING, OR JUST AN UNDECIDED WINDOW? ──────────────────────────────
+      # Most of these terms fail for reasons MORE EVIDENCE FIXES: a window shorter than the load1
+      # time constant (C2 n_eff), a box too quiet to have a load range (C1 spread), an ACTIVE count
+      # that never moved (C3, which §6 answers by running the window across a dispatch wave rather
+      # than during a lull). Only two arms are REFUTATIONS — the C1 tertile-ratio drift and the C2
+      # correlation/constant arms — because both say the census does not reproduce the load it
+      # apportions, and another hour of the same census cannot make that untrue. C3 is NEVER a
+      # refutation: an unidentified regressor is a statement about the window, never about the
+      # instrument. The distinction is emitted rather than left to a reader (or a caller) to infer
+      # from the prose, so that a quiet night can never be reported as "this census cannot measure
+      # this box" — which is the same class of error as the four values this whole file refuses.
+      # C1 needs the SAME independence gate C2 applies to itself. Tertiles of a window holding ~1.6
+      # independent observations of a 60 s moving average are three slices of one reading, so a
+      # ratio "drifting" across them is noise wearing a calibration failure. C2 gets this for free
+      # (its n_eff branch runs first); C1 has to be told.
+      if (!c1_ok && c1_dec && neff < minn) {
+        c1_dec = 0
+        c1_why = c1_why sprintf(" [n_eff %.1f < %d — drift not yet decidable]", neff, minn)
+      }
+      refuting = ""
+      if (!c1_ok && c1_dec) refuting = "C1"
+      if (!c2_ok && c2_dec) refuting = refuting (refuting ? "+" : "") "C2"
+      refusal = pass ? "" : (refuting \
+        ? sprintf("REFUTING (%s) — the census does not reproduce the load it apportions; more of the same will not help", refuting) \
+        : "UNDECIDED — too short or too quiet to decide; EXTEND the window (a dispatch wave moves both load and ACTIVE)")
+
       if (want_json) {
         printf "{\"n\":%d,\"n_eff\":%.2f,\"span_s\":%d,\"unit\":\"%s\",\"load_min\":%.2f,\"load_max\":%.2f,", n, neff, span, units, lmin, lmax
         printf "\"c1_level\":%s,\"c1_why\":\"%s\",\"c2_dynamics\":%s,\"c2_why\":\"%s\",\"c3_identify\":%s,\"c3_why\":\"%s\",", (c1_ok?"true":"false"), c1_why, (c2_ok?"true":"false"), c2_why, (c3_ok?"true":"false"), c3_why
         printf "\"ratio\":%.4f,\"naive_slope\":%.4f,", ratio, naive
         if (pass) printf "\"verdict\":\"MARGINAL\",\"marginal_load_per_active_session\":%.4f,\"se\":%.4f}\n", slope, se
-        else      printf "\"verdict\":\"NO-ATTRIBUTION\"}\n"
+        else      printf "\"verdict\":\"NO-ATTRIBUTION\",\"refusal\":\"%s\",\"refuting\":\"%s\"}\n", refusal, refuting
         exit (pass ? 0 : 1)
       }
       printf "CAPACITY-MARGINAL  n=%d  n_eff=%.1f  span=%ds  unit=%s  load1 %.2f..%.2f (%.2fx)\n", n, neff, span, units, lmin, lmax, lspread
@@ -373,6 +595,7 @@ cmd_analyze() {
         printf "  for contrast, the pooled load1~active fit this replaces: %.3f  [UNIDENTIFIED — 87%% of the numerator is not Claude]\n", naive
         exit 0
       }
+      printf "  REFUSAL: %s\n", refusal
       print  "VERDICT: NO-ATTRIBUTION — a control failed; no coefficient is quotable from this window."
       printf "  (the fit that WOULD have been reported: %.3f load units per ACTIVE session — withheld)\n", slope
       exit 1
@@ -382,6 +605,7 @@ cmd_analyze() {
 case "${1:-}" in
   sample)  shift; cmd_sample "$@" ;;
   analyze) shift; cmd_analyze "$@" ;;
-  -h|--help|'') sed -n '/^# Usage:/,/^#       2 usage/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
-  *) die "unknown subcommand '$1' (sample | analyze)" ;;
+  run)     shift; cmd_run "$@" ;;
+  -h|--help|'') sed -n '/^# Usage:/,/^#         GROWN windows/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) die "unknown subcommand '$1' (sample | analyze | run)" ;;
 esac

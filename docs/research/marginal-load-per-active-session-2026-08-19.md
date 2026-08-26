@@ -173,6 +173,10 @@ decidable too, and both are ordinary operating conditions on this box rather tha
   moves `cc_sp_active` through several levels on its own. If an hour lands on one level, run the
   window across a wave rather than during a lull — **do not** synthesise levels by pausing the box.
 
+Those two commands are the primitives; **§6b wraps this whole protocol, stop rule included, in one
+command** (`capacity-marginal.sh run`) — reach for that, and read the rest of this section as what
+it executes.
+
 `analyze` is re-runnable over a growing file, so the honest protocol is: sample, analyze, and extend
 the window until the verdict stops being `NO-ATTRIBUTION` **or** the refusal repeats with the same
 term across several windows — which would itself be the finding (the process-unit census is not the
@@ -218,6 +222,45 @@ correctly refusing a 60 s quiet window — `C1 FAIL` (tertile swing 1.56× > 1.3
 (`n_eff` 1.8 < 20, worded *uninformative, not refuting*), `C3 FAIL` (0 rows carry an ACTIVE count,
 6 unmeasurable), `VERDICT: NO-ATTRIBUTION`, exit 1, withheld fit labelled withheld. The instrument
 is ready; only the fleet is missing.
+
+### 6b · The remaining half is now ONE command, and the loop's stop rule is code (2026-08-26)
+
+§6 above is not two commands, it is a loop with a stop rule: sample, analyze, extend, and halt on a
+PASS or on the same control refusing as the window grows. Handed to a person that is an hour of
+babysitting plus a judgment call this document had already made — a worksheet, and the interpreter
+is the operator. `scripts/capacity-marginal.sh run` executes it:
+
+```sh
+bash scripts/capacity-marginal.sh run --out /tmp/marg.tsv --notify
+```
+
+Defaults are §6's protocol exactly: 1 h chunks at 60 s (`n_eff` 60 against a floor of 20), analyze
+the cumulative file after each, give up after 4 h, and treat 3 identical refusals over **grown**
+windows as the finding. Exit **0** coefficient (verdict also written to `<out>.verdict`, and the
+close-out step named in the output) · **1** undecided when the clock ran out, re-runnable against
+the same `--out` because the file is appended to and never reset · **3** the collector stopped
+producing rows · **4** STABLE REFUSAL, which routes to §7's thread-unit census rather than to
+another hour of the same instrument.
+
+**Two things stop the loop lying, and the first was caught by the loop's own first live run.** A
+refusal is only evidence if the window GREW (re-reading one window three times is one observation of
+it — the `n_eff` lesson at loop scale) **and** if the refusal was a REFUTATION. `analyze` now
+classifies its own refusal, because most of these terms fail for reasons more evidence fixes: a
+window shorter than the `load1` time constant, a box too quiet to hold a load range, an ACTIVE count
+that never moved. Only two arms refute — the C1 tertile-ratio drift and the C2 correlation/constant
+arms — and even C1's is gated on `n_eff`, since tertiles of ~1.6 independent observations are three
+slices of one reading. **C3 is never a refutation**: an unidentified regressor is a statement about
+the window, never about the census. The first smoke run of `run` on a Linux box reported *"the
+process-unit census cannot apportion this box"* from two 12-second windows whose own text read
+*"uninformative, not refuting"* — a quiet night accumulating into a manufactured finding, the same
+class of error as the four values this whole document refuses. Both properties are pinned by tests
+(`run` suite: PASS halts · STABLE REFUSAL over grown windows · a non-growing window is not a second
+refusal · UNDECIDED refusals reset the streak · the file is extended, never truncated).
+
+Verified this session, off-box: `bats tests/capacity-marginal.bats` **25/25**, `shellcheck` clean,
+`test-hermeticity-lint.sh` clean (551 suites, 0 new leaks), and `run` exercised end-to-end against
+the live Linux collector — refusing a quiet window as UNDECIDED and extending it, rather than
+reporting a finding. Still unrun: the box itself.
 
 ---
 
