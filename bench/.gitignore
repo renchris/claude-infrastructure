@@ -1,0 +1,13 @@
+.venv/
+_bench_tmp/
+__pycache__/
+
+# Derived artifacts. `build_corpus.py` emits pages/; `capture.py` emits shots/ and
+# snapshots/. The generators plus manifest.json are the source of truth, and
+# regenerating is two commands -- committing ~47k lines of rendered output would
+# bury the evidence that actually matters (findings_dom.json, local_vlm_results.json,
+# blind_key.json) in noise that changes on every Chromium bump.
+corpus/out/pages/
+corpus/out/shots/
+corpus/out/snapshots/
+corpus/out/blind/

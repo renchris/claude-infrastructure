@@ -1,0 +1,304 @@
+# A5 — CV primitives as a measurement layer beneath a web design-review agent
+
+**Question.** Which computer-vision primitives — learned (open-vocabulary detection, segmentation,
+pointing, dense features) and classical — are worth running locally on an M1 Max (64 GB unified,
+32-core GPU, macOS, torch+MPS) as the *measurement* layer under a design-review agent?
+
+**The target transformation.** Turn "the spacing looks uneven" into "these four cards have gaps of
+16, 16, 16 and 23 px." Everything below is judged on whether it produces a **number with units**,
+not a description.
+
+**Date of research: 2026-08-26.** Every model name and version was re-checked against the live web;
+the author's priors were treated as provisional and several were wrong (see §0).
+
+---
+
+## 0. Corrections to priors (things that changed since ~May 2026)
+
+| Prior | Actual, as of 2026-08-26 | Source |
+|---|---|---|
+| "SAM 2 is current; SAM 3 may not exist" | **SAM 3 shipped Nov 2025**; **SAM 3.1** shipped **2026-03-27** as a drop-in replacement. SAM 3 adds *Promptable Concept Segmentation* — a text or exemplar prompt returns **every** instance of a concept, not one mask per prompt. | [ai.meta.com/blog/segment-anything-model-3](https://ai.meta.com/blog/segment-anything-model-3/) · [ai.meta.com SAM3 paper](https://ai.meta.com/research/publications/sam-3-segment-anything-with-concepts/) |
+| "DINOv2 is the dense-feature backbone" | **DINOv3** (Aug 2025), 1.7 B curated images, up to 7 B params, distilled ViT-S/B/L + ConvNeXt variants, **commercial licence**, explicitly optimised for *dense* features via Gram anchoring. | [ai.meta.com/blog/dinov3-self-supervised-vision-model](https://ai.meta.com/blog/dinov3-self-supervised-vision-model/) · [arxiv 2508.10104](https://arxiv.org/pdf/2508.10104) |
+| "Molmo points, roughly" | **MolmoPoint** (2026) adds grounding tokens; **MolmoPoint-GUI-8B = 61.1 on ScreenSpot-Pro, 70.0 on OSWorld-G** — SOTA among fully open models, and trained partly on **HTML-rendered screenshots with auto-extracted bounding boxes**. | [allenai.org/blog/molmopoint](https://allenai.org/blog/molmopoint) · [arxiv 2603.28069](https://arxiv.org/html/2603.28069v1) |
+| "Grounding DINO 1.6 is open" | Grounding DINO **1.5/1.6 Pro are API-only** (IDEA Research / DeepDataSpace). Only the original **Grounding DINO (Swin-T/Swin-B, 2023)** and **Grounding DINO 1.5 Edge** distillations are locally runnable; 1.5 Pro is a hosted endpoint. | [arxiv 2405.10300](https://arxiv.org/pdf/2405.10300) |
+
+---
+
+## 1. Learned primitives — what actually runs on an M1 Max, by what route
+
+### 1.1 The Apple-Silicon routing rule
+
+There are four routes, and which one a model takes is the single biggest determinant of whether it
+is usable:
+
+1. **PyTorch + MPS** — works for pure-PyTorch models with no custom CUDA/Triton kernels. Slower than
+   an NVIDIA card but fine for a per-screenshot batch of one.
+2. **HuggingFace `transformers` reimplementation** — the escape hatch when the *official* repo has a
+   CUDA-only dependency. This is how SAM 3 becomes runnable at all on this machine (below).
+3. **MLX / `mlx-vlm`** — Apple's own array framework. Native Metal, unified-memory friendly.
+   `mlx-vlm` supports Qwen2-VL, LLaVA, Idefics, **Molmo**, PaliGemma, **Florence-2**, and OCR
+   specialists. ([github.com/Blaizzy/mlx-vlm](https://github.com/Blaizzy/mlx-vlm))
+4. **Core ML / ONNX Runtime (CoreMLExecutionProvider)** — best latency for the small fixed-shape
+   models (a YOLO detector, a CLIP image tower), worst ergonomics.
+
+**The trap to know about before you start.** SAM 3's official `facebookresearch/sam3` has a **hard
+dependency on Triton** — CUDA-only, no Metal backend — for its Euclidean distance-transform step,
+so the official checkpoint path is **dead on Apple Silicon**. The working route is the HF
+`transformers` implementation from main, which avoids Triton entirely; a `.pin_memory()` call in the
+video processor also has to be removed for MPS video inference.
+([huggingface.co/facebook/sam3/discussions/11](https://huggingface.co/facebook/sam3/discussions/11))
+SAM 2 has its own long-running MPS complaints (`Placeholder storage has not been allocated on MPS
+device`) — [facebookresearch/sam2#687](https://github.com/facebookresearch/sam2/issues/687),
+[#34](https://github.com/facebookresearch/sam2/issues/34) — and Ultralytics' SAM 3 wrapper still
+fails on MPS for the same `pin_memory()` reason
+([ultralytics#22954](https://github.com/ultralytics/ultralytics/issues/22954)).
+**Generalisable lesson: "open weights" is not "runs here." Check the kernel dependencies, not the
+licence.**
+
+### 1.2 Per-model verdict
+
+| Model | Status 2026-08 | Route on M1 Max | Rough 1440p latency | Licence | Verdict for design review |
+|---|---|---|---|---|---|
+| **Grounding DINO** (Swin-T 172 M / Swin-B) | 2023 weights still the only *open* ones | PyTorch+MPS, or HF `transformers` | ~1.5–4 s/image (est., MPS, fp32) | Apache-2.0 | **Marginal.** Text-conditioned boxes, but on natural-image priors — see §2 |
+| **Grounding DINO 1.5 Pro / 1.6 Pro** | **API-only** (IDEA / DeepDataSpace); 1.5 Pro = 54.3 AP COCO, 55.7 AP LVIS-minival ([arxiv 2405.10300](https://arxiv.org/pdf/2405.10300)) | none — hosted | n/a | proprietary | **Excluded** — not a local measurement layer |
+| **SAM 3 / SAM 3.1** | SAM 3 Nov 2025; **SAM 3.1 2026-03-27** ([ai.meta.com](https://ai.meta.com/blog/segment-anything-model-3/)) | **HF `transformers` only** (Triton blocks the official repo) | seconds/image; SAM ViT-B embedding measured at **1.9 s on M2 Ultra**, ~45 ms/mask thereafter ([geo-ai](https://geo-ai.medium.com/segment-anything-model-sam-on-apple-silicon-m1-and-m2-5cdb3f781b27)) — expect **3–5 s** on a 32-core M1 Max | SAM licence (permissive, check 3.1 terms) | **Interesting but not a measurement tool.** Masks are *pixel-accurate to the rendered edge*, which is exactly what you want; but SAM is **not semantic** and will happily segment a gradient |
+| **SAM 2** | superseded | PyTorch+MPS, buggy | — | Apache-2.0 | Skip — SAM 3 supersedes and its video tracking is irrelevant to a static screenshot |
+| **Florence-2** (0.23 B base / 0.77 B large) | still current; **no Florence-3** found as of 2026-08-26 | **MLX via `mlx-vlm`** — first-class support | sub-second to ~2 s | **MIT** | **Yes, as a captioner/region-proposer.** MIT + tiny + runs in MLX is a rare combination. It is the captioner half of OmniParser V2 |
+| **OWLv2 / OWL-ViT** | current | HF `transformers` + MPS | ~1–3 s (est.) | Apache-2.0 | Weak on UI; its value is *open-vocabulary recall*, not localisation precision |
+| **MolmoPoint-GUI-8B** | **2026**, SOTA open: **61.1 ScreenSpot-Pro, 70.0 OSWorld-G** ([allenai](https://allenai.org/blog/molmopoint)) | Molmo family is in `mlx-vlm`; 8 B at 4–8 bit fits 64 GB trivially | several seconds/query (autoregressive) | Apache-2.0 (Ai2) | **Yes — but as a *pointer*, not a measurer.** It returns a point, not a box with subpixel edges. Crucially it was **trained on HTML-rendered screenshots with auto-extracted boxes**, so it is one of the few models with *no* domain gap |
+| **DINOv2 / DINOv3** | **DINOv3** Aug 2025, ViT-S/B/L/H+ distillations + ConvNeXt ([ai.meta.com](https://ai.meta.com/blog/dinov3-self-supervised-vision-model/)) | PyTorch+MPS; ViT-S/B are fast | ViT-S ~200–400 ms (est.) | DINOv3 commercial licence | **Yes, for *similarity*, not geometry.** Patch-token cosine similarity answers "are these six cards visually the same component?" without any labels |
+| **YOLO-World → YOLOE** | **YOLOE** (Real-Time Seeing Anything) supersedes: +3.5 AP over YOLO-Worldv2 on LVIS, 1.4× faster, re-parameterises to zero extra cost ([ultralytics](https://docs.ultralytics.com/models/yoloe)) | Ultralytics + MPS, or CoreML export | tens of ms | **AGPL-3.0** ⚠️ | **Licence is the blocker**, not capability. AGPL contaminates a hosted review agent unless you buy the Ultralytics commercial licence |
+| **CLIP / OpenCLIP** | mature | MLX or PyTorch+MPS; image tower exports cleanly to Core ML | ~20–80 ms/crop | MIT | **Yes, as a cheap classifier over crops** — "is this crop a button / an avatar / a logo?" via zero-shot text prompts. Also the retrieval index for "find me every instance of this component" |
+| **OmniParser V2** (YOLOv8 icon detector + Florence-2 captioner) | **39.5–39.6 ScreenSpot-Pro**, 60 % lower latency than V1; a **YOLOv9-E** region detector was added **July 2026** ([microsoft/OmniParser](https://github.com/microsoft/omniparser)) | Ultralytics + MPS for the detector; MLX for Florence-2 | ~0.5–1.5 s | detector AGPL-adjacent; check per-component | **The most directly relevant learned system** — it is the only one on this list *trained on screenshots* |
+
+**Reading the table.** The learned models split cleanly into two jobs, and neither job is
+measurement:
+
+- **Naming things** — Florence-2, CLIP, MolmoPoint, OmniParser. "That region is a primary button."
+- **Grouping things** — DINOv3 patch similarity, CLIP embeddings. "These six regions are the same
+  component repeated."
+
+Not one of them returns "23 px". Every pixel number in the target sentence comes from §3.
+
+---
+
+## 2. The domain gap — stated plainly, with numbers
+
+**Verdict: the gap is real, it is large, and it is measured. Do not assume transfer.**
+
+Four independent measurements, from four different research communities, all point the same way.
+
+### 2.1 Rendered UI is a different visual distribution, structurally
+
+The GUI-detection literature states the difference as a property of the data, not a training
+accident: *"GUI element detection is a domain-specific case of object detection, in which objects
+overlap more often, and are located very close to each other, plus the number of object classes is
+considerably lower, yet there are more objects in the images compared to natural images. Studies
+that have been carried out on comparing various object detection models might not apply to GUI
+element detection."* ([arxiv 2408.03507](https://arxiv.org/pdf/2408.03507))
+
+Concretely, a screenshot violates almost every prior a COCO-trained detector encodes:
+
+| Natural-image prior | What a rendered UI does |
+|---|---|
+| Objects have texture, shading, occlusion boundaries | Flat fills, hard 1-px anti-aliased edges, zero texture |
+| Objects rarely tile identically | The *same component repeats* 6× with pixel-identical rendering |
+| Object scale/aspect follows a smooth distribution | Scales snap to a design system's 4/8-px grid |
+| Background is scene, not signal | **Whitespace IS the content** being reviewed |
+| Text is incidental | Text is 60–80 % of the pixels that matter |
+
+### 2.2 The hardest number: even the *best* learned detector cannot hit pixel accuracy
+
+The largest empirical study of GUI element detection (7 methods, >50 k GUI images, ESEC/FSE '20)
+found deep learning beats old-fashioned CV on non-text widgets — **and that the winner, Faster
+R-CNN, reaches only `F1 = 0.438` at `IoU > 0.9`.**
+([arxiv 2008.05132](https://arxiv.org/abs/2008.05132) ·
+[github.com/MulongXie/UIED](https://github.com/MulongXie/UIED))
+
+Read that as a design-review requirement, not a leaderboard entry. `IoU > 0.9` on a 200×48 button
+still permits a ~5 px boundary error. **A measurement layer that is wrong about the box edge is
+wrong about every gap, every alignment, and every margin computed from it.** The best available
+learned detector is right *less than half the time* at a tolerance that is still ten times looser
+than "16 vs 23 px" needs. This single number is the strongest argument in this document for the
+classical layer.
+
+The same paper's secondary finding is quietly useful: **more anchor scales/aspect ratios barely
+helped**, because *"the scales and aspect ratios of GUI elements follow standard distributions."*
+That regularity is exactly what a projection profile or a histogram of gaps exploits directly, with
+no model at all.
+
+### 2.3 Generalist VLMs collapse on high-resolution UI
+
+ScreenSpot-Pro (23 apps, 5 industries, 3 OSes, professional high-res screenshots) measures the gap
+in the bluntest possible way: **generalist MLLMs including GPT-4o and Qwen2-VL-7B score below 2 %**,
+while *specialist* 7 B GUI models — OS-Atlas-7B 18.9 %, UGround-7B 16.5 %, AriaUI 11.3 % — do an
+order of magnitude better, and even the SOTA search-augmented method reaches only ~48 %.
+([arxiv 2504.07981](https://arxiv.org/abs/2504.07981))
+
+Below 2 % is not "degraded transfer." It is *no* transfer. The models that do work — MolmoPoint-GUI,
+OmniParser, OS-Atlas, UI-TARS — all share one property: **screenshots in the training set.**
+MolmoPoint's screenshot data was generated by *rendering HTML and auto-extracting the boxes*
+([arxiv 2603.28069](https://arxiv.org/html/2603.28069v1)), i.e. they closed the gap by
+manufacturing in-domain data, not by hoping for generalisation.
+
+### 2.4 Saliency transfers worst of all — and it is quantified
+
+This is the cleanest single measurement of the gap anywhere in this document. UMSI, a saliency model,
+was evaluated on UI screenshots. **Trained on natural-scene / proxy data it scores AUC 0.778;
+retrained on UEyes (real eye-tracking over 1,980 UI screenshots, 62 participants, webpage + desktop
++ mobile + poster) it scores AUC 0.878.** The paper's own conclusion is that eye-movement data over
+*interfaces* "yields superior performance to training with proxy data, such as mouse movements or
+manual annotations, **or even training with data collected from viewing of natural scenes**."
+([UEyes, CHI '23](https://dl.acm.org/doi/10.1145/3544548.3581096) ·
+[dataset, arxiv 2402.05202](https://arxiv.org/pdf/2402.05202))
+
+A 10-point AUC swing from domain alone. **If you want a saliency map for hierarchy critique, use a
+UI-trained one (UEyes-finetuned UMSI) or none.** A natural-image saliency model on a screenshot
+will fire on the photograph in the hero and go quiet on the call-to-action.
+
+### 2.5 The one place the gap runs the *other* way
+
+Segmentation is the exception. SAM's masks follow rendered edges *better* than natural edges,
+because a rendered edge is a genuine step function with no motion blur, no depth of field, no
+shadow. The failure mode is not imprecision — it is that **SAM is not semantic**
+([facebookresearch/segment-anything](https://github.com/facebookresearch/segment-anything)): it will
+return a beautiful, pixel-exact mask of a background gradient band, or split one card into its
+image, its heading, and its body, with no signal about which grouping you wanted. SAM 3's concept
+prompts partially fix this — but the concepts it knows are natural-image concepts.
+
+**Net.** Use learned models for *semantics and grouping*, and only ones with screenshots in their
+training data. Use classical CV for *every number*. Anything else is assuming a transfer that four
+separate literatures say does not happen.
+
+---
+
+## 3. Classical CV — the actual measurement layer
+
+A screenshot is the **best case** for classical CV that exists: no lens, no noise, no illumination
+variance, axis-aligned rectangles, quantized colours, deterministic re-rendering. Every assumption
+that makes Canny fragile on a photograph is *satisfied* here. This is why UIED — the hybrid that
+beat every pure approach — uses "old-fashioned CV approaches to locate the elements and a CNN
+classifier to achieve classification"
+([github.com/MulongXie/UIED](https://github.com/MulongXie/UIED)). Localise classically; classify
+neurally. That division is the whole design.
+
+### 3.1 The table — function → defect
+
+| # | Technique | Concrete call | Output | Exact design defect it detects |
+|---|---|---|---|---|
+| C1 | **Connected components** | `cv2.connectedComponentsWithStats(bin, connectivity=8)` · `skimage.measure.label` + `regionprops` ([pyimagesearch](https://pyimagesearch.com/2021/02/22/opencv-connected-component-labeling-and-analysis/) · [datacarpentry](https://datacarpentry.github.io/image-processing/08-connected-components.html)) | per-blob `x, y, w, h, area, centroid` | **Element bounds to the exact pixel.** Everything downstream is arithmetic on these. Catches: inconsistent card heights, a button 2 px taller than its sibling |
+| C2 | **Edge + contour** | `cv2.Canny` → `cv2.findContours(RETR_TREE)` → `cv2.boundingRect` · `skimage.feature.canny` | nested box tree | **Containment hierarchy** and **padding**: `parent.box − child.box` per side gives the four padding values. Catches asymmetric padding (`16/16/16/12`) |
+| C3 | **Line segments** | `cv2.createLineSegmentDetector` (**restored in OpenCV ≥4.5.4** after the NFA code was MIT-relicensed — absent 3.4.6–3.4.15 and **4.1.0–4.5.3**, [opencv_contrib#2524](https://github.com/opencv/opencv_contrib/issues/2524)) · fallback `cv2.ximgproc.createFastLineDetector` (~10× faster, less accurate) · `cv2.HoughLinesP` · `skimage.transform.hough_line` | line segments with endpoints + angle | **Alignment.** Cluster segment x-coords → the vertical rules the design actually uses. A left edge 3 px off its column is a cluster outlier. Also catches **non-axis-aligned** artifacts: a "horizontal" divider at 0.4° |
+| C4 | **Projection profiles** | `binary.sum(axis=0)` / `.sum(axis=1)`; peaks via `scipy.signal.find_peaks`; valleys = gutters | 1-D signal per axis | **Grid and rhythm inference.** Vertical projection zeros = column gutters; horizontal = row gaps. This is the classical document-layout primitive (*"horizontal projection identifies text lines, vertical projection detects columns"*) and it works because UI is axis-aligned. **Directly produces `16, 16, 16, 23`** |
+| C5 | **Distance transform / morphology** | `cv2.distanceTransform(inv_bin, DIST_L2, 5)` · `cv2.morphologyEx(..., MORPH_CLOSE/OPEN)` · `skimage.morphology.binary_closing` | whitespace field, merged regions | **Whitespace measurement + grouping.** The distance transform's local maxima are the *widest whitespace channels* — the visual separators. A `MORPH_CLOSE` with a kernel of size *k* merges anything closer than *k*, which **operationalises proximity-grouping**: the *k* at which two blobs merge IS their perceptual distance. Catches "the label is closer to the wrong field" |
+| C6 | **Template matching** | `cv2.matchTemplate(img, tmpl, cv2.TM_CCOEFF_NORMED)` + `cv2.minMaxLoc` / NMS | match locations + scores | **Repeated-component divergence.** Crop one card, match across the page: score 1.00 for identical instances, 0.94 for the one whose border-radius differs. Catches inconsistent instances of a design-system component |
+| C7 | **Sub-pixel registration** | `skimage.registration.phase_cross_correlation(a, b, upsample_factor=100)` — registers *"to within 1/upsample_factor of a pixel"* ([skimage docs](https://scikit-image.org/docs/stable/api/skimage.registration.html)) | (dy, dx) to 0.01 px | **Off-by-a-fraction offsets** invisible to eye and to box arithmetic. Two supposedly identical rows differing by 0.5 px from a fractional-em line-height |
+| C8 | **Colour quantization** | `cv2.kmeans` in **Lab** (`skimage.color.rgb2lab`), or `PIL.Image.quantize(method=MEDIANCUT)`; count unique RGB with `np.unique(px, axis=0)` | palette + pixel-share per colour | **Palette sprawl** — the literal count of distinct colours actually painted. Also **near-duplicate colours**: two greys 1.5 ΔE apart is a token bug, not a design choice. Lab, not RGB, because ΔE is perceptual |
+| C9 | **Contrast (derived, not CV)** | WCAG relative-luminance ratio computed on C8's foreground/background pairs | ratio per text region | **Accessibility failures**: 3.8:1 body text. Needs C1+C8 to know *which* pair to compare — that is the CV part |
+| C10 | **Text bounds** | Vision.framework `VNRecognizeTextRequest` (native, free, fast on macOS) or `cv2.dnn` EAST/DB | word/line boxes + strings | **Type scale and leading**: cluster cap-heights → the actual font-size ramp; baseline deltas → leading. Catches a 7-step type scale that should be 4 |
+| C11 | **Classical saliency** | `cv2.saliency.StaticSaliencySpectralResidual_create()` · `StaticSaliencyFineGrained_create()` (opencv-contrib) ([docs.opencv.org](https://docs.opencv.org/4.x/da/dd0/classcv_1_1saliency_1_1StaticSaliencyFineGrained.html)) | float saliency map | Weak on UI — see §4. Useful only as a **cheap baseline** to contrast against a UI-trained model |
+| C12 | **Frequency / autocorrelation** | 2-D FFT magnitude, or autocorrelation + `skimage.feature.peak_local_max` | dominant periods (px) | **The base grid, discovered not assumed.** The autocorrelation peak period is the repeat unit — tells you the page is on an 8-px grid, so 23 is a violation and 24 would not be |
+| C13 | **Blur / asset quality** | `cv2.Laplacian(gray, cv2.CV_64F).var()` | scalar sharpness | **Upscaled raster assets** — a 1× logo on a 2× display. Low Laplacian variance in a region whose neighbours are crisp |
+| C14 | **Structural diff** | `skimage.metrics.structural_similarity(a, b, full=True)` | per-pixel SSIM map | **Responsive-breakpoint and state regressions** — what changed between 1440 and 1280, or hover vs rest, localised to a region |
+
+### 3.2 Why classical wins here specifically
+
+- **It answers the question that was asked.** "Uneven spacing" is a claim about a *distribution of
+  distances*. C1 → sort → diff → histogram is the whole computation. A detector that emits
+  `{"label": "card", "score": 0.91}` has not started.
+- **It is exact, not probabilistic.** `IoU > 0.9` at F1 0.438 (§2.2) vs a connected-component bound
+  that is correct by construction on an anti-aliased-edge image.
+- **It is auditable.** Every number traces to pixels. A reviewer can be shown the overlay.
+- **It is fast.** The entire C1–C8 chain on a 1440×2400 screenshot is **tens of milliseconds** of
+  NumPy/OpenCV on one M1 Max core — three orders of magnitude cheaper than any model in §1.
+- **Its failure mode is legible.** Classical CV fails by returning an obviously wrong number
+  (a blob that swallowed the whole page). Learned models fail by returning a *plausible* wrong
+  number. For a measurement layer, legible failure is worth more than a higher mean score.
+
+### 3.3 Where classical genuinely fails
+
+Be honest about the limits, because they define what §1 is for:
+
+1. **Gradients, shadows, glassmorphism, blur backdrops.** Thresholding and connected components
+   assume a step edge. A `backdrop-filter: blur(20px)` card has no edge. → needs SAM or a DOM box.
+2. **Semantics.** C1 finds a rectangle. It cannot say "primary CTA" vs "disabled secondary." →
+   Florence-2 / CLIP crop classification.
+3. **Overlap and z-order.** Connected components merge a badge overlapping an avatar into one blob.
+   → SAM's instance masks, or the DOM.
+4. **Photographic content.** A hero image is a texture bomb: Canny explodes, projection profiles go
+   flat. → mask it out first (this is a legitimate SAM use), or take its bounds from the DOM.
+5. **"Is this *good*?"** No classical operator has an opinion. The whole point of the measurement
+   layer is that judgment stays with the model reading the numbers.
+
+---
+
+## 4. Saliency and visual-weight maps for hierarchy critique
+
+**Which of the primitives can produce a map usable for hierarchy critique?** Four candidates, in
+descending order of trustworthiness on UI.
+
+### 4.1 UEyes-finetuned UMSI — the only one with UI ground truth
+
+The one to use. UEyes is real eye-tracking: **62 participants × 1,980 UI screenshots**, 495 each of
+webpage / desktop / mobile / poster, with multi-duration saliency maps *and scanpaths*, dataset and
+models public. Finetuning UMSI on it took AUC **0.778 → 0.878**.
+([CHI '23](https://dl.acm.org/doi/10.1145/3544548.3581096) ·
+[arxiv 2402.05202](https://arxiv.org/pdf/2402.05202))
+
+- **Runs on M1 Max?** Yes — UMSI is a small encoder-decoder CNN; PyTorch+MPS, well under a second.
+- **The scanpath output matters more than the heatmap.** A heatmap says "the eye goes here." A
+  *scanpath* says "the eye goes here **first**, then here." Hierarchy is an ordering claim, so the
+  scanpath is the artifact that can be checked against the designer's intent: *"your primary CTA is
+  fixation #4."* That is a measured fact, and it is the closest thing in this whole document to a
+  learned model producing a number worth arguing about.
+
+### 4.2 SUM (Saliency Unification through Mamba) — the 2025/26 generalist
+
+WACV 2025 Oral; a Mamba+U-Net hybrid whose Conditional Visual State Space block *"dynamically adapts
+to various image types, including natural scenes, **web pages**, and commercial imagery."*
+([github.com/Arhosseini77/SUM](https://github.com/Arhosseini77/SUM) ·
+[arxiv 2406.17815](https://arxiv.org/html/2406.17815))
+
+Web pages are an explicit conditioning mode, which is the property that matters. **Caveat for this
+machine:** Mamba's selective-scan is usually a custom CUDA kernel; expect either a slow pure-PyTorch
+fallback path on MPS or real porting work. Verify before committing — this is the same trap as SAM 3
+and Triton (§1.1).
+
+### 4.3 VLM-as-saliency — do not
+
+UIGaze (2026) asks exactly this question — *"How Closely Can VLMs Approximate Human Visual Attention
+on User Interfaces?"* ([arxiv 2604.26352](https://arxiv.org/pdf/2604.26352)). It benchmarks VLMs
+against UI eye-tracking rather than assuming equivalence, and positions purpose-built UI saliency
+models as the reference. Combined with the sub-2 % ScreenSpot-Pro result (§2.3), asking a VLM "where
+does the eye go" returns a *plausible narrative*, not a map. That is the single most dangerous
+output shape for a review agent, because it is unfalsifiable.
+
+### 4.4 The classical baseline — and why it under-performs here
+
+`cv2.saliency.StaticSaliencySpectralResidual` and `StaticSaliencyFineGrained` (opencv-contrib,
+[docs](https://docs.opencv.org/4.x/da/dd0/classcv_1_1saliency_1_1StaticSaliencyFineGrained.html))
+run in milliseconds and need no model. Both implement *bottom-up, centre-surround / spectral-residual
+contrast* — which on a screenshot fires on **the photograph in the hero and on any high-frequency
+texture**, and stays quiet on a large flat colour block that is the actual visual anchor. Keep it
+only as a **control**: if the UI-trained map and the spectral-residual map agree, the finding is
+robust; if they disagree, the UI-trained one is right and you have learned that the page's hierarchy
+is carried by *layout*, not by local contrast.
+
+### 4.5 A classical "visual weight" map that is arguably better than any of them
+
+For hierarchy critique specifically, you can compute visual weight *compositionally* from §3, and it
+has a property no learned map has: **every term is inspectable and attributable.**
+
+```
+weight(element) =  area(C1)
+                 × contrast_vs_background(C8/C9)      # ΔE in Lab, not RGB
+                 × isolation(C5 distance transform)   # whitespace around it = emphasis
+                 × (1 / (1 + normalized_position))    # F/Z-pattern position prior from UEyes
+```
+
+Rank elements by this and compare the ranking to the *semantic* hierarchy (h1 > h2 > body > caption,
+CTA > secondary) that the DOM or Florence-2 supplies. **A rank inversion is the hierarchy defect,
+stated as a measured fact:** *"the secondary 'Learn more' link has 2.3× the visual weight of the
+primary CTA — it is larger, has higher contrast against its background, and sits in more
+whitespace."* No eye-tracking model needed, and every clause is a number you can point at on the
+overlay. Use UMSI/UEyes to *validate* this ranking, not to replace it.

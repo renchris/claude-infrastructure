@@ -1,0 +1,122 @@
+{
+ "align-1px": [
+  {
+   "rule": "misalignment",
+   "target": "div.panel:nth-of-type(5)",
+   "detail": "left edge at 31px is 1.0px off the shared 32px edge used by 18 other elements",
+   "severity": "medium"
+  }
+ ],
+ "clean": [],
+ "contrast-on-gradient": [
+  {
+   "rule": "contrast-indeterminate",
+   "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
+   "detail": "cannot compute a ratio: backdrop is an image/gradient on div.hero:nth-of-type(1). Requirement 3.0:1 is UNVERIFIED for this text",
+   "severity": "high"
+  },
+  {
+   "rule": "contrast-indeterminate",
+   "target": "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
+   "detail": "cannot compute a ratio: backdrop is an image/gradient on div.hero:nth-of-type(1). Requirement 4.5:1 is UNVERIFIED for this text",
+   "severity": "high"
+  }
+ ],
+ "contrast-plain": [
+  {
+   "rule": "contrast",
+   "target": "div.helper:nth-of-type(4)",
+   "detail": "2.54:1 against 4.5:1 required (#9CA3AF on #FFFFFF)",
+   "severity": "high"
+  }
+ ],
+ "grid-offgrid": [
+  {
+   "rule": "grid-violation",
+   "target": "div.section-title:nth-of-type(3)",
+   "detail": "margin-top is 13px, not a multiple of the 8px grid",
+   "severity": "low"
+  }
+ ],
+ "hierarchy-inversion": [
+  {
+   "rule": "token-drift",
+   "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
+   "detail": "background-color #EFF6FF is 11.5 away from token #F9FAFB; almost certainly meant to be the token",
+   "severity": "low"
+  },
+  {
+   "rule": "contrast",
+   "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
+   "detail": "3.38:1 against 4.5:1 required (#3B82F6 on #EFF6FF)",
+   "severity": "high"
+  }
+ ],
+ "optical-centering": [],
+ "overflow-clip": [
+  {
+   "rule": "overflow",
+   "target": "div.panel:nth-of-type(5) > table > tbody > tr:nth-of-type(2) > td.cell-venue:nth-of-type(2)",
+   "detail": "content is 40px tall inside a 24px box with overflow hidden; text is clipped",
+   "severity": "high"
+  },
+  {
+   "rule": "overflow",
+   "target": "div.panel:nth-of-type(5) > table > tbody > tr:nth-of-type(3) > td.cell-venue:nth-of-type(2)",
+   "detail": "content is 40px tall inside a 24px box with overflow hidden; text is clipped",
+   "severity": "high"
+  },
+  {
+   "rule": "overflow",
+   "target": "div.panel:nth-of-type(5) > table > tbody > tr:nth-of-type(4) > td.cell-venue:nth-of-type(2)",
+   "detail": "content is 40px tall inside a 24px box with overflow hidden; text is clipped",
+   "severity": "high"
+  }
+ ],
+ "radius-drift": [
+  {
+   "rule": "token-drift",
+   "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(2)",
+   "detail": "border-radius 6px differs from the page's dominant 8px",
+   "severity": "low"
+  }
+ ],
+ "spacing-gap": [
+  {
+   "rule": "spacing-rhythm",
+   "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(3)",
+   "detail": "gap 39.0px breaks the 16.0px rhythm used by its siblings under div.kpi-row:nth-of-type(2)",
+   "severity": "medium"
+  },
+  {
+   "rule": "grid-violation",
+   "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(3)",
+   "detail": "margin-left is 23px, not a multiple of the 8px grid",
+   "severity": "low"
+  }
+ ],
+ "token-color-drift": [
+  {
+   "rule": "token-drift",
+   "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
+   "detail": "background-color #1D4ED3 is 5.0 away from token #1D4ED8; almost certainly meant to be the token",
+   "severity": "low"
+  }
+ ],
+ "touch-target": [
+  {
+   "rule": "touch-target",
+   "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-secondary:nth-of-type(2)",
+   "detail": "165x30px is under the 44px minimum target",
+   "severity": "high"
+  }
+ ],
+ "type-scale": [
+  {
+   "rule": "type-scale",
+   "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(4) > div.kpi-label:nth-of-type(1)",
+   "detail": "font-size 17px is used once and sits off the page scale [12.0, 14.0, 16.0, 24.0]; nearest step is 16px",
+   "severity": "medium"
+  }
+ ]
+}

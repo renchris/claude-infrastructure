@@ -1,0 +1,47 @@
+{
+  "machine": "Apple M1 Max, 64 GB unified, 32-core GPU",
+  "model": "mlx-community/Qwen3.8-27B-4bit",
+  "quantization": "uniform 4-bit (LLM + vision tower + projector)",
+  "image": "corpus/out/shots/hierarchy-inversion@2x.png",
+  "load_s": 2.8,
+  "peak_after_load_gb": 16.1,
+  "note": "cold vision encode every row -- matches a review loop, which never shows the same screenshot twice",
+  "rows": [
+    {
+      "width": 2560,
+      "pixels": "2560x1800",
+      "megapixels": 4.61,
+      "est_image_tokens": 1456,
+      "prompt_tokens": 4564,
+      "wall_s": 65.75,
+      "prompt_tps": 78.4,
+      "gen_tps": 16.7,
+      "peak_gpu_gb": 19.6,
+      "answer": "The most serious visual defect is a **misalignment in the action button row at the bottom of the page**.\n\n**Where it is:**\nIn the row containing the three buttons (\"Confirm all deposits\", \"Release held tables\", and the blue play button), the vertical alignment is broken. The \"Release held tables\" button and the blue circular play button are positioned lower than the \"Confirm all deposits\" button. "
+    },
+    {
+      "width": 1344,
+      "pixels": "1344x945",
+      "megapixels": 1.27,
+      "est_image_tokens": 396,
+      "prompt_tokens": 1344,
+      "wall_s": 30.15,
+      "prompt_tps": 78.6,
+      "gen_tps": 12.3,
+      "peak_gpu_gb": 19.0,
+      "answer": "Based on the visual design principles of hierarchy and user flow, the single most serious visual defect is:\n\n**The primary action button (\"Confirm all deposits\") has the lowest visual weight and contrast of the three buttons.**\n\n**Where it is:**\nIt is the first button in the row of three buttons located directly below the \"Reservations\" table.\n\n**Why it is a defect:**\nIn dashboard design, the \"pri"
+    },
+    {
+      "width": 1024,
+      "pixels": "1024x720",
+      "megapixels": 0.74,
+      "est_image_tokens": 225,
+      "prompt_tokens": 788,
+      "wall_s": 21.12,
+      "prompt_tps": 66.2,
+      "gen_tps": 12.6,
+      "peak_gpu_gb": 18.1,
+      "answer": "Upon reviewing the screenshot for visual design defects, the single most serious issue is a **misalignment in the action button row**.\n\n**Where it is:**\nIn the bottom-left section, below the \"Reservations\" table.\n\n**The Defect:**\nThe three action buttons (\"Confirm all deposits\", \"Release held tables\", and the blue play button) are not vertically aligned. The blue circular play button is positioned"
+    }
+  ]
+}
