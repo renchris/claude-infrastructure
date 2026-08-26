@@ -289,6 +289,26 @@ Nothing in this list is a model purchase.
 - `detect_dom.py` — nine general design-lint rules with an explicit `INDETERMINATE` verdict.
 - `bench_local_vlm.py` — the resolution/latency sweep.
 
+**How it reaches a session — a plain CLI, not an MCP server.** A11 checked the assumption and it was
+wrong in our favour: an MCP tool *can* return image content to Claude Code. But image data is charged
+against `MAX_MCP_OUTPUT_TOKENS` (default 25,000), and the `anthropic/maxResultSizeChars` escape hatch
+explicitly "has no effect on tools that return image content" — so an MCP image tool has exactly one
+lever, a session-global env var. A CLI that writes a JSON findings file and an annotated PNG, and lets
+the agent `Read` the PNG, chooses its own output resolution and therefore stays inside the Read
+ladder by construction. Fewer moving parts, and it is already the fleet's habit.
+
+**Division of labour inside the perception layer**, from A5 and confirmed by the bench: **learned
+models for semantics and grouping, classical CV for every number.** "Uneven spacing" is a claim about
+a distribution of distances — connected components, sort, diff, histogram is the entire computation,
+tens of milliseconds of NumPy on one core, and exact rather than probabilistic. A detector emitting
+`{"label": "card", "score": 0.91}` has not started on the question. The decisive property is not mean
+accuracy but the shape of failure: **classical CV fails by returning an obviously wrong number; a
+learned model fails by returning a plausible one.** For a measurement layer feeding an agent that will
+act on it, legible failure is worth more than a higher average. (The one place the gap runs the other
+way: SAM's masks track rendered edges *better* than natural ones, because a rendered edge is a true
+step function — but SAM is not semantic, so it will happily return a pixel-perfect mask of a gradient
+band.)
+
 **To add, in order:**
 1. **The abstention router.** Deterministic pass first; its `INDETERMINATE` set plus the pages it
    cannot reason about become the VLM's queue, cropped to the region in question.
@@ -332,6 +352,17 @@ agent type grants `Read, Glob, Grep, Bash, WebSearch, WebFetch, Agent, ToolSearc
 absolute path, so all fifteen had to satisfy it by streaming a 300-line markdown document through a
 single Bash heredoc. Ten succeeded. A5 stalled mid-stream doing exactly that, its last words being
 *"Write tool is disabled; creating the mandated file via heredoc instead."* The contract and the tool
-grant are in conflict; the fix is either to add `Write` to `deep-research` or to instruct incremental
-writes in the brief. Re-firing A5 on `general-purpose` (which has `Write`) with an explicit
-write-incrementally instruction resolved it.
+grant are in conflict. **Fixed in this commit** (`Scope (grown): +repair the deep-research Delivery-
+contract conflict`): `Write, Edit` added to `agents/deep-research.md`. That grant widens no
+capability — the agent already had `Bash` and could always create files — it only replaces a fragile
+channel with the first-class one. A contract an agent cannot satisfy with a proper tool is a contract
+that fails under load, and it failed at 2/15.
+
+Both stalled axes were re-fired on `general-purpose` with an explicit write-incrementally instruction
+and delivered in full, so coverage is 15/15 with no axis dropped.
+
+**On recovery generally, since it came up:** `/limit-recover`'s *audit principle* is the right
+instinct for any cut-off subagent — disk-truth audit every slot, re-run anything not provably
+complete, never accept a partial. Its *machinery* is not: it is built for a quota or login cliff and
+recovers by transcript transplant to another account. A mid-stream API stall has no reset to wait for
+and no account to move to. Audit with it; recover by re-firing.
