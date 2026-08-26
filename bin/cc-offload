@@ -400,7 +400,14 @@ cmd_up() {
   # a flag rather than as "leave it blank" so an UNMANAGED fire is a decision in the argv rather
   # than an accident of environment.
   if [ "$UP_UNMANAGED" = 0 ] && [ -z "$UP_NOTIFY_BACK" ]; then
-    UP_NOTIFY_BACK="${ITERM_SESSION_ID##*:}"
+    # `:-` IS LOAD-BEARING, not defensive style. This file runs under `set -u`, so the bare
+    # expansion ABORTED `up` outright wherever ITERM_SESSION_ID is unset — launchd, cron, a hook, a
+    # kitty pane, any fired session — killing the fire two lines above the note that exists to
+    # handle exactly that case. The unset branch below was therefore unreachable from the moment it
+    # was written, and its own suite could not tell: every case that reaches this line is red under
+    # any runner whose environment is not an iTerm pane. Found while the suite was being extended
+    # for the first-act contract (0c8b39b67665), which is the only reason it was found at all.
+    UP_NOTIFY_BACK="${ITERM_SESSION_ID:-}"; UP_NOTIFY_BACK="${UP_NOTIFY_BACK##*:}"
   fi
   if [ "$UP_UNMANAGED" = 1 ]; then UP_NOTIFY_BACK=''
   elif [ -z "$UP_NOTIFY_BACK" ]; then
