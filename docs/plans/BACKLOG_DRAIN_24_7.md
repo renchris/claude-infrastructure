@@ -87,8 +87,15 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 - **2026-08-26 — drain recycle #237: method 207 — EVERY ANTI-SILENCE ARM IN THIS FILE IS KEYED ON
-  THE RUN BEING **CUT**, AND THE FAILURE I FOUND MAKES THE RUN **COMPLETE**.** ONE fix landed, ONE
-  §2.1 entry landed, THREE land attempts, THREE lands, ZERO rc 6. 🚨 **MY LAND-1 SHA SURVIVED
+  THE RUN BEING **CUT**, AND THE FAILURE I FOUND MAKES THE RUN **COMPLETE**.** ONE fix landed and ONE
+  §2.1 entry landed. 🚨 **THE LAND COUNT IS DELIBERATELY ABSENT FROM THIS ENTRY, AND ITS ABSENCE IS
+  PART OF THE FINDING. Every number I wrote here about my own landing was falsified BY THE LAND THAT
+  CORRECTED IT — "TWO land attempts, TWO lands" became false when a third land fixed the sha clause,
+  then "THREE" became false when a fourth delivered the floor readings.** That is a fixed point, not
+  a mistake you can be careful enough to avoid: **a self-referential land count in an entry is
+  falsified by the act of correcting it, so the ONLY escape is to DELETE the claim rather than
+  restate it.** `git log --oneline origin/main` holds the count and always will; this entry holds the
+  lesson. 🚨 **MY LAND-1 SHA SURVIVED
   (`0782951ec`) AND MY ENTRY'S DID NOT — `7027ec14d` WAS REBASED INTO `54f6e4685` AT 09:52Z, BECAUSE A
   SIBLING LANDED `67933debb` BETWEEN MY TWO LANDS.** The clause that stood here read *"BOTH SHAS
   SURVIVED THEIR LANDS"*, and it was already false when it landed. 🚨 **THIS IS THE FOURTH
