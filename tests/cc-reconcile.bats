@@ -348,6 +348,49 @@ deadpid() { sleep 1 & local p=$!; kill "$p" 2>/dev/null || true; wait "$p" 2>/de
   [ "$(printf '%s' "$output" | jq -r .pruned)" = 0 ]
 }
 
+# write $D/panes as the needle pane followed by $1 filler panes, so the id list handed to the
+# liveness membership test is past the pipe-buffer regime with the needle on line 1.
+set_live_panes_bulk() {
+  local needle="$1" n="$2"
+  awk -v needle="$needle" -v n="$n" 'BEGIN{
+    printf "[{\"id\":\"%s\"}", needle
+    for (i = 1; i <= n; i++) printf ",{\"id\":\"FILL%04d-0000-0000-0000-%012d\"}", i, i
+    printf "]\n" }' > "$D/panes"
+}
+
+@test "prune: a LIVE pane is retained when the live-pane list is past the pipe-buffer regime" {
+  # THE MECHANISM ARM for the liveness membership test in the prune loop. Every prune case above
+  # declares two or three live panes — a ~40-byte id list, which is three orders of magnitude below
+  # the regime where this predicate can invert, so all of them stay green over a `grep -q` that
+  # answers NOT-LIVE for a pane iTerm2 just reported as live. The consequence is not a wrong
+  # message: the `continue` is skipped and the row falls through to the prune arm, so a live pane's
+  # registry row is DELETED. This arm is the one that can see that.
+  #
+  # 2,600 filler panes ⇒ an id list past the measured always-inverted floor of 87,122 bytes for
+  # this two-stage shape, needle on line 1, so a re-introduced -q fails every run, not one in
+  # twenty. The size is asserted rather than assumed.
+  local pane=AAAA0000-0000-0000-0000-000000000004 dead; dead="$(deadpid)"
+  add_orphan_row "$pane" "$dead" "$(old_ms)"
+  set_live_panes_bulk "$pane" 2600
+  local idbytes; idbytes="$(jq -r 'if type=="array" then .[].id // empty else empty end' "$D/panes" | wc -c | tr -d ' ')"
+  [ "$idbytes" -ge 87122 ] || { echo "live-pane id list is $idbytes B — under the inverting floor, cannot discriminate" >&2; return 1; }
+
+  run "$CCR" --json
+  [ "$status" -eq 0 ]
+  [ -f "$CC_REGISTRY_DIR/$pane.json" ] || { echo "a LIVE pane's row was PRUNED at a $idbytes B live-pane list" >&2; return 1; }
+  [ "$(printf '%s' "$output" | jq -r .pruned)" = 0 ]
+
+  # NEGATIVE control: an ABSENT pane at the same list size must still be pruned, so this arm cannot
+  # pass by simply never pruning once the list is large.
+  local gone=AAAA0000-0000-0000-0000-000000000005
+  add_orphan_row "$gone" "$dead" "$(old_ms)"
+  set_live_panes_bulk "$pane" 2600          # $gone is deliberately NOT in the list
+  run "$CCR" --json
+  [ "$status" -eq 0 ]
+  [ ! -f "$CC_REGISTRY_DIR/$gone.json" ] || { echo "an ABSENT pane survived — the arm cannot discriminate" >&2; return 1; }
+  true
+}
+
 @test "prune: P8 forensics — a gone row INSIDE the retain window survives (age, not liveness)" {
   local pane=AAAA0000-0000-0000-0000-000000000004 dead; dead="$(deadpid)"
   add_orphan_row "$pane" "$dead" "$CC_RECONCILE_NOW_MS"   # just died — still investigable

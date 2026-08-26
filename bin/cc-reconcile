@@ -296,7 +296,14 @@ if [ "$have_panes" = 1 ]; then
     [ -e "$f" ] || continue
     uuid="$(jq -r '.paneUUID // empty' "$f" 2>/dev/null)"
     [ -n "$uuid" ] || continue                                   # corrupt row → cc-sessions' call, not ours
-    printf '%s\n' "$live_panes" | grep -qxF "$uuid" && continue  # pane LIVE → never prune (heal case)
+    # DRAINED, not -q. The inline comment on this line states the safety intent, and `grep -q` is
+    # the one spelling that can defeat it: under `set -uo pipefail` grep exits on the first match,
+    # the producer takes SIGPIPE, pipefail returns non-zero, the `continue` is NOT taken — and a
+    # pane that iTerm2 just told us is LIVE falls through to the prune arm. Fail-OPEN into a
+    # destructive act. The feed is the it2 pane-id list, measured 33 bytes / 11 panes at
+    # 2026-08-26T20:44Z, so this is deeply LATENT — but the drain is one flag and the failure mode
+    # is unrecoverable, which is the wrong side of that trade to sit on.
+    printf '%s\n' "$live_panes" | grep -xF "$uuid" >/dev/null && continue  # pane LIVE → never prune (heal case)
     rowpid="$(jq -r '.pid // empty' "$f" 2>/dev/null)"
     [ -n "$rowpid" ] && kill -0 "$rowpid" 2>/dev/null && continue # pid alive → not confirmed gone
     # CONFIRMED GONE. Age it out under the retention window; undated rows fall back to mtime so

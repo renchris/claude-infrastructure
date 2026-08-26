@@ -13,7 +13,6 @@ bin/cc-comms-alarm-sweep	1
 bin/cc-idl	1
 bin/cc-notify	1
 bin/cc-reaper	1
-bin/cc-reconcile	1
 bin/cc-teardown	1
 docs/activation/pending-activation/13-mailbox-gc-activate.sh	2
 docs/activation/pending-activation/32-cc-roles-kitty-normalise-activate.sh	2
@@ -37,7 +36,7 @@ hooks/waiting-recycle.sh	2
 install.sh	3
 scripts/banner-shots.sh	1
 scripts/banner-video.sh	1
-scripts/bats-shellcheck-lint.sh	2
+scripts/bats-shellcheck-lint.sh	1
 scripts/bind-gate-e2e.sh	1
 scripts/branch-reaper.sh	6
 scripts/cloud-ceiling-probe.sh	3
@@ -49,7 +48,7 @@ scripts/gate-manifest.sh	1
 scripts/handoff-disposition.sh	1
 scripts/handoff-fire.sh	5
 scripts/offbox-partition.sh	1
-scripts/pane-spawn-coverage-lint.sh	2
+scripts/pane-spawn-coverage-lint.sh	1
 scripts/postland-verify.sh	1
 scripts/reap-guard.sh	1
 scripts/s3b-lint.sh	1

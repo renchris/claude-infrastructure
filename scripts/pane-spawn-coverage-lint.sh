@@ -458,7 +458,15 @@ scan_file() {
       # scannable file, so nothing may block. Only a file in the set can turn rc red; everything
       # else prints as ADVISORY and is counted. This is what bounds the gate — see the
       # `gate_bounded:` markers at its ship-land.sh call site.
-      if [ -n "${CC_PSC_OWN+set}" ] && ! printf '%s\n' "$CC_PSC_OWN" | grep -qxF -- "$rel"; then
+      # DRAINED, not -q. Same class as bats-shellcheck-lint's own-scope predicate, and the same
+      # fail-OPEN direction: under `set -uo pipefail` grep exits on the first match, the producer
+      # takes SIGPIPE, pipefail hands back non-zero, the `!` turns that into TRUE, and a file that
+      # IS in this land's own-set takes the ADVISORY branch — the finding stops blocking and the
+      # land proceeds. The own-set is CHANGED PATHS rather than changed lines, so this one is
+      # LATENT rather than live (the whole scannable corpus bounds it well under the 37,121-byte
+      # safe floor for this two-stage shape); it is drained anyway because latency is a property of
+      # today's diff sizes, not of the code, and nothing announces the crossing.
+      if [ -n "${CC_PSC_OWN+set}" ] && ! printf '%s\n' "$CC_PSC_OWN" | grep -xF -- "$rel" >/dev/null; then
         printf 'ADVISORY %s:%s: pane-spawn in a file with NO log call anywhere (outside this diff):\n    %s\n' \
           "$rel" "$n" "$(printf '%s' "$line" | sed 's/^[[:space:]]*//' | cut -c1-120)" >&2
         advised=$((advised + 1)); continue
