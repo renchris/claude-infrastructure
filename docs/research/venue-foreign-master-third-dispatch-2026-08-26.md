@@ -150,11 +150,83 @@ one-item worker.
 
 ---
 
-## 5 · Disposition
+## 5 · The land rail is unusable from this venue too — so even the disproof cannot reach trunk
+
+Attempting to land this document via the project-local `/ship` returns **exit 6 (GATE RED)**, and the
+red is not in the diff:
+
+```
+✗ gate: unattended-path-lint --selftest FAILED — the detector no longer discriminates, so
+  its clean verdict would mean nothing. Fix the lint before landing.
+✗ ship-land: GATE RED — not pushing.
+```
+
+**Attribution, proved rather than argued.** The same selftest was run on a pristine `origin/main`
+worktree with this session's commit entirely absent, and failed **identically — 11 of 42**. The red
+is a property of trunk *in this environment*, not of this diff. Independently: `scripts/ship-land.sh`
+builds the arm's own-set from `lint_own_scope`, which reports `scripts/* bin/* hooks/* hooks/*.sh
+tests/*.bats`, and this land changes exactly two files — `docs/plans/MASTER_PRODUCT_REPOS.md` and
+this document. **The intersection is empty.** The arm has nothing to judge here and blocks anyway,
+because the selftest gate at `scripts/ship-land.sh:3138-3143` fires unconditionally, *before*
+own-scope is consulted.
+
+**Why the detector is inert here, and why the gate is nonetheless right.** `unattended-path-lint.sh`
+reads launchd plists through `/usr/libexec/PlistBuddy` (`:992`, `:1003`) and its own header calls that
+binary "stock" (`:119`) — true on macOS, and this VM is **Linux**:
+
+```
+$ uname -s                        → Linux
+$ ls /usr/libexec/PlistBuddy      → No such file or directory
+$ command -v plutil shellcheck    → (both absent; jq, rg, perl, python3 present)
+$ grep -n 'Darwin\|uname' scripts/unattended-path-lint.sh   → (no match)
+```
+
+There is **no platform guard anywhere in the lint**, so on Linux its detectors return "found nothing"
+for environmental reasons, and 11 selftest assertions fail as `want 1, got 0`. The gate arm's refusal
+is then exactly correct by its own stated logic — *"the detector no longer discriminates, so its
+clean verdict would mean nothing"* — a genuinely inert instrument must never be read as green. The
+arm is not the defect; the defect is that a **macOS-only instrument sits on the mandatory land path
+of a repo that is dispatched to Linux VMs.**
+
+**Consequence, and it generalises past this item:** a cloud worker in this venue cannot land *any*
+diff, including a docs-only one that touches nothing the arm judges. So the venue defect is one layer
+worse than "the assigned work is unreachable" — the **disproof of that unreachability is also
+unlandable from the venue that produces it**, which is why entries in this family keep needing a
+later on-box session to carry them onto trunk.
+
+**No bypass was taken.** `SHIP_LAND_UNATTENDED_LINT` would skip the arm (the `[[ -x … ]]` test fails
+on a bad path), and pointing it at `/nonexistent` would have landed this commit. That is disabling a
+safeguard to get green, which this repo forbids outright, and it would be a *worse* act from a cloud
+VM than the venue-rule edit §4 already declines: the same reasoning that says a VM must not decide its
+own admission says it must not weaken the gate that admits its own commit. Fixing the lint properly —
+a Darwin guard, or a `skip`-with-nonverdict when `PlistBuddy` is absent — is a change to the land
+gate, cannot be tested here (`bats` absent), and belongs to an on-box session.
+
+⚠️ **Not dated.** This clone is **shallow** (`.git/shallow` present, 52 commits), so when this arm
+entered the gate is not answerable from here, and no claim is made that it is new. Earlier entries in
+this family record cloud sessions that *did* reach trunk (`venue-dod-offtrunk-2026-08-24.md` §6), so
+the arm may postdate them or the environments may differ — an on-box session can date it with
+`git log -S unattended-path-lint -- scripts/ship-land.sh`.
+
+---
+
+## 6 · Disposition
 
 The item is **blocked on an operator-side action**, and this VM cannot record that: `cc-backlog
 block` exits 3 against a store that does not exist here (§3). This document plus the
-`MASTER_PRODUCT_REPOS.md` status-log entry are the only durable record reachable from this venue.
+`MASTER_PRODUCT_REPOS.md` status-log entry are the only durable record reachable from this venue —
+and per §5 they are reachable only on the session branch, **not on trunk**.
+
+**Three things an on-box session should do, in this order:**
+
+1. `cc-backlog block 8f59467c92b0 --needs "route this cross-repo master away from a
+   claude-infrastructure-scoped venue; R1-R4 edit reso-management-app and doc_classifier"` — the park
+   this venue cannot apply. **Block, not reopen:** reopening re-cycles the row, which is what
+   produced dispatches two and three.
+2. Land this branch's commits, which carry §1-§5. They are gate-blocked here for the reason in §5,
+   not for anything in their content.
+3. Decide the lint's platform guard (§5) and the `plan-index-update.sh` overwrite (§2). Both are land-gate
+   / dispatch-chain changes that a one-item cloud worker should not make unilaterally.
 
 **The park must be applied on the operator's box.** Nothing in R1–R4 should be re-derived: they are
 open, correct, and unstarted.

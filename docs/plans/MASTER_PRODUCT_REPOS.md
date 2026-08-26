@@ -187,9 +187,27 @@ single-brained and audited, and doc_classifier's authorization holes are closed 
   VM building or running the venue rule ("deciding its own admission"), and `bats`+`shellcheck` are
   both ABSENT here so a shell change cannot be gated — the same ground on which
   `cloud-venue-project-repo-mismatch-2026-08-16.md` §3 refused to land an ungated guard into the fire
-  path. Full measurement → `docs/research/venue-foreign-master-third-dispatch-2026-08-26.md`.
+  path.
+  **(4)** 🚨 **the LAND rail is unusable from this venue too, so even the disproof cannot reach
+  trunk.** `/ship` returns exit 6 (GATE RED) on `unattended-path-lint --selftest FAILED`. It is not
+  this diff: the identical 11-of-42 failure reproduces on a pristine `origin/main` worktree with the
+  commit absent, and the arm's own-scope (`scripts/* bin/* hooks/* tests/*.bats`) has an **empty
+  intersection** with this land's two `.md` files — the selftest gate at `scripts/ship-land.sh:3138`
+  fires unconditionally, before own-scope. Cause: the lint reads plists via
+  `/usr/libexec/PlistBuddy` (`:992`, `:1003`) and its header calls that "stock" (`:119`) — true on
+  macOS; this VM is **Linux**, PlistBuddy and plutil are absent, and the lint has **no `uname`/Darwin
+  guard**, so its detectors return "found nothing" environmentally. The arm's refusal is then correct
+  by its own logic (an inert detector must never read green); the defect is a macOS-only instrument
+  on the mandatory land path of a repo dispatched to Linux VMs. **No bypass taken** —
+  `SHIP_LAND_UNATTENDED_LINT=/nonexistent` would have landed it, and disabling a safeguard to get
+  green is forbidden here and worse from a VM than the venue-rule edit (3) already declines. ⚠️ Not
+  dated: this clone is shallow (52 commits), so whether the arm postdates the cloud lands recorded in
+  `venue-dod-offtrunk-2026-08-24.md` §6 is unanswerable from here. Full measurement →
+  `docs/research/venue-foreign-master-third-dispatch-2026-08-26.md`.
   **Disposition unchanged: `cc-backlog block`, applied ON THE OPERATOR'S BOX** — it exits 3 from a VM,
-  so this file is the only durable record this venue can reach.
+  so this file is the only durable record this venue can reach, and per (4) it reaches only the
+  session branch, not trunk. An on-box session should block the row, land this branch, and decide the
+  lint guard + the indexer overwrite.
 - **2026-08-17 — the SAME row was cloud-dispatched AGAIN, and the re-fire is the finding.**
   `8f59467c92b0` was fired into an identical VM shape (one checkout, GitHub scope of one repo, no
   `~/Development`) ~2 days after the 08-15 entry below wrote its disproof into THIS FILE. R1-R4 were
