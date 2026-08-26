@@ -192,8 +192,14 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   - **STORES, each with its moment.** Post-land RED `.page` files under `autonomy/postland`: **0 at
     my open (07:32:10Z) and 0 at my close (08:25:53Z) — the 128th consecutive**, over a denominator
     that read **2,692** and **2,694** (it moved by 2 inside my link, against ~210 between two links
-    two links ago). ⚠️ **postland STAMPS read 472 at BOTH ends — FLAT across my link, read late on
-    purpose.** `~/.claude/autonomy/pages` **2,014 → 2,033 (+19)** with `.page` **118 → 118**.
+    two links ago). 🚨 **postland STAMPS read 472 at my open (07:32:10Z) AND at my close (08:25:53Z) — and
+    473 at my FLOOR (08:37:58Z), twelve minutes later. IT WAS NOT FLAT ACROSS MY LINK, AND THIS
+    CLAUSE SAID IT WAS UNTIL MY FLOOR CAUGHT IT.** That is the distinction the last two links
+    paid lands for, in its cheapest form: **every timestamped NUMBER in this entry survived the
+    same floor untouched, and the one clause that made a claim about THE LINK — a sentence with
+    no moment attached — was falsified by the very next reading.** The background
+    `postland-verify` mechanism is demonstrably ALIVE. **Read this store LATER THAN YOUR CLOSE
+    CENSUS: a close-census reading of it is early enough to look flat when it is not.** `~/.claude/autonomy/pages` **2,014 → 2,033 (+19)** with `.page` **118 → 118**.
     🚨 **inbox-guard `.escalated` went 485 → 472 — DOWN THIRTEEN inside one link**, after two flat
     links and a +2 in the one before. **Thirteen links, thirteen behaviours: inherit no rate and no
     monotone assumption.**
