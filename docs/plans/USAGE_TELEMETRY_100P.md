@@ -1610,8 +1610,8 @@ windows/week, carrying the fleet wall rate 1.72% → 2.20%.
 
 ### §5.7 Implementation record — what actually landed, and where it deviated from the spec
 
-Wave 1 = **S1 + S2 + S3**. Wave 2 = **S4 only**. S5–S7 are unbuilt and unchanged; S5 still gates
-S6, and nothing in wave 2 shortens that.
+Wave 1 = **S1 + S2 + S3**. Wave 2 = **S4 + S5**. S6 and S7 are unbuilt and unchanged. S5 is now
+BUILT but **not yet READ**, and S6's gate is the reading, not the building — see its record below.
 
 #### S1 · data fixes — LANDED
 
@@ -1828,14 +1828,55 @@ exactly as §5.2 states, and the monitoring plan (§5.5) re-runs the burst-strat
 every completed weekly window rather than waiting for the planner. RP-23 is the mutant test that
 keeps the freeze term honest: at `P_WALL = 0.0` the same row is no longer late at all.
 
+#### S5 · M3c `--strand-score` — BUILT, NOT YET READ (wave 2)
+
+`bin/claude-accounts`: `strand_score(samples, buckets, now)` + `render_strand_score(sc)` beside
+`wk_strand_pp`, constants `STRAND_SCORE_BUCKETS = (96,48,24,12,6)` /
+`STRAND_SCORE_LOOKBACK_H = 400` / `STRAND_AGREE_PP = 0.5`; a `--strand-score [--hours N] [--json]`
+branch in `main()` placed **before `load_cfg()`**, beside `--agents`, so it answers without a
+sweep, the keychain or a config. Cases RP-31..RP-36 in `tests/claude-accounts-strand.bats`,
+**6/6 proven RED** against the S4 binary.
+
+**Deviation 1 — it lives beside `wk_strand_pp`, not beside `_util_tail`** as §5.2 S5 says. It
+scores that function; placing the mutation test next to its subject is where an implementer
+reads it. Nothing about the resolution order changes.
+
+**Deviation 2 — CAUSALITY is an explicit slice, and it is the load-bearing guard the spec does
+not name.** `burn_wk_ewma_ph` filters by lookback, not by DIRECTION, so handing it the whole
+series lets a 12 h cell average over the burn that happened after it — and its EWMA weights
+`2^(-(now-t)/hl)` grow without bound for a future sample, so the peek does not merely leak, it
+DOMINATES. Each cell therefore re-runs M3a on `[x for x in ss if x["_t"] <= e["_t"]]`. Measured
+on the RP-31 fixture at the 12 h horizon: causal projection **49.60 pp**, non-causal **32.60**,
+realised **23.70** — the peek is nearly twice as close to the answer. RP-32 asserts that gap, so
+an edit that drops the slice cannot pass. *Without this the harness rebuilds the very tautology
+it exists to remove, one layer down.*
+
+**Deviation 3 — `agree` is not the sign-agreement rate §5.2 asks for.** `wk_strand_pp` is clamped
+at zero, so a strand has no negative branch and a sign-agreement rate would read 100% **by
+construction** — the same defect as the refuted score, in a new column. `agree` grades the binary
+question the planner acts on: does this window strand at all (≥ `STRAND_AGREE_PP`)? RP-35 pins
+both arms with a window that filled to exactly 100% while the nowcast said pp would die.
+
+**Deviation 4 — exit 3 when nothing is evaluable**, added rather than specified. A harness whose
+every cell is empty and whose exit code says success is precisely the vacuous pass. The empty
+bucket also PRINTS its emptiness (`no evaluable sample this far out`) rather than rendering a
+dash a reader could take for a zero.
+
+🚨 **S6 IS STILL GATED, and building S5 did not open the gate.** §5.2's rule is that S6 does not
+ship until S5 **has run and been read** — specifically, until the horizon-stratified bias at the
+12 h bucket is near zero. That reading needs the live `account-utilization.jsonl` on the
+operator's machine; wave 2 ran only on synthetic fixtures, where the numbers are properties of
+the fixture and say nothing about the fleet. **The next step on this plan is to run
+`claude-accounts --strand-score` and read it — not to build S6.**
+
 #### Acceptance status against §5.4
 
 | command | status |
 |---|---|
-| the bats suites (roll-key · util-tail · strand · burst · core) | wave 1: **111/111 green**. wave 2: **118 cases**, 8 new/extended, every one shown RED against the wave-1 binary |
+| the bats suites (roll-key · util-tail · strand · burst · core) | wave 1: **111/111 green**. wave 2: **124 cases**, 14 new/extended, every one shown RED against the binary that preceded it |
 | `claude-accounts --readout` renders the drain block for all four accounts | **yes** — see above |
 | `claude-accounts --readout \| grep -c 'strand'` → 3 or 4 | **4** |
-| `claude-accounts --strand-score` | **not in this wave** — that flag is S5 |
+| `claude-accounts --strand-score` | **built, and this is the ONE acceptance wave 2 could not run** — the table is only meaningful over the live series on the operator's machine. Run it there; §5.4's bar is non-zero `n` in the 24/12/6 buckets and a bias that could have been non-zero |
 
 ⚠️ **Wave 2's suites were run on a Linux container, not the operator's Mac, and 4 core cases are
 RED there BEFORE any change** — `--relogin-info` and the three `--login-status` cases, which need

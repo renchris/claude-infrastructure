@@ -255,3 +255,158 @@ print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
+
+# ---------------------------------------------------------------------------------------------
+# S5 · M3c · strand_score — USAGE_TELEMETRY_100P §5.2 S5, the instrument that CAN fail.
+#
+# THE SCORE IT REPLACES WAS A TAUTOLOGY. The synthesis evaluated its fire rule at each window's
+# LAST sample — the one instant where `100 - weekly_pct` has already converged to the realised
+# strand — got 8/8, and published `4/4 recall, 0 FP, median ~20 h lead`. Every part of that was
+# an artefact of WHERE it was read. Scoring at fixed distances BEFORE the reset is what makes a
+# wrong answer reachable, and RP-32 is the case that proves the harness is not quietly re-writing
+# the tautology one layer down.
+
+STRAND_SCORE_LOAD='
+def window(acct, reset_t, rates, step_h=0.1):
+    """A whole weekly window: rates = [(hours, weekly_pp_per_h), ...] from the window open."""
+    out, t, wp = [], reset_t - 168.0 * 3600.0, 0.0
+    for hours, rate in rates:
+        for _ in range(int(hours / step_h)):
+            out.append({"acct": acct, "weekly_pct": min(100.0, wp), "session_pct": 10,
+                        "_t": t, "weekly_reset_at": iso(reset_t),
+                        "session_reset_at": iso(t + 3 * 3600.0)})
+            wp += rate * step_h
+            t += step_h * 3600.0
+    return out
+'
+
+@test "RP-31: strand_score scores CLOSED windows at fixed horizons, and the bias is REACHABLE" {
+  # One closed window: 156 h at 0.30 pp/h, then a late burst at 2.5 pp/h. It closes at 76.6%,
+  # so the realised strand is 23.4 pp. Read 96 h out, the nowcast has seen only the slow pace and
+  # projects ~49.6 pp — a +26 pp error. THAT is the point: at the last sample the same arithmetic
+  # would have been exactly right, which is why the old score could not fail.
+  run python3 -c "$LOAD$STRAND_SCORE_LOAD"'
+sam = window("next3", NOW - 2 * 3600.0, [(156.0, 0.30), (11.9, 2.5)])
+sc = ca.strand_score(sam, now=NOW)
+assert sc["windows"] == 1, sc
+by = {b["h"]: b for b in sc["buckets"]}
+for h in (96.0, 48.0, 24.0, 12.0, 6.0):
+    assert by[h]["n"] == 1, (h, by[h])            # every bucket has an evaluable cell
+assert 20.0 < by[96.0]["bias"] < 32.0, by[96.0]   # measured +25.90
+assert by[96.0]["mae"] == abs(by[96.0]["bias"]), by[96.0]
+# ...and it CONVERGES as the horizon closes, which is the estimator being what it is sold as:
+# a good nowcaster precisely because it is a bad forecaster (§5.1 LB-2).
+assert by[6.0]["bias"] < by[96.0]["bias"] / 3.0, (by[6.0], by[96.0])
+lines = ca.render_strand_score(sc)
+assert "1 CLOSED weekly window" in lines[0], lines
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-32 CONTROL: the harness is CAUSAL — it cannot see the burn that came after the cell" {
+  # burn_wk_ewma_ph filters by lookback, not by DIRECTION. Handing it the whole series would let
+  # a 12 h cell average over the late burst it is supposed to be blind to, the projection would
+  # already know the answer, and the bias would collapse toward zero — the tautology rebuilt one
+  # layer down. This case computes both and asserts they DIFFER, so a future edit that drops the
+  # slice cannot pass.
+  run python3 -c "$LOAD$STRAND_SCORE_LOAD"'
+reset_t = NOW - 2 * 3600.0
+sam = window("next3", reset_t, [(156.0, 0.30), (11.9, 2.5)])
+cell = [c for c in ca.strand_score(sam, now=NOW)["buckets"] if c["h"] == 12.0][0]["cells"][0]
+# the same cell scored NON-causally: every sample, including the ones after this instant
+peek_e = [e for e in sam if e["_t"] == cell["at_t"]][0]
+ewma, _ = ca.burn_wk_ewma_ph(sam, peek_e["_t"], cell["at_h"])
+peek = ca.wk_strand_pp({"weekly_pct": peek_e["weekly_pct"], "weekly_reset_h": cell["at_h"],
+                        "burn_wk_ewma_ph": ewma})
+assert abs(peek - cell["realised"]) < abs(cell["projected"] - cell["realised"]), (peek, cell)
+assert abs(peek - cell["projected"]) > 1.0, (peek, cell)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-33 CONTROL: an unevaluable cell is EXCLUDED, never imputed and never counted as a hit" {
+  # A window observed only over its last 20 h has no sample 96/48/24 h before its reset. L2
+  # says those cells report nothing; imputing a zero would credit the projector with three
+  # perfect calls it never made, and a mean over imputed zeros is the vacuous pass again.
+  run python3 -c "$LOAD$STRAND_SCORE_LOAD"'
+reset_t = NOW - 2 * 3600.0
+sam = [e for e in window("next3", reset_t, [(156.0, 0.30), (11.9, 2.5)])
+       if (reset_t - e["_t"]) / 3600.0 <= 20.0]
+sc = ca.strand_score(sam, now=NOW)
+by = {b["h"]: b for b in sc["buckets"]}
+assert sc["windows"] == 1, sc                      # the window itself IS still closed+observed
+for h in (96.0, 48.0, 24.0):
+    assert by[h]["n"] == 0, (h, by[h])
+    assert by[h]["bias"] is None and by[h]["mae"] is None, by[h]
+for h in (12.0, 6.0):
+    assert by[h]["n"] == 1, (h, by[h])             # CONTROL: the horizons it CAN answer
+empty = [l for l in ca.render_strand_score(sc) if "96h" in l][0]
+assert "no evaluable sample" in empty, empty       # the emptiness is printed, not dashed away
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-34 CONTROL: the LIVE window is never scored — it has no realised strand yet" {
+  # completed_weekly_windows already refuses it (RP-9), and this is that refusal seen from the
+  # consumer that would otherwise publish an error against a number that does not exist.
+  run python3 -c "$LOAD$STRAND_SCORE_LOAD"'
+live = window("next3", NOW + 24 * 3600.0, [(140.0, 0.30)])
+sc = ca.strand_score(live, now=NOW)
+assert sc["windows"] == 0, sc
+assert all(b["n"] == 0 for b in sc["buckets"]), sc
+# CONTROL: the same shape with its reset in the PAST scores normally, so this is the live-window
+# rule firing and not an always-empty harness.
+closed = window("next3", NOW - 2 * 3600.0, [(166.0, 0.30)])
+assert ca.strand_score(closed, now=NOW)["windows"] == 1
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-35: agree grades the BINARY question, never the sign of a clamped quantity" {
+  # wk_strand_pp is clamped at zero, so a signed strand has no negative branch and a naive
+  # sign-agreement rate reads 100% by construction — the same defect as the old score. `agree`
+  # asks what the planner acts on: does this window strand at all? A window that filled to 100%
+  # while the nowcast said pp would die is a DISAGREEMENT, and must score as one.
+  run python3 -c "$LOAD$STRAND_SCORE_LOAD"'
+# 156 h at 0.30 (=46.8 pp), then a burst that takes it to exactly 100: realised strand 0.
+sam = window("next3", NOW - 2 * 3600.0, [(156.0, 0.30), (11.9, 4.5)])
+sc = ca.strand_score(sam, now=NOW)
+by = {b["h"]: b for b in sc["buckets"]}
+assert by[96.0]["cells"][0]["realised"] < 0.5, by[96.0]["cells"][0]   # it did NOT strand
+assert by[96.0]["cells"][0]["projected"] > 0.5, by[96.0]["cells"][0]  # ...but the nowcast said it would
+assert by[96.0]["agree"] == 0.0, by[96.0]
+# CONTROL: the window that DID strand agrees at the same horizon, so agree is not always 0.
+did = ca.strand_score(window("next3", NOW - 2 * 3600.0, [(156.0, 0.30), (11.9, 2.5)]), now=NOW)
+assert [b for b in did["buckets"] if b["h"] == 96.0][0]["agree"] == 1.0, did
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-36: --strand-score answers without a config, and exits 3 when it can measure NOTHING" {
+  # Two properties in one run. (a) The branch returns before load_cfg(), like --agents: HOME is
+  # fixtured and there is no accounts.json, so a branch placed after load_cfg() would exit
+  # non-zero for the wrong reason. (b) An empty series exits 3, NEVER 0 — a harness whose every
+  # cell is empty and whose exit code says success is the vacuous pass this suite exists to stop.
+  : > "$CC_UTIL_LOG"
+  run python3 "$CA_BIN" --strand-score
+  [ "$status" -eq 3 ] || { echo "status=$status"; echo "$output"; false; }
+  [[ "$output" == *"no evaluable sample"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"0 CLOSED weekly window"* ]] || { echo "$output"; false; }
+  # CONTROL: with real closed windows in the series the SAME command exits 0 and reports cells.
+  python3 -c "$LOAD$STRAND_SCORE_LOAD"'
+import json
+with open(os.environ["CC_UTIL_LOG"], "w") as f:
+    for e in window("next3", NOW - 2 * 3600.0, [(156.0, 0.30), (11.9, 2.5)], step_h=0.5):
+        f.write(json.dumps({"ts": iso(e["_t"]), "acct": e["acct"],
+                            "session_pct": e["session_pct"], "weekly_pct": e["weekly_pct"],
+                            "session_reset_at": e["session_reset_at"],
+                            "weekly_reset_at": e["weekly_reset_at"]}) + chr(10))'
+  run python3 "$CA_BIN" --strand-score
+  [ "$status" -eq 0 ] || { echo "status=$status"; echo "$output"; false; }
+  [[ "$output" == *"1 CLOSED weekly window"* ]] || { echo "$output"; false; }
+}
