@@ -5630,6 +5630,15 @@ if [ "${1:-}" = "__recycle" ]; then
           hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;;
         retype)
           if [ "$waited" = 60 ]; then
+            # typed-send-lint:allow — reviewed: the target is a live CC COMPOSER, never a shell, so
+            # the hazard the lint exists to stop (zsh `setopt CORRECT` parking a pane on `[nyae]?`)
+            # cannot arise — `retype` is returned only when recycle_nudge_decision read the composer
+            # as EMPTY, which requires a live CC session owning the box. The sanctioned helper is
+            # unusable here for the same reason: it2_type_verified is SHELL-shaped (Ctrl-U scrub, a
+            # `: <nonce>; ` wire prefix), and that prefix pasted into a composer submits literal text
+            # instead of the /exit slash command. The echo-verify the lint asks for is present, in
+            # the form a composer admits: the three lines below read the box back and gate the CR on
+            # an exact `/exit`, so an un-landed or mangled retype is never submitted.
             hf_bounded "$IT2" session send -s "$RSID" "/exit" >/dev/null 2>&1 || true
             sleep 1
             nc="$(composer_content "$IT2" "$RSID")" || nc=""
