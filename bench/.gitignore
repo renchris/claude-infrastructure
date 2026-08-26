@@ -11,3 +11,5 @@ corpus/out/pages/
 corpus/out/shots/
 corpus/out/snapshots/
 corpus/out/blind/
+# route.py cuts these out of shots/, so they are derived twice over.
+corpus/out/crops/

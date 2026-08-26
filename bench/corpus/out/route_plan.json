@@ -1,0 +1,278 @@
+{
+ "app": "bench-corpus",
+ "rationale": "The ground-truth corpus. Flat, because a weighting would grade the instrument on a curve.",
+ "family_weight": {
+  "G": 1.0,
+  "K": 1.0,
+  "A": 1.0,
+  "O": 1.0,
+  "X": 1.0,
+  "V": 1.0
+ },
+ "weight_floors_applied_to": [],
+ "role": "advisory",
+ "never_gates": true,
+ "control_clean": true,
+ "control_findings": [],
+ "xcheck_layer": "on",
+ "counts": {
+  "crop_requests": 0,
+  "abstentions_resolved_without_a_model": 2,
+  "gestalt_requests": 13,
+  "est_image_tokens": 43953
+ },
+ "resolved": [
+  {
+   "page": "contrast-on-gradient",
+   "class": "contrast-indeterminate",
+   "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
+   "settled_by": [
+    "xcheck-contrast-varies"
+   ]
+  },
+  {
+   "page": "contrast-on-gradient",
+   "class": "contrast-indeterminate",
+   "target": "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
+   "settled_by": [
+    "xcheck-contrast-varies"
+   ]
+  }
+ ],
+ "queue": [
+  {
+   "id": "g01",
+   "page": "align-1px",
+   "kind": "gestalt",
+   "class": "_gestalt",
+   "family": "V",
+   "weight": 1.0,
+   "question": "Look at this page as a whole. Name what the eye lands on first, second and third, and say whether that order matches what the page is for. If something reads as more important than it is, name it.",
+   "prohibition": "Answer only the question asked. Do not state, estimate or compute any number -- no pixel distances, sizes, contrast ratios or coordinates. Those are already known exactly and your estimate would replace a measurement with a guess. If this image does not let you answer, reply UNANSWERABLE.",
+   "role": "advisory",
+   "blind": true,
+   "image": "shots/align-1px@1.5x.png",
+   "image_px": [
+    1920,
+    1350
+   ],
+   "est_image_tokens": 3381
+  },
+  {
+   "id": "g02",
+   "page": "clean",
+   "kind": "gestalt",
+   "class": "_gestalt",
+   "family": "V",
+   "weight": 1.0,
+   "question": "Look at this page as a whole. Name what the eye lands on first, second and third, and say whether that order matches what the page is for. If something reads as more important than it is, name it.",
+   "prohibition": "Answer only the question asked. Do not state, estimate or compute any number -- no pixel distances, sizes, contrast ratios or coordinates. Those are already known exactly and your estimate would replace a measurement with a guess. If this image does not let you answer, reply UNANSWERABLE.",
+   "role": "advisory",
+   "blind": true,
+   "image": "shots/clean@1.5x.png",
+   "image_px": [
+    1920,
+    1350
+   ],
+   "est_image_tokens": 3381
+  },
+  {
+   "id": "g03",
+   "page": "contrast-on-gradient",
+   "kind": "gestalt",
+   "class": "_gestalt",
+   "family": "V",
+   "weight": 1.0,
+   "question": "Look at this page as a whole. Name what the eye lands on first, second and third, and say whether that order matches what the page is for. If something reads as more important than it is, name it.",
+   "prohibition": "Answer only the question asked. Do not state, estimate or compute any number -- no pixel distances, sizes, contrast ratios or coordinates. Those are already known exactly and your estimate would replace a measurement with a guess. If this image does not let you answer, reply UNANSWERABLE.",
+   "role": "advisory",
+   "blind": true,
+   "image": "shots/contrast-on-gradient@1.5x.png",
+   "image_px": [
+    1920,
+    1350
+   ],
+   "est_image_tokens": 3381
+  },
+  {
+   "id": "g04",
+   "page": "contrast-plain",
+   "kind": "gestalt",
+   "class": "_gestalt",
+   "family": "V",
+   "weight": 1.0,
+   "question": "Look at this page as a whole. Name what the eye lands on first, second and third, and say whether that order matches what the page is for. If something reads as more important than it is, name it.",
+   "prohibition": "Answer only the question asked. Do not state, estimate or compute any number -- no pixel distances, sizes, contrast ratios or coordinates. Those are already known exactly and your estimate would replace a measurement with a guess. If this image does not let you answer, reply UNANSWERABLE.",
+   "role": "advisory",
+   "blind": true,
+   "image": "shots/contrast-plain@1.5x.png",
+   "image_px": [
+    1920,
+    1350
+   ],
+   "est_image_tokens": 3381
+  },
+  {
+   "id": "g05",
+   "page": "grid-offgrid",
+   "kind": "gestalt",
+   "class": "_gestalt",
+   "family": "V",
+   "weight": 1.0,
+   "question": "Look at this page as a whole. Name what the eye lands on first, second and third, and say whether that order matches what the page is for. If something reads as more important than it is, name it.",
+   "prohibition": "Answer only the question asked. Do not state, estimate or compute any number -- no pixel distances, sizes, contrast ratios or coordinates. Those are already known exactly and your estimate would replace a measurement with a guess. If this image does not let you answer, reply UNANSWERABLE.",
+   "role": "advisory",
+   "blind": true,
+   "image": "shots/grid-offgrid@1.5x.png",
+   "image_px": [
+    1920,
+    1350
+   ],
+   "est_image_tokens": 3381
+  },
+  {
+   "id": "g06",
+   "page": "hierarchy-inversion",
+   "kind": "gestalt",
+   "class": "_gestalt",
+   "family": "V",
+   "weight": 1.0,
+   "question": "Look at this page as a whole. Name what the eye lands on first, second and third, and say whether that order matches what the page is for. If something reads as more important than it is, name it.",
+   "prohibition": "Answer only the question asked. Do not state, estimate or compute any number -- no pixel distances, sizes, contrast ratios or coordinates. Those are already known exactly and your estimate would replace a measurement with a guess. If this image does not let you answer, reply UNANSWERABLE.",
+   "role": "advisory",
+   "blind": true,
+   "image": "shots/hierarchy-inversion@1.5x.png",
+   "image_px": [
+    1920,
+    1350
+   ],
+   "est_image_tokens": 3381
+  },
+  {
+   "id": "g07",
+   "page": "optical-centering",
+   "kind": "gestalt",
+   "class": "_gestalt",
+   "family": "V",
+   "weight": 1.0,
+   "question": "Look at this page as a whole. Name what the eye lands on first, second and third, and say whether that order matches what the page is for. If something reads as more important than it is, name it.",
+   "prohibition": "Answer only the question asked. Do not state, estimate or compute any number -- no pixel distances, sizes, contrast ratios or coordinates. Those are already known exactly and your estimate would replace a measurement with a guess. If this image does not let you answer, reply UNANSWERABLE.",
+   "role": "advisory",
+   "blind": true,
+   "image": "shots/optical-centering@1.5x.png",
+   "image_px": [
+    1920,
+    1350
+   ],
+   "est_image_tokens": 3381
+  },
+  {
+   "id": "g08",
+   "page": "overflow-clip",
+   "kind": "gestalt",
+   "class": "_gestalt",
+   "family": "V",
+   "weight": 1.0,
+   "question": "Look at this page as a whole. Name what the eye lands on first, second and third, and say whether that order matches what the page is for. If something reads as more important than it is, name it.",
+   "prohibition": "Answer only the question asked. Do not state, estimate or compute any number -- no pixel distances, sizes, contrast ratios or coordinates. Those are already known exactly and your estimate would replace a measurement with a guess. If this image does not let you answer, reply UNANSWERABLE.",
+   "role": "advisory",
+   "blind": true,
+   "image": "shots/overflow-clip@1.5x.png",
+   "image_px": [
+    1920,
+    1350
+   ],
+   "est_image_tokens": 3381
+  },
+  {
+   "id": "g09",
+   "page": "radius-drift",
+   "kind": "gestalt",
+   "class": "_gestalt",
+   "family": "V",
+   "weight": 1.0,
+   "question": "Look at this page as a whole. Name what the eye lands on first, second and third, and say whether that order matches what the page is for. If something reads as more important than it is, name it.",
+   "prohibition": "Answer only the question asked. Do not state, estimate or compute any number -- no pixel distances, sizes, contrast ratios or coordinates. Those are already known exactly and your estimate would replace a measurement with a guess. If this image does not let you answer, reply UNANSWERABLE.",
+   "role": "advisory",
+   "blind": true,
+   "image": "shots/radius-drift@1.5x.png",
+   "image_px": [
+    1920,
+    1350
+   ],
+   "est_image_tokens": 3381
+  },
+  {
+   "id": "g10",
+   "page": "spacing-gap",
+   "kind": "gestalt",
+   "class": "_gestalt",
+   "family": "V",
+   "weight": 1.0,
+   "question": "Look at this page as a whole. Name what the eye lands on first, second and third, and say whether that order matches what the page is for. If something reads as more important than it is, name it.",
+   "prohibition": "Answer only the question asked. Do not state, estimate or compute any number -- no pixel distances, sizes, contrast ratios or coordinates. Those are already known exactly and your estimate would replace a measurement with a guess. If this image does not let you answer, reply UNANSWERABLE.",
+   "role": "advisory",
+   "blind": true,
+   "image": "shots/spacing-gap@1.5x.png",
+   "image_px": [
+    1920,
+    1350
+   ],
+   "est_image_tokens": 3381
+  },
+  {
+   "id": "g11",
+   "page": "token-color-drift",
+   "kind": "gestalt",
+   "class": "_gestalt",
+   "family": "V",
+   "weight": 1.0,
+   "question": "Look at this page as a whole. Name what the eye lands on first, second and third, and say whether that order matches what the page is for. If something reads as more important than it is, name it.",
+   "prohibition": "Answer only the question asked. Do not state, estimate or compute any number -- no pixel distances, sizes, contrast ratios or coordinates. Those are already known exactly and your estimate would replace a measurement with a guess. If this image does not let you answer, reply UNANSWERABLE.",
+   "role": "advisory",
+   "blind": true,
+   "image": "shots/token-color-drift@1.5x.png",
+   "image_px": [
+    1920,
+    1350
+   ],
+   "est_image_tokens": 3381
+  },
+  {
+   "id": "g12",
+   "page": "touch-target",
+   "kind": "gestalt",
+   "class": "_gestalt",
+   "family": "V",
+   "weight": 1.0,
+   "question": "Look at this page as a whole. Name what the eye lands on first, second and third, and say whether that order matches what the page is for. If something reads as more important than it is, name it.",
+   "prohibition": "Answer only the question asked. Do not state, estimate or compute any number -- no pixel distances, sizes, contrast ratios or coordinates. Those are already known exactly and your estimate would replace a measurement with a guess. If this image does not let you answer, reply UNANSWERABLE.",
+   "role": "advisory",
+   "blind": true,
+   "image": "shots/touch-target@1.5x.png",
+   "image_px": [
+    1920,
+    1350
+   ],
+   "est_image_tokens": 3381
+  },
+  {
+   "id": "g13",
+   "page": "type-scale",
+   "kind": "gestalt",
+   "class": "_gestalt",
+   "family": "V",
+   "weight": 1.0,
+   "question": "Look at this page as a whole. Name what the eye lands on first, second and third, and say whether that order matches what the page is for. If something reads as more important than it is, name it.",
+   "prohibition": "Answer only the question asked. Do not state, estimate or compute any number -- no pixel distances, sizes, contrast ratios or coordinates. Those are already known exactly and your estimate would replace a measurement with a guess. If this image does not let you answer, reply UNANSWERABLE.",
+   "role": "advisory",
+   "blind": true,
+   "image": "shots/type-scale@1.5x.png",
+   "image_px": [
+    1920,
+    1350
+   ],
+   "est_image_tokens": 3381
+  }
+ ]
+}

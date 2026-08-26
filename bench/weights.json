@@ -1,0 +1,103 @@
+{
+  "_": [
+    "Per-app rule weightings. One review harness, three different problems --",
+    "reso-landing-app is a purchased marketing template and is largely an",
+    "aesthetics problem; reso-management-app is a design system and is mostly a",
+    "conformance problem, where the deterministic layer does nearly all the work;",
+    "reso-web-app sits between them.",
+    "",
+    "A weight changes ORDER and SEVERITY. It never changes what is DETECTED. Every",
+    "rule runs on every app and every finding is written to the plan whatever its",
+    "weight, so the false-positive budget is invariant across profiles -- which is",
+    "the property fp_budget.py asserts rather than assumes. A profile that could",
+    "suppress a finding would be a way to make an app look clean by editing a JSON",
+    "file, and that is the failure mode this file must not have.",
+    "",
+    "`never_below_1` is the hard floor: accessibility (A) and correctness (O) can",
+    "be weighted UP by a profile and never down. Marketing aesthetics is a reason",
+    "to care more about hierarchy, never a reason to care less about a 2.5:1",
+    "contrast ratio or a 30px touch target."
+  ],
+
+  "families": {
+    "G": ["spacing-rhythm", "grid-violation", "misalignment"],
+    "K": ["type-scale", "token-drift"],
+    "A": ["contrast", "contrast-indeterminate"],
+    "O": ["overflow", "touch-target"],
+    "X": ["xcheck-zero-ink", "xcheck-optical-centre", "xcheck-contrast-varies"],
+    "V": ["_gestalt"]
+  },
+
+  "never_below_1": ["A", "O"],
+
+  "apps": {
+    "reso-management-app": {
+      "rationale": "Next 16 / React 19 / Tailwind 4 + Panda. A design system: conformance is the job, and the deterministic layer does nearly all of it.",
+      "families": { "G": 1.3, "K": 1.6, "A": 1.0, "O": 1.0, "X": 1.0, "V": 0.5 },
+      "gestalt": { "enabled": true },
+      "notes": [
+        "K is the highest weight in the fleet because a token violation here is",
+        "unambiguously a defect: there is a declared system and the element left it.",
+        "Gestalt stays ON but low -- a dashboard's hierarchy still has to work, and",
+        "the blind pass is the only thing that ever finds a defect nobody encoded.",
+        "It is the cheapest insurance in the pipeline and turning it off is how a",
+        "conformance-only review reports a clean page that reads as noise.",
+        "",
+        "OPEN, and it is a K-family blocker rather than a weighting question: the",
+        "spec measured 0 `@theme` blocks in this app's shell CSS, so its Tailwind 4",
+        "engine emits utilities from no declared token source and every",
+        "Tailwind-authored colour is unattributable to a token by construction.",
+        "Where that holds, the K family owes INDETERMINATE (reason",
+        "`engine-has-no-token-source`), not FAIL and not a silent pass -- an",
+        "abstention routes to the vision layer, a pass routes nowhere. Encoding it",
+        "needs a per-app token map that only the surface stage can produce, against",
+        "the bytes in node_modules rather than a range in package.json."
+      ]
+    },
+
+    "reso-landing-app": {
+      "rationale": "Next 14, purchased template. Marketing aesthetics: whether it lands, not whether it conforms.",
+      "families": { "G": 0.7, "K": 0.3, "A": 1.0, "O": 1.0, "X": 1.2, "V": 1.6 },
+      "gestalt": { "enabled": true },
+      "notes": [
+        "K is weighted almost out because token drift against a purchased template",
+        "is measuring the template's own vocabulary and calling it a defect. The",
+        "findings are still emitted -- they are just not what a reviewer should read",
+        "first, and a page of them is how an automated reviewer loses credibility",
+        "before it says anything useful.",
+        "",
+        "X goes UP: this is the app whose value is carried by hero imagery and",
+        "gradients, which is exactly where computed styles stop being able to answer",
+        "and the cross-check starts. Gestalt is the highest weight in the fleet for",
+        "the same reason -- 'does this land' is the actual question and no rule",
+        "reaches it.",
+        "",
+        "A and O are floored at 1.0 by never_below_1 and are not negotiable here:",
+        "a marketing page is the surface most likely to be read by someone who has",
+        "never seen the product, on a phone, in daylight."
+      ]
+    },
+
+    "reso-web-app": {
+      "rationale": "Next 13. Between the two: product surfaces with a partial system.",
+      "families": { "G": 1.0, "K": 1.0, "A": 1.0, "O": 1.0, "X": 1.0, "V": 1.0 },
+      "gestalt": { "enabled": true },
+      "notes": [
+        "Deliberately flat. This app has not been profiled against its own routes,",
+        "and a made-up weighting reads as a measurement. Flat is the honest default",
+        "until the surface stage has run here."
+      ]
+    },
+
+    "bench-corpus": {
+      "rationale": "The ground-truth corpus. Flat, because a weighting would grade the instrument on a curve.",
+      "families": { "G": 1.0, "K": 1.0, "A": 1.0, "O": 1.0, "X": 1.0, "V": 1.0 },
+      "gestalt": { "enabled": true },
+      "notes": [
+        "Never weight the corpus. Scores measured here are what the rules do, and",
+        "a profile applied to the instrument would make every downstream number a",
+        "statement about the profile instead."
+      ]
+    }
+  }
+}
