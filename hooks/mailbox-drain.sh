@@ -370,7 +370,9 @@ _armcmd="$HOME/.claude/bin/cc-await-ping --timeout ${CC_DRAIN_ARM_TIMEOUT_S:-144
 # exits at the empty-inbox path below, and its pre-gate exits before the take when nothing is pending.
 #
 # EXEMPTION: an idle-scoped watcher (B3, §4 C1-C7) is SANCTIONED under a live goal — it stands down
-# on any new turn of its own session, so its deferral spans exactly the idle window. It declares
+# on any new turn of its own session once that session has actually gone idle (never on the arming
+# turn's own completion chain — backlog b60eb29e97dd), so its deferral spans exactly the idle
+# window and no more, which is the whole licence. It declares
 # itself in the marker/claim; mailbox_wake_idle_scoped is the reader, and its absence means "plain",
 # which is what every watcher in the fleet is today.
 _goal_cond=""
@@ -399,7 +401,7 @@ You lose nothing by killing it: the goal blocks your stops, so you keep taking t
     fi
   else
     [ "$_headless" = 1 ] || nudge="
-(a /goal is LIVE, so do NOT park the ordinary 4-hour watcher — Claude Code SKIPS /goal evaluation at any Stop where a non-terminal background Bash exists, and that arm would silently disable the goal driving this session. Peer mail still lands at every turn boundary the goal forces, so while you have work you need no watcher at all. If you have NOTHING actionable and are waiting on an external event, arm the idle-scoped awaiter instead — it stands itself down on your next turn, so it defers the goal for exactly as long as you are actually idle: $_idlecmd)"
+(a /goal is LIVE, so do NOT park the ordinary 4-hour watcher — Claude Code SKIPS /goal evaluation at any Stop where a non-terminal background Bash exists, and that arm would silently disable the goal driving this session. Peer mail still lands at every turn boundary the goal forces, so while you have work you need no watcher at all. If you have NOTHING actionable and are waiting on an external event, arm the idle-scoped awaiter instead — it survives this turn's completion and then stands itself down on the next turn after you actually go idle, so it defers the goal for exactly as long as you are actually idle: $_idlecmd)"
   fi
 else
   [ "$_watched" = 1 ] || [ "$_headless" = 1 ] || nudge="

@@ -154,6 +154,33 @@ the arm-turn's stop, the continuation fires a UserPromptSubmit beat and self-can
 converging one bounce later. Discipline unchanged by this doc: the arm is the turn's LAST action on
 a clean, committed state, which the close protocol already demands.
 
+> 🚨 **CORRECTED 2026-08-26 (backlog `b60eb29e97dd`) — this paragraph is right about the mechanism
+> and WRONG that it converges.** It does not converge; it LOOPS, and it terminates by exhausting the
+> wake floor rather than by arming anything. Two facts the paragraph misses. First, the arm is
+> instructed BY a Stop hook that BLOCKED (§4.1 item 4 made the wake floor block under a live goal),
+> so the arming turn is *already* a forced continuation and the blockers above act on **its** stop
+> too — each block emitting a Stop beat AND the UserPromptSubmit beat of the turn it forces, i.e.
+> +2 boundaries, where `baseline + 1` allows +1. Second, "one bounce later" assumes the re-arm is
+> free; it is not. The floor's budget is `CC_WAKE_FLOOR_MAX` = 2, so the bounce spends an attempt,
+> and the same completion kills the second watcher for the same reason. **Measured 2/2 live arms
+> stood down on their own arming turn** (banners `beat seq > 3` and `beat seq > 6`), leaving the
+> session idle and deaf with its floor spent — the arm the floor demands was a deterministic no-op.
+>
+> **The fix moves the window's anchor from the ARM to the IDLE**, which is an event the same oracle
+> can already see: a Stop-kind beat that STANDS (a blocked Stop is superseded by its forced prompt
+> beat within about a second, so standing for `CC_AWAIT_SETTLE_DWELL_S` = 15 s proves the chain is
+> over). Until then the watcher is in Phase A and does not self-cancel; after it, ANY further
+> boundary cancels — no allowance, and the sampling hole item 3 below worries about is closed the
+> other way: a jumped Stop beat is ADOPTED as the new floor rather than stood down on, so the
+> watcher tracks the session's current position instead of a stale one. Two fail-safes keep Phase A
+> from becoming the starvation pole: a `who=operator` prompt beat cancels immediately (the beat hook
+> already separates typed turns from forced ones, its `who` predicate being the auto-traffic regex),
+> and Phase A is bounded by `CC_AWAIT_SETTLE_MAX_S` = 600 s — a session that never reaches a
+> standing Stop is taking turns continuously, so it is not idle and not deaf.
+> Subject: `bin/cc-await-ping` (`_turn_moved` / `_beat_dwelt`); suite: `tests/cc-await-ping.bats`
+> (`idle-scoped REGRESSION: a BLOCKED arming-turn completion does not stand the watcher down`,
+> plus the Phase-A bound, the typed-turn cancel and the two re-baseline tests).
+
 **Under NO live goal:** the bare 14400 s form remains correct and remains the nag's instruction —
 nothing to starve, and the parked watcher is the idle wake. The two modes are selected by the same
 `goal_live_condition` predicate every producer already sources (`hooks/lib/goal-state.sh`).
@@ -173,7 +200,11 @@ C1–C7 shipped as written. Four things the build settled that the spec left ope
    interpolate `--sid <session_id>` (they each hold it already: `mailbox-drain.sh:83`,
    `session-continue.sh:133`, and the PreToolUse payload for the deny). A producer that cannot
    resolve one emits the placeholder and says so, rather than teaching a form the tool refuses.
-3. **C2 is an OFFSET, not a `kind` filter.** The beat file holds only the LATEST boundary, so a whole
+3. **C2 is an OFFSET, not a `kind` filter.** *(SUPERSEDED 2026-08-26 — see the corrected paragraph in
+   §4 above. The sampling-hole reasoning below is sound and is preserved by the fix; the OFFSET is
+   not, because it excludes the arm turn's own trailing Stop and nothing else, while the arm turn's
+   COMPLETION emits two boundaries per blocked Stop. The offset is replaced by a settled-Stop anchor
+   that adopts a jumped beat as its floor instead of standing down on it.)* The beat file holds only the LATEST boundary, so a whole
    turn can complete inside one poll and leave the watcher looking at a Stop-kind beat whose prompt
    predecessor it never sampled — and a watcher that ignores that stays parked over a session that
    has moved on, i.e. the starvation pole re-entering through the oracle. Turns alternate, so

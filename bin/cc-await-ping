@@ -71,9 +71,14 @@
 #
 # The mode is therefore two exit conditions and a fail-closed arm gate:
 #   C1 exit-on-mail   unchanged — the wake half of 2-way comms.
-#   C2 exit-on-turn   a UserPromptSubmit-kind beat newer than the baseline taken at arm ⇒ the session
-#                     was woken by something else, so this awaiter's job is over: exit 0 SILENTLY
-#                     (verdict=stood-down), leaving the next natural Stop registry-quiet.
+#   C2 exit-on-turn   a new turn AFTER the idle window has opened ⇒ the session was woken by
+#                     something else, so this awaiter's job is over: exit 0 SILENTLY
+#                     (verdict=stood-down reason=new-turn), leaving the next natural Stop
+#                     registry-quiet. The window opens at the arming turn's SETTLED Stop, never at
+#                     the arm itself — see § THE ARMING TURN IS NOT OVER AT ARM TIME below, which is
+#                     the correction to the original "baseline taken at arm, plus one" rule that
+#                     made this mode a deterministic no-op (backlog b60eb29e97dd). Before the window
+#                     opens, only a typed (who=operator) turn cancels, and Phase A is bounded.
 #   C3 single-instance   refuse while a live sibling watcher claims any key of the keyset.
 #   C4 refuse-on-pending refuse while mail is already pending — mail waiting means you have work, and
 #                     arming would defer the judgment of state you ALREADY hold.
@@ -86,7 +91,9 @@
 # and blessed by a flag.
 #
 # Env overrides (tests): CC_BEAT_DIR · CC_AWAIT_BEAT_FRESH_S (arm-time beat staleness bound, default
-# 900s) — plus the CC_MAILBOX_DIR / CC_ROLES_DIR / CC_COMMS_ALARM_DIR / CC_REGISTRY_DIR seams below.
+# 900s) · CC_AWAIT_SETTLE_DWELL_S (how long a Stop beat must stand before it counts as the idle the
+# window opens on, default 15s) · CC_AWAIT_SETTLE_MAX_S (the bound on Phase A, default 600s) — plus
+# the CC_MAILBOX_DIR / CC_ROLES_DIR / CC_COMMS_ALARM_DIR / CC_REGISTRY_DIR seams below.
 #
 # CODES THE HARNESS SYNTHESIZES — NOT OURS, AND NOT 128+signal. If you see this watcher reported as
 # `failed with exit code 143` or `144`, it never reached any exit above; it was SIGTERMed, and the
@@ -353,7 +360,48 @@ _unbeat() {
 BEAT_DIR="${CC_BEAT_DIR:-$HOME/.claude/cc-beats}"
 BEAT_FRESH_S="${CC_AWAIT_BEAT_FRESH_S:-900}"
 BEAT_BASE_SEQ=0
-BEAT_STOP_ALLOWANCE=0
+# ── THE ARMING TURN IS NOT OVER AT ARM TIME (backlog b60eb29e97dd) ────────────────────────────────
+# The two knobs below exist because the ORIGINAL C2 baseline — the beat seq frozen at arm, plus an
+# allowance of exactly one for the arm turn's own trailing Stop — could not survive the turn that
+# armed it. MEASURED 2/2 live arms stood down within seconds of arming (banners `beat seq > 3` and
+# `beat seq > 6`), which makes the arm the wake floor DEMANDS a deterministic no-op: the floor blocks
+# to instruct it, the watcher dies on the very completion it was armed inside, and the floor's own
+# budget (CC_WAKE_FLOOR_MAX, 2) is spent on two watchers that never covered an idle.
+#
+# WHY ONE ALLOWANCE WAS NEVER ENOUGH, and it is not a tuning error. The arm is instructed BY a Stop
+# hook that BLOCKED, so the arming turn is itself a forced continuation — and its own Stop can be
+# blocked again by any of this fleet's other Stop arms (session-continue's mechanical 🔧 and SHIP
+# FLOOR, completion-assert's origin close contract, the wake floor itself). Each block writes a Stop
+# beat AND the UserPromptSubmit beat of the turn it forces, so the arming turn's COMPLETION emits
+# 2·k boundaries for k blocks, not one. `baseline + 1` excludes k = 0 and nothing else.
+# docs/research/goal-safe-2way-comms-2026-08-13.md §4 predicted this shape and called it benign —
+# "converging one bounce later". It is not benign: the convergence is a LOOP, and it terminates by
+# exhausting the floor rather than by arming anything.
+#
+# SO THE WINDOW IS ANCHORED TO THE IDLE, NOT TO THE ARM. The mode is called idle-scoped; its window
+# should begin when the session actually goes idle, which is an event this oracle can SEE — a
+# Stop-kind beat that STANDS. A blocked Stop is superseded by its forced prompt beat within about a
+# second, so a Stop beat that has been the newest boundary for SETTLE_DWELL_S proves the completion
+# chain is over. Until that happens the watcher is in PHASE A and does not self-cancel; after it, in
+# PHASE B, ANY further boundary cancels (no allowance needed — a settled Stop has no successor that
+# is not a new turn).
+#
+# THE TWO FAIL-SAFES THAT KEEP PHASE A FROM BECOMING THE STARVATION POLE IT REPLACES:
+#   · an OPERATOR-kind prompt beat cancels immediately, settled or not. A typed message is the one
+#     wake that can arrive mid-chain, and hooks/session-beat.sh already separates it from every
+#     forced turn (its `who` predicate is the auto-traffic regex, which matches `Stop hook
+#     feedback:` and the task/advisory prefixes by construction).
+#   · Phase A is BOUNDED by SETTLE_MAX_S. A session that never reaches a standing Stop is taking
+#     turns continuously — i.e. demonstrably not idle, and never deaf while it does, because
+#     mailbox-drain delivers at every boundary those turns produce. Standing down there costs one
+#     bounce turn; staying parked would cost the goal, which is the direction §4.1 already ruled on.
+ARM_SETTLED=0
+SETTLE_DWELL_S="${CC_AWAIT_SETTLE_DWELL_S:-15}"
+case "$SETTLE_DWELL_S" in ''|*[!0-9]*) SETTLE_DWELL_S=15 ;; esac
+SETTLE_MAX_S="${CC_AWAIT_SETTLE_MAX_S:-600}"
+case "$SETTLE_MAX_S" in ''|*[!0-9]*) SETTLE_MAX_S=600 ;; esac
+STOOD_REASON=new-turn
+_SETTLE_PREV_SEQ=""
 
 _beat_field() {  # <sid> <jq-path> → field value on stdout; empty on any failure
   local s="$1" p="$2"
@@ -407,16 +455,12 @@ if [ "$IDLE_SCOPED" = 1 ]; then
     _refuse stale-beat "The newest beat for [$SID] is $(( _now - _bt ))s old (bound ${BEAT_FRESH_S}s). An arm happens INSIDE a turn, so a live beat producer makes this seconds old — a stale one means either the producer is not running or the sid is not this session's."
   fi
   BEAT_BASE_SEQ="$(_beat_field "$SID" '.seq')"; case "$BEAT_BASE_SEQ" in ''|*[!0-9]*) BEAT_BASE_SEQ=0 ;; esac
-  # THE ALLOWANCE, and why the doc's "exclude Stop-kind beats" is implemented as an OFFSET rather
-  # than a kind filter. The beat file holds only the LATEST boundary, so a filter on `kind` alone has
-  # a sampling hole: a whole turn (prompt beat, then stop beat) can complete inside one poll
-  # interval, leaving us looking at a Stop-kind beat whose prompt predecessor we never saw — and a
-  # watcher that ignores it stays parked over a session that HAS moved on. That is the starvation
-  # pole re-entering through the oracle. Turns alternate, so any beat more than one past the arm
-  # baseline PROVES a prompt beat occurred in between, whether or not we sampled it. The offset says
-  # exactly that: the arm turn's own trailing Stop (baseline+1) is excluded, and nothing else is.
-  # Erring toward standing down early costs one bounce turn; erring the other way costs the goal.
-  [ "$(_beat_field "$SID" '.kind')" = "prompt" ] && BEAT_STOP_ALLOWANCE=1
+  # THE ARM BASELINE IS A FLOOR, NOT THE WINDOW. It is what Phase A measures "newer than" against;
+  # the window itself opens at the SETTLED Stop the loop below waits for (see the block at the head
+  # of this section). The sampling hole the old offset was built to close is closed here too, and
+  # more precisely: a beat that jumped several boundaries past the baseline is not ignored — once it
+  # STANDS as a Stop it becomes the new baseline, so the watcher tracks the session's current
+  # position instead of standing down over a stale one.
   # (C4) MAIL ALREADY PENDING = you have work. Arming here would defer the judgment of state the
   #      session already holds, which is the deferral this mode exists to make impossible.
   for _k in $(_keys); do
@@ -432,19 +476,58 @@ if [ "$IDLE_SCOPED" = 1 ]; then
     fi
   done
   echo "$_banner" >&2
-  echo "cc-await-ping: idle-scoped — will also stand down on any new turn of [$SID] (beat seq > $(( BEAT_BASE_SEQ + BEAT_STOP_ALLOWANCE )))" >&2
+  echo "cc-await-ping: idle-scoped — armed at beat seq $BEAT_BASE_SEQ of [$SID]. It does NOT stand down on the arming turn's own completion (that chain is 2 boundaries per blocked Stop, and a Stop hook is what instructed this arm); the idle window opens at the first Stop beat that stands for ${SETTLE_DWELL_S}s, and from there ANY further boundary stands it down. A typed (who=operator) turn stands it down immediately either way, and an arming chain that never settles within ${SETTLE_MAX_S}s does too." >&2
 fi
 
 # ── C2: THE EXIT THAT MAKES THE DEFERRAL IDLE-SCOPED ──────────────────────────────────────────────
 # Consulted every poll, AFTER the mail check: if a ping and a new turn both happened, the ping is the
 # thing the session must not lose, and delivering it also ends the watch.
-_turn_moved() {  # 0 iff this session has taken a new turn since the arm baseline
-  local seq
+#
+# NEITHER PHASE READS A CLOCK IT CANNOT CHECK. `_beat_dwelt` prefers the beat's OWN `t` — a
+# write-time stamp, so a poll that lands late or early cannot forge dwell — and falls back to "this
+# same boundary was already here at the previous poll" only when that stamp is unreadable. Both
+# functions are called from the loop body directly, never in a command substitution, so the
+# assignments they make to ARM_SETTLED / BEAT_BASE_SEQ / _SETTLE_PREV_SEQ actually survive.
+_beat_dwelt() {  # <seq> → 0 iff the CURRENT boundary has stood long enough to be a settled idle
+  local t now
+  t="$(_beat_field "$SID" '.t')"; case "$t" in ''|*[!0-9]*) t="" ;; esac
+  if [ -n "$t" ]; then
+    now="$(date +%s 2>/dev/null || echo 0)"; case "$now" in ''|*[!0-9]*) now=0 ;; esac
+    [ "$now" -ge "$t" ] || return 1                       # clock stepped back ⇒ never claim dwell
+    [ "$(( now - t ))" -ge "$SETTLE_DWELL_S" ] && return 0
+    return 1
+  fi
+  [ "$_SETTLE_PREV_SEQ" = "$1" ] && return 0
+  _SETTLE_PREV_SEQ="$1"
+  return 1
+}
+
+_turn_moved() {  # 0 iff the idle window this watcher was scoped to is over
+  local seq kind e
   [ "$IDLE_SCOPED" = 1 ] || return 1
   seq="$(_beat_field "$SID" '.seq')"; case "$seq" in ''|*[!0-9]*) return 1 ;; esac
-  # A Stop-kind beat at exactly baseline+1 is the arm turn's OWN trailing stop — never a new turn.
-  if [ "$seq" -gt "$(( BEAT_BASE_SEQ + BEAT_STOP_ALLOWANCE ))" ]; then return 0; fi
-  [ "$seq" -gt "$BEAT_BASE_SEQ" ] && [ "$(_beat_field "$SID" '.kind')" = "prompt" ] && return 0
+  kind="$(_beat_field "$SID" '.kind')"
+
+  if [ "$ARM_SETTLED" = 0 ]; then
+    # PHASE A — the arming turn's completion chain. Every boundary it emits is OUR OWN turn ending,
+    # not a new one, so seq alone says nothing here (see the head-of-section block).
+    if [ "$kind" = prompt ] && [ "$seq" -gt "$BEAT_BASE_SEQ" ] \
+       && [ "$(_beat_field "$SID" '.who')" = operator ]; then
+      STOOD_REASON=operator-turn; return 0
+    fi
+    if [ "$kind" = stop ] && [ "$seq" -ge "$BEAT_BASE_SEQ" ] && _beat_dwelt "$seq"; then
+      ARM_SETTLED=1; BEAT_BASE_SEQ="$seq"
+      echo "cc-await-ping: idle-scoped — the arming chain of [$SID] SETTLED at beat seq $seq (a Stop that has stood for ${SETTLE_DWELL_S}s with nothing after it). The idle window opens here; any further boundary now stands this watcher down." >&2
+      return 1
+    fi
+    e="$(_elapsed_s)"
+    if [ "$e" -ge 0 ] && [ "$e" -ge "$SETTLE_MAX_S" ]; then STOOD_REASON=never-settled; return 0; fi
+    return 1
+  fi
+
+  # PHASE B — the idle window. A settled Stop has no successor that is not a new turn, so there is
+  # no allowance to make and the sampling hole cannot reopen: any advance at all ends the watch.
+  [ "$seq" -gt "$BEAT_BASE_SEQ" ] && { STOOD_REASON=new-turn; return 0; }
   return 1
 }
 
@@ -1244,7 +1327,18 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
   # already awake. What it buys is the next natural Stop being registry-quiet, so the /goal judges
   # the NEW state exactly once instead of never (parked) or ninety times (bare).
   if _turn_moved; then
-    echo "cc-await-ping: verdict=stood-down uuid=${CUR_UUID} sid=${SID} — this session took a new turn, so the idle window this watcher was scoped to is over. Nothing was missed and no ping was consumed: mail that arrives now surfaces at your turn boundaries, and any /goal you hold evaluates at your next stop. If you go idle again with an empty inbox, arm a fresh one." >&2
+    # THE REASON IS PART OF THE VERDICT (backlog b60eb29e97dd). `never-settled` and the two turn
+    # cases are the same exit for the reader (re-arm when you next go idle) but NOT the same event
+    # for whoever is debugging a wake path: never-settled means this session never reached a
+    # standing Stop at all, which is a session that is busy, not one that was woken.
+    case "$STOOD_REASON" in
+      never-settled)
+        echo "cc-await-ping: verdict=stood-down reason=never-settled $(_elapsed_f) uuid=${CUR_UUID} sid=${SID} — ${SETTLE_MAX_S}s after arming, this session had still not reached a Stop that STOOD (every Stop was followed by another turn). That is a session taking turns, not an idle: it is not deaf — mail surfaces at every boundary those turns produce — so nothing was missed and no ping was consumed. Arm again when you actually go quiet." >&2 ;;
+      operator-turn)
+        echo "cc-await-ping: verdict=stood-down reason=operator-turn $(_elapsed_f) uuid=${CUR_UUID} sid=${SID} — the operator typed at this session, so the idle window this watcher was scoped to is over. Nothing was missed and no ping was consumed: mail that arrives now surfaces at your turn boundaries, and any /goal you hold evaluates at your next stop. If you go idle again with an empty inbox, arm a fresh one." >&2 ;;
+      *)
+        echo "cc-await-ping: verdict=stood-down reason=new-turn $(_elapsed_f) uuid=${CUR_UUID} sid=${SID} — this session took a new turn after its idle window had opened, so that window is over. Nothing was missed and no ping was consumed: mail that arrives now surfaces at your turn boundaries, and any /goal you hold evaluates at your next stop. If you go idle again with an empty inbox, arm a fresh one." >&2 ;;
+    esac
     exit 0
   fi
 

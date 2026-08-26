@@ -26,10 +26,16 @@ setup() {
 # ── beat fixtures (the C2 oracle) ────────────────────────────────────────────────────────────────
 # One attestation per turn boundary, exactly the shape hooks/session-beat.sh writes:
 # kind=prompt at UserPromptSubmit, kind=stop at Stop, `seq` monotone across both.
-beat() { # <seq> <kind> [age-seconds]
-  local age="${3:-0}"
-  jq -nc --arg k "$2" --argjson s "$1" --argjson t "$(( $(date +%s) - age ))" \
-    '{sid:"sidGOAL",pane:"p0",cwd:"/tmp",pid:1,lstart:"x",t:$t,kind:$k,who:"auto",operatorT:null,seq:$s}' \
+#
+# `who` is the fourth field and it is load-bearing, not decoration (backlog b60eb29e97dd): the hook
+# computes it from the auto-traffic regex, so a Stop-hook-forced continuation beats `auto` and only a
+# typed message beats `operator`. The watcher uses exactly that distinction to tell the arming turn's
+# own completion chain from a genuine wake. Default stays `auto` — the forced-turn case is the one
+# every pre-existing test in this file was modelling.
+beat() { # <seq> <kind> [age-seconds] [who]
+  local age="${3:-0}" who="${4:-auto}"
+  jq -nc --arg k "$2" --arg w "$who" --argjson s "$1" --argjson t "$(( $(date +%s) - age ))" \
+    '{sid:"sidGOAL",pane:"p0",cwd:"/tmp",pid:1,lstart:"x",t:$t,kind:$k,who:$w,operatorT:null,seq:$s}' \
     > "$CC_BEAT_DIR/$SID.json"
 }
 
@@ -718,18 +724,22 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
 # session with no watcher at all must spin one, on the identical timeline.
 
 @test "idle-scoped: stands down (exit 0, verdict=stood-down) when its session takes a new turn" {
-  beat 5 prompt
-  ( sleep 1; beat 6 prompt ) &
+  # Armed on a Stop that has already STOOD 5 s: the idle window is open on the first poll, so the
+  # next boundary is unambiguously a new turn rather than the arming turn's own completion.
+  export CC_AWAIT_SETTLE_DWELL_S=2
+  beat 6 stop 5
+  ( sleep 2; beat 7 prompt ) &
   local writer=$!
   run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
   wait "$writer" 2>/dev/null || true
   [ "$status" -eq 0 ]
-  [[ "$output" == *"verdict=stood-down"* ]] || false
+  [[ "$output" == *"verdict=stood-down reason=new-turn"* ]] || false
 }
 
 @test "idle-scoped: the stand-down carries NO body — there is no mail, and a fake one would be a lie" {
-  beat 5 prompt
-  ( sleep 1; beat 6 prompt ) &
+  export CC_AWAIT_SETTLE_DWELL_S=2
+  beat 6 stop 5
+  ( sleep 2; beat 7 prompt ) &
   local writer=$!
   run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
   wait "$writer" 2>/dev/null || true
@@ -737,7 +747,7 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
   [ ! -f "$MB" ] || [ ! -s "$MB" ]
 }
 
-@test "idle-scoped: the ARM TURN's own trailing Stop does NOT self-cancel it (baseline+1 is excluded)" {
+@test "idle-scoped: the ARM TURN's own trailing Stop does NOT self-cancel it" {
   # The arm happens inside a turn, so that turn's Stop beat lands moments later. Cancelling on it
   # would make the mode useless: the watcher would die before the idle it was scoped to even began.
   beat 10 prompt
@@ -749,18 +759,82 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
   [[ "$output" != *"stood-down"* ]] || false
 }
 
-@test "idle-scoped: a Stop beat BEYOND baseline+1 does cancel (the sampling hole is closed)" {
-  # The beat file holds only the LATEST boundary, so a whole turn can complete inside one poll and
-  # leave us looking at a Stop-kind beat whose prompt predecessor we never sampled. Turns alternate,
-  # so seq > baseline+1 PROVES a prompt beat happened in between — ignoring it would re-open the
-  # starvation pole through the oracle itself.
-  beat 10 prompt
-  ( sleep 1; beat 13 stop ) &
+# ── b60eb29e97dd: THE ARMING TURN IS NOT OVER AT ARM TIME ─────────────────────────────────────────
+# The three tests below are the regression the whole rewrite exists for, and the first is the one
+# that was RED. `baseline + 1` assumed the arming turn's completion emits exactly one boundary. It
+# does not: the arm is instructed BY a Stop hook that BLOCKED, and any of this fleet's other Stop
+# arms can block the arming turn's own Stop in turn — each block writing a Stop beat AND the
+# UserPromptSubmit beat of the turn it forces, i.e. +2 per block. Measured 2/2 live arms stood down
+# on their own arming turn (banners `beat seq > 3`, `beat seq > 6`), which made the arm the wake
+# floor DEMANDS a deterministic no-op and spent that floor's 2-attempt budget on nothing.
+
+@test "idle-scoped REGRESSION: a BLOCKED arming-turn completion does not stand the watcher down" {
+  export CC_AWAIT_SETTLE_DWELL_S=3
+  beat 20 prompt                                       # armed inside the floor-forced turn
+  (
+    sleep 1; beat 21 stop                              # its Stop …
+    sleep 1; beat 22 prompt                            # … BLOCKED — hook feedback forces another turn
+    sleep 1; beat 23 stop                              # that turn's Stop …
+    sleep 1; beat 24 prompt                            # … blocked again
+  ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 7
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 2 ]                                  # survived its own arming turn
+  [[ "$output" != *"stood-down"* ]] || false
+}
+
+@test "idle-scoped: a TYPED turn cancels even before the window opens — Phase A is not a deaf spot" {
+  # The one wake that can arrive mid-chain and must never be sat on. hooks/session-beat.sh already
+  # separates it from every forced turn: its `who` predicate is the auto-traffic regex, which matches
+  # `Stop hook feedback:` and the task/advisory prefixes by construction.
+  export CC_AWAIT_SETTLE_DWELL_S=30                    # keep the watcher firmly inside Phase A
+  beat 20 prompt
+  ( sleep 1; beat 21 stop; sleep 1; beat 22 prompt 0 operator ) &
   local writer=$!
   run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
   wait "$writer" 2>/dev/null || true
   [ "$status" -eq 0 ]
-  [[ "$output" == *"verdict=stood-down"* ]] || false
+  [[ "$output" == *"verdict=stood-down reason=operator-turn"* ]] || false
+}
+
+@test "idle-scoped: Phase A is BOUNDED — a chain that never settles stands down, never parks forever" {
+  # The fail-safe that keeps the fix from re-creating the starvation pole it replaces. A session that
+  # never reaches a standing Stop is taking turns continuously, so it is not idle and not deaf.
+  export CC_AWAIT_SETTLE_DWELL_S=30
+  export CC_AWAIT_SETTLE_MAX_S=3
+  beat 20 prompt
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 20
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down reason=never-settled"* ]] || false
+}
+
+@test "idle-scoped: a jumped Stop beat RE-BASELINES — the sampling hole, closed the other way" {
+  # The beat file holds only the LATEST boundary, so a whole turn can complete inside one poll and
+  # leave the watcher looking at a Stop-kind beat whose prompt predecessor it never sampled. The old
+  # rule stood down on it, which is what the blocked-completion chain above turned into a no-op.
+  # Adopting it as the window's floor instead keeps the anti-starvation property — the watcher tracks
+  # the session's CURRENT position rather than standing down over a stale one — without dying on its
+  # own arming turn.
+  export CC_AWAIT_SETTLE_DWELL_S=2
+  beat 10 prompt
+  ( sleep 1; beat 13 stop ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 6
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 2 ]                                  # the jump itself is NOT a stand-down …
+  [[ "$output" == *"SETTLED at beat seq 13"* ]] || false   # … it becomes the floor
+}
+
+@test "idle-scoped: once re-baselined on a jumped Stop, the NEXT boundary does cancel" {
+  export CC_AWAIT_SETTLE_DWELL_S=2
+  beat 10 prompt
+  ( sleep 1; beat 13 stop; sleep 4; beat 14 prompt ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down reason=new-turn"* ]] || false
 }
 
 @test "idle-scoped C1: MAIL still wins — a ping is delivered, never traded for a silent stand-down" {
@@ -860,7 +934,7 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
   beat 5 prompt
   run env ITERM_SESSION_ID="w0t0p0:$UUID" CC_PANE_ID=p0 "$AWAIT" "$UUID" --idle-scoped --interval 1 --timeout 2
   [ "$status" -eq 2 ]                                  # armed → the pane fallback found sidGOAL
-  [[ "$output" == *"new turn of [$SID]"* ]] || false
+  [[ "$output" == *"armed at beat seq 5 of [$SID]"* ]] || false
 }
 
 @test "idle-scoped: a REFUSAL never prints the watching banner (it would report the opposite)" {
@@ -903,12 +977,15 @@ stop_attempts() { # <pid|0> <count> → the number of those stops at which the g
   # proof worse than no proof at all.
   ! grep -q '^  if _turn_moved; then$' "$mut" || false
 
-  beat 5 prompt
+  # Armed on a Stop that has already STOOD, so the idle window is open from the first poll and the
+  # ONLY thing separating this mutant from the green case below is the self-cancel it lost.
+  export CC_AWAIT_SETTLE_DWELL_S=2
+  beat 6 stop 5
   "$mut" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 60 >/dev/null 2>&1 &
   local w=$!
   sleep 1
   local before; before="$(stop_attempts "$w" 3)"
-  beat 6 prompt                                        # the external event: this session woke
+  beat 7 prompt                                        # the external event: this session woke
   local after; after="$(stop_attempts "$w" 4)"
   # positive control: it is still alive, so this is the MUTATION and not a crashed watcher
   kill -0 "$w" 2>/dev/null || false
@@ -920,12 +997,13 @@ stop_attempts() { # <pid|0> <count> → the number of those stops at which the g
 }
 
 @test "GREEN pole 1: the real idle-scoped watcher lets the goal evaluate ONCE the world has changed" {
-  beat 5 prompt
+  export CC_AWAIT_SETTLE_DWELL_S=2
+  beat 6 stop 5
   "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 60 >/dev/null 2>&1 &
   local w=$!
   sleep 1
   local before; before="$(stop_attempts "$w" 3)"
-  beat 6 prompt
+  beat 7 prompt
   local after; after="$(stop_attempts "$w" 4)"
   kill "$w" 2>/dev/null || true
   wait "$w" 2>/dev/null || true
