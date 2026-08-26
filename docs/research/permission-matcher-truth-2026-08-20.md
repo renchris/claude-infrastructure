@@ -593,9 +593,30 @@ those by `bashMissKind` / error text. Only `no-rule-match` is addressable by a p
    auto it buys you nothing; it is a `default`/`acceptEdits`-mode lever.)
 7. **Put `defaultMode` and any `auto`-related key in `~/.claude/settings.json`**, never in a project
    or `.local` file.
-8. **Audit existing rules against the drop list.** Grep the 339 entries for
+8. **Audit existing rules against the drop list.** ~~Grep the 339 entries for~~
    `python|python3|node|deno|tsx|ruby|perl|php|lua|npx|bunx|npm run|yarn run|pnpm run|bun run|bash|sh|ssh|zsh|fish|eval|exec|env|xargs|sudo|curl|wget|kubectl|aws|gcloud|gsutil`
    in bare / `:*` / `*` / `<cmd> -flag*` form — every hit is dead weight in auto mode.
+
+   ✅ **DONE, and NOT as a grep** — `cc-permission-audit --drop` (2026-08-26) implements §3's
+   predicate structurally, and discovery now reaches `settings.json`, not only
+   `settings.local.json`. That widening is what makes the audit possible at all: per
+   `permission-settings-store-2026-08-20.md` §1 there is **no `settings.local.json` in any of
+   the five config dirs**, so the pre-existing `--prune` walk found zero files over all 1,692
+   live rules and reported an all-clear. The mode is **read-only, with no apply arm** — a
+   dropped rule is restored on leaving auto mode, so it is a *rewrite* list, not a delete list,
+   and that edit is the operator's.
+
+   ▶ `cc-permission-audit --drop`
+
+   A grep gets four classes wrong, each in the expensive direction, which is why the predicate
+   is written out structurally instead: `Bash(npm run:*)` dies while `Bash(npm run test:*)`
+   lives · `Bash(python -m pkg.module *)` survives the flag-tail rule by the documented `-m`
+   exception · `kubectl get` lives where `kubectl exec` dies (the `nSd` branch) · and a name
+   match hits a rule that merely *contains* a listed command, e.g.
+   `Bash(git log --format=%h -- bin/env:*)`. All four are poles in
+   `tests/cc-permission-audit-drop.bats`. The transcription inherits this doc's own caveat: it
+   is code-and-doc verified against **CC 2.1.220**, not probe-verified, so a finding is a claim
+   about the binary rather than a measured refusal.
 
 ### DON'T
 
