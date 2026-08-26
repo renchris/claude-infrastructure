@@ -86,6 +86,159 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-26 — drain recycle #236: method 206 — A SENSOR WHOSE FAILURE VALUE IS THE HEALTHIEST
+  READING IT CAN PRODUCE, ADDED ONE LINK EARLIER TO A FILE THAT STATES, TESTS AND ENFORCES THE
+  OPPOSITE LAW FOR ITS THREE OLDER SENSORS.** ONE fix landed, ONE §2.1 entry landed, TWO land
+  attempts, TWO lands, ZERO rc 6. 🚨 **MY FIRST SHA DID NOT SURVIVE ITS LAND** — `4eaea371f` was
+  rebased into **`f7cfb371f`**, breaking #231-#235's five-link run of surviving shas and confirming
+  that the rebase-on-land is not a law in either direction (memory:
+  `cited-sha-may-not-survive-the-land`). **Cite the LANDED sha; verify with `--is-ancestor`.**
+  - **THE FINDING (206).** `scripts/wrap-ledger.sh` states one law for every live-side sensor and
+    enforces it in three places with three bounded-read tests: *an unresolvable sensor may not
+    breach, AND IT MAY NOT CLEAR EITHER* — so it reports `?` and every sentence downstream stops
+    claiming a comparison. `LIVE_LAG`, `LIVE_ADDS` and `LIVE_DIVERGED` each carry it. **The
+    live-commit AGE — the clock the TIME budget arm compares, re-pointed one link earlier onto the
+    commit the live layer sits on — did not.** A failed `%ct` read left `ct=0`, so `age_s` became 0:
+    **the FRESHEST value that arm can hold, and therefore maximally CLEARING.** Nothing downstream
+    could tell it apart from a live layer the converger had advanced one second ago, and the close
+    then rendered `✅ Complete & landed — live layer converging (commit lag UNREADABLE; no added
+    file and inside the time budget)` — asserting a comparison that never happened, which is the
+    exact defect the `LIVE_LAG=?` arm was built to stop on 2026-08-21, reappearing at the one sensor
+    added after it.
+  - 🚨 **AND THE TWO FAILURES ARE CORRELATED, WHICH IS WHY THE EXISTING GREEN COULD NOT SEE IT.**
+    The `?` guard's own comment read *"the TIME budget (which is derived from HEAD's own committer
+    date and needs no live read) as the arm that still decides"*. **Both clauses were true of the arm
+    as written on 2026-08-21 and neither survived the re-pointing:** the clock now runs
+    `_bounded … git -C "$LIVE_REPO" log -1 --format=%ct "$LIVE_SHA"` — **the SAME repo through the
+    SAME timeout as the lag read one branch up.** So the state that produces `LIVE_LAG=?` in the
+    field (a live repo slow, locked, or on a stalled mount) takes the clock with it, and the sentence
+    promising an independent arm was promising nothing. **The sensor that genuinely survives is the
+    added-file read, which runs in OUR repo.** The comment now says that instead.
+  - 🚨 **THE INCUMBENT TEST COULD NOT REACH IT, AND THE REASON IS ITS FIXTURE'S SCOPE.** Test 2g's
+    shim is scoped to `HEAD..*`, so in ITS fixture the time budget really was measured and the
+    sentence it green-lights was true. **The population where it is not was unreachable from the only
+    test that names this path** (method 202's shape, at one remove).
+  - **THE FIX (landed `f7cfb371f`, content-verified).** `LIVE_AGE` takes `?` on an unreadable clock
+    and the TIME arm is guarded on it, like its three siblings; a commit dated in the FUTURE clamps
+    to 0 rather than going `?`, because that read SUCCEEDED and collapsing the two would put a
+    measured state back under the unmeasured label. **Plus the second half — WHICH ARM DECIDED, the
+    item the previous link measured, named and deliberately left.** The ladder always knew; every
+    renderer discarded it, so a TIME breach was reported in COMMIT units: `🚀 … the live layer is 1
+    commit(s) behind and past its converge budget` against a commit budget of 25 — self-contradicting
+    arithmetic that also contradicts the sibling actuator over the identical number (at
+    2026-08-26T06:22:30Z `deploy-live --dry-run` printed *"lag 11 commit(s) / 6h, inside the degrade
+    budget (25 / 6h)"* while this ledger said PAST). **The two are not in conflict** — different
+    arms, and deploy-live truncates its hours to integers so they disagree for `age_s` in
+    (21600, 25200] by design — **but nothing in the sentence said which arm applied, so a reader
+    could not tell a real disagreement from a rendering artefact.** `LIVE_BREACH_WHY` now carries
+    `migration · diverged · adds · commits · time` out of the ladder where the decision is made, the
+    `||` budget arm is split into two tested branches, and **both renderings keep their older phrase
+    ("past its converge budget", "PAST budget") and APPEND the arm — so not one incumbent assertion
+    was churned.** `LIVE_AGE` and `LIVE_BREACH_WHY` are emitted by `--machine`; both out-of-repo
+    consumers read fields BY KEY, so the addition is inert for them.
+  - ✅ **MUTANTS: FIVE ARMS, ONE PER SITE, ALL FIVE PREDICTIONS EXACT, THREE DISTINCT RED SETS,
+    ZERO INSTRUMENT FAULTS.** Baseline GREEN asserted first; anchor uniqueness asserted at exactly 1
+    and a NO-OP mutant refused as a named fault; subject restored byte-identically by sha256,
+    asserted in a trap (`RESTORE=OK`). M1 age-`?` → 0 (predicted 2 reds, got 2 — ids 40/41) · M2 drop
+    the time arm's own `?` guard (1, got 1 — id 40, on the stderr assertion) · M3 drop
+    `LIVE_BREACH_WHY="time"` (1, got 1 — id 43) · M4 `--full`'s row reverts to the un-attributed
+    phrase (1, got 1 — id 43) · **M5 THE HARNESS'S OWN CONTROL — the pre-fix subject reconstructed
+    from `git HEAD` (4, got 4 — ids 40/41/42/43), reproducing EXACTLY the red-proof taken
+    independently before any edit.** A mutant table with no arm that reproduces an independently
+    obtained figure is a table you must take on trust; this one has that arm.
+  - ⚠️ **AN INSTRUMENT FAULT IN MY OWN TEST, CAUGHT BY THE HARNESS AND WORTH COPYING AS A HABIT:**
+    `mk_live` clones to ONE FIXED PATH, so a second call inside one test dies on *"destination path …
+    already exists"* and reds the case on the FIXTURE rather than on the subject. The ok-path half is
+    now reached by advancing the existing clone onto trunk. **A red whose message names a path, not
+    an assertion, is the fixture talking.**
+  - ⚠️ **HONEST LIMIT, in my own words rather than over-credited:** no live instance was observed.
+    The correlated failure needs the live repo unreadable for ≥5 s, which it was not at any reading
+    this session. **The exposure is by construction and by fixture, and the pre-fix behaviour on it
+    is pinned by M5** — nothing here rests on having caught it in the field.
+  - 🚨 **THE LAND'S SMOKE WENT PARTIAL AT 420 s — AND THE PREVIOUS LINK'S 402 s IS NOT A BUDGET YOU
+    CAN INHERIT.** `SHIP_LAND_SMOKE_BUDGET_S=420` was exported (per the every-land rule) and the
+    smoke STILL reported `⛔ GATE-KILLED: tests/wrap-ledger.bats … exit 124, ZERO 'not ok', budget
+    SPENT` and `⚠ smoke PARTIAL — 9 direct suite(s) attempted in 420s`. **The difference from the
+    402 s all-green run is LOAD, not the tree: `uptime` read 27.23 / 28.71 / 28.87 at my land against
+    ~11.6 at the previous one.** The land was rc 0 and the non-verdict cost nothing **because the
+    same suite was a known 87/87 from my own foreground run twenty minutes earlier.** **Quote the
+    load beside any smoke timing; a budget sized in a quiet band is a non-verdict in a busy one.**
+  - ✅ **FOREGROUND DIRECT SET, ALL NINE, BEFORE LANDING — the SEVENTH consecutive payoff and the
+    first where it converted a GATE-KILL on the suite I had just EDITED.** 436 tests, 0 failures,
+    0 skips, plan == ok on every one, at 08:0x-08:2xZ: `completion-assert` **111** (300 s) ·
+    `operator-readout` **104** (95 s) · `wrap-ledger` **87 — was 83, I added 4** (133 s) ·
+    `boundary-handoff` **43** (55 s) · `dod-persist` **30** (18 s) · `wrap-ledger-memo` **23** (17 s)
+    · `operator-surface-scope` **21** (5 s) · `dod-path` **14** (5 s) ·
+    `operator-readout-live-symlink` **3** (1 s). ⚠️ **Compare those seconds with the previous link's
+    at load ~11.6 — `completion-assert` took 300 s here against 161 s there. Same suite, same tree.**
+  - 🚨 **`done` MOVED +8 AFTER SIX FLAT LINKS — AND NOT ONE OF THE EIGHT IS THE OFF-BOX CLOUD
+    ACTUATOR OR DRAIN WORK.** 2,329 at my open (07:32:44Z) → **2,337** at my close (08:25:43Z). All
+    eight are `reso` / `reso-management-app` rows closed by a reso session — `2a51e86b3c79`,
+    `30b8b2c69fd1`, `52c4a8782157`, `695b3e69388f`, `705afd1f2841`, `c40f44d49f38`, `e82d1326dcd8`,
+    `f07bb30d45e4` — and **none of them is in the cloud cluster's WOULD-CLOSE or WOULD-UNBLOCK
+    sets.** **So the actuator series stays `2, 2, 0, 7, 0, 1, 0, 0, 0, 0, 0, 0, 0` — THIRTEEN points,
+    SEVEN zeros running — while `done` moved 8.** 🚨 **THOSE ARE TWO DIFFERENT PREDICATES AND SIX
+    consecutive zeros made them look like one.** Fold on `.project` before you read a `done` delta as
+    actuation; a whole-board count answers a question about the board, not about the actuator.
+  - **BOARD, three moments, partition asserted `open + blocked == combined` at each** (predicate: the
+    row's `.status` field folded on `.id`, `allids` compared by `comm` on the FULL id set):
+    **OPEN 07:32:44Z — 330 open / 208 blocked / 2,329 done / 2 claimed** (538 combined, 2,869 rows);
+    **CLOSE 08:25:43Z — 322 / 209 / 2,337 / 3** (531 combined, 2,871 rows). **`allids` across my link:
+    departures 0, arrivals 2** — `89772d3e3403` (blocked, `reso-management-app`,
+    `master-operator-gated`, a venue menu image to re-obtain) and `badb132df232` (open,
+    `claude-infrastructure`, a design-review perception pipeline). **Neither is drain work.** From
+    the previous link's FLOOR to my open: departures 0, arrivals 1 (`737525ee6892`). **Five lists,
+    every time — the four status lists moved 9 out / 1 in on `open` alone while `allids` gained two.**
+  - **STORES, each with its moment.** Post-land RED `.page` files under `autonomy/postland`: **0 at
+    my open (07:32:10Z) and 0 at my close (08:25:53Z) — the 128th consecutive**, over a denominator
+    that read **2,692** and **2,694** (it moved by 2 inside my link, against ~210 between two links
+    two links ago). ⚠️ **postland STAMPS read 472 at BOTH ends — FLAT across my link, read late on
+    purpose.** `~/.claude/autonomy/pages` **2,014 → 2,033 (+19)** with `.page` **118 → 118**.
+    🚨 **inbox-guard `.escalated` went 485 → 472 — DOWN THIRTEEN inside one link**, after two flat
+    links and a +2 in the one before. **Thirteen links, thirteen behaviours: inherit no rate and no
+    monotone assumption.**
+  - ⚠️ **THE FORWARDED POST-LAND REDS IN MY INBOX WERE BOTH SOMEONE ELSE'S, AND I FILED NOTHING.**
+    Two arrived as session-start CONTEXT (not in the mailbox FILE), both on
+    `tests/cc-dispatch-venue-only.bats::(a)`, naming `cf97c4ac5a6f` and `d77541146235` — **lands from
+    four and two links back, both explicitly NOT attributed (floor-not-green, loads 14.32 and
+    12.07).** Owner is `675e9c81c884` (OPEN, matchcount 1, bogus-id NEG control 0). ⚠️ **A count
+    correction worth carrying: that row is described as carrying SEVEN such pages, and only FOUR
+    `postland-red-*.page` files exist on disk at 07:47:58Z — all four naming this suite, NEG control
+    0. Two populations (a row's recorded evidence vs the surviving files); do not collapse them, and
+    do not read the disk count as a refutation of the row.**
+  - **UNCHANGED, all re-measured rather than inherited:** the `qos-rewrite.sh` diff clean (rc 0,
+    0 bytes — the **119th** consecutive) · kitty window **27** resolved by `KITTY_WINDOW_ID` with the
+    jq selector returning EXACTLY ONE object and a bogus-id NEG control at 0 (**TENTH** consecutive)
+    · `cc-in-kitty` rc 0, `ITERM_SESSION_ID=w0t0p0:27`, `CC_TERM` UNSET · `cc-roles` reading
+    `desk UNVERIFIED 5 | docs-lead UNVERIFIED 450 | drain-lead UNVERIFIED 7 | orchestrator ABSENT
+    empty` (**TWENTIETH** identical table) · my mailbox file **4,059 bytes / 1 line** (**TWENTIETH**
+    identical) · ledger at my open (07:33:09Z) `RUNG=✅ LIVE=1 LIVE_SRC=ok LIVE_SHA=bc77b22a9d87
+    LIVE_LAG=1 LIVE_ADDS=0 LIVE_DIVERGED=0 MIG_FAILED=0`, with **`GATE=stale` for the NINTH reading
+    running — still not mine to drive.**
+  - **LINTS.** `shellcheck scripts/wrap-ledger.sh` rc 0 (re-run inline as an rc-95 commit gate) ·
+    `bash -n` rc 0 · scoped `bats-shellcheck-lint --range "$MB...HEAD"` *"clean — 1 suite(s) scanned,
+    0 blocking finding(s), 0 unanalyzable"* · `bats-assert-liveness` rc 0 · `bats --count` 87 ·
+    `pipefail-sigpipe-lint` bare *"clean (allowlist honoured)"* — **I added no new `| grep -q`
+    pipeline; every absence assertion I wrote is `[ "$(… grep -c 'X')" -eq 0 ]`** ·
+    **`alarm-polarity-lint` DECLARED NOT-RUN on a mute positive control** (`e07dc5e09f83`), the
+    ELEVENTH consecutive link to declare rather than claim. Selector `--direct "$MB..HEAD"` drew the
+    same **9** as the previous link (the doc and the suite add nothing to the set), POS control
+    speaking at **4** on every invocation.
+  - 🆕 **(206) THE SCREEN, brand new and spent on exactly ONE sensor.** For any file that states a
+    sensor law and enforces it more than once — `grep -n` for `?`-guards, `may not breach`,
+    `never 0`, `UNRESOLVED`, `UNREADABLE`, `not counted` — **COUNT THE SENSORS THE LAW BINDS AND ASK
+    WHICH ONE WAS ADDED LAST.** The newest sensor is the one written after the tests that encode the
+    law, so it is the one whose failure value nobody chose deliberately. **And the sharper half: ask
+    what a FAILED read of that sensor RENDERS AS. If its failure value is indistinguishable from its
+    healthiest reading, the sensor cannot fail loudly and no test over the healthy population will
+    ever say so** (memory: `fail-safe-default-mimics-the-healthy-state`). **Then ask whether the arm
+    it is documented as backstopping shares its failure mode** — two arms reached through one bound
+    against one repo are one arm wearing two names (memory:
+    `proxy-must-be-independent-of-what-it-supplements`). **Named and NOT taken:** the reaper's
+    bounds · `DEADLINE_S`/`URGENT_S` in `bin/cc-inbox-guard` · `CC_DEPLOY_REFUSE_MAX` /
+    `CC_DEPLOY_REFUSE_COOLOFF` · and **every `|| echo 0` / `2>/dev/null` on a bounded fork whose
+    value is then COMPARED** — that idiom is this defect's generator, and method 192's unspent
+    56-site remainder is the same corpus seen from the other side.
 - **2026-08-26 — drain recycle #235: method 205 — A TWO-ARMED BUDGET WHOSE SECOND ARM MEASURES A
   DIFFERENT QUANTITY FROM THE SIBLING IT IS DOCUMENTED AS MIRRORING, IN A SENTENCE WHOSE TWO
   CLAUSES ARE EACH ACCURATE ABOUT THEIR OWN HALF.** ONE fix landed, ONE correction to my OWN landed
