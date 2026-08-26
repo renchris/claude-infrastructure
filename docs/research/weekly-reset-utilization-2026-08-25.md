@@ -194,6 +194,27 @@ The one real cost in view is `next3`'s ~8 pp, and with 3.8 h left that is essent
   uninformative, and speaks only in the last ~2 days where linear and empirical converge
   (day 6: −17 pp; day 7: −2 pp).
 
+  ✅ **SHIPPED** (item `70ed289c10fb`). `MIN_ELAPSED_FRAC` is now derived from
+  `PROJ_SPEAKS_LAST_H = 24.0`, so `wall_projection()` — and with it `burn_ratio`, `proj_end_pct`
+  and `wall_risk` — abstains outside the last 24 h. **Two things this prescription did not say,
+  found while implementing it:**
+
+  1. **Day 5 is excluded, despite "the last ~2 days".** §3's shortfall column is a *level*; this
+     projection's own error is that level divided by elapsed fraction. Carried through, it
+     reproduces the backtest (46 pp @ d3, 35 pp @ d5) and reads **~49 / 38 / 51 / 47 / 34 / 20 /
+     2 pp** at days 1→7. The error leaves the 34–51 pp band at day 6, not day 5, so the floor is
+     24 h. Day 5 at 35 pp is not convergence; it is the same defect one day later.
+  2. **The ⚠ WALL glyph had to be re-sourced, or the widening would have deleted a warning.**
+     `pace_line` keyed the flag on the very projection that now goes silent, so a literal reading
+     of this bullet drops the mid-week wall warning by omission — the "strict loss" §5.2 S3
+     refused when it kept the glyph and dropped the number. The flag now also fires on
+     `wk_strand_pp == 0`, which is the same claim measured from realised 48 h pace
+     (`weekly_pct + ewma × reset_h ≥ 100`) and is untouched by the linearity defect. The
+     magnitude stays unrenderable; only direction crosses.
+
+  What the widening costs, measured, is one false alarm: the only mid-week ⚠ WALL in §3's
+  backtest (next@08-23, 119% projected at day 3) closed at 99%.
+
 **Reproduce:** the analysis scripts are in this session's scratchpad; the one-command version of
 the retrospective is `python3 scripts/desk-strand-replay.py`.
 

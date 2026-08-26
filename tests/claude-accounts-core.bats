@@ -1849,9 +1849,23 @@ assert "next3 strand ~5pp of 8 · p96 of its own 3h burns" in line, line
 assert "next no strand" in line, line
 assert "⚠ WALL trajectory" in line, line
 assert line.rstrip().split(chr(10))[-1].strip().startswith("next no strand"), line
-# ...and its burn RATIO survives unchanged, while the >100 PROJECTION does not render as a number
-assert "1.62× burn" in line, line
-assert "162" not in line and "163" not in line, line     # the RATIO, never the ~162% projection
+# ...and the >100 PROJECTION still does not render as a number. UPDATED IN PLACE a second time
+# (item 70ed289c10fb): the `1.62× burn` clause this row used to carry is GONE, and its ABSENCE is
+# the assertion now. The ratio is the linear projection in other units — proj/100 — so at the
+# phase of this row (0.32, i.e. 4 d left) it carried exactly the error the widening removes: the
+# linear divisor corrects PHASE and leaves the back-loaded SHAPE underneath, measured at a mean
+# 46 pp at day 3 and 35 pp at day 5. `wall_projection` therefore abstains outside the last 24 h.
+# What must NOT follow it out is the WARNING — the ⚠ arm above is now a live control on that,
+# because it can only pass off the realised-pace nowcast.
+assert "× burn" not in line, line
+assert "1.62" not in line, line
+assert "162" not in line and "163" not in line, line     # never the ~162% projection either
+# CONTROL: inside the last 24 h the projection IS entitled to speak and the ratio DOES ride the
+# row. Without this arm, the three assertions above are satisfied by a ratio that never renders
+# at all, which is the stub the widening must not be mistaken for.
+# 99% used with 8.4 h left = 95% elapsed -> 1.04x; the nowcast fills the window, so ⚠ too.
+lastday = ca.pace_line([row(acct="next", weekly_pct=99, weekly_reset_h=8.4, burn_wk_ewma_ph=0.2)])
+assert "next no strand — 1.04× burn, ⚠ WALL trajectory" in lastday, lastday
 assert "BEHIND" not in line, line                        # 47ddbf47c DELETED it: on 2026-08-16 three freshly-reset windows each read
                                                          # BEHIND, which is correct and reads as gross under-utilisation.
 # an abstention renders as the WORD plus its reason, never as a zero (L2)

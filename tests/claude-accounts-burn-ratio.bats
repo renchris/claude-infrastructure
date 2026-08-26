@@ -7,9 +7,19 @@
 # closed at 91/92/100/85%. The low readings were three windows that had just RESET. Every figure
 # was correct and its obvious interpretation was inverted.
 #
-# The abstain floor is the load-bearing case, not a nicety: at 1 h elapsed a 1% reading projects
-# to 168%, so an un-floored projection pages on every fresh window — manufacturing exactly the
-# false alarm the metric exists to remove. Cases 1 and 2 pin both sides of that floor.
+# The abstain floor is the load-bearing case, not a nicety, and it is now THE LAST 24 h rather
+# than the first 8 (docs/research/weekly-reset-utilization-2026-08-25.md §3, §6). Two distinct
+# defects sit under one floor:
+#
+#   * too early to divide — at 1 h elapsed a 1% reading projects to 168%, so an un-floored
+#     projection pages on every fresh window, manufacturing the alarm the metric exists to remove;
+#   * too early to BELIEVE — burn is back-loaded, not linear, so mid-week the divisor corrects
+#     phase and leaves the shape error underneath: a measured mean 46 pp at day 3, 35 pp at day 5,
+#     ~20 pp at day 6, ~2 pp at day 7. Silence is the honest reading until the window is closing.
+#
+# Cases 1-2 pin the abstain, 3 pins that it is a floor and not a stub, and 4-5 pin the two
+# mid-week regimes the widening exists for — including the one ⚠ WALL in the backtest, which
+# fired at day 3 at 119% against a 99% close and was FALSE.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -49,29 +59,51 @@ run_wp() { export WP_PCT="$1" WP_H="$2"; run wp; }
   [ "$output" = "NONE" ]
 }
 
-@test "CONTROL: projects once past the floor, so the abstain above is the floor and not a stub" {
-  # Same account one day in: 24h elapsed of 168 = 14.3%, above the floor.
-  run_wp 10 144
+@test "ABSTAINS mid-week where the linear model is wrong by a mean 46pp" {
+  # The doc's day-3 median: 21% used with 96h left (72h elapsed). Linear projects 49%; the
+  # windows that read like this closed at 92-100%. This case is the whole item — the old 0.05
+  # floor let this row speak, and it spoke wrongly for four more days.
+  run_wp 21 96
+  [ "$status" -eq 0 ]
+  [ "$output" = "NONE" ]
+}
+
+@test "ABSTAINS on the day-3 ⚠ WALL that never arrived (next@08-23: 119% projected, 99% actual)" {
+  # The one over-projection in the backtest. Silence here is what removes a false page, so this
+  # arm is the reason the widening is not a pure loss of signal.
+  run_wp 51 96
+  [ "$status" -eq 0 ]
+  [ "$output" = "NONE" ]
+}
+
+@test "CONTROL: projects once inside the last day, so the abstains above are a floor not a stub" {
+  # 24h left is the boundary itself and must SPEAK — MIN_ELAPSED_FRAC is derived from
+  # PROJ_SPEAKS_LAST_H by the same arithmetic, so this is exact and not a float near-miss.
+  run_wp 90 24
   [ "$status" -eq 0 ]
   [ "$output" != "NONE" ]
+  # …and one hour earlier it does not. Both sides, or the boundary is unpinned.
+  run_wp 90 25
+  [ "$output" = "NONE" ]
 }
 
 @test "burn ratio is 1.00x when consumption exactly tracks elapsed window" {
-  # halfway through the week (84h left), half the bucket spent => dead on pace
-  run_wp 50 84
+  # 8.4h left => 95% of the window elapsed; 95% of the bucket spent => dead on pace
+  run_wp 95 8.4
   [ "$status" -eq 0 ]
   printf '%s' "$output" | grep -qE '^1\.0000 100\.00$'
 }
 
 @test "burn ratio is 0.50x when half on pace — the under-use signal" {
-  run_wp 25 84
+  run_wp 47.5 8.4
   [ "$status" -eq 0 ]
   printf '%s' "$output" | grep -qE '^0\.5000 50\.00$'
 }
 
 @test "projects PAST 100 when over pace — the wall the alarm exists for" {
-  # 75% spent at the halfway mark projects to 150%: the account hits its limit early and is DOWN
-  run_wp 75 84
+  # 99% spent with 5% of the window left projects past 100: the account hits its limit before
+  # reset and is DOWN until it. This is the regime the flag survives for.
+  run_wp 99 8.4
   [ "$status" -eq 0 ]
   proj="$(printf '%s' "$output" | awk '{print $2}')"
   [ "$(python3 -c "print(1 if $proj >= 100 else 0)")" -eq 1 ]
