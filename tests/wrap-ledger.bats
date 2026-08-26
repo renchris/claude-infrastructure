@@ -948,6 +948,145 @@ mk_timeout_shim() {                        # $1 = argv token to fail on ; $2 = m
   [ "$(field "$output" RUNG)" = "🚀" ]
 }
 
+# ── 4d. THE TIME ARM'S OWN UNREADABLE STATE — the `?` law's FOURTH sensor (2026-08-26, recycle #236) ─
+# This file states, tests and enforces one law for every live-side sensor: an unresolvable sensor may
+# not breach, AND IT MAY NOT CLEAR EITHER — so it says `?` and the sentence stops claiming a
+# comparison. LIVE_LAG (2g), LIVE_ADDS (2f) and LIVE_DIVERGED (2h) each carry it. The live-commit
+# AGE, added one link earlier when the time arm was re-pointed at the live layer's commit, did not:
+# a failed `%ct` read left ct=0 ⇒ age_s=0 — the FRESHEST possible value, maximally CLEARING — and
+# nothing downstream could tell that reading apart from a live layer deployed one second ago.
+#
+# AND THE FAILURES ARE CORRELATED, WHICH IS WHY 2g's GREEN COULD NOT SEE THIS. Before #235 the time
+# arm read THIS repo's HEAD and genuinely needed no live read, so the comment on the `?` guard could
+# say the time budget "still decides" when the lag read failed. After #235 both reads are
+# `_bounded … git -C "$LIVE_REPO"` — same repo, same timeout — so the state that produces LIVE_LAG=?
+# in the field produces a dead clock too. 2g's shim is scoped to `HEAD..*` alone, so in ITS fixture
+# the time budget really was measured; the population where it is not was unreachable from that test.
+# This case makes it reachable by failing BOTH reads, which is the whole-repo timeout as it occurs.
+@test "BOTH live-side reads time out ⇒ LIVE_AGE=?, no breach, and NO claim that time cleared it" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  live_at_aged 25200                        # CONTROL: unaided, this fixture breaches ON THE CLOCK
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "🚀" ]
+  [ "$(field "$output" LIVE_LAG)" = "1" ]   # ...and NOT on the count: 1 is far inside the budget
+
+  mk_timeout_shim 'HEAD..*|--format=%ct' "$BATS_TEST_TMPDIR/shim-both"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ -s "$BATS_TEST_TMPDIR/shim-both" ]      # the shim WAS on the executed path
+  [ "$(field "$output" LIVE_LAG)" = "?" ]
+  [ "$(field "$output" LIVE_AGE)" = "?" ]   # pre-fix: not emitted at all
+  [ "$(field "$output" LIVE_SRC)" = "behind" ]
+  [ "$(field "$output" LIVE_ADDS)" = "0" ]  # the one sensor that still answered — it reads OUR repo
+  [ "$(field "$output" RUNG)" = "✅" ]      # an unresolvable sensor may not breach: unchanged
+  run bash "$LEDGER"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c .)" -eq 1 ]
+  # THE DEFECT, pinned: the one line asserted a measurement that was never made.
+  [ "$(printf '%s' "$output" | grep -ci "inside the time budget")" -eq 0 ]
+  [ "$(printf '%s' "$output" | grep -ci "within the converge budget")" -eq 0 ]
+  [ "$(printf '%s' "$output" | grep -ci "UNREADABLE")" -ge 1 ]
+  run bash "$LEDGER" --full
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | grep -c "within budget (")" -eq 0 ]
+  bash "$LEDGER" --machine >/dev/null 2>"$BATS_TEST_TMPDIR/err-both.txt"
+  [ ! -s "$BATS_TEST_TMPDIR/err-both.txt" ]
+}
+
+# ── 4e. THE CLOCK ALONE FAILS — one variable apart from 4d, and the arm that survives is different ─
+# 4d fails both reads; this fails ONLY `%ct`, so the COMMIT budget is still fully readable and is
+# what must decide. The pair is what stops "LIVE_AGE=?" being satisfiable by a broken box: here the
+# lag is a real number read through the same shimmed `timeout`, so a `?` on the age is the clock's
+# own failure and nothing else's.
+@test "the %ct read alone times out ⇒ LIVE_AGE=?, the COMMIT budget still decides" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  export WRAP_LIVE_BUDGET_COMMITS=2
+  live_at_aged 25200                        # 7h old AND, below, 3 commits of lag: both arms armed
+  advance_trunk 2
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "🚀" ]
+
+  mk_timeout_shim '--format=%ct' "$BATS_TEST_TMPDIR/shim-ct"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ -s "$BATS_TEST_TMPDIR/shim-ct" ]
+  [ "$(field "$output" LIVE_AGE)" = "?" ]
+  [ "$(field "$output" LIVE_LAG)" = "3" ]   # the sibling read is UNAFFECTED — a scalpel, not a box
+  [ "$(field "$output" RUNG)" = "🚀" ]      # 3 > 2: the commit arm carries the verdict alone
+  [ "$(field "$output" LIVE_BREACH_WHY)" = "commits" ]
+  bash "$LEDGER" --machine >/dev/null 2>"$BATS_TEST_TMPDIR/err-ct.txt"
+  [ ! -s "$BATS_TEST_TMPDIR/err-ct.txt" ]
+}
+
+# ── 4f. LIVE_AGE IS A NUMBER ON THE HEALTHY PATHS — a field only ever seen as `?` is not a sensor ──
+# The `?` cases above are satisfiable by a field that is ALWAYS `?`, which would report a permanently
+# dead clock as a permanently honest one. This pins the populated half on both live paths.
+@test "LIVE_AGE is emitted as a NUMBER on the behind path and on the ok path" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  live_at_aged 7200                         # inside the 6h default ⇒ ✅, and the clock IS readable
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_SRC)" = "behind" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+  age="$(field "$output" LIVE_AGE)"
+  case "$age" in ''|*[!0-9]*) false ;; esac  # numeric, not `?` and not empty
+  [ "$age" -ge 7000 ]                        # it is the AGED commit's clock, not a fresh one
+  [ "$age" -lt 25200 ]                       # ...and inside the budget, which is why the rung is ✅
+  # The ok path emits it too, so a consumer never has to guess whether the read happened. Reached by
+  # advancing THIS clone onto trunk rather than by a second mk_live — that helper clones to one fixed
+  # path and a second call dies on it (measured: "destination path … already exists"), which reds the
+  # test on the fixture rather than on the subject.
+  git -C "$WRAP_LIVE_REPO" fetch -q origin
+  git -C "$WRAP_LIVE_REPO" reset -q --hard origin/main
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_SRC)" = "ok" ]
+  [ "$(printf '%s' "$output" | grep -c "^LIVE_AGE=")" -eq 1 ]
+}
+
+# ── 4g. WHICH ARM DECIDED — the two-armed budget's verdict, attributed (2026-08-26, recycle #236) ──
+# The renderers took a two-armed breach and printed ONE arm's units. On a TIME breach the operator
+# read "the live layer is 1 commit(s) behind and past its converge budget" against a commit budget of
+# 25, and `--full` read "PAST budget" beside a lag of 1 — arithmetic that contradicts itself, and
+# contradicts the sibling actuator's own banner over the same number (deploy-live printed "lag 11
+# commit(s) / 6h, inside the degrade budget (25 / 6h)" at 2026-08-26T06:22:30Z while this ledger said
+# PAST). Nothing was wrong with the VERDICT; the reason was simply not carried out of the ladder.
+@test "a TIME breach names the TIME arm; a COMMIT breach names the COMMIT arm" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  live_at_aged 25200                        # lag 1 — INSIDE the commit budget; the clock is the lever
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "🚀" ]
+  [ "$(field "$output" LIVE_LAG)" = "1" ]
+  [ "$(field "$output" LIVE_BREACH_WHY)" = "time" ]
+  run bash "$LEDGER"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | grep -c "TIME arm")" -ge 1 ]
+  run bash "$LEDGER" --full
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | grep -c "PAST budget")" -ge 1 ]   # the older phrase is kept, not churned
+  [ "$(printf '%s' "$output" | grep -c "TIME arm")" -ge 1 ]
+
+  # the paired opposite: same rung, other arm, and the two must not render the same sentence
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  export WRAP_LIVE_BUDGET_COMMITS=2
+  advance_trunk 3                           # 3 > 2 on commits, every commit seconds old
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "🚀" ]
+  [ "$(field "$output" LIVE_BREACH_WHY)" = "commits" ]
+  run bash "$LEDGER"
+  [ "$(printf '%s' "$output" | grep -c "COMMIT arm")" -ge 1 ]
+  [ "$(printf '%s' "$output" | grep -c "TIME arm")" -eq 0 ]
+}
+
 # ── 5. a FAILED migration is independent of lag: live AT HEAD and it still fires ──
 @test "failed migration with the live layer at HEAD ⇒ RUNG=🚀, MIG_FAILED=1" {
   ok_state

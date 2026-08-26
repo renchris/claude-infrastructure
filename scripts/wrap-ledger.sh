@@ -818,6 +818,20 @@ MIG_DIR="${CC_MIGRATIONS_STATE:-$HOME/.claude/autonomy/migrations}/failed"
 # LIVE=1 iff the live layer is VERIFIED at/above HEAD. LIVE_SRC carries why: ok · behind · n-a
 # (positively inapplicable) · unknown (could not read) · skip (not computed — a worse rung governs).
 LIVE=0; LIVE_SRC="skip"; LIVE_SHA=""; LIVE_LAG=0; MIG_FAILED=0; LIVE_BREACH=0
+# LIVE_AGE = age in SECONDS of the commit the live layer is ON — the quantity the TIME budget arm
+# compares. `?` on the same law as LIVE_LAG / LIVE_ADDS / LIVE_DIVERGED: the read was attempted and
+# did not answer, which is NOT the same as a fresh layer (2026-08-26, recycle #236). It matters more
+# here than for the siblings, because this sensor's failure value USED to be 0 — the freshest reading
+# expressible, and therefore maximally CLEARING. An unresolvable sensor may not breach; the half this
+# field adds is that it may not CLEAR either, so no renderer can say the time budget was applied.
+LIVE_AGE=0
+# LIVE_BREACH_WHY = WHICH rung of the ladder below decided: migration · diverged · adds · commits ·
+# time. Empty when nothing breached. The ladder always knew; every renderer discarded it, so a TIME
+# breach was reported in COMMIT units ("1 commit(s) behind and past its converge budget" against a
+# budget of 25) — a sentence that contradicts itself and contradicts the sibling actuator's banner
+# over the same number. Carried out of the ladder rather than re-derived by each renderer, so the
+# reason a reader is given cannot drift from the reason the rung was computed on.
+LIVE_BREACH_WHY=""
 # LIVE_ADDS = paths HEAD carries that the live layer's tree does not — the inert-new-file count.
 # `?` is its own state: the live sha could not be read HERE, so the question was asked and not
 # answered. 0 alongside LIVE_SRC=skip/n-a/unknown means "not counted", which those already say.
@@ -1011,6 +1025,20 @@ compute_live_layer() {
   # --is-ancestor question on the live side and the added-file diff on ours. Bounded like every other
   # live-side read, and a failed read leaves ct=0 ⇒ age 0 ⇒ no time trip: an unresolvable sensor may
   # not breach, the same law as LIVE_LAG=? and LIVE_ADDS=?. `date +%s` failing lands in the same arm.
+  #
+  # AND THE READ IS `?` WHEN IT DOES NOT ANSWER (2026-08-26, recycle #236). Leaving ct=0 satisfied
+  # "may not breach" and violated its other half: age 0 is the FRESHEST value this arm can hold, so a
+  # dead clock rendered as a live layer deployed one second ago, and the readout went on to say
+  # "inside the time budget" — a claim about a comparison that never happened, which is the exact
+  # defect the LIVE_LAG=? arm two branches up was built to stop.
+  #
+  # IT MATTERS BECAUSE THE TWO FAILURES ARE CORRELATED. Before this arm was re-pointed it read THIS
+  # repo's HEAD and needed no live read at all, which is what made the `?` guard's old note true.
+  # Now both are `_bounded … git -C "$LIVE_REPO"` — same repo, same timeout — so the condition that
+  # produces LIVE_LAG=? in the field (a live repo that is slow, locked or on a stalled mount) takes
+  # the clock with it. The surviving independent sensor on that path is the added-file read, which
+  # runs in OUR repo; the tests pin both the correlated case and the clock-alone case, one variable
+  # apart, because a `?` proven only by a broken box proves nothing about either.
   now="$(date +%s 2>/dev/null || echo 0)"
   ct="$(_bounded "${WRAP_LIVE_TIMEOUT_S:-5}" git -C "$LIVE_REPO" log -1 --format=%ct "$LIVE_SHA" 2>/dev/null)"
   ct_rc=$?
@@ -1018,28 +1046,47 @@ compute_live_layer() {
   if [ "$ct_rc" -ne 0 ]; then ct=0; fi
   case "$ct"  in ''|*[!0-9]*) ct=0 ;; esac
   age_s=0
-  if [ "$now" -gt 0 ] && [ "$ct" -gt 0 ] && [ "$now" -gt "$ct" ]; then age_s=$((now - ct)); fi
+  if [ "$now" -gt 0 ] && [ "$ct" -gt 0 ]; then
+    # Both clocks answered ⇒ an age exists, and a commit dated in the FUTURE (a skewed committer
+    # date, which git accepts) clamps to 0 rather than going `?`: that read succeeded, and 0 is the
+    # true answer to "how long has it been sitting there". `?` is reserved for a read that did not
+    # happen — collapsing the two would put a measured state back under the unmeasured label.
+    if [ "$now" -gt "$ct" ]; then age_s=$((now - ct)); fi
+    LIVE_AGE="$age_s"
+  else
+    LIVE_AGE="?"
+  fi
 
   if [ "$MIG_FAILED" -gt 0 ]; then
-    LIVE_BREACH=1
+    LIVE_BREACH=1; LIVE_BREACH_WHY="migration"
   elif [ "$LIVE_SRC" = "behind" ]; then
     # A DIVERGENCE gets NO budget either, and it is tested FIRST because it OUTRANKS the added file:
     # an absent file is cured by the next converge tick, whereas a divergence is what stops every
     # converge tick — it is the CAUSE the added-file count is a symptom of. `?` may not breach, on
     # the same law as the two arms below.
     if [ "$LIVE_DIVERGED" != "?" ] && [ "$LIVE_DIVERGED" -gt 0 ]; then
-      LIVE_BREACH=1
+      LIVE_BREACH=1; LIVE_BREACH_WHY="diverged"
     # An ADD gets NO budget (header). `?` is not a number and must never breach — it falls through
     # to the budget arms, leaving the pre-2026-08-09 verdict exactly as it was.
     elif [ "$LIVE_ADDS" != "?" ] && [ "$LIVE_ADDS" -gt 0 ]; then
-      LIVE_BREACH=1
-    # LIVE_LAG carries `?` on an unresolved bounded read, for the same reason and with the same
-    # guard: an unresolvable sensor may not breach, and it may not clear either — so it drops out of
-    # the COMMIT budget and leaves the TIME budget (which is derived from HEAD's own committer date
-    # and needs no live read) as the arm that still decides.
-    elif { [ "$LIVE_LAG" != "?" ] && [ "$LIVE_LAG" -gt "$LIVE_BUDGET_COMMITS" ]; } \
-         || [ "$age_s" -gt "$((LIVE_BUDGET_MIN * 60))" ]; then
-      LIVE_BREACH=1
+      LIVE_BREACH=1; LIVE_BREACH_WHY="adds"
+    # THE TWO BUDGET ARMS — whichever trips FIRST, each guarded by its own sensor's `?`.
+    #
+    # BOTH GUARDS EXIST FOR THE SAME REASON AND NEITHER COVERS FOR THE OTHER (2026-08-26, recycle
+    # #236). The note that used to sit here said the TIME budget "is derived from HEAD's own
+    # committer date and needs no live read", which was true of the arm as written on 2026-08-21 and
+    # stopped being true one link before this one: the clock now reads the live repo, through the
+    # same `_bounded` and the same timeout as the lag read above. So on the failure that actually
+    # occurs — a live repo that is slow, locked, or on a stalled mount — BOTH arms abstain together,
+    # and what still decides is the added-file read one branch up, which runs in OUR repo. Written
+    # out because the older sentence read as a guarantee of independence that the code no longer has.
+    #
+    # Split into two tested branches rather than one `||`: the ladder is the only place that knows
+    # WHICH arm decided, and every renderer below was printing the other arm's units for want of it.
+    elif [ "$LIVE_LAG" != "?" ] && [ "$LIVE_LAG" -gt "$LIVE_BUDGET_COMMITS" ]; then
+      LIVE_BREACH=1; LIVE_BREACH_WHY="commits"
+    elif [ "$LIVE_AGE" != "?" ] && [ "$LIVE_AGE" -gt "$((LIVE_BUDGET_MIN * 60))" ]; then
+      LIVE_BREACH=1; LIVE_BREACH_WHY="time"
     fi
   fi
   return 0
@@ -1140,8 +1187,19 @@ else
       READOUT="🚀 Landed but NOT live — the live layer carries ${LIVE_DIVERGED} commit(s) trunk does not, so \`merge --ff-only\` cannot advance it and NO converge budget applies; run scripts/deploy-live.sh, which names which of them are already on trunk by content."
     elif [ "$LIVE_ADDS" != "?" ] && [ "$LIVE_ADDS" -gt 0 ]; then
       READOUT="🚀 Landed but NOT live — ${LIVE_ADDS} NEW file(s) are absent from the live layer, so every consumer guard on them silently skips; no budget covers an added file."
+    elif [ "$LIVE_BREACH_WHY" = "time" ]; then
+      # NAME THE ARM (2026-08-26, recycle #236). This sentence used to be the COMMIT sentence for
+      # both arms, so a TIME breach read "the live layer is 1 commit(s) behind and past its converge
+      # budget" against a commit budget of 25 — self-contradicting arithmetic, and it contradicted
+      # deploy-live's own banner over the identical lag ("lag 11 commit(s) / 6h, inside the degrade
+      # budget (25 / 6h)", 2026-08-26T06:22:30Z, while this line said PAST). The two are not in
+      # conflict — different arms, and the hours arm is integer-truncated so they disagree for up to
+      # an hour by design — but nothing in the sentence said which arm applied, so the reader had no
+      # way to tell a real disagreement from a rendering artefact. The lag is kept in the line
+      # because it is still what the converger will move; it is no longer the reason.
+      READOUT="🚀 Landed but NOT live — the live layer is ${LIVE_LAG} commit(s) behind and past its converge budget (the TIME arm: the commit it sits on is ${LIVE_AGE}s old, budget ${LIVE_BUDGET_MIN}m); the machine is not running this yet."
     else
-      READOUT="🚀 Landed but NOT live — the live layer is ${LIVE_LAG} commit(s) behind and past its converge budget; the machine is not running this yet."
+      READOUT="🚀 Landed but NOT live — the live layer is ${LIVE_LAG} commit(s) behind and past its converge budget (the COMMIT arm: ${LIVE_LAG} > ${LIVE_BUDGET_COMMITS}); the machine is not running this yet."
     fi
   elif [ "$YOURS" -gt 0 ]; then
     # 👤 outranks the absent-DoD note: an unrun operator step is a fact, an unverifiable scope is not.
@@ -1157,8 +1215,21 @@ else
     # "within the converge budget" is a CLAIM ABOUT A MEASUREMENT, so it may only be said when the
     # measurement was made. On `?` the commit budget abstained and the TIME budget is what cleared
     # this close — say that, rather than asserting a bound on a lag nothing read (2026-08-21).
-    if [ "$LIVE_LAG" = "?" ]; then
+    if [ "$LIVE_LAG" = "?" ] && [ "$LIVE_AGE" = "?" ]; then
+      # BOTH live-side sensors abstained (2026-08-26, recycle #236) — the correlated failure, since
+      # they are the same repo through the same bound. The rung is unchanged, because an unresolvable
+      # sensor may not breach; the SENTENCE is what changes, because it may not clear either. The
+      # older line credited "inside the time budget" on this path, which was written when that arm
+      # read our own HEAD and could not fail with the lag. Only the added-file read is left, and it
+      # is named as the only thing that actually answered.
+      RUNG="✅"; READOUT="✅ Complete & landed — live layer state UNREADABLE (commit lag and live-commit age both unread; no added file, so no budget was applied and nothing breached)."
+    elif [ "$LIVE_LAG" = "?" ]; then
       RUNG="✅"; READOUT="✅ Complete & landed — live layer converging (commit lag UNREADABLE; no added file and inside the time budget)."
+    elif [ "$LIVE_AGE" = "?" ]; then
+      # The mirror image, and it gets its own line for the same reason the one above does: naming
+      # the arm that DID clear is the only way the reader can tell an applied budget from an
+      # abstained one. "the converge budget" would assert both.
+      RUNG="✅"; READOUT="✅ Complete & landed — live layer converging (${LIVE_LAG} commit(s) behind; within the COMMIT budget — the live-commit clock was UNREADABLE, so the time budget was not applied)."
     else
       RUNG="✅"; READOUT="✅ Complete & landed — live layer converging (${LIVE_LAG} commit(s) behind; within the converge budget)."
     fi
@@ -1182,6 +1253,8 @@ emit_machine() {
   printf 'LIVE_LAG=%s\n' "$LIVE_LAG"
   printf 'LIVE_ADDS=%s\n' "$LIVE_ADDS"
   printf 'LIVE_DIVERGED=%s\n' "$LIVE_DIVERGED"
+  printf 'LIVE_AGE=%s\n' "$LIVE_AGE"
+  printf 'LIVE_BREACH_WHY=%s\n' "$LIVE_BREACH_WHY"
   printf 'MIG_FAILED=%s\n' "$MIG_FAILED"
   printf 'GATE=%s\n' "$GATE"
   printf 'DOD=%s\n' "$DOD"
@@ -1227,11 +1300,31 @@ emit_full() {
   # printing the budget beside a `?` reads as though it had been (2026-08-21). Stated as the base
   # rather than appended, so the stronger causes below still overwrite it — but each of those names
   # a fact that was actually READ, so none of them inherits the phantom comparison.
-  local behind_why="within budget (${LIVE_BUDGET_COMMITS})"
-  if [ "$LIVE_LAG" = "?" ]; then behind_why="commit lag UNREADABLE — budget not applied"; fi
+  #
+  # THE BUDGET IS TWO-ARMED AND THIS ROW USED TO NAME ONE OF THEM (2026-08-26, recycle #236). The
+  # base clause printed the COMMIT budget's number on every non-breaching path, and "PAST budget"
+  # carried no arm at all — so a TIME breach rendered as "BEHIND — 1 commit(s), PAST budget" beside a
+  # commit budget of 25. Both arms are now named from LIVE_BREACH_WHY, which the ladder sets where
+  # the decision is made, so this row cannot drift from the rung. `?` on either sensor drops that
+  # arm's clause instead of printing a comparison nothing made — the same law the lag clause already
+  # carried, now applied to the clock the time arm reads.
+  local behind_why="within budget (${LIVE_BUDGET_COMMITS} commit(s) / ${LIVE_BUDGET_MIN}m)"
+  if [ "$LIVE_LAG" = "?" ] && [ "$LIVE_AGE" = "?" ]; then
+    behind_why="commit lag AND live-commit age both UNREADABLE — no budget applied"
+  elif [ "$LIVE_LAG" = "?" ]; then
+    behind_why="commit lag UNREADABLE — commit budget not applied; within the time budget (${LIVE_BUDGET_MIN}m)"
+  elif [ "$LIVE_AGE" = "?" ]; then
+    behind_why="live-commit age UNREADABLE — time budget not applied; within the commit budget (${LIVE_BUDGET_COMMITS})"
+  fi
   if [ "$LIVE_ADDS" = "?" ]; then behind_why="${behind_why} · added-file check UNRESOLVED"
   elif [ "$LIVE_ADDS" -gt 0 ]; then behind_why="${LIVE_ADDS} NEW file(s) ABSENT — no budget covers an add"
-  elif [ "$LIVE_BREACH" -eq 1 ]; then behind_why="PAST budget"; fi
+  elif [ "$LIVE_BREACH" -eq 1 ]; then
+    case "$LIVE_BREACH_WHY" in
+      time)    behind_why="PAST budget — the TIME arm (live commit ${LIVE_AGE}s old > ${LIVE_BUDGET_MIN}m)" ;;
+      commits) behind_why="PAST budget — the COMMIT arm (${LIVE_LAG} > ${LIVE_BUDGET_COMMITS})" ;;
+      *)       behind_why="PAST budget" ;;
+    esac
+  fi
   local live_disp; case "$LIVE_SRC" in
     ok)      live_disp="at/above HEAD ($(printf '%s' "$LIVE_SHA" | cut -c1-8))" ;;
     behind)  live_disp="BEHIND — ${LIVE_LAG} commit(s), ${behind_why}" ;;
