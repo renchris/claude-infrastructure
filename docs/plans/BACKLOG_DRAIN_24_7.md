@@ -86,6 +86,67 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-26 — LANE A cloud dispatch (backlog `70f0001c657b`, NOT a Lane B recycle — no number
+  claimed): method 207 — A LAW STATED IN ONE FILE'S COMMENT, OBEYED BY THAT ONE FILE, AND WRONG IN
+  SIX OTHERS ON THE AWK THIS LANE'S OWN VMs RUN.** ONE fix committed on
+  `claude/fire-20260826T083850Z-84972-1`; NOT landed from here — a cloud worker pushes a ref and the
+  LAND is the local side's step (§4 Lane A), so this entry is written against a branch sha and the
+  land must re-verify by content.
+  - **THE FINDING (207).** `scripts/typed-send-lint.sh:164` states the rule outright: *"No interval
+    expressions ({n,m}) anywhere in the program: the classic one-true-awk that ships as
+    /usr/bin/awk on this box has not always supported them, and a silently-unmatched pattern here is
+    a false GREEN."* It is correct, it is load-bearing, and **it is prose in exactly one file, so it
+    bound exactly that file.** Censused today: **8 interval sites across 6 others** —
+    `moving-ref-control-lint.sh` (a ship-land ratchet), `plan-phase-scan.sh` ×3 (the sensor a
+    dispatch brief's own PLAN-OPEN SNAPSHOT is generated from), `assignee-pane-residency.sh` ×2,
+    `teammate-reap-alarm.sh`, `occupancy-probe.sh`. (memory:
+    `enforcement-must-live-at-the-chokepoint` — the same shape as the `land-lock`→`cc-backlog` and
+    registry-`lstart` members of the standing format-blast-radius lint.)
+  - 🚨 **AND THE PROSE UNDERSTATED IT, WHICH IS WHY IT NEVER GOT ENFORCED.** The rule's stated
+    failure is an awk with NO interval support — a shape everyone assumes is extinct, so the rule
+    read as history. The live failure is **PARTIAL** support and it is worse, because the site still
+    fires and still answers. Measured on `mawk 1.3.4 20240123`, the default `/usr/bin/awk` on Debian
+    and Ubuntu **and the awk in the Linux VMs this plan's Lane A runs in**: `{m,n}` is accepted and
+    then matches **EXACTLY m** whenever m ≥ 2. `^a{2,9}$` does not match nine a's; `^[0-9]{2,4}$`
+    does not match `2026`; `^[0-9]{4}$` does. `{m}` exact, `{0,n}` and `{1,n}` are all correct
+    there — so four of the eight sites were fine on THIS awk and wrong only on the extinct-looking
+    one, which is exactly the split that lets a rule rot while every site still looks right.
+  - **WHAT IT COST, measured on the real artifacts, gawk 5.2.1 against mawk 1.3.4.**
+    `plan-phase-scan.sh:242` built `commit_hashes` from `/[0-9a-f]{7,40}/`, so mawk took the first
+    SEVEN characters of every run and re-entered the loop on the remainder — three different wrong
+    answers on one pass: `ce7651b02a17` → `ce7651b` (TRUNCATED, and it is this plan's own §4 A-lane
+    heading); `a1b2c3d4e5f6a7b8` → `a1b2c3d` + `4e5f6a7` (FABRICATED — two shas nobody ever wrote);
+    `1234567abcdef` → nothing at all (the truncated head is purely numeric so the numeric guard
+    rejected it and the 6-char tail was too short), **and that section then read PENDING, because
+    the hash is what flips a heading to DONE.** `moving-ref-control-lint.sh:127` decides which refs
+    are PINNED with the same shape, and on trunk under mawk it reported **TEN correctly-pinned
+    suites as MOVING refs** — each told to "replay a LITERAL sha" that it already replays. Its own
+    bats suite is **RED on origin/main under mawk (2 of 8 cases) and green after this fix**, which
+    is the RED-proof: not a fixture, the shipped suite.
+  - 🚨 **THE GENERALISABLE HALF: A RULE'S HOME DECIDES ITS BLAST RADIUS, AND A COMMENT'S HOME IS ONE
+    FILE.** Nothing here was hidden — the rule is written down, in this repo, in plain language,
+    with the right reason. It still failed, because the only mechanism carrying it was a reader who
+    happened to open `typed-send-lint.sh`. This is the same lesson as
+    `instruction-to-a-recycling-chain-dies-at-its-brief` one layer down: an instruction persists
+    only where the thing it governs is regenerated from. For a repo-wide code law that place is a
+    lint at the land gate, never a paragraph. **Landed as `scripts/awk-interval-lint.sh`** —
+    own-scope three-state contract, ratchet EMPTY by construction (all eight sites repaired in the
+    same diff), `--selftest` 20/20 in both directions, one awk pass over the whole tree in ~1 s,
+    wired into `scripts/ship-land.sh` beside `moving-ref-control-lint` with the same
+    exit-2-is-a-NON-VERDICT arm. `tests/awk-interval-lint.bats` (8 cases) carries the corpus verdict
+    and the two arms a synthetic fixture cannot give: the five repaired files replayed pre-fix from
+    the literal pin `51bf8570` (5 flag, `typed-send-lint.sh` and `self-path-lint.sh` correctly do
+    NOT), and a **TWO-AWKS-AGREE** case that runs the same scanner under both implementations and
+    diffs the output — skipped, never silently passed, on a host with only one awk.
+  - ⚠️ **HONEST LIMITS, stated rather than discovered later.** (1) The harm is measured on
+    mawk; on the operator's macOS `/usr/bin/awk` (one-true-awk, intervals supported since 2020)
+    every site answered correctly today, so this is a fix for the venue this lane runs in and for
+    the rule the repo already wrote down — **not** a claim that the local box was returning wrong
+    shas. (2) The lint reads single-quoted program bodies only: `awk -f prog.awk`, a double-quoted
+    program, and a regex assembled at runtime (`"^a{" n ",9}$"`) are out of a grep's reach and are
+    named as limits in the file. (3) It excludes exactly ONE path — itself — because `--selftest`
+    keeps its RED fixtures there as heredocs; that exclusion is pinned to one basename by a test so
+    it cannot widen into an exemption list.
 - **2026-08-26 — drain recycle #236: method 206 — A SENSOR WHOSE FAILURE VALUE IS THE HEALTHIEST
   READING IT CAN PRODUCE, ADDED ONE LINK EARLIER TO A FILE THAT STATES, TESTS AND ENFORCES THE
   OPPOSITE LAW FOR ITS THREE OLDER SENSORS.** ONE fix landed, ONE §2.1 entry landed, TWO land
