@@ -5,13 +5,13 @@
   {
    "rule": "xcheck-contrast-varies",
    "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
-   "detail": "contrast is not one number across this text: 6.15:1 at the left edge and 1.76:1 at the right. Any single computed value is a fiction, and the right end is the one that fails a reader",
+   "detail": "contrast is not one number across this text: 6.15:1 at the left edge and 1.76:1 at the right. Any single computed value is a fiction, and the right end fails the 3.0:1 requirement at 1.76:1",
    "severity": "high"
   },
   {
    "rule": "xcheck-contrast-varies",
    "target": "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
-   "detail": "contrast is not one number across this text: 6.00:1 at the left edge and 1.75:1 at the right. Any single computed value is a fiction, and the right end is the one that fails a reader",
+   "detail": "contrast is not one number across this text: 6.00:1 at the left edge and 1.75:1 at the right. Any single computed value is a fiction, and the right end fails the 4.5:1 requirement at 1.75:1",
    "severity": "high"
   }
  ],

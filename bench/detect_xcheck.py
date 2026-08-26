@@ -58,6 +58,15 @@ unsound:
                      validated. It now excludes ink first and takes the MEDIAN of
                      what is left, which is the statistic a varying backdrop
                      actually has.
+                     Its VERDICT was wrong in the other direction: it asserted
+                     "the <side> end is the one that fails a reader" whenever the
+                     two ends differed by more than the tolerance, without ever
+                     comparing either to the requirement. A backdrop running 9:1
+                     to 5:1 varies by more than the tolerance and passes at both
+                     ends. It now names the requirement and says which of the two
+                     answers it is giving -- a failure, or a spread with nothing
+                     to fix. Both still settle the abstention, because both are
+                     the two real numbers the abstention said could not exist.
 
 Usage: python3 detect_xcheck.py <corpus-dir> [--no-x2]
 """
@@ -83,7 +92,20 @@ MIN_BOX = 8  # ignore hairlines; a 1px rule has no meaningful centroid
 # same threshold X1 uses for ink; it sits above JPEG-free antialiasing noise and
 # below any two colours a designer would call different.
 COLOUR_NEAR = 40
+# WCAG AA, so that X3 can say whether a spread actually FAILS rather than merely
+# existing. Same numbers as detect_dom.py, deliberately duplicated: a comparator
+# that imported its requirement from the detector it is checking would agree with
+# it by construction.
+CONTRAST_MIN = 4.5
+CONTRAST_MIN_LARGE = 3.0
 X2_ENABLED = "--no-x2" not in sys.argv  # see the X2 note in the docstring
+
+
+def px(v: str) -> float:
+    try:
+        return float(str(v).replace("px", "").strip())
+    except (ValueError, AttributeError):
+        return 0.0
 
 
 def rel_lum(rgb) -> float:
@@ -291,16 +313,42 @@ def check(snap: dict, png: pathlib.Path) -> list[dict]:
             cl = contrast(fg[:3], sampled["left"])
             cr = contrast(fg[:3], sampled["right"])
             if abs(cl - cr) > CONTRAST_DELTA:
-                lo_side = "left" if cl < cr else "right"
-                rep(
-                    "xcheck-contrast-varies",
-                    el["path"],
-                    f"contrast is not one number across this text: {cl:.2f}:1 at the "
-                    f"left edge and {cr:.2f}:1 at the right. Any single computed "
-                    f"value is a fiction, and the {lo_side} end is the one that "
-                    f"fails a reader",
-                    "high",
+                # Spread is not failure, and this arm used to say it was: it
+                # asserted "the <side> end is the one that fails a reader"
+                # whenever the two ends differed, without ever comparing either
+                # to the requirement. A backdrop running 9:1 to 5:1 varies by
+                # more than the tolerance and passes at both ends. Saying it
+                # fails is a false positive with a real number attached to it,
+                # which is the most persuasive kind.
+                size = px(el["styles"].get("font-size", ""))
+                weight = el["styles"].get("font-weight", "400")
+                large = size >= 24 or (
+                    size >= 18.66 and weight in ("700", "bold", "800", "900")
                 )
+                need = CONTRAST_MIN_LARGE if large else CONTRAST_MIN
+                lo_side = "left" if cl < cr else "right"
+                lo = min(cl, cr)
+                if lo < need:
+                    rep(
+                        "xcheck-contrast-varies",
+                        el["path"],
+                        f"contrast is not one number across this text: {cl:.2f}:1 at "
+                        f"the left edge and {cr:.2f}:1 at the right. Any single "
+                        f"computed value is a fiction, and the {lo_side} end fails "
+                        f"the {need}:1 requirement at {lo:.2f}:1",
+                        "high",
+                    )
+                else:
+                    rep(
+                        "xcheck-contrast-varies",
+                        el["path"],
+                        f"contrast is not one number across this text: {cl:.2f}:1 at "
+                        f"the left edge and {cr:.2f}:1 at the right. No single "
+                        f"computed value describes it, but both ends clear the "
+                        f"{need}:1 requirement -- the abstention is answered and "
+                        f"there is nothing here to fix",
+                        "low",
+                    )
     return out
 
 
