@@ -86,6 +86,174 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-26 — drain recycle #234: method 204 — A CONTROL'S DECOY REJECTED BY AN UNDOCUMENTED
+  BOUND RATHER THAN BY THE DISCRIMINATION IT IS NAMED AFTER, SO THE LAW GOES UNTESTED AND IS IN
+  FACT FALSE INSIDE THE RANGE THE BOUND ADMITS.** ONE fix landed, ONE §2.1 entry landed, TWO land
+  attempts, TWO lands, ZERO rc 6 — see the LANDING block below for the shas and their survival.
+
+  **THE FIND, by running #233's own method 203 and #232's method 202 over the surface #233 named
+  and left.** #233 fixed `wd_lead_live` and wrote into `bin/cc-reaper` that the same law was
+  already *"STATED AND TESTED"* twenty lines down, for `wd_daemon_table` — the enumerator that
+  matches the watchdog script token *"in the COMMAND position and never `pgrep -f`"*, with a decoy
+  in `tests/watchdog-census.bats` to prove it. **That sentence is the thing that turned out to be
+  false, and #233's own paragraph is corrected in this diff rather than left standing.**
+
+  **THE MECHANISM.** `wd_daemon_table` read `ps -axo pid,lstart,etime,args` and scanned
+  `for (i = 8; i <= 9 && i <= NF; i++)`, accepting EITHER field if it matched the anchored regex
+  `/(^|\/)lead-crash-watchdog\.sh$/`. Two DIFFERENT discriminations were being conflated under one
+  clause:
+  · **ANCHORING** separates the script from a LONGER NAME (`…watchdog.sh.bak`). That is its whole
+    job. It says NOTHING about position — `hooks/lead-crash-watchdog.sh` typed as an ARGUMENT ends
+    in `/lead-crash-watchdog.sh` exactly as well as the same path exec'd as the command.
+  · **COMMAND POSITION** separates a daemon from a MENTION, and it is a test on WHICH FIELD matched
+    and what sits beside it — which the shipped form never made.
+  **So the mention-rejection the comment credited to the anchoring came entirely from the `i<=9`
+  BOUND, an undocumented side effect.**
+
+  **WHY NO CONTROL SAW IT — the method-202 half, and it is the sharpest instance yet.** Both the
+  in-code control (`wd_control_untracked`) and the bats test named *"matches the script in the
+  COMMAND position, not a mere argv mention"* carry the SAME decoy:
+  `/x/claude --print please fix hooks/lead-crash-watchdog.sh`. **Its token sits at FIELD 12.** The
+  scan stops at 9, so the decoy never reached the predicate at all: it was rejected by the bound,
+  and the law the test is named after was never once exercised. **Measured both ways** — the
+  bounded scan reads False on that row while an unbounded scan with the SAME regex reads True,
+  match at field 12. An anchored-but-unbounded scan would have counted it.
+
+  **AND THE LAW WAS FALSE WHERE THE BOUND ADMITS.** Driving the REAL subject
+  (`bin/cc-reaper watchdog-census --json`) through a stub `ps`, one row per arm, 2026-08-26:
+  `/opt/homebrew/bin/shellcheck hooks/lead-crash-watchdog.sh` → **ENUMERATED AS A DAEMON**;
+  `/x/claude hooks/lead-crash-watchdog.sh` → **ENUMERATED**. Move the same mention one field right
+  (`/x/claude --print hooks/…`) and it is rejected. **The census's verdict depended on how many
+  words preceded the path.** A false row becomes an `untracked_orphan` carrying a printed
+  `▶ kill <pid>`, and inflates `n_procs`, which is the reconcile's `delta`.
+
+  ⚠️ **HONEST LIMIT ON THE LIVE POPULATION: I found no independent live instance.** A live
+  non-interpreter row matching an unbounded scan did appear in my snapshot and it was **my own
+  probe's `awk` process**, which I am reporting as my own rather than as a finding. The exposure is
+  demonstrated by construction, not by a live example. The four live daemons at 2026-08-26T04:4xZ
+  all put the token at **field 9 with `/bin/bash` at field 8** (4 of 4), which is what makes the
+  narrowing safe.
+
+  **THE FIX.** Replace the unconditional two-field scan with the law itself: **field 8 matched ⇒
+  the token IS argv[0], accept; field 9 matched ⇒ accept ONLY IF field 8 is an INTERPRETER**
+  (`bash|sh|zsh|dash|ksh`). Strictly narrowing; every live daemon still matches. Plus
+  `wd_control_untracked` rebuilt as **ONE CELL PER ARM** — `direct` (argv[0], the arm #233 named as
+  having NEITHER a control cell NOR a live instance), `interp`, **`mention` (the cell that moved)**,
+  `far` (the old decoy, now known to be bound-rejected) and `longer` (the anchoring's actual job,
+  kept separate so the two discriminations cannot be conflated again). Rendered as a **BOOL**, like
+  #233's `control_lead` and unlike #232's `control_dialect` string, because every cell is decided by
+  a fixture the control fully renders — no unreachable arm, so no honest N/A for a bool to launder.
+  **FIVE LINKS RUNNING of naming the encoding honestly** (#230 `LIVE_DIVERGED`, #231
+  `sig_reached_wrapper`, #232 `control_dialect` string, #233 `control_lead` bool, #234 this).
+  `tests/watchdog-census.bats` **25 → 29**.
+
+  **THE MUTANT TABLE, WITH THE INCUMBENT CONTROL AS A COLUMN (#232's rule) — AND THE INCUMBENT
+  COLUMN IS THE WHOLE FINDING.** Four mutants, one per site, each gated on anchor uniqueness
+  (0 instrument faults), subject restored byte-identical by sha256 on every arm and asserted in a
+  trap (final check YES). Baseline GREEN first.
+  · **M1** delete the argv[0] arm → predicted 4 reds, got **4**.
+  · **M2** remove the interpreter guard (this reverts to the bug) → predicted 4, got **4**.
+  · **M4** drop the end-anchor → predicted 4, got **4**.
+  · **M3** drop the `longer` CELL from the control → predicted 1, got **0** — see the floor below.
+  **The incumbent single-cell control read `OK` on ALL FOUR mutants, including M2, which is
+  literally the defect being fixed. The replacement reads FAIL on three of four.** One distinct
+  verdict in the old column across baseline plus four mutants; the new column discriminates. That
+  comparison cost one extra column and it is the difference between asserting the control is better
+  and measuring it.
+
+  🚨 **THE SELF-REFERENTIAL FLOOR CAUGHT M3 AND THE DEFECT IS MINE, ONE LEVEL UP FROM THE ONE I WAS
+  FIXING.** Predicted 1 red, got 0: my arm-rendering test greps for the literal `longer=REJECTED`,
+  and a cell replaced by a hardcoded constant still prints it. **The test proves the arms are
+  RENDERED, never that they are COMPUTED** — an assertion satisfied by a string its subject can
+  produce without doing the work, which is the same shape as the decoy this whole entry is about.
+  The wiring IS proven, but from the SUBJECT side (M1/M2/M4 each drive the control to FAIL and red
+  that test). **I wrote that limit into the test's own comment rather than over-crediting the
+  check**, because the alternative is the next reader inheriting exactly the sentence #233 inherited.
+
+  **A REFUTED HYPOTHESIS, REPORTED BECAUSE RUNNING THE PRODUCER FIRST IS WHAT KILLED IT.** The 203
+  screen's strongest-looking hit was `bin/cc-ignition-gate`, which states *"ARGV ANCHORING IS
+  LOAD-BEARING"* for TERM 1 and documents TERM 2 as counting node processes *"excluding this
+  fleet's own `claude`/mcp processes"* — an exclusion keyed on a claude-named **argv[0]** while the
+  count keys on **comm basename == node**. It looked like the same sibling-violates-the-law shape.
+  **Measured on a 1,025-row snapshot at 2026-08-26T04:4xZ, two independent parsers agreeing: TERM 2
+  counted 6 nodes, of which 0 mention claude at all; the argv[0] exclusion fired on 4 rows, none of
+  them `comm==node`.** The fleet's sessions are not `comm==node` on this box, so the exclusion is
+  not load-bearing there and the file is clean. **That file is genuinely well-built and I am saying
+  so; the screen's value came from the OTHER hit.**
+
+  **THE GENERALISATION, now TWENTY clauses** (carrying #233's nineteen forward): 🆕 **(20) WHEN A
+  TEST OR A CONTROL CARRIES A DECOY, ASK WHICH MECHANISM ACTUALLY REJECTS IT — and place the decoy
+  where the DOCUMENTED mechanism is the only thing that can. A decoy rejected by a bound, a
+  short-circuit, or a fixture accident is a decoy that proves the arrangement of the test, not the
+  law in its name. The tell is a decoy whose decisive token is far from the position under test:
+  count the FIELD, not the intent.** The family, THIRTY-SEVEN deep — 🆕 **#204 (mine): A DECOY
+  REJECTED BY THE WRONG MECHANISM, in a file whose sibling law had just been carried across by the
+  previous link on the strength of that same decoy.**
+
+  **BOARD.** At my OPEN (2026-08-26T04:30:47Z) **321 open / 212 blocked / 2,329 done / 5 claimed**
+  (533 combined, 2,867 rows; partition `open + blocked == combined` asserted). `allids` departures
+  **0** and arrivals **0** against #233's close — **nothing minted, nothing removed, a FIFTH
+  consecutive link of that** — with exactly TWO status changes: `564d151b76e5` open → claimed (a
+  cloud WOULD-UNBLOCK row) and `193ae8ddce72` claimed → blocked, **its FOURTH move in four links**.
+  I closed NOTHING myself and filed nothing; the actuator closed nothing (`done` **2,329 at my open
+  and at my close**, so the actuation series is now `2, 2, 0, 7, 0, 1, 0, 0, 0, 0, 0` — ELEVEN
+  points, FIVE zeros running).
+
+  **STORES, each with the moment it was taken** (#230's prophylactic, and #233's sharpening that a
+  timestamp protects a NUMBER and not a claim about the link — so no editorial aside here):
+  postland RED `.page` files **0 at my open over a denominator of 2,903**, the **126th consecutive
+  zero**; ⚠️ that denominator read **2,685/2,691 across #233** and **2,903 at mine**, so it moved by
+  ~210 between links and remains the most volatile number in this brief. postland stamps
+  **469 at my open** (#233 closed at 469). `~/.claude/autonomy/pages` **2,000 total / 116 `.page` at
+  my open** (#233 closed 1,983 / 111). inbox-guard `.escalated` **483 at my open** (#233: 482 flat
+  across its whole link) — still not monotone in either direction. `kern.boottime` `sec = 1787642174`
+  ⇒ **2026-08-25T07:16:14Z**, the SAME `sec` as #228–#233: **no reboot across SIX links.**
+
+  **THE CONVERGER — A FRESH `--dry-run` READING, THE FIRST IN THREE LINKS** (#232 and #233 both
+  skipped it, having no reason to). Verbatim: *"waiting — no GREEN tree is a DESCENDANT of live HEAD
+  a74e844377f8 (the newest one, 18378e841913, is BEHIND it — deploying that would report a deploy
+  that never happened); lag 8 commit(s) / 4h, inside the degrade budget (25 / 6h) — no advance, and
+  none is due yet."* Same shape as #231's, which is `GATE=stale` seen from the converger's side and
+  is NOT mine to drive. **The live head has now not moved for FOUR consecutive links**
+  (`a74e844377f8` throughout), with `LIVE_ADDS` 0, `LIVE_DIVERGED` 0 and `MIG_FAILED` 0 at every
+  reading. ⚠️ **The TIME arm is the one worth watching now, not the commit arm: 4h against a 6h
+  budget is two-thirds spent, where 8 of 25 commits is under a third.** That is the unspent
+  method-200 target #230 named, and it is closer to its wall than the number everyone quotes.
+
+  **LANDING.** TWO attempts, TWO lands, ZERO rc 6. Land 1 `d36142906` (the fix +
+  `tests/watchdog-census.bats`), land 2 this entry. **`d36142906`'s sha SURVIVED the land
+  unchanged**, as #231's, #232's and #233's did — while #230's fix-sha and #229's doc-sha were
+  rewritten, so verify rather than assume (memory: `cited-sha-may-not-survive-the-land`).
+  Content-verified on trunk: `git diff origin/main HEAD` **0 bytes over the whole tree**, and
+  HEAD-blob == trunk-blob on each path, with the pinned off-trunk NEG control `4e39debcf` refusing
+  (rc 1) and an `origin/main~1` POS control confirming (rc 0). `land-lock --status` read
+  `holder: (free) waiters: 0` before the attempt, at load ~16.1.
+  🚨 **THE FOREGROUND DIRECT-SET RUN PAID OFF FOR THE FIFTH CONSECUTIVE LINK, ON THE SAME SUITE.**
+  The land's smoke again cut `tests/cc-reaper.bats` at **exit 124 with ZERO `not ok` and the budget
+  SPENT** — which the gate itself names a NON-VERDICT and not evidence about the tree — and my
+  foreground run had already converted it into a known **192/192**. Pre-land I ran the selector's
+  ENTIRE direct set: **7 suites / 289 tests / 0 failures / 0 skips / plan == ok on every one** —
+  `cc-reaper` **192** (463 s at load ~17), `watchdog-census` **29**, `lstart-dialect-bin` 16,
+  `handoff-lifecycle-record` 15, `reap-sweep-bounds` 14 (49 s), `headless-address-consumers` 13,
+  `reap-freshness` 10. The selector's `--direct` set for my range was **exactly those 7**, with the
+  POS control (`7eb0eb0b6~1..7eb0eb0b6`) speaking at **4**.
+  **Lints that RAN:** `shellcheck bin/cc-reaper` rc 0 · `bash -n` rc 0 · `bats-shellcheck-lint
+  --range "$MB...HEAD"` rc 0 (*"clean — 1 suite(s) scanned, 0 blocking finding(s), 0 unanalyzable"*)
+  · `bats-assert-liveness` rc 0 · `bats --count` · `pipefail-sigpipe-lint` **bare** rc 0 (*"clean
+  (allowlist honoured)"*). **`alarm-polarity-lint` DECLARED NOT-RUN** on its mute positive control
+  (`e07dc5e09f83`, OPEN — do not re-file), rather than claiming its green: the **ninth** link running
+  to refuse that false green.
+
+  **INSTRUMENTS.** qos-rewrite diff clean, the **117th** consecutive. All four kitty-aware pre-fire
+  checks passed by minute ~3: `cc-in-kitty` rc 0, `KITTY_WINDOW_ID` **27**, the id-keyed jq selector
+  returned **exactly ONE** object (count asserted, bogus-id NEG control at **0**) — the **EIGHTH**
+  consecutive link resolved that way — and `ITERM_SESSION_ID=w0t0p0:27` with `CC_TERM` unset.
+  `cc-roles list` read `desk UNVERIFIED 5 | docs-lead UNVERIFIED 450 | drain-lead UNVERIFIED 7 |
+  orchestrator ABSENT empty` — an **EIGHTEENTH** consecutive identical table. `~/.claude/mailbox/27.md`
+  **4,059 bytes, 1 line**, unchanged — an **EIGHTEENTH** identical reading; no new peer mail arrived
+  by the inbox channel either. Zero guessed store paths: every one resolved from the CODE first,
+  the fourth link running to hit zero.
+
 - **2026-08-26 — drain recycle #233: method 203 — A LAW A FILE STATES, TESTS AND ENFORCES AT ONE
   SITE, WHILE ITS SIBLING PREDICATE — THE ONE WHOSE FAILURE IS QUIETER — VIOLATES IT, AND THAT
   SIBLING'S ONLY FIXTURE IS DRAWN FROM THE POPULATION THAT TRIVIALLY SATISFIES IT.** ONE fix landed
