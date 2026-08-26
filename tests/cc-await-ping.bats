@@ -26,10 +26,16 @@ setup() {
 # ── beat fixtures (the C2 oracle) ────────────────────────────────────────────────────────────────
 # One attestation per turn boundary, exactly the shape hooks/session-beat.sh writes:
 # kind=prompt at UserPromptSubmit, kind=stop at Stop, `seq` monotone across both.
-beat() { # <seq> <kind> [age-seconds]
-  local age="${3:-0}"
-  jq -nc --arg k "$2" --argjson s "$1" --argjson t "$(( $(date +%s) - age ))" \
-    '{sid:"sidGOAL",pane:"p0",cwd:"/tmp",pid:1,lstart:"x",t:$t,kind:$k,who:"auto",operatorT:null,seq:$s}' \
+# The optional 4th arg is `src` — the sub-classification of auto-traffic the producer grew for the
+# C2 oracle (backlog b60eb29e97dd): `stopfeedback`/`advisory` are the session driving ITSELF, which
+# C2 must absorb; anything else is a wake, which C2 must stand down on. OMITTED deliberately emits
+# NO src key, i.e. a beat written before the field existed — the backward-compat shape, which reads
+# UNKNOWN and must keep the pre-existing stand-down.
+beat() { # <seq> <kind> [age-seconds] [src]
+  local age="${3:-0}" src="${4:-}"
+  jq -nc --arg k "$2" --arg src "$src" --argjson s "$1" --argjson t "$(( $(date +%s) - age ))" \
+    '{sid:"sidGOAL",pane:"p0",cwd:"/tmp",pid:1,lstart:"x",t:$t,kind:$k,who:"auto",operatorT:null,seq:$s}
+     + (if $src == "" then {} else {src:$src} end)' \
     > "$CC_BEAT_DIR/$SID.json"
 }
 
@@ -718,6 +724,8 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
 # session with no watcher at all must spin one, on the identical timeline.
 
 @test "idle-scoped: stands down (exit 0, verdict=stood-down) when its session takes a new turn" {
+  # Doubles as the BACKWARD-COMPAT proof: neither fixture carries `src`, i.e. both are beats written
+  # before hooks/session-beat.sh grew the field. Unknown provenance ⇒ stand down, unchanged.
   beat 5 prompt
   ( sleep 1; beat 6 prompt ) &
   local writer=$!
@@ -756,6 +764,67 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
   # starvation pole through the oracle itself.
   beat 10 prompt
   ( sleep 1; beat 13 stop ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down"* ]] || false
+}
+
+# ── THE ARM TURN'S CLOSE CASCADE (backlog b60eb29e97dd) ──────────────────────────────────────────
+# The regression these four cover: an arm turn does not end at its Stop, it ends when its Stop is
+# finally ALLOWED. The wake floor blocks a Stop to demand this arm, so the watcher is born inside a
+# close cascade, and the next hook that blocks (mechanical 🔧, ship floor, origin close contract)
+# makes that cascade another `Stop hook feedback:` prompt — baseline+2, one past the old fixed
+# allowance, on the very turn that armed it. Measured 2/2 (`seq>3`, `seq>6`): the wake floor was
+# blocking to demand a deterministic no-op and the session went idle DEAF with its budget spent.
+
+@test "idle-scoped: the arm turn's own CLOSE CASCADE does not self-cancel it (the b60eb29e97dd regression)" {
+  # Exactly the measured shape: armed inside a Stop-hook-feedback turn at seq 2 (old threshold:
+  # seq>3), then that turn's Stop, then the NEXT blocked Stop's feedback re-prompt, then its Stop.
+  beat 2 prompt 0 stopfeedback
+  ( sleep 1; beat 3 stop 0 stop
+    sleep 2; beat 4 prompt 0 stopfeedback
+    sleep 2; beat 5 stop 0 stop ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 9
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 2 ]                                  # still watching → ran its term
+  [[ "$output" != *"stood-down"* ]] || false
+}
+
+@test "idle-scoped: a REAL wake after the cascade still stands it down (the absorb is not a blanket)" {
+  # The baseline rolls onto the cascade, so the operator prompt that follows is measured against the
+  # cascade's end — absorbing self-drive must not cost the mode its exit condition.
+  beat 2 prompt 0 stopfeedback
+  ( sleep 1; beat 3 stop 0 stop
+    sleep 2; beat 4 prompt 0 operator ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down"* ]] || false
+}
+
+@test "idle-scoped: auto traffic that is NOT self-drive is a wake — a task-notification cancels" {
+  # `who` reads auto for both a Stop-hook re-prompt and a task notification; only `src` separates
+  # them, and the separation is the whole fix: one is this session's own close, the other is the
+  # harness re-invoking it with news.
+  beat 10 prompt 0 stopfeedback
+  ( sleep 1; beat 11 stop 0 stop; sleep 2; beat 12 prompt 0 tasknote ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down"* ]] || false
+}
+
+@test "idle-scoped: a self-drive prompt too far past the baseline still cancels (the gap bound holds)" {
+  # A self-drive prompt accounts for itself and the Stop that must have preceded it — two beats, no
+  # more. A wider gap means beats we cannot name, and an unaccounted beat may be the wake this
+  # watcher exists to notice, so the sampling hole stays closed.
+  beat 10 prompt
+  ( sleep 1; beat 14 prompt 0 stopfeedback ) &
   local writer=$!
   run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
   wait "$writer" 2>/dev/null || true
@@ -867,6 +936,44 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
   run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 10
   [ "$status" -eq 6 ]
   [[ "$output" != *"watching $UUID inbox"* ]] || false
+}
+
+# ── THE MODE DECLARATION (backlog b60eb29e97dd) ──────────────────────────────────────────────────
+# hooks/lib/mailbox-pending.sh:316-333 writes the contract down and reads it; hooks/mailbox-drain.sh
+# consumes it to EXEMPT a sanctioned idle-scoped watcher from the "🚨 a parked watcher is holding
+# your LIVE /goal inert … kill <pid>" nudge. Nothing ever wrote the line, so the reader was
+# constant-false and the exemption unreachable: the wake floor blocked a Stop to demand this arm and
+# the very next boundary told the session to kill it. These two assert the writer exists AND that it
+# is a discriminator — a stamp every watcher carried would exempt the plain 4-hour park too.
+
+@test "idle-scoped DECLARES its mode in the marker and the claim (the drain's exemption reader)" {
+  # shellcheck source=/dev/null
+  . "$REPO/hooks/lib/mailbox-pending.sh"
+  beat 5 prompt
+  "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 20 >/dev/null 2>&1 &
+  local w=$!
+  sleep 2
+  kill -0 "$w" 2>/dev/null || false                    # positive control: it is actually watching
+  grep -q '^mode=idle-scoped$' "$CC_MAILBOX_DIR/$UUID.watching" || false
+  grep -q '^mode=idle-scoped$' "$CC_MAILBOX_DIR/.watchers/$UUID.$w" || false
+  mailbox_wake_idle_scoped "$UUID" || false            # ...and the shipped READER agrees
+  [ "$(mailbox_wake_pid "$UUID")" = "$w" ]             # the pid line still parses (anchored ^pid=)
+  kill "$w" 2>/dev/null || true
+  wait "$w" 2>/dev/null || true
+}
+
+@test "CONTROL: the BARE watcher declares nothing — it is the park the exemption must not cover" {
+  # shellcheck source=/dev/null
+  . "$REPO/hooks/lib/mailbox-pending.sh"
+  "$AWAIT" "$UUID" --interval 1 --timeout 20 >/dev/null 2>&1 &
+  local w=$!
+  sleep 2
+  kill -0 "$w" 2>/dev/null || false
+  ! grep -q '^mode=idle-scoped$' "$CC_MAILBOX_DIR/$UUID.watching" || false
+  ! mailbox_wake_idle_scoped "$UUID" || false
+  [ "$(mailbox_wake_pid "$UUID")" = "$w" ]
+  kill "$w" 2>/dev/null || true
+  wait "$w" 2>/dev/null || true
 }
 
 # ── RED-PROOF, BOTH POLES ────────────────────────────────────────────────────────────────────────

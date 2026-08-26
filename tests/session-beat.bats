@@ -46,6 +46,37 @@ emit() { # <json-stdin> <kind>
   [ "$(jq -r '.who' "$CC_BEAT_DIR/s2b.json")" = "auto" ]
 }
 
+# ── `src` — WHICH auto-traffic (backlog b60eb29e97dd) ────────────────────────────────────────────
+# `who` collapses every non-operator prompt into one answer, which is right for presence and wrong
+# for the one consumer that must tell a session's own close cascade from a wake: cc-await-ping
+# --idle-scoped stood itself down on the `Stop hook feedback:` re-prompt of the very turn that armed
+# it. Only this hook ever sees the prompt text, so the distinction has to be attested here.
+
+@test "src separates a session's OWN auto-drive from auto traffic that is a wake" {
+  emit '{"session_id":"t1","cwd":"/tmp","prompt":"Stop hook feedback: keep going"}' prompt
+  [ "$(jq -r '.src' "$CC_BEAT_DIR/t1.json")" = "stopfeedback" ]
+  emit '{"session_id":"t2","cwd":"/tmp","prompt":"⚑ boundary — persist and hand off"}' prompt
+  [ "$(jq -r '.src' "$CC_BEAT_DIR/t2.json")" = "advisory" ]
+  emit '{"session_id":"t3","cwd":"/tmp","prompt":"<task-notification>done</task-notification>"}' prompt
+  [ "$(jq -r '.src' "$CC_BEAT_DIR/t3.json")" = "tasknote" ]
+  emit '{"session_id":"t4","cwd":"/tmp","prompt":"[Request interrupted by user]"}' prompt
+  [ "$(jq -r '.src' "$CC_BEAT_DIR/t4.json")" = "interrupt" ]
+}
+
+@test "src is SUBORDINATE to who — it partitions the auto side and never contradicts presence" {
+  emit '{"session_id":"t5","cwd":"/tmp","prompt":"please fix the reaper"}' prompt
+  [ "$(jq -r '.who' "$CC_BEAT_DIR/t5.json")" = "operator" ]
+  [ "$(jq -r '.src' "$CC_BEAT_DIR/t5.json")" = "operator" ]
+  emit '{"session_id":"t5","cwd":"/tmp"}' stop
+  [ "$(jq -r '.src' "$CC_BEAT_DIR/t5.json")" = "stop" ]
+  # The CC_CLASSIFY_AUTO_RX seam still governs the split, and src follows it rather than second-
+  # guessing it: a pattern removed from the regex reads operator on BOTH fields.
+  printf '%s' '{"session_id":"t6","cwd":"/tmp","prompt":"Stop hook feedback: keep going"}' \
+    | env CC_CLASSIFY_AUTO_RX='^<task-notification>' /bin/bash "$BEAT" prompt
+  [ "$(jq -r '.who' "$CC_BEAT_DIR/t6.json")" = "operator" ]
+  [ "$(jq -r '.src' "$CC_BEAT_DIR/t6.json")" = "operator" ]
+}
+
 @test "operatorT is STICKY: a later auto beat must never lower it" {
   # Presence, once shown, decays only by the clock. A Stop beat landing after an operator prompt
   # must not erase the very evidence that protects the pane from being reaped.

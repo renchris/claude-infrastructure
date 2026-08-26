@@ -123,7 +123,7 @@ files, the owner guard, the signal verdicts. The mode adds two exit conditions a
 | Clause | Behaviour | Why |
 |---|---|---|
 | C1 exit-on-mail | unchanged: new inbox line → print body → exit 0 → task completes → **completion notification wakes the idle model with the mail** (A5) | the wake half of 2-way comms, as today |
-| C2 exit-on-turn | poll `~/.claude/cc-beats/<sid>.json`; any **UserPromptSubmit-kind** beat with `seq` > baseline-at-arm → exit 0 silently, `verdict=stood-down` | the session was woken by something else (typed message, task notification, asyncRewake fire). The awaiter's deferral job is over; the next natural Stop is registry-quiet and the goal judges the NEW state. Stop-kind beats are excluded so the arm-turn's own trailing Stop cannot self-cancel it |
+| C2 exit-on-turn | poll `~/.claude/cc-beats/<sid>.json`; any **UserPromptSubmit-kind** beat the session did not drive itself → exit 0 silently, `verdict=stood-down` | the session was woken by something else (typed message, task notification, asyncRewake fire). The awaiter's deferral job is over; the next natural Stop is registry-quiet and the goal judges the NEW state. The arm turn's own close cascade — its trailing Stop, and any `Stop hook feedback:` / ⟳⚑⚠ re-prompt a blocking Stop hook turns it into — is absorbed, so it cannot self-cancel (see §4.2) |
 | C3 single-instance | refuse to arm when a live sibling claim exists for the keyset (the `.watchers` claim machinery, `cc-await-ping:179-196`) | overlapping awaiters re-create d33abf12's permanent deferral |
 | C3′ **declare the mode** — a `mode=idle-scoped` line in the `.watching` marker AND in the per-pid `.watchers/<key>.<pid>` claim, re-stamped every poll beside the pid | **REQUIRED OF B3, and the reader already shipped** (E2, 2026-08-15): `mailbox_wake_idle_scoped` in `hooks/lib/mailbox-pending.sh` accepts EITHER file, and its absence means "plain" — so an idle-scoped watcher that omits the stamp will be reported to its own session as goal-blocking, with a `kill` beside it. The claim is the sturdier of the two: `_unbeat`'s hand-over rewrites the marker on behalf of a sibling whose mode it does not know. | the drain must tell a sanctioned awaiter apart from the 14400 s park it is replacing, and it can only do that from what the watcher writes |
 | C4 refuse-on-pending | refuse to arm while `mailbox_has_pending` is true on any key | mail waiting = you have work; arming would defer the judgment of state you already hold |
@@ -197,6 +197,51 @@ Suites: `tests/cc-await-ping.bats` (C1–C5, all four refusals + their discrimin
 two-pole red-proof against a fixture goal that models only A2 and A3) · `tests/wake-floor.bats` ·
 `tests/mailbox-drain.bats` · `tests/validate-bash-goal-guard.bats` (17–23: the carve-out, its
 per-segment scope, and that the loop shape still swallows it).
+
+### 4.2 · UPDATE 2026-08-26 — item 3 above was wrong by one beat, and item C7 shipped with no writer
+
+Backlog `b60eb29e97dd`. Both halves of the mode were inert in the same direction, and the direction
+is the one that matters: **the wake floor was blocking a Stop to demand an arm that no-opped.**
+
+**(a) The offset counted the wrong thing.** An arm turn does not end at its Stop — it ends when its
+Stop is finally *allowed*. The wake floor blocks a Stop to demand this very arm, so the watcher is
+born INSIDE a close cascade, and the next hook that blocks (the mechanical 🔧, the ship floor, the
+origin close contract) makes that cascade another `Stop hook feedback:` prompt at baseline+2 — one
+past an allowance of exactly 1, on the turn that armed it. Measured 2/2, banner thresholds `seq>3`
+and `seq>6`. The floor then had `cnt=1` and would not re-block, so the session went idle **deaf**
+with its budget spent: the alarm firing and the remedy it named being inert at the same time.
+Item 3's reasoning about the sampling hole was sound; its arithmetic assumed a cascade of fixed
+length. Fixed by making the baseline **roll**: every poll that can prove the newest beat belongs to
+this session's own close cascade advances onto it, so the cascade can be any length (it is bounded
+by `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` anyway). Two beats are absorbable — a Stop at exactly
+baseline+1, and a prompt the session drove itself — and nothing else. The gap bound (≤2 for a
+self-drive prompt: itself plus the Stop that must have preceded it) is what keeps the sampling hole
+closed, so item 3's asymmetry still holds.
+
+**(b) `who` could not answer the question, so the producer grew `src`.** "Is this prompt my own close
+cascade or a wake?" is invisible to `who`, which collapses `Stop hook feedback:` and
+`<task-notification>` into the same `auto`. Only `hooks/session-beat.sh` ever sees the prompt text,
+so the classification is attested there, once, on the prompt already in hand — the same economics
+that put `who` there. `src` is subordinate to `who` (`who=operator` ⇒ `src=operator`), so the
+`CC_CLASSIFY_AUTO_RX` seam still governs the split and the two fields cannot disagree; it only
+partitions the auto side into `stopfeedback` · `advisory` · `tasknote` · `localcmd` · `interrupt` ·
+`auto`. C2 absorbs the first two and stands down on everything else, **including an absent `src`** —
+a pre-field beat reads UNKNOWN, and unknown keeps the pre-existing stand-down, which is the mode's
+licence (it can always prove it will self-cancel).
+
+**(c) The `mode=idle-scoped` declaration had a documented reader and no writer.** `mailbox-pending.sh`
+§ THE WRITER CONTRACT specifies the line, `mailbox_wake_idle_scoped` reads it, and
+`mailbox-drain.sh:390` consumes it to exempt a sanctioned watcher from the "🚨 a parked watcher is
+holding your LIVE /goal inert … `kill <pid>`" nudge. `cc-await-ping` never wrote it, so the reader
+was constant-false and the exemption unreachable: the floor blocked to demand the arm and the very
+next boundary told the session to kill it. `_beat` now stamps both files it already rewrites every
+poll — the marker AND the per-pid claim, because `_claim_live`'s hand-over rewrites the marker on
+behalf of a sibling whose mode it does not know, and the claim is never handed over.
+
+New suite coverage: `tests/cc-await-ping.bats` — the cascade regression, a real wake after the
+cascade, a non-self-drive `auto` beat (task-notification) as the discriminator, the gap bound, and
+the mode declaration with the bare watcher as its control · `tests/session-beat.bats` — `src` as a
+discriminator and its subordination to `who` under a rewritten `CC_CLASSIFY_AUTO_RX`.
 
 **Still open after B3, and now reachable:** E4 — `goal-inert-watch.sh` will fire on a *sanctioned*
 idle-scoped deferral, which is an alarm losing its polarity rather than a wrong verdict. Filed

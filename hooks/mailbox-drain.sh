@@ -372,7 +372,9 @@ _armcmd="$HOME/.claude/bin/cc-await-ping --timeout ${CC_DRAIN_ARM_TIMEOUT_S:-144
 # EXEMPTION: an idle-scoped watcher (B3, §4 C1-C7) is SANCTIONED under a live goal — it stands down
 # on any new turn of its own session, so its deferral spans exactly the idle window. It declares
 # itself in the marker/claim; mailbox_wake_idle_scoped is the reader, and its absence means "plain",
-# which is what every watcher in the fleet is today.
+# which is what the ordinary 14400 s park is. (The writer landed 2026-08-26, backlog b60eb29e97dd —
+# before it, the predicate was constant-false and this exemption unreachable, so the kill notice
+# below fired over the very watcher the wake floor had just blocked a Stop to demand.)
 _goal_cond=""
 if command -v goal_live_condition >/dev/null 2>&1; then
   _goal_cond="$(goal_live_condition "$own_tp" 2>/dev/null)" || _goal_cond=""

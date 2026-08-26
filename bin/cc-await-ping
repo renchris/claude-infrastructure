@@ -71,9 +71,14 @@
 #
 # The mode is therefore two exit conditions and a fail-closed arm gate:
 #   C1 exit-on-mail   unchanged — the wake half of 2-way comms.
-#   C2 exit-on-turn   a UserPromptSubmit-kind beat newer than the baseline taken at arm ⇒ the session
-#                     was woken by something else, so this awaiter's job is over: exit 0 SILENTLY
-#                     (verdict=stood-down), leaving the next natural Stop registry-quiet.
+#   C2 exit-on-turn   a UserPromptSubmit-kind beat the session did NOT drive itself ⇒ it was woken by
+#                     something else, so this awaiter's job is over: exit 0 SILENTLY
+#                     (verdict=stood-down), leaving the next natural Stop registry-quiet. The
+#                     baseline ROLLS rather than freezing at arm: the arm turn's own close cascade —
+#                     its trailing Stop, and any `Stop hook feedback:` / ⟳⚑⚠ re-prompt a blocking
+#                     Stop hook turns it into — is absorbed, because the wake floor arms this watcher
+#                     from INSIDE that cascade and a frozen baseline made it a deterministic no-op
+#                     (backlog b60eb29e97dd; see the block above _turn_moved for the measurement).
 #   C3 single-instance   refuse while a live sibling watcher claims any key of the keyset.
 #   C4 refuse-on-pending refuse while mail is already pending — mail waiting means you have work, and
 #                     arming would defer the judgment of state you ALREADY hold.
@@ -86,7 +91,9 @@
 # and blessed by a flag.
 #
 # Env overrides (tests): CC_BEAT_DIR · CC_AWAIT_BEAT_FRESH_S (arm-time beat staleness bound, default
-# 900s) — plus the CC_MAILBOX_DIR / CC_ROLES_DIR / CC_COMMS_ALARM_DIR / CC_REGISTRY_DIR seams below.
+# 900s) · CC_AWAIT_SELFDRIVE_GAP (how many unseen beats one self-drive prompt may account for,
+# default 2) — plus the CC_MAILBOX_DIR / CC_ROLES_DIR / CC_COMMS_ALARM_DIR / CC_REGISTRY_DIR seams
+# below.
 #
 # CODES THE HARNESS SYNTHESIZES — NOT OURS, AND NOT 128+signal. If you see this watcher reported as
 # `failed with exit code 143` or `144`, it never reached any exit above; it was SIGTERMed, and the
@@ -311,13 +318,31 @@ _claim_live() {   # <key> → print the pid of a LIVE OTHER watcher beating this
   done
   return 1
 }
+# ── THE MODE DECLARATION — the writer half of a contract that shipped with no writer ─────────────
+# hooks/lib/mailbox-pending.sh:316-333 states it exactly: an idle-scoped watcher is SANCTIONED under
+# a live goal, so it must be distinguishable from the plain 14400s park, and it declares itself with
+# a `mode=idle-scoped` line in either file it re-writes every poll. `mailbox_wake_idle_scoped` is the
+# reader; hooks/mailbox-drain.sh:390 is the consumer. Nothing ever wrote the line, so the reader was
+# constant-false and the exemption unreachable — and the consequence is the SAME no-op the baseline
+# defect produced, from the other end (backlog b60eb29e97dd): the wake floor blocks a Stop to demand
+# this arm, and at the session's very next boundary the drain renders "🚨 A parked watcher is holding
+# your LIVE /goal inert … kill <pid>" over the watcher the floor just made it arm. One machine, two
+# rungs, opposite instructions.
+# BOTH FILES, because they fail differently: `_claim_live`'s hand-over (:340) rewrites the marker on
+# behalf of a sibling whose mode it does not know, so the marker's stamp can be lost; the per-pid
+# claim is never handed over. The reader accepts either, and the claim is the sturdier one.
+# The extra line is inert for every other reader: `mailbox_wake_pid` and `_unbeat` both parse the
+# marker with an anchored `^pid=` sed and take head -n1, and the claim's freshness is its MTIME,
+# which a content write updates exactly as the previous truncation did.
 _beat() {
-  local k
+  local k mode=""
+  [ "$IDLE_SCOPED" = 1 ] && mode='mode=idle-scoped
+'
   BEAT_KEYS="$(_keys)"
   mkdir -p "$WATCH_CLAIM_DIR" 2>/dev/null || true
   for k in $BEAT_KEYS; do
-    printf 'pid=%s\n' "$$" > "$MAILBOX_DIR/$k.watching" 2>/dev/null || true
-    : > "$WATCH_CLAIM_DIR/$k.$$" 2>/dev/null || true
+    printf 'pid=%s\n%s' "$$" "$mode" > "$MAILBOX_DIR/$k.watching" 2>/dev/null || true
+    printf '%s' "$mode" > "$WATCH_CLAIM_DIR/$k.$$" 2>/dev/null || true
   done
 }
 # Clears exactly the markers this process still OWNS — never a key it merely resolved once, and never
@@ -353,7 +378,10 @@ _unbeat() {
 BEAT_DIR="${CC_BEAT_DIR:-$HOME/.claude/cc-beats}"
 BEAT_FRESH_S="${CC_AWAIT_BEAT_FRESH_S:-900}"
 BEAT_BASE_SEQ=0
-BEAT_STOP_ALLOWANCE=0
+# How many unseen beats a self-drive prompt may account for: itself, plus the Stop that must have
+# preceded it (turns alternate). Wider means absorbing beats we cannot name — see _turn_moved.
+BEAT_SELFDRIVE_GAP="${CC_AWAIT_SELFDRIVE_GAP:-2}"
+case "$BEAT_SELFDRIVE_GAP" in ''|*[!0-9]*) BEAT_SELFDRIVE_GAP=2 ;; esac
 
 _beat_field() {  # <sid> <jq-path> → field value on stdout; empty on any failure
   local s="$1" p="$2"
@@ -407,16 +435,6 @@ if [ "$IDLE_SCOPED" = 1 ]; then
     _refuse stale-beat "The newest beat for [$SID] is $(( _now - _bt ))s old (bound ${BEAT_FRESH_S}s). An arm happens INSIDE a turn, so a live beat producer makes this seconds old — a stale one means either the producer is not running or the sid is not this session's."
   fi
   BEAT_BASE_SEQ="$(_beat_field "$SID" '.seq')"; case "$BEAT_BASE_SEQ" in ''|*[!0-9]*) BEAT_BASE_SEQ=0 ;; esac
-  # THE ALLOWANCE, and why the doc's "exclude Stop-kind beats" is implemented as an OFFSET rather
-  # than a kind filter. The beat file holds only the LATEST boundary, so a filter on `kind` alone has
-  # a sampling hole: a whole turn (prompt beat, then stop beat) can complete inside one poll
-  # interval, leaving us looking at a Stop-kind beat whose prompt predecessor we never saw — and a
-  # watcher that ignores it stays parked over a session that HAS moved on. That is the starvation
-  # pole re-entering through the oracle. Turns alternate, so any beat more than one past the arm
-  # baseline PROVES a prompt beat occurred in between, whether or not we sampled it. The offset says
-  # exactly that: the arm turn's own trailing Stop (baseline+1) is excluded, and nothing else is.
-  # Erring toward standing down early costs one bounce turn; erring the other way costs the goal.
-  [ "$(_beat_field "$SID" '.kind')" = "prompt" ] && BEAT_STOP_ALLOWANCE=1
   # (C4) MAIL ALREADY PENDING = you have work. Arming here would defer the judgment of state the
   #      session already holds, which is the deferral this mode exists to make impossible.
   for _k in $(_keys); do
@@ -432,20 +450,58 @@ if [ "$IDLE_SCOPED" = 1 ]; then
     fi
   done
   echo "$_banner" >&2
-  echo "cc-await-ping: idle-scoped — will also stand down on any new turn of [$SID] (beat seq > $(( BEAT_BASE_SEQ + BEAT_STOP_ALLOWANCE )))" >&2
+  echo "cc-await-ping: idle-scoped — will also stand down on any new turn of [$SID] (baseline beat seq=$BEAT_BASE_SEQ), but NOT on this arm turn's own close cascade: its trailing Stop, and any Stop-hook-feedback / advisory re-prompt a blocking Stop hook turns it into, are absorbed" >&2
 fi
 
 # ── C2: THE EXIT THAT MAKES THE DEFERRAL IDLE-SCOPED ──────────────────────────────────────────────
 # Consulted every poll, AFTER the mail check: if a ping and a new turn both happened, the ping is the
 # thing the session must not lose, and delivering it also ends the watch.
-_turn_moved() {  # 0 iff this session has taken a new turn since the arm baseline
-  local seq
+#
+# ── THE BASELINE ROLLS; IT IS NOT FROZEN AT ARM (backlog b60eb29e97dd) ────────────────────────────
+# THE DEFECT THIS REPLACES. The baseline used to be the seq read at arm, plus a fixed +1 allowance
+# for "the arm turn's own trailing Stop". That allowance counted the wrong number of beats, because
+# an arm turn does not end at its Stop — it ends when its Stop is finally ALLOWED. The wake floor
+# (hooks/session-continue.sh) blocks a Stop to demand this very arm, so the watcher is armed INSIDE
+# a close cascade, and the next hook that blocks (the mechanical 🔧, the ship floor, the origin close
+# contract) turns that cascade into another `Stop hook feedback:` prompt — baseline+2, one past the
+# allowance, on the turn that armed it. Measured 2/2 with thresholds `seq>3` and `seq>6`: the wake
+# floor was blocking to demand an arm that deterministically no-opped, spending its budget (cnt=1,
+# so it will not re-block) and leaving the session idle and DEAF anyway — the alarm firing and the
+# remedy it names being inert at the same time.
+#
+# THE SHAPE THAT FIXES IT. Absorb, do not allow: every poll that can PROVE the newest beat belongs
+# to this session's own close cascade advances the baseline onto it, so the cascade can be any
+# length (it is bounded by CLAUDE_CODE_STOP_HOOK_BLOCK_CAP anyway) without ever exhausting a fixed
+# offset. Two things are absorbable and nothing else is:
+#   (a) a Stop-kind beat at exactly baseline+1 — the trailing Stop of the turn we are abreast of.
+#   (b) a prompt beat whose `src` says the session drove it ITSELF (`stopfeedback` — a blocked Stop's
+#       feedback re-prompt; `advisory` — our own ⟳/⚑/⚠ nudges). Neither is new information, which is
+#       the only thing C2 exists to detect, so neither ends the idle window.
+# Everything else stands the watcher down, INCLUDING an unknown/absent `src` (a beat written before
+# hooks/session-beat.sh grew the field): unknown ⇒ stand down keeps the pre-existing behaviour and
+# the mode's licence, which is that it can always prove it will self-cancel.
+#
+# THE SAMPLING HOLE IS STILL CLOSED, by a gap bound rather than a kind filter. The beat file holds
+# only the LATEST boundary, so a whole turn can complete between two polls. Turns alternate, so a
+# gap of 1 onto a Stop proves nothing was missed, and a gap of ≤2 onto a self-drive prompt proves
+# only its own preceding Stop was missed. A wider gap means beats we cannot account for, and an
+# unaccounted beat may be the wake this watcher exists to notice — so it stands down. Erring toward
+# standing down early costs one bounce turn; erring the other way costs the goal.
+_turn_moved() {  # 0 iff this session has taken a new turn since the (rolling) baseline
+  local seq kind src new
   [ "$IDLE_SCOPED" = 1 ] || return 1
   seq="$(_beat_field "$SID" '.seq')"; case "$seq" in ''|*[!0-9]*) return 1 ;; esac
-  # A Stop-kind beat at exactly baseline+1 is the arm turn's OWN trailing stop — never a new turn.
-  if [ "$seq" -gt "$(( BEAT_BASE_SEQ + BEAT_STOP_ALLOWANCE ))" ]; then return 0; fi
-  [ "$seq" -gt "$BEAT_BASE_SEQ" ] && [ "$(_beat_field "$SID" '.kind')" = "prompt" ] && return 0
-  return 1
+  new=$(( seq - BEAT_BASE_SEQ ))
+  [ "$new" -gt 0 ] || return 1
+  kind="$(_beat_field "$SID" '.kind')"
+  # (a) the trailing Stop of the turn the baseline already names.
+  if [ "$kind" = stop ] && [ "$new" -le 1 ]; then BEAT_BASE_SEQ="$seq"; return 1; fi
+  # (b) this session's OWN auto-drive re-prompt — the close cascade continuing, not a wake.
+  if [ "$kind" = prompt ] && [ "$new" -le "$BEAT_SELFDRIVE_GAP" ]; then
+    src="$(_beat_field "$SID" '.src')"
+    case "$src" in stopfeedback|advisory) BEAT_BASE_SEQ="$seq"; return 1 ;; esac
+  fi
+  return 0
 }
 
 # ── THE SENDER RECORDER (backlog b38279c10c55) ────────────────────────────────────────────────────

@@ -3,7 +3,7 @@
 #
 # Wired to UserPromptSubmit and Stop. Writes ONE small durable attestation per turn boundary:
 #   ${CC_BEAT_DIR:-$HOME/.claude/cc-beats}/<sid>.json
-#   {sid, pane, pid, lstart, t, kind, who, operatorT, seq}
+#   {sid, pane, pid, lstart, t, kind, who, src, operatorT, seq}
 #
 # WHY THIS EXISTS. "Who drove the last turn" is the one signal a done-decision cannot fake —
 # idle+clean+landed is every live conversation's steady state between prompts (2026-07-24: two live
@@ -43,7 +43,7 @@ beat() {
   [ "${CC_BEAT:-on}" = off ] && return 0
   command -v jq >/dev/null 2>&1 || return 0
 
-  local sid cwd pane kind who prompt rx dir tmp prev prevOp now seq cpid lstart walk c i
+  local sid cwd pane kind who src prompt rx dir tmp prev prevOp now seq cpid lstart walk c i
   sid=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
   [ -n "$sid" ] || return 0
   # sid is the IDENTITY key, deliberately NOT the pane: tmux panes inherit the server's
@@ -65,6 +65,41 @@ beat() {
     if [ -n "$prompt" ] && ! printf '%s' "$prompt" | jq -Rs --arg rx "$rx" -e 'test($rx)' >/dev/null 2>&1; then
       who=operator
     fi
+  fi
+
+  # ── `src` — WHICH auto-traffic, not merely THAT it was auto (backlog b60eb29e97dd) ──────────────
+  # `who` answers presence, and for presence every non-operator prompt is the same answer. One
+  # consumer needs the distinction `who` collapses: `cc-await-ping --idle-scoped` stands itself down
+  # on "a new turn of my own session", and a session's own CLOSE CASCADE is made of turns — a Stop
+  # hook blocks, its `Stop hook feedback:` re-prompt is a UserPromptSubmit, and the beat seq moves.
+  # The watcher is ARMED inside exactly that cascade (the wake floor blocks to demand it), so a
+  # `who`-blind stand-down killed every idle-scoped watcher on the turn that armed it — measured
+  # 2/2, thresholds `seq>3` and `seq>6`, i.e. the arm turn's own completion. That made the wake
+  # floor's block an instruction to run a deterministic no-op and the session went idle DEAF anyway.
+  #
+  # The discriminator has to live HERE because only this hook ever sees the prompt text; by the time
+  # the watcher reads the beat, the prompt is gone. So the classification is attested with the beat,
+  # once, on the prompt already in hand — the same economics that put `who` here.
+  #
+  # SUBORDINATE TO `who`, never a second opinion on it: `who=operator` ⇒ `src=operator`, so the
+  # CC_CLASSIFY_AUTO_RX seam still governs the operator/auto split and the two fields cannot
+  # disagree. The sub-classification below only ever partitions the auto side.
+  # ADDITIVE: every existing consumer reads `who`/`operatorT`/`kind`/`seq` and is untouched; a beat
+  # written before this field existed reads `src` empty, which every reader must treat as UNKNOWN
+  # (cc-await-ping does — unknown falls through to the pre-existing stand-down, the safe direction).
+  if [ "$kind" != prompt ]; then
+    src=stop
+  elif [ "$who" = operator ]; then
+    src=operator
+  else
+    case "$prompt" in
+      'Stop hook feedback:'*)   src=stopfeedback ;;   # THIS session's own auto-drive — not a wake
+      '⟳'*|'⚑'*|'⚠'*)           src=advisory ;;       # our own ⟳/⚑/⚠ nudges — also not a wake
+      '<task-notification>'*)   src=tasknote ;;
+      '<local-command-stdout>'*) src=localcmd ;;
+      '[Request interrupted'*)  src=interrupt ;;
+      *)                        src=auto ;;
+    esac
   fi
 
   now=$(date +%s)
@@ -98,10 +133,10 @@ beat() {
 
   tmp="$dir/.$sid.$$.tmp"
   if jq -n --arg sid "$sid" --arg pane "$pane" --arg cwd "$cwd" --arg kind "$kind" \
-          --arg who "$who" --arg lstart "$lstart" --arg opT "$prevOp" \
+          --arg who "$who" --arg src "$src" --arg lstart "$lstart" --arg opT "$prevOp" \
           --argjson pid "$cpid" --argjson t "$now" --argjson seq "$seq" \
         '{sid:$sid, pane:$pane, cwd:$cwd, pid:$pid, lstart:$lstart, t:$t, kind:$kind, who:$who,
-          operatorT:(if $opT=="" then null else ($opT|tonumber) end), seq:$seq}' \
+          src:$src, operatorT:(if $opT=="" then null else ($opT|tonumber) end), seq:$seq}' \
         > "$tmp" 2>/dev/null; then
     mv -f "$tmp" "$dir/$sid.json" 2>/dev/null || rm -f "$tmp" 2>/dev/null
   else

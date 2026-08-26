@@ -323,8 +323,12 @@ mailbox_wake_pid() { # <uuid> → prints the LIVE watcher's pid; rc 1 = no live 
 # Either suffices; the claim is the sturdier of the two, because `_unbeat`'s hand-over rewrites the
 # marker on behalf of a sibling whose mode it does not know. Absence ⇒ NOT idle-scoped, which is the
 # fail direction E2 needs: an unstamped watcher is reported as goal-blocking (a false alarm at worst,
-# and today every watcher in the fleet genuinely is one), where the inverse would silently swallow
-# the report this exists to make.
+# and every PLAIN 14400 s park genuinely is one), where the inverse would silently swallow the report
+# this exists to make.
+# THE WRITER LANDED 2026-08-26 (backlog b60eb29e97dd) — `bin/cc-await-ping`'s `_beat`, stamping both
+# files under `--idle-scoped` only. Until then this contract had a reader and no writer: the
+# predicate was constant-false, so the exemption below was unreachable and a session that obeyed the
+# wake floor's block was told to kill the watcher it had just been made to arm.
 mailbox_wake_idle_scoped() { # <uuid> → 0 iff the LIVE watcher declares idle-scoped mode
   local u="${1:-}" wpid
   wpid="$(mailbox_wake_pid "$u")" || return 1
