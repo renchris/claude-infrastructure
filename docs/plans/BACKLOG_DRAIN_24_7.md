@@ -86,6 +86,204 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-26 — drain recycle #239: method 208 — A PROBE WITH NO WAY TO SAY "I COULD NOT RUN" HAS
+  ITS SILENCE READ AS AN ANSWER, AND THE OBVIOUS FIX WAS INVERTED IN BOTH DIRECTIONS.** I took
+  #238's own top recommendation — method 208 over `scripts/postland-verify.sh` and its consumers —
+  and the defect landed one step downstream of it, in `scripts/deploy-live.sh`'s escalation ladder.
+  🚨 **NO SHA, NO LAND COUNT AND NO SMOKE VERDICT APPEARS IN THIS ENTRY.** An entry is always
+  composed before its own land, so any claim about that land is a PREDICTION and cannot be stamped
+  with a moment; #237 paid three extra lands for that species of clause and #238 paid none by
+  applying the rule instead of re-learning it. The commit SUBJECT is
+  `fix(deploy): the green-scan probe had no way to say "I could not run"…`, which survives a rebase
+  where a sha does not, and `git log --oneline origin/main` holds the rest. **I also make no promise
+  about what does or does not appear below this line** — #238's entry promised "no paragraph below
+  this one" and then falsified its own clause by hand when a second finding arrived, which is the
+  same unstampable shape one layer out.
+
+  **THE DEFECT.** `refusal_culprit()` names which of six machines is at fault when the deploy lane
+  refuses on repeat, and its own comment already stated the rule: famine may be named *"only when
+  the wider probe agrees"*. The code accepted the probe's SILENCE as that agreement. The probe is
+  also silent when it never ran. So a killed scan minted a `verifier-famine` page — a POSITIVE claim
+  that no GREEN tree exists in the newest 2,000 commits of trunk — over a fixture where one
+  demonstrably sits 3 commits down, and prescribed a `--dry-run` that cannot fix it in place of the
+  `CC_DEPLOY_SCAN` raise that can. The wrong `--run` is the operator-visible cost: `cc-backlog needs`
+  files it, and a filed `--run` is a claim that the command works.
+  ✅ **THE WORKED EXAMPLE SITS TEN LINES BELOW THE DEFECT AND IS THE CHEAPEST PART OF THIS FINDING.**
+  `last_advance_hours()` faces the identical question and answers it correctly — it prints the
+  literal `unknown` and its comment says why, citing memory `lookup-miss-is-not-absence`. The file
+  already knew the shape. `blind_green_depth` simply had no third answer to give, so the ladder had
+  none to read. **When a file solves a problem correctly in one function, read its NEIGHBOURS for
+  the same problem solved by omission.**
+
+  🚨 **THE TWO HALVES OF ONE PROBE FAIL IN OPPOSITE DIRECTIONS, WHICH IS WHY THIS WAS NOT A
+  ONE-LINER, AND MEASURING THAT FIRST IS WHAT STOPPED ME SHIPPING THE WRONG FIX.** Every row is
+  literal stdout, its BYTE COUNT and its rc, one variable moved, with every stub WITNESSED so a row
+  that measured nothing reports itself (`probe239-rc2.sh`, `probe239-rc3.sh`):
+
+      site A  green_tree_shas    find … -exec grep -lE … + 2>/dev/null
+        files exist, none green ............ rc 1   0 bytes
+        grep SIGTERMed mid-scan ............ rc 1   0 bytes   <- indistinguishable
+        grep SIGKILLed mid-scan ............ rc 1   0 bytes   <- indistinguishable
+        grep exits 2 ....................... rc 1   0 bytes   <- indistinguishable
+      site C  blind_green_depth  g log … | awk … 2>/dev/null || true
+        match at depth 1 / 3 / 50 (SUCCESS)  rc 141           <- SIGPIPE on the producer
+        no match anywhere (honest miss) .... rc 0
+        awk SIGTERMed / SIGKILLed .......... rc 143 / 137
+        git SIGTERMed ...................... rc 137
+
+  🚨 **AT SITE A THERE WAS NO rc TO DISCARD — BSD `find` DESTROYS IT BEFORE THE CALLER CAN SEE IT.**
+  `-exec utility … +` collapses every non-zero exit of the utility into find's own rc 1, so a
+  SIGKILLed grep and a legitimate "none of these is green" arrive as the same rc over the same zero
+  bytes. **A fix that merely captured the rc would have closed exactly half of this door and looked
+  complete.** The list is now expanded by the shell in 400-file batches so grep answers for itself
+  (0 matched · 1 no match · 2+ error · 137/143 killed); still ONE grep, and ARG_MAX is preserved by
+  the batch rather than by `-exec` — the live store's **476** files spell **45,220** bytes of argv
+  against a **1,048,576** limit (measured 2026-08-26T12:50Z).
+  🚨 **AT SITE C THE rc EXISTS AND IS EXACTLY INVERTED, SO THE OBVIOUS SPELLING IS WORSE THAN THE
+  BUG.** `awk` exits the instant it matches, so the SUCCESS path SIGPIPEs `git log` and returns 141
+  under pipefail while the honest miss returns 0. A reader that consulted the rc before the output
+  would call **every healthy probe dead and every honest miss healthy**. The fix is therefore
+  ordered: **OUTPUT OUTRANKS rc, and only an EMPTY output lets the rc decide.** That ordering IS the
+  guard, and `M5` below is the arm that proves it.
+
+  🚨 **THE FIXTURE LESSON, AND IT COST ME FOUR RED-PROOF RUNS: A 5-COMMIT FIXTURE IS BLIND TO THIS
+  BY CONSTRUCTION, AND MY OWN PROBE CALLED A RACE "STRUCTURAL".** Small repos let git finish writing
+  before awk exits, so the success path reads rc 0 and the inversion is invisible
+  (memory: `control-fixture-must-reach-the-bug's-regime`). **The only structural threshold is the
+  64 KiB pipe buffer.** A 401-commit fixture emits ~16 KB, which FITS, so whether git loses the race
+  is luck — `probe239-flake.sh` won it **12/12 at N=400** and printed `verdict=STRUCTURAL`, and the
+  bats suite then LOST it on its very first run. **Twelve trials in one environment cannot establish
+  structural; only the arithmetic can.** At 1,700 commits (69,700 B) the producer cannot fit and it
+  is 10/10. Built with `git fast-import` — **~1 s against ~100 s of `git commit`** — and its
+  precondition is ASSERTED inside the test, so a fixture that stops reaching the regime fails as a
+  NAMED instrument fault instead of passing vacuously.
+
+  ✅ **NOT A WIDENING.** The new `probe-unreadable` culprit sits BETWEEN `verifier-lag` and
+  `verifier-famine` and names only the state that was previously unnameable; every incumbent culprit
+  keeps its exact behaviour on every door it already walked through. **All 8 incumbent R7 arms pass
+  untouched and ZERO existing assertions were edited.** Appending beat inverting, third consecutive
+  link. `tests/deploy-live.bats` **132 → 136**.
+  ✅ **RED-PROVED BEFORE THE FIX EXISTED: 1 red of 4, predicted 1 of 4**, and the red is the defect
+  arm while all three controls are green pre-fix — which is what makes the red attributable to the
+  defect rather than to the test.
+
+  **THE MUTANT TABLE — one arm per changed SITE**, predictions written to `pred239.txt` BEFORE the
+  run, subject restored byte-identically by sha256 in a trap (`RESTORE=OK` on all seven), anchors
+  extracted and asserted unique at 1, and the harness itself refusing rc 9 / 8 / 7 / 95 / 94 and a
+  new rc 93 PREDICTION-MISMATCH:
+
+      BASELINE                                     deploy-live 136/136 GREEN
+      M1  batch-grep rc dropped                    predicted 1  got 1  (114)
+      M2  listing find rc dropped                  predicted 0  got 0  DOCUMENTED LIMIT
+      M3  green_tree_shas rc not propagated        predicted 1  got 1  (114)
+      M4  probe-unreadable branch unreachable      predicted 1  got 1  (114)
+      M5  rc demanded alongside the output         predicted 1  got 1  (117)
+      M6  page prose gutted                        predicted 1  got 1  (114)
+      M7  pre-fix subject, git show HEAD:<path>    predicted 1  got 1  (114)
+
+  ✅ **M2's ZERO WAS PREDICTED WITH ITS REASON BEFORE THE RUN and is therefore a documented limit,
+  not a hole** — no arm makes `find` itself fail, because every fixture hands it a real readable
+  directory. #237's M6 rule, third consecutive link: *the difference between a limit and a hole is
+  entirely whether you wrote the zero down first, and it costs one line.*
+  ✅ **M5 IS THE ARM THAT PAYS FOR THE EXPENSIVE FIXTURE** — it reds test 117 and nothing else, so
+  the 1,700-commit arm is doing precisely the work it was built for and no other arm covers it.
+  ⚠️ **M6's first spelling was `THE SCAN…COMPLETE.*`, which swallowed the rest of the `printf` line
+  INCLUDING the case arm's `;;`; the harness returned rc 95 UNPARSEABLE.** A named fault, not a
+  finding-shaped zero. **Replace the SENTENCE, never the line.**
+
+  🚨 **NINE INSTRUMENT FAULTS IN ONE LINK, EVERY ONE OF THEM A CONFIDENT WRONG NUMBER RATHER THAN AN
+  ERROR, AND THEY ALL HAVE ONE ROOT: THE INSTRUMENT'S OWN EXECUTION ENVIRONMENT IS PART OF THE
+  INSTRUMENT.** This is the most transferable thing in the link:
+  **(1)** `PATH=x cmd | awk …` sets PATH for `cmd` ONLY — the shell resolves the LATER pipeline
+  stage from the CALLER's PATH, so my `awk` stub never ran and that row was a MUTE positive control.
+  **(2)** A stub that prints nothing is byte-identical to a legitimate no-match, so "the stub ran"
+  was unfalsifiable until every stub touched a **WITNESS** file and every row printed whether it
+  fired. **Two of my first three probes had a mute row.**
+  **(3)** `probe239-flake.sh` printed `verdict=STRUCTURAL` on 12/12 trials — a claim its own
+  measurement could not support (see the fixture block above).
+  **(4)** 🚨 **bats does NOT set `pipefail`, so my precondition instrument could not see the
+  producer's rc AT ALL** and read 0 forever on a fixture that DID reach the regime. The subject sets
+  `-o pipefail` at its top; **a check has to be taken under the same flags the subject runs under.**
+  **(5)** `git fast-import`'s `data N` is an EXACT byte count — a 4-for-3 mismatch made it swallow
+  the next line's `M` and crash; the crashing row still incremented my "non-zero rc" counter and
+  would have shipped as data if a second column had not disagreed with it.
+  **(6)** `fast-import`'s `from` takes a mark, a full branch name or a 40-hex SHA-1 — **NOT a
+  rev-parse expression**, so `refs/heads/main^0` made the whole import a silent no-op.
+  **(7)** A hardcoded 2023 committer epoch in the fixture tripped `CC_DEPLOY_MAX_LAG_HOURS`, which
+  ran the degrade path, which ADVANCED — so the lane never refused and the arm asserted against an
+  empty output. **The committer DATE is part of the fixture.**
+  **(8)** bats runs bodies under errexit, so a bare `( … )` returning 141 aborts the test and reports
+  the PRECEDING line as the failure. Use `( … ) || rc=$?`.
+  **(9)** M6's rc 95, above.
+  ✅ **Every one of these was caught by a NAMED FAULT or a disagreeing second column, never by a
+  hunch.** #226's rule is what carried the whole link: **INVESTIGATE EVERY ZERO, NEVER REPORT IT** —
+  and its converse bit too, since fault (5) was a non-zero that should have been a zero.
+
+  **THE LEDGER IS `🚀` AND IT IS NOT MINE.** At my open (12:45Z) `wrap-ledger.sh --machine` read
+  `RUNG=🚀 LIVE_SHA=51bf8570c LIVE_LAG=11 LIVE_AGE=15324 LIVE_ADDS=14 LIVE_BREACH_WHY=adds
+  LIVE_DIVERGED=0 MIG_FAILED=0 GATE=stale`. **All fourteen adds are
+  `docs/research/cv-design-review-2026-08-26/*`, a sibling's, enumerated per-path** — the documented
+  false positive on `4e6a51df2a84` (OPEN; NOT re-filed) for a third consecutive link. The converger
+  itself says it has nothing to do: `deploy-live.sh --dry-run` from the SHARED CHECKOUT at 12:47Z
+  read *"waiting — no GREEN tree is a DESCENDANT of live HEAD 51bf8570cdd2 (the newest one,
+  18378e841913, is BEHIND it — deploying that would report a deploy that never happened); lag 11
+  commit(s) / 4h, inside the degrade budget (25 / 6h) — no advance, and none is due yet"*, with
+  residency *"2 of 2 executing resident daemon(s) are running current bytes · 1 exempt"*.
+  ⚠️ **`GATE=stale` is the FOURTEENTH consecutive link to read stale and is NOT mine to drive** —
+  only the background `postland-verify` stamp moves it, and **the stamps store advanced 476 → 477
+  across my link**, which is the evidence that mechanism is alive underneath the stale marker.
+  **My own commits ADD no file**, asserted as an rc-97 gate inside the commit launcher.
+
+  **THE BOARD.** Open 12:45:41Z **321 open / 209 blocked / 2,338 done / 6 claimed** (530 combined,
+  2,874 rows); close 13:32:32Z **320 / 210 / 2,338 / 6** (530 combined, 2,874 rows). Both partitions
+  (`open + blocked == combined` AND `allids == allrows`) asserted at both moments.
+  🚨 **`allids` departures 0, arrivals 0 — and `done` DEAD FLAT at 2,338 — YET THE ACTUATOR MOVED.**
+  The `claimed` SET churned: `0c8b39b67665` LEFT it and **`b60eb29e97dd` ENTERED it, and that is a
+  cloud WOULD-UNBLOCK row.** One row also moved open → blocked. **A four-list session reads this link
+  as an idle actuator on two flat numbers. It was not.** Report the SET at both moments and say which
+  rows moved; never the count alone and never the `done` delta alone.
+  **Census** (`census239.sh`, every store's directory asserted to EXIST before its count is printed,
+  so an absent store reads UNKNOWN and never 0): postland RED pages **0** at both moments — the
+  **132nd** consecutive — over a denominator that moved **2,730 (12:45:34Z) → 2,739 (13:32:37Z)**;
+  `autonomy/pages` **2,094 / 126 → 2,102 / 130**; inbox-guard `.escalated` **476 → 477** (476 of 476
+  files, so the two counts are one number and not a ratio).
+  ⚠️ **The doc itself moved without me: `len()` read 2,031,132 chars / 23,762 lines at my open,
+  against #238's post-insert 2,026,688 / 23,710.** Do not assert your open length against an
+  inherited number.
+
+  **DECLARED, NOT CLAIMED: `alarm-polarity-lint` is NOT-RUN on a measured mute positive control** —
+  `scripts/idl-abstain-alarm.sh`, a known alarm emitter, returns the byte-identical *"clean — 1
+  file(s) scanned; 0 explained suppression(s), 0 inverted alarm predicates"* as my file. Owner is
+  `e07dc5e09f83` (OPEN); NOT re-filed. **Fourteenth consecutive link to declare rather than inherit.**
+  Statics that DID run: `shellcheck` rc 0, `bash -n` rc 0, `bats --count` 136, `bats-assert-liveness`
+  rc 0, `pipefail-sigpipe-lint` bare *"clean (allowlist honoured)"*, and the scoped bats lint
+  *"clean — 1 suite(s) scanned, 0 blocking finding(s), 0 unanalyzable"* — the first three re-run
+  INLINE as rc-95 gates inside the commit launcher so a stale green could not ride in, alongside a
+  discrimination gate asserting the new culprit is wired at ≥4 sites and that the rc-destroying
+  `-exec grep -lE` spelling is gone.
+
+  🚨 **FOR #240 — THE METHOD, AND IT IS CHEAP.** **Method 208 is now spent on TWO pairs and the
+  generator is untouched.** #238's recommendation held for a third consecutive link: **the cheapest
+  place left to look is an item your predecessor explicitly says it observed and did NOT spend.**
+  🆕 **AND #239's OWN ADDITION, WHICH IS ONE LAYER UNDER 208: WHEN A COMPONENT CANNOT REPORT ITS OWN
+  FAILURE, ASK WHETHER THE INFORMATION EXISTS TO BE REPORTED AT ALL, BEFORE DESIGNING THE FIX.** Site
+  A and site C are the same probe, one function apart, and they needed opposite fixes: at C the rc
+  existed and was thrown away; at A the rc was destroyed by `find` before any caller could reach it,
+  so capturing it would have been a fix that read as complete and closed half the door. **Grep for
+  `-exec … +`, `xargs` without `-0`, and any `$(cmd | cmd)` whose rc the caller inspects: the
+  question is not "does the consumer read the rc" but "is the rc still the SUBJECT's".**
+  **Named and NOT taken by me:** `scripts/postland-verify.sh`'s floor-not-green abstention and its
+  62-hit control surface (still the single heaviest unscreened 202/207/208 file) ·
+  `scripts/test-hermeticity-lint.sh` (153 hits) · `scripts/nightly-regression.sh` (68) ·
+  `deploy-live.sh`'s own `is_red`, whose unparseable-stamp policy is DOCUMENTED and deliberate — I
+  read it and left it · the `bound-fired` population in `bin/cc-reaper` · **M2's site, fixed but
+  unpinned**. **Closed ZERO rows myself and filed ZERO, deliberately** (premise 3).
+  **Self-referential floor, taken at 13:40Z after my last measurement tool call: ZERO of ZERO `.py`
+  files written with the `Write` tool** — `insert239.py` and `verify239.py` were cloned from #238's
+  by `sed 's/238/239/g; s/237/238/g'` and every `23[6789]` hit in the result was read and is a
+  filename or the recycle-number assertion — **0 of ~13 non-`.py` Writes and 0 of ~18 Edits
+  reformatted**, the `~` deliberate and honest because a count of my own activity keeps moving until
+  my last tool call.
 - **2026-08-26 — drain recycle #238: method 208 — A LAW ABOUT WHAT A PROGRAM PRINTS SAYS NOTHING
   ABOUT A PROGRAM THAT IS NO LONGER RUNNING.** I took the single target #237 named as cheapest and
   did not spend: `ship-land`'s smoke arm. 🚨 **NO LAND COUNT, NO SHA AND NO SMOKE VERDICT APPEARS IN
