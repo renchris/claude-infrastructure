@@ -1292,6 +1292,34 @@ while IFS= read -r line; do
   esac
 done < <({ "$GIT_BIN" -C "$MAIN" worktree list --porcelain 2>/dev/null; echo; })
 
+# THE THIRD MEMBER OF is_live_cwd's CLASS, and the only one in this file on a DESTRUCTIVE path
+# (drain recycle #243). Same shape as is_live_cwd above — a whole-line fixed-string membership test
+# whose whole body is `printf … | grep -q…` — and under the `set -uo pipefail` at :145 it fails in
+# the same direction: grep -q exits the instant it MATCHES, printf takes SIGPIPE, and pipefail hands
+# the caller a non-zero that reads as NOT FOUND. Here the caller is the `if` guarding
+# `git branch -d`, so a MATCH ("this branch still holds a worktree") would read as "no worktree" and
+# fall through to delete the ref of a branch whose worktree is still checked out. `branch -d` is the
+# second gate, but it only refuses an UNMERGED branch, and every candidate here has already passed
+# `landed` — so it refuses nothing. scripts/deploy-link-parity.sh:264 wrote this scar out once.
+#
+# IT WAS ALSO THE VISIBLE ONE. Unlike the two #242 drained, pipefail-sigpipe-lint --census LISTS
+# this site and pipefail-sigpipe-allow.txt GRANDFATHERED it at count 1 — so draining it SHRINKS the
+# ratchet, and that allowlist row is deleted in this same diff. A census comparison across this
+# change reads LOST=1 / NEW=0, which is a shrink and not a widening.
+#
+# LATENT, NOT LIVE, AND THE FEED IS RE-MEASURED HERE RATHER THAN INHERITED. WT_BRANCHES is the
+# worktree branch list: 67 branches / 1,301 bytes on this box 2026-08-26T19:45Z, ~28x under the
+# safe floor below. It is drained because that ceiling is an operational quantity that only grows
+# and nothing announces the crossing — not because it is failing today.
+#
+# THE REGIME, WITH THE SHAPE IT WAS MEASURED ON (#241/#242, 20 trials per size, needle on line 1).
+# This site is a TWO-STAGE BUILTIN pipeline, so it is the first row, not the three-stage one:
+#     2-stage builtin    printf | grep -q   safe 37,121 · 1/20 inverted 55,721 · ALWAYS 87,122+
+#     2-stage external   cat    | grep -q   safe 55,722 · 19/20 inverted 65,580 · ALWAYS 87,151+
+# Cite the STAGE COUNT, not the producer: the two producers agree, and it was the extra `sed` stage
+# that moved #241's three-stage floor down to 17,427.
+holds_worktree() { printf '%s\n' "$WT_BRANCHES" | grep -xF "$1" >/dev/null; }
+
 # ── 3. Branches. KEPT by default; --prune-branches deletes only the provably redundant. ──
 if [ "$PRUNE_BRANCHES" = "1" ]; then
   WT_BRANCHES="$("$GIT_BIN" -C "$MAIN" worktree list --porcelain 2>/dev/null | sed -n 's#^branch refs/heads/##p')"
@@ -1300,7 +1328,7 @@ if [ "$PRUNE_BRANCHES" = "1" ]; then
     protected_branch "$branch" && continue
     # Still holding a worktree ⇒ never delete (git-worktree-guard.sh:35-44 blocks it too:
     # a vanished worktree must stay recoverable via its branch).
-    if printf '%s\n' "$WT_BRANCHES" | grep -qxF "$branch"; then
+    if holds_worktree "$branch"; then
       if grep -qxF "$branch" "$REMOVED_BR" 2>/dev/null; then
         echo "KEEP-BR $branch — worktree record still present"
       fi

@@ -1801,3 +1801,52 @@ run_gc_lsof() {
   run bash -c "set -uo pipefail; . '$f'; LIVE_CWDS=\"\$(cat '$s')\"; is_live_cwd '/Users/x/Development/.worktrees/absent'; echo rc=\$?"
   [ "$output" = "rc=1" ] || { echo "an UNREGISTERED cwd did not answer 1: $output" >&2; return 1; }
 }
+
+# ── THE FAIL-OPEN PIPELINE IN THE BRANCH-PRUNE GUARD (drain recycle #243) ─────────────────────────
+# The third member of is_live_cwd's class in this file, and the only one on a DESTRUCTIVE path. It
+# is also the one the detector could already SEE: pipefail-sigpipe-lint --census listed
+# scripts/worktree-gc.sh:1303 and pipefail-sigpipe-allow.txt grandfathered it at count 1, so this
+# drain SHRINKS the ratchet and deletes that allowlist row in the same diff (census LOST=1, NEW=0).
+#
+# WHY THE DIRECTION MATTERS HERE MORE THAN AT THE OTHER TWO SITES. The predicate answers "does this
+# branch still hold a worktree", and its whole job is to STOP a delete. Inverted, a branch that is
+# still checked out reads as having no worktree and falls through to `git branch -d`. The comment
+# beside it calls `branch -d` the second gate, and it is — but it only refuses an UNMERGED branch,
+# and every candidate that reaches it has already passed `landed`, so on exactly this population it
+# refuses nothing. The two sites #242 drained sat under four further keep-arms; this one has none.
+@test "holds_worktree still answers FOUND on a branch list past the pipe-buffer regime" {
+  # THE BEHAVIOURAL ARM, pinning the MECHANISM and not a spelling, so it survives any rewording of
+  # the fix (memory: control-calibrated-to-implementation-decays). The function is EXTRACTED from
+  # the shipped script and sourced, never re-implemented (memory: control-must-replay-the-real-
+  # artifact). 120,000 bytes is past the always-inverted floor of both 2-stage rows measured by
+  # #241/#242 (87,122 builtin · 87,151 external), so a re-introduced `grep -q` fails this on EVERY
+  # run rather than one run in twenty — deterministic by construction, not racy.
+  local f="$BATS_TEST_TMPDIR/holds_worktree.sh" s="$BATS_TEST_TMPDIR/branches.txt"
+  /usr/bin/sed -n '/^holds_worktree()/p' "$REPO/scripts/worktree-gc.sh" > "$f"
+  [ -s "$f" ] || { echo "holds_worktree not found in worktree-gc.sh — the extractor has stopped matching" >&2; return 1; }
+  awk 'BEGIN{ printf "drain/zz-needle\n";
+              for (i = 1; i <= 2600; i++) printf "wave/filler-%06d-aaaaaaaaaaaaaaaaaaaaaaaa\n", i }' > "$s"
+  [ "$(wc -c < "$s")" -ge 87151 ] || { echo "fixture is under the inverting floor — it cannot discriminate" >&2; return 1; }
+
+  # POSITIVE: a branch that still holds a worktree reads FOUND (rc 0), which is the KEEP. A
+  # re-introduced -q answers non-zero here and the branch would be deleted out from under it.
+  run bash -c "set -uo pipefail; . '$f'; WT_BRANCHES=\"\$(cat '$s')\"; holds_worktree 'drain/zz-needle'; echo rc=\$?"
+  [ "$output" = "rc=0" ] || { echo "a branch WITH a live worktree read as having none: $output" >&2; return 1; }
+
+  # NEGATIVE: a branch with no worktree must still answer non-zero, so this cannot pass by always
+  # saying 0 — which would turn the guard into a blanket KEEP and quietly disable --prune-branches.
+  run bash -c "set -uo pipefail; . '$f'; WT_BRANCHES=\"\$(cat '$s')\"; holds_worktree 'drain/absent'; echo rc=\$?"
+  [ "$output" = "rc=1" ] || { echo "a branch with NO worktree did not answer 1: $output" >&2; return 1; }
+}
+
+@test "the branch-prune guard CALLS holds_worktree — the drain reached the destructive site" {
+  # The arm above proves the FUNCTION is sound; this proves the guard actually uses it. Without it
+  # the extractor could pass against a sound helper that nothing calls, which is the whole failure
+  # mode of a drain that edits a definition and leaves the call site alone.
+  local n
+  n="$(/usr/bin/grep -c -e 'if holds_worktree "$branch"; then' "$REPO/scripts/worktree-gc.sh" | head -1)"
+  [ "${n:-0}" -eq 1 ] || { echo "the prune guard does not call holds_worktree exactly once (got ${n:-0})" >&2; return 1; }
+  # ...and the rc-destroying spelling is gone from the file entirely.
+  n="$(/usr/bin/grep -c -e 'grep -qxF' "$REPO/scripts/worktree-gc.sh" | head -1)"
+  [ "${n:-0}" -eq 1 ] || { echo "expected exactly the one surviving grep -qxF (a FILE read, not a pipeline), got ${n:-0}" >&2; return 1; }
+}
