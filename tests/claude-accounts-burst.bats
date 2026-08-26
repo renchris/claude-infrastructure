@@ -152,3 +152,141 @@ print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
+
+# ---------------------------------------------------------------------------------------------
+# S4 · M4′ · burst_start_by — USAGE_TELEMETRY_100P §5.2 S4, RED-proof cases RP-21..RP-24.
+#
+# THE DEFECT IT CURES. Nothing on the drain line said whether the deficit was still CLOSABLE.
+# The synthesis's M4 (`wk_reach_pp`) tried to, and asked the wrong question: capacity. All 8
+# measured burst windows delivered 13-20 weekly pp whether or not they walled, so capacity is
+# nearly algebraically always sufficient and the verdict is nearly always REACHABLE. M4′ asks a
+# rate-and-freeze-against-the-clock question instead, which can come out either way — and does.
+#
+# THESE FIXTURES ARE THE MEASURED LIVE ROWS of 2026-08-25T09:47:41Z, so the suite pins the exact
+# numbers §5.2's table published rather than a re-derivation of them.
+
+@test "RP-21: burst_start_by returns LATE for next3's live shape — the verdict M4 got backwards" {
+  # next3 at 09:47Z: 8 weekly pp left, 2.21 h of window, a 13%-used session window. One burst
+  # window closes it (41.7 session pp at 22.87 spp/h = 1.82 h) but the expected frozen tail
+  # (0.625 x 1.653 h) pushes t_needed to 2.86 h against a 2.21 h deadline.
+  #
+  # THE DELETED M4 ON THIS SAME ROW read `16.9 pp reach vs 8 needed — REACHABLE, 2.1x margin`.
+  # next3 in fact stranded. That inversion is why wk_reach_pp is not implemented and must not be
+  # re-proposed; the record is USAGE_TELEMETRY_100P §5.2 S4 and §5.5.
+  run python3 -c "$LOAD"'
+r = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+     "session_pct": 13, "session_reset_h": 3.37, "session_reset_at": iso(NOW + 3.37 * 3600.0)}
+bs = ca.burst_start_by(r, 0.192)
+assert bs is not None, bs
+assert -1.0 < bs["h"] < 0.0, bs                       # measured -0.65
+assert bs["verdict"] == "LATE", bs
+assert bs["windows"] == 1, bs
+assert abs(bs["freeze_h"] - 1.0331) < 0.001, bs
+assert abs(bs["t_needed"] - 2.855) < 0.01, bs
+assert abs(bs["unrecoverable_pp"] - 2.83) < 0.02, bs  # the floor a PERFECT burst still loses
+assert "LATE" in ca.fmt_start_by(bs) and "unrecoverable" in ca.fmt_start_by(bs), ca.fmt_start_by(bs)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-22 CONTROL: an account with days of runway returns SLACK — not LATE always" {
+  # next2's live shape: 83 pp to close, 97.2 h of runway, and an almost-spent session window
+  # (0.54 h left) so the walk must roll onto the 5h grid — 6 windows, 21.41 h of burn+wait,
+  # 6.20 h of expected freeze. Without this arm RP-21 is satisfied by `return LATE`, which is
+  # exactly the degeneracy that made M4 useless in the other direction.
+  run python3 -c "$LOAD"'
+r = {"acct": "next2", "weekly_pct": 17, "weekly_reset_h": 97.2,
+     "session_pct": 8, "session_reset_h": 0.54, "session_reset_at": iso(NOW + 0.54 * 3600.0)}
+bs = ca.burst_start_by(r, 0.192)
+assert bs is not None, bs
+assert bs["h"] > 60.0, bs                             # measured +69.59
+assert bs["verdict"] == "SLACK", bs
+assert bs["windows"] == 6, bs
+assert bs["unrecoverable_pp"] == 0.0, bs
+assert ca.fmt_start_by(bs) == "start by T−28h (70h slack)", ca.fmt_start_by(bs)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-23 CONTROL: the freeze term is LIVE, not decorative — the P_WALL mutant moves it" {
+  # A purely arithmetic implementation that dropped the wall-freeze term survives every other
+  # case in this suite: it changes t_needed by ~1 h, which no other assertion can see. Run
+  # RP-21's fixture twice, with P_WALL at its shipped 0.625 and at 0.0, and pin the EXECUTED
+  # difference (1 window x 0.625 x 1.653 h = 1.0331 h), not a guess.
+  run python3 -c "$LOAD"'
+r = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+     "session_pct": 13, "session_reset_h": 3.37, "session_reset_at": iso(NOW + 3.37 * 3600.0)}
+with_wall = ca.burst_start_by(r, 0.192)
+ca.P_WALL = 0.0
+without = ca.burst_start_by(r, 0.192)
+assert abs((without["h"] - with_wall["h"]) - 1.033) < 0.01, (with_wall, without)
+# ...and the freeze is what makes the verdict, not just the number: with no expected wall the
+# same row is no longer late at all.
+assert with_wall["verdict"] == "LATE" and without["verdict"] != "LATE", (with_wall, without)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-24 CONTROL: no window open ⇒ abstain, not zero — and so do the other three refusals" {
+  # A null session stamp means NO WINDOW IS OPEN, which is a distinct state from an empty one.
+  # Collapsing it to avail=100 credits a burst that cannot start; L2 says that is null.
+  run python3 -c "$LOAD"'
+base = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+        "session_pct": 13, "session_reset_h": 3.37, "session_reset_at": iso(NOW + 3.37 * 3600.0)}
+no_window = dict(base, session_pct=None, session_reset_at=None, session_reset_h=None)
+assert ca.burst_start_by(no_window, 0.192) is None, "no window open did not abstain"
+assert ca.burst_start_by(base, None) is None, "unfitted K did not abstain"          # S1c abstained
+assert ca.burst_start_by(dict(base, weekly_pct=100), 0.192) is None, "no deficit"
+assert ca.burst_start_by(dict(base, weekly_reset_h=0), 0.192) is None, "bad reset stamp"
+assert ca.burst_start_by(dict(base, weekly_reset_h=200.0), 0.192) is None, "reset beyond a week"
+assert ca.fmt_start_by(None) is None
+# CONTROL for all five: the base row itself still reports, so the abstains are the RULE firing
+# and not a function that returns None for everything.
+assert ca.burst_start_by(base, 0.192) is not None
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-24b: an EXHAUSTED open window still has to roll — t does not start at zero" {
+  # §5.2's pseudocode leaves t = 0 when avail <= 0, which credits the next burst with starting
+  # NOW, inside a window that is already walled. All four live rows had avail > 0 so no published
+  # figure moves; this is the case the metric exists for. The pair is the proof: the same deficit
+  # with a spent window must need MORE time than with a fresh one, by the roll wait.
+  run python3 -c "$LOAD"'
+spent = {"acct": "next3", "weekly_pct": 90, "weekly_reset_h": 20.0, "session_pct": 100,
+         "session_reset_h": 4.0, "session_reset_at": iso(NOW + 4.0 * 3600.0)}
+fresh = dict(spent, session_pct=0)
+a, b = ca.burst_start_by(spent, 0.192), ca.burst_start_by(fresh, 0.192)
+assert a is not None and b is not None, (a, b)
+assert a["t_needed"] > b["t_needed"], (a, b)
+assert abs((a["t_needed"] - b["t_needed"]) - 4.0) < 0.01, (a, b)   # exactly the roll wait
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-24c CONTROL: LATE with nothing unrecoverable names the GRID, never a 0.0pp floor" {
+  # LATE and unrecoverable=0 is a real state, not a contradiction: the burn RATE would have
+  # closed the deficit and the 5h grid's waits are what push it past the reset. Rendering
+  # `0.0pp already unrecoverable` beside a warning reads as a bug; the binding constraint is the
+  # actionable fact. The control is RP-21's row, where the floor is real and IS named.
+  run python3 -c "$LOAD"'
+r = {"acct": "next2", "weekly_pct": 80, "weekly_reset_h": 12.0, "session_pct": 99,
+     "session_reset_h": 4.0, "session_reset_at": iso(NOW + 4.0 * 3600.0)}
+bs = ca.burst_start_by(r, 0.192)
+assert bs is not None and bs["verdict"] == "LATE", bs
+assert bs["unrecoverable_pp"] == 0.0, bs
+s = ca.fmt_start_by(bs)
+assert "5h grid binds" in s and "unrecoverable" not in s, s
+late = ca.burst_start_by({"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+                          "session_pct": 13, "session_reset_h": 3.37,
+                          "session_reset_at": iso(NOW + 3.37 * 3600.0)}, 0.192)
+assert "unrecoverable" in ca.fmt_start_by(late), ca.fmt_start_by(late)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}

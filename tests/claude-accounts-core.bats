@@ -1814,6 +1814,13 @@ assert "burn_wk_span_h" in r and r["burn_wk_span_h"] > 6.8, r
 assert "wk_strand_pp" in r, r
 assert 0.0 < r["wk_strand_pp"] < 5.0, r           # 40 + 0.583*100 = 98.3 -> ~1.7 pp die
 assert "burn_5h_ewma_ph" not in r, r              # S7 is a LATER wave and was not built here
+# S4: K is fitted ONCE per sweep and stamped on every row — it is a fleet fact (the pooled
+# session-pp -> weekly-pp ratio), not a per-account one. This series has no session movement,
+# so the fit is too thin and falls back to the frozen literal, which is a SOURCE, not a null.
+assert r["wk_k_src"] == "frozen" and r["wk_k"] == ca.K_FROZEN, r
+# ...and burst_start_by still abstains here, because these rows carry no session_reset_at:
+# no window open is a STATE, and it must not be stamped as a start time.
+assert "burst_start_by_h" not in r, r
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
@@ -1859,6 +1866,44 @@ ab = ca.pace_line([row(acct="next2", weekly_pct=13, weekly_reset_h=122.8, burn_w
 assert "next2 strand unknown (span 4.1h < 6.8h)" in ab, ab
 # no data ⇒ no block (a drain block over nothing would render at every error state)
 assert ca.pace_line([row(weekly_pct=None), row(weekly_reset_h=None)]) == ""
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "S4: the drain block carries the K clause and the start-by time, and abstains on each separately" {
+  # RP-29/RP-30 (USAGE_TELEMETRY_100P §5.2 S4). The block now answers all three of the goal's
+  # questions per row: how much dies (M3a) · is the demand routine (M5) · BY WHEN must it start
+  # (M4′). The third is the only one that names a time, and it is what turns the block from a
+  # description of the loss into an instruction.
+  run python3 -c "$LOAD"'
+K = dict(wk_k=0.192, wk_k_src="live", session_reset_at="2026-08-25T13:00:00Z")
+n4 = row(acct="next4", weekly_pct=14, weekly_reset_h=119.2, burn_wk_ewma_ph=0.186,
+         session_pct=8, session_reset_h=1.0, **K)
+n3 = row(acct="next3", weekly_pct=92, weekly_reset_h=2.21, burn_wk_ewma_ph=1.140,
+         session_pct=13, session_reset_h=3.37, **K)
+n1 = row(acct="next", weekly_pct=52, weekly_reset_h=114.21, burn_wk_ewma_ph=1.725,
+         session_pct=10, session_reset_h=2.0, **K)
+line = ca.pace_line([n3, n1, n4])
+assert line.startswith("weekly drain — pp that DIE at reset (K=0.192 live · nowcast"), line
+assert "next4 strand ~64pp of 86 · start by T−28h (91h slack)" in line, line
+assert "⚠ LATE by 0.6h — 2.8pp already unrecoverable" in line, line
+# the zero-strand row gets NO start-by clause: a start time for a deficit that is not dying
+# answers nothing, and its fact — the burn ratio — already ends the line.
+tail = [l for l in line.split(chr(10)) if l.strip().startswith("next no strand")][0]
+assert "start by" not in tail and "LATE" not in tail, tail
+# RP-30 CONTROL — the two abstains are SEPARATE. An unfitted K withdraws the start-by figures
+# and NOTHING else: M3a is pure weekly-space arithmetic and consumes no K, so suppressing the
+# strand along with it would withdraw a good number because an unrelated one refused.
+nok = ca.pace_line([dict(n4, wk_k=None, wk_k_src=None)])
+assert "K unfitted, outside [0.175,0.210] — no start-by figures" in nok, nok
+assert "next4 strand ~64pp of 86" in nok, nok
+assert "start by" not in nok, nok
+# ...and with NO stamp at all (apply_burn never ran) the header is the bare pre-S4 one: an
+# absent K is a different state from a refused one and must not borrow its words.
+bare = ca.pace_line([row(acct="next4", weekly_pct=14, weekly_reset_h=119.2,
+                         burn_wk_ewma_ph=0.186)])
+assert bare.split(chr(10))[0] == ca.PACE_HEAD, bare
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }

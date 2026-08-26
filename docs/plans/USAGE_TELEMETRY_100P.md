@@ -1610,7 +1610,8 @@ windows/week, carrying the fleet wall rate 1.72% → 2.20%.
 
 ### §5.7 Implementation record — what actually landed, and where it deviated from the spec
 
-Wave 1 = **S1 + S2 + S3 only**. S4–S7 are unbuilt and unchanged; S5 still gates S6.
+Wave 1 = **S1 + S2 + S3**. Wave 2 = **S4 only**. S5–S7 are unbuilt and unchanged; S5 still gates
+S6, and nothing in wave 2 shortens that.
 
 #### S1 · data fixes — LANDED
 
@@ -1770,14 +1771,78 @@ nowcaster precisely because it converges as the horizon closes, which is what ma
 forecaster. **S5 (`--strand-score`) is still the prerequisite for S6**, and nothing here
 shortens that.
 
+#### S4 · M4′ `burst_start_by` — LANDED (wave 2)
+
+`bin/claude-accounts`: `burst_start_by(r, k)` + `fmt_start_by(bs)` beside `fmt_burst`, constants
+`BURST_SPPH = 22.87` / `P_WALL = 0.625` / `MEAN_WALL_H = 1.653` / `GRID_H = 5.0` /
+`START_BY_SOON_H = 12.0`; `pace_head(rows)` beside `PACE_HEAD`; both attached in `apply_burn`
+(which now also fits `exchange_rate` **once per sweep** and stamps `wk_k` / `wk_k_src` on every
+row) and rendered by `pace_line`. Suite `tests/claude-accounts-burst.bats` extended with
+RP-21..RP-24 + RP-24b/RP-24c; `tests/claude-accounts-core.bats` extended in place (the `apply_burn
+attaches the new weekly keys` case) and with one new render case. **8/8 proven RED against the
+wave-1 binary** (`git stash push -- bin/claude-accounts`, run, pop), all green after.
+
+**The published table reproduces exactly.** next3 `−0.65 LATE` with a **2.83 pp** unrecoverable
+floor; next2 `+69.59 SLACK`, 6 windows, 21.41 h burn, 6.20 h freeze; next4 `+90.91 SLACK`. The
+render matches §5.4's mock — `start by T−28h (91h slack)` / `⚠ LATE by 0.6h — 2.8pp already
+unrecoverable` (the mock says `0.7h`; the executed value is 0.6453 h, and `:.1f` of the true
+number is what ships).
+
+**Deviation 1 — the return is a dict, not the bare float RP-21 sketches**, for RP-17's reason.
+`h ≤ 0` says it is late; it cannot say whether a perfect burst starting this instant still loses
+pp, and the floor is the only part of the verdict an operator can act on.
+
+**Deviation 2 — an EXHAUSTED open window now waits out its roll.** §5.2's pseudocode guards the
+first block on `avail > 0` and leaves `t = 0` otherwise, which credits the next burst with
+starting NOW inside a window that is already walled. All four live rows had `avail > 0`, so no
+published figure moves; RP-24b is the pair that pins it (same deficit, spent vs fresh window,
+differing by exactly the roll wait). The case the spec's arithmetic got wrong is the case the
+metric exists for.
+
+**Deviation 3 — an unfitted K withdraws the START-BY figures and nothing else.** §5.4's mock says
+a null K prints `no strand figures this sweep`. That was written before S3 established that M3a
+consumes no K at all (§5.7 S3 Deviation 1); suppressing the strand on an unfitted exchange rate
+would withdraw a good number because an unrelated one refused — the same fabricated dependency,
+in the other direction. The header now reads `K unfitted, outside [0.175,0.210] — no start-by
+figures` and every strand row survives. RP-30 is that control.
+
+**Deviation 4 — three header states, not two.** A row with **no** `wk_k` key at all (`apply_burn`
+never ran) renders the bare pre-S4 header, because an ABSENT K is not a REFUSED one and must not
+borrow its words. Without that arm the "unfitted" wording would have appeared in every context
+that renders rows without a sweep.
+
+**Deviation 5 — `LATE` with a zero floor names the GRID.** `unrecoverable_pp` is clamped at 0,
+and when it is 0 the render says `the 5h grid binds, not the rate` instead of `0.0pp already
+unrecoverable`, which beside a warning reads as a bug. It is a real and distinct state: the burn
+rate would have closed the deficit and the grid's inter-window waits are what push it past the
+reset — and the actionable response is different (route the work, do not push harder). RP-24c
+pins both arms.
+
+**Deviation 6 — the start-by clause renders only beside a strand.** A start time for a deficit
+that is not dying answers nothing; the zero-strand row's fact is its burn ratio, which already
+ends the line. Pinned in the render case.
+
+**Still not claimed.** No lead time, anywhere. S4 consumes `P_WALL` as a **lower bound** on the
+burst-window wall rate over n = 8 windows — the entire evidence base — so it ships on probation
+exactly as §5.2 states, and the monitoring plan (§5.5) re-runs the burst-stratified wall rate on
+every completed weekly window rather than waiting for the planner. RP-23 is the mutant test that
+keeps the freeze term honest: at `P_WALL = 0.0` the same row is no longer late at all.
+
 #### Acceptance status against §5.4
 
 | command | status |
 |---|---|
-| the bats suites (roll-key · util-tail · strand · burst · core) | **111/111 green**, every case shown RED at the commit before its fix |
+| the bats suites (roll-key · util-tail · strand · burst · core) | wave 1: **111/111 green**. wave 2: **118 cases**, 8 new/extended, every one shown RED against the wave-1 binary |
 | `claude-accounts --readout` renders the drain block for all four accounts | **yes** — see above |
 | `claude-accounts --readout \| grep -c 'strand'` → 3 or 4 | **4** |
 | `claude-accounts --strand-score` | **not in this wave** — that flag is S5 |
+
+⚠️ **Wave 2's suites were run on a Linux container, not the operator's Mac, and 4 core cases are
+RED there BEFORE any change** — `--relogin-info` and the three `--login-status` cases, which need
+the macOS keychain and fail the third on `OSError: Argument list too long` from that host's larger
+environment. They are red on the unmodified trunk binary in that environment and green on the
+Mac; wave 2 adds no failure and fixes none. Recorded rather than rounded away: a suite total that
+silently absorbs an environment's own reds is how a real regression gets one free pass.
 
 ⚠️ `bash tests/run.sh …`, named in §5.4, **does not exist in this repo**. The suites are run with
 `bats tests/<name>.bats`; `scripts/ship-land.sh` selects and runs them at the land.
