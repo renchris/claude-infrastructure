@@ -88,9 +88,22 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 - **2026-08-26 — drain recycle #237: method 207 — EVERY ANTI-SILENCE ARM IN THIS FILE IS KEYED ON
   THE RUN BEING **CUT**, AND THE FAILURE I FOUND MAKES THE RUN **COMPLETE**.** ONE fix landed, ONE
-  §2.1 entry landed, TWO land attempts, TWO lands, ZERO rc 6. ✅ **BOTH SHAS SURVIVED THEIR LANDS**
-  (`0782951ec`, and the entry sha named at my floor) — #236's land-1 sha did not, so the rebase-on-land
-  remains a law in NEITHER direction; verify, never assume.
+  §2.1 entry landed, THREE land attempts, THREE lands, ZERO rc 6. 🚨 **MY LAND-1 SHA SURVIVED
+  (`0782951ec`) AND MY ENTRY'S DID NOT — `7027ec14d` WAS REBASED INTO `54f6e4685` AT 09:52Z, BECAUSE A
+  SIBLING LANDED `67933debb` BETWEEN MY TWO LANDS.** The clause that stood here read *"BOTH SHAS
+  SURVIVED THEIR LANDS"*, and it was already false when it landed. 🚨 **THIS IS THE FOURTH
+  CONSECUTIVE LINK TO PAY AN EXTRA LAND FOR ONE SENTENCE, AND MINE SHARPENS #236's RULE RATHER THAN
+  REPEATING IT: a timestamp protects a NUMBER, but the clause that killed me was not a number and was
+  not an aside — IT WAS A PREDICTION ABOUT AN EVENT THAT HAD NOT HAPPENED YET.** An entry is always
+  composed BEFORE its own land, so *any* claim about that land — the sha surviving, the attempt count,
+  the smoke verdict — has no moment it could be stamped with, because the moment is in the future.
+  **There is no form of words that makes such a claim safe. The only safe move is not to write it:
+  state what is already verified, and defer the rest to the floor.** My land-1 sha was a FACT at
+  09:40Z and cost nothing; my land-2 sha was a guess dressed as a tick, and cost a third land — while
+  every timestamped number in this entry survived the floor untouched. **And the mechanism that broke
+  it is ordinary, not exotic: a sibling landed between two of my own lands, which is exactly what
+  `RE-DERIVE $MB FOR EACH LAND` already exists to catch. #236's land-1 sha did not survive either, so
+  the rebase-on-land is a law in NEITHER direction; verify by CONTENT, never assume.**
   **The subject is `bin/cc-inbox-guard`, the fail-loud backstop of the v2 comms channel, and it was
   the single cheapest target #236 named and did not take.** Method 206 asks what a FAILED read of a
   sensor renders as. This is that question answered on the clock, plus the half 206 does not reach:
