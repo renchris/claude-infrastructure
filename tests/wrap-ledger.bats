@@ -581,8 +581,18 @@ mk_failed_migration() {
   [ "$status" -eq 0 ]
   [ "$(field "$output" LIVE_SRC)" = "behind" ]
   [ "$(field "$output" LIVE_ADDS)" = "?" ]
-  [ "$(field "$output" RUNG)" = "✅" ]        # within budget, and the add could not be established
-  ! printf '%s' "$output" | grep -q "^RUNG=🚀" || false
+  # THE RUNG HERE WAS ✅ UNTIL 2026-08-25 (recycle #230), AND THAT WAS THE BLIND SPOT, NOT A CONTRACT.
+  # This fixture's "divergent commit that exists ONLY in the live clone" is not merely a sha we lack
+  # — it is a live layer `merge --ff-only` CANNOT ADVANCE, which is the one converge state no time
+  # budget cures. LIVE_DIVERGED reads it now, so the rung is 🚀 on the DIVERGENCE.
+  [ "$(field "$output" LIVE_DIVERGED)" = "1" ]
+  [ "$(field "$output" RUNG)" = "🚀" ]
+  # …and it is still NOT the `?` that raised it. That property is what this case has always been
+  # for, and it survives the rung change: an unresolvable added-file read may not breach, so the
+  # reason must never be the added file.
+  run bash "$LEDGER"
+  [ "$(printf '%s' "$output" | grep -ci "NEW file")" -eq 0 ]
+  run bash "$LEDGER" --machine
   run bash "$LEDGER" --full
   printf '%s' "$output" | grep -qi "UNRESOLVED"
   # STDERR MUST BE EMPTY, and this is the assertion that makes the `!= "?"` guards load-bearing.
@@ -603,15 +613,19 @@ mk_failed_migration() {
   ok_state
   WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
   export WRAP_LIVE_BUDGET_COMMITS=1
-  git -C "${WRAP_LIVE_REPO:?live repo path required}" config user.email tester@example.com
-  git -C "${WRAP_LIVE_REPO:?live repo path required}" config user.name tester
-  echo live-only >> "$WRAP_LIVE_REPO/base.txt"
-  git -C "$WRAP_LIVE_REPO" add base.txt
-  git -C "$WRAP_LIVE_REPO" commit -q -m "live-only commit"
   advance_trunk 3                             # edits only; 3 > 1 ⇒ the COMMIT budget is what trips
+  # THE `?` IS FORCED BY THE BOUND, NOT BY A LIVE-ONLY COMMIT (decoupled 2026-08-25, recycle #230).
+  # This case's subject is "`?` stays out of the way of a breach somebody ELSE raises", so its
+  # vehicle must not raise one itself. It used to make `?` with a divergent live commit — which
+  # LIVE_DIVERGED now reads as its own no-budget breach, so the divergence would have become the
+  # reason and the budget arm this case exists to exercise would never have been reached. The
+  # timeout shim produces the identical `?` while leaving the live layer strictly BEHIND.
+  mk_timeout_shim '--diff-filter=A' "$BATS_TEST_TMPDIR/shim-adds-2e"
   run bash "$LEDGER" --machine
   [ "$status" -eq 0 ]
+  [ -s "$BATS_TEST_TMPDIR/shim-adds-2e" ]     # the shim WAS on the executed path
   [ "$(field "$output" LIVE_ADDS)" = "?" ]
+  [ "$(field "$output" LIVE_DIVERGED)" = "0" ]   # behind, never diverged ⇒ the budget must decide
   [ "$(field "$output" RUNG)" = "🚀" ]
   run bash "$LEDGER"
   printf '%s' "$output" | grep -qi "past its converge budget"
@@ -675,6 +689,120 @@ mk_timeout_shim() {                        # $1 = argv token to fail on ; $2 = m
   printf '%s' "$output" | grep -qi "UNRESOLVED"
   bash "$LEDGER" --machine >/dev/null 2>"$BATS_TEST_TMPDIR/err-adds.txt"
   [ ! -s "$BATS_TEST_TMPDIR/err-adds.txt" ]
+}
+
+# ── 2h. DIVERGED vs BEHIND — the state the ledger could not tell apart (2026-08-25, recycle #230) ─
+# LIVE_LAG is `rev-list --count HEAD..TRUNK`, a ONE-DIRECTIONAL distance, so it is blind to the
+# ahead side by construction — and the ahead side is exactly what stops the converger, which
+# advances with `merge --ff-only "$TARGET"` (scripts/deploy-live.sh:1969, its case B at :1808).
+# MEASURED before the fix, against an isolated clone with ONE variable moved:
+#     behind 4 / ahead 0  →  LIVE_SRC=behind LIVE_LAG=4  "converging (4 behind; within the budget)"
+#     behind 4 / ahead 1  →  LIVE_SRC=behind LIVE_LAG=4  "converging (4 behind; within the budget)"
+# BYTE-IDENTICAL, while `merge-base --is-ancestor HEAD TRUNK` answered rc 0 for the first and rc 1
+# for the second. A converge BUDGET is a claim about TIME; time does not cure a divergence, so the
+# second line asserted a bound over a state that was never going to clear on its own.
+#
+# ONE MUTANT PER SITE, and the sites are separable: the read (2h), the breach arm (2h vs 2i), the
+# `?` guard (2j), and emission on the non-behind path (2k).
+@test "live layer DIVERGED but lag INSIDE budget ⇒ 🚀 on the divergence, never 'within budget'" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  # CONTROL FIRST, and it must SPEAK: this same fixture, BEHIND ONLY, is ✅ + "within the converge
+  # budget". Without it a 🚀 below could come from the lag, the clock or the fixture being broken.
+  advance_trunk 2                                   # edits only, 2 < the default commit budget
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_SRC)" = "behind" ]
+  [ "$(field "$output" LIVE_DIVERGED)" = "0" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+  run bash "$LEDGER"
+  printf '%s' "$output" | grep -qi "within the converge budget"
+
+  # ONE VARIABLE MOVES: the live layer acquires a commit of its own. Nothing else changes — same
+  # fixture, same trunk, same lag, same clock.
+  git -C "${WRAP_LIVE_REPO:?live repo path required}" config user.email tester@example.com
+  git -C "${WRAP_LIVE_REPO:?live repo path required}" config user.name tester
+  echo diverged >> "$WRAP_LIVE_REPO/base.txt"
+  git -C "$WRAP_LIVE_REPO" add base.txt
+  git -C "$WRAP_LIVE_REPO" commit -q -m "live-only divergent commit"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_SRC)" = "behind" ]
+  [ "$(field "$output" LIVE_DIVERGED)" = "1" ]
+  [ "$(field "$output" RUNG)" = "🚀" ]
+  run bash "$LEDGER"
+  printf '%s' "$output" | grep -qi "cannot advance it"
+  # THE FALSE SENTENCE MUST BE GONE, not merely outranked — this is the whole defect.
+  [ "$(printf '%s' "$output" | grep -ci "within the converge budget")" -eq 0 ]
+  bash "$LEDGER" --machine >/dev/null 2>"$BATS_TEST_TMPDIR/err-div.txt"
+  [ ! -s "$BATS_TEST_TMPDIR/err-div.txt" ]
+}
+
+# ── 2i. DIVERGENCE OUTRANKS THE ADDED FILE, because it is the cause the add is a symptom of ──
+# An absent file is cured by the next converge tick; a divergence is what stops every converge tick.
+# So when both hold the operator must be told the one that names the actual remedy.
+@test "DIVERGED composed with a real added file ⇒ the divergence wins the sentence" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  # CONTROL: unaided, this fixture breaches on the ADD and says so.
+  advance_trunk_adding 1
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_ADDS)" = "1" ]
+  [ "$(field "$output" RUNG)" = "🚀" ]
+  run bash "$LEDGER"
+  printf '%s' "$output" | grep -qi "NEW file"
+
+  git -C "${WRAP_LIVE_REPO:?live repo path required}" config user.email tester@example.com
+  git -C "${WRAP_LIVE_REPO:?live repo path required}" config user.name tester
+  echo diverged >> "$WRAP_LIVE_REPO/base.txt"
+  git -C "$WRAP_LIVE_REPO" add base.txt
+  git -C "$WRAP_LIVE_REPO" commit -q -m "live-only divergent commit"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_DIVERGED)" = "1" ]
+  [ "$(field "$output" RUNG)" = "🚀" ]
+  run bash "$LEDGER"
+  printf '%s' "$output" | grep -qi "cannot advance it"
+}
+
+# ── 2j. A FAILED ahead read is not a read of "no divergence" ──
+# Same law as LIVE_ADDS and LIVE_LAG (backlog 4fe8d531ce68): an unresolvable sensor may not breach
+# and may not clear. 0 here would be the phantom that clears the close, because 0 is the one value
+# that gets no budget scrutiny at all. The two ranges are deliberately distinct argv tokens —
+# `origin/main..HEAD` for this read, `HEAD..origin/main` for the lag — so the shim cannot hit both.
+@test "bounded ahead read FAILS ⇒ LIVE_DIVERGED=?, no manufactured 🚀, stderr clean" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  advance_trunk 2                                   # inside budget ⇒ ✅ unless something breaches
+  # CONTROL: unaided, this fixture reads a real 0 and stays ✅ — so a `?` below is the read failing.
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_DIVERGED)" = "0" ]
+
+  mk_timeout_shim 'origin/main..HEAD' "$BATS_TEST_TMPDIR/shim-ahead"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ -s "$BATS_TEST_TMPDIR/shim-ahead" ]             # the shim WAS on the executed path
+  [ "$(field "$output" LIVE_DIVERGED)" = "?" ]
+  [ "$(field "$output" LIVE_LAG)" = "2" ]           # the SIBLING read is untouched — a scalpel
+  [ "$(field "$output" RUNG)" = "✅" ]              # unresolvable may not manufacture a rung
+  bash "$LEDGER" --machine >/dev/null 2>"$BATS_TEST_TMPDIR/err-ahead.txt"
+  [ ! -s "$BATS_TEST_TMPDIR/err-ahead.txt" ]
+}
+
+# ── 2k. EMITTED ON EVERY PATH, so a consumer never has to guess whether the question was asked ──
+# The read lives inside the `behind` branch, which is what preserves the no-op guarantee for every
+# other LIVE_SRC — but the FIELD must still be printed, exactly as LIVE_ADDS is.
+@test "LIVE_DIVERGED is emitted on the ok path too, as 0" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_SRC)" = "ok" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+  [ "$(field "$output" LIVE_DIVERGED)" = "0" ]
+  printf '%s' "$output" | grep -q "^LIVE_DIVERGED="
 }
 
 # ── 2g. THE SIBLING READ, one line up: a FAILED lag read is not a lag of zero ──

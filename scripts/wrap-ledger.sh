@@ -795,6 +795,29 @@ LIVE=0; LIVE_SRC="skip"; LIVE_SHA=""; LIVE_LAG=0; MIG_FAILED=0; LIVE_BREACH=0
 # `?` is its own state: the live sha could not be read HERE, so the question was asked and not
 # answered. 0 alongside LIVE_SRC=skip/n-a/unknown means "not counted", which those already say.
 LIVE_ADDS=0
+# LIVE_DIVERGED = commits the LIVE layer's HEAD carries that its trunk does not — the count that
+# says the converger is BLOCKED rather than merely behind. Same `?` law as LIVE_ADDS: the question
+# was asked and not answered, which is not the same as zero.
+#
+# WHY IT IS A SEPARATE NUMBER FROM LIVE_LAG, AND WHY NO BUDGET MAY COVER IT (2026-08-25, recycle
+# #230). LIVE_LAG is `rev-list --count HEAD..TRUNK` — a ONE-DIRECTIONAL distance. It is blind to the
+# ahead side by construction, and the ahead side is precisely what stops the converger: deploy-live
+# advances with `merge --ff-only "$TARGET"` (scripts/deploy-live.sh:1969), which requires live HEAD
+# to be an ancestor of the target. deploy-live already classifies this state in detail — its case B
+# at :1808 — and its own comment records that it "FROZE THE LIVE LAYER FOR 29 DRAIN RECYCLES".
+#
+# MEASURED by execution against an isolated mktemp clone, one variable moved (the fixture HEAD's own
+# commit), everything else — fixture, trunk ref, origin URL, caller — held constant:
+#     behind 4 / ahead 0  → LIVE_SRC=behind LIVE_LAG=4  "converging (4 behind; within the budget)"
+#     behind 4 / ahead 1  → LIVE_SRC=behind LIVE_LAG=4  "converging (4 behind; within the budget)"
+# BYTE-IDENTICAL readouts, while `merge-base --is-ancestor HEAD TRUNK` answered rc 0 for the first
+# and rc 1 for the second. A POS control at trunk spoke differently (ok / lag 0), so the table
+# discriminates. The real box was in the second state at that session's open — the shared checkout
+# sat on two commits of its own — and this ledger rendered `✅ … converging … within the converge
+# budget` over it. That claim is FALSE there: a converge BUDGET is a claim about TIME, and time does
+# not cure a divergence. Only landing or dropping the ahead-side commits does. Hence it breaches at
+# 1, exactly as an added file does, and for the same reason: no amount of waiting is the remedy.
+LIVE_DIVERGED=0
 
 # Count failed-migration records with ZERO forks — this is a Stop-hook path, and `ls | grep -c`
 # spends two processes to answer what a glob already knows. An unmatched glob stays literal in
@@ -807,10 +830,10 @@ _count_failed_migrations() {
   printf '%s' "$n"
 }
 
-# Sets LIVE / LIVE_SRC / LIVE_SHA / LIVE_LAG / MIG_FAILED / LIVE_BREACH. Called ONLY on the
+# Sets LIVE / LIVE_SRC / LIVE_SHA / LIVE_LAG / LIVE_DIVERGED / MIG_FAILED / LIVE_BREACH. Called ONLY on the
 # ✅-eligible path with a resolved trunk (see the rung block) — a worse rung cannot be changed by it.
 compute_live_layer() {
-  local my_origin live_origin sha lag lag_rc now ct age_s _adds _arc
+  local my_origin live_origin sha lag lag_rc now ct age_s _adds _arc _ahead _hrc
 
   # `git config --get remote.origin.url` is the cheapest probe that answers "same repo?" and it
   # touches no network. It is compared BYTE-EQUAL on purpose: a fuzzy match (ssh-vs-https, .git
@@ -870,6 +893,27 @@ compute_live_layer() {
     LIVE=1; LIVE_SRC="ok"
   else
     LIVE_SRC="behind"
+    # ── DIVERGED: is the converger BLOCKED, or merely behind? (see LIVE_DIVERGED's header note) ──
+    # The exact complement of the lag read above — same repo, same trunk ref, same bound, range
+    # REVERSED — so the two numbers together answer "behind, ahead, or both" with no third fork and
+    # no second model of the trunk. Deliberately NOT `merge-base --is-ancestor`: that answers yes/no,
+    # and a count is what lets a reader tell one stray commit from a checkout someone has been
+    # working in for a week. Read here rather than beside the ancestry test above because this is the
+    # only branch where it can change a verdict — every other LIVE_SRC keeps its exact prior output,
+    # which is what preserves the no-op guarantee for repos that are not the live layer's source.
+    #
+    # `?` on a failed bound, never 0 — a swallowed failure here is indistinguishable from a clean
+    # read of "no divergence", which is the one state that gets no budget. Same scar as LIVE_ADDS
+    # and LIVE_LAG (backlog 4fe8d531ce68), and the same resolution: an unresolvable sensor may not
+    # breach, and it may not clear either, so it drops out and leaves the other arms deciding.
+    _ahead="$(_bounded "${WRAP_LIVE_TIMEOUT_S:-5}" git -C "$LIVE_REPO" rev-list --count "$TRUNK..HEAD" 2>/dev/null)"
+    _hrc=$?
+    if [ "$_hrc" -ne 0 ]; then
+      LIVE_DIVERGED="?"
+    else
+      case "$_ahead" in ''|*[!0-9]*) _ahead=0 ;; esac
+      LIVE_DIVERGED="$_ahead"
+    fi
     # ── ADDED FILES: the lag no budget may excuse (see the header). ──
     # A TREE diff, not a commit walk: --diff-filter=A between the live layer's tree and HEAD's tree
     # IS the question "which paths does HEAD have that the live layer does not", which is the
@@ -925,9 +969,15 @@ compute_live_layer() {
   if [ "$MIG_FAILED" -gt 0 ]; then
     LIVE_BREACH=1
   elif [ "$LIVE_SRC" = "behind" ]; then
+    # A DIVERGENCE gets NO budget either, and it is tested FIRST because it OUTRANKS the added file:
+    # an absent file is cured by the next converge tick, whereas a divergence is what stops every
+    # converge tick — it is the CAUSE the added-file count is a symptom of. `?` may not breach, on
+    # the same law as the two arms below.
+    if [ "$LIVE_DIVERGED" != "?" ] && [ "$LIVE_DIVERGED" -gt 0 ]; then
+      LIVE_BREACH=1
     # An ADD gets NO budget (header). `?` is not a number and must never breach — it falls through
     # to the budget arms, leaving the pre-2026-08-09 verdict exactly as it was.
-    if [ "$LIVE_ADDS" != "?" ] && [ "$LIVE_ADDS" -gt 0 ]; then
+    elif [ "$LIVE_ADDS" != "?" ] && [ "$LIVE_ADDS" -gt 0 ]; then
       LIVE_BREACH=1
     # LIVE_LAG carries `?` on an unresolved bounded read, for the same reason and with the same
     # guard: an unresolvable sensor may not breach, and it may not clear either — so it drops out of
@@ -1027,6 +1077,13 @@ else
     # the operator's next move differs from a merely-stale layer: the file is missing, not old.
     if [ "$MIG_FAILED" -gt 0 ]; then
       READOUT="🚀 Landed but NOT live — ${MIG_FAILED} migration(s) could not reach the enforcing store; the machine is not running this yet."
+    elif [ "$LIVE_DIVERGED" != "?" ] && [ "$LIVE_DIVERGED" -gt 0 ]; then
+      # NOT "unlanded work": deploy-live's own classifier (:1808) splits this into B1, where every
+      # diverging commit is already on trunk BY CONTENT because a rebased land rewrote the object,
+      # and B2, where one is genuinely un-landed — and it is fail-closed because the two are one typo
+      # apart in consequence. This sentence must be TRUE of both, so it states the mechanism (ff-only
+      # cannot advance) and points at the converger, rather than guessing which of the two holds.
+      READOUT="🚀 Landed but NOT live — the live layer carries ${LIVE_DIVERGED} commit(s) trunk does not, so \`merge --ff-only\` cannot advance it and NO converge budget applies; run scripts/deploy-live.sh, which names which of them are already on trunk by content."
     elif [ "$LIVE_ADDS" != "?" ] && [ "$LIVE_ADDS" -gt 0 ]; then
       READOUT="🚀 Landed but NOT live — ${LIVE_ADDS} NEW file(s) are absent from the live layer, so every consumer guard on them silently skips; no budget covers an added file."
     else
@@ -1070,6 +1127,7 @@ emit_machine() {
   printf 'LIVE_SHA=%s\n' "$LIVE_SHA"
   printf 'LIVE_LAG=%s\n' "$LIVE_LAG"
   printf 'LIVE_ADDS=%s\n' "$LIVE_ADDS"
+  printf 'LIVE_DIVERGED=%s\n' "$LIVE_DIVERGED"
   printf 'MIG_FAILED=%s\n' "$MIG_FAILED"
   printf 'GATE=%s\n' "$GATE"
   printf 'DOD=%s\n' "$DOD"
