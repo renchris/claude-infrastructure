@@ -147,7 +147,38 @@ _ig_bounded() { # run "$@" under the cap; unbounded only when no timeout(1) exis
 NL='
 '          # a literal newline, for exact whole-line `case` matching (bash 3.2-safe; == grep -qxF)
 
-now()  { printf '%s' "${CC_INBOX_GUARD_NOW:-$(date +%s 2>/dev/null || echo 0)}"; }
+# F13 — THE CLOCK IS A SENSOR, AND AN UNREADABLE SENSOR MAY NOT CLEAR. This was
+#   now() { printf '%s' "${CC_INBOX_GUARD_NOW:-$(date +%s 2>/dev/null || echo 0)}"; }
+# and the `|| echo 0` was the whole defect: 0 is a LEGAL epoch, so every consumer went on comparing
+# it as one. `now - ep` came out hugely negative, both consumers clamp a negative age to 0, and
+# `oldest 0s` is exactly what a message that arrived THIS INSTANT renders as — the healthiest reading
+# this subsystem can produce. Measured against the pre-fix subject with one fixture and one variable
+# moved: `ESCALATE … the target died with mail undelivered` (1 alarm, phone fired) became
+# `ok … 1 unacked but within deadline (oldest 0s)` (0 alarms, nothing phoned), rc 0 both times.
+#
+# Neither anti-silence arm in this file could ever have caught it, and the reason is structural, not
+# an oversight: the worklist announce and `sweep done — all N box(es) examined` are BOTH keyed on a
+# sweep being CUT, and a dead clock produces a sweep that COMPLETES. The fail-loud backstop rendered
+# its best possible line while every overdue box in the fleet went unpaged.
+#
+# The law restored is the one owner_liveness already states and enforces three times over its own
+# oracles (the memoized it2 failure, the name-keyed box, the it2-unreadable branch): an unresolvable
+# sensor may not fabricate a verdict. Report the failure as a value the ARITHMETIC CANNOT SWALLOW —
+# `?`, which no `$(( ))` will silently score — and let each consumer abstain out loud.
+#
+# `:-` had to go with it. It catches unset and EMPTY only, so a garbage CC_INBOX_GUARD_NOW reached
+# the arithmetic verbatim and bash scored THAT 0 as well: the identical silent clear, through a
+# second door, with no failed fork anywhere for a log to have recorded.
+NOW_UNREADABLE='?'
+now() {
+  local n
+  n="${CC_INBOX_GUARD_NOW:-}"
+  [ -n "$n" ] || n="$(date +%s 2>/dev/null || true)"
+  # epoch 0 is not a clock this box can be at; it is this defect's old failure value wearing a
+  # legal-looking coat, so it reads as unreadable rather than as 1970.
+  case "$n" in ''|*[!0-9]*|0) printf '%s' "$NOW_UNREADABLE"; return ;; esac
+  printf '%s' "$n"
+}
 utc()  { date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo ''; }
 stamp(){ date -u +%Y%m%dT%H%M%SZ 2>/dev/null || echo "$$"; }
 
@@ -245,7 +276,17 @@ headless_beat_live() { # <inbox key> → 0 iff a registered headless owner has a
   # This script's OWN clock, so the sweep's existing CC_INBOX_GUARD_NOW seam pins this decision too
   # rather than leaving one branch reading wall time. A beat from the FUTURE (a stepped clock) reads
   # as fresh, which is the safe direction here — it cannot manufacture an escalation.
-  age=$(( $(now) - t ))
+  #
+  # F13, second site: the SAME sensor, and here its old failure value was `live`. now()=0 made `age`
+  # hugely negative, `age <= max` trivially true, and this returned 0 — so under a dead clock a
+  # registered headless owner with ANY beat, however ancient, read LIVE. That is not merely
+  # over-forgiving: the caller then escalates with the cause "LIVE session … re-engage it", which is
+  # a FABRICATED cause of exactly the kind the INDETERMINATE arms above exist to refuse. An
+  # unreadable clock is not evidence of a fresh beat, so it takes the same not-live answer a stale
+  # beat takes, and the caller's INDETERMINATE arm — which escalates just the same — stays honest.
+  local n; n="$(now)"
+  case "$n" in ''|*[!0-9]*) return 1 ;; esac
+  age=$(( n - t ))
   [ "$age" -le "$max" ] 2>/dev/null || return 1
   return 0
 }
@@ -430,6 +471,19 @@ sweep() {
   # backfill the registry first so a live-but-unregistered pane is classifiable (F8), gated off dry-run.
   [ "$DRY" = 0 ] && [ -n "$RECONCILE_BIN" ] && _ig_bounded "$RECONCILE_BIN" >/dev/null 2>&1 || true
   local now; now="$(now)"; local n_esc=0
+  # F13 — classify the clock ONCE, before any work, and ANNOUNCE it. The ORDER is the point, and it
+  # is the same point the worklist announce below already makes: the summary line is the first thing
+  # a SIGTERM eats, so a verdict that appears only down there is a verdict a cut sweep cannot carry.
+  # Announced on BOTH branches, because a line that only ever prints on failure is a line nobody has
+  # seen work; on the healthy branch it carries the epoch the whole sweep was scored against.
+  local clock_ok=1
+  case "$now" in ''|*[!0-9]*|0) clock_ok=0 ;; esac
+  local n_unscored=0
+  if [ "$clock_ok" = 0 ]; then
+    echo "cc-inbox-guard: clock=UNREADABLE — no age can be computed this sweep, so NO box is scored ok and NO deadline is claimed; boxes holding unacked mail are reported UNSCORED (neither cleared nor escalated)"
+  else
+    echo "cc-inbox-guard: clock=$now"
+  fi
   # ONE `local` per line: /bin/bash here is 3.2.57, where a multi-variable `local` does not see its
   # own earlier initialiser. n_damp is the arm that used to be folded into n_esc — see escalate().
   local n_damp=0
@@ -528,6 +582,16 @@ sweep() {
 
     [ "$unacked" -gt 0 ] 2>/dev/null || continue   # nothing unconsumed → fine
 
+    # F13 — the abstention, SCOPED to the verdicts that actually needed the clock. Everything above
+    # this line is clock-free and keeps running: the cursor-past-EOF check compares two counts and
+    # cannot be wrong about them just because `date` failed, so it still escalates. Everything below
+    # is age arithmetic, and there is no age to compute.
+    if [ "$clock_ok" = 0 ]; then
+      echo "  UNSCORED $u — $unacked unacked message(s), and the clock is UNREADABLE: no age exists, so this box is neither cleared nor escalated"
+      n_unscored=$((n_unscored+1))
+      continue
+    fi
+
     # the oldest unacked line (line acked+1) and its class deadline; escalate if ANY unacked line is overdue.
     local overdue=0 oldest_age=0 scanres
     local kind a1 a2 ep age
@@ -566,7 +630,10 @@ $wlist
 WLEOF
   # Reaching this line means the whole worklist was examined. Its ABSENCE from a log entry is now
   # readable against the announce above: worklist N, no "sweep done" ⇒ cut before all N.
-  echo "cc-inbox-guard: sweep done — all $n_work box(es) examined, $n_esc escalation(s), damped=$n_damp$([ "$DRY" = 1 ] && echo ' (dry-run: none fired)')"
+  # `unscored=` is APPENDED after `damped=`, never woven into it: every incumbent assertion greps the
+  # substring `examined, N escalation(s), damped=D`, and an appended key=value leaves all of them
+  # true rather than churning a passing test to accommodate a new field.
+  echo "cc-inbox-guard: sweep done — all $n_work box(es) examined, $n_esc escalation(s), damped=$n_damp, unscored=$n_unscored$([ "$DRY" = 1 ] && echo ' (dry-run: none fired)')"
   return 0
 }
 
