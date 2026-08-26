@@ -8034,20 +8034,61 @@ if [ "$CLOUD" = 1 ]; then
   # there the name is authorised AT CREATE. cc_cloud_create's signature is `cfg cwd prompt`
   # (scripts/lib/cloud-create.sh:185): the CLI leg has NO branch parameter at all, so the payload
   # is the only place the branch can be established, and establishing it is a real `switch -c`.
-  CLOUD_PAYLOAD="$(cat "$PROMPT_FILE")
-"'
-── HOW TO RETURN YOUR WORK (this session runs off-box; read this before you finish) ──
-You are running in an Anthropic-managed VM. Nothing on the operator'"'"'s machine can see your
-filesystem, your processes or your terminal, and you cannot run this repo'"'"'s /ship. Your ONLY
-channel back is a git push, and it must go to exactly this branch — CREATE IT FIRST, then push it:
+  #
+  # 🚨 THE BOOT BEACON IS THE FIRST BLOCK, AND IT IS WHAT MAKES `NOT-STARTED` MEAN ANYTHING
+  # (backlog 0c8b39b67665). CLOUD_OBSERVABILITY.md §4.1 states the absence contract: absence is
+  # ambiguous — never started, died at boot, refused entitlement, and *booted and working but with
+  # nothing to push yet* are all one observation, "no ref" — and only a CONTRACT that the session's
+  # FIRST act is a push disambiguates it. That contract was PROSE ONLY. §8 step 2 asserted the brief
+  # "must require pushing the declared branch as its first act", and no brief ever did: the block
+  # below used to be the sole push instruction in this file and it is a FINISH-time instruction
+  # ("push whatever you have before you finish"). So `C1 NOT-STARTED` past the 900 s boot budget was
+  # being read — by bin/cc-cloud, by the board, and by every human reading its row — as "never
+  # booted", while it in fact also covered the commonest healthy case: a session 20 minutes into
+  # real work that has not reached a commit. A verdict that fires on a healthy session is the
+  # failure this whole document is organised against, one level down.
+  #
+  # An EMPTY COMMIT is enough and is deliberately what is asked for: it costs the VM two seconds,
+  # it needs no work to have happened, and it is the only push that is available *before* the work
+  # rather than after it. With it, "no ref past boot_s" is a statement about the VM, not about the
+  # task. The three commands are ordered create → beacon → push for B1's reason above, and the
+  # `switch -c … || switch …` fallback is load-bearing: the web harness may itself have put the VM
+  # on the declared branch already, and a bare `switch -c` would die on "already exists" — taking
+  # the whole beacon with it and restoring the exact ambiguity this block removes.
+  #
+  # QUOTING: this whole payload is ONE double-quoted string, so \$CLOUD_BRANCH expands in all four
+  # places it appears and the apostrophes in the prose need no escaping. It carries no backtick, no
+  # backslash and no other \$ — checked — so nothing else in it is subject to expansion.
+  CLOUD_PAYLOAD="── FIRST ACT — RUN THESE THREE COMMANDS BEFORE YOU DO ANYTHING ELSE ──
+Before you read the brief below, before any edit, any test, any tool call: push the branch this
+fire has assigned you. It is one empty commit and it is not optional.
 
-    git switch -c '"$CLOUD_BRANCH"'
+    git switch -c $CLOUD_BRANCH 2>/dev/null || git switch $CLOUD_BRANCH
+    git commit --allow-empty -m 'boot: $CLOUD_BRANCH'
     git push -u origin HEAD
+
+WHY, because this is not bookkeeping: the firing side cannot see this VM at all, and watches
+exactly one thing — whether that branch appears. If it has not appeared within the boot budget,
+this session is declared NOT-STARTED and may be re-fired, or reaped, while it is in fact alive and
+working. The empty commit is the only signal available BEFORE your work produces one, so skipping
+it makes a healthy session indistinguishable from one that never booted.
+
+── YOUR BRIEF ──
+$(cat "$PROMPT_FILE")
+
+── HOW TO RETURN YOUR WORK (this session runs off-box; read this before you finish) ──
+You are running in an Anthropic-managed VM. Nothing on the operator's machine can see your
+filesystem, your processes or your terminal, and you cannot run this repo's /ship. Your ONLY
+channel back is a git push, and it goes to the same branch your FIRST ACT above created:
+
+    git push
 
 That branch name was assigned by the firing side and is already declared as the one thing watched
 for your progress — a push anywhere else is invisible and your work will strand. Push whatever you
 have before you finish, even if the work is incomplete; an unpushed cloud session leaves no trace
-of any kind. A local reconciler (scripts/cloud-reconcile.sh) discovers the branch and lands it.'
+of any kind. A local reconciler (scripts/cloud-reconcile.sh) discovers the branch and lands it.
+(If the first act never ran, run it now: git switch -c $CLOUD_BRANCH 2>/dev/null || git switch
+$CLOUD_BRANCH, then git push -u origin HEAD.)"
 
   if [ "$DRY" = 1 ]; then
     echo "-- DRY RUN: cloud fire (no create issued, no quota spent)"

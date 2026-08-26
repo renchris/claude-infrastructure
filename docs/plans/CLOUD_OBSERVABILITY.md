@@ -150,6 +150,27 @@ session's brief requires its **first act** to be pushing that branch — an empt
 Absence then becomes informative: no ref inside the budget is `BOOTING` (expected); no ref past it
 is `NOT-STARTED` (actionable — re-fire, or check entitlement).
 
+⚠️ **A fourth world belongs in that list, and it is the one that made the gap below expensive:** a
+session that booted, is working, and simply *has nothing to push yet*. It reads "no ref" exactly
+like the other three, and unlike them it is **healthy**. It is also the commonest of the four, since
+every cloud session passes through it. The contract covers it only because the beacon is an EMPTY
+commit — the one push available *before* the work produces a commit of its own.
+
+**IMPLEMENTED 2026-08-26** (backlog `0c8b39b67665`). This paragraph was prose-only from the day it
+was written: §8 step 2 asserted the brief "must require" the first-act push, and no brief ever did.
+`scripts/handoff-fire.sh`'s cloud payload — the tree's only cloud brief emitter, since the API leg
+(`scripts/cloud-create-api.py`) takes no prompt at all — carried its sole push instruction under
+*"read this before you finish"*, i.e. at the wrong end of the session. So `C1 NOT-STARTED` past the
+900 s boot budget was being read, by `bin/cc-cloud` and by every human reading its row, as "never
+booted", while in fact it also covered every healthy session not yet 15 minutes from its first
+commit. The payload now opens with a `FIRST ACT` block — `git switch -c <branch>` (with a
+`|| git switch` fallback, because the web harness may have put the VM on that branch already) →
+`git commit --allow-empty` → `git push -u origin HEAD` — placed *ahead* of the brief, and the
+finish-time block behind it now says only `git push`. Pinned by `tests/handoff-fire-cloud.bats`
+cases 20 (the beacon, and the create→beacon→push order) and 21 (it precedes the brief, and the
+brief is still delivered); both are RED against the pre-change tree, case 17 green on both as the
+control.
+
 ### 4.2 The discriminator the whole design rests on
 
 Measured, not assumed:
@@ -776,7 +797,10 @@ Before any cloud session is fired, in this order:
 1. `cc-cloud declare --id <id> --branch <b> --paths <what it will land> --url <session url>` —
    an undeclared cloud session is unobservable, and `declare` refuses without `--id`/`--branch`.
 2. The session's brief must require **pushing the declared branch as its first act**, so that
-   absence past the boot budget means something (§4.1).
+   absence past the boot budget means something (§4.1). ✅ **BUILT 2026-08-26** — the `FIRST ACT`
+   block at the head of `scripts/handoff-fire.sh`'s cloud payload; see §4.1's IMPLEMENTED note for
+   what it replaced and why an empty commit is the load-bearing part. Until then this step was a
+   requirement on a brief that no emitter satisfied.
 3. §5.2 must be wired first — otherwise `com.claude.team-orphan-reaper` may archive the team
    while the session is healthy.
 4. On completion, `cc-cloud retire --id <id>` — or let C3 `LANDED` render it silent, which it does
@@ -817,6 +841,13 @@ is the safe one. A reservation that never binds expires into `U0 UNKNOWN` (never
 finding** (§6.5). If the CLI create route ships a bundle of the local tree rather than cloning the
 remote, then the branch the VM pushes may not be the branch this box declared. Until one fire
 settles it, declare the branch the *brief* names and treat a mismatch as `U0`, not as absence.
+
+*(Narrowed 2026-08-26 by the beacon, not closed by it.* The payload's first act is `git switch -c
+<the declared name>`, so the VM **creates** the declared branch rather than pushing whatever it
+happened to be on — the two names cannot diverge by accident on the CLI leg any more, whichever tree
+the VM started from. What is still unsettled is the remote it pushes to: a bundle-mode VM whose
+`origin` is not this repo's GitHub remote satisfies its own instruction and is still invisible here,
+and that is a `U0` case exactly as written above.)*
 
 ---
 

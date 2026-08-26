@@ -461,3 +461,63 @@ EOF
   [ -s "$CLOUD_DECL_LOG" ]
   [ ! -f "$BATS_TEST_TMPDIR/pf-off.log" ]                # the override SKIPS the probe, not just its verdict
 }
+
+# ── 20/21 — THE BOOT BEACON, i.e. the absence contract made executable (backlog 0c8b39b67665) ────
+# docs/plans/CLOUD_OBSERVABILITY.md §4.1 is the whole reason `NOT-STARTED` is a verdict rather than
+# a shrug: "no ref" is FOUR worlds (never started · died at boot · refused entitlement · booted and
+# working with nothing pushed yet), and only a contract that the session's FIRST act is a push
+# separates the fourth from the other three. §8 step 2 asserts that contract on the brief. Nothing
+# in the tree implemented it: before this change the ONLY push instruction in the payload sat under
+# "read this before you finish", so a session 20 minutes into honest work and a session that never
+# booted produced the identical observation, and bin/cc-cloud's C1 arm reported the second for both.
+#
+# The empty commit is load-bearing and is why case 20 asserts it BY NAME: it is the only push
+# available before the work produces a commit of its own. A beacon that required something to
+# commit would still be silent in exactly the case the contract exists to cover.
+#
+# RED-PROOF (MEASURED 2026-08-26, re-runnable). Use a REAL WORKTREE, not a hand-assembled scratch
+# tree — `git worktree add --detach /tmp/rp <pre-fix sha>`, then copy this file in:
+#
+#   RED there, green here : 20 21   (20 because `git commit --allow-empty` occurs 0 times in that
+#                                    payload; 21 because that tree's sole push instruction lives in
+#                                    the finish-time block, i.e. AFTER the brief)
+#   green on BOTH trees   : 17      — the control, unchanged by this work
+#
+# The header's scratch-tree recipe is the WRONG instrument for these three and was measured to be:
+# assembled by hand it also fails 17, which is green on both real trees, because the fire refuses
+# before the create for want of a lib nobody thought to copy. A false RED on the control is
+# indistinguishable from a real one at the point you are reading the output.
+
+@test "20 the payload's FIRST ACT is an empty-commit push — absence is only informative with it" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: t" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ -s "$BATS_TEST_TMPDIR/create.log" ]
+  local sw beacon push
+  sw="$(grep -n 'git switch -c claude/fire-'  "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  beacon="$(grep -n 'git commit --allow-empty' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  push="$(grep -n 'git push -u origin HEAD'    "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$beacon" ] || { echo "the payload never asks for the empty boot commit — §4.1's contract is prose again"; false; }
+  [ -n "$sw" ]
+  [ -n "$push" ]
+  # create → beacon → push. Any other order pushes nothing, or pushes to a ref nothing holds (B1).
+  [ "$sw" -lt "$beacon" ] || { echo "the beacon commit must FOLLOW the branch it lands on (sw=$sw beacon=$beacon)"; false; }
+  [ "$beacon" -lt "$push" ] || { echo "the push must FOLLOW the beacon commit (beacon=$beacon push=$push)"; false; }
+  # …and it is stated as the FIRST act, not as one more thing to remember at the end.
+  grep -qi 'FIRST ACT' "$BATS_TEST_TMPDIR/create.log"
+}
+
+@test "21 the beacon PRECEDES the brief — first means first, and the brief is still delivered" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: t" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  local beacon brief ret
+  beacon="$(grep -n 'git commit --allow-empty' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  brief="$(grep -n  'cloud venue gate fixture payload' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  ret="$(grep -n    'HOW TO RETURN YOUR WORK' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  # The brief is the CONTROL half: a beacon that displaced the task would be a worse defect than
+  # the one being fixed.
+  [ -n "$brief" ] || { echo "the brief itself is no longer in the payload"; false; }
+  [ "$beacon" -lt "$brief" ] || { echo "the boot beacon must precede the brief (beacon=$beacon brief=$brief)"; false; }
+  [ "$brief" -lt "$ret" ]    || { echo "the return block must stay AFTER the brief (brief=$brief ret=$ret)"; false; }
+}
