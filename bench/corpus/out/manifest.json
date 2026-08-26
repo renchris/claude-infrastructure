@@ -1,0 +1,179 @@
+{
+  "corpus_version": "1.0",
+  "built": "2026-08-26",
+  "viewport": {
+    "width": 1280,
+    "height": 900
+  },
+  "tokens": {
+    "blue600": "#3B82F6",
+    "blue700": "#1D4ED8",
+    "gray900": "#111827",
+    "gray600": "#4B5563",
+    "gray400": "#9CA3AF",
+    "gray200": "#E5E7EB",
+    "gray50": "#F9FAFB",
+    "white": "#FFFFFF",
+    "radius": "8px",
+    "gap": "16px",
+    "grid": 8
+  },
+  "control": "clean.html",
+  "counts": {
+    "total_variants": 13,
+    "dom_detectable": 9,
+    "pixels_only": 3
+  },
+  "scoring": {
+    "true_positive": "names the right defect class AND points at the right target",
+    "near_miss": "notices something wrong at the right target, wrong class",
+    "false_positive": "reports a defect on the clean control, or on an unmodified element of a defect page",
+    "note": "The control exists so a detector that reports problems everywhere scores badly. A run with zero findings on clean.html is a precondition for the rest of the score meaning anything."
+  },
+  "defects": [
+    {
+      "id": "spacing-gap",
+      "klass": "spacing-inconsistency",
+      "summary": "Third KPI card sits 23px from its neighbour; every other gap is 16px.",
+      "css": ".kpi-card:nth-child(3) { margin-left: 23px; }",
+      "target": ".kpi-card:nth-child(3)",
+      "detectable_by": "dom",
+      "magnitude": "7px deviation from a 16px rhythm",
+      "dom_blind_because": "",
+      "severity": "medium",
+      "html_override": {}
+    },
+    {
+      "id": "align-1px",
+      "klass": "misalignment",
+      "summary": "The table block is 1px left of the header block it should align with.",
+      "css": ".panel { transform: translateX(-1px); }",
+      "target": ".panel",
+      "detectable_by": "dom",
+      "magnitude": "1px horizontal",
+      "dom_blind_because": "",
+      "severity": "low",
+      "html_override": {}
+    },
+    {
+      "id": "radius-drift",
+      "klass": "token-drift",
+      "summary": "Second KPI card uses a 6px corner radius; the token is 8px.",
+      "css": ".kpi-card:nth-child(2) { border-radius: 6px; }",
+      "target": ".kpi-card:nth-child(2)",
+      "detectable_by": "dom",
+      "magnitude": "2px of 8px",
+      "dom_blind_because": "",
+      "severity": "low",
+      "html_override": {}
+    },
+    {
+      "id": "type-scale",
+      "klass": "typographic-scale",
+      "summary": "One KPI label is 17px; the scale is 12/14/16/24.",
+      "css": ".kpi-card:nth-child(4) .kpi-label { font-size: 17px; }",
+      "target": ".kpi-card:nth-child(4) .kpi-label",
+      "detectable_by": "dom",
+      "magnitude": "17px, off-scale by 1px",
+      "dom_blind_because": "",
+      "severity": "medium",
+      "html_override": {}
+    },
+    {
+      "id": "token-color-drift",
+      "klass": "token-drift",
+      "summary": "Primary button fill is #1D4ED3; the token is #1D4ED8.",
+      "css": ".btn-primary { background: #1D4ED3; }",
+      "target": ".btn-primary",
+      "detectable_by": "dom",
+      "magnitude": "5/255 on the blue channel; below the human just-noticeable difference",
+      "dom_blind_because": "",
+      "severity": "low",
+      "html_override": {}
+    },
+    {
+      "id": "grid-offgrid",
+      "klass": "grid-violation",
+      "summary": "Section heading has a 13px top margin; the grid is 8px.",
+      "css": ".section-title { margin-top: 13px; }",
+      "target": ".section-title",
+      "detectable_by": "dom",
+      "magnitude": "13px, 5px off the 8px grid",
+      "dom_blind_because": "",
+      "severity": "low",
+      "html_override": {}
+    },
+    {
+      "id": "contrast-plain",
+      "klass": "contrast",
+      "summary": "Helper text is #9CA3AF on white: 2.54:1, below the 4.5:1 floor.",
+      "css": ".helper { color: #9CA3AF; }",
+      "target": ".helper",
+      "detectable_by": "dom",
+      "magnitude": "2.54:1 against a 4.5:1 requirement",
+      "dom_blind_because": "",
+      "severity": "high",
+      "html_override": {}
+    },
+    {
+      "id": "overflow-clip",
+      "klass": "overflow",
+      "summary": "A table cell clips its text; the descender row is cut mid-glyph.",
+      "css": ".cell-venue { max-height: 18px; overflow: hidden; display: block; }",
+      "target": ".cell-venue",
+      "detectable_by": "dom",
+      "magnitude": "scrollHeight exceeds clientHeight",
+      "dom_blind_because": "",
+      "severity": "high",
+      "html_override": {}
+    },
+    {
+      "id": "touch-target",
+      "klass": "accessibility",
+      "summary": "Secondary button is 30px tall; the minimum touch target is 44px.",
+      "css": ".btn-secondary { padding-top: 6px; padding-bottom: 6px; line-height: 16px; }",
+      "target": ".btn-secondary",
+      "detectable_by": "dom",
+      "magnitude": "30px against a 44px floor",
+      "dom_blind_because": "",
+      "severity": "high",
+      "html_override": {}
+    },
+    {
+      "id": "contrast-on-gradient",
+      "klass": "contrast",
+      "summary": "Hero caption is white over a gradient that runs pale at the caption's position, so the text washes out in its right half.",
+      "css": ".hero { background: linear-gradient(100deg,#1E3A8A 0%,#3B82F6 45%,#DBEAFE 100%); } .hero-caption { color: #FFFFFF; }",
+      "target": ".hero-caption",
+      "detectable_by": "pixels",
+      "magnitude": "ratio falls from ~8.6:1 at the left edge to ~1.2:1 at the right",
+      "dom_blind_because": "getComputedStyle returns background-color rgba(0,0,0,0) for the caption and a background-image string for the ancestor. There is no numeric backdrop colour to contrast against, so the standard ratio computation has no second operand and axe-core reports 'incomplete' rather than a violation. The actual backdrop luminance varies across the element's own width.",
+      "severity": "high",
+      "html_override": {}
+    },
+    {
+      "id": "optical-centering",
+      "klass": "optical-alignment",
+      "summary": "The play glyph in the round button is geometrically centred but reads left-heavy, because a triangle's visual mass sits behind its bounding box centre.",
+      "css": ".glyph-btn .glyph { /* geometrically centred by flexbox; no offset applied */ }",
+      "target": ".glyph-btn .glyph",
+      "detectable_by": "pixels",
+      "magnitude": "ink centroid ~2px left of the geometric centre",
+      "dom_blind_because": "Every box-model number is symmetric: the flex container centres the glyph and getBoundingClientRect on the glyph is exactly centred within the button. The asymmetry lives in the distribution of ink inside the glyph's own box, which no DOM API exposes. Detecting it requires computing the centroid of the rendered pixels and comparing it to the geometric centre.",
+      "severity": "medium",
+      "html_override": {}
+    },
+    {
+      "id": "hierarchy-inversion",
+      "klass": "visual-hierarchy",
+      "summary": "The destructive secondary action is visually heavier than the primary action beside it, so the eye lands on the wrong button.",
+      "css": ".btn-secondary { background: #111827; color: #FFFFFF; font-weight: 700; border: none; font-size: 16px; padding: 12px 28px; line-height: 20px; } .btn-primary { background: #EFF6FF; color: #3B82F6; font-weight: 400; border: 1px solid #DBEAFE; font-size: 14px; }",
+      "target": ".actions",
+      "detectable_by": "pixels",
+      "magnitude": "secondary carries roughly 3x the visual weight of the primary",
+      "dom_blind_because": "Both buttons have entirely valid styles; nothing is out of range and no token is violated. The defect is the RELATION between them and the intent behind it. A rule could encode 'primary must outweigh secondary', but that requires knowing which is semantically primary and how to compare visual weight -- a judgement, not a measurement.",
+      "severity": "high",
+      "html_override": {}
+    }
+  ]
+}

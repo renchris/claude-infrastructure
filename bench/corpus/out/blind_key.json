@@ -1,0 +1,10 @@
+{
+ "page-A": "align-1px",
+ "page-B": "hierarchy-inversion",
+ "page-C": "contrast-on-gradient",
+ "page-D": "optical-centering",
+ "page-E": "token-color-drift",
+ "page-F": "type-scale",
+ "page-G": "spacing-gap",
+ "page-H": "clean"
+}
