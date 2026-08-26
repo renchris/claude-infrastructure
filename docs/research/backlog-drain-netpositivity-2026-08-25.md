@@ -448,3 +448,96 @@ agent free-text filed **mid-session**, which no hook reaches — only the `CLAUD
 and that is advisory. So mechanical coverage is roughly the close-time third; the rest rides on the
 rule being read and followed. **If the test above fails, look here first** before concluding the
 diagnosis was wrong.
+
+---
+
+## 10. CORRECTION — L1's named command cannot produce L1's stated outcome (2026-08-26)
+
+L1 was dispatched as backlog `37b112d8950d`. It could not run — and while establishing why, its
+headline projection was refuted. **Both halves are mechanism facts, measured, not opinions about
+priority: L1 is still the right lever. Its recipe and its number are wrong.**
+
+### 10a. `sweep --record` cannot convert the 457 — that is the design, not a bug
+
+L1 says the sweep "converts ~400 more from unknown to known freshness." It cannot. **Only
+probe-capable rows are ever stamped**, and `cc-premise:2996-3003` says so in its own voice:
+
+> 🚨 ONLY PROBED ROWS ARE STAMPED […] stamping [an unprobed row] as validated would drive the
+> never-validated headline to ZERO while ~400 of 564 rows had had nothing run against them. That is
+> not a weaker metric than none, it is a WORSE one. […] **A currency stamp records a MEASUREMENT. No
+> measurement, no stamp.**
+
+**Measured on a synthetic 3-row store** (2 rows with a stored falsifier, 1 with none) — the fixture
+this claim rests on, since the real store is unreadable off-box (§10c):
+
+| pass | `never validated` | sweep's own currency line |
+|---|---|---|
+| before | 3 of 3 | — |
+| `sweep --record` | **1 of 3** | `2 row(s) PROBED and recorded · 1 row(s) carry no probe at all, so nothing was asked and nothing was stamped` |
+| `sweep --record` again | **1 of 3** | identical — a second pass never reaches it |
+
+`never_validated` folds as `select(.v == null)` over the validation snapshot
+(`bin/cc-backlog:4606`), and that snapshot is written only from `all_verdicts`, which collects a row
+only when `probe_out["probed"]` is true. **The no-probe population is a permanent floor under any
+number of passes.**
+
+Applied to the live store: §2 measures **only 47 live rows carry a falsifier probe at all**, and
+501 − 457 = **44 are already validated** — so ~44 of those ~47 have already been swept. A full pass
+today moves `never validated` from 457 to roughly **454, not to ~57**. The same defect voids the
+retirement figure: `--close-falsified` can only close a row whose probe PASSED, and only
+probe-capable rows are ever asked, so the immediate yield is **~0–3 rows, not 54–89**.
+
+### 10b. The gating number is `coverage`, not `freshness` — and the repo already publishes it
+
+The two are different questions and the repo keeps them apart on purpose
+(`cc-premise:2152-2158`): `freshness` asks *has a probe RUN against this row*, `coverage` asks *can
+any arm SPEAK for it at all*. **L1 quotes the first and needs the second.**
+
+```
+cc-premise coverage        → probeable / covered (stored · derived-plan · derived-postland) /
+                             UNCOVERED — no arm speaks for these rows,  by generator, largest first
+```
+
+**Run that first.** It is one command, it costs no probes, and its `UNCOVERED` count is the real
+size of L1 — the number of rows that must have a falsifier *authored* before any sweep can speak for
+them. Note `covered` includes two **derived** arms that need no stored probe, so `UNCOVERED` may be
+materially below 457; **the true figure is unknown until the command runs on the box**, and this
+correction deliberately does not guess it. That authoring is per-row judgment against each row's
+title and dod-ref — the real shape and cost of L1, and not a sweep. §2's "This is a scheduling
+problem, not a design problem" is therefore **half right**: the *running* is scheduling; the
+*coverage* is authoring work that has never been done.
+
+**L1's ranking survives.** §7's blind-spot 1 ("live staleness is projected, not measured") is still
+the reason to do it, and `coverage`'s per-generator breakdown is what makes L2 precise — it names
+which mint sites to fix rather than inferring them.
+
+### 10c. L1 is box work, and nothing stopped it being dispatched off-box
+
+The ledger is `~/.claude/autonomy/backlog.jsonl` — local-only state, in the repo's own taxonomy
+`ineligible-box` (§6a: 191 items refused for exactly this). The off-box worker got
+`cc-backlog list --all --json` → `[]` and `cc-premise sweep` → `ledger unreadable … fail-open`
+against a store that does not exist there. **Every disposition it could write — `done`, `block`,
+`reopen` — would have landed in a throwaway container file.**
+
+`cc-eligible` had **no ledger entry at all**, and the item's title spells no word in any other list
+— no `~/.claude`, no launchd, no hook — so it read as ordinary repo work and was promoted. One
+burned worker slot, through the same door the `flyctl` entry was added to close (`96c57c1c4a6c`).
+
+Fixed in this commit: three narrow BOX spellings (`backlog-store`, `backlog-census`,
+`falsifier-sweep`) plus four tests. **`\bcc-backlog\b` was tested and REJECTED as the spelling** —
+1,900 corpus lines, worse than the `\bcredentials?\b` (506) this file already rejects, because
+cc-backlog is the verb every generator calls to file a row; filing a row is ordinary work a VM does
+perfectly well. The safe unit is the ledger-wide *operation* and the *store artifact*, never the
+tool — pinned by a lookalike control in both directions.
+
+### 10d. What the local session should actually run
+
+```
+cc-premise coverage                      # ← FIRST. the real size of L1; freshness cannot answer it
+cc-premise sweep --record                # stamps the already-capable rows (small; minutes)
+cc-premise sweep --record --close-falsified 5
+```
+
+Then the actual work: author falsifiers (`cc-backlog falsify <id> --falsifier '<probe>'`) for the
+`UNCOVERED` rows, largest generator first, and re-run the sweep. Note `falsify` **refuses a probe
+that already exits 0** against a live item, so each one is checked as it is attached.

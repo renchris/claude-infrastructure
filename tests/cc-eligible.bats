@@ -323,3 +323,44 @@ verdict() { "$CE" check "$1" 2>&1 | head -1; }
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"verdict=eligible"* ]] || { echo "$output"; false; }
 }
+
+# ── THE LEDGER ITSELF (2026-08-26, backlog 37b112d8950d) ────────────────────────────────────────
+
+@test "LEDGER: a census of the store's own rows is box work, refused" {
+  # Regression for the item that exposed the class. Its real title spells no word in any other
+  # list — no `~/.claude`, no launchd, no hook — so it read as ordinary repo work, was promoted,
+  # and the off-box worker found `cc-backlog list --all --json` returning `[]` against a store that
+  # exists only on this disk. The verdict is `ineligible-box` because the missing artifact IS this
+  # box's state, exactly as the `dot-claude` entry says when the path is spelled out.
+  local id; id="$(add drain "run the falsifier sweep across all 457 unvalidated live backlog rows, then close-falsified")"
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=ineligible-box"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"falsifier-sweep"* || "$output" == *"backlog-store"* ]] || { echo "named the class but not the spelling: $output"; false; }
+}
+
+@test "LEDGER: the store artifact and the ledger-wide census verbs each fire" {
+  local id; id="$(add drain "fold backlog.jsonl and re-read cc-backlog freshness after cc-premise coverage")"
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=ineligible-box"* ]] || { echo "$output"; false; }
+}
+
+@test "LEDGER lookalike: FILING a row is ordinary repo work and stays eligible" {
+  # The width guard, and the reason `\bcc-backlog\b` is NOT the spelling: it matches 1,900 lines of
+  # this repo's corpus because cc-backlog is the verb every generator calls to file a row. An item
+  # that merely CALLS the tool is repo work a VM does perfectly well; only a ledger-wide census or
+  # the store artifact refuses. Without this control the entry above would pass on a substring list
+  # that had quietly taken the whole drain lane off the cloud tap.
+  local id; id="$(add ctl "file a row with cc-backlog add when the postland gate goes red, and cite the backlog id in the commit")"
+  run "$CE" check "$id"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=eligible"* ]] || { echo "$output"; false; }
+}
+
+@test "LEDGER lookalike: an ordinary English 'backlog' is not the store — boundaries hold" {
+  local id; id="$(add ctl "the review backlog for the docs rewrite is long; rotate the drain lane document")"
+  run "$CE" check "$id"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=eligible"* ]] || { echo "$output"; false; }
+}
