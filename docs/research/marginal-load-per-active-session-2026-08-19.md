@@ -219,6 +219,50 @@ correctly refusing a 60 s quiet window — `C1 FAIL` (tertile swing 1.56× > 1.3
 6 unmeasurable), `VERDICT: NO-ATTRIBUTION`, exit 1, withheld fit labelled withheld. The instrument
 is ready; only the fleet is missing.
 
+### 6b · The run is now ONE command, because §6 was a loop with a judgment in it (2026-08-26)
+
+§6 above is correct and was still a **worksheet**: two commands plus a paragraph instructing a
+human to read three control verdicts, decide whether *this* refusal means "keep going" or "stop,
+that is the answer", re-run, and repeat — for hours, on a box they are also trying to work on.
+The interpreter that protocol delegates is a person. `scripts/capacity-marginal-run.sh`
+(`tests/capacity-marginal-run.bats`, 12 rows) is that interpreter:
+
+```sh
+bash scripts/capacity-marginal-run.sh
+```
+
+It measures nothing itself — every number still comes from `capacity-marginal.sh`, whose three
+controls remain the product. It only decides when to stop asking, and two of its decisions are
+ones a reader of §6 would plausibly get wrong:
+
+- **An `n_eff` shortfall is NOT the finding.** §6's terminal condition — *"the refusal repeats
+  with the same term"* — taken literally fires on the **first** short window every single time,
+  and that is the one refusal extending the window *cures*. The sampler already words it
+  *"uninformative, not refuting"* precisely so a reader can tell them apart; the driver acts on
+  the distinction, so an `n_eff` shortfall **resets** the streak and only a substantive refusal
+  (a census that does not track the load, a ratio drifting across tertiles, an ACTIVE count that
+  never moved) counts toward it. Stopping on the curable refusal is B3's own defect, one layer up.
+- **The preflight is keyed on the dangerous effect, not on `uname`.** "Refuse unless Darwin" is
+  wrong in both directions: a Darwin box with a dead ACTIVE sensor passes it and then burns the
+  whole window discovering C3 could never have passed, and a Linux VM with a stubbed
+  `cc_sp_active` passes it too. So it measures the two facts that actually identify the run — is
+  `cc_sp_active` measurable, is there a resident fleet — and refuses (exit 4) before spending an
+  hour. Off-box that is the line that fires; the suite's **first** row is the positive control,
+  because a guard that refused everywhere would pass every refusal test and quietly make this
+  measurement unrunnable.
+
+`UNDECIDED` is its own exit (**6**), distinct from a coefficient (**0**) and from the
+repeated-refusal finding (**5**) — the four values spanning 30× are what an inconclusive run
+reported as a number looks like. On a PASS it **re-greps** the citation sites per §6a rather than
+storing them, and reports rather than edits: a site that STATES a derivation takes the measured
+value, one that quotes the figure as REFUTED history keeps saying so, and the two are not
+distinguishable by path.
+
+Verified off-box: 12/12, with each of the three load-bearing rows watched to **fail** against a
+mutant of the behaviour it pins. (14 assertions in the first draft were dead no-ops — caught by
+this repo's own `bats-assert-liveness` RATCHET and revived with its fixer, which is why the
+red-proof is the re-run after that, not before it.)
+
 ---
 
 ## 7 · What this does not do
