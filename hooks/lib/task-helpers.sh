@@ -158,6 +158,43 @@ summary_stale() {
 }
 
 # Regenerate _summary.json for a task list directory.
+#
+# TWO-STATE VERDICT (exit status is the channel), same contract shape as find_active_list above.
+#   rc 0 → the summary on disk is CURRENT — every task json that `find` listed was read, and
+#          the published counts cover all of them.
+#   rc 1 → $1 is not a directory (unchanged legacy contract).
+#   rc 2 → UNDETERMINED — the task files could not be read in full, so the PREVIOUS summary was
+#          deliberately left in place rather than overwritten with a short one. Stale beats
+#          wrong: a board that silently loses a task is worse than one that stops advancing.
+# NOTE FOR CALLERS: rc 2 is a *verdict*, not a failure. A caller under `set -e` MUST spell the
+# call `regenerate_summary "$dir" || true` (or test `$?`), or the shell aborts — see
+# task-completed-index.sh:69, the one `set -euo pipefail` caller.
+#
+# WHY THE READ IS NO LONGER A PIPELINE. This body used to spell the read as
+# `find … -exec cat {} + | jq -s … > "$temp"` inside an `if`, so the verdict it acted on was a
+# PIPELINE's status. In a SOURCED library the shell options belong to whoever sourced it, and
+# `pipefail` is exactly what decides whether that status reports the reader or only the writer.
+# The three callers do not agree: task-completed-index.sh runs `set -euo pipefail`, while
+# task-mutation-index.sh and setup-task-symlinks.sh set neither. Measured on one fixture of 5
+# task files with 1 unreadable (controls all-readable, green in both regimes):
+#   pipefail OFF (mutation-index, setup-task-symlinks) → summary REWRITTEN, totalOnDisk=4 of 5
+#                  — a task silently vanishes from the board, and the hot TaskCreate/TaskUpdate
+#                    path is the one that takes this branch.
+#   pipefail ON  (completed-index)                     → summary NOT written at all, silently.
+# Both returned rc 0, so no caller could tell either outcome from success. Same input, opposite
+# results, decided by a setting the library cannot see. The read's rc is now captured from the
+# reader ITSELF, which has one meaning under every caller.
+#
+# The count reconciliation below is a SECOND, independent guard, and it covers a population the
+# rc cannot: a task json that is present and readable but EMPTY (a torn write mid-TaskCreate)
+# makes `cat` succeed while `jq -s` slurps one element fewer. rc catches unreadable, the count
+# catches unaccounted-for.
+#
+# LIMIT, stated rather than hidden: a dir holding a permanently empty or permanently unreadable
+# *.json now stops publishing summaries instead of publishing a short one. `summary_stale` keeps
+# returning 0 for it, so each session start retries and nothing corrupts — but it will not
+# advance until the bad file is removed. That is the intended trade, and rc 2 is what makes it
+# visible instead of silent.
 regenerate_summary() {
     local dir="$1"
     [ ! -d "$dir" ] && return 1
@@ -175,21 +212,46 @@ regenerate_summary() {
           > "$dir/_summary.json" 2>/dev/null || true
         return 0
     fi
-    local temp
+    # Denominator for the reconciliation: the files `find` just listed. Counted without a
+    # pipeline (and so without a second `pipefail` question) and without `mapfile`, which
+    # /bin/bash on macOS 3.2.57 does not have — same constraint as find_active_list above.
+    local want=0
+    while IFS= read -r _; do want=$((want + 1)); done <<< "$json_files"
+
+    local temp raw rc_read=0 got
     temp=$(mktemp)
-    if find "$dir" -maxdepth 1 -name '*.json' ! -name '_summary.json' -exec cat {} + 2>/dev/null \
-      | jq -s --arg listid "$listid" --argjson hwm "$hwm" \
+    raw=$(mktemp)
+    # `|| rc_read=$?` captures the READER's own status — unaffected by the caller's pipefail —
+    # and keeps a failed read from aborting a `set -e` caller before the rc 2 verdict is returned.
+    find "$dir" -maxdepth 1 -name '*.json' ! -name '_summary.json' -exec cat {} + \
+        > "$raw" 2>/dev/null || rc_read=$?
+    if [ "$rc_read" -ne 0 ]; then
+        rm -f "$temp" "$raw"
+        return 2
+    fi
+    if jq -s --arg listid "$listid" --argjson hwm "$hwm" \
         '{taskListId: $listid, highwatermark: $hwm, totalOnDisk: length,
           pending: [.[] | select(.status == "pending")] | length,
           in_progress: [.[] | select(.status == "in_progress")] | length,
           completed: [.[] | select(.status == "completed")] | length,
           plans: ([.[].description | [scan("\\[Plan: ([^]]+)\\]") | .[0]] | .[]] | unique),
           tasks: (sort_by(.id | tonumber))}' \
-        > "$temp" 2>/dev/null && [ -s "$temp" ]; then
-        mv "$temp" "$dir/_summary.json"
+        < "$raw" > "$temp" 2>/dev/null && [ -s "$temp" ]; then
+        got=$(jq -r '.totalOnDisk' "$temp" 2>/dev/null)
+        if [ "$got" = "$want" ]; then
+            mv "$temp" "$dir/_summary.json"
+            rm -f "$raw"
+        else
+            # Read every file, but the board would not account for all of them — refuse to
+            # publish it and keep the previous summary.
+            rm -f "$temp" "$raw"
+            return 2
+        fi
     else
-        rm -f "$temp"
+        rm -f "$temp" "$raw"
+        return 2
     fi
+    return 0
 }
 
 # Generate TASKS.md from a _summary.json file.

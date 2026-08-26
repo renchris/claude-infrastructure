@@ -40,7 +40,10 @@ TASK_DIR="$TASKS_DIR/$EFFECTIVE_ID"
 
 # Cleanup temp files on any exit
 TEMP=""
-# shellcheck disable=SC2329  # invoked indirectly via trap, which shellcheck cannot follow
+# shellcheck disable=SC2329,SC2317  # invoked indirectly via trap, which shellcheck cannot follow.
+# Both codes: shellcheck >=0.10 reports the unreached FUNCTION as SC2329, while 0.9.x reports its
+# BODY commands as SC2317. Only one fires on any given version, so the pair keeps this file clean
+# on both rather than only on whichever the author happened to be running.
 cleanup() { [ -n "$TEMP" ] && rm -f "$TEMP"; }
 trap cleanup EXIT
 
@@ -65,8 +68,11 @@ if [ -n "$TASK_LIST_ID" ] && [ -f "$INDEX" ]; then
     fi
 fi
 
-# Regenerate _summary.json
-regenerate_summary "$TASK_DIR"
+# Regenerate _summary.json. rc 2 is a VERDICT, not a failure — the task files could not be read
+# in full, so the previous summary was kept rather than overwritten with a short one. This script
+# is the one `set -euo pipefail` caller, so it must be spelled `|| true`, or the shell aborts here
+# and skips the `_current` symlink and TASKS.md below. See task-helpers.sh regenerate_summary.
+regenerate_summary "$TASK_DIR" || true
 
 # Update _current symlink (in case it drifted)
 if [ -n "$EFFECTIVE_ID" ]; then
