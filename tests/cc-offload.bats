@@ -622,3 +622,61 @@ EOF
     [[ "$output" == *"cc-offload $v"* ]] || false
   done
 }
+
+# ── THE API LANE'S BRIEF IS A PAYLOAD, NOT A MESSAGE (backlog 0c8b39b67665) ────────────────────
+# This lane used to hand cc-notify the operator's brief RAW — no branch, no push instruction of any
+# kind. The sibling CLI lane at least told its session to push before finishing; this one told it
+# nothing, so a session created here could do the whole job, commit it, and be reclaimed with the
+# container. And for the instrument it is worse than a lost result: with no push instructed, "no ref
+# past the boot budget" is the EXPECTED reading of a healthy session, so CLOUD_OBSERVABILITY.md
+# §4.3's C1 NOT-STARTED had no contract under it while three oracles still consumed it — one of them
+# the destructive `com.claude.team-orphan-reaper` (§5.2).
+#
+# RED-PROOF (re-runnable): replay against `git show 9e00181c:bin/cc-offload`. RED — the delivered
+# brief is `$(cat "$pf")` and nothing else, so neither the branch nor `--allow-empty` appears.
+@test "up --via api delivers the BOOT BEACON with the brief, keyed on the branch it declared" {
+  echo "brief" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+import sys
+print("session_beacon")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+  # The operator's own brief still arrives — the trailer is an addition, never a replacement.
+  grep -q 'brief' "$CALLS" || false
+  grep -q -- '--allow-empty' "$CALLS" \
+    || { echo "the delivered brief instructs no boot beacon — a healthy session reads NOT-STARTED"; false; }
+  # THE SAME branch that was declared. A beacon pushed to a different name is watched by nothing,
+  # which is the §11.2 finding-2 defect (a declaration against a branch with no producer) arriving
+  # from the other side.
+  local br
+  br="$(grep -o -- '--branch claude/fire-[A-Za-z0-9._/-]*' "$CALLS" | head -1 | awk '{print $2}')"
+  [ -n "$br" ] || { echo "no branch was declared at all"; false; }
+  grep -q "git switch -c $br" "$CALLS" || { echo "the beacon targets a branch other than the declared $br"; false; }
+}
+
+@test "up --via api REFUSES before the create when the trailer library has no beacon" {
+  # A create is quota. Spending it on a session that is unobservable by construction is the failure
+  # this lane exists to end, so the precondition is checked first and fail-closed — the same
+  # direction as the CLI lane's own lib-absent refusal.
+  echo "brief" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+import sys, os
+open(os.environ["CALLS"],"a").write("api-create-REACHED\n")
+print("session_never")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  : >"$BATS_TEST_TMPDIR/empty-lib.sh"
+  CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" \
+  CC_OFFLOAD_CREATE_LIB="$BATS_TEST_TMPDIR/empty-lib.sh" \
+    run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -ne 0 ]
+  ! grep -q 'api-create-REACHED' "$CALLS" || { echo "quota spent on an unobservable session"; false; }
+}

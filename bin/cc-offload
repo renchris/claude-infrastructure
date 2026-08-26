@@ -513,6 +513,27 @@ cmd_up_api() {
   local api="${CC_OFFLOAD_CREATE_API:-$ROOT/scripts/cloud-create-api.py}"
   [ -f "$api" ] || { note "cc-offload: missing $api"; return 3; }
 
+  # ── THE BRIEF IS NOT THE PAYLOAD, AND THIS LANE USED TO SHIP IT AS IF IT WERE ──────────────────
+  # `cc-notify --cloud "$sid" "$(cat "$pf")"` below sent the operator's brief RAW: no branch, no push
+  # instruction, nothing. The sibling CLI lane at least told its session to push before finishing;
+  # this one told it nothing at all, so a session created here could do the whole job, commit it, and
+  # be reclaimed with the container — the §13.3 failure this lane exists to end, arriving one step
+  # later. Worse for the instrument: with no push instructed, "no ref past the boot budget" is the
+  # EXPECTED reading of a healthy session, and every §5.2 oracle keying on C1 NOT-STARTED — including
+  # the destructive `com.claude.team-orphan-reaper` — was reading a verdict with no contract under it.
+  #
+  # The trailer is sourced, never re-typed. `switch -c … || switch …` is correct on this lane too:
+  # the branch is authorised at create in `outcomes.git_info.branches`, so the platform may already
+  # hold it, and the fallback is what makes ONE text right for both lanes. (backlog 0c8b39b67665)
+  local clib="${CC_OFFLOAD_CREATE_LIB:-$ROOT/scripts/lib/cloud-create.sh}"
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  [ -f "$clib" ] && . "$clib"
+  if ! command -v cc_cloud_offbox_trailer >/dev/null 2>&1; then
+    note "cc-offload: $clib defines no cc_cloud_offbox_trailer — a brief with no boot beacon makes"
+    note "  the session structurally unobservable (CLOUD_OBSERVABILITY.md §4.1). Refusing before any create."
+    return 3
+  fi
+
   # The router is the arbiter — never re-rank accounts here.
   if [ "$account" = auto ]; then
     [ -n "$ACCOUNTS_BIN" ] && account="$("$ACCOUNTS_BIN" --route general 2>/dev/null)"
@@ -570,7 +591,9 @@ cmd_up_api() {
         || note "cc-offload: custody could not be opened for $sid — the close-integrity arm is NOT armed for it."
     fi
 
-    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$(cat "$pf")" >/dev/null 2>&1
+    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" \
+      "$(cat "$pf")
+$(cc_cloud_offbox_trailer "$br")" >/dev/null 2>&1
     local drc=$?
     if [ "$drc" != 0 ]; then
       note "cc-offload: $sid created+declared but the brief did NOT queue (cc-notify exit $drc)."

@@ -383,6 +383,35 @@ diff_size() {  # <repo> <trunk-ref> <branch> → changed-file count (large senti
   case "$n" in ''|*[!0-9]*) printf '999999' ;; *) printf '%s' "$n" ;; esac
 }
 
+# ── BEACON-ONLY: the branch a session pushes to prove it BOOTED, carrying no work ────────────────
+# CLOUD_OBSERVABILITY.md §4.1's contract is that a cloud session's FIRST act is an empty commit
+# pushed to its declared branch, so that a later absence is informative. That contract was prose
+# until backlog 0c8b39b67665 implemented it (scripts/lib/cloud-create.sh cc_cloud_offbox_trailer),
+# and implementing it changes what THIS file sees: "booted and produced nothing" used to arrive as
+# silence and now arrives as a real branch with nothing in it.
+#
+# Left alone, each such branch is fetched, re-authored, and handed to ship-land, which finds an empty
+# diff and refuses — one `✗ … lander exited N` per dud session per sweep, forever, and a non-zero
+# reconcile exit assembled entirely out of sessions that did exactly as they were told. So the
+# emptiness is read BEFORE the land is attempted.
+#
+# BY CONTENT, never by commit count. A beacon-only branch holds one commit and a squashed real branch
+# holds one too; `rev-list --count` reads 0 after a sibling rebase and proves nothing
+# (scripts/land-verify.sh:6-11). `diff --name-only trunk...branch` asks the only question that
+# decides landability: is there a single file this branch would change.
+#
+# IT ABSTAINS RATHER THAN SKIPS. An undecidable diff — missing trunk ref, no merge base, unreadable
+# repo — returns 1, "not provably empty", and the branch takes the ordinary path so the lander gets
+# its say. Reading "cannot tell" as "empty" would drop real work silently, which is the expensive
+# direction; the cheap one is a wasted lander invocation, which is what this already cost.
+beacon_only() {  # <repo> <trunk-ref> <branch> → 0 provably no content difference · 1 otherwise
+  local out
+  "$GIT_BIN" -C "$1" rev-parse --verify --quiet "$2" >/dev/null 2>&1 || return 1
+  "$GIT_BIN" -C "$1" rev-parse --verify --quiet "refs/heads/$3" >/dev/null 2>&1 || return 1
+  out="$("$GIT_BIN" -C "$1" diff --name-only "$2...refs/heads/$3" 2>/dev/null)" || return 1
+  [ -z "$out" ]
+}
+
 # ── the identity translation (see "THE IDENTITY WALL" in the header) ─────────────────────────
 git_ident_email() {  # <repo> → the author email git ITSELF would use (empty ⇒ none resolvable)
   # `git var GIT_AUTHOR_IDENT`, never `git config user.email`: the same arbiter githooks/pre-commit
@@ -458,7 +487,7 @@ strip_trailer_block() {  # <repo> <msg-file> → 0 the final paragraph WAS the t
 REAUTH_DETAIL=""
 reauthor_branch() {  # <repo> <trunk-ref> <branch> <decl-id> → 0 ok (rewritten OR not needed) · 1 no
   local repo="$1" trunk="$2" b="$3" id="$4"
-  local want base sha ae ce tree new f n=0 total=0 stripped=0 date
+  local want base sha ae ce tree ptree new f n=0 total=0 stripped=0 dropped=0 date
   REAUTH_DETAIL=""
 
   want="$(git_ident_email "$repo")" || want=""
@@ -523,6 +552,27 @@ EOF
       REAUTH_DETAIL="could not read the tree of $sha."
       rm -f "$f"; return 1
     fi
+    # DROP AN EMPTY COMMIT — the boot beacon's other end (backlog 0c8b39b67665). Every cloud
+    # session's FIRST act is now `git commit --allow-empty` + push (CLOUD_OBSERVABILITY.md §4.1),
+    # so every cloud branch that reaches this replay carries one commit whose tree equals its
+    # parent's. `git rebase` KEEPS an already-empty commit — measured, not assumed: a scratch
+    # rebase of beacon+work onto a moved trunk replays both — so without this, ONE EMPTY COMMIT
+    # PER CLOUD LAND accumulates on the trunk, each saying nothing about any change. The beacon is
+    # a signal to the firing side, not a change to the repository, and it has already done its
+    # whole job by the time a land is possible.
+    #
+    # The test is the same one `beacon_only` uses one level up — a tree identical to its parent's
+    # contributes nothing — applied per commit rather than per branch, so it also drops an empty
+    # commit a session made for any other reason. Skipping it cannot lose work by construction:
+    # the replay carries trees, and this commit's tree is already what the previous one wrote.
+    #
+    # A BEACON-ONLY branch can never reach here (`beacon_only` skips it at both call sites, before
+    # this function), which is what keeps the `total -eq 0` refusal below meaning what it says.
+    ptree="$("$GIT_BIN" -C "$repo" rev-parse --verify --quiet "$new^{tree}" 2>/dev/null)" || ptree=""
+    if [ -n "$ptree" ] && [ "$tree" = "$ptree" ]; then
+      dropped=$((dropped + 1))
+      continue
+    fi
     if ! "$GIT_BIN" -C "$repo" log -1 --format=%B "$sha" > "$f" 2>/dev/null; then
       REAUTH_DETAIL="could not read the commit message of $sha."
       rm -f "$f"; return 1
@@ -569,6 +619,7 @@ EOF
   fi
   REAUTH_DETAIL="re-authored $total commit(s) as <$want> ($n of them were unattributable); provenance in Cloud-session / Original-commit / Original-branch trailers, and '$REMOTE' still holds the originals."
   [ "$stripped" -gt 0 ] && REAUTH_DETAIL="$REAUTH_DETAIL On $stripped of them the VM's OWN attribution trailer block was dropped — this repo's commit-msg hook refused it — and the provenance trailers re-express it in a form the hook allows."
+  [ "$dropped" -gt 0 ] && REAUTH_DETAIL="$REAUTH_DETAIL $dropped empty commit(s) were dropped — the boot beacon and any other commit whose tree matched its parent's; a rebase would have carried them onto the trunk saying nothing."
   return 0
 }
 
@@ -686,6 +737,12 @@ EOF
   rc=0; fetch_branch "$C_REPO" "$TARGET" || rc=$?
   [ "$rc" -eq 0 ] || die 65 "could not bring '$TARGET' into $C_REPO as a local head — $FETCH_DETAIL"
   [ -n "$FETCH_DETAIL" ] && echo "→ $TARGET — $FETCH_DETAIL"
+  # Checked only now, because emptiness is a fact about CONTENT and content needs a local head — the
+  # remote sha `classify` had is not enough to answer it.
+  if beacon_only "$C_REPO" "$C_TRUNK" "$TARGET"; then
+    echo "· $TARGET — beacon only: it booted and pushed, and no file differs from $C_TRUNK. Nothing to land."
+    exit 0
+  fi
   derive_paths "$C_ID"
   rc=0; reauthor_branch "$C_REPO" "$C_TRUNK" "$TARGET" "$C_ID" || rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -724,6 +781,12 @@ while IFS= read -r b || [ -n "$b" ]; do
     continue
   fi
   [ -n "$FETCH_DETAIL" ] && echo "→ $b — $FETCH_DETAIL"
+  # Before re-authoring or sizing it: a beacon-only branch is a session that BOOTED and produced
+  # nothing, which is a true and useful observation and not a landing candidate.
+  if beacon_only "$C_REPO" "$C_TRUNK" "$b"; then
+    echo "· $b — skipped: beacon only — it booted and pushed, and no file differs from $C_TRUNK."
+    continue
+  fi
   derive_paths "$C_ID"
   rc=0; reauthor_branch "$C_REPO" "$C_TRUNK" "$b" "$C_ID" || rc=$?
   if [ "$rc" -ne 0 ]; then

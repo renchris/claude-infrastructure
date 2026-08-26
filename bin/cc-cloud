@@ -107,6 +107,23 @@
 #   C5 ALIVE        ref exists and advanced inside the budget                               no row
 #   C6 ABANDONED    ref exists, not landed, past life_s                                       ROW
 #
+# ── C1 IS A VERDICT ABOUT BOOTING ONLY BECAUSE THE FIRE DEMANDS A BOOT PUSH ──────────────────────
+# C1 reads "never started". Nothing this program can observe says that: no-ref is equally consistent
+# with a session that booted fine and has simply not committed anything yet. The claim is bought
+# ENTIRELY by the contract in CLOUD_OBSERVABILITY.md §4.1 — the brief's FIRST act is
+# `git switch -c <branch>` + an `--allow-empty` commit + `git push -u` — so a booted session holds a
+# ref within seconds and absence past the budget is a fact about BOOTING rather than about progress.
+#
+# THE PRODUCER IS `cc_cloud_offbox_trailer` (scripts/lib/cloud-create.sh), appended to the payload by
+# BOTH fire lanes (scripts/handoff-fire.sh --cloud and bin/cc-offload cmd_up_api), each of which
+# refuses BEFORE the create if that function is unreachable. Until 2026-08-26 the contract was prose
+# in §4.1 and §8 step 2 and nothing else (backlog 0c8b39b67665): the CLI lane asked for the push at
+# the END of the work and the API lane asked for nothing, under which C1 fires on healthy sessions
+# ~15 min in. Named HERE because this file is where the verdict is read, and a reader who does not
+# know a producer exists cannot tell whether C1 means "never booted" or "has not pushed yet" — two
+# readings with opposite cures. If either lane ever ships a payload without it, that refusal is the
+# guard; this arm has no way to detect the omission after the fact.
+#
 # ── ORDERING: C3 PRECEDES C1, because a branch ref is DELETED on the way to being landed ─────────
 # A raw branch-presence probe scores a landed-then-pruned session identically to one that never
 # booted: both are `ls-remote` rc=0 with empty stdout. That is not a hypothetical. This repo's own
