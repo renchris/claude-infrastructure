@@ -86,6 +86,145 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-26 — drain recycle #242: method 211 — THE PRODUCER WAS NEVER WHAT MOVED THE FLOOR, AND A
+  TEST NAMING FOUR SITES RAN ONE WHOLE-TREE SCAN FOUR TIMES.** I took #241's own named-cheapest lead
+  — the two membership predicates it drained six siblings of and deliberately left — and, for the
+  SEVENTH consecutive link, "go where your predecessor pointed" paid. It paid twice: once in the
+  drain itself, and once in a measurement I only took because the sites did not fit the shape the
+  landed constant was measured on.
+
+  **THE TWO SITES.** `scripts/worktree-gc.sh`'s `is_live_cwd` and `scripts/stranded-sweep.sh`'s
+  `mine_match` both end in a function-final `grep -qxF` pipeline, so the rc the caller reads is the
+  pipeline's; under the pipefail both files set, a MATCH kills the producer with SIGPIPE and the
+  caller is handed a non-zero meaning the opposite of what was found. `is_live_cwd` answers the
+  `elif is_live_cwd "$cpath"` rung of the occupancy ladder in the janitor that REMOVES worktrees;
+  `mine_match` answers `! mine_match "${sha}"` in the `--mine` mode whose entire contract is
+  *exit 1 = YOUR content was dropped*, so an inverted answer silently DROPS the report of a real
+  own-session strand. **Both LATENT, and saying which matters:** LIVE_CWDS measured **545 bytes**
+  at 18:14Z with four further keep-arms beneath that rung, and `mine_match`'s feed is one commit's
+  trailer block, which the file's own header records that NOTHING writes (0 of the last 500 trunk
+  commits). Drained because the class is being closed out and both feeds only grow, not because
+  either is failing today.
+
+  **THE MEASUREMENT WORTH MORE THAN THE DRAIN, AND IT CAME FROM A PREDICTION MY OWN GATE REFUSED.**
+  `mine_match` is `git show | grep -q` — an EXTERNAL producer in a TWO-stage pipeline, which is
+  neither shape #241 measured. I predicted, in writing, that at **55,721 B** (where #241's builtin
+  two-stage was 1/20 racy) an external producer would already be ≥15/20 inverted. **It was 0/20.**
+  Re-run at #241's own grid points, 20 trials per size, needle on line 1, second column counting the
+  needle exactly as the subject matches it:
+
+      external  cat | grep -q    20/20 CORRECT at 17,456 · 23,233 · 37,172 · 55,722 B
+                                 19/20 INVERTED at 65,580 B · 20/20 INVERTED at 87,151 B and above
+      builtin   printf | grep -q (#241)   safe 37,121 · 1/20 at 55,721 · ALWAYS 87,122+
+
+  **The two bands COINCIDE.** #241's table pairs a builtin two-stage with an external THREE-stage
+  and reads as though the producer's externality lowers the floor. It does not. What lowered the
+  floor in that row was the extra **STAGE** — an intermediate `sed` that writes line by line and can
+  never hand grep one buffer-sized write. **Cite the stage count, not the producer.** A measured
+  constant is a claim with a scope, and the scope here was one variable off.
+
+  **AND THE PARENTHETICAL BESIDE IT DOES NOT REPRODUCE.** #241 landed *"pipefail hands the caller
+  141 (external producer) or 1 (bash builtin)"* into four lint comments and a test. Measured 20/20
+  each at 137,819 B on **GNU bash 3.2.57(1) arm64**: the builtin `printf` answers **141** as well.
+  Both producers, one rc. Its operational advice — test for non-zero, never `-eq 141` — is untouched
+  and still right; only the parenthetical is wrong. **Two links running, a correctly-measured number
+  turned out to carry a scope its sentence did not state.**
+
+  **THE FINDING: A TITLE THAT ASKS ABOUT FOUR FILES AND CODE THAT ANSWERS ABOUT 551.**
+  `tests/test-afunix-path-lint.bats`'s last arm loops over the four suites the absolute-AF_UNIX-bind
+  class actually lived in, and its comment says exactly why that matters — *"Named, so a future
+  refactor that reintroduces the bug in any of them fails HERE with the history attached, not just
+  in the anonymous whole-tree scan."* **The loop variable never reached the subject.** Every
+  iteration ran the same `bash "$LINT" "$REPO/tests"` — the anonymous whole-tree scan the comment
+  contrasts itself against — with `$f` appearing only in an existence check and in the failure
+  message. Measured by planting the violating shape in the FOURTH named site and restoring by
+  sha256: **the lint itself printed `handoff-fire-kitty-daemon.bats`, and the arm reported
+  `whole-tree scan is red while checking boot-resume-launch`.** A red always names site one. The one
+  instrument in the room that knew which file was dirty was overwritten by a loop counter. It was
+  also a byte-for-byte repeat of the sibling real-tree arm four times over: its `CC_AFUNIX_ALLOWLIST=""`
+  reads as a stricter setting, but EMBEDDED_ALLOWLIST is already the empty string.
+
+  **METHOD 212 — WHEN A LOOP NAMES ITS SUBJECTS, CHECK THAT THE LOOP VARIABLE REACHES THE COMMAND.**
+  #241's 211 says count the population a pin claims. This is its neighbour and it is cheaper: a
+  `for x in a b c; do …; done` whose body does not INTERPOLATE `$x` into the thing under test is a
+  fixed assertion wearing a per-item title, and the message it prints on failure names an item it
+  never singled out. **The tell is a loop variable that appears only in an `echo` and in a
+  precondition.** Unspent and one grep: `grep -n 'for [a-z]* in ' tests/*.bats`, then ask whether the
+  body's `run`/subject line mentions the variable at all.
+
+  **THE FIX** is the smallest scope `lint_dir` can be asked about: it takes a directory and
+  enumerates `"$dir"/*.bats`, so each site is copied ALONE into a one-file directory and scanned
+  there. The verdict is then genuinely per-site and the message can only name the file scanned. A
+  second arm was added because the first alone is unfalsifiable — an isolated directory is exactly
+  the fixture a lint that had stopped reading its input would find empty and call clean. It plants
+  the assembled violating shape into a COPY, asserts the scan goes RED *and names that file*, then
+  scans the UNPLANTED copy of the same file and asserts green.
+
+  **THE MUTANT TABLE — four arms across THREE suites, every prediction written before the run and
+  enforced as an rc-93 gate, subjects restored byte-identically by sha256, plan pinned per suite:**
+
+      BASELINE  worktree-gc 108 · stranded-sweep 16 · test-afunix-path-lint 19, all 0 not ok
+      M1  worktree-gc is_live_cwd reverted to -q        predicted 1  got 1
+      M2  stranded-sweep mine_match reverted to -q      predicted 1  got 1
+      M3  afunix per-site scan reverted to whole-tree   predicted 0  got 0
+      M4  afunix control's plant removed                predicted 1  got 1
+
+  **ZERO faults over four.** M3 predicts ZERO on purpose and it carries the whole argument:
+  reverting that fix is INVISIBLE to a green tree, which is exactly why the defect survived, and why
+  attribution had to be proven with a planted site rather than with a mutant. **A uniform prediction
+  tells you nothing about attribution; a table with a deliberate zero in it states which arm owns
+  what.** The harness is #241's with the suite promoted from a module constant to a per-mutant FIELD
+  — a table that ran one suite against mutants in three files would credit the wrong arm.
+
+  **RED-PROOF FIRST, against the unfixed subjects:** worktree-gc 107 → 108 planned with exactly 1
+  not ok, stranded-sweep 15 → 16 with exactly 1, both predicted before the run and both exact, every
+  incumbent arm green — and both failures reported **rc=141**, one for a REGISTERED cwd reading
+  NOT-LIVE and one for our own session's trailer reading NOT MINE. The third arm was GREEN pre-fix
+  because it PINS attribution rather than fixing a red, which is why it needed the planted-site probe.
+
+  **FOUR INSTRUMENT FAULTS, EVERY ONE CAUGHT BY A GATE OR A DISAGREEING COLUMN, NEVER BY A HUNCH.**
+  (1) A probe function that BOTH printed its table row and returned its value through stdout handed
+  the caller the row as well — the "histogram" came back carrying the whole line. The row goes to
+  stdout, the value goes to a FILE. (2) The attribution probe read the site name with a first-match
+  grep and got an empty string: **bats prints the failing ASSERTION'S SOURCE before its output**, so
+  the needle occurs twice and the first occurrence carries `$f` unexpanded. **A first-match grep over
+  a harness's own output reads the harness, not the subject.** (3) My commit gate counted the drained
+  flag cluster FILE-WIDE and refused a correct commit — on a landed COMMENT that quoted the old flag
+  while making a claim about a different property, and on a grandfathered sibling. Narrowed to the
+  two FUNCTION BODIES, comment lines stripped, span equal to subject. (4) The SEEDED fire test added
+  to prove the narrowed gate could still fire then caught its own seeder: the pre-fix `mine_match`
+  line **begins with a pipe**, and a `sed` program delimited by `|` died on it while the captured
+  count read **0** — a false clean indistinguishable from a mute gate. The seed is now built, not
+  sed-derived.
+
+  **NAMED AND DELIBERATELY LEFT, so nobody re-derives it:** `scripts/worktree-gc.sh:1300`,
+  `if printf '%s\n' "$WT_BRANCHES" | grep -qxF "$branch"`, the same inversion in `if` position on the
+  `--prune-branches` path, where a wrong answer deletes a branch whose worktree still exists. Feed
+  measured **1,301 bytes**. Unlike the two drained here it is fully VISIBLE — `pipefail-sigpipe-lint
+  --census` lists it and `pipefail-sigpipe-allow.txt` grandfathers it at count 1 — so it is a
+  tolerated, ratcheted site, and shrinking a shared allowlist is its own act with its own review, not
+  a rider on a commit about sites no detector can see. **That is the difference between absent-from-
+  the-population and grandfathered-by-it**, and it is the distinction #241's 210 exists to make.
+
+  **THE BOARD, and both partitions asserted at every reading.** Open 18:08:51Z: **328 open / 207
+  blocked / 2,338 done / 2 claimed** (535 combined, 2,875 rows). Against #241's floor the `allids`
+  set is UNCHANGED — departures 0, arrivals 0, the `claimed` set byte-identical — **yet FOUR rows
+  moved blocked → open in the 38 minutes between the two links, and they are the exact four #241
+  watched go claimed → blocked inside its own.** The off-box actuator is still moving and still
+  closing nothing: `done` has not moved since #229. **A claim is the actuator's first observable act,
+  a block is a refusal, an unblock is a reconsideration, and a close is its last — say which you
+  mean.** Stores at 18:08:59Z: **0 postland RED pages over a denominator of 2,742** (the 136th
+  consecutive zero), stamps **479**, `pages` **2,099 / 120**, inbox-guard **469 of 469**. Ledger at
+  open: `RUNG=✅ LIVE_SHA=119976eb801f LIVE_LAG=6 LIVE_ADDS=0 LIVE_DIVERGED=0 MIG_FAILED=0` with the
+  breach reason EMPTY and `GATE=stale` for the eighteenth consecutive link.
+
+  **ZERO rows closed by me, ZERO filed.** The whole draw ran GREEN before the land — six suites,
+  **231 tests, 0 skips**, plan == ok on every one, at load 17-26 — including three I had not touched
+  and ran anyway, because a draw is an audit of trunk you did not ask for. `pipefail-sigpipe-lint
+  --census` **151 → 151, LOST=0, NEW=0**, keyed on (path, TEXT) because this diff shifts line numbers,
+  and with the PRE arm extracted from `origin/main` itself rather than remembered. `bats-shellcheck-lint`
+  scoped: clean, 3 suites scanned, 0 blocking, 0 unanalyzable. `alarm-polarity-lint` declared NOT RUN
+  — no file here is an alarm emitter and that lint's own positive control is a known mute.
 - **2026-08-26 — drain recycle #241: method 210 — THE TEST THAT PINS "THE FOUR COPIES" SPANS FOUR OF
   ELEVEN, AND SIX OF THE SEVEN IT DOES NOT SPAN CARRY THE FAIL-OPEN #240 DRAINED FROM A TWELFTH.**
   I took #240's own top recommendation — the `in_own` quartet — and the first thing that fell out was
