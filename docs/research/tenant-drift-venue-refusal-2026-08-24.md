@@ -8,6 +8,10 @@ That file cannot be read, edited, or landed from here, so the item was not attem
 This is the 107th instance of the class `bin/cc-eligible` documents at `CROSS_REPO` — but it is
 **not** the shape that arm refuses, which is why it got through.
 
+> **Re-dispatched 2026-08-26 into the same venue — see §5.** This document landed on trunk and did
+> not park the item, because a dispatch reads the store and not `docs/research/`. The one command
+> that discharges it is in §4 and needs a box that has `~/.claude/autonomy/backlog.jsonl`.
+
 ## 1. Why the cross-repo arm passed it
 
 `cross_repo(project)` (bin/cc-eligible:724) keys on the item's **`project` field**, resolves it
@@ -73,3 +77,43 @@ Neither `cc-backlog` verb could be run from here — this container has no
 `~/.claude/autonomy/backlog.jsonl`, so `block`/`done`/`reopen` would have created a fresh store
 that nothing reads. A write that no reader can see is a fake discharge, which is the failure this
 document exists instead of.
+
+## 5. It re-dispatched. A DOC IS NOT A PARK — measured 2026-08-26
+
+**This document landed on trunk and did not stop anything.** It is an ancestor of `origin/main`
+via `04c00694`, and two days later `485f8f87eb5f` was dispatched **again**, into a venue whose
+constraints are identical in every measured respect:
+
+| Fact | 2026-08-24 | 2026-08-26 (this session) |
+|---|---|---|
+| GitHub scope | `renchris/claude-infrastructure` | `renchris/claude-infrastructure` |
+| reso clone on disk | absent | absent (`~/Development` does not exist) |
+| clone depth | shallow | shallow, 50 commits |
+| `~/.claude/autonomy/backlog.jsonl` | absent | absent |
+| `cc-backlog` on `PATH` | absent | absent |
+| `tenant-drift.yml` / `pnpm` on trunk | neither | neither (`.github/workflows/` = `diagrams.yml`, `hermetic.yml`) |
+
+Two worker slots now spent on one unreachable item, and the second one arrived carrying a freshly
+regenerated premise-check block — so whatever else is true, **the item is not parked.** (From here
+it cannot be distinguished whether §4's `block` was never run or was run and later reopened; the
+observable is that it dispatched as open.)
+
+**The generalisable defect, which is larger than this item.** §4 was written as advice to *the next
+dispatch*, but a dispatch reads the store, not `docs/research/`. Nothing in the pipeline consumes a
+refusal doc, so a cloud-refused item whose only artifact is a document re-enters the wave on every
+cycle, forever, at one burned slot each. The refusal was correct, complete, and pre-derived the fix
+— and was still worth zero, because it was written to the wrong surface. **A refusal is discharged
+by a store write or it is not discharged.**
+
+That changes §1's closing sentence from a question of judgement into arithmetic. The predicate
+widening is no longer "if an on-box session judges one item worth it" — the cost is not one item,
+it is one slot per wave until someone spends a single command. The command is in §4 and needs a box
+with the store; it remains unrunnable from this venue, for the same reason it was on 2026-08-24.
+
+**Still not fixed from here, and the guard is now confirmed mechanical rather than remembered.**
+`bin/cc-eligible`'s shallow guard keys on the dangerous effect — a cloud label minted from a
+truncated clone — and `git rev-parse --is-shallow-repository` returns `true` here at 50 commits, so
+`HistoryOracle.certify()` returns `shallow` and abstention is automatic. The rule against building
+the venue rule from inside the lane stands on its own footing anyway: *a session this lane created
+cannot verify a change to the lane* (`bin/cc-eligible:221`) — if a widened `cross_repo` were wrong,
+every failure mode is invisible from inside the session the lane produced.
