@@ -474,6 +474,27 @@ commit_aged() {
   git push -q origin main
 }
 
+# the LIVE-LAYER time lever: put the live clone's HEAD ON a commit whose committer date is $1 seconds
+# in the past, then move trunk ONE fresh pure-edit commit ahead of it. That is the quantity
+# deploy-live.sh's hours budget reads (deploy-live.sh:1451-1452 — "the age of the commit the live
+# layer is ON, which is the only clock that keeps ticking when trunk is quiet"). Isolated from the
+# commit lever (lag 1, far under 25), from the added-file lever (it appends to a tracked file), and
+# from the divergence lever (the live HEAD stays an ancestor of trunk, so LIVE_DIVERGED is 0).
+# commit_aged above is its exact complement: that one ages OUR commit and leaves the live layer's
+# fresh, and the pair differ in one variable — WHICH commit carries the age.
+live_at_aged() {
+  local age="$1" ts
+  ts=$(( $(date +%s) - age ))
+  echo agedlive >> base.txt; git add base.txt
+  GIT_AUTHOR_DATE="$ts +0000" GIT_COMMITTER_DATE="$ts +0000" git commit -q -m "aged live commit"
+  git push -q origin main
+  git -C "${WRAP_LIVE_REPO:?live repo path required}" fetch -q origin
+  git -C "$WRAP_LIVE_REPO" reset -q --hard origin/main   # the live layer is now ON the aged commit
+  echo fresh >> base.txt; git add base.txt; git commit -q -m "fresh work"
+  git push -q origin main
+  git -C "$WRAP_LIVE_REPO" fetch -q origin
+}
+
 # a failed-migration record: the converger reporting it could NOT put a landed conclusion into its
 # enforcing store (settings.json, a plist, PATH).
 mk_failed_migration() {
@@ -865,15 +886,65 @@ mk_timeout_shim() {                        # $1 = argv token to fail on ; $2 = m
 }
 
 # ── 4. past the TIME budget with lag UNDER the commit budget ⇒ 🚀 (whichever trips FIRST, not AND) ──
-@test "live behind PAST the time budget, lag under the commit budget ⇒ RUNG=🚀" {
+# THE CLOCK IS THE LIVE LAYER'S COMMIT, NOT THIS SESSION'S HEAD (2026-08-26, recycle #235). Until
+# then this test aged THIS session's HEAD by 2h and left the live clone sitting on a base commit
+# seconds old, then credited the pass to "past the time budget". That fixture makes only the WRONG
+# arm reachable: the quantity deploy-live.sh budgets on is the age of the commit the LIVE LAYER IS
+# ON, which was ZERO in it — so the arm's only positive control proved the clock the subject should
+# not have been reading. Both directions are pinned now, one variable apart, and 4b is that old
+# fixture with its assertion inverted.
+@test "live layer ON a commit past the time budget, lag under the commit budget ⇒ RUNG=🚀" {
   ok_state
   WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
-  commit_aged 7200                          # HEAD committed 2h ago; the default budget is 60 min
-  git -C "$WRAP_LIVE_REPO" fetch -q origin
+  live_at_aged 25200                        # the live layer is ON a 7h-old commit; the budget is 6h
   run bash "$LEDGER" --machine
   [ "$status" -eq 0 ]
   [ "$(field "$output" LIVE_SRC)" = "behind" ]
   [ "$(field "$output" LIVE_LAG)" = "1" ]   # 1 ≤ 25 — the commit budget is NOT what tripped
+  [ "$(field "$output" LIVE_ADDS)" = "0" ]  # an EDIT — nor is the added-file cause
+  [ "$(field "$output" LIVE_DIVERGED)" = "0" ]   # nor divergence: three arms pinned OFF, one left
+  [ "$(field "$output" RUNG)" = "🚀" ]
+  run bash "$LEDGER" --full
+  [ "$(printf '%s' "$output" | grep -c "PAST budget")" -ge 1 ]
+}
+
+# ── 4b. THE PAIRED OPPOSITE: MY commit is old, the LIVE layer's commit is fresh ⇒ ✅, never 🚀 ──
+# One variable apart from #4 — which commit carries the age. A session that has been working for
+# hours and lands onto a live layer the converger advanced seconds ago is not past ANY converge
+# budget: the bytes the machine runs are current, and the next tick carries the rest. Asserting ✅
+# on the exact fixture the pre-#235 test asserted 🚀 on is what makes the clock change falsifiable.
+@test "MY HEAD past the time budget but the live layer's commit is fresh ⇒ RUNG=✅, never 🚀" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  commit_aged 25200                         # HEAD committed 7h ago — the pre-#235 arm tripped here
+  git -C "$WRAP_LIVE_REPO" fetch -q origin  # the live clone SEES it and stays on its own fresh HEAD
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_SRC)" = "behind" ]
+  [ "$(field "$output" LIVE_LAG)" = "1" ]
+  [ "$(field "$output" LIVE_ADDS)" = "0" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+  [ "$(printf '%s' "$output" | grep -c "^RUNG=🚀")" -eq 0 ]
+}
+
+# ── 4c. THE CALIBRATION, pinned by ONE fixture and ONE variable ──
+# 60 minutes was calibrated for the session-HEAD clock, where "my landing is an hour old and still
+# not live" is reasonable impatience about a session's OWN work. On the live-layer clock the
+# sibling's own calibrated value for this same quantity is CC_DEPLOY_MAX_LAG_HOURS=6, and
+# re-pointing the arm without re-calibrating it would fire 🚀 at every close on a lane that is
+# legitimately mid-converge — the alarm-polarity bound this rung's header block opens with. Both
+# halves are asserted so that neither the default nor the seam can go vacuous.
+@test "live commit 2h old is INSIDE the 6h default ⇒ ✅; the same fixture at BUDGET_MIN=60 ⇒ 🚀" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  live_at_aged 7200                         # 2h — inside the 6h default, outside the old 60m one
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_SRC)" = "behind" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+  export WRAP_LIVE_BUDGET_MIN=60            # the seam, set to the pre-#235 default
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
   [ "$(field "$output" RUNG)" = "🚀" ]
 }
 

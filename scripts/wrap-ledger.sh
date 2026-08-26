@@ -84,9 +84,12 @@
 #   BOUNDED, by the same alarm-polarity law as 👤. The converger (deploy-live.sh --auto) runs on a
 #   600s launchd tick, so a session that lands and closes within the minute ALWAYS sees live < HEAD.
 #   A rung that fired there would fire at EVERY write-close and carry exactly zero bits. Only lag
-#   PAST the converge budget is news: WRAP_LIVE_BUDGET_COMMITS (25) or WRAP_LIVE_BUDGET_MIN (60,
-#   measured from HEAD's commit time), whichever trips FIRST — mirroring CC_DEPLOY_MAX_LAG_COMMITS /
-#   CC_DEPLOY_MAX_LAG_HOURS in deploy-live.sh. Within budget the fact is ATTACHED to the ✅ readout
+#   PAST the converge budget is news: WRAP_LIVE_BUDGET_COMMITS (25) or WRAP_LIVE_BUDGET_MIN (360,
+#   measured from the commit the LIVE LAYER IS ON — NOT from this session's HEAD; the two are
+#   different quantities and this sentence asserted both until 2026-08-26, see compute_live_layer),
+#   whichever trips FIRST — mirroring CC_DEPLOY_MAX_LAG_COMMITS / CC_DEPLOY_MAX_LAG_HOURS in
+#   deploy-live.sh, now on the same clock as well as the same name. Within budget the fact is
+#   ATTACHED to the ✅ readout
 #   ("live layer converging") instead of spending a rung. A FAILED migration
 #   ($CC_MIGRATIONS_STATE/failed/*.json — the converger reporting it could NOT put a landed
 #   conclusion into settings.json / a plist / PATH) trips 🚀 immediately, with no budget: no tick
@@ -780,12 +783,21 @@ count_open_custody() {
 # ── LIVE LAYER — the ENFORCING store, one edge past trunk (the 🚀 rung; see the header) ──
 LIVE_REPO="${WRAP_LIVE_REPO:-$HOME/Development/claude-infrastructure}"
 LIVE_BUDGET_COMMITS="${WRAP_LIVE_BUDGET_COMMITS:-25}"
-LIVE_BUDGET_MIN="${WRAP_LIVE_BUDGET_MIN:-60}"
+# 360 MINUTES = CC_DEPLOY_MAX_LAG_HOURS (2026-08-26, recycle #235). This was 60, calibrated for the
+# clock this arm used to read — THIS session's HEAD, where "my landing is an hour old and still not
+# live" is reasonable impatience about a session's own work. compute_live_layer now reads the age of
+# the commit the LIVE LAYER IS ON, which is the quantity deploy-live.sh budgets on, and on that
+# quantity the sibling's own calibrated value is 6h. The two moved together on purpose: re-pointing
+# the arm while leaving 60 would fire 🚀 at every close on a lane that is legitimately mid-converge
+# (the alarm-polarity bound the header block opens with), and re-calibrating without re-pointing
+# would only make a blind arm blinder. The two auditors of this one question now agree on both arms
+# and both values.
+LIVE_BUDGET_MIN="${WRAP_LIVE_BUDGET_MIN:-360}"
 # A budget that is not a number is a budget nobody can reason about — and `[ 3 -gt "" ]` is a hard
-# error thrown from inside a Stop hook. Fall back to the default (deploy-live.sh:81-82 does the same
-# for the same reason), never to "unbounded".
+# error thrown from inside a Stop hook. Fall back to the default (deploy-live.sh:110-111 does the
+# same for the same reason), never to "unbounded".
 case "$LIVE_BUDGET_COMMITS" in ''|*[!0-9]*) LIVE_BUDGET_COMMITS=25 ;; esac
-case "$LIVE_BUDGET_MIN"     in ''|*[!0-9]*) LIVE_BUDGET_MIN=60 ;; esac
+case "$LIVE_BUDGET_MIN"     in ''|*[!0-9]*) LIVE_BUDGET_MIN=360 ;; esac
 MIG_DIR="${CC_MIGRATIONS_STATE:-$HOME/.claude/autonomy/migrations}/failed"
 
 # LIVE=1 iff the live layer is VERIFIED at/above HEAD. LIVE_SRC carries why: ok · behind · n-a
@@ -833,7 +845,7 @@ _count_failed_migrations() {
 # Sets LIVE / LIVE_SRC / LIVE_SHA / LIVE_LAG / LIVE_DIVERGED / MIG_FAILED / LIVE_BREACH. Called ONLY on the
 # ✅-eligible path with a resolved trunk (see the rung block) — a worse rung cannot be changed by it.
 compute_live_layer() {
-  local my_origin live_origin sha lag lag_rc now ct age_s _adds _arc _ahead _hrc
+  local my_origin live_origin sha lag lag_rc now ct ct_rc age_s _adds _arc _ahead _hrc
 
   # `git config --get remote.origin.url` is the cheapest probe that answers "same repo?" and it
   # touches no network. It is compared BYTE-EQUAL on purpose: a fuzzy match (ssh-vs-https, .git
@@ -955,13 +967,40 @@ compute_live_layer() {
   # mechanism, so a session in another repo must never be convicted by it.
   MIG_FAILED="$(_count_failed_migrations "$MIG_DIR")"
 
-  # ── the budget: whichever trips FIRST (deploy-live.sh:78-82) ──
-  # %ct is the COMMITTER date, not the author date, and that is the right clock: an old patch
-  # re-committed today has just entered the pipeline and deserves a fresh budget, whereas its author
-  # date would start it already expired. `date +%s` can fail on a broken box ⇒ age 0 ⇒ no time trip.
+  # ── the budget: whichever trips FIRST (deploy-live.sh:1444-1461) ──
+  # THE CLOCK IS THE LIVE LAYER'S COMMIT, NOT THIS SESSION'S HEAD (2026-08-26, recycle #235). This
+  # read was `git log -1 --format=%ct HEAD` — the age of the commit THIS session is on — while the
+  # header block called the budget "measured from HEAD's commit time" AND "mirroring
+  # CC_DEPLOY_MAX_LAG_COMMITS / CC_DEPLOY_MAX_LAG_HOURS in deploy-live.sh" inside ONE sentence.
+  # Both clauses were accurate about their own half and they name DIFFERENT quantities:
+  # deploy-live.sh:1451-1452 reads %ct of the commit the LIVE LAYER IS ON, and its own comment says
+  # why — "the only clock that keeps ticking when trunk is quiet". Ours reset every time trunk moved.
+  #
+  # IT COULD ONLY FAIL IN ONE DIRECTION, AND IT IS THE DIRECTION THAT MATTERS. Wherever this arm
+  # decides at all, LIVE_SHA is an ancestor of HEAD — divergence breaches two branches up — so its
+  # committer date is the older of the two in any history git's own commands produce (rebase and
+  # cherry-pick both restamp). The session-HEAD arm was therefore strictly WEAKER than the one it was
+  # named after, and its blind region is exactly an ACTIVE session: every commit resets the clock to
+  # zero, so the more a session lands into the undeployed backlog, the FURTHER its close sits from a
+  # budget whose whole job is to notice the live layer standing still. Measured on this box at
+  # 2026-08-26T05:43:03Z: the live layer had been pinned on a74e844377f8 for 5h56m across five
+  # consecutive drain links, lag climbing 2→4→6→8→10, and each link's close read its own HEAD at 29m
+  # and rendered "live layer converging (10 commit(s) behind; within the converge budget)".
+  #
+  # THE DEFAULT MOVED WITH THE CLOCK AND MAY NOT MOVE SEPARATELY (see LIVE_BUDGET_MIN). %ct, not
+  # %at, is still the right date on either clock: an old patch re-committed today has just entered
+  # the pipeline and deserves a fresh budget, where its author date would start it already expired.
+  #
+  # Read from the LIVE repo: its own HEAD is resolvable there by construction, the rev-parse above
+  # having succeeded, whereas THIS repo may never have fetched it — the same asymmetry that puts the
+  # --is-ancestor question on the live side and the added-file diff on ours. Bounded like every other
+  # live-side read, and a failed read leaves ct=0 ⇒ age 0 ⇒ no time trip: an unresolvable sensor may
+  # not breach, the same law as LIVE_LAG=? and LIVE_ADDS=?. `date +%s` failing lands in the same arm.
   now="$(date +%s 2>/dev/null || echo 0)"
-  ct="$(git log -1 --format=%ct HEAD 2>/dev/null || echo 0)"
+  ct="$(_bounded "${WRAP_LIVE_TIMEOUT_S:-5}" git -C "$LIVE_REPO" log -1 --format=%ct "$LIVE_SHA" 2>/dev/null)"
+  ct_rc=$?
   case "$now" in ''|*[!0-9]*) now=0 ;; esac
+  if [ "$ct_rc" -ne 0 ]; then ct=0; fi
   case "$ct"  in ''|*[!0-9]*) ct=0 ;; esac
   age_s=0
   if [ "$now" -gt 0 ] && [ "$ct" -gt 0 ] && [ "$now" -gt "$ct" ]; then age_s=$((now - ct)); fi
