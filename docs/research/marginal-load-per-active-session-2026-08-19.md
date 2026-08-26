@@ -41,16 +41,34 @@ control the DoD named, **proven able to fail**.
 
 | value | stated method | what is actually wrong | repairable from the archive? |
 |---|---|---|---|
-| **2.5–5** | published, quoted into `capacity-admit.sh:698` and `agent-teams-enforce.sh:220` | **A ratio, not a marginal** — an aggregate ÷ N. Already refuted in the DoD. Its own source pair (load1 27.4 → 44.4 at 9 all-active) gives 1.89, not 2.5–5. | **No** — the arithmetic is the defect. |
+| **2.5–5** | published, quoted into `capacity-admit.sh` and `agent-teams-enforce.sh` (grep `2.5-5 runnable threads`) | **A ratio, not a marginal** — an aggregate ÷ N. Already refuted in the DoD. Its own source pair (load1 27.4 → 44.4 at 9 all-active) gives 1.89, not 2.5–5. | **No** — the arithmetic is the defect. |
 | **1.89** | `(44.4 − 27.4) / 9` | A **two-point delta**. n = 2 ⇒ no control is *computable*, let alone passable; and the 9 sessions arrived together with the instrument that measured them. | **No** — a control needs a series. |
 | **0.172** | "pooled OLS" | **No committed derivation exists on trunk** (grep: the only occurrence in the repo is the DoD line listing it). Pooled ⇒ dominated by the ambient confounder (§3). | **No** — unauditable *and* unidentified. |
 | **0.566** | "in-band bucket median" | Same: no committed derivation. Bucketing narrows the load range, which *weakens* identification rather than fixing it. | **No** — same two reasons. |
 
 **The 30× span is therefore not disagreement between measurements. It is four different quantities,
 two of which cannot be re-derived.** Any future citation of one of them is a citation of nothing;
-`capacity-admit.sh:698` and `hooks/agent-teams-enforce.sh:220` both currently quote the 2.5–5 row and
-should be updated to the measured value once §6 has been run — **not** before, and not to one of the
-other three.
+**THREE** sites currently quote the 2.5–5 row, and all three should be updated to the measured value
+once §6 has been run — **not** before, and not to one of the other three values:
+
+<!-- QUOTE-SITE CENSUS: one path per line, ratcheted by tests/capacity-admit-coverage.bats case 31 -->
+    scripts/lib/capacity-admit.sh
+    hooks/agent-teams-enforce.sh
+    scripts/lib/spawn-presence.sh
+
+Find them by CONTENT, `grep -rn '2.5-5 runnable threads' scripts hooks`, never by line number. The
+indented block above is the census case 31 reads; prose elsewhere in this document may mention these
+files for other reasons without claiming they carry the figure.
+
+> 🚨 **This paragraph said TWO sites until 2026-08-26, and it carried line numbers that had both
+> already drifted** (`capacity-admit.sh:698`→750, `agent-teams-enforce.sh:220`→235; the first moved
+> again under a comment-only land). The missed third is the load-bearing one:
+> `spawn-presence.sh`'s ACTIVE-population block *derives* its `~4-8 concurrent actives` ceiling from
+> the 2.5–5 figure, so a PASS that updated only the two sites named here would leave the number that
+> sets the actual spawn ceiling still quoting a value this document refutes. Same defect, same week,
+> same cause as the caller census in `capacity-admit.sh`'s own `WHERE IT STILL BINDS` block — a
+> hand-maintained list of call sites, with nothing that reds when the tree gains one. Cite by
+> CONTENT; a line number is a citation with an expiry date and no alarm.
 
 ---
 
@@ -180,8 +198,10 @@ right instrument, and the thread-unit refinement in §7 becomes the next increme
 nicety).
 
 On a PASS, quote the coefficient **with its standard error and its window**, update
-`scripts/lib/capacity-admit.sh:698` and `hooks/agent-teams-enforce.sh:220` (both currently carry
-2.5–5), and close `193ae8ddce72` with the landed sha.
+**all three** sites that carry 2.5–5 — locate them with `grep -rn '2.5-5 runnable threads' scripts
+hooks`, never by line number, and note that `spawn-presence.sh` derives its `~4-8 concurrent actives`
+ceiling from the figure, so it needs the re-derivation and not just the substitution (§3) — and close
+`193ae8ddce72` with the landed sha.
 
 ---
 

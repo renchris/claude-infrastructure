@@ -496,3 +496,70 @@ calls_gate() { grep -qE '^[^#]*[^_a-zA-Z]cc_capacity_admit[[:space:]]' "$1"; }
   grep -qF 'e981656df348' "$LIB" \
     || { echo "the refutation of e981656df348's premise left $LIB — a future reader will re-file the ceiling as 'blocked on 193ae8ddce72', which is the loop this case closes"; false; }
 }
+
+@test "31 the REFUTED 2.5-5 figure's quote sites are DERIVED from the tree, not written down (item e981656df348)" {
+  # WHY THIS CASE EXISTS. Case 30 ratchets one hand-maintained census (which callers bind the
+  # underived 2.0/core ceiling). Fixing it surfaced a SECOND one, in the same week and with the same
+  # cause: docs/research/marginal-load-per-active-session-2026-08-19.md refutes the published 2.5-5
+  # figure and tells a future session which quote sites to update on a PASS — and that list said TWO
+  # while the tree had THREE. The miss was the load-bearing one: scripts/lib/spawn-presence.sh does
+  # not merely cite 2.5-5, it DERIVES its `~4-8 concurrent actives` ceiling from it, so a PASS that
+  # updated only the two named sites would leave the number that sets the actual spawn ceiling still
+  # quoting a value that document refutes. A census with no falsifier decays in one direction only.
+  #
+  # DERIVED IN BOTH DIRECTIONS, like case 30 — a site that GAINS the figure must appear in the doc,
+  # and a site that LOSES it must leave. A one-way check is how the original defect survived.
+  #
+  # THIS CASE MUST NOT OUTLIVE ITS SUBJECT. On a §6 PASS the figure is replaced everywhere and this
+  # census goes empty; that is the case-25 discriminator, so the empty state fails LOUD with the
+  # instruction to rewrite the case to the new shape rather than letting it silently pass.
+  DOC="$REPO/docs/research/marginal-load-per-active-session-2026-08-19.md"
+  [ -f "$DOC" ] || skip "the refutation doc is gone — if 2.5-5 was re-derived, rewrite this case to the new shape"
+
+  sites="$(cd "$REPO" && grep -rl '2\.5-5 runnable threads' scripts hooks bin 2>/dev/null | sort)"
+  [ -n "$sites" ] \
+    || { echo "no file quotes 2.5-5 any more. If §6 PASSED and the figure was re-derived, this case must be REWRITTEN to ratchet the new value's quote sites (case 25's discriminator), not deleted — an empty census that passes is how the next one rots"; false; }
+
+  # BOTH ARMS READ THE SAME DELIMITED BLOCK, and that symmetry is the fix for this case's own second
+  # false green. The first draft asserted "the doc NAMES every site" with a whole-file `grep -qF`,
+  # which passed the undercount red-proof: dropping spawn-presence.sh from the census still left the
+  # path in the doc's PROSE (the history callout explains that exact miss by name), so the guard was
+  # satisfied by the sentence describing the defect it was meant to catch. A census arm must read the
+  # census, never the document — the same lesson as the anchor scoping below, in the other direction.
+  # for the reason case 30 hit and this case re-hit HARDER: the doc necessarily mentions these same
+  # paths in prose for other reasons (the refutation, the history callout, §6's protocol), so a
+  # whole-file path scrape cannot tell "this file carries the figure" from "this file is discussed".
+  # The first draft of this arm tried a keyword-proximity regex instead and SILENTLY PASSED its own
+  # red-proof — the stale-entry direction did not red at all, because the fuzzy context match simply
+  # failed to fire and `grep && { false; }` swallowed it. A delimited block is read exactly.
+  listed="$(awk '/QUOTE-SITE CENSUS/{f=1;next} f&&/^    [a-z]/{print $1;next} f&&NF==0{next} f{exit}' "$DOC")"
+  [ -n "$listed" ] \
+    || { echo "the QUOTE-SITE CENSUS block in $DOC lost its shape — case 31 can no longer read the list it ratchets; restore the marker comment and the 4-space-indented one-path-per-line block"; false; }
+  # ARM 1 — every site the TREE has must be IN THE CENSUS (the original defect: spawn-presence.sh).
+  for f in $sites; do
+    case "$(printf '%s\n' $listed)" in *"$f"*) ;; *)
+      echo "$f quotes the refuted 2.5-5 figure and is MISSING from the QUOTE-SITE CENSUS in $DOC — a §6 PASS would leave it quoting a value this document refutes; that is exactly the miss this case was built from (spawn-presence.sh, 2026-08-26)"; false ;;
+    esac
+  done
+
+  # ARM 2 — every site the CENSUS names must still carry it in the tree.
+  for f in $listed; do
+    grep -q '2\.5-5 runnable threads' "$REPO/$f" 2>/dev/null \
+      || { echo "$DOC's QUOTE-SITE CENSUS lists $f, but the tree says it does not carry the 2.5-5 figure (deleted, or already re-derived) — a stale census sends a §6 PASS to edit a file that has nothing to edit"; false; }
+  done
+
+  # AND THE CITATIONS STAY CONTENT-ANCHORED. The list decayed while wearing line numbers that had
+  # ALREADY drifted (capacity-admit.sh:698 -> 750, agent-teams-enforce.sh:220 -> 235). A line number
+  # is a citation with an expiry date and no alarm; if a LIVE one comes back, this reds.
+  #
+  # SCOPED TO PROSE, NOT TO THE RECORD — and the scoping is load-bearing, not tidying. The doc's
+  # blockquote callout necessarily QUOTES the two drifted anchors, because a reader who finds only
+  # the correction cannot tell what was wrong; an unscoped grep convicts the doc for explaining
+  # itself, which is the `guard-proxy-fails-in-both-directions` shape case 20 documents and case 30
+  # solves with the same move (there by indentation, here by the `>` marker). Blockquote = history,
+  # bare prose = a live instruction to a future session. Only the second kind may carry an anchor.
+  live_anchor="$(grep -vE '^[[:space:]]*>' "$DOC" \
+                   | grep -nE '(capacity-admit|agent-teams-enforce|spawn-presence)\.sh:[0-9]+' || true)"
+  [ -z "$live_anchor" ] \
+    || { echo "$DOC re-acquired a LIVE line-anchored citation into a shell file — cite by CONTENT (grep '2.5-5 runnable threads'); every line anchor this doc has ever carried had drifted by the time anyone re-read it: $live_anchor"; false; }
+}
