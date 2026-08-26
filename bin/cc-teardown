@@ -357,7 +357,15 @@ pane_present() {
   { [ -z "$n" ] || [ "$n" = -1 ]; } && return 2   # non-array / unparseable ⇒ unreadable
   [ "$n" -eq 0 ] && return 2                        # zero enumerated ⇒ blind enumerator ⇒ indeterminate
   ids="$(printf '%s' "$lst" | jq -r '.[].id // empty' 2>/dev/null)" || return 2
-  printf '%s\n' "$ids" | grep -qxF "$uuid" && return 0
+  # DRAINED, not -q. Every other line of this function bends over backwards to refuse a false
+  # ABSENT — a non-array returns 2, an unparseable count returns 2, and a ZERO-length list returns
+  # 2 on the stated ground that a blind enumerator must never read as "no panes exist". `grep -q`
+  # walks straight past all of it: on a MATCH the producer takes SIGPIPE, pipefail promotes it,
+  # `&&` does not fire, and the `return 1` below reports the pane provably ABSENT — the exact
+  # verdict the three guards above exist to prevent, reached from a list that CONTAINED it.
+  # Two-stage (floor 37,121 B) over the extracted id list, measured 37 B / 12 panes at
+  # 2026-08-26T21:53Z. Latent, and drained for the direction rather than for the distance.
+  printf '%s\n' "$ids" | grep -xF "$uuid" >/dev/null && return 0
   return 1
 }
 

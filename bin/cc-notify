@@ -1246,7 +1246,17 @@ EOF
   # zero live panes → not-live, NOT "unknown"). Only a non-array / errored / TIMED-OUT output is unknown.
   local raw; raw="$(it2_list_bounded || true)"
   if [ -n "$raw" ] && printf '%s' "$raw" | jq -e 'type=="array"' >/dev/null 2>&1; then
-    printf '%s' "$raw" | jq -r '.[].id // empty' 2>/dev/null | grep -qxF "$u" && return 0
+    # DRAINED, not -q. Same predicate over the same producer as cc-pane / cc-await-ping /
+    # cc-teardown / cc-reconcile, and the same fail-OPEN direction: grep exits on the match, the
+    # producer takes SIGPIPE, pipefail promotes it, `&&` does not fire, and control falls to the
+    # `return 1` below — whose own comment then asserts "authoritatively not-live" about a pane the
+    # list DID contain. A live target silently demoted to mailbox-only, on the wake path.
+    # THIS SITE IS THE THREE-STAGE ONE, and that is not a stylistic difference: keeping `jq` inside
+    # the pipeline both adds a stage (floor 17,427 B, not the two-stage 37,121) and pipes the RAW
+    # array rather than the extracted ids. Measured 2026-08-26T21:53Z: raw 1,795 B / extracted ids
+    # 37 B over 12 panes — so this line sits at ~10% of its floor while its two-stage siblings sit
+    # at ~0.1% of theirs. One authoring choice, a 100x difference in margin, same question.
+    printf '%s' "$raw" | jq -r '.[].id // empty' 2>/dev/null | grep -xF "$u" >/dev/null && return 0
     return 1       # list readable AND uuid absent → authoritatively not-live
   fi
   return 2         # it2 unavailable / errored / timed out → no liveness oracle → unknown
