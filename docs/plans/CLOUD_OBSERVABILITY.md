@@ -150,6 +150,67 @@ session's brief requires its **first act** to be pushing that branch — an empt
 Absence then becomes informative: no ref inside the budget is `BOOTING` (expected); no ref past it
 is `NOT-STARTED` (actionable — re-fire, or check entitlement).
 
+#### 4.1a · That contract was PROSE ONLY for five weeks — now built (backlog `0c8b39b67665`)
+
+The paragraph above is the premise every `C1 NOT-STARTED` verdict in this document rests on, and
+nothing implemented it. Measured on trunk 2026-08-26:
+
+| Where the contract had to live | What was actually there |
+| --- | --- |
+| `grep -rn 'allow-empty' bin/ scripts/ commands/ hooks/` | six hits, **none on a fire path** — three `cc-value` fixtures, two `telemetry-e2e.sh` fixtures, one `cc-cloud --selftest` seed |
+| `scripts/handoff-fire.sh` CLI-lane payload | a return block — `git switch -c` + `git push`, closing with *"Push whatever you have before you finish"*. A push at the END is the **deliverable**, not a boot beacon |
+| `bin/cc-offload` API lane — **the default** (`cmd_up`'s `via="${CC_OFFLOAD_VIA:-api}"`) | `cc-notify --cloud "$sid" "$(cat "$pf")"`: the operator's brief **verbatim**. No branch, no return channel, no contract |
+
+So C1 was computed over sessions that had never been asked for the evidence it reads, and C1's
+recover action is *re-fire* — meaning the failure mode was a second create landing on top of a live
+session, spending an account's rate limit twice. The API lane was worse than ambiguous: a session
+briefed with no branch at all does its work, pushes nowhere, and its container is reclaimed.
+
+**Built:** `scripts/lib/cloud-brief.sh` is the one composer both lanes call — the same factoring
+§10.4 forced on `cloud-create.sh`, for the same reason. Its trailer's first instruction is
+
+```text
+git switch -c <branch> 2>/dev/null || git switch <branch>
+git commit --allow-empty -m 'boot: <branch>'
+git push -u origin HEAD
+```
+
+The `|| git switch` fallback is load-bearing, not defensive style: `cloud-create-api.py` sets
+`reuse_outcome_branches: true` and names the branch **at create**, so on that lane the VM can
+legitimately already be on it, and a bare `switch -c` would abort the beacon at its first line —
+leaving exactly the silence the contract removes. Both lanes then record the assertion with
+`cc-cloud declare --beacon`; both refuse **before** the create if the library is unreachable, since
+a fire that cannot come home is worse than one that never happened (it also spends the quota).
+Suite: `tests/cloud-brief.bats` (7 cases), each asserting the contract against a **red control that
+replays the pre-fix trailer verbatim** — that trailer instructed a push too, so a presence check
+alone would pass on the bytes that shipped the defect. Plus `handoff-fire-cloud.bats` 20-22,
+`cc-offload.bats` (API-lane delivery + pre-create refusal), `cc-cloud.bats` (the three below).
+
+**And what C1 may CLAIM now depends on the field.** `beacon=contract` is the *firing side's*
+assertion about its own payload — the only place that fact exists once the process is gone. With
+it, absence past the budget is a diagnosis (`no boot beacon after 25m`): a session that booted
+would have beaconed. Without it, absence is the four-way ambiguity this section opens with, one
+branch of which is a healthy session that has simply not committed anything yet, so the detail
+reads `no ref after 25m, no boot contract` and names no cause. **Both still ROW.** Abstaining to
+`U0` without the field was considered and rejected: it would silence every hand-declared session
+and every declaration predating the field, trading a real alarm for none over a premise about our
+own bookkeeping. The recover action is the same URL either way; only the detail differs. This is
+the same abstain-on-unmeasured shape `base_probe` already uses one arm below it (§5.1).
+
+**One downstream consequence, guarded in the same change.** The contract creates a branch shape the
+reconciler had never had to see: **real commits, zero changed files.** `reauthor_branch`'s
+`commit-tree` replays such a range happily — the tree is identical, so there is nothing to conflict
+with — the lander pushes an empty no-op to trunk, and `scripts/cloud-reconcile.sh` prints
+`✓ <branch> — landed`. That is a false success of exactly the class this document is organised
+against: nothing landed, the declaration stays unlandable by content (`derive_paths` refuses an
+empty path set), and `cc-offload land --all` reaches it without anyone having named it. So
+`beacon_only()` now refuses a beacon-only branch on `--land` (exit 65, naming the beacon) and
+**skips** it on `--all` — a skip and not a failure, because a session that booted and produced
+nothing is a thing to go and look at, and its own declaration already rows `STALLED`/`ABANDONED` on
+its budgets. `diff_size`'s `999999` sentinel means the predicate fires only on a **measured** zero
+and fails open, which is §4.2's law one more level down. Suite: `tests/cloud-reconcile.bats`, two
+cases, each with the positive control that a one-file branch on the same fixture still lands.
+
 ### 4.2 The discriminator the whole design rests on
 
 Measured, not assumed:
@@ -199,7 +260,7 @@ mutators, and they write only under `CC_CLOUD_STATE`. Nothing fetches, and nothi
 
 ```text
 cc-cloud preflight [--repo P] [--branch B]   can a fire HERE be observed at all? exit 1 = no
-cc-cloud declare --id <id> --branch <b> [--remote --repo --paths --trunk --url --surface --item --boot --stall --life]
+cc-cloud declare --id <id> --branch <b> [--remote --repo --paths --trunk --url --surface --item --beacon --boot --stall --life]
 cc-cloud retire  --id <id>
 cc-cloud poll                     the ONLY mutator of the heartbeat sidecar
 cc-cloud is-offbox <id>           exit 0 iff declared and not retired — the abstain lookup
@@ -776,7 +837,10 @@ Before any cloud session is fired, in this order:
 1. `cc-cloud declare --id <id> --branch <b> --paths <what it will land> --url <session url>` —
    an undeclared cloud session is unobservable, and `declare` refuses without `--id`/`--branch`.
 2. The session's brief must require **pushing the declared branch as its first act**, so that
-   absence past the boot budget means something (§4.1).
+   absence past the boot budget means something (§4.1). ✅ **BUILT 2026-08-26, §4.1a** — this step
+   was prose only for five weeks and is now `scripts/lib/cloud-brief.sh`, carried by both fire
+   lanes and asserted at declaration time with `cc-cloud declare --beacon`. Both lanes REFUSE
+   before the create if the library is unreachable.
 3. §5.2 must be wired first — otherwise `com.claude.team-orphan-reaper` may archive the team
    while the session is healthy.
 4. On completion, `cc-cloud retire --id <id>` — or let C3 `LANDED` render it silent, which it does
@@ -817,6 +881,14 @@ is the safe one. A reservation that never binds expires into `U0 UNKNOWN` (never
 finding** (§6.5). If the CLI create route ships a bundle of the local tree rather than cloning the
 remote, then the branch the VM pushes may not be the branch this box declared. Until one fire
 settles it, declare the branch the *brief* names and treat a mismatch as `U0`, not as absence.
+
+**Still the right rule, and §4.1a now makes it structural rather than a discipline.** The branch the
+brief names and the branch the declaration names come from the same variable in the same function on
+both lanes — `CLOUD_BRANCH` through `cc_cloud_brief_payload` and `cc-cloud declare` in
+`scripts/handoff-fire.sh`, `$br` through both in `bin/cc-offload`'s `cmd_up_api` — so the two can no
+longer disagree by drift, only by the VM disobeying its brief. That residual case is what the beacon
+detects within the boot budget instead of at `life_s`: a session that boots and pushes somewhere else
+leaves the declared ref at its baseline, which §4.3's baseline arm already reads as C1.
 
 ---
 
@@ -1391,6 +1463,13 @@ owning account (`{ok:true}`, recorded in `<id>.sends`) — but "queued is not re
 off-box cursor, and the session's reply lands in a transcript no local instrument can open. A probe
 was sent asking it to paste `git remote -v`, its branch, and any push error. **The answer is
 unreachable from here by construction, not by omission.**
+
+⚠️ **Read this fire's verdict as `no boot contract`, not as `never booted` (§4.1a, 2026-08-26).**
+That declaration predates the boot beacon by five weeks, so its brief never asked for the evidence
+its `NOT-STARTED` row was reading — which is precisely why the paragraph above has to enumerate
+what is *not* established. Under `beacon=contract` the same absence is a diagnosis and the row says
+so; without it `cc-cloud` now prints `no ref after 15m, no boot contract` rather than a cause it
+cannot know. This section is the measured case that made the detail split worth building.
 
 ⚠️ Two smaller things the fire settled on the way past, both worth more than the negative result:
 

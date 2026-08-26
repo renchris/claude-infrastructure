@@ -77,6 +77,14 @@ ACCOUNTS_BIN="${CC_OFFLOAD_ACCOUNTS_BIN:-}"
 [ -n "$ACCOUNTS_BIN" ] || { for c in "$HOME/bin/claude-accounts" "$BINDIR/claude-accounts" "$(command -v claude-accounts 2>/dev/null || true)"; do
   [ -n "$c" ] && [ -x "$c" ] && { ACCOUNTS_BIN="$c"; break; }; done; }
 SPLIT_BIN="${CC_OFFLOAD_KITTY_SPLIT:-$BINDIR/kitty-split-launch.sh}"
+# THE OFF-BOX TRAILER. Resolved as a seam like everything else, but note what it is FOR on this
+# lane specifically: `cmd_up_api` delivers the brief with `cc-notify --cloud`, and until backlog
+# `0c8b39b67665` it delivered the operator's file VERBATIM — no branch, no return channel, and no
+# §4.1 boot contract. The CLI lane at least carried a return block inline; the API lane, which is
+# the DEFAULT (`--via api`), carried nothing. Same file as the fire path sources, deliberately:
+# §4.3's state function is one function over one store, so a lane whose trailer differs is a lane
+# whose C1 verdict means something else and no consumer can tell which.
+BRIEF_LIB="${CC_OFFLOAD_BRIEF_LIB:-$ROOT/scripts/lib/cloud-brief.sh}"
 CUSTODY_BIN="${CC_OFFLOAD_CUSTODY_BIN:-}"
 [ -n "$CUSTODY_BIN" ] || { for c in "$BINDIR/cc-custody" "$HOME/.claude/bin/cc-custody" "$(command -v cc-custody 2>/dev/null || true)"; do
   [ -n "$c" ] && [ -x "$c" ] && { CUSTODY_BIN="$c"; break; }; done; }
@@ -516,6 +524,17 @@ cmd_up_api() {
   local api="${CC_OFFLOAD_CREATE_API:-$ROOT/scripts/cloud-create-api.py}"
   [ -f "$api" ] || { note "cc-offload: missing $api"; return 3; }
 
+  # BEFORE THE QUOTA IS SPENT, and fail-closed. A session briefed without the trailer runs, works,
+  # and pushes nowhere — the container is reclaimed and the whole create is a loss that also reads
+  # NOT-STARTED. Checking it here rather than after the create is the same ordering B2 gave the
+  # preflight in scripts/handoff-fire.sh: a refusal is only worth anything before the charge.
+  if [ ! -f "$BRIEF_LIB" ]; then
+    note "cc-offload: missing $BRIEF_LIB — a session briefed without it cannot push home. Refusing."
+    return 3
+  fi
+  # shellcheck source=scripts/lib/cloud-brief.sh
+  . "$BRIEF_LIB" || { note "cc-offload: $BRIEF_LIB failed to source"; return 3; }
+
   # The router is the arbiter — never re-rank accounts here.
   if [ "$account" = auto ]; then
     [ -n "$ACCOUNTS_BIN" ] && account="$("$ACCOUNTS_BIN" --route general 2>/dev/null)"
@@ -553,14 +572,28 @@ cmd_up_api() {
     # Declare BEFORE delivering: an undeclared id is unobservable, and cc-notify refuses to claim a
     # send about one (exit 3). Carry the owning account or the send goes out unrouted — and carry
     # the management fields, because nothing downstream can reconstruct them (see the W2 block above).
+    # `--beacon`: this lane's brief carries §4.1's boot contract (composed below), so cc-cloud may
+    # read C1 as a real "never booted" rather than as an ambiguity. Recorded at declare because
+    # nothing downstream can reconstruct what a brief said hours later.
     local -a dargs=(declare --id "$sid" --branch "$br" --account "$account" --repo "$REPO"
-                    --url "https://claude.ai/code/$sid" --custody "$sid")
+                    --url "https://claude.ai/code/$sid" --custody "$sid" --beacon)
     if [ -n "$UP_ITEM" ]; then dargs+=(--item "$UP_ITEM"); else dargs+=(--item "cc-offload $(basename "$pf")"); fi
     [ -n "$UP_NOTIFY_BACK" ] && dargs+=(--notify-back "$UP_NOTIFY_BACK")
     [ -n "$UP_GOAL" ]        && dargs+=(--goal "$UP_GOAL")
     [ -n "$UP_GOAL_PROBE" ]  && dargs+=(--goal-probe "$UP_GOAL_PROBE")
-    "$CLOUD_BIN" "${dargs[@]}" >/dev/null 2>&1 \
-      || { note "cc-offload: created $sid but DECLARE FAILED — it is live and unobservable"; rc=11; break; }
+    # …and `--beacon` DEGRADES rather than failing the declare. It is a new flag, and this repo is
+    # the live layer's source: an edited file rides its per-file symlink immediately, but a box whose
+    # `cc-cloud` has not converged rejects an unknown arg with exit 2. Failing there would trade a
+    # missing FIELD for a live UNDECLARED session — quota burning where nothing local can see,
+    # address or reap it, with a 600s orphan reaper running. The retry drops only that flag, so the
+    # fallback is exactly today's behaviour and cc-cloud reads it as "no boot contract", which is true.
+    if ! "$CLOUD_BIN" "${dargs[@]}" >/dev/null 2>&1; then
+      local -a dargs_nb=(); local a
+      for a in "${dargs[@]}"; do [ "$a" = --beacon ] || dargs_nb+=("$a"); done
+      "$CLOUD_BIN" "${dargs_nb[@]}" >/dev/null 2>&1 \
+        || { note "cc-offload: created $sid but DECLARE FAILED — it is live and unobservable"; rc=11; break; }
+      note "cc-offload: declare rejected --beacon; declared without it (cc-cloud will report 'no boot contract')."
+    fi
 
     # CUSTODY OPENS AT THE FIRE, not at the return. The debt is what makes `✅ SAFE TO CLOSE`
     # mechanically unreachable while this session is in flight, so it has to exist from the instant
@@ -573,13 +606,26 @@ cmd_up_api() {
         || note "cc-offload: custody could not be opened for $sid — the close-integrity arm is NOT armed for it."
     fi
 
-    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$(cat "$pf")" >/dev/null 2>&1
+    # THE BRIEF CARRIES THE TRAILER. `$br` is the branch this create authorised in
+    # `outcomes.git_info.branches`, so the trailer names the one ref the VM is actually permitted
+    # to push — and its first instruction is the empty boot commit, which is what makes the
+    # declaration above observable at all.
+    local bf; bf="$(mktemp "${TMPDIR:-/tmp}/cc-offload-brief-XXXXXX")" || { rc=1; break; }
+    if ! cc_cloud_brief_payload "$br" "$(cat "$pf")" >"$bf"; then
+      note "cc-offload: $sid created+declared but the brief could not be composed for branch $br."
+      rm -f "$bf"; rc=11; break
+    fi
+    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$(cat "$bf")" >/dev/null 2>&1
     local drc=$?
     if [ "$drc" != 0 ]; then
       note "cc-offload: $sid created+declared but the brief did NOT queue (cc-notify exit $drc)."
-      note "  Retry just the delivery: cc-notify --cloud $sid \"\$(cat $pf)\""
+      # THE COMPOSED brief, not the operator's file. Re-delivering `$pf` would hand the VM a brief
+      # with no branch and no boot contract — a session that works and then pushes nowhere. The
+      # temp file is deliberately NOT removed on this path; it is the retry's payload.
+      note "  Retry just the delivery: cc-notify --cloud $sid \"\$(cat $bf)\""
       rc=11; break
     fi
+    rm -f "$bf"
     fired=$((fired+1))
     printf '%s✓%s %s on %s — anthropic_cloud VM, repo ATTACHED, branch %s\n' "$C_OK" "$C_OFF" "$sid" "$account" "$br"
     printf '  view   : https://claude.ai/code/%s\n  observe: cc-offload ls\n  land   : cc-offload land\n' "$sid"

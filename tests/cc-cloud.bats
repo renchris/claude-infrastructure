@@ -152,6 +152,74 @@ setup() {
   [ "$(field subject)" = "early" ]
 }
 
+# ── THE BOOT CONTRACT: what C1 may CLAIM, and what it may not (backlog 0c8b39b67665) ─────────────
+# §4.1 is the sentence the design rests on: a declared session that has pushed nothing is
+# indistinguishable from one that never started, one that died at boot, one refused entitlement,
+# and one that is perfectly healthy and has not committed anything yet. Only a CONTRACT separates
+# them — the brief requires an empty commit pushed to the declared branch as the session's FIRST
+# act — and that contract was PROSE ONLY until 2026-08-26. So C1 was computed over sessions never
+# told to produce the evidence it reads, and its recover action is "re-fire".
+#
+# `declare --beacon` is the firing side's assertion that ITS payload carried the contract. It does
+# not change which arm fires — both still ROW, because abstaining without the field would silence
+# every hand-declared session and trade a real alarm for none. It changes what the row may CLAIM.
+@test "C1 with the boot contract names the CAUSE; without it, it names the AMBIGUITY" {
+  have_subject
+  r="$(bare rem)"
+  cloud declare --id told   --branch feat/told   --remote "$r" --repo "" --boot 900 --beacon
+  cloud declare --id untold --branch feat/untold --remote "$r" --repo "" --boot 900
+
+  # Inside the budget neither is a fault — the contract changes nothing about C2.
+  [ "$(rows)" -eq 0 ]
+
+  export CC_CLOUD_NOW=$((T0 + 901))
+  [ "$(rows)" -eq 2 ]
+  local told untold
+  told="$("$CLOUD" --table | awk '$1=="told"')"
+  untold="$("$CLOUD" --table | awk '$1=="untold"')"
+  # Both are NOT-STARTED and both row: the recover action is the same URL either way.
+  [[ "$told" == *NOT-STARTED* ]] || false
+  [[ "$untold" == *NOT-STARTED* ]] || false
+  # The DETAIL is where they differ. Told to beacon and silent ⇒ it did not boot.
+  [[ "$told" == *"no boot beacon"* ]] || false
+  # Never told ⇒ say so, rather than naming a cause this instrument cannot know.
+  [[ "$untold" == *"no boot contract"* ]] || false
+  [[ "$untold" != *"no boot beacon"* ]] || false
+}
+
+@test "the boot contract survives the BASELINE arm — an unmoved pre-fire ref did not beacon either" {
+  have_subject
+  # The beacon is an EMPTY COMMIT, so under the contract a ref sitting at its fire-time sha is
+  # exactly as informative as no ref at all: the session did not beacon. Without the contract it
+  # only means "it has not pushed", which is a weaker claim and must read as one.
+  r="$(bare rem)"
+  push_ref "$r" feat/reused                      # the branch ALREADY exists at fire time
+  cloud declare --id reused --branch feat/reused --remote "$r" --repo "" --boot 900 --beacon
+  export CC_CLOUD_NOW=$((T0 + 901))
+  local row
+  row="$("$CLOUD" --table | awk '$1=="reused"')"
+  [[ "$row" == *NOT-STARTED* ]] || false
+  [[ "$row" == *"no boot beacon"* ]] || false
+  # The declaration records the assertion, so `show` can be read after the fact.
+  cloud show reused | grep -q '^beacon=contract'
+}
+
+@test "the row schema holds for both details — ASCII, <=44 bytes (cc-fleet pads by BYTES)" {
+  have_subject
+  r="$(bare rem)"
+  cloud declare --id told   --branch feat/told   --remote "$r" --repo "" --boot 900 --beacon
+  cloud declare --id untold --branch feat/untold --remote "$r" --repo "" --boot 900
+  export CC_CLOUD_NOW=$((T0 + 90000))            # a long age, so `dur` renders its widest form
+  local d
+  while read -r d; do
+    [ -n "$d" ] || continue
+    [ "$(printf %s "$d" | wc -c)" -le 44 ] || { echo "detail over 44 bytes: $d"; false; }
+    printf %s "$d" | LC_ALL=C grep -q '[^ -~]' && { echo "non-ASCII in detail: $d"; false; }
+  done < <("$CLOUD" --json | sed -n 's/.*"detail":"\([^"]*\)".*/\1/p')
+  # POSITIVE CONTROL: the loop actually saw rows.
+  [ "$(rows)" -eq 2 ]
+}
+
 # ── U0: the discriminator the whole design rests on ───────────────────────────────────────────────
 @test "U0 an UNREACHABLE remote is UNKNOWN, never NOT-STARTED — absence != inability to look" {
   have_subject

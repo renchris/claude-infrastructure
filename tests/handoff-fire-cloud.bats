@@ -292,6 +292,17 @@ if [ "${1:-}" = preflight ]; then
   if [ -n "${STUB_PF_LOG:-}" ]; then echo "$@" >> "$STUB_PF_LOG"; fi
   exit "${STUB_PF_RC:-0}"
 fi
+# A `cc-cloud` that PREDATES --beacon: an unconverged live layer rejects an unknown arg with 2.
+# Seam-gated so it is an input to the one case that is about it, never a default.
+if [ -n "${STUB_DECL_REJECT_BEACON:-}" ]; then
+  for a in "$@"; do
+    if [ "$a" = --beacon ]; then
+      echo "$@" >> "$CLOUD_DECL_LOG"
+      echo "cc-cloud declare: unknown arg --beacon" >&2
+      exit 2
+    fi
+  done
+fi
 echo "$@" >> "$CLOUD_DECL_LOG"
 exit "${CLOUD_DECL_RC:-0}"
 EOF
@@ -460,4 +471,82 @@ EOF
   [ "$status" -eq 0 ]
   [ -s "$CLOUD_DECL_LOG" ]
   [ ! -f "$BATS_TEST_TMPDIR/pf-off.log" ]                # the override SKIPS the probe, not just its verdict
+}
+
+# ── §4.1's BOOT CONTRACT on the CLI lane (backlog 0c8b39b67665) ───────────────────────────────────
+# Case 17 above pins that the payload CREATES the branch before pushing it. That is the return
+# channel, and it was the whole of what this lane instructed: its closing line was "Push whatever
+# you have before you finish". A push at the END is the deliverable. §4.1 requires one at the
+# START, because `C1 NOT-STARTED` reads exactly one observable — does the declared ref exist — and
+# absent the contract that observable cannot separate a VM that never booted from a healthy one
+# that has not committed anything yet. C1's recover action is "re-fire", so the untold session's
+# failure mode is a second create landing on top of a live one.
+@test "20 the payload's FIRST instruction is an empty boot commit, before any push" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: t" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ -s "$BATS_TEST_TMPDIR/create.log" ]
+  local ci push
+  # COMMAND LINES ONLY. The trailer says the words "a git push" in its opening sentence, and
+  # matching prose would read that as the first push and fail an ordering that is correct.
+  ci="$(grep -nE '^[[:space:]]+git commit .*--allow-empty' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  push="$(grep -nE '^[[:space:]]+git push' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$ci" ] || { echo "the payload never instructs the boot beacon — C1 cannot mean 'never booted'"; false; }
+  [ -n "$push" ] || { echo "the payload never instructs a push"; false; }
+  [ "$ci" -lt "$push" ] || { echo "the beacon must PRECEDE the push that publishes it (ci=$ci push=$push)"; false; }
+  # It is the DECLARED branch that gets beaconed, not some other name.
+  grep -qE "git commit .*--allow-empty -m 'boot: claude/fire-" "$BATS_TEST_TMPDIR/create.log"
+}
+
+@test "21 the declaration RECORDS that the contract was carried — declare --beacon" {
+  # Without this field cc-cloud cannot tell a session that was told to beacon from one that was
+  # not, so its C1 row would assert "never booted" over a session that was never asked for the
+  # evidence. The flag is the firing side's assertion about its OWN payload, which is the only
+  # place that fact exists.
+  cloud_acct; cloud_ccloud
+  cloud_claude "$(printf 'Created cloud session: t\x1b[8GView: https://claude.ai/code/session_01TESTTESTTESTTESTTESTT?from=cli')" 0
+  cfire
+  [ "$status" -eq 0 ]
+  [ -s "$CLOUD_DECL_LOG" ]
+  grep -q -- '--beacon' "$CLOUD_DECL_LOG"
+  # POSITIVE CONTROL on the same log: the other fire-time facts are still recorded, so this is not
+  # a stub that echoes everything it is handed.
+  grep -q -- '--account next3' "$CLOUD_DECL_LOG"
+}
+
+@test "22 the brief library being ABSENT is a REFUSAL, not a fire that cannot come home" {
+  # Mirrors case 10 (the create library) with a sharper reason. Without cloud-create.sh there is no
+  # fire; without cloud-brief.sh there IS one, and it runs with no branch instruction and no boot
+  # contract — it works, pushes nowhere, and its container is reclaimed. A fire that cannot be
+  # returned is worse than one that did not happen: it also spends the quota.
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: this create must never be reached" 0
+  cfire CC_FIRE_BRIEF_LIB="$BATS_TEST_TMPDIR/no-such-brief.sh" \
+        CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ "$status" -eq 10 ]
+  [[ "$output" == *"cloud-brief.sh is unreachable"* ]] || false
+  [ ! -f "$BATS_TEST_TMPDIR/create.log" ]                # the account's rate limit was NOT spent
+  [ ! -f "$CLOUD_DECL_LOG" ]                             # and nothing was declared
+}
+
+@test "23 a cc-cloud that predates --beacon still gets the session DECLARED, not exit 11" {
+  # The flag is new and this repo IS the live layer's source, so a box whose cc-cloud has not
+  # converged rejects it with exit 2. Failing the declare there would trade a MISSING FIELD for a
+  # LIVE UNDECLARED SESSION — quota burning where nothing local can see, address or reap it, with a
+  # 600s orphan reaper running. The retry drops only the flag.
+  cloud_acct; cloud_ccloud
+  cloud_claude "$(printf 'Created cloud session: t\x1b[8GView: https://claude.ai/code/session_01TESTTESTTESTTESTTESTT?from=cli')" 0
+  cfire STUB_DECL_REJECT_BEACON=1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"retrying without it"* ]] || false
+  # BOTH attempts are in the log: the flagged one that was rejected, and the plain one that stuck.
+  grep -q -- '--beacon' "$CLOUD_DECL_LOG"
+  grep -q -- "--id session_01TESTTESTTESTTESTTESTT" "$CLOUD_DECL_LOG"
+  [ "$(grep -c -- '--id session_01TESTTESTTESTTESTTESTT' "$CLOUD_DECL_LOG")" -eq 2 ]
+  # POSITIVE CONTROL — a cc-cloud that fails for a REAL reason still exits 11. The degrade must be
+  # scoped to the unknown flag, not a blanket second chance at any declaration failure.
+  rm -f "$CLOUD_DECL_LOG"
+  cfire CLOUD_DECL_RC=1
+  [ "$status" -eq 11 ]
+  [[ "$output" == *"declaration FAILED"* ]] || false
 }

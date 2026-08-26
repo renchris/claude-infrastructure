@@ -74,6 +74,15 @@ EOF
   cat >"$STUBDIR/cc-cloud" <<'EOF'
 #!/usr/bin/env bash
 echo "cc-cloud $*" >>"$CALLS"
+# A `cc-cloud` that PREDATES --beacon: an unconverged live layer rejects an unknown arg with 2.
+# Seam-gated so it is an input to the one case about it, never a default.
+if [ -n "${STUB_DECL_REJECT_BEACON:-}" ] && [ "$1" = declare ]; then
+  for a in "$@"; do
+    [ "$a" = --beacon ] || continue
+    echo "cc-cloud declare: unknown arg --beacon" >&2
+    exit 2
+  done
+fi
 case "$1" in
   list) cat "$CLOUD_ROWS" ;;
   preflight) echo "PREFLIGHT PASS." ;;
@@ -505,6 +514,73 @@ EOF
   chmod +x "$STUBDIR/create-api.py"
   CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
   grep -q -- '--repo acme/widget' "$CALLS" || false
+}
+
+# ── §4.1's BOOT CONTRACT on the API lane (backlog 0c8b39b67665) ─────────────────────────────────
+# THE DEFAULT LANE, and until this change it delivered the operator's brief VERBATIM: no branch, no
+# return channel, and no boot contract. The CLI lane at least carried a return block inline. So the
+# session that `cc-offload up` fires by default did its work and pushed nowhere — the container is
+# reclaimed and nothing on this box ever sees it — while `cc-cloud` reported NOT-STARTED, whose
+# recover action is to fire a second one on top.
+@test "up --via api delivers the BOOT CONTRACT, and declares that it carried it" {
+  echo "UNIQUEBRIEF-4b7e" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+import sys
+print("session_apibeacon")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+  # The brief still reaches the VM intact — the trailer is APPENDED, never a replacement.
+  grep -q 'UNIQUEBRIEF-4b7e' "$CALLS" || false
+  # …and it now carries the beacon, on the branch the create authorised.
+  grep -qE "git commit .*--allow-empty -m 'boot: claude/fire-" "$CALLS" || false
+  grep -q 'git push -u origin HEAD' "$CALLS" || false
+  # The declaration records that this fire's payload carried the contract, so cc-cloud's C1 row may
+  # read "never booted" rather than an ambiguity about our own bookkeeping.
+  grep -q -- '--beacon' "$CALLS" || false
+}
+
+@test "up --via api REFUSES before the create when the brief library is missing" {
+  # Order is the point, as it is for handoff-fire's preflight: a refusal is only worth anything
+  # before an account's rate limit is charged. A session briefed without the trailer runs, works,
+  # and strands — a loss that also costs the quota.
+  echo "brief" >"$BATS_TEST_TMPDIR/t.txt"
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+import sys, os
+open(os.environ["CALLS"],"a").write("api "+" ".join(sys.argv[1:])+"\n")
+print("session_never")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_BRIEF_LIB="$BATS_TEST_TMPDIR/no-such-brief.sh"     CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py"     run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"cannot push home"* ]] || false
+  ! grep -q '^api ' "$CALLS" || false
+}
+
+@test "up --via api: a cc-cloud that predates --beacon still DECLARES, never a live orphan" {
+  # The flag is new and this repo IS the live layer's source, so a box whose cc-cloud has not
+  # converged rejects it with exit 2. Failing there would trade a missing FIELD for a live
+  # UNDECLARED session — quota burning where nothing local can see, address or reap it.
+  echo "brief" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+print("session_nobeacon")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  STUB_DECL_REJECT_BEACON=1 CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py"     run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"declared without it"* ]] || false
+  # Two declare attempts recorded: the flagged one that was rejected, and the plain one that stuck.
+  [ "$(grep -c 'cc-cloud declare --id session_nobeacon' "$CALLS")" -eq 2 ]
+  # And the brief still went out — a degraded declaration must not abort the delivery.
+  grep -q 'cc-notify --cloud session_nobeacon' "$CALLS" || false
 }
 
 @test "up --via rejects anything but api or cli" {

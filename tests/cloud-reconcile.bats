@@ -1,8 +1,11 @@
 #!/usr/bin/env bats
-# shellcheck disable=SC2030,SC2031,SC2329
+# shellcheck disable=SC2030,SC2031,SC2329,SC2317
 #   Structurally false under bats, not suppressed noise: every @test body IS its own subshell, so an
 #   `export` inside one is *meant* to be test-local (SC2030/SC2031), and setup()'s helpers are
-#   invoked from those test subshells rather than from file scope (SC2329).
+#   invoked from those test subshells rather than from file scope (SC2329/SC2317 — shellcheck
+#   cannot see that the runner calls setup() before each body, so a helper defined there reads as
+#   unreachable; SC2317 was added when push_beacon() became the first helper whose body shellcheck
+#   traced, and it is the same false positive its two siblings already carry).
 #
 # cloud-reconcile.sh — gate G6, the CLOUD LANDING PATH.
 #
@@ -127,6 +130,21 @@ STUB
     git -C "$w" push -q origin "HEAD:refs/heads/$b"
     # Remove the LOCAL trace entirely — a cloud branch exists ONLY on the remote, and a local head
     # left behind would make the discovery arm pass for the wrong reason.
+    git -C "$REPO" worktree remove --force "$w"
+    git -C "$REPO" branch -q -D "$b"
+    rm -rf "$w"
+    true
+  }
+
+  # THE BOOT BEACON, as §4.1a actually produces it: `git commit --allow-empty` pushed to the
+  # declared branch as the session's first act. Real commit, zero changed files — a branch shape
+  # this reconciler never had to see before that contract shipped.
+  push_beacon() {  # $1=branch
+    local b="$1" w
+    w="$D/w-$(printf '%s' "$b" | tr / -)"
+    git -C "$REPO" worktree add -q -b "$b" "$w" main
+    git -C "$w" -c user.email=t@e.com -c user.name=tester commit -q --allow-empty -m "boot: $b"
+    git -C "$w" push -q origin "HEAD:refs/heads/$b"
     git -C "$REPO" worktree remove --force "$w"
     git -C "$REPO" branch -q -D "$b"
     rm -rf "$w"
@@ -732,6 +750,46 @@ dead_pid() {
 }
 
 # ── serialization ────────────────────────────────────────────────────────────────────────────
+# ── the boot beacon's new branch shape (CLOUD_OBSERVABILITY.md §4.1a) ────────────────────────
+# The contract has every cloud session push an EMPTY commit to its declared branch as its FIRST
+# act, so "the ref exists" means "the VM booted" rather than "the VM produced something". That is
+# the point of the contract — and it hands this reconciler a branch with real commits and zero
+# changed files, which `reauthor_branch`'s commit-tree replays happily (identical tree, nothing to
+# conflict with). Unguarded, the lander pushes an empty no-op to trunk and the sweep prints `✓ …
+# landed` over work that does not exist.
+@test "a BEACON-ONLY branch is not landed — an empty commit on trunk is not a land" {
+  push_beacon claude/beacon
+  decl cloud-beacon claude/beacon
+
+  CONFIRM=1 run cr --land claude/beacon
+  [ "$status" -eq 65 ]
+  [[ "$output" == *"boot beacon"* ]] || false
+  # THE LOAD-BEARING HALF: the lander was never called, so nothing reached trunk.
+  [ ! -s "$LAND_STUB_LOG" ]
+
+  # POSITIVE CONTROL on the same fixture shape: one real file and the SAME command lands.
+  push_branch claude/real 1
+  decl cloud-real claude/real
+  CONFIRM=1 run cr --land claude/real
+  [ "$status" -eq 0 ]
+  [ "$(landed_branches)" = "claude/real" ]
+}
+
+@test "--all SKIPS a beacon-only branch and still lands its siblings — a skip, not a failure" {
+  push_beacon claude/beacon
+  push_branch claude/work 1
+  decl cloud-beacon claude/beacon
+  decl cloud-work claude/work
+
+  CONFIRM=1 run cr --all
+  # A session that booted and produced nothing is a thing to go and look at, not a land that went
+  # wrong: exit 0, and the sweep is not reddened by behaving correctly.
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"boot beacon only"* ]] || false
+  # Only the real branch reached the lander.
+  [ "$(landed_branches)" = "claude/work" ]
+}
+
 @test "--all lands smallest-diff first" {
   push_branch claude/big 4
   push_branch claude/small 1

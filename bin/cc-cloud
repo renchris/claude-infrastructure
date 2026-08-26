@@ -4,6 +4,8 @@
 #
 #   cc-cloud preflight [--repo P] [--branch B]       can a fire HERE be observed at all? exit 1 = no
 #   cc-cloud declare --id <id> --branch <b> [opts]   register a session BEFORE firing it
+#                                                    --beacon = this fire's brief carried §4.1's
+#                                                    boot contract (see THE BOOT CONTRACT below)
 #   cc-cloud fill-paths --id <id> | --branch <b> | --all
 #                                                    fill `paths=` POST-HOC from the VM's own commits
 #                                                    (--branch selects by declared branch, for a
@@ -101,6 +103,7 @@
 #                   NO row, `--table` says UNKNOWN, `--check` FAILS. Never a vacuous pass.
 #   C1 NOT-STARTED  no ref AND no evidence of one, past declared_at+boot_s                    ROW
 #                   (or the ref exists but is STILL at its fire-time sha — see BASELINE)
+#                   detail depends on `beacon` — see THE BOOT CONTRACT below
 #   C2 BOOTING      same, still inside the boot budget — expected, not a fault              no row
 #   C3 LANDED       every declared path is content-present on the trunk ref                 no row
 #   C4 STALLED      ref exists, sha unchanged for > stall_s (sidecar evidence REQUIRED)       ROW
@@ -150,6 +153,26 @@
 # than treating an unmeasured baseline as an empty one — the same law as U0 one level down.
 # It is checked AFTER C3: a session whose declared content is on trunk is finished, and how its ref
 # moved is no longer a question worth alarming on.
+#
+# ── THE BOOT CONTRACT: `beacon=contract`, and what C1 may CLAIM (backlog 0c8b39b67665) ───────────
+# §4.1 of CLOUD_OBSERVABILITY.md is the sentence the whole design rests on: absence is ambiguous,
+# and only a CONTRACT disambiguates it — the brief requires the session's FIRST act to be pushing
+# the declared branch, an empty commit being enough. That contract was prose only until 2026-08-26:
+# neither fire lane instructed it (`grep -rn allow-empty bin/ scripts/` hit fixtures and this file's
+# own selftest seed, nothing on a fire path), and the API lane — the DEFAULT one in `cc-offload up`
+# — delivered the operator's brief verbatim with no trailer at all. C1 was therefore computed over
+# sessions never told to produce the evidence it reads. It now lives in scripts/lib/cloud-brief.sh,
+# is carried by BOTH lanes, and the firing side records that it was carried, with `declare --beacon`.
+#
+# What the field changes is NOT which arm classify() takes — it is what that arm is entitled to
+# claim. With `beacon=contract`, absence past the budget is a diagnosis: a session that booted would
+# have beaconed, so it did not boot. Without it, absence is the four-way ambiguity §4.1 opens with,
+# one branch of which is a perfectly healthy session that has not committed anything yet — so the
+# detail says `no boot contract` rather than naming a cause it cannot know.
+# BOTH still ROW. Abstaining to UNKNOWN without the field was considered and rejected: it would
+# silence every hand-declared session and every declaration predating the field, trading a real
+# alarm for no alarm at all over a premise about our own bookkeeping. The recover action is the
+# same URL either way; only the detail differs.
 #
 # C3 precedes C4 DELIBERATELY: a finished session stops pushing, so a STALLED-first order would
 # alarm forever on every successful cloud session — the failure mode where an alarm that always
@@ -526,6 +549,7 @@ classify() { # <id>
   local id="$1" f="$STATE/$1.decl" seen="$STATE/$1.seen"
   local branch remote repo paths trunk url dat boot stall life
   local sha rc n age url_cmd first_seen sha_age base_sha base_probe seen_sha paths_src pushed
+  local beacon c1_detail c1_base_detail
 
   branch="$(dfield "$f" branch)"
   remote="$(dfield "$f" remote)"
@@ -560,11 +584,33 @@ classify() { # <id>
   paths_src="$(dfield "$f" paths_src)"
   if [ -n "$seen_sha" ] || [ -n "$paths_src" ]; then pushed=1; else pushed=0; fi
 
+  # ── THE BOOT CONTRACT (§4.1), and what C1 is entitled to claim without it ──────────────────────
+  # `beacon=contract` is written by `declare --beacon`, i.e. by a fire whose payload carried
+  # scripts/lib/cloud-brief.sh's trailer and therefore told the session to push an empty commit to
+  # this branch before doing anything. With it, absence past the budget is a DIAGNOSIS: the session
+  # never booted, because a session that booted would have beaconed. Without it, absence is exactly
+  # the four-way ambiguity §4.1 opens with — never started, died at boot, refused entitlement, or
+  # perfectly healthy with nothing committed yet — and the row must say so rather than name one.
+  #
+  # Both still ROW, and that is deliberate. The alternative considered was abstaining to UNKNOWN
+  # without the contract; it was rejected because it would silence every hand-declared session and
+  # every declaration made before this field existed, converting a real alarm into no alarm at all
+  # over a premise about our own bookkeeping. The recover action is identical either way (open the
+  # URL); what differs is whether the detail may assert a cause, and only the detail changes.
+  beacon="$(dfield "$f" beacon)"
+  if [ "$beacon" = "contract" ]; then
+    c1_detail="no boot beacon after $(dur "$age") (budget $(dur "$boot"))"
+    c1_base_detail="no boot beacon; ref at pre-fire sha, $(dur "$age")"
+  else
+    c1_detail="no ref after $(dur "$age"), no boot contract"
+    c1_base_detail="ref still at pre-fire sha after $(dur "$age")"
+  fi
+
   # C1/C2 require BOTH: no ref now AND no evidence there ever was one. Reaching this arm on
   # evidence-of-push alone is the defect below.
   if [ -z "$sha" ] && [ "$pushed" -eq 0 ]; then
     if [ "$age" -gt "$boot" ]; then
-      printf 'NOT-STARTED\tno ref after %s (boot budget %s)\t%s\n' "$(dur "$age")" "$(dur "$boot")" "$url_cmd"
+      printf 'NOT-STARTED\t%s\t%s\n' "$c1_detail" "$url_cmd"
     else
       printf 'BOOTING\tno ref yet, %s into a %s budget\t-\n' "$(dur "$age")" "$(dur "$boot")"
     fi
@@ -594,7 +640,10 @@ classify() { # <id>
   base_sha="$(dfield "$f" base_sha)"
   if [ "$base_probe" = "ok" ] && [ -n "$base_sha" ] && [ "$sha" = "$base_sha" ]; then
     if [ "$age" -gt "$boot" ]; then
-      printf 'NOT-STARTED\tref still at pre-fire sha after %s\t%s\n' "$(dur "$age")" "$url_cmd"
+      # Same contract split as C1 above: the beacon is an EMPTY COMMIT, so under the contract a
+      # ref that has not moved off its pre-fire sha is exactly as informative as no ref at all —
+      # the session did not beacon. Without the contract it is only "it has not pushed".
+      printf 'NOT-STARTED\t%s\t%s\n' "$c1_base_detail" "$url_cmd"
     else
       printf 'BOOTING\tno push yet, %s into a %s budget\t-\n' "$(dur "$age")" "$(dur "$boot")"
     fi
@@ -673,7 +722,7 @@ do_check() {
 cmd_declare() {
   local id="" branch="" remote="origin" repo="$ROOT" paths="" trunk="" url="" surface="" item="" account=""
   local boot="" stall="" life="" f base="" brc=0
-  local notify_back="" goal="" goal_probe="" custody=""
+  local notify_back="" goal="" goal_probe="" custody="" beacon=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --id)      id="${2:-}"; shift 2 ;;
@@ -709,6 +758,17 @@ cmd_declare() {
       --goal)        goal="${2:-}"; shift 2 ;;
       --goal-probe)  goal_probe="${2:-}"; shift 2 ;;
       --custody)     custody="${2:-}"; shift 2 ;;
+      # ── THE BOOT CONTRACT (§4.1), asserted by the FIRING side ────────────────────────────────
+      # Set by a fire whose payload carried scripts/lib/cloud-brief.sh's trailer — i.e. one whose
+      # session was instructed to push an empty commit to `--branch` as its FIRST act, before it
+      # reads a file. It changes nothing about which arm classify() takes; it changes what that
+      # arm is ENTITLED TO CLAIM. C1's whole meaning is "this session never booted", and that
+      # reading is only available over a session that was told to produce boot evidence. Without
+      # it, "no ref" still deserves a row — something is wrong, and the recover action is the same
+      # URL — but the row must not name a cause it cannot know: a healthy VM briefed by some other
+      # route simply may not have committed anything yet. Same shape as `base_probe` below: an
+      # unmeasured premise abstains from the verdict it would license rather than being assumed.
+      --beacon)  beacon=1; shift ;;
       --boot)    boot="${2:-}"; shift 2 ;;
       --stall)   stall="${2:-}"; shift 2 ;;
       --life)    life="${2:-}"; shift 2 ;;
@@ -790,6 +850,7 @@ cmd_declare() {
     [ -n "$goal" ]        && printf 'goal=%s\n' "$goal"
     [ -n "$goal_probe" ]  && printf 'goal_probe=%s\n' "$goal_probe"
     [ -n "$custody" ]     && printf 'custody=%s\n' "$custody"
+    [ "$beacon" -eq 1 ]   && printf 'beacon=contract\n'
     is_num "$boot"  && printf 'boot_s=%s\n' "$boot"
     is_num "$stall" && printf 'stall_s=%s\n' "$stall"
     is_num "$life"  && printf 'life_s=%s\n' "$life"

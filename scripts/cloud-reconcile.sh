@@ -383,6 +383,25 @@ diff_size() {  # <repo> <trunk-ref> <branch> → changed-file count (large senti
   case "$n" in ''|*[!0-9]*) printf '999999' ;; *) printf '%s' "$n" ;; esac
 }
 
+# ── BEACON-ONLY: a branch carrying §4.1's boot beacon and nothing else ────────────────────────
+# CLOUD_OBSERVABILITY.md §4.1a has every cloud session push an EMPTY commit to its declared branch
+# as its FIRST act, so "the ref exists" now means "the VM booted" instead of "the VM produced
+# something". That is the whole point of the contract — and it creates a branch shape this
+# reconciler had never had to see: real commits, zero changed files.
+#
+# Left alone, reauthor_branch's `commit-tree` replays it happily (the tree is identical, so there
+# is nothing to conflict with), the lander pushes an empty no-op commit to trunk, and this script
+# prints `✓ <branch> — landed`. That is a FALSE SUCCESS of the exact class this file is organised
+# against: nothing was landed, the declaration stays unlandable by content (`derive_paths` refuses
+# an empty path set), and `--all` reaches it without anyone having named it.
+#
+# UNDECIDABLE IS NOT ZERO. `diff_size` returns its 999999 sentinel when it could not measure at
+# all, so this predicate fires only on a MEASURED zero and fails open — the same law the state
+# function upstream is built on.
+beacon_only() {  # <repo> <trunk-ref> <branch> → 0 iff the branch changes no file against trunk
+  [ "$(diff_size "$1" "$2" "$3")" -eq 0 ]
+}
+
 # ── the identity translation (see "THE IDENTITY WALL" in the header) ─────────────────────────
 git_ident_email() {  # <repo> → the author email git ITSELF would use (empty ⇒ none resolvable)
   # `git var GIT_AUTHOR_IDENT`, never `git config user.email`: the same arbiter githooks/pre-commit
@@ -686,6 +705,9 @@ EOF
   rc=0; fetch_branch "$C_REPO" "$TARGET" || rc=$?
   [ "$rc" -eq 0 ] || die 65 "could not bring '$TARGET' into $C_REPO as a local head — $FETCH_DETAIL"
   [ -n "$FETCH_DETAIL" ] && echo "→ $TARGET — $FETCH_DETAIL"
+  if beacon_only "$C_REPO" "$C_TRUNK" "$TARGET"; then
+    die 65 "'$TARGET' has commits but changes NO FILE against $C_TRUNK — it carries §4.1's boot beacon and nothing else. The session booted and produced no work; landing it would push an empty commit to trunk and report success. Read the session instead: cc-cloud show ${C_ID:-<id>}"
+  fi
   derive_paths "$C_ID"
   rc=0; reauthor_branch "$C_REPO" "$C_TRUNK" "$TARGET" "$C_ID" || rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -724,6 +746,14 @@ while IFS= read -r b || [ -n "$b" ]; do
     continue
   fi
   [ -n "$FETCH_DETAIL" ] && echo "→ $b — $FETCH_DETAIL"
+  # A SKIP, not a FAILED. `--all` is a sweep, and a session that booted and produced nothing is a
+  # thing to go and look at (its declaration will row STALLED or ABANDONED on its own budgets), not
+  # a land that went wrong. Counting it as a failure would put a red on a sweep that behaved
+  # correctly, which is how a sweep stops being trusted.
+  if beacon_only "$C_REPO" "$C_TRUNK" "$b"; then
+    echo "· $b — skipped: boot beacon only, no file changed against $C_TRUNK (the session booted and produced nothing)"
+    continue
+  fi
   derive_paths "$C_ID"
   rc=0; reauthor_branch "$C_REPO" "$C_TRUNK" "$b" "$C_ID" || rc=$?
   if [ "$rc" -ne 0 ]; then

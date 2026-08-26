@@ -7983,6 +7983,32 @@ if [ "$CLOUD" = 1 ]; then
   . "$_CC_CC" || { echo "!! cloud fire: cloud-create.sh failed to source" >&2
     emit_fire_refusal cloud-lib-absent "scripts/lib/cloud-create.sh failed to source"; exit 10; }
 
+  # THE BRIEF COMPOSER, resolved the same way and FAIL-CLOSED for a sharper reason than the create
+  # library's. Without cloud-create.sh there is no fire; without cloud-brief.sh there IS one — and
+  # it runs with no branch instruction and no boot contract, so it pushes nowhere, strands its work
+  # in a reclaimed container, and reads C1 NOT-STARTED forever while having done the job. A fire
+  # that cannot be returned is worse than a fire that did not happen: it also spends the quota.
+  _CC_CB=""
+  if [ -n "${CC_FIRE_BRIEF_LIB:-}" ]; then
+    if [ -f "${CC_FIRE_BRIEF_LIB}" ]; then _CC_CB="${CC_FIRE_BRIEF_LIB}"; fi
+  else
+    for _CC_CBD in "$(dirname "$_CC_KS")/lib/cloud-brief.sh" \
+                   "$(dirname "$0")/lib/cloud-brief.sh" \
+                   "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/cloud-brief.sh" \
+                   "${HOME:-}/.claude/scripts/lib/cloud-brief.sh"; do
+      if [ -f "$_CC_CBD" ]; then _CC_CB="$_CC_CBD"; break; fi
+    done
+  fi
+  if [ -z "$_CC_CB" ]; then
+    echo "!! cloud fire: REFUSING — scripts/lib/cloud-brief.sh is unreachable, so the session could" >&2
+    echo "   not be told which branch to push or to beacon its boot. It would strand its own work." >&2
+    emit_fire_refusal cloud-brief-absent "scripts/lib/cloud-brief.sh unreachable — no return channel, no boot contract"
+    exit 10
+  fi
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  . "$_CC_CB" || { echo "!! cloud fire: cloud-brief.sh failed to source" >&2
+    emit_fire_refusal cloud-brief-absent "scripts/lib/cloud-brief.sh failed to source"; exit 10; }
+
   # The account's config dir. `--launcher` bypasses account selection entirely and leaves CHOSEN as
   # a placeholder string, which cannot be routed — and an unrouted create would silently run as
   # whichever account this session happens to be, then be declared under a name that is not its
@@ -8034,20 +8060,22 @@ if [ "$CLOUD" = 1 ]; then
   # there the name is authorised AT CREATE. cc_cloud_create's signature is `cfg cwd prompt`
   # (scripts/lib/cloud-create.sh:185): the CLI leg has NO branch parameter at all, so the payload
   # is the only place the branch can be established, and establishing it is a real `switch -c`.
-  CLOUD_PAYLOAD="$(cat "$PROMPT_FILE")
-"'
-── HOW TO RETURN YOUR WORK (this session runs off-box; read this before you finish) ──
-You are running in an Anthropic-managed VM. Nothing on the operator'"'"'s machine can see your
-filesystem, your processes or your terminal, and you cannot run this repo'"'"'s /ship. Your ONLY
-channel back is a git push, and it must go to exactly this branch — CREATE IT FIRST, then push it:
-
-    git switch -c '"$CLOUD_BRANCH"'
-    git push -u origin HEAD
-
-That branch name was assigned by the firing side and is already declared as the one thing watched
-for your progress — a push anywhere else is invisible and your work will strand. Push whatever you
-have before you finish, even if the work is incomplete; an unpushed cloud session leaves no trace
-of any kind. A local reconciler (scripts/cloud-reconcile.sh) discovers the branch and lands it.'
+  #
+  # 🚨 AND THE FIRST ACT IS AN EMPTY COMMIT, WHICH IS §4.1's CONTRACT AND WAS PROSE ONLY (backlog
+  # 0c8b39b67665). This block used to end "Push whatever you have before you finish" — a push at
+  # the END, i.e. the deliverable. §4.1 requires the push at the START, because `C1 NOT-STARTED`
+  # reads exactly one observable (does the declared ref exist) and that observable is silent about
+  # WHY: a VM that never booted, one that died at boot, one refused entitlement, and a perfectly
+  # healthy one that has not committed anything yet are all "no ref". C1's recover action is
+  # "re-fire", so the untold session's failure mode is a second create spent on top of a live one.
+  # An empty boot commit costs nothing and makes absence mean one thing. The trailer now lives in
+  # scripts/lib/cloud-brief.sh so the API lane in bin/cc-offload carries the SAME bytes — a lane
+  # whose trailer differs is a lane whose C1 verdict means something different.
+  CLOUD_PAYLOAD="$(cc_cloud_brief_payload "$CLOUD_BRANCH" "$(cat "$PROMPT_FILE")")" || {
+    echo "!! cloud fire: REFUSING — the off-box trailer could not be composed for branch '$CLOUD_BRANCH'." >&2
+    emit_fire_refusal cloud-brief-uncomposable "cc_cloud_brief_payload failed for branch '$CLOUD_BRANCH' — no boot contract, no return channel"
+    exit 10
+  }
 
   if [ "$DRY" = 1 ]; then
     echo "-- DRY RUN: cloud fire (no create issued, no quota spent)"
@@ -8155,9 +8183,29 @@ of any kind. A local reconciler (scripts/cloud-reconcile.sh) discovers the branc
     emit_fire_refusal cloud-declare-absent "session $CLOUD_ID created, cc-cloud unreachable — session is live and UNDECLARED"
     exit 11
   fi
-  if ! "$CLOUD_DECL" declare --id "$CLOUD_ID" --branch "$CLOUD_BRANCH" --account "$CLOUD_ACCT" \
-         --repo "$REPO" --url "https://claude.ai/code/$CLOUD_ID" \
-         --item "handoff-fire $(basename "$PROMPT_FILE")" >&2; then
+  # `--beacon` records that THIS fire's payload carried §4.1's boot contract. It is not decoration:
+  # C1 NOT-STARTED means "never booted" only for a session that was TOLD to beacon, so `cc-cloud`
+  # reads this field to decide whether its C1 detail is a diagnosis or an ambiguity — the same
+  # abstain-on-unmeasured shape `base_probe` already uses one arm below it.
+  #
+  # …AND IT DEGRADES RATHER THAN FAILING THE DECLARE. `--beacon` is new, and this repo IS the live
+  # layer's source: a landed EDIT rides its per-file symlink immediately, but a box whose `cc-cloud`
+  # has not converged rejects an unknown arg with exit 2. Failing there would trade a MISSING FIELD
+  # for a LIVE UNDECLARED SESSION (exit 11) — quota burning where nothing local can see, address or
+  # reap it, with a 600s orphan reaper running. The retry drops only the flag, so the fallback is
+  # exactly today's behaviour and `classify` reads it as "no boot contract", which is true.
+  CLOUD_DECL_ARGS=(declare --id "$CLOUD_ID" --branch "$CLOUD_BRANCH" --account "$CLOUD_ACCT"
+                   --repo "$REPO" --url "https://claude.ai/code/$CLOUD_ID"
+                   --item "handoff-fire $(basename "$PROMPT_FILE")")
+  CLOUD_DECL_OK=0
+  if "$CLOUD_DECL" "${CLOUD_DECL_ARGS[@]}" --beacon >&2; then
+    CLOUD_DECL_OK=1
+  else
+    echo "-- cloud fire: declare rejected --beacon; retrying without it. The session gets declared" >&2
+    echo "   either way, and cc-cloud then reports 'no boot contract' rather than a cause it cannot know." >&2
+    if "$CLOUD_DECL" "${CLOUD_DECL_ARGS[@]}" >&2; then CLOUD_DECL_OK=1; fi
+  fi
+  if [ "$CLOUD_DECL_OK" != 1 ]; then
     echo "!! cloud fire: session $CLOUD_ID CREATED but the declaration FAILED — it is live and unobservable." >&2
     echo "     cc-cloud declare --id $CLOUD_ID --branch $CLOUD_BRANCH --account $CLOUD_ACCT --repo $REPO" >&2
     emit_fire_refusal cloud-declare-failed "session $CLOUD_ID created, cc-cloud declare exited non-zero — live and UNDECLARED"
