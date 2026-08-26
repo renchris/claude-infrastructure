@@ -194,6 +194,79 @@ setup() {
   case "$output" in *'"daemon_pid":"222"'*) echo "argv MENTION counted as a daemon (pgrep -f trap): $output"; false ;; *) ;; esac
 }
 
+# The decoy above is REJECTED BY THE SCAN BOUND, not by the law the test is named after. Measured
+# 2026-08-26: `/x/claude --print please fix hooks/lead-crash-watchdog.sh` puts its token at FIELD 12,
+# and the enumerator only ever looked at fields 8 and 9 — so the row never reached the predicate, and
+# "not a mere argv mention" went untested for as long as the test existed. Move the SAME mention to
+# field 9 and the pre-2026-08-26 enumerator counted it as a daemon. This test is that case: argv[0] is
+# not an interpreter, so argv[1] is an ARGUMENT, and the row is a mention however well-anchored the
+# token is. Red against the pre-fix tree; the decoy above is green against it.
+@test "enumerate: a mention at argv[1] under a NON-interpreter argv[0] is not a daemon" {
+  stub="$D/ps"
+  {
+    printf '#!/bin/bash\n'
+    printf 'printf "%%s\\n" "  PID STARTED                     ELAPSED ARGS"\n'
+    printf 'printf "%%s\\n" "111 Wed 29 Jul 22:34:14 2026 00:10 /bin/bash /x/hooks/lead-crash-watchdog.sh"\n'
+    printf 'printf "%%s\\n" "444 Wed 29 Jul 22:34:14 2026 00:10 /opt/homebrew/bin/shellcheck /x/hooks/lead-crash-watchdog.sh"\n'
+  } > "$stub"
+  chmod +x "$stub"
+  run env CC_WATCHDOG_PS_BIN="$stub" "$REAPER" watchdog-census --json
+  [ "$status" -eq 0 ]
+  case "$output" in *'"daemon_pid":"111"'*) ;; *) echo "the real daemon was not enumerated: $output"; false ;; esac
+  case "$output" in *'"daemon_pid":"444"'*) echo "an argv[1] MENTION under a non-interpreter argv[0] was counted as a daemon: $output"; false ;; *) ;; esac
+  printf '%s' "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["counts"]["live_procs"]==1, d["counts"]'
+}
+
+# The arm that had NO control cell and, on this box, no live instance either — a daemon exec'd through
+# its own shebang, so the script IS argv[0]. Nobody knew whether it worked (named by recycle #233).
+@test "enumerate: a daemon exec'd directly at argv[0] is still enumerated" {
+  stub="$D/ps"
+  {
+    printf '#!/bin/bash\n'
+    printf 'printf "%%s\\n" "  PID STARTED                     ELAPSED ARGS"\n'
+    printf 'printf "%%s\\n" "555 Wed 29 Jul 22:34:14 2026 00:10 /x/hooks/lead-crash-watchdog.sh"\n'
+  } > "$stub"
+  chmod +x "$stub"
+  run env CC_WATCHDOG_PS_BIN="$stub" "$REAPER" watchdog-census --json
+  [ "$status" -eq 0 ]
+  case "$output" in *'"daemon_pid":"555"'*) ;; *) echo "a directly-exec'd daemon was not enumerated: $output"; false ;; esac
+}
+
+# The ANCHORING's own job, kept in its own cell so it cannot be conflated with command position again.
+@test "enumerate: a longer name sharing the prefix is not the daemon" {
+  stub="$D/ps"
+  {
+    printf '#!/bin/bash\n'
+    printf 'printf "%%s\\n" "  PID STARTED                     ELAPSED ARGS"\n'
+    printf 'printf "%%s\\n" "666 Wed 29 Jul 22:34:14 2026 00:10 /bin/bash /x/hooks/lead-crash-watchdog.sh.bak"\n'
+  } > "$stub"
+  chmod +x "$stub"
+  run env CC_WATCHDOG_PS_BIN="$stub" "$REAPER" watchdog-census --json
+  [ "$status" -eq 0 ]
+  case "$output" in *'"daemon_pid":"666"'*) echo "a longer name was counted as the daemon: $output"; false ;; *) ;; esac
+  printf '%s' "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["counts"]["live_procs"]==0, d["counts"]'
+}
+
+# control 2 is now one cell per arm; the human line must name every arm's verdict, so a future reader
+# can see WHICH discrimination is being claimed rather than a bare OK.
+#
+# ⚠️ WHAT THIS TEST DOES NOT PROVE, measured rather than assumed: it greps for arm strings, and a cell
+# replaced by a hardcoded `longer=REJECTED` still prints one. Mutating the control that way reds
+# NOTHING in this suite (mutant M3, 2026-08-26) — so this test proves the arms are RENDERED, never
+# that they are COMPUTED. The WIRING is proven from the subject side instead: breaking the argv[0] arm,
+# the interpreter guard, or the end-anchor each drives control-untracked to FAIL and reds this test
+# along with the matching enumerate test (mutants M1, M2, M4). Read this the way the fix below it was
+# read — an assertion satisfied by a string its subject can produce without doing the work is the same
+# defect one level up, and naming the limit is cheaper than over-crediting the check.
+@test "watchdog-census: control 2 names a verdict for every arm, mention cells included" {
+  run "$REAPER" watchdog-census
+  [ "$status" -eq 0 ]
+  case "$output" in *"control-untracked=OK"*) ;; *) echo "untracked control did not pass: $output"; false ;; esac
+  for arm in "direct=SEEN" "interp=SEEN" "mention=REJECTED" "far=REJECTED" "longer=REJECTED"; do
+    case "$output" in *"$arm"*) ;; *) echo "arm not rendered: $arm in: $output"; false ;; esac
+  done
+}
+
 # ── the safety property: CENSUS ONLY ────────────────────────────────────────────────────────────
 @test "census kills NOTHING — the process it names as an orphan is still alive afterwards" {
   # Effect read, not a text scan: the fixture orphan names THIS test's own pid, so if the leg ever
