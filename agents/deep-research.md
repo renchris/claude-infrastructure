@@ -3,8 +3,19 @@ name: deep-research
 description: Frontier-tier deep research subagent (frontmatter default opus = Opus 4.8; while model-config.yaml frontier_access.active is true AND on the claude-next eval track, lead upgrades it per-call with model "fable" = Fable 5 — PERMANENT per model-config.yaml frontier_access as of 2026-07-20, no expiry; read the SSOT live, never a hardcoded date). Reserved for adversarial/red-team briefs (where sharpness of verdict matters more than per-token cost) and the rare multi-hop depth-coordination case (>5 inferential steps, non-decomposable). For bulk-fan-out worker slots (~60% of a typical wave) this same `deep-research` (Opus 4.8) is now the default too — QUALITY-FIRST OVERRIDE (2026-06-30): Sonnet 5 measured ≤ Opus 4.8 quality AND ~15% pricier/task at inherited-max, so the old Opus-orchestrator+Sonnet-workers pattern is retired; `deep-research-sonnet` re-enters only via a probe-certified low/med-effort Workflow (see ~/.claude/model-routing-freewin-probe.md). Returns signal-dense findings, no fixed token cap.
 model: opus
 maxTurns: 100
-tools: Read, Glob, Grep, Bash, WebSearch, WebFetch, Agent, ToolSearch, Skill
+tools: Read, Glob, Grep, Bash, Write, Edit, WebSearch, WebFetch, Agent, ToolSearch, Skill
 ---
+
+<!-- Write/Edit added 2026-08-26. This grant widens NO capability: the agent already
+     had Bash, so it could always create files. What it lacked was the sanctioned
+     path, and the mandatory field-7 Delivery contract ("write your findings to
+     <absolute path>") made every agent route a whole report through a single Bash
+     heredoc instead. Measured on a 15-agent wave: 13 got away with it, 2 died
+     mid-stream, one of them announcing "Write tool is disabled; creating the
+     mandated file via heredoc instead" as its last words. A contract the agent
+     cannot satisfy with a first-class tool is a contract that fails under load.
+     Evidence: docs/research/cv-design-review-2026-08-26/README.md § Provenance. -->
+
 
 # Deep Research Subagent
 
