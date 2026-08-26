@@ -196,11 +196,53 @@ PYEOF
 
 # The four files the class actually lived in. Named, so a future refactor that reintroduces the bug
 # in any of them fails HERE with the history attached, not just in the anonymous whole-tree scan.
-@test "the four known sites are all clean" {
-  local f
+#
+# THE LOOP VARIABLE HAS TO REACH THE SUBJECT, and until 2026-08-26 it did not. This arm used to run
+# `bash "$LINT" "$REPO/tests"` — the SAME whole-tree scan — once per iteration, with $f appearing
+# only in an existence check and in the failure message. Three things followed, and the third is the
+# one that costs a future reader an afternoon:
+#   · it had ZERO attribution power. Measured by planting the violating shape in the FOURTH named
+#     site: the lint itself printed "handoff-fire-kitty-daemon.bats", and this arm discarded that and
+#     reported "whole-tree scan is red while checking boot-resume-launch" — the FIRST site, which was
+#     clean. A red always names site one, whichever site caused it.
+#   · it was a byte-for-byte repeat of "the real tree is CLEAN" above, four times over. Its
+#     CC_AFUNIX_ALLOWLIST="" looks like a stricter setting but EMBEDDED_ALLOWLIST is already the
+#     empty string, so it selected exactly the same scan.
+#   · and a title naming a number is a completeness claim that nothing checked (memory:
+#     assertion-span-must-equal-its-subject; per-site-mutation-attributes-coverage — a green sweep
+#     over one whole-tree scan credits no site at all).
+# Scanning each site ALONE fixes all three at once: lint_dir takes a directory and enumerates
+# "$dir"/*.bats, so a one-file directory is the smallest scope it can be asked about, the verdict is
+# then genuinely per-site, and the message can only name the file that was scanned.
+@test "each of the four known sites is clean, scanned IN ISOLATION so a red names the site" {
+  local f d
   for f in boot-resume-launch cc-kitty-socket kitty-socket-address handoff-fire-kitty-daemon; do
-    [ -f "$REPO/tests/$f.bats" ] || { echo "missing suite: $f.bats"; false; }
-    CC_AFUNIX_ALLOWLIST="" run bash "$LINT" "$REPO/tests"
-    [ "$status" -eq 0 ] || { echo "whole-tree scan is red while checking $f"; false; }
+    [ -f "$REPO/tests/$f.bats" ] || { echo "missing suite: $f.bats" >&2; return 1; }
+    d="$BATS_TEST_TMPDIR/site-$f"
+    mkdir -p "$d"
+    cp "$REPO/tests/$f.bats" "$d/$f.bats"
+    CC_AFUNIX_ALLOWLIST="" run bash "$LINT" "$d"
+    [ "$status" -eq 0 ] || { echo "$f.bats binds an AF_UNIX socket by absolute path — the lint said: $output" >&2; return 1; }
   done
+}
+
+@test "INSTRUMENT CONTROL: an isolated per-site scan can go RED, and it names THAT site" {
+  # Without this, the arm above passes just as happily against a lint_dir that had stopped reading
+  # its input — an isolated directory is exactly the fixture a broken extractor would find empty
+  # (memory: probe-that-acts-on-absence-must-confirm-presence). Both halves are here, over the SAME
+  # copied file, so the red is attributable to the plant and to nothing else.
+  local d="$BATS_TEST_TMPDIR/ctl-red" e="$BATS_TEST_TMPDIR/ctl-green" n=0
+  mkdir -p "$d" "$e"
+  cp "$REPO/tests/handoff-fire-kitty-daemon.bats" "$d/handoff-fire-kitty-daemon.bats"
+  cp "$REPO/tests/handoff-fire-kitty-daemon.bats" "$e/handoff-fire-kitty-daemon.bats"
+  # assembled, never a literal — a literal here would make this suite violate its own rule
+  printf '%s\n' "$ABS_ONELINE" >> "$d/handoff-fire-kitty-daemon.bats"
+
+  CC_AFUNIX_ALLOWLIST="" run bash "$LINT" "$d"
+  [ "$status" -ne 0 ] || { echo "the isolated scan stayed GREEN on a planted absolute bind — it cannot discriminate" >&2; return 1; }
+  n="$(printf '%s\n' "$output" | /usr/bin/grep -c 'handoff-fire-kitty-daemon.bats')"
+  [ "$n" -ge 1 ] || { echo "the isolated scan went red without naming the site: $output" >&2; return 1; }
+
+  CC_AFUNIX_ALLOWLIST="" run bash "$LINT" "$e"
+  [ "$status" -eq 0 ] || { echo "the UNPLANTED copy is red too — the red above is not the plant: $output" >&2; return 1; }
 }
