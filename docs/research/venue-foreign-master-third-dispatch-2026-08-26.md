@@ -114,6 +114,12 @@ distinction matters to whoever tries this next. Measured this session, on this V
 | `cc-backlog block 8f59467c92b0 --needs …` | `cc-backlog: unknown id 8f59467c92b0` | **3** |
 | `cc-backlog done 8f59467c92b0 --evidence …` | *(same shape)* | **3** |
 | `cc-backlog list --all` | *(empty)* | **0** |
+| `cc-notify --role desk "…"` | `verdict=unresolvable … reason=role-unset`, then `fallback=phone-unwired — push-send is INERT (PUSHOVER_TOKEN/PUSHOVER_USER unset)` | **3** |
+
+`cc-notify` closes the set: the dispatch brief names three rails for a blocked item — `cc-backlog
+block`, `cc-backlog done`, `cc-notify --role desk` — and **all three exit 3 from this venue**, the
+notifier on both its channels (no live desk pane at `~/.claude/cc-roles/desk`, and the phone fallback
+has never been wired). There is no path from this VM to the operator's ledger *or* to the operator.
 
 So a cloud session **cannot** silently mis-report a park or a close: both write verbs fail with a
 clear message and a non-zero status, and a caller checking `$?` gets the truth. The rc-0 direction is
