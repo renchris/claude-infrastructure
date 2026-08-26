@@ -283,9 +283,20 @@ up_fixture() {
 
   # …and the caller half, asserted on ship-land's source: a re-introduced strip would silently put
   # the collapse back with every lint here still passing, because the lints never see the caller.
-  run grep -n "uown=\"\$(git diff --name-only" "$REPO/scripts/ship-land.sh"
+  # RE-ANCHORED 2026-08-26. This used to `run grep -n "uown=\"\$(git diff --name-only"` — a
+  # SOURCE-TEXT anchor on a spelling the 2026-08-15 lint_own_scope refactor deleted (backlog
+  # c1a29f8ee045 / 5fc8ff411a7c, and the arm's own comment records the removal). The grep therefore
+  # matched nothing, `[ "$status" -eq 0 ]` went red — and the `case` that carried the ACTUAL
+  # anti-strip check never executed at all. So this guard had stopped guarding while reporting
+  # itself as a RED on every land that selected it: the loud failure and the silent hole were the
+  # same event. An anchor pins a SPELLING and rots with the next refactor; assert the PROPERTY.
+  run grep -n 'uown="$(lint_own_scope' "$REPO/scripts/ship-land.sh"
   [ "$status" -eq 0 ]
-  case "$output" in *"sed 's:^[^/]*/::'"*) echo "ship-land strips the leading component off the utc own-set again — the three scan roots are merged" >&2; return 1 ;; esac
+  # THE PROPERTY, and it is what the `case` above was reaching for: no LIVE line may re-introduce
+  # the strip. Comment lines are excluded deliberately — the one surviving mention is the comment
+  # RECORDING the removal, and a guard that counted its own documentation is the scar where a grep
+  # matches the prose describing the thing instead of the thing.
+  [ "$(grep -Fn "sed 's:^[^/]*/::'" "$REPO/scripts/ship-land.sh" | grep -vc '^[0-9]*: *#')" -eq 0 ]
 }
 
 @test "basename collapse: a BARE own-entry is still wide — it matches in any directory" {
