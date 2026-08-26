@@ -2375,12 +2375,17 @@ wd_lstart(){ ps -o lstart= -p "${1:-0}" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s
 # row alone, and a genuinely orphaned daemon becomes invisible: precisely the false-clean report
 # this command check exists to prevent.
 #
-# THE SAME LAW IS ALREADY STATED AND TESTED TWENTY LINES DOWN, for the other predicate:
-# wd_daemon_table matches the script token in the COMMAND position and never `pgrep -f`, because
-# "any process whose argv merely MENTIONS the path" is a false census — with a test carrying a decoy
-# to prove it. That law was never carried across to this, its sibling, even though this end fails
-# the QUIETER way: an over-matching enumerator prints a spurious `▶ kill` an operator will not run,
-# while an over-matching lead check prints a clean zero nobody investigates.
+# THE SAME LAW IS ALREADY STATED TWENTY LINES DOWN, for the other predicate: wd_daemon_table matches
+# the script token in the COMMAND position and never `pgrep -f`, because "any process whose argv
+# merely MENTIONS the path" is a false census. That law was never carried across to this, its sibling,
+# even though this end fails the QUIETER way: an over-matching enumerator prints a spurious `▶ kill`
+# an operator will not run, while an over-matching lead check prints a clean zero nobody investigates.
+#
+# ⚠️ CORRECTION 2026-08-26: this paragraph used to read "STATED AND TESTED", crediting the sibling's
+# decoy test with proving the law. Measured — the decoy put its mention at FIELD 12, outside the scan
+# bound, so it was rejected without the law ever being exercised, and the sibling ADMITTED a mention
+# at field 9. Both predicates were violating the law; only one of them had it written down. A law a
+# file states is not a law the file enforces, and a test named after a law is not a test of it.
 #
 # TWO RENDERINGS, because they fail in opposite directions and neither is free: the IMAGE (`comm`)
 # cannot be forged by a process's arguments but is the INTERPRETER under a script-shebang launcher;
@@ -2553,8 +2558,30 @@ wd_control_dialect(){
 # Matched on the script token inside ARGS, never `comm` (truncated to 16 chars, so every one of these
 # reads "lead-crash-watch" and no exact match is possible) and never `pgrep -f` (which also matches
 # any process whose argv merely MENTIONS the path — agent briefs quoting a filename have produced
-# exactly that false census before). Anchored to a whitespace boundary and end-of-token so a path
-# ending in the script name matches while a longer name does not.
+# exactly that false census before).
+#
+# TWO SEPARATE DISCRIMINATIONS LIVE HERE, and conflating them is how this predicate was wrong:
+#
+#   ANCHORING — /(^|\/)lead-crash-watchdog\.sh$/ — separates the script from a LONGER NAME
+#   (`…watchdog.sh.bak`). That is its whole job. It says NOTHING about where in argv the token sits:
+#   `hooks/lead-crash-watchdog.sh` typed as an ARGUMENT satisfies it exactly as well as the same path
+#   exec'd as the command, because both end in `/lead-crash-watchdog.sh`.
+#
+#   COMMAND POSITION — separates a daemon from a MENTION, and it is a test on WHICH FIELD matched and
+#   on what sits beside it. argv begins at field 8 (lstart occupies $2-$6, etime $7), so:
+#     · $8 matched  ⇒ the token IS argv[0]: this process IS the script. Accept.
+#     · $9 matched  ⇒ accept ONLY IF $8 is an INTERPRETER — `bash /…/lead-crash-watchdog.sh` is how
+#       every live instance is spawned (4 of 4 measured 2026-08-26, all `/bin/bash` at $8). If $8 is
+#       anything else, $9 is an ARGUMENT and the row is a mention: `shellcheck hooks/lead-crash-…sh`,
+#       `claude hooks/lead-crash-watchdog.sh`. Both were ENUMERATED AS DAEMONS before 2026-08-26.
+#
+# The pre-2026-08-26 form scanned `for (i = 8; i <= 9 …)` and accepted EITHER field unconditionally,
+# so the mention rejection it claimed came entirely from the i<=9 BOUND — an undocumented side effect,
+# not the anchoring this comment used to credit. Measured: the decoy in wd_control_untracked and in
+# tests/watchdog-census.bats puts its mention at FIELD 12, so the bound rejected it and the law went
+# untested; move the same mention to field 9 and the shipped enumerator counted it. A false row here
+# becomes an `untracked_orphan` carrying a printed `▶ kill <pid>`, and inflates n_procs — which is the
+# reconcile's `delta`. wd_control_untracked now carries ONE CELL PER ARM, mention cells included.
 #
 # ONE ps call for the whole census, carrying {pid, lstart, etime} so the classification pass never
 # forks again. The naive shape — enumerate pids, then `ps -o lstart=` per .daemon record per daemon —
@@ -2569,9 +2596,15 @@ wd_control_dialect(){
 # Seam: CC_WATCHDOG_PS_BIN — lets the positive control drive a synthetic process table.
 wd_daemon_table(){
   "${CC_WATCHDOG_PS_BIN:-ps}" -axo pid,lstart,etime,args 2>/dev/null \
-    | awk '{ for (i = 8; i <= 9 && i <= NF; i++)
-               if ($i ~ /(^|\/)lead-crash-watchdog\.sh$/) {
-                 printf "%s\t%s %s %s %s %s\t%s\n", $1, $2, $3, $4, $5, $6, $7; break } }' \
+    | awk '{
+             cmd = 0
+             if (NF >= 8 && $8 ~ /(^|\/)lead-crash-watchdog\.sh$/)
+               cmd = 1                                    # the token IS argv[0]
+             else if (NF >= 9 && $9 ~ /(^|\/)lead-crash-watchdog\.sh$/ && \
+                      $8 ~ /(^|\/)(bash|sh|zsh|dash|ksh)$/)
+               cmd = 1                                    # interpreter argv[0], script argv[1]
+             if (cmd)
+               printf "%s\t%s %s %s %s %s\t%s\n", $1, $2, $3, $4, $5, $6, $7 }' \
     | sort -u
 }
 wd_daemon_pids(){ wd_daemon_table | cut -f1; }
@@ -2582,26 +2615,65 @@ wd_daemon_pids(){ wd_daemon_table | cut -f1; }
 # stub `ps` emits a synthetic table containing one daemon pid that appears in no .daemon file, and
 # the enumerator must return it. If wd_daemon_pids' args-matching ever silently stops matching — a
 # `comm` truncation, a changed ps format, an over-anchored pattern — the live census would quietly
-# report zero orphans, which is exactly what "everything is fine" looks like.
-wd_control_untracked(){
-  local d stub out
-  d="$(mktemp -d "${TMPDIR:-/tmp}/wd-ctl2.XXXXXX" 2>/dev/null)" || { printf 'control-untracked=FAIL reason=no-tmpdir'; return 1; }
-  stub="$d/ps"
+# report zero orphans, which is exactly what "everything is fine" looks like. It fails the other way
+# too, which this control was blind to until 2026-08-26: an UNDER-anchored match invents orphans.
+#
+# ONE CELL PER ARM, because an arm with no cell has no control. Until 2026-08-26 this control was a
+# single pass/fail over one three-row table, and every row it carried put its decisive token at a
+# field the shipped scan did not reach or did reach unconditionally — so it proved that A daemon is
+# enumerated and nothing about WHICH POSITIONS count:
+#   direct   — token at argv[0], no interpreter: must be ENUMERATED. Had NO cell and, on this box, no
+#              live instance either; the arm was simply unproven (named by recycle #233, measured here)
+#   interp   — token at argv[1] under `bash`: must be ENUMERATED. The shipped arm, and 4 of 4 live
+#              daemons on 2026-08-26
+#   mention  — token at argv[1] under a NON-interpreter argv[0]: must be REJECTED. THIS IS THE CELL
+#              THAT MOVED — the pre-2026-08-26 enumerator ADMITTED it, counting `shellcheck <path>`
+#              as an orphaned daemon
+#   far      — token past the scan bound: must be REJECTED. The only mention the old decoy tested,
+#              and it was rejected by the BOUND, which is why the law above went unmeasured
+#   longer   — `…watchdog.sh.bak`: must be REJECTED. This is the ANCHORING's actual job, and keeping
+#              it in its own cell is what stops the two discriminations being conflated again
+# Rendered as a BOOL, like control_lead and unlike control_dialect: every cell is decided by a fixture
+# this control fully renders, so no arm is unreachable and there is no honest N/A for a bool to
+# launder. The fixture is written here by hand and read back through the subject — it shares no writer
+# with the predicate it tests.
+wd_ctl_untracked_cell(){ # <dir> <argv> → "1" if the enumerator calls that row a daemon, else "0"
+  local stub out
+  stub="$1/ps"
   {
     printf '#!/bin/bash\n'
     printf 'printf "%%s\\n" "  PID STARTED                     ELAPSED ARGS"\n'
-    printf 'printf "%%s\\n" "424242 Wed 29 Jul 22:34:14 2026 01-02:03:04 /bin/bash /w/hooks/lead-crash-watchdog.sh"\n'
-    printf 'printf "%%s\\n" "424243 Wed 29 Jul 22:34:14 2026 01-02:03:04 /bin/bash /w/hooks/not-the-watchdog.sh"\n'
-    printf 'printf "%%s\\n" "424244 Wed 29 Jul 22:34:14 2026 01-02:03:04 /w/claude --print fix hooks/lead-crash-watchdog.sh"\n'
+    printf 'printf "%%s\\n" "424242 Wed 29 Jul 22:34:14 2026 01-02:03:04 %s"\n' "$2"
   } > "$stub"
   chmod +x "$stub" 2>/dev/null || true
   out="$(CC_WATCHDOG_PS_BIN="$stub" wd_daemon_pids)"
+  [ "$out" = "424242" ] && printf '1' || printf '0'
+}
+
+wd_control_untracked(){
+  local d rc=0 direct interp mention far longer
+  d="$(mktemp -d "${TMPDIR:-/tmp}/wd-ctl2.XXXXXX" 2>/dev/null)" || { printf 'control-untracked=FAIL reason=no-tmpdir'; return 1; }
+
+  [ "$(wd_ctl_untracked_cell "$d" '/w/hooks/lead-crash-watchdog.sh')" = 1 ] \
+    && direct=SEEN || { direct=MISSED; rc=1; }
+  [ "$(wd_ctl_untracked_cell "$d" '/bin/bash /w/hooks/lead-crash-watchdog.sh')" = 1 ] \
+    && interp=SEEN || { interp=MISSED; rc=1; }
+  [ "$(wd_ctl_untracked_cell "$d" '/w/bin/shellcheck /w/hooks/lead-crash-watchdog.sh')" = 0 ] \
+    && mention=REJECTED || { mention=COUNTED; rc=1; }
+  [ "$(wd_ctl_untracked_cell "$d" '/w/claude --print please fix hooks/lead-crash-watchdog.sh')" = 0 ] \
+    && far=REJECTED || { far=COUNTED; rc=1; }
+  [ "$(wd_ctl_untracked_cell "$d" '/bin/bash /w/hooks/lead-crash-watchdog.sh.bak')" = 0 ] \
+    && longer=REJECTED || { longer=COUNTED; rc=1; }
+
   rm -rf "$d" 2>/dev/null || true
-  if [ "$out" = "424242" ]; then
-    printf 'control-untracked=OK (synthetic unrecorded daemon enumerated from the process table; both decoys ignored)'
+
+  if [ "$rc" = 0 ]; then
+    printf 'control-untracked=OK (direct=%s interp=%s mention=%s far=%s longer=%s — an unrecorded daemon is enumerated from the process table, and the script counts only in the COMMAND position, never as an argument)' \
+      "$direct" "$interp" "$mention" "$far" "$longer"
     return 0
   fi
-  printf 'control-untracked=FAIL (enumerator returned "%s", expected 424242 — the census CANNOT SEE untracked daemons; untracked_orphan=0 below means nothing)' "${out:-<empty>}"
+  printf 'control-untracked=FAIL (direct=%s interp=%s mention=%s far=%s longer=%s — a MISSED arm means the census cannot see untracked daemons and untracked_orphan=0 below means nothing; a COUNTED arm means it is inventing them, and both untracked_orphan and the reconcile delta are inflated)' \
+    "$direct" "$interp" "$mention" "$far" "$longer"
   return 1
 }
 
