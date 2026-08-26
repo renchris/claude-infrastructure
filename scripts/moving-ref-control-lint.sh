@@ -135,7 +135,18 @@ moving_ref_shows() { # $1=file
       sub(/^[^[:alnum:]_-]?show[[:space:]]+/, "", tok)
       ref = tok; sub(/:.*$/, "", ref)
       # PINNED: 7+ hex characters, an abbreviated or full sha. Everything else moves.
-      if (ref ~ /^[0-9a-f]{7,40}$/) next
+      # ⚠️ NO INTERVAL EXPRESSION, AND NOT AS A STYLE NOTE. This read /^[0-9a-f]{7,40}$/, and
+      # mawk does not implement {n,m} — it takes the braces as literal characters, so the pattern
+      # matches nothing and EVERY correctly-pinned sha falls through to the MOVING branch.
+      # Measured 2026-08-26 on mawk 1.3.4: e6e5a4355 does NOT match that pattern, the --selftest
+      # below goes red on both of its `green pinned` cases, and a whole-tree scan reports 10
+      # suites — every one of them correctly pinned — as moving-ref controls.
+      # Invisible on the box this landed from (macOS awk is BWK awk, which does implement
+      # intervals) and wrong on every GNU/Linux one: CI, and now this repo own off-box cloud
+      # venue, which is a Linux VM by construction. The failure direction is the bad one twice
+      # over — it manufactures findings, and own-scope makes them BLOCK whoever next touches an
+      # innocent suite. Length arithmetic is the portable spelling and says the same thing.
+      if (ref ~ /^[0-9a-f]+$/ && length(ref) >= 7 && length(ref) <= 40) next
       src = $0; sub(/^[[:space:]]+/, "", src)
       printf "%d:%s:%s\n", NR, (ref == "" ? "<unreadable expansion>" : ref), src
     }
