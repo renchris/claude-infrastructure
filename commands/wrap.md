@@ -62,6 +62,18 @@ silently skips, and the feature is a no-op rather than a stale one. `LIVE_ADDS` 
 at lag 1 (2026-08-09, backlog `99b715f31a98` — measured on `scripts/lib/pane-spawn-log.sh`, where this
 ledger read "BEHIND 7, within budget (25)" over a feature that was doing nothing at all).
 
+**The budget has TWO arms and the ledger now says WHICH one decided** (2026-08-26, recycle #236).
+`LIVE_BREACH_WHY` carries `migration` · `diverged` · `adds` · `commits` · `time` out of the ladder
+that computes the rung, so a TIME breach no longer renders in COMMIT units — it used to read "the
+live layer is 1 commit(s) behind and past its converge budget" against a commit budget of 25, which
+contradicts itself and contradicts `deploy-live.sh`'s own banner over the identical lag (the two arms
+genuinely disagree for up to an hour, because that one truncates its hours to integers and trips at
+an effective 7h). And the clock itself now takes `?` when it cannot be read: `LIVE_AGE` is the age in
+seconds of the commit the live layer sits on, and a failed read used to leave 0 — the *freshest*
+value expressible, so a dead sensor cleared the close and the readout said "inside the time budget"
+about a comparison nothing had made. Both live-side reads go through one bound against one repo, so
+they fail together; the added-file read runs in YOUR repo and is what still answers.
+
 ## ◎ Goal liveness — is your `/goal` actually being EVALUATED?
 
 **Not a rung, and deliberately so.** A live `/goal` is a normal state of a working session, so a
