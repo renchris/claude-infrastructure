@@ -88,6 +88,27 @@ setup() {
   case "$output" in *"control-untracked=OK"*) ;; *) echo "untracked control did not pass: $output"; false ;; esac
 }
 
+# Control 3 covers what control 1 structurally cannot. Control 1 writes its fixture with wd_lstart
+# and reads it back through wd_lstart_matches's reader-ambient arm — the SAME function in the SAME
+# shell — so it matches by construction: measured 2026-08-26, deleting EITHER cross-dialect arm of
+# wd_lstart_matches leaves control 1 printing OK. Those arms carry backlog 7a00b5de1ec0's dialect
+# tolerance, and their failure is the quiet one (a running daemon recorded in another locale
+# classifies `stale-file` = "residue, nothing to reap", and the census reports a clean zero).
+#
+# The assertion is "not FAIL and not absent", never "== OK", because OK is not portable: a reader
+# already at UTC/C renders every dialect the same and the fixture then cannot discriminate, which
+# control 3 reports as N/A. N/A is an honest non-verdict and must not red; FAIL and a missing line
+# must. Killable either way — delete an arm and the real subject prints FAIL here.
+@test "watchdog-census: control 3 proves the cross-dialect arms match, or says it cannot tell" {
+  run "$REAPER" watchdog-census
+  [ "$status" -eq 0 ]
+  case "$output" in
+    *"control-dialect=FAIL"*) echo "dialect control FAILED: $output"; false ;;
+    *"control-dialect="*) ;;
+    *) echo "dialect control did not render at all: $output"; false ;;
+  esac
+}
+
 # ── classification ──────────────────────────────────────────────────────────────────────────────
 @test "classify: dead lead + live pinned daemon = orphan, and its reap command is printed" {
   printf '%s\n' "$DEAD_PID" > "$CC_WATCHDOG_DIR/sid-a.pid"
@@ -160,6 +181,15 @@ setup() {
   run "$REAPER" watchdog-census --json
   [ "$status" -eq 0 ]
   printf '%s' "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["control_ok"] is True, d; assert d["control_untracked_ok"] is True, d; assert "untracked_orphan" in d["counts"], d; assert "spawned" in d["log"], d'
+}
+
+# control_dialect is a STRING here, not a bool, and that is the point: its N/A and UNKNOWN values
+# are non-verdicts a bool would launder into `true`. Assert it is one of the four declared values
+# and that it is not FAIL — the same polarity as the human-output test above.
+@test "census --json carries the dialect control as a four-valued string, not a laundered bool" {
+  run "$REAPER" watchdog-census --json
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); v=d["control_dialect"]; assert v in ("OK","N/A","UNKNOWN","FAIL"), d; assert v != "FAIL", d'
 }
 
 @test "census reconciles spawned vs exits from the daemon's own log" {
