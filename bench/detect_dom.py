@@ -175,8 +175,17 @@ def find(snap: dict, tokens: dict) -> list[dict]:
                 )
 
     # --- 3. type scale: font sizes should come from one small set ------------
-    sizes = [px(e["styles"]["font-size"]) for e in text_els]
-    counts = collections.Counter(sizes)
+    # The scale is inferred over EVERY rendered element, and the violation is
+    # reported only on elements that actually render text. Those are two
+    # different populations on purpose. Inferring the scale from text-bearing
+    # elements alone makes a legitimate step vanish the moment it happens to have
+    # one text user on the page under review -- measured 2026-08-26: dropping a
+    # single 16px mark from the corpus took 16px out of the inferred scale and
+    # put a false positive on the clean control's section heading, which is a
+    # heading at the page's own base size. Inheritance is evidence: an element
+    # computing to 16px is a place the page renders at 16px, whether or not that
+    # particular node is the one holding the characters.
+    counts = collections.Counter(px(e["styles"]["font-size"]) for e in els)
     scale = {s for s, n in counts.items() if n >= 2}
     for e in text_els:
         s = px(e["styles"]["font-size"])

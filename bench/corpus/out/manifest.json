@@ -158,8 +158,8 @@
       "css": ".glyph-btn .glyph { transform: none; }",
       "target": ".glyph-btn .glyph",
       "detectable_by": "pixels",
-      "magnitude": "ink centroid ~2px left of the geometric centre",
-      "dom_blind_because": "Every box-model number is symmetric: the flex container centres the glyph and getBoundingClientRect on the glyph is exactly centred within the button. The asymmetry lives in the distribution of ink inside the glyph's own box, which no DOM API exposes. Detecting it requires computing the centroid of the rendered pixels and comparing it to the geometric centre.",
+      "magnitude": "ink centroid 2.33px left of the geometric centre (14px triangle, centroid at h/3)",
+      "dom_blind_because": "Every box-model number is symmetric: the flex container centres the glyph and getBoundingClientRect on the glyph is exactly centred within the button. The asymmetry lives in the distribution of ink inside the glyph's own box, which no DOM API exposes. Detecting it requires computing the centroid of the rendered pixels and comparing it to the centre of the shape the button paints -- and NOT to the glyph's own box, which is the post-transform box and therefore moves with the very compensation under test.",
       "severity": "medium",
       "html_override": {}
     },

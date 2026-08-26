@@ -199,9 +199,11 @@ DEFECTS: list[Defect] = [
             "getBoundingClientRect on the glyph is exactly centred within the button. The "
             "asymmetry lives in the distribution of ink inside the glyph's own box, which no "
             "DOM API exposes. Detecting it requires computing the centroid of the rendered "
-            "pixels and comparing it to the geometric centre."
+            "pixels and comparing it to the centre of the shape the button paints -- and "
+            "NOT to the glyph's own box, which is the post-transform box and therefore "
+            "moves with the very compensation under test."
         ),
-        magnitude="ink centroid ~2px left of the geometric centre",
+        magnitude="ink centroid 2.33px left of the geometric centre (14px triangle, centroid at h/3)",
         severity="medium",
     ),
     Defect(
@@ -290,11 +292,28 @@ tr + tr td {{ border-top: 1px solid {TOKENS["gray200"]}; }}
   width: 44px; height: 44px; border-radius: 22px; background: {TOKENS["blue700"]};
   display: flex; align-items: center; justify-content: center;
 }}
-.glyph {{ color: #FFFFFF; font-size: 16px; line-height: 1;
-         /* Optical compensation: a triangle's ink mass sits behind its
-            bounding-box centre, so geometric centring reads as left-heavy.
-            Measured offset on this glyph at this size: 2.2px left, 1.9px up. */
-         transform: translate(2px, 2px); }}
+.glyph {{
+  /* The mark is drawn by CSS, not by a font. It was a U+25B6 text glyph until
+     2026-08-26, and that made the CONTROL font-dependent: the compensation below
+     was a constant measured against Helvetica's outline, and Helvetica does not
+     exist off macOS. Measured on Linux/DejaVu, clean.html's own play mark sat
+     3.6px below its button's centre -- so the control carried an optical defect
+     on any machine that was not the one the corpus was authored on, and the
+     pixels-only item it exists to grade could not be scored there at all.
+     A border triangle has exactly the same ink distribution everywhere.
+
+     Ink geometry, therefore exact rather than measured: base 16px on the left
+     edge, apex 14px to the right. The area centroid of a triangle is one third
+     of the way from base to apex, so the ink sits at x = 14/3 = 4.67 inside a
+     14px-wide box whose centre is 7.0 -- 2.33px left of geometric centre.
+     Optical compensation is that number and nothing else; vertically the shape
+     is symmetric and needs none. */
+  width: 0; height: 0; color: #FFFFFF;
+  border-left: 14px solid currentColor;
+  border-top: 8px solid transparent;
+  border-bottom: 8px solid transparent;
+  transform: translate(2.33px, 0);
+}}
 """
 
 BODY_HTML = """
@@ -330,7 +349,7 @@ BODY_HTML = """
     <button class="btn-primary">Confirm all deposits</button>
     <button class="btn-secondary">Release held tables</button>
   </div>
-  <div class="glyph-btn"><span class="glyph">&#9654;</span></div>
+  <div class="glyph-btn"><span class="glyph"></span></div>
 </div>
 """
 

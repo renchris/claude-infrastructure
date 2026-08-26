@@ -18,27 +18,48 @@ Three checks, chosen because each maps to a documented way DOM-only review is
 unsound:
 
   X1 zero-ink        an element reports a healthy box and paints nothing.
-  X2 ink-centroid    PROVISIONAL, OFF BY DEFAULT (--x2 to enable). Two defects
-                     found by trying to validate it, both worth recording:
-                     (a) it compares ink to the element's OWN box, and
+  X2 ink-centroid    ON BY DEFAULT since 2026-08-26 (--no-x2 to disable). It
+                     shipped disabled because trying to validate it found two
+                     defects; both are now fixed, and the fix is what earned the
+                     arm its default:
+                     (a) it compared ink to the element's OWN box, and
                      getBoundingClientRect returns the POST-transform box, so any
-                     translate moves box and ink together and the measured offset
-                     is INVARIANT under the very compensation it should verify;
-                     (b) its background is the region's modal colour, so on a
+                     translate moved box and ink together and the measured offset
+                     was INVARIANT under the very compensation it should verify.
+                     It now measures against the CONTAINER's painted shape, which
+                     no transform on the mark can move.
+                     (b) its background was the region's modal colour, so on a
                      round button the square crop's corners -- page background
-                     outside the circle -- count as ink and swamp a 16px glyph.
-                     The fix for both is to measure against the CONTAINER and to
-                     mask to the painted shape. Until then it reports a real
-                     quantity nobody has validated, which is exactly the kind of
-                     plausible-wrong-number this whole document argues against.
+                     outside the circle -- counted as ink and swamped a 16px
+                     glyph. It now masks to the painted shape, recovered from the
+                     container's OWN background colour by a per-row/per-column
+                     span fill, and the page background outside the disc is
+                     excluded by construction.
+                     Measured on this corpus after the fix: 0 findings on the
+                     control (was 2), 1 on optical-centering (was 2, i.e. the arm
+                     had zero discrimination -- it said the same thing about every
+                     page including the clean one).
   X3 contrast-real   the colour sampled behind the text disagrees with the colour
                      computed from the cascade. getComputedStyle runs BEFORE
                      compositing, so mix-blend-mode, filter and backdrop-filter
                      all make the computed answer wrong; a gradient makes it
                      unrepresentable. This is the check that catches what the
                      scalar blended-backdrop cannot.
+                     Its backdrop estimator was the third defect of the same
+                     family, and it was invisible on the machine it was written
+                     on. It took the MODAL colour of each third -- but under a
+                     gradient no backdrop colour repeats, while the text ink is
+                     one exact constant, so the mode can BE the foreground. It
+                     then contrasts the text against itself, gets 1.00:1 at both
+                     ends, and reports nothing. Measured: on macOS/Helvetica the
+                     backdrop won the mode and the arm fired; on Linux/DejaVu the
+                     ink won and the same arm went silent on the same page. A
+                     detector whose verdict turns on a font fallback is not
+                     validated. It now excludes ink first and takes the MEDIAN of
+                     what is left, which is the statistic a varying backdrop
+                     actually has.
 
-Usage: python3 detect_xcheck.py <corpus-dir>
+Usage: python3 detect_xcheck.py <corpus-dir> [--no-x2]
 """
 
 from __future__ import annotations
@@ -55,10 +76,14 @@ from PIL import Image
 INK_MIN_FRAC = (
     0.002  # below this share of non-background pixels, the box paints nothing
 )
-CENTROID_TOL_PX = 1.0  # ink centre vs box centre
+CENTROID_TOL_PX = 1.0  # ink centre vs the painted shape's centre
 CONTRAST_DELTA = 1.5  # ratio points between sampled and computed contrast
 MIN_BOX = 8  # ignore hairlines; a 1px rule has no meaningful centroid
-X2_ENABLED = "--x2" in sys.argv  # provisional; see the X2 note in the docstring
+# Channel-sum distance under which a pixel counts as "that colour". 40 is the
+# same threshold X1 uses for ink; it sits above JPEG-free antialiasing noise and
+# below any two colours a designer would call different.
+COLOUR_NEAR = 40
+X2_ENABLED = "--no-x2" not in sys.argv  # see the X2 note in the docstring
 
 
 def rel_lum(rgb) -> float:
@@ -102,12 +127,50 @@ def crop(img: np.ndarray, rect: dict, scale: float):
     return img[y0:y1, x0:x1]
 
 
+def near(region: np.ndarray, rgb, tol: int = COLOUR_NEAR) -> np.ndarray:
+    """Boolean mask of pixels within `tol` channel-sum distance of `rgb`."""
+    return (
+        np.abs(region.astype(np.int32) - np.asarray(rgb[:3], dtype=np.int32)).sum(
+            axis=2
+        )
+        <= tol
+    )
+
+
+def span_fill(mask: np.ndarray) -> np.ndarray:
+    """Fill the holes in a convex mask, without a morphology dependency.
+
+    The painted shape we need is the container's background -- a disc, a pill, a
+    rounded rect -- with the glyph punched out of it. Taking the intersection of
+    each row's and each column's occupied span closes that hole exactly for a
+    convex shape, and a mark small enough for this arm to look at is convex. It
+    is deliberately NOT a flood fill: a flood fill from the border would leak
+    through any antialiased seam, and this cannot.
+    """
+    rows = np.zeros_like(mask)
+    cols = np.zeros_like(mask)
+    idx_x = np.arange(mask.shape[1])
+    idx_y = np.arange(mask.shape[0])
+    for y in np.nonzero(mask.any(axis=1))[0]:
+        xs = idx_x[mask[y]]
+        rows[y, xs.min() : xs.max() + 1] = True
+    for x in np.nonzero(mask.any(axis=0))[0]:
+        ys = idx_y[mask[:, x]]
+        cols[ys.min() : ys.max() + 1, x] = True
+    return rows & cols
+
+
 def check(snap: dict, png: pathlib.Path) -> list[dict]:
     img = np.asarray(Image.open(png).convert("RGB")).astype(np.int16)
     # The snapshot is in CSS px; the shot may be at a device scale. Derive the
     # factor from the artifacts themselves rather than trusting a flag.
     scale = img.shape[1] / snap["scroll"]["w"]
+    by_path = {e["path"]: e for e in snap["elements"]}
     out = []
+
+    def container_of(el):
+        head = el["path"].rsplit(" > ", 1)
+        return by_path.get(head[0]) if len(head) > 1 else None
 
     def rep(rule, target, detail, severity="medium"):
         out.append(
@@ -142,48 +205,89 @@ def check(snap: dict, png: pathlib.Path) -> list[dict]:
             )
             continue
 
-        # --- X2: ink is not centred in the box the DOM centred -----------------
+        # --- X2: ink is not centred in the shape the DOM centred it in ---------
         # Only meaningful where the element is a small, self-contained mark. A
         # paragraph's ink is legitimately top-left-heavy because text flows.
+        #
+        # Both operands come from the CONTAINER, never from the mark's own box.
+        # That is the whole fix for defect (a): getBoundingClientRect returns the
+        # post-transform box, so a `translate` on the mark moves box and ink
+        # together and any offset measured inside that box is invariant under the
+        # compensation it is supposed to verify. The container's painted shape is
+        # the one frame the mark's transform cannot move.
+        # A mark, not a paragraph: small, and carrying at most a glyph's worth of
+        # text. Zero text is admitted because an icon drawn by CSS or SVG is the
+        # same subject and paints the same way -- the old text-length floor was a
+        # proxy for "is this a glyph" that excluded every non-font icon.
         is_glyph_like = (
-            X2_ENABLED
-            and frac > 0.02
-            and r["w"] < 64
-            and r["h"] < 64
-            and len(el["text"]) <= 3
+            X2_ENABLED and r["w"] < 64 and r["h"] < 64 and len(el["text"]) <= 3
         )
-        if is_glyph_like and ink.any():
-            ys, xs = np.nonzero(ink)
-            cx_ink = xs.mean() / scale
-            cy_ink = ys.mean() / scale
-            cx_box = (region.shape[1] / scale) / 2
-            cy_box = (region.shape[0] / scale) / 2
-            dx, dy = cx_ink - cx_box, cy_ink - cy_box
-            if abs(dx) > CENTROID_TOL_PX or abs(dy) > CENTROID_TOL_PX:
-                rep(
-                    "xcheck-optical-centre",
-                    el["path"],
-                    f"the DOM centres this box exactly, but its rendered ink sits "
-                    f"{abs(dx):.1f}px {'left' if dx < 0 else 'right'} and "
-                    f"{abs(dy):.1f}px {'up' if dy < 0 else 'down'} of the geometric "
-                    f"centre -- it will read as misaligned however correct the CSS is",
-                )
+        cont = container_of(el) if is_glyph_like else None
+        if cont is not None and cont["rect"]["w"] < 96 and cont["rect"]["h"] < 96:
+            fg = parse_rgb(el["styles"].get("color", ""))
+            cbg = parse_rgb(cont["styles"].get("background-color", ""))
+            shell = crop(img, cont["rect"], scale)
+            # No opaque container fill means no painted shape to mask to, and
+            # guessing one is how this arm produced its first wrong number. Say
+            # nothing rather than measure against the crop's corners.
+            if shell is not None and fg and cbg and cbg[3] > 0.99:
+                bgmask = near(shell, cbg)
+                if bgmask.mean() >= 0.05:
+                    shape = span_fill(bgmask)
+                    # Ink is what sits INSIDE the painted shape and is not the
+                    # fill. Defect (b) was that page background outside the disc
+                    # counted as ink -- and on a white glyph over a white page it
+                    # is not merely noise, it is the same colour. Nothing outside
+                    # `shape` can be counted now, whatever colour it is.
+                    ink_m = shape & ~bgmask & near(shell, fg, COLOUR_NEAR * 2)
+                    if ink_m.sum() >= 8:
+                        ys, xs = np.nonzero(ink_m)
+                        sy, sx = np.nonzero(shape)
+                        dx = (xs.mean() - sx.mean()) / scale
+                        dy = (ys.mean() - sy.mean()) / scale
+                        if abs(dx) > CENTROID_TOL_PX or abs(dy) > CENTROID_TOL_PX:
+                            rep(
+                                "xcheck-optical-centre",
+                                el["path"],
+                                f"the DOM centres this mark exactly inside "
+                                f"{cont['path'].rsplit(' > ', 1)[-1]}, but its rendered "
+                                f"ink sits {abs(dx):.1f}px "
+                                f"{'left' if dx < 0 else 'right'} and {abs(dy):.1f}px "
+                                f"{'up' if dy < 0 else 'down'} of that shape's own "
+                                f"centre -- it will read as misaligned however correct "
+                                f"the CSS is",
+                            )
 
         # --- X3: sampled backdrop vs the one the cascade computed --------------
         if el["text"] and len(el["text"]) > 3:
             fg = parse_rgb(el["styles"].get("color", ""))
             if not fg:
                 continue
-            # Sample the actual backdrop under the text: the modal non-ink colour,
-            # taken separately from the left and right thirds so a backdrop that
-            # VARIES across the run cannot hide behind a single average.
+            # Sample the actual backdrop under the text, separately in the left
+            # and right thirds so a backdrop that VARIES across the run cannot
+            # hide behind a single average.
+            #
+            # Exclude the text's own ink FIRST, then take the median of what is
+            # left. The mode cannot do this job: under a gradient no backdrop
+            # colour repeats, while antialiased text is one exact constant, so
+            # the most frequent colour in the band can be the foreground itself
+            # -- which contrasts against itself at 1.00:1 and makes the arm
+            # silent on precisely the page it exists for. Measured: that is what
+            # it did here under DejaVu, and not under Helvetica. The median is
+            # the statistic a varying backdrop actually has.
             w = region.shape[1]
             thirds = {"left": region[:, : w // 3], "right": region[:, -w // 3 :]}
             sampled = {}
             for side, band in thirds.items():
-                fb = band.reshape(-1, 3)
-                v, c = np.unique(fb, axis=0, return_counts=True)
-                sampled[side] = v[c.argmax()]
+                keep = ~near(band, fg, COLOUR_NEAR * 2)
+                # Too little backdrop left to describe: abstain rather than
+                # report a ratio computed off five pixels.
+                if keep.mean() < 0.2:
+                    sampled = {}
+                    break
+                sampled[side] = np.median(band[keep].reshape(-1, 3), axis=0)
+            if not sampled:
+                continue
             cl = contrast(fg[:3], sampled["left"])
             cr = contrast(fg[:3], sampled["right"])
             if abs(cl - cr) > CONTRAST_DELTA:
