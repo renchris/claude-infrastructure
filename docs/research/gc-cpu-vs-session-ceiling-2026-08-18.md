@@ -144,6 +144,73 @@ measurement (load1 delta across N all-active sessions) and set the ceiling from 
 point. That is a two-arm experiment, not a config edit, and it is the only thing that can legitimately
 move a capacity constant.
 
+### 3.1 AMENDMENT (2026-08-26) — the closing prescription is REFUTED, and this section already contains its refutation
+
+**Backlog `e981656df348` closes here, on a disproof, not on a measurement.** The row this section
+minted — *"`CC_HW_DEFAULT_MAX_LOAD_PER_CORE=2.0` was never derived from a measured failure … derive
+it, do NOT blind-raise; blocked on the marginal-load measurement"* — is **right about the provenance
+and wrong about the cure**. The provenance finding stands exactly as written above and was landed
+into the code comment on 2026-08-25. Both halves of the prescribed cure are refuted on trunk, and one
+of them is refuted four paragraphs above by this very section.
+
+**1 · The prescription contradicts its own section.** §3 establishes that load-per-core is *"an axis
+that provably cannot separate fatal from survived"*, then closes by prescribing that the ceiling be
+set *"from a measured failure point"* on that same axis. Both cannot hold, and the earlier paragraph
+is the one carrying evidence: the survived population **contains** the fatal value (fatal 2.53/core
+against 13 consecutive survived samples at 2.92–5.98/core, plus 42 h at 2.5/core with no panic). That
+is not merely written down — it is *executable* in `scripts/capacity-alarm.sh`'s selftest, which pins
+5.98/core as an ALARM the box **survived**. A failure point lying inside the survived band cannot site
+a threshold, so this is not a sample-size problem and no two-arm experiment repairs it.
+`LOAD_INSENSITIVE_VERIFY_V2.md` §5 reaches the same place from the design side and is blunter:
+*"Load is unbounded above; any constant is a future permanent-refuse."*
+
+**2 · The instrument the prescription names is refuted by name.** *"load1 delta across N all-active
+sessions"* cannot be run as an experiment on this box. `fix(fire-gate): load1 does not move with the
+spawn it was gating` (`f944d6e3`, 2026-08-20, ancestor of trunk) measured that an additional
+**resident** session moves the 1-minute runnable count by ~0 — the delta this asks for is not small,
+it is absent. And `marginal-load-per-active-session-2026-08-19.md` §3 is titled *"Why `load1 ~ N`
+cannot answer this on this box"*: 87.3% of the load numerator is not Claude across an 8.35→46.39
+daily range, and A8's direct probe watched load **fall** while a unit was added. A regression with 3×
+more variance in its confounder than in its treatment always returns something — which is precisely
+where `0.172` and `0.566` came from.
+
+**3 · The named blocker cannot discharge the row, because it answers a different question.** Marginal
+Δload per ACTIVE session is a **capacity-in-sessions coefficient**: it converts a ceiling into a
+session count. It cannot locate a failure boundary, which is what this row asked for. The row was
+parked behind a measurement that could never have released it. `fix(capacity): strike the refuted
+2.5-5 marginal from all three live sites` (`34a21973`, 2026-08-26) reaches the matching conclusion
+from the other side — it struck the refuted figure with **no value substituted** and recorded that the
+active ceiling is *not* blocked on that measurement, so the measurement "can take as long as it needs".
+
+**4 · This section mis-transcribes §9.5, and the slip points the reader the wrong way.**
+`MACHINE_CAPACITY_V2` §9.5 reads *"A ceiling that refuses at **4.0**/core and admits at 1.55/core"* —
+not 2.92. The `2.92` in §9.5 is the **bottom of the survived band** (13 samples at load 29.15–59.80 on
+10 cores), and it is the same 2.92 quoted three paragraphs down as survived. Reporting it as the
+refusal point makes §9.5 look like a tight bracket around 2.0, as though the shipped literal were a
+measured midpoint; in fact the number cited here as evidence *for* a threshold is a member of the
+population that **refutes** one. The section's conclusion — §9.5 contains no derivation — is
+unaffected and stands.
+
+**5 · What landed instead, and why the literal did not move.** `docs(capacity-admit): the ceiling
+cites a section that has no derivation, and the term it parameterises already defaults off`
+(`e89918f2b`, 2026-08-25) struck the false *"§9.5's measured ceiling"* provenance and wrote this
+reasoning at the constant itself. The operative fact is that **the input is wrong, not the number**:
+the load term now defaults **off** — verified on trunk at `scripts/handoff-fire.sh:5074`
+(`[ "${CC_FIRE_LOAD_TERM:-off}" != off ]`) — while `segments` and `active` carry its intent because
+they *do* move with the spawn. The literal stays at 2.0 deliberately (a fix moves a term switch, never
+a ceiling) and binds only the two unattended recovery callers, `scripts/boot-resume-launch.sh:266` and
+`scripts/limit-recover/lr-fire-resume.sh:318`, both budget-released after `CC_ADMIT_BUDGET`
+consecutive refusals. *(That comment cites this rule as `C18`; no `C18` matching it resolves anywhere
+on trunk — the only hits are `ACCOUNT_ROUTING_V2`'s unrelated `route.jsonl` row. The rule itself is
+real and is quoted above from `LOAD_INSENSITIVE_VERIFY_V2.md` §5; cite it there.)*
+
+🚨 **Do not re-mint this row from the closing paragraph above.** Reopening it requires first naming an
+input that **moves with the spawn** — re-running the axis-09 measurement is not that, and neither is a
+larger N. And before treating the active ceiling as the well-anchored alternative, read
+`jcode-due-diligence-2026-08-11/bottleneck-audit.md:27`: the 127/127 refusal band cited for it in §5
+is drawn from `handoff-fire`'s *sibling* `capacity_gate()` ledger, a population that structurally
+excludes the Agent-tool path.
+
 ## 4 · If 2.1.234 is adopted, adopt it on other grounds — and set one env var first
 
 The upgrade is defensible for 33 releases of unrelated fixes, never for capacity. Two items gate it:
