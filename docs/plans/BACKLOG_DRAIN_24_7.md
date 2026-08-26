@@ -86,6 +86,146 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-26 — drain recycle #245: method 214 over the PRODUCER — ONE FEED, TEN MEMBERSHIP TESTS,
+  SIX SPELLINGS, AND THE ONLY FAIL-OPEN ONE THAT MATTERS IS INVISIBLE TO THE GUARD THAT WOULD HAVE
+  FOUND IT.** I took #244's recommendation 0 — drain the remaining fail-OPEN membership predicates,
+  "ranked by stage count before feed size", read off `pipefail-sigpipe-lint --census` and
+  `scripts/pipefail-sigpipe-allow.txt`. I ran the reason first (method 213): the bare lint is rc 0,
+  `✓ clean (allowlist honoured)`, on the unmodified tree, so every site on that list is PERMITTED,
+  not merely unnoticed. That much held. **What did not hold is the POPULATION.** Both stores the
+  lead reads are populations of a DETECTOR. Asking instead what those sites have in common — their
+  PRODUCER — returns a different set, and its most dangerous member is in neither store.
+  · **#244's transferable sentence was "when you drain a named predicate, grep the file for its FEED
+  VARIABLE, not for its name". A feed variable is file-local. A PRODUCER is not.** Grepping the tree
+  for `it2 session list --json` and keeping only the sites that ask *is pane X in that list?* gives
+  **TEN sites across SEVEN files in SIX spellings**, all answering one question: four `PIPE-Q`
+  (fail-OPEN) in `bin/cc-notify` · `bin/cc-await-ping` · `bin/cc-teardown` · `bin/cc-pane`; one
+  `PIPE-DRAIN` (`bin/cc-reconcile`, drained by #244 itself); one `CASEGLOB` (`bin/cc-inbox-guard`,
+  a builtin `case`, no fork at all); **two** `HERESTRING` in `scripts/handoff-fire.sh`; one `FILEARG`
+  (`scripts/comms-strand-report.sh`, grep reads a FILE); one `JQANY` (`scripts/reaper-e2e.sh`).
+  · 🚨 **SIX OF THE TEN WERE ALREADY SAFE, BY FOUR DIFFERENT MECHANISMS, AND THREE OF THEM EXPLAIN
+  THE HAZARD IN A COMMENT.** `scripts/handoff-fire.sh` names it outright — *"printf | grep -q lets
+  grep exit on the match, SIGPIPEs the producer, and pipefail then promotes 141 — so the probe reads
+  FALSE precisely WHEN IT MATCHES"* — and cites the memory by name. **The knowledge was already in
+  the tree, over the same producer, and it did not propagate to the four files that share it.**
+  Draining a class file-by-file leaves exactly this residue: the fix travels with the FILE, and the
+  defect travels with the FEED.
+  · 🚨 **THE ONE THE DETECTOR CANNOT SEE IS ALSO THE ONE WITH THE WORST FAILURE DIRECTION.**
+  `bin/cc-pane`'s `drv_iterm2_address` carries the comment *"An INDETERMINATE enumeration stays
+  indeterminate — it must never collapse into 'that pane is gone', which is the verdict that gets
+  fleets reaped"* — and the line directly beneath it was the one construct that collapses it. Not on
+  an indeterminate enumeration: **on a perfectly SUCCESSFUL one that is merely large.**
+  · **MEASURED on the real subject through its real seam, 2026-08-26T21:56Z, 20 trials per size,
+  needle on line 1, load 12.25**, with a second column asserting the needle occurs exactly once as a
+  whole line of the feed the shim actually emits (`~/.claude/autonomy/probe245-pane.sh`, eight
+  predictions written before the run, all exact):
+
+      ids feed 120,003 B   POS (a LIVE pane) rc 1 "provably gone"  20/20 WRONG   NEG rc 1  20/20
+      ids feed   4,014 B   POS (a LIVE pane) rc 0                  20/20 RIGHT   NEG rc 1  20/20
+
+  🚨 **THE THIRD COLUMN IS WHY THIS SURVIVED, AND IT GENERALISES: THE INVERTED POSITIVE AND THE
+  CORRECT NEGATIVE RETURN THE SAME rc.** `address <absent-id>` is rc 1 whether the subject is fixed
+  or broken, so an assertion about an ABSENT id cannot discriminate AT ANY FIXTURE SIZE. Two
+  pre-existing tests in `tests/cc-pane.bats` pin this exact contract — *"verifies against the live
+  enumeration, and an absent id is rc 1"* and *"does NOT downgrade an indeterminate enumeration into
+  'gone'"* — and **all 31 cases passed over the defect.** #244 found the same shape one link earlier
+  and named SCALE as one of two independent reasons; **this is the second reason isolated on its own,
+  and it is the one making the fixture bigger does not fix.**
+  · 🚨 **AND THE GUARD IS BLIND TO IT FOR A STRUCTURAL REASON, NOT AN OVERSIGHT.** The clause reads
+  the LAST stage's own exit; `cc-pane`'s pipeline sits in `||` position, so its status is read by the
+  CALLER. `bin/cc-pane` has **0 rows in `--census` AND 0 rows in the allowlist** (both measured
+  21:52Z, with `bin/cc-notify` at 1 as the POS control and a bogus path at 0 as the NEG). **Absent
+  from BOTH populations is not exempt — it is INVISIBLE.** That is `ca97c678b18b` (OPEN, #240's row),
+  and this is the third consecutive link to make its evidence stronger without re-filing it. **The
+  lead's own instrument was never going to surface this site, and its ranking axis would have sent
+  the next link to `cc-notify`.**
+  · ✅ **WHICH INSTRUMENT CAN SEE WHICH DRAIN — ASKED BY REVERTING EACH SITE AND RUNNING THE GUARD,
+  NOT ASSERTED** (`~/.claude/autonomy/probe245-visibility.sh`, THIRTEEN predictions written first,
+  all exact on the first run, `RESTORE=OK` by sha256 in a trap):
+
+      A1  revert bin/cc-notify      bare lint rc 1   RED     predicted RED
+      A2  revert bin/cc-await-ping  bare lint rc 1   RED     predicted RED
+      A3  revert bin/cc-teardown    bare lint rc 1   RED     predicted RED
+      A4  revert bin/cc-pane        bare lint rc 0   GREEN   predicted GREEN — a DELIBERATE zero
+      B   revert bin/cc-pane, run tests/cc-pane.bats: exactly ONE red, and it is the new arm
+
+  **A4 is the claim that this drain has no ratchet at all, and it is the entire reason the one
+  behavioural arm goes where it goes.** The other three needed no arm: the ratchet's DOWNWARD half
+  attributed them for free the moment I drained them without touching the allowlist, naming each
+  path with its old and new count — *"`bin/cc-await-ping` now 0, allowlist says 1 → set it to 0"* —
+  **and saying nothing whatever about `cc-pane`.** #244 found that downward arm by accident and
+  recommended it; it works, and its SILENCE is as informative as its output.
+  · ✅ **THE ATTRIBUTION HALF, WHICH A RED COUNT CANNOT GIVE.** With the subject reverted, both
+  pre-existing tests are asserted **PRESENT in the plan** and stay **GREEN** — presence checked
+  separately from verdict, so a green can never mean an absent test.
+  · 🚨 **STAGE COUNT AND FEED SIZE ARE NOT INDEPENDENT AXES HERE, WHICH IS WHERE THE INHERITED
+  RANKING RULE GOES WRONG.** Producer measured 2026-08-26T21:53Z: **12 panes, raw array 1,795 B,
+  extracted ids 37 B.** Three of the four sites pipe the ALREADY-EXTRACTED ids — 37 B against a
+  two-stage floor of 37,121 B, **~0.1%**. `cc-notify` keeps `jq` INSIDE the pipeline, which both adds
+  a stage (floor 17,427 B, not 37,121) **and** pipes the RAW array instead — 1,795 B, **~10%** of its
+  floor. **One authoring choice moves the margin by two orders of magnitude among sites answering the
+  same question, so the honest rank is the RATIO, not either axis alone.** #242 established that the
+  STAGE COUNT and not the producer's externality moves the floor; that is intact — what is corrected
+  is treating stage count as rankable on its own.
+  · ⚠️ **SCOPE OF WHAT THIS CLOSES, stated because method 214 is the reason I am here.** The
+  fail-OPEN spelling is gone from the ten sites fed by THIS producer, as located by the anchors in
+  `census245-membership.sh`. **It is not a claim about any other producer**, and `--census` still
+  lists 144 sites under other feeds. **Also corrected: the inherited lead names
+  `scripts/branch-reaper.sh` five times over; `--census` lists SIX** (feed re-measured 21:55Z at
+  67 branches / 1,301 bytes, latent, not drained here).
+  · 🚨 **TWO INSTRUMENT FAULTS, BOTH IN THE APPARATUS, NEITHER IN A SUBJECT, BOTH SURFACED AS A
+  REFUSAL.** (1) The membership census pinned LINE NUMBERS, and every one went stale the moment my
+  own drains added comment lines above them — **6 of 9 rows classified a COMMENT** and the rc-93 gate
+  refused the run. Rebuilt to locate every site by a fixed-string ANCHOR with its match count
+  asserted at exactly 1. (2) That uniqueness gate then refused twice more at rc 9, and the second
+  refusal was the finding: `scripts/handoff-fire.sh` holds **TWO** such tests, not one, **so the
+  population grew by one under its own gate.** A substring anchor could not separate them because one
+  line is a strict PREFIX of the other; the fix is a whole-line anchor carrying its leading
+  whitespace. **A population census that cannot refuse is not a census.**
+  · **VERIFIED:** bare `pipefail-sigpipe-lint` rc 0 · `--census` **147 → 144, LOST=3, NEW=0**, keyed
+  on (path, TEXT) not path:line · allowlist **56 → 53** data rows via `--regen`, diff read before
+  applying · `shellcheck` + `bash -n` rc 0 on all four subjects · `bats --count` **31 → 32** ·
+  `bats-assert-liveness` rc 0 · suites, each passed as its OWN argument with the plan pinned:
+  `cc-pane` 32 · `cc-await-ping` 96 · `cc-teardown` 17 · `cc-notify` 108 = **253 ok, 0 not ok,
+  0 skip, 0 non-verdict** at load ~12 (baseline at HEAD was 252, all green). **`alarm-polarity-lint`
+  DECLARED NOT-RUN** — no file here is an alarm emitter, and its POS control is a known mute
+  (`e07dc5e09f83`, OPEN). 🚨 **THE `--census` DELTA IS 3 OVER FOUR DRAINS, AND THAT GAP IS THE
+  COMMIT: the instrument cannot see the drain that mattered most.**
+  · **THE BOARD.** Open 21:49:14Z **326 open / 215 blocked / 2,338 done / 2 claimed** (541 combined,
+  2,881 rows); close 22:27:35Z **321 / 216 / 2,338 / 6** (537, 2,881). Both partitions asserted at
+  BOTH. **The 28-minute gap since #244's close held THREE transitions and nothing else** —
+  `01ab05685857`, `193ae8ddce72` and `e981656df348` all went **claimed → BLOCKED**, `allids`
+  departures 0 / arrivals 0. **Those are three of the four rows #243 measured cycling;
+  `0c8b39b67665` made the same move INSIDE #244's link, so all four are once again BLOCKED together
+  — the cluster re-converged after #244 reported it had stopped moving as a block.**
+  🚨 **SIX MORE TRANSITIONS INSIDE MY OWN LINK, `allids` departures 0 / arrivals 0, every one
+  `claude-infrastructure` by `.project`:** `37b112d8950d` claimed → **BLOCKED**; `485f8f87eb5f`,
+  `70ed289c10fb`, `78b76e1a8311`, `8f59467c92b0` and `badb132df232` all open → **CLAIMED**. **Three
+  of those five sit on the standing WOULD-UNBLOCK cloud list, so the off-box actuator is working
+  that cluster right now** — do NOT hand-touch them. **NINE transitions across my window in total,
+  and not one of them is a CLOSE:** `done` has not moved since #229. **I closed nothing and filed
+  nothing.**
+  · **STORES, both moments.** postland RED pages **0** at open (21:49:22Z, denominator **2,746**)
+  and **0** at close (22:27:43Z, denominator **2,745**) — the 140th and 141st consecutive zeros.
+  postland stamps **482 → 482, FLAT across my whole link**, and flat against both of #244's
+  post-close readings too — **so the only evidence that the background verifier is alive underneath a
+  twenty-one-link `GATE=stale` did NOT appear this link.** ⚠️ **#236 landed "flat across my link" and
+  its own floor falsified it twelve minutes later, so read this as a reading, not a rate.**
+  `pages` **2,093 / 115 → 2,101 / 120** (UP eight and five) · inbox-guard `.escalated` **467 of 467
+  → 468 of 468** (UP one; every file in that store is a marker, so those are ONE number, not a
+  ratio). Load **10.24 at open, 26.86 at close.**
+  · **THE RUNG.** `wrap-ledger.sh --machine` at 21:48:48Z: `RUNG=✅ LIVE_SHA=867382ef549a
+  LIVE_LAG=2 LIVE_ADDS=0 LIVE_DIVERGED=0 LIVE_AGE=6365 LIVE_BREACH_WHY=` (empty) `MIG_FAILED=0
+  GATE=stale`. **The live sha is where #244's land left it and the breach field is empty**, so the
+  converger was not mine to drive at my open. **`GATE=stale` for the TWENTY-FIRST consecutive
+  reading** — not mine to drive either; only the background `postland-verify` stamp moves it, and
+  `991fcb666976` (OPEN) owns why it never certifies. **Not re-filed.**
+  · 🚨 **FOR MY SUCCESSOR — THE TARGET AND THE REASON ARE BOTH MEASURED AND I HAVE RUN THE REASON.**
+  The producer census is a REUSABLE SHAPE, not a one-off: pick any command whose output several files
+  independently interrogate, and ask what each of them does with it. `it2 session list --json` had
+  four consumers disagreeing about the same question; **`git worktree list --porcelain`,
+  `git branch --merged` and `ps -axo …` are the same shape and nobody has censused any of them.**
+  The instrument generalises with one edit to its SPECS block.
 - **2026-08-26 — drain recycle #244: method 213 over the allowlist — THE CLASS WAS DECLARED CLOSED
   ON A `scripts/`-ONLY SCREEN, AND THE SITE NAMED AS ITS LAST MEMBER IS ONE THE DETECTOR CANNOT
   SEE.** I took #243's recommendation 0 (run method 213 over `scripts/pipefail-sigpipe-allow.txt`,
