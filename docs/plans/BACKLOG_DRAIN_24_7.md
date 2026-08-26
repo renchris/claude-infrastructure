@@ -121,8 +121,13 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
     the hash is what flips a heading to DONE.** `moving-ref-control-lint.sh:127` decides which refs
     are PINNED with the same shape, and on trunk under mawk it reported **TEN correctly-pinned
     suites as MOVING refs** — each told to "replay a LITERAL sha" that it already replays. Its own
-    bats suite is **RED on origin/main under mawk (2 of 8 cases) and green after this fix**, which
-    is the RED-proof: not a fixture, the shipped suite.
+    bats suite is **RED on origin/main under mawk (3 of its 7 cases — `--selftest`, `the REAL tree
+    is clean`, `SELF-HARNESS`) and 7/7 green after this fix**, which is the RED-proof: not a
+    fixture, the shipped suite. ⚠️ **ERRATUM against commit `7a03b22f`'s message, which says "2 of
+    8 cases".** That figure came from a `git archive` tree with no `.git`, where two of the suite's
+    cases SKIP for want of history and the count read differently; re-measured on a real worktree
+    at `51bf8570` it is 3 of 7. The commit body is left as written rather than rewritten — the
+    branch is pushed — and this line is the correction of record.
   - 🚨 **THE GENERALISABLE HALF: A RULE'S HOME DECIDES ITS BLAST RADIUS, AND A COMMENT'S HOME IS ONE
     FILE.** Nothing here was hidden — the rule is written down, in this repo, in plain language,
     with the right reason. It still failed, because the only mechanism carrying it was a reader who
