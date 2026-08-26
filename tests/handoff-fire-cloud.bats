@@ -461,3 +461,73 @@ EOF
   [ -s "$CLOUD_DECL_LOG" ]
   [ ! -f "$BATS_TEST_TMPDIR/pf-off.log" ]                # the override SKIPS the probe, not just its verdict
 }
+
+# ── 20-22 — THE BOOT CONTRACT (CLOUD_OBSERVABILITY.md §4.1, backlog 0c8b39b67665) ───────────────
+# §4.1 is the paragraph the whole cloud state function rests on: absence is ambiguous, and "it can
+# only be resolved by CONTRACT — the session's brief requires its FIRST ACT to be pushing that
+# branch, an empty commit is enough". That contract was PROSE ONLY. This payload instructed the
+# push as the LAST act (its heading literally read "read this before you finish"), so a VM that
+# booted, read the brief, found it could not proceed and stopped was byte-identical from this side
+# to one that never ran — and bin/cc-eligible:404-416 measures the bill: 119 of 133 sessions called
+# NOT-STARTED were live `anthropic_cloud` VMs with the repo attached that HAD booted.
+#
+# RED-PROOF (re-runnable): replay against `git show origin/main:scripts/handoff-fire.sh` in a
+# scratch tree. 20 goes RED (the payload contains no `--allow-empty` at all, and its push follows
+# the brief rather than preceding it), 21 goes RED (the declaration carries no `--boot-contract`,
+# so nothing downstream can tell an attested brief from an unattested one), 22 goes RED (there is
+# no brief library to be absent, so the fire proceeds to the create).
+#
+# EVERY ONE ASSERTS ON AN EFFECT — the argv actually handed to the create, the argv actually handed
+# to the declare, an exit code — never on a string in the source. That is the discipline cases 9-16
+# were written under, and it is what stops this contract becoming prose a second time.
+
+@test "20 the payload's FIRST act is the boot push — an empty commit, before the brief" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: t" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ -s "$BATS_TEST_TMPDIR/create.log" ]
+  local boot task sw push
+  boot="$(grep -n -- '--allow-empty' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$boot" ] || { echo "the payload never instructs the empty boot commit (§4.1)"; false; }
+  # ORDER IS THE WHOLE CONTRACT. The receipt must precede the brief, or a session that stops on
+  # reading the brief has still pushed nothing and the absence stays unreadable.
+  sw="$(grep -n 'git switch -c claude/fire-' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  push="$(grep -n 'git push -u origin HEAD' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  task="$(grep -n 'cloud venue gate fixture payload' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$task" ] || { echo "the brief itself is missing from the payload"; false; }
+  [ "$sw" -lt "$boot" ] || { echo "the branch must exist before the receipt is committed"; false; }
+  [ "$boot" -lt "$push" ] || { echo "the receipt must be committed before it is pushed"; false; }
+  [ "$push" -lt "$task" ] || { echo "the boot push must PRECEDE the brief (push=$push task=$task)"; false; }
+  # The receipt's message is written inside this repo's own commit-msg hook, which refuses
+  # `claude.ai/code` and AI-authorship trailers — a receipt the hook rejects is a land that fails
+  # for a reason the VM cannot see.
+  run grep -- '--allow-empty' "$BATS_TEST_TMPDIR/create.log"
+  [[ "$output" != *"claude.ai/code"* ]] || false
+}
+
+@test "21 the declaration ATTESTS the contract — the fire is what makes C1 readable" {
+  # `--boot-contract` is the producing side saying "the brief I just sent requires a first-act
+  # push". Only a composer of the brief can say it, and cc-cloud abstains (UNKNOWN, never
+  # NOT-STARTED) without it — so a payload carrying the block and a declaration omitting the flag
+  # would leave the fire observable in principle and unreadable in practice.
+  cloud_acct; cloud_ccloud
+  cloud_claude "$(printf 'Created cloud session: t\x1b[8GView: https://claude.ai/code/session_01TESTTESTTESTTESTTESTT?from=cli')" 0
+  cfire
+  [ "$status" -eq 0 ]
+  [ -s "$CLOUD_DECL_LOG" ]
+  grep -q -- "--boot-contract" "$CLOUD_DECL_LOG"
+}
+
+@test "22 the brief library being ABSENT is a REFUSAL — an unreadable fire is not fired" {
+  # The same fail-closed rule as case 10, for the same blast radius, and with a sharper reason: a
+  # fire with no boot contract spends an account's quota to produce a session whose absence can
+  # never be read. That is precisely the unobservable fire case 18's preflight exists to refuse.
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: this create must never be reached" 0
+  cfire CC_FIRE_CLOUD_BRIEF_LIB="$BATS_TEST_TMPDIR/no-such-brief.sh" \
+        CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ "$status" -eq 10 ]
+  [[ "$output" == *"cloud-brief.sh is unreachable"* ]] || false
+  [ ! -f "$BATS_TEST_TMPDIR/create.log" ]                # the account's rate limit was NOT spent
+  [ ! -f "$CLOUD_DECL_LOG" ]
+}

@@ -4,6 +4,9 @@
 #
 #   cc-cloud preflight [--repo P] [--branch B]       can a fire HERE be observed at all? exit 1 = no
 #   cc-cloud declare --id <id> --branch <b> [opts]   register a session BEFORE firing it
+#                    [--boot-contract]               the BRIEF'S PRODUCER attests it requires a
+#                                                    first-act push; without it, an absent ref can
+#                                                    never be read as NOT-STARTED (§4.1, below)
 #   cc-cloud fill-paths --id <id> | --branch <b> | --all
 #                                                    fill `paths=` POST-HOC from the VM's own commits
 #                                                    (--branch selects by declared branch, for a
@@ -97,9 +100,12 @@
 #
 # ── the state function (total, first match wins, every arm TERMINAL) ─────────────────────────────
 #   U0 UNKNOWN      a sensor could not run (ls-remote rc!=0, unreadable declaration, no git),
-#                   or the ref VANISHED after a push and landedness is not assertable (see below).
+#                   or the ref VANISHED after a push and landedness is not assertable (see below),
+#                   or the declaration carries NO BOOT CONTRACT, which makes an absent or unmoved
+#                   ref unreadable (see THE BOOT CONTRACT).
 #                   NO row, `--table` says UNKNOWN, `--check` FAILS. Never a vacuous pass.
-#   C1 NOT-STARTED  no ref AND no evidence of one, past declared_at+boot_s                    ROW
+#   C1 NOT-STARTED  no ref AND no evidence of one, past declared_at+boot_s, AND the brief was
+#                   attested to require a first-act push (`declare --boot-contract`)            ROW
 #                   (or the ref exists but is STILL at its fire-time sha — see BASELINE)
 #   C2 BOOTING      same, still inside the boot budget — expected, not a fault              no row
 #   C3 LANDED       every declared path is content-present on the trunk ref                 no row
@@ -137,6 +143,22 @@
 # "never started" has been REFUTED, and "landed" was declined, so no verdict is available.
 # `scripts/branch-prune-landed.sh` fills the path set BEFORE it deletes, so a prune from here on
 # leaves C3 answerable rather than manufacturing this UNKNOWN.
+#
+# ── THE BOOT CONTRACT: the one fact that makes an ABSENCE readable (§4.1) ────────────────────────
+# `NOT-STARTED` is a claim about the OTHER side, made from ONE observation on this side: a ref that
+# is not there. That observation cannot separate "never booted" from "booted, working, nothing to
+# commit yet" unless the brief REQUIRED a push as its first act — which is why §4.1 resolves the
+# ambiguity by contract rather than by sensor, and why an empty commit is enough to satisfy it.
+# The contract was PROSE ONLY until 2026-08-26: it was written in §4.1, restated as step 2 of §8's
+# fire protocol, and implemented by no producer, so every C1 verdict this file had ever emitted
+# rested on a promise no brief had made. What that cost is measured in bin/cc-eligible:404-416 —
+# of 133 sessions reading NOT-STARTED, 119 were real `anthropic_cloud` VMs with the repo attached
+# that HAD booted, read the brief, found the item's project absent and correctly stopped. A session
+# that declines the work commits nothing to push, and nothing had ever told it to push first.
+# `declare --boot-contract` is the producing side's ATTESTATION that the brief carries the block in
+# scripts/lib/cloud-brief.sh. Without it BOTH C1 arms abstain to UNKNOWN: no row, `--check` fails,
+# and the declaration says why. Sourced by handoff-fire.sh (the CLI leg) and `cc-offload up` (the
+# API leg) — the two producers of a cloud brief, sharing one text so it cannot drift.
 #
 # ── BASELINE: why C1/C2 also fire on a ref that EXISTS (migrated from cc-cloud-watch `record`) ────
 # `declare` probes the remote once and records the sha the branch held BEFORE the fire. Without it,
@@ -526,6 +548,7 @@ classify() { # <id>
   local id="$1" f="$STATE/$1.decl" seen="$STATE/$1.seen"
   local branch remote repo paths trunk url dat boot stall life
   local sha rc n age url_cmd first_seen sha_age base_sha base_probe seen_sha paths_src pushed
+  local contract
 
   branch="$(dfield "$f" branch)"
   remote="$(dfield "$f" remote)"
@@ -560,11 +583,28 @@ classify() { # <id>
   paths_src="$(dfield "$f" paths_src)"
   if [ -n "$seen_sha" ] || [ -n "$paths_src" ]; then pushed=1; else pushed=0; fi
 
+  # ── THE BOOT CONTRACT: what makes an ABSENCE mean anything at all (§4.1) ────────────────────────
+  # NOT-STARTED is a claim about the OTHER side — "it never ran" — and this side has exactly one
+  # observation to make it from: a ref that is not there. That observation separates a session that
+  # never booted from one working perfectly with nothing yet to commit ONLY IF the brief required a
+  # push as its first act. `declare --boot-contract` is the producer's attestation that it did;
+  # scripts/lib/cloud-brief.sh is the text, and both brief producers inject it.
+  # Absent, this arm ABSTAINS rather than guessing, because the guess is wrong in the loud
+  # direction: measured over the live population (bin/cc-eligible:404-416), 119 of 133 sessions
+  # called NOT-STARTED were real VMs with the repo attached that had booted, read the brief, found
+  # the item's project absent and correctly stopped without committing anything. UNKNOWN emits no
+  # row and FAILS --check, so the gap is loud and never a vacuous pass.
+  contract="$(dfield "$f" boot_contract)"
+
   # C1/C2 require BOTH: no ref now AND no evidence there ever was one. Reaching this arm on
   # evidence-of-push alone is the defect below.
   if [ -z "$sha" ] && [ "$pushed" -eq 0 ]; then
     if [ "$age" -gt "$boot" ]; then
-      printf 'NOT-STARTED\tno ref after %s (boot budget %s)\t%s\n' "$(dur "$age")" "$(dur "$boot")" "$url_cmd"
+      if [ "$contract" = required ]; then
+        printf 'NOT-STARTED\tno ref after %s (boot budget %s)\t%s\n' "$(dur "$age")" "$(dur "$boot")" "$url_cmd"
+      else
+        printf 'UNKNOWN\tno ref; no boot contract to read it by\t%s\n' "cc-cloud show $id"
+      fi
     else
       printf 'BOOTING\tno ref yet, %s into a %s budget\t-\n' "$(dur "$age")" "$(dur "$boot")"
     fi
@@ -594,7 +634,15 @@ classify() { # <id>
   base_sha="$(dfield "$f" base_sha)"
   if [ "$base_probe" = "ok" ] && [ -n "$base_sha" ] && [ "$sha" = "$base_sha" ]; then
     if [ "$age" -gt "$boot" ]; then
-      printf 'NOT-STARTED\tref still at pre-fire sha after %s\t%s\n' "$(dur "$age")" "$url_cmd"
+      # Gated on the contract for the SAME reason as the arm above, and it is the same fact: an
+      # unmoved ref and an absent one are both "this session has pushed nothing", which convicts
+      # only against a brief that required a push. Two arms, one law — so a declaration cannot be
+      # read one way onto a fresh branch name and another onto a re-used one.
+      if [ "$contract" = required ]; then
+        printf 'NOT-STARTED\tref still at pre-fire sha after %s\t%s\n' "$(dur "$age")" "$url_cmd"
+      else
+        printf 'UNKNOWN\tref unmoved; no boot contract to read it by\t%s\n' "cc-cloud show $id"
+      fi
     else
       printf 'BOOTING\tno push yet, %s into a %s budget\t-\n' "$(dur "$age")" "$(dur "$boot")"
     fi
@@ -673,7 +721,7 @@ do_check() {
 cmd_declare() {
   local id="" branch="" remote="origin" repo="$ROOT" paths="" trunk="" url="" surface="" item="" account=""
   local boot="" stall="" life="" f base="" brc=0
-  local notify_back="" goal="" goal_probe="" custody=""
+  local notify_back="" goal="" goal_probe="" custody="" boot_contract=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --id)      id="${2:-}"; shift 2 ;;
@@ -709,6 +757,17 @@ cmd_declare() {
       --goal)        goal="${2:-}"; shift 2 ;;
       --goal-probe)  goal_probe="${2:-}"; shift 2 ;;
       --custody)     custody="${2:-}"; shift 2 ;;
+      # ── THE BOOT CONTRACT (CLOUD_OBSERVABILITY.md §4.1) ──────────────────────────────────────
+      # An ATTESTATION, and only a producer of the BRIEF may make it: "the brief this session was
+      # given requires a push as its FIRST act". Nothing else in the declaration can stand in for
+      # it — a branch, a budget and a baseline all describe what THIS side did, and §4.1's whole
+      # point is that absence is readable only when the OTHER side was told to break it.
+      # Its absence is not a hole to be filled with a default: `classify` abstains on it (UNKNOWN,
+      # never NOT-STARTED), because "no ref" over a brief that never asked for one is the same
+      # observation for a session that never booted and one working perfectly with nothing yet to
+      # commit. Measured, bin/cc-eligible:404-416: 119 of 133 `NOT-STARTED` sessions were live VMs
+      # with the repo attached that HAD booted, so this is the majority case, not the corner.
+      --boot-contract) boot_contract=required; shift ;;
       --boot)    boot="${2:-}"; shift 2 ;;
       --stall)   stall="${2:-}"; shift 2 ;;
       --life)    life="${2:-}"; shift 2 ;;
@@ -790,6 +849,7 @@ cmd_declare() {
     [ -n "$goal" ]        && printf 'goal=%s\n' "$goal"
     [ -n "$goal_probe" ]  && printf 'goal_probe=%s\n' "$goal_probe"
     [ -n "$custody" ]     && printf 'custody=%s\n' "$custody"
+    [ -n "$boot_contract" ] && printf 'boot_contract=%s\n' "$boot_contract"
     is_num "$boot"  && printf 'boot_s=%s\n' "$boot"
     is_num "$stall" && printf 'stall_s=%s\n' "$stall"
     is_num "$life"  && printf 'life_s=%s\n' "$life"
@@ -803,6 +863,13 @@ cmd_declare() {
   elif [ -n "$base" ]; then
     printf '  ! %s ALREADY EXISTS on %s at %.7s — progress is measured as a move OFF that sha\n' \
       "$branch" "$remote" "$base" >&2
+  fi
+  # Said at DECLARATION time, where the gap is still cheap to close, rather than only at the verdict
+  # hours later. The declaration is still written: an undeclared session is unobservable, which is
+  # strictly worse than one whose absence cannot be read — the same trade-off the baseline makes.
+  if [ -z "$boot_contract" ]; then
+    printf '  ! no --boot-contract: this brief was not attested to require a first-act push, so an\n' >&2
+    printf '    absent ref can never be read as NOT-STARTED for %s (it abstains to UNKNOWN, §4.1).\n' "$id" >&2
   fi
 }
 
@@ -1048,6 +1115,11 @@ cmd_list() {
       printf '"base_probe":"%s","base_sha":"%s","last_sha":"%s","last_seen_at":%s,"url":"%s",' \
         "$bprobe" "$(jesc "$base")" "$(jesc "$lsha")" \
         "$(is_num "$lsince" && printf '%s' "$lsince" || printf 'null')" "$(jesc "$url")"
+      # Projected like `base_probe` and for the same reason: it is what decides whether this
+      # declaration's absence is READABLE, so a consumer looking at an UNKNOWN row can tell a
+      # sensor that could not run from a brief that never promised a ref (§4.1).
+      printf '"boot_contract":"%s",' \
+        "$([ "$(dfield "$f" boot_contract)" = required ] && printf 'required' || printf 'none')"
       if [ "$probe" -eq 1 ]; then
         printf '"state":"%s","detail":"%s","recover":"%s",' \
           "$(jesc "$state")" "$(jesc "$(clip "$detail")")" "$(jesc "$rcmd")"
@@ -1102,7 +1174,7 @@ do_selftest() {
   # where the one "pass" came from a `declare` that had SILENTLY FAILED, leaving no file at all —
   # classify then returned UNKNOWN for the right answer and the wrong reason. Asserting the
   # declaration exists is what separates "the sensor said UNKNOWN" from "there was nothing to sense".
-  cmd_declare --id boot --branch feat/x --remote "$_ST_D/remote.git" --repo "" >/dev/null
+  cmd_declare --id boot --branch feat/x --remote "$_ST_D/remote.git" --repo "" --boot-contract >/dev/null
   if [ -f "$STATE/boot.decl" ]; then _ST_PASS=$((_ST_PASS + 1)); printf 'ok   declare wrote a declaration (control)\n'
   else _ST_FAIL=$((_ST_FAIL + 1)); printf 'FAIL declare wrote no declaration — every verdict below is vacuous\n'; fi
 
@@ -1110,6 +1182,14 @@ do_selftest() {
 
   CC_CLOUD_NOW=$((2000000000 + 5000))
   _st_expect "absent ref past the boot budget is NOT-STARTED" NOT-STARTED boot
+  CC_CLOUD_NOW=2000000000
+
+  # THE BOOT CONTRACT (§4.1). The SAME fixture minus the attestation: same remote, same absence,
+  # same clock. Only the contract differs, so this pair isolates the one fact NOT-STARTED rests on.
+  cmd_declare --id nocontract --branch feat/nc --remote "$_ST_D/remote.git" --repo "" >/dev/null 2>&1
+  CC_CLOUD_NOW=$((2000000000 + 5000))
+  _st_expect "no boot contract ⇒ an absent ref is UNKNOWN, never NOT-STARTED" UNKNOWN nocontract
+  _st_expect "control: with the contract, the same absence at the same clock DOES convict" NOT-STARTED boot
   CC_CLOUD_NOW=2000000000
 
   cmd_declare --id gone --branch feat/y --remote "$_ST_D/nonexistent.git" --repo "" >/dev/null
@@ -1129,7 +1209,7 @@ do_selftest() {
   # its ref MOVED and ALIVE is right. `reused` is declared AFTER, onto the same already-pushed
   # branch: nothing has moved, and without a fire-time baseline that reads ALIVE for the whole 6h
   # life budget — a session that never booted onto a re-used branch name, hidden behind a green.
-  cmd_declare --id reused --branch feat/x --remote "$_ST_D/remote.git" --repo "" >/dev/null 2>&1
+  cmd_declare --id reused --branch feat/x --remote "$_ST_D/remote.git" --repo "" --boot-contract >/dev/null 2>&1
   _st_expect "a ref that already existed at fire time is BOOTING, not ALIVE" BOOTING reused
   CC_CLOUD_NOW=$((2000000000 + 5000))
   _st_expect "an unmoved pre-fire ref past the boot budget is NOT-STARTED" NOT-STARTED reused

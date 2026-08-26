@@ -622,3 +622,58 @@ EOF
     [[ "$output" == *"cc-offload $v"* ]] || false
   done
 }
+
+# ── THE BOOT CONTRACT on the API leg (CLOUD_OBSERVABILITY.md §4.1, backlog 0c8b39b67665) ─────────
+# This leg queued the task file VERBATIM, which left the VM with no return instruction of any kind:
+# the branch it may push to is named in the create body's `outcomes.git_info.branches` and is
+# therefore known to the API and to nobody else. So the block below is both §4.1's first-act
+# contract AND the only place this leg has ever told the VM the branch name. Until it existed, a
+# session fired here could only ever read as one that never started — the state bin/cc-eligible
+# measured 133 of, 119 of them live VMs with the repo attached that HAD booted.
+#
+# RED-PROOF: against `git show origin/main:bin/cc-offload` in a scratch tree, both cases fail — the
+# first because the queued brief is the task file alone, the second because the declaration carries
+# no attestation and cc-cloud must then abstain from every verdict about the session.
+
+@test "up --via api queues the BOOT CONTRACT above the brief — the VM is told to push FIRST" {
+  echo "the task itself" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+import sys
+print("session_apitest")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+  grep -q -- '--allow-empty' "$CALLS" || { echo "the queued brief carries no boot receipt"; false; }
+  grep -q 'git switch -c claude/fire-' "$CALLS" || { echo "the brief never names the branch to push"; false; }
+  # The receipt must come BEFORE the task in the queued text, or a session that stops on reading
+  # the task has still pushed nothing and its absence stays unreadable.
+  [ "$(grep -n -- '--allow-empty' "$CALLS" | head -1 | cut -d: -f1)" -lt \
+    "$(grep -n 'the task itself' "$CALLS" | head -1 | cut -d: -f1)" ] || false
+}
+
+@test "up --via api ATTESTS the contract on the declaration — composing it is what licenses saying so" {
+  echo "brief" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+print("session_apitest")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+  grep -q -- 'cc-cloud declare .*--boot-contract' "$CALLS" || false
+
+  # FAIL-CLOSED CONTROL: with the library unreachable there is no contract to inject, so the fire
+  # is REFUSED before any quota is spent rather than fired and reported as unknowable.
+  : >"$CALLS"
+  CC_OFFLOAD_BRIEF_LIB="$BATS_TEST_TMPDIR/no-such-brief.sh" \
+    CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" \
+    run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 3 ]
+  ! grep -q 'cc-cloud declare' "$CALLS" || false
+}

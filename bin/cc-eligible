@@ -416,6 +416,16 @@ DEEP_HISTORY = "ineligible-deep-history"
 # every one of them NOT-STARTED because its only sensor is whether the declared branch appeared,
 # and a session that correctly declines to do the work commits nothing to push.
 #
+# ⚠️ THAT LAST SENTENCE IS NOW HISTORY, AND ONLY FOR DECLARATIONS MADE BEFORE 2026-08-26. This
+# measurement is what closed backlog 0c8b39b67665: CLOUD_OBSERVABILITY.md §4.1's boot contract had
+# been prose since it was written, so nothing had ever told a cloud session to push FIRST. It now
+# does — both brief producers inject the first-act push (scripts/lib/cloud-brief.sh) and attest it
+# with `cc-cloud declare --boot-contract`, and cc-cloud abstains to UNKNOWN rather than convicting
+# an unattested declaration (§4.1a). A session that declines the work now still leaves a boot
+# receipt, so from here it reads as a ref that stopped moving, not as one that never appeared.
+# The CROSS_REPO class below is unaffected and remains the right cure: reading the failure
+# correctly is not the same as not wasting the session, and this class is what stops the fire.
+#
 # WHY THE SPELLING TABLE ABOVE COULD NOT CATCH THIS, AND WHY WIDENING IT NEVER WILL. Every class in
 # CLASSES is a regex over the item's TEXT, so it can only refuse an item that happens to SAY a
 # refused word. Reachability is not a word — it is a property of the pair (the item's project, the

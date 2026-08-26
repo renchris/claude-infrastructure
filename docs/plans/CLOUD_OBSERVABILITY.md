@@ -150,6 +150,50 @@ session's brief requires its **first act** to be pushing that branch — an empt
 Absence then becomes informative: no ref inside the budget is `BOOTING` (expected); no ref past it
 is `NOT-STARTED` (actionable — re-fire, or check entitlement).
 
+#### 4.1a · The contract was PROSE ONLY for four months, and C1 was unfounded for all of it (backlog `0c8b39b67665`, closed 2026-08-26)
+
+The paragraph above was written, restated as step 2 of §8's fire protocol, and **implemented by no
+producer**. `grep -rn 'allow-empty' bin/ scripts/` returned exactly one hit, in `cc-cloud`'s own
+selftest fixture. Both real brief producers shipped without it: handoff-fire.sh's cloud payload
+instructed the push as the **last** act (its heading read *"read this before you finish"*), and
+`cc-offload up` queued the task file verbatim with **no return instruction of any kind** — on that
+leg the branch name lives only in the create body's `outcomes.git_info.branches`, so the VM was
+never told it. Every `NOT-STARTED` this document has ever justified rested on a promise no brief
+had made.
+
+**What it cost is measured, not argued** (`bin/cc-eligible:404-416`, over the whole live cloud
+population, 2026-08-23): of **133** declarations reading `NOT-STARTED`, **130** still answer
+`GET /v1/code/sessions/<id>` and **119** read `environment_kind: anthropic_cloud` **and**
+`sources: 1` — real VMs with the repo attached, fully able to push. They booted, read the brief,
+found the item's project absent and correctly stopped, in their own words: *"reso-management-app
+repo absent in cloud VM; backlog item unreachable"*. One spent $2.00 reaching that verdict. A
+session that correctly declines the work commits nothing, and nothing had told it to commit first —
+so the label named 119 sessions it was wrong about and 14 it was right about, with no way to tell
+them apart.
+
+**What now exists, and where:**
+
+| Piece | File | What it is |
+| --- | --- | --- |
+| the text | `scripts/lib/cloud-brief.sh` | `cc_cloud_boot_contract <branch>` — the block, in ONE place. Two producers compose briefs, and a contract written twice drifts (this file's own §5.1 records what two readers of one observable set cost). |
+| the CLI leg | `scripts/handoff-fire.sh` | the block is prepended **above** the brief; the return block below it now says "push again", not "create it and push". Fail-closed: an unreachable library refuses the fire (exit 10) rather than spending quota on an unreadable session. |
+| the API leg | `bin/cc-offload` (`up`) | the same block, prepended to the task file before `cc-notify --cloud` queues it. Fail-closed at exit 3, before the create. |
+| the attestation | `cc-cloud declare --boot-contract` | written as `boot_contract=required`. **Only a producer of the BRIEF may pass it** — it says "the brief I sent requires a first-act push", which is a fact no other field can stand in for. |
+| the gate | `bin/cc-cloud` `classify()` | **both** C1 arms (absent ref, and unmoved-since-baseline ref) claim `NOT-STARTED` only against an attested declaration. Unattested ⇒ `UNKNOWN`: no row, `--check` FAILS, and `declare` says so at declaration time where the gap is still cheap to close. |
+
+Two consequences worth stating plainly, because neither is free:
+
+- **A pre-contract declaration now abstains rather than convicting.** That is the point — §4.2's law
+  one level up — but it means `bin/cc-backlog`'s `cloud_map` no longer reopens such an item into the
+  wave (`UNKNOWN` is its "cannot tell"). The three producers all attest, so this is legacy rows and
+  hand-declares only, and the abstention is loud (`--check` fails) rather than silent.
+- **The receipt lands.** `git rebase` keeps an originally-empty commit (measured, git 2.43), so it
+  rides `cloud-reconcile`'s re-author replay onto trunk as one empty `chore:` commit per landed
+  cloud session. It is deliberately not filtered at land time: teaching the lander to drop a commit
+  by message would erase the receipt in exactly the case it matters most (a session that pushed
+  nothing else). One empty commit naming where an off-box session began is provenance, at the grain
+  of the `Cloud-session` trailer the lander already writes.
+
 ### 4.2 The discriminator the whole design rests on
 
 Measured, not assumed:
@@ -171,8 +215,8 @@ exactly one row and `bin/cc-blockers` can consume it unchanged.
 
 | Arm | Condition | Row? |
 | --- | --- | --- |
-| **U0 UNKNOWN** | a sensor could not run (`ls-remote` rc≠0, unreadable declaration) | no row; `--table` says UNKNOWN; **`--check` fails** |
-| **C1 NOT-STARTED** | no ref, past `declared_at + boot_s` | ROW |
+| **U0 UNKNOWN** | a sensor could not run (`ls-remote` rc≠0, unreadable declaration), **or the declaration carries no boot contract** (§4.1a — absence is unreadable without one) | no row; `--table` says UNKNOWN; **`--check` fails** |
+| **C1 NOT-STARTED** | no ref, past `declared_at + boot_s`, **and the brief was attested to require a first-act push** (`declare --boot-contract`) | ROW |
 | **C2 BOOTING** | no ref, inside the boot budget | no row |
 | **C3 LANDED** | every declared path content-present on trunk | no row |
 | **C4 STALLED** | ref exists, sha unchanged past `stall_s` — **sidecar history required** | ROW |
@@ -200,6 +244,7 @@ mutators, and they write only under `CC_CLOUD_STATE`. Nothing fetches, and nothi
 ```text
 cc-cloud preflight [--repo P] [--branch B]   can a fire HERE be observed at all? exit 1 = no
 cc-cloud declare --id <id> --branch <b> [--remote --repo --paths --trunk --url --surface --item --boot --stall --life]
+                 [--boot-contract]   the BRIEF'S PRODUCER attests it requires a first-act push (§4.1a)
 cc-cloud retire  --id <id>
 cc-cloud poll                     the ONLY mutator of the heartbeat sidecar
 cc-cloud is-offbox <id>           exit 0 iff declared and not retired — the abstain lookup
@@ -776,7 +821,11 @@ Before any cloud session is fired, in this order:
 1. `cc-cloud declare --id <id> --branch <b> --paths <what it will land> --url <session url>` —
    an undeclared cloud session is unobservable, and `declare` refuses without `--id`/`--branch`.
 2. The session's brief must require **pushing the declared branch as its first act**, so that
-   absence past the boot budget means something (§4.1).
+   absence past the boot budget means something (§4.1). ✅ **BUILT 2026-08-26** — it is no longer a
+   thing the firer must remember: `scripts/lib/cloud-brief.sh` holds the text, both producers
+   prepend it and refuse to fire without it, and the declaration carries `--boot-contract` so the
+   state function can tell an attested fire from an unattested one. §4.1a is the whole account,
+   including what four months of it being prose cost.
 3. §5.2 must be wired first — otherwise `com.claude.team-orphan-reaper` may archive the team
    while the session is healthy.
 4. On completion, `cc-cloud retire --id <id>` — or let C3 `LANDED` render it silent, which it does

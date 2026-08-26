@@ -139,7 +139,7 @@ setup() {
 @test "C2 BOOTING is silent inside the boot budget; C1 NOT-STARTED rows past it" {
   have_subject
   r="$(bare rem)"
-  cloud declare --id early --branch feat/a --remote "$r" --repo "" --boot 900
+  cloud declare --id early --branch feat/a --remote "$r" --repo "" --boot 900 --boot-contract
 
   # Inside the budget: expected, not a fault.
   [ "$(rows)" -eq 0 ]
@@ -159,8 +159,8 @@ setup() {
   # reachable remote missing the ref, rc=128 for a remote that cannot be reached at all. Reading
   # emptiness alone would convict a live cloud session on a wifi blip.
   reachable="$(bare good)"
-  cloud declare --id down --branch feat/a --remote "$D/no-such-remote.git" --repo "" --boot 900
-  cloud declare --id up   --branch feat/a --remote "$reachable"            --repo "" --boot 900
+  cloud declare --id down --branch feat/a --remote "$D/no-such-remote.git" --repo "" --boot 900 --boot-contract
+  cloud declare --id up   --branch feat/a --remote "$reachable"            --repo "" --boot 900 --boot-contract
 
   export CC_CLOUD_NOW=$((T0 + 5000))   # both are far past the boot budget
 
@@ -191,13 +191,13 @@ setup() {
   r="$(bare rem)"
   # Declare FIRST, then push: that is what a session doing the work looks like. Pushing first would
   # seed the fire-time baseline with this very sha, making it a pre-existing branch (C1/C2).
-  cloud declare --id live --branch feat/a --remote "$r" --repo "" --boot 900 --life 21600
+  cloud declare --id live --branch feat/a --remote "$r" --repo "" --boot 900 --life 21600 --boot-contract
   push_ref "$r" feat/a >/dev/null
   [ "$(tstate live)" = "ALIVE" ]
   [ "$(rows)" -eq 0 ]
 
   # CONTROL: the same declaration with no ref pushed is NOT silent once past boot.
-  cloud declare --id nolive --branch feat/zzz --remote "$r" --repo "" --boot 900
+  cloud declare --id nolive --branch feat/zzz --remote "$r" --repo "" --boot 900 --boot-contract
   export CC_CLOUD_NOW=$((T0 + 5000))
   [ "$(tstate nolive)" = "NOT-STARTED" ]
 }
@@ -301,7 +301,7 @@ setup() {
   repo="$(trunk_repo work docs/thing.md)"
   # docs/thing.md is ALREADY on this trunk, and this session never pushes anything.
   cloud declare --id neverran --branch feat/b --remote "$r" --repo "$repo" \
-        --trunk origin/main --paths docs/thing.md --boot 900 --stall 3600 --life 999999
+        --trunk origin/main --paths docs/thing.md --boot 900 --stall 3600 --life 999999 --boot-contract
 
   [ "$(tstate neverran)" = "BOOTING" ]     # control: inside the budget, silent
   export CC_CLOUD_NOW=$((T0 + 100000))
@@ -318,10 +318,10 @@ setup() {
   repo="$(trunk_repo work docs/thing.md)"
   # No --paths: landedness is not assertable for this declaration by construction.
   cloud declare --id gone --branch feat/c --remote "$r" --repo "$repo" \
-        --trunk origin/main --boot 900 --stall 999999 --life 999999
+        --trunk origin/main --boot 900 --stall 999999 --life 999999 --boot-contract
   # CONTROL, same fixture, never pushed and never polled — no sidecar, so no evidence of a push.
   cloud declare --id never --branch feat/d --remote "$r" --repo "$repo" \
-        --trunk origin/main --boot 900 --stall 999999 --life 999999
+        --trunk origin/main --boot 900 --stall 999999 --life 999999 --boot-contract
   push_ref "$r" feat/c >/dev/null
   cloud poll >/dev/null                     # writes gone's sidecar; `never` has no ref, so none
 
@@ -435,7 +435,7 @@ setup() {
 @test "retire removes a session from reconciliation entirely" {
   have_subject
   r="$(bare rem)"
-  cloud declare --id temp --branch feat/a --remote "$r" --repo "" --boot 900
+  cloud declare --id temp --branch feat/a --remote "$r" --repo "" --boot 900 --boot-contract
   export CC_CLOUD_NOW=$((T0 + 5000))
   [ "$(rows)" -eq 1 ]                     # control: it was firing before the retire
 
@@ -449,7 +449,7 @@ setup() {
 @test "rows carry the frozen 6-field schema, ASCII detail bounded at 44 bytes" {
   have_subject
   r="$(bare rem)"
-  cloud declare --id schema-check --branch feat/a --remote "$r" --repo "" --boot 900
+  cloud declare --id schema-check --branch feat/a --remote "$r" --repo "" --boot 900 --boot-contract
   export CC_CLOUD_NOW=$((T0 + 5000))
 
   line="$("$CLOUD" --json)"
@@ -471,7 +471,7 @@ setup() {
 @test "CC_CLOUD_RECONCILE=off emits zero rows, exit 0, and SAYS SO on stderr" {
   have_subject
   r="$(bare rem)"
-  cloud declare --id offsw --branch feat/a --remote "$r" --repo "" --boot 900
+  cloud declare --id offsw --branch feat/a --remote "$r" --repo "" --boot 900 --boot-contract
   export CC_CLOUD_NOW=$((T0 + 5000))
   [ "$(rows)" -eq 1 ]                     # control: it fires while the switch is on
 
@@ -542,7 +542,7 @@ setup() {
   have_subject
   r="$(bare rem)"
   push_ref "$r" feat/a >/dev/null            # the branch name is re-used: it exists BEFORE the fire
-  cloud declare --id reused --branch feat/a --remote "$r" --repo "" --boot 900 --life 999999
+  cloud declare --id reused --branch feat/a --remote "$r" --repo "" --boot 900 --life 999999 --boot-contract
 
   # Without the fire-time baseline this reads ALIVE — and stays silent for the whole life budget,
   # hiding the likeliest real failure (a session that never boots onto a re-used branch name).
@@ -551,7 +551,7 @@ setup() {
 
   # POSITIVE CONTROL, same remote and same clock: a session declared BEFORE its push has moved off
   # its baseline and stays ALIVE. So the verdicts here are the baseline arm, not the clock.
-  cloud declare --id moved --branch feat/b --remote "$r" --repo "" --boot 900 --life 999999
+  cloud declare --id moved --branch feat/b --remote "$r" --repo "" --boot 900 --life 999999 --boot-contract
   push_ref "$r" feat/b >/dev/null
   export CC_CLOUD_NOW=$((T0 + 5000))
   [ "$(tstate reused)" = "NOT-STARTED" ]
@@ -566,7 +566,7 @@ setup() {
   # recorded. Then bring the remote up and push. The ref is new, and the classifier must say so
   # rather than reading an unmeasured baseline as an empty one and convicting a live session.
   r="$D/late.git"
-  cloud declare --id late --branch feat/a --remote "$r" --repo "" --boot 900 --life 999999
+  cloud declare --id late --branch feat/a --remote "$r" --repo "" --boot 900 --life 999999 --boot-contract
   [ -f "$CC_CLOUD_STATE/late.decl" ]
   run grep -c '^base_probe=' "$CC_CLOUD_STATE/late.decl"
   [ "$output" = "0" ]
@@ -580,7 +580,7 @@ setup() {
   # POSITIVE CONTROL: an identically-aged declaration WITH a measured baseline over the same,
   # now-reachable remote and the same branch DOES convict. The abstention above is the missing
   # measurement, not a classifier that has stopped firing.
-  cloud declare --id measured --branch feat/a --remote "$r" --repo "" --boot 900 --life 999999
+  cloud declare --id measured --branch feat/a --remote "$r" --repo "" --boot 900 --life 999999 --boot-contract
   grep -q '^base_probe=ok$' "$CC_CLOUD_STATE/measured.decl"
   export CC_CLOUD_NOW=$((T0 + 10000))
   [ "$(tstate measured)" = "NOT-STARTED" ]
@@ -721,4 +721,90 @@ setup() {
   run cloud declare --id absdecl --branch main --remote "$D/nonexistent.git" --repo ""
   [ "$status" -eq 0 ]
   [ -f "$CC_CLOUD_STATE/absdecl.decl" ] || { echo "an unreachable remote turned into a refusal"; false; }
+}
+
+# ── B1-B4 · THE BOOT CONTRACT (§4.1, backlog 0c8b39b67665) ───────────────────────────────────────
+# §4.1 is the paragraph every C1 verdict rests on: "A declared cloud session that has pushed
+# nothing is indistinguishable from one that never started, one that died at boot, and one that was
+# refused entitlement… It can only be resolved by CONTRACT: the session's brief requires its FIRST
+# ACT to be pushing that branch — an empty commit is enough."
+#
+# That contract was PROSE ONLY until 2026-08-26, so NOT-STARTED was a claim about the other side
+# resting on a promise no brief had made. The bill is measured in bin/cc-eligible:404-416: of the
+# 133 declarations reading NOT-STARTED, 130 still answered the API and 119 read
+# `environment_kind: anthropic_cloud` AND `sources: 1` — real VMs with the repo attached that HAD
+# booted, read the brief, found the item's project absent and correctly stopped. A session that
+# declines the work commits nothing, and nothing had told it to push first.
+#
+# `declare --boot-contract` is the producing side's attestation that the brief carries the block.
+# Without it both C1 arms abstain to UNKNOWN — no row, `--check` fails, so the gap is loud.
+#
+# EVERY CASE HERE IS A PAIR ON ONE FIXTURE: the only thing that differs between the convicting and
+# the abstaining declaration is the attestation, so nothing else can be explaining the verdict.
+#
+# RED-PROOF (re-runnable): against `git show origin/main:bin/cc-cloud` in a scratch tree, B1 and B2
+# go RED (the unattested declaration is convicted NOT-STARTED, and --check's failure is a vacuous
+# pass of the wrong kind), B3 goes RED (--boot-contract is an unknown arg, rc 2), and B4 goes RED
+# (the projection has no boot_contract key at all).
+
+@test "B1 no boot contract ⇒ an ABSENT ref is UNKNOWN, never NOT-STARTED" {
+  have_subject
+  r="$(bare rem)"
+  # ONE remote, ONE clock, two declarations that differ in exactly one flag.
+  cloud declare --id attested   --branch feat/a --remote "$r" --repo "" --boot 900 --boot-contract
+  cloud declare --id unattested --branch feat/b --remote "$r" --repo "" --boot 900
+
+  export CC_CLOUD_NOW=$((T0 + 5000))
+  [ "$(tstate attested)" = "NOT-STARTED" ]      # the brief promised a ref; there is none
+  [ "$(tstate unattested)" = "UNKNOWN" ]        # nothing ever promised one; absence proves nothing
+
+  # UNKNOWN emits NO row — an unreadable absence must not be dressed as an actionable one …
+  [ "$("$CLOUD" --json | grep -c '"subject":"unattested"' || true)" -eq 0 ]
+  # … and the attested one still does, so this is an abstention and not a detector that stopped.
+  [ "$("$CLOUD" --json | grep -c '"subject":"attested"' || true)" -eq 1 ]
+}
+
+@test "B2 the abstention is LOUD: --check FAILS on it, and declare says so at declaration time" {
+  have_subject
+  r="$(bare rem)"
+  cloud declare --id attested --branch feat/a --remote "$r" --repo "" --boot 900 --boot-contract
+  export CC_CLOUD_NOW=$((T0 + 5000))
+  run "$CLOUD" --check
+  [ "$status" -ne 0 ]                            # control: NOT-STARTED already fails --check
+
+  # The unattested one fails it too — silence would be the one outcome that turns a missing
+  # contract into a clean board.
+  export CC_CLOUD_NOW=$T0
+  run "$CLOUD" declare --id unattested --branch feat/b --remote "$r" --repo "" --boot 900
+  [ "$status" -eq 0 ]                            # it is DECLARED: unobservable would be worse
+  printf '%s' "$output" | grep -q 'boot-contract' # …and the gap is named where it is cheap to fix
+  export CC_CLOUD_NOW=$((T0 + 5000))
+  run "$CLOUD" --check
+  [ "$status" -ne 0 ]
+}
+
+@test "B3 the SAME law on an UNMOVED ref — the baseline arm is gated identically" {
+  have_subject
+  r="$(bare rem)"
+  # The branch names already exist at fire time, so both declarations take the baseline arm
+  # (sha == base_sha) rather than the absent-ref arm. One law, two arms.
+  push_ref "$r" feat/a >/dev/null
+  push_ref "$r" feat/b >/dev/null
+  cloud declare --id reattested --branch feat/a --remote "$r" --repo "" --boot 900 --life 999999 --boot-contract
+  cloud declare --id reunattested --branch feat/b --remote "$r" --repo "" --boot 900 --life 999999
+
+  export CC_CLOUD_NOW=$((T0 + 5000))
+  [ "$(tstate reattested)" = "NOT-STARTED" ]
+  [ "$(tstate reunattested)" = "UNKNOWN" ]
+}
+
+@test "B4 the attestation is PROJECTED, so an UNKNOWN can be told from a starved sensor" {
+  have_subject
+  r="$(bare rem)"
+  cloud declare --id attested   --branch feat/a --remote "$r" --repo "" --boot-contract
+  cloud declare --id unattested --branch feat/b --remote "$r" --repo ""
+  run bash -c "'$CLOUD' list --json | grep '\"id\":\"attested\"'"
+  printf '%s' "$output" | grep -q '"boot_contract":"required"'
+  run bash -c "'$CLOUD' list --json | grep '\"id\":\"unattested\"'"
+  printf '%s' "$output" | grep -q '"boot_contract":"none"'
 }

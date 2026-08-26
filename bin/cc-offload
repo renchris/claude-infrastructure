@@ -81,6 +81,13 @@ CUSTODY_BIN="${CC_OFFLOAD_CUSTODY_BIN:-}"
 [ -n "$CUSTODY_BIN" ] || { for c in "$BINDIR/cc-custody" "$HOME/.claude/bin/cc-custody" "$(command -v cc-custody 2>/dev/null || true)"; do
   [ -n "$c" ] && [ -x "$c" ] && { CUSTODY_BIN="$c"; break; }; done; }
 WEBSETUP_STATE="${CC_OFFLOAD_WEBSETUP_STATE:-$HOME/.claude/autonomy/websetup}"
+# THE BOOT CONTRACT (CLOUD_OBSERVABILITY.md §4.1). Sourced, not re-typed: handoff-fire.sh's cloud
+# leg is the other producer of a cloud brief, and a contract written in two places drifts — the
+# defect bin/cc-cloud's own header records from the two tools that once read one observable set.
+# Composition, not reimplementation, is this file's stated rule; the text belongs to the library.
+BRIEF_LIB="${CC_OFFLOAD_BRIEF_LIB:-$ROOT/scripts/lib/cloud-brief.sh}"
+# shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+[ -f "$BRIEF_LIB" ] && . "$BRIEF_LIB"
 REPO="${CC_OFFLOAD_REPO:-$ROOT}"
 # The create path is interactive-only and 2.1.114 has no --cloud at all; keep ONE default with
 # scripts/lib/cloud-create.sh rather than a second opinion about which binary can fire.
@@ -507,6 +514,16 @@ cmd_up_api() {
   local pf="$1" n="$2" account="$3" dry="$4" i rc=0 fired=0
   local api="${CC_OFFLOAD_CREATE_API:-$ROOT/scripts/cloud-create-api.py}"
   [ -f "$api" ] || { note "cc-offload: missing $api"; return 3; }
+  # FAIL-CLOSED, BEFORE ANY QUOTA IS SPENT. A brief with no boot contract produces a session whose
+  # absence can never be read: `cc-cloud` refuses to call it NOT-STARTED and every verdict about it
+  # abstains for its whole life (§4.1). That is the unobservable fire `cc-cloud preflight` already
+  # spends an exit code refusing, reached through a different door — so it is refused here too,
+  # rather than fired and then reported honestly as unknowable.
+  if ! declare -F cc_cloud_boot_contract >/dev/null 2>&1; then
+    note "cc-offload: missing $BRIEF_LIB — the brief would carry no boot contract (§4.1), so the"
+    note "  session's absence would be unreadable. Not firing. Set CC_OFFLOAD_BRIEF_LIB to override."
+    return 3
+  fi
 
   # The router is the arbiter — never re-rank accounts here.
   if [ "$account" = auto ]; then
@@ -545,8 +562,12 @@ cmd_up_api() {
     # Declare BEFORE delivering: an undeclared id is unobservable, and cc-notify refuses to claim a
     # send about one (exit 3). Carry the owning account or the send goes out unrouted — and carry
     # the management fields, because nothing downstream can reconstruct them (see the W2 block above).
+    # `--boot-contract` is the ATTESTATION that the brief queued below carries the first-act push,
+    # and only the composer of that brief may make it. It is passed unconditionally because the
+    # brief is composed unconditionally (the guard at the top of this function is what makes that
+    # true); the two cannot come apart without this line changing.
     local -a dargs=(declare --id "$sid" --branch "$br" --account "$account" --repo "$REPO"
-                    --url "https://claude.ai/code/$sid" --custody "$sid")
+                    --url "https://claude.ai/code/$sid" --custody "$sid" --boot-contract)
     if [ -n "$UP_ITEM" ]; then dargs+=(--item "$UP_ITEM"); else dargs+=(--item "cc-offload $(basename "$pf")"); fi
     [ -n "$UP_NOTIFY_BACK" ] && dargs+=(--notify-back "$UP_NOTIFY_BACK")
     [ -n "$UP_GOAL" ]        && dargs+=(--goal "$UP_GOAL")
@@ -565,7 +586,16 @@ cmd_up_api() {
         || note "cc-offload: custody could not be opened for $sid — the close-integrity arm is NOT armed for it."
     fi
 
-    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$(cat "$pf")" >/dev/null 2>&1
+    # THE BRIEF = THE BOOT CONTRACT, THEN THE TASK. This leg used to queue the task file verbatim,
+    # which left the VM with no return instruction of any kind: the branch it may push to is named
+    # in the create body's `outcomes.git_info.branches` and therefore known to the API and to
+    # nobody else. So the block is not only §4.1's contract here, it is also the only place the VM
+    # is ever told the branch name — an omission that read, from this side, as a session that never
+    # started (bin/cc-eligible:404-416 measures what that cost across 133 declarations).
+    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" \
+      "$(cc_cloud_boot_contract "$br")
+
+$(cat "$pf")" >/dev/null 2>&1
     local drc=$?
     if [ "$drc" != 0 ]; then
       note "cc-offload: $sid created+declared but the brief did NOT queue (cc-notify exit $drc)."

@@ -7861,6 +7861,35 @@ if [ "$CLOUD" = 1 ]; then
   . "$_CC_CC" || { echo "!! cloud fire: cloud-create.sh failed to source" >&2
     emit_fire_refusal cloud-lib-absent "scripts/lib/cloud-create.sh failed to source"; exit 10; }
 
+  # THE BOOT CONTRACT (CLOUD_OBSERVABILITY.md §4.1), resolved the same way and refused the same way.
+  # It is a separate library from the create because the OTHER producer of a cloud brief —
+  # `cc-offload up`, which creates through scripts/cloud-create-api.py and never sources
+  # cloud-create.sh — must emit the identical text, and a contract written twice drifts.
+  # FAIL-CLOSED, and for a stronger reason than the create's: a fire whose brief carries no boot
+  # contract is one whose absence can never be read, so `cc-cloud` refuses to call it NOT-STARTED
+  # and the session becomes exactly the unobservable fire the preflight below spends an exit code
+  # refusing. Firing it anyway would spend an account's quota to produce a verdict nobody can state.
+  _CC_CB=""
+  if [ -n "${CC_FIRE_CLOUD_BRIEF_LIB:-}" ]; then
+    if [ -f "${CC_FIRE_CLOUD_BRIEF_LIB}" ]; then _CC_CB="${CC_FIRE_CLOUD_BRIEF_LIB}"; fi
+  else
+    for _CC_CBD in "$(dirname "$_CC_KS")/lib/cloud-brief.sh" \
+                   "$(dirname "$0")/lib/cloud-brief.sh" \
+                   "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/cloud-brief.sh" \
+                   "${HOME:-}/.claude/scripts/lib/cloud-brief.sh"; do
+      if [ -f "$_CC_CBD" ]; then _CC_CB="$_CC_CBD"; break; fi
+    done
+  fi
+  if [ -z "$_CC_CB" ]; then
+    echo "!! cloud fire: REFUSING — scripts/lib/cloud-brief.sh is unreachable, so the brief would" >&2
+    echo "   carry no boot contract and the session's absence would be unreadable (§4.1)." >&2
+    emit_fire_refusal cloud-lib-absent "scripts/lib/cloud-brief.sh unreachable — no boot contract to inject"
+    exit 10
+  fi
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  . "$_CC_CB" || { echo "!! cloud fire: cloud-brief.sh failed to source" >&2
+    emit_fire_refusal cloud-lib-absent "scripts/lib/cloud-brief.sh failed to source"; exit 10; }
+
   # The account's config dir. `--launcher` bypasses account selection entirely and leaves CHOSEN as
   # a placeholder string, which cannot be routed — and an unrouted create would silently run as
   # whichever account this session happens to be, then be declared under a name that is not its
@@ -7891,11 +7920,19 @@ if [ "$CLOUD" = 1 ]; then
   CLOUD_BRANCH="$(cc_cloud_branch_name)"
   CLOUD_CWD="$PWD"; [ -d "$CLOUD_CWD" ] || CLOUD_CWD="$REPO"
 
-  # The payload = the brief, plus the ONE instruction that makes the result reachable. A cloud VM
-  # has no ~/.claude, no cc-notify and no /ship (§1, G6), so the local trailers below — the
-  # back-channel ping, the self-retire, the pane bookkeeping — are all unrunnable there. Its push
-  # IS its back-channel: scripts/cloud-reconcile.sh discovers `claude/*` on the remote and hands it
-  # to the sanctioned local lander.
+  # The payload = the BOOT CONTRACT, then the brief, then the ONE instruction that makes the result
+  # reachable. A cloud VM has no ~/.claude, no cc-notify and no /ship (§1, G6), so the local
+  # trailers below — the back-channel ping, the self-retire, the pane bookkeeping — are all
+  # unrunnable there. Its push IS its back-channel: scripts/cloud-reconcile.sh discovers `claude/*`
+  # on the remote and hands it to the sanctioned local lander.
+  #
+  # 🚨 THE BOOT CONTRACT GOES FIRST, ABOVE THE BRIEF, BECAUSE IT IS A FIRST-ACT CONTRACT
+  # (CLOUD_OBSERVABILITY.md §4.1; scripts/lib/cloud-brief.sh carries the full why). This payload
+  # used to instruct the push ONLY as the last act — its own heading read "read this before you
+  # finish" — which leaves every absence ambiguous for the whole of a session's life: a VM that
+  # booted, read the brief, found it could not proceed and stopped is byte-identical, from this
+  # side, to one that never ran. Measured cost, bin/cc-eligible:404-416: 119 of 133 `NOT-STARTED`
+  # sessions were real VMs with the repo attached that had booted. Ordering is the entire fix.
   #
   # 🚨 THE PAYLOAD SAYS `switch -c` FIRST, AND THAT ORDER IS THE WHOLE POINT (B1, backlog
   # 7c6ff16259a0; docs/research/scaling-bottlenecks-2026-08-09/06-offbox.md §B1). It used to say
@@ -7912,20 +7949,31 @@ if [ "$CLOUD" = 1 ]; then
   # there the name is authorised AT CREATE. cc_cloud_create's signature is `cfg cwd prompt`
   # (scripts/lib/cloud-create.sh:185): the CLI leg has NO branch parameter at all, so the payload
   # is the only place the branch can be established, and establishing it is a real `switch -c`.
-  CLOUD_PAYLOAD="$(cat "$PROMPT_FILE")
+  # Composed into its own variable first, with the refusal spelled out. Inlining the substitution
+  # into the payload assignment would make its rc the ASSIGNMENT's rc, and this file runs under
+  # `set -e` — so a contract that refused (an empty branch) would exit 2 silently, mid-fire, with
+  # no gate reason recorded and nothing on stderr. A refusal that cannot be read is the failure
+  # this whole leg is written against.
+  CLOUD_BOOT_BLOCK="$(cc_cloud_boot_contract "$CLOUD_BRANCH")" || {
+    echo "!! cloud fire: REFUSING — the boot contract could not be composed for branch '$CLOUD_BRANCH'." >&2
+    emit_fire_refusal cloud-lib-absent "cc_cloud_boot_contract refused branch '$CLOUD_BRANCH' — no contract to inject"
+    exit 10; }
+  CLOUD_PAYLOAD="$CLOUD_BOOT_BLOCK
+
+$(cat "$PROMPT_FILE")
 "'
-── HOW TO RETURN YOUR WORK (this session runs off-box; read this before you finish) ──
+── HOW TO RETURN YOUR WORK (this session runs off-box) ──
 You are running in an Anthropic-managed VM. Nothing on the operator'"'"'s machine can see your
 filesystem, your processes or your terminal, and you cannot run this repo'"'"'s /ship. Your ONLY
-channel back is a git push, and it must go to exactly this branch — CREATE IT FIRST, then push it:
+channel back is a git push, onto the branch you created at the top of this message:
 
-    git switch -c '"$CLOUD_BRANCH"'
     git push -u origin HEAD
 
 That branch name was assigned by the firing side and is already declared as the one thing watched
-for your progress — a push anywhere else is invisible and your work will strand. Push whatever you
-have before you finish, even if the work is incomplete; an unpushed cloud session leaves no trace
-of any kind. A local reconciler (scripts/cloud-reconcile.sh) discovers the branch and lands it.'
+for your progress — a push anywhere else is invisible and your work will strand. Push again
+whenever you finish a piece, and push whatever you have before you stop, even if the work is
+incomplete; an unpushed cloud session leaves no trace of any kind. A local reconciler
+(scripts/cloud-reconcile.sh) discovers the branch and lands it.'
 
   if [ "$DRY" = 1 ]; then
     echo "-- DRY RUN: cloud fire (no create issued, no quota spent)"
@@ -8033,8 +8081,13 @@ of any kind. A local reconciler (scripts/cloud-reconcile.sh) discovers the branc
     emit_fire_refusal cloud-declare-absent "session $CLOUD_ID created, cc-cloud unreachable — session is live and UNDECLARED"
     exit 11
   fi
+  # `--boot-contract` is an ATTESTATION BY THE PRODUCER OF THE BRIEF, and only such a producer may
+  # pass it: it says "the payload I just sent requires a push as its first act", which is the one
+  # fact that makes a later absence readable (§4.1). It is passed HERE, unconditionally, because
+  # the payload above is composed unconditionally — the two cannot come apart without this call
+  # changing. cc-cloud abstains (UNKNOWN, never NOT-STARTED) on a declaration that lacks it.
   if ! "$CLOUD_DECL" declare --id "$CLOUD_ID" --branch "$CLOUD_BRANCH" --account "$CLOUD_ACCT" \
-         --repo "$REPO" --url "https://claude.ai/code/$CLOUD_ID" \
+         --repo "$REPO" --url "https://claude.ai/code/$CLOUD_ID" --boot-contract \
          --item "handoff-fire $(basename "$PROMPT_FILE")" >&2; then
     echo "!! cloud fire: session $CLOUD_ID CREATED but the declaration FAILED — it is live and unobservable." >&2
     echo "     cc-cloud declare --id $CLOUD_ID --branch $CLOUD_BRANCH --account $CLOUD_ACCT --repo $REPO" >&2

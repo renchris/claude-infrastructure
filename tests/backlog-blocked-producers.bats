@@ -86,8 +86,15 @@ sub() { printf '%s' "${1//@@/$2}"; }   # <template> <digits> → the fixture tit
 # Identity is passed with transient `-c`, never `git config`: this suite runs inside a linked
 # worktree that shares one .git/config with ~100 siblings, and `git -C ""` is a documented NO-OP, so
 # an all-expansion target would silently re-author commits in the REAL repo (the 2026-08-05 leak).
+# `boot_contract=` is written because a REAL fire writes it: since 2026-08-26 both producers of a
+# cloud brief inject CLOUD_OBSERVABILITY.md §4.1's first-act push and pass `cc-cloud declare
+# --boot-contract` to say so, and cc-cloud abstains from NOT-STARTED without it (an absent ref
+# proves nothing when no brief ever promised one). A fixture that omitted it would be modelling a
+# hand-declare, not a fire, and the NOT-STARTED case below would be asserting the wrong world.
+# `decl <item> <branch> <push?> nocontract` builds the unattested variant — used by exactly one
+# case, which pins that the abstention stays FAIL-CLOSED at this consumer.
 decl() {
-  local item="$1" branch="$2" push="${3:-no}"
+  local item="$1" branch="$2" push="${3:-no}" contract="${4:-attested}"
   local bare="$BATS_TEST_TMPDIR/remote.git" work="$BATS_TEST_TMPDIR/work"
   if [ ! -d "$bare" ]; then
     git init -q --bare "$BATS_TEST_TMPDIR/remote.git"
@@ -109,6 +116,8 @@ url=https://claude.ai/code/session_$item
 item=$item
 declared_at=$(( CC_CLOUD_NOW - 1000 ))
 EOF
+  [ "$contract" = attested ] && printf 'boot_contract=required\n' >> "$CC_CLOUD_STATE/session_$item.decl"
+  return 0
 }
 
 # reap_cloud <push?> — files a row, claims it off-box, ages the claim past the stale gate, sweeps.
@@ -116,7 +125,7 @@ EOF
 # that is a subshell, and ROW would never reach the test.
 reap_cloud() {
   ROW="$(bash "$CB" add --title "off-box unit of work" --project p --source t)"
-  decl "$ROW" "claude/fire-20260812T071538Z-80941-1" "${1:-no}"
+  decl "$ROW" "claude/fire-20260812T071538Z-80941-1" "${1:-no}" "${2:-attested}"
   bash "$CB" claim "$ROW" --by dispatcher-9999 --venue cloud --force >/dev/null 2>&1
   REAPLOG="$BATS_TEST_TMPDIR/reap.log"
   CC_BACKLOG_NOW="$(( $(date +%s) + 100000 ))" bash "$CB" reap >"$REAPLOG" 2>&1
@@ -148,6 +157,19 @@ status_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id=
   bash "$CB" claim "$id" --by dispatcher-9999 --venue cloud --force >/dev/null 2>&1
   CC_BACKLOG_NOW="$(( $(date +%s) + 100000 ))" bash "$CB" reap >/dev/null 2>&1
   [ "$(bash "$CB" list --all --json | jq -r --arg i "$id" '.[]|select(.id==$i)|.status')" = blocked ]
+}
+
+@test "FIX1 CONTROL: an UNATTESTED declaration is cannot-tell too — the abstention stays fail-closed here" {
+  # The consumer-side half of CLOUD_OBSERVABILITY.md §4.1a. A declaration carrying no boot contract
+  # makes an absent ref unreadable, so cc-cloud answers UNKNOWN instead of NOT-STARTED — and this
+  # reap's `cloud_state` maps UNKNOWN to rc 2, the same "cannot tell" as no declaration at all.
+  # The row therefore stays BLOCKED rather than returning to the wave, which is the honest outcome:
+  # nothing has established that no worker is running. It is the price of the abstention and it is
+  # bounded — every producer of a cloud brief attests, so only legacy rows and hand-declares reach
+  # this arm, and `cc-cloud --check` fails loudly over each one.
+  reap_cloud no nocontract
+  ! grep -q 'NOT-STARTED' "$REAPLOG" || false
+  [ "$(status_of "$ROW")" = blocked ]
 }
 
 @test "FIX1 CURE: a row ALREADY blocked on the off-box sentence is re-adjudicated and cleared" {
