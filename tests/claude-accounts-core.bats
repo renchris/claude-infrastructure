@@ -1813,7 +1813,15 @@ assert 12.0 < r["burn_wk_ppd"] < 16.0, r          # ~14 %/day, i.e. the same rat
 assert "burn_wk_span_h" in r and r["burn_wk_span_h"] > 6.8, r
 assert "wk_strand_pp" in r, r
 assert 0.0 < r["wk_strand_pp"] < 5.0, r           # 40 + 0.583*100 = 98.3 -> ~1.7 pp die
-assert "burn_5h_ewma_ph" not in r, r              # S7 is a LATER wave and was not built here
+# RP-27, S7 arm. UPDATED IN PLACE when S7 landed: this line read `"burn_5h_ewma_ph" not in r`
+# while S7 was a later wave. The 5h key now ships beside the weekly one, under its OWN name and
+# in %/h — the series here is FLAT on session_pct (10 throughout, 24 h of it), so the honest
+# reading is a measured ZERO, not an absence. That distinction is the case: a producer that
+# only stamps a truthy value reports "no data" for an idle account, and the router cannot tell
+# an idle window from a blind one.
+assert "burn_5h_ewma_ph" in r, r
+assert r["burn_5h_ewma_ph"] == 0.0, r
+assert r["burn_5h_ewma_span_h"] > 1.3, r
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
@@ -2323,4 +2331,93 @@ assert d['outcome'] == 'none' and d['acct'] is None and d['score'] is None, d
 assert d['excluded'].get('capped'), d
 print('OK')"
   [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router M7 + S4: the drain block carries K in its header and a START-BY clause per row" {
+  # RP-25c/RP-26c — S4 (M4′) reaching the ONE renderer (L3). Three facts per strand row now:
+  # how much dies (M3a) · is the demand routine (M5) · by when must it start (M4′).
+  #
+  # THE HEADER'S K CLAUSE ENTERS HERE AND NOWHERE EARLIER. §5.4's mock put `K=0.192 live` on the
+  # header at S3, but M3a is pure weekly-space arithmetic and consumes no K at all; rendering a
+  # coefficient nothing on the line used would be the metric shape §3.2 forbids. burst_start_by
+  # is the first consumer, so the clause ships with it.
+  run python3 -c "$LOAD"'
+n4 = row(acct="next4", weekly_pct=14, weekly_reset_h=119.2, burn_wk_ewma_ph=0.186,
+         session_pct=8, session_reset_h=0.54, k_rate=0.192, k_src="live")
+n3 = row(acct="next3", weekly_pct=92, weekly_reset_h=2.21, burn_wk_ewma_ph=1.140,
+         session_pct=13, session_reset_h=3.37, k_rate=0.192, k_src="live")
+line = ca.pace_line([n3, n4])
+assert "K=0.192 live" in line, line
+assert "nowcast at the last 48h of pace" in line, line     # the S3 caption is NOT displaced
+# SLACK: the start time, and the slack that makes it comfortable
+assert "next4 strand ~64pp of 86" in line, line
+assert "start by T−28h (91h slack)" in line, line
+# LATE: the FLOOR is named, because that is the number that decides where to route the work
+assert "next3 strand ~5pp of 8" in line, line
+assert "⚠ LATE by 0.6h — 2.8pp already unrecoverable" in line, line
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router M7 + S4 CONTROL: a null K kills the START-BY clause ONLY — the strand still renders" {
+  # THE SCOPED ABSTAIN, and it is a deliberate deviation from §5.4's mock. That mock says a null K
+  # prints `no strand figures this sweep`, which would gate M3a on a coefficient it does not
+  # consume — a fabricated dependency, and a strictly worse surface: the strand is the number the
+  # operator loses money by not seeing. K's abstain takes down exactly what K feeds.
+  #
+  # Without this arm the previous case is satisfied by an implementation that renders the clause
+  # unconditionally and prints `start by T−nanh` when the fit left the band.
+  run python3 -c "$LOAD"'
+def r3(**kw):
+    d = dict(acct="next3", weekly_pct=92, weekly_reset_h=2.21, burn_wk_ewma_ph=1.140,
+             session_pct=13, session_reset_h=3.37)
+    d.update(kw); return row(**d)
+unfit = ca.pace_line([r3(k_rate=None, k_src=None, k_fit=0.2304)])
+assert "strand ~5pp of 8" in unfit, unfit                    # the strand SURVIVES
+assert "K unfitted" in unfit and "0.230" in unfit, unfit     # ...and says what it rejected
+assert "0.175" in unfit and "0.210" in unfit, unfit          # ...against which band
+assert "start by" not in unfit and "LATE" not in unfit, unfit
+# a FROZEN K is a third state and is labelled as one — never laundered into `live`
+froz = ca.pace_line([r3(k_rate=0.192, k_src="frozen")])
+assert "K=0.192 frozen" in froz, froz
+assert "LATE" in froz, froz
+# apply_burn never ran ⇒ no K stamp at all ⇒ the pre-S4 header, byte for byte, and no clause
+bare = ca.pace_line([r3()])
+assert bare.startswith(ca.PACE_HEAD), bare
+assert "K" not in bare.split(chr(10))[0], bare
+assert "start by" not in bare, bare
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router M7 + S7: _su_projected consumes the NEW 5h key at the right SCALE, not saturated" {
+  # RP-28. THE ÷100 IS THE WHOLE CASE. burn_5h_ewma_ph is %/h; _su_projected's arithmetic is
+  # `su + b * ahead` with su ∈ [0,1]. Feeding 60.0 in raw gives 0.2 + 60 = min(1.0, …) = 1.0 —
+  # every account reads as fully under 5h pressure, the projection stops discriminating, and
+  # nothing errors. Only an assertion on the VALUE can see it.
+  run python3 -c "$LOAD"'
+R = dict(PROJ_LOOKAHEAD_H=1.0)
+r = row(acct="next3", session_pct=20, session_reset_h=2.0, burn_5h_ewma_ph=60.0)
+got = ca._su_projected(r, R)
+assert abs(got - 0.80) < 1e-9, got                 # 0.20 + 0.60, NOT 1.0
+# the reset still CAPS the lookahead — pressure vanishes at the roll, and the new key must not
+# have quietly bypassed that
+near = row(acct="next3", session_pct=20, session_reset_h=0.5, burn_5h_ewma_ph=60.0)
+assert abs(ca._su_projected(near, R) - 0.50) < 1e-9, ca._su_projected(near, R)
+# PRECEDENCE + FALLBACK: the incumbent key still drives when the EWMA abstained, in ITS unit
+old = row(acct="next3", session_pct=20, session_reset_h=2.0, burn_5h_ph=0.3)
+assert abs(ca._su_projected(old, R) - 0.50) < 1e-9, ca._su_projected(old, R)
+# ...and when BOTH are present the EWMA wins, so the migration is not silently a no-op
+both = row(acct="next3", session_pct=20, session_reset_h=2.0,
+           burn_5h_ewma_ph=60.0, burn_5h_ph=0.01)
+assert abs(ca._su_projected(both, R) - 0.80) < 1e-9, ca._su_projected(both, R)
+# a measured ZERO is a MEASUREMENT: it must not fall through to the stale incumbent
+zero = row(acct="next3", session_pct=20, session_reset_h=2.0,
+           burn_5h_ewma_ph=0.0, burn_5h_ph=0.3)
+assert abs(ca._su_projected(zero, R) - 0.20) < 1e-9, ca._su_projected(zero, R)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }

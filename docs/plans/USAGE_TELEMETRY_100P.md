@@ -1612,6 +1612,10 @@ windows/week, carrying the fleet wall rate 1.72% → 2.20%.
 
 Wave 1 = **S1 + S2 + S3 only**. S4–S7 are unbuilt and unchanged; S5 still gates S6.
 
+Wave 2 = **S4 + S5 + S7**. S6 remains unbuilt **by its own rule**, not by scope: §5.2 S6 is literal
+that it does not ship until S5 has run against the live series and been read, and S5 is what wave 2
+built. The record is below at *§5.7 wave 2*.
+
 #### S1 · data fixes — LANDED
 
 `bin/claude-accounts`: `_reset_key` / `_rolled` (:1877), `_util_tail(path, hours=48.0,
@@ -1781,3 +1785,160 @@ shortens that.
 
 ⚠️ `bash tests/run.sh …`, named in §5.4, **does not exist in this repo**. The suites are run with
 `bats tests/<name>.bats`; `scripts/ship-land.sh` selects and runs them at the land.
+
+---
+
+### §5.7 wave 2 — S4 + S5 + S7, implementation record
+
+Built and landed 2026-08-26 from `claude/fire-20260826T030615Z-29426-1`, off `origin/main` at
+`cf97c4ac`. **S6 is deliberately still unbuilt** — see *What is NOT claimed* below.
+
+#### S4 · M4′ `burst_start_by` — LANDED
+
+`bin/claude-accounts`: `burst_start_by(r, k)` + `fmt_start_by(sb)` beside `fmt_burst`, constants
+`BURST_SPPH = 22.87` / `P_WALL = 0.625` / `MEAN_WALL_H = 1.653` / `SESSION_WINDOW_H = 5.0` /
+`START_SOON_H = 12.0`; consumed by `pace_line`, with K stamped in `apply_burn`. Suite
+`tests/claude-accounts-burst.bats` extended with RP-21..RP-24 + RP-22b, and
+`tests/claude-accounts-core.bats` with two render cases — **7/7 shown RED against the wave-1
+binary**, green after.
+
+The three §5.2 worked examples reproduce **exactly** on the shipped code: next3 `−0.645 h`
+(spec −0.65), floor **2.83 pp**, 1 window; next2 `+69.59 h`, 6 windows, 21.41 h of burn +
+6.20 h of freeze = 27.61 h.
+
+**Return shape is a dict**, not the bare float §5.3 RP-21 sketches — `{"h", "verdict",
+"unrecoverable_pp", "windows", "burn_h", "freeze_h", "t_needed_h"}`. RP-21's own text asks for a
+number *and* a verdict string, which a float cannot carry; this is the same call S2 made for
+`burst_percentile` and for the same reason.
+
+**Deviation 1 — the walk has an `avail <= 0` arm the spec's pseudocode does not.** Written
+literally, a session window already at 100% leaves `t = 0` and the loop spends the next 100 pp
+before the window it needs has rolled — the one direction a grid walk must never be optimistic
+in. Shipped: `else: t = srh`. It changes none of the four live rows (every one had room), so the
+pinned numbers above are unaffected; it changes the answer for exactly the account that is
+walled, which is when the question is asked.
+
+**Deviation 2 — a THIRD verdict rung is pinned by its own case (RP-22b).** §5.2 names SLACK /
+START SOON / LATE but §5.3 proves only the outer two, and a two-armed ladder is a boolean wearing
+three names. RP-22b is a two-window burst landing at `+7.75 h`.
+
+**Deviation 3 — the header's K clause, and the abstain is SCOPED.** §5.4's mock says a null K
+prints `no strand figures this sweep`. That would gate M3a on a coefficient it does not consume
+(§5.7 S3 Deviation 1 already established this) and would suppress the single number the operator
+loses money by not seeing. Shipped: K's abstain takes down exactly what K feeds — the start-by
+clause — and the header says why: `K unfitted (trailing 0.230 outside [0.175,0.210]) — no
+start-by figures this sweep`. Three K states are rendered distinctly (`live` · `frozen` ·
+`unfitted`) and a **fourth** — no K stamp at all, i.e. `apply_burn` never ran — falls back to the
+pre-S4 header byte for byte, so a renderer running without a sweep cannot claim a fit it does not
+have. `tests/claude-accounts-core.bats` pins all four.
+
+**Deviation 4 — `_k_sums()` factored out of `exchange_rate`.** The abstain returns `(None, Σds,
+None)`, which is the right VALUE contract, but it discards the raw fit the header has to name.
+Recomputing the pair filter in the renderer is how two spellings drift; one loop, two callers.
+`exchange_rate`'s 3-tuple signature is unchanged and RP-10..RP-12b still pass untouched.
+
+**The start-by clause rides STRAND ROWS ONLY.** A row with nothing dying has no start time to
+miss, and rendering one there answers a question the row does not raise.
+
+#### S5 · M3c `--strand-score` — LANDED
+
+`bin/claude-accounts`: `strand_score(samples, buckets, now)` + `render_strand_score(res, span_h)`
+beside `PACE_HEAD`, constants `STRAND_SCORE_BUCKETS = (96,48,24,12,6)` /
+`STRAND_SCORE_LOOKBACK_H = 1344` (8 weeks) / `STRAND_SIG_PP = 0.5`; `main()` branch placed
+**before `load_cfg()`**, immediately after `--agents`, with `--json`. New suite
+`tests/claude-accounts-strand-score.bats` (RP-34..RP-37) — **4/4 RED** against the wave-1 binary.
+
+**RP-35 is the case that makes the whole instrument falsifiable**, and it is the one the refuted
+score could not have produced. A window burned at 0.5 %/h for 120 h then 0.05 %/h for 48 h closes
+at 62.4% and strands 37.6 pp. Scored on the shipped code: the 96 h cell reads **−21.6 pp** —
+under-predicting the loss by two thirds — and the 6 h cell reads ~0. The suite asserts the error
+gradient is **monotone decreasing** across the whole grid, which no constant-bias stub reproduces.
+RP-34 is its necessary twin: a dead-constant window reads bias < 1 pp in every bucket, so neither
+"always zero" nor "always wrong" passes.
+
+**Two distinct reasons a cell is non-evaluable, and RP-36 pins both.** No *sample* at the horizon
+(the series picked the window up late) and no *estimate* at the horizon (a sample exists but M3a
+cannot clear its own 6.8 h span floor on the history that existed then). Either reports `n = 0`
+with `bias`/`mae`/`sign_agree` **null — never 0.0** — and contributes nothing to the aggregate.
+The walk goes newest-first among qualifying samples and stops at the first one M3a will speak on,
+because a sample the estimator abstains on is not a call it made.
+
+**It is causal by construction:** each cell re-derives M3a from `[x for x in ss if x["_t"] <=
+e["_t"]]` with `now = e["_t"]`. A scorer that reads the whole window to grade a mid-window call
+is measuring hindsight, which is the failure the refuted score already shipped.
+
+**A LIVE window is never scored** — `completed_weekly_windows`'s S1d rule excludes it, and RP-36
+asserts that directly. Scoring one would read the input back out as the answer.
+
+**Deviation — sign agreement is scored on `STRAND_SIG_PP = 0.5`, not on a raw sign.** Both
+quantities are clamped at zero by M3a's own design, so a literal sign comparison is `>= 0` on both
+sides and is true by construction. `>= 0.5 pp` is the distinction `pace_line` itself draws, i.e.
+*did it say this window would lose quota, and did it*.
+
+**L3 exception, as argued in §5.2:** this renders scored HISTORY, nothing routes on it, and it
+ships as a flag on the same binary so it rides the existing `~/.claude/bin/claude-accounts`
+symlink and converges on the trunk fast-forward instead of landing as an ADD the live layer
+cannot reach (the `LIVE_ADDS` trap, global CLAUDE.md § the `🚀` rung).
+
+#### S7 · M1 `burn_5h_ewma_ph` — LANDED
+
+`bin/claude-accounts`: `burn_5h_ewma_ph(samples_for_acct, now)` beside `burn_wk_ewma_ph`,
+constants `EWMA_5H_LOOKBACK_H = 6.0` / `EWMA_5H_HL = 1.0` / `EWMA_5H_MIN_SPAN_H = 1.3` /
+`EWMA_5H_MAX_DT_H = 1.0`; stamped in `apply_burn`'s existing EWMA loop; consumed by
+`_su_projected`. New suite `tests/claude-accounts-5h-ewma.bats` (RP-29..RP-33) plus core's RP-27
+arm and RP-28 — **7/7 RED** against the wave-1 binary.
+
+**Both named hazards ship as cases, because both produce a plausible wrong number rather than an
+error.** RP-29 + RP-28 pin the UNIT: the new key is %/h under its own name and `_su_projected`
+divides by 100, so the 100× saturation to `1.0` on every row is caught by an assertion on the
+value (0.80, not 1.0) and by nothing else. RP-32 pins the ROLL SPELLING with a fixture whose
+reset stamp alternates ±0.3 s across one minute boundary: under `_reset_key`'s rounding the true
+20 %/h survives; under truncation the roll branch fires and injects the absolute level.
+
+**Deviation 1 — `burn_5h_ph` is not replaced, it is left in place.** §5.2 says the new branch
+replaces the `burn_5h_ph` block at `:1925-1939` *and* that the old key stays populated for one
+release. Those cannot both be done to one block, and the second is the load-bearing half:
+`_su_projected` is not the only shape that could read it. Shipped: the incumbent block is
+untouched and the EWMA is stamped beside it. `tests/claude-accounts-core.bats:1778`
+(`burn_5h_ph ≈ 0.6`) therefore still passes unedited, which is the proof the old consumer surface
+did not move. RP-33 pins both keys present, each in its own unit.
+
+**Deviation 2 — a measured ZERO is stamped, and it does NOT fall through to the incumbent.** The
+producer writes `burn_5h_ewma_span_h` unconditionally and `burn_5h_ewma_ph` whenever the estimator
+spoke, including `0.0`; `_su_projected` prefers the EWMA on `isinstance`, not on truthiness. An
+idle window and a blind one are different states, and preferring a one-pair reading over a
+six-hour one because the six-hour one measured zero is the inversion. Core's RP-27 arm was
+updated in place for this — it previously asserted `"burn_5h_ewma_ph" not in r` while S7 was a
+later wave, and its fixture is flat on `session_pct`, so the honest reading there is a measured
+zero rather than an absence.
+
+**The blind spot ships in the docstring, verbatim from §5.2:** at `session_pct >= 40` the
+incumbent is *more* accurate (MAE 0.0617 vs 0.0797, EWMA over-projects by +3.6 pp). That is the
+burst regime the weekly-drain planner deliberately creates. The direction is soften-only at the
+one consumer and therefore fail-safe for routing, but the number is wrong there and must not be
+quoted as accurate. §5.6 Q3 names the measurement that fixes it.
+
+#### Acceptance status against §5.4 — wave 2
+
+| command | status |
+|---|---|
+| the bats suites (roll-key · util-tail · strand · burst · core · **5h-ewma** · **strand-score**) | **48/48 green** on the seven telemetry suites; every wave-2 case demonstrated RED against the wave-1 binary first |
+| `claude-accounts --strand-score` prints the horizon-stratified table with non-zero `n` in the 24 h / 12 h / 6 h buckets and a bias that could have been non-zero | **structurally yes, RP-37** — on a synthetic 5-window series the shipped renderer reads `96h −14.00 · 48h −14.00 · 24h −0.82 · 12h −0.14 · 6h −0.04`. ⚠️ **The LIVE run is an operator step** (below) |
+| `claude-accounts --readout` renders the drain block, now with the K header and the start-by clause | **not verifiable here** — needs the keychain and the four live accounts (below) |
+
+🚨 **What wave 2 could NOT verify, and it is the same fact for all three rows.** This wave was
+built in a Linux cloud container with no macOS keychain, no `~/.claude/accounts.json`, and no
+utilization series — so every figure above is a fixture, and §5.4's real acceptance (*"the
+operator's ONE command"*) has not been run. That is filed as an operator step, not asserted away.
+Four pre-existing suite failures in `tests/claude-accounts-core.bats` (`--relogin-info`,
+three `--login-status` cases) and 11 in `tests/gate-precheck.bats` reproduce **identically on the
+unmodified trunk binary in the same container** and are environment, not regression — measured by
+`git stash push -- bin/claude-accounts`, re-run, pop.
+
+**What is NOT claimed — and S6 is still not built.** §5.2 S6 is literal: *"Do not build this until
+S5 has run and been read. If the horizon-stratified bias at the 12 h bucket is not near zero, this
+alarm is not shippable at any parameter setting."* S5 now exists and its arithmetic is pinned, but
+it has been run only against fixtures the same session authored, which cannot discharge that gate —
+a harness graded on its author's own synthetic series is the tautology this instrument replaced,
+one level up. **The gate is the LIVE run.** No lead-time claim is made anywhere in this wave, in
+any docstring, caption or commit message; §5.1 LB-2's four kills stand.

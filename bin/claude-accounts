@@ -54,6 +54,14 @@ Usage:
       the same rows as data. Three INDEPENDENT facts per backend — installed / authenticated /
       has a headless agent mode — because only the third decides routability, and a presence
       check silently skips it (an editor launcher on PATH is not an agent backend).
+  claude-accounts --strand-score      how well the weekly-drain NOWCAST has actually done, scored
+      against every weekly window that has closed, stratified by how far from the reset the call
+      was made (96/48/24/12/6 h out). Reads only the utilization series — no keychain, no sweep,
+      no accounts.json — and NOTHING ROUTES ON IT: it is the nowcast's own mutation test, not a
+      second opinion about the fleet. Add --json for the same numbers as data. A cell with no
+      evaluable sample at its horizon reports n=0 and is EXCLUDED from the aggregate; a negative
+      bias is the nowcast UNDER-predicting the loss, and it is expected to shrink as the horizon
+      closes. See USAGE_TELEMETRY_100P §5.2 S5.
   claude-accounts --route general|fable|interactive   best account name (bare, on stdout)
       general      dispatch lane: headroom/T**2, deadline-DOMINANT — spend quota before it strands.
       interactive  a HUMAN's long-lived desk: maximise runway (absolute weekly headroom x projected
@@ -1867,7 +1875,17 @@ def _su_projected(r, R):
     su = (r.get("session_pct") or 0) / 100.0
     if not _term_on("CC_ROUTE_PROJ"):
         return su
-    b = r.get("burn_5h_ph")
+    # S7 · THE ÷100 IS LOAD-BEARING. `burn_5h_ewma_ph` is %/h; this arithmetic is fraction/h
+    # (`su + b * ahead`, su ∈ [0,1]). Feeding the new key in raw makes every row saturate to 1.0
+    # and reads as "every account is under 5h pressure" — a 100× error that raises nothing. The
+    # EWMA is preferred where it spoke, INCLUDING when it measured zero: a measured idle window
+    # is a fact, and falling through to the incumbent there would prefer a one-pair reading over
+    # a six-hour one. `burn_5h_ph` survives as the fallback for the spans the EWMA abstains on.
+    e = r.get("burn_5h_ewma_ph")
+    if isinstance(e, (int, float)):
+        b = e / 100.0
+    else:
+        b = r.get("burn_5h_ph")
     if not isinstance(b, (int, float)) or b <= 0:
         return su
     ahead = _cliff_env("CC_ROUTE_PROJ_LOOKAHEAD_H", R.get("PROJ_LOOKAHEAD_H", PROJ_LOOKAHEAD_H))
@@ -2021,6 +2039,24 @@ def exchange_rate(samples, hours=168.0):
     is not proven to be a real change, and a FROZEN literal has no path to learn that it became
     one. Abstaining outside K_SANE is the only reading that stays honest under both hypotheses:
     a silently widened band launders a plan change into a number."""
+    sum_ds, sum_dw = _k_sums(samples, hours)
+    if sum_ds < K_MIN_SDS:
+        return K_FROZEN, sum_ds, "frozen"
+    k = sum_dw / sum_ds
+    if not (K_SANE[0] <= k <= K_SANE[1]):
+        return None, sum_ds, None
+    return k, sum_ds, "live"
+
+
+def _k_sums(samples, hours=168.0):
+    """The ratio-of-sums numerator and denominator, `(Σ Δsession, Σ Δweekly)`, unbanded.
+
+    FACTORED OUT SO THE ABSTAIN CAN SAY WHAT IT REJECTED. `exchange_rate` returns `(None, Σds,
+    None)` outside K_SANE, which is the right VALUE contract — a consumer must not be handed a
+    number the band refuses — but the footer has to render *"trailing 0.230 outside
+    [0.175,0.210]"*, and that raw fit is exactly what the abstain discards. Recomputing it in the
+    renderer would be a second implementation of the pair filter, which is how the two spellings
+    drift apart. One loop, two callers."""
     now = time.time()
     cutoff = now - max(0.0, hours) * 3600.0
     by = {}
@@ -2047,12 +2083,7 @@ def exchange_rate(samples, hours=168.0):
                 continue
             sum_ds += ds
             sum_dw += dw
-    if sum_ds < K_MIN_SDS:
-        return K_FROZEN, sum_ds, "frozen"
-    k = sum_dw / sum_ds
-    if not (K_SANE[0] <= k <= K_SANE[1]):
-        return None, sum_ds, None
-    return k, sum_ds, "live"
+    return sum_ds, sum_dw
 
 
 WEEKLY_TAIL_GAP_H = 3.0       # a window is "observed to its end" only if a sample lands this close
@@ -2163,6 +2194,23 @@ def apply_burn(rows, cfg, samples=None):
         if bp is not None:
             r["burst"] = bp
 
+    # S4: K is a FLEET fact fitted on the series, so it is stamped here — the one place holding
+    # the series — rather than re-derived per row. It is stamped on EVERY row, including the
+    # abstain state, because `pace_line`'s header has to be able to say which of the three
+    # states it is in, and an absent key is a fourth state (apply_burn never ran) that must stay
+    # distinguishable from a refusal.
+    k, k_sds, k_src = exchange_rate(samples)
+    k_fit = None
+    if k is None:
+        sds, sdw = _k_sums(samples)
+        k_fit = (sdw / sds) if sds > 0 else None
+    for r in rows:
+        r["k_rate"] = k
+        r["k_src"] = k_src or "unfitted"
+        r["k_sum_ds"] = k_sds
+        if k_fit is not None:
+            r["k_fit"] = k_fit
+
     # M2 + M3a: the roll-aware weekly EWMA and the strand nowcast it feeds. The span is stamped
     # beside the value because it is the ABSTAIN's reason, and a null that cannot say why reads
     # as a missing measurement rather than as a refusal.
@@ -2174,6 +2222,15 @@ def apply_burn(rows, cfg, samples=None):
         r["burn_wk_span_h"] = span
         if v is not None:
             r["burn_wk_ewma_ph"] = v
+        # S7 · M1. Stamped in the SAME loop and under its OWN key, in %/h. `burn_5h_ph` above
+        # stays populated for one release: it is read by _su_projected as fraction/h, and a
+        # rename dressed as an addition is how a silent consumer break ships. A measured ZERO
+        # is written, not skipped — an idle window and a blind one are different states, and
+        # only the stamp can tell them apart downstream.
+        v5, span5 = burn_5h_ewma_ph(ss, now)
+        r["burn_5h_ewma_span_h"] = span5
+        if v5 is not None:
+            r["burn_5h_ewma_ph"] = v5
         s = wk_strand_pp(r)
         if s is not None:
             r["wk_strand_pp"] = s
@@ -2283,6 +2340,110 @@ def fmt_burst(bp):
     return f"p{min(99.0, bp['pct']):.0f} of its own {bp['h']:.0f}h burns"
 
 
+# S4 · M4′. Constants from the burst table, USAGE_TELEMETRY_100P §5.1.
+BURST_SPPH = 22.87        # session pp per hour a real burst sustains (mean of the 8 measured)
+P_WALL = 0.625            # P(a burst window walls) — 5 of 8. A LOWER BOUND: walls under ~13 min
+                          # are invisible to the detector, so the freeze term under-counts.
+MEAN_WALL_H = 1.653       # mean frozen tail once a window walls, in hours
+SESSION_WINDOW_H = 5.0    # the session bucket's span: window N+1 cannot open before N resets
+START_SOON_H = 12.0       # slack at or below this is the START SOON rung
+
+
+def burst_start_by(r, k):
+    """M4′ — by WHEN must the endgame burst start for this weekly window to close at 100%?
+    Returns None (abstain) or {"h", "verdict", "unrecoverable_pp", "windows", "burn_h",
+    "freeze_h", "t_needed_h"}. `h` <= 0 means the start time is already in the past.
+
+    THE PRIMITIVE IS A START TIME, NOT A CAPACITY VERDICT, and that is the whole difference
+    from the deleted M4. All 8 measured burst windows delivered 13–20 weekly pp whether or not
+    they walled, so the wall is not loss *within* the window — the loss is the frozen tail.
+    M4's `wk_reach_pp` asked whether the quota was reachable, which is nearly algebraically
+    fixed, and read next3 as `16.9 pp reach vs 8 needed — REACHABLE, 2.1× margin` on the account
+    that in fact stranded. This asks a rate-and-freeze-against-the-clock question — burn plus
+    expected freeze plus the 5h grid against the weekly runway — which can come out either way,
+    and reads the same row as LATE by 0.65 h with 2.83 pp already unrecoverable.
+
+    THE GRID IS WALKED, NOT DIVIDED. `need_spp / BURST_SPPH` is not the answer: a burst cannot
+    buy more than the OPEN window's remaining room, and the next 100 pp cannot begin before that
+    window rolls. next2's 83 pp of deficit is 21.4 h of burn spread over SIX windows and 27.6 h
+    of wall clock, not 18.9 h — and the difference is what makes its verdict honest.
+
+    ABSTAIN (L2). Null K (S1c left the band) ⇒ null: without an exchange rate there is no session
+    pp figure to plan in. A null `session_pct` / `session_reset_h` means NO WINDOW IS OPEN — a
+    distinct state (_reset_key's docstring: 15.0% of rows) that must not collapse to
+    `session_pct = 0`, which reads as a FULL window of free room and manufactures the most
+    optimistic start time the function can produce. Deficit <= 0 ⇒ nothing to plan for.
+
+    🚨 SHIPS ON PROBATION. `P_WALL` and `MEAN_WALL_H` are sized on the BURST denominator (5 of 8
+    windows), never the all-windows one (5 of 252), and n = 8 is the entire evidence base. The
+    monitoring plan (§5.5) re-runs the burst-stratified wall rate on every completed weekly
+    window rather than waiting for the planner to be wrong on a live one."""
+    if not isinstance(k, (int, float)) or k <= 0:
+        return None
+    wp, wrh = r.get("weekly_pct"), r.get("weekly_reset_h")
+    sp, srh = r.get("session_pct"), r.get("session_reset_h")
+    if wp is None or not isinstance(wrh, (int, float)) or not (0 < wrh <= WEEK_H):
+        return None
+    if not isinstance(sp, (int, float)) or not isinstance(srh, (int, float)) or srh < 0:
+        return None
+    deficit_wk = max(0.0, 100.0 - wp)
+    if deficit_wk <= 0:
+        return None
+    need_spp = deficit_wk / k
+
+    t = 0.0
+    rem = need_spp
+    windows = 0
+    avail = 100.0 - sp                       # the OPEN window's remaining room
+    if avail > 0:
+        burn_h = min(min(avail, rem) / BURST_SPPH, srh)   # the window may die before the room does
+        took = burn_h * BURST_SPPH
+        rem -= took
+        t += burn_h
+        if took > 0:
+            windows += 1
+        if rem > 0:
+            t = srh                          # wait out the roll before opening the next window
+    else:
+        # The open window is ALREADY walled. The spec's walk assumes room in it; without this
+        # arm t starts at 0 and the next 100 pp is spent before the window it needs has rolled,
+        # which is the one direction the grid must never be optimistic in.
+        t = srh
+    while rem > 0:
+        take = min(100.0, rem)
+        t += take / BURST_SPPH
+        rem -= take
+        windows += 1
+        if rem > 0:
+            t += SESSION_WINDOW_H - (100.0 / BURST_SPPH)   # idle until the next roll
+
+    freeze = windows * P_WALL * MEAN_WALL_H
+    t_needed = t + freeze
+    h = wrh - t_needed
+    verdict = "SLACK" if h > START_SOON_H else ("START SOON" if h > 0 else "LATE")
+    # The floor: freeze eats the runway first, and only what is left can be burned at all.
+    unrecoverable = max(0.0, deficit_wk - k * BURST_SPPH * max(0.0, wrh - freeze))
+    return {"h": h, "verdict": verdict, "unrecoverable_pp": unrecoverable,
+            "windows": windows, "burn_h": t, "freeze_h": freeze, "t_needed_h": t_needed}
+
+
+def fmt_start_by(sb):
+    """The one rendering of burst_start_by, so its three verdicts cannot be spelled two ways.
+
+    A LATE row names the FLOOR, not just the lateness. "you are 0.6 h late" is a scolding; "2.8 pp
+    cannot be saved even by a perfect burst starting this instant" is the number that decides
+    whether to route the work here or somewhere with runway — which is the action this whole
+    block exists to produce."""
+    if not sb:
+        return None
+    if sb["verdict"] == "LATE":
+        floor = sb["unrecoverable_pp"]
+        tail = f" — {floor:.1f}pp already unrecoverable" if floor >= 0.05 else ""
+        return f"⚠ LATE by {-sb['h']:.1f}h{tail}"
+    lead = "⚠ START SOON — " if sb["verdict"] == "START SOON" else ""
+    return f"{lead}start by T−{sb['t_needed_h']:.0f}h ({sb['h']:.0f}h slack)"
+
+
 WEEK_H = 168.0          # the weekly bucket's span; reset stamps are exactly 7 d apart
 MIN_ELAPSED_FRAC = 0.05  # ~8.4 h — below this a projection is noise, so we ABSTAIN
 
@@ -2321,6 +2482,60 @@ WK_EWMA_MIN_SPAN_H = 6.8     # below this, +-1 pp quantization exceeds 25% of th
 WK_EWMA_HL_NEAR = 4.0        # weekly_reset_h <= 12: weight the last hours hard
 WK_EWMA_HL_FAR = 8.0         # beyond 12 h the hl=4 form may NEVER be extrapolated
 WK_EWMA_NEAR_H = 12.0
+
+
+EWMA_5H_LOOKBACK_H = 6.0     # the trailing window the 5h rate is measured over
+EWMA_5H_HL = 1.0             # half-life: an hour-old pair weighs half of a fresh one
+EWMA_5H_MIN_SPAN_H = 1.3     # below this, ±1 pp quantization exceeds 25% of the meter's mean
+EWMA_5H_MAX_DT_H = 1.0       # a wider pair is a gap, not a measurement
+
+
+def burn_5h_ewma_ph(samples_for_acct, now):
+    """S7 / M1 — roll-aware EWMA of the SESSION meter, in %/h, as (value|None, measured_span_h).
+
+    CORRECTNESS AND AVAILABILITY, NOT ACCURACY — and the blind spot ships in this docstring
+    because the metric must not be quoted as accurate where it is not. At `session_pct >= 40`
+    the incumbent single-pair `burn_5h_ph` is MORE accurate (MAE 0.0617 vs 0.0797; this EWMA
+    over-projects by +3.6 pp). That is the burst regime — the one the weekly-drain planner
+    deliberately creates. The over-projection direction is soften-only at the one consumer
+    (`_su_projected` feeds `_soft`, floored at SF_FLOOR so it can never exclude), so it is
+    fail-safe for routing, but it is wrong there. §5.6 Q3 names the measurement that fixes it.
+
+    WHAT IT BUYS. The incumbent is a single adjacent pair ≤1.5 h apart with `d >= 0`. One stale
+    sweep and the rate is absent; a pair that straddles the 5h reset reads `d < 0` and is
+    discarded, so the router's projection input goes blind exactly at the roll. Here the roll is
+    crossed: the new window's level IS the accrual, as a LOWER bound.
+
+    ABSTAIN (L2) on the RAW MEASURED SPAN — the sum of dt over usable pairs, never the requested
+    lookback and never the weighted span — and on fewer than 2 usable pairs. NEVER on a roll.
+
+    🚨 THE ROLL SPELLING IS `_reset_key`, WHICH ROUNDS, and this is not interchangeable with a
+    truncation or a string prefix. The reset stamp straddles the minute boundary; under
+    truncation the roll branch fires on 46.0% of adjacent pairs and each false fire injects an
+    ABSOLUTE level where a delta belongs — measured MAE 0.0282 → 0.2110, i.e. 5.4× worse than
+    the incumbent this replaces. The unit hazard is the other half: see `_su_projected`."""
+    ss = sorted((e for e in samples_for_acct or []
+                 if e.get("session_pct") is not None and e.get("_t") is not None
+                 and now - e["_t"] <= EWMA_5H_LOOKBACK_H * 3600.0),
+                key=lambda e: e["_t"])
+    num = den = span = 0.0
+    pairs = 0
+    for a, b in zip(ss, ss[1:]):
+        dt_h = (b["_t"] - a["_t"]) / 3600.0
+        if not (0 < dt_h <= EWMA_5H_MAX_DT_H):
+            continue
+        if _rolled(a, b, "session_reset_at", "session_pct"):
+            d = b["session_pct"]                      # the new window's level, a LOWER bound
+        else:
+            d = max(0.0, b["session_pct"] - a["session_pct"])
+        w = 2.0 ** (-((now - b["_t"]) / 3600.0) / EWMA_5H_HL)
+        num += w * d
+        den += w * dt_h
+        span += dt_h
+        pairs += 1
+    if pairs < 2 or span < EWMA_5H_MIN_SPAN_H or den <= 0:
+        return None, span
+    return num / den, span
 
 
 def burn_wk_ewma_ph(samples_for_acct, now, weekly_reset_h):
@@ -2395,7 +2610,148 @@ def wk_strand_pp(r):
     return max(0.0, 100.0 - (wp + b * wrh))
 
 
+STRAND_SCORE_BUCKETS = (96.0, 48.0, 24.0, 12.0, 6.0)   # hours BEFORE the reset, scored separately
+STRAND_SCORE_LOOKBACK_H = 1344.0                       # 8 weeks — enough closed windows to score
+STRAND_SIG_PP = 0.5      # `pace_line`'s own no-strand threshold; sign agreement is scored on it
+
+
+def strand_score(samples, buckets=STRAND_SCORE_BUCKETS, now=None):
+    """S5 / M3c — score the strand NOWCAST against what each closed weekly window actually
+    stranded, stratified by how far from the reset the call was made.
+
+    THE INSTRUMENT THAT CAN FAIL, and that is the entire specification. The refuted score
+    evaluated the fire rule at each window's LAST sample, where `100 - weekly_pct` has already
+    converged to the true strand — it therefore agreed with the IDENTITY FUNCTION on 8 of 8
+    windows and reported `4/4 recall, 0 FP`. Eight binary cells, none of which could have come
+    out the other way. This scores ~45 (window, horizon) cells at FIXED distances from the reset,
+    where the projection has NOT converged: on a decelerating window the 96 h cell misses by
+    ~22 pp and the 6 h cell does not. A harness whose every cell reads 0.0 is the tautology again.
+
+    IT IS CAUSAL BY CONSTRUCTION. Each cell re-derives M3a from the samples that existed AT that
+    instant (`now = e["_t"]`), never from the window's full history — a scorer that reads the
+    whole window to grade a mid-window call is measuring hindsight.
+
+    ABSTAIN. A (window, bucket) cell with no evaluable sample at `weekly_reset_h >= H` reports
+    `n = 0` with `bias`/`mae` NULL, and contributes nothing to the aggregate — never imputed,
+    never counted as a hit. `evaluable` means M3a can actually speak there: the walk goes newest
+    first among the qualifying samples and stops at the first one where `burn_wk_ewma_ph` clears
+    its own span floor, because a sample the estimator abstains on is not a call it made.
+
+    SIGN AGREEMENT is scored on `pace_line`'s own STRAND_SIG_PP threshold, not on a raw sign:
+    both quantities are clamped at zero, so `>= 0.5 pp` versus `< 0.5 pp` is the only distinction
+    the surface actually draws — did it say this window would lose quota, and did it?"""
+    now = time.time() if now is None else now
+    wins = completed_weekly_windows(samples, now=now)
+    by_acct = {}
+    for e in samples or []:
+        if e.get("_t") is not None:
+            by_acct.setdefault(e.get("acct"), []).append(e)
+    for ss in by_acct.values():
+        ss.sort(key=lambda e: e["_t"])
+
+    cells = {h: [] for h in buckets}
+    for w in wins:
+        acct, reset_t, realised = w["acct"], w["reset_t"], w["strand"]
+        key = round(reset_t / 60.0)
+        ss = by_acct.get(acct) or []
+        mine = [e for e in ss
+                if e.get("weekly_pct") is not None
+                and _reset_key(e.get("weekly_reset_at")) == key]
+        for h in buckets:
+            cand = [e for e in mine if (reset_t - e["_t"]) / 3600.0 >= h]
+            for e in reversed(cand):                       # newest first
+                wrh = (reset_t - e["_t"]) / 3600.0
+                hist = [x for x in ss if x["_t"] <= e["_t"]]
+                b, _span = burn_wk_ewma_ph(hist, e["_t"], wrh)
+                if b is None:
+                    continue                               # not an evaluable call: keep walking
+                proj = max(0.0, 100.0 - (e["weekly_pct"] + b * wrh))
+                cells[h].append({"acct": acct, "reset_t": reset_t, "at_h": wrh,
+                                 "projected": proj, "realised": realised,
+                                 "signed_error": proj - realised})
+                break
+
+    def _agg(rows):
+        n = len(rows)
+        if not n:
+            return {"n": 0, "bias": None, "mae": None, "sign_agree": None}
+        return {"n": n,
+                "bias": sum(c["signed_error"] for c in rows) / n,
+                "mae": sum(abs(c["signed_error"]) for c in rows) / n,
+                "sign_agree": sum(1 for c in rows
+                                  if (c["projected"] >= STRAND_SIG_PP)
+                                  == (c["realised"] >= STRAND_SIG_PP)) / n}
+
+    out = []
+    for h in buckets:
+        a = _agg(cells[h])
+        a["h"] = h
+        a["cells"] = cells[h]
+        out.append(a)
+    flat = [c for h in buckets for c in cells[h]]
+    return {"n_windows": len(wins), "buckets": out, "overall": _agg(flat),
+            "windows": [{"acct": w["acct"], "reset_t": w["reset_t"],
+                         "final_pct": w["final_pct"], "strand": w["strand"]} for w in wins]}
+
+
+def render_strand_score(res, span_h=None):
+    """The one rendering of strand_score. HISTORY, not live state — so it does not touch L3's
+    single live-state renderer and nothing routes on it.
+
+    THE HEADER STATES THE DENOMINATOR because it is the binding limit on every weekly-side
+    figure this program produces: n = 8 closed account-weeks at the time of writing, growing
+    ~3.7/week. A table that reported bias without n would invite exactly the confidence the
+    refuted score already spent."""
+    lines = ["strand nowcast vs realised — signed error by horizon "
+             "(projected − realised, in weekly pp)"]
+    span = f", {span_h:.0f}h of series" if isinstance(span_h, (int, float)) and span_h else ""
+    lines.append(f"  {res['n_windows']} closed account-week(s) scored{span}. "
+                 "A cell with no evaluable sample at its horizon reports n=0 and is EXCLUDED.")
+    lines.append("")
+    lines.append(f"  {'horizon':>8}  {'n':>3}  {'bias':>8}  {'MAE':>8}  {'sign agree':>10}")
+    for b in res["buckets"]:
+        if not b["n"]:
+            lines.append(f"  {b['h']:>7.0f}h  {0:>3}  {'—':>8}  {'—':>8}  {'—':>10}")
+            continue
+        lines.append(f"  {b['h']:>7.0f}h  {b['n']:>3}  {b['bias']:>+8.2f}  {b['mae']:>8.2f}  "
+                     f"{100.0 * b['sign_agree']:>9.0f}%")
+    o = res["overall"]
+    if o["n"]:
+        lines.append(f"  {'all':>8}  {o['n']:>3}  {o['bias']:>+8.2f}  {o['mae']:>8.2f}  "
+                     f"{100.0 * o['sign_agree']:>9.0f}%")
+    lines.append("")
+    lines.append("  A NEGATIVE bias is the nowcast UNDER-predicting the loss. It is expected to "
+                 "shrink as the")
+    lines.append("  horizon closes — that convergence is why this is sold as a nowcast "
+                 "and never as a forecast.")
+    lines.append("  S6's rescue alarm does not ship unless the 12h bias is near zero (§5.2 S6).")
+    return "\n".join(lines)
+
+
 PACE_HEAD = "weekly drain — pp that DIE at reset (nowcast at the last 48h of pace):"
+PACE_HEAD_K = "weekly drain — pp that DIE at reset ({k} · nowcast at the last 48h of pace):"
+
+
+def _pace_head(rows):
+    """The block's header. Carries K only once something on the line CONSUMES it (S4).
+
+    THE THREE STATES ARE NAMED SEPARATELY because they license different readings: `live` is a
+    fit on this week's own pairs, `frozen` is the pooled literal standing in for a fit too thin
+    to make, and `unfitted` is a refusal that must say what it rejected and against which band —
+    a fit at 0.230 is the meter or the plan having changed, which is news, not a missing value."""
+    src = k = fit = None
+    for r in rows:
+        if r.get("k_src") or r.get("k_rate") is not None or r.get("k_fit") is not None:
+            src, k, fit = r.get("k_src"), r.get("k_rate"), r.get("k_fit")
+            break
+    if src in ("live", "frozen") and isinstance(k, (int, float)):
+        return PACE_HEAD_K.format(k=f"K={k:.3g} {src}")
+    if fit is not None or src == "unfitted":
+        band = f"[{K_SANE[0]:.3f},{K_SANE[1]:.3f}]"
+        why = (f"trailing {fit:.3f} outside {band}" if isinstance(fit, (int, float))
+               else f"the trailing fit left {band}")
+        return PACE_HEAD_K.format(k=f"K unfitted ({why}) — no start-by figures this sweep")
+    return PACE_HEAD
 
 
 def pace_line(rows):
@@ -2456,8 +2812,14 @@ def pace_line(rows):
         b = fmt_burst(r.get("burst"))
         if b and s is not None and s >= 0.5:
             p += f" · {b}"
+        # M4′ rides the strand rows only. A row with nothing dying has no start time to miss,
+        # and rendering one there would answer a question the row does not raise.
+        sb = (fmt_start_by(burst_start_by(r, r.get("k_rate")))
+              if s is not None and s >= 0.5 else None)
+        if sb:
+            p += f" · {sb}"
         parts.append(f"  {p} · {left} left")
-    return "\n".join([PACE_HEAD] + parts) if parts else ""
+    return "\n".join([_pace_head(rows)] + parts) if parts else ""
 
 
 def _excluded(r, R, cliff=True, k_of=None):
@@ -4621,6 +4983,25 @@ def main():
             print("no provider registry (~/.claude/providers.json) — Claude-only fleet")
             return
         print("\n".join(lines).lstrip("\n"))
+        return
+
+    # --strand-score: the weekly-drain nowcast's own mutation test, and it returns BEFORE
+    # load_cfg() for the same two reasons --agents does — it must answer without a sweep, without
+    # the keychain and without a Claude accounts.json existing at all. It reads only the
+    # utilization series and NOTHING ROUTES ON IT, which is why shipping it as a flag on this
+    # binary does not violate L3's single-live-renderer rule: it renders scored HISTORY, not
+    # "what are the accounts doing now". It is a flag rather than a scripts/*.sh sibling so that
+    # it rides the existing ~/.claude/bin/claude-accounts symlink and converges on the trunk
+    # fast-forward, instead of landing as an ADD the live layer cannot reach (the LIVE_ADDS trap).
+    if "--strand-score" in args:
+        rows, span = _util_tail(hours=STRAND_SCORE_LOOKBACK_H)
+        res = strand_score(rows)
+        if "--json" in args:
+            print(json.dumps({k: v for k, v in res.items() if k != "buckets"}
+                             | {"buckets": [{k: v for k, v in b.items() if k != "cells"}
+                                            for b in res["buckets"]]}, indent=2))
+            return
+        print(render_strand_score(res, span))
         return
 
     # --max-wait / --max-age are GLOBAL modifiers, parsed before load_cfg() because --max-wait 0
