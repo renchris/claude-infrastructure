@@ -86,6 +86,217 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-26 — drain recycle #244: method 213 over the allowlist — THE CLASS WAS DECLARED CLOSED
+  ON A `scripts/`-ONLY SCREEN, AND THE SITE NAMED AS ITS LAST MEMBER IS ONE THE DETECTOR CANNOT
+  SEE.** I took #243's recommendation 0 (run method 213 over `scripts/pipefail-sigpipe-allow.txt`,
+  57 rows, one command per row) and the first command refuted the standing claim rather than a row.
+  For the NINTH consecutive link the value came from a LEAD rather than a board row, and this time
+  from the lead's REASON: #243's own transferable sentence is *run the guard first*, and running it
+  is what showed the guard was **rc 0 — `✓ pipefail-sigpipe-lint: clean (allowlist honoured)`** on
+  every site below.
+- **THE CLAIM I INHERITED, IN ITS OWN WORDS:** *"THE MEMBERSHIP-PREDICATE SUB-CLASS IN `scripts/` IS
+  NOW CLOSED … The only remaining known member is `bin/cc-comms-alarm-sweep:92` — `is_legacy_uuid`
+  — which is the same shape over a FIXED literal and is genuinely bounded. Named so nobody
+  re-derives it."* **Both halves are wrong, and in OPPOSITE directions.**
+  · `is_legacy_uuid` is **FUNCTION-FINAL**, so `--census` cannot see it at all — its status is read
+  by the CALLER, which is exactly the detector gap `ca97c678b18b` owns and which #243's arm C
+  widened. The census's only `cc-comms-alarm-sweep` row is a DIFFERENT site, a selftest assertion.
+  **The sentence named an INVISIBLE site as the visible residue.**
+  · Meanwhile the census, at that same moment, listed membership predicates of exactly the drained
+  shape under `bin/` and `hooks/` that nobody had counted. **The closure was true of `scripts/`;
+  the sentence was written without that scope, and a scope-free closure is a completeness claim
+  nothing checks** — method 211 applied to a prose sentence instead of a test title.
+- 🚨 **AND THE ONE THAT IS NOT LATENT WAS 92 LINES FROM A SITE ALREADY DRAINED FOR THIS EXACT
+  REASON.** `scripts/bats-shellcheck-lint.sh` had `in_own()` drained by #241, with a comment
+  naming its feed as *the one whose ceiling a real land already clears*. `lint_files` reads that
+  SAME `$own` variable a second time, at what was line 230, with `grep -q`. **#241 drained the
+  predicate and left the inline copy of it, in the same function, over the same feed it had just
+  measured as live.** The own-set reaches that line VERBATIM (no filtering between the entry point
+  and the call), which I checked rather than assumed.
+- **FEED RE-MEASURED 2026-08-26T20:53Z, taken here rather than inherited:**
+
+      origin/main~20...origin/main      595 lines /  17,831 B   under the safe floor
+      origin/main~60...origin/main    2,615 lines /  89,458 B   PAST the always-inverted floor
+      origin/main~150...origin/main   6,576 lines / 226,697 B
+      origin/main~400...origin/main  13,295 lines / 454,797 B
+
+  The two-stage shape is safe to 37,121 B, racy at 55,721, ALWAYS inverted from 87,122. Measured in
+  ISOLATION at 162,769 B, 20 trials each: **`grep -q` gives the WRONG answer on a match 20/20; the
+  drained form 0/20.** So a file THIS LAND WROTE IN reads as NOT-own, falls to the `abort_other`
+  arm, and its *"shellcheck aborted, nothing in this file is checked"* warning is downgraded from
+  BLOCKING to a one-line advisory. **A fail-OPEN in a blocking land gate.**
+- ✅ **THREE DRAINED, ALL INLINE — never extracted into a function.** #243's warning is the reason
+  and it is worth restating: **a census delta cannot distinguish "drained in place" from "moved out
+  of the detector's field of view", because both read `LOST=1`.** Keeping them inline is what makes
+  the delta below mean what it says.
+  · `scripts/bats-shellcheck-lint.sh` — `lint_files` own-scope. **LIVE** (feed above).
+  · `scripts/pane-spawn-coverage-lint.sh` — `CC_PSC_OWN` own-scope. Latent; same land-gate class.
+  · `bin/cc-reconcile` — the live-pane prune guard. Latent (it2 id list measured **33 B / 11 panes**
+  at 20:44Z) and **DESTRUCTIVE**: the inline comment on that very line reads *"pane LIVE → never
+  prune (heal case)"*, and `grep -q` is the one spelling that defeats it — the `continue` is
+  skipped and a pane iTerm2 has just reported as LIVE has its registry row deleted.
+- 🚨 **THE PRE-EXISTING TEST COULD NOT SEE ANY OF IT, FOR TWO INDEPENDENT REASONS, AND THE SECOND IS
+  THE ONE WORTH CARRYING.** `tests/bats-shellcheck-lint.bats` already carried *"an UNANALYZABLE file
+  BLOCKS when this change wrote in it, and never otherwise"*. **Measured against a deliberately
+  reverted subject: it stays GREEN, 0 red across all 28 cases.**
+  · **Reason 1 — the fixture never reaches the regime.** Its own-set is ~30 bytes, three orders of
+  magnitude under 87,122.
+  · **Reason 2, INDEPENDENT OF SIZE — its assertions cannot tell the two states apart.** `rc` is
+  **1 in BOTH** states, and the broken arm's message reads *"N file(s) UNANALYZABLE but not in your
+  diff"* — so `[ "$status" -eq 1 ]` **and** `grep -q UNANALYZABLE` both hold when the predicate is
+  inverted. **Making the fixture bigger would NOT have been enough.** The two arms differ only in
+  WHICH message is emitted, so the new arm asserts the blocking one PRESENT and the advisory one
+  ABSENT.
+- 🚨 **AND I FOUND REASON 2 ONLY BECAUSE THE rc-93 PREDICTION GATE REFUSED ME.** I predicted M1
+  would turn 1 red and it turned **0**, and my first instinct was that the pipeline had not
+  inverted. It had — 20/20. **The fault was in MY ARM, not in the subject.** That is the third link
+  running where a written prediction's REFUSAL was worth more than any confirmation in the same
+  link, and it is the whole argument for writing the number down before the run.
+- ✅ **THREE BEHAVIOURAL ARMS, one per site, each sized from the MEASURED regime and each with a NEG
+  control so it cannot pass by always answering one way:** `tests/bats-shellcheck-lint.bats`
+  **27 → 28** (own-set 162,769 B, needle on line 1) · `tests/pane-spawn-memo.bats` **11 → 12** ·
+  `tests/cc-reconcile.bats` **34 → 35** (live-pane id list past 87,122 B).
+- ⚠️ **THE PANE-SPAWN ARM NEEDED A FIXTURE BUILT RATHER THAN BORROWED, AND THAT IS A REUSABLE
+  TRAP.** My first version DERIVED its subject from the suite's own copied corpus slice — the
+  correct instinct — and failed loudly with *"the corpus slice emitted no ADVISORY line"*. Every
+  finding that slice produces is **TIER 2** (its files ARE instrumented), and tier 2 `continue`s
+  **BEFORE** the own-scope branch: measured **2 notices, 0 advisory**. **A subject drawn from the
+  available population never reached the predicate under test.** Derive-don't-transcribe does not
+  save you when the population you are deriving from cannot reach the branch — and the arm said so
+  rather than passing, which is the only reason I know it.
+- ✅ **MUTANTS: 3 of 3 predictions EXACT** (plan pinned per suite, every distinct suite baselined
+  green first, subject restored byte-identically by sha256 on every arm, `RESTORE=OK` throughout).
+  ✅ **ATTRIBUTION PROBE: 5 of 5 exact** — total reds 1; the pre-existing case **GREEN**; the new
+  case **RED**; and, because "green" must not be able to mean "absent", **both cases asserted
+  PRESENT in the plan** (memory: `lookup-miss-is-not-absence`).
+- ✅ **THE RATCHET SHRANK, AND ITS DOWNWARD ARM IS A BETTER DRAIN-PROOF THAN A CENSUS `comm`.** The
+  lint refused the tree and NAMED all three sites itself — *"a grandfathered site was FIXED but its
+  allowlist count was not lowered … `bin/cc-reconcile now 0, allowlist says 1`"*. Allowlist
+  **57 → 56 rows** (cc-reconcile's row deleted; the other two 2 → 1). `--census` **150 → 147,
+  LOST=3, NEW=0**, keyed on **(path, TEXT)** because the diff adds 30+ comment lines and every
+  number below them shifts, with the PRE arm **extracted from `origin/main` via
+  `git archive | tar -x`** rather than remembered and `CC_PIPEFAIL_ROOT` pinned on BOTH arms.
+  ⚠️ **Honest limit on that key: `-F:` is lossy on text containing colons — it mangles the
+  `"^$f:"` needle in the printed row. It is lossy IDENTICALLY on both arms, so it cannot mint a
+  false LOST or NEW, but it could hide a change that is purely colon-structural.**
+- 🚨 **THE ALLOWLIST'S ONLY NUMERIC COLUMN IS COUNT, AND COUNT IS ANTI-CORRELATED WITH RISK HERE.**
+  #243 handed me *"a high-count row is the best draw"* and named
+  `tests/handoff-fire-account-sweep.bats` at **38**, far the largest. Those 38 are
+  `echo "$output" | grep -q` **bats ASSERTIONS**, whose inversion is a **loud false RED**, not a
+  fail-OPEN — the safest failure direction in the file. **The fail-OPEN gates sit at counts 1 to
+  3.** And the 38 exist at all only because that file is **the one suite of 189 that declares
+  `set -euo pipefail` at file scope** (the detector's `hase` gate reads exactly that, file-wide):
+  measured, `bats-shellcheck-lint` / `pane-spawn-memo` / `cc-reconcile` all read **0** errexit
+  lines, which is why the `grep -q` assertions I added to them are not violations and the bare lint
+  agrees. **Sorting a ratchet by its only number puts the safest row on top.**
+- ⚠️ **THREE INSTRUMENT FAULTS, ALL MINE, ALL IN THE INSTRUMENT AND NONE IN A SUBJECT — and every
+  one surfaced as a REFUSAL or a self-caught zero rather than a wrong number.**
+  1. 🚨 **A SAMPLING KEY THAT WAS NOT MONOTONE IN THE MEASURED QUANTITY.** To ask whether the
+  transcript-fed sites are live I ranked 7,191 transcripts by **FILE BYTES** and measured the top
+  25. But the feed is ~31 B per **tool_result RECORD**, and file bytes are dominated by result
+  CONTENT — so a transcript with a few enormous results is huge with a tiny feed. Re-ranked by
+  record count, the max went **20,460 → 31,217 B**, a 52% undercount. **The repaired number is the
+  finding: 31,217 B is 84% of the 37,121 B floor, at 1,007 tool_results, so the crossing is at
+  about 1,198 tool calls in one session — and nothing announces it.**
+  2. 🚨 **A VERB'S ARITY, READ FROM PROSE INSTEAD OF FROM ITS CODE.** `--own-lines` takes its range
+  **POSITIONALLY** (`[ "$#" -eq 2 ]`); I passed `--own-lines --range <r>`, which exits 2 with a
+  usage message, and with stderr suppressed the feed read **0 bytes on every range**. A confident
+  zero. #216's `gate-selector.sh` scar wearing different clothes — **the name resolved, the ARITY
+  did not** — and the POS control (the bogus form must read 0 where the correct form reads real
+  data) is what pinned it.
+  3. 🚨 **AN ARM WHOSE TWO ASSERTIONS ARE BOTH TRUE IN BOTH STATES** — reason 2 above, caught by
+  the rc-93 gate.
+- ⚠️ **AND ONE NON-FAULT WORTH RECORDING, BECAUSE IT LOOKS EXACTLY LIKE ONE.** My selector POS
+  control read **0 suites** and that is CORRECT: I drew it from #243's `docs(drain)` commit, which
+  is PROSE-ONLY. Re-drawn from a code-touching commit it **SPOKE with 4**. The brief warns about
+  this in one line and I still spent a minute on it.
+- ✅ **THE WHOLE `--direct` DRAW RUN IN THE FOREGROUND BEFORE THE LAND: 8 suites / 324 tests /
+  0 not ok / 0 skip / plan == ok on every one, WALL 436s at load 12-25.** ⚠️ **That is 65% MORE
+  tests than #242's 231 in 10% LESS wall-clock, so #243's warning stands and hardens: the
+  wall-clock is dominated by something neither suite count nor test count predicts. SIZE FROM THE
+  DRAW, ERR HIGH, DO NOT MODEL IT.** Suites: `ship-land` 153 · `cc-inbox-guard` 41 ·
+  `cc-reconcile` 35 · `bats-shellcheck-lint` 28 · `gate-ownscope-leak` 24 · `pipefail-sigpipe-lint`
+  18 · `headless-address-consumers` 13 · `pane-spawn-memo` 12. **THREE of the eight were pulled in
+  by the selector and not touched by me** — run anyway on #238's principle that a big draw is an
+  audit of trunk nobody asked for. **All green: NO new unowned trunk red.**
+- ✅ **Lints, each RUN and named rather than claimed:** `shellcheck` rc 0 and `bash -n` rc 0 on all
+  three changed shell files · `--selftest` rc 0 on all three lints · `bats-assert-liveness` rc 0 on
+  all three edited suites · the bare pipefail ratchet rc 0 · the scoped bats lint rc 0
+  (*"clean — 3 suite(s) scanned, 0 blocking finding(s), 0 unanalyzable"*, with 1 pre-existing
+  non-blocking finding that is not mine). ⚠️ **`alarm-polarity-lint` DECLARED NOT-RUN** — none of
+  my files is an alarm emitter and its POS control is a known mute (`e07dc5e09f83`, already OPEN,
+  do NOT re-file). **Seventeenth consecutive link to declare rather than claim.**
+- **THE BOARD.** Open 20:27:22Z **324 open / 209 blocked / 2,338 done / 6 claimed** (533 combined,
+  2,877 rows); close 21:21:06Z **326 / 212 / 2,338 / 5** (538, 2,881). Both partitions asserted at
+  BOTH moments. ⚠️ **The gap before me was LIVE and held ONE**: `37b112d8950d` went open → CLAIMED
+  in the 12 minutes after #243's close. **Inside my link: FIVE transitions, departures 0.** FOUR
+  arrivals, and **not one is drain work** — attributed by `.project`, they are
+  `25523a92dcde` (`reso-management-app`), `d7eff844ee29` (`reso-web-app`), and `e2cd5c8c888d` plus
+  `f8336c45f069` (both `personal`, both filed BLOCKED). Plus one status change: **`0c8b39b67665`
+  went claimed → BLOCKED** — one of the four rows #243 measured going round the same
+  claimed → blocked → open → claimed cycle three times, **now entering a fourth lap.** The other
+  three (`01ab05685857`, `193ae8ddce72`, `e981656df348`) did not move. ⚠️ **`done` HAS STILL NOT
+  MOVED SINCE #229**, so none of this is a close. Every fold asserted matchcount 1 on `.id` with a
+  bogus-id NEG control at 0. **I closed NOTHING and FILED NOTHING.**
+- **THE STORES, read at both moments.** postland RED pages **0 at both — the 138th consecutive** —
+  ⚠️ **but over a denominator that COLLAPSED inside my link, 2,741 (20:27Z) → 511 (21:21Z), a
+  factor of 5.4.** #240 saw exactly this shape and watched it come back. **A zero over a denominator
+  that can move by an order of magnitude within one link is only meaningful WITH the denominator.**
+  postland stamps **481 → 482, an ADVANCE**, after 479 → 480 across #243's — so the background
+  `postland-verify` mechanism is alive underneath a `GATE=stale` that has now read stale for
+  **TWENTY** consecutive links. It is running and NOT CERTIFYING, which is what `991fcb666976`
+  says. `~/.claude/autonomy/pages` **2,093/116 → 2,092/115** (down on both). inbox-guard
+  `.escalated` **464 → 467** (467 of 467 files, so it is ONE number and not a ratio).
+- **THE RUNG WAS `🚀` AT MY OPEN, not merely at my close.** 20:27Z: `RUNG=🚀 LIVE_SHA=119976eb801f
+  LIVE_LAG=11 LIVE_ADDS=0 LIVE_DIVERGED=0 LIVE_AGE=24987 LIVE_BREACH_WHY=time MIG_FAILED=0
+  GATE=stale`. **The live sha is now FROZEN ACROSS FIVE CONSECUTIVE LINKS.** I ran the converger
+  from the shared checkout and it REFUSED at rc 0, in the same words #243 got: *"waiting — no GREEN
+  tree is a DESCENDANT of live HEAD … lag 11 commit(s) / 6h, inside the degrade budget (25 / 6h)"*,
+  with `residency: 2 of 2 … running current bytes · 1 exempt` and `migrate: 0 applied, 14 staged`.
+  ✅ **That refusal is owned by `991fcb666976` and I did NOT file one.** 🆕 ⚠️ **AND I CAUGHT THE
+  TWO ARMS DISAGREEING A SECOND TIME, which promotes #243's live catch from an anecdote to a
+  reproducible property:** the ledger said BREACHED on the time arm while `deploy-live` said
+  *"inside the degrade budget"*, about the same instant. 24,987 s = **6.94 h** → integer 6 → not
+  `-gt 6` → "inside"; 24,987 > 21,600 → breach. **Both correct as written; they will disagree for a
+  60-minute window on every link that reaches this state. SAY WHICH ARM YOU ARE QUOTING.**
+- ⚠️ **THE FORWARDED POST-LAND RED NAMES A SHA THAT IS NOT #243's.** My session-start mail carried
+  *"post-land RED: `tests/cc-dispatch-venue-only.bats::(a)` … observed after your land"* naming a
+  commit whose subject is **`docs(drain): recycle #241`** — an entry commit two links back, not the
+  land that preceded me. **NO bisect verdict (floor-not-green), explicitly NOT attributed.** Owner
+  is `675e9c81c884` (OPEN); #235–#243 all declined to file another page-row and so do I.
+  **Check the sha a forwarded page names before you feel implicated — it is often not yours.**
+- ⚠️ **Standing readings, all re-taken:** `cc-roles list` **byte-identical for the twenty-fifth
+  consecutive time** (`desk UNVERIFIED 5 | docs-lead UNVERIFIED 450 | drain-lead UNVERIFIED 7 |
+  orchestrator ABSENT empty`) · my mailbox `~/.claude/mailbox/27.md` still **exactly one message,
+  4,059 bytes, 1 line**, #217's, a twenty-eighth identical reading · the `qos-rewrite.sh` diff
+  clean at 0 bytes for the **127th** consecutive link · all four kitty pre-fire checks passed by
+  minute ~2, the `KITTY_WINDOW_ID` selector returning **exactly one object** (id 27, cwd my own
+  worktree) with a bogus-id NEG control at **0**, the **eighteenth** consecutive link.
+  `4e6a51df2a84` untouched: my diff **ADDED NO FILE** (asserted as an rc-97 staged-ADD gate in the
+  commit launcher). **#129–#150 and #152–#244 added no file.**
+- 🚨 **WHAT I DID NOT DO, NAMED SO NOBODY RE-DERIVES IT.** I did not screen `scripts/` and `bin/`
+  with method 212 (#243's recommendation 1 — still unspent, and `scan243.py` is still the built
+  instrument). I did not drain the REST of the population I measured, and it is the lead below.
+  I did not touch `ca97c678b18b` (building that detector is a design job, not a one-liner) and did
+  not re-file it, nor `991fcb666976`, nor `4e6a51df2a84`, nor `675e9c81c884`. I did not hand-touch
+  any cloud row, including `70f0001c657b`, the drain's own SSOT row.
+- 🚨 **THE LEAD FOR #245, WITH ITS TARGET *AND* ITS REASON — AND I HAVE ALREADY RUN THE REASON, SO
+  YOU DO NOT INHERIT A GUESS.** The remaining fail-OPEN membership predicates are in the census and
+  grandfathered, i.e. the guard is GREEN on every one. Read off `--census` at 21:0xZ:
+  `bin/cc-await-ping` (`_pane_gone`: inversion reports a LIVE pane as CONFIRMED ABSENT) ·
+  `bin/cc-teardown` (`pane_present`) · `bin/cc-notify` (a **THREE-STAGE** pipeline, whose floor is
+  17,427 B not 87,122 — the lowest on the board) · `bin/cc-classify` ×3 (two over `ps` output, one
+  over a whole transcript) · `hooks/teammate-auto-shutdown.sh` (the same transcript-fed shape) ·
+  `hooks/git-worktree-guard.sh` (inversion reads a LIVE worktree as dead) ·
+  **`scripts/branch-reaper.sh` ×5, whose inversion REAPS a protected or worktree-held branch** ·
+  `scripts/postland-verify.sh` · `scripts/ship-land.sh` · `bin/cc-backlog` · `bin/cc-bus` ×2 ·
+  `bin/cc-blockers` · `scripts/deploy-link-parity.sh` · `scripts/offbox-partition.sh` ·
+  `scripts/handoff-disposition.sh`. ⚠️ **The two transcript-fed ones are the interesting pair: I
+  measured their feed at 31,217 B max over the 40 largest of 7,191 transcripts — 84% of their
+  floor, margin 191 tool calls, growing.** ⚠️ **AND THE REASON YOU SHOULD RUN BEFORE TOUCHING ANY
+  OF THEM: `bin/cc-notify`'s is three-stage, so its floor is a quarter of the others' — check the
+  STAGE COUNT before you rank them by feed size, because #242 proved the stage count and not the
+  producer is what moves the floor.**
 - **2026-08-26 — drain recycle #243: method 212 — THE ONE SITE THE RATCHET COULD SEE WAS THE ONE IT
   HAD ALREADY EXCUSED.** I ran #242's named-cheapest lead first (method 212 over `tests/`) and it
   came back EMPTY, then took its recommendation 1 (the `if`-position membership predicate in
