@@ -156,6 +156,40 @@ branch queue is empty or explicitly abandoned with reasons, the production deplo
 single-brained and audited, and doc_classifier's authorization holes are closed with tests.
 
 ## Status log
+- **2026-08-26 — THIRD dispatch of the same row, and the 08-17 remedy turns out not to be durable.**
+  `8f59467c92b0` was fired into the same VM shape a third time (one checkout, GitHub scope of one
+  repo, no `~/Development`, no backlog store), **nine days** after the 08-17 entry landed its
+  disproof into this file. R1-R4 remain **open, correct as filed, and unstarted** — the tree was
+  verified at trunk (`HEAD..origin/main` = 0) before reading, so nothing here is a stale-clone
+  artifact. Confirms 08-17's finding (1) at a longer horizon: prose in a plan parks nothing, and the
+  nine days were bought by chance, not by mechanism. Three things this fire measured that 08-17
+  could not:
+  **(1)** 🚨 **the ~0-cost remedy this file proposed does not survive contact with the indexer.**
+  08-17 was right that `scripts/find-plan.sh:73` PREFERS `.plans[$k].projectName`, but
+  `hooks/plan-index-update.sh` OWNS that field and rewrites it from the plan's path with a plain `=`
+  (not `//=`) in **both** modes — the PostToolUse hook at `:148-154`, which fires on
+  `*/docs/plans/*.md` and therefore on any edit to THIS file (including the one recording the
+  remedy), and `reconcile` at `:96-110`, which rebuilds each entry fresh and preserves only
+  `firstIndexed`, and which is wired at **SessionStart**
+  (`docs/activation/ledger-activate-snippet.md:22`). So a hand-set value is wiped at the next session
+  start even if nobody edits the plan. `hooks/migrate-plans-index.sh:48` uses `//=` for the same
+  fields and would have preserved it; the indexer does not. Making the park durable is therefore a
+  code change to the dispatch chain — minimally `=` → `//=`, or a separate never-clobbered override
+  field — i.e. part of the open decision, not a way around it.
+  **(2)** **Correction to 08-17's closing line.** "the rails fail at rc 0 from a VM" is wrong for the
+  WRITE verbs: `cc-backlog block` and `cc-backlog done` both exit **3** with `unknown id` against an
+  absent store, so a cloud session cannot silently mis-report a park or a close. The rc-0 direction
+  is the READ verb — `list --all` exits 0 on an absent store (empty ledger is indistinguishable from
+  no ledger) and CREATES a 0-byte store as a side effect. The first measurement this session read
+  `rc=0` for `block` and was an artifact of piping to `head`; any wrapper piping a rail without
+  `PIPESTATUS`/`pipefail` owns the silent-park bug 08-17 attributed to the rail.
+  **(3)** No code cure attempted, on two of this repo's own rails: `bin/cc-venue:55` forbids a cloud
+  VM building or running the venue rule ("deciding its own admission"), and `bats`+`shellcheck` are
+  both ABSENT here so a shell change cannot be gated — the same ground on which
+  `cloud-venue-project-repo-mismatch-2026-08-16.md` §3 refused to land an ungated guard into the fire
+  path. Full measurement → `docs/research/venue-foreign-master-third-dispatch-2026-08-26.md`.
+  **Disposition unchanged: `cc-backlog block`, applied ON THE OPERATOR'S BOX** — it exits 3 from a VM,
+  so this file is the only durable record this venue can reach.
 - **2026-08-17 — the SAME row was cloud-dispatched AGAIN, and the re-fire is the finding.**
   `8f59467c92b0` was fired into an identical VM shape (one checkout, GitHub scope of one repo, no
   `~/Development`) ~2 days after the 08-15 entry below wrote its disproof into THIS FILE. R1-R4 were
