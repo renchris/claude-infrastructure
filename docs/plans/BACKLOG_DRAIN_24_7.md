@@ -86,6 +86,120 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-26 — drain recycle #233: method 203 — A DECOY PLACED OUTSIDE THE SCAN WINDOW TESTS THE
+  BOUND, NOT THE PREDICATE, AND READS AS COVERAGE OF THE VERY CLASS THE PREDICATE STILL ADMITS.**
+  ONE fix committed (`2d731b4a`), gates green, ZERO rows closed by me, ZERO filed. 🚨 **NOT LANDED —
+  and deliberately so, not a stall:** this link ran in a **Claude Cloud remote container**, not on
+  the box. The harness pins every push to `claude/fire-20260826T034955Z-50327-1` and forbids pushing
+  elsewhere, while `/ship` lands on trunk and needs the land-lock and `~/.claude/autonomy` machinery
+  this container does not have (`~/.claude/autonomy/` **does not exist** here — so `cc-backlog done`
+  was equally unrunnable and item `70f0001c657b` stays OPEN by fact, not by omission). The rung is
+  **📦**, and the land is the next on-box link's first act.
+
+  **THE PRECEDING LINK LANDED WITHOUT AN ENTRY.** `f059e0e8` (*"the lead check read a process's
+  ARGUMENTS, and its only fixture could not tell"* — control 4, `wd_control_lead`) is an ancestor of
+  `origin/main` and appears nowhere in this log; its commit body is EMPTY, so nothing on disk
+  records what it measured. I have not reconstructed it — I did not do that work and inventing its
+  numbers is exactly the false-provenance this log exists to prevent. **Naming the gap is the
+  deliverable; whoever wrote it owns the entry.** Numbering continues from the entries that EXIST,
+  so this is #233 and the count of links now exceeds the count of entries by one.
+
+  **THE FIND, by running #232's method 202 over its own named unspent surface.** #232 closed by
+  naming `wd_control_untracked` — *"builds its `ps` stub by hand and asserts one pid — same question,
+  unasked"* — and clause 18 is the question: which arm of the predicate does the fixture make
+  reachable, and does the control notice when each other arm is deleted? Measured, not read.
+  `wd_daemon_table`'s awk scanned fields 8 and 9 (argv[0] and argv[1]) and accepted the script token
+  at either, unconditionally. The fixture's accept row put the script at argv[1], so **neutralising
+  the argv[0] arm left the control printing OK** — one arm covered of two.
+
+  **BUT THE UNCOVERED ARM WAS NOT THE DEFECT — THE COVERED ONE WAS.** Field 9 is argv[1], which is
+  precisely where a one-argument tool puts its file. Driven through the real enumerator with a
+  synthetic table: `shellcheck /w/hooks/lead-crash-watchdog.sh` → **enumerated**;
+  `/usr/bin/vim /w/hooks/lead-crash-watchdog.sh` → **enumerated**. Neither is named by a `.daemon`
+  record (an editor writes none), so each is classed **UNTRACKED-orphan** at `cc-reaper:2712` and
+  rendered `▶ kill <pid>  # UNTRACKED watchdog daemon` — **the reaper recommending the operator kill
+  their own linter.** That is verbatim the failure mode the enumerator's own comment disclaims for
+  `pgrep -f` (*"matches any process whose argv merely MENTIONS the path — agent briefs quoting a
+  filename have produced exactly that false census before"*). The `i <= 9` bound narrowed the window
+  and did not close it. NEG control, same run: `/bin/bash -n /w/hooks/lead-crash-watchdog.sh` is
+  refused — its script lands at field 10, so the bound catches that one by accident.
+
+  **WHY THREE INDEPENDENT SITES ALL READ AS COVERAGE.** The control's decoy for this class,
+  `424244 … /w/claude --print fix hooks/lead-crash-watchdog.sh`, carries its mention at **field 11 —
+  OUTSIDE the `i <= 9` window.** It is refused by the BOUND, so **every anchor mutant passes it** and
+  it can never exercise the property it was written for. `tests/watchdog-census.bats`'s
+  *"enumerate: matches the script in the COMMAND position, not a mere argv mention"* used the same
+  out-of-window decoy under a title naming the exact property it could not test. And the enumerator's
+  comment asserted the `pgrep -f` contrast in prose. **Three sites, one measurement, all three
+  false** — and the cheapest tell was free: the decoy's field index.
+
+  **THE FIX.** The two fields stop being interchangeable and each takes its own law: argv[0]
+  accepted alone (the script IS the image, a bare exec); argv[1] accepted **only behind an
+  interpreter at argv[0]**, which is what a shebang exec renders (`#!/bin/bash` ⇒ argv
+  `/bin/bash <script>`). Widening the ACCEPT side to the shell family cannot re-open the hole —
+  `shellcheck`, `vim` and `claude` all fail `sh$` anchored at a path boundary, and it is the anchor
+  that rejects. The control becomes **one cell per arm** — interp · argv0 · mention · anchor · bound
+  — the `printf` format is byte-identical so `tsv-pad-lint`'s premise about cell 2's literal spaces
+  still holds, and both comment sites now say which cell covers what instead of what they wished.
+
+  **CONTROL TABLE (subject restored byte-identical by sha256 on every arm):** baseline
+  `interp=OK argv0=OK mention=REJECTED` · argv[0] arm neutralised `argv0=MISSED` · argv[1]-interp arm
+  deleted `interp=MISSED` · **pre-fix predicate `mention=ADMITTED`**. **4 distinct verdicts across 4
+  mutants, 3 red, 0 red nothing.** ⚠️ **ONE INSTRUMENT FAULT, found and corrected mid-run and worth
+  more than the table:** the first argv[0] mutant DELETED the `if` line, leaving a dangling `else` —
+  an awk syntax error that silenced the whole enumerator, so the table read `interp=MISSED` for a
+  mutant that was supposed to touch only argv0. **A mutant that breaks the program is not a mutant of
+  one arm**, and it would have been read as the argv[1] cell having power it does not have here.
+  Re-run by neutralising the CONDITION (`if (0)`) with the chain intact.
+
+  **TESTS 25 → 27** (#232 recorded 22; controls 3 and 4 took it to 25 across the two links since).
+  Both new tests drive the REAL subject via `--json` and read counts, not text — `live_procs==1`
+  against a three-row table is the number the `▶ kill` rows are drawn from. **Per-site mutants: 3
+  mutants, 3 DISTINCT red sets, 0 red nothing** — argv[0] neutralised reds ONLY the bare-exec test;
+  the pre-fix predicate reds ONLY the mention test; the interp arm deleted reds both plus the old
+  test. **The red-proof of the find is that fourth cell: under the pre-fix predicate the OLD
+  enumerator test stays GREEN while the new mention test reds** — the pre-existing test was blind to
+  the defect its own title names.
+
+  **GATES.** ONE commit, lints run and named: `shellcheck bin/cc-reaper` rc **0 / 0 findings** — it
+  caught a real `SC2016` on my first draft (literal backticks inside a single-quoted `printf` format)
+  and the fix was to drop them, since they were decorative · `bash -n` rc 0 · `bats --count` 27 ·
+  `bats-shellcheck-lint` rc 0, *"clean — 1 suite(s) scanned, 0 blocking finding(s), 0 unanalyzable"* ·
+  `bats-assert-liveness.py` rc 0 · `pipefail-sigpipe-lint.sh` bare, rc 0, *"clean (allowlist
+  honoured)"* · `test-hermeticity-lint.sh` clean, 68 embedded selftests. Suites run in the
+  FOREGROUND: `watchdog-census` **27/27** · `lstart-dialect-bin` **16/16** · `reap-freshness`
+  **10/10** — 0 failures, 0 skips, plan == ok on each.
+
+  🚨 **NOT MINE, NAMED NOT DRIVEN — and this container is why.** `tests/reap-sweep-bounds.bats` fails
+  **14/14** and `tests/cc-reaper.bats` **51/192** here, and BOTH reproduce on the **PRISTINE** tree
+  with my diff stashed (verified by stash/run/pop, and by re-running three named B/C bodies against
+  pristine). Cause is platform, not code: setup uses BSD-only `date -u -r <epoch>` (Linux `date -r`
+  means *reference file*), and the reds are the macOS-targeted peer-reap belts. **Attribution before
+  driving:** `grep -icE 'watchdog|daemon|census|enumerat'` over the 51 red names returns **0**, and
+  `tests/cc-reaper.bats` contains **no** `wd_daemon`, `watchdog-census` or `CC_WATCHDOG_PS_BIN` —
+  the enumerator's only test consumer is `watchdog-census.bats`, which is green. ⚠️ **So this link's
+  suite evidence is NARROWER than an on-box link's**, and a successor must not read "0 failures" as
+  fleet-wide: two suites in the selector's direct set are structurally unrunnable here.
+
+  **NO CENSUS THIS LINK, AND THAT ABSENCE IS THE READING.** Every board / stores / live-layer /
+  kitty / mailbox number the prior 232 entries carry is drawn from `~/.claude/autonomy`, `kitty` and
+  the launchd fleet, **none of which exist in this container**. Recording zeros for them would be the
+  `lookup-miss-is-not-absence` error #231 named, at plan scale. They are **UNMEASURED, not zero** —
+  and the actuator series, the `allids` deltas and the postland page counts all stall at #232's
+  values until an on-box link resumes them.
+
+  **THE GENERALISATION, method 203, now NINETEEN clauses** (carrying #232's eighteen forward):
+  (19) **A NEGATIVE FIXTURE PROVES ONLY THE FIRST GATE THAT REJECTS IT — SO LOCATE THE DECOY INSIDE
+  THE PREDICATE, NOT MERELY OUTSIDE THE ACCEPT SET.** #232's clause 18 asked which arm a POSITIVE
+  fixture reaches; this is its negative twin, and it is the sharper one because a decoy rejected
+  early reads as coverage of every gate behind it. The tell is structural and costs one glance: **a
+  decoy whose distinguishing feature sits outside the subject's own scan bound, index range, length
+  cap or early-return.** Cheap screen: for each negative fixture, name the gate that rejects it, then
+  ask whether the gate you MEANT is downstream of that one. **UNSPENT SURFACE: `wd_control_lead`'s
+  `plain` cell (a live non-session naming nothing — rejected by the first gate, so it says nothing
+  about the argv[0] arm behind it), and every `case`/`grep -q` decoy in `tests/` whose fixture
+  differs from its positive twin in MORE THAN ONE respect.**
+
 - **2026-08-26 — drain recycle #232: method 202 — A POSITIVE CONTROL WHOSE FIXTURE AND WHOSE
   ASSERTION SHARE A WRITER COVERS EXACTLY THE ONE ARM IT WROTE, AND ITS COMMENT CAN CLAIM THE
   OPPOSITE.** ONE fix landed (`050569c39`, sha SURVIVED the land unchanged — as #231's did, while
