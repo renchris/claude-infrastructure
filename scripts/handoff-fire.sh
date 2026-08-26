@@ -5518,11 +5518,31 @@ if [ "${1:-}" = "__recycle" ]; then
         cr)
           hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;;
         retype)
+          # ROUTED, not hand-rolled. This was its own three-step verify — raw send, sleep 1,
+          # `[ "$nc" = "/exit" ]`, CR — the exact shape typed-send-lint refuses. It cost twice, and
+          # the second cost is why this is a fix rather than a lint appeasement:
+          #   · The lint scans the TREE (this wrapper is not in scripts/host-suites.manifest), so its
+          #     verdict is a grep — deterministic, load-independent, and it survives the retry ladder
+          #     into a RED stamp every sweep. One raw site therefore makes a GREEN postland stamp
+          #     UNREACHABLE, which halts deploy-live's green cursor for the whole box. That is
+          #     cc-backlog 01ab05685857's mechanism, and 94aa89bc re-opened it 54 minutes after
+          #     3d34ba42 closed it.
+          #   · Byte equality against composer_content is wrong on the merits anyway: it reads the
+          #     VIEWPORT, and the 40-column measurement at paste_readback_ok (2026-08-25) proves a
+          #     pristine paste returns a SUFFIX in the narrow panes this fires into. `=` then
+          #     withholds the CR from a paste that landed whole, stranding /exit in the composer.
+          # it2_paste_submit_verified is those same three steps against paste_readback_ok's
+          # tail-anchored rule plus the composer_owned gate — the helper the lint sanctions here.
+          # Pre-wait 5s, not the 30s default: recycle_nudge_decision proved the composer EMPTY one
+          # call ago, so the loop breaks on its first pass; a 30s hold would stall the at_shell
+          # watch. Non-zero rc (2 abstain · 3 held · 4 mangled) withholds the CR by construction and
+          # is LOGGED, not swallowed — the recoverable outcome the gate above describes.
           if [ "$waited" = 60 ]; then
-            hf_bounded "$IT2" session send -s "$RSID" "/exit" >/dev/null 2>&1 || true
-            sleep 1
-            nc="$(composer_content "$IT2" "$RSID")" || nc=""
-            if [ "$nc" = "/exit" ]; then hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true; fi
+            rt_rc=0; it2_paste_submit_verified "$IT2" "$RSID" "/exit" 5 || rt_rc=$?
+            [ "$rt_rc" = 0 ] || {
+              echo "→ nudge@${waited}s retype UNVERIFIED (rc=$rt_rc): /exit not proven in the composer, CR withheld"
+              emit_recycle_event recycle-nudge-unverified "" "$RSID" "retype rc=$rt_rc at ${waited}s" || true
+            }
           fi ;;
         *)
           echo "→ nudge@${waited}s HELD ($nd): composer is not a stranded /exit — a CR here would submit someone else's buffer"
