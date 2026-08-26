@@ -195,8 +195,16 @@ qualifies on ~2026-08-24** under this repo's own 2.1.220 precedent if no success
   load FALL while a unit was added. The sampler this bullet asks for is landed
   (`scripts/capacity-marginal.sh`, controls proven able to fail in `tests/capacity-marginal.bats`);
   the coefficient itself still wants one ~1 h on-box window (§6 of that doc). **Until it exists, none
-  of the four may be quoted** — including by `scripts/lib/capacity-admit.sh:698` and
-  `hooks/agent-teams-enforce.sh:220`, which both still carry `2.5–5`.
+  of the four may be quoted.**
+  **Discharged 2026-08-26** — the quote is now retired from every code site. A repo-wide grep found
+  **three**, not the two this bullet named: `scripts/lib/capacity-admit.sh` (the `CC_ADMIT_ACTIVE_CEILING`
+  warrant), `hooks/agent-teams-enforce.sh` (the operator-facing deny message), and a third this bullet
+  missed — `scripts/lib/spawn-presence.sh` § THE ACTIVE POPULATION, the library both of the others
+  read their census from. Each now states that `2.5–5` is an aggregate÷N and points at the
+  adjudication. **No ceiling moved**: `CC_ADMIT_ACTIVE_CEILING` stays `8`, re-warranted on the two
+  facts that do not divide by the missing coefficient (the census is a proven lower bound, so the term
+  under-refuses by construction; and 8 is where all 127/127 historic gate refusals correspond). The
+  measurement itself is unchanged and still owed — §6 of the adjudication, on the box.
 - **Whether load average means anything as a capacity signal at all.** At constant N=15–16 the box
   read **11.21 → 36.07**; one instrumentation run alone moved it 19 → 36 with session count unchanged.
 - **Whether automated fires retry after a capacity refusal** — decides whether raising the ceiling

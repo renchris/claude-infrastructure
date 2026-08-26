@@ -720,11 +720,24 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
   # deprioritises"), and axis 10's F3 is the failure it produces — a fleet-wide wake turns 140 idle
   # residents into 140 concurrent turns, which no spawn gate keyed on residency can even see.
   #
-  # 8 is the top of the measured band. Axis 09: 2.5-5 runnable threads per genuinely-ACTIVE session
-  # (load1 27.4 -> 44.4 at 9 all-active) against the load-20 gate ⇒ ~4-8 concurrent actives, which is
-  # also what all 127/127 historic gate refusals correspond to. The TOP of the band is deliberate:
-  # this term refuses real work, so it must bind where the evidence is unambiguous, and the load and
-  # segment terms above already cover the middle of the band from their own directions.
+  # 8 IS PROVISIONAL AND ITS DERIVATION IS WITHDRAWN — DO NOT QUOTE A MARGINAL HERE. This comment
+  # used to read "Axis 09: 2.5-5 runnable threads per genuinely-ACTIVE session (load1 27.4 -> 44.4 at
+  # 9 all-active) ⇒ ~4-8 concurrent actives". That input is arithmetically disqualified: 2.5-5 is an
+  # aggregate/N — a RATIO, not a marginal — and its own source pair gives (44.4-27.4)/9 = 1.89, a
+  # two-point delta over which no control is even computable. The other two published values (0.172
+  # pooled OLS, 0.566 in-band bucket median) have NO committed derivation anywhere on trunk, and the
+  # instrument behind all four — load1 regressed on session count — is measured UNIDENTIFIED on this
+  # box: 87.3% of the load numerator is not-Claude across an 8.35->46.39 daily range, and the direct
+  # Δload probe watched load FALL while a unit was added. Adjudication of all four:
+  # docs/research/marginal-load-per-active-session-2026-08-19.md (backlog 193ae8ddce72).
+  #
+  # WHAT STILL WARRANTS 8, WITHOUT ANY MARGINAL. Two reasons that do not divide by the missing
+  # coefficient: the census below is a PROVEN LOWER BOUND, so this term under-refuses by construction;
+  # and 8 is where all 127/127 historic gate refusals correspond. It binds high on purpose — this term
+  # refuses real work, and the load and segment terms above already cover the middle from their own
+  # directions. Re-derive it from a PASSING window of `scripts/capacity-marginal.sh`, whose three
+  # controls emit NO-ATTRIBUTION rather than a number when the census cannot reproduce the load it
+  # apportions — never from one of the four retired values.
   #
   # THE CENSUS IS A PROVEN LOWER BOUND (scripts/lib/spawn-presence.sh § THE ACTIVE POPULATION), so
   # this term under-refuses rather than refusing on unproven activity — the same direction rule the

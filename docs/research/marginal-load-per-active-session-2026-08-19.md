@@ -47,10 +47,19 @@ control the DoD named, **proven able to fail**.
 | **0.566** | "in-band bucket median" | Same: no committed derivation. Bucketing narrows the load range, which *weakens* identification rather than fixing it. | **No** — same two reasons. |
 
 **The 30× span is therefore not disagreement between measurements. It is four different quantities,
-two of which cannot be re-derived.** Any future citation of one of them is a citation of nothing;
-`capacity-admit.sh:698` and `hooks/agent-teams-enforce.sh:220` both currently quote the 2.5–5 row and
-should be updated to the measured value once §6 has been run — **not** before, and not to one of the
-other three.
+two of which cannot be re-derived.** Any future citation of one of them is a citation of nothing.
+
+**Retired in code, 2026-08-26.** This paragraph used to say `capacity-admit.sh:698` and
+`hooks/agent-teams-enforce.sh:220` "should be updated to the measured value once §6 has been run —
+**not** before". That conflated two different actions and left the disqualified number sitting in
+live code in the meantime. **Substituting a coefficient waits for §6; withdrawing a disqualified one
+does not** — a warrant that cites a ratio as a marginal is wrong the day it is read, not the day a
+replacement arrives. All three sites (the repo-wide grep found a third, `scripts/lib/spawn-presence.sh`
+§ THE ACTIVE POPULATION, which is the library the other two take their census from) now name `2.5–5`
+as an aggregate÷N and point here. **No behaviour changed and no ceiling moved**:
+`CC_ADMIT_ACTIVE_CEILING` stays `8`, re-warranted on the two facts that survive the withdrawal — the
+census is a proven lower bound, so the term under-refuses by construction, and 8 is where all 127/127
+historic gate refusals correspond. §6 is still owed, and §6 is still what supplies the number.
 
 ---
 
@@ -179,9 +188,18 @@ term across several windows — which would itself be the finding (the process-u
 right instrument, and the thread-unit refinement in §7 becomes the next increment rather than a
 nicety).
 
-On a PASS, quote the coefficient **with its standard error and its window**, update
-`scripts/lib/capacity-admit.sh:698` and `hooks/agent-teams-enforce.sh:220` (both currently carry
-2.5–5), and close `193ae8ddce72` with the landed sha.
+On a PASS, quote the coefficient **with its standard error and its window**, and write it into the
+three sites that now carry the withdrawal notice instead of a number —
+`scripts/lib/capacity-admit.sh` (the `CC_ADMIT_ACTIVE_CEILING` warrant), `scripts/lib/spawn-presence.sh`
+§ THE ACTIVE POPULATION, and `hooks/agent-teams-enforce.sh` (the deny message). Then re-derive the
+ceiling from it rather than re-asserting 8, and close `193ae8ddce72` with the landed sha.
+
+**Status 2026-08-26.** The dispatched worker for `193ae8ddce72` ran off-box (Linux container, 4 cores,
+one `claude` process, no Darwin and no fleet), so §6 was unrunnable there — it is parked as an on-box
+step, not reopened, so it does not re-cycle through workers that structurally cannot run it. What that
+worker *could* discharge was §2's unconditional half, above. `bats tests/capacity-marginal.bats` was
+re-run against trunk first: **15/15 green**, so the instrument and its three controls are intact and
+the only thing missing is the window.
 
 ---
 
