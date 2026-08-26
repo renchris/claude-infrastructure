@@ -155,10 +155,15 @@ write_record() {
   local log_json=""
   [[ -n "$STDERR_LOG" && -s "$STDERR_LOG" ]] && log_json="$(printf '%s' "$STDERR_LOG" | _json_escape)"
 
+  # sig_reached_wrapper — see the _forward() block for what this answers and why si_pid is NOT
+  # obtainable here. Appended after stderr_log, same additive contract. The value is one of our
+  # own trap literals (INT/TERM/HUP) or empty, so it needs no _json_escape pass. The NAME is
+  # deliberately not a superstring or substring of "signal": close_record_field greps an
+  # UNANCHORED "<key>": and takes head -1, so an overlapping key would silently shadow.
   local out="$RECORDS_DIR/${rpid:-0}-${START_EPOCH}.json"
   local tmp="$out.tmp.$$"
-  if printf '{"pid":%s,"ppid":%s,"argv":["%s","%s","%s"],"started_at":"%s","ended_at":"%s","exit_code":%s,"signal":"%s","stderr_tail":"%s","version":"%s","stderr_log":"%s"}\n' \
-    "${rpid:-0}" "$$" "$a0" "$a1" "$a2" "$STARTED_AT" "$ENDED_AT" "${rcode:-0}" "$rsig" "$tail_json" "$rver" "$log_json" \
+  if printf '{"pid":%s,"ppid":%s,"argv":["%s","%s","%s"],"started_at":"%s","ended_at":"%s","exit_code":%s,"signal":"%s","stderr_tail":"%s","version":"%s","stderr_log":"%s","sig_reached_wrapper":"%s"}\n' \
+    "${rpid:-0}" "$$" "$a0" "$a1" "$a2" "$STARTED_AT" "$ENDED_AT" "${rcode:-0}" "$rsig" "$tail_json" "$rver" "$log_json" "${SIG_TO_WRAPPER:-}" \
     > "$tmp" 2>/dev/null; then
     mv -f "$tmp" "$out" 2>/dev/null || rm -f "$tmp" 2>/dev/null
   else
@@ -173,8 +178,45 @@ write_record() {
 #    reads/writes the tty without SIGTTIN/SIGTTOU. Traps forward terminal signals to the
 #    child and keep the wrapper alive to reap + record. ─────────────────────────────────────
 child=""
+
+# WHICH PROCESS THE SIGNAL WAS AIMED AT — the one provenance fact that IS in scope here, and the
+# one docs/research/sigterm-forensics-2026-08-25.md had to reconstruct by hand.
+#
+# 🚨 READ THIS BEFORE IMPLEMENTING THAT DOC'S TOP RECOMMENDATION. It says (§ line 186) "capture
+# si_pid in cc-close-attrib's _forward() TERM trap and write it into the close record ... it is
+# ~3 lines", and (§ line 96) "cc-await-ping captures si_pid in its handler". BOTH ARE FALSE, and
+# the backlog row 28b39195b4af that carries them inherits both:
+#
+#   (1) NOT IMPLEMENTABLE HERE AT ALL. A bash `trap` is a command string bash runs AFTER its own
+#       internal handler returns; the shell never exposes `siginfo_t`. There is no si_pid in
+#       scope in _forward() to "just read". cc-await-ping:453 says it exactly — "only a handler
+#       installed with SA_SIGINFO ever sees it" — and sigaction(2) is not reachable from bash.
+#   (2) THE ONLY IMPLEMENTABLE FORM IS BLIND TO THE MOTIVATING CASE. cc-await-ping does not read
+#       si_pid in its handler; _sigrecord_arm (cc-await-ping:489-543) forks a python3/ctypes
+#       SA_SIGINFO SIDE-CAR that writes a capture file the shell later reads. Being a SEPARATE
+#       PROCESS it only ever sees a signal that reaches IT too — i.e. a process-GROUP or pattern
+#       kill. cc-await-ping:467-471 states the boundary in its own words: "A 143 (this process
+#       alone) never reaches the recorder, so the sender stays unknown exactly as before." The
+#       kill that motivated the row — pid 50399 at 21:42:25Z — was a 143 with NO co-victims
+#       (forensics doc § line 84). So the transplant, built perfectly, would be inert for
+#       precisely the incident it was designed to solve. The 21:28 kill is named only because it
+#       was a `pkill -f`, a MULTI-TARGET kill that happened to hit the side-car as well.
+#
+# WHAT IS RECOVERABLE, for free, with no new mechanism: whether the signal reached the WRAPPER
+# (or its group) or only the claude CHILD. A trap that runs proves the former; a child that dies
+# 143 while this trap never ran proves the latter. Both render an IDENTICAL exit_code 143 /
+# signal 15 today, which is why the forensics doc had to infer the distinction from the absence
+# of co-victims — and that inference is exactly what "redirects the entire search" (§ line 71:
+# "the process that had to be selected was a bash running cc-close-attrib, not a claude").
+# Recording it turns that hand-reconstruction into a stored fact.
+#
+# An empty value is therefore MEANINGFUL, not missing: it means no terminal signal reached this
+# wrapper. A signal arriving before the child spawn leaves $child empty and forwards nothing —
+# the flag is still set, correctly, because the wrapper was still the target.
+SIG_TO_WRAPPER=""
+
 # shellcheck disable=SC2329  # invoked indirectly by the traps below (shellcheck can't see it)
-_forward() { [[ -n "$child" ]] && kill -"$1" "$child" 2>/dev/null || true; }
+_forward() { SIG_TO_WRAPPER="$1"; [[ -n "$child" ]] && kill -"$1" "$child" 2>/dev/null || true; }
 trap '_forward INT'  INT
 trap '_forward TERM' TERM
 trap '_forward HUP'  HUP
