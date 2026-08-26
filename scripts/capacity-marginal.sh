@@ -82,11 +82,30 @@
 # assuming one, so the coarser unit costs accuracy in the ratio, never validity in the verdict.
 # `analyze` REFUSES a file whose rows mix units.
 #
+# ══ THE RUN IS A PROGRAM, NOT A WORKSHEET (`collect`) ═══════════════════════════════════════════
+# The measurement protocol is not one command, it is a LOOP: sample a window, analyze, and extend
+# the window until the verdict stops being NO-ATTRIBUTION *or* the same term refuses across several
+# windows — which is itself the finding (the process-unit census is the wrong instrument, and B3's
+# thread census becomes the next increment). Handing a human that loop makes the human the runtime:
+# they run an hour, read a refusal, and stop. `collect` is that loop, unattended and re-runnable —
+# it appends to ONE growing file, re-analyzes after every chunk, and terminates on its own.
+#
+# It latches the repeat-refusal stop ONLY on a DECIDABLE window (n_eff >= CC_MARG_MIN_N). That is
+# the same distinction the analyzer already draws in words and it must not be lost here: an early
+# chunk fails C2 because a 60 s time constant has not yet accumulated independent observations —
+# "uninformative, NOT refuting". Counting those toward the repeat streak would stop the run at
+# exactly the point the doc says to extend it, and would report the instrument's warm-up as the
+# box's answer. Decidability is read as a NUMBER out of the analyzer's own JSON, never grepped for
+# a phrase, so a reworded message can never silently disarm the guard.
+#
 # Usage:
 #   capacity-marginal.sh sample  [--window-s N] [--interval-s N] [--out FILE]
 #   capacity-marginal.sh analyze [--in FILE] [--json]
+#   capacity-marginal.sh collect [--out FILE] [--chunk-s N] [--interval-s N] [--max-s N]
+#                                [--repeat-k N]
 #
-# Exit: 0 coefficient emitted (all controls passed) · 1 NO-ATTRIBUTION (a control failed) ·
+# Exit: 0 coefficient emitted (all controls passed) · 1 NO-ATTRIBUTION (a control failed; for
+#       `collect`, the budget ran out or the same term refused --repeat-k decidable windows) ·
 #       2 usage error · 3 NO-DATA (nothing sampled / file unreadable).
 #
 # Seams (all read with an explicit default; none may be empty):
@@ -99,6 +118,9 @@
 #   CC_MARG_MIN_ACTIVE_LEVELS(3)    distinct active levels required by C3
 #   CC_MARG_EXEC_RE                 regex matching a session's executable path (comm), default below
 #   CC_MARG_OUT                     default sample output path
+#   CC_MARG_CHUNK_S(900)            `collect` window per analyze pass, seconds
+#   CC_MARG_MAX_S(14400)            `collect` total wall-clock budget, seconds
+#   CC_MARG_REPEAT_K(3)             `collect` identical DECIDABLE refusals that stop the run
 set -uo pipefail
 
 CC_MARG_TAU="${CC_MARG_TAU:-60}"
@@ -112,6 +134,9 @@ CC_MARG_MIN_ACTIVE_LEVELS="${CC_MARG_MIN_ACTIVE_LEVELS:-3}"
 # `.claude-NNN/node_modules` form is the versioned launcher every interactive session runs.
 CC_MARG_EXEC_RE="${CC_MARG_EXEC_RE:-\\.claude-[0-9]+/node_modules/|claude\\.exe$}"
 CC_MARG_OUT="${CC_MARG_OUT:-${TMPDIR:-/tmp}/capacity-marginal.tsv}"
+CC_MARG_CHUNK_S="${CC_MARG_CHUNK_S:-900}"
+CC_MARG_MAX_S="${CC_MARG_MAX_S:-14400}"
+CC_MARG_REPEAT_K="${CC_MARG_REPEAT_K:-3}"
 
 SCHEMA='#ts	load1	unit	total_run	claude_run	active	resident'
 
@@ -379,9 +404,90 @@ cmd_analyze() {
     }' "$in"
 }
 
+# FIRST OCCURRENCE, by parameter expansion — no jq dependency and no greedy regex that could skip
+# past the key it was asked for into a later one. Returns `-` and rc 1 when the key is absent, so a
+# missing key can never read as a value.
+_marg_json_get() {
+  local key="$1" json="$2" rest
+  rest="${json#*\""$key"\":}"
+  if [ "$rest" = "$json" ]; then printf '%s' -; return 1; fi
+  rest="${rest%%,*}"; rest="${rest%%\}*}"
+  printf '%s' "$rest"
+}
+
+cmd_collect() {
+  local out="$CC_MARG_OUT" chunk="$CC_MARG_CHUNK_S" interval="$CC_MARG_TAU"
+  local max="$CC_MARG_MAX_S" repk="$CC_MARG_REPEAT_K"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --out)        out="${2:-}"; shift 2 ;;
+      --chunk-s)    chunk="${2:-}"; shift 2 ;;
+      --interval-s) interval="${2:-}"; shift 2 ;;
+      --max-s)      max="${2:-}"; shift 2 ;;
+      --repeat-k)   repk="${2:-}"; shift 2 ;;
+      *) die "collect: unknown argument '$1'" ;;
+    esac
+  done
+  case "$chunk$interval$max$repk" in *[!0-9]*) die "collect: numeric options must be integers" ;; esac
+  [ "$chunk" -ge 1 ] || die "collect: --chunk-s must be >= 1"
+  [ "$repk"  -ge 1 ] || die "collect: --repeat-k must be >= 1"
+
+  local start deadline pass=0 sig="" prev="" streak=0 chunks=0 nodata=0 j rc neff
+  start="$(date +%s)"; deadline=$(( start + max ))
+  printf 'capacity-marginal: collect -> %s (chunk %ss, budget %ss, stop after %s identical decidable refusals)\n' \
+    "$out" "$chunk" "$max" "$repk" >&2
+
+  while :; do
+    [ "$(date +%s)" -lt "$deadline" ] || { printf 'capacity-marginal: budget exhausted\n' >&2; break; }
+    cmd_sample --window-s "$chunk" --interval-s "$interval" --out "$out" --quiet
+    chunks=$(( chunks + 1 ))
+
+    j="$(cmd_analyze --in "$out" --json)"; rc=$?
+    if [ "$rc" -eq 3 ]; then
+      nodata=$(( nodata + 1 ))
+      printf 'capacity-marginal: chunk %d NO-DATA (%d consecutive)\n' "$chunks" "$nodata" >&2
+      # A box that yields nothing three chunks running is not a short window, it is a dead sensor.
+      [ "$nodata" -lt 3 ] || { printf 'capacity-marginal: no usable rows after %d chunks\n' "$chunks" >&2; return 3; }
+      continue
+    fi
+    nodata=0
+    if [ "$rc" -eq 0 ]; then pass=1; break; fi
+
+    sig="$(_marg_json_get c1_level "$j")/$(_marg_json_get c2_dynamics "$j")/$(_marg_json_get c3_identify "$j")"
+    neff="$(_marg_json_get n_eff "$j")"
+    # DECIDABLE, as a number: below the n_eff floor C2 is uninformative rather than refuting, and a
+    # streak counted there would stop the run at exactly the point the protocol says to extend it.
+    if awk -v a="$neff" -v b="$CC_MARG_MIN_N" 'BEGIN{exit !(a+0 >= b+0)}'; then
+      if [ "$sig" = "$prev" ]; then streak=$(( streak + 1 )); else streak=1; prev="$sig"; fi
+      printf 'capacity-marginal: chunk %d NO-ATTRIBUTION %s (decidable, n_eff %s, streak %d/%d)\n' \
+        "$chunks" "$sig" "$neff" "$streak" "$repk" >&2
+      if [ "$streak" -ge "$repk" ]; then
+        printf 'capacity-marginal: the same term refused %d decidable windows — that IS the finding\n' "$repk" >&2
+        break
+      fi
+    else
+      printf 'capacity-marginal: chunk %d NO-ATTRIBUTION %s (n_eff %s < %s — extending, not refuting)\n' \
+        "$chunks" "$sig" "$neff" "$CC_MARG_MIN_N" >&2
+    fi
+  done
+
+  printf '\n' >&2
+  cmd_analyze --in "$out"; rc=$?
+  [ "$pass" -eq 1 ] && return 0
+  return "$rc"
+}
+
+# LIBRARY MODE — sourced rather than executed: define the functions and stop. `collect`'s subject is
+# its own control flow (decidability guard, streak latch, stop reasons), and that cannot be exercised
+# through a real `ps` without making the suite pass or fail on how busy the operator's box is — the
+# one input a gate corpus may never depend on. Sourcing lets a test substitute `cmd_sample` with a
+# fixture chunk. It changes nothing when the file is run.
+if [ "${BASH_SOURCE[0]}" != "${0}" ]; then return 0; fi
+
 case "${1:-}" in
   sample)  shift; cmd_sample "$@" ;;
   analyze) shift; cmd_analyze "$@" ;;
+  collect) shift; cmd_collect "$@" ;;
   -h|--help|'') sed -n '/^# Usage:/,/^#       2 usage/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
-  *) die "unknown subcommand '$1' (sample | analyze)" ;;
+  *) die "unknown subcommand '$1' (sample | analyze | collect)" ;;
 esac

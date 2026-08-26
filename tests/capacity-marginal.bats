@@ -276,3 +276,131 @@ EOF
   run bash "$M" sample --interval-s 0 --window-s 1 --out "$D/x.tsv"
   [ "$status" -eq 2 ]
 }
+
+# ── `collect`: THE RUN AS A PROGRAM ─────────────────────────────────────────────────────────────
+# §6 of the adjudication is a LOOP, not a command: sample, analyze, extend the window until the
+# verdict stops being NO-ATTRIBUTION or the same term refuses across several windows. Handed to a
+# human that loop gets run once and abandoned, so `collect` runs it unattended. What must be pinned
+# is its control flow — when it stops, and above all when it must NOT — so these tests source the
+# script and substitute the box.
+
+# Harness: source the script in library mode and stand a scripted `cmd_sample` in for the box.
+# CHUNKS is consulted per call, so each test declares what the box does on chunk 1, 2, 3, ...
+_collect_harness() {
+  # shellcheck disable=SC1090
+  . "$M"
+  CHUNK_N=0
+  cmd_sample() {
+    local out=""
+    while [ $# -gt 0 ]; do case "$1" in --out) out="$2"; shift 2 ;; *) shift ;; esac; done
+    CHUNK_N=$(( CHUNK_N + 1 ))
+    _box_chunk "$CHUNK_N" "$out"
+  }
+}
+
+# A window whose census is FLAT while the load moves — the shape that killed this wave's own
+# headline. Spaced 60 s so n_eff clears the floor: this refusal is DECIDABLE and must latch.
+_flat_chunk() {
+  local out="$1" base="$2" i ts load
+  [ -s "$out" ] || printf '#ts\tload1\tunit\ttotal_run\tclaude_run\tactive\tresident\n' > "$out"
+  for i in $(seq 0 39); do
+    ts=$(( base + i * 60 ))
+    load="$(awk -v i="$i" 'BEGIN { printf "%.2f", 12 + 14 * i / 39 }')"
+    printf '%s\t%s\tproc\t%s\t%s\t%s\t14\n' "$ts" "$load" "$(( 19 + i % 2 ))" "$(( 2 + i % 3 ))" "$(( 3 + i % 4 ))" >> "$out"
+  done
+}
+
+# The planted-coefficient window from the NEGATIVE CONTROL: all three controls PASS.
+_planted_chunk() {
+  local out="$1" base="$2" i ts act amb cl tot load
+  [ -s "$out" ] || printf '#ts\tload1\tunit\ttotal_run\tclaude_run\tactive\tresident\n' > "$out"
+  for i in $(seq 0 39); do
+    ts=$(( base + i * 60 )); act=$(( 2 + i % 6 ))
+    amb="$(awk -v i="$i" 'BEGIN { printf "%.3f", 9 + 6 * ((i * 7) % 11) / 10 }')"
+    cl="$(awk -v a="$act" 'BEGIN { printf "%.3f", 0.25 * a }')"
+    tot="$(awk -v a="$amb" -v c="$cl" 'BEGIN { printf "%.3f", a + c }')"
+    load="$(awk -v t="$tot" 'BEGIN { printf "%.3f", 1.30 * t }')"
+    printf '%s\t%s\tproc\t%s\t%s\t%s\t14\n' "$ts" "$load" "$tot" "$cl" "$act" >> "$out"
+  done
+}
+
+@test "collect stops the moment a window PASSES, and reports the coefficient" {
+  _collect_harness
+  _box_chunk() { _planted_chunk "$2" $(( 3000000 + $1 * 3000 )); }
+  run cmd_collect --out "$D/c-pass.tsv" --chunk-s 1 --max-s 60 --repeat-k 3
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"VERDICT: MARGINAL"* ]] || false
+  [[ "$output" != *"budget exhausted"* ]] || false
+}
+
+@test "collect stops after --repeat-k IDENTICAL DECIDABLE refusals — that repetition IS the finding" {
+  # The doc's own terminating condition: "the refusal repeats with the same term across several
+  # windows — which would itself be the finding". It must stop on the streak, not on the budget,
+  # or an operator learns nothing from a run that merely ran out of time.
+  _collect_harness
+  _box_chunk() { _flat_chunk "$2" $(( 1000000 + $1 * 3000 )); }
+  run cmd_collect --out "$D/c-flat.tsv" --chunk-s 1 --max-s 600 --repeat-k 2
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"the same term refused 2 decidable windows"* ]] || false
+  [[ "$output" != *"budget exhausted"* ]] || false
+  [[ "$output" == *"NO-ATTRIBUTION"* ]] || false
+  # Stopped ON the streak: exactly --repeat-k decidable chunks, never a third.
+  [[ "$output" == *"streak 2/2"* ]] || false
+  [[ "$output" != *"streak 3/2"* ]] || false
+}
+
+@test "collect does NOT latch the streak on an UNDECIDABLE window — uninformative is not refuting" {
+  # THE LOAD-BEARING GUARD. Below the n_eff floor C2 is uninformative rather than refuting (B3's
+  # defect, by name). Counting those toward the streak would stop the run at exactly the point the
+  # protocol says to EXTEND it, and would report the instrument's warm-up as the box's answer.
+  # Chunks 1-3 are 5 s-spaced and undecidable; --repeat-k is 2, so a naive streak stops at chunk 2.
+  # Chunk 4 is the box finally delivering a window that decides. Reaching it is the assertion.
+  _collect_harness
+  _box_chunk() {
+    local n="$1" out="$2" i ts
+    if [ "$n" -ge 4 ]; then : > "$out"; _planted_chunk "$out" 3000000; return 0; fi
+    [ -s "$out" ] || printf '#ts\tload1\tunit\ttotal_run\tclaude_run\tactive\tresident\n' > "$out"
+    for i in $(seq 0 9); do
+      ts=$(( 1000000 + n * 50 + i * 5 ))
+      printf '%s\t%s\tproc\t%s\t%s\t%s\t14\n' "$ts" "$(awk -v i="$i" 'BEGIN{printf "%.2f", 12 + i}')" \
+        "$(( 19 + i % 2 ))" "$(( 2 + i % 3 ))" "$(( 3 + i % 4 ))" >> "$out"
+    done
+  }
+  run cmd_collect --out "$D/c-warm.tsv" --chunk-s 1 --max-s 600 --repeat-k 2
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"extending, not refuting"* ]] || false
+  [[ "$output" != *"the same term refused"* ]] || false
+  [[ "$output" == *"VERDICT: MARGINAL"* ]] || false
+}
+
+@test "collect gives up as NO-DATA, never as a zero, when the box yields nothing" {
+  # A dead sensor must not read as a quiet box — the same rule the row-level `-` already enforces.
+  _collect_harness
+  _box_chunk() { : ; }
+  run cmd_collect --out "$D/c-none.tsv" --chunk-s 1 --max-s 600 --repeat-k 2
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"no usable rows after 3 chunks"* ]] || false
+  [[ "$output" != *"VERDICT: MARGINAL"* ]] || false
+}
+
+@test "collect rejects a bad option as a usage error rather than sampling on a guess" {
+  run bash "$M" collect --chunk-s notanumber --out "$D/c-usage.tsv"
+  [ "$status" -eq 2 ]
+  run bash "$M" collect --nope
+  [ "$status" -eq 2 ]
+}
+
+@test "the JSON reader takes the FIRST occurrence of a key, and a missing key is never a value" {
+  # collect's decidability guard reads n_eff as a NUMBER out of the analyzer's own JSON rather than
+  # grepping its prose, so a reworded message cannot silently disarm the guard. That only holds if
+  # the reader cannot skip past the key it was asked for, and cannot invent one that is absent.
+  # shellcheck disable=SC1090
+  . "$M"
+  local j='{"n":40,"n_eff":40.00,"c1_level":false,"c1_why":"n_eff 40.00 blah","c2_dynamics":true}'
+  [ "$(_marg_json_get n_eff "$j")" = "40.00" ]
+  [ "$(_marg_json_get c1_level "$j")" = "false" ]
+  [ "$(_marg_json_get c2_dynamics "$j")" = "true" ]
+  run _marg_json_get absent "$j"
+  [ "$status" -eq 1 ]
+  [ "$output" = "-" ]
+}

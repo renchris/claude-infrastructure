@@ -179,9 +179,42 @@ term across several windows — which would itself be the finding (the process-u
 right instrument, and the thread-unit refinement in §7 becomes the next increment rather than a
 nicety).
 
-On a PASS, quote the coefficient **with its standard error and its window**, update
-`scripts/lib/capacity-admit.sh:698` and `hooks/agent-teams-enforce.sh:220` (both currently carry
-2.5–5), and close `193ae8ddce72` with the landed sha.
+On a PASS, quote the coefficient **with its standard error and its window**, update the sites §6a
+re-greps, and close `193ae8ddce72` with the landed sha.
+
+### 6b · That protocol is now a program, not a worksheet (`collect`, 2026-08-26)
+
+The paragraph above is a **loop**, and the two commands are one pass of it. Handing a human a loop
+makes the human the runtime: they run an hour, read a refusal, and stop — which is how a measurement
+that is "~30 minutes of wall clock with no operator judgment in it" sits unmade for a week. The loop
+is now `collect`, and it is the whole of §6:
+
+```sh
+bash scripts/capacity-marginal.sh collect --out /tmp/marg.tsv
+```
+
+It samples a chunk, re-analyzes the growing file, and terminates **on its own** in exactly the three
+ways this section describes: a PASS (exit 0, coefficient printed), the same term refusing
+`--repeat-k` windows (exit 1 — *that repetition IS the finding*), or the wall-clock budget
+(`--max-s`, default 4 h). It appends to one file and is safe to re-run, so a run interrupted by a
+reboot resumes by being invoked again. Defaults are 15-minute chunks, 60 s interval, `--repeat-k 3`.
+
+**The one subtlety, and it is the reason this is not a `while` loop in a shell history.** A refusal
+only counts toward the repeat-stop when the window is **decidable** — `n_eff ≥ CC_MARG_MIN_N`. Below
+that floor C2 is *uninformative rather than refuting* (B3's defect, by name), and counting those
+would stop the run at exactly the point this section says to **extend** it — reporting the
+instrument's warm-up as the box's answer. Decidability is read as a **number** out of the analyzer's
+own JSON, never grepped for a phrase, so rewording a message cannot silently disarm the guard.
+`tests/capacity-marginal.bats` pins it: chunks 1–3 undecidable against `--repeat-k 2`, and reaching
+chunk 4's passing window *is* the assertion. Removing the guard fails that row and only that row.
+
+Verified off-box: 21/21 green (15 pre-existing + 6 for `collect`), `shellcheck -x` clean,
+`test-hermeticity-lint.sh` clean (551 suites, 0 new leaks), and an end-to-end `collect` on Linux
+correctly refusing a quiet 24 s budget — three chunks logged *"extending, not refuting"*, never a
+streak, then `VERDICT: NO-ATTRIBUTION`, exit 1.
+
+**What remains is the fleet and nothing else:** one `collect` on the 10-core Darwin box, ideally
+started before a dispatch wave so C3 gets its levels.
 
 ### 6a · The ban is now enforced in code — and there were THREE sites, not two (2026-08-26)
 
@@ -210,7 +243,8 @@ on §6**, so the measurement can take as long as it needs without leaving a gate
 number its own source pair refutes.
 
 **What remains is exactly §6 and nothing else** — one ~1 h window on the 10-core Darwin box during a
-dispatch wave, then the update-and-close. Verified this session, off-box: `bats
+dispatch wave, then the update-and-close. Since 2026-08-26 that window is a single unattended
+command rather than a loop someone has to sit through: **§6b**. Verified this session, off-box: `bats
 tests/capacity-marginal.bats` **15/15**, plus `tests/agent-teams-enforce.bats` and
 `tests/capacity-admit-active.bats` green alongside them (61/61 total), `shellcheck` clean,
 `test-hermeticity-lint.sh` clean (551 suites, 0 new leaks), and the sampler smoke-run on Linux
