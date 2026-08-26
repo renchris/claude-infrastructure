@@ -86,6 +86,141 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-25 — drain recycle #230: method 200 — A ONE-DIRECTIONAL DISTANCE USED AS A CONVERGENCE
+  VERDICT IS BLIND TO THE SIDE THAT ACTUALLY BLOCKS THE CONVERGER — and the four-link-old question
+  "what converges this box?" is ANSWERED.** ONE fix landed (`decd34029`, rebased from `49dffb55d` —
+  re-derive it, the land rewrote the object), rc 0, content-verified on trunk by CONTENT (both paths
+  present, `git diff origin/main HEAD` empty on each) with the pinned off-trunk NEG control refusing
+  (rc 1) and an `origin/main~1` POS control confirming (rc 0). Board at OPEN **324 open / 207 blocked
+  / 2,329 done / 6 claimed** (531 combined, 2,866 rows); at CLOSE **325 / 208 / 2,329 / 4** (533
+  combined, 2,866). ZERO rows closed by me and **ZERO by the actuator** — the actuator series is now
+  **`2, 2, 0, 7, 0, 1, 0`**, still bursty, still not a rate.
+  🚨 **THE WHOLE LINK'S BOARD MOVEMENT WAS PURE STATUS CHURN INSIDE A FROZEN ROW SET.** `allids`
+  departures and arrivals were **BOTH EMPTY** and `allrows` sat at 2,866 at both ends: nothing was
+  minted, nothing was removed, `done` did not move. Every delta came from four existing rows changing
+  status — `70f0001c657b` claimed → open (the drain's own SSOT row: REPORT it, do not work it),
+  `0c8b39b67665` and `e981656df348` claimed → blocked, `01ab05685857` blocked → claimed. **A
+  two-list session sees "open +1, blocked +1, claimed −2" and reads a productive link; the id-set
+  comparison proves NOTHING WAS CREATED OR CLOSED.** My OPEN board was also byte-identical to #229's
+  CLOSE on all four lists — the first fully quiescent handover in this chain's recorded window.
+
+  **LEAD 1 IS RETIRED: THE CONVERGER IS `com.claude.deploy-live`, AND THE CHAIN HAS BEEN READING ITS
+  SUCCESS AS A REFUSAL FOR NINE LINKS.** It is a launchd user agent, `StartInterval` 600, `RunAtLoad`
+  true, exec'ing `~/.claude/scripts/deploy-live.sh --auto` with a fallback to the repo copy, logging
+  to `~/.claude/autonomy/postland/deploy.log`. Evidence, by content rather than by inference:
+  deploy.log carries its **success** lines — `install.sh ok (links refreshed, incl. any brand-new
+  tracked file)` ×25, `link-refresh: N live link(s) created` ×15, `post-deploy host checks: 3 suite(s)
+  from host-suites.manifest, against the LIVE layer` ×23, `0 un-stamped commit(s) remain above the
+  live tip` ×24 — and the shared checkout's reflog carries **122** `merge <40-char sha>: Fast-forward`
+  entries, which is deploy-live's own signature: it rev-parses TARGET to an object name BEFORE
+  merging (`scripts/deploy-live.sh:1969`, and `hooks/validate-bash.sh:913` states the same). The 30
+  `merge origin/main` NAMED-ref entries are a different, older producer.
+  🚨 **WHY NINE LINKS MIS-READ IT.** #221–#227 measured `--auto` at rc 1 and #229 at rc 0, all with
+  the single line `deploy-migrations: migrate: 0 applied, 14 staged (operator-owned), 0 pending`, and
+  the chain read that as the lane refusing. **It is the lane SUCCEEDING.** The healthy steady state is
+  the `TARGET = HEAD_SHA` branch: it calls `damp_clear`, then `asay` — which is DAMPED and therefore
+  SILENT under `--auto` by design, because at 144 ticks/day a spoken line is the noise defect — then
+  `exit 0`. I ran the same binary with `--dry-run`, the documented decide-and-print path, and it
+  SPOKE: `deploy-live: at trunk tip becc077d53eb — nothing above the live layer to deploy`, plus a
+  residency verdict (`2 of 2 executing resident daemon(s) are running current bytes · 1 exempt`).
+  ⚠️ **The lesson is not about this lane. A ONE-LINE OUTPUT AT rc 0 IS NOT A VERDICT UNTIL YOU KNOW
+  WHICH CHANNEL THE VERDICT USES — a damped channel and a broken producer are indistinguishable from
+  the outside, and `--dry-run` was the free discriminator sitting in the same binary the whole time.**
+  **`799ec26e3a74` and `42243203fb31` both stay OPEN/BLOCKED and un-re-filed, but read their premises
+  as DEAD: the refusal they describe is not what the lane is doing.**
+
+  **THE FIX — `LIVE_DIVERGED` in `scripts/wrap-ledger.sh`.** `LIVE_LAG` is
+  `rev-list --count HEAD..TRUNK`: a distance measured in ONE direction, blind to the ahead side by
+  construction. The ahead side is precisely what stops the converger, which advances with
+  `merge --ff-only "$TARGET"` and so requires live HEAD to be an ancestor of the target. deploy-live
+  already classifies that state in detail — its case B at `:1808`, split fail-closed into B1
+  (superseded by a rebased land, droppable) and B2 (genuinely un-landed) — and its own comment records
+  that it **"FROZE THE LIVE LAYER FOR 29 DRAIN RECYCLES"**. The ledger that computes the close rung
+  never asked the question.
+  **MEASURED BY EXECUTION — the ninth consecutive link where running the producer beat reading it** —
+  against an isolated `mktemp -d` clone, ONE variable moved (whether the fixture HEAD carries a commit
+  of its own), fixture / trunk ref / origin URL / caller held constant:
+
+        behind 4 / ahead 0  ->  LIVE_SRC=behind LIVE_LAG=4  "converging (4 behind; within the budget)"
+        behind 4 / ahead 1  ->  LIVE_SRC=behind LIVE_LAG=4  "converging (4 behind; within the budget)"
+
+  **BYTE-IDENTICAL readouts**, while `merge-base --is-ancestor HEAD TRUNK` answered **rc 0** for the
+  first and **rc 1** for the second — the converger can advance in one cell and is BLOCKED in the
+  other. A POS control at trunk spoke differently (`ok` / lag 0 / "live on trunk"), so the table
+  discriminates. 🚨 **AND THIS WAS THE REAL BOX AT MY OPEN, not a fixture:** the shared checkout sat
+  on two commits of its own (`1ecc808fb`, then `e0f938d8e`; HEAD not an ancestor of origin/main) and
+  the ledger rendered `RUNG=✅ … live layer converging (1 commit(s) behind; within the converge
+  budget)` over it. **A converge BUDGET is a claim about TIME, and time does not cure a divergence** —
+  only landing or dropping the ahead-side commits does. So the budget was being applied to a state it
+  cannot bound. `LIVE_DIVERGED` is the exact complement of the lag read (same repo, same trunk ref,
+  same bound, range reversed), lives only inside the `behind` branch so every other `LIVE_SRC` keeps
+  its prior output byte-for-byte, breaches at **1** with no budget, and is tested BEFORE the added-file
+  arm because it OUTRANKS it: an absent file is cured by the next converge tick, a divergence is what
+  stops every converge tick. `tests/wrap-ledger.bats` **77 → 81**.
+
+  🚨 **TWO INSTRUMENT FAULTS, BOTH CAUGHT BY THE SAME POSITIVE CONTROL, AND THAT IS THE METHOD.** My
+  FIRST truth table returned a uniform `LIVE_SRC=ok` in all four cells INCLUDING the control — my own
+  HEAD was an ancestor of the fixture HEAD everywhere, so the `behind` arm was never reached. I based
+  the fixture below my own HEAD; the SECOND table then returned a uniform `LIVE_SRC=skip`, because my
+  own uncommitted edit had made the tree dirty and the rung short-circuits before the live probe ever
+  runs. **Both looked like clean tables. Neither was a finding.** ✅ **#229's rule generalises and is
+  now two-for-two: a table whose cells all agree is the HARNESS before it is the finding — assume that
+  first, it is cheaper to check — and the thing that makes it checkable at all is a POS control chosen
+  to produce a DIFFERENT answer from every other cell.**
+
+  ⚠️ **THE HONEST LIMIT, MEASURED RATHER THAN ASSUMED: THIS IS NOT A RARE ALARM.** Over the shared
+  checkout's own 319-entry reflog the partition sums and reads **122 merge + 34 pull + 23
+  reset-to-trunk (converging) against 74 commit + 54 rebase + 1 amend (ahead-side-creating)**, on **17
+  of 24 distinct days**. Sessions commit directly in the symlink source often, though the project
+  `CLAUDE.md` forbids it by name. The window is transient — the land clears it — so the rung fires
+  only on a close taken inside it, and when it fires the statement is TRUE and the remedy is real. It
+  is attribution-neutral by construction: it names the fact and ONE drivable command, never a culprit,
+  because this is usually a 🔧 you did not cause. **State that limit rather than claiming rarity.**
+
+  **TWO EXISTING TESTS MOVED, AND NEITHER WAS STALE — read this before assuming a red test is a bug.**
+  Both used a divergent live commit purely as SCAFFOLDING to force `LIVE_ADDS=?`. Case 2d asserted
+  `RUNG=✅` over exactly the diverged state — **that assertion WAS the blind spot**, so it now asserts
+  🚀 while keeping the property it has always existed for (the `?` must not be what raised the rung, so
+  the reason may never be the added file). Case 2e's subject is "`?` stays out of the way of a breach
+  somebody ELSE raises", so its vehicle must not raise one itself: its `?` now comes from the timeout
+  shim, leaving the live layer strictly behind and the budget arm it exercises actually reachable.
+  🚨 **A TEST THAT REDS UNDER YOUR FIX IS THREE DIFFERENT THINGS — a stale assertion, a real
+  regression, or a VEHICLE whose side effect your change just started reading. Read which, per test.**
+
+  **MUTANT-PROVEN, ONE PER SITE, predictions written BEFORE the run, baseline asserted GREEN first,
+  subject restored byte-identical by sha256 on every arm, anchor uniqueness asserted at 1 per mutant:**
+  M1 the ahead read made dead ⇒ **4** reds (2d, 2h, 2i, 2j) · M2 the `?` guard collapsed to 0 ⇒ **1**
+  red (2j), exactly and only the phantom zero · M3 the breach arm unreachable ⇒ **3** reds (2d, 2h,
+  2i) · M4 the readout arm unreachable ⇒ **2** reds (2h, 2i), rung still fires and the sentence is
+  gone. **No mutant redded nothing.** ⚠️ **M1's set is ONE WIDER than I predicted** — it deletes the
+  very read test 2j's timeout shim targets, so that shim's own "was I on the executed path" control
+  correctly fails too. **Say that rather than rounding it to four-for-four.**
+
+  **PRE-LAND, I RAN THE SELECTOR'S ENTIRE DIRECT SET MYSELF IN THE FOREGROUND — 9 suites / 430 tests /
+  0 failures / 0 skips / plan == ok on every one:** `completion-assert` 111 · `operator-readout` 104 ·
+  `wrap-ledger` 81 · `boundary-handoff` 43 · `dod-persist` 30 · `wrap-ledger-memo` 23 ·
+  `operator-surface-scope` 21 · `dod-path` 14 · `operator-readout-live-symlink` 3. **That is what
+  converted the land's own GATE-KILL into a known:** the smoke cut `tests/wrap-ledger.bats` at exit
+  124 with **ZERO `not ok`**, which the gate itself names a NON-VERDICT and not evidence about the
+  tree. Lints run: `shellcheck` (rc 0), `bash -n` (rc 0), scoped `bats-shellcheck-lint --range
+  "$MB...HEAD"` after committing ("clean — 1 suite(s)"), `bats-assert-liveness` (rc 0), `bats --count`,
+  and **`pipefail-sigpipe-lint` BARE** (rc 0, "clean (allowlist honoured)"). **`alarm-polarity-lint` is
+  DECLARED NOT-RUN** on its mute POS control (`e07dc5e09f83`, OPEN — do not re-file), never claimed
+  green. Selector POS control spoke with 4 every time.
+
+  **STANDING READINGS.** Post-land RED pages **0**, the **122nd** consecutive — ⚠️ over a denominator
+  that FELL inside my own link, **2,682 at open → 2,679 at close**, so quote it WITH the denominator.
+  postland stamps `~/.claude/autonomy/postland/stamps` **464 → 465**. `~/.claude/autonomy/pages`
+  **1,967 → 1,971 total**, `.page` **117 → 117** (flat — a seventh distinct behaviour in seven links).
+  inbox-guard `.escalated` **484 → 485**. `kern.boottime` `sec = 1787642174` = **2026-08-25T07:16:14Z**,
+  the SAME `sec` as #228 and #229 ⇒ **no reboot for three links** (the `usec` field differed again —
+  649822; it is not the stable one). `cc-roles list` read `drain-lead UNVERIFIED 7` at open AND close,
+  a **FOURTEENTH** consecutive identical table. Mailbox `~/.claude/mailbox/27.md` **4,059 bytes / 1
+  line**, unchanged — a **FOURTEENTH** identical reading, no new mail. qos diff CLEAN, the **113th**
+  consecutive. All four kitty pre-fire checks passed by minute ~4: `cc-in-kitty` rc 0,
+  `KITTY_WINDOW_ID=27`, the id-keyed jq selector returned **exactly ONE** object (asserted with
+  `length`) whose cwd was my own worktree, `cc-notify --self` → 27 rc 0. `GATE=stale` at open and
+  close — not mine to drive.
 - **2026-08-25 — drain recycle #229: method 199 — A FALLBACK KEYED ON A MAPPING ITS OWN TRIGGERING
   EVENT DESTROYS.** ONE fix landed (`ac7cbc5c2`), rc 0, content-verified on trunk with the pinned
   off-trunk NEG control refusing (rc 1) and an `origin/main~1` POS control confirming (rc 0); ten
