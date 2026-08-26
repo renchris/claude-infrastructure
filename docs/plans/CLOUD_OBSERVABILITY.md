@@ -1887,3 +1887,38 @@ link at all and the shared checkout is 8 commits behind. `deploy-live` refuses c
 tree descends live HEAD; `postland-verify` has the sha queued and emits ~0.17 greens/day). Until it
 converges, the launchd sweep runs the OLD script and returns nothing — filed `5354fffc4079`.
 
+---
+
+## 14 · A worker with nothing to do must still land a path (2026-08-26)
+
+🚨 **A cloud worker's ONLY channel to the desk is its branch, so "nothing to do" is not expressible
+as silence.** `scripts/cloud-return.sh` step 8 closes a dispatched row only when `landed_ok -eq 0`,
+which needs a `paths=` set derived from the VM's **own commits** (step 5) and content-verified on the
+trunk ref (step 6). A worker that pushes nothing is therefore indistinguishable, from this box, from
+one that never booted:
+
+    no commits → C1 NOT-STARTED → cloud-return.sh:273 "nothing to return"
+               → cc-backlog cloud_map NOT-STARTED → open → re-dispatched, forever
+
+There is no desk-side fix. The distinguishing fact — *the worker looked and the work was already
+done* — exists only inside the VM.
+
+**THE RULE.** A cloud worker that finds its row already cured, unworkable, or refuted **lands a
+verdict artifact**: a `docs/research/*.md` naming the cure sha (asserted with
+`git merge-base --is-ancestor <sha> origin/main`), the verification it actually ran, and the
+evidence. That path is what `fill-paths` derives and what closes the row. It does **not** invent code
+work to justify a push, and it does **not** push nothing.
+
+Two classes have now arrived at this independently, which is why it is written here rather than
+re-derived a third time:
+
+- **venue-mismatch** — seven sessions appending rows to
+  `docs/research/venue-foreign-repo-recurrence-2026-08-17.md`.
+- **already-cured** — `f85fce7c26f5`, whose cure landed `a42f107a` (2026-08-25) and which was still
+  cycling `open → claimed → open` a day later across drain recycles #233/#235. Record and mechanism:
+  `docs/research/cloud-already-cured-redispatch-2026-08-26.md`.
+
+**Honest limit:** the rule makes a row *closable*, not closed. The desk's next `cloud-return.sh` pass
+is still what fires `cc-backlog done`, and §13.6's ADD-rule caveat above still governs whether that
+pass is running the landed script or the old one.
+
