@@ -114,16 +114,26 @@ own errors:
 
 **The constant that stops us was never derived from anything.**
 
-`CC_HW_DEFAULT_MAX_LOAD_PER_CORE = 2.0` (`scripts/lib/capacity-admit.sh:134`) is the number that
-becomes the load-20 ceiling on this 10-core box, and both gates expand it. Its own code comment cites
-"§9.5's measured ceiling" — and **§9.5 contains no such derivation**; it shows only that the gate
-admits at 1.55 and refuses at 2.92, which is a demonstration that a threshold thresholds. The origin
-commit `0fc3a3d33` measured the motivating incident at **2.72/core** and picked 2.0 with no stated
-rule. The verifier read the full commit body and **confirmed this verbatim** — it called it the
-strongest finding in the wave.
+`CC_HW_DEFAULT_MAX_LOAD_PER_CORE = 2.0` (`scripts/lib/capacity-admit.sh` — grep the literal, it was
+at `:134` when this was written and is at `:161` on trunk today) is the number that becomes the
+load-20 ceiling on this 10-core box, and both gates expand it. Its code comment cited "§9.5's
+measured ceiling" — and **§9.5 contains no such derivation**; it records the gate admitting at 1.55
+and refusing at 4.0, which is a demonstration that a threshold thresholds, and its own closing
+paragraph then says the gate keys on a quantity that is not session-attributable, i.e. the section
+undercuts the term it was cited as justifying. The origin commit (`feat(handoff-fire): machine-capacity
+admission gate at the spawn chokepoint`, 2026-07-29 — cite by SUBJECT, a land rebases) measured its
+motivating incident at **2.72/core** and picked 2.0 with no stated rule. The verifier read the full
+commit body and **confirmed this verbatim** — it called it the strongest finding in the wave.
+
+✅ **The stale provenance was struck on trunk 2026-08-25** (`e89918f2`, `docs(capacity-admit): the
+ceiling cites a section that has no derivation…`): the comment now carries the refutation instead of
+the citation, with the literal untouched at 2.0. This paragraph is kept as written-at-the-time
+because it is what the fix was derived from; the two readings above (`:134`, "refuses at 2.92") are
+corrected in place — 2.92 is the floor of the 13-sample survived band below, never §9.5's refusal
+reading, which is 4.0.
 
 Worse, the repo's own instrument already documents that this axis cannot do the job
-(`scripts/capacity-alarm.sh:139-147`, verbatim):
+(`scripts/capacity-alarm.sh`, its rung-7 header — verbatim):
 
 > **THE SURVIVED POPULATION CONTAINS THE FATAL VALUE.** Fatal 2026-08-05: 25.3 on 10 cores = 2.53/core.
 > Survived: 13 consecutive samples at a CONSTANT 31–32 sessions spanning 29.15–59.80, i.e.
@@ -143,6 +153,53 @@ The honest actionable is therefore **to derive the number, not to move it**: re-
 measurement (load1 delta across N all-active sessions) and set the ceiling from a measured failure
 point. That is a two-arm experiment, not a config edit, and it is the only thing that can legitimately
 move a capacity constant.
+
+### 3a · That prescription is REFUTED — and this section already contained the refutation (2026-08-26)
+
+**"Do not raise it" stands. "Derive it from a measured failure point" does not, and it never could.**
+The paragraph above was dispatched as backlog `e981656df348` ("derive it, do NOT blind-raise; blocked
+on the marginal-load measurement"). Both halves of that dispatch are dead, for reasons that were on
+this page and on trunk before the row was ever picked up:
+
+1. **The prescribed remedy has no solution on this axis — see three paragraphs up.** The
+   `capacity-alarm.sh` block quoted above under *"THE SURVIVED POPULATION CONTAINS THE FATAL VALUE"*
+   (cited by phrase, never by line — an insertion above it moves the number) is the disproof: **the survived population
+   contains the fatal value** (fatal 2026-08-05 at 2.53/core against 13 consecutive survived samples
+   spanning 2.92–5.98/core, plus 42 h at 2.5/core with no panic). A failure point that sits *inside*
+   the survived band does not locate a boundary, so "set the ceiling from a measured failure point"
+   has no value to return. §3 quoted that block and then prescribed the thing it rules out; the
+   prescription was self-contradictory on its own page. That file's selftest already pins 5.98/core as
+   a known false ALARM, so the refutation is executable, not rhetorical.
+
+2. **The named blocker answers a different question.** Marginal Δload per active session is a
+   *capacity-in-sessions coefficient*: it converts a ceiling into a session count. It cannot locate a
+   failure boundary, so no value of it — not the four adjudicated in §5, not the one §6 of
+   `marginal-load-per-active-session-2026-08-19.md` still wants — would discharge this row. The item
+   was parked behind a measurement that was never on its critical path.
+
+3. **The real cure landed two days after this document was written, and it is stronger than either.**
+   `f944d6e3` (2026-08-20, ancestor of trunk — `fix(fire-gate): load1 does not move with the spawn it
+   was gating`) established that an additional **resident** session moves the 1-min runnable count by
+   ~0. So **no value of this literal can make the term correct: the input is wrong, not the number.**
+   `CC_FIRE_LOAD_TERM` now defaults **off** in `capacity_gate()` (grep
+   `"${CC_FIRE_LOAD_TERM:-off}"` in `scripts/handoff-fire.sh`), and the
+   Agent-tool path has run it off since Wave D; `segments` and `active` carry its intent because they
+   *do* move with the spawn. Per C18 that fix moved a **term switch**, never a ceiling — which is
+   precisely why the literal, and this section's stale provenance, outlived it.
+
+**What the literal is today, and why it stays 2.0.** Untouched, deliberately. It now binds only where
+`cc_capacity_admit` leaves the load term on — the two unattended recovery callers
+(`scripts/boot-resume-launch.sh`, `scripts/limit-recover/lr-fire-resume.sh`), which price the
+imprecision at a delayed resume and are budget-released after `CC_ADMIT_BUDGET` consecutive refusals.
+Raising it is the lazy design `docs/plans/LOAD_INSENSITIVE_VERIFY_V2.md` exists to reject (grep the
+row *"Raise `CC_FIRE_MAX_LOAD_PER_CORE` until tests pass"* — "load is unbounded above; any constant
+is a future permanent-refuse"); the
+full argument is in the `capacity-admit.sh` header, which is the SSOT for this term.
+
+**Read this before re-filing anything from §3.** The generalisable defect is that a section can hold
+a disproof and a prescription that the disproof kills, and dispatch will read the prescription — the
+same shape as the `§9.5` provenance one level up, where a cited section undercut the term citing it.
+Run a remedy's discriminator against the *other* class before crediting it.
 
 ## 4 · If 2.1.234 is adopted, adopt it on other grounds — and set one env var first
 
