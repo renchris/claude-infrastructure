@@ -150,6 +150,33 @@ session's brief requires its **first act** to be pushing that branch — an empt
 Absence then becomes informative: no ref inside the budget is `BOOTING` (expected); no ref past it
 is `NOT-STARTED` (actionable — re-fire, or check entitlement).
 
+#### 4.1a The contract was PROSE-ONLY for four weeks, and the state function convicted anyway
+
+*(Implemented 2026-08-27, backlog `0c8b39b67665`. The paragraph above was written on 2026-08-07 and
+nothing ever executed it: no fire attached the clause, no declaration recorded whether it had been
+attached, and `classify()` emitted `NOT-STARTED` regardless. So C1's whole claim — "never
+started" — rested on a convention that had never once been in force.)*
+
+The cost is measured, and it is most of the board. On 2026-08-27, **222 of 262** live sessions had
+ended a turn with `post_turn_summary.status_category == "need_input"` — they had booted, worked, and
+asked a question — and every one of them read `NOT-STARTED` here, because a VM that finishes a turn
+without pushing has no ref. `scripts/cloud-inbox.py` was built to route around that by reading the
+control plane; the verdict itself stayed wrong. **The fourth cause of silence is the common one, and
+`--allow-empty` is the half of the clause that removes it**: a session with nothing to commit still
+has something to push.
+
+Three pieces, and the third is what makes the first two un-skippable:
+
+| | Where | What it does |
+| --- | --- | --- |
+| the clause | `cc-cloud contract --branch <b>` | ONE text, owned beside the state function that reads its consequence. A fire that wrote its own wording would still record the flag, and the flag would then attest to a promise nobody can read back. |
+| the attachment | `bin/cc-offload` `cmd_up_api` | prepends the clause to the delivered brief. This is the only place in the fire that both knows `$br` and composes the text, so a contract not attached here does not exist. |
+| the record | `declare --contract` · `contract --attached --id <id>` | writes `contract=ok` on the declaration. The second form exists because §8.1 is real: the id is a *return value* of the fire, so the brief is delivered **after** the declaration, and claiming the contract before the send would attest to a brief that may never queue. `up` therefore records it only once `cc-notify` has returned 0. |
+
+**Fail-closed, and the direction is the whole point.** A declaration with no `contract=ok` can never
+yield C1. It yields **`C1' NO-CONTRACT`** (§4.3), which rows — the fire's defect is loud — but
+convicts the session of nothing.
+
 ### 4.2 The discriminator the whole design rests on
 
 Measured, not assumed:
@@ -172,15 +199,26 @@ exactly one row and `bin/cc-blockers` can consume it unchanged.
 | Arm | Condition | Row? |
 | --- | --- | --- |
 | **U0 UNKNOWN** | a sensor could not run (`ls-remote` rc≠0, unreadable declaration) | no row; `--table` says UNKNOWN; **`--check` fails** |
-| **C1 NOT-STARTED** | no ref, past `declared_at + boot_s` | ROW |
+| **C1 NOT-STARTED** | no ref, past `declared_at + boot_s`, **and `contract=ok`** (§4.1a) | ROW |
+| **C1' NO-CONTRACT** | the same absence with **no contract recorded** — absence proves nothing | ROW |
 | **C2 BOOTING** | no ref, inside the boot budget | no row |
 | **C3 LANDED** | every declared path content-present on trunk | no row |
 | **C4 STALLED** | ref exists, sha unchanged past `stall_s` — **sidecar history required** | ROW |
 | **C5 ALIVE** | ref exists and advanced inside the budget | no row |
 | **C6 ABANDONED** | ref exists, not landed, past `life_s` | ROW |
 
-Two orderings are load-bearing:
+**C1' is a row about the FIRE, not about the session**, and its `recover_cmd` says so: `cc-cloud
+inbox`, the one reader that can settle whether the VM booted and asked something. It also changes
+what every downstream consumer does, in the abstain direction, because each treats an unmodelled
+state as "cannot tell" — `scripts/custody-deathwatch.sh` stops filing it `GONE` (it was issuing a
+death verdict off C1), `cc-offload gc` stops retiring it, and `cc-backlog`'s `cloud_map` **blocks**
+rather than reopening (reopening would fire a second peer onto possibly-live work; closing would be
+a death verdict on no evidence).
 
+Three orderings are load-bearing:
+
+- **C1 requires the contract, and C1' takes what is left.** Without it C1 is not a verdict, it is
+  the name of one of four worlds. See §4.1a.
 - **C3 precedes C4.** A finished session stops pushing *on purpose*. STALLED-first would alarm
   forever on every successful cloud session — an alarm that always fires carries exactly as many
   bits as one that never fires.
@@ -199,7 +237,9 @@ mutators, and they write only under `CC_CLOUD_STATE`. Nothing fetches, and nothi
 
 ```text
 cc-cloud preflight [--repo P] [--branch B]   can a fire HERE be observed at all? exit 1 = no
-cc-cloud declare --id <id> --branch <b> [--remote --repo --paths --trunk --url --surface --item --boot --stall --life]
+cc-cloud contract --branch <b> [--remote R]  PRINT the boot-push clause a brief MUST carry (§4.1a)
+cc-cloud contract --attached --id <id>       RECORD that the DELIVERED brief carried it
+cc-cloud declare --id <id> --branch <b> [--contract --remote --repo --paths --trunk --url --surface --item --boot --stall --life]
 cc-cloud retire  --id <id>
 cc-cloud poll                     the ONLY mutator of the heartbeat sidecar
 cc-cloud is-offbox <id>           exit 0 iff declared and not retired — the abstain lookup
@@ -246,9 +286,15 @@ Row schema, matching `bin/cc-fleet`'s frozen shape:
 {"kind":"cloud-session","state":"<S>","detail":"<ascii, <=44 bytes>","subject":"<id>","recover_cmd":"<paste-ready>","ts":<epoch>}
 ```
 
-`state ∈ NOT-STARTED|STALLED|ABANDONED`. Consumers must filter on `.kind` only, never on the
-`.state` enum, so a state added later still reaches the operator instead of being silently dropped
-(`bin/cc-blockers:921-922`).
+`state ∈ NOT-STARTED|NO-CONTRACT|STALLED|ABANDONED`. Consumers must filter on `.kind` only, never on
+the `.state` enum, so a state added later still reaches the operator instead of being silently
+dropped (`bin/cc-blockers:921-922`).
+
+`NO-CONTRACT` was added 2026-08-27 (§4.1a) and is the first exercise of that rule. It cost three
+one-line edits and no behaviour change anywhere else: every consumer that *does* key on the enum
+for its own decision — `cc-offload`'s palette and action column, `scripts/custody-deathwatch.sh`'s
+`peer_disposition`, `cc-offload gc`, `cc-backlog`'s `cloud_state` — already had an abstaining
+default, so the new token reached the operator by construction and convicted nobody on its way.
 
 ### 5.2 Built as a primitive, NOT yet wired — the three liars
 
@@ -776,7 +822,12 @@ Before any cloud session is fired, in this order:
 1. `cc-cloud declare --id <id> --branch <b> --paths <what it will land> --url <session url>` —
    an undeclared cloud session is unobservable, and `declare` refuses without `--id`/`--branch`.
 2. The session's brief must require **pushing the declared branch as its first act**, so that
-   absence past the boot budget means something (§4.1).
+   absence past the boot budget means something (§4.1). ✅ **Executable since 2026-08-27** — this
+   step is no longer a convention to remember: `cc-offload up --via api` prepends
+   `cc-cloud contract --branch <b>`'s clause to the brief and records `contract=ok` once the send
+   returns 0, and a declaration without it can no longer produce C1 at all (§4.1a). A fire on any
+   other path that skips this does not produce a wrong verdict; it produces `NO-CONTRACT`, which is
+   the honest one.
 3. §5.2 must be wired first — otherwise `com.claude.team-orphan-reaper` may archive the team
    while the session is healthy.
 4. On completion, `cc-cloud retire --id <id>` — or let C3 `LANDED` render it silent, which it does
@@ -817,6 +868,13 @@ is the safe one. A reservation that never binds expires into `U0 UNKNOWN` (never
 finding** (§6.5). If the CLI create route ships a bundle of the local tree rather than cloning the
 remote, then the branch the VM pushes may not be the branch this box declared. Until one fire
 settles it, declare the branch the *brief* names and treat a mismatch as `U0`, not as absence.
+
+**This is now the reason the CLI route ships uncontracted, deliberately.** `cc-offload up --via api`
+knows `$br` because it generates it, so it can render a branch-specific clause; the `--via cli`
+route hands the branch choice to the bundle and cannot. It therefore attaches nothing and records
+nothing, and its sessions read `NO-CONTRACT` rather than `NOT-STARTED` — the same abstention this
+paragraph already prescribed, arrived at by the same route (§4.1a). Wiring a clause into the CLI
+path is blocked on the same unsettled fact, not on the mechanism.
 
 ---
 
@@ -1379,7 +1437,13 @@ and one item does NOT yet traverse `create → execute → claude/* push → clo
 
 🚨 **This is `NOT-STARTED`, which under §4.1 means "the declared ref never appeared" — NOT "the
 session did nothing".** The distinction is this document's founding one and it must not be quietly
-collapsed here of all places. What is established: a create happened, a bundle was uploaded (attempt
+collapsed here of all places.
+
+*(Retrofit, 2026-08-27: **this same fire reads `NO-CONTRACT` today**, and that is the state function
+finally saying in a token what this paragraph had to say in a warning. The brief that went out here
+carried no boot-push clause — none did, §4.1a — so `NOT-STARTED` was a verdict the evidence did not
+support even as it was being correctly caveated in prose. The caveat is now the arm. Nothing about
+the reading below changes; it stops depending on a reader noticing the 🚨.)* What is established: a create happened, a bundle was uploaded (attempt
 1's `Bundle upload failed` is positive evidence that the CLI took the BUNDLE path, not a GitHub
 one), the session was declared, and no ref reached the remote inside 15 minutes. What is **not**
 established: whether the VM executed at all, whether it attempted the push, and what it saw if it

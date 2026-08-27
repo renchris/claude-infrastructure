@@ -5309,7 +5309,7 @@ cloud_state() { # <backlog-id> → echoes cc-cloud's state token, rc 0; rc 2 = C
   # the declaration itself is cat'd first and a future field could share the prefix.
   st="$(printf '%s\n' "$out" | sed -n 's/^state=//p' | tail -1)"
   case "$st" in
-    BOOTING|ALIVE|LANDED|NOT-STARTED|STALLED|ABANDONED) printf '%s' "$st"; return 0 ;;
+    BOOTING|ALIVE|LANDED|NOT-STARTED|NO-CONTRACT|STALLED|ABANDONED) printf '%s' "$st"; return 0 ;;
     *) return 2 ;;   # UNKNOWN, empty, or a token this reap does not model ⇒ cannot tell
   esac
 }
@@ -5327,6 +5327,13 @@ cloud_state() { # <backlog-id> → echoes cc-cloud's state token, rc 0; rc 2 = C
 #                              live work — the exact double-dispatch the local oracle exists to stop.
 #   NOT-STARTED / STALLED /  → open. A verdict the machine can act on: nobody is working this, so
 #   ABANDONED                  it belongs back in the wave. Not a human's problem.
+#   NO-CONTRACT              → block. NOT a fourth spelling of "nobody is working this": cc-cloud
+#                              reaches it precisely when it CANNOT tell, because the fire attached
+#                              no boot-push contract and an absent ref therefore names four worlds
+#                              at once (cc-cloud's THE CONTRACT). Reopening would fire a second
+#                              peer onto work that may be live — the same double-dispatch the
+#                              BOOTING/ALIVE arm refuses — and closing would be a death verdict on
+#                              no evidence. So it parks with the ONE reader that can settle it.
 #   LANDED                   → done. cc-cloud asserts this BY CONTENT (`git ls-tree <trunk> -- <p>`
 #                              per declared path) and returns NOT-landed on an empty path list, so
 #                              it cannot pass vacuously — which is what makes it safe to close on.
@@ -5339,6 +5346,8 @@ cloud_map() { # <state> <id> → verdict triple, rc 0; rc 1 = no action for this
     NOT-STARTED|STALLED|ABANDONED)
       printf 'open\037cloud-%s\037cc-cloud reads %s for this item — no off-box worker is making progress, so it returns to the wave.' \
         "$(printf '%s' "$st" | tr '[:upper:]' '[:lower:]')" "$st" ;;
+    NO-CONTRACT)
+      printf 'block\037cloud-no-contract\037cc-cloud reads NO-CONTRACT for this item: the fire attached no boot-push contract, so the absent ref names four worlds at once (never booted / died / refused entitlement / booted, worked and had nothing to push) and NO verdict is available. Not reopened — the session may be live, and a reopen would fire a SECOND peer onto it. Settle it with `cc-cloud inbox` or `cc-cloud show --item %s`, then `cc-backlog unblock %s`.' "$id" "$id" ;;
     LANDED)
       printf 'done\037cloud-landed\037cc-cloud reads LANDED — every path this off-box session declared is content-present on the trunk ref (git ls-tree, never a commit count). Closed by the reap on that content verdict; `cc-cloud show --item %s` reproduces it.' "$id" ;;
     *) return 1 ;;

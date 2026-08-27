@@ -78,6 +78,14 @@ case "$1" in
   list) cat "$CLOUD_ROWS" ;;
   preflight) echo "PREFLIGHT PASS." ;;
   declare) echo "declared" ;;
+  # The boot-push contract. `contract --branch <b>` renders the clause a brief must carry;
+  # `contract --attached --id <id>` records that the DELIVERED brief carried it. Both are stubbed
+  # here because cc-offload is the only place in the fire that knows the branch and composes the
+  # text — see the up --via api tests.
+  contract) case "${2:-}" in
+              --attached) echo "contract recorded" ;;
+              *) printf 'BOOT CONTRACT — do this FIRST\n    git commit --allow-empty -m "boot"\n' ;;
+            esac ;;
   retire) echo "retired $3" ;;
   show) echo "url=https://claude.ai/code/$2" ;;
   *) exit 2 ;;
@@ -488,6 +496,102 @@ EOF
   # declare must precede the send in the recorded order
   [ "$(grep -n 'cc-cloud declare' "$CALLS" | head -1 | cut -d: -f1)" -lt \
     "$(grep -n 'cc-notify --cloud' "$CALLS" | head -1 | cut -d: -f1)" ] || false
+}
+
+@test "up --via api PREPENDS the boot-push contract to the brief, and records it AFTER the send" {
+  # THE CONTRACT IS ATTACHED HERE OR NOWHERE. cc-cloud's C1 NOT-STARTED means "never booted", and
+  # that reading rests entirely on the brief having required a first push onto the declared branch.
+  # This is the only place in the fire that knows `$br` and composes the delivered text, so a
+  # contract not prepended here does not exist — which is what it was while the plan carried it as
+  # prose and `cc-cloud --table` filed every silent session as never-started.
+  echo "the actual work" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+import sys
+print("session_contract")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+
+  # The clause is ASKED OF cc-cloud, never written here: one owner for the promise and for the
+  # state function that reads its consequence, or the emitter and the reader drift silently.
+  grep -q 'cc-cloud contract --branch claude/fire-' "$CALLS" || false
+  # …and the DELIVERED text carries both halves: the clause and the operator's actual brief. The
+  # payload is MULTI-LINE by construction (the clause is a block), so this reads the stub's record
+  # from the cc-notify line onward rather than expecting one line — a single-line grep would pass
+  # off the clause alone and never notice a fire that shipped the contract and dropped the work.
+  sed -n '/^cc-notify --cloud session_contract/,$p' "$CALLS" | grep 'BOOT CONTRACT' >/dev/null || false
+  sed -n '/^cc-notify --cloud session_contract/,$p' "$CALLS" | grep 'the actual work' >/dev/null || false
+
+  # AFTER the send, never before. The declaration is written before the brief is delivered (§8.1:
+  # the id is a return value of the fire), so recording the contract at declare time would attest
+  # to a promise made to a brief that may never have queued.
+  grep -q 'cc-cloud contract --attached --id session_contract' "$CALLS" || false
+  [ "$(grep -n 'cc-notify --cloud session_contract' "$CALLS" | head -1 | cut -d: -f1)" -lt \
+    "$(grep -n 'cc-cloud contract --attached' "$CALLS" | head -1 | cut -d: -f1)" ] || false
+}
+
+@test "up --via api NEVER records a contract it could not deliver — an unqueued brief promised nothing" {
+  # POSITIVE/NEGATIVE PAIR with the test above, off the same fixture with one seam moved: the send
+  # FAILS. A `--contract` written at declare time would have survived this and left the state
+  # function convicting a session on a promise nothing ever made to it.
+  echo "the actual work" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+import sys
+print("session_nosend")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  NOTIFY_RC=4 CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -ne 0 ]
+  grep -q 'cc-notify --cloud session_nosend' "$CALLS" || false
+  ! grep -q 'cc-cloud contract --attached' "$CALLS" || false
+
+  # POSITIVE CONTROL, same fixture, ONE seam moved back: the send succeeds and the mark IS written.
+  # Without this the assertion above passes off any build that never records a contract at all —
+  # including the pre-change one — which is a detector that fires on nothing.
+  : >"$CALLS"
+  CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+  grep -q 'cc-cloud contract --attached --id session_nosend' "$CALLS" || false
+}
+
+@test "up --via api SURFACES an unrenderable contract instead of shipping a silent uncontracted fire" {
+  # cc-cloud absent or refusing is a real state (a partial install, an older sibling on PATH). The
+  # fire still goes — an undelivered brief helps nobody — but it SAYS the session ships
+  # uncontracted, because the alternative is a board that reads NOT-STARTED off a promise that was
+  # never made. Silence here is the exact defect this whole change removes.
+  echo "the actual work" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git
+  cat >"$STUBDIR/cc-cloud" <<'EOF'
+#!/usr/bin/env bash
+echo "cc-cloud $*" >>"$CALLS"
+case "$1" in
+  declare) echo declared ;;
+  contract) exit 2 ;;          # the verb this build does not have
+  *) exit 2 ;;
+esac
+EOF
+  chmod +x "$STUBDIR/cc-cloud"
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+import sys
+print("session_nocontract")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+  [[ "$output" == *UNCONTRACTED* ]] || false
+  # The brief still reached the session…
+  sed -n '/^cc-notify --cloud session_nocontract/,$p' "$CALLS" | grep 'the actual work' >/dev/null || false
+  # …and NOTHING claimed a contract it never rendered.
+  ! grep -q 'cc-cloud contract --attached' "$CALLS" || false
 }
 
 @test "up --via api derives owner/name portably (no GNU-only lazy quantifier)" {

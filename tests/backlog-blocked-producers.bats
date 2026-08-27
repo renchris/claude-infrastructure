@@ -77,17 +77,24 @@ sub() { printf '%s' "${1//@@/$2}"; }   # <template> <digits> → the fixture tit
 
 # ── FIX 1 — the reap must consult cc-cloud before blocking a venue=cloud claim ──────────────────
 
-# decl <item-id> <branch> <push?> — a cloud declaration + the git fixture classify() reads through.
+# decl <item-id> <branch> <push?> [contract?] — a cloud declaration + the git fixture classify()
+# reads through.
 # ONE fixture, ONE flag: the ref is ABSENT (-> NOT-STARTED, past the 900s boot budget) or PRESENT
 # (-> ALIVE, inside the 21600s life budget). declared_at sits 1000s before the pinned clock so it is
 # past boot and inside life at once — the two states then differ by exactly one observable, which is
 # what makes the pair a control rather than two unrelated fixtures.
 #
+# `contract=ok` is written by DEFAULT because these fixtures model a REAL fire, and a real fire
+# attaches the boot-push contract (cc-cloud's THE CONTRACT; cc-offload writes it after the brief
+# queues). Without it cc-cloud answers NO-CONTRACT rather than NOT-STARTED — an honest "cannot
+# tell" — and the reap correctly declines to reopen. The 4th arg drops it, so that arm has its own
+# fixture rather than being reached by accident.
+#
 # Identity is passed with transient `-c`, never `git config`: this suite runs inside a linked
 # worktree that shares one .git/config with ~100 siblings, and `git -C ""` is a documented NO-OP, so
 # an all-expansion target would silently re-author commits in the REAL repo (the 2026-08-05 leak).
 decl() {
-  local item="$1" branch="$2" push="${3:-no}"
+  local item="$1" branch="$2" push="${3:-no}" contract="${4:-yes}"
   local bare="$BATS_TEST_TMPDIR/remote.git" work="$BATS_TEST_TMPDIR/work"
   if [ ! -d "$bare" ]; then
     git init -q --bare "$BATS_TEST_TMPDIR/remote.git"
@@ -109,6 +116,8 @@ url=https://claude.ai/code/session_$item
 item=$item
 declared_at=$(( CC_CLOUD_NOW - 1000 ))
 EOF
+  [ "$contract" = yes ] && printf 'contract=ok\n' >> "$CC_CLOUD_STATE/session_$item.decl"
+  return 0
 }
 
 # reap_cloud <push?> — files a row, claims it off-box, ages the claim past the stale gate, sweeps.
@@ -138,6 +147,20 @@ status_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id=
   # peer onto live work, the exact double-dispatch the local oracle existed to prevent.
   reap_cloud yes
   grep -q 'live-cloud-worker' "$REAPLOG"
+  [ "$(status_of "$ROW")" = blocked ]
+}
+
+@test "FIX1 CONTROL: an UNCONTRACTED fire is NO-CONTRACT, and that BLOCKS rather than reopening" {
+  # The same absent ref as the FIX1 case above, with exactly one thing removed: the fire never
+  # promised a first push. cc-cloud then reads NO-CONTRACT — four worlds at once, including a
+  # session that booted, worked and had nothing to push — and reopening on that would fire a
+  # SECOND peer onto possibly-live work. So it parks, and NAMES the reader that can settle it.
+  ROW="$(bash "$CB" add --title "uncontracted off-box work" --project p --source t)"
+  decl "$ROW" "claude/fire-20260812T071538Z-80941-1" no no
+  bash "$CB" claim "$ROW" --by dispatcher-9999 --venue cloud --force >/dev/null 2>&1
+  REAPLOG="$BATS_TEST_TMPDIR/reap-nc.log"
+  CC_BACKLOG_NOW="$(( $(date +%s) + 100000 ))" bash "$CB" reap >"$REAPLOG" 2>&1
+  grep -q 'NO-CONTRACT' "$REAPLOG"
   [ "$(status_of "$ROW")" = blocked ]
 }
 

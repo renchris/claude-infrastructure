@@ -144,6 +144,10 @@ state_colour() {
     ALIVE|LANDED)          printf '%s' "$C_OK" ;;
     BOOTING)               printf '%s' "$C_WARN" ;;
     NOT-STARTED|STALLED|ABANDONED) printf '%s' "$C_BAD" ;;
+    # NO-CONTRACT is not a fault of the SESSION — it says this box cannot tell, because the fire
+    # attached no boot-push contract. Colouring it like a death would re-assert exactly the verdict
+    # cc-cloud declined to make.
+    NO-CONTRACT)           printf '%s' "$C_WARN" ;;
     *)                     printf '%s' "$C_META" ;;   # UNKNOWN and anything cc-cloud grows later
   esac
 }
@@ -218,14 +222,20 @@ cmd_ls() {
     # LANDED is terminal-GOOD and must not be tallied as "working" — a finished session stops
     # pushing, which is exactly why cc-cloud checks C3 before C4.
     case "$st" in
-      ALIVE|BOOTING) n_live=$((n_live+1)) ;;
-      LANDED)        n_done=$((n_done+1)) ;;
-      UNKNOWN|'')    n_unk=$((n_unk+1)) ;;
-      *)             n_dead=$((n_dead+1)) ;;
+      ALIVE|BOOTING)       n_live=$((n_live+1)) ;;
+      LANDED)              n_done=$((n_done+1)) ;;
+      # NO-CONTRACT joins UNKNOWN rather than the dead tally: both mean "no verdict is available",
+      # and the summary line already says exactly that about this column.
+      UNKNOWN|NO-CONTRACT|'') n_unk=$((n_unk+1)) ;;
+      *)                   n_dead=$((n_dead+1)) ;;
     esac
     local action='-'
     case "$st" in
       NOT-STARTED|STALLED|ABANDONED) action="open $url" ;;
+      # `inbox` reads the CONTROL PLANE, which is the only place that can say whether an
+      # uncontracted session booted and asked a question — the exact distinction the missing
+      # contract destroyed. `open $url` would be the right answer to a question nobody asked yet.
+      NO-CONTRACT)                   action="cc-cloud inbox" ;;
       LANDED)                        action="cc-offload land" ;;
       ALIVE|BOOTING)                 action="cc-offload say ${id} '…'" ;;
     esac
@@ -234,7 +244,7 @@ cmd_ls() {
       "$id" "$sc" "$st" "$C_OFF" "$(age_human "$age")" "$acct" "$br" "$C_META" "$action" "$C_OFF"
   done <<<"$rows"
 
-  [ "$quiet" = 1 ] || printf '%s%d working · %d landed · %d need you · %d UNKNOWN (a sensor could not run — never a verdict)%s\n' \
+  [ "$quiet" = 1 ] || printf '%s%d working · %d landed · %d need you · %d UNKNOWN (a sensor could not run, or the fire promised no first push — never a verdict)%s\n' \
     "$C_META" "$n_live" "$n_done" "$n_dead" "$n_unk" "$C_OFF"
   return 0
 }
@@ -571,13 +581,37 @@ cmd_up_api() {
         || note "cc-offload: custody could not be opened for $sid — the close-integrity arm is NOT armed for it."
     fi
 
-    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$(cat "$pf")" >/dev/null 2>&1
+    # ── THE BOOT-PUSH CONTRACT, ATTACHED HERE OR NOWHERE ────────────────────────────────────────
+    # cc-cloud's C1 NOT-STARTED means "never booted", and that reading rests on ONE thing: the
+    # brief having REQUIRED a first push onto the declared branch, empty commit and all. This is
+    # the only place in the fire that both knows `$br` and composes the delivered text, so a
+    # contract not prepended here is a contract that does not exist — which is what it was for four
+    # weeks, while `cc-cloud --table` filed every silent session as never-started (85% of the board,
+    # measured 2026-08-27). The clause is asked of cc-cloud rather than written here: one owner for
+    # the promise and its consequence, or the emitter and the reader drift.
+    local brief_body clause contracted=0
+    clause="$("$CLOUD_BIN" contract --branch "$br" --remote origin 2>/dev/null)"
+    if [ -n "$clause" ]; then
+      brief_body="$clause"$'\n\n---\n\n'"$(cat "$pf")"; contracted=1
+    else
+      note "cc-offload: cc-cloud could not render the boot contract — $sid ships UNCONTRACTED."
+      note "  Its silence will read NO-CONTRACT (honest), never NOT-STARTED (a verdict it has not earned)."
+      brief_body="$(cat "$pf")"
+    fi
+
+    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$brief_body" >/dev/null 2>&1
     local drc=$?
     if [ "$drc" != 0 ]; then
       note "cc-offload: $sid created+declared but the brief did NOT queue (cc-notify exit $drc)."
       note "  Retry just the delivery: cc-notify --cloud $sid \"\$(cat $pf)\""
       rc=11; break
     fi
+    # AFTER the send, never before. The declaration is written before the brief is delivered (§8.1:
+    # the id is a return value of the fire), so a `--contract` at declare time would attest to a
+    # promise made to a brief that may never have queued — and the failure arm right above is
+    # exactly that case. Recording it here means `contract=ok` is a fact about text that reached
+    # the session, not about text this box intended to send.
+    [ "$contracted" -eq 1 ] && "$CLOUD_BIN" contract --attached --id "$sid" >/dev/null 2>&1
     fired=$((fired+1))
     printf '%s✓%s %s on %s — anthropic_cloud VM, repo ATTACHED, branch %s\n' "$C_OK" "$C_OFF" "$sid" "$account" "$br"
     printf '  view   : https://claude.ai/code/%s\n  observe: cc-offload ls\n  land   : cc-offload land\n' "$sid"
