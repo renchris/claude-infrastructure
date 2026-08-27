@@ -156,6 +156,54 @@ branch queue is empty or explicitly abandoned with reasons, the production deplo
 single-brained and audited, and doc_classifier's authorization holes are closed with tests.
 
 ## Status log
+- **2026-08-27 — THIRD cloud fire of `8f59467c92b0`, and the finding is that the RETURN RAILS are
+  rc-0 no-ops.** Same VM shape as 08-15 and 08-17 (one checkout, GitHub scope of one repo, no
+  `~/Development`, no `~/.claude/autonomy/backlog.jsonl`). R1-R4 untouched and still **open, correct
+  as filed, unstarted** — the plan's content is not refuted, only the venue. Two things this fire
+  measured that the prior two could not:
+  **(1) 🚨 the remedy filed on 2026-08-21 does not catch this row either.**
+  `cloud-venue-foreign-project-2026-08-21.md` §5 specifies `ineligible-foreign-project`, keyed on
+  `item.project ∈ CLOUD_PROJECTS` — and it is still unlanded 6 days on (`grep 'CLOUD_PROJECTS' bin/`
+  → zero hits). But landedness is the smaller point: this row's project label is
+  `claude-infrastructure` (`find-plan.sh:70` derives it from the plan FILE's path, and the dispatch
+  brief carries it verbatim), which is IN the set, so the arm acquits. That makes **three** filed
+  remedies that all pass this row — the 08-16 decision's two options, the 08-21 arm, and the
+  `projectName` data entry that depends on it. All three are keyed on `project`, and for a
+  cross-repo master the file and the work sit in different repos.
+  **(2) the completion rails cannot park anything from this venue.** Measured at verb level against
+  the VM's store shape: `cc-backlog block 8f59467c92b0` and `cc-backlog done 8f59467c92b0` each
+  print `unknown id` to stderr and **exit 0 having appended nothing** — and the third rail is the
+  same: `cc-notify --role desk` returns `verdict=unresolvable enqueued=0`, role unset and the phone
+  fallback unwired, **exit 0**. All three return rails the brief names are rc-0 no-ops here; the git
+  branch is the only channel that survives the trip. So the 08-17 conclusion —
+  "a disproof in plan prose does not park an item" — understates it: *no* action available to a
+  cloud worker parks a foreign-tree item, because the only rail that parks writes to a store the
+  venue does not have and reports success when it fails. The row stays open, the falsifier stays
+  unrefuted, discovery re-mints. That is the generator; a fourth fire is the system's default
+  behaviour, not an accident.
+  **What WOULD convict it, measured rather than proposed:** question 1b already resolves this
+  dodRef to a trunk pathspec and proves it readable, so the plan BODY is one `git show` away at zero
+  extra cost — and it names `~/Development/reso-management-app` ×3 and `~/Development/doc_classifier`
+  ×1 against the lane's single clone. A fail-open conjunct beside 1b that convicts on a positive
+  reading of a foreign `~/Development/<repo>` root is the "08-15 subject discriminator" the 08-17
+  entry asked for, and it composes with (does not replace) the 08-21 project arm: that one catches a
+  correctly-labelled FOREIGN row, this one catches a correctly-labelled HOME row whose work is
+  foreign. Full measurement, spec and the fail-open rules →
+  `docs/research/venue-foreign-master-third-fire-2026-08-27.md`. **No patch carried**, per
+  `cc-eligible`'s own `OFFBOX_LANE` rule and `cc-venue`'s guard — a cloud VM may not build the venue
+  rule, and `bats` is not installed here. **Disposition: `cc-backlog block`, operator-owned** —
+  the verb is unavailable from the VM (finding 2), so it is a step on the box that holds the ledger,
+  not something this session can claim to have done.
+  **(3) found by trying to land the write-up: the cloud lane cannot land in `claude-infrastructure`
+  either.** `scripts/ship-land.sh` exits 6 (GATE RED) on `unattended-path-lint --selftest`, which is
+  not in the diff (two `.md` files) and cannot be: the lint's subject is the macOS launchd stock
+  floor and its fixtures need `md5` (`/sbin/md5`), `plutil` and `launchctl` — all ABSENT on Linux —
+  so 11 of 42 arms return `want 1, got 0` and the selftest correctly reports a detector that does
+  not discriminate. There is no `uname` guard, so it fails closed for any Linux caller. That widens
+  the family's recorded venue limits from "cannot reach a foreign tree" and "cannot park an item" to
+  include **"cannot land in its own"** — all three the same shape, a rail whose implementation
+  assumes the operator's box. This entry is therefore pushed on the fire branch
+  `claude/fire-20260827T062244Z-2364-1` and **unlanded**; the land is an operator-owned step.
 - **2026-08-17 — the SAME row was cloud-dispatched AGAIN, and the re-fire is the finding.**
   `8f59467c92b0` was fired into an identical VM shape (one checkout, GitHub scope of one repo, no
   `~/Development`) ~2 days after the 08-15 entry below wrote its disproof into THIS FILE. R1-R4 were
