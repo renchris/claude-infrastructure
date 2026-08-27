@@ -86,6 +86,49 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-27 — A2's "THE LAND IS THE BLOCKER" NOW HAS A MECHANISM: `/ship`'s GATE CARRIES A
+  DARWIN-ONLY ARM, SO A CLOUD VM EXITS 6 BEFORE THE PUSH NO MATTER WHAT ITS DIFF IS.** §4's A2
+  heading has said since 2026-08-17 that the return path is not the blocker and the LAND is. It did
+  not name a mechanism. Found by running the real pipeline from a real cloud VM on a diff that
+  cannot be red: **one prose block appended to this file, zero code**. `scripts/ship-land.sh
+  --dry-run` → **exit 6, GATE RED, not pushing** — every static, ratchet and coverage arm ahead of
+  it clean (`utc-stamp-lint` ×3, `pipefail-sigpipe-lint`, `self-path-lint` 377 files,
+  `pane-spawn-coverage-lint` 433 files/23 sites), and the refusal is
+  `unattended-path-lint --selftest FAILED (11 of 42) — the detector does not discriminate.`
+  🚨 **THE RED IS NOT THE DIFF'S, AND THAT IS MEASURED RATHER THAN ARGUED.** The same selftest was
+  run at `origin/main` in a detached worktree with the commit ABSENT: **identical, 11 of 42.** The
+  landing diff touches exactly one path (`git diff origin/main..HEAD --name-only` → this file) and
+  adds no shell, no python and no plist, so nothing in it is reachable by this detector at all.
+  ✅ **THE CAUSE IS A HOST CAPABILITY, NOT A TREE DEFECT, AND THE OBVIOUS SUSPECT IS REFUTED.** The
+  lint reads launchd `ProgramArguments` and `EnvironmentVariables:PATH` through
+  **`/usr/libexec/PlistBuddy`** (`:992`, `:1003`) and names `plutil` among its stock binaries
+  (`:366`). Both are **macOS-only and both are ABSENT here** (verified). Every failing arm is a
+  `want 1, got 0` — the detector fires on NOTHING, which is the signature of a scanner that cannot
+  read its input rather than one that reads it wrongly. **REFUTED: the hardcoded `PY=/usr/bin/python3`
+  (`:134`).** That is the tempting explanation on a box whose `python3` resolves to
+  `/usr/local/bin/python3`, but `/usr/bin/python3` exists as a symlink here and runs at
+  **Python 3.11.15, rc 0**, so the interpreter is not the discriminator.
+  ✅ **THE LINT IS BEHAVING CORRECTLY AND THAT IS THE POINT.** Its own header states the law —
+  *"exit 2 = … unrunnable scanner (LOUD, never silent-green — a check that could not run has
+  nothing to say about the tree)"* — and a non-discriminating detector refusing to certify is
+  exactly right; a silent green here would be far worse. **The defect is not in the lint. It is that
+  a Darwin-capability arm sits on the LAND path, which is the one path a cloud VM must complete**,
+  and nothing upstream of it declares that dependency. A cloud session therefore cannot reach the
+  push under any diff, cannot self-land, and its work survives only as a branch ref.
+  ⚠️ **THIS IS THE UPSTREAM HALF OF THE ONE DEADLINE ITEM IN THE LANE AUDIT.** That audit closed on
+  *"15 sessions are `review_ready` with no ref on origin — completed work inside containers that get
+  reclaimed"*, and it read that as a return-path gap. It is also a LAND gap: a VM that finishes
+  cannot land, so **pushing the branch is the only durable act available to it** and everything
+  after the push is somebody else's lane. This session pushed
+  `claude/fire-20260827T185154Z-45682-1` (`b668fa4a`) for exactly that reason and stopped at `📦`
+  deliberately — **a `📦` from a cloud VM is a structural terminal state, not a session's choice**,
+  and reading it as one is how the board came to file succeeded sessions as NOT-STARTED.
+  **NOT FIXED HERE, and the refusal is the same one that produced the finding.** The cure is a
+  capability gate — the arm should ABSTAIN (declared, attested in `land.log`) on a host without
+  PlistBuddy rather than fail the land, which is the `smoke:"skipped"` discipline v2 already applies
+  one phase later. That is a change to the land gate, it wants `tests/unattended-path-lint.bats` and
+  the eleven `cc-dispatch` suites, and **`bin/cc-bats` is FATAL on this host** — the same class of
+  missing-capability that caused the finding. Filed, not guessed.
 - **2026-08-27 — DISPATCH PREMISE REFUTED FOR `70f0001c657b`, THE DRAIN'S OWN SSOT ROW: ITS ONLY
   RETRACTION PATH IS UNFALSIFIABLE BY CONSTRUCTION, SO THE STANDING "REPORT IT, DO NOT WORK IT" CAN
   NEVER BE DISCHARGED BY CLOSING THE ROW.** A Claude Cloud VM was dispatched on `70f0001c657b` with
