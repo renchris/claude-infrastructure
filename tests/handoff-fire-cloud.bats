@@ -461,3 +461,35 @@ EOF
   [ -s "$CLOUD_DECL_LOG" ]
   [ ! -f "$BATS_TEST_TMPDIR/pf-off.log" ]                # the override SKIPS the probe, not just its verdict
 }
+
+# ── 20 · THE BOOT BEACON reaches the real create (backlog 0c8b39b67665) ─────────────────────────
+# The library's own suite (tests/cloud-create-lib.bats 20-23) proves `cc_cloud_payload` composes the
+# beacon correctly. This case proves the FIRE actually hands that composition to the create, which
+# is a separate fact: the trailer used to be a heredoc inline in this script, so a refactor that
+# left the inline copy in place would keep every library case green while firing the old payload.
+# Read as an EFFECT — the stub's own argv — exactly as case 17 does, never as a string in the source.
+#
+# RED-PROOF (re-runnable): replay against `git show <pre-fix sha>:scripts/handoff-fire.sh` in a
+# scratch tree. This case goes RED there — that payload's only push sat under "read this before you
+# finish", so there is no empty commit and no push ahead of the return section. Case 17 stays GREEN
+# on both trees by design: it is the non-discrimination control that the branch is still created
+# before it is pushed, which this change must not regress.
+@test "20 the payload handed to the create instructs a BOOT BEACON before the return push" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: t" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ -s "$BATS_TEST_TMPDIR/create.log" ]
+  local beacon first_push ret
+  beacon="$(grep -n 'git commit --allow-empty' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  first_push="$(grep -n 'git push' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  ret="$(grep -n 'HOW TO RETURN IT' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$beacon" ] || { echo "the fired payload asks for no boot beacon — C1 NOT-STARTED cannot mean 'never booted'"; false; }
+  [ -n "$ret" ] || { echo "the fired payload lost its return instructions"; false; }
+  [ "$beacon" -lt "$first_push" ] || { echo "the beacon commit must precede every push (beacon=$beacon push=$first_push)"; false; }
+  [ "$first_push" -lt "$ret" ] || { echo "the first push is inside the RETURN section — the defect this closes"; false; }
+  # Two pushes, and the beacon's branch is the one the fire assigned and declared.
+  [ "$(grep -c 'git push' "$BATS_TEST_TMPDIR/create.log")" -ge 2 ]
+  grep -q 'git switch -c claude/fire-' "$BATS_TEST_TMPDIR/create.log"
+  # The brief itself still arrives — the trailer is an addition, not a replacement.
+  grep -q 'cloud venue gate fixture payload' "$BATS_TEST_TMPDIR/create.log"
+}

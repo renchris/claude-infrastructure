@@ -316,3 +316,87 @@ View: https://claude.ai/code/session_01REALREALREALREALREALR?from=cli&m=0"
   run git check-ref-format --branch "$a"
   [ "$status" -eq 0 ]
 }
+
+# ── 20-23 · THE BOOT BEACON — the producer half of §4.1's absence contract (backlog 0c8b39b67665) ─
+#
+# WHAT THESE DEFEND, and why a "does the payload mention a push" check would not have caught the
+# defect. The trailer that preceded `cc_cloud_payload` DID instruct a push, and case 17 of
+# tests/handoff-fire-cloud.bats already asserted that it created the branch before pushing it. What
+# it never asserted — because the contract it came from was prose in a design document and nothing
+# executable pointed at it — is WHEN. That trailer's push sat under a heading reading "read this
+# before you FINISH" and asked for a push "before you finish", so the only push any brief ever
+# requested was a return-time one, while `bin/cc-cloud`'s C1 arm had already been written to read an
+# absent ref past a 900 s budget as "never booted". These cases are therefore about ORDER and
+# EMPTINESS, not about presence:
+#
+#   20  the beacon exists, is an EMPTY commit, and creates the branch before pushing it
+#   21  the beacon precedes the return push — the RED-PROOF case, and the only one that fails
+#       against the old trailer (which had exactly one push, at the end)
+#   22  the caller's brief survives intact, and comes first
+#   23  the branch the beacon names is the branch that was passed, byte for byte
+#
+# RED-PROOF (re-runnable): replay 20-23 against `git show <pre-fix sha>:scripts/lib/cloud-create.sh`
+# — `cc_cloud_payload` does not exist there at all, so all four error out; against a hand-restored
+# copy of the old trailer text, 21 is the discriminating failure.
+
+@test "20 the payload's FIRST instruction is a boot beacon, and it is an EMPTY commit" {
+  local p
+  p="$(cc_cloud_payload "do the work" "claude/fire-20260827T000000Z-1")"
+  # An empty commit is the whole point: §4.1 says "an empty commit is enough", and a beacon that
+  # required content could not be the FIRST act — there is no content yet.
+  [[ "$p" == *"git commit --allow-empty"* ]] || { echo "no empty-commit beacon in the payload"; false; }
+  local sw cm push
+  sw="$(printf '%s\n' "$p" | grep -n 'git switch -c claude/fire-20260827T000000Z-1' | head -1 | cut -d: -f1)"
+  cm="$(printf '%s\n' "$p" | grep -n 'git commit --allow-empty' | head -1 | cut -d: -f1)"
+  push="$(printf '%s\n' "$p" | grep -n 'git push -u origin HEAD' | head -1 | cut -d: -f1)"
+  [ -n "$sw" ] && [ -n "$cm" ] && [ -n "$push" ] || { echo "beacon incomplete: sw=$sw cm=$cm push=$push"; false; }
+  # The branch must exist before a commit can go on it, and the commit before the push can carry it.
+  [ "$sw" -lt "$cm" ] || { echo "switch -c must precede the commit (sw=$sw cm=$cm)"; false; }
+  [ "$cm" -lt "$push" ] || { echo "the commit must precede the push (cm=$cm push=$push)"; false; }
+}
+
+@test "21 the beacon comes BEFORE the return push — the whole contract is the ordering" {
+  # THE DISCRIMINATING CASE. A trailer with one push at the end satisfies "the payload instructs a
+  # push" and still leaves C1 NOT-STARTED unable to separate a dead VM from a working one, because
+  # the first observable event is the LAST thing the session does. Two pushes, beacon first.
+  local p n_push first_push last_push beacon
+  p="$(cc_cloud_payload "do the work" "claude/fire-20260827T000000Z-1")"
+  n_push="$(printf '%s\n' "$p" | grep -c 'git push')"
+  [ "$n_push" -ge 2 ] || { echo "expected a boot push AND a return push; found $n_push"; false; }
+  beacon="$(printf '%s\n' "$p" | grep -n 'git commit --allow-empty' | head -1 | cut -d: -f1)"
+  first_push="$(printf '%s\n' "$p" | grep -n 'git push' | head -1 | cut -d: -f1)"
+  last_push="$(printf '%s\n' "$p" | grep -n 'git push' | tail -1 | cut -d: -f1)"
+  [ "$beacon" -lt "$first_push" ] || { echo "the beacon commit must precede every push"; false; }
+  [ "$first_push" -lt "$last_push" ] || { echo "the boot push and the return push must be distinct"; false; }
+  # And the instruction must READ as a first act rather than as a return step — the exact way the
+  # predecessor failed. The beacon block is above the return heading, not inside it.
+  local ret_heading
+  ret_heading="$(printf '%s\n' "$p" | grep -n 'HOW TO RETURN IT' | head -1 | cut -d: -f1)"
+  [ -n "$ret_heading" ] || { echo "the payload lost its return instructions"; false; }
+  [ "$first_push" -lt "$ret_heading" ] || { echo "the boot push is inside the RETURN section — that is the defect"; false; }
+}
+
+@test "22 the caller's brief is preserved verbatim and comes first" {
+  # The trailer is an addition, never a replacement: a composer that dropped or reordered the brief
+  # would fire a session with no task.
+  local brief p brief_line beacon
+  brief='TASK — a multi-line brief.
+Second line, with $dollars and "quotes" and a trailing backslash \'
+  p="$(cc_cloud_payload "$brief" "claude/fire-20260827T000000Z-1")"
+  [[ "$p" == *'Second line, with $dollars and "quotes" and a trailing backslash \'* ]] \
+    || { echo "the brief was mangled"; false; }
+  brief_line="$(printf '%s\n' "$p" | grep -n 'TASK — a multi-line brief' | head -1 | cut -d: -f1)"
+  beacon="$(printf '%s\n' "$p" | grep -n 'git commit --allow-empty' | head -1 | cut -d: -f1)"
+  [ "$brief_line" -lt "$beacon" ] || { echo "the brief must come before the trailer"; false; }
+}
+
+@test "23 the beacon names the branch it was PASSED — not a re-derived one" {
+  # A composer that called cc_cloud_branch_name itself would name a branch the firing side never
+  # declared, which is §10.2c's hazard verbatim: a declaration watching a ref nothing will push.
+  local b p
+  b="$(cc_cloud_branch_name)"
+  p="$(cc_cloud_payload "hi" "$b")"
+  [[ "$p" == *"git switch -c $b"* ]] || { echo "the payload does not name '$b'"; false; }
+  # Exactly one branch name appears, so there is no second name for the VM to pick.
+  [ "$(printf '%s\n' "$p" | grep -c 'claude/fire-')" -eq 1 ]
+}

@@ -8013,41 +8013,21 @@ if [ "$CLOUD" = 1 ]; then
   CLOUD_BRANCH="$(cc_cloud_branch_name)"
   CLOUD_CWD="$PWD"; [ -d "$CLOUD_CWD" ] || CLOUD_CWD="$REPO"
 
-  # The payload = the brief, plus the ONE instruction that makes the result reachable. A cloud VM
-  # has no ~/.claude, no cc-notify and no /ship (§1, G6), so the local trailers below — the
-  # back-channel ping, the self-retire, the pane bookkeeping — are all unrunnable there. Its push
-  # IS its back-channel: scripts/cloud-reconcile.sh discovers `claude/*` on the remote and hands it
-  # to the sanctioned local lander.
+  # The payload = the brief, plus the two instructions that make the session observable and its
+  # result reachable — the BOOT BEACON and the return push. Both live in `cc_cloud_payload`
+  # (scripts/lib/cloud-create.sh) rather than inline here, and that is deliberate: the beacon is a
+  # property of firing a cloud session AT ALL, not of firing one from this script, so a second
+  # caller must not be able to compose a payload that omits it. The branch mechanics are the half
+  # that IS specific to this leg — cc_cloud_create's signature is `cfg cwd prompt`, so the payload
+  # is the only place the branch can be established — and the composer's own header records why.
   #
-  # 🚨 THE PAYLOAD SAYS `switch -c` FIRST, AND THAT ORDER IS THE WHOLE POINT (B1, backlog
-  # 7c6ff16259a0; docs/research/scaling-bottlenecks-2026-08-09/06-offbox.md §B1). It used to say
-  # only `git push origin HEAD:<branch>` — a push of a detached-from-anything HEAD to a ref name
-  # this side INVENTED, which is not the session's working branch. This repo had already learned
-  # that lesson once and did not carry it forward: CLOUD_OBSERVABILITY.md:737-740 records §7.4's
-  # push probe as void as first written, with the fix stated verbatim — "the fix is `git switch -c`
-  # first, so the control is a real session branch". `switch -c` / `checkout -b` then appeared
-  # NOWHERE in this file or any cloud-*.sh; only in that one prose line.
-  #
-  # ⚠️ Note WHY the sibling lane needs none of this, because the difference is not style. The API
-  # create (scripts/cloud-create-api.py:357/411) puts the branch in the create body's
-  # `outcomes.git_info.branches` — "what names the branch the VM may push to", its own words — so
-  # there the name is authorised AT CREATE. cc_cloud_create's signature is `cfg cwd prompt`
-  # (scripts/lib/cloud-create.sh:185): the CLI leg has NO branch parameter at all, so the payload
-  # is the only place the branch can be established, and establishing it is a real `switch -c`.
-  CLOUD_PAYLOAD="$(cat "$PROMPT_FILE")
-"'
-── HOW TO RETURN YOUR WORK (this session runs off-box; read this before you finish) ──
-You are running in an Anthropic-managed VM. Nothing on the operator'"'"'s machine can see your
-filesystem, your processes or your terminal, and you cannot run this repo'"'"'s /ship. Your ONLY
-channel back is a git push, and it must go to exactly this branch — CREATE IT FIRST, then push it:
-
-    git switch -c '"$CLOUD_BRANCH"'
-    git push -u origin HEAD
-
-That branch name was assigned by the firing side and is already declared as the one thing watched
-for your progress — a push anywhere else is invisible and your work will strand. Push whatever you
-have before you finish, even if the work is incomplete; an unpushed cloud session leaves no trace
-of any kind. A local reconciler (scripts/cloud-reconcile.sh) discovers the branch and lands it.'
+  # 🚨 THE BEACON IS THE PRODUCER HALF OF §4.1'S ABSENCE CONTRACT, and it was prose-only until
+  # backlog `0c8b39b67665`. `bin/cc-cloud` had already been built against it: its C1 arm reads an
+  # absent ref past the boot budget as NOT-STARTED, a verdict meaning "never booted". The trailer
+  # this replaces asked only for a RETURN-time push, so an absent ref also covered a session that
+  # booted and is still working — and the boot budget (900 s) is far shorter than a real session's
+  # first commit, making the false-death reading the common one rather than the corner case.
+  CLOUD_PAYLOAD="$(cc_cloud_payload "$(cat "$PROMPT_FILE")" "$CLOUD_BRANCH")"
 
   if [ "$DRY" = 1 ]; then
     echo "-- DRY RUN: cloud fire (no create issued, no quota spent)"

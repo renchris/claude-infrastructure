@@ -150,6 +150,44 @@ session's brief requires its **first act** to be pushing that branch — an empt
 Absence then becomes informative: no ref inside the budget is `BOOTING` (expected); no ref past it
 is `NOT-STARTED` (actionable — re-fire, or check entitlement).
 
+#### 4.1a The contract is now PRODUCED, not merely stated — `cc_cloud_payload` (backlog `0c8b39b67665`)
+
+⚠️ **This paragraph was prose only for the whole life of this document, and the reader had already
+been built against it.** `bin/cc-cloud`'s C1 arm reads an absent ref past `declared_at + boot_s` as
+`NOT-STARTED`, a verdict whose entire meaning is *"the VM never booted"* — and nothing in the tree
+ever told a VM to push at boot. The one brief-composer on the fire path (`handoff-fire.sh`'s cloud
+leg) put its push under a heading reading *"read this before you FINISH"* and asked the session to
+*"push whatever you have before you finish"*: a **return-time** push, the only one any brief has
+ever requested. Under that payload an absent ref covered two opposite worlds —
+
+| the ref is absent because… | `NOT-STARTED` is… |
+| --- | --- |
+| never booted · died at boot · refused entitlement | right |
+| **booted, working, has not reached its first commit** | **a false death verdict** |
+
+— and the boot budget is 900 s, far shorter than a real session's first commit, so the false-death
+arm was the *common* reading rather than the corner case. That is §4.2's `[ -z "$out" ]` conflation
+one level up: a confident terminal verdict computed from evidence that cannot tell the two worlds
+apart. It also mattered more than a wrong row on a board, because `NOT-STARTED` is what §5.2's three
+liars — including the **destructive** `com.claude.team-orphan-reaper` — are wired to abstain on.
+
+The producer is `cc_cloud_payload` / `cc_cloud_boot_beacon` in **`scripts/lib/cloud-create.sh`**,
+called by `handoff-fire.sh`. It sits in the shared library rather than inline in the caller for one
+reason: the beacon is a property of firing a cloud session *at all*, so a second caller must not be
+able to compose a payload that omits it. (The branch mechanics — `switch -c` — genuinely are
+CLI-leg-specific, because the API lane authorises the branch in the create body; the *beacon* is
+needed on both lanes, since authorising a branch name says nothing about whether the VM pushes to
+it.) Proved by `tests/cloud-create-lib.bats` (the beacon's content and its ordering *before* the
+return push) and `tests/handoff-fire-cloud.bats` case 20 (the beacon reaching the real create's
+argv, not merely existing as a string in the source).
+
+**One consequence, landed in the same change:** a session that beacons and produces nothing leaves a
+branch whose content diff against trunk is empty. Under `cloud-reconcile.sh`'s smallest-diff-first
+ordering that branch sorts *ahead of every real result*, so it would be the first thing handed to
+`desk-land` on every sweep, forever. `range_is_empty()` refuses it — by **content**, never by commit
+count, which reads non-zero for a beacon-only branch and zero for one a sibling rebase already
+absorbed.
+
 ### 4.2 The discriminator the whole design rests on
 
 Measured, not assumed:
@@ -776,7 +814,12 @@ Before any cloud session is fired, in this order:
 1. `cc-cloud declare --id <id> --branch <b> --paths <what it will land> --url <session url>` —
    an undeclared cloud session is unobservable, and `declare` refuses without `--id`/`--branch`.
 2. The session's brief must require **pushing the declared branch as its first act**, so that
-   absence past the boot budget means something (§4.1).
+   absence past the boot budget means something (§4.1). ✅ **BUILT** — `cc_cloud_payload`
+   (`scripts/lib/cloud-create.sh`) composes every CLI-leg payload with the boot beacon ahead of the
+   brief's work, and `handoff-fire.sh` calls it rather than composing its own. See §4.1a for why
+   this was the load-bearing gap: until it landed, `NOT-STARTED` could not distinguish *never
+   booted* from *booted and not yet committed*, and the second is the likelier world inside a 900 s
+   budget.
 3. §5.2 must be wired first — otherwise `com.claude.team-orphan-reaper` may archive the team
    while the session is healthy.
 4. On completion, `cc-cloud retire --id <id>` — or let C3 `LANDED` render it silent, which it does

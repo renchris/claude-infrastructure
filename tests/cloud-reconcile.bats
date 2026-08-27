@@ -848,3 +848,77 @@ dead_pid() {
   [[ "$output" == *"NOT filled"* ]] || false   # … but the non-verdict is NAMED
   grep -q '^paths=$' "$CC_CLOUD_STATE/nofill.decl"
 }
+
+# ── THE BOOT BEACON'S CONSEQUENCE HERE (backlog 0c8b39b67665) ────────────────────────────────
+# CLOUD_OBSERVABILITY.md §4.1 requires a fired cloud session's FIRST act to be pushing its declared
+# branch, "an empty commit is enough" — the producer is `cc_cloud_payload` in
+# scripts/lib/cloud-create.sh, landed with these arms. That makes a branch carrying ONLY an empty
+# commit a routine object on the remote, and it is the worst possible shape for this script: its
+# content diff against trunk is empty, so under smallest-diff-first it sorts AHEAD OF EVERY REAL
+# RESULT and would be the first thing handed to desk-land on every sweep, forever, because nothing
+# about it ever changes.
+#
+# RED-PROOF (re-runnable): replay these three against `git show <pre-guard sha>:scripts/cloud-
+# reconcile.sh`. The first two go RED there — the beacon branch is fetched, re-authored and handed
+# to the lander. The third is the non-discrimination control and is GREEN on both trees.
+
+push_beacon_branch() {  # $1=branch — a boot beacon and nothing else: one EMPTY commit
+  local b="$1" w="$D/w-beacon-$(printf '%s' "$b" | tr / -)"
+  git -C "$REPO" worktree add -q -b "$b" "$w" main
+  git -C "$w" -c user.email=noreply@anthropic.com -c user.name="Claude" \
+    commit -q --allow-empty -m 'chore: cloud session boot beacon'
+  git -C "$w" push -q origin "HEAD:refs/heads/$b"
+  git -C "$REPO" worktree remove --force "$w"
+  git -C "$REPO" branch -q -D "$b"
+  rm -rf "$w"
+  true
+}
+
+@test "a BEACON-ONLY branch is never handed to the lander — landing nothing is not a land" {
+  push_beacon_branch claude/beacon-only
+  decl session_beacon claude/beacon-only
+  run env CONFIRM=1 bash "$CR" --all
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"nothing to land"* ]] || false
+  # The lander was never called at all — not called-and-refused. Landing nothing burns the landing
+  # lock and runs the full shellcheck+bats gate for a range that adds no byte to trunk.
+  [ ! -s "$LAND_STUB_LOG" ]
+  # And it is NOT counted as a failure: nothing failed.
+  [[ "$output" == *"0 ok, 0 failed"* ]] || false
+}
+
+@test "…and it does not hold the queue: a real result in the same sweep still lands" {
+  # The ordering half, which is the reason this guard is not merely tidy. An empty diff sorts FIRST,
+  # so before the guard the beacon branch was the head of every queue.
+  push_beacon_branch claude/beacon-first
+  push_branch claude/real-work 2
+  decl session_beacon claude/beacon-first
+  decl session_real claude/real-work
+  run env CONFIRM=1 bash "$CR" --all
+  [ "$status" -eq 0 ]
+  [ "$(landed_branches)" = "claude/real-work" ]
+  [[ "$output" == *"claude/beacon-first"*"nothing to land"* ]] || false
+}
+
+@test "--land NAMES a beacon-only branch and still refuses to land it — exit 0, not a failure" {
+  # The operator named it explicitly, so the answer is REPORTED rather than skipped silently; it is
+  # still not landed, because there is nothing to land. Exit 0: a correct refusal is not an error.
+  push_beacon_branch claude/beacon-named
+  decl session_named claude/beacon-named
+  run env CONFIRM=1 bash "$CR" --land claude/beacon-named
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"nothing to land"* ]] || false
+  [[ "$output" == *"boot beacon"* ]] || false
+  [ ! -s "$LAND_STUB_LOG" ]
+}
+
+@test "CONTROL — a branch with real content is untouched by the guard" {
+  # The non-discrimination half: the guard must key on CONTENT, not on 'the VM authored it' or on a
+  # commit count. A one-file result is the smallest thing that is still a result.
+  push_branch claude/one-file 1
+  decl session_one claude/one-file
+  run env CONFIRM=1 bash "$CR" --all
+  [ "$status" -eq 0 ]
+  [ "$(landed_branches)" = "claude/one-file" ]
+  [[ "$output" != *"nothing to land"* ]] || false
+}

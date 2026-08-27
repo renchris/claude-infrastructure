@@ -383,6 +383,37 @@ diff_size() {  # <repo> <trunk-ref> <branch> → changed-file count (large senti
   case "$n" in ''|*[!0-9]*) printf '999999' ;; *) printf '%s' "$n" ;; esac
 }
 
+# ── THE EMPTY RANGE, which the BOOT BEACON made a routine occurrence ─────────────────────────
+# CLOUD_OBSERVABILITY.md §4.1's absence contract requires a fired session's FIRST act to be pushing
+# its declared branch — "an empty commit is enough" — so that no-ref past the boot budget means
+# "never booted" rather than "booted and has not committed yet". `cc_cloud_payload`
+# (scripts/lib/cloud-create.sh) is the producer, landed with this guard.
+#
+# The consequence lands HERE, and it is not a corner case. A session that beacons and then produces
+# nothing — refused entitlement after boot, killed mid-plan, or simply finished with no change —
+# leaves a branch whose content diff against trunk is EMPTY. Under this script's smallest-diff-first
+# ordering that branch sorts FIRST, ahead of every real result, and would be the first thing handed
+# to desk-land on every sweep. Landing nothing is not a land: it burns the landing lock, runs the
+# full shellcheck+bats gate, and returns a lander exit the caller has to interpret — once per sweep,
+# forever, because nothing about the branch ever changes.
+#
+# 🚨 THE TEST IS CONTENT, NEVER COMMIT COUNT. `rev-list --count` reads non-zero for a beacon-only
+# branch (it has a commit) and reads zero for a branch a sibling rebase already absorbed — wrong in
+# both directions, which is the same lesson scripts/land-verify.sh:6-11 records and the reason
+# `landed()` above is written against `ls-tree`. A three-dot diff against the trunk asks the only
+# question that matters: is there anything here that is not already on trunk?
+#
+# A FAILED DIFF IS NOT AN EMPTY DIFF. `git diff` exits 1 for "differences found" and >1 for an
+# error, so an unreadable ref must not fall through the 0-means-empty arm — that would refuse a real
+# result on a sensor failure, the inverse of the fault this script's own header forbids at the
+# network sensor ("cannot look is never nothing found"). rc>1 abstains: the branch proceeds and the
+# lander is left to answer for it.
+range_is_empty() {  # <repo> <trunk-ref> <branch> → 0 iff the range provably adds nothing to trunk
+  local rc=0
+  "$GIT_BIN" -C "$1" diff --quiet "$2...refs/heads/$3" >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 0 ]
+}
+
 # ── the identity translation (see "THE IDENTITY WALL" in the header) ─────────────────────────
 git_ident_email() {  # <repo> → the author email git ITSELF would use (empty ⇒ none resolvable)
   # `git var GIT_AUTHOR_IDENT`, never `git config user.email`: the same arbiter githooks/pre-commit
@@ -686,6 +717,13 @@ EOF
   rc=0; fetch_branch "$C_REPO" "$TARGET" || rc=$?
   [ "$rc" -eq 0 ] || die 65 "could not bring '$TARGET' into $C_REPO as a local head — $FETCH_DETAIL"
   [ -n "$FETCH_DETAIL" ] && echo "→ $TARGET — $FETCH_DETAIL"
+  # The operator NAMED this branch, so an empty range is reported rather than swept past — but it is
+  # still not landed, because there is nothing to land (see range_is_empty). Exit 0: refusing to
+  # land nothing is a correct outcome, not a failure.
+  if range_is_empty "$C_REPO" "$C_TRUNK" "$TARGET"; then
+    echo "· $TARGET — nothing to land: the range adds no content to $C_TRUNK. A cloud session's boot beacon is an EMPTY commit (CLOUD_OBSERVABILITY.md §4.1), so this is a session that provably booted and produced no work — a real record, and not a landable one."
+    exit 0
+  fi
   derive_paths "$C_ID"
   rc=0; reauthor_branch "$C_REPO" "$C_TRUNK" "$TARGET" "$C_ID" || rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -724,6 +762,13 @@ while IFS= read -r b || [ -n "$b" ]; do
     continue
   fi
   [ -n "$FETCH_DETAIL" ] && echo "→ $b — $FETCH_DETAIL"
+  # Before re-authoring, and before it can sort to the head of the queue: a range that adds nothing
+  # to trunk is a beacon-only session (or one a sibling already absorbed). Skipping it here also
+  # spares it a pointless history rewrite. Not counted as a failure — nothing failed.
+  if range_is_empty "$C_REPO" "$C_TRUNK" "$b"; then
+    echo "· $b — skipped: the range adds no content to $C_TRUNK (boot beacon only, or already absorbed); there is nothing to land."
+    continue
+  fi
   derive_paths "$C_ID"
   rc=0; reauthor_branch "$C_REPO" "$C_TRUNK" "$b" "$C_ID" || rc=$?
   if [ "$rc" -ne 0 ]; then
