@@ -245,28 +245,42 @@ and then	a back\slash'
 # level: the SITE must reach hf_alarm with THIS class and must not reach a silent cc-notify push.
 # It keeps its teeth: the pre-change artifact has no hf_alarm at all, so it still fails — which the
 # three tests below assert explicitly rather than assume.
+# AND THE SAME DEFECT RECURRED ONE LEVEL UP, IN THIS FUNCTION'S OWN FIRST LINE. The oracle used
+# uniqueness as a LOCATOR — "there is exactly one occurrence, so `grep` gives me THE line" — and a
+# locator that demands `-eq 1` silently imposes a COMPLETENESS claim the class never made: that a
+# failure class may only ever have one site. `recycle-dead` grew a second site at 39813ed4
+# (2026-08-25T15:37) and a third at c67bda62 (2026-08-25T23:52), both properly converted, and this
+# assertion went RED on trunk for both of them — the assertion outliving its subject, which is
+# precisely what the paragraph above says the previous rewrite existed to prevent.
+# So it moves up one more level: EVERY occurrence of the token must be converted, and there must be
+# at least one. That is strictly STRONGER than the old form (it validates three sites where the old
+# one refused to validate any) and it cannot rot when a class legitimately gains a site.
 site_is_converted() { # $1=file $2=class-token $3=hf_alarm class
-  local line n from win
-  [ "$(grep -c "$2" "$1")" -eq 1 ] || { echo "token $2 anchors $(grep -c "$2" "$1")× in $1, not once"; return 1; }
-  line="$(grep "$2" "$1")"
-  case "$line" in
-    *'>/dev/null 2>&1 || true'*) echo "site $2 still carries the banned silent-push idiom"; return 1 ;;
-  esac
-  n="$(grep -n "$2" "$1" | cut -d: -f1)"
-  from=$(( n > 6 ? n - 6 : 1 ))                 # a tri-state site decides the class just ABOVE the claim
-  win="$(sed -n "${from},$((n + 30))p" "$1")"
-  case "$win" in
-    *"hf_alarm $3 "*) ;;                        # one-claim site: literal class at the call
-    *"_cls=$3"*)                                # tri-state site: the arm decides, one call raises
-      case "$win" in
-        *'hf_alarm "$_cls"'*) ;;
-        *) echo "site $2 sets _cls=$3 but never raises hf_alarm \"\$_cls\": $line"; return 1 ;;
-      esac ;;
-    *) echo "site $2 does not reach hf_alarm $3: $line"; return 1 ;;
-  esac
-  case "$win" in
-    *'cc-notify'*'>/dev/null 2>&1 || true'*) echo "site $2 still reaches a silent cc-notify push"; return 1 ;;
-  esac
+  local line n from win nums total
+  total="$(grep -c "$2" "$1")"
+  [ "$total" -ge 1 ] || { echo "token $2 does not occur in $1 at all"; return 1; }
+  nums="$(grep -n "$2" "$1" | cut -d: -f1)"
+  while IFS= read -r n; do
+    [ -n "$n" ] || continue
+    line="$(sed -n "${n}p" "$1")"
+    case "$line" in
+      *'>/dev/null 2>&1 || true'*) echo "site $2 (line $n of $total) still carries the banned silent-push idiom"; return 1 ;;
+    esac
+    from=$(( n > 6 ? n - 6 : 1 ))               # a tri-state site decides the class just ABOVE the claim
+    win="$(sed -n "${from},$((n + 30))p" "$1")"
+    case "$win" in
+      *"hf_alarm $3 "*) ;;                      # one-claim site: literal class at the call
+      *"_cls=$3"*)                              # tri-state site: the arm decides, one call raises
+        case "$win" in
+          *'hf_alarm "$_cls"'*) ;;
+          *) echo "site $2 (line $n) sets _cls=$3 but never raises hf_alarm \"\$_cls\": $line"; return 1 ;;
+        esac ;;
+      *) echo "site $2 (line $n) does not reach hf_alarm $3: $line"; return 1 ;;
+    esac
+    case "$win" in
+      *'cc-notify'*'>/dev/null 2>&1 || true'*) echo "site $2 (line $n) still reaches a silent cc-notify push"; return 1 ;;
+    esac
+  done <<< "$nums"
   return 0
 }
 
@@ -299,6 +313,12 @@ site_is_converted() { # $1=file $2=class-token $3=hf_alarm class
   # failed branch (class recycle-relaunch-failed), previously one of the two ledger-invisible
   # recycle deaths. The completion push and the succession announce stay non-sites: a different
   # mechanism with a different failure model; converting them here would be unasked scope.
+  # FIFTH and SIXTH added 2026-08-25, both recycle-dead: 39813ed4 (the shell-timeout escalation)
+  # and c67bda62 (a pane whose argv IS its launcher, destroyed by its own /exit). Counted here
+  # 2026-08-26. THIS PIN IS DELIBERATE AND IT IS THE POINT OF THE TEST — it does not track the file,
+  # it forces a NEW alarm site to be a decision somebody writes down. Both of those commits moved it
+  # without saying so and left this suite red on trunk for ~23h; the number is not the defect, the
+  # silent move is. If you add a site, add its sha and its class to this comment and raise the count.
   [ "$(grep -c 'if \[ -x "\$HOME/.claude/bin/cc-notify" \]' "$FIRE")" -eq 1 ]
-  [ "$(grep -c '^    hf_alarm ' "$FIRE")" -eq 4 ]
+  [ "$(grep -c '^    hf_alarm ' "$FIRE")" -eq 6 ]
 }
