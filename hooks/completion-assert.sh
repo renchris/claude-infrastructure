@@ -732,7 +732,12 @@ while IFS= read -r ca_l; do
   # or a marked line: `▶ <cmd>` / a line following a "Run this"-style marker
   case "$ca_t" in '▶'*) ca_is_run=1 ;; esac
   printf '%s' "$ca_prev" | grep -qiE '(^|[^a-z])run (this|it)\b|▶' && [ -n "$ca_t" ] && ca_is_run=1
-  if [ "$ca_is_run" -eq 1 ] && printf '%s' "$ca_t" | grep -qE "$CA_PLACEHOLDER"; then d5=1; break; fi
+  # DRAINED, not `grep -qE` (2026-08-27), matching the four sibling sites this file already
+  # grandfathers. It is the FIFTH and it had never been judged: the lint's heredoc tracker latched
+  # on the comment at :705 — the one explaining that `<<EOF` is doubled and so is not a placeholder
+  # — and every line below it was read as heredoc body. The allowlist row said 5 and the detector
+  # could see only 4, which is why the count matched and nothing looked wrong.
+  if [ "$ca_is_run" -eq 1 ] && printf '%s' "$ca_t" | grep -E "$CA_PLACEHOLDER" >/dev/null; then d5=1; break; fi
   ca_prev="$ca_t"
 done <<< "$MSG"
 
