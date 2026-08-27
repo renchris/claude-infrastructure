@@ -192,7 +192,7 @@ The one real cost in view is `next3`'s ~8 pp, and with 3.8 h left that is essent
   empirical trajectory — but not yet: 4 windows cannot calibrate a curve. The cheap correct move
   is to widen the abstain rule so the projection stays silent mid-week, where it is measurably
   uninformative, and speaks only in the last ~2 days where linear and empirical converge
-  (day 6: −17 pp; day 7: −2 pp).
+  (day 6: −17 pp; day 7: −2 pp). ✅ **DONE 2026-08-27 — see §9.**
 
 **Reproduce:** the analysis scripts are in this session's scratchpad; the one-command version of
 the retrospective is `python3 scripts/desk-strand-replay.py`.
@@ -305,3 +305,53 @@ records". The 0 replicates and is right; the control does not — those `rate_li
 the CC binary's own error enum being dumped by agents reading its strings, i.e. meta too. **The
 scan's proof that it could find anything was itself an artifact.** Use
 `cache_read_input_tokens` (present in 6,497 of 6,749 transcripts) as the control instead.
+
+---
+
+## §9 The remedy, implemented (2026-08-27)
+
+§6's cheap correct move is shipped. `wall_projection()` now abstains for ~5 of every 7 days.
+
+**The change is one constant and its rationale.** `MIN_ELAPSED_FRAC` was the literal `0.05`; it is
+now derived — `CONVERGED_REMAIN_H = 48.0`, `MIN_ELAPSED_FRAC = (WEEK_H - CONVERGED_REMAIN_H) /
+WEEK_H` = 0.714. Deriving it rather than writing `0.714` is the point: the floor's meaning is *the
+last two days*, which is a claim about where §3's shortfall closes (−27 pp at day 4, −24 at day 5,
+−17 at day 6, −2 at day 7), not a fraction anyone chose. `burn_ratio`, `proj_end_pct` and
+`wall_risk` are simply absent outside that tail, which is the same abstain contract the 0.05 floor
+already had — only wider.
+
+**What the widening costs, and the one thing it must NOT cost.** In `pace_line` the `N.NN× burn`
+clause on a zero-strand row is now last-48h-only; mid-week it drops off the row, which is the
+intended loss — there it is wrong by a mean 46 pp. A consumer that needs a weekly signal mid-week
+wants `wk_strand_pp`, which nowcasts off measured pace instead of assuming the shape of the rest
+of the week.
+
+**The `⚠ WALL trajectory` flag was re-sourced, not widened away, and finding that out is the part
+worth writing down.** The flag was gated on `wall_projection`'s `proj >= 100`, so widening the
+floor silently deleted it for 5 of every 7 days — caught by `tests/claude-accounts-strand.bats`
+RP-16, whose fixture is a mid-week account at 114 h left burning 1.725 %/h. That is a genuine
+warning and losing it would have been a strict regression, so it now reads `s == 0.0` from the
+strand nowcast — exactly `weekly_pct + measured_pace × hours_left >= 100`. Two reasons that is the
+correct source rather than a workaround. It is founded on 48 h of MEASURED pace, so unlike the
+linear divisor it does not decay mid-week. And `wk_strand_pp`'s own docstring already claimed this
+render (*"the account is reported as being on a wall trajectory instead"*) — the flag was reading
+off the wrong estimator all along, and RP-16's own comment says so, noting that the incumbent
+renders 154.6% on that fixture against a truth near 100%. The general shape: **an abstain widened
+under a signal that was gated on the abstaining estimator deletes the signal.** Grep the consumers
+of a predicate before widening it, and check what each was really asking.
+
+**What was deliberately NOT done.** The empirical divisor. §5.2 stands: 4 windows with day-1
+coverage are ample to refute the linear model and cannot calibrate a curve. Re-derive after ≥2 more
+full cycles; until then the honest instrument is silence, not a fitted shape.
+
+**Proof.** `tests/claude-accounts-burn-ratio.bats`, 10 cases (was 8), plus `claude-accounts-core`
+RP-25/26 and `claude-accounts-strand` RP-16, which are what caught the WALL regression above and
+now pin its new source (mutant: re-gating the flag on the linear projector reds both). RED-proved
+against the old
+floor: the two new abstain cases fail with `MIN_ELAPSED_FRAC = 0.05` and pass with the widened one —
+including next3@08-18's actual day-3 reading (12% at 96 h left, the −70 pp miss) and next@08-23's
+(51%, the false WALL). The boundary is additionally mutant-proved in **both** directions, because a
+floor that only reds when it is too loose is half-pinned: `CONVERGED_REMAIN_H = 24` reds the SPEAKS
+arm at 48 h and the control; `= 96` reds both abstain arms. The three arithmetic cases moved from
+the 84 h midpoint into the tail (42 h left, 75% elapsed) — they pin the ratio arithmetic, which is
+unchanged, and at the midpoint they would now be asserting on an abstention.

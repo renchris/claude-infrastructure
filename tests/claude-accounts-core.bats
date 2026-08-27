@@ -1849,9 +1849,22 @@ assert "next3 strand ~5pp of 8 · p96 of its own 3h burns" in line, line
 assert "next no strand" in line, line
 assert "⚠ WALL trajectory" in line, line
 assert line.rstrip().split(chr(10))[-1].strip().startswith("next no strand"), line
-# ...and its burn RATIO survives unchanged, while the >100 PROJECTION does not render as a number
-assert "1.62× burn" in line, line
-assert "162" not in line and "163" not in line, line     # the RATIO, never the ~162% projection
+# ...and the >100 PROJECTION still does not render as a number.
+# ASSERTION UPDATED IN PLACE, invariant unchanged. This used to also assert `1.62× burn` — the
+# RATIO surviving beside the suppressed projection. `next` here sits at 114 h left, i.e. mid-week,
+# and wall_projection now ABSTAINS there: its linear divisor errs by a mean 46 pp at day 3
+# (weekly-reset-utilization-2026-08-25 §3), and on this very fixture it renders 154-162% against a
+# truth near 100%. So the ratio drops off this row by design. What RP-26 is for is untouched: the
+# zero-strand row still renders, still renders last, and still carries its ⚠ WALL — because that
+# flag is now sourced from the strand NOWCAST (measured 48 h pace), not from the projector that
+# was wrong here. Pinning the ratio spelling would have made this case a tripwire on the very fix
+# its own subject needed.
+assert "1.62× burn" not in line, line
+assert "162" not in line and "163" not in line, line     # never the ~162% projection
+# CONTROL for the line above, so it asserts an ABSTAIN and not a deletion: inside the converged
+# tail (30 h left) the same ratio render is alive, alongside the same WALL flag.
+tl = ca.pace_line([row(acct="next", weekly_pct=96, weekly_reset_h=30.0, burn_wk_ewma_ph=0.6)])
+assert "1.17× burn" in tl and "⚠ WALL trajectory" in tl, tl
 assert "BEHIND" not in line, line                        # 47ddbf47c DELETED it: on 2026-08-16 three freshly-reset windows each read
                                                          # BEHIND, which is correct and reads as gross under-utilisation.
 # an abstention renders as the WORD plus its reason, never as a zero (L2)
