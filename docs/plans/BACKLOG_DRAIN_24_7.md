@@ -25347,6 +25347,39 @@ The proven local-drain design (9 recycles) plus the one missing property — sel
   (42d27a758's named-but-never-implemented rule) — enforced in the recycle brief + goal
   constraint ("do not end the recycle net-positive on filings").
 
+#### A2 addendum 2026-08-27 — the 08-17 step is NOT the prune artifact, and A2 has a second named blocker (f85fce7c26f5)
+
+The A2 forensics above named **one** thing A2 is blocked on: the expired OAuth access token
+(`8636b8f829fe`). Item `f85fce7c26f5` carried a competing explanation for the same period — that the
+"return/land arm died 2026-08-17T09:12:05Z" reading was an artifact of a branch-presence probe that
+scores a landed-then-pruned session identically to a never-pushed one. **That probe defect is real
+and is fixed on trunk (`a42f107a`, re-verified by content 08-27: `tests/cc-cloud.bats` 31/31,
+`cc-cloud --selftest` 24/24). It does not explain the step.**
+
+`docs/research/branch-prune-manifest-2026-08-19.tsv` — the pruner's own census, written *before* it
+deleted anything, by `git cherry` patch equivalence rather than branch presence, so pruning cannot
+confound it — puts landing rate by fire day at **75/75/53/76/64/50/50% for 08-11..08-17 and 16% on
+08-18**. A second census over only the *surviving* branches, a population pruning cannot touch by
+construction, reads **69% landed through 08-17 against 34% for 08-18..08-25**. Two instruments, two
+populations, same step. (Re-derived independently on 08-27; the 08-25 snapshot's `6 LANDED / 74
+UNLANDED` has since partly drained to `37 / 54`, so the honest statement is **degraded, not dead**.
+Two limits are stated in the doc: the last ~48 h are censored upward, and volume rose 3.6× across
+the step, which no VM-side instrument can separate from an arm defect.)
+
+Leading hypothesis, **not asserted**: `ba69a451` tightened `scripts/autonomy-sweep.sh`'s
+deployed-copy gate to an exact path compare at `2026-08-17T08:10:22Z`, 62 minutes before the last
+recorded land. Its two operands come from different places — the plist hardcodes
+`~/.claude/scripts/autonomy-sweep.sh`, `_cc_cfg` reads `CLAUDE_CONFIG_DIR` — so a divergence makes
+the gate refuse its own caller and both cloud rails skip on every tick, silently. Settling it needs
+`launchctl` + `zsh -lc` + `idl.jsonl` reads no cloud VM has; the one command is in
+`docs/research/cloud-land-arm-step-2026-08-25.md` §3.
+
+Closed from the VM side this pass: the gate's divergence case now files
+`skipped-config-divergence` in both rails and says so on stderr (the predicate is untouched and
+still fail-closed), plus the bats arm that exercises the plist's own spelling — the suite previously
+fixtured `CLAUDE_CONFIG_DIR` to the same root it invoked from, so the divergence was structurally
+unreachable. **`f85fce7c26f5` stays open on the operator command above.**
+
 ### §4.1 Lane B recycle-fire template (SSOT — the drain session regenerates its per-recycle brief from THIS)
 
 Fire command (from any claude-infrastructure checkout; the drain session runs this ON ITSELF at
