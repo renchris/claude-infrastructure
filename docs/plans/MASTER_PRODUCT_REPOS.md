@@ -1,5 +1,6 @@
 ---
 status: open
+targets: reso-management-app, doc_classifier
 ---
 
 # MASTER: product repos — the operator's actual products, one wave per repo
@@ -156,6 +157,40 @@ branch queue is empty or explicitly abandoned with reasons, the production deplo
 single-brained and audited, and doc_classifier's authorization holes are closed with tests.
 
 ## Status log
+- **2026-08-27 — the disproofs were never the problem; they never LANDED. Fixed by landing the arm.**
+  `8f59467c92b0` fired into the same VM shape again (one checkout, no `~/Development`, no
+  `~/.claude/autonomy`), so R1-R4 are unreachable and the premise is refuted at this venue for the
+  Nth time. What is new is **why the previous N disproofs bought nothing**, measured BY CONTENT
+  rather than by ancestry (the cloud clone is shallow — `git rev-list --count origin/main` = 50 —
+  so `merge-base --is-ancestor` reports STRANDED for commits that are demonstrably on trunk, and
+  every count in this entry is a content check instead):
+  **(1)** trunk's copy of THIS FILE carries status entries for `2026-08-12`, `08-15`, `08-17` and
+  nothing later, while disproof commits dated 08-24, 08-26 (×3) and 08-27 (×2) exist on
+  `origin/claude/fire-*` branches. Measured with `git cherry` (**patch-ids, which survive the
+  rebase `ship-land` performs** — an ancestry test would mis-read every rebase-landed branch as
+  stranded, and did: it gave "2 of 207 merged", which is not the same claim): of the **133** fire
+  branches dated 08-24 → 08-27, **131 still carry patches whose content is not on trunk.** Each
+  cloud worker wrote its finding, committed it, pushed it to its own fire branch, and closed; the
+  branch was never landed, so trunk never learned, so the next worker read a plan frozen at 08-17
+  and rediscovered the same fact. The doc channel is not inert because docs do not work — it is
+  inert because **a fire branch is not a landing**.
+  **(2)** 🚨 **The `feat(cc-eligible)` subject-foreign arm (73a2b1f8, 08-24) is one of those
+  strandings, and it is the exact fix this row needed.** Trunk's `cross_repo()` is healthy and
+  passes this row by construction — the row's project label IS `claude-infrastructure` and is
+  ACCURATE, since `find-plan.sh:70` derives it from the plan file's path. Only a `targets:`
+  frontmatter declaration can express a master whose work is in two other trees.
+  **Landed in this commit**, with the one-line `targets: reso-management-app, doc_classifier`
+  declaration that arms it. Gate: **68/68 green** (58 sibling cc-eligible tests unchanged + 10 new),
+  red-proofed against trunk's `bin/cc-eligible` — tests 1, 2, 4, 8, 9 FAIL without the arm, which
+  matches 73a2b1f8's own claim. This row is now cloud-INELIGIBLE by measurement, not by prose.
+  **(3)** Correction to `802ad21e` ("the return rails are rc-0 no-ops"): **they are not.**
+  `cc-backlog done|block|reopen 8f59467c92b0` each exit **3** with `unknown id`, and
+  `cc-notify --role desk` exits **3** with `reason=role-unset`. The rails are loud and honest. The
+  rc-0 reading is the `$?`-after-`head` artifact this repo has already named twice (`c0fa70e5`,
+  `739bc469`) — reproduced here by accident, then re-measured without the pipe. The real defect is
+  narrower and unfixable from the VM: `cc-backlog list --all --json` returns `[]` because the store
+  does not exist off-box, so **no transition of this item can be recorded from cloud at all** —
+  the `done`/`block` instruction in the dispatch brief is unexecutable at the venue it is sent to.
 - **2026-08-17 — the SAME row was cloud-dispatched AGAIN, and the re-fire is the finding.**
   `8f59467c92b0` was fired into an identical VM shape (one checkout, GitHub scope of one repo, no
   `~/Development`) ~2 days after the 08-15 entry below wrote its disproof into THIS FILE. R1-R4 were

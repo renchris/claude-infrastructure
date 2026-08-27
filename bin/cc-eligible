@@ -429,17 +429,60 @@ DEEP_HISTORY = "ineligible-deep-history"
 # nothing to do with a horizon.
 CROSS_REPO = "ineligible-cross-repo"
 
+# THE SUBJECT-FOREIGN ARM — an item whose LABEL is right and whose WORK is somewhere else.
+#
+# CROSS_REPO above keys on the pair (item's project, the lane), and that pair is the whole of what
+# it can see. A row whose `project` is accurate therefore passes it by construction, however far
+# from the lane the work actually lives. That is not hypothetical: `8f59467c92b0` ("MASTER: product
+# repos") is labelled `claude-infrastructure` because `scripts/find-plan.sh:70` derives the project
+# from the plan FILE's path and the plan does live here — while every wave it carries edits
+# `~/Development/reso-management-app` or `~/Development/doc_classifier`. It was dispatched to a
+# one-checkout cloud VM on 2026-08-15, again on 08-17, and again on 08-24 after the CROSS_REPO arm
+# had landed. Three slots, no work possible on arrival, and the arm was correct every time.
+#
+# TWO REPAIRS WERE PROPOSED BEFORE THIS ONE AND BOTH ARE REFUTED BY MEASUREMENT (2026-08-24):
+#
+#   · "read the item's TEXT for another dispatch-set project"
+#     (docs/research/venue-foreign-master-redispatch-2026-08-17.md §3). The text a classifier gets
+#     is SPAN_FIELDS — title · dodRef · condition · source. This row's four span fields name no
+#     foreign tree; only the plan BODY does. The discriminator cannot see the case it was filed to
+#     catch.
+#   · "then read the plan BODY named by dodRef". Measured over the 45 open plans in docs/plans: 14
+#     of them (31%) merely MENTION reso-management-app or doc_classifier in passing. A body scan
+#     refuses a third of this repo's plan-derived work from cloud to catch one row — and this
+#     file's own header names that failure by name: a denylist enumerates SPELLINGS, never the
+#     class (memory: denylist-enumerates-spellings-not-the-class).
+#
+# So the signal is DECLARED, never inferred: a plan whose work is in other trees says so in its
+# frontmatter, and this arm reads that declaration. Zero false positives by construction — nothing
+# fires without an explicit key — and it is the one shape that expresses a CROSS-repo master, which
+# targets TWO trees and so cannot be routed by any single-valued project field
+# (MASTER_PRODUCT_REPOS.md, 2026-08-15 status entry).
+FOREIGN_TREE = "ineligible-foreign-tree"
+
+# The frontmatter key a plan uses to declare the trees its work edits, when they are not the tree
+# the plan FILE sits in. Comma- or space-separated project names, e.g.
+#
+#     ---
+#     status: open
+#     targets: reso-management-app, doc_classifier
+#     ---
+#
+# Absent — which is every plan that works its own tree — the arm is silent.
+DOD_TARGETS_KEY = "targets"
+
 # Every refusing verdict with its one-line description, spelling-backed and measured alike. The
 # census renders from THIS, not from CLASSES, so a measured class cannot be invisible in the report
 # that exists to find what the classifier misses.
 SWEEP_ROWS = [(v, d) for v, d, _p in CLASSES] + [
     (CROSS_REPO, "ANOTHER REPO — the VM is given exactly one, and this is not it (measured)"),
+    (FOREIGN_TREE, "ANOTHER TREE — the label is right, the work is declared elsewhere (measured)"),
     (DEEP_HISTORY, "NEEDS HISTORY the shallow cloud clone cannot see (measured)"),
 ]
 
 # The verdicts that REFUSE (exit 3). One tuple so the gate, the census and the tests can never
 # disagree about which is which — cc-premise's BLOCKING, same reason.
-BLOCKING = tuple(v for v, _d, _p in CLASSES) + (CROSS_REPO, DEEP_HISTORY)
+BLOCKING = tuple(v for v, _d, _p in CLASSES) + (CROSS_REPO, FOREIGN_TREE, DEEP_HISTORY)
 
 # The uncertainty verdicts. Both exit 0. They are SEPARATE tokens because they mean different
 # things to whoever reads the census: "no such item" is a caller bug, "unreadable store" is an
@@ -501,7 +544,7 @@ def build_index(recs):
     idx = {}
     for r in recs:
         rid = r["id"]
-        ent = idx.setdefault(rid, {"text": "", "title": "", "project": ""})
+        ent = idx.setdefault(rid, {"text": "", "title": "", "project": "", "dodRef": ""})
         parts = [r.get(k) or "" for k in SPAN_FIELDS]
         text = " ".join(p for p in parts if p)
         if text:
@@ -510,6 +553,10 @@ def build_index(recs):
             ent["title"] = r["title"]
         if r.get("project") and not ent["project"]:
             ent["project"] = r["project"]
+        # Kept as its OWN field, not only folded into `text`: the foreign-tree arm resolves it to a
+        # file, and a dodRef concatenated into a bag of words is no longer a path.
+        if r.get("dodRef") and not ent["dodRef"]:
+            ent["dodRef"] = r["dodRef"]
     return idx
 
 
@@ -789,6 +836,82 @@ def cross_repo(project):
     return True, "project %r is %s; the VM is given only %s" % (project, seen, lane_origin)
 
 
+def _dod_path(dod_ref, project):
+    """The file a `dodRef` names, or "" — absolute as given, else relative to the item's repo.
+
+    An absolute dodRef is honoured as written because the ledger is shared across boxes and one
+    box's `/Users/<who>/Development/...` is another's nothing; resolving it against the local repo
+    would silently point at the wrong file rather than at no file.
+    """
+    if not dod_ref:
+        return ""
+    ref = dod_ref.split("#", 1)[0].strip()          # a `#section` anchor names a heading, not a file
+    if not ref:
+        return ""
+    if os.path.isabs(ref):
+        return ref if os.path.isfile(ref) else ""
+    repo = repo_for(project)
+    if not repo:
+        return ""
+    cand = os.path.join(repo, ref)
+    return cand if os.path.isfile(cand) else ""
+
+
+def declared_targets(dod_ref, project):
+    """The projects a DoD-ref plan DECLARES its work edits, via the frontmatter `targets:` key.
+
+    Reads only the frontmatter block — the first `---`-fenced region — never the body, which is the
+    whole point of the arm (see FOREIGN_TREE). Fails OPEN, returning [], on every state it cannot
+    measure: no dodRef, a ref that resolves to no file, a file with no frontmatter, an unreadable
+    file, or a frontmatter carrying no `targets:` key.
+    """
+    path = _dod_path(dod_ref, project)
+    if not path:
+        return []
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            first = fh.readline()
+            if first.strip() != "---":
+                return []                          # no frontmatter block ⇒ nothing declared
+            raw = ""
+            for _ in range(200):                   # bounded: frontmatter is a header, not a document
+                line = fh.readline()
+                if not line or line.strip() == "---":
+                    break
+                key, sep, val = line.partition(":")
+                if sep and key.strip().lower() == DOD_TARGETS_KEY:
+                    raw = val
+                    break
+    except OSError:
+        return []
+    raw = raw.strip().strip("[]")
+    out = []
+    for tok in re.split(r"[,\s]+", raw):
+        tok = tok.strip().strip("'\"")
+        if tok and tok not in out:
+            out.append(tok)
+    return out
+
+
+def foreign_trees(dod_ref, project):
+    """[(target, why)] — declared target projects that are NOT reachable from the lane.
+
+    Each target is measured by `cross_repo`, so this arm inherits that one's fail-open law in every
+    direction rather than restating it: an unresolvable lane, an unreadable tree, or a target that
+    is a second checkout of the lane's own origin all stay silent here too. A target equal to the
+    item's own project is skipped — that case is CROSS_REPO's, and reporting it twice would double-
+    count one fact in the census.
+    """
+    out = []
+    for tgt in declared_targets(dod_ref, project):
+        if tgt == project:
+            continue
+        elsewhere, why = cross_repo(tgt)
+        if elsewhere:
+            out.append((tgt, why))
+    return out
+
+
 def repo_for(project):
     """The tree an item's project means. cc-dispatch's project_repo convention, deliberately.
 
@@ -840,7 +963,7 @@ def assess_full(item_id, idx, measure=True):
             "tokens": [], "title": "", "project": "", "classes": [],
             "history": {"state": "not-measured", "repo": "", "ref": "", "depth": CLOUD_DEPTH,
                         "unreachable": []},
-            "reach": {"state": "not-measured", "lane": "", "why": ""},
+            "reach": {"state": "not-measured", "lane": "", "why": "", "targets": []},
         }
     text = ent["text"]
     classes = classify_all(text)
@@ -849,7 +972,7 @@ def assess_full(item_id, idx, measure=True):
     orc = oracle_for(project)
     hist = {"state": "not-measured", "repo": orc.repo, "ref": "", "depth": orc.depth,
             "unreachable": []}
-    reach = {"state": "not-measured", "lane": "", "why": ""}
+    reach = {"state": "not-measured", "lane": "", "why": "", "targets": []}
     if measure:
         # REACH BEFORE HISTORY, in that order: a repo the VM never receives has no horizon worth
         # reporting, and "this is another repo" is the sentence that tells a reader what to do.
@@ -862,6 +985,19 @@ def assess_full(item_id, idx, measure=True):
                 "verdict": CROSS_REPO,
                 "description": "ANOTHER REPO — the VM is given exactly one and this is not it",
                 "tokens": [project],
+            })
+        # THE SUBJECT-FOREIGN ARM, beside the label arm rather than inside it: the two answer
+        # different questions ("is the LABEL elsewhere" / "is the declared WORK elsewhere") and a
+        # row can satisfy one and not the other. Ordered after it because when both fire, the
+        # label is the simpler sentence to lead with.
+        foreign = foreign_trees(ent.get("dodRef", ""), project)
+        reach["targets"] = [t for t, _w in foreign]
+        if foreign:
+            classes.append({
+                "verdict": FOREIGN_TREE,
+                "description": "ANOTHER TREE — this item's DoD declares work in %s, which the VM "
+                               "does not receive" % ", ".join(t for t, _w in foreign),
+                "tokens": [t for t, _w in foreign],
             })
         hist["state"] = orc.certify()
         hist["ref"] = orc.ref
