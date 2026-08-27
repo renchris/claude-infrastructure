@@ -1024,8 +1024,43 @@ _cc_cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; _cc_cfg="${_cc_cfg%/}"
 # difference there is.
 _cloudret_deployed=0
 [ "$0" = "$_cc_cfg/scripts/autonomy-sweep.sh" ] && _cloudret_deployed=1
+
+# 🚨 A SKIP HAS TWO CAUSES AND ONLY ONE OF THEM IS EXPECTED — so they get different names.
+# The predicate above is deliberately UNCHANGED and stays fail-closed: nothing below can make a
+# non-deployed copy land, mark done or spend quota. What is added is the ability to tell the
+# EXPECTED skip from the one that means the rail is dead.
+#   * a checkout or verifier copy skipping is the gate WORKING. It is quiet, and always was.
+#   * the DEPLOYED path skipping is the gate EATING ITS OWN CALLER, and it is silent in exactly
+#     the same words. `launchd/com.chrisren.autonomy-sweep.plist:10` invokes a hardcoded
+#     `~/.claude/scripts/autonomy-sweep.sh`, so `$0` is fixed at `$HOME/.claude/scripts/…` — but
+#     `_cc_cfg` comes from CLAUDE_CONFIG_DIR, which three migrations in this repo record the
+#     operator's shell exporting as `~/.claude-next` (migrations/0013…:26, 0009…:80, 0006…:87).
+#     Let those two disagree and the compare is `~/.claude/scripts/…` against
+#     `~/.claude-next/scripts/…`: both cloud rails answer `skipped-not-deployed` on every 300 s
+#     tick, forever, and the ledger row is byte-identical to the healthy checkout case.
+# That is not hypothetical shape. This gate was tightened to an exact compare in `ba69a451`
+# (2026-08-17T08:10:22Z), and the cloud lane's landing rate stepped that week: 89% of the 82
+# `claude/fire-*` branches fired 08-10..08-17 are on trunk today against 35% of the 109 fired
+# 08-18..08-25 and 0 of the 116 fired since — judged at FULL MATURITY on 2026-08-28, so no snapshot
+# censoring is doing the work (docs/research/cloud-land-arm-step-2026-08-25.md §6.2; §6.1 shows why
+# the pruner's own 08-19 census, which reads 16% on 08-18, cannot be used for this — its last two
+# columns are branches that had not had time to land yet, and at full maturity they read 67%/53%).
+# THE STEP IS NOT A CLIFF AND THE RAIL IS NOT DEAD: cloud-attributable landings come in windows and
+# there have been three since — 08-23, 08-25 morning, 08-25 evening, the last ending 20:17Z (§6.3).
+# An intermittent rail is exactly what a gate whose two operands can disagree per launchd reload
+# looks like from outside. The hypothesis is NOT asserted here — settling it needs reads no cloud VM
+# has, and the one command that does is in that doc's §3. What IS asserted is that this arm must
+# never again be able to fail by saying nothing distinguishable (backlog f85fce7c26f5).
+_cloudret_skip="skipped-not-deployed"
+if [ "$_cloudret_deployed" != 1 ] \
+   && [ "$0" = "${HOME%/}/.claude/scripts/autonomy-sweep.sh" ] \
+   && [ "$_cc_cfg" != "${HOME%/}/.claude" ]; then
+  _cloudret_skip="skipped-config-divergence"
+  printf '%s\n' "autonomy-sweep: CONFIG DIVERGENCE — invoked as '$0' (the launchd plist's hardcoded path) but CLAUDE_CONFIG_DIR puts the deployed copy at '$_cc_cfg/scripts/autonomy-sweep.sh'. Both cloud rails skip on EVERY tick until these agree: align CLAUDE_CONFIG_DIR with the plist, or the plist with it." >&2
+fi
+
 if [ "$_cloudret_deployed" != 1 ]; then
-  _cloudret_rc="skipped-not-deployed"
+  _cloudret_rc="$_cloudret_skip"
 elif [ -x "$_cloudret" ]; then
   if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then "$_tmo" -k 10 900 bash "$_cloudret" --sweep >/dev/null 2>&1
   else bash "$_cloudret" --sweep >/dev/null 2>&1; fi
@@ -1033,7 +1068,7 @@ elif [ -x "$_cloudret" ]; then
 fi
 log_idl cloud-return "$(jq -cn --arg c "$_cloudret_rc" \
   '{cloud_return_rc:$c,
-    note:"0 = pass completed (per-session outcomes in the cloud return ledger); 4 = another pass held the lock; 124 = the bound cut the pass, next tick resumes (the return path itself abstains on a cut land rather than filing a refusal); skipped = tool absent (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never land, mark done or spend quota"}')"
+    note:"0 = pass completed (per-session outcomes in the cloud return ledger); 4 = another pass held the lock; 124 = the bound cut the pass, next tick resumes (the return path itself abstains on a cut land rather than filing a refusal); skipped = tool absent (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never land, mark done or spend quota; skipped-config-divergence = THE DEPLOYED COPY ITSELF was refused because CLAUDE_CONFIG_DIR disagrees with the plist path — the rail is dead until they agree, NOT a healthy skip"}')"
 
 # ── the REFUSAL LOOP (W3) — immediately after the return pass, and under ITS OWN guard ────────────
 # The return pass above is what WRITES `<id>.land-refused`, so routing in the same tick closes the
@@ -1053,7 +1088,10 @@ log_idl cloud-return "$(jq -cn --arg c "$_cloudret_rc" \
 _cloudrfz="$_SWEEP_DIR/cloud-refusal-route.sh"
 _cloudrfz_rc="skipped"
 if [ "$_cloudret_deployed" != 1 ]; then
-  _cloudrfz_rc="skipped-not-deployed"
+  # SAME token as the return rail, from the SAME variable — they share `_cloudret_deployed`, so a
+  # divergence that kills one kills the other, and two ledgers disagreeing about why would be the
+  # defect one layer up (memory: make-the-actuator-the-arbiter).
+  _cloudrfz_rc="$_cloudret_skip"
 elif [ -x "$_cloudrfz" ]; then
   if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then "$_tmo" -k 10 180 bash "$_cloudrfz" --sweep >/dev/null 2>&1
   else bash "$_cloudrfz" --sweep >/dev/null 2>&1; fi
@@ -1061,7 +1099,7 @@ elif [ -x "$_cloudrfz" ]; then
 fi
 log_idl cloud-refusal-route "$(jq -cn --arg c "$_cloudrfz_rc" \
   '{cloud_refusal_rc:$c,
-    note:"0 = pass completed (per-refusal outcomes in the refusal-route ledger); 4 = another pass held the lock; 124 = the bound cut the pass, next tick resumes (a refusal is idempotent per artifact, so nothing is double-sent); skipped = tool absent (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never send off-box"}')"
+    note:"0 = pass completed (per-refusal outcomes in the refusal-route ledger); 4 = another pass held the lock; 124 = the bound cut the pass, next tick resumes (a refusal is idempotent per artifact, so nothing is double-sent); skipped = tool absent (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never send off-box; skipped-config-divergence = THE DEPLOYED COPY ITSELF was refused because CLAUDE_CONFIG_DIR disagrees with the plist path — the rail is dead until they agree, NOT a healthy skip"}')"
 
 # ── 2e. CUSTODY DEATHWATCH — the arm that runs when NOBODY IS HOME ────────────────────────────────
 # The two blocks above only ever speak to an address the FIRE recorded. Measured 2026-08-23: 1055 of
