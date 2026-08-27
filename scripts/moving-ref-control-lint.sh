@@ -135,7 +135,15 @@ moving_ref_shows() { # $1=file
       sub(/^[^[:alnum:]_-]?show[[:space:]]+/, "", tok)
       ref = tok; sub(/:.*$/, "", ref)
       # PINNED: 7+ hex characters, an abbreviated or full sha. Everything else moves.
-      if (ref ~ /^[0-9a-f]{7,40}$/) next
+      # THE TEST IS INTERVAL-FREE, and that is not style. `{7,40}` is a POSIX interval expression
+      # and mawk — the system awk on every Linux host, i.e. every OFF-BOX venue this suite is NOT
+      # excluded from (scripts/offbox-excluded.manifest) — does not implement it: the braces are
+      # matched LITERALLY, so `^[0-9a-f]{7,40}$` matches nothing and EVERY pinned sha falls through
+      # as "moving". Measured 2026-08-27 under mawk 1.3.4: 10 suites reported MOVING-REF, all ten
+      # of them already correctly pinned to a literal sha, and the lint exits 1 — a standing-red
+      # off-box verdict asserting the exact opposite of the truth, on the tree corpus that gates
+      # the post-land green stamp. `length()` is the same predicate with no regex dialect in it.
+      if (ref ~ /^[0-9a-f]+$/ && length(ref) >= 7 && length(ref) <= 40) next
       src = $0; sub(/^[[:space:]]+/, "", src)
       printf "%d:%s:%s\n", NR, (ref == "" ? "<unreadable expansion>" : ref), src
     }
