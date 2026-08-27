@@ -114,12 +114,33 @@ row() {
 #               violate because it had no exclusion to make stale and no fault to mis-shape. What
 #               they protect is the NEXT edit to this code, which is a real job but a different one.
 
+# iso_ago <bsd-spec> <gnu-spec> — a UTC ISO timestamp that many units in the PAST, relative to NOW.
+#
+# 🚨 EVERY REFUSAL FIXTURE HERE MUST BE NOW-RELATIVE, AND A LITERAL DATE IS A TIME BOMB. The
+# exclusion under test admits the row again once the refusal is older than
+# CC_DISPATCH_VENUE_REFUSAL_TTL (bin/cc-dispatch:1732, default 86400s), so a fixture dated by hand
+# is only inside the TTL on the day it was typed. This file shipped with a literal
+# `2026-08-24T08:00:00Z` default and case (a) went red at 2026-08-25T08:00Z — silently, for two
+# days, and it was the sole red suite standing between trunk and a green stamp, which is what the
+# deploy converger needs before it will advance the live layer. Diagnosed 2026-08-26.
+#   The trap has a second face worth naming, because it makes a test pass rather than fail: case (b)
+# proves a refusal SELF-CLEARS when the row is touched afterwards, and with a stale literal date
+# that refusal was ALSO expired, so (b) went green without exercising the self-clear arm at all — a
+# vacuous pass wearing a green tick (memory: control-calibrated-to-implementation-decays,
+# sibling-guard-makes-the-fixture-vacuous). Both are fixed by dating from `now`.
+#   Cases that want an EXPIRED refusal must force it with CC_DISPATCH_VENUE_REFUSAL_TTL, never by
+# picking an old date — see (b2), which pins TTL=1 so expiry is by construction, not by calendar.
+iso_ago() {
+  date -u -v-"$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "-$2" +%Y-%m-%dT%H:%M:%SZ
+}
+
 # refused <id> [ts] — the exact record the claim gate writes when cc-eligible refuses the item for
 # this venue. Replayed verbatim from the live journal rather than approximated, because the
 # exclusion parses this string (memory: control-must-replay-the-real-artifact).
+# Default ts is ONE HOUR AGO — recent enough to be live under any sane TTL, and never a literal.
 refused() {
   printf '{"ts":"%s","actor":"cc-dispatch","action":"skipped","detail":"%s: cloud-ineligible — claim REFUSED at the actuator: this work cannot run off-box — cc-backlog claim: REFUSED verdict=cloud-ineligible  %s — it claims LOCALLY untouched, or `cc-backlog claim %s --venue cloud --force`"}\n' \
-    "${2:-2026-08-24T08:00:00Z}" "$1" "$1" "$1" >> "$CC_DISPATCH_IDL"
+    "${2:-$(iso_ago 1H '1 hour')}" "$1" "$1" "$1" >> "$CC_DISPATCH_IDL"
 }
 # admitted <id> → 1 if this pass journalled an `admit` decision for it, else 0
 admitted() {
@@ -146,9 +167,16 @@ admitted() {
   # lastTs past the refusal, and the row re-enters the queue on the next pass with no operator
   # action. A `venue` record deliberately does NOT count: bin/cc-backlog:1157-1170 keeps venue
   # annotations out of lastTs on purpose, and the re-derived label is the other arm of the cure.
+  #
+  # The two fixture stamps are NOW-RELATIVE and ORDERED — refusal 2h ago, reopen 1h ago — so the
+  # refusal is still LIVE under the TTL and the only thing that can admit this row is the
+  # self-clear. With the literal dates this carried until 2026-08-26 the refusal was also expired,
+  # so the row was admitted by the TTL and this case scored a green without touching its subject.
+  local _ref _touch
+  _ref="$(iso_ago 2H '2 hours')"; _touch="$(iso_ago 1H '1 hour')"
   printf '{"id":"aa11cd016cb0","ts":"2026-08-01T00:00:00Z","event":"add","project":"p","title":"t aa11cd016cb0","venuePlan":"cloud"}\n' >> "$CC_BACKLOG_FILE"
-  printf '{"id":"aa11cd016cb0","ts":"2026-08-24T09:00:00Z","event":"reopen","project":"p"}\n' >> "$CC_BACKLOG_FILE"
-  refused aa11cd016cb0 2026-08-24T08:00:00Z
+  printf '{"id":"aa11cd016cb0","ts":"%s","event":"reopen","project":"p"}\n' "$_touch" >> "$CC_BACKLOG_FILE"
+  refused aa11cd016cb0 "$_ref"
   run env CC_DISPATCH_VENUE_ONLY=cloud "$SUT" --decide
   [ "$status" -eq 0 ]
   [ "$(admitted aa11cd016cb0)" -eq 1 ]
