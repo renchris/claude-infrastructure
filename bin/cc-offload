@@ -142,7 +142,9 @@ usage() {
 state_colour() {
   case "$1" in
     ALIVE|LANDED)          printf '%s' "$C_OK" ;;
-    BOOTING)               printf '%s' "$C_WARN" ;;
+    # NEEDS-INPUT is not a fault and not a death: the session WORKED and is waiting on us, so it
+    # takes the colour of a thing to attend to rather than the colour of a thing that broke.
+    BOOTING|NEEDS-INPUT)   printf '%s' "$C_WARN" ;;
     NOT-STARTED|STALLED|ABANDONED) printf '%s' "$C_BAD" ;;
     *)                     printf '%s' "$C_META" ;;   # UNKNOWN and anything cc-cloud grows later
   esac
@@ -221,12 +223,21 @@ cmd_ls() {
       ALIVE|BOOTING) n_live=$((n_live+1)) ;;
       LANDED)        n_done=$((n_done+1)) ;;
       UNKNOWN|'')    n_unk=$((n_unk+1)) ;;
+      # NEEDS-INPUT lands in the "need you" column DELIBERATELY, and it is named rather than left to
+      # the catch-all: the column's word is the literal truth for this state, and a state that falls
+      # into a default reads the same whether the default was chosen for it or merely reached.
+      NEEDS-INPUT)   n_dead=$((n_dead+1)) ;;
       *)             n_dead=$((n_dead+1)) ;;
     esac
     local action='-'
     case "$st" in
       NOT-STARTED|STALLED|ABANDONED) action="open $url" ;;
       LANDED)                        action="cc-offload land" ;;
+      # THE GAP THIS ROW EXISTED WITHOUT. Every other state names a next move; the one row that is
+      # BY DEFINITION waiting on a human fell through to '-'. `open <url>` is the wrong one here —
+      # the question is already readable on this box, and the point of C7 is that nobody had to go
+      # look in a browser to find it.
+      NEEDS-INPUT)                   action="cc-cloud inbox --id ${id}" ;;
       ALIVE|BOOTING)                 action="cc-offload say ${id} '…'" ;;
     esac
     [ -n "$ret" ] && action="retired"

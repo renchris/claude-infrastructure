@@ -16,6 +16,9 @@
 #                                                    `item=` link; rc 1 = no declaration names it)
 #   cc-cloud list [--json] [--state]                 the declaration inventory from DISK — no probe
 #                                                    (--state opts INTO the state function, §9.3)
+#   cc-cloud inbox [--id <id>] [--all] [--json]      what the sessions have been ASKING (control
+#                                                    plane); also the WRITER of the `.turn` evidence
+#                                                    the state function reads — see C7 below
 #   cc-cloud --json | --table | --check | --selftest
 #
 # ── ONE tool, because two reading one observable set is worse than either ─────────────────────────
@@ -106,6 +109,8 @@
 #   C4 STALLED      ref exists, sha unchanged for > stall_s (sidecar evidence REQUIRED)       ROW
 #   C5 ALIVE        ref exists and advanced inside the budget                               no row
 #   C6 ABANDONED    ref exists, not landed, past life_s                                       ROW
+#   C7 NEEDS-INPUT  the CONTROL PLANE saw this session end a turn in a state that waits on us  ROW
+#                   (`need_input` / `review_ready`) — it worked and ASKED. See WORK EVIDENCE.
 #
 # ── ORDERING: C3 PRECEDES C1, because a branch ref is DELETED on the way to being landed ─────────
 # A raw branch-presence probe scores a landed-then-pruned session identically to one that never
@@ -138,6 +143,57 @@
 # `scripts/branch-prune-landed.sh` fills the path set BEFORE it deletes, so a prune from here on
 # leaves C3 answerable rather than manufacturing this UNKNOWN.
 #
+# ── WORK EVIDENCE (C7): A PUSH IS NOT THE ONLY WAY A SESSION PROVES IT STARTED ────────────────────
+# THE DEFECT, measured 2026-08-27 across 262 live sessions (BACKLOG_DRAIN_24_7.md § lane audit,
+# backlog 700005171b41). The board read 151 NOT-STARTED / 107 STALLED / 14 ABANDONED — 86% of 315
+# active declarations — and every obvious cause was REFUTED: 262/262 control-plane GETs returned
+# 200, every record `status:"active"`, `accepted:true`, evenly spread across four accounts, and
+# `refusal-route.jsonl` held zero creation refusals. What the control plane said instead:
+# **222 of 262 (85%) carried `post_turn_summary.status_category == "need_input"`.** They had worked
+# and ASKED A QUESTION. Verbatim from one session this file filed NOT-STARTED:
+#   status_category  need_input
+#   status_detail    fix verified & tests green; gate issues block ship
+# That session had SUCCEEDED. It read never-started because the C1 arm derived "never started" from
+# git-ref absence ALONE, and a VM that finishes (or blocks) without pushing has no ref. The label
+# sent 83% of triage at a boot problem that does not exist.
+#
+# THE SHAPE OF THE FIX IS THIS FILE'S OWN, NOT A NEW ONE. C1 already refuses to fire on
+# evidence-of-push (the `.seen` sidecar / `paths_src`, guard 2 above): POSITIVE, durable evidence
+# that survives the ref itself. A control-plane turn is the SAME kind of evidence about the same
+# claim — "this session never started" — so it enters by the same door:
+#   `$STATE/<id>.turn`   at=<epoch observed>  cat=<status_category>  worker=<worker_status>
+# written by `cc-cloud inbox` (scripts/cloud-inbox.py), which already reads the control plane, on
+# the same cadence `cloud-return` runs at. This file does NOT probe the control plane itself, for
+# three reasons that are not style: `classify` is called in a loop over every declaration by
+# emit_rows / list --state / do_check, so a per-id authenticated subprocess would put the network
+# and four accounts' credentials on a hot path; this file is deliberately jq-free and the answer is
+# JSON; and a second decoder of the control plane is a second source of truth that cannot learn the
+# API changed. One writer, one sidecar, one reader — exactly the `.seen` contract.
+#
+# WHAT IT MAY AND MAY NOT DECIDE. The evidence is PURELY REFUTING: with no `.turn` file every arm
+# behaves exactly as before, so this can only ever move a session OFF C1, never onto it. With one:
+#   cat ∈ need_input|review_ready  → C7 NEEDS-INPUT. It worked and it is waiting on US. This is a
+#                                    verdict, not an abstention, and it emits a ROW — the whole
+#                                    failure was 85% of the board pointing triage the wrong way.
+#                                    C7 outranks C6: a session that asked a question six days ago
+#                                    is not ABANDONED, it is UNANSWERED, and the 15 `review_ready`
+#                                    sessions holding unpushed work in reclaimable containers are
+#                                    the one part of this with a deadline.
+#   any other category             → U0 UNKNOWN. "Never started" is refuted and nothing else is
+#                                    established — the same answer, for the same reason, as the
+#                                    ref-vanished-after-push arm above.
+# The sidecar must be NO OLDER than the declaration (`at >= declared_at`) or it is ignored: a
+# re-declared id inherits the previous fire's sidecars, and a turn taken by the PREVIOUS session on
+# this id says nothing about this one. (`.seen` carries no such guard and inherits the same way —
+# a real latent defect, named here rather than fixed in this change because it is C4's arm, not
+# C1's, and it wants its own red-proof.)
+#
+# ONLY ENUM-SHAPED TOKENS CROSS THE BOUNDARY. `status_detail` and `needs_action` are free text
+# composed by a REMOTE VM. They are never written to the sidecar and never read here: this store is
+# `key=value`, one line per field, and a newline in a remote-authored value forges fields in it.
+# The writer sanitises to [A-Za-z0-9._-]{1,64} and writes `unmodelled` otherwise. The prose stays
+# where a human reads it, in `cc-cloud inbox`, which classifies and prints and never executes.
+#
 # ── BASELINE: why C1/C2 also fire on a ref that EXISTS (migrated from cc-cloud-watch `record`) ────
 # `declare` probes the remote once and records the sha the branch held BEFORE the fire. Without it,
 # declaring against a branch name that already exists reads C5 ALIVE from the instant of the
@@ -160,8 +216,26 @@
 # ── row schema (matches bin/cc-fleet's FROZEN shape so cc-blockers can consume it unchanged) ─────
 # {"kind":"cloud-session","state":"<S>","detail":"<ascii, <=44 bytes>","subject":"<id>",
 #  "recover_cmd":"<paste-ready>","ts":<epoch>}
-# state ∈ NOT-STARTED|STALLED|ABANDONED.  `detail` is ASCII-only and <=44 bytes: the board's
-# renderer pads by BYTES, so one em-dash silently shifts the column.
+# state ∈ NOT-STARTED|STALLED|ABANDONED|NEEDS-INPUT.  `detail` is ASCII-only and <=44 bytes: the
+# board's renderer pads by BYTES, so one em-dash silently shifts the column.
+#
+# NEEDS-INPUT is a GROWN member of that set, and every consumer was READ rather than assumed (the
+# enum-member-falls-into-an-unaudited-default class). Four take a documented fail-closed default and
+# are correct under it, unchanged:
+#   bin/cc-backlog `cloud_state` whitelists the tokens it models and returns rc 2 CANNOT-TELL
+#     otherwise, so `cloud_map` is never consulted: the claim sweep falls through to its local
+#     paths (abstain under the ceiling, block over it) and the cure sweep leaves the block standing
+#     — neither REOPENS. That is the fix, precisely: C1 maps to `open`, which returns the row to
+#     the wave and fires a SECOND peer at work whose only remaining need is an answer. A block
+#     parks; a reopen duplicates. (An explicit `cloud_map` arm naming the ask would be better than
+#     the generic abstain — deliberately not taken here, see the plan entry.)
+#   bin/cc-offload `gc` retires an explicit opt-in list (NOT-STARTED ABANDONED), so a session that
+#     asked a question can never be retired out from under its question by the default sweep.
+#   scripts/custody-deathwatch.sh answers UNKNOWN rather than GONE — no peer is declared dead.
+#   scripts/cloud-return.sh says "not a return state" and lands nothing, correct with no ref.
+# `do_check` FAILS on it, correctly — someone must act. Only bin/cc-offload's board had a GAP
+# rather than a default (its per-row `action` column stayed `-` for the one row that by definition
+# needs a human) and is changed with this.
 #
 # READ-ONLY against the network and against the git repo. `git ls-remote` performs no fetch and
 # writes no ref. The only bytes this program writes are its own declarations and sidecars under
@@ -220,6 +294,15 @@ dfield() { # <file> <key> → value (empty if absent)
     case "$line" in "$k="*) printf '%s' "${line#*=}"; return 0 ;; esac
   done < "$f"
   return 0
+}
+
+# The control-plane categories that mean "this session is waiting on US". Kept in ONE place because
+# scripts/cloud-inbox.py holds the same set as `BLOCKING`, and two spellings of one set drift: the
+# writer would stamp a category the reader does not act on, silently. tests/cc-cloud.bats pins the
+# two together by reading both out of the files rather than restating either.
+is_blocking_cat() { # <category> → 0 iff the session is waiting on us
+  case "${1:-}" in need_input|review_ready) return 0 ;; esac
+  return 1
 }
 
 ids() { # every declared, non-retired id, sorted
@@ -523,9 +606,10 @@ trailer_supported() { # <claude-binary> → 0 yes, 1 no, 2 cannot tell
 # ── the state function ───────────────────────────────────────────────────────────────────────────
 # Emits: <state>\t<detail>\t<recover_cmd>  — exactly one line per id, always.
 classify() { # <id>
-  local id="$1" f="$STATE/$1.decl" seen="$STATE/$1.seen"
+  local id="$1" f="$STATE/$1.decl" seen="$STATE/$1.seen" turn="$STATE/$1.turn"
   local branch remote repo paths trunk url dat boot stall life
   local sha rc n age url_cmd first_seen sha_age base_sha base_probe seen_sha paths_src pushed
+  local worked worked_at worked_cat worked_age worked_wait inbox_cmd
 
   branch="$(dfield "$f" branch)"
   remote="$(dfield "$f" remote)"
@@ -560,9 +644,48 @@ classify() { # <id>
   paths_src="$(dfield "$f" paths_src)"
   if [ -n "$seen_sha" ] || [ -n "$paths_src" ]; then pushed=1; else pushed=0; fi
 
+  # ── WORK EVIDENCE: the SECOND refutation of "never started" (C7 in the header) ───────────────────
+  # A push is not the only proof a session ran. `cc-cloud inbox` stamps this sidecar from the
+  # control plane's own record of the session's last turn. Ignored unless it is at least as new as
+  # the declaration: a re-declared id inherits the previous fire's sidecar, and that fire's turn
+  # says nothing about this one.
+  worked=0; worked_cat=""; worked_age=0; worked_wait=0
+  worked_at="$(dfield "$turn" at)"
+  if is_num "$worked_at" && [ "$worked_at" -ge "$dat" ]; then
+    worked=1
+    worked_cat="$(dfield "$turn" cat)"
+    worked_age=$((n - worked_at)); [ "$worked_age" -lt 0 ] && worked_age=0
+    # WHO DECIDES "waiting on us": the WRITER, once, because it is the only party holding the whole
+    # control-plane record. A category is not the only way a session waits — an outstanding
+    # permission request has no `status_category` at all and is just as blocked — so the verdict is
+    # made where both facts are visible rather than re-derived here from the half that survives.
+    case "$(dfield "$turn" waiting)" in
+      1) worked_wait=1 ;;
+      0) worked_wait=0 ;;
+      *) # Absent — a partial write, or a sidecar older than the field. Fall back to the category
+         # test, which is the same set spelled on this side; the suite pins the two together.
+         if is_blocking_cat "$worked_cat"; then worked_wait=1; fi ;;
+    esac
+  fi
+  inbox_cmd="cc-cloud inbox --id $id"
+
   # C1/C2 require BOTH: no ref now AND no evidence there ever was one. Reaching this arm on
   # evidence-of-push alone is the defect below.
   if [ -z "$sha" ] && [ "$pushed" -eq 0 ]; then
+    # C7 BEFORE C1, and before C3 for the same reason C1 is: with no evidence of a push, `landed()`
+    # would read a declaration naming an already-present path as finished from the instant it was
+    # written (guard 1 in the header).
+    if [ "$worked" -eq 1 ]; then
+      if [ "$worked_wait" -eq 1 ]; then
+        printf 'NEEDS-INPUT\tasked %s ago (%s), no ref\t%s\n' "$(dur "$worked_age")" "$worked_cat" "$inbox_cmd"
+      else
+        # Started — that much is measured — and nothing else is. Same answer, same law, as the
+        # ref-vanished-after-push arm below: a refuted claim does not make the opposite one true.
+        printf 'UNKNOWN\tturn seen %s ago (%s), no ref\t%s\n' \
+          "$(dur "$worked_age")" "${worked_cat:-no category}" "$inbox_cmd"
+      fi
+      return 0
+    fi
     if [ "$age" -gt "$boot" ]; then
       printf 'NOT-STARTED\tno ref after %s (boot budget %s)\t%s\n' "$(dur "$age")" "$(dur "$boot")" "$url_cmd"
     else
@@ -588,17 +711,40 @@ classify() { # <id>
     return 0
   fi
 
+  # ── C7 for a ref that EXISTS: after C3, ahead of C4 and C6 ───────────────────────────────────────
+  # A session that pushed, asked a question and then went quiet satisfies C4 STALLED and, later, C6
+  # ABANDONED — and both of those map, in bin/cc-backlog's reap, to "nobody is working this, return
+  # it to the wave". That reopen fires a SECOND peer at work whose only remaining need is an ANSWER,
+  # which is the same misrouting C1 caused and the reason C7 has to outrank them rather than only
+  # C1. It does NOT outrank C3: content on the trunk means the work is done and the question moot.
+  if [ "$worked" -eq 1 ] && [ "$worked_wait" -eq 1 ]; then
+    printf 'NEEDS-INPUT\tasked %s ago (%s), ref at %.7s\t%s\n' \
+      "$(dur "$worked_age")" "$worked_cat" "$sha" "$inbox_cmd"
+    return 0
+  fi
+
   # BASELINE (C1/C2 for a ref that exists but has not MOVED since the fire). Only when the fire-time
   # probe actually answered: an unmeasured baseline abstains rather than being read as an empty one.
   base_probe="$(dfield "$f" base_probe)"
   base_sha="$(dfield "$f" base_sha)"
   if [ "$base_probe" = "ok" ] && [ -n "$base_sha" ] && [ "$sha" = "$base_sha" ]; then
-    if [ "$age" -gt "$boot" ]; then
-      printf 'NOT-STARTED\tref still at pre-fire sha after %s\t%s\n' "$(dur "$age")" "$url_cmd"
-    else
-      printf 'BOOTING\tno push yet, %s into a %s budget\t-\n' "$(dur "$age")" "$(dur "$boot")"
+    # 🚨 THE SECOND SPELLING OF C1, AND IT IS WHY THIS ARM IS TOUCHED TOO. "Never started" is
+    # asserted at TWO sites in this function — once as "no ref" above and once as "the ref has not
+    # moved off its fire-time sha" here — and a session that worked without pushing satisfies BOTH.
+    # Draining a named predicate at one site and leaving its sibling is the failure
+    # BACKLOG_DRAIN_24_7 has recorded four times (#243, #244, #245, #249), so the same evidence
+    # refutes the same claim in both places. The blocking case has already returned C7 above; what
+    # is left here is a session the control plane saw take a turn that is NOT waiting on us.
+    if [ "$worked" -eq 0 ]; then
+      if [ "$age" -gt "$boot" ]; then
+        printf 'NOT-STARTED\tref still at pre-fire sha after %s\t%s\n' "$(dur "$age")" "$url_cmd"
+      else
+        printf 'BOOTING\tno push yet, %s into a %s budget\t-\n' "$(dur "$age")" "$(dur "$boot")"
+      fi
+      return 0
     fi
-    return 0
+    # Worked, not waiting on us, and the ref exists: unlike the no-ref arm there IS a sha to reason
+    # about, so fall through to C4/C6/C5 rather than abstaining. Only the C1 claim is refuted.
   fi
 
   # C4 needs HISTORY. The sidecar records "sha X was first seen at T"; `poll` writes it.
@@ -632,7 +778,7 @@ emit_rows() {
     state="${line%%	*}"; line="${line#*	}"
     detail="${line%%	*}"; rcmd="${line#*	}"
     case "$state" in
-      NOT-STARTED|STALLED|ABANDONED) ;;
+      NOT-STARTED|STALLED|ABANDONED|NEEDS-INPUT) ;;
       *) continue ;;
     esac
     printf '{"kind":"cloud-session","state":"%s","detail":"%s","subject":"%s","recover_cmd":"%s","ts":%s}\n' \
@@ -1110,6 +1256,25 @@ do_selftest() {
 
   CC_CLOUD_NOW=$((2000000000 + 5000))
   _st_expect "absent ref past the boot budget is NOT-STARTED" NOT-STARTED boot
+
+  # C7 OFF THE SAME FIXTURE, WHICH IS THE POINT. Only the sidecar changes — same declaration, same
+  # absent ref, same clock that just produced NOT-STARTED — so this cannot pass for any reason
+  # except the work evidence being read. 85% of the live board sat on the verdict above.
+  { printf 'at=%s\n' "$((2000000000 + 100))"; printf 'cat=need_input\n'; } > "$STATE/boot.turn"
+  _st_expect "a control-plane turn REFUTES NOT-STARTED — it worked and asked" NEEDS-INPUT boot
+  { printf 'at=%s\n' "$((2000000000 + 100))"; printf 'cat=working\n'; } > "$STATE/boot.turn"
+  _st_expect "a turn that is NOT waiting on us refutes C1 without asserting C7" UNKNOWN boot
+  # The WRITER's verdict is what decides, not the category: a session stopped on a permission
+  # request carries no blocking `status_category` at all and is still waiting on us. The two arms
+  # above ran the category FALLBACK (no `waiting=` line); these run the field.
+  { printf 'at=%s\n' "$((2000000000 + 100))"; printf 'cat=working\n'; printf 'waiting=1\n'; } > "$STATE/boot.turn"
+  _st_expect "waiting=1 asserts C7 over a category that does not block (permission ask)" NEEDS-INPUT boot
+  { printf 'at=%s\n' "$((2000000000 + 100))"; printf 'cat=need_input\n'; printf 'waiting=0\n'; } > "$STATE/boot.turn"
+  _st_expect "waiting=0 OVERRIDES a blocking category — the writer is the arbiter" UNKNOWN boot
+  # NEGATIVE CONTROL: a sidecar OLDER than the declaration belongs to a previous fire on this id.
+  { printf 'at=%s\n' "$((2000000000 - 100))"; printf 'cat=need_input\n'; } > "$STATE/boot.turn"
+  _st_expect "a sidecar predating the declaration is ignored (previous fire's turn)" NOT-STARTED boot
+  rm -f "$STATE/boot.turn"
   CC_CLOUD_NOW=2000000000
 
   cmd_declare --id gone --branch feat/y --remote "$_ST_D/nonexistent.git" --repo "" >/dev/null

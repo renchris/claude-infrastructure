@@ -162,3 +162,119 @@ run_inbox() { run python3 "$INBOX" "$@"; }
   [ "$status" -eq 0 ]
   [[ "$output" != *"some_future_state"* ]]
 }
+
+# ── THE WRITER: `<id>.turn`, the work evidence cc-cloud's C7 arm reads ────────────────────────────
+# Printing the question fixed the CHANNEL and not the BOARD. `cc-cloud classify()` is the arbiter
+# cc-offload, cc-backlog's reap, custody-deathwatch and cloud-return all ask, and its "never
+# started" rung derived that verdict from git-ref absence alone — so the same 222 sessions that
+# reach a human here were still filed NOT-STARTED everywhere a machine looked, and the reap maps
+# that to "return it to the wave": a second peer fired at work whose only remaining need is an
+# answer. These five pin the evidence this pass leaves behind, and case 12 pins the two halves
+# together through the real files rather than through a shared belief about the format.
+
+# turnfield <id> <key> → the value, or '' — read the way cc-cloud's dfield reads it.
+turnfield() { sed -n "s/^$2=//p" "$C/state/$1.turn" 2>/dev/null | head -1; }
+
+@test "8 a session that TOOK A TURN leaves the evidence cc-cloud reads, with the waiting verdict" {
+  decl session_T t1; fx session_T need_input "gate issues block ship" "cc-backlog done t1"
+  run_inbox --now 1900000000
+  [ "$status" -eq 0 ]
+  [ -f "$C/state/session_T.turn" ]
+  [ "$(turnfield session_T at)" = "1900000000" ]
+  [ "$(turnfield session_T cat)" = "need_input" ]
+  [ "$(turnfield session_T worker)" = "idle" ]
+  # THE VERDICT IS MADE HERE, ONCE, because this is the only party holding the whole record.
+  [ "$(turnfield session_T waiting)" = "1" ]
+  # The tally must distinguish a pass that stamped from one that did not — the arm on the far side
+  # can only ever fire on evidence this pass wrote.
+  [[ "$output" == *"turn evidence — stamped 1"* ]]
+}
+
+@test "9 a 200 that is NOT a turn is NEVER stamped — C1 stays right about a never-started session" {
+  # THE ONE WAY THIS CHANGE COULD MAKE THE BOARD WORSE. A session that never booted also returns 200
+  # with accepted:true; stamping every readable probe would refute NOT-STARTED for exactly the
+  # sessions NOT-STARTED is correct about. The predicate is a `post_turn_summary` (or an outstanding
+  # permission request), never a successful GET.
+  decl session_Q q1
+  printf '{"id":"x","accepted":true,"status_bucket":"queued","worker_status":"idle"}' > "$C/fx/session_Q.json"
+  run_inbox --all --now 1900000000
+  [ "$status" -eq 0 ]
+  [ ! -f "$C/state/session_Q.turn" ]
+  [[ "$output" == *"turn evidence — no-turn 1"* ]] || false
+
+  # POSITIVE CONTROL: a permission request with NO status_category at all IS a turn, and it is
+  # waiting on us — the case a category test alone would miss, which is why `waiting` is decided
+  # from the whole record rather than from the category that survives into the sidecar.
+  decl session_P p1
+  printf '{"id":"x","accepted":true,"worker_status":"idle","requires_action":["approve write"]}' > "$C/fx/session_P.json"
+  run_inbox --id session_P --now 1900000000
+  [ -f "$C/state/session_P.turn" ]
+  [ "$(turnfield session_P waiting)" = "1" ]
+  [ "$(turnfield session_P cat)" = "" ]
+}
+
+@test "10 a value the REMOTE composed cannot forge a field in the store the arbiter trusts" {
+  # The sidecar is `key=value`, one line per field. `status_category` is remote-authored, so a
+  # newline in it would write `waiting=1` into a session that is not waiting — the arbiter reading
+  # an attacker-chosen verdict out of its own state dir. Shape allowlist, never a scrub of spellings.
+  decl session_X x1
+  python3 - "$C/fx/session_X.json" <<'PY'
+import json, sys
+json.dump({"id": "x", "accepted": True, "worker_status": "idle",
+           "summary": {"status_category": "need_input\nwaiting=1\nat=9999999999",
+                       "status_detail": "d", "needs_action": "a"}}, open(sys.argv[1], "w"))
+PY
+  run_inbox --all --now 1900000000
+  [ "$status" -eq 0 ]
+  [ "$(turnfield session_X cat)" = "unmodelled" ]
+  [ "$(turnfield session_X at)" = "1900000000" ]
+  # The forged line never reached the file at all — not merely overridden by ordering.
+  [ "$(grep -c . "$C/state/session_X.turn")" -eq 4 ]
+  # …and the injected category is NOT read as blocking, so the forgery buys nothing either way.
+  [ "$(turnfield session_X waiting)" = "0" ]
+}
+
+@test "11 --no-stamp reports without writing, and --id probes exactly one declaration" {
+  decl session_1 i1; fx session_1 need_input d "ask"
+  decl session_2 i2; fx session_2 need_input d "ask"
+
+  run_inbox --no-stamp
+  [ "$status" -eq 0 ]
+  [ ! -f "$C/state/session_1.turn" ]
+  [ ! -f "$C/state/session_2.turn" ]
+  [[ "$output" == *"turn evidence — off 2"* ]] || false
+
+  run_inbox --id session_2 --now 1900000000
+  [ "$status" -eq 0 ]
+  [ -f "$C/state/session_2.turn" ]
+  [ ! -f "$C/state/session_1.turn" ]
+  # `--id` defines the population the way `--item` does: the filter is applied before the tally, so
+  # the pass reports what it was ASKED to read, not a fraction of the whole store.
+  [[ "$output" == *"probed 1 of 1 active session(s)"* ]]
+}
+
+@test "12 END TO END: one inbox pass flips the REAL cc-cloud board off NOT-STARTED" {
+  # The two halves meet through the files, not through a shared belief about the format. Either
+  # side alone can be green while the lane stays broken: this is the only case that fails if the
+  # writer's key names, its epoch, or its freshness guard drift from what the arbiter reads.
+  CLOUD="$REPO/bin/cc-cloud"
+  [ -x "$CLOUD" ]
+  git init -q --bare "$C/rem.git"
+  export CC_CLOUD_NOW=2000000000
+  # `--account` is not decoration: a session id is not a globally-addressable handle, so a
+  # declaration without one is `unreadable` at the probe and nothing is ever stamped.
+  "$CLOUD" declare --id e2e --branch feat/a --remote "$C/rem.git" --repo "" --boot 900 \
+    --account next3 >/dev/null
+  fx e2e need_input "fix verified & tests green; gate issues block ship" "cc-backlog done b60eb29e97dd"
+
+  # CONTROL: the exact verdict 151 live declarations were sitting on, off this exact fixture.
+  export CC_CLOUD_NOW=$((2000000000 + 5000))
+  [ "$("$CLOUD" --table | awk '$1=="e2e"{print $2}')" = "NOT-STARTED" ]
+
+  run_inbox --now $((2000000000 + 100))
+  [ "$status" -eq 0 ]
+  [ "$("$CLOUD" --table | awk '$1=="e2e"{print $2}')" = "NEEDS-INPUT" ]
+  # And it reaches the ROW consumers, pointing at the reader rather than at a browser.
+  [ "$("$CLOUD" --json | grep -c '"state":"NEEDS-INPUT"')" -eq 1 ]
+  [[ "$("$CLOUD" --json)" == *'"recover_cmd":"cc-cloud inbox --id e2e"'* ]]
+}

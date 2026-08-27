@@ -51,6 +51,41 @@ folded into "nothing to answer". An empty inbox must mean "asked and nobody is b
 is a different fact from "could not ask" (memory: lookup-miss-is-not-absence, and
 suppressed-stderr-turns-a-failed-command-into-a-zero).
 
+── AND IT IS THE WRITER OF THE EVIDENCE `cc-cloud classify()` READS (`<id>.turn`) ─────────────
+
+Printing the question fixed the channel and not the BOARD. `cc-cloud` is the arbiter every other
+tool asks — cc-offload's table, cc-backlog's reap, custody-deathwatch, cloud-return — and its C1
+NOT-STARTED rung derived "never started" from git-ref absence ALONE. So the same 222 sessions
+that reach a human here were still filed never-started everywhere a machine looked, and
+cc-backlog's reap maps NOT-STARTED to "nobody is working this, return it to the wave": a reopen
+that fires a SECOND peer at work whose only remaining need is an answer.
+
+`cc-cloud` cannot ask the control plane itself. `classify()` runs in a loop over every
+declaration, so a per-id authenticated subprocess would put the network and four accounts'
+credentials on a hot path; the file is deliberately jq-free and the answer is JSON; and a second
+decoder is a second source of truth that cannot learn the API changed. This tool is already the
+one reader, on the daemon's cadence, so it leaves the evidence behind in the same durable,
+positive, refuting shape `poll` uses for the sha (`<id>.seen`):
+
+    <CC_CLOUD_STATE>/<id>.turn     at=<epoch>  cat=<category>  worker=<worker_status>  waiting=<0|1>
+
+THE STAMP REQUIRES A TURN, NOT A 200. A never-started session ALSO returns 200 with
+`accepted:true` — stamping every readable probe would refute C1 for the sessions C1 is right
+about, which is the one way this could make the board worse than it was. The predicate is
+`post_turn_summary` present (the field's own name is the evidence) OR an outstanding
+`requires_action`. Neither ⇒ no stamp, and `cc-cloud` behaves exactly as it did before.
+
+`waiting` IS DECIDED HERE, ONCE. A blocking category is not the only way a session waits: a
+session stopped on a permission request carries no `status_category` at all. This tool holds the
+whole record, so it makes the call rather than leaving the far side to re-derive it from the
+half that survives.
+
+ONLY ENUM-SHAPED TOKENS ARE WRITTEN. `status_detail` and `needs_action` are free text composed by
+a remote VM, and the sidecar is `key=value`, one line per field — a newline in a remote-authored
+value forges fields in a store the arbiter trusts. Values are written only if they match
+`[A-Za-z0-9._-]{1,64}`, else `unmodelled`. The prose stays here, where a human reads it. This is
+still not an actuator: it writes what it OBSERVED into our own state, and executes nothing.
+
 Exit codes:  0 = ran, whatever it found (an empty inbox is not an error)
              2 = usage
              3 = the declaration store is unreadable — cannot even enumerate
@@ -65,6 +100,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # The probe binary is an env seam so the suite can stub the control plane. Unstubbed, a test would
@@ -89,6 +125,55 @@ BLOCKING = {"need_input", "review_ready"}
 RUNNABLE_RE = re.compile(
     r"^\s*(?:\d+[.)]\s*)?(cc-backlog|cc-cloud|cc-notify|cc-custody|bash scripts/|git )\b"
 )
+
+# What may cross into the `<id>.turn` sidecar. An ALLOWLIST of shape, not a scrub of the spellings
+# we happen to have seen: the values are composed by a remote VM and the sidecar is a `key=value`
+# store the arbiter trusts, so one newline forges a field in it. A value that does not match is
+# written as `unmodelled` — which is news, and legible as news, rather than a silent omission.
+TOKEN_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
+
+
+def token(v) -> str:
+    """A control-plane value, safe to write into a key=value store. '' for absent."""
+    if v is None:
+        return ""
+    s = str(v)
+    if not s:
+        return ""
+    return s if TOKEN_RE.fullmatch(s) else "unmodelled"
+
+
+def stamp(state: str, sid: str, row: dict, now: int) -> str:
+    """Write `<id>.turn` when the record proves a TURN happened. Returns why, for the tally.
+
+    Never raises: this is a side effect of a reporting pass, and a sidecar that could not be
+    written must not take the report down with it.
+    """
+    if row.get("state") != "read":
+        return "not-read"          # a probe that could not run establishes nothing
+    # THE PREDICATE. A 200 is not a turn — a never-started session returns one too. `requires_action`
+    # counts because a session stopped at a permission prompt has demonstrably run.
+    if not row.get("has_turn"):
+        return "no-turn"
+    waiting = 1 if (row.get("category") in BLOCKING or row.get("requires_action")) else 0
+    body = (
+        f"at={now}\n"
+        f"cat={token(row.get('category'))}\n"
+        f"worker={token(row.get('worker_status'))}\n"
+        f"waiting={waiting}\n"
+    )
+    tmp = os.path.join(state, f".{sid}.turn.tmp{os.getpid()}")
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(body)
+        os.replace(tmp, os.path.join(state, sid + ".turn"))
+    except OSError as e:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return f"unwritable: {e}"
+    return "stamped"
 
 
 def read_decl(path: str) -> dict:
@@ -157,6 +242,7 @@ def probe(sid: str, account: str, timeout: int) -> dict:
             "why": f"rc={p.returncode}; {why[-1][:160] if why else 'no output'}",
         }
     summary = rec.get("summary") or {}
+    requires = rec.get("requires_action") or []
     return {
         "id": sid,
         "state": "read",
@@ -166,7 +252,11 @@ def probe(sid: str, account: str, timeout: int) -> dict:
         "category": summary.get("status_category"),
         "detail": summary.get("status_detail"),
         "needs_action": summary.get("needs_action"),
-        "requires_action": rec.get("requires_action") or [],
+        "requires_action": requires,
+        # DID THIS SESSION TAKE A TURN? The one fact `cc-cloud`'s C1 rung was missing, and it is a
+        # property of the RECORD, not of the report — so it is derived here, beside the decoding,
+        # rather than inferred downstream from whichever fields happened to be printed.
+        "has_turn": bool(summary) or bool(requires),
     }
 
 
@@ -192,10 +282,19 @@ def main() -> int:
     ap.add_argument(
         "--item", default="", help="only the session declared for this backlog id"
     )
+    ap.add_argument("--id", default="", help="only this declaration id")
     ap.add_argument(
         "--all",
         action="store_true",
         help="report every session, not only the blocked ones",
+    )
+    ap.add_argument(
+        "--no-stamp",
+        action="store_true",
+        help="report only; do not write the <id>.turn evidence cc-cloud reads",
+    )
+    ap.add_argument(
+        "--now", type=int, default=0, help="epoch override for the stamp (tests)"
     )
     args = ap.parse_args()
 
@@ -210,6 +309,8 @@ def main() -> int:
 
     if args.item:
         rows = [(s, d) for s, d in rows if d.get("item") == args.item]
+    if args.id:
+        rows = [(s, d) for s, d in rows if s == args.id]
     # THE BOUND IS ANNOUNCED, NEVER SILENT. A truncated sweep that prints like a complete one reads
     # as "everything is fine" (CLAUDE.md § no silent caps), so say what was dropped and why.
     total = len(rows)
@@ -221,6 +322,7 @@ def main() -> int:
             file=sys.stderr,
         )
 
+    now = args.now or int(time.time())
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
         futs = {
@@ -235,6 +337,13 @@ def main() -> int:
             row["url"] = decl.get("url", "")
             row["ask"] = (
                 classify_ask(row) if row.get("state") == "read" else "UNREADABLE"
+            )
+            # STAMPED FOR EVERY PROBED SESSION, not only the ones this pass PRINTS. The report is
+            # filtered to what a human should look at; the arbiter's evidence is about whether the
+            # session ran at all, and a `--all`-less pass that stamped only its own rows would
+            # leave every non-blocked session reading NOT-STARTED — the defect, one filter deeper.
+            row["stamp"] = (
+                "off" if args.no_stamp else stamp(args.state, sid, row, now)
             )
             results.append(row)
 
@@ -277,6 +386,18 @@ def main() -> int:
         + str(total)
         + " active session(s) — "
         + (", ".join(f"{k} {v}" for k, v in sorted(counts.items())) or "nothing read"),
+        file=sys.stderr,
+    )
+    # THE STAMP TALLY IS NOT OPTIONAL OUTPUT. `cc-cloud`'s C7 arm can only fire on evidence this
+    # pass wrote, so a pass that stamped nothing and a pass that stamped everything must not read
+    # the same. `no-turn` is the expected majority on a healthy fleet and is a REPORT, not a fault:
+    # those sessions genuinely have not taken a turn, and C1 is right about them.
+    stamps: dict = {}
+    for r in results:
+        stamps[r.get("stamp", "?")] = stamps.get(r.get("stamp", "?"), 0) + 1
+    print(
+        "cloud-inbox: turn evidence — "
+        + (", ".join(f"{k} {v}" for k, v in sorted(stamps.items())) or "nothing probed"),
         file=sys.stderr,
     )
     return 0

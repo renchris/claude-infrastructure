@@ -152,6 +152,154 @@ setup() {
   [ "$(field subject)" = "early" ]
 }
 
+# ── C7 WORK EVIDENCE: a push is not the only way a session proves it started ──────────────────────
+# THE MEASURED DEFECT these five pin (2026-08-27, 262 live sessions): the board read 86% dead while
+# 222 of 262 records (85%) carried `post_turn_summary.status_category == "need_input"` — they had
+# worked and ASKED. C1 derived "never started" from git-ref absence alone, and cc-backlog's reap
+# maps NOT-STARTED to "return it to the wave", firing a second peer at work that had succeeded.
+#
+# `turn` writes the sidecar cc-cloud reads. It is HAND-WRITTEN here on purpose: this suite is about
+# what the state function does with the evidence, and tests/cloud-inbox.bats owns whether the writer
+# produces it (including the end-to-end case where the two halves meet through the real files).
+turn() { # <id> <at> <cat> [waiting]
+  # A plain `[ -n "$4" ] && printf …` would leave the brace group's exit status at 1 whenever the
+  # optional argument is absent, and bats runs every body under `set -eET` — so the helper would
+  # kill its own caller on the commonest call. The suite's dead-assertion discipline, one level up.
+  { printf 'at=%s\n' "$2"; printf 'cat=%s\n' "$3"
+    if [ -n "${4:-}" ]; then printf 'waiting=%s\n' "$4"; fi; } > "$CC_CLOUD_STATE/$1.turn"
+}
+
+@test "C7 a control-plane turn REFUTES C1 — the session worked and asked, off the SAME fixture" {
+  have_subject
+  r="$(bare rem)"
+  cloud declare --id asked --branch feat/a --remote "$r" --repo "" --boot 900
+  export CC_CLOUD_NOW=$((T0 + 5000))
+
+  # CONTROL FIRST, so the flip below cannot be a fixture that was never NOT-STARTED: this is the
+  # exact verdict 151 live declarations were sitting on.
+  [ "$(tstate asked)" = "NOT-STARTED" ]
+
+  turn asked $((T0 + 100)) need_input
+  [ "$(tstate asked)" = "NEEDS-INPUT" ]
+  # It ROWS. The failure was not a wrong word on a table nobody reads — it was 85% of the board
+  # pointing triage at a boot problem that does not exist, so C7 has to reach the same consumers.
+  [ "$(rows)" -eq 1 ]
+  [ "$(states)" = "NEEDS-INPUT" ]
+  [ "$(field recover_cmd)" = "cc-cloud inbox --id asked" ]
+
+  # A turn that is NOT waiting on us refutes C1 without asserting C7 — "never started" is false and
+  # nothing else is established. Same law, same answer, as the ref-vanished-after-push arm.
+  turn asked $((T0 + 100)) working
+  [ "$(tstate asked)" = "UNKNOWN" ]
+  [ "$(rows)" -eq 0 ]
+}
+
+@test "C7 the evidence is PURELY REFUTING — no sidecar leaves every arm byte-identical" {
+  have_subject
+  r="$(bare rem)"
+  cloud declare --id noev --branch feat/a --remote "$r" --repo "" --boot 900
+  export CC_CLOUD_NOW=$((T0 + 5000))
+  before="$("$CLOUD" --table)"
+
+  # A sidecar with no readable `at` is not evidence. The arm must abstain rather than fire on the
+  # file's mere EXISTENCE — the whole design is positive evidence, never an inference from presence.
+  printf 'cat=need_input\n' > "$CC_CLOUD_STATE/noev.turn"
+  [ "$("$CLOUD" --table)" = "$before" ]
+  printf 'at=not-a-number\ncat=need_input\n' > "$CC_CLOUD_STATE/noev.turn"
+  [ "$("$CLOUD" --table)" = "$before" ]
+
+  # NEGATIVE CONTROL on the guard itself: a sidecar OLDER than the declaration belongs to a previous
+  # fire on this id (declare overwrites the .decl and leaves the sidecars), so it says nothing here.
+  turn noev $((T0 - 100)) need_input
+  [ "$("$CLOUD" --table)" = "$before" ]
+
+  # POSITIVE CONTROL: one that IS newer flips it, so the three silences above are the guard and not
+  # a dead arm.
+  turn noev $((T0 + 100)) need_input
+  [ "$("$CLOUD" --table)" != "$before" ] || false
+  [ "$(tstate noev)" = "NEEDS-INPUT" ]
+}
+
+@test "C7 OUTRANKS C4 and C6 — a session that asked is UNANSWERED, never stalled or abandoned" {
+  have_subject
+  r="$(bare rem)"
+  # Pushed, so this is the OTHER path into C7: the ref exists and the evidence still has to be read
+  # after C3 rather than only in the no-ref arm.
+  cloud declare --id quiet --branch feat/a --remote "$r" --repo "" --stall 3600 --life 7200
+  cloud declare --id ctrl  --branch feat/a --remote "$r" --repo "" --stall 3600 --life 7200
+  push_ref "$r" feat/a >/dev/null
+  cloud poll >/dev/null
+
+  # Past stall_s but inside life_s: C4's window.
+  export CC_CLOUD_NOW=$((T0 + 5000))
+  [ "$(tstate ctrl)" = "STALLED" ]
+  turn quiet $((T0 + 100)) review_ready
+  [ "$(tstate quiet)" = "NEEDS-INPUT" ]
+}
+
+@test "C7 OUTRANKS C6 — the question does not age into an abandonment" {
+  have_subject
+  r="$(bare rem)"
+  # C6's own fixture: `--stall 999999` and NO poll, so there is no sidecar history for C4 to claim
+  # on and the lifetime budget is the arm that fires. A question asked six days ago is not
+  # ABANDONED, it is UNANSWERED — and the 15 `review_ready` sessions holding unpushed work inside
+  # containers that get reclaimed are the part of this with a deadline.
+  cloud declare --id asked6d --branch feat/a --remote "$r" --repo "" --life 3600 --stall 999999
+  cloud declare --id ctrl6d  --branch feat/a --remote "$r" --repo "" --life 3600 --stall 999999
+  push_ref "$r" feat/a >/dev/null
+
+  export CC_CLOUD_NOW=$((T0 + 3601))
+  [ "$(tstate ctrl6d)" = "ABANDONED" ]
+  turn asked6d $((T0 + 100)) review_ready
+  [ "$(tstate asked6d)" = "NEEDS-INPUT" ]
+}
+
+@test "C7 does NOT outrank C3 — content on trunk means the work is done and the question moot" {
+  have_subject
+  r="$(bare rem)"
+  repo="$(trunk_repo lwork docs/thing.md)"
+  # BOTH declared BEFORE the push and before the clock moves. The declaration order is load-bearing
+  # twice over: a declaration made after the push reads its own baseline as the session's work (the
+  # fixture note at the top of this file), and the work-evidence guard ignores a sidecar older than
+  # the declaration — so a late `unfin` would go silent for the RIGHT reason and prove nothing.
+  cloud declare --id fin   --branch feat/a --remote "$r" --repo "$repo" \
+        --trunk origin/main --paths docs/thing.md  --stall 3600 --life 7200
+  cloud declare --id unfin --branch feat/a --remote "$r" --repo "$repo" \
+        --trunk origin/main --paths docs/absent.md --stall 3600 --life 7200
+  push_ref "$r" feat/a >/dev/null
+  cloud poll >/dev/null
+  export CC_CLOUD_NOW=$((T0 + 99999))
+
+  turn fin $((T0 + 100)) need_input
+  [ "$(tstate fin)" = "LANDED" ]
+
+  # POSITIVE CONTROL off the same fixture, differing ONLY in whether the declared path is on trunk:
+  # the identical evidence DOES assert C7 where the content verdict is unavailable, so the LANDED
+  # above is the ordering and not an inert arm.
+  turn unfin $((T0 + 100)) need_input
+  [ "$(tstate unfin)" = "NEEDS-INPUT" ]
+  [ "$(rows)" -eq 1 ]
+}
+
+@test "C7 the BLOCKING set has ONE definition — cc-cloud and cloud-inbox cannot drift apart" {
+  have_subject
+  # Two files decide "is this session waiting on us": cloud-inbox.py stamps `waiting=`, and cc-cloud
+  # falls back to its own category test when that field is absent. Two spellings of one set drift
+  # silently — the writer stamps a category the reader does not act on, and nothing fails. So the
+  # sets are READ OUT OF BOTH FILES here rather than restated in this test, which would just be a
+  # third spelling to drift from.
+  bash_set="$(sed -n 's/^  case "${1:-}" in \(.*\)) return 0 ;; esac$/\1/p' "$CLOUD" \
+             | tr '|' '\n' | sort | tr '\n' ' ')"
+  py_set="$(sed -n 's/^BLOCKING = {\(.*\)}$/\1/p' "$ROOT/scripts/cloud-inbox.py" \
+           | tr -d '"' | tr ',' '\n' | tr -d ' ' | grep . | sort | tr '\n' ' ')"
+
+  # Neither may be empty: an extractor that silently matched nothing would make this pass by
+  # comparing "" to "" — the vacuous green this repo's own selftest shipped once already.
+  [ -n "$bash_set" ]
+  [ -n "$py_set" ]
+  [ "$bash_set" = "$py_set" ]
+}
+
 # ── U0: the discriminator the whole design rests on ───────────────────────────────────────────────
 @test "U0 an UNREACHABLE remote is UNKNOWN, never NOT-STARTED — absence != inability to look" {
   have_subject

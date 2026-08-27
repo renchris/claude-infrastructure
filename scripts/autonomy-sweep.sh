@@ -1063,6 +1063,44 @@ log_idl cloud-refusal-route "$(jq -cn --arg c "$_cloudrfz_rc" \
   '{cloud_refusal_rc:$c,
     note:"0 = pass completed (per-refusal outcomes in the refusal-route ledger); 4 = another pass held the lock; 124 = the bound cut the pass, next tick resumes (a refusal is idempotent per artifact, so nothing is double-sent); skipped = tool absent (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never send off-box"}')"
 
+# ── the CLOUD INBOX pass — the only writer of the work evidence cc-cloud's C7 arm reads ───────────
+# WHY THIS IS A DAEMON BLOCK AND NOT A VERB SOMEBODY RUNS. `cc-cloud classify()` is the arbiter that
+# cc-offload's board, cc-backlog's reap, custody-deathwatch and cloud-return all ask, and until
+# 2026-08-27 its "never started" rung derived that verdict from git-ref absence alone. Measured over
+# 262 live sessions: 222 (85%) had ended a turn with `post_turn_summary.status_category ==
+# "need_input"` — they had worked and asked — and every one of them read NOT-STARTED, which
+# cc-backlog's reap maps to "return it to the wave" and fires a SECOND peer at work whose only
+# remaining need is an answer. cc-cloud cannot ask the control plane itself (classify runs in a loop
+# over every declaration; a per-id authenticated subprocess would put the network and four accounts'
+# credentials on a hot path, and a second JSON decoder is a second source of truth). So the reader
+# that already speaks to the control plane leaves the evidence behind, and it has to run on a
+# CADENCE or the arm never fires: a fix nobody invokes is inert, which is the failure this plan
+# records as `🚀 landed but NOT live`.
+#
+# 🚨 THE SAME DEPLOYED-COPY GUARD, and it is load-bearing here for the ordinary reason: this SPENDS
+# QUOTA (one authenticated control-plane GET per active declaration) and WRITES the operator's live
+# declaration store. `tests/autonomy-sweep.bats` executes the real sweep once per test and
+# postland-verify runs that suite from a throwaway worktree UNDER the config dir, so the guard is
+# keyed on the exact deployed path exactly as `_cloudret_deployed` is — never a prefix, which is
+# what the 2026-08-17 incident defeated.
+#
+# It READS and STAMPS. It never executes anything a VM composed — 13 of the 222 asks parse as
+# runnable shell, and the reader/actuator line in cloud-inbox.py's header is a security line.
+_cloudinb="$_SWEEP_DIR/cloud-inbox.py"
+_cloudinb_rc="skipped"
+if [ "$_cloudret_deployed" != 1 ]; then
+  _cloudinb_rc="skipped-not-deployed"
+elif [ -f "$_cloudinb" ]; then
+  # Output discarded: the human-facing report is `cc-cloud inbox`, run on demand. What this pass is
+  # for is the sidecar it leaves behind, and its outcome is the rc plus the tally in the IDL row.
+  if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then "$_tmo" -k 10 300 python3 "$_cloudinb" >/dev/null 2>&1
+  else python3 "$_cloudinb" >/dev/null 2>&1; fi
+  _cloudinb_rc=$?
+fi
+log_idl cloud-inbox "$(jq -cn --arg c "$_cloudinb_rc" \
+  '{cloud_inbox_rc:$c,
+    note:"0 = pass completed (per-session ask + stamp tally on the pass stderr; the durable artifact is <id>.turn under CC_CLOUD_STATE, which cc-cloud reads as C7 work evidence); 3 = the declaration store is unreadable, so NOTHING was stamped (never read as an empty fleet); 124 = the bound cut the pass — sessions probed before the cut ARE stamped and the next tick resumes, because a stamp is a last-write-wins fact rather than a transaction; skipped = tool absent (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never spend quota or write the live store"}')"
+
 # ── 2e. CUSTODY DEATHWATCH — the arm that runs when NOBODY IS HOME ────────────────────────────────
 # The two blocks above only ever speak to an address the FIRE recorded. Measured 2026-08-23: 1055 of
 # cloud-return's 1116 wake attempts resolved to "the declaration names no notify-back target —

@@ -86,6 +86,105 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-27 — cloud lane (VM worker, backlog `70f0001c657b`): PRINTING THE QUESTION FIXED THE
+  CHANNEL AND NOT THE BOARD — THE ARBITER STILL DERIVED "NEVER STARTED" FROM A GIT REF ALONE.**
+  Takes the first of the three the lane audit above named as NOT CLOSED: *"`classify()`'s
+  NOT-STARTED rung still reads the git ref alone (`700005171b41`)"*. The audit's own fix,
+  `c8da1242f`, gave 222 waiting sessions a reader — `cc-cloud inbox` — and that is where it stopped.
+  **`cc-cloud classify()` is the arbiter every OTHER consumer asks** (cc-offload's board,
+  cc-backlog's reap, custody-deathwatch, cloud-return), and it never learned the fact the reader
+  had just made available. So the same 222 sessions still read NOT-STARTED everywhere a MACHINE
+  looked, and cc-backlog's `cloud_map` maps NOT-STARTED to `open`: **the row returns to the wave and
+  a SECOND peer is fired at work whose only remaining need is an answer.** A one-way lane with a
+  human-readable inbox bolted on the side is still a one-way lane.
+  ✅ **THE FIX IS THIS FILE'S OWN SHAPE, NOT A NEW ONE — C1 ALREADY REFUSES TO FIRE ON EVIDENCE.**
+  `classify()` has carried a *positive, durable, purely-refuting* evidence arm since the prune fix:
+  the `.seen` sidecar (written by `poll` only after a probe returned a sha) and `paths_src` prove a
+  push HAPPENED and survive the ref itself, and with either present C1 is refuted. A control-plane
+  turn is the same kind of evidence about the same claim, so it enters by the same door:
+  `<CC_CLOUD_STATE>/<id>.turn` carrying `at` · `cat` · `worker` · `waiting`, written by
+  `cc-cloud inbox`, which already reads the control plane. **C7 NEEDS-INPUT** is the new verdict and
+  it ROWS; a turn that is *not* waiting on us refutes C1 and asserts nothing (U0), which is the same
+  answer the ref-vanished-after-push arm already gives for the same reason.
+  🚨 **THE ARBITER DOES NOT PROBE, AND THAT IS A DESIGN CONSTRAINT RATHER THAN A PREFERENCE.**
+  `classify` is called in a loop over every declaration by `emit_rows` / `list --state` / `do_check`,
+  so a per-id authenticated subprocess puts the network and four accounts' credentials on a hot
+  path; the file is deliberately jq-free and the answer is JSON; and a second decoder of the control
+  plane is a second source of truth that cannot learn the API changed. One writer, one sidecar, one
+  reader — the `.seen` contract exactly.
+  ✅ **THE PREDICATE FOR STAMPING IS A TURN, NEVER A 200, AND THAT IS THE ONE WAY THIS COULD HAVE
+  MADE THE BOARD WORSE.** A never-started session ALSO returns 200 with `accepted:true` — the audit
+  measured 262/262 GETs succeeding — so stamping every readable probe would refute C1 for exactly
+  the sessions C1 is RIGHT about, converting a wrong-loud board into a wrong-silent one. The
+  predicate is `post_turn_summary` present (the field's own name is the evidence) OR an outstanding
+  `requires_action`. Pinned by `cloud-inbox.bats` case 9, whose positive control is a permission
+  request with **no `status_category` at all** — a turn a category test alone cannot see, which is
+  why `waiting` is decided by the writer holding the whole record rather than re-derived downstream
+  from the half that survives into the sidecar.
+  ✅ **BOTH SPELLINGS OF C1 WERE DRAINED, WHICH IS THIS PLAN'S OWN REPEATED LESSON APPLIED FIRST
+  RATHER THAN LEARNED AGAIN.** "Never started" is asserted at TWO sites in `classify()` — as *no
+  ref* and as *the ref has not moved off its fire-time sha* — and a session that worked without
+  pushing satisfies BOTH. #243, #244, #245 and #249 are four consecutive recycles about a named
+  predicate drained at one site and left at its sibling, so the sibling was fixed in the same diff.
+  C7 also outranks **C4 and C6**, not only C1: a session that pushed, asked and went quiet ages into
+  STALLED and then ABANDONED, and `cloud_map` maps both to `open` — the identical misrouting one
+  arm further down. It does NOT outrank C3: content on trunk means the work is done and the question
+  is moot.
+  ✅ **THE STAMP RIDES A CADENCE, BECAUSE A FIX NOBODY INVOKES IS INERT.** `cc-cloud inbox` was a
+  hand-run verb; an arm that fires only on evidence a human remembers to generate is the `🚀 landed
+  but NOT live` rung wearing a code change's clothes. Wired into `autonomy-sweep.sh` beside
+  `cloud-return`, under the SAME exact-path deployed-copy guard (`$0 = $_cc_cfg/scripts/…`, never a
+  prefix — the 2026-08-17 incident defeated a prefix with its own harness), because this spends
+  quota and writes the live declaration store. A cut pass keeps what it stamped: a stamp is
+  last-write-wins, not a transaction.
+  ⚠️ **EVERY CONSUMER OF THE STATE VOCABULARY WAS READ, NOT ASSUMED.** Growing an enum whose members
+  are switched on in five other files is how a fix becomes someone else's default. Four take a
+  documented fail-closed default and are CORRECT under it, unchanged — cc-backlog's `cloud_state`
+  whitelist (rc 2 ⇒ `cloud_map` never consulted ⇒ the claim sweep abstains-or-blocks and the cure
+  sweep leaves the block standing; **neither reopens**, and a block parks where a reopen
+  duplicates), `cc-offload gc`'s explicit opt-in retire list, custody-deathwatch's UNKNOWN-not-GONE,
+  cloud-return's "not a return state". `do_check` fails on it, correctly. Exactly one consumer had a
+  GAP rather than a default — cc-offload's board left `action` at `-` for the one row that by
+  definition needs a human — and it is fixed here to point at `cc-cloud inbox --id <id>` rather than
+  at a browser.
+  ✅ **TESTS 38 → 49, ELEVEN NEW ARMS, ALL ELEVEN RED-PROVED AGAINST THE PRE-CHANGE SUBJECT.**
+  `cc-cloud.bats` 31 → 37 (`CC_CLOUD_SUBJECT_ROOT=<git archive HEAD>`: all six red); `cloud-inbox.bats`
+  7 → 12 (new suite file over the pristine subject: all five red); `cc-cloud --selftest` 24 → 29.
+  Every arm carries a positive control off the SAME fixture, because the flip has to be attributable
+  to the evidence and not to a fixture that was never NOT-STARTED in the first place. The one that
+  earns its place hardest is **`cloud-inbox.bats` case 12, the end-to-end**: it declares through the
+  real `cc-cloud`, runs a real inbox pass against the stubbed control plane, and asserts the real
+  board flips NOT-STARTED → NEEDS-INPUT. Either half can be green while the lane stays broken — a
+  key name, an epoch or the freshness guard drifting is invisible to both unit suites and fatal to
+  the feature.
+  🚨 **AND THE FRESHNESS GUARD IS WHERE THE UNFIXED SIBLING LIVES, NAMED RATHER THAN SWEPT UP.**
+  `.turn` is ignored unless `at >= declared_at`: `declare` overwrites the `.decl` and leaves the
+  sidecars, so a re-fire on the same id inherits the PREVIOUS fire's evidence, and that fire's turn
+  says nothing about this one. **`.seen` carries no such guard and inherits exactly the same way** —
+  a live latent defect that makes a re-declared session read as already-pushed, feeding C3's
+  evidence-of-push gate. Not fixed in this diff: it is C4's arm rather than C1's, it wants its own
+  red-proof against a real re-declare, and folding it in would have made this change unattributable.
+  **Follow-ons, both agent work, neither blocking:** (1) that `.seen` inheritance guard;
+  (2) an explicit `cloud_map` arm for NEEDS-INPUT, so the reap files a block whose `needs` names the
+  ask and the row becomes actionable in the LEDGER rather than merely correct on the board — held
+  back because it changes ledger write semantics and deserves its own control.
+  ⚠️ **WHAT THIS DOES NOT CLOSE.** The other two the audit named stand untouched: nothing yet
+  ANSWERS an inbox row (`cd561ed37e8e` — and 13 of the 222 asks parse as runnable shell, so an
+  actuator needs its own allowlist and consent gate, never a flag on the reader), and the **15
+  `review_ready` sessions with no ref on origin** are still completed work inside containers that
+  get reclaimed. This change makes those 15 legible on the board for the first time — C7 rather than
+  NOT-STARTED — which is a precondition for recovering them, not the recovery.
+  ⚠️ **BOUNDS OF THE GREEN, STATED RATHER THAN IMPLIED.** Run on a Linux cloud VM, not the fleet's
+  macOS box. `tests/autonomy-sweep.bats` reads 43 ok / 18 not ok and `tests/cc-offload.bats` 43/1
+  **identically on pristine HEAD** (byte-identical counts, same test names), as do `cc-inbox-guard`
+  34/7, `cloud-return` 21/6 and `custody-deathwatch` 13/2 — environment failures, not this diff;
+  `cloud-reconcile` 31/0, `cc-eligible` 31/0 and `gate-select` 45/0 are clean. Lints green:
+  pipefail-sigpipe, test-hermeticity, test-walltime, bats-testname-eval, bats-kill-guard,
+  alarm-polarity, self-path, subshell-cleanup, utc-stamp, tsv-pad, offbox-admission, growth-coverage
+  (its `autonomy/cloud` row updated to name `.turn`), gate-select --lint. `moving-ref-control-lint`
+  is rc 1 on pristine HEAD too and names ten OTHER suites, neither of them mine. **No live
+  control-plane call was made from this VM; every control-plane fact above is the audit's
+  measurement, not a re-measurement.**
 - **2026-08-27 — drain recycle #249: method 219 — A PARAMETER RENAME AT A FUNCTION BOUNDARY HIDES
   A SITE FROM THE VERY GREP THAT FOUND ITS SIBLINGS.** #244 landed the rule that when you drain a
   named predicate you should grep the file for its FEED VARIABLE rather than for its name, and that
