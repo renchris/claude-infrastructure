@@ -499,6 +499,26 @@ def main() -> int:
         ok = kind == CLOUD_KIND and n_sources == 1
         # PRINT THE PAIR, not just the verdict. §13.3's whole content is that each prior attempt got
         # one of the two — a bare pass/fail would hide which half a future regression lost.
+        #
+        # 🚨 AND PRINT post_turn_summary, WHICH THIS PROJECTION USED TO DROP ON THE FLOOR. That
+        # omission is the cloud lane's central defect, measured 2026-08-27 over 262 live sessions:
+        # 222 of them (85%) had ended a turn with status_category "need_input" — a QUESTION — and a
+        # tree-wide grep for `post_turn_summary|status_category|needs_action|requires_action` over
+        # bin/ scripts/ hooks/ returned exactly one hit, a comment in this file. The VM wrote its
+        # question into a field with no reader, so the lane was one-way: work went out, nothing came
+        # back, and 229 commits stranded across 164 branches at +68/day.
+        #
+        # Verbatim from a live session at 07:5xZ that the board filed as NOT-STARTED:
+        #   status_category "need_input" · status_detail "fix verified & tests green; gate issues
+        #   block ship" · needs_action "1. Land it via desk box …; 2. Record item b60eb29e97dd done"
+        # That session had finished. It was labelled never-started because `classify()` derives its
+        # state from git-ref absence alone and the VM had nothing to push.
+        #
+        # Emitted as a NESTED object under one key rather than flattened: every existing consumer
+        # reads named top-level keys, so a new sibling key cannot collide with one, and a reader that
+        # wants the question asks for it by name. `{}` when absent, never null — a caller doing
+        # `.summary.status_category` then gets an absent field rather than a type error on None.
+        summary = record.get("post_turn_summary") or {}
         print(
             json.dumps(
                 {
@@ -508,6 +528,15 @@ def main() -> int:
                     "accepted": ok,
                     "status_bucket": record.get("status_bucket"),
                     "worker_status": record.get("worker_status"),
+                    "summary": {
+                        "status_category": summary.get("status_category"),
+                        "status_detail": summary.get("status_detail"),
+                        "needs_action": summary.get("needs_action"),
+                    },
+                    # A separate top-level list on the record, NOT part of post_turn_summary: it
+                    # carries the permission prompts (12 of the 262 measured), which are a different
+                    # kind of blocker from a prose question and must stay distinguishable.
+                    "requires_action": record.get("requires_action_details_list") or [],
                 }
             )
         )

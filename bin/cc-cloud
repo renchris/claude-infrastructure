@@ -1259,10 +1259,28 @@ case "${1:-}" in
   is-offbox)  shift; cmd_is_offbox "${1:-}"; exit $? ;;
   show)       shift; cmd_show "$@"; exit $? ;;
   list)       shift; cmd_list "$@"; exit $? ;;
+  # inbox — the lane's RETURN channel: what the cloud sessions have been ASKING.
+  #
+  # Every state this tool otherwise reports is derived from the git ref, which answers "did the VM
+  # push?" and nothing else. That is why 85% of the board was wrong: measured 2026-08-27, 222 of 262
+  # live sessions had ended a turn with `post_turn_summary.status_category == "need_input"` — they
+  # had worked and asked a question — and `classify()` filed them NOT-STARTED because a VM that
+  # finished without pushing has no ref. `inbox` reads the CONTROL PLANE instead, so a question can
+  # reach a reader.
+  #
+  # Delegated to python rather than implemented here, for two reasons that are not style: this file
+  # is deliberately jq-free (see cmd_preflight's header) and the answer is JSON; and the probe is
+  # `cloud-create-api.py --verify`, so the reader consumes the SAME projection the emitter produces
+  # rather than decoding the API a second time.
+  #
+  # 🚨 IT READS AND CLASSIFIES. IT NEVER EXECUTES. 13 of those 222 asks parse as runnable shell, and
+  # running one is executing a string a remote VM composed, on this box, unattended. The reader/
+  # actuator line is a security line — see the module docstring.
+  inbox)      shift; exec python3 "$ROOT/scripts/cloud-inbox.py" "$@" ;;
   --selftest) do_selftest; exit $? ;;
   -h|--help)  sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   --json|--table|--check) ;;
-  "")  echo "cc-cloud: pick a verb (preflight|declare|fill-paths|retire|poll|is-offbox|show|list|--json|--table|--check|--selftest)" >&2; exit 2 ;;
+  "")  echo "cc-cloud: pick a verb (preflight|declare|fill-paths|retire|poll|is-offbox|show|list|inbox|--json|--table|--check|--selftest)" >&2; exit 2 ;;
   *)   echo "cc-cloud: unknown arg $1" >&2; exit 2 ;;
 esac
 
