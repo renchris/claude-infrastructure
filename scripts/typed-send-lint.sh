@@ -105,10 +105,22 @@ LAYERS="scripts hooks bin"
 # the same three-step contract as it2_type_verified against a different surface. It is now the
 # ONLY paste route into a live composer in this tree — the blind it2_paste_submit was deleted in
 # the same commit — so a raw send outside it is a landmine with no remaining excuse.
+#
+# it2_composer_retype_verified is its LINE-typing sibling, added 2026-08-27, and it is what took the
+# tree from 1 raw site to 0. a771a1611d28 took the count 2 → 1 and left the last one — the recycle
+# watcher's `retype` nudge — because neither existing helper fits a SLASH COMMAND typed at a
+# composer: the shell-side pair prefix a zsh nonce and `unsetopt correct`, and the paste route
+# bracket-pastes, which is not proven to reach CC's command form. That site was already doing the
+# three steps INLINE (send, composer_content read-back, CR only on exact match); what it was not
+# doing was doing them under a NAME, so this line-based lint could not see the verification and
+# stayed RED on pristine trunk for three days. Extracting it is the fix; sanctioning the name is
+# how the ratchet learns it. The contract is identical to the two above — type, prove, submit —
+# and a raw send outside all three remains a landmine.
 EMBEDDED_SANCTIONED="$(cat <<'SANCT'
 it2_type_verified
 _it2_type_line
 it2_paste_submit_verified
+it2_composer_retype_verified
 osa_type_verified
 _cc_tv_type_line
 _cc_tv_scrub_type_read

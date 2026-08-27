@@ -58,6 +58,7 @@ setup() {
     sed -n '/^paste_readback_expect() {/,/^}/p'       "$HF"
     sed -n '/^paste_readback_ok() {/,/^}/p'           "$HF"
     sed -n '/^it2_paste_submit_verified() {/,/^}/p'   "$HF"
+    sed -n '/^it2_composer_retype_verified() {/,/^}/p' "$HF"
   } > "$BATS_TEST_TMPDIR/units.sh"
   bash -n "$BATS_TEST_TMPDIR/units.sh" || { echo "extraction from $HF is not valid bash" >&2; return 1; }
   # shellcheck disable=SC1091
@@ -78,7 +79,7 @@ setup() {
   composer_owned() { return 0; }        # ownership is composer_owned's OWN suite's subject
   _under_test() { echo true; }
   export BP_START=$'\x1b[200~' BP_END=$'\x1b[201~'   # read by it2_paste_submit{,_verified} from units.sh
-  export FIRE_TYPE_SETTLE=0.01 FIRE_PASTE_PREWAIT=0 FIRE_PASTE_PREIVL=0.01
+  export FIRE_TYPE_SETTLE=0.01 FIRE_PASTE_PREWAIT=0 FIRE_PASTE_PREIVL=0.01 FIRE_RETYPE_SETTLE=0.01
 
   # ---- fixture screens, from the MEASURED shapes -------------------------------------------
   B="$(printf '─%.0s' $(seq 1 100))"    # a full-width border row (U+2500 run)
@@ -261,6 +262,69 @@ phased_hf_bounded() {
   run blind_paste_submit it2 sid "/goal reply with DONE"
   [ "$status" -eq 0 ]
   grep -q $'SEND:\r' "$SENT_LOG"                                 # blind CR: sent regardless
+}
+
+# ── 5b. the verified RETYPE — the same contract, typed instead of pasted ─────────────────────
+# The recycle watcher's `retype` nudge is the ONE remaining raw typed send in the deployed layers
+# (a771a1611d28 took typed-send-lint's count 2 → 1 and left this). It was already type → read-back
+# → CR-on-proof INLINE; extracting it under a name is what makes that visible to a line-based
+# ratchet and drivable here. These tests pin the proof step, not the extraction: they fail if the
+# CR ever stops being gated on the read-back.
+
+@test "verified retype: happy path — composer holds exactly the line, CR sent (rc 0)" {
+  mk_screen "$GLYPH /exit"
+  run it2_composer_retype_verified it2 sid "/exit"
+  [ "$status" -eq 0 ]
+  grep -c 'SEND:' "$SENT_LOG" | grep -qx 2                       # the line + the CR, nothing else
+  tail -1 "$SENT_LOG" | grep -q $'SEND:\r'                       # the CR came LAST
+}
+
+@test "verified retype: read-back shows something else → rc 1, line typed but CR WITHHELD" {
+  # The operator raced in between the type and the read-back: the box now holds a hybrid, and
+  # submitting it is exactly the swallowed-message class the composer gate exists to end.
+  mk_screen "$GLYPH also fix the margin/exit"
+  run it2_composer_retype_verified it2 sid "/exit"
+  [ "$status" -eq 1 ]
+  grep -c 'SEND:' "$SENT_LOG" | grep -qx 1                       # the line only
+  ! grep -q $'SEND:\r' "$SENT_LOG"                               # NO CR — the whole point
+}
+
+@test "verified retype: unreadable screen is NOT proof → rc 1, CR WITHHELD" {
+  : > "$SCREEN_FILE"                                             # boxless/torn frame ⇒ UNKNOWN
+  run it2_composer_retype_verified it2 sid "/exit"
+  [ "$status" -eq 1 ]
+  ! grep -q $'SEND:\r' "$SENT_LOG"
+}
+
+@test "verified retype: an all-whitespace payload types NOTHING (rc 1)" {
+  # Emptiness is judged on the CALLER's line, before any wire traffic — the same rule
+  # it2_type_verified states, and the reason a blank nudge can never submit a stranded buffer.
+  mk_screen "$GLYPH "
+  run it2_composer_retype_verified it2 sid "   "
+  [ "$status" -eq 1 ]
+  [ ! -s "$SENT_LOG" ]
+}
+
+@test "mutant control: the BLIND retype sends a CR on the identical mismatch fixture" {
+  # The pre-extraction shape with its read-back removed. It MUST submit the hybrid the shipped
+  # form refuses; if this passes while the rc-1 test above fails, the verification was dropped.
+  blind_retype() {
+    local it2="$1" id="$2" line="$3"
+    hf_bounded "$it2" session send -s "$id" "$line" >/dev/null 2>&1 || true
+    hf_bounded "$it2" session send -s "$id" $'\r' >/dev/null 2>&1
+  }
+  mk_screen "$GLYPH also fix the margin/exit"
+  run blind_retype it2 sid "/exit"
+  [ "$status" -eq 0 ]
+  grep -q $'SEND:\r' "$SENT_LOG"                                 # blind CR: sent regardless
+}
+
+@test "the retype nudge CALLS the verified helper — no raw session-send survives at that site" {
+  # The ratchet, keyed on the call site rather than on the helper: scripts/typed-send-lint.sh is
+  # line-based, so an inline re-expansion of these three steps would read as a raw typed send and
+  # redden that lint's own real-tree test. This asserts the same property from the other end.
+  grep -q 'it2_composer_retype_verified "\$IT2" "\$RSID" "/exit"' "$HF"
+  ! grep -qE 'session send -s "\$RSID" "/exit"' "$HF"
 }
 
 @test "no blind paste primitive survives in the script — the mutant is test-local only" {

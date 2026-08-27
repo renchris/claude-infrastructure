@@ -2316,6 +2316,46 @@ it2_paste_submit_verified() { # $1=it2-bin $2=pane-uuid $3=text [$4=max-pre-wait
   hf_bounded "$it2" session send -s "$id" $'\r' >/dev/null 2>&1
 }
 
+# VERIFIED COMPOSER RETYPE — the LINE-typing counterpart to it2_paste_submit_verified, on the same
+# surface, and the last raw typed send in the deployed layers (typed-send-lint went 2 → 1 on
+# a771a1611d28 and stopped there; the 1 is this call, and it has kept tests/typed-send-lint.bats
+# tests 16+17 RED on pristine origin/main ever since — a grep over the tree, so it survives the
+# post-land retry ladder into a RED stamp every sweep and pins the live layer behind an
+# uncertified trunk).
+#
+# NEITHER EXISTING HELPER FITS, which is why the send was left raw rather than migrated:
+#   · _it2_type_line / it2_type_verified are SHELL-side. They prefix a shell-comment nonce
+#     (`: hfv-…; /exit`) and additionally type `unsetopt correct`. Both are zsh lines; typed into a
+#     Claude Code composer they are chat text, and the nonce would make the payload stop being a
+#     slash command at all.
+#   · it2_paste_submit_verified is the right SURFACE but the wrong WIRE for this payload: it
+#     bracket-pastes, and a bracket-pasted slash command is not proven to reach CC's command form.
+# So the contract is honored in the form this surface takes, and it is the same three steps every
+# sanctioned helper takes — TYPE, PROVE, then SUBMIT: send the line, read the composer BACK through
+# composer_content, and send the CR only if the box holds exactly that line and nothing else. That
+# is why the name belongs in typed-send-lint.sh's EMBEDDED_SANCTIONED and not in its allowlist:
+# this is the verified form, not a grandfathered raw send. Behavior is unchanged from the inline
+# code it replaces — the extraction is what makes the verification VISIBLE to the ratchet, and
+# NAMED, so it can be driven by tests instead of only by a live pane.
+#
+# WITHHOLDING THE CR IS THE RECOVERABLE OUTCOME. The caller has already proven the composer EMPTY
+# with claude alive (recycle_nudge_decision = `retype`), so a read-back that does not match means
+# the type was mangled or lost. Refusing to submit leaves the watcher to fail loudly at its 600s
+# refusal with the session alive and the operator's text intact.
+#   rc 0 typed + verified + submitted · 1 not submitted (send failed, unreadable, or mangled)
+it2_composer_retype_verified() { # $1=it2-bin $2=session-id $3=line
+  local it2="$1" id="$2" line="$3" want got
+  # composer_content returns its content space-stripped, so the expectation is stripped the same
+  # way — comparing a raw line against a stripped read-back would call every spaced payload mangled.
+  want="$(printf '%s' "$line" | LC_ALL=C tr -d '[:space:]')"
+  [ -n "$want" ] || return 1
+  hf_bounded "$it2" session send -s "$id" "$line" >/dev/null 2>&1 || return 1
+  /bin/sleep "${FIRE_RETYPE_SETTLE:-1}"
+  got="$(composer_content "$it2" "$id")" || got=""
+  [ "$got" = "$want" ] || return 1
+  hf_bounded "$it2" session send -s "$id" $'\r' >/dev/null 2>&1
+}
+
 # ---- PANE-PARKED oracle: the pane is still a SHELL, and it is STUCK (item 7146aab37a9a) -------
 # The engagement oracle below is disk-only (a transcript with an assistant turn). That makes it
 # blind, BY CONSTRUCTION, to the difference between "claude booted and never ingested the brief"
@@ -5630,10 +5670,7 @@ if [ "${1:-}" = "__recycle" ]; then
           hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;;
         retype)
           if [ "$waited" = 60 ]; then
-            hf_bounded "$IT2" session send -s "$RSID" "/exit" >/dev/null 2>&1 || true
-            sleep 1
-            nc="$(composer_content "$IT2" "$RSID")" || nc=""
-            if [ "$nc" = "/exit" ]; then hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true; fi
+            it2_composer_retype_verified "$IT2" "$RSID" "/exit" || true
           fi ;;
         *)
           echo "→ nudge@${waited}s HELD ($nd): composer is not a stranded /exit — a CR here would submit someone else's buffer"
