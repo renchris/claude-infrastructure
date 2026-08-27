@@ -293,8 +293,24 @@ tr + tr td {{ border-top: 1px solid {TOKENS["gray200"]}; }}
 .glyph {{ color: #FFFFFF; font-size: 16px; line-height: 1;
          /* Optical compensation: a triangle's ink mass sits behind its
             bounding-box centre, so geometric centring reads as left-heavy.
-            Measured offset on this glyph at this size: 2.2px left, 1.9px up. */
-         transform: translate(2px, 2px); }}
+            Measured 2026-08-27 by the repaired detect_xcheck X2 arm -- ink
+            centroid against the centroid of the shape .glyph-btn paints, at both
+            dpr 1 and dpr 1.5 -- the uncompensated glyph sits 1.9px LEFT and
+            1.4px DOWN of that centre.
+
+            This constant used to read `translate(2px, 2px)` under a comment
+            claiming the offset was "2.2px left, 1.9px up". The horizontal half
+            was right; the vertical half had the sign backwards, so the control
+            shipped compensating DOWN an offset that was already down and the
+            glyph sat 3.4px low on the page this corpus grades every detector
+            against. Nothing could see it: the DOM cannot (every box number is
+            symmetric, which is the premise of the optical-centering defect), and
+            X2 -- the one arm that could -- was disabled, so the number went
+            unchecked for exactly as long as its checker did. That is the second
+            defect found in this "clean" control, after the three WCAG failures,
+            and it is the same failure mode the README names: a plausible number
+            nobody measured. */
+         transform: translate(2px, -1.4px); }}
 """
 
 BODY_HTML = """

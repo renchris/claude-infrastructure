@@ -18,19 +18,23 @@ Three checks, chosen because each maps to a documented way DOM-only review is
 unsound:
 
   X1 zero-ink        an element reports a healthy box and paints nothing.
-  X2 ink-centroid    PROVISIONAL, OFF BY DEFAULT (--x2 to enable). Two defects
-                     found by trying to validate it, both worth recording:
-                     (a) it compares ink to the element's OWN box, and
-                     getBoundingClientRect returns the POST-transform box, so any
-                     translate moves box and ink together and the measured offset
-                     is INVARIANT under the very compensation it should verify;
-                     (b) its background is the region's modal colour, so on a
+  X2 ink-centroid    a mark's rendered ink is not centred in the shape its
+                     container paints. Both defects that kept this arm disabled
+                     are now fixed, and the fixes are the whole arm:
+                     (a) it referenced the element's OWN box, and
+                     getBoundingClientRect returns the POST-transform box, so a
+                     translate moved box and ink together and the measurement was
+                     INVARIANT under the very compensation it should verify. It
+                     now references the CONTAINER's painted shape, which no
+                     transform on the mark can move.
+                     (b) its background was the crop's modal colour, so on a
                      round button the square crop's corners -- page background
-                     outside the circle -- count as ink and swamp a 16px glyph.
-                     The fix for both is to measure against the CONTAINER and to
-                     mask to the painted shape. Until then it reports a real
-                     quantity nobody has validated, which is exactly the kind of
-                     plausible-wrong-number this whole document argues against.
+                     outside the circle -- counted as ink and swamped a 16px
+                     glyph. Ink is now taken only inside the container's painted
+                     shape, eroded to drop the antialiased rim, and weighted by
+                     how far each pixel has travelled from the container's own
+                     background toward the mark's own colour. Both operands come
+                     from the DOM; the pixels supply only where the ink landed.
   X3 contrast-real   the colour sampled behind the text disagrees with the colour
                      computed from the cascade. getComputedStyle runs BEFORE
                      compositing, so mix-blend-mode, filter and backdrop-filter
@@ -38,7 +42,19 @@ unsound:
                      unrepresentable. This is the check that catches what the
                      scalar blended-backdrop cannot.
 
-Usage: python3 detect_xcheck.py <corpus-dir>
+                     🚨 This arm was silently dead when the abstention router was
+                     built against it, and it is the arm README.md credits with
+                     removing contrast-over-a-gradient from the vision queue. It
+                     sampled the backdrop as each band's MODAL colour, and on a
+                     smooth gradient no backdrop colour repeats -- so the mode was
+                     the text's own antialiased white (120 px against the busiest
+                     gradient colour's 70). It compared white to white, got
+                     1.00:1 vs 1.38:1, and reported nothing. The backdrop is now
+                     the per-band MEDIAN over pixels that are NOT the known
+                     foreground colour: the mode assumes a flat backdrop, which is
+                     precisely the assumption this check exists to break.
+
+Usage: python3 detect_xcheck.py <corpus-dir> [--no-x2]
 """
 
 from __future__ import annotations
@@ -55,10 +71,23 @@ from PIL import Image
 INK_MIN_FRAC = (
     0.002  # below this share of non-background pixels, the box paints nothing
 )
-CENTROID_TOL_PX = 1.0  # ink centre vs box centre
+CENTROID_TOL_PX = 1.0  # ink centroid vs the container's painted-shape centroid
+# The vertical axis gets its own, wider tolerance because it is the only one that
+# moves with capture DPR. Text baselines snap to whole DEVICE pixels, so the same
+# glyph lands at a different fraction of a CSS pixel at 1x and 1.5x: measured on
+# this corpus, dx agreed to 0.04 px across the two captures while dy moved 0.89 px.
+# A single tolerance would either fire on the capture config or miss a real 1.5 px
+# vertical offset, so the axes are stated separately rather than averaged.
+CENTROID_TOL_PX_Y = 1.5
 CONTRAST_DELTA = 1.5  # ratio points between sampled and computed contrast
 MIN_BOX = 8  # ignore hairlines; a 1px rule has no meaningful centroid
-X2_ENABLED = "--x2" in sys.argv  # provisional; see the X2 note in the docstring
+# X2's subject and container are both small painted marks -- an icon button and
+# its glyph. Above this, "the shape the mark sits in" stops being a shape and
+# becomes the page, and a centroid over it means nothing.
+MARK_MAX_PX = 96
+SHAPE_TOL = 60  # sum|dRGB| within which a pixel counts as the container's fill
+RIM_ERODE_PX = 2  # drop the antialiased edge of the container's own shape
+X2_ENABLED = "--no-x2" not in sys.argv
 
 
 def rel_lum(rgb) -> float:
@@ -89,6 +118,66 @@ def parse_rgb(s: str):
     return tuple(v)
 
 
+def erode(mask: np.ndarray, r: int) -> np.ndarray:
+    """Shrink a mask by r px. Nine-line disc erosion, no SciPy dependency."""
+    out = mask.copy()
+    for dy in range(-r, r + 1):
+        for dx in range(-r, r + 1):
+            if dx * dx + dy * dy > r * r:
+                continue
+            out &= np.roll(np.roll(mask, dy, 0), dx, 1)
+    return out
+
+
+def fill_holes(mask: np.ndarray) -> np.ndarray:
+    """Close a painted outline into a solid region.
+
+    The glyph punches a hole in the container's fill, so the fill alone is a ring
+    and its centroid is only accidentally the shape's centre. Spanning each row
+    and each column between their outermost set pixels and intersecting the two
+    closes any convex shape -- a rect, a pill, a circle -- which is every shape a
+    border-radius can produce.
+    """
+    rows = np.zeros_like(mask)
+    cols = np.zeros_like(mask)
+    for i, row in enumerate(mask):
+        nz = np.nonzero(row)[0]
+        if len(nz):
+            rows[i, nz[0] : nz[-1] + 1] = True
+    for j in range(mask.shape[1]):
+        nz = np.nonzero(mask[:, j])[0]
+        if len(nz):
+            cols[nz[0] : nz[-1] + 1, j] = True
+    return rows & cols
+
+
+def ink_weight(region: np.ndarray, bg, fg) -> np.ndarray:
+    """Per-pixel ink mass along the container-background -> mark-colour axis.
+
+    Both endpoints are read from the DOM, so this asks the pixels only one
+    question: how far along that axis did this pixel land. A hard threshold would
+    make the centroid jump with the antialiasing, and the whole claim is about
+    fractions of a pixel -- so the partial coverage of an edge pixel is carried as
+    partial mass. Anything off the axis (a third colour bleeding in) is dropped
+    rather than projected onto it.
+    """
+    axis = np.asarray(fg, dtype=float) - np.asarray(bg, dtype=float)
+    denom = float(axis @ axis)
+    if denom < 1.0:  # mark and container share a colour; nothing to measure
+        return np.zeros(region.shape[:2])
+    t = ((region - bg) @ axis) / denom
+    off_axis = np.linalg.norm(region - (bg + t[..., None] * axis), axis=2)
+    return np.clip(t, 0.0, 1.0) * (off_axis < 30)
+
+
+def centroid(weight: np.ndarray):
+    mass = float(weight.sum())
+    if mass <= 0:
+        return None
+    ys, xs = np.mgrid[0 : weight.shape[0], 0 : weight.shape[1]]
+    return float((xs * weight).sum() / mass), float((ys * weight).sum() / mass), mass
+
+
 def crop(img: np.ndarray, rect: dict, scale: float):
     x0 = int(round(rect["x"] * scale))
     y0 = int(round(rect["y"] * scale))
@@ -108,11 +197,36 @@ def check(snap: dict, png: pathlib.Path) -> list[dict]:
     # factor from the artifacts themselves rather than trusting a flag.
     scale = img.shape[1] / snap["scroll"]["w"]
     out = []
+    by_path = {e["path"]: e for e in snap["elements"]}
 
     def rep(rule, target, detail, severity="medium"):
         out.append(
             {"rule": rule, "target": target, "detail": detail, "severity": severity}
         )
+
+    def mark_container(el):
+        """The nearest ancestor that PAINTS a shape this mark sits inside.
+
+        Referencing the mark's own box is the defect that kept X2 disabled --
+        getBoundingClientRect is post-transform, so the box follows the ink and
+        the offset is invariant under the compensation being verified. An
+        ancestor carrying its own opaque fill is not moved by a transform on the
+        mark, which is what makes it a reference at all.
+        """
+        path = el["path"]
+        while " > " in path:
+            path = path.rsplit(" > ", 1)[0]
+            anc = by_path.get(path)
+            if anc is None:
+                continue
+            bg = parse_rgb(anc["styles"].get("background-color", ""))
+            if not bg or bg[3] < 0.99:
+                continue
+            r = anc["rect"]
+            if r["w"] > MARK_MAX_PX or r["h"] > MARK_MAX_PX:
+                return None  # a page-sized ancestor is not a shape
+            return anc, bg[:3]
+        return None
 
     for el in snap["elements"]:
         r = el["rect"]
@@ -142,48 +256,71 @@ def check(snap: dict, png: pathlib.Path) -> list[dict]:
             )
             continue
 
-        # --- X2: ink is not centred in the box the DOM centred -----------------
+        # --- X2: the mark's ink is not centred in the shape its container paints
         # Only meaningful where the element is a small, self-contained mark. A
         # paragraph's ink is legitimately top-left-heavy because text flows.
         is_glyph_like = (
             X2_ENABLED
-            and frac > 0.02
-            and r["w"] < 64
-            and r["h"] < 64
-            and len(el["text"]) <= 3
+            and r["w"] < MARK_MAX_PX
+            and r["h"] < MARK_MAX_PX
+            and 1 <= len(el["text"]) <= 3
         )
-        if is_glyph_like and ink.any():
-            ys, xs = np.nonzero(ink)
-            cx_ink = xs.mean() / scale
-            cy_ink = ys.mean() / scale
-            cx_box = (region.shape[1] / scale) / 2
-            cy_box = (region.shape[0] / scale) / 2
-            dx, dy = cx_ink - cx_box, cy_ink - cy_box
-            if abs(dx) > CENTROID_TOL_PX or abs(dy) > CENTROID_TOL_PX:
-                rep(
-                    "xcheck-optical-centre",
-                    el["path"],
-                    f"the DOM centres this box exactly, but its rendered ink sits "
-                    f"{abs(dx):.1f}px {'left' if dx < 0 else 'right'} and "
-                    f"{abs(dy):.1f}px {'up' if dy < 0 else 'down'} of the geometric "
-                    f"centre -- it will read as misaligned however correct the CSS is",
-                )
+        held = mark_container(el) if is_glyph_like else None
+        if held:
+            anc, cbg = held
+            shell = crop(img, anc["rect"], scale)
+            fg = parse_rgb(el["styles"].get("color", ""))
+            if shell is not None and fg:
+                painted = fill_holes(np.abs(shell - np.asarray(cbg)).sum(2) < SHAPE_TOL)
+                core = erode(painted, max(1, round(RIM_ERODE_PX * scale)))
+                shape_c = centroid(painted.astype(float))
+                ink_c = centroid(ink_weight(shell, cbg, fg[:3]) * core)
+                # Under ~20 px of ink mass the centroid is one antialiased edge
+                # away from meaningless, and the arm abstains rather than guess.
+                if shape_c and ink_c and ink_c[2] >= 20 * scale * scale:
+                    dx = (ink_c[0] - shape_c[0]) / scale
+                    dy = (ink_c[1] - shape_c[1]) / scale
+                    if abs(dx) > CENTROID_TOL_PX or abs(dy) > CENTROID_TOL_PX_Y:
+                        parts = []
+                        if abs(dx) > CENTROID_TOL_PX:
+                            parts.append(f"{abs(dx):.1f}px {'left' if dx < 0 else 'right'}")
+                        if abs(dy) > CENTROID_TOL_PX_Y:
+                            parts.append(f"{abs(dy):.1f}px {'up' if dy < 0 else 'down'}")
+                        rep(
+                            "xcheck-optical-centre",
+                            el["path"],
+                            f"every box-model number here is symmetric, but the ink "
+                            f"this mark actually paints sits {' and '.join(parts)} of "
+                            f"the centre of the shape {anc['path'].rsplit(' > ', 1)[-1]} "
+                            f"paints around it -- it will read as misaligned however "
+                            f"correct the CSS is",
+                        )
 
         # --- X3: sampled backdrop vs the one the cascade computed --------------
         if el["text"] and len(el["text"]) > 3:
             fg = parse_rgb(el["styles"].get("color", ""))
             if not fg:
                 continue
-            # Sample the actual backdrop under the text: the modal non-ink colour,
-            # taken separately from the left and right thirds so a backdrop that
-            # VARIES across the run cannot hide behind a single average.
+            # Sample the actual backdrop under the text, separately in the left
+            # and right thirds so a backdrop that VARIES across the run cannot
+            # hide behind a single average.
+            #
+            # The MEDIAN over pixels that are not the known foreground colour --
+            # never the mode. A mode assumes some backdrop colour repeats, which
+            # is exactly false on the gradient this check exists for: measured
+            # here, the busiest gradient colour appeared 70 times against the
+            # text's own antialiased white at 120, so the mode returned the ink
+            # and the check compared white to white and reported nothing.
             w = region.shape[1]
-            thirds = {"left": region[:, : w // 3], "right": region[:, -w // 3 :]}
+            bands = {"left": region[:, : w // 3], "right": region[:, -w // 3 :]}
             sampled = {}
-            for side, band in thirds.items():
-                fb = band.reshape(-1, 3)
-                v, c = np.unique(fb, axis=0, return_counts=True)
-                sampled[side] = v[c.argmax()]
+            for side, band in bands.items():
+                backdrop = band[np.abs(band - np.asarray(fg[:3])).sum(2) > 90]
+                if len(backdrop) < 20:
+                    break  # the run is nearly all ink; no backdrop to sample
+                sampled[side] = np.median(backdrop, axis=0)
+            if len(sampled) < 2:
+                continue
             cl = contrast(fg[:3], sampled["left"])
             cr = contrast(fg[:3], sampled["right"])
             if abs(cl - cr) > CONTRAST_DELTA:
@@ -200,16 +337,20 @@ def check(snap: dict, png: pathlib.Path) -> list[dict]:
     return out
 
 
-def main(corpus: pathlib.Path) -> None:
+def main(corpus: pathlib.Path, suffix: str = "", out_name: str = "") -> None:
     snaps = corpus / "snapshots"
     shots = corpus / "shots"
     results = {}
     for f in sorted(snaps.glob("*.json")):
-        png = shots / f"{f.stem}.png"
+        png = shots / f"{f.stem}{suffix}.png"
         if not png.exists():
             continue
         results[f.stem] = check(json.loads(f.read_text()), png)
-    (corpus / "findings_xcheck.json").write_text(json.dumps(results, indent=1))
+    if not results:
+        sys.exit(f"no captures matching shots/*{suffix}.png under {shots}")
+    (corpus / (out_name or f"findings_xcheck{suffix}.json")).write_text(
+        json.dumps(results, indent=1)
+    )
 
     ctrl = results.get("clean", [])
     print(f"CONTROL clean.html -> {len(ctrl)} finding(s){'' if ctrl else '  (quiet)'}")
@@ -230,4 +371,11 @@ def main(corpus: pathlib.Path) -> None:
 
 if __name__ == "__main__":
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    main(pathlib.Path(args[0] if args else "corpus/out").resolve())
+    # A pixel check that only ever ran at one capture scale has not been tested,
+    # it has been demonstrated. --shot-suffix reruns the identical rules against
+    # the other capture of the same frame; X2's per-axis tolerances exist because
+    # that comparison found dy moving with DPR and dx not.
+    suffix = next(
+        (a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--shot-suffix=")), ""
+    )
+    main(pathlib.Path(args[0] if args else "corpus/out").resolve(), suffix)
