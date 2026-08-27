@@ -786,9 +786,9 @@ change in the list and ranks last because it provably does not move the goal.
 | **S1** | data fixes | roll-key rounding · `_util_tail` by time · live-window exclusion · live-K fit | **blocks everything below** | S |
 | **S2** | M5 | `burst_percentile` — is the demand physically routine or a p95 stunt? | S1 | S |
 | **S3** | M3a + M2 | `wk_strand_pp` nowcast on a roll-aware weekly EWMA | S1 | M |
-| **S4** | M4′ | `burst_start_by_h` — the start-time constraint | S1, S2 | M |
-| **S5** | M3c | `--strand-score` — the falsifiable scoring harness | S3 | M |
-| **S6** | M3b | `wk_strand_alarm` ≤12 h, latching, causal | **S5 must clear it first** | S |
+| ~~**S4**~~ | M4′ | ✅ **LANDED (wave 2)** — `burst_start_by` + `fmt_start_by` + the header's `K=` clause. Record: §5.7 | S1, S2 | M |
+| ~~**S5**~~ | M3c | ✅ **BUILT (wave 2)** — `--strand-score`. **Built ≠ cleared:** §5.4's acceptance is a falsification at the next weekly reset, and it has not been run | S3 | M |
+| **S6** | M3b | `wk_strand_alarm` ≤12 h, latching, causal | **still gated — S5 must be RUN AND READ on the live series, not merely built** | S |
 | **S7** | M1 | `burn_5h_ewma_ph` — correctness/availability only | S1 | S |
 
 **L3 (one renderer) is held.** Every live metric renders through `readout_lines`
@@ -1610,7 +1610,9 @@ windows/week, carrying the fleet wall rate 1.72% → 2.20%.
 
 ### §5.7 Implementation record — what actually landed, and where it deviated from the spec
 
-Wave 1 = **S1 + S2 + S3 only**. S4–S7 are unbuilt and unchanged; S5 still gates S6.
+Wave 1 = **S1 + S2 + S3**. Wave 2 = **S4 + S5**. **S6 and S7 are unbuilt.** S5 is now built but
+that is *not* the same as S5 having cleared S6: §5.4's real acceptance is a falsification the
+operator runs at the next weekly reset, and until that has been run and read, S6 stays gated.
 
 #### S1 · data fixes — LANDED
 
@@ -1781,3 +1783,130 @@ shortens that.
 
 ⚠️ `bash tests/run.sh …`, named in §5.4, **does not exist in this repo**. The suites are run with
 `bats tests/<name>.bats`; `scripts/ship-land.sh` selects and runs them at the land.
+
+---
+
+#### S4 · M4′ `burst_start_by` — the start-time constraint — LANDED
+
+`bin/claude-accounts`: `burst_start_by(r, k)` + `fmt_start_by(sb)` beside `fmt_burst`, constants
+`BURST_SPPH` / `P_WALL` / `MEAN_WALL_H` / `START_BY_SLACK_H`; `pace_head(rows)` replacing the bare
+`PACE_HEAD` constant; both attached in `apply_burn`, rendered in `pace_line`. New suite
+`tests/claude-accounts-start-by.bats` (RP-21..RP-24 + RP-22b/RP-24b/RP-24c), **7/7 proven RED**
+against the pre-change binary (`git stash push -- bin/claude-accounts`, run, pop), 7/7 green after.
+Two new cases in `tests/claude-accounts-core.bats` (RP-34 render, RP-35 stamp), **2/2 RED**.
+
+**The spec's own four live rows reproduce exactly**, which is the arithmetic's acceptance:
+next3 −0.65 h LATE (2.83 pp unrecoverable, 1 window, freeze 1.033 h) · next2 +69.59 h SLACK
+(6 windows, burn 21.41 h, freeze 6.20 h, t_needed 27.61 h) · and the walk reproduces the same
+`windows`/`burn_h`/`freeze_h` decomposition §5.2 S4's table publishes for all four.
+
+**Deviation 1 — the return is a dict, not the bare float §5.3 RP-21 compares against.** RP-21
+asserts `-1.0 < burst_start_by(row, K) < 0.0` *and* that "the verdict string is `LATE`", which a
+float cannot both be. Same resolution as S2's `burst_percentile`, and for a stronger reason here:
+`unrecoverable_pp` is a *second measured quantity*, not a restatement of the first — it is what
+turns `LATE` from a direction into a decision ("route the work to next4"), and it is the number
+§5.4's own acceptance table quotes. The cases assert on `sb["h"]` with the spec's published bounds.
+
+**Deviation 2 — a third verdict is REACHABLE and had no spec case, so it got one.** §5.2 S4
+defines `START SOON` for `0 < h ≤ 12`, but all four live rows landed on SLACK or LATE, so RP-21
+and RP-22 between them leave the middle branch entirely unexecuted. RP-22b covers it and pins the
+boundary on the SLACK side of 12. An implementation with only the two verdicts the live table
+happened to contain passes the spec's cases and fails this one.
+
+**Deviation 3 — the clause rides the STRAND row only, never the zero-strand row.** §5.4's mock
+shows exactly this (`next  no strand — 1.62× burn, wall trajectory · 114h left` carries no
+`start by`), but no case pinned it, and `next` in fact computes a valid SLACK. Rendering it there
+would be a start time for a rescue nobody needs — a number no reader consumes, which is the metric
+shape §3.2 forbids. RP-34 asserts the verdict exists *and* that the row does not carry it, so the
+suppression is proven deliberate rather than accidental.
+
+**Deviation 4 — the header's `K=…` clause enters HERE, as S3's Deviation 1 said it would.**
+`PACE_HEAD` splits into `PACE_HEAD_PRE` / `PACE_HEAD_POST` with `pace_head(rows)` composing them;
+`tests/claude-accounts-core.bats:1838`'s `startswith("weekly drain — pp that DIE at reset")` and
+`tests/claude-accounts-burn-ratio.bats:100`'s source grep both still hold by construction, which is
+why the split is a split and not a rewrite. When K abstains the clause is absent from the header
+*and* the row, and the strand still renders — asserted in RP-34, because an abstained coefficient
+silently becoming a default is exactly the failure S1c's three-way abstain exists to prevent.
+
+**RP-23 is the case that carries the most weight, and it is a mutant kill, not an assertion.** All
+three constants are fitted on n = 8 burst windows and `P_WALL` is a lower bound. An implementation
+that dropped the freeze term entirely passes RP-21, RP-22 and RP-24. RP-23 executes the subject
+twice with `P_WALL` injected at 0.625 and 0.0, asserts the 1.033 h delta, **and** asserts the
+verdict flips LATE → START SOON — so the term is shown to change an answer, not just a number.
+
+#### S5 · M3c `--strand-score` — the instrument that CAN fail — LANDED
+
+`bin/claude-accounts`: `strand_score(samples, buckets, now)` + `render_strand_score(res)` beside
+`wk_strand_pp`, constants `STRAND_SCORE_BUCKETS` / `STRAND_SCORE_LOOKBACK_H` /
+`STRAND_SCORE_HIT_PP`, and a `--strand-score` branch in `main()` placed before `load_cfg()` like
+`--agents`. New suite `tests/claude-accounts-strand-score.bats` (RP-29..RP-33 + RP-33b),
+**6/6 proven RED** against the pre-change binary, 6/6 green after.
+
+**Deviation 1 — placed beside `wk_strand_pp`, not beside `_util_tail` as §5.2 S5 specifies.** It
+calls `completed_weekly_windows`, `burn_wk_ewma_ph` and `wk_strand_pp`, all three of which are
+defined *after* `_util_tail`. Python resolves at call time so the spec's placement would work, but
+a function sitting above everything it consumes reads as a primitive, and the file's own convention
+is the opposite (`fmt_burst` sits beside `burst_percentile`; `wk_strand_pp` sits beside the EWMA it
+consumes). Placement follows the dependencies.
+
+🚨 **The causality guard is the whole instrument, and RP-30 was rewritten to prove it by MUTATION
+rather than by construction.** §5.2 S5 specifies "take the last evaluable sample with
+`weekly_reset_h ≥ H`" and says nothing about what the estimator may see at that instant. Feeding it
+the whole window is the same vacuous pass the refuted score minted, wearing different clothes — and
+**the polarity is what makes it undetectable by any accuracy assertion**: in a decelerating window
+a leak makes the harness look *better*, because the projection converges toward the truth it was not
+entitled to know. A leaking harness reports a smaller bias and a higher sign-agreement, i.e. it
+presents as a better instrument.
+
+The first draft of RP-30 truncated the series at the horizon and re-derived the projection through
+the same functions, asserting float equality. That was **wrong twice**: it reproduced the subject's
+internal arithmetic in the test (so a shared error passes), and it compared against the *raw* reset
+stamp while `completed_weekly_windows` keys on the **minute-rounded** one — a 1.5 s disagreement
+that made the case fail for a reason having nothing to do with causality. Shipped instead: two
+series **byte-identical up to the 24 h horizon** and completely divergent after it (one coasts to
+76.5%, one bursts to 96.9%). The 24 h cell must be *exactly* equal across the pair; the 6 h cell
+must differ (or an always-constant projector passes); and the realised strands must differ by
+>15 pp (or the equality is a tautology). **Proven by mutant:** deleting the `<= at` bound from the
+harness's `hist` filter — a one-token lookahead leak — turns RP-30 and RP-29 red while RP-31,
+RP-32 and RP-33 stay green. An absence-red would not have established that.
+
+**Deviation 2 — RP-31's fixture window is 40 h, and the length is load-bearing.** A 30 h window
+makes the 96 h and 48 h cells empty as intended, but it *also* empties the 24 h cell — for the
+other reason (`WK_EWMA_MIN_SPAN_H` = 6.8 h of history behind the horizon), so the case would have
+passed while testing nothing about exclusion. 40 h is under 48 (the two long horizons are genuinely
+unreachable) and over 24 + 6.8 (the 24 h horizon can actually be scored).
+
+**Deviation 3 — `sign-agreement` needed a definition the spec does not give.** Both the projection
+and the realised strand are clamped to ≥ 0 by `wk_strand_pp`, so a literal sign comparison is
+`True == True` on every cell and would report 100% forever — a third tautology. Defined instead as
+agreement on *whether a strand was called at all*, at `STRAND_SCORE_HIT_PP` = 0.5 pp — the same
+threshold `pace_line` already renders a strand at, so the harness scores the surface's own
+decision rather than a private one.
+
+**What is NOT claimed, and it is the same withholding as S3.** The harness reports bias, MAE and
+sign-agreement; it does **not** report a lead time, and building it does not discharge §5.4's
+acceptance. That acceptance is a *falsification*: after next2's or next4's window closes, the
+realised strand must fall inside the error band the 24 h bucket published before it closed. Until
+that has been run on the live series and read, **S6 stays gated** and §5.6 Q1 stays open.
+
+#### Acceptance status after wave 2
+
+| command | status |
+|---|---|
+| `bats` over roll-key · util-tail · strand · burst · **start-by** · **strand-score** · core | **130/130 green** on the wave-2 additions and everything they touch; 15/15 new cases shown RED at the commit before their fix |
+| `claude-accounts --strand-score` prints the horizon-stratified table | **yes** — RP-33 runs the real binary end to end and asserts non-zero `n` in the 24 h, 12 h and 6 h buckets plus a bias that came out non-zero |
+| `claude-accounts --readout` renders `start by T−Nh` / `⚠ LATE by …` on the drain rows | **structure proven, live run NOT done** — see the note below |
+| the next-weekly-reset falsification (§5.4) | **not run** — it cannot be, until a window closes |
+
+🚨 **Two acceptance items could not be executed in this session and are not claimed as green.**
+The wave was implemented in a container with **no `~/.claude/logs/account-utilization.jsonl` and no
+keychain**, so `claude-accounts --readout` cannot sweep and `--strand-score` has no live series to
+score. What *was* executed: every suite above, the render path through `pace_line` on the spec's own
+live row shapes (RP-34), and `--strand-score` end-to-end against a fixture series written to
+`$CC_UTIL_LOG` (RP-33). **The live readout and the reset falsification remain the operator's to
+run**, and S6 remains gated behind the second of them.
+
+⚠️ Five cases in `tests/claude-accounts-core.bats` (4) and `tests/claude-accounts.bats` (1) fail in
+that container — `--relogin-info`, three `--login-status` cases, and one `--json` e2e. **All five
+reproduce identically against pristine `origin/main`** with this wave's diff stashed, and all five
+exercise the macOS keychain / `security` / BSD `date`. They are the platform, not this change.

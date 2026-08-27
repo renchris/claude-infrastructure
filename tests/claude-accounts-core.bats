@@ -1864,6 +1864,97 @@ print("OK")'
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
+@test "router S4: the drain row carries the START-BY constraint, and the header names the K it used" {
+  # USAGE_TELEMETRY_100P §5.3 RP-34 — a NEW case rather than an extension of the S3 case above,
+  # for the reason S3's own Deviation 5 records: that fixture's rows deliberately carry no
+  # `session_reset_at` and no `k_exch`, so widening it in place would mean adding the very inputs
+  # whose ABSENCE it pins. Two fixtures, two questions.
+  #
+  # THE THIRD QUESTION THE GOAL NAMES. S3 shipped rows answering two of three — how much dies,
+  # and whether the demand is routine. `start by T−Nh` is the third: when the endgame burst must
+  # begin for the answer to still be yes. Live shapes at 2026-08-25T09:47:41Z, K = 0.192.
+  run python3 -c "$LOAD"'
+SR = "2026-08-25T13:09:00Z"                 # the 5h window STAMP: its presence says one is open
+def r4(**kw):
+    kw.setdefault("session_reset_at", SR)
+    kw.setdefault("k_exch", 0.192)
+    kw.setdefault("k_exch_src", "live")
+    return row(**kw)
+n2 = r4(acct="next2", weekly_pct=17, weekly_reset_h=97.2, burn_wk_ewma_ph=0.281,
+        session_pct=8, session_reset_h=0.54)
+n3 = r4(acct="next3", weekly_pct=92, weekly_reset_h=2.21, burn_wk_ewma_ph=1.140,
+        session_pct=13, session_reset_h=3.37,
+        burst={"pct": 95.6, "h": 3.0, "n": 2576, "need_pph": 3.62, "never": False})
+n1 = r4(acct="next", weekly_pct=52, weekly_reset_h=114.21, burn_wk_ewma_ph=1.725,
+        session_pct=0, session_reset_h=4.5)
+line = ca.pace_line([n3, n1, n2])
+# the header now names the coefficient AND its source — S3 withheld this clause deliberately,
+# because M3a consumes no K; S4 is the first consumer, so the reader can check the arithmetic
+assert line.startswith("weekly drain — pp that DIE at reset (K=0.192 live · nowcast"), line
+# an account with runway is told WHEN, not just that it is losing pp
+assert "next2 strand ~56pp of 83 · start by T−28h (70h slack)" in line, line
+# ...and one that is out of runway is told the QUANTITY it can no longer save. `LATE` alone is a
+# direction and invites "so start now", which on next3 buys 5.17 of the 8 pp and strands the rest.
+assert "next3 strand ~5pp of 8 · p96 of its own 3h burns · ⚠ LATE by 0.6h — 2.8pp already unrecoverable" in line, line
+# THE ZERO-STRAND ROW GETS NO START-BY, and this is the case that pins it. `next` has a 48 pp
+# deficit and would compute SLACK, so an implementation that renders the clause unconditionally
+# passes every assertion above and fails here: a start time for a rescue nobody needs is a number
+# no reader consumes, which is the metric shape §3.2 forbids on this surface.
+assert ca.burst_start_by(n1, 0.192)["verdict"] == "SLACK", ca.burst_start_by(n1, 0.192)
+tail = [l for l in line.split(chr(10)) if l.strip().startswith("next no strand")]
+assert len(tail) == 1 and "start by" not in tail[0] and "SLACK" not in tail[0], tail
+# K ABSTAINED (S1c left the sane band) ⇒ the clause is absent from BOTH the header and the row,
+# and the strand still renders. An abstain must never silently become a default coefficient.
+bare = ca.pace_line([{k: v for k, v in n2.items() if k not in ("k_exch", "k_exch_src")}])
+assert bare.startswith(ca.PACE_HEAD), bare
+assert "K=" not in bare and "start by" not in bare, bare
+assert "next2 strand ~56pp of 83" in bare, bare
+# ...and the same absence at the head function itself, so the two spellings cannot drift
+assert ca.pace_head([row()]) == ca.PACE_HEAD, ca.pace_head([row()])
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router S4: apply_burn stamps the fitted K and the start-by dict under their own names" {
+  # RP-35 — the stamp side. `pace_line` COMPUTES burst_start_by rather than reading the stamp
+  # (S3 Deviation 3: a renderer that reads a stamp renders nothing at all when apply_burn has not
+  # run, which is a silent failure), so the stamp exists for OTHER consumers and needs its own
+  # case or it is untested. K is fitted ONCE per sweep and stamped on every row, because
+  # exchange_rate pools across accounts by design.
+  run python3 -c "$LOAD"'
+import time
+now = time.time()
+def s(acct, i, sp, wp):
+    return {"acct": acct, "_t": now - i * 600.0, "session_pct": sp, "weekly_pct": wp,
+            "session_reset_at": "2026-08-25T13:09:00Z",
+            "weekly_reset_at": "2026-08-29T06:00:00Z"}
+# 40 pairs at 10 min: session +40 pp/step, weekly +7.68 => K = 0.192 exactly, and Sds = 1600,
+# comfortably above K_MIN_SDS so the fit is LIVE rather than the frozen fallback
+sam = [s("next3", i, 40.0 * (40 - i), 7.68 * (40 - i)) for i in range(41)][::-1]
+rows = [row(acct="next3", weekly_pct=92, weekly_reset_h=2.21, session_pct=13,
+            session_reset_h=3.37, session_reset_at="2026-08-25T13:09:00Z")]
+ca.apply_burn(rows, {}, samples=sam)
+r = rows[0]
+assert abs(r["k_exch"] - 0.192) < 1e-6, r.get("k_exch")
+assert r["k_exch_src"] == "live", r.get("k_exch_src")
+assert r["k_exch_sum_ds"] > ca.K_MIN_SDS, r.get("k_exch_sum_ds")
+sb = r["burst_start_by"]
+assert sb["verdict"] == "LATE" and -1.0 < sb["h"] < 0.0, sb
+# CONTROL: a series that cannot fit K leaves the LIVE keys off — absent, not defaulted — while
+# the weight it did see is still stamped, so a thin fit is distinguishable from a missing one.
+thin = [s("next3", i, 1.0 * (3 - i), 0.192 * (3 - i)) for i in range(4)][::-1]
+rows2 = [row(acct="next3", weekly_pct=92, weekly_reset_h=2.21, session_pct=13,
+             session_reset_h=3.37, session_reset_at="2026-08-25T13:09:00Z")]
+ca.apply_burn(rows2, {}, samples=thin)
+assert rows2[0]["k_exch_src"] == "frozen", rows2[0].get("k_exch_src")
+assert rows2[0]["k_exch"] == ca.K_FROZEN, rows2[0].get("k_exch")
+assert rows2[0]["k_exch_sum_ds"] < ca.K_MIN_SDS, rows2[0].get("k_exch_sum_ds")
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
 @test "--assign CLI: appends one ledger row and never sweeps; unknown account exits 64" {
   local ledger="$BATS_TEST_TMPDIR/assign-cli.jsonl"
   # the fixture endpoint is unreachable — if --assign tried a sweep this would hang/fail loudly
