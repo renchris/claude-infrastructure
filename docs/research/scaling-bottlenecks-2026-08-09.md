@@ -103,6 +103,35 @@ large cached context many times with near-zero output; predicted ≈ 0 pp under 
 ~1 pp per 2B cache-read tokens under API-list. That probe would move the ≤+16% bound to a point, but
 it cannot revive +50%, which both hypotheses already exclude.
 
+#### 2a.1 · Propagation sweep, 2026-08-27 — the ruling reached the two named docs but not its own source or its consumers
+
+The 2026-08-24 ruling struck this doc's rows 36 and 150 and added the reciprocal citation, then
+stopped. Backlog `564d151b76e5` was re-read three days later and the **premise was still live,
+un-struck and prescriptive, in five further places** — none of them the two files the item named. A
+strike at the citing site does not reach the site that derived the number, nor the docs that consumed
+it before the strike existed:
+
+| Site | What was still live | Now |
+|---|---|---|
+| `scaling-bottlenecks-2026-08-09/07-accounts-api.md:114` | the composition itself, labelled *"the single most actionable number in the file"* | struck; the unit confusion named (**$eq share at API list price**, not quota draw) |
+| `…/07-accounts-api.md` **§6.4** | an entire section headed *"The largest quota lever is context, not accounts"* — the **origin** of the lever this doc's row 36 merely cited | struck whole; model-down-tier half preserved (it is priced per *emitted* token, which the meter does charge) |
+| `jcode-due-diligence-2026-08-11.md:53` | graded the refuted claim **"Correct, and understated"** | struck; the surviving clause (quota binds, provider-side) kept and separated from the dead magnitude |
+| `jcode-due-diligence-2026-08-11.md:129` + `…/ranked-levers.md:36` | **rank-1 lever L7**, ranked #1 *because* it was "the ONLY lever that lands on both axes" | quota axis struck ⇒ L7 is a **single-axis resident-memory lever**; score 17.1 flagged as an upper bound needing re-derivation |
+| `…/ranked-levers.md:108` + `…:132` (rank 4) | *"nothing else in this ranking is worth building until [the cache TTL] is settled"* | blocking clause withdrawn — see below |
+
+**One substantive correction fell out of the sweep, not just a strike.** The "swing measurement"
+gating that whole ranking was framed in the wrong unit: both its branches priced a cold
+`claude --resume` on **cache-read**, so with cache-read at 0.000 pp/Mtok the *"L6 costs ~10× on one
+turn per resume"* branch cannot occur, and the *"eviction is quota-FREE"* branch is false too — a cold
+resume pays **cache-creation at 0.105 pp/Mtok** over the rehydrated transcript. The **sign** of the L6
+trade is therefore known without ever measuring the TTL; the TTL sets only the magnitude and remains
+unmeasured. A ranking had been frozen for 16 days behind a measurement that could not have settled it.
+
+**The generalisable defect:** this item was filed against the two docs where the contradiction was
+*visible* (one prescribing, one refuting), and closing on that list would have been a false done over
+a guard still red in five places. When a measurement refutes a derived figure, the sweep runs
+**downstream to every consumer and upstream to the derivation**, not just at the site that quoted it.
+
 **Downstream carriers of the struck figure**, corrected or annotated with this block:
 `memory-econ-rearchitecture-2026-08-10/prior-art.md` row 55/56 (a LIVE-status ledger — flipped).
 Left as dated audit records of what was believed on their date, not corrected:

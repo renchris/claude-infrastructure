@@ -112,7 +112,12 @@ cap is the budget. Any policy that optimises the 5h number is optimising the wro
 | per-turn context (in+cw+cr) | 199,628 tok | — | — | — |
 
 **Cost composition: cache-read 68.0% · cache-write 18.0% · output 14.0% · fresh input 0.0%.**
-This is the single most actionable number in the file — see §6.4.
+~~This is the single most actionable number in the file — see §6.4.~~
+🚨 **STRUCK 2026-08-27 — the share is real, the inference from it is not.** These are **$eq shares at
+API list price** (§2a's 0.10× cache-read multiplier), *not* measured quota draw, and §6.4 spent them
+as if the two were the same unit. Measured Opus-5 cache-read is **0.000 pp/Mtok** (p95 ≤ 0.0017 over
+≥590M tokens) — `../usage-telemetry-100p-2026-08-16/exchange-rate.md` §finding 8 — so this 68% share
+buys **~0% of the weekly cap**. Ruling: `../scaling-bottlenecks-2026-08-09.md` §2a.
 
 Model mix by $eq this weekly window: `next` opus 426 / sonnet 1.5 · `next4` opus 227 · `next3`
 opus 2104 / **fable 80.5** / haiku 0.0 · `next2` opus 406 / fable 1.0 / haiku 0.3. Effectively an
@@ -287,13 +292,31 @@ constraints on top:
   relogin or account rebuild that clusters the resets would convert four independent budgets into
   one synchronized one.
 
-### 6.4 · The largest quota lever is context, not accounts
+### 6.4 · ~~The largest quota lever is context, not accounts~~ — REFUTED 2026-08-24
 
-**68% of every quota dollar is cache-read**, and cache-read scales linearly with per-turn context
+🚨 **This whole section is struck. Its premise was refuted by direct measurement; the ruling is
+`../scaling-bottlenecks-2026-08-09.md` §2a and the meter is
+`../usage-telemetry-100p-2026-08-16/exchange-rate.md` §finding 8 / R1.** The section priced cache-read
+from §2a's API-list multiplier and then spent that price against the **quota** meter — two different
+units. Measured Opus-5 cache-read is **0.000 pp/Mtok** (p95 ≤ 0.0017 over ≥590M tokens; NNLS, 265 ≥2 h
+intervals / 4 accounts, R²=0.82, replicated on the disjoint 5-hour bucket). Quota is spent by what a
+session **emits** (output 1.282 pp/Mtok, cache-creation 0.105), not by what it re-reads. The lever is
+worth **0% under the measured fit and ≤ +16% under the list-price alternative** — an upper bound, since
+halving the window does not halve cache-creation. **Never +50%.** `exchange-rate.md` R1 gives the
+opposite instruction: *"Stop treating long cached context as quota-expensive… it authorises MORE
+context."*
+
+⚠️ **Context stewardship is unaffected — but re-read why it stands.** CLAUDE.md § Context Stewardship
+is argued from the hard `Prompt is too long` ceiling and decision rot, never from quota; the paragraph
+below was the only thing recasting it as a capacity lever, and that recasting is what died. The
+**model down-tier** half is untouched by this ruling — it is priced per emitted token, which the meter
+does charge for.
+
+~~**68% of every quota dollar is cache-read**, and cache-read scales linearly with per-turn context
 (median **199,628 tokens**). Halving working context ≈ **−34% quota draw ≈ +50% sustainable active
 sessions** — a bigger multiplier than a fifth account (+25%). CLAUDE.md § Context Stewardship's
 recycle thresholds are therefore a **capacity policy**, not only a quality policy, and `/handoff`
-at 35% idle fill is worth real active-hours. Second lever: **model down-tier**. Sonnet 5 is 0.6× Opus
+at 35% idle fill is worth real active-hours.~~ Second lever: **model down-tier**. Sonnet 5 is 0.6× Opus
 per token (1.67× the active-hours); Haiku 4.5 is 0.2× (5×). The fleet is ~99% Opus by $eq today,
 so this lever is entirely unspent.
 
