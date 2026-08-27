@@ -158,6 +158,10 @@ A control nobody has watched fail is a rubber stamp. `tests/capacity-marginal.ba
 On the box, in a session that is not itself doing heavy work (the sampler costs one `ps` per minute):
 
 ```sh
+# The whole protocol below, driven to a verdict in one command (§6b):
+bash scripts/capacity-marginal-run.sh --artifact-dir /tmp/marginal-run
+
+# ...which is these two plus the extend-until-settled loop, kept here as the specification:
 bash scripts/capacity-marginal.sh sample --window-s 3600 --interval-s 60 --out /tmp/marg.tsv
 bash scripts/capacity-marginal.sh analyze --in /tmp/marg.tsv
 ```
@@ -208,6 +212,45 @@ gate refusals landing at ~4-8 concurrent actives**, a count over refusals rather
 a per-session coefficient. That matters for sequencing: `CC_ADMIT_ACTIVE_CEILING=8` is **not blocked
 on §6**, so the measurement can take as long as it needs without leaving a gate justified by a
 number its own source pair refutes.
+
+### 6b · §6 is now ONE command, because a hand-off must be a program (2026-08-27)
+
+The paragraph above is right that only the run remains, and wrong about what shape it was left in.
+**§6 as written is a worksheet**: two commands plus a judgment loop — *"sample, analyze, and extend
+the window until the verdict stops being `NO-ATTRIBUTION` **or** the refusal repeats with the same
+term across several windows"* — handed to a person to execute. This repo's own Manual-Command
+Delivery rule says that is the defect (*"making the human the runtime"*), and nothing in that loop
+is a judgment: the stop criterion is literally *PASS, or the same failing term N times running*.
+
+**`scripts/capacity-marginal-run.sh`** is that paragraph, executable. One command, three mechanical
+stops, and it computes nothing — every verdict, control and coefficient comes from
+`capacity-marginal.sh analyze` unmodified, which a test pins by grepping the driver for arithmetic
+it must not contain. A second implementation of the fit is a second thing to keep true, and four
+numbers from instruments nobody controlled is the reason this item exists.
+
+| stop | reached when | exit |
+|---|---|---|
+| **PASS** | all three controls passed; the coefficient is quotable with its s.e. and window | 0 |
+| **SETTLED-REFUSAL** | the identical control signature refused `--settle` rounds running — §6 names this as itself the finding | 1 |
+| **UNSETTLED** | `--max-s` elapsed with the signature still moving; re-runnable against the same `--out` | 1 |
+| **NO-DATA** | no analyzable rows — a claim about the box, never a refusal | 3 |
+
+Two things it fixes beyond the shape. **The cap is a deadline**: a round that cannot finish inside
+the remaining budget is truncated to what is left, so a 30-minute extension can never run 29 minutes
+past a 1-minute budget (a cap that only gates the *next* round is not a cap). And **the artifact
+records the box** — `--artifact-dir` writes the TSV, the verbatim `analyze` text and a JSON carrying
+`uname`/`ncpu`/`host` alongside the verdict. A marginal is a property of a machine, and once a value
+is separated from where it was taken nothing downstream can tell a 10-core Darwin fleet from a
+4-core container.
+
+It also **synthesises no conditions**, per §6: it sleeps and watches, starts no sessions and kills
+none.
+
+Verified off-box: `tests/capacity-marginal-run.bats` **11/11**, `tests/capacity-marginal.bats` still
+15/15 beside it, `shellcheck` clean, `bash -n` clean, `test-hermeticity-lint.sh` clean (553 suites,
+0 new leaks), and an end-to-end smoke against the *real* sampler on this container correctly
+reaching `SETTLED-REFUSAL` with all three controls FAIL and no quotable number in stdout or in the
+artifact.
 
 **What remains is exactly §6 and nothing else** — one ~1 h window on the 10-core Darwin box during a
 dispatch wave, then the update-and-close. Verified this session, off-box: `bats

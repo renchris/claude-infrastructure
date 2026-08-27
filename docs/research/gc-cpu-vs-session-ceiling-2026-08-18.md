@@ -236,6 +236,14 @@ census shape that killed the 64% headline and asserts the refusal, so the contro
 to fail rather than assumed to be. Design, the adjudication of the four values, and the run protocol:
 `marginal-load-per-active-session-2026-08-19.md`.
 
+**And the run is now one command** (2026-08-27, §6b of that doc): `scripts/capacity-marginal-run.sh`
+executes the sample → analyze → extend-until-settled protocol that paragraph specified in prose,
+stopping on PASS, on the same control refusing N rounds running (which §6 names as itself the
+finding), or on a wall-clock cap. It computes nothing — every verdict comes from `analyze`
+unmodified — and its `--artifact-dir` records the box the number was taken on, because a marginal
+is a property of a machine. What is still outstanding is the ~1 h window on the 10-core Darwin
+fleet; the container this was built in has neither the cores nor the sessions.
+
 ---
 
 ## 6 · Provenance
