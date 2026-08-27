@@ -40,6 +40,8 @@ prediction moving from argued to observed, on the project that had not yet been 
 | 08-19 | `38de29ec5e59` | `doc_classifier` | label-foreign — **third burn of the same item**, and the first fired *after* its disproof was on trunk (§ THIRD BURN below) |
 | 08-20 | `38de29ec5e59` | `doc_classifier` | label-foreign — **THIRD burn of the same item**, and the row was still `open` at fire time (§ SIXTH OCCURRENCE) |
 | 08-20 | `20caf9661ea4` | `reso-management-app` | label-foreign — first **DECISION** item; three days after the cause was located and published (§ below) |
+| 08-24 | `485f8f87eb5f` | `claude-infrastructure` | **subject-foreign** — label accurate, target is `renchris/reso-management-app`; `docs/research/tenant-drift-venue-refusal-2026-08-24.md` |
+| 08-27 | `485f8f87eb5f` | `claude-infrastructure` | subject-foreign — **second burn**, 3 days after that doc named the exact command to prevent it; nothing consumed it (that doc, § 5–6) |
 
 The 08-17 `reso-management-app` row is a **repeat of the 08-14/08-16 route**, not a fifth route. The class has stopped producing
 new spellings and is now producing recurrences on a known mechanism — which is why nothing about the

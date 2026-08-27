@@ -73,3 +73,72 @@ Neither `cc-backlog` verb could be run from here — this container has no
 `~/.claude/autonomy/backlog.jsonl`, so `block`/`done`/`reopen` would have created a fresh store
 that nothing reads. A write that no reader can see is a fake discharge, which is the failure this
 document exists instead of.
+
+---
+
+## 5. Second burn, 2026-08-27 — §4 was never executed, and that is now the item's largest fact
+
+Re-dispatched to a second `anthropic_cloud` VM three days later. Same venue, same refusal, same
+four measurements, re-taken rather than recalled:
+
+| probe | 08-24 | 08-27 |
+|---|---|---|
+| `/Users`, `~/Development`, any `reso-management-app` clone | absent | absent |
+| GitHub scope | `renchris/claude-infrastructure` | `renchris/claude-infrastructure` |
+| `tenant-drift.yml` on `origin/main` here | absent (`.github/workflows/` = `diagrams.yml`, `hermetic.yml`) | unchanged |
+| `~/.claude/autonomy/backlog.jsonl` | absent | absent |
+| clone | 50-commit graft | 50-commit graft, `HEAD..origin/main` = 0 |
+
+**The premise is still neither refuted nor confirmable from this venue** — §2 stands verbatim, and
+its "9 days stale" is now 17. Nothing here contradicts the item; nothing here can check it. reso's
+trunk remains the only oracle and this VM still cannot read it.
+
+What is new is not about tenant-drift at all. §4 named the exact command that would have kept this
+item out of the cloud lane, and the next dispatch fired it into the cloud lane anyway. For this
+item, *"nothing in the dispatch chain reads plan prose"* (`venue-foreign-repo-recurrence-2026-08-17.md`)
+has moved from **argued to measured**: the argument was on trunk, on-topic, in the item's own
+named file, and it bought nothing. A third document recommending the same unexecuted command would
+be the loop, not a contribution — which is why §6 changes the recommendation instead of repeating it.
+
+## 6. The remedy is `venue`, not `block` — supersedes §4
+
+§4 was wrong about the verb, and the difference matters more than the venue refusal it was written
+about. `cc-backlog block` parks the row **behind a human** and out of every wave, so the item stops
+burning slots and also stops draining; on a store whose blocked rows have a p90 of days, that trades
+a recurring cost for an indefinite one. The item does not need a human. It needs to stop being
+offered to the one venue that cannot do it.
+
+`cc-dispatch` already reads `venuePlan` and filters the cloud queue on it — *"that is genuinely
+ineligible reads `venuePlan=local` and leaves the cloud queue by the filter"* (`bin/cc-dispatch:1755`).
+So the shipped one-line remedy, using existing machinery, adding no predicate and touching no gate:
+
+```
+cc-backlog venue 485f8f87eb5f --venue local \
+  --why "ineligible-cross-repo: subject is renchris/reso-management-app/.github/workflows/tenant-drift.yml — unreachable from the cloud lane, which is given only renchris/claude-infrastructure (docs/research/tenant-drift-venue-refusal-2026-08-24.md)"
+```
+
+The token leads with `ineligible-cross-repo` because that is the name `bin/cc-eligible:430` already
+gives this class, so a split on `": "` files it with its 106 siblings rather than minting a synonym.
+After it, the row stays **open and drainable** — it simply drains on a box that has reso — and the
+cloud queue loses it permanently. No operator decision, no parked row, no new arm.
+
+Not runnable from here for the reason §4 already gave: no store. This is the on-box step.
+
+**Why this is not a `cc-eligible` patch.** The honest fix for the *class* is upstream —
+`cross_repo()` keys on the `project` field, and this item's project label is accurate while its
+subject is foreign, so no reading of that field can catch it. Widening the predicate from a VM is
+refused by `bin/cc-venue`'s guard (§1), and `venue-foreign-repo-recurrence-2026-08-17.md` separately
+settled that the `cc-eligible` placement is the weaker of the two anyway: it gates the *claim*, while
+`cc-offload` gates the *fire*, and it is the fire that spends the slot. That remains the open
+decision filed 2026-08-16. The `venue` line above does not wait on it.
+
+**Second-order note for whoever executes it.** A `venuePlan=local` row still provisions its worktree
+from `project`, i.e. from `~/Development/claude-infrastructure`, so the on-box worker arrives in this
+repo and must `cd` to reso itself. That is workable — on-box, both trees exist and neither is
+scope-fenced — and it is strictly better than the alternative of re-filing under
+`reso-management-app` (which is a `repo=` row in `scripts/dispatch-projects.conf` and would provision
+correctly, but mints a NEW id: ids are keyed on `project+title+source`, so a relabel is an
+add-plus-terminate, the hand migration that file documents at its `reso` alias row). One line beats
+two rows unless the worktree provenance is later measured to matter.
+
+§3's pre-derived fix is untouched and still the work.
