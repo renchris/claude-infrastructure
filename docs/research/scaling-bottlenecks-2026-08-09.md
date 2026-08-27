@@ -105,9 +105,41 @@ it cannot revive +50%, which both hypotheses already exclude.
 
 **Downstream carriers of the struck figure**, corrected or annotated with this block:
 `memory-econ-rearchitecture-2026-08-10/prior-art.md` row 55/56 (a LIVE-status ledger — flipped).
-Left as dated audit records of what was believed on their date, not corrected:
-`jcode-due-diligence-2026-08-11.md:53`, `jcode-due-diligence-2026-08-11/bottleneck-audit.md:73`,
-`jcode-due-diligence-2026-08-11/ranked-levers.md:36,:54`.
+
+### 2b · PROPAGATION SWEEP 2026-08-27 — the ruling above did not reach its own origin, and "dated audit record" was the wrong test
+
+This block revises one decision made above. 2a listed `jcode-due-diligence-2026-08-11.md:53`,
+`…/bottleneck-audit.md:73` and `…/ranked-levers.md:36,:54` as **"left as dated audit records of what
+was believed on their date"**, and it missed the origin site entirely. A grep sweep three days later
+found the struck lever still reading LIVE in **seven** places, so the guard 2a exists to close —
+*live-but-refuted guidance invisible to every sensor* — was still red on the sensor that found it in
+the first place.
+
+**Why the "dated audit record" test fails here.** It is right for a finished narrative and wrong for
+a *prescription*. `ranked-levers.md` is a recommendation document whose **rank-1, still-unspent**
+action ("L7 context-ceiling cap… Do this first, whatever is decided about jcode") was scored
+`(18 × 0.95)/1 = 17.1` with the refuted quota gain **inside the numerator**, and sold as *"the ONLY
+lever that lands on both the resident axis and the active/quota axis at once"*. That is not a record
+of a past belief; it is an instruction to spend an agent-day, and half its case is dead. A reader
+arriving by grep gets `[MEASURED]` and a score, not a date. Every site below therefore keeps its
+original wording under `~~strikethrough~~` — the audit record is preserved verbatim, which is what
+the "dated record" concern actually wanted — with the correction and a pointer to this section
+beside it.
+
+| Site | What was live | Now |
+|---|---|---|
+| `scaling-bottlenecks-2026-08-09/07-accounts-api.md:114` | the composition itself, flagged *"the single most actionable number in the file"* | annotated: it is a share of **API-list-equivalent dollars**, not of quota |
+| `…/07-accounts-api.md` **§6.4** | **THE ORIGIN** — *"Halving working context ≈ −34% quota draw ≈ +50% sustainable active sessions"*, unstruck by 2a | struck; the surviving **model down-tier** lever kept and re-justified (it acts on *output*, which the meter does charge) |
+| `jcode-due-diligence-2026-08-11.md:53` | verdict *"Correct, and understated"* over the lever | struck; verdict corrected to "Correct" — the overstatement was ours |
+| `jcode-due-diligence-2026-08-11.md:129` | L7 as *"the only lever that moves both axes"* | quota half struck; L7 is a **resident-axis lever only** |
+| `…/bottleneck-audit.md:73` | the lever under a `MEASURED:` label | struck, with the $eq-vs-quota category error named |
+| `…/ranked-levers.md` finding + evidence | score 17.1 with the quota gain folded in | struck; **≈15.2 on the resident axis alone** by its own arithmetic (+16 resident) |
+| `…/ranked-levers.md` Unknowns | *"THE swing measurement for the whole ranking"* — the cache TTL, priced off the 68% | **largely settled without it**: cache-read 0.000 / cache-creation 0.105 pp/Mtok make a cold ~200K `--resume` ≈ **0.02 pp**, so L6 eviction is ~quota-free whichever way the TTL falls |
+
+The `~3.9 concurrent-active` figure travels in the same sentences (it was priced with the same
+composition), so it is corrected to the model-free **6.2–11.0** wherever it appears in them, plus
+`memory-econ-rearchitecture-2026-08-10.md:40`. The quota wall itself is unchanged in kind — the
+correction *widens* it, it does not remove it, and `L3` (cloud) is still the only lever that moves it.
 
 ---
 

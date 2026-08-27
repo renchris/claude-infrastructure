@@ -112,7 +112,16 @@ cap is the budget. Any policy that optimises the 5h number is optimising the wro
 | per-turn context (in+cw+cr) | 199,628 tok | — | — | — |
 
 **Cost composition: cache-read 68.0% · cache-write 18.0% · output 14.0% · fresh input 0.0%.**
-This is the single most actionable number in the file — see §6.4.
+~~This is the single most actionable number in the file — see §6.4.~~
+
+🚨 **CORRECTED 2026-08-27 — this composition is API-LIST-EQUIVALENT dollars, not weekly-quota
+draw, and the lever §6.4 built on it is struck.** The percentages come from this file's own §2a
+`$eq` method, which prices cache-read at a 0.10× *list* multiplier. The weekly meter does not
+charge that: measured Opus-5 cache-read is **0.000 pp/Mtok** (p95 ≤ 0.0017 over ≥590M tokens,
+NNLS over 265 ≥2 h intervals / 4 accounts, R²=0.82, replicated on the disjoint 5-hour bucket).
+So 68% of `$eq` is ~0% of quota; and re-priced at API list over a realised 80 pp cycle it is
+**~28%**, not 68%, under either fit. Ruling: `../scaling-bottlenecks-2026-08-09.md` §2a.
+Measurement: `../usage-telemetry-100p-2026-08-16/exchange-rate.md` finding #8, R1.
 
 Model mix by $eq this weekly window: `next` opus 426 / sonnet 1.5 · `next4` opus 227 · `next3`
 opus 2104 / **fable 80.5** / haiku 0.0 · `next2` opus 406 / fable 1.0 / haiku 0.3. Effectively an
@@ -287,15 +296,39 @@ constraints on top:
   relogin or account rebuild that clusters the resets would convert four independent budgets into
   one synchronized one.
 
-### 6.4 · The largest quota lever is context, not accounts
+### 6.4 · ~~The largest quota lever is context, not accounts~~ — STRUCK 2026-08-27
 
-**68% of every quota dollar is cache-read**, and cache-read scales linearly with per-turn context
-(median **199,628 tokens**). Halving working context ≈ **−34% quota draw ≈ +50% sustainable active
-sessions** — a bigger multiplier than a fifth account (+25%). CLAUDE.md § Context Stewardship's
-recycle thresholds are therefore a **capacity policy**, not only a quality policy, and `/handoff`
-at 35% idle fill is worth real active-hours. Second lever: **model down-tier**. Sonnet 5 is 0.6× Opus
-per token (1.67× the active-hours); Haiku 4.5 is 0.2× (5×). The fleet is ~99% Opus by $eq today,
-so this lever is entirely unspent.
+🚨 **REFUTED BY MEASUREMENT. Do not act on this section; the surviving lever is the down-tier
+paragraph at the end.** Ruling: `../scaling-bottlenecks-2026-08-09.md` §2a. Measurement:
+`../usage-telemetry-100p-2026-08-16/exchange-rate.md` finding #8, R1.
+
+> ~~**68% of every quota dollar is cache-read**, and cache-read scales linearly with per-turn context~~
+> ~~(median **199,628 tokens**). Halving working context ≈ **−34% quota draw ≈ +50% sustainable active**~~
+> ~~**sessions** — a bigger multiplier than a fifth account (+25%). CLAUDE.md § Context Stewardship's~~
+> ~~recycle thresholds are therefore a **capacity policy**, not only a quality policy, and `/handoff`~~
+> ~~at 35% idle fill is worth real active-hours.~~
+
+*(Struck per line, not per block, so a line-oriented grep sees the strike on whichever line it hits —
+the sensor failure this whole correction exists to close.)*
+
+**Why it is dead.** The 68% is a share of *API-list-equivalent dollars* (**this file's** §2a `$eq`
+method, which applies a 0.10× list multiplier to cache-read), silently read as a share of *weekly
+quota*. The
+meter charges Opus-5 cache-read **0.000 pp/Mtok**; quota is spent by what a session EMITS (output
+1.282 pp/Mtok, cache-creation 0.105), not by what it re-reads. Trimming context therefore buys
+**0%** under the measured fit and **≤ +16%** under the API-list alternative — and even that is an
+upper bound, since halving the window does not halve cache-creation. **Never +50%**, under either
+hypothesis. `exchange-rate.md` R1 gives the opposite instruction: long cached context is not
+quota-expensive, and the measurement *authorises* more of it.
+
+**What this does NOT touch.** CLAUDE.md § Context Stewardship stands unchanged — it is argued from
+the hard `Prompt is too long` ceiling and from decision rot, never from quota. `/handoff` at 35%
+idle fill is still right; it is a quality and survivability policy, not a capacity lever.
+
+**Surviving second lever: model down-tier.** Sonnet 5 is 0.6× Opus per token (1.67× the
+active-hours); Haiku 4.5 is 0.2× (5×). The fleet is ~99% Opus by $eq today, so this lever is
+entirely unspent — and unlike the context lever it acts on *output*, the class the meter actually
+charges.
 
 ### 6.5 · Fail-open directions to watch (both currently safe)
 

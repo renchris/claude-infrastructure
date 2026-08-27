@@ -315,8 +315,11 @@ think its own is better conditioned. The correct label is the source's: **a boun
 **Why this does not damage the practical answer:** §C4's sustainable-count derivation never touches
 the token model. It survives whichever way cache-read resolves.
 
-**A live consequence nobody has filed.** If cache-read ≈ 0, the prior wall-ranking doc's headline
-quota lever is dead — and that doc is still the repo's standing reference
+**A live consequence nobody has filed.** *(✅ **Filed and acted on since** — backlog
+`564d151b76e5`. The lever was struck at both cited sites on 2026-08-24 and its seven downstream
+carriers swept on 2026-08-27; ruling `../scaling-bottlenecks-2026-08-09.md` §2a, sweep §2b. This
+section's diagnosis is preserved below as written — it was correct.)* If cache-read ≈ 0, the prior
+wall-ranking doc's headline quota lever is dead — and that doc is still the repo's standing reference
 (`scaling-bottlenecks-2026-08-09.md:36`, QUOTED-FROM-DOC):
 
 > **68% of quota cost is cache-read at median ~200K contexts ⇒ halving context ≈ +50% active
@@ -473,11 +476,15 @@ process-level instruments.** Recording it so no one else re-derives it and over-
    away from wide waves on one account far more sharply than quota alone does. Test: `fs_usage -w -f
    filesys | grep oauth_refresh` on one account across a known expiry instant, with a teammate wave
    live.
-3. **Two repo documents give opposite advice on context size and neither cites the other.**
-   `scaling-bottlenecks-2026-08-09.md:36,150` ("68% of quota cost is cache-read ⇒ halving context ≈
-   +50% capacity", carried into standing policy) vs `exchange-rate.md:45,223` ("cache-READ is ≤1/750
-   of an output token… it authorises MORE context"). One of them is live guidance and wrong. This
-   needs a filed decision, not another measurement.
+3. ~~**Two repo documents give opposite advice on context size and neither cites the other.**~~
+   ~~`scaling-bottlenecks-2026-08-09.md:36,150` ("68% of quota cost is cache-read ⇒ halving context ≈~~
+   ~~+50% capacity", carried into standing policy) vs `exchange-rate.md:45,223` ("cache-READ is ≤1/750~~
+   ~~of an output token… it authorises MORE context"). One of them is live guidance and wrong. This~~
+   ~~needs a filed decision, not another measurement.~~
+   ✅ **RESOLVED — do not re-raise.** Filed as backlog `564d151b76e5`; ruling in
+   `../scaling-bottlenecks-2026-08-09.md` **§2a** (class A — the measured rate governs; the lever is
+   struck) and the propagation swept in **§2b**. The two docs now cite each other. This question was
+   right, and it is closed.
 4. **The finder's `RMSE=1.73` and its published 17.7 pp residual cannot both be true** (§C5).
    Whichever way that resolves, the 5-hour exchange rate should be published with an interval and a
    condition number, and the repo should pick one of the two competing fits (the `USAGE_TELEMETRY_100P`

@@ -37,7 +37,8 @@ total".** Ranked by what binds first (axis L, evidence per rung):
    runnable threads each on 10 cores; 127/127 historic gate refusals were load, 0 memory). Felt
    turn-end lag is 3.7s p50, 92% of it ONE call (`cc-backlog list --blocked` on the Stop path).
 3. **Self-imposed caps.** Router KMAX refuses the 33rd session (`handoff-fire.sh:5266`); 4 Max
-   accounts sustain ~3.9 active 24/7.
+   accounts sustain ~~~3.9~~ → **6.2–11.0** active 24/7 (corrected 2026-08-27 — the 3.9 was priced
+   with the refuted 68%-cache-read composition; `scaling-bottlenecks-2026-08-09.md` §2a).
 
 **Residency is nearly free.** Marginal session = 230MB arrival / 400-460MB steady footprint,
 **saturating at ~450MB within 1.5h — no lifetime leak** (log-curve fit, r²=0.695/0.967; a 20h
