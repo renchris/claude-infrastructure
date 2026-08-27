@@ -71,9 +71,13 @@
 #
 # The mode is therefore two exit conditions and a fail-closed arm gate:
 #   C1 exit-on-mail   unchanged — the wake half of 2-way comms.
-#   C2 exit-on-turn   a UserPromptSubmit-kind beat newer than the baseline taken at arm ⇒ the session
-#                     was woken by something else, so this awaiter's job is over: exit 0 SILENTLY
-#                     (verdict=stood-down), leaving the next natural Stop registry-quiet.
+#   C2 exit-on-turn   a turn boundary newer than the arm turn's OWN trailing Stop ⇒ the session was
+#                     woken by something else, so this awaiter's job is over: exit 0 SILENTLY
+#                     (verdict=stood-down), leaving the next natural Stop registry-quiet. Stated as
+#                     "a UserPromptSubmit-kind beat newer than the baseline" in the design doc, which
+#                     is not implementable as written: the arm is instructed through a Stop-hook
+#                     block, and such a continuation turn fires no UserPromptSubmit at all, so its
+#                     only beat is a Stop (see THE ALLOWANCE below — backlog b60eb29e97dd).
 #   C3 single-instance   refuse while a live sibling watcher claims any key of the keyset.
 #   C4 refuse-on-pending refuse while mail is already pending — mail waiting means you have work, and
 #                     arming would defer the judgment of state you ALREADY hold.
@@ -409,14 +413,37 @@ if [ "$IDLE_SCOPED" = 1 ]; then
   BEAT_BASE_SEQ="$(_beat_field "$SID" '.seq')"; case "$BEAT_BASE_SEQ" in ''|*[!0-9]*) BEAT_BASE_SEQ=0 ;; esac
   # THE ALLOWANCE, and why the doc's "exclude Stop-kind beats" is implemented as an OFFSET rather
   # than a kind filter. The beat file holds only the LATEST boundary, so a filter on `kind` alone has
-  # a sampling hole: a whole turn (prompt beat, then stop beat) can complete inside one poll
-  # interval, leaving us looking at a Stop-kind beat whose prompt predecessor we never saw — and a
-  # watcher that ignores it stays parked over a session that HAS moved on. That is the starvation
-  # pole re-entering through the oracle. Turns alternate, so any beat more than one past the arm
-  # baseline PROVES a prompt beat occurred in between, whether or not we sampled it. The offset says
-  # exactly that: the arm turn's own trailing Stop (baseline+1) is excluded, and nothing else is.
+  # a sampling hole: a whole turn can complete inside one poll interval, leaving us looking at a
+  # Stop-kind beat whose predecessor we never saw — and a watcher that ignores it stays parked over a
+  # session that HAS moved on. That is the starvation pole re-entering through the oracle. The offset
+  # closes it: the arm turn's own trailing Stop (baseline+1) is excluded, and nothing else is.
   # Erring toward standing down early costs one bounce turn; erring the other way costs the goal.
-  [ "$(_beat_field "$SID" '.kind')" = "prompt" ] && BEAT_STOP_ALLOWANCE=1
+  #
+  # 🚨 THE ALLOWANCE IS UNCONDITIONAL, and it used to be gated on `kind = prompt` — which made this
+  # mode a DETERMINISTIC NO-OP on the one path that arms it (backlog b60eb29e97dd; measured 2/2,
+  # `beat seq > 3` and `beat seq > 6`, each watcher standing down at the very Stop that ended the
+  # turn it was armed in). The gate encoded "turns alternate prompt/stop, so a sample taken inside a
+  # turn is that turn's prompt beat". THE SITE THAT DEMANDS THE ARM DOES NOT PRODUCE ONE.
+  # hooks/session-continue.sh's wake floor reaches the model by BLOCKING the Stop, and a Stop-hook
+  # continuation turn fires NO UserPromptSubmit: cli.js turns the blocking error into a user message
+  # directly (`d6({content: getStopHookMessage(...), isMeta:true})`) and the query loop `continue`s
+  # with `stopHookActive:true`, never re-entering processUserInput, the sole caller of
+  # executeUserPromptSubmitHooks. So hooks/session-beat.sh writes no prompt beat for that turn, the
+  # newest beat at arm time is the PREVIOUS turn's Stop, the gate read `kind = stop`, the allowance
+  # stayed 0, and the arm turn's own trailing Stop at baseline+1 tripped C2 seconds later. The wake
+  # floor then burned its 2-attempt budget re-instructing an arm that could not survive being armed,
+  # and the session went idle DEAF — the exact failure the floor exists to prevent.
+  # (The other two instructing sites land on different turn shapes — hooks/mailbox-drain.sh nudges
+  # via UserPromptSubmit additionalContext, so ITS arm turn does open with a prompt beat, and the
+  # hooks/validate-bash.sh denial arrives as a tool_result inside whichever turn is running. An
+  # oracle that has to be right on all three cannot be keyed on the arm turn's opening beat at all.)
+  # The invariant that actually holds is kind-independent: AT MOST ONE boundary beat can be written
+  # by the arm turn after the arm, its own trailing Stop, because a turn's opening beat (when it has
+  # one at all) precedes the arm. So tolerate exactly one, always. A `prompt`-kind beat above the
+  # baseline is never the arm turn's own and still stands down at +1, via the second clause of
+  # _turn_moved below — which is what keeps a queued operator prompt, or a task notification, from
+  # riding the allowance. Evidence: docs/research/idle-scoped-arm-turn-2026-08-27.md.
+  BEAT_STOP_ALLOWANCE=1
   # (C4) MAIL ALREADY PENDING = you have work. Arming here would defer the judgment of state the
   #      session already holds, which is the deferral this mode exists to make impossible.
   for _k in $(_keys); do
@@ -442,8 +469,12 @@ _turn_moved() {  # 0 iff this session has taken a new turn since the arm baselin
   local seq
   [ "$IDLE_SCOPED" = 1 ] || return 1
   seq="$(_beat_field "$SID" '.seq')"; case "$seq" in ''|*[!0-9]*) return 1 ;; esac
-  # A Stop-kind beat at exactly baseline+1 is the arm turn's OWN trailing stop — never a new turn.
+  # A Stop-kind beat at exactly baseline+1 is the arm turn's OWN trailing stop — never a new turn,
+  # whether or not that turn opened with a prompt beat (see THE ALLOWANCE at the arm gate).
   if [ "$seq" -gt "$(( BEAT_BASE_SEQ + BEAT_STOP_ALLOWANCE ))" ]; then return 0; fi
+  # …but a PROMPT-kind beat at baseline+1 is not: a turn's opening beat precedes the arm, so this one
+  # opened a turn that started after it. This is the clause that keeps a queued operator prompt or a
+  # task notification from riding the allowance the arm turn's own Stop is owed.
   [ "$seq" -gt "$BEAT_BASE_SEQ" ] && [ "$(_beat_field "$SID" '.kind')" = "prompt" ] && return 0
   return 1
 }

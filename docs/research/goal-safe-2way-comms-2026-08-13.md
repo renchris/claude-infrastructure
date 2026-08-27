@@ -123,7 +123,7 @@ files, the owner guard, the signal verdicts. The mode adds two exit conditions a
 | Clause | Behaviour | Why |
 |---|---|---|
 | C1 exit-on-mail | unchanged: new inbox line → print body → exit 0 → task completes → **completion notification wakes the idle model with the mail** (A5) | the wake half of 2-way comms, as today |
-| C2 exit-on-turn | poll `~/.claude/cc-beats/<sid>.json`; any **UserPromptSubmit-kind** beat with `seq` > baseline-at-arm → exit 0 silently, `verdict=stood-down` | the session was woken by something else (typed message, task notification, asyncRewake fire). The awaiter's deferral job is over; the next natural Stop is registry-quiet and the goal judges the NEW state. Stop-kind beats are excluded so the arm-turn's own trailing Stop cannot self-cancel it |
+| C2 exit-on-turn | poll `~/.claude/cc-beats/<sid>.json`; any **UserPromptSubmit-kind** beat with `seq` > baseline-at-arm → exit 0 silently, `verdict=stood-down` | the session was woken by something else (typed message, task notification, asyncRewake fire). The awaiter's deferral job is over; the next natural Stop is registry-quiet and the goal judges the NEW state. Stop-kind beats are excluded so the arm-turn's own trailing Stop cannot self-cancel it. **⚠ "UserPromptSubmit-kind" is CORRECTED — see note 3 below (backlog `b60eb29e97dd`): the arm turn produces no prompt beat, so the oracle is an unconditional one-beat offset** |
 | C3 single-instance | refuse to arm when a live sibling claim exists for the keyset (the `.watchers` claim machinery, `cc-await-ping:179-196`) | overlapping awaiters re-create d33abf12's permanent deferral |
 | C3′ **declare the mode** — a `mode=idle-scoped` line in the `.watching` marker AND in the per-pid `.watchers/<key>.<pid>` claim, re-stamped every poll beside the pid | **REQUIRED OF B3, and the reader already shipped** (E2, 2026-08-15): `mailbox_wake_idle_scoped` in `hooks/lib/mailbox-pending.sh` accepts EITHER file, and its absence means "plain" — so an idle-scoped watcher that omits the stamp will be reported to its own session as goal-blocking, with a `kill` beside it. The claim is the sturdier of the two: `_unbeat`'s hand-over rewrites the marker on behalf of a sibling whose mode it does not know. | the drain must tell a sanctioned awaiter apart from the 14400 s park it is replacing, and it can only do that from what the watcher writes |
 | C4 refuse-on-pending | refuse to arm while `mailbox_has_pending` is true on any key | mail waiting = you have work; arming would defer the judgment of state you already hold |
@@ -177,9 +177,30 @@ C1–C7 shipped as written. Four things the build settled that the spec left ope
    turn can complete inside one poll and leave the watcher looking at a Stop-kind beat whose prompt
    predecessor it never sampled — and a watcher that ignores that stays parked over a session that
    has moved on, i.e. the starvation pole re-entering through the oracle. Turns alternate, so
-   `seq > baseline + allowance` (allowance 1 iff the baseline beat was prompt-kind) excludes exactly
-   the arm turn's own trailing Stop and nothing else. Erring toward standing down early costs one
-   bounce turn; erring the other way costs the goal.
+   `seq > baseline + allowance` (~~allowance 1 iff the baseline beat was prompt-kind~~ **allowance 1,
+   unconditionally — see the correction below**) excludes exactly the arm turn's own trailing Stop
+   and nothing else. Erring toward standing down early costs one bounce turn; erring the other way
+   costs the goal.
+
+   🚨 **CORRECTED 2026-08-27 (backlog `b60eb29e97dd`), and the correction also refutes the C2 row in
+   the §4 table above.** "Any **UserPromptSubmit-kind** beat with `seq` > baseline" is not
+   implementable on this substrate, and the `iff the baseline beat was prompt-kind` guard made the
+   mode a deterministic no-op on the only path that arms it — measured 2/2, each watcher standing
+   down at the Stop that ended the turn it was armed in (`beat seq > 3`, `beat seq > 6`), after
+   which the wake floor spent its budget and the session went idle DEAF. **The C7 producer that
+   DEMANDS the arm does not produce a prompt beat**: `session-continue.sh` reaches the model by
+   blocking the Stop (the other two land on different turn shapes — `mailbox-drain.sh` nudges via
+   `UserPromptSubmit`, `validate-bash.sh` denies inside whichever turn is running — so an oracle that
+   must be right on all three cannot key on the arm turn's opening beat at all), and a
+   Stop-hook continuation turn fires no `UserPromptSubmit` at all — `cli.js` builds the feedback user
+   message itself (`getStopHookMessage`, `isMeta:true`) and the query loop `continue`s with
+   `stopHookActive:true`, never re-entering `processUserInput`, the sole caller of
+   `executeUserPromptSubmitHooks`. So the arm's baseline is always the PREVIOUS turn's Stop. The
+   invariant that actually holds is kind-independent — at most one boundary beat can be written by
+   the arm turn after the arm, its own trailing Stop, because a turn's opening beat (where it has
+   one) precedes the arm — so the allowance is now always 1, with the prompt-kind clause still
+   standing the watcher down at +1 for a queued prompt or a task notification. Full derivation and
+   the decompiled call chain: `docs/research/idle-scoped-arm-turn-2026-08-27.md`.
 4. **The wake floor now BLOCKS under a live goal instead of abstaining.** The 08-10 abstain rested on
    "the goal itself keeps this session awake", which holds only BELOW the block cap — and the 15
    measured cap force-idles are exactly the population above it. It stays budgeted, TTL'd and

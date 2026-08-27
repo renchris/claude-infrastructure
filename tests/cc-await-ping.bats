@@ -763,6 +763,78 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
   [[ "$output" == *"verdict=stood-down"* ]] || false
 }
 
+# ── b60eb29e97dd: THE ARM TURN AS THE WAKE FLOOR ACTUALLY ARMS IT ────────────────────────────────
+# Every test above baselines on `beat N prompt`, which models an arm typed inside an operator's
+# turn. That is not the turn shape the site which DEMANDS this arm produces:
+# hooks/session-continue.sh's wake floor reaches the model by BLOCKING the Stop, and a Stop-hook
+# continuation turn fires no UserPromptSubmit at all —
+# cli.js builds the feedback user message itself (`getStopHookMessage`, isMeta:true) and the query
+# loop continues with `stopHookActive:true`, never re-entering processUserInput, the sole caller of
+# executeUserPromptSubmitHooks. So hooks/session-beat.sh writes NO prompt beat for the arm turn, and
+# the newest beat the arm can sample is the PREVIOUS turn's Stop.
+# Under the old `kind = prompt` gate the allowance was therefore always 0, and the arm turn's own
+# trailing Stop at baseline+1 stood the watcher down seconds after it was armed — measured 2/2 in
+# the field (`beat seq > 3`, `beat seq > 6`). The floor then spent its 2-attempt budget re-arming a
+# watcher that could not survive being armed, and the session went idle DEAF.
+# docs/research/idle-scoped-arm-turn-2026-08-27.md.
+
+@test "b60eb29e97dd: armed from a STOP baseline, the ARM TURN's own trailing Stop does NOT cancel" {
+  beat 3 stop                                          # the previous turn's Stop = all a blocked-stop
+                                                       # continuation turn can ever see
+  ( sleep 1; beat 4 stop ) &                           # the arm turn's own trailing Stop
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 4
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 2 ]                                  # still watching → it survived being armed
+  [[ "$output" != *"stood-down"* ]] || false
+  [[ "$output" == *"beat seq > 4"* ]] || false         # and says so: the allowance is +1, not +0
+}
+
+@test "b60eb29e97dd CONTROL: from a STOP baseline, the NEXT turn's Stop (baseline+2) still cancels" {
+  # The allowance buys exactly ONE beat. A second Stop with no prompt beat between them is another
+  # blocked-stop turn — the session HAS moved on, and parking through it is the starvation pole.
+  beat 3 stop
+  ( sleep 1; beat 5 stop ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down"* ]] || false
+}
+
+@test "b60eb29e97dd CONTROL: from a STOP baseline, a PROMPT beat at baseline+1 cancels at once" {
+  # A turn's opening beat precedes the arm, so a prompt beat ABOVE the baseline opened a turn that
+  # started after it — a queued operator prompt, or a task notification. It never rides the
+  # allowance the arm turn's own Stop is owed.
+  beat 3 stop
+  ( sleep 1; beat 4 prompt ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down"* ]] || false
+}
+
+# Pinned, never a moving ref (tests/wake-floor.bats:164-170): once this lands, a floating control IS
+# the fixed tree and the proof inverts. A stale control is a hard FAILURE here, not a skip — bats
+# renders a skip as `ok`, which is how a dead red-proof stays green for months.
+CC_AWAIT_IDLE_ARMTURN_PREFIX_SHA="${CC_AWAIT_IDLE_ARMTURN_PREFIX_SHA:-6e7a4bf1}"
+@test "b60eb29e97dd RED-PROOF (pinned sha): the pre-fix watcher self-cancels on the turn that armed it" {
+  local old="$BATS_TEST_TMPDIR/prearmturn"; mkdir -p "$old"
+  git -C "$REPO" archive "$CC_AWAIT_IDLE_ARMTURN_PREFIX_SHA" bin hooks | tar -x -C "$old" \
+    || skip "pre-fix tree $CC_AWAIT_IDLE_ARMTURN_PREFIX_SHA unavailable"
+  [ -x "$old/bin/cc-await-ping" ]
+  ! grep -q 'b60eb29e97dd' "$old/bin/cc-await-ping" || false    # genuinely predates the fix
+  beat 3 stop
+  ( sleep 1; beat 4 stop ) &
+  local writer=$!
+  run "$old/bin/cc-await-ping" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 4
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]                                  # RED: it stood down on its OWN arm turn…
+  [[ "$output" == *"verdict=stood-down"* ]] || false
+  [[ "$output" == *"beat seq > 3"* ]] || false         # …because its allowance was 0
+}
+
 @test "idle-scoped C1: MAIL still wins — a ping is delivered, never traded for a silent stand-down" {
   beat 5 prompt
   # both events land inside ONE poll interval, and the mail check runs first within an iteration:
