@@ -218,6 +218,24 @@ from *unknown freshness* to *known*. Existence proof: the 2026-08-24 pass falsif
 closed within 3 minutes. **#1 because it attacks residence-time decay directly and makes every later
 decision cheaper.**
 
+> 🚨 **L1 IS LOCAL-ONLY, and it was dispatched off-box before anything said so (2026-08-27).** The
+> row filed for it, `37b112d8950d`, went to a cloud VM. There, `cc-backlog freshness` answers
+> `never validated: 0 of 0 live rows` — not a smaller pool, an **absent** one: the 457 rows live in
+> `~/.claude/autonomy/backlog.jsonl` on the box, and each probe a sweep would run executes against
+> that row's own repo path. The failure mode is worse than an unreadable store, because
+> `cmd_add`'s `mkdir -p` (`bin/cc-backlog:995`) means a worker that pushes on **writes a phantom
+> store and gets a clean receipt** — including for its own `cc-backlog done`. `cc-eligible` had
+> passed the item as `eligible / (nothing fired)`: its `dot-claude` spelling matches the store's
+> **path**, and nobody discussing the pool types the path — they type the verb
+> (`cc-backlog freshness`, `cc-premise sweep`) or the population (`live backlog rows`). Fixed by
+> adding those two surfaces to `BOX` as `backlog-store` / `backlog-pool` / `backlog-sweep`,
+> deliberately excluding the per-item verbs every dispatch brief is made of and excluding
+> maintenance of `bin/cc-backlog` itself (fixture-verifiable, so legitimately off-box); 11 cases
+> pinned in `tests/cc-eligible.bats`. **L1 still has not run** — it needs a session on the box.
+> This is §7's blind spot #1 (*"the true live rate is UNKNOWN until L1 runs"*) gaining a second
+> reason, and an instance of §6a's dominant cloud failure: the VM was real and able, and the state
+> was on the other disk.
+
 **L2 · Adopt `--condition` at the four uncured mint sites — AGENT, ~half a day.**
 `scripts/ship-land.sh:1000`, `scripts/postland-verify.sh:793-797`, `scripts/deploy-live.sh:725,870`,
 `scripts/autonomy-sweep.sh:381`. Prospectively removes ~**5–8 adds/day**. The pattern is proven twice

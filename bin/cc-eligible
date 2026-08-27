@@ -207,6 +207,41 @@ BOX = [
     ("versioned-config-dir", r"\.claude-(?:\d+|next\d*|secondary|tertiary)\b"),  # 7d8e44dd5822
     ("installed-binaries", r"\binstalled\b.{0,40}\bbinar(?:y|ies)\b|\bbinar(?:y|ies)\b.{0,20}\binstalled\b"),  # 7d8e44dd5822
     ("cc-binary-version", r"\b2\.1\.\d{3}\b"),            # bbad96d163ab
+    # ── FOUND BY BEING THE MISROUTE (2026-08-27) ──────────────────────────────────────────────
+    # THE LIVE BACKLOG POOL ITSELF. This entry was written by the off-box session that item
+    # `37b112d8950d` was dispatched to, which is the only reason it names a measurement instead of
+    # a hunch: that item is L1 of docs/research/backlog-drain-netpositivity-2026-08-25.md — "run
+    # the falsifier sweep across all 457 unvalidated live backlog rows" — and its real title
+    # returned `eligible / (nothing fired)` here. In the VM, `cc-backlog freshness` answers
+    # `never validated: 0 of 0 live rows`. Not a smaller pool: an ABSENT one. The 457 rows are in
+    # `~/.claude/autonomy/backlog.jsonl` on that disk, and the probes a sweep would run execute
+    # against each row's own repo path. Worse than unreadable — `cmd_add`'s `mkdir -p` (bin/
+    # cc-backlog:995) means a worker that pushes on writes a PHANTOM store and gets a clean
+    # receipt for a mutation no one will ever read, including its own `cc-backlog done`.
+    #
+    # WHY `dot-claude` DID NOT ALREADY CATCH IT, which is the whole lesson: that spelling matches
+    # the store's PATH, and no one discussing the pool ever types the path. They type the verb
+    # (`cc-backlog freshness`, `cc-premise sweep`) or the population (`live backlog rows`). The
+    # spellings below are the verb surface and the population; the path stays with `dot-claude`.
+    #
+    # DELIBERATELY NARROW, because the over-broad version of this entry kills the whole tap. Bare
+    # `cc-backlog` is in EVERY dispatch brief ("On completion: cc-backlog done <id>"), and bare
+    # `backlog` is an ordinary repo word. So the verb list is whole-POOL reads only — freshness,
+    # falsify, sweep, coverage, screen — and never the per-item verbs (done/add/block/reopen/
+    # claim) a brief is made of. Editing `bin/cc-backlog` itself stays ELIGIBLE on purpose: that
+    # is ordinary repo work its bats suite verifies against a fixture, and refusing it would cost
+    # the tap the tool's own maintenance.
+    #
+    # MEASURED, and the limits stated because this file forbids a hunch: 3 phrasings of the item
+    # refuse, 8 lookalikes (brief boilerplate, the block protocol, cc-backlog/cc-premise code
+    # work, the plain word, the drain doc, the `--condition` item, an unrelated "rows") stay
+    # eligible — all 11 pinned in tests/cc-eligible.bats. What could NOT be measured from here is
+    # the one number this file's header usually asks for: the live ELIGIBLE bucket count, which
+    # needs the store this entry exists because the VM does not have. A local session can settle
+    # it with `bin/cc-eligible sweep` and should widen or narrow on what it reads.
+    ("backlog-store", r"\bbacklog\.jsonl\b|\bautonomy/backlog\b"),                          # 37b112d8950d
+    ("backlog-pool", r"\blive (?:backlog )?rows\b|\blive pool\b|\bunvalidated\b.{0,24}\brows\b"),  # 37b112d8950d
+    ("backlog-sweep", r"\bcc-(?:backlog|premise)\s+(?:freshness|falsify|sweep|coverage|screen)\b|\bclose-falsified\b|\bfalsifier sweep\b"),  # 37b112d8950d
 ]
 
 OFFBOX_LANE = [

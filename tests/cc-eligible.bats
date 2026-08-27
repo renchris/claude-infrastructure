@@ -323,3 +323,53 @@ verdict() { "$CE" check "$1" 2>&1 | head -1; }
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"verdict=eligible"* ]] || { echo "$output"; false; }
 }
+
+@test "BACKLOG POOL: the live pool is this box — the item that WAS misrouted here" {
+  # Regression for backlog `37b112d8950d`, verbatim, and the strongest kind of case this suite can
+  # carry: the off-box session this item was dispatched to is the one that wrote the spelling. Its
+  # real title returned `eligible / (nothing fired)`, and in the VM `cc-backlog freshness` answers
+  # `never validated: 0 of 0 live rows` — the 457 rows and the probes' repos are on the other disk.
+  local id; id="$(add pool "L1: run the falsifier sweep across all 457 unvalidated live backlog rows, then close-falsified. cc-backlog freshness reads 'never validated: 457 of 501'.")"
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=ineligible-box"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"backlog-pool"* || "$output" == *"backlog-sweep"* ]] || { echo "named the class but not the spelling: $output"; false; }
+}
+
+@test "BACKLOG POOL: the whole-pool VERB refuses even with no population word" {
+  local id; id="$(add pool "run cc-premise sweep --record --close-falsified over every live row lacking a probe")"
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [[ "$output" == *"backlog-sweep"* ]] || { echo "named the class but not the spelling: $output"; false; }
+}
+
+@test "BACKLOG POOL: the store FILE is the class's own name" {
+  local id; id="$(add pool "fold ~/.claude/autonomy/backlog.jsonl and report the malformed lines")"
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+}
+
+@test "BACKLOG POOL lookalike: a dispatch brief's own completion protocol stays eligible" {
+  # THE WIDTH GUARD, and the reason the verb list is whole-pool-only. Every brief this lane emits
+  # ends with `cc-backlog done <id>`; a bare `cc-backlog` spelling would refuse the entire tap.
+  local id; id="$(add ctl "On completion: cc-backlog done 37b112d8950d --evidence '<landed sha>'; if blocked, cc-backlog block --needs '<the step>'")"
+  run "$CE" check "$id"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=eligible"* ]] || { echo "$output"; false; }
+}
+
+@test "BACKLOG POOL lookalike: maintaining the backlog TOOL is ordinary repo work" {
+  # Deliberate: bin/cc-backlog and bin/cc-premise are verified against fixtures by this very
+  # suite, so editing them is claimable off-box. Only operating on the LIVE pool is not.
+  local id; id="$(add ctl "add a --json flag to cc-backlog list and pin it with a fixtured bats test; cc-premise check should fail open when the ledger is malformed")"
+  run "$CE" check "$id"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=eligible"* ]] || { echo "$output"; false; }
+}
+
+@test "BACKLOG POOL lookalike: the plain word 'backlog' and unrelated 'rows' stay eligible" {
+  local id; id="$(add ctl "file a backlog row for the retired method, rotate docs/plans/BACKLOG_DRAIN_24_7.md, and backfill the rows the migration adds to the sessions table")"
+  run "$CE" check "$id"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=eligible"* ]] || { echo "$output"; false; }
+}
