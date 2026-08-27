@@ -86,6 +86,67 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-27 — DISPATCH PREMISE REFUTED FOR `70f0001c657b`, THE DRAIN'S OWN SSOT ROW: ITS ONLY
+  RETRACTION PATH IS UNFALSIFIABLE BY CONSTRUCTION, SO THE STANDING "REPORT IT, DO NOT WORK IT" CAN
+  NEVER BE DISCHARGED BY CLOSING THE ROW.** A Claude Cloud VM was dispatched on `70f0001c657b` with
+  the frozen scope *"drive this ONE item to finished-verified-landed"*. That scope is unsatisfiable,
+  and not because the row is stale — **because the row is not a unit of work at all.** It is the
+  auto-minted `source=plan-open` tracker for THIS plan, and this plan is a standing program: its own
+  frozen scope ends *"…and keep it there"* and §6 is **Operating invariants**, which are permanent by
+  definition. Recorded here rather than acted on, per the premise-check contract: the disproof is the
+  deliverable.
+  🚨 **THE MECHANICAL STATEMENT, AND IT IS THE HALF WORTH KEEPING.** A `plan-open` row stores no
+  probe of its own, so its retraction runs through cc-premise's DERIVED falsifier
+  (`bin/cc-premise:1881-1945`), which retracts **iff `find-plan.sh --status <dodRef>` reads
+  `complete` or `superseded`** — every other answer returns `None` and falls through. Measured in
+  container: `find-plan.sh --status docs/plans/BACKLOG_DRAIN_24_7.md` → **`open`, rc 0**. It will
+  read `open` for as long as the program it tracks is running. **The falsifier is not stale and not
+  broken; it is unfalsifiable by construction** — the premise it re-asks ("this plan is open") is a
+  tautology over a standing plan rather than a decaying claim. `cc-dispatch`'s dispatcher-side gate
+  (`:1848-1927`) reads the identical field, so both enforcement points are dead on this row for the
+  same reason, and the row re-enters the wave every pass. **A gate whose predicate can never change
+  is not a gate.**
+  🚨 **AND THIS IS WHY THE ROW MUST NOT BE CLOSED AS `premise-retracted` — THE TWO PREMISES ARE
+  DIFFERENT CLAIMS.** The row's own premise, *"this plan is open"*, is **TRUE**; what is refuted is
+  the **DISPATCH** premise, *"this row is drivable to done"*. `cc-premise`'s own retraction string is
+  `premise-retracted: <plan> is <status>`, and writing it here would file evidence that is false on
+  its face. It would also buy at most one pass: cc-discover's C2 critic mints one row per plan that
+  `find-plan.sh --list-open` reports, so **a close does not remove the generator, it re-arms it.**
+  Distinguish the two premises before reaching for `done` on any `plan-open` row.
+  ✅ **THE OBVIOUS CURE WAS MEASURED AND IT FAILS — WITH BOTH CONTROLS.** The tempting fix is a new
+  frontmatter word meaning "standing program". Executed against the real `find-plan.sh`, three
+  fixtures, `CC_PLAN_INDEX_PATH` neutralised and `CC_PLAN_SCAN_ROOTS` pinned to the fixture dir:
+  `status: standing` → **`--status` reads `unknown`** (`:53` accepts exactly four words and folds
+  everything else to `unknown`) **and `--list-open` STILL LISTS IT**, because `:108` excludes only
+  `complete|superseded`. **POS control:** `complete` correctly excluded. **NEG control:** `open`
+  correctly listed. So the new word (a) fails to suppress the mint, (b) destroys the plan's honest
+  status, and (c) leaves the derived falsifier returning `None` exactly as today, since `unknown` is
+  not in its retracting set either. **That is `new-enum-member-falls-into-fail-closed-default`
+  reproduced at the PRODUCER instead of at a consumer** — cc-premise names the hazard in its own
+  docstring and the naive fix walks into it from the other side. **The cure is an exclusion the
+  minting feed can see, not a word the status field cannot carry.**
+  ⚠️ **THE COST IS NOT ABSTRACT AND IT IS ALREADY IN THIS FILE.** 13 mentions of this id across the
+  log; three carry the standing instruction verbatim (`:227`, `:2774`, `:3464`); `:4924` counts it
+  among the 9 starved rows — *"THE COST IS NOT ABSTRACT. The 9 starved rows include `70f0001c657b`
+  — this drain's own SSOT row"*. **A rule that every link must hand-remember is exactly the class
+  this plan converts to mechanism**, and this dispatch is the next instance of it: a worker slot,
+  a VM and a full premise investigation spent to re-derive a sentence already written three times
+  on trunk.
+  ✅ **WHAT WAS DELIBERATELY NOT ATTEMPTED, AND THE REFUSALS ARE MEASURED RATHER THAN ASSUMED.**
+  (1) **No cc-backlog verb was run**: `$HOME/.claude/autonomy` does not exist on a cloud VM, so
+  `bin/cc-backlog list --open` returns empty at rc 0 — *a silent empty store is indistinguishable
+  from a drained one*, which is this plan's own §1.1 defect, so nothing was concluded from it.
+  (2) **No code fix was landed**: `bin/cc-bats` is FATAL here (*"cannot resolve the real bats(1)"*),
+  so `tests/cc-premise-plan-open.bats` and the eleven `cc-dispatch` suites cannot be run, and the
+  cure touches four consumers of one status word. Un-gate-provable in this container ⇒ **FILED, not
+  guessed.** (3) **The minting itself cannot be reproduced here**: `list_open_scan_disk` scans
+  `$HOME/Development/*/docs/plans`, absent on a VM, which is why `--list-open` reads 0 in container
+  while listing this plan on the box. **Read that zero as blindness, never as absence.**
+  **DISPOSITION, for whoever holds the store.** The row is REPORT-ONLY and its correct state is
+  parked OUT of the dispatch wave until the generator is cured — not `done` (false evidence, and it
+  re-mints), not `reopen` (that is the loop). The generator fix is **agent** work, not an operator
+  step, so it is filed as its own row rather than keyed into `master-operator-gated` — which is the
+  same discrimination `bin/cc-backlog:927` already makes about this exact id.
 - **2026-08-27 — drain recycle #249: method 219 — A PARAMETER RENAME AT A FUNCTION BOUNDARY HIDES
   A SITE FROM THE VERY GREP THAT FOUND ITS SIBLINGS.** #244 landed the rule that when you drain a
   named predicate you should grep the file for its FEED VARIABLE rather than for its name, and that
