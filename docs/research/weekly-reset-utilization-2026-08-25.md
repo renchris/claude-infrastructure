@@ -192,7 +192,10 @@ The one real cost in view is `next3`'s ~8 pp, and with 3.8 h left that is essent
   empirical trajectory — but not yet: 4 windows cannot calibrate a curve. The cheap correct move
   is to widen the abstain rule so the projection stays silent mid-week, where it is measurably
   uninformative, and speaks only in the last ~2 days where linear and empirical converge
-  (day 6: −17 pp; day 7: −2 pp).
+  (day 6: −17 pp; day 7: −2 pp). ✅ **DONE 2026-08-27 — but SHIPPED AT PHASE 0.90, NOT 0.714, and
+  this sentence is why: it picks the tail off the shortfall-of-the-meter column when what governs
+  is the projector's own error, which the table beside it puts at 35 pp on this very boundary.
+  See §9.**
 
 **Reproduce:** the analysis scripts are in this session's scratchpad; the one-command version of
 the retrospective is `python3 scripts/desk-strand-replay.py`.
@@ -305,3 +308,87 @@ records". The 0 replicates and is right; the control does not — those `rate_li
 the CC binary's own error enum being dumped by agents reading its strings, i.e. meta too. **The
 scan's proof that it could find anything was itself an artifact.** Use
 `cache_read_input_tokens` (present in 6,497 of 6,749 transcripts) as the control instead.
+
+---
+
+## §9 The remedy, implemented (2026-08-27)
+
+§6's cheap correct move is shipped. `wall_projection()` now abstains for ~6 of every 7 days.
+
+**The change is one constant and its rationale.** `MIN_ELAPSED_FRAC` was the literal `0.05`; it is
+now `0.90`, with `CONVERGED_REMAIN_H = WEEK_H × (1 − MIN_ELAPSED_FRAC)` = 16.8 h derived *from* it
+rather than the other way round. Phase is the unit both backtests are stated in, so it is the one
+the constant should be written in — and the float behaviour makes that more than a preference:
+`(168 − 16.8) / 168` is `0.8999999999999999`, so an hours-first spelling puts the nominal boundary
+hour on the *abstaining* side of its own floor. `burn_ratio`, `proj_end_pct` and `wall_risk` are
+simply absent outside the tail, which is the same abstain contract the 0.05 floor already had —
+only far wider.
+
+**Why 0.90 and not §6's own "last ~2 days" (0.714) — this doc's remedy is corrected by its own
+data.** §6 picks the tail by reading the *shortfall of the meter* against linear off §3's table
+(−17 pp at day 6, −2 at day 7). What governs the abstain is not that column but the *projector's*
+error, and §3's backtest puts that at **35 pp at day 5** — which is phase 0.714, the boundary §6
+prescribes. The drain-telemetry wave measured the same quantity independently and on more data
+(11,287 adjacent pairs over 12 window instances), giving this projector's MAE by phase as **47.2 /
+46.9 / 46.2 / 36.7 / 18.3 pp at phase 0.1 / 0.3 / 0.5 / 0.7 / 0.9**
+(`drain-telemetry-2026-08-25/axis-D-windows.md` §5), and `SYNTHESIS-design.md` §1.5 resolved the
+question at **0.90**. Two independent measurements therefore agree that a floor at 0.714 admits a
+~36 pp regime — the same defect one day later, not convergence. 0.90 is the only grid point with a
+measured MAE beneath it. **Two prior implementations of this item shipped 0.714 by following §6's
+sentence rather than §3's table**; the sentence is the part that was wrong.
+
+**And what survives the floor is a sanity figure, not a forecast.** Even at phase 0.90 the linear
+MAE is 18.3 pp, against a CONSTANT predictor — the leave-one-out mean of the other windows' finals
+— at 5.3. At mid-week that constant beats this projector **8.7×**, which is the sharpest available
+statement of the defect: mid-window percentage carries essentially no information about where the
+window lands. No lead-time claim attaches to the number anywhere.
+
+**What the widening costs, and the one thing it must NOT cost.** In `pace_line` the `N.NN× burn`
+clause on a zero-strand row is now a late-window one; before phase 0.90 it drops off the row, which
+is the intended loss — there it is wrong by a mean 46 pp. A consumer that needs a weekly signal
+mid-week wants `wk_strand_pp`, which nowcasts off measured pace instead of assuming the shape of the
+rest of the week.
+
+**The `⚠ WALL trajectory` flag was re-sourced, not widened away, and finding that out is the part
+worth writing down.** The flag was gated on `wall_projection`'s `proj >= 100`, so widening the
+floor silently deleted it for most of every week — caught by `tests/claude-accounts-strand.bats`
+RP-16, whose fixture is a mid-week account at 114 h left burning 1.725 %/h. That is a genuine
+warning and losing it would have been a strict regression, so it now reads `s == 0.0` from the
+strand nowcast — exactly `weekly_pct + measured_pace × hours_left >= 100`. Two reasons that is the
+correct source rather than a workaround. It is founded on 48 h of MEASURED pace, so unlike the
+linear divisor it does not decay mid-week. And `wk_strand_pp`'s own docstring already claimed this
+render (*"the account is reported as being on a wall trajectory instead"*) — the flag was reading
+off the wrong estimator all along, and RP-16's own comment says so, noting that the incumbent
+renders 154.6% on that fixture against a truth near 100%. The general shape: **an abstain widened
+under a signal that was gated on the abstaining estimator deletes the signal.** Grep the consumers
+of a predicate before widening it, and check what each was really asking.
+
+**What was deliberately NOT done.** The empirical divisor. §5.2 stands: 4 windows with day-1
+coverage are ample to refute the linear model and cannot calibrate a curve. Re-derive after ≥2 more
+full cycles; until then the honest instrument is silence, not a fitted shape.
+
+**Proof.** `tests/claude-accounts-burn-ratio.bats`, 11 cases (was 8), plus `claude-accounts-core`
+RP-25/26 and `claude-accounts-strand` RP-16, which are what caught the WALL regression above and
+now pin its new source. The abstain cases use the real readings that missed — next3@08-18's day-3
+12% at 96 h left (the −70 pp miss) and next@08-23's 51% (the false WALL) — and the floor is
+mutant-proved in **both** directions, because a floor that only reds when it is too loose is
+half-pinned:
+
+| mutant | reds |
+|---|---|
+| `MIN_ELAPSED_FRAC = 0.05` (the incumbent) | both abstain cases **and** the day-5 case and the boundary |
+| `= 0.714` (§6's literal remedy, and what two prior attempts shipped) | the day-5 case and the boundary |
+| `= 0.99` (too tight) | the boundary, the control, and all three arithmetic cases |
+
+The 0.714 row is the one worth keeping: without a case at day 5 this change is indistinguishable
+from the two implementations that read §6's sentence instead of §3's table. The three arithmetic
+cases moved from the 84 h midpoint to 8.4 h left — phase 0.95 exactly, so the ratios stay exact —
+and they pin arithmetic that is itself unchanged; at the midpoint they would now be asserting on an
+abstention. RP-26's control moved to 12 h left for the same reason, and now asserts the shape of
+the whole change: the ⚠ WALL fires on **both** sides of the floor, the `× burn` ratio only inside
+it.
+
+**Pre-existing reds, named so they are not read as this diff's:** `claude-accounts-core` fails 4
+cases on trunk before this change (`--relogin-info`, two `--login-status`, one `e2e
+--login-status`) and `claude-accounts.bats` one (`e2e --json` logged-out inherit); all are
+probe/environment failures unrelated to this function. The set is byte-identical before and after.
