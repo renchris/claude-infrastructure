@@ -152,3 +152,140 @@ print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
+
+# ---- S4 · M4′ burst_start_by — RP-21..RP-24 ---------------------------------------------------
+#
+# THE DELETION THIS RECORDS. The synthesis shipped M4 `wk_reach_pp`, a CAPACITY question: is the
+# remaining deficit reachable inside the window? Run against next3's measured live row it answers
+# `16.9 pp reach vs 8 needed — REACHABLE, 2.1× margin` — and next3 in fact stranded that window.
+# The question is nearly algebraically fixed, so it can only ever answer yes. M4′ asks a
+# rate-and-freeze-against-the-clock question instead, reads the SAME row as LATE by 0.65 h with
+# 2.83 pp already unrecoverable, and can come out either way (RP-22 is the proof that it does).
+
+@test "RP-21: burst_start_by reads next3's live shape as LATE, with an unrecoverable floor" {
+  # The measured row at 2026-08-25T09:47:41Z. deficit 8 pp / K 0.192 = 41.67 session pp; at
+  # BURST_SPPH that is 1.82 h of burn inside the OPEN window (avail 87 pp, 3.37 h left, so the
+  # window does not bind); one window ⇒ freeze 1.03 h; t_needed 2.86 h against 2.21 h of runway.
+  run python3 -c "$LOAD"'
+r = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+     "session_pct": 13, "session_reset_h": 3.37, "session_reset_at": "2026-08-25T13:09:41Z"}
+bs = ca.burst_start_by(r, 0.192)
+assert bs is not None, bs
+assert bs["verdict"] == "LATE", bs
+assert -1.0 < bs["h"] < 0.0, bs                      # measured -0.65
+assert abs(bs["h"] - (-0.645)) < 0.02, bs
+assert bs["windows"] == 1, bs
+assert abs(bs["freeze_h"] - 1.033) < 0.01, bs
+assert abs(bs["need_spp"] - 41.667) < 0.01, bs
+assert abs(bs["unrecoverable_pp"] - 2.832) < 0.02, bs   # 8 - 0.192*22.87*(2.21-1.033)
+# The floor, not the clock, leads the string: "LATE by 0.6h" alone reads as a scheduling slip.
+assert ca.fmt_burst_start(bs) == "⚠ LATE by 0.6h — 2.8pp already unrecoverable", ca.fmt_burst_start(bs)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-22 CONTROL: an account with days of runway returns SLACK — the metric is not LATE-always" {
+  # Without this arm RP-21 is satisfied by `return LATE`, which is the mirror image of the
+  # degeneracy that killed M4. next2 live: 83 pp deficit = 432.3 session pp = 6 windows,
+  # 21.41 h of burn + 6.20 h of freeze = 27.61 h against 97.2 h of runway.
+  run python3 -c "$LOAD"'
+r = {"acct": "next2", "weekly_pct": 17, "weekly_reset_h": 97.2,
+     "session_pct": 8, "session_reset_h": 0.54, "session_reset_at": "2026-08-25T10:20:00Z"}
+bs = ca.burst_start_by(r, 0.192)
+assert bs is not None and bs["verdict"] == "SLACK", bs
+assert bs["h"] > 60.0, bs
+assert abs(bs["h"] - 69.59) < 0.05, bs
+assert bs["windows"] == 6, bs                        # the 5h GRID, not one long burn
+assert abs(bs["t_needed_h"] - 27.61) < 0.05, bs
+assert bs["unrecoverable_pp"] == 0.0, bs             # a slack account has no floor, not a negative one
+assert ca.fmt_burst_start(bs) == "start by T−28h (70h slack)", ca.fmt_burst_start(bs)
+# ...and the middle verdict exists and is reachable: same shape, 8 h of runway left.
+soon = ca.burst_start_by({"acct": "n", "weekly_pct": 88, "weekly_reset_h": 8.0,
+                          "session_pct": 8, "session_reset_h": 4.0,
+                          "session_reset_at": "x"}, 0.192)
+assert soon["verdict"] == "START SOON", soon
+assert 0.0 < soon["h"] <= 12.0, soon
+assert ca.fmt_burst_start(soon).startswith("⚠ START SOON — start by T−"), ca.fmt_burst_start(soon)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-23 CONTROL: the wall-freeze term is LIVE, not decorative" {
+  # The mutant a purely arithmetic implementation survives: drop the freeze and every verdict
+  # shifts by exactly windows × P_WALL × MEAN_WALL_H. RP-21'"'"'s row is one window, so 1.033 h --
+  # the EXECUTED value, and enough on its own to flip that row from LATE to START SOON.
+  run python3 -c "$LOAD"'
+r = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+     "session_pct": 13, "session_reset_h": 3.37, "session_reset_at": "2026-08-25T13:09:41Z"}
+with_wall = ca.burst_start_by(r, 0.192)
+ca.P_WALL = 0.0                                      # module constant, read at call time
+without = ca.burst_start_by(r, 0.192)
+ca.P_WALL = 0.625
+assert abs((without["h"] - with_wall["h"]) - 1.033) < 0.01, (with_wall, without)
+assert without["freeze_h"] == 0.0, without
+assert with_wall["verdict"] == "LATE" and without["verdict"] == "START SOON", (with_wall, without)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-24 CONTROL: no window open ⇒ abstain, and an unpriced session pp ⇒ abstain" {
+  # A null session stamp is a STATE -- no 5h window is open -- and collapsing it to zero hours of
+  # remaining window would silently report the tightest possible schedule for the emptiest row.
+  # In production session_reset_h IS hrs_until(session_reset_at), so both spellings are one fact;
+  # each is pinned separately so neither check can be dropped while the other still passes.
+  run python3 -c "$LOAD"'
+base = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+        "session_pct": 13, "session_reset_h": 3.37, "session_reset_at": "2026-08-25T13:09:41Z"}
+assert ca.burst_start_by(base, 0.192) is not None                       # the positive control
+assert ca.burst_start_by(dict(base, session_pct=None,
+                              session_reset_h=None, session_reset_at=None), 0.192) is None
+assert ca.burst_start_by(dict(base, session_pct=None), 0.192) is None
+assert ca.burst_start_by(dict(base, session_reset_h=None), 0.192) is None
+# K abstained (outside K_SANE, S1c): weekly pp cannot be bought at an unknown price.
+assert ca.burst_start_by(base, None) is None
+assert ca.burst_start_by(base, 0.0) is None
+# the deficit is already closed, and a weekly stamp outside its own bucket is bad data
+assert ca.burst_start_by(dict(base, weekly_pct=100), 0.192) is None
+assert ca.burst_start_by(dict(base, weekly_reset_h=200.0), 0.192) is None
+assert ca.burst_start_by(dict(base, weekly_reset_h=0.0), 0.192) is None
+assert ca.fmt_burst_start(None) is None
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-24b: the drain block carries the start-by clause and names K — on strand rows only" {
+  # The render half. Three properties: (a) the header names K AND its source, because `frozen`
+  # and `live` are different claims; (b) the clause rides the strand rows beside M5; (c) it does
+  # NOT ride the no-strand row -- a start time for a burst that rescues nothing is noise.
+  run python3 -c "$LOAD"'
+def row(**kw):
+    base = dict(acct="a", session_pct=10, session_reset_h=3.0, session_reset_at="x",
+                weekly_pct=40, weekly_reset_h=24.0, exchange_k=0.1969, exchange_k_src="live")
+    base.update(kw); return base
+n4 = row(acct="next4", weekly_pct=14, weekly_reset_h=119.2, burn_wk_ewma_ph=0.186)
+n3 = row(acct="next3", weekly_pct=92, weekly_reset_h=2.21, session_pct=13, session_reset_h=3.37,
+         burn_wk_ewma_ph=1.140)
+n1 = row(acct="next", weekly_pct=52, weekly_reset_h=114.21, burn_wk_ewma_ph=1.725)
+line = ca.pace_line([n3, n1, n4])
+assert line.startswith("weekly drain — pp that DIE at reset (K=0.197 live · nowcast"), line
+assert "nowcast at the last 48h of pace" in line, line     # the S3 caption is intact
+assert "next4 strand ~64pp of 86 · start by T−" in line, line
+assert "⚠ LATE by" in line and "pp already unrecoverable" in line, line
+# (c) the zero-strand row keeps its wall read and gains NO start-by clause
+tail = line.rstrip().split(chr(10))[-1]
+assert tail.strip().startswith("next no strand"), line
+assert "start by" not in tail and "LATE" not in tail, tail
+# ...and with no K stamped the header falls back and every clause abstains -- the strand, which
+# consumes no K at all, still renders. Gating it on K would be a fabricated dependency.
+noK = ca.pace_line([{k: v for k, v in n4.items() if not k.startswith("exchange_k")}])
+assert noK.startswith("weekly drain — pp that DIE at reset (nowcast"), noK
+assert "start by" not in noK and "K=" not in noK, noK
+assert "next4 strand ~64pp of 86" in noK, noK
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}

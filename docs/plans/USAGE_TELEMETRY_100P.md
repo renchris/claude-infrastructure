@@ -1610,7 +1610,7 @@ windows/week, carrying the fleet wall rate 1.72% → 2.20%.
 
 ### §5.7 Implementation record — what actually landed, and where it deviated from the spec
 
-Wave 1 = **S1 + S2 + S3 only**. S4–S7 are unbuilt and unchanged; S5 still gates S6.
+Wave 1 = **S1 + S2 + S3**. Wave 2 = **S4**. S5–S7 are unbuilt and unchanged; S5 still gates S6.
 
 #### S1 · data fixes — LANDED
 
@@ -1770,13 +1770,88 @@ nowcaster precisely because it converges as the horizon closes, which is what ma
 forecaster. **S5 (`--strand-score`) is still the prerequisite for S6**, and nothing here
 shortens that.
 
+#### S4 · M4′ `burst_start_by` — LANDED
+
+`bin/claude-accounts`: `burst_start_by(r, k)` + `fmt_burst_start(bs)` beside `pace_need_ppd`,
+constants `BURST_SPPH` / `P_WALL` / `MEAN_WALL_H` / `SESSION_WINDOW_H` / `BURST_START_SOON_H`;
+`apply_burn` stamps `exchange_k` / `exchange_k_src` and `burst_start_by`; `pace_line` gains the
+`PACE_HEAD_K` header and the per-row clause. Suite `tests/claude-accounts-burst.bats` grows
+RP-21..RP-24 + RP-24b — **5/5 proven RED** against the pre-change binary
+(`git stash push -- bin/claude-accounts`, run, pop), 10/10 green after.
+
+**The 27-suite direct gate selection** (`scripts/gate-select.sh --direct`) runs **553 cases**; the
+failure SET is byte-identical before and after the change — the differential is the discipline
+that matters here, because this box carries no keychain and no `account-utilization.jsonl`, so a
+raw pass count would have been read as a red.
+
+**Render, against §5.2 S4's own measured live shapes** (this is arithmetic reproduced from the
+spec's table, **not** a live sweep — see the deviation on evidence below):
+
+```
+weekly drain — pp that DIE at reset (K=0.192 live · nowcast at the last 48h of pace):
+  next4 strand ~64pp of 86 · start by T−28h (91h slack) · 4d left
+  next2 strand ~56pp of 83 · start by T−28h (70h slack) · 4d left
+  next3 strand ~5pp of 8 · p96 of its own 3h burns · ⚠ LATE by 0.6h — 2.8pp already unrecoverable · 2.2h left
+  next no strand — 1.62× burn, ⚠ WALL trajectory · 4d left
+```
+
+Every figure reproduces §5.2 S4's table: next3 −0.645 h with a 2.83 pp floor, next2 +69.59 h over
+6 windows, next4 +90.91 h, next +99.42 h. The third of the goal's three questions — *what single
+action changes it* — is now on the surface it belongs on.
+
+**Deviation 1 — the return is a dict, not the bare float §5.3 RP-21/22/23 assert against**, for
+exactly S2's reason and no other: `h`, `verdict` and `unrecoverable_pp` are three facts, and RP-21
+itself asserts on two of them in one breath, which a float cannot carry. The cases read `bs["h"]`
+and `bs["verdict"]`.
+
+**Deviation 2 — the "no window open" abstain is keyed on `session_reset_h`, not on
+`session_reset_at`.** §5.2 names the stamp; in production the countdown IS `hrs_until(sr)`
+(`bin/claude-accounts:1232`), so a null stamp and a null countdown are one fact and keying on the
+countdown is what a synthetic row can also express. RP-24 pins **each spelling separately**, so
+neither check can be deleted while the other still passes.
+
+**Deviation 3 — §5.2's pseudocode has no `else` on `if avail > 0`, and that hole is a real
+mis-read.** An already-exhausted 5h window (`session_pct = 100`) falls straight through to the
+grid walk at `t = 0`, i.e. the code reports that a burst can begin immediately on the one input
+shape where it provably cannot. Shipped with `else: t = session_reset_h` — an exhausted window is
+the same constraint as a partly-spent one, at `avail = 0`. No RP case reaches it (next3 and next2
+both have `avail > 0`), which is why it had to be found by reading rather than by a red.
+
+**Deviation 4 — the clause is APPENDED to the row; §5.4's mock substitutes it for `· Nh left`.**
+The countdown and the slack are different facts (*when does this window die* vs *when must the
+burst begin*), and the existing core assertion `next3 strand ~5pp of 8 · p96 of its own 3h burns`
+survives as a prefix rather than being re-spelled — Deviation 6 of S3 is the standing lesson about
+what a render change costs downstream.
+
+**Deviation 5 — the K header clause names its SOURCE**, which §5.4's mock does not:
+`K=0.197 live` and `K=0.192 frozen` are different claims, and `frozen` says the trailing fit was
+too thin to speak (S1c). It enters here exactly as S3's Deviation 1 promised — *"the first K
+consumer is S4"* — and a K that abstained stamps nothing, so the header falls back and every
+start-by abstains **while the strand still renders**, because M3a consumes no K at all.
+
+**Deviation 6 — RP-24b is beyond §5.3's list**, and S2's own record is why: `fmt_burst`'s abstain
+held at the number and leaked at the string, caught on the live surface rather than by RP-19.
+Checking the guard in the producer and the format string in the renderer are two different checks,
+so the render half is pinned here — including the negative arm that a **zero-strand row gains no
+clause**, since a start time for a burst that rescues nothing is noise.
+
+**What is NOT claimed, and it is an evidence gap, not a caveat.** `P_WALL = 0.625` and
+`MEAN_WALL_H = 1.653` rest on **n = 8 burst windows** and ship on probation exactly as §5.2 says;
+§5.5's monitoring plan re-runs the burst-stratified wall rate on every completed weekly window.
+And this wave was built in a cloud container with **no keychain and no
+`~/.claude/logs/account-utilization.jsonl`**, so unlike S1–S3 there is **no live `--readout`
+confirmation here** — the render above is the spec's own measured rows put through the shipped
+code. `claude-accounts --readout` on the desk is the first live read, and it is the acceptance
+command below.
+
 #### Acceptance status against §5.4
 
 | command | status |
 |---|---|
-| the bats suites (roll-key · util-tail · strand · burst · core) | **111/111 green**, every case shown RED at the commit before its fix |
-| `claude-accounts --readout` renders the drain block for all four accounts | **yes** — see above |
-| `claude-accounts --readout \| grep -c 'strand'` → 3 or 4 | **4** |
+| the bats suites (roll-key · util-tail · strand · burst · core) | **116/116 green** on this box, every case shown RED at the commit before its fix |
+| the 27-suite direct gate selection | **553 cases, failure set unchanged** by this diff (47 pre-existing, all keychain/live-surface absences in the container) |
+| `claude-accounts --readout` renders the drain block for all four accounts | **yes** for S1–S3, measured 2026-08-25; **S4's clause is unconfirmed live** — no series on this box |
+| `claude-accounts --readout \| grep -c 'strand'` → 3 or 4 | **4** (S3 wave) |
 | `claude-accounts --strand-score` | **not in this wave** — that flag is S5 |
 
 ⚠️ `bash tests/run.sh …`, named in §5.4, **does not exist in this repo**. The suites are run with
