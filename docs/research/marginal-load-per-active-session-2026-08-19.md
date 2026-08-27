@@ -219,6 +219,53 @@ correctly refusing a 60 s quiet window — `C1 FAIL` (tertile swing 1.56× > 1.3
 6 unmeasurable), `VERDICT: NO-ATTRIBUTION`, exit 1, withheld fit labelled withheld. The instrument
 is ready; only the fleet is missing.
 
+### 6b · The row is HARDWARE-GATED, and the cloud lane can never close it (2026-08-27)
+
+§6a's off-box half is holding. Re-verified this session from a **Linux cloud VM** against
+`origin/main`, 44 commits after §6a landed (`34a21973`):
+
+- **The ban, re-grepped at the wider scope §6a demanded** — not the three paths that table names,
+  but every tracked non-`docs/` file. Still exactly three live-code sites
+  (`scripts/lib/capacity-admit.sh`, `hooks/agent-teams-enforce.sh`, `scripts/lib/spawn-presence.sh`),
+  all three carrying the REFUTED label with **no value substituted**. No fourth site has appeared.
+- **The instrument is intact.** `bash -n` clean; a 45 s smoke window on this container reproduces
+  §6a's refusal shape exactly — `C1 FAIL` (tertile swing 1.75× > 1.35×), `C2 FAIL` (`n_eff` 1.5 < 20,
+  worded *uninformative, not refuting*), `C3 FAIL` (0 rows carry an ACTIVE count, 3 unmeasurable),
+  `VERDICT: NO-ATTRIBUTION`, exit 1, withheld fit labelled withheld.
+  ⚠️ `bats` is **not installed in the cloud image**, so the 15/15 fixture claim remains §6a's; this
+  session verified syntax and live behaviour, not the fixtures.
+
+**And that is the whole of what a cloud worker can contribute — which is the finding.** §6 needs one
+~1 h window on the **10-core Darwin box with a live Claude fleet**: `load1` from `vm.loadavg`, a `ps`
+census attributed against `.claude-NNN/node_modules`, and `cc_sp_active` moving through ≥3 levels
+during a dispatch wave. A cloud VM has none of those, and no route home but a `git push` —
+`scripts/cloud-refusal-route.sh`, verbatim: *"has no route home except the git remote it cloned
+from"* — so it cannot even record the ledger transition that would park the row. **No cloud worker
+can ever close this row**, and every dispatch of it to the cloud lane spends a worker slot
+re-deriving that sentence.
+
+The ledger already shows the cost. `BACKLOG_DRAIN_24_7.md` carries this row on the **cloud
+WOULD-UNBLOCK list** and logs it cycling `claimed → blocked → open → claimed → blocked` across
+successive links — the link after #233 names it *"its FOURTH move in four links"*, and at the latest
+link it reads `claimed` again. Nothing about the row changed at any of those moves. The venue did not
+either.
+
+**So the routing decision is the deliverable, not another instrument.** §6 states that its own run has
+*"no operator judgment in it"* — which means this was never an operator-gated row. It is a
+**local-lane** row that has been sitting in the cloud cluster:
+
+```sh
+cc-backlog venue 193ae8ddce72 --venue local \
+  --why "hardware: §6 needs the 10-core Darwin box + a live fleet; a cloud VM has no loadavg population, no cc_sp_active, and no route home but git push"
+cc-backlog block 193ae8ddce72 \
+  --needs "on the Darwin box, during a dispatch wave: bash scripts/capacity-marginal.sh sample --window-s 3600 --interval-s 60 --out /tmp/marg.tsv && bash scripts/capacity-marginal.sh analyze --in /tmp/marg.tsv"
+```
+
+`block`, never `unblock`/`reopen` — reopening is what returns it to the cloud wave, and the log above
+is several links of exactly that. On the `analyze` PASS: quote the coefficient **with its standard
+error and its window**, **re-grep** for the citation sites (§6a — the list is a denylist of
+spellings), update them, and `cc-backlog done 193ae8ddce72 --evidence <sha>`.
+
 ---
 
 ## 7 · What this does not do

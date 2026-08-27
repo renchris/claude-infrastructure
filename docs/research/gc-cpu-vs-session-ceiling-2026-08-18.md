@@ -203,6 +203,12 @@ qualifies on ~2026-08-24** under this repo's own 2.1.220 precedent if no success
   is denominated in. `CC_ADMIT_ACTIVE_CEILING=8` is **not** blocked on the measurement: it now
   stands on the 127/127 refusal band, a count over refusals that needs no per-session divisor.
   Re-grep at the PASS rather than working from any list of paths.
+  🚨 **The remainder is HARDWARE-GATED, so do not dispatch this row to the cloud lane** (2026-08-27,
+  §6b of that doc): what is left needs the 10-core Darwin box with a live fleet — `vm.loadavg`, a
+  `ps` census over `.claude-NNN/node_modules`, and `cc_sp_active` moving through ≥3 levels — and a
+  cloud VM has none of them and no route home but a `git push`. It has already cycled
+  `claimed → blocked → open → claimed` across successive drain links on that mismatch. Route it
+  **local**, and `block` it rather than reopening it until the window is run.
 - **Whether load average means anything as a capacity signal at all.** At constant N=15–16 the box
   read **11.21 → 36.07**; one instrumentation run alone moved it 19 → 36 with session count unchanged.
 - **Whether automated fires retry after a capacity refusal** — decides whether raising the ceiling
