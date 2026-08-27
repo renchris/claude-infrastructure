@@ -79,7 +79,15 @@ echo "reconcile confirm=${CONFIRM:-UNSET} $*" >>"$CALLS"
 [ "${LAND_EMPTY:-0}" = 1 ] && { echo "stub: reported success and landed NOTHING"; exit 0; }
 b="$2"
 tree="$(git -C "$WORK" rev-parse "refs/heads/$b^{tree}")"
-new="$(git -C "$WORK" commit-tree "$tree" -p refs/heads/trunkref -m "landed by a re-author")"
+# IDENTITY ON THE COMMAND, like every other commit this suite makes (lines 42/49/51). setup()
+# fixtures $HOME for hermeticity, which hides ~/.gitconfig — so on any box whose identity lives
+# there rather than in the environment (a cloud VM, a fresh CI runner) this was the ONE commit in
+# the file with no identity to fall back on. It died with `unable to auto-detect email address`,
+# trunkref never received the tree, and SIX cases went red on the content-verify leg: precisely the
+# shape of "the return rail is broken", against pristine trunk, for a reason that is entirely the
+# environment's. Recorded in docs/research/cloud-land-arm-step-2026-08-25.md §4, where those reds
+# were nearly reported as corroboration that the lane had stopped.
+new="$(git -C "$WORK" -c user.email=lander@t -c user.name=lander commit-tree "$tree" -p refs/heads/trunkref -m "landed by a re-author")"
 git -C "$WORK" update-ref refs/heads/trunkref "$new"
 echo "✓ $b — landed via stub"
 EOF
