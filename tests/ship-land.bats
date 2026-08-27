@@ -3544,3 +3544,87 @@ error: failed to push some refs to '\''/tmp/remA.git'\'''"
   [ -z "$(git ls-tree origin/main -- hr.txt)" ]
   [ -z "$(git status --porcelain)" ]
 }
+
+# --- run_scoped_suite's DIRECT carve-out: the membership decision, driven by extraction ---------
+# The carve-out decides whether a pass-on-retry is "intermittence in code you are landing" (RED) or
+# a flake (EXONERATED). It is the land gate's last fence, and it fails OPEN: whatever it cannot see
+# as yours gets absolved. So it is tested on the MECHANISM — feed it a real list and read its
+# answer — not on its spelling, which any correct rewrite is free to change.
+_carveout_extract() {  # extract the LIVE decision; sourcing ship-land.sh would RUN a land
+  local last n
+  # THE ANCHOR IS ASSERTED, NOT ASSUMED, AND DELIBERATELY SPELLING-AGNOSTIC. `if [[ "$notok1"
+  # -gt 0 ]]` occurs TWICE in run_scoped_suite — the earlier one opens the RED-message block — so a
+  # range sed from the FIRST match silently extracts a different 27-line region that still parses.
+  # Taking the LAST match pins the carve-out in either spelling, which is what lets this arm go red
+  # against the pre-fix subject instead of dying in its own extraction.
+  last="$(grep -nE 'if \[\[ "\$notok1" -gt 0 \]\]' "$SHIPLAND" | tail -1 | cut -d: -f1)"
+  [ -n "$last" ] || { echo "carve-out anchor not found"; return 1; }
+  n="$(grep -cE 'if \[\[ "\$notok1" -gt 0 \]\]' "$SHIPLAND")"
+  [ "$n" -eq 2 ] || { echo "carve-out anchor count moved: $n (expected 2)"; return 1; }
+  {
+    cat <<'PRE'
+#!/bin/bash
+# $1 = member|absent|tail   $2 = target size in bytes for the direct list
+set -uo pipefail
+mode="$1"; want="$2"
+NL=$'\n'
+needle="tests/the-needle-suite.bats"
+f="$needle"
+[ "$mode" = absent ] && f="tests/not-in-the-list.bats"
+direct=""
+[ "$mode" != tail ] && direct="$needle"
+i=0
+while [ "${#direct}" -lt "$want" ]; do
+  i=$(( i + 1 ))
+  direct="$direct$NL$(printf 'tests/filler-%06d.bats' "$i")"
+done
+[ "$mode" = tail ] && direct="$direct$NL$needle"
+notok1=1
+carve() {
+  local f="$1" direct="$2" notok1=1
+PRE
+    awk -v s="$last" 'NR>=s{print} NR>s && /^  fi$/{exit}' "$SHIPLAND"
+    cat <<'POST'
+  return 0
+}
+carve "$f" "$direct" 2>/dev/null
+exit $?
+POST
+  } > "$BATS_TEST_TMPDIR/carve.sh"
+  # a fail-loud extraction guard: the decision, not just some lines, must have come across
+  [ "$(grep -c 'return 1' "$BATS_TEST_TMPDIR/carve.sh")" -eq 1 ]
+  [ "$(grep -c 'direct' "$BATS_TEST_TMPDIR/carve.sh")" -ge 3 ]
+}
+
+@test "carve-out: a DIRECT suite at the HEAD of a 120,000-byte list still reads as DIRECT" {
+  _carveout_extract
+  # 120,000 IS CHOSEN FROM A MEASUREMENT, NOT FOR ROUNDNESS. With the needle at the head of the
+  # list, the pre-fix `printf '%s\n' "$direct" | grep -qxF` spelling answered correctly 20/20 up to
+  # 40,017 B, 19/20 at 60,012 B and 0/20 at 90,020 B (measured 2026-08-27 at load ~22, 20 trials
+  # per size). 120,000 is past that always-inverted floor, so a re-introduced pipeline fails EVERY
+  # run rather than one in twenty — the arm is deterministic by construction, not by luck.
+  run bash "$BATS_TEST_TMPDIR/carve.sh" member 120000
+  [ "$status" -eq 1 ]   # 1 = "this suite IS in the direct list" = the RED branch was taken
+  # NEG CONTROL: a suite genuinely absent from the list must still read as NOT direct, so this arm
+  # cannot pass by always answering "direct".
+  run bash "$BATS_TEST_TMPDIR/carve.sh" absent 120000
+  [ "$status" -eq 0 ]
+  true
+}
+
+@test "carve-out: the verdict does not depend on WHERE the suite sits in the direct list" {
+  _carveout_extract
+  # THE PROPERTY THE DEFECT ACTUALLY BROKE, and the one that survives any rewording of the fix.
+  # `grep -q` exits at the FIRST match, so the earlier a suite sat in the list the sooner the pipe
+  # closed and the likelier the producer died of SIGPIPE — making the answer a function of POSITION.
+  # Membership is not a positional question, and a test that only ever placed its needle at the end
+  # of the list would have been green throughout: at the tail the pre-fix form was still correct
+  # 20/20 even at 120,028 B, because grep never exits early there.
+  run bash "$BATS_TEST_TMPDIR/carve.sh" member 120000
+  head_status="$status"
+  run bash "$BATS_TEST_TMPDIR/carve.sh" tail 120000
+  tail_status="$status"
+  [ "$head_status" -eq "$tail_status" ]
+  [ "$head_status" -eq 1 ]
+  true
+}

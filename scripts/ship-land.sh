@@ -2320,9 +2320,30 @@ run_scoped_suite() {  # $1=suite file $2=newline-list of DIRECT suites
   # Unkeyed, this branch would turn "the box was busy for 30s" into exit 6 on a green tree — R6's
   # "a non-verdict is never a red" broken at the exact point v2 made it most likely to fire.
   # A named failure that vanishes on re-run is STILL red here; that fence is untouched.
-  if [[ "$notok1" -gt 0 ]] && printf '%s\n' "$direct" | grep -qxF -- "$f"; then
-    echo "✗ gate: bats RED: $f — pass-on-retry in a DIRECT suite of this change; intermittence in changed code is a finding, not a flake." >&2
-    return 1
+  # MEMBERSHIP BY `case` OVER A NEWLINE-FENCED STRING, NOT `printf | grep -qxF`. This file already
+  # documents that hazard and already applies this exact cure at the two sites that ask the SAME
+  # question about the SAME list under the caller's name for it, `own` (:2098 and :2114). This was
+  # the third consumer and it kept the hazardous spelling, because the caller passes `$own`
+  # POSITIONALLY (:2089) and this function binds it to `direct` (:2251) — so every grep for the
+  # feed variable stops at the call site and never arrives here.
+  # THE DIRECTION IS FAIL-OPEN, AND IN THE LAND GATE. Under `set -o pipefail` (:185) `grep -q`
+  # exits at the first match, the producer then takes SIGPIPE, pipefail promotes it, the `&&`
+  # failed, and this branch was SKIPPED — so a suite that IS yours fell through to EXONERATED. That
+  # is the outcome :2044 forbids by name: "under-claiming it silently green-lights a real
+  # regression in code that is".
+  # MEASURED 2026-08-27, 20 trials per size at load ~22, needle at the HEAD of the list: correct
+  # 20/20 up to 40,017 B, 19/20 at 60,012 B, 0/20 at 90,020 B. With the needle at the TAIL it is
+  # correct even at 120,028 B, so the defect is POSITION-DEPENDENT — the earlier a suite sits, the
+  # sooner grep closes the pipe. The first suites in the list were the exposed ones.
+  # LATENT, NOT SAFE: the largest real direct list over 26 historical ranges is 85 suites /
+  # 2,965 B, ~7% of the safe ceiling. That ceiling is an operational quantity that only grows and
+  # nothing announces the crossing.
+  if [[ "$notok1" -gt 0 ]]; then
+    case $'\n'"$direct"$'\n' in
+      *$'\n'"$f"$'\n'*)
+        echo "✗ gate: bats RED: $f — pass-on-retry in a DIRECT suite of this change; intermittence in changed code is a finding, not a flake." >&2
+        return 1 ;;
+    esac
   fi
   fdir="${POSTLAND_DIR:-$HOME/.claude/autonomy/postland}"
   mkdir -p "$fdir" 2>/dev/null || true
