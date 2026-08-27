@@ -247,8 +247,32 @@ EOF
   log "gc: swept $WATCHDOG_DIR cp-*.count (>2d) + $CWD checkpoint refs (>${GC_DAYS}d or rank>$GC_KEEP, keep $GC_FLOOR/member): $GC_DEL dropped"
 fi
 
-# Only snapshot if there's something to snapshot
-if ! git -C "$CWD" status --porcelain 2>/dev/null | grep -q .; then
+# Only snapshot if there's something to snapshot.
+#
+# CAPTURE FIRST, TEST THE BLOB SECOND — never `status --porcelain | grep -q .`. That shape reads a
+# DIRTY tree as CLEAN and skips the snapshot outright: grep -q leaves at line 1, `git status` takes
+# SIGPIPE, pipefail (:35) promotes it to a non-zero pipeline, and the leading `!` inverts that into
+# the clean branch. The consequence is the one this hook exists to prevent — a teammate's work goes
+# unsnapshotted, silently, with a log line asserting the tree was clean.
+#
+# `pipefail-sigpipe-lint --selftest` already names this exact shape RED, in these words: its `r2`
+# fixture is `if git status --porcelain 2>/dev/null | grep -q .` with the expectation string
+# "git status | grep -q . (a dirty tree reads CLEAN)". The detector knew; the allowlist row for this
+# file is what excused the one real instance of it.
+#
+# MEASURED 2026-08-27, and the apparatus is part of the measurement: 20 trials per arm, interleaved,
+# load ~18, against a REAL worktree rather than a fixture — .worktrees/wt-7e2df754d0b8, 937 paths /
+# 40,031 B of porcelain, its dirtiness asserted by `wc` so neither arm's pipeline vouched for
+# itself. The raced form answered CLEAN 20/20. This drained form was wrong 0/20. On a clean tree
+# both were right 20/20, so what fails is a SIZE, not a spelling.
+#
+# THE PUBLISHED SIGPIPE FLOORS DO NOT RATE THIS SITE, and that is the point. They were taken on a
+# producer holding its whole output in memory, able to write the instant the pipeline forks; nobody
+# chose that property, so nobody wrote it down. `git status` must walk the tree first: measured
+# 19/20 inverted at 25,500 B and 20/20 at 30,000 B, under HALF the published 37,121 B "safe to"
+# figure. 3 of the 70 worktrees on this box today are past that point.
+_porc="$(git -C "$CWD" status --porcelain 2>/dev/null)"
+if [ -z "$_porc" ]; then
   log "no checkpoint needed for $CWD — tree clean"
   exit 0
 fi

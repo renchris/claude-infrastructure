@@ -22,12 +22,10 @@ hooks/git-worktree-guard.sh	2
 hooks/hook-chain.sh	1
 hooks/lead-crash-watchdog.sh	6
 hooks/plan-agent-teams-default.sh	1
-hooks/plan-version-commit.sh	1
 hooks/qos-rewrite.sh	2
 hooks/research-precognition-nudge.sh	1
 hooks/session-index-sweep.sh	1
 hooks/task-quality-gate.sh	2
-hooks/teammate-checkpoint.sh	1
 hooks/waiting-recycle.sh	2
 install.sh	3
 scripts/banner-shots.sh	1

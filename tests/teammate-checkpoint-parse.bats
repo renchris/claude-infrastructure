@@ -175,3 +175,63 @@ SHIM
   PATH="$shim:$PATH" fire Stop
   [ "$(grep -c . "$log" || true)" -ge 1 ]     # Stop: the sweep is still reachable
 }
+
+# ── the dirty-tree gate, at a size the published SIGPIPE floors do not describe ──────────────────
+#
+# Every case above dirties the tree with ONE small file, and every one of them stays GREEN over the
+# defect these two exist to catch — which is exactly why it shipped. The gate at :251 used to read
+# `status --porcelain | grep -q .`; on a large dirty tree grep -q leaves at line 1, `git status`
+# takes SIGPIPE, pipefail promotes it and the leading `!` sends a DIRTY tree down the "tree clean"
+# branch, skipping the snapshot. A one-file fixture never reaches that regime.
+#
+# L5 (extending the harness laws above): a fixture for a size-dependent failure must ASSERT it
+# reached the regime. A case named after a floor it never crosses is a control that cannot fail.
+
+# Build a repo whose `git status --porcelain` crosses the regime, by MODIFYING tracked files —
+# untracked ones collapse to a single `?? src/` line and could never get there. Long names buy the
+# byte count with few files: ~166 B per porcelain line, so 250 files clear 40,000 B in ~1 commit.
+mkbig() { # <dir> [files]
+  local d="$1"
+  local n="${2:-250}"
+  local i=0 pad
+  pad="$(printf '%0150d' 0)"
+  mkdir -p "$d/src"
+  git -C "$d" init -q
+  while [ "$i" -lt "$n" ]; do printf 'seed\n' > "$d/src/f-$i-$pad.txt"; i=$((i+1)); done
+  git -C "$d" add -A >/dev/null
+  git -c user.email=t@t -c user.name=t -C "$d" commit -qm seed >/dev/null
+}
+dirtybig() { # <dir>
+  local f
+  for f in "$1"/src/*.txt; do printf 'changed\n' >> "$f"; done
+}
+porcbytes() { git -C "$1" status --porcelain | wc -c | tr -d ' '; }
+
+@test "MECHANISM: a dirty tree past the measured always-inverted floor still checkpoints" {
+  local BIG="$BATS_TEST_TMPDIR/wt-team-big"
+  mkbig "$BIG"
+  dirtybig "$BIG"
+  # ANTI-VACUITY, and the number is chosen rather than inherited. 30,000 B is where THIS producer —
+  # `git status --porcelain`, which must walk the tree before it can write — was measured 20/20
+  # inverted (19/20 at 25,500). It is NOT 37,121: that figure was taken on a producer holding its
+  # whole output in memory, able to write the instant the pipeline forks, and it does not describe
+  # this shape. Past the always-inverted point a re-introduced `grep -q` fails EVERY run rather
+  # than one in twenty, so this case is deterministic by construction.
+  local b
+  b="$(porcbytes "$BIG")"
+  [ "$b" -ge 30000 ] || { echo "fixture is $b B, under the 30,000 B always-inverted floor — it cannot discriminate" >&2; return 1; }
+  fire Stop "$BIG"
+  has_cp team-big "$BIG"
+}
+
+@test "NEG: a clean tree of the same size still makes no checkpoint" {
+  local BIG="$BATS_TEST_TMPDIR/wt-team-clean"
+  mkbig "$BIG"
+  # Same machinery, NOT dirtied. Without this the case above would pass on a hook that snapshotted
+  # unconditionally — the other way to be wrong about the same predicate, and one a red count alone
+  # cannot distinguish from a correct fix.
+  [ "$(porcbytes "$BIG")" -eq 0 ]
+  fire Stop "$BIG"
+  run has_cp team-clean "$BIG"
+  [ "$status" -ne 0 ]
+}
