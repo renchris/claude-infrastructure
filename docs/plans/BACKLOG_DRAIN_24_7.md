@@ -86,6 +86,173 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-27 — drain recycle #249: method 219 — A PARAMETER RENAME AT A FUNCTION BOUNDARY HIDES
+  A SITE FROM THE VERY GREP THAT FOUND ITS SIBLINGS.** #244 landed the rule that when you drain a
+  named predicate you should grep the file for its FEED VARIABLE rather than for its name, and that
+  rule is right. It is also blind in exactly one place, and this link is what lives there: a caller
+  passes `"$own"` POSITIONALLY and the callee binds it to a different local name, so every grep for
+  the feed variable stops at the call site and never arrives at the consumer. The subject is
+  `scripts/ship-land.sh:2323`, the DIRECT carve-out inside `run_scoped_suite` — **the oldest
+  named-and-untaken lead in this brief, found by #245 and left by #245, #246, #247 and #248.**
+  **THE DEFECT.** The carve-out decides whether a pass-on-retry is *"intermittence in code you are
+  landing"* (RED) or a flake (EXONERATED). It asked that question as
+  `if [[ "$notok1" -gt 0 ]] && printf '%s\n' "$direct" | grep -qxF -- "$f"; then`, under this file's
+  own `set -o pipefail` at `:185`. `grep -q` exits at the first match, the producer then takes
+  SIGPIPE, pipefail promotes it, the `&&` fails, and the RED branch is SKIPPED — so a suite that IS
+  yours falls through to EXONERATED. **Fail-OPEN, in the land gate**, and it is the outcome the
+  comment 280 lines above it forbids by name: *"under-claiming it silently green-lights a real
+  regression in code that is."*
+  🚨 **WHY IT SURVIVED, AND IT IS NOT THAT NOBODY LOOKED — THIS IS THE TRANSFERABLE HALF.** This
+  file already DOCUMENTS the hazard and already APPLIES the cure. `:2093-2096` names SIGPIPE,
+  pipefail and 141-on-match in prose, and `:2098` and `:2114` both ask the SAME membership question
+  about the SAME list with the safe idiom, `case` over a newline-fenced string. The third consumer
+  kept the hazard. The caller passes `$own` at `:2089`; `run_scoped_suite` binds it to `direct` at
+  `:2251`. **Measured with `probe249-rename.sh`: membership hazards on `$own` reachable by a
+  feed-variable grep = 0. Reachable by resolving the call through the rename = 1, this site.** Ten
+  of ten predictions exact — three aliases (`direct`, `val`, `list`), three call sites, three direct
+  sites, and a NEG control at 0. **The knowledge was in the file, in the right words, twelve lines
+  from a site that used it. What did not travel was the NAME.**
+  ✅ **THE DEFECT IS POSITION-DEPENDENT, WHICH IS WHY NO SMALLER FIXTURE COULD EVER HAVE SEEN IT.**
+  `probe249-invert.sh`, 20 trials per size at load ~22, needle at the HEAD of the list: correct
+  20/20 to 40,017 B, **19/20 at 60,012 B**, **0/20 at 90,020 B**. With the needle at the TAIL it is
+  correct even at 120,028 B, because grep never exits early there. `grep -q` stops at the FIRST
+  match, so the earlier a suite sat in the direct list the sooner the pipe closed. **Membership is
+  not a positional question; this implementation made it one.** A test that placed its needle at
+  the end of the list would have been green at every size.
+  ⚠️ **AND THE INHERITED BAND TABLE READS BACKWARDS IF YOU SIZE A FIXTURE FROM IT.** #241's row
+  *"2-stage BUILTIN printf | grep -q SAFE 37,121 · RACY 1/20 at 55,721 · ALWAYS 87,122+"* is
+  correct, and its first column is **the largest size measured entirely SAFE — not the size at
+  which inversion begins.** I predicted inversion just above it and my own rc-93 gate refused: at
+  40,017 B the pre-fix form is still 20/20 correct. The two figures are ~53 KB apart. **A fixture
+  sized just over the SAFE column is GREEN and proves nothing.** Size from the ALWAYS column.
+  ⚠️ **LATENT, NOT SAFE, AND THE CONTROL FOR THAT CLAIM COST TWO TRIES.** `probe249-feed.sh`'s first
+  answer was that every historical range yields a one-suite four-byte feed. **Four bytes is the
+  literal string `FULL`** — `gate-select.sh`'s fail-closed *"I cannot decide"*, which `grep -c .`
+  counts as one line and `${#d}` measures as four bytes. That is #238's four-non-red-outcomes
+  finding wearing a feed measurement's clothes, and its LATENT verdict was computed over an EMPTY
+  population: a vacuous pass. The cause was WIDTH — a 20-, 60-, 150- or 400-commit range is nothing
+  like the single land's diff `ship-land` passes it. Re-run over SINGLE code-touching commits
+  (`probe249-feed2.sh`), **24 of 26 ranges yield a REAL list and #241's published positive control
+  reproduces exactly at 8 suites.** **Largest real direct list over 26 real ranges: 85 suites /
+  2,965 B, about 7% of the safe ceiling.** That ceiling is an operational quantity that only grows
+  and nothing announces the crossing.
+  🚨 **THE CLASS, MEASURED RATHER THAN ASSERTED.** `probe249-class.sh` takes the detector's OWN
+  population and asks of each site whether the variable it pipes is PARAMETER-BOUND in its
+  enclosing function — because a parameter-bound site is one a caller-side feed grep can never
+  reach, and **its risk is a property of the CALLER's feed, not of anything visible where the site
+  lives.** Partition asserted to sum: **13 PARAM_BOUND · 113 LOCAL_OR_GLOBAL · 11 NO_VAR = 137.**
+  The POS control is this link's own pre-fix site replayed from git so it still fires after the
+  drain; the NEG control is a variable bound nowhere. **The thirteen: `scripts/branch-reaper.sh` ×4
+  in `is_kept`** — whose inversion REAPS a protected or worktree-held branch, and which is the
+  sharpest of them — **`bin/cc-announce` ×5 in `classify`, `hooks/lead-crash-watchdog.sh` ×2
+  (`find_transcript`, `marker_owns_sid`), `install.sh:971` in `resident_bounce_vetoed`, and
+  `scripts/test-overwrite-guard.sh:133` in `assert_output_contains`.** Every one is grandfathered,
+  so the guard is rc 0 on all of them. **Nobody has measured a single one of their feeds, and the
+  feed is not in the file you would open.**
+  ✅ **ATTRIBUTION, AND THE DELIBERATE GREEN IS THE CELL THAT MATTERS.** `redproof249.sh` ran
+  `tests/ship-land.bats` in BOTH states, subject reverted from git and restored byte-identically by
+  sha256 in a trap (`RESTORE=OK`), baseline asserted GREEN before any revert. **POST 155/155, 0 not
+  ok, 359 s at load ~21. PRE: plan 155, exactly TWO not ok, and both are the new arms.** The
+  deliberate zero: **`smoke ARTIFACT LEG A (carve-out path)` — the ONE incumbent arm whose title
+  names this very code path — is GREEN in BOTH states, and PRESENT in the plan in both** (a green
+  that is really an absent test proves nothing). It drives the carve-out through a fixture whose
+  direct list is a handful of paths, roughly four orders of magnitude below the inversion floor.
+  **153 existing arms could not attribute this change, including the one named after it.**
+  ✅ **THE TESTS ARE 153 → 155, ONE MECHANISM ARM AND ONE POSITION ARM.** The mechanism arm extracts
+  the LIVE decision from the file and feeds it a 120,000-byte list with the needle at the head —
+  past the always-inverted floor, so a re-introduced pipeline fails EVERY run rather than one in
+  twenty — with a NEG control so it cannot pass by always answering "direct". The position arm
+  asserts head and tail AGREE, which is the property the defect actually broke and the only one
+  that survives a rewording of the fix. 🚨 **AND ITS EXTRACTION ANCHOR IS ASSERTED AND DELIBERATELY
+  SPELLING-AGNOSTIC:** the obvious anchor, `if [[ "$notok1" -gt 0 ]]`, occurs **TWICE** in
+  `run_scoped_suite`, and a range `sed` from the FIRST match silently extracts a different 27-line
+  region that still parses. Taking the LAST match pins the carve-out in EITHER spelling, which is
+  what lets the arm go red against the pre-fix subject instead of dying in its own extraction.
+  ✅ **THE RATCHET ATTRIBUTED THE DRAIN FOR FREE, PER PATH, BEFORE THE ALLOWLIST WAS TOUCHED** —
+  #244's downward-arm technique, and it works exactly as advertised: *"a grandfathered site was
+  FIXED but its allowlist count was not lowered … `scripts/ship-land.sh now 0, allowlist says 1`"*.
+  The row was REMOVED, not lowered; the file now grandfathers nothing. Census keyed on (path, TEXT)
+  rather than path:line because the diff adds comment lines and every number below them shifts,
+  allowlist neutralised on both arms, PRE extracted with `git archive` rather than remembered, each
+  arm run TWICE with a determinism gate: **138 → 137, LOST=1 (exactly this site), NEW=0.** Drained
+  IN PLACE — the site did not become a function, so this delta is a drain and not #243's
+  disappearance.
+  ✅ **THE WHOLE `--direct` DRAW RUN IN THE FOREGROUND BEFORE THE LAND: 32 suites / 1,070 tests,
+  1,070 ok, 0 not ok, 0 skip, 0 NO-PLAN and 0 PLAN-MISMATCH**, at load ~15-35. Every suite got a
+  verdict. That is what lets a link assert green at its close without waiting on the land.
+  🚨 **FOUR INSTRUMENT FAULTS, ALL IN THE APPARATUS, NONE IN A SUBJECT, AND EVERY ONE SURFACED AS A
+  REFUSAL RATHER THAN A WRONG NUMBER.** (1) The class screen's variable extractor took the
+  **FIRST** `"$var"` left of the pipe; the carve-out has TWO there and only the second is piped, so
+  it classified the site by the guard's counter and the POS control refused at rc 94. **The
+  producer's variable is the LAST one before the pipe.** (2) The same screen read a function's name
+  by stripping punctuation from the whole definition line, and the house spelling is
+  `fn() {  # $1=… $2=…`, so the trailing comment came with it — #241's function-open-regex scar in
+  its third costume. (3) The feed probe's `FULL` reading above.
+  🚨 **(4) IS THE ONE TO CARRY FORWARD, BECAUSE IT PRODUCES A GREEN THAT IS INDISTINGUISHABLE FROM
+  A REAL ONE. THE SUITE RUNNER FED ITS SUITE LIST ON STDIN AND A CHILD ATE IT.** `bats` reads
+  stdin; a `while read s; do bats "$s"; done < list` loop therefore loses the rest of its list to
+  whichever suite consumes it. **The run ended after 27 of 32 suites, with every suite it reached
+  green and no `not ok` anywhere in the log** — and it had already printed its last suite line, so
+  nothing looked truncated. What caught it was asserting the TERMINATOR: no `TOTAL` and no
+  `verdict=` line had been written. **A truncated run whose survivors are all green is a NON-VERDICT
+  wearing a pass's clothes.** The fix is three parts and all three are cheap: read the list on
+  **fd 3** (`exec 3< "$LIST"` / `read -r s <&3`), give every child **`< /dev/null`**, and assert at
+  the end that the number of suites RUN equals the number in the list (rc 93). **Never conclude
+  from "no `not ok` in the log"; conclude from the terminator.**
+  ⚠️ **A CORRECTION TO THE BRIEF THAT COSTS NOTHING AND CHANGES A NUMBER: §YOUR RECOMMENDED START
+  NAMED THE WRONG BASELINE.** It says to `comm` against `248floor`. #248 took a SECOND floor and
+  `248floor2` is its last reading — the brief warns about exactly this in §THE BOARD (*"check
+  whether it did rather than assuming the suffix"*) and then hardcodes the wrong suffix a hundred
+  lines later. Against `248floor` this link reads **one arrival in `allids`**; against `248floor2`
+  it reads **zero arrivals and one STATUS TRANSITION**. Same reality, two different facts, decided
+  entirely by which snapshot you diff. **Take your predecessor's LAST reading by mtime, never by
+  the suffix a brief names.**
+  **THE BOARD — AND MY LINK IS THE BUSIEST THE ACTUATOR SERIES HAS SEEN.** Open 08:32:05Z **324
+  open / 221 blocked / 2,339 done / 2 claimed** (545 combined, 2,886 rows); close 09:48:05Z **330 /
+  217 / 2,339 / 4** (547 combined, 2,890 rows). Both partitions asserted at BOTH moments
+  (`open + blocked == combined` AND `allids == allrows`), all five lists `sort -c`-checked before
+  every `comm`. In the 3 m 16 s gap before my open, against #248's TRUE last reading: **departures
+  0, arrivals 0, ONE status transition** — `654cbb468f66` open → **BLOCKED**, a
+  `claude-infrastructure` `re-land feat/cloud-inbox` row naming a SIBLING's branch and one of the
+  re-land generator's emissions. **Do not close it individually, and do not read a `re-land` row
+  arriving beside your own work as your own failure — read its branch name.**
+  🚨 **INSIDE MY LINK: departures 0, FOUR arrivals, and TWELVE status transitions.** Arrivals
+  `700005171b41`, `baf8b76db360` and `cd561ed37e8e` (all `claude-infrastructure`, all open) and
+  **`9f8e7c2fd37e`, which is `reso-web-app`** — note that is a THIRD project string, not
+  `reso-management-app`; **attribute an arrival by `.project` before reading it as chain activity.**
+  The transitions: **the SAME FOUR ROWS #243 measured going round the same cycle — `01ab05685857`,
+  `0c8b39b67665`, `193ae8ddce72`, `e981656df348` — ALL went to `claimed` again, which is the FOURTH
+  turn of that loop, not progress.** Four more went blocked → open (`564d151b76e5`,
+  `abf5e7509608`, `f85fce7c26f5`, and **`70f0001c657b`, the drain's OWN SSOT row — report its
+  status, do not work it**), and two went claimed → blocked (`8f59467c92b0`, `b60eb29e97dd`).
+  ⚠️ **Several of these sit on the standing WOULD-UNBLOCK cloud list, so the off-box actuator is
+  working them RIGHT NOW: do NOT hand-touch them.** **`done` has STILL not moved since #229** — so
+  every one of the twelve is a claim, a block or a reconsideration, and NONE is a close. **ZERO rows
+  closed by me, ZERO filed.**
+  **THE STORES, two moments.** postland RED pages **0 over a denominator of 2,749** at 08:33:07Z
+  and **0 over 2,747** at 09:48:05Z — the 152nd and 153rd consecutive zeroes, and no collapse of
+  the denominator inside a 75-minute window (it is EPISODIC, so a link that does not see one has
+  learned nothing about whether it still happens). postland stamps **487 → 489, an ADVANCE**, so
+  the background verifier is alive underneath a marker that has now read `GATE=stale` for the
+  twenty-sixth consecutive link — running and not certifying, exactly what `991fcb666976` says.
+  **Not mine to drive: only the `postland-verify` stamp moves that marker.**
+  `~/.claude/autonomy/pages` **2,170 / 116 → 2,181 / 114** — up eleven and DOWN two inside one
+  link, non-monotone in both columns again. inbox-guard `.escalated` **458 of 458 files at both
+  moments**, and I draw NO conclusion about my link from a flat pair 75 minutes apart.
+  **THE LEDGER AT OPEN (08:33:06Z).** `RUNG=✅ LIVE_LAG=8 LIVE_ADDS=0 LIVE_DIVERGED=0
+  LIVE_AGE=18792 LIVE_BREACH_WHY=`(empty)` MIG_FAILED=0`. **Inside the budget with an EMPTY breach
+  field, so the converger was NOT mine to drive and I did not run it.** The live sha is the same one
+  #247 and #248 both read, so the lane has now been frozen across THREE consecutive links while the
+  lag climbed 5 → 8. ⚠️ **`LIVE_AGE` is within ~2,800 s of the 21,600 s time arm — about one link.
+  READ YOUR OWN AGE AND BREACH FIELD; do not inherit a rung from this sentence.** My diff ADDS no
+  file (three modifications, asserted by an rc-97 staged-ADD gate), so `4e6a51df2a84`'s LIVE_ADDS
+  false positive does not arise.
+  ✅ **ENVIRONMENT.** All four kitty checks passed by minute two — `bin/cc-in-kitty` rc 0,
+  `KITTY_WINDOW_ID=27`, exactly ONE object from the id-keyed query with a bogus-id NEG control at 0,
+  `cc-notify --self` printing 27. The `qos-rewrite.sh` diff was clean and empty for the **132nd**
+  consecutive time. `cc-roles list` is byte-identical again — `desk UNVERIFIED 5 · docs-lead
+  UNVERIFIED 450 · drain-lead UNVERIFIED 7 · orchestrator ABSENT empty`. My mailbox holds the same
+  4,059-byte single line it has held since #218. Every tool resolved first try; no rc 127.
 - **2026-08-27 — LANE AUDIT (operator check-in, 4-agent fan-out): BOTH LANES ARE STOPPED BY A
   CONNECTIVITY DEFECT, AND IN BOTH CASES THE MECHANISM WAS HEALTHY WHILE THE CHANNEL WAS NOT.**
   The operator asked for a productivity read on the local and cloud 24/7 drains. Answer: the local
