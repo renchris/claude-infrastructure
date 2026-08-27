@@ -5630,10 +5630,17 @@ if [ "${1:-}" = "__recycle" ]; then
           hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;;
         retype)
           if [ "$waited" = 60 ]; then
-            hf_bounded "$IT2" session send -s "$RSID" "/exit" >/dev/null 2>&1 || true
-            sleep 1
-            nc="$(composer_content "$IT2" "$RSID")" || nc=""
-            if [ "$nc" = "/exit" ]; then hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true; fi
+            # ONE gated retype of the stranded /exit, through the COMPOSER-side verified helper.
+            # It used to be an inline raw send followed by a hand-rolled read-back compared with
+            # BYTE EQUALITY — the one shape `paste_readback_ok` exists to replace, and the shape
+            # scripts/typed-send-lint.sh reds the tree corpus over: a raw `session send` of a
+            # command line, with the verification written beside it rather than inside a helper the
+            # lint (or a reader) can recognise. it2_paste_submit_verified does the same three steps
+            # and two more — it gates on PROOF that a live CC session owns the pane, and its
+            # read-back is suffix-anchored, so a composer narrower than the payload cannot read a
+            # pristine paste as mangled (line 2257). Best-effort, exactly as the sibling `cr)` arm
+            # is; every failure path inside the helper already names itself on stderr.
+            it2_paste_submit_verified "$IT2" "$RSID" "/exit" || true
           fi ;;
         *)
           echo "→ nudge@${waited}s HELD ($nd): composer is not a stranded /exit — a CR here would submit someone else's buffer"
