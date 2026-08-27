@@ -116,9 +116,25 @@
 # sessions that worked. Measured before the fix: one declaration, content on trunk, flips
 # LANDED -> NOT-STARTED on nothing but `git update-ref -d` against the remote, and emits an
 # actionable row telling the operator to go re-open a session that had already finished.
-# Any rate computed over these states therefore STEPS DOWN at a prune with no change in the fleet:
-# the 2026-08-17 "the cloud return/land arm died" reading (push rate 81% through 08-16, 33% from
-# 08-18) is that artifact (backlog f85fce7c26f5).
+# Any rate computed over these states therefore STEPS DOWN at a prune with no change in the fleet.
+#
+# 🚨 BUT CHECK THE SIGN BEFORE BLAMING THE PRUNE. This note used to attribute the 2026-08-17 "the
+# cloud return/land arm died" reading (push rate 81% through 08-16, 33% from 08-18) to this
+# artifact. That attribution is REFUTED BY THE PRUNE'S OWN MANIFEST, and the refutation is
+# structural, not statistical: the prune deletes a branch only when EVERY commit on it is patch-
+# equivalent on trunk, i.e. only a LANDED one — and this lane landed NOTHING after
+# 2026-08-17T09:12:05Z (0 `returned` rows since 08-18 against 140 lifetime successes; see the
+# bound-kill-debris note in scripts/cloud-reconcile.sh). A branch in the window the step falls in
+# therefore CANNOT have been pruned, and the manifest measures exactly that: of 55 DELETED, 49
+# carry a fire date <= 08-16 and the latest last_commit among them is 2026-08-18T01:18:36Z, while
+# the 41 HOLD-stranded — unlanded, hence undeletable — run about five a day straight through 08-19.
+# The artifact biases the PRE-death window DOWN (the true rate through 08-16 was higher than 81%)
+# and cannot lower the post-08-18 number at all, so it predicts the OPPOSITE sign to the step it
+# was cited for. The measured cause of the death at that timestamp is desk-land's own bound-kill
+# debris holding each branch checked out, fixed in cd5d009b5.
+# The defect guarded below is real and the two guards earn their keep; it is simply not the
+# explanation for that step, and a reader who dismisses a future post-prune drop as "just the
+# artifact" inherits the mis-diagnosis this correction removes. (backlog f85fce7c26f5)
 #
 # `landed()` reads the TRUNK TREE and never the branch ref, so it answers just as well for a branch
 # that no longer exists — the check simply had to be asked FIRST.
