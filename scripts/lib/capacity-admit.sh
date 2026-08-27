@@ -147,7 +147,13 @@
 # that file's own conclusion, executable in its selftest (5.98/core pinned as a known false ALARM).
 #
 # 🚨 THIS IS NOT A CASE TO RAISE THE NUMBER. `fix(fire-gate): load1 does not move with the spawn it
-# was gating` (f944d6e3, 2026-08-20, ancestor of trunk) established the stronger fact: an additional
+# was gating` (2026-08-20 — SUBJECT only. This line used to read "f944d6e3, ancestor of trunk"; that
+# sha is NOT an ancestor of trunk and never was reachable outside its authoring checkout, because
+# this repo rebases on land — the same trap the origin-commit citation eight lines up already flags.
+# A sha that fails `git merge-base --is-ancestor <sha> origin/main` is worse than no citation: it
+# reads as checkable and is not. The tree is the citation — `CC_FIRE_LOAD_TERM:-off` in
+# scripts/handoff-fire.sh is the claim below, and it cannot go stale without the claim going with
+# it.) That fix established the stronger fact: an additional
 # RESIDENT session moves the 1-min runnable count by ~0, so NO value of this literal can make the
 # term correct — the INPUT is wrong, not the number. The load term therefore DEFAULTS OFF in
 # capacity_gate() (CC_FIRE_LOAD_TERM) and has been off on the Agent-tool path since Wave D;
@@ -158,6 +164,15 @@
 # (scripts/boot-resume-launch.sh, scripts/limit-recover/lr-fire-resume.sh), DELIBERATELY — see the
 # load-term block below, which prices that imprecision at a delayed resume, and both are
 # budget-released after CC_ADMIT_BUDGET consecutive refusals.
+#
+# DISPOSITION — backlog e981656df348 ("derive this constant") is CLOSED ON REFUTATION, 2026-08-27, and
+# this line is here so the next reader of the literal does not re-file it. There is nothing left to
+# measure on this axis: the survived population contains the fatal value (above), and the input does
+# not move with the spawn (above). It was parked behind "the marginal-load measurement" — WRONG
+# ITEM: marginal Δload per ACTIVE session is a capacity-IN-SESSIONS coefficient (backlog
+# 193ae8ddce72), which turns a ceiling into a session count and cannot locate a failure boundary, so
+# that measurement could never have discharged this row however long it waited. Full three-leg
+# refutation: docs/research/gc-cpu-vs-session-ceiling-2026-08-18.md §3a.
 CC_HW_DEFAULT_MAX_LOAD_PER_CORE=2.0
 CC_HW_DEFAULT_MIN_HEADROOM_GB=4
 

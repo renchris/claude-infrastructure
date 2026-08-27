@@ -4658,6 +4658,27 @@ arm_goal() { # $1=it2-bin $2=pane $3=condition → always 0; prints a parseable 
 # Signal = 1-minute load average / core count. It is the cheapest honest saturation read (one sysctl,
 # no fork storm) and the 1-min window smooths the burstiness of an agent fleet.
 #
+# 🚨 THAT SIGNAL IS DORMANT HERE, AND ITS CEILING WAS NEVER DERIVED. Both facts landed inside this
+# function or in the sibling file, and this header went on describing the pre-fix gate — which is
+# the §12.1 defect in miniature (an in-source claim that stops the next reader from checking):
+#   · `CC_FIRE_LOAD_TERM` defaults to **off** — `fix(fire-gate): load1 does not move with the spawn
+#     it was gating` (2026-08-20; SUBJECT only, and no sha ANYWHERE in this block, deliberately: this
+#     repo rebases on land, so the sha that fix carried on its branch resolves in the authoring
+#     checkout and NOWHERE ELSE. The verifiable form is the tree itself — the `:-off` two screens
+#     below IS the citation, and it cannot go stale without the claim going with it.)
+#     That fix measured that an ADDITIONAL RESIDENT session moves the 1-min runnable count by ~0, so this
+#     term was reading a quantity that does not respond to the thing it gates. `segments` and
+#     `active` carry its intent because they DO move with the spawn. The term is live only where
+#     `cc_capacity_admit` leaves it on — the two unattended recovery callers — and budget-released
+#     there. Read the block above the `if` inside this function for the switch itself.
+#   · `CC_HW_DEFAULT_MAX_LOAD_PER_CORE=2.0`, which the ceiling line below expands, has no measured
+#     failure point behind it and none is reachable on this axis. The full statement is at the
+#     literal — `grep -n 'WAS NEVER DERIVED' scripts/lib/capacity-admit.sh`, landed by
+#     `docs(capacity-admit): the ceiling cites a section that has no derivation…` (2026-08-25); it is
+#     pointed at rather than copied because THIS gate is the other expander and a reader of this
+#     header alone would take the number for a measurement. **Do not raise it** — C18: a fix moves a
+#     TERM SWITCH, never a ceiling (backlog e981656df348, closed on that refutation).
+#
 # A RECYCLE is EXEMPT: it REPLACES a session (net-zero panes), so gating it would strand the very
 # handoff that SHEDS load — the gate would amplify the contention it exists to relieve
 # (fail-closed-degradation-as-amplifier). Only NET-NEW spawns are admitted against capacity.
@@ -4669,8 +4690,12 @@ arm_goal() { # $1=it2-bin $2=pane $3=condition → always 0; prints a parseable 
 # payload error). Prints the measured numbers either way — a refusal with no numbers is unauditable.
 #
 # ---- M10 (MACHINE_CAPACITY_V2 §11.3): a SECOND, session-attributable term ----------------------
-# The loadavg ceiling above STAYS — §9.5 measured it behaving as a ceiling — but it is the wrong
-# instrument on its own: box-wide load is neither session-ATTRIBUTABLE nor SHEDDABLE. Measured
+# This paragraph used to open "The loadavg ceiling above STAYS — §9.5 measured it behaving as a
+# ceiling —", and BOTH halves are now false: the term defaults off (see the block above), and §9.5
+# derives no ceiling — it records an admit at 1.55/core and a refusal at 4.0/core, i.e. that a
+# threshold thresholds. What M10 rests on is the clause that followed, which is untouched: the
+# loadavg term is the wrong instrument on its own, because
+# box-wide load is neither session-ATTRIBUTABLE nor SHEDDABLE. Measured
 # 2026-07-29 (§11.2): the gate refused every net-new fire at 5.20/core with only 12–15 sessions
 # live, while ~2.0 of those cores were iTerm2+WindowServer merely DRAWING — closing a session
 # would not have moved the number the gate reads. Memory headroom is both: a session's footprint

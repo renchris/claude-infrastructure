@@ -112,6 +112,9 @@ own errors:
 
 ## 3 · The actionable finding, and it has nothing to do with the vendor
 
+> ⚠️ **READ §3a FIRST.** The diagnosis below is correct and stands; **the remedy it prescribes is
+> refuted**, and the defect it names was struck from the code on 2026-08-25. Do not re-file it.
+
 **The constant that stops us was never derived from anything.**
 
 `CC_HW_DEFAULT_MAX_LOAD_PER_CORE = 2.0` (`scripts/lib/capacity-admit.sh:134`) is the number that
@@ -143,6 +146,73 @@ The honest actionable is therefore **to derive the number, not to move it**: re-
 measurement (load1 delta across N all-active sessions) and set the ceiling from a measured failure
 point. That is a two-arm experiment, not a config edit, and it is the only thing that can legitimately
 move a capacity constant.
+
+### 3a · AMENDMENT 2026-08-27 — that prescription is REFUTED, and the diagnosis it rests on is already cured on trunk
+
+*The paragraph above is left standing verbatim because it is what backlog item `e981656df348` was
+filed on, and a prescription that quietly vanishes is how a wave launders its own errors. It is
+wrong, on three independent legs, and this section is the reason the item closes without a
+derivation.*
+
+**Leg 1 — "set the ceiling from a measured failure point" has no solution on this axis, by this
+document's own evidence.** §3 quotes `scripts/capacity-alarm.sh` two paragraphs above the
+prescription: fatal 2026-08-05 at **2.53/core** against **13 consecutive survived samples spanning
+2.92–5.98/core**, plus 42 h at 2.5/core with no panic. A failure point that sits *inside* the
+survived population is not a threshold; that instrument's own header states the conclusion —
+"no setting of these two numbers can make it" separate fatal from survived — and pins 5.98/core in
+its selftest as a known false ALARM so a future re-derivation has to argue with a control. The
+prescription asked for the one experiment the section's own citation forecloses.
+
+**Leg 2 — the input is wrong, not the number, and that fix landed two days after this doc.**
+`fix(fire-gate): load1 does not move with the spawn it was gating` (2026-08-20; cited by SUBJECT —
+see *Why no sha appears below*) established the stronger fact: an additional **resident** session moves the
+1-min runnable count by ~0. So no value of `CC_HW_DEFAULT_MAX_LOAD_PER_CORE` can make the term
+correct. `CC_FIRE_LOAD_TERM` now defaults **off** in `capacity_gate()`; the Agent-tool path has run
+`CC_ADMIT_LOAD_TERM=off` since Wave D; `segments` and `active` carry the term's intent because they
+do move with the spawn. Per C18 that fix moved a **term switch** and left the literal at 2.0 —
+which is exactly why the stale provenance survived it and this item kept re-dispatching.
+
+**Leg 3 — the premise's factual clause was discharged on 2026-08-25.** The item was filed on
+`capacity-admit.sh:134` citing "§9.5's measured ceiling", a section that undercuts the term it was
+cited as justifying. `docs(capacity-admit): the ceiling cites a section that has no derivation, and
+the term it parameterises already defaults off` (2026-08-25) struck that
+citation and replaced it with the honest provenance, including the origin commit's own numbers
+(`feat(handoff-fire): machine-capacity admission gate at the spawn chokepoint`,
+2026-07-29 — motivating incident measured at 2.72/core, 2.0 picked with no stated rule, so the
+shipped ceiling sits *below* the only incident that produced it).
+
+**Why no sha appears above, and how to check the two legs anyway.** This repo rebases on land, so a
+sha minted on a feature branch resolves in the authoring checkout and **nowhere else** — the exact
+trap `capacity-admit.sh`'s own provenance block flags with *"cite by SUBJECT, a land rebases."*
+Every sha this amendment was first drafted with (`f944d6e3`, `e89918f2b`, `0fc3a3d33`) fails
+`git merge-base --is-ancestor <sha> origin/main` on trunk today, while the **content** of all three
+is present. So both legs are stated as **predicates over the tree**, which survive a rebase:
+
+```sh
+# Leg 2 — the load term is dormant in the attended gate (expect: :-off)
+grep -n 'CC_FIRE_LOAD_TERM:-' scripts/handoff-fire.sh
+# Leg 3 — the §9.5 citation is gone and the honest provenance is in its place
+grep -n 'WAS NEVER DERIVED' scripts/lib/capacity-admit.sh
+```
+
+A predicate that fails is news; a sha that fails to resolve is only noise.
+
+**The item's named blocker could not have discharged it either.** `e981656df348` was parked behind
+"the marginal-load measurement". Marginal Δload per **active** session is a capacity-**in-sessions**
+coefficient: it translates a ceiling into a session count, and cannot locate a failure boundary. It
+belongs to `193ae8ddce72` — see `docs/research/marginal-load-per-active-session-2026-08-19.md` and
+`fix(capacity): strike the refuted 2.5-5 marginal from all three live sites` (**34a21973**,
+2026-08-26) — and that item's own land records `CC_ADMIT_ACTIVE_CEILING=8` as *not* blocked on it.
+Two items, two questions; the park was against the wrong one.
+
+**What this session changed, and what it deliberately did not.** No literal moved: 2.0 stands, per
+C18. The one live site still teaching the refuted shape was `capacity_gate()`'s header in
+`scripts/handoff-fire.sh` — it announced the loadavg ceiling "STAYS — §9.5 measured it behaving as
+a ceiling" and named the ceiling with no note that the term defaults off, i.e. the *other* expander
+of the shared literal kept the provenance the library's own fix had already struck. That header now carries
+both facts. **The standing rule for this constant: it is not derivable on this axis, it is dormant
+in both attended gates, and raising it is the lazy design `docs/plans/LOAD_INSENSITIVE_VERIFY_V2.md:156`
+exists to reject.**
 
 ## 4 · If 2.1.234 is adopted, adopt it on other grounds — and set one env var first
 
