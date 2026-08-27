@@ -30,6 +30,13 @@ BASE_SHA="bf796c57"   # immutable ancestor of origin/main; carries the pre-chang
 # behaviour is the S6-era tree, not the pre-S6 one. Pinned for the same reason BASE_SHA is —
 # `origin/main` becomes the NEW code the moment this lands, and the control would invert.
 A2_BASE_SHA="ec92e68c"   # immutable ancestor of origin/main; carries S6 holding the lock across the tail
+# A THIRD control, for A2' — the same defect INVERTED. A2's fix narrowed what the lock GATES but not
+# WHO TAKES IT, so `decide` kept acquiring an admission lock it returns (step 3a) without ever
+# spending. The artifact that exhibits THAT is neither control above: both predate A2's fix and would
+# fail this test for the wrong reason — an absent lock and a lock held across the tail are different
+# defects from a lock held by a mode that cannot use it. It is the tree as of this branch's base,
+# pinned for the same reason its siblings are.
+A2P_BASE_SHA="c3acc6665"   # immutable ancestor of origin/main; step 0 reads `[ "$mode" != dry ]`
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -58,6 +65,24 @@ setup() {
   chmod +x "$PRE_A2" 2>/dev/null || true
   if [ ! -x "$PRE_A2" ]; then
     echo "cc-dispatch-v2.bats: cannot recover the pre-A2 control — 'git -C $REPO archive $A2_BASE_SHA bin/cc-dispatch' produced nothing. The RED-proof cannot run." >&2
+    return 1
+  fi
+
+  # the pre-A2' control: the lock narrowed to admission, but still ACQUIRED by `decide` (step 0 reads
+  # `!= dry`), so a kicked decide pass starves the only mode that can fire.
+  mkdir -p "$C/prea2p"
+  git -C "$REPO" archive "$A2P_BASE_SHA" bin/cc-dispatch 2>/dev/null | tar -x -C "$C/prea2p"
+  PRE_A2P="$C/prea2p/bin/cc-dispatch"
+  chmod +x "$PRE_A2P" 2>/dev/null || true
+  if [ ! -x "$PRE_A2P" ]; then
+    echo "cc-dispatch-v2.bats: cannot recover the pre-A2' control — 'git -C $REPO archive $A2P_BASE_SHA bin/cc-dispatch' produced nothing. The RED-proof cannot run." >&2
+    return 1
+  fi
+  # AND it must be the RIGHT artifact, not merely a readable one: assert the defect is PRESENT in the
+  # control. A control recovered from the wrong sha reads as a passing guard (memory:
+  # control-must-replay-the-real-artifact); this pins the exact byte the fix changes.
+  if ! grep -q '\[ "\$mode" != dry \] && ! lock_acquire' "$PRE_A2P"; then
+    echo "cc-dispatch-v2.bats: the pre-A2' control does NOT carry the defect it exists to exhibit — $A2P_BASE_SHA is the wrong sha. The RED-proof would pass vacuously." >&2
     return 1
   fi
 
@@ -335,6 +360,40 @@ spawns()     { local n; n="$(grep -c . "$C/spawn.log" 2>/dev/null || true)"; ech
   [ -f "$C/wave.json" ] || false
   [ "$(grep -c '^claim ' "$C/backlog.log")" -eq 2 ] || false   # …2 claimed + fired (MAX_SPAWN=2)
   [ "$(spawns)" -eq 2 ] || false
+}
+
+# ── A2' — the lock is taken by the mode that can SPEND it, never by `decide` ──────────────────────
+# The throughput property, stated as the thing an operator cares about: a backlog WRITE must not be
+# able to stop the cron tick from firing a worker. `cc-backlog add` kicks a detached `--decide`, and
+# on the pre-fix tree that kick takes the admission lock for its whole decision phase, so a busy
+# ledger is a self-starving one. Asserted on CLAIMS and SPAWNS rather than on verdict counts,
+# deliberately: only a `run` pass can claim or spawn, so those two reads name the tick unambiguously
+# even though both passes journal into one IDL.
+@test "A2': a concurrent --decide does NOT starve the --once tick — it claims and fires; the pre-fix tree fires nothing" {
+  fresh
+  STUB_LIST_SLEEP=4 CC_DISPATCH_CEILING=6 "$DISP" --decide >/dev/null 2>&1 &
+  local kick=$!
+  sleep 1                                        # the decide pass is now inside its decision phase
+  run env CC_DISPATCH_CEILING=6 "$DISP" --once
+  [ "$status" -eq 0 ] || false
+  wait "$kick" 2>/dev/null || true
+  [ "$(grep -c '^claim ' "$C/backlog.log")" -eq 2 ] || false   # the tick claimed (MAX_SPAWN=2)
+  [ "$(spawns)" -eq 2 ] || false                               # …and fired
+  [ "$(dec ' and .reason=="pass-in-flight"')" -eq 0 ] || false # nothing was refused admission
+  [ ! -d "$C/dispatch.lock" ] || false                         # both passes released, never leaked
+
+  # RED — the real pre-fix artifact from the pinned sha (its presence of the defect is asserted in
+  # setup, so this cannot pass vacuously). Its step 0 reads `!= dry`, the decide pass takes the
+  # admission lock, and the tick is reduced to DECIDING ONLY.
+  fresh
+  STUB_LIST_SLEEP=4 CC_DISPATCH_CEILING=6 "$PRE_A2P" --decide >/dev/null 2>&1 &
+  kick=$!
+  sleep 1
+  env CC_DISPATCH_CEILING=6 "$PRE_A2P" --once >/dev/null 2>&1
+  wait "$kick" 2>/dev/null || true
+  [ "$(grep -c '^claim ' "$C/backlog.log" || true)" -eq 0 ]        # THE STARVATION: zero claims…
+  [ "$(spawns)" -eq 0 ] || false                                   # …zero fires…
+  [ "$(dec ' and .reason=="pass-in-flight"')" -eq 3 ] || false     # …every item refused admission
 }
 
 @test "S6: a holder whose pid matches but whose lstart does not (a RECYCLED pid) is STALE — the lock is broken, not honoured forever" {
