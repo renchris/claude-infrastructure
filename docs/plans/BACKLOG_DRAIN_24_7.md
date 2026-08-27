@@ -86,6 +86,75 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-27 — LANE AUDIT (operator check-in, 4-agent fan-out): BOTH LANES ARE STOPPED BY A
+  CONNECTIVITY DEFECT, AND IN BOTH CASES THE MECHANISM WAS HEALTHY WHILE THE CHANNEL WAS NOT.**
+  The operator asked for a productivity read on the local and cloud 24/7 drains. Answer: the local
+  dispatcher is loaded, exits 0, and has run 313 times; the cloud sessions are alive on real VMs and
+  every credential works. Neither is broken in the way its own instruments report, and neither is
+  productive.
+  · **THE HEADLINE NUMBER.** Live rows **546 = 323 open · 221 blocked · 2 claimed** (⚠️ *schema
+  correction for every future reader: `cc-backlog list --open` is `.status != "done"`
+  (bin/cc-backlog:4083), so "546 open" is NOT 546 open items* — the fold was replicated from
+  `fold()` verbatim and reproduces the tool exactly). Level trough **403 on 08-18 → 546 today,
+  +15.9/day**; net flow +13.9/d over 30 d, +16.4/d over 7 d. **Interactive sessions close 4 of every
+  5 items** (80.7% of the last 337 dones); the autonomous fleet closes ~1 in 5 and falling. And the
+  fleet does not FAIL on the queue — **278 of 323 open rows (86%) have never been claimed once.**
+  · 🚨 **LOCAL LANE — A2 INVERTED: A DECIDE PASS TOOK THE ADMISSION LOCK IT CANNOT SPEND.**
+  `cc-backlog add` kicks a detached `cc-dispatch --decide` on every write (§ S5 KICK-ON-WRITE);
+  step 0's guard read `[ "$mode" != dry ]`, so that kick acquired the singleton — and `decide`
+  returns at step 3a before wave-plan, claim or spawn. **Filing work was a lock generator, and the
+  only pass that can fire is the 300 s tick.** Measured: SIX concurrent `--decide` (00:01 … 25:48)
+  with the lock owner a `--decide` alive 25 min; **176 of 313 launchd passes (56.2%) refused
+  admission**; two consecutive passes deferred **286/286 and 285/285** items on `pass-in-flight`
+  against `live_workers=2, free_slots=10` — ten slots idle while 100% of the queue was deferred;
+  `defer/pass-in-flight` is ~65% of ALL decisions across the 5.3 d the IDL retains. Pass span p50
+  260 s / p90 546 s / max 1,361 s against a 300 s interval, so **42% of passes outlive their tick**
+  and the queue is permanently ≥2 deep. **FIXED + LANDED `5f89ce484`** (`[ "$mode" = run ]`; the
+  1a2 venue-label write takes the same lock around the write and releases). RED-proved against the
+  real pre-fix artifact at pinned ancestor `c3acc6665`, with setup() asserting the control CARRIES
+  the defect so the RED half cannot pass vacuously.
+  · ⚠️ **AND THE LOCK IS ONLY THE SECOND CONSTRAINT.** The plist exports
+  `CC_DISPATCH_VENUE_ONLY=cloud`. venuePlan over the 546: **local 335 · unlabelled 192 · cloud 19**,
+  so the filter parks **96%** of the queue every pass — worse than the 86% recorded at the 2026-08-11
+  flip, because the venue labeller keeps minting *local* labels into the parked bucket. **Zero
+  `venue=local` dispatcher claims have EVER been taken.** Conversion by venue: local 547/2,035
+  (**26.9%**), cloud 11/562 (**2.0%**). Un-parking needs a `launchctl` reload ⇒ C10, operator-owned
+  ⇒ decision packet **`ff24ce1f7808`** (class C). Also standing: 37 open rows in 6 projects skipped
+  every pass as `project-not-dispatched`, and `reso` is a hand-passed alias of the declared
+  `reso-management-app`.
+  · 🚨 **CLOUD LANE — IT IS ONE-WAY, NOT DEAD, AND EVERY OBVIOUS CAUSE IS REFUTED.** Board: 151
+  NOT-STARTED / 107 STALLED / 14 ABANDONED = **86% of 315 active**. But 262/262 control-plane GETs
+  returned 200, all `status:"active"`, `accepted:true`, evenly spread across four accounts, and
+  `refusal-route.jsonl` holds **zero** creation refusals — creation, auth and quota are all
+  **REFUTED**. What the control plane said instead: **222 of 262 (85%) carried
+  `post_turn_summary.status_category == "need_input"`. They had worked and ASKED A QUESTION.** A
+  tree-wide grep for that field returned **one hit, a comment**. `--verify` printed six fields and
+  dropped the summary; `cloud-return.sh` reads `.worker_status` and nothing else. Verbatim from a
+  session the board filed NOT-STARTED: *"fix verified & tests green; gate issues block ship" /
+  "1. Land it via desk box …; 2. Record item b60eb29e97dd done"* — **that session had succeeded.**
+  It reads never-started because `classify()` derives state from git-ref absence alone and a VM that
+  finishes without pushing has no ref, so the label sent 83% of triage at a boot problem that does
+  not exist. **FIXED + LANDED `c8da1242f`**: `--verify` emits the summary + `requires_action`, and
+  `cc-cloud inbox` (`scripts/cloud-inbox.py`, 7/7 mutation-proved) classifies every waiting session
+  PERMISSION / RUNNABLE / PROSE. 🚨 **It READS. It never EXECUTES** — 13 of those asks parse as
+  runnable shell, and running one is executing a string a remote VM composed, unattended.
+  · **THE COUPLING, which is why neither lane's own instruments could see this.** A stalled cloud
+  session reads ALIVE for six hours and the reap correctly refuses to reopen live work, so its item
+  is BLOCKED rather than returned. Result: **448 block/unblock churn events since 08-20 across 225
+  ids**, top reason `a LIVE off-box worker … still holds this item past the ceiling` (87). The
+  ledger's entire recent motion is that churn — 12 dones on 08-26, **0** on 08-27 — and it is the
+  cloud lane's one-wayness expressed in the local ledger. `01ab05685857`, one of the four rows
+  cycling as a block, has a cloud session reporting *"postland-verify fix landed; awaiting
+  cloud-reconcile + ledger close"*: the work is DONE and cannot say so.
+  · **RETURN PATH, re-measured (the open task's "246 across 106 branches" is stale on both halves):
+  195 `origin/claude/fire-*` branches, 193 with commits ahead, 273 ahead in total, **229 genuinely
+  stranded across 164 branches** after patch-id exclusion. Accrual **+3 / +39 / +50 / +68** on
+  Aug 23-26 — accelerating, so a one-shot sweep is a leak and not a fix. `cloud-return.sh` IS
+  daemonised (via `autonomy-sweep`); its lifetime record is 2,206 rows at a **6.6% return rate**.
+  · **NOT CLOSED, and named so it is not mistaken for done:** `classify()`'s NOT-STARTED rung still
+  reads the git ref alone (`700005171b41`), nothing yet ANSWERS an inbox row (`cd561ed37e8e`), and
+  **15 sessions are `review_ready` with no ref on origin** — completed work inside containers that
+  get reclaimed, the one item here with a deadline.
 - **2026-08-27 — drain recycle #248: method 218 — A LATCHING STATE MACHINE MUST TEST FOR *CODE*
   BEFORE IT TESTS FOR *SYNTAX*, OR A COMMENT THAT NAMES THE SYNTAX MUTES THE REST OF THE FILE.**
   #247's method 217 said a constant with an unstated scope acquits sites, so enumerate its citers.
