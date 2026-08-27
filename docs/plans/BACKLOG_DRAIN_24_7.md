@@ -220,6 +220,63 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   converger was not mine to drive at my open. **`GATE=stale` for the TWENTY-FIRST consecutive
   reading** — not mine to drive either; only the background `postland-verify` stamp moves it, and
   `991fcb666976` (OPEN) owns why it never certifies. **Not re-filed.**
+  · 🚨 **AND THE LAND REFUSED — ON AN UNOWNED TRUNK RED THAT MY OWN DRAW SURFACED, WHICH IS THE
+  SECOND FINDING OF THIS LINK AND WAS FOUND BY A LAND RATHER THAN BY A SCREEN.** The selector drew
+  **42 direct suites** — **the largest draw this chain has recorded** (the previous big one was 32)
+  — and `tests/handoff-alarm-records.bats` came back RED on tests 14 and 15, `✗ ship-land: GATE RED
+  — not pushing`, rc 6. **#238's principle, paid in full: a big draw is an audit of trunk you did
+  not ask for.** ⚠️ **rc 6 is NOT diagnostic of whose fault it is** — #229's was its own, #228's and
+  #238's were trunk's — **so I attributed it before driving it, and the attribution took about a
+  minute:** `scripts/handoff-fire.sh` and the suite are **both byte-identical to `origin/main`** by
+  `git rev-parse HEAD:<p>` vs `origin/main:<p>`, my diff touches neither, and the suite is **RED on a
+  pristine `git archive origin/main | tar -x` extract with the identical failure message.**
+  · **THE DEFECT IS THE TEST'S ORACLE, NOT THE SUBJECT.** `site_is_converted`'s first line required
+  the class token to occur **EXACTLY ONCE**. That was a **LOCATOR** — *there is one occurrence, so
+  grep hands me THE line* — **and a locator spelled `-eq 1` silently imposes a COMPLETENESS claim the
+  class never made: that a failure class may only ever have ONE site.** `recycle-dead` grew a second
+  site and then a third, **both properly converted**, and the assertion went red on both.
+  🚨 **THE COMMENT DIRECTLY ABOVE THAT FUNCTION ALREADY RECORDS THIS EXACT LESSON** — it explains
+  that the oracle was rewritten once before so that pinning a line-shape could not force a tri-state
+  site to be REVERTED to satisfy a test, *"the assertion outliving its subject and becoming a guard
+  on the bug"*. **The same defect then recurred one level up, in the first line of the function that
+  paragraph introduces. A file can state a lesson and re-commit it in the line below.**
+  · **DATED, with a POS control** (`~/.claude/autonomy/probe245-alarmsites.sh` — the live tree must
+  read 6 sites / 3 tokens before any historical row is believed): the count was **3** from
+  2026-08-10, **4** from 2026-08-22 (which the test's own comment names), **5** from
+  2026-08-25T15:37 — **where trunk went red** — and **6** from 2026-08-25T23:52. **Trunk had been red
+  for roughly 23 hours across two commits, and no land drew this suite until mine.**
+  ⚠️ **AND READ THE SUBJECT OF THE COMMIT THAT BROKE IT: `docs(research): name the 21:28 SIGTERM
+  sender…`. A docs-titled commit carrying the code change that took a guard red** (memory:
+  `read-the-diff-not-the-commit-subject`).
+  ⚠️ **An inline zsh attempt at that same census threw `bad substitution` on every iteration and
+  printed `hf_alarm=0` for all forty commits — a false zero indistinguishable from a real one. I
+  re-ran it as a `#!/bin/bash` FILE with a positive control. DO NOT MEASURE ANYTHING THAT DECIDES
+  SOMETHING IN AN INLINE Bash-tool CALL; the brief says so and it cost me a reading anyway.**
+  · ✅ **FIXED BY MOVING THE ORACLE UP ONE MORE LEVEL — at least one occurrence, and EVERY occurrence
+  must be converted — AND PROVEN STRICTLY STRONGER WITH A CONTROL RATHER THAN ASSERTED**
+  (`~/.claude/autonomy/probe245-oracle.sh`: both oracle bodies run side by side, the new one LIFTED
+  from the `.bats` by an anchored line range, the old one rebuilt as a quoted-heredoc **SEED** rather
+  than `sed`-derived from the subject it seeds; **eight predictions written first, all exact**):
+
+      P2  new oracle, unmodified tree                 rc 0   PASS
+      P1  old oracle, unmodified tree                 rc 1   FAIL — this IS the trunk red
+      P3  new, banned idiom planted at site 1         rc 1   caught
+      P4  new, banned idiom planted at site 2         rc 1   caught — the old form never reached here
+      P5  new, banned idiom planted at site 3         rc 1   caught — nor here
+      P6  OLD, banned idiom planted at site 2         rc 1   but its message says "not once" (1 hit)
+          and never says "banned silent-push idiom" (0 hits)
+
+  🚨 **P6 IS THE POINT, AND IT IS WHY THIS IS NOT MERELY UN-BREAKING A TEST. The old form did not
+  fail because it noticed the plant — it failed on the COUNT, before looking at anything. It was not
+  only RED on trunk, it was BLIND: a real regression at the second or third site would have produced
+  the identical message as a legitimate one.** The new form validates three sites where the old
+  refused to validate any. Test 15's pin moves **4 → 6** and stays a PIN deliberately — its job is to
+  make a new alarm site a decision somebody writes down — so its comment now carries both new shas
+  and their class, and says plainly that **the silent move, not the number, was the defect.**
+  ⚠️ **THIS IS THE THIRD UNOWNED TRUNK RED THE CHAIN HAS FOUND** (#228's `completion-assert`, #238's
+  `gate-ownscope-leak`, mine). **#238's was found the same way — by a draw of 32 where earlier links
+  drew 3. Two of the three were surfaced by an unusually large draw, not by a screen. CHECK FOR A NEW
+  ONE; do not assume trunk is clean.**
   · 🚨 **FOR MY SUCCESSOR — THE TARGET AND THE REASON ARE BOTH MEASURED AND I HAVE RUN THE REASON.**
   The producer census is a REUSABLE SHAPE, not a one-off: pick any command whose output several files
   independently interrogate, and ask what each of them does with it. `it2 session list --json` had
