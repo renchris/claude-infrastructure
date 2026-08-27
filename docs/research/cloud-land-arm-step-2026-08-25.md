@@ -203,6 +203,17 @@ Recorded because of what it nearly did: those six reds were about to be reported
 corroboration of A. Attributing them against a stashed, pristine `bin/cc-cloud` is what caught it —
 a red that reproduces identically on trunk is evidence about the harness, never about the diff.
 
+> **CORRECTION 2026-08-27 — "fixed in place" reached no branch, and the count was 27, not 24.** The
+> repair above lived only in the 08-25 session's working tree: it is not on `origin/main` and not on
+> that session's own branch `90d6ce1f`. So this paragraph shipped a fix that existed nowhere, and
+> the defect it describes was still live — `tests/cloud-return.bats` read **21/27** on a Linux cloud
+> VM today, the six reds being exactly the content-verify leg and the done/custody/wake chain and
+> goal verdict that hang off it. Reproduced directly: `setup()` fixtures `$HOME`, which hides
+> `~/.gitconfig`, and the lander stub's `git commit-tree` was the one commit in the file with no
+> identity on the command. Ported in `caaf67bc` with the suite's own idiom (lines 42/49/51), which
+> takes it to **27/27**, and to 27/27 again with `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` both
+> `/dev/null` — no ambient identity anywhere. The §4 lesson holds; it just needed a commit.
+
 ---
 
 ## 5 · Re-derivation and correction, 2026-08-27 (third dispatch of the same item)
