@@ -1,190 +1,35 @@
 {
- "align-1px": [
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  }
- ],
- "clean": [
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  }
- ],
+ "align-1px": [],
+ "clean": [],
  "contrast-on-gradient": [
   {
    "rule": "xcheck-contrast-varies",
-   "target": "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
-   "detail": "contrast is not one number across this text: 4.81:1 at the left edge and 1.57:1 at the right. Any single computed value is a fiction, and the right end is the one that fails a reader",
+   "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
+   "detail": "contrast is not one number across this text: 6.15:1 at the left edge and 1.73:1 at the right. Any single computed value is a fiction, and the right end is the one that fails a reader",
    "severity": "high"
   },
   {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "rule": "xcheck-contrast-varies",
+   "target": "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
+   "detail": "contrast is not one number across this text: 5.92:1 at the left edge and 1.71:1 at the right. Any single computed value is a fiction, and the right end is the one that fails a reader",
+   "severity": "high"
   }
  ],
- "contrast-plain": [
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  }
- ],
- "grid-offgrid": [
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  }
- ],
- "hierarchy-inversion": [
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.4px left and 0.6px down of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  }
- ],
+ "contrast-plain": [],
+ "grid-offgrid": [],
+ "hierarchy-inversion": [],
  "optical-centering": [
   {
    "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.5px left and 0.7px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
+   "target": "div.actions:nth-of-type(7) > div.glyph-btn:nth-of-type(2) > span.glyph",
+   "detail": "div.actions:nth-of-type(7) > div.glyph-btn:nth-of-type(2) centres this mark on both axes, but its rendered ink sits 2.0px left and 0.0px down of that container's centre -- it will read as misaligned however correct the CSS is",
    "severity": "medium"
   }
  ],
- "overflow-clip": [
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  }
- ],
- "radius-drift": [
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  }
- ],
- "spacing-gap": [
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  }
- ],
- "token-color-drift": [
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  }
- ],
- "touch-target": [
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  }
- ],
- "type-scale": [
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  }
- ]
+ "overflow-clip": [],
+ "radius-drift": [],
+ "spacing-gap": [],
+ "token-color-drift": [],
+ "touch-target": [],
+ "type-scale": []
 }

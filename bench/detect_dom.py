@@ -99,6 +99,16 @@ class Page:
         p = el["path"].rsplit(" > ", 1)
         return self.by_path.get(p[0]) if len(p) > 1 else None
 
+    def children_of(self, el):
+        """Direct element children. Built once; the naive form is O(n^2) per call."""
+        if not hasattr(self, "_kids"):
+            self._kids = collections.defaultdict(list)
+            for e in self.els:
+                p = self.parent_of(e)
+                if p:
+                    self._kids[p["path"]].append(e)
+        return self._kids[el["path"]]
+
     def backdrop(self, el):
         """Resolve the effective backdrop colour behind an element.
 

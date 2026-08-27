@@ -199,9 +199,12 @@ DEFECTS: list[Defect] = [
             "getBoundingClientRect on the glyph is exactly centred within the button. The "
             "asymmetry lives in the distribution of ink inside the glyph's own box, which no "
             "DOM API exposes. Detecting it requires computing the centroid of the rendered "
-            "pixels and comparing it to the geometric centre."
+            "pixels and comparing it to the geometric centre -- and to the CONTAINER's "
+            "centre, because getBoundingClientRect returns the post-transform box, so the "
+            "glyph's own box moves with the compensation and the offset between them is "
+            "invariant under the very thing being verified."
         ),
-        magnitude="ink centroid ~2px left of the geometric centre",
+        magnitude="ink centroid exactly 2px left of the container's centre",
         severity="medium",
     ),
     Defect(
@@ -290,11 +293,30 @@ tr + tr td {{ border-top: 1px solid {TOKENS["gray200"]}; }}
   width: 44px; height: 44px; border-radius: 22px; background: {TOKENS["blue700"]};
   display: flex; align-items: center; justify-content: center;
 }}
-.glyph {{ color: #FFFFFF; font-size: 16px; line-height: 1;
-         /* Optical compensation: a triangle's ink mass sits behind its
-            bounding-box centre, so geometric centring reads as left-heavy.
-            Measured offset on this glyph at this size: 2.2px left, 1.9px up. */
-         transform: translate(2px, 2px); }}
+/* The play mark is DRAWN, not typed. It was the character U+25B6 until
+   2026-08-27, with a compensation measured off one machine's font -- and a
+   character is not a pinned shape however carefully the font stack is pinned.
+   The fallback that resolves on Linux puts the same glyph's ink low in its line
+   box where Helvetica puts it high, so the authored `translate(2px, 2px)`
+   over-corrected by 3.5px vertically and the CONTROL failed its own centring
+   check on a host the corpus was never run on. A corpus that grades a detector
+   cannot have a ground truth that moves with the host.
+   The triangle is (0,0) (12,8) (0,16), whose centroid is analytically
+   ((0+12+0)/3, (0+8+16)/3) = (4, 8) against a box centre of (6, 8): 2px left,
+   0px vertical, on every machine, by arithmetic rather than by measurement.
+   Drawn with BORDERS rather than the shorter `clip-path: polygon(...)`, because a
+   centroid needs uniform density and clip-path does not give one here: measured
+   at both capture scales, Chromium fills the region below the upper edge at ~55%
+   of the region above it, which is invisible to the eye and biases the ink
+   centroid 0.7px up -- a plausible wrong number of exactly the kind this bench
+   exists to refuse. The border rasteriser fills flat and mirrors exactly. */
+.glyph {{
+  width: 0; height: 0;
+  border-top: 8px solid transparent;
+  border-bottom: 8px solid transparent;
+  border-left: 12px solid #FFFFFF;   /* border-box makes the rect 12x16 */
+  transform: translate(2px, 0);      /* the optical compensation under test */
+}}
 """
 
 BODY_HTML = """
@@ -325,12 +347,21 @@ BODY_HTML = """
   </table>
 </div>
 
+<!-- The 16px step needs a SECOND use, and it needs to be text. Until 2026-08-27
+     the only other 16px element on the page was the play glyph, which carried
+     `font-size: 16px` because it was a character; drawing the mark instead left
+     the step with a single use and rule 3 correctly reported the section title as
+     off a scale of [12, 14, 24]. The page was declaring a 12/14/16/24 scale and
+     using 16 once, propped up by an icon -- a control that was clean for a reason
+     unrelated to its design. -->
+<div class="section-title">Tonight&rsquo;s actions</div>
+
 <div class="actions">
   <div class="action-group">
     <button class="btn-primary">Confirm all deposits</button>
     <button class="btn-secondary">Release held tables</button>
   </div>
-  <div class="glyph-btn"><span class="glyph">&#9654;</span></div>
+  <div class="glyph-btn"><span class="glyph"></span></div>
 </div>
 """
 
