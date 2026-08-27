@@ -86,6 +86,122 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-27 — drain recycle #245: I RAN #244's REASON BEFORE ITS TARGET, AND THE REASON IS WHAT
+  BROKE.** #244 handed forward a lead naming the remaining fail-OPEN membership predicates plus an
+  explicit instruction to run first: *"check the STAGE COUNT before you rank them by feed size,
+  because #242 proved the stage count and not the producer is what moves the floor"*, with
+  `bin/cc-notify` named as the lowest floor on the board *because* it is three-stage. For the TENTH
+  consecutive link the value came from a LEAD rather than a board row — and for the second link
+  running, from executing the lead's REASON rather than its target.
+- **THE SCREEN CONTRADICTS THE RANKING IT WAS SUPPOSED TO JUSTIFY.** Sorting the census by pipe count
+  puts `scripts/postland-verify.sh:3349` (`printf | sed | tr | grep -qxF`, FOUR stages) above
+  `bin/cc-notify:1249` (`printf | jq | grep -qxF`, three). Measured here, 20 trials/point, that
+  ordering is **backwards**: the 3-stage site is always-inverted from 49,152 B; the 4-stage site is
+  still clean there and does not reach 20/20 until 131,072 B. **The ranking was right and the reason
+  was wrong**, which is the more dangerous combination — a correct call that licenses a false rule.
+- 🚨 **STAGE COUNT DOES NOT PREDICT THE FLOOR AT ALL, AND THE CONTROL IS FOUR PIPELINES THAT ARE ALL
+  THREE STAGES.** Only the middle command differs. Needle on line 1, wrong/20:
+
+      bytes     |jq|   |cat|  |sed|  |tr|   2-stage
+      32768      10      0      2      0      0
+      49152      20      0     10      0      0
+      65536      20      3     18      4      3
+      98304      20      5     19     19     20
+     131072      20     20     20     20     20
+
+  A 4× spread across shapes with **identical stage counts**, and a `|tr|` middle that behaves exactly
+  like no middle at all. **#242's rule correctly rejected "the producer"; the replacement it named is
+  not a predictor either.** The predictor is WHICH command sits immediately upstream of grep.
+- ✅ **THE MECHANISM, READ OFF `PIPESTATUS` RATHER THAN INFERRED — and it is the carryable half.**
+  In every inverted run **`grep` itself exits 0: the match SUCCEEDED.** The 141 comes from above it.
+
+      49,152 B   jq-middle  (0 141 0)     producer fine, jq dies
+      49,152 B   2-stage    (0 0)         clean
+     131,072 B   2-stage    (141 0)       only now does the producer itself die
+
+  A bash **builtin** producer survives to ~98 KB because the 64 KiB pipe buffer absorbs its whole
+  output in one write. **`jq` must parse its entire input before it emits anything**, so it is
+  GUARANTEED to still be writing when grep exits, and dies once its own output passes ~20 KB. The
+  corollary is the counter-intuitive one: **a stage that SHRINKS its stream RAISES the floor of
+  everything below it** — `sed 's/#.*//'` collapses postland-verify's manifest from 14,407 B to
+  **262 B** before grep ever sees it, which is why the four-stage site is the safer of the two.
+- 🚨 **CONSEQUENCE: #244 SIZED THE TWO TRANSCRIPT-FED SITES AGAINST A FLOOR THAT IS NOT THEIRS.** It
+  reported them at *"84% of the 37,121 B floor, margin 191 tool calls, growing"*. But 37,121 B is the
+  **two-stage builtin-producer** floor, and the producer at both sites is **`jq` reading a FILE**.
+  Measured on that exact pipeline: 100 tool_result records (3,332 B of jq output) **0/20**; 250
+  records (8,282 B) **20/20 — always, not racy**. #244's own corpus figure was 1,007 tool_results /
+  31,217 B, roughly **4× PAST** the crossing. **There is no margin, and there has not been one on the
+  largest transcripts for as long as they have existed.** A floor is a property of the SHAPE; carrying
+  one between shapes overstated this margin by ~4.5× in the unsafe direction.
+- 🚨 **AND THE FAILURE IS TOTAL, NOT OCCASIONAL — which is a stronger statement than a probability.**
+  At both sites the line's only contribution is its `return 1` branch; on a miss the fall-through is
+  already the right answer. Above the floor that branch is **UNREACHABLE**, so `tool_in_flight` does
+  not merely err — it is **INERT**, always answering *"a tool is running"*. In
+  `hooks/teammate-auto-shutdown.sh` an idle teammate therefore reads as mid-call, the shutdown never
+  fires, and the pane and its worktree are orphaned — **the leak that hook exists to close, wearing
+  the mask of the false-close bug its own comment says the predicate was added to fix.**
+- ✅ **THREE DRAINED, ALL INLINE** (a census delta cannot tell *drained in place* from *moved out of
+  the detector's view* — both read `LOST=1`):
+  · `bin/cc-classify:389` — `tool_in_flight`. **PAST its floor on the measured corpus.**
+  · `hooks/teammate-auto-shutdown.sh:532` — `_tool_in_flight`. Same, and the destructive one.
+  · `bin/cc-notify:1249` — `target_live`'s it2 arm. Latent (11 panes; crossing ~1,000).
+- ✅ **ONE ARM + ONE NEG CONTROL, sized from a curve measured for THIS shape rather than borrowed:**
+  300 panes (11,137 B of jq output) 0/20 · 600 (22,237 B) **13/20 RACY** · 1,000 (37,037 B) 20/20.
+  The arm uses **1,500**, inside the deterministic region — *a racy fixture is a flaky test, not a
+  pin*. ⚠️ **The target had to be UNREGISTERED**: `target_live()` decides a registered pane from the
+  registry and **RETURNS before it ever reaches the it2 list**, so a registered fixture never
+  exercises the line at all. `tests/cc-notify.bats` **108 → 110**.
+- ✅ **MUTANT: prediction written before the run — arm RED, NEG control GREEN, total reds 1 — EXACT**,
+  subject restored byte-identically by sha256. ⚠️ **AND THE FIRST MUTANT ATTEMPT APPLIED TO ZERO
+  SITES.** A `perl -0pi` escaping mistake changed nothing, the arms duly passed, and that "green" was
+  **vacuous** — caught only by an applied-count control printing `0 site(s)`. The replacement is now
+  assertion-gated on matching **exactly once**. *A mutant run without a did-it-apply control is not a
+  test of the subject; it is a test of nothing, and it reads identically to success.*
+- ✅ **THE RATCHET SHRANK, which is what proves the drains landed in the detector's view.** The lint's
+  downward arm named all three sites itself and refused the tree until the counts came down.
+  Allowlist **56 → 55** rows (cc-notify's row deleted; the other two 3→2 and 4→3). `--census`
+  **147 → 144, LOST=3, NEW=0**, PRE arm extracted from `origin/main` via `git archive | tar -x`
+  rather than remembered, `CC_PIPEFAIL_ROOT` pinned on BOTH arms.
+- ✅ **Lints, each RUN and named rather than claimed:** `bash -n` rc 0 on all three changed shell
+  files · `shellcheck` rc 0 on cc-classify and teammate-auto-shutdown · the bare pipefail ratchet
+  rc 0 · `--selftest` **30/30** · `bats-assert-liveness` rc 0 · `bats-shellcheck-lint --range` rc 0
+  (*"clean — 1 suite(s) scanned, 0 blocking finding(s), 0 unanalyzable"*) · `alarm-polarity-lint`
+  **RUN, not declared** (clean, 0 inverted predicates) — #244 declared it not-run on the grounds that
+  none of its files was an alarm emitter; `bin/cc-notify` writes `CC_COMMS_ALARM_DIR`, so it was run.
+  ⚠️ `shellcheck` rc 2 on `bin/cc-notify` is **PRE-EXISTING on origin/main** (8 findings both sides,
+  **none on the changed lines**) and is not attributed here.
+- ⚠️ **`bats-assert-liveness` CAUGHT MY OWN NEG FIXTURE GUARD AS A DEAD ASSERTION.** I wrote it as
+  `cmd && { echo …; false; }`; the lint named it `DEAD [and-absorbed]`. Rewritten as an `if … fi`.
+  **The check that proves the arm is not vacuous was itself vacuous** — and only the lint could see it.
+- 🚨 **DECLARED, NOT CLAIMED — WHAT THIS BOX COULD NOT VERIFY, AND WHY NO ARM WAS ADDED FOR TWO OF THE
+  THREE SITES.** This link ran on **Linux**, and the repo's own CI comment (`hermetic.yml:15`) already
+  measured why the suite job is `macos-latest`: *312 suites plausible on macOS against 224 on Linux*,
+  the gap being BSD userland — **`date -v/-r/-j` (48 suites)**. `tests/cc-classify.bats` uses `date -j`
+  **16 times** and baselines **18-ok / 65-notok** here; `tests/teammate-auto-shutdown.bats` **52 / 2**.
+  **Both are byte-for-byte UNCHANGED by this diff** (re-run after, identical counts), but neither can
+  be baselined GREEN on this box — so **no arm was written into either.** Adding a case to a suite that
+  cannot run is a green that means *absent*, which is precisely the defect the cc-notify arm exists to
+  prevent. Those two sites are drained on the strength of the mechanism and the measurement; **their
+  behavioural arms are the named residue for #246.** ⚠️ **And the constants do not transfer:** these
+  are Linux / 64 KiB-pipe floors, while macOS pipes start at **16 KiB**, so the real crossings on the
+  operator's box are **LOWER, not higher** — the direction is safe, the numbers are not portable.
+- **THE BOARD AND THE STORES: NOT READ, AND THAT IS A FACT ABOUT THIS BOX, NOT A SKIPPED STEP.** This
+  link ran in a **remote cloud container with no `~/.claude/autonomy/` at all** — no `backlog.jsonl`,
+  no ledger, no `cc-backlog`, no live-layer sha, no mailbox, no `cc-roles`. Every standing reading
+  #240–#244 take at open and close is **structurally unavailable**, so none is reported rather than
+  guessed. **I closed NOTHING and FILED NOTHING**, and `70f0001c657b` — the drain's own SSOT row — was
+  not hand-touched. The one store-shaped fact I can assert is the tree's: **origin/main at open, 0
+  ahead / 0 behind, census 147 matching #244's close exactly.**
+- 🚨 **THE LEAD FOR #246, WITH ITS REASON ALREADY RUN.** Rank the remaining census by **what sits
+  immediately upstream of `grep -q`**, never by stage count and never by the allowlist's count column.
+  The `jq`-adjacent sites are the live class; a `printf`-builtin-adjacent site needs ~98 KB before it
+  moves and most are structurally bounded well under it. ⚠️ **Specifically retired from the lead:**
+  `scripts/branch-reaper.sh` ×5 — #244 flagged these as the destructive ones (*"inversion REAPS a
+  protected or worktree-held branch"*), and the severity is real, but **four of the five feed a SINGLE
+  BRANCH NAME (`printf '%s' "$b"`, ~40 B) into grep**. That is bounded by git's own ref-name limit and
+  **can never reach any floor on any platform.** Severity ranked them; reachability retires them. The
+  fifth and the `worktree_branches` pair are bounded by the worktree count and are equally far off.
+  **The genuinely open items are the two macOS-pinned arms above.**
 - **2026-08-26 — drain recycle #244: method 213 over the allowlist — THE CLASS WAS DECLARED CLOSED
   ON A `scripts/`-ONLY SCREEN, AND THE SITE NAMED AS ITS LAST MEMBER IS ONE THE DETECTOR CANNOT
   SEE.** I took #243's recommendation 0 (run method 213 over `scripts/pipefail-sigpipe-allow.txt`,
