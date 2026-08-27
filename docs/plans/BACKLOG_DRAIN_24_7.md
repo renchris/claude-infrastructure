@@ -217,6 +217,44 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   for it"*) — **a host suite EXCLUDED from the corpus is falsely exonerated by a green that never
   ran it.** Left because touching it pulls the 130-test, pathologically slow
   `tests/postland-verify.bats` into the draw. **Take it on a link whose diff is otherwise small.**
+- **#250's CLOSE AND FLOOR, added after the entry above was composed — and the reason this addendum
+  exists is itself the lesson.** The rule *"compose the entry BEFORE the land, because a correction
+  is free until you have pushed it"* is sound, and following it means the entry is written before
+  the close census exists. **So a link that obeys the rule lands a §2.1 entry with no close data in
+  it, and only notices afterwards.** #249's entry carried close numbers because it composed later;
+  mine did not. **The fix is not to compose later — it is to plan the entry with a CLOSE section
+  from the start and fill it in the same working tree before the land.** Stated here so the next
+  link designs for it rather than discovering it.
+- **CLOSE 2026-08-27T22:08:46Z: 325 open / 224 blocked / 2,341 done / 1 claimed** (549 combined,
+  2,891 rows), both partitions asserted. Against the open (10:45:03Z, 331 / 217 / 2,339 / 4):
+  **THIRTEEN status transitions, ZERO arrivals, ZERO departures, across ELEVEN HOURS AND TWENTY-THREE
+  MINUTES.** Six open → blocked (`37b112d8950d`, `485f8f87eb5f`, `564d151b76e5`, `abf5e7509608`,
+  `badb132df232`, and **`70f0001c657b`, the drain's OWN SSOT row — status reported, NOT worked**);
+  four claimed → blocked (`0c8b39b67665`, `193ae8ddce72`, `e981656df348`, `f85fce7c26f5` — **the
+  same four #243 and #249 each measured, so this is the FIFTH turn of one loop, not progress**); one
+  blocked → claimed (`70ed289c10fb`); and two blocked → **done**.
+- 🚨 **THOSE TWO CLOSES MOVED `done` FOR THE FIRST TIME SINCE #229 — AND NEITHER IS OURS.**
+  `9f8e7c2fd37e` and `aaba2d20b870` are both **`reso-web-app`** rows under `master-operator-gated`,
+  both operator-gated production deploys, and both ARRIVED during #249's link. **Read as a bare
+  delta, 2,339 → 2,341 says the actuator finally closed something after twenty-one links. Folded on
+  `.project` it says a sibling project's operator ran a deploy, and the claude-infrastructure `done`
+  count has still not moved since #229.** ✅ **#236's rule, in its sharpest instance yet: FOLD ON
+  `.project` BEFORE READING A `done` DELTA AS ACTUATION — and #250's converse, that a MOVING `done`
+  is no more self-interpreting than a flat one.**
+- ⚠️ **TWO FLOORS, AND THE FIRST WAS NOT A READING.** Floor 1 at **22:10:12Z** was **86 seconds**
+  after the close census and was identical in all four columns and all five lists — #241 got the
+  same non-result at 32 seconds. **A floor taken immediately after the close census is not an
+  independent reading.** Floor 2 at **22:18:08Z**, a **9m22s** gap, is the last and is the one to
+  `comm` against: **325 / 224 / 2,341 / 1, ZERO transitions and ZERO arrivals** — a gap that
+  genuinely held nothing, like #243's sixteen minutes and #246's four.
+- **STORES across the three moments** (open / close / floor2): postland RED pages **0 / 0 / 0** over
+  denominators **2,749 / 2,753 / 2,753** — the 154th, 155th and 156th consecutive zeroes, and
+  **eleven hours without the ~5× denominator collapse #244 and #246 both watched happen, which is
+  the longest anyone has watched it without one**; postland stamps **489 / 490 / 490** — an advance,
+  under a `GATE` marker that has now read `stale` for twenty-seven links; `~/.claude/autonomy/pages`
+  **2,189/118 → 2,192/107 → 2,200/109**, up eleven overall while the `.page` count fell eleven then
+  rose two; inbox-guard `.escalated` **453 / 451 / 451**, every file in that store being an
+  `.escalated` marker, so those are ONE number and not a ratio. Load **16.8 / 21.7 / 39.5**.
 - **2026-08-27 — drain recycle #249: method 219 — A PARAMETER RENAME AT A FUNCTION BOUNDARY HIDES
   A SITE FROM THE VERY GREP THAT FOUND ITS SIBLINGS.** #244 landed the rule that when you drain a
   named predicate you should grep the file for its FEED VARIABLE rather than for its name, and that
