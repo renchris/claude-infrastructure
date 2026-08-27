@@ -1341,3 +1341,80 @@ STUB
   grep -q "invoked=cloud-return from=$deployed --sweep" "$marker" || false
   grep -q "invoked=cloud-refusal-route from=$deployed --sweep" "$marker" || false
 }
+
+@test "the DEPLOYED copy refused by a CLAUDE_CONFIG_DIR divergence NAMES itself, and a checkout copy still does not" {
+  # THE SPELLING THE GATE'S ONE REAL CALLER ACTUALLY USES, which no arm in this suite exercised.
+  # The case above fixtures `CLAUDE_CONFIG_DIR` to the SAME root it invokes the deployed copy from,
+  # so `$0` and `$_cc_cfg/scripts/autonomy-sweep.sh` agree BY CONSTRUCTION — it can prove the gate
+  # admits the deployed path and refuses a verifier copy, and it is structurally blind to the two
+  # disagreeing. But they are supplied by different things and can: the plist hardcodes
+  # `~/.claude/scripts/autonomy-sweep.sh` (launchd/com.chrisren.autonomy-sweep.plist:10) while
+  # `_cc_cfg` reads CLAUDE_CONFIG_DIR, which migrations 0013/0009/0006 record being exported as
+  # `~/.claude-next`. Then the gate refuses ITS OWN CALLER and both cloud rails skip on every tick,
+  # filing the byte-identical row a healthy checkout copy files — a rail that dies by saying
+  # nothing distinguishable. That is the shape behind the lane's 08-17 landing-rate step
+  # (docs/research/cloud-land-arm-step-2026-08-25.md; backlog f85fce7c26f5).
+  local deployed="$HOME/.claude/scripts"          # what the plist invokes — hardcoded, not derived
+  local cfg="$HOME/.claude-next"                  # what CLAUDE_CONFIG_DIR says instead
+  local checkout="$BATS_TEST_TMPDIR/checkout/scripts"   # neither: an ordinary working copy
+  mkdir -p "$deployed" "$cfg/scripts" "$checkout"
+  export CLAUDE_CONFIG_DIR="$cfg"
+  export CC_CLOUD_STATE="$BATS_TEST_TMPDIR/cloudstate"; mkdir -p "$CC_CLOUD_STATE"
+
+  local marker="$BATS_TEST_TMPDIR/cloud-return-invocations"; : >"$marker"
+  # Seed all three copies identically, so the ONLY axis that moves below is the invoked path.
+  local d t
+  for d in "$deployed" "$cfg/scripts" "$checkout"; do
+    cp "$SWEEP" "$d/autonomy-sweep.sh"; chmod +x "$d/autonomy-sweep.sh"
+    mkdir -p "$d/lib" && cp "$REPO"/scripts/lib/*.sh "$d/lib/" 2>/dev/null
+    for t in cloud-return cloud-refusal-route; do
+      cat >"$d/$t.sh" <<STUB
+#!/bin/bash
+echo "invoked=$t from=$d \$*" >>"$marker"
+STUB
+      chmod +x "$d/$t.sh"
+    done
+  done
+
+  # ── THE SUBJECT: the plist's own path, with CLAUDE_CONFIG_DIR pointing elsewhere ───────────────
+  : >"$CC_IDL"
+  run "${SWEEP_TO[@]}" bash "$deployed/autonomy-sweep.sh"
+  # 1. STILL FAIL-CLOSED. Naming the divergence must never be confused with tolerating it: a copy
+  #    that fails the gate may not land a branch, mark a backlog row done or brief a VM, whatever
+  #    the reason it failed. This is the assertion that keeps the fix from re-opening 2026-08-17.
+  ! grep -q "from=$deployed" "$marker" || false
+  # 2. …and it is NAMED, in both ledgers, with a token a healthy skip cannot produce.
+  grep -q '"cloud_return_rc":"skipped-config-divergence"' "$CC_IDL"
+  grep -q '"cloud_refusal_rc":"skipped-config-divergence"' "$CC_IDL"
+  # 3. …and the operator is told on stderr, naming BOTH paths — the row alone is only findable by
+  #    someone already looking, which is the state that lasted eight days.
+  [[ "$output" == *"CONFIG DIVERGENCE"* ]] || false
+  [[ "$output" == *"$deployed/autonomy-sweep.sh"* ]] || false
+  [[ "$output" == *"$cfg/scripts/autonomy-sweep.sh"* ]] || false
+
+  # ── CONTROL 1: an ORDINARY checkout copy is still the quiet, EXPECTED skip ─────────────────────
+  # Without this, a token that fired on every non-deployed copy would satisfy every assertion above
+  # and carry exactly zero bits — the alarm-that-always-fires failure this repo ratchets on
+  # (memory: positive-control-the-denominator). One axis moves: the invoked path.
+  : >"$CC_IDL"; : >"$marker"
+  run "${SWEEP_TO[@]}" bash "$checkout/autonomy-sweep.sh"
+  ! grep -q "from=$checkout" "$marker" || false
+  grep -q '"cloud_return_rc":"skipped-not-deployed"' "$CC_IDL"
+  grep -q '"cloud_refusal_rc":"skipped-not-deployed"' "$CC_IDL"
+  # FIELD, never a bare substring: both rows carry a `note:` that ENUMERATES every token including
+  # this one, so `grep -q skipped-config-divergence` matches on a perfectly healthy row. Asserting
+  # the phrase instead of the value is the same defect one layer up, and it fired here first.
+  ! grep -q '"cloud_return_rc":"skipped-config-divergence"' "$CC_IDL" || false
+  ! grep -q '"cloud_refusal_rc":"skipped-config-divergence"' "$CC_IDL" || false
+  [[ "$output" != *"CONFIG DIVERGENCE"* ]] || false
+
+  # ── CONTROL 2: THE DENOMINATOR. With the two in agreement the rail still RUNS ──────────────────
+  # `$cfg/scripts` IS the deployed copy under this CLAUDE_CONFIG_DIR, so this is the healthy box:
+  # same script, same stubs, both tools invoked. A gate that refused everything would pass the
+  # subject and control 1 and silently disable the whole return rail — which is the outcome being
+  # investigated, not a fix for it.
+  : >"$CC_IDL"; : >"$marker"
+  "${SWEEP_TO[@]}" bash "$cfg/scripts/autonomy-sweep.sh" >/dev/null 2>&1 || true
+  grep -q "invoked=cloud-return from=$cfg/scripts --sweep" "$marker" || false
+  grep -q "invoked=cloud-refusal-route from=$cfg/scripts --sweep" "$marker" || false
+}
