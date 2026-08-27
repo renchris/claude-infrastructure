@@ -27,7 +27,6 @@ hooks/qos-rewrite.sh	2
 hooks/research-precognition-nudge.sh	1
 hooks/session-index-sweep.sh	1
 hooks/task-quality-gate.sh	2
-hooks/teammate-auto-shutdown.sh	4
 hooks/teammate-checkpoint.sh	1
 hooks/waiting-recycle.sh	2
 install.sh	3

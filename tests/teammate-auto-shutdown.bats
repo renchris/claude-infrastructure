@@ -1190,3 +1190,91 @@ EOF
   run grep -c "STILL PRESENT" "$LOGF"
   [ "$output" -eq 0 ]
 }
+
+# ── THE SIGPIPE-INVERSION PAIR (2026-08-27) ─────────────────────────────────────────────────────
+# This hook runs under `set -uo pipefail`, and every membership/emptiness question in it used to be
+# a `producer | grep -q …` pipeline. On a MATCH `grep -q` exits immediately, the producer takes
+# SIGPIPE, pipefail promotes it, and the caller reads the pipeline as FAILED — so a match reads as
+# NO MATCH. Two of those sites decided whether a member's worktree was dirty; their inversion is
+# fail-OPEN in the one direction that destroys data (no defer, and no belt-and-suspenders patch).
+#
+# WHY THESE TWO ARMS AND NOT ONE. The first pins the SPELLING and dies the day someone rewords the
+# fix; the second pins the MECHANISM and survives any rewording, because it feeds a REAL producer a
+# REAL feed sized from the measured regime and asks only what the answer was. Neither alone is
+# enough: the spelling arm cannot tell a safe rewrite from an unsafe one, and the mechanism arm
+# cannot see a re-introduced `-q` at a site whose feed is currently small.
+
+@test "no pipeline in this hook asks a question with grep -q (the drained-spelling ratchet)" {
+  # Comment lines are stripped FIRST: the drained sites each carry a comment explaining the `-q`
+  # hazard, and a raw grep would convict the very file the fix landed in.
+  run bash -c "grep -vE '^[[:space:]]*#' '$H' | grep -cE '\\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q'"
+  [ "$output" -eq 0 ]
+  # PAIRED POSITIVE CONTROL — without it a broken pattern reads as a clean file. The same predicate
+  # over a seeded copy MUST report exactly 1, so this arm cannot pass by being unable to match.
+  printf 'x() {\n  git status --porcelain | grep -q .\n}\n' > "$D/seeded.sh"
+  run bash -c "grep -vE '^[[:space:]]*#' '$D/seeded.sh' | grep -cE '\\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q'"
+  [ "$output" -eq 1 ]
+}
+
+@test "the dirty-tree predicate answers DIRTY on a feed past the measured inversion floor" {
+  # SIZED FROM THE MEASUREMENT, and the number is not arbitrary. Measured 2026-08-27 on this box,
+  # 20 trials per size, with the drained twin reading 0/20 at every size as the control:
+  #   7,500 B 0/20 · 12,000 B 0/20 · 16,500 B 1/20 · 21,000 B 19/20 · 25,500 B 19/20 ·
+  #   30,000 B 20/20 · 75,000 B 20/20
+  # Past 30,000 B a re-introduced `-q` fails EVERY run rather than one in twenty, so this arm is
+  # deterministic by construction rather than a coin flip in CI. Three real worktrees on this box
+  # measured 40,031 / 48,474 / 88,840 B the same day, which is why the floor is not academic.
+  G="$D/dirtyrepo"
+  mkdir -p "$G"
+  git -C "$G" init -q
+  git -C "$G" config user.email t@local
+  git -C "$G" config user.name t
+  i=0
+  while [ "$i" -lt 900 ]; do
+    i=$((i + 1))
+    printf 'x\n' > "$G/f$(printf '%06d' "$i")-padpadpadpadpadpadpadpadpadpad.txt"
+  done
+  # VACUITY GUARD: the fixture must actually REACH the regime the assertion is about. A shrunken
+  # fixture would make this arm pass while proving nothing (memory: control-fixture-must-reach-the-
+  # bugs-regime).
+  FEED="$(git -C "$G" status --porcelain | wc -c | tr -d ' ')"
+  [ "$FEED" -ge 30000 ] || false
+  # THE MECHANISM, AND IT EXECUTES THE HOOK'S OWN LINE RATHER THAN A RETYPED COPY. A retyped
+  # pipeline would pass forever no matter what the hook says — the arm would be calibrated to a
+  # string instead of to the subject. Both dirty-tree sites must share ONE spelling; if they ever
+  # diverge this count changes and the arm says so before anything else does.
+  # ANCHOR ON THE PIPELINE'S SHAPE, NOT ON THE TOKEN. A bare `status --porcelain` grep counts 5 —
+  # it matches the COMMENTS that document this very fix, and a third, unrelated site that writes
+  # the patch BODY (`… --porcelain … || true`, no pipe). Comment lines stripped first, and the
+  # anchor carries the pipe, so this selects exactly the two predicates and nothing that describes
+  # them (memory: a grep that counts a token matches the comment that documents it).
+  [ "$(grep -vE '^[[:space:]]*#' "$H" | grep -cE 'status --porcelain.*\|[[:space:]]*grep')" -eq 2 ] || false
+  PRED="$(grep -vE '^[[:space:]]*#' "$H" | grep -E 'status --porcelain.*\|[[:space:]]*grep' | head -1 \
+          | sed -e 's/^[[:space:]]*if[[:space:]]*//' -e 's/;[[:space:]]*then[[:space:]]*$//')"
+  # EXTRACTION GUARD: a blank or malformed lift must not read as a pass (memory:
+  # suppressed-stderr-turns-a-failed-command-into-a-zero).
+  [ -n "$PRED" ] || false
+  [ "$(printf '%s' "$PRED" | grep -c 'git -C')" -eq 1 ] || false
+  run env WORKTREE="$G" bash -uo pipefail -c "$PRED"
+  [ "$status" -eq 0 ]
+}
+
+@test "NEGATIVE CONTROL: the same predicate answers CLEAN on a clean tree" {
+  # Without this the arm above passes by always answering 0 — a predicate that can only ever say
+  # DIRTY is not a predicate (memory: guard-proxy-fails-in-both-directions).
+  G="$D/cleanrepo"
+  mkdir -p "$G"
+  git -C "$G" init -q
+  git -C "$G" config user.email t@local
+  git -C "$G" config user.name t
+  printf 'x\n' > "$G/only.txt"
+  git -C "$G" add only.txt
+  git -C "$G" commit -qm seed
+  [ "$(git -C "$G" status --porcelain | wc -c | tr -d ' ')" -eq 0 ]
+  PRED="$(grep -vE '^[[:space:]]*#' "$H" | grep -E 'status --porcelain.*\|[[:space:]]*grep' | head -1 \
+          | sed -e 's/^[[:space:]]*if[[:space:]]*//' -e 's/;[[:space:]]*then[[:space:]]*$//')"
+  [ -n "$PRED" ] || false
+  run env WORKTREE="$G" bash -uo pipefail -c "$PRED"
+  [ "$status" -ne 0 ]
+  true
+}
