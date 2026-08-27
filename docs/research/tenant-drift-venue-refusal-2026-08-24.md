@@ -73,3 +73,52 @@ Neither `cc-backlog` verb could be run from here — this container has no
 `~/.claude/autonomy/backlog.jsonl`, so `block`/`done`/`reopen` would have created a fresh store
 that nothing reads. A write that no reader can see is a fake discharge, which is the failure this
 document exists instead of.
+
+## 5. It re-dispatched anyway — §4 is not a park, and could never have been one
+
+**2026-08-27, three days later.** The same item `485f8f87eb5f` was dispatched to a second cloud VM
+(branch `claude/fire-20260827T192028Z-61984-1`, HEAD `8ca08d17`), scope `renchris/claude-infrastructure`,
+`/Users/chrisren/Development` absent, no `~/.claude/autonomy/`, `cc-notify` unreachable (it needs an
+iTerm2 pane). Every venue fact in §1 re-measured identical. The brief carried no trace of this
+document — it re-derived the premise-check and FIRST-STEP instructions from scratch, against a repo
+it still cannot read.
+
+**The loop is structural, not an oversight.** §4's remedy is a `cc-backlog block` command, and §4's
+own last paragraph says that command is unrunnable from the only venue that ever reaches this item.
+So the refusal can only ever be written as prose, prose does not change the row's state, and the
+row re-enters the next wave unchanged. A document cannot park an item; only the store can. **This
+file has now been read by the dispatcher exactly zero times and by refused workers twice.**
+
+**And the class is not new.** `docs/research/` carries ten venue-refusal documents — `2026-08-11`,
+`-14`, `-15` (×2), `-16`, `-17` (×2), `-21`, `-22`, `-24` — at least seven of them the same shape:
+an item reaching a VM that cannot see its subject. §1's framing of this item as "the 107th instance …
+the residual case the join could not see" was itself written nine days after
+`venue-foreign-subject-repo-2026-08-15.md` documented the identical *filed-under-X-specified-against-Y*
+route, and one day after `venue-dod-offtrunk-2026-08-24.md`. Each refused session writes a fresh
+document; none can write the store; the count of documents grows and the count of parked items does
+not. **The doc-per-refusal habit is the visible symptom of the missing write, and adding an eleventh
+document would have been this session's contribution to it** — hence this section rather than a new
+file.
+
+Not fixed from here, for the same reason as §1: widening `cross_repo()` (bin/cc-eligible:766) to key
+on an item's *target* repo rather than its `project` field would be a cloud VM editing the predicate
+that admits cloud VMs, which `bin/cc-venue`'s guard forbids by name, and this shallow clone cannot
+read the 107-instance history that justifies the arm's current exclusions. It is also not this item's
+scope. It stays an on-box decision.
+
+## 6. Premise state, re-checked 2026-08-27
+
+Unchanged from §2, and now staler. **Not refuted; not confirmable from this venue.** Nothing readable
+here contradicts any claim in the item. The last direct measurement of the failing workflow is still
+run `31401486855` (2026-08-10T15:03Z) — now **17 days old**. The §3 fix is still *pre-derived and
+unverified against reso's trunk*: an on-box session must run the FIRST-STEP check
+(`git show origin/main:.github/workflows/tenant-drift.yml`) before writing the diff, because a cure
+that already landed would make §3's patch a revert. Re-confirmed from here: this repo is not the
+carrier — no `tenant-drift.yml` on `origin/main`, and `.github/workflows/` holds only `diagrams.yml`
+and `hermetic.yml`.
+
+The one action that ends this loop is still §4's command, and it still needs a box with the store:
+
+```
+cc-backlog block 485f8f87eb5f --needs "dispatch on-box: target is renchris/reso-management-app/.github/workflows/tenant-drift.yml, unreachable from a cloud VM (see docs/research/tenant-drift-venue-refusal-2026-08-24.md §5 — refused twice, 08-24 and 08-27)"
+```
