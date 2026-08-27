@@ -379,6 +379,14 @@ txtool() { printf '{"type":"assistant","timestamp":"%s.000Z","message":{"role":"
 # the tool RETURNED (a user tool_result record appended) ⇒ turn finished
 txtoolresult() { printf '{"type":"user","timestamp":"%s.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"%s"}]}}\n' "$(iso "$2")" "${3:-tu1}" >> "$D/proj/slug/$1.jsonl"; }
 wait_gone() { local i=0; while [ -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i=$((i+1)); done; [ ! -e "$1" ]; }
+# BOUNDED POLL FOR A LOG LINE — the same remedy 366dadddb gave the shared-cwd guard, now given to
+# the SHAPE rather than to one arm. `wait_gone` bounds the wait on the DIRECTORY disappearing, but
+# the reap writes "worktree removed: …" AFTER unlinking it, so a grep placed straight after
+# wait_gone reads a window in which the directory is already gone and the line is not yet flushed.
+# On an idle desk that window is invisible; inside the land gate's smoke it is not — this suite went
+# RED there and GREEN on the exoneration re-run, which ship-land correctly refuses to call a flake.
+# The assertion is UNCHANGED and still required; only the guess about how long to wait is gone.
+wait_log() { local i=0; while [ "$i" -lt 100 ]; do if grep -qF "$1" "$LOGF"; then return 0; fi; sleep 0.1; i=$((i+1)); done; grep -qF "$1" "$LOGF"; }
 
 # (A) NAME leg — a worktree named for the member resolves from git itself, and IS removed.
 #     POSITIVE CONTROL for the ownership gate: proves it is not merely "never remove".
@@ -394,7 +402,7 @@ wait_gone() { local i=0; while [ -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i=
   [ "$status" -eq 0 ]
   grep -q "Auto-shutdown idle teammate: $member" "$LOGF"     # resolved ⇒ reached the reap
   wait_gone "$wt"                                            # and the OWNED worktree was removed
-  grep -q "worktree removed: $wt" "$LOGF"
+  wait_log "worktree removed: $wt"
 }
 
 # (B) SHARED cwd — THE data-loss guard. On the implicit-team model every member's config `cwd` is the
@@ -440,7 +448,7 @@ wait_gone() { local i=0; while [ -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i=
   run hookrun "$member" "$team" "$sid" /nonexistent-cwd
   [ "$status" -eq 0 ]
   wait_gone "$wt"
-  grep -q "worktree removed: $wt" "$LOGF"
+  wait_log "worktree removed: $wt"
 }
 
 # (C) TOOL-IN-FLIGHT — a teammate mid-tool_use is LIVE. Observed 2026-07-29: a teammate actively
@@ -511,7 +519,7 @@ wait_gone() { local i=0; while [ -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i=
   [ "$status" -eq 0 ]
   grep -q "Auto-shutdown idle teammate: $member" "$LOGF"
   wait_gone "$wt"                                            # the member's OWN worktree was removed…
-  grep -q "worktree removed: $wt" "$LOGF"
+  wait_log "worktree removed: $wt"
   [ -d "$D/repo4" ]                                          # …and the shared repo root was NOT touched
 }
 
