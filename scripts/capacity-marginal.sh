@@ -85,9 +85,17 @@
 # Usage:
 #   capacity-marginal.sh sample  [--window-s N] [--interval-s N] [--out FILE]
 #   capacity-marginal.sh analyze [--in FILE] [--json]
+#   capacity-marginal.sh run     [--out FILE] [--interval-s N] [--chunk-s N] [--max-s N]
+#                                [--repeat-refusals N] [--force]
+#   capacity-marginal.sh classify <analyze-exit-code>   # analyze's text on stdin; the seam `run`
+#                                                       # decides with, exposed so it is testable
+#
+# `run` is the DoD's §6 protocol as a program rather than a worksheet: sample a chunk, analyze the
+# whole file so far, and extend until the verdict stops being NO-ATTRIBUTION *or* the same refusal
+# repeats on informative windows — which §6 says is itself the finding. See § THE CONVERGENCE RULE.
 #
 # Exit: 0 coefficient emitted (all controls passed) · 1 NO-ATTRIBUTION (a control failed) ·
-#       2 usage error · 3 NO-DATA (nothing sampled / file unreadable).
+#       2 usage error · 3 NO-DATA (nothing sampled / file unreadable / the ACTIVE sensor is dead).
 #
 # Seams (all read with an explicit default; none may be empty):
 #   CC_MARG_TAU(60)                 load1 time constant, seconds — the independence spacing
@@ -99,6 +107,33 @@
 #   CC_MARG_MIN_ACTIVE_LEVELS(3)    distinct active levels required by C3
 #   CC_MARG_EXEC_RE                 regex matching a session's executable path (comm), default below
 #   CC_MARG_OUT                     default sample output path
+#   CC_MARG_CHUNK_S(900)            `run`: seconds sampled between re-analyses
+#   CC_MARG_MAX_S(14400)            `run`: total wall-clock deadline for the whole protocol
+#   CC_MARG_REPEAT_REFUSALS(3)      `run`: identical informative refusals that end the protocol
+#   CC_MARG_RUN_NO_SAMPLE           `run`: TEST SEAM — stand the sampler down, let the clock run
+#
+# ══ THE CONVERGENCE RULE (`run`) ════════════════════════════════════════════════════════════════
+# §6 of the adjudication says the honest protocol is "sample, analyze, and extend the window until
+# the verdict stops being NO-ATTRIBUTION *or* the refusal repeats with the same term across several
+# windows — which would itself be the finding". That sentence is the whole loop, and it turns on a
+# distinction a naive driver would erase:
+#
+#   · A C2 failure worded "uninformative, not refuting" is NOT a refusal. It means `n_eff` has not
+#     yet reached the floor — the window is young, not the instrument wrong. `n_eff` grows
+#     monotonically as the file grows, so the ONLY correct response is to extend. A driver that
+#     counted it toward "the refusal repeats" would conclude "the process census is not the right
+#     instrument" from a window that was merely too short, inverting the exact distinction this
+#     script was built to make (it is B3's defect, mechanised).
+#   · A C3 failure naming UNMEASURABLE rows is not a finding about the box at all — it means
+#     `cc_sp_active` could not be read (off-box, or spawn-presence's beat directory absent). No
+#     amount of extending fixes a dead sensor, so `run` PREFLIGHTS it and refuses in the first
+#     second rather than at hour four. That refusal is NO-DATA (3), never NO-ATTRIBUTION (1):
+#     "could not measure the regressor" must not read as "the census failed its control".
+#   · A repeat only counts when the SAME term set fails. Different terms failing in different
+#     windows is a moving target, not a reproduced refusal.
+#
+# The loop analyzes the whole growing file each time, never the latest chunk alone — `analyze` is
+# re-runnable over a growing file by construction, and the controls are properties of the SERIES.
 set -uo pipefail
 
 CC_MARG_TAU="${CC_MARG_TAU:-60}"
@@ -112,6 +147,9 @@ CC_MARG_MIN_ACTIVE_LEVELS="${CC_MARG_MIN_ACTIVE_LEVELS:-3}"
 # `.claude-NNN/node_modules` form is the versioned launcher every interactive session runs.
 CC_MARG_EXEC_RE="${CC_MARG_EXEC_RE:-\\.claude-[0-9]+/node_modules/|claude\\.exe$}"
 CC_MARG_OUT="${CC_MARG_OUT:-${TMPDIR:-/tmp}/capacity-marginal.tsv}"
+CC_MARG_CHUNK_S="${CC_MARG_CHUNK_S:-900}"
+CC_MARG_MAX_S="${CC_MARG_MAX_S:-14400}"
+CC_MARG_REPEAT_REFUSALS="${CC_MARG_REPEAT_REFUSALS:-3}"
 
 SCHEMA='#ts	load1	unit	total_run	claude_run	active	resident'
 
@@ -379,9 +417,151 @@ cmd_analyze() {
     }' "$in"
 }
 
+# ── the convergence classifier ──────────────────────────────────────────────────────────────────
+# Reads `analyze`'s TEXT output on stdin and its exit code as $1; prints one line
+# `<decision>|<signature>|<why>`. Kept as a pure function of (text, rc) — no clock, no filesystem,
+# no sampling — because it is where the ONE judgment in §6 lives, and a judgment welded inside a
+# four-hour loop is a judgment nothing can test. Every branch of it has a test row.
+#
+# decision ∈ pass    all three controls passed; the protocol is done
+#            extend  the window is young or empty; more sampling can still decide it
+#            refuse  an INFORMATIVE control failure; a repeat of the same signature is the finding
+#            sensor  the ACTIVE regressor is unreadable; extending cannot fix it
+marg_classify() { # $1 = analyze exit code; stdin = analyze text output
+  local rc="${1:-1}" out sig="" c2_uninformative="" c3_blind=""
+  out="$(cat)"
+
+  case "$rc" in
+    0) printf 'pass||all three controls passed\n'; return 0 ;;
+    2) printf 'refuse|usage|analyze rejected its own arguments\n'; return 0 ;;
+    3) printf 'extend|nodata|%s\n' "${out%%$'\n'*}"; return 0 ;;
+  esac
+
+  case "$out" in *"C1 LEVEL      FAIL"*) sig="C1" ;; esac
+  case "$out" in *"C2 DYNAMICS   FAIL"*) sig="${sig:+$sig+}C2" ;; esac
+  case "$out" in *"C3 IDENTIFY   FAIL"*) sig="${sig:+$sig+}C3" ;; esac
+  [ -n "$sig" ] || sig="unknown"
+
+  case "$out" in *"uninformative, not refuting"*) c2_uninformative=1 ;; esac
+  case "$out" in *"unmeasurable"*) c3_blind=1 ;; esac
+
+  # ORDER MATTERS. A dead regressor outranks a young window: a run whose ACTIVE column is entirely
+  # `-` will never decide, however long it runs, so saying "extend" there would burn the deadline
+  # and then report the wrong conclusion.
+  if [ -n "$c3_blind" ]; then
+    printf 'sensor|%s|the ACTIVE census (cc_sp_active) is unreadable — no row carries a regressor\n' "$sig"
+  elif [ -n "$c2_uninformative" ]; then
+    printf 'extend|n_eff|C2 has not reached its independence floor yet — the window is young, not wrong\n'
+  else
+    printf 'refuse|%s|%s failed on an informative window\n' "$sig" "$sig"
+  fi
+}
+
+cmd_run() {
+  local out="$CC_MARG_OUT" interval="$CC_MARG_TAU" chunk="$CC_MARG_CHUNK_S"
+  local maxs="$CC_MARG_MAX_S" repeat="$CC_MARG_REPEAT_REFUSALS" force=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --out)              out="${2:-}"; shift 2 ;;
+      --interval-s)       interval="${2:-}"; shift 2 ;;
+      --chunk-s)          chunk="${2:-}"; shift 2 ;;
+      --max-s)            maxs="${2:-}"; shift 2 ;;
+      --repeat-refusals)  repeat="${2:-}"; shift 2 ;;
+      --force)            force=1; shift ;;
+      *) die "run: unknown argument '$1'" ;;
+    esac
+  done
+  case "$interval$chunk$maxs$repeat" in *[!0-9]*) die "run: --interval-s/--chunk-s/--max-s/--repeat-refusals must be integers" ;; esac
+  [ "$interval" -ge 1 ] || die "run: --interval-s must be >= 1"
+  [ "$chunk" -ge "$interval" ] || die "run: --chunk-s must be >= --interval-s"
+  [ "$repeat" -ge 1 ] || die "run: --repeat-refusals must be >= 1"
+
+  # ── PREFLIGHT ─────────────────────────────────────────────────────────────────────────────────
+  # Both sensors, once, before committing hours. The ACTIVE census is the regressor: without it C3
+  # can never pass, so a run that starts blind is a run whose answer is already written.
+  read_load1 >/dev/null || { printf 'CAPACITY-MARGINAL: NO-DATA — load1 is unreadable on this host; nothing to sample\n'; return 3; }
+  local a0; a0="$(read_active)"
+  if [ "$a0" = "-" ] && [ -z "$force" ]; then
+    printf 'CAPACITY-MARGINAL: NO-DATA — the ACTIVE census (cc_sp_active) is unreadable here.\n'
+    printf '  C3 can never pass without it, so this window would refuse after %ss for a reason\n' "$maxs"
+    printf '  visible in the first second. This measurement needs the live fleet (DoD §6);\n'
+    printf '  scripts/lib/spawn-presence.sh must be sourceable and its beat directory present.\n'
+    printf '  Override with --force only to exercise the loop itself.\n'
+    return 3
+  fi
+
+  local start now deadline elapsed rc cls decision sig why
+  local streak_sig="" streak=0 rounds=0 last_out="" last_sig=""
+  start="$(date +%s)"; deadline=$(( start + maxs ))
+  printf 'capacity-marginal: run — chunk %ss, deadline %ss, stop on %d identical informative refusals -> %s\n' \
+    "$chunk" "$maxs" "$repeat" "$out" >&2
+  printf 'capacity-marginal: ACTIVE census reads %s at preflight\n' "$a0" >&2
+
+  while :; do
+    now="$(date +%s)"
+    [ "$now" -lt "$deadline" ] || break
+    local remaining=$(( deadline - now )) this="$chunk"
+    [ "$this" -le "$remaining" ] || this="$remaining"
+    # CC_MARG_RUN_NO_SAMPLE stands the sampler down and lets the clock run, so the CONVERGENCE
+    # loop can be tested over a fixed series. Without it the only way to exercise "the refusal
+    # repeated three times" is to be on a box doing the right thing for an hour — i.e. the loop
+    # would ship untested, which is the same defect as an untested control.
+    if [ -n "${CC_MARG_RUN_NO_SAMPLE:-}" ]; then sleep "$this"
+    else cmd_sample --window-s "$this" --interval-s "$interval" --out "$out" --quiet
+    fi
+    rounds=$(( rounds + 1 ))
+
+    last_out="$(cmd_analyze --in "$out" 2>&1)"; rc=$?
+    cls="$(printf '%s\n' "$last_out" | marg_classify "$rc")"
+    decision="${cls%%|*}"; why="${cls##*|}"
+    sig="${cls#*|}"; sig="${sig%%|*}"
+    last_sig="$sig"
+    elapsed=$(( $(date +%s) - start ))
+    printf 'capacity-marginal: round %d (%ss elapsed) -> %s [%s] %s\n' "$rounds" "$elapsed" "$decision" "$sig" "$why" >&2
+
+    case "$decision" in
+      pass)
+        printf '%s\n' "$last_out"
+        printf '\nPROTOCOL: CONVERGED after %d round(s) / %ss. The coefficient above is quotable.\n' "$rounds" "$elapsed"
+        printf 'NEXT: re-grep the ban at the PASS rather than working from any list of paths —\n'
+        printf "  git grep -nE '2\\.5-5|0\\.172|0\\.566|1\\.89' -- scripts hooks bin commands skills\n"
+        return 0 ;;
+      sensor)
+        printf '%s\n' "$last_out"
+        printf '\nPROTOCOL: ABORTED — %s\n' "$why"
+        printf 'This is an environment refusal, not a finding about the box.\n'
+        return 3 ;;
+      refuse)
+        if [ "$sig" = "$streak_sig" ]; then streak=$(( streak + 1 )); else streak_sig="$sig"; streak=1; fi
+        if [ "$streak" -ge "$repeat" ]; then
+          printf '%s\n' "$last_out"
+          printf '\nPROTOCOL: STABLE REFUSAL — %s failed identically on %d consecutive informative windows (%ss).\n' \
+            "$sig" "$streak" "$elapsed"
+          printf 'Per DoD §6 this IS the finding: the process-unit census is not the right instrument\n'
+          printf 'here, and the thread-unit refinement (§7.3, needs a captured "ps -axM" fixture)\n'
+          printf 'becomes the next increment. Do NOT quote the withheld fit.\n'
+          return 1
+        fi ;;
+      extend) : ;;
+    esac
+  done
+
+  elapsed=$(( $(date +%s) - start ))
+  printf '%s\n' "$last_out"
+  printf '\nPROTOCOL: DEADLINE — %ss elapsed over %d round(s) without a decidable verdict (last: %s).\n' \
+    "$elapsed" "$rounds" "${last_sig:-none}"
+  printf 'The window was never informative enough to refuse OR to pass; extend --max-s, or run it\n'
+  printf 'across a dispatch wave rather than a lull (DoD §6). No coefficient is quotable.\n'
+  case "$last_sig" in nodata) return 3 ;; *) return 1 ;; esac
+}
+
 case "${1:-}" in
   sample)  shift; cmd_sample "$@" ;;
   analyze) shift; cmd_analyze "$@" ;;
+  run)     shift; cmd_run "$@" ;;
+  # The convergence judgment, addressable on its own so the SHIPPED function is what the suite
+  # exercises rather than a copy of it: `analyze` text on stdin, its exit code as the argument.
+  classify) shift; marg_classify "$@" ;;
   -h|--help|'') sed -n '/^# Usage:/,/^#       2 usage/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
   *) die "unknown subcommand '$1' (sample | analyze)" ;;
 esac

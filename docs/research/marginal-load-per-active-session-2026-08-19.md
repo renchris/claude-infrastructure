@@ -162,6 +162,9 @@ bash scripts/capacity-marginal.sh sample --window-s 3600 --interval-s 60 --out /
 bash scripts/capacity-marginal.sh analyze --in /tmp/marg.tsv
 ```
 
+> **Since 2026-08-27 this pair is the manual form; the loop below is `capacity-marginal.sh run` and
+> the box window is one walk-away command. Read §6b before running either.**
+
 **One hour at 60 s gives `n_eff` = 60 against a floor of 20**, so C2 is decidable rather than
 undecided — the single thing B3's three windows could not buy. Two conditions make C1 and C3
 decidable too, and both are ordinary operating conditions on this box rather than an intervention:
@@ -218,6 +221,47 @@ correctly refusing a 60 s quiet window — `C1 FAIL` (tertile swing 1.56× > 1.3
 (`n_eff` 1.8 < 20, worded *uninformative, not refuting*), `C3 FAIL` (0 rows carry an ACTIVE count,
 6 unmeasurable), `VERDICT: NO-ATTRIBUTION`, exit 1, withheld fit labelled withheld. The instrument
 is ready; only the fleet is missing.
+
+### 6b · The remaining half is now a PROGRAM, not a worksheet (2026-08-27)
+
+§6 above is a **loop** — *"sample, analyze, and extend the window until the verdict stops being
+`NO-ATTRIBUTION` **or** the refusal repeats with the same term across several windows"* — and it was
+shipped as prose. That makes the operator the interpreter of a four-hour control loop, which this
+repo's own Manual-Command Delivery rule names as the defect: *"if they must execute your steps in
+order, you wrote a worksheet and delegated the interpreter to a person."* The loop is now
+`capacity-marginal.sh run`, and the ~1 h box window is **one command that can be walked away from**:
+
+```sh
+bash scripts/capacity-marginal.sh run --out /tmp/marg.tsv
+```
+
+Defaults: 900 s chunks, re-analyzing the whole growing file each round, a 4 h deadline, stopping on
+3 identical informative refusals. It prints the ordinary `analyze` block plus one `PROTOCOL:` verdict
+— `CONVERGED` (0) · `STABLE REFUSAL` (1) · `DEADLINE` (1) · `ABORTED`/preflight (3).
+
+**The loop is thin; its one judgment is which refusals count as repeats, and that is what was worth
+building.** Three distinctions a naive driver erases, each now a test row that has been watched to
+fail under mutation:
+
+| the reading | naive driver | what `run` does, and why |
+|---|---|---|
+| C2 FAIL worded *"uninformative, not refuting"* | counts it as a refusal ⇒ after 3 short rounds reports **"the process census is the wrong instrument"** | **EXTEND, always.** `n_eff` grows monotonically with the file, so this says the window is *young*, not the instrument wrong. Counting it is B3's own defect, mechanised — the exact confusion §4 built `n_eff` to prevent |
+| C3 FAIL naming **unmeasurable** rows | extends for the full deadline, then blames the box | **PREFLIGHT and abort in the first second.** An unreadable `cc_sp_active` means no row carries the regressor; no window fixes a dead sensor. Exit **3 (NO-DATA)**, never 1 — *"could not measure the regressor"* must not read as *"the census failed its control"* |
+| the same *terms* failing vs *a* failure repeating | any repeat ends it | a repeat counts only when the **signature** (`C1`, `C1+C3`, …) is identical. Different terms in different windows is a moving target, not a reproduced refusal |
+
+Verified this session, off-box: `bats tests/capacity-marginal.bats` **25/25** (15 pre-existing + 10
+new), 71/71 across it plus `agent-teams-enforce.bats` and `capacity-admit-active.bats`, `shellcheck`
+clean, `bats-testname-eval-lint.sh` clean, `test-hermeticity-lint.sh` clean (551 suites, 0 new
+leaks). **Two mutation runs**, because a convergence rule nobody has watched break is the same rubber
+stamp §5 refuses: deleting the `uninformative, not refuting` test kills rows 17 and 24 **and nothing
+else**; inverting the sensor/young-window precedence kills row 18 alone.
+
+`--force` and `CC_MARG_RUN_NO_SAMPLE` exist only to exercise the loop against a fixed series — the
+preflight is otherwise unconditional, so the honest failure mode off-box is a one-second `NO-DATA`
+naming the missing fleet, which is what this container produces.
+
+**What remains is now one command on the box**, run during a dispatch wave rather than a lull (§6),
+and then the re-grep-and-close. Nothing else in this item is off-box work.
 
 ---
 
