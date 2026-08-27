@@ -47,7 +47,6 @@ scripts/postland-verify.sh	1
 scripts/reap-guard.sh	1
 scripts/s3b-lint.sh	1
 scripts/self-path-lint.sh	1
-scripts/ship-land.sh	1
 scripts/test-overwrite-guard.sh	5
 scripts/wait-contract-lint.sh	2
 scripts/worktree-gc-infra-run.sh	2
