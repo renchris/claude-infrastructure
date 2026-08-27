@@ -3344,9 +3344,36 @@ verb_falsify_red() { # <suite-path|tests/> <red-sha> → 0 retracted · 1 still 
   # it. An ABSENT manifest is the EMPTY set by the manifest's own frozen contract, not a failure —
   # but an unreadable one at that ref is "could not ask", and the two must not collapse.
   if git -C "$REPO" cat-file -e "$lgc:$MANIFEST_REL" >/dev/null 2>&1; then
-    local mf
+    local mf norm
     mf="$(git -C "$REPO" show "$lgc:$MANIFEST_REL" 2>/dev/null)" || return 2
-    printf '%s\n' "$mf" | sed 's/#.*//' | tr -d '[:blank:]' | grep -qxF "$path" && return 2
+    # THE MEMBERSHIP TEST IS FENCED-`case`, NOT `grep -q` IN A PIPELINE, and the reason is the one
+    # direction this verb must never fail in. Under `set -o pipefail` (:44) an early-exiting `grep
+    # -q` promotes its own producer's SIGPIPE to the pipeline's status ON A MATCH, so the `&&` fails
+    # exactly when the answer is YES: the `return 2` is skipped, control falls through to the
+    # existence check, and a host suite the green never executed is returned as 0 — RETRACTED. Exit
+    # 0 is this verb's only load-bearing answer (see the header above), so that is a fail-OPEN
+    # asserting a verdict over a suite the run never ran — precisely what the span clause exists to
+    # prevent (memory: assertion-span-must-equal-its-subject).
+    #
+    # MEASURED 2026-08-27, 20 trials per cell, on the REAL extracted line, /bin/bash 3.2.57(1) with
+    # /usr/bin/{sed,tr,grep}. THE BINDING QUANTITY IS WHAT THE LAST PRE-grep STAGE EMITS, NOT WHAT
+    # THE PRODUCER WRITES — and for this clause those two differ by ~55x, because `sed`+`tr` reduce
+    # a comment-dominated manifest almost to nothing. Holding the producer CONSTANT at 199,968 B and
+    # varying only the surviving fraction: post-reduction 2,157 / 4,110 / 12,015 B answer correctly
+    # 20/20, and 21,873 / 51,540 / 101,016 / 199,968 B are wrong 20/20. The transition brackets the
+    # 17,427 B floor measured for a three-stage pipeline in 2026-08-26 — i.e. the stage that decides
+    # is the one feeding grep, and the fourth stage buys nothing. Read the raw feed instead and you
+    # get the opposite answer: this same clause is correct 20/20 at a 200,000-byte RAW manifest,
+    # because 165 of its 172 lines are header comment.
+    #
+    # SO THE OPERATIONAL QUANTITY IS THE NUMBER OF HOST SUITES, NOT THE SIZE OF THE FILE. The
+    # manifest grew 2,834 -> 14,407 B between 2026-07-28 and 2026-08-08 (5.1x in eleven days) and
+    # ALL of that growth was header comment: it normalises to 261 B / 3 entries, ~1.2% of the floor.
+    # At ~30 B per entry the floor is ~400 host suites away. That margin is real but it is not the
+    # one the file size suggests, and nothing announces the crossing — which is why this is a `case`
+    # and not a bigger allowlist number.
+    norm="$(printf '%s\n' "$mf" | sed 's/#.*//' | tr -d '[:blank:]')"
+    case $'\n'"$norm"$'\n' in *$'\n'"$path"$'\n'*) return 2 ;; esac
   fi
   # The suite must have EXISTED at the green — a green cannot vouch for a file it never saw.
   git -C "$REPO" cat-file -e "$lgc:$path" >/dev/null 2>&1 || return 2

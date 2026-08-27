@@ -3524,3 +3524,60 @@ c30_shape_is_not_a_verdict() {   # $1 = the TAP line to plant, verbatim
   run bash -c "grep -ac '^not ok' \"\$1\"" _ "$corpus"
   [ "$output" = "5" ]                     # the old pattern counted FIVE — four of them torn
 }
+
+# ── C18b: the host-manifest SPAN CLAUSE of --falsify-red, at the size where its old spelling broke ──
+# WHY BEHAVIOURAL ARMS AND NOT SPELLING ONES: a test that greps the SUT for `case`, or for the
+# ABSENCE of `grep -q`, dies the day someone rewords the fix and says nothing about the property
+# that matters (memory: control-calibrated-to-implementation-decays). These two drive the REAL
+# `--falsify-red` verb end to end and assert its ANSWER, so any implementation that answers
+# correctly passes and any early-exiting consumer inside that pipeline fails.
+#
+# THE FIXTURE SIZE IS TAKEN FROM A MEASUREMENT, NOT PICKED — and it is taken on the quantity that
+# actually decides. Measured 2026-08-27, 20 trials per cell on the real extracted line: holding the
+# PRODUCER constant at 199,968 B and varying only the fraction of lines surviving `sed`+`tr`, the
+# clause answers correctly 20/20 at 2,157 / 4,110 / 12,015 B of POST-REDUCTION stream and wrongly
+# 20/20 at 21,873 B and above. So the manifest built below is sized by what reaches grep, not by its
+# own byte count: the same clause is correct 20/20 on a 200,000-byte RAW manifest that is 96% header
+# comment. It normalises to >=60,000 B here, nearly 3x into the always-wrong band, so a re-introduced
+# `grep -q` fails this EVERY run rather than one in twenty. The needle is the FIRST entry, which is
+# where an early-exiting grep exits soonest and the producer has most left to write.
+mk_big_manifest() {                       # $1 = repo-relative suite to place FIRST (the needle)
+  local i n=3000
+  mkdir -p "$R/scripts"                   # setup() mints only $R/tests; the manifest lives elsewhere
+  { printf '# host suites — %s padding entries follow the needle\n' "$n"
+    printf '%s\n' "$1"
+    for (( i=0; i<n; i++ )); do printf 'tests/pad-%04d-aaaaaaaaaaaaaaaaaaaa.bats\n' "$i"; done
+  } > "$R/scripts/host-suites.manifest"
+}
+
+@test "C18b: a host suite IN the manifest answers 'could not ask' (2) at a normalised feed past the measured SIGPIPE floor" {
+  local red lg norm
+  red="$(origin_head)"                                     # the accused commit
+  printf '@test "h" { true; }\n' > "$R/tests/hostonly.bats"
+  mk_big_manifest tests/hostonly.bats
+  push_commit big-manifest
+  lg="$(origin_head)"
+  mkdir -p "$CC_POSTLAND_DIR"; printf '%s' "$lg" > "$CC_POSTLAND_DIR/last-green"
+  # The fixture must reach the regime it claims to, and the assertion is on the NORMALISED size —
+  # the quantity the measurement above says decides — never on the file size, which does not.
+  norm="$(git -C "$R" show "$lg:scripts/host-suites.manifest" | sed 's/#.*//' | tr -d '[:blank:]' | wc -c | tr -d ' ')"
+  [ "$norm" -ge 60000 ]
+  # Pin the branch under test: without ancestry the verb returns 1 for an unrelated reason and this
+  # arm would pass while never reaching the span clause at all.
+  git -C "$R" merge-base --is-ancestor "$red" "$lg"
+  run bash "$SUT" --falsify-red tests/hostonly.bats "$red"
+  [ "$status" -eq 2 ]        # C18: excluded from the corpus ⇒ the green cannot speak about it
+}
+
+@test "C18b control: a suite ABSENT from that same large manifest still retracts (0), so the arm above cannot pass by always answering 2" {
+  local red lg
+  red="$(origin_head)"
+  printf '@test "t" { true; }\n' > "$R/tests/treeonly.bats"
+  mk_big_manifest tests/hostonly.bats                      # the needle is a DIFFERENT suite
+  push_commit big-manifest-neg
+  lg="$(origin_head)"
+  mkdir -p "$CC_POSTLAND_DIR"; printf '%s' "$lg" > "$CC_POSTLAND_DIR/last-green"
+  git -C "$R" merge-base --is-ancestor "$red" "$lg"
+  run bash "$SUT" --falsify-red tests/treeonly.bats "$red"
+  [ "$status" -eq 0 ]        # in the corpus AND present at the green ⇒ the premise really is gone
+}

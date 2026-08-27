@@ -43,7 +43,6 @@ scripts/handoff-disposition.sh	1
 scripts/handoff-fire.sh	5
 scripts/offbox-partition.sh	1
 scripts/pane-spawn-coverage-lint.sh	1
-scripts/postland-verify.sh	1
 scripts/reap-guard.sh	1
 scripts/s3b-lint.sh	1
 scripts/self-path-lint.sh	1
