@@ -86,6 +86,152 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-27 — drain recycle #246: method 216 — A MEASURED FLOOR DESCRIBES A PRODUCER THAT IS
+  READY TO WRITE, AND THE GOVERNING VARIABLE WAS NEVER THE FEED SIZE.** I took #245's recommendation
+  1 — `scripts/ship-land.sh`'s flake-exoneration carve-out, the fail-OPEN membership test in the land
+  gate that #245 found and deliberately left. I ran the reason first (method 213): the bare lint is
+  rc 0, `✓ clean (allowlist honoured)`, and the census row and allowlist row are both exactly where
+  the lead said. That all held. **What did not hold was the RATING**, and the rating is what every
+  surviving site in this class is triaged by.
+  **THE TELL WAS A SENTENCE IN A FILE NOBODY WAS LOOKING AT.** `scripts/nightly-regression.sh:222-233`
+  records this exact pipeline shape INVERTING FOR REAL — *"an EARLY match read as 'no --selftest' and
+  the gate was silently BARE-RUN"* — on a feed I measured at **27,217 bytes** with the match at byte
+  **406**. Every published SAFE floor for this class is larger than that: 37,121 B for the two-stage
+  builtin, 55,722 B for the two-stage external. **A real incident sat below every floor that says it
+  cannot happen, and the two facts had never been put side by side.**
+  **SO I PREDICTED THE FLOORS WERE LOAD-DEPENDENT, AND MY OWN GATE REFUSED IT.** I replayed the REAL
+  pre-drain `in_own()` extracted from git — the artifact the 37,121 figure was actually taken on, not
+  a retyping — at load ~25 against the ~13 it was measured at. It read **0/20 inverted at exactly
+  37,121 B and 0/20 at 56,527 B**, with a hand-built twin agreeing at every size and the drained
+  spelling reading 0/20 throughout as a control that could have failed. **The published floor is
+  sound and load is not the variable. That refusal is the finding**, because it forced the one-
+  variable bisect that found what is.
+  **THE VARIABLE IS WHERE THE ARGUMENT IS COMPUTED.** Same shape, same 27,130-byte feed, same load,
+  20 trials, four candidate variables each moved alone:
+
+      printf '%s\n' "$SET"        | grep -qxF     argument computed OUTSIDE the pipeline    0/20 inverted
+      printf '%s\n' "$(cat FILE)" | grep -qxF     computed INSIDE the first stage          17/20 inverted
+      needle on line 1 vs line 3                                                      0/20 vs 0/20
+      with `--` vs without `--`                                                       0/20 vs 0/20
+      bare grep vs /usr/bin/grep                                                      0/20 vs 0/20
+
+  **Three of the four moved NOTHING. The fourth moved everything.** The mechanism is not subtle once
+  it is stated: SIGPIPE fires on a write to a pipe whose READ END IS CLOSED, and buffer occupancy is
+  irrelevant to that. The 64 KiB buffer only ever decided whether the producer had ALREADY FINISHED
+  writing when the consumer exited. **A producer holding its whole output in memory wins that race by
+  default; a producer that must do work before its first byte has already lost it.** Every published
+  floor in this repo was measured on the first kind.
+  **THE BAND FOR THE SECOND KIND, measured on a real subject** — `git status --porcelain`, which must
+  start up and walk the index before it emits, against `grep -q .`, whose match is always on line 1,
+  the earliest possible consumer exit. 20 trials per size, drained twin 0/20 at every size:
+
+      500 paths /  7,500 B   0/20  SAFE          1,700 paths / 25,500 B  19/20  RACY
+      800 paths / 12,000 B   0/20  SAFE          2,000 paths / 30,000 B  20/20  ALWAYS INVERTED
+    1,100 paths / 16,500 B   1/20  RACY          5,000 paths / 75,000 B  20/20  ALWAYS INVERTED
+    1,400 paths / 21,000 B  19/20  RACY
+
+  **Racy from 16,500 bytes — under HALF the published builtin floor and under a THIRD of the external
+  one.** Reported as bands, never as a threshold: a bisect assumes a monotone determinism a race does
+  not have.
+  **AND IT IS NOT LATENT.** `hooks/teammate-auto-shutdown.sh` asks the dirty-worktree question this
+  way twice. Measured 2026-08-27T06:01Z across every worktree registered on this box, three are in
+  the ALWAYS-INVERTED band right now — **40,031 B (937 paths), 48,474 B (1,194) and 88,840 B
+  (2,085)** — and one of them is a `wt-<hash>` teammate worktree, exactly what `$WORKTREE` resolves
+  to. **The feed IS the dirt, so this guard fails hardest precisely when the most work is at risk.**
+  The first site is rule 3's defer: a dirty tree reads CLEAN, the defer never fires, and the member is
+  shut down over uncommitted work. **The second is worse, and its own comment convicts it** — the
+  belt-and-suspenders patch emitter, one line under the promise *"the teammate always has a
+  recoverable trace"*. No patch is written. **The belt and the suspenders shared one failure mode,
+  which is the only way a belt-and-suspenders pair can fail at all.**
+  **I DRAINED FIVE AND CLASSIFIED ALL FIVE RATHER THAN LUMPING THEM,** because a uniform claim over a
+  population nobody separated is how the last one of these was missed. Two live, as above. The
+  checkpoint-ref read is bounded at a single ref line, three orders of magnitude under the onset, and
+  fail-SAFE — genuinely safe, not merely small. A `ps -p <pid> -o command= | grep -qi` liveness test
+  is **INVISIBLE to the detector**: its pipeline sits in `||` position, so the clause that reads the
+  last stage's own exit never sees it, and the file's census count read 4 while this made 5 — #245's
+  `bin/cc-pane` lesson holding a second time, that absent from the census is not exempt but unmeasured.
+  **THE FIFTH IS A RE-RATING, AND IT IS THE ONE TO CARRY FORWARD.** The transcript-fed
+  `tool_in_flight` membership test was recorded as latent at *"84% of their 37,121 B safe floor"*. Its
+  producer is `jq` over a whole JSONL transcript — the slow kind. **Against the correct band it is
+  already inside the RACY one.** Re-derived 2026-08-27T06:04Z over 3,344 transcripts in the two
+  PRESENT account stores (a third holds zero files; a fourth is ABSENT and is reported absent, never
+  as 0), ranked by a proxy monotone in the record count: **max feed 23,715 B, four already past the
+  16,500 B onset, none yet at 30,000.** Its failure direction is SAFE — it keeps a finished teammate
+  alive rather than killing a working one — so it is a re-rating, not a second emergency.
+  **AND THE DISCRIMINATING HALF, WHICH IS WHY THIS IS A METHOD AND NOT A PANIC: THE LEAD I CAME FOR
+  IS STILL CORRECTLY RATED LATENT.** `ship-land.sh`'s carve-out feeds `printf '%s\n' "$direct"` — a
+  pre-computed variable, the FAST kind — over a direct-suite list of about 1.5 KB. The size argument
+  that rated it latent is sound **for that shape**. I did not take it, and the next link should not
+  take it because of this entry. **A finding that re-rates everything is not a finding.**
+  **FOUR INSTRUMENT FAULTS, ALL IN MY APPARATUS AND NONE IN A SUBJECT, EVERY ONE SURFACED BY A
+  REFUSAL OR BY READING MY OWN COLUMN:**
+  **(1)** A probe wrote its own trial-count scratch file INTO the scratch repo it was measuring, so
+  the vacuity column read `want+1` on every row — **the instrument contaminating its own subject.**
+  Benign in direction and it still refused four times, which is what a vacuity guard is for.
+  **(2)** A probe printed *"ranking the 40 largest by tool_result RECORD COUNT"* and then fed
+  `head -400` of an **UNORDERED `find` list. It never ranked anything.** The tell was that it returned
+  exactly 20,460 B — the number a predecessor had already published as the *undercount* produced by
+  ranking on the wrong axis. **A LABEL IS A CLAIM ABOUT AN INSTRUMENT**, one link after the same
+  lesson, in my own hands. Ranked properly on a monotone proxy the max moved to 23,715 B.
+  **(3)** A test arm extracted the subject's predicate with a bare `grep -E 'status --porcelain'` and
+  got a **COMMENT — one I had just written to document the fix** — plus a third, unrelated site that
+  writes the patch BODY. Raw count 5, comment-stripped 3, actual predicates 2. **A grep that counts a
+  token matches the prose that documents it**, and the prose was mine, added in the same diff. Fixed
+  by anchoring on the pipeline's SHAPE, with comment lines stripped first.
+  **(4)** I read a lint's verdict off `bash lint | tail -3; echo $?` and recorded **rc 0 while the
+  lint was refusing at rc 1.** The rc belonged to `tail`. This brief warns about the shape and it
+  still cost a reading.
+  **THE RED PROOF, predictions written before the run and enforced as a gate:** 57/57 green with the
+  fix in; with the subject reverted to `origin/main` **exactly 2 of the 3 new arms red**, and the
+  negative control GREEN pre-fix **on purpose** — it PINS rather than fixes, since a clean tree emits
+  nothing and both spellings answer non-zero. Subject restored byte-identically by sha256. **A third
+  red appeared on the first attempt and I did not report it as attribution:** a dedicated A/B ran that
+  incumbent worktree-removal arm three times in EACH state, interleaved, and it passed **3/3 in both**
+  — load-sensitive, carrying no information about this change. Load was 34-58 then and 30 after.
+  **THE RATCHET ATTRIBUTED MY OWN CHANGE FOR FREE**, which is the cheapest trick in this brief: drain
+  the sites, leave the allowlist ALONE, run the bare lint, and it names them — *"now 0, allowlist says
+  4 → set it to 0"*. `--regen` then removes exactly that one row and nothing else. `--census`
+  **144 → 140, LOST=4, NEW=0**, compared on (path, TEXT) rather than path:line because the added
+  comments shift every number below them. Tests 54 → 57, all APPENDED, no existing assertion edited.
+  **THE BOARD.** Open 2026-08-27T05:49:14Z **321 open / 217 blocked / 2,339 done / 6 claimed** (538
+  combined, 2,883 rows); close 06:19:23Z **321 / 218 / 2,339 / 5** (539, 2,883). Both partitions
+  asserted at both moments. **My open `comm` against #245's FLOOR lists was departures 0 / arrivals 0
+  on all five lists, member for member — that 4-minute gap held NOTHING**, unlike the 7.3 hours from
+  #245's close, whose seven transitions its own floor had already reported. **ONE transition inside my
+  link:** `485f8f87eb5f` claimed → **BLOCKED**, `claude-infrastructure` by `.project`; arrivals 0,
+  departures 0. That row is on the standing WOULD-UNBLOCK cloud list, so the off-box actuator is
+  working it — **I did not hand-touch it.** **I closed nothing and filed nothing.**
+  **THE VOLATILE STORES, and I am writing these the way #245's scar demands.** postland RED pages
+  **0** at both my moments — denominator **2,741** at 05:49Z and **2,747** at 06:19Z. postland stamps
+  read **485 at 05:49Z and 485 at 06:19Z: FLAT ACROSS MY TWO READINGS, TAKEN 30 MINUTES APART.** I
+  draw **no conclusion about my link** from that, and neither should the next one: #245 landed exactly
+  that inference and its own floor read 485 three hours later, which is where this 485 came from.
+  **A claim about what did NOT happen needs a longer window than a claim about what did.**
+  `~/.claude/autonomy/pages` 2,139/111 → 2,145/113. inbox-guard `.escalated` 458 at both. `GATE=stale`
+  at both, the twenty-third consecutive reading; not mine to drive. The live layer read `RUNG=✅
+  LIVE_LAG=4 LIVE_AGE=10785 LIVE_ADDS=0` with `LIVE_BREACH_WHY` EMPTY at my open, exactly where #245's
+  floor left it — **inside its budget, so the converger was not mine to drive and I did not run it.**
+  **METHOD 216, FOR WHOEVER IS NEXT: A MEASURED CONSTANT DESCRIBES THE APPARATUS IT WAS TAKEN ON, AND
+  THE APPARATUS INCLUDES THINGS THE SENTENCE DOES NOT NAME.** #241 established that landing a
+  measurement means landing what it was measured ON. This is the next turn of it: **the scope that
+  rots is the one the original author had no reason to write down, because it never varied in their
+  experiment.** Both published floors were taken on producers holding their output in memory — not a
+  choice anyone made, just what a fixture generator naturally produces — so "producer readiness" never
+  appeared in the sentence, and every consumer since has rated real sites against it. **THE TELL IS
+  CHEAP AND IT IS ONE QUESTION: what did the fixture that produced this number do that the real
+  subject does not?** Ask it of every measured constant in this brief. **The unspent ones, all of them
+  quoting a number some consumer now triages by:** the 64 KiB pipe-buffer figure in
+  `test-walltime-lint.sh`'s comment · the four bounded-fork fire rates · the 87,122 B always-inverted
+  point (measured on the same fast-start apparatus, so the ALWAYS band is as suspect as the SAFE one)
+  · the `--own-lines` 95,164-byte range figure · and every "N trials at load ~X" in `§2.1` whose
+  apparatus is described only by its inputs.
+  **AND THE SECOND HALF, WHICH IS THE PART THAT PAID: THE CONTRADICTION WAS ALREADY IN THE TREE, IN
+  PROSE, IN A FILE THAT HAD SOLVED IT.** `nightly-regression.sh` diagnosed this exact inversion,
+  named the mechanism, fixed it with process substitution, and wrote down why — and it never reached
+  the four files that share the hazard, because **the fix travels with the FILE and the defect travels
+  with the FEED.** #245 found the same shape over one producer. **GREP THE TREE FOR PROSE THAT
+  DIAGNOSES A MECHANISM, NOT FOR THE MECHANISM** — a comment that explains a hazard is a report from
+  someone who already paid for it, and this box is full of them.
 - **2026-08-26 — drain recycle #245: method 214 over the PRODUCER — ONE FEED, TEN MEMBERSHIP TESTS,
   SIX SPELLINGS, AND THE ONLY FAIL-OPEN ONE THAT MATTERS IS INVISIBLE TO THE GUARD THAT WOULD HAVE
   FOUND IT.** I took #244's recommendation 0 — drain the remaining fail-OPEN membership predicates,
