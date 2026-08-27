@@ -86,6 +86,119 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-27 — drain recycle #248: method 218 — A LATCHING STATE MACHINE MUST TEST FOR *CODE*
+  BEFORE IT TESTS FOR *SYNTAX*, OR A COMMENT THAT NAMES THE SYNTAX MUTES THE REST OF THE FILE.**
+  #247's method 217 said a constant with an unstated scope acquits sites, so enumerate its citers.
+  This link is the same defect one layer down, in the DETECTOR rather than in a constant: a screen
+  that carries LATCHING state acquits sites by never reaching them, and unlike a wrong constant it
+  leaves no number to check. `scripts/pipefail-sigpipe-lint.sh`'s heredoc tracker is its only
+  file-level latching state, and its opener test ran **three lines BEFORE** its comment test. So a
+  comment that merely MENTIONED a heredoc opener armed the tracker, no terminator ever arrived, and
+  every remaining line in the file was consumed as heredoc BODY. **Not a miscount — a latched false
+  NEGATIVE, and a census of 0 for a muted file is byte-identical to a census of 0 for a clean one.**
+  **BOTH CULPRITS ARE COMMENTS DOCUMENTING SHELL MECHANICS, WHICH IS WHY IT SURVIVED:**
+  `scripts/limit-recover/lr-reset-poller.sh:357` explains a `python3 - <<PY` bug the file once had,
+  and `hooks/completion-assert.sh:705` explains why `<<EOF` is doubled and so is not an operator
+  placeholder. **In a tree whose house style is long mechanical rationales in comments — #246's
+  method 216 screen returned 199 such comment hits in `bin/ scripts/ hooks/` alone — the trigger is
+  CORRELATED WITH THE STYLE.** The better the tree documents a mechanism, the blinder this detector
+  became to it.
+  🚨 **MEASURED, INTERLEAVED, BOTH ARMS AGAINST ONE PINNED ROOT, TWICE, DETERMINISTIC IN BOTH**
+  (`probe248-ab.sh`; PRE extracted with `git show HEAD:` rather than remembered, allowlist pinned to
+  `/dev/null` on both arms so only the detector differs): **PRE census 138 · POST census 143 ·
+  NEW=5 · LOST=0**, with `lr-reset-poller` rows **0 → 4**. Of **402** scanned files, **TEN** were
+  latched at EOF pre-fix and **FOUR** remain after (from `<<TOK` inside quoted CODE, not inside a
+  comment). Only two of the ten swallowed a site today; **the residual is NAMED in the code and
+  deliberately not folded in**, because tightening the opener test to ignore quoted occurrences
+  changes what counts as an opener and wants its own measurement.
+  🚨 **WHY IT MATTERED WHERE IT MATTERED — AND THIS IS THE HALF WORTH KEEPING.**
+  `scripts/limit-recover/lr-reset-poller.sh` was invisible from `:357` to EOF **and carries NO
+  allowlist row at all**, so its four sites had never once been judged. **Absent from the census AND
+  absent from the allowlist is #240's method 210 exactly — invisible, not exempt — but with a new
+  cause: not a clause that cannot see the shape, a STATE that never reached the line.** The worst of
+  the four is the monthly-spend detector at `:598`: **THREE stages** (`printf | grep -iE | grep -q`),
+  whose measured safe floor is **17,427 B** against the two-stage **37,121 B**, fed by
+  `tail_bytes=$(tail -c 20000 "$tx")` — **a hard-coded constant ABOVE its own shape's floor.** Its
+  inversion reads a genuine monthly-spend kill as ABSENT. `hooks/completion-assert.sh:735` is the
+  FIFTH site in a file whose allowlist row says **5** and whose detector could see only **4** —
+  **the count matched, so nothing looked wrong.**
+  🚨 **A RATCHET EXISTS TO REFUSE *NEW* VIOLATIONS, AND BELOW A LATCH POINT A NEW VIOLATION IS BORN
+  INVISIBLE, WITH NO ALLOWLIST ROW TO RECORD IT.** That is the whole cost, and it is silent in the
+  one direction a ratchet cannot afford.
+  ✅ **SIX SITES DRAINED** to the blessed `grep P >/dev/null`. Five are the newly visible ones; the
+  sixth is `lr-reset-poller.sh:627-628`, the session|weekly detector, which the detector **STILL**
+  cannot see because it is a backslash **CONTINUATION** and the scan is line-oriented. **That is a
+  SECOND face of `ca97c678b18b` and it is not addressed here** — the site is drained anyway because
+  its inversion falls through `|| continue` and skips the session entirely.
+  ✅ **NOT A WIDENING, and the strongest form of that claim: after the fix AND the drains the census
+  reads 138 with NEW=0 and LOST=0 against the PRE arm.** The detector gained sight of five sites and
+  all five were drained in the same diff, so the visible population is byte-identical while the
+  BLIND population for these two files is zero. **The allowlist is untouched — no row added, none
+  lowered.**
+  🚨 **NO INCUMBENT ARM COULD ATTRIBUTE THIS CHANGE, AND THE RED-PROOF SAYS SO IN A CELL.** Test 8,
+  the tree-vs-allowlist arm, is **GREEN IN BOTH STATES** — with the unfixed detector on the
+  already-drained tree, completion-assert still reads 5 (all five of its old sites sit ABOVE the
+  muting comment) and lr-reset-poller still reads 0. **A deliberate green is a claim about what your
+  test design CANNOT catch** (#242's M3), and it is why arms 19 and 20 exist at all.
+  ✅ **RED-PROOF, subject reverted from git and restored byte-identically by sha256 (`RESTORE=OK`),
+  baseline green before any revert, every prediction written first and gated at rc 93:**
+  `selftest r15` PRE **GREEN(0)** / POST **RED(1)** — the only arm that MOVES · `selftest g31` PRE
+  **GREEN(0)** / POST **GREEN(0)** — deliberate uniform, it can only refute a widening ·
+  **live control** (the same scar with NO comment above it) PRE **1** / POST **1**, so r15's PRE
+  zero is the DEFECT and not a dead instrument · suite **POST 0 not_ok / PRE 3 not_ok**, exactly
+  tests **1, 19, 20**. **Six predictions, six exact, first run.**
+  ✅ **ARM 19 PLANTS THE SCAR 200 LINES BELOW THE COMMENT, and that distance is the point:** the
+  lint's own `--selftest` builds TWO-LINE fixtures, which cannot tell a one-line slip from an
+  UNBOUNDED mute — the real culprits sat **241** and **30** lines above their victims.
+  **ARM 20 IS A TRIPWIRE ON THE REAL SUBJECT** rather than a pattern (memory:
+  `probe-that-acts-on-absence-must-confirm-presence`): copy `lr-reset-poller.sh`, append a known
+  scar to its END, ask the detector — **with a control asserting the UNAPPENDED copy reads 0**, so
+  it cannot pass vacuously. selftest **30/30 → 32/32**, suite **18 → 20**, both pins updated
+  deliberately.
+  🚨 **THREE INSTRUMENT FAULTS, ALL MINE, ALL IN THE APPARATUS AND NONE IN A SUBJECT — AND THE FIRST
+  TWO SURFACED AS A REFUSAL.**
+  **(1)** A producer histogram whose top cells were `-n`, `%s` and the empty string. It split each
+  line on a bare `|`, which also splits **inside a quoted regex** (`grep -E 'a|b'`) and inside a
+  printf format. **A histogram whose cells are FLAGS is an instrument fault, not data** (#241's
+  `needle_in_set`, third costume). Rebuilt with a quote- and substitution-aware scanner and FOUR
+  controls written down first; all four held, and the corrected sweep read **306** early-exit
+  `| grep -*q` sites in `bin/ scripts/ hooks/`, **262 builtin-producer / 44 external**.
+  **(2)** `probe248-visible.sh` asked `--print-scope` for the resolved FILE list. **That verb prints
+  the five PATHSPECS**, so every subject AND the positive control alike read 0 and the rc-93 gate
+  refused. The scan set is `git ls-files` filtered by `in_scan_set`, matching those pathspecs as
+  BASH patterns where `*` DOES cross a `/`. **#216's `gate-selector.sh` scar in a third costume: the
+  NAME resolved, the SHAPE of what it returns did not.**
+  **(3)** 🚨 **THE ONE THAT DID *NOT* SURFACE AS A REFUSAL, AND IT NEARLY LANDED AS A FINDING.** My
+  first before/after read **+9 / −4** and I began writing up four sites the fix had supposedly
+  BLINDED — an impossible result, since a fix that only makes a latching tracker latch LESS cannot
+  remove a row. **`comm` had been handed an UNSORTED file:** the as-is census was written with
+  `--census > f` and never sorted, and `sort -c` puts the disorder at **exactly `bin/cc-bus:1008`,
+  the first of the four phantoms.** **`comm` DOES NOT REFUSE UNSORTED INPUT — it silently answers a
+  different question**, and the answer is finding-shaped. **The implausible number is what made me
+  look**, which is #243's rule paying a second time. **SORT BOTH SIDES, OR `sort -c` THEM, BEFORE
+  EVERY `comm` — this brief has leaned on `comm` for five id lists at three moments for twenty
+  links.**
+  ⚠️ **AND A FOURTH, IN THIS ENTRY'S OWN ANCESTOR PROBE:** `probe248-mute.sh` compared the census
+  against a tree with **every** heredoc opener neutralised — real ones too — so it was measuring
+  "sites hidden by any opener" while its label said "sites swallowed by the tracker". It happened to
+  print the right 5, but **the two quantities are not the same and only the A/B against the actual
+  fix is admissible** (#242's "make the PRE arm REAL instead of remembered"). It also lost a line to
+  **backticks inside a double-quoted `echo`** (#203's scar), which executed `--census` as a command.
+  ⚠️ **`GATE=stale` at my reading — the TWENTY-FIFTH consecutive.** Not mine to drive; only the
+  background `postland-verify` stamp moves that marker, and `991fcb666976` (OPEN) already owns the
+  chain that keeps it there. **I did NOT file one.**
+  🚨 **LEADS I DID NOT TAKE, in order of what I would take first.** **(a)** The **CONTINUATION-LINE
+  blind spot**, now measured rather than suspected: **14 of the 306** early-exit sites have their
+  producer on the PREVIOUS physical line, and a line-oriented scan can never pair them — the same
+  shape as `:627-628`. **That is a design job on the detector, like `ca97c678b18b`; do not bolt it
+  on.** **(b)** The remaining **FOUR latched-at-EOF files** — `docs/activation/pending-activation/`
+  `10-close-attrib-activate.sh:39` · `hooks/tests/validate-bash.test.sh:116` ·
+  `scripts/pipefail-sigpipe-lint.sh:120` (its own fixture, and it excludes itself, so harmless) ·
+  `tools/it2-probe/it2-logging-shim.sh:86`. **None swallows a site today; every one is a region a
+  future `grep -q` would be born invisible in.** **(c)** The **44 external-producer sites** the
+  corrected sweep enumerated are #247's method-217 population done properly — **by the PROPERTY
+  (time to first write) rather than by NAMING FIVE GIT VERBS**, which is how `find`, `ps`, `tail`
+  and a whole `bash` program came into view at all. `sweep248.py` prints them.
 - **2026-08-27 — drain recycle #247: method 217 — A CONSTANT WITH AN UNSTATED SCOPE ACQUITS SITES,
   SO ENUMERATE ITS CITERS AND CLASSIFY THEM BY THE PROPERTY IT ASSUMED.** #246 proved that this
   repo's published SIGPIPE floors describe an apparatus: every one was taken on a producer holding
