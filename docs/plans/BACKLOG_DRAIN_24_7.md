@@ -86,6 +86,174 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-27 — drain recycle #247: method 217 — A CONSTANT WITH AN UNSTATED SCOPE ACQUITS SITES,
+  SO ENUMERATE ITS CITERS AND CLASSIFY THEM BY THE PROPERTY IT ASSUMED.** #246 proved that this
+  repo's published SIGPIPE floors describe an apparatus: every one was taken on a producer holding
+  its whole output in memory, able to write the instant the pipeline forks, and nobody wrote that
+  down because nobody chose it. It named the open question — *"every one of them is a number some
+  consumer now triages by"* — and left it. **The follow-through is the method, and it is three
+  greps.** A measured constant that turns out to have an unstated scope is not a fact to correct in
+  one file; it is a CITATION whose every consumer inherited the scope silently. So: grep the tree
+  for the DIGITS, so a citation cannot hide behind rewording; split the citers into those that use
+  the number to SIZE A FIXTURE (harmless — over-sizing a fixture costs nothing, and this is most of
+  them) and those that use it as a LATENCY RATING for a live predicate (where a too-high floor is a
+  FALSE ACQUITTAL); then classify only the second group by whether its producer has the property
+  the constant assumed. **35 files cite a band figure across 76 lines. The screen narrowed that to
+  11 sites, and the first one was a live fail-open in a wired hook.**
+  🚨 **THE DEFECT: `hooks/teammate-checkpoint.sh` READ A DIRTY WORKTREE AS CLEAN, 20/20, ON A REAL
+  WORKTREE ON THIS BOX TODAY — AND SKIPPED THE SNAPSHOT.** The gate was
+  `if ! git -C "$CWD" status --porcelain 2>/dev/null | grep -q .; then log "…tree clean"; exit 0`.
+  `grep -q` leaves at line 1, `git status` takes SIGPIPE, pipefail (`:35`) promotes it, and the
+  leading `!` sends a dirty tree down the clean branch. **The consequence is the loss this hook
+  exists to prevent, announced in the log as a success.** Drained to a capture-then-test, which has
+  no pipeline and therefore nothing to invert.
+  ✅ **MEASURED 2026-08-27 at 07:06Z, AND THE APPARATUS IS PART OF THE MEASUREMENT.** 20 trials per
+  arm, interleaved, load ~18, against a REAL worktree rather than a fixture —
+  `.worktrees/wt-7e2df754d0b8`, 937 paths / 40,031 B of porcelain — with the dirtiness asserted by
+  `wc`, a third reader sharing no pipeline with either arm, so neither could vouch for itself:
+  **raced WRONG 20/20 · drained WRONG 0/20 · both right 20/20 on a clean tree.** All four
+  predictions were written down first and gated at rc 93; all four exact on the first run.
+  **So the failure is a SIZE, not a spelling.**
+  🚨 **THE FLOOR THAT ACQUITTED IT WAS THE RIGHT NUMBER FOR THE WRONG SHAPE.** The site rated LATENT
+  against *"safe to 37,121 B"*. That figure is correct and does not describe this producer: `git
+  status --porcelain` must walk the working tree before it can write, and #246 measured that shape
+  19/20 inverted at 25,500 B and 20/20 at 30,000 — **under HALF the number that acquitted it.**
+  **At 07:03Z, 3 of the 70 worktrees on this box were at or past that point (88,840 / 48,474 /
+  40,031 B), one of them carrying the `wt-` naming this hook parses**, and the hook is wired TWICE
+  in `~/.claude/settings.json` (`:582`, `:798`).
+  ✅ **AND THE DETECTOR ALREADY KNEW, IN THESE EXACT WORDS.** `pipefail-sigpipe-lint --selftest`
+  carries the shape as a RED fixture: `mk r2 "if git status --porcelain 2>/dev/null | grep -q .;
+  then :; fi"` with the expectation string **"git status | grep -q . (a dirty tree reads CLEAN)"**.
+  The knowledge was in the guard the whole time; the ALLOWLIST ROW for this file is what excused the
+  one real instance of it. Method 213 run on the unmodified tree: the bare lint was **rc 0 on the
+  defect**. **This drain removes an exemption, not a protection — say which, every time.**
+  ⚠️ **WHAT THIS DOES NOT PROVE, AND IT IS THE HALF THAT KEEPS THE METHOD HONEST.** The second site,
+  `hooks/plan-version-commit.sh:81` (`git ls-files --others … | grep -q .`, same fail direction), is
+  drained for uniformity and was NOT measured live: its pathspec is a **SINGLE FILE**, so the
+  producer emits at most one path (~40 B) however large the plan repo grows. **It is latent BY
+  CONSTRUCTION rather than by a size ceiling that could creep** — a genuinely different claim from
+  "the feed is small today" — and the comment says so, so nobody cites it as evidence about a
+  population. No behavioural arm was written for it, because there is no regime it can reach.
+  **A finding that re-rates everything is not a finding; this one re-rates 1 of 76 citations.**
+  ✅ **THE POPULATION, COUNTED RATHER THAN INHERITED.** Of the **140** `--census` rows at 07:00Z,
+  **11** have a producer that must do work before its first write (114 FAST builtins, 0 `cat`, 15
+  unclassifiable because the census truncates a continuation, partition asserted to sum). A separate
+  tree-wide sweep for a SLOW git producer feeding an early-exit consumer found **7 sites, 2 visible
+  to the detector and 5 INVISIBLE to it** — and the 5 are not defects, each named in the probe
+  output: two are the lint's OWN selftest fixtures, one is `[ -n "$( … )" ]` (literally the lint's
+  `g7` GREEN control), one sits inside a `bash -c` where pipefail is OFF by default, and
+  `bin/cc-dispatch:2657` captures through `head -1` and reads the VALUE, never the rc.
+  🚨 **AND THE COMPLETENESS CHECK THAT COST #246 A COMMIT: I COUNTED THE COPIES MYSELF.** An
+  allowlist count is a claim about what the DETECTOR can see, never about what the file contains.
+  `hooks/teammate-checkpoint.sh` holds **exactly ONE** copy of the shape (file total 1, detector 1,
+  invisible 0) and `plan-version-commit.sh` the same — so unlike #246's de-race, the remedy and the
+  shape travel together here. **`hooks/lead-crash-watchdog.sh` is the counter-example and I did not
+  take it: 11 early-exit pipelines, detector sees 6, FIVE INVISIBLE** — all `head -1` idioms under
+  `set -euo pipefail`, a different risk profile (the rc is discarded or the value is already
+  written), and touching it pulls a 35-test suite. **Named so the next link can decide, not so it
+  reads as screened.**
+  ✅ **TESTS: `tests/teammate-checkpoint-parse.bats` 11 → 13, both arms APPENDED, zero existing
+  assertions edited.** Red-proved against the subject reverted from `origin/main` and restored
+  byte-identically by sha256 in a trap (`RESTORE=OK`), predictions written first and gated at rc 93:
+  **baseline green 13/13 with the plan pinned; pre-fix exactly 1 not ok, and it is the MECHANISM arm
+  BY NAME.** The NEG arm is a **DELIBERATE green pre-fix** — a clean tree reads clean under both
+  spellings, so it can never attribute this defect — and **all 11 incumbent arms were green pre-fix
+  too, which is precisely why the bug shipped**: every one of them dirties the tree with a single
+  small file and never reaches the regime. The mechanism arm asserts its own fixture crossed
+  30,000 B before trusting its verdict, so it cannot pass vacuously, and past the always-inverted
+  point a re-introduced `grep -q` fails EVERY run rather than one in twenty. **Size a behavioural
+  fixture from the MEASURED regime, and say in the test why that number and not another.**
+  ✅ **RATCHET, AND #244's FREE ATTRIBUTION USED ON PURPOSE.** I drained both sites WITHOUT touching
+  the allowlist first, so the guard's own downward arm named my change per path for free —
+  *"hooks/plan-version-commit.sh now 0, allowlist says 1"*, the same for `teammate-checkpoint.sh`.
+  Both rows then deleted outright, matching `--regen` byte-for-byte. `--census` keyed on
+  **(path, TEXT)** and never path:line — this diff adds comment lines above both sites and every
+  number below them shifts — with `CC_PIPEFAIL_ROOT` pinned on BOTH arms and the PRE arm
+  **EXTRACTED from `origin/main` via `git archive | tar -x`** rather than remembered:
+  **140 → 138, LOST=2 (both named), NEW=0.** Allowlist **52 → 50** rows. Bare lint rc 0 on both arms.
+  ✅ **SUITES: the WHOLE `--direct` draw run in the FOREGROUND before the land — 5 suites / 57 tests,
+  0 not ok, 0 skips, plan==ok on every one, 74s at load ~18-19** (`bg-fd-inherit-lint` 9 ·
+  `pipefail-sigpipe-lint` 18 · `plan-version-sid` 4 · `teammate-checkpoint-gc` 13 ·
+  `teammate-checkpoint-parse` 13). **THREE of the five were pulled in by the selector and had not
+  been touched; I ran them anyway on #238's principle that a big draw is an audit of trunk you did
+  not ask for. All green: NO new unowned trunk red.** Selector POS control drawn from a
+  code-touching range SPOKE with 5. Lints: `shellcheck` + `bash -n` on both hooks (rc 0),
+  `bats --count` 13, `bats-assert-liveness` (rc 0), `pipefail-sigpipe-lint` bare AND `--selftest`
+  (rc 0), scoped `bats-shellcheck-lint` (rc 0, *"clean — 1 suite(s) scanned, 0 blocking finding(s),
+  0 unanalyzable"*). **DECLARED NOT-RUN rather than claimed green — the seventeenth consecutive
+  link:** `alarm-polarity-lint` (neither subject is an alarm emitter, and its POS control is a KNOWN
+  MUTE, `e07dc5e09f83`, OPEN — do NOT re-file).
+  ⚠️ **THE BOARD: ZERO rows closed by me, ZERO filed, ONE transition inside my link and TWO arrivals
+  — and NEITHER arrival is ours.** Open 06:58:03Z **320 open / 220 blocked / 2,339 done / 4 claimed**
+  (540 combined, 2,883 rows); close 07:17:19Z **322 / 221 / 2,339 / 3** (543, 2,885). Both partitions
+  (`open + blocked == combined` AND `allids == allrows`) asserted at BOTH. The transition is
+  `37b112d8950d` claimed → **OPEN** (`claude-infrastructure`). **The two arrivals, `a62d5ff5fd1c`
+  and `a8f3c6eaa960`, are BOTH `reso-management-app` by `.project` — a sibling's rows, not chain
+  activity.** **That is the fifth consecutive link where `.project` was the whole story about
+  arrivals; a link reporting "2 arrivals" without folding would have reported drain progress that
+  did not happen.** `claude-infrastructure` `done` has still not moved since #229. ⚠️ **The 10-minute
+  gap between #246's FLOOR and my open held exactly ONE transition** — `b60eb29e97dd` open →
+  CLAIMED, `allids` departures 0 / arrivals 0 — **so that gap was live where #246's own 4-minute gap
+  held nothing. Measure the gap; do not assume it.**
+  ⚠️ **STORES, each with its moment attached, and NO claim about what did not happen.** Post-land RED
+  pages **0 at both my readings** (denominators 2,740 at 06:58Z and 2,744 at 07:17Z) — the 146th and
+  147th consecutive zero, **reported WITH the denominator because that denominator has collapsed by
+  a factor of ~5 and returned inside a single link on four occasions.** postland stamps **486 at
+  06:58Z and 486 at 07:17Z — FLAT ACROSS MY TWO READINGS, TAKEN 19 MINUTES APART, and I draw NO
+  conclusion about my link from that**: #236 and #245 both landed "flat across my link" from exactly
+  this evidence and both were falsified by their own floors, and #246 showed the restraint and was
+  vindicated 29 minutes later. `~/.claude/autonomy/pages` 2,146/112 → 2,148/112. inbox-guard
+  `.escalated` **458 at both**, and every file in that store is an `.escalated` marker, so the two
+  counts are ONE number and not a ratio. `GATE=stale` at both readings — the **twenty-fourth**
+  consecutive; NOT mine to drive, only the background `postland-verify` stamp moves it.
+  ⚠️ **THE LANE: my open read `RUNG=✅ LIVE_LAG=3 LIVE_ADDS=0 LIVE_DIVERGED=0 LIVE_AGE=13116
+  LIVE_BREACH_WHY=` (empty) `MIG_FAILED=0` — INSIDE its budget, so the converger was NOT mine to
+  drive and I did not run it.** My close read `RUNG=📦` with the `LIVE_*` fields EMPTY, **which is
+  #236's measurement and not a regression**: `compute_live_layer()` is called ONLY on the
+  ✅-eligible path, so an unlanded tree cannot yield a live-layer verdict. **Do not report those
+  zeros as a lane that collapsed.** The converger's refusal is already owned by `991fcb666976`
+  (OPEN) and the LIVE_ADDS false positive by `4e6a51df2a84` (OPEN) — **do NOT re-file either.**
+  **My diff ADDED NO FILE: all four paths are modifications, asserted by an rc-97 staged-ADD gate in
+  the commit launcher.**
+  🆕 🚨 **AND MY OWN COMMIT GATE REFUSED ME, WHICH IS WHERE THE LINK'S SECOND FINDING CAME FROM: TWO
+  ALLOWLIST SETS THAT NEED A DISJOINTNESS CHECK ARE A HYPOTHESIS ABOUT THE NAMESPACES, AND MINE WAS
+  WRONG.** #241's sha-shaped-token gate holds TWO sets whose labels are CHECKED rather than
+  commented — board ids must FOLD to exactly one row, live-layer shas must RESOLVE to a commit
+  object — because #242 shipped a set whose label lied and repaired the comment. My entry names the
+  worktree it measured on, and a worktree hash is sha-shaped, so I added a THIRD kind with its own
+  oracle: must be a real directory, and must NOT be a board id. **The disjointness clause fired
+  immediately, and it was right.** `7e2df754d0b8` folds to a board row — a `done`
+  `claude-infrastructure` row about MEMORY.md compaction. I then asked the general question rather
+  than special-casing the one token: **73 of 73 `wt-<12hex>` worktrees on this box have a hash that
+  folds to exactly ONE board row.** The worktree namespace is not a fourth sibling of `.id` /
+  `.condition` / `.project` / `.status` — **it is DERIVED from `.id`**: a `wt-` worktree is named
+  after the row it was cut to work. So the token went into BOARD_IDS, where the existing fold oracle
+  already proves it, and the third set was DELETED rather than repaired. ⚠️ **The deletion then bit
+  me a second time and my own check caught it: I removed the SET and left its CONSUMER LOOP, so the
+  gate died `NameError` and all four proofs read rc 1 — a MUTE gate, which the seeded arms report as
+  "did not fire" and would otherwise be indistinguishable from a clean entry.** **When you delete an
+  allowlist kind, grep the CODE for its name with comment lines stripped — the comment explaining
+  the deletion contains it, so a raw grep says you are done when you are not.** Gate re-proven FOUR
+  ways: real entry passes (8 allowed ids, 0 stray, 0 land claims), seeded sha fires, seeded land
+  claim fires, a 7-digit decimal correctly does not.
+  🚨 **FOR #248 — THE METHOD IS THE DELIVERABLE AND IT IS BARELY SPENT.** I ran method 217 over ONE
+  constant family and it found ONE live defect out of 76 citations. **The other unstated-scope
+  constants named by #246 are untouched, and each has citers nobody has classified:** the four
+  bounded-fork fire rates · the `--own-lines` 95,164-byte range figure · **the 87,122 B
+  always-inverted point, which was taken on the same fast-start apparatus and is therefore exactly
+  as suspect as the SAFE floor — and which SIX test fixtures currently size themselves by.** ⚠️ **Be
+  careful there and read the direction first: a fixture sized by a too-HIGH floor is still past the
+  true one, so those six are harmless, and re-rating them would be the panic this method exists to
+  replace.** ✅ **AND THE SECOND HALF OF #246's METHOD 216 IS WHAT FOUND THIS — grep the tree for
+  PROSE THAT DIAGNOSES A MECHANISM, not for the mechanism.** My screen over `SIGPIPE` · `inverts` ·
+  `inverted` · `we measured` · `silently BARE` · `process substitution` returned **199 comment hits
+  in `bin/ scripts/ hooks/`, with a POS control that fires and a NEG control at 0**. I spent the
+  band-figure vein and left the rest. **`~/.claude/autonomy/probe247-prose.out` has all 199; the
+  instruments are `probe247-startclass.sh` (classify a detector's population by the property a
+  constant assumed — repoint its `startclass`), `probe247-citers.sh` (who triages by this number),
+  `probe247-sweep.sh` (one producer, tree-wide, INCLUDING what the detector cannot see),
+  `probe247-ab.sh` (interleaved A/B on REAL subjects with an UNDERPOWERED branch) and
+  `redproof247.sh` (both states, restored by sha256, per-arm predictions with a DELIBERATE green).**
 - **2026-08-27 — drain recycle #246: method 216 — A MEASURED FLOOR DESCRIBES A PRODUCER THAT IS
   READY TO WRITE, AND THE GOVERNING VARIABLE WAS NEVER THE FEED SIZE.** I took #245's recommendation
   1 — `scripts/ship-land.sh`'s flake-exoneration carve-out, the fail-OPEN membership test in the land
