@@ -25,27 +25,36 @@ setup() {
 }
 
 LOAD='
-import importlib.machinery, importlib.util, json, os, sys, time
+import importlib.machinery, importlib.util, json, math, os, sys, time
 from datetime import datetime, timezone
 sys.argv = ["claude-accounts"]
 loader = importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"])
 ca = importlib.util.module_from_spec(importlib.util.spec_from_loader("ca", loader))
 loader.exec_module(ca)
 ca.LOG_PATH = os.path.join(os.environ["BATS_TEST_TMPDIR"], "claude-accounts.log")
-NOW = time.time()
+# NOW IS SNAPPED TO A MINUTE BOUNDARY, and that is a correctness requirement of the fixture rather
+# than tidiness. `_reset_key` ROUNDS a reset stamp to the nearest minute (S1a), so
+# completed_weekly_windows reconstructs `reset_t` as `key * 60` — up to 30 s either side of the
+# stamp the fixture wrote. Off a bare time.time() that reconstruction lands BELOW the real reset
+# half the time, `gap = reset_t - last._t` goes negative, and the window is silently dropped: a
+# suite that is green on odd minutes and red on even ones. Snapping removes the jitter at the
+# source; the 6-min tail below is the independent margin that survives it.
+NOW = math.floor(time.time() / 60.0) * 60.0
 STEP_H = 0.1
 def iso(t):
     return datetime.fromtimestamp(t, timezone.utc).isoformat().replace("+00:00", "Z")
 
 def window(acct, closed_h_ago, span_h, rate_pph, tail=None):
-    """One CLOSED weekly window: samples every 6 min from `span_h` before its reset up to the
-    reset itself (so completed_weekly_windows sees a tail inside WEEKLY_TAIL_GAP_H), accruing at
-    rate_pph. `tail` = (hours_before_reset, other_rate) switches the pace for the final stretch,
-    which is what makes an early projection WRONG rather than merely early."""
+    """One CLOSED weekly window: samples every 6 min from `span_h` before its reset up to SIX
+    MINUTES before it — never to the reset instant itself, which no real series ever hits and
+    which leaves zero margin against the minute-rounding above. completed_weekly_windows still
+    sees the tail, well inside WEEKLY_TAIL_GAP_H (3 h). `tail` = (hours_before_reset, other_rate)
+    switches the pace for the final stretch, which is what makes an early projection WRONG rather
+    than merely early."""
     reset_t = NOW - closed_h_ago * 3600.0
     out, wp = [], 0.0
     n = int(round(span_h / STEP_H))
-    for i in range(n + 1):
+    for i in range(n):
         h_left = span_h - i * STEP_H
         out.append({"acct": acct, "_t": reset_t - h_left * 3600.0,
                     "weekly_pct": round(wp, 4), "session_pct": 10,
