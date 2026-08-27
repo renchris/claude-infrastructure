@@ -1,0 +1,131 @@
+{
+  "$schema_note": [
+    "Per-app rule weightings. One review harness, three different problems -- and the",
+    "weighting is where the difference lives, not in three forks of the detector.",
+    "",
+    "A weight multiplies a finding's severity to rank the report. It NEVER changes",
+    "whether a rule fires: that is the false-positive budget's territory, and a rule",
+    "that needs its weight lowered to be tolerable is a rule that should not have",
+    "passed the budget. Weight 0 SUPPRESSES a class from the report body, and the",
+    "router prints what it suppressed and why -- a silently dropped class reads as",
+    "'nothing found there', which is the one thing a coverage claim may never do.",
+    "",
+    "`gestalt` decides whether the page itself earns a model call for the questions",
+    "no rule may claim -- hierarchy, attention, whether the page makes sense. This is",
+    "the expensive knob and the one that differs most between these three apps.",
+    "",
+    "Bounds: these weights are editorial judgements about what each app is FOR,",
+    "derived from the app inventory in the research README, not measurements. They",
+    "order a report; they are not evidence about anything. The severities they",
+    "multiply come from the rules, which are measured."
+  ],
+
+  "severity_scale": { "high": 3, "medium": 2, "low": 1 },
+
+  "profiles": {
+    "default": {
+      "label": "unweighted",
+      "why": "Every class at parity. The baseline a profile has to justify departing from, and the right choice for an app nobody has characterised yet.",
+      "class_weights": {},
+      "gestalt": {
+        "enabled": true,
+        "budget_per_run": 1
+      }
+    },
+
+    "reso-landing-app": {
+      "label": "marketing aesthetics",
+      "why": [
+        "Next 14, purchased template. The design system is someone else's and was",
+        "bought deliberately, so linting it for token conformance reports the",
+        "purchase rather than a defect -- high volume, all of it correct-by-decision,",
+        "and it buries the findings that matter. What matters here is whether the",
+        "page persuades: hierarchy, where the eye lands, whether the render betrays",
+        "the intent. That is the judgement layer's work, so gestalt runs on every",
+        "page and is the point of the run rather than a garnish.",
+        "Correctness classes are NOT relaxed. Contrast and target size are legal and",
+        "physical facts about a reader, not house style, and a bought template has no",
+        "standing to fail them."
+      ],
+      "class_weights": {
+        "contrast": 3.0,
+        "accessibility": 3.0,
+        "visual-hierarchy": 3.0,
+        "render": 2.0,
+        "optical-alignment": 1.5,
+        "overflow": 1.5,
+        "misalignment": 0.5,
+        "spacing-inconsistency": 0.5,
+        "token-drift": 0.0,
+        "grid-violation": 0.0,
+        "typographic-scale": 0.0
+      },
+      "gestalt": {
+        "enabled": true,
+        "budget_per_run": 8
+      }
+    },
+
+    "reso-management-app": {
+      "label": "design-system conformance",
+      "why": [
+        "Next 16, React 19, Tailwind 4, and the design system is ours. Here the",
+        "deterministic layer does nearly all the work, because almost every question",
+        "worth asking has a number in the answer: is this the token, is this on the",
+        "grid, is this on the scale, is this reachable. Drift is the defect class,",
+        "and drift is exactly what a rule catches and a model guesses at.",
+        "Gestalt is throttled rather than disabled. An internal operations tool is",
+        "judged on whether it is correct and consistent, not on whether it is",
+        "beautiful, and a hierarchy call on every screen of a large app is the single",
+        "most expensive thing this pipeline can be asked to do for the least return.",
+        "A small budget keeps the capability without letting it set the bill."
+      ],
+      "class_weights": {
+        "contrast": 3.0,
+        "accessibility": 3.0,
+        "token-drift": 2.5,
+        "grid-violation": 2.5,
+        "typographic-scale": 2.5,
+        "spacing-inconsistency": 2.0,
+        "misalignment": 2.0,
+        "overflow": 2.0,
+        "optical-alignment": 1.0,
+        "render": 2.0,
+        "visual-hierarchy": 0.5
+      },
+      "gestalt": {
+        "enabled": true,
+        "budget_per_run": 2
+      }
+    },
+
+    "reso-web-app": {
+      "label": "between the two",
+      "why": [
+        "Next 13, public-facing but built in-house, so both readings apply and",
+        "neither dominates. Conformance is checkable because the system is ours;",
+        "persuasion matters because a customer sees it. Left near parity",
+        "deliberately: an app characterised as 'between' has not been characterised,",
+        "and inventing a confident weighting for it would be the kind of plausible",
+        "number this bench exists to refuse."
+      ],
+      "class_weights": {
+        "contrast": 3.0,
+        "accessibility": 3.0,
+        "visual-hierarchy": 2.0,
+        "token-drift": 1.5,
+        "grid-violation": 1.5,
+        "typographic-scale": 1.5,
+        "spacing-inconsistency": 1.5,
+        "misalignment": 1.5,
+        "overflow": 2.0,
+        "optical-alignment": 1.0,
+        "render": 2.0
+      },
+      "gestalt": {
+        "enabled": true,
+        "budget_per_run": 4
+      }
+    }
+  }
+}

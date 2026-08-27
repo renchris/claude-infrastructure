@@ -1,0 +1,228 @@
+{
+ "profile": "default",
+ "profile_label": "unweighted",
+ "report": [
+  {
+   "page": "contrast-on-gradient",
+   "rule": "xcheck-contrast-varies",
+   "klass": "contrast",
+   "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
+   "detail": "contrast is not one number across this text: 6.15:1 at the left edge and 1.73:1 at the right. Any single computed value is a fiction, and the right end is the one that fails a reader",
+   "severity": "high",
+   "rank": 3.0
+  },
+  {
+   "page": "contrast-on-gradient",
+   "rule": "xcheck-contrast-varies",
+   "klass": "contrast",
+   "target": "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
+   "detail": "contrast is not one number across this text: 5.92:1 at the left edge and 1.71:1 at the right. Any single computed value is a fiction, and the right end is the one that fails a reader",
+   "severity": "high",
+   "rank": 3.0
+  },
+  {
+   "page": "contrast-plain",
+   "rule": "contrast",
+   "klass": "contrast",
+   "target": "div.helper:nth-of-type(4)",
+   "detail": "2.54:1 against 4.5:1 required (#9CA3AF on #FFFFFF)",
+   "severity": "high",
+   "rank": 3.0
+  },
+  {
+   "page": "hierarchy-inversion",
+   "rule": "contrast",
+   "klass": "contrast",
+   "target": "div.actions:nth-of-type(7) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
+   "detail": "3.38:1 against 4.5:1 required (#3B82F6 on #EFF6FF)",
+   "severity": "high",
+   "rank": 3.0
+  },
+  {
+   "page": "overflow-clip",
+   "rule": "overflow",
+   "klass": "overflow",
+   "target": "div.panel:nth-of-type(5) > table > tbody > tr:nth-of-type(2) > td.cell-venue:nth-of-type(2)",
+   "detail": "content is 40px tall inside a 24px box with overflow hidden; text is clipped",
+   "severity": "high",
+   "rank": 3.0
+  },
+  {
+   "page": "overflow-clip",
+   "rule": "overflow",
+   "klass": "overflow",
+   "target": "div.panel:nth-of-type(5) > table > tbody > tr:nth-of-type(3) > td.cell-venue:nth-of-type(2)",
+   "detail": "content is 40px tall inside a 24px box with overflow hidden; text is clipped",
+   "severity": "high",
+   "rank": 3.0
+  },
+  {
+   "page": "overflow-clip",
+   "rule": "overflow",
+   "klass": "overflow",
+   "target": "div.panel:nth-of-type(5) > table > tbody > tr:nth-of-type(4) > td.cell-venue:nth-of-type(2)",
+   "detail": "content is 40px tall inside a 24px box with overflow hidden; text is clipped",
+   "severity": "high",
+   "rank": 3.0
+  },
+  {
+   "page": "touch-target",
+   "rule": "touch-target",
+   "klass": "accessibility",
+   "target": "div.actions:nth-of-type(7) > div.action-group:nth-of-type(1) > button.btn-secondary:nth-of-type(2)",
+   "detail": "164x29px is under the 44px minimum target",
+   "severity": "high",
+   "rank": 3.0
+  },
+  {
+   "page": "align-1px",
+   "rule": "misalignment",
+   "klass": "misalignment",
+   "target": "div.panel:nth-of-type(5)",
+   "detail": "left edge at 31px is 1.0px off the shared 32px edge used by 9 other elements",
+   "severity": "medium",
+   "rank": 2.0
+  },
+  {
+   "page": "optical-centering",
+   "rule": "xcheck-optical-centre",
+   "klass": "optical-alignment",
+   "target": "div.actions:nth-of-type(7) > div.glyph-btn:nth-of-type(2) > span.glyph",
+   "detail": "div.actions:nth-of-type(7) > div.glyph-btn:nth-of-type(2) centres this mark on both axes, but its rendered ink sits 2.0px left and 0.0px down of that container's centre -- it will read as misaligned however correct the CSS is",
+   "severity": "medium",
+   "rank": 2.0
+  },
+  {
+   "page": "spacing-gap",
+   "rule": "spacing-rhythm",
+   "klass": "spacing-inconsistency",
+   "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(3)",
+   "detail": "gap 39.0px breaks the 16.0px rhythm used by its siblings under div.kpi-row:nth-of-type(2)",
+   "severity": "medium",
+   "rank": 2.0
+  },
+  {
+   "page": "type-scale",
+   "rule": "type-scale",
+   "klass": "typographic-scale",
+   "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(4) > div.kpi-label:nth-of-type(1)",
+   "detail": "font-size 17px is used once and sits off the page scale [12.0, 14.0, 16.0, 24.0]; nearest step is 16px",
+   "severity": "medium",
+   "rank": 2.0
+  },
+  {
+   "page": "grid-offgrid",
+   "rule": "grid-violation",
+   "klass": "grid-violation",
+   "target": "div.section-title:nth-of-type(3)",
+   "detail": "margin-top is 13px, not a multiple of the 8px grid",
+   "severity": "low",
+   "rank": 1.0
+  },
+  {
+   "page": "grid-offgrid",
+   "rule": "grid-violation",
+   "klass": "grid-violation",
+   "target": "div.section-title:nth-of-type(6)",
+   "detail": "margin-top is 13px, not a multiple of the 8px grid",
+   "severity": "low",
+   "rank": 1.0
+  },
+  {
+   "page": "hierarchy-inversion",
+   "rule": "token-drift",
+   "klass": "token-drift",
+   "target": "div.actions:nth-of-type(7) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
+   "detail": "background-color #EFF6FF is 11.5 away from token #F9FAFB; almost certainly meant to be the token",
+   "severity": "low",
+   "rank": 1.0
+  },
+  {
+   "page": "radius-drift",
+   "rule": "token-drift",
+   "klass": "token-drift",
+   "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(2)",
+   "detail": "border-radius 6px differs from the page's dominant 8px",
+   "severity": "low",
+   "rank": 1.0
+  },
+  {
+   "page": "spacing-gap",
+   "rule": "grid-violation",
+   "klass": "grid-violation",
+   "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(3)",
+   "detail": "margin-left is 23px, not a multiple of the 8px grid",
+   "severity": "low",
+   "rank": 1.0
+  },
+  {
+   "page": "token-color-drift",
+   "rule": "token-drift",
+   "klass": "token-drift",
+   "target": "div.actions:nth-of-type(7) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
+   "detail": "background-color #1D4ED3 is 5.0 away from token #1D4ED8; almost certainly meant to be the token",
+   "severity": "low",
+   "rank": 1.0
+  }
+ ],
+ "suppressed_by_weight_zero": {},
+ "discharged": [
+  {
+   "page": "contrast-on-gradient",
+   "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
+   "abstention": "contrast-indeterminate",
+   "discharged_by": "xcheck-contrast-varies"
+  },
+  {
+   "page": "contrast-on-gradient",
+   "target": "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
+   "abstention": "contrast-indeterminate",
+   "discharged_by": "xcheck-contrast-varies"
+  }
+ ],
+ "queue": [
+  {
+   "page": "align-1px",
+   "kind": "gestalt",
+   "klass": "visual-hierarchy",
+   "rules": [],
+   "targets": [
+    "<page>"
+   ],
+   "question": "Does this page make sense at a glance? Where does the eye land first, and is that the thing the page is for? Is the visually heaviest element the most important one? Report nothing with a number in it -- spacing, sizes, ratios and offsets are measured elsewhere and your estimate of one would be wrong.",
+   "prohibition": "This crop is for judgement only. Do not report any distance, size, ratio or coordinate from it: every number about this region is already known exactly from the DOM, and a number read off pixels can only be worse. Say what is wrong, not how far.",
+   "region": null,
+   "rank": 3.0,
+   "crop": {
+    "path": "shots/align-1px@1.5x.png",
+    "px": [
+     1920,
+     1350
+    ],
+    "image_tokens": 3381,
+    "from": "align-1px@1.5x.png"
+   }
+  }
+ ],
+ "budget": {
+  "findings_after_control": 20,
+  "asserted_no_model_call": 18,
+  "abstentions_discharged": 2,
+  "queued": 1,
+  "image_tokens": 3381,
+  "abstentions_without_a_rect": 0,
+  "gestalt_pages_not_queued": [
+   "contrast-plain",
+   "optical-centering",
+   "radius-drift",
+   "token-color-drift",
+   "touch-target",
+   "type-scale",
+   "contrast-on-gradient",
+   "grid-offgrid",
+   "hierarchy-inversion",
+   "spacing-gap",
+   "overflow-clip"
+  ]
+ }
+}

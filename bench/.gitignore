@@ -11,3 +11,6 @@ corpus/out/pages/
 corpus/out/shots/
 corpus/out/snapshots/
 corpus/out/blind/
+
+# route.py cuts these from the shots on demand; same reasoning as shots/ above.
+corpus/out/crops/
