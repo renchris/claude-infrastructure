@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import sys
 import time
@@ -142,9 +143,15 @@ def capture(corpus: pathlib.Path, dprs: list[int]) -> None:
     snaps.mkdir(exist_ok=True)
 
     timings = []
+    # `channel="chromium"` resolves against Playwright's own install. A machine
+    # that carries a pre-provisioned browser at a fixed path (CI images do) has
+    # no such channel, and the corpus is worth nothing if it only runs on the
+    # laptop it was written on -- so honour an explicit binary when one is named.
+    exe = os.environ.get("BENCH_CHROMIUM")
+    launch_kw = {"executable_path": exe} if exe else {"channel": "chromium"}
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            channel="chromium",
+            **launch_kw,
             args=[
                 "--force-color-profile=srgb",
                 "--disable-lcd-text",
