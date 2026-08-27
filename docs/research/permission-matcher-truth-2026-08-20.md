@@ -593,9 +593,22 @@ those by `bashMissKind` / error text. Only `no-rule-match` is addressable by a p
    auto it buys you nothing; it is a `default`/`acceptEdits`-mode lever.)
 7. **Put `defaultMode` and any `auto`-related key in `~/.claude/settings.json`**, never in a project
    or `.local` file.
-8. **Audit existing rules against the drop list.** Grep the 339 entries for
-   `python|python3|node|deno|tsx|ruby|perl|php|lua|npx|bunx|npm run|yarn run|pnpm run|bun run|bash|sh|ssh|zsh|fish|eval|exec|env|xargs|sudo|curl|wget|kubectl|aws|gcloud|gsutil`
-   in bare / `:*` / `*` / `<cmd> -flag*` form — every hit is dead weight in auto mode.
+8. **Audit existing rules against the drop list** — now `cc-permission-audit --auto-drop`
+   (also run by `--prune`), which implements `gsn`/`_sn`/`iSd`/`nSd`/`PHs` above verbatim.
+
+   > ⚠️ **DO NOT use the grep this item used to recommend** (`python|node|…|sudo|curl|…` over
+   > the 339 entries). It was landed here as the remedy and it is wrong in both directions.
+   > **False positives:** a substring match sweeps `shellcheck`, `nodemon`, `sudoku`,
+   > `envsubst`, `execa`, `npm run-script` — every one of which survives auto mode, and all
+   > six are pinned as arms in `tests/cc-permission-auto-drop.bats`. **False negatives:** it
+   > cannot see bare `Bash`, an all-wildcard specifier, an `Agent(…)` rule (all dropped
+   > whatever the specifier), or `autoMode.classifyAllShell`, which drops *every* Bash and
+   > PowerShell rule from any settings source. The predicate is a rule algebra, not a
+   > spelling — the same lesson THE DEAD-ENTRY PREDICATE learned for `--prune`.
+
+   The audit **reports and never removes**: a dropped rule is restored on leaving auto mode,
+   so it is dead *weight*, not a dead *entry*, and pruning it would change default-mode
+   behaviour. Rewrite each hit narrower per DO #1–#2 instead.
 
 ### DON'T
 
