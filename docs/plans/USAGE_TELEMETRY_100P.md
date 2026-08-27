@@ -1610,7 +1610,9 @@ windows/week, carrying the fleet wall rate 1.72% → 2.20%.
 
 ### §5.7 Implementation record — what actually landed, and where it deviated from the spec
 
-Wave 1 = **S1 + S2 + S3 only**. S4–S7 are unbuilt and unchanged; S5 still gates S6.
+Wave 1 = **S1 + S2 + S3**. Wave 2 (2026-08-27) = **S4 + S5**. **S6 and S7 remain unbuilt**, and S5
+still gates S6 — the gate is "S5 has been RUN and READ", which wave 2 could not discharge (see the
+live-data caveat in S5 below).
 
 #### S1 · data fixes — LANDED
 
@@ -1770,6 +1772,110 @@ nowcaster precisely because it converges as the horizon closes, which is what ma
 forecaster. **S5 (`--strand-score`) is still the prerequisite for S6**, and nothing here
 shortens that.
 
+#### S4 · M4′ `burst_start_by` — LANDED (wave 2)
+
+`bin/claude-accounts`: `burst_start_by(r, k)` + `fmt_start_by(sb)` beside `fmt_burst`, constants
+`BURST_SPPH` / `P_WALL` / `MEAN_WALL_H` / `SESSION_WINDOW_H` / `START_SOON_H`; `exchange_rate`
+wired into `apply_burn` and stamped as `exch_k` / `exch_k_src` / `burst_start_by_h` /
+`burst_start_by`; `pace_line` gains the clause and the `PACE_HEAD_K` header. Suite
+`tests/claude-accounts-start-by.bats` (RP-21..RP-24 + RP-24b/RP-24c), **6/6 RED** against the
+pre-S4 binary, 30/30 green after across start-by · strand · burst · burn-ratio.
+
+**The spec's arithmetic reproduces §5.2 S4's live table exactly**, which is the check that matters
+because that table is the only out-of-sample evidence this metric has. next3: 1 window, need 41.67
+session pp, freeze 1.0331 h, t_needed 2.855 h against 2.21 h of runway → **LATE by 0.645 h with a
+2.832 pp floor**. next2: 6 windows, need 432.29, freeze 6.199, t_needed 27.61 → `start by T−28h
+(70h slack)`, byte-identical to §5.4's mock row.
+
+**Deviation 1 — an EXHAUSTED 5h window now waits out its roll, and the spec's pseudocode does
+not.** §5.2 S4 guards the whole first-window step on `avail > 0`, so at `session_pct = 100` — a
+meter that cannot burn one more pp right now — `t` stays 0 and the walk starts burning
+immediately. The error is **fail-DANGEROUS in exactly one direction**: `t_needed` comes out short,
+`burst_start_by_h` comes out long, and the verdict reads **SLACK on the one state where the burst
+is provably blocked**. Every other arm of the walk waits out the roll; so does this one now.
+RP-23 pins it as a *relation* (the blocked account needs strictly more clock than an otherwise
+identical open one, by its own `session_reset_h`), not as a magnitude — a magnitude assertion here
+would re-freeze the constants the probation clause exists to keep movable.
+
+**Deviation 2 — the clause REPLACES the `· Nd left` countdown on the rows that carry it**, per
+§5.4's mock, rather than adding to it. `T−28h` and `28h slack` sum to `weekly_reset_h`, so the row
+already holds the countdown; rendering both spends a scarce column on a derived number. Rows where
+M4′ abstains keep the countdown unchanged, so the abstain is visible as the fallback.
+
+**Deviation 3 — the start-by clause rides M5's gate (`strand ≥ 0.5 pp`), not every row.** A start
+time is an instruction to SPEND, and an account with no strand has nothing to rescue: ungated,
+`next` — 1.63× burn, on a wall trajectory — would have been told to begin bursting. §5.4's mock
+shows exactly this shape and it is the reason the mock shows it.
+
+**Deviation 4 — K reaches `pace_line` as a STAMP, and it is the one thing this renderer does not
+compute.** S3 Deviation 3 is that a renderer reading a stamp renders nothing when `apply_burn` has
+not run — a silent failure — which is why the strand is computed in place. K cannot be: the fit
+needs the utilization series and `pace_line` is handed rows. The failure mode is therefore
+graceful and is *exactly M4′'s own abstain*: no stamp ⇒ no start-by clause and no `K=` in the
+header, which is what an unfitted exchange rate honestly means. The header clause is gated on a
+row having actually consumed a K, so the block can never advertise a coefficient nothing used.
+
+**The fit is ONCE per sweep, not once per row.** K is a fleet-level ratio; re-fitting it per
+account would turn one pooled estimate into four thin ones, each below `K_MIN_SDS`, each silently
+falling back to `K_FROZEN` — a per-account number that is the same literal four times and reads as
+four measurements. RP-24c pins the single fit and the stamp.
+
+**This closes the third of the product's four questions** (§5.1 *What is now the product*): how
+much dies (M3a), whether the demand is routine (M5), and now by when the spending must begin. The
+fourth — how early you could have known — the data does not carry beyond ~12 h and no surface here
+claims it.
+
+#### S5 · M3c `--strand-score` — LANDED (wave 2)
+
+`bin/claude-accounts`: `strand_score(samples, buckets, now)` + `render_strand_score(buckets,
+windows)`, constants `STRAND_SCORE_BUCKETS` / `STRAND_SCORE_LOOKBACK_H` / `STRAND_EPS_PP`, and a
+`--strand-score [--hours N] [--json]` branch in `main()` placed **before `load_cfg()`**, beside
+`--agents`. Suite `tests/claude-accounts-strand-score.bats` (RP-28..RP-32), **5/5 RED** at the S4
+commit, green after.
+
+**It replays the real artifact.** `burn_wk_ewma_ph` and `wk_strand_pp` are called, never
+re-implemented — a harness that scores its own copy of the arithmetic scores the copy.
+
+**Deviation 1 — a causality guard was added to `burn_wk_ewma_ph` itself**, and this is the finding
+of the wave. Replaying M3a at a past instant makes every LATER sample in the series a *future*
+sample, and that estimator's lookback filter was one-sided (`now - _t <= 48h`), which is true for
+future samples too. Live it cannot matter — `now` is the wall clock — but a harness handing it the
+whole series would have let the score peek at the outcome it is supposed to be predicting, and
+RP-30 would then have passed for the wrong reason: **the vacuous pass this harness exists to
+catch, reappearing inside the harness.** Fixed at both layers deliberately: the estimator refuses
+`_t > now`, and `strand_score` slices to the evaluation instant before calling it. RP-31 pins
+both, and pins that the refusal is of the FUTURE and not merely of the lookback (samples 10 h
+after the instant, well inside 48 h of it, are dropped).
+
+**Deviation 2 — the third statistic is agreement on strand-vs-fill, not the spec's "sign
+agreement".** M3a clamps both the projection and the realised strand at zero (§5.1 LB-2's
+overshoot rule), so their signs are degenerate and a literal sign-agreement rate reads 100% by
+construction — a second tautology in the instrument built to remove one. What is falsifiable is
+the binary the block actually drives: did the projection at H hours out say this window would
+strand, and did it? Threshold is `STRAND_EPS_PP = 0.5`, the same one `pace_line` renders `no
+strand` against, so the score is graded on the surface's own decision and not on a private one.
+
+**Deviation 3 — placed beside `wk_strand_pp`, not beside `_util_tail`** as §5.2 S5 says. It scores
+M3a and reads M3a's neighbours; module-level name resolution makes the position free, and the
+version that sits next to what it scores is the one a reader can check.
+
+**What the acceptance is, restated because it is easy to get wrong.** Not *"it is accurate"* — it
+is that the buckets carry non-zero `n` and report a bias that **could** have been non-zero. RP-30
+is that property as a case: a 120 h window running 24 h at 0.85 pp/h and then 96 h at 0.36 closes
+near 55%, so ~45 pp die; at **T−96h** the nowcast still sees the fast pace (20.4 + 0.85×96 = 102),
+projects the window FILLING, clamps to zero, and is wrong by the entire strand with `agree = 0%`.
+By **T−6h** it has converged and is nearly right. The refuted rule could not have produced that
+row, because it only ever looked where the projection had already converged.
+
+⚠️ **The live table is NOT in this record, and its absence is the honest state.** Wave 2 ran in a
+Linux container with no `~/.claude/logs/account-utilization.jsonl`, so every figure above is
+fixture-derived or reproduced from §5.2's own recorded table. **`claude-accounts --strand-score`
+against the real series has not been run**, and §5.4 acceptance 2 — non-zero `n` in the 24/12/6 h
+buckets *on live data* — is therefore still open. RP-32 proves the flag answers with no config, no
+keychain and no sweep, and that the buckets fill on a synthetic series; it does not prove the real
+series carries enough closed windows. **S6 stays gated**: §5.2 S6 is literal that the alarm must
+not be built until S5 has been run **and read**, and reading it means reading it against live data.
+
 #### Acceptance status against §5.4
 
 | command | status |
@@ -1777,7 +1883,31 @@ shortens that.
 | the bats suites (roll-key · util-tail · strand · burst · core) | **111/111 green**, every case shown RED at the commit before its fix |
 | `claude-accounts --readout` renders the drain block for all four accounts | **yes** — see above |
 | `claude-accounts --readout \| grep -c 'strand'` → 3 or 4 | **4** |
-| `claude-accounts --strand-score` | **not in this wave** — that flag is S5 |
+| `claude-accounts --strand-score` | ~~not in this wave~~ → **wave 2: the flag exists and answers**, but see the ⚠ below |
+
+**Wave 2 (S4 + S5) acceptance, and what it does NOT establish.**
+
+| command | status |
+|---|---|
+| `bats tests/claude-accounts-start-by.bats` (RP-21..RP-24c) | **6/6 green**, all 6 shown RED against the pre-S4 binary |
+| `bats tests/claude-accounts-strand-score.bats` (RP-28..RP-32) | **5/5 green**, all 5 shown RED at the S4 commit |
+| regression: start-by · strand · burst · burn-ratio · roll-key · util-tail · core | **green on every case that this environment can run** |
+| `claude-accounts --strand-score` **on the live series** | ⚠ **NOT RUN** — no `account-utilization.jsonl` in the wave-2 container |
+| `claude-accounts --readout` on the live fleet | ⚠ **NOT RUN**, same reason |
+
+⚠️ **Two pre-existing environment reds, named so a later session does not re-diagnose them as
+wave 2's.** Both reproduce **identically on a pristine trunk tree** in the same container, and
+neither touches a file this wave wrote:
+
+1. **5 bats cases** in `claude-accounts.bats` / `claude-accounts-core.bats` (`--login-status` ×3,
+   `--relogin-info`, `e2e --json` logged-out) — they shell out to macOS keychain/`security`
+   probes, and one dies on Linux's smaller `ARG_MAX` (`OSError: [Errno 7] Argument list too long`).
+2. **`scripts/ship-land.sh --precheck` RED on the `unattended-path-selftest` arm.** The lint's
+   `EMBEDDED_ALLOWLIST` names macOS-only binaries — `gtimeout`, `taskpolicy`, `sysctl`, `lsof`,
+   `gh` — none of which resolve in a Linux container, so its self-discrimination check fails
+   11/42 and the ratchet refuses to issue a verdict. Every **other** gate arm ran clean on this
+   diff, the dead-assertion ratchet included (2 changed suites), and the lint flags no file this
+   wave wrote. On the operator's Mac this arm should go green with no change.
 
 ⚠️ `bash tests/run.sh …`, named in §5.4, **does not exist in this repo**. The suites are run with
 `bats tests/<name>.bats`; `scripts/ship-land.sh` selects and runs them at the land.
