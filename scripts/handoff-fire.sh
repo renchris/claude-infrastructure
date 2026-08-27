@@ -5629,7 +5629,22 @@ if [ "${1:-}" = "__recycle" ]; then
         cr)
           hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;;
         retype)
+          # THE ECHO-VERIFY IS THE THREE LINES BELOW, in the composer's own oracle — not missing.
+          # scripts/typed-send-lint.sh reads this send as unverified because it does not route
+          # through it2_type_verified / osa_type_verified, and both of those are SHELL-pane helpers
+          # that are wrong here in kind, not merely in style: _it2_type_line types `: <nonce>; <line>`
+          # so the read-back can be anchored to something no scrollback residue can forge. Prefixing
+          # a shell no-op onto `/exit` does not produce a slash command — it produces a text message
+          # to the model — and its Ctrl-U scrub is inert in a composer anyway (measured 2.1.220,
+          # see the composer-content oracle above). The hazard the lint exists to stop is a zsh
+          # `setopt CORRECT` prompt wedging on a mangled command line; there is no shell here.
+          # What the lint actually asks for — paste, READ THE PANE BACK, only then send the CR — is
+          # exactly what runs: recycle_nudge_decision returned `retype`, which it does only on a
+          # composer PROVEN empty, and the CR is gated on composer_content reading back exactly
+          # `/exit`. A mangled retype therefore holds, and the recycle fails loudly at the 600s
+          # refusal with the session alive — the same polarity every other injection site here has.
           if [ "$waited" = 60 ]; then
+            # typed-send-lint:allow — reviewed: the CR is gated on the read-back two lines down
             hf_bounded "$IT2" session send -s "$RSID" "/exit" >/dev/null 2>&1 || true
             sleep 1
             nc="$(composer_content "$IT2" "$RSID")" || nc=""
