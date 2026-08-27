@@ -97,6 +97,40 @@
 # record is still written (A9's observable) — now alongside the decisions rather than instead of
 # them.
 #
+# ── A2', THE SAME DEFECT INVERTED — A DECIDER STARVING THE ADMITTER (2026-08-27) ──────────────────
+# A2 above narrowed what the lock GATES. It did not narrow WHO TAKES IT, and the guard it shipped
+# read `[ "$mode" != dry ]`, so `decide` acquired the admission lock too. A decide pass returns at
+# step 3a — before wave-plan, before claim, before spawn — so it can never spend that lock; it just
+# holds it to process exit under the EXIT trap, across a decision phase this header measures at
+# 7-45 s and the live store has since grown to p50 260 s / p90 546 s / max 1,361 s.
+#
+# WHO CALLS WHICH MODE IS THE WHOLE PROBLEM, and it is a coupling A2 could not have seen because
+# the kick post-dates it: `cc-backlog add` fires a debounced, detached `--decide` on EVERY
+# successful write (bin/cc-backlog § S5 KICK-ON-WRITE). So filing work MINTS lock-holders, while the
+# only pass that can fire a worker is the 300 s `--once` tick. The busier the ledger, the more
+# certainly the tick is refused — the feedback sign is backwards.
+#
+# MEASURED ON THE LIVE BOX, 2026-08-27T07:2x-07:5xZ, before the fix:
+#   · SIX concurrent `cc-dispatch --decide` (ages 00:01, 00:01, 01:45, 07:49, 12:33, 18:35, 24:06)
+#     and one `--once`; `dispatch.lock/owner` named a `--decide` alive 25 min, so the stale-reclaim
+#     in lock_acquire correctly refused to break it.
+#   · 176 of the daemon's 313 launchd passes — 56.2% — printed "an admission is already in flight".
+#   · Two consecutive passes deferred 286/286 and 285/285 items on reason `pass-in-flight`, i.e.
+#     100% of the queue, against `live_workers=2, free_slots=10, ceiling=12`. Ten slots idle.
+#   · 65 `admit` verdicts in 68 min yielded 1 claim and 2 fires; ten of those admits were held by a
+#     `--decide` pass and evaporated at its step-3a return.
+#   · `defer/pass-in-flight` is ~65% of ALL decisions in the 5.3 d the IDL retains; `defer/capacity`
+#     is second. Contention, not the fleet, is what the dispatcher spends its passes on.
+#
+# THE FIX. Step 0 now reads `[ "$mode" = run ]` — only the mode that can admit takes the admission
+# lock. Decide's one write (the 1a2 venue label) takes the SAME lock around the write itself and
+# releases immediately, which is what its `inflight` guard was really buying; a decide pass that
+# loses that race skips labelling exactly as it did before. Rejected alternative (b) above — "a
+# second, separate admission lock" — was rejected on the premise that once the loser decides
+# lock-free "the FIRST lock has no remaining job". That premise held while `decide` was incidental.
+# It stopped holding when `decide` became the dominant caller, and the answer is still not a second
+# lock: it is one lock, taken by one mode, for the phase it was always meant to cover.
+#
 # THE COST, STATED (this is a real trade, not a free win). A skipped pass used to append ONE record;
 # it now appends one per dispatchable item (~135 live), so a spawn tail long enough to skip 2-3
 # passes multiplies the IDL's growth over that span. That matters because the IDL is not write-only:
@@ -1560,15 +1594,32 @@ dispatch() { # <dry|run|decide>
   # it to the incumbent dry pass (still zero claims/spawns/pages) rather than invent a lane-v1 mode.
   [ "$v2" -eq 0 ] && [ "$mode" = decide ] && mode=dry
 
-  # 0. S6 SINGLETON — writing modes only. A dry pass writes nothing, so it must neither block a live
-  # pass nor be blocked by one. skip-not-queue: a LIVE holder means an ADMISSION is already in
+  # 0. S6 SINGLETON — THE ADMITTING MODE ONLY. A dry pass writes nothing, so it must neither block a
+  # live pass nor be blocked by one. skip-not-queue: a LIVE holder means an ADMISSION is already in
   # flight, so this pass may never claim or spawn (never queues ⇒ never double-claims).
   #
   # It does NOT return here. Losing the lock costs this pass its admission budget, not its voice:
   # the decision journal is a pure read (S1) and is what the 5-minute bound is measured on, so it
   # runs either way and `inflight` carries the verdict downstream. Returning at this line is the
   # A2 defect itself — see THE LOCK COVERS ADMISSION, NOT DECISION in the header.
-  if [ "$v2" -eq 1 ] && [ "$mode" != dry ] && ! lock_acquire; then
+  #
+  # 🚨 `= run`, NOT `!= dry` — A2 FROM THE OTHER SIDE (measured 2026-08-27). The guard used to read
+  # `!= dry`, which admitted `decide` as well, and a `decide` pass RETURNS AT STEP 3a (`[ "$mode" =
+  # decide ] && idl_summary; return 0`) before wave-plan, before claim, before spawn. So it acquired
+  # an admission lock it is structurally incapable of spending, then held it to process exit under
+  # the EXIT trap — for the WHOLE decision phase, which this file's own header measures at 7-45 s
+  # and which the live store has since grown to p50 260 s / p90 546 s / max 1,361 s against a 300 s
+  # launchd tick. A2 was "the admitter starves the deciders"; this is the same defect inverted, and
+  # it is worse because of WHO calls which mode: `cc-backlog add` kicks a detached `--decide` on
+  # every successful write (bin/cc-backlog § S5 KICK-ON-WRITE), so filing is a lock generator, while
+  # the only pass that can ever fire is the 300 s `--once` tick. MEASURED on the live box before the
+  # fix: SIX concurrent `--decide` processes (ages 00:01 … 25:48) with the lock owner a `--decide`
+  # at 25 min; 176 of the daemon's 313 launchd passes (56.2%) refused admission; every item of every
+  # recent pass deferred `pass-in-flight` (286/286 and 285/285 on two consecutive passes) against
+  # `live_workers=2, free_slots=10` — the fleet was 10 slots idle while the queue was 100% deferred.
+  # The header's premise — "a decision is a pure read: it costs no quota, no session, no lock" — is
+  # what this line now implements; before, the implementation contradicted it for `decide`.
+  if [ "$v2" -eq 1 ] && [ "$mode" = run ] && ! lock_acquire; then
     inflight=1
     idl_inflight
     echo "cc-dispatch: an admission is already in flight — DECIDING ONLY (zero claims, zero spawns)." >&2
@@ -1748,8 +1799,21 @@ dispatch() { # <dry|run|decide>
   # `cc-backlog add` kicks — a `--once` cron tick is a clock, and hanging a labeller off a clock is
   # the sweep this wave deletes. A dry pass writes nothing, by the same rule as every other write
   # here, and a pass that lost the singleton is a pure read.
-  if [ "$v2" -eq 1 ] && [ "$mode" = decide ] && [ "$inflight" -eq 0 ]; then
+  #
+  # 🚨 THE LOCK IS TAKEN *HERE*, AROUND THE WRITE, AND RELEASED IMMEDIATELY — never at step 0.
+  # This write is the ONLY thing a decide pass does that needs serialising, and it is milliseconds
+  # of work at the head of a decision phase measured at p50 260 s / max 1,361 s. Holding the
+  # admission lock across the whole phase to protect this one call is what starved the `--once`
+  # tick (see the 🚨 at step 0). Scoping the hold to the write keeps concurrent labellers from
+  # double-appending — the property the old `inflight` guard actually bought — while leaving the
+  # admission lock free for the only mode that can spend it.
+  #
+  # A decide pass that LOSES this race skips labelling, which is byte-identical to what the old
+  # `inflight` guard did for it, so nothing about the labeller's contract changes. It is a plain
+  # `if`, not a wait: skip-not-queue, exactly as at step 0. The next kick relabels.
+  if [ "$v2" -eq 1 ] && [ "$mode" = decide ] && [ "$inflight" -eq 0 ] && lock_acquire; then
     venue_label_new "$open_items"
+    lock_release
   fi
   gcount="$(printf '%s' "$guarded"      | jq 'length' 2>/dev/null || echo 0)"
   count="$( printf '%s' "$dispatchable" | jq 'length' 2>/dev/null || echo 0)"
