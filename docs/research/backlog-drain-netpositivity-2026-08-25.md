@@ -218,6 +218,12 @@ from *unknown freshness* to *known*. Existence proof: the 2026-08-24 pass falsif
 closed within 3 minutes. **#1 because it attacks residence-time decay directly and makes every later
 decision cheaper.**
 
+> 🚨 **REFUTED 2026-08-27 — do not action this as written; see §7a.** The sweep was already scheduled
+> four times a day when this was filed (`1138abb2`, 2026-08-19), `457 of 501` counts the 198 blocked
+> rows this repo had already flagged as the wrong denominator, and ~340 of the 501 carry no probe arm
+> and therefore *cannot* be validated by any sweep. What is real is a **44-validated-vs-157-capable**
+> gap that needs the live box.
+
 **L2 · Adopt `--condition` at the four uncured mint sites — AGENT, ~half a day.**
 `scripts/ship-land.sh:1000`, `scripts/postland-verify.sh:793-797`, `scripts/deploy-live.sh:725,870`,
 `scripts/autonomy-sweep.sh:381`. Prospectively removes ~**5–8 adds/day**. The pattern is proven twice
@@ -313,7 +319,9 @@ wrong population, or the wrong conclusion. The counts were fine; the *folds* wer
 ### Still blind — say "unknown", not a number
 
 1. **Live staleness is projected, not measured.** The 54–89 figure applies *closed-row* rates to
-   *live* rows. **The true live rate is UNKNOWN until L1 runs.**
+   *live* rows. **The true live rate is UNKNOWN until L1 runs** — and per §7a it stays unknown for the
+   ~340 rows that carry no probe arm, whatever L1 does. Measurable only over the ~157 probe-capable
+   rows, which is a different and much smaller claim than the one projected here.
 2. **The `project` field records the worktree directory basename, not the repo.** ~100 rows are filed
    under slugs like `.desk-land-claude-fire-…`. **Every per-project census here undercounts
    claude-infrastructure by an unknown margin** — including my own 64.1% machinery figure.
@@ -326,6 +334,62 @@ wrong population, or the wrong conclusion. The counts were fine; the *folds* wer
    pricing applied to it.
 6. **`~/.claude-next` holds 0 transcripts** while four other account roots hold 713/831/729/573.
    Unexplained; any fleet-wide transcript census may be missing a stratum.
+
+### 7a. POST-PUBLICATION — L1's premise is refuted on trunk (2026-08-27, backlog `37b112d8950d`)
+
+L1 was filed as a work item and dispatched. The worker could not run it, and in reading trunk to find
+out why, found the recommendation's premise false in three places. Recorded here rather than in a new
+document because §7 is where this doc keeps corrections to itself, and because L6 is right that this
+lane's answer to every finding must stop being another artifact.
+
+**1. "The mitigation is built and 91% unapplied … a scheduling problem, not a design problem" was
+already false when written.** The scheduled currency pass — `cc-premise sweep --json --record --limit
+150 --close-falsified 5` — landed in `scripts/autonomy-sweep.sh` on **2026-08-19** (`1138abb2`), six
+days before this doc measured `457 of 501`. It is scheduled by
+`launchd/com.chrisren.autonomy-sweep.plist` at `StartInterval 300` and gated to fire every 6 h
+(`CC_PREMISE_PASS_EVERY_S=21600`) — four passes a day, over a probe cap deliberately set *above* the
+probe-capable population. **Nothing about L1 was unscheduled.** The `--limit`/`--close-falsified`
+caps are load-bearing safety, not throttles to be raised: the closer's own header gives the reason
+(`bin/cc-premise:_close_falsified` bound 3 — a probe-corrupting tree change must not empty the store
+in one pass).
+
+**2. "Across all 457 … converts ~400 more from unknown to known" is impossible by construction, not
+merely slow.** `cc-premise:probe_capability` recognises exactly three arms — a **stored** `falsifier`,
+a **derived-plan** dodRef, a **derived-postland** red row — and returns `"none"` for everything else.
+`cmd_sweep` appends a verdict only under `if probe_out.get("probed")` (`bin/cc-premise:3050`), so an
+unprobed row never enters `_record_validations` and can never receive a stamp. **A row with no arm is
+permanently `never_validated`, and no sweep at any cadence changes that.**
+
+**3. The `457 of 501` denominator is the error this repo had already diagnosed.** `cc-backlog
+freshness` folds `select(.status != "done")` (`bin/cc-backlog:4599`), so its "live" **includes the 198
+blocked rows** — and `scripts/backlog-ratchet.sh:60-70` records the same mistake being made and
+corrected two weeks earlier: *"the 505-row figure that motivated it came from `cc-backlog list
+--open`, whose projection INCLUDES 198 blocked rows — so the denominator under suspicion was the
+analyst's, not this script's. Correct numbers: 304 open + 3 claimed = 307, of which 157 carry a
+probe."* The `needs` class carries no oracle at all and cannot cheaply be given one: its `--run`
+*performs* the operator step, so it can never be executed as a probe (`backlog-ratchet.sh:50-56`).
+cc-premise never reads a `run` field, which is why this is a ceiling on coverage rather than a live
+hazard in the sweep.
+
+**So `never validated` has a structural floor of roughly 340 of 501** — the line this doc reproduces
+as *"← the number that must fall"* cannot fall past it. Raising coverage means **minting probes**
+(the ratchet's axis, L2-shaped work), not running a sweep.
+
+**What survives, and it is a better-aimed item than L1.** The arithmetic still does not close:
+~157 rows are probe-capable and the pass has fired ~4×/day since 2026-08-19, yet 2026-08-25 read only
+**44** validated. Either the job is not firing on the box, or its stamp writes are failing, or the
+`--limit` cursor is not completing a cycle — the pass journals `validated_recorded`, `deferred` and
+`shard_pending` for exactly this question. **That is a live-box question**: `backlog.jsonl`,
+`premise-pass.stamp` and the launchd job are local-only state, which is why the cloud worker dispatched
+onto L1 could not answer it (`cc-backlog freshness` reads `0 of 0` in a cloud container). Re-aim the
+item at the gap, and run it where the store is:
+
+```
+launchctl print gui/$UID/com.chrisren.autonomy-sweep | grep -E 'state|last exit'
+ls -l ~/.claude/autonomy/premise-pass.stamp          # older than 6 h ⇒ the pass is not firing
+python3 bin/cc-premise coverage                      # probe-capable, by arm — the real ceiling
+python3 bin/cc-premise sweep --json | jq '{probed:(.validated_recorded//0),unprobed,deferred,shard_pending}'
+```
 
 ---
 
