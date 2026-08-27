@@ -183,3 +183,32 @@ mechanism, so the cost of an unfixed venue is **not capped at one session per it
 dispatcher re-fires the row. Its premise was re-confirmed and its supersession refuted from evidence
 already in this repo, so it is open-and-unstarted, blocked purely on venue.
 `venue-foreign-repo-recurrence-2026-08-17.md` § FIFTH OCCURRENCE.
+
+🚨 **A REPO-IDENTITY ARM HAS SINCE SHIPPED, AND §3 IS STILL OPEN — measured 2026-08-27.** Read this
+before building either option: the thing an implementer would reach for first now exists.
+`bin/cc-venue` and `cc-eligible`'s `cross_repo(project)` are on trunk; the arm normalises origins and
+compares the item's `project` against the one repo the lane holds. It closes the **subject-in-the-
+field** cases this doc measured (an item *filed under* `reso-management-app` or `doc_classifier`) and
+it does not close the **subject-in-the-prose** case the 08-17 note above describes.
+
+`8f59467c92b0` was fired a **third** time on 2026-08-27 and passed the shipped arm — correctly, on
+the arm's own terms: its `project` is `claude-infrastructure`, which *is* the lane, and that label is
+accurate because the plan really does live in this repo. Only the plan BODY names the two foreign
+trees. So the 08-17 paragraph's prediction is no longer a reading of unwritten code; it is an
+**observation of code that shipped and ran**, which is the evidence §3 was waiting on. The residual
+shape is stated in general as *filed under X, specified against Y* in
+`tenant-drift-venue-refusal-2026-08-24.md` §1.
+
+Two consequences for the option set, neither of which the shipped arm changes:
+
+- **The discriminator §3 still needs is the SUBJECT one**, dropped-not-refuted when §2-3 relocated
+  the guard from the claim to the fire — the item's text read against
+  `scripts/dispatch-projects.conf`, both available at fire time. A `project`-keyed arm cannot reach
+  a subject named only in prose, however it is widened.
+- **A cross-repo master must resolve to refuse/park, never to route.** Route-by-project is not
+  merely insufficient for this row but inexpressible: a session gets exactly one `git_repository`
+  source, permanently, and this row's work spans two trees.
+
+Full measurement, including why the fix was not attempted from that VM (`bin/cc-venue:55` — a cloud
+VM must never build or run the venue rule; that clone was shallow at exactly 50) →
+`venue-foreign-master-redispatch-2026-08-17.md` §§9-10.

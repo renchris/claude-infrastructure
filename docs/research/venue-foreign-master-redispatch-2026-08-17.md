@@ -201,3 +201,109 @@ c07fb00eb9b6`, filed 2026-08-16, per that doc §4):
 ```
 cc-backlog add --project claude-infrastructure --title "the cc-offload venue guard decision is under-specified: BOTH filed options (fail-closed, route-by-project) pass a subject-foreign row, and a cross-repo master is inexpressible for route-by-project — restore the 08-15 subject discriminator as a conjunct at the fire" --dod-ref "docs/research/venue-foreign-master-redispatch-2026-08-17.md#3" --source 8f59467c92b0
 ```
+
+---
+
+## 9 · THIRD OCCURRENCE — 2026-08-27, and §3's prediction is now OBSERVED against shipped code
+
+`8f59467c92b0` was fired a third time, into the same VM shape, **10 days** after §8 wrote its
+disposition into this file. The interval did not shrink: 08-15 → 08-17 was 2 days, 08-17 → 08-27
+was 10. The row is not converging on a fix; it is being re-served.
+
+**This venue, measured rather than inherited.** Branch `claude/fire-20260827T231330Z-47448-1`,
+HEAD `6e7a4bf1`, `is-shallow-repository` = true, `rev-list --count HEAD` = **50**,
+`HEAD..origin/main` = 0 (this tree IS trunk, so nothing below is a stale-tree artifact).
+`$HOME` is `/root`; `~/Development` does not exist; `ls ..` holds only `claude-infrastructure`.
+**Both routes to the product trees are closed, and the second one is new evidence** — the API route
+was assumed by §§1-8 and is now measured:
+
+```
+mcp__github__get_file_contents renchris/reso-management-app CLAUDE.md
+→ Access denied: repository "renchris/reso-management-app" is not configured for this session.
+  Allowed repositories: renchris/claude-infrastructure
+```
+
+So the trees are unreachable by disk *and* by API. There is no third route.
+
+### What is new relative to §§1-8
+
+**(a) The `cross_repo` arm shipped in between, and this row still passed it.** On 08-15/08-17 the
+venue predicate had no repo-identity arm at all; `bin/cc-venue` and `cc-eligible`'s
+`cross_repo(project)` both exist on trunk now. The arm keys on the item's **`project` field**,
+resolves it through `repo_for()`, and compares normalised origins against the lane. This row's
+`project` is `claude-infrastructure` — which *is* the lane — so the arm returns reachable, and it is
+**right to**: `find-plan.sh:70` derived that label correctly from the plan's own path. §3 predicted
+exactly this ("both §3 options pass this row") from a reading of unwritten code. It is now an
+observation of code that shipped and ran. The prediction cost 10 days to confirm and nothing about
+it changed.
+
+The sibling `tenant-drift-venue-refusal-2026-08-24.md` §1 names this residual shape in general —
+**filed under X, specified against Y** — and reports it on a different row (`485f8f87eb5f`). This is
+that shape's **second observation**, and the first on a *cross-repo master*, which is the harder
+sub-case: `485f8f87eb5f` has one foreign subject and could in principle be routed to it, while this
+row's work spans **two** foreign trees and a session gets exactly one `git_repository` source
+permanently. Route-by-project cannot express it at any width. **A cross-repo master must resolve to
+refuse/park, never to route** — §3 said so, and the shipped arm is the first thing that could have
+acted on it.
+
+**(b) The silent rc-0 that §8 told the next session to verify is now measured.** From this VM:
+
+```
+./bin/cc-backlog list --all   → rc=0, 0 bytes of output
+test -e ~/.claude/autonomy/backlog.jsonl → ABSENT
+```
+
+`bin/cc-backlog:887` resolves the store to `$HOME/.claude/autonomy/backlog.jsonl`, which does not
+exist here, and the read reports **success** over it. A `cc-backlog block` issued from this venue
+would therefore exit 0 and write nothing. That failure mode is established as fact.
+
+⚠️ **It is NOT hereby claimed to be what happened to §8's disposition.** §8 filed the block as an
+*operator* action needing the Mac, so the likeliest history is that it was never run at all rather
+than that it ran and silently no-opped. The two are indistinguishable from here, and the distinction
+matters to whoever fixes the return path: one is a broken rail, the other a dropped handoff. What
+*is* certain is the outcome — the row was not parked, and it re-fired.
+
+**(c) Not fixed here — and the grounds are now MECHANICAL, where §6's were a judgment call.**
+`bin/cc-venue:55` states the guard verbatim: *"A cloud VM must never build or run the venue rule: it
+would be deciding its own admission, and its 50-commit clone cannot read the history that justifies
+the exclusions."* This clone is shallow at exactly 50. So the venue rule was neither built nor run
+in this session, deliberately — including `cc-venue assess` on this row, which would have been the
+tempting move. §6's independent grounds were re-measured and still hold: **`bats` and `shellcheck`
+are both ABSENT** on this host, so a shell/Python change to the fire path cannot be gated here, and
+`bin/cc-offload` fires paid sessions.
+
+**(d) The "~0-cost" plan-index stopgap is not reachable from a VM either.** §3 costed *"a
+`projectName` entry in the plan index"* as a data entry rather than a build, and that costing is
+correct — `scripts/find-plan.sh:73` already reads `.plans[$k].projectName` and prefers it over the
+path basename. But `:38` resolves `CC_PLAN_INDEX_PATH` to `$HOME/.claude/plans-index.json`: live
+operator-box state, **outside this repo**, and a C10 in-place edit. So the one remedy a VM could
+plausibly have applied is the one it structurally cannot reach. Every option in the set now needs
+the Mac.
+
+### The item itself — still NOT adjudicated
+
+§7 stands verbatim and is not weakened by a third look. R1-R4 (`pnpm lint` red on reso's trunk, the
+four unlanded branches, the Amplify/Fly split-brain, `doc_classifier`'s `require_role` holes) remain
+**open, correct as filed, and unstarted**. Nothing about them was readable from this session, and
+per the honesty standard `tenant-drift-venue-refusal-2026-08-24.md` §2 sets, whether any of their
+cures landed on the product trunks in the interim is **unknown and unconfirmable from this venue** —
+not "unrefuted". The plan's falsifier returning `NOT REFUTED` at fire time says only that a probe
+declined to retract; it is not a positive confirmation, and it reads a plan file, not the product
+trees. **What is refuted is the venue, for the third time — never the plan.**
+
+## 10 · Operator actions (2026-08-27)
+
+Unchanged in shape from §8, updated for the third occurrence. Needs the Mac — the ledger is absent
+here and a write from this venue exits 0 without writing (§9b).
+
+```
+cc-backlog block 8f59467c92b0 --needs "re-dispatch ONLY to a session holding BOTH reso-management-app and doc_classifier (the local drain, per MASTER_PRODUCT_REPOS.md Phase 0). This row is cross-repo: a cloud VM gets one git_repository source permanently, so no cloud fire can serve it at any width. THIRD misroute of this id (08-15, 08-17, 08-27); premise NOT adjudicated; the shipped cc-eligible cross_repo arm passes it correctly because its project label is accurate — see docs/research/venue-foreign-master-redispatch-2026-08-17.md#9"
+```
+
+`block`, not `reopen` — blocked on **where it was sent**, not on information or a judgment call.
+§8 already said this and the row still re-fired, so the block taking is the thing to verify, not the
+command to re-derive.
+
+The §9a finding belongs on the existing under-specification row (`--source 8f59467c92b0`, §8) as a
+confirmation, not a new row: what it adds is that the prediction has been **observed against shipped
+code**, which is the evidence that decision was waiting on.

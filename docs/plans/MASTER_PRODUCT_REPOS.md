@@ -156,6 +156,34 @@ branch queue is empty or explicitly abandoned with reasons, the production deplo
 single-brained and audited, and doc_classifier's authorization holes are closed with tests.
 
 ## Status log
+- **2026-08-27 — a THIRD cloud dispatch of `8f59467c92b0`, 10 days after the last one, and the
+  shipped venue arm passed it correctly.** Same VM shape (one shallow 50-commit checkout of
+  `claude-infrastructure`, no `~/Development`, GitHub scope of one repo — this time the API refusal
+  was *measured*, not assumed: `renchris/reso-management-app` returns `Access denied … Allowed
+  repositories: renchris/claude-infrastructure`). R1-R4 were untouched and remain **open, correct as
+  filed, and unstarted**; the venue is refuted, not the plan. Three things this fire adds:
+  **(1)** `bin/cc-venue` and `cc-eligible`'s `cross_repo(project)` arm both shipped between 08-17 and
+  now, and this row still passed — because its project label *is* accurate and *is* the lane. The
+  08-17 prediction that both filed remedy options pass this row is therefore **observed against
+  shipped code**, not argued. It is the second observation of the residual "filed under X, specified
+  against Y" shape (`tenant-drift-venue-refusal-2026-08-24.md` §1) and the first on a cross-repo
+  master — the harder sub-case, since a session gets ONE `git_repository` source permanently and this
+  row spans two trees, so route-by-project is inexpressible at any width.
+  **(2)** The silent rc-0 the 08-17 entry told the next session to verify is measured:
+  `cc-backlog list --all` from the VM returns **rc 0 with zero bytes** over an absent store, so a
+  `block` issued here would report success and write nothing. Whether that is what defeated the
+  08-17 disposition, or whether it was simply never run on the Mac, is indistinguishable from this
+  venue — but the row was not parked either way.
+  **(3)** The "~0-cost" plan-index stopgap is **unreachable from a VM**: `find-plan.sh:38` resolves
+  the index to `$HOME/.claude/plans-index.json` — operator-box live state, outside this repo, a C10
+  in-place edit. Every option in the remedy set now needs the Mac.
+  Not fixed here, on **mechanical** grounds this time rather than judgment: `bin/cc-venue:55` — *"a
+  cloud VM must never build or run the venue rule: it would be deciding its own admission, and its
+  50-commit clone cannot read the history that justifies the exclusions"* — and this clone is shallow
+  at exactly 50, so the rule was neither built nor run. (`bats`/`shellcheck` re-measured ABSENT too.)
+  Full measurement → `docs/research/venue-foreign-master-redispatch-2026-08-17.md` §§9-10.
+  **Disposition: `cc-backlog block` (the §10 command), not `reopen`** — and the 08-17 entry already
+  said so, so what needs verifying is that the block TAKES, not what the command is.
 - **2026-08-17 — the SAME row was cloud-dispatched AGAIN, and the re-fire is the finding.**
   `8f59467c92b0` was fired into an identical VM shape (one checkout, GitHub scope of one repo, no
   `~/Development`) ~2 days after the 08-15 entry below wrote its disproof into THIS FILE. R1-R4 were
