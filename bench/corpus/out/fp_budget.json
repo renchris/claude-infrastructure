@@ -1,0 +1,210 @@
+{
+ "corpus_version": "1.1",
+ "pages": {
+  "align-1px": {
+   "klass": "misalignment",
+   "detectable_by": "dom",
+   "target": ".panel",
+   "caught_by": [
+    "misalignment"
+   ],
+   "near_miss_by": [],
+   "judgement_only": false,
+   "unattributed": 0
+  },
+  "contrast-on-gradient": {
+   "klass": "contrast",
+   "detectable_by": "pixels",
+   "target": ".hero-caption",
+   "caught_by": [
+    "contrast-indeterminate",
+    "xcheck-contrast-varies"
+   ],
+   "near_miss_by": [],
+   "judgement_only": false,
+   "unattributed": 0
+  },
+  "contrast-plain": {
+   "klass": "contrast",
+   "detectable_by": "dom",
+   "target": ".helper",
+   "caught_by": [
+    "contrast"
+   ],
+   "near_miss_by": [],
+   "judgement_only": false,
+   "unattributed": 0
+  },
+  "grid-offgrid": {
+   "klass": "grid-violation",
+   "detectable_by": "dom",
+   "target": ".section-title",
+   "caught_by": [
+    "grid-violation"
+   ],
+   "near_miss_by": [],
+   "judgement_only": false,
+   "unattributed": 0
+  },
+  "hierarchy-inversion": {
+   "klass": "visual-hierarchy",
+   "detectable_by": "pixels",
+   "target": ".actions",
+   "caught_by": [],
+   "near_miss_by": [
+    "contrast",
+    "token-drift"
+   ],
+   "judgement_only": true,
+   "unattributed": 0
+  },
+  "optical-centering": {
+   "klass": "optical-alignment",
+   "detectable_by": "pixels",
+   "target": ".glyph-btn .glyph",
+   "caught_by": [
+    "xcheck-optical-centre"
+   ],
+   "near_miss_by": [],
+   "judgement_only": false,
+   "unattributed": 0
+  },
+  "overflow-clip": {
+   "klass": "overflow",
+   "detectable_by": "dom",
+   "target": ".cell-venue",
+   "caught_by": [
+    "overflow"
+   ],
+   "near_miss_by": [],
+   "judgement_only": false,
+   "unattributed": 0
+  },
+  "radius-drift": {
+   "klass": "token-drift",
+   "detectable_by": "dom",
+   "target": ".kpi-card:nth-child(2)",
+   "caught_by": [
+    "token-drift"
+   ],
+   "near_miss_by": [],
+   "judgement_only": false,
+   "unattributed": 0
+  },
+  "spacing-gap": {
+   "klass": "spacing-inconsistency",
+   "detectable_by": "dom",
+   "target": ".kpi-card:nth-child(3)",
+   "caught_by": [
+    "spacing-rhythm"
+   ],
+   "near_miss_by": [
+    "grid-violation"
+   ],
+   "judgement_only": false,
+   "unattributed": 0
+  },
+  "token-color-drift": {
+   "klass": "token-drift",
+   "detectable_by": "dom",
+   "target": ".btn-primary",
+   "caught_by": [
+    "token-drift"
+   ],
+   "near_miss_by": [],
+   "judgement_only": false,
+   "unattributed": 0
+  },
+  "touch-target": {
+   "klass": "accessibility",
+   "detectable_by": "dom",
+   "target": ".btn-secondary",
+   "caught_by": [
+    "touch-target"
+   ],
+   "near_miss_by": [],
+   "judgement_only": false,
+   "unattributed": 0
+  },
+  "type-scale": {
+   "klass": "typographic-scale",
+   "detectable_by": "dom",
+   "target": ".kpi-card:nth-child(4) .kpi-label",
+   "caught_by": [
+    "type-scale"
+   ],
+   "near_miss_by": [],
+   "judgement_only": false,
+   "unattributed": 0
+  }
+ },
+ "per_rule": {
+  "contrast": {
+   "control": 0,
+   "ok": 2,
+   "unattributed": 0
+  },
+  "contrast-indeterminate": {
+   "control": 0,
+   "ok": 2,
+   "unattributed": 0
+  },
+  "grid-violation": {
+   "control": 0,
+   "ok": 3,
+   "unattributed": 0
+  },
+  "misalignment": {
+   "control": 0,
+   "ok": 1,
+   "unattributed": 0
+  },
+  "overflow": {
+   "control": 0,
+   "ok": 3,
+   "unattributed": 0
+  },
+  "spacing-rhythm": {
+   "control": 0,
+   "ok": 1,
+   "unattributed": 0
+  },
+  "token-drift": {
+   "control": 0,
+   "ok": 3,
+   "unattributed": 0
+  },
+  "touch-target": {
+   "control": 0,
+   "ok": 1,
+   "unattributed": 0
+  },
+  "type-scale": {
+   "control": 0,
+   "ok": 1,
+   "unattributed": 0
+  },
+  "xcheck-contrast-varies": {
+   "control": 0,
+   "ok": 2,
+   "unattributed": 0
+  },
+  "xcheck-optical-centre": {
+   "control": 0,
+   "ok": 1,
+   "unattributed": 0
+  }
+ },
+ "control_findings": [],
+ "unattributed_findings": [],
+ "unclassified_rules": [],
+ "denominator": {
+  "what": "every finding a reviewer would show a human",
+  "novel_on_variants_plus_control": 20,
+  "control": 0,
+  "unattributed": 0,
+  "rate": 0.0
+ },
+ "caught": 11,
+ "gate": "PASS"
+}

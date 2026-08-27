@@ -62,6 +62,16 @@ class Defect:
     magnitude: str
     # Why the DOM cannot see it. Required for pixels-only defects.
     dom_blind_because: str = ""
+    # Other elements the injected CSS legitimately changes. A defect scoped to an
+    # ancestor changes its descendants too, and a detector that says so is right:
+    # `contrast-on-gradient` puts the gradient on `.hero`, so the hero TITLE sits
+    # on it exactly as the caption does, and reporting the title's contrast as
+    # unverifiable is a true positive about the injected defect. Without this
+    # field the false-positive budget scored both as noise, which would have put
+    # pressure on the attribution rule to loosen -- and a loosened attribution
+    # rule launders real false positives for every defect, not just this one.
+    # Ground truth belongs in the manifest, where it can be argued with.
+    also_affects: list[str] = field(default_factory=list)
     # Severity a human designer would assign, for weighting.
     severity: str = "medium"
     html_override: dict[str, str] = field(default_factory=dict)
@@ -181,6 +191,9 @@ DEFECTS: list[Defect] = [
             "backdrop luminance varies across the element's own width."
         ),
         magnitude="ratio falls from ~8.6:1 at the left edge to ~1.2:1 at the right",
+        also_affects=[
+            ".hero-title"
+        ],  # the gradient is on .hero; the title sits on it too
         severity="high",
     ),
     Defect(
@@ -395,8 +408,14 @@ def build(outdir: pathlib.Path) -> dict:
         entries.append(asdict(d))
 
     manifest = {
-        "corpus_version": "1.0",
-        "built": "2026-08-26",
+        # 1.1 (2026-08-27): the play mark is drawn rather than typed, so the
+        # optical-centring ground truth stops moving with the host's fonts; a
+        # second 16px heading makes the declared 12/14/16/24 type scale honest;
+        # `also_affects` records the elements a defect's CSS legitimately changes
+        # beyond its named target. Findings captured against 1.0 are not
+        # comparable -- three pages render differently.
+        "corpus_version": "1.1",
+        "built": "2026-08-27",
         "viewport": {"width": 1280, "height": 900},
         "tokens": TOKENS,
         "control": "clean.html",
