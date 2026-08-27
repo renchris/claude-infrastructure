@@ -400,7 +400,13 @@ cmd_up() {
   # a flag rather than as "leave it blank" so an UNMANAGED fire is a decision in the argv rather
   # than an accident of environment.
   if [ "$UP_UNMANAGED" = 0 ] && [ -z "$UP_NOTIFY_BACK" ]; then
-    UP_NOTIFY_BACK="${ITERM_SESSION_ID##*:}"
+    # `${ITERM_SESSION_ID##*:}` on a BARE name aborts under `set -u` when the variable is unset —
+    # which made the "no pane to wake (ITERM_SESSION_ID is unset)" branch three lines below
+    # UNREACHABLE: the code that handles the case died before it. Not theoretical: it is every
+    # environment without iTerm (launchd, cron, a hook, CI, a cloud VM), and it turned 11 of this
+    # file's 44 tests red on any box but the operator's, for a reason none of them names.
+    UP_NOTIFY_BACK="${ITERM_SESSION_ID:-}"
+    UP_NOTIFY_BACK="${UP_NOTIFY_BACK##*:}"
   fi
   if [ "$UP_UNMANAGED" = 1 ]; then UP_NOTIFY_BACK=''
   elif [ -z "$UP_NOTIFY_BACK" ]; then
