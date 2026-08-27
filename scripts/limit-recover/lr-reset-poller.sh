@@ -595,8 +595,17 @@ for cfg in "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME"/.claude-tertia
     #    On no confirmation, FALL THROUGH (never `continue`): a short transcript can carry the
     #    skill-listing text in its tail AND a genuine session|weekly kill, and an unconditional
     #    continue here shadowed the auto-resume path for it.
-    if printf '%s' "$tail_bytes" | grep -iE "$SPEND_RE" | grep -q '"isApiErrorMessage"[[:space:]]*:[[:space:]]*true'; then
-      if head -c 8000 "$tx" 2>/dev/null | grep -q '"agentName"'; then
+    # DRAINED, not `grep -q` (2026-08-27). Under `set -o pipefail` an early-exiting last stage
+    # closes the pipe on its FIRST match, the stage before it dies of SIGPIPE, pipefail promotes
+    # that to the pipeline status, and the `if` reads a genuine match as NO MATCH. This file was
+    # invisible to scripts/pipefail-sigpipe-lint.sh — its heredoc tracker latched on the comment at
+    # :357 that names `python3 - <<PY` and never unlatched — so these four sites had never been
+    # judged and the file carries no allowlist row. This one is the worst of them: it is THREE
+    # stages, whose measured safe floor is 17,427 B against the two-stage 37,121 B, and its feed is
+    # `tail -c 20000` — a hard-coded constant ABOVE that floor. An inversion here reads a genuine
+    # monthly-spend kill as absent and the session is never recovered.
+    if printf '%s' "$tail_bytes" | grep -iE "$SPEND_RE" | grep '"isApiErrorMessage"[[:space:]]*:[[:space:]]*true' >/dev/null; then
+      if head -c 8000 "$tx" 2>/dev/null | grep '"agentName"' >/dev/null; then
         if [[ ! -f "$STATE/teammate-skip/$sid" ]]; then
           mkdir -p "$STATE/teammate-skip"; : > "$STATE/teammate-skip/$sid"
           log "SKIP  $sid — teammate session (lead-owned recovery)"
@@ -625,12 +634,12 @@ print('1' if any(e.get('kind')=='monthly_spend' for e in es) else '')
     # ships in every session's skill_listing, so the bare text matched universally and paid for an
     # lr-audit subprocess on EVERY session, EVERY tick. lr-audit still rules on the verdict below.
     printf '%s' "$tail_bytes" | grep -E "You've hit your (session|weekly) limit" \
-      | grep -q '"isApiErrorMessage"[[:space:]]*:[[:space:]]*true' || continue
+      | grep '"isApiErrorMessage"[[:space:]]*:[[:space:]]*true' >/dev/null || continue
     # teammate sessions (implicit-team assignees carry "agentName" on their early
     # records; leads never do) are recovered by their LEAD via the team-aware
     # lr-audit — a bare --resume here would detach them from team semantics
     # (inbox/agentName wiring) and duplicate the lead's respawn.
-    if head -c 8000 "$tx" 2>/dev/null | grep -q '"agentName"'; then
+    if head -c 8000 "$tx" 2>/dev/null | grep '"agentName"' >/dev/null; then
       if [[ ! -f "$STATE/teammate-skip/$sid" ]]; then
         mkdir -p "$STATE/teammate-skip"; : > "$STATE/teammate-skip/$sid"
         log "SKIP  $sid — teammate session (lead-owned recovery)"
@@ -777,7 +786,7 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
   # would just re-elect it next tick once the winner is running (already-running filters the
   # winner out) — sprawl at 10-minute cadence. The session is not lost: resume it explicitly by
   # sid, and a genuinely new limit event re-parks it via the REPARK path above.
-  if ! printf '%s\n' "$WINNER_SIDS" | grep -qx "$sid"; then
+  if ! printf '%s\n' "$WINNER_SIDS" | grep -x "$sid" >/dev/null; then
     # Log the REAL reason, not an assumed one. A non-winner may have lost the per-worktree
     # contest, or may have been filtered outright (no transcript, teammate, cwd gone) — those
     # are different facts and "not the winner" would misattribute them.

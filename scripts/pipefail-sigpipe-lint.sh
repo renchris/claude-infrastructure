@@ -282,14 +282,39 @@ BEGIN { FS = "" }
 
   # Heredoc bodies are DATA, not code — a scar shape quoted inside one is not executed.
   if (inhd) { if ($0 ~ hdterm) inhd = 0; next }
+
+  line = ltrim(raw)
+  # A COMMENT IS NOT CODE, AND THIS TEST MUST RUN BEFORE THE OPENER TEST BELOW. It used to sit
+  # three lines AFTER it, and inhd is LATCHING state: a comment that merely MENTIONS a heredoc
+  # opener armed the tracker, no terminator ever arrived, and every remaining line in the file was
+  # then consumed as heredoc BODY. That is not a miscount — it is a latched false NEGATIVE, and a
+  # census of 0 for a muted file is byte-identical to a census of 0 for a clean one.
+  #
+  # MEASURED ON THE UNFIXED TREE, 2026-08-27: of 402 scanned files TEN were latched at EOF and TWO
+  # of them swallowed real sites — census 138 against a true 143. BOTH culprits are comments
+  # DOCUMENTING shell mechanics: scripts/limit-recover/lr-reset-poller.sh:357 explains a
+  # `python3 - <<PY` bug it once had, and hooks/completion-assert.sh:705 explains why `<<EOF` is not
+  # an operator placeholder. In a tree whose house style is long mechanical rationales in comments,
+  # the trigger is CORRELATED with the style, which is why this went unnoticed for so long.
+  #
+  # The consequence was worst where nothing else covered it: lr-reset-poller.sh was invisible from
+  # :357 to EOF and carries NO allowlist row at all, so its four sites had never once been judged —
+  # among them the monthly-spend detector, a THREE-stage pipeline over a `tail -c 20000` feed whose
+  # inversion reads a genuine spend kill as ABSENT. A ratchet exists to refuse NEW violations; below
+  # a latch point a new violation is born invisible, with no allowlist row to record it.
+  #
+  # RESIDUAL, NAMED RATHER THAN WIDENED: four files still latch at EOF after this fix, from `<<TOK`
+  # inside quoted CODE rather than inside a comment. None of the four swallows a site today
+  # (measured: the swallowed set is exactly the two files above). Tightening the opener test to
+  # ignore quoted occurrences is a real change to what counts as an opener and wants its own
+  # measurement; it is not folded in here. g31/g32 pin both directions of what IS fixed.
+  if (line ~ /^#/ || line == "") next
+
   if (match($0, /<<-?[ \t]*[\x27"]?[A-Za-z_][A-Za-z0-9_]*[\x27"]?/)) {
     tok = substr($0, RSTART, RLENGTH)
     sub(/^<<-?[ \t]*/, "", tok); gsub(/[\x27"]/, "", tok)
     hdterm = "^[ \t]*" tok "[ \t]*$"; inhd = 1
   }
-
-  line = ltrim(raw)
-  if (line ~ /^#/ || line == "") next
 
   work = line
   gsub(/\|\|/, "\002", work)          # || is an OR-list, not a pipe
@@ -628,6 +653,26 @@ EOF"
   expect g15 GREEN "a \$? INSIDE the producer is the inner command's, never the pipeline's"
   mk_noe g16 "rc=\$?; git log --oneline | head -5"
   expect g16 GREEN "a \$? capture BEFORE the pipeline reads the PREVIOUS command's status"
+
+  # ── THE COMMENTED-HEREDOC MUTE (2026-08-27) ───────────────────────────────────────────────────
+  # The heredoc tracker is the detector's ONLY file-level latching state, and its opener test used
+  # to run BEFORE the comment test. A comment that merely NAMES an opener armed it, no terminator
+  # ever came, and the rest of the file was read as heredoc body: the file went silently and
+  # permanently MUTE. Measured 10 latched files of 402, 5 swallowed sites across 2 of them.
+  #
+  # r15 is the defect verbatim — the comment shape is the one this tree actually writes, a sentence
+  # explaining a heredoc bug — and it was GREEN before the fix. g31 is the arm that stops the fix
+  # from being a widening: a comment ahead of a REAL heredoc must not stop the body being treated
+  # as DATA, which is the property g10 already pins for the no-comment case. Two arms, opposite
+  # directions, one variable between them: whether the heredoc that follows is real.
+  mk r15 "# a note about \`python3 - <<PY\` and why it once broke
+if git status --porcelain 2>/dev/null | grep -q .; then :; fi"
+  expect r15 RED "a COMMENT naming a heredoc opener must not mute the rest of the file"
+  mk g31 "# a note about \`cat <<EOF\` and what it does
+cat <<'EOF'
+if git status --porcelain | grep -q .; then :; fi
+EOF"
+  expect g31 GREEN "a comment ahead of a REAL heredoc still leaves the body as DATA"
 
   local total=$((pass+fail))
   if [ "$fail" -gt 0 ]; then

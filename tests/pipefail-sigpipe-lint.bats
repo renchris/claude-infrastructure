@@ -34,10 +34,10 @@ mkfile() { # $1=name $2=body  [$3=set line]
 }
 census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" --census 2>/dev/null; }
 
-@test "1: the lint's own --selftest passes (30/30, both directions)" {
+@test "1: the lint's own --selftest passes (32/32, both directions)" {
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s' "$output" | grep '30/30' >/dev/null \
+  printf '%s' "$output" | grep '32/32' >/dev/null \
     || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 
@@ -255,4 +255,58 @@ $(head -c 131072 /dev/zero | tr "\0" x | fold -w 80)"; printf "%s\n" "$V" | grep
   printf '%s\n' "$output" | grep -v '^#' | awk 'NF' | grep -c . > "$BATS_TEST_TMPDIR/n.txt"
   [ "$(cat "$BATS_TEST_TMPDIR/n.txt")" -gt 0 ] \
     || { echo "healthy --regen produced no rows — the guard is firing on a good tree"; false; }
+}
+
+@test "19: a comment naming a heredoc opener does not mute the REST OF THE FILE" {
+  # The 2026-08-27 defect. The detector's heredoc tracker is its only file-level LATCHING state and
+  # its opener test ran BEFORE its comment test, so a comment that merely NAMED an opener armed it,
+  # no terminator ever arrived, and every later line was consumed as heredoc BODY. Measured on the
+  # unfixed tree: 10 of 402 scanned files latched at EOF, 5 real sites swallowed across 2 of them.
+  #
+  # THE DISTANCE IS THE POINT, and it is why this arm exists beside the lint's own --selftest arms:
+  # those build two-line fixtures, which cannot tell a one-line slip apart from an UNBOUNDED mute.
+  # The real culprits sat 241 and 30 lines above their victims. This plants the scar 200 lines below
+  # the comment, so a fix that only cured the adjacent line would still fail here.
+  {
+    echo '#!/bin/bash'; echo 'set -euo pipefail'
+    printf '%s\n' '# a note about `python3 - <<PY` and the bug it once had'
+    i=0; while [ "$i" -lt 200 ]; do echo ": filler $i"; i=$((i+1)); done
+    printf '%s\n' 'if git status --porcelain 2>/dev/null | grep -q .; then :; fi'
+  } > "$FIX/scripts/muted.sh"
+  # `grep -c` EXITS 1 on a legitimate zero, so a bare `n="$( … grep -c … )"` fails the test on the
+  # very reading this arm exists to catch. Keep the substitution inside `[ ]`, where its status is
+  # discarded, and re-take it only to build the message.
+  [ "$(census | grep -c 'scripts/muted\.sh:')" -eq 1 ] \
+    || { echo "expected 1 hit 200 lines below the comment, detector said \
+$(census | grep -c 'scripts/muted\.sh:' || true) — the file is muted"; census | sed 's/^/  /'; false; }
+  true
+}
+
+@test "20: REACHABILITY — the detector reaches the TAIL of the file the mute actually hid" {
+  # Arm 19 pins the shape on a synthetic fixture; this pins it on the real subject, because a
+  # fixture can satisfy a rule the live file still defeats. scripts/limit-recover/lr-reset-poller.sh
+  # was invisible from its :357 comment to EOF and carries NO allowlist row, so its sites had never
+  # once been judged — the failure was silent in the only direction that matters for a ratchet: a
+  # NEW violation added below a latch point is born invisible, with no row to record it.
+  #
+  # A TRIPWIRE rather than a pattern (memory: probe-that-acts-on-absence-must-confirm-presence):
+  # copy the real file, append a known scar to its END, and ask the detector. A green here means the
+  # detector cannot see the tail of that file, whatever its census count says.
+  [ -f "$REPO/scripts/limit-recover/lr-reset-poller.sh" ] \
+    || skip "subject absent — this arm asserts about a specific file"
+  mkdir -p "$FIX/scripts/limit-recover"
+  cp "$REPO/scripts/limit-recover/lr-reset-poller.sh" "$FIX/scripts/limit-recover/lr-reset-poller.sh"
+  printf '%s\n' 'if git status --porcelain 2>/dev/null | grep -q .; then :; fi' \
+    >> "$FIX/scripts/limit-recover/lr-reset-poller.sh"
+  [ "$(census | grep -c 'lr-reset-poller\.sh:')" -ge 1 ] \
+    || { echo "the detector cannot reach the tail of lr-reset-poller.sh — it is muted again"; false; }
+  # CONTROL, so the arm cannot pass vacuously on an unrelated pre-existing hit: the UNAPPENDED copy
+  # must read 0. If it does not, this file has regained a live `grep -q` and the tripwire proves
+  # nothing about reachability. The substitution stays inside `[ ]` — `grep -c` exits 1 on the zero
+  # this control is asserting, so a bare assignment would fail the test on the PASSING reading.
+  cp "$REPO/scripts/limit-recover/lr-reset-poller.sh" "$FIX/scripts/limit-recover/lr-reset-poller.sh"
+  [ "$(census | grep -c 'lr-reset-poller\.sh:')" -eq 0 ] \
+    || { echo "control failed: the unappended file already reads \
+$(census | grep -c 'lr-reset-poller\.sh:' || true) hit(s), so arm 20 is vacuous"; false; }
+  true
 }
