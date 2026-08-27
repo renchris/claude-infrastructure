@@ -1,0 +1,170 @@
+{
+  "$schema_note": [
+    "Per-app rule WEIGHTINGS, and nothing else. One review harness, three problems.",
+    "",
+    "🚨 This file holds POLICY ONLY. It carries no fact about any app's stack --",
+    "no framework, no version, no CSS engine, no token map. PIPELINE_SPEC C11 is a",
+    "table that banned prose as a source and then published three unmeasured cells",
+    "of its own; the ruling was that stack facts must be GENERATED into",
+    "profiles.json by reading the checkouts, never written down. So the two kinds",
+    "of profile are kept apart: that generated artifact says what an app IS, this",
+    "one says what we CARE about, and only the second is a judgement a person makes.",
+    "",
+    "Availability is expressed as a REQUIREMENT, never as a claim. A profile that",
+    "needs a token map to score conformance says so in `requires`; the router then",
+    "reports those classes UNVERIFIED whenever the run does not supply one. An app",
+    "whose class names are runtime hashes therefore abstains because the token map",
+    "is absent at run time -- not because this file asserted something about it. A",
+    "silent zero on a rule that could not run is the failure this shape prevents."
+  ],
+
+  "routing": {
+    "$note": "Which rule classes are questions rather than verdicts, and what closes them. The T1 subtraction reads this; it is code, not discipline (C16).",
+    "abstention_classes": {
+      "contrast-indeterminate": {
+        "resolved_by": ["xcheck-contrast-varies"],
+        "asks": "what is the contrast where the text actually sits"
+      }
+    },
+    "unscreenable_classes": {
+      "$note": "T2. Never derived from a finding, never cut for budget -- these are the questions no rule can ask, so their absence from the deterministic pass means nothing at all.",
+      "hierarchy": "does the eye land on the action the page wants first",
+      "gestalt": "do the groupings the layout implies match the ones the content has",
+      "content-fit": "does the copy fit the space it was given, at this length",
+      "semantic-coherence": "does what the page says match what it shows",
+      "optical-alignment": "does anything read as misaligned that measures as aligned",
+      "readability": "can this be read at a glance, at the size it ships"
+    },
+    "never_ask_a_model": [
+      "any distance, gap, size, ratio or contrast value -- solid or gradient",
+      "token membership",
+      "a bounding box for anything",
+      "any score, grade or ranking"
+    ]
+  },
+
+  "profiles": {
+    "corpus": {
+      "emphasis": "everything, unweighted -- the bench measures rules, not products",
+      "why": "A profile that demoted anything would make the false-positive budget a measurement of the profile rather than of the rule.",
+      "surface_floor": 0.0,
+      "crop_budget": 6,
+      "requires": ["token-map"],
+      "weights": {}
+    },
+
+    "reso-landing-app": {
+      "emphasis": "marketing aesthetics",
+      "why": [
+        "A purchased template carries its own internal design system, coherent and",
+        "not ours. Scoring it against our tokens produces a page of true statements",
+        "that are not defects -- the ~20% false-positive cliff reached by being",
+        "right about the wrong question. What a landing page fails at is the part",
+        "no rule can ask: whether the eye lands where the page wanted it.",
+        "So conformance is demoted, correctness is not demoted at all (a contrast",
+        "failure is a failure whoever authored the CSS), and the crop budget is",
+        "spent on the unscreenable classes."
+      ],
+      "surface_floor": 0.25,
+      "crop_budget": 8,
+      "requires": [],
+      "weights": {
+        "token-drift": 0.15,
+        "grid-violation": 0.1,
+        "type-scale": 0.2,
+        "spacing-rhythm": 0.35,
+        "misalignment": 0.4,
+        "contrast": 1.0,
+        "contrast-indeterminate": 1.0,
+        "overflow": 1.0,
+        "touch-target": 1.0,
+        "xcheck-zero-ink": 1.0,
+        "xcheck-contrast-varies": 1.0,
+        "xcheck-optical-centre": 0.8
+      },
+      "queue_priority": [
+        "hierarchy",
+        "gestalt",
+        "readability",
+        "semantic-coherence",
+        "content-fit",
+        "optical-alignment"
+      ]
+    },
+
+    "reso-management-app": {
+      "emphasis": "design-system conformance",
+      "why": [
+        "An app we author against tokens we own is the one case where the",
+        "deterministic layer does nearly all the work: every conformance question",
+        "has a number in the answer, so none of it belongs to a model. Drift here",
+        "is a real defect rather than a difference of authorship, and it compounds",
+        "-- one off-scale size becomes the precedent for the next.",
+        "The vision queue is correspondingly small: it exists for the six",
+        "unscreenable classes and for whatever the deterministic pass could not",
+        "resolve, and for nothing else."
+      ],
+      "surface_floor": 0.0,
+      "crop_budget": 3,
+      "requires": ["token-map"],
+      "weights": {
+        "token-drift": 1.0,
+        "grid-violation": 0.9,
+        "type-scale": 1.0,
+        "spacing-rhythm": 1.0,
+        "misalignment": 1.0,
+        "contrast": 1.0,
+        "contrast-indeterminate": 1.0,
+        "overflow": 1.0,
+        "touch-target": 1.0,
+        "xcheck-zero-ink": 1.0,
+        "xcheck-contrast-varies": 1.0,
+        "xcheck-optical-centre": 1.0
+      },
+      "queue_priority": [
+        "content-fit",
+        "semantic-coherence",
+        "optical-alignment",
+        "hierarchy",
+        "readability",
+        "gestalt"
+      ]
+    },
+
+    "reso-web-app": {
+      "emphasis": "between the two -- and it must say which half it could not check",
+      "why": [
+        "Conformance rules need a token map to mean anything: without one,",
+        "'no drift found' is not a pass, it is a rule that never ran. This profile",
+        "therefore REQUIRES a token map and lets the router mark those classes",
+        "UNVERIFIED when the run cannot supply one, which is the honest report and",
+        "the same shape as rule 6's third answer."
+      ],
+      "surface_floor": 0.2,
+      "crop_budget": 5,
+      "requires": ["token-map"],
+      "weights": {
+        "token-drift": 0.7,
+        "grid-violation": 0.5,
+        "type-scale": 0.7,
+        "spacing-rhythm": 0.7,
+        "misalignment": 0.7,
+        "contrast": 1.0,
+        "contrast-indeterminate": 1.0,
+        "overflow": 1.0,
+        "touch-target": 1.0,
+        "xcheck-zero-ink": 1.0,
+        "xcheck-contrast-varies": 1.0,
+        "xcheck-optical-centre": 0.9
+      },
+      "queue_priority": [
+        "hierarchy",
+        "content-fit",
+        "readability",
+        "semantic-coherence",
+        "gestalt",
+        "optical-alignment"
+      ]
+    }
+  }
+}
