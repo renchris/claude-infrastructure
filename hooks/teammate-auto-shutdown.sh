@@ -150,7 +150,14 @@ tas_bounded() {
 _kitty_generation() {
   local pid="${KITTY_PID:-}"
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-  ps -p "$pid" -o command= 2>/dev/null | grep -qi 'kitty' || return 1
+  # DRAINED, not -q, and this one is INVISIBLE to the detector: the pipeline sits in `||` position,
+  # so the clause — which reads the LAST stage's own exit — never sees it, and the file's census
+  # count was 4 while this made 5. Absent from the census is not exempt, it is unmeasured. Its feed
+  # is one `ps` line for ONE pid (tens of bytes, bounded by the OS's argv limit and by the -p), so
+  # it is genuinely safe rather than merely small — named here so nobody re-derives that. It is
+  # drained regardless, because a file that keeps one pipeline `-q` after the other five were
+  # drained for this exact reason is how the inline copy outlives the class.
+  ps -p "$pid" -o command= 2>/dev/null | grep -i 'kitty' >/dev/null || return 1
   printf '%s\n' "$pid"
 }
 
@@ -527,9 +534,30 @@ _tool_in_flight() {  # <session-id> → 0 if a tool call is outstanding
     | jq -r '(.message.content // []) | map(select(.type=="tool_use")) | last | .id // empty' 2>/dev/null)"
   if [[ -n "$tu_id" ]]; then
     # a matching tool_result anywhere ⇒ the tool returned ⇒ not in flight
+    # DRAINED, not -q. Under the `set -uo pipefail` above, `grep -q` exits on the first match, the
+    # producer takes SIGPIPE, and pipefail hands the caller a non-zero — so a MATCH reads as NO
+    # MATCH. Here that means "the tool_result is absent" ⇒ the call reads as still in flight, so
+    # this site's failure direction is SAFE (a finished teammate is kept alive, never killed mid
+    # call). It is drained anyway because leaving one `-q` in a file whose siblings were drained
+    # for this exact reason is how the inline copy survives the class (the fix travels with the
+    # FILE, the defect travels with the FEED).
+    #
+    # THE FLOOR HERE IS NOT THE PUBLISHED ONE, AND THAT IS THE POINT. The 37,121 B "safe to" figure
+    # in this repo's other drained predicates was measured on `printf '%s\n' "$VAR"` — a producer
+    # holding its whole output in memory, ready to write the instant the pipeline forks. THIS
+    # producer is `jq` over a whole JSONL transcript: it must start up, parse and emit
+    # incrementally, so the consumer is already parked in read() before the first byte exists.
+    # Measured 2026-08-27 on this box, 20 trials per size, one variable (the argument computed
+    # OUTSIDE the pipeline vs INSIDE the first element, same shape, same 27,130 bytes, same load):
+    # 0/20 inverted vs 17-19/20. Needle position, `--`, and which grep is on PATH each moved
+    # NOTHING. On a real slow-start producer the band is SAFE ≤12,000 B · RACY 16,500-25,500 B ·
+    # ALWAYS-INVERTED ≥30,000 B — under half the published builtin floor.
+    # This feed is ~31 B per tool_result record: max 23,715 B over 3,344 transcripts across the two
+    # PRESENT account stores (ranked by a monotone proxy, not by file bytes), with 4 already past
+    # the 16,500 B racy onset and none yet at 30,000. RACY TODAY, not latent.
     jq -rc 'select(.type=="user") | (.message.content // []) | if type=="array" then .[] else empty end
             | select(.type=="tool_result") | .tool_use_id // empty' "$f" 2>/dev/null \
-      | grep -qxF "$tu_id" && return 1
+      | grep -xF "$tu_id" >/dev/null && return 1
   fi
   return 0
 }
@@ -773,7 +801,19 @@ DEFER_COUNT=0
 
 TREE_DIRTY=false
 if [[ -n "$WORKTREE" ]]; then
-  if git -C "$WORKTREE" status --porcelain 2>/dev/null | grep -q .; then
+  # DRAINED, not -q, and THIS is the site that was LIVE rather than latent. `grep -q .` matches on
+  # LINE 1 — the earliest possible consumer exit — while `git status --porcelain` must start up and
+  # walk the index before it writes a byte. Under `set -uo pipefail` (:45) the producer then takes
+  # SIGPIPE, pipefail promotes it, and the `if` reads FALSE: A DIRTY WORKTREE READS CLEAN, so rule
+  # 3's defer never fires and the member is shut down over uncommitted work. Fail-OPEN, in the one
+  # direction that destroys data.
+  # MEASURED 2026-08-27, 20 trials per size, drained twin 0/20 at every size as the control:
+  #   500 paths / 7,500 B  0/20 · 800 / 12,000 B  0/20 · 1,100 / 16,500 B  1/20 ·
+  #   1,400 / 21,000 B 19/20 · 1,700 / 25,500 B 19/20 · 2,000 / 30,000 B 20/20 · 5,000 / 75,000 B 20/20
+  # NOT LATENT: three real worktrees on this box measured 40,031 B (937 paths), 48,474 B (1,194)
+  # and 88,840 B (2,085) the same day — all in the ALWAYS-INVERTED band. And the failure scales the
+  # wrong way, because the feed IS the dirt: the more work is at risk, the more certain the miss.
+  if git -C "$WORKTREE" status --porcelain 2>/dev/null | grep . >/dev/null; then
     TREE_DIRTY=true
   fi
 fi
@@ -1016,7 +1056,13 @@ if [[ -n "$WORKTREE" ]]; then
   # work preserved? `CHECKPOINT_OK=true` was therefore true whenever the script merely ran, and on a
   # SHARED cwd (where the tree usually does match HEAD, because the member committed) it asserted a
   # checkpoint that does not exist. The ref either exists or it does not; read the ref.
-  if git -C "$WORKTREE" for-each-ref --format='%(refname)' "refs/wip/$TEAMMATE_NAME/LAST" 2>/dev/null | grep -q .; then
+  # DRAINED, not -q. This one is BOUNDED and its direction is SAFE, and saying so is the point: the
+  # feed is a single ref line (~40 B), three orders of magnitude under the 16,500 B racy onset, and
+  # an inversion would leave CHECKPOINT_OK false — under-claiming a checkpoint that exists, never
+  # over-claiming one that does not. Drained for uniformity so the file carries ONE spelling; do not
+  # read it as evidence that this shape is dangerous everywhere, and do not read its safety as
+  # evidence about its siblings above and below, whose feeds are unbounded.
+  if git -C "$WORKTREE" for-each-ref --format='%(refname)' "refs/wip/$TEAMMATE_NAME/LAST" 2>/dev/null | grep . >/dev/null; then
     CHECKPOINT_OK=true
     log "  ✓ final checkpoint written (ref refs/wip/$TEAMMATE_NAME/LAST) for $WORKTREE"
   else
@@ -1025,7 +1071,14 @@ if [[ -n "$WORKTREE" ]]; then
 
   # Regardless of checkpoint success, also emit a patch if tree is dirty
   # (belt-and-suspenders — the teammate always has a recoverable trace)
-  if git -C "$WORKTREE" status --porcelain 2>/dev/null | grep -q .; then
+  #
+  # DRAINED, not -q — the SECOND live site, and the one whose inversion voids the guarantee the
+  # comment directly above states. Same shape and same measured band as the defer guard at rule 3:
+  # `grep -q .` matches on line 1, `git status --porcelain` writes late, pipefail promotes the
+  # producer's SIGPIPE, and the belt reads a dirty tree as clean — so NO patch is written and the
+  # "always has a recoverable trace" promise is void. The belt and the suspenders shared one
+  # failure mode, which is the only way a belt-and-suspenders pair can fail at all.
+  if git -C "$WORKTREE" status --porcelain 2>/dev/null | grep . >/dev/null; then
     PATCH="/tmp/${TEAM_NAME}-${TEAMMATE_NAME}-$(date -u +%Y%m%dT%H%M%SZ).patch"
     {
       echo "# Auto-patch from teammate-auto-shutdown.sh"
