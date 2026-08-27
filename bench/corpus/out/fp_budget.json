@@ -1,0 +1,38 @@
+{
+ "clean_pages": [
+  "corpus/out/clean"
+ ],
+ "subject_checks": {
+  "spacing-rhythm": 18,
+  "grid-violation": 188,
+  "type-scale": 31,
+  "token-drift": 53,
+  "contrast": 31,
+  "contrast-indeterminate": 31,
+  "overflow": 47,
+  "touch-target": 2,
+  "misalignment": 47,
+  "xcheck-zero-ink": 31,
+  "xcheck-contrast-varies": 24
+ },
+ "false_positives": {},
+ "x2_enabled": false,
+ "render_env": [
+  {
+   "browser": "141.0.7390.37",
+   "platform": "linux",
+   "device_scale_factors": [
+    1.0,
+    1.5
+   ],
+   "font_stack_declared": "Helvetica, 'Helvetica Neue', Arial, sans-serif",
+   "font_probe_widths_px": {
+    "Helvetica": 158.25,
+    "Helvetica Neue": null,
+    "Arial": 158.25,
+    "Liberation Sans": 158.25,
+    "DejaVu Sans": 177.97
+   }
+  }
+ ]
+}

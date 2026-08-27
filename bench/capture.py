@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import sys
 import time
@@ -143,8 +144,14 @@ def capture(corpus: pathlib.Path, dprs: list[int]) -> None:
 
     timings = []
     with sync_playwright() as p:
+        # The `chromium` channel is the default and is what the corpus was built
+        # against. A container that ships a browser outside Playwright's own
+        # download tree (CI images do) has no channel to name, so allow an
+        # explicit binary instead -- same Chromium, different bookkeeping.
+        exe = os.environ.get("BENCH_CHROMIUM")
+        launch_target = {"executable_path": exe} if exe else {"channel": "chromium"}
         browser = p.chromium.launch(
-            channel="chromium",
+            **launch_target,
             args=[
                 "--force-color-profile=srgb",
                 "--disable-lcd-text",
@@ -182,6 +189,52 @@ def capture(corpus: pathlib.Path, dprs: list[int]) -> None:
                     (html.stem, dpr, round((time.perf_counter() - t0) * 1000))
                 )
             ctx.close()
+
+        # Stamp the render environment beside the artifacts it produced. Two of
+        # this bench's arms are sub-pixel and one of the corpus's injected
+        # defects is an optical compensation whose magnitude was authored against
+        # macOS Helvetica metrics -- so "which face actually rendered" is not
+        # trivia, it is the difference between a control false positive being an
+        # instrument defect and being a true finding about this machine.
+        ctx = browser.new_context(viewport={"width": 320, "height": 240})
+        pg = ctx.new_page()
+        pg.goto("about:blank")
+        # `document.fonts.check` is the obvious probe and it is the wrong one --
+        # it answers whether the STACK resolves, which a fallback always makes
+        # true, so it reports every family as present. Width comparison against
+        # the three generic bases is the test that can return false.
+        faces = pg.evaluate(
+            """(families) => {
+              const c = document.createElement('canvas').getContext('2d');
+              const probe = 'mmmwwwiii0123 ABC';
+              const width = (font) => { c.font = font; return c.measureText(probe).width; };
+              const bases = ['monospace', 'serif', 'sans-serif'];
+              const out = {};
+              for (const f of families) {
+                const named = width(`16px "${f}", sans-serif`);
+                // Resolved, and at what metrics. The width matters as much as the
+                // boolean: a name can resolve through a fontconfig alias to a face
+                // with different metrics, which is invisible to a yes/no answer.
+                out[f] = bases.some(b => width(`16px "${f}", ${b}`) !== width(`16px ${b}`))
+                  ? Math.round(named * 100) / 100 : null;
+              }
+              return out;
+            }""",
+            ["Helvetica", "Helvetica Neue", "Arial", "Liberation Sans", "DejaVu Sans"],
+        )
+        (corpus / "run_env.json").write_text(
+            json.dumps(
+                {
+                    "browser": browser.version,
+                    "platform": sys.platform,
+                    "device_scale_factors": dprs,
+                    "font_stack_declared": "Helvetica, 'Helvetica Neue', Arial, sans-serif",
+                    "font_probe_widths_px": faces,  # null = family not resolvable here
+                },
+                indent=1,
+            )
+        )
+        ctx.close()
         browser.close()
 
     per_dpr = {}

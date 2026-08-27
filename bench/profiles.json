@@ -1,0 +1,62 @@
+{
+  "schema": 1,
+  "what_this_is": "Per-app rule weightings. POLICY, authored -- not a measurement, and it may not become one by being written down. Weights change the ORDER findings are read in and whether a rule applies to an app at all. They never change a finding's truth value, never invent a severity, and never silently drop a rule: a rule that does not apply under a profile emits an abstention with a stated reason, because a silent pass that should have been an abstention is a defect shipped (README.md section 2).",
+  "the_rule_that_governs_the_app_rows": "PIPELINE_SPEC.md section 2 C11 -- the measured stack wins and prose is banned as a source. The `basis` field on each profile names where its premise comes from. Any cell here that disagrees with a live `dr surface` read of the checkout loses, automatically, with no ruling required. C11 was written to stop the pipeline inheriting a false premise from a brief, caught the brief in two of three rows, and then published its own unmeasured row in the fix; this file is the same shape of artifact and is under the same suspicion.",
+  "severity_is_not_here": "Severity is the emitting rule's, computed from the defect. A weight multiplies rank, not severity, and no model sets either (C13/C14).",
+
+  "families": {
+    "conformance": ["token-drift", "grid-violation", "type-scale", "spacing-rhythm", "misalignment"],
+    "accessibility": ["contrast", "touch-target", "overflow"],
+    "cross-check": ["xcheck-contrast-varies", "xcheck-zero-ink", "xcheck-optical-centre"],
+    "abstention": ["contrast-indeterminate"],
+    "judgement": ["hierarchy", "gestalt", "content-fit", "semantic-coherence", "optical-alignment", "readability"]
+  },
+
+  "requirements": {
+    "token_map": ["token-drift"],
+    "authored_design_system": ["grid-violation", "type-scale", "spacing-rhythm"]
+  },
+
+  "profiles": {
+    "default": {
+      "stance": "balanced",
+      "basis": "no app-specific premise; used when --app is not given",
+      "provides": ["token_map", "authored_design_system"],
+      "weights": {"conformance": 1.0, "accessibility": 1.0, "cross-check": 1.0, "abstention": 1.0, "judgement": 1.0}
+    },
+
+    "reso-management-app": {
+      "stance": "design-system-conformance",
+      "basis": "README.md section 8 -- 'mostly design-system conformance, where the deterministic layer does nearly all the work'. Its two-engine PostCSS chain, and the consequence below, are C11's measured row, not this file's claim.",
+      "provides": ["authored_design_system"],
+      "withheld": {
+        "token_map": "C11 measured two style engines in one PostCSS chain with no single token map, and no @theme at all on one of them. A token rule with no token map cannot FAIL -- a confident FAIL whose truth depends on which resolver won is worse than an abstention. Supply one with --tokens to turn this rule back on."
+      },
+      "weights": {"conformance": 2.0, "accessibility": 1.5, "cross-check": 1.0, "abstention": 1.0, "judgement": 0.5},
+      "why": "This is the app the deterministic layer was built for: 9/9 of the corpus's DOM-determined defects are conformance or accessibility, and every one of them is a number the browser already knows. Judgement findings are still emitted -- taste stays human, and the eye is the only thing that sees hierarchy -- they just read after the facts."
+    },
+
+    "reso-landing-app": {
+      "stance": "marketing-aesthetics",
+      "basis": "README.md section 8 -- 'purchased template, largely a marketing-aesthetics problem'",
+      "provides": [],
+      "withheld": {
+        "token_map": "A purchased template carries its own system, authored by someone else. Grading it against our tokens measures the purchase, not the page.",
+        "authored_design_system": "Same reason. The page's own dominant convention is still the reference for the cross-check arms, which need no token map."
+      },
+      "weights": {"conformance": 0.25, "accessibility": 1.5, "cross-check": 1.0, "abstention": 1.0, "judgement": 2.0},
+      "why": "The question this app is asked is whether the page lands -- hierarchy, attention, whether the first fold makes sense. None of that is reachable from a computed style, and all of it is what the blind pass is for. Accessibility stays at full weight: it is correctness, not taste, and the June 2026 ruling gates on correctness. Conformance is not zeroed either -- 0.25 keeps it visible at the bottom of the report, where a genuine token break on OUR components inside the template can still be seen."
+    },
+
+    "reso-web-app": {
+      "stance": "between",
+      "basis": "README.md section 8 -- 'sits between the two'. C11's measured row adds the consequence below.",
+      "provides": ["authored_design_system"],
+      "withheld": {
+        "token_map": "C11 measured runtime css-<hash> class names that are not invertible, which is why that app's conformance surface reads 100% INDETERMINATE today. C11 also names the one-line fix -- emotion autoLabel dev-only -- after which this row should be re-measured, not re-argued."
+      },
+      "weights": {"conformance": 1.0, "accessibility": 1.5, "cross-check": 1.0, "abstention": 1.25, "judgement": 1.0},
+      "why": "Abstentions are weighted UP here on purpose. On an app whose conformance surface is largely indeterminate, the abstention set is the honest output and it is the thing most likely to be skimmed past."
+    }
+  }
+}

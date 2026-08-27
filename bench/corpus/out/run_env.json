@@ -1,0 +1,16 @@
+{
+ "browser": "141.0.7390.37",
+ "platform": "linux",
+ "device_scale_factors": [
+  1.0,
+  1.5
+ ],
+ "font_stack_declared": "Helvetica, 'Helvetica Neue', Arial, sans-serif",
+ "font_probe_widths_px": {
+  "Helvetica": 158.25,
+  "Helvetica Neue": null,
+  "Arial": 158.25,
+  "Liberation Sans": 158.25,
+  "DejaVu Sans": 177.97
+ }
+}

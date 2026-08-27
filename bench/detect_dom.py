@@ -121,7 +121,7 @@ class Page:
         return (255, 255, 255, 1.0), "ok"  # document canvas
 
 
-def find(snap: dict, tokens: dict) -> list[dict]:
+def find(snap: dict, tokens: dict, census: dict | None = None) -> list[dict]:
     pg = Page(snap)
     els = pg.els
     out: list[dict] = []
@@ -319,6 +319,30 @@ def find(snap: dict, tokens: dict) -> list[dict]:
                     f"{s}px edge used by {edges[s]} other elements",
                 )
                 break
+
+    # The subject-check census: how many (rule, subject) pairs this page put to
+    # each rule. It is the denominator a false-positive budget must be stated
+    # over -- a rate per RUN is unreadable, because one page here carries 47
+    # subjects while one real route carries 1,841, and false-positive supply
+    # grows with subjects, not with pages. Counted from each rule's own subject
+    # domain rather than by instrumenting its body, so it stays reviewable.
+    if census is not None:
+        interactive = [e for e in els if e["tag"] in INTERACTIVE]
+        census.update(
+            {
+                "spacing-rhythm": sum(
+                    max(0, len(k) - 1) for k in groups.values() if len(k) >= 3
+                ),
+                "grid-violation": len(els) * 4,
+                "type-scale": len(text_els),
+                "token-drift": len(els) + len(seen),
+                "contrast": len(text_els),
+                "contrast-indeterminate": len(text_els),
+                "overflow": len(els),
+                "touch-target": len(interactive),
+                "misalignment": len(els),
+            }
+        )
     return out
 
 

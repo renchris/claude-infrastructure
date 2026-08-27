@@ -1,0 +1,814 @@
+{
+ "app": "reso-management-app",
+ "profile_stance": "design-system-conformance",
+ "degradation": {
+  "xcheck": "present",
+  "subtraction": "applied"
+ },
+ "budget_per_page": 2,
+ "unscreenable_classes": {
+  "gestalt": "Does this screen make sense at a glance? Say what it is for, then what confuses you about it.",
+  "hierarchy": "What does the eye land on first, second, third -- and is that the order the screen wants? Name the elements, in order.",
+  "content-fit": "Is anything here promised and not delivered, or delivered and not promised? Quote the text that makes the promise.",
+  "semantic-coherence": "Does every control say what it does, and does every group belong together? Name any control whose label and behaviour disagree.",
+  "optical-alignment": "Does anything read as misaligned, crooked or off-centre, even where you would expect the CSS to be correct? Name the element.",
+  "readability": "Is any text here hard to read as rendered -- washed out, too tight, clipped, or competing with what is behind it? Name it."
+ },
+ "pages": {
+  "align-1px": {
+   "coverage": {
+    "dom_findings": 1,
+    "indeterminate": 0,
+    "closed_by_xcheck": 0,
+    "routed_T1": 0,
+    "routed_T2": 6,
+    "unadjudicated_by_budget": 0
+   },
+   "queue": [
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "gestalt",
+     "target": "align-1px fold 1",
+     "rank": 0.5,
+     "image": "route_crops/align-1px.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "hierarchy",
+     "target": "align-1px fold 1",
+     "rank": 0.5,
+     "image": "route_crops/align-1px.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "content-fit",
+     "target": "align-1px fold 1",
+     "rank": 0.5,
+     "image": "route_crops/align-1px.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "semantic-coherence",
+     "target": "align-1px fold 1",
+     "rank": 0.5,
+     "image": "route_crops/align-1px.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "optical-alignment",
+     "target": "align-1px fold 1",
+     "rank": 0.5,
+     "image": "route_crops/align-1px.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "readability",
+     "target": "align-1px fold 1",
+     "rank": 0.5,
+     "image": "route_crops/align-1px.fold1.png"
+    }
+   ]
+  },
+  "clean": {
+   "coverage": {
+    "dom_findings": 0,
+    "indeterminate": 0,
+    "closed_by_xcheck": 0,
+    "routed_T1": 0,
+    "routed_T2": 6,
+    "unadjudicated_by_budget": 0
+   },
+   "queue": [
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "gestalt",
+     "target": "clean fold 1",
+     "rank": 0.5,
+     "image": "route_crops/clean.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "hierarchy",
+     "target": "clean fold 1",
+     "rank": 0.5,
+     "image": "route_crops/clean.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "content-fit",
+     "target": "clean fold 1",
+     "rank": 0.5,
+     "image": "route_crops/clean.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "semantic-coherence",
+     "target": "clean fold 1",
+     "rank": 0.5,
+     "image": "route_crops/clean.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "optical-alignment",
+     "target": "clean fold 1",
+     "rank": 0.5,
+     "image": "route_crops/clean.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "readability",
+     "target": "clean fold 1",
+     "rank": 0.5,
+     "image": "route_crops/clean.fold1.png"
+    }
+   ]
+  },
+  "contrast-on-gradient": {
+   "coverage": {
+    "dom_findings": 2,
+    "indeterminate": 2,
+    "closed_by_xcheck": 2,
+    "routed_T1": 0,
+    "routed_T2": 6,
+    "unadjudicated_by_budget": 0
+   },
+   "queue": [
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "gestalt",
+     "target": "contrast-on-gradient fold 1",
+     "rank": 0.5,
+     "image": "route_crops/contrast-on-gradient.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "hierarchy",
+     "target": "contrast-on-gradient fold 1",
+     "rank": 0.5,
+     "image": "route_crops/contrast-on-gradient.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "content-fit",
+     "target": "contrast-on-gradient fold 1",
+     "rank": 0.5,
+     "image": "route_crops/contrast-on-gradient.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "semantic-coherence",
+     "target": "contrast-on-gradient fold 1",
+     "rank": 0.5,
+     "image": "route_crops/contrast-on-gradient.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "optical-alignment",
+     "target": "contrast-on-gradient fold 1",
+     "rank": 0.5,
+     "image": "route_crops/contrast-on-gradient.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "readability",
+     "target": "contrast-on-gradient fold 1",
+     "rank": 0.5,
+     "image": "route_crops/contrast-on-gradient.fold1.png"
+    }
+   ]
+  },
+  "contrast-plain": {
+   "coverage": {
+    "dom_findings": 1,
+    "indeterminate": 0,
+    "closed_by_xcheck": 0,
+    "routed_T1": 0,
+    "routed_T2": 6,
+    "unadjudicated_by_budget": 0
+   },
+   "queue": [
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "gestalt",
+     "target": "contrast-plain fold 1",
+     "rank": 0.5,
+     "image": "route_crops/contrast-plain.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "hierarchy",
+     "target": "contrast-plain fold 1",
+     "rank": 0.5,
+     "image": "route_crops/contrast-plain.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "content-fit",
+     "target": "contrast-plain fold 1",
+     "rank": 0.5,
+     "image": "route_crops/contrast-plain.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "semantic-coherence",
+     "target": "contrast-plain fold 1",
+     "rank": 0.5,
+     "image": "route_crops/contrast-plain.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "optical-alignment",
+     "target": "contrast-plain fold 1",
+     "rank": 0.5,
+     "image": "route_crops/contrast-plain.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "readability",
+     "target": "contrast-plain fold 1",
+     "rank": 0.5,
+     "image": "route_crops/contrast-plain.fold1.png"
+    }
+   ]
+  },
+  "grid-offgrid": {
+   "coverage": {
+    "dom_findings": 1,
+    "indeterminate": 0,
+    "closed_by_xcheck": 0,
+    "routed_T1": 0,
+    "routed_T2": 6,
+    "unadjudicated_by_budget": 0
+   },
+   "queue": [
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "gestalt",
+     "target": "grid-offgrid fold 1",
+     "rank": 0.5,
+     "image": "route_crops/grid-offgrid.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "hierarchy",
+     "target": "grid-offgrid fold 1",
+     "rank": 0.5,
+     "image": "route_crops/grid-offgrid.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "content-fit",
+     "target": "grid-offgrid fold 1",
+     "rank": 0.5,
+     "image": "route_crops/grid-offgrid.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "semantic-coherence",
+     "target": "grid-offgrid fold 1",
+     "rank": 0.5,
+     "image": "route_crops/grid-offgrid.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "optical-alignment",
+     "target": "grid-offgrid fold 1",
+     "rank": 0.5,
+     "image": "route_crops/grid-offgrid.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "readability",
+     "target": "grid-offgrid fold 1",
+     "rank": 0.5,
+     "image": "route_crops/grid-offgrid.fold1.png"
+    }
+   ]
+  },
+  "hierarchy-inversion": {
+   "coverage": {
+    "dom_findings": 2,
+    "indeterminate": 0,
+    "closed_by_xcheck": 0,
+    "routed_T1": 0,
+    "routed_T2": 6,
+    "unadjudicated_by_budget": 0
+   },
+   "queue": [
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "gestalt",
+     "target": "hierarchy-inversion fold 1",
+     "rank": 0.5,
+     "image": "route_crops/hierarchy-inversion.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "hierarchy",
+     "target": "hierarchy-inversion fold 1",
+     "rank": 0.5,
+     "image": "route_crops/hierarchy-inversion.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "content-fit",
+     "target": "hierarchy-inversion fold 1",
+     "rank": 0.5,
+     "image": "route_crops/hierarchy-inversion.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "semantic-coherence",
+     "target": "hierarchy-inversion fold 1",
+     "rank": 0.5,
+     "image": "route_crops/hierarchy-inversion.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "optical-alignment",
+     "target": "hierarchy-inversion fold 1",
+     "rank": 0.5,
+     "image": "route_crops/hierarchy-inversion.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "readability",
+     "target": "hierarchy-inversion fold 1",
+     "rank": 0.5,
+     "image": "route_crops/hierarchy-inversion.fold1.png"
+    }
+   ]
+  },
+  "optical-centering": {
+   "coverage": {
+    "dom_findings": 0,
+    "indeterminate": 0,
+    "closed_by_xcheck": 0,
+    "routed_T1": 0,
+    "routed_T2": 6,
+    "unadjudicated_by_budget": 0
+   },
+   "queue": [
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "gestalt",
+     "target": "optical-centering fold 1",
+     "rank": 0.5,
+     "image": "route_crops/optical-centering.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "hierarchy",
+     "target": "optical-centering fold 1",
+     "rank": 0.5,
+     "image": "route_crops/optical-centering.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "content-fit",
+     "target": "optical-centering fold 1",
+     "rank": 0.5,
+     "image": "route_crops/optical-centering.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "semantic-coherence",
+     "target": "optical-centering fold 1",
+     "rank": 0.5,
+     "image": "route_crops/optical-centering.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "optical-alignment",
+     "target": "optical-centering fold 1",
+     "rank": 0.5,
+     "image": "route_crops/optical-centering.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "readability",
+     "target": "optical-centering fold 1",
+     "rank": 0.5,
+     "image": "route_crops/optical-centering.fold1.png"
+    }
+   ]
+  },
+  "overflow-clip": {
+   "coverage": {
+    "dom_findings": 3,
+    "indeterminate": 0,
+    "closed_by_xcheck": 0,
+    "routed_T1": 0,
+    "routed_T2": 6,
+    "unadjudicated_by_budget": 0
+   },
+   "queue": [
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "gestalt",
+     "target": "overflow-clip fold 1",
+     "rank": 0.5,
+     "image": "route_crops/overflow-clip.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "hierarchy",
+     "target": "overflow-clip fold 1",
+     "rank": 0.5,
+     "image": "route_crops/overflow-clip.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "content-fit",
+     "target": "overflow-clip fold 1",
+     "rank": 0.5,
+     "image": "route_crops/overflow-clip.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "semantic-coherence",
+     "target": "overflow-clip fold 1",
+     "rank": 0.5,
+     "image": "route_crops/overflow-clip.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "optical-alignment",
+     "target": "overflow-clip fold 1",
+     "rank": 0.5,
+     "image": "route_crops/overflow-clip.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "readability",
+     "target": "overflow-clip fold 1",
+     "rank": 0.5,
+     "image": "route_crops/overflow-clip.fold1.png"
+    }
+   ]
+  },
+  "radius-drift": {
+   "coverage": {
+    "dom_findings": 1,
+    "indeterminate": 0,
+    "closed_by_xcheck": 0,
+    "routed_T1": 0,
+    "routed_T2": 6,
+    "unadjudicated_by_budget": 0
+   },
+   "queue": [
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "gestalt",
+     "target": "radius-drift fold 1",
+     "rank": 0.5,
+     "image": "route_crops/radius-drift.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "hierarchy",
+     "target": "radius-drift fold 1",
+     "rank": 0.5,
+     "image": "route_crops/radius-drift.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "content-fit",
+     "target": "radius-drift fold 1",
+     "rank": 0.5,
+     "image": "route_crops/radius-drift.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "semantic-coherence",
+     "target": "radius-drift fold 1",
+     "rank": 0.5,
+     "image": "route_crops/radius-drift.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "optical-alignment",
+     "target": "radius-drift fold 1",
+     "rank": 0.5,
+     "image": "route_crops/radius-drift.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "readability",
+     "target": "radius-drift fold 1",
+     "rank": 0.5,
+     "image": "route_crops/radius-drift.fold1.png"
+    }
+   ]
+  },
+  "spacing-gap": {
+   "coverage": {
+    "dom_findings": 2,
+    "indeterminate": 0,
+    "closed_by_xcheck": 0,
+    "routed_T1": 0,
+    "routed_T2": 6,
+    "unadjudicated_by_budget": 0
+   },
+   "queue": [
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "gestalt",
+     "target": "spacing-gap fold 1",
+     "rank": 0.5,
+     "image": "route_crops/spacing-gap.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "hierarchy",
+     "target": "spacing-gap fold 1",
+     "rank": 0.5,
+     "image": "route_crops/spacing-gap.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "content-fit",
+     "target": "spacing-gap fold 1",
+     "rank": 0.5,
+     "image": "route_crops/spacing-gap.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "semantic-coherence",
+     "target": "spacing-gap fold 1",
+     "rank": 0.5,
+     "image": "route_crops/spacing-gap.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "optical-alignment",
+     "target": "spacing-gap fold 1",
+     "rank": 0.5,
+     "image": "route_crops/spacing-gap.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "readability",
+     "target": "spacing-gap fold 1",
+     "rank": 0.5,
+     "image": "route_crops/spacing-gap.fold1.png"
+    }
+   ]
+  },
+  "token-color-drift": {
+   "coverage": {
+    "dom_findings": 1,
+    "indeterminate": 0,
+    "closed_by_xcheck": 0,
+    "routed_T1": 0,
+    "routed_T2": 6,
+    "unadjudicated_by_budget": 0
+   },
+   "queue": [
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "gestalt",
+     "target": "token-color-drift fold 1",
+     "rank": 0.5,
+     "image": "route_crops/token-color-drift.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "hierarchy",
+     "target": "token-color-drift fold 1",
+     "rank": 0.5,
+     "image": "route_crops/token-color-drift.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "content-fit",
+     "target": "token-color-drift fold 1",
+     "rank": 0.5,
+     "image": "route_crops/token-color-drift.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "semantic-coherence",
+     "target": "token-color-drift fold 1",
+     "rank": 0.5,
+     "image": "route_crops/token-color-drift.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "optical-alignment",
+     "target": "token-color-drift fold 1",
+     "rank": 0.5,
+     "image": "route_crops/token-color-drift.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "readability",
+     "target": "token-color-drift fold 1",
+     "rank": 0.5,
+     "image": "route_crops/token-color-drift.fold1.png"
+    }
+   ]
+  },
+  "touch-target": {
+   "coverage": {
+    "dom_findings": 1,
+    "indeterminate": 0,
+    "closed_by_xcheck": 0,
+    "routed_T1": 0,
+    "routed_T2": 6,
+    "unadjudicated_by_budget": 0
+   },
+   "queue": [
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "gestalt",
+     "target": "touch-target fold 1",
+     "rank": 0.5,
+     "image": "route_crops/touch-target.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "hierarchy",
+     "target": "touch-target fold 1",
+     "rank": 0.5,
+     "image": "route_crops/touch-target.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "content-fit",
+     "target": "touch-target fold 1",
+     "rank": 0.5,
+     "image": "route_crops/touch-target.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "semantic-coherence",
+     "target": "touch-target fold 1",
+     "rank": 0.5,
+     "image": "route_crops/touch-target.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "optical-alignment",
+     "target": "touch-target fold 1",
+     "rank": 0.5,
+     "image": "route_crops/touch-target.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "readability",
+     "target": "touch-target fold 1",
+     "rank": 0.5,
+     "image": "route_crops/touch-target.fold1.png"
+    }
+   ]
+  },
+  "type-scale": {
+   "coverage": {
+    "dom_findings": 1,
+    "indeterminate": 0,
+    "closed_by_xcheck": 0,
+    "routed_T1": 0,
+    "routed_T2": 6,
+    "unadjudicated_by_budget": 0
+   },
+   "queue": [
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "gestalt",
+     "target": "type-scale fold 1",
+     "rank": 0.5,
+     "image": "route_crops/type-scale.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "hierarchy",
+     "target": "type-scale fold 1",
+     "rank": 0.5,
+     "image": "route_crops/type-scale.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "content-fit",
+     "target": "type-scale fold 1",
+     "rank": 0.5,
+     "image": "route_crops/type-scale.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "semantic-coherence",
+     "target": "type-scale fold 1",
+     "rank": 0.5,
+     "image": "route_crops/type-scale.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "optical-alignment",
+     "target": "type-scale fold 1",
+     "rank": 0.5,
+     "image": "route_crops/type-scale.fold1.png"
+    },
+    {
+     "trigger": "T2",
+     "kind": "unscreenable",
+     "rule": "readability",
+     "target": "type-scale fold 1",
+     "rank": 0.5,
+     "image": "route_crops/type-scale.fold1.png"
+    }
+   ]
+  }
+ },
+ "fold_captions": {
+  "align-1px fold 1": "region fold 1\nthe whole of the page, about 100% of its height, beside: nothing else in frame\neffective resolution 1.50x CSS\nDO NOT assert any 1-2px alignment, hairline-width or colour-drift finding from this image. If you suspect one, name the region and stop.",
+  "clean fold 1": "region fold 1\nthe whole of the page, about 100% of its height, beside: nothing else in frame\neffective resolution 1.50x CSS\nDO NOT assert any 1-2px alignment, hairline-width or colour-drift finding from this image. If you suspect one, name the region and stop.",
+  "contrast-on-gradient fold 1": "region fold 1\nthe whole of the page, about 100% of its height, beside: nothing else in frame\neffective resolution 1.50x CSS\nDO NOT assert any 1-2px alignment, hairline-width or colour-drift finding from this image. If you suspect one, name the region and stop.",
+  "contrast-plain fold 1": "region fold 1\nthe whole of the page, about 100% of its height, beside: nothing else in frame\neffective resolution 1.50x CSS\nDO NOT assert any 1-2px alignment, hairline-width or colour-drift finding from this image. If you suspect one, name the region and stop.",
+  "grid-offgrid fold 1": "region fold 1\nthe whole of the page, about 100% of its height, beside: nothing else in frame\neffective resolution 1.50x CSS\nDO NOT assert any 1-2px alignment, hairline-width or colour-drift finding from this image. If you suspect one, name the region and stop.",
+  "hierarchy-inversion fold 1": "region fold 1\nthe whole of the page, about 100% of its height, beside: nothing else in frame\neffective resolution 1.50x CSS\nDO NOT assert any 1-2px alignment, hairline-width or colour-drift finding from this image. If you suspect one, name the region and stop.",
+  "optical-centering fold 1": "region fold 1\nthe whole of the page, about 100% of its height, beside: nothing else in frame\neffective resolution 1.50x CSS\nDO NOT assert any 1-2px alignment, hairline-width or colour-drift finding from this image. If you suspect one, name the region and stop.",
+  "overflow-clip fold 1": "region fold 1\nthe whole of the page, about 100% of its height, beside: nothing else in frame\neffective resolution 1.50x CSS\nDO NOT assert any 1-2px alignment, hairline-width or colour-drift finding from this image. If you suspect one, name the region and stop.",
+  "radius-drift fold 1": "region fold 1\nthe whole of the page, about 100% of its height, beside: nothing else in frame\neffective resolution 1.50x CSS\nDO NOT assert any 1-2px alignment, hairline-width or colour-drift finding from this image. If you suspect one, name the region and stop.",
+  "spacing-gap fold 1": "region fold 1\nthe whole of the page, about 100% of its height, beside: nothing else in frame\neffective resolution 1.50x CSS\nDO NOT assert any 1-2px alignment, hairline-width or colour-drift finding from this image. If you suspect one, name the region and stop.",
+  "token-color-drift fold 1": "region fold 1\nthe whole of the page, about 100% of its height, beside: nothing else in frame\neffective resolution 1.50x CSS\nDO NOT assert any 1-2px alignment, hairline-width or colour-drift finding from this image. If you suspect one, name the region and stop.",
+  "touch-target fold 1": "region fold 1\nthe whole of the page, about 100% of its height, beside: nothing else in frame\neffective resolution 1.50x CSS\nDO NOT assert any 1-2px alignment, hairline-width or colour-drift finding from this image. If you suspect one, name the region and stop.",
+  "type-scale fold 1": "region fold 1\nthe whole of the page, about 100% of its height, beside: nothing else in frame\neffective resolution 1.50x CSS\nDO NOT assert any 1-2px alignment, hairline-width or colour-drift finding from this image. If you suspect one, name the region and stop."
+ }
+}
