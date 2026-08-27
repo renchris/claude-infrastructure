@@ -86,6 +86,137 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-27 — drain recycle #250: method 220 — A HAZARD'S RANK MUST KEY ON WHICH SIDE OF THE
+  PIPE THE VARIABLE SITS ON, NOT ON HOW IT IS BOUND.** #249 classified every `pipefail-sigpipe-lint
+  --census` site by asking *"is the variable this site PIPES parameter-bound in its enclosing
+  function?"*, and handed its thirteen `PARAM_BOUND` sites forward as the ranked worklist, with
+  `scripts/branch-reaper.sh`'s `is_kept` named first — *"the sharpest, take it first"*, because its
+  inversion reaps a protected or worktree-held branch. **The consequence was right, the file was
+  right, and the SITES were wrong, because `local b="$1"` says nothing about SIZE.** A SIGPIPE
+  site's risk is set by the bytes it PIPES; binding is orthogonal to that. At the two `is_kept`
+  sites where `$b` is actually piped (`:108`, `:111`) `$b` is ONE BRANCH NAME — the longest of
+  **2,079** local refs measured **41 bytes** at 2026-08-27T11:36Z, and git's own ref-name rules
+  bound it forever, so neither can invert at any fleet size. **The site that CAN invert is the one
+  where `$b` is the grep ARGUMENT and the fleet-sized list is the feed — and on #249's axis that
+  site is not `PARAM_BOUND` at all.**
+- **THE WORKED EXAMPLE, AND ITS SHAPE IS "TWO GUARDS OVER ONE FEED ARE ONE GUARD".**
+  `scripts/branch-reaper.sh` deletes branch REFS. Its header lists, FIRST among the things it *"will
+  not touch, EVER"*, a branch with a checked-out worktree — *"that is a live session's carrier"*.
+  That exclusion is asked TWICE: in the main loop at `:120`, and again inside `is_kept` at `:109`,
+  reached from `:126`. **Both asked it with `printf '%s\n' "$worktree_branches" | grep -qxF "$b"`.**
+  The file runs under `set -uo pipefail`; `grep -q` exits at the FIRST match, the producer takes
+  SIGPIPE, pipefail promotes it, and the `&&` / `if` **fails ON A MATCH** — so a branch that IS
+  worktree-held reads NOT-KEPT, falls past both guards into the delete plan, and under `--confirm`
+  the next line is `git branch -d`. **Fail-OPEN, in the guard whose entire job is to stop this
+  script deleting a live session's carrier.** The two are not independent belts: they share ONE
+  variable, so a single oversized feed inverts BOTH at once. (The third belt the header names,
+  `hooks/git-worktree-guard.sh`, is a genuinely separate process and is untouched.)
+- **MEASURED ON THE REAL EXTRACTED FUNCTION, NOT REASONED — 20 trials per cell, load ~71,
+  2026-08-27T11:40Z.** `probe250-invert.sh` pulls `is_kept` out of the file by anchor and runs it:
+  correct **20/20** at the live feed (**1,323 B**) and at 20,000 B; **INVERTED 20/20 at 120,000 B
+  with the needle at the HEAD**; correct 20/20 at 120,000 B with it at the TAIL. **POSITION is as
+  much the variable as size**, because `grep -q` exits at the first match — the earlier the needle,
+  the sooner the pipe closes. The same table post-fix reads 20/20 correct in every member cell with
+  both NEG cells unmoved.
+- **REACHABILITY, STATED HONESTLY: LATENT, NOT LIVE — and the argument against calling that safe is
+  in the file's own header.** The feed is `git worktree list --porcelain | sed … | sort -u`,
+  measured **1,323 B / 68 branches at 2026-08-27T11:36:50Z** — **3.6%** of the 37,121 B safe floor
+  for a two-stage builtin pipeline. But `branch-reaper.sh` exists *because* the fleet is moving to
+  per-session worktree isolation at **14-27 sessions/day**, so this feed is an operational quantity
+  that only grows and nothing announces the crossing. **#241's clause holds: LATENT IS NOT SAFE.**
+- 🚨 **THE HALF THAT GENERALISES, WITH THE PARTITION ASSERTED TO SUM AND BOTH CONTROLS DRAWN FROM
+  THE LIVE TREE.** `probe250-side.sh` re-derives BOTH axes over the same census:
+  **`FEED_LOCAL_OR_GLOBAL` 115 · `FEED_NO_VAR` 7 · `PARAM_ON_FEED` 13 · `PARAM_ON_PATTERN` 2 =
+  137.** The standing axis's total is reproduced EXACTLY at 13. **`PARAM_ON_PATTERN` is the axis
+  nobody had computed, it holds only two sites, and one of them is the defect above.** POS control
+  `branch-reaper.sh:109` must classify `PARAM_ON_PATTERN` (feed `worktree_branches`, pattern `b`);
+  NEG control `:108` must classify `PARAM_ON_FEED` (feed `b`); both fired.
+- ⚠️ **DECLARED BLIND SPOT, BECAUSE IT BIT BOTH CLASSIFIERS ONE LEVEL DOWN: NEITHER READS WHAT THE
+  PRODUCER *WRITES*, ONLY WHICH VARIABLES ITS TEXT MENTIONS.** `install.sh:971` is the worked
+  example — its producer is `"$LAUNCHCTL_BIN" list "$label"`, an external COMMAND, so `$label` is an
+  ARGUMENT and none of those variables is piped at all. #249's classifier called that site
+  `PARAM_ON_FEED`; mine calls it `FEED_LOCAL_OR_GLOBAL`; **both are keying on the wrong thing.**
+  **The two classifiers agree on the total 13 and DISAGREE on the per-file attribution** (#249:
+  branch-reaper ×4, watchdog ×2, install.sh ×1; mine: branch-reaper ×2, watchdog ×5, install.sh ×0)
+  — **and I did not adjudicate that. Do not cite either attribution as settled.**
+- ✅ **THE DELIBERATE GREEN IS THE FINDING, NOT A FOOTNOTE.** `redproof250.sh` ran the suite against
+  the `origin/main` subject with the red SET predicted in advance and gated at rc 93: **red arms
+  `[15 16]` exactly, plan 16, 2 reds, subject restored by sha256 in a trap (`RESTORE=OK`).**
+  **Arm 4 — *"REFUSAL: a branch backing a worktree is EXCLUDED from the candidate set"* — pins the
+  very contract this defect broke and STAYED GREEN over the unfixed subject**, because its fixture
+  feeds ONE branch, about 17 bytes. It is a well-built test; it even carries a note recording that a
+  previous mutation found its naive assertion vacuous. **It could not see this because the defect is
+  a function of the feed's SIZE and nothing sized its fixture.** A red count says a suite noticed;
+  only naming which arm went red AND which stayed green says what the incumbent tests cannot see.
+- **THE ARMS: 14 → 16, both APPENDED, zero existing assertions edited.** Arm 15 is a MECHANISM arm
+  (extracts the real `is_kept`, feeds it 120,000 B at the head, asserts KEPT, with a NEG control at
+  the same size so it cannot pass by always answering KEPT, **plus an explicit assertion that
+  pipefail is ON — without which the arm is vacuous in BOTH states**). 120,000 is taken from the
+  measured always-inverted band, so a re-introduced `grep -q` fails it every run rather than one in
+  twenty. Arm 16 is a class arm whose **SPAN is the whole file, deliberately**, because the property
+  is about one VARIABLE with TWO consumers — a span narrowed to the function would have pinned one
+  and left the other. It strips comment lines first, since the cure documents the hazard by name and
+  a raw grep convicts the fixed file for explaining its own fix.
+- ✅ **#244's FREE ATTRIBUTION WORKED FIRST TRY AND IS STILL THE CHEAPEST DRAIN-PROOF.** Sites
+  drained, allowlist UNTOUCHED, bare lint run: it refused and named the change per path —
+  *"`scripts/branch-reaper.sh` now 4, allowlist says 6 → set it to 4"*. **Row LOWERED 6 → 4, not
+  deleted**, because `is_kept`'s two `$b`-fed sites remain and are correctly still grandfathered.
+  Census **137 → 135, LOST=2, NEW=0**, keyed on **(path, TEXT)** with the PRE arm extracted from
+  `origin/main` via `git archive | tar -x` rather than remembered. Both lost rows are the two
+  drained sites, **drained IN PLACE** — `is_kept` still exists and is still censused, so this is not
+  #243's *"moved out of the detector's field of view"*.
+- 🚨 **TWO INSTRUMENT REFUSALS, BOTH IN MY OWN APPARATUS, BOTH CAUGHT BY A WRITTEN PREDICTION.**
+  **(1)** `probe249-class.sh`, re-run rather than trusted, **REFUSED rc 94**: its POS control is the
+  site #249 itself drained, so it now reads MISSING. **That is the instrument being a PRE-FIX
+  instrument, not a fault — but it means the inherited `13 / 113 / 11` cannot be reproduced without
+  repointing the control, and nobody should quote it as though it can.** **(2)** My own probe's NEG
+  control was **VACUOUS**: its feed builder PLANTED the needle in every mode, so the "non-member"
+  cell was a member and read `not-kept` for the same SIGPIPE reason as the member cell — **zero
+  discriminating power in exactly the direction I needed.** The rc-93 gate refused it. Fixed with an
+  `absent` mode that plants nothing. **A NEG control fed through a builder that plants the needle
+  cannot be a non-member.**
+- 🚨 **A LINK'S WINDOW IS MEASURED, NOT FELT — AND MINE WAS ELEVEN HOURS, NOT ONE.** My open census
+  stamped **2026-08-27T10:45:03Z** and my mid-link ledger re-read stamped **21:40:22Z**; the turn
+  sequence between them felt continuous and contained no waiting. **Had I trusted the felt duration
+  I would have carried an open-moment `LIVE_AGE=3113` (well inside the 21,600 s arm) into my close
+  as though it were current, which is exactly the reading that goes stale.** #249's rung changed
+  `✅` → `🚀` inside a 2-hour link; an 11-hour one cannot be reasoned about from its open at all.
+  **Stamp every moment, subtract them, and report the elapsed figure you computed rather than the
+  one you experienced.** (memory: `session-signals-do-not-measure-background-runtime`.)
+- ⚠️ **AND THE `GATE` FIELD MOVED ACROSS THAT SAME LINK — BUT I READ IT IN TWO DIFFERENT TREE
+  STATES, SO I DREW NO CONCLUSION FROM THE PAIR.** `GATE=stale` at my open (clean tree) and
+  `GATE=green` at my mid-link re-read (**dirty tree, `LIVE_SRC=skip`** — `compute_live_layer()` runs
+  only on the ✅-eligible path, #236's measurement). **Two tree states are two populations. The
+  apples-to-apples reading is the one taken clean after committing, and that is the one to compare
+  against the twenty-six-link `stale` streak.**
+- **BOARD, both partitions asserted at every moment** (`open + blocked == combined` AND
+  `allids == allrows`), five lists, every list `sort`ed before every `comm`. Open **2026-08-27T
+  10:45:03Z: 331 open / 217 blocked / 2,339 done / 4 claimed** (548 combined, 2,891 rows).
+  **The 9m19s gap between #249's floor (10:35:44Z, found by `mtime` and NOT by the suffix a brief
+  named) and my open held ONE transition and ZERO arrivals:** `01ab05685857` claimed → **blocked**
+  — a `postland-cut-starves-green` row and one of the four #243 measured going round the same
+  cycle. **`done` has still not moved since #229.**
+- **STORES at open:** postland RED pages **0** over a denominator of **2,749** — the **154th**
+  consecutive zero; postland stamps **489** (flat against #249's close reading of 489, and **I draw
+  no conclusion about my link from a flat pair**, per #245's scar); `~/.claude/autonomy/pages`
+  **2,189 / 118**; inbox-guard `.escalated` **453 of 453 files** — every file in that store is an
+  `.escalated` marker, so those are ONE number and not a ratio.
+- **THE DRAW WAS 2 SUITES, AND IT SHARPENS #248's VARIABLE RATHER THAN #243's.**
+  `tests/branch-reaper.bats` + `tests/pipefail-sigpipe-lint.bats`, run in the FOREGROUND before the
+  land: **36 ok, 0 not ok, 0 skip, 0 NO-PLAN, 0 PLAN-MISMATCH, 73s at load ~18**, with
+  suites-run == suites-listed asserted at rc 93 and every child given `< /dev/null`.
+  **`tests/ship-land.bats` was NOT pulled in even though my diff touches a lint's ALLOWLIST** — so
+  the trigger is narrower still than *"which lint"*: it is whether the diff names the lint SCRIPT,
+  not its data. ⚠️ **`tests/pipefail-sigpipe-lint.bats` read plan=20 at 2026-08-27T21:44Z, where
+  this brief's measured-sizes list carries 18. Stamped, not concluded from — re-count it.**
+- 🚨 **NAMED AND DELIBERATELY NOT TAKEN, AND IT IS THE STRONGEST LEAD I LEAVE:**
+  **`scripts/postland-verify.sh:3349`** is the other `PARAM_ON_PATTERN` site and is the same shape
+  ONE STAGE WORSE — `printf '%s\n' "$mf" | sed … | tr … | grep -qxF "$path" && return 2`, **FOUR
+  stages**, so its floor is below the 17,427 B three-stage figure. Inversion skips `return 2`
+  (*"the green cannot speak about this file"*) and falls through to `return 0` (*"the green vouches
+  for it"*) — **a host suite EXCLUDED from the corpus is falsely exonerated by a green that never
+  ran it.** Left because touching it pulls the 130-test, pathologically slow
+  `tests/postland-verify.bats` into the draw. **Take it on a link whose diff is otherwise small.**
 - **2026-08-27 — drain recycle #249: method 219 — A PARAMETER RENAME AT A FUNCTION BOUNDARY HIDES
   A SITE FROM THE VERY GREP THAT FOUND ITS SIBLINGS.** #244 landed the rule that when you drain a
   named predicate you should grep the file for its FEED VARIABLE rather than for its name, and that
