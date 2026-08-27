@@ -11,3 +11,15 @@ corpus/out/pages/
 corpus/out/shots/
 corpus/out/snapshots/
 corpus/out/blind/
+
+# Same rule, applied to the router's output. `route_plan.json` is 92 KB of which
+# almost all is the six unconditional questions repeated once per page, and
+# crops/ is the rendered image ledger -- both regenerate from the committed
+# findings in one command (`bash run.sh`). The evidence worth keeping is the
+# findings files and the README table they support; a plan file that changes
+# whenever a caption is reworded would bury exactly that.
+corpus/out/route_plan.json
+corpus/out/crops/
+# The second capture scale exists to prove the pixel arms agree across it, which
+# is a property the run asserts rather than an artifact anyone reads.
+corpus/out/findings_xcheck@*.json
