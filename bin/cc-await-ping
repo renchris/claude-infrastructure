@@ -71,9 +71,13 @@
 #
 # The mode is therefore two exit conditions and a fail-closed arm gate:
 #   C1 exit-on-mail   unchanged — the wake half of 2-way comms.
-#   C2 exit-on-turn   a UserPromptSubmit-kind beat newer than the baseline taken at arm ⇒ the session
-#                     was woken by something else, so this awaiter's job is over: exit 0 SILENTLY
-#                     (verdict=stood-down), leaving the next natural Stop registry-quiet.
+#   C2 exit-on-turn   a beat more than ONE past the baseline taken at arm ⇒ the session was woken by
+#                     something else, so this awaiter's job is over: exit 0 SILENTLY
+#                     (verdict=stood-down), leaving the next natural Stop registry-quiet. The one
+#                     excluded beat is the arm turn's OWN trailing Stop — the arm runs inside a turn,
+#                     so that turn always still owes exactly one beat, whatever kind the baseline
+#                     was. Conditioning that allowance on a prompt-kind baseline is what made every
+#                     wake-floor-instructed arm a silent no-op until 2026-08-27 (b60eb29e97dd).
 #   C3 single-instance   refuse while a live sibling watcher claims any key of the keyset.
 #   C4 refuse-on-pending refuse while mail is already pending — mail waiting means you have work, and
 #                     arming would defer the judgment of state you ALREADY hold.
@@ -353,6 +357,7 @@ _unbeat() {
 BEAT_DIR="${CC_BEAT_DIR:-$HOME/.claude/cc-beats}"
 BEAT_FRESH_S="${CC_AWAIT_BEAT_FRESH_S:-900}"
 BEAT_BASE_SEQ=0
+BEAT_BASE_KIND=""
 BEAT_STOP_ALLOWANCE=0
 
 _beat_field() {  # <sid> <jq-path> → field value on stdout; empty on any failure
@@ -407,6 +412,7 @@ if [ "$IDLE_SCOPED" = 1 ]; then
     _refuse stale-beat "The newest beat for [$SID] is $(( _now - _bt ))s old (bound ${BEAT_FRESH_S}s). An arm happens INSIDE a turn, so a live beat producer makes this seconds old — a stale one means either the producer is not running or the sid is not this session's."
   fi
   BEAT_BASE_SEQ="$(_beat_field "$SID" '.seq')"; case "$BEAT_BASE_SEQ" in ''|*[!0-9]*) BEAT_BASE_SEQ=0 ;; esac
+  BEAT_BASE_KIND="$(_beat_field "$SID" '.kind')"
   # THE ALLOWANCE, and why the doc's "exclude Stop-kind beats" is implemented as an OFFSET rather
   # than a kind filter. The beat file holds only the LATEST boundary, so a filter on `kind` alone has
   # a sampling hole: a whole turn (prompt beat, then stop beat) can complete inside one poll
@@ -416,7 +422,34 @@ if [ "$IDLE_SCOPED" = 1 ]; then
   # baseline PROVES a prompt beat occurred in between, whether or not we sampled it. The offset says
   # exactly that: the arm turn's own trailing Stop (baseline+1) is excluded, and nothing else is.
   # Erring toward standing down early costs one bounce turn; erring the other way costs the goal.
-  [ "$(_beat_field "$SID" '.kind')" = "prompt" ] && BEAT_STOP_ALLOWANCE=1
+  #
+  # ── THE ALLOWANCE IS UNCONDITIONAL, AND THE `kind=prompt` GUARD IT REPLACES WAS THE WHOLE BUG ────
+  # (backlog b60eb29e97dd, 2026-08-27.) This line used to read `[ kind = prompt ] && ALLOWANCE=1`, so
+  # a stop-kind baseline got NO allowance, the threshold collapsed onto the baseline itself, and the
+  # arm turn's own trailing Stop at baseline+1 tripped C2 on the first poll. Measured 2/2 in the
+  # field, banners `beat seq > 3` and `beat seq > 6` — i.e. every instructed arm was a silent no-op:
+  # armed, stood down seconds later, and the session went deaf anyway. Reproduced red here (see
+  # tests/cc-await-ping.bats § "STOP-KIND baseline").
+  #
+  # WHY A STOP-KIND BASELINE IS NOT THE EXOTIC CASE BUT THE ONLY ONE THE WAKE FLOOR EVER PRODUCES.
+  # The guard encoded A9 of goal-safe-2way-comms-2026-08-13.md — "Stop-hook feedback re-prompts DO
+  # fire UserPromptSubmit" — whose citation is session-beat.sh's own header COMMENT, never a probe.
+  # The measured fact is the opposite and older: a `decision:block` continuation does NOT re-fire
+  # UserPromptSubmit (cross-session-mail-2026-07-20.md:132, "v2 load-bearing fact"; the beat header's
+  # regex is inherited from cc-interactive.sh, which classifies TRANSCRIPT rows — where Stop-hook
+  # feedback does appear as a user turn — not hook events). And the thing that instructs this arm IS
+  # a `decision:block`: hooks/session-continue.sh's wake floor. So the arm turn is a continuation
+  # turn, it writes no prompt beat, and the newest beat at arm time is always the PRECEDING turn's
+  # Stop. The guard therefore never held on the path that matters.
+  #
+  # WHAT THE ALLOWANCE ACTUALLY COUNTS — and it is not "was the baseline a prompt". The arm runs
+  # INSIDE a turn, before that turn's Stop, so the arm turn still owes exactly ONE beat: its own
+  # trailing Stop at baseline+1. That is true whether the baseline is this turn's prompt beat or the
+  # previous turn's stop beat, because in both cases our Stop is still to come. One turn, one owed
+  # beat, one allowance. Clause 2 of _turn_moved keeps the fail-open beat producer honest: a PROMPT
+  # beat at baseline+1 means our trailing Stop was never written and a real new turn began, which
+  # still cancels.
+  BEAT_STOP_ALLOWANCE=1
   # (C4) MAIL ALREADY PENDING = you have work. Arming here would defer the judgment of state the
   #      session already holds, which is the deferral this mode exists to make impossible.
   for _k in $(_keys); do
@@ -432,7 +465,10 @@ if [ "$IDLE_SCOPED" = 1 ]; then
     fi
   done
   echo "$_banner" >&2
-  echo "cc-await-ping: idle-scoped — will also stand down on any new turn of [$SID] (beat seq > $(( BEAT_BASE_SEQ + BEAT_STOP_ALLOWANCE )))" >&2
+  # THE BANNER CARRIES THE BASELINE'S KIND, not just the derived threshold. b60eb29e97dd was
+  # diagnosed from this line, and `beat seq > 3` alone cannot say whether 3 is a baseline with no
+  # allowance or a baseline+1 — the one bit that separated "working" from "no-op". Print both.
+  echo "cc-await-ping: idle-scoped — will also stand down on any new turn of [$SID] (baseline seq=$BEAT_BASE_SEQ kind=${BEAT_BASE_KIND:-unknown}; stands down on beat seq > $(( BEAT_BASE_SEQ + BEAT_STOP_ALLOWANCE )))" >&2
 fi
 
 # ── C2: THE EXIT THAT MAKES THE DEFERRAL IDLE-SCOPED ──────────────────────────────────────────────

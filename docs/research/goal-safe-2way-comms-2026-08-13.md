@@ -48,7 +48,8 @@ All measured against CC 2.1.220 unless noted; sources in brackets.
 | A6 | Delivery into a running turn = the drain boundaries (SessionStart / UserPromptSubmit / PostToolUse + the Stop fold). Delivery into an IDLE session = only a wake: watcher completion, asyncRewake fire, typed message, composer injection | MEASURED [mailbox-drain.sh header] |
 | A7 | A goal dies with its session; `--recycle` inherits a live goal by default since R3 | MEASURED [goal-in-handoff §3.4, § RESOLUTION R3] |
 | A8 | Evaluation economics: across all 380 goals ever armed here, **82% of met goals were met on evaluation #1; the met rate falls to 27% at ≥10 evaluations**; the one `failed:true` goal burned 45 evaluations / 27.6 h / 390,885 tokens. Re-judging is grinding, not converging | MEASURED [commands/handoff.md § goal-condition rules] |
-| A9 | One attestation per turn boundary already lands in `~/.claude/cc-beats/<sid>.json` — `{kind: UserPromptSubmit|Stop, t, seq, who}` — written fail-open by `hooks/session-beat.sh` on every session. Auto-driven re-prompts (task notifications, Stop-hook feedback) DO fire UserPromptSubmit | MEASURED [session-beat.sh header] |
+| A9 | One attestation per turn boundary already lands in `~/.claude/cc-beats/<sid>.json` — `{kind: UserPromptSubmit|Stop, t, seq, who}` — written fail-open by `hooks/session-beat.sh` on every session. ~~Auto-driven re-prompts (task notifications, Stop-hook feedback) DO fire UserPromptSubmit~~ → **REFUTED for Stop-hook feedback, 2026-08-27 (backlog b60eb29e97dd)** — see A9-R below | ASSUMED, not measured [the citation is session-beat.sh's header COMMENT] |
+| **A9-R** | A `decision:block` continuation does **NOT** re-fire UserPromptSubmit, so it writes **no prompt beat**: the newest beat during such a turn is the PRECEDING turn's Stop. A9 read the auto-traffic regex in `session-beat.sh`'s header as evidence that Stop-hook feedback arrives at that event; the regex is inherited verbatim from `hooks/lib/cc-interactive.sh`, which classifies **transcript rows** — where Stop-hook feedback does appear as an `isMeta:true` user turn — and says nothing about hook events. This matters because the arm C2 is scoped to is instructed BY a `decision:block` (the wake floor), so a stop-kind baseline is not the exotic case but the only one the floor ever produces | MEASURED [cross-session-mail-2026-07-20.md:132, "v2 load-bearing fact"; red-reproduced in `tests/cc-await-ping.bats` § STOP-KIND baseline] |
 
 The deployed R1–R3 state was re-verified live this morning: `mailbox-wake-arm.sh` registered
 `asyncRewake:true` in **all five** config dirs, `goal-inert-watch.sh` registered on Stop in all
@@ -123,7 +124,7 @@ files, the owner guard, the signal verdicts. The mode adds two exit conditions a
 | Clause | Behaviour | Why |
 |---|---|---|
 | C1 exit-on-mail | unchanged: new inbox line → print body → exit 0 → task completes → **completion notification wakes the idle model with the mail** (A5) | the wake half of 2-way comms, as today |
-| C2 exit-on-turn | poll `~/.claude/cc-beats/<sid>.json`; any **UserPromptSubmit-kind** beat with `seq` > baseline-at-arm → exit 0 silently, `verdict=stood-down` | the session was woken by something else (typed message, task notification, asyncRewake fire). The awaiter's deferral job is over; the next natural Stop is registry-quiet and the goal judges the NEW state. Stop-kind beats are excluded so the arm-turn's own trailing Stop cannot self-cancel it |
+| C2 exit-on-turn | poll `~/.claude/cc-beats/<sid>.json`; any beat with `seq` > **baseline-at-arm + 1** → exit 0 silently, `verdict=stood-down` (plus: a *prompt*-kind beat at exactly baseline+1, which means our own trailing Stop was never written and a real turn began) | the session was woken by something else (typed message, task notification, asyncRewake fire). The awaiter's deferral job is over; the next natural Stop is registry-quiet and the goal judges the NEW state. The **+1** is the one beat the arm turn still owes — its own trailing Stop — and it owes exactly that one whatever kind the baseline was, because the arm runs inside a turn, before that turn's Stop. ⚠️ **Corrected 2026-08-27 (b60eb29e97dd):** this row used to say "any **UserPromptSubmit-kind** beat … Stop-kind beats are excluded", and the shipped code implemented it as an allowance granted only on a *prompt-kind baseline*. Under A9-R the floor-instructed arm never has one, so the allowance never applied and the arm turn cancelled itself, 2/2 |
 | C3 single-instance | refuse to arm when a live sibling claim exists for the keyset (the `.watchers` claim machinery, `cc-await-ping:179-196`) | overlapping awaiters re-create d33abf12's permanent deferral |
 | C3′ **declare the mode** — a `mode=idle-scoped` line in the `.watching` marker AND in the per-pid `.watchers/<key>.<pid>` claim, re-stamped every poll beside the pid | **REQUIRED OF B3, and the reader already shipped** (E2, 2026-08-15): `mailbox_wake_idle_scoped` in `hooks/lib/mailbox-pending.sh` accepts EITHER file, and its absence means "plain" — so an idle-scoped watcher that omits the stamp will be reported to its own session as goal-blocking, with a `kill` beside it. The claim is the sturdier of the two: `_unbeat`'s hand-over rewrites the marker on behalf of a sibling whose mode it does not know. | the drain must tell a sanctioned awaiter apart from the 14400 s park it is replacing, and it can only do that from what the watcher writes |
 | C4 refuse-on-pending | refuse to arm while `mailbox_has_pending` is true on any key | mail waiting = you have work; arming would defer the judgment of state you already hold |
@@ -150,9 +151,24 @@ completion re-wakes the model, whose next stop evaluates. Cost: one bounce turn,
 never periodic. Default `--interval` for the mode: 5 s (beat file is one small stat).
 
 **Interaction with our own Stop blockers** (session-continue 🔧, completion-assert): if one blocks
-the arm-turn's stop, the continuation fires a UserPromptSubmit beat and self-cancels the awaiter —
-converging one bounce later. Discipline unchanged by this doc: the arm is the turn's LAST action on
-a clean, committed state, which the close protocol already demands.
+the arm-turn's stop, the continuation ~~fires a UserPromptSubmit beat and self-cancels the awaiter —
+converging one bounce later~~ writes no prompt beat at all (A9-R). Discipline unchanged by this doc:
+the arm is the turn's LAST action on a clean, committed state, which the close protocol already
+demands.
+
+> **CORRECTION, 2026-08-27 (backlog b60eb29e97dd).** This paragraph had the interaction backwards in
+> the direction that mattered, and the shipped C2 encoded the backwards version. It treated a
+> blocking Stop hook as an occasional *neighbour* of the arm, when the wake floor's own
+> `decision:block` is what **instructs** the arm — so the arm turn is ALWAYS a continuation turn, and
+> by A9-R it never writes a prompt beat. `cc-await-ping` granted its baseline+1 allowance only when
+> the baseline was prompt-kind, so on every floor-instructed arm the threshold collapsed onto the
+> baseline and the arm turn's **own** trailing Stop cancelled the watcher on its first poll. Not "one
+> bounce later" — immediately, and every time: measured 2/2 in the field (banners `beat seq > 3`,
+> `beat seq > 6`), i.e. the floor blocked a stop to demand an arm that deterministically no-opped,
+> then let the session go deaf anyway. **Fix:** the allowance counts the one beat the arm turn still
+> owes (its trailing Stop), which it owes whatever kind the baseline was — so it is unconditional.
+> The sampling-hole closure and clause 2 are unchanged, and the stand-down semantics for a genuine
+> new turn are unchanged.
 
 **Under NO live goal:** the bare 14400 s form remains correct and remains the nag's instruction —
 nothing to starve, and the parked watcher is the idle wake. The two modes are selected by the same

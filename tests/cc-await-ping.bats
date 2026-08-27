@@ -763,6 +763,56 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
   [[ "$output" == *"verdict=stood-down"* ]] || false
 }
 
+# ── STOP-KIND baseline: the arm turn the WAKE FLOOR actually produces (backlog b60eb29e97dd) ─────
+# The floor instructs this arm with a Stop `decision:block`, and a decision:block continuation does
+# NOT re-fire UserPromptSubmit (cross-session-mail-2026-07-20.md:132). So the arm turn writes no
+# prompt beat and the newest beat at arm time is the PREVIOUS turn's Stop. Until 2026-08-27 the
+# allowance was gated on `kind=prompt`, which collapsed the threshold onto the baseline itself and
+# let the arm turn's own trailing Stop cancel the watcher on its first poll — measured 2/2 in the
+# field, banners `beat seq > 3` and `beat seq > 6`. Every instructed arm was a silent no-op.
+
+@test "idle-scoped: a STOP-KIND baseline still excludes the arm turn's own trailing Stop" {
+  beat 3 stop
+  ( sleep 1; beat 4 stop ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 4
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 2 ]                                  # still watching → ran its term
+  [[ "$output" != *"stood-down"* ]] || false
+}
+
+@test "idle-scoped: a STOP-KIND baseline still cancels BEYOND baseline+1 (no starvation traded in)" {
+  beat 3 stop
+  ( sleep 1; beat 5 stop ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down"* ]] || false
+}
+
+@test "idle-scoped: a STOP-KIND baseline still cancels on a PROMPT beat at baseline+1" {
+  # Clause 2 keeps the fail-open beat producer honest: session-beat.sh can drop our trailing Stop
+  # (hard 3s timeout, silent no-op without jq), and a prompt beat landing in that slot is a real new
+  # turn, not our own. Erring toward standing down costs one bounce turn; the other way costs the goal.
+  beat 3 stop
+  ( sleep 1; beat 4 prompt ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down"* ]] || false
+}
+
+@test "idle-scoped: the banner names the baseline's KIND, not just the derived threshold" {
+  # b60eb29e97dd was diagnosed from this banner, and `beat seq > 3` alone cannot distinguish a
+  # baseline carrying no allowance from a baseline+1 — the one bit that separated working from no-op.
+  beat 3 stop
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 1
+  [[ "$output" == *"baseline seq=3 kind=stop"* ]] || false
+  [[ "$output" == *"beat seq > 4"* ]] || false
+}
+
 @test "idle-scoped C1: MAIL still wins — a ping is delivered, never traded for a silent stand-down" {
   beat 5 prompt
   # both events land inside ONE poll interval, and the mail check runs first within an iteration:
