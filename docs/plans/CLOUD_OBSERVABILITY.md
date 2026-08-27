@@ -1887,3 +1887,142 @@ link at all and the shared checkout is 8 commits behind. `deploy-live` refuses c
 tree descends live HEAD; `postland-verify` has the sha queued and emits ~0.17 greens/day). Until it
 converges, the launchd sweep runs the OLD script and returns nothing — filed `5354fffc4079`.
 
+
+---
+
+## 14 · ✅ CLOSED — §4.1's contract stops being prose (2026-08-27)
+
+The absence contract is the load-bearing sentence of this whole document. §4.1: a declared session
+that has pushed nothing is indistinguishable from one that never started, one that died at boot and
+one that was refused entitlement; there is no inbound channel to a cloud VM, so the ambiguity "can
+only be resolved by **contract** — the fire declares a branch and a boot budget, and the session's
+brief requires its **first act** to be pushing that branch."
+
+**It was never implemented.** Measured on trunk 2026-08-27: `grep -rni 'first act' bin/ scripts/`
+returned three hits and none is a cloud brief. The two fire paths, checked one at a time:
+
+| leg | what the brief actually said about pushing |
+| --- | --- |
+| `handoff-fire.sh --cloud` | the `HOW TO RETURN YOUR WORK` block — *"Push whatever you have **before you finish**"* |
+| `cc-offload up` (the API leg, the production path) | **nothing at all**: it delivered `$(cat "$pf")` verbatim. The branch is authorised at create time in `outcomes.git_info.branches`, but authorising a branch is not asking a session to push it |
+
+So the observable C1 keys on was produced, if at all, at the END of the work, and the verdict that
+reads its absence fires after **15 minutes** (`CC_CLOUD_BOOT_S`, 900). A healthy session working an
+ordinary backlog item is convicted as a matter of course, and `NOT-STARTED` degenerates to "has not
+finished yet".
+
+🚨 **The board says exactly that, and it has said it for weeks.** Live, 2026-08-19, non-retired,
+n=84: **65 NOT-STARTED** · 7 STALLED · 7 ABANDONED · 2 LANDED · 2 ALIVE · 1 BOOTING — against a
+mature-window (08-11…08-16) push rate of **80%** and a land rate of **53%**
+(`docs/research/breaking-the-ceiling-2026-08-19/B2-cloud-economics.md` §2.6). The alarm fired on the
+healthy majority, which is this document's own definition of one carrying no bits (§4.3). And §12.5
+is the same defect with the receipt attached: thirteen sessions read as inert, and the one the
+operator finally opened in the web UI had done the entire brief and been refused at the push by the
+git proxy — *"every instrument this box owns is a ref-watcher, so 'did not push' and 'did not run'
+produce byte-identical evidence here."*
+
+### 14.1 · What was built — one producer, one recorded field, one gated arm
+
+**`scripts/lib/cloud-boot-contract.sh`** is the single producer of the clause and of the token a
+declaration records. One file rather than two copies for §5.1's reason: `cc-cloud-watch` was deleted
+because two implementations of one observable set drift and a caller cannot tell which is
+authoritative — and a *contract* is worse that way, since a wording that drifts on one leg silently
+unmakes the verdict for every session fired through it, with nothing downstream able to notice.
+
+**The clause publishes the branch and does NOT make a commit**, which departs from §4.1's "an empty
+commit is enough". That phrase states how little is needed, and this is less: `cloud-reconcile.sh`
+replays every commit in `merge-base..branch` onto trunk with `commit-tree` (:551), so a boot commit
+does not stop at the remote — it lands as an empty commit on `origin/main`, once per landed cloud
+session, ~8×/day at the mature-window rate. A bare `git push -u origin HEAD` produces the same
+observable (the ref appears; `ls-remote` answers rc=0 non-empty) and leaves the landing path an
+empty range, which `re_author` already returns 0 on and the lander already reports as nothing to
+land (:577-580 records that case as known and harmless). It is still a real push, so it still proves
+what the empty commit would have: the VM booted, its clone has a remote, and the git proxy will
+inject a credential for this repo — the precise thing §12.5's 403 refused.
+
+`git switch -c <b> 2>/dev/null || git switch <b>` is not padding. The two legs hand the VM different
+starting states: the bundle leg's clone has no remote at all (§12.5) so the branch must be created,
+while the API leg seeds a remote-TRACKING ref at provision time (§13.4) so `switch -c` fails on a
+name that already exists. One block has to work in both or the contract reaches one leg only.
+
+**`cc-cloud declare --boot-contract <token>`** records `boot_contract=first-push`. Passed by the
+FIRE, because the fire composed the brief and is the only thing that knows what was in it — a
+declaration cannot inspect a message already on its way to a VM. Both legs pass it **conditionally**
+on having actually loaded the library: asserting it unconditionally would license the state function
+to convict a session for not doing something nobody asked it to do, which is this defect re-created
+one layer up.
+
+**`classify()` now requires it before convicting.** The contract is a *sensor*, so this file's own
+law applies unchanged — no sensor, no verdict:
+
+| | with `boot_contract` | without it |
+| --- | --- | --- |
+| no ref, past `boot_s` | `NOT-STARTED` (ROW) | **`UNKNOWN`** — `no ref after 20m; no boot contract` |
+| ref unmoved from `base_sha`, past `boot_s` | `NOT-STARTED` (ROW) | **`UNKNOWN`** — `ref unmoved 20m; no boot contract` |
+| either, inside `boot_s` | `BOOTING` | `BOOTING` |
+
+Both conviction arms, not one: "the ref has not moved since the fire" is the same fact as "no ref"
+(§5.1's baseline note says so), so gating one and leaving the other would keep the whole verdict
+reachable through the re-used-branch door. `BOOTING` is ungated deliberately — inside the budget
+silence is expected under either reading, so the contract decides nothing there, and gating it would
+make a rung fire that carries no information.
+
+An absent key **abstains**; it is never read as a delivered one. That is the same law as
+`base_probe`, one arm down, and the direction is the safe one: `UNKNOWN` emits no row, fails
+`--check` loudly, names its own cause in `--table`, and reaches `cc-backlog`'s reap through a path
+that **already exists** — `cloud_state()` returns rc 2 ("cannot tell") for UNKNOWN, which routes to
+the operator-gated block rather than reopening an item a live session may still be working. Nothing
+in the actuator chain needed changing for the abstention to be handled.
+
+### 14.2 · The migration, stated rather than discovered
+
+Every declaration written before this lands lacks the field, so those sessions move from
+`NOT-STARTED` to `UNKNOWN` — on the 2026-08-19 shape, ~65 rows leave the board and `--check` fails
+over them instead. **That is the correction, not a side effect**: those verdicts were computed from
+evidence that has nothing to do with their sessions, and 60% of the population they were drawn from
+had in fact pushed. Loud-and-honest replaces confident-and-wrong. Declarations made by any path that
+does not compose the brief — a hand declaration, `cc-dispatch`'s bare fallback, a web-UI session
+adopted after the fact — abstain permanently and correctly, because that is what is true of them.
+
+`declare` says so at the moment it can still be fixed, on stderr: `! NO BOOT CONTRACT
+(--boot-contract) — absence on <branch> will read UNKNOWN, never NOT-STARTED`. Once the session is
+running there is no inbound channel that can add a first-act clause to a brief already delivered.
+
+⚠️ **Both fire legs DEGRADE rather than refuse when the library is unreachable, and the asymmetry
+with `cloud-create.sh` (which fail-closes) is measured, not stylistic.** `cloud-boot-contract.sh` is
+a NEW file, and a file a landed diff **adds** is not stale on the live layer — it is ABSENT until
+`deploy-live.sh` converges (the `LIVE_ADDS` rule: a lag of 1 breaches for an add). A fail-closed
+branch would therefore refuse every cloud fire on the live layer for the whole window between the
+land and the converge. Degrading costs exactly one thing, in the safe direction: `--boot-contract`
+is omitted, so the observer abstains instead of convicting, and both legs say so on stderr.
+
+⚠️ **What this does NOT fix, named so it is not read as fixed.** A contracted session that boots,
+pushes, and then works for an hour without pushing again reads `STALLED` at `stall_s` (3600) instead
+of `NOT-STARTED` at 900 — a false alarm four times later and correctly named ("ref frozen at
+<sha>"), but still a false alarm. The honest cure is a heartbeat, which is a different observable
+and a different change. And `NOT-STARTED` still does not mean "never booted" in the strong sense
+even with the contract: §12.5's session ran perfectly and was refused at the push. What the contract
+buys is that absence past the budget is now a **fault of some kind** rather than the normal
+appearance of a healthy session — which is the whole of what §4.1 claimed for it.
+
+### 14.3 · Coverage
+
+| where | what it pins |
+| --- | --- |
+| `bin/cc-cloud --selftest` | the PAIR at one clock — `boot` (contracted) convicts, `nocontract` abstains, same absence, one field apart |
+| `tests/cc-cloud.bats` (34) | the pair as an end-to-end board read (row emitted / no row, `--check` fails, `--table` names the cause) · the baseline arm gated identically · `declare`'s stderr warning with its control. Fixtures that stand for a fired session now go through a `fired` helper that carries the contract; `cloud declare` is kept where a test is about the verb itself, so both spellings mean something |
+| `tests/handoff-fire-cloud.bats` (22) | the clause is in the payload actually handed to the create, and PRECEDES the brief · the declare argv carries `--boot-contract first-push` · an absent library still fires, declares, and claims nothing it did not deliver |
+| `tests/cc-offload.bats` (46) | the same three on the API leg, read off the message actually delivered by `cc-notify` and the branch actually declared |
+| `tests/backlog-blocked-producers.bats` | its raw-`.decl` fixture carries `boot_contract=`, because it stands for a fired session and its ABSENT arm has no verdict to adjudicate without one |
+
+Order is asserted in both payload tests rather than mere presence: a clause that says "before you
+read anything else" cannot arrive after the task it precedes, since a model reading top-down acts on
+what it met first.
+
+*(One adjacent defect fixed on the way, in a file already being edited: `bin/cc-offload`'s
+`UP_NOTIFY_BACK="${ITERM_SESSION_ID##*:}"` aborts under `set -u` when the variable is unset, which
+made the "no pane to wake (ITERM_SESSION_ID is unset)" branch three lines below **unreachable** —
+the code written for that case died before reaching it. That is every environment without iTerm:
+launchd, cron, a hook, CI, a cloud VM. It turned 11 of `tests/cc-offload.bats`'s 44 cases red on any
+box but the operator's, for a reason none of them names, and it is what stopped this change being
+verifiable off-box until it was fixed.)*

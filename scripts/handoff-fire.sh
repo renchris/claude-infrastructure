@@ -8013,6 +8013,50 @@ if [ "$CLOUD" = 1 ]; then
   CLOUD_BRANCH="$(cc_cloud_branch_name)"
   CLOUD_CWD="$PWD"; [ -d "$CLOUD_CWD" ] || CLOUD_CWD="$REPO"
 
+  # ---- §4.1's BOOT CONTRACT — the clause that makes the branch above WORTH WATCHING -------------
+  # The block below tells the session to push its work; that is the RETURN half, and it happens at
+  # the END. §4.1 needs the other half: absence of the ref is only informative if a healthy session
+  # would already have pushed, so the brief has to require a first-act push. Without it,
+  # `cc-cloud`'s C1 arm convicts at 15 minutes every session that has merely not finished — and it
+  # did: 65 of 84 non-retired declarations read NOT-STARTED on the 2026-08-19 board against an 80%
+  # push rate. The clause has ONE producer (scripts/lib/cloud-boot-contract.sh) because both fire
+  # legs deliver it and a wording that drifts on one leg silently unmakes the verdict for every
+  # session fired through it.
+  #
+  # DEGRADE, NEVER REFUSE, unlike the cloud-create.sh branch above — and the asymmetry is measured
+  # rather than stylistic. This file is a per-file symlink into the shared checkout, but the LIBRARY
+  # IS A NEW FILE, and a file a landed diff ADDS is not stale on the live layer, it is ABSENT until
+  # `deploy-live.sh` runs (global CLAUDE.md, the `LIVE_ADDS` rule: a lag of 1 breaches for an add).
+  # A fail-closed branch here would therefore refuse every cloud fire on the live layer for the
+  # whole window between the land and the converge. Firing without the clause costs exactly one
+  # thing — the declaration below omits --boot-contract, and the observer ABSTAINS instead of
+  # convicting, which is the safe direction and is loud (`--check` fails).
+  CLOUD_CONTRACT=""
+  # SET-including-EMPTY seam (`${VAR+set}`), the same shape CC_CLOUD_BIN uses below: a test can set
+  # it to '' to make the library genuinely unreachable and assert the degraded fire, which no
+  # PATH-order trick can do here — every fallback below resolves to the real file in the checkout.
+  if [ -n "${CC_FIRE_BOOT_CONTRACT_LIB+set}" ]; then
+    CC_BC_CANDIDATES=("$CC_FIRE_BOOT_CONTRACT_LIB")
+  else
+    CC_BC_CANDIDATES=("$(dirname "$_CC_CC")/cloud-boot-contract.sh"
+                      "$(dirname "$_CC_KS")/lib/cloud-boot-contract.sh"
+                      "$(dirname "$0")/lib/cloud-boot-contract.sh"
+                      "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/cloud-boot-contract.sh"
+                      "${HOME:-}/.claude/scripts/lib/cloud-boot-contract.sh")
+  fi
+  for _CC_BCD in "${CC_BC_CANDIDATES[@]}"; do
+    [ -n "$_CC_BCD" ] && [ -f "$_CC_BCD" ] || continue
+    # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+    . "$_CC_BCD" || continue
+    CLOUD_CONTRACT="$(cc_cloud_boot_contract "$CLOUD_BRANCH")" || CLOUD_CONTRACT=""
+    break
+  done
+  if [ -z "$CLOUD_CONTRACT" ]; then
+    echo "!! cloud fire: NO BOOT CONTRACT — scripts/lib/cloud-boot-contract.sh is unreachable." >&2
+    echo "   The session will be fired and declared, but its brief will not require a first-act" >&2
+    echo "   push, so absence of $CLOUD_BRANCH reads UNKNOWN and never NOT-STARTED (§4.1)." >&2
+  fi
+
   # The payload = the brief, plus the ONE instruction that makes the result reachable. A cloud VM
   # has no ~/.claude, no cc-notify and no /ship (§1, G6), so the local trailers below — the
   # back-channel ping, the self-retire, the pane bookkeeping — are all unrunnable there. Its push
@@ -8041,7 +8085,7 @@ You are running in an Anthropic-managed VM. Nothing on the operator'"'"'s machin
 filesystem, your processes or your terminal, and you cannot run this repo'"'"'s /ship. Your ONLY
 channel back is a git push, and it must go to exactly this branch — CREATE IT FIRST, then push it:
 
-    git switch -c '"$CLOUD_BRANCH"'
+    git switch -c '"$CLOUD_BRANCH"' 2>/dev/null || git switch '"$CLOUD_BRANCH"'
     git push -u origin HEAD
 
 That branch name was assigned by the firing side and is already declared as the one thing watched
@@ -8049,11 +8093,27 @@ for your progress — a push anywhere else is invisible and your work will stran
 have before you finish, even if the work is incomplete; an unpushed cloud session leaves no trace
 of any kind. A local reconciler (scripts/cloud-reconcile.sh) discovers the branch and lands it.'
 
+  # THE CONTRACT GOES FIRST, ahead of the brief — not appended beside the return block. A clause
+  # that says "before you read anything else" cannot arrive after the task it is meant to precede,
+  # and a model reading a long brief top-down acts on what it met first. (`switch -c` in the return
+  # block above is now tolerant of the branch already existing for exactly this reason: after a
+  # first-act push it does.)
+  if [ -n "$CLOUD_CONTRACT" ]; then
+    CLOUD_PAYLOAD="$CLOUD_CONTRACT
+
+$CLOUD_PAYLOAD"
+  fi
+
   if [ "$DRY" = 1 ]; then
     echo "-- DRY RUN: cloud fire (no create issued, no quota spent)"
     echo "   account : $CLOUD_ACCT   (config dir $CLOUD_CFG)"
     echo "   cwd     : $CLOUD_CWD"
     echo "   branch  : $CLOUD_BRANCH   (assigned here; the payload instructs the push)"
+    if [ -n "$CLOUD_CONTRACT" ]; then
+      echo "   contract: first-push — the brief requires publishing that branch as its FIRST act"
+    else
+      echo "   contract: NONE — absence of the branch will read UNKNOWN, never NOT-STARTED (§4.1)"
+    fi
     echo "   repo    : $REPO"
     echo "   binary  : $CC_CLOUD_CREATE_BIN   (attempts up to $CC_CLOUD_CREATE_ATTEMPTS)"
     exit 0
@@ -8155,9 +8215,16 @@ of any kind. A local reconciler (scripts/cloud-reconcile.sh) discovers the branc
     emit_fire_refusal cloud-declare-absent "session $CLOUD_ID created, cc-cloud unreachable — session is live and UNDECLARED"
     exit 11
   fi
-  if ! "$CLOUD_DECL" declare --id "$CLOUD_ID" --branch "$CLOUD_BRANCH" --account "$CLOUD_ACCT" \
-         --repo "$REPO" --url "https://claude.ai/code/$CLOUD_ID" \
-         --item "handoff-fire $(basename "$PROMPT_FILE")" >&2; then
+  # --boot-contract IS CONDITIONAL ON WHAT WAS ACTUALLY DELIVERED, never asserted unconditionally.
+  # The flag is this side's statement that the payload above carried §4.1's first-act clause; if the
+  # library was unreachable it did not, and claiming otherwise would license `cc-cloud` to convict a
+  # session for not doing something nobody asked it to do — the exact defect being fixed, re-created
+  # one layer up.
+  CLOUD_DECL_ARGS=(declare --id "$CLOUD_ID" --branch "$CLOUD_BRANCH" --account "$CLOUD_ACCT"
+                   --repo "$REPO" --url "https://claude.ai/code/$CLOUD_ID"
+                   --item "handoff-fire $(basename "$PROMPT_FILE")")
+  [ -n "$CLOUD_CONTRACT" ] && CLOUD_DECL_ARGS+=(--boot-contract "${CC_CLOUD_BOOT_CONTRACT:-first-push}")
+  if ! "$CLOUD_DECL" "${CLOUD_DECL_ARGS[@]}" >&2; then
     echo "!! cloud fire: session $CLOUD_ID CREATED but the declaration FAILED — it is live and unobservable." >&2
     echo "     cc-cloud declare --id $CLOUD_ID --branch $CLOUD_BRANCH --account $CLOUD_ACCT --repo $REPO" >&2
     emit_fire_refusal cloud-declare-failed "session $CLOUD_ID created, cc-cloud declare exited non-zero — live and UNDECLARED"

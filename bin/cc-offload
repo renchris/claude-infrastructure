@@ -522,6 +522,34 @@ cmd_up_api() {
   # owner/name from the remote, portably. NOT a lazy-quantifier regex: BSD sed has no `+?` and the
   # first attempt died with "repetition-operator operand invalid" — a GNU-ism that would have been
   # silently fine on Linux CI and broken on every machine this actually runs on.
+  # ── §4.1's BOOT CONTRACT, resolved ONCE for the whole batch ──────────────────────────────────
+  # This leg delivers `$(cat "$pf")` VERBATIM as the brief — the raw task file, with no return
+  # protocol of any kind. The branch is authorised at create time (it goes into the create body's
+  # `outcomes.git_info.branches`), but authorising a branch is not the same as asking the session to
+  # push it, and nothing here ever asked. So every session fired through the production path ran a
+  # brief that gave it no reason to touch the declared branch until it FINISHED, while `cc-cloud`
+  # convicted its absence as NOT-STARTED after 15 minutes: 65 of 84 non-retired declarations on the
+  # 2026-08-19 board, against a mature-window push rate of 80%.
+  #
+  # SET-including-EMPTY seam, so the degraded path is testable. And DEGRADE, never refuse: this is a
+  # NEW file, and a file a landed diff ADDS is ABSENT on the live layer until deploy-live.sh
+  # converges (never merely stale), so a fail-closed branch would refuse every cloud fire for that
+  # whole window. Firing without it costs exactly one thing — `--boot-contract` is then omitted
+  # below and the observer abstains instead of convicting, which is the safe direction.
+  local bclib=""
+  if [ -n "${CC_OFFLOAD_BOOT_CONTRACT_LIB+set}" ]; then bclib="$CC_OFFLOAD_BOOT_CONTRACT_LIB"
+  else bclib="$ROOT/scripts/lib/cloud-boot-contract.sh"; fi
+  local have_contract=0
+  if [ -n "$bclib" ] && [ -f "$bclib" ]; then
+    # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+    if . "$bclib" 2>/dev/null; then have_contract=1; fi
+  fi
+  if [ "$have_contract" != 1 ]; then
+    note "cc-offload: NO BOOT CONTRACT (scripts/lib/cloud-boot-contract.sh unreachable) — these"
+    note "  briefs will not require a first-act push, so absence of the branch reads UNKNOWN and"
+    note "  never NOT-STARTED (CLOUD_OBSERVABILITY.md §4.1)."
+  fi
+
   local remote_url repo_slug
   remote_url="$(cd "$REPO" 2>/dev/null && git remote get-url origin 2>/dev/null)"
   remote_url="${remote_url%.git}"
@@ -557,6 +585,10 @@ cmd_up_api() {
     [ -n "$UP_NOTIFY_BACK" ] && dargs+=(--notify-back "$UP_NOTIFY_BACK")
     [ -n "$UP_GOAL" ]        && dargs+=(--goal "$UP_GOAL")
     [ -n "$UP_GOAL_PROBE" ]  && dargs+=(--goal-probe "$UP_GOAL_PROBE")
+    # Stated only when it was actually delivered. Asserting it unconditionally would license
+    # cc-cloud to convict a session for not doing something nobody asked it to do — the very defect
+    # this closes, re-created one layer up.
+    [ "$have_contract" = 1 ] && dargs+=(--boot-contract "${CC_CLOUD_BOOT_CONTRACT:-first-push}")
     "$CLOUD_BIN" "${dargs[@]}" >/dev/null 2>&1 \
       || { note "cc-offload: created $sid but DECLARE FAILED — it is live and unobservable"; rc=11; break; }
 
@@ -571,7 +603,14 @@ cmd_up_api() {
         || note "cc-offload: custody could not be opened for $sid — the close-integrity arm is NOT armed for it."
     fi
 
-    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$(cat "$pf")" >/dev/null 2>&1
+    # THE CONTRACT GOES FIRST, ahead of the brief. This message IS the session's first turn (the
+    # create carries `events:[]` on purpose — see the three-step note above), and a clause that says
+    # "before you read anything else" cannot arrive after the task it is meant to precede.
+    local bmsg; bmsg="$(cat "$pf")"
+    [ "$have_contract" = 1 ] && bmsg="$(cc_cloud_boot_contract "$br")
+
+$bmsg"
+    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$bmsg" >/dev/null 2>&1
     local drc=$?
     if [ "$drc" != 0 ]; then
       note "cc-offload: $sid created+declared but the brief did NOT queue (cc-notify exit $drc)."

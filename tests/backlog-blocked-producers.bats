@@ -83,6 +83,12 @@ sub() { printf '%s' "${1//@@/$2}"; }   # <template> <digits> → the fixture tit
 # past boot and inside life at once — the two states then differ by exactly one observable, which is
 # what makes the pair a control rather than two unrelated fixtures.
 #
+# `boot_contract=` is what a FIRE writes (CLOUD_OBSERVABILITY.md §4.1, via
+# scripts/lib/cloud-boot-contract.sh): it records that the brief required a first-act push, which is
+# the only thing that makes ref-absence mean "never booted" rather than "has not finished yet".
+# Without it classify() abstains to UNKNOWN and this fixture's ABSENT arm would have no verdict to
+# adjudicate — so the field is part of standing for a fired session, not decoration.
+#
 # Identity is passed with transient `-c`, never `git config`: this suite runs inside a linked
 # worktree that shares one .git/config with ~100 siblings, and `git -C ""` is a documented NO-OP, so
 # an all-expansion target would silently re-author commits in the REAL repo (the 2026-08-05 leak).
@@ -107,6 +113,7 @@ repo=$work
 paths=
 url=https://claude.ai/code/session_$item
 item=$item
+boot_contract=first-push
 declared_at=$(( CC_CLOUD_NOW - 1000 ))
 EOF
 }

@@ -4,6 +4,9 @@
 #
 #   cc-cloud preflight [--repo P] [--branch B]       can a fire HERE be observed at all? exit 1 = no
 #   cc-cloud declare --id <id> --branch <b> [opts]   register a session BEFORE firing it
+#                    [--boot-contract first-push]    the fire states it delivered §4.1's first-act
+#                                                    clause; WITHOUT it absence is UNKNOWN, never
+#                                                    NOT-STARTED (scripts/lib/cloud-boot-contract.sh)
 #   cc-cloud fill-paths --id <id> | --branch <b> | --all
 #                                                    fill `paths=` POST-HOC from the VM's own commits
 #                                                    (--branch selects by declared branch, for a
@@ -97,9 +100,11 @@
 #
 # ── the state function (total, first match wins, every arm TERMINAL) ─────────────────────────────
 #   U0 UNKNOWN      a sensor could not run (ls-remote rc!=0, unreadable declaration, no git),
-#                   or the ref VANISHED after a push and landedness is not assertable (see below).
+#                   or the ref VANISHED after a push and landedness is not assertable (see below),
+#                   or the declaration carries NO BOOT CONTRACT (see below).
 #                   NO row, `--table` says UNKNOWN, `--check` FAILS. Never a vacuous pass.
-#   C1 NOT-STARTED  no ref AND no evidence of one, past declared_at+boot_s                    ROW
+#   C1 NOT-STARTED  no ref AND no evidence of one, past declared_at+boot_s, AND the fire delivered
+#                   the boot contract                                                         ROW
 #                   (or the ref exists but is STILL at its fire-time sha — see BASELINE)
 #   C2 BOOTING      same, still inside the boot budget — expected, not a fault              no row
 #   C3 LANDED       every declared path is content-present on the trunk ref                 no row
@@ -137,6 +142,31 @@
 # "never started" has been REFUTED, and "landed" was declined, so no verdict is available.
 # `scripts/branch-prune-landed.sh` fills the path set BEFORE it deletes, so a prune from here on
 # leaves C3 answerable rather than manufacturing this UNKNOWN.
+#
+# ── THE BOOT CONTRACT: what licenses C1 to mean "never booted" AT ALL ────────────────────────────
+# §4.1 of CLOUD_OBSERVABILITY.md is the sentence this arm rests on: absence is ambiguous, there is
+# no inbound channel to a cloud VM, and the ambiguity "can only be resolved by CONTRACT — the
+# session's brief requires its FIRST ACT to be pushing that branch". Absence past the budget is
+# informative BECAUSE a healthy session would have pushed within seconds of booting.
+#
+# So the contract is a SENSOR, and this file's own law applies to it unchanged: no sensor, no
+# verdict. A declaration whose fire never delivered the clause is watching a branch a healthy
+# session has no reason to touch until it FINISHES, so absence at the 15-minute budget separates
+# nothing — and NOT-STARTED there is a confident verdict computed from evidence that has nothing to
+# do with the session. That is not hypothetical either. Measured on the live board 2026-08-19,
+# before any fire path delivered the clause: 65 of 84 non-retired declarations read NOT-STARTED,
+# against a mature-window push rate of 80% (docs/research/breaking-the-ceiling-2026-08-19/
+# B2-cloud-economics.md §2.6) — the alarm fired on the healthy majority. §12.5 is the same defect
+# with a receipt: thirteen sessions read as inert, and the one the operator finally opened had done
+# the entire brief and been refused at the push by the git proxy.
+#
+# `boot_contract=` is therefore written by `declare` ONLY when the caller states that the brief it
+# delivered carried the clause (scripts/lib/cloud-boot-contract.sh is its single producer), and an
+# ABSENT key abstains rather than being read as a delivered one — the same law as `base_probe` one
+# arm down. The abstention is loud, not quiet: `--check` FAILS on UNKNOWN, `--table` names the
+# missing contract, and cc-backlog's reap already models this exact case (`cloud_state` returns
+# "cannot tell" for UNKNOWN, which routes to the operator-gated block rather than reopening an item
+# a live session may still be working).
 #
 # ── BASELINE: why C1/C2 also fire on a ref that EXISTS (migrated from cc-cloud-watch `record`) ────
 # `declare` probes the remote once and records the sha the branch held BEFORE the fire. Without it,
@@ -526,6 +556,7 @@ classify() { # <id>
   local id="$1" f="$STATE/$1.decl" seen="$STATE/$1.seen"
   local branch remote repo paths trunk url dat boot stall life
   local sha rc n age url_cmd first_seen sha_age base_sha base_probe seen_sha paths_src pushed
+  local contract
 
   branch="$(dfield "$f" branch)"
   remote="$(dfield "$f" remote)"
@@ -560,13 +591,21 @@ classify() { # <id>
   paths_src="$(dfield "$f" paths_src)"
   if [ -n "$seen_sha" ] || [ -n "$paths_src" ]; then pushed=1; else pushed=0; fi
 
+  # THE BOOT CONTRACT — read once, consumed by both conviction arms. See the header block: it is
+  # what licenses absence to mean "never booted", and an absent key abstains rather than assumes.
+  contract="$(dfield "$f" boot_contract)"
+
   # C1/C2 require BOTH: no ref now AND no evidence there ever was one. Reaching this arm on
   # evidence-of-push alone is the defect below.
   if [ -z "$sha" ] && [ "$pushed" -eq 0 ]; then
-    if [ "$age" -gt "$boot" ]; then
+    if [ "$age" -le "$boot" ]; then
+      # Inside the budget, silence is expected under EITHER reading, so the contract decides
+      # nothing here and BOOTING stays a plain no-row. Only the terminal conviction needs a licence.
+      printf 'BOOTING\tno ref yet, %s into a %s budget\t-\n' "$(dur "$age")" "$(dur "$boot")"
+    elif [ -n "$contract" ]; then
       printf 'NOT-STARTED\tno ref after %s (boot budget %s)\t%s\n' "$(dur "$age")" "$(dur "$boot")" "$url_cmd"
     else
-      printf 'BOOTING\tno ref yet, %s into a %s budget\t-\n' "$(dur "$age")" "$(dur "$boot")"
+      printf 'UNKNOWN\tno ref after %s; no boot contract\t%s\n' "$(dur "$age")" "$url_cmd"
     fi
     return 0
   fi
@@ -593,10 +632,15 @@ classify() { # <id>
   base_probe="$(dfield "$f" base_probe)"
   base_sha="$(dfield "$f" base_sha)"
   if [ "$base_probe" = "ok" ] && [ -n "$base_sha" ] && [ "$sha" = "$base_sha" ]; then
-    if [ "$age" -gt "$boot" ]; then
+    # Same two arms, and the SAME contract precondition: "the ref has not moved since the fire" is
+    # the same fact as "no ref" (the header says so), so it is the same conviction and needs the
+    # same licence. Without the contract a healthy session has no reason to have moved it yet.
+    if [ "$age" -le "$boot" ]; then
+      printf 'BOOTING\tno push yet, %s into a %s budget\t-\n' "$(dur "$age")" "$(dur "$boot")"
+    elif [ -n "$contract" ]; then
       printf 'NOT-STARTED\tref still at pre-fire sha after %s\t%s\n' "$(dur "$age")" "$url_cmd"
     else
-      printf 'BOOTING\tno push yet, %s into a %s budget\t-\n' "$(dur "$age")" "$(dur "$boot")"
+      printf 'UNKNOWN\tref unmoved %s; no boot contract\t%s\n' "$(dur "$age")" "$url_cmd"
     fi
     return 0
   fi
@@ -673,7 +717,7 @@ do_check() {
 cmd_declare() {
   local id="" branch="" remote="origin" repo="$ROOT" paths="" trunk="" url="" surface="" item="" account=""
   local boot="" stall="" life="" f base="" brc=0
-  local notify_back="" goal="" goal_probe="" custody=""
+  local notify_back="" goal="" goal_probe="" custody="" contract=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --id)      id="${2:-}"; shift 2 ;;
@@ -709,6 +753,15 @@ cmd_declare() {
       --goal)        goal="${2:-}"; shift 2 ;;
       --goal-probe)  goal_probe="${2:-}"; shift 2 ;;
       --custody)     custody="${2:-}"; shift 2 ;;
+      # ── THE BOOT CONTRACT (§4.1). Passed by the fire that COMPOSED the brief, because the fire
+      # is the only thing that knows whether the clause was actually in it — a declaration cannot
+      # look at a message already on its way to a VM. The value is the contract token from
+      # scripts/lib/cloud-boot-contract.sh (`first-push`), so producer and consumer share one
+      # string rather than a bare boolean that says nothing about WHICH contract was delivered.
+      # Omitting it is the honest default for every path that declares a session whose brief it did
+      # not write (a hand declaration, cc-dispatch's bare fallback, a web-UI session adopted after
+      # the fact): classify() then abstains instead of convicting. See the header block.
+      --boot-contract) contract="${2:-}"; shift 2 ;;
       --boot)    boot="${2:-}"; shift 2 ;;
       --stall)   stall="${2:-}"; shift 2 ;;
       --life)    life="${2:-}"; shift 2 ;;
@@ -728,7 +781,7 @@ cmd_declare() {
   # newline in ANY value breaks the `key=value` store's one-line-per-field invariant, and a guard
   # that enumerates the fields it knows about gets out-run by the next field added (memory:
   # denylist-enumerates-spellings-not-the-class).
-  case "$branch$remote$paths$url$account$notify_back$goal$goal_probe$custody" in
+  case "$branch$remote$paths$url$account$notify_back$goal$goal_probe$custody$contract" in
     *"$NL"*) echo "cc-cloud declare: newline in a field" >&2; return 2 ;;
   esac
   # THE TRUNK REFUSAL (backlog 55065a61b31c). A cloud session declared against the remote's DEFAULT
@@ -790,6 +843,7 @@ cmd_declare() {
     [ -n "$goal" ]        && printf 'goal=%s\n' "$goal"
     [ -n "$goal_probe" ]  && printf 'goal_probe=%s\n' "$goal_probe"
     [ -n "$custody" ]     && printf 'custody=%s\n' "$custody"
+    [ -n "$contract" ]    && printf 'boot_contract=%s\n' "$contract"
     is_num "$boot"  && printf 'boot_s=%s\n' "$boot"
     is_num "$stall" && printf 'stall_s=%s\n' "$stall"
     is_num "$life"  && printf 'life_s=%s\n' "$life"
@@ -797,6 +851,14 @@ cmd_declare() {
   } > "$f" || return 1
   rm -f "$STATE/$id.retired"
   printf 'declared %s (branch %s on %s) — it is now observable\n' "$id" "$branch" "$remote"
+  if [ -z "$contract" ]; then
+    # Said at DECLARE time, not only at verdict time, because this is the last moment the caller
+    # can still fix it: the brief is composed by the fire, and once the session is running there is
+    # no inbound channel that can add a first-act clause to a message already delivered.
+    printf '  ! NO BOOT CONTRACT (--boot-contract) — absence on %s will read UNKNOWN, never\n' "$branch" >&2
+    printf '    NOT-STARTED: a session whose brief never required a first-act push has no reason\n' >&2
+    printf '    to touch that branch until it FINISHES, so silence separates nothing (§4.1).\n' >&2
+  fi
   if [ "$brc" -ne 0 ]; then
     printf '  ! fire-time baseline UNMEASURED (remote did not answer) — a pre-existing ref on %s\n' "$branch" >&2
     printf '    cannot be told from this session pushing one; re-declare when the remote answers.\n' >&2
@@ -1102,14 +1164,21 @@ do_selftest() {
   # where the one "pass" came from a `declare` that had SILENTLY FAILED, leaving no file at all —
   # classify then returned UNKNOWN for the right answer and the wrong reason. Asserting the
   # declaration exists is what separates "the sensor said UNKNOWN" from "there was nothing to sense".
-  cmd_declare --id boot --branch feat/x --remote "$_ST_D/remote.git" --repo "" >/dev/null
+  cmd_declare --id boot --branch feat/x --remote "$_ST_D/remote.git" --repo "" \
+    --boot-contract first-push >/dev/null
   if [ -f "$STATE/boot.decl" ]; then _ST_PASS=$((_ST_PASS + 1)); printf 'ok   declare wrote a declaration (control)\n'
   else _ST_FAIL=$((_ST_FAIL + 1)); printf 'FAIL declare wrote no declaration — every verdict below is vacuous\n'; fi
 
   _st_expect "absent ref inside the boot budget is BOOTING, not a fault" BOOTING boot
 
+  # THE BOOT CONTRACT, as a PAIR at one clock. `boot` carries it and `nocontract` does not; they are
+  # otherwise identical declarations against the same absent ref, so the two verdicts differ by
+  # exactly one field and neither can be explained by the clock. Without the pair, a single
+  # NOT-STARTED assertion passes just as well against a build that ignores the contract entirely.
+  cmd_declare --id nocontract --branch feat/never --remote "$_ST_D/remote.git" --repo "" >/dev/null 2>&1
   CC_CLOUD_NOW=$((2000000000 + 5000))
-  _st_expect "absent ref past the boot budget is NOT-STARTED" NOT-STARTED boot
+  _st_expect "absent ref past the boot budget is NOT-STARTED when the fire delivered the contract" NOT-STARTED boot
+  _st_expect "the SAME absence is UNKNOWN without one — a brief that never required a first push separates nothing" UNKNOWN nocontract
   CC_CLOUD_NOW=2000000000
 
   cmd_declare --id gone --branch feat/y --remote "$_ST_D/nonexistent.git" --repo "" >/dev/null
@@ -1129,7 +1198,8 @@ do_selftest() {
   # its ref MOVED and ALIVE is right. `reused` is declared AFTER, onto the same already-pushed
   # branch: nothing has moved, and without a fire-time baseline that reads ALIVE for the whole 6h
   # life budget — a session that never booted onto a re-used branch name, hidden behind a green.
-  cmd_declare --id reused --branch feat/x --remote "$_ST_D/remote.git" --repo "" >/dev/null 2>&1
+  cmd_declare --id reused --branch feat/x --remote "$_ST_D/remote.git" --repo "" \
+    --boot-contract first-push >/dev/null 2>&1
   _st_expect "a ref that already existed at fire time is BOOTING, not ALIVE" BOOTING reused
   CC_CLOUD_NOW=$((2000000000 + 5000))
   _st_expect "an unmoved pre-fire ref past the boot budget is NOT-STARTED" NOT-STARTED reused
@@ -1260,7 +1330,9 @@ case "${1:-}" in
   show)       shift; cmd_show "$@"; exit $? ;;
   list)       shift; cmd_list "$@"; exit $? ;;
   --selftest) do_selftest; exit $? ;;
-  -h|--help)  sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  # The whole verb list, not a prefix of it. This window was '2,12p' and the header grew past it —
+  # `--help` stopped mid-sentence inside `fill-paths` and never named retire/poll/show/list at all.
+  -h|--help)  sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   --json|--table|--check) ;;
   "")  echo "cc-cloud: pick a verb (preflight|declare|fill-paths|retire|poll|is-offbox|show|list|--json|--table|--check|--selftest)" >&2; exit 2 ;;
   *)   echo "cc-cloud: unknown arg $1" >&2; exit 2 ;;

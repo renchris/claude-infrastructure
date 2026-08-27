@@ -461,3 +461,55 @@ EOF
   [ -s "$CLOUD_DECL_LOG" ]
   [ ! -f "$BATS_TEST_TMPDIR/pf-off.log" ]                # the override SKIPS the probe, not just its verdict
 }
+
+# ══ 20-22 · THE BOOT CONTRACT (CLOUD_OBSERVABILITY.md §4.1) ═════════════════════════════════════
+#
+# §4.1 is what makes the declared branch worth watching: absence of the ref means "never booted"
+# ONLY because the brief required a first-act push. It was prose and nothing else until 2026-08-27
+# — this file's own case 17 pinned that the payload creates and pushes the branch, and the payload
+# said to do it *before you finish*, i.e. at the END of the session. So the observable the verdict
+# reads was produced, if at all, hours after the 15-minute budget that convicts its absence.
+# Measured consequence on the live board 2026-08-19: 65 of 84 non-retired declarations read
+# NOT-STARTED against a mature-window push rate of 80%.
+#
+# Written as EFFECTS, like 9-19: the payload actually handed to the create, and the argv actually
+# handed to `cc-cloud declare`. Never the presence of a string in the source.
+
+@test "20 the payload's FIRST ACT is the branch publish, and it PRECEDES the brief" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: t" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ -s "$BATS_TEST_TMPDIR/create.log" ]
+  local first task
+  first="$(grep -n 'FIRST ACT' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  task="$(grep -n 'cloud venue gate fixture payload' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$first" ] || { echo "the payload carries no first-act clause — §4.1 is prose again"; false; }
+  [ -n "$task" ] || { echo "the payload lost the brief itself"; false; }
+  # ORDER IS THE WHOLE CLAIM. A clause that says "before you read anything else" cannot arrive
+  # after the task it precedes: a model reading top-down acts on what it met first.
+  [ "$first" -lt "$task" ] || { echo "the contract must PRECEDE the brief (first=$first task=$task)"; false; }
+}
+
+@test "21 the declaration STATES the contract was delivered — the fire is the only thing that knows" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "$(printf 'Created cloud session: t\x1b[8GView: https://claude.ai/code/session_01TESTTESTTESTTESTTESTT?from=cli')" 0
+  cfire
+  [ "$status" -eq 0 ]
+  grep -q -- "--boot-contract first-push" "$CLOUD_DECL_LOG"
+}
+
+@test "22 an ABSENT contract library DEGRADES the fire, and the declaration does not claim one" {
+  # Deliberately NOT the create library's fail-closed treatment (case 10). This library is a NEW
+  # file, and a file a landed diff ADDS is ABSENT on the live layer — not stale — until
+  # deploy-live.sh converges, so a refusal here would break every cloud fire for that whole window.
+  # The cost of degrading is exactly one thing, and it is the safe direction: the declaration omits
+  # the flag, so cc-cloud ABSTAINS on absence instead of convicting.
+  cloud_acct; cloud_ccloud
+  cloud_claude "$(printf 'Created cloud session: t\x1b[8GView: https://claude.ai/code/session_01TESTTESTTESTTESTTESTT?from=cli')" 0
+  cfire CC_FIRE_BOOT_CONTRACT_LIB= CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ "$status" -eq 0 ]                                    # it still fires
+  [ -s "$CLOUD_DECL_LOG" ]                               # and is still declared
+  ! grep -q -- "--boot-contract" "$CLOUD_DECL_LOG"        # but claims nothing it did not deliver
+  ! grep -q 'FIRST ACT' "$BATS_TEST_TMPDIR/create.log"
+  [[ "$output" == *"NO BOOT CONTRACT"* ]] || false        # and says so where a human will see it
+}

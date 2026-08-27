@@ -622,3 +622,70 @@ EOF
     [[ "$output" == *"cc-offload $v"* ]] || false
   done
 }
+
+# ══ up — §4.1's BOOT CONTRACT on the API leg ════════════════════════════════════════════════════
+#
+# This is the PRODUCTION fire path, and it delivered `$(cat "$pf")` verbatim: the raw task file,
+# with no return protocol at all. The branch is authorised at create time (it goes into the create
+# body's `outcomes.git_info.branches`), but authorising a branch is not asking the session to push
+# it — so nothing ever gave a session a reason to touch the declared branch until it FINISHED,
+# while `cc-cloud` convicted the absence of that branch as NOT-STARTED after 15 minutes. Measured
+# on the live board 2026-08-19: 65 of 84 non-retired declarations read NOT-STARTED against a
+# mature-window push rate of 80%.
+#
+# Asserted on the DELIVERED MESSAGE and the DECLARE ARGV, never on the source: the fire is the only
+# thing that knows what was in the brief, and the declaration is where it says so.
+
+@test "up --via api delivers the boot contract FIRST, and declares that it did" {
+  echo "THE-BRIEF-ITSELF" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+import sys
+print("session_apitest")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+
+  # The message that actually reached the session carries the clause, naming the DECLARED branch —
+  # not some other one — and the clause precedes the brief. A model reading top-down acts on what
+  # it met first, so "before you read anything else" arriving after the task is not the contract.
+  local first task br
+  first="$(grep -n 'FIRST ACT' "$CALLS" | head -1 | cut -d: -f1)"
+  task="$(grep -n 'THE-BRIEF-ITSELF' "$CALLS" | head -1 | cut -d: -f1)"
+  [ -n "$first" ] || { echo "the delivered brief carries no first-act clause — §4.1 is prose again"; false; }
+  [ -n "$task" ] || { echo "the delivered brief lost the task"; false; }
+  [ "$first" -lt "$task" ] || { echo "the contract must PRECEDE the brief (first=$first task=$task)"; false; }
+  br="$(grep -o -- '--branch [^ ]*' "$CALLS" | head -1 | cut -d' ' -f2)"
+  [ -n "$br" ] && grep -q "git switch -c $br" "$CALLS"
+
+  grep -q -- '--boot-contract first-push' "$CALLS" || false
+}
+
+@test "up --via api DEGRADES without the contract library, and claims nothing it did not deliver" {
+  # Deliberately not a refusal. The library is a NEW file, and a file a landed diff ADDS is ABSENT
+  # on the live layer until deploy-live.sh converges — not stale — so failing closed here would
+  # refuse every cloud fire for that whole window. The cost of degrading is one thing, in the safe
+  # direction: no --boot-contract on the declaration, so cc-cloud abstains rather than convicting.
+  echo "THE-BRIEF-ITSELF" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+import sys
+print("session_apitest")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  # Spelled '' rather than a bare `VAR=`: the empty value IS the fixture (the seam is honoured
+  # SET-including-EMPTY), and a bare `=` reads as a typo to shellcheck and to the next reader alike.
+  CC_OFFLOAD_BOOT_CONTRACT_LIB='' CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" \
+    run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]                                    # it still fires
+  grep -q 'cc-cloud declare --id session_apitest' "$CALLS" || false
+  ! grep -q -- '--boot-contract' "$CALLS"
+  ! grep -q 'FIRST ACT' "$CALLS"
+  grep -q 'THE-BRIEF-ITSELF' "$CALLS" || false           # the brief itself is untouched
+  [[ "$output" == *"NO BOOT CONTRACT"* ]] || false       # and it says so where a human will see it
+}
