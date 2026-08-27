@@ -116,9 +116,22 @@
 # sessions that worked. Measured before the fix: one declaration, content on trunk, flips
 # LANDED -> NOT-STARTED on nothing but `git update-ref -d` against the remote, and emits an
 # actionable row telling the operator to go re-open a session that had already finished.
-# Any rate computed over these states therefore STEPS DOWN at a prune with no change in the fleet:
-# the 2026-08-17 "the cloud return/land arm died" reading (push rate 81% through 08-16, 33% from
-# 08-18) is that artifact (backlog f85fce7c26f5).
+# Any rate computed over these states therefore STEPS DOWN at a prune with no change in the fleet.
+#
+# 🚨 BUT IT DOES NOT EXPLAIN THE 08-17 STEP, AND THIS COMMENT USED TO SAY IT DID (corrected
+# 2026-08-27, backlog f85fce7c26f5). The claim here was that the "cloud return/land arm died
+# 2026-08-17T09:12:05Z" reading — push rate 81% through 08-16, 33% from 08-18 — "is that artifact".
+# It is not. The refutation was already on trunk when the claim was written:
+# `docs/research/branch-prune-manifest-2026-08-19.tsv` is the PRUNER'S OWN census, written BEFORE it
+# deleted anything, and its test is `git cherry` patch equivalence rather than branch presence — so
+# pruning cannot confound it. Landing rate by fire day out of that file, re-derived 2026-08-27:
+# 75/75/53/76/64/50/50% for 08-11..08-17, then 16% on 08-18. A second census over only the SURVIVING
+# branches — a population pruning cannot touch by construction — puts 08-11..08-17 at 69% landed
+# against 34% for 08-18..08-25.
+# So THE PROBE DEFECT AND THE LANE'S STEP ARE INDEPENDENT. This file fixes the probe; the step is
+# real, is still open, and its mechanism needs reads no cloud VM has. Full derivation, both tables,
+# the two limits on them, and the ONE operator command that discriminates the leading hypothesis:
+# docs/research/cloud-land-arm-step-2026-08-25.md (§1, §5, and §3 for the command).
 #
 # `landed()` reads the TRUNK TREE and never the branch ref, so it answers just as well for a branch
 # that no longer exists — the check simply had to be asked FIRST.
