@@ -63,6 +63,9 @@ asserts manifest-vs-Turso but never env-var-vs-manifest). One reso session, both
 
 ## 4. What the next dispatch should do with this item
 
+> **Superseded by §5 (2026-08-27): `block` alone is not enough — it leaves the misfiled `project`
+> field that made the item cloud-eligible in the first place. Use the two-write discharge in §5.4.**
+
 Park it out of the cloud lane and give it to a box that has reso:
 
 ```
@@ -73,3 +76,76 @@ Neither `cc-backlog` verb could be run from here — this container has no
 `~/.claude/autonomy/backlog.jsonl`, so `block`/`done`/`reopen` would have created a fresh store
 that nothing reads. A write that no reader can see is a fake discharge, which is the failure this
 document exists instead of.
+
+## 5. It recurred — 2026-08-27, same venue, second slot burned
+
+### 5.1 The venue, re-measured rather than inherited
+
+Re-dispatched today to another `anthropic_cloud` VM. Every fact in §1 re-established from this
+container, not read off §1: GitHub scope is exactly `renchris/claude-infrastructure` (and the
+session prompt forbids reading any other repo); `/home/user/` holds that one clone; `~/Development`
+does not exist; `~/.claude/autonomy/` does not exist; `cc-backlog`, `cc-venue`, `cc-eligible` and
+`cc-notify` are not on `PATH`. `renchris/reso-management-app` is unreachable by disk and by tool.
+Identical refusal, second time.
+
+### 5.2 The recurrence is self-proving, and it indicts the remedy, not the diagnosis
+
+The item arrived **open**. A blocked item is parked out of the dispatch wave by construction, so
+its arrival is proof that §4's `block` was never run — which is exactly what §4 said it could not
+be, from here. Two cloud dispatch slots have now been spent on one unreachable item.
+
+**A document is not a park.** Dispatch reads `~/.claude/autonomy/backlog.jsonl`; nothing in the
+promotion path reads `docs/research/`. So a venue-refusal doc written *from the venue it refuses*
+cannot prevent the next dispatch to that venue — it can only shorten it. This one did shorten it:
+this session spent minutes confirming §3 instead of an hour re-deriving it, and that is its whole
+remaining value. The park itself has to be a store write, and the store is on-box.
+
+### 5.3 The promoting arm is unchanged — established by content, not by log
+
+`cross_repo()` at `bin/cc-eligible:766` on `origin/main` today still keys on the item's `project`
+field alone: it resolves `project` through `repo_for()` to `~/Development/<project>` and compares
+origins. This item's project is `claude-infrastructure` — the lane itself — so the arm still
+answers "reachable" and the item is still promotable. §1's analysis holds verbatim.
+
+⚠️ **That claim is made from the file's content at `origin/main`, deliberately, because the log
+cannot support it here.** This clone is grafted at 50 commits: its root commit `decd3402` carries
+a synthetic full-tree diff dated **2026-08-25 17:12**, so `git log -- bin/cc-eligible` sees only
+the last two days and is structurally incapable of speaking about 2026-08-24, the day §1 was
+written. A "no commits touched it since" sentence would have read as evidence and been an artifact
+of clone depth. This is the same shallow-clone blindness the `cc-venue` guard is keyed on
+(`bin/cc-venue:55`) showing up one layer down, in the history a cloud session would cite.
+
+### 5.4 The discharge — two store writes, on-box, not one
+
+`block` parks this instance. It does **not** fix the cause, which is a misfiled `project`: the row
+says `claude-infrastructure` while its subject is `renchris/reso-management-app`. Leave that and a
+third dispatch is a coin-flip away. No `cc-backlog` verb mutates an existing row's project —
+`add`, `needs`, `dups`, `backfill` and `list` all accept `--project`, none re-files an existing id
+— so the durable discharge is a park plus a correctly-filed successor:
+
+```
+cc-backlog block 485f8f87eb5f --needs "dispatch on-box: subject is renchris/reso-management-app/.github/workflows/tenant-drift.yml, unreachable from a cloud VM; refused twice (2026-08-24, 2026-08-27) — see docs/research/tenant-drift-venue-refusal-2026-08-24.md"
+cc-backlog add --project reso-management-app --title "tenant-drift.yml has never run its check: drop the version: input from pnpm/action-setup" --source tenant-drift-venue-refusal-2026-08-24
+```
+
+The successor row lands under the reso lane, where `cross_repo()` measures it correctly and refuses
+to promote it to a cloud VM. An on-box reso session then applies §3's one-line diff, batched with
+`6e86209ae6bc` per §2.
+
+### 5.5 What was deliberately NOT done from here
+
+Widening `cross_repo()` to read an item's *prose* for a repo it names — the residual
+"filed under X, specified against Y" case §1 identifies — is the standing fix, and it stays with an
+on-box session. Not out of deference: it is unvalidatable from this venue. The change would need
+its false-positive rate measured across the whole backlog, and this container has no backlog to
+measure against and no history to read the 107-instance population out of. `bin/cc-eligible`'s own
+header names that move by name — *"widening a denylist on a hunch is how the tap starves"*
+(`bin/cc-eligible:250`, `:317`). An unmeasurable edit to the promotion gate is worse than the
+second-order bug it patches.
+
+### 5.6 The premise, one more time
+
+Unchanged from §2: **not refuted, and still not confirmable from this venue.** Nothing readable
+here contradicts any claim in the item, and the FIRST STEP check (`git show origin/main:<path>`)
+remains unrunnable against a repo with no remote in this container. The on-box session must re-run
+it against reso's trunk before writing the diff — the census behind the claim is now 17 days old.
