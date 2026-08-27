@@ -32,7 +32,7 @@ scripts/banner-shots.sh	1
 scripts/banner-video.sh	1
 scripts/bats-shellcheck-lint.sh	1
 scripts/bind-gate-e2e.sh	1
-scripts/branch-reaper.sh	6
+scripts/branch-reaper.sh	4
 scripts/cloud-ceiling-probe.sh	3
 scripts/comms-strand-report.sh	1
 scripts/deathwatch-watchfile.sh	1

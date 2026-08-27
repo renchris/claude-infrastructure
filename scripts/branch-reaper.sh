@@ -105,8 +105,20 @@ worktree_branches="$(git worktree list --porcelain 2>/dev/null | sed -n 's|^bran
 
 is_kept() {
   local b="$1" re
+  # The two membership questions below look alike and are NOT alike, because they pipe different
+  # things. `$b` is ONE branch name — git's own ref-name rules bound it, and the longest of 2,079
+  # local refs measured 41 bytes on 2026-08-27 — so a pipeline fed by `$b` cannot reach the SIGPIPE
+  # band at any fleet size. `$worktree_branches` is a FLEET-SIZED list that grows one entry per
+  # isolated session (the header above: 14-27 sessions/day), and under `set -o pipefail` a producer
+  # piped into an early-exiting `grep -q` is promoted to 141 ON A MATCH — so the `&&` fails and a
+  # branch that IS worktree-held reads NOT-KEPT. Fail-OPEN, in the guard that stops this script
+  # deleting a live session's carrier. Measured 2026-08-27, the REAL extracted function, 20 trials
+  # per cell at load ~71: correct 20/20 at the live feed (1,323 B) and at 20,000 B, and WRONG 20/20
+  # at 120,000 B with the needle at the head — correct again at 120,000 B with it at the tail, so
+  # POSITION is as much the variable as size. Membership therefore asks `case` over a newline-fenced
+  # string: fork-free, and it cannot report the opposite of what it found.
   printf '%s' "$b" | grep -qE "$PROTECTED" && return 0
-  printf '%s\n' "$worktree_branches" | grep -qxF "$b" && return 0
+  case $'\n'"$worktree_branches"$'\n' in *$'\n'"$b"$'\n'*) return 0 ;; esac
   for re in ${KEEP_EXTRA[@]+"${KEEP_EXTRA[@]}"}; do
     printf '%s' "$b" | grep -qE "$re" && return 0
   done
@@ -117,7 +129,12 @@ cand_auto=(); cand_named=(); skipped_wt=0; skipped_prot=0; skipped_keep=0
 while IFS= read -r b; do
   [ -n "$b" ] || continue
   if printf '%s' "$b" | grep -qE "$PROTECTED"; then skipped_prot=$((skipped_prot+1)); continue; fi
-  if printf '%s\n' "$worktree_branches" | grep -qxF "$b"; then skipped_wt=$((skipped_wt+1)); continue; fi
+  # Same feed, same hazard, same cure as is_kept's — and note these two are NOT independent belts.
+  # The header calls the worktree exclusion one of the things this script "will not touch, EVER",
+  # and it is asked twice: here, and again inside is_kept at :126. Both asked `$worktree_branches |
+  # grep -q`, so a single oversized feed inverted BOTH at once. Two guards over one feed are one
+  # guard. (The third belt, hooks/git-worktree-guard.sh, is a genuinely separate process.)
+  case $'\n'"$worktree_branches"$'\n' in *$'\n'"$b"$'\n'*) skipped_wt=$((skipped_wt+1)); continue ;; esac
   # COUNTED, not merely skipped. The "NOT merged" line below is a RESIDUAL, so a branch dropped
   # here without a bucket of its own was silently relabelled "untouched, holds work" — a merged,
   # contentless ref reported as one that still holds work, with no branch changing state. Measured

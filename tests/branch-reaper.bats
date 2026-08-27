@@ -172,3 +172,75 @@ setup() {
   local keptn; keptn="$(printf '%s\n' "$output" | sed -n 's/.*--keep pattern: *//p')"
   [ "${keptn:-0}" -ge 1 ] || { echo "--keep matched nothing, so this test proves nothing" >&2; return 1; }
 }
+
+@test "the worktree guard answers KEPT for a member even when the worktree-branch list is past the SIGPIPE floor" {
+  # WHAT TEST 4 CANNOT SEE, AND WHY THIS ARM EXISTS. Test 4 proves the exclusion decides correctly
+  # on a fixture whose worktree-branch list is ONE branch — about 17 bytes. The defect this arm
+  # pins is a function of the list's SIZE, so test 4 stayed green over it for the whole of the
+  # defect's life. A red count says a suite noticed; only a differently-sized fixture says which.
+  #
+  # WHY 120,000 AND NOT ANOTHER NUMBER. Measured 2026-08-27 against the REAL extracted function,
+  # 20 trials per cell at load ~71: `printf | grep -q` (two stages, builtin producer) answers
+  # correctly 20/20 at 1,323 B (the live feed that day) and at 20,000 B, and INVERTS 20/20 at
+  # 120,000 B with the needle at the HEAD — and is correct again at 120,000 B with the needle at
+  # the TAIL, because `grep -q` exits at the FIRST match, so the earlier the needle the sooner the
+  # pipe closes. 120,000-at-the-head is inside the always-inverted band, so a re-introduced
+  # `grep -q` fails this arm on EVERY run rather than one in twenty.
+  #
+  # This is a MECHANISM arm, not a spelling arm: it feeds the real function and reads its answer,
+  # so it survives any rewording of the cure.
+  local fn feed body needle
+  [ "$(/usr/bin/grep -c '^is_kept() {' "$SCRIPT")" -eq 1 ]
+  fn="$BATS_TEST_TMPDIR/is_kept.sh"
+  awk '/^is_kept\(\) \{/,/^\}/' "$SCRIPT" > "$fn"
+  [ "$(/usr/bin/grep -c 'worktree_branches' "$fn")" -ge 1 ]
+
+  needle="wt-00c8a786f8fd"
+  body="$(awk 'BEGIN{for(i=0;i<6000;i++) printf "filler/branch-%06d\n", i}')"
+  [ "${#body}" -ge 120000 ]
+
+  # PIPEFAIL MUST BE ON, or this arm is vacuous: without it the pre-fix pipeline answers correctly
+  # too and no fixture size could ever make it fail.
+  run bash -c 'set -uo pipefail; case "$(set -o | /usr/bin/grep "^pipefail")" in *on*) echo PF=on;; *) echo PF=off;; esac'
+  [[ "$output" == *"PF=on"* ]] || false
+
+  # POSITIVE: the needle is a MEMBER, at the head of an oversized list. Correct answer is KEPT (0).
+  feed="$needle
+$body"
+  FEED="$feed" run bash -c '
+    set -uo pipefail
+    PROTECTED="^(main|master|trunk|HEAD)$"
+    KEEP_EXTRA=()
+    worktree_branches="$FEED"
+    . "$1"
+    is_kept "$2"; echo "verdict=$?"' _ "$fn" "$needle"
+  [[ "$output" == *"verdict=0"* ]] || {
+    echo "a worktree-held branch read NOT-KEPT at $(printf %s "$feed" | wc -c) bytes — it is reapable" >&2; false; }
+
+  # NEGATIVE CONTROL: the same oversized list with the needle ABSENT must answer NOT-KEPT (1). This
+  # is what stops the arm passing by always answering 0. It must hold in BOTH states of the subject.
+  FEED="$body" run bash -c '
+    set -uo pipefail
+    PROTECTED="^(main|master|trunk|HEAD)$"
+    KEEP_EXTRA=()
+    worktree_branches="$FEED"
+    . "$1"
+    is_kept "$2"; echo "verdict=$?"' _ "$fn" "$needle"
+  [[ "$output" == *"verdict=1"* ]] || { echo "NEG control: a non-member read KEPT" >&2; false; }
+}
+
+@test "no pipeline feeds the fleet-sized worktree-branch list into an early-exiting grep" {
+  # SPAN = THE WHOLE FILE, deliberately, because this is a property of ONE VARIABLE and it had TWO
+  # consumers: is_kept's, and the main loop's own guard ~11 lines below it. A span narrowed to the
+  # function would have pinned one and left the other, and the two are not independent belts — one
+  # oversized feed inverted both at once.
+  #
+  # Comment lines are stripped FIRST: the cure carries a comment naming the hazard by name, and a
+  # raw grep would convict the fixed file for documenting its own fix.
+  local code
+  code="$BATS_TEST_TMPDIR/code.sh"
+  /usr/bin/grep -v '^[[:space:]]*#' "$SCRIPT" > "$code"
+  [ "$(/usr/bin/grep -cE 'worktree_branches.*grep -q' "$code")" -eq 0 ]
+  # …and the cure is WIRED at both sites, so this cannot pass by the variable simply disappearing.
+  [ "$(/usr/bin/grep -cE 'case .*worktree_branches' "$code")" -eq 2 ]
+}
