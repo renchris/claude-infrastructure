@@ -593,9 +593,19 @@ those by `bashMissKind` / error text. Only `no-rule-match` is addressable by a p
    auto it buys you nothing; it is a `default`/`acceptEdits`-mode lever.)
 7. **Put `defaultMode` and any `auto`-related key in `~/.claude/settings.json`**, never in a project
    or `.local` file.
-8. **Audit existing rules against the drop list.** Grep the 339 entries for
+8. **Audit existing rules against the drop list** — `cc-permission-audit --auto-drop`, which
+   implements §3's predicate (`gsn`/`_sn`/`PHs`, plus the `bsn()` `classifyAllShell` arm) over
+   every `settings.json` and `settings.local.json` it finds. Report-only by construction: these
+   rules are restored on leaving auto mode, so the fix is to NARROW each hit, never to delete it.
+
+   *Landed 2026-08-27 (backlog `78b76e1a8311`). Written as a tool rather than the grep this item
+   originally specified, because **the grep is a screen, not the predicate, and it over-reports in
+   the direction that costs most**: the alternation below hits `Bash(npm run test:*)`,
+   `Bash(python3 scripts/gen.py *)` and `Bash(bash scripts/wrap-ledger.sh:*)`, all three of which
+   SURVIVE the drop — only the bare / `:*` / `*` / `<cmd> -flag*` forms go, and a named
+   sub-command or script path is exactly the narrowing this section recommends. Acting on a raw
+   grep hit means rewriting a rule that already works. Kept below as the screen it is:*
    `python|python3|node|deno|tsx|ruby|perl|php|lua|npx|bunx|npm run|yarn run|pnpm run|bun run|bash|sh|ssh|zsh|fish|eval|exec|env|xargs|sudo|curl|wget|kubectl|aws|gcloud|gsutil`
-   in bare / `:*` / `*` / `<cmd> -flag*` form — every hit is dead weight in auto mode.
 
 ### DON'T
 

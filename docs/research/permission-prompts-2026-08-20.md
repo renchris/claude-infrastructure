@@ -134,6 +134,24 @@ Two smaller follow-ons, both filed rather than done here:
 * The 339 existing allow entries have never been audited against the auto-mode drop list;
   `cc-permission-audit --prune` already exists to find provably-dead ones.
 
+  **Update 2026-08-27 (backlog `78b76e1a8311`) — the audit now exists as
+  `cc-permission-audit --auto-drop`, and pointing this bullet at `--prune` was wrong on both
+  halves.** `--prune` could not have answered it: its predicate is REDUNDANCY (a duplicate, or a
+  literal already covered by a `:*` rule in the same file), which is disjoint from the drop list,
+  and its discovery walk collects only `settings.local.json` — so it has never been able to open
+  `~/.claude/settings.json`, the file the 339 are in. The new mode carries its own population
+  (both filenames) and its own predicate, transcribed from
+  `permission-matcher-truth-2026-08-20.md` §3.
+  🚨 **It never writes, and that is not an omission.** `--prune`'s entries are dead in every mode,
+  so it may rewrite the file; a drop-list entry is dead **only inside auto mode** and is restored
+  on leaving it, so it is still load-bearing under `default` and `acceptEdits`. The finding is
+  therefore *narrow this rule* (`Bash(npm run:*)` → `Bash(npm run test:*)`), never *delete it* —
+  `CONFIRM=1` is deliberately not consulted by this mode, and a test asserts that.
+  Audited here at the same time: this repo's own two committed settings files, **0 of 52 dropped**
+  — which is also the over-reach control, since `Bash(bash scripts/wrap-ledger.sh:*)` and
+  `Bash(sed -n:*)` both sit in that 52 and both correctly survive. The fleet-wide 339 live on the
+  operator's box and are one command away: `cc-permission-audit --auto-drop`.
+
 ## Deployment note
 
 Hooks reach all five accounts by per-file symlink into this checkout, and CC 2.1.220 ships a

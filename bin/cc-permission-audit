@@ -20,6 +20,8 @@ Usage:
   cc-permission-audit [DAYS]            the report above (0/absent = all history)
   cc-permission-audit --prune [FILE…]   list provably-dead approved patterns; writes NOTHING
   CONFIRM=1 cc-permission-audit --prune [FILE…]   remove them (timestamped backup per file)
+  cc-permission-audit --auto-drop [FILE…]  list approved patterns the harness DELETES in auto
+                                        mode; report-only, never writes under any env var
 """
 
 import json, glob, re, sys, collections, os, time
@@ -43,6 +45,7 @@ def _days_arg(v):
 
 ARGV = sys.argv[1:]
 PRUNE = "--prune" in ARGV
+AUTODROP = "--auto-drop" in ARGV
 # `--prune FILE…` takes explicit settings paths; the positional day-count keeps working
 # unchanged when no flag is given, so `cc-permission-audit 7` is untouched.
 PRUNE_PATHS = [a for a in ARGV if not a.startswith("-") and a.endswith(".json")]
@@ -413,10 +416,224 @@ def prune_report():
         print("  DRY RUN — nothing written. Re-run as: "
               f"CONFIRM=1 {os.path.basename(sys.argv[0])} --prune"
               + (" " + " ".join(PRUNE_PATHS) if PRUNE_PATHS else ""))
+    # The second, disjoint deadness. Printed unconditionally because a clean prune reads as
+    # "the allow list is audited" and it is not: this population is invisible to --prune both
+    # by predicate (redundancy, not danger) and by scope (settings.local.json only).
+    if not AUTODROP:
+        print(f"  Auto-mode deadness is a SEPARATE audit: "
+              f"{os.path.basename(sys.argv[0])} --auto-drop")
+    return 1 if failed else 0
+
+
+# ───────────────────────────── --auto-drop ──────────────────────────────────
+#
+# THE AUTO-MODE DROP PREDICATE — a DIFFERENT kind of deadness from --prune's, and the
+# distinction is the whole reason this is a separate, report-only mode.
+#
+# --prune's population is REDUNDANT: the rule cannot change any decision in ANY mode, so
+# deleting it is semantics-preserving and the tool may rewrite the file. The population
+# here is CONDITIONALLY dead: on entering auto mode the harness deletes broad allow rules
+# that grant arbitrary code execution, and RESTORES them on leaving it. Every entry named
+# below is still load-bearing in `default` and `acceptEdits`. Deleting one is therefore a
+# behaviour change, not a cleanup — which is why nothing here is ever written, `CONFIRM=1`
+# is not consulted, and the finding is a recommendation to REPLACE the rule with a narrower
+# spelling that survives (see WHAT SURVIVES below), never to drop it.
+#
+# Source: docs/research/permission-matcher-truth-2026-08-20.md §3, read out of the 2.1.220
+# binary (`pme` offset 22935790 → `qNt` → `bsn`/`Ssn` → `gsn` → `_sn`, list `iSd` at offset
+# 19668065) and corroborated by the `/permission-modes` doc. That document flags this as its
+# one load-bearing claim that is code-and-doc verified but NOT probe-verified — no observable
+# in `stream-json` distinguishes "allowed by rule" from "allowed by classifier" under auto —
+# so this report inherits that bound and says so in its own footer rather than implying a
+# measurement it does not have.
+#
+# WHAT SURVIVES: anything narrower. `Bash(npm run test:*)` (tail does not start with a flag),
+# `Bash(python3 scripts/foo.py *)`, and every command never on the list — `Bash(git status:*)`,
+# `Bash(rg:*)`, `Bash(jq:*)`. The fix for a hit is to enumerate the sub-commands actually used.
+
+ISD_BASE = [
+    "python", "python3", "python2", "node", "deno", "tsx", "ruby", "perl", "php", "lua",
+    "npx", "bunx", "npm run", "yarn run", "pnpm run", "bun run",
+    "bash", "sh", "ssh", "zsh", "fish", "eval", "exec", "env", "xargs", "sudo",
+]
+NSD = ["curl", "wget", "kubectl", "aws", "gcloud", "gsutil"]      # network/cloud subset
+# Longest-first so `python3` is attributed to `python3` and not to `python`, and `npm run`
+# is never read as a bare `npm`. The predicate's VERDICT is the same either way; the REASON
+# string is what would otherwise be wrong, and a wrong reason is what sends the operator to
+# fix the wrong rule.
+ISD = sorted(ISD_BASE + NSD, key=len, reverse=True)
+
+KUBECTL_MUTATING = {
+    "exec", "apply", "create", "delete", "run", "cp", "port-forward", "proxy", "patch",
+    "edit", "replace", "attach", "debug", "scale", "rollout", "drain", "cordon", "taint",
+}
+# `python -m pkg.module *` is the one flag-tail form carved out of the drop.
+PY_M_OK = re.compile(r"^-m\s+\w+\.[\w.]+(\s*:|\s+)$")
+BARE_WILDCARD = re.compile(r"^[\s*]+$")
+
+
+def _strip_tail_glob(t):
+    """`-e *` → `-e `, `-m pkg.module:*` → `-m pkg.module:`. One trailing `*` only: the
+    predicate keys on what precedes the glob, and `**` is not a distinct rule shape here."""
+    return t[:-1] if t.endswith("*") else t
+
+
+def _sn(content):
+    """The dangerous-rule test. Returns a REASON string (⇒ dropped) or None (⇒ survives).
+
+    The VERDICT is computed on the lowercased content, exactly as `_sn` does. The REASON
+    quotes the operator's own casing: a report that tells them to go fix `curl -ss…` when
+    they wrote `-sS` sends them looking for a rule that is not in the file."""
+    raw = " ".join(content.strip().split())
+    c = raw.lower()
+    if len(raw) != len(c):                       # non-ASCII case-fold changed the length
+        raw = c                                  # → offsets no longer align; quote the safe one
+    if c == "*":
+        return "matches everything (`*`)"
+    for cmd in ISD:
+        if c in (cmd, cmd + ":*", cmd + " *", cmd + "*"):
+            return f"bare `{cmd}` — arbitrary code execution"
+        if not c.startswith(cmd + " "):
+            continue
+        tail = c[len(cmd) + 1:]
+        stem = _strip_tail_glob(tail)
+        if tail.endswith("*") and stem.startswith("-"):
+            if cmd.startswith("python") and PY_M_OK.match(stem):
+                return None                      # the one carve-out; see PY_M_OK
+            flag = _strip_tail_glob(raw[len(cmd) + 1:]).split()[0]
+            return f"`{cmd}` with a flag tail (`{flag}…`) — arbitrary code execution"
+        if cmd in NSD:
+            if "$" in tail or "`" in tail:
+                return f"`{cmd}` whose argument interpolates (`$`/backtick)"
+            args = [a for a in stem.split() if not a.startswith("-")]
+            if cmd == "kubectl" and args and args[0] in KUBECTL_MUTATING:
+                return f"`kubectl {args[0]}` — a mutating verb"
+            if not args and not (cmd in ("curl", "wget") and "://" in tail):
+                return f"`{cmd}` with no positional argument"
+        return None                              # a named sub-command: narrow enough to survive
+    return None
+
+
+def auto_dropped(rule):
+    """Reason this allow rule is deleted in auto mode, or None. Mirrors `qNt`:
+    Agent unconditionally, then Bash via `gsn`. Tools other than Bash/Agent are untouched —
+    the PowerShell arm fires only under `autoMode.classifyAllShell`, reported separately."""
+    m = RULE_RE.match(rule)
+    if not m:
+        # A rule with no parens is the BARE tool form (`"Bash"`), which `gsn` drops on its
+        # undefined-content branch. This is the shape the matcher-truth doc's DON'T #5 warns
+        # about, so it must not fall through as "survives".
+        tool, arg = rule.strip(), None
+    else:
+        tool, arg = m.group(1), m.group(2)
+    if tool == "Agent":
+        return "every `Agent` allow rule is dropped in auto mode, whatever its specifier"
+    if tool != "Bash":
+        return None
+    if arg is None or arg == "":
+        return "bare `Bash` — grants every command"
+    if BARE_WILDCARD.match(arg):
+        return "matches everything (`*`)"
+    return _sn(arg)
+
+
+def _audit_files():
+    """The --auto-drop population: BOTH `settings.json` and `settings.local.json`.
+
+    Deliberately wider than `_settings_files()`, and deliberately NOT shared with it. The
+    entries this mode exists to find live in `~/.claude/settings.json` — the fleet-wide file
+    that `--prune` has never been able to see, which is why the 339 approved patterns there
+    had gone unaudited (docs/research/permission-prompts-2026-08-20.md §5). Widening the
+    PRUNE population instead would have pointed a file-rewriting code path at the fleet-wide
+    settings file; this mode never writes, so the wider scope costs nothing.
+    """
+    if PRUNE_PATHS:
+        return PRUNE_PATHS
+    root = os.path.expanduser("~")
+    base = root.rstrip("/").count("/")
+    out = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        if dirpath.count("/") - base >= WALK_MAXDEPTH:
+            dirnames[:] = []
+        else:
+            dirnames[:] = [d for d in dirnames if d not in WALK_SKIP]
+        if not os.path.basename(dirpath).startswith(".claude"):
+            continue
+        for name in ("settings.json", "settings.local.json"):
+            if name in filenames:
+                out.append(os.path.join(dirpath, name))
+    return sorted(set(out))
+
+
+def _classify_all_shell(paths):
+    """`bsn()` — ANY settings source carrying autoMode.classifyAllShell:true drops EVERY Bash
+    and PowerShell allow rule, whatever its content. One source arms it for all of them, so
+    this is a property of the fleet and not of a file, and is reported once."""
+    hits = []
+    for p in paths:
+        try:
+            with open(p, encoding="utf-8") as fh:
+                obj = json.load(fh)
+        except Exception:
+            continue
+        if isinstance(obj, dict) and (obj.get("autoMode") or {}).get("classifyAllShell") is True:
+            hits.append(p)
+    return hits
+
+
+def autodrop_report():
+    """Report-only, always. `CONFIRM=1` is not read here and must never be — see THE AUTO-MODE
+    DROP PREDICATE: these rules are live outside auto mode."""
+    files = _audit_files()
+    print("── AUTO-MODE DROP AUDIT (report only — nothing is ever written) ──")
+    print(f"  scope: {len(files)} settings file(s)")
+    cas = _classify_all_shell(files)
+    total = dropped_total = failed = 0
+    for path in files:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                obj = json.load(fh)
+        except Exception as e:
+            print(f"  ⚠ SKIP (unreadable/invalid JSON): {path}: {e}")
+            failed += 1
+            continue
+        allow = ((obj.get("permissions") or {}).get("allow")) if isinstance(obj, dict) else None
+        if not isinstance(allow, list):
+            continue
+        total += len(allow)
+        hits = [(r, why) for r in allow for why in [auto_dropped(r)] if why]
+        if not hits:
+            continue
+        dropped_total += len(hits)
+        print(f"\n  {path}  ({len(allow)} entries, {len(hits)} dropped in auto mode)")
+        for rule, why in hits:
+            print(f"    - {rule[:100]}   [{why}]")
+    pct = f"{100 * dropped_total / total:.1f}%" if total else "n/a"
+    print(f"\n  {dropped_total} of {total} approved pattern(s) are dead weight in auto mode ({pct})")
+    if cas:
+        print("  🚨 autoMode.classifyAllShell:true is set in "
+              + ", ".join(cas)
+              + "\n     ⇒ EVERY Bash and PowerShell allow rule is dropped in auto mode, not just"
+                " the ones listed above. The count above is a floor while that key is set.")
+    if dropped_total:
+        print("  FIX: replace each with the sub-commands you actually run —"
+              " `Bash(npm run:*)` → `Bash(npm run test:*)`; `Bash(python3:*)` →"
+              " `Bash(python3 scripts/foo.py *)`. Do NOT simply delete them: they are live"
+              " in default and acceptEdits mode.")
+    print("  BOUND: the drop predicate is read out of the 2.1.220 binary and corroborated by"
+          " the docs, but is NOT probe-verified — see"
+          " docs/research/permission-matcher-truth-2026-08-20.md §3.")
     return 1 if failed else 0
 
 
 def main():
+    if AUTODROP:
+        # Same reason as the PRUNE arm below: this reads settings files only, and must not
+        # depend on ~/.claude/settings.json existing or spend a minute on the transcript corpus.
+        rc = autodrop_report()
+        if not PRUNE:
+            sys.exit(rc)
+        print()
     if PRUNE:
         # Before load_rules(): a prune must not depend on ~/.claude/settings.json existing,
         # and must not spend a minute scanning the transcript corpus it does not read.
