@@ -1867,6 +1867,17 @@ projects the window FILLING, clamps to zero, and is wrong by the entire strand w
 By **T−6h** it has converged and is nearly right. The refuted rule could not have produced that
 row, because it only ever looked where the projection had already converged.
 
+**…and the suite shipped with a wall-clock time bomb, caught by re-running it rather than by
+reading it.** `_reset_key` rounds a reset stamp to the nearest minute, so `completed_weekly_windows`
+reconstructs `reset_t` as `key × 60` — up to 30 s either side of what the fixture wrote. The
+`window()` helper emitted its last sample AT the reset instant, so `gap = reset_t − last._t` went
+negative whenever the rounding landed low and every bucket read `n=0`: a coin flip on where the run
+started inside the minute, green six times and then red five cases on an unchanged tree. Fixed
+twice over on purpose (`NOW` snapped to a minute boundary; the series stops 6 min short, which is
+what a real 6-min-cadence series does anyway), so one later edit cannot silently re-arm it.
+**Class:** a fixture anchored on a bare `time.time()` against a rounding rule is a time bomb even
+when nothing in it looks like a date. Commit `3edd62cf`.
+
 ⚠️ **The live table is NOT in this record, and its absence is the honest state.** Wave 2 ran in a
 Linux container with no `~/.claude/logs/account-utilization.jsonl`, so every figure above is
 fixture-derived or reproduced from §5.2's own recorded table. **`claude-accounts --strand-score`
