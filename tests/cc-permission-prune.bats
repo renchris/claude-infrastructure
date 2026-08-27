@@ -186,6 +186,34 @@ backups() { # count of backups made for the fixture
   [[ "$output" == *"shadowed by Bash(git:*)"* ]] || false
 }
 
+@test "APPLY names a live settings.json before rewriting it — the blast radius is not silent" {
+  # Discovery learning `settings.json` grew what CONFIRM=1 can touch from worktree-local files
+  # to the operator's five live user-level stores. That escalation is announced, not inferred
+  # from a path list. Both poles are asserted: the warning belongs to the WRITE, not the read.
+  local f="$BATS_TEST_TMPDIR/live.settings.json"
+  printf '%s\n' '{"permissions":{"allow":["Bash(git:*)","Bash(git status --short)"]}}' > "$f"
+  run env CONFIRM=1 python3 "$AUDIT" --prune "$f"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"are LIVE user/project settings.json"* ]] || false
+  [[ "$output" == *"$f"* ]] || false
+  # …and a DRY RUN says nothing of the sort.
+  run python3 "$AUDIT" --prune "$f"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"are LIVE user/project settings.json"* ]] || false
+}
+
+@test "a settings.local.json is NOT announced as live — the predicate is the old walk's reach" {
+  # The negative pole of the arm above: the escalation set is "what the old walk could never
+  # have reached", so a settings.local.json must never trip the warning, even under APPLY.
+  local f="$BATS_TEST_TMPDIR/wt.settings.local.json"
+  printf '%s\n' '{"permissions":{"allow":["Bash(git:*)","Bash(git status --short)"]}}' > "$f"
+  run env CONFIRM=1 python3 "$AUDIT" --prune "$f"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"are LIVE user/project settings.json"* ]] || false
+  # the prune itself still happened, so this is not passing by doing nothing
+  [ "$(allow_n "$f")" -eq 1 ]
+}
+
 @test "the plain report still works — --prune is additive, not a rewrite of the tool" {
   cat > "$HOME/.claude/settings.json" <<'JSON'
 {"permissions":{"allow":["Bash(ls:*)"],"deny":[],"ask":[]}}
