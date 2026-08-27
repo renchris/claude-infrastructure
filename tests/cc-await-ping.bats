@@ -18,6 +18,9 @@ setup() {
   # here rather than per-test so no future test can read the operator's live beats by omission.
   export CC_BEAT_DIR="$BATS_TEST_TMPDIR/beats"
   mkdir -p "$CC_BEAT_DIR"
+  # § SETTLE window, shrunk for the suite (production: 45s / 900s — asserted in its own case).
+  export CC_AWAIT_SETTLE_S=1
+  export CC_AWAIT_SETTLE_MAX_S=6
   UUID="AAAAAAAA-1111-2222-3333-444444444444"
   MB="$CC_MAILBOX_DIR/$UUID.md"
   SID="sidGOAL"
@@ -26,12 +29,22 @@ setup() {
 # ── beat fixtures (the C2 oracle) ────────────────────────────────────────────────────────────────
 # One attestation per turn boundary, exactly the shape hooks/session-beat.sh writes:
 # kind=prompt at UserPromptSubmit, kind=stop at Stop, `seq` monotone across both.
-beat() { # <seq> <kind> [age-seconds]
-  local age="${3:-0}"
-  jq -nc --arg k "$2" --argjson s "$1" --argjson t "$(( $(date +%s) - age ))" \
-    '{sid:"sidGOAL",pane:"p0",cwd:"/tmp",pid:1,lstart:"x",t:$t,kind:$k,who:"auto",operatorT:null,seq:$s}' \
+beat() { # <seq> <kind> [age-seconds] [who]
+  local age="${3:-0}" who="${4:-auto}"
+  jq -nc --arg k "$2" --arg w "$who" --argjson s "$1" --argjson t "$(( $(date +%s) - age ))" \
+    '{sid:"sidGOAL",pane:"p0",cwd:"/tmp",pid:1,lstart:"x",t:$t,kind:$k,who:$w,operatorT:null,seq:$s}' \
     > "$CC_BEAT_DIR/$SID.json"
 }
+
+# § SETTLE (backlog b60eb29e97dd): the idle-scoped baseline LOCKS on the first stop-kind beat that
+# has rested CC_AWAIT_SETTLE_S, so every idle-scoped case must either drive that timeline or shrink
+# the window. Pinned in setup() to 1s/6s so the suite exercises the anchor rather than skipping it;
+# the production defaults (45/900) are asserted by their own case below.
+#
+# ⚠ FIXTURE DISCIPLINE, and it is what made the shipped suite green over the measured defect: beat
+# boundaries ALTERNATE (hooks/session-beat.sh writes prompt at UserPromptSubmit and stop at Stop), so
+# `beat 5 prompt; beat 6 prompt` is a sequence no producer can emit. Every new-turn fixture here
+# therefore steps prompt → stop → prompt, the shape a real session actually walks.
 
 @test "exits 0 and prints the new line when a ping lands mid-wait" {
   ( sleep 1; printf '2026-07-10T10:00:00+0000 [peer] HANDOFF-PING slug: done\n' >> "$MB" ) &
@@ -718,8 +731,8 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
 # session with no watcher at all must spin one, on the identical timeline.
 
 @test "idle-scoped: stands down (exit 0, verdict=stood-down) when its session takes a new turn" {
-  beat 5 prompt
-  ( sleep 1; beat 6 prompt ) &
+  beat 5 prompt                                        # the arm turn
+  ( sleep 1; beat 6 stop; sleep 4; beat 7 prompt ) &    # …its stop rests, THEN a real new turn
   local writer=$!
   run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
   wait "$writer" 2>/dev/null || true
@@ -729,7 +742,7 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
 
 @test "idle-scoped: the stand-down carries NO body — there is no mail, and a fake one would be a lie" {
   beat 5 prompt
-  ( sleep 1; beat 6 prompt ) &
+  ( sleep 1; beat 6 stop; sleep 4; beat 7 prompt ) &
   local writer=$!
   run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
   wait "$writer" 2>/dev/null || true
@@ -749,18 +762,122 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
   [[ "$output" != *"stood-down"* ]] || false
 }
 
-@test "idle-scoped: a Stop beat BEYOND baseline+1 does cancel (the sampling hole is closed)" {
+@test "idle-scoped: a Stop beat BEYOND the SETTLED baseline does cancel (the sampling hole is closed)" {
   # The beat file holds only the LATEST boundary, so a whole turn can complete inside one poll and
   # leave us looking at a Stop-kind beat whose prompt predecessor we never sampled. Turns alternate,
-  # so seq > baseline+1 PROVES a prompt beat happened in between — ignoring it would re-open the
-  # starvation pole through the oracle itself.
+  # so a stop beat past the settled baseline PROVES a prompt beat happened in between — ignoring it
+  # would re-open the starvation pole through the oracle itself. The hole is only reachable AFTER the
+  # baseline locks: before that, a jump is arm-turn tail and is folded in (see the cascade case).
   beat 10 prompt
-  ( sleep 1; beat 13 stop ) &
+  ( sleep 1; beat 11 stop; sleep 4; beat 13 stop ) &
   local writer=$!
   run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
   wait "$writer" 2>/dev/null || true
   [ "$status" -eq 0 ]
   [[ "$output" == *"verdict=stood-down"* ]] || false
+}
+
+# ── § SETTLE: THE ARMING TURN'S OWN COMPLETION (backlog b60eb29e97dd) ─────────────────────────────
+# Measured 2/2 on live sessions before this: every arm the wake floor demanded stood itself down
+# inside its own arming turn, the floor spent its budget (CC_WAKE_FLOOR_MAX=2) on an arm that
+# deterministically no-ops, and the session idled DEAF. The arm is instructed BY a Stop blocker, so
+# the arming turn's own stop runs that same battery again — and any blocker there emits
+# `stop` then `prompt`, i.e. baseline+2, which the one-beat offset cannot cover.
+
+@test "SETTLE: a BLOCKED arm-turn stop (stop→prompt cascade) does NOT stand the watcher down" {
+  # THE MEASURED DEFECT, as a test. Pre-fix this cascade fires C2 within one poll: the offset is
+  # spent by seq 11 and seq 12 is a prompt past baseline+1.
+  beat 10 prompt                                       # the arming turn
+  ( sleep 1; beat 11 stop; sleep 1; beat 12 prompt ) &  # its stop is BLOCKED → continuation turn
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 5
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 2 ]                                  # still watching → ran its term
+  [[ "$output" != *"stood-down"* ]] || false
+}
+
+@test "SETTLE: a cascade of SEVERAL blocked stops is survived, and the wake AFTER it still cancels" {
+  # The baseline moves with the cascade, so its length is not a bound the watcher has to guess.
+  beat 20 prompt
+  ( sleep 1; beat 21 stop; sleep 1; beat 22 prompt; sleep 1; beat 23 stop; sleep 1; beat 24 prompt
+    sleep 1; beat 25 stop                              # the cascade's LAST stop — now silence
+    sleep 4; beat 26 prompt ) &                        # …and the genuine wake that follows it
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 20
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down"* ]] || false
+  [[ "$output" == *"arming turn settled at beat seq 25"* ]] || false
+}
+
+@test "SETTLE: the OPERATOR fast-path cancels inside the settle window (a typed turn needs no anchor)" {
+  # The one wake that is unambiguous without the anchor, so it must not be foldable into the tail.
+  beat 30 prompt
+  ( sleep 1; beat 31 stop; sleep 1; beat 32 prompt 0 operator ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down"* ]] || false
+}
+
+@test "SETTLE: the bound LOCKS the baseline, it does not disarm the wake path" {
+  # A session that never writes a resting stop beat (force-idled mid-turn) still needs this watcher.
+  # At CC_AWAIT_SETTLE_MAX_S the baseline locks where it stands and C2 resumes — it must NOT exit.
+  beat 40 prompt
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 9
+  [ "$status" -eq 2 ]                                  # ran its term; the wake path stayed armed
+  [[ "$output" == *"settle bound reached"* ]] || false
+  [[ "$output" != *"stood-down"* ]] || false
+}
+
+@test "SETTLE C1: mail is delivered DURING the settle window — the anchor never gates a ping" {
+  beat 50 prompt
+  ( sleep 1; beat 51 stop; printf '2026-08-27T10:00:00+0000 [peer] HANDOFF-PING slug: landed\n' >> "$MB" ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"HANDOFF-PING slug: landed"* ]] || false
+}
+
+@test "SETTLE RED-PROOF: the PINNED PRE-FIX subject stands itself down on that same cascade" {
+  # Arm 2. Without this the cascade case above is an assertion nobody has watched fail. Same planting
+  # discipline as the F12 red-proof: the pre-fix copy goes at <root>/bin with <root>/hooks symlinked
+  # to the repo's, because --idle-scoped REFUSES (exit 6, no-mailbox-lib) without a lib it resolves
+  # as "$_bd/../hooks/lib/mailbox-pending.sh", and a bare copy would prove nothing.
+  #
+  # A LITERAL SHA, never a moving ref (moving-ref-control-lint). 8ca08d170 is trunk's tip immediately
+  # before this fix — the last sha at which the defect is present — and it is an ancestor of trunk.
+  local root="$BATS_TEST_TMPDIR/presettle"
+  mkdir -p "$root/bin"
+  git -C "$REPO" show 8ca08d170:bin/cc-await-ping > "$root/bin/cc-await-ping" \
+    || skip "pinned pre-fix copy unavailable"
+  chmod +x "$root/bin/cc-await-ping"
+  ln -s "$REPO/hooks" "$root/hooks"
+
+  # The pinned copy must be the PRE-FIX one, or this proves nothing.
+  ! grep -q '_settle' "$root/bin/cc-await-ping" \
+    || { echo "the pinned copy already carries the fix — this arm cannot red"; false; }
+
+  beat 10 prompt
+  ( sleep 1; beat 11 stop; sleep 1; beat 12 prompt ) &
+  local writer=$!
+  run "$root/bin/cc-await-ping" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 5
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ] \
+    || { echo "expected the pre-fix subject to stand down inside its arming turn: $status"; echo "$output"; false; }
+  [[ "$output" == *"verdict=stood-down"* ]] \
+    || { echo "expected pre-fix verdict=stood-down — the defect did not reproduce: $output"; false; }
+}
+
+@test "SETTLE: the production defaults are 45s / 900s, and the arm banner says the baseline is provisional" {
+  beat 5 prompt
+  run env -u CC_AWAIT_SETTLE_S -u CC_AWAIT_SETTLE_MAX_S "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 1
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"PROVISIONAL"* ]] || false
+  [[ "$output" == *"rests 45s"* ]] || false
+  [[ "$output" == *"or at 900s"* ]] || false
 }
 
 @test "idle-scoped C1: MAIL still wins — a ping is delivered, never traded for a silent stand-down" {
@@ -907,8 +1024,9 @@ stop_attempts() { # <pid|0> <count> → the number of those stops at which the g
   "$mut" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 60 >/dev/null 2>&1 &
   local w=$!
   sleep 1
-  local before; before="$(stop_attempts "$w" 3)"
-  beat 6 prompt                                        # the external event: this session woke
+  beat 6 stop                                          # the arming turn's own stop — not an event
+  local before; before="$(stop_attempts "$w" 3)"       # …and the baseline settles on it in here
+  beat 7 prompt                                        # the external event: this session woke
   local after; after="$(stop_attempts "$w" 4)"
   # positive control: it is still alive, so this is the MUTATION and not a crashed watcher
   kill -0 "$w" 2>/dev/null || false
@@ -924,8 +1042,9 @@ stop_attempts() { # <pid|0> <count> → the number of those stops at which the g
   "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 60 >/dev/null 2>&1 &
   local w=$!
   sleep 1
-  local before; before="$(stop_attempts "$w" 3)"
-  beat 6 prompt
+  beat 6 stop                                          # the arming turn's own stop — not an event
+  local before; before="$(stop_attempts "$w" 3)"       # …and the baseline settles on it in here
+  beat 7 prompt
   local after; after="$(stop_attempts "$w" 4)"
   kill "$w" 2>/dev/null || true
   wait "$w" 2>/dev/null || true

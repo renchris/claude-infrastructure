@@ -18,7 +18,8 @@
 #   --idle-scoped   THE ONE SHAPE THAT IS SAFE UNDER A LIVE /goal (see § IDLE-SCOPED below):
 #                   additionally terminates on any NEW TURN of its own session, so the
 #                   deferral it creates spans exactly the idle window. Defaults --timeout
-#                   3600 and --interval 5 (both still overridable).
+#                   3600 and --interval 5 (both still overridable). Its baseline is taken
+#                   when the ARMING TURN COMES TO REST, not at arm time — see § SETTLE.
 #   --sid <id>      this session's Claude session id — the key of its turn-boundary beat
 #                   (~/.claude/cc-beats/<sid>.json). Required by --idle-scoped in practice;
 #                   omitted, the mode resolves it by pane and REFUSES if it cannot.
@@ -71,9 +72,9 @@
 #
 # The mode is therefore two exit conditions and a fail-closed arm gate:
 #   C1 exit-on-mail   unchanged — the wake half of 2-way comms.
-#   C2 exit-on-turn   a UserPromptSubmit-kind beat newer than the baseline taken at arm ⇒ the session
-#                     was woken by something else, so this awaiter's job is over: exit 0 SILENTLY
-#                     (verdict=stood-down), leaving the next natural Stop registry-quiet.
+#   C2 exit-on-turn   a UserPromptSubmit-kind beat newer than the SETTLED baseline (§ SETTLE) ⇒ the
+#                     session was woken by something else, so this awaiter's job is over: exit 0
+#                     SILENTLY (verdict=stood-down), leaving the next natural Stop registry-quiet.
 #   C3 single-instance   refuse while a live sibling watcher claims any key of the keyset.
 #   C4 refuse-on-pending refuse while mail is already pending — mail waiting means you have work, and
 #                     arming would defer the judgment of state you ALREADY hold.
@@ -85,8 +86,47 @@
 # nicety: an idle-scoped watcher that cannot self-cancel IS the starvation pole, armed deliberately
 # and blessed by a flag.
 #
+# ── § SETTLE — THE BASELINE IS TAKEN WHEN THE ARMING TURN RESTS, NOT WHEN THE ARM RUNS ────────────
+# backlog b60eb29e97dd, measured 2/2 on live sessions (thresholds `seq > 3` and `seq > 6`): every
+# idle-scoped watcher the wake floor demanded stood itself down inside its own arming turn, so the
+# floor spent its whole budget (CC_WAKE_FLOOR_MAX=2) instructing an arm that deterministically
+# no-ops, and the session then idled DEAF with no wake path and nothing left to demand one.
+#
+# WHY THE OFFSET WAS NOT ENOUGH. `BEAT_STOP_ALLOWANCE` sizes the tail of the arming turn at exactly
+# ONE beat — the turn's own trailing Stop. That is the tail of a turn that stops CLEANLY. The arm is
+# instructed BY A STOP BLOCKER (the wake floor blocks, and the block's feedback IS the arming turn),
+# and the arming turn's own stop runs the same battery again: session-continue's 🔧/ship floor,
+# completion-assert's close contract, the floor itself if the heartbeat has not landed yet. Any one
+# of them blocking emits `stop` then `prompt` — baseline+2 — and C2 fires on the cascade the arm was
+# never scoped to. §4 of goal-safe-2way-comms-2026-08-13.md foresaw this and predicted it would
+# "converge one bounce later"; it cannot, because nothing actuates a re-arm on the bounce turn (the
+# floor is TTL'd at 600 s and capped at 2), so the first cascade is terminal.
+#
+# WHY THE SHIPPED SUITE WAS GREEN OVER IT: its fixtures step `prompt → prompt` (seq 5 then 6), a
+# sequence hooks/session-beat.sh CANNOT emit — boundaries alternate. Under the real
+# `prompt(arm) → stop → prompt(cascade)` the offset is spent by the stop and the cascade's prompt
+# stands the watcher down. The fixture, not the reasoning, is what made the offset look sufficient.
+#
+# THE FIX — an ANCHOR the cascade cannot fake. A blocked stop is followed by its continuation prompt
+# within seconds; only the LAST stop of a cascade is followed by silence. So the watcher does not
+# baseline at arm: it holds the baseline forward across every beat, and LOCKS it on the first
+# `stop`-kind beat that has been the latest boundary for CC_AWAIT_SETTLE_S (default 45 s — a whole
+# Stop-hook battery plus the harness's re-invoke, with room). From that lock C2 is exactly as before.
+# Three properties keep it from becoming the starvation pole it is guarding:
+#   · C1 is UNAFFECTED throughout — mail exits the watcher during settle exactly as after it.
+#   · An operator-kind prompt beat past the arm seq stands it down IMMEDIATELY, settled or not: a
+#     typed message is the one wake that is unambiguous without an anchor.
+#   · CC_AWAIT_SETTLE_MAX_S (default 900 s) bounds the search. It LOCKS at the current seq rather
+#     than standing down — a session still churning turns after 15 min is not this watcher's to
+#     judge, and standing down there would disarm the wake path of a session that may simply never
+#     have written a stop beat (force-idle mid-turn).
+# Cost of the anchor: a wake arriving inside the settle window and carrying neither mail nor an
+# operator prompt is folded into the baseline, so the deferral outlives it by one idle window
+# (bounded by --timeout). Cost of not having it: measured, 2/2, a deaf session.
+#
 # Env overrides (tests): CC_BEAT_DIR · CC_AWAIT_BEAT_FRESH_S (arm-time beat staleness bound, default
-# 900s) — plus the CC_MAILBOX_DIR / CC_ROLES_DIR / CC_COMMS_ALARM_DIR / CC_REGISTRY_DIR seams below.
+# 900s) · CC_AWAIT_SETTLE_S · CC_AWAIT_SETTLE_MAX_S — plus the CC_MAILBOX_DIR / CC_ROLES_DIR /
+# CC_COMMS_ALARM_DIR / CC_REGISTRY_DIR seams below.
 #
 # CODES THE HARNESS SYNTHESIZES — NOT OURS, AND NOT 128+signal. If you see this watcher reported as
 # `failed with exit code 143` or `144`, it never reached any exit above; it was SIGTERMed, and the
@@ -354,6 +394,16 @@ BEAT_DIR="${CC_BEAT_DIR:-$HOME/.claude/cc-beats}"
 BEAT_FRESH_S="${CC_AWAIT_BEAT_FRESH_S:-900}"
 BEAT_BASE_SEQ=0
 BEAT_STOP_ALLOWANCE=0
+# § SETTLE state. BEAT_ARM_SEQ is the seq at arm and NEVER advances — it is the operator fast-path's
+# reference, so a turn the operator typed is still recognisable while the baseline is still moving.
+BEAT_ARM_SEQ=0
+BEAT_SETTLED=0
+BEAT_SETTLE_S="${CC_AWAIT_SETTLE_S:-45}"
+BEAT_SETTLE_MAX_S="${CC_AWAIT_SETTLE_MAX_S:-900}"
+BEAT_SETTLE_T0=0          # when the CURRENT seq first became the latest boundary
+BEAT_SETTLE_DEADLINE=0    # arm + BEAT_SETTLE_MAX_S — lock unconditionally at this point
+case "$BEAT_SETTLE_S"     in ''|*[!0-9]*) BEAT_SETTLE_S=45 ;; esac
+case "$BEAT_SETTLE_MAX_S" in ''|*[!0-9]*) BEAT_SETTLE_MAX_S=900 ;; esac
 
 _beat_field() {  # <sid> <jq-path> → field value on stdout; empty on any failure
   local s="$1" p="$2"
@@ -417,6 +467,10 @@ if [ "$IDLE_SCOPED" = 1 ]; then
   # exactly that: the arm turn's own trailing Stop (baseline+1) is excluded, and nothing else is.
   # Erring toward standing down early costs one bounce turn; erring the other way costs the goal.
   [ "$(_beat_field "$SID" '.kind')" = "prompt" ] && BEAT_STOP_ALLOWANCE=1
+  # § SETTLE: the offset above is now the SEED of a baseline that keeps moving, not the baseline.
+  BEAT_ARM_SEQ="$BEAT_BASE_SEQ"
+  BEAT_SETTLE_T0="$_now"
+  BEAT_SETTLE_DEADLINE="$(( _now + BEAT_SETTLE_MAX_S ))"
   # (C4) MAIL ALREADY PENDING = you have work. Arming here would defer the judgment of state the
   #      session already holds, which is the deferral this mode exists to make impossible.
   for _k in $(_keys); do
@@ -432,19 +486,62 @@ if [ "$IDLE_SCOPED" = 1 ]; then
     fi
   done
   echo "$_banner" >&2
-  echo "cc-await-ping: idle-scoped — will also stand down on any new turn of [$SID] (beat seq > $(( BEAT_BASE_SEQ + BEAT_STOP_ALLOWANCE )))" >&2
+  echo "cc-await-ping: idle-scoped — will also stand down on any new turn of [$SID] (beat seq > $(( BEAT_BASE_SEQ + BEAT_STOP_ALLOWANCE )), PROVISIONAL: the baseline locks on the first stop-kind beat that rests ${BEAT_SETTLE_S}s, or at ${BEAT_SETTLE_MAX_S}s, so the arming turn's own completion cannot stand this watcher down)" >&2
 fi
 
 # ── C2: THE EXIT THAT MAKES THE DEFERRAL IDLE-SCOPED ──────────────────────────────────────────────
 # Consulted every poll, AFTER the mail check: if a ping and a new turn both happened, the ping is the
 # thing the session must not lose, and delivering it also ends the watch.
-_turn_moved() {  # 0 iff this session has taken a new turn since the arm baseline
-  local seq
+_turn_moved() {  # 0 iff this session has taken a new turn since the SETTLED baseline (§ SETTLE)
+  local seq kind
   [ "$IDLE_SCOPED" = 1 ] || return 1
   seq="$(_beat_field "$SID" '.seq')"; case "$seq" in ''|*[!0-9]*) return 1 ;; esac
+  kind="$(_beat_field "$SID" '.kind')"
+  # THE OPERATOR FAST-PATH, and it is measured against the ARM seq, not the moving baseline: a
+  # typed message is the one wake that needs no anchor to be recognised, and it must not be foldable
+  # into a settle window. `who` is only ever `operator` on a prompt beat (session-beat.sh:60-68).
+  if [ "$seq" -gt "$BEAT_ARM_SEQ" ] && [ "$kind" = "prompt" ] \
+     && [ "$(_beat_field "$SID" '.who')" = "operator" ]; then return 0; fi
+  if [ "$BEAT_SETTLED" != 1 ]; then _settle "$seq" "$kind" || return 1; fi
   # A Stop-kind beat at exactly baseline+1 is the arm turn's OWN trailing stop — never a new turn.
   if [ "$seq" -gt "$(( BEAT_BASE_SEQ + BEAT_STOP_ALLOWANCE ))" ]; then return 0; fi
-  [ "$seq" -gt "$BEAT_BASE_SEQ" ] && [ "$(_beat_field "$SID" '.kind')" = "prompt" ] && return 0
+  [ "$seq" -gt "$BEAT_BASE_SEQ" ] && [ "$kind" = "prompt" ] && return 0
+  return 1
+}
+
+# ── § SETTLE — hold the baseline forward until the ARMING TURN has come to rest ────────────────────
+# Called only while unsettled. rc 0 = the baseline is now LOCKED and the caller may evaluate C2 on
+# this same poll; rc 1 = still settling, so this beat is arm-turn tail and carries no verdict.
+_settle() {  # <seq> <kind>
+  local seq="$1" kind="$2" now
+  now="$(date +%s 2>/dev/null || echo 0)"
+  # Every advance is tail until proven otherwise: carry the baseline (and its allowance) forward and
+  # restart the rest clock. This is what makes an arbitrarily long block-cascade survivable — the
+  # cascade cannot outrun a baseline that moves with it.
+  if [ "$seq" -ne "$BEAT_BASE_SEQ" ]; then
+    BEAT_BASE_SEQ="$seq"
+    BEAT_STOP_ALLOWANCE=0
+    [ "$kind" = "prompt" ] && BEAT_STOP_ALLOWANCE=1
+    BEAT_SETTLE_T0="$now"
+    return 1
+  fi
+  # THE ANCHOR. A blocked stop is followed by its continuation prompt within seconds; only the LAST
+  # stop of a cascade is followed by silence. Resting on one for the full window is therefore the
+  # arming turn's end, stated in the only terms the beat file can prove.
+  if [ "$kind" = "stop" ] && [ "$(( now - BEAT_SETTLE_T0 ))" -ge "$BEAT_SETTLE_S" ] 2>/dev/null; then
+    BEAT_SETTLED=1
+    BEAT_STOP_ALLOWANCE=0     # the tail is behind us; from here every advance is a new turn
+    echo "cc-await-ping: idle-scoped — arming turn settled at beat seq ${BEAT_BASE_SEQ} (stop-kind, rested ${BEAT_SETTLE_S}s); standing down from here on beat seq > ${BEAT_BASE_SEQ}" >&2
+    return 0
+  fi
+  # THE BOUND. Lock where we are rather than stand down: a session still churning after
+  # BEAT_SETTLE_MAX_S is not this watcher's to judge, and a session that simply never wrote a stop
+  # beat (force-idled mid-turn) still needs the wake path this watcher IS.
+  if [ "$BEAT_SETTLE_DEADLINE" -gt 0 ] && [ "$now" -ge "$BEAT_SETTLE_DEADLINE" ] 2>/dev/null; then
+    BEAT_SETTLED=1
+    echo "cc-await-ping: idle-scoped — settle bound reached (${BEAT_SETTLE_MAX_S}s with no resting stop beat); locking the baseline at seq ${BEAT_BASE_SEQ} (+${BEAT_STOP_ALLOWANCE}) and evaluating C2 from here" >&2
+    return 0
+  fi
   return 1
 }
 

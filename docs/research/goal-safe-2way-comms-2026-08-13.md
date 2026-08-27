@@ -123,7 +123,7 @@ files, the owner guard, the signal verdicts. The mode adds two exit conditions a
 | Clause | Behaviour | Why |
 |---|---|---|
 | C1 exit-on-mail | unchanged: new inbox line → print body → exit 0 → task completes → **completion notification wakes the idle model with the mail** (A5) | the wake half of 2-way comms, as today |
-| C2 exit-on-turn | poll `~/.claude/cc-beats/<sid>.json`; any **UserPromptSubmit-kind** beat with `seq` > baseline-at-arm → exit 0 silently, `verdict=stood-down` | the session was woken by something else (typed message, task notification, asyncRewake fire). The awaiter's deferral job is over; the next natural Stop is registry-quiet and the goal judges the NEW state. Stop-kind beats are excluded so the arm-turn's own trailing Stop cannot self-cancel it |
+| C2 exit-on-turn | poll `~/.claude/cc-beats/<sid>.json`; any **UserPromptSubmit-kind** beat with `seq` > baseline-at-arm → exit 0 silently, `verdict=stood-down` | the session was woken by something else (typed message, task notification, asyncRewake fire). The awaiter's deferral job is over; the next natural Stop is registry-quiet and the goal judges the NEW state. Stop-kind beats are excluded so the arm-turn's own trailing Stop cannot self-cancel it ⚠️ *"baseline-at-arm" was superseded 2026-08-27 — the baseline is taken when the arming turn RESTS (§4.1 delta 5); at-arm made the whole mode a no-op* |
 | C3 single-instance | refuse to arm when a live sibling claim exists for the keyset (the `.watchers` claim machinery, `cc-await-ping:179-196`) | overlapping awaiters re-create d33abf12's permanent deferral |
 | C3′ **declare the mode** — a `mode=idle-scoped` line in the `.watching` marker AND in the per-pid `.watchers/<key>.<pid>` claim, re-stamped every poll beside the pid | **REQUIRED OF B3, and the reader already shipped** (E2, 2026-08-15): `mailbox_wake_idle_scoped` in `hooks/lib/mailbox-pending.sh` accepts EITHER file, and its absence means "plain" — so an idle-scoped watcher that omits the stamp will be reported to its own session as goal-blocking, with a `kill` beside it. The claim is the sturdier of the two: `_unbeat`'s hand-over rewrites the marker on behalf of a sibling whose mode it does not know. | the drain must tell a sanctioned awaiter apart from the 14400 s park it is replacing, and it can only do that from what the watcher writes |
 | C4 refuse-on-pending | refuse to arm while `mailbox_has_pending` is true on any key | mail waiting = you have work; arming would defer the judgment of state you already hold |
@@ -153,6 +153,15 @@ never periodic. Default `--interval` for the mode: 5 s (beat file is one small s
 the arm-turn's stop, the continuation fires a UserPromptSubmit beat and self-cancels the awaiter —
 converging one bounce later. Discipline unchanged by this doc: the arm is the turn's LAST action on
 a clean, committed state, which the close protocol already demands.
+
+> ⚠️ **THAT CONVERGENCE CLAIM IS REFUTED — measured 2/2, backlog `b60eb29e97dd`, fixed by delta 5 in
+> §4.1.** It cannot converge, because nothing actuates a re-arm on the bounce turn: the wake floor is
+> the only producer that instructs the arm, and it is TTL'd at 600 s and capped at
+> `CC_WAKE_FLOOR_MAX=2`. So the first cascade is terminal, not a bounce. And the cascade is not an
+> edge case here — **the arm is instructed BY a Stop blocker**, so the arming turn is itself a
+> continuation turn, and its own stop runs the same battery again. Live sessions showed thresholds
+> `seq > 3` and `seq > 6` standing their watchers down inside the arming turn, the floor spending both
+> attempts on an arm that deterministically no-ops, and the session then idling **deaf**.
 
 **Under NO live goal:** the bare 14400 s form remains correct and remains the nag's instruction —
 nothing to starve, and the parked watcher is the idle wake. The two modes are selected by the same
@@ -186,6 +195,29 @@ C1–C7 shipped as written. Four things the build settled that the spec left ope
    kill-switched; the only thing the goal changes is WHICH command the block names. **One case still
    abstains: mail already pending** — the session has work, C4 would refuse the arm for that very
    reason, and the goal-forced turns deliver it, so blocking would be a pure round-trip.
+
+5. **THE BASELINE IS TAKEN WHEN THE ARMING TURN RESTS, NOT WHEN THE ARM RUNS** (backlog
+   `b60eb29e97dd`, landed 2026-08-27). Delta 3's offset sizes the arm turn's tail at exactly ONE beat
+   — correct for a turn that stops *cleanly*, and the arm never gets one: it is instructed by a Stop
+   blocker, and the arming turn's own stop runs that same battery again. Any blocker there emits
+   `stop` then `prompt`, i.e. baseline+2, and C2 fires on the cascade it was never scoped to. Measured
+   2/2 on live sessions; the floor then spent both attempts (`CC_WAKE_FLOOR_MAX=2`) on an arm that
+   deterministically no-ops and the session idled deaf, which is worse than either pole this mode
+   replaced. **Why the suite was green over it:** its fixtures stepped `prompt → prompt` (seq 5 then
+   6), a sequence `hooks/session-beat.sh` cannot emit — boundaries alternate. The fixture, not the
+   reasoning, is what made the offset look sufficient.
+   **The anchor:** a blocked stop is followed by its continuation prompt within seconds; only the LAST
+   stop of a cascade is followed by silence. So the watcher holds the baseline forward across every
+   beat and LOCKS it on the first `stop`-kind beat that has been the latest boundary for
+   `CC_AWAIT_SETTLE_S` (45 s). Cascade length is then not a bound anyone has to guess. Three clauses
+   keep it from becoming the starvation pole it guards: C1 is untouched throughout (mail exits the
+   watcher during settle exactly as after it); an **operator**-kind prompt beat past the arm seq
+   cancels immediately, settled or not; and `CC_AWAIT_SETTLE_MAX_S` (900 s) bounds the search by
+   **locking** the baseline where it stands rather than standing down — a session still churning after
+   15 min is not this watcher's to judge, and a session that never wrote a stop beat at all
+   (force-idled mid-turn) still needs the wake path this watcher *is*. Residual cost: a wake arriving
+   inside the settle window carrying neither mail nor an operator prompt is folded into the baseline,
+   so the deferral outlives it by one idle window, bounded by `--timeout`.
 
 Also fixed in passing, because C3 rested on it: `_claim_live`'s mtime read used the repo's usual
 `stat -f %m … || stat -c %Y …` order, which is silently WRONG on coreutils (`-f` is `--file-system`
