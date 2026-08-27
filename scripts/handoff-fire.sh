@@ -5629,11 +5629,23 @@ if [ "${1:-}" = "__recycle" ]; then
         cr)
           hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;;
         retype)
+          # ROUTED THROUGH THE SANCTIONED HELPER (2026-08-27, backlog 01ab05685857). This arm used
+          # to hand-roll the paste → read-back → CR contract with a raw `session send` and a byte
+          # equality test against "/exit", which is `it2_paste_submit_verified`'s contract written a
+          # second time and weaker in three ways: no ownership gate, no bracketed-paste atomicity,
+          # and a read-back that cannot tell a mangled paste from an unreadable box. It was also the
+          # last site `scripts/typed-send-lint.sh` scanned RED on trunk — a tree-grep, so every
+          # postland sweep stamped RED on it deterministically and no GREEN stamp could be minted;
+          # that starvation is the condition the backlog item was filed off.
+          # PRE-WAIT 0 IS DELIBERATE, not a shortcut: `recycle_nudge_decision` returned `retype`,
+          # which IS the proof the composer was empty a moment ago, and this call sits inside a
+          # while-loop whose `waited` counter counts its own sleeps — a blocking pre-wait here would
+          # silently stretch the 150/300/600s checkpoints past their wall-clock meaning. With 0 the
+          # helper re-checks once and returns HELD (rc 3) rather than blocking, which is the same
+          # decision the old code reached by never asking.
           if [ "$waited" = 60 ]; then
-            hf_bounded "$IT2" session send -s "$RSID" "/exit" >/dev/null 2>&1 || true
-            sleep 1
-            nc="$(composer_content "$IT2" "$RSID")" || nc=""
-            if [ "$nc" = "/exit" ]; then hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true; fi
+            it2_paste_submit_verified "$IT2" "$RSID" "/exit" 0 \
+              || echo "→ nudge@${waited}s retype NOT submitted (rc $?) — the composer was not proven; the ${rcy_wait_max}s refusal below still owns the outcome"
           fi ;;
         *)
           echo "→ nudge@${waited}s HELD ($nd): composer is not a stranded /exit — a CR here would submit someone else's buffer"
