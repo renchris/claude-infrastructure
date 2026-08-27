@@ -473,11 +473,19 @@ process-level instruments.** Recording it so no one else re-derives it and over-
    away from wide waves on one account far more sharply than quota alone does. Test: `fs_usage -w -f
    filesys | grep oauth_refresh` on one account across a known expiry instant, with a teammate wave
    live.
-3. **Two repo documents give opposite advice on context size and neither cites the other.**
+3. ~~**Two repo documents give opposite advice on context size and neither cites the other.**~~
+   ✅ **CLOSED 2026-08-24** (class A, backlog `564d151b76e5`).
    `scaling-bottlenecks-2026-08-09.md:36,150` ("68% of quota cost is cache-read ⇒ halving context ≈
    +50% capacity", carried into standing policy) vs `exchange-rate.md:45,223` ("cache-READ is ≤1/750
-   of an output token… it authorises MORE context"). One of them is live guidance and wrong. This
-   needs a filed decision, not another measurement.
+   of an output token… it authorises MORE context"). ~~One of them is live guidance and wrong. This
+   needs a filed decision, not another measurement.~~ **Ruled: the measured rate governs.** Struck at
+   both sites and the two docs now cite each other; ruling + arithmetic in
+   `scaling-bottlenecks-2026-08-09.md` **§2a**. It survives §C6's correct *bound-not-a-point* caveat
+   on the cache-read coefficient, because the 68% premise fails under the API-list hypothesis too
+   (~28%), so the lever is worth 0% to ≤+16% under either fit. **Propagation completed 2026-08-27:**
+   the same premise had also reached the `jcode-due-diligence-2026-08-11` wave (its C6 verdict, rank-1
+   lever L7, and L6's eviction pricing) and axis `07-accounts-api.md` §4/§6.4 — the origin of the
+   composition itself — none of which were in the 2026-08-24 commit's file set. All are now struck.
 4. **The finder's `RMSE=1.73` and its published 17.7 pp residual cannot both be true** (§C5).
    Whichever way that resolves, the 5-hour exchange rate should be published with an interval and a
    condition number, and the repo should pick one of the two competing fits (the `USAGE_TELEMETRY_100P`

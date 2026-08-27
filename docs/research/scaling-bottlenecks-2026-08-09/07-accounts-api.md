@@ -111,8 +111,15 @@ cap is the budget. Any policy that optimises the 5h number is optimising the wro
 | duty cycle (active / wall-span) | 0.83 | — | — | — |
 | per-turn context (in+cw+cr) | 199,628 tok | — | — | — |
 
-**Cost composition: cache-read 68.0% · cache-write 18.0% · output 14.0% · fresh input 0.0%.**
-This is the single most actionable number in the file — see §6.4.
+~~**Cost composition: cache-read 68.0% · cache-write 18.0% · output 14.0% · fresh input 0.0%.**
+This is the single most actionable number in the file — see §6.4.~~
+🚨 **STRUCK 2026-08-24 — REFUTED. This composition is MODELLED, not metered**: it applies the
+published API price multipliers (cache-read 0.10×, §3) to measured token counts and assumes plan
+quota bills on the same schedule. A direct meter experiment says it does not — Opus-5 cache-read is
+**0.000 pp/Mtok** (p95 ≤ 0.0017 over ≥590M tokens), replicated on a disjoint bucket. Every
+downstream use of this line — §6.4's lever above all — falls with it. Measurement:
+`docs/research/usage-telemetry-100p-2026-08-16/exchange-rate.md`; ruling (class A, backlog
+`564d151b76e5`): `docs/research/scaling-bottlenecks-2026-08-09.md` **§2a**.
 
 Model mix by $eq this weekly window: `next` opus 426 / sonnet 1.5 · `next4` opus 227 · `next3`
 opus 2104 / **fable 80.5** / haiku 0.0 · `next2` opus 406 / fable 1.0 / haiku 0.3. Effectively an
@@ -161,9 +168,12 @@ per week fleet-wide*, or add accounts (§6.2).
   see 5c).
 - **Cache reads are exempt from ITPM.** "For most Claude models, only uncached input tokens count
   toward your ITPM rate limits… `cache_read_input_tokens` ✗ **Do NOT count**." Same page. This is
-  why Claude Code sessions are rate-limit-cheap and quota-expensive: the 5h/weekly quota **does**
-  bill cache reads (at 0.1×, and they are 68% of our cost), while the per-minute limiter ignores
-  them entirely.
+  why Claude Code sessions are rate-limit-cheap ~~and quota-expensive: the 5h/weekly quota **does**
+  bill cache reads (at 0.1×, and they are 68% of our cost)~~ **— and, measured 2026-08-16,
+  quota-cheap on the same tokens: the 5h/weekly quota bills Opus-5 cache reads at 0.000 pp/Mtok, so
+  BOTH limiters effectively ignore them** (see §4's struck composition), while the per-minute limiter ignores
+  them entirely. *The ITPM exemption asserted here is unaffected — it is an Anthropic-documented
+  rate-limit rule, independent of price.*
 - Start-tier Opus 5 reference limits: **1,000 RPM / 2,000,000 ITPM / 400,000 OTPM**. Opus 5 has its
   own bucket, separate from Opus 4.x. Fable 5 is much tighter (500K ITPM / 100K OTPM at Start).
 - Third-party figures ("Max 20x = 24-40 Opus hours/week") are **not comparable** to §2b's 164 h and
@@ -287,13 +297,26 @@ constraints on top:
   relogin or account rebuild that clusters the resets would convert four independent budgets into
   one synchronized one.
 
-### 6.4 · The largest quota lever is context, not accounts
+### 6.4 · ~~The largest quota lever is context, not accounts~~ — 🚨 **REFUTED 2026-08-24; this section is the origin of a lever that does not exist**
 
-**68% of every quota dollar is cache-read**, and cache-read scales linearly with per-turn context
+🚨 **Do not act on this section.** Its premise (§4's 68% composition) was modelled from API list
+multipliers, never metered. The meter reads Opus-5 cache-read at **0.000 pp/Mtok**, so the lever
+below is worth **0% to ≤+16%, never +50%** — and the corrected prescription is the *opposite*:
+`usage-telemetry-100p-2026-08-16/exchange-rate.md` R1, *"stop treating long cached context as
+quota-expensive… it authorises MORE context."* The premise fails under the API-list hypothesis too
+(cache-read ≈ **28%** of dollar cost, not 68%). Ruling + full arithmetic: `scaling-bottlenecks-2026-08-09.md`
+**§2a** (class A, backlog `564d151b76e5`).
+
+⚠️ **Context Stewardship is unaffected and was never downstream of this.** `CLAUDE.md` §
+Context Stewardship is argued from the hard `Prompt is too long` ceiling and from decision rot —
+never from quota. What is struck is this section's attempt to *re-found* it as a capacity policy.
+
+~~**68% of every quota dollar is cache-read**, and cache-read scales linearly with per-turn context
 (median **199,628 tokens**). Halving working context ≈ **−34% quota draw ≈ +50% sustainable active
 sessions** — a bigger multiplier than a fifth account (+25%). CLAUDE.md § Context Stewardship's
 recycle thresholds are therefore a **capacity policy**, not only a quality policy, and `/handoff`
-at 35% idle fill is worth real active-hours. Second lever: **model down-tier**. Sonnet 5 is 0.6× Opus
+at 35% idle fill is worth real active-hours.~~ Second lever (**this one survives** — it prices
+*output*, which the meter confirms is what quota actually bills): **model down-tier**. Sonnet 5 is 0.6× Opus
 per token (1.67× the active-hours); Haiku 4.5 is 0.2× (5×). The fleet is ~99% Opus by $eq today,
 so this lever is entirely unspent.
 
@@ -333,9 +356,13 @@ so this lever is entirely unspent.
    10 s timeout at 150 sessions. Measured — it does not (§6.5). The scaling risk there is the
    fail-open *direction*, not the budget.
 5. **Axis I nearly assumed irrelevant:** per-minute rate limits. They are irrelevant *at the design
-   point* (§5b) — but only because cache reads are ITPM-exempt while being 68% of quota cost. That
+   point* (§5b) — but only because cache reads are ITPM-exempt ~~while being 68% of quota cost. That
    asymmetry is the reason quota and rate-limits give opposite answers, and it is the single fact
-   that makes 150 resident affordable at all.
+   that makes 150 resident affordable at all.~~ 🚨 **REVISED 2026-08-24: the asymmetry is gone,
+   and the conclusion gets STRONGER, not weaker.** Cache reads are exempt from ITPM *and* measured
+   at 0.000 pp/Mtok on quota, so quota and rate-limits now give the **same** answer rather than
+   opposite ones. 150 resident is affordable for a simpler reason than this doc found: a resident
+   session's re-read costs nothing on either limiter. See `scaling-bottlenecks-2026-08-09.md` §2a.
 
 ---
 

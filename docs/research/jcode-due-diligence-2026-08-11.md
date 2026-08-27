@@ -50,12 +50,56 @@ Six of nine clauses survive with corrections; three do not. Graded against this 
 | "~507 MB of MCP children that no budget counted" | **Half right** | *"No budget counted"* is true — `scripts/lib/capacity-admit.sh` has no Model Context Protocol (MCP) term at all. **507 MB is dead**: it was `ps` RSS (the instrument `session-capacity-ceiling-2026-08-09.md` §2.4 bans) over one snapshot. The term is **per-config and bimodal**, not a per-session constant: ~322 MB with the server resident, ~600 MB steady / ~1,036 MB peak once a browser is actually driven (vmmap phys_footprint, transitive ppid closure, 2026-08-10). Token-matched censuses read 62–88 MB per *live* session because they are structurally blind to the isolated Chrome + 3 Framework helpers that `chrome-devtools-mcp --isolated` spawns — no `mcp` token in their argv. **Forecast risk the statement omits: 75 of 79 `.mcp.json` files on this box declare chrome-devtools**, so today's ~12–21% hosting rate is a property of the current working-directory mix, not of the fleet. |
 | "capping near ~100 resident" | **Arithmetic, never observed** | Max concurrency ever measured on this box is 31. Honest range: ~103 (real desktop state) to ~139 (against total RAM at 450 MB steady). |
 | "only ~4-8 simultaneously active on 10 cores" | **Number right, cause wrong** | 2.5–4.9 runnable threads per active session is measured. The ceiling is a **policy constant** — `CC_HW_DEFAULT_MAX_LOAD_PER_CORE=2.0 × 10 cores` at `capacity-admit.sh:121` — not silicon. The box ran load 44.4 during the audit, degraded but alive. jcode cannot raise a policy constant; an editor can. |
-| "and on 4 accounts' quotas" | **Correct, and understated** | ~3.9 concurrently-active sessions sustainable 24/7. Cache-read is 68% of spend at ~200K median contexts, so **halving context ≈ +50% active capacity — larger than adding a fifth account**. Provider-side; invariant under every local runtime swap. |
+| "and on 4 accounts' quotas" | **Correct** ~~and understated~~ | ~~~3.9~~ → **6.2–11.0** concurrently-active sessions sustainable 24/7. ~~Cache-read is 68% of spend at ~200K median contexts, so **halving context ≈ +50% active capacity — larger than adding a fifth account**.~~ 🚨 **STRUCK 2026-08-24 — the "understated" half is REFUTED; see §Correction below.** The clause itself stands: quota binds, it is provider-side, and it is invariant under every local runtime swap. |
 | "crashes were never capacity, but compressor-segment exhaustion from unbounded toolchain bursts" | **Best-evidenced clause; slight over-reach** | 100% of `vm.compressor_segment_limit` consumed at ~28% mean segment fill, with kernel `memoryPressure` reading False. 5 of 8 ledgered events are this class (panic #2 was a spinlock timeout, incident #0 a WindowServer freeze). Ignition is always a node dev-toolchain burst — **harness-independent**. This clause is an argument *against* migrating for crash reasons. |
 | "now frozen by the armed sentinel" | **Overstated** | It is armed and has now genuinely fired once (`SIGSTOP pid=23125 rss_kb=1732176 comm=node`, 2026-08-10T07:09Z). But the daemon holds fd on a 42,679-byte image while the deployed path is HEAD's 52,618 bytes — **the stale-bytes defect has recurred** — there is no `SIGCONT` sender anywhere in the tree, and it is a burst guard that produces no session ceiling. |
 | the three remedies | **Mixed** | MCP consolidation: supported, but it is a one-line edit in *another repo's* `.mcp.json`. Active-count admission: **unbuilt** (the router already keys on active `k_work`; the machine-side gate does not). Cloud lane: **no longer blocked** — a full round trip executed 2026-08-11 (`cloud-reconcile: 2 ok`, VM push landed as `9096fc62`). None of the three requires a different agent CLI. |
 
 **The framing error worth naming.** "Per-session memory" is stated as the bottleneck and "the crashes were never capacity" in the same sentence — but a burst *is* a memory term, just not a resident one, and the two bind at different design points. They cannot both be the true bottleneck. The honest single sentence: *resident memory is the term with the most headroom, active concurrency and quota are the terms that bind, and bursts are what kills the box.*
+
+---
+
+## Correction 2026-08-24 — this wave's quota arithmetic inherited a refuted premise
+
+**Do not read the quota numbers in this document without this section.** Three of its findings —
+the `"and on 4 accounts' quotas"` verdict above, **rank-1 lever L7**, and
+[`ranked-levers.md`](jcode-due-diligence-2026-08-11/ranked-levers.md) L6 — priced quota from
+`scaling-bottlenecks-2026-08-09.md`'s composition model (**cache-read 68.0% / cache-write 18.0% /
+output 14.0%** at ~200K median contexts) and from its derived lever *"halving context ≈ +50% active
+capacity"*. That premise has since been **refuted by direct measurement** and struck at source.
+
+| | This wave inherited (2026-08-11) | Measured (`usage-telemetry-100p-2026-08-16/exchange-rate.md`) |
+|---|---|---|
+| cache-read price | 0.10× multiplier, **68% of quota cost** | Opus-5 **0.000 pp/Mtok** (p95 ≤ 0.0017 over ≥590M tokens) |
+| the lever | *"halving context ≈ +50% active capacity"* | worth **0% to ≤ +16%**, never +50% — and R1 gives the **opposite** prescription: *"it authorises MORE context"* |
+| sustainable concurrent-active | ~3.9 | **6.2–11.0** (model-free, `orchestration-units-2026-08-19/A6-VERIFY-quota-economics.md` §C4) |
+
+**Ruling: class A, 2026-08-24 — the measured rate governs** (backlog `564d151b76e5`). Full reasoning,
+including why the 68% premise fails under the API-list hypothesis too (**~28%**, not 68%), is in
+[`scaling-bottlenecks-2026-08-09.md` **§2a**](scaling-bottlenecks-2026-08-09.md). This document was
+not in that commit's file set; the correction is propagated here on 2026-08-27.
+
+**What changes here, and what does not:**
+
+1. **The `"4 accounts' quotas"` clause survives; only "understated" dies.** Quota still binds, it is
+   still provider-side, and it is still invariant under a runtime swap — none of which rested on the
+   cache-read share. What dies is the claim that the operator *understated* it by omitting a
+   +50% lever that does not exist.
+2. **L7 loses its quota half, and that half's sign INVERTS.** The resident-axis arithmetic
+   (571 → 297 MB ⇒ 148 resident from 132) is a phys_footprint measurement and is untouched. But
+   capping context does not buy active capacity — under the measured rate a cached re-read is free,
+   so R1 *authorises* more context. **L7 is therefore no longer "the only lever that moves both
+   axes"; it moves one.** Its ~1-day effort and 0.95 reversibility are unchanged, so it remains
+   worth doing on memory grounds alone — the claim to drop is the two-axis framing, not the lever.
+3. **L6's pricing is wrong in the direction that made it look cheap.** "A cold resume pays ~10× on
+   ONE turn's input — repaid after ~10 subsequent turns" assumed warm re-reads cost 68% of spend. At
+   0.000 they cost nothing, so there is no stream of savings to repay the resume out of: eviction's
+   quota cost is the cache-**creation** on every rehydration, not a discount that amortises. L6's
+   *decision-relevance* stands — the cache TTL is still the number that decides it — but it is no
+   longer "eviction is quota-free".
+4. **Nothing in this document's VERDICT moves.** `DO-NOT-MIGRATE` rested on the cost gate, the
+   coupling census, and release maturity. The quota term was never the load-bearing part of the
+   migration case, and correcting it downward-in-confidence does not create one.
 
 ---
 
@@ -126,7 +170,7 @@ Scored `(sessions or protection gained × reversibility) / agent-days`.
 
 | # | Lever | Arithmetic | Effort | Rev. |
 |---|---|---|---|---|
-| **1** | **L7 context-ceiling cap** (`CLAUDE_CODE_DISABLE_1M_CONTEXT` / cap 200K) | Cost model, phys_footprint, n=21, R²=0.71: `MB = 228 + 0.343 × K-input-tokens + 0.071 × min`. Every live session runs a 1M window with autocompact off ⇒ a 343 MB per-session ceiling. Capping at 200K: 571 → 297 MB ⇒ 44 GB / 0.297 = **148 resident, from 132**. And on the quota side, cache-read is 68% of spend ⇒ **+~50% active capacity**. The only lever that moves both axes. | ~1 day | 0.95 |
+| **1** | **L7 context-ceiling cap** (`CLAUDE_CODE_DISABLE_1M_CONTEXT` / cap 200K) | Cost model, phys_footprint, n=21, R²=0.71: `MB = 228 + 0.343 × K-input-tokens + 0.071 × min`. Every live session runs a 1M window with autocompact off ⇒ a 343 MB per-session ceiling. Capping at 200K: 571 → 297 MB ⇒ **148 resident, from 132** — this half stands, and it is measured on memory, not on quota. ~~And on the quota side, cache-read is 68% of spend ⇒ **+~50% active capacity**. The only lever that moves both axes.~~ 🚨 **STRUCK 2026-08-24 — the quota half is REFUTED and its sign INVERTS; see §Correction. L7 is a RESIDENT-axis lever only.** | ~1 day | 0.95 |
 | **2** | **L2 burst bound + fix the admission term** | 5 kernel deaths in 11 days; gains 0 resident, protects all 150. `cc_hw_headroom_gb()` counts anonymous-inactive as reclaimable, over-reporting by ≥10 GB with the error *growing* under fan-out; add a process-class cardinality term that would have caught the 736-process node swarm ~60 s early. Both are small edits to one live-symlinked library. | ~2 days | 0.9 |
 | **3** | **L1 MCP opt-in** (edit reso's `.mcp.json`, not ours) | **Removes** the term rather than pooling it: 1,050 MB freed today; at 150 sessions holding ~21% hosting, ~11.2 GB ≈ **33 sessions**, and it keeps the three HTTP servers. Strictly dominates jcode's best case (which leaves one 350 MB stack and drops the HTTP servers). | ~1 hour | 1.0 |
 | **4** | **L6 idle eviction** — *blocked on one 0.5-day measurement* | `claude --resume` appends to the same transcript with a fresh process, so a closed session is disk-durable and rehydratable at the 228 MB floor. If the Anthropic prompt cache really goes cold at ~5 min idle, eviction is quota-free and **150-resident is an incoherent target**. Measure the cache TTL first; nothing else here is worth building until it is settled. | 0.5 day to decide | 1.0 |
