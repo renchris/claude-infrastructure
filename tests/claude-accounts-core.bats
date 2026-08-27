@@ -1849,11 +1849,27 @@ assert "next3 strand ~5pp of 8 · p96 of its own 3h burns" in line, line
 assert "next no strand" in line, line
 assert "⚠ WALL trajectory" in line, line
 assert line.rstrip().split(chr(10))[-1].strip().startswith("next no strand"), line
-# ...and its burn RATIO survives unchanged, while the >100 PROJECTION does not render as a number
-assert "1.62× burn" in line, line
-assert "162" not in line and "163" not in line, line     # the RATIO, never the ~162% projection
+# ...and its WALL FLAG survives, while neither the >100 projection NOR the mid-week burn ratio
+# renders as a number.
+#
+# ASSERTION UPDATED IN PLACE, invariant sharpened (weekly-reset-utilization-2026-08-25 §3/§6).
+# This arm used to read `assert "1.62× burn" in line` — the linear burn ratio at phase 0.32.
+# That figure was measured wrong by a mean 46 pp at day 3 and 8.7x worse than a constant
+# predictor mid-window, so `wall_projection` now abstains below phase 0.90 and the ratio is
+# absent here. Restoring the old spelling would restore the reading §6 names as un-actionable.
+# The flag it used to ride alongside is NOT dropped: it moved to the 48h nowcast
+# (`wk_wall_traj`), which is why the assertion above it still holds on this same row.
+assert "× burn" not in line, line                        # phase 0.32 — the projector ABSTAINS
+assert "162" not in line and "163" not in line, line     # and never the ~162% projection
+assert "1.62" not in line, line                          # nor the ratio it was rendered from
 assert "BEHIND" not in line, line                        # 47ddbf47c DELETED it: on 2026-08-16 three freshly-reset windows each read
                                                          # BEHIND, which is correct and reads as gross under-utilisation.
+# CONTROL for the two arms above — without it, "× burn not in line" is satisfied by DELETING the
+# render, and the widened floor would read as a feature it is not. Same shape, late phase: 10 h
+# left of 168 is phase 0.940, past the 0.90 floor, so the projector speaks again and the row
+# carries all three parts.
+late = ca.pace_line([row(acct="next", weekly_pct=95, weekly_reset_h=10.0, burn_wk_ewma_ph=0.6)])
+assert "next no strand — 1.01× burn, ⚠ WALL trajectory" in late, late
 # an abstention renders as the WORD plus its reason, never as a zero (L2)
 ab = ca.pace_line([row(acct="next2", weekly_pct=13, weekly_reset_h=122.8, burn_wk_span_h=4.1)])
 assert "next2 strand unknown (span 4.1h < 6.8h)" in ab, ab

@@ -255,3 +255,80 @@ print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
+
+@test "RP-17: the ⚠ WALL flag is the NOWCAST's, so it survives wall_projection's widened floor" {
+  # WHY THIS CASE EXISTS. `pace_line` used to read its wall flag off `wall_projection()`'s
+  # `proj >= 100`. That projector now abstains below phase 0.90 (it is wrong by a mean 46 pp
+  # mid-week — weekly-reset-utilization-2026-08-25 §3), which would have silently taken the
+  # warning down with it for 90% of every window. The flag was re-sourced onto `wk_wall_traj`,
+  # the same 48h estimator that already decides `s < 0.5` one branch above it in the renderer.
+  # RP-16 is the live proof (phase 0.32, flag present); this case pins the contract underneath
+  # it so the coupling cannot be undone without a red.
+  run python3 -c "$LOAD"'
+mid = {"acct": "next", "weekly_pct": 52, "weekly_reset_h": 114.0, "burn_wk_ewma_ph": 1.725}
+# the source it can no longer read: mid-week, the linear projector has nothing to say
+assert ca.wall_projection(mid) == (None, None), ca.wall_projection(mid)
+# ...and the flag is up anyway, because the nowcast says 52 + 1.725*114 = 248 >= 100
+assert ca.wk_wall_traj(mid) is True, mid
+assert "⚠ WALL trajectory" in ca.pace_line([mid]), ca.pace_line([mid])
+# CONTROL: the flag DISCRIMINATES. Same phase, a rate that lands the window under the wall ->
+# zero strand is still zero (99.9 > 99.5) but this is the target state, not a warning.
+near = {"acct": "next", "weekly_pct": 52, "weekly_reset_h": 114.0, "burn_wk_ewma_ph": 0.42}
+assert abs(ca.wk_strand_pp(near) - 0.12) < 0.02, ca.wk_strand_pp(near)
+assert ca.wk_wall_traj(near) is False, near
+line = ca.pace_line([near])
+assert "on pace to fill the window" in line, line
+assert "WALL" not in line, line
+# it is a BOOLEAN, never a magnitude: the 248% it was computed from must not reach the surface
+assert "248" not in ca.pace_line([mid]), ca.pace_line([mid])
+# missing data gates the ESCALATION off, never on — False, not None, and never a raised glyph
+assert ca.wk_wall_traj({"weekly_pct": 99, "weekly_reset_h": 10.0}) is False           # no rate
+assert ca.wk_wall_traj({"weekly_pct": None, "weekly_reset_h": 10.0, "burn_wk_ewma_ph": 9.0}) is False
+assert ca.wk_wall_traj({"weekly_pct": 99, "weekly_reset_h": 200.0, "burn_wk_ewma_ph": 9.0}) is False
+assert ca.wk_wall_traj({"weekly_pct": 99, "weekly_reset_h": 0.0, "burn_wk_ewma_ph": 9.0}) is False
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-17b: apply_burn STAMPS the nowcast verdict, so machine consumers keep a mid-week field" {
+  # `wall_risk` is now absent for the first ~151 h of every window. A consumer that routed on it
+  # gets its replacement stamped beside `wk_strand_pp` — and only when the nowcast can speak, so
+  # absent still means "cannot say" rather than "no wall" (L2 abstain-never-impute).
+  run python3 -c "$LOAD"'
+import json, os
+def series(path, hours, step_h, rate_pph):
+    wra = NOW + 114 * 3600
+    n = int(hours / step_h)
+    with open(path, "w") as f:
+        for i in range(n, -1, -1):
+            f.write(json.dumps({"ts": iso(NOW - i * step_h * 3600.0), "acct": "next",
+                                "session_pct": 10,
+                                "weekly_pct": 52 - i * step_h * rate_pph,
+                                "session_reset_at": None,
+                                "weekly_reset_at": iso(wra)}) + "\n")
+    return path
+def fresh():
+    return [{"acct": "next", "session_pct": 10, "session_reset_h": 3.0, "weekly_pct": 52,
+             "weekly_reset_h": 114.0, "k": 2, "credits_on": False}]
+D = os.environ["BATS_TEST_TMPDIR"]
+# 24 h at 6 min, weekly climbing 1.75 %/h to 52 -> the nowcast speaks and says WALL
+rows = fresh()
+ca.apply_burn(rows, {}, samples=ca._util_tail(path=series(D + "/w.jsonl", 24, 0.1, 1.75),
+                                              hours=48.0)[0])
+r = rows[0]
+assert r.get("wk_wall_traj") is True, r
+assert "wall_risk" not in r, r                    # phase 0.32 — the linear projector abstains
+assert "burn_ratio" not in r and "proj_end_pct" not in r, r
+assert "wk_strand_pp" in r, r                     # ...while the nowcast half is fully populated
+# CONTROL: a series too THIN for the EWMA leaves the field ABSENT, not False. A False here would
+# read as "measured, no wall" on a row nothing was measured on — the fail-open direction.
+thin = fresh()
+ca.apply_burn(thin, {}, samples=ca._util_tail(path=series(D + "/t.jsonl", 2, 0.1, 1.75),
+                                              hours=48.0)[0])
+assert "burn_wk_ewma_ph" not in thin[0], thin[0]  # span 2h < the 6.8h floor
+assert "wk_wall_traj" not in thin[0], thin[0]
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}

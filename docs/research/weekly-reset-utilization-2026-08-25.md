@@ -194,6 +194,31 @@ The one real cost in view is `next3`'s ~8 pp, and with 3.8 h left that is essent
   uninformative, and speaks only in the last ~2 days where linear and empirical converge
   (day 6: −17 pp; day 7: −2 pp).
 
+  ✅ **SHIPPED 2026-08-27** (backlog `70ed289c10fb`). `MIN_ELAPSED_FRAC` **0.05 → 0.90** in
+  `bin/claude-accounts`. The threshold is the tighter of the two readings this doc offers, not
+  its "last ~2 days" phrasing: `docs/research/drain-telemetry-2026-08-25/axis-D-windows.md` §5
+  scores the same function by phase decile — MAE 47.2 / 46.9 / 46.2 / 36.7 / **18.3** at phase
+  0.1 → 0.9 — and `SYNTHESIS-design.md` §1.5 reconciled the two axes onto **phase 0.90**. Day 5
+  (−24 pp) and day 6 (−17 pp) are still far worse than the 5.3 pp a constant predictor scores, so
+  the last **~17 h**, not the last 2 days, is where this arithmetic earns a render.
+
+  **The other half, which this section did not anticipate.** `pace_line` sourced its
+  `⚠ WALL trajectory` glyph from the same projector's `proj >= 100`, so widening the floor alone
+  would have silently dropped the warning for 90% of every window — and dropped it from the one
+  estimator that was measurably wrong about it (the 08-23 `WALL` that never arrived is in §3's
+  table). The flag moved to `wk_wall_traj`, the 48 h roll-aware nowcast's own verdict, which is
+  reliable about the SIGN and worthless about the magnitude — so the sign ships and the number
+  never does. `wk_wall_traj` is also stamped beside `wk_strand_pp` for machine consumers, since
+  `wall_risk` now abstains for the first ~151 h of every window. Tests:
+  `claude-accounts-burn-ratio.bats` (10 cases, each abstain paired with a late-phase control and
+  the floor bracketed to 0.90 by a 16 h / 17 h pair) and `claude-accounts-strand.bats` RP-17/17b.
+
+  **Not done, deliberately:** the shape-fitted divisor. Axis-D §5 built and backtested it
+  leave-one-out and it **lost to linear by 37%** — it removes the bias and inflates the error —
+  and the shape is a fossil of the operator's own end-of-window rush, so fitting to it goes wrong
+  in the direction of complacency the moment the rush stops. Re-derive after ≥2 more full cycles
+  (§5.2), not before.
+
 **Reproduce:** the analysis scripts are in this session's scratchpad; the one-command version of
 the retrospective is `python3 scripts/desk-strand-replay.py`.
 
