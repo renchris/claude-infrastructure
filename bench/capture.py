@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import sys
 import time
@@ -142,9 +143,17 @@ def capture(corpus: pathlib.Path, dprs: list[int]) -> None:
     snaps.mkdir(exist_ok=True)
 
     timings = []
+    # `channel="chromium"` is the pinned instrument and stays the default. A CI or
+    # cloud box that ships its own Chromium at a different Playwright build number
+    # cannot satisfy that channel and exits before capturing anything, so
+    # BENCH_CHROMIUM names an executable to launch instead. Everything that makes
+    # the capture comparable -- sRGB, LCD text off, the pinned device scale -- is in
+    # the args below and is unaffected by which binary honours them.
+    exe = os.environ.get("BENCH_CHROMIUM") or None
+    launch_kw = {"executable_path": exe} if exe else {"channel": "chromium"}
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            channel="chromium",
+            **launch_kw,
             args=[
                 "--force-color-profile=srgb",
                 "--disable-lcd-text",
