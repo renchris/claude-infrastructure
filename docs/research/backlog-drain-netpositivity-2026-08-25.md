@@ -381,8 +381,19 @@ as *"← the number that must fall"* cannot fall past it. Raising coverage means
 `--limit` cursor is not completing a cycle — the pass journals `validated_recorded`, `deferred` and
 `shard_pending` for exactly this question. **That is a live-box question**: `backlog.jsonl`,
 `premise-pass.stamp` and the launchd job are local-only state, which is why the cloud worker dispatched
-onto L1 could not answer it (`cc-backlog freshness` reads `0 of 0` in a cloud container). Re-aim the
-item at the gap, and run it where the store is:
+onto L1 could not answer it (`cc-backlog freshness` reads `0 of 0` in a cloud container).
+
+**Route it to the box, not to cloud — L1 was doubly un-runnable where it was sent.** Beyond the absent
+store, this repo's land gate cannot pass off-box at all: `ship-land.sh --dry-run` exits 6 on
+`unattended-path-lint --selftest FAILED`, reproduced here on a pristine `origin/main` worktree with
+this diff absent. The lint is right and its *selftest* is macOS-shaped — its RED fixtures invoke
+`shellcheck`/`tmux`, which sit off `STOCK_PATH` on the operator's Mac (detected ⇒ green) and on it in
+a Debian container (correctly not detected ⇒ every "want 1, got 0"). Already recorded twice —
+`docs/plans/MASTER_ENFORCING_STORE.md:139-153` and
+`docs/plans/BACKLOG_CONSOLIDATION_2026-08-09.md:807-813` — with the standing verdict that
+off-box-eligible for claude-infrastructure means **eligible to write, not eligible to land**. §6a's
+stranded-commit count is the shape this leaves behind. Re-aim the item at the gap, and run it where
+the store is:
 
 ```
 launchctl print gui/$UID/com.chrisren.autonomy-sweep | grep -E 'state|last exit'
