@@ -4668,13 +4668,31 @@ arm_goal() { # $1=it2-bin $2=pane $3=condition → always 0; prints a parseable 
 # Returns 0 = admit, 9 = refuse (a distinct code so a caller can back off rather than treat it as a
 # payload error). Prints the measured numbers either way — a refusal with no numbers is unauditable.
 #
+# 🚨 READ THIS BEFORE QUOTING THE 2.0 ABOVE. Everything from here to the M10 block describes the
+# LOAD term, and that term DEFAULTS OFF (`CC_FIRE_LOAD_TERM:-off`, :5074 — see the block there for
+# why). So the sentence "capacity_gate() refuses a net-new fire above 2.0/core", which this header
+# is the source of, is FALSE as an unqualified statement of what the gate does: by default the load
+# term is not evaluated at all, and a net-new fire is admitted at any load. What DOES evaluate by
+# default is headroom (:5145), segments (:5188) and actives (:5233); those are the terms an
+# unpinned caller actually meets. The ceiling literal stays at 2.0 deliberately — C18: a fix moves
+# a TERM SWITCH, never a ceiling — so 2.0 is still the number this term compares against WHEN
+# SWITCHED ON, and is not a claim about the gate's default behaviour.
+#
 # ---- M10 (MACHINE_CAPACITY_V2 §11.3): a SECOND, session-attributable term ----------------------
-# The loadavg ceiling above STAYS — §9.5 measured it behaving as a ceiling — but it is the wrong
+# The loadavg ceiling above is RETAINED (as a switched-off term; M10 kept it switched ON, and
+# `fix(fire-gate): load1 does not move with the spawn it was gating` later turned it off — cite by
+# SUBJECT, a land rebases). §9.5 is quoted here for exactly one thing and no more: it measured the
+# ceiling BEHAVING as a ceiling — admitting at 1.55/core, refusing at 4.0/core — which refuted a
+# "permanent dispatch outage" projection. It does NOT derive 2.0, and it must not be cited as
+# though it did; see scripts/lib/capacity-admit.sh's header on the shared literal for the full
+# disproof, and note §9.5's own closing paragraph undercuts this term by conceding the gate keys on
+# a quantity that is not session-attributable. Which is this block's own point: load is the wrong
 # instrument on its own: box-wide load is neither session-ATTRIBUTABLE nor SHEDDABLE. Measured
 # 2026-07-29 (§11.2): the gate refused every net-new fire at 5.20/core with only 12–15 sessions
 # live, while ~2.0 of those cores were iTerm2+WindowServer merely DRAWING — closing a session
 # would not have moved the number the gate reads. Memory headroom is both: a session's footprint
-# is its own, and quitting it returns the pages. So a net-new fire must now clear BOTH terms.
+# is its own, and quitting it returns the pages. So M10 made a net-new fire clear BOTH terms; today
+# it clears the three that default on (headroom, segments, actives), and load only when switched on.
 #
 # Headroom = (free + speculative + inactive + purgeable) pages × page size — the classes the kernel
 # can hand to a new process without swapping (wired and active are not reclaimable, and `Pages

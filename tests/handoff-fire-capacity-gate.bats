@@ -212,8 +212,12 @@ EOF
 # 2026-07-29 the gate above refused every net-new fire at 5.20/core with only 12–15 sessions live,
 # while ~2.0 of those cores were iTerm2+WindowServer merely DRAWING panes — closing a session would
 # not have moved the number the gate reads. Memory headroom is both attributable and sheddable, so
-# it is the term that can actually be acted on. The load ceiling STAYS (§9.5 measured it behaving as
-# a ceiling); the terms are additive and ordered, load first.
+# it is the term that can actually be acted on. The load ceiling was RETAINED by M10 (§9.5 measured
+# it behaving as a ceiling — that and nothing more: §9.5 does NOT derive 2.0, see
+# scripts/lib/capacity-admit.sh's header for the disproof); the terms are additive and ordered, load
+# first. Since `fix(fire-gate): load1 does not move with the spawn it was gating` the load term
+# DEFAULTS OFF, which is why setup() at :76 must pin CC_FIRE_LOAD_TERM=on for the cases below to
+# exercise it at all, and why the :1008 block unsets that pin to assert the default.
 #
 # RED-PROOF (recorded 2026-07-30): the whole suite was replayed against the pristine pre-change tree
 # recovered via `git archive eaa0cdeb` (3558 lines, 0 occurrences of CC_FIRE_MIN_HEADROOM_GB), run

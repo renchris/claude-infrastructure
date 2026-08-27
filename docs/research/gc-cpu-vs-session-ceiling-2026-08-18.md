@@ -139,10 +139,66 @@ consumers were `bun` 65%, `mediaanalysisd` 33%, `kernel_task` 25%, with the high
 **5.5%** and 52% idle). Corroborated live while writing this: **load 10.66 at 13 sessions**, against
 19.06 at 14 sessions twelve hours earlier — the same session count spanning a 1.8× load range.
 
-The honest actionable is therefore **to derive the number, not to move it**: re-run the axis-09-style
+~~The honest actionable is therefore **to derive the number, not to move it**: re-run the axis-09-style
 measurement (load1 delta across N all-active sessions) and set the ceiling from a measured failure
 point. That is a two-arm experiment, not a config edit, and it is the only thing that can legitimately
-move a capacity constant.
+move a capacity constant.~~
+
+### 3.1 AMENDMENT (2026-08-27) — the prescription above is REFUTED BY THE PARAGRAPH ABOVE IT, and the item it spawned is closed
+
+**The finding survives; the actionable does not.** Everything before this subsection stands: 2.0/core
+was never derived, `§9.5` contains no derivation of it, and the origin commit picked 2.0 after
+measuring its motivating incident at 2.72/core. The verifier's "strongest finding in the wave" is
+intact.
+
+**But "set the ceiling from a measured failure point" has no solution on this axis, and this section
+quotes the proof of that three paragraphs above its own prescription.** The blockquote from
+`scripts/capacity-alarm.sh:139-147` says the survived population *contains* the fatal value — fatal
+2026-08-05 at 2.53/core against 13 consecutive survived samples spanning 2.92–5.98/core, every one
+above the fatal reading. That instrument's own conclusion is that "no setting of these two numbers
+can" separate fatal from survived. A failure point that does not exist cannot be measured, so the
+two-arm experiment prescribed here would return no boundary however carefully it were run. This is
+the self-falsifying-citation defect the section is *about*, committed by the section itself one level
+up.
+
+**The named blocker could not have discharged it either.** The backlog row (`e981656df348`) parked
+this behind "the marginal-load measurement". Marginal Δload per active session is a
+capacity-**in-sessions** coefficient: it converts a ceiling into a session count. It cannot locate a
+failure boundary, so the item was parked behind a measurement answering a different question.
+(`docs/research/marginal-load-per-active-session-2026-08-19.md` §1 separately bans quoting any
+published value for it until its controls clear on the box; `34a21973` struck the refuted 2.5–5 figure
+from three live sites and left `CC_ADMIT_ACTIVE_CEILING=8` standing on an anchor that adjudication
+does not touch.)
+
+**The real cure had already landed two days after this doc was written, and it is not a number.**
+`fix(fire-gate): load1 does not move with the spawn it was gating` (2026-08-20 — cite by SUBJECT, a
+land rebases) established the stronger fact: an additional **resident** session moves the 1-min
+runnable count by ~0, because load1 counts only runnable and uninterruptible tasks while every live
+`claude` process sits in S/Ss. So **no value of this literal can make the term correct — the INPUT is
+wrong, not the number.** Per C18 that fix moved a TERM SWITCH, never a ceiling: `CC_FIRE_LOAD_TERM`
+now defaults **off** in `capacity_gate()`, the Agent-tool path has run `CC_ADMIT_LOAD_TERM=off` since
+Wave D, and `segments`/`actives` carry the term's intent because they *do* move with the spawn. The
+2.0 literal is left standing on purpose, and raising it remains the lazy design
+`docs/plans/LOAD_INSENSITIVE_VERIFY_V2.md:156` exists to reject. It still binds only where
+`cc_capacity_admit` leaves the term on — the two unattended recovery callers
+(`scripts/boot-resume-launch.sh`, `scripts/limit-recover/lr-fire-resume.sh`) — deliberately, and both
+are budget-released after `CC_ADMIT_BUDGET` consecutive refusals.
+
+**Disposition.** `e89918f2b` (2026-08-25) wrote this disproof into `scripts/lib/capacity-admit.sh`'s
+header and struck the false provenance there. It touched that file and no other, which is why this
+section — the doc a re-dispatch actually reads — still prescribed the refuted experiment until now.
+Item `e981656df348` is **closed as refuted-and-discharged**, not as done-as-specified.
+
+**What that commit missed, found by re-grepping instead of working from its file list.** The stale
+sentence *"capacity_gate() refuses a net-new fire above 2.0/core"* was still live at its two teaching
+surfaces — `scripts/handoff-fire.sh`'s `capacity_gate()` header and `scripts/test-hermeticity-lint.sh`
+rule 2 (both its file header and its runtime operator message) — and had been copied verbatim into
+**~28 bats `setup()` comments**. It is false as an unqualified claim on trunk: with the load term off
+by default, an unpinned suite meets headroom, segments and actives, never the 2.0 ceiling. Both
+teaching surfaces and the gate's own suite header are corrected; **the pins themselves never moved,
+because `CC_FIRE_CAPACITY_GATE=off` still disables every term** — only the stated *reason* was stale,
+which is why nothing went red. The ~28 downstream comments are cosmetic and are filed rather than
+swept, so a 28-file churn does not ride along with a provenance fix.
 
 ## 4 · If 2.1.234 is adopted, adopt it on other grounds — and set one env var first
 

@@ -22,12 +22,25 @@
 # RULE 2 (the fire capacity gate) — the SAME CLASS, found 2026-07-29 and folded into this ratchet
 # rather than given a guard of its own, because the failure, the remedy and the ratchet contract are
 # identical; only the seam differs. handoff-fire.sh's `capacity_gate()` (scripts/handoff-fire.sh,
-# `CC_FIRE_CAPACITY_GATE`) reads LIVE `sysctl vm.loadavg` and REFUSES a net-new fire at >= 2.0
-# load/core (exit 9). This box sits permanently at 3.4-7.3/core. So a suite that exercises a net-new
-# fire WITHOUT pinning the gate off does not test its subject at all: it reads AMBIENT MACHINE LOAD
-# and goes red-by-load — the same "result depends on whatever the desk happens to be doing" flake
-# that rule 1 exists to kill. Proven two-sided at 3.39/core on tests/fire-engagement.bats (ambient ->
-# `not ok 14`; `CC_FIRE_CAPACITY_GATE=off` -> `ok 14`).
+# `CC_FIRE_CAPACITY_GATE`) reads LIVE machine state and REFUSES a net-new fire with exit 9. So a
+# suite that exercises a net-new fire WITHOUT pinning the gate off does not test its subject at all:
+# it reads AMBIENT MACHINE STATE and goes red-by-ambient — the same "result depends on whatever the
+# desk happens to be doing" flake that rule 1 exists to kill.
+#
+# 🚨 WHICH TERM refuses has CHANGED, and this header is where the wrong answer was minted. As
+# written 2026-07-29 the sentence was "reads LIVE `sysctl vm.loadavg` and REFUSES at >= 2.0
+# load/core; this box sits permanently at 3.4-7.3/core", and the two-sided proof behind it is still
+# good FOR ITS DATE (3.39/core on tests/fire-engagement.bats: ambient -> `not ok 14`;
+# `CC_FIRE_CAPACITY_GATE=off` -> `ok 14`). It is no longer what the gate does. Since
+# `fix(fire-gate): load1 does not move with the spawn it was gating` the LOAD term defaults OFF
+# (`CC_FIRE_LOAD_TERM:-off`), so the 2.0/core ceiling does not evaluate unless a caller switches it
+# on; what refuses by default is headroom < CC_FIRE_MIN_HEADROOM_GB, segments >
+# CC_FIRE_MAX_SEGMENT_PCT, or CC_FIRE_ACTIVE_CEILING sessions already mid-turn. The RULE and its
+# remedy are UNCHANGED — `CC_FIRE_CAPACITY_GATE=off` still pins every term, which is why no suite's
+# pin had to move — but the REASON stated in ~28 suite setup() comments repeats the stale "above
+# 2.0/core" wording copied from this header and rule 2's operator message below. Do not propagate
+# it; see scripts/handoff-fire.sh's capacity_gate() header, and scripts/lib/capacity-admit.sh's
+# header for why 2.0 was never derived in the first place.
 #   A suite is compliant iff it does NOT reference handoff-fire at all (out of scope — never
 #   flagged), or its setup()/setup_file() BODY contains `CC_FIRE_CAPACITY_GATE=off` (export or
 #   inline env). Per-test pinning does NOT count, for rule 1's reason verbatim: it leaves every
@@ -2047,7 +2060,7 @@ lint_dir() {
         fi
       elif ! in_allowlist "$base" "$fire_allow"; then
         if in_own "$f" "$own" "$own_scoped"; then
-          printf '  AMBIENT  %s: setup() does not pin CC_FIRE_CAPACITY_GATE=off — its fires read live machine load\n' "$base"
+          printf '  AMBIENT  %s: setup() does not pin CC_FIRE_CAPACITY_GATE=off — its fires read live machine state\n' "$base"
           fire_leak=$((fire_leak + 1))
         else
           printf '  ambient? %s does not pin CC_FIRE_CAPACITY_GATE=off (NOT in your diff — advisory, not blocking)\n' "$base"
@@ -2283,9 +2296,13 @@ EOF
     echo "  Fix: delete their lines from EMBEDDED_ALLOWLIST in $0 — the ratchet only shrinks."
   fi
   if [ "$fire_leak" -gt 0 ]; then
-    echo "test-hermeticity-lint: ⛔ $fire_leak suite(s) above exercise handoff-fire against AMBIENT machine load."
-    echo "  WHY: handoff-fire's capacity_gate() refuses a net-new fire above ${CC_FIRE_MAX_LOAD_PER_CORE:-2.0}/core"
-    echo "       and this box lives well above that, so the suite goes red-by-load, not by its subject."
+    echo "test-hermeticity-lint: ⛔ $fire_leak suite(s) above exercise handoff-fire against AMBIENT machine state."
+    echo "  WHY: handoff-fire's capacity_gate() refuses a net-new fire with exit 9 when reclaimable headroom is"
+    echo "       below ${CC_FIRE_MIN_HEADROOM_GB:-4}GB, compressor segments are above ${CC_FIRE_MAX_SEGMENT_PCT:-50}%, or ${CC_FIRE_ACTIVE_CEILING:-8} sessions are already mid-turn."
+    echo "       This box trips those, so the suite goes red-by-ambient, not by its subject."
+    echo "       NOT by load: the load term DEFAULTS OFF (CC_FIRE_LOAD_TERM), so the ${CC_FIRE_MAX_LOAD_PER_CORE:-2.0}/core ceiling"
+    echo "       does not evaluate unless a caller switches it on. Do not copy 'refuses above ${CC_FIRE_MAX_LOAD_PER_CORE:-2.0}/core'"
+    echo "       into a new setup() comment — this message was where that sentence came from."
     echo "  Fix: in setup(), \`export CC_FIRE_CAPACITY_GATE=off\`. Do NOT add to the fire allowlist."
   fi
   if [ "$fire_stuck" -gt 0 ]; then
