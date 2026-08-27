@@ -86,6 +86,112 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-27 — drain recycle #251: method 221 — A SIGPIPE SITE'S FLOOR IS SET BY THE BYTES THE
+  LAST PRE-CONSUMER STAGE EMITS, NOT BY THE BYTES ITS PRODUCER WRITES.** #250 established that a
+  hazard's rank must key on which side of the pipe the variable sits on rather than on how it is
+  bound, and handed forward `scripts/postland-verify.sh:3349` as *"the best-specified unworked site
+  on the box"* — the other `PARAM_ON_PATTERN` site, ranked as *"FOUR stages, so its floor sits below
+  the 17,427 B three-stage figure"*. **The site was real, the direction was read correctly, and the
+  RANK was computed on the wrong quantity — a quantity that, for this clause, differs from the right
+  one by a factor of about 55.**
+  **THE SUBJECT.** `verb_falsify_red`'s host-manifest span clause asked membership as
+  `printf '%s\n' "$mf" | sed 's/#.*//' | tr -d '[:blank:]' | grep -qxF "$path" && return 2`. Under
+  the file's `set -o pipefail` an early-exiting `grep -q` promotes its producer's SIGPIPE to the
+  pipeline's status ON A MATCH, so the `&&` fails exactly when the answer is YES: the `return 2` is
+  skipped, control falls through the existence check to `return 0`, and a host suite the green never
+  executed is RETRACTED. Exit 0 is this verb's only load-bearing answer, so that is a fail-OPEN
+  asserting a verdict over a suite the run never ran — the exact thing the clause's own header
+  forbids in those words.
+  **THE MEASUREMENT THAT SETTLES THE RANK, AND IT IS ONE TABLE.** Hold the PRODUCER CONSTANT at
+  199,968 B and vary ONLY the fraction of lines surviving `sed`+`tr` (20 trials per cell, the REAL
+  extracted line, `/bin/bash` 3.2.57(1), `/usr/bin/{sed,tr,grep}`, load ~14):
+  post-reduction **2,157 B correct 20/20** · **4,110 B correct 20/20** · **12,015 B correct 20/20** ·
+  **21,873 B WRONG 20/20** · **51,540 B WRONG 20/20** · **101,016 B WRONG 20/20** · **199,968 B
+  WRONG 20/20.** **One producer size, seven verdicts.** The transition brackets the **17,427 B**
+  floor #241 measured for a THREE-stage pipeline — i.e. the stage that decides is the one FEEDING
+  grep, and the fourth stage buys nothing.
+  **AND THE STAGE COUNT IS NOT MONOTONE IN THE FLOOR, MEASURED ON ONE FEED AT ONE LOAD.** Deriving
+  the 2- and 3-stage shapes from this same extracted line by DELETING stages, so all three rows
+  share one producer, one needle and one grep: 2-stage **SAFE 20/20 at 39,991 B, ALWAYS at 89,920+**
+  and 3-stage **RACY 1/20 at 19,966 B, ALWAYS at 39,991+** — both reproducing #241's published
+  bands, which is what licenses the third row — while the **4-stage subject sat WITH the 3-stage and
+  never below it** (RACY 3/20 at 19,966 B, RACY 1/20 at 39,991 B, ALWAYS at 89,920+). **Adding a
+  stage did not lower the floor. Read the RAW feed instead and you get the OPPOSITE answer: this
+  same clause is correct 20/20 on a 200,000-byte raw manifest**, because 165 of the real manifest's
+  172 lines are header comment.
+  **SO THE OPERATIONAL QUANTITY IS THE NUMBER OF HOST SUITES, NOT THE SIZE OF THE FILE — and that
+  inverts the growth story too.** The manifest grew **2,834 → 14,407 B between 2026-07-28 and
+  2026-08-08, 5.1x in eleven days**, which on a raw-feed rank reads as a site racing toward its
+  floor. **Every byte of that growth was header comment.** It normalises to **261 B across 3
+  entries**, about **1.2%** of the floor, and at ~30 B per entry the crossing is roughly **400 host
+  suites** away. The margin is real; it is simply not the one the file size advertises, and nothing
+  announces the crossing. **WHEN YOU RANK A PIPELINE, MEASURE WHAT REACHES THE CONSUMER — and when
+  a stage REDUCES, the producer's size is not a conservative proxy, it is a wrong one in the
+  flattering direction.**
+  🚨 **THE INSTRUMENT FAULT, AND IT PRODUCED A CONFIDENT WRONG TABLE BEFORE A CONTROL KILLED IT.**
+  Two probe runs bound `mf` but NOT `path`, so `eval` hit an unbound variable under `set -u` and the
+  harness scored every failure as an INVERSION — **a uniform 0/20 across seven differently-sized
+  cells**, which is #225's tell exactly and which I read past once. What caught it was the NEG
+  control reading ALWAYS-INVERTED on the **live 14,407 B feed**, which is not a thing the live feed
+  does. **Every variable the extracted subject names must be BOUND by the harness, and the check is
+  one loop over the extracted text.** A repaired POS control then read SAFE at 200,000 B, leaving the
+  probe with no firing cell at all — so the stage-isolation table above exists to give the harness a
+  cell that MUST fire before its green cells are allowed to mean anything.
+  **THE FIX** is the fenced-`case` already house style in `ship-land.sh` and `unattended-path-lint.sh`:
+  fork-free, and it cannot report the opposite of what it found. **TWO BEHAVIOURAL ARMS, not spelling
+  arms**, driving the real `--falsify-red` verb end to end, with the fixture sized FROM THE MEASURED
+  REGIME (normalised ≥ 60,000 B, ~3x into the always-wrong band, needle placed FIRST where an
+  early-exiting grep exits soonest) so a re-introduced `grep -q` fails **every** run rather than one
+  in twenty. **Red-proved in BOTH states: post-fix 2 ok / 0 not ok; pre-fix exactly ONE red,
+  attributed to the member arm, with the control arm a DELIBERATE GREEN** — it is absent from the
+  manifest, so grep never matches, nothing takes SIGPIPE, and the defect is structurally invisible to
+  it. That green is this test design's own statement of what it cannot catch. Subject restored by
+  sha256 in a trap (`RESTORE=OK`).
+  **DELTAS.** `--census` keyed on **(path, TEXT)** with the PRE arm extracted from `origin/main` via
+  `git archive | tar -x` rather than remembered: **135 → 134, LOST=1, NEW=0** — drained IN PLACE, not
+  a widening and not moved out of the detector's field of view. Allowlist row **REMOVED rather than
+  lowered** because the count reached 0 (**53 → 52 rows**), attributed for free by the ratchet's own
+  downward arm (*"scripts/postland-verify.sh now 0, allowlist says 1 → set it to 0"*) — #244's
+  attribution trick, first try again. `tests/postland-verify.bats` **130 → 132**, ZERO existing
+  assertions edited. Bare pipefail lint rc 0, `--selftest` **32/32**, shellcheck rc 0, `bash -n`
+  rc 0, `bats-assert-liveness` rc 0, scoped bats-shellcheck-lint *"clean — 1 suite(s) scanned, 0
+  blocking finding(s)"*, `test-walltime-lint.sh tests` *"clean — 552 suite(s); 1 grandfathered, 0 new
+  time bombs"* (**a DIRECTORY argument — handed a file it prints `⛔ not a directory` and exits 0**).
+  `alarm-polarity-lint` declared **NOT-RUN**: none of my files is an alarm emitter and its POS control
+  is a known mute. Selector controls both fired — POS spoke with 2 on a code-touching range, NEG
+  silent at 0 on #250's prose-only `docs(drain)` range, which is the trap the brief names and which
+  cost one redraw.
+  **THE BOARD — TWO STATUS TRANSITIONS, ZERO ARRIVALS, ZERO DEPARTURES, ZERO CLOSES, over a window
+  of 19 m 09 s.** Open **2026-08-27T22:26:43Z** `325 open / 224 blocked / 2,341 done / 1 claimed`
+  (549 combined, 2,891 rows); close **22:45:52Z** `326 / 224 / 2,341 / 0` (550, 2,891). Both
+  partitions asserted at both moments. `70ed289c10fb` went **claimed → blocked** and `78b76e1a8311`
+  went **blocked → open**, each folded on `.id` at matchcount 1 with a bogus-id NEG control at 0,
+  both `claude-infrastructure`. **`70ed289c10fb` is the row #250 watched go blocked → claimed, so
+  this is the same loop turning again, not progress** — and **the claude-infrastructure `done` count
+  has still not moved since #229.** The GAP before my open (#250's second floor at 22:18:08Z → my
+  open, **8 m 35 s**) held **ZERO** transitions and ZERO arrivals in all five lists — a real result,
+  since #250's own 9-minute gap held one.
+  **THE STORES.** postland RED pages **0 at both moments — the 158th and 159th consecutive** — over
+  denominators **2,753 → 2,755**, and **no collapse seen** (#247 through this link have now all missed
+  one, which says nothing about whether it still happens). postland stamps **490 → 491, an ADVANCE**, after
+  #250's 489 → 490; **`GATE=stale` at my open, the TWENTY-EIGHTH consecutive reading, and not mine to
+  drive.** `~/.claude/autonomy/pages` **2,198/108 → 2,201/107** — total up three while the `.page`
+  count fell one. inbox-guard `.escalated` **451 → 451**, flat, all 451 of 451 files. Ledger at open
+  (22:27Z): `RUNG=✅ LIVE_LAG=1 LIVE_ADDS=0 LIVE_AGE=2239 LIVE_BREACH_WHY=` empty — **inside its
+  budget, so the converger was NOT mine at that moment.** The qos-rewrite diff was clean and empty:
+  **the 132nd consecutive.** All four kitty checks passed by minute ~2 — `KITTY_WINDOW_ID=27`,
+  `KITTY_PID=1427`, `TERM=xterm-kitty`, `CC_TERM` UNSET, `bin/cc-in-kitty` rc 0, exactly one object
+  from the id-keyed query with a bogus-id NEG control at 0 — the **twenty-first** consecutive link.
+  **WHAT I LEFT, AND THE FIRST ONE IS NOW CHEAP BECAUSE THE INSTRUMENT EXISTS.** The whole 134-site
+  census is still ranked on producer bytes. `~/.claude/autonomy/probe251-stage.sh` measures any
+  extracted line's bands with the 2- and 3-stage shapes DERIVED from it as controls, and
+  `probe251-reduce.sh` holds the producer constant while moving only the reduction — **between them
+  they answer "which stage decides" for a site in one command each.** **Point them at the sites whose
+  pipelines contain a REDUCING stage** (a `sed` that strips, a `grep -v`, a `cut`, an `awk` that
+  prints one field), because those are precisely the ones every rank so far has scored on the wrong
+  number — and note the converse is just as wrong: a pipeline that only ever grows or preserves its
+  stream has been under-ranked nowhere, so this re-rank is not a general amnesty. **`4e6a51df2a84`
+  remains OPEN and I added nothing to its axis question this link.**
 - **2026-08-27 — drain recycle #250: method 220 — A HAZARD'S RANK MUST KEY ON WHICH SIDE OF THE
   PIPE THE VARIABLE SITS ON, NOT ON HOW IT IS BOUND.** #249 classified every `pipefail-sigpipe-lint
   --census` site by asking *"is the variable this site PIPES parameter-bound in its enclosing
