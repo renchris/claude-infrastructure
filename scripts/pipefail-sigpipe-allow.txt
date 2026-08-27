@@ -7,11 +7,10 @@ bin/cc-await-ping	1
 bin/cc-backlog	1
 bin/cc-blockers	1
 bin/cc-bus	3
-bin/cc-classify	3
+bin/cc-classify	2
 bin/cc-cloud	1
 bin/cc-comms-alarm-sweep	1
 bin/cc-idl	1
-bin/cc-notify	1
 bin/cc-reaper	1
 bin/cc-teardown	1
 docs/activation/pending-activation/13-mailbox-gc-activate.sh	2
@@ -30,7 +29,7 @@ hooks/qos-rewrite.sh	2
 hooks/research-precognition-nudge.sh	1
 hooks/session-index-sweep.sh	1
 hooks/task-quality-gate.sh	2
-hooks/teammate-auto-shutdown.sh	4
+hooks/teammate-auto-shutdown.sh	3
 hooks/teammate-checkpoint.sh	1
 hooks/waiting-recycle.sh	2
 install.sh	3

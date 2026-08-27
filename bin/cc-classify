@@ -385,8 +385,28 @@ tool_in_flight() { # <jsonl> → 0 if a tool is RUNNING: the transcript's LAST r
   tu_id="$(printf '%s' "$last_rec" | jq -r '(.message.content // []) | map(select(.type=="tool_use")) | last | .id // empty' 2>/dev/null)"
   if [ -n "$tu_id" ]; then
     # a matching tool_result (a `user` record block) anywhere ⇒ the tool returned ⇒ not in-flight
+    # DRAINED, not -q — and this one is NOT latent, it is PAST its floor on the measured corpus.
+    # Under the `set -uo pipefail` at the top, `grep -q` exits on the first match and the producer
+    # `jq` takes SIGPIPE; pipefail returns 141, the `&& return 1` is NOT taken, and the function
+    # falls through to `return 0` = "a tool is running". So a session whose tool has ALREADY
+    # RETURNED reads as in-flight.
+    #
+    # THE CONSEQUENCE IS TOTAL, NOT OCCASIONAL. This line's only job is to answer YES-it-returned;
+    # on a miss the fall-through to `return 0` is already the right answer. So the `return 1` branch
+    # is the ONLY thing the line contributes — and above the floor that branch is UNREACHABLE. The
+    # predicate is not sometimes wrong, it is entirely INERT: it always answers "in flight".
+    #
+    # THE FLOOR BELONGS TO THE SHAPE, AND THIS SHAPE'S PRODUCER IS `jq` READING A FILE — not a bash
+    # builtin. Measured 2026-08-27 on this exact pipeline, 20 trials per point: 100 tool_result
+    # records (3,332 B of jq output) 0/20 wrong; 250 records (8,282 B) 20/20 wrong. Not racy —
+    # always. The generic two-stage floor of 37,121 B does NOT transfer here and overstates the
+    # margin by ~4.5x: a `printf`-fed grep survives to ~98 KB because the pipe buffer absorbs the
+    # builtin's whole output, whereas `jq` must read the entire file before emitting and is
+    # therefore still writing when grep exits. The corpus was measured at up to 1,007 tool_results
+    # (31,217 B) 2026-08-26 — roughly 4x PAST the 250-record crossing, so this has been inert on
+    # the largest transcripts for as long as they have existed.
     jq -rc 'select(.type=="user") | (.message.content // []) | if type=="array" then .[] else empty end | select(.type=="tool_result") | .tool_use_id // empty' "$f" 2>/dev/null \
-      | grep -qxF "$tu_id" && return 1
+      | grep -xF "$tu_id" >/dev/null && return 1
   fi
   return 0   # trailing tool_use with no (matching) result → a tool is running
 }

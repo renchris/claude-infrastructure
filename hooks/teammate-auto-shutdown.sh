@@ -527,9 +527,25 @@ _tool_in_flight() {  # <session-id> → 0 if a tool call is outstanding
     | jq -r '(.message.content // []) | map(select(.type=="tool_use")) | last | .id // empty' 2>/dev/null)"
   if [[ -n "$tu_id" ]]; then
     # a matching tool_result anywhere ⇒ the tool returned ⇒ not in flight
+    # DRAINED, not -q — the same fail-OPEN as bin/cc-classify's tool_in_flight(), drained in the
+    # same land, and this copy carries the WORSE consequence. `grep -q` exits on the first match,
+    # the producer `jq` takes SIGPIPE, `set -uo pipefail` returns 141, the `&& return 1` is not
+    # taken, and the function falls to `return 0` = "a tool call is outstanding". Above the floor
+    # the `return 1` branch is UNREACHABLE, so this predicate does not merely err — it answers
+    # in-flight ALWAYS. A teammate that has been idle for hours is read as mid-tool-call, the
+    # shutdown at the call site below never fires, and the pane and its worktree are orphaned:
+    # exactly the leak this hook exists to close, wearing the mask of the false-close bug the
+    # comment above says the predicate was added to fix.
+    #
+    # Measured 2026-08-27 on this exact pipeline, 20 trials per point: 100 tool_result records
+    # (3,332 B of jq output) 0/20 wrong; 250 records (8,282 B) 20/20 wrong — always, not racy. The
+    # generic two-stage floor (37,121 B) does not apply, because the producer is `jq` reading a
+    # file rather than a bash builtin: a builtin's output the 64 KiB pipe buffer absorbs whole,
+    # while `jq` must parse the entire file before emitting and so is still writing when grep
+    # exits. Corpus measured to 1,007 tool_results (31,217 B) — ~4x past the crossing.
     jq -rc 'select(.type=="user") | (.message.content // []) | if type=="array" then .[] else empty end
             | select(.type=="tool_result") | .tool_use_id // empty' "$f" 2>/dev/null \
-      | grep -qxF "$tu_id" && return 1
+      | grep -xF "$tu_id" >/dev/null && return 1
   fi
   return 0
 }

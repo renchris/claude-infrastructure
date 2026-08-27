@@ -1589,3 +1589,63 @@ _fixture_site_b() {
   [[ "$output" != *"NO replacement is coming"* ]] || { echo "$output"; false; }
   [[ "$output" != *"UNVERIFIABLE"* ]] || { echo "$output"; false; }
 }
+
+# ── target_live()'s it2 arm: a large live-pane list must not invert the membership test ──────────
+# bin/cc-notify:1249 sits under the file's `set -uo pipefail`. With `grep -q` the match makes grep
+# exit at once, the grep-adjacent `jq` takes SIGPIPE, pipefail returns 141, the `&& return 0` is not
+# taken, and the pane falls to `return 1` — whose own comment calls that verdict AUTHORITATIVE. So a
+# pane iTerm2 has just listed as LIVE is reported as authoritatively not-live: fail-OPEN into the
+# most confident answer the function has.
+#
+# SIZED FROM A MEASURED CURVE, NOT A GUESS (2026-08-27, this shape, needle first, 20 trials/point):
+#   300 panes = 11,137 B of jq output → 0/20 wrong · 600 = 22,237 B → 13/20 RACY · 1,000 = 37,037 B
+#   → 20/20 · drained form 0/20 everywhere to 4,000. 1,500 is used below so a re-introduced `-q`
+# fails EVERY run rather than two in three — a racy fixture is a flaky test, not a pin.
+#
+# The target is deliberately UNREGISTERED: target_live() decides a registered pane from the registry
+# and RETURNS before it ever reaches the it2 list, so a registered fixture never exercises this line.
+_it2_big_list() {   # $1 = uuid to place FIRST (or empty for none); $2 = filler count
+  local first="$1" n="$2" i body=""
+  [ -n "$first" ] && body="{\"id\":\"$first\"}"
+  for ((i=0;i<n;i++)); do
+    [ -n "$body" ] && body="$body,"
+    body="$body{\"id\":\"$(printf 'BBBBBBBB-%04d-2222-3333-444444444444' "$i")\"}"
+  done
+  cat > "$IT2_BIN" <<SH
+#!/bin/bash
+if [ "\$1" = "session" ] && [ "\$2" = "list" ]; then printf '[$body]\n'; exit 0; fi
+if [ "\$1" = "session" ] && [ "\$2" = "send" ]; then printf 'SEND %s\n' "\$*" >> "$IT2_LOG"; exit 0; fi
+exit 0
+SH
+  chmod +x "$IT2_BIN"
+}
+
+@test "target_live: an UNREGISTERED pane present in a 1,500-entry it2 list reads LIVE, not authoritatively-not-live" {
+  local LIVEUUID="CCCCCCCC-1111-2222-3333-444444444444"   # no registry row → falls through to the it2 arm
+  _it2_big_list "$LIVEUUID" 1500
+  # POSITIVE CONTROL on the fixture itself: the pane really is in the list the stub emits, so a
+  # not-live verdict below can only come from the predicate, never from a fixture that forgot it.
+  "$IT2_BIN" session list --json | jq -r '.[].id' | grep -xF "$LIVEUUID" >/dev/null \
+    || { echo "fixture did not contain the target — arm is vacuous"; false; }
+  run "$NOTIFY" "$LIVEUUID" "to a live unregistered pane"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"NOT a live session"* ]] \
+    || { echo "a LIVE pane in a large it2 list was called authoritatively not-live — the membership test inverted: $output"; false; }
+  [[ "$output" != *"mailbox only"* ]] || { echo "$output"; false; }
+  [ "$(sent_count)" -eq 0 ]
+}
+
+@test "target_live NEG CONTROL: an absent pane in an equally large it2 list still reads NOT-live" {
+  # Without this the arm above passes on a remedy that simply always answers "live". Same list size,
+  # same code path, needle genuinely absent — the verdict must flip.
+  local GHOSTUUID="CCCCCCCC-9999-8888-7777-666666666666"
+  _it2_big_list "" 1500
+  if "$IT2_BIN" session list --json | jq -r '.[].id' | grep -xF "$GHOSTUUID" >/dev/null; then
+    echo "NEG fixture unexpectedly contained the target"; false
+  fi
+  run "$NOTIFY" "$GHOSTUUID" "to a pane that is not there"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"mailbox only"* ]] \
+    || { echo "an ABSENT pane was not reported not-live — the arm above could pass by always saying live: $output"; false; }
+  [ "$(sent_count)" -eq 0 ]
+}

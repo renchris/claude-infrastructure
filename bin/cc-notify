@@ -1246,7 +1246,26 @@ EOF
   # zero live panes → not-live, NOT "unknown"). Only a non-array / errored / TIMED-OUT output is unknown.
   local raw; raw="$(it2_list_bounded || true)"
   if [ -n "$raw" ] && printf '%s' "$raw" | jq -e 'type=="array"' >/dev/null 2>&1; then
-    printf '%s' "$raw" | jq -r '.[].id // empty' 2>/dev/null | grep -qxF "$u" && return 0
+    # DRAINED, not -q. Under the `set -uo pipefail` at the top, `grep -q` exits on the first match,
+    # the stage IMMEDIATELY UPSTREAM takes SIGPIPE, and pipefail hands the caller 141 — so the
+    # `&& return 0` is not taken and a pane iTerm2 has just listed as LIVE falls to the `return 1`
+    # below, whose own comment calls that verdict AUTHORITATIVE. Fail-OPEN into the most confident
+    # answer the function has.
+    #
+    # THE FAILURE CARRIER HERE IS `jq`, NOT THE PRODUCER, AND THAT IS WHAT SETS THE FLOOR. Measured
+    # on this repo 2026-08-27 (Linux 6.18, 64 KiB pipe buffer), 20 trials per point: in EVERY
+    # inverted run `grep` itself exits 0 — the match SUCCEEDED — and the 141 comes from the
+    # grep-adjacent stage still having output to write. `printf` is a bash BUILTIN whose whole
+    # output the pipe buffer absorbs, so it survives to ~98 KB; `jq` must parse the entire array
+    # before it emits anything, so it is GUARANTEED to still be writing when grep exits, and it
+    # inverts once ITS OWN OUTPUT passes ~20 KB. Measured on THIS pipeline over a UUID array with
+    # the needle first: 300 panes (11,137 B out) 0/20 wrong · 600 (22,237 B) 13/20 — racy · 1,000
+    # (37,037 B) 20/20 — deterministic; the drained form is 0/20 at every size up to 4,000 panes.
+    # LATENT today (11 panes measured 2026-08-26) — drained anyway, because the margin is a fact
+    # about today's pane count, not about this code, and nothing announces the crossing. The arm in
+    # tests/cc-notify.bats is sized at 1,500 panes, i.e. inside the deterministic region rather
+    # than the racy band, so a re-introduced `-q` fails every run instead of two runs in three.
+    printf '%s' "$raw" | jq -r '.[].id // empty' 2>/dev/null | grep -xF "$u" >/dev/null && return 0
     return 1       # list readable AND uuid absent → authoritatively not-live
   fi
   return 2         # it2 unavailable / errored / timed out → no liveness oracle → unknown
