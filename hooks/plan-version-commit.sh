@@ -76,9 +76,21 @@ jq -nc \
   # Copy plan file (follow symlinks with -L)
   cp -L "$FILE" "plans/$BASENAME" 2>/dev/null || exit 0
 
-  # Skip if content unchanged (dedup via git status)
+  # Skip if content unchanged (dedup via git status).
+  #
+  # `[ -z "$( … )" ]` and never `… | grep -q .`: the pipeline form reads a PRESENT untracked file as
+  # ABSENT once the producer outruns the pipe buffer, because grep -q leaves on the match, ls-files
+  # takes SIGPIPE and pipefail promotes it — here under a leading `!`, so the wrong answer takes the
+  # `exit 0` and the plan version is never committed. This is `pipefail-sigpipe-lint`'s own `g7`
+  # GREEN idiom, which discards the pipeline status by construction, and it keeps the `&&`
+  # short-circuit so the abstain path still pays only one fork.
+  #
+  # LATENT BY CONSTRUCTION, not by size, and the distinction matters because a size ceiling only
+  # ever grows: the pathspec is a SINGLE FILE, so this producer can emit at most one path (~40 B)
+  # however large the plan repo becomes. Recorded so nobody cites it as evidence about a population
+  # — its sibling in hooks/teammate-checkpoint.sh has an unbounded feed and was measured LIVE.
   if git diff --quiet -- "plans/$BASENAME" 2>/dev/null && \
-     ! git ls-files --others --exclude-standard -- "plans/$BASENAME" | grep -q .; then
+     [ -z "$(git ls-files --others --exclude-standard -- "plans/$BASENAME")" ]; then
     exit 0  # No changes
   fi
 
