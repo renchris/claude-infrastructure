@@ -35,11 +35,43 @@
 #   `printf '%s\n' "$VAR"` builtin, 64 KiB                      10/10   ← the pipe buffer
 #   `printf '%s\n' "$VAR"` builtin, 96 KB / 128 KB / 269 KB     10/10
 #
-# The boundary is not probabilistic and it is not the grep implementation: it is the 64 KiB pipe
-# buffer. One write that FITS completes before the consumer is even scheduled; one that does not
-# blocks mid-write and is SIGPIPEd exactly like an external producer, deterministically. (A brief
-# measured against a differently-shaped payload put the knee lower and made it look statistical —
-# 7/10 at 49 KB, 10/10 at 59 KB. Same conclusion, softer edge; the sharp one above is this shape.)
+# 🚨 THAT TABLE IS TRUE AND ITS CONCLUSION WAS NOT — CORRECTED 2026-08-28, and BOTH halves of the
+# sentence it used to carry are refuted by measurement. It read: *"The boundary is not probabilistic
+# and it is not the grep implementation: it is the 64 KiB pipe buffer … deterministically"*, and
+# dismissed a contrary 7/10-at-49 KB reading as "a softer edge, same conclusion". It is not the same
+# conclusion. A knee stated as ONE byte figure is under-specified in three ways, each measured:
+#
+#   1. IT MOVES WITH LINE COUNT AT FIXED BYTES. `grep` cannot exit on a line it has not finished
+#      reading, so the decision unit is the LINE, not the byte. Decorrelated in ONE interleaved run
+#      (BACKLOG_DRAIN_24_7 recycle #255, `probe255-ab.sh`): 37,121 B over 2,856 lines of 13 B read
+#      674/1,000 WRONG, and the SAME 37,121 B over 689 lines of 55 B read 0/1,000. Same bytes, same
+#      consumer, same needle position, same instant.
+#   2. IT IS PROBABILISTIC BELOW THE BUFFER. 674/1,000 is a band, not a boundary. #255 put the onset
+#      for a 13 B line near 23,399 B — 63% of the figure this header was read as certifying safe.
+#   3. IT IS A PROPERTY OF THE BOX, and this file publishes numbers from exactly one. Re-run here on
+#      **Linux 6.18 / GNU bash 5.2.21 / GNU grep 3.11** (200 trials/cell, one box, one run, load
+#      unpinned — a weaker draw than either set above, reported as such):
+#
+#        38,485 B over    690 lines of 55 B ....   0/200 WRONG
+#        41,741 B over  2,857 lines of 13 B ....   1/200 WRONG      ← macOS/BSD read 674/1,000 here
+#        88,901 B over  6,001 lines of 13 B .... 197/200 WRONG
+#       180,901 B over 12,001 lines of 13 B .... 200/200 WRONG
+#
+#      The DIRECTION of (1) reproduces — more lines at the same bytes is worse — but the MAGNITUDE
+#      does not survive the crossing: at the shape macOS inverts two times in three, this box inverts
+#      one time in two hundred, and the near-deterministic onset sits at the 64 KiB pipe buffer the
+#      old sentence named. So that sentence was not wrong about THIS platform; it was wrong to state
+#      a platform's constant as the mechanism's.
+#
+# ⚠️ WHY THAT IS NOT AN ACADEMIC POINT IN THIS REPO: these scripts run on BOTH. The local lane is
+# macOS/BSD; Lane A (BACKLOG_DRAIN_24_7 §4) runs the same files in Linux cloud VMs. A site ranked
+# safe against one box's floor is unranked against the other's, and — the sharper edge — a FIXTURE
+# calibrated to the macOS onset (~23 KB) is VACUOUS on Linux: it passes against the unfixed script.
+# The PIPE1/PIPE2 arms in tests/deploy-link-parity.bats therefore assert past the 64 KiB pipe buffer,
+# which is the more conservative of the two floors and holds on both.
+#
+# 🚨 SO: WHEN YOU PUBLISH A FLOOR, PUBLISH ITS LINE WIDTH AND ITS BOX. A bare byte figure is not a
+# floor — it is one platform's reading of a two-variable surface, and it is read as permission.
 #
 # A variable's contents are not bounded by inspection, so the builtin exemption cannot key on the
 # command WORD — it keys on the ARGUMENT. A pure LITERAL keeps the 0/200 exemption (a literal you
