@@ -219,6 +219,56 @@ correctly refusing a 60 s quiet window — `C1 FAIL` (tertile swing 1.56× > 1.3
 6 unmeasurable), `VERDICT: NO-ATTRIBUTION`, exit 1, withheld fit labelled withheld. The instrument
 is ready; only the fleet is missing.
 
+### 6b · The run is now a PROGRAM, and it refuses the wrong box in a second (2026-08-28)
+
+§6 above is a protocol, and a protocol makes the operator the runtime: sample, read a verdict,
+decide whether to extend, re-sample, re-read, and on a PASS re-grep three citation sites. Two of
+those steps are judgments, one is a loop, and **none of them can start off-box** — which is the
+part that kept costing something. The dispatch wave that produced this section landed a session on
+a 4-core Linux container with no fleet, where `cc_sp_active` reads `-` and every `claude.exe` count
+is 0. Nothing in §6 says so, so the honest reading of it there was *run the hour and see* — an hour
+that ends in a `C3 FAIL` reading **identically** to a genuinely quiet box.
+
+`scripts/capacity-marginal-run.sh` is §6 as one command, and its first act is the one that was
+missing:
+
+```sh
+bash scripts/capacity-marginal-run.sh --preflight-only     # 1 second, on any box
+bash scripts/capacity-marginal-run.sh                      # the run itself
+```
+
+**Preflight uses the sampler as its own arbiter** — it takes ONE real row through
+`capacity-marginal.sh sample` and inspects it, rather than re-implementing the probes, so it can
+never disagree with the run it gates (the shape `githooks/pre-commit` uses for the same reason). It
+refuses on three named terms: `load1` unreadable (no row recorded), `active` unmeasurable (the
+sensor the coefficient is denominated in), `fleet` below `CC_MARGRUN_MIN_RESIDENT` (a marginal per
+ACTIVE session fitted where there is no fleet is a slope through one point). Measured on the
+container this section was written in: **`PREFLIGHT-REFUSED — active`, exit 4, in one second.**
+
+**The driver's own controls are the two judgments §6 left to a human**, and both are guards against
+this driver re-committing the defect its instrument was built to refuse:
+
+| verdict | exit | fires when |
+|---|---|---|
+| `MARGINAL` | 0 | all three controls pass; prints the coefficient **and re-greps the citation sites** rather than reciting §6a's table |
+| `UNDECIDED` | 1 | budget spent, failing term still moving — prints the command that extends **the same series** |
+| `PERSISTENT-REFUSAL` | 3 | the same term refused `--repeat-refusals` consecutive windows, **past `CC_MARGRUN_SETTLE_S`** — §6's *"which would itself be the finding"*, as a distinct exit so a caller can tell a finding from a spent budget |
+| `PREFLIGHT-REFUSED` | 4 | this box cannot answer; nothing is sampled |
+
+- **The settle floor (default 3600 s).** C2 needs `n_eff` ≥ 20, so an early window *must* fail it.
+  Declaring a persistent refusal over four minutes of data is B3's mistake in a nicer wrapper, and
+  the floor is what stops it. `tests/capacity-marginal-run.bats` runs the identical input on both
+  sides of the floor and asserts the verdict changes.
+- **An uninformative C2 never builds a streak.** A window whose C2 failure is worded *"uninformative,
+  not refuting"* resets the counter outright — that distinction is the whole lesson of B3, and
+  counting such a window as evidence would be the defect by name.
+
+Verified this session, off-box: `bats tests/capacity-marginal-run.bats` **14/14**, sibling suites
+still 61/61, `shellcheck` clean, `test-hermeticity-lint.sh` clean (553 suites, 0 new leaks),
+`bats-testname-eval-lint.sh` clean, and the live preflight refusal above. **The coefficient is still
+unmeasured and none of the four values may be quoted** — what changed is that the run is now one
+command that cannot be started on a box that cannot answer it.
+
 ---
 
 ## 7 · What this does not do

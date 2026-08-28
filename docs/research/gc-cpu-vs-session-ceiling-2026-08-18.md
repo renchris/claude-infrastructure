@@ -203,6 +203,14 @@ qualifies on ~2026-08-24** under this repo's own 2.1.220 precedent if no success
   is denominated in. `CC_ADMIT_ACTIVE_CEILING=8` is **not** blocked on the measurement: it now
   stands on the 127/127 refusal band, a count over refusals that needs no per-session divisor.
   Re-grep at the PASS rather than working from any list of paths.
+  ✅ **The run is a program now (2026-08-28, §6b of that doc):** `scripts/capacity-marginal-run.sh`
+  drives sample→analyze→extend to one of four named verdicts, and its **preflight refuses a box that
+  cannot answer in one second** — `load1` unreadable, `cc_sp_active` unmeasurable, or no resident
+  fleet — using the sampler's own row as its arbiter rather than a second set of probes. Measured on
+  the off-box container that wrote §6b: `PREFLIGHT-REFUSED — active`, exit 4. What is still missing
+  is only the fleet: **one ~1 h window on the 10-core Darwin box during a dispatch wave**, started
+  with `bash scripts/capacity-marginal-run.sh`. The coefficient remains unmeasured and the ban on
+  all four values stands until that window returns `VERDICT: MARGINAL`.
 - **Whether load average means anything as a capacity signal at all.** At constant N=15–16 the box
   read **11.21 → 36.07**; one instrumentation run alone moved it 19 → 36 with session count unchanged.
 - **Whether automated fires retry after a capacity refusal** — decides whether raising the ceiling
