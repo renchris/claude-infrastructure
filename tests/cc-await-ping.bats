@@ -26,11 +26,30 @@ setup() {
 # ── beat fixtures (the C2 oracle) ────────────────────────────────────────────────────────────────
 # One attestation per turn boundary, exactly the shape hooks/session-beat.sh writes:
 # kind=prompt at UserPromptSubmit, kind=stop at Stop, `seq` monotone across both.
-beat() { # <seq> <kind> [age-seconds]
-  local age="${3:-0}"
-  jq -nc --arg k "$2" --argjson s "$1" --argjson t "$(( $(date +%s) - age ))" \
-    '{sid:"sidGOAL",pane:"p0",cwd:"/tmp",pid:1,lstart:"x",t:$t,kind:$k,who:"auto",operatorT:null,seq:$s}' \
-    > "$CC_BEAT_DIR/$SID.json"
+#
+# `who` AND THE STICKY `operatorT` ARE PART OF THE FIXTURE, because they are what C2 reads. The
+# defaults are who=auto / operatorT unset, which is the SESSION'S OWN AUTO-DRIVE — the shape
+# tests/session-beat.bats:32 pins ("a Stop-hook re-prompt reads who=auto with NO operatorT") and the
+# shape every beat of an arm turn's hook-blocked closing chain has. `beat <seq> <kind> [age]
+# operator` raises the mark, exactly as session-beat.sh does on a real operator prompt; $BEAT_OPT is
+# exposed so a test can model an operator prompt whose OWN beat was never sampled (the mark is
+# sticky, so the next beat still carries it — that is what closes the sampling hole).
+#
+# WRITTEN ATOMICALLY (tmp + `mv -f`), because session-beat.sh:100-107 is, and the difference is not
+# cosmetic: a bare `>` truncates the file for as long as the `jq` that fills it takes, and a watcher
+# whose arm gate samples that window reads NO beat and REFUSES (exit 6, reason=no-beat). Any test
+# whose fixture rewrites the beat while a watcher is starting is then load-sensitively flaky —
+# observed once here, under a concurrent second bats run, on a test that passes alone every time.
+BEAT_OPT=""
+beat() { # <seq> <kind> [age-seconds] [who]   — who=operator raises the sticky operatorT high-water mark
+  local age="${3:-0}" who="${4:-auto}" t
+  t="$(( $(date +%s) - age ))"
+  [ "$who" = operator ] && BEAT_OPT="$t"
+  jq -nc --arg k "$2" --arg w "$who" --arg op "$BEAT_OPT" --argjson s "$1" --argjson t "$t" \
+    '{sid:"sidGOAL",pane:"p0",cwd:"/tmp",pid:1,lstart:"x",t:$t,kind:$k,who:$w,
+      operatorT:(if $op == "" then null else ($op|tonumber) end), seq:$s}' \
+    > "$CC_BEAT_DIR/.$SID.tmp"
+  mv -f "$CC_BEAT_DIR/.$SID.tmp" "$CC_BEAT_DIR/$SID.json"
 }
 
 @test "exits 0 and prints the new line when a ping lands mid-wait" {
@@ -719,7 +738,7 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
 
 @test "idle-scoped: stands down (exit 0, verdict=stood-down) when its session takes a new turn" {
   beat 5 prompt
-  ( sleep 1; beat 6 prompt ) &
+  ( sleep 1; beat 6 prompt 0 operator ) &
   local writer=$!
   run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
   wait "$writer" 2>/dev/null || true
@@ -729,12 +748,31 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
 
 @test "idle-scoped: the stand-down carries NO body — there is no mail, and a fake one would be a lie" {
   beat 5 prompt
-  ( sleep 1; beat 6 prompt ) &
+  ( sleep 1; beat 6 prompt 0 operator ) &
   local writer=$!
   run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
   wait "$writer" 2>/dev/null || true
   [ "$status" -eq 0 ]
   [ ! -f "$MB" ] || [ ! -s "$MB" ]
+}
+
+@test "RED-PROOF b60eb29e97dd: the ARM TURN's own hook-blocked closing chain does NOT self-cancel" {
+  # THE BUG THIS PINS. The wake floor DEMANDS this arm from inside a BLOCKED Stop, so the arm turn
+  # never ends in one beat: every hook that blocks the closing stop adds a stop beat AND an
+  # auto-driven re-prompt beat (tests/session-beat.bats:32). The seq therefore runs two clear of the
+  # arm baseline while the session is still merely closing the turn that armed the watcher — and the
+  # old fixed baseline+1 allowance stood the watcher down there, 2 arms out of 2, before the idle it
+  # was scoped to had begun. A wake floor that blocks a stop to demand an arm which deterministically
+  # no-ops has bought nothing and spent a budgeted block.
+  beat 10 prompt                        # arm here: the wake floor's own "Stop hook feedback:" re-prompt
+  ( sleep 1; beat 11 stop               # the arm turn's trailing Stop …
+    sleep 1; beat 12 prompt             # … blocked by a second Stop arm → auto re-prompt
+    sleep 1; beat 13 stop ) &           # … and its trailing Stop
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 6
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 2 ]                                  # still watching → ran its term
+  [[ "$output" != *"stood-down"* ]] || false
 }
 
 @test "idle-scoped: the ARM TURN's own trailing Stop does NOT self-cancel it (baseline+1 is excluded)" {
@@ -749,18 +787,46 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
   [[ "$output" != *"stood-down"* ]] || false
 }
 
-@test "idle-scoped: a Stop beat BEYOND baseline+1 does cancel (the sampling hole is closed)" {
+@test "idle-scoped: an UNSAMPLED operator prompt still cancels (the sampling hole is closed)" {
   # The beat file holds only the LATEST boundary, so a whole turn can complete inside one poll and
-  # leave us looking at a Stop-kind beat whose prompt predecessor we never sampled. Turns alternate,
-  # so seq > baseline+1 PROVES a prompt beat happened in between — ignoring it would re-open the
-  # starvation pole through the oracle itself.
+  # leave us looking at a Stop-kind beat whose prompt predecessor we never sampled. seq cannot tell
+  # that apart from the arm turn's own closing chain (the RED-PROOF above) — but `operatorT` can,
+  # because it is a STICKY high-water mark: the operator prompt we missed is still carried by every
+  # later beat. Here seq jumps 10 → 13 with the prompt at 12 never sampled, and the watcher stands
+  # down anyway, off the mark the stop beat carries.
   beat 10 prompt
-  ( sleep 1; beat 13 stop ) &
+  ( sleep 1; BEAT_OPT="$(date +%s)"; beat 13 stop ) &
   local writer=$!
   run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
   wait "$writer" 2>/dev/null || true
   [ "$status" -eq 0 ]
   [[ "$output" == *"verdict=stood-down"* ]] || false
+}
+
+@test "idle-scoped: a session with NO operator prompt yet still cancels on its first one (null → set)" {
+  # A dispatched peer's whole life can be auto-driven, so its arm baseline is `operatorT: null`. The
+  # rise that matters there is null → set, which a numeric comparison against an unset baseline must
+  # not silently swallow.
+  beat 4 prompt                                   # operatorT null at arm
+  [ "$(jq -r '.operatorT' "$CC_BEAT_DIR/$SID.json")" = "null" ]
+  ( sleep 1; beat 5 prompt 0 operator ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down"* ]] || false
+}
+
+@test "idle-scoped: an operator mark that merely PERSISTS is not a rise (baselined, never absolute)" {
+  # operatorT is sticky, so it is non-null across most of a live session's life. Standing down on
+  # its mere presence would make the mode no-op for exactly the sessions an operator is driving.
+  beat 7 prompt 0 operator                        # the operator prompt that PRECEDES the arm
+  ( sleep 1; beat 8 stop; sleep 1; beat 9 prompt; sleep 1; beat 10 stop ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 6
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 2 ]
+  [[ "$output" != *"stood-down"* ]] || false
 }
 
 @test "idle-scoped C1: MAIL still wins — a ping is delivered, never traded for a silent stand-down" {
@@ -860,7 +926,7 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
   beat 5 prompt
   run env ITERM_SESSION_ID="w0t0p0:$UUID" CC_PANE_ID=p0 "$AWAIT" "$UUID" --idle-scoped --interval 1 --timeout 2
   [ "$status" -eq 2 ]                                  # armed → the pane fallback found sidGOAL
-  [[ "$output" == *"new turn of [$SID]"* ]] || false
+  [[ "$output" == *"takes a turn it did not drive itself"* ]] || false
 }
 
 @test "idle-scoped: a REFUSAL never prints the watching banner (it would report the opposite)" {
@@ -908,7 +974,7 @@ stop_attempts() { # <pid|0> <count> → the number of those stops at which the g
   local w=$!
   sleep 1
   local before; before="$(stop_attempts "$w" 3)"
-  beat 6 prompt                                        # the external event: this session woke
+  beat 6 prompt 0 operator                             # the external event: this session woke
   local after; after="$(stop_attempts "$w" 4)"
   # positive control: it is still alive, so this is the MUTATION and not a crashed watcher
   kill -0 "$w" 2>/dev/null || false
@@ -925,7 +991,7 @@ stop_attempts() { # <pid|0> <count> → the number of those stops at which the g
   local w=$!
   sleep 1
   local before; before="$(stop_attempts "$w" 3)"
-  beat 6 prompt
+  beat 6 prompt 0 operator                             # the same external event, on the same timeline
   local after; after="$(stop_attempts "$w" 4)"
   kill "$w" 2>/dev/null || true
   wait "$w" 2>/dev/null || true

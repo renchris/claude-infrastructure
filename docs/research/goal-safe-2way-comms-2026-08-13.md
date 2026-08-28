@@ -173,7 +173,9 @@ C1–C7 shipped as written. Four things the build settled that the spec left ope
    interpolate `--sid <session_id>` (they each hold it already: `mailbox-drain.sh:83`,
    `session-continue.sh:133`, and the PreToolUse payload for the deny). A producer that cannot
    resolve one emits the placeholder and says so, rather than teaching a form the tool refuses.
-3. **C2 is an OFFSET, not a `kind` filter.** The beat file holds only the LATEST boundary, so a whole
+3. **C2 is an OFFSET, not a `kind` filter.** — 🚨 **SUPERSEDED 2026-08-28 by §4.2 below; the offset
+   was the defect, not the fix.** Kept for the reasoning, which is sound up to one wrong inference.
+   The beat file holds only the LATEST boundary, so a whole
    turn can complete inside one poll and leave the watcher looking at a Stop-kind beat whose prompt
    predecessor it never sampled — and a watcher that ignores that stays parked over a session that
    has moved on, i.e. the starvation pole re-entering through the oracle. Turns alternate, so
@@ -202,6 +204,44 @@ per-segment scope, and that the loop shape still swallows it).
 idle-scoped deferral, which is an alarm losing its polarity rather than a wrong verdict. Filed
 separately; the fix is the one §8 already names (recognise the idle-scoped claim, downgrade to an
 info line).
+
+### 4.2 · C2's oracle is `operatorT`, not `seq` (backlog `b60eb29e97dd`, landed 2026-08-28)
+
+**The mode could not survive the turn that armed it — 2 arms out of 2** (baselines rendering as
+`seq>3` and `seq>6`), so every wake floor block that demanded this arm bought a watcher that
+deterministically no-op'd and a session that then idled deaf, with the floor's budgeted block spent.
+
+**Where §4.1 item 3 goes wrong is one inference, not the observation.** `seq > baseline+1` does prove
+an unsampled prompt beat happened. It does **not** prove a NEW TURN, and the gap between those two is
+the whole bug: the wake floor demands this arm from inside a **blocked Stop**, so the arm is issued
+mid-close, and *every further Stop arm that blocks that close adds two beats* — a stop beat, then an
+auto-driven re-prompt beat (`tests/session-beat.bats:32`: "a Stop-hook re-prompt reads `who=auto`
+with NO `operatorT`"). The arm turn therefore does not end in one beat; it ends in a chain whose
+length is however many Stop arms happen to block. **No fixed allowance can bound that**, so replacing
+1 with a larger constant would only move the failure.
+
+**`operatorT` answers C2's actual question** — "was this session woken by something it did not drive
+itself?" — and it beats `seq` on every axis the mode needs:
+
+| | `seq + allowance` (as built) | `operatorT` rise (now) |
+|---|---|---|
+| the arm turn's closing chain | counted as new turns ⇒ **the bug** | invisible: the chain is auto-driven by construction |
+| the sampling hole | patched by proxy (the offset exists only for this) | closed exactly — the mark is **sticky**, so a missed operator prompt is still carried by the next beat |
+| tuning surface | a constant to get wrong | none; one monotone comparison |
+
+Two things this deliberately does not do. It does not stand down for a **peer's** wake — that is C1,
+checked first in the poll loop, so a ping is delivered rather than traded for a silent stand-down.
+And it does not stand down for an auto-driven turn from some *other* background task; C5's 3600 s
+timeout is the designed floor there, and a session whose operator never speaks is one no stand-down
+could have helped. Both are strictly better than the shipped behaviour, which stood down before the
+idle began in every case.
+
+The comparison is a **rise above the arm baseline, never a presence**: `operatorT` is sticky and so
+is non-null across most of a live session's life, and testing it absolutely would reproduce the same
+instant no-op from the other direction (`tests/cc-await-ping.bats` — "an operator mark that merely
+PERSISTS is not a rise"). Red-proof for the original defect: "the ARM TURN's own hook-blocked closing
+chain does NOT self-cancel"; both poles of the §4.1 fixture-goal proof now model the external event
+as an operator-driven turn, which is what "the world changed" always meant.
 
 ## 5 · The safety net: W2 — re-arm the asyncRewake watcher at every Stop
 

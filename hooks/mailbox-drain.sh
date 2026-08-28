@@ -399,7 +399,7 @@ You lose nothing by killing it: the goal blocks your stops, so you keep taking t
     fi
   else
     [ "$_headless" = 1 ] || nudge="
-(a /goal is LIVE, so do NOT park the ordinary 4-hour watcher — Claude Code SKIPS /goal evaluation at any Stop where a non-terminal background Bash exists, and that arm would silently disable the goal driving this session. Peer mail still lands at every turn boundary the goal forces, so while you have work you need no watcher at all. If you have NOTHING actionable and are waiting on an external event, arm the idle-scoped awaiter instead — it stands itself down on your next turn, so it defers the goal for exactly as long as you are actually idle: $_idlecmd)"
+(a /goal is LIVE, so do NOT park the ordinary 4-hour watcher — Claude Code SKIPS /goal evaluation at any Stop where a non-terminal background Bash exists, and that arm would silently disable the goal driving this session. Peer mail still lands at every turn boundary the goal forces, so while you have work you need no watcher at all. If you have NOTHING actionable and are waiting on an external event, arm the idle-scoped awaiter instead — it stands itself down on your next operator-driven turn (never on your own closing chain of hook-blocked stops), so it defers the goal for exactly as long as you are actually idle: $_idlecmd)"
   fi
 else
   [ "$_watched" = 1 ] || [ "$_headless" = 1 ] || nudge="
