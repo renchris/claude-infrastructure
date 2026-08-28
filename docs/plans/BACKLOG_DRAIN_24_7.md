@@ -86,6 +86,140 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-28 — drain recycle #251: method 221 — A REDUCING FILTER BETWEEN THE PRODUCER AND THE
+  EARLY-EXITING CONSUMER DECOUPLES WHAT A STAGE *READS* FROM WHAT IT *WRITES*, SO A SIGPIPE HAZARD'S
+  SIZE VARIABLE IS POST-MATCH BYTES **WRITTEN**, NOT THE FEED.** #250 named
+  `scripts/postland-verify.sh:3349` as the strongest lead it left and ranked it *"the same shape ONE
+  STAGE WORSE — FOUR stages, so its floor is below the 17,427 B three-stage figure."* **The site was
+  the right site and the ranking's reason does not survive measurement.** Taken, measured, fixed.
+- 🚨 **THE CONSEQUENCE IS SHARPER THAN "FALSELY EXONERATED", AND IT IS §1's FALSE-CLOSE MECHANISM
+  LIVING INSIDE AN INSTRUMENT.** `verb_falsify_red` is not a reporting verb: `fals_red()` (:3281)
+  stores `--falsify-red <suite> <sha>` as the **STORED FALSIFIER** on every backlog row this script
+  mints, and `bin/cc-premise run_falsifier` re-runs it at CLAIM time under an asymmetric contract the
+  SUT quotes on itself — *"exit 0 means the premise is GONE and the claim is refused; every non-zero
+  means still live, advisory only. So **exit 0 is the only load-bearing answer here**."* The
+  inverted branch skips `return 2` (*"the green cannot speak about this file"*) and falls to
+  `return 0`. **So a HOST suite — excluded from the corpus by C18, therefore never run by any green —
+  has its still-live red row refused as premise-gone.** A row silently closed by a green that
+  structurally never ran the suite it is about is exactly §1's *"per-effort 0 open read as program
+  completion"*, one layer down, in the instrument the drain uses to decide what is still real.
+- **MEASURED END-TO-END ON THE REAL CLI VERB, NOT ON AN EXTRACTED FUNCTION** (`probe251.sh`, 20
+  trials per cell, fixture repo minted per trial, needle FIRST in the manifest so `grep -q` quits
+  early). Against the `origin/main` subject: **rc=2 20/20** at 0 / 5,000 / 20,000 B of post-match
+  manifest; **rc=0 17/20 at 60,000 B**; **rc=0 20/20 at 120,000 B**. Post-fix the same table reads
+  **rc=2 20/20 in every cell**. NEG control (`probe251-neg.sh`, needle planted by NOTHING, so it is
+  genuinely a non-member — #250's scar): **rc=0 20/20 at 0 / 60,000 / 120,000 B in BOTH states,
+  unmoved by the fix**, so the cure cannot be passing by always answering 2.
+- ⚠️ **#250's STAGE-COUNT RANKING IS NOT SUPPORTED, AND I MEASURED IT RATHER THAN INHERITING IT.**
+  Same platform, same feed builder, 20 trials per cell, 2- vs 3- vs 4-stage spellings of the same
+  question: the **2-stage** floor is clearly the highest (20/20 correct at 65,039 B where both longer
+  forms had already broken), but **3-stage and 4-stage are not separable at 20 trials** — 3-stage was
+  equal or LOWER than 4-stage in five of seven cells. So *"one stage worse ⇒ a lower floor"* is not
+  the reason this site outranked its siblings. **The direction "more stages ⇒ lower floor" holds
+  against two stages and stops carrying information after that.**
+- 🚨 **THE HALF THAT GENERALISES, AND IT REFINES #250's AXIS RATHER THAN REPLACING IT.** #250 fixed
+  the rank onto *which side of the pipe the variable sits on*. Necessary, not sufficient — because a
+  **reducing** filter sits between the producer and the consumer here, and it decouples read volume
+  from write volume. Measured on three realistically-shaped feeds: a **71,084 B** manifest whose
+  57,150 post-match bytes are COMMENTS read **20/20 CORRECT**, because `sed 's/#.*//'` turns each
+  commented line into one byte and the producer never blocks; a **30,902 B** manifest listing every
+  one of the repo's 552 suites, 16,968 post-match bytes of real ENTRIES, also 20/20 correct; while a
+  synthetic 120,000 B entry feed inverts 20/20. **The feed's size predicts none of that. What the
+  surviving producer still has to WRITE after the consumer quits predicts all of it.** This is
+  #250's own declared blind spot — *"neither classifier reads what the producer WRITES, only which
+  variables its text mentions"* — promoted from a footnote to the ranking variable.
+- **REACHABILITY, AND IT INVERTS THE NAIVE READING OF THE SAME FILE.** The live manifest is
+  **14,406 B**, which sits inside the band where a head-positioned needle inverts. It is nonetheless
+  **20/20 correct today**, and the reason is LAYOUT, not size: its three entries sit at lines
+  **166–172 of 172**, so **13,934 B PRECEDE the first entry and exactly 1 B FOLLOWS the last**. When
+  `grep` quits, `sed` has one byte left to write. **A file can be far past a hazard's floor and be
+  safe because of where its payload sits — so "how big is the feed" is the wrong question to ask of
+  a census row, twice over.** Growth ceiling: the manifest can never list more suites than exist
+  (552 today ⇒ ≈17 KB post-match), and that ceiling measured 20/20 correct here.
+- 🚨 **PLATFORM CAVEAT — AND IT IS WHY THAT CEILING IS NOT A LICENCE TO DEFER.** Every number above
+  was measured in a **Claude Cloud Linux/glibc container with 64 KiB pipe buffers**; inversion onsets
+  here at ~50–60 KB. **The fleet runs macOS, whose pipe buffer starts at 16 KiB** — roughly a quarter
+  — which would put the onset near the ≈17 KB all-552-suites ceiling I just called safe. **I could
+  not measure macOS and do not claim the bound holds there.** For the same reason **#250's 17,427 B
+  three-stage figure and 37,121 B two-stage floor were measured on the Mac and are NOT comparable to
+  any figure in this entry** — nobody should read the two entries as one table. **A SIGPIPE floor is
+  a property of the platform's pipe buffer, so a floor measured on one box may not be quoted on
+  another.** The cure is fork-free and strictly cheaper than the pipeline it replaces, so the
+  platform question changes nothing about taking it.
+- ✅ **THE DELIBERATE GREEN, AND IT IS STARKER THAN #250's: THERE WAS NO ARM AT ALL.** #250's story
+  was a well-built arm that stayed green because its fixture was 17 bytes. Here the suite's **130
+  incumbent tests name exactly one of the SUT's four verbs** (`verb_bisect`); `--falsify-red`,
+  `verb_is_green` and `verb_status` have **zero** coverage between them. So nothing in a 3,526-line
+  red-proof suite could have gone red when this inverted — **not because a fixture was too small, but
+  because the verb was never addressed.** A suite's test COUNT says nothing about which of its
+  subject's entry points it can speak about; **count the verbs, not the arms.**
+- **THE ARMS: 130 → 132, both APPENDED, zero existing assertions edited.** Arm 131 is the MECHANISM
+  arm: it drives the **real CLI dispatch** end-to-end at 120,000 B (taken from the measured
+  always-inverted band, so a re-introduced `grep -q` fails every run rather than one in twenty), with
+  the same-size NEG control inline so the two can never drift apart, an assertion that the needle is
+  genuinely absent from the control's manifest, and an explicit assertion that **pipefail is ON** —
+  without which the arm is vacuous in both states. Arm 132 is the CLASS arm, spanning the whole verb
+  because the property is about *where an early-exiting consumer may sit*, not about one variable; it
+  strips **whole-line** comments only — never `s/#.*//`, because the function contains `${#lg}` and a
+  blanket strip would mangle it into a false green — and carries a positive control proving the
+  detector fires on the shape it hunts.
+- ✅ **RED-PROOF WITHOUT MUTATING THE SUBJECT, VIA THE SUITE'S OWN SEAM.** `setup()` already honours
+  `CC_POSTLAND_BIN`, so the unfixed subject was extracted with `git show origin/main:…` and pointed
+  at through that seam — **no in-place edit, so no sha256 restore trap and no window in which the
+  working tree is the wrong file.** Predictions written before the run: red set = exactly the two new
+  arms, the mechanism arm failing on its POS half and the class arm on the `grep -q` count. Observed
+  **exactly that**, each on its named assertion, with the hazard confirmed present in the subject
+  first. **Where a suite already has a binary-selection seam, use it — it is a strictly better
+  red-proof than mutate-and-restore.**
+- ✅ **RATCHET — #244's FREE ATTRIBUTION WORKED FIRST TRY AGAIN.** Bare lint before touching the
+  allowlist: it refused and named the change per path — *"`scripts/postland-verify.sh` now 0,
+  allowlist says 1 → set it to 0"*. **The row was DELETED, not lowered to 0**: the file's census
+  reached zero and no row in the list spells zero. Guarded against the obvious hazard of a whole-file
+  `--regen` — the regen was diffed against the live allowlist FIRST (**its only change was that one
+  row**, so no sibling's drift was silently absorbed), the deletion was then made surgically, and the
+  result asserted **byte-identical** to the regen. Census **135 → 134, LOST = exactly the one drained
+  site, NEW = 0**, PRE extracted from `origin/main` via `git archive | tar -x` rather than remembered.
+- ⚠️ **A NECESSARY CONDITION THAT IS UNIVERSAL IN ITS OWN POPULATION CARRIES ZERO RANKING
+  INFORMATION — MEASURED, BEFORE I TRIED TO HAND IT ON.** I started to leave "which of the remaining
+  sites pipe into an early-exiting consumer" as the next worklist. It is **132 of 134**, because that
+  condition is what census MEMBERSHIP means. **The next ranking cannot be another text classifier**:
+  by method 221 the discriminator is post-match bytes WRITTEN, which is a property of what the
+  producer emits and is not readable from the site's text at all — the exact blind spot #250 declared
+  and neither classifier closed. **The next link's deliverable is that MEASUREMENT, not a third
+  attribution table.** Both `PARAM_ON_PATTERN` sites are now drained (#250 took `branch-reaper:109`,
+  this link took `postland-verify:3349`), so that axis is exhausted and has no next row to hand on.
+- 🚨 **DECLARED NOT DONE, AND IT IS A W-P1 VENUE FINDING RATHER THAN A GAP IN THIS LINK.** This
+  recycle ran in a **Claude Cloud container, not on the box**. `cc-backlog`, `cc-notify`, `cc-custody`
+  and the whole `~/.claude/autonomy/` store **do not exist here** — so there is **no open census, no
+  close census, no floor, and no stores reading** in this entry, and none should be inferred from its
+  absence. **More consequentially: the row's own completion protocol — `cc-backlog done 70f0001c657b
+  --evidence <sha>` — is not executable by this worker.** The dispatcher routed a row to a venue that
+  cannot record that row's close. That is precisely the *venue policy* half of W-P1 (§1.4: the
+  standing dispatcher runs `CC_DISPATCH_VENUE_ONLY=cloud`), and it means **a cloud-lane close depends
+  on an on-box actor folding it in** — an unmodelled hop, and a candidate explanation for closes that
+  never land in the ledger. **The item must be closed on-box against the landed sha.**
+- ⚠️ **AN INSTRUMENT ARTIFACT I MADE, MEASURED AND THEN DISCARDED RATHER THAN REPORTED.** A serial
+  and a parallel pass of `tests/postland-verify.bats` were briefly running AT ONCE on this 4-core
+  container. The serial run's reds went 0 → 12 while they overlapped. **This SUT is documented
+  load-sensitive by its own contract (C24 band, C29 windows: *"a box at load 15 is at load 15 for all
+  three attempts"*), so those 12 are an artifact of my apparatus and are evidence about nothing.**
+  Discarded, and named here rather than quietly dropped, because a red count from a contaminated box
+  is exactly the shape of number that gets quoted later as though it were a finding. **Never run two
+  passes of a load-sensitive suite concurrently to save wall-clock — the second one destroys the
+  first.**
+- ⚠️ **AND THE INCUMBENT SUITE CANNOT GO FULLY GREEN IN THIS VENUE AT ALL, WHICH IS PRE-EXISTING.**
+  `git commit` inside the suite's fixture repos fails **"Author identity unknown"** in this container,
+  taking down a cluster of ~12 tests whose bodies commit to the fixture. **Attributed before it was
+  waved away:** it reproduces identically on a **fully pristine `origin/main` tree — pristine suite
+  file AND pristine SUT**, extracted via `git archive | tar -x`, verified per-test for *"is-green: 0
+  for a stamped-green sha"* and *"C7: the worktree cell is MINTED"*. So it is trunk's-and-the-venue's,
+  not this diff's, and per the global rule the close reports it in one line and closes on MY state.
+- **CLOSE (venue-limited, and the limits are stated rather than left as blanks).** Fix + arms +
+  ratchet landed as **`389bb90e`**; this entry follows it. **No open/close/floor census, no board, no
+  stores** — `cc-backlog` and `~/.claude/autonomy/` do not exist in this container (see the venue
+  finding above), so those five lists are ABSENT, not zero, and nothing about the ledger's motion
+  should be read out of this link. What IS measured: probe251 POS/NEG in both subject states, the
+  red-proof red set, six lints, and the census delta — all above.
 - **2026-08-27 — drain recycle #250: method 220 — A HAZARD'S RANK MUST KEY ON WHICH SIDE OF THE
   PIPE THE VARIABLE SITS ON, NOT ON HOW IT IS BOUND.** #249 classified every `pipefail-sigpipe-lint
   --census` site by asking *"is the variable this site PIPES parameter-bound in its enclosing
