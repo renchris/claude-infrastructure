@@ -305,3 +305,64 @@ records". The 0 replicates and is right; the control does not — those `rate_li
 the CC binary's own error enum being dumped by agents reading its strings, i.e. meta too. **The
 scan's proof that it could find anything was itself an artifact.** Use
 `cache_read_input_tokens` (present in 6,497 of 6,749 transcripts) as the control instead.
+
+---
+
+## §9 The §6 fix, executed — what shipped, and where it deviates from the prescription
+
+*Appended 2026-08-28, closing `cc-backlog 70ed289c10fb`. §6 above is the prescription; this is what
+the code now does. §1–§8 are unchanged.*
+
+`bin/claude-accounts:wall_projection()` gained a **second abstain floor**, beside the original one
+rather than replacing it, because the two guard different defects and the new one is the wider:
+
+| constant | guards | value |
+|---|---|---|
+| `MIN_ELAPSED_FRAC` | a noisy DENOMINATOR — at 1 h elapsed a 1% reading projects to 168% | `0.05` (unchanged) |
+| `MIN_PROJ_ELAPSED_FRAC` | the wrong MODEL — §3's mean 46 pp | `(168 − 48)/168 = 0.714` |
+
+The linear divisor is **not** replaced: §5.2 is right that 4 day-1-covered windows refute a model
+but cannot calibrate its replacement. Silence is the whole change.
+
+**Two deviations from §6 as written, both deliberate.**
+
+1. **"The last ~2 days" is implemented as `weekly_reset_h ≤ 48`, and its FIRST admitted reading
+   still carries a large residual.** §6 justifies the window with day 6 (−17 pp) and day 7 (−2 pp),
+   but a reading taken at 48 h remaining is a day-**5** reading, where §3's table shows −24 pp. The
+   48 h bound is kept anyway — a 24 h bound would silence the metric almost entirely, including
+   where it is genuinely load-bearing — and the residual is instead documented in the docstring as
+   what it is: **one-signed**. Linear UNDER-projects throughout the admitted window, because the
+   tail is where the catch-up happens. So a fired `⚠ WALL` past this floor is trustworthy, and
+   **silence is not proof an account will not fill its window.** That asymmetry is the reason a
+   −24 pp boundary residual is tolerable and a mid-week +20 pp false wall was not.
+
+2. **A carve-out §6 does not mention: `weekly_pct >= 100` projects at any phase.** The floor exists
+   because extrapolating a back-loaded curve is wrong. An account already AT the wall is not an
+   extrapolation — it is the present tense, and it is DOWN until reset (§2: next3 sat at exactly
+   100% for 11.2 h on 2026-08-11). Abstaining there would have dropped an alarm about a *fact* in
+   order to fix a *forecast*. The carve-out is a second predicate, never an early return: it must
+   not pierce `MIN_ELAPSED_FRAC`, where `frac` is 0 and the arithmetic divides by zero
+   (mutant-proved — the naive early-return form crashes and case 2c catches it).
+
+**What the operator sees change.** On `pace_line`'s weekly-drain block, a zero-strand row read
+mid-week loses its `N.NN× burn` clause and its `⚠ WALL trajectory` glyph and falls to the bare
+`no strand — on pace to fill the window`, which is the M3a nowcast speaking unaided by a model
+known to be wrong there. Nothing else moved: the strand rows, the sort by pp-at-risk, and the
+abstention texts are untouched.
+
+**Why dropping a warning is bounded here.** The glyph survives where it is trustworthy (inside the
+last 2 days, and at any phase once the meter reads 100), and where it is silenced **no routing
+decision depended on it** — `score_general` excludes a spent account on `weekly-exhausted`, read
+straight off the meter, and a repo-wide grep finds no consumer of `burn_ratio` / `proj_end_pct` /
+`wall_risk` outside `pace_line` and the stamps in `apply_burn`.
+
+**Tests.** `tests/claude-accounts-burn-ratio.bats` 10/10 — cases 2 (the §3 backtest's worst row,
+`next@day3` 51%/96 h, replayed) and 2b (both sides of the 48 h boundary) **RED-proved against the
+pre-fix binary**; 2c mutant-proved. Two existing render assertions were **updated in place, not
+deleted**: `tests/claude-accounts-strand.bats` RP-16 and `tests/claude-accounts-core.bats` RP-26
+each pinned `⚠ WALL trajectory` on a 114 h-left fixture — mid-week, i.e. exactly the reading this
+doc measured as false — and each now pins its absence there **plus its survival at 24 h left**, so
+the fix cannot be satisfied by deleting the alarm outright.
+
+**Still open, unchanged by this:** §5.2 (N=4; re-derive the curve after ≥2 more full cycles, which
+is what would let the divisor itself be replaced) and §5.3 (nothing alarms on the retrospective).

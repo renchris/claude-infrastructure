@@ -223,17 +223,35 @@ print("OK")'
   # next at phase 0.32 on 2026-08-25: weekly_pct 52, 114 h left, EWMA 1.725 %/h -> a raw
   # projection of 248.7%. In that regime EVERY projector measured here is badly wrong (the
   # incumbent renders 154.6%, this EWMA 231.4%, against a truth near 100%), so the clamp keeps
-  # the shortfall regime -- where the arithmetic converges -- and discards the overshoot. The
-  # account is reported as on a WALL TRAJECTORY, which is true and actionable; "248%" is neither.
+  # the shortfall regime -- where the arithmetic converges -- and discards the overshoot.
+  #
+  # ONE ASSERTION MOVED, THE CASE'S INVARIANT UNCHANGED. This case used to assert
+  # `⚠ WALL trajectory` on THIS row and called it "true and actionable". At 114 h left that is
+  # phase 0.32 -- mid-week -- and the backtest since measured the linear projection wrong by a
+  # mean 46 pp there, firing exactly this glyph on an account that closed at 99%
+  # (docs/research/weekly-reset-utilization-2026-08-25.md §3). `wall_projection` now abstains
+  # below MIN_PROJ_ELAPSED_FRAC, so the mid-week row loses the glyph and falls to the M3A nowcast
+  # alone. The invariant this case is FOR -- that the overshoot never renders as a NUMBER -- is
+  # untouched and still asserted; arm 2 pins the glyph where it survives, so the fix cannot be
+  # satisfied by deleting the alarm outright.
   run python3 -c "$LOAD"'
 r = {"acct": "next", "weekly_pct": 52, "weekly_reset_h": 114.0, "burn_wk_ewma_ph": 1.725}
 st = ca.wk_strand_pp(r)
 assert st == 0.0, st
 line = ca.pace_line([r])
-assert "⚠ WALL trajectory" in line, line
+assert "no strand" in line, line
+assert "⚠ WALL trajectory" not in line, line      # mid-week: the linear model is refuted here
 assert "248" not in line, line
 assert "231" not in line, line
 assert "154" not in line, line
+assert "1.62" not in line, line                   # the mid-week RATIO goes with the projection
+# arm 2 -- the same shape inside the last 2 days, where linear and empirical converge. 24 h left
+# is phase 0.857; 90% used projects to 105%. The glyph SURVIVES, the number still does not.
+late = {"acct": "next", "weekly_pct": 90, "weekly_reset_h": 24.0, "burn_wk_ewma_ph": 1.0}
+assert ca.wk_strand_pp(late) == 0.0, ca.wk_strand_pp(late)
+lline = ca.pace_line([late])
+assert "⚠ WALL trajectory" in lline, lline
+assert "105" not in lline, lline
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }

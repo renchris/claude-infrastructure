@@ -1847,11 +1847,24 @@ assert "next3 strand ~5pp of 8 · p96 of its own 3h burns" in line, line
 # RP-26 — a zero-strand account still RENDERS, and renders LAST. A sorted() over a list filtered
 # on strand > 0 passes RP-25 and drops this row silently.
 assert "next no strand" in line, line
-assert "⚠ WALL trajectory" in line, line
 assert line.rstrip().split(chr(10))[-1].strip().startswith("next no strand"), line
-# ...and its burn RATIO survives unchanged, while the >100 PROJECTION does not render as a number
-assert "1.62× burn" in line, line
-assert "162" not in line and "163" not in line, line     # the RATIO, never the ~162% projection
+# ...and the >100 PROJECTION does not render as a number.
+assert "162" not in line and "163" not in line, line     # never the ~162% projection
+# UPDATED IN PLACE (weekly-reset-utilization-2026-08-25 §3, §6), invariant unchanged. This pair
+# used to read `"⚠ WALL trajectory" in line` and `"1.62× burn" in line`. next sits at 114.21 h
+# left -- phase 0.32, mid-week -- and `wall_projection` is LINEAR, while measured weekly burn is
+# heavily back-loaded: backtested at day 3 it errs by a mean 46 pp and fired this very glyph on
+# an account that closed at 99%. It now abstains below MIN_PROJ_ELAPSED_FRAC, so a mid-week
+# zero-strand row renders the M3a nowcast alone. RP-26 is about the row SURVIVING and sorting
+# LAST, which is asserted above and unchanged; restoring either spelling would restore a wall
+# alarm the fleet measured as false.
+assert "next no strand — on pace to fill the window" in line, line
+assert "⚠ WALL trajectory" not in line, line
+assert "× burn" not in line, line
+# ...and the glyph is NOT deleted, it is phase-gated: the same shape at 24 h left still fires.
+late = ca.pace_line([row(acct="next", weekly_pct=90, weekly_reset_h=24.0, burn_wk_ewma_ph=1.0)])
+assert "⚠ WALL trajectory" in late, late
+assert "1.05× burn" in late, late
 assert "BEHIND" not in line, line                        # 47ddbf47c DELETED it: on 2026-08-16 three freshly-reset windows each read
                                                          # BEHIND, which is correct and reads as gross under-utilisation.
 # an abstention renders as the WORD plus its reason, never as a zero (L2)
