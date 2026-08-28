@@ -150,6 +150,20 @@ session's brief requires its **first act** to be pushing that branch — an empt
 Absence then becomes informative: no ref inside the budget is `BOOTING` (expected); no ref past it
 is `NOT-STARTED` (actionable — re-fire, or check entitlement).
 
+✅ **EXECUTABLE SINCE `f8bbc53e` (2026-08-28) — until then this paragraph was PROSE ONLY, on both
+legs, and C1 could not mean what §4.3 says it means** (backlog `0c8b39b67665`). Both fire paths
+instructed *a* push, so a content check would have passed; neither instructed it **first**. The CLI
+leg's trailer was titled "HOW TO RETURN YOUR WORK" and said *push whatever you have before you
+finish* — a push at the END — and the API leg (`cc-offload up --via api`, the shipping path)
+delivered the brief verbatim and never named the declared branch at all. A return channel and a
+boot beacon are not the same instruction and only the second one discriminates: under an
+end-of-run push, a session twenty minutes into a three-hour brief has pushed nothing **for the
+correct reason** and is byte-identical to one that never booted — both `ls-remote` rc=0 with empty
+stdout, past `declared_at + boot_s`. So C1 did not separate never-started from nothing-to-commit;
+it meant "no ref", which is §4.4's seven worlds at once, one of them healthy. §12's `cc-offload gc`
+retires on that verdict. `cc_cloud_brief_trailer` (`scripts/lib/cloud-create.sh`) now composes the
+contract for **both** legs from one place — see §13.7.
+
 ### 4.2 The discriminator the whole design rests on
 
 Measured, not assumed:
@@ -776,7 +790,10 @@ Before any cloud session is fired, in this order:
 1. `cc-cloud declare --id <id> --branch <b> --paths <what it will land> --url <session url>` —
    an undeclared cloud session is unobservable, and `declare` refuses without `--id`/`--branch`.
 2. The session's brief must require **pushing the declared branch as its first act**, so that
-   absence past the boot budget means something (§4.1).
+   absence past the boot budget means something (§4.1). ✅ **Now enforced by construction rather
+   than by whoever writes the brief** — `cc_cloud_brief_trailer` appends it on both legs and
+   `cc-offload` refuses to create without it (`f8bbc53e`, §13.7). The operator writing a brief no
+   longer has to remember this step, and cannot omit it.
 3. §5.2 must be wired first — otherwise `com.claude.team-orphan-reaper` may archive the team
    while the session is healthy.
 4. On completion, `cc-cloud retire --id <id>` — or let C3 `LANDED` render it silent, which it does
@@ -1887,3 +1904,57 @@ link at all and the shared checkout is 8 commits behind. `deploy-live` refuses c
 tree descends live HEAD; `postland-verify` has the sha queued and emits ~0.17 greens/day). Until it
 converges, the launchd sweep runs the OLD script and returns nothing — filed `5354fffc4079`.
 
+
+### 13.7 · ✅ §4.1's absence contract stopped being prose (`f8bbc53e`, 2026-08-28)
+
+The contract in §4.1 is the load-bearing paragraph of this whole document — §4.3's C1 arm and §8
+step 2 are both derived from it — and it had never been implemented. Backlog `0c8b39b67665` named
+the consequence exactly: *"it is the sole basis for C1 NOT-STARTED being readable as 'never
+booted', and without it no-ref cannot distinguish never-started from nothing-to-commit."*
+
+**Why a content check would have missed it, and position is the whole finding.** Both fire legs
+already told the session to push, so `grep -q 'git push'` was green on both before and after:
+
+| leg | what it shipped | what was wrong with it |
+| --- | --- | --- |
+| CLI `handoff-fire.sh` | a trailer titled *HOW TO RETURN YOUR WORK* — `switch -c`, then `push -u`, then *"push whatever you have **before you finish**"* | a return channel. The push is at the END, so absence is uninformative for the entire life of the brief |
+| API `cc-offload up --via api` | `cc-notify --cloud "$sid" "$(cat "$pf")"` — the brief VERBATIM | worse: the branch `--branch $br` declares, and which `cloud-create-api.py` authorises in the create body's `outcomes.git_info.branches`, was **never named to the session** |
+
+Under an end-of-run push the healthy session and the dead one are the same observation. A session
+twenty minutes into a three-hour brief has pushed nothing *for the correct reason*, and that is
+`ls-remote` rc=0 with empty stdout past `declared_at + boot_s` — §4.3's C1 arm, firing on a healthy
+population. That is the alarm-polarity defect this document is organised against, and it actuates:
+§12's `cc-offload gc` retires on `NOT-STARTED`, and a re-fire spends quota against a session that
+is still working. The beacon is what buys the discrimination, and §4.1 already priced it correctly
+at ONE empty commit: after it, absence can only be never-booted / died-at-boot / refused-entitlement
+— every one actionable — and presence hands §4.3 its C4/C5 arms instead of nothing.
+
+**One composer, two legs.** `cc_cloud_brief_trailer` sits in `scripts/lib/cloud-create.sh` beside
+`cc_cloud_branch_name`, for the same reason that file exists at all (its header: *"rather than
+written a fourth time"*): the branch name and the instruction that makes that name observable are
+one fact, and a leg that assigns the branch without carrying the trailer is declaring against a ref
+nothing will ever push — §10.2c's hazard with the sign flipped. The session id is **optional**
+because §8.1 is still true: on the CLI leg the id is a return value of the create and the payload
+must be composed before it exists, so the beacon subject falls back to the branch, which is unique
+per fire either way. `cc-offload` **refuses (exit 3) before the create** when the composer is
+unreachable — the same law as `handoff-fire`'s `cloud-lib-absent`, since a fire that cannot carry
+the contract is quota spent on a session no local instrument can judge.
+
+**⚠️ What this does NOT close.** §8's own step-2 caveat still stands: if a create ever takes the
+bundle path rather than cloning the remote, the branch the VM pushes may not be the branch this box
+declared, and that mismatch is `U0`, not absence. The trailer names the declared branch, which is
+the right thing to name in both worlds, but it cannot make a bundled VM's remote match.
+
+**Found on the way, one line, fixed in the same commit** (it lives in the function the trailer had
+to be threaded through): `cc-offload`'s wake-target default read `${ITERM_SESSION_ID##*:}` with no
+`:-`, three lines above the branch that handles the unset case *by name*. Under `set -u` that
+aborts the process before that branch can run, so every `up` from anything that is not an iTerm
+pane — a hook, launchd, a fired session, any other terminal — died with `unbound variable` instead
+of firing fire-and-forget. `tests/cc-offload.bats` case 41 was RED on trunk for exactly this and is
+the only `up` case that does not export a pane id.
+
+**Tests, each red-proofed against the pre-fix text rather than against an absent function** —
+`tests/cloud-create-lib.bats` 20-22 (switch → commit → push; beacon precedes the return-channel
+section; optional id; a branchless call refuses), `tests/handoff-fire-cloud.bats` 20, and two cases
+in `tests/cc-offload.bats`. Replaying the old inline trailer through case 21's assertions puts its
+only push line at row 8 against the return heading at row 2, and finds no `--allow-empty` at all.
