@@ -376,7 +376,7 @@ tool_in_flight() { # <jsonl> → 0 if a tool is RUNNING: the transcript's LAST r
   # assistant tool_use timestamped at call START, so IDLE crosses 300s mid-call and reads `finished`.
   # In a real transcript a finished turn's last record is an assistant TEXT turn or a `user` tool_result
   # (never a bare trailing tool_use) — so this fires ONLY for a genuine mid-call state.
-  local f="$1" last_rec tu_id
+  local f="$1" last_rec tu_id ids
   [ -f "$f" ] || return 1
   last_rec="$(tail -n 1 "$f" 2>/dev/null)"
   [ -n "$last_rec" ] || return 1
@@ -385,8 +385,23 @@ tool_in_flight() { # <jsonl> → 0 if a tool is RUNNING: the transcript's LAST r
   tu_id="$(printf '%s' "$last_rec" | jq -r '(.message.content // []) | map(select(.type=="tool_use")) | last | .id // empty' 2>/dev/null)"
   if [ -n "$tu_id" ]; then
     # a matching tool_result (a `user` record block) anywhere ⇒ the tool returned ⇒ not in-flight
-    jq -rc 'select(.type=="user") | (.message.content // []) | if type=="array" then .[] else empty end | select(.type=="tool_result") | .tool_use_id // empty' "$f" 2>/dev/null \
-      | grep -qxF "$tu_id" && return 1
+    #
+    # DRAINED 2026-08-28. Was `jq … "$f" | grep -qxF "$tu_id" && return 1`. `grep -q` exits at the
+    # FIRST match, jq takes EPIPE, this file's own `set -o pipefail` (:41) promotes that over grep's
+    # 0, and the `&&` reads FALSE ON A TRUE MATCH — a session whose tool HAS returned is then read
+    # as in-flight. That direction is fail-SAFE (CAUSE=active, never-reap), which is why it is drained
+    # here quietly and its two siblings in team_live_member() are not: those invert the other way.
+    #
+    # THE FEED IS THIS PRODUCER'S OUTPUT, NOT THE TRANSCRIPT. jq is a REDUCING stage: what reaches
+    # the pipe is the tool_use_id list, ~31 B per tool_result. Measured 2026-08-28T08:17Z over the
+    # 60 largest of 5,207 transcripts across all four account stores: max 31,217 B at 1,007 ids.
+    # At that size, on THIS shape (external producer, two stages), 0 inversions in 1,000 trials —
+    # latent ON EVIDENCE, not by extrapolation from someone else's 20-trial curve. But 31,217 B is
+    # 97.4% of 32,035 B, the smallest size at which an inversion has been OBSERVED on this box, and
+    # the feed grows by one id per tool call. `case` is a builtin: no pipe, so no race at any size.
+    # `-qxF` was a WHOLE-LINE match, so the pattern is newline-delimited on both sides to match it.
+    ids="$(jq -rc 'select(.type=="user") | (.message.content // []) | if type=="array" then .[] else empty end | select(.type=="tool_result") | .tool_use_id // empty' "$f" 2>/dev/null)"
+    case $'\n'"$ids"$'\n' in *$'\n'"$tu_id"$'\n'*) return 1 ;; esac
   fi
   return 0   # trailing tool_use with no (matching) result → a tool is running
 }
@@ -455,8 +470,29 @@ team_live_member() { # <team-config> → 0 if any member of this team is a live 
   procs="$("$PS_BIN" -eo pid=,command= 2>/dev/null | grep -- '--agent-name' || true)"
   while IFS= read -r m; do
     [ -z "$m" ] && continue
-    printf '%s' "$procs" | grep -qF -- "--agent-name $m" && return 0
-    printf '%s' "$procs" | grep -qF -- "--agent-name=$m" && return 0
+    # DRAINED 2026-08-28. Was two `printf '%s' "$procs" | grep -qF -- …` tests under this file's own
+    # `set -o pipefail` (:41). On a TRUE match grep exits first, printf takes EPIPE, pipefail promotes
+    # it, and the `&&` reads FALSE — so a team WITH a live member answers "no live member". Three
+    # lines below, the Gap A branch says in its own words "LIVE coordination (team_live_member above)
+    # never reaches here"; the inversion is exactly what makes it reach there, and the verdict it
+    # produces is coordination-abandoned — REAPABLE. The comment forbids a verdict and the line
+    # beneath produced it.
+    #
+    # AND THIS FEED IS NOT LATENT, WHICH EVERY EARLIER SCREEN OF IT CONCLUDED FROM AN IDLE BOX.
+    # `$procs` is `ps -eo pid=,command=` filtered to `--agent-name`, and an agent's command line
+    # carries its whole BRIEF as argv. Measured 2026-08-28T08:18Z: the longest single claude row on
+    # this box is 46,621 B, and the standing teammate cap is 6, so the feed's ceiling is ~279,726 B.
+    # At 1,000 trials on this exact shape: 46,624 B inverts 29/1,000 (2.9%), 279,744 B inverts
+    # 1,000/1,000 — deterministic. ONE live teammate already puts the feed past the size at which
+    # this spelling misanswers; six make it certain.
+    #
+    # The trap is that the hazard is produced BY the population the branch exists to detect: `$procs`
+    # is only large when teammates are RUNNING, which is the only state in which this line is reached
+    # at all. Sampled on an idle box it reads 35 B and ranks latent, and that sample is taken from a
+    # regime where the branch is dead code. `case` is a builtin: no pipe, no race at any size.
+    case "$procs" in
+      *"--agent-name $m"*|*"--agent-name=$m"*) return 0 ;;
+    esac
   done <<< "$names"
   return 1
 }
