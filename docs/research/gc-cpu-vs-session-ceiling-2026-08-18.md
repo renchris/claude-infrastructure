@@ -227,7 +227,13 @@ apportions. If the census stays flat while load moves, it is the instrument — 
 this wave's "64% is our own automation" headline died. No attribution figure should be quoted again
 until a sampler clears that control.
 
-**That sampler is now `scripts/capacity-marginal.sh`** (2026-08-19). It implements this paragraph as
+**That sampler is now `scripts/capacity-marginal.sh`** (2026-08-19; `run` subcommand + a Darwin
+`ps`-width fix 2026-08-28, §6b of that doc). **The whole remaining measurement is now ONE command,
+run on the box during a dispatch wave** — `bash scripts/capacity-marginal.sh run --total-s 3600
+--chunk-s 600 --interval-s 60`. It samples in chunks, re-analyzes the growing window after each,
+stops the moment the three controls pass, and on exhaustion names a control that refused every
+window as itself the finding — the branch §6 previously left to the operator to notice across
+separately-typed invocations. It implements this paragraph as
 three required controls — LEVEL (does the census reproduce the load, at more than one load) ·
 DYNAMICS (does it move when load moves, over `n_eff` independent observations, not `n`) · IDENTIFY
 (did the ACTIVE count vary at all) — and emits `NO-ATTRIBUTION` with the failing term rather than a

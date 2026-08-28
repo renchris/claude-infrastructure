@@ -83,8 +83,15 @@
 # `analyze` REFUSES a file whose rows mix units.
 #
 # Usage:
+#   capacity-marginal.sh run     [--total-s N] [--chunk-s N] [--interval-s N] [--out FILE] [--append]
 #   capacity-marginal.sh sample  [--window-s N] [--interval-s N] [--out FILE]
 #   capacity-marginal.sh analyze [--in FILE] [--json]
+#
+# `run` is the whole §6 protocol driven unattended and is what the measurement should be invoked as:
+# it samples in chunks, re-analyzes the growing window after each one, STOPS EARLY the moment the
+# three controls pass, and on exhaustion reports whether the same control refused every window —
+# which the design doc names as itself a finding. `sample`/`analyze` remain separately callable
+# because the analyzer must stay testable against a fixture file rather than a machine.
 #
 # Exit: 0 coefficient emitted (all controls passed) · 1 NO-ATTRIBUTION (a control failed) ·
 #       2 usage error · 3 NO-DATA (nothing sampled / file unreadable).
@@ -145,13 +152,34 @@ read_load1() {
 # CC_MARG_PS_OVERRIDE names a file standing in for `ps` output. It exists so the ATTRIBUTION can be
 # tested against a fixed process table — an ancestor walk that is only ever exercised against the
 # live box is a walk nobody has checked, and this one decides two thirds of the numerator.
+#
+# 🚨 THE `ww` IS LOAD-BEARING, AND ITS ABSENCE IS INVISIBLE TO ALL THREE CONTROLS. macOS `ps`
+# renders a row only as wide as the terminal, and falls back to 79 columns when no fd is a tty —
+# which is exactly the case inside `$(...)` in a launchd- or hook-driven run. This file's own
+# columns cost ~17 characters before `comm` starts, and the launcher image on this box is
+# `/Users/chrisren/.claude-220/node_modules/@anthropic-ai/claude-code/bin/claude.exe` — 81
+# characters, so the row is ~98 and the tail is cut. The `claude\.exe$` alternative of
+# CC_MARG_EXEC_RE is END-ANCHORED, so a cut tail silently un-attributes every process it is the only
+# match for. The repo has measured the sibling of this exact defect twice already — compressor-
+# sentinel.sh:465 ("`ps` gives a column its FULL value only when that column is LAST", 16-char
+# truncation, measured 2026-08-11) and cc-reaper.sh:2396 ("it read 0 matches where the per-pid form
+# read 6") — and both fixed it the same way, with `-axwwo`.
+#
+# WHY THIS ONE IS WORSE THAN EITHER OF THOSE, and why it is fixed here rather than noted. C1, C2 and
+# C3 all validate `total_run` — the ratio it reproduces, the correlation it carries, the regressor's
+# spread. The coefficient is fit on `claude_run`. Truncation moves processes from `claude_run` to
+# "not ours" WITHOUT touching `total_run`, so every control still passes and the number is still
+# printed — just smaller than the truth by however many rows were cut. A defect that survives the
+# controls and lands inside `VERDICT: MARGINAL` is precisely the failure this whole instrument was
+# built to make impossible, so the widening is not hygiene here, it is part of the control surface.
+# `-axwwo` on BSD/Darwin, `-ewwo` on the Linux fallback; `tests/capacity-marginal.bats` pins both.
 census_row() { # -> "<total_run> <claude_run> <resident>"
   local ps_out
   if [ -n "${CC_MARG_PS_OVERRIDE:-}" ]; then
     [ -r "$CC_MARG_PS_OVERRIDE" ] || return 1
     ps_out="$(cat "$CC_MARG_PS_OVERRIDE")"
   else
-    ps_out="$(ps -axo pid=,ppid=,stat=,comm= 2>/dev/null || ps -eo pid=,ppid=,stat=,comm= 2>/dev/null)" || return 1
+    ps_out="$(ps -axwwo pid=,ppid=,stat=,comm= 2>/dev/null || ps -ewwo pid=,ppid=,stat=,comm= 2>/dev/null)" || return 1
   fi
   [ -n "$ps_out" ] || return 1
   printf '%s\n' "$ps_out" | awk -v re="$CC_MARG_EXEC_RE" '
@@ -336,7 +364,7 @@ cmd_analyze() {
       ratio = (sy > 0) ? sx / sy : 0
       bx = 0; by = 0; bn = 0
       for (i = 1; i <= n; i++) if (hasA[i]) { bx += A[i]; by += CL[i]; bn++ }
-      slope = 0; se = 0; naive = 0
+      slope = 0; se = 0; naive = 0; vif = 1
       if (bn >= 3) {
         mbx = bx / bn; mby = by / bn
         bxx = 0; byy = 0; bxy = 0
@@ -345,7 +373,16 @@ cmd_analyze() {
           slope = (bxy / bxx) * ratio
           resid = byy - (bxy * bxy) / bxx
           if (resid < 0) resid = 0
-          if (bn > 2) se = sqrt(resid / (bn - 2) / bxx) * ratio
+          # AUTOCORRELATION INFLATION. The textbook OLS s.e. assumes independent residuals. load1 is
+          # a 60 s moving average, so a window sampled faster than CC_MARG_TAU holds n rows but only
+          # n_eff independent observations — the exact distinction C2 refuses to blur when it READS
+          # a correlation. Publishing the s.e. off n would concede at the last step what C2 refuses
+          # at the first, and the s.e. is the half of this number a reader uses to decide whether it
+          # separates from the four it replaces. Variance inflates by n/n_eff, so the s.e. scales by
+          # its root; at the recommended protocol (--interval-s == CC_MARG_TAU) the factor is 1.
+          vif = (neff > 0) ? n / neff : 1
+          if (vif < 1) vif = 1
+          if (bn > 2) se = sqrt(resid / (bn - 2) / bxx) * ratio * sqrt(vif)
         }
         # the pooled load1 ~ active fit: what 0.172 and 0.566 are, kept only to be labelled
         nxx = 0; nxy = 0; mnl = 0
@@ -360,7 +397,7 @@ cmd_analyze() {
         printf "{\"n\":%d,\"n_eff\":%.2f,\"span_s\":%d,\"unit\":\"%s\",\"load_min\":%.2f,\"load_max\":%.2f,", n, neff, span, units, lmin, lmax
         printf "\"c1_level\":%s,\"c1_why\":\"%s\",\"c2_dynamics\":%s,\"c2_why\":\"%s\",\"c3_identify\":%s,\"c3_why\":\"%s\",", (c1_ok?"true":"false"), c1_why, (c2_ok?"true":"false"), c2_why, (c3_ok?"true":"false"), c3_why
         printf "\"ratio\":%.4f,\"naive_slope\":%.4f,", ratio, naive
-        if (pass) printf "\"verdict\":\"MARGINAL\",\"marginal_load_per_active_session\":%.4f,\"se\":%.4f}\n", slope, se
+        if (pass) printf "\"verdict\":\"MARGINAL\",\"marginal_load_per_active_session\":%.4f,\"se\":%.4f,\"se_autocorr_factor\":%.4f}\n", slope, se, sqrt(vif)
         else      printf "\"verdict\":\"NO-ATTRIBUTION\"}\n"
         exit (pass ? 0 : 1)
       }
@@ -369,7 +406,7 @@ cmd_analyze() {
       printf "  C2 DYNAMICS   %-4s  %s\n", (c2_ok ? "PASS" : "FAIL"), c2_why
       printf "  C3 IDENTIFY   %-4s  %s\n", (c3_ok ? "PASS" : "FAIL"), c3_why
       if (pass) {
-        printf "VERDICT: MARGINAL %.3f load units per ACTIVE session  (+/- %.3f, 1 s.e.; ratio %.3f load/runnable-%s)\n", slope, se, ratio, units
+        printf "VERDICT: MARGINAL %.3f load units per ACTIVE session  (+/- %.3f, 1 s.e.%s; ratio %.3f load/runnable-%s)\n", slope, se, (vif > 1.05 ? sprintf(" inflated x%.2f for load1 autocorrelation", sqrt(vif)) : ""), ratio, units
         printf "  for contrast, the pooled load1~active fit this replaces: %.3f  [UNIDENTIFIED — 87%% of the numerator is not Claude]\n", naive
         exit 0
       }
@@ -379,9 +416,99 @@ cmd_analyze() {
     }' "$in"
 }
 
+# ── run: the §6 protocol, driven ────────────────────────────────────────────────────────────────
+# WHY THIS EXISTS. The run protocol in
+# docs/research/marginal-load-per-active-session-2026-08-19.md §6 is two commands and a JUDGMENT:
+# "sample, analyze, and extend the window until the verdict stops being NO-ATTRIBUTION *or* the
+# refusal repeats with the same term across several windows — which would itself be the finding."
+# Written that way it makes the operator the runtime: they must sit with the box, re-run `analyze`,
+# and remember which control failed last time in order to recognise the second branch. That is a
+# worksheet, and the one thing this item is actually blocked on is a human hour on a 10-core Darwin
+# box — the scarcest input in the whole measurement. Spending it on loop-driving rather than on the
+# box being BUSY (C1 needs the load to move 1.5x, C3 needs three ACTIVE levels — both are properties
+# of the operator's ordinary dispatch traffic, not of the sampler) is how the window gets wasted.
+#
+# So this drives both branches and returns ONE verdict:
+#   · PASS  -> stops early, prints the coefficient, exit 0. Nothing further is needed from anyone.
+#   · REFUSE-> keeps extending to --total-s, then reports the per-chunk failure SIGNATURE history.
+#             A signature identical in every chunk is the doc's second branch, and it is named as
+#             such in the output rather than left for a reader to infer: the process-unit census is
+#             not the instrument, and §7's thread-unit refinement is the next increment.
+#
+# THE OUTPUT FILE IS FRESH BY DEFAULT, and an existing one is REFUSED without --append. `sample`
+# appends by design (that is what "extend the window" means), but a file left over from a different
+# day extends the window across a gap: `span` grows, `n_eff` grows with it, and C2 becomes decidable
+# on evidence that is half stale. Refusing is the honest re-run: the operator chooses to extend.
+cmd_run() {
+  local total=3600 chunk=600 interval="$CC_MARG_TAU" out="" append=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --total-s)    total="${2:-}"; shift 2 ;;
+      --chunk-s)    chunk="${2:-}"; shift 2 ;;
+      --interval-s) interval="${2:-}"; shift 2 ;;
+      --out)        out="${2:-}"; shift 2 ;;
+      --append)     append=1; shift ;;
+      *) die "run: unknown argument '$1'" ;;
+    esac
+  done
+  case "$total$chunk$interval" in *[!0-9]*) die "run: --total-s/--chunk-s/--interval-s must be integers" ;; esac
+  [ "$interval" -ge 1 ] || die "run: --interval-s must be >= 1"
+  [ "$chunk" -ge "$interval" ] || die "run: --chunk-s ($chunk) must be >= --interval-s ($interval)"
+  [ "$total" -ge "$chunk" ] || die "run: --total-s ($total) must be >= --chunk-s ($chunk)"
+  [ -n "$out" ] || out="${TMPDIR:-/tmp}/capacity-marginal-$(date +%Y%m%dT%H%M%S).tsv"
+  if [ -s "$out" ] && [ -z "$append" ]; then
+    die "run: '$out' already holds samples — pass --append to extend that window deliberately, or --out a fresh path (a stale window inflates n_eff on half-stale evidence)"
+  fi
+
+  local start now elapsed left this rc text sig i=0 sigs="" first_sig="" stable=1 last=""
+  start="$(date +%s)"
+  printf 'capacity-marginal: run — up to %ss in %ss chunks at %ss, into %s\n' "$total" "$chunk" "$interval" "$out" >&2
+  while :; do
+    now="$(date +%s)"; elapsed=$(( now - start )); left=$(( total - elapsed ))
+    [ "$left" -ge "$interval" ] || break
+    this="$chunk"; [ "$this" -le "$left" ] || this="$left"
+    i=$(( i + 1 ))
+    cmd_sample --window-s "$this" --interval-s "$interval" --out "$out" --quiet
+    text="$(cmd_analyze --in "$out")"; rc=$?
+    last="$text"
+    if [ "$rc" -eq 0 ]; then
+      printf '%s\n' "$text"
+      printf 'capacity-marginal: PASSED after %d chunk(s) / %ss — samples in %s\n' "$i" "$(( $(date +%s) - start ))" "$out" >&2
+      return 0
+    fi
+    # The SIGNATURE is which controls refused, not how they worded it — the wording carries live
+    # numbers that differ every chunk and would make every signature unique by construction.
+    sig=""
+    case "$text" in *"C1 LEVEL      FAIL"*) sig="${sig}C1 " ;; esac
+    case "$text" in *"C2 DYNAMICS   FAIL"*) sig="${sig}C2 " ;; esac
+    case "$text" in *"C3 IDENTIFY   FAIL"*) sig="${sig}C3 " ;; esac
+    case "$text" in *NO-DATA*) sig="NO-DATA " ;; esac
+    sig="${sig% }"
+    [ -n "$first_sig" ] || first_sig="$sig"
+    [ "$sig" = "$first_sig" ] || stable=0
+    sigs="${sigs}${sigs:+, }#${i} ${sig}"
+    printf 'capacity-marginal: chunk %d (%ss elapsed) — refused on %s; extending\n' \
+      "$i" "$(( $(date +%s) - start ))" "$sig" >&2
+  done
+
+  [ -n "$last" ] || { printf 'CAPACITY-MARGINAL: NO-DATA — the window produced no analyzable sample\n'; return 3; }
+  printf '%s\n' "$last"
+  printf '  window history: %s\n' "$sigs"
+  if [ "$i" -ge 3 ] && [ "$stable" -eq 1 ] && [ -n "$first_sig" ] && [ "$first_sig" != "NO-DATA" ]; then
+    printf '  STABLE REFUSAL — %s failed in every one of %d extending windows. Per §6 of\n' "$first_sig" "$i"
+    printf '  docs/research/marginal-load-per-active-session-2026-08-19.md that is ITSELF the finding:\n'
+    printf '  the process-unit census is not the right instrument here, and §7.3 (the thread-unit\n'
+    printf '  census, which needs a captured `ps -axM` fixture before its parser can be tested) is\n'
+    printf '  the next increment rather than a nicety. Do not quote the withheld fit.\n'
+  fi
+  printf '  samples retained: %s — re-run with --out %s --append to extend this same window.\n' "$out" "$out"
+  return 1
+}
+
 case "${1:-}" in
   sample)  shift; cmd_sample "$@" ;;
   analyze) shift; cmd_analyze "$@" ;;
+  run)     shift; cmd_run "$@" ;;
   -h|--help|'') sed -n '/^# Usage:/,/^#       2 usage/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
-  *) die "unknown subcommand '$1' (sample | analyze)" ;;
+  *) die "unknown subcommand '$1' (run | sample | analyze)" ;;
 esac

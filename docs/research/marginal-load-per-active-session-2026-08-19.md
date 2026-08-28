@@ -158,6 +158,14 @@ A control nobody has watched fail is a rubber stamp. `tests/capacity-marginal.ba
 On the box, in a session that is not itself doing heavy work (the sampler costs one `ps` per minute):
 
 ```sh
+bash scripts/capacity-marginal.sh run --total-s 3600 --chunk-s 600 --interval-s 60
+```
+
+*(`run` is new in §6b and is now the invocation. The two-command form below still works and is what
+`run` drives; it is kept because the analyzer must stay callable against a fixture file rather than
+a machine, which is what every control test depends on.)*
+
+```sh
 bash scripts/capacity-marginal.sh sample --window-s 3600 --interval-s 60 --out /tmp/marg.tsv
 bash scripts/capacity-marginal.sh analyze --in /tmp/marg.tsv
 ```
@@ -217,7 +225,88 @@ tests/capacity-marginal.bats` **15/15**, plus `tests/agent-teams-enforce.bats` a
 correctly refusing a 60 s quiet window — `C1 FAIL` (tertile swing 1.56× > 1.35×), `C2 FAIL`
 (`n_eff` 1.8 < 20, worded *uninformative, not refuting*), `C3 FAIL` (0 rows carry an ACTIVE count,
 6 unmeasurable), `VERDICT: NO-ATTRIBUTION`, exit 1, withheld fit labelled withheld. The instrument
-is ready; only the fleet is missing.
+is ready; only the fleet is missing. *(Counts are as of 2026-08-26; §6b below carries the current
+ones. Its conclusion — §6 and nothing else — is unchanged.)*
+
+---
+
+### 6b · One defect the three controls structurally cannot catch, and the protocol driven (2026-08-28)
+
+§6a discharged the half of this item that did not need the box. This is the last off-box increment:
+the remaining half is one operator hour on a 10-core Darwin box, and that hour is the scarcest input
+in the whole measurement. Two things were spending it, and both are now gone.
+
+**1 · The width defect — and why it is a control problem, not hygiene.** `census_row` read
+`ps -axo pid=,ppid=,stat=,comm=`. macOS `ps` renders a row only as wide as the terminal and falls
+back to 79 columns when no fd is a tty, which is the case inside `$(...)`. Those three columns cost
+~17 characters before `comm` begins, and the launcher image on this box is
+`/Users/chrisren/.claude-220/node_modules/@anthropic-ai/claude-code/bin/claude.exe` — 81 characters,
+so the row is ~98 and the tail is cut. `CC_MARG_EXEC_RE`'s second alternative, `claude\.exe$`, is
+END-ANCHORED, so a cut tail silently un-attributes every process that alternative is the only match
+for. The read is now `ps -axwwo` (`-ewwo` on the Linux fallback).
+
+**Why this one outranks its two siblings.** The repo has fixed this defect's near relative twice —
+`compressor-sentinel.sh:465` (*"`ps` gives a column its FULL value only when that column is LAST"*,
+16-character truncation, measured 2026-08-11) and `cc-reaper:2396` (*"it read 0 matches where the
+per-pid form read 6"*). Both of those are **loud**: a census that reads zero gets investigated. This
+one is **silent, and silent specifically past the controls**. C1, C2 and C3 are all computed on
+`total_run` — the ratio it reproduces, the correlation it carries, the regressor's spread.
+The coefficient is fit on `claude_run`. Truncation moves processes out of `claude_run` without
+touching `total_run`, so **every control still passes and `VERDICT: MARGINAL` still prints**, low by
+however many rows were cut. A wrong number wearing this instrument's certificate is the exact
+artifact the item exists to prevent, and it would have been the fifth unrepairable value rather than
+the first measured one.
+
+⚠️ **Stated at its true epistemic weight:** the *line-width* truncation is documented macOS `ps`
+behaviour and is the mechanism both siblings guard with `ww`, but it was **not measured for this
+invocation** — that needs the box, which is the thing this session does not have. The widening is
+free on both dialects and removes the risk either way, so it is taken rather than filed. What does
+**not** depend on the box is the second paragraph: the blindness of all three controls to any
+attribution defect is a property of which series each one reads, and it holds however the truncation
+question resolves.
+
+**2 · `run` — §6's protocol, driven.** §6 as written was two commands and a judgment: *"sample,
+analyze, and extend the window until the verdict stops being NO-ATTRIBUTION **or** the refusal
+repeats with the same term across several windows — which would itself be the finding."* That makes
+the operator the runtime — sitting with the box, re-typing `analyze`, and remembering which control
+refused last time in order to recognise the second branch at all. `capacity-marginal.sh run` drives
+both branches and returns one verdict: it samples in chunks, re-analyzes the growing window after
+each, **stops the moment the three controls pass** (so a window that answers in 10 minutes does not
+cost 60), and on exhaustion prints the per-window failure signature history and names a signature
+identical in every window as §6's second branch. The output file is fresh by default and an existing
+one is refused without `--append`, because a file left over from another day extends `span` across
+the gap and makes C2 decidable on half-stale evidence.
+
+**3 · The published s.e. now matches the standard C2 already holds.** The OLS slope s.e. was computed
+over `n` rows while C2 deliberately reads its correlation over `n_eff` independent observations —
+conceding at the last step exactly what the control refuses at the first. It is now inflated by
+`sqrt(n/n_eff)`; at the recommended protocol (`--interval-s` = `CC_MARG_TAU`) the factor is exactly
+1, so this changes nothing about the intended run and stops a faster-sampled one publishing an s.e.
+roughly `sqrt(tau/interval)` too tight. The s.e. is the half of this coefficient a reader uses to
+decide whether it separates from the four values it replaces.
+
+**Verified this session, off-box:** `bats tests/capacity-marginal.bats` **21/21** (was 15), with each
+of the three additions **mutation-proved able to fail** — and the width control failed that proof on
+its first draft. Written per-line, it PASSED against a deliberate revert of the primary read to
+`-axo`, because the Darwin read and its Linux fallback share one source line and the fallback's own
+`ww` satisfied a substring check for the pair. It now strips comments and extracts each `-o`-bearing
+invocation on its own, and each read reverted alone is caught alone. *A control that green-lights the
+mutation it was written to catch is worse than no control — this suite's own founding argument, live
+against the suite.* Also green: `tests/agent-teams-enforce.bats` + `tests/capacity-admit-active.bats`
+(46/46), `scripts/test-hermeticity-lint.sh` (552 suites, 0 new leaks), `test-walltime-lint.sh`,
+`bats-testname-eval-lint.sh`, `gate-select.sh lint`, and `bats-assert-liveness.py` clean on the suite.
+**`shellcheck` could NOT be run** — the container's proxy refuses the binary download (403), and
+`tests/bats-shellcheck-lint.bats` fails 11/11 identically on unmodified trunk, so that arm is
+environmental rather than a finding about this diff. `bash -n` clean.
+
+**What remains is still exactly §6, and it is now one command** — `bash
+scripts/capacity-marginal.sh run --total-s 3600 --chunk-s 600 --interval-s 60`, run on the 10-core
+Darwin box during a dispatch wave (C1 needs the load to move 1.5x and C3 needs three ACTIVE levels;
+both are properties of ordinary traffic, which is why a lull is the wrong hour and an intervention is
+not needed). Then update the sites a fresh grep returns and close `193ae8ddce72`.
+
+**What this does not do** — it does not measure the number, and nothing off-box can. The instrument
+is one defect safer and the operator's hour is one loop shorter; the fleet is still missing.
 
 ---
 

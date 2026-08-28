@@ -266,13 +266,156 @@ EOF
   # DoD §5, verbatim: count "by executable path, never argv — argv reads 30-33 against a true
   # 15-16, because briefs mention the path". A future edit swapping comm= for args= would double
   # the denominator of every capacity claim and change no test but this one.
-  run grep -noE 'ps -[ae]xo [a-z=,]+' "$REPO/scripts/capacity-marginal.sh"
+  run grep -noE 'ps -[aew]+o [a-z=,]+' "$REPO/scripts/capacity-marginal.sh"
   [ "$status" -eq 0 ]
   [[ "$output" == *"comm="* ]] || false
   [[ "$output" != *"args="* ]]
 }
 
+@test "every live ps read is width-unlimited — truncation is the one defect the controls cannot see" {
+  # macOS ps renders a row only as wide as the terminal and falls back to 79 columns when no fd is a
+  # tty, which is the case inside $(...). This file's columns cost ~17 characters before comm, and
+  # the launcher image on the box is 81 characters
+  # (/Users/chrisren/.claude-220/node_modules/@anthropic-ai/claude-code/bin/claude.exe), so the row
+  # is ~98 and the tail is cut — defeating CC_MARG_EXEC_RE's END-ANCHORED `claude\.exe$` alternative.
+  #
+  # WHY THIS GETS ITS OWN TEST RATHER THAN A COMMENT. Truncation moves processes out of `claude_run`
+  # without touching `total_run`. C1, C2 and C3 are all computed on `total_run`; the coefficient is
+  # fit on `claude_run`. So this is the one defect in the instrument that passes every control and
+  # still lands inside `VERDICT: MARGINAL` — a wrong number wearing a certificate, which is the
+  # exact artifact the whole item exists to prevent. Sibling measurements, both on this box:
+  # compressor-sentinel.sh:465 (16-char column truncation, 2026-08-11) and cc-reaper:2396 ("it read
+  # 0 matches where the per-pid form read 6").
+  # PER-INVOCATION, NOT PER-LINE. Written per-line first, this test PASSED against a deliberate
+  # revert of the primary read to `-axo` — because the Darwin read and its Linux fallback share one
+  # source line, so the fallback's own `ww` satisfied a substring check for the pair. A control that
+  # green-lights the mutation it was written to catch is worse than no control, so the scan strips
+  # comments (leaving only executable text, which excludes the prose citing the narrower
+  # `ps -o comm=` form and the per-thread `ps -axM` this file names but never calls) and then
+  # extracts each `-o`-bearing invocation ON ITS OWN, so every read is judged alone.
+  run bash -c "sed 's/#.*//' '$REPO/scripts/capacity-marginal.sh' | grep -oE 'ps -[a-z]+o '"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c .)" -ge 2 ]
+  local inv
+  while IFS= read -r inv; do
+    [ -n "$inv" ] || continue
+    [[ "$inv" == *ww* ]] || { echo "width-limited ps read: '$inv'"; return 1; }
+  done <<< "$output"
+}
+
 @test "a bad interval is a usage error, not a busy loop" {
   run bash "$M" sample --interval-s 0 --window-s 1 --out "$D/x.tsv"
+  [ "$status" -eq 2 ]
+}
+
+# ── THE PUBLISHED UNCERTAINTY ───────────────────────────────────────────────────────────────────
+
+@test "the s.e. is inflated for load1 autocorrelation, and says so" {
+  # C2 refuses to READ a correlation off n rather than n_eff. An s.e. computed off n would concede
+  # at the last step exactly what C2 refuses at the first — and the s.e. is the half of this number
+  # a reader uses to decide whether it separates from the four values it replaces. Same planted
+  # series at two spacings: 60 s (n_eff == n, factor 1, no note) and 15 s (n_eff == n/4, so the
+  # s.e. must roughly double and the note must appear).
+  local sp f
+  for sp in 60 15; do
+    f="$D/vif-$sp.tsv"; hdr "$f"
+    local i ts=2000000 act amb cl tot load
+    for i in $(seq 0 79); do
+      act=$(( 2 + i % 6 ))
+      amb="$(awk -v i="$i" 'BEGIN { printf "%.3f", 9 + 6 * ((i * 7) % 11) / 10 }')"
+      cl="$(awk -v a="$act" -v i="$i" 'BEGIN { printf "%.3f", 0.25 * a + 0.05 * ((i * 3) % 7) / 7 }')"
+      tot="$(awk -v a="$amb" -v c="$cl" 'BEGIN { printf "%.3f", a + c }')"
+      load="$(awk -v t="$tot" 'BEGIN { printf "%.3f", 1.30 * t }')"
+      row "$f" "$ts" "$load" "$tot" "$cl" "$act"
+      ts=$(( ts + sp ))
+    done
+  done
+  # 60 s: independent, so no inflation and no note.
+  run bash "$M" analyze --in "$D/vif-60.tsv" --json
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | jq -e '.se_autocorr_factor > 0.99 and .se_autocorr_factor < 1.01' >/dev/null
+  local se60; se60="$(printf '%s' "$output" | jq -r '.se')"
+  # 15 s: C2 correctly refuses the window (n_eff 20.75 is barely decidable), but the s.e. arithmetic
+  # is what is under test here, so read it from the same JSON the refusal emits.
+  run bash "$M" analyze --in "$D/vif-15.tsv" --json
+  printf '%s' "$output" | jq -e '.n_eff < .n' >/dev/null
+  run bash "$M" analyze --in "$D/vif-60.tsv"
+  [[ "$output" != *"inflated x"* ]] || false
+  # And the note is emitted whenever the factor is real: shrink tau so n_eff < n on the 60 s file.
+  run env CC_MARG_TAU=240 CC_MARG_MIN_N=5 bash "$M" analyze --in "$D/vif-60.tsv"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"inflated x"* ]] || false
+  local se_inf; se_inf="$(printf '%s\n' "$output" | awk -F'[()]' '/VERDICT: MARGINAL/ { print $2 }' | awk '{print $2}')"
+  run awk -v a="$se60" -v b="$se_inf" 'BEGIN { exit !(b > a * 1.5) }'
+  [ "$status" -eq 0 ]
+}
+
+# ── THE DRIVER ──────────────────────────────────────────────────────────────────────────────────
+
+@test "run STOPS EARLY the moment the controls pass, instead of burning the whole window" {
+  # The scarce input in this measurement is an operator hour on a 10-core Darwin box. A driver that
+  # samples its full --total-s after the answer already exists spends that hour for nothing.
+  # CC_MARG_PS_OVERRIDE + a pre-seeded file make the census deterministic and the window instant.
+  local f="$D/run-pass.tsv"; hdr "$f"
+  local i ts act amb cl tot load
+  ts="$(( $(date +%s) - 4000 ))"
+  for i in $(seq 0 39); do
+    act=$(( 2 + i % 6 ))
+    amb="$(awk -v i="$i" 'BEGIN { printf "%.3f", 9 + 6 * ((i * 7) % 11) / 10 }')"
+    cl="$(awk -v a="$act" 'BEGIN { printf "%.3f", 0.25 * a }')"
+    tot="$(awk -v a="$amb" -v c="$cl" 'BEGIN { printf "%.3f", a + c }')"
+    load="$(awk -v t="$tot" 'BEGIN { printf "%.3f", 1.30 * t }')"
+    row "$f" "$ts" "$load" "$tot" "$cl" "$act"; ts=$(( ts + 60 ))
+  done
+  # --total-s 60 with --chunk-s/--interval-s 1: without early exit this would sample for a minute.
+  local t0 t1
+  t0="$(date +%s)"
+  run bash "$M" run --total-s 60 --chunk-s 1 --interval-s 1 --out "$f" --append
+  t1="$(date +%s)"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"VERDICT: MARGINAL"* ]] || false
+  [ "$(( t1 - t0 ))" -lt 30 ]
+}
+
+@test "run REFUSES to silently extend a window left over from another day" {
+  # `sample` appends by design — that is what "extend the window" means. But a file from a previous
+  # run extends `span` across the gap, `n_eff` grows with it, and C2 becomes decidable on evidence
+  # that is half stale. The operator must say --append, which is the honest form of re-runnable.
+  local f="$D/stale.tsv"; hdr "$f"; row "$f" 1000000 12.0 9 2 3
+  run bash "$M" run --total-s 4 --chunk-s 2 --interval-s 1 --out "$f"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--append"* ]] || false
+}
+
+@test "run reports a STABLE refusal as the finding it is, and quotes no number" {
+  # §6's second branch, which the two-command protocol left to the operator to notice across
+  # separately-typed invocations: "the refusal repeats with the same term across several windows —
+  # which would itself be the finding". Seeded flat (the shape that killed the wave's own headline)
+  # so every extending window refuses on C2 for the same reason.
+  local f="$D/run-flat.tsv"; hdr "$f"
+  local i ts
+  ts="$(( $(date +%s) - 4000 ))"
+  for i in $(seq 0 39); do
+    row "$f" "$ts" "$(awk -v i="$i" 'BEGIN { printf "%.2f", 12 + 14 * i / 39 }')" \
+        "$(( 19 + i % 2 ))" "$(( 2 + i % 3 ))" "$(( 3 + i % 4 ))"
+    ts=$(( ts + 60 ))
+  done
+  # WHICH control refuses is deliberately not asserted: the driver appends LIVE rows from whatever
+  # box the suite runs on, so the term is a property of that box. What is under test is that the
+  # driver carries a signature ACROSS separately-analyzed windows and names the repeat — the thing
+  # a human re-typing two commands has to hold in their head, and the half of §6 the two-command
+  # protocol never automated.
+  run bash "$M" run --total-s 12 --chunk-s 1 --interval-s 1 --out "$f" --append
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"window history: #1 "* ]] || false
+  [[ "$output" == *"STABLE REFUSAL"* ]] || false
+  [[ "$output" == *"thread-unit"* ]] || false
+  [[ "$output" != *"VERDICT: MARGINAL"* ]]
+}
+
+@test "run rejects an incoherent window rather than looping on it" {
+  run bash "$M" run --total-s 10 --chunk-s 60 --out "$D/y.tsv"
+  [ "$status" -eq 2 ]
+  run bash "$M" run --chunk-s 5 --interval-s 60 --out "$D/z.tsv"
   [ "$status" -eq 2 ]
 }
