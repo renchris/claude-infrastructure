@@ -86,6 +86,166 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-28 — drain recycle #253: method 224 — A HAZARD WHOSE FEED IS PRODUCED BY THE VERY
+  POPULATION THE BRANCH EXISTS TO DETECT CANNOT BE RANKED FROM AN IDLE SAMPLE, AND `bin/cc-classify`
+  IS THE WORKED EXAMPLE: ITS `team_live_member` MEMBERSHIP TEST IS FED BY THE TEAM'S OWN argv.**
+  🚨 **THE FINDING. `bin/cc-classify` held three of the census's fail-open membership predicates, all
+  under its own `set -uo pipefail` (`:41`) — `:389` in `tool_in_flight()`, `:458` and `:459` in
+  `team_live_member()`. Ten links of census screening ranked all three LATENT, and every one of those
+  screens was right about the number it took and wrong about the regime it took it in.** `$procs` is
+  `ps -eo pid=,command=` filtered to `--agent-name`. Sampled at 08:17Z it is **35 bytes**; on an idle
+  box it is **empty**. But the feed exists ONLY while teammates are running, which is the only state
+  in which the line is reached at all — so an idle sample is drawn from the regime where the branch
+  is **dead code**, and it is the one regime that can never inform the ranking. **THE TELL IS
+  STRUCTURAL AND COSTS ONE QUESTION: does the thing that makes this feed BIG also make this branch
+  REACHABLE? When the answer is yes, an idle measurement is not a weak measurement, it is a
+  measurement of a different question.**
+  🚨 **AND THE QUANTITY THAT MAKES IT BIG IS argv, WHICH NOBODY HAD PUT BESIDE THIS SITE.** An agent's
+  command line carries its whole BRIEF (memory: `pgrep-f-matches-agent-briefs`). Measured
+  2026-08-28T08:18:34Z: the longest single `claude` row in the live `ps` table is **46,621 B**
+  (1,242 rows, 508,661 B total, 139 claude rows); the standing teammate cap is **6**; so the feed's
+  ceiling is **~279,726 B**. **ONE live teammate already puts `$procs` past the size at which this
+  spelling misanswers.**
+  🚨 **MEASURED AT 1,000 TRIALS PER CELL, not the 20 every published band rests on** — needle on line
+  1, BSD grep 2.6.0-FreeBSD, bash 3.2.57, load 23-25, producer and consumer identical across cells
+  (`probe253-tail.sh`; six predictions written BEFORE the run and gated at rc 93, **all six exact**):
+
+        external (site :389's real feed)     31,217 B        0 / 1,000
+        builtin  (control)                   3,596 B        0 / 1,000
+        builtin  ONE claude ps row          46,624 B       29 / 1,000  · and 186 / 1,000 re-run
+        builtin  6-teammate cap            279,744 B    1,000 / 1,000
+        external                           120,001 B    1,000 / 1,000
+        external                           279,744 B    1,000 / 1,000
+
+  ✅ **AN INDEPENDENT SECOND COLUMN CORROBORATES THE COUNT TO THE UNIT: the run emitted 1,029
+  `printf: write error: Broken pipe` lines against 29 + 1,000 = 1,029 inversions.** That column was
+  not designed; it is the shell's own stderr, and it is the cheapest cross-check in this file.
+  🚨 **AND THE CORRECTION TO #252's METHOD 223, PRODUCED BY ITS OWN INSTRUMENT: PUBLISHING A BAND WITH
+  ITS TRIAL COUNT IS NECESSARY AND NOT SUFFICIENT, BECAUSE THE RATE INSIDE THE BAND IS NOT
+  REPRODUCIBLE.** 46,624 B read **29/1,000** and then **186/1,000** minutes later — same size, same
+  shape, same box, load 24.50 and 23.30 — a factor of **6.4**. The **BAND** reproduces; a **RATE**
+  inside it is a scalar sample of a varying quantity (memory: `scalar-sample-of-a-varying-quantity`).
+  **Report the band and the trial count. Do NOT report a rate inside the racy band as a property of
+  a site — #252's table has one such cell (2/1,200 at 32,035 B) and this says what it is worth.**
+  🚨 **WHAT THE TWO DIRECTIONS COST, AND WHY ONE ALLOWLIST COUNT SHOULD NEVER HAVE SPANNED THEM.**
+  `:389` inverting makes a session whose tool HAS returned read as in-flight ⇒ `CAUSE=active`,
+  never-reap — **fail-SAFE**. `:458`/`:459` inverting makes a team WITH a live member answer *no live
+  member*, and the branch three lines below is Gap A, whose own comment reads *"LIVE coordination
+  (team_live_member above) never reaches here."* **The inversion is exactly what makes it reach
+  there, and the verdict it produces is `coordination-abandoned` — REAPABLE.** The allowlist row read
+  `bin/cc-classify 3`: **one number spanning a fail-safe site and two that get a session with LIVE
+  teammates killed.** #244 measured that the ratchet's only numeric column is anti-correlated with
+  risk; **the sharper statement is that a count can merge OPPOSITE DIRECTIONS, and no consumer of
+  that column can tell.**
+  ✅ **SITE `:389` IS DRAINED ON EVIDENCE, NOT ON SUSPICION — AND ITS SCREEN CONFIRMED A PREDECESSOR
+  RATHER THAN REFUTING ONE.** The brief warned that its right quantity is jq's OUTPUT, not the
+  transcript's size (jq is a REDUCING stage, #251's method 221). Measured at its own generator
+  (`feed253.sh`, 08:17:04Z) over the **60 largest of 5,207** transcripts across all **four** account
+  stores: **31,217 B at 1,007 ids, ~31 B each** — which reproduces #244's figure **byte-for-byte**,
+  so that number was ALREADY jq's output and the correction had already been applied. **A method-222
+  screen that confirms is still a result: it is the only way to know which half of a warning is
+  live.** ⚠️ **The corpus itself moved — 7,191 transcripts then, 5,207 now — while the max did not.**
+  ⚠️ **AND `:389` IS NOT SAFE, IT IS LATENT: 31,217 B is 97.4% of 32,035 B, the smallest size at which
+  an inversion has been OBSERVED on this box, and the feed grows by one id per tool call.**
+  ✅ **THE FIX: all three drained to `case` — a builtin, no pipe, no race at any size.** `-qxF` was a
+  WHOLE-LINE match, so its replacement is newline-delimited on both sides.
+  ✅ **RED-PROVED IN BOTH STATES** against the subject as `origin/main` has it, restored
+  byte-identically by sha256 (`RESTORE=OK`). **87 planned, exactly 3 `not ok` pre-fix and 0 post-fix,
+  both predicted before the run, gated at rc 93, and ATTRIBUTED BY NAME rather than by count**
+  (`redproof253.sh`): the two MECHANISM arms and the CLASS arm went red; the NEG CONTROL was green in
+  both states, deliberately. **All 83 incumbent arms green in both states; `tests/cc-classify.bats`
+  83 → 87 with ZERO existing assertions edited.**
+  · **MECHANISM `:458`/`:459`** drives the real binary end to end through the `CC_CLASSIFY_PS_BIN`
+    seam with a **6-row, ~280,000 B** feed shaped like six teammates at the cap, the FIRST row naming
+    the live member. **Sized from the measured regime, so it fails every run rather than one in
+    twenty.**
+  · **MECHANISM `:389`** builds a real transcript whose matching `tool_result` is the FIRST record and
+    whose producer output is **≥ 120,000 B**, past the measured always-inverted floor for an external
+    producer — **with a POS control asserting the fixture actually REACHES that regime**, so it cannot
+    pass on a feed too small to have ever inverted (memory:
+    `control-fixture-must-reach-the-bugs-regime`).
+  · **CLASS** is keyed on the repo's OWN detector, not on my spelling, so it survives any rewording of
+    the cure (memory: `control-calibrated-to-implementation-decays`); **its POS control runs FIRST**,
+    because a mute detector would pass it vacuously with a table of zeros.
+  · **NEG CONTROL, a DELIBERATE GREEN in both states:** the same oversized feed NOT naming the member
+    must still read `coordination-abandoned`, so the mechanism arm cannot pass by answering
+    `owned-wait` unconditionally. **Every incumbent arm uses a small feed, so none of them would have
+    noticed either failure.**
+  ✅ **RATCHET, and the guard attributed the drain for free.** The bare lint refused BEFORE the
+  allowlist was touched — *"`bin/cc-classify` now 0, allowlist says 3 → set it to 0"* — **which is the
+  guard itself proving the sites were drained IN PLACE rather than moved out of its field of view**
+  (#243's warning; a census delta alone cannot tell those apart). Row REMOVED: allowlist **47 → 46**.
+  **`--census` 132 → 129, LOST=3, NEW=0**, keyed on **(path, TEXT)** with the PRE arm extracted from
+  `origin/main` by `git archive | tar -x` rather than remembered; **the three LOST rows are exactly
+  the three drained lines.** `--selftest` **32/32**. shellcheck rc 0 · `bash -n` rc 0 ·
+  `bats-assert-liveness` rc 0 · scoped bats-shellcheck-lint rc 0 (*"clean — 1 suite(s) scanned, 0
+  blocking finding(s), 0 unanalyzable"*, plus 2 pre-existing non-diff findings reported not blocking).
+  ⚠️ **`alarm-polarity-lint` DECLARED NOT-RUN** — no file here is an alarm emitter and its POS control
+  is a known mute (`e07dc5e09f83`, OPEN, do NOT re-file). **Seventeenth consecutive link to declare
+  rather than claim.**
+  🚨 **THREE INSTRUMENT FAULTS, ALL IN MY OWN APPARATUS, NONE IN A SUBJECT, AND EVERY ONE SURFACED AS
+  A REFUSAL RATHER THAN A WRONG NUMBER.**
+  **(1)** The red-proof runner declared `local label="$1" log="…$label…"` **on one line**. On bash 3.2
+  a multi-variable `local` does not see its own earlier initialiser, so `log` read UNBOUND under
+  `set -u`, both TAP files were absent, and the counts came back **EMPTY**. The rc-93 gate refused.
+  **This brief documents that exact trap and it cost a run anyway.** The same function also returned
+  its value through the stdout it printed its row on (#242's fault 3). Repaired: **one `local` per
+  line, row to stdout, value to a FILE.**
+  **(2)** The commit gate's DISCRIMINATION arm counted `grep -q?F` **file-wide** and refused a correct
+  commit on **2 hits that were both my own comments documenting the drain** — #241/#242's scar, third
+  costume. Narrowed to strip comment lines, **and the narrowing is PAID FOR by a SEEDED FIRE TEST
+  built with a quoted heredoc** (never sed-derived: the pre-fix line begins with a pipe and a
+  `|`-delimited sed dies while its count reads a false 0). It fired at 1.
+  **(3)** The CURE-WIRING arm used `^\s+case …` under `grep -E`. **BSD ERE has no `\s`**, so it matched
+  **ONE of the two** `case` arms and refused with a merged count naming neither. Replaced by **two
+  fixed-string counts, one per arm**, so a refusal now says WHICH arm is missing.
+  ✅ **THE DRAW, RUN TWICE.** `gate-select.sh --direct "$MB..HEAD"` drew **5 suites**; the POS control
+  (a code-touching range) SPOKE with 3. Run in the FOREGROUND before the land (`suites253.sh`, all
+  three of #249's fixes — list on fd 3, every child `< /dev/null`, suites-run == suites-listed):
+  **5 of 5, 322 ok, 0 not ok, 0 skip, 0 NO-PLAN, 0 PLAN-MISMATCH, terminator present, 603 s at load
+  20-23** — `cc-classify-origin-unify` 10 · `cc-classify` **87** · `cc-reaper` **192** ·
+  `headless-address-consumers` 13 · `pipefail-sigpipe-lint` **20**. ⚠️ **`ship-land.bats` (153) was
+  NOT pulled in and neither was `postland-verify.bats`** — my diff names a lint's DATA file, not a
+  lint script, which is #248's narrower trigger confirmed once more. ⚠️ **AND A STANDING COUNT
+  DRIFTED: `pipefail-sigpipe-lint.bats` is 20, where the inherited size table says 18. RE-MEASURE
+  BEFORE YOU PIN.**
+  🚨 **THE BOARD, five lists at three moments, both partitions asserted at each, every list `sort`ed
+  and `sort -c`'d on both sides of every `comm`** (`board253.sh`). Open **2026-08-28T08:14:08Z**:
+  **331 open / 219 blocked / 2,345 done / 4 claimed** (550 combined, 2,899 rows). ⚠️ **The gap from
+  #252's floor (08:09:04Z, 5 m 04 s) held ZERO arrivals and ZERO departures across the full id set,
+  and exactly ONE status transition — `0c8b39b67665` (`claude-infrastructure`) claimed → blocked**,
+  which is the claimed column at 5 → 4. **THE CLAIMED SET REMAINS THE MOST VOLATILE COLUMN AND A
+  COUNT IS STILL NOT A SET.**
+  ✅ **STORES AT MY OPEN (`census253.sh`, 08:14:53Z, every directory asserted to EXIST before its
+  count so an absent store reads UNKNOWN and never 0): postland RED pages 0 over a denominator of
+  2,752** — the 164th consecutive zero — **and that denominator is the story: it read 523 at #252's
+  floor nine minutes before my open and 2,752 at my open, so the 5.3× collapse #252 caught RECOVERED
+  inside five minutes. It is EPISODIC in BOTH directions. Report the zero WITH its denominator AND
+  its moment, every time.** postland stamps **494** · `~/.claude/autonomy/pages` **2,227 / 108
+  `.page`** · inbox-guard `.escalated` **452 / 452 files** (one number, not a ratio).
+  ⚠️ **`GATE=stale` at my open — the THIRTY-FIRST consecutive. NOT yours to drive; only the background
+  `postland-verify` stamp moves it.**
+  ✅ **LEDGER at open: `RUNG=✅ LIVE_SRC=behind LIVE_LAG=2 LIVE_ADDS=0
+  LIVE_AGE=6853 LIVE_BREACH_WHY=`** (empty) — **behind, INSIDE its budget, so NOT MINE, and I did not
+  run the converger.** **READ THE LAG AND THE BREACH FIELD, never the age alone.**
+  ✅ **The four kitty checks passed at minute ~1: `cc-in-kitty` rc 0 · `KITTY_WINDOW_ID=27` ·
+  `KITTY_PID=1427` · exactly ONE object from the id-keyed `kitty @ ls` query with a bogus-id NEG
+  control at 0 · `cc-notify --self` = 27 · `ITERM_SESSION_ID=w0t0p0:27` · `CC_TERM` UNSET · pane cwd
+  its own worktree — the TWENTY-SIXTH consecutive.** The qos-rewrite diff was empty (rc 0, 0 bytes),
+  the **134th** consecutive clean.
+  ✅ **METHOD 222 RE-RUN AT 08:16Z, and it moved again in five days' worth of one link:
+  `hooks/git-worktree-guard.sh` now reads GONE, so the standing residual is EIGHT sites, not the nine
+  the brief hands down** — `bin/cc-classify` (**now GONE too, by this diff**) · `scripts/branch-
+  reaper.sh` 4 · `bin/cc-bus` 3 · `bin/cc-backlog` 1 · `bin/cc-blockers` 1 ·
+  `scripts/deploy-link-parity.sh` 1 · `scripts/offbox-partition.sh` 1 ·
+  `scripts/handoff-disposition.sh` 1. **On every surviving path census == allowlist, and on every GONE
+  path both are 0.** **A VERIFIED LIST DECAYS TOO — just more slowly than an unverified one.**
+  ⚠️ **ZERO rows closed by me, ZERO filed. TWO commits, ONE push.**
+  🚨 **THE LEAD FOR #254: `scripts/branch-reaper.sh` ×4 IS NOW THE LARGEST REMAINING CLUSTER AND ITS
+  INVERSION REAPS A PROTECTED OR WORKTREE-HELD BRANCH — but do NOT rank it from a live sample either.
+  Ask method 224's question first: its feed is `git branch --merged` / `git worktree list`, and THIS
+  CHAIN MANUFACTURES WORKTREES, so the feed is one this box grows on its own. Measure it at its own
+  generator, at 1,000 trials, and report the BAND — never a rate inside it.**
 - **2026-08-28 — drain recycle #252: method 222 — A BRIEF'S "STILL OPEN / NOBODY HAS TAKEN"
   CLAIMS ROT IN THE OPPOSITE DIRECTION FROM ITS "CLOSED" CLAIMS, AND THEY ARE THE EXPENSIVE
   HALF.** #244's method 214 screens every sentence declaring a class **CLOSED**, **EXHAUSTED**,
