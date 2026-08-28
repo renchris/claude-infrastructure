@@ -16,10 +16,19 @@ carries a measured set alongside the inferred bound. The archive only accumulate
 FORWARD from the day it landed, so a short history means a small observed set, not an
 absence of prompts — the two are distinguished explicitly below.
 
+--prune reports TWO independent deadness axes over `permissions.allow`, and only the first is
+ever removed: REDUNDANCY (a duplicate or a shadowed entry — semantics-preserving in any mode)
+and the AUTO-MODE DROP LIST (entries this box's own `--permission-mode auto` discards before
+matching — inert here, but restored the moment you leave auto mode, so they are reported and
+never deleted). See the two predicate blocks below.
+
 Usage:
   cc-permission-audit [DAYS]            the report above (0/absent = all history)
-  cc-permission-audit --prune [FILE…]   list provably-dead approved patterns; writes NOTHING
-  CONFIRM=1 cc-permission-audit --prune [FILE…]   remove them (timestamped backup per file)
+  cc-permission-audit --prune [FILE…]   both axes; writes NOTHING
+  CONFIRM=1 cc-permission-audit --prune [FILE…]   remove the redundant ones (backup per file)
+
+Discovery covers both `settings.json` and `settings.local.json` under `~/.claude*`. A rewrite of
+a discovered `settings.json` requires naming that path explicitly — see prune_report().
 """
 
 import json, glob, re, sys, collections, os, time
@@ -303,6 +312,13 @@ WALK_SKIP = {
     "dist", "build", ".next",
 }
 WALK_MAXDEPTH = 5
+# Both filenames carry `permissions.allow`, and until 2026-08-28 discovery found only the
+# `.local` one — so the population this tool's own backlog row names (the ~339 entries in the
+# five `~/.claude*/settings.json`) was unreachable by the command that row names. Reporting now
+# covers both; REWRITING a non-`.local` file still requires naming it explicitly (see
+# prune_report), because `settings.json` is the operator's primary file and a settings watcher
+# reloads it live.
+SETTINGS_NAMES = ("settings.json", "settings.local.json")
 
 
 def _settings_files():
@@ -316,9 +332,122 @@ def _settings_files():
             dirnames[:] = []
         else:
             dirnames[:] = [d for d in dirnames if d not in WALK_SKIP]
-        if "settings.local.json" in filenames and os.path.basename(dirpath).startswith(".claude"):
-            out.append(os.path.join(dirpath, "settings.local.json"))
+        if not os.path.basename(dirpath).startswith(".claude"):
+            continue
+        for name in SETTINGS_NAMES:
+            if name in filenames:
+                out.append(os.path.join(dirpath, name))
     return sorted(out)
+
+
+# ────────────────────── THE AUTO-MODE DROP PREDICATE ──────────────────────
+#
+# A SECOND, INDEPENDENT deadness axis, and it is REPORT-ONLY — never removed, not even under
+# CONFIRM=1. The predicate above asks "is this rule redundant?"; this one asks "does the mode we
+# actually run even LOAD this rule?".
+#
+# Every session on this box runs `--permission-mode auto`, and auto mode DISCARDS broad allow
+# rules before matching: `pme()` skips each allow rule for which `qNt(tool, content)` is true.
+# Such an entry is inert in the mode it lives in — dead weight that reads as coverage.
+#
+# 🚨 WHY REPORT-ONLY, both halves load-bearing:
+#   (a) The drop is restored when you LEAVE auto mode. Deleting the entry is therefore a real
+#       semantic change under `default`/`acceptEdits`, unlike the redundancy predicate, which is
+#       semantics-preserving under any matcher and in any mode. Two different kinds of dead.
+#   (b) The predicate is code-and-doc verified but NOT probe-verified — the source
+#       (docs/research/permission-matcher-truth-2026-08-20.md §"Auto mode drops broad allow
+#       rules") flags it as the one load-bearing claim resting on two non-probe sources, because
+#       no observable distinguishes "allowed by rule" from "allowed by classifier" in auto mode.
+#       A false prune costs the operator a prompt forever; a report costs a line of output.
+#
+# Transcribed from that doc's `gsn`/`_sn`/`iSd`/`nSd`/`PHs` reading. It is a claim about a
+# specific decompiled build (CC 2.1.220) and can go stale in a way the redundancy predicate
+# cannot — which is why it is a separate section with its own reason strings.
+
+# `iSd` — the dangerous-command list, verbatim from the doc.
+DROP_CMDS = (
+    "python", "python3", "python2", "node", "deno", "tsx", "ruby", "perl", "php", "lua",
+    "npx", "bunx", "npm run", "yarn run", "pnpm run", "bun run",
+    "bash", "sh", "ssh", "zsh", "fish", "eval", "exec", "env", "xargs", "sudo",
+)
+# `nSd` — the network/cloud subset, which gets extra conditions on top of the bare forms.
+DROP_NET = ("curl", "wget", "kubectl", "aws", "gcloud", "gsutil")
+# The kubectl verbs that drop even with a positional arg present.
+KUBECTL_VERBS = {
+    "exec", "apply", "create", "delete", "run", "cp", "port-forward", "proxy", "patch",
+    "edit", "replace", "attach", "debug", "scale", "rollout", "drain", "cordon", "taint",
+}
+# The one documented survivor inside the flag-tail branch: `Bash(python -m pkg.module *)`.
+DASH_M_SURVIVES = re.compile(r"^-m\s+\w+\.[\w.]+(\s*:|\s+)")
+ALL_STARS = re.compile(r"^[\s*]+$")
+
+
+def _tail_after(content, cmd):
+    """The part of `content` after the leading `cmd` token(s), or None if `cmd` does not lead."""
+    if content == cmd:
+        return ""
+    for sep in (":", " "):
+        if content.startswith(cmd + sep):
+            return content[len(cmd) + len(sep):].strip()
+    if content.startswith(cmd) and content[len(cmd):].startswith("*"):
+        return content[len(cmd):].strip()
+    return None
+
+
+def auto_mode_dropped(rule):
+    """Reason string if auto mode discards this allow rule, else None. See the block above."""
+    m = RULE_RE.match(rule)
+    if not m:
+        # No parens at all: a bare tool name. `PHs` drops every Agent rule; `gsn`'s
+        # undefined-content branch drops bare `Bash`.
+        bare = rule.strip()
+        if bare == "Agent":
+            return "Agent rule — auto mode drops every Agent allow rule"
+        if bare == "Bash":
+            return "bare `Bash` — auto mode drops the empty-content form"
+        return None
+    tool, content = m.group(1), m.group(2)
+    if tool == "Agent":
+        return "Agent rule — auto mode drops every Agent allow rule, whatever its specifier"
+    if tool != "Bash":
+        return None                      # gsn returns false for every non-Bash tool
+    c = content.strip().lower()
+    if c == "" or ALL_STARS.match(c):
+        return "matches everything — auto mode drops the bare/wildcard Bash form"
+
+    for cmd in DROP_CMDS + DROP_NET:
+        tail = _tail_after(c, cmd)
+        if tail is None:
+            continue
+        # Bare forms: `<cmd>`, `<cmd>:*`, `<cmd> *`, `<cmd>*`.
+        if tail in ("", "*"):
+            return f"`{cmd}` in bare/`:*` form — on auto mode's dangerous-command list"
+        # `<cmd> …*` whose tail starts with a flag, minus the documented `-m pkg.module` case.
+        if tail.startswith("-") and not DASH_M_SURVIVES.match(tail):
+            return f"`{cmd}` with a flag tail (`{tail[:24]}`) — auto mode drops the flag form"
+        if cmd in DROP_NET:
+            if "$" in tail or "`" in tail:
+                return f"`{cmd}` tail contains a substitution — auto mode drops it"
+            if cmd == "kubectl":
+                first = next((t for t in tail.split() if not t.startswith("-")), "")
+                if first in KUBECTL_VERBS:
+                    return f"`kubectl {first}` — on auto mode's dropped-verb list"
+            if not any(not t.startswith("-") for t in tail.split()):
+                if cmd in ("curl", "wget") and "://" in tail:
+                    break               # documented exception: a URL counts as the positional
+                return f"`{cmd}` with no positional argument — auto mode drops it"
+        break                            # first matching command decides; no second opinion
+    return None
+
+
+def classify_all_shell(obj):
+    """True iff this file sets `autoMode.classifyAllShell` — which drops EVERY Bash allow rule.
+
+    Reported because it makes the per-entry drop list moot rather than merely longer: with it on
+    in ANY settings source, no Bash allow rule survives auto mode at all.
+    """
+    am = obj.get("autoMode") if isinstance(obj, dict) else None
+    return bool(isinstance(am, dict) and am.get("classifyAllShell") is True)
 
 
 def dead_entries(allow):
@@ -369,8 +498,11 @@ def prune_report():
     apply = os.environ.get("CONFIRM", "0") == "1"
     files = _settings_files()
     print(f"── PRUNE {'(APPLY)' if apply else '(DRY RUN — nothing will be written)'} ──")
-    print(f"  scope: {len(files)} settings.local.json file(s)")
+    print(f"  scope: {len(files)} settings file(s)")
     total = dead_total = written = failed = 0
+    dropped_total = 0
+    dropped_by_file = []
+    shell_off = []
     for path in files:
         try:
             with open(path, encoding="utf-8") as fh:
@@ -383,6 +515,14 @@ def prune_report():
         if not isinstance(allow, list):
             continue
         total += len(allow)
+        if classify_all_shell(obj):
+            shell_off.append(path)
+        # The auto-mode axis is computed for every file and reported separately below — it never
+        # feeds `survivors`, so nothing here can remove an entry on account of it.
+        drops = [(r, why) for r in allow for why in (auto_mode_dropped(r),) if why]
+        if drops:
+            dropped_total += len(drops)
+            dropped_by_file.append((path, len(allow), drops))
         survivors, dead = dead_entries(allow)
         if not dead:
             continue
@@ -391,6 +531,14 @@ def prune_report():
         for _, rule, why in dead:
             print(f"    - {rule[:100]}   [{why}]")
         if not apply:
+            continue
+        # A discovered (not explicitly named) non-`.local` file is REPORTED but never rewritten:
+        # `settings.json` is the operator's primary file, a settings watcher reloads it live, and
+        # widening discovery must not widen what a bare `CONFIRM=1` run mutates. Naming the path
+        # on the command line is the deliberate act that authorises the write.
+        if not PRUNE_PATHS and os.path.basename(path) != "settings.local.json":
+            print(f"    ⏸ NOT rewritten — name this path explicitly to prune it:"
+                  f" CONFIRM=1 {os.path.basename(sys.argv[0])} --prune {path}")
             continue
         try:
             bak = _backup(path)                      # backup BEFORE the write, always
@@ -413,7 +561,32 @@ def prune_report():
         print("  DRY RUN — nothing written. Re-run as: "
               f"CONFIRM=1 {os.path.basename(sys.argv[0])} --prune"
               + (" " + " ".join(PRUNE_PATHS) if PRUNE_PATHS else ""))
+    _dropped_report(total, dropped_total, dropped_by_file, shell_off)
     return 1 if failed else 0
+
+
+def _dropped_report(total, dropped_total, dropped_by_file, shell_off):
+    """The auto-mode axis, printed after the prune verdict and never acted on."""
+    print("\n── AUTO-MODE DROP LIST (inert under `--permission-mode auto`; REPORT ONLY) ──")
+    if shell_off:
+        print("  🚨 autoMode.classifyAllShell is set in: " + ", ".join(shell_off))
+        print("     In ANY settings source that drops EVERY Bash allow rule in auto mode, not")
+        print("     just the ones listed below — the whole Bash allowlist is inert.")
+    if not total:
+        print("  no approved patterns read — nothing to classify.")
+        return
+    if not dropped_total:
+        print(f"  0 of {total} approved patterns are on the drop list. Nothing is inert.")
+        return
+    for path, n, drops in dropped_by_file:
+        print(f"\n  {path}  ({len(drops)} of {n} inert in auto mode)")
+        for rule, why in drops:
+            print(f"    · {rule[:100]}   [{why}]")
+    print(f"\n  {dropped_total} of {total} approved patterns ({100 * dropped_total / total:.1f}%) "
+          "are DROPPED before matching in auto mode.")
+    print("  NOT removed by --prune, deliberately: the drop is undone outside auto mode, so")
+    print("  deleting these changes behaviour under `default`/`acceptEdits`. Narrow them")
+    print("  (`Bash(npm run test:*)` survives; `Bash(npm run:*)` does not) rather than deleting.")
 
 
 def main():
