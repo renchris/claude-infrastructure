@@ -4669,6 +4669,30 @@ arm_goal() { # $1=it2-bin $2=pane $3=condition → always 0; prints a parseable 
 # payload error). Prints the measured numbers either way — a refusal with no numbers is unauditable.
 #
 # ---- M10 (MACHINE_CAPACITY_V2 §11.3): a SECOND, session-attributable term ----------------------
+# 🚨 M10's FIRST CLAUSE IS SUPERSEDED — read this before the paragraph below, whose opening sentence
+# is now false in its operative half. "The loadavg ceiling above STAYS" was true when M10 landed;
+# `f944d6e3` (2026-08-20, `fix(fire-gate): load1 does not move with the spawn it was gating`) turned
+# the load term OFF BY DEFAULT in this very function — `[ "${CC_FIRE_LOAD_TERM:-off}" != off ]`, at
+# the top of capacity_gate()'s body below — because an additional RESIDENT session moves the 1-min
+# runnable count by ~0. The INPUT is wrong, not the number, so the ceiling did not move (C18) and the
+# term switch did.
+#
+# Its JUSTIFICATION is superseded too, and that half was never sound: "§9.5 measured it behaving as a
+# ceiling" records the gate ADMITTING at 1.55/core and REFUSING at 4.0/core — a demonstration that a
+# THRESHOLD THRESHOLDS, never a derivation of 2.0 — and §9.5's own closing paragraph then states the
+# gate keys on a quantity that is not session-attributable, so the section undercuts the term it is
+# cited as justifying. The same citation was struck on the OTHER gate at
+# `scripts/lib/capacity-admit.sh`'s `CC_HW_DEFAULT_MAX_LOAD_PER_CORE` (`e89918f2`, 2026-08-25); this
+# was the second live site and outlived that fix by three days — cite by SYMBOL, and re-grep at the
+# pass rather than working from a list of paths (`34a21973`'s third-site finding).
+# Why no derivation is reachable on this axis at all — the survived population contains the fatal
+# value — is `docs/research/gc-cpu-vs-session-ceiling-2026-08-18.md` §3 and its RESOLVED subsection.
+#
+# M10's SECOND clause is not merely still true: it is the reasoning f944d6e3 finished. Box-wide load
+# being neither session-ATTRIBUTABLE nor SHEDDABLE is exactly why the term had to go off rather than
+# up, and why `segments`/`active` carry its intent — they DO move with the spawn. M10's text is kept
+# verbatim below as the record of what was believed when the headroom term was added.
+#
 # The loadavg ceiling above STAYS — §9.5 measured it behaving as a ceiling — but it is the wrong
 # instrument on its own: box-wide load is neither session-ATTRIBUTABLE nor SHEDDABLE. Measured
 # 2026-07-29 (§11.2): the gate refused every net-new fire at 5.20/core with only 12–15 sessions

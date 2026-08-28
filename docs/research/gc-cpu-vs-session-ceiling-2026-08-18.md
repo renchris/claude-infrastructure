@@ -144,6 +144,51 @@ measurement (load1 delta across N all-active sessions) and set the ceiling from 
 point. That is a two-arm experiment, not a config edit, and it is the only thing that can legitimately
 move a capacity constant.
 
+### ✅ RESOLVED 2026-08-28 — the prescription immediately above is REFUTED, by this same section
+
+Backlog `e981656df348` was parked on that prescription for ten days. **The disproof, not a
+derivation, is what closes it.** The finding it rests on — *the constant was never derived* — stands
+and is now recorded in the code; only the prescribed cure was wrong.
+
+**The remedy has no solution on this axis.** "Set the ceiling from a measured failure point" requires
+a failure point outside the survived range. Two paragraphs up, this section quotes the proof that
+there is none: fatal **2.53/core** against 13 consecutive survived samples spanning
+**2.92–5.98/core** — every one *above* the fatal reading (`scripts/capacity-alarm.sh:141-145`, and
+executable: 5.98/core is pinned in that file's selftest as a known false ALARM). A section cannot
+call an axis one that "provably cannot separate fatal from survived" and then, three paragraphs
+later, prescribe locating a boundary on it. The two-arm experiment would return, correctly, that
+there is nothing to set.
+
+**The named blocker could not have discharged it either.** Marginal Δload per ACTIVE session is a
+capacity-**in-sessions** coefficient — it converts a ceiling into a session count. It cannot locate a
+failure boundary, so the item was parked behind a measurement that answers a different question. That
+measurement is separately unavailable: all four published values are under §1's quoting ban in
+`marginal-load-per-active-session-2026-08-19.md` until `scripts/capacity-marginal.sh` clears its
+controls on the box (§5 below; ban enforced in code by `34a21973`, 2026-08-26).
+
+**And the stronger fact landed two days *before* this DoD was written** — `f944d6e3` (2026-08-20,
+`fix(fire-gate): load1 does not move with the spawn it was gating`): an additional RESIDENT session
+moves the 1-min runnable count by ~0. **No value of this literal can make the term correct — the
+input is wrong, not the number**, which is why the answer is a term switch and not a threshold.
+`CC_FIRE_LOAD_TERM` defaults **off** in `capacity_gate()` (`scripts/handoff-fire.sh:5074`), and the
+Agent-tool path — the highest-volume spawn surface on the box — runs it off explicitly
+(`hooks/agent-teams-enforce.sh:229`). `segments` and `active` carry its intent because they *do* move
+with the spawn.
+
+**What actually landed on the constant:** `e89918f2` (2026-08-25) struck the false provenance and put
+this history in its place. **The literal is untouched at 2.0, deliberately** — C18: a fix moves a term
+switch, never a ceiling, and raising it is the lazy design
+`docs/plans/LOAD_INSENSITIVE_VERIFY_V2.md:156` exists to reject. Its residual reach is the two
+unattended recovery callers that leave the term at its `on` default
+(`scripts/boot-resume-launch.sh:266`, `scripts/limit-recover/lr-fire-resume.sh:318`), and both are
+budget-released after `CC_ADMIT_BUDGET`(3) consecutive refusals (`scripts/lib/capacity-admit.sh:909`,
+`basis:"budget-expired"` + page) — so an underived ceiling there costs a delayed resume, never a
+standing refusal.
+
+**The citation above has also drifted:** the literal is at `scripts/lib/capacity-admit.sh:161` on
+trunk, not `:134`. The comment block recording this refutation is what moved it — cite the symbol
+`CC_HW_DEFAULT_MAX_LOAD_PER_CORE`, not the line.
+
 ## 4 · If 2.1.234 is adopted, adopt it on other grounds — and set one env var first
 
 The upgrade is defensible for 33 releases of unrelated fixes, never for capacity. Two items gate it:
