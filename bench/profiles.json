@@ -1,0 +1,132 @@
+{
+  "note": [
+    "Rule WEIGHTS are policy and are hand-authored here on purpose: they encode what a",
+    "review of each app is FOR, which is a decision, not a measurement.",
+    "",
+    "STACK facts are the opposite and are deliberately ABSENT. PIPELINE_SPEC C11 bans",
+    "prose as a source for them, and its own worked example is a table that banned prose",
+    "and then published three unmeasured cells in the fix. `stack` is therefore null in",
+    "every profile below and is filled by a live `dr surface` read of the checkout. A",
+    "consumer that needs a framework version must read it from there and must fail rather",
+    "than default when it is null."
+  ],
+  "severity_score": { "high": 3, "medium": 2, "low": 1, "info": 0 },
+  "surfacing_floor": 0.25,
+  "default_profile": "reso-web",
+  "profiles": {
+    "reso-landing": {
+      "kind": "marketing-aesthetics",
+      "stack": null,
+      "why": [
+        "A purchased template. Its design system is not ours, so conformance to it is not",
+        "a defect we can act on -- a token-drift finding here resolves to 'the vendor chose",
+        "that', and a review that leads with forty of them buries the two findings a person",
+        "would act on. What DOES bind is anything a reader experiences: contrast, clipped",
+        "text, targets you cannot hit, and whether the page reads in the intended order.",
+        "So conformance is demoted, correctness is full weight, and the judgement classes",
+        "carry the review -- which is also the only app of the three where they should."
+      ],
+      "weights": {
+        "token-drift": 0.15,
+        "grid-violation": 0.15,
+        "type-scale": 0.25,
+        "spacing-rhythm": 0.4,
+        "misalignment": 0.5,
+        "contrast": 1.0,
+        "overflow": 1.0,
+        "touch-target": 1.0,
+        "contrast-indeterminate": 1.0,
+        "type-scale-indeterminate": 0.25,
+        "xcheck-zero-ink": 1.0,
+        "xcheck-optical-centre": 0.8,
+        "xcheck-contrast-real": 1.0,
+        "xcheck-contrast-mismatch": 1.0,
+        "xcheck-contrast-varies": 0.5
+      },
+      "t2_classes": ["hierarchy", "gestalt", "readability", "semantic-coherence"],
+      "image_budget": 2
+    },
+    "reso-management": {
+      "kind": "design-system-conformance",
+      "stack": null,
+      "why": [
+        "An internal dashboard on our own system. Here conformance IS the review: a card",
+        "with the wrong radius or a label off the scale is a real, actionable, cheap fix,",
+        "and the deterministic layer finds all of it with no model call. The judgement",
+        "classes shrink to the two a dashboard actually fails at -- a table that does not",
+        "fit its data, and a label that promises something the rows do not do (both were",
+        "found by the blind reviewer on this corpus and by no rule).",
+        "",
+        "Its `type-scale` rule will abstain, not fail, wherever no token map declares a",
+        "scale. An engine with no declared scale cannot produce a conformance verdict, and",
+        "a confident FAIL whose truth depends on which resolver ran is worse than silence."
+      ],
+      "weights": {
+        "token-drift": 1.0,
+        "grid-violation": 0.9,
+        "type-scale": 1.0,
+        "spacing-rhythm": 0.9,
+        "misalignment": 0.8,
+        "contrast": 1.0,
+        "overflow": 1.0,
+        "touch-target": 1.0,
+        "contrast-indeterminate": 1.0,
+        "type-scale-indeterminate": 1.0,
+        "xcheck-zero-ink": 1.0,
+        "xcheck-optical-centre": 0.5,
+        "xcheck-contrast-real": 1.0,
+        "xcheck-contrast-mismatch": 1.0,
+        "xcheck-contrast-varies": 0.6
+      },
+      "t2_classes": ["content-fit", "semantic-coherence"],
+      "image_budget": 1
+    },
+    "reso-web": {
+      "kind": "mixed",
+      "stack": null,
+      "why": [
+        "Between the two, and the weights say so rather than picking a side. Its class",
+        "names are runtime hashes, so a conformance finding here is often unattributable",
+        "to a source line even when it is correct -- which is a reason to rank it below a",
+        "correctness finding, not a reason to stop computing it."
+      ],
+      "weights": {
+        "token-drift": 0.6,
+        "grid-violation": 0.5,
+        "type-scale": 0.6,
+        "spacing-rhythm": 0.7,
+        "misalignment": 0.7,
+        "contrast": 1.0,
+        "overflow": 1.0,
+        "touch-target": 1.0,
+        "contrast-indeterminate": 1.0,
+        "type-scale-indeterminate": 0.6,
+        "xcheck-zero-ink": 1.0,
+        "xcheck-optical-centre": 0.7,
+        "xcheck-contrast-real": 1.0,
+        "xcheck-contrast-mismatch": 1.0,
+        "xcheck-contrast-varies": 0.5
+      },
+      "t2_classes": ["hierarchy", "content-fit", "semantic-coherence"],
+      "image_budget": 2
+    },
+    "bench": {
+      "kind": "instrument",
+      "stack": null,
+      "why": [
+        "The corpus's own profile: everything at 1.0, nothing demoted. The bench exists to",
+        "measure the detectors, and a weighting is exactly the thing that would stop it."
+      ],
+      "weights": {},
+      "t2_classes": [
+        "hierarchy",
+        "gestalt",
+        "content-fit",
+        "semantic-coherence",
+        "optical-alignment",
+        "readability"
+      ],
+      "image_budget": 2
+    }
+  }
+}

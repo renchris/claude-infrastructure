@@ -1,0 +1,67 @@
+{
+ "align-1px": {
+  "xcheck-zero-ink": 16,
+  "xcheck-optical-centre": 1,
+  "xcheck-contrast": 24
+ },
+ "clean": {
+  "xcheck-zero-ink": 16,
+  "xcheck-optical-centre": 1,
+  "xcheck-contrast": 24
+ },
+ "contrast-on-gradient": {
+  "xcheck-zero-ink": 14,
+  "xcheck-optical-centre": 1,
+  "xcheck-contrast": 24
+ },
+ "contrast-plain": {
+  "xcheck-zero-ink": 16,
+  "xcheck-optical-centre": 1,
+  "xcheck-contrast": 24
+ },
+ "grid-offgrid": {
+  "xcheck-zero-ink": 16,
+  "xcheck-optical-centre": 1,
+  "xcheck-contrast": 24
+ },
+ "hierarchy-inversion": {
+  "xcheck-zero-ink": 16,
+  "xcheck-optical-centre": 1,
+  "xcheck-contrast": 24
+ },
+ "optical-centering": {
+  "xcheck-zero-ink": 16,
+  "xcheck-optical-centre": 1,
+  "xcheck-contrast": 24
+ },
+ "overflow-clip": {
+  "xcheck-zero-ink": 16,
+  "xcheck-optical-centre": 1,
+  "xcheck-contrast": 24
+ },
+ "radius-drift": {
+  "xcheck-zero-ink": 16,
+  "xcheck-optical-centre": 1,
+  "xcheck-contrast": 24
+ },
+ "spacing-gap": {
+  "xcheck-zero-ink": 16,
+  "xcheck-optical-centre": 1,
+  "xcheck-contrast": 24
+ },
+ "token-color-drift": {
+  "xcheck-zero-ink": 16,
+  "xcheck-optical-centre": 1,
+  "xcheck-contrast": 24
+ },
+ "touch-target": {
+  "xcheck-zero-ink": 16,
+  "xcheck-optical-centre": 1,
+  "xcheck-contrast": 24
+ },
+ "type-scale": {
+  "xcheck-zero-ink": 16,
+  "xcheck-optical-centre": 1,
+  "xcheck-contrast": 24
+ }
+}

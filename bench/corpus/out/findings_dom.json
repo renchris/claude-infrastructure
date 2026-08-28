@@ -3,7 +3,7 @@
   {
    "rule": "misalignment",
    "target": "div.panel:nth-of-type(5)",
-   "detail": "left edge at 31px is 1.0px off the shared 32px edge used by 8 other elements",
+   "detail": "left edge at 31px is 1.0px off the shared 32px edge used by 18 other elements",
    "severity": "medium"
   }
  ],
@@ -13,13 +13,15 @@
    "rule": "contrast-indeterminate",
    "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
    "detail": "cannot compute a ratio: backdrop is an image/gradient on div.hero:nth-of-type(1). Requirement 3.0:1 is UNVERIFIED for this text",
-   "severity": "high"
+   "severity": "high",
+   "cause": "backdrop is an image/gradient on div.hero:nth-of-type(1)"
   },
   {
    "rule": "contrast-indeterminate",
    "target": "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
    "detail": "cannot compute a ratio: backdrop is an image/gradient on div.hero:nth-of-type(1). Requirement 4.5:1 is UNVERIFIED for this text",
-   "severity": "high"
+   "severity": "high",
+   "cause": "backdrop is an image/gradient on div.hero:nth-of-type(1)"
   }
  ],
  "contrast-plain": [
@@ -107,7 +109,7 @@
   {
    "rule": "touch-target",
    "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-secondary:nth-of-type(2)",
-   "detail": "164x29px is under the 44px minimum target",
+   "detail": "165x30px is under the 44px minimum target",
    "severity": "high"
   }
  ],
@@ -115,7 +117,7 @@
   {
    "rule": "type-scale",
    "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(4) > div.kpi-label:nth-of-type(1)",
-   "detail": "font-size 17px is used once and sits off the page scale [12.0, 14.0, 16.0, 24.0]; nearest step is 16px",
+   "detail": "font-size 17px is 1px off the declared scale ['12', '14', '16', '24']; nearest step is 16px",
    "severity": "medium"
   }
  ]

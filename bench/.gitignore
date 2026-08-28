@@ -11,3 +11,12 @@ corpus/out/pages/
 corpus/out/shots/
 corpus/out/snapshots/
 corpus/out/blind/
+
+# The router's queue is derived from whichever profile last ran, so a committed
+# copy would be a record of one invocation wearing the authority of a baseline --
+# and its crop byte sizes churn with every Pillow bump. `route.py` rebuilds both
+# in under a second. The FP-gate receipt and the per-rule censuses DO stay
+# tracked: they are the denominator every safety claim in the README needs, they
+# are small, and they change only when a rule changes.
+corpus/out/queue/
+corpus/out/route_plan.json

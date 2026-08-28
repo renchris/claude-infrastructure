@@ -41,6 +41,13 @@ TOKENS = {
     "radius": "8px",
     "gap": "16px",
     "grid": 8,
+    # The DECLARED type scale. Added 2026-08-28 because the rule that judges type
+    # was inferring its scale from one page's own histogram -- "a size used once
+    # is off-scale" -- which makes every page's least-used heading a defect. On
+    # this corpus that stayed hidden only because a glyph coincidentally shared
+    # the section heading's 16px; the moment the glyph stopped being text, the
+    # control failed. A design system's scale is declared, not counted.
+    "type_scale": [12, 14, 16, 24],
 }
 
 
@@ -169,7 +176,7 @@ DEFECTS: list[Defect] = [
         ),
         css=(
             ".hero { background: linear-gradient(100deg,#1E3A8A 0%,#3B82F6 45%,"
-            "#DBEAFE 100%); } .hero-caption { color: #FFFFFF; }"
+            "#DBEAFE 100%); } .hero-caption { color: #FFFFFF; text-align: right; }"
         ),
         target=".hero-caption",
         detectable_by="pixels",
@@ -180,7 +187,15 @@ DEFECTS: list[Defect] = [
             "operand and axe-core reports 'incomplete' rather than a violation. The actual "
             "backdrop luminance varies across the element's own width."
         ),
-        magnitude="ratio falls from ~8.6:1 at the left edge to ~1.2:1 at the right",
+        # `text-align: right` is part of the DEFECT, not decoration, and it is a
+        # 2026-08-28 correction. Without it the caption's glyphs occupy columns
+        # 2..299 of an 1168px box -- entirely inside the gradient's dark end, at
+        # 10.4:1 falling to ~7:1, which PASSES everywhere a reader looks. The
+        # defect existed only in the pixels of the element's BOX, which no glyph
+        # occupies, so any detector "finding" it was reporting a contrast for a
+        # place nobody reads. Right-aligning puts the run on the pale end and
+        # makes the summary above true of the text rather than of the padding.
+        magnitude="ratio over the caption's own glyphs falls from ~2.6:1 to ~1.3:1",
         severity="high",
     ),
     Defect(
@@ -198,10 +213,13 @@ DEFECTS: list[Defect] = [
             "Every box-model number is symmetric: the flex container centres the glyph and "
             "getBoundingClientRect on the glyph is exactly centred within the button. The "
             "asymmetry lives in the distribution of ink inside the glyph's own box, which no "
-            "DOM API exposes. Detecting it requires computing the centroid of the rendered "
-            "pixels and comparing it to the geometric centre."
+            "DOM API exposes -- the shape comes from `clip-path`, which is a polygon nobody "
+            "can take a centroid of without rasterising it. Detecting it requires computing "
+            "the centroid of the rendered pixels and comparing it to the CONTAINER's centre; "
+            "comparing to the glyph's own box cannot work, because getBoundingClientRect "
+            "returns the POST-transform box and the compensation moves box and ink together."
         ),
-        magnitude="ink centroid ~2px left of the geometric centre",
+        magnitude="ink centroid exactly 2px left of the container's centre (12px triangle: w/6)",
         severity="medium",
     ),
     Defect(
@@ -290,11 +308,23 @@ tr + tr td {{ border-top: 1px solid {TOKENS["gray200"]}; }}
   width: 44px; height: 44px; border-radius: 22px; background: {TOKENS["blue700"]};
   display: flex; align-items: center; justify-content: center;
 }}
-.glyph {{ color: #FFFFFF; font-size: 16px; line-height: 1;
-         /* Optical compensation: a triangle's ink mass sits behind its
-            bounding-box centre, so geometric centring reads as left-heavy.
-            Measured offset on this glyph at this size: 2.2px left, 1.9px up. */
-         transform: translate(2px, 2px); }}
+.glyph {{ width: 12px; height: 14px; background: #FFFFFF;
+         clip-path: polygon(0 0, 100% 50%, 0 100%);
+         /* Optical compensation, and it is now arithmetic rather than a
+            measurement: a triangle's area centroid sits one third of the width
+            from its base, so a 12px triangle centred by its bounding box reads
+            exactly 12/6 = 2px left-heavy. Drawn with clip-path rather than the
+            U+25B6 font glyph (2026-08-28) because the glyph version compensated
+            by `translate(2px, 2px)`, a pair of numbers measured off one macOS
+            font stack. Re-measured on a Linux/DejaVu render the vertical half was
+            not merely wrong but inverted -- the control sat 3.48px below its
+            container's centre while the "defect" variant sat 1.48px below, so the
+            page that grades every optical finding was the worse of the two. A
+            corpus whose control is only clean on the machine that authored it
+            cannot grade anything anywhere else. A clip-path polygon rasterises
+            identically on every platform, and its centroid is derivable rather
+            than observed. */
+         transform: translateX(2px); }}
 """
 
 BODY_HTML = """
@@ -330,7 +360,7 @@ BODY_HTML = """
     <button class="btn-primary">Confirm all deposits</button>
     <button class="btn-secondary">Release held tables</button>
   </div>
-  <div class="glyph-btn"><span class="glyph">&#9654;</span></div>
+  <div class="glyph-btn"><span class="glyph"></span></div>
 </div>
 """
 
@@ -364,8 +394,20 @@ def build(outdir: pathlib.Path) -> dict:
         entries.append(asdict(d))
 
     manifest = {
-        "corpus_version": "1.0",
-        "built": "2026-08-26",
+        "corpus_version": "1.1",
+        "built": "2026-08-28",
+        "changed_in_1_1": [
+            "optical-centering: the play mark is a clip-path triangle, not a U+25B6 "
+            "font glyph, and its compensation is translateX(2px) = w/6 derived from "
+            "the triangle rather than translate(2px,2px) measured off one macOS font "
+            "stack. On a Linux/DejaVu render the old vertical compensation inverted "
+            "the control: clean sat 3.48px below its container's centre against the "
+            "variant's 1.48px.",
+            "contrast-on-gradient: the caption is right-aligned, because its glyphs "
+            "previously occupied columns 2..299 of an 1168px box -- the gradient's "
+            "dark end, 10.4:1 falling to ~7:1, passing everywhere a reader looks. "
+            "The defect lived only in box pixels no glyph occupies.",
+        ],
         "viewport": {"width": 1280, "height": 900},
         "tokens": TOKENS,
         "control": "clean.html",

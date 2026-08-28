@@ -10,13 +10,21 @@ Screenshots are taken at both deviceScaleFactor 1 and 2 so the capture-fidelity
 question (does a 2x capture actually buy a vision model anything, or does the
 model's own downscaling throw it away) can be measured rather than assumed.
 
-Usage: python3 capture.py <corpus-dir> [--dpr 1,2]
+Usage: python3 capture.py <corpus-dir> [--dpr 1,2] [--browser <path-to-chrome>]
+
+`--browser` (or `$DR_CHROMIUM`) exists because the `channel="chromium"` default
+resolves only against the browser build the installed Playwright expects, and a
+machine that carries a pinned Chromium under its own path -- a CI image, a
+sandbox -- otherwise cannot run the corpus at all. Given a path, the channel is
+dropped and the binary is used verbatim, so the render is the one that was
+pinned rather than one Playwright chose.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import sys
 import time
@@ -129,7 +137,9 @@ EXTRACT_JS = """
 """
 
 
-def capture(corpus: pathlib.Path, dprs: list[int]) -> None:
+def capture(
+    corpus: pathlib.Path, dprs: list[int], browser_path: str | None = None
+) -> None:
     manifest = json.loads((corpus / "manifest.json").read_text())
     vp = manifest["viewport"]
     pages = sorted((corpus / "pages").glob("*.html"))
@@ -141,22 +151,30 @@ def capture(corpus: pathlib.Path, dprs: list[int]) -> None:
     shots.mkdir(exist_ok=True)
     snaps.mkdir(exist_ok=True)
 
+    args = [
+        "--force-color-profile=srgb",
+        "--disable-lcd-text",
+        "--hide-scrollbars",
+        # Pins the host display scale so headless matches headed. Without it
+        # the two disagree on line-box rounding -- measured at ~1.5px drift
+        # accumulated over four paragraphs, with identical font metrics --
+        # and every geometric finding inherits a phantom offset that reads
+        # like a real 1px bug.
+        f"--force-device-scale-factor={max(dprs):g}",
+    ]
+    if browser_path and os.geteuid() == 0:
+        # A pinned binary is normally run in a container, where Chromium's
+        # sandbox needs privileges the container does not grant.
+        args.append("--no-sandbox")
+
     timings = []
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            channel="chromium",
-            args=[
-                "--force-color-profile=srgb",
-                "--disable-lcd-text",
-                "--hide-scrollbars",
-                # Pins the host display scale so headless matches headed. Without it
-                # the two disagree on line-box rounding -- measured at ~1.5px drift
-                # accumulated over four paragraphs, with identical font metrics --
-                # and every geometric finding inherits a phantom offset that reads
-                # like a real 1px bug.
-                f"--force-device-scale-factor={max(dprs):g}",
-            ],
-        )
+        launch = {"args": args}
+        if browser_path:
+            launch["executable_path"] = browser_path
+        else:
+            launch["channel"] = "chromium"
+        browser = p.chromium.launch(**launch)
         for dpr in dprs:
             ctx = browser.new_context(
                 viewport={"width": vp["width"], "height": vp["height"]},
@@ -205,5 +223,6 @@ if __name__ == "__main__":
     ap.add_argument(
         "--dpr", default="1,1.5"
     )  # 1.5 keeps 1280px wide under the 2000px clamp
+    ap.add_argument("--browser", default=os.environ.get("DR_CHROMIUM"))
     a = ap.parse_args()
-    capture(a.corpus.resolve(), [float(x) for x in a.dpr.split(",")])
+    capture(a.corpus.resolve(), [float(x) for x in a.dpr.split(",")], a.browser)

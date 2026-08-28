@@ -1,0 +1,14 @@
+{
+ "corpus": "/home/user/claude-infrastructure/bench/corpus/out",
+ "control_pages": [
+  "clean"
+ ],
+ "n": 1,
+ "subject_checks": 507,
+ "findings_on_controls": 0,
+ "by_rule": {},
+ "gate": "pass",
+ "rate_publishable": false,
+ "deficit_pages": 15,
+ "per_1000_subject_checks": 0.0
+}

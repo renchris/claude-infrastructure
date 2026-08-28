@@ -10,6 +10,15 @@ cloud/API, on the pattern of Parakeet/Whisper-v3-Turbo locally and the Mistral O
 defect corpus measured three ways on this machine (`../../../bench/`). Where the agents and the
 bench disagree, the bench wins; where agents disagree with each other, both are named.
 
+> **CURRENCY — read §11 before quoting any number in §2.** The pipeline was built on 2026-08-28
+> (`bench/README.md`), and building it falsified four things measured here: X2's fix needed a fix to
+> the *corpus*, X3's validated arm found nothing at all on a different antialiasing stack, the
+> gradient defect was passing everywhere a reader looks, and `type-scale` convicted the page's own
+> heading. Every one was found by running the control and none by running the defect pages. §§1–10
+> are unchanged and stand as the 2026-08-26 record; each superseded sentence carries its correction
+> inline, and §11 holds the whole account. This document now carries the staleness banner §7 found
+> missing from all four of its own predecessors.
+
 ---
 
 ## The answer
@@ -172,6 +181,15 @@ Sampling the backdrop separately in the left and right thirds turns "unrepresent
 numbers and a verdict — no VLM call, no abstention, zero findings on the control. **That moves
 contrast-over-a-gradient out of the vision layer's queue entirely.**
 
+🚨 **The conclusion holds; the two numbers above were measured a way that does not survive a
+different antialiasing stack, and the thirds they came from were the wrong thirds. Both are
+corrected in §11 and the arm was rewritten.** In short: the backdrop was the band's *modal* colour,
+and on a gradient every backdrop pixel is nearly unique while every glyph pixel is exactly the text
+colour — so on greyscale AA the text wins the mode and the check compares white against white,
+1.00:1 on both sides, spread 0.00, **silence**. Re-run on Linux/Chromium 141 this arm found nothing
+at all. And the thirds were thirds of the element's *box*: the caption's glyphs occupied 298 of its
+1168px, so 4.81/1.57 described a region no reader ever looks at.
+
 🚨 **The centroid arm is PROVISIONAL and ships disabled** (`--x2` to enable), because trying to
 validate it found two defects in it, and both are instances of the exact failure this document warns
 about — a plausible number nobody checked. (a) It compares ink to the element's **own** box, and
@@ -181,6 +199,13 @@ background is the crop's modal colour, so on a round button the square crop's co
 background outside the circle — count as ink and swamp a 16px glyph. Both fixes are known (measure
 against the container; mask to the painted shape) and neither is done. Shipping it on would have
 handed the pipeline a confident number with no ground truth behind it.
+
+✅ **Both are now done, and X2 ships ON — see §11.** It measures against the container's box and
+masks to the painted silhouette, which makes it sensitive to the compensation for the first time
+(−2.91px uncompensated → −0.91px compensated, where the old form returned the same number for
+both). It clears the control at zero. **Validating it also found a third defect, and it was in the
+corpus rather than in the rule**: the control's own vertical compensation was a macOS measurement
+that inverts on other font stacks.
 
 ---
 
@@ -407,3 +432,85 @@ instinct for any cut-off subagent — disk-truth audit every slot, re-run anythi
 complete, never accept a partial. Its *machinery* is not: it is built for a quota or login cliff and
 recovers by transcript transplant to another account. A mid-stream API stall has no reset to wait for
 and no account to move to. Audit with it; recover by re-firing.
+
+---
+
+## 11. Built, 2026-08-28 — the router, the X2 fix, the FP budget, the per-app weightings
+
+*Appended, not substituted: §§1–10 record what was measured on 2026-08-26 and stand. This section
+records what §8's build list produced, and the four things that turned out to be false when the
+code was actually run. Where it contradicts an earlier section the contradiction is named inline
+above, at the sentence it corrects.*
+
+Built in `bench/` (see `bench/README.md` for the run sequence), all four items of
+`cc-backlog badb132df232`:
+
+| | Build | State |
+|---|---|---|
+| `route.py` | **the abstention router** — T1 (indeterminates minus what the cross-check closed, collapsed by `(rule, cause)`) · T2 (the profile's unscreenable classes, unconditional) · T3 (`--ask`). Crops the archived master, clamps to the read envelope, captions every crop with its own prohibitions, prints the coverage deficit | new, ~380 LOC |
+| `detect_xcheck.py` | **X2 fixed and ON**; X3 rewritten; the cascade walk now IMPORTED from `detect_dom` rather than duplicated | rewritten |
+| `fp_budget.py` | **the false-positive budget** — zero-on-control as the ship gate at n=1, unweighted; refuses a rate below n=16; states the budget per 1,000 subject-checks | new |
+| `profiles.{json,py}` | **per-app rule weightings** — `reso-landing` marketing-aesthetics vs `reso-management` design-system-conformance, with `reso-web` between | new |
+| `tests/design-review-perception.bats` | 9 acceptance tests, including the negative controls for all three | new |
+
+**Measured on this build, Linux/Chromium 141, corpus 1.1:** `detect_dom` 9/9 DOM-determined, **0
+findings on the control**, 507 subject-checks. `detect_xcheck` **0 on the control**, catches both
+measurable pixels-only defects, resolves 2 abstentions. T1 on the corpus is **0** — and now
+demonstrably *because the cross-check closed it*, not because nothing abstained: removing
+`findings_xcheck.json` grows it to 1 class, which is pinned by a test.
+
+### The four things that were false, and what each one teaches
+
+**1. X2's fix needed a third fix, and it was in the corpus.** Measuring against the container made
+the arm sensitive to the compensation — and then the *control* failed at 3.48px vertical while the
+*variant* sat at 1.48px. The corpus compensated a U+25B6 font glyph by `translate(2px, 2px)`, two
+numbers measured off one macOS font stack; a triangle's horizontal centroid is a property of the
+shape, but its vertical placement is a property of the *font's* baseline metrics, and that half
+does not travel. The mark is now a `clip-path` polygon whose centroid is **derivable** (`w/6` =
+exactly 2px) and rasterises identically everywhere. **A corpus whose control is only clean on the
+machine that authored it cannot grade anything anywhere else** — and this one carried a docstring
+promising reproducibility across machines while doing the opposite.
+
+**2. X3, the arm §2 reports as validated, found nothing at all.** Its backdrop was a band's modal
+colour. On a gradient every backdrop pixel is nearly unique while every glyph pixel is exactly the
+text colour, so wherever antialiasing is greyscale rather than subpixel **the text wins the mode**
+and the arm compares white against white: 1.00:1 both ends, spread 0.00, no finding. The failure is
+silent, it is total, and it is invisible to any test that only asks whether the control is clean.
+Fixed by excluding declared-foreground pixels from the backdrop population and taking a **median**,
+which a gradient cannot capture.
+
+**3. The gradient defect was not a defect.** X3's headline output described the left and right
+thirds of the caption's *box*. The caption's glyphs occupied columns 2..299 of that 1168px box —
+entirely inside the gradient's dark end, at 10.4:1 falling to ~7:1, **passing everywhere a reader
+looks**. The reported 1.57:1 was a contrast for a place with no text in it. The arm now measures
+over the ink's own horizontal extent, and the corpus right-aligns the caption so the injected
+defect is one a reader would actually experience (1.76:1 → 1.39:1 over the glyphs). *This is the
+generator this whole document is about, caught in the document's own validated example.*
+
+**4. `type-scale` convicted the page's own heading.** It inferred the scale from one page's
+histogram — a size used twice was a step, a size used once was a defect — which makes the
+least-used heading on every page a violation. It passed the control only because a glyph
+coincidentally shared the section heading's 16px; the instant the glyph stopped being text, the
+control failed. It now consults a **declared** scale and emits `type-scale-indeterminate` where
+none exists, which is the honest answer for the app whose Tailwind half has no token map at all.
+
+**What all four share:** every one was found by running the control, and none was reachable by
+running the defect pages. Three of the four *raised* the recall of the rule that carried them. **A
+gate that only asks "did we catch the defect" cannot see any of this**, which is the whole argument
+for §8's item 2 being a gate rather than a follow-on.
+
+### What this does NOT do
+
+No local VLM, no specialist GUI-grounding model, no VLM-as-quality-gate. §7's June 2026 ruling —
+*taste stays human; gates adjudicate correctness and coverage only* — is not reopened. `route.py`
+writes a queue and a deficit; it computes no score, no rank and no exit code, and there is no code
+path from a model finding to an assertion.
+
+### Still open
+
+- **B0, the mined clean corpus (~315 pages).** `fp_budget.py` is built and it currently reports
+  `n = 1`, so it prints a deficit of 15 pages rather than a rate. **The gate exists; its
+  denominator does not.** Until B0 lands, the honest statement remains "zero on every control we
+  have", never a percentage.
+- **The probes U1–U10 (§7)** are unrun, and T1's five-trigger machinery stays cut pending U3.
+- The north-star taste yardstick (§7) is still absent.

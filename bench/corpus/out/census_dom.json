@@ -1,0 +1,132 @@
+{
+ "align-1px": {
+  "spacing-rhythm": 15,
+  "grid-violation": 188,
+  "type-scale": 30,
+  "token-drift": 107,
+  "contrast": 30,
+  "overflow": 47,
+  "touch-target": 2,
+  "misalignment": 47
+ },
+ "clean": {
+  "spacing-rhythm": 15,
+  "grid-violation": 188,
+  "type-scale": 30,
+  "token-drift": 107,
+  "contrast": 30,
+  "overflow": 47,
+  "touch-target": 2,
+  "misalignment": 47
+ },
+ "contrast-on-gradient": {
+  "spacing-rhythm": 15,
+  "grid-violation": 188,
+  "type-scale": 30,
+  "token-drift": 106,
+  "contrast": 30,
+  "overflow": 47,
+  "touch-target": 2,
+  "misalignment": 47
+ },
+ "contrast-plain": {
+  "spacing-rhythm": 15,
+  "grid-violation": 188,
+  "type-scale": 30,
+  "token-drift": 107,
+  "contrast": 30,
+  "overflow": 47,
+  "touch-target": 2,
+  "misalignment": 47
+ },
+ "grid-offgrid": {
+  "spacing-rhythm": 15,
+  "grid-violation": 188,
+  "type-scale": 30,
+  "token-drift": 107,
+  "contrast": 30,
+  "overflow": 47,
+  "touch-target": 2,
+  "misalignment": 47
+ },
+ "hierarchy-inversion": {
+  "spacing-rhythm": 15,
+  "grid-violation": 188,
+  "type-scale": 30,
+  "token-drift": 107,
+  "contrast": 30,
+  "overflow": 47,
+  "touch-target": 2,
+  "misalignment": 47
+ },
+ "optical-centering": {
+  "spacing-rhythm": 15,
+  "grid-violation": 188,
+  "type-scale": 30,
+  "token-drift": 107,
+  "contrast": 30,
+  "overflow": 47,
+  "touch-target": 2,
+  "misalignment": 47
+ },
+ "overflow-clip": {
+  "spacing-rhythm": 15,
+  "grid-violation": 188,
+  "type-scale": 30,
+  "token-drift": 107,
+  "contrast": 30,
+  "overflow": 47,
+  "touch-target": 2,
+  "misalignment": 47
+ },
+ "radius-drift": {
+  "spacing-rhythm": 15,
+  "grid-violation": 188,
+  "type-scale": 30,
+  "token-drift": 107,
+  "contrast": 30,
+  "overflow": 47,
+  "touch-target": 2,
+  "misalignment": 47
+ },
+ "spacing-gap": {
+  "spacing-rhythm": 15,
+  "grid-violation": 188,
+  "type-scale": 30,
+  "token-drift": 107,
+  "contrast": 30,
+  "overflow": 47,
+  "touch-target": 2,
+  "misalignment": 47
+ },
+ "token-color-drift": {
+  "spacing-rhythm": 15,
+  "grid-violation": 188,
+  "type-scale": 30,
+  "token-drift": 107,
+  "contrast": 30,
+  "overflow": 47,
+  "touch-target": 2,
+  "misalignment": 47
+ },
+ "touch-target": {
+  "spacing-rhythm": 15,
+  "grid-violation": 188,
+  "type-scale": 30,
+  "token-drift": 107,
+  "contrast": 30,
+  "overflow": 47,
+  "touch-target": 2,
+  "misalignment": 47
+ },
+ "type-scale": {
+  "spacing-rhythm": 15,
+  "grid-violation": 188,
+  "type-scale": 30,
+  "token-drift": 107,
+  "contrast": 30,
+  "overflow": 47,
+  "touch-target": 2,
+  "misalignment": 47
+ }
+}

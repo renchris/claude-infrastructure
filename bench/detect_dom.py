@@ -121,14 +121,41 @@ class Page:
         return (255, 255, 255, 1.0), "ok"  # document canvas
 
 
-def find(snap: dict, tokens: dict) -> list[dict]:
+RULES = (
+    "spacing-rhythm",
+    "grid-violation",
+    "type-scale",
+    "token-drift",
+    "contrast",
+    "overflow",
+    "touch-target",
+    "misalignment",
+)
+
+
+def find(snap: dict, tokens: dict) -> tuple[list[dict], dict]:
+    """-> (findings, census). The census is the DENOMINATOR.
+
+    A false-positive count with no subject count is a number about a corpus, not
+    about a detector: 0 findings over 40 subjects and 0 over 40,000 are the same
+    line of output and wildly different evidence. Every rule therefore reports
+    how many subjects it actually examined, and `fp_budget.py` states the budget
+    per 1,000 subject-checks rather than per run.
+    """
     pg = Page(snap)
     els = pg.els
     out: list[dict] = []
+    census = dict.fromkeys(RULES, 0)
 
-    def rep(rule, target, detail, severity="medium"):
+    def rep(rule, target, detail, severity="medium", **extra):
         out.append(
-            {"rule": rule, "target": target, "detail": detail, "severity": severity}
+            {
+                "rule": rule,
+                "target": target,
+                "detail": detail,
+                "severity": severity,
+                **extra,
+            }
         )
 
     text_els = [e for e in els if e["text"]]
@@ -153,6 +180,7 @@ def find(snap: dict, tokens: dict) -> list[dict]:
         m, share = mode_of(gaps)
         if m is None or share < 0.5:
             continue
+        census["spacing-rhythm"] += len(gaps)
         for i, g in enumerate(gaps):
             if abs(g - m) > 1.0:
                 rep(
@@ -164,6 +192,7 @@ def find(snap: dict, tokens: dict) -> list[dict]:
 
     # --- 2. grid adherence: spacing values should be multiples of the unit ----
     for e in els:
+        census["grid-violation"] += 4
         for side in ("margin-top", "margin-left", "margin-bottom", "margin-right"):
             v = px(e["styles"].get(side))
             if v and v % GRID != 0 and v not in (1.0, 2.0, 4.0) and v < 100:
@@ -174,20 +203,45 @@ def find(snap: dict, tokens: dict) -> list[dict]:
                     "low",
                 )
 
-    # --- 3. type scale: font sizes should come from one small set ------------
-    sizes = [px(e["styles"]["font-size"]) for e in text_els]
-    counts = collections.Counter(sizes)
-    scale = {s for s, n in counts.items() if n >= 2}
-    for e in text_els:
-        s = px(e["styles"]["font-size"])
-        if s not in scale and scale:
-            near = min(scale, key=lambda x: abs(x - s))
-            rep(
-                "type-scale",
-                e["path"],
-                f"font-size {s:g}px is used once and sits off the page scale "
-                f"{sorted(scale)}; nearest step is {near:g}px",
-            )
+    # --- 3. type scale: font sizes must come from the DECLARED scale ---------
+    # This rule used to infer the scale from the page's own histogram -- a size
+    # used twice was a step, a size used once was a defect. That is not a type
+    # scale, it is a popularity contest, and it convicts the least-used heading
+    # on every page. It survived on this corpus only because a glyph happened to
+    # share the section heading's 16px; the control failed the instant it did
+    # not. A scale is declared by a design system or it is not knowable from one
+    # page, so where nothing declares one this abstains, ONCE, and the router
+    # takes it from there.
+    declared = tokens.get("type_scale")
+    sizes = sorted({px(e["styles"]["font-size"]) for e in text_els})
+    census["type-scale"] += len(text_els)
+    if not declared:
+        rep(
+            "type-scale-indeterminate",
+            "<page>",
+            f"no type scale is declared for this app, so none of the "
+            f"{len(sizes)} sizes in use ({', '.join(f'{s:g}' for s in sizes)}) "
+            f"can be judged conformant or drifted. Requirement UNVERIFIED",
+            "high",
+            cause="no type scale is declared for this app",
+        )
+    else:
+        steps = sorted(float(s) for s in declared)
+        for e in text_els:
+            s = px(e["styles"]["font-size"])
+            if s in steps:
+                continue
+            near = min(steps, key=lambda x: abs(x - s))
+            d = abs(s - near)
+            # Same doctrine as rule 5: a near-miss to a step is drift, a size far
+            # from every step is an undeclared decision. Only the first is a bug.
+            if d <= 3:
+                rep(
+                    "type-scale",
+                    e["path"],
+                    f"font-size {s:g}px is {d:g}px off the declared scale "
+                    f"{[f'{x:g}' for x in steps]}; nearest step is {near:g}px",
+                )
 
     # --- 4. radius conformance ----------------------------------------------
     radii = [
@@ -197,6 +251,7 @@ def find(snap: dict, tokens: dict) -> list[dict]:
     ]
     m, share = mode_of(radii)
     if m and share >= 0.4:
+        census["token-drift"] += len(els)
         for e in els:
             r = px(e["styles"]["border-radius"])
             # A pill/circle is a deliberate shape, not radius drift.
@@ -224,6 +279,7 @@ def find(snap: dict, tokens: dict) -> list[dict]:
                 continue
             h = hexof(c)
             seen.setdefault(h, []).append((e["path"], prop))
+    census["token-drift"] += sum(len(u) for u in seen.values())
     for h, uses in seen.items():
         if h in palette:
             continue
@@ -250,6 +306,7 @@ def find(snap: dict, tokens: dict) -> list[dict]:
         fg = parse_rgb(e["styles"]["color"])
         if not fg:
             continue
+        census["contrast"] += 1
         bg, why = pg.backdrop(e)
         size = px(e["styles"]["font-size"])
         weight = e["styles"].get("font-weight", "400")
@@ -258,12 +315,18 @@ def find(snap: dict, tokens: dict) -> list[dict]:
         )
         need = CONTRAST_MIN_LARGE if large else CONTRAST_MIN
         if bg is None:
+            # `cause` is the collapse key, emitted as a FIELD rather than left in
+            # the prose. Ninety-five abstentions are not ninety-five questions --
+            # every text run on one gradient is one question -- and a router that
+            # had to regex this sentence to discover that would be re-deriving a
+            # fact this layer already knew.
             rep(
                 "contrast-indeterminate",
                 e["path"],
                 f"cannot compute a ratio: {why}. Requirement {need}:1 is UNVERIFIED "
                 f"for this text",
                 "high",
+                cause=why,
             )
             continue
         ratio = contrast(fg, bg)
@@ -276,6 +339,7 @@ def find(snap: dict, tokens: dict) -> list[dict]:
             )
 
     # --- 7. overflow / clipping ---------------------------------------------
+    census["overflow"] += len(els)
     for e in els:
         ov = " ".join(
             [e["styles"].get("overflow", ""), e["styles"].get("overflow-y", "")]
@@ -294,6 +358,7 @@ def find(snap: dict, tokens: dict) -> list[dict]:
         role = e["tag"] in INTERACTIVE
         if not role:
             continue
+        census["touch-target"] += 1
         w, h = e["rect"]["w"], e["rect"]["h"]
         if h < TARGET_MIN - TARGET_TOL or w < TARGET_MIN - TARGET_TOL:
             rep(
@@ -306,6 +371,7 @@ def find(snap: dict, tokens: dict) -> list[dict]:
     # --- 9. near-miss alignment ---------------------------------------------
     edges = collections.Counter(round(e["rect"]["x"], 1) for e in els)
     strong = {x for x, n in edges.items() if n >= 3}
+    census["misalignment"] += len(els)
     for e in els:
         x = round(e["rect"]["x"], 1)
         if x in strong:
@@ -319,17 +385,23 @@ def find(snap: dict, tokens: dict) -> list[dict]:
                     f"{s}px edge used by {edges[s]} other elements",
                 )
                 break
-    return out
+    return out, census
 
 
-def main(corpus: pathlib.Path) -> None:
+def run(corpus: pathlib.Path) -> tuple[dict, dict]:
     manifest = json.loads((corpus / "manifest.json").read_text())
     tokens = manifest["tokens"]
     snaps = corpus / "snapshots"
-    results = {}
+    results, censuses = {}, {}
     for f in sorted(snaps.glob("*.json")):
-        results[f.stem] = find(json.loads(f.read_text()), tokens)
+        results[f.stem], censuses[f.stem] = find(json.loads(f.read_text()), tokens)
+    return results, censuses
+
+
+def main(corpus: pathlib.Path) -> None:
+    results, censuses = run(corpus)
     (corpus / "findings_dom.json").write_text(json.dumps(results, indent=1))
+    (corpus / "census_dom.json").write_text(json.dumps(censuses, indent=1))
 
     ctrl = results.get("clean", [])
     print(
