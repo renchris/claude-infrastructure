@@ -3524,3 +3524,83 @@ c30_shape_is_not_a_verdict() {   # $1 = the TAP line to plant, verbatim
   run bash -c "grep -ac '^not ok' \"\$1\"" _ "$corpus"
   [ "$output" = "5" ]                     # the old pattern counted FIVE — four of them torn
 }
+
+# ── C_FALSIFY: `--falsify-red` must never answer 0 about a HOST suite ────────────────────────────
+# CONTRACT, quoted from the SUT's own header at scripts/postland-verify.sh:3291 and from
+# bin/cc-premise run_falsifier: "exit 0 means the premise is GONE and the claim is refused; every
+# non-zero means 'still live', advisory only. So exit 0 is the only load-bearing answer here." And:
+# "EXACTLY ONE SUCCESS STATE: a tree CONTAINING the accused commit has since run the FULL corpus
+# green, and that green's span actually covered this suite." By C18 the corpus is tests/*.bats MINUS
+# scripts/host-suites.manifest, so a suite LISTED in that manifest was never run by any green and the
+# only admissible answer about it is 2 ("could not ask").
+#
+# WHY THESE TWO ARMS EXIST. Of the SUT's four verbs, the 130 tests above name only `verb_bisect`:
+# `--falsify-red` had no arm at all, so when it inverted, nothing in this file could go red. The
+# defect is a function of how many bytes the surviving producer still has to WRITE after the
+# consumer quits, and every incumbent fixture in this suite is a few dozen bytes — so size is the
+# variable these arms control, deliberately.
+falsify_manifest() { # <post-match filler bytes> <plant|absent>
+  local fill="$1" mode="$2" n=0 acc=0
+  mkdir -p "$R/scripts"
+  {
+    echo "# host suites — fixture"
+    if [ "$mode" = plant ]; then echo "tests/subject.bats"; fi   # NEEDLE FIRST: grep -q quits early
+    while [ "$acc" -lt "$fill" ]; do
+      echo "tests/filler-$n-aaaaaaaaaaaaaaaaaaaa.bats"; acc=$(( acc + 35 )); n=$(( n + 1 ))
+    done
+  } > "$R/scripts/host-suites.manifest"
+}
+
+@test "C_FALSIFY: a HOST suite answers 2 at a manifest size that inverts a piped \`grep -q\`" {
+  # NON-VACUITY FIRST: this arm is about a pipeline promoted to 141 by pipefail. With pipefail OFF
+  # the hazard cannot exist and the arm would pass in BOTH states, proving nothing.
+  run grep -c '^set -uo pipefail' "$SUT"
+  [ "$output" -ge 1 ]
+
+  printf '@test "s" { true; }\n' > "$R/tests/subject.bats"
+  push_commit red-subject
+  redsha="$(git -C "$R" rev-parse HEAD)"
+  mkdir -p "$CC_POSTLAND_DIR"
+
+  # POS: the suite IS a host suite. 120,000 B is taken from the measured always-inverted band
+  # (probe251.sh, 2026-08-28: rc=0 20/20 there against the unfixed subject), so a re-introduced
+  # `| grep -q` fails this arm on every run rather than one in twenty.
+  falsify_manifest 120000 plant
+  push_commit green-manifest-plant
+  [ "$(wc -c < "$R/scripts/host-suites.manifest")" -gt 100000 ]   # the size IS the fixture
+  printf '%s' "$(git -C "$R" rev-parse HEAD)" > "$CC_POSTLAND_DIR/last-green"
+  run bash "$SUT" --falsify-red tests/subject.bats "$redsha"
+  [ "$status" = "2" ]        # "could not ask" — a green that excluded this suite cannot retract it
+
+  # NEG CONTROL, at the SAME size, with the needle PLANTED BY NOTHING. Without it the arm above
+  # could pass on a SUT that simply always answered 2. A control fed through a builder that plants
+  # the needle in every mode is not a non-member at all — so `absent` writes no needle line.
+  falsify_manifest 120000 absent
+  push_commit green-manifest-absent
+  run grep -c '^tests/subject\.bats$' "$R/scripts/host-suites.manifest"
+  [ "$output" = "0" ]        # the control is genuinely a non-member
+  printf '%s' "$(git -C "$R" rev-parse HEAD)" > "$CC_POSTLAND_DIR/last-green"
+  run bash "$SUT" --falsify-red tests/subject.bats "$redsha"
+  [ "$status" = "0" ]        # in the corpus, covered by the green ⇒ the premise IS gone
+}
+
+# The CLASS property, read LIVE off the SUT. The arm above pins one size; this pins the shape, so a
+# future edit cannot reintroduce the hazard at a size no fixture happens to cover. The SPAN is the
+# whole verb rather than the one line, because the property is about where an early-exiting consumer
+# may sit, not about which variable is being asked.
+@test "C_FALSIFY: the manifest membership test never pipes into an early-exiting consumer" {
+  span="$(sed -n '/^verb_falsify_red() {/,/^}/p' "$SUT")"
+  [ -n "$span" ]                                        # absent ⇒ fail by NAME, never vacuously
+  printf '%s\n' "$span" | grep -q 'MANIFEST_REL'        # ...and it still asks the manifest at all
+  # Strip WHOLE-LINE comments only: the cure documents the hazard by name, and a raw grep would
+  # convict the fixed file for explaining its own fix. Line-based, never `s/#.*//`, because the
+  # function legitimately contains `${#lg}` and a blanket strip would mangle it into a false green.
+  code="$(printf '%s\n' "$span" | grep -v '^[[:space:]]*#')"
+  run bash -c 'printf "%s\n" "$1" | grep -c "|[[:space:]]*grep[[:space:]][[:space:]]*-q"' _ "$code"
+  [ "$output" = "0" ]
+  # ...and the detector DOES fire on the shape it is meant to catch, so the 0 above is a finding
+  # rather than a pattern that matches nothing anywhere.
+  run bash -c 'printf "%s\n" "$1" | grep -c "|[[:space:]]*grep[[:space:]][[:space:]]*-q"' _ \
+    'printf "%s\n" "$mf" | sed "s/#.*//" | tr -d "[:blank:]" | grep -qxF "$path" && return 2'
+  [ "$output" = "1" ]
+}

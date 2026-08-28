@@ -3344,9 +3344,26 @@ verb_falsify_red() { # <suite-path|tests/> <red-sha> → 0 retracted · 1 still 
   # it. An ABSENT manifest is the EMPTY set by the manifest's own frozen contract, not a failure —
   # but an unreadable one at that ref is "could not ask", and the two must not collapse.
   if git -C "$REPO" cat-file -e "$lgc:$MANIFEST_REL" >/dev/null 2>&1; then
-    local mf
+    local mf mfn
     mf="$(git -C "$REPO" show "$lgc:$MANIFEST_REL" 2>/dev/null)" || return 2
-    printf '%s\n' "$mf" | sed 's/#.*//' | tr -d '[:blank:]' | grep -qxF "$path" && return 2
+    # NORMALISE FIRST, ASK MEMBERSHIP SECOND — and the split is the whole point, not a style choice.
+    # This file runs under `set -uo pipefail`. Piping the manifest straight into `grep -qxF` puts an
+    # EARLY-EXITING consumer at the end of the pipe: grep quits at the first match, the surviving
+    # producer takes SIGPIPE, pipefail promotes the pipeline to 141, and the `&& return 2` therefore
+    # FAILS ON A MATCH. Control then falls to `return 0` — and 0 is the ONE load-bearing answer this
+    # verb has (cc-premise run_falsifier: "exit 0 means the premise is GONE and the claim is
+    # refused"). So a HOST suite, excluded from the corpus by definition, is reported as covered by a
+    # green that structurally never ran it, and the backlog row about it is refused as premise-gone.
+    # Measured 2026-08-28 against this very CLI verb, 20 trials per cell (probe251.sh), needle first
+    # in the manifest so grep quits early: rc=2 20/20 at 0/5,000/20,000 B of post-match manifest,
+    # rc=0 17/20 at 60,000 B, and rc=0 20/20 at 120,000 B. The command substitution below reads to
+    # EOF and cannot close the pipe early, so the same sed|tr normalisation is safe there; membership
+    # is then asked with `case` over a newline-fenced string — the cure this repo already uses at
+    # scripts/ship-land.sh:2098 and scripts/branch-reaper.sh:109. Fork-free, and it cannot report the
+    # opposite of what it found. The quoted "$path" in a case pattern is literal, so a metacharacter
+    # in a suite name cannot turn a membership test into a glob.
+    mfn="$(printf '%s\n' "$mf" | sed 's/#.*//' | tr -d '[:blank:]')"
+    case $'\n'"$mfn"$'\n' in *$'\n'"$path"$'\n'*) return 2 ;; esac
   fi
   # The suite must have EXISTED at the green — a green cannot vouch for a file it never saw.
   git -C "$REPO" cat-file -e "$lgc:$path" >/dev/null 2>&1 || return 2
