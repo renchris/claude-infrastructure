@@ -986,8 +986,46 @@ file_guards() { # $1=file $2=binary
 # as bucket 4 — the near-vacuous verdict this lint was built to end, reproduced in the lint itself.
 # It was caught only because --list prints the per-plist PATH and a known inline-PATH job read
 # "default". PlistBuddy prints the element raw, which is also what the ancestor suite does.
+#
+# ── WHY THERE IS A SECOND READER, AND WHY IT IS plistlib AND NOT A PARSER ─────────────────────────
+# PlistBuddy ships with macOS and exists nowhere else. Every read below FAILED on a non-Darwin box,
+# and each failure is indistinguishable from "the key is absent": `plist_arg_strings` returned an
+# empty list, so `plist_effective_path` fell through its four arms to the last one and answered
+# STOCK_PATH for EVERY plist in the tree — including the ones whose whole point is an inline
+# `export PATH=` that cannot reach Homebrew. That is the near-vacuous verdict this lint was built to
+# end, silently reinstated by the absence of one binary, with no message and no non-verdict.
+#
+# The fallback is python3's `plistlib` — stdlib, an exact XML/binary plist reader, already a hard
+# dependency of this script (`PY` is checked with `die2` before the scanner runs) and present at
+# /usr/bin/python3 on macOS as well. It is deliberately NOT a sed/grep parse of the XML: the comment
+# above records what happened the last time this file read a plist through a text transform, when
+# plutil's JSON escaping made the extraction match nothing and every inline-PATH job read "default".
+# A reader that is wrong in the SAFE direction is the failure mode, not the safeguard.
+#
+# PlistBuddy stays FIRST so nothing about a Darwin run changes: same reader, same order, same output.
+plist_reader() { # -> stdout: buddy | py ; rc 1 if neither is available
+  [ -x /usr/libexec/PlistBuddy ] && { printf 'buddy\n'; return 0; }
+  [ -x "$PY" ] && { printf 'py\n'; return 0; }
+  return 1
+}
+
 plist_arg_strings() { # $1=plist -> one ProgramArguments element per line, unescaped
   local pl="$1" i=0 s
+  if [ "$(plist_reader)" = "py" ]; then
+    # The 32-element cap is PlistBuddy's, mirrored here so the two readers cannot disagree about a
+    # pathological plist. `or []` keeps a missing key an empty list rather than a traceback.
+    "$PY" - "$pl" <<'PY' 2>/dev/null
+import plistlib, sys
+try:
+    with open(sys.argv[1], 'rb') as fh:
+        d = plistlib.load(fh)
+except Exception:
+    sys.exit(1)
+for s in (d.get('ProgramArguments') or [])[:33]:
+    print(s)
+PY
+    return 0
+  fi
   while :; do
     s="$(/usr/libexec/PlistBuddy -c "Print :ProgramArguments:$i" "$pl" 2>/dev/null)" || break
     printf '%s\n' "$s"
@@ -996,11 +1034,35 @@ plist_arg_strings() { # $1=plist -> one ProgramArguments element per line, unesc
   done
 }
 
+plist_env_path() { # $1=plist -> the EnvironmentVariables:PATH string, or empty
+  local pl="$1"
+  if [ "$(plist_reader)" = "py" ]; then
+    "$PY" - "$pl" <<'PY' 2>/dev/null
+import plistlib, sys
+try:
+    with open(sys.argv[1], 'rb') as fh:
+        d = plistlib.load(fh)
+except Exception:
+    sys.exit(1)
+v = (d.get('EnvironmentVariables') or {}).get('PATH')
+if v:
+    print(v)
+PY
+    return 0
+  fi
+  /usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:PATH' "$pl" 2>/dev/null || true
+}
+
 plist_effective_path() { # $1=plist -> stdout: a PATH string, or the LOGIN_SHELL sentinel
   local pl="$1" p="" args
 
+  # 0. NO READER, NO VERDICT. Falling through to arm 4 with an unreadable plist would answer
+  #    STOCK_PATH for a job that declares something else — a fabricated verdict in the safe
+  #    direction, which is the one this file's header names as how a lint goes quietly useless.
+  plist_reader >/dev/null || die2 "no plist reader: neither /usr/libexec/PlistBuddy nor $PY is executable, so this plist's PATH cannot be read (NON-VERDICT)"
+
   # 1. EnvironmentVariables:PATH
-  p="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:PATH' "$pl" 2>/dev/null)" || p=""
+  p="$(plist_env_path "$pl")" || p=""
   if [ -n "$p" ]; then printf '%s\n' "$p"; return 0; fi
 
   args="$(plist_arg_strings "$pl")"
@@ -1390,7 +1452,7 @@ if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then usage; exit 0; fi
 # scanner unexpanded, so SC2016 is the intended spelling for this whole block, not a slip.
 # shellcheck disable=SC2016
 if [ "${1:-}" = "--selftest" ]; then
-  checks=0; fails=0
+  checks=0; fails=0; skips=0
   d="$(mktemp -d)" || die2 "mktemp failed"
   trap 'rm -rf "$d"' EXIT
 
@@ -1408,56 +1470,107 @@ if [ "${1:-}" = "--selftest" ]; then
   # hook_population falls back to the whole directory — the widening direction, asserted below.
   newtree() { mkdir -p "$d/$1/hooks" "$d/$1/launchd"; }
 
+  # ── THE TWO FIXTURE BINARIES, AND WHY NO CASE BELOW MAY NAME A REAL ONE ───────────────────────
+  # A finding needs BOTH halves of a conjunction: `installed_somewhere` says the name is a real
+  # binary somewhere, AND `reachable_on` says it is NOT on the PATH the job actually runs with. Both
+  # halves stat the LIVE FILESYSTEM, so a fixture spelled with a real binary name asks a question
+  # about THE BOX RUNNING THE SELFTEST and not about the scanner. Every RED control below then fires
+  # only where the author happens not to have that tool installed.
+  #
+  # THIS IS MEASURED, NOT FEARED. On a Linux box, `apt-get install shellcheck` — which touches no
+  # file in this repository — moved this selftest from 11 failures to 14, because three RED controls
+  # spelled with `shellcheck` found /usr/bin/shellcheck reachable on STOCK_PATH and stopped firing.
+  # Fourteen of 42 cases were decided by the invoker's tool inventory: `tmux`, `yq` and `shellcheck`
+  # are Homebrew-only on the operator's Mac and stock on Linux, and `md5` is /sbin-only on macOS and
+  # absent from Linux entirely. A detector whose own controls answer to the box cannot certify
+  # anything about the tree, and scripts/ship-land.sh gate-reds on this exit code — so off Darwin
+  # the arm refused every land, including a docs-only one, with a verdict that named no defect.
+  # (backlog f85fce7c26f5: eight cloud dispatches, eight branches, nothing landed.)
+  #
+  # The idiom that fixes it was already in this file, at cases 20a-21i, with its reasoning written
+  # out: `zzunobtainium` is "chosen precisely because no box installs it — the live probe CANNOT be
+  # the thing that makes this red". Case 19a says the same thing from the other side: "Only a binary
+  # the stock floor CANNOT reach makes the label position load-bearing here" — and then spells the
+  # fixture `shellcheck`, which the stock floor reaches on any Linux. Generalised here:
+  #
+  #   zzunobtainium  vouched for by CC_UNATTENDED_INVENTORY, installed NOWHERE. `installed_somewhere`
+  #                  answers yes through the inventory arm alone and `reachable_on` answers no on
+  #                  every PATH there is. A RED control spelled with it fires on every box or the
+  #                  SCANNER is broken, which is the only thing these cases are entitled to measure.
+  #   zzreachable    the same, plus a real executable FILE at $ZR_DIR (inside the sandbox). A GREEN
+  #                  control puts $ZR_DIR on the fixture's declared PATH, so "reachable" is a fact
+  #                  about the fixture. This also DE-VACUOUSES the green half: cases 11 and 15 used
+  #                  to pass off Darwin because their word resolved nowhere and was dropped as
+  #                  scanner noise, i.e. for the opposite of the reason they claim to assert.
+  #
+  # The GREEN controls are converted too, and that is not tidiness. A green case spelled with a name
+  # the stock floor reaches can never be reported by any scanner, so it passes on a lint that has
+  # stopped scanning altogether — the exact vacuity the RED controls beside them exist to exclude.
+  #
+  # THE ONE CASE THAT STAYS ENVIRONMENTAL IS CASE 19, and it is gated rather than converted: see it.
+  INV_Z="zzunobtainium"
+  INV_BOTH="zzunobtainium
+zzreachable"
+  ZR_DIR="$d/refbin"
+  mkdir -p "$ZR_DIR"
+  printf '#!/bin/sh\nexit 0\n' > "$ZR_DIR/zzreachable"
+  chmod +x "$ZR_DIR/zzreachable"
+
   # 1. RED — the unguarded shape, and specifically the one a greedy tokenizer MISSED: a command
   #    substitution inside double quotes. If this ever goes green the scanner has regressed to the
   #    version that called task-quality-gate.sh:164 clean.
   newtree t1
-  mk t1 hooks/a.sh 'out="$(shellcheck foo.sh 2>&1)"'
-  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t1" >/dev/null 2>&1 ); expect 1 "$?" 'a bare binary inside "$( )" was not detected'
+  mk t1 hooks/a.sh 'out="$(zzunobtainium foo.sh 2>&1)"'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t1" >/dev/null 2>&1 ); expect 1 "$?" 'a bare binary inside "$( )" was not detected'
 
   # 2. RED — the plainest shape, bare at line start.
-  newtree t2; mk t2 hooks/a.sh 'tmux kill-pane -t "$p"'
-  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t2" >/dev/null 2>&1 ); expect 1 "$?" 'a bare binary at command position was not detected'
+  newtree t2; mk t2 hooks/a.sh 'zzunobtainium kill-pane -t "$p"'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t2" >/dev/null 2>&1 ); expect 1 "$?" 'a bare binary at command position was not detected'
 
-  # 3. GREEN — an absolute path is the fix, and must not be reported.
-  newtree t3; mk t3 hooks/a.sh 'out="$(/opt/homebrew/bin/shellcheck foo.sh)"'
-  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t3" >/dev/null 2>&1 ); expect 0 "$?" 'an absolute path was reported as a violation'
+  # 3. GREEN — an absolute path is the fix, and must not be reported. Spelled with the fixture binary
+  #    so the case still discriminates: a scanner that stripped the directory would report the tail.
+  newtree t3; mk t3 hooks/a.sh 'out="$(/opt/homebrew/bin/zzunobtainium foo.sh)"'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t3" >/dev/null 2>&1 ); expect 0 "$?" 'an absolute path was reported as a violation'
 
   # 4. GREEN — the false positive that killed the grep version: a binary NAME inside a single-quoted
   #    regex is prose. completion-assert.sh's CA_CMD_RE is the real line this replays.
   newtree t4
-  mk t4 hooks/a.sh "CA_CMD_RE='^(cc-backlog|claude|npx|pnpm|tmux|shellcheck)([[:space:]]|\$)'"
-  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t4" >/dev/null 2>&1 ); expect 0 "$?" 'a binary name inside a single-quoted regex was reported as an invocation'
+  mk t4 hooks/a.sh "CA_CMD_RE='^(cc-backlog|claude|npx|pnpm|zzunobtainium)([[:space:]]|\$)'"
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t4" >/dev/null 2>&1 ); expect 0 "$?" 'a binary name inside a single-quoted regex was reported as an invocation'
 
   # 5. GREEN — a name in a comment is prose.
-  newtree t5; mk t5 hooks/a.sh '# we deliberately do not call shellcheck or tmux here
+  newtree t5; mk t5 hooks/a.sh '# we deliberately do not call zzunobtainium here
 true'
-  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t5" >/dev/null 2>&1 ); expect 0 "$?" 'a binary name in a comment was reported'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t5" >/dev/null 2>&1 ); expect 0 "$?" 'a binary name in a comment was reported'
 
   # 6. GREEN — a heredoc body is data.
   newtree t6; mk t6 hooks/a.sh 'cat <<'"'"'EOF'"'"'
-shellcheck tmux yq
+zzunobtainium
 EOF'
-  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t6" >/dev/null 2>&1 ); expect 0 "$?" 'a heredoc body was scanned as code'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t6" >/dev/null 2>&1 ); expect 0 "$?" 'a heredoc body was scanned as code'
 
-  # 7. GREEN — a stock binary is not this lint's business, however bare.
+  # 7. GREEN — a stock binary is not this lint's business, however bare. `sed` and `awk` are the one
+  #    pair that may stay spelled for real: /usr/bin/sed and /usr/bin/awk are on STOCK_PATH on every
+  #    box this lint has ever run on, so the case asks the same question everywhere. That is the
+  #    property the rest of the fixtures had to be given by construction.
   newtree t7; mk t7 hooks/a.sh 'sed -n 1p "$f" | awk "{print}"'
   ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t7" >/dev/null 2>&1 ); expect 0 "$?" 'a stock-PATH binary was reported'
 
   # 8. GREEN — grandfathered by the allowlist, and the entry is USED so it is not stuck.
-  newtree t8; mk t8 hooks/a.sh 'tmux kill-pane'
-  ( CC_UNATTENDED_ALLOWLIST="hooks/a.sh:tmux" "$SELF" "$d/t8" >/dev/null 2>&1 ); expect 0 "$?" 'an allowlisted site still blocked'
+  newtree t8; mk t8 hooks/a.sh 'zzunobtainium kill-pane'
+  ( CC_UNATTENDED_ALLOWLIST="hooks/a.sh:zzunobtainium" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t8" >/dev/null 2>&1 ); expect 0 "$?" 'an allowlisted site still blocked'
 
   # 9. RED — a STUCK entry: allowlisted but the site is clean. This is the property that stops the
   #    ratchet becoming a permanent exemption list.
   newtree t9; mk t9 hooks/a.sh 'true'
-  ( CC_UNATTENDED_ALLOWLIST="hooks/a.sh:tmux" "$SELF" "$d/t9" >/dev/null 2>&1 ); expect 1 "$?" 'a stuck ratchet entry did not fail'
+  ( CC_UNATTENDED_ALLOWLIST="hooks/a.sh:zzunobtainium" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t9" >/dev/null 2>&1 ); expect 1 "$?" 'a stuck ratchet entry did not fail'
 
-  # 10. RED CONTROL on the PLIST half — a plist whose own PATH omits /opt/homebrew, running a script
-  #     that calls a Homebrew binary bare. Without this the plist half is vacuous, which is exactly
-  #     the failure mode the generating item named.
+  # 10. RED CONTROL on the PLIST half — a plist whose own PATH cannot reach the binary, running a
+  #     script that calls it bare. Without this the plist half is vacuous, which is exactly the
+  #     failure mode the generating item named. The fixture PATH is the stock floor and the binary is
+  #     installed nowhere, so "cannot reach" holds on every box rather than on Homebrew-less ones.
   newtree t10
-  mk t10 scripts/j.sh 'yq eval .a "$f"'
+  mk t10 scripts/j.sh 'zzunobtainium eval .a "$f"'
   cat > "$d/t10/launchd/com.test.j.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -1469,11 +1582,17 @@ EOF'
   </array>
 </dict></plist>
 PLIST
-  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t10" >/dev/null 2>&1 ); expect 1 "$?" 'the plist half did not fire on an INLINE export PATH (the near-vacuous trigger this lint exists to fix)'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t10" >/dev/null 2>&1 ); expect 1 "$?" 'the plist half did not fire on an INLINE export PATH (the near-vacuous trigger this lint exists to fix)'
 
-  # 11. GREEN on the plist half — the same script under a plist whose inline PATH DOES carry brew.
+  # 11. GREEN on the plist half — the same script under a plist whose inline PATH DOES reach the
+  #     binary. The reaching directory is $ZR_DIR, a real directory holding a real executable inside
+  #     this sandbox, standing where /opt/homebrew/bin stood before. That substitution is the whole
+  #     point of the case: spelled with a Homebrew binary, it passed off Darwin because the word
+  #     resolved NOWHERE and was dropped as scanner noise — green through the filter this case is
+  #     supposed to be proving it gets past. Now the word is inventory-vouched, so the only thing
+  #     that can make it green is the reachability the fixture declares.
   newtree t11
-  mk t11 scripts/j.sh 'yq eval .a "$f"'
+  mk t11 scripts/j.sh 'zzreachable eval .a "$f"'
   cat > "$d/t11/launchd/com.test.j.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -1481,11 +1600,30 @@ PLIST
   <key>Label</key><string>com.test.j</string>
   <key>ProgramArguments</key><array>
     <string>/bin/bash</string><string>-c</string>
-    <string>export PATH="/opt/homebrew/bin:/usr/bin:/bin"; exec "\$HOME/scripts/j.sh"</string>
+    <string>export PATH="$ZR_DIR:/usr/bin:/bin"; exec "\$HOME/scripts/j.sh"</string>
   </array>
 </dict></plist>
 PLIST
-  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t11" >/dev/null 2>&1 ); expect 0 "$?" 'a plist whose inline PATH DOES reach the binary was still reported'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_BOTH" "$SELF" "$d/t11" >/dev/null 2>&1 ); expect 0 "$?" 'a plist whose inline PATH DOES reach the binary was still reported'
+
+  # 11b. RED CONTROL for 11 — the SAME fixture with $ZR_DIR taken off the plist's PATH. Without it,
+  #      11 is satisfied by a lint that reports nothing at all, which is the failure every green case
+  #      in this file is paired against. It is also the one case that proves $ZR_DIR is what 11 is
+  #      resting on: delete the directory from 11's PATH string and this is what 11 becomes.
+  newtree t11b
+  mk t11b scripts/j.sh 'zzreachable eval .a "$f"'
+  cat > "$d/t11b/launchd/com.test.j.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.test.j</string>
+  <key>ProgramArguments</key><array>
+    <string>/bin/bash</string><string>-c</string>
+    <string>export PATH="/usr/bin:/bin"; exec "\$HOME/scripts/j.sh"</string>
+  </array>
+</dict></plist>
+PLIST
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_BOTH" "$SELF" "$d/t11b" >/dev/null 2>&1 ); expect 1 "$?" 'the reachable fixture binary went unreported when the declared PATH could NOT reach it'
 
   # 12. LOUD — a non-verdict must never read as clean.
   ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/nope" >/dev/null 2>&1 ); expect 2 "$?" 'a missing scan root did not exit 2'
@@ -1494,11 +1632,11 @@ PLIST
 
   # 13. own-scope: a finding OUTSIDE the own-set is advisory (exit 0); INSIDE it blocks (exit 1).
   #     Set-but-empty must not collapse to "unset" — that would silently reinstate the hard stop.
-  newtree t13; mk t13 hooks/a.sh 'tmux kill-pane'
-  ( CC_UNATTENDED_OWN="hooks/a.sh" CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t13" >/dev/null 2>&1 ); expect 1 "$?" 'own-scope did not block on a file INSIDE the own-set'
-  ( CC_UNATTENDED_OWN="hooks/other.sh" CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t13" >/dev/null 2>&1 ); expect 0 "$?" 'own-scope blocked on a file OUTSIDE the own-set'
-  ( CC_UNATTENDED_OWN="" CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t13" >/dev/null 2>&1 ); expect 0 "$?" 'own-scope set-but-empty blocked'
-  ( unset CC_UNATTENDED_OWN; CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t13" >/dev/null 2>&1 ); expect 1 "$?" 'own-scope UNSET did not block'
+  newtree t13; mk t13 hooks/a.sh 'zzunobtainium kill-pane'
+  ( CC_UNATTENDED_OWN="hooks/a.sh" CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t13" >/dev/null 2>&1 ); expect 1 "$?" 'own-scope did not block on a file INSIDE the own-set'
+  ( CC_UNATTENDED_OWN="hooks/other.sh" CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t13" >/dev/null 2>&1 ); expect 0 "$?" 'own-scope blocked on a file OUTSIDE the own-set'
+  ( CC_UNATTENDED_OWN="" CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t13" >/dev/null 2>&1 ); expect 0 "$?" 'own-scope set-but-empty blocked'
+  ( unset CC_UNATTENDED_OWN; CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t13" >/dev/null 2>&1 ); expect 1 "$?" 'own-scope UNSET did not block'
 
   # A runner plist for the bats-corpus half. The NAME must be one of CORPUS_RUNNERS, and that
   # coupling is deliberate: rename the real plist without updating the list and case 18's real-tree
@@ -1517,46 +1655,96 @@ PLIST
 PLIST
   }
 
-  # 14. RED CONTROL on the BATS-CORPUS half — the exact shape that shipped. A bare /sbin-only binary
+  # 14. RED CONTROL on the BATS-CORPUS half — the exact shape that shipped. A bare unreachable binary
   #     in a test, under a runner whose inline PATH stops at /bin. Before this half existed the lint
   #     scanned ZERO test files and called this tree clean, which is how tests/cc-queue.bats C12
-  #     hashed with a `md5` that resolves nowhere on either scheduled runner.
+  #     hashed with a `md5` that resolves nowhere on either scheduled runner. The fixture used to be
+  #     spelled `md5` after that instance; `md5` is /sbin-only on macOS and absent from Linux
+  #     ENTIRELY, so off Darwin `installed_somewhere` dropped it as noise and this control went
+  #     silent — a RED case whose polarity was set by the operating system it ran on.
   newtree t14; mkrunner t14 "/usr/bin:/bin"
-  mk t14 tests/a.bats 'before="$(find . | sort | md5)"'
-  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t14" >/dev/null 2>&1 ); expect 1 "$?" 'the bats-corpus half did not fire on a bare /sbin-only binary'
+  mk t14 tests/a.bats 'before="$(find . | sort | zzunobtainium)"'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t14" >/dev/null 2>&1 ); expect 1 "$?" 'the bats-corpus half did not fire on a bare unreachable binary'
 
-  # 15. GREEN on the same half — the identical corpus file under a runner whose PATH DOES carry
-  #     /sbin. Proves the half discriminates on the runner's PATH and not merely on the population,
-  #     which an always-red control could not tell apart.
-  newtree t15; mkrunner t15 "/usr/bin:/bin:/usr/sbin:/sbin"
-  mk t15 tests/a.bats 'before="$(find . | sort | md5)"'
-  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t15" >/dev/null 2>&1 ); expect 0 "$?" 'a corpus binary reachable on the runner PATH was still reported'
+  # 15. GREEN on the same half — the identical corpus file under a runner whose PATH DOES reach the
+  #     binary. Proves the half discriminates on the runner's PATH and not merely on the population,
+  #     which an always-red control could not tell apart. The reaching directory is $ZR_DIR for the
+  #     reason case 11 gives: spelled `md5` with a /sbin-carrying PATH, this passed off Darwin
+  #     because the word resolved nowhere and was dropped — never because the PATH reached it.
+  newtree t15; mkrunner t15 "/usr/bin:/bin:$ZR_DIR"
+  mk t15 tests/a.bats 'before="$(find . | sort | zzreachable)"'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_BOTH" "$SELF" "$d/t15" >/dev/null 2>&1 ); expect 0 "$?" 'a corpus binary reachable on the runner PATH was still reported'
 
   # 16. LOUD — a corpus with no runner plist present is a NON-VERDICT, never a clean bill. Without
   #     this, deleting or renaming a runner silently restores the scans-nothing state with a green
   #     badge on it: the failure this whole half exists to end.
   newtree t16
-  mk t16 tests/a.bats 'before="$(find . | sort | md5)"'
-  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t16" >/dev/null 2>&1 ); expect 2 "$?" 'a corpus with no runner plist did not exit 2'
+  mk t16 tests/a.bats 'before="$(find . | sort | zzunobtainium)"'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t16" >/dev/null 2>&1 ); expect 2 "$?" 'a corpus with no runner plist did not exit 2'
 
   # 17. RED through bats' own `run` wrapper — the corpus's dominant idiom (1,385 `run bash` alone).
   #     Without "run" in TRANSPARENT the scanner reports `run` itself, which no box installs so it is
   #     dropped, and the binary after it is never seen — leaving the half blind to the spelling most
   #     of its population uses. This case fails on that revision and passes on this one.
   newtree t17; mkrunner t17 "/usr/bin:/bin"
-  mk t17 tests/a.bats 'run md5 -q "$f"'
-  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t17" >/dev/null 2>&1 ); expect 1 "$?" 'the bats `run` wrapper hid a bare binary from the scanner'
+  mk t17 tests/a.bats 'run zzunobtainium -q "$f"'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t17" >/dev/null 2>&1 ); expect 1 "$?" 'the bats `run` wrapper hid a bare binary from the scanner'
 
-  # 17b. RED on the SAME fixture with /sbin stripped from the CALLER's PATH — the detector's verdict
-  #      must come from the tree, never from whoever invoked it. `installed_somewhere` searches the
-  #      inherited PATH and a NO there DROPS the finding, so a lean caller silently deletes true
-  #      positives: ship-land's gate PATH carries no /sbin, and cases 14/17 above duly reported
-  #      "want 1, got 0" on every land while passing for an interactive shell that had it. The two
-  #      cases were already RED-proof; what they could not see is that they were only RED for SOME
-  #      invokers. Re-running one of them under an explicitly hostile PATH is what pins that, and it
-  #      fails on the revision before /usr/sbin:/sbin joined the static suffix.
-  ( PATH="/usr/bin:/bin" CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t17" >/dev/null 2>&1 )
-  expect 1 "$?" 'a caller PATH without /sbin silently dropped a /sbin-only finding'
+  # 17b. THE INVARIANCE CASE — the SAME fixture under a deliberately hostile CALLER PATH must return
+  #      the SAME verdict. `installed_somewhere` searches the inherited PATH and a NO there DROPS the
+  #      finding, so a lean caller silently deletes true positives: ship-land's gate PATH carries no
+  #      /sbin, and cases 14/17 — then spelled `md5` — duly reported "want 1, got 0" on every land
+  #      while passing for an interactive shell that had it.
+  #
+  #      WHAT IT ASSERTS CHANGED WITH THE FIXTURE, AND THE NOTE IS THE POINT. It used to pin one
+  #      REPAIR: /usr/sbin:/sbin joining the static suffix, so that a /sbin-only binary survived a
+  #      /sbin-less caller. Vouching the fixture through the inventory makes the caller's PATH
+  #      irrelevant BY CONSTRUCTION — `in_inventory` returns before the probe is reached — so the
+  #      case now pins the PROPERTY that repair was serving, which is the one the header claims:
+  #      the verdict comes from the tree, never from whoever invoked it. Case 17c below is what still
+  #      pins the static suffix itself, on the population where it is load-bearing.
+  ( PATH="/usr/bin:/bin" CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t17" >/dev/null 2>&1 )
+  expect 1 "$?" 'a hostile caller PATH changed the verdict on an unchanged tree'
+
+  # 17c. THE STATIC SUFFIX, pinned hermetically — the arm 17b used to carry. A binary the inventory
+  #      does NOT vouch for, absent from the caller's PATH and from STOCK_PATH, installed ONLY in
+  #      $HOME/.local/bin — one of the fixed directories `installed_somewhere` appends. The finding
+  #      can therefore be reached by exactly one route, and drops the moment that suffix narrows.
+  #      $HOME is redirected into the sandbox for this one invocation, so the case writes nothing
+  #      outside it and reads the same on a box where /sbin is unwritable (every macOS since SIP).
+  newtree t17c; mk t17c hooks/a.sh 'zzsuffixonly --check "$f"'
+  mkdir -p "$d/hm17c/.local/bin"
+  printf '#!/bin/sh\nexit 0\n' > "$d/hm17c/.local/bin/zzsuffixonly"
+  chmod +x "$d/hm17c/.local/bin/zzsuffixonly"
+  ( HOME="$d/hm17c" PATH="/usr/bin:/bin" CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="somethingelse" "$SELF" "$d/t17c" >/dev/null 2>&1 )
+  expect 1 "$?" 'a binary installed ONLY in a static-suffix directory was dropped as scanner noise'
+
+  # 17d. GREEN CONTROL for 17c — identical in every respect except that the binary is not installed
+  #      at all. Without it, 17c would be satisfied by an `installed_somewhere` that had stopped
+  #      filtering, which is the failure case 20b names for the inventory arm.
+  newtree t17d; mk t17d hooks/a.sh 'zzsuffixonly --check "$f"'
+  mkdir -p "$d/hm17d/.local/bin"
+  ( HOME="$d/hm17d" PATH="/usr/bin:/bin" CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="somethingelse" "$SELF" "$d/t17d" >/dev/null 2>&1 )
+  expect 0 "$?" 'a word installed nowhere and vouched for by nothing was reported as a finding'
+
+  # 17e. THE /sbin ARM, kept EXACTLY as it was and gated on the box that can answer it. 17c pins the
+  #      static suffix through $HOME/.local/bin, which is writable inside the sandbox; `/usr/sbin` and
+  #      `/sbin` are not writable on any macOS since SIP, so the only way to assert them is with a
+  #      binary the OS already put there. `md5` is that binary, it is /sbin-only, and it is NOT in
+  #      EMBEDDED_BINARY_INVENTORY — so on Darwin this finding survives a /sbin-less caller through
+  #      the static suffix and through nothing else, which is the original assertion verbatim.
+  #      Off Darwin `md5` exists nowhere at all, which is why this case USED to report "want 1, got
+  #      0" on every Linux box and take the whole gate red. Restoring it as a skip rather than
+  #      deleting it is the point: the coverage is not lost, it is scoped to where it is a fact.
+  if [ "$(uname -s 2>/dev/null || echo unknown)" = "Darwin" ]; then
+    newtree t17e; mkrunner t17e "/usr/bin:/bin"
+    mk t17e tests/a.bats 'run md5 -q "$f"'
+    ( PATH="/usr/bin:/bin" CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t17e" >/dev/null 2>&1 )
+    expect 1 "$?" 'a caller PATH without /sbin silently dropped a /sbin-only finding'
+  else
+    skips=$((skips + 1))
+    echo "unattended-path-lint --selftest: SKIP (/sbin static-suffix arm) — needs a /sbin-only stock binary (md5), which exists on Darwin only. Case 17c pins the same suffix hermetically through \$HOME/.local/bin."
+  fi
 
   # 18. GREEN — prose AFTER an arithmetic expansion nested in a command substitution. This replays
   #     hooks/dispatch-assert.sh:222-225 in two lines: `$((` used to be stepped over without a push,
@@ -1564,13 +1752,15 @@ PLIST
   #     was read as code. It is a GREEN case because the visible symptom was a FALSE POSITIVE — it
   #     reported `cc-dispatch` and `cc-backlog` out of prose, and two allowlist rows were minted to
   #     silence them. The silent half was worse: while dq_depth is stuck the scanner sees no command
-  #     positions at all. VERIFIED TO DISCRIMINATE — on the pre-fix scanner this fixture reports
-  #     `tmux` from inside the message; the `(` before it is what re-opens command position, which is
-  #     why a fixture without one passes on both revisions and proves nothing.
+  #     positions at all. VERIFIED TO DISCRIMINATE — on the pre-fix scanner this fixture reports the
+  #     binary from inside the message; the `(` before it is what re-opens command position, which is
+  #     why a fixture without one passes on both revisions and proves nothing. The word is the
+  #     fixture binary rather than `tmux` so that "would have been reported" stays true on a box
+  #     where /usr/bin/tmux exists — otherwise this case is green on a scanner that reports nothing.
   newtree t18
   mk t18 hooks/a.sh 'payload="$(jq -cn --argjson n "$((N+1))" x)"
-reason="see \`x\` (tmux kill-pane) now"'
-  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t18" >/dev/null 2>&1 ); expect 0 "$?" 'prose after a nested $(( )) was reported as an invocation (the quote machine desynced)'
+reason="see \`x\` (zzunobtainium kill-pane) now"'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t18" >/dev/null 2>&1 ); expect 0 "$?" 'prose after a nested $(( )) was reported as an invocation (the quote machine desynced)'
 
   # 19a. GREEN — a case LABEL is a pattern, not a command, in EITHER arity. The filed symptom was
   #      `githooks|launchd)` reporting "`launchd` is unreachable (bare)", which took the land gate
@@ -1584,18 +1774,23 @@ reason="see \`x\` (tmux kill-pane) now"'
   #      (`install)`, `test)`, `find)`, `time)`) false-positived just the same. A fix scoped to the
   #      alternation arm would have left that live and looked complete, which is why the one-arm
   #      fixture is here and not folded into the two-arm one.
-  #      THE LABEL WORDS ARE `shellcheck`, NOT the `launchd` of the filed symptom, and that is the
-  #      difference between a case and a decoration. This half is judged against the STOCK floor,
+  #      THE LABEL WORDS ARE THE FIXTURE BINARY, NOT the `launchd` of the filed symptom, and that is
+  #      the difference between a case and a decoration. This half is judged against the STOCK floor,
   #      where /usr/sbin/launchd and /usr/bin/osascript both resolve — so a fixture spelled with the
   #      real symptom's words is GREEN whether or not the label state exists, and proves nothing.
   #      Written that way first and caught by mutation: neutering the state left it passing. Only a
   #      binary the stock floor CANNOT reach makes the label position load-bearing here.
+  #      IT WAS SPELLED `shellcheck` FOR THAT REASON AND THE REASON DID NOT TRAVEL: shellcheck is
+  #      Homebrew-only on the operator's Mac and stock at /usr/bin on Linux, so on Linux this case
+  #      re-acquired exactly the vacuity the paragraph above rules out — and the mutation that once
+  #      caught it would no longer. `zzunobtainium` is the property the paragraph was reaching for,
+  #      stated as a fact about the fixture instead of a fact about one box's package manager.
   newtree t19a
   mk t19a hooks/a.sh 'case "$1" in
-  githooks|shellcheck) : ;;
-  shellcheck) : ;;
+  githooks|zzunobtainium) : ;;
+  zzunobtainium) : ;;
 esac'
-  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t19a" >/dev/null 2>&1 ); expect 0 "$?" 'a case LABEL (one-arm or alternation) was reported as an invocation'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t19a" >/dev/null 2>&1 ); expect 0 "$?" 'a case LABEL (one-arm or alternation) was reported as an invocation'
 
   # 19b. RED on the SAME shape — the case BODY is still read. This is the half that makes 19a mean
   #      something, and it is not symmetry for its own sake: the missing state made the scanner wrong
@@ -1605,16 +1800,16 @@ esac'
   #      Measured on the old scanner, this fixture reports nothing at all.
   newtree t19b
   mk t19b hooks/a.sh 'case "$1" in
-  githooks|launchd) shellcheck foo.sh ;;
+  githooks|launchd) zzunobtainium foo.sh ;;
 esac'
-  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t19b" >/dev/null 2>&1 ); expect 1 "$?" 'a bare binary inside a case BODY was not detected'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t19b" >/dev/null 2>&1 ); expect 1 "$?" 'a bare binary inside a case BODY was not detected'
 
   # 19c. RED — a REAL pipeline is untouched. The fix turns `|` transparent only BETWEEN LABEL ARMS;
   #      an ordinary `foo | bar` must still put `bar` at command position, or 19a would have been
   #      bought by blinding the scanner to every piped invocation in the tree.
   newtree t19c
-  mk t19c hooks/a.sh 'head -1 x | shellcheck -'
-  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t19c" >/dev/null 2>&1 ); expect 1 "$?" 'a bare binary after a real pipe was not detected'
+  mk t19c hooks/a.sh 'head -1 x | zzunobtainium -'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t19c" >/dev/null 2>&1 ); expect 1 "$?" 'a bare binary after a real pipe was not detected'
 
   # 20a. RED — a bare binary that resolves NOWHERE on this box is reported anyway when the checked-in
   #      inventory vouches for it. This is the case the union arm exists for: on the AUTHOR'S box the
@@ -1648,8 +1843,8 @@ esac'
   # scripts/assignee-pane-residency.sh's `IT2_BIN="${CC_RESIDENCY_IT2_BIN:-it2}"` — invisible for
   # the whole life of the defect, and it spoke only once a fix moved `it2` to command position.
   # `zzunobtainium` is the inventory-vouched word cases 20a-20c already use, so these arms test the
-  # SCANNER and inherit a settled answer for everything downstream of it.
-  INV_Z="zzunobtainium"
+  # SCANNER and inherit a settled answer for everything downstream of it. INV_Z is now declared once
+  # at the top of this block, with the two fixture binaries, because every case above uses it too.
 
   # 21a/b/c. RED — one per spelling. Separate fixtures, because a single file would let ONE working
   #          spelling carry the other two (memory: per-site-mutation-attributes-coverage).
@@ -1716,7 +1911,41 @@ Y=/bin/ls
 
   # 19. GREEN on the real tree with the shipped allowlist — the ratchet must be satisfiable today,
   #     or it cannot be wired into the gate at all.
-  if [ -n "$ROOT" ] && [ -d "$ROOT/hooks" ]; then
+  #
+  # ── THE ONE CASE THAT IS A FACT ABOUT THE BOX, AND IS THEREFORE GATED ON DARWIN ────────────────
+  # Every other case above was converted to fixture binaries so that its verdict is a property of the
+  # tree. THIS one cannot be, and must not be faked into one. It asks whether the shipped allowlist
+  # covers the findings the REAL tree produces — and the findings depend on which binaries the box
+  # has and where, because that is the question this lint exists to ask. The subject it asks it about
+  # is the operator's Mac: `launchd` is a macOS-only supervisor, LAUNCHD_GLOB judges .plist files
+  # that only macOS executes, and CORPUS_RUNNERS names a launchd job. There is no launchd job to be
+  # unattended on off Darwin, so the tree-level question has no referent there.
+  #
+  # MEASURED, off Darwin, on an unmodified trunk checkout: 13 fabricated findings (`swift`, `swiftc`,
+  # `plutil`, `sqlite3`, `node`, `gtimeout` — every one present on the Mac and absent from Linux) AND
+  # 23 STUCK-RATCHET rows (`timeout`, `lsof`, `sysctl`, `taskpolicy`, `gh`, `bun`, `cargo` — every one
+  # allowlisted because it is unreachable on the Mac and reachable at /usr/bin here). Both directions
+  # at once, from a tree nobody had touched. That is an INERT SENSOR, and the repo's own law is that a
+  # sensor which cannot run yields a NON-VERDICT and never a verdict: this case used to return one of
+  # those 13-plus-23 as `fails=1`, which took the whole --selftest to exit 1, which took
+  # scripts/ship-land.sh's gate arm to `gate_red unattended-path-selftest` for ANY diff on any
+  # non-Darwin box — a docs-only one included. That is the whole of what stopped every cloud VM from
+  # landing anything: backlog f85fce7c26f5, eight dispatches, eight pushed branches, zero lands, each
+  # one re-deriving an answer that the arm beside this one then refused to let it deliver.
+  #
+  # SKIPPED IS NOT PASSED. The skip is counted and printed, the summary line names it, and the
+  # detector's 40-odd hermetic cases still run and still gate — which is what ship-land's arm reads
+  # this exit code FOR ("the detector no longer discriminates" is a claim about the detector). The
+  # tree-level question is not lost either: the very next thing ship-land does is run this lint over
+  # the real tree in own-scope, which asks it directly, of the diff, on whatever box is landing.
+  if [ "$(uname -s 2>/dev/null || echo unknown)" != "Darwin" ]; then
+    skips=$((skips + 1))
+    echo "unattended-path-lint --selftest: SKIP (real-tree arm) — $(uname -s 2>/dev/null || echo unknown), not Darwin."
+    echo "  The tree arm judges bare names against the binaries THIS box installs; the unattended jobs"
+    echo "  it judges them for are launchd jobs, which exist only on macOS. Off Darwin it fabricates"
+    echo "  findings for Mac-only binaries and drops the allowlist rows for Linux-stock ones, in both"
+    echo "  directions at once — a NON-VERDICT. The detector cases above ran and are unaffected."
+  elif [ -n "$ROOT" ] && [ -d "$ROOT/hooks" ]; then
     ( unset CC_UNATTENDED_OWN; "$SELF" "$ROOT" >/dev/null 2>&1 ); expect 0 "$?" 'the real tree is not clean under the shipped allowlist'
   fi
 
@@ -1725,17 +1954,20 @@ Y=/bin/ls
   #     here would be satisfied by a scanner that had simply stopped reporting, which is the failure
   #     this pair exists to exclude.
   #
-  #     The body replays the real false positive verbatim in shape: `def log_event(yq):` puts `yq`
-  #     inside what a SHELL scanner reads as a subshell, i.e. at command position, which is exactly
-  #     why bin/claude-accounts:203 rendered a python parameter as an unreachable binary.
+  #     The body replays the real false positive verbatim in shape: `def log_event(zzunobtainium):`
+  #     puts the name inside what a SHELL scanner reads as a subshell, i.e. at command position,
+  #     which is exactly why bin/claude-accounts:203 rendered a python parameter as an unreachable
+  #     binary. The live instance was spelled `yq`; the fixture is not, because `yq` is Homebrew-only
+  #     on the Mac and stock at /usr/bin on Linux, which made the RED control below fire on one box
+  #     and go silent on the other while the GREEN beside it passed on both.
   pybody='#!/usr/bin/env python3
-yq = 1
-def log_event(yq):
-    return yq'
+zzunobtainium = 1
+def log_event(zzunobtainium):
+    return zzunobtainium'
   shbody='#!/bin/bash
-yq = 1
-def log_event(yq):
-    return yq'
+zzunobtainium = 1
+def log_event(zzunobtainium):
+    return zzunobtainium'
 
   mkplist() { # $1=tree $2=target-relpath — a plist whose own PATH cannot reach Homebrew
     cat > "$d/$1/launchd/com.test.j.plist" <<PLIST
@@ -1751,23 +1983,38 @@ def log_event(yq):
 PLIST
   }
 
-  # 20a. RED CONTROL — the identical body under a BASH shebang must still be reported. Without this
+  # THE TREES ARE t22*, NOT t20* — the names these three cases used to carry. `newtree` is mkdir -p,
+  # so re-using t20a/t20b/t20c laid the language fixtures ON TOP of the inventory cases' surviving
+  # hooks/a.sh. It was green only because those three invocations passed no inventory, leaving the
+  # stale hook's word unvouched and dropped; the moment one of them vouched for it — which is what
+  # the fixture-binary conversion does everywhere else — 22a would have gone red on the wrong file
+  # and 22b red outright. Separate trees make the fixture the only thing in the tree, which is what
+  # every other case here already relies on.
+
+  # 22a. RED CONTROL — the identical body under a BASH shebang must still be reported. Without this
   #      the GREEN below proves nothing: it would pass just as well on a lint that scanned nothing.
-  newtree t20a; mk t20a scripts/j.sh "$shbody"; mkplist t20a scripts/j.sh
-  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t20a" >/dev/null 2>&1 ); expect 1 "$?" 'the RED control for the language guard did not fire — a shell file with the same body must still be reported'
+  newtree t22a; mk t22a scripts/j.sh "$shbody"; mkplist t22a scripts/j.sh
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t22a" >/dev/null 2>&1 ); expect 1 "$?" 'the RED control for the language guard did not fire — a shell file with the same body must still be reported'
 
-  # 20b. GREEN — the same bytes under a PYTHON shebang are prose, not command positions.
-  newtree t20b; mk t20b scripts/j.py "$pybody"; mkplist t20b scripts/j.py
-  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t20b" >/dev/null 2>&1 ); expect 0 "$?" 'a python-shebang file was scanned as shell and its prose reported as a bare binary'
+  # 22b. GREEN — the same bytes under a PYTHON shebang are prose, not command positions.
+  newtree t22b; mk t22b scripts/j.py "$pybody"; mkplist t22b scripts/j.py
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t22b" >/dev/null 2>&1 ); expect 0 "$?" 'a python-shebang file was scanned as shell and its prose reported as a bare binary'
 
-  # 20c. GREEN — a file with NO shebang is still scanned as shell. The guard must skip python, never
+  # 22c. RED — a file with NO shebang is still scanned as shell. The guard must skip python, never
   #      widen into "anything I cannot positively identify as shell", which would silently exempt the
   #      tracked hooks/*.sh that carry no shebang at all.
-  newtree t20c; mk t20c scripts/j.sh 'yq eval .a "$f"'; mkplist t20c scripts/j.sh
-  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t20c" >/dev/null 2>&1 ); expect 1 "$?" 'a shebang-less file stopped being scanned — the guard widened past python'
+  newtree t22c; mk t22c scripts/j.sh 'zzunobtainium eval .a "$f"'; mkplist t22c scripts/j.sh
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t22c" >/dev/null 2>&1 ); expect 1 "$?" 'a shebang-less file stopped being scanned — the guard widened past python'
+
+  # The certificate may only claim what actually ran. `GREEN on the real tree` was a fixed clause in
+  # this line; on a platform where case 19 is a non-verdict it would have been a fabricated claim
+  # sitting inside the very message that certifies the detector.
+  real_tree_clause="; GREEN on the real tree"
+  [ "$skips" -gt 0 ] && real_tree_clause=""
 
   if [ "$fails" -eq 0 ]; then
-    echo "unattended-path-lint --selftest: $checks/$checks — RED on a bare binary inside \"\$( )\" (the shape a greedy tokenizer missed), on a bare binary at command position, on a stuck ratchet entry, on a plist whose INLINE export PATH cannot reach the binary, on a /sbin-only binary in the bats corpus under a runner whose PATH stops at /bin, on that binary reached through bats' own \`run\` wrapper, on a bare binary inside a case BODY (invisible to this lint for its whole life, until the label state landed) and on one after a REAL pipe (so the label fix was not bought by blinding the scanner to piped invocations); GREEN on a case LABEL in EITHER arity — the shape that minted two allowlist rows and contorted a real test into \`[ = ] || [ = ]\`, and whose one-arm form was wrongly believed already handled — on an absolute path, a name inside a single-quoted regex, a name in a comment, a heredoc body, a stock binary, a grandfathered site, a plist whose inline PATH does reach, the same corpus file under a runner whose PATH carries /sbin, and prose following an arithmetic expansion nested in a command substitution (the desync that minted two allowlist rows out of nothing); LOUD on a missing root, a root with no governed layers, and a corpus with no runner plist; own-scope blocks INSIDE / advises OUTSIDE across all three arity states; GREEN on a python-shebang file whose prose sits where a shell scanner reads command position, against a RED control of the SAME BYTES under a bash shebang and a RED control on a shebang-less file (so the language guard is keyed on the shebang and did not widen into scanning nothing); GREEN on the real tree."
+    echo "unattended-path-lint --selftest: $checks/$checks — RED on a bare binary inside \"\$( )\" (the shape a greedy tokenizer missed), on a bare binary at command position, on a stuck ratchet entry, on a plist whose INLINE export PATH cannot reach the binary, on a /sbin-only binary in the bats corpus under a runner whose PATH stops at /bin, on that binary reached through bats' own \`run\` wrapper, on a bare binary inside a case BODY (invisible to this lint for its whole life, until the label state landed) and on one after a REAL pipe (so the label fix was not bought by blinding the scanner to piped invocations); GREEN on a case LABEL in EITHER arity — the shape that minted two allowlist rows and contorted a real test into \`[ = ] || [ = ]\`, and whose one-arm form was wrongly believed already handled — on an absolute path, a name inside a single-quoted regex, a name in a comment, a heredoc body, a stock binary, a grandfathered site, a plist whose inline PATH does reach, the same corpus file under a runner whose PATH carries /sbin, and prose following an arithmetic expansion nested in a command substitution (the desync that minted two allowlist rows out of nothing); LOUD on a missing root, a root with no governed layers, and a corpus with no runner plist; own-scope blocks INSIDE / advises OUTSIDE across all three arity states; GREEN on a python-shebang file whose prose sits where a shell scanner reads command position, against a RED control of the SAME BYTES under a bash shebang and a RED control on a shebang-less file (so the language guard is keyed on the shebang and did not widen into scanning nothing)${real_tree_clause}. EVERY fixture above names a binary installed NOWHERE (zzunobtainium) or one installed only inside the sandbox (zzreachable), so each verdict is a property of the fixture and not of the invoker's tool inventory — the defect that made this arm answer to \`apt-get install shellcheck\`."
+    [ "$skips" -gt 0 ] && echo "unattended-path-lint --selftest: $skips arm(s) SKIPPED as a NON-VERDICT on this platform (named above) — the detector's own cases all ran, and the tree-level question is asked directly by ship-land's own-scope run."
     exit 0
   fi
   echo "unattended-path-lint --selftest: FAILED ($fails of $checks) — the detector does not discriminate."
