@@ -20,6 +20,8 @@ Usage:
   cc-permission-audit [DAYS]            the report above (0/absent = all history)
   cc-permission-audit --prune [FILE…]   list provably-dead approved patterns; writes NOTHING
   CONFIRM=1 cc-permission-audit --prune [FILE…]   remove them (timestamped backup per file)
+  cc-permission-audit --drops [FILE…]   list approved patterns that are INERT under
+                                        --permission-mode auto; NEVER writes, at any CONFIRM
 """
 
 import json, glob, re, sys, collections, os, time
@@ -43,10 +45,11 @@ def _days_arg(v):
 
 ARGV = sys.argv[1:]
 PRUNE = "--prune" in ARGV
-# `--prune FILE…` takes explicit settings paths; the positional day-count keeps working
-# unchanged when no flag is given, so `cc-permission-audit 7` is untouched.
-PRUNE_PATHS = [a for a in ARGV if not a.startswith("-") and a.endswith(".json")]
-_POS = [a for a in ARGV if not a.startswith("-") and a not in PRUNE_PATHS]
+DROPS = "--drops" in ARGV
+# `--prune FILE…` / `--drops FILE…` take explicit settings paths; the positional day-count keeps
+# working unchanged when no flag is given, so `cc-permission-audit 7` is untouched.
+FILE_PATHS = [a for a in ARGV if not a.startswith("-") and a.endswith(".json")]
+_POS = [a for a in ARGV if not a.startswith("-") and a not in FILE_PATHS]
 DAYS = _days_arg(_POS[0]) if _POS else 0  # 0 = all history
 # AXIS MISMATCH, deliberate and disclosed: with DAYS set the ARCHIVE is filtered per-ROW on
 # resolved_ts, while the transcript corpus is filtered per-FILE on mtime — so an actively
@@ -305,9 +308,7 @@ WALK_SKIP = {
 WALK_MAXDEPTH = 5
 
 
-def _settings_files():
-    if PRUNE_PATHS:
-        return PRUNE_PATHS
+def _walk_settings(names):
     root = os.path.expanduser("~")
     base = root.rstrip("/").count("/")
     out = []
@@ -316,9 +317,20 @@ def _settings_files():
             dirnames[:] = []
         else:
             dirnames[:] = [d for d in dirnames if d not in WALK_SKIP]
-        if "settings.local.json" in filenames and os.path.basename(dirpath).startswith(".claude"):
-            out.append(os.path.join(dirpath, "settings.local.json"))
+        if os.path.basename(dirpath).startswith(".claude"):
+            for n in names:
+                if n in filenames:
+                    out.append(os.path.join(dirpath, n))
     return sorted(out)
+
+
+def _settings_files():
+    # `--prune` REWRITES what it finds, so its discovery stays exactly as narrow as it has always
+    # been: `settings.local.json` only. `--drops` never writes and therefore reads wider — see
+    # `_drops_files()`.
+    if FILE_PATHS:
+        return FILE_PATHS
+    return _walk_settings(("settings.local.json",))
 
 
 def dead_entries(allow):
@@ -412,7 +424,239 @@ def prune_report():
     else:
         print("  DRY RUN — nothing written. Re-run as: "
               f"CONFIRM=1 {os.path.basename(sys.argv[0])} --prune"
-              + (" " + " ".join(PRUNE_PATHS) if PRUNE_PATHS else ""))
+              + (" " + " ".join(FILE_PATHS) if FILE_PATHS else ""))
+    # REDUNDANCY IS NOT THE ONLY WAY AN ENTRY FAILS TO FIRE, and the other way is bigger. An entry
+    # can be perfectly non-redundant and still be deleted from the ruleset for the whole session by
+    # the auto-mode drop filter. That question is `--drops`, and it is deliberately a DIFFERENT
+    # command with a DIFFERENT verdict (report, never remove) — see THE AUTO-MODE DROP PREDICATE.
+    print(f"  Inertness under `--permission-mode auto` is a separate audit: "
+          f"{os.path.basename(sys.argv[0])} --drops")
+    return 1 if failed else 0
+
+
+# ───────────────────── --drops (auto-mode inertness audit) ──────────────────
+#
+# THE AUTO-MODE DROP PREDICATE — INERTNESS, which is NOT deadness, which is why this mode
+# has no CONFIRM path and can never write.
+#
+# On entering `--permission-mode auto`, Claude Code walks `permissions.allow` and DELETES every
+# rule that grants arbitrary code execution, for the lifetime of that session. Such a rule is
+# not redundant and not dead — it is restored the moment the session leaves auto mode, and it
+# is still load-bearing in `default` / `acceptEdits`. So the only correct remedy is to REPLACE
+# it with a narrower rule that survives the filter, never to remove it. `--prune` removes; this
+# reports. Folding this class into the prune population would silently disarm every non-auto
+# session, which is the opposite of what the operator asked for.
+#
+# The predicate below is transcribed from `pme` / `qNt` / `gsn` / `_sn` / `PHs` and the
+# `iSd` (offset 19668065) and `nSd` tables of Claude Code 2.1.220, as read out in
+# `docs/research/permission-matcher-truth-2026-08-20.md` § "Auto mode drops broad allow rules —
+# the exact predicate" (findings F9/F10).
+#
+# 🚨 HONEST BOUND, carried into the report itself: that read is code-and-doc verified (binary
+# disassembly plus the published `/permission-modes` docs) and **NOT probe-verified** — the
+# research that produced it could not construct an observable distinguishing "allowed by rule"
+# from "allowed by classifier" while inside auto mode. It is the one load-bearing claim in that
+# document resting on two non-probe sources. A hit here means "this rule is inert under auto on
+# the best available reading of 2.1.220", never "measured inert". Treat a hit as a REVIEW
+# prompt, and re-derive the tables against the running binary before trusting the count in a
+# decision that cannot be undone.
+#
+# ALSO REPORTED, because it dominates every per-rule verdict: `autoMode.classifyAllShell: true`
+# in ANY settings source drops EVERY Bash and PowerShell allow rule in auto mode (F10). When it
+# is set, the per-entry list below is no longer the answer — the answer is "all of them".
+
+# `iSd`, verbatim. Order is irrelevant: no member is a prefix of another under the match forms
+# used below (`python` never matches `python3:*`, `sh` never matches `bash …`).
+ISD = (
+    "python", "python3", "python2", "node", "deno", "tsx", "ruby", "perl", "php", "lua",
+    "npx", "bunx", "npm run", "yarn run", "pnpm run", "bun run",
+    "bash", "sh", "ssh", "zsh", "fish", "eval", "exec", "env", "xargs", "sudo",
+)
+# `nSd` — the network/cloud subset, which has its own branch rather than the bare-form test.
+NSD = ("curl", "wget", "kubectl", "aws", "gcloud", "gsutil")
+KUBECTL_MUTATORS = {
+    "exec", "apply", "create", "delete", "run", "cp", "port-forward", "proxy", "patch",
+    "edit", "replace", "attach", "debug", "scale", "rollout", "drain", "cordon", "taint",
+}
+# The one documented survivor inside the flag-tail branch: `Bash(python -m pkg.module *)`.
+PY_DASH_M = re.compile(r"^-m\s+\w+\.[\w.]+(\s*:|\s+)$")
+BLANK_OR_STAR = re.compile(r"^[\s*]+$")
+
+_SCRIPT_RUNNERS = {"python", "python3", "python2", "node", "deno", "tsx", "ruby", "perl",
+                   "php", "lua"}
+_TASK_RUNNERS = {"npm run", "yarn run", "pnpm run", "bun run"}
+
+
+def _replacement_hint(cmd):
+    """The narrower rule that survives the filter. Advice, deliberately not a generated rule —
+    only the operator knows which sub-commands they actually run."""
+    if cmd in _TASK_RUNNERS:
+        return f"enumerate the scripts you run: Bash({cmd} test:*), Bash({cmd} build:*), …"
+    if cmd in _SCRIPT_RUNNERS:
+        return f"name the script: Bash({cmd} scripts/<file>.py *) — a flag tail is dropped too"
+    if cmd == "kubectl":
+        return "scope to a read-only verb: Bash(kubectl get:*), Bash(kubectl describe:*)"
+    if cmd in NSD:
+        return f"give it a positional argument: Bash({cmd} <subcommand-or-url>:*)"
+    if cmd in ("bash", "sh", "zsh", "fish", "ssh", "eval", "exec", "env", "xargs", "sudo",
+               "npx", "bunx"):
+        return (f"no narrower `{cmd}` form survives as a wrapper — allow the wrapped command "
+                "instead, or use a PreToolUse hook")
+    return "prefer two tokens then `:*` — Bash(<cmd> <subcmd>:*)"
+
+
+def _args_of(content, cmd):
+    """The argument text a rule constrains, with its trailing wildcard/colon chrome removed.
+
+    `curl:*` → ``   ·   `aws s3 ls:*` → `s3 ls`   ·   `curl https://x/*` → `https://x/`
+    """
+    rest = content[len(cmd):]
+    if rest.startswith(":"):
+        rest = rest[1:]
+    rest = rest.strip()
+    if rest.endswith("*"):
+        rest = rest[:-1].strip()
+    if rest.endswith(":"):
+        rest = rest[:-1].strip()
+    return rest
+
+
+def _nsd_reason(cmd, t):
+    """`nSd` branch: interpolation, a mutating kubectl verb, or no positional argument."""
+    if not (t == cmd or t.startswith(cmd + ":") or t.startswith(cmd + " ")
+            or t.startswith(cmd + "*")):
+        return None
+    args = _args_of(t, cmd)
+    if "$" in args or "`" in args:
+        return (f"`{cmd}` rule whose arguments interpolate (`$` or a backtick)",
+                _replacement_hint(cmd))
+    if cmd == "kubectl":
+        first = next((a for a in args.split() if not a.startswith("-")), None)
+        if first in KUBECTL_MUTATORS:
+            return (f"`kubectl {first}` is a mutating verb", _replacement_hint(cmd))
+    positional = [a for a in args.split() if not a.startswith("-")]
+    if not positional and not (cmd in ("curl", "wget") and "://" in args):
+        return (f"broad `{cmd}` rule with no positional argument", _replacement_hint(cmd))
+    return None
+
+
+def _isd_reason(cmd, t):
+    """`_sn` branch: the bare/`:*`/` *`/`*` forms, plus a tail that starts with a flag."""
+    if t in (cmd, cmd + ":*", cmd + " *", cmd + "*"):
+        return (f"broad `{cmd}` rule — grants arbitrary code execution", _replacement_hint(cmd))
+    if t.startswith(cmd + " ") and t.endswith("*"):
+        tail = t[len(cmd) + 1:]
+        if tail.startswith("-"):
+            if cmd.startswith("python") and PY_DASH_M.match(tail[:-1]):
+                return None                      # the one documented survivor
+            return (f"`{cmd}` with a flag tail (`{tail[:32]}`) — still arbitrary execution",
+                    _replacement_hint(cmd))
+    return None
+
+
+def drop_reason(tool, content):
+    """(why, hint) if this allow rule is dropped in auto mode, else None.
+
+    `content is None` is the bare-tool-name rule (`"Bash"`, `"Agent"`), which `gsn` treats as
+    empty content and drops — that is Anthropic's own recommended shape for prompt-free
+    operation, and under auto it buys nothing.
+    """
+    if tool == "Agent":
+        return ("every Agent allow rule is dropped in auto mode, whatever its specifier",
+                "none — the drop is on the tool, not on the pattern")
+    if tool != "Bash":
+        return None
+    t = (content or "").strip().lower()
+    if t == "" or BLANK_OR_STAR.match(t):
+        return ("blanket Bash rule (empty or all-wildcard content)",
+                "name a command: Bash(<cmd> <subcmd>:*)")
+    for cmd in NSD:
+        hit = _nsd_reason(cmd, t)
+        if hit:
+            return hit
+    for cmd in ISD:
+        hit = _isd_reason(cmd, t)
+        if hit:
+            return hit
+    return None
+
+
+def _split_rule(rule):
+    """`Bash(git:*)` → ('Bash', 'git:*')   ·   bare `Bash` → ('Bash', None)."""
+    m = RULE_RE.match(rule)
+    if m:
+        return m.group(1), m.group(2)
+    if re.match(r"^[A-Za-z_][A-Za-z0-9_.-]*$", rule.strip()):
+        return rule.strip(), None
+    return None, None
+
+
+def _drops_files():
+    if FILE_PATHS:
+        return FILE_PATHS
+    # Wider than the prune walk on purpose: the entries this audit is about live in the
+    # per-config-dir `settings.json`, not in `settings.local.json`. Reading wider is safe here
+    # precisely because this mode has no write path at all.
+    return _walk_settings(("settings.json", "settings.local.json"))
+
+
+def drops_report():
+    """Read-only, always. There is no CONFIRM branch and there must never be one."""
+    files = _drops_files()
+    print("── AUTO-MODE DROP AUDIT (read-only — this mode NEVER writes) ──")
+    print(f"  scope: {len(files)} settings file(s)")
+    union_all, union_dead, failed, classify_all = set(), {}, 0, []
+    for path in files:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                obj = json.load(fh)
+        except Exception as e:
+            print(f"  ⚠ SKIP (unreadable/invalid JSON): {path}: {e}")
+            failed += 1
+            continue
+        if not isinstance(obj, dict):
+            continue
+        if ((obj.get("autoMode") or {}).get("classifyAllShell") is True
+                or (obj.get("permissions") or {}).get("autoMode", {}).get(
+                    "classifyAllShell") is True):
+            classify_all.append(path)
+        allow = ((obj.get("permissions") or {}).get("allow"))
+        if not isinstance(allow, list):
+            continue
+        hits = []
+        for rule in allow:
+            if not isinstance(rule, str):
+                continue
+            union_all.add(rule)
+            tool, content = _split_rule(rule)
+            if tool is None:
+                continue
+            why = drop_reason(tool, content)
+            if why:
+                hits.append((rule, why))
+                union_dead[rule] = why
+        if not hits:
+            continue
+        print(f"\n  {path}  ({len(allow)} allow entr(ies), {len(hits)} inert under auto)")
+        for rule, (why, hint) in hits:
+            print(f"    ✗ {rule[:100]}   [{why}]")
+            print(f"        ↳ {hint}")
+    total = len(union_all)
+    pct = f"{100 * len(union_dead) / total:.1f}%" if total else "n/a"
+    print(f"\n  {len(union_dead)} of {total} distinct approved pattern(s) are inert under "
+          f"`--permission-mode auto` ({pct})")
+    if classify_all:
+        print("\n  🚨 autoMode.classifyAllShell is TRUE in: " + ", ".join(classify_all))
+        print("     While that is set, EVERY Bash and PowerShell allow rule is dropped in auto "
+              "mode, not just the ones listed above (finding F10).")
+    print("\n  NOT DEAD — do NOT delete these, and note that `--prune` deliberately will not.")
+    print("  The drop is undone the moment the session leaves auto mode, and these rules still")
+    print("  decide in `default` and `acceptEdits`. Replace each with a narrower rule that")
+    print("  survives the filter; keep or drop the broad one on its non-auto value alone.")
+    print("\n  FIDELITY: predicate transcribed from Claude Code 2.1.220 (pme/qNt/gsn/_sn/PHs,")
+    print("  tables iSd/nSd) via docs/research/permission-matcher-truth-2026-08-20.md — "
+          "code-and-doc")
+    print("  verified, NOT probe-verified. A hit is a review prompt, not a measurement.")
     return 1 if failed else 0
 
 
@@ -421,6 +665,8 @@ def main():
         # Before load_rules(): a prune must not depend on ~/.claude/settings.json existing,
         # and must not spend a minute scanning the transcript corpus it does not read.
         sys.exit(prune_report())
+    if DROPS:
+        sys.exit(drops_report())      # same reasoning; and this mode reads no corpus either
     allow, deny, ask = load_rules()
     files = glob.glob(os.path.expanduser("~/.claude/projects/*/*.jsonl"))
     files += glob.glob(os.path.expanduser("~/.claude-next/projects/*/*.jsonl"))

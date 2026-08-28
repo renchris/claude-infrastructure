@@ -593,9 +593,23 @@ those by `bashMissKind` / error text. Only `no-rule-match` is addressable by a p
    auto it buys you nothing; it is a `default`/`acceptEdits`-mode lever.)
 7. **Put `defaultMode` and any `auto`-related key in `~/.claude/settings.json`**, never in a project
    or `.local` file.
-8. **Audit existing rules against the drop list.** Grep the 339 entries for
+8. **Audit existing rules against the drop list** — `cc-permission-audit --drops`, which implements
+   the `gsn`/`_sn`/`PHs` predicate above (both tables, the flag-tail branch, the `python -m`
+   survivor, the `nSd` clauses, the `Agent` blanket, and the `classifyAllShell` escalation) and
+   names every inert entry with the narrower form that survives. It reads `settings.json` as well
+   as `settings.local.json`, because the entries this is about live in the former. The by-hand
+   fallback is a grep of the 339 entries for
    `python|python3|node|deno|tsx|ruby|perl|php|lua|npx|bunx|npm run|yarn run|pnpm run|bun run|bash|sh|ssh|zsh|fish|eval|exec|env|xargs|sudo|curl|wget|kubectl|aws|gcloud|gsutil`
-   in bare / `:*` / `*` / `<cmd> -flag*` form — every hit is dead weight in auto mode.
+   in bare / `:*` / `*` / `<cmd> -flag*` form.
+
+   ⚠️ **Correction to this item as first written, and it is the load-bearing half.** It said *"every
+   hit is dead weight in auto mode"*. A hit is **inert**, which is not **dead**: § 3 records two
+   paragraphs above that dropped rules are *restored when you leave auto mode*, so the entry still
+   decides in `default` and `acceptEdits`. Deleting on a hit therefore silently disarms every
+   non-auto session. This is why `--drops` **reports and never writes** — no `CONFIRM` path exists —
+   and why the class is deliberately kept out of `cc-permission-audit --prune`, whose own predicate
+   is REDUNDANCY proven inside one file. **Replace a hit with a narrower rule; retire the broad one
+   only on its non-auto value.**
 
 ### DON'T
 
