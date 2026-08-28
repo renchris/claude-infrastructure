@@ -939,3 +939,91 @@ tx_loop() { local sid="$1" n="$2" ago="$3" step="$4"; shift 4
   [ "$(printf '%s' "$output" | jq -r 'length')" -eq 0 ]
   [ "$(printf '%s' "$stderr" | grep -cF 'FALLBACK, not a verdict')" -ge 1 ]
 }
+
+# ── 2026-08-28: the three SIGPIPE membership sites in bin/cc-classify ──────────────────────────────
+# Both feeds are produced BY the population the branch exists to detect, so every previous screen of
+# them sampled an idle box, read tens of bytes, and ranked them latent. Sizes below are MEASURED
+# (argv253.sh / feed253.sh / probe253-tail.sh, 1,000 trials per cell, 2026-08-28T08:1xZ), never
+# chosen — each sits in a regime where the pre-fix spelling misanswers on EVERY run, not one in
+# twenty, so these arms are deterministic rather than flaky.
+
+# a ps stub at the standing 6-teammate cap: 6 rows, each carrying a brief-sized argv the way a real
+# agent command line does, the FIRST naming the live member. 6 x ~46,600 B = ~280,000 B, the size at
+# which this exact spelling inverted 1,000/1,000. args: stub-path live-member-name-or-empty
+mk_ps_big() { local out="$1" live="${2:-}"
+  { printf '#!/bin/bash\n'
+    printf 'awk %sBEGIN{ pad=""; for(i=0;i<4660;i++) pad = pad sprintf("pad%%06d ", i);' "'"
+    printf ' for(r=0;r<6;r++) { n = (r==0 && "%s" != "") ? "%s" : sprintf("filler-%%d", r);' "$live" "$live"
+    printf ' printf "%%d claude --agent-name %%s %%s\\n", 12340+r, n, pad } }%s\n' "'"
+  } > "$out"; chmod +x "$out"; }
+
+@test "team_live_member survives a 279,726-byte ps feed: a team with a LIVE member is owned-wait, never coordination-abandoned" {
+  # THE PRODUCTION CONSEQUENCE, end to end through the real binary. Pre-fix, `printf "$procs" |
+  # grep -qF` under this file's own pipefail answers FALSE ON A TRUE MATCH once the feed is large,
+  # so a lead whose teammate is ALIVE falls past the owned-wait branch into Gap A and is classified
+  # coordination-abandoned — REAPABLE. Gap A's own comment says "LIVE coordination (team_live_member
+  # above) never reaches here"; this arm is that sentence made falsifiable.
+  # WHY 279,726 B AND NOT ANOTHER NUMBER: the longest single claude ps row on this box measured
+  # 46,621 B (argv carries the agent's whole brief), and the standing teammate cap is 6. At that size
+  # the pre-fix spelling inverted 1,000/1,000; at 46,624 B it inverted 29/1,000 on one run and
+  # 186/1,000 on another, which is why the fixture is sized at the cap and not at one row.
+  mk_ps_big "$D/bin/ps-big" worker-live
+  export CC_CLASSIFY_PS_BIN="$D/bin/ps-big"
+  export CC_CLASSIFY_COORD_HANG_DEAD_REAP_S=7200
+  mkdir -p "$D/teams/teamBig"
+  reg PANE-A "$LIVE" /shared sidBig; tx sidBig 50000        # idle past the horizon
+  printf '{"leadSessionId":"sidBig","members":[{"name":"worker-live"}]}\n' > "$D/teams/teamBig/config.json"
+  add PANE-LIVE "$LIVE" /shared sidOwner 999999900          # live co-cwd owner: Gap A's third term
+  c="$(cause PANE-A)"
+  [ "$c" = owned-wait ]
+  [ "$c" != coordination-abandoned ]
+}
+
+@test "NEG CONTROL: an oversized ps feed that does NOT name the member still reads coordination-abandoned" {
+  # Without this the arm above could pass by answering owned-wait unconditionally — a cure that
+  # always claims a live member is as wrong as one that never does, and every incumbent arm here
+  # uses a SMALL feed, so none of them would notice.
+  mk_ps_big "$D/bin/ps-big-nomatch" ""      # 6 rows of the same size, none naming worker-live
+  export CC_CLASSIFY_PS_BIN="$D/bin/ps-big-nomatch"
+  export CC_CLASSIFY_COORD_HANG_DEAD_REAP_S=7200
+  mkdir -p "$D/teams/teamBigN"
+  reg PANE-A "$LIVE" /shared sidBigN; tx sidBigN 50000
+  printf '{"leadSessionId":"sidBigN","members":[{"name":"worker-live"}]}\n' > "$D/teams/teamBigN/config.json"
+  add PANE-LIVE "$LIVE" /shared sidOwner 999999900
+  [ "$(cause PANE-A)" = coordination-abandoned ]
+}
+
+@test "tool_in_flight survives a 120,000-byte tool_use_id feed: a tool that HAS returned is not read as running" {
+  # Site A, the third of the three. jq is a REDUCING stage, so the quantity that reaches the pipe is
+  # the tool_use_id LIST, not the transcript: measured 31,217 B at 1,007 ids over the 60 largest of
+  # 5,207 real transcripts. That size reads 0/1,000 today, so this fixture is sized at 120,000 B —
+  # past the measured ALWAYS-inverted floor for an EXTERNAL producer (1,000/1,000 at 120,001 B) — so
+  # the arm fails every run pre-fix instead of one in twenty. The needle is the FIRST record, which
+  # is the worst case and the one the probe measured: grep exits early, jq takes EPIPE, pipefail
+  # promotes it, and a finished session reads `active` forever (fail-SAFE, but never-reap).
+  TU="toolu_01RETURNED253AAAAAAAAAAA"
+  reg PANE-A "$LIVE" /repo sidTIF; tx sidTIF 9000
+  # the MATCHING tool_result first, then padding, then the trailing assistant tool_use
+  printf '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"%s"}]}}\n' "$TU" >> "$D/proj/slug/sidTIF.jsonl"
+  awk 'BEGIN{ for(i=0;i<4200;i++) printf "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_01PAD%019d\"}]}}\n", i }' \
+    >> "$D/proj/slug/sidTIF.jsonl"
+  ts="$(TZ=UTC date -j -f %s "$((NOW-9000))" +%Y-%m-%dT%H:%M:%S 2>/dev/null).000Z"
+  printf '{"type":"assistant","isSidechain":false,"timestamp":"%s","message":{"role":"assistant","content":[{"type":"tool_use","id":"%s","name":"Bash","input":{}}]}}\n' "$ts" "$TU" \
+    >> "$D/proj/slug/sidTIF.jsonl"
+  # POS control on the fixture itself: the producer must really reach the measured regime, or this
+  # arm passes on a feed too small to have ever inverted (memory: control-fixture-must-reach-the-bugs-regime).
+  feedb="$(jq -rc 'select(.type=="user") | (.message.content // []) | if type=="array" then .[] else empty end | select(.type=="tool_result") | .tool_use_id // empty' "$D/proj/slug/sidTIF.jsonl" 2>/dev/null | wc -c)"
+  [ "${feedb// /}" -ge 120000 ]
+  c="$(cause PANE-A)"
+  [ "$c" != active ]
+  [ "$c" = owned-wait ]
+}
+
+@test "class guard: the pipefail-sigpipe detector reports ZERO early-exit pipelines in bin/cc-classify" {
+  # Keyed on the repo's OWN detector rather than on my spelling, so it survives any rewording of the
+  # cure (memory: control-calibrated-to-implementation-decays). The POS control runs FIRST: a mute
+  # detector would pass the real assertion vacuously with a table of zeros.
+  cens="$(CC_PIPEFAIL_ROOT="$REPO" bash "$REPO/scripts/pipefail-sigpipe-lint.sh" --census 2>/dev/null)"
+  [ "$(printf '%s\n' "$cens" | grep -c .)" -ge 50 ]
+  [ "$(printf '%s\n' "$cens" | grep -c '^bin/cc-classify:')" -eq 0 ]
+}
