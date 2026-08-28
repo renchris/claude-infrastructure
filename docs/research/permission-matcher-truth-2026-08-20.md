@@ -593,9 +593,26 @@ those by `bashMissKind` / error text. Only `no-rule-match` is addressable by a p
    auto it buys you nothing; it is a `default`/`acceptEdits`-mode lever.)
 7. **Put `defaultMode` and any `auto`-related key in `~/.claude/settings.json`**, never in a project
    or `.local` file.
-8. **Audit existing rules against the drop list.** Grep the 339 entries for
-   `python|python3|node|deno|tsx|ruby|perl|php|lua|npx|bunx|npm run|yarn run|pnpm run|bun run|bash|sh|ssh|zsh|fish|eval|exec|env|xargs|sudo|curl|wget|kubectl|aws|gcloud|gsutil`
-   in bare / `:*` / `*` / `<cmd> -flag*` form — every hit is dead weight in auto mode.
+8. **Audit existing rules against the drop list** — now `cc-permission-audit --prune`, which
+   emits an `AUTO-MODE DROP LIST` section implementing `gsn`/`_sn`/`iSd`/`nSd`/`PHs` above
+   verbatim, alongside its existing redundancy audit.
+
+   > ⚠️ **DO NOT use the grep this item used to recommend**
+   > (`python|python3|node|…|sudo|curl|wget|kubectl|aws|gcloud|gsutil` over the 339 entries,
+   > struck 2026-08-28). It was landed here as the remedy and it is wrong in **both**
+   > directions. **False positives:** a substring match sweeps `shellcheck`, `nodemon`,
+   > `sudoku`, `envsubst`, `execa` and `npm run-script`, every one of which survives auto mode
+   > — a token-boundary test is what separates them, and all six are pinned as arms in
+   > `tests/cc-permission-dropped.bats`. **False negatives:** it cannot see bare `Bash`, an
+   > all-wildcard specifier, an `Agent(…)` rule (dropped whatever the specifier), or
+   > `autoMode.classifyAllShell`, which drops *every* Bash and PowerShell allow rule from any
+   > settings source. The predicate is a rule **algebra**, not a spelling — the same lesson
+   > THE DEAD-ENTRY PREDICATE already learned for `--prune`.
+
+   The audit **reports and never removes**, not even under `CONFIRM=1`: a dropped rule is
+   restored the moment a session leaves auto mode, so it is dead *weight*, not a dead *entry*,
+   and deleting it is a real semantic change under `default`/`acceptEdits`. Rewrite each hit
+   narrower per DO #1–#2 instead.
 
 ### DON'T
 
