@@ -5,7 +5,7 @@
 bin/cc-announce	5
 bin/cc-backlog	1
 bin/cc-blockers	1
-bin/cc-bus	3
+bin/cc-bus	1
 bin/cc-cloud	1
 bin/cc-comms-alarm-sweep	1
 bin/cc-idl	1
