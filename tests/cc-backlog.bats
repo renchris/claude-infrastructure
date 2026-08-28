@@ -2552,3 +2552,95 @@ foreign_cwd_cleanup() {
   [ "$status" -eq 0 ]
   printf '%s' "$output" | grep -q 'verdict=reclaimed'
 }
+
+# ── SIGPIPE-INVERSION GUARD on compact's drop-set membership test ────────────────────────────────
+# These two arms exist because the pipeline form they replaced was measurably wrong on the LIVE
+# ledger, not at some future ceiling: the real drop set of 2,345 ids / 30,484 B measured 37/1,000
+# WRONG on 2026-08-28. Under `set -uo pipefail`, `grep -q` exits on the match, the producer takes
+# SIGPIPE, pipefail promotes the rc, and the row is KEPT — so compact rewrites the ledger unchanged
+# and reports success having compacted nothing.
+#
+# THE THREE INCUMBENT compact ARMS ABOVE STAY GREEN OVER THAT DEFECT, AND THAT IS THE POINT. Their
+# ledgers hold a handful of rows, so the drop set is ~5 ids / ~65 B — three orders of magnitude
+# under the floor, and the bug cannot fire inside them. A fixture that never reaches the bug's
+# regime is structurally incapable of failing for it, so neither of these arms is a duplicate of
+# the ones above; they are the two things those cannot see.
+
+@test "compact: the drop-set membership decision contains no early-exit pipeline" {
+  # THE SPELLING ARM, scoped to cmd_compact and NEVER to the file. bin/cc-backlog is ~6,200 lines
+  # and holds grandfathered `grep -q` siblings elsewhere; a file-wide count would convict a correct
+  # change on its neighbours (a gate whose span exceeds its subject).
+  # COMMENT LINES ARE STRIPPED FIRST, and this is not tidiness — this arm went red on its first run
+  # against the FIXED subject, on the `# WAS:` comment that documents the very form it bans. A grep
+  # that counts a token matches the comment explaining that token, so a drained file convicts
+  # itself and the only way to stay green would be to stop documenting the fix.
+  local frag="$BATS_TEST_TMPDIR/compact.sh"
+  sed -n '/^cmd_compact()/,/^}/p' "$CB" | /usr/bin/grep -vE '^[[:space:]]*#' > "$frag"
+  [ -s "$frag" ]
+  [ "$(/usr/bin/grep -cE '\| *grep +-[a-zA-Z]*q' "$frag")" -eq 0 ]
+
+  # POS CONTROL — the regex must FIND the banned form when one is present, or this arm is a mute
+  # gate that passes over any spelling at all. Seeded with a quoted heredoc rather than derived
+  # from the subject: the pre-fix line is exactly what we must not depend on still existing.
+  local seed="$BATS_TEST_TMPDIR/seed.sh"
+  cat > "$seed" <<'SEED'
+      if printf '%s\n' "$drop" | grep -qxF -- "$lid"; then
+        dropped=$((dropped + 1)); continue
+      fi
+SEED
+  [ "$(/usr/bin/grep -cE '\| *grep +-[a-zA-Z]*q' "$seed")" -eq 1 ]
+  true
+}
+
+@test "compact: the drop-set membership decision is correct at a drop set past the measured ALWAYS floor" {
+  # THE MECHANISM ARM. It runs the decision AS THE FILE SPELLS IT — the LF, the wrap and the branch
+  # are all EXTRACTED from bin/cc-backlog — so it survives any rewording of the fix and fails the
+  # moment the pipeline form returns. It cannot pass by always answering MEMBER: the NEG control
+  # below asserts a non-member still answers NON-MEMBER.
+  #
+  # WHY 6,000 AND NOT ANOTHER NUMBER. A drop-set line is a 12-hex id plus a newline = 13 B, and the
+  # decision unit for this hazard is the LINE, not the byte. Measured 2026-08-28 at 13 B per line,
+  # /bin/bash 3.2.57(1) arm64, BSD grep, needle on line 1: SAFE to 1,200 lines · RACY from ~1,800
+  # (1/500) through 2,856 (201/500) and 3,400 (480/500) · ALWAYS by 6,000 (300/300). Today's real
+  # drop set is 2,345 lines, i.e. INSIDE the racy band — sizing this arm there would make it a coin
+  # toss, because a rate inside a racy band does not reproduce. 6,000 makes a re-introduced
+  # `grep -q` fail EVERY run rather than one in a thousand.
+  local frag="$BATS_TEST_TMPDIR/frag.sh"
+  sed -n '/^      case "\$dropw" in$/,/^      esac$/p' "$CB" > "$frag"
+  # A revert to the pipeline form deletes this block outright, so an EMPTY extraction is itself the
+  # red — never a silently-skipped arm.
+  [ -s "$frag" ]
+
+  local dropfile="$BATS_TEST_TMPDIR/drop.txt"
+  awk 'BEGIN { for (i = 0; i < 6000; i++) printf "%012d\n", i }' > "$dropfile"
+  [ "$(/usr/bin/grep -c '' "$dropfile")" -eq 6000 ]
+
+  local drv="$BATS_TEST_TMPDIR/drv.sh"
+  {
+    printf '%s\n' 'set -uo pipefail'
+    printf '%s\n' 'lid="$1"'
+    printf '%s\n' 'drop="$(cat "$2")"'
+    # The subject's OWN two setup lines, lifted rather than retyped.
+    sed -n '/^  LF=/p'    "$CB"
+    sed -n '/^  dropw=/p' "$CB"
+    printf '%s\n' 'dropped=0'
+    printf '%s\n' 'for _once in 1; do'
+    cat "$frag"
+    printf '%s\n' '  printf "%s\\n" "$lid" > /dev/null'
+    printf '%s\n' 'done'
+    printf '%s\n' 'printf "dropped=%s\\n" "$dropped"'
+  } > "$drv"
+
+  # The needle sits at line 1 — the position that leaves the producer holding the whole feed, and
+  # the one a full compaction is guaranteed to exercise, because every id in the drop set is
+  # matched by its own ledger line.
+  run bash "$drv" 000000000000 "$dropfile"
+  [ "$status" -eq 0 ]
+  [ "$output" = "dropped=1" ]
+
+  # NEG CONTROL — a non-member must still answer NON-MEMBER, so this cannot pass by always dropping.
+  run bash "$drv" ffffffffffff "$dropfile"
+  [ "$status" -eq 0 ]
+  [ "$output" = "dropped=0" ]
+  true
+}
