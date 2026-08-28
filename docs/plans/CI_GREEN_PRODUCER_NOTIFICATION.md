@@ -200,7 +200,7 @@ mechanically incapable of emailing). Ranked by failed runs/day:
 | `lakehouse-lecture` pages-build-deployment | 1.57 | GitHub's own Pages Liquid parser on literal `{%…%}` | filed `54d7aff8ed8d` |
 | `doc_classifier` nightly | 1.07 | 15/15 red, `make scale-run SCALE_POINT=proving` | filed `9333991e4544` |
 | `reso` soketi-image-cve-scan | 0.14 | **TRUE positive** — green until 2026-06-29, red since on unpatched CVE-2026-59874 | filed `e3f988b489c3`; should stay red until patched |
-| `reso` tenant-drift | 0.14 | dies at `pnpm/action-setup`; **has never once reached its own check** since 2026-05-24 | filed `485f8f87eb5f`; cloud dispatch refused on venue 2026-08-24 — fix pre-derived in `docs/research/tenant-drift-venue-refusal-2026-08-24.md`, needs an on-box session |
+| `reso` tenant-drift | 0.14 | dies at `pnpm/action-setup`; **has never once reached its own check** since 2026-05-24 | filed `485f8f87eb5f`; cloud dispatch refused on venue **twice** (2026-08-24, 2026-08-28) — fix pre-derived in `docs/research/tenant-drift-venue-refusal-2026-08-24.md`, needs an on-box session. 🚨 **Do not re-dispatch off-box, and do not `block` it** — §5.2 there measures `block` as re-admitting it (8 transitions, 0 closes); it needs `venue=local`, which only an on-box session can write |
 
 `hermetic` alone was more than every other workflow combined, which is why the perceived cadence was
 "every 30 minutes". The reso `tenant-drift` row is the one worth reading twice: a config-drift check

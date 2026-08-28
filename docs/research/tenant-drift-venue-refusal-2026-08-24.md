@@ -73,3 +73,92 @@ Neither `cc-backlog` verb could be run from here — this container has no
 `~/.claude/autonomy/backlog.jsonl`, so `block`/`done`/`reopen` would have created a fresh store
 that nothing reads. A write that no reader can see is a fake discharge, which is the failure this
 document exists instead of.
+
+---
+
+## 5. 2026-08-28 — dispatched again, to the same venue. §4's cure is REFUTED.
+
+**The second cloud dispatch of this item landed four days later, on an identical VM, and refused
+identically.** This section is appended by that session. §1–§3 are re-verified and stand unchanged;
+**§4 does not, and this is the deliverable** — its recommended cure is documented *in this repo* as
+the thing that AMPLIFIES the loop it was meant to stop.
+
+### 5.1 The venue facts, re-measured rather than inherited
+
+| fact | how it was established, 2026-08-28 |
+|---|---|
+| GitHub scope is exactly `renchris/claude-infrastructure` | the session's own scope declaration; reading reso is *prohibited*, not merely unavailable |
+| the reso clone is absent | `~/Development` does not exist; the only checkout is this repo |
+| this repo is not the carrier | `.github/workflows/` holds `diagrams.yml` + `hermetic.yml`; no `tenant-drift.yml` on `origin/main` |
+| tree **is** trunk | `git rev-list --count HEAD..origin/main` = 0 (so §2's staleness caveat does not apply to this reading) |
+| the clone is **grafted at 50 commits** | `git rev-parse --is-shallow-repository` = true, `.git/shallow` present |
+| `cc-backlog` is unrunnable | no `~/.claude/autonomy/`; the container's `~/.claude` is a fresh scaffold, not the live layer |
+
+That fifth row is the guard firing *mechanically*, exactly as `bin/cc-eligible:74-84` says it should:
+a shallow clone makes `HistoryOracle.certify()` return `shallow`, and no cloud label may be written
+without a certification. The prose rule and the measurement agree here — this VM cannot certify.
+
+### 5.2 Why `cc-backlog block` (§4) does not park this item
+
+§4 assumed `block` removes the item from the dispatch wave until an operator acts. **It does not.**
+`docs/plans/BACKLOG_DRAIN_24_7.md` records this exact id crossing the blocked boundary **in both
+directions**, repeatedly, across the drain links — **eight status transitions, zero closes**:
+
+```
+blocked → open   ·  open → blocked  ·  claimed → BLOCKED  ·  open → CLAIMED
+claimed → open   ·  open → claimed  ·  claimed → open     ·  open → claimed
+```
+
+The drain links name it as sitting on a **standing WOULD-UNBLOCK cloud list**, and annotate it *"the
+off-box actuator is working that cluster right now — do NOT hand-touch them."* So a `block` written
+here would be reverted by the unblocker and the item re-admitted to the same cloud lane, with
+`project` still `claude-infrastructure`, so `cross_repo()` still passes and the next VM refuses
+again. That is the loop this session is the newest turn of, not a fix for it.
+
+`bin/cc-premise:1284-1287` already states the general form, measured on a different item:
+
+> the item was auto-blocked for thrash, unblocked seven days on, and re-dispatched with the original
+> file list verbatim. `block`/`unblock` **AMPLIFIES** this rather than pausing it — blocked items sit
+> longest … and unblock is the one transition that re-admits an item to the wave without re-reading
+> anything.
+
+**Read §4 as refuted on its remedy, not on its diagnosis.** Blocking is not wrong because the item is
+healthy; it is wrong because `blocked` is not a durable state for a row on the unblock list, so the
+cure decays into another dispatch.
+
+### 5.3 Why this session did not fix it either — the forbidden set is defined in-repo
+
+The durable cure has to teach the router that this item's **target** repo is reso, whereas
+`cross_repo()` keys on its **`project`** field (§1). Every place that could carry it is inside the
+routing rule's own surface, which `bin/cc-dispatch:251-253` names by path:
+
+> `CC_DISPATCH_VENUE_RULE_PATHS` (default: `bin/cc-venue`, `bin/cc-eligible`, `bin/cc-premise`) —
+> **the ROUTING RULE's own surface.** A landing under any of these voids a venue label as
+> `venue-rule-moved` and re-derives it.
+
+So a diff from here would (a) be a cloud VM building the venue rule — the one thing `bin/cc-venue:55`
+forbids outright, on a rationale this VM's 50-commit clone confirms rather than escapes — and (b)
+void **every** venue label fleet-wide, forcing re-derivation of the whole board to service one row.
+Both costs land on the operator, neither is visible from here. The alternative — adding a target-repo
+field to the item — is a store write, and there is no store.
+
+**This is a hard boundary, not a judgment call, and it is why two cloud slots have now produced
+documents instead of a diff.** The third will too.
+
+### 5.4 What actually has to happen — one on-box session, two items
+
+The work is unchanged from §3 and remains pre-derived, so the on-box session spends minutes:
+
+1. Re-run the FIRST STEP check against **reso's** trunk (`git show origin/main:.github/workflows/tenant-drift.yml`)
+   — the census behind §3 is now ~18 days stale and reso's trunk is the oracle. If the `version: 9`
+   input is already gone, the item is **done on trunk** and closes with that sha.
+2. Otherwise apply §3's one-line diff, and read reso's own `CLAUDE.md` for landing policy first
+   (`/ship` there is free since `fb76c35bb`, but that is a perishable fact — run its `land-status.sh`).
+3. Expect the first green setup to yield a **red check**. Per §3 that is the alarm working; the DoD is
+   *the check runs*.
+4. Batch with `6e86209ae6bc` — same repo, same file family.
+
+**And route it so it stops returning.** The row needs `venue=local` (or an equivalent that survives
+the unblocker), not `blocked`. Only an on-box session can write that, and only an on-box session
+should decide whether one item justifies widening `cross_repo()` from a `project` proxy to a
+cited-target measurement — the residual case §1 measured at 1 of 107.
