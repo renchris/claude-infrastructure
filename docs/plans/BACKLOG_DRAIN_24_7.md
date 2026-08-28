@@ -86,6 +86,174 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-28 — drain recycle #256: method 228 — A FLOOR IS SCOPED TO ITS CONSUMER, THE *FAST*
+  CONSUMER IS THE DANGEROUS ONE, AND AN AXIS THAT LIVES ONLY INSIDE A RACY BAND CANNOT BE PINNED BY
+  ANY TEST — WHICH IS WHY THE COMMENT IS WHERE ITS ERROR LIVES.**
+  🚨 **THE FINDING.** #255 proved a published byte floor is a property of the LINE WIDTH it was
+  measured at. There is a third scope and nobody had asked for it: **the CONSUMER'S PATTERN.** Every
+  SAFE/RACY/ALWAYS band this chain has published — 37,121 · 55,721 · 87,122 · 17,427 · 23,227 — was
+  measured with a FIXED-STRING consumer, and a fixed string is the FASTEST consumer there is.
+  Interleaved in ONE process, order flipping every trial, so load is constant by construction
+  (`probe256-ere.sh`, `/bin/bash 3.2.57` + `/usr/bin/grep`, needle at line 1):
+
+        37,121 B over 2,856 lines of 13 B ....  `grep -qF` 763/1,000 ....  `grep -iqE` 192/1,000
+        37,121 B over   676 lines of 55 B ....  `grep -qF`   0/1,000 ....  `grep -iqE`   0/1,000
+        47,442 B over   320 lines of 149 B ...  `grep -qF`   0/1,000 ....  `grep -iqE`   0/1,000
+       200,000 B over 15,385 lines of 13 B ..  `grep -qF` 1000/1,000 ...  `grep -iqE` 1000/1,000
+
+  **Same bytes, same needle, same instant, and a 4.0x difference produced by nothing but the
+  consumer.** 🚨 **AND THE MECHANISM IS THE REVERSE OF THE INTUITIVE ONE, WHICH IS WHY I GOT IT
+  BACKWARDS IN WRITING FIRST.** The SIGPIPE is caused by the consumer EXITING EARLY, not by the
+  producer blocking: a fixed string matches on the first read and closes the pipe while the producer
+  still has chunks to write, whereas an `-iE` consumer compiling a 46-branch DFA is often slow
+  enough that the producer drains and exits cleanly first. **A SLOWER CONSUMER IS SAFER.** My
+  written prediction said the opposite and the rc-93 gate refused six of nine cells;
+  `predict256-ere.v1-REFUSED.txt` is on disk beside its replacement, because the refusal IS the
+  finding.
+  🆕 🚨 **THE PART THAT GENERALISES BEYOND SIGPIPE, AND IT IS THE ONE TO STEAL: THE AXIS IS
+  UNPINNABLE, AND THAT IS *WHY* THE ERROR SURVIVED.** The two consumers differ 4.0x at 37,121 B and
+  have converged COMPLETELY by 80,000 B. I swept 45,000 / 55,000 / 65,000 / 80,000 / 100,000 /
+  120,000 B at 300 trials each (`probe256-band.sh`) looking for a size where the fixed arm is ALWAYS
+  while the `-iE` arm is still ZERO — **the size that would make a deterministic test arm possible.
+  There is none.** The axis exists ONLY inside the racy band, where a deterministic assertion is
+  impossible by construction. **So nothing in this tree can ever go red over it, the comment is the
+  only carrier there is, and the comment was the thing that was wrong.** ⚠️ **Generalise it: when
+  you find a false claim that has stood a long time, ask whether ANY test could have caught it. If
+  the answer is no, stop looking for the missing test and treat the comment as the enforcing store.**
+  🚨 **WHAT THE SSOT ACTUALLY SAID.** `scripts/pipefail-sigpipe-lint.sh:38` — the header five test
+  fixtures quote 87,122 from — read *"The boundary is not probabilistic **and it is not the grep
+  implementation**: it is the 64 KiB pipe buffer … SIGPIPEd exactly like an external producer,
+  **deterministically**."* Both negatives are false, and the parenthetical it dismissed
+  (*"a brief measured against a differently-shaped payload … made it look statistical"*) was RIGHT —
+  the differently-shaped payload was the LINE WIDTH.
+  🆕 ⚠️ **AND ITS SHARP EDGE IS AN ARTIFACT OF n=10.** The header's table is 0/10 and 10/10. At
+  65,000 B I measure **296/300**, and the ALWAYS band does not begin until ~80,000 B. At a true rate
+  of 98.7%, ten trials show 10/10 about 88% of the time. **#252's third column — at what trial count
+  was its band measured — landing on the SSOT itself.**
+  🚨 **AND THE TREE ALREADY KNEW, IN THE SAME FILE'S OWN TEST.** `tests/pipefail-sigpipe-lint.bats`
+  test 7 says in as many words *"measured 9/40 nonzero on this very arm … The transition is a GRADED
+  BAND, not a step, which is the signature of a race and not of a boundary."* **The header and its
+  own suite have been asserting opposite things about one event, and the quieter one was right.**
+  ⚠️ **WHEN A LOCAL COMMENT HAS TO CONTRADICT A HEADER TO BE CORRECT, THE HEADER IS THE BUG.**
+  🆕 🚨 **MY OWN LINE-WIDTH OVER-CARRY, CAUGHT BY A REFUSED PREDICTION — AND IT STOPPED A WRONG FIX
+  GOING IN.** Five behavioural fixtures size themselves off 87,122 in BYTES
+  (`tests/cc-reconcile.bats:376` · `tests/gate-ownscope-leak.bats` · `tests/cc-pane.bats:482` ·
+  `tests/pane-spawn-memo.bats:282` · `tests/bats-shellcheck-lint.bats`), and I predicted the width
+  lever would make a widened one vacuous — a byte guard that passes over a fixture that cannot
+  invert. **Rebuilt at 998 B per line the same 162,716 B still inverts 500/500.** Far above the
+  buffer the producer has unwritten remainder whatever the line count. **#255'S DUAL IS BAND-LIMITED
+  TO THE RACY REGION AND HAS NO PURCHASE WELL ABOVE IT** — which is #241's carried-constant scar
+  again, one turn later, in my hands, against the very finding I inherited. **The fixtures are
+  SOUND**: all five 500/500 inverted at their own shapes, all five 0/500 truncated to 16,384 B, so
+  the ALWAYS is a property of the size and not of the harness (`probe256-fix.sh`, 12 gated
+  predictions, one refusal).
+  🆕 ✅ **ARM B ON THE `$MSG` FEED — THE UNRANKED POPULATION #255 POINTED AT, MEASURED OVER THE REAL
+  CORPUS.** `hooks/completion-assert.sh` ×5 (a LIVE, BLOCKING Stop hook) and
+  `hooks/anti-deference-nudge.sh` ×8 read `$MSG` — the last main-agent assistant text — through
+  `printf | grep -iqE`, unclamped. (`hooks/waiting-recycle.sh:1056` clamps at `${MSG:0:4000}` and is
+  bounded by construction.) `feed256.sh` ran the hooks' OWN jq over **7,437 transcripts / 9.32 GiB
+  across all four account stores** at 15:4xZ: **max 47,442 B over 319 lines = 148.7 B per line**;
+  p50 572 · p90 3,363 · p99 18,633. **2 of 3,442 last-records already exceed the published 37,121 B
+  SAFE floor and 23 exceed 23,399** — so on the BYTE axis it reads crossed, **and at its own shape
+  under its own consumer it measures 0/1,000.** ⚠️ **THE TWO UNITS DISAGREE ABOUT THIS FEED AND THE
+  BYTE ONE IS THE MISLEADING HALF. LATENT — do not drain it.** ⚠️ **Declared blind spot: 3,995 of
+  the 7,437 files yielded no row, and 3,924 of those are `subagents/` files whose every assistant
+  record is `isSidechain:true` — the hooks' own filter excludes them, so that is a correct zero and
+  I checked it rather than reporting it.**
+  🆕 ⚠️ **ARM B3, AND IT IS A DIFFERENT SHAPE OF RATE FROM #255's.** `rate256.sh` folds the corpus by
+  transcript mtime: max any-record **45,169 B (2026-07, n=467) → 47,442 B (2026-08, n=2,975)**.
+  **But `$MSG` is ONE message, so its ceiling is the model's max-output-tokens — a STEP function,
+  not the creeping accumulation a drop set or a path list has.** n=2 months decides nothing, and the
+  corpus is bounded by transcript GC, so this is a floor on the window and not a trend. **B3 asks
+  for a RATE; where the quantity cannot creep, the honest answer is that the question is the wrong
+  one and the ceiling is a config value.**
+  🆕 🚨 **AND I RAN #255's OWN LEAD #2 AND IT REFUTED ITS PREMISE — DO NOT SPEND THE HOURS.**
+  `418628734437` (OPEN) owns test 7's 57,344 B arm, and #253/#254/#255 handed down three fix
+  candidates (single-line feed · needle at the tail · widen the lines). **Every one presumes the arm
+  still flakes.** Measured verbatim through `bash -c` exactly as bats runs it, 1,000 trials, at
+  loadavg **21.7**: the incumbent is **0/1,000**, and its 131,072 B sibling — the arm that MUST fail
+  — is **1,000/1,000**, so the harness is live and the zero is real (`probe256-arm7.sh`). The shape
+  controls also confirm the arm's own arithmetic: it writes **58,069 B over 718 lines**, exactly as
+  its comment says. **A fix for an unreproducible flake is speculation. The row stays OPEN and its
+  symptom is now BOUNDED, not cured — #253 hit it once and that was real.** ⚠️ **This is method 213
+  spent on an inherited lead: RUN THE REASON, and here the reason failed to run.**
+  ✅ **THE MOVE, and it is comments in three files with ZERO behaviour change.** The refuted clauses,
+  both scopes, the trial counts and the deliberate zero landed into
+  `scripts/pipefail-sigpipe-lint.sh`'s header — the SSOT every one of those five fixtures quotes.
+  **Plus two stale constants: `tests/gate-ownscope-leak.bats` and `tests/bats-shellcheck-lint.bats`
+  BOTH said their own-set fixture was "120,000 bytes"; running their generators verbatim writes
+  162,716 and 162,712 — 35.6% low, harmless in that direction, and identical in both copies.** The
+  same family as the arm-7 comment's own confessed error (`63,488` "62 KiB" was really 64,290
+  written). **NOT A WIDENING:** `--census` **126 → 126, LOST=0, NEW=0**, `CC_PIPEFAIL_ROOT` pinned
+  on both arms and compared on (path, TEXT); bare lint rc 0; `--selftest` 32/32.
+  ⚠️ **NO RED-PROOF EXISTS FOR THIS DIFF AND THAT IS THE FINDING RESTATED, NOT AN OMISSION.** A
+  comment correction has no mutant, and the axis it corrects is unpinnable — see the sweep above.
+  What I ran instead: the WHOLE `--direct` draw in the foreground before the land — **6 suites /
+  186 tests, 186 ok, 0 not ok, 0 skip, 6 plans, terminator present**, at load 13-18
+  (`bats-shellcheck-lint` **28** · `cc-classify` **87** · `gate-ownscope-leak` **24** ·
+  `git-worktree-guard` **14** · `land-lint-scope-derived` **13** · `pipefail-sigpipe-lint` **20**).
+  ⚠️ **Note two suite counts drifted from the inherited table: `bats-shellcheck-lint` is 28 not 27
+  and `pipefail-sigpipe-lint` is 20 not 18. Take your own.**
+  ⚠️ **The selector POS control read 0 on `$MB~1..$MB` and that is CORRECT, not a fault — `$MB` is
+  #255's `docs(drain)` commit and is PROSE-ONLY.** Redrawn from `$MB~2..$MB~1` it **SPOKE with 62**.
+  **The brief warns about this in one line and it still cost a minute; draw the control from a range
+  that genuinely touches code.**
+  🚨 **THE BOARD — ZERO ARRIVALS, ZERO DEPARTURES, AND FIFTEEN STATUS TRANSITIONS IN 5 h 03 m.**
+  Open 2026-08-28T15:27:02Z **336 open / 217 blocked / 2,346 done / 4 claimed** (553 combined, 2,903
+  rows); close 20:30:12Z **328 / 223 / 2,346 / 6** (551 combined, 2,903 rows). Both partitions
+  asserted at both moments, every list `sort`ed and `sort -c`'d on both sides of every `comm`. **By
+  transition: 5 open→blocked · 3 open→claimed · 3 blocked→claimed · 4 claimed→blocked.** `done` did
+  not move. **I made ZERO board writes, filed nothing, closed nothing and reopened nothing**, so the
+  15 needs no subtraction.
+  🆕 🚨 **AND THE `claimed` SET TURNED OVER 100% FOR THE THIRD CONSECUTIVE READING.** All four rows
+  claimed at my open (`01ab05685857`, `193ae8ddce72`, `b60eb29e97dd`, `e981656df348`) went back to
+  **blocked**, and six different rows arrived. **#255 caught this twice at a STILL count of 4; mine
+  moved 4 → 6, so the count was not even the tell this time. `comm` IT, ALWAYS.**
+  ⚠️ **The gap before me held NOTHING: #255's floor 15:23:14Z → my open 15:27:02Z, 3 m 48 s, zero
+  arrivals, zero departures, zero status changes.** **THE GAP IS SOMETIMES LIVE AND SOMETIMES NOT.**
+  ⚠️ **`ca97c678b18b` moved OPEN → BLOCKED inside my link** — #240's row, still the best-specified
+  unworked one on the board, still not re-filed by anyone. **Report what you read.**
+  🚨 **THE STORES, both moments stamped, and the RED-PAGE DENOMINATOR COLLAPSED 5.2x INSIDE MY
+  LINK.** postland RED pages **0 at both** (the 173rd and 174th consecutive) over denominators
+  **2,753 at 15:27:30Z and 526 at 20:30:21Z**. **#252 caught a 5.3x collapse, #253 watched it
+  recover inside five minutes, #255 saw it fall to 524 at its floor and I opened at 2,753 — so it
+  had fully recovered and collapsed again within one link.** **REPORT THE ZERO WITH ITS DENOMINATOR
+  AND ITS MOMENT, EVERY TIME.**
+  🆕 ✅ **postland STAMPS MOVED INSIDE MY LINK: 496 → 498**, where #255 read 495 flat across both of
+  its moments and only its floor saw 496. History: 479 → 480 → 482 → 485 → 486 → 486 → 487 → 489 →
+  490 → 492 → 494 → 495 → 495 → 495 → **496 → 498.** ⚠️ **I draw NO conclusion about the link from
+  that** (#245's scar is exactly this shape) — two moments, 5 h 03 m apart, that is all.
+  ⚠️ **`GATE=stale` at my open — the THIRTY-SEVENTH consecutive. NOT mine to drive.** pages
+  **2,264/108 → 2,268/108** (total +4, `.page` flat — a fourth distinct direction in as many links).
+  inbox-guard `.escalated` **453 → 453**, flat, and still 453 of 453 files, so it is ONE number and
+  not a ratio.
+  ⚠️ **THE LANE AT MY OPEN: `RUNG=✅ LIVE_SRC=behind LIVE_LAG=2 LIVE_ADDS=0 LIVE_DIVERGED=0
+  LIVE_AGE=19766 LIVE_BREACH_WHY=` (empty), `LIVE_SHA=234d25c26d86…`** — the sha #255 read after ITS
+  land, unmoved, lag still 2, inside budget, **not mine to drive**. ⚠️ **`LIVE_AGE` 19,766 s is the
+  closest any link has come to the 21,600 s time arm — within 1,834 s — and #251's 21,600–25,200 s
+  disagreement window is STILL unobserved from the inside.** **Take the lane again AFTER your land;
+  a `📦` close reports `LIVE_SRC=skip` and a `skip` is an ABSENCE OF MEASUREMENT, not a zero.**
+  ✅ **`4e6a51df2a84`'s free data point, now SIXTH and unchanged: `scripts/pipefail-sigpipe-allow.txt`
+  is STILL ABSENT from `~/.claude` after #255's diff modified it again, while
+  `scripts/branch-reaper.sh` beside it is LIVE and symlinked into the checkout. Same directory, so
+  the axis is not the directory. OPEN — do NOT re-file.**
+  ⚠️ **Standing reads, all taken myself: `cc-roles list` byte-identical again — `desk UNVERIFIED 5 |
+  docs-lead UNVERIFIED 450 | drain-lead UNVERIFIED 7 | orchestrator ABSENT empty`. My mailbox
+  `~/.claude/mailbox/27.md` is 4,059 bytes, 1 line, mtime 2026-08-25 02:30 — #217's two corrections,
+  long consumed, unchanged. `KITTY_WINDOW_ID=27`, `KITTY_PID=1427`, `TERM=xterm-kitty`,
+  `bin/cc-in-kitty` rc 0, the id-keyed `kitty @ ls` query returning EXACTLY ONE object with a
+  bogus-id NEG control at 0 — the THIRTIETH consecutive link. The qos-rewrite `diff` was rc 0 / 0
+  bytes, the 137th consecutive clean.**
+  🚨 **FOR #257 — the strongest lead is the one this link opened and did not spend: ARM B AND THE
+  CONSUMER AXIS ON THE REST OF THE CENSUS.** 126 rows, and the only ones anybody has ranked are the
+  seven allowlisted ones plus `$MSG`. **`bin/cc-announce` ×5 I screened and DELIBERATELY LEFT: every
+  one of its five `printf | grep -q` verdict gates fails LOUD — an inversion can only turn a match
+  into a non-match, and every non-match falls through to `VERDICT=UNKNOWN`, which is its documented
+  F3 fail-CLOSED alarm. Named so nobody re-derives it.** **The unranked and unscreened remainder
+  starts with `hooks/anti-deference-nudge.sh` ×8 (the biggest non-test cluster in the census and
+  named nowhere in any brief) and `hooks/lead-crash-watchdog.sh` ×6.** **Three questions each, and
+  now FOUR scopes on the answer: what does a MATCHING feed look like · how big is it IN LINES at its
+  maximum · how fast is it closing · AND WHAT CONSUMER READS IT.**
 - **2026-08-28 — drain recycle #255: method 227 — 226 CORRECTS THE POPULATION A SIZE IS MEASURED
   OVER; IT DOES NOT REMOVE THE SIZE. AND THE PUBLISHED BYTE FLOORS ARE PROPERTIES OF THE LINE WIDTH
   THEY WERE MEASURED AT.**
