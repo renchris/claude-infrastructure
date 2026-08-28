@@ -1610,7 +1610,10 @@ windows/week, carrying the fleet wall rate 1.72% → 2.20%.
 
 ### §5.7 Implementation record — what actually landed, and where it deviated from the spec
 
-Wave 1 = **S1 + S2 + S3**. Wave 2 = **S4 + S7**. S5 and S6 are unbuilt; S5 still gates S6.
+Wave 1 = **S1 + S2 + S3**. Wave 2 = **S4 + S5 + S7**. **S6 is the only unbuilt item**, and it is
+gated exactly as §5.2 says: not on S5 existing, but on S5 having been **RUN AGAINST THE LIVE SERIES
+AND READ**. That reading is an operator-side step — the series lives on the desk — and it is the one
+thing this plan now waits on. See the wave-2 note under *Acceptance status* below.
 
 #### S1 · data fixes — LANDED
 
@@ -1886,6 +1889,75 @@ soften-only and therefore fail-safe for routing, but the metric is wrong there a
 quoted as accurate. §5.6 Q3 names the measurement that would fix it. **This ships on correctness and
 availability, not on accuracy**, which is what §5.2 S7 asks for and all it asks for.
 
+#### S5 · M3c `--strand-score` — LANDED (wave 2)
+
+`bin/claude-accounts`: `strand_score(samples, buckets, now)` + `strand_score_lines(sc)` beside
+`completed_weekly_windows`, constants `STRAND_SCORE_BUCKETS` / `STRAND_SCORE_TAIL_H` /
+`STRAND_POSITIVE_PP`; a `--strand-score` branch in `main()` placed **before `load_cfg()`**, exactly
+like `--agents`, with `--json` and `--hours N`. Cases RP-29..RP-32 in
+`tests/claude-accounts-strand.bats`, **4/4 proven RED** against the S7 binary, green after; 213
+cases across eleven suites with the same 23 pre-existing environment failures before and after.
+
+**The rendered table, on a synthetic three-window series** — the shape §5.4 asks for, and the
+convergence is the measurement:
+
+```
+strand score — projected minus realised strand, by horizon (+ = over-predicted the loss):
+  horizon      n     bias      MAE   agree
+     96h      3   +25.67    25.67   100%
+     48h      3   +25.67    25.67   100%
+     24h      3   +16.94    16.94   100%
+     12h      3    +4.08     4.08   100%
+      6h      3    +0.32     0.32   100%
+  windows completed: 3 · scored: 3 · evaluable cells: 15
+```
+
+**RP-30 is the case that matters, and it pins CAUSALITY.** Recomputing M3a from the whole series
+rather than from the prefix up to the evaluated instant lets the 24 h cell see a burst that had not
+happened yet, the projection collapses onto the realised strand, and the bias goes to ~0 at every
+horizon — *which is precisely what the refuted score reported, and precisely what it looks like.*
+The leak restores the tautology while looking like an improvement. The discriminator is two windows
+with the **same final strand and opposite shapes**: a causal score gives them different 24 h
+projections (measured: > 5 pp apart, coast-then-burst over-predicting), a leaky one gives them
+nearly the same.
+
+**Both abstains are pinned, and they must not look alike (RP-31).** A cell with no sample at
+`weekly_reset_h ≥ H` and a cell where M3a itself abstained below its 6.8 h span floor are both
+excluded from the aggregate — `n=0`, `bias=None` — and the renderer prints the WORD
+(`no evaluable sample`), never a `0.00`. `n=0 with bias None` and `n=1 with bias 0.00` are different
+facts; a table that spells them the same way is the tautology arriving through the renderer instead.
+
+**Deviation 1 — `agree` is the sign-agreement rate at `pace_line`'s OWN threshold (0.5 pp).** §5.2
+says "the sign-agreement rate" without naming a sign, and after M3a's clamp every projection is
+`≥ 0`, so a literal sign test is vacuous. Scored at 0.5 pp it answers the question a reader of the
+footer actually has: did the block say something would die when something did, and stay quiet when
+it did not? That number is the one `pace_line` renders against, so the harness and the surface
+cannot drift apart.
+
+**Deviation 2 — `--hours N` was added, defaulting to `STRAND_SCORE_TAIL_H = 720`.** §5.2 names no
+tail. Weekly windows need weeks of series; `_util_tail`'s doubling seek makes a wide read nearly
+free, and the bound is a flag rather than a constant so the acceptance run can be replayed over the
+same span twice. Malformed values exit 64 through the existing `_num_flag` contract rather than
+silently defaulting.
+
+**Deviation 3 — the JSON form carries `span_h` and `samples`.** A score over a tail that turned out
+to be short is a different fact from a score over a full one, and the reader cannot see which
+without them.
+
+**L3 is not breached, and the argument is not "it is small".** L3 governs the LIVE STATE surface:
+there is one renderer of *what are the accounts doing now*. This renders HISTORY, reads only the
+series, and **nothing routes on it**. It ships as a flag on the same binary rather than a new
+`scripts/*.sh` for the deployment reason `--keepwarm`'s comment already spells out:
+`~/.claude/bin/claude-accounts` is a symlink into the checkout, so a flag is an EDIT that converges
+on the trunk fast-forward, while a new file is an ADD the live layer cannot reach — the `LIVE_ADDS`
+trap.
+
+🚨 **S6 IS STILL GATED, and building S5 did not open the gate.** §5.2 S6's condition is that S5 has
+been **run against the live series and READ** — specifically, that the horizon-stratified bias at
+the **12 h bucket** is near zero. The live series is on the desk and not in this container, so that
+reading has not happened. Until it does, S6 is not shippable at any parameter setting, and the
+`⚠ next3 — 5pp will die in 2.2h…` alarm line stays unbuilt.
+
 #### Acceptance status against §5.4
 
 | command | status |
@@ -1894,12 +1966,23 @@ availability, not on accuracy**, which is what §5.2 S7 asks for and all it asks
 | `claude-accounts --readout` renders the drain block for all four accounts | **yes** — see above |
 | `claude-accounts --readout \| grep -c 'strand'` → 3 or 4 | **4** |
 | the drain rows answer the goal's **third** question (`by when must it start`) | **yes, from wave 2** — S4 `start by T−Nh` / `⚠ LATE by Nh`. §5.7 S3 Deviation 2 is discharged |
-| `claude-accounts --strand-score` | **still not built** — that flag is S5 |
+| `claude-accounts --strand-score` | **built and green on fixtures** (S5) — the horizon-stratified table renders, empty cells say the word. **NOT yet read against the live series**, which is the actual acceptance and the gate on S6 |
 
 ⚠️ **Wave 2 was built and gated in a cloud container, not on the desk**, so every figure above is
-from the hermetic suites; the LIVE four-account readout in §5.4 has not been re-run against
-`api.anthropic.com` since wave 1. That is the one acceptance line S4 leaves unread, and it needs no
-code — `claude-accounts --readout` on the desk is the whole check.
+from the hermetic suites. Two acceptance lines are therefore unread, both operator-side, both
+needing no code:
+
+```
+▶ Run this:
+
+`claude-accounts --readout && claude-accounts --strand-score`
+```
+
+The first re-checks §5.4's live four-account block, now carrying S4's `start by T−Nh` clause and the
+`K=… live` caption. The second is **the gate on S6**: read the **12 h bucket's bias**. Near zero ⇒
+S6 is shippable at the §5.2 defaults (`FLOOR = 4 pp`, `DWELL = 2 h`, `HORIZON_CAP = 12 h`). Not near
+zero ⇒ **S6 does not ship at any parameter setting** and §5.6 Q1 becomes the priority — which is
+what §5.4 already says, and is why this harness was built to be able to fail.
 
 ⚠️ `bash tests/run.sh …`, named in §5.4, **does not exist in this repo**. The suites are run with
 `bats tests/<name>.bats`; `scripts/ship-land.sh` selects and runs them at the land.

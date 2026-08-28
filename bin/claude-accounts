@@ -54,6 +54,13 @@ Usage:
       the same rows as data. Three INDEPENDENT facts per backend — installed / authenticated /
       has a headless agent mode — because only the third decides routability, and a presence
       check silently skips it (an editor launcher on PATH is not an agent backend).
+  claude-accounts --strand-score      score the weekly-drain nowcast against what ACTUALLY
+      stranded, stratified by horizon (96/48/24/12/6 h before each completed window's reset).
+      History, not live state: no keychain, no sweep, no config, and nothing routes on it. It is
+      the mutation-test of the planner — the score it replaces evaluated at each window's CLOSE,
+      where the projection has already converged to the truth, so it agreed with the identity
+      function on 8/8 windows and could not have come out any other way. Add --json for the same
+      cells as data, `--hours N` to widen the tail (default 720 h).
   claude-accounts --route general|fable|interactive   best account name (bare, on stdout)
       general      dispatch lane: headroom/T**2, deadline-DOMINANT — spend quota before it strands.
       interactive  a HUMAN's long-lived desk: maximise runway (absolute weekly headroom x projected
@@ -2098,6 +2105,110 @@ def completed_weekly_windows(samples, now=None):
                     "strand": max(0.0, 100.0 - last["weekly_pct"])})
     out.sort(key=lambda w: w["reset_t"])
     return out
+
+
+STRAND_SCORE_BUCKETS = (96.0, 48.0, 24.0, 12.0, 6.0)
+STRAND_SCORE_TAIL_H = 720.0   # 30 d — the span that holds enough completed windows to stratify
+STRAND_POSITIVE_PP = 0.5      # "will strand" threshold: pace_line's OWN no-strand cut (s < 0.5)
+
+
+def strand_score(samples, buckets=STRAND_SCORE_BUCKETS, now=None):
+    """M3c — score M3a against the strand that ACTUALLY happened, stratified by HORIZON.
+
+    THIS IS THE INSTRUMENT THAT CAN FAIL, and that is its whole reason for existing. The score
+    it replaces produced 8 binary cells evaluated at each window's CLOSE, where the projection
+    has already converged to `100 - weekly_pct`, i.e. to the true strand — so it agreed with the
+    identity function on 8/8 windows and could not have come out any other way. A harness that
+    cannot be wrong measures nothing. This evaluates at FIXED DISTANCES from the reset, where the
+    projection can be, and will be, wrong.
+
+    METHOD, and it is CAUSAL. For each completed weekly window (the S1d rule: the reset is in the
+    PAST and the series observed it to its close) and each horizon H, take the LAST sample still
+    at least H hours from that window's reset, recompute M3a **from the samples up to that
+    instant only** — never from the whole series, which would leak the outcome into the
+    prediction — and score `signed_error = projected_strand - realised_strand`.
+
+    ABSTAIN, twice, and neither is imputed. A (window, H) cell with no sample at `weekly_reset_h
+    >= H` reports nothing and is EXCLUDED from its bucket's aggregate. So is a cell where M3a
+    itself abstained at that instant (below its 6.8 h measured-span floor). Counting either as a
+    hit is how a harness scores its own silence.
+
+    `agree` is the sign-agreement rate at the surface's OWN threshold — `pace_line` renders
+    `no strand` below 0.5 pp — so it answers the question a reader of the footer actually has:
+    did the block say something would die when something did, and stay quiet when it did not?
+
+    n IS THE BINDING LIMIT and it grows ~3.7 windows/week. Read the per-bucket n before the
+    per-bucket bias; a 96 h row over two cells is an anecdote with a decimal point."""
+    now = time.time() if now is None else now
+    wins = completed_weekly_windows(samples, now=now)
+    by_acct = {}
+    for e in samples or []:
+        if e.get("_t") is not None:
+            by_acct.setdefault(e.get("acct"), []).append(e)
+    for ss in by_acct.values():
+        ss.sort(key=lambda e: e["_t"])
+    cells = {h: [] for h in buckets}
+    scored = 0
+    for w in wins:
+        key = int(round(w["reset_t"] / 60.0))     # completed_weekly_windows' own key, recovered
+        acct_ss = by_acct.get(w["acct"], [])
+        win_ss = [e for e in acct_ss
+                  if e.get("weekly_pct") is not None
+                  and _reset_key(e.get("weekly_reset_at")) == key]
+        if not win_ss:
+            continue
+        scored += 1
+        for h in buckets:
+            cand = [e for e in win_ss if (w["reset_t"] - e["_t"]) / 3600.0 >= h]
+            if not cand:
+                continue                          # no evaluable sample — excluded, never imputed
+            e = cand[-1]
+            wrh = (w["reset_t"] - e["_t"]) / 3600.0
+            if not (0 < wrh <= WEEK_H):
+                continue
+            prefix = [x for x in acct_ss if x["_t"] <= e["_t"]]
+            v, _span = burn_wk_ewma_ph(prefix, e["_t"], wrh)
+            proj = wk_strand_pp({"weekly_pct": e["weekly_pct"], "weekly_reset_h": wrh,
+                                 "burn_wk_ewma_ph": v})
+            if proj is None:
+                continue                          # M3a abstained here — not a hit and not a miss
+            cells[h].append((proj, w["strand"]))
+    out = []
+    for h in buckets:
+        xs = cells[h]
+        n = len(xs)
+        if n == 0:
+            out.append({"h": h, "n": 0, "bias": None, "mae": None, "agree": None})
+            continue
+        errs = [p - r for p, r in xs]
+        agree = sum(1 for p, r in xs
+                    if (p >= STRAND_POSITIVE_PP) == (r >= STRAND_POSITIVE_PP)) / float(n)
+        out.append({"h": h, "n": n, "bias": sum(errs) / n,
+                    "mae": sum(abs(x) for x in errs) / n, "agree": agree})
+    return {"buckets": out, "windows": len(wins), "windows_scored": scored,
+            "cells": sum(b["n"] for b in out)}
+
+
+def strand_score_lines(sc):
+    """The one rendering of strand_score. An empty bucket prints the WORD, never a 0.0 — a cell
+    with no evaluable sample and a cell whose error happened to be zero are different facts, and
+    a table that spells them the same way is the tautology this harness exists to replace."""
+    if not sc or sc["windows"] == 0:
+        return ["strand score — no completed weekly window in this series; nothing to score yet "
+                "(windows accrue at ~3.7/week)."]
+    lines = ["strand score — projected minus realised strand, by horizon "
+             "(+ = over-predicted the loss):",
+             "  horizon      n     bias      MAE   agree"]
+    for b in sc["buckets"]:
+        if b["n"] == 0:
+            lines.append(f"  {b['h']:5.0f}h      0        —        —       —"
+                         "   no evaluable sample")
+            continue
+        lines.append(f"  {b['h']:5.0f}h  {b['n']:5d}  {b['bias']:+7.2f}  {b['mae']:7.2f}  "
+                     f"{100.0 * b['agree']:4.0f}%")
+    lines.append(f"  windows completed: {sc['windows']} · scored: {sc['windows_scored']} · "
+                 f"evaluable cells: {sc['cells']}")
+    return lines
 
 
 def apply_burn(rows, cfg, samples=None):
@@ -4837,6 +4948,31 @@ def main():
             print("no provider registry (~/.claude/providers.json) — Claude-only fleet")
             return
         print("\n".join(lines).lstrip("\n"))
+        return
+
+    # --strand-score: the scoring harness for M3a, and like --agents it returns BEFORE load_cfg(),
+    # before the keychain, before the usage endpoint and before the lock. It renders HISTORY —
+    # scored past weekly windows out of the utilization series — so it needs no sweep, no account
+    # config and no live quota read, and forcing one on a question about the past would be the
+    # same coupling --agents' comment describes.
+    #
+    # L3 (ONE RENDERER) IS NOT BREACHED, and the argument is not "it is small". L3 governs the
+    # LIVE STATE surface: there is one renderer of "what are the accounts doing now". This touches
+    # none of it, reads only the series, and NOTHING ROUTES ON IT. It is the mutation-test of the
+    # planner, not a second opinion about the fleet.
+    #
+    # A FLAG, not a new scripts/*.sh, for the deployment reason --keepwarm's comment spells out:
+    # ~/.claude/bin/claude-accounts is a symlink into the checkout, so a flag is an EDIT that
+    # rides it and converges on the trunk fast-forward. A new file is an ADD the live layer cannot
+    # reach at all — the LIVE_ADDS trap — so it would be absent from every path the box can run.
+    if "--strand-score" in args:
+        hours = _num_flag(args, "--hours")
+        samples, span = _util_tail(hours=STRAND_SCORE_TAIL_H if hours is None else hours)
+        sc = strand_score(samples)
+        if "--json" in args:
+            print(json.dumps(dict(sc, span_h=span, samples=len(samples)), indent=2))
+            return
+        print("\n".join(strand_score_lines(sc)))
         return
 
     # --max-wait / --max-age are GLOBAL modifiers, parsed before load_cfg() because --max-wait 0
