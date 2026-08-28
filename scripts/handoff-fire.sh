@@ -8110,7 +8110,7 @@ if [ "$CLOUD" = 1 ]; then
     echo "!! cloud fire: A SESSION WAS CREATED AND CANNOT BE NAMED — the create banner carried no session id." >&2
     echo "   It is live, spending ${CLOUD_ACCT}'s quota, and nothing local can observe, address or reap it." >&2
     echo "   Find it at https://claude.ai/code and either declare it by hand or stop it:" >&2
-    echo "     cc-cloud declare --id <id> --branch $CLOUD_BRANCH --account $CLOUD_ACCT --repo $REPO" >&2
+    echo "     cc-cloud declare --id <id> --branch $CLOUD_BRANCH --account $CLOUD_ACCT --repo $REPO --boot-contract" >&2
     echo "   raw: $CLOUD_MSG" >&2
     emit_fire_refusal cloud-create-unidentified "create succeeded, no session id extractable — UNOBSERVABLE live session on $CLOUD_ACCT"
     exit 11
@@ -8147,7 +8147,7 @@ if [ "$CLOUD" = 1 ]; then
   if [ -z "$CLOUD_DECL" ] || ! command -v "$CLOUD_DECL" >/dev/null 2>&1 && [ ! -x "$CLOUD_DECL" ]; then
     echo "!! cloud fire: session $CLOUD_ID CREATED but cc-cloud is unreachable — IT IS UNDECLARED." >&2
     echo "   Declare it by hand before the 600s orphan reaper sees a team with no live lead:" >&2
-    echo "     cc-cloud declare --id $CLOUD_ID --branch $CLOUD_BRANCH --account $CLOUD_ACCT --repo $REPO" >&2
+    echo "     cc-cloud declare --id $CLOUD_ID --branch $CLOUD_BRANCH --account $CLOUD_ACCT --repo $REPO --boot-contract" >&2
     emit_fire_refusal cloud-declare-absent "session $CLOUD_ID created, cc-cloud unreachable — session is live and UNDECLARED"
     exit 11
   fi
@@ -8160,7 +8160,7 @@ if [ "$CLOUD" = 1 ]; then
          --repo "$REPO" --url "https://claude.ai/code/$CLOUD_ID" --boot-contract \
          --item "handoff-fire $(basename "$PROMPT_FILE")" >&2; then
     echo "!! cloud fire: session $CLOUD_ID CREATED but the declaration FAILED — it is live and unobservable." >&2
-    echo "     cc-cloud declare --id $CLOUD_ID --branch $CLOUD_BRANCH --account $CLOUD_ACCT --repo $REPO" >&2
+    echo "     cc-cloud declare --id $CLOUD_ID --branch $CLOUD_BRANCH --account $CLOUD_ACCT --repo $REPO --boot-contract" >&2
     emit_fire_refusal cloud-declare-failed "session $CLOUD_ID created, cc-cloud declare exited non-zero — live and UNDECLARED"
     exit 11
   fi
