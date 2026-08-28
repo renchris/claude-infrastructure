@@ -34,10 +34,10 @@ mkfile() { # $1=name $2=body  [$3=set line]
 }
 census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" --census 2>/dev/null; }
 
-@test "1: the lint's own --selftest passes (32/32, both directions)" {
+@test "1: the lint's own --selftest passes (35/35, both directions)" {
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s' "$output" | grep '32/32' >/dev/null \
+  printf '%s' "$output" | grep '35/35' >/dev/null \
     || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 
@@ -309,4 +309,62 @@ $(census | grep -c 'scripts/muted\.sh:' || true) — the file is muted"; census 
     || { echo "control failed: the unappended file already reads \
 $(census | grep -c 'lr-reset-poller\.sh:' || true) hit(s), so arm 20 is vacuous"; false; }
   true
+}
+
+@test "21: a FUNCTION-FINAL pipeline is seen — its rc is the return value the caller reads" {
+  # The 2026-08-28 defect (backlog ca97c678b18b). Clause 4 asks "does anything READ this pipeline's
+  # status" and could only look at the LINE. A function's last command sets its RETURN VALUE, and
+  # the caller that tests it (`if f; then`) is in another function — often another file — so with no
+  # errexit the shape was invisible. Three real sites were standing in the tree, absent from BOTH
+  # the census AND the allowlist, which is not exempt but INVISIBLE.
+  #
+  # THE POSITIVE CONTROL IS THE MIDDLE ARM, not decoration: the same pipeline one line earlier must
+  # stay GREEN. Without it this arm passes just as well against a detector that flags every bare
+  # pipeline in a function, which would red-line most of the tree.
+  mkfile ffinal 'f() {
+  git status --porcelain 2>/dev/null | grep -q .
+}
+if f; then :; fi' 'set -uo pipefail'
+  [ "$(census | grep -c 'scripts/ffinal\.sh:')" -eq 1 ] \
+    || { echo "function-final pipeline not seen"; census | sed 's/^/  /'; false; }
+
+  mkfile ffmid 'f() {
+  git status --porcelain 2>/dev/null | grep -q .
+  printf "done\n"
+}' 'set -uo pipefail'
+  [ "$(census | grep -c 'scripts/ffmid\.sh:')" -eq 0 ] \
+    || { echo "MID-body pipeline flagged — the clause widened past function-final"; \
+         census | sed 's/^/  /'; false; }
+
+  # ...and it must inherit clause 4's masks rather than route around them. `local` returns its OWN
+  # 0, so the pipeline's status never becomes the function's return value at all.
+  mkfile ffmask 'f() {
+  local v=$(git log --oneline | head -1)
+}' 'set -uo pipefail'
+  [ "$(census | grep -c 'scripts/ffmask\.sh:')" -eq 0 ] \
+    || { echo "local-masked function-final flagged — 4c bypassed clause 4's masks"; false; }
+  true
+}
+
+@test "22: MECHANISM — a function-final pipeline really does hand its caller 141 on a MATCH" {
+  # Real bash, real SIGPIPE, not a re-read of the detector — the same discipline as arm 6, applied
+  # to the position that makes this shape worse than the inline one: the inversion crosses the
+  # function boundary, so the caller reads NOT-FOUND for a needle that is present, with no pipeline
+  # in sight at the call site.
+  seq 1 200000 > "$BATS_TEST_TMPDIR/big.txt"
+  run bash -c "set -uo pipefail
+    f() { cat '$BATS_TEST_TMPDIR/big.txt' | grep -q '^1\$'; }
+    if f; then echo TRUE; else echo \"FALSE:\$?\"; fi"
+  printf '%s' "$output" | grep -q '^FALSE:141$' \
+    || { echo "the defect did NOT reproduce (output=$output) — arm 21 pins nothing"; false; }
+  # ...and the drain fix repairs it THROUGH the function boundary.
+  run bash -c "set -uo pipefail
+    f() { cat '$BATS_TEST_TMPDIR/big.txt' | grep '^1\$' >/dev/null; }
+    if f; then echo TRUE; else echo \"FALSE:\$?\"; fi"
+  [ "$output" = TRUE ] || { echo "the drain fix did not repair it (output=$output)"; false; }
+  # ...and the repaired predicate must still be able to say NO.
+  run bash -c "set -uo pipefail
+    f() { cat '$BATS_TEST_TMPDIR/big.txt' | grep '^NOPE\$' >/dev/null; }
+    if f; then echo TRUE; else echo FALSE; fi"
+  [ "$output" = FALSE ] || { echo "the fix returns TRUE on a non-match — not a predicate"; false; }
 }

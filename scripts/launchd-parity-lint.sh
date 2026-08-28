@@ -92,9 +92,13 @@ bad() { printf '  RED  %s\n' "$1"; viol=$((viol+1)); }
 # Read a plist's Label without ever writing to it. `plutil -p` is a pure reader; `plutil -extract`
 # is NOT (no -o ⇒ in-place rewrite) and must never appear in this file.
 plist_label() {
+  # `awk 'NR<=1'`, not `head -1`: this pipeline is the LAST command of the function, so its status
+  # IS plist_label's return value. `head -1` exits on the first line, sed takes SIGPIPE, and
+  # pipefail hands the caller 141 for a Label it just read. awk drains, same one line out.
+  # (pipefail-sigpipe-lint clause 4c.)
   plutil -p "$1" 2>/dev/null \
     | sed -n 's/^[[:space:]]*"Label"[[:space:]]*=>[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' \
-    | head -1
+    | awk 'NR<=1'
 }
 
 IDX="$(mktemp "${TMPDIR:-/tmp}/launchd-parity-idx.XXXXXX")" || exit 2

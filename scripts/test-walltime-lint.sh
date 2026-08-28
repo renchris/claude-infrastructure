@@ -93,8 +93,10 @@ in_own() {  # $1=basename · $2=own-set text · $3=1 if an own-set was supplied 
   # real timebomb inside the landers own diff from BLOCKING to advisory. A fail-OPEN in a
   # blocking land gate. Bounded by the own-set size (CC_WALLTIME_OWN, one path per line), so
   # unlike the ratchet list this ceiling is a real operational quantity: ~1,600 paths.
-  # NOTE: pipefail-sigpipe-lint still cannot SEE this shape — a function-final pipeline is
-  # consumed by its caller, which clause 4 has no way to observe. Filed separately.
+  # NOTE: when this was drained, pipefail-sigpipe-lint could not SEE the shape — a function-final
+  # pipeline is consumed by its caller, which clause 4 had no way to observe. Filed as backlog
+  # ca97c678b18b and CLOSED 2026-08-28: clause 4c tracks function bodies, so re-seeding `-q` on
+  # this line now goes RED instead of silently passing.
   printf '%s\n' "$2" | sed 's:.*/::' | grep -xF "$1" >/dev/null
 }
 

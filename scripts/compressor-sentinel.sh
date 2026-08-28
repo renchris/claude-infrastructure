@@ -1088,6 +1088,12 @@ freeze_boot_epoch() {
 # into two rows. An exact-match key on a jittering identity is a dedupe that cannot dedupe.
 freeze_boot_already() { # <boot_epoch>
   [ -f "$PANIC_LEDGER" ] || return 1
+  # LEAVE THE `-q`-less shape alone: pipefail-sigpipe-lint grandfathers this line (clause 4c saw it
+  # once function-body tracking landed), but it is a detector FALSE POSITIVE and not a defect. The
+  # clause-2 test is `awk … exit`, which cannot tell an early `exit` from an `END{exit}` — and this
+  # awk exits only at END, i.e. after DRAINING every line jq wrote. Nothing is ever SIGPIPEd, so the
+  # rc is the verdict it computed. Draining harder would change nothing; the allowlist row is the
+  # honest record.
   grep '"kind":"freeze"' "$PANIC_LEDGER" 2>/dev/null | jq -r '.boot // empty' 2>/dev/null \
     | awk -v b="$1" 'BEGIN{hit=1} { d = $1 - b; if (d < 0) d = -d; if (d <= 5) hit=0 } END{exit hit}'
 }

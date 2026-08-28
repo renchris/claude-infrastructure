@@ -124,8 +124,12 @@ proc_age_s() {
 # The TCP port this pid listens on (the dev port). First LISTEN wins; the 9xxx inspector port is
 # 127.0.0.1-bound and sorts after the *:PORT dev port in lsof output, so filter to the wildcard form.
 proc_port() {
+  # DRAINED (`!done` rather than `exit`): this pipeline is the LAST command of the function, so its
+  # status IS proc_port's return value. An `exit` here orphans lsof mid-write, `set -o pipefail`
+  # promotes the 141, and the function returns 141 on a port it just found. Same first-match-wins
+  # output, no early exit. (pipefail-sigpipe-lint clause 4c.)
   "$LSOF_CMD" -nP -p "$1" -a -i 2>/dev/null \
-    | awk '/LISTEN/ { split($9,a,":"); if (a[1] == "*") { print a[2]; exit } }'
+    | awk '/LISTEN/ { split($9,a,":"); if (a[1] == "*" && !done) { print a[2]; done=1 } }'
 }
 
 # Established connections ON THE DEV PORT only — never a bare per-pid count (see header D-b).

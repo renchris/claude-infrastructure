@@ -645,7 +645,11 @@ is_registered_desk(){ # $1=telemetry session_id → 0 iff it is the registered m
 pid_alive_owner(){ # $1=pid → 0 iff alive AND its process command marks it a claude session owner
   local p="$1"
   [ -n "$p" ] && kill -0 "$p" 2>/dev/null || return 1
-  ps -p "$p" -o command= 2>/dev/null | grep -qiF "$OWNER_PAT"
+  # DRAINED, not -q: this pipeline is the FUNCTION-FINAL statement, so its rc IS this predicate's
+  # answer. `grep -q` exits on the match, `ps` takes SIGPIPE, and a LIVE claude owner reads as dead
+  # — which routes a row to DEAD and spends its insurance. One `ps` line is one write today, so it
+  # is latent; the shape is not. (clause 4c.)
+  ps -p "$p" -o command= 2>/dev/null | grep -iF "$OWNER_PAT" >/dev/null
 }
 
 # ── GC — drop a LIVE-OWNER telemetry row that has been stale past the horizon (item fdc101e8b0c7). ──

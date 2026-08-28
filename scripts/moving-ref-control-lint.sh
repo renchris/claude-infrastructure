@@ -97,8 +97,9 @@ in_own() {  # $1=basename · $2=own-set text · $3=1 if an own-set was supplied 
   # (load ~13), safe to 17,427 bytes and ALWAYS inverted from 23,227 — not the 64 KiB pipe buffer.
   # LATENT here rather than live, because this own-set is CHANGED PATHS and the whole .bats corpus
   # is 16,945 bytes of them; that ceiling is an operational quantity and it grows. Draining costs
-  # nothing and keeps the same 0/1 ladder the callers read. (backlog ca97c678b18b: pipefail-sigpipe
-  # -lint cannot SEE a function-final pipeline, so no ratchet would have caught this.)
+  # nothing and keeps the same 0/1 ladder the callers read. (backlog ca97c678b18b: the lint could
+  # not SEE a function-final pipeline when this was drained by hand, so no ratchet would have caught
+  # it. CLOSED 2026-08-28 — clause 4c tracks function bodies; re-seeding `-q` here goes RED.)
   printf '%s\n' "$2" | sed 's:.*/::' | grep -xF "$1" >/dev/null
 }
 

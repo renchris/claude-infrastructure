@@ -90,9 +90,12 @@
 #      moment the write exceeds the 64 KiB pipe buffer. The command word is identical in both cases,
 #      so only the argument can discriminate;
 #   4. the pipeline's status is CONSUMED — an `if`/`elif`/`while`/`until` condition, a `!` operand,
-#      or (under `set -e`) a bare pipeline or a top-level `VAR=$(…)`. `local`/`declare`/`export`
+#      a following `&&`, a `; rc=$?` capture (4b), the FUNCTION-FINAL position (4c — the last
+#      command of a function body sets its RETURN VALUE, which the caller reads), or (under
+#      `set -e`) a bare pipeline or a top-level `VAR=$(…)`. `local`/`declare`/`export`
 #      MASK the status (the builtin's own 0 wins), and `[ -n "$( … )" ]` discards it, so neither is
-#      a violation however exposed the pipeline inside looks;
+#      a violation however exposed the pipeline inside looks — and 4c inherits those masks rather
+#      than routing around them;
 #   5. it is NOT already mitigated by a trailing `|| true` / `|| <fallback>`, which swallows the 141
 #      before anything reads it.
 #
@@ -310,6 +313,46 @@ BEGIN { FS = "" }
   # measurement; it is not folded in here. g31/g32 pin both directions of what IS fixed.
   if (line ~ /^#/ || line == "") next
 
+  # ── Clause 4c state: FUNCTION BODIES ────────────────────────────────────────────────────────
+  # A function-final pipeline is the ONE consumer position that is not on the line. `f() { p |
+  # grep -q X; }` makes the pipelines status the FUNCTIONs return value, and the caller reads it
+  # (`if f; then`) from another file entirely. Clause 4 asks "does anything READ this pipelines
+  # status" and looks only at this line, so with no errexit it answered no and the site was
+  # invisible — the same blind spot the $? capture (4b) closed for the other off-line reader.
+  #
+  # Deciding it needs ONE line of LOOKAHEAD (is the next code line this functions closing brace?),
+  # which a streaming detector does not have. So the hit is BUFFERED in pend_* and emitted at the
+  # closer; any other code line in between expires it. Comment and heredoc lines `next` above this
+  # point and so leave the buffer intact, which is correct — a comment before the `}` does not stop
+  # the pipeline being the last thing the function runs.
+  #
+  # DELIBERATELY CONSERVATIVE in three directions, because a ratchet that over-reaches costs more
+  # than one that under-reaches: the closer must be a bare `}` at the openers OWN indentation (a
+  # nested definition ends tracking for its parent), the opener must put `{` at end of line (a
+  # one-line `f() { p | grep -q X; }` is not seen), and a pipeline ending an `if`/`case` arm inside
+  # the function is not seen either, since the next code line is `fi`/`esac`.
+  #
+  # It does NOT ask whether any caller actually reads the rc, and cannot: the definition site does
+  # not know its callers, and a functions return value is its contract whether or not todays
+  # callers test it. Flagging the shape is the conservative direction; the allowlist grandfathers
+  # what stands.
+  #
+  # The trailing `(#.*)?` on BOTH tests is not tidiness — it is the house style, and leaving it out
+  # made this clause silently miss the three sites that motivated it. `in_own() {  # $1=basename …`
+  # is how every own-scope predicate in this tree is written, and an opener test anchored at `{$`
+  # reads it as an ordinary command: fn_open stays 0, the function-final pipeline four lines down is
+  # never buffered, and the census reads a cheerful zero. Caught by re-seeding `-q` into the three
+  # hand-drained sites and demanding RED — the control that turned a passing selftest into a real
+  # one. (memory: probe-that-acts-on-absence-must-confirm-presence.)
+  if (fn_open && raw ~ ("^" fn_indent "\\}[ \t]*(#.*)?$")) {
+    if (pend) printf "%s:%d:%s\n", FILE, pend_no, pend_txt
+    fn_open = 0
+  }
+  pend = 0
+  if (raw ~ /^[ \t]*([A-Za-z_][A-Za-z0-9_:.-]*[ \t]*\(\)|function[ \t]+[A-Za-z_][A-Za-z0-9_:.-]*([ \t]*\(\))?)[ \t]*\{[ \t]*(#.*)?$/) {
+    match(raw, /^[ \t]*/); fn_indent = substr(raw, 1, RLENGTH); fn_open = 1
+  }
+
   if (match($0, /<<-?[ \t]*[\x27"]?[A-Za-z_][A-Za-z0-9_]*[\x27"]?/)) {
     tok = substr($0, RSTART, RLENGTH)
     sub(/^<<-?[ \t]*/, "", tok); gsub(/[\x27"]/, "", tok)
@@ -360,7 +403,14 @@ BEGIN { FS = "" }
   # the ASSIGNMENT form after the last stage separates them; g15/g16 pin both directions.
   # (No apostrophes here: this is inside the single-quoted DETECT_AWK string.)
   cap = (last ~ /;[ \t]*[A-Za-z_][A-Za-z0-9_]*=\$\?/)
-  if (amp == 0 && !cap && !consumed(line, HASE)) next
+  if (amp == 0 && !cap && !consumed(line, HASE)) {
+    # Clause 4c — nothing on THIS line reads the status. If we are inside a function body and this
+    # is a BARE pipeline (consumed() would say yes were errexit on — so not a `local` mask, not an
+    # `[ -n "$( … )" ]` discard, not an argument substitution), buffer it: it is a violation iff the
+    # function ends here. Under errexit the same line already printed above and never reaches this.
+    if (fn_open && consumed(line, 1)) { pend = 1; pend_no = FNR; pend_txt = line }
+    next
+  }
 
   printf "%s:%d:%s\n", FILE, FNR, line
 }'
@@ -674,12 +724,55 @@ if git status --porcelain | grep -q .; then :; fi
 EOF"
   expect g31 GREEN "a comment ahead of a REAL heredoc still leaves the body as DATA"
 
+  # ── THE FUNCTION-FINAL PIPELINE (2026-08-28) ─────────────────────────────────────────────────
+  # The last off-line reader of a pipeline's status, and the one with the longest reach: a
+  # function's final command sets its RETURN VALUE, which a caller in another file tests with
+  # `if f; then`. Clause 4 looked only at the line, so with no errexit this was invisible — the
+  # same blind spot 4b closed for `; rc=$?`. Measured on this tree: census 126 → 138 with the clause
+  # in and nothing yet drained, then back to 136 once five are, and ZERO of the 126 incumbents lost
+  # (compared on file+TEXT, not file:LINE — this commit's own comments shift line numbers, and a
+  # shifted row reads as one lost plus one new on a naive diff). All fifteen new rows are real.
+  # FIVE are drained in the same commit — the two PREDICATES whose rc IS the
+  # answer (`is_legacy_uuid` in bin/cc-comms-alarm-sweep, `pid_alive_owner` in lead-supervisor.sh)
+  # plus the three found by the first cut (proc_port, plist_label, run_suite) — and the remaining
+  # TEN are value-producers whose callers read the bytes and never the rc, so they are grandfathered
+  # BY FILE WITH THEIR COUNT, which is this ratchet's whole answer to a widening (see the header:
+  # a flag-day over incumbents is a larger and less reversible change than the bug it prevents).
+  #
+  # ONE of those ten is a detector FALSE POSITIVE and is recorded as such rather than "fixed":
+  # scripts/compressor-sentinel.sh:1092 ends in `awk … END{exit hit}`, and clause 2's `awk … exit`
+  # test cannot tell an early exit from an END one. An END exit has already DRAINED its input, so
+  # nothing is ever SIGPIPEd there. Narrowing clause 2 moves incumbent counts and wants its own
+  # measurement; it is filed, not folded in.
+  #
+  # RUNTIME-PROVED before the detector was touched, on the shape r16 carries: `f() { yes … |
+  # grep -q pad; }` under `set -uo pipefail`, called as `if f; then` — 3/3 FALSE on a match, rc 141.
+  #
+  # g17/g18 are what stop this being a widening, and the variable between the three is exactly the
+  # two questions clause 4c adds: is the pipeline LAST in the body (g17: no), and would clause 4
+  # have read its status at all were errexit on (g18: no — `local` masks it, and 4c must inherit
+  # that mask rather than route around it).
+  mk_noe r16 "f() {
+  git status --porcelain 2>/dev/null | grep -q .
+}
+if f; then :; fi"
+  expect r16 RED "a function-final pipeline — its rc IS the return value the caller reads"
+  mk_noe g17 "f() {
+  git status --porcelain 2>/dev/null | grep -q .
+  printf 'done\\n'
+}"
+  expect g17 GREEN "the same pipeline NOT last in the body — nothing reads it, no errexit"
+  mk_noe g18 "f() {
+  local v=\$(git log --oneline | head -1)
+}"
+  expect g18 GREEN "function-final but LOCAL-masked — 4c inherits clause 4's masks"
+
   local total=$((pass+fail))
   if [ "$fail" -gt 0 ]; then
     echo "⛔ $SELF_NAME --selftest: $pass/$total — the detector no longer discriminates." >&2
     return 1
   fi
-  echo "✓ $SELF_NAME --selftest: $pass/$total (both directions; builtin producer RED on a variable or substitution, GREEN on a literal)"
+  echo "✓ $SELF_NAME --selftest: $pass/$total (both directions; builtin producer RED on a variable or substitution, GREEN on a literal; function-final pipeline RED, mid-body and local-masked GREEN)"
   return 0
 }
 

@@ -89,7 +89,11 @@ UUIDS
 
 is_legacy_uuid() { # <token>
   [ -n "${1:-}" ] || return 1
-  printf '%s\n' "$LEGACY_UUIDS" | grep -qxF "$1"
+  # DRAINED, not -q: this pipeline is the FUNCTION-FINAL statement, so its rc IS the answer every
+  # caller reads. Under the pipefail above, `grep -q` exits on the match, printf takes SIGPIPE, and
+  # a LEGACY uuid reads as NOT-legacy — the fail-open direction for a sweep. Latent only while this
+  # heredoc stays under the 64 KiB pipe buffer, which nothing enforces. (clause 4c.)
+  printf '%s\n' "$LEGACY_UUIDS" | grep -xF "$1" >/dev/null
 }
 
 # classify <file> → prints "R0" | "R1" | "R2" (fixture-origin, naming the rule) or "" (real/keep)
