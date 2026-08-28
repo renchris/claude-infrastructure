@@ -1847,11 +1847,19 @@ assert "next3 strand ~5pp of 8 · p96 of its own 3h burns" in line, line
 # RP-26 — a zero-strand account still RENDERS, and renders LAST. A sorted() over a list filtered
 # on strand > 0 passes RP-25 and drops this row silently.
 assert "next no strand" in line, line
-assert "⚠ WALL trajectory" in line, line
 assert line.rstrip().split(chr(10))[-1].strip().startswith("next no strand"), line
-# ...and its burn RATIO survives unchanged, while the >100 PROJECTION does not render as a number
-assert "1.62× burn" in line, line
-assert "162" not in line and "163" not in line, line     # the RATIO, never the ~162% projection
+# ...and the burn RATIO is now ABSENT on this row, which is the same defect being fixed one layer
+# up. UPDATED IN PLACE (weekly-reset-utilization-2026-08-25 §3/§6): this case used to assert
+# "1.62× burn" and "⚠ WALL trajectory" here. `next` at 114 h left is phase 0.32, and
+# `wall_projection` divides by elapsed fraction, which corrects PHASE only if burn is LINEAR —
+# it is back-loaded 2.3x in the last 30% of the window, so the mid-week figure carries a
+# backtested 46 pp mean error against 5.3 pp for a constant that ignores it. This very row is
+# the measured false alarm: `next` read 46-52% mid-week on 2026-08-25, flew ⚠ WALL, closed at 99%.
+# Both spellings therefore go silent HERE and both are pinned inside the last 48 h by RP-16c in
+# tests/claude-accounts-strand.bats — restoring either one here re-introduces what it cost.
+assert "⚠ WALL trajectory" not in line, line
+assert "× burn" not in line, line
+assert "162" not in line and "163" not in line, line     # never the ~162% projection either
 assert "BEHIND" not in line, line                        # 47ddbf47c DELETED it: on 2026-08-16 three freshly-reset windows each read
                                                          # BEHIND, which is correct and reads as gross under-utilisation.
 # an abstention renders as the WORD plus its reason, never as a zero (L2)

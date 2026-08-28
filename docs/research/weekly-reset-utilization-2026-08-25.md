@@ -194,6 +194,29 @@ The one real cost in view is `next3`'s ~8 pp, and with 3.8 h left that is essent
   uninformative, and speaks only in the last ~2 days where linear and empirical converge
   (day 6: −17 pp; day 7: −2 pp).
 
+  ✅ **DONE 2026-08-28 — the cheap correct move, exactly as scoped.** `MIN_ELAPSED_FRAC` in
+  `bin/claude-accounts` goes `0.05 → 5/7`, so `burn_ratio` / `proj_end_pct` / `wall_risk` are
+  stamped and rendered only inside a window's last 48 h. **The arithmetic below the floor is
+  untouched** — only where it is published moved, and a mutant guard in the suite drops the floor
+  to 0 and asserts the old mid-week values return exactly, so an abstain-everywhere stub cannot
+  pass. The empirical-trajectory alternative was NOT built, and axis-D §5 is why: it was already
+  built, backtested leave-one-out, and LOSES to linear by 37% (54.1 vs 39.5 MAE), and the shape is
+  a fossil of the operator's own end-of-window rush — an estimator fitted to it goes wrong in the
+  direction of complacency the moment the planner reading this surface works.
+
+  **What went silent, and what did not.** The mid-week `N.NN× burn` figure and the mid-week `⚠ WALL`
+  flag; on the measured record both were false alarms, and the one that fired here is the `next`
+  row in §4 — 46–52% mid-week, projected 119% `⚠ WALL`, closed at **99%**. `wk_strand_pp` is
+  unaffected and still speaks mid-week, which is the surface that carries the real mid-week signal.
+  Both spellings are re-pinned inside the last 48 h (`RP-16c`, `tests/claude-accounts-strand.bats`),
+  so the flag is silenced where it lied and survives where it is trustworthy.
+
+  **Honest residual, stated so the next session does not have to re-derive it.** Even inside the
+  speaking window this projection is not good: 18.3 pp MAE at phase 0.9 against the constant's
+  5.3 pp. It is a coarse pace indicator, never a forecast, and the docstring says so. N is 8
+  windows — re-derive the floor, **in either direction**, after ≥2 more full cycles rather than
+  tuning it on this sample (§5 item 2 governs).
+
 **Reproduce:** the analysis scripts are in this session's scratchpad; the one-command version of
 the retrospective is `python3 scripts/desk-strand-replay.py`.
 

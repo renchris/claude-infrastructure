@@ -2154,7 +2154,10 @@ def apply_burn(rows, cfg, samples=None):
     # percentage (the governed dispatcher, USAGE_TELEMETRY_100P §4 M1, admits work against this).
     # Absent keys mean "too early to say" — see wall_projection's abstain rule; a consumer that
     # treats a missing burn_ratio as 0 would read a fresh window as idle, which is the exact
-    # inversion this metric exists to prevent.
+    # inversion this metric exists to prevent. SINCE THE FLOOR WIDENED TO 5/7, ABSENCE IS THE
+    # COMMON CASE, NOT THE EDGE ONE: these three keys are stamped only inside a window's last
+    # 48 h, so a consumer must route on their PRESENCE and fall back to `wk_strand_pp` (which
+    # speaks mid-week) rather than defaulting them.
     # M5: rank each account's REQUIRED rate inside its own realised history. Stamped here, beside
     # the other burn facts, because this is the one place that holds both the rows and the series;
     # pace_line renders what is stamped, so there is still exactly one renderer (L3).
@@ -2284,7 +2287,10 @@ def fmt_burst(bp):
 
 
 WEEK_H = 168.0          # the weekly bucket's span; reset stamps are exactly 7 d apart
-MIN_ELAPSED_FRAC = 0.05  # ~8.4 h — below this a projection is noise, so we ABSTAIN
+# ABSTAIN unless the window is inside its LAST ~2 DAYS. Was 0.05 (~8.4 h), which floored only the
+# fresh-window false alarm; 5/7 also floors the MID-WEEK one, which is the larger of the two and
+# was the one shipping. See wall_projection's docstring for the measurement.
+MIN_ELAPSED_FRAC = 5.0 / 7.0        # 0.714 — 48 h left of 168
 
 
 def wall_projection(r):
@@ -2304,6 +2310,38 @@ def wall_projection(r):
     a 1% reading projects to 168%, so an un-floored projection would page on every fresh window —
     manufacturing the very false alarm the metric exists to remove. Returning None is the honest
     answer to "too early to say", per the repo's abstain-never-impute rule.
+
+    THE FLOOR IS 5/7, NOT 0.05, AND THE WIDENING IS THE CORRECTION — the arithmetic above divides
+    by elapsed fraction, which removes the PHASE error only if burn is LINEAR, and it is not
+    (docs/research/weekly-reset-utilization-2026-08-25.md §3; drain-telemetry-2026-08-25
+    axis-D §4-5). Burn is back-loaded: phase 0.0-0.7 runs 10.9 pp/day and phase 0.7-1.0 runs
+    25.2 pp/day, a 2.3x acceleration in the last 30% of the window. So a phase fix LOOKS like it
+    corrects for shape too, and the shape error survived underneath it. Backtested against the 8
+    completed windows, this projection's mean absolute error is:
+
+      phase   0.1    0.3    0.5    0.7    0.9
+      MAE    47.2   46.9   46.2   36.7   18.3   pp
+
+    against 5.3 pp for a CONSTANT predictor that ignores the reading entirely and always answers
+    ~94. Below 5/7 the published number was 8.7x worse than that constant — mid-window weekly
+    percentage carries essentially no information about where the window lands. Two windows sat
+    at 12% and 17% on day 3 and closed at 98% and 100%; the one account that read ahead of pace
+    projected 119% and flew a WALL that never arrived, closing at 99%.
+
+    THE FIX IS SILENCE, NOT A BETTER CURVE. A shape-corrected projector was built and backtested
+    leave-one-out and LOSES to this linear one by 37% overall (54.1 vs 39.5 MAE): between-window
+    shape variance dominates the mean shape, and dividing by a small S amplifies it. Worse, the
+    shape is a fossil of the operator's end-of-window rush — if the planner reading this surface
+    works, the rush stops, the shape flattens, and an estimator fitted to it is then wrong in the
+    direction of complacency. Do not ship a shape-fitted weekly projector.
+
+    WHAT THIS COSTS, STATED PLAINLY. The mid-week `N.NNx burn` figure and the mid-week `WALL`
+    flag both go silent; on the measured record both were false alarms, and pace_line's
+    `wk_strand_pp` nowcast is unaffected and still speaks mid-week. What survives is the last
+    48 h, where linear and empirical converge (day 6 shortfall -17 pp, day 7 -2 pp). Note that
+    18.3 pp at phase 0.9 is still 3.5x the constant's error: inside the window this is a coarse
+    pace indicator, never a forecast. N is 8 windows — re-derive the floor, in either direction,
+    after >=2 more full cycles rather than tuning it on this sample.
     """
     wp, wrh = r.get("weekly_pct"), r.get("weekly_reset_h")
     if wp is None or not isinstance(wrh, (int, float)):

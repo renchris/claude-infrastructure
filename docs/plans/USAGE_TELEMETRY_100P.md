@@ -1471,6 +1471,15 @@ saturates to 1.0 and is caught only here.*
 and its 5% abstain floor are untouched by this spec; the 5h `burn_ratio` render survives as the one
 raw-percentage figure L1 permits.
 
+> ⚠️ **SUPERSEDED ON THE FLOOR (2026-08-28).** The 5% floor named here shipped and was later
+> measured wrong — not in its arithmetic but in its WIDTH. Dividing by elapsed fraction corrects
+> PHASE only under linear burn; burn is back-loaded 2.3×, so the mid-week projection carries a
+> 46 pp mean absolute error against 5.3 pp for a constant that ignores the reading entirely.
+> `MIN_ELAPSED_FRAC` is now **5/7** — the projection speaks only inside a window's last 48 h.
+> Evidence and the refuted shape-corrected alternative: `docs/research/weekly-reset-utilization-2026-08-25.md`
+> §3/§6 and `docs/research/drain-telemetry-2026-08-25/axis-D-windows.md` §4-5. The suite is now
+> 12 cases, not 8.
+
 ---
 
 ### §5.4 Acceptance

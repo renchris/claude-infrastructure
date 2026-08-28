@@ -225,12 +225,22 @@ print("OK")'
   # incumbent renders 154.6%, this EWMA 231.4%, against a truth near 100%), so the clamp keeps
   # the shortfall regime -- where the arithmetic converges -- and discards the overshoot. The
   # account is reported as on a WALL TRAJECTORY, which is true and actionable; "248%" is neither.
+  #
+  # ASSERTION UPDATED IN PLACE; THIS CASE'S OWN INVARIANT IS UNCHANGED. The WALL arm moved to
+  # RP-16c, because THIS fixture's phase is 0.32 and `wall_projection` now abstains below 5/7
+  # (weekly-reset-utilization-2026-08-25 §3/§6). That is not collateral damage — this row IS the
+  # backtested false alarm: `next` read 46-52% mid-week on 2026-08-25, flew ⚠ WALL, and closed
+  # at 99%. The clamp and the floor are two guards on ONE regime, reached from opposite ends:
+  # the clamp refuses to render the overshoot as a NUMBER, the floor refuses to render it as a
+  # FLAG this early. What must still hold here is the clamp: strand is 0.0 and no projection
+  # digits leak. RP-16c pins the flag where it is trustworthy, so neither arm is merely deleted.
   run python3 -c "$LOAD"'
 r = {"acct": "next", "weekly_pct": 52, "weekly_reset_h": 114.0, "burn_wk_ewma_ph": 1.725}
 st = ca.wk_strand_pp(r)
 assert st == 0.0, st
 line = ca.pace_line([r])
-assert "⚠ WALL trajectory" in line, line
+assert "next no strand" in line, line
+assert "⚠ WALL trajectory" not in line, line   # phase 0.32 — the floor, see RP-16c
 assert "248" not in line, line
 assert "231" not in line, line
 assert "154" not in line, line
@@ -251,6 +261,27 @@ assert abs(ca.wk_strand_pp(r2) - 8.0) < 1e-9, ca.wk_strand_pp(r2)
 assert ca.wk_strand_pp({"weekly_pct": 50, "weekly_reset_h": 200.0, "burn_wk_ewma_ph": 0.5}) is None
 assert ca.wk_strand_pp({"weekly_pct": 50, "weekly_reset_h": 0.0, "burn_wk_ewma_ph": 0.5}) is None
 assert ca.wk_strand_pp({"weekly_pct": None, "weekly_reset_h": 10.0, "burn_wk_ewma_ph": 0.5}) is None
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-16c: the WALL flag SURVIVES inside the last 48h — the floor silences it, never kills it" {
+  # THE COUNTERPART TO RP-16, and the reason its WALL arm could move rather than be deleted.
+  # `wall_projection`'s widened floor removes the mid-week wall flag because that flag was
+  # measurably a false alarm; it must NOT remove the flag outright. An account that reaches 100%
+  # is DOWN until reset (next3 sat at exactly 100% for 11.2 h on 2026-08-11), so dropping the
+  # warning where it is trustworthy is a strict loss and exactly what a lazy fix would do.
+  #
+  # Same account, same shape, one variable moved: phase 0.32 -> 0.79 (36 h left). The flag comes
+  # back, and the >100 projection still does NOT render as a number — both guards at once.
+  run python3 -c "$LOAD"'
+r = {"acct": "next", "weekly_pct": 92, "weekly_reset_h": 36.0, "burn_wk_ewma_ph": 1.725}
+assert ca.wk_strand_pp(r) == 0.0, ca.wk_strand_pp(r)
+line = ca.pace_line([r])
+assert "⚠ WALL trajectory" in line, line
+assert "1.17× burn" in line, line     # 0.92 / (132/168) — the RATIO renders, the projection never
+assert "117" not in line, line
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
