@@ -73,3 +73,43 @@ Neither `cc-backlog` verb could be run from here — this container has no
 `~/.claude/autonomy/backlog.jsonl`, so `block`/`done`/`reopen` would have created a fresh store
 that nothing reads. A write that no reader can see is a fake discharge, which is the failure this
 document exists instead of.
+
+## 5. Second burn, 2026-08-28 — the doc is on trunk and the dispatcher does not read it
+
+Re-dispatched to another `anthropic_cloud` VM four days after §1–§4 landed. Everything above held;
+nothing in it needed revising. What this run adds is one **measurement** where 08-24 had an
+inference, and one conclusion about where a fix can live.
+
+**The refusal is now measured, not argued.** 08-24 reasoned from the session's declared scope.
+This run asked GitHub for the file and was denied at the tool boundary:
+
+```
+mcp__github__get_file_contents(renchris/reso-management-app, .github/workflows/tenant-drift.yml)
+→ Access denied: repository "renchris/reso-management-app" is not configured for this session.
+  Allowed repositories: renchris/claude-infrastructure
+```
+
+So the premise is **still not refuted and still not confirmable here**: whether the one-line cure in
+§3 has landed on reso's trunk in the 18 days since run `31401486855` cannot be read from this venue
+by any route — not the filesystem, not the git remote, not the GitHub API. §3 stands as written and
+is what an on-box session should verify against reso's trunk before writing anything.
+
+**A document is the wrong carrier and this run proves the cost.** `venue-foreign-repo-recurrence-2026-08-17.md`
+already established that nothing in the dispatch chain reads prose, and that a disproof written into
+an item's own DoD-ref plan bought two days. This file was the most on-topic location available for
+this item, it landed on trunk, and it bought four days and then zero — the item was fired again, at
+its own doc, into the same wall. Two cloud slots have now been spent producing analyses that agree
+with each other and cannot reach the store that dispatches.
+
+**The residue is therefore one operator action, unchanged from §4 and now twice-owed.** Run on-box,
+where the store exists:
+
+```
+cc-backlog block 485f8f87eb5f --needs "dispatch on-box: target is renchris/reso-management-app/.github/workflows/tenant-drift.yml, unreachable from a cloud VM (see docs/research/tenant-drift-venue-refusal-2026-08-24.md)"
+```
+
+Until that row flips, this item is a standing cloud-slot burn on a ~9-day timer, and the next VM
+will write a sixth `venue-*` document saying so. The class-level remedy remains the open decision
+filed 2026-08-16 — fail-closed at fire time (`bin/cc-offload:84`) vs route-by-`item.project` — and
+this item is the case that **route-by-project would not have caught**: its `project` field is
+accurate, so only fail-closed on the (`attached_repo`, `subject`) pair reaches it.
