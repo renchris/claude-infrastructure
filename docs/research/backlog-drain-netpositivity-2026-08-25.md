@@ -218,6 +218,10 @@ from *unknown freshness* to *known*. Existence proof: the 2026-08-24 pass falsif
 closed within 3 minutes. **#1 because it attacks residence-time decay directly and makes every later
 decision cheaper.**
 
+> 🚨 **BOTH HALVES OF L1 ARE NOW REFUTED — see §11 before actioning this row.** The sweep has had a
+> scheduled caller since before this document was written, and the ~400-row currency conversion is
+> structurally unreachable by running it. What remains is a *coverage* task, not a *scheduling* one.
+
 **L2 · Adopt `--condition` at the four uncured mint sites — AGENT, ~half a day.**
 `scripts/ship-land.sh:1000`, `scripts/postland-verify.sh:793-797`, `scripts/deploy-live.sh:725,870`,
 `scripts/autonomy-sweep.sh:381`. Prospectively removes ~**5–8 adds/day**. The pattern is proven twice
@@ -448,3 +452,95 @@ agent free-text filed **mid-session**, which no hook reaches — only the `CLAUD
 and that is advisory. So mechanical coverage is roughly the close-time third; the rest rides on the
 rule being read and followed. **If the test above fails, look here first** before concluding the
 diagnosis was wrong.
+
+---
+
+## 11. CORRECTION — L1 is refuted on both halves; the residue is COVERAGE, not scheduling (2026-08-28)
+
+L1 was dispatched as backlog item `37b112d8950d` ("run the falsifier sweep across all 457 unvalidated
+live rows, then close-falsified"). Reading the cited machinery **on `origin/main`** before running
+anything — the discipline §2 itself prescribes, and which `scripts/ship-land.sh:1020-1024` records
+having saved trunk once already — refutes the row's premise twice over. Both refutations are pure
+code reads against trunk and need no access to the store.
+
+### 11.1 The scheduling half was already cured, and this document inherited a stale finding
+
+L1 says *"This is a scheduling problem, not a design problem"* (§2), resting on the zero-caller census
+in `docs/research/backlog-pipeline-recon-2026-08-12/recon-staleness.md` (*"`cc-premise sweep` … zero
+callers. Not in `hooks/`, `scripts/`, `bin/`, `commands/`, `skills/`, any settings.json, any
+LaunchAgent"*). **That census was true on 2026-08-12 and false by 2026-08-16.** On trunk today:
+
+| the claim | trunk says |
+|---|---|
+| the sweep has no caller | `scripts/autonomy-sweep.sh:813-816` runs `cc-premise sweep --json --record --limit 150 --close-falsified 5` |
+| nothing schedules it | `launchd/com.chrisren.autonomy-sweep.plist` — `StartInterval 300` |
+| it would be a one-shot pass | its own currency gate, `CC_PREMISE_PASS_EVERY_S` default **21600 s** (`autonomy-sweep.sh:754`) — **four passes a day** |
+
+The wiring block carries its own measurements dated 2026-08-12 and 2026-08-16 and cites the shard's
+backlog id `d23f3a444984`, so it predates this document by ~9 days. **The 2026-08-24 pass this
+document offers as L1's "existence proof" was not a manual demonstration of an unrun capability — it
+was the scheduled job doing its job.** Nothing in L1's scheduling half is left to build or to run.
+
+### 11.2 The currency half is unreachable by construction, and §2's own numbers say so
+
+L1 projects that a sweep *"converts ~400 more from unknown freshness to known"*. It cannot, and the
+reason is a deliberate design decision documented at the point of enforcement:
+
+- `bin/cc-premise:3029` splits every non-done row by `probe_capability` **before any probe runs**.
+  That arbiter (`:2121-2172`) returns `none` unless the row carries a **stored falsifier**, a
+  **plan `dodRef`**, or is a **postland-RED** row of this repo.
+- `cmd_sweep` stamps only rows where a probe actually executed — `:3050` appends to `all_verdicts`
+  under `if probe_out.get("probed")`, and `:3073` hands *only* that list to `_record_validations`.
+  Its comment states the rule outright: *"A currency stamp records a MEASUREMENT. No measurement, no
+  stamp"* — and explains that stamping unprobed rows *"would drive the never-validated headline to
+  ZERO while ~400 of 564 rows had had nothing run against them … not a weaker metric than none, it is
+  a WORSE one."*
+- `cc-backlog freshness` counts `never_validated` as live rows carrying no `validated` event.
+
+So a row with no probe capability is **structurally unstampable**: it is asked, all three arms decline,
+and it stays "never validated" for any number of passes. The ceiling on what a sweep can ever convert
+is the probe-capable population — **141 rows across 567 non-done on 2026-08-16** per the wiring block's
+own measurement, against §2's **47 live rows carrying a stored probe**. Either figure is an order of
+magnitude short of ~400.
+
+**§2 already contained the refutation and the document folded it the wrong way.** "457 never validated"
+and "only 47 carry a falsifier probe at all" appear in the same paragraph; read together they say the
+457 is a *coverage* deficit with a ~47-row scheduling component, not a 457-row scheduling backlog.
+This is §7's own pattern one more time — a correct count under the wrong fold.
+
+### 11.3 What L1 actually reduces to, and why it is not one day of agent work
+
+The residue is: **author a falsifier for rows that have none**, which is `cc-backlog falsify`, not
+`cc-premise sweep`. That is per-row judgment against a live target, not a batch pass — and §9 has
+already measured the blunt version of it: requiring a falsifier at filing would refuse 98.1% of
+filings at **precision 38.9%**, blocking 1,403 rows that closed as real work. So the honest scoping is:
+
+- **Scenario B (§5) is overstated by roughly 10×.** Its −54 to −89 assumed the sweep reaches ~457 rows.
+  Against a probe-capable ceiling of ~141 non-done (~47 live with a stored probe), the one-time level
+  cut a *sweep* can deliver is single-digit-to-low-double-digit — and the scheduled pass has been
+  taking that cut four times a day, capped at 5 closes per pass, since ~2026-08-16.
+- The **`--close-falsified 5` cap** is the live throttle on retirement rate, not the sweep's existence.
+  Raising it is a one-line config decision with a stated rationale against it
+  (`autonomy-sweep.sh:794-797`: the cap is what stops a probe-corrupting tree change emptying the
+  store in one pass). **That is an operator call, not an agent one.**
+- The genuinely agent-shaped follow-on is **raising `probe_capability` coverage on the rows that
+  matter** — which is `scripts/backlog-ratchet.sh`'s published axis and already has an alarm, a
+  consumer, and a self-retiring row (`autonomy-sweep.sh` §2b-iv). It is a different item from this one.
+
+### 11.4 What this session could NOT do, and why — `ineligible-box`
+
+This item was dispatched to a **cloud container**, and the work it names is local-only state a VM
+cannot see — exactly the `ineligible-box` class §6a measures at 191 of 494 refusals. `~/.claude/autonomy/`
+does not exist here; `bin/cc-backlog freshness` in this container returns **`never validated: 0 of 0
+live rows`** over an absent store, and falsifier probes execute against the operator's checkouts.
+
+**Therefore no live number in this section is measured — every one is read out of trunk source or
+quoted from this document.** Specifically UNKNOWN from here, and to be measured on the box before
+acting: how many of today's live rows are probe-capable; what `never_validated` reads now; how many
+passes the shard cycle currently owes (`premise_shard_pending` in the sweep beat). Run
+`bin/cc-premise sweep --json` and `bin/cc-backlog freshness` on the box for all three.
+
+**Disposition of `37b112d8950d`: its premise is falsified as written.** The scheduling work is done and
+landed; the currency projection is unreachable by the named mechanism. It should close as premise-dead
+with this section as evidence — itself an instance of the ≥23.4% >1-week refutation rate §2 measures,
+arrived at by exactly the cheap trunk re-read §2 says stale rows usually admit.
