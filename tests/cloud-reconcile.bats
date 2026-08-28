@@ -848,3 +848,69 @@ dead_pid() {
   [[ "$output" == *"NOT filled"* ]] || false   # … but the non-verdict is NAMED
   grep -q '^paths=$' "$CC_CLOUD_STATE/nofill.decl"
 }
+
+# ── SEEDED — the §4.1 boot marker is evidence of a boot, never work to land ──────────────────────
+# scripts/lib/cloud-contract.sh now puts the contract into every brief: a cloud session's FIRST act
+# is `git commit --allow-empty` + push, so an absent ref means "never booted" instead of meaning
+# nothing. From that moment a branch on the remote is evidence of a BOOT, and this script's
+# discovery is branch-presence — so without the SEEDED arm every booted session becomes a permanent
+# ELIGIBLE row that `--all` hands to the lander with nothing in it.
+
+push_seed_branch() {  # $1=branch — the contract's first act, replayed exactly: no tree change
+  local b="$1" w
+  w="$D/w-$(printf '%s' "$b" | tr / -)"
+  git -C "$REPO" worktree add -q -b "$b" "$w" main
+  git -C "$w" -c user.email=t@e.com -c user.name=tester commit -q --allow-empty \
+    -m "chore: cloud session boot marker ($b)"
+  git -C "$w" push -q origin "HEAD:refs/heads/$b"
+  git -C "$REPO" worktree remove --force "$w"
+  git -C "$REPO" branch -q -D "$b"
+  rm -rf "$w"
+  true
+}
+
+@test "a SEED-ONLY branch is never handed to the lander — and a working sibling in the same run is" {
+  # The positive control is the whole test: a detector that skips everything is not a detector.
+  push_seed_branch claude/seeded
+  decl seeded claude/seeded
+  push_branch claude/real 1
+  decl real claude/real
+  run env CONFIRM=1 bash "$CR" --all
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"claude/seeded"*SEEDED* ]] || false
+  landed_branches | grep -qx 'claude/real'
+  ! landed_branches | grep -qx 'claude/seeded' || { echo "the boot marker was sent to the lander"; false; }
+  true
+}
+
+@test "--land names the SEEDED case as a non-event (exit 0), not a lander failure" {
+  # It must not read as a fault: the session started and has not returned work yet, which is the
+  # normal state of every cloud session between its first push and its last.
+  push_seed_branch claude/seedone
+  decl seedone claude/seedone
+  run env CONFIRM=1 bash "$CR" --land claude/seedone
+  [ "$status" -eq 0 ]
+  [[ "$output" == *SEEDED* ]] || false
+  [ ! -s "$LAND_STUB_LOG" ]
+}
+
+@test "a branch that only DELETES a file is NOT seed-only — an empty ADD set is not an empty diff" {
+  # GREEN ON BOTH TREES BY DESIGN — the one exception to this file's RED-proof header, and not a
+  # weaker case for it: it is the non-discrimination control proving SEEDED is a discriminator and
+  # not a blanket skip of every branch whose path set comes back empty.
+  # The near-miss that would make this arm strand real work. `cc-cloud fill-paths` excludes
+  # deletions and can come back empty (bin/cc-cloud:368), so "no paths to assert" and "no tree
+  # change" are different facts; conflating them here would silently drop a delete-only result.
+  local w=$D/w-del
+  git -C "$REPO" worktree add -q -b claude/del "$w" main
+  rm "$w/base.txt"
+  git -C "$w" add -A
+  git -C "$w" -c user.email=t@e.com -c user.name=tester commit -q -m "remove base"
+  git -C "$w" push -q origin HEAD:refs/heads/claude/del
+  git -C "$REPO" worktree remove --force "$w"; git -C "$REPO" branch -q -D claude/del
+  decl del claude/del
+  run env CONFIRM=1 bash "$CR" --land claude/del
+  [ "$status" -eq 0 ]
+  ! [[ "$output" == *SEEDED* ]] || { echo "a delete-only branch was misread as the boot marker"; false; }
+  landed_branches | grep -qx 'claude/del'
+}

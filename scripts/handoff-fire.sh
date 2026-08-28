@@ -7983,6 +7983,34 @@ if [ "$CLOUD" = 1 ]; then
   . "$_CC_CC" || { echo "!! cloud fire: cloud-create.sh failed to source" >&2
     emit_fire_refusal cloud-lib-absent "scripts/lib/cloud-create.sh failed to source"; exit 10; }
 
+  # THE ABSENCE CONTRACT IS ALSO A LIBRARY, and for the same reason the create is: the API leg
+  # (bin/cc-offload --via api) needs the identical text, and this block had already drifted from
+  # CLOUD_OBSERVABILITY.md §4.1 by instructing the push as the LAST act instead of the first.
+  # Resolved beside cloud-create.sh and fail-closed on the same reasoning — a payload without the
+  # contract produces a session whose absence means nothing, which is the fire this leg exists to
+  # stop issuing.
+  _CC_CT=""
+  if [ -n "${CC_FIRE_CLOUD_CONTRACT_LIB:-}" ]; then
+    if [ -f "${CC_FIRE_CLOUD_CONTRACT_LIB}" ]; then _CC_CT="${CC_FIRE_CLOUD_CONTRACT_LIB}"; fi
+  else
+    for _CC_CTD in "$(dirname "$_CC_KS")/lib/cloud-contract.sh" \
+                   "$(dirname "$0")/lib/cloud-contract.sh" \
+                   "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/cloud-contract.sh" \
+                   "${HOME:-}/.claude/scripts/lib/cloud-contract.sh"; do
+      if [ -f "$_CC_CTD" ]; then _CC_CT="$_CC_CTD"; break; fi
+    done
+  fi
+  if [ -z "$_CC_CT" ]; then
+    echo "!! cloud fire: REFUSING — scripts/lib/cloud-contract.sh is unreachable." >&2
+    echo "   Without it the brief cannot carry the first-act push, and an absent ref would be" >&2
+    echo "   uninterpretable: never-booted and booted-but-silent read identically (§4.1)." >&2
+    emit_fire_refusal cloud-lib-absent "scripts/lib/cloud-contract.sh unreachable — no absence contract to put in the brief"
+    exit 10
+  fi
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  . "$_CC_CT" || { echo "!! cloud fire: cloud-contract.sh failed to source" >&2
+    emit_fire_refusal cloud-lib-absent "scripts/lib/cloud-contract.sh failed to source"; exit 10; }
+
   # The account's config dir. `--launcher` bypasses account selection entirely and leaves CHOSEN as
   # a placeholder string, which cannot be routed — and an unrouted create would silently run as
   # whichever account this session happens to be, then be declared under a name that is not its
@@ -8028,26 +8056,18 @@ if [ "$CLOUD" = 1 ]; then
   # first, so the control is a real session branch". `switch -c` / `checkout -b` then appeared
   # NOWHERE in this file or any cloud-*.sh; only in that one prose line.
   #
-  # ⚠️ Note WHY the sibling lane needs none of this, because the difference is not style. The API
-  # create (scripts/cloud-create-api.py:357/411) puts the branch in the create body's
-  # `outcomes.git_info.branches` — "what names the branch the VM may push to", its own words — so
-  # there the name is authorised AT CREATE. cc_cloud_create's signature is `cfg cwd prompt`
+  # ⚠️ Note WHY the sibling lane needs none of THE BRANCH half of this, because the difference is
+  # not style. The API create (scripts/cloud-create-api.py:357/411) puts the branch in the create
+  # body's `outcomes.git_info.branches` — "what names the branch the VM may push to", its own words
+  # — so there the name is authorised AT CREATE. cc_cloud_create's signature is `cfg cwd prompt`
   # (scripts/lib/cloud-create.sh:185): the CLI leg has NO branch parameter at all, so the payload
   # is the only place the branch can be established, and establishing it is a real `switch -c`.
+  # The CONTRACT half is needed on BOTH legs, which is why it is now a shared composer rather than
+  # a block written here: authorising a branch says nothing about WHEN the VM pushes to it, and
+  # "when" is the entire content of §4.1.
   CLOUD_PAYLOAD="$(cat "$PROMPT_FILE")
-"'
-── HOW TO RETURN YOUR WORK (this session runs off-box; read this before you finish) ──
-You are running in an Anthropic-managed VM. Nothing on the operator'"'"'s machine can see your
-filesystem, your processes or your terminal, and you cannot run this repo'"'"'s /ship. Your ONLY
-channel back is a git push, and it must go to exactly this branch — CREATE IT FIRST, then push it:
 
-    git switch -c '"$CLOUD_BRANCH"'
-    git push -u origin HEAD
-
-That branch name was assigned by the firing side and is already declared as the one thing watched
-for your progress — a push anywhere else is invisible and your work will strand. Push whatever you
-have before you finish, even if the work is incomplete; an unpushed cloud session leaves no trace
-of any kind. A local reconciler (scripts/cloud-reconcile.sh) discovers the branch and lands it.'
+$(cc_cloud_return_contract "$CLOUD_BRANCH")"
 
   if [ "$DRY" = 1 ]; then
     echo "-- DRY RUN: cloud fire (no create issued, no quota spent)"

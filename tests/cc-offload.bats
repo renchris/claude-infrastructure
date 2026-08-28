@@ -507,6 +507,56 @@ EOF
   grep -q -- '--repo acme/widget' "$CALLS" || false
 }
 
+@test "up --via api delivers the ABSENCE CONTRACT with the brief, naming the declared branch" {
+  # THE LEG THAT HAD NONE. CLOUD_OBSERVABILITY.md §4.1 makes an absent ref informative only if the
+  # brief requires the session's FIRST act to be pushing that branch. The CLI leg appended a return
+  # block (whose push was the last act); this leg — the DEFAULT one — delivered `cat "$pf"` and
+  # nothing else, so the VM was never told to push at all and its silence carried no information.
+  # C1 NOT-STARTED then fired over sessions that had worked (bin/cc-cloud's `inbox` note: 222 of
+  # 262 live sessions on 2026-08-27 ended a turn at need_input).
+  echo "brief" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin git@github.com:acme/widget.git
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+import sys
+print("session_contract")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+  # The brief itself still arrives — a contract that displaced the work would be a worse defect.
+  grep -q 'brief' "$CALLS" || false
+  grep -q -- '--allow-empty' "$CALLS" || false
+  # …against the SAME branch the declaration names, not a second invented one. Both are read out of
+  # the recorded argv rather than assumed, because a mismatch here is invisible until a live fire
+  # pushes somewhere nothing watches.
+  local br
+  br="$(sed -n 's/.*cc-cloud declare .*--branch \([^ ]*\).*/\1/p' "$CALLS" | head -1)"
+  [ -n "$br" ] || { echo "no branch was declared at all"; false; }
+  grep -q "git switch -c $br" "$CALLS" || false
+}
+
+@test "up --via api REFUSES when the contract library is unreachable — before the quota is spent" {
+  # Fail-closed, and fail EARLY: a create issued without the contract produces a VM that may work
+  # perfectly and still leave the board reading NOT-STARTED. Telling the operator to re-fire a
+  # session that is running is strictly worse than not firing.
+  echo "brief" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin git@github.com:acme/widget.git
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+import sys
+open(__import__("os").environ["CALLS"],"a").write("api "+" ".join(sys.argv[1:])+"\n")
+print("session_never")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_CONTRACT_LIB="$BATS_TEST_TMPDIR/no-such-contract.sh"     CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py"     run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 3 ]
+  ! grep -q '^api ' "$CALLS" || { echo "a create was issued without the contract"; false; }
+  true
+}
+
 @test "up --via rejects anything but api or cli" {
   echo x >"$BATS_TEST_TMPDIR/t.txt"
   run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --via bundle

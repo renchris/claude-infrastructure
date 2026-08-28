@@ -377,6 +377,39 @@ fetch_branch() {  # <repo> <branch> → 0 ok (FETCH_DETAIL non-empty ⇒ healed)
   return 2
 }
 
+# ── SEEDED — the other half of the absence contract, and why the lander must know about it ───────
+# CLOUD_OBSERVABILITY.md §4.1 requires a cloud session's FIRST act to be pushing its branch with an
+# empty commit, so that an absent ref means "never booted" instead of meaning nothing at all
+# (scripts/lib/cloud-contract.sh emits that instruction into every brief). The consequence lands
+# HERE: from the moment the contract is honoured, a branch on the remote is evidence of a BOOT and
+# no longer evidence of WORK, and this script's discovery is branch-presence.
+#
+# Without this arm every booted session becomes a permanent ELIGIBLE row — `paths=` is empty at
+# fire time, so `landed()` cannot assert LANDED (bin/cc-cloud:317, §11.3) — and `--all` hands the
+# lander a branch with nothing in it, taking the landing lock to discover that. The refusal would
+# be harmless and completely uninformative: "lander exited N" over a session that is working fine.
+#
+# THE TEST IS CONTENT, NOT THE COMMIT MESSAGE. cc_cloud_seed_message's text is a convenience for a
+# human reading `git log`; a VM that reworded it, squashed it, or added a second empty commit would
+# still have produced nothing to land, and a message match would send that branch to the lander.
+# An empty range diff answers the question that is actually being asked.
+#
+# ABSTENTION FALLS THROUGH, NEVER SKIPS. rc 2 ("cannot tell" — no merge-base, no local head, a git
+# that failed) leaves the caller on its pre-existing path rather than manufacturing a skip out of a
+# sensor failure. Skipping on a broken sensor is how a real result would go unlanded silently.
+seed_only() {  # <repo> <trunk-ref> <branch> → 0 seed-only (nothing to land) · 1 has content · 2 cannot tell
+  local repo="$1" trunk="$2" b="$3" base rc=0
+  [ -n "$repo" ] && [ -d "$repo" ] || return 2
+  "$GIT_BIN" -C "$repo" rev-parse --verify --quiet "refs/heads/$b" >/dev/null 2>&1 || return 2
+  base="$("$GIT_BIN" -C "$repo" merge-base "$trunk" "refs/heads/$b" 2>/dev/null)" || base=""
+  [ -n "$base" ] || return 2
+  # `git diff --quiet` is tri-valued and the third value is the whole reason this is not a one-
+  # liner: 0 identical, 1 differing, ANYTHING ELSE an error. Reading rc!=0 as "has content" would
+  # be safe here by luck, and reading it as "empty" would strand work; neither is a verdict.
+  "$GIT_BIN" -C "$repo" diff --quiet "$base" "refs/heads/$b" 2>/dev/null || rc=$?
+  case "$rc" in 0) return 0 ;; 1) return 1 ;; *) return 2 ;; esac
+}
+
 diff_size() {  # <repo> <trunk-ref> <branch> → changed-file count (large sentinel if undecidable)
   local n
   n="$("$GIT_BIN" -C "$1" diff --name-only "$2...refs/heads/$3" 2>/dev/null | wc -l | tr -d ' ')" || n=""
@@ -686,6 +719,11 @@ EOF
   rc=0; fetch_branch "$C_REPO" "$TARGET" || rc=$?
   [ "$rc" -eq 0 ] || die 65 "could not bring '$TARGET' into $C_REPO as a local head — $FETCH_DETAIL"
   [ -n "$FETCH_DETAIL" ] && echo "→ $TARGET — $FETCH_DETAIL"
+  rc=0; seed_only "$C_REPO" "$C_TRUNK" "$TARGET" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "· $TARGET — SEEDED: the branch exists but its range against $C_TRUNK changes no file. That is the §4.1 boot marker, which is evidence the VM STARTED, not work to land. Nothing landed, and nothing is wrong."
+    exit 0
+  fi
   derive_paths "$C_ID"
   rc=0; reauthor_branch "$C_REPO" "$C_TRUNK" "$TARGET" "$C_ID" || rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -724,6 +762,11 @@ while IFS= read -r b || [ -n "$b" ]; do
     continue
   fi
   [ -n "$FETCH_DETAIL" ] && echo "→ $b — $FETCH_DETAIL"
+  rc=0; seed_only "$C_REPO" "$C_TRUNK" "$b" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "· $b — skipped: SEEDED (the §4.1 boot marker only — no file changes against $C_TRUNK). The session started; it has not returned work yet."
+    continue
+  fi
   derive_paths "$C_ID"
   rc=0; reauthor_branch "$C_REPO" "$C_TRUNK" "$b" "$C_ID" || rc=$?
   if [ "$rc" -ne 0 ]; then

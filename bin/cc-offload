@@ -81,6 +81,12 @@ CUSTODY_BIN="${CC_OFFLOAD_CUSTODY_BIN:-}"
 [ -n "$CUSTODY_BIN" ] || { for c in "$BINDIR/cc-custody" "$HOME/.claude/bin/cc-custody" "$(command -v cc-custody 2>/dev/null || true)"; do
   [ -n "$c" ] && [ -x "$c" ] && { CUSTODY_BIN="$c"; break; }; done; }
 WEBSETUP_STATE="${CC_OFFLOAD_WEBSETUP_STATE:-$HOME/.claude/autonomy/websetup}"
+# THE ABSENCE CONTRACT (CLOUD_OBSERVABILITY.md §4.1), shared verbatim with the CLI leg. This leg
+# used to deliver the brief with NO return instructions at all — the branch was authorised in the
+# create body and nothing ever told the VM to push to it, let alone to push FIRST — so every
+# session it fired was one whose silence carried no information. Same file the fire path sources,
+# on purpose: two copies of a contract is one copy plus a future divergence.
+CONTRACT_LIB="${CC_OFFLOAD_CONTRACT_LIB:-$ROOT/scripts/lib/cloud-contract.sh}"
 REPO="${CC_OFFLOAD_REPO:-$ROOT}"
 # The create path is interactive-only and 2.1.114 has no --cloud at all; keep ONE default with
 # scripts/lib/cloud-create.sh rather than a second opinion about which binary can fire.
@@ -510,6 +516,17 @@ cmd_up_api() {
   local pf="$1" n="$2" account="$3" dry="$4" i rc=0 fired=0
   local api="${CC_OFFLOAD_CREATE_API:-$ROOT/scripts/cloud-create-api.py}"
   [ -f "$api" ] || { note "cc-offload: missing $api"; return 3; }
+  # FAIL-CLOSED on the contract, before an account's quota is spent. A create issued without it
+  # produces a VM that may work perfectly and still leave the board reading NOT-STARTED, which is
+  # strictly worse than not firing: the operator is told to re-fire a session that is running.
+  if [ -f "$CONTRACT_LIB" ]; then
+    # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+    . "$CONTRACT_LIB" || { note "cc-offload: $CONTRACT_LIB failed to source"; return 3; }
+  else
+    note "cc-offload: missing $CONTRACT_LIB — the brief could not carry the first-act push, so an"
+    note "  absent ref would be uninterpretable (never-booted reads the same as booted-and-silent)."
+    return 3
+  fi
 
   # The router is the arbiter — never re-rank accounts here.
   if [ "$account" = auto ]; then
@@ -568,7 +585,13 @@ cmd_up_api() {
         || note "cc-offload: custody could not be opened for $sid — the close-integrity arm is NOT armed for it."
     fi
 
-    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$(cat "$pf")" >/dev/null 2>&1
+    # THE BRIEF IS THE BRIEF PLUS THE CONTRACT. Delivering `cat "$pf"` alone is what made this
+    # leg's sessions unobservable: the VM was never told to push at all, so `no ref` meant nothing
+    # and C1 NOT-STARTED fired over sessions that had worked (bin/cc-cloud's `inbox` note).
+    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" \
+      "$(cat "$pf")
+
+$(cc_cloud_return_contract "$br")" >/dev/null 2>&1
     local drc=$?
     if [ "$drc" != 0 ]; then
       note "cc-offload: $sid created+declared but the brief did NOT queue (cc-notify exit $drc)."

@@ -150,6 +150,11 @@ session's brief requires its **first act** to be pushing that branch — an empt
 Absence then becomes informative: no ref inside the budget is `BOOTING` (expected); no ref past it
 is `NOT-STARTED` (actionable — re-fire, or check entitlement).
 
+🚨 **This paragraph was PROSE ONLY from the day it was written until 2026-08-27** — no fire leg ever
+composed it into a brief, so every `NOT-STARTED` this document has ever cited was computed against a
+contract nothing enforced. It is now `scripts/lib/cloud-contract.sh`, emitted by both legs; §14
+records what was actually happening in the gap and what had to change on the consuming side.
+
 ### 4.2 The discriminator the whole design rests on
 
 Measured, not assumed:
@@ -1887,3 +1892,86 @@ link at all and the shared checkout is 8 commits behind. `deploy-live` refuses c
 tree descends live HEAD; `postland-verify` has the sha queued and emits ~0.17 greens/day). Until it
 converges, the launchd sweep runs the OLD script and returns nothing — filed `5354fffc4079`.
 
+
+---
+
+## 14 · §4.1 becomes code — the contract had never been composed into a brief (2026-08-27)
+
+*(backlog `0c8b39b67665`. §4.1 is the sentence the whole instrument rests on; this section records
+that nothing implemented it, what that cost, and the consuming-side change that shipping it forced.)*
+
+### 14.1 · What was actually there
+
+Both fire legs were read on trunk before anything was written:
+
+| Leg | What it appended to the brief | What that makes an absent ref mean |
+| --- | --- | --- |
+| `scripts/handoff-fire.sh --cloud` (CLI) | a `HOW TO RETURN YOUR WORK` block ending *"Push whatever you have before you finish"* | a **last**-act push ⇒ absence means "has not finished", not "never booted" |
+| `bin/cc-offload up --via api` (**the default**) | nothing — `cc-notify --cloud "$sid" "$(cat "$pf")"` delivered the brief verbatim | the VM was never told to push at all ⇒ absence means nothing whatsoever |
+
+So `C1 NOT-STARTED` — the one row `bin/cc-cloud` emits as *actionable*, whose recover verb is
+"re-fire, or check entitlement" — has never in this document's history distinguished a VM that never
+booted from one that booted, worked, and ended without pushing. §11.4 states the distinction
+carefully and is right to; what it could not know is that the contract making the distinction
+available was not in the brief that fire sent.
+
+**The scale of the miss is already measured in this repo, by a sibling.** `bin/cc-cloud`'s `inbox`
+note records that on 2026-08-27, **222 of 262** live sessions had ended a turn with
+`post_turn_summary.status_category == "need_input"` — they had worked and asked a question — and
+`classify()` filed every one of them `NOT-STARTED`, because a VM that finishes without pushing has
+no ref. `inbox` fixed the *reading* side by going to the control plane. This is the *writing* side:
+with the seed push in the brief, those sessions would have had a ref from their first second, and
+the ref-derived board would have said `ALIVE`/`STALLED` — true statements — instead of "never ran".
+
+### 14.2 · What shipped
+
+- **`scripts/lib/cloud-contract.sh`** — `cc_cloud_return_contract <branch>`, the single source of the
+  text. One composer, because the defect being fixed *is* a divergence between two legs and a
+  document, and the leg that had lost the contract entirely was the default one. The three lines it
+  instructs, as the session's first act: `git switch -c <branch> 2>/dev/null || git switch <branch>`,
+  `git commit --allow-empty`, `git push -u origin HEAD`. The `||` fallback is contract, not polish —
+  the CLI leg invents a branch name nothing holds, while the API leg authorises (and may
+  materialise) it in `outcomes.git_info.branches`, and one spelling has to work on both.
+- **Both legs source it, fail-closed.** An unreachable library refuses the fire (`handoff-fire.sh`
+  exit 10 · `cc-offload` exit 3) *before* an account's quota is spent, on the reasoning §5's
+  create-library refusal already uses: firing without it produces a session whose silence carries no
+  information, and the operator is then told to re-fire a VM that may be working.
+
+### 14.3 · The consuming side had to change too, and this is the non-obvious half
+
+The moment the contract is honoured, **a branch on the remote is evidence of a BOOT and no longer
+evidence of WORK** — and `scripts/cloud-reconcile.sh`'s discovery is branch-presence. Every booted
+session would have become a permanent `ELIGIBLE` row (`paths=` is empty at fire time, so `landed()`
+cannot assert `LANDED` — §11.3), and `--all` would have handed the lander a branch with nothing in
+it, taking the landing lock to find that out. A `SEEDED` arm (`seed_only()`) now skips a branch whose
+range against trunk changes no file, in both `--land` and `--all`, as a non-event rather than a
+failure.
+
+Two rules there, both load-bearing and both tested:
+
+1. **The test is CONTENT, never the commit message.** `cc_cloud_seed_message` exists for a human
+   reading `git log`; a VM that reworded it, squashed it, or pushed two empty commits still produced
+   nothing to land, and a message match would send that branch to the lander. An empty range diff
+   answers the question actually being asked.
+2. **A delete-only branch is NOT seed-only.** `fill-paths` excludes deletions and can legitimately
+   come back empty (§13.5), so "no paths to assert" and "no tree change" are different facts.
+   Conflating them here would silently strand a real delete-only result — the same
+   never-satisfiable verdict this document keeps re-meeting from a new side.
+3. **Abstention falls through, never skips.** `seed_only` is tri-valued; "cannot tell" (no
+   merge-base, no local head, a git that failed) leaves the caller on its pre-existing path. Making a
+   skip out of a sensor failure is how a real result goes unlanded in silence — this file's own U0
+   law, one level down.
+
+### 14.4 · What this does and does not close
+
+**Closes:** `NOT-STARTED` now means what §4.1 says it means, on both legs, enforced by
+`tests/cloud-contract.bats` (8), `tests/handoff-fire-cloud.bats` 20–21, `tests/cc-offload.bats` 35–36
+and `tests/cloud-reconcile.bats` 32–34 — every one of them RED against the pre-change tree except the
+two declared non-discrimination controls.
+
+**Does not close:** the contract narrows the ambiguity, it does not eliminate it. A VM that booted
+and could not push at all — §12.5's policy-denied `sources=[]` case — still produces no ref and still
+reads `NOT-STARTED`. That is now a two-way disjunction ("never started **or** could not push") rather
+than a four-way one, and both arms take the same operator action, so the row stays actionable. The
+honest residual is that this box cannot tell those two apart from here; `cc-cloud inbox` (control
+plane) is the only instrument that can, and it is already built.

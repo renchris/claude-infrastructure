@@ -461,3 +461,44 @@ EOF
   [ -s "$CLOUD_DECL_LOG" ]
   [ ! -f "$BATS_TEST_TMPDIR/pf-off.log" ]                # the override SKIPS the probe, not just its verdict
 }
+
+# ── B3 — the §4.1 absence contract, which was PROSE ONLY until backlog 0c8b39b67665 ──────────────
+# Test 17 above pinned that the payload CREATES the branch before pushing it. It could not pin the
+# thing the whole instrument rests on: WHEN the VM pushes. The block it was written against said
+# "Push whatever you have before you finish" — a LAST act — so an absent ref still conflated "never
+# booted" with "booted, worked, ended without pushing", and C1 NOT-STARTED (the one row cc-cloud
+# emits as actionable) meant neither. §4.1 fixes it by contract: the FIRST act is an empty commit
+# and a push. These two pin that the fire actually composes it.
+#
+# RED-PROOF (re-runnable): replay against `git show <pre-fix sha>:scripts/handoff-fire.sh` in a
+# scratch tree. 20 goes RED there — the payload contains no `--allow-empty` at all — and 21 goes
+# RED because there was no contract library to be absent.
+
+@test "20 the payload's FIRST act is the seed push, before the work — not a push at the end" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: t" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ -s "$BATS_TEST_TMPDIR/create.log" ]
+  local seed work brief
+  seed="$(grep -n -- '--allow-empty' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  work="$(grep -n 'THEN do the work' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$seed" ] || { echo "the payload never instructs the boot marker — absence stays uninformative"; false; }
+  [ -n "$work" ] || { echo "the payload never hands over to the work"; false; }
+  [ "$seed" -lt "$work" ] || { echo "the seed push must precede the work (seed=$seed work=$work)"; false; }
+  # POSITIVE CONTROL on the same artifact: the operator's brief is still delivered. A contract that
+  # displaced the work would pass every assertion above and be a far worse defect.
+  brief="$(head -1 "$PAYLOAD")"
+  grep -qF -- "$brief" "$BATS_TEST_TMPDIR/create.log"
+}
+
+@test "21 the contract library being ABSENT is a REFUSAL, on the same reasoning as test 10" {
+  # Firing without it spends an account's quota on a session whose silence means nothing — and the
+  # operator is then told to re-fire a VM that may be working. That is worse than not firing.
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: this create must never be reached" 0
+  cfire CC_FIRE_CLOUD_CONTRACT_LIB="$BATS_TEST_TMPDIR/no-such-contract.sh" \
+        CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ "$status" -eq 10 ]
+  [[ "$output" == *"cloud-contract.sh is unreachable"* ]] || false
+  [ ! -f "$BATS_TEST_TMPDIR/create.log" ]
+}
