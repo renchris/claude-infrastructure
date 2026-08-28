@@ -116,9 +116,30 @@
 # sessions that worked. Measured before the fix: one declaration, content on trunk, flips
 # LANDED -> NOT-STARTED on nothing but `git update-ref -d` against the remote, and emits an
 # actionable row telling the operator to go re-open a session that had already finished.
-# Any rate computed over these states therefore STEPS DOWN at a prune with no change in the fleet:
-# the 2026-08-17 "the cloud return/land arm died" reading (push rate 81% through 08-16, 33% from
-# 08-18) is that artifact (backlog f85fce7c26f5).
+# Any rate computed over these states therefore STEPS DOWN at a prune with no change in the fleet.
+#
+# 🚨 BUT IT DOES NOT EXPLAIN THE 08-17 STEP, AND THIS COMMENT USED TO SAY IT DID (corrected
+# 2026-08-28, backlog f85fce7c26f5). The claim here was that the "cloud return/land arm died
+# 2026-08-17T09:12:05Z" reading — push rate 81% through 08-16, 33% from 08-18 — "is that artifact".
+# It is not. Judged at FULL MATURITY on 2026-08-28, over every `claude/fire-*` branch ever observed
+# (the 55 the pruner recorded as patch-equivalent before deleting them, unioned with the 253 alive
+# on origin), the lane lands **89% of the 82 branches fired 08-10..08-17, 35% of the 109 fired
+# 08-18..08-25, and 0 of the 116 fired since** — and 110 of the last 113 carry work no other branch
+# reproduced, so a re-dispatching drain is not what the zero is made of. Pruning cannot touch any of
+# that: a pruned branch is counted LANDED, which is the direction that would HIDE a step, not mint
+# one.
+# THE STEP IS REAL, THE RAIL IS INTERMITTENT RATHER THAN DEAD, and the strongest signal has no
+# population to confound at all: attributing trunk commits back to cloud branches by subject, the
+# cloud lane fed trunk continuously to 08-18T03:25Z, then **zero for 125.8 h**, one window on 08-23,
+# a large one on 08-25 ending 20:17Z, and **zero for the 64.8 h since**.
+# Do NOT cite the pruner's own 08-19 manifest for this, either: it is a snapshot taken at
+# 2026-08-19T13:36Z on a lane whose median land lag is 1.78 d, so its 16%-on-08-18 / 0%-on-08-19
+# cells are its own right edge — that same population reads 67% / 60% today.
+# So THE PROBE DEFECT AND THE LANE'S STEP ARE INDEPENDENT. This file fixes the probe; the step is
+# real, is still open, and its mechanism needs reads no cloud VM has (the return ledger, the sweep's
+# IDL journal, the launchd job's environment). Full derivation, the four instruments, the limits on
+# each, and the ONE operator command that discriminates the leading hypothesis:
+# docs/research/cloud-land-arm-step-2026-08-25.md (§6 for the numbers, §3 for the command).
 #
 # `landed()` reads the TRUNK TREE and never the branch ref, so it answers just as well for a branch
 # that no longer exists — the check simply had to be asked FIRST.
