@@ -5630,10 +5630,38 @@ if [ "${1:-}" = "__recycle" ]; then
           hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;;
         retype)
           if [ "$waited" = 60 ]; then
-            hf_bounded "$IT2" session send -s "$RSID" "/exit" >/dev/null 2>&1 || true
-            sleep 1
-            nc="$(composer_content "$IT2" "$RSID")" || nc=""
-            if [ "$nc" = "/exit" ]; then hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true; fi
+            # ROUTED THROUGH THE COMPOSER-SIDE VERIFIED HELPER (2026-08-28). This arm always DID
+            # read the composer back before its CR — but inline, as a raw `session send` plus a
+            # byte-equality test, which is a shape typed-send-lint cannot tell from a landmine. It
+            # was the last site holding tests/typed-send-lint.bats:17 ("GREEN on the REAL tree")
+            # red on trunk, and that wrapper is not in scripts/host-suites.manifest, so it is in
+            # the corpus of every postland sweep and its failure is a grep — deterministic, never
+            # cleared by the retry ladder, a RED stamp every time and therefore no green stamp.
+            #
+            # it2_paste_submit_verified is the same three-step contract done properly, and it is
+            # STRICTER on every axis this arm cares about. It re-proves a live CC session owns the
+            # pane (composer_owned) before typing anything — this arm never checked, and a pane
+            # that dropped to a shell in the 60s since the last probe would have been handed a
+            # bare `/exit` to execute. Its comparator is paste_readback_ok, which accepts the
+            # scrolled TAIL a 40-column agent pane actually shows and still rejects a transport
+            # truncation; the byte-equality here rejected BOTH, so on exactly the narrow panes
+            # this fires into a pristine retype read as a mismatch and silently sent nothing.
+            #
+            # Pre-wait 0 is deliberate, not a shortcut: recycle_nudge_decision returned `retype`
+            # only on an EMPTY composer, read moments ago, so the helper's wait loop breaks on its
+            # first probe. A composer that filled in between is a draft, and the immediate HELD
+            # that 0 produces is precisely what this arm already wanted — never a blind CR onto
+            # someone else's buffer.
+            #
+            # Non-zero is now SAID. The old `|| true` on the send plus the silent else made a
+            # failed retype indistinguishable from a successful one, so the 600s refusal was the
+            # first and only news of it. `|| nrc=$?` and not `if ! …`: under `set -e` the negation
+            # would reset $? to 0 and every failure would report rc 0.
+            nrc=0; it2_paste_submit_verified "$IT2" "$RSID" "/exit" 0 || nrc=$?
+            if [ "$nrc" != 0 ]; then
+              echo "→ nudge@${waited}s retype NOT SUBMITTED (rc $nrc): the /exit was not proven into the composer — holding"
+              emit_recycle_event recycle-nudge-held "" "$RSID" "retype rc=$nrc at ${waited}s" || true
+            fi
           fi ;;
         *)
           echo "→ nudge@${waited}s HELD ($nd): composer is not a stranded /exit — a CR here would submit someone else's buffer"
