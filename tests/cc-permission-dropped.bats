@@ -26,9 +26,11 @@ setup() {
   AUDIT="$REPO/bin/cc-permission-audit"
   [ -f "$AUDIT" ] || skip "cc-permission-audit missing"
   FIX="$BATS_TEST_TMPDIR/fixture.settings.local.json"
-  # 8 of the 18 entries are on the drop list, each for a DIFFERENT documented branch of the
-  # predicate; the remaining 10 are SURVIVORS, likewise each for a different reason — four of them
-  # prefix-confusion cases that a `startswith` implementation would wrongly condemn.
+  # 8 of the 22 entries are on the drop list, each for a DIFFERENT documented branch of the
+  # predicate; the remaining 14 are SURVIVORS, likewise each for a different reason — eight of them
+  # prefix-confusion cases that a `startswith` implementation would wrongly condemn. Those eight
+  # are the exact false positives produced by the substring grep this tool replaced (struck from
+  # permission-matcher-truth-2026-08-20.md DO #8), so they are the arms that keep it struck.
   cat > "$FIX" <<'JSON'
 {
   "permissions": {
@@ -50,6 +52,10 @@ setup() {
       "Bash(evaluate:*)",
       "Bash(shellcheck:*)",
       "Bash(npm:*)",
+      "Bash(nodemon:*)",
+      "Bash(sudoku:*)",
+      "Bash(execa:*)",
+      "Bash(npm run-script:*)",
       "Read(//tmp/fixture/**)"
     ],
     "deny": [], "ask": []
@@ -71,7 +77,7 @@ run_audit() {
 
 @test "the drop-list section reports the EXACT population, not a superset" {
   run_audit
-  [[ "$OUTPUT" == *"8 of 18 approved patterns (44.4%) are DROPPED"* ]] || false
+  [[ "$OUTPUT" == *"8 of 22 approved patterns (36.4%) are DROPPED"* ]] || false
 }
 
 @test "each documented drop branch fires, and says WHICH branch" {
@@ -95,22 +101,26 @@ run_audit() {
 @test "the documented SURVIVORS are not reported — an over-wide predicate fails here" {
   run_audit
   # Narrower than the bare form: the tail is not `*` and does not start with a flag.
-  ! grep -qF "· Bash(npm run test:*) " <<<"$OUTPUT"
+  ! grep -qF "· Bash(npm run test:*) " <<<"$OUTPUT" || false
   # The one documented exception inside the flag-tail branch.
-  ! grep -qF "· Bash(python -m pkg.module *) " <<<"$OUTPUT"
-  ! grep -qF "· Bash(python3 scripts/foo.py *) " <<<"$OUTPUT"
+  ! grep -qF "· Bash(python -m pkg.module *) " <<<"$OUTPUT" || false
+  ! grep -qF "· Bash(python3 scripts/foo.py *) " <<<"$OUTPUT" || false
   # Never on either list at all.
-  ! grep -qF "· Bash(git status:*) " <<<"$OUTPUT"
-  ! grep -qF "· Bash(rg:*) " <<<"$OUTPUT"
+  ! grep -qF "· Bash(git status:*) " <<<"$OUTPUT" || false
+  ! grep -qF "· Bash(rg:*) " <<<"$OUTPUT" || false
   # gsn returns false for every non-Bash tool (Agent excepted, asserted above).
-  ! grep -qF "· Read(//tmp/fixture/**) " <<<"$OUTPUT"
+  ! grep -qF "· Read(//tmp/fixture/**) " <<<"$OUTPUT" || false
   # PREFIX CONFUSION, the failure mode a naive `startswith` would ship: each of these begins with
   # a listed command's letters and is a different command. `_sn` keys on the whole token, so the
   # boundary (`:`, a space, or `*`) is what makes a match, not the prefix.
-  ! grep -qF "· Bash(envsubst:*) " <<<"$OUTPUT"     # not `env`
-  ! grep -qF "· Bash(evaluate:*) " <<<"$OUTPUT"     # not `eval`
-  ! grep -qF "· Bash(shellcheck:*) " <<<"$OUTPUT"   # not `sh`
-  ! grep -qF "· Bash(npm:*) " <<<"$OUTPUT"          # `npm run` is listed; bare `npm` is not
+  ! grep -qF "· Bash(envsubst:*) " <<<"$OUTPUT" || false   # not `env`
+  ! grep -qF "· Bash(evaluate:*) " <<<"$OUTPUT" || false   # not `eval`
+  ! grep -qF "· Bash(shellcheck:*) " <<<"$OUTPUT" || false   # not `sh`
+  ! grep -qF "· Bash(npm:*) " <<<"$OUTPUT" || false   # `npm run` is listed; bare `npm` is not
+  ! grep -qF "· Bash(nodemon:*) " <<<"$OUTPUT" || false   # not `node`
+  ! grep -qF "· Bash(sudoku:*) " <<<"$OUTPUT" || false   # not `sudo`
+  ! grep -qF "· Bash(execa:*) " <<<"$OUTPUT" || false   # not `exec`
+  ! grep -qF "· Bash(npm run-script:*) " <<<"$OUTPUT" || false   # `run-script` is not the `run` token
 }
 
 @test "a dropped entry is REPORTED but never removed — even under CONFIRM=1" {
@@ -121,7 +131,7 @@ run_audit() {
   # and the auto-mode axis is barred from writing at all.
   [ "$(shasum -a 256 "$FIX" | awk '{print $1}')" = "$ORIG_SHA" ]
   jq -e '(.permissions.allow | index("Bash(python3:*)")) != null' "$FIX" >/dev/null
-  jq -e '(.permissions.allow | length) == 18' "$FIX" >/dev/null
+  jq -e '(.permissions.allow | length) == 22' "$FIX" >/dev/null
 }
 
 @test "the two axes are independent — a redundant entry goes, a dropped one stays" {
