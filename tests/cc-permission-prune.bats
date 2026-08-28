@@ -162,7 +162,7 @@ backups() { # count of backups made for the fixture
   # walk is rooted at HOME, which setup() has redirected into the test tmpdir.
   run python3 "$AUDIT" --prune
   [ "$status" -eq 0 ]
-  [[ "$output" == *"scope: 0 settings.local.json file(s)"* ]] || false
+  [[ "$output" == *"scope: 0 settings file(s)"* ]] || false
 }
 
 @test "the plain report still works — --prune is additive, not a rewrite of the tool" {
