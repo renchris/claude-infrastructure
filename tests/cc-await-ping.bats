@@ -763,6 +763,64 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
   [[ "$output" == *"verdict=stood-down"* ]] || false
 }
 
+# ── b60eb29e97dd: THE ARM SEQUENCE MUST SURVIVE, AND ITS SHAPE IS A STOP BEAT ────────────────────
+# The three cases above all baseline on a PROMPT beat, which is not how this mode is ever armed in
+# the field. Both instructing hooks (session-continue.sh's wake floor, mailbox-drain.sh) are STOP
+# hooks that reach the model by BLOCKING the stop, and that forced continuation writes no
+# UserPromptSubmit beat — so the newest boundary an arm reads is the Stop beat the same hook chain
+# just wrote. Under the shipped `+1 only if kind==prompt` offset that made the threshold equal to the
+# baseline, and the arm sequence's own next Stop tripped the stand-down every single time: measured
+# 2/2 in the field (`seq>3`, `seq>6`), i.e. the wake floor demanded an arm that deterministically
+# no-opped. These four pin the corrected oracle — absorb a CONTIGUOUS stop-kind beat, however many
+# times in a row; stand down on a prompt beat or a seq jump.
+
+@test "idle-scoped b60eb29e97dd: armed off a STOP-kind beat (the wake floor's own flow), the arm sequence's trailing Stop must NOT self-cancel it" {
+  beat 3 stop
+  ( sleep 1; beat 4 stop ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 4
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 2 ]                                  # still watching → ran its term
+  [[ "$output" != *"stood-down"* ]] || false
+}
+
+@test "idle-scoped b60eb29e97dd: a RUN of blocked stops is absorbed — one per Stop hook that re-prompts" {
+  # The arm sequence is not one stop. Each Stop hook that blocks forces another turn that ends in
+  # another Stop beat, with no prompt beat between them. A fixed offset cannot cover a run of
+  # unknown length; a contiguity proof covers all of them.
+  beat 3 stop
+  ( sleep 1; beat 4 stop; sleep 1; beat 5 stop; sleep 1; beat 6 stop ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 6
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 2 ]
+  [[ "$output" != *"stood-down"* ]] || false
+}
+
+@test "idle-scoped b60eb29e97dd DISCRIMINATION: off a STOP baseline, a PROMPT beat at baseline+1 still cancels" {
+  # The fix must not buy survival by going deaf to the event it exists to catch: from a stop-kind
+  # baseline the very next boundary IS the new turn's prompt beat, and that one must stand it down.
+  beat 3 stop
+  ( sleep 1; beat 4 prompt ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down"* ]] || false
+}
+
+@test "idle-scoped b60eb29e97dd: absorbing stops does not re-open the sampling hole — a JUMP after them cancels" {
+  # The cursor advances only over boundaries it OBSERVED. Two absorbed stops then a jump of 2 still
+  # proves a prompt beat happened in the gap, so the starvation pole stays shut.
+  beat 3 stop
+  ( sleep 1; beat 4 stop; sleep 1; beat 5 stop; sleep 1; beat 7 stop ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down"* ]] || false
+}
+
 @test "idle-scoped C1: MAIL still wins — a ping is delivered, never traded for a silent stand-down" {
   beat 5 prompt
   # both events land inside ONE poll interval, and the mail check runs first within an iteration:

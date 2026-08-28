@@ -73,7 +73,11 @@
 #   C1 exit-on-mail   unchanged — the wake half of 2-way comms.
 #   C2 exit-on-turn   a UserPromptSubmit-kind beat newer than the baseline taken at arm ⇒ the session
 #                     was woken by something else, so this awaiter's job is over: exit 0 SILENTLY
-#                     (verdict=stood-down), leaving the next natural Stop registry-quiet.
+#                     (verdict=stood-down), leaving the next natural Stop registry-quiet. The arm
+#                     sequence's OWN trailing Stop beats are absorbed — contiguously observed and
+#                     stop-kind, so nothing can hide behind them (backlog b60eb29e97dd: this used to
+#                     be a fixed +1 offset, and the wake floor arms from inside a Stop hook, where
+#                     that offset was 0 and the mode self-cancelled before its idle even began).
 #   C3 single-instance   refuse while a live sibling watcher claims any key of the keyset.
 #   C4 refuse-on-pending refuse while mail is already pending — mail waiting means you have work, and
 #                     arming would defer the judgment of state you ALREADY hold.
@@ -353,7 +357,9 @@ _unbeat() {
 BEAT_DIR="${CC_BEAT_DIR:-$HOME/.claude/cc-beats}"
 BEAT_FRESH_S="${CC_AWAIT_BEAT_FRESH_S:-900}"
 BEAT_BASE_SEQ=0
-BEAT_STOP_ALLOWANCE=0
+# The RUNNING cursor the C2 oracle advances as it absorbs the arm sequence's own trailing Stops.
+# Initialised to the arm baseline; see the block at the arm gate for why an OFFSET could not work.
+BEAT_LAST_SEQ=0
 
 _beat_field() {  # <sid> <jq-path> → field value on stdout; empty on any failure
   local s="$1" p="$2"
@@ -407,16 +413,40 @@ if [ "$IDLE_SCOPED" = 1 ]; then
     _refuse stale-beat "The newest beat for [$SID] is $(( _now - _bt ))s old (bound ${BEAT_FRESH_S}s). An arm happens INSIDE a turn, so a live beat producer makes this seconds old — a stale one means either the producer is not running or the sid is not this session's."
   fi
   BEAT_BASE_SEQ="$(_beat_field "$SID" '.seq')"; case "$BEAT_BASE_SEQ" in ''|*[!0-9]*) BEAT_BASE_SEQ=0 ;; esac
-  # THE ALLOWANCE, and why the doc's "exclude Stop-kind beats" is implemented as an OFFSET rather
-  # than a kind filter. The beat file holds only the LATEST boundary, so a filter on `kind` alone has
-  # a sampling hole: a whole turn (prompt beat, then stop beat) can complete inside one poll
-  # interval, leaving us looking at a Stop-kind beat whose prompt predecessor we never saw — and a
-  # watcher that ignores it stays parked over a session that HAS moved on. That is the starvation
-  # pole re-entering through the oracle. Turns alternate, so any beat more than one past the arm
-  # baseline PROVES a prompt beat occurred in between, whether or not we sampled it. The offset says
-  # exactly that: the arm turn's own trailing Stop (baseline+1) is excluded, and nothing else is.
-  # Erring toward standing down early costs one bounce turn; erring the other way costs the goal.
-  [ "$(_beat_field "$SID" '.kind')" = "prompt" ] && BEAT_STOP_ALLOWANCE=1
+  # THE BASELINE IS A CURSOR, NOT AN OFFSET — and that correction is the whole of backlog
+  # b60eb29e97dd. What shipped here was `baseline + allowance`, with the allowance set to 1 only when
+  # the beat that happened to be latest AT ARM TIME was prompt-kind. That encoded an assumption the
+  # mode's own PRIMARY caller falsifies: that an arm always happens inside a turn whose
+  # UserPromptSubmit beat is the newest boundary on disk.
+  #
+  # It is not. This mode is instructed by the WAKE FLOOR (hooks/session-continue.sh) and by
+  # hooks/mailbox-drain.sh — both of them Stop hooks. They reach the model by BLOCKING the stop, and
+  # that forced continuation writes no UserPromptSubmit beat, so the newest boundary the arm reads is
+  # the Stop beat the same hook chain just wrote. Latest kind = `stop` ⇒ allowance 0 ⇒ threshold =
+  # baseline ⇒ the arm sequence's OWN next Stop, at baseline+1, tripped the stand-down. Not a race
+  # and not a rare interleaving: the deterministic outcome of every arm the wake floor demands, which
+  # is 2/2 of the arms measured in the field (thresholds printed as `seq>3` and `seq>6`, each tripped
+  # by the very next beat). A mode whose licence to park under a live /goal is that it self-cancels
+  # had become one that self-cancels before the idle it was scoped to begins — a no-op behind a flag.
+  #
+  # THE REPLACEMENT keeps the sampling hole closed without guessing at the arm turn's shape. The hole
+  # is real: the beat file holds only the LATEST boundary, so a whole turn (prompt then stop) can
+  # complete inside one poll interval and leave us looking at a Stop-kind beat whose prompt
+  # predecessor we never sampled — a filter on `kind` alone would stay parked over a session that HAS
+  # moved on, which is the starvation pole re-entering through the oracle. But a hole only exists
+  # where the counter JUMPS. So the oracle now carries a running cursor and decides per observation:
+  #   · seq advanced by exactly 1 AND the new beat is stop-kind ⇒ PROVABLY no prompt beat hid behind
+  #     it (we watched the counter tick once, and that tick was a Stop). Absorb it, advance the
+  #     cursor, keep watching — however many times in a row it happens.
+  #   · anything else — a prompt-kind beat, or a jump of ≥2 — ⇒ a prompt boundary occurred or is
+  #     provably hidden in the gap. Stand down.
+  # This is strictly stronger than the offset it replaces: the offset had to guess how many trailing
+  # Stops the arm sequence would produce (it guessed 1, or 0), while the cursor never guesses because
+  # it only ever absorbs a boundary it OBSERVED CONTIGUOUSLY. A run of blocked stops — one per Stop
+  # hook that re-prompts, which is the ordinary shape of a close in this fleet — is absorbed exactly
+  # because it is what it looks like: our own machinery force-continuing a session over a world in
+  # which nothing has changed.
+  BEAT_LAST_SEQ="$BEAT_BASE_SEQ"
   # (C4) MAIL ALREADY PENDING = you have work. Arming here would defer the judgment of state the
   #      session already holds, which is the deferral this mode exists to make impossible.
   for _k in $(_keys); do
@@ -432,20 +462,29 @@ if [ "$IDLE_SCOPED" = 1 ]; then
     fi
   done
   echo "$_banner" >&2
-  echo "cc-await-ping: idle-scoped — will also stand down on any new turn of [$SID] (beat seq > $(( BEAT_BASE_SEQ + BEAT_STOP_ALLOWANCE )))" >&2
+  echo "cc-await-ping: idle-scoped — will also stand down on any new turn of [$SID] (beat baseline seq=$BEAT_BASE_SEQ kind=$(_beat_field "$SID" '.kind'); the arm sequence's own trailing Stop beats are absorbed, a prompt beat or a seq jump is not)" >&2
 fi
 
 # ── C2: THE EXIT THAT MAKES THE DEFERRAL IDLE-SCOPED ──────────────────────────────────────────────
 # Consulted every poll, AFTER the mail check: if a ping and a new turn both happened, the ping is the
 # thing the session must not lose, and delivering it also ends the watch.
 _turn_moved() {  # 0 iff this session has taken a new turn since the arm baseline
-  local seq
+  local seq kind
   [ "$IDLE_SCOPED" = 1 ] || return 1
   seq="$(_beat_field "$SID" '.seq')"; case "$seq" in ''|*[!0-9]*) return 1 ;; esac
-  # A Stop-kind beat at exactly baseline+1 is the arm turn's OWN trailing stop — never a new turn.
-  if [ "$seq" -gt "$(( BEAT_BASE_SEQ + BEAT_STOP_ALLOWANCE ))" ]; then return 0; fi
-  [ "$seq" -gt "$BEAT_BASE_SEQ" ] && [ "$(_beat_field "$SID" '.kind')" = "prompt" ] && return 0
-  return 1
+  [ "$seq" -gt "$BEAT_LAST_SEQ" ] || return 1          # nothing new since the last observation
+  kind="$(_beat_field "$SID" '.kind')"
+  # A CONTIGUOUS Stop beat is the arm sequence's own trailing boundary — absorb it and keep watching.
+  # Contiguity is what makes this a proof rather than the guess the old offset was: we watched the
+  # counter advance by exactly one, and that one boundary is a Stop, so no prompt beat can be hiding
+  # in a gap we never sampled. Anything else (a prompt beat, or a jump of ≥2) means a prompt boundary
+  # happened. Erring toward standing down early costs one bounce turn; erring the other way costs the
+  # goal — but absorbing an OBSERVED stop errs in neither direction.
+  if [ "$seq" -eq "$(( BEAT_LAST_SEQ + 1 ))" ] && [ "$kind" = "stop" ]; then
+    BEAT_LAST_SEQ="$seq"
+    return 1
+  fi
+  return 0
 }
 
 # ── THE SENDER RECORDER (backlog b38279c10c55) ────────────────────────────────────────────────────

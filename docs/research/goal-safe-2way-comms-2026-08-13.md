@@ -149,6 +149,47 @@ one Stop can still be deferred; the awaiter then stands down within one `--inter
 completion re-wakes the model, whose next stop evaluates. Cost: one bounce turn, only on wake,
 never periodic. Default `--interval` for the mode: 5 s (beat file is one small stat).
 
+### UPDATE 2026-08-28 — C2's baseline is a CURSOR, not an offset (backlog `b60eb29e97dd`)
+
+C2 above says *"Stop-kind beats are excluded so the arm-turn's own trailing Stop cannot self-cancel
+it."* The intent was right and the implementation was not. `bin/cc-await-ping` shipped the exclusion
+as an **offset** — `stand down when seq > baseline + allowance`, with `allowance = 1` **only if the
+beat that happened to be newest at arm time was prompt-kind** — because the beat file holds one
+boundary, so a pure kind filter has a sampling hole (a whole turn completing inside one poll leaves a
+Stop-kind beat whose prompt predecessor was never seen).
+
+That offset encodes an assumption this mode's own primary caller falsifies: **that an arm always
+happens inside a turn whose UserPromptSubmit beat is the newest boundary on disk.** C7 above hands
+the arm to the wake floor (`hooks/session-continue.sh`) and the drain nudge (`hooks/mailbox-drain.sh`)
+— both **Stop hooks**, which reach the model by blocking the stop. That forced continuation writes no
+UserPromptSubmit beat, so the newest boundary an arm reads is the Stop beat the same hook chain just
+wrote. Latest kind `stop` ⇒ allowance 0 ⇒ threshold = baseline ⇒ **the arm sequence's own next Stop,
+at baseline+1, tripped the stand-down.** Measured 2/2 in the field (banners printed `seq>3` and
+`seq>6`, each tripped by the very next beat). Not a race: the deterministic outcome of every arm the
+wake floor demands. A mode whose entire licence to park under a live `/goal` is that it self-cancels
+had become one that self-cancels before the idle it was scoped to begins — a no-op behind a flag, and
+the floor above it was blocking a turn to demand it.
+
+**The correction keeps the hole shut without guessing at the arm sequence's shape.** A sampling hole
+only exists where the counter JUMPS, so the oracle now carries a running cursor and decides per
+observation:
+
+| Observation | Verdict | Why it is a proof and not a guess |
+|---|---|---|
+| `seq` advanced by exactly 1 **and** the new beat is stop-kind | absorb, advance the cursor, keep watching — however many times in a row | we watched the counter tick once and that tick was a Stop, so no prompt beat can hide in a gap we never sampled |
+| a prompt-kind beat, or a jump of ≥2 | stand down | a prompt boundary either was observed or is provably hidden in the gap |
+
+Strictly stronger than the offset it replaces: the offset had to guess **how many** trailing Stops the
+arm sequence would produce (it guessed one, or none), while the cursor never guesses because it only
+absorbs a boundary it observed contiguously. A **run** of blocked stops — one per Stop hook that
+re-prompts, the ordinary shape of a close in this fleet — is therefore absorbed, which is correct:
+that is our own machinery force-continuing a session over a world in which nothing has changed.
+
+Pinned by four cases in `tests/cc-await-ping.bats` (two red against the pre-fix binary, two
+discriminations green in both so the fix cannot buy survival by going deaf): the stop-kind baseline,
+a run of blocked stops, a prompt beat at baseline+1 off a stop-kind baseline (still cancels), and a
+jump after absorbed stops (still cancels).
+
 **Interaction with our own Stop blockers** (session-continue 🔧, completion-assert): if one blocks
 the arm-turn's stop, the continuation fires a UserPromptSubmit beat and self-cancels the awaiter —
 converging one bounce later. Discipline unchanged by this doc: the arm is the turn's LAST action on
