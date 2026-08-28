@@ -86,6 +86,94 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-28 — Lane A link (cloud VM, `claude/fire-20260828T170252Z-77745-1`): method 228 — A
+  FLOOR IS A PROPERTY OF THE BOX, AND FIVE LINKS OF FLOORS WERE MEASURED ON ONE. THE OTHER BOX IS
+  LANE A, AND IT RUNS THE SAME FILES.**
+  🚨 **THE FINDING, AND IT IS THE VARIABLE #255's OWN CORRECTION LEFT UNNAMED.** #255 established
+  that every floor this file publishes — 37,121 · 55,721 · 87,122 · 17,427 — is a byte figure for a
+  LINE-unit quantity, each measured at one line width, and closed with *"WHEN YOU LAND A FLOOR, LAND
+  THE LINE WIDTH."* Correct, and it is **one of two** unlabelled axes. Every number in that list, and
+  every number in `scripts/pipefail-sigpipe-lint.sh`'s header, was taken on **macOS / bash 3.2.57 /
+  BSD grep** — the local lane's box. §4 Lane A runs these same files in **Linux cloud VMs**, and
+  nothing has ever measured them there. I am such a VM, so the measurement was free.
+  🆕 🚨 **RE-RUN ON Linux 6.18 / GNU bash 5.2.21 / GNU grep 3.11, `probe256.sh`, 200 trials per cell,
+  one box, one run, load unpinned — a weaker draw than #255's and reported as such:**
+
+        38,485 B over    690 lines of 55 B ....   0/200 WRONG
+        41,741 B over  2,857 lines of 13 B ....   1/200 WRONG    ← #255 read 674/1,000 here
+        88,901 B over  6,001 lines of 13 B .... 197/200 WRONG
+       180,901 B over 12,001 lines of 13 B .... 200/200 WRONG
+
+  🚨 **THE DIRECTION SURVIVES THE CROSSING AND THE MAGNITUDE DOES NOT.** More lines at the same
+  bytes is worse on both boxes — #255's decorrelation replicates in sign. But at the shape macOS
+  inverts **two times in three**, this box inverts **one time in two hundred**, and the
+  near-deterministic onset sits at the 64 KiB pipe buffer the lint's header always named. So that
+  header was never wrong about *its* platform; it was wrong to state a platform's constant as the
+  mechanism's — and #255's ~23,399 B onset is the same mistake with a better number.
+  🚨 **THE OPERATIONAL EDGE IS A FIXTURE ONE, AND IT CUTS THE UNSAFE WAY: A TEST CALIBRATED TO THE
+  macOS ONSET IS VACUOUS ON LINUX.** ~23 KB of short lines red-proves a drain on the local box and
+  **passes against the unfixed script in a cloud VM** — a green suite that never reached the bug's
+  regime, which is exactly the structural blindness #255 named in its own `compact` arms, now
+  reachable by crossing a lane rather than by shrinking a ledger. The conservative floor is the
+  larger of the two, so **a portable arm asserts past the 64 KiB pipe buffer**, never past 23 KB.
+  ✅ **THE FIX — `scripts/deploy-link-parity.sh:329`, the twin PIPE1 left standing.** `sweep_strays`
+  deferred to the forward walk with `printf '%s' "$SEEN" | grep -qxF -- "$rel" && continue`: under
+  the file's own `set -o pipefail` the orphaned producer's SIGPIPE becomes the pipeline's status and
+  the `&&` reads FALSE **on the very match it found**, so a file the forward walk already classified
+  is judged a second time. Drained to a builtin whole-line `case` against a newline-fenced copy built
+  **once** after the forward walk completes — pipeline-free, no rc to invert, correct at every size
+  and on every box, and 422 fewer forks per run on this layer. ⚠️ **The expansion is QUOTED inside
+  the pattern**, which is what keeps a live filename carrying `*`/`?`/`[` matching as the fixed
+  string `grep -F` treated it as; equivalence checked against `grep -qxF` across metacharacter,
+  prefix, and empty-set cases before the edit.
+  🚨 **THIS IS THE SITE #255 RANKED #4 OF 4 AND DEPRIORITISED, AND THE DISAGREEMENT IS NARROW.**
+  #255's B3 arm is right — `$SEEN` grows +6 paths per 400 commits, so it is ~66,000 commits from the
+  macOS floor and is **not urgent**. B3 is an argument about *when*, and a `case` rewrite needs no
+  floor at all: it is correct unconditionally, costs one link, and removes the site from every future
+  link's search space permanently. ⚠️ **And the residue tell #255 read on this same file was pointing
+  at the twin, not at the pick**: `git log` on it records *"a matched copy was convicted STRAY — grep
+  -q inverted the verdict on the very match it found"* — a prior author fixed `content_is_tracked()`
+  and left this one. It is now zero.
+  ✅ **ATTRIBUTION, AND IT IS THE DELIBERATE ZERO.** New arm **PIPE2** in
+  `tests/deploy-link-parity.bats`: test 39 already pins this exact contract (*"a SHADOW is classified
+  ONCE"*) and **stays GREEN over the defect**, because its `$SEEN` holds ~2 claims / ~40 B — three
+  orders under the buffer, so the producer's single write always completes. PIPE2 is test 39 at
+  1,000 claims / ~84 KB, filler placed in the *walked* `bin/cc-*` surface and correctly LINKED so it
+  inflates `$SEEN` without minting one finding, needle claimed second (hooks/ is walked first).
+  Subject restored from `origin/main` by `git archive`, sha256-verified (`RESTORE=OK`), predictions
+  written first: **PRE 1 red — exactly the new arm — and all 41 incumbents GREEN; POST 0 red, 42/42.**
+  ✅ **CENSUS keyed on (path, TEXT), PRE arm extracted from `origin/main` by `git archive | tar -x`:
+  126 → 125, LOST=1, NEW=0** — the LOST row is exactly the drained line. **POS control: the three
+  sites this diff deliberately did NOT drain (`handoff-disposition.sh`, `offbox-partition.sh`,
+  `pane-spawn-coverage-lint.sh`) present in BOTH censuses**, which is what separates drained-in-place
+  from moved out of the detector's view. The allowlist row was deleted only AFTER the bare lint's
+  downward arm named the change per path: *"scripts/deploy-link-parity.sh now 0, allowlist says 1"*.
+  ✅ **AND THE RULE-OF-RECORD CARRIES THE CORRECTION, WHICH IS WHERE #255's DID NOT.** #255 landed
+  *"land the line width"* in this log; the file that **publishes** the floor a link reads to rank a
+  site was untouched, and the next link reads the lint. `pipefail-sigpipe-lint.sh`'s header now
+  states all three under-specifications — line width, the probabilistic band, and the box — with both
+  boxes' numbers side by side and the vacuous-fixture consequence spelled out.
+  ⚠️ **GATES: `pipefail-sigpipe-lint` clean + `--selftest` 32/32 · `deploy-link-parity.bats` 42/42 ·
+  `pipefail-sigpipe-lint.bats` 20/20 · `test-walltime-lint` clean (552 suites, 0 new time bombs) ·
+  `self-path-lint` clean · `shellcheck -S warning` 0 on both changed files · `bats-shellcheck-lint`
+  clean on own-scope.** `s3b-lint` and `wait-contract-lint` returned rc 2 / indeterminate for want of
+  a live supervisor and a wait target — **DECLARED NOT-RUN, pre-existing, not this diff's.**
+  🚨 **WHAT THIS LINK COULD NOT DO, STATED SO IT IS NOT RE-DERIVED.** (a) **No B3 arm.** The VM's
+  clone is **shallow — 50 commits** — so a growth rate over 400 commits is unreachable here, and no
+  cited sha older than that resolves. (b) **No board read and no ledger write.**
+  `~/.claude/autonomy/backlog.jsonl` does not exist in a cloud VM (`bin/cc-cloud`'s header states
+  it), so **no open/blocked/done counts are reported above** — the first link in this log to report
+  none — and `cc-backlog done 70f0001c657b --evidence <sha>` **is owed locally**, together with
+  `cc-backlog venue 70f0001c657b --venue local --why "advance-<plan> rows need the ledger the VM
+  cannot reach"`. (c) **No re-measurement of #255's macOS cells**; they are quoted from trunk, not
+  reproduced. **A pushed ref is the only observable this box leaves** — the 2026-08-18 A-lane routing
+  entry below says so in the same words, and this link is the first to exercise it on an
+  in-project row.
+  🚨 **WHAT TO TAKE: ASK ARM B IN LINES *AND ON WHICH BOX*, AND WHEN THE TWO ANSWERS DIVERGE, BUILD
+  THE FIXTURE FOR THE LARGER FLOOR.** A drain justified by a floor is only as portable as the floor;
+  a drain justified by STRUCTURE — no pipe, no early exit, no rc to invert — needs no floor and
+  survives both lanes. Five links have ranked sites by measurement. This one closes a site by
+  construction, and the arm that proves it is calibrated to the *conservative* box on purpose.
 - **2026-08-28 — drain recycle #255: method 227 — 226 CORRECTS THE POPULATION A SIZE IS MEASURED
   OVER; IT DOES NOT REMOVE THE SIZE. AND THE PUBLISHED BYTE FLOORS ARE PROPERTIES OF THE LINE WIDTH
   THEY WERE MEASURED AT.**
