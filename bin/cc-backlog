@@ -4699,6 +4699,15 @@ cmd_compact() {
     printf 'cc-backlog compact: nothing aged out (cutoff %s)\n' "$cutoff" >&2
     return 0
   fi
+  # Sentinel-wrapped ONCE here, so the membership test in the scan loop below can be a BUILTIN
+  # whole-line match with no pipe, no fork and no early exit to invert. See the block at the test
+  # itself for why the pipeline form it replaces was measurably wrong on this feed TODAY.
+  # ONE `local` per line: under bash 3.2 a multi-variable `local a=… b=…"$a"…` does not see its
+  # own earlier initialiser.
+  local LF
+  LF=$'\n'
+  local dropw
+  dropw="$LF$drop$LF"
   # ── LOST-APPEND SAFETY (a15/D2) ───────────────────────────────────────────────────────────────
   # compact is the ONE verb that rewrites this store; every other writer appends. It read the whole
   # file into $tmp and then `mv`'d $tmp over it, with no lock and no re-check, so ANY record appended
@@ -4740,9 +4749,36 @@ cmd_compact() {
         printf 'cc-backlog compact: preserved malformed line %d\n' "$n" >&2
         continue
       fi
-      if printf '%s\n' "$drop" | grep -qxF -- "$lid"; then
-        dropped=$((dropped + 1)); continue
-      fi
+      # WAS: printf '%s\n' "$drop" | grep -qxF -- "$lid"
+      # Under this file's `set -uo pipefail`, `grep -q` exits the instant it matches; the producer
+      # is then killed by SIGPIPE, pipefail promotes the rc, the `if` reads FALSE — and FALSE here
+      # means the row is KEPT and `dropped` is never incremented. compact then rewrites the ledger
+      # unchanged and reports success having compacted nothing. The failure is SILENT and it is
+      # SELF-REINFORCING: the feed IS the set of rows this branch exists to remove, so every
+      # compaction that fails leaves them behind, which grows $drop, which makes the next one fail
+      # harder.
+      #
+      # MEASURED 2026-08-28, and the scope matters more than the number. 1,000 trials per cell,
+      # /bin/bash 3.2.57(1) arm64, BSD grep, needle on line 1, load 10-21:
+      #     the REAL live drop set, 2,345 ids / 30,484 B ......  37/1,000 WRONG  <-- today, not a ceiling
+      #     synthetic 2,856 ids / 37,127 B .................... 674/1,000 WRONG
+      # 37,121 B is this repo's published "SAFE floor" for a 2-stage builtin pipeline. It is NOT a
+      # property of the byte count. It was measured on a ~55 B/line feed, and at a FIXED 37,121 B,
+      # interleaved trial-by-trial in ONE run so load is held constant by construction:
+      #     2,856 lines of 13 B .... 674/1,000 WRONG
+      #       689 lines of 55 B ....   0/1,000
+      # The decision unit is the LINE (a 12-hex id is 13 B), so the floor for THIS feed shape is
+      # ~1,800 lines / ~23,399 B — 63% of the published byte figure. A drop-set id is one line, so
+      # the quantity that ranks this site is the ROW COUNT, and it only ever grows: the ledger's own
+      # `done` events ran 689 in 2026-07 and 1,833 in 2026-08.
+      #
+      # THE FIX is a builtin whole-line match: no pipe, no early exit, no rc to invert — and it also
+      # removes two forks per ledger line, which on a 15,097-line ledger is ~30,000 fewer processes.
+      case "$dropw" in
+        *"$LF$lid$LF"*)
+          dropped=$((dropped + 1)); continue
+          ;;
+      esac
       printf '%s\n' "$line" >> "$tmp"; kept=$((kept + 1))
     done < "$BACKLOG"
     # Late arrivals ride through untouched — they are by definition newer than the cutoff, so no

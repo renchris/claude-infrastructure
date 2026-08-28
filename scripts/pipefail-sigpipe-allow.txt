@@ -3,7 +3,6 @@
 # GAINS a violation and when it LOSES one without the count being lowered.
 # Regenerate: scripts/pipefail-sigpipe-lint.sh --regen > scripts/pipefail-sigpipe-allow.txt
 bin/cc-announce	5
-bin/cc-backlog	1
 bin/cc-blockers	1
 bin/cc-bus	1
 bin/cc-cloud	1
