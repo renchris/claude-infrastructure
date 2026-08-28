@@ -1870,11 +1870,24 @@ def apply_assignments(rows, cfg):
 def _su_projected(r, R):
     """5h utilization the router scores: measured, plus what the account's own recent burn rate
     accrues over the lookahead — capped at the window reset, past which pressure vanishes.
-    Consumed only by _soft, so it is soften-only by construction."""
+    Consumed only by _soft, so it is soften-only by construction.
+
+    🚨 THE ÷100 IS NOT OPTIONAL AND NOT COSMETIC (S7/M1). `burn_5h_ewma_ph` is **%/h**;
+    everything below here is a FRACTION in [0,1]. Reading the new key without the conversion
+    makes `su + b * ahead` saturate to 1.0 on every row with any burn at all, which does not
+    look like a bug — it looks like a fleet under uniform 5h pressure. The incumbent
+    `burn_5h_ph` is already fraction/h and is used unchanged as the fallback while it stays
+    populated. Where the EWMA speaks it wins, because the incumbent is a single adjacent-pair
+    difference that goes ABSENT across every 5h roll; where it abstains, nothing changes.
+
+    Reach: this feeds only the `SF` multiplier in `_soft` (score-ranking, floored at
+    `SF_FLOOR` so it can never exclude) and the desk lane's `DESK_5H_FLOOR` tier key in
+    `desk_keys`. It does NOT reach `_excluded`, which reads the raw meter."""
     su = (r.get("session_pct") or 0) / 100.0
     if not _term_on("CC_ROUTE_PROJ"):
         return su
-    b = r.get("burn_5h_ph")
+    e = r.get("burn_5h_ewma_ph")
+    b = (e / 100.0) if isinstance(e, (int, float)) and e > 0 else r.get("burn_5h_ph")
     if not isinstance(b, (int, float)) or b <= 0:
         return su
     ahead = _cliff_env("CC_ROUTE_PROJ_LOOKAHEAD_H", R.get("PROJ_LOOKAHEAD_H", PROJ_LOOKAHEAD_H))
@@ -2181,6 +2194,12 @@ def apply_burn(rows, cfg, samples=None):
         r["burn_wk_span_h"] = span
         if v is not None:
             r["burn_wk_ewma_ph"] = v
+        # S7 / M1: the 5h twin. Under its OWN key, in %/h — see burn_5h_ewma_ph's first paragraph.
+        # `burn_5h_ph` above stays populated for one release so nothing reading it breaks silently.
+        v5, span5 = burn_5h_ewma_ph(ss, now)
+        r["burn_5h_span_h"] = span5
+        if v5 is not None:
+            r["burn_5h_ewma_ph"] = v5
         s = wk_strand_pp(r)
         if s is not None:
             r["wk_strand_pp"] = s
@@ -2502,6 +2521,64 @@ def burn_wk_ewma_ph(samples_for_acct, now, weekly_reset_h):
         span += dt_h
         pairs += 1
     if pairs < 2 or span < WK_EWMA_MIN_SPAN_H or den <= 0:
+        return None, span
+    return num / den, span
+
+
+BURN5_EWMA_LOOKBACK_H = 6.0   # the 5h meter's own window plus a margin for the roll
+BURN5_EWMA_HL = 1.0           # half-life; the 5h bucket turns over in hours, not days
+BURN5_EWMA_MIN_SPAN_H = 1.3   # below this a ±1 pp step exceeds 25% of the meter's realised mean
+
+
+def burn_5h_ewma_ph(samples_for_acct, now):
+    """Roll-aware EWMA of the 5h session meter, in **%/h**, as (value|None, measured_span_h).
+
+    🚨 THE UNIT IS THE HAZARD, AND IT IS WHY THIS SHIPS UNDER A NEW KEY. The incumbent
+    `burn_5h_ph` is FRACTION/h and is consumed as such by `_su_projected` (`su + b * ahead`, with
+    `su ∈ [0,1]`). Writing a %/h value onto that key saturates the projection to 1.0 on every row
+    and reads as "every account is under 5h pressure" — a 100× error wearing an entirely plausible
+    face. The new value therefore gets its own name, in %/h, and the consumer divides by 100.
+
+    IT SHIPS ON CORRECTNESS AND AVAILABILITY, NOT ON ACCURACY — the same claim as the weekly EWMA,
+    and it is the reason M1 ranks LAST in §5.2 despite being the best-measured change in the list.
+    The incumbent is a single newest-adjacent-pair difference: one ±1 pp quantization step is the
+    whole estimate, and a pair that straddles a 5h roll leaves the field absent entirely. This
+    weights every usable pair in the lookback and reconstructs post-roll accrual as a LOWER bound
+    by taking the new window's level as the increment, so a roll shortens the estimate instead of
+    deleting it.
+
+    🚨 NAMED BLIND SPOT, and it must not be quoted away: at `session_pct ≥ 40` the INCUMBENT is
+    more accurate (MAE 0.0617 vs 0.0797; this over-projects by +3.6 pp). That is the burst regime
+    — the one M4′'s planner deliberately creates. The over-projection direction is soften-only and
+    therefore fail-safe for routing, but the number is wrong there and is not to be cited as
+    accurate. §5.6 Q3 names the measurement that would fix it.
+
+    THE ROLL SPELLING IS LOAD-BEARING. `_rolled` uses `_reset_key`'s minute ROUNDING. Under
+    truncation the roll branch fires on 46.0% of pairs and injects an absolute level as a delta:
+    MAE degrades 0.0282 → 0.2110, i.e. 5.4× worse than the incumbent it replaces.
+
+    ABSTAIN (L2) on the RAW MEASURED SPAN inside the lookback — never the weighted span, never the
+    requested window — and on fewer than 2 usable pairs. **Never** abstain on a roll."""
+    ss = sorted((e for e in samples_for_acct or []
+                 if e.get("session_pct") is not None and e.get("_t") is not None
+                 and now - e["_t"] <= BURN5_EWMA_LOOKBACK_H * 3600.0),
+                key=lambda e: e["_t"])
+    num = den = span = 0.0
+    pairs = 0
+    for a, b in zip(ss, ss[1:]):
+        dt_h = (b["_t"] - a["_t"]) / 3600.0
+        if not (0 < dt_h <= 1.0):
+            continue
+        if _rolled(a, b, "session_reset_at", "session_pct"):
+            d = b["session_pct"]                      # the new window's level, a LOWER bound
+        else:
+            d = max(0.0, b["session_pct"] - a["session_pct"])
+        w = 2.0 ** (-((now - b["_t"]) / 3600.0) / BURN5_EWMA_HL)
+        num += w * d
+        den += w * dt_h
+        span += dt_h
+        pairs += 1
+    if pairs < 2 or span < BURN5_EWMA_MIN_SPAN_H or den <= 0:
         return None, span
     return num / den, span
 

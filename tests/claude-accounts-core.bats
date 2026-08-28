@@ -1800,7 +1800,8 @@ wra = (now + timedelta(hours=100)).isoformat()
 with open(p, "w") as f:
     for i in range(240, -1, -1):                  # 24 h at 6 min, weekly 26 -> 40 = 0.583 %/h
         f.write(json.dumps({"ts": (now - timedelta(minutes=i * 6)).isoformat(),
-                            "acct": "next3", "session_pct": 10, "weekly_pct": 26 + (240 - i) * 0.0583,
+                            "acct": "next3", "session_pct": 10 + (240 - i) * 0.2,
+                            "weekly_pct": 26 + (240 - i) * 0.0583,
                             "session_reset_at": None, "weekly_reset_at": wra}) + "\n")
 rows = [row(acct="next3", weekly_pct=40, weekly_reset_h=100.0)]
 samples, span = ca._util_tail(path=p, hours=48.0)
@@ -1813,7 +1814,18 @@ assert 12.0 < r["burn_wk_ppd"] < 16.0, r          # ~14 %/day, i.e. the same rat
 assert "burn_wk_span_h" in r and r["burn_wk_span_h"] > 6.8, r
 assert "wk_strand_pp" in r, r
 assert 0.0 < r["wk_strand_pp"] < 5.0, r           # 40 + 0.583*100 = 98.3 -> ~1.7 pp die
-assert "burn_5h_ewma_ph" not in r, r              # S7 is a LATER wave and was not built here
+# UPDATED IN PLACE (S7/M1, wave 2): this line used to read `"burn_5h_ewma_ph" not in r` with the
+# comment "S7 is a LATER wave and was not built here". S7 is built, and the session side of the
+# fixture now ramps 0.2 pp per 6 min = 2.0 %/h, so the key has something to be wrong about.
+# THE UNIT IS THE
+# WHOLE ASSERTION: 2.0 %/h and NOT 0.02 fraction/h. A %/h value written onto the incumbent key
+# saturates _su_projected to 1.0 on every row and reads as a fleet under uniform 5h pressure — a
+# 100× error wearing a plausible face, which RP-28 below catches at the consumer.
+assert "burn_5h_ewma_ph" in r, r
+assert 1.8 < r["burn_5h_ewma_ph"] < 2.2, r        # ~2 %/h -- NOT 0.02, and NOT 48
+assert "burn_5h_ph" in r, r                       # the incumbent is NOT overwritten
+assert 0.018 < r["burn_5h_ph"] < 0.022, r         # ...and it is still FRACTION/h: the same rate
+assert "burn_5h_span_h" in r and r["burn_5h_span_h"] > 1.3, r
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
@@ -1859,6 +1871,75 @@ ab = ca.pace_line([row(acct="next2", weekly_pct=13, weekly_reset_h=122.8, burn_w
 assert "next2 strand unknown (span 4.1h < 6.8h)" in ab, ab
 # no data ⇒ no block (a drain block over nothing would render at every error state)
 assert ca.pace_line([row(weekly_pct=None), row(weekly_reset_h=None)]) == ""
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-28 · S7: _su_projected consumes the new key at the right SCALE — the missing ÷100" {
+  # THE 100x ERROR THAT LOOKS LIKE A FLEET UNDER PRESSURE. burn_5h_ewma_ph is %/h; everything
+  # inside _su_projected is a FRACTION in [0,1]. Without the conversion `su + b * ahead`
+  # saturates to 1.0 on every row with any burn at all, and 1.0 does not read as a bug — it
+  # reads as "every account is under 5h pressure". No other case in this file catches it: the
+  # producer is right, the key is right, and only the consumer is wrong.
+  run python3 -c "$LOAD"'
+import os
+os.environ.pop("CC_ROUTE_PROJ", None)
+R2 = dict(R, PROJ_LOOKAHEAD_H=1.0)
+r = row(acct="next3", session_pct=20, session_reset_h=2.0, burn_5h_ewma_ph=60.0)
+v = ca._su_projected(r, R2)
+assert abs(v - 0.80) < 1e-9, v                    # 0.20 + 0.60 -- NOT 1.0
+# the reset CAPS the lookahead: past it the 5h pressure vanishes, so half an hour of runway
+# buys half the accrual. Pins that the new key rides the same capping path as the old one.
+assert abs(ca._su_projected(dict(r, session_reset_h=0.5), R2) - 0.50) < 1e-9
+# CONTROL: the INCUMBENT key is already fraction/h and must NOT be divided again. Same rate,
+# same answer -- a blanket ÷100 at the consumer would read 0.206 here.
+assert abs(ca._su_projected(row(acct="next3", session_pct=20, session_reset_h=2.0,
+                                burn_5h_ph=0.60), R2) - 0.80) < 1e-9
+# ...and where the EWMA speaks it WINS over the incumbent, because the incumbent goes absent
+# across every 5h roll. Both present, disagreeing: the EWMA is the one that lands.
+both = row(acct="next3", session_pct=20, session_reset_h=2.0,
+           burn_5h_ewma_ph=60.0, burn_5h_ph=0.10)
+assert abs(ca._su_projected(both, R2) - 0.80) < 1e-9, ca._su_projected(both, R2)
+# ABSTAIN: no rate at all leaves the measured value untouched, never a projection of zero-burn
+assert abs(ca._su_projected(row(acct="next3", session_pct=20, session_reset_h=2.0), R2) - 0.20) < 1e-9
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-28b · S7: burn_5h_ewma_ph is roll-aware and abstains on a span it cannot measure" {
+  # Three arms of the L2 rule, and the first is the one the incumbent fails. A pair straddling a
+  # 5h roll leaves `burn_5h_ph` ABSENT entirely (its delta goes negative); here the roll is not a
+  # discard — the new window level is taken as a LOWER bound on the accrual, so the estimate
+  # shortens instead of vanishing. "Never abstain on a roll" is the shipped rule.
+  run python3 -c "$LOAD"'
+import time
+NOW = time.time()
+def s(ago_h, pct, reset_at):
+    return {"acct": "next3", "session_pct": pct, "_t": NOW - ago_h * 3600.0,
+            "session_reset_at": reset_at}
+A, B = "2026-08-25T12:00:00Z", "2026-08-25T17:00:00Z"
+# 4 h of samples at 30 min, a 5h ROLL two hours back: 80 -> 5 across the boundary.
+roll = ([s(4.0 - i * 0.5, 20 + i * 20, A) for i in range(4)] +
+        [s(2.0 - i * 0.5, 5 + i * 10, B) for i in range(5)])
+v, span = ca.burn_5h_ewma_ph(roll, NOW)
+assert v is not None, (v, span)                   # NEVER null on a roll
+assert v > 0, (v, span)
+assert span >= 3.5, span
+# CONTROL: below the measured-span floor it abstains rather than reading its own quantization.
+short = [s(1.0 - i * 0.5, 20 + i, A) for i in range(3)]      # 1.0 h of span, floor is 1.3
+v2, span2 = ca.burn_5h_ewma_ph(short, NOW)
+assert v2 is None, (v2, span2)
+assert abs(span2 - 1.0) < 1e-6, span2             # the span is REPORTED even when the value is not
+# CONTROL: one usable pair is not an estimate either -- pairs < 2 abstains at any span.
+one = [s(6.0, 20, A), s(3.0, 50, A), s(2.5, 55, A)]          # first pair dt=3h > 1h, so 1 pair
+v3, span3 = ca.burn_5h_ewma_ph(one, NOW)
+assert v3 is None, (v3, span3)
+# CONTROL: a clean 2 %/h ramp over 4 h reads 2 %/h -- the arms above are gates, not a stub.
+ramp = [s(4.0 - i * 0.25, 10 + i * 0.5, A) for i in range(17)]
+v4, span4 = ca.burn_5h_ewma_ph(ramp, NOW)
+assert v4 is not None and 1.9 < v4 < 2.1, (v4, span4)
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }

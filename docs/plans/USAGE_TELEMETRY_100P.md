@@ -1610,8 +1610,11 @@ windows/week, carrying the fleet wall rate 1.72% → 2.20%.
 
 ### §5.7 Implementation record — what actually landed, and where it deviated from the spec
 
-Wave 1 = **S1 + S2 + S3 only**. Wave 2 = **S4 + S5**. S6 and S7 are unbuilt; S6 stays gated on
-S5's table being RUN on the live series and READ — the code existing does not discharge that.
+Wave 1 = **S1 + S2 + S3 only**. Wave 2 = **S4 + S5 + S7** — the whole ranked list except S6.
+**S6 is the only item left, and it is not blocked on code**: §5.2 S6 is literal that it does not
+ship until S5's horizon-stratified bias at the 12 h bucket has been RUN on the live series and
+READ. That is a measurement on the operator's own `~/.claude/logs/account-utilization.jsonl`,
+which no fixture can stand in for; S5 existing does not discharge it.
 
 #### S1 · data fixes — LANDED / DONE
 
@@ -1917,6 +1920,59 @@ alarm is not shippable at any parameter setting*, and that reading is a measurem
 operator's own `~/.claude/logs/account-utilization.jsonl`, not something a fixture can stand in
 for.
 
+#### S7 · M1 `burn_5h_ewma_ph` — correctness and availability only — LANDED / DONE (wave 2)
+
+`bin/claude-accounts`: `burn_5h_ewma_ph(samples_for_acct, now) → (value|None, span_h)` beside
+`burn_wk_ewma_ph`, constants `BURN5_EWMA_LOOKBACK_H` / `BURN5_EWMA_HL` /
+`BURN5_EWMA_MIN_SPAN_H`; stamped in `apply_burn` beside the weekly twin (`burn_5h_ewma_ph` +
+`burn_5h_span_h`); consumed by `_su_projected`. `tests/claude-accounts-core.bats` gains RP-28
+and RP-28b and updates RP-27 in place. **3/3 proven RED** against the S5 binary, green after;
+the core suite reads **89 cases, 85 ok**, the four failures being the pre-existing
+`--relogin-info` / `--login-status` cases that read the operator's live `accounts.json` and
+fail in any container that has none.
+
+**It ranks last for the reason §5.2 gives, and shipping it does not change that.** M1 is the
+best-measured change in the list and it provably does not move the goal: it feeds only the `SF`
+multiplier in `_soft` (score-ranking, floored at `SF_FLOOR` so it can never exclude) and the
+desk lane's `DESK_5H_FLOOR` tier key. It does **not** reach `_excluded`, which reads the raw
+meter. The gain is availability and roll-awareness, not accuracy — the incumbent is a single
+newest-adjacent-pair difference, so one ±1 pp quantization step is the whole estimate and a pair
+straddling a 5h roll leaves the field absent entirely.
+
+**Both hazards §5.2 names are shipped as tests, because both produce a plausible wrong number.**
+The **unit** hazard is RP-28: `burn_5h_ewma_ph` is %/h, everything inside `_su_projected` is a
+fraction, and without the ÷100 the projection saturates to 1.0 on every row with any burn — which
+does not read as a bug, it reads as a fleet under uniform 5h pressure. The producer is right, the
+key is right, and only the consumer is wrong, so no other case in the file catches it. RP-28's
+third arm is the mirror: the incumbent key is *already* fraction/h and must not be divided again,
+which a blanket ÷100 at the consumer would break. The **roll-spelling** hazard rides `_rolled`,
+i.e. `_reset_key`'s minute rounding, unchanged from S1a — under truncation the roll branch fires
+on 46.0% of pairs and MAE degrades 0.0282 → 0.2110, 5.4× worse than the incumbent it replaces.
+
+**The blind spot ships in the docstring, as §5.2 requires.** At `session_pct ≥ 40` the incumbent
+is *more* accurate (MAE 0.0617 vs 0.0797; this over-projects by +3.6 pp) — and that is the burst
+regime, the one M4′'s planner deliberately creates. The over-projection direction is soften-only
+and therefore fail-safe for routing, but the number is wrong there and is not to be quoted as
+accurate. §5.6 Q3 names the measurement that would fix it.
+
+**Deviation 1 — the incumbent `burn_5h_ph` block is KEPT, not replaced.** §5.2's heading says
+"replacing the `burn_5h_ph` block" and its last line says "keep the old key populated for one
+release so nothing that reads it breaks silently"; the two cannot both be done literally. The
+second wins, because it is the one with a failure mode. `_su_projected` prefers the EWMA and
+falls back to the incumbent, so where the EWMA abstains nothing changes at all. RP-28's fourth
+arm pins the precedence with both keys present and disagreeing.
+
+**Deviation 2 — RP-27 was updated in place by changing its FIXTURE, not only its assertion.** The
+existing case held `session_pct` constant at 10, so the new key would have been present and
+identically 0.0 — an assertion that a working implementation and a `return 0.0` stub both pass.
+The session side now ramps 0.2 pp per 6 min, and the case asserts 2.0 %/h on the new key **and**
+0.02 fraction/h on the incumbent, which is the unit hazard stated as one comparison. The reason
+is recorded beside the line, per the file's own convention.
+
+**Deviation 3 — `burn_5h_span_h` is stamped even when the value abstains**, matching
+`burn_wk_span_h`. A null that cannot say why reads as a missing measurement rather than as a
+refusal, and RP-28b asserts the span is reported on exactly the case where the value is not.
+
 #### Acceptance status against §5.4
 
 | command | status |
@@ -1926,6 +1982,7 @@ for.
 | `claude-accounts --readout \| grep -c 'strand'` → 3 or 4 | **4** |
 | the footer's `start by T−Nh` / `⚠ LATE by Xh` clause and the `K=… live` caption | **yes** (S4, wave 2) — the rendered block matches §5.4's mock line for line |
 | `claude-accounts --strand-score` | **built** (S5, wave 2) — the table reports per horizon with non-zero n and a bias that could have been non-zero. **Not yet RUN on the live series**, which is what gates S6 |
+| the 5h twin `burn_5h_ewma_ph`, in %/h, consumed at the right scale | **yes** (S7, wave 2) — RP-28 pins `_su_projected` at 0.80, not the saturated 1.0 |
 
 ⚠️ `bash tests/run.sh …`, named in §5.4, **does not exist in this repo**. The suites are run with
 `bats tests/<name>.bats`; `scripts/ship-land.sh` selects and runs them at the land.
