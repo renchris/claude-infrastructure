@@ -1,17 +1,27 @@
 #!/usr/bin/env python3
 """Build a ground-truth visual-design-defect corpus.
 
-One realistic dashboard page. Thirteen variants: one clean control plus twelve
-variants each carrying exactly ONE injected defect at a known location with a
-known magnitude.
+One realistic dashboard page, rendered fourteen ways: one clean control plus
+thirteen variants, each carrying exactly ONE injected defect at a known location
+with a known magnitude.
 
 The point of the corpus is the `detectable_by` field. Nine defects are fully
 determined by the DOM, so a deterministic extractor should find them every
 time and any detector that misses one is simply worse than a `getComputedStyle`
-call. Three are invisible to the DOM by construction -- the styles are correct
+call. Four are invisible to the DOM by construction -- the styles are correct
 and the rendering is still wrong -- so only something that looks at pixels can
 find them. A candidate stack is only worth its complexity if it wins the
 second group without losing the first.
+
+`contrast-on-texture` is the fourth of those and was added when the router was
+built. It exists to separate two things the gradient variant conflates: an
+abstention the pixel comparator can CLOSE, and one it cannot. Its backdrop is a
+6px two-tone pattern, so every band of the text run averages to the same colour
+and the left/right and top/bottom comparisons both come back equal -- the
+comparator has no verdict, the DOM's abstention survives, and the question
+reaches the vision layer. Without it every abstention in the corpus was closed
+for free and the router's whole region-call path went unexercised, which is a
+test suite agreeing with itself.
 
 Usage:  python3 build_corpus.py [outdir]
 Writes: <outdir>/pages/*.html and <outdir>/manifest.json
@@ -64,8 +74,25 @@ class Defect:
     dom_blind_because: str = ""
     # Severity a human designer would assign, for weighting.
     severity: str = "medium"
+    # Other elements the SAME injected change legitimately affects, each mapped to
+    # the reason it is affected. A finding on one of these is a true positive, not
+    # an off-target one -- a defect's blast radius is a property of the defect, and
+    # a scorer that did not know it would charge a detector for being thorough.
+    #
+    # This is a dict rather than a list so a reason is mandatory by construction:
+    # the field is otherwise an unfalsifiable escape hatch for laundering real
+    # false positives into ground truth, which is the one way a corpus stops being
+    # an instrument.
+    collateral: dict[str, str] = field(default_factory=dict)
     html_override: dict[str, str] = field(default_factory=dict)
 
+
+REASON_HERO_BACKDROP = (
+    "The injected rule replaces the .hero BACKGROUND, so every text element inside "
+    "the hero sits on the new backdrop. The title is white on the same run as the "
+    "caption and is affected identically; a detector that reports both has found "
+    "the defect twice, not found a spurious one."
+)
 
 DEFECTS: list[Defect] = [
     # ---------- DOM-determined: a computed-style read should ace all nine ----
@@ -182,6 +209,38 @@ DEFECTS: list[Defect] = [
         ),
         magnitude="ratio falls from ~8.6:1 at the left edge to ~1.2:1 at the right",
         severity="high",
+        collateral={".hero-title": REASON_HERO_BACKDROP},
+    ),
+    Defect(
+        id="contrast-on-texture",
+        klass="contrast",
+        summary=(
+            "Hero text sits on a high-frequency two-tone pattern, so it is legible "
+            "against half the backdrop and invisible against the other half -- and "
+            "every band of the run averages to the same colour."
+        ),
+        css=(
+            ".hero { background: repeating-linear-gradient(45deg,#1E3A8A 0 6px,"
+            "#DBEAFE 6px 12px); } .hero-caption { color: #FFFFFF; }"
+        ),
+        target=".hero-caption",
+        detectable_by="pixels",
+        dom_blind_because=(
+            "Identical to the gradient case as far as the cascade is concerned: "
+            "background-image is a string, so there is no numeric second operand and "
+            "the ratio computation has nothing to run on. What makes this variant "
+            "different is that it also defeats SAMPLING: the pattern's period is far "
+            "smaller than the text run, so the left, right, top and bottom bands all "
+            "average to the same colour and a comparator that only measures the "
+            "DIFFERENCE between bands reports one confident number. The honest answer "
+            "is that no scalar represents this backdrop at all."
+        ),
+        magnitude=(
+            "backdrop luminance alternates 0.045 <-> 0.72 every 6px; band-to-band "
+            "delta is ~0, so the abstention must come from the spread, not the delta"
+        ),
+        severity="high",
+        collateral={".hero-title": REASON_HERO_BACKDROP},
     ),
     Defect(
         id="optical-centering",

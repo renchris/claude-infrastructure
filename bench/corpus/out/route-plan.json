@@ -1,0 +1,789 @@
+{
+ "align-1px": {
+  "schema": "design-route/1",
+  "ok": true,
+  "page": "align-1px",
+  "profile": "bench",
+  "budget": {
+   "image_blocks_granted": 12,
+   "image_blocks_used": 1,
+   "ceiling": 12,
+   "per_page_max": 2
+  },
+  "settled": {
+   "deterministic": 1,
+   "abstentions_closed_by_xcheck": [],
+   "abstentions_suppressed_by_profile": []
+  },
+  "report": [
+   {
+    "rule": "misalignment",
+    "target": "div.panel:nth-of-type(5)",
+    "detail": "left edge at 31px is 1.0px off the shared 32px edge used by 8 other elements",
+    "severity": "medium",
+    "score": 1.0
+   }
+  ],
+  "suppressed_by_profile": {},
+  "calls": [
+   {
+    "id": "C1",
+    "kind": "global",
+    "image": "align-1px.png",
+    "raster": [
+     1280,
+     900
+    ],
+    "visual_tokens": 1518,
+    "asks": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ]
+   }
+  ],
+  "unrouted": [],
+  "coverage": {
+   "dom": "complete",
+   "pixel": "complete",
+   "judgement": "planned"
+  }
+ },
+ "clean": {
+  "schema": "design-route/1",
+  "ok": true,
+  "page": "clean",
+  "profile": "bench",
+  "budget": {
+   "image_blocks_granted": 12,
+   "image_blocks_used": 1,
+   "ceiling": 12,
+   "per_page_max": 2
+  },
+  "settled": {
+   "deterministic": 0,
+   "abstentions_closed_by_xcheck": [],
+   "abstentions_suppressed_by_profile": []
+  },
+  "report": [],
+  "suppressed_by_profile": {},
+  "calls": [
+   {
+    "id": "C1",
+    "kind": "global",
+    "image": "clean.png",
+    "raster": [
+     1280,
+     900
+    ],
+    "visual_tokens": 1518,
+    "asks": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ]
+   }
+  ],
+  "unrouted": [],
+  "coverage": {
+   "dom": "complete",
+   "pixel": "complete",
+   "judgement": "planned"
+  }
+ },
+ "contrast-on-gradient": {
+  "schema": "design-route/1",
+  "ok": true,
+  "page": "contrast-on-gradient",
+  "profile": "bench",
+  "budget": {
+   "image_blocks_granted": 12,
+   "image_blocks_used": 1,
+   "ceiling": 12,
+   "per_page_max": 2
+  },
+  "settled": {
+   "deterministic": 2,
+   "abstentions_closed_by_xcheck": [
+    "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
+    "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)"
+   ],
+   "abstentions_suppressed_by_profile": []
+  },
+  "report": [
+   {
+    "rule": "xcheck-contrast-varies",
+    "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
+    "detail": "contrast is not one number across this text: it varies horizontally, 6.15:1 at the left and 1.73:1 at the right. Any single computed value is a fiction, and the right end is the one that fails a reader",
+    "severity": "high",
+    "score": 2.0
+   },
+   {
+    "rule": "xcheck-contrast-varies",
+    "target": "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
+    "detail": "contrast is not one number across this text: it varies horizontally, 5.92:1 at the left and 1.71:1 at the right. Any single computed value is a fiction, and the right end is the one that fails a reader",
+    "severity": "high",
+    "score": 2.0
+   }
+  ],
+  "suppressed_by_profile": {},
+  "calls": [
+   {
+    "id": "C1",
+    "kind": "global",
+    "image": "contrast-on-gradient.png",
+    "raster": [
+     1280,
+     900
+    ],
+    "visual_tokens": 1518,
+    "asks": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ]
+   }
+  ],
+  "unrouted": [],
+  "coverage": {
+   "dom": "complete",
+   "pixel": "complete",
+   "judgement": "planned"
+  }
+ },
+ "contrast-on-texture": {
+  "schema": "design-route/1",
+  "ok": true,
+  "page": "contrast-on-texture",
+  "profile": "bench",
+  "budget": {
+   "image_blocks_granted": 12,
+   "image_blocks_used": 2,
+   "ceiling": 12,
+   "per_page_max": 2
+  },
+  "settled": {
+   "deterministic": 0,
+   "abstentions_closed_by_xcheck": [],
+   "abstentions_suppressed_by_profile": []
+  },
+  "report": [],
+  "suppressed_by_profile": {},
+  "calls": [
+   {
+    "id": "C1",
+    "kind": "global",
+    "image": "contrast-on-texture.png",
+    "raster": [
+     1280,
+     900
+    ],
+    "visual_tokens": 1518,
+    "asks": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ]
+   },
+   {
+    "id": "C2",
+    "kind": "region",
+    "image": "clip/contrast-on-texture-C2@1200x84.png",
+    "raster": [
+     1200,
+     84
+    ],
+    "visual_tokens": 129,
+    "css_box": [
+     40.0,
+     40.0,
+     1200.0,
+     84.0
+    ],
+    "from": [
+     "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
+     "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)"
+    ],
+    "asks": [
+     "contrast-indeterminate"
+    ]
+   }
+  ],
+  "unrouted": [],
+  "coverage": {
+   "dom": "complete",
+   "pixel": "complete",
+   "judgement": "planned"
+  }
+ },
+ "contrast-plain": {
+  "schema": "design-route/1",
+  "ok": true,
+  "page": "contrast-plain",
+  "profile": "bench",
+  "budget": {
+   "image_blocks_granted": 12,
+   "image_blocks_used": 1,
+   "ceiling": 12,
+   "per_page_max": 2
+  },
+  "settled": {
+   "deterministic": 1,
+   "abstentions_closed_by_xcheck": [],
+   "abstentions_suppressed_by_profile": []
+  },
+  "report": [
+   {
+    "rule": "contrast",
+    "target": "div.helper:nth-of-type(4)",
+    "detail": "2.54:1 against 4.5:1 required (#9CA3AF on #FFFFFF)",
+    "severity": "high",
+    "score": 2.0
+   }
+  ],
+  "suppressed_by_profile": {},
+  "calls": [
+   {
+    "id": "C1",
+    "kind": "global",
+    "image": "contrast-plain.png",
+    "raster": [
+     1280,
+     900
+    ],
+    "visual_tokens": 1518,
+    "asks": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ]
+   }
+  ],
+  "unrouted": [],
+  "coverage": {
+   "dom": "complete",
+   "pixel": "complete",
+   "judgement": "planned"
+  }
+ },
+ "grid-offgrid": {
+  "schema": "design-route/1",
+  "ok": true,
+  "page": "grid-offgrid",
+  "profile": "bench",
+  "budget": {
+   "image_blocks_granted": 12,
+   "image_blocks_used": 1,
+   "ceiling": 12,
+   "per_page_max": 2
+  },
+  "settled": {
+   "deterministic": 1,
+   "abstentions_closed_by_xcheck": [],
+   "abstentions_suppressed_by_profile": []
+  },
+  "report": [
+   {
+    "rule": "grid-violation",
+    "target": "div.section-title:nth-of-type(3)",
+    "detail": "margin-top is 13px, not a multiple of the 8px grid",
+    "severity": "low",
+    "score": 0.5
+   }
+  ],
+  "suppressed_by_profile": {},
+  "calls": [
+   {
+    "id": "C1",
+    "kind": "global",
+    "image": "grid-offgrid.png",
+    "raster": [
+     1280,
+     900
+    ],
+    "visual_tokens": 1518,
+    "asks": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ]
+   }
+  ],
+  "unrouted": [],
+  "coverage": {
+   "dom": "complete",
+   "pixel": "complete",
+   "judgement": "planned"
+  }
+ },
+ "hierarchy-inversion": {
+  "schema": "design-route/1",
+  "ok": true,
+  "page": "hierarchy-inversion",
+  "profile": "bench",
+  "budget": {
+   "image_blocks_granted": 12,
+   "image_blocks_used": 1,
+   "ceiling": 12,
+   "per_page_max": 2
+  },
+  "settled": {
+   "deterministic": 2,
+   "abstentions_closed_by_xcheck": [],
+   "abstentions_suppressed_by_profile": []
+  },
+  "report": [
+   {
+    "rule": "contrast",
+    "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
+    "detail": "3.38:1 against 4.5:1 required (#3B82F6 on #EFF6FF)",
+    "severity": "high",
+    "score": 2.0
+   },
+   {
+    "rule": "token-drift",
+    "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
+    "detail": "background-color #EFF6FF is 11.5 away from token #F9FAFB; almost certainly meant to be the token",
+    "severity": "low",
+    "score": 0.5
+   }
+  ],
+  "suppressed_by_profile": {},
+  "calls": [
+   {
+    "id": "C1",
+    "kind": "global",
+    "image": "hierarchy-inversion.png",
+    "raster": [
+     1280,
+     900
+    ],
+    "visual_tokens": 1518,
+    "asks": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ]
+   }
+  ],
+  "unrouted": [],
+  "coverage": {
+   "dom": "complete",
+   "pixel": "complete",
+   "judgement": "planned"
+  }
+ },
+ "optical-centering": {
+  "schema": "design-route/1",
+  "ok": true,
+  "page": "optical-centering",
+  "profile": "bench",
+  "budget": {
+   "image_blocks_granted": 12,
+   "image_blocks_used": 1,
+   "ceiling": 12,
+   "per_page_max": 2
+  },
+  "settled": {
+   "deterministic": 1,
+   "abstentions_closed_by_xcheck": [],
+   "abstentions_suppressed_by_profile": []
+  },
+  "report": [
+   {
+    "rule": "xcheck-optical-centre",
+    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
+    "detail": "div.glyph-btn:nth-of-type(2) centres this mark exactly, but its rendered ink sits 4.2px left and 3.0px up of the container's painted centre, and nothing compensates for it -- it will read as misaligned however correct the CSS is",
+    "severity": "medium",
+    "score": 1.0
+   }
+  ],
+  "suppressed_by_profile": {},
+  "calls": [
+   {
+    "id": "C1",
+    "kind": "global",
+    "image": "optical-centering.png",
+    "raster": [
+     1280,
+     900
+    ],
+    "visual_tokens": 1518,
+    "asks": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ]
+   }
+  ],
+  "unrouted": [],
+  "coverage": {
+   "dom": "complete",
+   "pixel": "complete",
+   "judgement": "planned"
+  }
+ },
+ "overflow-clip": {
+  "schema": "design-route/1",
+  "ok": true,
+  "page": "overflow-clip",
+  "profile": "bench",
+  "budget": {
+   "image_blocks_granted": 12,
+   "image_blocks_used": 1,
+   "ceiling": 12,
+   "per_page_max": 2
+  },
+  "settled": {
+   "deterministic": 3,
+   "abstentions_closed_by_xcheck": [],
+   "abstentions_suppressed_by_profile": []
+  },
+  "report": [
+   {
+    "rule": "overflow",
+    "target": "div.panel:nth-of-type(5) > table > tbody > tr:nth-of-type(2) > td.cell-venue:nth-of-type(2)",
+    "detail": "content is 40px tall inside a 24px box with overflow hidden; text is clipped",
+    "severity": "high",
+    "score": 2.0
+   },
+   {
+    "rule": "overflow",
+    "target": "div.panel:nth-of-type(5) > table > tbody > tr:nth-of-type(3) > td.cell-venue:nth-of-type(2)",
+    "detail": "content is 40px tall inside a 24px box with overflow hidden; text is clipped",
+    "severity": "high",
+    "score": 2.0
+   },
+   {
+    "rule": "overflow",
+    "target": "div.panel:nth-of-type(5) > table > tbody > tr:nth-of-type(4) > td.cell-venue:nth-of-type(2)",
+    "detail": "content is 40px tall inside a 24px box with overflow hidden; text is clipped",
+    "severity": "high",
+    "score": 2.0
+   }
+  ],
+  "suppressed_by_profile": {},
+  "calls": [
+   {
+    "id": "C1",
+    "kind": "global",
+    "image": "overflow-clip.png",
+    "raster": [
+     1280,
+     900
+    ],
+    "visual_tokens": 1518,
+    "asks": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ]
+   }
+  ],
+  "unrouted": [],
+  "coverage": {
+   "dom": "complete",
+   "pixel": "complete",
+   "judgement": "planned"
+  }
+ },
+ "radius-drift": {
+  "schema": "design-route/1",
+  "ok": true,
+  "page": "radius-drift",
+  "profile": "bench",
+  "budget": {
+   "image_blocks_granted": 12,
+   "image_blocks_used": 1,
+   "ceiling": 12,
+   "per_page_max": 2
+  },
+  "settled": {
+   "deterministic": 1,
+   "abstentions_closed_by_xcheck": [],
+   "abstentions_suppressed_by_profile": []
+  },
+  "report": [
+   {
+    "rule": "token-drift",
+    "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(2)",
+    "detail": "border-radius 6px differs from the page's dominant 8px",
+    "severity": "low",
+    "score": 0.5
+   }
+  ],
+  "suppressed_by_profile": {},
+  "calls": [
+   {
+    "id": "C1",
+    "kind": "global",
+    "image": "radius-drift.png",
+    "raster": [
+     1280,
+     900
+    ],
+    "visual_tokens": 1518,
+    "asks": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ]
+   }
+  ],
+  "unrouted": [],
+  "coverage": {
+   "dom": "complete",
+   "pixel": "complete",
+   "judgement": "planned"
+  }
+ },
+ "spacing-gap": {
+  "schema": "design-route/1",
+  "ok": true,
+  "page": "spacing-gap",
+  "profile": "bench",
+  "budget": {
+   "image_blocks_granted": 12,
+   "image_blocks_used": 1,
+   "ceiling": 12,
+   "per_page_max": 2
+  },
+  "settled": {
+   "deterministic": 2,
+   "abstentions_closed_by_xcheck": [],
+   "abstentions_suppressed_by_profile": []
+  },
+  "report": [
+   {
+    "rule": "spacing-rhythm",
+    "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(3)",
+    "detail": "gap 39.0px breaks the 16.0px rhythm used by its siblings under div.kpi-row:nth-of-type(2)",
+    "severity": "medium",
+    "score": 1.0
+   },
+   {
+    "rule": "grid-violation",
+    "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(3)",
+    "detail": "margin-left is 23px, not a multiple of the 8px grid",
+    "severity": "low",
+    "score": 0.5
+   }
+  ],
+  "suppressed_by_profile": {},
+  "calls": [
+   {
+    "id": "C1",
+    "kind": "global",
+    "image": "spacing-gap.png",
+    "raster": [
+     1280,
+     900
+    ],
+    "visual_tokens": 1518,
+    "asks": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ]
+   }
+  ],
+  "unrouted": [],
+  "coverage": {
+   "dom": "complete",
+   "pixel": "complete",
+   "judgement": "planned"
+  }
+ },
+ "token-color-drift": {
+  "schema": "design-route/1",
+  "ok": true,
+  "page": "token-color-drift",
+  "profile": "bench",
+  "budget": {
+   "image_blocks_granted": 12,
+   "image_blocks_used": 1,
+   "ceiling": 12,
+   "per_page_max": 2
+  },
+  "settled": {
+   "deterministic": 1,
+   "abstentions_closed_by_xcheck": [],
+   "abstentions_suppressed_by_profile": []
+  },
+  "report": [
+   {
+    "rule": "token-drift",
+    "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
+    "detail": "background-color #1D4ED3 is 5.0 away from token #1D4ED8; almost certainly meant to be the token",
+    "severity": "low",
+    "score": 0.5
+   }
+  ],
+  "suppressed_by_profile": {},
+  "calls": [
+   {
+    "id": "C1",
+    "kind": "global",
+    "image": "token-color-drift.png",
+    "raster": [
+     1280,
+     900
+    ],
+    "visual_tokens": 1518,
+    "asks": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ]
+   }
+  ],
+  "unrouted": [],
+  "coverage": {
+   "dom": "complete",
+   "pixel": "complete",
+   "judgement": "planned"
+  }
+ },
+ "touch-target": {
+  "schema": "design-route/1",
+  "ok": true,
+  "page": "touch-target",
+  "profile": "bench",
+  "budget": {
+   "image_blocks_granted": 12,
+   "image_blocks_used": 1,
+   "ceiling": 12,
+   "per_page_max": 2
+  },
+  "settled": {
+   "deterministic": 1,
+   "abstentions_closed_by_xcheck": [],
+   "abstentions_suppressed_by_profile": []
+  },
+  "report": [
+   {
+    "rule": "touch-target",
+    "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-secondary:nth-of-type(2)",
+    "detail": "164x29px is under the 44px minimum target",
+    "severity": "high",
+    "score": 2.0
+   }
+  ],
+  "suppressed_by_profile": {},
+  "calls": [
+   {
+    "id": "C1",
+    "kind": "global",
+    "image": "touch-target.png",
+    "raster": [
+     1280,
+     900
+    ],
+    "visual_tokens": 1518,
+    "asks": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ]
+   }
+  ],
+  "unrouted": [],
+  "coverage": {
+   "dom": "complete",
+   "pixel": "complete",
+   "judgement": "planned"
+  }
+ },
+ "type-scale": {
+  "schema": "design-route/1",
+  "ok": true,
+  "page": "type-scale",
+  "profile": "bench",
+  "budget": {
+   "image_blocks_granted": 12,
+   "image_blocks_used": 1,
+   "ceiling": 12,
+   "per_page_max": 2
+  },
+  "settled": {
+   "deterministic": 1,
+   "abstentions_closed_by_xcheck": [],
+   "abstentions_suppressed_by_profile": []
+  },
+  "report": [
+   {
+    "rule": "type-scale",
+    "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(4) > div.kpi-label:nth-of-type(1)",
+    "detail": "font-size 17px is used once and sits off the page scale [12.0, 14.0, 16.0, 24.0]; nearest step is 16px",
+    "severity": "medium",
+    "score": 1.0
+   }
+  ],
+  "suppressed_by_profile": {},
+  "calls": [
+   {
+    "id": "C1",
+    "kind": "global",
+    "image": "type-scale.png",
+    "raster": [
+     1280,
+     900
+    ],
+    "visual_tokens": 1518,
+    "asks": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ]
+   }
+  ],
+  "unrouted": [],
+  "coverage": {
+   "dom": "complete",
+   "pixel": "complete",
+   "judgement": "planned"
+  }
+ }
+}

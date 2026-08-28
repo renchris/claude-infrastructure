@@ -20,9 +20,9 @@
   },
   "control": "clean.html",
   "counts": {
-    "total_variants": 13,
+    "total_variants": 14,
     "dom_detectable": 9,
-    "pixels_only": 3
+    "pixels_only": 4
   },
   "scoring": {
     "true_positive": "names the right defect class AND points at the right target",
@@ -41,6 +41,7 @@
       "magnitude": "7px deviation from a 16px rhythm",
       "dom_blind_because": "",
       "severity": "medium",
+      "collateral": {},
       "html_override": {}
     },
     {
@@ -53,6 +54,7 @@
       "magnitude": "1px horizontal",
       "dom_blind_because": "",
       "severity": "low",
+      "collateral": {},
       "html_override": {}
     },
     {
@@ -65,6 +67,7 @@
       "magnitude": "2px of 8px",
       "dom_blind_because": "",
       "severity": "low",
+      "collateral": {},
       "html_override": {}
     },
     {
@@ -77,6 +80,7 @@
       "magnitude": "17px, off-scale by 1px",
       "dom_blind_because": "",
       "severity": "medium",
+      "collateral": {},
       "html_override": {}
     },
     {
@@ -89,6 +93,7 @@
       "magnitude": "5/255 on the blue channel; below the human just-noticeable difference",
       "dom_blind_because": "",
       "severity": "low",
+      "collateral": {},
       "html_override": {}
     },
     {
@@ -101,6 +106,7 @@
       "magnitude": "13px, 5px off the 8px grid",
       "dom_blind_because": "",
       "severity": "low",
+      "collateral": {},
       "html_override": {}
     },
     {
@@ -113,6 +119,7 @@
       "magnitude": "2.54:1 against a 4.5:1 requirement",
       "dom_blind_because": "",
       "severity": "high",
+      "collateral": {},
       "html_override": {}
     },
     {
@@ -125,6 +132,7 @@
       "magnitude": "scrollHeight exceeds clientHeight",
       "dom_blind_because": "",
       "severity": "high",
+      "collateral": {},
       "html_override": {}
     },
     {
@@ -137,6 +145,7 @@
       "magnitude": "30px against a 44px floor",
       "dom_blind_because": "",
       "severity": "high",
+      "collateral": {},
       "html_override": {}
     },
     {
@@ -149,6 +158,24 @@
       "magnitude": "ratio falls from ~8.6:1 at the left edge to ~1.2:1 at the right",
       "dom_blind_because": "getComputedStyle returns background-color rgba(0,0,0,0) for the caption and a background-image string for the ancestor. There is no numeric backdrop colour to contrast against, so the standard ratio computation has no second operand and axe-core reports 'incomplete' rather than a violation. The actual backdrop luminance varies across the element's own width.",
       "severity": "high",
+      "collateral": {
+        ".hero-title": "The injected rule replaces the .hero BACKGROUND, so every text element inside the hero sits on the new backdrop. The title is white on the same run as the caption and is affected identically; a detector that reports both has found the defect twice, not found a spurious one."
+      },
+      "html_override": {}
+    },
+    {
+      "id": "contrast-on-texture",
+      "klass": "contrast",
+      "summary": "Hero text sits on a high-frequency two-tone pattern, so it is legible against half the backdrop and invisible against the other half -- and every band of the run averages to the same colour.",
+      "css": ".hero { background: repeating-linear-gradient(45deg,#1E3A8A 0 6px,#DBEAFE 6px 12px); } .hero-caption { color: #FFFFFF; }",
+      "target": ".hero-caption",
+      "detectable_by": "pixels",
+      "magnitude": "backdrop luminance alternates 0.045 <-> 0.72 every 6px; band-to-band delta is ~0, so the abstention must come from the spread, not the delta",
+      "dom_blind_because": "Identical to the gradient case as far as the cascade is concerned: background-image is a string, so there is no numeric second operand and the ratio computation has nothing to run on. What makes this variant different is that it also defeats SAMPLING: the pattern's period is far smaller than the text run, so the left, right, top and bottom bands all average to the same colour and a comparator that only measures the DIFFERENCE between bands reports one confident number. The honest answer is that no scalar represents this backdrop at all.",
+      "severity": "high",
+      "collateral": {
+        ".hero-title": "The injected rule replaces the .hero BACKGROUND, so every text element inside the hero sits on the new backdrop. The title is white on the same run as the caption and is affected identically; a detector that reports both has found the defect twice, not found a spurious one."
+      },
       "html_override": {}
     },
     {
@@ -161,6 +188,7 @@
       "magnitude": "ink centroid ~2px left of the geometric centre",
       "dom_blind_because": "Every box-model number is symmetric: the flex container centres the glyph and getBoundingClientRect on the glyph is exactly centred within the button. The asymmetry lives in the distribution of ink inside the glyph's own box, which no DOM API exposes. Detecting it requires computing the centroid of the rendered pixels and comparing it to the geometric centre.",
       "severity": "medium",
+      "collateral": {},
       "html_override": {}
     },
     {
@@ -173,6 +201,7 @@
       "magnitude": "secondary carries roughly 3x the visual weight of the primary",
       "dom_blind_because": "Both buttons have entirely valid styles; nothing is out of range and no token is violated. The defect is the RELATION between them and the intent behind it. A rule could encode 'primary must outweigh secondary', but that requires knowing which is semantically primary and how to compare visual weight -- a judgement, not a measurement.",
       "severity": "high",
+      "collateral": {},
       "html_override": {}
     }
   ]

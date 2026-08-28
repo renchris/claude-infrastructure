@@ -11,3 +11,9 @@ corpus/out/pages/
 corpus/out/shots/
 corpus/out/snapshots/
 corpus/out/blind/
+# route.py's crops are cut from shots/ and are as regenerable as it is;
+# route-steps.sh is a rendering of route-plan.json, which IS committed because it
+# is the decision record -- which abstentions were routed, which the cross-check
+# closed for free, and what each call cost.
+corpus/out/clip/
+corpus/out/route-steps.sh
