@@ -73,3 +73,51 @@ Neither `cc-backlog` verb could be run from here — this container has no
 `~/.claude/autonomy/backlog.jsonl`, so `block`/`done`/`reopen` would have created a fresh store
 that nothing reads. A write that no reader can see is a fake discharge, which is the failure this
 document exists instead of.
+
+## 5. It happened again on 2026-08-28 — a doc is not a store, measured
+
+`485f8f87eb5f` was re-dispatched **four days later to the identical venue**: another
+`anthropic_cloud` VM, GitHub scope `renchris/claude-infrastructure`, a **50-commit shallow clone**
+(`git rev-parse --is-shallow-repository` → `true`), `$HOME=/root` with no `~/.claude/autonomy/`.
+Every refusal in §1–§4 reproduced exactly. Two cloud worker slots have now been spent on one item,
+and neither could touch it.
+
+That is the prediction in §4 coming true rather than a new failure. §4 named the right command and
+could not run it, so the only record of the refusal was this file — and **no arm of the dispatcher
+reads `docs/research/`**. There is no repo-resident venue store to write to either: `config/` holds
+no exclusion list, and `bin/cc-eligible` / `bin/cc-venue` / `bin/cc-dispatch` carry no
+never-cloud/route-local denylist. The park is only expressible in the operator's backlog store, on
+the box, which is precisely the surface a cloud VM does not have. **Until an on-box session runs
+§4's command, this item will keep re-dispatching here on every wave.**
+
+The guard held for the second session too, and now automatically rather than by memory: a 50-commit
+grafted clone makes `HistoryOracle.certify()` return `shallow`, so this VM cannot write a venue
+label at all. §1's fix — widening `cross_repo` past the `project` field — remains an on-box
+session's to make, and no predicate code was written from here.
+
+### The new finding: a SECOND arm is blind to the same field
+
+§1 measured `cross_repo` reading `project` as a proxy for reachability. The 2026-08-28 dispatch
+shows the **evidence-age arm** keying on the same field and going wrong the same way. The item's
+prose says *"READ reso's own CLAUDE.md for landing policy first"*; the arm resolved that bare name
+against **this** repo and reported the item's cited file as freshly touched, offering four commits
+as a possible discharge:
+
+```
+078c96a13  fix(claude-md): an operator rule lived only in the live file …
+eff291df6  feat(close): W3 — slots and a store, not a word cap
+b8124fe6a  docs(close): the close cap is a number now …
+c7e1250c8  docs: register the msg command for personal message history
+```
+
+All four are claude-infrastructure's own `CLAUDE.md`, verified with `git log --oneline -1 <sha> --
+CLAUDE.md`. None has any bearing on `renchris/reso-management-app`'s tenant-drift workflow. The arm
+was inviting the session to close the item as already-discharged **against the wrong repo's
+history** — the false-done the FIRST STEP check exists to prevent, arriving through the check
+itself.
+
+So `project` is not one arm's local shortcut. Two independent arms — reachability and
+evidence-freshness — resolve an item's subject through it, and both mis-resolve on the same
+residual shape: **filed under X, specified against Y.** That widens the case for §1's fix from one
+misrouted item to a class that can also manufacture a plausible wrong closure. Whichever on-box
+session takes it should fix the resolution, not either arm.
