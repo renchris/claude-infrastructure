@@ -9,6 +9,13 @@ verifiers returned; the load-mechanism verifier was aborted at 00:59 and the mem
 verifier never returned. **Every claim below is labelled by whether it survived verification.**
 Raw A/B measurements: [`data/gc-cpu-ab-2026-08-18.md`](data/gc-cpu-ab-2026-08-18.md).
 
+> 🚨 **STATUS 2026-08-28 — the title's second clause is still true and is no longer ACTIONABLE. Read
+> §3a before acting on §3.** `CC_HW_DEFAULT_MAX_LOAD_PER_CORE=2.0` was indeed never derived, but §3's
+> prescribed cure ("derive it from a measured failure point") is refuted by evidence §3 itself quotes,
+> and the load term now defaults **off** on both main gates (`f944d6e3`) — so the constant no longer
+> "stops us" anywhere except two budget-released recovery callers. Backlog `e981656df348` is closed on
+> that finding. **Do not mint a new row against this constant from this doc's title.**
+
 **The vendor claim under test** ([@ClaudeDevs](https://x.com/ClaudeDevs), 2026-08-17): "Claude Code CLI
 now uses 2× less CPU at p99. Bun's garbage collector was running on a fixed timer, so it would kick in
 mid-turn and steal CPU right when Claude Code was busiest. Now it waits until the process is idle."
@@ -117,10 +124,17 @@ own errors:
 `CC_HW_DEFAULT_MAX_LOAD_PER_CORE = 2.0` (`scripts/lib/capacity-admit.sh:134`) is the number that
 becomes the load-20 ceiling on this 10-core box, and both gates expand it. Its own code comment cites
 "§9.5's measured ceiling" — and **§9.5 contains no such derivation**; it shows only that the gate
-admits at 1.55 and refuses at 2.92, which is a demonstration that a threshold thresholds. The origin
-commit `0fc3a3d33` measured the motivating incident at **2.72/core** and picked 2.0 with no stated
-rule. The verifier read the full commit body and **confirmed this verbatim** — it called it the
+admits at 1.55 and refuses at ~~2.92~~ **4.0**, which is a demonstration that a threshold thresholds.
+The origin commit `0fc3a3d33` measured the motivating incident at **2.72/core** and picked 2.0 with no
+stated rule. The verifier read the full commit body and **confirmed this verbatim** — it called it the
 strongest finding in the wave.
+
+> *(Refuse figure corrected 2026-08-28. §9.5's closing sentence is verbatim "A ceiling that refuses at
+> 4.0/core and admits at 1.55/core is behaving as a ceiling, not as an outage." **2.92 is not from that
+> sentence at all** — it is the low end of the 2.92–5.98 SURVIVED band quoted three paragraphs below,
+> i.e. this section mis-cited its own source while indicting a mis-citation. The indictment stands
+> either way, and stands harder at 4.0: the gap between the picked ceiling and the demonstrated refusal
+> point is wider, not narrower.)*
 
 Worse, the repo's own instrument already documents that this axis cannot do the job
 (`scripts/capacity-alarm.sh:139-147`, verbatim):
@@ -139,10 +153,65 @@ consumers were `bun` 65%, `mediaanalysisd` 33%, `kernel_task` 25%, with the high
 **5.5%** and 52% idle). Corroborated live while writing this: **load 10.66 at 13 sessions**, against
 19.06 at 14 sessions twelve hours earlier — the same session count spanning a 1.8× load range.
 
-The honest actionable is therefore **to derive the number, not to move it**: re-run the axis-09-style
+~~The honest actionable is therefore **to derive the number, not to move it**: re-run the axis-09-style
 measurement (load1 delta across N all-active sessions) and set the ceiling from a measured failure
 point. That is a two-arm experiment, not a config edit, and it is the only thing that can legitimately
-move a capacity constant.
+move a capacity constant.~~
+
+### 3a · That prescription is REFUTED, and this section already contained its refutation
+
+**Adjudicated 2026-08-28** (backlog `e981656df348`, the row this section minted — closed on this
+finding, not on a derivation). The paragraph struck above is the only site left on trunk still asking
+for a derivation on this axis; `scripts/lib/capacity-admit.sh` carries the refutation in code as of
+`e89918f2` (2026-08-25, ancestor of trunk). Four things are now settled, and none of them is the
+number:
+
+1. **The provenance defect this section names is FIXED.** `e89918f2` struck `"§9.5's measured
+   ceiling"` from `capacity-admit.sh` and replaced it with an explicit statement that 2.0/core was
+   never derived and that no derivation is reachable on this axis. The literal was left at 2.0,
+   untouched — per C18, a fix moves a term switch, never a ceiling.
+
+2. **"Set the ceiling from a measured failure point" has no solution here — and the proof is quoted
+   three paragraphs above, in this very section.** `THE SURVIVED POPULATION CONTAINS THE FATAL VALUE`:
+   fatal at 2.53/core against 13 consecutive survived samples spanning 2.92–5.98/core, plus reso's
+   42 h at 2.5/core with no panic. `scripts/capacity-alarm.sh`'s own words are `"no setting of these
+   two numbers can make it"` separate fatal from survived. A section cannot quote that and then
+   prescribe a measured failure point; §3 did both, four paragraphs apart. **A prescription must be
+   run against the counter-evidence already on the page before it is written down.**
+
+3. **The blocker the row was parked behind cannot discharge it — it answers a different question.**
+   Marginal Δload per active session is a *capacity-in-sessions coefficient*: it translates a ceiling
+   into a session count. It cannot **locate** a failure boundary, so no value of it — not the four
+   spanning 30× in §5, not the clean one `scripts/capacity-marginal.sh` might yet produce — makes
+   2.0/core derivable. The row sat blocked from 2026-08-18 on a measurement that was never on its
+   critical path. *(Independently, that coefficient was adjudicated unidentified on 2026-08-19 —
+   `marginal-load-per-active-session-2026-08-19.md`, backlog `193ae8ddce72` — so the block was
+   doubly inert.)*
+
+4. **The real cure landed two days after this doc was written, and it is stronger than the one asked
+   for.** `f944d6e3` (2026-08-20, ancestor of trunk) established that an additional **resident**
+   session moves the 1-min runnable count by ~0 — so **the input is wrong, not the number**, and no
+   value of this literal can make the term correct. `CC_FIRE_LOAD_TERM` now defaults **off** in
+   `capacity_gate()` (`scripts/handoff-fire.sh`, `${CC_FIRE_LOAD_TERM:-off}`); the Agent-tool path has
+   run `CC_ADMIT_LOAD_TERM=off` since Wave D; `segments` and `active` carry the term's intent because
+   they *do* move with the spawn. This section's own observation that "47% of gated fires run with the
+   gate switched off" was the fleet arriving at the same conclusion ahead of the code.
+
+**Where the literal still binds, and why that is deliberate.** Only the two unattended recovery
+callers leave the load term on — `scripts/boot-resume-launch.sh` and
+`scripts/limit-recover/lr-fire-resume.sh` — and both are budget-released after `CC_ADMIT_BUDGET`
+consecutive refusals, so the imprecision is priced at a **delayed resume**, never a standing refusal.
+That is the §12.2 amplifier being bounded rather than removed. **Do not re-mint a row against 2.0/core
+from this section.** If the load term is ever to bind again, the work is a *different input*, not a
+different number.
+
+⚠️ **A shallow clone silently inverts the ancestry check that gates this kind of close.** Both
+commits above read `NOT-ancestor` from `git merge-base --is-ancestor` in the cloud worker that wrote
+this annotation, because the clone arrives at `--depth=50` and the answer for anything older than the
+fetch boundary is a false NO, not an error. `git fetch --unshallow` first, or an ancestry check will
+hand you a fabricated refutation of a commit that is on trunk. *(Same trap in the other direction:
+`0fc3a3d33` above read NOT-ancestor at depth 474 and is a genuine ancestor — the sha citation is
+sound. `capacity-admit.sh` still prefers citing that commit by SUBJECT, because a land rebases.)*
 
 ## 4 · If 2.1.234 is adopted, adopt it on other grounds — and set one env var first
 
