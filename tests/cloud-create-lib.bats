@@ -316,3 +316,59 @@ View: https://claude.ai/code/session_01REALREALREALREALREALR?from=cli&m=0"
   run git check-ref-format --branch "$a"
   [ "$status" -eq 0 ]
 }
+
+# ── 20-22 · THE BRIEF TRAILER — §4.1's absence contract, made executable ────────────────────────
+# The contract these three pin is CLOUD_OBSERVABILITY.md §4.1, quoted because the whole point is
+# that it was quotable and nothing else: "the session's brief requires its FIRST ACT to be pushing
+# that branch — an empty commit is enough. Absence then becomes informative."
+#
+# WHY THE ORDERING ASSERTIONS ARE THE TEST, and a grep for `--allow-empty` would not be. Both fire
+# legs already instructed a push before this function existed; the CLI leg's said "push whatever
+# you have BEFORE YOU FINISH". A push at the END satisfies every content check and buys ZERO
+# discrimination: the session that is working correctly and the session that never booted are both
+# "no ref" at the boot budget, which is §4.3's C1 arm firing on a healthy population. So what is
+# asserted is POSITION — the beacon precedes the return-channel paragraph — because position is
+# the entire difference between a contract and a courtesy.
+
+@test "20 the trailer makes the FIRST act an empty commit pushed to the declared branch" {
+  local t; t="$(cc_cloud_brief_trailer claude/fire-20260828T000000Z-1)"
+  local sw ec push
+  sw="$(printf '%s\n' "$t"   | grep -n 'git switch -c claude/fire-20260828T000000Z-1' | head -1 | cut -d: -f1)"
+  ec="$(printf '%s\n' "$t"   | grep -n 'git commit --allow-empty' | head -1 | cut -d: -f1)"
+  push="$(printf '%s\n' "$t" | grep -n 'git push -u origin HEAD'  | head -1 | cut -d: -f1)"
+  [ -n "$sw" ]   || { echo "the trailer never creates the declared branch"; false; }
+  [ -n "$ec" ]   || { echo "no empty commit — §4.1's beacon has nothing to push"; false; }
+  [ -n "$push" ] || { echo "the trailer never instructs the push"; false; }
+  [ "$sw" -lt "$ec" ] && [ "$ec" -lt "$push" ] || { echo "switch → commit → push (got $sw $ec $push)"; false; }
+  # The pre-fix spelling pushed a detached HEAD at an invented ref name (B1, backlog 7c6ff16259a0).
+  ! printf '%s\n' "$t" | grep -q 'HEAD:claude/fire-'
+}
+
+@test "21 the beacon PRECEDES the return-channel paragraph — the discrimination, not the courtesy" {
+  # RED CONTROL, re-runnable: replay this against `git show <pre-fix sha>:scripts/handoff-fire.sh`'s
+  # inline trailer. It carries the switch and the push, so case 20's content half nearly passes —
+  # and this one cannot, because its only push instruction IS the return-channel one ("push
+  # whatever you have before you finish"). There is no earlier line for the beacon to precede.
+  local t; t="$(cc_cloud_brief_trailer claude/fire-x)"
+  local first ret
+  first="$(printf '%s\n' "$t" | grep -n 'git push -u origin HEAD' | head -1 | cut -d: -f1)"
+  ret="$(printf '%s\n' "$t"   | grep -n 'HOW TO RETURN YOUR WORK' | head -1 | cut -d: -f1)"
+  [ -n "$ret" ] || { echo "the return channel must still be stated — the beacon does not replace it"; false; }
+  [ "$first" -lt "$ret" ] || { echo "the beacon push must come BEFORE the return-channel section"; false; }
+  # And it must say WHY, in the terms the state function actually uses, or a session that is busy
+  # will rationally defer it: the cost of deferring is being read as NOT-STARTED and re-fired.
+  printf '%s\n' "$t" | grep -q 'NOT-STARTED'
+}
+
+@test "22 the session id is OPTIONAL — the CLI leg has none at compose time (§8.1)" {
+  # §8.1: on both real routes the id is a RETURN VALUE of the fire, so the CLI leg composes its
+  # payload before any id exists. A composer that required one would be unsatisfiable there.
+  run cc_cloud_brief_trailer claude/fire-y
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"boot beacon: claude/fire-y"* ]] || false
+  run cc_cloud_brief_trailer claude/fire-y session_01ABC
+  [[ "$output" == *"boot beacon: session_01ABC"* ]] || false
+  # A branchless call is a REFUSAL, never a trailer naming nothing.
+  run cc_cloud_brief_trailer ""
+  [ "$status" -eq 2 ]
+}

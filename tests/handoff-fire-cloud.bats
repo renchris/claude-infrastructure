@@ -461,3 +461,35 @@ EOF
   [ -s "$CLOUD_DECL_LOG" ]
   [ ! -f "$BATS_TEST_TMPDIR/pf-off.log" ]                # the override SKIPS the probe, not just its verdict
 }
+
+# ── 20 · THE ABSENCE CONTRACT — backlog 0c8b39b67665 ────────────────────────────────────────────
+# CLOUD_OBSERVABILITY.md §4.1 is the load-bearing paragraph of the observability design, and it was
+# PROSE ONLY on both legs: "the session's brief requires its FIRST ACT to be pushing that branch —
+# an empty commit is enough." Case 17 above already pins the branch being CREATED before it is
+# pushed; it cannot see WHEN. The pre-fix trailer's only push instruction was "push whatever you
+# have before you finish" — a push at the END, which is a return channel and not a beacon, and
+# under it the healthy session (twenty minutes into a long brief, nothing to commit yet) and the
+# session that never booted are the same observation: no ref, past the boot budget, §4.3's C1
+# NOT-STARTED. §12's `cc-offload gc` retires on that verdict.
+#
+# RED-PROOF (re-runnable): replay against `git show <pre-fix sha>:scripts/handoff-fire.sh`. Both
+# halves go RED there — no `--allow-empty` anywhere in the payload, and the only push line sits
+# INSIDE the return-channel section rather than before it. Measured before this test was written.
+
+@test "20 the payload's FIRST act is an empty commit pushed to the declared branch, before the return channel" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: t" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ -s "$BATS_TEST_TMPDIR/create.log" ]
+  local ec push ret
+  ec="$(grep -n 'git commit --allow-empty' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  push="$(grep -n 'git push -u origin HEAD' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  ret="$(grep -n 'HOW TO RETURN YOUR WORK' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$ec" ]  || { echo "§4.1's beacon has nothing to push — no empty commit in the payload"; false; }
+  [ -n "$ret" ] || { echo "the return channel must still be stated; the beacon does not replace it"; false; }
+  [ "$ec" -lt "$push" ] || { echo "the commit must precede the push (ec=$ec push=$push)"; false; }
+  [ "$push" -lt "$ret" ] || { echo "the beacon must precede the return-channel section (push=$push ret=$ret)"; false; }
+  # And the brief itself is still delivered — a trailer that ate the payload would pass everything
+  # above while firing a session with no work to do.
+  grep -q 'cloud venue gate fixture payload' "$BATS_TEST_TMPDIR/create.log"
+}

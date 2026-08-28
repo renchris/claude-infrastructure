@@ -8034,20 +8034,19 @@ if [ "$CLOUD" = 1 ]; then
   # there the name is authorised AT CREATE. cc_cloud_create's signature is `cfg cwd prompt`
   # (scripts/lib/cloud-create.sh:185): the CLI leg has NO branch parameter at all, so the payload
   # is the only place the branch can be established, and establishing it is a real `switch -c`.
+  #
+  # 🚨 THE TRAILER TEXT NO LONGER LIVES HERE — cc_cloud_brief_trailer (scripts/lib/cloud-create.sh)
+  # composes it for BOTH legs, and the reason is a defect this copy carried (backlog 0c8b39b67665).
+  # This one was titled "HOW TO RETURN YOUR WORK" and said "push whatever you have BEFORE YOU
+  # FINISH" — a push at the END. CLOUD_OBSERVABILITY.md §4.1 requires the push as the session's
+  # FIRST ACT ("an empty commit is enough") for one reason: only a boot beacon makes absence
+  # informative. Under an end-of-run push, a session twenty minutes into a three-hour brief has
+  # pushed nothing for the CORRECT reason and reads byte-identically to one that never booted, so
+  # C1 NOT-STARTED could not mean "never booted" — and §12's `cc-offload gc` retires on it. The
+  # sibling API leg was worse: it delivered the brief verbatim and never named the branch at all.
+  # One composer, so neither leg can drift from the contract the state function is keyed on.
   CLOUD_PAYLOAD="$(cat "$PROMPT_FILE")
-"'
-── HOW TO RETURN YOUR WORK (this session runs off-box; read this before you finish) ──
-You are running in an Anthropic-managed VM. Nothing on the operator'"'"'s machine can see your
-filesystem, your processes or your terminal, and you cannot run this repo'"'"'s /ship. Your ONLY
-channel back is a git push, and it must go to exactly this branch — CREATE IT FIRST, then push it:
-
-    git switch -c '"$CLOUD_BRANCH"'
-    git push -u origin HEAD
-
-That branch name was assigned by the firing side and is already declared as the one thing watched
-for your progress — a push anywhere else is invisible and your work will strand. Push whatever you
-have before you finish, even if the work is incomplete; an unpushed cloud session leaves no trace
-of any kind. A local reconciler (scripts/cloud-reconcile.sh) discovers the branch and lands it.'
+$(cc_cloud_brief_trailer "$CLOUD_BRANCH")"
 
   if [ "$DRY" = 1 ]; then
     echo "-- DRY RUN: cloud fire (no create issued, no quota spent)"

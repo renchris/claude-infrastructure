@@ -622,3 +622,64 @@ EOF
     [[ "$output" == *"cc-offload $v"* ]] || false
   done
 }
+
+# ══ the absence contract on the API leg — backlog 0c8b39b67665 ══════════════════════════════════
+# This leg was the worse of the two. `up --via api` declares a per-fire branch and
+# cloud-create-api.py authorises it in the create body's `outcomes.git_info.branches` — and then
+# the brief was delivered as `cat "$pf"` VERBATIM, so the session was never told the branch existed,
+# let alone to push it. `--branch $br` named a push target only one side of the contract knew
+# about, which is CLOUD_OBSERVABILITY.md §10.2c's hazard with the sign flipped: C1 NOT-STARTED
+# forever, a confident verdict computed from evidence that has nothing to do with the session.
+#
+# The two tests are the pair this file's header demands: the contract is DELIVERED, and its
+# composer being unreachable is a REFUSAL rather than a quieter fire.
+
+@test "up --via api briefs the session with the ABSENCE CONTRACT, not the bare task file" {
+  echo "do the thing" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+print("session_apitest")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+  # The brief still arrives — a trailer that replaced the task would pass every check below while
+  # firing a session with nothing to do.
+  grep -q 'do the thing' "$CALLS" || false
+  # The DECLARED branch is named to the session, and it is the same one the declare used.
+  local br; br="$(grep -o 'cc-cloud declare --id session_apitest --branch [^ ]*' "$CALLS" | awk '{print $NF}')"
+  [ -n "$br" ] || false
+  grep -q "git switch -c $br" "$CALLS" || { echo "the brief never names the branch the declare watches"; false; }
+  # §4.1's beacon: an EMPTY commit, pushed, BEFORE the return-channel section. Position is the test
+  # — an end-of-run push satisfies "instructs a push" and buys no discrimination at all.
+  local ec push ret
+  ec="$(grep -n 'git commit --allow-empty' "$CALLS" | head -1 | cut -d: -f1)"
+  push="$(grep -n 'git push -u origin HEAD' "$CALLS" | head -1 | cut -d: -f1)"
+  ret="$(grep -n 'HOW TO RETURN YOUR WORK' "$CALLS" | head -1 | cut -d: -f1)"
+  [ -n "$ec" ] && [ -n "$ret" ] || { echo "beacon or return channel missing from the delivered brief"; false; }
+  [ "$ec" -lt "$push" ] && [ "$push" -lt "$ret" ] || { echo "beacon must precede the return channel ($ec $push $ret)"; false; }
+}
+
+@test "up --via api REFUSES when the trailer composer is unreachable — it never fires unobservably" {
+  # Same law as case 10 of tests/handoff-fire-cloud.bats: a fire that cannot carry the contract is
+  # quota spent on a session no local instrument can judge, so the refusal must come BEFORE the
+  # create rather than after it.
+  echo "do the thing" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+import os, sys
+open(os.environ["CALLS"],"a").write("api "+" ".join(sys.argv[1:])+"\n")
+print("session_apitest")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_CREATE_LIB="$BATS_TEST_TMPDIR/nope.sh" CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" \
+    run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 3 ]
+  [[ "$output" == *REFUSING* ]] || false
+  ! grep -q '^api ' "$CALLS"                       # no create was issued — no quota spent
+  ! grep -q 'cc-cloud declare' "$CALLS"            # and nothing was declared
+}

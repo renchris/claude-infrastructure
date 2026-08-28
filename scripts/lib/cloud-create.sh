@@ -231,8 +231,82 @@ cc_cloud_create() { # $1=cfgdir $2=cwd $3=prompt → "<outcome>\t<id>\t<msg>"; b
 # forever, which is §10.2c's hazard with the sign flipped: a confident verdict computed from
 # evidence that has nothing to do with the session.
 #
-# So the firing side NAMES the branch and the payload instructs the push (see the trailer
-# handoff-fire.sh appends). That also settles §10.2c's own hazard in the other direction: the name
-# is unique per fire, so — unlike `--branch main`, where trunk's background traffic reads as a
+# So the firing side NAMES the branch and the payload instructs the push (see
+# cc_cloud_brief_trailer below). That also settles §10.2c's own hazard in the other direction: the
+# name is unique per fire, so — unlike `--branch main`, where trunk's background traffic reads as a
 # heartbeat forever — nothing but this session can advance it. O2 becomes a real signal.
 cc_cloud_branch_name() { printf 'claude/fire-%s-%s' "$(date -u +%Y%m%dT%H%M%SZ)" "$$"; }
+
+# ── THE BRIEF TRAILER — the executable form of CLOUD_OBSERVABILITY.md §4.1's absence contract ────
+#
+# §4.1 is the load-bearing paragraph of the whole observability design: "a declared cloud session
+# that has pushed nothing is indistinguishable from one that never started, one that died at boot,
+# and one that was refused entitlement… It can only be resolved by CONTRACT: the fire declares a
+# branch and a boot budget, and the session's brief REQUIRES ITS FIRST ACT TO BE PUSHING THAT
+# BRANCH — an empty commit is enough." §4.3's C1 arm and §8 step 2 both cite it by name.
+#
+# 🚨 IT WAS PROSE ONLY, ON BOTH LEGS, AND THAT MADE C1 UNREADABLE (backlog 0c8b39b67665).
+# What the two fire paths actually shipped before this function existed:
+#
+#   CLI  (handoff-fire.sh)  a trailer titled "HOW TO RETURN YOUR WORK" — `switch -c` then push,
+#                           with "push whatever you have BEFORE YOU FINISH". A push at the END.
+#   API  (cc-offload up --via api, the shipping path)  the brief VERBATIM. No trailer at all, so
+#                           the branch cc-offload declares was never even named to the session.
+#
+# A return-channel push and a boot beacon are not the same instruction, and only the second one
+# discriminates. Under "push before you finish", a session twenty minutes into a three-hour brief
+# has pushed nothing FOR THE CORRECT REASON, and it reads byte-identically to a session that never
+# booted: both are `ls-remote` rc=0 with empty stdout, past `declared_at + boot_s`, i.e. C1
+# NOT-STARTED. So C1 could not mean "never booted" — it meant "no ref", which is seven worlds at
+# once (§4.4), one of which is healthy. An alarm that fires on a healthy population is the
+# alarm-polarity defect this document is organised against, and the actuation is real: §12's
+# `cc-offload gc` retires on it and a re-fire spends quota against a session that is still working.
+#
+# The beacon is what buys the discrimination, and it is cheap in exactly the way §4.1 says: ONE
+# empty commit in the first minute. After it, absence of the ref past the boot budget can only be
+# never-booted / died-at-boot / refused-entitlement — every one of them actionable — and presence
+# of the ref hands §4.3 its C4/C5 arms (sha unchanged vs advanced) instead of nothing at all.
+#
+# ONE COMPOSER, TWO LEGS. It lives here beside `cc_cloud_branch_name` because the branch name and
+# the instruction that makes that name observable are one fact: a leg that assigns the branch and
+# does not carry this trailer is declaring against a ref nothing will ever push (the §10.2c hazard
+# with the sign flipped, which is what this file's header already refuses to let happen twice).
+#
+# $2 (the session id) is OPTIONAL because the CLI leg does not have one yet: on that leg the id is
+# a return value of the create, and the payload must be composed before the create is issued
+# (§8.1). The beacon subject falls back to the branch, which is unique per fire either way.
+cc_cloud_brief_trailer() { # $1 = declared branch  [$2 = session id] → the trailer on stdout
+  local br="$1" tag="${2:-}"
+  [ -n "$br" ] || return 2
+  [ -n "$tag" ] || tag="$br"
+  cat <<TRAILER
+
+── FIRST ACT — PUSH THE BOOT BEACON, BEFORE YOU DO ANYTHING ELSE ───────────────────────────────
+You are running off-box, on an Anthropic-managed VM. Nothing on the operator's machine can see
+your filesystem, your processes or your terminal. The single fact their instruments CAN observe
+about you is whether this branch exists on the remote:
+
+    $br
+
+Create it and push it NOW, before you start the work above. An EMPTY commit is enough, and is
+exactly what is wanted:
+
+    git switch -c $br
+    git commit --allow-empty -m "boot beacon: $tag"
+    git push -u origin HEAD
+
+This is not bookkeeping, and it is not optional. Until that ref appears, "no such branch" is
+indistinguishable from "never started", "died at boot" and "refused entitlement" — so past the
+boot budget the local instrument (cc-cloud) reads you as NOT-STARTED, and a session that reads as
+NOT-STARTED gets retired and re-fired while it is still working. One empty commit in your first
+minute is the whole of what makes your silence afterwards mean something. If git refuses it for
+want of an identity, set one and retry rather than skipping it.
+
+── HOW TO RETURN YOUR WORK ─────────────────────────────────────────────────────────────────────
+That same branch is your only channel home: you cannot run this repo's /ship, and nothing here
+reaches the operator's box. Commit onto it and push as often as you like — and at minimum once
+more before you finish, even if the work is incomplete. A push anywhere else is invisible and
+your work will strand; an unpushed cloud session leaves no trace of any kind. A local reconciler
+(scripts/cloud-reconcile.sh) discovers the branch and hands it to the sanctioned local lander.
+TRAILER
+}

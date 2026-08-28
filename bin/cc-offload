@@ -399,8 +399,15 @@ cmd_up() {
   # extra still gets the return path. `--unmanaged` is the deliberate opt-out, and it is spelled as
   # a flag rather than as "leave it blank" so an UNMANAGED fire is a decision in the argv rather
   # than an accident of environment.
+  # `:-` is load-bearing under `set -u`, and its absence made this line FATAL rather than empty.
+  # The branch three lines down already handles the unset case by name ("ITERM_SESSION_ID is
+  # unset"), so the intent was never in doubt — but a bare `${ITERM_SESSION_ID##*:}` aborts the
+  # process before that branch can run, so every `up` from anything that is not an iTerm pane (a
+  # hook, launchd, a fired session, any other terminal) died with "unbound variable" instead of
+  # firing fire-and-forget. Found by tests/cc-offload.bats case 41, which was RED on trunk for
+  # exactly this reason and is the only `up` case that does not export a pane id.
   if [ "$UP_UNMANAGED" = 0 ] && [ -z "$UP_NOTIFY_BACK" ]; then
-    UP_NOTIFY_BACK="${ITERM_SESSION_ID##*:}"
+    UP_NOTIFY_BACK="${ITERM_SESSION_ID:-}"; UP_NOTIFY_BACK="${UP_NOTIFY_BACK##*:}"
   fi
   if [ "$UP_UNMANAGED" = 1 ]; then UP_NOTIFY_BACK=''
   elif [ -z "$UP_NOTIFY_BACK" ]; then
@@ -508,6 +515,21 @@ cmd_up_api() {
   local api="${CC_OFFLOAD_CREATE_API:-$ROOT/scripts/cloud-create-api.py}"
   [ -f "$api" ] || { note "cc-offload: missing $api"; return 3; }
 
+  # The brief trailer's composer, sourced from the SAME library the CLI leg uses. REFUSE rather
+  # than fire without it: a session briefed without the §4.1 contract is one whose declared branch
+  # nothing was told to push, i.e. quota spent on a session that is unobservable by construction —
+  # the exact failure this whole path exists to prevent. Lazy, and guarded against double-source
+  # inside the library itself, so the other verbs pay nothing for it.
+  local clib="${CC_OFFLOAD_CREATE_LIB:-$ROOT/scripts/lib/cloud-create.sh}"
+  if ! declare -f cc_cloud_brief_trailer >/dev/null 2>&1; then
+    # shellcheck source=scripts/lib/cloud-create.sh
+    [ -f "$clib" ] && . "$clib"
+  fi
+  declare -f cc_cloud_brief_trailer >/dev/null 2>&1 || {
+    note "cc-offload: REFUSING — cc_cloud_brief_trailer is unreachable ($clib)."
+    note "  Without it the brief never names the declared branch, so the session cannot be observed."
+    return 3; }
+
   # The router is the arbiter — never re-rank accounts here.
   if [ "$account" = auto ]; then
     [ -n "$ACCOUNTS_BIN" ] && account="$("$ACCOUNTS_BIN" --route general 2>/dev/null)"
@@ -565,7 +587,18 @@ cmd_up_api() {
         || note "cc-offload: custody could not be opened for $sid — the close-integrity arm is NOT armed for it."
     fi
 
-    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$(cat "$pf")" >/dev/null 2>&1
+    # THE BRIEF CARRIES THE ABSENCE CONTRACT, or the declare two lines up is watching a ref nothing
+    # was ever told to push (backlog 0c8b39b67665). This leg delivered `cat "$pf"` VERBATIM: the
+    # branch it declares — and which cloud-create-api.py authorises in the create body's
+    # `outcomes.git_info.branches` — was never named to the session at all, so `--branch $br` named
+    # a push target only one side of the contract knew about. Worse than the CLI leg's end-of-run
+    # push, which at least named it. CLOUD_OBSERVABILITY.md §4.1 wants the push as the FIRST act
+    # (an empty commit is enough) so that absence past the boot budget is informative rather than
+    # being seven worlds at once; §4.3's C1 arm and §12's `cc-offload gc` both actuate on it.
+    # Composed by the same function the CLI leg uses, so the two legs cannot drift.
+    local brief; brief="$(cat "$pf")
+$(cc_cloud_brief_trailer "$br" "$sid")"
+    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$brief" >/dev/null 2>&1
     local drc=$?
     if [ "$drc" != 0 ]; then
       note "cc-offload: $sid created+declared but the brief did NOT queue (cc-notify exit $drc)."
