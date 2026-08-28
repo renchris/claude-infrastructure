@@ -30,6 +30,25 @@ setup() {
   STOCK="/usr/bin:/bin:/usr/sbin:/sbin"
 }
 
+# ── THE TREE ARMS ARE FACTS ABOUT THE BOX, AND OFF DARWIN THEY ARE NON-VERDICTS ──────────────────
+# Two tests below scan the REAL repository and assert the shipped allowlist covers what comes back.
+# What comes back depends on which binaries the box has and where, because that is the question this
+# lint exists to ask — and the jobs it asks it FOR are launchd jobs, which exist only on macOS.
+#
+# Measured off Darwin on an untouched trunk checkout: 13 fabricated findings (`swift`, `swiftc`,
+# `plutil`, `sqlite3`, `node`, `gtimeout` — present on the Mac, absent here) AND 23 stuck-ratchet
+# rows (`timeout`, `lsof`, `sysctl`, `taskpolicy`, `gh`, `bun`, `cargo` — allowlisted because they
+# are unreachable on the Mac, reachable at /usr/bin here). Wrong in both directions at once, from a
+# tree nobody had touched: an inert sensor, and the repo's law is that one yields a NON-VERDICT.
+#
+# A `skip` is the honest spelling and a visible one — bats prints it, and it cannot be mistaken for
+# a pass in the way a silently-deleted assertion can. The detector's own cases are unaffected: they
+# are hermetic now (see --selftest's fixture-binary block) and they still run and still gate here.
+darwin_only_tree_arm() {
+  [ "$(uname -s 2>/dev/null || echo unknown)" = "Darwin" ] || \
+    skip "tree-level arm: judges bare names against THIS box's binaries, for launchd jobs that exist only on macOS — a NON-VERDICT on $(uname -s 2>/dev/null || echo unknown), not a pass"
+}
+
 @test "the lint is present and executable" {
   [ -x "$LINT" ]
 }
@@ -39,9 +58,49 @@ setup() {
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
 
+@test "--selftest's verdict does not move when the BOX gains a binary (backlog f85fce7c26f5)" {
+  # THE DEFECT, STATED AS THE EXPERIMENT THAT FOUND IT. On a Linux box, `apt-get install shellcheck`
+  # — which touches no file in this repository — moved --selftest from 11 failures to 14. Fourteen of
+  # its 42 cases named a REAL binary (`shellcheck`, `tmux`, `yq`, `md5`), and a finding needs the name
+  # to be installed somewhere AND unreachable on the job's PATH, so each case's polarity was set by
+  # the invoker's tool inventory. ship-land.sh gate-reds on this exit code, so off Darwin the arm
+  # refused every land — a docs-only one included — and eight cloud dispatches of f85fce7c26f5 pushed
+  # eight branches that could not be landed.
+  #
+  # The fixtures now name binaries installed NOWHERE, so this asserts the property directly rather
+  # than the instance: prepend a directory full of executables named after the words the fixtures
+  # used to use, and the verdict must not move. It fails on the revision before the conversion.
+  local shim="$BATS_TEST_TMPDIR/shim"
+  mkdir -p "$shim"
+  local b
+  for b in shellcheck tmux yq md5 node jq swift plutil sqlite3; do
+    printf '#!/bin/sh\nexit 0\n' > "$shim/$b"
+    chmod +x "$shim/$b"
+  done
+
+  # Compare the FAILING-CASE COUNT as well as the exit status. The status alone is a one-bit oracle
+  # and both arms were red together on the revision this pins: it would have read "invariant" while
+  # the shim moved 14 failures to 17. The count is what actually names a case whose polarity flipped.
+  run env PATH="$shim:$PATH" "$LINT" --selftest
+  local shim_st="$status" shim_n
+  shim_n="$(printf '%s\n' "$output" | grep -c 'SELFTEST FAIL' || true)"
+  run "$LINT" --selftest
+  local bare_st="$status" bare_n
+  bare_n="$(printf '%s\n' "$output" | grep -c 'SELFTEST FAIL' || true)"
+
+  # ONE ASSERTION PER FACT, each its own scannable AND-OR list. The obvious spelling
+  # `[ a ] && [ b ] || { … }` is what bats-assert-liveness flags as and-absorbed, and its fixer
+  # declines it by name rather than guessing — so it is written out instead of contracted.
+  local diag="--selftest answered exit $bare_st / $bare_n failing case(s) bare, and exit $shim_st / $shim_n with a directory of stub binaries prepended. Some case is still spelled with a real binary name, so its verdict is a fact about the box."
+  [ "$shim_st" -eq "$bare_st" ] || { echo "$diag"; false; }
+  [ "$shim_n" -eq "$bare_n" ] || { echo "$diag"; false; }
+  [ "$bare_st" -eq 0 ]
+}
+
 @test "the real tree is clean under the shipped allowlist" {
   # If this goes red, either a new bare-name site landed or a grandfathered one was fixed without
   # deleting its allowlist line. Both are the ratchet working; neither is a reason to widen it.
+  darwin_only_tree_arm
   run env -u CC_UNATTENDED_OWN "$LINT" "$REPO"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
@@ -158,12 +217,22 @@ setup() {
 }
 
 @test "the lint itself depends on no non-stock binary (it would be self-refuting)" {
-  # It runs on /usr/bin/python3, /usr/bin/jq, /usr/libexec/PlistBuddy and /usr/bin/sed — all stock.
+  # It runs on /usr/bin/python3, /usr/bin/jq and /usr/bin/sed — all stock — plus a plist reader.
   # A lint that forbids a Homebrew dependency while carrying one could never run in the environment
   # it is describing.
-  for b in /usr/bin/python3 /usr/bin/sed /usr/libexec/PlistBuddy; do
+  for b in /usr/bin/python3 /usr/bin/sed; do
     [ -x "$b" ] || { echo "$b is missing — the lint's own dependency is not stock after all"; false; }
   done
+  # THE PLIST READER IS A PAIR, NOT A BINARY, and this test used to name only the macOS half. It
+  # asserted /usr/libexec/PlistBuddy — stock on macOS and present on no other system — so on a
+  # non-Darwin box the test that certifies "no non-stock dependency" was itself the thing failing
+  # over one. The lint now reads a plist through PlistBuddy where it exists and python3's stdlib
+  # `plistlib` where it does not, so the claim to assert is that AT LEAST ONE reader is available:
+  # the disjunction is what makes the dependency stock everywhere rather than stock on one OS.
+  [ -x /usr/libexec/PlistBuddy ] || [ -x /usr/bin/python3 ] || {
+    echo "neither /usr/libexec/PlistBuddy nor /usr/bin/python3 is executable — the lint has no plist reader"
+    false
+  }
   # Assert only what that claim MEANS: the lint EXECUTES with no Homebrew on PATH. Deliberately not
   # "produces an identical verdict" — the corpus scan legitimately reports less when a binary is
   # absent from the box entirely, and conflating the two is what made an earlier version of this
@@ -178,6 +247,13 @@ setup() {
   # the allowlist were consulted after the is-it-installed filter, stripping Homebrew and fnm would
   # make every non-stock finding vanish, every allowlist line read as stuck, and the gate go RED over
   # a machine's tool inventory instead of over the land — fail-closed, on a fresh checkout.
+  #
+  # IT IS A TREE ARM DESPITE ITS NAME. It strips the PATH and then scans the REAL repository, so the
+  # allowlist it asserts is the one written for the operator's Mac; off Darwin the stuck-entry set is
+  # computed over a different box's binaries and the test reports a red that names no defect. The
+  # property it guards — allowlist BEFORE the is-it-installed filter — is asserted hermetically by
+  # --selftest case 9, which is why gating this arm costs no coverage of the ordering itself.
+  darwin_only_tree_arm
   run env -i PATH="$STOCK" HOME="$HOME" bash "$LINT" "$REPO"
   [ "$status" -eq 0 ] || {
     echo "the shipped allowlist did not survive a stripped PATH:"; echo "$output"; false;
