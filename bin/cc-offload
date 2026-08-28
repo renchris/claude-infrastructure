@@ -399,8 +399,12 @@ cmd_up() {
   # extra still gets the return path. `--unmanaged` is the deliberate opt-out, and it is spelled as
   # a flag rather than as "leave it blank" so an UNMANAGED fire is a decision in the argv rather
   # than an accident of environment.
+  # `${ITERM_SESSION_ID:-}` first, THEN the strip: `${ITERM_SESSION_ID##*:}` is an unbound-variable
+  # fatal under `set -u` when the var is unset, and the very next branch exists to handle exactly
+  # that case — so the default was unreachable from anywhere without iTerm (launchd, a hook, CI, a
+  # fired session). It never showed locally because the operator's shell always exports it.
   if [ "$UP_UNMANAGED" = 0 ] && [ -z "$UP_NOTIFY_BACK" ]; then
-    UP_NOTIFY_BACK="${ITERM_SESSION_ID##*:}"
+    UP_NOTIFY_BACK="${ITERM_SESSION_ID:-}"; UP_NOTIFY_BACK="${UP_NOTIFY_BACK##*:}"
   fi
   if [ "$UP_UNMANAGED" = 1 ]; then UP_NOTIFY_BACK=''
   elif [ -z "$UP_NOTIFY_BACK" ]; then
