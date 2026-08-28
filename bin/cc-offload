@@ -400,7 +400,10 @@ cmd_up() {
   # a flag rather than as "leave it blank" so an UNMANAGED fire is a decision in the argv rather
   # than an accident of environment.
   if [ "$UP_UNMANAGED" = 0 ] && [ -z "$UP_NOTIFY_BACK" ]; then
-    UP_NOTIFY_BACK="${ITERM_SESSION_ID##*:}"
+    # `${ITERM_SESSION_ID##*:}` is an EXPANSION, not a test, so under `set -u` it aborts the whole
+    # command on any box that is not iTerm — including every bats run — and the very next line
+    # exists to handle the unset case it can never reach. The default has to come first.
+    UP_NOTIFY_BACK="${ITERM_SESSION_ID:-}"; UP_NOTIFY_BACK="${UP_NOTIFY_BACK##*:}"
   fi
   if [ "$UP_UNMANAGED" = 1 ]; then UP_NOTIFY_BACK=''
   elif [ -z "$UP_NOTIFY_BACK" ]; then
