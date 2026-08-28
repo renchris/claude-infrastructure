@@ -448,3 +448,107 @@ agent free-text filed **mid-session**, which no hook reaches — only the `CLAUD
 and that is advisory. So mechanical coverage is roughly the close-time third; the rest rides on the
 rule being read and followed. **If the test above fails, look here first** before concluding the
 diagnosis was wrong.
+
+---
+
+## 10. L1 IS REFUTED AS WRITTEN — the sweep already runs, and it structurally cannot reach the 457 (2026-08-28)
+
+**Verdict: the top-ranked intervention in §6 is not unstarted work.** Its mechanism is built, wired,
+and firing on a 6 h cadence; the residual it leaves is a *different* action from the one §6 names,
+and that action carries a measured false-retraction hazard the §6 entry does not price in. Read
+entirely off `origin/main` at `234d25c2`; no probe was executed, because the store is local-only
+(below).
+
+### 10.1 "Run the falsifier sweep" — it is already scheduled
+
+`scripts/autonomy-sweep.sh:732-830` is §2b-iii, **THE CURRENCY PASS**. It invokes exactly the
+command §6 L1 prescribes:
+
+```
+scripts/autonomy-sweep.sh:814-816
+  python3 bin/cc-premise sweep --json --record \
+      --limit "${CC_PREMISE_PASS_LIMIT:-150}" \
+      --close-falsified "${CC_PREMISE_CLOSE_CAP:-5}"
+```
+
+behind a 6 h interval gate (`CC_PREMISE_PASS_EVERY_S`, `:754`) on a script that fires every 300 s.
+§2's own existence proof is a reading of this arm running, not of a gap: *"the 2026-08-24T07:59Z pass
+marked 4 rows falsified and all 4 closed within 3 minutes."* **That is the scheduled pass working.**
+So "**This is a scheduling problem, not a design problem**" (§2) is wrong in both halves — the
+schedule exists, and what stops the 457 is a design decision taken deliberately.
+
+### 10.2 Why the pass cannot lower `never validated` for those rows — and why that is correct
+
+`cc-premise sweep` splits the live population **before anything runs**, by `probe_capability`
+(`bin/cc-premise:2121-2172`), which returns `stored` · `derived-plan` · `derived-postland` · **`none`**.
+Only rows where an arm actually *executed* are stamped: `cmd_sweep` appends to `all_verdicts` under
+`if probe_out.get("probed")` (`:3050`), and `probed=True` is set at exactly three sites — the stored
+arm and the two derived arms (`:2315`, `:2346`, `:2356`). Everything else increments `unprobed`.
+
+The refusal is explicit and load-bearing (`bin/cc-premise:2991`):
+
+> 🚨 **ONLY PROBED ROWS ARE STAMPED** … `assess` returns `clear` both for "a probe ran and the
+> condition is still live" and for "there was no probe, so nothing was asked" — and stamping the
+> second as validated would drive the never-validated headline to ZERO while ~400 of 564 rows had
+> had nothing run against them. That is not a weaker metric than none, it is a **WORSE** one.
+
+**The arithmetic in §2 is itself the proof the pass is not the bottleneck.** 501 − 457 = 44 validated,
+against §2's "only 47 live rows carry a falsifier probe at all". The pass is already reaching
+essentially every probe-capable row and no others. **Re-running it retires nothing**, because
+`--close-falsified` closes only `buckets["falsified"]`, which is a probe-derived verdict.
+
+### 10.3 The residual is `cc-backlog falsify` — and its hazard is measured, in this repo
+
+What §6 L1 actually leaves undone is its middle clause: *authoring* a probe for each uncovered row.
+`cmd_falsify` exists precisely because `add --falsifier` cannot reach an existing row
+(`bin/cc-backlog:3353-3359`), and its header carries the measurements that price bulk authoring:
+
+| measurement | figure | source |
+|---|---|---|
+| force-stored probes hand-refuted by the currency pass | **16 of 26 (61.5%)**, dominant class = a needle already in the tree at filing — *"not weak coverage but ANTI-coverage"* | `bin/cc-backlog:3386-3390` |
+| probes that fail to retract against a **landed fix** | **5 of 12 (42%)** immortal; 4 of the 5 grep a literal the real cure never typed | `bin/cc-backlog:3427-3437` |
+| the asymmetry that makes this expensive | non-zero is advisory; **exit 0 RETRACTS** — a probe wrong in that direction *"silently retires live work"* | `bin/cc-backlog:3373-3379` |
+
+A probe that exits 0 for the wrong reason closes a live row **with no work done and no one reading
+it** — which is the same ledger event as L1's advertised win. At 61.5% hand-refutation on the
+force-stored population, bulk-authoring 457 probes cannot be assumed net-positive; its yield and its
+damage arrive through the identical channel and are not separable after the fact.
+
+### 10.4 What this does to the 54–89 estimate
+
+Unchanged in status, and §7 blind-spot 1 already said so: *"The 54–89 figure applies closed-row rates
+to live rows. The true live rate is UNKNOWN until L1 runs."* §10 adds that **L1 as specified will
+never make it known** — the sweep half is already running and is silent on those rows by design, and
+the authoring half is the part with the hazard. Scenario **B** in §5 ("bulk-falsify the 457
+unvalidated rows, −54 to −89") should be read as an unvalidated projection resting on an action
+nobody has costed, not as a shelf-ready lever.
+
+### 10.5 The honest re-statement of L1
+
+Split it, and rank the halves separately:
+
+- **L1a — nothing to do.** The sweep is wired and firing. Confirm with
+  `bin/cc-premise coverage --json` and the `premise_pass_*` fields in the autonomy-sweep beat; do not
+  re-run it as an intervention.
+- **L1b — author probes, but SCREENED and SAMPLED, not bulk.** `cc-backlog falsify` already ships the
+  two screens (`--probe` exit-0 refusal; `cc-premise screen` filing-day anti-coverage warning). The
+  defensible next step is a **measured pilot on 20–30 rows** with `cc-premise screen --all` read
+  after, not a 457-row pass. Write the needle against the defect's *behaviour*, never the remedy's
+  spelling (`bin/cc-backlog:3437-3445`).
+- **A cheaper unranked lever, noted not recommended:** the mechanical verdicts (`superseded`,
+  `self-duplicate`) are already computed **whole-store on every pass** (`bin/cc-premise:3009-3011`,
+  and `assess` runs them for `plain` rows too) and **have no actuator** — only `falsified` is closed.
+  Those rows are in the same no-exit state `_close_falsified` was built for: they refuse every claim
+  (rc 3) and nothing retires them. Deliberately **not** proposed as a change here: the supersession
+  predicate was rebuilt once after convicting an open item wrongly (*"370 hits where 24 are real"*,
+  `bin/cc-premise:1116` region and §7 item 1 pattern), and an auto-closer over it must be measured
+  against the live store before it is armed. Filed as a question, not a diff.
+
+### 10.6 Why no probe was run for this correction
+
+The subject is `~/.claude/autonomy/backlog.jsonl`, which exists only on the operator's box. Verified
+from the dispatched container: `bin/cc-backlog freshness` → `never validated: 0 of 0 live rows`;
+`cc-premise coverage` → `ledger unreadable … fail-open`. This item is the `ineligible-box` class §6a
+measures at **191 of 494** — local-only state a VM cannot see. Every claim in §10 is therefore read
+from code on trunk and from figures already recorded in this repo; **no live-store measurement is
+asserted, and none was taken.**
