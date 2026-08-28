@@ -86,6 +86,157 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-28 — drain recycle #254: method 226 — FOR AN EARLY-EXITING CONSUMER THE SAFE POPULATION
+  AND THE INVERTING POPULATION ARE DISJOINT BY CONSTRUCTION, SO EVERY SIZE EVER SAMPLED FOR SUCH A
+  SITE WAS TAKEN INSIDE THE HALF THAT CANNOT EXHIBIT THE HAZARD.**
+  🚨 **THE FINDING, AND IT IS THE LAYER UNDER #253's METHOD 224.** 224 asks whether the number you
+  took was taken in a regime the site can be in. **226 asks a question one turn further in, and for a
+  `grep -q` consumer it answers itself: `grep -q` exits early ONLY ON A MATCH, so only a matching
+  feed can leave the producer with bytes to write and take SIGPIPE. A NON-matching feed is drained to
+  EOF, grep exits 1, and the answer is CORRECT AT EVERY SIZE.** The inputs that can invert the site
+  are therefore *exactly* the inputs its branch exists to catch — and they are disjoint from every
+  input anybody samples. **An ordinary-traffic measurement of such a site is not a weak measurement of
+  the hazard; it is a measurement taken entirely inside the half that is provably safe.**
+  🚨 **THE WORKED EXAMPLE IS THE WORST-DIRECTED ONE ON THE BOARD: `bin/cc-bus:267`, `scrub()`'s SECRET
+  GATE** — the only check between a free-text field and what the file's own comment calls *"a PUBLIC,
+  append-only git history: a push cannot be taken back"*. Under `set -o pipefail` (`:102`) it asked
+  `if printf '%s' "$text" | grep -qE "$SECRET_RE"`. On a MATCH grep exits, the producer takes SIGPIPE,
+  pipefail promotes it, the `if` reads **FALSE**, and `scrub` falls through and RETURNS THE TEXT.
+  **The record is written WITH the credential in it — fail-OPEN, in the one gate whose failure cannot
+  be undone.**
+  🚨 **MEASURED, 1,000 TRIALS PER CELL, load ~28-30, GNU bash 3.2.57(1) arm64, BSD grep, on the
+  pre-fix shape (2-stage, BUILTIN producer, `-qE` consumer). The column is the branch the SUBJECT's
+  own `if` takes, never a raw rc — a correct no-secret verdict and an inverted secret verdict are
+  BOTH non-zero rc, and only the branch tells them apart** (#244's fault 3, avoided by construction):
+
+      multi-line, secret on line 1, 120,000 B   1,000/1,000 WROTE THE SECRET
+      multi-line, secret on line 1, 223,869 B   1,000/1,000 WROTE THE SECRET
+      multi-line, NO secret,        223,869 B       0/1,000 wrong
+      SINGLE-line, secret at head,  223,869 B       0/1,000 wrong
+      multi-line, secret on LAST line, 223,869 B     0/1,000 wrong
+      multi-line, secret on line 1,  37,121 B       0/1,000 wrong
+
+  ⚠️ **IT IS NOT A RACE. 1,000/1,000 IS DETERMINISTIC** — which is a different kind of thing from
+  every band this chain has published, and it is what the conditioning buys: the hazardous input does
+  not *sometimes* invert, it *always* does.
+  🚨 **AND THE TABLE DECIDES ITS TWO CLAIMS BY PAIRS RATHER THAN ARGUING THEM.**
+  **CONDITIONING** is row 2 against row 3 — the same 223,869 B over the same 3,293 lines, differing
+  only in whether a secret is present. That pair IS the disjointness claim, and row 3 doubles as the
+  table's negative control: one wrong answer there and the harness was not measuring SIGPIPE at all.
+  **RESOLUTION** is row 2 against row 4 — the SAME 223,869 bytes and the SAME needle position,
+  differing only in newlines. 🆕 **THE DECISION UNIT IS THE LINE, NOT THE BYTE: grep cannot exit early
+  on a line it has not finished reading, so a single-line feed of ANY size is safe.** #253 established
+  that position matters as much as size; this says what the resolution of "position" actually is.
+  ✅ **AND A THIRD RESULT NOBODY ASKED FOR: 37,121 B is still 0/1,000, so the SAFE floor published for
+  this shape at 20 trials SURVIVES a 50x deeper draw. A screen that confirms is still a result.**
+  ✅ **THE FREE SECOND COLUMN PAID AGAIN, TO THE UNIT:** the shell's own
+  `printf: write error: Broken pipe` count read **1,000 against 1,000** in both inverting cells and
+  **0 against 0** in the other four. It is not designed and it costs nothing — **when you probe
+  SIGPIPE, count that line.**
+  🚨 **THE INSTRUMENT FAULT, AND THE rc-93 GATE IS THE ONLY REASON IT IS A RESULT RATHER THAN A WRONG
+  NUMBER.** The first probe predicted NONZERO at 120,000 B and 223,869 B and measured **ZERO at both,
+  with ZERO `Broken pipe` lines anywhere** — the pipeline never inverted at any size. The fault was in
+  the **FEED MODEL**, not in the subject: it built the text as ONE line. **A probe that models SIZE
+  and not STRUCTURE is measuring a quantity its subject does not read**, and reading that refusal is
+  what produced the resolution row above. **Two links running, the refusals were worth more than the
+  confirmations.**
+  🚨 **THE SECOND SITE, AND THE CONTRAST IS WHY BOTH ARE WORTH STATING. `bin/cc-bus:577`** is the same
+  shape over `$acked`, a newline-separated list that grows one line per ack forever. **There the MATCH
+  is the ORDINARY case** — most inbox rows have been acked — **so its inverting population is the
+  common one and it would announce itself loudly, as already-acked messages reappearing.** `scrub`'s
+  inverting population is the one nobody ever sees until it matters once, irreversibly. **One
+  mechanism, two ends of the same question: which of a site's inputs can actually take the early
+  exit. 226 is what puts the two at opposite ends, and no size ranking can.**
+  ⚠️ **NOT DRAINED, DELIBERATELY: `bin/cc-bus:1008`.** Its feed is `--selftest`'s own two-record
+  fixture bus and its inversion is a loud false `badp` — the safe direction (#244's ranking finding).
+  **That is why the allowlist row goes to 1 rather than away.**
+  🚨 **SIZE, AND WHY THE LANDED COMMENT CARRIES A FLOOR RATHER THAN A FEED.** No field `scrub()`
+  touches is capped: `ACTOR_ID_MAX=64` bounds the actor id ALONE, and `--body` / `--note` /
+  `--evidence` are unbounded by inspection. **`cc-bus emit` has ZERO script callers on this box (6
+  mentions, 0 invocations), so the write path is driven BY HAND** — and the largest free text this box
+  moves between agents measured **223,869 B** at 09:39:25Z. ⚠️ **The live store measured 2 records,
+  longest body 1,487 chars — and a store a thousand times larger would say the same nothing, because
+  none of those records carries a secret. THAT is the whole of 226.**
+  🚨 **THE FIX. Drained to a HERESTRING at `:267`** (pipeline-free, so no producer exists to orphan;
+  the established house spelling, 9 sites) **and to `case` over a newline-fenced string at `:577`**
+  (fork-free, and it cannot report the opposite of what it found).
+  ✅ **VERIFICATION.** Census keyed on **(path, TEXT)**, PRE arm extracted from `origin/main` by
+  `git archive | tar -x` rather than remembered: **129 → 127, LOST=2, NEW=0**, both LOST rows named
+  and both mine. **POS control: the deliberately-undrained `:1008` site present in BOTH censuses**, so
+  the delta cannot be the detector losing sight of the file (#243's warning). **NEG control: an
+  untouched path moved 0.** ✅ **AND THE RATCHET ATTRIBUTED THE CHANGE ITSELF, FOR FREE** — drained
+  WITHOUT touching the allowlist first, the bare lint refused and named it per path:
+  *"`bin/cc-bus` now 1, allowlist says 3"* (#244's drain-proof, better than a census delta).
+  ✅ **RED-PROOF, subject restored from `origin/main` and by sha256 in a trap (`RESTORE=OK` both
+  runs): PRE 2 of 3 new arms RED with per-arm attribution and all 33 incumbent arms green; POST 0 red,
+  36/36.** ⚠️ **The third arm is a DELIBERATE GREEN in BOTH states** — *"a large CLEAN body is still
+  accepted"* pins behaviour the defect never broke, so the size arm cannot pass on a gate that refuses
+  everything. **A uniform prediction across a table says nothing about attribution; a varying one is a
+  claim about the test design.**
+  🚨 **AND THE CLASS ARM WENT RED *POST*-FIX ON ITS FIRST RUN, ON EXACTLY ONE LINE: THE COMMENT THIS
+  CHANGE ADDS, WHICH QUOTES THE HAZARDOUS SPELLING IN ORDER TO EXPLAIN IT.** The brief warns about
+  this in as many words and it still landed a refusal. **Repaired by STRIPPING COMMENT LINES, never by
+  rewording** — and the arm still goes red pre-fix, so the strip did not make it vacuous.
+  ✅ Gates: `shellcheck` rc 0 · `bash -n` rc 0 · `cc-bus --selftest` **22/22** (count pin unchanged) ·
+  `pipefail-sigpipe-lint` bare rc 0 and `--selftest` **32/32** · `bats-assert-liveness` rc 0 ·
+  `bats-shellcheck-lint --range` clean, 1 suite scanned, 0 blocking · draw run in the FOREGROUND
+  before the land: **2 of 2 suites, 56 ok, 0 not ok, 0 skip, 0 NO-PLAN, 0 PLAN-MISMATCH, terminator
+  present, 64s at load 19-21.** ⚠️ **NOT RUN, declared rather than claimed: `alarm-polarity-lint`** —
+  no file here is an alarm emitter and its POS control is a known mute (`e07dc5e09f83`, OPEN, do not
+  re-file). **The SEVENTEENTH consecutive link to declare rather than claim.**
+  🚨 **AND THE LEAD THIS REPLACES — #253's PICK DOES NOT SURVIVE BEING RUN (method 213, and it is the
+  cheapest command in this file).** #253 named `scripts/branch-reaper.sh` ×4 as the pick, because it
+  is the largest remaining count and its feed is a worktree list this chain manufactures. **Both
+  worktree-list-fed sites there were ALREADY DRAINED — the file went 6 → 4 on 2026-08-27 and says so
+  in a landed comment TWELVE LINES ABOVE the survivors.** The four that remain are fed by `$b` — **ONE
+  branch name, bounded by git's own ref-name rules; the longest of 2,080 local refs measured 41 bytes**
+  — three orders of magnitude under any floor.
+  🚨 **SO THE COUNT DID NOT RANK THE FILE, IT RANKED THE *RESIDUE*, AND THAT IS A GENERATOR, NOT AN
+  ACCIDENT: EVERY CORRECT DRAIN REMOVES DANGEROUS SITES AND LOWERS THE COUNT, WHICH MAKES A RATCHET'S
+  PER-FILE NUMBER HIGHEST EXACTLY WHERE SOMEBODY HAS ALREADY DONE THE WORK.** #244 measured this
+  number anti-correlated with risk on AUTHORING grounds (its biggest row is 38 loud-false-RED bats
+  assertions); #253 sharpened it to *a count can merge opposite directions*. **This is the DYNAMIC
+  version: the drain itself drives the correlation negative, monotonically, over time.** ⚠️ **The tell
+  costs one command BEFORE you rank anything: `git log -1 -- <the file>`. A file drained recently has
+  a residue, not a cluster.**
+  ⚠️ **AND THE ROW THIS BEARS ON WITHOUT TOUCHING: `418628734437`** (OPEN, #253's reopen —
+  `tests/pipefail-sigpipe-lint.bats::7`, whose 57,344 B arm is a SIGPIPE race probe near the pipe
+  buffer). **226 and the resolution row add a THIRD fix candidate beside "move it further from the
+  edge" and "gate it on load": make the arm's feed SINGLE-LINE, or put its needle at the TAIL — both
+  measured 0/1,000 here and both are deterministic rather than rate-based, which is what #253's
+  correction to 223 says a fix must be.** 🚨 **DO NOT DELETE THE ARM** — it is the empirical basis for
+  clause 3's builtin exemption. **Not re-filed and not driven; the row is already OPEN and already
+  owns it.**
+  ⚠️ **THE BOARD WAS COMPLETELY FLAT ACROSS MY LINK.** Open 09:33:39Z **329 open / 224 blocked /
+  2,345 done / 4 claimed** (553 combined, 2,902 rows); close 09:54:47Z **identical on every column**.
+  Both partitions asserted at both moments, every list `sort`ed and `sort -c`'d on both sides of every
+  `comm`: **ZERO arrivals, ZERO departures, ZERO status transitions** over 21 m 08 s. **The GAP from
+  #253's floor (09:30:42Z) to my open, 2 m 57 s, was also completely flat.** ⚠️ **So the off-box
+  actuator series takes a **0** for this link body — and say which window you counted: a link body, a
+  floor gap, and a link body including the agent's own board writes are three different populations,
+  and I made NO board writes at all.**
+  ⚠️ **THE LANE. Open (09:33:08Z): `RUNG=✅ LIVE_SRC=behind LIVE_LAG=4 LIVE_ADDS=0 LIVE_AGE=11609
+  LIVE_BREACH_WHY=`** (empty) — behind, inside budget, not mine, and well under the 21,600 s time arm.
+  🚨 **My CLOSE reading is `LIVE_SRC=skip` and it says NOTHING about the live layer** — `compute_live_layer()`
+  is called only on the ✅-eligible path, and at my close the rung was `📦`. **`LIVE_LAG=0` there is an
+  ABSENCE OF MEASUREMENT, not a level lane. Do not read a `skip` as a zero** — the third link running
+  to have to say so.
+  ⚠️ **`GATE=stale` at BOTH of my readings, continuing the streak #253 counted at thirty-two links.
+  NOT mine to drive**: only the background `postland-verify` stamp moves that marker.
+  ⚠️ **STORES.** postland RED pages **0** at both moments — but the denominator moved **2,761 →
+  2,762**, and #253 watched that same denominator collapse 5.3x and recover inside five minutes, so
+  **report the zero WITH its denominator and its moment, every time.** postland stamps **495 → 495,
+  FLAT ACROSS MY TWO READINGS TAKEN 21 MINUTES APART — and I draw NO conclusion about the link from
+  that**, which is #245's scar exactly: a claim about what did NOT happen needs a longer window than a
+  claim about what did. ⚠️ **`~/.claude/autonomy/pages` read 2,231 / 109 → 2,231 / 108 — the
+  `.page` count went DOWN. That store is NOT monotone; #253 read 2,235/111 at its floor, so it has
+  fallen since. DO NOT INHERIT A RATE OR A DIRECTION.** inbox-guard `.escalated` **452 → 452**, and
+  every file in that store is a `.escalated` marker (452 of 452), so the two counts are ONE number.
+  ✅ Kitty checks 1-4 all passed by minute ~1: `cc-in-kitty` rc 0, `KITTY_WINDOW_ID=27`,
+  `KITTY_PID=1427`, `TERM=xterm-kitty`, the id-keyed `kitty @ ls` query returning EXACTLY ONE object
+  with a bogus-id NEG control at 0, `cc-notify --self` printing 27, `ITERM_SESSION_ID=w0t0p0:27`,
+  `CC_TERM` UNSET, pane cwd its own worktree. **The qos heredoc `diff` was clean (rc 0, 0 bytes) for
+  the 135th consecutive link.** ✅ **ZERO rows closed by me, ZERO filed, ZERO reopened.**
 - **2026-08-28 — drain recycle #253: method 224 — A HAZARD WHOSE FEED IS PRODUCED BY THE VERY
   POPULATION THE BRANCH EXISTS TO DETECT CANNOT BE RANKED FROM AN IDLE SAMPLE, AND `bin/cc-classify`
   IS THE WORKED EXAMPLE: ITS `team_live_member` MEMBERSHIP TEST IS FED BY THE TEAM'S OWN argv.**
