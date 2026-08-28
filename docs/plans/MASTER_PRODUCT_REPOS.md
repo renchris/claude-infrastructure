@@ -156,6 +156,44 @@ branch queue is empty or explicitly abandoned with reasons, the production deplo
 single-brained and audited, and doc_classifier's authorization holes are closed with tests.
 
 ## Status log
+- **2026-08-28 — a THIRD cloud dispatch of `8f59467c92b0`, and the finding is that the remedy the
+  08-17 entry costed at ~0 DOES NOT EXIST.** Venue shape identical to 08-15 and 08-17: one checkout
+  (`claude-infrastructure`), GitHub scope pinned to `renchris/claude-infrastructure`, no
+  `~/Development` at all, no `~/.claude/autonomy/backlog.jsonl`. R1-R4 were untouched and remain
+  **open, correct as filed, and unstarted** — nothing in the plan body is refuted, only the venue,
+  for the third time on this row (making the census **seven dispatches over five items**, not six).
+  What IS refuted is the cost correction in the 08-17 entry below: *"a `projectName` entry in the
+  plan index … is a ~0-cost data entry, and setting it to a foreign project composes with
+  fail-closed to park THIS row specifically."* **It parks nothing, because `projectName` is not a
+  data field — it is a cache of the path, recomputed by every writer and read back by none.** Both
+  writers assign it unconditionally from `classify_path()`, which is path-only and reads no
+  frontmatter: the PostToolUse arm at `hooks/plan-index-update.sh:154` (`.projectName =
+  $projectName`) and `reconcile()` at `:100`, which rebuilds every entry from disk truth and
+  preserves nothing but `firstIndexed`. Measured this session against trunk with `CC_PLAN_INDEX`
+  pointed at a temp index and a fixture plan:
+
+  | | step | `projectName` |
+  |---|---|---|
+  | A | after first index | `proj` |
+  | B | after the hand-set remedy | `reso-management-app` |
+  | C | after **one edit to the plan file** (PostToolUse arm) | `proj` |
+  | D | after **one `reconcile`** (the SessionStart arm) | `proj` |
+
+  So the remedy's lifetime is one write, and `reconcile` is wired at SessionStart
+  (`docs/activation/ledger-activate-snippet.md`) — it would be reverted before the next dispatch
+  even if no one touched the file. 🚨 **And the remedy and its own documentation are mutually
+  destructive: writing this entry IS an Edit to this plan file, which is precisely the event that
+  fires the clobber at line 154.** A future session must not spend a slot setting that field.
+  This collapses the four-mechanism list to **four builds, not three-plus-a-data-entry** — the
+  frontmatter `project:` key is a build too (`scripts/find-plan.sh` parses frontmatter for
+  `status:` and `title:` only; nothing anywhere reads a `project:` key), and no
+  not-dispatchable list exists beside `scripts/dispatch-projects.conf` to add a row to. Every
+  remaining option is the open decision itself, and the 08-15 entry's ruling stands: **a one-item
+  worker does not pick among them unilaterally**, least of all the `cc-eligible` arm its own author
+  called "the narrowest of the four and probably the wrong one". Nothing was built here.
+  **Disposition: unchanged — `cc-backlog block`, still not `reopen`.** This session could not
+  execute it either: the ledger is absent from the VM, so the block remains an OPERATOR-only step
+  and the row stays live until it is run from the desk.
 - **2026-08-17 — the SAME row was cloud-dispatched AGAIN, and the re-fire is the finding.**
   `8f59467c92b0` was fired into an identical VM shape (one checkout, GitHub scope of one repo, no
   `~/Development`) ~2 days after the 08-15 entry below wrote its disproof into THIS FILE. R1-R4 were
@@ -175,7 +213,10 @@ single-brained and audited, and doc_classifier's authorization holes are closed 
   One cost correction to the four-mechanism list in Phase 0: *"a `projectName` entry in the plan
   index"* is **not a build** — `scripts/find-plan.sh:73` already reads `.plans[$k].projectName` and
   prefers it over the path basename, so it is a ~0-cost data entry, and setting it to a foreign
-  project composes with fail-closed to park THIS row specifically. Full measurement →
+  project composes with fail-closed to park THIS row specifically. 🚨 **REFUTED 2026-08-28 — do not
+  act on this sentence; see the entry above.** `find-plan.sh:73` reads the field, but every WRITER
+  recomputes it from the path, so a hand-set value survives exactly one plan edit or one
+  `reconcile`. It is a build like the other three. Full measurement →
   `docs/research/venue-foreign-master-redispatch-2026-08-17.md`. **Disposition: `cc-backlog block`,
   not `reopen`** — blocked on where it was sent; the rails fail at rc 0 from a VM, so verify the
   block took rather than assuming it.
