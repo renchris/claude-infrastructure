@@ -201,7 +201,7 @@ DEFECTS: list[Defect] = [
             "DOM API exposes. Detecting it requires computing the centroid of the rendered "
             "pixels and comparing it to the geometric centre."
         ),
-        magnitude="ink centroid ~2px left of the geometric centre",
+        magnitude="ink centroid exactly 2px left of the geometric centre",
         severity="medium",
     ),
     Defect(
@@ -248,7 +248,14 @@ body {{
   margin-bottom: 24px;
 }}
 .hero-title {{ font-size: 24px; font-weight: 700; color: #FFFFFF; }}
-.hero-caption {{ font-size: 14px; color: #DBEAFE; margin-top: 8px; }}
+/* 16px, matching .section-title, so every step of the page's type scale is used
+   more than once. That is what a real page looks like and it is what the type
+   rule assumes: a size used exactly once is either a legitimate step or a stray
+   override, and on a page where NO step repeats there is no evidence to tell
+   them apart. Before this the 16px step was carried by the play glyph's
+   font-size, which is markup nobody thought was load-bearing until replacing it
+   turned the rule's zero-false-positive result red. */
+.hero-caption {{ font-size: 16px; color: #DBEAFE; margin-top: 8px; }}
 
 .kpi-row {{ display: flex; gap: {TOKENS["gap"]}; margin-bottom: 24px; }}
 .kpi-card {{
@@ -290,14 +297,46 @@ tr + tr td {{ border-top: 1px solid {TOKENS["gray200"]}; }}
   width: 44px; height: 44px; border-radius: 22px; background: {TOKENS["blue700"]};
   display: flex; align-items: center; justify-content: center;
 }}
-.glyph {{ color: #FFFFFF; font-size: 16px; line-height: 1;
-         /* Optical compensation: a triangle's ink mass sits behind its
+.glyph {{ display: block;
+         /* Optical compensation. A triangle's ink mass sits behind its
             bounding-box centre, so geometric centring reads as left-heavy.
-            Measured offset on this glyph at this size: 2.2px left, 1.9px up. */
-         transform: translate(2px, 2px); }}
+            The magnitude is not measured here, it is ARITHMETIC: the mark is
+            the SVG triangle below, whose area centroid is at x = (2+2+14)/3 = 6
+            in a bounding box centred on 8. Two pixels, exactly, on every
+            machine -- see the GLYPH_SVG note for why that matters. */
+         transform: translate(2px, 0); }}
 """
 
-BODY_HTML = """
+# The play mark, as geometry rather than as a character.
+#
+# It used to be `&#9654;` at font-size 16. That made the corpus's one
+# ink-centroid ground truth a property of the RENDERING FONT, and the stack it
+# pins -- Helvetica, Helvetica Neue, Arial -- exists only on macOS. Everywhere
+# else the whole chain falls through to the generic `sans-serif`, a different
+# face draws the triangle, and the authored compensation constant (measured on
+# one Mac as 2.2px left, 1.9px up) is simply wrong for the glyph on screen.
+# Measured on Linux/DejaVu Sans: the "clean" control rendered its mark 3.7px
+# BELOW the button's centre -- a real, visible defect on the page whose entire
+# job is to have none, and the ship gate is absolute zero on the control.
+#
+# A polygon fixes it by removing the dependency instead of pinning it. These
+# vertices are the corpus's own markup, so every machine rasterises the same
+# shape, and the ground truth is arithmetic rather than a measurement:
+#
+#     centroid = ((2+2+14)/3, (1+15+8)/3) = (6, 8)
+#     bounding box (2..14, 1..15) has its centre at (8, 8)
+#     => the ink sits exactly 2px left of the box the DOM centres, 0px vertically
+#
+# So the compensation is `translate(2px, 0)` and the injected defect removes it,
+# and both halves are now true wherever this renders. This also makes the arm
+# that grades it non-circular: the control passes because the geometry says it
+# should, not because the same estimator was used to calibrate it.
+GLYPH_SVG = (
+    '<svg class="glyph" width="16" height="16" viewBox="0 0 16 16" '
+    'aria-hidden="true"><polygon points="2,1 2,15 14,8" fill="#FFFFFF"/></svg>'
+)
+
+BODY_HTML = f"""
 <div class="hero">
   <div class="hero-title">Tonight at Ophelia</div>
   <div class="hero-caption">Doors 22:00 &middot; 14 tables held &middot; 3 awaiting deposit</div>
@@ -330,7 +369,7 @@ BODY_HTML = """
     <button class="btn-primary">Confirm all deposits</button>
     <button class="btn-secondary">Release held tables</button>
   </div>
-  <div class="glyph-btn"><span class="glyph">&#9654;</span></div>
+  <div class="glyph-btn">{GLYPH_SVG}</div>
 </div>
 """
 
@@ -364,7 +403,12 @@ def build(outdir: pathlib.Path) -> dict:
         entries.append(asdict(d))
 
     manifest = {
-        "corpus_version": "1.0",
+        # 1.1 -- the optical-centering mark became an SVG polygon. Its ground
+        # truth was a font metric, and the pinned font stack is macOS-only, so
+        # off that machine the control itself rendered the defect it exists not
+        # to have. Bumped rather than edited in place because a findings file
+        # captured under 1.0 was graded against a different page.
+        "corpus_version": "1.1",
         "built": "2026-08-26",
         "viewport": {"width": 1280, "height": 900},
         "tokens": TOKENS,

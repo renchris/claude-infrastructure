@@ -26,6 +26,8 @@ import pathlib
 import re
 import sys
 
+from rules import assert_registered
+
 GRID = 8
 CONTRAST_MIN = 4.5
 CONTRAST_MIN_LARGE = 3.0
@@ -34,6 +36,9 @@ TARGET_MIN = 44.0
 # band, a control authored at exactly 44px flips to a defect when the capture
 # config changes -- measured: 44.0 unpinned vs 43.x with --force-device-scale-factor.
 TARGET_TOL = 0.75
+# How close a once-used font size has to sit to a real step before it reads as a
+# stray override rather than a step of its own. See rule 3.
+TYPE_NEAR_PX = 1.5
 INTERACTIVE = {"button", "a", "input", "select", "textarea"}
 
 RGB_RE = re.compile(r"rgba?\(([^)]+)\)")
@@ -102,34 +107,65 @@ class Page:
     def backdrop(self, el):
         """Resolve the effective backdrop colour behind an element.
 
-        Returns (rgb, 'ok') when a solid colour is found, or (None, reason) when
-        the honest answer is that no single colour exists.
+        Returns (rgb, reason, signature). `rgb` is None when the honest answer is
+        that no single colour exists, and `signature` is then the collapse key the
+        router groups abstentions by -- (owner path, kind). Ninety-five text runs
+        over one hero gradient share one signature and therefore one question,
+        which is the whole affordability argument in PIPELINE_SPEC C7. The
+        signature is structured rather than parsed back out of the prose, because
+        a router that regexes a `detail` string breaks the first time someone
+        improves the wording.
         """
         cur = el
         depth = 0
         while cur is not None and depth < 12:
             img = (cur["styles"].get("background-image") or "none").strip()
             if img != "none":
-                return None, f"backdrop is an image/gradient on {cur['path']}"
+                kind = "gradient" if "gradient" in img else "image"
+                return (
+                    None,
+                    f"backdrop is an image/gradient on {cur['path']}",
+                    (cur["path"], kind),
+                )
             c = parse_rgb(cur["styles"].get("background-color", ""))
             if c and c[3] > 0.99:
-                return c, "ok"
+                return c, "ok", None
             if c and 0 < c[3] <= 0.99:
-                return None, f"backdrop is semi-transparent on {cur['path']}"
+                return (
+                    None,
+                    f"backdrop is semi-transparent on {cur['path']}",
+                    (cur["path"], "alpha"),
+                )
             cur = self.parent_of(cur)
             depth += 1
-        return (255, 255, 255, 1.0), "ok"  # document canvas
+        return (255, 255, 255, 1.0), "ok", None  # document canvas
 
 
-def find(snap: dict, tokens: dict) -> list[dict]:
+def find(snap: dict, tokens: dict, census: dict | None = None) -> list[dict]:
+    """Run every rule over one snapshot.
+
+    `census`, when passed, is filled with rule id -> number of subjects that rule
+    actually evaluated. PIPELINE_SPEC C18 ruling 3 requires the false-positive
+    budget to be stated per 1,000 subject-checks rather than per run, and a run
+    count is not a denominator: the corpus is 52 elements a page against a real
+    page's 1,841 subjects. It is also the only way to tell a rule that found
+    nothing from a rule that looked at nothing.
+    """
     pg = Page(snap)
     els = pg.els
     out: list[dict] = []
 
-    def rep(rule, target, detail, severity="medium"):
-        out.append(
-            {"rule": rule, "target": target, "detail": detail, "severity": severity}
-        )
+    def note(rule: str, subjects: int) -> None:
+        if census is not None:
+            assert_registered(rule)
+            census[rule] = census.get(rule, 0) + subjects
+
+    def rep(rule, target, detail, severity="medium", meta=None):
+        assert_registered(rule)
+        f = {"rule": rule, "target": target, "detail": detail, "severity": severity}
+        if meta:
+            f["meta"] = meta
+        out.append(f)
 
     text_els = [e for e in els if e["text"]]
 
@@ -153,6 +189,7 @@ def find(snap: dict, tokens: dict) -> list[dict]:
         m, share = mode_of(gaps)
         if m is None or share < 0.5:
             continue
+        note("spacing-rhythm", len(gaps))
         for i, g in enumerate(gaps):
             if abs(g - m) > 1.0:
                 rep(
@@ -163,6 +200,7 @@ def find(snap: dict, tokens: dict) -> list[dict]:
                 )
 
     # --- 2. grid adherence: spacing values should be multiples of the unit ----
+    note("grid-violation", len(els) * 4)
     for e in els:
         for side in ("margin-top", "margin-left", "margin-bottom", "margin-right"):
             v = px(e["styles"].get(side))
@@ -174,20 +212,48 @@ def find(snap: dict, tokens: dict) -> list[dict]:
                     "low",
                 )
 
-    # --- 3. type scale: font sizes should come from one small set ------------
+    # --- 3. type scale: a singleton size that NEARLY matches a real step ------
+    #
+    # The claim is a near-miss, not a singleton. It used to be a singleton, and
+    # the false-positive gate caught what that costs: a section title at 16px on
+    # a page whose other text runs 12 / 14 / 24 is a legitimate step of the
+    # scale, used once because the page has one section title. It is not drift,
+    # and reporting it is how a reviewer loses a reader.
+    #
+    # This is the same shape as the colour rule below, deliberately: near-miss to
+    # an existing member is drift, far from any member is an undeclared value
+    # that this rule does not claim to judge. `17px` next to a `16px` step is a
+    # typo or a hardcoded override; `16px` next to a `14px` step is a step. At
+    # these sizes no real scale puts two steps within 1.5px of each other, which
+    # is what makes the threshold a statement about typography rather than a
+    # tuned constant.
+    #
+    # Worth recording how this surfaced, because the mechanism generalises: the
+    # rule scored 9/9 with zero control false positives, and it did so partly by
+    # luck. The old corpus carried a decorative glyph at font-size 16, which made
+    # 16 a twice-used size and put it in the scale. Replacing that glyph with an
+    # SVG -- for unrelated reasons -- dropped 16 to a single use and the rule
+    # immediately fired on the control. The zero had been resting on a piece of
+    # markup nobody thought was load-bearing.
     sizes = [px(e["styles"]["font-size"]) for e in text_els]
     counts = collections.Counter(sizes)
     scale = {s for s, n in counts.items() if n >= 2}
+    note("type-scale", len(text_els))
     for e in text_els:
         s = px(e["styles"]["font-size"])
-        if s not in scale and scale:
-            near = min(scale, key=lambda x: abs(x - s))
-            rep(
-                "type-scale",
-                e["path"],
-                f"font-size {s:g}px is used once and sits off the page scale "
-                f"{sorted(scale)}; nearest step is {near:g}px",
-            )
+        if s in scale or not scale:
+            continue
+        near = min(scale, key=lambda x: abs(x - s))
+        if abs(s - near) > TYPE_NEAR_PX:
+            continue
+        rep(
+            "type-scale",
+            e["path"],
+            f"font-size {s:g}px is used once and sits {abs(s - near):g}px off the "
+            f"{near:g}px step of the page scale {sorted(scale)}; that is closer "
+            f"than any real step, so it reads as a stray override rather than a "
+            f"size of its own",
+        )
 
     # --- 4. radius conformance ----------------------------------------------
     radii = [
@@ -197,6 +263,7 @@ def find(snap: dict, tokens: dict) -> list[dict]:
     ]
     m, share = mode_of(radii)
     if m and share >= 0.4:
+        note("token-drift", len(els))
         for e in els:
             r = px(e["styles"]["border-radius"])
             # A pill/circle is a deliberate shape, not radius drift.
@@ -224,6 +291,7 @@ def find(snap: dict, tokens: dict) -> list[dict]:
                 continue
             h = hexof(c)
             seen.setdefault(h, []).append((e["path"], prop))
+    note("token-drift", sum(len(u) for u in seen.values()))
     for h, uses in seen.items():
         if h in palette:
             continue
@@ -250,7 +318,7 @@ def find(snap: dict, tokens: dict) -> list[dict]:
         fg = parse_rgb(e["styles"]["color"])
         if not fg:
             continue
-        bg, why = pg.backdrop(e)
+        bg, why, sig = pg.backdrop(e)
         size = px(e["styles"]["font-size"])
         weight = e["styles"].get("font-weight", "400")
         large = size >= 24 or (
@@ -258,14 +326,23 @@ def find(snap: dict, tokens: dict) -> list[dict]:
         )
         need = CONTRAST_MIN_LARGE if large else CONTRAST_MIN
         if bg is None:
+            note("contrast-indeterminate", 1)
             rep(
                 "contrast-indeterminate",
                 e["path"],
                 f"cannot compute a ratio: {why}. Requirement {need}:1 is UNVERIFIED "
                 f"for this text",
                 "high",
+                meta={
+                    # The collapse key. Grouping on it is what turns one gradient
+                    # behind ninety-five text runs into ONE question -- C7 ruling 1.
+                    "backdrop_owner": sig[0],
+                    "backdrop_kind": sig[1],
+                    "requirement": need,
+                },
             )
             continue
+        note("contrast", 1)
         ratio = contrast(fg, bg)
         if ratio < need:
             rep(
@@ -276,6 +353,7 @@ def find(snap: dict, tokens: dict) -> list[dict]:
             )
 
     # --- 7. overflow / clipping ---------------------------------------------
+    note("overflow", len(els))
     for e in els:
         ov = " ".join(
             [e["styles"].get("overflow", ""), e["styles"].get("overflow-y", "")]
@@ -290,6 +368,7 @@ def find(snap: dict, tokens: dict) -> list[dict]:
             )
 
     # --- 8. touch-target size -----------------------------------------------
+    note("touch-target", sum(1 for e in els if e["tag"] in INTERACTIVE))
     for e in els:
         role = e["tag"] in INTERACTIVE
         if not role:
@@ -306,6 +385,7 @@ def find(snap: dict, tokens: dict) -> list[dict]:
     # --- 9. near-miss alignment ---------------------------------------------
     edges = collections.Counter(round(e["rect"]["x"], 1) for e in els)
     strong = {x for x, n in edges.items() if n >= 3}
+    note("misalignment", len(els))
     for e in els:
         x = round(e["rect"]["x"], 1)
         if x in strong:

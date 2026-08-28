@@ -1099,6 +1099,17 @@ later family buy its way in.
    1×10⁻⁴ — twenty times better than anything measured anywhere in this substrate — still yields
    **~19 false findings per audit**, delivered to an agent that acts on them by editing source.
 
+✅ **All three rulings are enforced in code as of 2026-08-28 — `bench/fp_budget.py`, exit 1 on a
+breach.** Ruling 1 is the gate and runs at n = 1 with no baseline-diff suppression. Ruling 2 is a
+refusal: the rate is *withheld*, loudly, with the page deficit stated, rather than computed from
+whatever n is available. Ruling 3 is the printed denominator. Two additions the rulings implied but
+did not state: an **abstention is never scored as a false positive** (it is the router's input, and
+folding it in would punish the behaviour this pipeline rewards), and **every registered rule is
+listed with its subject count**, so a rule that evaluated zero subjects reads as unproven rather than
+passing — the two cases are identical in a findings file and mean opposite things. The gate caught a
+real regression on its first run, in a rule that had scored 9/9 with zero control FP: its zero had
+been resting on a decorative glyph's `font-size` making a once-used type step twice-used.
+
 And the instrument that fixes it is nearly free: **mine ~315 clean screens from the three apps' own
 git history** — pages that shipped and were never subsequently touched by a visual-bug fix. Every
 finding on that set is a false positive **by construction, at zero labelling cost.** This is the
@@ -1492,7 +1503,7 @@ spine already reaches it.
 | **B1** | **CAPTURE, pinned** — the three DPR flags, the 9-step readiness ladder, `manifest.json` with `eff_read`/`eff_api`/`read_colour_class`/`tier_safe` computed. **The stability gate ships as an ADVISORY abstention flag, not a gate** | without the scale flag every geometric finding inherits a **1.5 px phantom offset**; without the scroll prime **7 of 8** sections photograph at `opacity:0` (47,991 B → 58,960 B once primed) | `BUILDABLE` | ~350 LOC |
 | **B2** | **EXTRACT** — one `captureSnapshot` + one AX tree → the 854-token fact-pack + `target_key` | **32.7 ms** vs 881 ms in-page vs 5,788 ms per-node — 29× and 177×. The pack is **cheaper than the screenshot it rides beside** | `BUILDABLE` | ~500 LOC |
 | **B3** | **`detect_dom`** — the rule file **with its explicit `INDETERMINATE`** | **9/9 DOM-determined, 0 control FP, 80 ms/page.** Exists and runs today at 353 LOC | `BUILDABLE` | ~250 LOC |
-| **B4** | **`detect_xcheck`, X3 arm only** — contrast sampled in thirds | resolves the gradient deterministically (**4.81 / 1.57**), **0 control FP**, removes a whole class from the model queue. Exists today at 233 LOC | `BUILDABLE` | ~180 LOC |
+| **B4** | **`detect_xcheck`, X3 arm only** ~~only~~ — **X2 joins it as of 2026-08-28** | resolves the gradient deterministically (**4.81 / 1.57**), **0 control FP**, removes a whole class from the model queue. Exists today at 233 LOC. **X2 now settles the second pixels-only defect at 2.03px against an exact 2.00px, also at 0 control FP** — so the cross-check row is 2/2 and BOTH pixels-only classes leave the model queue. ⚠️ X3's third-sampling also carried a latent portability defect found while validating X2: it took the modal colour of the whole band, *including the text's own ink*, and over a smooth gradient the backdrop has no repeated value at all — so the most-repeated colour in the band **is** the text, scoring 1.00:1 against itself. On a machine other than the author's it reported nothing at all on the gradient page. Now: ink excluded, and the estimator is the **median** rather than the mode, which is identical on a solid backdrop and representative by construction on a varying one | `BUILDABLE` | ~180 LOC |
 | **B5** | **One blind gestalt call** — request-isolated, viewport frame, `unprompted` array. 🚨 **BLIND-ONLY: no fact-pack, no verdicts, until U5 answers** | **2/2 judgement + 3 real defects nobody injected + 0 FP.** This is the arm that was *measured*; adding the fact-pack changes the arm (§2 C3) | `BUILDABLE` | one prompt |
 | **B9** | **S0 SURFACE + the `UNREVIEWED` block** — *promoted into the spine from Tier 1* | It is a `find`: **0 `loading.tsx` against 16 `page.tsx` under `(app)`, 0 against 105 across `src/`**; **18 of 288 tuples = 6.3 %**; `prefers-reduced-motion` **0** in two of three apps. Zero FP by construction, and **no stage that begins at a URL can produce any of it** | `BUILDABLE` | ~300 LOC |
 
@@ -1550,7 +1561,7 @@ because each carries a real observation — the observation is just not worth a 
 |---|---|---|---|
 | **B17** | **S5 DECOMPOSE — CUT from the core pipeline** | **CONCEDED (A2.7).** §2 C2 already killed the ScreenSeekeR transfer (zero web screenshots, point-in-box not IoU, inverse task) and found **4 of 5 unique findings are page-global quantifications structurally unreachable from a crop**. Its survival was conditional on U4, which is unrun, and 706 lines of P2 spec rested on that probe. **What ships instead: a ~40-LOC re-clip utility** (`Page.captureScreenshot` with a rect), no planning half, no MECE cover, no duty crops. Revived only if **U4 shows a 6-crop arm strictly dominating full-page on our own corpus** | `PARTIAL` |
 | **B18** | **S7 STATES/MOTION — DEFERRED; its one real finding has been extracted** | **CONCEDED (A2.10).** Its blocker is genuine but it is a **`grep`, not a stage**: `prefers-reduced-motion` = **0** in `reso-web-app` and `reso-landing-app`, and the landing app is the `framer-motion` one (338 in management). **That line now lives in S0 SURFACE** (§1.0) and costs nothing. The rest of S7 stays deferred for the reason its own spec gives: **no acceptance corpus exists for it.** Revived when one does | `PROSE` |
-| **B19** | **S4 ROUTE — CUT to ~20 lines** | **CONCEDED (A2.8).** T1 on the corpus today is **0**. Five triggers, a block ledger and collapse-by-class exist to manage an empty queue of unknown real size. **S4 v1 is: "route T2 unconditionally; forward everything else as a fact."** The five-trigger machinery, the class collapse and the session ledger are revived by **U3** (if 95 abstentions collapse to ~3, the machinery is affordable and worth building) and **U1** (if the cliff is per-conversation) | `BUILDABLE` (the 20-line form) |
+| **B19** | **S4 ROUTE — CUT to ~20 lines** · **BUILT 2026-08-28 as `bench/route.py`** | **CONCEDED (A2.8).** T1 on the corpus today is **0**. Five triggers, a block ledger and collapse-by-class exist to manage an empty queue of unknown real size. **S4 v1 is: "route T2 unconditionally; forward everything else as a fact."** The five-trigger machinery, the class collapse and the session ledger are revived by **U3** (if 95 abstentions collapse to ~3, the machinery is affordable and worth building) and **U1** (if the cliff is per-conversation). **What shipped is T1 + T2 and nothing else** — T3/T4/T5 are not implemented and deliberately not stubbed, because a stub of a scheduler is indistinguishable from one that never fires. The class collapse IS in, at ~15 lines, because it is a dict key rather than machinery and because without it the router cannot express the C7 ruling it will need the day U3 answers; the block ledger, the exemplar→class converter and the arbitration re-ask are not. **T1 measured 0 on the corpus, as predicted.** The two things that had to be code rather than discipline are: the cross-check subtraction (a table, `rules.RESOLVED_BY`, so a rule added later cannot quietly stop being subtracted) and its **file-existence gate** (a missing findings file makes T1 *grow* — verified by deleting it, T1 goes 0 → 1) | `BUILDABLE` (the 20-line form) |
 | **B19b** | **S1b INK-PROBE — DEFERRED** | **CONCEDED (A2.9).** It costs ≤40 differential captures per cell to fix a swamping bug in X1 — **and X1 has produced zero true positives to date.** Build it the first time X1 finds one. *(The C24 ruling that it belongs inside S1's process stands and is unaffected — it is a placement ruling, not a build order.)* | `BUILDABLE` |
 | **B20** | Saliency (UMSI++) | **the UEyes licence is the gate**, not a nice-to-have. CC 0.833 vs the best VLM at 0.408 is mechanistic and will not be closed by a better prompt | `PROSE` |
 | **B21** | The 512 px squint pass | its own probe (U6) shows the gestalt defects survive and the sub-perceptual ones still miss | `PARTIAL` |
@@ -1560,7 +1571,15 @@ because each carries a real observation — the observation is just not worth a 
 
 Local VLM in the detection path · any learned GUI detector · annotated overlays as a standing input
 (a full second image at ~3,240 tok against ~840 for the same findings as JSON) · any score, grade,
-rank or 1–5 rating · X2 centroid **on** by default · X4/X5/X6 until each has its own control run ·
+rank or 1–5 rating · ~~X2 centroid **on** by default~~ **← REVIVED 2026-08-28 on this list's own
+stated terms.** The condition attached to its neighbours is *"until each has its own control run"*,
+and X2 now has one: zero findings on the control, and it measures the injected defect at **2.03px
+against a ground truth of exactly 2.00px**. Both named fixes landed (measure against the container,
+mask to the painted shape), plus two the list had not predicted — inset the mask past the
+container's antialiased edge, and take the reference from the container's analytic centre rather
+than the discrete mask's centroid. The corpus item it grades was also font-dependent and is now an
+SVG polygon with a closed-form centroid. See README §2 for the numbers. · X4/X5/X6 until each has
+its own control run ·
 a per-finding duty crop · negative caching of "this cell had no findings" (it makes the clean result
 and the not-run result the same bytes) · **Route C and its AST-allowlisted predicate DSL** (D18 —
 no model finding is promotable by any route) · **S5's planning half** (B17) · **S4's five-trigger

@@ -1,0 +1,668 @@
+{
+ "align-1px": {
+  "page": "align-1px",
+  "corpus_page_size": {
+   "w": 1280,
+   "h": 900
+  },
+  "degradation": {
+   "xcheck": "present"
+  },
+  "coverage": {
+   "subjects": 1,
+   "settled_forwarded_as_facts": 1,
+   "abstentions": 0,
+   "resolved_by_xcheck": 0,
+   "open_abstentions": 0,
+   "abstention_classes": 0,
+   "adjudicated": 0,
+   "unadjudicated_by_budget": 0
+  },
+  "facts": [
+   {
+    "rule": "misalignment",
+    "target": "div.panel:nth-of-type(5)",
+    "value": "left edge at 31px is 1.0px off the shared 32px edge used by 8 other elements"
+   }
+  ],
+  "questions": [
+   {
+    "id": "q00",
+    "trigger": "T2",
+    "kind": "unscreenable",
+    "classes": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ],
+    "subjects": [],
+    "n_subjects": 0,
+    "crop": null,
+    "consequence": Infinity,
+    "budget_exempt": true,
+    "caption": "region q00 -- the whole page (1280x900 CSS px). Global frame: answer only about the page as a whole. Name regions, never coordinates."
+   }
+  ],
+  "unadjudicated_by_budget": []
+ },
+ "clean": {
+  "page": "clean",
+  "corpus_page_size": {
+   "w": 1280,
+   "h": 900
+  },
+  "degradation": {
+   "xcheck": "present"
+  },
+  "coverage": {
+   "subjects": 0,
+   "settled_forwarded_as_facts": 0,
+   "abstentions": 0,
+   "resolved_by_xcheck": 0,
+   "open_abstentions": 0,
+   "abstention_classes": 0,
+   "adjudicated": 0,
+   "unadjudicated_by_budget": 0
+  },
+  "facts": [],
+  "questions": [
+   {
+    "id": "q00",
+    "trigger": "T2",
+    "kind": "unscreenable",
+    "classes": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ],
+    "subjects": [],
+    "n_subjects": 0,
+    "crop": null,
+    "consequence": Infinity,
+    "budget_exempt": true,
+    "caption": "region q00 -- the whole page (1280x900 CSS px). Global frame: answer only about the page as a whole. Name regions, never coordinates."
+   }
+  ],
+  "unadjudicated_by_budget": []
+ },
+ "contrast-on-gradient": {
+  "page": "contrast-on-gradient",
+  "corpus_page_size": {
+   "w": 1280,
+   "h": 900
+  },
+  "degradation": {
+   "xcheck": "present"
+  },
+  "coverage": {
+   "subjects": 4,
+   "settled_forwarded_as_facts": 2,
+   "abstentions": 2,
+   "resolved_by_xcheck": 2,
+   "open_abstentions": 0,
+   "abstention_classes": 0,
+   "adjudicated": 0,
+   "unadjudicated_by_budget": 0
+  },
+  "facts": [
+   {
+    "rule": "xcheck-contrast-varies",
+    "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
+    "value": "contrast is not one number across this text: 6.15:1 at the left edge and 1.73:1 at the right. Any single computed value is a fiction, and the right end is the one that fails a reader"
+   },
+   {
+    "rule": "xcheck-contrast-varies",
+    "target": "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
+    "value": "contrast is not one number across this text: 6.08:1 at the left edge and 1.71:1 at the right. Any single computed value is a fiction, and the right end is the one that fails a reader"
+   },
+   {
+    "rule": "contrast-indeterminate",
+    "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
+    "value": "cannot compute a ratio: backdrop is an image/gradient on div.hero:nth-of-type(1). Requirement 3.0:1 is UNVERIFIED for this text"
+   },
+   {
+    "rule": "contrast-indeterminate",
+    "target": "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
+    "value": "cannot compute a ratio: backdrop is an image/gradient on div.hero:nth-of-type(1). Requirement 4.5:1 is UNVERIFIED for this text"
+   }
+  ],
+  "questions": [
+   {
+    "id": "q00",
+    "trigger": "T2",
+    "kind": "unscreenable",
+    "classes": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ],
+    "subjects": [],
+    "n_subjects": 0,
+    "crop": null,
+    "consequence": Infinity,
+    "budget_exempt": true,
+    "caption": "region q00 -- the whole page (1280x900 CSS px). Global frame: answer only about the page as a whole. Name regions, never coordinates."
+   }
+  ],
+  "unadjudicated_by_budget": []
+ },
+ "contrast-plain": {
+  "page": "contrast-plain",
+  "corpus_page_size": {
+   "w": 1280,
+   "h": 900
+  },
+  "degradation": {
+   "xcheck": "present"
+  },
+  "coverage": {
+   "subjects": 1,
+   "settled_forwarded_as_facts": 1,
+   "abstentions": 0,
+   "resolved_by_xcheck": 0,
+   "open_abstentions": 0,
+   "abstention_classes": 0,
+   "adjudicated": 0,
+   "unadjudicated_by_budget": 0
+  },
+  "facts": [
+   {
+    "rule": "contrast",
+    "target": "div.helper:nth-of-type(4)",
+    "value": "2.54:1 against 4.5:1 required (#9CA3AF on #FFFFFF)"
+   }
+  ],
+  "questions": [
+   {
+    "id": "q00",
+    "trigger": "T2",
+    "kind": "unscreenable",
+    "classes": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ],
+    "subjects": [],
+    "n_subjects": 0,
+    "crop": null,
+    "consequence": Infinity,
+    "budget_exempt": true,
+    "caption": "region q00 -- the whole page (1280x900 CSS px). Global frame: answer only about the page as a whole. Name regions, never coordinates."
+   }
+  ],
+  "unadjudicated_by_budget": []
+ },
+ "grid-offgrid": {
+  "page": "grid-offgrid",
+  "corpus_page_size": {
+   "w": 1280,
+   "h": 900
+  },
+  "degradation": {
+   "xcheck": "present"
+  },
+  "coverage": {
+   "subjects": 1,
+   "settled_forwarded_as_facts": 1,
+   "abstentions": 0,
+   "resolved_by_xcheck": 0,
+   "open_abstentions": 0,
+   "abstention_classes": 0,
+   "adjudicated": 0,
+   "unadjudicated_by_budget": 0
+  },
+  "facts": [
+   {
+    "rule": "grid-violation",
+    "target": "div.section-title:nth-of-type(3)",
+    "value": "margin-top is 13px, not a multiple of the 8px grid"
+   }
+  ],
+  "questions": [
+   {
+    "id": "q00",
+    "trigger": "T2",
+    "kind": "unscreenable",
+    "classes": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ],
+    "subjects": [],
+    "n_subjects": 0,
+    "crop": null,
+    "consequence": Infinity,
+    "budget_exempt": true,
+    "caption": "region q00 -- the whole page (1280x900 CSS px). Global frame: answer only about the page as a whole. Name regions, never coordinates."
+   }
+  ],
+  "unadjudicated_by_budget": []
+ },
+ "hierarchy-inversion": {
+  "page": "hierarchy-inversion",
+  "corpus_page_size": {
+   "w": 1280,
+   "h": 900
+  },
+  "degradation": {
+   "xcheck": "present"
+  },
+  "coverage": {
+   "subjects": 2,
+   "settled_forwarded_as_facts": 2,
+   "abstentions": 0,
+   "resolved_by_xcheck": 0,
+   "open_abstentions": 0,
+   "abstention_classes": 0,
+   "adjudicated": 0,
+   "unadjudicated_by_budget": 0
+  },
+  "facts": [
+   {
+    "rule": "token-drift",
+    "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
+    "value": "background-color #EFF6FF is 11.5 away from token #F9FAFB; almost certainly meant to be the token"
+   },
+   {
+    "rule": "contrast",
+    "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
+    "value": "3.38:1 against 4.5:1 required (#3B82F6 on #EFF6FF)"
+   }
+  ],
+  "questions": [
+   {
+    "id": "q00",
+    "trigger": "T2",
+    "kind": "unscreenable",
+    "classes": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ],
+    "subjects": [],
+    "n_subjects": 0,
+    "crop": null,
+    "consequence": Infinity,
+    "budget_exempt": true,
+    "caption": "region q00 -- the whole page (1280x900 CSS px). Global frame: answer only about the page as a whole. Name regions, never coordinates."
+   }
+  ],
+  "unadjudicated_by_budget": []
+ },
+ "optical-centering": {
+  "page": "optical-centering",
+  "corpus_page_size": {
+   "w": 1280,
+   "h": 900
+  },
+  "degradation": {
+   "xcheck": "present"
+  },
+  "coverage": {
+   "subjects": 1,
+   "settled_forwarded_as_facts": 1,
+   "abstentions": 0,
+   "resolved_by_xcheck": 0,
+   "open_abstentions": 0,
+   "abstention_classes": 0,
+   "adjudicated": 0,
+   "unadjudicated_by_budget": 0
+  },
+  "facts": [
+   {
+    "rule": "xcheck-optical-centre",
+    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > svg.glyph",
+    "value": "'<svg>' is geometrically centred in div.glyph-btn:nth-of-type(2) by the DOM, but its rendered ink sits 2.0px left and 0.0px down of that shape's centre -- it will read as off-centre however correct the CSS is"
+   }
+  ],
+  "questions": [
+   {
+    "id": "q00",
+    "trigger": "T2",
+    "kind": "unscreenable",
+    "classes": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ],
+    "subjects": [],
+    "n_subjects": 0,
+    "crop": null,
+    "consequence": Infinity,
+    "budget_exempt": true,
+    "caption": "region q00 -- the whole page (1280x900 CSS px). Global frame: answer only about the page as a whole. Name regions, never coordinates."
+   }
+  ],
+  "unadjudicated_by_budget": []
+ },
+ "overflow-clip": {
+  "page": "overflow-clip",
+  "corpus_page_size": {
+   "w": 1280,
+   "h": 900
+  },
+  "degradation": {
+   "xcheck": "present"
+  },
+  "coverage": {
+   "subjects": 3,
+   "settled_forwarded_as_facts": 3,
+   "abstentions": 0,
+   "resolved_by_xcheck": 0,
+   "open_abstentions": 0,
+   "abstention_classes": 0,
+   "adjudicated": 0,
+   "unadjudicated_by_budget": 0
+  },
+  "facts": [
+   {
+    "rule": "overflow",
+    "target": "div.panel:nth-of-type(5) > table > tbody > tr:nth-of-type(2) > td.cell-venue:nth-of-type(2)",
+    "value": "content is 40px tall inside a 24px box with overflow hidden; text is clipped"
+   },
+   {
+    "rule": "overflow",
+    "target": "div.panel:nth-of-type(5) > table > tbody > tr:nth-of-type(3) > td.cell-venue:nth-of-type(2)",
+    "value": "content is 40px tall inside a 24px box with overflow hidden; text is clipped"
+   },
+   {
+    "rule": "overflow",
+    "target": "div.panel:nth-of-type(5) > table > tbody > tr:nth-of-type(4) > td.cell-venue:nth-of-type(2)",
+    "value": "content is 40px tall inside a 24px box with overflow hidden; text is clipped"
+   }
+  ],
+  "questions": [
+   {
+    "id": "q00",
+    "trigger": "T2",
+    "kind": "unscreenable",
+    "classes": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ],
+    "subjects": [],
+    "n_subjects": 0,
+    "crop": null,
+    "consequence": Infinity,
+    "budget_exempt": true,
+    "caption": "region q00 -- the whole page (1280x900 CSS px). Global frame: answer only about the page as a whole. Name regions, never coordinates."
+   }
+  ],
+  "unadjudicated_by_budget": []
+ },
+ "radius-drift": {
+  "page": "radius-drift",
+  "corpus_page_size": {
+   "w": 1280,
+   "h": 900
+  },
+  "degradation": {
+   "xcheck": "present"
+  },
+  "coverage": {
+   "subjects": 1,
+   "settled_forwarded_as_facts": 1,
+   "abstentions": 0,
+   "resolved_by_xcheck": 0,
+   "open_abstentions": 0,
+   "abstention_classes": 0,
+   "adjudicated": 0,
+   "unadjudicated_by_budget": 0
+  },
+  "facts": [
+   {
+    "rule": "token-drift",
+    "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(2)",
+    "value": "border-radius 6px differs from the page's dominant 8px"
+   }
+  ],
+  "questions": [
+   {
+    "id": "q00",
+    "trigger": "T2",
+    "kind": "unscreenable",
+    "classes": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ],
+    "subjects": [],
+    "n_subjects": 0,
+    "crop": null,
+    "consequence": Infinity,
+    "budget_exempt": true,
+    "caption": "region q00 -- the whole page (1280x900 CSS px). Global frame: answer only about the page as a whole. Name regions, never coordinates."
+   }
+  ],
+  "unadjudicated_by_budget": []
+ },
+ "spacing-gap": {
+  "page": "spacing-gap",
+  "corpus_page_size": {
+   "w": 1280,
+   "h": 900
+  },
+  "degradation": {
+   "xcheck": "present"
+  },
+  "coverage": {
+   "subjects": 2,
+   "settled_forwarded_as_facts": 2,
+   "abstentions": 0,
+   "resolved_by_xcheck": 0,
+   "open_abstentions": 0,
+   "abstention_classes": 0,
+   "adjudicated": 0,
+   "unadjudicated_by_budget": 0
+  },
+  "facts": [
+   {
+    "rule": "spacing-rhythm",
+    "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(3)",
+    "value": "gap 39.0px breaks the 16.0px rhythm used by its siblings under div.kpi-row:nth-of-type(2)"
+   },
+   {
+    "rule": "grid-violation",
+    "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(3)",
+    "value": "margin-left is 23px, not a multiple of the 8px grid"
+   }
+  ],
+  "questions": [
+   {
+    "id": "q00",
+    "trigger": "T2",
+    "kind": "unscreenable",
+    "classes": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ],
+    "subjects": [],
+    "n_subjects": 0,
+    "crop": null,
+    "consequence": Infinity,
+    "budget_exempt": true,
+    "caption": "region q00 -- the whole page (1280x900 CSS px). Global frame: answer only about the page as a whole. Name regions, never coordinates."
+   }
+  ],
+  "unadjudicated_by_budget": []
+ },
+ "token-color-drift": {
+  "page": "token-color-drift",
+  "corpus_page_size": {
+   "w": 1280,
+   "h": 900
+  },
+  "degradation": {
+   "xcheck": "present"
+  },
+  "coverage": {
+   "subjects": 1,
+   "settled_forwarded_as_facts": 1,
+   "abstentions": 0,
+   "resolved_by_xcheck": 0,
+   "open_abstentions": 0,
+   "abstention_classes": 0,
+   "adjudicated": 0,
+   "unadjudicated_by_budget": 0
+  },
+  "facts": [
+   {
+    "rule": "token-drift",
+    "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
+    "value": "background-color #1D4ED3 is 5.0 away from token #1D4ED8; almost certainly meant to be the token"
+   }
+  ],
+  "questions": [
+   {
+    "id": "q00",
+    "trigger": "T2",
+    "kind": "unscreenable",
+    "classes": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ],
+    "subjects": [],
+    "n_subjects": 0,
+    "crop": null,
+    "consequence": Infinity,
+    "budget_exempt": true,
+    "caption": "region q00 -- the whole page (1280x900 CSS px). Global frame: answer only about the page as a whole. Name regions, never coordinates."
+   }
+  ],
+  "unadjudicated_by_budget": []
+ },
+ "touch-target": {
+  "page": "touch-target",
+  "corpus_page_size": {
+   "w": 1280,
+   "h": 900
+  },
+  "degradation": {
+   "xcheck": "present"
+  },
+  "coverage": {
+   "subjects": 1,
+   "settled_forwarded_as_facts": 1,
+   "abstentions": 0,
+   "resolved_by_xcheck": 0,
+   "open_abstentions": 0,
+   "abstention_classes": 0,
+   "adjudicated": 0,
+   "unadjudicated_by_budget": 0
+  },
+  "facts": [
+   {
+    "rule": "touch-target",
+    "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-secondary:nth-of-type(2)",
+    "value": "164x29px is under the 44px minimum target"
+   }
+  ],
+  "questions": [
+   {
+    "id": "q00",
+    "trigger": "T2",
+    "kind": "unscreenable",
+    "classes": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ],
+    "subjects": [],
+    "n_subjects": 0,
+    "crop": null,
+    "consequence": Infinity,
+    "budget_exempt": true,
+    "caption": "region q00 -- the whole page (1280x900 CSS px). Global frame: answer only about the page as a whole. Name regions, never coordinates."
+   }
+  ],
+  "unadjudicated_by_budget": []
+ },
+ "type-scale": {
+  "page": "type-scale",
+  "corpus_page_size": {
+   "w": 1280,
+   "h": 900
+  },
+  "degradation": {
+   "xcheck": "present"
+  },
+  "coverage": {
+   "subjects": 1,
+   "settled_forwarded_as_facts": 1,
+   "abstentions": 0,
+   "resolved_by_xcheck": 0,
+   "open_abstentions": 0,
+   "abstention_classes": 0,
+   "adjudicated": 0,
+   "unadjudicated_by_budget": 0
+  },
+  "facts": [
+   {
+    "rule": "type-scale",
+    "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(4) > div.kpi-label:nth-of-type(1)",
+    "value": "font-size 17px is used once and sits 1px off the 16px step of the page scale [12.0, 14.0, 16.0, 24.0]; that is closer than any real step, so it reads as a stray override rather than a size of its own"
+   }
+  ],
+  "questions": [
+   {
+    "id": "q00",
+    "trigger": "T2",
+    "kind": "unscreenable",
+    "classes": [
+     "hierarchy",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence",
+     "optical-alignment",
+     "readability"
+    ],
+    "subjects": [],
+    "n_subjects": 0,
+    "crop": null,
+    "consequence": Infinity,
+    "budget_exempt": true,
+    "caption": "region q00 -- the whole page (1280x900 CSS px). Global frame: answer only about the page as a whole. Name regions, never coordinates."
+   }
+  ],
+  "unadjudicated_by_budget": []
+ }
+}

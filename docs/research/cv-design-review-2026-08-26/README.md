@@ -26,12 +26,21 @@ Three measurements, all taken on this machine today, carry the argument:
 | Detector | DOM-determined | Pixels-only | False positives on the clean control |
 |---|---|---|---|
 | **Deterministic rules** (~250 lines, 80 ms/page) | **9 / 9** | 0 / 2 (1 honest abstention) | **0** |
-| **DOM-vs-pixels cross-check** (~180 lines NumPy, no model) | — | **1 / 2** | **0** |
+| **DOM-vs-pixels cross-check** (~180 lines NumPy, no model) | — | **2 / 2** *(was 1/2)* | **0** |
 | **Claude vision, blind** (8 pages, no ground truth) | 2 / 4 | **2 / 2** | **0** |
 | **Local `Qwen3.8-27B-4bit`** (MLX, this Mac) | not run | 1 of 3 resolutions correct | invented a defect at 2 of 3 resolutions |
 
 **The union of the first three is 11 of 11**, and each covers precisely what the others cannot. That
 complementarity *is* the architecture. The fourth row is why no local model is in it.
+
+⚠️ **The cross-check row moved to 2/2 on 2026-08-28**, when the centroid arm's two known defects were
+fixed (§2, third layer). Both pixels-only defects are now settled deterministically, at zero model
+cost, and neither reaches the vision layer at all. That does **not** shrink the vision layer's job —
+its 2/2 above is on the *judgement* defects, and the three real defects it found that nobody injected
+remain the capability nothing else in this table has. What it shrinks is the queue. Recall and the
+control false-positive count are now computed by `bench/score.py` and `bench/fp_budget.py` rather
+than read off this table by a person, and `bash bench/run_bench.sh` runs both and takes the worse
+answer.
 
 ⚠️ **This table is a correction.** The first version scored three pixels-only defects and reported
 6 of 7. Building the cross-check exposed the reason: the `optical-centering` variant injected an
@@ -172,15 +181,45 @@ Sampling the backdrop separately in the left and right thirds turns "unrepresent
 numbers and a verdict — no VLM call, no abstention, zero findings on the control. **That moves
 contrast-over-a-gradient out of the vision layer's queue entirely.**
 
-🚨 **The centroid arm is PROVISIONAL and ships disabled** (`--x2` to enable), because trying to
+🚨 **The centroid arm was PROVISIONAL and shipped disabled** (`--x2` to enable), because trying to
 validate it found two defects in it, and both are instances of the exact failure this document warns
 about — a plausible number nobody checked. (a) It compares ink to the element's **own** box, and
 `getBoundingClientRect` returns the *post*-transform box, so a `translate` moves box and ink together
 and the measured offset is **invariant under the very compensation it is supposed to verify**. (b) Its
 background is the crop's modal colour, so on a round button the square crop's corners — page
-background outside the circle — count as ink and swamp a 16px glyph. Both fixes are known (measure
-against the container; mask to the painted shape) and neither is done. Shipping it on would have
-handed the pipeline a confident number with no ground truth behind it.
+background outside the circle — count as ink and swamp a 16px glyph.
+
+✅ **Both are fixed as of 2026-08-28, with the fixes this document named — measure against the
+container, mask to the painted shape — and X2 is now ON by default (`--no-x2` to disable).** The
+numbers, because the complaint was that it reported a quantity nobody had validated:
+
+| | Before | After |
+|---|---|---|
+| control page (compensation present) | fires, 2.2px left / 1.9px up | **silent** |
+| variant page (compensation deleted) | fires, 2.2px left / 1.9px up | fires, **2.03px left / 0.09px up** |
+| ground truth | — | **exactly 2.00px left, 0.00px up** |
+
+The old arm reported *the same number for the right answer and the wrong one* — a detector carrying
+zero information, which is worse than the "plausible number" it was accused of. Three things were
+needed rather than two. Beyond the container frame and the shape mask: the mask has to be **inset**
+past the container's own antialiased edge, because that ring is ~84 px against a 16px mark's ~70,
+it is centred, and it therefore drags every centroid toward the middle (it halved the measured
+offset); and the reference point has to be the container's **analytic** centre rather than the
+discrete mask's centroid, because the button's box starts at x = 391.33 while its crop starts at 391
+and that third of a pixel is 17% of the quantity being measured.
+
+**A fourth defect surfaced that this document had not predicted, and it is the more general one.**
+The corpus pinned `Helvetica, 'Helvetica Neue', Arial, sans-serif` with the comment *"pinned so a
+render is reproducible across machines"*. Every face in that chain is macOS-only, so off that
+machine the whole chain falls through to the generic and a different font draws the mark. The
+authored compensation constant — 2.2px left, 1.9px up, measured once on one Mac — is then simply
+wrong for the glyph on screen: rendered under DejaVu Sans, **the clean control put its mark 3.7px
+below the button's centre**, a real and visible defect on the one page whose entire job is to have
+none. *An ink-metric ground truth expressed as a font-dependent constant is not a ground truth.* The
+mark is now an inline SVG polygon, so its centroid is arithmetic rather than a measurement —
+`((2+2+14)/3, (1+15+8)/3) = (6, 8)` in a bounding box centred on `(8, 8)`, i.e. exactly 2px left and
+0px vertical, on every machine. Corpus bumped to **1.1**; a findings file captured under 1.0 was
+graded against a different page.
 
 ---
 
@@ -328,7 +367,21 @@ Nothing in this list is a model purchase.
 - `capture.py` — screenshot + full layout/style snapshot in one browser pass, so a pixel finding and a
   DOM finding describe the same frame. sRGB pinned, LCD text off, reduced motion, fonts awaited.
 - `detect_dom.py` — nine general design-lint rules with an explicit `INDETERMINATE` verdict.
+- `detect_xcheck.py` — the comparator. All three arms on; X2's two defects fixed (§2).
 - `bench_local_vlm.py` — the resolution/latency sweep.
+
+**Added 2026-08-28** — the four items this section asked for, plus the two instruments that keep them
+honest. `bash bench/run_bench.sh` runs the whole chain and takes the worse of the two gates;
+`python3 bench/selftest.py` checks the arithmetic in under a second with no browser.
+- `rules.py` — the rule registry. A rule is registered here or it does not exist, and registration is
+  what forces it through the control run and into every per-app weighting. Carries the `answer`
+  column that makes the NEVER list mechanical rather than a discipline.
+- `route.py` — the abstention router (item 1 below).
+- `fp_budget.py` — the false-positive budget and the ship gate (item 2 below).
+- `profiles.py` + `review_profiles.json` — the three rule weightings (§8's last paragraph).
+- `score.py` — recall against the manifest's ground truth. The gates fail in opposite directions:
+  `fp_budget` catches a rule that went loud, `score` catches one that went quiet, and until now
+  nothing at all watched the second direction. It caught two regressions during this work.
 
 **How it reaches a session — a plain CLI, not an MCP server.** A11 checked the assumption and it was
 wrong in our favour: an MCP tool *can* return image content to Claude Code. But image data is charged
@@ -351,11 +404,38 @@ step function — but SAM is not semantic, so it will happily return a pixel-per
 band.)
 
 **To add, in order:**
-1. **The abstention router.** (The cross-check in `bench/detect_xcheck.py` already removes the gradient case from this queue.) Deterministic pass first; its `INDETERMINATE` set plus the pages it
-   cannot reason about become the VLM's queue, cropped to the region in question.
-2. **A false-positive budget.** ~20% FP is where an AI reviewer loses credibility regardless of catch
-   rate. Our two zero-FP runs are the baseline to defend; every rule added must be re-run against the
-   clean control before it ships.
+1. ✅ **The abstention router.** — **built, `bench/route.py`.** (The cross-check in
+   `bench/detect_xcheck.py` already removes the gradient case from this queue.) Deterministic pass
+   first; its `INDETERMINATE` set plus the pages it cannot reason about become the VLM's queue,
+   cropped to the region in question.
+   Built to PIPELINE_SPEC C7's ruling and its own deferral: two triggers, not five. **T1** is
+   abstentions minus what the cross-check closed, collapsed by `(rule, backdrop signature)`;
+   **T2** is one unconditional page-global question about the six unscreenable classes, never cut
+   for budget. T3/T4/T5 are not implemented and not stubbed — a stub of a scheduler is
+   indistinguishable from one that never fires, and **T1 on this corpus is 0**, exactly as the spec
+   predicted. Three things are load-bearing and each has a test: the subtraction is a table
+   (`rules.RESOLVED_BY`) rather than a habit; it is gated on the cross-check having *run*, so a
+   missing findings file makes the queue **grow**; and a rule whose answer is a number can never
+   become a question, re-checked against the finished plan, with class overlap explicitly not
+   granting a route. Budget overflow is printed as `unadjudicated_by_budget`, because a dropped
+   abstention routes nowhere — which is the silent pass the abstention existed to prevent.
+2. ✅ **A false-positive budget.** — **built, `bench/fp_budget.py`.** ~20% FP is where an AI reviewer
+   loses credibility regardless of catch rate. Our two zero-FP runs are the baseline to defend; every
+   rule added must be re-run against the clean control before it ships.
+   Enforces C18's three separated claims: **absolute zero asserted findings on the control at n = 1**
+   (no baseline-diff suppression, which is how a broken rule becomes a quiet one); **no FP *rate*
+   below 16 clean pages**, withheld loudly with the deficit stated rather than computed from whatever
+   n is to hand; and the budget stated **per 1,000 subject-checks**, with the note that this corpus
+   carries ~528 checks a page against a real route's ~1,841 subjects. An abstention is counted
+   separately and is never scored as a false positive. Every registered rule appears with its
+   subject count, so a rule that evaluated zero subjects reads as *unproven* rather than passing —
+   `contrast-indeterminate` is currently one, on a control with no gradient.
+   **It earned its keep during its own construction.** Replacing the font-dependent glyph (§2) removed
+   the page's second 16px text run, and the `type-scale` rule immediately fired on the control: its
+   9/9-with-zero-FP result had been resting partly on a decorative glyph's `font-size`, which nobody
+   thought was load-bearing. The rule now claims a *near-miss* rather than a singleton — the same
+   shape the colour rule already used — and the corpus gives every step of its type scale more than
+   one use, which is what a real page looks like.
 3. **Order-randomised comparison.** If we ever compare two designs, permute over 3–5 orderings —
    that recovers about two-thirds of the benefit of ten, and exact balancing buys essentially nothing.
    Report discrimination spread and swap-consistency, never mean agreement.
@@ -370,6 +450,29 @@ band.)
 template) is largely a marketing-aesthetics problem; `reso-management-app` (Next 16, React 19,
 Tailwind 4) is mostly design-system conformance, where the deterministic layer does nearly all the
 work; `reso-web-app` (Next 13) sits between. One review harness, three different rule weightings.
+
+✅ **Built, `bench/review_profiles.json` + `bench/profiles.py`.** Landing runs conformance rules at
+0.1–0.3 and pushes contrast, overflow and the abstention arm to 1.5–2.0 — a purchased template's own
+scale and radii *are* its design system, so a rule measuring them against the page's dominant
+convention flags deliberate template variety as drift. Management inverts it: `token-drift` at 2.0,
+the highest weight in the programme, because a near-miss colour is invisible in one component and
+unmistakable across forty. A weight **ranks and never suppresses**; `0.0` is the one exception and
+means the rule is off for that app. Every profile must weight every registered rule, so adding a
+rule breaks all four until someone decides what it means per app — which is the mechanism that makes
+"consider it per app" true rather than aspirational.
+
+🚨 **The framework versions in the paragraph above are exactly what these profiles do NOT carry.**
+PIPELINE_SPEC C11 bans prose as a source for stack facts, and it earned that ban by publishing three
+unmeasured cells in the very table that stated it — the wave brief was wrong in two of three rows,
+and the correction was wrong in three cells of its own. So `stack` is `null` in every profile and
+`profiles.py` **refuses to load** one that is not; those facts belong in a generated artifact read
+live from the checkout. What the profiles carry is review *intent* and weights, which are a policy
+choice about what a review of that app is for and are a legitimate thing to author. Two consequences
+are recorded as notes rather than as weights, because a weight cannot substitute for a verdict: a
+two-engine app has no single token map to conform to, so a token rule there must **abstain** rather
+than emit a confident FAIL whose truth value depends on which resolver won; and where class names are
+runtime hashes a conformance finding cannot be attributed to a source token, which is a reason to fix
+the app's compiler options, not to tune a number.
 
 ---
 

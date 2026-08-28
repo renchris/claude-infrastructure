@@ -1,0 +1,103 @@
+{
+  "_what_this_is": "Per-app REVIEW INTENT and rule weights. README section 8: 'one review harness, three different rule weightings', because reso-landing-app is largely a marketing-aesthetics problem, reso-management-app is mostly design-system conformance, and reso-web-app sits between. A weight is a POLICY choice about what a review of that app is for, which is a legitimate thing to author.",
+
+  "_what_this_is_NOT": "This is NOT PIPELINE_SPEC section 1.0's generated profiles.json, and it deliberately carries no framework versions, no token-map facts and no attribution capabilities. C11 bans prose as a source for those and it caught itself doing it: the table written to stop the pipeline inheriting a false premise from the wave brief published three unmeasured cells in its own fix. Every stack fact belongs in the GENERATED artifact, produced by a live read of the checkout, and any cell here that disagreed with one would lose automatically. So there are no such cells here. `stack` is null in every profile and stays null.",
+
+  "_weights": "0.0 turns a rule OFF for that app -- a claim that the rule cannot be true there, not that it is low priority. Anything above 0.0 is a ranking multiplier: it orders findings and it orders the router's crop budget, and it NEVER suppresses one. Ranking and suppression are kept apart on purpose, because a weight that silently drops findings is a false-negative generator with no sensor on it.",
+
+  "_completeness": "profiles.py refuses a profile that does not carry a weight for every rule in bench/rules.py. That is the mechanism that makes 'a new rule must be considered per app' true rather than aspirational: registering a rule breaks every profile until someone decides what it means for each app.",
+
+  "profiles": {
+    "default": {
+      "review_intent": "unweighted -- every registered rule at parity",
+      "why": "The baseline the corpus is measured at. A per-app number that cannot be compared against an unweighted run is not evidence of anything.",
+      "stack": null,
+      "weights": {
+        "spacing-rhythm": 1.0,
+        "grid-violation": 1.0,
+        "type-scale": 1.0,
+        "token-drift": 1.0,
+        "contrast": 1.0,
+        "overflow": 1.0,
+        "touch-target": 1.0,
+        "misalignment": 1.0,
+        "contrast-indeterminate": 1.0,
+        "xcheck-zero-ink": 1.0,
+        "xcheck-optical-centre": 1.0,
+        "xcheck-contrast-varies": 1.0
+      }
+    },
+
+    "reso-landing-app": {
+      "review_intent": "marketing aesthetics",
+      "why": "A purchased template on a marketing site. Nobody uses it twice and nobody works in it, so the review question is what a first-time visitor perceives in the first second: does the eye land where the page wants it to, is the type readable over the imagery, does the thing look finished. Design-system conformance is close to meaningless here -- the template's scale, radii and palette ARE its design system, and a rule measuring them against the page's own dominant convention will flag deliberate template variety as drift. So conformance rules are demoted to near-zero ranking rather than switched off: a 0.1 still surfaces a genuinely wild outlier at the bottom of the report, where an app that does not own its own design system is exactly where an outlier is worth a glance.",
+      "stack": null,
+      "weights": {
+        "spacing-rhythm": 0.3,
+        "grid-violation": 0.1,
+        "type-scale": 0.1,
+        "token-drift": 0.1,
+        "contrast": 1.5,
+        "overflow": 1.5,
+        "touch-target": 1.2,
+        "misalignment": 0.6,
+        "contrast-indeterminate": 2.0,
+        "xcheck-zero-ink": 1.5,
+        "xcheck-optical-centre": 1.5,
+        "xcheck-contrast-varies": 2.0
+      },
+      "notes": {
+        "contrast-indeterminate": "The highest weight in this profile, and the reason the router exists. A marketing hero is text over a photograph or a gradient, which is the exact configuration where the computed ratio has no second operand -- so this app supplies most of the abstentions and therefore most of the vision layer's real work.",
+        "xcheck-optical-centre": "Template icon buttons are where a mark being two pixels off is actually noticed, because the page is a shop window."
+      }
+    },
+
+    "reso-management-app": {
+      "review_intent": "design-system conformance",
+      "why": "An operator tool people work in all day. Nobody is charmed by it and nobody should be surprised by it: consistency IS the quality, and the deterministic layer does nearly all of the work. Conformance rules run at or above parity; the aesthetic arms stay on at low weight rather than off, because an operator tool still has to be legible.",
+      "stack": null,
+      "weights": {
+        "spacing-rhythm": 1.5,
+        "grid-violation": 1.5,
+        "type-scale": 1.5,
+        "token-drift": 2.0,
+        "contrast": 1.5,
+        "overflow": 1.5,
+        "touch-target": 1.5,
+        "misalignment": 1.2,
+        "contrast-indeterminate": 0.8,
+        "xcheck-zero-ink": 1.2,
+        "xcheck-optical-centre": 0.5,
+        "xcheck-contrast-varies": 0.8
+      },
+      "notes": {
+        "token-drift": "The highest weight in the programme. A near-miss colour or radius on a dense internal tool is the defect class that compounds: it is invisible in one component and unmistakable across forty.",
+        "contrast-indeterminate": "Below parity, and it is a prediction rather than a preference: flat panels over solid backgrounds resolve to a number, so an abstention here is rarer and, when it happens, usually means a layered overlay that is worth a look but is not this app's characteristic risk.",
+        "_engine_caveat": "The measured stack for this app is the pipeline's business, not this file's -- but the SHAPE of the risk is worth recording because it changes what a weight means. Where an app runs two CSS engines in one chain, a token rule has no single token map to conform to, and the correct verdict is INDETERMINATE rather than a confident FAIL whose truth value depends on which resolver won. That is a rule-level abstention this bench does not yet implement; a weight cannot substitute for it, and raising token-drift to 2.0 does not make it safe to run against an unresolved token map. Generate the stack facts before trusting a token verdict here."
+      }
+    },
+
+    "reso-web-app": {
+      "review_intent": "between the two -- a guest-facing surface that is also a product",
+      "why": "Guests see it and it has to work, so neither the marketing nor the conformance reading is the whole story. Everything sits near parity, which is the honest position when nothing has been measured to move it.",
+      "stack": null,
+      "weights": {
+        "spacing-rhythm": 1.0,
+        "grid-violation": 0.8,
+        "type-scale": 1.0,
+        "token-drift": 0.8,
+        "contrast": 1.5,
+        "overflow": 1.5,
+        "touch-target": 1.5,
+        "misalignment": 1.0,
+        "contrast-indeterminate": 1.2,
+        "xcheck-zero-ink": 1.2,
+        "xcheck-optical-centre": 1.0,
+        "xcheck-contrast-varies": 1.2
+      },
+      "notes": {
+        "token-drift": "Held below parity for a mechanical reason rather than a taste one: where an app's class names are runtime-generated hashes, a conformance finding cannot be attributed back to a source token, so it costs a reader more to act on than it costs the rule to emit. The weight is a stopgap; the real fix is making the class names invertible on the app side, which is a one-line compiler option and the highest ratio of value to diff in the whole programme."
+      }
+    }
+  }
+}

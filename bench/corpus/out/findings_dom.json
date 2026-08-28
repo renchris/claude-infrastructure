@@ -13,13 +13,23 @@
    "rule": "contrast-indeterminate",
    "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
    "detail": "cannot compute a ratio: backdrop is an image/gradient on div.hero:nth-of-type(1). Requirement 3.0:1 is UNVERIFIED for this text",
-   "severity": "high"
+   "severity": "high",
+   "meta": {
+    "backdrop_owner": "div.hero:nth-of-type(1)",
+    "backdrop_kind": "gradient",
+    "requirement": 3.0
+   }
   },
   {
    "rule": "contrast-indeterminate",
    "target": "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
    "detail": "cannot compute a ratio: backdrop is an image/gradient on div.hero:nth-of-type(1). Requirement 4.5:1 is UNVERIFIED for this text",
-   "severity": "high"
+   "severity": "high",
+   "meta": {
+    "backdrop_owner": "div.hero:nth-of-type(1)",
+    "backdrop_kind": "gradient",
+    "requirement": 4.5
+   }
   }
  ],
  "contrast-plain": [
@@ -115,7 +125,7 @@
   {
    "rule": "type-scale",
    "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(4) > div.kpi-label:nth-of-type(1)",
-   "detail": "font-size 17px is used once and sits off the page scale [12.0, 14.0, 16.0, 24.0]; nearest step is 16px",
+   "detail": "font-size 17px is used once and sits 1px off the 16px step of the page scale [12.0, 14.0, 16.0, 24.0]; that is closer than any real step, so it reads as a stray override rather than a size of its own",
    "severity": "medium"
   }
  ]
