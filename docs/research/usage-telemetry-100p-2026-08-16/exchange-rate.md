@@ -248,6 +248,24 @@ to ≤ +16%, never +50%), and the corrected sustainable-active figure (A6 §C4's
 correctly held this doc's cache-read result to *a bound, not a point*) →
 `orchestration-units-2026-08-19/Z-completeness-critic.md` G15 (no decision was filed) → §2a (filed).
 
+**Propagation completed 2026-08-28.** The 2026-08-24 ruling struck the two sites the backlog item
+named, and deliberately left the downstream carriers as dated audit records. That call is withdrawn
+in §2a, for two reasons: it missed the **origin** of the claim — the composition and the "+50%"
+prescription are authored in `../scaling-bottlenecks-2026-08-09/07-accounts-api.md` §3/§6.4, the
+detail file every summary cites — and "dated audit record" fits an observation, not the live
+**verdicts** two of the carriers render (`jcode-due-diligence-2026-08-11.md:53` graded the clause
+*"Correct, and understated"*, which this measurement inverts; `.../ranked-levers.md` L7 is a live
+ranking justified by it). All sites are annotated by strike-plus-dated-note, never deletion; the
+A6-VERIFY and Z-completeness-critic docs are untouched because they **quote** the clause to refute
+it. Full site list: `../scaling-bottlenecks-2026-08-09.md` §2a.
+
+⚠️ **One consequence for this document's own R1.** Correcting the sustainable-active figure from 3.9
+to **6.2–11.0** lifts the quota ceiling to *overlap* the box's measured ~4–8 concurrent-active load
+ceiling, where it previously sat below it. R1's advice is unchanged and strengthened — long cached
+context is not what quota charges for — but the fleet literature that ranked quota as the uniquely
+binding active wall (and reached for an off-box lane because it was the only lever that moved it)
+was ranking on the refuted number. Load binds first more often than that literature implies.
+
 ⚠️ **Read R1 as scoped to quota, which is all it ever measured.** It removes the *quota* reason to
 trim context. It says nothing about the context-window ceiling — a hard `Prompt is too long` refusal
 with no auto-compaction beneath it — which is the entire basis of `CLAUDE.md` § Context Stewardship

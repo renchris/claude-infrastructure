@@ -105,9 +105,45 @@ it cannot revive +50%, which both hypotheses already exclude.
 
 **Downstream carriers of the struck figure**, corrected or annotated with this block:
 `memory-econ-rearchitecture-2026-08-10/prior-art.md` row 55/56 (a LIVE-status ledger — flipped).
-Left as dated audit records of what was believed on their date, not corrected:
+~~Left as dated audit records of what was believed on their date, not corrected:
 `jcode-due-diligence-2026-08-11.md:53`, `jcode-due-diligence-2026-08-11/bottleneck-audit.md:73`,
-`jcode-due-diligence-2026-08-11/ranked-levers.md:36,:54`.
+`jcode-due-diligence-2026-08-11/ranked-levers.md:36,:54`.~~
+
+**REVISED 2026-08-28 — the sweep was completed; the "leave them as dated records" call above is
+withdrawn, and this paragraph records why rather than deleting it.** Two things were wrong with it.
+**(1) It missed the origin.** The list names carriers but not the SOURCE: the 68% composition and
+the "+50%" prescription are *authored* in `scaling-bottlenecks-2026-08-09/07-accounts-api.md` — §3's
+composition line, §6.4 (titled *"The largest quota lever is context, not accounts"*), §4's duty-cycle
+table, §5a's ITPM bullet, §6.6 finding #5 — and axis 07 is what every other doc cites. Striking the
+summary while the axis it summarises still prescribed the lever left the guard red at the one file a
+reader is sent to for detail. **(2) "Dated audit record" is the right treatment for an
+OBSERVATION, not for a VERDICT.** `ranked-levers.md` L7 is a live ranking whose top-ranked
+recommendation was justified as *"the ONLY lever that lands on both the resident axis and the
+active/quota axis at once"* — a claim that is now false, and that an operator acting on the ranking
+would act on. `jcode-due-diligence-2026-08-11.md:53` renders the verdict *"Correct, and
+understated"* over a clause the meter refutes, and the correction **inverts** it (quota is looser
+than that row claimed, not tighter). The dated-record objection is fully met by the form used
+throughout: **strikethrough plus a dated note, never deletion** — the original wording, its date and
+its author's reasoning all survive in place, which is exactly what rank 4 and §5 P2 above already do.
+
+Sites annotated in the 2026-08-28 sweep, all by strike-plus-note, none by deletion:
+`scaling-bottlenecks-2026-08-09/07-accounts-api.md` §head verdict, §3 composition, §4 table, §5a
+ITPM bullet, §6.4 (whole section), §6.6 finding #5 · this file's §4 ASCII summary block (which still
+read *"cheaper contexts"* and `~3.9` 113 lines below the strike) ·
+`jcode-due-diligence-2026-08-11.md:53` and its "wave's own findings" bullet ·
+`jcode-due-diligence-2026-08-11/bottleneck-audit.md` C6 ·
+`jcode-due-diligence-2026-08-11/ranked-levers.md` L7, L6, and the two `~3.9` bounds ·
+`memory-econ-rearchitecture-2026-08-10/bottleneck-refute.md:7,:52` ·
+`mcp-memory-groundup-2026-08-10/02-provenance.md:203`. Two carriers were left alone deliberately and
+correctly: `orchestration-units-2026-08-19/A6-VERIFY-quota-economics.md` and
+`.../Z-completeness-critic.md` **quote** the struck clause in order to refute it — annotating those
+would corrupt the quotation.
+
+**One correction the sweep produced, worth its own line:** with the quota figure raised from 3.9 to
+**6.2–11.0**, quota no longer binds *below* the box's own ~4–8 active-load ceiling — the two now
+overlap. Every doc that ranked quota as the uniquely-binding active wall (and reached for a cloud
+lane because it was the only lever that moved it) was ranking on the refuted number. Load binds
+first more often than that literature implies. Not resolved here; flagged where it appears.
 
 ---
 
@@ -146,9 +182,11 @@ decision — opened this session (see §6).
                        (ratified+re-aimed 0006, workerThreads, sentinel current).
                        Otherwise the honest on-box ceiling is ~100–130 resident.
 ACTIVE concurrency:    ~4–8 sustained is what BOTH the box (load slope 2.5–5) and the quota
-                       (~3.9 sustained 24/7; 10 for ~39% of the week) support. This is the real
-                       "15 sessions lag" fix: fewer simultaneously-ACTIVE turns, cheaper turns,
-                       cheaper contexts — not fewer resident sessions.
+                       (6.2–11.0 sustained 24/7 — CORRECTED 2026-08-24 from the cache-read-priced
+                       3.9, see §2a; 10 for ~39% of the week) support. This is the real
+                       "15 sessions lag" fix: fewer simultaneously-ACTIVE turns and cheaper turns.
+                       NOT "cheaper contexts" — that clause was the struck lever (§2a); re-reading
+                       a long context is ~free, so the box's load slope is now the binding half.
 150+ TOTAL:            residency on-box + the active half split between on-box actives and
                        OFF-BOX sessions. Off-box is 2 small fixes away (06): the payload pushes
                        to an invented branch name (vendor allows only the session's current

@@ -200,7 +200,7 @@ datapoint, closed on *"branch `cc-001759-77337` does not exist; `.mcp.json` stil
 |---|---|---|
 | 1 | **Memory — composite** (340 MB, N~=103-132) | **ACTIVE-session CPU load** — binds at **~4-8 concurrently-active**; 127/127 historic gate refusals were load, **0 memory** |
 | 1a | +- **MCP children ~507 MB — "forecloses 150-resident on its own"** | **VM-compressor SEGMENT TABLE** under node dev-tooling bursts — *the killer*; 5/5 panics at 31-33% pages / **100% segments**; deaths at **5-17 sessions** |
-| 1b | +- `claude.exe` self-bursts (54 procs >4 GB in 11 d, max 41 GB) | Fleet self-imposed caps (KMAX refuses the 33rd session; quota ~3.9 sustained-active) |
+| 1b | +- `claude.exe` self-bursts (54 procs >4 GB in 11 d, max 41 GB) | Fleet self-imposed caps (KMAX refuses the 33rd session; quota ~~~3.9~~ **6.2-11.0** sustained-active — corrected 2026-08-24, `../scaling-bottlenecks-2026-08-09.md` §2a) |
 | 1c | +- toolchain bursts (the crash igniter) | Exec-path serialization (launchd/xpcproxy/tccd/syspolicyd) — **no guard exists** |
 | 2 | Active-session load | **RAM total — "real but FAR out", N~=103-132 resident** |
 | 3 | Fleet self-imposed caps | — |
