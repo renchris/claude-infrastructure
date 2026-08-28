@@ -526,6 +526,47 @@ witness() {  # $1 = repo-relative path · $2 = the line that must name the artif
   [ "$(printf '%s' "$output" | grep -c "hooks/shadowed.sh")" -eq 2 ]   # the note + its fix line, not 4
 }
 
+# PIPE2 — the SECOND early-exit membership test in this file, and the one PIPE1's fix left standing.
+#
+# sweep_strays() deferred to the forward walk with `printf '%s' "$SEEN" | grep -qxF -- "$rel"`. Same
+# inversion as PIPE1's subject, one function down: `grep -q` exits on the match, the orphaned builtin
+# producer takes SIGPIPE, `set -o pipefail` promotes it, and the `&& continue` reads FALSE **on the
+# very match it found** — so the file the forward walk already classified is judged a second time.
+#
+# 🚨 THIS ARM EXISTS BECAUSE TEST 39 CANNOT FAIL FOR IT. Test 39 pins exactly this contract ("a
+# SHADOW is classified ONCE") and stays GREEN over the defect, because its $SEEN holds ~2 claims —
+# ~40 bytes, three orders of magnitude under the pipe buffer, so the producer's single write always
+# completes and nothing is ever signalled. A fixture that never reaches the bug's regime is
+# structurally incapable of failing for it; the size is not incidental to this case, it IS the case.
+#
+# The needle must also sort EARLY. $SEEN is appended in forward-walk order — hooks/ first, bin/ last
+# — so the shadowed hook is claim #2 of ~1,000 and grep exits with ~84 KB still unwritten.
+@test "a SHADOW is still classified ONCE once the claimed set passes the pipe buffer (PIPE2)" {
+  land_new "hooks/shadowed.sh"
+  printf 'new\n' > "$CC_LINKPARITY_CONFIG/hooks/shadowed.sh"     # identical bytes ⇒ would match COPY
+
+  # Filler must be CLAIMED, so it has to sit in a walked surface — bin/ is walked as `cc-*` only.
+  # Each filler is correctly LINKED, so it inflates $SEEN without minting a single finding.
+  local i=0 pad
+  pad="$(printf 'p%.0s' $(seq 1 72))"
+  while [ "$i" -lt 1000 ]; do
+    printf 'f\n' > "$CC_LINKPARITY_REPO/bin/cc-$pad$i"
+    ln -sfn "$CC_LINKPARITY_REPO/bin/cc-$pad$i" "$CC_LINKPARITY_CONFIG/bin/cc-$pad$i"
+    i=$((i + 1))
+  done
+
+  # ANTI-VACUITY: the claimed set must exceed the 64 KiB pipe buffer, or this passes unfixed.
+  # `bin/cc-` + 72 pad + the index + newline ≥ 80 B per claim, over 1,000 claims.
+  [ "$(( 1000 * 80 ))" -gt 65536 ] || false
+
+  run "$LP"
+  [ "$status" -eq 1 ]
+  has "SHADOW"
+  has "0 live-extra"
+  # The note + its fix line, and NOT a third line from the stray leg re-judging the same file.
+  [ "$(printf '%s' "$output" | grep -c "hooks/shadowed.sh")" -eq 2 ]
+}
+
 @test "a clean live layer still proves the stray leg LOOKED (live-extra is counted, not hidden)" {
   # A leg that can only ever print nothing is indistinguishable from one that never ran.
   printf 'wrapper\n' > "$CC_LINKPARITY_REPO/bin/it2-wrapper"

@@ -138,6 +138,8 @@ extra_n=0
 LINES=""
 FIXES=""
 SEEN=""     # repo-relative paths the forward walk claimed; the STRAY leg defers to them
+NL=$'\n'    # the claim separator, named once so the fence below reads as a whole-line test
+SEEN_FENCED="$NL"   # $SEEN with one leading newline; rebuilt once the forward walk is complete
 
 note() { LINES="${LINES}$(printf '  %-9s %-44s %s' "$1" "$2" "$3")"$'\n'; }
 fix()  { FIXES="${FIXES}  ▶ $1"$'\n'; }
@@ -326,7 +328,21 @@ sweep_strays() {  # $1 = live-relative directory
     [ -d "$f" ] && continue          # structural dirs and __pycache__ residue are not tools
     base="$(basename "$f")"; rel="$d/$base"
     # Already classified by the forward walk (it reported SHADOW) — one file, one verdict, one remedy.
-    printf '%s' "$SEEN" | grep -qxF -- "$rel" && continue
+    #
+    # WAS: `printf '%s' "$SEEN" | grep -qxF -- "$rel" && continue`, and it was fail-OPEN in exactly
+    # the direction this line exists to prevent. `grep -q` exits the instant it matches; under the
+    # file's own `set -o pipefail` (:102) the orphaned producer's SIGPIPE becomes the pipeline's
+    # status, the `&&` reads FALSE **on the very match it found**, and the already-classified file
+    # falls through to be judged a second time. That is the same inversion content_is_tracked() —
+    # one leg of this same audit, pinned by the PIPE1 arm in tests/deploy-link-parity.bats — was
+    # already fixed for; the twin here was left standing, and the lint's allowlist grandfathered it.
+    #
+    # The `case` is pipeline-free, so no producer exists to orphan and there is no rc to invert. It
+    # is also correct at EVERY size, which the pipe never was: quoting the expansion inside the
+    # pattern makes $rel literal, so a live filename carrying a glob metacharacter (`*`, `?`, `[`)
+    # still matches as the fixed string `grep -F` treated it as. And it costs one fewer fork per
+    # swept file — 422 on this box's live layer today.
+    case "$SEEN_FENCED" in *"$NL$rel$NL"*) continue ;; esac
     if content_is_tracked "$f"; then
       extra_n=$((extra_n + 1))
       $ALL && note "COPY" "$rel" "real file, but its bytes are tracked — deployed by copy"
@@ -370,6 +386,16 @@ done
 # Single-file links install.sh makes by name rather than by glob.
 check_one "accounts.json"       "$CFG/accounts.json"
 check_one "bin/claude-accounts" "$BINDIR/claude-accounts"
+
+# The forward walk is COMPLETE here — every `check_one` above has claimed its path, and nothing
+# below appends. So $SEEN is at its maximum for every read the stray leg makes, and the fenced copy
+# the membership test needs is built ONCE, here, rather than per file inside sweep_strays().
+#
+# The fence is what makes a substring test a WHOLE-LINE test: $SEEN is newline-TERMINATED (each
+# claim appends "$rel"$'\n'), so prefixing one more newline puts every entry between two of them and
+# *"$NL$rel$NL"* can only match a complete claim. Empty $SEEN degenerates to a lone newline and
+# matches nothing, which is the correct answer before the first claim.
+SEEN_FENCED="$NL$SEEN"
 
 for d in hooks hooks/lib commands scripts scripts/limit-recover bin; do sweep_orphans "$CFG/$d"; done
 for d in "$CFG"/skills/*/; do [ -d "$d" ] && sweep_orphans "$d"; done
