@@ -1864,6 +1864,97 @@ print("OK")'
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
+@test "S4 · M4′: the drain block carries the start-by constraint, and the caption carries K" {
+  # RP-29. The §5.4 acceptance mock, reproduced exactly — same four live shapes as the sort case
+  # above, now with the session side populated so burst_start_by can schedule against the 5h grid.
+  #
+  # WHAT THE CLAUSE ADDS. Before it, every row answered two of the goal's three questions: how
+  # much dies (M3a) and whether the demand is routine (M5). The third — WHEN does the endgame
+  # have to start, and how much is already lost — had no surface, and next3 stranded 8 pp while
+  # the footer read `p96 of its own 3h burns`, i.e. "hard but not unprecedented", with no word
+  # that a perfect burst begun that instant could no longer save 2.8 of them.
+  #
+  # THE K CAPTION ARRIVES HERE, not in S3. M3a is pure weekly-space arithmetic and consumes no
+  # exchange rate; rendering K beside it would have been a number nothing on the surface read
+  # (§3.2). burst_start_by is its first consumer, so the caption ships with its consumer.
+  run python3 -c "$LOAD"'
+def sess(**kw):
+    return dict(session_reset_at="2026-08-25T13:10:00Z", exchange_k=0.192,
+                exchange_k_src="live", **kw)
+n4 = row(acct="next4", weekly_pct=14, weekly_reset_h=119.2, burn_wk_ewma_ph=0.186,
+         **sess(session_pct=20, session_reset_h=2.0))
+n2 = row(acct="next2", weekly_pct=17, weekly_reset_h=97.2, burn_wk_ewma_ph=0.281,
+         **sess(session_pct=8, session_reset_h=0.54))
+n3 = row(acct="next3", weekly_pct=92, weekly_reset_h=2.21, burn_wk_ewma_ph=1.140,
+         burst={"pct": 95.6, "h": 3.0, "n": 2576, "need_pph": 3.62, "never": False},
+         **sess(session_pct=13, session_reset_h=3.37))
+n1 = row(acct="next", weekly_pct=52, weekly_reset_h=114.21, burn_wk_ewma_ph=1.725,
+         **sess(session_pct=30, session_reset_h=4.0))
+for r in (n4, n2, n3, n1):
+    bs = ca.burst_start_by(r, 0.192)
+    if bs is not None:
+        r["burst_start_by"] = bs
+line = ca.pace_line([n3, n1, n2, n4])
+assert line.startswith("weekly drain — pp that DIE at reset"), line       # the S3 opening survives
+assert "K=0.192 live" in line, line
+assert "nowcast at the last 48h of pace" in line, line                    # still a NOWCAST
+assert "next4 strand ~64pp of 86 · start by T−28h (91h slack)" in line, line
+assert "next2 strand ~56pp of 83 · start by T−28h (70h slack)" in line, line
+assert "next3 strand ~5pp of 8 · p96 of its own 3h burns · ⚠ LATE by 0.6h — 2.8pp already unrecoverable" in line, line
+# A ZERO-STRAND ROW TAKES NO START-BY. `next` has a 48 pp deficit, so the function reports for
+# it — but it is on a wall trajectory, and a plan for closing a deficit that is not going to die
+# answers a question nobody asked while pushing the ⚠ WALL flag off the end of the line.
+assert n1.get("burst_start_by") is not None, n1
+assert "next no strand" in line, line
+assert "start by" not in line.rstrip().split(chr(10))[-1], line
+assert "⚠ WALL trajectory" in line, line
+# ...and with K absent the caption falls back to the S3 wording rather than printing a null:
+# the strand figures below it do not consume K, so gating them on it would be a fabricated
+# dependency (§5.7 S3 Deviation 1).
+bare = ca.pace_line([row(acct="next3", weekly_pct=92, weekly_reset_h=2.21,
+                         burn_wk_ewma_ph=1.140)])
+assert bare.startswith("weekly drain — pp that DIE at reset (nowcast"), bare
+assert "start by" not in bare and "LATE" not in bare, bare
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "S4 · M4′: apply_burn stamps the exchange rate and the start-by beside the other burn facts" {
+  # RP-30. K is fitted ONCE per sweep, from the same series every metric above it reads, and
+  # stamped on every row — pace_line captions it without re-walking 336 h of samples per account.
+  # This fixture holds session_pct constant, so Σ Δsession is 0, below K_MIN_SDS: exchange_rate
+  # returns the FROZEN literal, and the source is stamped so the caption cannot pass a fallback
+  # off as a live fit.
+  run python3 -c "$LOAD"'
+import json, os
+from datetime import datetime, timezone, timedelta
+p = os.path.join(os.environ["BATS_TEST_TMPDIR"], "util-startby.jsonl")
+now = datetime.now(timezone.utc)
+wra, sra = (now + timedelta(hours=2.21)).isoformat(), (now + timedelta(hours=3.37)).isoformat()
+with open(p, "w") as f:
+    for i in range(240, -1, -1):
+        f.write(json.dumps({"ts": (now - timedelta(minutes=i * 6)).isoformat(),
+                            "acct": "next3", "session_pct": 13,
+                            "weekly_pct": 78 + (240 - i) * 0.0583,
+                            "session_reset_at": sra, "weekly_reset_at": wra}) + "\n")
+rows = [row(acct="next3", weekly_pct=92, weekly_reset_h=2.21, session_pct=13,
+            session_reset_h=3.37, session_reset_at=sra)]
+samples, span = ca._util_tail(path=p, hours=48.0)
+ca.apply_burn(rows, cfg, samples=samples)
+r = rows[0]
+assert abs(r["exchange_k"] - ca.K_FROZEN) < 1e-9, r
+assert r["exchange_k_src"] == "frozen", r               # not laundered as `live`
+assert r["exchange_k_sds"] == 0.0, r
+assert "burst_start_by" in r, r
+assert r["burst_start_by"]["verdict"] == "LATE", r
+assert -1.0 < r["burst_start_by"]["h"] < 0.0, r
+assert "K=0.192 frozen" in ca.pace_line(rows), ca.pace_line(rows)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
 @test "--assign CLI: appends one ledger row and never sweeps; unknown account exits 64" {
   local ledger="$BATS_TEST_TMPDIR/assign-cli.jsonl"
   # the fixture endpoint is unreachable — if --assign tried a sweep this would hang/fail loudly

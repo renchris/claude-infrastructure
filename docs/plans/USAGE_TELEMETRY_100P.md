@@ -1610,9 +1610,9 @@ windows/week, carrying the fleet wall rate 1.72% → 2.20%.
 
 ### §5.7 Implementation record — what actually landed, and where it deviated from the spec
 
-Wave 1 = **S1 + S2 + S3 only**. S4–S7 are unbuilt and unchanged; S5 still gates S6.
+Wave 1 = **S1 + S2 + S3 only**. Wave 2 = **S4**. S5–S7 are unbuilt and unchanged; S5 still gates S6.
 
-#### S1 · data fixes — LANDED
+#### S1 · data fixes — LANDED / DONE
 
 `bin/claude-accounts`: `_reset_key` / `_rolled` (:1877), `_util_tail(path, hours=48.0,
 max_bytes=None) → (rows, achieved_span_h)`, `exchange_rate` + `K_FROZEN` / `K_MIN_SDS` /
@@ -1653,7 +1653,7 @@ green and vacuous, which is the failure §5.5 names.
 `_util_tail` is now a 2-tuple, and the case additionally asserts the achieved span, because that
 span is what every abstain rule below it is written against.
 
-#### S2 · M5 `burst_percentile` — LANDED
+#### S2 · M5 `burst_percentile` — LANDED / DONE
 
 `bin/claude-accounts`: `burst_percentile(r, samples)` + `fmt_burst(bp)` beside `pace_need_ppd`,
 constants `BURST_LOOKBACK_H` / `BURST_H_GRID` / `BURST_MIN_WINDOWS` / `BURST_MIN_RESET_H` /
@@ -1694,7 +1694,7 @@ arms (99.96 → `p99`; 95.6 → `p96`, so the cap is not a blanket). **Class:** 
 only as strong as its rendering — checking the guard in the producer and the format string in the
 renderer are two different checks, and RP-19 was only ever the first.
 
-#### S3 · M2 + M3a — the nowcast — LANDED
+#### S3 · M2 + M3a — the nowcast — LANDED / DONE
 
 `bin/claude-accounts`: `burn_wk_ewma_ph(samples_for_acct, now, weekly_reset_h) → (value|None,
 measured_span_h)` and `wk_strand_pp(r)` beside `wall_projection`; both attached in `apply_burn`;
@@ -1770,14 +1770,98 @@ nowcaster precisely because it converges as the horizon closes, which is what ma
 forecaster. **S5 (`--strand-score`) is still the prerequisite for S6**, and nothing here
 shortens that.
 
+#### S4 · M4′ `burst_start_by` — the start-time constraint — LANDED / DONE (wave 2)
+
+`bin/claude-accounts`: `burst_start_by(r, K)` + `fmt_start_by(bs)` beside `wall_projection`,
+constants `BURST_SPPH` / `P_WALL` / `MEAN_WALL_H` / `BURST_SOON_H` / `BURST_MAX_WINDOWS`;
+`pace_head(rows)` beside `PACE_HEAD`; both attached in `apply_burn` alongside the one
+per-sweep `exchange_rate` fit. Suite `tests/claude-accounts-burst.bats` gains RP-21..RP-24 +
+RP-24b; `tests/claude-accounts-core.bats` gains RP-29 (render) and RP-30 (stamp).
+**7/7 proven RED** against the S3 binary (`git stash push -- bin/claude-accounts`, run, pop),
+7/7 green after; the six claude-accounts suites read **122 ok** with the diff in.
+
+**The renderer reproduces §5.4's acceptance mock line for line**, which is the one place a
+spec of this size can be checked against itself rather than against its author:
+
+```
+weekly drain — pp that DIE at reset (K=0.192 live · nowcast at the last 48h of pace):
+  next4 strand ~64pp of 86 · p87 of its own 24h burns · start by T−28h (91h slack) · 4d left
+  next2 strand ~56pp of 83 · p65 of its own 24h burns · start by T−28h (70h slack) · 4d left
+  next3 strand ~5pp of 8 · p96 of its own 3h burns · ⚠ LATE by 0.6h — 2.8pp already unrecoverable · 2.2h left
+  next no strand — 1.62× burn, ⚠ WALL trajectory · 4d left
+```
+
+Every row now answers all three of the goal's questions — how much dies (M3a), whether the
+demand is routine for this account (M5), and **when the endgame has to start and how much is
+already lost** (M4′). Before this, next3 stranded 8 pp under a footer reading `p96 of its own
+3h burns` — "hard, but not unprecedented" — with no word anywhere on the surface that a perfect
+burst begun that instant could no longer save 2.8 of them.
+
+**Deviation 1 — the return is a dict, and RP-21's `-1.0 < burst_start_by(row, K) < 0.0` reads
+`bs["h"]`.** §5.3 sketches a bare float, but the case in the same breath asserts *"and the
+verdict string is `LATE`"*, which one float cannot carry — the identical shape argument that
+moved `burst_percentile` off a float in S2, where `never` and `pct` are different states. The
+dict additionally exports `t_needed` / `sched_h` / `freeze_h` / `windows` / `need_spp` /
+`unrecoverable_pp`, because RP-22 and RP-23 assert on the schedule's *internals* (the walk, the
+freeze term) and a test that can only see the answer cannot tell a right answer from a right
+answer reached by the wrong arithmetic.
+
+**Deviation 2 — the roll wait is HOISTED OUT of the `avail > 0` branch, because §5.2's
+pseudocode drops the exhausted-window case.** As written, `session_pct = 100` gives `avail = 0`,
+the branch does not run, and the `while` loop starts the walk at `t = 0` — scheduling a burst
+inside a window that is frozen. That is the fail-open direction: it reports SLACK on the one
+state where no burst is possible at all. Shipped instead: *any* demand remaining after the open
+window waits `session_reset_h`, whether the window gave nothing because it was full or because
+it rolled first. **RP-24b is that proof** — two fixtures identical but for `session_pct`
+(100 vs 0), which must differ by exactly the 4.0 h roll wait, and which is also what flips the
+verdict from LATE to START SOON.
+
+**Deviation 3 — the `K=… live` clause enters through a `pace_head(rows)` function, not by
+editing `PACE_HEAD`.** S3's Deviation 1 held the clause back because M3a consumes no K and
+*"rendering a number nothing consumes is the metric shape §3.2 forbids"*; M4′ is its first
+consumer, so it arrives with its consumer. When `exchange_rate` abstains (K outside `K_SANE`)
+the caption falls back to the S3 wording verbatim rather than printing a null — the strand
+figures below it are pure weekly-space arithmetic, so gating them on K would be the fabricated
+dependency S3 refused. §5.4's *"a null K prints `no strand figures this sweep`"* is therefore
+**still declined**, on S3's reasoning, not on new grounds. RP-29's last arm pins the fallback.
+
+**Deviation 4 — K is fitted ONCE per sweep in `apply_burn` and stamped on every row**
+(`exchange_k` / `exchange_k_src` / `exchange_k_sds`), and `pace_line` reads the stamp. This is
+the `burst` precedent, not the `wk_strand_pp` one: S3's Deviation 3 has the renderer *compute*
+the strand so it cannot silently render nothing, but `exchange_rate` needs the 336 h series,
+which `pace_line(rows)` does not hold — so the choice is a stamp or a re-walk per account.
+`exchange_k_src` is stamped beside the value for the reason `burn_wk_span_h` is stamped beside
+the EWMA: a frozen fallback rendered as `K=0.192` alone is indistinguishable from a live fit at
+the same value. **RP-30 pins that** — its fixture holds `session_pct` constant, so Σ Δsession
+is 0, below `K_MIN_SDS`, and the caption must read `K=0.192 frozen`.
+
+**Deviation 5 — the clause rides the STRAND rows only, on the same gate as M5.** §5.4's mock
+shows `next` with no start-by despite a 48 pp deficit, and the function does report for it. A
+plan for closing a deficit that is not going to die answers a question nobody asked, and it
+would push `⚠ WALL trajectory` — the most important thing on that row — off the end of the
+line. RP-29 asserts both halves: the stamp is present on the row, the clause is not.
+
+**What ships on probation, restated because the number is small enough to forget.** `P_WALL`
+and `MEAN_WALL_H` are sized on **n = 8** burst windows (5 walled), never the 252 all-windows
+denominator, and `P_WALL` is a **lower** bound — freezes under ~13 min are invisible to the
+detector. §5.5's monitoring plan (re-run the burst-stratified wall rate on every completed
+weekly window) is the thing that retires the probation; S5's `--strand-score` is not, since it
+scores M3a and never touches the freeze term.
+
+**Known gap, not a deviation: nothing scores M4′.** S5 scores the strand nowcast. The verdict
+`LATE` and the `unrecoverable_pp` floor are arithmetic over a constant fitted on 8 windows, and
+no harness in this plan can be wrong about them yet. The falsification that exists is the one
+§5.5 already names, and it is per completed weekly window, not per sweep.
+
 #### Acceptance status against §5.4
 
 | command | status |
 |---|---|
-| the bats suites (roll-key · util-tail · strand · burst · core) | **111/111 green**, every case shown RED at the commit before its fix |
+| the bats suites (roll-key · util-tail · strand · burst · core) | wave 1 **111/111 green**; wave 2 (S4) adds 7 cases → **122 ok**, every case shown RED at the commit before its fix |
 | `claude-accounts --readout` renders the drain block for all four accounts | **yes** — see above |
 | `claude-accounts --readout \| grep -c 'strand'` → 3 or 4 | **4** |
-| `claude-accounts --strand-score` | **not in this wave** — that flag is S5 |
+| the footer's `start by T−Nh` / `⚠ LATE by Xh` clause and the `K=… live` caption | **yes** (S4, wave 2) — the rendered block matches §5.4's mock line for line |
+| `claude-accounts --strand-score` | **not built** — that flag is S5, and it still gates S6 |
 
 ⚠️ `bash tests/run.sh …`, named in §5.4, **does not exist in this repo**. The suites are run with
 `bats tests/<name>.bats`; `scripts/ship-land.sh` selects and runs them at the land.
