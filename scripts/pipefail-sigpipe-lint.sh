@@ -92,9 +92,53 @@
 #   4. the pipeline's status is CONSUMED — an `if`/`elif`/`while`/`until` condition, a `!` operand,
 #      or (under `set -e`) a bare pipeline or a top-level `VAR=$(…)`. `local`/`declare`/`export`
 #      MASK the status (the builtin's own 0 wins), and `[ -n "$( … )" ]` discards it, so neither is
-#      a violation however exposed the pipeline inside looks;
+#      a violation however exposed the pipeline inside looks. A pipeline that is the LAST statement
+#      of a FUNCTION is consumed too, errexit or not: its status IS that function's return value;
 #   5. it is NOT already mitigated by a trailing `|| true` / `|| <fallback>`, which swallows the 141
 #      before anything reads it.
+#
+# THE FUNCTION-FINAL PIPELINE (clause 4c, 2026-08-28 — backlog ca97c678b18b). Clause 4 asked "does
+# anything READ this pipeline's status?" and, in a file without errexit, answered it with
+# `if (!hase) return 0` — i.e. only a control-flow position or errexit counts. A pipeline that is the
+# LAST statement of a function is neither, and it is the one position where the status does not
+# evaporate at the next statement: it BECOMES the function's return value, exported to every present
+# and future caller. The detector could not see it at all. Measured here on bash 5.2.21:
+#
+#   has_match() { cat "$BIG" | grep -q MATCHME; }   # 3.6 MB, match on line 1
+#   if has_match; then …                            # FALSE on a present match: 100/100
+#
+# and `--census` on the unfixed tree said nothing about that fixture. The shape this misses is the
+# commonest one a shell library writes — a boolean predicate whose whole contract is its rc.
+#
+# THE MASK DISTINCTION IS WHAT KEEPS THIS FROM BEING A WIDENING, and clause 4 already drew it for a
+# different purpose. Its three "not consumed" answers are not the same answer: `local v=$(p | head)`
+# and `[ -n "$(p | head)" ]` and an argument-position `$( … )` DESTROY the status — the builtin's or
+# the outer command's own 0 is what leaves the statement, so nothing downstream can ever read the
+# pipeline's — while "no errexit and not a condition" merely leaves it UNREAD. Only the second kind
+# can be resurrected by sitting last in a function, so `consumed()` now records WHICH answer it gave
+# (MASKED) and clause 4c stashes a candidate only when the status was not destroyed. g17-g19 pin all
+# three masks in the function-final position; without them this clause would flag `local v=$(…)` as
+# the last line of a function, whose return value is `local`'s own 0 and never the pipeline's.
+#
+# WHAT IT ADDED, and the honest reading: census 127 → 142, one new site in each of 15 files. Every
+# caller of all 15 enclosing functions was read; only FOUR read the rc at all, and none of the four
+# can invert TODAY, because each has a producer bounded well under the 64 KiB pipe buffer:
+# `is_legacy_uuid` greps a 3-entry heredoc list, `pid_alive_owner` pipes ONE `ps -o command=` line,
+# `meta_get` (cc-pane-headless, `pid="$(meta_get …)" || return 1`) reads a small key=value `meta`
+# file, and `freeze_boot_already` is the clause-2 over-match named under RESIDUALS below, which
+# drains and cannot orphan anything. The other eleven are called as `VAR="$(fn …)"` in files with no
+# errexit, where the rc is discarded at the call site. So this closes a DETECTOR blind spot rather
+# than a live inversion — the same standing as the `$?`-capture clause below it, and the same reason
+# it is worth closing: the next site in this shape may be neither so small nor so lightly consumed,
+# and a ratchet only protects what it can see.
+#
+# RESIDUALS, NAMED RATHER THAN WIDENED. (a) The `}` test is INDENTATION-matched against the opener,
+# so a one-line `f() { p | grep -q x; }` and a body that ends in `return $?` are both missed; both
+# want their own measurement. (b) The 14 include one clause-2 over-match this clause merely
+# SURFACED: scripts/compressor-sentinel.sh:1092 is `awk … END{exit hit}`, which drains its input and
+# cannot orphan anything — `is_early`'s `awk .* exit` does not distinguish an `exit` in END from one
+# in the body. It is grandfathered as-is; tightening clause 2 changes counts on lines this item never
+# touched and belongs to its own change.
 #
 # THE FIX, in the order to reach for it:
 #   · `p | grep -q PAT`   → `p | grep PAT >/dev/null`     — plain grep drains; 0/400
@@ -252,10 +296,17 @@ function is_external(s,   t, p) {
 }
 
 # Clause 4: does anything READ this pipelines status?
+#
+# It also records HOW it said no, in the global MASKED. A no because the status was DESTROYED (a
+# local/declare assignment, a [ -n "$( … )" ] test, an argument-position substitution) is final: the
+# statement emits somebody elses 0 and no caller can ever see the pipelines. A no because nothing on
+# THIS line happened to read it is not final — sitting last in a function resurrects it as the
+# functions return value, which is clause 4c below. Only the second kind may become a candidate.
 function consumed(l, hase,   t, pre, i) {
+  MASKED = 0
   t = ltrim(l)
   # [ -n "$( … )" ] / [ -z … ] discard the substitutions status entirely.
-  if (t ~ /\[\[?[ \t]+-[nz][ \t]+"?\$\(/) return 0
+  if (t ~ /\[\[?[ \t]+-[nz][ \t]+"?\$\(/) { MASKED = 1; return 0 }
   # A pipeline inside a command substitution used as an ARGUMENT is masked: the status the shell
   # reads is the OUTER commands, and a substitution that dies 141 still yields its bytes. Only
   # VAR=$( … ) — where the substitution IS the whole RHS — lets the status through to errexit.
@@ -266,17 +317,32 @@ function consumed(l, hase,   t, pre, i) {
     sub(/^![ \t]*/, "", pre)
     sub(/^(local|declare|typeset|export|readonly)[ \t]+/, "", pre)
     pre = ltrim(pre)
-    if (pre != "" && pre !~ /[A-Za-z_][A-Za-z0-9_]*\+?="?$/) return 0
+    if (pre != "" && pre !~ /[A-Za-z_][A-Za-z0-9_]*\+?="?$/) { MASKED = 1; return 0 }
   }
   if (t ~ /^(if|elif|while|until)[ \t]/)  return 1
   if (t ~ /^![ \t]/)                      return 1
-  if (!hase) return 0
   # local/declare/export return their OWN 0 — the pipelines status never survives the assignment.
-  if (t ~ /^(local|declare|typeset|export|readonly)[ \t]/) return 0
+  # This sits ABOVE the errexit test rather than below it (where it used to, with identical effect on
+  # the RETURN value) so that MASKED is set on this path too: a masked line must stay masked in a
+  # no-errexit file, which is exactly where clause 4c would otherwise resurrect it.
+  if (t ~ /^(local|declare|typeset|export|readonly)[ \t]/) { MASKED = 1; return 0 }
+  if (!hase) return 0
   return 1
 }
 
+# Clause 4c: is this line inside a function body, and is the closing brace the very next thing to
+# execute? The test is INDENTATION-matched against the opener rather than brace-counted, because a
+# brace count over shell text has to know about ${VAR}, case patterns, and braces inside strings —
+# three ways to lose the count silently. Every function in this tree opens `name() {` at end of line
+# and closes `}` at the openers own indentation, so matching those two shapes is both simpler and
+# harder to fool. What it costs is named in the header residual (a) — a one-line function body.
+function indent_of(s) { match(s, /^[ \t]*/); return substr(s, 1, RLENGTH) }
+
 BEGIN { FS = "" }
+# scan() runs one awk per file, but --census in the selftest and any future multi-file invocation
+# would carry inhd/infunc/pend across the boundary — a latch that outlives its file is the exact
+# failure the commented-heredoc fix below was written for. Reset at every file start.
+FNR == 1 { inhd = 0; infunc = 0; pend_line = "" }
 {
   raw = $0
 
@@ -314,6 +380,24 @@ BEGIN { FS = "" }
     tok = substr($0, RSTART, RLENGTH)
     sub(/^<<-?[ \t]*/, "", tok); gsub(/[\x27"]/, "", tok)
     hdterm = "^[ \t]*" tok "[ \t]*$"; inhd = 1
+  }
+
+  # ── clause 4c: resolve any PENDING candidate, then track the function boundary ────────────────
+  # The pending candidate is emitted iff the first thing to execute after it is the closing brace of
+  # the function it sits in — i.e. it really is the last statement, and its status really is the
+  # return value. Any other executable line means something else runs after it and its status is
+  # overwritten before the function returns, so the candidate is dropped. Resolving BEFORE the
+  # opener/closer bookkeeping below is what lets the closing brace both emit and end the function.
+  if (pend_line != "") {
+    if (infunc && line ~ /^\}[ \t]*;?[ \t]*(#.*)?$/ && indent_of(raw) == fn_indent)
+      printf "%s:%d:%s\n", FILE, pend_fnr, pend_line
+    pend_line = ""
+  }
+  if (line ~ /^(function[ \t]+)?[A-Za-z_][A-Za-z0-9_:.-]*[ \t]*\([ \t]*\)[ \t]*\{[ \t]*(#.*)?$/ ||
+      line ~ /^function[ \t]+[A-Za-z_][A-Za-z0-9_:.-]*[ \t]*\{[ \t]*(#.*)?$/) {
+    infunc = 1; fn_indent = indent_of(raw)
+  } else if (infunc && line ~ /^\}[ \t]*;?[ \t]*(#.*)?$/ && indent_of(raw) == fn_indent) {
+    infunc = 0
   }
 
   work = line
@@ -360,7 +444,13 @@ BEGIN { FS = "" }
   # the ASSIGNMENT form after the last stage separates them; g15/g16 pin both directions.
   # (No apostrophes here: this is inside the single-quoted DETECT_AWK string.)
   cap = (last ~ /;[ \t]*[A-Za-z_][A-Za-z0-9_]*=\$\?/)
-  if (amp == 0 && !cap && !consumed(line, HASE)) next
+  if (amp == 0 && !cap && !consumed(line, HASE)) {
+    # Clause 4c — not read HERE, but the status may still escape as the enclosing functions return
+    # value. Stash it and let the next executable line decide (see the resolver above). MASKED is
+    # the veto: a status the statement DESTROYED cannot be resurrected by position.
+    if (infunc && !MASKED) { pend_line = line; pend_fnr = FNR }
+    next
+  }
 
   printf "%s:%d:%s\n", FILE, FNR, line
 }'
@@ -674,12 +764,48 @@ if git status --porcelain | grep -q .; then :; fi
 EOF"
   expect g31 GREEN "a comment ahead of a REAL heredoc still leaves the body as DATA"
 
+  # ── THE FUNCTION-FINAL PIPELINE (2026-08-28, backlog ca97c678b18b) ────────────────────────────
+  # r16 is the shape the detector could not see at all: a boolean predicate whose whole contract is
+  # its rc, in a file with no errexit. Measured 100/100 FALSE on a present match (header block), and
+  # `--census` on the unfixed tree said nothing about it.
+  mk_noe r16 "has_match() {
+  cat \"\$BIG\" | grep -q MATCHME
+}"
+  expect r16 RED "a function-final pipeline IS the function's return value"
+  # g17-g19 are the arms that keep this from being a widening, one per way clause 4 says no. Each
+  # masks the status with somebody else's 0, so the function returns THAT, never the pipeline's —
+  # and each is byte-identical to a RED fixture apart from the mask, which is what makes it a control
+  # rather than a coincidence.
+  mk_noe g17 "f() {
+  local v=\$(git log | head -1)
+}"
+  expect g17 GREEN "function-final \`local v=\$( … )\` returns local's own 0, not the pipeline's"
+  mk_noe g18 "f() {
+  [ -n \"\$(git status --porcelain | head -1)\" ]
+}"
+  expect g18 GREEN "function-final \`[ -n \"\$( … )\" ]\` returns the test's status"
+  mk_noe g19 "f() {
+  printf '  %s\\n' \"\$(sed -n 's/a/b/p' /some/file | head -1)\"
+}"
+  expect g19 GREEN "function-final \$( … ) as an ARGUMENT — printf's status is what returns"
+  # ...and the arm that pins LAST, rather than merely INSIDE. Without it the clause would flag every
+  # pipeline in every function body, which is a different and much larger rule than the one measured.
+  mk_noe g20 "f() {
+  git status --porcelain | grep -q .
+  echo done
+}"
+  expect g20 GREEN "a pipeline with a statement AFTER it is not the return value"
+  mk_noe g21 "f() {
+  git log --oneline | head -1 || true
+}"
+  expect g21 GREEN "a trailing || swallows the 141 in the function-final position too"
+
   local total=$((pass+fail))
   if [ "$fail" -gt 0 ]; then
     echo "⛔ $SELF_NAME --selftest: $pass/$total — the detector no longer discriminates." >&2
     return 1
   fi
-  echo "✓ $SELF_NAME --selftest: $pass/$total (both directions; builtin producer RED on a variable or substitution, GREEN on a literal)"
+  echo "✓ $SELF_NAME --selftest: $pass/$total (both directions; builtin producer RED on a variable or substitution, GREEN on a literal; a function-final pipeline RED, its masked forms GREEN)"
   return 0
 }
 

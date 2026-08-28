@@ -34,10 +34,10 @@ mkfile() { # $1=name $2=body  [$3=set line]
 }
 census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" --census 2>/dev/null; }
 
-@test "1: the lint's own --selftest passes (32/32, both directions)" {
+@test "1: the lint's own --selftest passes (38/38, both directions)" {
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s' "$output" | grep '32/32' >/dev/null \
+  printf '%s' "$output" | grep '38/38' >/dev/null \
     || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 
@@ -308,5 +308,67 @@ $(census | grep -c 'scripts/muted\.sh:' || true) — the file is muted"; census 
   [ "$(census | grep -c 'lr-reset-poller\.sh:')" -eq 0 ] \
     || { echo "control failed: the unappended file already reads \
 $(census | grep -c 'lr-reset-poller\.sh:' || true) hit(s), so arm 20 is vacuous"; false; }
+  true
+}
+
+@test "21: MECHANISM — a function-final pipeline inverts, and the detector now sees it" {
+  # The 2026-08-28 blind spot (backlog ca97c678b18b). Clause 4 asked "does anything READ this
+  # pipeline's status?" and, without errexit, answered `if (!hase) return 0` — only a control-flow
+  # position or errexit counted. A pipeline that is the LAST statement of a function is neither, and
+  # is the one position where the status does not evaporate at the next statement: it BECOMES the
+  # function's return value. That is the commonest thing a shell library writes — a boolean
+  # predicate whose entire contract is its rc — and the detector could not see it at all.
+  #
+  # Real bash first, for the same reason test 6 exists: a lint for a race nobody re-measures is a
+  # lint for a rumour. Measured 100/100 FALSE on a present match while writing this.
+  seq 1 200000 > "$BATS_TEST_TMPDIR/big.txt"
+  run bash -c "set -uo pipefail
+has_match() { cat '$BATS_TEST_TMPDIR/big.txt' | grep -q '^1\$'; }
+if has_match; then exit 0; else exit 9; fi"
+  [ "$status" -eq 9 ] \
+    || { echo "the function-final inversion did NOT reproduce (status=$status) — this arm proves nothing"; false; }
+  # ...and the drain fix repairs it THROUGH the function boundary.
+  run bash -c "set -uo pipefail
+has_match() { cat '$BATS_TEST_TMPDIR/big.txt' | grep '^1\$' >/dev/null; }
+if has_match; then exit 0; else exit 9; fi"
+  [ "$status" -eq 0 ] || { echo "the drain fix did not repair the function's return value (status=$status)"; false; }
+
+  # Now the detector, on the same shape, in a file with NO errexit — where the old clause 4 was blind.
+  mkfile ffinal "has_match() {
+  cat \"\$BIG\" | grep -q MATCHME
+}" 'set -uo pipefail'
+  run census
+  printf '%s' "$output" | grep 'scripts/ffinal.sh:' >/dev/null \
+    || { echo "the detector still cannot see a function-final pipeline: $output"; false; }
+}
+
+@test "22: CONTROL — a MASKED status is not resurrected by sitting last in a function" {
+  # The arm that keeps clause 4c from being a widening. Clause 4 says "not consumed" for three
+  # different reasons and they are not the same reason: `local v=$( … )`, `[ -n "$( … )" ]`, and an
+  # argument-position substitution all DESTROY the status — somebody else's 0 is what leaves the
+  # statement — while "no errexit and not a condition" merely leaves it unread. Only the second kind
+  # can be resurrected by position. Each fixture below is the RED shape of test 21 apart from its
+  # mask, so a green here is a statement about the mask and nothing else.
+  mkfile m1 "f() {
+  local v=\$(git log | head -1)
+}" 'set -uo pipefail'
+  mkfile m2 "f() {
+  [ -n \"\$(git status --porcelain | head -1)\" ]
+}" 'set -uo pipefail'
+  mkfile m3 "f() {
+  printf '  %s\\n' \"\$(sed -n 's/a/b/p' /some/file | head -1)\"
+}" 'set -uo pipefail'
+  # ...and the arm that pins LAST rather than merely INSIDE. Without it the clause would flag every
+  # pipeline in every function body — a much larger rule than the one that was measured.
+  mkfile m4 "f() {
+  git status --porcelain | grep -q .
+  echo done
+}" 'set -uo pipefail'
+  run census
+  for m in m1 m2 m3 m4; do
+    if printf '%s' "$output" | grep "scripts/$m\.sh:" >/dev/null; then
+      echo "clause 4c widened past its measurement — $m should be GREEN: $output"; false
+    fi
+  done
   true
 }
