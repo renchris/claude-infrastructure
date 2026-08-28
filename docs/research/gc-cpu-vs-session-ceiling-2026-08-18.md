@@ -236,6 +236,15 @@ census shape that killed the 64% headline and asserts the refusal, so the contro
 to fail rather than assumed to be. Design, the adjudication of the four values, and the run protocol:
 `marginal-load-per-active-session-2026-08-19.md`.
 
+**And the run protocol is now itself a program** (2026-08-28, §6b of that doc):
+`capacity-marginal.sh run` is the whole of §6 in one command — preflight, then sample → analyze →
+extend, terminating on each of §6's three outcomes with its own exit code. Its **preflight** is the
+part that matters here: an off-box triple-FAIL is textually identical to one from the 10-core box
+mid-wave, and only the second is a finding about capacity, so `run` refuses to start where the ACTIVE
+sensor is blind or the fleet is too small for C3's levels — the two conditions no length of window can
+fix. The measurement still wants the box; what is gone is the hour of human interpretation and the
+chance of reading a refusal from the wrong machine as a result.
+
 ---
 
 ## 6 · Provenance

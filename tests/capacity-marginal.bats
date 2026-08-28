@@ -22,6 +22,11 @@ setup() {
   # Hermetic HOME: nothing here writes to it today, but `sample` resolves spawn-presence.sh, which
   # reads the operator's beat directory. A probe must never see the live fleet.
   export HOME="$D/home"; mkdir -p "$HOME/.claude"
+  # `run --preflight` reaches cc_sp_active, and spawn-presence.sh reaches the capacity-admit gate,
+  # which refuses on LIVE load / headroom / session census. None of that is this suite's subject:
+  # left on, these tests would go red by how busy the operator's box is — the one input a gate
+  # corpus may never depend on (see this file's header).
+  export CC_ADMIT_GATE=off
   hdr() { printf '#ts\tload1\tunit\ttotal_run\tclaude_run\tactive\tresident\n' > "$1"; }
 }
 
@@ -274,5 +279,146 @@ EOF
 
 @test "a bad interval is a usage error, not a busy loop" {
   run bash "$M" sample --interval-s 0 --window-s 1 --out "$D/x.tsv"
+  [ "$status" -eq 2 ]
+}
+
+# ── `run`: §6's PROTOCOL, AND THE PREFLIGHT THAT KEEPS AN OFF-BOX REFUSAL FROM READING AS A FINDING ─
+#
+# A triple-FAIL from a box with no fleet is textually identical to a triple-FAIL from the 10-core
+# box mid-wave, and only the second one is a finding. §6a of the adjudication doc records exactly
+# such an off-box smoke run. These tests pin the two structural ways the answer is unreachable, and
+# they are the reason `run` refuses to spend an hour rather than reporting about itself.
+
+@test "run PREFLIGHT refuses a blind ACTIVE sensor — C3 could never pass, however long the window" {
+  # cc_sp_active unmeasurable => every row records `-` => C3 fails on "0 row(s) carry an ACTIVE
+  # count", which is the shape the C3-blind test above pins. Sampling into that is an hour spent
+  # measuring the sensor.
+  cat > "$D/ps_fleet.txt" <<'EOF'
+  100     1 S    /sbin/launchd
+  200   100 R    /Users/x/.claude-220/node_modules/.bin/claude
+  300   100 S    /Users/x/.claude-220/node_modules/.bin/claude
+  400   100 R    /Users/x/.claude-220/node_modules/.bin/claude
+EOF
+  # HOME is the hermetic one from setup(), so spawn-presence has no beat directory to read and
+  # read_active returns `-` exactly as it does off-box.
+  run env CC_MARG_PS_OVERRIDE="$D/ps_fleet.txt" bash "$M" run --preflight
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"PREFLIGHT FAIL  active"* ]] || false
+  [[ "$output" == *"C3 IDENTIFY can never pass"* ]]
+}
+
+@test "run PREFLIGHT refuses a fleet too small to produce the ACTIVE levels C3 requires" {
+  cat > "$D/ps_one.txt" <<'EOF'
+  100     1 S    /sbin/launchd
+  200   100 R    /Users/x/.claude-220/node_modules/.bin/claude
+EOF
+  run env CC_MARG_PS_OVERRIDE="$D/ps_one.txt" CC_MARG_RUN_ACTIVE_OVERRIDE=1 bash "$M" run --preflight
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"PREFLIGHT FAIL  fleet"* ]] || false
+  [[ "$output" == *"1 resident session(s), need >= 3"* ]]
+}
+
+@test "run PREFLIGHT passes on a fleet-carrying box and reports the census it will sample" {
+  cat > "$D/ps_ok.txt" <<'EOF'
+  100     1 S    /sbin/launchd
+  200   100 R    /Users/x/.claude-220/node_modules/.bin/claude
+  201   200 R    jq
+  300   100 S    /Users/x/.claude-220/node_modules/.bin/claude
+  400   100 R    /Users/x/.claude-220/node_modules/.bin/claude
+  500   100 R    mediaanalysisd
+EOF
+  run env CC_MARG_PS_OVERRIDE="$D/ps_ok.txt" CC_MARG_RUN_ACTIVE_OVERRIDE=4 bash "$M" run --preflight
+  [ "$status" -eq 0 ]
+  # 3 resident sessions; runnable 4 (200, 201, 400, 500) of which 3 are ours (200, 201, 400).
+  [[ "$output" == *"PREFLIGHT PASS  3 resident session(s), 4 ACTIVE now, 3/4 runnable procs are ours."* ]]
+}
+
+# The stopping rule, as a pure function. Tested by extraction — this suite's own header forbids a
+# gate test that passes or fails on how busy the operator's box is, and a loop exercised only
+# against the live fleet is a loop nobody has checked.
+decide() { # <rc> <sig> <prev> <streak> <elapsed> <max> <k>
+  bash -c 'set -uo pipefail
+'"$(sed -n '/^run_decide() {/,/^}/p' "$M")"'
+run_decide "$@"' _ "$@"
+}
+
+@test "run STOPS on a PASS — a coefficient ends the protocol, whatever the budget says" {
+  run decide 0 - - 0 10 10000 3
+  [ "$status" -eq 0 ]
+  [[ "$output" == PASS* ]]
+}
+
+@test "run calls a refusal STABLE only once the SAME term has refused K windows running" {
+  # §6, verbatim: extend "until the verdict stops being NO-ATTRIBUTION OR the refusal repeats with
+  # the same term across several windows — which would itself be the finding".
+  run decide 1 C2 C2 1 300 10000 2
+  [ "$status" -eq 0 ]
+  [[ "$output" == "STABLE 2" ]]
+}
+
+@test "a MOVING failing term resets the streak and is never reported as the finding" {
+  # The load-bearing half of the rule. A window that fails C1, then C2, then C1 has not shown that
+  # the process-unit census is the wrong instrument; it has shown a box that changed underneath it.
+  # Reporting that as "the finding" would mint exactly the kind of unearned conclusion this whole
+  # script exists to refuse.
+  run decide 1 C1 C2 5 300 10000 2
+  [ "$status" -eq 0 ]
+  [[ "$output" == "CONTINUE 1" ]]
+}
+
+@test "run gives up as INCONCLUSIVE, never as a finding, when the budget ends on a moving term" {
+  run decide 1 C1 C2 4 10000 10000 3
+  [ "$status" -eq 0 ]
+  [[ "$output" == "INCONCLUSIVE 1" ]]
+}
+
+@test "the PASS hand-off RE-GREPS the citation sites instead of listing them" {
+  # The 2026-08-26 ban pass found THREE live sites where the doc named two, and the one it missed
+  # was spawn-presence.sh — the library that defines the ACTIVE population the coefficient is
+  # denominated in. A hard-coded path list in the hand-off would ship that defect a second time.
+  run sed -n '/^run_next_steps() {/,/^}/p' "$M"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"grep -rl 'marginal-load-per-active-session-2026-08-19'"* ]] || false
+  [[ "$output" != *"capacity-admit.sh"* ]] || false
+  [[ "$output" != *"agent-teams-enforce.sh"* ]] || false
+  [[ "$output" != *"spawn-presence.sh"* ]]
+}
+
+@test "the hand-off resolves its own path through symlinks, and never renders zero hits as none" {
+  # ~/.claude/scripts/ is a tree of per-file symlinks into the checkout, so an unresolved
+  # `dirname "$0"/..` reads ~/.claude — no docs/, no .git — and the re-grep would print an empty
+  # list on the ONE path the operator runs: a hand-off asserting "no sites remain" while three do.
+  # Here the script is reached through a symlink whose parent has no repo under it, and the output
+  # must still say the root is suspect rather than saying nothing.
+  mkdir -p "$D/live/scripts" "$D/empty/scripts"
+  ln -s "$M" "$D/live/scripts/capacity-marginal.sh"
+  cp "$M" "$D/empty/scripts/capacity-marginal.sh"
+  handoff() {
+    bash -c 'set -uo pipefail
+'"$(sed -n '/^_marg_resolve_self() {/,/^}/p' "$M")"'
+'"$(sed -n '/^run_next_steps() {/,/^}/p' "$M")"'
+run_next_steps "$1"' _ "$1"
+  }
+
+  # Reached through a symlink whose own parent tree holds no repo: resolution must hop back into
+  # the real checkout and find the live sites there.
+  run handoff "$D/live/scripts/capacity-marginal.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"scripts/lib/spawn-presence.sh"* ]] || false
+  [[ "$output" != *"(no live citation site found"* ]] || false
+
+  # A real file in a tree with no sites: zero hits must render as SUSPECT, never as "none". Those
+  # two readings differ by whether three live sites still quote a refuted figure.
+  run handoff "$D/empty/scripts/capacity-marginal.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"(no live citation site found"* ]]
+}
+
+@test "run rejects a bad budget as a usage error, not a loop that can never terminate" {
+  run bash "$M" run --increment-s 900 --max-s 60 --out "$D/y.tsv"
+  [ "$status" -eq 2 ]
+  run bash "$M" run --repeat-k 0 --out "$D/y.tsv"
+  [ "$status" -eq 2 ]
+  run bash "$M" run --increment-s abc --out "$D/y.tsv"
   [ "$status" -eq 2 ]
 }

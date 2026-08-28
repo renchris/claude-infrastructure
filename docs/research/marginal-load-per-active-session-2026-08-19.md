@@ -209,6 +209,53 @@ a per-session coefficient. That matters for sequencing: `CC_ADMIT_ACTIVE_CEILING
 on §6**, so the measurement can take as long as it needs without leaving a gate justified by a
 number its own source pair refutes.
 
+### 6b · §6 is now a program, not a protocol — and preflight is the point of it (2026-08-28)
+
+§6 above is a *protocol*: two commands plus a loop whose interpreter is a person — *"sample,
+analyze, and extend the window until the verdict stops being `NO-ATTRIBUTION` **or** the refusal
+repeats with the same term across several windows"*. An hour of the operator's box, and an hour of
+the operator's judgment, for a decision rule that is fully specified. `capacity-marginal.sh run`
+is that same rule with the loop inside the program:
+
+```sh
+bash scripts/capacity-marginal.sh run --out /tmp/marg.tsv        # the whole of §6, one command
+bash scripts/capacity-marginal.sh run --preflight                # 2 s: can this box answer at all?
+```
+
+It terminates on each of §6's three outcomes with its own exit code — **0** coefficient (then it
+prints the remaining edits, *re-grepped*, per 6a's lesson) · **1** the same control refused
+`CC_MARG_RUN_REPEAT_K` windows running, which §6 names as itself the finding · **4** the budget
+elapsed with the failing term still *moving*, which is neither a coefficient nor a finding · **5**
+preflight refused.
+
+**Rung 5 is the reason this was worth writing.** §6a's own off-box smoke run — `C1 FAIL / C2 FAIL /
+C3 FAIL / NO-ATTRIBUTION`, printed in this document as evidence the instrument works — is
+**textually identical** to what the 10-core box would print mid-wave, and only the second one is a
+finding about capacity. Preflight refuses to start where the answer is structurally unreachable,
+naming which check failed, on the two conditions no length of window can fix:
+
+| check | refuses when | because |
+|---|---|---|
+| **active** | `cc_sp_active` reads `-` | every row is blind ⇒ C3 fails on *"0 row(s) carry an ACTIVE count"*. That is a verdict about the sensor. |
+| **fleet** | resident sessions < `CC_MARG_RUN_MIN_RESIDENT` (3) | C3 needs the ACTIVE count at ≥3 distinct levels; a fleet smaller than that cannot produce them even in principle. |
+
+It deliberately does **not** gate on `uname` being Darwin. The sampler already reads
+`/proc/loadavg` on Linux and `vm.loadavg` on Darwin, and what decides whether a box can answer is
+its fleet and its sensor, not its kernel — a `uname` gate would be a check on the spelling of the
+box. Verified off-box: this Linux container is refused at the **active** check in two seconds, and
+a fixture fleet of one session is refused at the **fleet** check.
+
+`tests/capacity-marginal.bats` grows from 15 rows to **24**. The load-bearing new row is *"a MOVING
+failing term resets the streak and is never reported as the finding"*: a window that fails C1, then
+C2, then C1 has shown a box that changed underneath the sampler, not that the process-unit census
+is the wrong instrument, and calling that a finding would mint exactly the kind of unearned
+conclusion this script exists to refuse. The stopping rule is tested as an extracted pure function
+so no gate row depends on how busy the operator's box is, which this suite's own header forbids.
+
+**What §6b does not do: it still measures nothing.** The window is unchanged and still wants the
+box. What changed is that the operator now spends one command instead of an hour of interpretation,
+and that a refusal from the wrong box can no longer be mistaken for a result.
+
 **What remains is exactly §6 and nothing else** — one ~1 h window on the 10-core Darwin box during a
 dispatch wave, then the update-and-close. Verified this session, off-box: `bats
 tests/capacity-marginal.bats` **15/15**, plus `tests/agent-teams-enforce.bats` and
@@ -239,7 +286,15 @@ is ready; only the fleet is missing.
    projection; do not invert it.
 5. **`kernel_task` remains invisible** to `ps` (~720 threads; B3 §2e). It lives inside C1's ratio
    residual and is attributable to nobody.
-6. **A passing control does not make the coefficient causal.** It makes it *quotable*: an
+6. **A dead-quiet box is reported as malformed data, not as a quiet box.** `analyze` treats
+   `load1 <= 0` as a malformed row, so a window where the box read `0.00` throughout returns
+   `NO-DATA — 0 usable row(s) (N malformed)` rather than the C1 refusal §6 predicts for a quiet
+   hour. Measured 2026-08-28 on an idle Linux container. Left unchanged deliberately: the target
+   box never reads 0.00, and relaxing the check would make one 0.00 reading collapse `lspread` to
+   0 and fail C1 for a window that actually spanned 0 → 46 — trading a misleading message for a
+   misleading *reason*. §6b's preflight now refuses such a box before a row is written, which is
+   the containment that matters.
+7. **A passing control does not make the coefficient causal.** It makes it *quotable*: an
    apportionment whose census demonstrably tracks the quantity it apportions, over enough independent
    observations to tell. That is the bar the DoD set, and it is the bar nothing in this repo has met
    before.

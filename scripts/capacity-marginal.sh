@@ -85,9 +85,27 @@
 # Usage:
 #   capacity-marginal.sh sample  [--window-s N] [--interval-s N] [--out FILE]
 #   capacity-marginal.sh analyze [--in FILE] [--json]
+#   capacity-marginal.sh run     [--out FILE] [--increment-s N] [--max-s N] [--repeat-k N]
+#                                [--interval-s N] [--preflight]
 #
-# Exit: 0 coefficient emitted (all controls passed) · 1 NO-ATTRIBUTION (a control failed) ·
-#       2 usage error · 3 NO-DATA (nothing sampled / file unreadable).
+# `run --preflight` answers only "can THIS box answer the question at all?" and exits — worth the
+# two seconds before committing an hour of the box's time to a window that cannot conclude.
+#
+# `run` is §6 of marginal-load-per-active-session-2026-08-19.md, DRIVEN. That section is a
+# protocol, not a command: preflight nothing, sample, analyze, "extend the window until the verdict
+# stops being NO-ATTRIBUTION OR the refusal repeats with the same term across several windows —
+# which would itself be the finding". Left as prose, the operator is the interpreter of that loop
+# for an hour. `run` is the same protocol with the loop inside the program, and it terminates on
+# every one of §6's three outcomes with a distinct exit code.
+#
+# Exit: 0 coefficient emitted (all controls passed) ·
+#       1 NO-ATTRIBUTION — a control failed; from `run`, the SAME control refused K windows
+#         running, which §6 names as itself the finding (the thread-unit census of §7.3 becomes the
+#         next increment, not a nicety) ·
+#       2 usage error ·
+#       3 NO-DATA (nothing sampled / file unreadable) ·
+#       4 run: the max window elapsed with the failing term still moving — inconclusive, extend ·
+#       5 run: preflight refused — THIS BOX cannot answer the question (it prints which check).
 #
 # Seams (all read with an explicit default; none may be empty):
 #   CC_MARG_TAU(60)                 load1 time constant, seconds — the independence spacing
@@ -99,6 +117,11 @@
 #   CC_MARG_MIN_ACTIVE_LEVELS(3)    distinct active levels required by C3
 #   CC_MARG_EXEC_RE                 regex matching a session's executable path (comm), default below
 #   CC_MARG_OUT                     default sample output path
+#   CC_MARG_RUN_INCREMENT_S(900)    `run`: seconds sampled before each re-analysis
+#   CC_MARG_RUN_MAX_S(10800)        `run`: total wall clock after which an unstable refusal is
+#                                   reported as inconclusive rather than extended again
+#   CC_MARG_RUN_REPEAT_K(3)         `run`: identical consecutive refusals that make a refusal STABLE
+#   CC_MARG_RUN_MIN_RESIDENT(3)     `run`: sessions the box must be carrying for C3 to be reachable
 set -uo pipefail
 
 CC_MARG_TAU="${CC_MARG_TAU:-60}"
@@ -112,6 +135,10 @@ CC_MARG_MIN_ACTIVE_LEVELS="${CC_MARG_MIN_ACTIVE_LEVELS:-3}"
 # `.claude-NNN/node_modules` form is the versioned launcher every interactive session runs.
 CC_MARG_EXEC_RE="${CC_MARG_EXEC_RE:-\\.claude-[0-9]+/node_modules/|claude\\.exe$}"
 CC_MARG_OUT="${CC_MARG_OUT:-${TMPDIR:-/tmp}/capacity-marginal.tsv}"
+CC_MARG_RUN_INCREMENT_S="${CC_MARG_RUN_INCREMENT_S:-900}"
+CC_MARG_RUN_MAX_S="${CC_MARG_RUN_MAX_S:-10800}"
+CC_MARG_RUN_REPEAT_K="${CC_MARG_RUN_REPEAT_K:-3}"
+CC_MARG_RUN_MIN_RESIDENT="${CC_MARG_RUN_MIN_RESIDENT:-3}"
 
 SCHEMA='#ts	load1	unit	total_run	claude_run	active	resident'
 
@@ -379,9 +406,200 @@ cmd_analyze() {
     }' "$in"
 }
 
+# ── run: §6's protocol, with the loop inside the program ────────────────────────────────────────
+# WHY PREFLIGHT EXISTS, AND WHY IT IS THE POINT OF THIS SUBCOMMAND. A triple-FAIL from a box that
+# has no fleet is textually identical to a triple-FAIL from the 10-core box during a dispatch wave,
+# and only the second one is a finding. That is not hypothetical: §6a of the adjudication doc
+# records exactly such an off-box smoke run — `C1 FAIL / C2 FAIL / C3 FAIL / NO-ATTRIBUTION` — and
+# it means nothing about capacity. So `run` refuses to start where the answer is structurally
+# unreachable, rather than spending an hour producing a refusal about itself.
+#
+# The two checks are the two ways C3 can be unreachable no matter how long the window runs:
+#   · the ACTIVE sensor is blind — cc_sp_active reads `-`, so EVERY row is blind and C3 fails on
+#     "0 row(s) carry an ACTIVE count" (the shape tests/capacity-marginal.bats already pins);
+#   · the box carries fewer sessions than C3 needs levels — C3 wants the ACTIVE count at
+#     >= CC_MARG_MIN_ACTIVE_LEVELS distinct levels with spread >= CC_MARG_MIN_ACTIVE_SPREAD, and a
+#     fleet smaller than that cannot produce those levels even in principle.
+#
+# It deliberately does NOT gate on `uname` being Darwin. The sampler reads /proc/loadavg on Linux
+# and vm.loadavg on Darwin, and the thing that decides whether this box can answer is the fleet and
+# the sensor, not the kernel. A uname gate would be a check on the spelling of the box.
+run_preflight() {
+  local cen tot cl res act
+  if ! cen="$(census_row)"; then
+    printf 'PREFLIGHT FAIL  census — ps returned nothing; this box cannot be sampled at all.\n'
+    return 1
+  fi
+  read -r tot cl res <<<"$cen"
+  act="${CC_MARG_RUN_ACTIVE_OVERRIDE:-$(read_active)}"
+  case "$act" in
+    ''|*[!0-9]*)
+      printf 'PREFLIGHT FAIL  active — cc_sp_active is unmeasurable here (it reads as a dash), so\n'
+      printf '                would be blind and C3 IDENTIFY can never pass. Fix the sensor, not\n'
+      printf '                the window: scripts/lib/spawn-presence.sh must be sourceable and its\n'
+      printf '                beat directory readable by this user.\n'
+      return 1 ;;
+  esac
+  if [ "$res" -lt "$CC_MARG_RUN_MIN_RESIDENT" ]; then
+    printf 'PREFLIGHT FAIL  fleet — %d resident session(s), need >= %d. C3 needs the ACTIVE count\n' \
+      "$res" "$CC_MARG_RUN_MIN_RESIDENT"
+    printf '                at %s distinct levels; a fleet this small cannot reach them however\n' \
+      "$CC_MARG_MIN_ACTIVE_LEVELS"
+    printf '                long the window runs. Run this ON the box, during a dispatch wave.\n'
+    return 1
+  fi
+  printf 'PREFLIGHT PASS  %d resident session(s), %d ACTIVE now, %d/%d runnable procs are ours.\n' \
+    "$res" "$act" "$cl" "$tot"
+  return 0
+}
+
+# THE DECISION, AS A PURE FUNCTION. Extracted so §6's stopping rule can be tested without sampling
+# anything — this suite's own header forbids a gate test that depends on how busy the operator is,
+# and a loop tested only against the live box is a loop nobody has checked.
+#   run_decide <analyze_rc> <sig> <prev_sig> <streak> <elapsed_s> <max_s> <k>  ->  "<verdict> <streak>"
+# rc 3 reaching here is already adjudicated TERMINAL by the caller (a file that mixes census units,
+# or one that cannot be read); the transient "too few rows yet" form never gets this far.
+run_decide() {
+  local rc="$1" sig="$2" prev="$3" streak="$4" elapsed="$5" max="$6" k="$7" now
+  case "$rc" in
+    0) printf 'PASS %d' "$streak"; return 0 ;;
+    3) printf 'NO-DATA %d' "$streak"; return 0 ;;
+  esac
+  if [ "$sig" = "$prev" ]; then now=$(( streak + 1 )); else now=1; fi
+  if [ "$now" -ge "$k" ];        then printf 'STABLE %d' "$now"; return 0; fi
+  if [ "$elapsed" -ge "$max" ];  then printf 'INCONCLUSIVE %d' "$now"; return 0; fi
+  printf 'CONTINUE %d' "$now"
+}
+
+# On a PASS the remaining edits are RE-GREPPED, never listed. The 2026-08-26 ban pass found THREE
+# live citation sites where the doc named two, and the one it missed was the library that defines
+# the ACTIVE population the coefficient is denominated in. A hard-coded path list here would ship
+# that same defect a second time.
+#
+# THE SELF-PATH MUST BE RESOLVED FIRST, and this hand-off is exactly where an unresolved one would
+# bite. ~/.claude/scripts/ is a tree of per-file SYMLINKS into the checkout, so through the live
+# layer `dirname "$0"/..` is ~/.claude — no docs/, no .git, no repo. The grep below would then match
+# nothing and print an empty list, silently, on the one path the operator actually runs: a hand-off
+# that says "no sites remain" when three do. Canonical loop, matching _resolve_self in
+# scripts/ship-land.sh (no `readlink -f` — GNU-only, and the target box is BSD).
+_marg_resolve_self() {
+  local p="$1" d
+  while [ -L "$p" ]; do
+    d="$(cd "$(dirname "$p")" && pwd)"
+    p="$(readlink "$p")"
+    case "$p" in /*) ;; *) p="$d/$p" ;; esac
+  done
+  printf '%s/%s\n' "$(cd "$(dirname "$p")" && pwd)" "$(basename "$p")"
+}
+
+# $1 is this script's own path, passed in rather than read from BASH_SOURCE inside: BASH_SOURCE
+# cannot be assigned in a subshell, so a self-read here could only ever be exercised on the path it
+# is already on, and the symlink resolution above would be untestable.
+run_next_steps() { # <self path>
+  local self repo hits
+  self="$(_marg_resolve_self "$1")" || return 0
+  repo="$(cd "$(dirname "$self")/.." && pwd)" || return 0
+  printf '\nNEXT — quote the coefficient WITH its standard error and its window, then update every\n'
+  printf 'live site that still points at this adjudication (re-grepped just now, not listed):\n'
+  # The sampler and its own suite name that doc as their provenance, not as a citation of a value,
+  # so they are excluded by name — otherwise this file lists itself and the operator's edit list
+  # opens with a false positive.
+  hits="$(cd "$repo" && grep -rl 'marginal-load-per-active-session-2026-08-19' \
+      --exclude-dir=.git --exclude-dir=docs --exclude='capacity-marginal.*' . 2>/dev/null \
+      | sed 's|^\./|  |')"
+  # An EMPTY result is reported as unknown, never as "none". Zero hits here means either that the
+  # ban really is discharged or that the root above is wrong, and those two must never render alike.
+  if [ -n "$hits" ]; then
+    printf '%s\n' "$hits"
+  else
+    printf '  (no live citation site found under %s — verify that root before reading this as none)\n' "$repo"
+  fi
+  printf '  docs/research/marginal-load-per-active-session-2026-08-19.md   (record the run: §6)\n'
+  printf 'Then land it and close the item:  cc-backlog done 193ae8ddce72 --evidence "<landed sha>"\n'
+}
+
+cmd_run() {
+  local out="$CC_MARG_OUT" inc="$CC_MARG_RUN_INCREMENT_S" max="$CC_MARG_RUN_MAX_S"
+  local k="$CC_MARG_RUN_REPEAT_K" interval="$CC_MARG_TAU" only_preflight=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --out)         out="${2:-}"; shift 2 ;;
+      --increment-s) inc="${2:-}"; shift 2 ;;
+      --max-s)       max="${2:-}"; shift 2 ;;
+      --repeat-k)    k="${2:-}"; shift 2 ;;
+      --interval-s)  interval="${2:-}"; shift 2 ;;
+      --preflight)   only_preflight=1; shift ;;
+      *) die "run: unknown argument '$1'" ;;
+    esac
+  done
+  case "$inc$max$k$interval" in *[!0-9]*) die "run: --increment-s/--max-s/--repeat-k/--interval-s must be integers" ;; esac
+  [ "$inc" -ge 1 ] || die "run: --increment-s must be >= 1"
+  [ "$k" -ge 1 ]   || die "run: --repeat-k must be >= 1"
+  [ "$max" -ge "$inc" ] || die "run: --max-s must be >= --increment-s"
+
+  run_preflight || return 5
+  [ -z "$only_preflight" ] || return 0
+
+  local start now elapsed rc aout sig prev="" streak=0 decision iter=0
+  start="$(date +%s)"
+  while :; do
+    iter=$(( iter + 1 ))
+    cmd_sample --window-s "$inc" --interval-s "$interval" --out "$out" --quiet
+    rc=$?
+    if [ "$rc" -eq 3 ]; then
+      printf 'CAPACITY-MARGINAL: NO-DATA — window %d recorded no rows; load1 or ps is unreadable.\n' "$iter"
+      return 3
+    fi
+    aout="$(cmd_analyze --in "$out")"; rc=$?
+    now="$(date +%s)"; elapsed=$(( now - start ))
+
+    # NO-DATA splits, and conflating the halves is how a young window gets reported as a verdict.
+    # "rows mix census units" and an unreadable file are TERMINAL — more sampling cannot unmix a
+    # file. "N usable row(s)" is the opposite: it says the window is younger than the 3 rows the
+    # estimator needs, which is exactly what the next increment fixes.
+    if [ "$rc" -eq 3 ]; then
+      case "$aout" in
+        *'mix census units'*|*'cannot read'*) printf '%s\n' "$aout"; return 3 ;;
+      esac
+      if [ "$elapsed" -ge "$max" ]; then printf '%s\n' "$aout"; return 3; fi
+      printf 'capacity-marginal: window %d (%ds elapsed) too few rows yet — extending\n' \
+        "$iter" "$elapsed" >&2
+      continue
+    fi
+
+    sig="$(printf '%s\n' "$aout" | awk '$1 ~ /^C[123]$/ && $3 == "FAIL" { printf "%s%s", (n++ ? "+" : ""), $1 }')"
+    [ -n "$sig" ] || sig="-"
+    read -r decision streak <<<"$(run_decide "$rc" "$sig" "$prev" "$streak" "$elapsed" "$max" "$k")"
+    prev="$sig"
+    case "$decision" in
+      PASS)
+        printf '%s\n' "$aout"; run_next_steps "${BASH_SOURCE[0]:-$0}"; return 0 ;;
+      NO-DATA)
+        printf '%s\n' "$aout"; return 3 ;;
+      STABLE)
+        printf '%s\n' "$aout"
+        printf '\nSTABLE REFUSAL — %s refused %d consecutive windows over %ds. Per §6 this IS the\n' "$sig" "$streak" "$elapsed"
+        printf 'finding, not a failed run: the process-unit census is not the instrument for this box,\n'
+        printf 'and the thread-unit census of §7.3 becomes the next increment. It wants a captured\n'
+        printf 'ps -axM fixture before its parser can be tested — capture one from THIS box.\n'
+        return 1 ;;
+      INCONCLUSIVE)
+        printf '%s\n' "$aout"
+        printf '\nINCONCLUSIVE — %ds elapsed (max %ds) and the failing term is still moving (now %s).\n' "$elapsed" "$max" "$sig"
+        printf 'Nothing is quotable and nothing is concluded. Re-run with the same --out to extend the\n'
+        printf 'window; the file accumulates and analyze re-reads all of it.\n'
+        return 4 ;;
+      *)
+        printf 'capacity-marginal: window %d (%ds elapsed) NO-ATTRIBUTION [%s] — extending\n' \
+          "$iter" "$elapsed" "$sig" >&2 ;;
+    esac
+  done
+}
+
 case "${1:-}" in
   sample)  shift; cmd_sample "$@" ;;
   analyze) shift; cmd_analyze "$@" ;;
-  -h|--help|'') sed -n '/^# Usage:/,/^#       2 usage/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
-  *) die "unknown subcommand '$1' (sample | analyze)" ;;
+  run)     shift; cmd_run "$@" ;;
+  -h|--help|'') sed -n '/^# Usage:/,/^#       5 run: preflight/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) die "unknown subcommand '$1' (sample | analyze | run)" ;;
 esac
