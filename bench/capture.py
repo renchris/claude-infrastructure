@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import sys
 import time
@@ -143,8 +144,14 @@ def capture(corpus: pathlib.Path, dprs: list[int]) -> None:
 
     timings = []
     with sync_playwright() as p:
+        # A pinned browser binary wins over the channel when one is supplied. The
+        # bench otherwise only runs where Playwright's own download matches its
+        # Python package, which is not true of a CI image that ships one Chromium
+        # for every version of the client. Set BENCH_CHROMIUM to that binary.
+        exe = os.environ.get("BENCH_CHROMIUM")
+        launch_kw = {"executable_path": exe} if exe else {"channel": "chromium"}
         browser = p.chromium.launch(
-            channel="chromium",
+            **launch_kw,
             args=[
                 "--force-color-profile=srgb",
                 "--disable-lcd-text",
