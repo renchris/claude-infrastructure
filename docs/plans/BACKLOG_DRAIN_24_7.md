@@ -86,6 +86,38 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-28T19:0xZ — POST-FIX PRODUCTION VERDICT on `5f89ce484` (the admission-lock scope fix):
+  IT WORKED, AND THE BINDING CONSTRAINT MOVED EXACTLY WHERE THE AUDIT PREDICTED — ONTO THE VENUE
+  FILTER, WHICH IS OPERATOR-OWNED.** The live layer converged at 11:40Z (a green stamp after the
+  verifier's 31-cut/14-red/6-green run of stalls); `LIVE_LAG=0`, `LIVE_ADDS=0`, and the fix is
+  present in the deployed binary. Measured on the real dispatcher, not on a fixture:
+
+  | | before the fix (2026-08-27) | after (2026-08-28, since 11:40Z) |
+  |---|---|---|
+  | `defer / pass-in-flight` | 4,528 in 68 min — ~65% of ALL decisions | **0 — the reason does not appear in the IDL at all** |
+  | `admit` | 31 in 68 min, and 0 on every recent pass | **727** |
+  | `fired` | 2 in that hour | **26** |
+  | per-pass shape | `deferred:285/285`, `deferred:286/286`, `admitted:0` | `deferred:0..3`, admits flowing |
+
+  🚨 **AND THE BACKLOG STILL GREW: 546 → 557 live.** That is not a failure of the fix and it is the
+  most useful number here. The lock was the dispatcher's THROAT; the venue filter is its AIM. With
+  the throat clear, all 26 fires went where the filter points them — Cloud, where a claim reaches
+  done 2.0% of the time against local's 26.9%. **A drain that runs and does not drain is the exact
+  signature of a correctly-working mechanism pointed at the wrong lane**, and it is now measured
+  rather than argued: `defer/capacity` (16,114) and `skip/project-not-dispatched` (3,779) are the
+  new top reasons, i.e. the fleet ceiling doing its real job.
+  · **THIS STRENGTHENS THE OPEN DECISION `ff24ce1f7808` AND NARROWS IT.** Its stated risk against
+  "allow both venues" was fleet footprint — local dispatch once fired 189 panes in a day against a
+  ~15-session budget. The post-fix data answers that half empirically: **the ceiling is already the
+  binding term** (16,114 capacity defers, 24 at-ceiling, 26 fires all day), so the venue filter is
+  not what is protecting the box — the ceiling is, and it is doing it without help. What remains
+  genuinely operator-owned is the `launchctl` reload and the value call, not the capacity argument.
+  · ⚠️ **ONE LATENT GAP FOUND WHILE VERIFYING, worth carrying:** `~/.claude/scripts/cloud-inbox.py`
+  has NO symlink — the known ff-sync-never-symlinks-a-NEW-file defect (`761a546f939c`). It is
+  harmless *here* only because `bin/cc-cloud` resolves `$ROOT` through its own symlink target into
+  the checkout, so `cc-cloud inbox` works from any cwd (verified by EXECUTING it from `/tmp`, not by
+  checking file presence — memory: convergence-counter-measures-distance-not-delivery). The next
+  added file whose consumer hardcodes `~/.claude/scripts/<x>` will silently skip.
 - **2026-08-28 — drain recycle #256: method 228 — A FLOOR IS SCOPED TO ITS CONSUMER, THE *FAST*
   CONSUMER IS THE DANGEROUS ONE, AND AN AXIS THAT LIVES ONLY INSIDE A RACY BAND CANNOT BE PINNED BY
   ANY TEST — WHICH IS WHY THE COMMENT IS WHERE ITS ERROR LIVES.**
