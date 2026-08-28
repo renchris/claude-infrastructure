@@ -232,6 +232,83 @@ assert rows[0]["actor"] == "tester", rows
   [ -f "$CC_BUS_DIR/actors/tester.jsonl" ]
 }
 
+# ── the secret gate, at the size it is actually for ─────────────────────────────────────────────
+# The two tests above pin the gate on ~40-byte bodies, and a 40-byte body is the one regime in which
+# the gate cannot fail. Measured 2026-08-28, the REAL binary, 1,000 trials per cell at load ~28-30
+# (probe254-cond2.sh), on the pre-fix `printf '%s' "$text" | grep -qE "$SECRET_RE"`:
+#
+#     multi-line, secret on line 1, 120,000 B   1,000/1,000 WROTE THE SECRET
+#     multi-line, secret on line 1, 223,869 B   1,000/1,000 WROTE THE SECRET
+#     multi-line, NO secret,        223,869 B       0/1,000 wrong
+#     SINGLE-line, secret at head,  223,869 B       0/1,000 wrong
+#     multi-line, secret on the LAST line,      0/1,000 wrong
+#     multi-line, secret on line 1,  37,121 B       0/1,000 wrong
+#
+# Three things that table says, and the size below is chosen from it rather than picked:
+#   * It is not a race. 1,000/1,000 is deterministic; `grep -q` exits on the first match and
+#     pipefail promotes the producer's SIGPIPE, so the `if` reads FALSE and scrub falls through
+#     and RETURNS THE TEXT. The record is written to what this file calls a PUBLIC, append-only
+#     git history that a push cannot take back.
+#   * Only a body that CARRIES a secret can invert, because only a match makes grep exit early.
+#     Every size ever measured for this site was measured over ordinary traffic — the population
+#     that is correct at every size — so no sample of ordinary records could ever have ranked it.
+#   * The decision unit is the LINE, not the byte: 223,869 B on one line is safe and the same
+#     223,869 B over 3,293 lines is not.
+# 120,000 B / 1,766 lines is past the always-inverted floor and well under ARG_MAX (1,048,576), so
+# this arm is deterministic by construction rather than one-in-twenty. It survives any rewording of
+# the fix because it drives the real CLI and asserts the CONTRACT, not a spelling.
+@test "the secret gate REFUSES a credential in a LARGE multi-line body (the regime it is actually for)" {
+  big="$(awk 'BEGIN{
+    printf "%s\n", "ghp_abcdefghij0123456789"
+    line = "the quick brown fox jumps over the lazy dog and files a backlog row"
+    n = 25
+    while (n < 120000) { printf "%s\n", line; n += length(line) + 1 }
+  }')"
+  [ "${#big}" -gt 119000 ]
+  nl="$(printf '%s' "$big" | grep -c '')"
+  [ "$nl" -gt 1000 ]
+  run "$BUS" post peer "$big"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *REFUSED* ]] || false
+  [ ! -f "$CC_BUS_DIR/actors/tester.jsonl" ]
+}
+
+# The NEG control for the arm above. Without it that arm passes on a gate that refuses EVERYTHING,
+# which is the failure a one-sided size test would call a fix (#233's scar, and the same reason the
+# 40-byte pair above has two halves). Same size, same line count, no credential.
+@test "a large CLEAN body is still accepted (the size arm cannot pass by refusing everything)" {
+  big="$(awk 'BEGIN{
+    line = "the quick brown fox jumps over the lazy dog and files a backlog row"
+    n = 0
+    while (n < 120000) { printf "%s\n", line; n += length(line) + 1 }
+  }')"
+  [ "${#big}" -gt 119000 ]
+  run "$BUS" post peer "$big"
+  [ "$status" -eq 0 ]
+  [ -f "$CC_BUS_DIR/actors/tester.jsonl" ]
+}
+
+# The class arm, scoped to EXACTLY the two function bodies this change drains — never file-wide.
+# A file-wide count would convict the --selftest assertion at :1008, which is a different case: its
+# feed is the selftest's own two-record fixture bus and its inversion is a loud false `badp`, the
+# safe direction. A gate whose span exceeds its subject convicts its neighbours (#242's scar).
+@test "scrub and cmd_inbox ask their questions without piping into an early-exiting reader" {
+  for fn in scrub cmd_inbox; do
+    body="$(awk -v f="$fn" '$0 ~ "^" f "\\(\\) \\{" { inb = 1 } inb { print } inb && /^\}/ { exit }' "$REPO/bin/cc-bus")"
+    # The extraction must have found something, or this arm passes vacuously on an empty string.
+    [ -n "$body" ] || false
+    [ "$(printf '%s\n' "$body" | grep -c '')" -gt 3 ]
+    # COMMENT LINES ARE STRIPPED FIRST, and that is load-bearing rather than tidiness: the drained
+    # site now carries a comment quoting the hazardous spelling in order to explain it, so a raw
+    # count over the body convicts the FIXED file on its own documentation. This arm went red for
+    # exactly that reason before the strip existed — one hit, and it was the comment.
+    code="$(printf '%s\n' "$body" | grep -v '^[[:space:]]*#')"
+    [ -n "$code" ] || false
+    # `grep -c`, never `grep -q`: a bare assertion on a zero count fails the test itself.
+    [ "$(printf '%s\n' "$code" | grep -cE '\|[[:space:]]*(/usr/bin/|/bin/)?g?e?f?grep[[:space:]]+-[A-Za-z]*q')" -eq 0 ]
+  done
+}
+
 @test "done requires --evidence" {
   run "$BUS" "done" SOME-ITEM
   [ "$status" -eq 2 ]

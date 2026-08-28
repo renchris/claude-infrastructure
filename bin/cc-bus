@@ -263,8 +263,40 @@ SECRET_RE='(sk-ant-[A-Za-z0-9_-]{8})|(ghp_[A-Za-z0-9]{20})|(github_pat_[A-Za-z0-
 
 scrub() {
   # stdin → stdout, with $HOME collapsed to ~. Refuses (exit 3) on a secret-shaped match.
+  #
+  # The match is asked of a HERESTRING, not of a pipeline, and that is the whole guard. Under
+  # `set -o pipefail` (:102), `printf … | grep -qE …` inverts EXACTLY WHEN IT MATCHES: grep -q exits
+  # on the first match, the producer takes SIGPIPE, pipefail promotes it, the `if` reads FALSE, and
+  # scrub falls through and RETURNS THE TEXT. A credential is then written to what the header above
+  # calls a PUBLIC, append-only git history that a push cannot take back — fail-OPEN, in the one
+  # gate whose failure is unrecoverable.
+  #
+  # Measured 2026-08-28 on the pre-fix form, 1,000 trials per cell at load ~28-30, GNU bash 3.2.57,
+  # BSD grep, on the SHAPE this line is (2-stage, BUILTIN producer, `-qE` consumer):
+  #
+  #     multi-line, secret on line 1, 120,000 B   1,000/1,000 WROTE THE SECRET
+  #     multi-line, secret on line 1, 223,869 B   1,000/1,000 WROTE THE SECRET
+  #     multi-line, NO secret,        223,869 B       0/1,000 wrong
+  #     SINGLE-line, secret at head,  223,869 B       0/1,000 wrong
+  #     multi-line, secret on the LAST line       0/1,000 wrong
+  #     multi-line, secret on line 1,  37,121 B       0/1,000 wrong
+  #
+  # Not a race — 1,000/1,000 is deterministic. Three properties that table pins, each of which a
+  # size taken on its own would have got wrong:
+  #   * ONLY A MATCHING BODY CAN INVERT. A body with no secret drains, grep exits 1, the producer is
+  #     never orphaned, and the answer is correct at every size. So the population that can invert is
+  #     exactly the population this branch exists to catch, and it is disjoint from the population
+  #     anybody samples. The live store's largest body was 1,487 B over 2 records, and no number
+  #     drawn from ordinary traffic — at any depth — could have ranked this line.
+  #   * THE DECISION UNIT IS THE LINE, not the byte. 223,869 B on ONE line is safe; the same
+  #     223,869 B over 3,293 lines is not. grep cannot exit early on a line it has not finished.
+  #   * 37,121 B stays correct at 1,000 trials, so the safe floor published for this shape at 20
+  #     trials survives a 50x deeper draw. That is a confirmation, and it is why the number below is
+  #     the FLOOR and not this line's feed: no field cc-bus scrubs is capped (ACTOR_ID_MAX bounds the
+  #     actor id alone), `emit` has zero script callers and is driven by hand, and the largest free
+  #     text this box moves between agents measured 223,869 B.
   local text; text="$(cat)"
-  if printf '%s' "$text" | grep -qE "$SECRET_RE"; then
+  if grep -qE "$SECRET_RE" <<<"$text"; then
     printf 'cc-bus: REFUSED — the record matches a secret-shaped pattern.\n' >&2
     printf '  The bus is a PUBLIC, append-only git history: a push cannot be taken back.\n' >&2
     printf '  Remove the credential from the message. Nothing was written.\n' >&2
@@ -574,7 +606,18 @@ cmd_inbox() {
     to="$(json_field "$line" to)"
     [ "$to" = "$me" ] || [ "$to" = "*" ] || continue
     id="$(json_field "$line" actor):$(printf '%s' "$line" | sed -n 's/.*"seq":\([0-9]*\).*/\1/p')"
-    if [ "$all" = 0 ] && printf '%s\n' "$acked" | grep -qxF "$id"; then continue; fi
+    # Same shape as scrub's gate above, same cure, and the contrast between them is the reason both
+    # are worth stating. `$acked` is newline-separated and grows one line per ack forever, so it is
+    # a multi-line feed with no bound — and here the MATCH is the ordinary case, not the rare one:
+    # most inbox rows have been acked. So this site's inverting population is the common one and it
+    # would announce itself, loudly, as already-acked messages reappearing; scrub's inverting
+    # population is the one nobody ever sees until it matters once, irreversibly. One mechanism, two
+    # ends of the same question — which of a site's inputs can actually take the early exit.
+    # Membership therefore asks `case` over a newline-fenced string: fork-free, and it cannot report
+    # the opposite of what it found.
+    if [ "$all" = 0 ]; then
+      case $'\n'"$acked"$'\n' in *$'\n'"$id"$'\n'*) continue ;; esac
+    fi
     if [ -n "$since" ] && [ "$(json_field "$line" ts)" \< "$since" ]; then continue; fi
     n=$((n+1))
     printf '%s  [%s]  from %s\n    %s\n' \
