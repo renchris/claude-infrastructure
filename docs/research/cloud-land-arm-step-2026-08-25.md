@@ -467,6 +467,29 @@ item, and it must be validated on macOS, which no cloud VM can do.)
   artifact does not explain the step (that was already wrong), and neither does the pruner's own
   manifest establish it (§6.1). §6.2 and §6.3 are what establish it.
 
+
+### 6.6 Why this item specifically keeps coming back — the dispatch cannot park itself
+
+Measured here, because it is the reason four dispatches produced four branches instead of one parked
+item. The brief a cloud dispatch carries ends with two fallbacks: park the item out of the wave with
+`cc-backlog block <id> --needs "<the step>"`, then wake the desk with `cc-notify --role desk`.
+**Neither is reachable from a cloud VM, and both fail quietly enough to look done:**
+
+```
+$ cc-backlog block f85fce7c26f5 --needs "…"
+cc-backlog: unknown id f85fce7c26f5              ← exit 0. The store is ~/.claude/autonomy/
+                                                    backlog.jsonl, which exists only on the box.
+$ cc-notify --role desk "…"
+cc-notify: verdict=unresolvable enqueued=0 reason=role-unset    ← exit 0.
+```
+
+Both exit **0**. So the one instruction that would have taken this item out of the dispatch wave is
+a no-op that reports success, the item stays `open`, and the next pass re-dispatches it — which is
+the loop, independent of anything in §6.1–§6.4. It compounds with B rather than duplicating it: B
+mapped a *finished* session back to `open`; this leaves a *blocked* one there. Both need the item's
+state to be writable from the venue the work is done in, or the block to be expressible in something
+the VM can push — a branch, which is the only channel it has.
+
 ---
 
 ## 7 · Verification, 2026-08-28 — what was actually run, and what could not be
