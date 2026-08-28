@@ -86,6 +86,128 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-28 — drain recycle #255: method 227 — 226 CORRECTS THE POPULATION A SIZE IS MEASURED
+  OVER; IT DOES NOT REMOVE THE SIZE. AND THE PUBLISHED BYTE FLOORS ARE PROPERTIES OF THE LINE WIDTH
+  THEY WERE MEASURED AT.**
+  🚨 **THE FINDING, AND IT IS A CORRECTION TO MY PREDECESSOR'S OWN METHOD.** #254's method 226 says
+  that for an early-exiting consumer only a MATCHING feed can leave the producer holding bytes, so
+  an ordinary-traffic size ranks such a site over the half that provably cannot fail. That is right,
+  and #254's own worked example shows what it actually DOES: `bin/cc-bus:267` went from *"1,487 B
+  over 2 records, latent"* to 1,000/1,000 because 226 moved the size measurement from the
+  NON-matching population to the MATCHING one. **It changed the population a size is taken over. It
+  did not remove the size.** A site inverts only when BOTH arms hold — **ARM A CONDITIONING**, an
+  input exists that takes the early exit, and **ARM B MAGNITUDE**, the producer still has bytes to
+  write when it does. **Answering 226's questions YES is HALF a ranking, and it is the half that
+  feels decisive.**
+  🚨 **THE PROOF IS MY OWN INHERITED PICK, REFUTED BY ONE MEASUREMENT.** #254 recommended
+  `scripts/deploy-link-parity.sh:329` in its strongest terms, derived by answering 226's two
+  questions — matching feed? multi-line? match near the head? — YES/YES/YES, and it never took a
+  size over the matching population at all. `$SEEN` is **11,069 B / 422 lines AT ITS MAXIMUM**: the
+  forward walk completes at `:372` before the first `sweep_strays` call at `:380`, so every read is
+  a read of the maximum and there is no warm-up regime. That is **30% of the 37,121 B floor**, and
+  `probe255-size.sh` measured the site itself at **0/1,000 at 11,069 B against 1,000/1,000 at
+  120,000 B** — identical shape, identical match position, identical line structure, ONE variable.
+  **Seven predictions, all seven exact on the first run.**
+  ⚠️ **AND THE RESIDUE TELL PAID BEFORE ANY OF THAT: `git log -1` on that file returns
+  *"fix(link-parity): a matched copy was convicted STRAY — grep -q inverted the verdict on the very
+  match it found"*, and that commit's own body records that the lint *"DOES flag this file — at line
+  311 … and MISSES line 261"*. The site I inherited as the top hazard is the one a prior author had
+  already looked at and left. #254's residue generator, one link later, on #254's own pick.**
+  🆕 🚨 **ARM B HAS THREE PARTS, NOT ONE — AND THE THIRD IS THE ONE NOBODY HAS EVER MEASURED.**
+  B1 the feed's maximum today over the MATCHING population · B2 the floor for that pipeline shape ·
+  **B3 the RATE at which B1 closes on B2.** This brief's standing sentence is *"LATENT IS NOT SAFE:
+  every one of those ceilings is an operational quantity that only grows, and nothing announces the
+  crossing."* True as a caution, and **it is a claim WITH A GROWTH RATE that nobody has run.** Run
+  on `$SEEN`: deployable paths measured **415 → 418 → 421 → 421 → 421** across 400 commits — **+6**.
+  Closing the gap needs **+995 paths, roughly 66,000 commits.** Not latent. **Unreachable.**
+  🆕 🚨 **THE RE-RANKING INVERTS THE INHERITED ORDER.** `rank255.sh` took all four surviving
+  fail-open membership sites under both arms. Every one is under the floor today; what separates
+  them is B3, and it separates them by three orders of magnitude:
+  `scripts/handoff-disposition.sh:185` **26 B** (ONE session name — structurally fixed, the
+  branch-reaper shape) · `scripts/offbox-partition.sh:165` **92 B / 3 lines** ·
+  `scripts/deploy-link-parity.sh:329` **11,069 B / 422** · **`bin/cc-backlog:4743` 30,485 B / 2,345
+  ids, 82% of floor, growing by one per row that ever reaches `done`** — and the ledger's own events
+  ran **689 in 2026-07 and 1,833 in 2026-08.** **#254 promoted the 66,000-commit site to #1 and left
+  the live one as a bare row in a list. A ratio is not a rate.**
+  🆕 🚨 **THEN THE rc-93 GATE REFUSED THREE PREDICTIONS AND THE REFUSALS WERE THE LINK'S BEST
+  FINDING — AGAIN.** I predicted `bin/cc-backlog:4743` ZERO at both 30,485 B and at 37,121 B, on the
+  published floor. Measured **1/1,000** and **256/1,000**, and **the REAL live drop set at 37/1,000.**
+  **37,121 B IS NOT A PROPERTY OF THE BYTE COUNT.** It was measured on a ~55 B/line feed; a drop-set
+  line is a 12-hex id plus a newline = **13 B**.
+  ⚠️ **TWO EXPLANATIONS WERE CONFOUNDED THERE — line density and LOAD — and a between-runs
+  comparison cannot separate them, exactly as #253 proved for a rate inside a racy band.**
+  ✅ **`probe255-ab.sh` FORCED THE DECORRELATION: both arms in ONE run, interleaved trial by trial,
+  the order flipping every trial, so load is held constant BY CONSTRUCTION rather than by hope:**
+
+        37,121 B over 2,856 lines of 13 B .... 674/1,000 WRONG
+        37,121 B over   689 lines of 55 B ....   0/1,000
+
+  **Same bytes, same consumer, same needle position, same instant. Six predictions including both
+  comparison arms, all six exact.** #254 established the decision unit is the LINE by holding bytes
+  fixed and COLLAPSING them to one line; **this is the dual, and it is the operationally dangerous
+  half: at a fixed byte count, MORE LINES MEANS MORE INVERSION.**
+  🆕 ✅ **SO THE FLOOR, MEASURED IN THE UNIT THAT PREDICTS IT** (`probe255-lines.sh`, 13 B/line,
+  needle on line 1, rate curve and never a bisect): **SAFE to 1,200 lines · RACY from ~1,800 (1/500)
+  through 2,345 (1/500), 2,600 (17/500), 2,856 (201/500) and 3,400 (480/500) · ALWAYS by 6,000
+  (300/300), and still ALWAYS at 8,000, 12,000, 20,000 and 30,000.** In bytes the real onset is near
+  **23,399 — 63% of the figure that was being read as safe.** 🚨 **EVERY FLOOR THIS FILE PUBLISHES —
+  37,121 · 55,721 · 87,122 · 17,427 — IS A BYTE FIGURE FOR A LINE-UNIT QUANTITY, EACH MEASURED AT
+  ONE LINE WIDTH. #241's scar is that a correctly-measured constant was carried to a shape it was
+  ~2.8× wrong for; this is the same scar on the floors themselves. WHEN YOU LAND A FLOOR, LAND THE
+  LINE WIDTH.**
+  ✅ **THE FIX: `bin/cc-backlog:4743`'s drop-set membership test drained to a BUILTIN whole-line
+  `case` against a sentinel-wrapped copy built once outside the loop** — no pipe, no early exit, no
+  rc to invert, and ~30,000 fewer forks per compaction on a 15,097-line ledger. **The inversion was
+  SILENT and SELF-REINFORCING: the row is KEPT, `dropped` is never incremented, compact rewrites the
+  ledger unchanged and reports success — and the feed IS the set of rows the branch exists to
+  remove, so every failed compaction grows it.** Census **127 → 126, LOST=1, NEW=0**, keyed on
+  (path, TEXT) with the PRE arm extracted from `origin/main` by `git archive | tar -x`; the LOST row
+  is exactly the drained line, and **a POS control asserts the two sites this diff deliberately did
+  NOT drain are in BOTH censuses** — which is what distinguishes drained-in-place from moved out of
+  the detector's view. The allowlist row was deleted only AFTER the lint's own downward arm named
+  the change per path. Suite **145 → 147**.
+  🆕 🚨 **THE ATTRIBUTION IS THE DELIBERATE ZERO, AND IT IS WHY THIS SHIPPED.** Red-proved against
+  the subject as `origin/main` has it, restored by sha256 in a trap (`RESTORE=OK`), predictions
+  written before the run: **PRE 2 red — exactly my two new arms — POST 0, and ZERO incumbent reds.**
+  **The three incumbent `compact` arms pin exactly this contract and all three stay GREEN over the
+  defect**, because their ledgers hold a handful of rows, so their drop set is ~5 ids / ~65 B, three
+  orders of magnitude under any floor. **A fixture that never reaches the bug's regime is
+  structurally incapable of failing for it. A uniform prediction says nothing about attribution; a
+  varying one is a claim about what your existing tests cannot see.**
+  ⚠️ **ONE INSTRUMENT FAULT, AND IT IS THE MOST-REPEATED ONE IN THIS FILE: MY SPELLING ARM WENT RED
+  AGAINST THE FIXED SUBJECT, ON MY OWN `# WAS:` COMMENT DOCUMENTING THE FORM IT BANS.** A grep that
+  counts a token matches the comment explaining that token, so a drained file convicts itself and
+  the only way to stay green is to stop documenting the fix. **#241's remedy is the right one and it
+  is one line: STRIP COMMENT LINES FIRST.** The arm is scoped to `cmd_compact` and never to the
+  ~6,200-line file, because a file-wide count convicts grandfathered neighbours; its POS control
+  seeds the banned form from a QUOTED HEREDOC rather than deriving it from the subject it seeds.
+  🚨 **THE BOARD DID NOT MOVE ACROSS MY LINK BODY, AND THE GAP BEFORE IT DID.** Open 10:13:22Z:
+  **333 open / 220 blocked / 2,345 done / 4 claimed** (553 combined, 2,902 rows), both partitions
+  asserted, every list `sort -c`'d on both sides of every `comm`. Against #254's floor: **ZERO
+  arrivals, ZERO departures, THREE rows blocked → open** — `485f8f87eb5f`, `564d151b76e5` and
+  `ca97c678b18b` — **so the off-box actuator series takes a 3 for that 9 m 28 s gap.** ⚠️ **Two of
+  the three are cloud WOULD-UNBLOCK rows; the third is #240's detector-gap row, which this brief
+  describes as OPEN and which was therefore BLOCKED when #254 read it. Report the transition, not
+  the brief's word.** **I closed nothing, filed nothing, reopened nothing and made no board write.**
+  ⚠️ **STORES at my open (10:13:06Z): postland RED pages **0** over a denominator of **2,762** — the
+  170th consecutive · postland stamps **495**, still flat against #254's three readings of 495, and
+  I draw NO conclusion about either link from that · pages store **2,236 / 109** · inbox-guard
+  `.escalated` **452 / 452**, one number and not a ratio.
+  ⚠️ **LANE at my open: `RUNG=✅ LIVE_SRC=behind LIVE_LAG=6 LIVE_ADDS=0 LIVE_AGE=13983
+  LIVE_BREACH_WHY=` (empty), `LIVE_SHA` unmoved from #254's both-ends reading. Behind, inside
+  budget, and NOT mine to converge.** **`GATE=stale` — the THIRTY-SIXTH consecutive; only the
+  background `postland-verify` stamp moves that marker.**
+  ✅ **The qos-rewrite diff was the 136th consecutive clean (rc 0, 0 bytes); kitty resolved by
+  `KITTY_WINDOW_ID`=27 with `KITTY_PID=1427` and `cc-in-kitty` rc 0; `cc-roles list` returned the
+  byte-identical four-row table for the twenty-fifth consecutive reading; `~/.claude/mailbox/27.md`
+  is unchanged at 4,059 bytes / 1 line for the twenty-eighth. `test-walltime-lint` clean — 552
+  suites, 1 grandfathered, 0 new time bombs. `alarm-polarity-lint` DECLARED NOT-RUN: none of these
+  files is an alarm emitter.**
+  🚨 **WHAT TO TAKE: ASK ARM B AFTER YOU ASK ARM A, AND ASK IT IN LINES.** For every early-exit
+  site: what does a matching feed look like (226) · **how big is it, in LINES, over that matching
+  population** · **and how fast is that closing on the floor?** A site that answers 226's questions
+  perfectly and sits 66,000 commits from its floor is not a hazard; a site nobody ranked at all,
+  reading 82% of a floor that is itself 1.6× too generous for its line width, is inverting today.
 - **2026-08-28 — drain recycle #254: method 226 — FOR AN EARLY-EXITING CONSUMER THE SAFE POPULATION
   AND THE INVERTING POPULATION ARE DISJOINT BY CONSTRUCTION, SO EVERY SIZE EVER SAMPLED FOR SUCH A
   SITE WAS TAKEN INSIDE THE HALF THAT CANNOT EXHIBIT THE HAZARD.**
