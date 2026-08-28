@@ -152,3 +152,109 @@ print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
+
+# ---------------------------------------------------------------------------------------------
+# S4 · M4′ · burst_start_by — RP-21..RP-24. The start-time constraint that REPLACES the deleted
+# M4 (`wk_reach_pp`). M4 asked a CAPACITY question, which is nearly algebraically fixed:
+# `reach_pp` and `need` are both monotone in (weekly_pct, hours-remaining), so it read REACHABLE
+# on 99.37% of the series and on 100% of the 74 samples inside the 5 wall episodes it was written
+# to catch. M4′ asks a rate-and-freeze-against-the-clock question, which can come out either way.
+# RP-21 is where the two split, and RP-22 is what stops M4′ degenerating the other way.
+# ---------------------------------------------------------------------------------------------
+
+@test "RP-21: burst_start_by returns LATE for next3's live shape — where M4′ splits from M4" {
+  # The measured live row at 2026-08-25T09:47:41Z, K = 0.192. 8 weekly pp of deficit costs 41.7
+  # session pp; at BURST_SPPH that is 1.82 h of burn in the open window, plus one window's
+  # expected freeze (0.625 × 1.653 = 1.03 h) = 2.86 h needed against 2.21 h left.
+  #
+  # THE DELETED M4 ON THIS EXACT ROW read `16.9 pp reach vs 8 needed — REACHABLE, 2.1× margin`.
+  # next3 in fact stranded. The verdict here is the opposite one, and the floor says how much of
+  # the 8 pp a perfect burst starting at this instant still could not have saved.
+  run python3 -c "$LOAD"'
+r = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+     "session_pct": 13, "session_reset_h": 3.37}
+sb = ca.burst_start_by(r, 0.192)
+assert sb is not None, sb
+assert -1.0 < sb["h"] < 0.0, sb                       # measured -0.65
+assert sb["verdict"] == "LATE", sb
+assert sb["windows"] == 1, sb
+assert abs(sb["freeze_h"] - 1.033125) < 1e-6, sb
+assert abs(sb["t_needed_h"] - 2.855) < 0.01, sb
+assert 2.7 < sb["unrecoverable_pp"] < 3.0, sb         # measured 2.83 pp
+out = ca.fmt_start_by(sb)
+assert out.startswith("⚠ LATE by "), out
+assert "pp already unrecoverable" in out, out
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-22 CONTROL: an account with days of runway returns SLACK — the anti-degeneracy arm" {
+  # Without this, RP-21 is satisfied by a function that returns LATE always, which is exactly the
+  # degeneracy that killed M4 in the other direction. next2's live shape: 83 pp of deficit needs
+  # 432.3 session pp = 6 windows on the 5h grid, 21.41 h of burn + 6.20 h of expected freeze
+  # against 97.2 h left. Note the OPEN window contributes only 0.54 h before it rolls.
+  run python3 -c "$LOAD"'
+r = {"acct": "next2", "weekly_pct": 17, "weekly_reset_h": 97.2,
+     "session_pct": 8, "session_reset_h": 0.54}
+sb = ca.burst_start_by(r, 0.192)
+assert sb is not None, sb
+assert sb["h"] > 60.0, sb                             # measured +69.59
+assert sb["verdict"] == "SLACK", sb
+assert sb["windows"] == 6, sb
+assert sb["unrecoverable_pp"] == 0.0, sb
+assert ca.fmt_start_by(sb) == "start by T−28h (70h slack)", ca.fmt_start_by(sb)
+# ...and the THIRD verdict exists: between the two there is a START SOON band, so the rule is
+# not a two-valued restatement of sign.
+mid = ca.burst_start_by({"acct": "next2", "weekly_pct": 17, "weekly_reset_h": 32.0,
+                         "session_pct": 8, "session_reset_h": 0.54}, 0.192)
+assert mid["verdict"] == "START SOON", mid
+assert 0.0 < mid["h"] <= ca.BURST_SLACK_H, mid
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-23 CONTROL: the freeze term is LIVE, not decorative" {
+  # The mutant a purely arithmetic implementation survives: drop the wall-freeze term and every
+  # other case still passes, because the burn walk alone already orders the accounts correctly.
+  # The executed difference on RP-21's fixture is exactly one window's freeze — 1.033 h, not a
+  # guess — and on that row it is the whole verdict: without it next3 reads +0.39 h, i.e. SAFE.
+  run python3 -c "$LOAD"'
+def shape():
+    return {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+            "session_pct": 13, "session_reset_h": 3.37}
+with_wall = ca.burst_start_by(shape(), 0.192)
+ca.P_WALL = 0.0
+without = ca.burst_start_by(shape(), 0.192)
+ca.P_WALL = 0.625
+assert abs((without["h"] - with_wall["h"]) - 1.033) < 0.01, (with_wall, without)
+assert with_wall["verdict"] == "LATE" and without["verdict"] == "START SOON", (with_wall, without)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-24 CONTROL: no window open ⇒ abstain, and so does an unfitted K" {
+  # A null session stamp means NO WINDOW IS OPEN — a distinct state that must not collapse into
+  # "the open window has 100 pp free", which would understate t_needed by a whole window.
+  # And S4 is the FIRST consumer of K (S1c): when the fit abstains, this abstains with it. The
+  # strand above it deliberately does NOT, because it consumes no exchange rate at all.
+  run python3 -c "$LOAD"'
+base = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+        "session_pct": 13, "session_reset_h": 3.37}
+assert ca.burst_start_by(dict(base, session_pct=None, session_reset_h=None), 0.192) is None
+assert ca.burst_start_by(base, None) is None                       # S1c abstained
+assert ca.burst_start_by(dict(base, weekly_pct=100), 0.192) is None # deficit already closed
+assert ca.burst_start_by(dict(base, weekly_reset_h=0), 0.192) is None
+assert ca.burst_start_by(dict(base, weekly_reset_h=200.0), 0.192) is None
+assert ca.fmt_start_by(None) is None
+# an EXHAUSTED open window is not an absent one: it waits out its own reset before window 2.
+ex = ca.burst_start_by({"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 9.0,
+                        "session_pct": 100, "session_reset_h": 4.0}, 0.192)
+assert ex is not None and ex["windows"] == 1, ex
+assert ex["t_needed_h"] > 4.0, ex                    # the 4 h wait is INSIDE the answer
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}

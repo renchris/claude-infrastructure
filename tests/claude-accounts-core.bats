@@ -1784,7 +1784,7 @@ print("OK")'
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
-@test "router M7 + S3: apply_burn attaches the new weekly keys under their OWN names, in %/h" {
+@test "router M7 + S3 + S4: apply_burn attaches the new weekly keys under their OWN names, in %/h" {
   # RP-27. THE UNIT IS THE HAZARD, and it is why this case exists separately from the assertions
   # on the incumbent keys above. burn_5h_ph is consumed by _su_projected as a FRACTION per hour
   # (su + b * ahead, su in [0,1]), so a %/h value written onto that key saturates the projection
@@ -1814,12 +1814,20 @@ assert "burn_wk_span_h" in r and r["burn_wk_span_h"] > 6.8, r
 assert "wk_strand_pp" in r, r
 assert 0.0 < r["wk_strand_pp"] < 5.0, r           # 40 + 0.583*100 = 98.3 -> ~1.7 pp die
 assert "burn_5h_ewma_ph" not in r, r              # S7 is a LATER wave and was not built here
+# S4 (RP-27b): the PRODUCER half. K is a fleet-level fit computed ONCE and stamped on every row,
+# because pace_line holds no series and cannot re-derive it; the verdict is stamped for the same
+# reason. A constant session_pct means no session movement, so the fit is too thin and FALLS BACK
+# to the frozen constant rather than abstaining — three arms, and this fixture pins the middle one.
+assert r["wk_k_src"] == "frozen" and r["wk_k"] == ca.K_FROZEN, r
+assert "burst_start_by" in r, r
+assert r["burst_start_by"]["verdict"] == "SLACK", r["burst_start_by"]
+assert r["burst_start_by"]["windows"] >= 1, r["burst_start_by"]
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
-@test "router M7 + S3: the weekly-drain block sorts by pp AT RISK, and a zero-strand row still renders" {
+@test "router M7 + S3 + S4: the weekly-drain block sorts by pp AT RISK, names K, and a zero-strand row still renders" {
   # UPDATED IN PLACE (USAGE_TELEMETRY_100P §5.3 RP-25/RP-26/RP-27), not rewritten. This case used
   # to assert `soonest-first` and the bare `needs N%/d` rate. BOTH were the defect:
   #   * soonest-first led with the 5 pp account and TRAILED the pair holding 119.5 pp with four
@@ -1857,6 +1865,33 @@ assert "BEHIND" not in line, line                        # 47ddbf47c DELETED it:
 # an abstention renders as the WORD plus its reason, never as a zero (L2)
 ab = ca.pace_line([row(acct="next2", weekly_pct=13, weekly_reset_h=122.8, burn_wk_span_h=4.1)])
 assert "next2 strand unknown (span 4.1h < 6.8h)" in ab, ab
+# RP-25b — S4 rides the block: the caption names K only once K HAS a consumer, and the start-by
+# verdict rides the STRAND rows only. Extended in place rather than split off, because the thing
+# under test is this one renderer (L3) and a second case over it would be a second opinion about
+# the same string. Rows with no `wk_k_src` stamp are apply_burn-never-ran and say NOTHING about K
+# — which is why every assertion above still holds unchanged.
+assert ca.pace_line([n3, n1, n2, n4]).startswith(
+    "weekly drain — pp that DIE at reset (nowcast"), "unstamped rows invented a K clause"
+n3k = row(acct="next3", weekly_pct=92, weekly_reset_h=2.21, burn_wk_ewma_ph=1.140,
+          wk_k=0.1969, wk_k_src="live", wk_k_sds=1889.0,
+          burst_start_by={"h": -0.65, "verdict": "LATE", "t_needed_h": 2.855,
+                          "freeze_h": 1.033, "windows": 1, "unrecoverable_pp": 2.83})
+n1k = row(acct="next", weekly_pct=52, weekly_reset_h=114.21, burn_wk_ewma_ph=1.725,
+          wk_k=0.1969, wk_k_src="live", wk_k_sds=1889.0,
+          burst_start_by={"h": 99.42, "verdict": "SLACK", "t_needed_h": 14.79,
+                          "freeze_h": 3.10, "windows": 3, "unrecoverable_pp": 0.0})
+k = ca.pace_line([n3k, n1k])
+assert k.startswith("weekly drain — pp that DIE at reset (K=0.197 live · nowcast"), k
+assert "⚠ LATE by 0.7h — 2.8pp already unrecoverable" in k, k
+# ...and it does NOT ride the zero-strand row: `⚠ LATE` beside `no strand` reads as an alarm
+# about an account that is fine. A stub that appends the clause unconditionally fails here.
+assert "next no strand" in k and "T−15h" not in k, k
+# an UNFITTED K says what is lost — the start-by figure — and NOT the strand, which consumes no
+# exchange rate at all (§5.7 S3 Deviation 1 refused to build that gate; §5.4 mock describes it).
+unfit = ca.pace_line([row(acct="next3", weekly_pct=92, weekly_reset_h=2.21,
+                          burn_wk_ewma_ph=1.140, wk_k=None, wk_k_src=None, wk_k_sds=12.0)])
+assert "K unfitted" in unfit and "no start-by figures" in unfit, unfit
+assert "next3 strand ~5pp of 8" in unfit, unfit    # the strand SURVIVES an unfitted K
 # no data ⇒ no block (a drain block over nothing would render at every error state)
 assert ca.pace_line([row(weekly_pct=None), row(weekly_reset_h=None)]) == ""
 print("OK")'

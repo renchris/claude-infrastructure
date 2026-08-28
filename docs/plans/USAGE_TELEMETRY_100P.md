@@ -1610,7 +1610,7 @@ windows/week, carrying the fleet wall rate 1.72% → 2.20%.
 
 ### §5.7 Implementation record — what actually landed, and where it deviated from the spec
 
-Wave 1 = **S1 + S2 + S3 only**. S4–S7 are unbuilt and unchanged; S5 still gates S6.
+Wave 1 = **S1 + S2 + S3**. Wave 2 = **S4**. S5–S7 are unbuilt and unchanged; S5 still gates S6.
 
 #### S1 · data fixes — LANDED
 
@@ -1770,14 +1770,81 @@ nowcaster precisely because it converges as the horizon closes, which is what ma
 forecaster. **S5 (`--strand-score`) is still the prerequisite for S6**, and nothing here
 shortens that.
 
+#### S4 · M4′ `burst_start_by` — LANDED (wave 2)
+
+`bin/claude-accounts`: `burst_start_by(r, K)` + `fmt_start_by(sb)` beside `fmt_burst`, constants
+`BURST_SPPH` / `P_WALL` / `MEAN_WALL_H` / `BURST_SLACK_H` / `BURST_MAX_WINDOWS`; `pace_head(rows)`
+replacing the bare `PACE_HEAD` literal at the block's caption; both attached in `apply_burn` beside
+the M2/M3a stamps. Suite: `tests/claude-accounts-burst.bats` RP-21..RP-24, plus RP-25b and RP-27b
+extending the two `claude-accounts-core.bats` cases **in place**. **6/6 proven RED** against the S3
+binary (`git stash push -- bin/claude-accounts`, run, pop), green after; the four `claude-accounts`
+suites run 133 cases with the same 4 pre-existing environment failures before and after
+(`--relogin-info`, three `--login-status`), i.e. zero regressions attributable to this diff.
+
+**The arithmetic reproduces §5.2's live table exactly** on the two rows it pins with full session
+shapes: next3 `−0.65 → LATE`, freeze 1.033 h, `t_needed` 2.855 h, floor **2.83 pp**; next2
+`+69.59 → SLACK`, 6 windows, burn 21.41 h, freeze 6.20 h. next4 reproduces `+90.91` as well. The
+`next` row differs (+97.89 against the table's +99.42) because the table gives no session shape for
+it and its own numbers imply `session_pct = 0`; the formula is unchanged.
+
+**Deviation 1 — an EXHAUSTED open window now waits out its own reset, which §5.2's pseudocode does
+not.** The published walk puts `t = session_reset_h` only inside the `if avail > 0` branch, so an
+account already at `session_pct = 100` falls through with `t = 0` and opens window 2 *instantly*. A
+window at 100% is DOWN until it resets, so that understates `t_needed` by up to 5 h — on precisely
+the account under the most pressure, which is the one this metric exists for. Neither RP-21 nor
+RP-22 exercises the arm (both have headroom), so it is pinned by its own assertion inside RP-24.
+
+**Deviation 2 — the K caption enters here, and an unfitted K withdraws the START-BY figure, not the
+strand.** §5.4's mock says a null K prints `no strand figures this sweep`; that sentence describes
+the gating **S3 Deviation 1 refused to build**, and building it now would re-introduce a fabricated
+dependency the strand still does not have. The caption reads
+`K unfitted (outside [0.175, 0.21]) — no start-by figures this sweep`, and RP-25b pins that the
+strand rows survive it. `pace_head` also keys on the **presence of the `wk_k` key**, never on its
+value: reading the value collapses *"K abstained"* into *"apply_burn never ran"* and would print the
+S3 caption over a sweep whose start-by figures are all silently missing.
+
+**Deviation 3 — `pace_line` READS the `burst_start_by` stamp rather than computing it**, which is
+the opposite of S3 Deviation 3's rule for the strand, and for the reason that rule actually rests
+on. The strand is recomputed because it consumes nothing `apply_burn` owns; `burst_start_by`
+consumes **K**, and K is a fleet-level fit over the series, which `pace_line` does not hold. So K is
+fitted once in `apply_burn` and stamped (`wk_k` / `wk_k_src` / `wk_k_sds`) along with the per-row
+verdict — the same shape `burst` already uses.
+
+**Deviation 4 — the return is a dict, not the bare float RP-21 sketches.** `h`, `verdict`,
+`t_needed_h`, `freeze_h`, `windows` and `unrecoverable_pp` are six different facts; RP-23 needs
+`freeze_h` to be separately observable to prove the wall term is live at all, and the renderer needs
+`t_needed_h` for the `T−Nh` clause. A float plus a verdict string cannot carry them.
+
+**Deviation 5 — the verdict clause rides the STRAND rows only**, exactly as M5 does. An account with
+nothing to strand has no deficit to start a burst for, and `⚠ LATE` beside `no strand` reads as an
+alarm about an account that is fine. RP-25b pins the negative arm, so a stub that appends the clause
+unconditionally fails.
+
+**A loop bound was added that the spec has no term for.** `BURST_MAX_WINDOWS = 64` bounds the grid
+walk. Inside `K_SANE` a 100 pp deficit needs 6 windows, so the bound is unreachable in every shipped
+path; it exists because `burst_start_by` takes K as an argument and a caller passing a near-zero K
+would otherwise spin. The abstain on `K <= 0` is the real guard; this is the belt.
+
+**What is NOT claimed.** S4 ships **on probation**, as §5.2 requires: `BURST_SPPH = 22.87`,
+`P_WALL = 0.625` and `MEAN_WALL_H = 1.653` rest on n = 8 burst windows, `P_WALL` is a lower bound
+(walls under ~13 min are invisible to the detector), and the threshold is sized on that denominator
+(5 of 8), never the all-windows one (5 of 252). Nothing routes on the verdict — it renders, and that
+is all. **S5 (`--strand-score`) remains the prerequisite for S6** and nothing here shortens it.
+
 #### Acceptance status against §5.4
 
 | command | status |
 |---|---|
-| the bats suites (roll-key · util-tail · strand · burst · core) | **111/111 green**, every case shown RED at the commit before its fix |
+| the bats suites (roll-key · util-tail · strand · burst · core) | wave 1 **111/111 green**; wave 2 **133 cases, 129 green + the 4 pre-existing environment failures that are red before and after** — every new case shown RED at the commit before its fix |
 | `claude-accounts --readout` renders the drain block for all four accounts | **yes** — see above |
 | `claude-accounts --readout \| grep -c 'strand'` → 3 or 4 | **4** |
-| `claude-accounts --strand-score` | **not in this wave** — that flag is S5 |
+| the drain rows answer the goal's **third** question (`by when must it start`) | **yes, from wave 2** — S4 `start by T−Nh` / `⚠ LATE by Nh`. §5.7 S3 Deviation 2 is discharged |
+| `claude-accounts --strand-score` | **still not built** — that flag is S5 |
+
+⚠️ **Wave 2 was built and gated in a cloud container, not on the desk**, so every figure above is
+from the hermetic suites; the LIVE four-account readout in §5.4 has not been re-run against
+`api.anthropic.com` since wave 1. That is the one acceptance line S4 leaves unread, and it needs no
+code — `claude-accounts --readout` on the desk is the whole check.
 
 ⚠️ `bash tests/run.sh …`, named in §5.4, **does not exist in this repo**. The suites are run with
 `bats tests/<name>.bats`; `scripts/ship-land.sh` selects and runs them at the land.
