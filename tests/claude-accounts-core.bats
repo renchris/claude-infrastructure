@@ -1864,6 +1864,89 @@ print("OK")'
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
+@test "router M7 + S4: the drain block names K in its header and answers BY WHEN on strand rows" {
+  # RP-28 (USAGE_TELEMETRY_100P §5.2 S4 / §5.4). S3 shipped two of the goal's three questions —
+  # how much dies, and whether the demand is routine. This is the third: by when must the burst
+  # START. Three things are pinned here that the unit cases cannot reach, because they are
+  # properties of the RENDERER:
+  #   * the header names K WITH its source. `live` and `frozen` are different claims (a trailing
+  #     fit vs the pooled literal standing in), and an unfitted K is a refusal, not a value.
+  #   * the start-by clause REPLACES the `left` suffix on a strand row, and does not join it.
+  #   * a null K does NOT suppress the strand figures. §5.4's mock says it does; that was written
+  #     before S3 established that M3a is pure weekly arithmetic and consumes no K at all. Gating
+  #     the strand on a coefficient it does not use would be a fabricated dependency.
+  run python3 -c "$LOAD"'
+K = 0.192
+n4 = row(acct="next4", weekly_pct=14, weekly_reset_h=119.2, burn_wk_ewma_ph=0.186,
+         session_pct=8, session_reset_h=2.0, exchange_k=K, exchange_k_src="live")
+n3 = row(acct="next3", weekly_pct=92, weekly_reset_h=2.21, burn_wk_ewma_ph=1.140,
+         session_pct=13, session_reset_h=3.37, exchange_k=K, exchange_k_src="live",
+         burst={"pct": 95.6, "h": 3.0, "n": 2576, "need_pph": 3.62, "never": False})
+line = ca.pace_line([n3, n4])
+assert line.startswith("weekly drain — pp that DIE at reset"), line     # the invariant, unchanged
+assert "(K=0.192 live · nowcast at the last 48h of pace):" in line, line
+# next4 has 91 h of slack; next3 is LATE by 0.65 h with 2.83 pp already gone. The pair is the
+# discrimination: a renderer that printed one verdict for both would satisfy either arm alone.
+assert "next4 strand ~64pp of 86 · start by T−28h (91h slack)" in line, line
+assert "next3 strand ~5pp of 8 · p96 of its own 3h burns · ⚠ LATE by 0.6h — 2.8pp already unrecoverable" in line, line
+# the clause REPLACES `left` — a row carrying both says the same thing twice, and §5.2s AFTER
+# block is four facts per row, not five.
+assert "119h left" not in line and "2.2h left" not in line, line
+# CONTROL: an unfitted K states the refusal AND its consequence, and the strand survives it.
+un = ca.pace_line([row(acct="next3", weekly_pct=92, weekly_reset_h=2.21, burn_wk_ewma_ph=1.140,
+                       exchange_k_src="unfitted")])
+assert "K unfitted — no start-by figures this sweep" in un, un
+assert "next3 strand ~5pp of 8" in un, un                  # M3a consumes no K and does not gate
+assert "start by" not in un and "LATE" not in un, un
+assert "2.2h left" in un, un                               # ...and `left` comes back
+# CONTROL: NO stamp at all is a fourth state — apply_burn never ran, which is not a claim about
+# K. It renders the bare header, never the refusal.
+bare = ca.pace_line([row(acct="next3", weekly_pct=92, weekly_reset_h=2.21, burn_wk_ewma_ph=1.140)])
+assert bare.startswith("weekly drain — pp that DIE at reset (nowcast"), bare
+assert "K" not in bare.split(chr(10))[0].replace("DIE", ""), bare
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router M7 + S4: apply_burn fits K once and stamps it, with its source, on every row" {
+  # K is a property of the SERIES, not of a row, so it is fitted in the one place holding both.
+  # The stamp is what lets pace_line render the header without a second exchange_rate call — the
+  # second spelling L3 exists to prevent — and what lets burst_start_by stay row-local.
+  run python3 -c "$LOAD"'
+import json, os
+from datetime import datetime, timedelta, timezone
+now = datetime.now(timezone.utc)
+p = os.path.join(os.environ["BATS_TEST_TMPDIR"], "s4-series.jsonl")
+wra = (now + timedelta(hours=100)).isoformat()
+sra = (now + timedelta(hours=2)).isoformat()
+with open(p, "w") as f:
+    # 24 h at 6 min. session 0->96 while weekly 26->44.4: K = 18.4/96 = 0.1917, inside K_SANE,
+    # and Sds = 96 pp... below K_MIN_SDS on one account, so this fixture also pins the FROZEN
+    # fallback source rather than the live one.
+    for i in range(240, -1, -1):
+        j = 240 - i
+        f.write(json.dumps({"ts": (now - timedelta(minutes=i * 6)).isoformat(), "acct": "next3",
+                            "session_pct": j * 0.4, "weekly_pct": 26 + j * 0.0767,
+                            "session_reset_at": sra, "weekly_reset_at": wra}) + "\n")
+rows = [row(acct="next3", weekly_pct=44, weekly_reset_h=100.0, session_pct=30,
+            session_reset_h=2.0)]
+samples, _span = ca._util_tail(path=p, hours=48.0)
+ca.apply_burn(rows, cfg, samples=samples)
+r = rows[0]
+assert r["exchange_k_src"] == "frozen", r["exchange_k_src"]   # Sds under K_MIN_SDS -> the literal
+assert abs(r["exchange_k"] - ca.K_FROZEN) < 1e-9, r
+assert "burst_start_by_h" in r and "burst_start_verdict" in r, r
+assert r["burst_start_verdict"] == "SLACK", r                 # 100 h to close 56 pp
+assert r["burst_unrecoverable_pp"] == 0.0, r
+# the stamp exists for OTHER consumers; pace_line still COMPUTES (Deviation 3), so a row that
+# apply_burn never touched renders nothing rather than silently rendering a stale verdict.
+assert ca.burst_start_by(r, r["exchange_k"])["h"] == r["burst_start_by_h"], r
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
 @test "--assign CLI: appends one ledger row and never sweeps; unknown account exits 64" {
   local ledger="$BATS_TEST_TMPDIR/assign-cli.jsonl"
   # the fixture endpoint is unreachable — if --assign tried a sweep this would hang/fail loudly

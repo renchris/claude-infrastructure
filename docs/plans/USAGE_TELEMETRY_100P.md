@@ -1610,7 +1610,8 @@ windows/week, carrying the fleet wall rate 1.72% → 2.20%.
 
 ### §5.7 Implementation record — what actually landed, and where it deviated from the spec
 
-Wave 1 = **S1 + S2 + S3 only**. S4–S7 are unbuilt and unchanged; S5 still gates S6.
+Wave 1 = **S1 + S2 + S3 only**. Wave 2 = **S4 only**. S5–S7 are unbuilt and unchanged; S5 still
+gates S6.
 
 #### S1 · data fixes — LANDED
 
@@ -1781,3 +1782,101 @@ shortens that.
 
 ⚠️ `bash tests/run.sh …`, named in §5.4, **does not exist in this repo**. The suites are run with
 `bats tests/<name>.bats`; `scripts/ship-land.sh` selects and runs them at the land.
+
+---
+
+#### S4 · M4′ `burst_start_by` — BUILT + GATE-GREEN, AWAITING LAND (wave 2)
+
+🚨 **Not landed, and the blocker is the CONTAINER, not the diff.** This wave was built in a
+dispatched Linux build container, where `scripts/ship-land.sh --precheck` reds on one arm —
+`unattended-path-lint --selftest`, 11 of 42 assertions — **and it reds identically on a pristine
+`origin/main` worktree in the same container**, which is how it was attributed. The cause is that
+the lint's fixtures are built on macOS-only binaries (`md5` exists only at `/sbin/md5`;
+`networksetup`, `scutil`, `launchctl`, `pmset` are all absent here), so the detector cannot
+discriminate and correctly refuses to issue a clean verdict. Every other precheck arm passes.
+**The land is one `/ship` from the operator's own machine**, where those fixtures resolve; the
+branch is `claude/fire-20260828T113432Z-33521-1`.
+
+`bin/claude-accounts`: `burst_start_by(r, k)` + `fmt_burst_start(bs)` beside `wk_strand_pp`,
+constants `BURST_SPPH` / `P_WALL` / `MEAN_WALL_H` / `BURST_SOON_H` / `BURST_WALK_CAP_H`; K fitted
+once in `apply_burn` and stamped as `exchange_k` / `exchange_k_src`; `PACE_HEAD` split behind a
+`pace_head(k, k_src)` composer. Cases RP-21..RP-24 in `tests/claude-accounts-burst.bats` and two
+renderer cases in `tests/claude-accounts-core.bats` — **6/6 RED** against the S3 binary
+(`git stash push -- bin/claude-accounts`, run, pop), all green after.
+
+**The spec's own live table reproduces exactly** on all three rows whose inputs §5.2 published:
+
+```
+next3  need= 41.67 win=1 burn= 1.82 frz=1.03 t_needed= 2.86  h= -0.65  LATE   floor 2.83pp
+next2  need=432.29 win=6 burn=21.41 frz=6.20 t_needed=27.61  h=+69.59  SLACK
+next4  need=447.92 win=6 burn=22.10 frz=6.20 t_needed=28.29  h=+90.91  SLACK
+```
+
+The fourth row (`next`) is **not reproducible and that is a gap in the spec, not a mismatch** —
+§5.2's table prints its deficit and reset but never its `session_pct` / `session_reset_h`, which
+are two of the walk's four inputs. The shape recovers (freeze 3.10 h at 3 windows) and the exact
+`t_needed` does not. *Generalisable: a published worked example is only a fixture if every input
+it consumed is on the page.*
+
+**Deviation 1 — a null K does NOT suppress the strand figures, and §5.4's mock says it does.**
+That mock predates S3's Deviation 1, which established that M3a is pure weekly-space arithmetic
+and consumes no K at all; the first K consumer is this wave. Gating the strand on a coefficient it
+does not use would be the fabricated dependency S3 already refused, so the refusal is stated with
+the consequence it actually has: `K unfitted — no start-by figures this sweep`, with every
+`strand ~Npp of M` still rendered beside it.
+
+**Deviation 2 — the header has FOUR states, not two.** `K=0.192 live` and `K=0.192 frozen` are
+different claims (a fit on this sweep's own series vs the pooled literal standing in below
+`K_MIN_SDS`), `unfitted` is `exchange_rate` refusing outside `K_SANE`, and **no stamp at all** is
+`apply_burn` never having run — which is not a claim about K and renders the bare header. Collapsing
+the fourth into the third would have made every unit-test call of `pace_line` assert a refusal the
+code never made.
+
+**Deviation 3 — the return is a dict, for the reason S2's was.** §5.3 RP-21 sketches
+`burst_start_by(row, K)` as a scalar with the verdict alongside; `h`, the verdict, the floor and
+the window count are four different facts and a float carries one. Same shape as `burst_percentile`.
+
+**Deviation 4 — the start-by clause REPLACES the `left` suffix, it does not join it.** §5.4's
+AFTER block is four facts per row and `T−28h (91h slack)` already locates the deadline; a row
+carrying both says the same thing twice. Rows with no start-by clause (abstained, or zero strand)
+keep `left` unchanged, which is what leaves the existing RP-25/RP-26 assertions intact.
+
+**Deviation 5 — `BURST_WALK_CAP_H` is a rail the spec does not name.** Inside `K_SANE`,
+`need_spp ≤ 100/0.175 = 571` pp, i.e. at most 6 windows, so the cap is unreachable from anything
+`exchange_rate` can return. It exists so a caller passing a tiny K gets a LATE verdict instead of a
+hang — the walk's loop is bounded by `rem`, and `rem` is bounded by K.
+
+**The `START SOON` band got a rendering, and it needed a test of its own.** §5.2 names three
+verdicts; §5.4's mock shows only two. RP-22 pins the middle one in the same case that pins SLACK,
+because a band rendered nowhere collapses to a binary and the whole point of a start TIME is the
+window between "fine" and "too late".
+
+**RP-23 is the mutant case and it is the one that matters.** A purely arithmetic implementation
+that drops the freeze survives every other assertion here: the verdicts all still look plausible.
+Setting `P_WALL = 0` must move next3 by exactly one window's expected freeze (1 × 0.625 × 1.653 =
+1.033 h) **and flip its verdict off LATE**, because the freeze is the entire reason that account is
+late. Both arms are asserted; so is the floor moving with it, which pins that the floor reads the
+same freeze term rather than a second constant.
+
+**What is NOT claimed.** Still no lead time anywhere — S4 is a deadline computed from the current
+row, not a forecast of it. The constants remain on probation at n = 8 burst windows, per §5.2's own
+🚨. **S5 (`--strand-score`) is still the prerequisite for S6** and nothing here shortens that.
+
+#### Acceptance status against §5.4 — after wave 2
+
+| command | status |
+|---|---|
+| the bats suites (roll-key · util-tail · strand · burst · core) | **117/121 green** — the 4 reds are PRE-EXISTING and not this diff's (below) |
+| every new case shown RED at the commit before its fix | **6/6** — RP-21..RP-24 + the two renderer cases |
+| `claude-accounts --readout` renders the start-by clause | **not verifiable in the build container** — no keychain, no accounts; the renderer is covered by the RP-28 case against `pace_line` directly |
+| `claude-accounts --strand-score` | **not in this wave** — that flag is S5 |
+
+⚠️ **Four `claude-accounts-core.bats` reds and one `claude-accounts.bats` red are PRE-EXISTING**,
+reproduced on a pristine `origin/main` checkout before this diff was written: core #30
+(`--relogin-info`), #59/#60/#61 (`--login-status`, one of them failing with
+`OSError: [Errno 7] Argument list too long`), and claude-accounts #6 (`e2e --json`: a logged-out
+account). They are environment shape — a Linux build container against a macOS-keychain surface —
+not this change's, and driving them would be an infinite loop wearing diligence's clothes. Named
+here so the next session does not re-derive them. `scripts/bats-shellcheck-lint.sh` also reports
+`shellcheck not installed` on a bare container; installed from `shellcheck-py` (the GitHub release
+tarball the npm package fetches is 403 through the agent proxy) before the lint was run clean.

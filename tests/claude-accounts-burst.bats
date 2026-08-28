@@ -152,3 +152,109 @@ print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
+
+# ---------------------------------------------------------------------------------------------
+# S4 · M4′ · burst_start_by — USAGE_TELEMETRY_100P §5.2 S4, RED-proof cases RP-21..RP-24.
+#
+# WHAT M4′ IS FOR, AND WHY M4 WAS DELETED. All 8 measured burst windows delivered 13-20 weekly pp
+# whether or not they walled, so the loss is not capacity INSIDE the window — it is the frozen
+# tail plus the 5h grid. The synthesis's M4 asked a CAPACITY question (`wk_reach_pp`), which is
+# nearly algebraically fixed: on next3's live shape it read `16.9 pp reach vs 8 needed —
+# REACHABLE, 2.1× margin`, on the account that in fact stranded. M4′ asks a
+# rate-and-freeze-against-the-clock question, which can come out either way. RP-21 and RP-22 are
+# the pair that pins it: a function returning LATE always passes RP-21 and fails RP-22, which is
+# exactly the degeneracy that killed M4.
+#
+# The fixtures are the live shapes measured at 2026-08-25T09:47:41Z with K = 0.192.
+
+@test "RP-21: burst_start_by returns LATE for next3's live shape, with the unrecoverable floor" {
+  run python3 -c "$LOAD"'
+r = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+     "session_pct": 13, "session_reset_h": 3.37}
+bs = ca.burst_start_by(r, 0.192)
+assert bs is not None, bs
+assert bs["verdict"] == "LATE", bs
+assert -1.0 < bs["h"] < 0.0, bs                       # measured -0.65
+assert abs(bs["h"] - (-0.6449)) < 0.01, bs
+assert bs["windows"] == 1, bs                         # 41.7 session pp fits the open window
+assert abs(bs["t_needed"] - 2.855) < 0.01, bs         # 1.822 h burn + 1.033 h expected freeze
+# THE FLOOR, computed as §5.2 states it: freeze 1.033 h of the 2.21 h remaining leaves 1.177 h of
+# usable burn = K x BURST_SPPH x 1.177 = 5.17 weekly pp of the 8 needed, so 2.83 pp cannot be
+# saved even by a perfect burst starting this instant.
+assert abs(bs["unrecoverable_pp"] - 2.832) < 0.01, bs
+assert ca.fmt_burst_start(bs) == "⚠ LATE by 0.6h — 2.8pp already unrecoverable", ca.fmt_burst_start(bs)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-22 CONTROL: an account with days of runway returns SLACK — not LATE always" {
+  # Without this arm RP-21 is satisfied by `return LATE`, which is the degeneracy that killed M4.
+  run python3 -c "$LOAD"'
+r = {"acct": "next2", "weekly_pct": 17, "weekly_reset_h": 97.2,
+     "session_pct": 8, "session_reset_h": 0.54}
+bs = ca.burst_start_by(r, 0.192)
+assert bs is not None, bs
+assert bs["verdict"] == "SLACK", bs
+assert bs["h"] > 60.0, bs                             # measured +69.59
+assert abs(bs["h"] - 69.589) < 0.02, bs
+assert bs["windows"] == 6, bs                         # 432.3 session pp needs six 5h windows
+assert bs["unrecoverable_pp"] == 0.0, bs              # nothing is lost yet
+assert ca.fmt_burst_start(bs) == "start by T−28h (70h slack)", ca.fmt_burst_start(bs)
+# ...and the THIRD verdict exists: slack inside the 12 h band is START SOON, not SLACK. Without
+# this the band collapses to a binary and the whole point of a start TIME is lost.
+soon = ca.burst_start_by({"acct": "next2", "weekly_pct": 17, "weekly_reset_h": 33.0,
+                          "session_pct": 8, "session_reset_h": 0.54}, 0.192)
+assert soon["verdict"] == "START SOON", soon
+assert 0 < soon["h"] <= 12.0, soon
+assert ca.fmt_burst_start(soon).startswith("⚠ START SOON — start by T−28h ("), ca.fmt_burst_start(soon)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-23 CONTROL: the wall-freeze term is LIVE, not decorative" {
+  # The mutant a purely arithmetic implementation survives: drop the freeze and every verdict
+  # still looks plausible. Setting P_WALL to 0 must move next3 by exactly one window's expected
+  # freeze -- 1 x 0.625 x 1.653 = 1.033 h -- and must flip the verdict off LATE, because the
+  # freeze is the entire reason that account is late.
+  run python3 -c "$LOAD"'
+r = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+     "session_pct": 13, "session_reset_h": 3.37}
+with_wall = ca.burst_start_by(r, 0.192)
+ca.P_WALL = 0.0
+without = ca.burst_start_by(r, 0.192)
+assert abs((without["h"] - with_wall["h"]) - 1.033) < 0.01, (with_wall, without)
+assert with_wall["verdict"] == "LATE" and without["verdict"] == "START SOON", (with_wall, without)
+assert without["freeze_h"] == 0.0, without
+# the floor moves with it too — it is the same freeze term, not a second constant
+assert without["unrecoverable_pp"] == 0.0, without
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-24 CONTROL: no window open ⇒ abstain, and a null K abstains rather than fabricating" {
+  # A null session stamp means NO WINDOW IS OPEN — a distinct state that must not collapse to
+  # `session_pct = 0`, which would hand the walk a free full window it does not have. 15.0% of
+  # series rows carry it. And a null K is S1c refusing: every session→weekly conversion below
+  # would be a fabricated number, so the metric says nothing rather than something.
+  run python3 -c "$LOAD"'
+base = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+        "session_pct": 13, "session_reset_h": 3.37}
+assert ca.burst_start_by(dict(base, session_pct=None, session_reset_h=None), 0.192) is None
+assert ca.burst_start_by(dict(base, session_reset_h=None), 0.192) is None
+assert ca.burst_start_by(base, None) is None                    # S1c abstained
+assert ca.burst_start_by(base, 0.0) is None
+assert ca.burst_start_by(dict(base, weekly_pct=100), 0.192) is None   # nothing left to start for
+assert ca.burst_start_by(dict(base, weekly_reset_h=0.0), 0.192) is None
+assert ca.burst_start_by(dict(base, weekly_reset_h=200.0), 0.192) is None
+assert ca.fmt_burst_start(None) is None
+# ...and a `session_pct = 0` row is NOT the same abstain — an OPEN and empty window is a real
+# state with a real full window in it. Collapsing the two is the defect this case pins.
+open_empty = ca.burst_start_by(dict(base, session_pct=0), 0.192)
+assert open_empty is not None and open_empty["windows"] == 1, open_empty
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
