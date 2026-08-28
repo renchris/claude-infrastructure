@@ -150,3 +150,82 @@ guard_json() {  # $1 = command string → the hook's stdin payload. Paths here c
     [[ "$output" == *"lsof is not resolvable"* ]] || { echo "wrong refusal for CC_WTG_LSOF=[$v]: $output"; false; }
   done
 }
+
+# --- the two membership tests, drained 2026-08-28 (recycle #252) -----------------------------
+# Both were `printf '%s\n' "$var" | grep -q…`, whose consumer exits at the FIRST match: the
+# producer then takes EPIPE, `set -o pipefail` (:17) promotes that over grep's own 0, and the `if`
+# reads FALSE ON A TRUE MATCH. In THIS file both inversions are fail-OPEN in a PreToolUse safety
+# refusal — :52 force-deletes a branch that has a worktree, :115 lets a live worktree be removed.
+#
+# WHY 120,000 B AND NOT SOME OTHER NUMBER: measured 2026-08-28 at load ~20-27, needle on line 1 —
+# this spelling is correct 20/20 at 4,000 B and 0/20 at 120,000 B, so a fixture at 120,000 B fails
+# EVERY run against the old spelling rather than one run in twenty. Sizing a behavioural fixture
+# from the measured regime is what makes it deterministic (memory: control-fixture-must-reach-the
+# -bugs-regime). The REAL feeds are small — `git worktree list` 7,585 B, the lsof cwd list 3,580 B,
+# both measured 0 inversions in 1,000 trials — so these arms pin the SHAPE, not today's exposure.
+
+# Build an `lsof -Fn` payload of at least $2 bytes; $1, when non-empty, is placed on the FIRST line
+# (the worst case: the earlier the needle, the sooner the consumer closes the pipe).
+mk_cwd_payload() {  # $1=needle-path-or-empty  $2=bytes  $3=outfile
+  { [ -n "$1" ] && printf 'n%s\n' "$1"
+    awk -v want="$2" 'BEGIN{n=0; while(n<want){p=sprintf("n/Users/x/pad/path-%06d",n); print p; n+=length(p)+1}}'
+  } > "$3"
+}
+
+# A stub lsof: the cwd leg (-Fn) gets the oversized payload, every other call answers nothing, so
+# the SECOND liveness leg cannot rescue the verdict and the arm reads the FIRST leg alone.
+mk_lsof_stub() {  # $1=outfile
+  cat > "$1" <<'STUB'
+#!/bin/bash
+case "$*" in
+  *-Fn*) cat "$CC_WTG_STUB_PAYLOAD" ;;
+  *)     exit 1 ;;
+esac
+STUB
+  chmod +x "$1"
+}
+
+@test "MECHANISM: a cwd list past the measured SIGPIPE floor still BLOCKS a live worktree" {
+  cd "$REPO"
+  spawn_live_probe "$TDIR/wt-held"
+  local wtabs stub payload
+  wtabs="$(cd "$TDIR/wt-held" && pwd -P)"
+  stub="$BATS_TEST_TMPDIR/lsof-stub"; payload="$BATS_TEST_TMPDIR/cwds-pos"
+  mk_lsof_stub "$stub"
+  mk_cwd_payload "$wtabs" 120000 "$payload"
+  [ "$(wc -c < "$payload")" -ge 120000 ] || { echo "payload too small to reach the measured regime"; false; }
+  run env CC_WTG_LSOF="$stub" CC_WTG_STUB_PAYLOAD="$payload" \
+      bash -c "$(declare -f guard_json); guard_json 'git worktree remove $TDIR/wt-held' | bash '$GUARD'"
+  [ "$status" -eq 2 ] || { echo "exited $status, expected 2 — the cwd leg lost a TRUE match at $(wc -c < "$payload") B"; false; }
+  true
+}
+
+@test "NEG CONTROL: an oversized cwd list NOT naming the path must still pass (no blanket block)" {
+  # Without this the arm above could pass by blocking unconditionally. Deliberately GREEN in both
+  # states — it pins the other direction, and says so rather than reading as a second red.
+  cd "$REPO"
+  spawn_live_probe "$TDIR/wt-held"
+  local stub payload
+  stub="$BATS_TEST_TMPDIR/lsof-stub"; payload="$BATS_TEST_TMPDIR/cwds-neg"
+  mk_lsof_stub "$stub"
+  mk_cwd_payload "" 120000 "$payload"
+  run env CC_WTG_LSOF="$stub" CC_WTG_STUB_PAYLOAD="$payload" \
+      bash -c "$(declare -f guard_json); guard_json 'git worktree remove $TDIR/wt-idle-nonexistent' | bash '$GUARD'"
+  [ "$status" -eq 0 ] || { echo "exited $status, expected 0 — a non-member must not be blocked"; false; }
+  true
+}
+
+@test "CLASS: the repo's own detector reports no early-exit pipe consumer in this hook" {
+  # Keyed on the DETECTOR's predicate, not on my spelling, so it survives any rewording of the cure
+  # (memory: control-calibrated-to-implementation-decays). Its POS control runs FIRST: a mute
+  # detector would otherwise pass this arm vacuously with a table of zeros.
+  local lint="$BATS_TEST_DIRNAME/../scripts/pipefail-sigpipe-lint.sh"
+  [ -f "$lint" ] || { echo "detector missing at $lint"; false; }
+  run bash "$lint" --census
+  [ "$status" -eq 0 ] || { echo "--census exited $status"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c ':')" -ge 50 ] \
+    || { echo "--census reported $(printf '%s\n' "$output" | grep -c ':') rows repo-wide — it is mute here, so this arm proves nothing"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c '^hooks/git-worktree-guard\.sh:')" -eq 0 ] \
+    || { echo "detector still names $(printf '%s\n' "$output" | grep -c '^hooks/git-worktree-guard\.sh:') site(s) in this hook"; false; }
+  true
+}

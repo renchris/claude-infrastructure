@@ -49,10 +49,19 @@ if printf '%s' "$ncmd" | grep -qE 'git branch([[:space:]]|.)*-(d|D|-delete)'; th
   if [ -n "$crepo" ]; then wtlist="$(git -C "$crepo" worktree list 2>/dev/null)"; else wtlist="$(git worktree list 2>/dev/null)"; fi
   for tok in $(printf '%s' "$ncmd" | sed -E 's/.*git branch//' | tr ' ' '\n' | grep -vE '^-'); do
     [ -n "$tok" ] || continue
-    if printf '%s\n' "$wtlist" | grep -qF "[$tok]"; then
+    # MEMBERSHIP BY `case`, NOT `printf | grep -qF`. `grep -q` exits at the FIRST match, the
+    # producer then takes EPIPE, `set -o pipefail` (:17) promotes that over grep's own 0, and the
+    # `if` reads FALSE ON A TRUE MATCH — here that force-deletes a branch that HAS a worktree,
+    # i.e. fail-OPEN in the exact refusal this file exists to make. Measured 2026-08-28, needle on
+    # line 1, load ~20-27: this spelling is correct 20/20 at 4,000 B and 0/20 at 120,000 B.
+    # The feed is `git worktree list`, measured 7,585 B over 72 worktrees (~105 B each) and 0
+    # inversions in 1,000 trials AT THAT SIZE — so today it is latent ON EVIDENCE, not by
+    # extrapolation. It is also the one feed this box manufactures: one row per worktree.
+    case "$wtlist" in
+      *"[$tok]"*)
       echo "git-worktree-guard: BLOCKED 'git branch -D $tok' — branch '$tok' has a checked-out worktree. Branches with worktrees are NEVER force-deleted (a live Claude session may depend on it; the worktree-gc janitor preserves branches by design — a vanished worktree must stay recoverable via its branch). If the worktree is genuinely idle, reap it with 'bash scripts/worktree-gc.sh --prune' (it gates on live-claude-cwd/lsof/idle>30m and KEEPS the branch). If it is idle but UNLANDED, --prune will keep it by design; land the branch, or record the abandon decision explicitly with 'bash scripts/worktree-gc.sh --warrant <path> --reason \"<why>\"' then '--dispose-abandoned' (that removes the DIRECTORY only — the branch still preserves every commit)." >&2
-      exit 2
-    fi
+        exit 2 ;;
+    esac
   done
 fi
 
@@ -111,8 +120,19 @@ if printf '%s' "$ncmd" | grep -qE 'git worktree remove([[:space:]]|$)'; then
   # live session often does not satisfy. A worktree removal could proceed under active work.
   if [ -n "$cpids" ]; then
     _cwds="$("$LSOF" -a -p "$cpids" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' || true)"
-    # printf of a captured variable is ONE write — the safe producer shape (measured 0/200 at 4 KiB).
-    if printf '%s\n' "$_cwds" | grep -qxF "$wtabs"; then live=1; fi
+    # WAS: `printf '%s\n' "$_cwds" | grep -qxF "$wtabs"`, cleared by the comment "printf of a
+    # captured variable is ONE write — the safe producer shape (measured 0/200 at 4 KiB)". The
+    # measurement reproduces (0/1,000 at 3,601 B on 2026-08-28) and the word it does not license is
+    # SHAPE: one write larger than the 64 KiB pipe buffer is still delivered in pieces, and the SAME
+    # spelling on the SAME producer reads FALSE ON A TRUE MATCH 20/20 at 120,000 B. A point
+    # measurement inside the safe band is a fact about this FEED, never about this SHAPE.
+    # AND THE BAND'S OWN EDGE IS A PROPERTY OF THE TRIAL COUNT: the published curve (SAFE 37,121 B,
+    # first raciness 1/20 at 55,721 B) was taken at 20 trials per size, and 0 events in 20 trials
+    # bounds a rate at ~15%, not at 0. At 1,000-1,200 trials the first inversion appears at
+    # 32,000 B — BELOW that published SAFE figure — at about 0.17%.
+    # The real feed here (lsof -d cwd over `pgrep -f claude`) measured 3,580 B / 104 rows with 0
+    # inversions in 1,000 trials, so this site is latent ON EVIDENCE. `case` removes the question.
+    case $'\n'"$_cwds"$'\n' in *$'\n'"$wtabs"$'\n'*) live=1 ;; esac
   fi
   if [ "$live" = "0" ] && "$LSOF" -- "$wtabs" 2>/dev/null | grep . >/dev/null; then live=1; fi
   if [ "$live" = "1" ]; then

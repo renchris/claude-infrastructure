@@ -18,7 +18,6 @@ hooks/agent-teams-enforce.sh	2
 hooks/anti-deference-nudge.sh	8
 hooks/coldcompile-admit.sh	1
 hooks/completion-assert.sh	5
-hooks/git-worktree-guard.sh	2
 hooks/hook-chain.sh	1
 hooks/lead-crash-watchdog.sh	6
 hooks/plan-agent-teams-default.sh	1
