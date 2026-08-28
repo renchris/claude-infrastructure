@@ -134,6 +134,30 @@ Two smaller follow-ons, both filed rather than done here:
 * The 339 existing allow entries have never been audited against the auto-mode drop list;
   `cc-permission-audit --prune` already exists to find provably-dead ones.
 
+  **RESOLVED as a capability, 2026-08-28 (backlog `78b76e1a8311`) — the audit is now one
+  command. Two things had made it impossible rather than merely undone, and neither is the one
+  this bullet names.** (1) 🚨 **`--prune` could not reach the file this bullet is about.**
+  Discovery matched `settings.local.json` only, and `permission-settings-store-2026-08-20.md`
+  §1a measured that **no `settings.local.json` exists in any config dir on this box** — so a
+  bare `cc-permission-audit --prune` printed a scope that structurally excluded
+  `~/.claude/settings.json` and read as an all-clear over a list it had never opened.
+  Discovery now takes both filenames across every `.claude*` dir, putting all five stores in
+  scope; *rewriting* a non-`.local` file still requires naming its path, so widening what is
+  REPORTED did not widen what a bare `CONFIRM=1` run MUTATES. (2) **No code implemented the
+  drop predicate** — `--prune` knew only REDUNDANCY. It now also emits an `AUTO-MODE DROP LIST`
+  section transcribing `gsn`/`_sn`/`iSd`/`nSd`/`PHs` from
+  `permission-matcher-truth-2026-08-20.md`, report-only and never removed (an auto-dropped rule
+  is restored on leaving auto mode, so it is dead *weight*, not a dead *entry*).
+
+  **In-repo half of the audit, done:** all 52 approved patterns across
+  `.claude/settings.json`, `settings-templates/settings.example.json` and the robobun
+  repo-rails template are clean on **both** axes — 0 redundant, 0 inert. The template seeds
+  nothing dead into a fresh config dir.
+
+  **Still owed: the RESULT for the 339.** That half reads the operator's live
+  `~/.claude*/settings.json`, which no cloud session can open; the count of the 339 that cannot
+  fire is whatever `cc-permission-audit --prune` prints on his box.
+
 ## Deployment note
 
 Hooks reach all five accounts by per-file symlink into this checkout, and CC 2.1.220 ships a
