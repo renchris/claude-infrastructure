@@ -25887,6 +25887,28 @@ first deliverable; forensics agent for this axis died mid-run and is being re-ru
   trunk-red row 11d3a3cd8507); the 3 dispatcher-refused worktrees (rebase or retire).
 - R2.3 Close each recovered branch's re-land row(s) with the landed sha as evidence.
 
+**§3 CURRENCY VERDICTS — 2026-08-28, sourced from THIS PLAN'S OWN §2.1 (worklist audit, Lane A VM).**
+Nothing below is a new measurement; each row cites the §2.1 entry that already settled it. The
+worklist carried no status at all, so every reader of §3 has been re-deriving twelve days of
+finished work out of a 25k-line log. R1/R2 are **COMPLETE except R1.4 and R1.5**:
+
+| | Verdict | Evidence in §2.1 |
+|---|---|---|
+| R1.1 | ✅ **RAN** — reap executed, 0 reopened. `1d25b0e07668` is venue=cloud, so this box's oracles correctly decline it; it lapses on lease TTL rather than being reaped. | 2026-08-16 "W-R1 lead ops done" |
+| R1.2 | ✅ **DRAINED** — blocked re-land rows **30 → 2** (neither belonging to the recovery wave). | 2026-08-17 ~07:45Z "W-R2 COMPLETE" |
+| R1.3 | ✅ **ADJUDICATED, and the item's own premise was refuted** — b59eb997d035 was NOT reopened: the test case is not "gone", it lives rewritten at `tests/test-hermeticity-lint.bats:151` citing the row. Re-asserted done with corrected evidence; the substance stood and only the prose was false. | 2026-08-16 "W-R1 lead ops done" |
+| R1.4 | ⚠️ **HALF DONE** — the gate it asked to file LANDED as C4/C3 (`672f34757`, below). The 27-row audit itself has **no verdict anywhere in §2.1**; treat it as open. |  — |
+| R1.5 | ❌ **NOT ACHIEVED, AND IT REGRESSED** — this line's target was 123 ungrouped against a W2 floor of 50. §2.1's own later replay reads **ungrouped 133 → 132** (2026-08-22, as-of-pinned at 05:10:00Z / 05:23:37Z). Grouping did not hold. | 2026-08-22 as-of replay |
+| R2.1 | ✅ **ENUMERATED** — 543 `refs/land/failed` pins → 333 landed-by-content · 131 REAL-UNLANDED collapsing to 7 fire branches · 79 ambiguous. | 2026-08-16 "stranded-work enumeration complete" |
+| R2.2 | ✅ **RESOLVED** — the uniform `SIGTERM-143` land killer was cc-reaper's orphan-bash garbage arm, fixed and LIVE (`a87f32c66`), confirmed at 39× enrichment plus a fixture repro. | 2026-08-16 ~20:30Z · 2026-08-17 ~07:45Z |
+| R2.3 | ✅ **COMPLETE, ZERO LOSS** — **12/12 stranded branches resolved**: 9 landed (`1817ca740` `b4d0a3d0f` `f81808f5b` `896973916` `764f96963` `c037c1aa1` `73ceb76aa` `dbaba83ac` `76d5dc100`), 3 retired-by-content with evidence; all 12 shas verified ancestors by the lead. | 2026-08-17 ~07:45Z "W-R2 COMPLETE" |
+
+⚠️ **R2's completion does NOT generalise to the branch population that exists today, and reading it
+that way is the trap.** W-R2 closed the 12 branches that existed on 2026-08-16. §2.1's freshest
+measurement (2026-08-27, recycle #248) counts **229 genuinely stranded commits across 164
+`origin/claude/fire-*` branches**, accruing **+3 / +39 / +50 / +68** on Aug 23-26 — accelerating.
+That is a live generator, not R2's residue, and it belongs to the cloud lane's one-wayness below.
+
 ## §4 Pipeline architecture (W-P1)
 
 **Lane A — Claude Cloud, 24/7, for the off-box-eligible slice (~8-14% + backfill).**
@@ -26306,13 +26328,59 @@ Brief body invariants (regenerate the specifics each recycle; never drop these):
   ship-land.sh (`git checkout $BRANCH && bash scripts/ship-land.sh`); make the retry command
   invoke TRUNK's ship-land against the branch so aa1886a5e's brake + 40613b786's rc-5 screen
   actually govern retries of old branches.
+  ✅ **LANDED** `46a86deb7` (§2.1, 2026-08-16 ~20:30Z), re-verified BY CONTENT on `origin/main`
+  2026-08-28: `scripts/ship-land.sh:953` composes the retry as a detached `origin/main` worktree and
+  runs `bash "$_tw/scripts/ship-land.sh"`, with the rationale landed beside it at `:917-951` —
+  including why the two obvious alternatives (extract-to-temp, checkout-into-tree) were rejected.
 - C2 find-plan.sh plan_status(): read the status LOG/body, not frontmatter alone — kills the
   4-day "advance a finished plan" re-mint class.
+  🚨 **LANDED — BUT NOT BY THIS PRESCRIPTION, AND THE PRESCRIPTION WAS DELIBERATELY REJECTED. DO NOT
+  IMPLEMENT C2 AS WRITTEN.** The re-mint class is closed by a PRE-MINT FALSIFIER SCREEN, not by a
+  body-reading `plan_status()`: `944abba49` (§2.1, 2026-08-16 ~20:30Z), re-verified by content on
+  `origin/main` 2026-08-28 at `bin/cc-discover:268` — cc-discover runs `plan-phase-scan.sh <path>
+  --falsify` before `add_candidate` and skips only on the affirmative token `FALSIFIED`, failing OPEN
+  on every other answer. `bin/cc-discover:255-261` states the reasoning this line contradicts: three
+  copies of `plan_status()` already exist and the third disagrees with the other two, so a new
+  body-reader would be a **fourth** answer to *"is this plan finished"* — while `--falsify` is a
+  strict superset of the frontmatter read (clause (a) IS the status word; clause (b) adds the plan's
+  remaining sections). Building C2's text now would add the reader that file argues against.
+  ⚠️ **`plan_status()` IS still frontmatter-only** (`scripts/find-plan.sh:43-58`) and that is
+  deliberate; both consumers are covered by other arms. `--list-open` only PROPOSES (cc-discover
+  screens it at mint), and cc-dispatch's stale-premise guard (`bin/cc-dispatch:1848-1917`) is a
+  fail-OPEN *retraction* pre-screen whose fourth conjunct — premise currency — is explicitly
+  delegated rather than re-implemented: `cc-backlog claim` runs cc-premise and refuses with
+  `verdict=premise-refuted` (`bin/cc-dispatch:1217-1219`). The stored falsifier, never the status
+  word, is what actually adjudicates a plan-open row.
 - C3 done-with-evidence: `cc-backlog done` warns (then refuses, ratcheted) on empty
   --evidence.
+  ✅ **LANDED — phase 1 of the sequence this item itself names** `672f34757` (§2.1, 2026-08-16
+  ~20:30Z), re-verified by content on `origin/main` 2026-08-28: `bin/cc-backlog:2617-2623` prints
+  `verdict=done-without-evidence` on line 1 and the transition stays durable.
+  ⚠️ The "then refuses, ratcheted" half is **not a diff and must not be filed as one**.
+  `bin/cc-backlog:2600-2612` records the asymmetry deliberately — the fleet's unattended closers
+  (ship-land's auto-retraction, `reap`'s dead-worker returns, cloud-return's auto-land) would strand
+  MID-RECOVERY on a refusal — and fixes the ordering: warn now, ratchet on the counter, refuse only
+  once the rate is provably at zero. That last step is a live-store measurement.
 - C4 premise-pass repair: it has validated 0 rows ever (420s rc-124 + `unparsed` on the one
   completing run). Fix the bound to fit the Background band it runs in (bound-fits-the-band)
   and the --json parse; prove ≥1 production pass that RECORDS validations.
+  ✅ **LANDED, WITH ITS PRODUCTION PROOF ALREADY ON THE RECORD.** §2.1 (2026-08-16 ~20:30Z) reports
+  the first non-zero pass in the mechanism's production history — `premise_rows_validated:138,
+  closed:5` — and **refutes the brief's own root cause**: the pass runs at UTILITY, and `unparsed`
+  was `_die_open` exiting 0 with `verdict=unknown` on stdout, not a parse bug in the caller.
+  Re-verified by content on `origin/main` 2026-08-28: the bound is `CC_PREMISE_PASS_BOUND_S:-1500` on
+  its own 6 h cadence (`scripts/autonomy-sweep.sh:754,813` — it was 420 s inside a 300 s sweep, which
+  is the band mismatch this item named); the fail-open channel now speaks the caller's language
+  (`bin/cc-premise:424`, `:2661`); and the pass has an exit for rows a probe proves dead
+  (`premise_rows_closed`), which before had none — falsified refused every claim and nothing closed
+  them.
+
+**⇒ ALL FOUR INFLOW FIXES ARE LANDED.** §1.3 named inflow as the reason the drain lost 4 days out of
+5, and C1-C4 were its whole answer; a reader of this list has had no way to see that since
+2026-08-16. What §1.3 measured is therefore **due for re-measurement, not for re-fixing** — the
+question "does the backlog now trend DOWN week over week" is the frozen scope's actual exit
+condition and no entry in §2.1 answers it. That re-measurement needs the live ledger and is
+local-only.
 
 ## §5 Verification before mass fire (W-P1 exit gate)
 
@@ -26321,6 +26389,66 @@ Brief body invariants (regenerate the specifics each recycle; never drop these):
    recycle fires itself, goal re-armed, verified in the fired transcript). 3. Freshness probe:
    one stale row auto-closed by falsifier-retraction at claim. 4. Conservation visible: the
    recycle's close prints filed/closed. Only then W-P2.
+
+🚨 **THE "ALL FOUR §5 GATES NOW HOLD" LINE IN §2.1 IS AN OVER-CLAIM, AND IT IS §1.1's DEFECT WEARING
+A DIFFERENT NUMBER.** §2.1 (2026-08-17 ~07:45Z) asserts *"two unattended boundaries = §5 gate (2)
+PROVEN; **all four §5 gates now hold**"*. Gates 2, 3 and 4 do hold — but **gate 1 has never once
+been met, and this plan's own later text says so in as many words.** The generalisation from one
+proven gate to all four is exactly what §1.1 is about: a partial pass read as program completion.
+
+| Gate | Verdict 2026-08-28 | What settles it, in this plan |
+|---|---|---|
+| **1. Cloud probe** — one real row through Lane A end-to-end (ref pushed, landed by content, row closed) | ❌ **NOT MET, and not close** | §4's A2 forensics: *"The lane has never once done this … Until this probe passes, cloud is a paper lane."* The one row that DID close on 2026-08-17 closed by the **local** half — `cloud-return` abstained on HTTP 401, `cloud-reconcile` hit a conflict in this very plan doc, and the row was closed on evidence *"re-derived HERE, independent of the VM's report"*. That is the local lane rescuing a cloud row, which is the opposite of what gate 1 asks. Freshest read (§2.1, 2026-08-27, recycle #248): `cloud-return.sh` lifetime **2,206 rows at a 6.6% return rate**, **229 stranded commits across 164 branches**, accrual accelerating. |
+| **2. Local probe** — one recycle boundary crossed unattended | ✅ **MET, ~253 times over** | #10→#11→#12 unattended (§2.1, 2026-08-17); the chain has since reached **#254** (§2.1, 2026-08-28). |
+| **3. Freshness probe** — one stale row auto-closed by falsifier-retraction at claim | ✅ **MET** | premise pass `closed:5` (§2.1, 2026-08-16 ~20:30Z); the retraction path is landed at `bin/cc-dispatch:1907-1916`, closing with `--evidence "premise-retracted: …"`. |
+| **4. Conservation visible** | ✅ **MET and routine** | every recycle close prints its filed/closed tally — #254's reads *"ZERO rows closed by me, ZERO filed, ZERO reopened"*. |
+
+⚠️ **GATE 1 IS BLOCKED ON A NAMED OPERATOR STEP, NOT ON CODE — do not fire a wave at it.** Row
+`8636b8f829fe`: account `next`'s OAuth **ACCESS** token is expired, and `cc-relogin next` refuses
+for a principled reason (that account holds a live session, and rotating the token out from under a
+running CC discards the rotation, i.e. it is a logout). The second-order half is filed with it —
+cc-relogin's health gate keys on the LOGIN deadline and is blind to an expired access token, so the
+board keeps prescribing *"no re-auth needed"* while every cloud read 401s.
+
+📌 **WHY W-P2 WAS RIGHT TO PROCEED ANYWAY, so this correction is not read as a rollback.** §2.1
+(2026-08-16) re-measured the cloud-eligible slice at **10 of 269 open rows (3.7%)**, not the
+planning-era 8-14%, and concluded *"Lane B is the drain"*. Gate 1 gates **Lane A**, and Lane A is
+3.7% of the pile. Holding the whole program on it would have been the larger error. What the
+over-claim actually costs is narrower and is the reason for this correction: **it makes Lane A look
+finished, so nothing is pointed at the 229 stranded commits its one-wayness is producing** — and
+that number is growing faster than the drain closes rows.
+
+#### Provenance of the §3 / §4 / §5 currency verdicts above (2026-08-28, from inside a Lane A VM)
+
+Filed by the Lane A session dispatched for backlog row `70f0001c657b` (*"advance
+BACKLOG_DRAIN_24_7"*), which is the repo-MATCHED case of the 2026-08-18 A-lane routing entry above:
+project `claude-infrastructure`, so the brief's mandated FIRST STEP was executable here and the
+foreign-project failure recorded there did not recur.
+
+**Method, and its one limit.** Every verdict is either (a) quoted from an existing §2.1 entry, or
+(b) re-verified BY CONTENT against `origin/main` at `234d25c2` — `git rev-list --count
+HEAD..origin/main` = 0 at both ends of this session — which is §6's own unit of done. **No verdict
+here rests on a commit count or a stamp.** The limit: this clone is **grafted at `b4a10cdc`
+(2026-08-26, 50 commits)**, so the 2026-08-16 shas cited above (`46a86deb7` `944abba49` `672f34757`
+`a87f32c66` and R2.3's nine) **cannot be reached with `git merge-base --is-ancestor` from here**.
+They are relayed from §2.1, where the lead recorded them as verified ancestors; the CONTENT claims
+beside them are first-hand. Re-check the shas locally before citing them onward.
+
+**Why this was worth a link at all.** §3, §4 and §5 are the plan's three worklists and **none of
+them carried any status**, while §2.1 — 25,700 lines and the only place the answers lived — is
+ordered newest-first. So the cost of asking *"is C2 still open?"* was a full-log read, every time,
+for twelve days; a reader who did not pay it would have built C2 as written and landed the exact
+reader `bin/cc-discover` argues against. **Nothing in §3/§4/§5 was deleted or rewritten** — the
+original prescriptions stand verbatim above each verdict, including the one now refuted.
+
+⚠️ **THE RESIDUE, named rather than filed** (this VM cannot reach `~/.claude/autonomy/backlog.jsonl`
+— `bin/cc-cloud`'s header states why — so `cc-backlog` and `cc-notify` are unreachable and a pushed
+ref is the only observable this box leaves). Four items, all local-only, none of them code:
+**(1)** R1.4's 27-row evidence-less-dones audit has no verdict on record. **(2)** R1.5 regressed —
+ungrouped sits at ~132 against a floor of 50. **(3)** §1.3's inflow measurement is due for
+RE-measurement now that C1-C4 are all landed; that is the frozen scope's actual exit condition and
+nothing has answered it. **(4)** Gate 1 stays blocked on `8636b8f829fe` until the operator
+re-authenticates `next`.
 
 ## §6 Operating invariants
 
