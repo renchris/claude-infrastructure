@@ -26370,3 +26370,40 @@ Brief body invariants (regenerate the specifics each recycle; never drop these):
   store's next generator.
 - Weekly report: adds vs closes; net-positive week ⇒ the INFLOW list (C1-C4) gets the next
   fix, not more drain horsepower.
+
+---
+
+### Addendum 2026-08-28 — the cloud return/land arm, and the drain's own throughput (`f85fce7c26f5`)
+
+Filed against §4's A2 forensics, which produced the "arm died `2026-08-17T09:12:05Z`, push rate
+81% → 33%" reading this item carries. That reading is **directionally right and wrong about the
+shape**, and it has been mis-explained on trunk twice in a row — first as an artifact of the
+branch-presence probe (`bin/cc-cloud`, `a42f107a`), then as settled by the pruner's own 08-19
+manifest (`41ff4e46`, unlanded). Both are corrected in
+`docs/research/cloud-land-arm-step-2026-08-25.md` §6, landed with this addendum.
+
+What holds, measured at full maturity on 08-28 over every `claude/fire-*` branch ever observed:
+
+- **89%** of the 82 branches fired 08-10..08-17 are on trunk · **35%** of the 109 fired 08-18..08-25
+  · **0 of the 116** fired since. Not a cliff — a decline beginning 08-18 that is now total.
+- The lane's own throughput, attributing trunk commits back to cloud branches by subject: continuous
+  to `08-18T03:25Z`, then **zero for 125.8 h**, one window on 08-23, a long one on 08-25 ending
+  `20:17Z`, and **zero for the 64.8 h since**. The rail is **intermittent**, not dead and not merely
+  degraded.
+- The volume confound is closed for the current window: **110 of the 113** branches fired 08-26..08-28
+  carry subjects no other branch reproduced. This is 110 distinct pieces of unlanded work, not one
+  item re-dispatched.
+
+**This is the drain's own inflow problem, not only the cloud lane's.** Every cloud dispatch since
+08-26 has produced commits that reach `origin` and stop there, so the wave's output is accumulating
+off-trunk at ~40 branches a day. This item is its own witness: dispatched four times (08-25, 08-27
+×2, 08-28), four branches, four sets of commits, and until this land none of them home. A re-dispatch
+that cannot land re-derives the same finding at full cost and adds a branch to the pile.
+
+**A2's blocker list was one item and is now two:** the expired OAuth token (`8636b8f829fe`) and this
+— and this one is operator-gated on a single read. §3 of the research doc carries the command
+(`launchctl print` + `zsh -lc` + `idl.jsonl`); the leading hypothesis is `ba69a451`'s exact-path
+deployed-copy gate, whose two operands can disagree per launchd reload — which is exactly what an
+intermittent rail looks like from off-box. From this land on, that failure names itself:
+`scripts/autonomy-sweep.sh` files `skipped-config-divergence` in both cloud ledgers instead of the
+healthy-looking `skipped-not-deployed`.
