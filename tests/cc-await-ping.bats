@@ -26,10 +26,21 @@ setup() {
 # ── beat fixtures (the C2 oracle) ────────────────────────────────────────────────────────────────
 # One attestation per turn boundary, exactly the shape hooks/session-beat.sh writes:
 # kind=prompt at UserPromptSubmit, kind=stop at Stop, `seq` monotone across both.
+#
+# `beat` writes the LEGACY shape — no `wakeSeq` — on purpose: it is what a producer predating
+# backlog b60eb29e97dd wrote, so every test using it exercises the fallback oracle. `wbeat` writes
+# today's shape and exercises the preferred one. Both are live paths; both need coverage.
 beat() { # <seq> <kind> [age-seconds]
   local age="${3:-0}"
   jq -nc --arg k "$2" --argjson s "$1" --argjson t "$(( $(date +%s) - age ))" \
     '{sid:"sidGOAL",pane:"p0",cwd:"/tmp",pid:1,lstart:"x",t:$t,kind:$k,who:"auto",operatorT:null,seq:$s}' \
+    > "$CC_BEAT_DIR/$SID.json"
+}
+
+wbeat() { # <seq> <kind> <wakeSeq> [age-seconds]
+  local age="${4:-0}"
+  jq -nc --arg k "$2" --argjson s "$1" --argjson w "$3" --argjson t "$(( $(date +%s) - age ))" \
+    '{sid:"sidGOAL",pane:"p0",cwd:"/tmp",pid:1,lstart:"x",t:$t,kind:$k,who:"auto",operatorT:null,seq:$s,wakeSeq:$w}' \
     > "$CC_BEAT_DIR/$SID.json"
 }
 
@@ -761,6 +772,80 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
   wait "$writer" 2>/dev/null || true
   [ "$status" -eq 0 ]
   [[ "$output" == *"verdict=stood-down"* ]] || false
+}
+
+# ── THE WAKE ORACLE — surviving the turn that arms it (backlog b60eb29e97dd) ──────────────────────
+# The four tests above pin the LEGACY oracle, and the second of them ("baseline+1 is excluded") is
+# exactly as far as a boundary count can get. It assumes turns alternate prompt/stop. Under a
+# Stop-hook BLOCK they do not: a blocked Stop emits its stop beat AND the feedback prompt beat that
+# follows it. The wake floor DELIVERS the idle-scoped arm instruction by blocking a Stop, so the
+# arming turn's own completion lands at baseline+2 — past the allowance — and stood the watcher
+# down within seconds of arming it, measured 2/2 in the field. The floor's demand was a
+# deterministic no-op. `wakeSeq` counts wakes rather than boundaries, so self-drive cannot advance
+# it and no allowance has to be guessed.
+
+@test "idle-scoped REGRESSION: the arming turn's whole Stop-hook block cascade does NOT stand it down" {
+  # The exact field shape: the wake floor blocked T1's Stop, the model armed inside the feedback
+  # turn (wakeSeq 1, seq 3), and then the arming turn's own completion cascades — its trailing
+  # Stop, then two more self-drive rounds from the other blocking arms on this repo's Stop chain.
+  # Not one of those is new information, so not one of them may end the watch.
+  wbeat 3 prompt 1
+  ( sleep 1; wbeat 4 stop   1     # the arm turn's own trailing Stop
+    sleep 1; wbeat 5 prompt 1     # 🔧 mechanical loose-ends block → feedback re-prompt
+    sleep 1; wbeat 6 stop   1
+    sleep 1; wbeat 7 prompt 1 ) & # ⚑ boundary-handoff advisory → feedback re-prompt
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 8
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 2 ]                                  # still watching → ran its term
+  [[ "$output" != *"stood-down"* ]] || false
+  [[ "$output" == *"survives the turn that armed it"* ]] || false
+}
+
+@test "idle-scoped: a GENUINE wake (wakeSeq advances) still stands it down at once" {
+  # The other half of the contract: surviving self-drive must not cost the exit that makes the
+  # deferral idle-scoped. A peer's task-notification is who=auto yet IS a wake.
+  wbeat 3 prompt 1
+  ( sleep 1; wbeat 4 stop 1; sleep 1; wbeat 5 prompt 2 ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down"* ]] || false
+}
+
+@test "idle-scoped: the wake oracle is ANNOUNCED at arm, and the legacy fallback says it is weaker" {
+  wbeat 3 prompt 1
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 1
+  [[ "$output" == *"wakeSeq > 1"* ]] || false
+  [[ "$output" != *"LEGACY ORACLE"* ]] || false
+  beat 3 prompt                                        # a producer predating wakeSeq
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 1
+  [[ "$output" == *"LEGACY ORACLE"* ]] || false         # never a silent downgrade
+  [[ "$output" == *"beat seq > 4"* ]] || false
+}
+
+@test "idle-scoped: wakeSeq VANISHING mid-watch falls back to the boundary oracle, never goes blind" {
+  # Another config dir's older producer can rewrite this session's beat. Reading a missing field as
+  # 'never woken' would re-open the starvation pole through the oracle itself.
+  wbeat 10 prompt 4
+  ( sleep 1; beat 14 prompt ) &                        # legacy shape, well past baseline+1
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down"* ]] || false
+}
+
+@test "idle-scoped C1 under the wake oracle: MAIL still wins over a simultaneous wake" {
+  wbeat 3 prompt 1
+  ( sleep 1; printf '2026-08-28T10:00:00+0000 [peer] HANDOFF-PING slug: landed\n' >> "$MB"; wbeat 4 prompt 2 ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 3 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"HANDOFF-PING slug: landed"* ]] || false
+  [[ "$output" != *"stood-down"* ]] || false
 }
 
 @test "idle-scoped C1: MAIL still wins — a ping is delivered, never traded for a silent stand-down" {

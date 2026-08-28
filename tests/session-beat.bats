@@ -46,6 +46,68 @@ emit() { # <json-stdin> <kind>
   [ "$(jq -r '.who' "$CC_BEAT_DIR/s2b.json")" = "auto" ]
 }
 
+# ── wakeSeq — the WAKE counter, and why it is not `who` (backlog b60eb29e97dd) ────────────────────
+# `who` answers "is a human present". `wakeSeq` answers "was this session driven from OUTSIDE", and
+# the two disagree on exactly the traffic cc-await-ping --idle-scoped depends on: a peer's
+# task-notification is who=auto yet IS a wake, while this session's own Stop-hook feedback is a
+# continuation of a turn that has not ended and must NOT be one. Counting self-drive as a wake is
+# what made the wake floor's arm a deterministic no-op — the floor blocks a Stop to demand the arm,
+# so the arming turn's own completion cascade was guaranteed to follow it.
+
+@test "wakeSeq advances on a genuine wake and stays FLAT across stop beats" {
+  emit '{"session_id":"w1","cwd":"/tmp","prompt":"get the wave landed"}' prompt
+  [ "$(jq -r '.wakeSeq' "$CC_BEAT_DIR/w1.json")" = "1" ]
+  emit '{"session_id":"w1","cwd":"/tmp"}' stop
+  [ "$(jq -r '.wakeSeq' "$CC_BEAT_DIR/w1.json")" = "1" ]   # a boundary is not a wake
+  [ "$(jq -r '.seq' "$CC_BEAT_DIR/w1.json")" = "2" ]       # …but it IS a boundary
+  emit '{"session_id":"w1","cwd":"/tmp","prompt":"<task-notification>peer 427 finished</task-notification>"}' prompt
+  [ "$(jq -r '.wakeSeq' "$CC_BEAT_DIR/w1.json")" = "2" ]   # who=auto, and still a wake
+  [ "$(jq -r '.who' "$CC_BEAT_DIR/w1.json")" = "auto" ]
+}
+
+@test "SELF-DRIVE is not a wake: Stop-hook feedback and our advisory glyphs leave wakeSeq flat" {
+  emit '{"session_id":"w2","cwd":"/tmp","prompt":"start"}' prompt
+  [ "$(jq -r '.wakeSeq' "$CC_BEAT_DIR/w2.json")" = "1" ]
+  emit '{"session_id":"w2","cwd":"/tmp","prompt":"Stop hook feedback: 🔔 WAKE FLOOR — arm your watcher"}' prompt
+  [ "$(jq -r '.wakeSeq' "$CC_BEAT_DIR/w2.json")" = "1" ]
+  emit '{"session_id":"w2","cwd":"/tmp"}' stop
+  emit '{"session_id":"w2","cwd":"/tmp","prompt":"⚑ boundary-handoff advisory"}' prompt
+  [ "$(jq -r '.wakeSeq' "$CC_BEAT_DIR/w2.json")" = "1" ]
+  emit '{"session_id":"w2","cwd":"/tmp","prompt":"⟳ recycle advisory"}' prompt
+  [ "$(jq -r '.wakeSeq' "$CC_BEAT_DIR/w2.json")" = "1" ]
+  [ "$(jq -r '.seq' "$CC_BEAT_DIR/w2.json")" = "5" ]       # five boundaries, one wake
+}
+
+@test "an INTERRUPT is a wake even though it is not presence (who and wakeSeq are different questions)" {
+  emit '{"session_id":"w3","cwd":"/tmp","prompt":"start"}' prompt
+  emit '{"session_id":"w3","cwd":"/tmp","prompt":"[Request interrupted by user]"}' prompt
+  [ "$(jq -r '.who' "$CC_BEAT_DIR/w3.json")" = "auto" ]
+  [ "$(jq -r '.wakeSeq' "$CC_BEAT_DIR/w3.json")" = "2" ]
+}
+
+@test "wakeSeq fails toward WAKE: an unreadable prompt counts (early stand-down beats a lost goal)" {
+  emit '{"session_id":"w4","cwd":"/tmp","prompt":"start"}' prompt
+  emit '{"session_id":"w4","cwd":"/tmp"}' prompt          # no prompt field at all
+  [ "$(jq -r '.wakeSeq' "$CC_BEAT_DIR/w4.json")" = "2" ]
+}
+
+@test "wakeSeq survives a beat file that never had it (the pre-fix converge window)" {
+  mkdir -p "$CC_BEAT_DIR"                                 # the producer normally creates it
+  jq -nc '{sid:"w5",pane:"p0",cwd:"/tmp",pid:1,lstart:"x",t:0,kind:"prompt",who:"auto",operatorT:null,seq:9}' \
+    > "$CC_BEAT_DIR/w5.json"
+  emit '{"session_id":"w5","cwd":"/tmp","prompt":"typed"}' prompt
+  [ "$(jq -r '.seq' "$CC_BEAT_DIR/w5.json")" = "10" ]      # boundary count carries on
+  [ "$(jq -r '.wakeSeq' "$CC_BEAT_DIR/w5.json")" = "1" ]   # wake count starts from 0, never null
+}
+
+@test "CC_BEAT_SELFDRIVE_RX is a seam, and it is NOT the presence regex (they must be free to diverge)" {
+  CC_BEAT_SELFDRIVE_RX='^ROBOT:' emit '{"session_id":"w6","cwd":"/tmp","prompt":"ROBOT: keep going"}' prompt
+  [ "$(jq -r '.wakeSeq' "$CC_BEAT_DIR/w6.json")" = "0" ]
+  [ "$(jq -r '.who' "$CC_BEAT_DIR/w6.json")" = "operator" ]   # presence unchanged by the wake seam
+  CC_BEAT_SELFDRIVE_RX='^ROBOT:' emit '{"session_id":"w6","cwd":"/tmp","prompt":"Stop hook feedback: x"}' prompt
+  [ "$(jq -r '.wakeSeq' "$CC_BEAT_DIR/w6.json")" = "1" ]      # the default no longer applies
+}
+
 @test "operatorT is STICKY: a later auto beat must never lower it" {
   # Presence, once shown, decays only by the clock. A Stop beat landing after an operator prompt
   # must not erase the very evidence that protects the pane from being reaped.

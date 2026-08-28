@@ -124,6 +124,7 @@ files, the owner guard, the signal verdicts. The mode adds two exit conditions a
 |---|---|---|
 | C1 exit-on-mail | unchanged: new inbox line → print body → exit 0 → task completes → **completion notification wakes the idle model with the mail** (A5) | the wake half of 2-way comms, as today |
 | C2 exit-on-turn | poll `~/.claude/cc-beats/<sid>.json`; any **UserPromptSubmit-kind** beat with `seq` > baseline-at-arm → exit 0 silently, `verdict=stood-down` | the session was woken by something else (typed message, task notification, asyncRewake fire). The awaiter's deferral job is over; the next natural Stop is registry-quiet and the goal judges the NEW state. Stop-kind beats are excluded so the arm-turn's own trailing Stop cannot self-cancel it |
+| C2 exit-on-**WAKE** — *revised 2026-08-28, see §4 item 3* | poll the beat's `wakeSeq`; `wakeSeq > baseline-at-arm` → exit 0 silently, `verdict=stood-down` | same intent, correct predicate. The boundary count above could not distinguish a wake from the session's own Stop-hook self-drive, and so died in the block cascade that armed it |
 | C3 single-instance | refuse to arm when a live sibling claim exists for the keyset (the `.watchers` claim machinery, `cc-await-ping:179-196`) | overlapping awaiters re-create d33abf12's permanent deferral |
 | C3′ **declare the mode** — a `mode=idle-scoped` line in the `.watching` marker AND in the per-pid `.watchers/<key>.<pid>` claim, re-stamped every poll beside the pid | **REQUIRED OF B3, and the reader already shipped** (E2, 2026-08-15): `mailbox_wake_idle_scoped` in `hooks/lib/mailbox-pending.sh` accepts EITHER file, and its absence means "plain" — so an idle-scoped watcher that omits the stamp will be reported to its own session as goal-blocking, with a `kill` beside it. The claim is the sturdier of the two: `_unbeat`'s hand-over rewrites the marker on behalf of a sibling whose mode it does not know. | the drain must tell a sanctioned awaiter apart from the 14400 s park it is replacing, and it can only do that from what the watcher writes |
 | C4 refuse-on-pending | refuse to arm while `mailbox_has_pending` is true on any key | mail waiting = you have work; arming would defer the judgment of state you already hold |
@@ -180,6 +181,41 @@ C1–C7 shipped as written. Four things the build settled that the spec left ope
    `seq > baseline + allowance` (allowance 1 iff the baseline beat was prompt-kind) excludes exactly
    the arm turn's own trailing Stop and nothing else. Erring toward standing down early costs one
    bounce turn; erring the other way costs the goal.
+
+   🚨 **SUPERSEDED 2026-08-28 — the offset shipped, and it could not survive its own arm** (backlog
+   `b60eb29e97dd`). Its premise is the sentence "turns alternate", and under a **Stop-hook block**
+   they do not: a blocked Stop emits its stop beat AND the feedback prompt beat that follows it, so
+   two boundaries pass with no new information. That is not a corner case here — it is the delivery
+   mechanism. C7 has the wake floor BLOCK a Stop in order to demand this arm (item 4 below), and
+   this repo's Stop chain carries several more blocking arms behind it (`session-continue`'s
+   mechanical 🔧 and ship floor, `completion-assert`'s origin close contract, `anti-deference-nudge`,
+   `boundary-handoff`). So the arming turn's own completion cascade lands at `baseline + 2`, past the
+   allowance, and stood the watcher down within seconds of arming it — **measured 2/2 in the field
+   (thresholds `seq > 3` and `seq > 6`), i.e. the floor's demand was a deterministic no-op.**
+   Reproduced against the shipped binary before the fix, and the shape is in
+   `tests/cc-await-ping.bats` ("the arming turn's whole Stop-hook block cascade").
+
+   **No allowance value fixes it**, because a block cascade is bounded only by
+   `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` (fleet default 50) — the offset would have to guess a number
+   the harness chooses. The fix is to stop counting boundaries and count **wakes**:
+   `hooks/session-beat.sh` now carries a second monotone counter, `wakeSeq`, advanced only by a
+   prompt beat originating OUTSIDE the session and left flat by every stop beat and every self-drive
+   re-prompt. C2 is then exact — `wakeSeq > baseline-at-arm` — with no allowance to tune and no
+   sampling hole (the counter is carried forward on every beat, so a boundary missed between polls
+   is still counted). The offset above stays in the code as the fallback for a beat written by a
+   producer predating the field, and the arm banner says so rather than claiming a guarantee it
+   lacks.
+
+   **`wakeSeq` is deliberately NOT `who`.** Presence and wake are different questions and disagree
+   on the traffic that matters: a `<task-notification>` (a fired peer reported) is `who=auto` yet IS
+   a wake, while this session's own `Stop hook feedback:` is not. Two predicates, two seams
+   (`CC_CLASSIFY_AUTO_RX`, `CC_BEAT_SELFDRIVE_RX`), free to diverge.
+
+   **What this trades, stated plainly:** a session that self-drives for a long time now keeps the
+   watcher parked, so its goal is deferred until a wake or the C5 timeout. That is the case A2 calls
+   correct (real in-flight work), the session is taking turns so `mailbox-drain` delivers its mail at
+   every boundary anyway, and C5's 3600 s is the bound. The alternative — the shipped behaviour — was
+   an arm that never survived to cover an idle at all.
 4. **The wake floor now BLOCKS under a live goal instead of abstaining.** The 08-10 abstain rested on
    "the goal itself keeps this session awake", which holds only BELOW the block cap — and the 15
    measured cap force-idles are exactly the population above it. It stays budgeted, TTL'd and

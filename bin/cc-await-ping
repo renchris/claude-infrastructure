@@ -71,9 +71,24 @@
 #
 # The mode is therefore two exit conditions and a fail-closed arm gate:
 #   C1 exit-on-mail   unchanged — the wake half of 2-way comms.
-#   C2 exit-on-turn   a UserPromptSubmit-kind beat newer than the baseline taken at arm ⇒ the session
-#                     was woken by something else, so this awaiter's job is over: exit 0 SILENTLY
+#   C2 exit-on-WAKE   the beat's `wakeSeq` past the baseline taken at arm ⇒ the session was woken by
+#                     something OUTSIDE itself, so this awaiter's job is over: exit 0 SILENTLY
 #                     (verdict=stood-down), leaving the next natural Stop registry-quiet.
+#                     🚨 A WAKE, NOT A BOUNDARY — and the distinction is the whole of backlog
+#                     b60eb29e97dd. C2 shipped as "any prompt-kind beat newer than the arm
+#                     baseline, less a one-beat allowance for the arm turn's own trailing Stop",
+#                     which assumed turns alternate prompt/stop. Under a Stop-hook BLOCK they do
+#                     not: a blocked Stop emits its stop beat AND the feedback prompt beat that
+#                     follows, so the arming turn's own completion lands at baseline+2 and tripped
+#                     the stand-down. That is not a corner: the wake floor DELIVERS this arm
+#                     instruction by blocking a Stop, and this repo's Stop chain holds several more
+#                     blocking arms, so the watcher was stood down seconds after arming — measured
+#                     2/2 in the field, making the floor's demand a deterministic no-op. No larger
+#                     allowance fixes it (a block cascade is bounded only by
+#                     CLAUDE_CODE_STOP_HOOK_BLOCK_CAP); a counter that this session's own self-drive
+#                     cannot advance does. hooks/session-beat.sh attests it — see its WAKE decision.
+#                     A beat with no `wakeSeq` (pre-fix producer) falls back to the old boundary
+#                     oracle, and the banner says so rather than claiming a guarantee it lacks.
 #   C3 single-instance   refuse while a live sibling watcher claims any key of the keyset.
 #   C4 refuse-on-pending refuse while mail is already pending — mail waiting means you have work, and
 #                     arming would defer the judgment of state you ALREADY hold.
@@ -354,6 +369,7 @@ BEAT_DIR="${CC_BEAT_DIR:-$HOME/.claude/cc-beats}"
 BEAT_FRESH_S="${CC_AWAIT_BEAT_FRESH_S:-900}"
 BEAT_BASE_SEQ=0
 BEAT_STOP_ALLOWANCE=0
+BEAT_BASE_WAKE=""
 
 _beat_field() {  # <sid> <jq-path> → field value on stdout; empty on any failure
   local s="$1" p="$2"
@@ -406,9 +422,22 @@ if [ "$IDLE_SCOPED" = 1 ]; then
   if [ "$(( _now - _bt ))" -gt "$BEAT_FRESH_S" ] 2>/dev/null; then
     _refuse stale-beat "The newest beat for [$SID] is $(( _now - _bt ))s old (bound ${BEAT_FRESH_S}s). An arm happens INSIDE a turn, so a live beat producer makes this seconds old — a stale one means either the producer is not running or the sid is not this session's."
   fi
+  # ── THE ORACLE, PREFERRED FORM: wakeSeq — count WAKES, not boundaries (backlog b60eb29e97dd) ────
+  # hooks/session-beat.sh carries a second counter that advances ONLY on a prompt beat originating
+  # outside this session (an operator message, a peer's injection, a task-notification, an
+  # interrupt), and stays flat across every stop beat and every Stop-hook self-drive re-prompt.
+  # That is exactly C2's predicate — "the session was woken by SOMETHING ELSE" — attested at the
+  # instant it is knowable instead of guessed here from a boundary count.
+  BEAT_BASE_WAKE="$(_beat_field "$SID" '.wakeSeq')"
+  case "$BEAT_BASE_WAKE" in ''|*[!0-9]*) BEAT_BASE_WAKE="" ;; esac
+
   BEAT_BASE_SEQ="$(_beat_field "$SID" '.seq')"; case "$BEAT_BASE_SEQ" in ''|*[!0-9]*) BEAT_BASE_SEQ=0 ;; esac
-  # THE ALLOWANCE, and why the doc's "exclude Stop-kind beats" is implemented as an OFFSET rather
-  # than a kind filter. The beat file holds only the LATEST boundary, so a filter on `kind` alone has
+  # THE ALLOWANCE — the LEGACY oracle, kept as the fallback for a beat written by a producer that
+  # predates wakeSeq (the converge window, or a config dir whose hook has not caught up). It is
+  # weaker, and the weakness is the whole reason wakeSeq exists, so it is announced when used.
+  #
+  # Why the doc's "exclude Stop-kind beats" is implemented as an OFFSET rather than a kind filter.
+  # The beat file holds only the LATEST boundary, so a filter on `kind` alone has
   # a sampling hole: a whole turn (prompt beat, then stop beat) can complete inside one poll
   # interval, leaving us looking at a Stop-kind beat whose prompt predecessor we never saw — and a
   # watcher that ignores it stays parked over a session that HAS moved on. That is the starvation
@@ -416,6 +445,14 @@ if [ "$IDLE_SCOPED" = 1 ]; then
   # baseline PROVES a prompt beat occurred in between, whether or not we sampled it. The offset says
   # exactly that: the arm turn's own trailing Stop (baseline+1) is excluded, and nothing else is.
   # Erring toward standing down early costs one bounce turn; erring the other way costs the goal.
+  #
+  # ⚠ AND THAT ASYMMETRY IS WHY THIS FORM COULD NOT SURVIVE ITS OWN ARM. Turns do NOT alternate
+  # under a Stop-hook block: a blocked Stop emits a stop beat AND the feedback prompt beat that
+  # follows it, so the cascade that DELIVERS this arm instruction (the wake floor blocks a Stop to
+  # demand it) puts the very next self-drive round at baseline+2 — past the allowance, tripping the
+  # stand-down within seconds. Measured 2/2 in the field. No offset value fixes it, because a block
+  # cascade is unbounded (CLAUDE_CODE_STOP_HOOK_BLOCK_CAP); only a counter that self-drive cannot
+  # advance does.
   [ "$(_beat_field "$SID" '.kind')" = "prompt" ] && BEAT_STOP_ALLOWANCE=1
   # (C4) MAIL ALREADY PENDING = you have work. Arming here would defer the judgment of state the
   #      session already holds, which is the deferral this mode exists to make impossible.
@@ -432,15 +469,37 @@ if [ "$IDLE_SCOPED" = 1 ]; then
     fi
   done
   echo "$_banner" >&2
-  echo "cc-await-ping: idle-scoped — will also stand down on any new turn of [$SID] (beat seq > $(( BEAT_BASE_SEQ + BEAT_STOP_ALLOWANCE )))" >&2
+  if [ -n "$BEAT_BASE_WAKE" ]; then
+    echo "cc-await-ping: idle-scoped — will also stand down when [$SID] is next WOKEN (wakeSeq > $BEAT_BASE_WAKE). Its own trailing Stop and any Stop-hook self-drive re-prompt do NOT count, so this watcher survives the turn that armed it." >&2
+  else
+    echo "cc-await-ping: idle-scoped — will also stand down on any new turn of [$SID] (beat seq > $(( BEAT_BASE_SEQ + BEAT_STOP_ALLOWANCE ))). ⚠ LEGACY ORACLE: this session's beat carries no wakeSeq (its hooks/session-beat.sh predates it), so a Stop-hook block cascade on the arming turn can stand this watcher down early — see the allowance note in this file." >&2
+  fi
 fi
 
 # ── C2: THE EXIT THAT MAKES THE DEFERRAL IDLE-SCOPED ──────────────────────────────────────────────
 # Consulted every poll, AFTER the mail check: if a ping and a new turn both happened, the ping is the
 # thing the session must not lose, and delivering it also ends the watch.
-_turn_moved() {  # 0 iff this session has taken a new turn since the arm baseline
-  local seq
+_turn_moved() {  # 0 iff this session has been WOKEN since the arm baseline
+  local seq wake
   [ "$IDLE_SCOPED" = 1 ] || return 1
+  # PREFERRED: the producer's own wake attestation. Monotone, no sampling hole (it is carried
+  # forward on every beat, so a boundary missed between polls is still counted), and structurally
+  # blind to this session's own self-drive — which is what lets the watcher outlive the block
+  # cascade that armed it.
+  if [ -n "$BEAT_BASE_WAKE" ]; then
+    wake="$(_beat_field "$SID" '.wakeSeq')"
+    case "$wake" in ''|*[!0-9]*) : ;; *)
+      # `-ne`, not `-gt`. The counter can only go BACKWARDS if the beat file was torn or rebuilt
+      # from scratch, and that itself means boundaries passed unobserved — reading it as "not yet
+      # woken" would park this watcher forever over a session that has moved on. Standing down
+      # early costs one bounce turn; the other way costs the goal.
+      [ "$wake" -ne "$BEAT_BASE_WAKE" ] && return 0
+      return 1 ;;
+    esac
+    # Fall through ONLY if the field vanished mid-watch (a beat rewritten by an older producer in
+    # another config dir). Reading that as "never woken" would be the starvation pole re-entering
+    # through a missing field, so the legacy oracle takes over rather than the watcher going blind.
+  fi
   seq="$(_beat_field "$SID" '.seq')"; case "$seq" in ''|*[!0-9]*) return 1 ;; esac
   # A Stop-kind beat at exactly baseline+1 is the arm turn's OWN trailing stop — never a new turn.
   if [ "$seq" -gt "$(( BEAT_BASE_SEQ + BEAT_STOP_ALLOWANCE ))" ]; then return 0; fi
@@ -1252,7 +1311,7 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
   # already awake. What it buys is the next natural Stop being registry-quiet, so the /goal judges
   # the NEW state exactly once instead of never (parked) or ninety times (bare).
   if _turn_moved; then
-    echo "cc-await-ping: verdict=stood-down uuid=${CUR_UUID} sid=${SID} — this session took a new turn, so the idle window this watcher was scoped to is over. Nothing was missed and no ping was consumed: mail that arrives now surfaces at your turn boundaries, and any /goal you hold evaluates at your next stop. If you go idle again with an empty inbox, arm a fresh one." >&2
+    echo "cc-await-ping: verdict=stood-down uuid=${CUR_UUID} sid=${SID} — this session was woken from outside, so the idle window this watcher was scoped to is over. Nothing was missed and no ping was consumed: mail that arrives now surfaces at your turn boundaries, and any /goal you hold evaluates at your next stop. If you go idle again with an empty inbox, arm a fresh one." >&2
     exit 0
   fi
 
