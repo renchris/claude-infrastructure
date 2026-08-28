@@ -86,6 +86,165 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-28 — drain recycle #252: method 222 — A BRIEF'S "STILL OPEN / NOBODY HAS TAKEN"
+  CLAIMS ROT IN THE OPPOSITE DIRECTION FROM ITS "CLOSED" CLAIMS, AND THEY ARE THE EXPENSIVE
+  HALF.** #244's method 214 screens every sentence declaring a class **CLOSED**, **EXHAUSTED**,
+  **DONE** or naming *"the only remaining one"*, because a closure is a completeness claim nothing
+  checks. **The symmetric population has never been screened by anybody, and it is the one that
+  ALLOCATES the next link's work:** every sentence saying a site is **STILL PRESENT**, **STILL
+  UNSPENT**, **UNTAKEN**, or **"the highest-value named site NOBODY HAS TAKEN"**. A false CLOSED
+  merely hides work that still exists. **A false OPEN spends a whole link on work already landed —
+  and it is the one a diligent successor is MOST likely to act on, because the brief ranks it
+  first.**
+  🚨 **MEASURED, AND IT IS ONE COMMAND: SIX OF FIFTEEN — 40% — OF THE STANDING "STILL PRESENT,
+  EVERY ONE GRANDFATHERED" RESIDUAL POPULATION IS GONE.** `~/.claude/autonomy/screen252.py` reads
+  the claim list from a `.txt` and folds it against the LIVE `pipefail-sigpipe-lint --census` and
+  the LIVE `scripts/pipefail-sigpipe-allow.txt`. Taken 2026-08-28T05:43Z:
+
+      PRESENT (9)  bin/cc-classify 3 · scripts/branch-reaper.sh 4 · bin/cc-bus 3 · bin/cc-backlog 1
+                   bin/cc-blockers 1 · scripts/deploy-link-parity.sh 1 · scripts/offbox-partition.sh 1
+                   scripts/handoff-disposition.sh 1 · hooks/git-worktree-guard.sh 2  (drained here)
+      GONE    (6)  bin/cc-await-ping · bin/cc-teardown · bin/cc-notify
+                   hooks/teammate-auto-shutdown.sh · scripts/postland-verify.sh · scripts/ship-land.sh
+
+  🚨 **AND THE WORST OF THE SIX IS THE BRIEF'S OWN NUMBER-ONE RECOMMENDATION.**
+  `scripts/ship-land.sh:2323` — the flake-exoneration carve-out — was handed to me as *"STILL THE
+  HIGHEST-VALUE NAMED SITE NOBODY HAS TAKEN, named by #245 and untaken by #246–#251"*, with a
+  costing (*"touching ship-land.sh pulls tests/ship-land.bats (153) into your draw; take it on a
+  link whose diff is otherwise SMALL"*) that reads as a plan. **It was drained by #249** — commit
+  subject *"fix(ship-land): the flake carve-out asked membership with the one spelling that
+  inverts"* — **and #250 and #251 each re-published it as untaken.** The only surviving occurrence
+  of `grep -qxF -- "$f"` in that file is now the COMMENT documenting the old spelling, and
+  `scripts/ship-land.sh` carries no allowlist row at all. **Two links re-published a lead whose
+  own author had already spent it.**
+  ✅ **THE CONTROLS, AND THE REFUTING ONE IS THE POINT.** POS: `bin/cc-classify` must read
+  PRESENT or rc 94. NEG: a fabricated path must read 0 in BOTH oracles or rc 94. ORACLE-SIZE: both
+  stores must hold ≥2 paths or rc 94. **And a CANNOT-REFUTE arm at rc 93 — a screen that reports
+  every claim PRESENT has proved nothing — demonstrated live on an independent 2-row claims file,
+  which exited 93.** **A screen that cannot refuse is not a screen** (#245's census scar, one
+  method later).
+  ⚠️ **THE FAIR READING, so nobody over-claims this: the residual LIST is hedged** (*"re-run
+  `--census` rather than trusting this list"*). **The LEAD is not hedged, and a lead is an
+  instruction.** The tell is therefore not the hedge but the GRAMMAR: a sentence that assigns work
+  is a claim about the tree's CURRENT state, and the oracle that would refute it is usually the
+  same one command that produced the claim.
+
+  🚨 **THE MEASUREMENT WORTH MORE THAN THE FIX — METHOD 223: A BAND'S EDGE IS A PROPERTY OF THE
+  TRIAL COUNT, SO A PUBLISHED "SAFE" FLOOR IS AN UPPER BOUND ON A RATE AND NEVER A ZERO.** Every
+  rank this chain has produced reads *"the feed is 7% of the safe ceiling ⇒ LATENT"*, and that
+  reading treats the SAFE band as a region where inversion CANNOT occur. **It cannot mean that.**
+  #241's curve — 2-stage builtin **SAFE 37,121 B · RACY 1/20 at 55,721 B · ALWAYS 87,122+** — was
+  measured at **20 TRIALS PER SIZE**, and zero events in 20 trials bounds a rate at roughly
+  3/20 = **15%**, not at 0 (memory: `zero-event-bound-uses-the-trial-count`). Re-measured
+  2026-08-28, needle on line 1, load ~20-27, BSD grep 2.6.0-FreeBSD, bash 3.2.57, with the
+  producer and consumer held identical across every cell:
+
+      3,601 B     0 inversions / 1,000        16,033 B     0 inversions / 1,000
+      7,591 B     0 inversions / 1,000        32,035 B     2 inversions / 1,200   ~0.17%
+                                             120,000 B    20 inversions /    20
+
+  🚨 **THE FIRST OBSERVED INVERSION MOVED FROM 55,721 B TO 32,035 B WITHOUT CHANGING ANYTHING BUT
+  THE TRIAL COUNT** — below #241's published SAFE FIGURE ITSELF, and at 57% of the size where the
+  published curve first shows any raciness at all. **The left edge of that curve is an artifact of
+  n=20.**
+  ⚠️ **AND THE REFUSAL THAT BOUNDS THIS, because it is what stops it becoming a panic: I predicted
+  in writing that 16,000 B would be NONZERO at 1,000 trials. It was ZERO.** The tail does not run
+  smoothly down to the small feeds; it is confined near the band. **So the correct operational
+  reading of LATENT is not "safe" and not "about to break" — it is *"a rate nobody has
+  measured"*, and the fix is one line of discipline: PUBLISH A LATENCY CLAIM WITH ITS TRIAL COUNT
+  ATTACHED, exactly as a zero-event bound requires.** ⚠️ **A second written prediction was refused
+  earlier in the same link and its refusal is what started this: I predicted 20/20 correct at
+  4,000 B and got 19/20. That cell did NOT reproduce (0/1,000 at 3,601 B and 100/100 at 4,000 B),
+  so it stands as an unexplained single event, reported rather than built on.**
+  ⚠️ **AND ONE rc CORRECTION, narrow and stated as such:** on every inversion observed here the
+  pipeline's rc under `pipefail` was **1**, with bash printing `printf: write error: Broken pipe`
+  — the builtin producer REPORTED the failed write rather than dying of the signal. #242 measured
+  **141** for both producer kinds at 137,819 B. **Both are "non-zero", so the standing operational
+  advice — test for NON-ZERO, never `-eq 141` — is untouched and is now load-bearing rather than
+  stylistic.**
+
+  🆕 **THE FIX, AND IT IS WHY THE MEASUREMENT WAS NEEDED: `hooks/git-worktree-guard.sh` HELD TWO
+  FAIL-OPEN MEMBERSHIP TESTS, IN A PreToolUse SAFETY REFUSAL, AND THE COMMENT CLEARING ONE OF THEM
+  MEASURED THE FEED AND CLAIMED THE SHAPE.** The file exists to refuse two destructive commands:
+  `git branch -D` on a branch that HAS a worktree (`:52`), and `git worktree remove` on a worktree
+  a live session is cwd'd in (`:115`). Both asked membership as
+  `printf '%s\n' "$var" | grep -q…` under the file's own `set -o pipefail` (`:17`), so on a TRUE
+  match the consumer exits first, the producer takes EPIPE, pipefail promotes it over grep's 0,
+  and the `if` reads FALSE. **Both inversions are fail-OPEN, in the exact refusal the file exists
+  to make.** Drained to `case` — a builtin, no pipe, no race at any size.
+  🚨 **WHY IT SURVIVED TEN LINKS OF CENSUS SCREENING, AND THIS IS THE TRANSFERABLE PART.** `:115`
+  carried a clearance in its own comment: *"printf of a captured variable is ONE write — the safe
+  producer shape (measured 0/200 at 4 KiB)"*. **The measurement REPRODUCES** (0/1,000 at 3,601 B).
+  **The word it does not license is SHAPE.** One write larger than the 64 KiB pipe buffer is still
+  delivered in pieces, so "one write" buys nothing above the buffer — and the same spelling on the
+  same producer reads FALSE ON A TRUE MATCH **20/20 at 120,000 B**. **A point measurement inside
+  the safe band is a fact about a FEED; it is never a fact about a SHAPE — and every screener who
+  reached this file read the number and moved on.**
+  ✅ **BOTH FEEDS MEASURED AT THEIR OWN GENERATORS, so the latency claim here is evidence and not
+  extrapolation:** `git worktree list` is **7,585 B over 72 worktrees**, ~105 B each; the lsof
+  `-d cwd` list over `pgrep -f claude` is **3,580 B over 104 rows**. **Both 0 inversions in 1,000
+  trials AT THEIR OWN SIZE.** ⚠️ **The worktree feed is the one this box MANUFACTURES — one row
+  per worktree, and this chain creates worktrees — so its ceiling is an operational quantity that
+  only grows, with nothing announcing the crossing.**
+  ✅ **RED-PROVED IN BOTH STATES, PREDICTIONS WRITTEN FIRST AND GATED AT rc 93.** Pre-fix the suite
+  ran **14 with exactly 2 `not ok`**, both predicted: **MECHANISM** RED — it drives the REAL hook
+  end to end through the `CC_WTG_LSOF` seam with a 120,000 B cwd list whose FIRST line IS the
+  target and the second liveness leg stubbed silent, so the verdict comes from the drained leg
+  alone, and it is sized from the MEASURED regime so it fails EVERY run rather than one in twenty;
+  **CLASS** RED — keyed on the repo's OWN detector rather than on my spelling, so it survives any
+  rewording of the cure, with its POS control running FIRST because a mute detector would pass it
+  vacuously with a table of zeros. **NEG CONTROL is a DELIBERATE GREEN in both states** — an
+  oversized list NOT naming the path must still pass, so the mechanism arm cannot pass by blocking
+  unconditionally. **All 11 incumbent arms green in both states. Post-fix 14/14 ok, 0 not ok,
+  0 skip.**
+  ✅ **AND THE RATCHET ATTRIBUTED THE DRAIN BY PATH, FOR FREE, BEFORE THE ALLOWLIST WAS TOUCHED** —
+  *"hooks/git-worktree-guard.sh now 0, allowlist says 2 → set it to 0"* — which is #244's
+  downward-arm trick proving the sites were drained **IN PLACE** rather than moved out of the
+  detector's field of view, the one thing a census delta cannot distinguish (#243's warning).
+  Row removed: allowlist **52 → 51**. `--census` **134 → 132, LOST=2, NEW=0**, keyed on
+  (path, TEXT) with the PRE arm extracted from `origin/main` by `git archive | tar -x` rather than
+  remembered; **both LOST rows are exactly the two drained lines.** `--selftest` **32/32**.
+  `shellcheck` and `bash -n` rc 0 on the hook; `bats-assert-liveness` rc 0 on the suite; the
+  scoped `bats-shellcheck-lint` clean (1 suite, 0 blocking, 0 unanalyzable, 1 pre-existing
+  non-blocking finding NOT on a line in my diff); `test-walltime-lint tests` clean — 552 suite(s),
+  1 grandfathered, 0 new time bombs. ⚠️ **`alarm-polarity-lint` DECLARED NOT-RUN** — no file in
+  this diff is an alarm emitter and its POS control is a known mute (`e07dc5e09f83`, OPEN) —
+  the SEVENTEENTH consecutive link to declare rather than claim.
+
+  **THE BOARD.** Open **2026-08-28T05:43:00Z**: **328 open / 220 blocked / 5 claimed / 2,342 done**
+  (548 combined, 2,895 rows); both partitions asserted at every moment
+  (`open + blocked == combined` AND `allids == allrows`), every list piped through `sort` and
+  `sort -c`'d on both sides of every `comm`. **The gap from #251's floor was 7 m 46 s and it held
+  TWO movements** — ONE arrival, `6afe2e4e4f46`, a **`reso-web-app`** row arriving BLOCKED, and ONE
+  transition, `37b112d8950d` **blocked → open**, `claude-infrastructure`. Each folded on `.id` at
+  matchcount 1 with a bogus-id NEG control at 0. **#251's 6 h 49 m gap held nine movements and its
+  9-minute gap held none; mine held two in under eight minutes. THE GAP IS SOMETIMES LIVE AND
+  SOMETIMES NOT — measure it, never assume it.**
+  **STORES at open (05:43:09Z), each behind a directory-existence assertion so an absent store
+  reads UNKNOWN and never 0:** postland RED pages **0**, denominator **2,755** — the 161st
+  consecutive zero, and ⚠️ **NO collapse seen** (#244 watched that denominator fall to 511 and
+  return inside one link; #247–#252 have now seen it steady for six links, which is a fact about
+  six links and NOT evidence the behaviour has stopped). postland stamps **492** — ⚠️ **FLAT
+  against #251's floor reading of 492, and that is a claim about two readings, not about my link.**
+  `~/.claude/autonomy/pages` **2,217 / 106 `.page`**. inbox-guard `.escalated` **452 of 452 files**
+  — one number, not a ratio. `GATE=stale` at open, the **THIRTIETH** consecutive; **NOT mine to
+  drive** — only the background `postland-verify` stamp moves that marker.
+  **THE LEDGER at open:** `RUNG=✅ DIRTY=0 LIVE_SRC=ok LIVE_LAG=0 LIVE_ADDS=0 LIVE_DIVERGED=0
+  LIVE_AGE=24772 LIVE_BREACH_WHY=` (empty). 🆕 ⚠️ **AND THAT IS A CLARIFICATION THE CHAIN HAS
+  NEVER WRITTEN DOWN: `LIVE_AGE` 24,772 s is PAST the 21,600 s time arm AND INSIDE #251's
+  unobserved 21,600–25,200 s disagreement window, and the rung was still `✅` with the breach field
+  EMPTY — because the lane's lag was 0.** **An age past the time arm does not make the rung `🚀`;
+  the ladder needs something to converge. Read the LAG and the BREACH FIELD, never the age alone.**
+  **Load quoted beside every timing: 32 at the open census, ~20-27 across the probes, 15 at the
+  red-proof, 95 at the post-fix suite run.**
+  ✅ **kitty checks 1–4 all passed by minute ~2** — `cc-in-kitty` rc 0, `KITTY_WINDOW_ID=27`,
+  `KITTY_PID=1427`, `TERM=xterm-kitty`, exactly ONE id-keyed object with a bogus-id NEG control at
+  0, `cc-notify --self` = 27, `ITERM_SESSION_ID=w0t0p0:27`, `CC_TERM` UNSET — the twenty-sixth
+  consecutive link to resolve by `KITTY_WINDOW_ID`. The `qos-rewrite.sh` diff was **empty, the
+  133rd consecutive clean**. `cc-roles list` read the byte-identical four-row table again; the
+  mailbox file `~/.claude/mailbox/27.md` is **unchanged at 4,059 bytes / 1 line**, still #217's
+  single consumed message. **Nothing closed BY ME and nothing filed** — per premise 3, and because
+  the two rows that moved are the actuator's and a sibling's.
 - **2026-08-27 — drain recycle #251: method 221 — A SIGPIPE SITE'S FLOOR IS SET BY THE BYTES THE
   LAST PRE-CONSUMER STAGE EMITS, NOT BY THE BYTES ITS PRODUCER WRITES.** #250 established that a
   hazard's rank must key on which side of the pipe the variable sits on rather than on how it is
