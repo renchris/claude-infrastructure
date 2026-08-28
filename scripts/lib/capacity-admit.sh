@@ -147,17 +147,59 @@
 # that file's own conclusion, executable in its selftest (5.98/core pinned as a known false ALARM).
 #
 # 🚨 THIS IS NOT A CASE TO RAISE THE NUMBER. `fix(fire-gate): load1 does not move with the spawn it
-# was gating` (f944d6e3, 2026-08-20, ancestor of trunk) established the stronger fact: an additional
-# RESIDENT session moves the 1-min runnable count by ~0, so NO value of this literal can make the
-# term correct — the INPUT is wrong, not the number. The load term therefore DEFAULTS OFF in
+# was gating` (2026-08-20) established the stronger fact: an additional RESIDENT session moves the
+# 1-min runnable count by ~0, so NO value of this literal can make the term correct — the INPUT is
+# wrong, not the number. VERIFY IT IN THE CODE, NOT BY SHA: the claim's anchor on trunk is the
+# `${CC_FIRE_LOAD_TERM:-off}` default in `capacity_gate()` (scripts/handoff-fire.sh) and the reasoning
+# block immediately above it, both greppable. This sentence used to name `f944d6e3` "ancestor of
+# trunk"; that sha is NOT an ancestor of origin/main — it survives only on the cloud fire branches
+# that produced it, and its content reached trunk under a rebased sha inside another subject's land.
+# It resolved in the authoring checkout and nowhere else, which is precisely the failure the
+# cite-by-SUBJECT rule six lines above exists to prevent. The load term therefore DEFAULTS OFF in
 # capacity_gate() (CC_FIRE_LOAD_TERM) and has been off on the Agent-tool path since Wave D;
 # `segments` and `active` carry its intent because they DO move with the spawn. The literal stays at
 # 2.0 on purpose — C18: a fix moves a TERM SWITCH, never a ceiling — and raising it is the lazy
-# design docs/plans/LOAD_INSENSITIVE_VERIFY_V2.md:156 exists to reject. It still binds only where
-# `cc_capacity_admit` leaves the term on: the two unattended recovery callers
-# (scripts/boot-resume-launch.sh, scripts/limit-recover/lr-fire-resume.sh), DELIBERATELY — see the
-# load-term block below, which prices that imprecision at a delayed resume, and both are
-# budget-released after CC_ADMIT_BUDGET consecutive refusals.
+# design docs/plans/LOAD_INSENSITIVE_VERIFY_V2.md:156 exists to reject.
+#
+# WHERE IT STILL BINDS — FOUR unattended callers, and this list is now DERIVED, not written down.
+# `CC_ADMIT_LOAD_TERM` defaults to `on` (see the load-term block below), so a caller binds unless it
+# passes `CC_ADMIT_LOAD_TERM=off`; exactly one does (hooks/agent-teams-enforce.sh, the Agent-tool
+# path, since Wave D). Everything else that calls `cc_capacity_admit` carries the underived ceiling:
+#   bin/cc-resume-layout.sh · bin/reso-resume-one · scripts/boot-resume-launch.sh ·
+#   scripts/limit-recover/lr-fire-resume.sh
+# DELIBERATELY — the load-term block below prices that imprecision at a delayed resume, and all four
+# are budget-released after CC_ADMIT_BUDGET consecutive refusals.
+#
+# 🚨 THIS SENTENCE READ "the two unattended recovery callers" UNTIL 2026-08-25, AND THE MISSING TWO
+# WERE BOTH `bin/`. It was true when written and two later lands falsified it with no conflict —
+# `fix(resume): gate the per-monitor batch through capacity admission, and re-land it` added
+# cc-resume-layout.sh, `feat(reso-resume-one): the last capacity bypass was a direct call to the
+# engine` added reso-resume-one (cite by SUBJECT, a land rebases). Neither touched this comment, so
+# nothing could conflict, and the block arguing that an underived ceiling is TOLERABLE understated
+# its own blast radius by 2×. That is the whole hazard of a hand-maintained caller census
+# (memory `scan-revision-predates-the-fix`), so the list is no longer maintained by hand:
+# tests/capacity-admit-coverage.bats case 30 recomputes it from the tree and reddens when this
+# comment and the tree disagree in EITHER direction.
+#
+# 🚨 AND THE DERIVATION IS NOT MERELY PENDING — ITS NAMED BLOCKER CANNOT SUPPLY IT. Backlog
+# e981656df348 filed this ceiling as "derive it, do NOT blind-raise; blocked on the marginal-load
+# measurement" (193ae8ddce72, scripts/capacity-marginal.sh). That dependency does not exist: a
+# marginal is a SLOPE (Δload per active session) and a ceiling wants a FAILURE POINT, and no slope
+# can produce one on an axis whose survived population straddles its own fatal value (the paragraph
+# above). docs/research/marginal-load-per-active-session-2026-08-19.md §6 says so by omission — what
+# a PASS there produces is a per-ACTIVE-session COEFFICIENT, and it claims nothing about this
+# literal, because it cannot. So e981656df348's premise is REFUTED, not blocked: waiting on
+# 193ae8ddce72 would keep this line open forever against a measurement that was never going to
+# close it.
+# The quote-site half of 193ae8ddce72 is ALREADY DISCHARGED and was never this line's dependency
+# anyway: `fix(capacity): strike the refuted 2.5-5 marginal from all three live sites` (2026-08-26)
+# struck them with NO value substituted. There were THREE, not the two that doc's §2/§6 enumerate —
+# scripts/lib/spawn-presence.sh, which DEFINES the ACTIVE population the coefficient is denominated
+# in, was the third — so re-grep at the PASS rather than working from any written list of paths.
+# That land also left CC_ADMIT_ACTIVE_CEILING=8 standing on the 127/127 refusal band, a count over
+# refusals needing no per-session divisor, which is why the ceiling is not blocked on §6 either.
+# (Prose is `#` + 1 space here on purpose: `#` + 3 is the DERIVED LIST's indentation, which case 30
+# parses, and prose wearing the list's shape is how a ratchet starts reading sentences as data.)
 CC_HW_DEFAULT_MAX_LOAD_PER_CORE=2.0
 CC_HW_DEFAULT_MIN_HEADROOM_GB=4
 

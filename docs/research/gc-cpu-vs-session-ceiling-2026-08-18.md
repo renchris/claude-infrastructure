@@ -144,6 +144,61 @@ measurement (load1 delta across N all-active sessions) and set the ceiling from 
 point. That is a two-arm experiment, not a config edit, and it is the only thing that can legitimately
 move a capacity constant.
 
+> ### 🚨 That last paragraph is REFUTED, and it is refuted by this section's own block quote (2026-08-25)
+>
+> **The prescription above cannot be carried out — not "not yet", but never on this axis — and leaving
+> it standing is what kept re-filing the work.** It is preserved verbatim because it is the text
+> backlog `e981656df348` was filed from, and a reader who finds only the correction cannot tell what
+> was wrong. Three facts kill it, the first of which is four paragraphs above:
+>
+> 1. **"Set the ceiling from a measured failure point" has no solution here.** The block quote in this
+>    very section records that **the survived population contains the fatal value** — fatal 2026-08-05
+>    at 2.53/core, against 13 consecutive survived samples spanning 2.92–5.98/core, all on a box that
+>    lived. This section states that as its own headline ("an axis that provably cannot separate fatal
+>    from survived") and then, twelve lines later, prescribes measuring exactly that separation. The
+>    contradiction is internal; no new measurement is needed to see it.
+> 2. **The number is not the broken part.** `fix(fire-gate): load1 does not move with the spawn it was
+>    gating` (2026-08-20) established that an additional RESIDENT session moves the 1-minute runnable
+>    count by ~0. So **no value of `CC_HW_DEFAULT_MAX_LOAD_PER_CORE` can make the term correct**: the
+>    INPUT is wrong. "Derive it, don't raise it" and "raise it" are the same category error, differing
+>    only in politeness. **Verify this in the code, never by sha:** the anchor on trunk is the
+>    `${CC_FIRE_LOAD_TERM:-off}` default in `capacity_gate()` (`scripts/handoff-fire.sh`) and the
+>    reasoning block above it, both greppable. An earlier revision of this bullet — and of the code
+>    comment it summarises — named that fix `f944d6e3` and called it an ancestor of trunk. It is not:
+>    `git merge-base --is-ancestor f944d6e3 origin/main` fails, and `git branch --contains` puts it
+>    only on the cloud fire branches that produced it, its content having reached trunk under a
+>    rebased sha inside another subject's land. The sha resolved in its authoring checkout and nowhere
+>    else, which is the exact failure the cite-by-SUBJECT rule exists to prevent — including here.
+> 3. **The blocker this item named cannot supply the derivation.** `e981656df348` was filed as
+>    *"blocked on the marginal-load measurement"* (`193ae8ddce72`, `scripts/capacity-marginal.sh`).
+>    A marginal is a **slope**; a ceiling wants a **failure point**; and no slope yields one on an axis
+>    whose survived set straddles its fatal value. `marginal-load-per-active-session-2026-08-19.md` §6
+>    says as much by omission — what a PASS there produces is a per-ACTIVE-session **coefficient**,
+>    and it claims nothing about this literal, because it cannot. **The dependency does not exist**,
+>    so waiting on it would have held this item open against a measurement that was never going to
+>    close it. (The *quote-site* half of `193ae8ddce72` was never this ceiling's dependency and is in
+>    any case already discharged: `fix(capacity): strike the refuted 2.5-5 marginal from all three
+>    live sites` (2026-08-26) struck them with **no value substituted**, and found **three** sites
+>    where §2/§6 of that doc enumerate two — `scripts/lib/spawn-presence.sh`, which *defines* the
+>    ACTIVE population, was the third. Re-grep at the PASS rather than working from a list of paths.)
+>
+> **What replaced the derivation is already on trunk**, in `scripts/lib/capacity-admit.sh` at the
+> `CC_HW_DEFAULT_MAX_LOAD_PER_CORE` block: the load term **defaults OFF** in `capacity_gate()`
+> (`CC_FIRE_LOAD_TERM`) and is off on the Agent-tool path; `segments` and `active` carry its intent
+> because they *do* move with the spawn; and the literal stays at 2.0 deliberately under C18 — *a fix
+> moves a TERM SWITCH, never a ceiling*. The residue is a blast radius, not a number, and that is now
+> derived rather than asserted: **four** unattended callers still bind it
+> (`bin/cc-resume-layout.sh`, `bin/reso-resume-one`, `scripts/boot-resume-launch.sh`,
+> `scripts/limit-recover/lr-fire-resume.sh`), all budget-released, with
+> `tests/capacity-admit-coverage.bats` **case 30** recomputing that list from the tree in both
+> directions. The comment had said *two* since it was written; two later lands added the `bin/` pair
+> without touching it, so the paragraph arguing the ceiling was tolerable understated its own reach
+> by 2× with no conflict to catch it.
+>
+> **Do not re-file this as a measurement.** The one thing that would legitimately reopen it is a
+> *different instrument* — one that moves with the spawn — not another run on `load1`. Closing
+> evidence: `e981656df348`.
+
 ## 4 · If 2.1.234 is adopted, adopt it on other grounds — and set one env var first
 
 The upgrade is defensible for 33 releases of unrelated fixes, never for capacity. Two items gate it:
