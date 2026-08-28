@@ -564,7 +564,17 @@ classify() { # <id>
   # evidence-of-push alone is the defect below.
   if [ -z "$sha" ] && [ "$pushed" -eq 0 ]; then
     if [ "$age" -gt "$boot" ]; then
-      printf 'NOT-STARTED\tno ref after %s (boot budget %s)\t%s\n' "$(dur "$age")" "$(dur "$boot")" "$url_cmd"
+      # TWO DETAILS FOR ONE STATE, and the difference is the whole of §4.1. A fire that issued the
+      # boot contract told the session to push BEFORE doing anything else, so a missing ref past the
+      # budget rules out the running-but-nothing-to-commit world and the verdict is about the
+      # session. A declaration with no contract — a hand-declare of a web-UI session, or one made by
+      # a fire path that predates cc_cloud_payload — rules out nothing, and saying so is the point:
+      # the state is the same alarm either way, but only one of them is evidence of a dead boot.
+      if [ "$(dfield "$f" boot_contract)" = 1 ]; then
+        printf 'NOT-STARTED\tboot push contracted, none after %s\t%s\n' "$(dur "$age")" "$url_cmd"
+      else
+        printf 'NOT-STARTED\tno ref after %s (no boot contract)\t%s\n' "$(dur "$age")" "$url_cmd"
+      fi
     else
       printf 'BOOTING\tno ref yet, %s into a %s budget\t-\n' "$(dur "$age")" "$(dur "$boot")"
     fi
@@ -673,7 +683,7 @@ do_check() {
 cmd_declare() {
   local id="" branch="" remote="origin" repo="$ROOT" paths="" trunk="" url="" surface="" item="" account=""
   local boot="" stall="" life="" f base="" brc=0
-  local notify_back="" goal="" goal_probe="" custody=""
+  local notify_back="" goal="" goal_probe="" custody="" boot_contract=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --id)      id="${2:-}"; shift 2 ;;
@@ -709,6 +719,14 @@ cmd_declare() {
       --goal)        goal="${2:-}"; shift 2 ;;
       --goal-probe)  goal_probe="${2:-}"; shift 2 ;;
       --custody)     custody="${2:-}"; shift 2 ;;
+      # ── THE ABSENCE CONTRACT (§4.1). A FACT ABOUT THE FIRE, recorded where the fire's other
+      # unrecoverable facts are: the payload is gone the instant the create returns, so nothing
+      # downstream can ask whether the brief mandated a boot push. §4.1's argument is that no-ref is
+      # ambiguous between four worlds and only a contract collapses them — so C1's "NOT-STARTED"
+      # licenses the reading "never booted" ONLY for a session whose brief required a push as its
+      # first act. A hand-declaration of a session started in the web UI issued no such contract,
+      # and its absence really is ambiguous; classify() says so rather than borrowing the verdict.
+      --boot-contract) boot_contract=1; shift ;;
       --boot)    boot="${2:-}"; shift 2 ;;
       --stall)   stall="${2:-}"; shift 2 ;;
       --life)    life="${2:-}"; shift 2 ;;
@@ -790,6 +808,7 @@ cmd_declare() {
     [ -n "$goal" ]        && printf 'goal=%s\n' "$goal"
     [ -n "$goal_probe" ]  && printf 'goal_probe=%s\n' "$goal_probe"
     [ -n "$custody" ]     && printf 'custody=%s\n' "$custody"
+    [ "$boot_contract" = 1 ] && printf 'boot_contract=1\n'
     is_num "$boot"  && printf 'boot_s=%s\n' "$boot"
     is_num "$stall" && printf 'stall_s=%s\n' "$stall"
     is_num "$life"  && printf 'life_s=%s\n' "$life"

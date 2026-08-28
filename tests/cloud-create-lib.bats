@@ -316,3 +316,94 @@ View: https://claude.ai/code/session_01REALREALREALREALREALR?from=cli&m=0"
   run git check-ref-format --branch "$a"
   [ "$status" -eq 0 ]
 }
+
+# ── 20-23 · THE BOOT CONTRACT (CLOUD_OBSERVABILITY.md §4.1; backlog 0c8b39b67665) ───────────────
+# §4.1 is the load-bearing argument of the whole observability design: absence of a ref is ambiguous
+# between four worlds — never started, died at boot, refused entitlement, and running-but-nothing-
+# to-push — and no inbound channel to a cloud VM exists to ask which. Only a CONTRACT collapses
+# them: the brief requires a push as the session's FIRST act, so no ref past the boot budget stops
+# being a shrug and becomes C1 NOT-STARTED.
+#
+# That contract was prose in a plan document and nothing else. handoff-fire.sh appended a "read this
+# before you finish" trailer (a push at the END, which leaves the ambiguity intact for the entire
+# life of the session) and bin/cc-offload's API lane sent the brief with no push instruction at all.
+# These four cases are the contract made checkable; 21 carries the RED control, because a test that
+# only asserts the fixed payload passes just as well against a payload with no contract in it.
+
+@test "20 the boot push is the FIRST act — the contract precedes the brief, which survives verbatim" {
+  local p sw brief
+  p="$(cc_cloud_payload claude/fire-x 'THE BRIEF BODY — do the thing')"
+  sw="$(printf '%s\n' "$p" | grep -n 'git switch -c claude/fire-x' | head -1 | cut -d: -f1)"
+  brief="$(printf '%s\n' "$p" | grep -n 'THE BRIEF BODY' | head -1 | cut -d: -f1)"
+  [ -n "$sw" ] || { echo "the payload never instructs the boot push"; false; }
+  [ -n "$brief" ] || { echo "the brief did not survive the wrapper"; false; }
+  # A trailer is not a first act. This is the entire defect: order, not presence.
+  [ "$sw" -lt "$brief" ] || { echo "the contract must PRECEDE the brief (sw=$sw brief=$brief)"; false; }
+  # And the brief is passed through untouched — a wrapper that reflowed it would be editing the work.
+  [[ "$p" == *'THE BRIEF BODY — do the thing'* ]] || false
+}
+
+@test "21 the boot commit is EMPTY-ALLOWED — with the RED control that the predecessor payload was not" {
+  local p
+  p="$(cc_cloud_payload claude/fire-x brief)"
+  # --allow-empty is the load-bearing half. "Push when you have something" re-admits the
+  # nothing-to-commit world the contract exists to exclude, and that world is indistinguishable
+  # from a dead boot for as long as the session runs.
+  [[ "$p" == *'git commit --allow-empty'* ]] || { echo "no empty boot commit — absence stays ambiguous"; false; }
+  [[ "$p" == *'git push -u origin HEAD'* ]] || false
+
+  # RED CONTROL: the payload as it shipped before this contract existed — the brief plus a return
+  # trailer. It satisfies "mentions a push" and fails every predicate that matters, which is why the
+  # predicates above are spelled the way they are.
+  local pre="brief
+── HOW TO RETURN YOUR WORK (this session runs off-box; read this before you finish) ──
+    git switch -c claude/fire-x
+    git push -u origin HEAD"
+  [[ "$pre" != *'--allow-empty'* ]] || { echo "the RED control is not red"; false; }
+  local psw pbr
+  psw="$(printf '%s\n' "$pre" | grep -n 'git switch -c' | head -1 | cut -d: -f1)"
+  pbr="$(printf '%s\n' "$pre" | grep -n '^brief$' | head -1 | cut -d: -f1)"
+  [ "$psw" -gt "$pbr" ] || { echo "the RED control is not red: its push already preceded the brief"; false; }
+}
+
+@test "22 both halves name the SAME branch, and nothing names another one" {
+  local p others
+  p="$(cc_cloud_payload claude/fire-only-this brief)"
+  [ "$(printf '%s\n' "$p" | grep -c 'claude/fire-only-this')" -ge 3 ]
+  # The return half must not re-issue `switch -c`: the branch already exists by then and the command
+  # would fail, teaching the session that the block is approximate.
+  [ "$(printf '%s\n' "$p" | grep -c 'git switch -c')" -eq 1 ]
+  # No push to an invented ref name. §7.4: `HEAD:<branch>` pushes a detached HEAD at a name that is
+  # not the session's working branch, which is how the first push probe came out void.
+  if printf '%s\n' "$p" | grep -q 'HEAD:claude/'; then echo "the payload pushes at an invented ref"; false; fi
+  # And no OTHER claude/ branch is named anywhere — one fire, one observable ref.
+  # `.` is in the class because a branch name may legally contain one; sentence-final periods are
+  # stripped rather than excluded, so a real `claude/a.b` branch would still be caught.
+  others="$(printf '%s\n' "$p" | grep -o 'claude/[A-Za-z0-9._/-]*' | sed 's/\.$//' | sort -u \
+            | grep -cv '^claude/fire-only-this$' || true)"
+  [ "$others" -eq 0 ]
+}
+
+@test "23 the three commands RUN — the contract produces the ref the watcher looks for" {
+  # The strongest form of this test available without a VM: take the commands out of the payload as
+  # literal text and execute them against a real bare remote. A contract that reads well and does
+  # not run would fail in the one place nothing local can observe.
+  local rem="$BATS_TEST_TMPDIR/boot-rem.git" work="$BATS_TEST_TMPDIR/boot-work" br=claude/fire-boot-23
+  git init -q --bare "$rem"
+  git init -q "$work"
+  git -C "$work" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+  git -C "$work" remote add origin "$rem"
+  git -C "$work" config user.email t@t; git -C "$work" config user.name t
+
+  # The ref does not exist yet — the state a watcher reads as NOT-STARTED.
+  [ -z "$(git -C "$work" ls-remote --heads origin "$br")" ]
+
+  # Extract the indented command lines verbatim. If the block stops being runnable-as-written, this
+  # stops finding three commands and the case fails rather than quietly testing nothing.
+  local cmds; cmds="$(cc_cloud_boot_contract "$br" | sed -n 's/^    \(git .*\)$/\1/p')"
+  [ "$(printf '%s\n' "$cmds" | wc -l)" -eq 3 ]
+  ( cd "$work" && printf '%s\n' "$cmds" | while IFS= read -r c; do eval "$c" || exit 1; done ) >/dev/null 2>&1
+
+  # O1: the ref now exists. That is the entire observable the contract buys.
+  [ -n "$(git -C "$work" ls-remote --heads origin "$br")" ]
+}

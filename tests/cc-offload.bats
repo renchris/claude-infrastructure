@@ -622,3 +622,59 @@ EOF
     [[ "$output" == *"cc-offload $v"* ]] || false
   done
 }
+
+# ── THE BOOT CONTRACT ON THE API LANE (CLOUD_OBSERVABILITY.md §4.1; backlog 0c8b39b67665) ────────
+# This lane delivered the brief RAW. The branch is authorised at create here
+# (`outcomes.git_info.branches`, scripts/cloud-create-api.py:357/411), so the VM *may* push — it was
+# simply never told to, by anything. That leaves §4.1's absence contract unimplemented on the lane
+# that is now the default one: a session that pushes nothing leaves zero trace anywhere this box can
+# read, and C1 NOT-STARTED gets read as "never booted" on the strength of a sentence in a plan
+# document no session was ever shown.
+
+@test "up wraps the brief in the BOOT CONTRACT, naming the branch it declared" {
+  _api_fixture
+  ITERM_SESSION_ID="w0t0p9:PANE-UUID" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+
+  # The first act, delivered to the session itself — not a trailer, and not absent.
+  grep -q 'git commit --allow-empty' "$CALLS" || { echo "the brief carried no boot push"; false; }
+  grep -q 'git push -u origin HEAD' "$CALLS" || false
+  # …and the brief still reaches the session intact.
+  grep -q '^cc-notify --cloud session_apitest' "$CALLS" || false
+  grep -q '^brief$' "$CALLS" || { echo "the wrapper ate the brief"; false; }
+
+  # ONE branch, end to end. The contract naming a different branch from the declaration is the
+  # failure a second copy of the payload produces, and it is silent: both halves look right alone.
+  local br
+  br="$(grep -o -- '--branch claude/fire-[A-Za-z0-9._-]*' "$CALLS" | head -1 | awk '{print $2}')"
+  [ -n "$br" ] || { echo "no branch was declared"; false; }
+  grep -q "git switch -c $br" "$CALLS" || { echo "the contract names a branch nobody declared"; false; }
+  grep -q -- '--boot-contract' "$CALLS" || { echo "the fire contracted a boot push and never recorded it"; false; }
+}
+
+@test "up REFUSES before the create when the contract library is unreachable" {
+  # Fail-closed, and BEFORE the quota: firing without the wrapper spends an account's rate limit on
+  # a session that is unobservable by construction, which is the same trade handoff-fire.sh already
+  # refuses at :cloud-lib-absent. A refusal after the create is not a refusal.
+  _api_fixture
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+import os, sys
+open(os.environ["CALLS"], "a").write("create-api SPENT\n")
+print("session_apitest")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_CREATE_LIB="$BATS_TEST_TMPDIR/no-such-lib.sh" \
+    run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"REFUSING"* ]] || false
+  ! grep -q 'create-api SPENT' "$CALLS" || false
+  ! grep -q 'cc-cloud declare' "$CALLS" || false
+
+  # POSITIVE CONTROL: the identical fixture with the library present DOES fire, so the refusal
+  # above is the missing library and not the stub.
+  : >"$CALLS"
+  run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+  grep -q 'create-api SPENT' "$CALLS" || false
+}

@@ -512,6 +512,24 @@ cmd_up_api() {
   local api="${CC_OFFLOAD_CREATE_API:-$ROOT/scripts/cloud-create-api.py}"
   [ -f "$api" ] || { note "cc-offload: missing $api"; return 3; }
 
+  # THE PAYLOAD WRAPPER, AND WHY ITS ABSENCE IS A REFUSAL RATHER THAN A DEGRADED FIRE.
+  # This lane used to deliver the brief RAW (`cc-notify --cloud "$sid" "$(cat "$pf")"`) with no push
+  # instruction of any kind. The branch is authorised at create here — `outcomes.git_info.branches`,
+  # scripts/cloud-create-api.py:357/411 — so the VM *may* push; it was simply never told to, and a
+  # session that pushes nothing leaves zero trace anywhere this box can read (CLOUD_OBSERVABILITY.md
+  # §1). Firing without the wrapper therefore spends an account's quota on a session that is
+  # unobservable by construction, which is the same trade handoff-fire.sh already refuses at
+  # :cloud-lib-absent. Checked HERE, before the create, because a refusal after the quota is spent
+  # is not a refusal.
+  local lib="${CC_OFFLOAD_CREATE_LIB:-$ROOT/scripts/lib/cloud-create.sh}"
+  if [ ! -f "$lib" ]; then
+    note "cc-offload: REFUSING — $lib is unreachable, so the boot/return contracts cannot be built."
+    note "  A brief without them creates a session nothing on this box can observe or collect."
+    return 3
+  fi
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  . "$lib" || { note "cc-offload: REFUSING — $lib failed to source"; return 3; }
+
   # The router is the arbiter — never re-rank accounts here.
   if [ "$account" = auto ]; then
     [ -n "$ACCOUNTS_BIN" ] && account="$("$ACCOUNTS_BIN" --route general 2>/dev/null)"
@@ -550,7 +568,7 @@ cmd_up_api() {
     # send about one (exit 3). Carry the owning account or the send goes out unrouted — and carry
     # the management fields, because nothing downstream can reconstruct them (see the W2 block above).
     local -a dargs=(declare --id "$sid" --branch "$br" --account "$account" --repo "$REPO"
-                    --url "https://claude.ai/code/$sid" --custody "$sid")
+                    --url "https://claude.ai/code/$sid" --custody "$sid" --boot-contract)
     if [ -n "$UP_ITEM" ]; then dargs+=(--item "$UP_ITEM"); else dargs+=(--item "cc-offload $(basename "$pf")"); fi
     [ -n "$UP_NOTIFY_BACK" ] && dargs+=(--notify-back "$UP_NOTIFY_BACK")
     [ -n "$UP_GOAL" ]        && dargs+=(--goal "$UP_GOAL")
@@ -569,7 +587,12 @@ cmd_up_api() {
         || note "cc-offload: custody could not be opened for $sid — the close-integrity arm is NOT armed for it."
     fi
 
-    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$(cat "$pf")" >/dev/null 2>&1
+    # The brief goes out WRAPPED, from the same function handoff-fire.sh's CLI lane uses: the
+    # first-act boot push (§4.1's absence contract, which is what makes C1 NOT-STARTED mean "never
+    # booted" rather than "no ref, cause unknown") and the return contract. One function, so the
+    # two lanes can never name different branches or drift on the instruction.
+    local payload; payload="$(cc_cloud_payload "$br" "$(cat "$pf")")"
+    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$payload" >/dev/null 2>&1
     local drc=$?
     if [ "$drc" != 0 ]; then
       note "cc-offload: $sid created+declared but the brief did NOT queue (cc-notify exit $drc)."

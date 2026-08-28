@@ -150,6 +150,52 @@ session's brief requires its **first act** to be pushing that branch — an empt
 Absence then becomes informative: no ref inside the budget is `BOOTING` (expected); no ref past it
 is `NOT-STARTED` (actionable — re-fire, or check entitlement).
 
+#### 4.1a The contract was PROSE ONLY until 2026-08-28 — and it is the load-bearing half
+
+🚨 **The paragraph above was, for the entire life of the fire path, the whole of the contract: a
+sentence in this document that no cloud session was ever shown** (backlog `0c8b39b67665`). Both
+lanes shipped without it, in different directions:
+
+| Lane | What the session was actually told | What that leaves |
+| --- | --- | --- |
+| `handoff-fire.sh --cloud` | a trailer headed *"HOW TO RETURN YOUR WORK … read this before you finish"* — `switch -c` + push, at the END | a session that boots, works for an hour and pushes on the way out is indistinguishable from a dead boot **for that whole hour**. `boot_s` is 15m, so C1 fires and the item is re-fired against a session already doing it. |
+| `cc-offload up` (the API lane, and the default one) | the brief, **raw** — `cc-notify --cloud "$sid" "$(cat "$pf")"`, no push instruction of any kind | the branch is authorised at create (`outcomes.git_info.branches`), so the VM *may* push; nothing ever told it to. §1's "a cloud session that pushed nothing leaves zero trace" was the guaranteed outcome, not the hazard. |
+
+So C1 `NOT-STARTED` was being read as *"never booted"* on the strength of an unimplemented
+requirement — the same shape as §10.2c's false `ALIVE`, a confident verdict computed from evidence
+that has nothing to do with the session. §7.5's eleven sessions and §11.4's fire were all graded
+against it.
+
+**Now implemented, in ONE place because two copies is how the lanes drifted apart:**
+`scripts/lib/cloud-create.sh` — `cc_cloud_boot_contract` (the first-act block),
+`cc_cloud_return_contract` (§11.4's return half), `cc_cloud_payload` (boot + brief + return, in
+that order). Both lanes call `cc_cloud_payload`; `bin/cc-offload` REFUSES before the create if the
+library is unreachable, on the same grounds `handoff-fire.sh` already refuses at
+`:cloud-lib-absent` — firing without it spends an account's quota on a session that is unobservable
+by construction.
+
+**The empty commit is the load-bearing half, not ceremony.** Without it the contract degrades to
+*"push when you have something"*, which re-admits the fourth world above — running, alive, nothing
+to commit yet — and that world is indistinguishable from a dead boot for exactly as long as the
+session takes to produce its first file. `git switch -c` precedes it for §7.4's reason (a push of a
+detached HEAD to a ref name this side invented is not the session's working branch), and `push -u`
+follows so the session's later pushes need no argument.
+
+**And the reader now says which absence it saw.** `cc-cloud declare --boot-contract` records
+`boot_contract=1` — a fact about the FIRE, recorded where the fire's other unrecoverable facts are,
+because the payload is gone the instant the create returns. `classify()` then emits two details for
+the one state: `boot push contracted, none after 15m` (the contract was issued, so the
+nothing-to-push world is ruled out and the verdict is about the session) versus `no ref after 15m
+(no boot contract)` for a hand-declaration of a web-UI session, which rules out nothing. Same alarm,
+different claim — borrowing the stronger reading for a declaration that never earned it is the
+defect this whole document is organised against.
+
+Suites: `tests/cloud-create-lib.bats` 20-23 (case 21 carries the RED control — the predecessor
+payload satisfies "mentions a push" and fails every predicate that matters; case 23 executes the
+three commands against a real bare remote and asserts O1 appears), `tests/handoff-fire-cloud.bats`
+20, `tests/cc-cloud.bats` B1/B2, `tests/cc-offload.bats` (the wrapped brief + the fail-closed
+refusal, with its positive control).
+
 ### 4.2 The discriminator the whole design rests on
 
 Measured, not assumed:
@@ -776,7 +822,9 @@ Before any cloud session is fired, in this order:
 1. `cc-cloud declare --id <id> --branch <b> --paths <what it will land> --url <session url>` —
    an undeclared cloud session is unobservable, and `declare` refuses without `--id`/`--branch`.
 2. The session's brief must require **pushing the declared branch as its first act**, so that
-   absence past the boot budget means something (§4.1).
+   absence past the boot budget means something (§4.1). ✅ **IMPLEMENTED 2026-08-28** —
+   `cc_cloud_payload` wraps every brief on both lanes and `--boot-contract` records that it did;
+   until then this step was prose only and no session had ever been shown it (§4.1a).
 3. §5.2 must be wired first — otherwise `com.claude.team-orphan-reaper` may archive the team
    while the session is healthy.
 4. On completion, `cc-cloud retire --id <id>` — or let C3 `LANDED` render it silent, which it does

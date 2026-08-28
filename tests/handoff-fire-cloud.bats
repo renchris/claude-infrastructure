@@ -461,3 +461,36 @@ EOF
   [ -s "$CLOUD_DECL_LOG" ]
   [ ! -f "$BATS_TEST_TMPDIR/pf-off.log" ]                # the override SKIPS the probe, not just its verdict
 }
+
+# ── 20 · THE BOOT CONTRACT ON THIS LANE (CLOUD_OBSERVABILITY.md §4.1; backlog 0c8b39b67665) ─────
+# Case 17 above proves the payload creates the branch it pushes. It does NOT prove the push happens
+# FIRST, and until this case that was the actual state: the payload carried one trailer, headed
+# "read this before you finish", i.e. a push on the way out. §4.1's absence contract needs the
+# opposite — a push before any work — because that is the only thing that makes "no ref past the
+# boot budget" mean "never booted" instead of "no ref, cause unknown". A session that boots, works
+# for an hour and pushes at the end is indistinguishable from a dead boot for that whole hour, and
+# the watcher re-fires the item at 15 minutes against a session already doing it.
+#
+# RED-PROOF (re-runnable): replay against `git show <pre-fix sha>:scripts/handoff-fire.sh` in a
+# scratch tree carrying scripts/lib/cloud-create.sh from the same sha. Both halves go RED — the
+# payload contained no `--allow-empty` at all, and the declare carried no `--boot-contract`.
+
+@test "20 the fire CONTRACTS a boot push as the first act, and RECORDS that it did" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "$(printf 'Created cloud session: t\x1b[8GView: https://claude.ai/code/session_01TESTTESTTESTTESTTESTT?from=cli')" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ "$status" -eq 0 ]
+  [ -s "$BATS_TEST_TMPDIR/create.log" ]
+
+  local commit brief
+  commit="$(grep -n 'git commit --allow-empty' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  brief="$(grep -n 'cloud venue gate fixture payload' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$commit" ] || { echo "the payload never contracts an EMPTY boot commit — absence stays ambiguous"; false; }
+  [ -n "$brief" ] || { echo "the brief did not reach the create"; false; }
+  [ "$commit" -lt "$brief" ] || { echo "the boot push must PRECEDE the brief (commit=$commit brief=$brief)"; false; }
+
+  # The DECLARATION is where the verdict is computed from, and the payload is gone the moment the
+  # create returns — so "this fire issued the contract" is recorded there or it is unrecoverable.
+  grep -q -- "--boot-contract" "$CLOUD_DECL_LOG" \
+    || { echo "the fire contracted a boot push and never told the watcher"; false; }
+}

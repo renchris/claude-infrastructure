@@ -722,3 +722,71 @@ setup() {
   [ "$status" -eq 0 ]
   [ -f "$CC_CLOUD_STATE/absdecl.decl" ] || { echo "an unreachable remote turned into a refusal"; false; }
 }
+
+# ── B1/B2 · THE ABSENCE CONTRACT IS RECORDED, AND C1 SAYS WHICH KIND OF ABSENCE IT SAW ───────────
+# §4.1 is the argument the whole state function rests on: no-ref is ambiguous between four worlds —
+# never started, died at boot, refused entitlement, running-with-nothing-to-push — and there is no
+# inbound channel to a cloud VM to ask which. Only a CONTRACT collapses them, and the contract is
+# that the brief requires a push as the session's FIRST act (now emitted by
+# scripts/lib/cloud-create.sh:cc_cloud_payload and passed here as --boot-contract by both fire
+# lanes; backlog 0c8b39b67665).
+#
+# So C1 has two readings and they are not the same claim. With the contract, a missing ref past the
+# budget rules out the nothing-to-push world and is evidence about the SESSION. Without it — a
+# hand-declaration of a web-UI session, a fire path that predates the wrapper — it rules out
+# nothing. The state is the same alarm either way; borrowing the stronger reading for a declaration
+# that never earned it is precisely the "confident verdict computed from evidence that has nothing
+# to do with the session" this file exists to refuse.
+
+@test "B1 a contracted fire reads NOT-STARTED as a MISSING BOOT PUSH; an uncontracted one does not" {
+  have_subject
+  local r; r="$(bare bootc)"
+  cloud declare --id contracted --branch claude/c-1 --remote "$r" --repo "" --boot 900 --boot-contract
+  cloud declare --id barefire   --branch claude/c-2 --remote "$r" --repo "" --boot 900
+
+  # The fact is on disk, where a verdict computed minutes later can still read it: the payload that
+  # carried the contract is gone the instant the create returns.
+  grep -q '^boot_contract=1$' "$CC_CLOUD_STATE/contracted.decl" || { echo "the contract was not recorded"; false; }
+  if grep -q '^boot_contract=' "$CC_CLOUD_STATE/barefire.decl"; then
+    echo "an uncontracted declaration claims a contract"; false
+  fi
+
+  export CC_CLOUD_NOW=$((T0 + 901))
+  [ "$(tstate contracted)" = "NOT-STARTED" ]
+  [ "$(tstate barefire)" = "NOT-STARTED" ]      # same STATE — the contract changes the reading, not the arm
+
+  local dc db
+  dc="$("$CLOUD" --json | sed -n 's/.*"subject":"contracted".*/&/p' | sed -n 's/.*"detail":"\([^"]*\)".*/\1/p')"
+  db="$("$CLOUD" --json | sed -n 's/.*"subject":"barefire".*/&/p'   | sed -n 's/.*"detail":"\([^"]*\)".*/\1/p')"
+  [[ "$dc" == *"boot push contracted"* ]] || { echo "a contracted fire does not say so: '$dc'"; false; }
+  [[ "$db" == *"no boot contract"* ]] || { echo "an uncontracted absence claims more than it knows: '$db'"; false; }
+
+  # POSITIVE CONTROL on the same fixture: the contracted declaration is silent INSIDE the budget,
+  # so the row above is the clock firing and not the flag.
+  export CC_CLOUD_NOW=$((T0 + 100))
+  [ "$(tstate contracted)" = "BOOTING" ]
+}
+
+@test "B2 both C1 details obey the FROZEN row schema — ASCII, <=44 bytes" {
+  # The board's renderer pads by BYTES (bin/cc-cloud's row-schema note), so one multibyte character
+  # silently shifts a column for every consumer. A new detail string is exactly where that gets
+  # introduced, and `dur` widens with age — so the check is run at an age that produces the widest
+  # duration this function can print.
+  have_subject
+  local r; r="$(bare bootc2)"
+  cloud declare --id wide1 --branch claude/w-1 --remote "$r" --repo "" --boot 900 --boot-contract
+  cloud declare --id wide2 --branch claude/w-2 --remote "$r" --repo "" --boot 900
+  export CC_CLOUD_NOW=$((T0 + 400 * 86400))          # "400d" — the widest dur() output
+
+  local d n seen=0
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    seen=$((seen + 1))
+    n="$(printf '%s' "$d" | wc -c | tr -d ' ')"
+    [ "$n" -le 44 ] || { echo "detail is $n bytes, over the frozen 44: '$d'"; false; }
+    if printf '%s' "$d" | LC_ALL=C grep -q '[^ -~]'; then echo "detail is not ASCII: '$d'"; false; fi
+  done < <("$CLOUD" --json | sed -n 's/.*"detail":"\([^"]*\)".*/\1/p')
+  # The loop is only evidence if it ran: an empty read list passes every assertion inside it.
+  [ "$seen" -eq 2 ] || { echo "expected 2 detail strings, saw $seen"; false; }
+  [ "$(rows)" -eq 2 ]
+}

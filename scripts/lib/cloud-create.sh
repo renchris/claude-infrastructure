@@ -6,6 +6,10 @@
 #   cc_cloud_session_id           stdin → session_…   "" when the output names no session
 #   cc_cloud_create_once  cfg cwd prompt  → "<outcome>\t<id>\t<msg>"
 #   cc_cloud_create       cfg cwd prompt  → same, with a BOUNDED retry over the transient class
+#   cc_cloud_branch_name          → claude/fire-<utc>-<pid>   the branch the fire ASSIGNS
+#   cc_cloud_boot_contract  branch        → §4.1's first-act push block (the absence contract)
+#   cc_cloud_return_contract branch       → the how-to-return block
+#   cc_cloud_payload      branch brief    → boot contract + brief + return contract, in that order
 #
 # ── WHY THIS FILE EXISTS RATHER THAN A FOURTH COPY ────────────────────────────────────────────
 # CLOUD_OBSERVABILITY.md §10.4 graded G5 ✅ on the parts that were built and discovered the fire
@@ -231,8 +235,89 @@ cc_cloud_create() { # $1=cfgdir $2=cwd $3=prompt → "<outcome>\t<id>\t<msg>"; b
 # forever, which is §10.2c's hazard with the sign flipped: a confident verdict computed from
 # evidence that has nothing to do with the session.
 #
-# So the firing side NAMES the branch and the payload instructs the push (see the trailer
-# handoff-fire.sh appends). That also settles §10.2c's own hazard in the other direction: the name
-# is unique per fire, so — unlike `--branch main`, where trunk's background traffic reads as a
-# heartbeat forever — nothing but this session can advance it. O2 becomes a real signal.
+# So the firing side NAMES the branch and the payload instructs the push (see cc_cloud_payload
+# below). That also settles §10.2c's own hazard in the other direction: the name is unique per
+# fire, so — unlike `--branch main`, where trunk's background traffic reads as a heartbeat forever
+# — nothing but this session can advance it. O2 becomes a real signal.
 cc_cloud_branch_name() { printf 'claude/fire-%s-%s' "$(date -u +%Y%m%dT%H%M%SZ)" "$$"; }
+
+# ── THE BOOT CONTRACT (CLOUD_OBSERVABILITY.md §4.1, §8 step 2) ─────────────────────────────────
+# §4.1's whole argument is that absence is ambiguous and only a CONTRACT disambiguates it: four
+# different worlds — never started, died at boot, refused entitlement, and running-but-with-nothing-
+# to-push — all read as "no ref", and there is no inbound channel to a cloud VM to ask which. The
+# design's answer is that the brief REQUIRES a push as the session's first act, so that no ref past
+# the boot budget stops being a shrug and becomes C1 NOT-STARTED.
+#
+# 🚨 That contract was PROSE ONLY for the whole life of the fire path (backlog 0c8b39b67665). Both
+# lanes shipped without it, in different directions:
+#   · handoff-fire.sh --cloud  appended a "HOW TO RETURN YOUR WORK … read this before you finish"
+#                              trailer — a push at the END. A session that boots, works for an hour
+#                              and pushes on the way out is INDISTINGUISHABLE, for that hour, from
+#                              one that never booted; the watcher calls NOT-STARTED at 15m and the
+#                              item is re-fired against a session already doing it.
+#   · cc-offload up (API lane) delivered the brief RAW via `cc-notify --cloud`, with no push
+#                              instruction of any kind. The branch is authorised at create there
+#                              (`outcomes.git_info.branches`), so the VM *may* push — it was simply
+#                              never told to.
+# So C1 was being read as "never booted" on the strength of a sentence in a plan document that no
+# session had ever been shown. This function is that sentence, made executable, in ONE place: a
+# second copy is how the two lanes drifted apart in the first place.
+#
+# THE EMPTY COMMIT IS THE LOAD-BEARING HALF, not ceremony. Without it the contract is "push when
+# you have something", which re-admits the nothing-to-commit world the contract exists to exclude.
+# `git switch -c` before it, for the reason §7.4 records (a push of a detached HEAD to a ref name
+# this side invented is not the session's working branch), and `push -u` after it so the session's
+# own later pushes need no argument.
+cc_cloud_boot_contract() { # $1=branch → the FIRST-ACT block on stdout
+  local br="$1"
+  cat <<EOF
+── FIRST ACT — RUN THESE THREE COMMANDS BEFORE ANYTHING ELSE ──
+You are running in an Anthropic-managed VM. Nothing on the operator's machine can see your
+filesystem, your processes or your terminal, so the ONLY thing anyone can observe about you is a
+git ref appearing on the remote. Before you read the brief, before you plan, before any other tool
+call:
+
+    git switch -c $br
+    git commit --allow-empty -m "boot: $br"
+    git push -u origin HEAD
+
+The empty commit is the point, not a formality. Absence of that ref is the only signal the watcher
+has, and it must mean exactly one thing: without a boot push, a session that has booted and has
+nothing to commit yet looks identical to one that never started at all — so the watcher reports
+NOT-STARTED at the end of its boot budget and the work is re-fired against a session already doing
+it.
+
+If any of the three fails, say so in your first message and quote the error verbatim, then carry on
+with the brief. A named failure is a diagnosis this box can act on; silence is not.
+EOF
+}
+
+# The RETURN half — the push is also how work gets home, because a cloud VM has no ~/.claude, no
+# cc-notify and no /ship (§1, G6). Kept in the same file as the boot contract so the two can never
+# name different branches, which is the failure mode a second copy produces.
+cc_cloud_return_contract() { # $1=branch → the return block on stdout
+  local br="$1"
+  cat <<EOF
+── HOW TO RETURN YOUR WORK (read this before you finish) ──
+Your only channel home is a git push, and it must go to the branch you created in your first act:
+$br
+The firing side assigned that name and already declared it as the one thing watched for your
+progress; a push anywhere else is invisible and your work will strand.
+
+    git push -u origin HEAD
+
+Push whatever you have before you finish, even if the work is incomplete; an unpushed cloud session
+leaves no trace of any kind. You cannot run this repo's /ship — a local reconciler
+(scripts/cloud-reconcile.sh) discovers the branch and hands it to the sanctioned local lander.
+EOF
+}
+
+# The payload every lane sends: the contract that makes the session OBSERVABLE, the brief, and the
+# contract that makes its work REACHABLE. Order is the point — the boot block is first because it
+# is the first act, and a trailer is not a first act.
+cc_cloud_payload() { # $1=branch $2=brief → the full payload on stdout
+  local br="$1" brief="$2"
+  cc_cloud_boot_contract "$br"
+  printf '\n%s\n\n' "$brief"
+  cc_cloud_return_contract "$br"
+}
