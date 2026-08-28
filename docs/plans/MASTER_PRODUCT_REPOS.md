@@ -157,6 +157,49 @@ branch queue is empty or explicitly abandoned with reasons, the production deplo
 single-brained and audited, and doc_classifier's authorization holes are closed with tests.
 
 ## Status log
+- **2026-08-28 — the 08-27 fix is CORRECT and still did not land; the blocker is one `gate_red` that
+  should be an `arm_nonverdict`, at `scripts/ship-land.sh:3201`.**
+  `8f59467c92b0` fired again, one day later, into the same VM shape (`$HOME=/root`, the checkout at
+  `/home/user/claude-infrastructure`, no `~/Development`, no `~/.claude/autonomy`). R1-R4 remain
+  unreachable and unstarted; nothing in the plan is refuted, only the venue — for the Nth time.
+  This entry adds two things the 08-27 entry could not.
+  **(1) The stranding is ACCELERATING, and the 08-27 commit is itself now stranded.** Re-measured
+  today by patch-id (`git cherry`, which survives `ship-land`'s rebase): of the **181** fire
+  branches dated ≥ 08-24, **180 still carry content absent from trunk** — against 131 of 133
+  measured yesterday. That is ~48 further branches stranded in a single day. Trunk's copy of this
+  file still ends at the 08-17 entry, so the 08-27 arm never reached it either.
+  **(2) The cure is verified, and the ONLY thing between it and trunk is one arm that cannot render
+  a verdict on this platform.** The 08-27 subject-foreign arm was cherry-picked here and
+  re-verified independently, not taken on trust: **68/68 green** across all four `cc-eligible`
+  suites with 0 failures; red-proofed against trunk's `bin/cc-eligible`, where the new suite goes
+  **5 ok / 5 not ok**, failing exactly tests 1, 2, 4, 8, 9 as claimed; and end-to-end on the REAL
+  plan file in a Mac-shaped `$HOME`, `8f59467c92b0` → `verdict=ineligible-foreign-tree`, **exit 3**,
+  naming both trees, while the live control (`AUTONOMY_DISPATCH_V2.md`, which *mentions*
+  `reso-management-app` once but declares nothing) stays `eligible`, exit 0.
+  `scripts/ship-land.sh --dry-run` nonetheless exits **6 (GATE RED)**. Every other arm is clean —
+  statics, all nine ratchets, and `unattended-path` own-scope on the 2 files this diff touches. The
+  single red is `unattended-path-lint --selftest`, **11 of 42**, which reproduces identically on
+  clean `origin/main` in a throwaway worktree with this commit absent. It is environmental: the
+  lint measures the live box's Mac toolchain, and this Linux VM lacks `gtimeout`/`taskpolicy`/
+  `osascript`/`plutil`/`gh`/`shellcheck`/`tmux`, so 8 fixtures resolve nothing (`want 1, got 0`)
+  and 3 `EMBEDDED_ALLOWLIST` staleness checks invert (`want 0, got 1`).
+  🚨 **Where the fix belongs — and why it is a DECISION, not a patch.** `ship-land.sh:3198-3202`
+  answers a failing selftest with `gate_red unattended-path-selftest`. But this file already
+  distinguishes the two cases and has vocabulary for the other one: `arm_nonverdict` (used at
+  `:3192` and `:3205` for precisely "this arm could not produce a trustworthy verdict"), against
+  `GATE_RED` for "a check produced a REAL verdict and it was red" (`:268-274`). A detector that was
+  never able to discriminate **on this platform** has not regressed — it has produced a
+  non-verdict, and the gate is currently classifying it as a red. Making the selftest report *why*
+  it failed, so the gate can tell platform-inapplicability from a genuine regression, is the fix.
+  **Not done here, deliberately:** it changes when a security gate blocks, its safety argument
+  rests on the Mac passing all 42 (true by inference from every landed commit, but not measurable
+  from this VM), and misclassifying even one of the 11 cases would blind a real check on the
+  operator's own box. Do **not** follow the lint's printed fix — deleting the stale
+  `EMBEDDED_ALLOWLIST` lines would remove protections the Mac needs (confirms `46db2550`, itself
+  stranded). No sanctioned bypass exists and none was sought: `SHIP_LAND_UNATTENDED_LINT`
+  substitutes the lint and `SHIP_LAND_UNATTENDED_OWN_SCOPE` only widens scope; the selftest runs
+  unconditionally ahead of `own_run`. **This is the ⛔ for the desk: one platform-policy call that
+  unblocks 180 stranded branches, not this row alone.**
 - **2026-08-27 — the disproofs were never the problem; they never LANDED. Fixed by landing the arm.**
   `8f59467c92b0` fired into the same VM shape again (one checkout, no `~/Development`, no
   `~/.claude/autonomy`), so R1-R4 are unreachable and the premise is refuted at this venue for the
