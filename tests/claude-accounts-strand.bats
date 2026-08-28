@@ -223,17 +223,45 @@ print("OK")'
   # next at phase 0.32 on 2026-08-25: weekly_pct 52, 114 h left, EWMA 1.725 %/h -> a raw
   # projection of 248.7%. In that regime EVERY projector measured here is badly wrong (the
   # incumbent renders 154.6%, this EWMA 231.4%, against a truth near 100%), so the clamp keeps
-  # the shortfall regime -- where the arithmetic converges -- and discards the overshoot. The
-  # account is reported as on a WALL TRAJECTORY, which is true and actionable; "248%" is neither.
+  # the shortfall regime -- where the arithmetic converges -- and discards the overshoot.
+  #
+  # UPDATED IN PLACE, and the update is the SAME finding one step further out
+  # (`docs/research/weekly-reset-utilization-2026-08-25.md` §3, §6). This case used to assert
+  # `⚠ WALL trajectory` on THIS row, mid-window. That flag is `wall_projection`'s linear
+  # projection speaking, and this exact account is the backtest's only WALL: at day 3 it read
+  # 1.19x and projected 119%, and the window closed at 99%. The overshoot regime being wrong is
+  # what this case has always been about; the flag was the one number-free survivor of it, and it
+  # was wrong too. So mid-window the account is now reported by the NOWCAST alone — it renders,
+  # it is labelled, and it makes no forecast. The WALL flag is not deleted: RP-16c pins that it
+  # still fires inside the last 2 days, where linear and empirical converge.
   run python3 -c "$LOAD"'
 r = {"acct": "next", "weekly_pct": 52, "weekly_reset_h": 114.0, "burn_wk_ewma_ph": 1.725}
 st = ca.wk_strand_pp(r)
 assert st == 0.0, st
 line = ca.pace_line([r])
-assert "⚠ WALL trajectory" in line, line
 assert "248" not in line, line
 assert "231" not in line, line
 assert "154" not in line, line
+# NOT SILENCE — the row still renders and is still named. Dropping the account would satisfy
+# every "not in line" arm above, which is why this arm is here.
+assert "next no strand — on pace to fill the window" in line, line
+assert "⚠ WALL trajectory" not in line, line     # mid-window: refuted, so it does not speak
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-16c CONTROL: the ⚠ WALL flag still fires inside the last 2 days — it was narrowed, not cut" {
+  # Same shape, moved to 40 h left (phase 0.762), where the day-6/day-7 backtest converges to
+  # −17 pp / −2 pp. 90% used at 0.762 of the window is 1.18x, projecting 118%. Without this
+  # control, RP-16's `not in line` arm is satisfied by a flag that was removed outright.
+  run python3 -c "$LOAD"'
+r = {"acct": "next", "weekly_pct": 90, "weekly_reset_h": 40.0, "burn_wk_ewma_ph": 1.725}
+assert ca.wk_strand_pp(r) == 0.0, ca.wk_strand_pp(r)
+line = ca.pace_line([r])
+assert "1.18× burn" in line, line
+assert "⚠ WALL trajectory" in line, line
+assert "118" not in line, line                   # still the RATIO, never the >100 projection
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }

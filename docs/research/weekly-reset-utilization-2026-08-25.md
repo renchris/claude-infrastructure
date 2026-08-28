@@ -193,6 +193,16 @@ The one real cost in view is `next3`'s ~8 pp, and with 3.8 h left that is essent
   is to widen the abstain rule so the projection stays silent mid-week, where it is measurably
   uninformative, and speaks only in the last ~2 days where linear and empirical converge
   (day 6: −17 pp; day 7: −2 pp).
+  ✅ **SHIPPED** — `wall_projection()`'s abstain is now two-sided: `WALL_SPEAK_H = 48.0`, so the
+  burn ratio and the projection are returned only inside the window's last 2 days. The original
+  `MIN_ELAPSED_FRAC = 0.05` noise floor is arithmetically subsumed and is kept as the defensive
+  floor that still binds if `WALL_SPEAK_H` is ever widened back out. **The `⚠ WALL` flag went
+  with it mid-window**, deliberately: it is a rendering of the same linear projection, and the
+  one WALL this backtest produced (next@08-23, 119% projected) closed at 99%. `pace_line`'s
+  zero-strand row falls back to the M3a strand **nowcast** it is already headed by. The
+  empirical-trajectory replacement stays UNBUILT and still needs ≥2 more full cycles (§5.2).
+  Pinned by `tests/claude-accounts-burn-ratio.bats` (both mid-window directions plus the 48 h
+  boundary), `claude-accounts-strand.bats` RP-16/RP-16c, and `claude-accounts-core.bats` §5.3.
 
 **Reproduce:** the analysis scripts are in this session's scratchpad; the one-command version of
 the retrospective is `python3 scripts/desk-strand-replay.py`.

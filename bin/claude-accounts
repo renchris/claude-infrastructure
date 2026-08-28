@@ -2152,9 +2152,12 @@ def apply_burn(rows, cfg, samples=None):
 
     # Window-phase view, exported so consumers ROUTE on it instead of re-deriving it from a raw
     # percentage (the governed dispatcher, USAGE_TELEMETRY_100P §4 M1, admits work against this).
-    # Absent keys mean "too early to say" — see wall_projection's abstain rule; a consumer that
-    # treats a missing burn_ratio as 0 would read a fresh window as idle, which is the exact
-    # inversion this metric exists to prevent.
+    # Absent keys mean "not a number I can stand behind here" — see wall_projection's abstain
+    # rule, which is now TWO-SIDED: too early (below the noise floor) AND mid-window, where the
+    # linear divisor is refuted by a mean 46 pp backtest error at day 3. A consumer that treats
+    # a missing burn_ratio as 0 would read a fresh window as idle, which is the exact inversion
+    # this metric exists to prevent; one that treats a mid-week absence as "no wall risk" is
+    # reading the abstain correctly — mid-week, this function has no wall opinion to give.
     # M5: rank each account's REQUIRED rate inside its own realised history. Stamped here, beside
     # the other burn facts, because this is the one place that holds both the rows and the series;
     # pace_line renders what is stamped, so there is still exactly one renderer (L3).
@@ -2285,6 +2288,7 @@ def fmt_burst(bp):
 
 WEEK_H = 168.0          # the weekly bucket's span; reset stamps are exactly 7 d apart
 MIN_ELAPSED_FRAC = 0.05  # ~8.4 h — below this a projection is noise, so we ABSTAIN
+WALL_SPEAK_H = 48.0      # and MID-WINDOW it is refuted, so it speaks only in the last ~2 days
 
 
 def wall_projection(r):
@@ -2300,10 +2304,35 @@ def wall_projection(r):
       burn_ratio = (weekly_pct/100) / elapsed_fraction    1.0 = exactly on pace to end at 100%
       proj_end   = weekly_pct / elapsed_fraction          where the window lands if nothing changes
 
-    ABSTAIN below MIN_ELAPSED_FRAC. This is the whole point rather than a nicety: at 1 h elapsed
-    a 1% reading projects to 168%, so an un-floored projection would page on every fresh window —
-    manufacturing the very false alarm the metric exists to remove. Returning None is the honest
-    answer to "too early to say", per the repo's abstain-never-impute rule.
+    THE ABSTAIN WINDOW IS TWO-SIDED, AND THE MID-WINDOW SIDE IS THE ONE THAT WAS MISSING.
+    Dividing by elapsed fraction removes the PHASE error only under an assumption of LINEAR
+    burn, and that assumption is measurably false here: burn is heavily back-loaded, so the
+    correction that fixed phase left the SHAPE error underneath it — precisely because a phase
+    fix looks like it corrects for both. Measured over the completed windows in
+    `docs/research/weekly-reset-utilization-2026-08-25.md` §3, the empirical median reads
+    **0.49× at day 3**, not the ~1.0 the original derivation asserted, and backtesting this
+    function against what actually happened gives a **mean absolute error of 46 pp at day 3**
+    (individual windows −70, −60, −34, +20) and still **35 pp at day 5**. The sign is
+    systematic: it under-projects every account that is mid-week and behind linear, and it
+    raised a `⚠ WALL` on the one that was ahead — 119% projected, 99% actual. Two windows sat at
+    12% and 17% on day 3 and closed at 98% and 100%.
+
+    So the projection now SPEAKS ONLY IN THE LAST ~2 DAYS, where linear and empirical converge
+    (day 6: −17 pp; day 7: −2 pp), and is SILENT across the mid-window regime where it is
+    measurably uninformative. This is the cheap correct move rather than the expensive one: the
+    real fix is to replace the linear divisor with the empirical trajectory, and **4 windows
+    cannot calibrate a curve** (that doc's §5.2 is explicit that they refute the linear model
+    and do not fit its replacement). Widening an abstain needs no calibration to be right.
+
+    The original MIN_ELAPSED_FRAC noise floor is arithmetically subsumed by WALL_SPEAK_H
+    (frac ≥ 0.714 implies frac ≥ 0.05) and is kept in the same test as a defensive floor: it is
+    what still binds if WALL_SPEAK_H is ever widened back out. Its reason stands unchanged — at
+    1 h elapsed a 1% reading projects to 168%, so an un-floored projection pages on every fresh
+    window, manufacturing the very false alarm the metric exists to remove.
+
+    Returning None is the honest answer to "not a number I can stand behind here", per the
+    repo's abstain-never-impute rule. The trustworthy weekly surface mid-window is M3a's strand
+    NOWCAST (`wk_strand_pp`, "at the pace of the last 48 h"), which carries no lead-time claim.
     """
     wp, wrh = r.get("weekly_pct"), r.get("weekly_reset_h")
     if wp is None or not isinstance(wrh, (int, float)):
@@ -2311,7 +2340,7 @@ def wall_projection(r):
     if not (0 < wrh <= WEEK_H):          # a stamp outside the bucket is bad data, not a signal
         return None, None
     frac = (WEEK_H - wrh) / WEEK_H
-    if frac < MIN_ELAPSED_FRAC:
+    if wrh > WALL_SPEAK_H or frac < MIN_ELAPSED_FRAC:
         return None, None
     return (wp / 100.0) / frac, wp / frac
 
@@ -2414,11 +2443,19 @@ def pace_line(rows):
     NOWCAST, NOT FORECAST — the caption says `at the last 48h of pace` and there is deliberately
     no lead-time claim anywhere on this surface. §5.1 LB-2.
 
-    ZERO-STRAND ROWS STILL RENDER, and render last. `wall_projection`'s burn RATIO survives
-    unchanged on them, because an account on a wall trajectory has no strand and is still the
-    most important thing on the line; what does NOT survive is rendering a weekly projection
-    ABOVE 100 as a number, which is the regime where every projector measured here is wrong by
-    50-130 pp. An abstention renders as the word plus its reason, never as a zero."""
+    ZERO-STRAND ROWS STILL RENDER, and render last. `wall_projection`'s burn RATIO survives on
+    them IN THE WINDOW'S LAST ~2 DAYS, because an account on a wall trajectory there has no
+    strand and is still the most important thing on the line; what does NOT survive is rendering
+    a weekly projection ABOVE 100 as a number, which is the regime where every projector
+    measured here is wrong by 50-130 pp. An abstention renders as the word plus its reason,
+    never as a zero.
+
+    MID-WINDOW THE RATIO IS NOW SILENT, and that is a fix rather than a loss (`wall_projection`'s
+    two-sided abstain; `docs/research/weekly-reset-utilization-2026-08-25.md` §3, §6). The one
+    `⚠ WALL` this line raised at day 3 projected 119% against a 99% actual, while three accounts
+    reading far BEHIND closed at 92-100%. So the mid-week annotation this row used to carry was
+    wrong in both directions, and the row falls back to the strand NOWCAST — which is what the
+    header has said it speaks for all along."""
     def _strand(x):
         # Computed here, not read off the stamp, for the same reason wall_projection is called
         # rather than read off `burn_ratio`: the renderer must not silently render nothing when

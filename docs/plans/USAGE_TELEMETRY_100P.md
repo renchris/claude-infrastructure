@@ -1011,6 +1011,23 @@ number** — report the strand, and separately that the account is on a wall tra
 `wall_projection` itself **stays** — the 5h `burn_ratio` render is the one raw-percentage figure
 §3.3 L1 permits, and `tests/claude-accounts-burn-ratio.bats` continues to pin it unchanged.
 
+🚨 **AMENDED 2026-08-28 — the weekly half is now SILENT MID-WINDOW, not merely superseded.**
+M3's abstain (below) is stated as "**Abstains below 5% elapsed**", and that floor turned out to be
+only the early half of the honest window. Dividing by elapsed fraction corrects **phase** and
+leaves **shape**, and burn here is heavily back-loaded: backtested against the completed windows
+(`docs/research/weekly-reset-utilization-2026-08-25.md` §3), `wall_projection` erred by a **mean
+46 pp at day 3** and **35 pp at day 5**, under-projecting three accounts that closed at 92–100%
+and raising a `⚠ WALL` at 119% on the one that closed at 99%. The empirical median reads **0.49×
+at day 3**, not the ~1.0 §1 asserted; §1's sample read ~1.0 only because it was taken at day 0–1,
+where linear and empirical have not yet diverged. So `WALL_SPEAK_H = 48.0` was added beside
+`MIN_ELAPSED_FRAC`: the ratio, the projection and the `⚠ WALL` flag speak only in the window's
+last ~2 days (day 6: −17 pp; day 7: −2 pp) and abstain everywhere else, leaving the mid-window
+zero-strand row to M3a's nowcast. **The replacement of the linear divisor by the empirical
+trajectory is NOT this change and remains unbuilt** — 4 windows refute a model without
+calibrating its successor (that doc's §5.2); widening an abstain needs no calibration to be
+right. `tests/claude-accounts-burn-ratio.bats` is at 11 cases, no longer 8, and RP-16 gained
+RP-16c so the narrowed flag is not mistaken for a deleted one.
+
 🚨 **Framing constraint, and it is the whole amendment.** M3a is rendered as a **nowcast**:
 *"at the pace of the last 48 h."* It carries **no lead-time claim** and **no alarm semantics**. The
 synthesis's `4/4 recall / 0 FP / median ~20 h lead` line is withdrawn and must not appear in the
@@ -1470,6 +1487,9 @@ saturates to 1.0 and is caught only here.*
 **Unchanged, deliberately:** `tests/claude-accounts-burn-ratio.bats` (all 8 cases). `wall_projection`
 and its 5% abstain floor are untouched by this spec; the 5h `burn_ratio` render survives as the one
 raw-percentage figure L1 permits.
+*(Still true of THIS spec, and no longer true of the file: a later change — see the AMENDED
+2026-08-28 callout above — widened the weekly abstain to the window's last 2 days and took the
+suite to 11 cases. Read this line as what M3a did not touch, not as the current floor.)*
 
 ---
 
