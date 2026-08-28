@@ -207,6 +207,41 @@ BOX = [
     ("versioned-config-dir", r"\.claude-(?:\d+|next\d*|secondary|tertiary)\b"),  # 7d8e44dd5822
     ("installed-binaries", r"\binstalled\b.{0,40}\bbinar(?:y|ies)\b|\bbinar(?:y|ies)\b.{0,20}\binstalled\b"),  # 7d8e44dd5822
     ("cc-binary-version", r"\b2\.1\.\d{3}\b"),            # bbad96d163ab
+    # ── THE AUTONOMY LEDGER'S LIVE POPULATION (2026-08-28) ─────────────────────────────────────
+    # Found the way this file's header says to find one: a cloud worker was dispatched onto
+    # `37b112d8950d` — "run the falsifier sweep across all 457 unvalidated live backlog rows, then
+    # close-falsified" — and discovered off-box that the work had no OBJECT. Measured on the real
+    # title before adding, as the entries above were: `verdict=eligible / (nothing fired)`.
+    #
+    # The `dot-claude` entry above already claims the live layer, but it is a PATH spelling, and an
+    # item may name the ledger's CONTENTS without ever writing the path. This item's span says
+    # "live backlog rows" and "cc-backlog freshness"; it never says `~/.claude`. That is the gap.
+    #
+    # THIS IS THE STRICTEST CASE IN THE FILE, not a borderline one. The failure is not `hook`'s
+    # knowingly-ambiguous one ("a VM can write it and can never learn whether it fires"). The store
+    # is not there at all, and the tools report its absence in the SHAPE OF A COMPLETED PASS —
+    # measured in the VM, 2026-08-28, both exit 0:
+    #     cc-backlog freshness  →  never validated : 0 of 0 live rows
+    #     cc-premise coverage   →  probeable : 0 · UNCOVERED : 0
+    # which is this file's own "plausible-looking empty version" verbatim. A worker that trusted it
+    # would report a clean sweep over a store it never read — the wrong-ELIGIBLE cost the header
+    # calls unrecoverable, reached without a single error on the way.
+    #
+    # NOT A ONE-OFF: `scripts/backlog-grouping-sweep.sh:164` MINTS this shape, filing titles that
+    # read "N of M live backlog rows carry no master effort". A minting site makes the class
+    # recurring, which is what earns a spelling rather than a note on one item.
+    #
+    # NARROW ON PURPOSE — the ledger's POPULATION, never its CODE. `cc-backlog`, `cc-premise` and
+    # this file are ordinary repo Python with repo-level bats suites, and a VM is the right place to
+    # work on them; refusing every item that names the tool would cost the tap this file's own
+    # maintenance. So the width is measured, not guessed, over the repo corpus: bare `live rows?`
+    # matches 185 lines and stays OUT for that reason, `live (backlog|ledger) rows?` matches 4 (three
+    # of them the store-scoped generators above), and `never validated` was a candidate that stayed
+    # OUT because it takes ordinary English with it ("a role value is never validated",
+    # docs/research/infra-reliability-audit-2026-07-22/raw/a4.md:72). The bare-`live rows` control is
+    # pinned in tests/cc-eligible.bats in the ELIGIBLE direction.
+    ("live-ledger-rows", r"\blive (?:backlog|ledger) rows?\b|\b\d+ of \d+ live rows?\b"),  # 37b112d8950d
+    ("premise-sweep", r"\bfalsifier sweep\b"),             # 37b112d8950d
 ]
 
 OFFBOX_LANE = [

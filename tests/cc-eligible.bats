@@ -323,3 +323,52 @@ verdict() { "$CE" check "$1" 2>&1 | head -1; }
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"verdict=eligible"* ]] || { echo "$output"; false; }
 }
+
+@test "LEDGER POPULATION: a pass over the live backlog rows is refused — the work has no object off-box" {
+  # Regression for backlog `37b112d8950d`, the item that exposed the class by being dispatched into
+  # a VM that could not do it. Measured on the real title before the spelling landed: `eligible /
+  # (nothing fired)`. It names the ledger's CONTENTS and never the `~/.claude` path, so `dot-claude`
+  # — the live-layer entry that would otherwise cover it — cannot see it.
+  local id; id="$(add drain "run the falsifier sweep across all 457 unvalidated live backlog rows, then close-falsified")"
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=ineligible-box"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"live backlog rows"* || "$output" == *"live-ledger-rows"* ]] \
+    || { echo "named the class but not the spelling: $output"; false; }
+}
+
+@test "LEDGER POPULATION: the MINTED shape is refused too — a generator makes the class recurring" {
+  # scripts/backlog-grouping-sweep.sh:164 files this title verbatim. One item earns a note; a
+  # minting site is what earns a spelling.
+  local id; id="$(add group "424 of 553 live backlog rows carry no master effort — each is one dispatch slot by default")"
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=ineligible-box"* ]] || { echo "$output"; false; }
+}
+
+@test "LEDGER POPULATION: a bare count over the live rows is the same read of this box" {
+  local id; id="$(add drain "cc-backlog freshness reads 457 of 501 live rows never probed; close the ones that fail")"
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=ineligible-box"* ]] || { echo "$output"; false; }
+}
+
+@test "LEDGER POPULATION lookalike: maintaining the TOOL is repo work and stays eligible" {
+  # The width guard, and the reason bare `live rows?` stayed out of the list: it matches 185 lines
+  # of this repo's own source, so classifying on it would refuse the maintenance of the very files
+  # the class is about. cc-backlog and cc-premise are ordinary repo Python with bats suites, and a
+  # VM is the right place to work on them.
+  local id; id="$(add ctl "fix the fold in bin/cc-backlog so freshness counts live rows once, and pin it in the bats suite")"
+  run "$CE" check "$id"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=eligible"* ]] || { echo "$output"; false; }
+}
+
+@test "LEDGER POPULATION lookalike: 'never validated' is ordinary English and deliberately NOT the class" {
+  # The candidate that stayed out. docs/research/infra-reliability-audit-2026-07-22/raw/a4.md:72
+  # says "a role value is never validated" about a code path, not about the ledger.
+  local id; id="$(add ctl "the role value is never validated, so a junk token routes mail to the wrong box")"
+  run "$CE" check "$id"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=eligible"* ]] || { echo "$output"; false; }
+}
