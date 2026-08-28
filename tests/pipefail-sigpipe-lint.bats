@@ -34,10 +34,10 @@ mkfile() { # $1=name $2=body  [$3=set line]
 }
 census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" --census 2>/dev/null; }
 
-@test "1: the lint's own --selftest passes (32/32, both directions)" {
+@test "1: the lint's own --selftest passes (37/37, both directions)" {
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s' "$output" | grep '32/32' >/dev/null \
+  printf '%s' "$output" | grep '37/37' >/dev/null \
     || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 
@@ -309,4 +309,54 @@ $(census | grep -c 'scripts/muted\.sh:' || true) — the file is muted"; census 
     || { echo "control failed: the unappended file already reads \
 $(census | grep -c 'lr-reset-poller\.sh:' || true) hit(s), so arm 20 is vacuous"; false; }
   true
+}
+
+@test "21: MECHANISM — a function-final pipeline really does return 141 to its caller" {
+  # Clause 4c's premise, asserted by running bash rather than by re-reading the detector. Clause 4
+  # used to look only at the pipeline's own line, where in a non-errexit file nothing reads the
+  # status — but the last command's status IS the function's return value, so the `if` at the call
+  # site reads it, and reads FALSE on a match. This is the ec9a43a9 scar with the reader moved one
+  # frame up, which is the only thing that made it invisible.
+  seq 1 200000 > "$BATS_TEST_TMPDIR/big21.txt"
+  run bash -c "set -uo pipefail
+    has_one() { cat '$BATS_TEST_TMPDIR/big21.txt' | grep -q '^1\$'; }
+    if has_one; then echo YES; else echo NO; fi"
+  [ "$output" = "NO" ] \
+    || { echo "the function-final defect did not reproduce (said '$output') — clause 4c guards nothing"; false; }
+  # ...and the same drain fix repairs it through the function boundary.
+  run bash -c "set -uo pipefail
+    has_one() { cat '$BATS_TEST_TMPDIR/big21.txt' | grep '^1\$' >/dev/null; }
+    if has_one; then echo YES; else echo NO; fi"
+  [ "$output" = "YES" ] \
+    || { echo "the drain fix did not repair the function-final pipeline (said '$output')"; false; }
+}
+
+@test "22: clause 4c is a DISCRIMINATOR at distance, not a blanket flag on non-errexit files" {
+  # The lint's own --selftest builds four-line fixtures; this plants the shape in a body long enough
+  # that a detector keying on "some pipeline earlier in this function" would pass there and fail
+  # here. Three fixtures, one variable between them: whether the pipeline's status still lives when
+  # the brace closes.
+  {
+    echo '#!/bin/bash'; echo 'set -uo pipefail'
+    echo 'port_listening() {'
+    i=0; while [ "$i" -lt 60 ]; do echo "  : filler $i"; i=$((i+1)); done
+    echo '  ps -p "$1" -o command= 2>/dev/null | grep -q LISTEN'
+    echo '}'
+  } > "$FIX/scripts/ffinal.sh"
+  [ "$(census | grep -c 'scripts/ffinal\.sh:')" -eq 1 ] \
+    || { echo "a function-final pipeline 60 lines into the body was not flagged:"; census | sed 's/^/  /'; false; }
+  rm -f "$FIX/scripts/ffinal.sh"
+
+  # CONTROL 1 — the SAME pipeline, no longer last. Its status is discarded by the command after it.
+  mkfile fnotlast 'port_listening() {
+  ps -p "$1" -o command= 2>/dev/null | grep -q LISTEN
+  echo done
+}' 'set -uo pipefail'
+  # CONTROL 2 — last, but MASKED: `local` returns its own 0, so nothing escapes the brace.
+  mkfile fmasked 'first_line() {
+  local v=$(git log --oneline | head -1)
+}' 'set -uo pipefail'
+  run census
+  [ -z "$output" ] \
+    || { echo "clause 4c flagged a pipeline whose status cannot reach the caller: $output"; false; }
 }

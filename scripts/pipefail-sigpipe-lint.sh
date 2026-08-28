@@ -92,9 +92,42 @@
 #   4. the pipeline's status is CONSUMED — an `if`/`elif`/`while`/`until` condition, a `!` operand,
 #      or (under `set -e`) a bare pipeline or a top-level `VAR=$(…)`. `local`/`declare`/`export`
 #      MASK the status (the builtin's own 0 wins), and `[ -n "$( … )" ]` discards it, so neither is
-#      a violation however exposed the pipeline inside looks;
+#      a violation however exposed the pipeline inside looks. A pipeline that is the LAST statement
+#      of a function body (or brace group) is consumed too — see 4c below;
 #   5. it is NOT already mitigated by a trailing `|| true` / `|| <fallback>`, which swallows the 141
 #      before anything reads it.
+#
+# CLAUSE 4c — THE FUNCTION-FINAL PIPELINE (2026-08-28, backlog ca97c678b18b). Clause 4 asks "does
+# anything READ this pipeline's status?" and answered it by looking at THIS LINE only: a control-flow
+# keyword, a `!`, a `; rc=$?`, a following `&&`, or — under errexit — the bare pipeline itself. In a
+# file with no `set -e` a bare pipeline therefore read as "nobody looks", which is exactly backwards
+# when the pipeline is the last statement of a function body:
+#
+#     port_listening() {                 # ← no set -e in this file
+#       ps -p "$1" -o command= | grep -q LISTEN
+#     }
+#     if port_listening "$pid"; then …   # ← THE READER, and it is nowhere near the pipeline
+#
+# The last command's status IS the enclosing construct's status (bash: a function returns the status
+# of the last command executed; a `{ … }` group likewise). So a function-final pipeline does not go
+# unread — its status ESCAPES the line and is read at every call site, which may be in another file
+# entirely. That is the one position where "look at this line" is structurally unable to answer
+# clause 4's question, and it is the shape the tree writes most: a one-pipeline predicate function.
+#
+# MEASURED on this tree, 2026-08-28: census 135 → 156, twenty-one sites in sixteen files, every one a
+# genuine predicate-or-extractor function ending in an early-exit stage — among them
+# scripts/lead-supervisor.sh:648 (`ps … | grep -qiF "$OWNER_PAT"`), bin/cc-comms-alarm-sweep:92
+# (`printf '%s\n' "$LEGACY_UUIDS" | grep -qxF "$1"`, the in_allowlist shape r14 already pins in its
+# `; rc=$?` spelling) and six bats `@test` bodies, whose closing pipeline IS the test's pass/fail.
+#
+# SCOPE, and why it is stated as "the enclosing construct" rather than "the function". The flush test
+# is a lone `}` on its own line, which in shell closes a function body or a brace group — and the
+# status propagates identically out of both, so the clause is sound for either without having to
+# tell them apart. It deliberately does NOT fire on `} >/dev/null` or `} || true`: the first is a
+# residual (the status does propagate through a redirect) and the second is clause 5 doing its job.
+# MASKED positions stay green: `local v=$(p | head -1)` as the last statement returns the `local`
+# builtin's own 0, not the pipeline's, so the escape never happens — which is why consumed() now
+# distinguishes MASKED (0) from merely UNREAD-ON-THIS-LINE (2) instead of collapsing both to false.
 #
 # THE FIX, in the order to reach for it:
 #   · `p | grep -q PAT`   → `p | grep PAT >/dev/null`     — plain grep drains; 0/400
@@ -252,6 +285,12 @@ function is_external(s,   t, p) {
 }
 
 # Clause 4: does anything READ this pipelines status?
+#   1 = CONSUMED here · 0 = MASKED (the status is discarded by construction and can never escape)
+#   2 = UNREAD ON THIS LINE (nothing here reads it, but it is still THIS pipelines status, so it
+#       escapes as the enclosing constructs status if this is the last statement — clause 4c).
+# The 0/2 split is load-bearing: collapsing both to false is what made a function-final pipeline
+# invisible, and treating both as true would flag `local v=$(p | head -1)`, where the pipeline never
+# reaches the function boundary at all.
 function consumed(l, hase,   t, pre, i) {
   t = ltrim(l)
   # [ -n "$( … )" ] / [ -z … ] discard the substitutions status entirely.
@@ -270,9 +309,13 @@ function consumed(l, hase,   t, pre, i) {
   }
   if (t ~ /^(if|elif|while|until)[ \t]/)  return 1
   if (t ~ /^![ \t]/)                      return 1
-  if (!hase) return 0
   # local/declare/export return their OWN 0 — the pipelines status never survives the assignment.
+  # This test must sit ABOVE the !hase line, not below it: MASKED and UNREAD used to be the same
+  # answer (false), so the order could not matter; now it decides whether clause 4c may fire, and a
+  # `local v=$(p | head -1)` closing a function must stay green because the function returns the
+  # builtins 0. g6 pins the errexit direction, g32 the function-final one.
   if (t ~ /^(local|declare|typeset|export|readonly)[ \t]/) return 0
+  if (!hase) return 2
   return 1
 }
 
@@ -309,6 +352,17 @@ BEGIN { FS = "" }
   # ignore quoted occurrences is a real change to what counts as an opener and wants its own
   # measurement; it is not folded in here. g31/g32 pin both directions of what IS fixed.
   if (line ~ /^#/ || line == "") next
+
+  # Clause 4c — FLUSH. `pend` holds a line that satisfied clauses 1/2/3/5 and failed clause 4 only
+  # with UNREAD-ON-THIS-LINE (2), i.e. its status is still live at the end of the line. If the very
+  # next CODE line closes the enclosing construct, that status is the constructs return value and is
+  # read at the call site. Blank lines and comments are already skipped above, so a trailing comment
+  # between the pipeline and the brace does not hide the shape (r17) — but any other statement does
+  # clear it, because then THAT statements status is what the construct returns (g33).
+  if (pend != "") {
+    if (line ~ /^\}[ \t]*$/) print pend
+    pend = ""
+  }
 
   if (match($0, /<<-?[ \t]*[\x27"]?[A-Za-z_][A-Za-z0-9_]*[\x27"]?/)) {
     tok = substr($0, RSTART, RLENGTH)
@@ -360,7 +414,13 @@ BEGIN { FS = "" }
   # the ASSIGNMENT form after the last stage separates them; g15/g16 pin both directions.
   # (No apostrophes here: this is inside the single-quoted DETECT_AWK string.)
   cap = (last ~ /;[ \t]*[A-Za-z_][A-Za-z0-9_]*=\$\?/)
-  if (amp == 0 && !cap && !consumed(line, HASE)) next
+  cons = consumed(line, HASE)
+  if (amp == 0 && !cap && cons != 1) {
+    # Not read HERE — but if it is UNREAD rather than MASKED, park it: the next code line decides
+    # whether the status escapes as the enclosing constructs return value (clause 4c, flushed above).
+    if (cons == 2) pend = sprintf("%s:%d:%s", FILE, FNR, line)
+    next
+  }
 
   printf "%s:%d:%s\n", FILE, FNR, line
 }'
@@ -528,6 +588,8 @@ regen() {
   printf '%s\n' "# pipefail-sigpipe-lint allowlist — <path><TAB><violation count>."
   echo "# Grandfathered sites only. This list may only SHRINK: the lint goes RED both when a file"
   echo "# GAINS a violation and when it LOSES one without the count being lowered."
+  echo "# The ONE legitimate way it GROWS is a DETECTOR widening — a new clause makes sites visible"
+  echo "# that were never judged before, so the baseline is re-taken in the same commit as the clause."
   echo "# Regenerate: scripts/pipefail-sigpipe-lint.sh --regen > scripts/pipefail-sigpipe-allow.txt"
   printf '%s\n' "$hits" | awk -F: 'NF{print $1}' | sort | uniq -c | awk '{ printf "%s\t%s\n", $2, $1 }' | sort
 }
@@ -674,12 +736,41 @@ if git status --porcelain | grep -q .; then :; fi
 EOF"
   expect g31 GREEN "a comment ahead of a REAL heredoc still leaves the body as DATA"
 
+  # ── THE FUNCTION-FINAL PIPELINE (2026-08-28, backlog ca97c678b18b) ────────────────────────────
+  # Clause 4 read only THIS line, so in a file with no errexit a bare pipeline meant "nobody looks".
+  # For the last statement of a function that is exactly backwards: the pipelines status IS the
+  # functions return value, and the reader is at the call site — possibly in another file. r16/r17
+  # are the defect; g32/g33/g34 are the three ways the status does NOT escape, and without them this
+  # clause would be satisfied by a lint that flagged every pipeline in a non-errexit file.
+  mk_noe r16 "port_listening() {
+  ps -p \"\$1\" -o command= 2>/dev/null | grep -q LISTEN
+}"
+  expect r16 RED "function-final pipeline — its rc IS the function's return value"
+  mk_noe r17 "port_listening() {
+  ps -p \"\$1\" -o command= 2>/dev/null | grep -q LISTEN
+  # a trailing note, which is this tree's house style
+}"
+  expect r17 RED "function-final pipeline with a trailing COMMENT before the brace"
+  mk_noe g32 "first_line() {
+  local v=\$(git log --oneline | head -1)
+}"
+  expect g32 GREEN "function-final but MASKED — local returns its own 0, the status never escapes"
+  mk_noe g33 "port_listening() {
+  git log --oneline | head -1
+  echo done
+}"
+  expect g33 GREEN "not the LAST statement — the later command's status is what the function returns"
+  mk_noe g34 "port_listening() {
+  git status --porcelain | grep -q . || true
+}"
+  expect g34 GREEN "a trailing || swallows the 141 even in the function-final position"
+
   local total=$((pass+fail))
   if [ "$fail" -gt 0 ]; then
     echo "⛔ $SELF_NAME --selftest: $pass/$total — the detector no longer discriminates." >&2
     return 1
   fi
-  echo "✓ $SELF_NAME --selftest: $pass/$total (both directions; builtin producer RED on a variable or substitution, GREEN on a literal)"
+  echo "✓ $SELF_NAME --selftest: $pass/$total (both directions; builtin producer RED on a variable or substitution, GREEN on a literal; function-final pipeline RED, masked/non-final/|| GREEN)"
   return 0
 }
 
