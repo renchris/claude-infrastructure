@@ -153,11 +153,26 @@
 # capacity_gate() (CC_FIRE_LOAD_TERM) and has been off on the Agent-tool path since Wave D;
 # `segments` and `active` carry its intent because they DO move with the spawn. The literal stays at
 # 2.0 on purpose — C18: a fix moves a TERM SWITCH, never a ceiling — and raising it is the lazy
-# design docs/plans/LOAD_INSENSITIVE_VERIFY_V2.md:156 exists to reject. It still binds only where
-# `cc_capacity_admit` leaves the term on: the two unattended recovery callers
-# (scripts/boot-resume-launch.sh, scripts/limit-recover/lr-fire-resume.sh), DELIBERATELY — see the
-# load-term block below, which prices that imprecision at a delayed resume, and both are
-# budget-released after CC_ADMIT_BUDGET consecutive refusals.
+# design docs/plans/LOAD_INSENSITIVE_VERIFY_V2.md:156 exists to reject.
+#
+# WHERE IT STILL BINDS — FOUR callers, not the two this comment used to name. It binds wherever
+# `cc_capacity_admit` is called without `CC_ADMIT_LOAD_TERM=off`, and a grep for that (2026-08-28)
+# returns bin/cc-resume-layout.sh, bin/reso-resume-one, scripts/boot-resume-launch.sh and
+# scripts/limit-recover/lr-fire-resume.sh. The earlier text named the last two only, which is the
+# same defect `fix(capacity): strike the refuted 2.5-5 marginal from all three live sites`
+# (34a21973) found one file away: a site list written in prose is a denylist of spellings, and the
+# sites it misses are the ones nobody is told to look at. All four are resume callers and all four
+# are UNATTENDED, so the class the sentence described was right and only its enumeration was short;
+# the imprecision is priced at a delayed resume (see the load-term block below) and every one of
+# them is budget-released after CC_ADMIT_BUDGET consecutive refusals, because `_cc_admit_spend`
+# keys the bound on `$1=caller`. The single exception that turns the term OFF is
+# hooks/agent-teams-enforce.sh, the Agent-tool path.
+#
+# DO NOT MAINTAIN THAT LIST BY HAND — re-grep it. tests/capacity-admit-coverage.bats case 30 is the
+# ratchet: it derives the set live and reds when this comment and the tree disagree, in either
+# direction. Backlog e981656df348 exists because the provenance sentence four paragraphs up rotted
+# unnoticed for three weeks; a second hand-maintained claim in the same block would mint the same
+# item again.
 CC_HW_DEFAULT_MAX_LOAD_PER_CORE=2.0
 CC_HW_DEFAULT_MIN_HEADROOM_GB=4
 

@@ -426,3 +426,93 @@ calls_gate() { grep -qE '^[^#]*[^_a-zA-Z]cc_capacity_admit[[:space:]]' "$1"; }
     fi
   done
 }
+
+@test "30 THE BINDING SET — the load literal's comment names every caller that still evaluates it" {
+  # WHY THIS CASE EXISTS. Backlog e981656df348 was filed because the provenance sentence attached to
+  # CC_HW_DEFAULT_MAX_LOAD_PER_CORE ("2.0/core is §9.5's measured ceiling") was false and nothing in
+  # the tree could tell. e89918f2 replaced it with the real story, and in the same block wrote a
+  # SECOND hand-maintained claim — which callers still evaluate the literal — that was already short
+  # by two on the day it landed: it named boot-resume-launch and lr-fire-resume, while cc-resume-layout
+  # and reso-resume-one call the gate with the load term ON as well. Fixing prose with prose would
+  # re-arm the same trap, so the claim is pinned here instead.
+  #
+  # This is 34a21973's finding generalised ("THE THIRD SITE IS THE FINDING": §2 and §6 of the marginal
+  # doc both named two sites and a grep returned three, the missed one being the library that DEFINES
+  # the population). A site list written in prose is a denylist of spellings. Derive it.
+  #
+  # TWO-SIDED BY CONSTRUCTION. A one-way check ("everything censused is named") passes forever once
+  # someone widens the prose, and a check the other way ("everything named exists") passes forever
+  # once someone deletes a caller. Both directions are asserted, and so is the term-OFF exception —
+  # if the Agent-tool path ever turns the load term back on, that is a binding-set change too.
+
+  # THE CENSUS. A real invocation, in a file that actually resolves the library at runtime — the
+  # library's own definition and test-hermeticity-lint.sh's bats FIXTURES both mention the symbol
+  # without ever calling the shipped gate (memory `caller-census-keyed-on-path-misses-the-name`).
+  # Newline-delimited throughout, never space-delimited: a path with a space in it would otherwise
+  # split into two names that each fail every direction below for the wrong reason.
+  local callers f term_on="" term_off=""
+  callers="$(grep -rlE '^[^#]*(^|[^_[:alnum:]])cc_capacity_admit[[:space:]]+[a-zA-Z"$]' \
+               "$REPO/scripts" "$REPO/bin" "$REPO/hooks" 2>/dev/null | sort || true)"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    case "$f" in */lib/capacity-admit.sh) continue ;; esac
+    grep -qE '^[^#]*\.claude/scripts/lib/capacity-admit\.sh' "$f" || continue
+    if grep -q 'CC_ADMIT_LOAD_TERM=off' "$f"; then
+      term_off="${term_off}${f#"$REPO"/}
+"
+    else
+      term_on="${term_on}${f#"$REPO"/}
+"
+    fi
+  done <<< "$callers"
+  [ -n "$term_on" ]  || { echo "the census found NO caller evaluating the load term — it is asserting over nothing"; false; }
+  [ -n "$term_off" ] || { echo "the census found NO caller with the term off — the Agent-tool exception vanished"; false; }
+
+  # THE CLAIM, read out of the comment block that owns the literal. Bounded by its own heading and
+  # the literal itself, so an unrelated path elsewhere in the file cannot satisfy or break it.
+  local window
+  window="$(awk '/^# WHERE IT STILL BINDS/{p=1} p; /^CC_HW_DEFAULT_MAX_LOAD_PER_CORE=/{exit}' "$LIB")"
+  [ -n "$window" ] \
+    || { echo "the load literal lost its WHERE IT STILL BINDS block — the claim this case pins is gone"; false; }
+  local named
+  # Trailing sentence punctuation is stripped: prose ends a path with a full stop, and `.sh.` is not
+  # a filename. This bit the case on its first run — the predicate must read the path, not the clause.
+  named="$(printf '%s' "$window" | grep -oE '(scripts|bin|hooks)/[A-Za-z0-9_./-]+' | sed 's/[.,;:)]*$//' | sort -u)"
+
+  # DIRECTION A — every caller that evaluates the literal is named. This is the one that was RED.
+  local p
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    printf '%s\n' "$named" | grep -qxF "$p" \
+      || { echo "$p evaluates the load literal and the comment does not name it — re-grep, do not hand-edit:"; printf '%s\n' "$named"; false; }
+  done <<< "$term_on"
+
+  # DIRECTION B — every caller named is real, and is on the side the comment puts it on.
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    [ -f "$REPO/$p" ] || { echo "the comment names $p, which does not exist"; false; }
+    printf '%s\n%s\n' "$term_on" "$term_off" | grep -qxF "$p" \
+      || { echo "the comment names $p as a gate caller; the census says it is not one"; false; }
+  done <<< "$named"
+
+  # DIRECTION C — the term-OFF exception is named as the exception, and is the only one.
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    printf '%s\n' "$named" | grep -qxF "$p" \
+      || { echo "$p turns the load term OFF and the comment does not name it as the exception"; false; }
+  done <<< "$term_off"
+
+  # MUTATION CONTROL — direction A must be able to FAIL, or every assertion above is satisfied by a
+  # predicate that matches anything. Run the SAME extraction over the SAME window with one real
+  # caller struck out, and require that the caller is then absent. That is precisely the state
+  # direction A exists to reject, so a predicate blind to it proves nothing.
+  local victim shrunk
+  victim="$(printf '%s' "$term_on" | head -1)"
+  [ -n "$victim" ] || { echo "no censused caller to mutate — the control cannot run"; false; }
+  shrunk="$(printf '%s\n' "$window" | sed "s#$victim##g" \
+              | grep -oE '(scripts|bin|hooks)/[A-Za-z0-9_./-]+' | sed 's/[.,;:)]*$//' | sort -u || true)"
+  if printf '%s\n' "$shrunk" | grep -qxF "$victim"; then
+    echo "the naming predicate still finds $victim after it was struck out — it proves nothing"
+    false
+  fi
+}

@@ -112,6 +112,12 @@ own errors:
 
 ## 3 · The actionable finding, and it has nothing to do with the vendor
 
+> 🚨 **CLOSED — read [§3a](#3a--closed-2026-08-28--the-finding-stands-the-prescription-above-is-refuted)
+> before acting on anything in this section.** The finding below stands and is now recorded in the
+> code it is about; the *prescription* it ends on ("derive the number … from a measured failure
+> point") is refuted, including by this section's own block quote. Two of its citations are stale
+> against trunk. Backlog `e981656df348` is closed on §3a, not on the paragraph at the end of §3.
+
 **The constant that stops us was never derived from anything.**
 
 `CC_HW_DEFAULT_MAX_LOAD_PER_CORE = 2.0` (`scripts/lib/capacity-admit.sh:134`) is the number that
@@ -143,6 +149,63 @@ The honest actionable is therefore **to derive the number, not to move it**: re-
 measurement (load1 delta across N all-active sessions) and set the ceiling from a measured failure
 point. That is a two-arm experiment, not a config edit, and it is the only thing that can legitimately
 move a capacity constant.
+
+### 3a · CLOSED 2026-08-28 — the finding stands, the prescription above is REFUTED
+
+Backlog `e981656df348` carried the paragraph above as an instruction ("derive it, do NOT blind-raise")
+and parked it behind a marginal-load measurement. **The diagnosis is discharged and the prescription
+has no solution.** Both halves are on trunk; neither needed the box. Read this before re-dispatching
+the row — the paragraph above is preserved verbatim as the record of what was believed on 2026-08-18,
+not as live work.
+
+**The diagnosis was TRUE and is DISCHARGED in code.** `docs(capacity-admit): the ceiling cites a
+section that has no derivation…` (`e89918f2`, 2026-08-25, ancestor of trunk) rewrote the literal's
+comment to say exactly what §3 found, at length and in the file a reader of the constant actually
+opens. Two citations above are now stale against that commit and are corrected here rather than
+edited away: the literal is at `capacity-admit.sh:161`, not `:134` (**cite it by symbol — the line
+moves every time the comment grows**, which is how a `:134` written on 2026-08-18 came to point at
+prose about namespaces); and "its own code comment cites §9.5's measured ceiling" **is no longer true
+of trunk** — that sentence was the thing e89918f2 deleted.
+
+**The prescription is refuted three ways, and the third is fatal to the whole axis.**
+
+1. **By §3's own block quote, four paragraphs up.** "Set the ceiling from a measured failure point"
+   requires a failure point. `scripts/capacity-alarm.sh`'s rung-7 header — quoted above, in this
+   section — records that the survived population *contains* the fatal value: fatal at 2.53/core
+   against 13 consecutive survived samples spanning 2.92–5.98/core, plus 42 h at 2.5/core with no
+   panic. Its own words are that **no setting of these two numbers can separate fatal from survived.**
+   §3 quoted that instrument and then prescribed the measurement it rules out; the two paragraphs
+   never faced each other.
+2. **By the named blocker, which answers a different question.** Marginal Δload per active session is
+   a capacity-in-*sessions* coefficient: it converts a ceiling into a session count. It cannot locate
+   a boundary, so no value of it could ever have discharged this row. The row was parked behind a
+   measurement that was never on its critical path — and that measurement is separately adjudicated
+   unrepairable and **unquotable** (`marginal-load-per-active-session-2026-08-19.md` §1–§2, backlog
+   `193ae8ddce72`; enforced in code by `34a21973`, 2026-08-26). Worse, the "axis-09-style measurement"
+   this paragraph prescribes *is* that coefficient: the prescription names a banned instrument.
+3. **The INPUT is wrong, not the number.** `fix(fire-gate): load1 does not move with the spawn it was
+   gating` (`f944d6e3`, 2026-08-20 — two days after this doc was written) established that an
+   additional RESIDENT session moves the 1-min runnable count by ~0. A gate whose reading does not
+   respond to the thing it gates cannot be repaired at any threshold. So `CC_FIRE_LOAD_TERM` now
+   **defaults off** in `capacity_gate()`, and the Agent-tool path has run `CC_ADMIT_LOAD_TERM=off`
+   since Wave D; `segments` and `active` carry the term's intent because they *do* move with the
+   spawn. Per C18 that fix moved a term switch and left the literal at 2.0 — which is exactly why the
+   stale provenance survived it, and why this row outlived its own cure by five days.
+
+**Where the literal still binds, measured 2026-08-28 rather than recalled: four callers, not two.**
+`e89918f2`'s new comment named `boot-resume-launch.sh` and `lr-fire-resume.sh`; a live grep for
+`cc_capacity_admit` without `CC_ADMIT_LOAD_TERM=off` also returns `bin/cc-resume-layout.sh` and
+`bin/reso-resume-one`. All four are unattended resume callers and all four are budget-released after
+`CC_ADMIT_BUDGET` consecutive refusals, so the class was right and only the enumeration was short —
+the same shape as `34a21973`'s "THE THIRD SITE IS THE FINDING". Corrected in the comment, and pinned
+by `tests/capacity-admit-coverage.bats` **case 30**, which derives the set live and reds in both
+directions. That ratchet is the actual remedy for this row: **§3's defect was a hand-maintained claim
+about a constant, and a second hand-maintained claim was already rotting inside its own fix.**
+
+**What is genuinely still open, and it is not this row.** One ~1 h on-box window for
+`scripts/capacity-marginal.sh` (§6 of the marginal doc) — a *session-count* question. It does not
+gate `CC_HW_DEFAULT_MAX_LOAD_PER_CORE`, and it does not gate `CC_ADMIT_ACTIVE_CEILING=8` either,
+which stands on the 127/127 refusal band (a count over refusals, needing no per-session divisor).
 
 ## 4 · If 2.1.234 is adopted, adopt it on other grounds — and set one env var first
 
