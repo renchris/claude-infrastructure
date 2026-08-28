@@ -105,9 +105,79 @@ it cannot revive +50%, which both hypotheses already exclude.
 
 **Downstream carriers of the struck figure**, corrected or annotated with this block:
 `memory-econ-rearchitecture-2026-08-10/prior-art.md` row 55/56 (a LIVE-status ledger — flipped).
-Left as dated audit records of what was believed on their date, not corrected:
+~~Left as dated audit records of what was believed on their date, not corrected:
 `jcode-due-diligence-2026-08-11.md:53`, `jcode-due-diligence-2026-08-11/bottleneck-audit.md:73`,
-`jcode-due-diligence-2026-08-11/ranked-levers.md:36,:54`.
+`jcode-due-diligence-2026-08-11/ranked-levers.md:36,:54`.~~
+
+#### Sweep completed 2026-08-28 — the carrier list was incomplete, and the "leave them" disposition is reversed
+
+A repo-wide grep for the lever, run four days after the ruling, found **nine live un-struck carriers
+across four files** and closed two gaps in the block above. The first grep (`halving context` /
+`68% of quota` / `+50% active`) found six; **widening it to the composition itself** (`cache-read
+68.0%`, `0.10× multiplier`) found three more — the origin, the single most prominent carrier in the
+repo, and a standing **blocker** (`ranked-levers.md` Unknowns: *"nothing else in this ranking is
+worth building until it is settled"*, gating an eight-lever list on a cold-cache probe whose branches
+the meter collapses to one answer). *Both patterns were needed — a doc can carry the premise without
+ever repeating the slogan, which is how the loudest three sites survived the first pass.*
+
+**Gap 1 — the ORIGIN site was in neither list, and it reveals the generating defect.**
+`scaling-bottlenecks-2026-08-09/07-accounts-api.md` **§6.4** is titled *"The largest quota lever is
+context, not accounts"* and is where this figure was generated; **§3 line 114** states the raw
+composition and calls it *"the single most actionable number in the file"*; §7 item 5 restates it.
+Rank 4 above cites axis 07, so striking rank 4 while its own source still read as live inverted the
+citation: a reader chasing the evidence trail from the struck row arrived at the unstruck original.
+
+**The defect is visible once §3 and §6.4 are read together, and it is a unit error, not a bad
+measurement.** §3's 68% is an **API-list-price weighting of our own token counts** — §2a's rates with
+cache-read at the 0.10× multiplier — i.e. *what the stream would cost at list*. §6.4 then spent that
+number as *what the stream draws against the Max weekly limit*. Those are different quantities with
+different denominators, and nothing in either section marks the substitution. So the 68% was never a
+wrong quota measurement; **it was a dollar composition read as a quota composition** — which is
+exactly why a meter experiment could refute it without finding any arithmetic error to point at, and
+why re-deriving it more carefully in the same units would have reproduced it. All three sites are now
+struck, and §6.4 carries the propagation list so the origin indexes its own descendants.
+
+*The residue of §3 line 114 that survives, and inverts:* its last term, **fresh input 0.0%**. The
+fleet re-sends nothing and re-reads everything — the fact that makes long contexts **cheap**, sitting
+in the same sentence that was used to argue they were expensive.
+
+**Gap 2 — "dated audit record" was the wrong classification for the jcode files.** It is right for a
+narrative that merely *reports* a belief; it is wrong for these four, on the same LIVE-status test
+that flipped `prior-art.md`. `ranked-levers.md` is a **ranked recommendation list carrying a
+numeric score** (L7 = 17.1) and the standing directive *"Do this first, whatever is decided about
+jcode"* — a live prescription, not a snapshot, and its score was computed from the dead premise.
+`jcode-due-diligence-2026-08-11.md:53` renders a **verdict** (*"Correct, and understated"*) that
+asserts the figure as presently true. `bottleneck-audit.md:73` labels it **`[MEASURED]`**, which is
+the specific claim the meter refutes — it was modelled, never measured. And
+**`jcode-due-diligence-2026-08-11.md:129` is the decision memo's `#1`-ranked lever**, whose
+justification column reads *"cache-read is 68% of spend ⇒ +~50% active capacity. The only lever that
+moves both axes"* — the loudest live statement of the struck figure anywhere in the repo, in the
+table a reader consults precisely to decide what to do next. A snapshot does not rank things.
+
+**The audit-record concern is met without deleting anything**, by the method this ruling already
+used on `prior-art.md`: every original sentence is preserved verbatim under `~~strikethrough~~` with
+a dated correction beside it, so what was believed on 2026-08-11 is still readable in full. Nothing
+was rewritten; what changed is that a grep for the lever can no longer surface a carrier that does
+not carry the refutation with it.
+
+**What survived the sweep, and matters more than what was struck.** Three downstream conclusions
+rest on the refuted premise but do **not** fall with it, and each is now annotated in place rather
+than struck: jcode's **quota clause** (quota binds, per-account, provider-side, invariant under a
+runtime swap — the point that row was written to make); **L7** (still a real resident-memory lever
+at 571→297 MB per session; only its active-axis leg and its mixed-axis score die); and **§6.4's
+model down-tier** (priced per *output* token — the class the meter says actually costs — so it is
+untouched and is now the largest unspent quota lever in that section). One conclusion **inverts**:
+`ranked-levers.md` L6 priced cold-resume at *"~10× on one turn's input, repaid after ~10 turns"*, but
+on the measured rate an idle resident session emits nothing and re-reads at 0.000, so eviction saves
+~0 while the resume pays cache-creation (0.105 pp/Mtok) over the whole rehydrated context. **Both
+fits reject eviction on quota grounds** (API-list: 6.25 vs 0.5 ⇒ a 12.5× cold penalty against a zero
+saving). L6's memory case is untouched; its quota case is now an argument against it.
+
+*Generalisable lesson, which is why this block exists rather than a silent second pass:* the ruling
+struck the two sites its backlog item **named** and classified the rest from that item's framing
+(*"two repo docs contradict"*). The item's file list was the filing agent's guess, not a measurement
+— the lever had reached **eight** files. **Strike by grep, not by the citation you were handed**, and
+record the disposition of every hit so the next sweep can tell a considered "leave it" from a miss.
 
 ---
 
