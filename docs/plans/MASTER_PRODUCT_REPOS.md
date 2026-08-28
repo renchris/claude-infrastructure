@@ -156,6 +156,39 @@ branch queue is empty or explicitly abandoned with reasons, the production deplo
 single-brained and audited, and doc_classifier's authorization holes are closed with tests.
 
 ## Status log
+- **2026-08-28 — THIRD cloud dispatch of `8f59467c92b0`, and the finding is that ALL THREE
+  specified remedies miss this row.** Same VM shape as 08-15 and 08-17 (one checkout, GitHub scope
+  of one repo, no `~/Development`), so R1-R4 were again unreachable by construction and remain
+  **open, correct as filed, and unstarted** — nothing about the plan is refuted, only the venue.
+  What is new is that "the remedy has not landed yet" is no longer the explanation. A remedy *did*
+  land — `bin/cc-eligible`'s reach arm (`CROSS_REPO`, `cross_repo()` at :766, in `BLOCKING`) — and
+  **three** comparisons now fail on this row, each for its own measured reason:
+  **(1)** the landed arm is keyed on `item.project`, and this row's label is *accurate*
+  (`claude-infrastructure` == the lane), so both early returns fire and it is silent;
+  **(2)** 🚨 **the subject discriminator this plan's 08-17 entry prescribed would ALSO miss it** —
+  it reads the item's TEXT, and `bin/cc-eligible:490` fixes that span to
+  `("title","dodRef","condition","source")` while `bin/cc-discover:274` fixes what a plan-minted row
+  puts there (`advance <H1>` · the plan path · the condition · `plan-open`). `grep -cE
+  'reso-management-app|doc_classifier'` over the whole span returns **0**; every foreign tree is
+  named only in the plan BODY. Reproduced end-to-end with the exact minted span and all three repos
+  present: `verdict=eligible`, `refused: (nothing fired)`, `claim --venue cloud` **exit 0**;
+  **(3)** the natural repair — follow `dodRef` and scan the plan body — **over-refuses**: 24 of the
+  76 plans in `docs/plans/` name a foreign dispatchable project, and the self-normalising variant
+  flags 12, most of them genuine claude-infrastructure work (`HOOK_CHAIN_COST` 0/3,
+  `LAND_PIPELINE_V2` 1/2, `DEPLOY_DECOUPLING_V2` 1/3). That is the expensive false-positive
+  direction `tests/cc-eligible-cross-repo.bats` names, so it is not a drop-in for (2).
+  Consequence for the filed decision (`cloud-venue-project-repo-mismatch-2026-08-16.md` §3): the
+  pair (`item.project`, `session.attached_repo`) is **not sufficient in either proposed extension**,
+  which the decision could not have known — it was filed believing the subject conjunct would close
+  the class. Still standing and untouched: the ~0-cost **`projectName` entry in the plan index**
+  (`scripts/find-plan.sh:73` already reads it), which is a *declaration* and therefore has no
+  false-positive surface — but it lives in `$HOME/.claude/plans-index.json`, which is desk state and
+  absent from the VM. **No gate arm was written**: the two shapes reachable from inside the VM are
+  exactly the two just refuted, and this plan reserves the fix shape for the desk. Also re-confirmed:
+  the block rail fails at **rc 0** from a VM (`cc-backlog block …` → `unknown id`, exit 0), so the
+  block must be applied desk-side. Full measurement →
+  `docs/research/venue-master-redispatch-3rd-2026-08-28.md`. **Disposition: `cc-backlog block`**,
+  unchanged.
 - **2026-08-17 — the SAME row was cloud-dispatched AGAIN, and the re-fire is the finding.**
   `8f59467c92b0` was fired into an identical VM shape (one checkout, GitHub scope of one repo, no
   `~/Development`) ~2 days after the 08-15 entry below wrote its disproof into THIS FILE. R1-R4 were

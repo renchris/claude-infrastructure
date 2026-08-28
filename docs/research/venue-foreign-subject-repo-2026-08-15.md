@@ -85,6 +85,33 @@ survives the relocation intact — it reads the item's text against
 should be restored as a **conjunct** of whichever shape is chosen, at `cc-offload`.
 `venue-foreign-master-redispatch-2026-08-17.md` §3.
 
+🚨 **CORRECTION (measured 2026-08-28): this section's own discriminator does NOT catch
+`8f59467c92b0`, so restoring it would not have stopped that row either.** The claim above — that the
+subject discriminator "survives the relocation intact" and covers the row both filed options pass —
+is refuted for the specific row it names. The rule reads the item's **text**, and the classified span
+is not free text: `bin/cc-eligible:490` fixes it to `("title","dodRef","condition","source")`, and
+`bin/cc-discover:274` fixes what a plan-minted row puts in it — `advance <plan H1>` · the plan path ·
+the condition · the literal `plan-open`. For `8f59467c92b0` that span is *"advance MASTER: product
+repos — the operator's actual products, one wave per repo"* + `…/docs/plans/MASTER_PRODUCT_REPOS.md`
++ `master-product-repos` + `plan-open`, and `grep -cE 'reso-management-app|doc_classifier'` over it
+returns **0**. Every foreign tree this row is about is named only in the plan BODY. Reproduced with
+the exact minted span and all three repos present on the dispatching side: `verdict=eligible`,
+`refused: (nothing fired)`, `claim --venue cloud` exit 0 — a **third** fire, on 2026-08-28.
+
+Why the two rows differ, which is the generalisable part: this file's original subject was
+`9333991e4544`, whose *title opens with* `doc_classifier` — the foreign name was in the span by
+luck of phrasing, not by construction. A row minted from a plan by `cc-discover` never carries a
+foreign name in its span, because every field it mints is derived from the plan's *path* and *H1*.
+So the text discriminator covers hand-filed rows and is structurally blind to plan-minted ones,
+which is the entire `advance <plan>` population.
+
+The obvious repair — follow `dodRef` and scan the plan BODY — is measured and **rejected**: 24 of
+the 76 plans in `docs/plans/` name a foreign dispatchable project, and the self-normalising variant
+(foreign ≥ own) flags 12, most of them genuine claude-infrastructure work. This section's own
+closing caveat anticipated that shape ("a genuine cross-repo claude-infrastructure item names every
+project by construction") and understated it: it describes a third of the corpus, not an edge case.
+Full measurement → `docs/research/venue-master-redispatch-3rd-2026-08-28.md` §4-§6.
+
 ## Not fixed here, deliberately
 
 `bin/cc-venue`'s header forbids a cloud VM from building or running the venue rule: it would be
