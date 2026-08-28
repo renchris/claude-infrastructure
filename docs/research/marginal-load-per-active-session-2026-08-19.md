@@ -155,7 +155,16 @@ A control nobody has watched fail is a rubber stamp. `tests/capacity-marginal.ba
 
 ## 6 · The run — what remains, and it is not a judgment call
 
-On the box, in a session that is not itself doing heavy work (the sampler costs one `ps` per minute):
+On the box, in a session that is not itself doing heavy work (the sampler costs one `ps` per minute).
+**One command, and it drives its own stopping rule** (see §6b — the two-command form below was a
+worksheet, and the paragraph after it was the interpreter):
+
+```sh
+bash scripts/capacity-marginal.sh run --out /tmp/marg.tsv
+```
+
+The two halves it composes remain available and unchanged; `analyze` is re-runnable over the growing
+file at any moment, from any other pane:
 
 ```sh
 bash scripts/capacity-marginal.sh sample --window-s 3600 --interval-s 60 --out /tmp/marg.tsv
@@ -210,7 +219,8 @@ on §6**, so the measurement can take as long as it needs without leaving a gate
 number its own source pair refutes.
 
 **What remains is exactly §6 and nothing else** — one ~1 h window on the 10-core Darwin box during a
-dispatch wave, then the update-and-close. Verified this session, off-box: `bats
+dispatch wave, then the update-and-close (and §6b has since made that *one command* rather than a
+loop the operator drives). Verified this session, off-box: `bats
 tests/capacity-marginal.bats` **15/15**, plus `tests/agent-teams-enforce.bats` and
 `tests/capacity-admit-active.bats` green alongside them (61/61 total), `shellcheck` clean,
 `test-hermeticity-lint.sh` clean (551 suites, 0 new leaks), and the sampler smoke-run on Linux
@@ -218,6 +228,61 @@ correctly refusing a 60 s quiet window — `C1 FAIL` (tertile swing 1.56× > 1.3
 (`n_eff` 1.8 < 20, worded *uninformative, not refuting*), `C3 FAIL` (0 rows carry an ACTIVE count,
 6 unmeasurable), `VERDICT: NO-ATTRIBUTION`, exit 1, withheld fit labelled withheld. The instrument
 is ready; only the fleet is missing.
+
+### 6b · The stopping rule was prose, and prose is behind a diode (2026-08-28)
+
+§6 above shipped an instrument and a **protocol** — *"sample, analyze, and extend the window until
+the verdict stops being NO-ATTRIBUTION **or** the refusal repeats with the same term across several
+windows"* — and shipped the protocol only as this paragraph. That is a loop with two terminating
+conditions and a per-increment judgement about whether this refusal is the same refusal as the last
+one, with a human holding the interpreter. This repo's own recurring finding applies to it exactly:
+a conclusion that never reaches the enforcing store is advisory, and the global rule for a hand-off
+is that it must be a **program, not a worksheet** — *making the human the runtime is the defect*.
+
+`capacity-marginal.sh run` is that paragraph as code. It samples in `--increment-s` chunks (default
+1800), re-analyzes the growing file after each, and stops on whichever condition fires:
+
+| outcome | exit | what it means |
+|---|---|---|
+| `VERDICT: MARGINAL …` | **0** | all three controls passed; the coefficient, its s.e. and its window |
+| `SETTLED REFUSAL — <term> refused K consecutive windows` | **4** | §6's second condition — **the finding**, not a timeout |
+| `budget exhausted … has NOT repeated enough to settle` | **1** | neither fired inside `--max-s`; re-run the same command over the same file |
+| `NO-DATA` | 3 | nothing analyzable |
+
+**The settled refusal has its own exit code, deliberately.** "Keep sampling" and "the process-unit
+census cannot measure this box" are the two answers the window is being run to tell apart, and
+collapsing them into one exit leaves the caller unable to. On a settled refusal the run says so in
+words: the next increment is the thread-unit census of §7.3 (which wants a captured `ps -axM`
+fixture first), **not** a longer window, and **not** one of the four values.
+
+**On a PASS it re-greps the ban's citation sites rather than reciting them** — §6a's own lesson,
+mechanised: the table above named two sites and live code held three, so the driver prints what the
+box can see at that moment. It drops itself from that list by deriving its own path, never by
+naming one.
+
+**And building the driver surfaced a defect in the shipped instrument that only bites where it
+matters.** `read_active` derived its library path from an **unresolved** `$0`. `~/.claude/scripts/`
+is a per-file symlink farm into the checkout, so invoked the way the operator's live layer invokes
+it, `dirname "$0"/lib/spawn-presence.sh` names a file that does not exist — and `read_active`
+records `-` rather than failing, so **C3 would have refused every window, forever, on the live path
+and only there**. §6's one command would have run for an hour and returned NO-ATTRIBUTION with a
+blameless-looking reason. Both consumers now resolve through `resolve_self()` (ship-land's loop; no
+`readlink -f`, which is GNU-only). This is the class `scripts/self-path-lint.sh` exists for, and
+that lint's own warning is that the bug is invisible from a worktree — which is why the suite now
+invokes the script through a symlink with a **decoy** library planted where the broken derivation
+would look, RED-proved to read `77` on the pre-fix code.
+
+Tests: `tests/capacity-marginal.bats` grew from 15 to **21** rows. The six new ones pin the
+stopping rule the way the original fifteen pin the controls — that a PASS stops and hands over the
+re-grepped sites, that an identical refusal settles with exit 4 and leaks nothing quotable, that a
+**changed** term *resets* the streak (without which "the same term across several windows" degrades
+into "several windows", which any refusal reaches by waiting), that `--repeat 1` is a usage error,
+that an exhausted source is NO-DATA rather than a settled answer, and the live-layer row above. The fixture seam feeds a
+**directory of rows**, never a command to execute: the subject is a sequence of verdicts, and a
+stopping rule tested against real 30-minute increments is a stopping rule nobody has watched stop.
+
+**This does not measure the coefficient.** §6 still needs its ~1 h window on the 10-core Darwin box
+during a dispatch wave — which is why `193ae8ddce72` is parked on that step rather than closed.
 
 ---
 

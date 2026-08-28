@@ -82,12 +82,38 @@
 # assuming one, so the coarser unit costs accuracy in the ratio, never validity in the verdict.
 # `analyze` REFUSES a file whose rows mix units.
 #
+# ══ THE RUN IS A PROGRAM, NOT A WORKSHEET ═══════════════════════════════════════════════════════
+# `sample` and `analyze` are the two halves of a protocol whose STOPPING RULE lived only in prose
+# (docs/research/marginal-load-per-active-session-2026-08-19.md §6, verbatim):
+#
+#     "analyze is re-runnable over a growing file, so the honest protocol is: sample, analyze, and
+#      extend the window until the verdict stops being NO-ATTRIBUTION *or* the refusal repeats with
+#      the same term across several windows — which would itself be the finding."
+#
+# That is a loop with two terminating conditions, an operator holding the interpreter, and one
+# judgement per increment about whether a refusal is the same refusal as last time. A rule stated
+# only in a document is behind a diode: nothing reads it at the moment it applies. `run` is that
+# paragraph as code — it samples in increments, re-analyzes the growing file after each, and stops
+# on whichever condition fires first, so the remaining box step is ONE command that drives itself
+# and reports which of the two answers it reached.
+#
+# THE SETTLED REFUSAL IS AN ANSWER, AND IT GETS ITS OWN EXIT CODE. A window that refuses once is
+# "keep sampling"; the SAME control refusing across CC_MARG_RUN_REPEAT consecutive windows is the
+# finding §6 names — the process-unit census is not the right instrument for this box, and the
+# thread-unit refinement (§7.3) becomes the next increment. Collapsing those two into one exit code
+# would leave the caller unable to tell "not yet" from "this is the result", which is the whole
+# reason the stopping rule exists.
+#
 # Usage:
 #   capacity-marginal.sh sample  [--window-s N] [--interval-s N] [--out FILE]
 #   capacity-marginal.sh analyze [--in FILE] [--json]
+#   capacity-marginal.sh run     [--out FILE] [--increment-s N] [--interval-s N] [--max-s N]
+#                                [--repeat K]
 #
-# Exit: 0 coefficient emitted (all controls passed) · 1 NO-ATTRIBUTION (a control failed) ·
-#       2 usage error · 3 NO-DATA (nothing sampled / file unreadable).
+# Exit: 0 coefficient emitted (all controls passed) · 1 NO-ATTRIBUTION (a control failed; for `run`,
+#       the time budget ran out while the refusal was still moving) · 2 usage error ·
+#       3 NO-DATA (nothing sampled / file unreadable) · 4 SETTLED REFUSAL (`run` only — the same
+#       control refused K consecutive windows; a finding, not a timeout).
 #
 # Seams (all read with an explicit default; none may be empty):
 #   CC_MARG_TAU(60)                 load1 time constant, seconds — the independence spacing
@@ -99,6 +125,16 @@
 #   CC_MARG_MIN_ACTIVE_LEVELS(3)    distinct active levels required by C3
 #   CC_MARG_EXEC_RE                 regex matching a session's executable path (comm), default below
 #   CC_MARG_OUT                     default sample output path
+#   CC_MARG_RUN_INCREMENT(1800)     `run`: seconds sampled between re-analyses
+#   CC_MARG_RUN_MAX(14400)          `run`: total sampling budget before it gives up (exit 1)
+#   CC_MARG_RUN_REPEAT(3)           `run`: consecutive identical refusals that make it SETTLED
+#   CC_MARG_RUN_SAMPLE_OVERRIDE     `run`: fixture DIR standing in for the sampler — increment k
+#                                   appends the data rows of <dir>/k.tsv and sleeps not at all.
+#                                   It exists because `run`'s subject is a SEQUENCE OF VERDICTS,
+#                                   and a stopping rule tested against real 30-minute increments is
+#                                   a stopping rule nobody has watched stop. A DIRECTORY OF ROWS,
+#                                   never a command to execute: the seam has to be able to feed a
+#                                   series without becoming a way to run something.
 set -uo pipefail
 
 CC_MARG_TAU="${CC_MARG_TAU:-60}"
@@ -112,10 +148,29 @@ CC_MARG_MIN_ACTIVE_LEVELS="${CC_MARG_MIN_ACTIVE_LEVELS:-3}"
 # `.claude-NNN/node_modules` form is the versioned launcher every interactive session runs.
 CC_MARG_EXEC_RE="${CC_MARG_EXEC_RE:-\\.claude-[0-9]+/node_modules/|claude\\.exe$}"
 CC_MARG_OUT="${CC_MARG_OUT:-${TMPDIR:-/tmp}/capacity-marginal.tsv}"
+CC_MARG_RUN_INCREMENT="${CC_MARG_RUN_INCREMENT:-1800}"
+CC_MARG_RUN_MAX="${CC_MARG_RUN_MAX:-14400}"
+CC_MARG_RUN_REPEAT="${CC_MARG_RUN_REPEAT:-3}"
 
 SCHEMA='#ts	load1	unit	total_run	claude_run	active	resident'
 
 die() { printf 'capacity-marginal: %s\n' "$*" >&2; exit 2; }
+
+# ── where this file really lives ────────────────────────────────────────────────────────────────
+# ~/.claude/{scripts,hooks,bin}/ are per-file SYMLINKS into the checkout, so through the live layer
+# an UNRESOLVED `dirname "$0"` is ~/.claude/scripts — a directory with no lib/ beside it and no
+# repo above it. Both consumers below fail SILENTLY there rather than loudly: `read_active` would
+# record `-` for every row (C3 then refuses every window, forever, on the live path only), and
+# `run_followup` would grep a tree with no hooks/ and hand over an empty site list. Resolve first.
+# No `readlink -f` — GNU-only, and this box is BSD; the loop is ship-land.sh's `_resolve_self`.
+resolve_self() {
+  local p="${BASH_SOURCE[0]}" d
+  while [ -L "$p" ]; do
+    d="$(cd "$(dirname "$p")" && pwd)"; p="$(readlink "$p")"
+    case "$p" in /*) ;; *) p="$d/$p" ;; esac
+  done
+  printf '%s/%s' "$(cd "$(dirname "$p")" && pwd)" "$(basename "$p")"
+}
 
 # ── load1 ───────────────────────────────────────────────────────────────────────────────────────
 # Darwin: `sysctl -n vm.loadavg` -> `{ 1.23 4.56 7.89 }`. Linux: /proc/loadavg field 1. Empty on
@@ -185,7 +240,7 @@ census_row() { # -> "<total_run> <claude_run> <resident>"
 # like a quiet box, which is the exact failure cc_sp_active's own existence gate exists to refuse.
 read_active() {
   local lib v
-  lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/spawn-presence.sh"
+  lib="$(dirname "$(resolve_self)")/lib/spawn-presence.sh"
   if [ -r "$lib" ]; then
     # shellcheck source=/dev/null
     . "$lib" 2>/dev/null || { printf '%s' -; return 0; }
@@ -379,9 +434,122 @@ cmd_analyze() {
     }' "$in"
 }
 
+# ── the follow-up, RE-GREPPED and never recited ─────────────────────────────────────────────────
+# §6a of the adjudication is emphatic about this and says why: the doc's own table named TWO
+# citation sites and a grep over live code returned THREE — the third being spawn-presence.sh, the
+# library that DEFINES the population the coefficient is denominated in. "A ban enumerated as a
+# list of paths is a denylist of spellings." So on a PASS this prints the sites the box can see
+# right now, not the sites the doc remembers. A hit is a place that currently says the number is
+# unquotable; each one is where the measured coefficient goes.
+run_followup() {
+  local root doc self
+  self="$(resolve_self)"
+  root="$(cd "$(dirname "$self")/.." && pwd)"
+  doc='marginal-load-per-active-session-2026-08-19.md'
+  # Self is dropped by DERIVING its own path, never by naming one: this file cites the doc to
+  # explain itself, it does not carry the ban, and a literal exclusion here would be the first row
+  # of exactly the hardcoded list §6a exists to refuse.
+  self="${self#"$root/"}"
+  printf '\n── the sites that carry the ban, re-grepped just now (never read from a list) ──\n'
+  ( cd "$root" && grep -rln "$doc" --include='*.sh' --include='*.py' \
+      scripts hooks bin 2>/dev/null | grep -vxF "$self" | sort ) | sed 's/^/  /'
+  printf '  (each one currently says the figure is UNQUOTABLE; the coefficient above is what\n'
+  printf '   replaces that sentence — quote it WITH its s.e. and its window.)\n'
+}
+
+# ── run: the protocol's stopping rule, as code ──────────────────────────────────────────────────
+cmd_run() {
+  local out="$CC_MARG_OUT" interval="$CC_MARG_TAU" increment="$CC_MARG_RUN_INCREMENT"
+  local max_s="$CC_MARG_RUN_MAX" repeat="$CC_MARG_RUN_REPEAT"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --out)         out="${2:-}"; shift 2 ;;
+      --interval-s)  interval="${2:-}"; shift 2 ;;
+      --increment-s) increment="${2:-}"; shift 2 ;;
+      --max-s)       max_s="${2:-}"; shift 2 ;;
+      --repeat)      repeat="${2:-}"; shift 2 ;;
+      *) die "run: unknown argument '$1'" ;;
+    esac
+  done
+  case "$interval$increment$max_s$repeat" in *[!0-9]*) die "run: --interval-s/--increment-s/--max-s/--repeat must be integers" ;; esac
+  [ "$increment" -ge 1 ] || die "run: --increment-s must be >= 1"
+  [ "$repeat" -ge 2 ] || die "run: --repeat must be >= 2 (one refusal is not a repetition)"
+  [ "$max_s" -ge "$increment" ] || die "run: --max-s must be >= --increment-s"
+
+  local fixture="${CC_MARG_RUN_SAMPLE_OVERRIDE:-}"
+  local budget started k=0 elapsed a_out a_rc sig prev_sig="" streak=0 src
+  budget=$(( max_s / increment )); [ "$budget" -ge 1 ] || budget=1
+  started="$(date +%s)"
+  printf 'capacity-marginal: run — %ss increments, budget %ss (%d), settle at %d identical refusals -> %s\n' \
+    "$increment" "$max_s" "$budget" "$repeat" "$out" >&2
+
+  while [ "$k" -lt "$budget" ]; do
+    k=$(( k + 1 ))
+    if [ -n "$fixture" ]; then
+      src="$fixture/$k.tsv"
+      if [ ! -r "$src" ]; then
+        printf 'CAPACITY-MARGINAL: NO-DATA — the sample source is exhausted after %d increment(s)\n' "$(( k - 1 ))"
+        return 3
+      fi
+      [ -s "$out" ] || printf '%s\n' "$SCHEMA" > "$out" || die "run: cannot write '$out'"
+      grep -v '^#' "$src" >> "$out"
+    else
+      cmd_sample --window-s "$increment" --interval-s "$interval" --out "$out" --quiet
+    fi
+
+    a_out="$(cmd_analyze --in "$out")"; a_rc=$?
+    case "$a_rc" in
+      0)
+        printf '%s\n' "$a_out"
+        printf '\ncapacity-marginal: PASS after %d increment(s) (~%ss sampled).\n' "$k" "$(( k * increment ))"
+        run_followup
+        return 0 ;;
+      3)
+        # Too thin to judge yet — normal on the first increments, and NOT a refusal, so it must not
+        # count toward settling. A NO-DATA streak is broken time, not evidence about the box.
+        printf 'capacity-marginal: increment %d/%d — no verdict yet (NO-DATA)\n' "$k" "$budget" >&2
+        prev_sig=""; streak=0 ;;
+      *)
+        sig="$(printf '%s\n' "$a_out" | awk '/^  C[123] .*FAIL/ { printf "%s%s", (n++ ? "+" : ""), $1 }')"
+        [ -n "$sig" ] || sig="?"
+        if [ "$sig" = "$prev_sig" ]; then streak=$(( streak + 1 )); else streak=1; prev_sig="$sig"; fi
+        printf 'capacity-marginal: increment %d/%d — NO-ATTRIBUTION (%s), same-term streak %d/%d\n' \
+          "$k" "$budget" "$sig" "$streak" "$repeat" >&2
+        if [ "$streak" -ge "$repeat" ]; then
+          printf '%s\n' "$a_out"
+          printf '\nCAPACITY-MARGINAL: SETTLED REFUSAL — %s refused %d consecutive windows (~%ss sampled).\n' \
+            "$sig" "$streak" "$(( k * increment ))"
+          printf '  This is the finding, not a timeout: on this box the process-unit census cannot\n'
+          printf '  support the attribution, so the thread-unit refinement (adjudication doc §7.3,\n'
+          printf '  which wants a captured ps -axM fixture first) is the next increment — NOT a\n'
+          printf '  longer window, and NOT one of the four published values.\n'
+          return 4
+        fi ;;
+    esac
+
+    elapsed=$(( $(date +%s) - started ))
+    if [ -z "$fixture" ] && [ "$elapsed" -ge "$max_s" ]; then break; fi
+  done
+
+  printf '%s\n' "${a_out:-CAPACITY-MARGINAL: NO-DATA — nothing analyzable}"
+  printf '\ncapacity-marginal: budget exhausted after %d increment(s) (~%ss) — no PASS, and the refusal\n' \
+    "$k" "$(( k * increment ))"
+  printf '  has NOT repeated enough to settle (%s at %d of %d consecutive windows).\n' \
+    "${prev_sig:-no verdict}" "$streak" "$repeat"
+  printf '  Not settled — re-run the same command to extend the window over the same file:\n'
+  printf '    bash %s run --out %s\n' "${BASH_SOURCE[0]}" "$out"
+  printf '  Run it across a dispatch wave rather than a lull (C3 needs the ACTIVE count to move);\n'
+  printf '  do NOT synthesise levels by pausing the box.\n'
+  return 1
+}
+
 case "${1:-}" in
   sample)  shift; cmd_sample "$@" ;;
   analyze) shift; cmd_analyze "$@" ;;
-  -h|--help|'') sed -n '/^# Usage:/,/^#       2 usage/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
-  *) die "unknown subcommand '$1' (sample | analyze)" ;;
+  run)     shift; cmd_run "$@" ;;
+  # Ends on the Seams header rather than on a line of the Exit prose: an exit-code list gains rows
+  # (it just gained `4`), and a help extractor anchored to one of them silently prints the whole
+  # file the day it does.
+  -h|--help|'') sed -n '/^# Usage:/,/^# Seams /p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'; exit 2 ;;
+  *) die "unknown subcommand '$1' (sample | analyze | run)" ;;
 esac

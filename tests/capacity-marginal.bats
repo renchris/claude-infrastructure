@@ -22,6 +22,10 @@ setup() {
   # Hermetic HOME: nothing here writes to it today, but `sample` resolves spawn-presence.sh, which
   # reads the operator's beat directory. A probe must never see the live fleet.
   export HOME="$D/home"; mkdir -p "$HOME/.claude"
+  # ...and spawn-presence.sh reaches capacity-admit.sh, whose gate reads live load, memory and the
+  # session census — so on a busy box this suite would go red BY DESK rather than by its subject
+  # (backlog 5ef0dcb22aec). The admit gate is not what any test here is about.
+  export CC_ADMIT_GATE=off
   hdr() { printf '#ts\tload1\tunit\ttotal_run\tclaude_run\tactive\tresident\n' > "$1"; }
 }
 
@@ -275,4 +279,152 @@ EOF
 @test "a bad interval is a usage error, not a busy loop" {
   run bash "$M" sample --interval-s 0 --window-s 1 --out "$D/x.tsv"
   [ "$status" -eq 2 ]
+}
+
+# ── THE STOPPING RULE ───────────────────────────────────────────────────────────────────────────
+# `run` is the adjudication doc's §6 protocol as code: sample, re-analyze the growing file, and stop
+# on whichever of TWO conditions fires — a PASS, or the same control refusing across several
+# windows. Those are different answers and they must not be reachable through the same exit code,
+# because "keep sampling" and "this box cannot be measured with this census" are the two things the
+# operator is running the window to tell apart. The seam feeds a SERIES of increments from fixtures:
+# the subject here is the sequence of verdicts, and a stopping rule tested against real 30-minute
+# increments is a stopping rule nobody has ever watched stop.
+
+# Fill <dir>/<k>.tsv with a window that refuses via C2 (census flat while load moves).
+inc_flat() {
+  local f="$1/$2.tsv" i ts="$3"
+  : > "$f"
+  for i in $(seq 0 39); do
+    row "$f" "$ts" "$(awk -v i="$i" 'BEGIN { printf "%.2f", 12 + 14 * i / 39 }')" 19 3 "$(( 3 + i % 4 ))"
+    ts=$(( ts + 60 ))
+  done
+}
+
+# Fill <dir>/<k>.tsv with the planted-coefficient window that passes all three controls.
+inc_planted() {
+  local f="$1/$2.tsv" i ts="$3" act amb cl tot load
+  : > "$f"
+  for i in $(seq 0 39); do
+    act=$(( 2 + i % 6 ))
+    amb="$(awk -v i="$i" 'BEGIN { printf "%.3f", 9 + 6 * ((i * 7) % 11) / 10 }')"
+    cl="$(awk -v a="$act" 'BEGIN { printf "%.3f", 0.25 * a }')"
+    tot="$(awk -v a="$amb" -v c="$cl" 'BEGIN { printf "%.3f", a + c }')"
+    load="$(awk -v t="$tot" 'BEGIN { printf "%.3f", 1.30 * t }')"
+    row "$f" "$ts" "$load" "$tot" "$cl" "$act"
+    ts=$(( ts + 60 ))
+  done
+}
+
+@test "run STOPS on a PASS and hands over the sites, re-grepped rather than recited" {
+  local fx="$D/fx1"; mkdir -p "$fx"
+  inc_planted "$fx" 1 2000000
+  inc_planted "$fx" 2 2100000
+  run env CC_MARG_RUN_SAMPLE_OVERRIDE="$fx" bash "$M" run \
+      --out "$D/run1.tsv" --increment-s 60 --max-s 600 --repeat 3
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"VERDICT: MARGINAL"* ]] || false
+  [[ "$output" == *"PASS after 1 increment"* ]] || false
+  # §6a: the ban's citation sites are RE-GREPPED at the PASS, because the doc's own list was one
+  # site short of live code. spawn-presence.sh is the site the list did not have.
+  [[ "$output" == *"scripts/lib/spawn-presence.sh"* ]] || false
+  [[ "$output" == *"scripts/lib/capacity-admit.sh"* ]] || false
+  [[ "$output" == *"hooks/agent-teams-enforce.sh"* ]]
+}
+
+@test "run SETTLES on a repeated identical refusal — a finding, not a timeout, with its own exit" {
+  # The stopping rule's second condition, and the one that cannot share exit 1 with "budget ran
+  # out": a settled C2 refusal says the process-unit census is the wrong instrument for this box,
+  # which sends the next increment to the thread-unit census, NOT to a longer window.
+  local fx="$D/fx2"; mkdir -p "$fx"
+  inc_flat "$fx" 1 3000000
+  inc_flat "$fx" 2 3100000
+  inc_flat "$fx" 3 3200000
+  inc_flat "$fx" 4 3300000
+  run env CC_MARG_RUN_SAMPLE_OVERRIDE="$fx" bash "$M" run \
+      --out "$D/run2.tsv" --increment-s 60 --max-s 6000 --repeat 3
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"SETTLED REFUSAL"* ]] || false
+  [[ "$output" == *"C2"* ]] || false
+  [[ "$output" == *"thread-unit refinement"* ]] || false
+  # A settled refusal is still a refusal: nothing quotable may escape it.
+  [[ "$output" != *"VERDICT: MARGINAL"* ]]
+}
+
+# Fill <dir>/<k>.tsv with a window whose ONLY failing control is C3 — the ACTIVE count is pinned at
+# one level while the census tracks the load faithfully.
+inc_flatact() {
+  local f="$1/$2.tsv" i ts="$3" tot
+  : > "$f"
+  for i in $(seq 0 39); do
+    tot=$(( 10 + i % 12 ))
+    row "$f" "$ts" "$(awk -v t="$tot" 'BEGIN { printf "%.2f", 1.3 * t }')" "$tot" 4 5
+    ts=$(( ts + 60 ))
+  done
+}
+
+@test "run's streak counts the SAME term — a changed term resets it, and exhaustion is exit 1" {
+  # "The same term across several windows" is the whole content of the stopping rule; without the
+  # reset it would degrade into "several windows", which any refusal reaches by waiting. `analyze`
+  # pools the GROWING file, so the signature here genuinely moves as the pool changes: C1+C2 after
+  # the first window, C1 after the second. At --repeat 2 that must NOT settle — the streak reset.
+  local fx="$D/fx3"; mkdir -p "$fx"
+  inc_flat    "$fx" 1 4000000
+  inc_flatact "$fx" 2 4100000
+  inc_flatact "$fx" 3 4200000
+  run env CC_MARG_RUN_SAMPLE_OVERRIDE="$fx" bash "$M" run \
+      --out "$D/run3.tsv" --increment-s 60 --max-s 120 --repeat 2
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"C1+C2"* ]] || false          # window 1's term
+  [[ "$output" == *"streak 1/2"* ]] || false     # window 2's term differs -> reset, not 2/2
+  [[ "$output" == *"budget exhausted"* ]] || false
+  [[ "$output" != *"SETTLED"* ]]
+  # That settling is reachable at all is the previous test's job; this one pins only that a CHANGED
+  # term cannot reach it.
+}
+
+@test "run refuses a --repeat of 1 — one refusal is not a repetition" {
+  run bash "$M" run --out "$D/run4.tsv" --increment-s 60 --max-s 600 --repeat 1
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"not a repetition"* ]]
+}
+
+@test "invoked THROUGH the live symlink layer, run still finds its lib and its sites" {
+  # ~/.claude/scripts/ is a per-file symlink farm into the checkout, so an unresolved
+  # `dirname "$0"` there is a directory with no lib/ beside it and no repo above it. Both failures
+  # are SILENT: the ACTIVE census would record `-` for every row (C3 then refuses every window on
+  # the live path and only there), and the hand-off would list no sites at all. This is the defect
+  # class scripts/self-path-lint.sh exists for, and its own warning is that it is invisible from a
+  # worktree — so the suite has to invoke the script the way the live layer does.
+  local live="$D/live/scripts"; mkdir -p "$live"
+  ln -s "$M" "$live/capacity-marginal.sh"
+  local fx="$D/fx6"; mkdir -p "$fx"
+  inc_planted "$fx" 1 2000000
+  run env CC_MARG_RUN_SAMPLE_OVERRIDE="$fx" bash "$live/capacity-marginal.sh" run \
+      --out "$D/run6.tsv" --increment-s 60 --max-s 600 --repeat 3
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"scripts/lib/spawn-presence.sh"* ]] || false
+  # ...and the ACTIVE census resolves through the link too. A DECOY beside the symlink is what
+  # makes this discriminating: an unresolved $0 would source THIS file and stamp 77 into every
+  # row, while a resolved one never sees it. Asserting only that the census is readable would pass
+  # on the broken script too, since it records `-` rather than failing.
+  # The decoy goes where the UNRESOLVED derivation would look — beside the symlink, not beside the
+  # real file. RED-proved: with `dirname "${BASH_SOURCE[0]}"` restored, every row reads 77.
+  mkdir -p "$live/lib"
+  printf 'cc_sp_active() { printf 77; }\n' > "$live/lib/spawn-presence.sh"
+  printf '  1     0 R    /sbin/launchd\n' > "$D/ps-live.txt"
+  run env CC_MARG_PS_OVERRIDE="$D/ps-live.txt" bash "$live/capacity-marginal.sh" \
+      sample --window-s 1 --interval-s 1 --out "$D/live.tsv" --quiet
+  [ -s "$D/live.tsv" ]
+  run awk -F'\t' '!/^#/ && $6 == 77 { n++ } END { exit (n > 0) }' "$D/live.tsv"
+  [ "$status" -eq 0 ]
+}
+
+@test "run reports an exhausted sample source as NO-DATA, never as a settled answer" {
+  local fx="$D/fx5"; mkdir -p "$fx"
+  inc_flat "$fx" 1 5000000
+  run env CC_MARG_RUN_SAMPLE_OVERRIDE="$fx" bash "$M" run \
+      --out "$D/run5.tsv" --increment-s 60 --max-s 6000 --repeat 3
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"NO-DATA"* ]] || false
+  [[ "$output" != *"SETTLED"* ]]
 }
