@@ -109,6 +109,20 @@ Left as dated audit records of what was believed on their date, not corrected:
 `jcode-due-diligence-2026-08-11.md:53`, `jcode-due-diligence-2026-08-11/bottleneck-audit.md:73`,
 `jcode-due-diligence-2026-08-11/ranked-levers.md:36,:54`.
 
+🚨 **The UPSTREAM source was missed by that enumeration and is annotated 2026-08-28:**
+`scaling-bottlenecks-2026-08-09/07-accounts-api.md` — **this doc's own axis 07**, the file the
+composition above is quoted *from*. It is neither a downstream carrier nor a foreign audit record,
+so it fell through both lists: §6.4 there is headed *"The largest quota lever is context, not
+accounts"* and stated the +50% lever, the 68% share, and *"§ Context Stewardship … is therefore a
+**capacity policy**"* in the present tense, unannotated, for four days after the parent was struck —
+while §2a here cited that same file as the provenance, so a reader chasing the citation landed on
+the refuted original. Now carries a correction header and in-place strikes at §6.4, §5's ITPM bullet
+and §7 finding 5, plus the Verdict's `~4 concurrent active`. *(Generalisable, and this repo has
+learned it before — `34a21973`: a correction enumerated as a list of paths is **a denylist of
+spellings**; re-grep at the pass instead. Here the omitted path was not downstream at all: fixing a
+synthesis while leaving its own axis document asserting the refuted premise leaves the claim live at
+its source.)*
+
 ---
 
 **Felt lag, precisely (12):** turn-end lag is **3.7 s p50 / 7.7 s p90** and 92% of it is ONE call —
