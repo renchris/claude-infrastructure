@@ -41,6 +41,60 @@
 # measured against a differently-shaped payload put the knee lower and made it look statistical —
 # 7/10 at 49 KB, 10/10 at 59 KB. Same conclusion, softer edge; the sharp one above is this shape.)
 #
+# ── A THIRD CORRECTION, 2026-08-28, and it is to the paragraph immediately above ────────────────
+# Both of that paragraph's negative claims are FALSE, and the parenthetical it dismisses was right.
+# Re-measured on this box, /bin/bash 3.2.57 + /usr/bin/grep, needle on line 1, INTERLEAVED (both
+# arms in ONE process, order flipping every trial, so load is held constant BY CONSTRUCTION rather
+# than by hope — a between-runs rate comparison inside a racy band does not reproduce):
+#
+#   at 13 B per line          fixed-string `grep -qF`     `grep -iqE` (46-branch ERE)
+#     37,121 B / 2,856 lines      763/1,000  RACY             192/1,000  RACY
+#     45,000 B / 3,462 lines      268/  300  RACY             244/  300  RACY
+#     55,000 B / 4,231 lines      289/  300  RACY             277/  300  RACY
+#     65,000 B / 5,000 lines      296/  300  RACY             291/  300  RACY
+#     80,000 B / 6,154 lines      300/  300  ALWAYS           300/  300  ALWAYS
+#   at 55 B per line
+#     37,121 B /   676 lines        0/1,000  SAFE               0/1,000  SAFE
+#   at 149 B per line
+#     47,442 B /   320 lines        0/1,000  SAFE               0/1,000  SAFE
+#
+#   · "not probabilistic … deterministically" — REFUTED. 65,000 B reads 296/300, not 10/10; the
+#     ALWAYS band does not begin until ~80,000 B. The sharp edge in the table above is an artifact
+#     of n=10: at a true rate of 98.7%, ten trials show 10/10 about 88% of the time. The transition
+#     is a GRADED BAND, which is the signature of a race and not of a boundary. The tree already
+#     knew this and nobody carried it back here — tests/pipefail-sigpipe-lint.bats test 7 says so
+#     in its own words ("measured 9/40 nonzero on this very arm … a GRADED BAND, not a step"), so
+#     this file's header and this file's own test have been asserting opposite things about one
+#     event (memory: alarm-must-key-on-the-store-not-the-sensor is the sibling shape; here it is
+#     two diagnostics of one event, and the quieter one was right).
+#   · "not the grep implementation" — REFUTED, and this is the clause that stopped anyone looking.
+#     At 37,121 B / 2,856 lines the SAME feed bytes with the SAME needle in the SAME interleaved
+#     run invert 763/1,000 under `grep -qF` and 192/1,000 under `grep -iqE`. Nothing differs but
+#     the consumer's pattern. The mechanism is the reverse of the intuitive one: the SIGPIPE is
+#     caused by the consumer EXITING EARLY, so a FASTER consumer is the DANGEROUS one — a fixed
+#     string matches on the first read and closes the pipe while the producer still has chunks to
+#     write, whereas an -iE consumer compiling a 46-branch DFA is slow enough that the producer
+#     often drains and exits cleanly first.
+#   · The parenthetical's "differently-shaped payload" was the LINE WIDTH, and it is the third
+#     scope this table never carried. At a FIXED 37,121 B, 2,856 lines of 13 B invert 763/1,000
+#     while 676 lines of 55 B invert 0/1,000. Every band above was measured at ONE width.
+#
+# SO: THESE NUMBERS ARE SCOPED TO (bytes, LINE WIDTH, CONSUMER, TRIAL COUNT), AND A BAND QUOTED
+# WITHOUT ALL FOUR IS NOT A BAND. That is not pedantry — this repo has already shipped the same
+# error one level down twice: a 64 KiB constant measured on a 2-stage pipeline and then reasoned
+# about a 3-stage one it is ~2.8x wrong for, and a fixture whose stated size omitted the framing
+# the fixture itself introduced (63,488 "62 KiB" was really 64,290 written).
+#
+# DELIBERATE ZERO, stated rather than hidden: NO TEST ARM PINS THE CONSUMER AXIS, and none can.
+# The two consumers differ by 4.0x at 37,121 B and have converged completely by 80,000 B, so the
+# axis exists ONLY inside the racy band — where a deterministic assertion is impossible by
+# construction. A sweep for a size at which the fixed arm is ALWAYS while the -iE arm is still
+# ZERO found none (45,000 / 55,000 / 65,000 / 80,000 / 100,000 / 120,000 B, 300 trials each,
+# ~/.claude/autonomy/probe256-band.sh). That is precisely why a wrong claim about this axis could
+# sit in this header indefinitely: nothing in the tree can go red over it, so the comment is the
+# only carrier and the comment was the thing that was wrong.
+# ────────────────────────────────────────────────────────────────────────────────────────────────
+#
 # A variable's contents are not bounded by inspection, so the builtin exemption cannot key on the
 # command WORD — it keys on the ARGUMENT. A pure LITERAL keeps the 0/200 exemption (a literal you
 # can read is a length you can read, and that is what the row above actually measured); a parameter
