@@ -531,10 +531,27 @@ PROBE
   # (memory: control-calibrated-to-implementation-decays — #240 lost a pre-land run to a stub keyed
   # on the exact flag string its own correct fix removed).
   #
-  # 120,000 bytes with the needle on line 1 is past the measured always-inverted floor of 87,122 for
-  # this two-stage shape, so a re-introduced `grep -q` fails this deterministically rather than one
-  # run in twenty. The function is EXTRACTED and sourced, never re-implemented, so this replays the
-  # real shipped artifact (memory: control-must-replay-the-real-artifact).
+  # 162,716 bytes over 2,601 lines of 62.6 B, needle on line 1, is past the measured always-inverted
+  # floor of 87,122 for this two-stage shape, so a re-introduced `grep -q` fails this
+  # deterministically rather than one run in twenty. The function is EXTRACTED and sourced, never
+  # re-implemented, so this replays the real shipped artifact (memory:
+  # control-must-replay-the-real-artifact).
+  #
+  # THAT SIZE WAS "120,000 bytes" HERE UNTIL 2026-08-28 AND THE GENERATOR NEVER PRODUCED IT. Running
+  # this awk verbatim writes 162,716 B — the stated figure was 35.6% low. Harmless in this direction
+  # (bigger is further past the floor) but it is the SECOND fixture in this repo whose landed size
+  # omitted framing the fixture itself introduced; tests/pipefail-sigpipe-lint.bats test 7 confesses
+  # the first ("63488 … actually wrote 64290"). Measured, not computed: 500/500 inverted at this
+  # shape, 0/500 truncated to 16,384 B (~/.claude/autonomy/probe256-fix.sh).
+  #
+  # AND THE GUARD BELOW IS A PROXY, WHICH IS WORTH KNOWING WHEN YOU EDIT THE GENERATOR. 87,122 is a
+  # byte figure, and scripts/pipefail-sigpipe-lint.sh's header now records that the floor is scoped
+  # to (bytes, LINE WIDTH, CONSUMER, trial count). The width is the lever: at 37,121 B, 2,856 lines
+  # of 13 B invert 763/1,000 while 676 lines of 55 B invert 0/1,000. It does NOT bite here — the
+  # same 162,716 B rebuilt at 998 B per line still inverts 500/500, because that far above the
+  # buffer the producer has unwritten remainder whatever the line count — so the guard is sound at
+  # THIS size and the width caveat is band-limited, not general. Do not carry either half across to
+  # a fixture near 37 KB without re-measuring.
   sed -n '/^in_own() {/,/^}/p' "$REPO/scripts/bats-shellcheck-lint.sh" > "$FIX/in_own.sh"
   [ -s "$FIX/in_own.sh" ] || { echo "in_own body not found in bats-shellcheck-lint.sh" >&2; return 1; }
   awk 'BEGIN{ printf "tests/zz-needle.bats:1\n";

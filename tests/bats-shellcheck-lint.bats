@@ -260,12 +260,25 @@ mkrepo() {  # $1=dir → git tree with the lint at scripts/, dirty trunk suite, 
   # cannot discriminate (memory: control-fixture-must-reach-the-bugs-regime). It pins the CONTRACT;
   # this pins the MECHANISM, so it survives any rewording of the fix.
   #
-  # WHY 120,000 AND NOT SOME OTHER NUMBER. `$own` is own_lines output — one `path:line` per CHANGED
+  # WHY THIS SIZE AND NOT SOME OTHER. `$own` is own_lines output — one `path:line` per CHANGED
   # LINE, bounded by nothing but the diff. Measured on this repo 2026-08-26,
   # `origin/main~60...origin/main` is 2,615 lines / 89,458 bytes and `~150...` is 226,697. The
   # two-stage `printf | grep` shape is safe to 37,121 B, racy at 55,721 and ALWAYS inverted from
   # 87,122, so a fixture past 87,122 fails a re-introduced -q on EVERY run rather than one in
   # twenty. The needle is on line 1 so grep exits at the first record it reads.
+  #
+  # THIS PARAGRAPH SAID "WHY 120,000" UNTIL 2026-08-28 AND `own_neg` HAS NEVER BEEN 120,000 BYTES.
+  # The generator below writes 162,712 B over 2,601 lines of 62.6 B — the stated figure was 35.6%
+  # low, in the harmless direction, and the sibling copy of this comment in
+  # tests/gate-ownscope-leak.bats carried the identical wrong number. Measured rather than computed:
+  # 500/500 inverted at this shape and 0/500 truncated to 16,384 B
+  # (~/.claude/autonomy/probe256-fix.sh), so the arm does reach the regime it claims.
+  #
+  # ⚠️ 87,122 IS A BYTE FIGURE FOR A QUANTITY THAT IS ALSO SCOPED TO LINE WIDTH, CONSUMER AND TRIAL
+  # COUNT — scripts/pipefail-sigpipe-lint.sh's header now carries all four and the evidence. It does
+  # not bite at THIS size (the same bytes rebuilt at 998 B per line still invert 500/500), but it
+  # bites hard near 37 KB, where the same bytes go 763/1,000 at 13 B per line and 0/1,000 at 55 B.
+  # If you shrink this fixture toward the floor, re-measure; the byte guard cannot see the width.
   mkb abort '# shellcheck + prose that opens with the tool name
 @test "x" {
   foo= bar
