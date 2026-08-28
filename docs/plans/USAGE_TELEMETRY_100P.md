@@ -1610,7 +1610,8 @@ windows/week, carrying the fleet wall rate 1.72% → 2.20%.
 
 ### §5.7 Implementation record — what actually landed, and where it deviated from the spec
 
-Wave 1 = **S1 + S2 + S3 only**. Wave 2 = **S4**. S5–S7 are unbuilt and unchanged; S5 still gates S6.
+Wave 1 = **S1 + S2 + S3 only**. Wave 2 = **S4 + S5**. S6 and S7 are unbuilt; S6 stays gated on
+S5's table being RUN on the live series and READ — the code existing does not discharge that.
 
 #### S1 · data fixes — LANDED / DONE
 
@@ -1853,6 +1854,69 @@ scores M3a and never touches the freeze term.
 no harness in this plan can be wrong about them yet. The falsification that exists is the one
 §5.5 already names, and it is per completed weekly window, not per sweep.
 
+#### S5 · M3c `--strand-score` — the instrument that CAN fail — LANDED / DONE (wave 2)
+
+`bin/claude-accounts`: `strand_score(samples, buckets, now)` + `render_strand_score(res)` beside
+`wk_strand_pp`, constants `STRAND_SCORE_BUCKETS` / `STRAND_SCORE_TAIL_H` / `STRAND_MATERIAL_PP`;
+a `--strand-score` branch in `main()` placed **before `load_cfg()`**, beside `--agents`, with
+`--tail-h N` and `--json`. New suite `tests/claude-accounts-strand-score.bats` (RP-31..RP-36),
+**6/6 proven RED** against the S4 binary, 6/6 green after. The six fast claude-accounts suites
+read **45 ok**; the whole `claude-accounts-*` set reads **154 ok** with the diff in.
+
+**The causality truncation is the entire product, and it is one line.** `burn_wk_ewma_ph` filters
+on its 48 h lookback but **not on the future** — handed the full series with `now = t_eval` it
+weights samples that had not happened yet, and because that lookback then reaches the
+end-of-window burst, a 96 h-out projection comes out nearly exact. That is the tautology the old
+score died of, wearing a second costume: a harness that cannot be wrong measures nothing. The fix
+is `causal = [e for e in acct_series if e["_t"] <= s["_t"]]`, and **RP-32 pins it against a
+hand-truncated control** — the produced value must equal the hand-computed causal one to the
+float, AND the acausal value must differ by >5 pp, so the first arm cannot be satisfied by an
+implementation where the truncation happens to be a no-op. Measured on the fixture: the acausal
+EWMA is strictly larger, exactly as the mechanism predicts.
+
+**Deviation 1 — "sign-agreement rate" is defined at S6's material floor, because the literal
+reading is degenerate.** `wk_strand_pp` clamps at zero, so projected and realised strand are both
+non-negative and their signs agree **unconditionally** — a 100% agreement rate that is a property
+of the clamp, not of the estimator, and indistinguishable from the 8/8 this harness exists to
+replace. Shipped instead: `(projected ≥ STRAND_MATERIAL_PP) == (realised ≥ STRAND_MATERIAL_PP)`
+at exactly the 4 pp floor S6 fires on — which is the binary that actually decides whether S6
+ships. **RP-35 pins that the floor is a knob**, not decoration: two windows read 0.5 agreement at
+the 96 h horizon and 1.0 at the 6 h horizon, and lifting the floor above both quantities flips the
+96 h cell to 1.0.
+
+**Deviation 2 — `strand_score` sits beside `wk_strand_pp`, not beside `_util_tail`** as §5.2
+says. It consumes `completed_weekly_windows`, `burn_wk_ewma_ph` and `wk_strand_pp`; placing it at
+`_util_tail` would put it ~450 lines above all three. Nothing else in the entry moves.
+
+**Deviation 3 — two groupings, not one.** The window being scored is grouped by `(acct, reset
+key)`, but the EWMA is handed the account's **whole** causal series, because its 48 h lookback
+legitimately reaches back across the window's own opening roll — that roll-awareness is precisely
+what S1's `_rolled` anchor and S3's EWMA bought, and truncating to the scored window would throw
+it away and abstain across the first stretch of every window, which is where the long horizons
+live.
+
+**Deviation 4 — a cell whose EWMA abstains is dropped, not scored as an error.** §5.2's abstain
+rule names only "no evaluable sample at `weekly_reset_h ≥ H`"; a sample that exists but sits on
+under `WK_EWMA_MIN_SPAN_H` of usable history is the same absence of a measurement, and scoring it
+would import the estimator's refusal as if it were a prediction of zero. RP-33 pins both arms
+together — 96/48/24 h report `n = 0` with `bias`/`mae`/`agree` all null, and 12/6 h report — and
+the renderer prints `—` for an empty bucket, never `0.0`, because a 0.0 reads as a perfectly
+unbiased estimator. §5.4 is explicit that a table whose every cell reads 0.0 is the tautology all
+over again.
+
+**`--tail-h` reads its default through an explicit `None` test, not `or`.** `_num_flag`'s own
+docstring is the reason — *"a bound the caller believes it set, and did not, is worse than no
+bound"* — and `--tail-h 0` is falsey, so `or STRAND_SCORE_TAIL_H` would silently ignore it.
+
+**What this does NOT do.** It scores **M3a only**. M4′'s verdict and its `unrecoverable_pp` floor
+are arithmetic over `P_WALL` / `MEAN_WALL_H`, fitted on n = 8 burst windows, and nothing here
+touches the freeze term — §5.5's monitoring plan is still the only thing that retires that
+probation. And **S6 remains ungated until this is RUN on the live series and READ**: the shipped
+criterion is §5.2 S6's, *if the horizon-stratified bias at the 12 h bucket is not near zero, the
+alarm is not shippable at any parameter setting*, and that reading is a measurement on the
+operator's own `~/.claude/logs/account-utilization.jsonl`, not something a fixture can stand in
+for.
+
 #### Acceptance status against §5.4
 
 | command | status |
@@ -1861,7 +1925,7 @@ no harness in this plan can be wrong about them yet. The falsification that exis
 | `claude-accounts --readout` renders the drain block for all four accounts | **yes** — see above |
 | `claude-accounts --readout \| grep -c 'strand'` → 3 or 4 | **4** |
 | the footer's `start by T−Nh` / `⚠ LATE by Xh` clause and the `K=… live` caption | **yes** (S4, wave 2) — the rendered block matches §5.4's mock line for line |
-| `claude-accounts --strand-score` | **not built** — that flag is S5, and it still gates S6 |
+| `claude-accounts --strand-score` | **built** (S5, wave 2) — the table reports per horizon with non-zero n and a bias that could have been non-zero. **Not yet RUN on the live series**, which is what gates S6 |
 
 ⚠️ `bash tests/run.sh …`, named in §5.4, **does not exist in this repo**. The suites are run with
 `bats tests/<name>.bats`; `scripts/ship-land.sh` selects and runs them at the land.
