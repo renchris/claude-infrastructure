@@ -318,3 +318,92 @@ harness, never about the diff.
 `zsh -lc` + `idl.jsonl` one-liner is still the discriminator, and it is still the next step; §5.3
 only guarantees that from now on the divergence would announce itself instead of being inferred
 nine days later from a landing-rate table. The item cannot be closed from a cloud VM.
+
+---
+
+## 6 · Sixth dispatch, 2026-08-28 — the row recycles because its own answer keeps stranding
+
+`f85fce7c26f5` has now been dispatched six times. Dispatches two through five each reached a
+correct verdict, wrote it up, pushed it, and **landed none of it.** Measured this session, by patch
+equivalence against `origin/main`:
+
+| commit | date (UTC) | branch | what it holds |
+|---|---|---|---|
+| `aa556ff4` | 08-25 19:51 | `…fire-20260825T194636Z-62117-1` | `BACKLOG_DRAIN_24_7.md` §2.1 entry: "already cured, no arm died" |
+| `8bd76cf0` | 08-26 15:19 | `…fire-20260826T151105Z-95151-1` | `CLOUD_OBSERVABILITY.md` §14 — the convention written to END this loop |
+| `92740e5f` | 08-27 01:33 | `…fire-20260827T011720Z-8347-1` | the strand census; refutes the recorded cause of the `/ship` refusal |
+| `471984e0` | 08-27 10:13 | `…fire-20260827T100526Z-92338-1` | `bin/cc-cloud` header correction (sign argument) |
+| `4bcf3f0b` | 08-27 18:48 | `…fire-20260827T182235Z-13748-1` | the `skipped-config-divergence` naming + its bats arm |
+| `41ff4e46` | 08-27 18:49 | ″ | `bin/cc-cloud` header correction + §1–§5 of this document |
+| `caaf67bc` | 08-27 18:53 | ″ | `tests/cloud-return.bats` identity repair |
+| `abc2220b` | 08-27 18:54 | ″ | §4's addendum |
+
+Eight commits, five branches, **zero on trunk.** §5.5's "the item cannot be closed from a cloud VM"
+is the whole diagnosis of the recycle, and it is the same defect the row reports, met from inside:
+the arm that returns cloud work is the arm that would have landed the analysis of why it stopped.
+
+### 6.1 What this dispatch did instead of a seventh derivation
+
+Consolidated the eight into ONE branch, rebased on trunk, so a revived land arm clears the row in
+one land rather than five that conflict:
+
+- **Landed here:** `4bcf3f0b`, `41ff4e46`, `caaf67bc`, `abc2220b`, `8bd76cf0`, `92740e5f`. All six
+  cherry-picked onto `origin/main` with **no conflict**.
+- **`471984e0` dropped, deliberately, and recorded rather than deleted.** It edits the same
+  `bin/cc-cloud` hunk as `41ff4e46` and reaches a *different* conclusion: that the death's cause is
+  already on trunk (`cd5d009b5`, desk-land's bound-kill debris). `41ff4e46` is eight hours later,
+  carries two independent censuses, and leaves the cause OPEN. Both cannot occupy the hunk; the
+  later, better-evidenced one wins. `471984e0` remains on its branch and its sha is here.
+- **`aa556ff4` dropped for the same reason.** Its §2.1 headline — *"the cloud return arm never
+  died"* — is refuted by §1 of this document, and landing it would put a refuted claim into an
+  append-only log whose correcting entry lives in a different section.
+
+### 6.2 Everything re-verified this session, on a box that could finally run the gates
+
+Dispatches 3–5 each recorded *"bats and shellcheck absent in this venue"*. They are installable
+(`apt-get install -y shellcheck bats`, 0.9.0 / 1.10.0), so this dispatch ran the gates the earlier
+ones could only defer:
+
+| check | pristine `origin/main` | this branch |
+|---|---|---|
+| `tests/cc-cloud.bats` | 31/31 | 31/31 |
+| `tests/cloud-return.bats` | **21/27 — 6 red** | **27/27** |
+| `tests/autonomy-sweep.bats` | 43/61, 18 red | 44/62, **the identical 18** |
+| `cc-cloud --selftest` | — | 24/24 |
+| `shellcheck -x` on both changed shell files | — | rc 0 |
+| 12 repo lints (pipefail-sigpipe · test-hermeticity · bats-kill-guard · bats-testname-eval · bats-shim-parity · self-path · utc-stamp · alarm-polarity · test-walltime · subshell-cleanup · tsv-pad · git-identity) | — | all rc 0 |
+
+The two red sets in `autonomy-sweep` are byte-identical (`diff` of the sorted names is empty), so
+the set this diff introduces is **empty** and §5.4's attribution holds. `caaf67bc`'s repair is
+confirmed two-sided: the six reds it fixes are present on pristine trunk and absent here.
+
+§1.1 was re-derived a third time, independently, off `branch-prune-manifest-2026-08-19.tsv` on
+trunk, and **reproduces exactly**: 100/75/75/53/76/64/50/50% for 08-10..08-17, then **16% on 08-18
+and 0% on 08-19**. That instrument records `git cherry` patch equivalence *before* any deletion, so
+pruning cannot confound it — which is why trunk's current claim that the step "is that artifact" is
+wrong, and why the correction in this branch is the substance of the row.
+
+### 6.3 The strand is growing, and that is the measurement that dates the arm
+
+| date measured | `origin/claude/fire-*` branches | carrying un-landed commits | un-landed commits |
+|---|---|---|---|
+| 2026-08-27 (`92740e5f` §…) | 183 | 151 | 205 |
+| **2026-08-28 (this session)** | **237** | **205** | **286** |
+
++54 branches and +81 un-landed commits in one day. The cloud lane is still firing and still not
+returning; nothing about the arm has changed since 08-17.
+
+### 6.4 The `/ship` refusal reproduces, and its count has moved
+
+`92740e5f` measured `scripts/unattended-path-lint.sh --selftest` at 11 of 42 failing on a Linux VM,
+which makes `/ship` exit 6 for any diff and is why a cloud VM cannot land its own work. Re-run this
+session it is **14 of 42** — and **identically 14 of 42 on pristine `origin/main`**, so the drift is
+in the tree the lint scans, not in this diff. The diagnosis is unchanged: the lint's fixtures assert
+on host binaries (`tmux`, `yq`, `md5`) that resolve differently off Darwin, so its verdict is a
+property of the box running it. No bypass was taken.
+
+### 6.5 Still open, still one command, still operator-gated
+
+Unchanged from §5.5, and now with a second reason to run it: §3's `launchctl print` + `zsh -lc` +
+`idl.jsonl` one-liner is the discriminator for A's mechanism, **and** reviving the arm is what lands
+this branch. Until it runs, dispatch seven will produce a ninth stranded commit.

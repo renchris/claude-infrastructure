@@ -86,6 +86,39 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-28 — `f85fce7c26f5`, SIXTH dispatch: THE ROW RECYCLES BECAUSE ITS OWN ANSWER KEEPS
+  STRANDING, so this dispatch consolidated the answer instead of deriving a seventh one.**
+  Dispatches two through five each reached a correct verdict and landed none of it: **8 commits
+  across 5 fire branches, 0 on trunk** (`aa556ff4` · `8bd76cf0` · `92740e5f` · `471984e0` ·
+  `4bcf3f0b` · `41ff4e46` · `caaf67bc` · `abc2220b`). That is the row's own reported defect met from
+  inside — the arm that returns cloud work is the arm that would have landed the analysis of why it
+  stopped. Six of the eight are cherry-picked here onto current trunk with **no conflict**;
+  `471984e0` and `aa556ff4` are deliberately dropped, with their shas and the reason recorded in
+  `docs/research/cloud-land-arm-step-2026-08-25.md` §6.1 rather than deleted — `471984e0` edits the
+  same `bin/cc-cloud` hunk as `41ff4e46` under a *contrary* conclusion (cause already on trunk at
+  `cd5d009b5`) that the later, twice-censused commit supersedes, and `aa556ff4`'s headline ("the
+  cloud return arm never died") is refuted by §1 of that same document.
+  **The row's two halves, restated:** its cited probe defect (a pruned branch scoring identically to
+  one that never booted) **is cured on trunk** — `a42f107a`, `tests/cc-cloud.bats` 31/31 and
+  `cc-cloud --selftest` 24/24 re-run here. Its **headline is true and still open**: the 08-17 step
+  is NOT the prune artifact, re-derived a third time off `branch-prune-manifest-2026-08-19.tsv`
+  (`git cherry` patch equivalence, recorded *before* any deletion, so pruning cannot confound it) —
+  **75/75/53/76/64/50/50% for 08-11..08-17, then 16% on 08-18 and 0% on 08-19**, exact to the digit.
+  Trunk's `bin/cc-cloud` header currently asserts the opposite; this branch corrects it.
+  **Gates, on a VM where they could finally run** (`shellcheck`/`bats` are `apt-get`-installable —
+  three prior dispatches recorded them "absent in this venue"): `cloud-return.bats` **21/27 red on
+  pristine trunk → 27/27 here**, `autonomy-sweep.bats` 43/61 → 44/62 with a **byte-identical** red
+  set (the 18 are `mk_marker`'s BSD `date -v` on GNU coreutils; the set introduced is empty),
+  `cc-cloud.bats` 31/31 both sides, `shellcheck -x` rc 0, 12 repo lints rc 0.
+  **The strand is growing**: 183 fire branches / 205 un-landed commits on 08-27 → **237 / 286
+  today**, +54 branches and +81 commits in one day.
+  **BLOCKED, operator-gated, and the block is why this is a sixth dispatch and not a close.** A
+  cloud VM cannot land: `unattended-path-lint --selftest` is **14 of 42 failing here AND on pristine
+  trunk** (host-binary fixtures off Darwin), so `/ship` exits 6 for any diff. The one command that
+  discriminates A's mechanism — and reviving the arm is what lands this branch — is
+  `docs/research/cloud-land-arm-step-2026-08-25.md` §3. Until it runs, dispatch seven produces a
+  ninth stranded commit. A2's blocker list is now three: the expired OAuth token (`8636b8f829fe`),
+  the sweep's config-divergence hypothesis, and this lint's missing reference environment.
 - **2026-08-27 — drain recycle #251: method 221 — A SIGPIPE SITE'S FLOOR IS SET BY THE BYTES THE
   LAST PRE-CONSUMER STAGE EMITS, NOT BY THE BYTES ITS PRODUCER WRITES.** #250 established that a
   hazard's rank must key on which side of the pipe the variable sits on rather than on how it is
