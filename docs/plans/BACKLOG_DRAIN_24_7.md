@@ -211,9 +211,17 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   `git commit` inside the suite's fixture repos fails **"Author identity unknown"** in this container,
   taking down a cluster of ~12 tests whose bodies commit to the fixture. **Attributed before it was
   waved away:** it reproduces identically on a **fully pristine `origin/main` tree — pristine suite
-  file AND pristine SUT**, extracted via `git archive | tar -x`, verified per-test for *"is-green: 0
-  for a stamped-green sha"* and *"C7: the worktree cell is MINTED"*. So it is trunk's-and-the-venue's,
+  file AND pristine SUT**, extracted via `git archive | tar -x`. So it is trunk's-and-the-venue's,
   not this diff's, and per the global rule the close reports it in one line and closes on MY state.
+  **The control ran to completion, ONE TEST AT A TIME ON AN IDLE BOX** (never concurrently — the
+  artifact above is what that rule is for), over six representative cluster members: *is-green
+  stamped-green* · *C7 cell MINTED/REMOVED* · *stamps key on TREE (amended commit)* · *LIVE
+  run.lock.d holder* · *C6b RECYCLED pid* · *RED run, last-green FROZEN*. **PRISTINE 6/6 red,
+  MINE 6/6 red — identical sets, so this diff moves none of them.** ✅ **A per-test A/B against an
+  EXTRACTED trunk tree is what turns "probably pre-existing" into an attribution**, and it is cheaper
+  than it looks because the columns are not symmetric: **the load-bearing one is PRISTINE**, since a
+  failure present on untouched trunk is disowned whatever this tree does. The MINE column only rules
+  out the one remaining reading — that the diff ADDED a second, coincidentally identical failure.
 - **CLOSE (venue-limited, and the limits are stated rather than left as blanks).** Fix + arms +
   ratchet landed as **`389bb90e`**; this entry follows it. **No open/close/floor census, no board, no
   stores** — `cc-backlog` and `~/.claude/autonomy/` do not exist in this container (see the venue
