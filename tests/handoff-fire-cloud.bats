@@ -461,3 +461,56 @@ EOF
   [ -s "$CLOUD_DECL_LOG" ]
   [ ! -f "$BATS_TEST_TMPDIR/pf-off.log" ]                # the override SKIPS the probe, not just its verdict
 }
+
+# ── 20 + 21 — THE ABSENCE CONTRACT'S PRODUCER (backlog 0c8b39b67665) ─────────────────────────────
+# CLOUD_OBSERVABILITY.md §4.1 fixes the meaning of an absent ref by CONTRACT: the brief's FIRST ACT
+# is a push, an empty commit is enough, so a booted session leaves a ref whatever else it does. It
+# is the SOLE basis on which C1 NOT-STARTED may be read as "never booted" — and it had no producer.
+# This payload said the push under a heading reading "read this before you FINISH" and told the VM
+# to "push whatever you have before you finish": a LAST-act contract, under which an absent ref is
+# still four states at once, one of which is a session that ran the whole brief and had nothing to
+# commit. That fourth is the common one — 222 of 262 live sessions, measured 2026-08-27.
+#
+# RED-PROOF: replay both against `git show <pre-fix sha>:scripts/handoff-fire.sh`. 20 goes red on
+# its ordering assertion (the pre-fix payload has no commit instruction at all, so the extraction
+# finds nothing to order) and 21 on the missing flag. Case 17 above stays green on BOTH trees and
+# is the control: the branch-before-push ordering it pins is untouched by this change.
+
+@test "20 the payload's FIRST ACT is a boot beacon — ordered AHEAD of the brief, not after it" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: t" 0
+  # No status assertion, exactly as case 17: this banner carries no id, so the fire exits 11 at
+  # created-unidentified. The subject here is the PAYLOAD, which is composed and sent before that.
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ -s "$BATS_TEST_TMPDIR/create.log" ]
+  local sw commit push brief
+  sw="$(grep -n 'git switch -c claude/fire-' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  commit="$(grep -n 'git commit --allow-empty' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  push="$(grep -n 'git push -u origin HEAD' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  # The BRIEF's own first line, from the fixture at setup() — the thing the beacon must precede.
+  brief="$(grep -n 'TASK — cloud venue gate fixture payload' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$commit" ] || { echo "the payload never instructs the empty boot commit — §4.1's contract is still prose"; false; }
+  [ -n "$brief" ] || { echo "the brief itself never reached the payload"; false; }
+  # The beacon is a three-command sequence IN ORDER, and the whole sequence precedes the brief.
+  # Ordering is the entire claim: the same three commands after the brief are the LAST-act contract
+  # that C1 cannot read.
+  [ "$sw" -lt "$commit" ] || { echo "switch -c must precede the commit (sw=$sw commit=$commit)"; false; }
+  [ "$commit" -lt "$push" ] || { echo "the commit must precede the push (commit=$commit push=$push)"; false; }
+  [ "$push" -lt "$brief" ] || { echo "the beacon must precede the BRIEF (push=$push brief=$brief) — a last-act push is what left C1 unreadable"; false; }
+}
+
+@test "21 the declaration RECORDS that this fire's payload carried the contract" {
+  # Both halves are written by the same caller on purpose. A payload that beacons but a declaration
+  # that does not say so leaves bin/cc-cloud abstaining forever; a declaration that claims the
+  # contract over a payload that never sent it is the false NOT-STARTED, restored by hand. Nothing
+  # downstream can reconstruct either — the payload goes to a VM this box cannot read and is gone.
+  cloud_acct; cloud_ccloud
+  cloud_claude "$(printf 'Created cloud session: t\x1b[8GView: https://claude.ai/code/session_01TESTTESTTESTTESTTESTT?from=cli')" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ "$status" -eq 0 ]
+  [ -s "$CLOUD_DECL_LOG" ]
+  grep -q -- "--boot-contract beacon" "$CLOUD_DECL_LOG"
+  # …and it is only claimed because the payload really carries it. Asserting the flag alone would
+  # pass just as well over a payload that dropped the beacon block entirely.
+  grep -q 'git commit --allow-empty' "$BATS_TEST_TMPDIR/create.log"
+}

@@ -8034,14 +8034,51 @@ if [ "$CLOUD" = 1 ]; then
   # there the name is authorised AT CREATE. cc_cloud_create's signature is `cfg cwd prompt`
   # (scripts/lib/cloud-create.sh:185): the CLI leg has NO branch parameter at all, so the payload
   # is the only place the branch can be established, and establishing it is a real `switch -c`.
-  CLOUD_PAYLOAD="$(cat "$PROMPT_FILE")
-"'
-── HOW TO RETURN YOUR WORK (this session runs off-box; read this before you finish) ──
+  #
+  # 🚨 THE BEACON BLOCK IS FIRST, AHEAD OF THE BRIEF, AND THAT IS THE ABSENCE CONTRACT ITSELF
+  # (backlog 0c8b39b67665; CLOUD_OBSERVABILITY.md §4.1). §4.1 states the contract in prose — "the
+  # session's brief requires its FIRST ACT to be pushing that branch — an empty commit is enough" —
+  # and it is the SOLE basis on which C1 NOT-STARTED may be read as "never booted". It had no
+  # producer anywhere in the tree: this payload put the push under a heading that says "read this
+  # before you FINISH" and told the VM to "push whatever you have before you finish", i.e. it
+  # specified a LAST act. Under a last-act contract an absent ref is four states at once — never
+  # booted, died at boot, refused entitlement, or ran the whole brief and had nothing to commit —
+  # and cc-cloud's classify() called all four NOT-STARTED. That is not a hypothetical either:
+  # measured 2026-08-27, 222 of 262 live sessions had ENDED A TURN ASKING A QUESTION and were filed
+  # NOT-STARTED for no reason but a missing ref (bin/cc-cloud:1265). A boot beacon collapses the
+  # ambiguity at the only point it can be collapsed — before the work — because after the work
+  # there is nothing left to distinguish.
+  #
+  # WHY THE BRIEF IS SAFE TO DISPLACE: check_slash_head (:7212) has already REFUSED any prompt file
+  # whose first non-blank line is a slash command, so no fire that reaches here has a head the
+  # harness would parse as a command. Prepending is therefore text in front of text.
+  #
+  # WHY AN EMPTY COMMIT AND NOT A BARE `push HEAD`: measured here, `git cherry <trunk> <branch>`
+  # reports an empty commit as `+` (not patch-equivalent), so scripts/branch-prune-landed.sh — which
+  # deletes remote branches whose every commit IS patch-equivalent, 54 of them in one 2026-08-19
+  # pass — leaves a beacon-only branch alone. A bare push of the clone's HEAD would put the ref AT
+  # trunk, where the pruner would delete the very evidence the beacon exists to leave.
+  CLOUD_PAYLOAD='── DO THIS BEFORE ANYTHING ELSE — three commands, then read the brief below ──
 You are running in an Anthropic-managed VM. Nothing on the operator'"'"'s machine can see your
-filesystem, your processes or your terminal, and you cannot run this repo'"'"'s /ship. Your ONLY
-channel back is a git push, and it must go to exactly this branch — CREATE IT FIRST, then push it:
+filesystem, your processes or your terminal. Your FIRST ACT — before you read the brief, before you
+open a file — is to publish a boot beacon on the branch this fire assigned you:
 
     git switch -c '"$CLOUD_BRANCH"'
+    git commit --allow-empty -m "boot: '"$CLOUD_BRANCH"'"
+    git push -u origin HEAD
+
+Why first and not last: that branch is the ONLY thing the firing side can observe about you. An
+absent ref is the same observation whether you never booted, died at boot, were refused entitlement,
+or ran the whole brief and had nothing to commit — so absence only carries information once BOOTING
+itself pushes. Until you run those three commands you are indistinguishable from a session that
+never started, and the operator will be told to re-fire you.
+
+'"$(cat "$PROMPT_FILE")"'
+
+── HOW TO RETURN YOUR WORK (this session runs off-box; read this before you finish) ──
+You cannot run this repo'"'"'s /ship. Your ONLY channel back is a git push, and it must go to exactly
+the branch you created above:
+
     git push -u origin HEAD
 
 That branch name was assigned by the firing side and is already declared as the one thing watched
@@ -8114,7 +8151,7 @@ of any kind. A local reconciler (scripts/cloud-reconcile.sh) discovers the branc
     echo "!! cloud fire: A SESSION WAS CREATED AND CANNOT BE NAMED — the create banner carried no session id." >&2
     echo "   It is live, spending ${CLOUD_ACCT}'s quota, and nothing local can observe, address or reap it." >&2
     echo "   Find it at https://claude.ai/code and either declare it by hand or stop it:" >&2
-    echo "     cc-cloud declare --id <id> --branch $CLOUD_BRANCH --account $CLOUD_ACCT --repo $REPO" >&2
+    echo "     cc-cloud declare --id <id> --branch $CLOUD_BRANCH --account $CLOUD_ACCT --repo $REPO --boot-contract beacon" >&2
     echo "   raw: $CLOUD_MSG" >&2
     emit_fire_refusal cloud-create-unidentified "create succeeded, no session id extractable — UNOBSERVABLE live session on $CLOUD_ACCT"
     exit 11
@@ -8151,15 +8188,22 @@ of any kind. A local reconciler (scripts/cloud-reconcile.sh) discovers the branc
   if [ -z "$CLOUD_DECL" ] || ! command -v "$CLOUD_DECL" >/dev/null 2>&1 && [ ! -x "$CLOUD_DECL" ]; then
     echo "!! cloud fire: session $CLOUD_ID CREATED but cc-cloud is unreachable — IT IS UNDECLARED." >&2
     echo "   Declare it by hand before the 600s orphan reaper sees a team with no live lead:" >&2
-    echo "     cc-cloud declare --id $CLOUD_ID --branch $CLOUD_BRANCH --account $CLOUD_ACCT --repo $REPO" >&2
+    echo "     cc-cloud declare --id $CLOUD_ID --branch $CLOUD_BRANCH --account $CLOUD_ACCT --repo $REPO --boot-contract beacon" >&2
     emit_fire_refusal cloud-declare-absent "session $CLOUD_ID created, cc-cloud unreachable — session is live and UNDECLARED"
     exit 11
   fi
+  # `--boot-contract beacon` is the OTHER half of the payload's beacon block, and the two must be
+  # written by the same caller or the reader is guessing. It records that THIS fire's payload
+  # actually carried the first-act instruction, which is the only fact that makes a later "no ref"
+  # mean "never booted" rather than "we never asked it to say so". A declaration made by any other
+  # path (a hand-declare, scripts/cloud-websetup-drive.sh, a probe) carries no such fact, and
+  # bin/cc-cloud's C1 arm abstains for it instead of inventing a confident verdict.
   if ! "$CLOUD_DECL" declare --id "$CLOUD_ID" --branch "$CLOUD_BRANCH" --account "$CLOUD_ACCT" \
          --repo "$REPO" --url "https://claude.ai/code/$CLOUD_ID" \
+         --boot-contract beacon \
          --item "handoff-fire $(basename "$PROMPT_FILE")" >&2; then
     echo "!! cloud fire: session $CLOUD_ID CREATED but the declaration FAILED — it is live and unobservable." >&2
-    echo "     cc-cloud declare --id $CLOUD_ID --branch $CLOUD_BRANCH --account $CLOUD_ACCT --repo $REPO" >&2
+    echo "     cc-cloud declare --id $CLOUD_ID --branch $CLOUD_BRANCH --account $CLOUD_ACCT --repo $REPO --boot-contract beacon" >&2
     emit_fire_refusal cloud-declare-failed "session $CLOUD_ID created, cc-cloud declare exited non-zero — live and UNDECLARED"
     exit 11
   fi

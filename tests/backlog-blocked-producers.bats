@@ -108,8 +108,17 @@ paths=
 url=https://claude.ai/code/session_$item
 item=$item
 declared_at=$(( CC_CLOUD_NOW - 1000 ))
+boot_contract=beacon
 EOF
 }
+# `boot_contract=beacon` is not decoration: it is what a REAL fire writes. cc-cloud's C1 arm reads
+# NOT-STARTED only for a declaration whose fire actually ordered a boot beacon (CLOUD_OBSERVABILITY
+# §4.1a, backlog 0c8b39b67665) — because without that instruction an absent ref is equally a
+# session that ran the whole brief and had nothing to commit, which is what filed 222 of 262 live
+# sessions as never-started. scripts/handoff-fire.sh writes the payload block and this field in one
+# place, so a fixture modelling a fired cloud session carries it. A fixture WITHOUT it models a
+# declaration nobody asked to beacon; cc-cloud abstains there, and the reap stays blocked — the
+# same fail-closed path the "NO cloud declaration" control below already pins.
 
 # reap_cloud <push?> — files a row, claims it off-box, ages the claim past the stale gate, sweeps.
 # Sets ROW and writes the sweep log to $REAPLOG. Deliberately NOT called in a command substitution:

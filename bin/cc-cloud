@@ -101,6 +101,7 @@
 #                   NO row, `--table` says UNKNOWN, `--check` FAILS. Never a vacuous pass.
 #   C1 NOT-STARTED  no ref AND no evidence of one, past declared_at+boot_s                    ROW
 #                   (or the ref exists but is STILL at its fire-time sha — see BASELINE)
+#                   REQUIRES `boot_contract` in the declaration — see ABSENCE CONTRACT below.
 #   C2 BOOTING      same, still inside the boot budget — expected, not a fault              no row
 #   C3 LANDED       every declared path is content-present on the trunk ref                 no row
 #   C4 STALLED      ref exists, sha unchanged for > stall_s (sidecar evidence REQUIRED)       ROW
@@ -150,6 +151,22 @@
 # than treating an unmeasured baseline as an empty one — the same law as U0 one level down.
 # It is checked AFTER C3: a session whose declared content is on trunk is finished, and how its ref
 # moved is no longer a question worth alarming on.
+#
+# ── ABSENCE CONTRACT: why C1 needs a FACT ABOUT THE FIRE, not just an observation ─────────────────
+# "No ref" is four states at once — never booted, died at boot, refused entitlement, and ran the
+# whole brief with nothing to commit. Nothing observable from this side separates them, and there is
+# no inbound channel to a cloud VM to ask. Only a CONTRACT can: the fire's payload orders the VM to
+# push the branch as its FIRST act (an empty commit is enough), so a booted session leaves a ref
+# whatever else it does, and absence past the budget means it never ran.
+# CLOUD_OBSERVABILITY.md §4.1 stated that contract and NOTHING IMPLEMENTED IT until 2026-08-28
+# (backlog 0c8b39b67665): the payload put the push under "read this before you FINISH" — a LAST-act
+# contract, under which the fourth state is invisible. It is the common one, not a corner: measured
+# 2026-08-27, 222 of 262 live sessions had ended a turn ASKING A QUESTION and were filed
+# NOT-STARTED purely for having no ref (see the `inbox` note at the dispatch table).
+# `declare --boot-contract beacon` records that a fire's payload actually carried the instruction.
+# With it, C1 is a verdict. WITHOUT it, C1 abstains to UNKNOWN — no row, `--check` still fails, the
+# detail says why — which is this file's own U0 law applied to a missing FACT rather than a missing
+# sensor. scripts/handoff-fire.sh writes both halves in one place; every other declarer abstains.
 #
 # C3 precedes C4 DELIBERATELY: a finished session stops pushing, so a STALLED-first order would
 # alarm forever on every successful cloud session — the failure mode where an alarm that always
@@ -526,6 +543,7 @@ classify() { # <id>
   local id="$1" f="$STATE/$1.decl" seen="$STATE/$1.seen"
   local branch remote repo paths trunk url dat boot stall life
   local sha rc n age url_cmd first_seen sha_age base_sha base_probe seen_sha paths_src pushed
+  local boot_contract
 
   branch="$(dfield "$f" branch)"
   remote="$(dfield "$f" remote)"
@@ -560,11 +578,42 @@ classify() { # <id>
   paths_src="$(dfield "$f" paths_src)"
   if [ -n "$seen_sha" ] || [ -n "$paths_src" ]; then pushed=1; else pushed=0; fi
 
+  # ── THE ABSENCE CONTRACT GATE (backlog 0c8b39b67665; CLOUD_OBSERVABILITY.md §4.1) ───────────────
+  # §4.1's contract — the brief's FIRST ACT is a push, an empty commit is enough — is the SOLE
+  # basis on which "no ref" may be read as "never booted". It was prose only until 2026-08-28: the
+  # payload composed by scripts/handoff-fire.sh put the push under "read this before you FINISH",
+  # i.e. specified a LAST act, so an absent ref was four states at once — never booted, died at
+  # boot, refused entitlement, and RAN THE WHOLE BRIEF AND HAD NOTHING TO COMMIT. NOT-STARTED
+  # named the first and the fourth identically.
+  #
+  # That fourth state is the common one, not the corner: measured 2026-08-27, 222 of 262 live
+  # sessions ended a turn with status_category "need_input" — they had WORKED and asked a question
+  # — and were filed NOT-STARTED for no reason but a missing ref (see the `inbox` note below). An
+  # actionable row telling the operator to re-fire a session that is sitting there waiting for an
+  # answer is worse than no row: it spends an account's quota re-doing work that already exists.
+  #
+  # So the verdict is gated on the fact that makes it meaningful. `boot_contract` is written by
+  # `declare` and only by a caller that actually sent the beacon instruction. Present, absence is
+  # informative and C1 fires. ABSENT, this is exactly the file's own U0 law one level up — a sensor
+  # that could not run yields no verdict, never a vacuous confident one — so it reports UNKNOWN,
+  # emits NO row, and FAILS `--check` (which is what UNKNOWN already does everywhere else here).
+  # `--check` therefore does not change verdict for these declarations; only the false actionable
+  # row goes away, and it is replaced by a detail that names why nothing can be concluded.
+  #
+  # INSIDE the boot budget the two cases coincide — BOOTING is "expected, not a fault", emits no
+  # row and fails nothing — so the gate is only asked once the budget is spent, where the two
+  # answers actually differ.
+  boot_contract="$(dfield "$f" boot_contract)"
+
   # C1/C2 require BOTH: no ref now AND no evidence there ever was one. Reaching this arm on
   # evidence-of-push alone is the defect below.
   if [ -z "$sha" ] && [ "$pushed" -eq 0 ]; then
     if [ "$age" -gt "$boot" ]; then
-      printf 'NOT-STARTED\tno ref after %s (boot budget %s)\t%s\n' "$(dur "$age")" "$(dur "$boot")" "$url_cmd"
+      if [ -n "$boot_contract" ]; then
+        printf 'NOT-STARTED\tno ref after %s (boot budget %s)\t%s\n' "$(dur "$age")" "$(dur "$boot")" "$url_cmd"
+      else
+        printf 'UNKNOWN\tno ref after %s, no boot contract\t%s\n' "$(dur "$age")" "$url_cmd"
+      fi
     else
       printf 'BOOTING\tno ref yet, %s into a %s budget\t-\n' "$(dur "$age")" "$(dur "$boot")"
     fi
@@ -594,7 +643,16 @@ classify() { # <id>
   base_sha="$(dfield "$f" base_sha)"
   if [ "$base_probe" = "ok" ] && [ -n "$base_sha" ] && [ "$sha" = "$base_sha" ]; then
     if [ "$age" -gt "$boot" ]; then
-      printf 'NOT-STARTED\tref still at pre-fire sha after %s\t%s\n' "$(dur "$age")" "$url_cmd"
+      # Gated on the same fact as the no-ref arm above, and for the same reason: an UNMOVED ref is
+      # "produced nothing", which is the identical observation for a session that never booted onto
+      # a re-used branch name and one that booted, worked and had nothing to commit. Only the beacon
+      # contract separates them — under it the beacon commit itself moves the ref off base_sha, so
+      # still-at-base past the budget can only be a session that never ran.
+      if [ -n "$boot_contract" ]; then
+        printf 'NOT-STARTED\tref still at pre-fire sha after %s\t%s\n' "$(dur "$age")" "$url_cmd"
+      else
+        printf 'UNKNOWN\tref unmoved after %s, no boot contract\t%s\n' "$(dur "$age")" "$url_cmd"
+      fi
     else
       printf 'BOOTING\tno push yet, %s into a %s budget\t-\n' "$(dur "$age")" "$(dur "$boot")"
     fi
@@ -673,7 +731,7 @@ do_check() {
 cmd_declare() {
   local id="" branch="" remote="origin" repo="$ROOT" paths="" trunk="" url="" surface="" item="" account=""
   local boot="" stall="" life="" f base="" brc=0
-  local notify_back="" goal="" goal_probe="" custody=""
+  local notify_back="" goal="" goal_probe="" custody="" boot_contract=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --id)      id="${2:-}"; shift 2 ;;
@@ -709,6 +767,17 @@ cmd_declare() {
       --goal)        goal="${2:-}"; shift 2 ;;
       --goal-probe)  goal_probe="${2:-}"; shift 2 ;;
       --custody)     custody="${2:-}"; shift 2 ;;
+      # ── THE ABSENCE CONTRACT, RECORDED (backlog 0c8b39b67665; CLOUD_OBSERVABILITY.md §4.1) ──
+      # A token naming the first-act contract this fire's PAYLOAD actually carried. `beacon` is the
+      # only one that exists: the payload's first block tells the VM to create the branch, make an
+      # empty commit and push it BEFORE reading the brief.
+      #
+      # It is a declared FACT ABOUT THE FIRE, not a policy knob, and it is recorded here for the
+      # same reason `--account` is — nothing downstream can reconstruct it. The payload is composed
+      # in the firing process, sent to a VM this box cannot read, and then gone; minutes later
+      # classify() has only this file. Without the field, classify() cannot tell a session that was
+      # ASKED to beacon and did not from one that was never asked, and those are opposite verdicts.
+      --boot-contract) boot_contract="${2:-}"; shift 2 ;;
       --boot)    boot="${2:-}"; shift 2 ;;
       --stall)   stall="${2:-}"; shift 2 ;;
       --life)    life="${2:-}"; shift 2 ;;
@@ -728,7 +797,7 @@ cmd_declare() {
   # newline in ANY value breaks the `key=value` store's one-line-per-field invariant, and a guard
   # that enumerates the fields it knows about gets out-run by the next field added (memory:
   # denylist-enumerates-spellings-not-the-class).
-  case "$branch$remote$paths$url$account$notify_back$goal$goal_probe$custody" in
+  case "$branch$remote$paths$url$account$notify_back$goal$goal_probe$custody$boot_contract" in
     *"$NL"*) echo "cc-cloud declare: newline in a field" >&2; return 2 ;;
   esac
   # THE TRUNK REFUSAL (backlog 55065a61b31c). A cloud session declared against the remote's DEFAULT
@@ -790,6 +859,7 @@ cmd_declare() {
     [ -n "$goal" ]        && printf 'goal=%s\n' "$goal"
     [ -n "$goal_probe" ]  && printf 'goal_probe=%s\n' "$goal_probe"
     [ -n "$custody" ]     && printf 'custody=%s\n' "$custody"
+    [ -n "$boot_contract" ] && printf 'boot_contract=%s\n' "$boot_contract"
     is_num "$boot"  && printf 'boot_s=%s\n' "$boot"
     is_num "$stall" && printf 'stall_s=%s\n' "$stall"
     is_num "$life"  && printf 'life_s=%s\n' "$life"
@@ -1043,6 +1113,9 @@ cmd_list() {
         "$(jesc "$(dfield "$f" paths)")" "$(jesc "$(dfield "$f" notify_back)")" \
         "$(jesc "$(dfield "$f" goal)")" "$(jesc "$(dfield "$f" goal_probe)")" \
         "$(jesc "$(dfield "$f" custody)")" "$(jesc "$(dfield "$f" item)")"
+      # Emitted on the same projection because it is what decides whether this row's absence can
+      # ever become a verdict: empty means C1 abstains for this session no matter how long it sits.
+      printf '"boot_contract":"%s",' "$(jesc "$(dfield "$f" boot_contract)")"
       printf '"repo":"%s","trunk":"%s",' \
         "$(jesc "$(dfield "$f" repo)")" "$(jesc "$(dfield "$f" trunk)")"
       printf '"base_probe":"%s","base_sha":"%s","last_sha":"%s","last_seen_at":%s,"url":"%s",' \
@@ -1102,14 +1175,25 @@ do_selftest() {
   # where the one "pass" came from a `declare` that had SILENTLY FAILED, leaving no file at all —
   # classify then returned UNKNOWN for the right answer and the wrong reason. Asserting the
   # declaration exists is what separates "the sensor said UNKNOWN" from "there was nothing to sense".
-  cmd_declare --id boot --branch feat/x --remote "$_ST_D/remote.git" --repo "" >/dev/null
+  cmd_declare --id boot --branch feat/x --remote "$_ST_D/remote.git" --repo "" \
+    --boot-contract beacon >/dev/null
   if [ -f "$STATE/boot.decl" ]; then _ST_PASS=$((_ST_PASS + 1)); printf 'ok   declare wrote a declaration (control)\n'
   else _ST_FAIL=$((_ST_FAIL + 1)); printf 'FAIL declare wrote no declaration — every verdict below is vacuous\n'; fi
 
   _st_expect "absent ref inside the boot budget is BOOTING, not a fault" BOOTING boot
 
+  # ABSENCE CONTRACT (backlog 0c8b39b67665). The SAME observation — declared, no ref, past the boot
+  # budget — on a declaration whose fire never ordered a boot beacon. `nocontract` differs from
+  # `boot` in exactly one field, and is declared at the SAME clock, so the pair discriminates the
+  # gate and nothing else: NOT-STARTED there, UNKNOWN here. Without the gate the second line reads
+  # NOT-STARTED too, which is the verdict that filed 222 of 262 working sessions as never-started.
+  cmd_declare --id nocontract --branch feat/z --remote "$_ST_D/remote.git" --repo "" >/dev/null
+  _st_expect "control: inside the budget the contract is not asked — still BOOTING" BOOTING nocontract
+
   CC_CLOUD_NOW=$((2000000000 + 5000))
   _st_expect "absent ref past the boot budget is NOT-STARTED" NOT-STARTED boot
+  _st_expect "no ref past the budget WITHOUT a boot contract abstains — UNKNOWN, not NOT-STARTED" \
+    UNKNOWN nocontract
   CC_CLOUD_NOW=2000000000
 
   cmd_declare --id gone --branch feat/y --remote "$_ST_D/nonexistent.git" --repo "" >/dev/null
@@ -1129,10 +1213,20 @@ do_selftest() {
   # its ref MOVED and ALIVE is right. `reused` is declared AFTER, onto the same already-pushed
   # branch: nothing has moved, and without a fire-time baseline that reads ALIVE for the whole 6h
   # life budget — a session that never booted onto a re-used branch name, hidden behind a green.
-  cmd_declare --id reused --branch feat/x --remote "$_ST_D/remote.git" --repo "" >/dev/null 2>&1
+  # Declared WITH the boot contract, because the arm under test here is the baseline and not the
+  # contract gate: under the beacon contract the beacon commit itself moves the ref off base_sha, so
+  # still-at-base past the budget can only be a session that never ran. `reused_nc` below is the
+  # same fixture without the contract, and it is the discriminating half.
+  cmd_declare --id reused --branch feat/x --remote "$_ST_D/remote.git" --repo "" \
+    --boot-contract beacon >/dev/null 2>&1
   _st_expect "a ref that already existed at fire time is BOOTING, not ALIVE" BOOTING reused
   CC_CLOUD_NOW=$((2000000000 + 5000))
   _st_expect "an unmoved pre-fire ref past the boot budget is NOT-STARTED" NOT-STARTED reused
+  CC_CLOUD_NOW=2000000000
+  cmd_declare --id reused_nc --branch feat/x --remote "$_ST_D/remote.git" --repo "" >/dev/null 2>&1
+  CC_CLOUD_NOW=$((2000000000 + 5000))
+  _st_expect "an unmoved pre-fire ref with NO boot contract abstains — 'produced nothing' is two states" \
+    UNKNOWN reused_nc
   # POSITIVE CONTROL at the SAME clock: the session that genuinely pushed is still ALIVE. Without
   # this, both verdicts above are equally explained by the clock convicting every declaration.
   _st_expect "control: the session that DID push is ALIVE at that same clock" ALIVE boot

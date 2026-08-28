@@ -150,6 +150,48 @@ session's brief requires its **first act** to be pushing that branch — an empt
 Absence then becomes informative: no ref inside the budget is `BOOTING` (expected); no ref past it
 is `NOT-STARTED` (actionable — re-fire, or check entitlement).
 
+#### 4.1a The contract was PROSE ONLY for three weeks, and C1 was unreadable for all of them
+
+✅ **Implemented 2026-08-28** (backlog `0c8b39b67665`). Recorded here rather than silently fixed,
+because the shape of the miss is the transferable part: **this section is the sole basis on which
+C1 may be read as "never booted", and nothing in the tree implemented it.** The paragraph above
+was written before the first fire and was never wired to one.
+
+- **There was a fourth state, and it is the common one.** The list above names three — never
+  started, died at boot, refused entitlement. A session that **ran the whole brief and had nothing
+  to commit** is the fourth, and it reads identically. Measured 2026-08-27, **222 of 262** live
+  sessions had ended a turn with `post_turn_summary.status_category == "need_input"` — they had
+  *worked* and asked a question — and `classify()` filed every one of them `NOT-STARTED`
+  (`bin/cc-cloud`, the `inbox` note at the dispatch table). The row told the operator to re-fire a
+  session that was sitting there waiting for an answer.
+- **The producer said the opposite of what this section says.** `scripts/handoff-fire.sh` composed
+  the payload with the push under a heading reading *"read this before you **finish**"*, and told
+  the VM to *"push whatever you have before you finish"*. That is a **last-act** contract. Under
+  it the fourth state is invisible by construction, because after the work there is nothing left
+  to distinguish. The fix is ordering, not wording: the beacon block is now the payload's first
+  block, ahead of the brief, and the brief follows it.
+- **The reader now requires the fact, and abstains without it.** `cc-cloud declare
+  --boot-contract beacon` records that *this fire's payload actually carried the instruction* —
+  a fact about the fire that nothing downstream can reconstruct, recorded for the same reason
+  `--account` and `base_sha` are. `classify()`'s C1 arms (both of them: no-ref, and the §5.1
+  baseline's unmoved-ref) fire `NOT-STARTED` only with it. Without it they return `UNKNOWN` — no
+  row, `--check` still fails, detail says why. That is §4.2's own law one level up: **a missing
+  FACT disables a verdict exactly as a missing SENSOR does.** Every other declarer (a hand-declare,
+  `cloud-websetup-drive.sh`, the probes) therefore abstains rather than inheriting a confidence it
+  did not earn.
+- **Why an empty commit and not a bare `push HEAD`.** Measured here: `git cherry <trunk> <branch>`
+  reports an empty commit as `+` — *not* patch-equivalent — so `scripts/branch-prune-landed.sh`,
+  which deletes remote branches whose every commit **is** patch-equivalent (54 of them in one
+  2026-08-19 pass), leaves a beacon-only branch alone. A bare push of the clone's HEAD would put
+  the ref **at** trunk, where the pruner would delete the very evidence the beacon exists to leave.
+- **Displacing the brief is safe, and that is checked upstream, not assumed.** `check_slash_head`
+  (`scripts/handoff-fire.sh`) already refuses any prompt file whose first non-blank line is a slash
+  command, and it runs long before the payload is composed. So no fire that reaches the beacon
+  block has a head the harness would parse as a command; prepending is text in front of text.
+
+Suites: `tests/cc-cloud.bats` (4 cases, `BOOT CONTRACT …`) · `tests/handoff-fire-cloud.bats`
+(cases 20–21). Both red against the pre-fix tree; case 17 stays green on both trees as the control.
+
 ### 4.2 The discriminator the whole design rests on
 
 Measured, not assumed:
@@ -171,8 +213,8 @@ exactly one row and `bin/cc-blockers` can consume it unchanged.
 
 | Arm | Condition | Row? |
 | --- | --- | --- |
-| **U0 UNKNOWN** | a sensor could not run (`ls-remote` rc≠0, unreadable declaration) | no row; `--table` says UNKNOWN; **`--check` fails** |
-| **C1 NOT-STARTED** | no ref, past `declared_at + boot_s` | ROW |
+| **U0 UNKNOWN** | a sensor could not run (`ls-remote` rc≠0, unreadable declaration), **or the declaration carries no `boot_contract`** (§4.1a — absence carries no information unless the fire ordered a beacon) | no row; `--table` says UNKNOWN; **`--check` fails** |
+| **C1 NOT-STARTED** | no ref, past `declared_at + boot_s`, **and the fire ordered a boot beacon** | ROW |
 | **C2 BOOTING** | no ref, inside the boot budget | no row |
 | **C3 LANDED** | every declared path content-present on trunk | no row |
 | **C4 STALLED** | ref exists, sha unchanged past `stall_s` — **sidecar history required** | ROW |
@@ -199,7 +241,7 @@ mutators, and they write only under `CC_CLOUD_STATE`. Nothing fetches, and nothi
 
 ```text
 cc-cloud preflight [--repo P] [--branch B]   can a fire HERE be observed at all? exit 1 = no
-cc-cloud declare --id <id> --branch <b> [--remote --repo --paths --trunk --url --surface --item --boot --stall --life]
+cc-cloud declare --id <id> --branch <b> [--remote --repo --paths --trunk --url --surface --item --boot --stall --life --boot-contract]
 cc-cloud retire  --id <id>
 cc-cloud poll                     the ONLY mutator of the heartbeat sidecar
 cc-cloud is-offbox <id>           exit 0 iff declared and not retired — the abstain lookup
