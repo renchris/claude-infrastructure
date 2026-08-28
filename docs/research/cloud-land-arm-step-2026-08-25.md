@@ -381,6 +381,9 @@ today. Landed := pruned-as-equivalent, or every own-work commit's subject presen
 | branches | 6 | 17 | 8 | 5 | 6 | 4 | 27 | 36 | ‖ | 44 | 46 | 26 |
 | landed | 67% | 53% | 38% | 20% | 67% | 25% | 37% | 15% | ‖ | **0%** | **0%** | **0%** |
 
+(08-19 reads 53% here against §6.1's 60% for the same day: the manifest was written at 13:36Z and
+saw 5 of that day's fires, this table has all 17.)
+
 **89% (73/82) for 08-10..08-17 · 35% (37/109) for 08-18..08-25 · 0% (0/116) since.** The shape is a
 **progressive decline that begins on 08-18**, not the cliff at `2026-08-17T09:12:05Z` the item
 reports — that timestamp is the last row in the operator's return ledger, an instrument this VM
@@ -447,7 +450,16 @@ item, and it must be validated on macOS, which no cloud VM can do.)
 - **B — the branch-presence probe.** Done on trunk (`a42f107a`), re-verified by content here:
   `tests/cc-cloud.bats` 31/31 and `cc-cloud --selftest` 24/24, re-run here — §7.
 - **A — the arm.** Real, worse than reported, currently at zero for 64.8 h, and **operator-gated**.
-  §3's one command is unchanged and is the next step. What this dispatch adds beyond the numbers is
+  §3's three reads are unchanged and are still the next step — but they are no longer a worksheet.
+  `scripts/cloud-land-arm-diagnose.sh`, landed here, runs all of them (the launchd job's
+  environment, what `/bin/zsh -lc` exports, the IDL's whole `cloud_return_rc` history including the
+  date each token FIRST appears, the return ledger, and the sweep's own stderr log) and prints one
+  verdict token. It is read-only — no lock, no ref, no quota — so it is safe on a live box mid-sweep.
+  It abstains rather than guessing: an unreadable journal reads `UNREADABLE`, never a clean
+  `NO-ROWS`, which is what an off-box run of it would otherwise claim about the operator's machine.
+  `--selftest` is 11/11 and drives the verdict function with no box at all. Four dispatches have now
+  ended by writing those commands into a document for a human to run by hand; four documents, zero
+  runs, and this is that hand-work made executable. What this dispatch adds beyond the numbers is
   `4bcf3f0b`, landed here: the deployed-copy gate can no longer refuse its own caller silently — it
   files `skipped-config-divergence` in both cloud ledgers and names both paths on stderr — so the
   next occurrence announces itself instead of being inferred nine days later from a rate table.

@@ -27077,8 +27077,9 @@ off-trunk at ~40 branches a day. This item is its own witness: dispatched four t
 that cannot land re-derives the same finding at full cost and adds a branch to the pile.
 
 **A2's blocker list was one item and is now two:** the expired OAuth token (`8636b8f829fe`) and this
-— and this one is operator-gated on a single read. §3 of the research doc carries the command
-(`launchctl print` + `zsh -lc` + `idl.jsonl`); the leading hypothesis is `ba69a451`'s exact-path
+— and this one is operator-gated on a single read, now packaged as one command rather than a
+worksheet: `bash scripts/cloud-land-arm-diagnose.sh` (read-only, `--selftest` 11/11) runs every read
+§3 of the research doc lists and prints one verdict. The leading hypothesis is `ba69a451`'s exact-path
 deployed-copy gate, whose two operands can disagree per launchd reload — which is exactly what an
 intermittent rail looks like from off-box. From this land on, that failure names itself:
 `scripts/autonomy-sweep.sh` files `skipped-config-divergence` in both cloud ledgers instead of the
