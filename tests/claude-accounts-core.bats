@@ -1784,7 +1784,7 @@ print("OK")'
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
-@test "router M7 + S3 + S4: apply_burn attaches the new weekly keys under their OWN names, in %/h" {
+@test "router M7 + S3 + S4 + S7: apply_burn attaches the new burn keys under their OWN names, in %/h" {
   # RP-27. THE UNIT IS THE HAZARD, and it is why this case exists separately from the assertions
   # on the incumbent keys above. burn_5h_ph is consumed by _su_projected as a FRACTION per hour
   # (su + b * ahead, su in [0,1]), so a %/h value written onto that key saturates the projection
@@ -1813,7 +1813,11 @@ assert 12.0 < r["burn_wk_ppd"] < 16.0, r          # ~14 %/day, i.e. the same rat
 assert "burn_wk_span_h" in r and r["burn_wk_span_h"] > 6.8, r
 assert "wk_strand_pp" in r, r
 assert 0.0 < r["wk_strand_pp"] < 5.0, r           # 40 + 0.583*100 = 98.3 -> ~1.7 pp die
-assert "burn_5h_ewma_ph" not in r, r              # S7 is a LATER wave and was not built here
+# S7 (RP-27, the 5h half): UPDATED IN PLACE — this line used to read `"burn_5h_ewma_ph" not in r,
+# S7 is a LATER wave`. A flat session meter is a genuine ZERO rate, not an absence, and the key is
+# stamped as 0.0; asserting absence again would pin the wave boundary rather than the metric.
+assert "burn_5h_ewma_ph" in r and r["burn_5h_ewma_ph"] == 0.0, r
+assert "burn_5h_span_h" in r and r["burn_5h_span_h"] > 5.5, r    # the RAW span, ~6 h of 6-min pairs
 # S4 (RP-27b): the PRODUCER half. K is a fleet-level fit computed ONCE and stamped on every row,
 # because pace_line holds no series and cannot re-derive it; the verdict is stamped for the same
 # reason. A constant session_pct means no session movement, so the fit is too thin and FALLS BACK
@@ -2358,4 +2362,111 @@ assert d['outcome'] == 'none' and d['acct'] is None and d['score'] is None, d
 assert d['excluded'].get('capped'), d
 print('OK')"
   [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+# ---------------------------------------------------------------------------------------------
+# S7 · M1 · burn_5h_ewma_ph — USAGE_TELEMETRY_100P §5.2 S7, RED-proof cases RP-27c/RP-28.
+#
+# The incumbent `burn_5h_ph` takes the NEWEST ADJACENT PAIR, so it is exactly one ±1 pp
+# quantization step wide and reads 0 or a spike depending on where the sample landed. This
+# weights the trailing 6 h with a 1 h half-life, and crosses a session roll instead of
+# discarding it. It ships on CORRECTNESS AND AVAILABILITY, never on accuracy: at
+# session_pct ≥ 40 the incumbent is measurably better (MAE 0.0617 vs 0.0797).
+#
+# BOTH of the spec's named hazards are cases here, because both produce a plausible wrong
+# number rather than an error: the UNIT (RP-28) and the ROLL SPELLING (RP-27c).
+# ---------------------------------------------------------------------------------------------
+
+@test "S7 RP-27c: burn_5h_ewma_ph is %/h, CROSSES a session roll, and abstains on a thin span" {
+  run python3 -c "$LOAD"'
+import time
+from datetime import datetime, timezone
+# ANCHOR AWAY FROM BOTH BOUNDARIES. _reset_key ROUNDS t/60, so its knife-edge is the :30 second
+# mark, not :00 — a stamp landing there makes the sub-second jitter below flip the key at random
+# and the fixture becomes flaky on exactly the axis it is pinning. :15 is clear of both.
+now = (time.time() // 60.0) * 60.0 + 15.0
+def iso(t):
+    return datetime.fromtimestamp(t, timezone.utc).isoformat().replace("+00:00", "Z")
+def series(hours, rate_pph, roll_at_h=None, step_h=0.1):
+    """A session meter climbing at rate_pph, optionally RESETTING roll_at_h hours before now."""
+    out, n = [], int(round(hours / step_h))
+    for i in range(n, -1, -1):
+        age = i * step_h
+        # A reset stamp is CONSTANT inside its own window and jumps once at the roll. Recomputing
+        # it per sample would make every adjacent pair look rolled — which is the truncation
+        # failure mode this case exists to catch, arriving through the fixture instead.
+        if roll_at_h is not None and age < roll_at_h:
+            elapsed = roll_at_h - age
+            reset = now + (5.0 - roll_at_h) * 3600.0
+        else:
+            elapsed = hours - age
+            reset = now - (roll_at_h * 3600.0 if roll_at_h is not None else -5.0 * 3600.0)
+        out.append({"acct": "next3", "_t": now - age * 3600.0,
+                    "session_pct": min(100.0, elapsed * rate_pph),
+                    "session_reset_at": iso(reset), "weekly_pct": 40.0,
+                    "weekly_reset_at": iso(now + 100 * 3600.0)})
+    return out
+# (a) THE UNIT. A steady 12 %/h reads ~12, NOT 0.12. An implementation that reuses the
+# incumbent`s fraction/h scale passes every ordering assertion and fails exactly here.
+v, span = ca.burn_5h_ewma_ph(series(6.0, 12.0), now)
+assert v is not None, (v, span)
+assert 11.0 < v < 13.0, (v, span)          # %/h
+assert not (0.10 < v < 0.14), (v, span)    # NOT fraction/h — the 100x hazard, spelled out
+assert span >= 5.9, span                   # the RAW measured span, not the requested lookback
+# (b) THE ROLL. The whole gain is availability ACROSS a reset: the incumbent goes blind there
+# (d < 0 ⇒ field absent). A roll must contribute the new window`s LEVEL as a lower bound, and
+# must NEVER cause an abstain. Rolled 2 h ago, same 12 %/h on both sides.
+vr, spanr = ca.burn_5h_ewma_ph(series(6.0, 12.0, roll_at_h=2.0), now)
+assert vr is not None, (vr, spanr)         # NEVER null on a roll
+assert 8.0 < vr < 16.0, (vr, spanr)        # the rate survives the reset, not a 100 pp spike
+# ...and the roll is spelled with _reset_key (S1a, ROUNDING). Under truncation the roll branch
+# fires on 46% of pairs and injects an ABSOLUTE LEVEL where a delta belongs — MAE 0.0282 ->
+# 0.2110, i.e. 5.4x worse than the incumbent. A sub-minute jitter must not read as a roll.
+jitter = [{"acct": "next3", "_t": now - (19 - i) * 360.0, "session_pct": 10.0 + i * 1.2,
+           "session_reset_at": iso(now + 5 * 3600.0 + (0.4 if i % 2 else -0.4)),
+           "weekly_pct": 40.0, "weekly_reset_at": iso(now + 100 * 3600.0)}
+          for i in range(20)]
+vj, spanj = ca.burn_5h_ewma_ph(jitter, now)
+assert vj is not None and 10.0 < vj < 14.0, (vj, spanj)   # ~12 %/h, not a train of levels
+# (c) THE ABSTAIN, on the RAW measured span. Below 1.3 h a +-1 pp step exceeds 25% of the
+# realised mean, so the number would be reading its own rounding. It is null, never a zero.
+assert ca.burn_5h_ewma_ph(series(1.0, 12.0), now)[0] is None
+assert ca.burn_5h_ewma_ph(series(1.0, 12.0), now)[1] < 1.3
+# ...and the boundary is the SPAN, not "short series abstain for some other reason".
+assert ca.burn_5h_ewma_ph(series(2.0, 12.0), now)[0] is not None
+# fewer than 2 usable pairs is the other arm (a single pair is one quantization step wide)
+assert ca.burn_5h_ewma_ph(series(6.0, 12.0)[:2], now)[0] is None
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "S7 RP-28 CONTROL: _su_projected consumes the new key at the right SCALE, and still falls back" {
+  # THE MISSING ÷100 IS CAUGHT ONLY HERE. burn_5h_ewma_ph is %/h; _su_projected adds it to a
+  # fraction in [0,1]. Without the divide, 60 %/h + su saturates to min(1.0, ...) = 1.0 on every
+  # row — "every account is under 5h pressure" — and saturation is a plausible number, so no
+  # ordering, ranking or rendering assertion anywhere else in this suite can see it.
+  run python3 -c "$LOAD"'
+import os
+os.environ["CC_ROUTE_PROJ"] = "1"
+R2 = dict(R); R2["PROJ_LOOKAHEAD_H"] = 1.0
+r = row(acct="next3", session_pct=20, session_reset_h=2.0, burn_5h_ewma_ph=60.0)
+su = ca._su_projected(r, R2)
+assert abs(su - 0.80) < 1e-9, su                 # 0.20 + 0.60*1.0 — NOT 1.0
+# the incumbent stays the FALLBACK for one release: the EWMA abstains below a 1.3 h span, and a
+# router that went blind there would be a regression rather than a fix. Old key, old scale.
+old = ca._su_projected(row(acct="next3", session_pct=20, session_reset_h=2.0,
+                           burn_5h_ph=0.60), R2)
+assert abs(old - 0.80) < 1e-9, old
+# ...and when BOTH are present the EWMA wins, at its own scale. A consumer that read the old key
+# first would pass both arms above and silently keep the noisier estimator forever.
+both = ca._su_projected(row(acct="next3", session_pct=20, session_reset_h=2.0,
+                            burn_5h_ewma_ph=60.0, burn_5h_ph=0.10), R2)
+assert abs(both - 0.80) < 1e-9, both
+# the lookahead is still capped at the window reset, past which 5h pressure vanishes
+assert abs(ca._su_projected(row(acct="next3", session_pct=20, session_reset_h=0.5,
+                                burn_5h_ewma_ph=60.0), R2) - 0.50) < 1e-9
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }

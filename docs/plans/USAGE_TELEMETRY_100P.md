@@ -1610,7 +1610,7 @@ windows/week, carrying the fleet wall rate 1.72% → 2.20%.
 
 ### §5.7 Implementation record — what actually landed, and where it deviated from the spec
 
-Wave 1 = **S1 + S2 + S3**. Wave 2 = **S4**. S5–S7 are unbuilt and unchanged; S5 still gates S6.
+Wave 1 = **S1 + S2 + S3**. Wave 2 = **S4 + S7**. S5 and S6 are unbuilt; S5 still gates S6.
 
 #### S1 · data fixes — LANDED
 
@@ -1830,6 +1830,61 @@ would otherwise spin. The abstain on `K <= 0` is the real guard; this is the bel
 (walls under ~13 min are invisible to the detector), and the threshold is sized on that denominator
 (5 of 8), never the all-windows one (5 of 252). Nothing routes on the verdict — it renders, and that
 is all. **S5 (`--strand-score`) remains the prerequisite for S6** and nothing here shortens it.
+
+#### S7 · M1 `burn_5h_ewma_ph` — LANDED (wave 2)
+
+`bin/claude-accounts`: `burn_5h_ewma_ph(samples_for_acct, now) → (value|None, span_h)` beside
+`burn_wk_ewma_ph`, constants `SU_EWMA_LOOKBACK_H` / `SU_EWMA_HL_H` / `SU_EWMA_MIN_SPAN_H` /
+`SU_EWMA_MAX_DT_H`; producer attached in `apply_burn` beside the incumbent `burn_5h_ph`, which is
+**kept populated**; consumer `_su_projected` reads the new key and divides by 100. Cases RP-27c and
+RP-28 in `tests/claude-accounts-core.bats`, plus RP-27's 5h half updated in place. **3/3 proven RED**
+against the S4 binary, green after; 209 cases across eleven suites with the same 23 pre-existing
+environment failures before and after.
+
+**Both spec hazards are cases, because both produce a plausible wrong number rather than an error.**
+The UNIT — a %/h value written onto the fraction/h key saturates `_su_projected` to 1.0 on every
+row, which reads as *"every account is under 5h pressure"*, and saturation is plausible, so no
+ordering, ranking or rendering assertion anywhere else in the suite can see it. The ROLL SPELLING —
+`_reset_key` rounds; under truncation the roll branch fires on 46.0% of pairs and injects an
+absolute level where a delta belongs, degrading MAE 0.0282 → 0.2110, i.e. **5.4× worse than the
+incumbent it replaces**.
+
+**Deviation 1 — RP-27's `≈ 60.0 for a 10→40 move over 30 min` is not buildable as written, and the
+reason is the spec's own abstain.** A single 30-minute pair is one pair over a 0.5 h span, which
+this function must refuse (< 2 usable pairs, and span < `SU_EWMA_MIN_SPAN_H` = 1.3 h). A fixture
+that produced 60.0 would be a fixture that broke the abstain. The unit is pinned instead on a steady
+12 %/h series — `11 < v < 13`, and explicitly `not (0.10 < v < 0.14)` so the 100× hazard is spelled
+out rather than implied — and the literal 60.0 survives at RP-28, where it actually bites: at the
+consumer, where the missing ÷100 lives.
+
+**Deviation 2 — `_su_projected` PREFERS the new key and FALLS BACK to `burn_5h_ph`**, rather than
+switching outright. §5.2 says keep the old key populated for one release; the fallback is what makes
+that non-decorative. The EWMA abstains below a 1.3 h measured span, and a router that went blind
+there would be a regression rather than a fix. RP-28 pins all three arms, including that the EWMA
+wins when both are present — a consumer that read the old key first would pass the other two and
+silently keep the noisier estimator forever.
+
+**Deviation 3 — the producer stamps `burn_5h_span_h` beside the value**, mirroring
+`burn_wk_span_h`. The span is the abstain's REASON, and a null that cannot say why reads as a
+missing measurement rather than as a refusal.
+
+**A fixture hazard worth carrying, same class as S1a.** `_reset_key` **rounds**, so its knife-edge
+is the **:30 second mark, not :00**. The roll-spelling case anchors its stamps mid-minute and the
+first draft used `:30` — which is exactly the boundary — so a ±0.4 s jitter flipped the key at
+random and the case failed against a correct implementation. Anchored at `:15` it is stable. A
+fixture that lands on the rounding boundary makes the very case it is pinning vacuous or flaky,
+and which second you pick is not arbitrary.
+
+**No renderer changed.** `_su_projected` is the sole gateway to both consumers §5.2 names — `_soft`'s
+`SF` multiplier (score-ranking only, floored at `SF_FLOOR = 0.05`, so it can never exclude) and the
+desk lane's `DESK_5H_FLOOR` tier key. `_excluded` reads the raw meter and is untouched.
+
+**Named blind spot, shipped in the docstring as required.** At `session_pct ≥ 40` the **incumbent is
+more accurate** (MAE 0.0617 against 0.0797; this estimator over-projects by +3.6 pp). That is the
+burst regime — the one S4's planner deliberately creates. The over-projection direction is
+soften-only and therefore fail-safe for routing, but the metric is wrong there and must not be
+quoted as accurate. §5.6 Q3 names the measurement that would fix it. **This ships on correctness and
+availability, not on accuracy**, which is what §5.2 S7 asks for and all it asks for.
 
 #### Acceptance status against §5.4
 
