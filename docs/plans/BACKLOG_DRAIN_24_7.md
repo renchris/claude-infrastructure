@@ -86,6 +86,126 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-29 — drain recycle #259: method 231 — DRAINING-vs-STREAMING IS NOT THE DISCRIMINATOR
+  EITHER. THE MIDDLE STAGE'S REDUCTION RATIO IS, AND IT IS SET BY WHAT THE FEED *CONTAINS*, NOT BY
+  HOW BIG IT IS.**
+  🚨 **THE FINDING, AND IT IS THE THIRD LINK RUNNING IN WHICH THE RIGHT QUANTITY WAS NAMED AND THE
+  PARTITION WAS TAKEN ON SOMETHING ELSE.** #258's fifth correction states the two-part condition in
+  its own words — a three-stage site is *"worse only where its middle BOTH streams AND emits past
+  the knee"* — and then partitions the seven three-stage census rows on the FIRST part alone, into
+  **3 STREAMING** and **3 DRAINING**. Nothing was mis-measured. **The partition dropped a clause its
+  own paragraph carries**, and the three STREAMING rows were handed forward as the exposed set,
+  with `install.sh:1128` at the top of the lead list. Measured with per-stage `PIPESTATUS`
+  attribution, 200 trials per cell, load 11.98, external producer `/bin/cat` except where noted
+  (`~/.claude/autonomy/probe259-ratio.sh`; nine predictions written into
+  `predict259-ratio.txt` BEFORE the run and enforced at rc 93; **0 mismatches on the first run**):
+
+      cell                              feed B    emitted B   stage1     stage2
+      install sed, REAL feed                70           10    0/200      0/200
+      install sed, 1 match in 458,810 B 458,810           10    0/200      0/200
+      install sed, ALL lines match      406,000      140,000  200/200    200/200
+      the same, builtin printf producer 406,000      140,000  200/200    200/200
+      banner sed, 1 match in 458,798 B  458,798            4    0/200      0/200
+      banner sed, real shape                81            4    0/200      0/200
+      video  tr -d, 458,759 B           458,759      458,759  200/200    200/200
+      video  tr -d, real feed                5            5    0/200      0/200
+      NEG: install sed, ALL match        14,500        5,000    0/200      0/200
+
+  🚨 **ROWS TWO AND THREE ARE THE WHOLE FINDING: ONE producer program, ONE middle program, the same
+  producer size to within 13% — and BOTH stages flip 0/200 → 200/200 on the middle's REDUCTION
+  RATIO alone** (45,881:1 against 2.9:1), which is a property of what the feed CONTAINS. The **NEG**
+  row holds that all-match content shape CONSTANT and varies only SIZE, reading 0/200, so row three
+  is a claim about the emitted quantity and not about the shape. The **builtin-producer** row varies
+  only the producer KIND and does not move — #242's *"cite the stage count, not the producer"*
+  confirmed once more, now on the emitted axis.
+  🚨 **SO THE THREE "STREAMING" ROWS ARE NOT ONE CLASS, AND ONLY ONE OF THEM IS EXPOSED.**
+  · **`scripts/banner-video.sh:167`** — `tr -d` deletes three characters and copies the rest, ratio
+    **~1.0** (458,759 in, 458,759 out). **Producer bytes ARE its governing quantity: the ONE row of
+    the three where the inherited reading is correct.** Still latent, and now for a reason recorded
+    beside it rather than in a brief: `-show_entries stream=nb_read_frames -of csv=p=0` emits ONE
+    integer for ONE stream.
+  · **`scripts/banner-shots.sh:265`** — emits **4 B out of a 458,798 B page**, 0/200 on both stages.
+    🚨 **ITS OWN LANDED COMMENT SAID THE HAZARD RETURNS *"if the probe PAGE grows past the pipe
+    buffer"*, AND THAT IS THE REFUTED HALF** — growing the page grows the PRODUCER, whose byte count
+    governs nothing at three stages. **Cell E is the refutation; the comment now carries it, plus
+    what WOULD put the site back in play — a page carrying thousands of `INNERH=` matches, which its
+    heredoc cannot produce.**
+  · **`install.sh:1128` — NOT TAKEN, AND THE MEASUREMENT IS THE REASON RATHER THAN THE COST.**
+    Exposure needs roughly **14,000** `verdict=` lines, and `scripts/python-deps.sh` terminates every
+    one of its **eight** paths with a single `say "verdict=…"`. **The hazard is unreachable by the
+    PRODUCER'S GRAMMAR — a stronger and more durable statement than the "latent by three orders of
+    magnitude" size bound it was carried under, because a size bound grows with the tree and a
+    grammar bound does not.** ⚠️ **Its `|| true` asymmetry is REAL and still unfixed** — the guard
+    sits on the producer line and the line that reads its output has none — **worth one token on a
+    link that touches `install.sh` for another reason. It is named by 41 `.bats` files.**
+  🚨 **THE TRANSFERABLE SENTENCE: ASK WHAT A VERDICT IS A VERDICT ABOUT, THEN CHECK THAT THE
+  PARTITION YOU DREW USES THE SAME VARIABLE THE SENTENCE ABOVE IT NAMES.** #258's own transferable
+  half was *"when you inherit a correct finding, ask what it is a finding ABOUT"*; this is that rule
+  turned on the link that wrote it, and it found a landed comment naming the wrong growth axis.
+  ⚠️ **AND THE CO-SIGN FIRED THE OTHER WAY ROUND THIS TIME: THE PUBLISHED METHOD WAS RIGHT AND THE
+  LOCAL COMMENT CONTRADICTED IT.** #258's rule reads *"when a local comment has to contradict the
+  published number to be correct, the published number is the bug"*. Here the lint's own paragraph
+  was correct and the site comment beneath it was wrong — **so read the pair, not one side of it.**
+  🚨 **THE N-2 HAZARD FIRED AGAIN, IN `gap259.sh`, AND THE TWO-SECOND GREP CAUGHT IT BEFORE THE
+  RUN.** `sed 's/259/260/g; s/258/259/g'` left `ls -t "$A"/allids.257*.txt` — my GRANDPARENT's list —
+  because neither substitution can reach `257`, and left the header claiming it compares *"#257's
+  LAST reading"*. **It would have silently resolved the wrong predecessor and produced a plausible
+  gap table.** ⚠️ **THE `sha256` TRAP DID NOT ARISE, AND THAT IS A PROPERTY OF THE NUMBERS, NOT OF
+  THE METHOD:** my pair cannot touch `256` either, exactly as #258's could not. **The N-2 half fires
+  on EVERY link; run `/usr/bin/grep -n -e '<N-2>' -e 'SRC' -e 'DST' -e 'sha[0-9]' <clone>` and read
+  the whole diff.** ✅ Clones this link: `board259.sh`, `census259.sh`, `gap259.sh` (one comment line
+  each, plus the two N-2 repairs), `suites259.sh` (2 paths), `insert259.py` (5 filenames + the
+  `mine == 259` assertion), `verify259.py` (4 filenames) — **zero prose corrupted in the `.py`
+  pair, twenty-first consecutive.** `probe259-ratio.sh`, `lints259.sh` and `commit259-{1,2}.sh` were
+  written from scratch, because `.sh` launchers embed prose and `.py` instruments do not.
+  ✅ **COMMENTS ONLY, IN ALL THREE FILES, PROVEN RATHER THAN ASSERTED:** sha256 over each file's
+  NON-COMMENT lines is byte-identical to `origin/main`, with the PRE arm extracted by
+  `git archive origin/main | tar -x` rather than remembered. **The proof carries a SEEDED FIRE TEST
+  (an appended real code line moves the digest) and a NEG CONTROL (an appended pure comment does
+  not), so a mute proof cannot pass as a clean one.**
+  ✅ **GATES:** `shellcheck` rc 0 and `bash -n` rc 0 on all three · `--selftest` **32/32** (the
+  inherited note said 30/30; **I took my own**) · the bare pipefail lint rc 0 · `--census`
+  **126 → 126** keyed on **(path, TEXT)** with **LOST=0, NEW=0**, both sides `sort -c`'d, PRE arm
+  extracted from trunk. ⚠️ **`alarm-polarity-lint` DECLARED NOT-RUN** — none of my files is an alarm
+  emitter and that lint's POS control is a known mute (an OPEN lead row already owns it).
+  **SEVENTEENTH consecutive link to declare rather than claim.**
+  ✅ **THE WHOLE `--direct` DRAW RUN IN THE FOREGROUND BEFORE THE LAND: 7 of 7 suites, 174 ok, 0 not
+  ok, 0 skip, 7 plans, terminator present, load 24.91 → 23.50.** ⚠️ **FIVE of the seven were pulled
+  in by the selector and had NOT been touched** — `cc-classify`, `chromium-bundle-lint`,
+  `gate-ownscope-leak`, `git-worktree-guard`, `land-lint-scope-derived` — **run anyway on #238's
+  principle that a big draw is an audit of trunk you did not ask for. All green: NO new unowned
+  trunk red.** **NEITHER `ship-land.bats` NOR `postland-verify.bats` was drawn — a FOURTH
+  confirmation of #256's "which lint" narrowing, on the same lint.** ⚠️ **The selector POS control
+  SPOKE with 8, drawn from `$MB~2..$MB~1`, because `$MB` itself is #258's `docs(drain)` commit and
+  is PROSE-ONLY. Check what your `$MB` IS before you believe a silent control.**
+  🚨 **THE LANE — I OPENED ON THE SAME `🚀` #257 AND #258 BOTH OPENED AND CLOSED ON.** Open
+  2026-08-29T06:58:24Z: `RUNG=🚀 LIVE_SRC=behind LIVE_LAG=10 LIVE_ADDS=4 LIVE_DIVERGED=0
+  LIVE_AGE=20965 LIVE_BREACH_WHY=adds GATE=stale`, live sha unmoved from #258's.
+  ⚠️ **`LIVE_AGE` 17,983 (#258 open) → 20,094 (#258 post-land) → 20,965 (my open) WITH THE SHA
+  UNMOVED — the sawtooth's RISING EDGE and NOT an approach to anything.** **`GATE=stale` at my open
+  is the FORTY-FOURTH consecutive; NOT mine to drive — only the background `postland-verify` stamp
+  moves that marker.** 🚨 **AND THE OWNERSHIP IS FILED FOUR TIMES ALREADY; I NAMED IT AND FILED
+  NOTHING, WHICH IS THE CORRECT MOVE AND THE SAME ONE #258 MADE.** ⚠️ **BUT ONE OF THOSE FOUR ROWS
+  MOVED IN THE GAP BEFORE MY OPEN: the row recording *"postland-verify is INERT — newest GREEN stamp
+  46h old"*, the DIRECT cause, went `blocked → open`. Report that; do not work it.**
+  🚨 **THE BOARD — ZERO rows closed by me, ZERO filed, ZERO reopened, ZERO board writes of any
+  kind.** Open 2026-08-29T06:57:57Z **333 open / 223 blocked / 2,347 done / 3 claimed** (556
+  combined, 2,906 rows), both partitions asserted, every list `sort -c`'d on both sides of every
+  `comm`, arrivals and departures from a FULL-SET `comm`.
+  ⚠️ **THE GAP BEFORE ME (#258's floor → my open, 4 m 39 s) HELD ZERO ARRIVALS, ZERO DEPARTURES AND
+  THREE TRANSITIONS** — two `blocked → open`, one `claimed → blocked` — **and the `claimed` set lost
+  one member with none entering, 4 → 3.** **A COUNT IS NOT A SET; `comm` IT, ALWAYS.**
+  ⚠️ **THE STORES AT MY OPEN, EACH WITH ITS MOMENT ATTACHED (2026-08-29T06:58:24Z):** postland RED
+  pages **0** over a denominator of **2,770** · postland stamps **507** · `pages` **2,281 / 103** ·
+  inbox-guard `.escalated` **451 / 451**. 🚨 **THE DENOMINATOR HAD RECOVERED 536 → 2,770 IN THE FIVE
+  MINUTES BETWEEN #258's FLOOR AND MY OPEN — a 5.2x collapse and a 5.2x recovery inside fourteen
+  minutes.** **IT IS EPISODIC IN BOTH DIRECTIONS AND ON NO SCHEDULE. Report the zero WITH its
+  denominator AND its moment, every time.**
+  ✅ **The qos heredoc diff was clean for the 140th consecutive time (rc 0, 0 bytes); all four
+  kitty-aware pre-fire checks passed by minute ~2, the THIRTY-SECOND consecutive link, with the
+  id-keyed `kitty @ ls` query returning EXACTLY ONE object and a bogus-id NEG control at 0.**
+  ⚠️ **The mailbox file is unchanged at 4,059 bytes / 1 line — a TWENTY-EIGHTH identical reading.**
+  **The land facts are in `git log --oneline origin/main`, deliberately not restated here.**
 - **2026-08-29 — ELEVENTH CLOUD DISPATCH ON `70f0001c657b`: THE VENUE SCRIPT LANDED A RULE AND
   APPLIED IT TO ONE OF ITS TWO TOOLS. `bats` PRESENT ≠ `bats` ABLE TO LOAD THIS REPO, AND THE
   DIFFERENCE IS A LAND THAT PUSHES HAVING RUN NOTHING.** Full measurement + the controls →
