@@ -55,8 +55,12 @@ setup() {
   # so it cannot cut a healthy sweep; CC_SWEEP_TEST_BOUND_S re-sizes it without editing 81 lines.
   SWEEP_TO=(env)
   local _tb
+  # `gtimeout` is NOT probed through PATH, only at the two paths Homebrew installs it to. It is
+  # Homebrew-only, so a bare-name probe is unreachable on the PATH the nightly plist actually runs
+  # this corpus with (unattended-path-lint) and reaches nothing the absolute entries below do not.
+  # `timeout` keeps its PATH probe: it is /usr/bin/timeout on every Linux box, where the absolute
+  # macOS fallbacks below would find nothing.
   for _tb in "$(command -v timeout 2>/dev/null || true)" \
-             "$(command -v gtimeout 2>/dev/null || true)" \
              /opt/homebrew/bin/timeout /usr/local/bin/timeout \
              /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
     if [ -n "$_tb" ] && [ -x "$_tb" ]; then
@@ -157,6 +161,11 @@ printf '%s\n' "$*" >> "$OSA_LOG"
 SH
   chmod +x "$BATS_TEST_TMPDIR/bin/osascript"
   export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+  # …and NAME it. The sweep resolves the binary absolutely (it runs from launchd, where a bare name
+  # is not on the PATH), so the stub is reached through the seam rather than by shadowing a name —
+  # which is also what makes the NO-CHANNEL branch reachable: point the seam at a path that does not
+  # exist and `auto` genuinely finds nothing, where PATH-shadowing could only ever add a binary.
+  export CC_SWEEP_OSASCRIPT="$BATS_TEST_TMPDIR/bin/osascript"
   export CC_SWEEP_OS_CHANNEL=off
   echo "desk-pane-uuid-current" > "$CC_ROLES_DIR/desk"
   # HERMETIC it2: the D4 world probe defaults to the operator's REAL ~/.claude/bin/it2 against the
@@ -264,7 +273,10 @@ mk_marker() { # <file> <pane> <mode> [young]  — aged 1 h by default (> the 900
 
 # ── a new page surfaces ────────────────────────────────────────────────────────
 @test "a new page triggers one notify" {
-  echo "1784370726" > "$CC_PAGES_DIR/$(uuidgen 2>/dev/null || echo p1).page"
+  # A FIXED name, not `uuidgen`: CC_PAGES_DIR is this test's own $BATS_TEST_TMPDIR, so the file is
+  # already unique to the run, and the binary was unreachable on the PATH the nightly corpus runs
+  # with — a fixture whose name generator can fail is a fixture that can be named "p1" by accident.
+  echo "1784370726" > "$CC_PAGES_DIR/p1.page"
   run "${SWEEP_TO[@]}" bash "$SWEEP"
   [ "$status" -eq 0 ]
   [ "$(notify_count)" -eq 1 ]
