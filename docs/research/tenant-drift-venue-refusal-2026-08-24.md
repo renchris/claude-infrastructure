@@ -123,3 +123,45 @@ readable here contradicts any clause of the item. The last direct measurement is
 `31401486855` (2026-08-10T15:03Z), now **19 days stale** — the `git show origin/main:<path>` step
 the dispatch brief opens with is unrunnable against a repo with no remote here, so §3's pre-derived
 one-line fix must still be re-checked against reso's trunk before anyone writes it.
+
+## 6. Third dispatch, 2026-08-29 10:48Z — §5's own remedy was disproved 8 hours after it landed
+
+Re-dispatched to a THIRD `anthropic_cloud` VM (distinct box: `.git/shallow` graft roots
+`7d0514fa`/`bd5eab33`, against §5's `1ca8d168`). **The interval collapsed from 5 days to 8 hours** —
+§5 landed at 02:44:18Z as `40564bb6` and this dispatch opened at 10:48Z. Cadence is accelerating, so
+the cost of this loop is no longer one VM per re-file; left alone it bounds only on dispatch volume.
+
+**The finding: §5's remedy was never testable, because the emitter half of that channel does not
+exist on a VM.** §5 concluded the loop would close now that `cc-cloud inbox` could *read* a park
+request. Measured here, the write side has no verb: `cloud-create-api.py --verify` **reads**
+`post_turn_summary` and requires `--account` creds, and this box has no `~/.claude/accounts*`, no
+`CC_*` in env (0 matches) and no `~/.claude/autonomy/`. Nothing on a VM can populate
+`needs_action` directly. That field is filled by the **control plane, from the session's own
+turn-end summary** — so a cloud VM's *close message is the only emitter it has*. §4's command
+landed in a committed document, which no consumer of that channel ever reads; §5 then recorded the
+channel as built while its request went out through a path with no writer. A remedy whose emitter
+was never checked is what let n go from 2 to 3.
+
+**Consequence for any future dispatch that lands here: put the park command in the CLOSE, not only
+in this file.** `RUNNABLE_RE` (`scripts/cloud-inbox.py:89`) classifies on the *text of the summary*;
+a `cc-backlog …` line reaching it there surfaces under the inbox's runnable heading. Committing it
+is for the record, not for the routing — the two are different acts and this document conflated
+them twice.
+
+**The venue refusal now rests on POLICY, not on absence.** §1 and §5 argued from a missing clone and
+an asserted GitHub scope. This session's own configuration states the constraint directly: GitHub
+access is scoped to `renchris/claude-infrastructure`, with reads, writes and searches against any
+other repo denied. So the question is not whether reso *could* be reached by some unprobed path — it
+is settled ex ante, and no future dispatch needs to re-derive it from `ls ~/Development`. Every
+other venue fact re-measured and unchanged: no `tenant-drift.yml` on `origin/main`;
+`.github/workflows/` holds only `diagrams.yml` and `hermetic.yml`; `cc-backlog` not on `PATH`.
+
+**The self-admission guard again binds mechanically, so §1's deferral needs no memory.** `.git/shallow`
+present, `git rev-list --count HEAD` = 50 ⇒ `HistoryOracle.certify()` returns `shallow` ⇒ `--apply`
+cannot write a `cloud` label (`bin/cc-venue:55`). Widening `cross_repo`, and equally the EVIDENCE-AGE
+arm §5 diagnosed, stays an on-box change: both are lane machinery, and a 50-commit horizon cannot
+read the history that justifies either exclusion.
+
+**Premise, re-checked a third time: not refuted, not confirmable here.** Unchanged from §5; the
+2026-08-10 measurement is now 19 days stale and §3's one-line fix still needs re-checking against
+reso's trunk before anyone writes it.
