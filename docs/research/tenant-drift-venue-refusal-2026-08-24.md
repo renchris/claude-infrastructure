@@ -217,7 +217,11 @@ and closed on completed work; §6's remedy was therefore untestable in precisely
 END AS AN ASK (so the control plane categorises it `need_input` and the row survives `shown`), and
 `needs_action` must BEGIN with the verb (so it classifies RUNNABLE rather than PROSE). A close that
 says *"done, here is what the operator should run"* satisfies neither. This session closes on the
-`⛔` rung with the bare §4 command leading its ask, which is the first dispatch to satisfy both.
+`👤` rung — agent side landed, one operator-only step unrun — with the bare §4 command leading its
+ask, which is the first dispatch to satisfy both. `👤` and not `⛔`: what remains is an **action**
+(re-dispatch on a box that has reso), not a decision or missing information, and the global rung
+table splits those. The step is **unfiled** rather than filed, because `cc-backlog` is not on this
+box's `PATH` — which is exactly why it has to be *named in the close* and cannot be left to a store.
 
 **No code change landed for this.** Widening `RUNNABLE_RE` to scan segments would classify
 remote-authored prose containing `git …` as friendly — the exact hazard the allowlist comment names
