@@ -1746,6 +1746,92 @@ print("OK")'
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
+@test "router M7 + S7: _su_projected consumes burn_5h_ewma_ph at the right SCALE" {
+  # RP-28. THE 100x ERROR THAT LOOKS LIKE A FINDING. burn_5h_ewma_ph is %/h; burn_5h_ph is
+  # FRACTION/h. `su + b * ahead` with su in [0,1] saturates to 1.0 the instant a %/h value
+  # reaches it, and a fleet where every row projects to 1.0 reads as "every account is under 5h
+  # pressure" — plausible, wrong, and invisible to every other case in this file. This is the
+  # only case that fails on a missing divide-by-100, which is why the key is new rather than
+  # reused: a wrong UNIT on a right key cannot be caught by any assertion about presence.
+  run python3 -c "$LOAD"'
+import os
+for v in ("CC_ROUTE_PROJ", "CC_ROUTE_PROJ_LOOKAHEAD_H"):
+    os.environ.pop(v, None)
+r = row(session_pct=20, session_reset_h=2.0, burn_5h_ewma_ph=60.0)
+assert abs(ca._su_projected(r, R) - 0.80) < 1e-9, ca._su_projected(r, R)   # NOT 1.0
+# CONTROL — the same number on the OLD key is a fraction/h and means something 100x smaller.
+# Without this arm, "divide everything by 100" passes RP-28 and silently breaks the incumbent.
+old = row(session_pct=20, session_reset_h=2.0, burn_5h_ph=0.6)
+assert abs(ca._su_projected(old, R) - 0.80) < 1e-9, ca._su_projected(old, R)
+assert abs(ca._su_projected(row(session_pct=20, session_reset_h=2.0, burn_5h_ph=60.0), R)
+           - 1.0) < 1e-9                            # the old key at 60 DOES saturate: it is 60x/h
+# the EWMA WINS where both are present, because the incumbent goes silent across a roll exactly
+# when a fresh window pace is being set
+both = row(session_pct=20, session_reset_h=2.0, burn_5h_ewma_ph=60.0, burn_5h_ph=0.01)
+assert abs(ca._su_projected(both, R) - 0.80) < 1e-9, ca._su_projected(both, R)
+# ...and the incumbent is the FALLBACK, not dead code: it needs one pair, so it still speaks
+# where the EWMA abstains below its 1.3 h span floor.
+fb = row(session_pct=20, session_reset_h=2.0, burn_5h_ewma_ph=0.0, burn_5h_ph=0.6)
+assert abs(ca._su_projected(fb, R) - 0.80) < 1e-9, ca._su_projected(fb, R)
+# soften-only survives: a projection may never trip an exclusion
+assert ca._excluded(row(session_pct=50, session_reset_h=3.0, burn_5h_ewma_ph=500.0), R) is None
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router M7 + S7: burn_5h_ewma_ph CROSSES a session roll and abstains on a thin span" {
+  # The incumbent reads the newest adjacent pair and DISCARDS it when that pair straddled a
+  # window roll, so it is blind for the first stretch of every 5h window — which is when the
+  # window pressure is actually decided. Here a roll is a lower-bound increment, not a discard.
+  #
+  # THE ROLL SPELLING IS THE HAZARD, and it is why the corpus case RP-5 exists one file over:
+  # under a TRUNCATED reset key the roll branch fires on 46.0% of adjacent pairs and injects an
+  # absolute level where a delta belongs — MAE 0.0282 -> 0.2110, i.e. 5.4x worse than the
+  # incumbent it replaces. _reset_key ROUNDS.
+  run python3 -c "$LOAD"'
+import time
+from datetime import datetime, timezone
+NOW = time.time()
+def iso(t):
+    return datetime.fromtimestamp(t, timezone.utc).isoformat().replace("+00:00", "Z")
+# 4 h at 6 min, a steady 15 %/h throughout, with the session window rolling 30 MINUTES AGO. The
+# roll is placed recent DELIBERATELY: an EWMA at hl=1h weights it 0.71, so the pair the incumbent
+# discards is one of the heaviest in the sum. A roll four hours back would be down-weighted to
+# noise and this case would pass on a discard-on-roll estimator too.
+sam = []
+for i in range(40, -1, -1):
+    t = NOW - i * 360.0
+    old = i >= 6
+    sam.append({"acct": "next3", "_t": t, "session_pct": (40 - i if old else 6 - i) * 1.5,
+                "session_reset_at": iso(NOW + (-0.5 if old else 4.5) * 3600.0)})
+v, span = ca.burn_5h_ewma_ph(sam, NOW)
+assert v is not None, (v, span)
+assert 3.5 < span < 4.1, span                      # the RAW measured span, not the lookback
+assert 13.0 < v < 17.0, v                          # ~15 %/h, in %/h and NOT 0.15
+# CONTROL: the roll pair is what keeps it near 15. Drop the roll-awareness (treat a decrease as
+# zero) and the same series reads materially lower — so the branch is live, not decorative.
+naive_num = naive_den = 0.0
+for a, b in zip(sam, sam[1:]):
+    dt = (b["_t"] - a["_t"]) / 3600.0
+    # age_h is split out rather than inlined: the dead-assertion ratchet lints this file as BASH,
+    # so a Python `(-((NOW - b["_t"]) / 3600.0) / hl)` reads as a bare `(( ... ))` arithmetic
+    # assertion and REDs the land gate. Inline Python here avoids a `((` pair for that reason.
+    age_h = (NOW - b["_t"]) / 3600.0
+    w = 2.0 ** (-age_h / ca.SU_EWMA_HL_H)
+    naive_num += w * max(0.0, b["session_pct"] - a["session_pct"]); naive_den += w * dt
+assert naive_num / naive_den < v - 0.5, (naive_num / naive_den, v)
+# ABSTAIN on the raw span, and it is the SPAN that decides, not the pair count: 1 h of samples
+# is eleven usable pairs and still below the 1.3 h floor where +-1 pp quantization dominates.
+thin = [e for e in sam if NOW - e["_t"] <= 3600.0]
+vt, st = ca.burn_5h_ewma_ph(thin, NOW)
+assert len(thin) > 5 and vt is None and st < ca.SU_EWMA_MIN_SPAN_H, (len(thin), vt, st)
+assert ca.burn_5h_ewma_ph([], NOW) == (None, 0.0)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
 @test "router M7: apply_burn derives rates from the utilization series; a rolled window reads as unknown" {
   run python3 -c "$LOAD"'
 import json, os, time
@@ -1813,7 +1899,13 @@ assert 12.0 < r["burn_wk_ppd"] < 16.0, r          # ~14 %/day, i.e. the same rat
 assert "burn_wk_span_h" in r and r["burn_wk_span_h"] > 6.8, r
 assert "wk_strand_pp" in r, r
 assert 0.0 < r["wk_strand_pp"] < 5.0, r           # 40 + 0.583*100 = 98.3 -> ~1.7 pp die
-assert "burn_5h_ewma_ph" not in r, r              # S7 is a LATER wave and was not built here
+# S7 lands the 5h twin. UPDATED IN PLACE (this line asserted `not in r` while S7 was unbuilt):
+# the fixture holds session_pct pinned at 10 for 24 h, so the EWMA measures a real ZERO rate and
+# the key is PRESENT with value 0.0 — which is the distinction the whole unit hazard turns on. A
+# 0.0 that is absent reads as "no measurement"; a 0.0 that is present reads as "not burning".
+assert "burn_5h_ewma_ph" in r, r
+assert r["burn_5h_ewma_ph"] == 0.0, r
+assert 5.0 < r["burn_5h_span_h"] <= ca.SU_EWMA_LOOKBACK_H, r
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }

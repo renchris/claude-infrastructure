@@ -1867,7 +1867,14 @@ def _su_projected(r, R):
     su = (r.get("session_pct") or 0) / 100.0
     if not _term_on("CC_ROUTE_PROJ"):
         return su
-    b = r.get("burn_5h_ph")
+    # S7 UNIT HAZARD, and this is the whole of the fix: burn_5h_ewma_ph is %/h, burn_5h_ph is
+    # FRACTION/h. Reading the new key without the divide saturates `su + b * ahead` to 1.0 on
+    # every row and reads as "every account is under 5h pressure" — a 100x error that looks like
+    # a finding. The incumbent stays as the FALLBACK (it needs only one adjacent pair, so it
+    # still speaks where the EWMA's 1.3 h span floor abstains); prefer the EWMA where both exist,
+    # because a roll leaves the incumbent silent exactly when a fresh window's pace is being set.
+    b = r.get("burn_5h_ewma_ph")
+    b = b / 100.0 if isinstance(b, (int, float)) and b > 0 else r.get("burn_5h_ph")
     if not isinstance(b, (int, float)) or b <= 0:
         return su
     ahead = _cliff_env("CC_ROUTE_PROJ_LOOKAHEAD_H", R.get("PROJ_LOOKAHEAD_H", PROJ_LOOKAHEAD_H))
@@ -2174,6 +2181,13 @@ def apply_burn(rows, cfg, samples=None):
         r["burn_wk_span_h"] = span
         if v is not None:
             r["burn_wk_ewma_ph"] = v
+        # M1 (S7): the 5h meter's twin. Its own key, in %/h, BESIDE burn_5h_ph rather than over
+        # it — the incumbent stays populated for one release so nothing reading it breaks
+        # silently, and the key is new because the two carry different UNITS.
+        v5, span5 = burn_5h_ewma_ph(ss, now)
+        r["burn_5h_span_h"] = span5
+        if v5 is not None:
+            r["burn_5h_ewma_ph"] = v5
         s = wk_strand_pp(r)
         if s is not None:
             r["wk_strand_pp"] = s
@@ -2376,6 +2390,68 @@ def burn_wk_ewma_ph(samples_for_acct, now, weekly_reset_h):
         span += dt_h
         pairs += 1
     if pairs < 2 or span < WK_EWMA_MIN_SPAN_H or den <= 0:
+        return None, span
+    return num / den, span
+
+
+SU_EWMA_LOOKBACK_H = 6.0     # the trailing span the 5h meter's pace is read over
+SU_EWMA_HL_H = 1.0           # half-life: the 5h window is 5 h long, so an hour is the unit
+SU_EWMA_MIN_SPAN_H = 1.3     # below this, +-1 pp quantization exceeds 25% of the meter's mean
+SU_EWMA_MAX_DT_H = 1.0       # a wider gap is two separate observations, not one rate
+
+
+def burn_5h_ewma_ph(samples_for_acct, now):
+    """M1 — roll-aware EWMA of the 5h meter, in %/h, as (value|None, measured_span_h).
+
+    IT SHIPS ON CORRECTNESS AND AVAILABILITY, NOT ON ACCURACY, and the incumbent it replaces is
+    not deleted for exactly that reason. `burn_5h_ph` reads the NEWEST ADJACENT PAIR: one delta,
+    at whatever the series' cadence happened to be, discarded outright when that single pair
+    straddled a window roll. So it is blind for the first stretch of every 5h window — which is
+    when the window's pressure is actually decided — and its one-pair form reads a 6-minute
+    quantization step as a rate. Here a roll is not a discard: post-roll accrual is reconstructed
+    as a LOWER BOUND by taking the new window's level as the increment, the same treatment
+    burn_wk_ewma_ph gives the weekly meter.
+
+    TWO HAZARDS, BOTH OF WHICH SILENTLY PRODUCE A PLAUSIBLE WRONG NUMBER, and both are pinned by
+    a test rather than by this paragraph:
+
+      UNIT. This emits %/h. `burn_5h_ph` is consumed by `_su_projected` as FRACTION/h
+      (`su + b * ahead`, su in [0,1]), so the same number on the old key saturates every row to
+      1.0 and reads as "every account is under 5h pressure" — a 100x error wearing a plausible
+      face. Hence a NEW key, and the divide-by-100 lives at the consumer.
+
+      ROLL SPELLING. `_reset_key` ROUNDS (S1a). Under truncation the roll branch fires on 46.0%
+      of adjacent pairs and injects an absolute level where a delta belongs: MAE degrades
+      0.0282 -> 0.2110, i.e. 5.4x WORSE than the incumbent it replaces.
+
+    ABSTAIN (L2) on the RAW MEASURED SPAN inside the lookback — never the weighted span, never
+    the requested one — and on fewer than 2 usable pairs. NEVER abstain on a roll.
+
+    NAMED BLIND SPOT, and it must not be quoted away: at session_pct >= 40 the INCUMBENT is more
+    accurate (MAE 0.0617 against 0.0797; this over-projects by +3.6 pp). That is the burst regime
+    — the one S4's planner deliberately creates. The direction is over-projection, which is
+    soften-only at the single consumer and therefore fail-safe for routing, but the metric is
+    wrong there and is not to be cited as accurate. §5.6 Q3 names the measurement that fixes it."""
+    ss = sorted((e for e in samples_for_acct or []
+                 if e.get("session_pct") is not None and e.get("_t") is not None
+                 and now - e["_t"] <= SU_EWMA_LOOKBACK_H * 3600.0),
+                key=lambda e: e["_t"])
+    num = den = span = 0.0
+    pairs = 0
+    for a, b in zip(ss, ss[1:]):
+        dt_h = (b["_t"] - a["_t"]) / 3600.0
+        if not (0 < dt_h <= SU_EWMA_MAX_DT_H):
+            continue
+        if _rolled(a, b, "session_reset_at", "session_pct"):
+            d = b["session_pct"]                      # the new window's level, a LOWER bound
+        else:
+            d = max(0.0, b["session_pct"] - a["session_pct"])
+        w = 2.0 ** (-((now - b["_t"]) / 3600.0) / SU_EWMA_HL_H)
+        num += w * d
+        den += w * dt_h
+        span += dt_h
+        pairs += 1
+    if pairs < 2 or span < SU_EWMA_MIN_SPAN_H or den <= 0:
         return None, span
     return num / den, span
 

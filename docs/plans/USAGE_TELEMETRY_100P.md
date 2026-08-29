@@ -1813,6 +1813,47 @@ and RP-24 all stay green — the burn walk alone already discriminates them. RP-
 1.033 h and that the freeze is what **flips** next3's verdict (`START SOON` without it). A
 hard-coded 1.033 h inside the function fails it.
 
+#### S7 · M1 `burn_5h_ewma_ph` — LANDED (wave 2, 2026-08-29)
+
+`bin/claude-accounts`: `burn_5h_ewma_ph(samples_for_acct, now) → (value|None, measured_span_h)`
+beside `burn_wk_ewma_ph`, constants `SU_EWMA_LOOKBACK_H` / `SU_EWMA_HL_H` / `SU_EWMA_MIN_SPAN_H` /
+`SU_EWMA_MAX_DT_H`; stamped in `apply_burn` beside `burn_5h_span_h`; consumed by `_su_projected`
+with the ÷100. Cases RP-28 and the roll/abstain case in `tests/claude-accounts-core.bats`, plus
+RP-27's S7 half updated in place — **3/3 RED** against the pre-S7 binary, green after.
+
+**Deviation 1 — the incumbent is the FALLBACK, not dead code.** §5.2 says "replaces
+`burn_5h_ph`", and keeping the old key populated for one release was already the spec's own
+instruction; what is shipped goes one step further and *reads* it when the EWMA abstains.
+`burn_5h_ph` needs a single adjacent pair, so it still speaks below the 1.3 h span floor where
+the EWMA refuses. Preferring the EWMA where both exist keeps the roll-awareness that is the whole
+point; falling back where it abstains keeps the availability the incumbent already had. RP-28
+pins both arms, and pins that the old key is still read **as fraction/h** — "divide everything by
+100" passes the new-key assertion and silently breaks the incumbent.
+
+**Deviation 2 — `burn_5h_span_h` is stamped unconditionally**, exactly as S3 does for the weekly
+twin: a null that cannot say *why* reads as a missing measurement rather than as a refusal.
+
+**The fixture bug is worth recording, because it reproduced the shipped hazard by accident.** The
+first roll-crossing fixture walked `session_pct` *downward* through the old window. Every adjacent
+pair therefore tripped `_rolled`'s second witness (the meter went backwards), the roll branch
+injected an absolute level as a delta on nearly every pair, and the estimator read **33.8 %/h**
+against a true 15 — the same shape, and the same order of magnitude, as the 5.4× degradation the
+truncated-key hazard produces. A test that asserts only "a number came back" would have shipped
+it.
+
+**The control that earns its keep is the roll's PLACEMENT, not its presence.** The roll sits 30
+minutes back, where an hl = 1 h EWMA weights it 0.71 — one of the heaviest pairs in the sum. With
+the roll four hours back the same case passes against a discard-on-roll estimator, because the
+pair the incumbent throws away has been down-weighted into noise. The case asserts the
+roll-aware value exceeds an inline naïve recomputation over the identical series, so the branch is
+proven live rather than merely present.
+
+**Blind spot, shipped in the docstring as §5.2 requires:** at `session_pct ≥ 40` the incumbent is
+more accurate (MAE 0.0617 vs 0.0797; this over-projects by +3.6 pp). That is the burst regime —
+the one S4's planner deliberately creates. Over-projection is soften-only at the single consumer
+and therefore fail-safe for routing, but the metric is wrong there and must not be quoted as
+accurate. §5.6 Q3 names the measurement that would fix it.
+
 #### Acceptance status against §5.4
 
 | command | status |
