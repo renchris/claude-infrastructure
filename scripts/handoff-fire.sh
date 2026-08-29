@@ -5630,6 +5630,21 @@ if [ "${1:-}" = "__recycle" ]; then
           hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;;
         retype)
           if [ "$waited" = 60 ]; then
+            # typed-send-lint:allow — reviewed: the invariant is SATISFIED HERE, three lines wide, by
+            # the read-back below rather than by a named helper. The rule is "type the line, READ THE
+            # PANE BACK to prove it landed intact, and only then send the Enter", and that is exactly
+            # this block: the send, then composer_content (a live `session read` of the pane's composer
+            # box), then a CR gated on it reading back exactly `/exit`. A corrupted type therefore
+            # HOLDS — no CR is ever sent onto an unproven buffer — which is the same safe direction
+            # the nudge gate above chose deliberately, and the 600s refusal is what reports it.
+            # NEITHER SANCTIONED HELPER CAN BE USED, and that is not a routing debt deferred:
+            # osa_type_verified and it2_type_verified both type a SHELL line at a zsh prompt and
+            # prepend FIRE_NOCORRECT_LINE to disarm `setopt CORRECT`. The target here is a live Claude
+            # Code COMPOSER, where that prefix would be typed as message text and submitted to Claude.
+            # A per-line marker rather than a ratchet entry because the ratchet cannot express this
+            # site: the send sits at TOP LEVEL inside the `__recycle` block, not in a function, so the
+            # narrow `path::function` form has no function to name and the only other spelling — a
+            # bare `scripts/handoff-fire.sh` — would exempt this whole 10k-line file from the lint.
             hf_bounded "$IT2" session send -s "$RSID" "/exit" >/dev/null 2>&1 || true
             sleep 1
             nc="$(composer_content "$IT2" "$RSID")" || nc=""
