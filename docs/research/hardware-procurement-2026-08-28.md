@@ -130,7 +130,28 @@ where 512GB is the SSD and 36GB the RAM, which scans as a 64GB+ hit.
 - **A MacBook Pro is a desk replacement, not capacity.** M5 Max is the only chip reaching 128GB
   (M5 Pro caps at 64GB — a lateral move from an M1 Max). Never buy one as a *worker*: it always
   drives a display, and it thermally throttles under exactly the sustained load a fleet generates.
-- **Open:** `CC_HW_DEFAULT_MAX_LOAD_PER_CORE` still wants deriving (backlog `e981656df348`, held
-  by a live off-box worker). `scripts/capacity-marginal.sh` returned **NO-ATTRIBUTION** on a
-  27.6-minute quiet-box window — C1 LEVEL and C2 DYNAMICS both failed, and it correctly withheld
-  the 0.846 fit that would otherwise have become a fifth value in the 30×-span family.
+- **NOT open — `CC_HW_DEFAULT_MAX_LOAD_PER_CORE` is underivable on this axis, and that is settled on
+  trunk.** This bullet used to read *"still wants deriving (backlog `e981656df348`, held by a live
+  off-box worker)"*. That prescription is disproved, not merely unfinished: load-per-core cannot
+  separate fatal from survived — fatal 2026-08-05 at **2.53/core** against **13 consecutive survived
+  samples spanning 2.92–5.98/core** (`scripts/capacity-alarm.sh` rung-7 header, *executable*: 5.98 is
+  pinned in its selftest as a known false ALARM) — so there is no measured failure point to set a
+  ceiling from. Independently, `fix(fire-gate): load1 does not move with the spawn it was gating`
+  established that an additional **resident** session moves the 1-min runnable count by ~0: the INPUT
+  is wrong, not the value, so no setting of the literal can make the term correct. The load term
+  therefore `DEFAULT`s **off** in `capacity_gate()` and the literal stays at 2.0 deliberately (C18 — a
+  fix moves a term switch, never a ceiling; raising it is the design
+  `docs/plans/LOAD_INSENSITIVE_VERIFY_V2.md:156` exists to reject). Both cures are on trunk: the
+  falsified `§9.5` citation in `scripts/lib/capacity-admit.sh` (landed in `b5553505`) and the
+  disproved §3 prescription itself (`951d4e82`). Full account, and the standing rule it leaves —
+  *strike a remedy in the same edit as the evidence that kills it* —
+  `docs/research/gc-cpu-vs-session-ceiling-2026-08-18.md` §3.
+  ⚠️ **The stated blocker was a misattribution.** This item was never gated on the marginal-load
+  measurement: that coefficient (backlog `193ae8ddce72`) denominates `CC_ADMIT_ACTIVE_CEILING`, a
+  per-**active-session** population, not this per-**core** literal — and its own §6a records that even
+  the active ceiling is *"not blocked on §6"*. Running it would not have discharged this row.
+- **Still genuinely open (a different constant):** `scripts/capacity-marginal.sh` returned
+  **NO-ATTRIBUTION** on a 27.6-minute quiet-box window — C1 LEVEL and C2 DYNAMICS both failed, and it
+  correctly withheld the 0.846 fit that would otherwise have become a fifth value in the 30×-span
+  family. That is the `CC_ADMIT_ACTIVE_CEILING` axis (`193ae8ddce72`), and it is unaffected by the
+  paragraph above.
