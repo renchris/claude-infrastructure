@@ -119,6 +119,25 @@ confer capability (the 27 blocked `post-deploy HOST RED:` rows in §3 are derive
 carry no stored probe). `cc-premise sweep --json` reports `unprobed` / `deferred` / capable directly —
 **run it on the box that holds the store before sizing any successor to L1.**
 
+**The row itself is still open, and that is the second finding — a refutation that lands as a DOC does
+not retire the item it refutes.** The paragraph above landed on trunk as `21f116c7` (verified an
+ancestor of `origin/main`); `37b112d8950d` was nevertheless dispatched a **second** time at
+2026-08-29T23:06Z carrying the identical brief and the identical 54–89 / ~400 projections, and the
+second worker spent its slot re-deriving the same verdict from the same code — three `falsified`
+return sites (`bin/cc-premise:1403`, `:1932`, `:2104`), all three inside the three arms;
+`_close_falsified` consuming only that bucket; the currency stamp gated on `probe_out["probed"]`, so a
+probe-less row is counted `unprobed` and stamped by nothing. No new diff was warranted and none was
+made. **A doc commit is not a store write**, and no arm of the sweep reads prose, so nothing in this
+file can close the row — including this sentence. It is retired by exactly one command, on the box
+that holds the store:
+
+```sh
+cc-backlog done 37b112d8950d --evidence "premise refuted on trunk at 21f116c7: --close-falsified consumes only the falsified bucket, which only the three probe arms can reach, so the 457 probe-less rows can be neither closed nor stamped by the sweep (docs/research/backlog-drain-netpositivity-2026-08-25.md §2)"
+```
+
+Until it is run, this row re-enters every dispatch wave and costs one worker per cycle to reach this
+same paragraph. That cost is the concrete, per-cycle form of the coverage gap L1′ names.
+
 ### What refutes the strong form
 
 The ticket usually still points at a real artifact. All 20 sampled files from the >72 h population
