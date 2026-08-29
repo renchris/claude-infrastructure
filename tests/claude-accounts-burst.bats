@@ -152,3 +152,158 @@ print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
+
+# ---- S4 · M4′ · burst_start_by — the START-TIME constraint (RP-21..RP-24) ---------------------
+#
+# WHAT THIS HALF OF THE SUITE IS FOR. M5 above says whether the required rate is routine for the
+# account. It does NOT say whether there is still TIME to run it. All 8 observed burst windows
+# delivered 13–20 weekly pp whether or not they walled, so the loss is never burn capacity WITHIN
+# a window — it is the frozen tail plus the 5h grid, i.e. a START TIME.
+#
+# THE DELETED M4 IS THE REASON THIS SHAPE IS PINNED, NOT JUST ITS ARITHMETIC. The synthesis's
+# `wk_reach_pp` asked a CAPACITY question — "could a perfect burst reach 100?" — and both sides of
+# it are monotone in (weekly_pct, hours-remaining), so it read REACHABLE on 99.37% of the series
+# and on 100% of the 74 samples inside the 5 wall episodes it was written to catch. On next3's
+# live shape it read `16.9 pp reach vs 8 needed — REACHABLE, 2.1× margin`, and next3 in fact
+# stranded. M4′ asks a rate-and-freeze-against-the-clock question, which can come out either way:
+# RP-21 is the LATE verdict on that same row, and RP-22 is the control that proves the metric is
+# not the constant LATE that a degenerate implementation would ship.
+#
+# RETURN SHAPE — a dict, not the bare float §5.3 RP-21 sketches, for S2's reason: the verdict and
+# the unrecoverable floor are different facts from the hours, and a float cannot carry them.
+
+@test "RP-21: burst_start_by returns LATE for next3's live shape, with the unrecoverable floor" {
+  # The measured row at 2026-08-25T09:47:41Z. deficit 8 pp -> 41.67 session pp at K=0.192 ->
+  # 1.82 h of burn in the OPEN window (87 pp of room, 3.37 h before it rolls), + one expected
+  # wall freeze of 1.03 h = 2.86 h needed against 2.21 h left.
+  run python3 -c "$LOAD"'
+r = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+     "session_pct": 13, "session_reset_h": 3.37, "session_reset_at": iso(NOW + 3.37 * 3600.0)}
+sb = ca.burst_start_by(r, 0.192)
+assert sb is not None, sb
+assert -1.0 < sb["h"] < 0.0, sb                       # measured -0.645
+assert abs(sb["h"] - -0.645) < 0.01, sb
+assert sb["verdict"] == "LATE", sb
+assert sb["windows"] == 1, sb                          # the open window alone carries the burn
+assert abs(sb["freeze_h"] - 1.033) < 0.01, sb
+assert abs(sb["unrecoverable_pp"] - 2.83) < 0.02, sb   # a PERFECT burst starting now loses 2.83 pp
+assert "LATE" in ca.fmt_start_by(sb) and "unrecoverable" in ca.fmt_start_by(sb), ca.fmt_start_by(sb)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-22 CONTROL: an account with days of runway returns SLACK, and a mid-band row START SOON" {
+  # Without this arm RP-21 is satisfied by a function that returns LATE always — which is exactly
+  # the degeneracy that killed M4, in the opposite direction. next2's live shape needs 432 session
+  # pp = 6 windows = 21.4 h of burn + 6.2 h of expected freeze against 97.2 h of runway.
+  #
+  # The THIRD verdict is pinned in the same case deliberately: a two-branch implementation passes
+  # both RP-21 and the SLACK arm and never renders START SOON at all.
+  run python3 -c "$LOAD"'
+n2 = {"acct": "next2", "weekly_pct": 17, "weekly_reset_h": 97.2,
+      "session_pct": 8, "session_reset_h": 0.54, "session_reset_at": iso(NOW + 0.54 * 3600.0)}
+sb = ca.burst_start_by(n2, 0.192)
+assert sb is not None, sb
+assert sb["h"] > 60.0, sb                              # measured +69.59
+assert abs(sb["h"] - 69.59) < 0.05, sb
+assert sb["verdict"] == "SLACK", sb
+assert sb["windows"] == 6, sb                          # the 5h grid, walked
+assert sb["unrecoverable_pp"] == 0.0, sb               # nothing is lost yet, and a negative floor
+                                                       # is not a negative loss — it clamps to 0
+assert "start by T" in ca.fmt_start_by(sb), ca.fmt_start_by(sb)
+assert "slack" in ca.fmt_start_by(sb), ca.fmt_start_by(sb)
+# mid band: 20 pp deficit, a full open window and 14 h of runway -> 8.25 h needed, 5.75 h spare
+soon = {"acct": "next", "weekly_pct": 80, "weekly_reset_h": 14.0,
+        "session_pct": 0, "session_reset_h": 6.0, "session_reset_at": iso(NOW + 6.0 * 3600.0)}
+sb2 = ca.burst_start_by(soon, 0.192)
+assert 5.5 < sb2["h"] < 6.0, sb2
+assert sb2["verdict"] == "START SOON", sb2
+assert "START SOON" in ca.fmt_start_by(sb2), ca.fmt_start_by(sb2)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-23 CONTROL: the wall-freeze term is LIVE, not decorative" {
+  # The mutant a purely arithmetic implementation survives. Run RP-21's fixture twice, once with
+  # P_WALL at its shipped 0.625 and once at 0.0, and assert the two answers differ by exactly the
+  # freeze this row expects: 1 window x 0.625 x 1.653 h = 1.033 h. If the freeze were dropped the
+  # verdict on next3 flips from LATE to START SOON, i.e. the freeze is the whole finding.
+  run python3 -c "$LOAD"'
+r = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+     "session_pct": 13, "session_reset_h": 3.37, "session_reset_at": iso(NOW + 3.37 * 3600.0)}
+with_wall = ca.burst_start_by(r, 0.192)
+ca.P_WALL = 0.0
+try:
+    no_wall = ca.burst_start_by(r, 0.192)
+finally:
+    ca.P_WALL = 0.625
+assert abs((no_wall["h"] - with_wall["h"]) - 1.033) < 0.01, (with_wall, no_wall)
+assert no_wall["freeze_h"] == 0.0, no_wall
+assert no_wall["verdict"] == "START SOON" and with_wall["verdict"] == "LATE", (with_wall, no_wall)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-24 CONTROL: every abstain arm — no window open, no K, no deficit, a stamp out of band" {
+  # L2. A null session stamp means NO WINDOW IS OPEN — a distinct state that must not collapse to
+  # "a window with zero room", which is what a `.get(..., 0)` would silently make of it. And the
+  # K arm is the one this metric genuinely depends on (the strand does NOT, §5.7 Deviation 1):
+  # start-time arithmetic is the FIRST consumer of the exchange rate, so when exchange_rate
+  # abstains this must abstain with it rather than substituting the frozen literal itself.
+  run python3 -c "$LOAD"'
+base = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+        "session_pct": 13, "session_reset_h": 3.37, "session_reset_at": iso(NOW + 3.37 * 3600.0)}
+def var(**kw):
+    d = dict(base); d.update(kw); return d
+assert ca.burst_start_by(var(session_reset_at=None, session_pct=None), 0.192) is None
+assert ca.burst_start_by(var(session_reset_at=None), 0.192) is None
+assert ca.burst_start_by(var(session_pct=None), 0.192) is None
+assert ca.burst_start_by(base, None) is None            # exchange_rate abstained
+assert ca.burst_start_by(base, 0.0) is None             # a zero rate is a division, not a fact
+assert ca.burst_start_by(var(weekly_pct=100), 0.192) is None    # nothing left to buy
+assert ca.burst_start_by(var(weekly_pct=None), 0.192) is None
+assert ca.burst_start_by(var(weekly_reset_h=0.0), 0.192) is None
+assert ca.burst_start_by(var(weekly_reset_h=200.0), 0.192) is None   # outside the weekly bucket
+assert ca.fmt_start_by(None) is None
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-24b: the drain block carries K in its header and the start-time clause on its rows" {
+  # THE HEADER CLAUSE ENTERS HERE, not with S3. §5.7 Deviation 1 held it back because M3a is pure
+  # weekly-space arithmetic and consumes no K at all; rendering a coefficient nothing on the line
+  # consumed is the metric shape §3.2 forbids. S4 is its first consumer, so it renders now.
+  #
+  # K IS READ OFF THE ROW, unlike the strand, which pace_line recomputes. That is not an
+  # inconsistency: the strand is a per-row derivation the renderer can redo, and K is a FLEET fit
+  # over the utilization series, which the renderer does not hold. When it is absent the header
+  # keeps its S3 spelling and every start-time clause abstains with it — the CONTROL arm below.
+  run python3 -c "$LOAD"'
+n3 = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21, "burn_wk_ewma_ph": 1.140,
+      "session_pct": 13, "session_reset_h": 3.37, "session_reset_at": iso(NOW + 3.37 * 3600.0),
+      "k_exch": 0.192, "k_exch_src": "live"}
+n2 = {"acct": "next2", "weekly_pct": 17, "weekly_reset_h": 97.2, "burn_wk_ewma_ph": 0.281,
+      "session_pct": 8, "session_reset_h": 0.54, "session_reset_at": iso(NOW + 0.54 * 3600.0),
+      "k_exch": 0.192, "k_exch_src": "live"}
+line = ca.pace_line([n3, n2])
+assert line.startswith("weekly drain — pp that DIE at reset"), line   # the invariant is unmoved
+assert "K=0.192 live" in line, line
+assert "nowcast at the last 48h of pace" in line, line
+assert "next2 strand ~56pp of 83 · start by T−28h (70h slack)" in line, line
+assert "next3 strand ~5pp of 8 · ⚠ LATE by 0.6h — 2.8pp already unrecoverable" in line, line
+# CONTROL — no K stamped: the S3 header, and NO start-time clause anywhere. An implementation
+# that falls back to K_FROZEN here would render a start time off a coefficient that abstained.
+bare = ca.pace_line([dict(n3, k_exch=None, k_exch_src=None),
+                     dict(n2, k_exch=None, k_exch_src=None)])
+assert bare.startswith("weekly drain — pp that DIE at reset (nowcast"), bare
+assert "K=" not in bare, bare
+assert "start by" not in bare and "LATE" not in bare, bare
+assert "next3 strand ~5pp of 8" in bare, bare          # the strand does NOT gate on K
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}

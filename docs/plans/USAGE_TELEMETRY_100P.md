@@ -1610,7 +1610,7 @@ windows/week, carrying the fleet wall rate 1.72% → 2.20%.
 
 ### §5.7 Implementation record — what actually landed, and where it deviated from the spec
 
-Wave 1 = **S1 + S2 + S3 only**. S4–S7 are unbuilt and unchanged; S5 still gates S6.
+Wave 1 = **S1 + S2 + S3 only**. Wave 2 = **S4**. S5–S7 are unbuilt and unchanged; S5 still gates S6.
 
 #### S1 · data fixes — LANDED
 
@@ -1770,14 +1770,85 @@ nowcaster precisely because it converges as the horizon closes, which is what ma
 forecaster. **S5 (`--strand-score`) is still the prerequisite for S6**, and nothing here
 shortens that.
 
+#### S4 · M4′ `burst_start_by` — LANDED
+
+`bin/claude-accounts`: `burst_start_by(r, k)` + `fmt_start_by(sb)` beside `wall_projection`,
+constants `BURST_SPPH` / `P_WALL` / `MEAN_WALL_H` / `BURST_WINDOW_H` / `BURST_SOON_H` /
+`BURST_MAX_WINDOWS` / `BURST_REM_EPS`; `pace_head(k, k_src)` split out of the `PACE_HEAD`
+constant; `apply_burn` stamps `k_exch` / `k_exch_src`; `pace_line(rows, k=None, k_src=None)`
+renders both. Suite `tests/claude-accounts-burst.bats` extended with RP-21..RP-24 + RP-24b —
+**5/5 proven RED** against the S3 binary, 10/10 green after.
+
+**The arithmetic reproduces §5.2's live table exactly** on the two rows that carry a full fixture:
+next3 `−0.645 h` LATE with a `2.83 pp` unrecoverable floor (spec: −0.65 / 2.83), next2 `+69.589 h`
+SLACK over 6 windows and `6.199 h` of freeze (spec: +69.59 / 6 / 6.20).
+
+**Deviation 1 — the return is a dict, not the bare float §5.3 RP-21 sketches**, for S2's reason
+restated: the hours of slack, the verdict, and the unrecoverable floor are three different facts
+and a float carries one. RP-21 asserts on `sb["h"]` and `sb["verdict"]`; the inequality it
+specifies is pinned unchanged.
+
+**Deviation 2 — K reaches the renderer as a ROW STAMP, which is the OPPOSITE of S3's Deviation 3,
+and the difference is real rather than a lapse.** S3 argued `pace_line` must COMPUTE the strand
+instead of reading `wk_strand_pp`, because a renderer that reads a stamp renders nothing when
+`apply_burn` has not run — a silent failure. That argument turns on the renderer *being able* to
+redo the derivation from the row it already holds. K is not that kind of quantity: it is a fleet
+fit over the utilization series, which `pace_line` does not hold and cannot re-derive. So
+`apply_burn` stamps it (the one place holding both the rows and the series, exactly as for M5's
+`burst`) and `pace_line` reads it, with an explicit `k=` parameter for any caller that has its
+own. The failure mode S3 named is still real here and is answered by the abstain instead: with no
+K the header keeps its S3 spelling and every start-time clause is absent — which is the same
+thing the reader sees when `exchange_rate` itself abstains, and is therefore not a second story.
+
+**Deviation 3 — the start-time clause renders on STRANDING rows only** (`wk_strand_pp ≥ 0.5`, the
+same gate M5's percentile already rides). §5.4's own mock does this without saying so: `next`
+carries a 48 pp deficit and would score `SLACK` with 99 h of slack, and the mock row shows no
+start-by clause on it. An account with no strand is on pace to fill its window or through it;
+there is no endgame burst to schedule, and a start time for a plan nobody is making is the metric
+shape §3.2 forbids.
+
+**Deviation 4 — `BURST_REM_EPS`, a residue guard the spec's pseudocode does not have, and it is
+worth 1.03 h on this plan's own keystone row.** `while rem > 0` over floats: in the exact-fit case
+— which is RP-21, next3, the row the whole metric was written for — `burn_h` is computed as
+`rem / BURST_SPPH` and `rem -= burn_h * BURST_SPPH` lands on a residue near 1e-14 rather than on
+zero. That opens a second window, charges a second `P_WALL × MEAN_WALL_H`, and moves the answer
+from −0.645 h to −1.68 h. The verdict survives; the number the operator is asked to act on does
+not. **Class:** a spec written in exact arithmetic has to be read twice when it ships in floats,
+and the place it bites is the boundary case the spec chose as its example.
+
+**Deviation 5 — a null K does NOT print `no strand figures this sweep`** (§5.4's abstain text).
+That line was written when the strand was believed to consume K; S3 Deviation 1 established it
+does not. The strand renders exactly as it did in S3, and only the K clause and the start-time
+clauses go silent — RP-24b's control arm pins both halves, including that no fallback to
+`K_FROZEN` happens at the renderer. Substituting the frozen literal for a fit that abstained is
+how a refusal becomes a rendered number.
+
+**What is NOT claimed.** M4′ ships **on probation**, as §5.2 requires: `BURST_SPPH = 22.87`,
+`P_WALL = 0.625` and `MEAN_WALL_H = 1.653` all rest on n = 8 burst windows, `P_WALL` is a lower
+bound (a wall under ~13 min is invisible to the detector), and it is sized on the burst
+denominator (5/8) and must never be quoted against the all-windows one (5/252). The docstring
+carries all three. **S5 (`--strand-score`) is still the prerequisite for S6**, and nothing here
+shortens that either.
+
 #### Acceptance status against §5.4
 
 | command | status |
 |---|---|
-| the bats suites (roll-key · util-tail · strand · burst · core) | **111/111 green**, every case shown RED at the commit before its fix |
-| `claude-accounts --readout` renders the drain block for all four accounts | **yes** — see above |
+| the bats suites (roll-key · util-tail · strand · burst · core) | **111/111 green** after wave 1; **154/159 across all `claude-accounts*` suites** after wave 2 (S4), every new case shown RED at the commit before its fix |
+| `claude-accounts --readout` renders the drain block for all four accounts | **yes** — see above (wave 1's live capture) |
 | `claude-accounts --readout \| grep -c 'strand'` → 3 or 4 | **4** |
-| `claude-accounts --strand-score` | **not in this wave** — that flag is S5 |
+| `claude-accounts --strand-score` | **not built** — that flag is S5 |
 
 ⚠️ `bash tests/run.sh …`, named in §5.4, **does not exist in this repo**. The suites are run with
 `bats tests/<name>.bats`; `scripts/ship-land.sh` selects and runs them at the land.
+
+⚠️ **Wave 2's 5 reds are the ENVIRONMENT, not the diff, and the distinction was established by
+measurement rather than by reading.** S4 was built in a remote container with no keychain, no
+route to `api.anthropic.com`, and a smaller `ARG_MAX` than the desk. Five cases in
+`claude-accounts-core.bats` / `claude-accounts.bats` fail there — `--relogin-info`, three
+`--login-status` cases (one dying on `OSError: [Errno 7] Argument list too long`), and the
+`--json` logged-out e2e (`probe-error`). All five were re-run with the diff **stashed** and failed
+identically, so they attribute to the box. The live `--readout` acceptance above is
+correspondingly **unrunnable there** and is not re-asserted for wave 2; it needs one run on a
+machine with the accounts. RP-24b covers the render path that acceptance would exercise, over
+fixtures rather than the live fleet.
