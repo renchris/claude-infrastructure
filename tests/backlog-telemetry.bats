@@ -252,8 +252,13 @@ lane_of() { # <id> → the lane recorded on that id's LAST done record ("" when 
 @test "E4 a stalled lane past its cadence renders verdict=lane-stalled" {
   # Seeded relative to now, never as an absolute literal: a pinned date becomes the past and the
   # case silently changes meaning. A negative offset is always in the past by construction.
+  # BOTH date(1) dialects. `-v` is BSD-only: on Linux the substitution comes back EMPTY and the
+  # fixture's ts is the empty string, so the case dies before it asserts anything. BSD is probed
+  # first because macOS `date -d` means "daylight saving", not "date string", and would succeed
+  # there with a wrong answer.
   local old
-  old="$(TZ=UTC date -u -v-400H +%Y-%m-%dT%H:%M:%SZ)"
+  old="$(TZ=UTC date -u -v-400H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+         || TZ=UTC date -u -d '400 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
   printf '%s\n' \
     '{"id":"aaaaaaaaaaaa","ts":"'"$old"'","event":"add"}' \
     '{"id":"aaaaaaaaaaaa","ts":"'"$old"'","event":"done","lane":"cloud","evidence":"long ago"}' \
