@@ -279,6 +279,86 @@ EOF
   [ "$(grep -c 'cc-notify' "$CALLS")" -eq 1 ]           # …and still exactly one ping
 }
 
+# ══ THE PARK — the second terminal disposition ══════════════════════════════════════════════════
+#
+# A cloud worker can finish a row (`done`) or discover that the next step is the OPERATOR's, which
+# it cannot take. The brief tells it to park those with `cc-backlog block`, and that verb cannot
+# reach the store from a VM — it answers `unknown id`, exits 3, writes nothing. The row therefore
+# stayed `open` and was re-dispatched forever (f85fce7c26f5: ten dispatches, ten branches, one
+# unchanged verdict). The park is now a landed file the VM CAN push, and these four arms pin the
+# properties that make it safe to act on unattended.
+
+# Append an entry to the park log on the VM's branch, exactly as scripts/cloud-park.sh writes it.
+park_entry_on_vm() { # <id> <branch-named-in-the-entry> <needs>
+  git -C "$WORK" checkout -q claude/vm
+  mkdir -p "$WORK/docs/parks"
+  { printf '## 2026-08-29T00:00:00Z\n\n'; printf 'branch: %s\n' "$2"; printf 'needs: %s\n' "$3"; printf '\n'; } \
+    >>"$WORK/docs/parks/$1.md"
+  git -C "$WORK" add -A
+  git -C "$WORK" -c user.email=vm@anthropic -c user.name=vm commit -q -m "park $1"
+  git -C "$WORK" checkout -q "$SEED"
+}
+
+@test "a park written by THIS dispatch BLOCKS the row on the operator's step instead of closing it" {
+  # Two entries, and the LAST one is this branch's: the reader must take the last, or a row's park
+  # history would make the first dispatch that ever parked it the permanent answer.
+  park_entry_on_vm deadbeef1234 claude/superseded "an older dispatch's step"
+  park_entry_on_vm deadbeef1234 claude/vm "bash scripts/cloud-land-arm-diagnose.sh"
+  declare_managed --item deadbeef1234
+  seen_at 1000
+  CC_RETURN_NOW=999999 run "$SUT" --sweep
+  [ "$status" -eq 0 ]
+  grep -q 'cc-backlog block deadbeef1234 --needs bash scripts/cloud-land-arm-diagnose.sh' "$CALLS" || false
+  ! grep -q 'cc-backlog done' "$CALLS" || false
+  [[ "$output" == *"PARKED deadbeef1234 on the operator: bash scripts/cloud-land-arm-diagnose.sh"* ]] || false
+  # A park is TERMINAL for this dispatch: the land is verified, so custody is discharged and the
+  # admission slot is released. Leaving the slot held is how a parked row silently costs a worker.
+  grep -q 'cc-custody return session_test' "$CALLS" || false
+  [[ "$output" == *"slot: retired"* ]] || false
+  [ "$(grep -c 'cc-notify' "$CALLS")" -eq 1 ]
+}
+
+@test "a park from an EARLIER dispatch is inert — the file outlives the park, the park does not" {
+  # The failure this refuses: docs/parks/<id>.md stays on trunk after the operator unblocks the row,
+  # so a reader keyed on the file's EXISTENCE would re-block the row on the next land, forever.
+  park_entry_on_vm deadbeef1234 claude/some-older-fire "a step that was taken three days ago"
+  declare_managed --item deadbeef1234
+  seen_at 1000
+  CC_RETURN_NOW=999999 run "$SUT" --sweep
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"an earlier dispatch's park, not this one's; ignored"* ]] || false
+  grep -q 'cc-backlog done deadbeef1234' "$CALLS" || false
+  ! grep -q 'cc-backlog block' "$CALLS" || false
+}
+
+@test "a park naming this branch with NO step in it settles NOTHING — neither parked nor done" {
+  # The worker said "this is not finished" and the only executable half of that statement is missing.
+  # Falling through to `done` here would be the loudest false completion available on this rail.
+  park_entry_on_vm deadbeef1234 claude/vm ""
+  declare_managed --item deadbeef1234
+  seen_at 1000
+  CC_RETURN_NOW=999999 run "$SUT" --sweep
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"REFUSED to settle deadbeef1234"* ]] || false
+  ! grep -q 'cc-backlog done' "$CALLS" || false
+  ! grep -q 'cc-backlog block' "$CALLS" || false
+  [[ "$output" != *"slot: retired"* ]] || false     # unsettled ⇒ not latched, the next sweep retries
+}
+
+@test "the park is read from the TRUNK REF, never from a working tree" {
+  # It is acted on unattended, so it must have passed the same content-verify as everything else
+  # this step touches. A `[ -f "$repo/docs/parks/<id>.md" ]` spelling would honour a file that never
+  # landed — and on the operator's box `$repo` is a live checkout somebody is working in.
+  mkdir -p "$WORK/docs/parks"
+  printf 'branch: claude/vm\nneeds: a step that was never committed\n' >"$WORK/docs/parks/deadbeef1234.md"
+  declare_managed --item deadbeef1234
+  seen_at 1000
+  CC_RETURN_NOW=999999 run "$SUT" --sweep
+  [ "$status" -eq 0 ]
+  grep -q 'cc-backlog done deadbeef1234' "$CALLS" || false
+  ! grep -q 'cc-backlog block' "$CALLS" || false
+}
+
 # ══ THE LAUNDERING GUARDS ═══════════════════════════════════════════════════════════════════════
 
 @test "a lander that reports success while landing NOTHING is caught by the CONTENT check" {
