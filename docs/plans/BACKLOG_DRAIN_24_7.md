@@ -27283,9 +27283,24 @@ recorded green land gate from a cloud VM in this lane.
   repo-scoped entry condition. The whole finding is an argument about someone else's control flow,
   and an argument about code rots when that code changes. Admitted by `offbox-admission-lint` as
   **green off-box**, which is the property a cloud lane needs and cannot assume.
-- A comments-only correction block in `scripts/ship-land.sh` at the `cut → partial` site, stating
-  the venue caveat where a reader of that line will meet it. **Non-comment lines byte-identical to
-  `origin/main` by sha256** — the discrimination gate recycle #258 recommended stealing, run here.
+- 🚨 **NOT landed, and its refusal is the FOURTH lock — the one that actually stopped this land.** A
+  comments-only correction block in `scripts/ship-land.sh` at the `cut → partial` site, written to
+  put the caveat where a reader of that line meets it. It passed everything on its own merits:
+  non-comment lines **byte-identical to `origin/main` by sha256** (the discrimination gate recycle
+  #258 recommended stealing), shellcheck finding set identical, precheck rc 0. It cannot land from a
+  cloud VM because **touching `scripts/ship-land.sh` selects 32 direct suites** — measured by
+  attribution: the other three files select **1, 1 and 0**, and only this one pulls in
+  `tests/cc-reaper.bats`, which fails **51 of 192** off-box. The land reported exactly `51 failing
+  test(s)`; a run against **pristine `origin/main`** in the same container reports **51** as well —
+  the same number, so the land's red is reproduced by trunk with none of this diff in it. Exit 6,
+  "a VERDICT about your diff", over a suite the diff never touches.
+  **Nothing was skipped, disabled, quarantined, or manifest-excluded to get past it** — the gate is
+  correct in refusing, its input is what is wrong, and the venue cannot fix the input. The hunk is
+  preserved as `/tmp/venue/ship-land-comment.patch` on the firing VM and, durably, on the local ref
+  `keep/venue-full-20260829` and in this repo's own history: it is added by the first commit of this
+  branch and removed by the last, so `git log -p scripts/ship-land.sh` carries the exact text. **It
+  is a one-command apply from the operator's box, where `cc-reaper` is green**, and that is the
+  named follow-on rather than a widening of this land.
 
 **Six instrument faults, all mine, all found by a control or a gate rather than by a wrong number —
 and the last three were found by the arms of this very diff, which is the point of writing them:**
