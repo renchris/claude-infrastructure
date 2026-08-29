@@ -163,6 +163,15 @@ ffmpeg -y -loglevel error -framerate "$FPS" -start_number 0 -i "$STAGE/f%05d.png
 [[ -s "$MP4" ]] || die "ffmpeg produced a zero-byte file at $MP4"
 
 if command -v ffprobe >/dev/null 2>&1; then
+  # SIGPIPE: a THREE-stage pipeline under pipefail, and of the three such sites carrying a STREAMING
+  # middle this is the ONLY one whose producer bytes are the governing quantity — see the SIXTH
+  # CORRECTION in scripts/pipefail-sigpipe-lint.sh. `tr -d` deletes three characters and copies the
+  # rest, so its REDUCTION RATIO is ~1.0: measured 458,759 B in, 458,759 B out, 200/200 on both
+  # stages at 2026-08-29T07:02Z (~/.claude/autonomy/probe259-ratio.sh cell G). Its two siblings
+  # extract with `sed -n …p` and reduce by four orders of magnitude, so their producers are immune
+  # at any size; this one is not, and reading it in producer bytes is correct HERE and only here.
+  # LATENT because the producer is bounded by its own flags: `-show_entries stream=nb_read_frames
+  # -of csv=p=0` emits ONE integer for ONE stream. Measured 5 B in, 5 B out, 0/200 (cell H).
   GOT=$(ffprobe -v error -count_frames -select_streams v:0 \
         -show_entries stream=nb_read_frames -of csv=p=0 "$MP4" 2>/dev/null | tr -d '\r, ' | head -1)
   # An unreadable count is a NON-VERDICT, not a pass — the whole point of the check is that a short
