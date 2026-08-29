@@ -311,7 +311,7 @@ $ bin/cc-backlog list --all
                                                                     # empty, rc 0
 ```
 
-`~/.claude/autonomy/` does not exist here, so the store is unwritable and *both* the 08-15 and 08-17
+*(⚠️ CORRECTED in §10.2: `block` returns rc **3**, not rc 0, on unchanged code; `list --all` is the silent rail.)* `~/.claude/autonomy/` does not exist here, so the store is unwritable and *both* the 08-15 and 08-17
 dispositions demonstrably did not take — this fire is the evidence. A worker trusting the exit code
 would report the item parked three times over while it stayed in the wave.
 
@@ -332,3 +332,105 @@ R1-R4 remain **open, correct as filed, and unstarted**. `pnpm lint` on `reso-man
 four unlanded branches, the Amplify/Fly split-brain and `doc_classifier`'s `require_role` holes were
 again never readable — the trees do not exist here. Nothing in this section refutes the plan; what
 is refuted is the venue, and now also the sufficiency of the *third* filed remedy.
+
+## 10 · 2026-08-29, six hours later — the FOURTH fire, and §9.5's exit code is wrong
+
+**`8f59467c92b0` was fired again at 10:55Z, against a VM of the identical shape**, 6 h 24 m after
+§9's own disproof landed on trunk as `d075abc2` (04:30:59Z). Re-measured here, not inherited:
+`$HOME` `/root`, `~/Development` absent, `/home/user` holding `claude-infrastructure` alone,
+`git rev-list --count HEAD` = 50, `HEAD..origin/main` = 0, `~/.claude/autonomy/backlog.jsonl`
+absent. R1-R4 were again unreachable by construction and are again untouched.
+
+### 10.1 · The interval collapsed from twelve days to six hours
+
+| fire | when | gap since previous |
+|---|---|---|
+| 1 | 2026-08-15 | — |
+| 2 | 2026-08-17 | 2 days |
+| 3 | 2026-08-29 04:30Z | 12 days |
+| **4** | **2026-08-29 10:55Z** | **6 h 24 m** |
+
+This is the finding §9 could not have: the re-fire latency is not stable, it is *shortening*, and
+the fourth fire arrived inside the same day as the third — i.e. inside the window in which a desk
+disposition would have had to act to prevent it. The cost of the unclosed decision is therefore not
+"a slot every week or two"; on this rate it is a slot per pass. Note also that §9 landed a full
+disproof to trunk between fires 3 and 4 and it changed nothing, which re-confirms §1's rule at a
+tighter interval: **nothing in the dispatch chain reads plan prose.**
+
+### 10.2 · 🚨 CORRECTION to §9.5 — `cc-backlog block` returns rc **3**, not rc 0
+
+§9.5 reported that `bin/cc-backlog block <id>` "answers `unknown id` at **rc 0** against an absent
+store", and the plan's 2026-08-29 Status-log entry repeats that verbatim and builds a causal claim
+on it — *"which is why the 08-15 and 08-17 dispositions both failed silently"*. Re-run here on
+**unchanged code** (`git diff d075abc2..origin/main -- bin/cc-backlog` is empty), capturing each rc
+in isolation rather than after a pipeline:
+
+| rail | rc | stdout | stderr |
+|---|---|---|---|
+| `cc-backlog block 8f59467c92b0 --needs …` | **3** | empty | `cc-backlog block: unknown id 8f59467c92b0` |
+| `cc-backlog list --all` | **0** | **empty** | empty |
+| `cc-backlog add …` | 2 | empty | usage |
+| `cc-notify --role desk …` | 3 | empty | `verdict=unresolvable enqueued=0 … reason=role-unset` |
+
+`bin/cc-backlog:1943` is explicit — `has_id "$id" || { …; return 3; }`. So **the block rail
+convicts**: it prints to stderr *and* returns non-zero, and a worker trusting its exit code is
+told, correctly, that the disposition did not take. Three of the four rails do this;
+`cc-notify` even names the reason (`role-unset`, no live pane at `/root/.claude/cc-roles/desk`).
+
+**The silent rail is `list`, not `block`** — rc 0 with zero bytes on stdout, indistinguishable from
+a genuinely empty backlog. That is the one place an absent store reads as a healthy answer.
+
+The correction matters because it changes the diagnosis. The 08-15 and 08-17 dispositions did not
+fail *silently*; they failed *loudly and unheard*, which is a different defect with a different fix.
+There is nothing to harden in `cc-backlog block` — it already fails closed. What is missing is that
+a store-less venue is discoverable at rc 3 by the worker and by nobody else: the conviction has no
+consumer, because the worker that receives it is the one entity that cannot act on it. Harden
+`list` (a store-absent verdict distinct from an empty store) and the same signal becomes readable
+by the tooling that fires these items, not just by the session that cannot.
+
+### 10.3 · Why this session did not fix the venue rule either — grounds RE-MEASURED
+
+§9.6's two refusal grounds were re-taken this session rather than carried over, and both hold:
+
+- `bin/cc-venue:55-56` verbatim: *"A cloud VM must never build or run the venue rule: it would be
+  deciding its own admission, and its 50-commit clone cannot read the history that justifies the
+  exclusions."* This is that VM on that clone, and `bin/cc-eligible` **is** the venue rule.
+- `bats`, `shellcheck` and `shfmt` are all still **ABSENT** (`command -v` → nothing for each). A
+  change to the predicate cannot be gated here, and a wrong refusal in that arm starves the tap for
+  every project — an unbounded cost against one bounded slot.
+
+Independently re-read this session, `cross_repo(project)` (`bin/cc-eligible:766`) takes **only** the
+project label as its argument, so §9.2's result holds by construction and needs no re-derivation:
+the arm cannot fire on a row whose label is accurate.
+
+### 10.4 · One new contribution to the open decision: only mechanism (a) can land in git
+
+The four filed mechanisms (08-15 Status log) are not equivalent in *where they live*, and the three
+fires so far have all foundered on exactly that:
+
+| mechanism | lives in | reachable from a cloud worker? |
+|---|---|---|
+| (a) a plan-frontmatter `project:` key | the **plan file** — tracked, in this repo | **yes** — it is a normal reviewable diff |
+| (b) a `projectName` entry in the plan index | `~/.claude/plans-index.json` — **untracked** live layer | no — absent on every VM |
+| (c) a new `ineligible-*` class in `cc-eligible` | the venue rule | no — refused by `cc-venue`'s guard |
+| (d) a not-dispatchable plan list beside `dispatch-projects.conf` | tracked, but keyed on **project**, and the incumbent is unioned in unconditionally (`scripts/dispatch-projects.conf` header) | tracked, but cannot express this row |
+
+§9.4 recommends (b), and (b) is sound — but it is a desk edit to an untracked file, which is
+precisely the shape of disposition that has now failed to happen four times. **(a) is the only one
+of the four whose fix is a commit.** `scripts/find-plan.sh:70 project_name_for()` reads the index
+then falls back to the path basename and never opens the plan's frontmatter, while `plan_title()`
+eleven lines above it already parses that same frontmatter for `title:` — so (a) is a small,
+symmetric addition at a function that is *not* the venue rule, and it would let a cross-repo master
+carry its own routing truth in the file that states it.
+
+Not implemented here, for the reason the 08-15 entry gave and this session does not overturn: the
+choice among the four is a desk decision, the ungated-shell-change ground in §10.3 applies to
+`find-plan.sh` as much as to `cc-eligible` (it has bats coverage this VM cannot run), and a
+single-value `project:` key still cannot express a master that targets **two** trees. What is new
+is the location column above: it says which option survives being handed to the venue that keeps
+receiving this item.
+
+### 10.5 · The item — still NOT adjudicated, fourth time
+
+R1-R4 remain **open, correct as filed, and unstarted**. Nothing here refutes the plan. What is
+refuted, again, is the venue — and now also §9.5's exit code.

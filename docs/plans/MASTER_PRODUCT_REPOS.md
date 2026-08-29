@@ -182,6 +182,34 @@ branch queue is empty or explicitly abandoned with reasons, the production deplo
 single-brained and audited, and doc_classifier's authorization holes are closed with tests.
 
 ## Status log
+- **2026-08-29 (10:55Z) — a FOURTH fire, six hours after the third, and the third fire's exit code
+  was wrong.** `8f59467c92b0` reached a fourth cloud VM of the identical shape, 6 h 24 m after the
+  entry below landed its own disproof on trunk (`d075abc2`, 04:30:59Z). R1-R4 untouched and **still
+  open, correct as filed, and unstarted** — the plan is not refuted, the venue is, for the fourth
+  time. Two things this fire measured:
+  **(1)** the re-fire interval is **shortening**, not stable — 2 days · 12 days · **6 h 24 m** —
+  so the cost of the unclosed decision is now roughly a worker slot per dispatch pass, not one per
+  week. A full disproof landed on trunk *between* fires 3 and 4 and changed nothing, re-confirming
+  at a tighter interval that nothing in the dispatch chain reads plan prose.
+  **(2)** 🚨 **the entry below is wrong about the exit code, and its causal claim goes with it.**
+  Re-run here on **unchanged** code (`git diff d075abc2..origin/main -- bin/cc-backlog` is empty),
+  capturing each rc in isolation: `cc-backlog block` returns **rc 3** with `unknown id` on stderr
+  (`bin/cc-backlog:1943` — `has_id … || return 3`), and `cc-notify --role desk` returns **rc 3**
+  naming `role-unset`. The block rail therefore **fails closed and says so**; the dispositions of
+  08-15 and 08-17 did not fail *silently*, they failed *loudly and unheard*. The one genuinely
+  silent rail is `cc-backlog list --all` — **rc 0, zero bytes**, indistinguishable from an empty
+  backlog. That is where the store-absent verdict is missing, and hardening it is what would make
+  this conviction readable by the tooling that fires these items rather than only by the session
+  that cannot act on it.
+  One new contribution to the still-open four-mechanism decision: the options differ in **where
+  they live**, and that is what all four fires have foundered on. A plan-frontmatter `project:` key
+  is the **only one whose fix is a commit** — the plan index is untracked live-layer state, the
+  `cc-eligible` arm is refused by `bin/cc-venue`'s guard, and `dispatch-projects.conf` is keyed on
+  project with the incumbent unioned in unconditionally. Not implemented here (ungated shell change
+  on a VM with `bats`/`shellcheck`/`shfmt` all absent — re-measured; and a single-value key still
+  cannot express a master targeting two trees). Full measurement →
+  `docs/research/venue-foreign-master-redispatch-2026-08-17.md` §10.
+  **Disposition: unchanged — `cc-backlog block`, still not `reopen`; both steps are desk actions.**
 - **2026-08-29 — the guard LANDED, the member rows are stopped, and THIS row was fired a third
   time.** `8f59467c92b0` reached a third cloud VM of the identical shape (one checkout, GitHub scope
   of one repo, no `~/Development`, 50-commit shallow clone). R1-R4 untouched and **still open,
@@ -207,7 +235,10 @@ single-brained and audited, and doc_classifier's authorization holes are closed 
   **Disposition: `cc-backlog block`, still not `reopen`** — and 08-17's warning to *verify the block
   took* is now vindicated rather than precautionary: re-measured here, `cc-backlog block` answers
   `unknown id` at **rc 0** against an absent store, which is why the 08-15 and 08-17 dispositions
-  both failed silently and this row fired a third time.
+  both failed silently and this row fired a third time. *(⚠️ CORRECTED by the 2026-08-29 10:55Z
+  entry above: re-measured on unchanged code, `block` returns **rc 3** with stderr — it fails
+  closed. `list --all` is the rail that answers rc 0 silently. The dispositions failed unheard,
+  not unsignalled.)*
 - **2026-08-17 — the SAME row was cloud-dispatched AGAIN, and the re-fire is the finding.**
   `8f59467c92b0` was fired into an identical VM shape (one checkout, GitHub scope of one repo, no
   `~/Development`) ~2 days after the 08-15 entry below wrote its disproof into THIS FILE. R1-R4 were
