@@ -683,3 +683,79 @@ bash scripts/cloud-land-arm-diagnose.sh
 
 — read-only, safe on a live box mid-sweep, and it prints one verdict token. Seven dispatches have
 now ended here. The eighth should not be dispatched to a cloud VM at all.
+
+## 9 · Tenth dispatch, 2026-08-29 — the park is now expressible, and this row uses it
+
+Seven dispatches ended by naming the operator's one command. Two more (the eighth and ninth) ended
+by naming it again, one of them after finding the reason the naming never stuck. This one ends by
+**parking the row**, which is what every one of them was trying to do and none could.
+
+### 9.1 The wall was never the diagnosis — it was that a VM cannot state a park
+
+§6.6 measured it and §8 worked around everything except it. The brief every cloud dispatch carries
+ends with `cc-backlog block <id> --needs "<step>"`, and the store that verb writes is
+`~/.claude/autonomy/backlog.jsonl`, which exists only on the operator's box. From a VM it answers
+`unknown id` and returns 3, writing nothing. So the row stayed `open` — which IS `cc-dispatch`'s
+fire predicate — and the wave fired it again, ten times, at full cost, for a verdict that has not
+changed since 08-25.
+
+The generator is worth stating plainly, because it is not about this row: **a worker can report that
+it FINISHED, and cannot report that it is BLOCKED.** `cloud-return.sh` step 8 had exactly one
+terminal disposition, `done`, derived from a landed path set (§14 of `CLOUD_OBSERVABILITY.md`). The
+other disposition had no channel at all, so every operator-gated row reached from a cloud VM is a
+re-dispatch loop by construction, whatever it is about.
+
+### 9.2 The park is a landed file, for the same reason the close is
+
+The VM's one channel is its branch. `scripts/cloud-park.sh` (new, `--selftest` 12/12,
+`tests/cloud-park.bats` 8/8) writes `docs/parks/<id>.md`; `cloud-return.sh` step 8 reads it and
+calls `block` instead of `done` (`tests/cloud-return.bats` § THE PARK, 4 arms, suite 31/31). Three
+properties carry the safety, and each is pinned by a test rather than by this paragraph:
+
+- **Read from the TRUNK REF, never a working tree.** The park is acted on unattended, so it passes
+  the same content-verify (step 6) as everything else that step touches. On the operator's box
+  `$repo` is a live checkout somebody is working in; a `[ -f "$repo/…" ]` spelling would honour a
+  park that never landed.
+- **Honoured only when the last entry's `branch:` is THIS dispatch's branch.** The file outlives the
+  park — after the operator unblocks the row and it is re-dispatched, `docs/parks/<id>.md` is still
+  on trunk — so a reader keyed on existence alone would re-block the row on its next land, forever.
+- **Append-only, and a malformed park settles NOTHING.** An entry naming this branch with no
+  `needs:` line does not fall through to `done`: the worker said the row is not finished, and
+  closing it on the unreadable half of that statement is the loudest false completion this rail
+  has. It leaves `done_unsettled=1`, which is the existing bounded-retry path.
+
+### 9.3 What is still open — unchanged, and now out of the wave
+
+**A's mechanism is still operator-gated and is still one command.** Nothing here measures it;
+§8.5 stands verbatim:
+
+```
+bash scripts/cloud-land-arm-diagnose.sh
+```
+
+What changed is that saying so is now a state transition instead of a paragraph. This dispatch's
+park is `docs/parks/f85fce7c26f5.md`; on the desk's next `cloud-return.sh` pass the row folds to
+`blocked`, which `cc-dispatch` excludes, and the eleventh dispatch does not happen.
+
+### 9.4 Verification
+
+Run in this venue, which `scripts/cloud-venue-provision.sh` took to READY (shellcheck 0.11.0 from
+upstream, bats 1.10.0, and the horizon deepened from 50 to 3,838 commits before any trunk read):
+
+| check | result |
+|---|---|
+| `bats tests/cloud-return.bats` | **31/31** (27 pre-existing + 4 new) |
+| `bats tests/cloud-park.bats` | **8/8** |
+| `bash scripts/cloud-park.sh --selftest` | **12/12** |
+| `bin/cc-cloud --selftest` | **24/24** |
+| `bats tests/cc-cloud.bats` | **31/31** |
+| `bash scripts/cloud-land-arm-diagnose.sh --selftest` | **11/11** |
+| `git merge-base --is-ancestor a42f107a origin/main` (full clone) | **rc 0** — B's cure is on trunk |
+
+**Honest limits.** The reader has not been exercised against the real `cc-backlog` — the suite stubs
+it and asserts on argv, as the rest of that file does — so what is proven here is that step 8 calls
+`block` with the operator's step, not that the store accepts it; `bin/cc-backlog`'s own guard
+documents that blocking a CLAIMED row is legitimate and that only a `done` row is refused without
+`--force`. And `scripts/cloud-park.sh` is an ADD, so it is absent from the live `~/.claude` layer
+until the converger runs; the reader half is an edit to an already-symlinked file and goes live on
+the fast-forward, which is the half that has to be there for this park to be honoured.
