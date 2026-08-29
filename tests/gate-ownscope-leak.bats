@@ -477,6 +477,22 @@ PROBE
 # in the sibling comments describes only the two-stage form:
 #     2-stage  printf | grep -q        safe to 37,121 B · racy at 55,721 · ALWAYS inverted 87,122+
 #     3-stage  printf | sed | grep -q  safe to 17,427 B · ALWAYS inverted from 23,227 B
+#
+# ⚠️ BOTH ROWS ABOVE ARE KEPT ONLY AS THE HISTORICAL READING; BOTH HAVE SINCE BEEN REFUTED, AND THE
+# 3-STAGE ROW IS WRONG IN ITS UNIT AND NOT MERELY IN ITS VALUE (2026-08-28,
+# ~/.claude/autonomy/probe257-{3stage,emit}.sh; the full table is in the header of
+# scripts/pipefail-sigpipe-lint.sh, which is the SSOT for these bands).
+#   · "safe to 17,427 B" holds at ONE line width and not at two others on the SAME producer bytes:
+#     17,420 B over 1,340 lines of 13 B is 0/200, while 17,435 B over 317 lines of 55 B is 43/200
+#     and 17,433 B over 117 lines of 149 B is 54/200.
+#   · "ALWAYS inverted from 23,227 B" is RACY, not ALWAYS: 137-149 of 200 across four widths. The
+#     ALWAYS band needs ~94,711 emitted bytes. Both rows' sharp edges are n=20 artifacts.
+#   · THE BINDING QUANTITY IS WHAT THE STAGE FEEDING grep EMITS, not what the producer writes.
+#     Held at 400 lines x 55 B = 22,000 producer bytes in all six cells and varying only the bytes
+#     the `sed` strips: 279/400 wrong at 18,000 emitted, 1/400 at 16,400, 0/400 at 15,600.
+#     scripts/postland-verify.sh:3359 had already landed exactly this sentence on 2026-08-27.
+# THE PIN BELOW IS UNAFFECTED — it asserts the drained SPELLING, which is correct at every size, and
+# the numbers above are the RATIONALE for draining rather than the thing being pinned.
 # Only ONE of the six sites can reach its floor today: bats-shellcheck's own-set is one "path:line"
 # per CHANGED LINE, and a real 60-commit landing range on this repo already measures 95,164 bytes.
 # The other five are bounded under their floors by an empty embedded allowlist or by the whole .bats

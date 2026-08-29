@@ -1318,6 +1318,15 @@ done < <({ "$GIT_BIN" -C "$MAIN" worktree list --porcelain 2>/dev/null; echo; })
 #     2-stage external   cat    | grep -q   safe 55,722 · 19/20 inverted 65,580 · ALWAYS 87,151+
 # Cite the STAGE COUNT, not the producer: the two producers agree, and it was the extra `sed` stage
 # that moved #241's three-stage floor down to 17,427.
+# ⚠️ AND CITE WHAT THAT EXTRA STAGE *EMITS*, NOT WHAT THE PRODUCER WRITES — the "17,427" above is
+# REFUTED as a byte floor (2026-08-28): on the SAME producer bytes it reads 0/200 at 13 B per line
+# and 43-54/200 at 55 and 149 B, because the sed's output size, not the printf's, is what binds.
+# Held at 22,000 producer bytes across six cells and varying only the sed's reduction: 279/400
+# wrong at 18,000 emitted, 0/400 at 15,600. THIS SITE IS UNAFFECTED — it is the TWO-STAGE row above
+# and has no intermediate stage at all, so its own floor is the one it already cites. The reason
+# this note is here is that the sentence beneath the table invites the next reader to carry the
+# three-stage number, and that number does not describe a size of anything the producer writes.
+# Full table + method: the header of scripts/pipefail-sigpipe-lint.sh (the SSOT for these bands).
 holds_worktree() { printf '%s\n' "$WT_BRANCHES" | grep -xF "$1" >/dev/null; }
 
 # ── 3. Branches. KEPT by default; --prune-branches deletes only the provably redundant. ──

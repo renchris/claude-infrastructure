@@ -601,9 +601,29 @@ for cfg in "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME"/.claude-tertia
     # invisible to scripts/pipefail-sigpipe-lint.sh — its heredoc tracker latched on the comment at
     # :357 that names `python3 - <<PY` and never unlatched — so these four sites had never been
     # judged and the file carries no allowlist row. This one is the worst of them: it is THREE
-    # stages, whose measured safe floor is 17,427 B against the two-stage 37,121 B, and its feed is
-    # `tail -c 20000` — a hard-coded constant ABOVE that floor. An inversion here reads a genuine
-    # monthly-spend kill as absent and the session is never recovered.
+    # stages, and an inversion here reads a genuine monthly-spend kill as absent and the session is
+    # never recovered.
+    #
+    # ⚠️ THE CEILING ABOVE USED TO BE STATED AS "`tail -c 20000` — a hard-coded constant ABOVE the
+    # 17,427 B floor", AND BOTH HALVES OF THAT WERE THE WRONG QUANTITY (corrected 2026-08-28).
+    #   · 17,427 B is not a floor. On identical producer bytes it reads 0/200 at 13 B per line and
+    #     43-54/200 at 55 and 149 B; the sibling "ALWAYS from 23,227" is RACY at 137-149/200.
+    #   · The binding quantity is what the stage FEEDING grep emits, not what the producer writes —
+    #     22,000 producer bytes held constant across six cells, varying only the middle stage's
+    #     reduction, reads 279/400 wrong at 18,000 emitted and 0/400 at 15,600.
+    #     (Method and full table: the header of scripts/pipefail-sigpipe-lint.sh, the SSOT.)
+    # So the number that governs THIS site is what `grep -iE "$SPEND_RE"` hands the last stage, and
+    # `tail -c 20000` is only its upper bound. MEASURED over the whole corpus rather than reasoned
+    # about — 7,445 transcripts across all four account stores, 2026-08-28
+    # (~/.claude/autonomy/feed257.sh): 262 transcripts' tails match SPEND_RE at all, and the largest
+    # hands the last stage 19,466 B — 97.3% of the 20,000 B tail. THE FILTER BARELY FILTERS HERE,
+    # because a JSONL tail is a handful of very long records and a matching one matches wholesale.
+    # 19,466 B emitted sits INSIDE the racy band, so the old comment reached the right conclusion
+    # for the wrong reason and the margin it implied does not exist. ⚠️ DO NOT GENERALISE THE RATIO:
+    # scripts/postland-verify.sh:3359 measures the same shape reducing ~55x, this one reduces 1.03x.
+    # The reduction ratio is a per-site property and it must be measured, never inferred from shape.
+    # The site is safe TODAY only because the last stage is drained (`>/dev/null`, reads to EOF);
+    # that spelling is what is load-bearing here, not any headroom.
     if printf '%s' "$tail_bytes" | grep -iE "$SPEND_RE" | grep '"isApiErrorMessage"[[:space:]]*:[[:space:]]*true' >/dev/null; then
       if head -c 8000 "$tx" 2>/dev/null | grep '"agentName"' >/dev/null; then
         if [[ ! -f "$STATE/teammate-skip/$sid" ]]; then
