@@ -1,0 +1,408 @@
+{
+ "profile": "reso-web-app",
+ "problem": "between the two",
+ "tokens_authoritative": true,
+ "totals": {
+  "pages": 13,
+  "asserted": 16,
+  "abstentions": 2,
+  "resolved_by_xcheck": 2,
+  "crop_calls": 0,
+  "gestalt_calls": 13,
+  "suppressed": 0,
+  "model_calls": 13
+ },
+ "pages": {
+  "align-1px": {
+   "asserted": [
+    {
+     "rule": "misalignment",
+     "target": "div.panel:nth-of-type(5)",
+     "detail": "left edge at 31px is 1.0px off the shared 32px edge used by 8 other elements",
+     "severity": "low",
+     "weight": 0.8,
+     "demoted_from": "medium",
+     "verdict": "ASSERTED"
+    }
+   ],
+   "abstentions": 0,
+   "resolved": [],
+   "routed": [],
+   "suppressed": [],
+   "gestalt": {
+    "class": "gestalt",
+    "frame": "viewport",
+    "blind": true,
+    "question": "Look at this frame as a first-time reader would in one second. What does the eye land on first, and is that what the page is for? Report anything that does not make sense -- an unlabelled control, a promise the page does not keep, a grouping that reads wrong. Report nothing you cannot see.",
+    "prohibition": "Do not report any number, distance, size, ratio or coordinate. Those are measured elsewhere and a number from you is discarded. Name what you see and where it is.",
+    "weight": 0.7,
+    "why": "hierarchy, grouping and does-this-make-sense are page-global and structurally unreachable from a crop"
+   },
+   "model_calls": 1
+  },
+  "clean": {
+   "asserted": [],
+   "abstentions": 0,
+   "resolved": [],
+   "routed": [],
+   "suppressed": [],
+   "gestalt": {
+    "class": "gestalt",
+    "frame": "viewport",
+    "blind": true,
+    "question": "Look at this frame as a first-time reader would in one second. What does the eye land on first, and is that what the page is for? Report anything that does not make sense -- an unlabelled control, a promise the page does not keep, a grouping that reads wrong. Report nothing you cannot see.",
+    "prohibition": "Do not report any number, distance, size, ratio or coordinate. Those are measured elsewhere and a number from you is discarded. Name what you see and where it is.",
+    "weight": 0.7,
+    "why": "hierarchy, grouping and does-this-make-sense are page-global and structurally unreachable from a crop"
+   },
+   "model_calls": 1
+  },
+  "contrast-on-gradient": {
+   "asserted": [
+    {
+     "rule": "xcheck-contrast-varies",
+     "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
+     "detail": "contrast is not one number across this text: 6.15:1 at the left edge and 1.73:1 at the right. Any single computed value is a fiction, and the right end is the one that fails a reader",
+     "severity": "high",
+     "weight": 1.0,
+     "verdict": "ASSERTED"
+    },
+    {
+     "rule": "xcheck-contrast-varies",
+     "target": "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
+     "detail": "contrast is not one number across this text: 6.00:1 at the left edge and 1.71:1 at the right. Any single computed value is a fiction, and the right end is the one that fails a reader",
+     "severity": "high",
+     "weight": 1.0,
+     "verdict": "ASSERTED"
+    }
+   ],
+   "abstentions": 2,
+   "resolved": [
+    {
+     "rule": "contrast-indeterminate",
+     "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
+     "detail": "cannot compute a ratio: backdrop is an image/gradient on div.hero:nth-of-type(1). Requirement 3.0:1 is UNVERIFIED for this text",
+     "severity": "high",
+     "weight": 1.0,
+     "verdict": "RESOLVED",
+     "abstains_as": "contrast-indeterminate",
+     "resolved_by": "xcheck-contrast-varies",
+     "resolution": "contrast is not one number across this text: 6.15:1 at the left edge and 1.73:1 at the right. Any single computed value is a fiction, and the right end is the one that fails a reader"
+    },
+    {
+     "rule": "contrast-indeterminate",
+     "target": "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
+     "detail": "cannot compute a ratio: backdrop is an image/gradient on div.hero:nth-of-type(1). Requirement 4.5:1 is UNVERIFIED for this text",
+     "severity": "high",
+     "weight": 1.0,
+     "verdict": "RESOLVED",
+     "abstains_as": "contrast-indeterminate",
+     "resolved_by": "xcheck-contrast-varies",
+     "resolution": "contrast is not one number across this text: 6.00:1 at the left edge and 1.71:1 at the right. Any single computed value is a fiction, and the right end is the one that fails a reader"
+    }
+   ],
+   "routed": [],
+   "suppressed": [],
+   "gestalt": {
+    "class": "gestalt",
+    "frame": "viewport",
+    "blind": true,
+    "question": "Look at this frame as a first-time reader would in one second. What does the eye land on first, and is that what the page is for? Report anything that does not make sense -- an unlabelled control, a promise the page does not keep, a grouping that reads wrong. Report nothing you cannot see.",
+    "prohibition": "Do not report any number, distance, size, ratio or coordinate. Those are measured elsewhere and a number from you is discarded. Name what you see and where it is.",
+    "weight": 0.7,
+    "why": "hierarchy, grouping and does-this-make-sense are page-global and structurally unreachable from a crop"
+   },
+   "model_calls": 1
+  },
+  "contrast-plain": {
+   "asserted": [
+    {
+     "rule": "contrast",
+     "target": "div.helper:nth-of-type(4)",
+     "detail": "2.54:1 against 4.5:1 required (#9CA3AF on #FFFFFF)",
+     "severity": "high",
+     "weight": 1.0,
+     "verdict": "ASSERTED"
+    }
+   ],
+   "abstentions": 0,
+   "resolved": [],
+   "routed": [],
+   "suppressed": [],
+   "gestalt": {
+    "class": "gestalt",
+    "frame": "viewport",
+    "blind": true,
+    "question": "Look at this frame as a first-time reader would in one second. What does the eye land on first, and is that what the page is for? Report anything that does not make sense -- an unlabelled control, a promise the page does not keep, a grouping that reads wrong. Report nothing you cannot see.",
+    "prohibition": "Do not report any number, distance, size, ratio or coordinate. Those are measured elsewhere and a number from you is discarded. Name what you see and where it is.",
+    "weight": 0.7,
+    "why": "hierarchy, grouping and does-this-make-sense are page-global and structurally unreachable from a crop"
+   },
+   "model_calls": 1
+  },
+  "grid-offgrid": {
+   "asserted": [
+    {
+     "rule": "grid-violation",
+     "target": "div.section-title:nth-of-type(3)",
+     "detail": "margin-top is 13px, not a multiple of the 8px grid",
+     "severity": "low",
+     "weight": 0.6,
+     "demoted_from": "low",
+     "verdict": "ASSERTED"
+    }
+   ],
+   "abstentions": 0,
+   "resolved": [],
+   "routed": [],
+   "suppressed": [],
+   "gestalt": {
+    "class": "gestalt",
+    "frame": "viewport",
+    "blind": true,
+    "question": "Look at this frame as a first-time reader would in one second. What does the eye land on first, and is that what the page is for? Report anything that does not make sense -- an unlabelled control, a promise the page does not keep, a grouping that reads wrong. Report nothing you cannot see.",
+    "prohibition": "Do not report any number, distance, size, ratio or coordinate. Those are measured elsewhere and a number from you is discarded. Name what you see and where it is.",
+    "weight": 0.7,
+    "why": "hierarchy, grouping and does-this-make-sense are page-global and structurally unreachable from a crop"
+   },
+   "model_calls": 1
+  },
+  "hierarchy-inversion": {
+   "asserted": [
+    {
+     "rule": "token-drift",
+     "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
+     "detail": "background-color #EFF6FF is 11.5 away from token #F9FAFB; almost certainly meant to be the token",
+     "severity": "low",
+     "weight": 0.6,
+     "demoted_from": "low",
+     "verdict": "ASSERTED"
+    },
+    {
+     "rule": "contrast",
+     "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
+     "detail": "3.38:1 against 4.5:1 required (#3B82F6 on #EFF6FF)",
+     "severity": "high",
+     "weight": 1.0,
+     "verdict": "ASSERTED"
+    }
+   ],
+   "abstentions": 0,
+   "resolved": [],
+   "routed": [],
+   "suppressed": [],
+   "gestalt": {
+    "class": "gestalt",
+    "frame": "viewport",
+    "blind": true,
+    "question": "Look at this frame as a first-time reader would in one second. What does the eye land on first, and is that what the page is for? Report anything that does not make sense -- an unlabelled control, a promise the page does not keep, a grouping that reads wrong. Report nothing you cannot see.",
+    "prohibition": "Do not report any number, distance, size, ratio or coordinate. Those are measured elsewhere and a number from you is discarded. Name what you see and where it is.",
+    "weight": 0.7,
+    "why": "hierarchy, grouping and does-this-make-sense are page-global and structurally unreachable from a crop"
+   },
+   "model_calls": 1
+  },
+  "optical-centering": {
+   "asserted": [],
+   "abstentions": 0,
+   "resolved": [],
+   "routed": [],
+   "suppressed": [],
+   "gestalt": {
+    "class": "gestalt",
+    "frame": "viewport",
+    "blind": true,
+    "question": "Look at this frame as a first-time reader would in one second. What does the eye land on first, and is that what the page is for? Report anything that does not make sense -- an unlabelled control, a promise the page does not keep, a grouping that reads wrong. Report nothing you cannot see.",
+    "prohibition": "Do not report any number, distance, size, ratio or coordinate. Those are measured elsewhere and a number from you is discarded. Name what you see and where it is.",
+    "weight": 0.7,
+    "why": "hierarchy, grouping and does-this-make-sense are page-global and structurally unreachable from a crop"
+   },
+   "model_calls": 1
+  },
+  "overflow-clip": {
+   "asserted": [
+    {
+     "rule": "overflow",
+     "target": "div.panel:nth-of-type(5) > table > tbody > tr:nth-of-type(2) > td.cell-venue:nth-of-type(2)",
+     "detail": "content is 40px tall inside a 24px box with overflow hidden; text is clipped",
+     "severity": "high",
+     "weight": 1.0,
+     "verdict": "ASSERTED"
+    },
+    {
+     "rule": "overflow",
+     "target": "div.panel:nth-of-type(5) > table > tbody > tr:nth-of-type(3) > td.cell-venue:nth-of-type(2)",
+     "detail": "content is 40px tall inside a 24px box with overflow hidden; text is clipped",
+     "severity": "high",
+     "weight": 1.0,
+     "verdict": "ASSERTED"
+    },
+    {
+     "rule": "overflow",
+     "target": "div.panel:nth-of-type(5) > table > tbody > tr:nth-of-type(4) > td.cell-venue:nth-of-type(2)",
+     "detail": "content is 40px tall inside a 24px box with overflow hidden; text is clipped",
+     "severity": "high",
+     "weight": 1.0,
+     "verdict": "ASSERTED"
+    }
+   ],
+   "abstentions": 0,
+   "resolved": [],
+   "routed": [],
+   "suppressed": [],
+   "gestalt": {
+    "class": "gestalt",
+    "frame": "viewport",
+    "blind": true,
+    "question": "Look at this frame as a first-time reader would in one second. What does the eye land on first, and is that what the page is for? Report anything that does not make sense -- an unlabelled control, a promise the page does not keep, a grouping that reads wrong. Report nothing you cannot see.",
+    "prohibition": "Do not report any number, distance, size, ratio or coordinate. Those are measured elsewhere and a number from you is discarded. Name what you see and where it is.",
+    "weight": 0.7,
+    "why": "hierarchy, grouping and does-this-make-sense are page-global and structurally unreachable from a crop"
+   },
+   "model_calls": 1
+  },
+  "radius-drift": {
+   "asserted": [
+    {
+     "rule": "token-drift",
+     "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(2)",
+     "detail": "border-radius 6px differs from the page's dominant 8px",
+     "severity": "low",
+     "weight": 0.6,
+     "demoted_from": "low",
+     "verdict": "ASSERTED"
+    }
+   ],
+   "abstentions": 0,
+   "resolved": [],
+   "routed": [],
+   "suppressed": [],
+   "gestalt": {
+    "class": "gestalt",
+    "frame": "viewport",
+    "blind": true,
+    "question": "Look at this frame as a first-time reader would in one second. What does the eye land on first, and is that what the page is for? Report anything that does not make sense -- an unlabelled control, a promise the page does not keep, a grouping that reads wrong. Report nothing you cannot see.",
+    "prohibition": "Do not report any number, distance, size, ratio or coordinate. Those are measured elsewhere and a number from you is discarded. Name what you see and where it is.",
+    "weight": 0.7,
+    "why": "hierarchy, grouping and does-this-make-sense are page-global and structurally unreachable from a crop"
+   },
+   "model_calls": 1
+  },
+  "spacing-gap": {
+   "asserted": [
+    {
+     "rule": "spacing-rhythm",
+     "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(3)",
+     "detail": "gap 39.0px breaks the 16.0px rhythm used by its siblings under div.kpi-row:nth-of-type(2)",
+     "severity": "low",
+     "weight": 0.8,
+     "demoted_from": "medium",
+     "verdict": "ASSERTED"
+    },
+    {
+     "rule": "grid-violation",
+     "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(3)",
+     "detail": "margin-left is 23px, not a multiple of the 8px grid",
+     "severity": "low",
+     "weight": 0.6,
+     "demoted_from": "low",
+     "verdict": "ASSERTED"
+    }
+   ],
+   "abstentions": 0,
+   "resolved": [],
+   "routed": [],
+   "suppressed": [],
+   "gestalt": {
+    "class": "gestalt",
+    "frame": "viewport",
+    "blind": true,
+    "question": "Look at this frame as a first-time reader would in one second. What does the eye land on first, and is that what the page is for? Report anything that does not make sense -- an unlabelled control, a promise the page does not keep, a grouping that reads wrong. Report nothing you cannot see.",
+    "prohibition": "Do not report any number, distance, size, ratio or coordinate. Those are measured elsewhere and a number from you is discarded. Name what you see and where it is.",
+    "weight": 0.7,
+    "why": "hierarchy, grouping and does-this-make-sense are page-global and structurally unreachable from a crop"
+   },
+   "model_calls": 1
+  },
+  "token-color-drift": {
+   "asserted": [
+    {
+     "rule": "token-drift",
+     "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
+     "detail": "background-color #1D4ED3 is 5.0 away from token #1D4ED8; almost certainly meant to be the token",
+     "severity": "low",
+     "weight": 0.6,
+     "demoted_from": "low",
+     "verdict": "ASSERTED"
+    }
+   ],
+   "abstentions": 0,
+   "resolved": [],
+   "routed": [],
+   "suppressed": [],
+   "gestalt": {
+    "class": "gestalt",
+    "frame": "viewport",
+    "blind": true,
+    "question": "Look at this frame as a first-time reader would in one second. What does the eye land on first, and is that what the page is for? Report anything that does not make sense -- an unlabelled control, a promise the page does not keep, a grouping that reads wrong. Report nothing you cannot see.",
+    "prohibition": "Do not report any number, distance, size, ratio or coordinate. Those are measured elsewhere and a number from you is discarded. Name what you see and where it is.",
+    "weight": 0.7,
+    "why": "hierarchy, grouping and does-this-make-sense are page-global and structurally unreachable from a crop"
+   },
+   "model_calls": 1
+  },
+  "touch-target": {
+   "asserted": [
+    {
+     "rule": "touch-target",
+     "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-secondary:nth-of-type(2)",
+     "detail": "164x29px is under the 44px minimum target",
+     "severity": "high",
+     "weight": 1.0,
+     "verdict": "ASSERTED"
+    }
+   ],
+   "abstentions": 0,
+   "resolved": [],
+   "routed": [],
+   "suppressed": [],
+   "gestalt": {
+    "class": "gestalt",
+    "frame": "viewport",
+    "blind": true,
+    "question": "Look at this frame as a first-time reader would in one second. What does the eye land on first, and is that what the page is for? Report anything that does not make sense -- an unlabelled control, a promise the page does not keep, a grouping that reads wrong. Report nothing you cannot see.",
+    "prohibition": "Do not report any number, distance, size, ratio or coordinate. Those are measured elsewhere and a number from you is discarded. Name what you see and where it is.",
+    "weight": 0.7,
+    "why": "hierarchy, grouping and does-this-make-sense are page-global and structurally unreachable from a crop"
+   },
+   "model_calls": 1
+  },
+  "type-scale": {
+   "asserted": [
+    {
+     "rule": "type-scale",
+     "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(4) > div.kpi-label:nth-of-type(1)",
+     "detail": "font-size 17px is used once and sits off the page scale [12.0, 14.0, 16.0, 24.0]; nearest step is 16px",
+     "severity": "low",
+     "weight": 0.6,
+     "demoted_from": "medium",
+     "verdict": "ASSERTED"
+    }
+   ],
+   "abstentions": 0,
+   "resolved": [],
+   "routed": [],
+   "suppressed": [],
+   "gestalt": {
+    "class": "gestalt",
+    "frame": "viewport",
+    "blind": true,
+    "question": "Look at this frame as a first-time reader would in one second. What does the eye land on first, and is that what the page is for? Report anything that does not make sense -- an unlabelled control, a promise the page does not keep, a grouping that reads wrong. Report nothing you cannot see.",
+    "prohibition": "Do not report any number, distance, size, ratio or coordinate. Those are measured elsewhere and a number from you is discarded. Name what you see and where it is.",
+    "weight": 0.7,
+    "why": "hierarchy, grouping and does-this-make-sense are page-global and structurally unreachable from a crop"
+   },
+   "model_calls": 1
+  }
+ }
+}

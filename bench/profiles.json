@@ -1,0 +1,117 @@
+{
+  "_doc": [
+    "Per-app rule weightings. One review harness, three different problems --",
+    "reso-landing-app (Next 14, purchased template) is largely a marketing-aesthetics",
+    "problem; reso-management-app (Next 16, React 19, Tailwind 4) is mostly",
+    "design-system conformance, where the deterministic layer does nearly all the",
+    "work; reso-web-app (Next 13) sits between.",
+    "",
+    "WEIGHT SEMANTICS, and the one direction a weight may not move:",
+    "  0.0        SUPPRESSED. The rule does not appear in this app's report at all.",
+    "             Reserved for rules whose findings are structurally unactionable",
+    "             there -- token drift inside a template nobody on the team authored",
+    "             is a true statement and a dead letter, and a re-reported true",
+    "             finding spends the same credibility as a wrong one.",
+    "  0 < w < 1  DEMOTED. Reported, one severity rung down, ordered below full-weight",
+    "             findings.",
+    "  1.0        Reported at the severity the rule itself assigned.",
+    "A weight may LOWER a severity and may never RAISE one. The rule that measured the",
+    "defect stays the authority on how bad it is; a profile only says how much this app",
+    "intends to act on it. Without that asymmetry a weighting file becomes a second,",
+    "un-measured severity model competing with the first.",
+    "",
+    "tokens_authoritative=false demotes token conformance from an assertion to an",
+    "ABSTENTION, so it routes to the judge instead of failing. This is not a",
+    "preference: PIPELINE_SPEC 1.0 rules that token conformance must abstain rather",
+    "than FAIL wherever the winning declaration came from a token-map-less engine, and",
+    "Tailwind 4 ships no token map. Engaged mechanically whenever a profile declares",
+    "it, so an app with no palette to conform to cannot be reported as non-conformant.",
+    "",
+    "gestalt is the one blind whole-frame model call per page. It is advisory triage,",
+    "never a gate -- the June 2026 campaign ratified taste-stays-human, and nothing in",
+    "this file may promote a judgement finding into a pass/fail."
+  ],
+
+  "default": {
+    "problem": "unweighted -- every rule at the severity it assigned itself",
+    "tokens_authoritative": true,
+    "rules": {},
+    "gestalt": { "enabled": true, "weight": 1.0 }
+  },
+
+  "reso-landing-app": {
+    "problem": "marketing aesthetics",
+    "why": [
+      "Next 14, purchased template. The team did not author its design system and will",
+      "not refactor it, so conformance findings against it are unactionable by",
+      "construction. What actually decides this app is whether the first second of",
+      "attention lands where the page intends -- which is the one thing no rule here",
+      "can measure and the blind gestalt call can."
+    ],
+    "tokens_authoritative": true,
+    "rules": {
+      "token-drift": 0.0,
+      "grid-violation": 0.0,
+      "type-scale": 0.3,
+      "spacing-rhythm": 0.5,
+      "misalignment": 0.5,
+      "contrast": 1.0,
+      "contrast-indeterminate": 1.0,
+      "overflow": 1.0,
+      "touch-target": 1.0,
+      "xcheck-zero-ink": 1.0,
+      "xcheck-contrast-varies": 1.0
+    },
+    "gestalt": { "enabled": true, "weight": 1.0 }
+  },
+
+  "reso-management-app": {
+    "problem": "design-system conformance",
+    "why": [
+      "Next 16, React 19, Tailwind 4 -- an app the team owns end to end, where a token",
+      "or grid deviation is a real bug with a real edit site. The deterministic layer",
+      "does nearly all the work here, so the model's share is small and stays advisory.",
+      "Tailwind 4 ships no token map, so colour/radius conformance abstains rather than",
+      "asserting a violation against a palette it cannot see."
+    ],
+    "tokens_authoritative": false,
+    "rules": {
+      "token-drift": 1.0,
+      "grid-violation": 1.0,
+      "type-scale": 1.0,
+      "spacing-rhythm": 1.0,
+      "misalignment": 1.0,
+      "contrast": 1.0,
+      "contrast-indeterminate": 1.0,
+      "overflow": 1.0,
+      "touch-target": 1.0,
+      "xcheck-zero-ink": 1.0,
+      "xcheck-contrast-varies": 1.0
+    },
+    "gestalt": { "enabled": true, "weight": 0.4 }
+  },
+
+  "reso-web-app": {
+    "problem": "between the two",
+    "why": [
+      "Next 13, partly team-authored and partly inherited. Conformance findings are",
+      "actionable often enough to report and not reliably enough to lead with, so they",
+      "are demoted rather than suppressed."
+    ],
+    "tokens_authoritative": true,
+    "rules": {
+      "token-drift": 0.6,
+      "grid-violation": 0.6,
+      "type-scale": 0.6,
+      "spacing-rhythm": 0.8,
+      "misalignment": 0.8,
+      "contrast": 1.0,
+      "contrast-indeterminate": 1.0,
+      "overflow": 1.0,
+      "touch-target": 1.0,
+      "xcheck-zero-ink": 1.0,
+      "xcheck-contrast-varies": 1.0
+    },
+    "gestalt": { "enabled": true, "weight": 0.7 }
+  }
+}
