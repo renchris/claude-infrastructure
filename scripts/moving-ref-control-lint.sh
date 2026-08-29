@@ -93,10 +93,17 @@ in_own() {  # $1=basename · $2=own-set text · $3=1 if an own-set was supplied 
   # caller reads. Under the `set -uo pipefail` above, `grep -q` exits on the first match, `sed`
   # takes SIGPIPE, and pipefail returns 141 — a MATCH reading as NOT-IN-OWN-SCOPE, which downgrades
   # a finding this land actually wrote from BLOCKING to advisory. The three-stage form inverts far
-  # earlier than the two-stage one its siblings document: measured 2026-08-26 at 20 trials per size
-  # (load ~13), safe to 17,427 bytes and ALWAYS inverted from 23,227 — not the 64 KiB pipe buffer.
-  # LATENT here rather than live, because this own-set is CHANGED PATHS and the whole .bats corpus
-  # is 16,945 bytes of them; that ceiling is an operational quantity and it grows. Draining costs
+  # earlier than the two-stage one its siblings document — but ⚠️ the numbers this comment used to
+  # quote ("safe to 17,427 bytes and ALWAYS inverted from 23,227", 20 trials, 2026-08-26) are
+  # REFUTED and were in the wrong UNIT: re-measured 2026-08-28, 17,427 producer bytes is 0/200 at
+  # 13 B per line and 43-54/200 at 55 and 149 B, and 23,227 is RACY at 137-149/200, not ALWAYS.
+  # THE BINDING QUANTITY IS WHAT THE `sed` EMITS, not what the printf writes — 22,000 producer bytes
+  # held constant across six cells reads 279/400 wrong at 18,000 emitted and 0/400 at 15,600.
+  # Full table + method: the header of scripts/pipefail-sigpipe-lint.sh (the SSOT for these bands).
+  # LATENT here rather than live, and the RIGHT ceiling to watch is the EMITTED one: this own-set is
+  # CHANGED PATHS, the whole .bats corpus is 16,945 bytes of them, and the `sed 's:.*/::'` below
+  # reduces those paths to basenames — so what reaches grep is smaller still. That ceiling is an
+  # operational quantity and it grows; measure it after the sed, not before. Draining costs
   # nothing and keeps the same 0/1 ladder the callers read. (backlog ca97c678b18b: pipefail-sigpipe
   # -lint cannot SEE a function-final pipeline, so no ratchet would have caught this.)
   printf '%s\n' "$2" | sed 's:.*/::' | grep -xF "$1" >/dev/null

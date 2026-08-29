@@ -93,6 +93,59 @@
 # ~/.claude/autonomy/probe256-band.sh). That is precisely why a wrong claim about this axis could
 # sit in this header indefinitely: nothing in the tree can go red over it, so the comment is the
 # only carrier and the comment was the thing that was wrong.
+#
+# ── A FOURTH CORRECTION, 2026-08-28, and it is to the SIBLING ROW, which had never been re-measured
+#    at all: THE THREE-STAGE BAND IS NOT SCOPED BY BYTES, AND ITS "BYTES" ARE THE WRONG BYTES. ────
+# Seven sites in this tree publish "3-stage  printf | sed | grep -q  safe to 17,427 B · ALWAYS
+# inverted from 23,227 B" (tests/gate-ownscope-leak.bats · scripts/moving-ref-control-lint.sh ·
+# scripts/test-afunix-path-lint.sh · scripts/worktree-gc.sh · scripts/postland-verify.sh ·
+# scripts/limit-recover/lr-reset-poller.sh, twice). The correction above re-measured only the
+# 2-stage row and left that one standing. Re-measured on this box, needle on line 1, INTERLEAVED,
+# 200 trials per cell (~/.claude/autonomy/probe257-3stage.sh):
+#
+#   producer bytes held at ~17,427 — THE PUBLISHED SAFE FLOOR — and the WIDTH varied:
+#     17,420 B / 1,340 lines of 13 B    sed emits 14,740     0/200  SAFE
+#     17,435 B /   317 lines of 55 B    sed emits 16,801    43/200  RACY
+#     17,433 B /   117 lines of 149 B   sed emits 17,199    54/200  RACY
+#   producer bytes held at ~23,227 — THE PUBLISHED *ALWAYS* FLOOR — width varied:
+#     23,231 / 23,225 / 23,210 / 23,244 B at 13 / 25 / 55 / 149 B per line
+#                                       137-149 of 200 — RACY, nowhere near ALWAYS.
+#   the ALWAYS band is reached at 94,711 emitted bytes (200/200), ~4x higher than published.
+#
+#   · "safe to 17,427 B" — REFUTED. It is safe at ONE width and 43-54/200 at two others, on the
+#     same producer bytes. It was measured at the narrow one.
+#   · "ALWAYS inverted from 23,227 B" — REFUTED, and by the same n=20 artifact the 2-stage row was:
+#     a 70% rate shows 20/20 about 0.08% of the time, so that reading was not merely imprecise.
+#
+# AND THE AXIS IS NEITHER BYTES NOR WIDTH NOR LINES. THE BINDING QUANTITY IS WHAT THE STAGE FEEDING
+# grep *EMITS*. Measured with everything else nailed down — six cells of 400 lines x 55 B = 22,000
+# producer bytes EXACTLY, identical line count, identical width, varying ONLY how many bytes the
+# `sed` strips (~/.claude/autonomy/probe257-emit.sh, 400 trials per cell):
+#
+#     emits 21,200   244/400        emits 15,600     0/400
+#     emits 18,000   279/400        emits 13,200     0/400
+#     emits 16,400     1/400        emits 10,000     0/400
+#
+# Nothing about the producer differs across those six. Width was a CONFOUNDER in the width table
+# above and not a cause: a 2-byte prefix stripped from a 13-byte line is 15.4% of it and from a
+# 149-byte line 1.3%, so width and reduction ratio moved together in every earlier cell.
+#
+# 🚨 THIS TREE ALREADY KNEW, ONE FILE OVER, AND NOTHING CARRIED IT. scripts/postland-verify.sh:3359
+# (commit 11a73819c, 2026-08-27) states it outright — "THE BINDING QUANTITY IS WHAT THE LAST PRE-grep
+# STAGE EMITS, NOT WHAT THE PRODUCER WRITES" — and brackets its own transition at post-reduction
+# 12,015 B correct / 21,873 B wrong, which straddles the knee measured here. It is the ONE site of
+# the seven that got this right, and the other six went on quoting producer bytes for a further day.
+# #256's co-sign fires again: WHEN A LOCAL COMMENT HAS TO CONTRADICT THE PUBLISHED NUMBER TO BE
+# CORRECT, THE PUBLISHED NUMBER IS THE BUG. (Its RATES are not comparable to these — its last
+# pre-grep stage is `tr`, which is block-buffered rather than line-buffered, and its consumer
+# differs. The ordering and the named quantity are what agree; do not merge the tables.)
+#
+# DELIBERATE NON-RESULT, stated rather than rounded: THE KNEE IS NOT A ROUND BUFFER CONSTANT AND I
+# DID NOT ESTABLISH ONE. 16,384 was predicted and REFUSED — 16,430 emitted bytes reads 0/400 and
+# 16,960 reads 93/400, so the transition begins somewhere in between. Writing "the 16 KiB stdio
+# buffer" here would have repeated, one level down, precisely the error the corrections above
+# exist to undo: this header asserted "the 64 KiB pipe buffer" as a cause for two months and both
+# of its negative clauses were false. A bracket that is measured beats a constant that is tidy.
 # ────────────────────────────────────────────────────────────────────────────────────────────────
 #
 # A variable's contents are not bounded by inspection, so the builtin exemption cannot key on the
