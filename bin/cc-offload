@@ -374,7 +374,7 @@ cmd_setup() {
 #              transport a local peer uses. The originator never polls.
 UP_GOAL='' UP_GOAL_PROBE='' UP_NOTIFY_BACK='' UP_ITEM='' UP_UNMANAGED=0
 cmd_up() {
-  local task='' n=1 account='auto' dry='' i via="${CC_OFFLOAD_VIA:-api}"
+  local task='' n=1 account='auto' dry='' i via="${CC_OFFLOAD_VIA:-api}" _iterm=''
   while [ $# -gt 0 ]; do
     case "$1" in
       --task) task="${2:-}"; shift 2 ;;
@@ -399,8 +399,14 @@ cmd_up() {
   # extra still gets the return path. `--unmanaged` is the deliberate opt-out, and it is spelled as
   # a flag rather than as "leave it blank" so an UNMANAGED fire is a decision in the argv rather
   # than an accident of environment.
+  # `:-` FIRST, then the trim. This file runs under `set -u`, and `${ITERM_SESSION_ID##*:}` on an
+  # UNSET variable is an unbound-variable abort, not an empty string — so `up` died at this line on
+  # every host without iTerm2 (a kitty pane, a hook, launchd, a cloud VM). The line below already
+  # knew the variable could be unset and prints the right message for it; only this expansion had
+  # no default. :564 spells the same read correctly with `${VAR:+…}`, which is why the defect
+  # survived a reading — the file contains its own counter-example two hundred lines down.
   if [ "$UP_UNMANAGED" = 0 ] && [ -z "$UP_NOTIFY_BACK" ]; then
-    UP_NOTIFY_BACK="${ITERM_SESSION_ID##*:}"
+    _iterm="${ITERM_SESSION_ID:-}"; UP_NOTIFY_BACK="${_iterm##*:}"
   fi
   if [ "$UP_UNMANAGED" = 1 ]; then UP_NOTIFY_BACK=''
   elif [ -z "$UP_NOTIFY_BACK" ]; then
