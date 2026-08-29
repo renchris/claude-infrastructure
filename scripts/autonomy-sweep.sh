@@ -1227,14 +1227,23 @@ summary="${summary%,}"
 #
 # CC_SWEEP_OS_CHANNEL is a real operator switch as well as the test seam: `off` restores
 # mailbox-only-and-retry (for a box where Notification Center is not the right surface, or where a
-# desk IS being run), `on` forces the channel, `auto` (default) probes. A bare `command -v` with no
-# seam would leave the no-channel branch untestable — no suite can un-find /usr/bin/osascript via
-# PATH — which is how this whole class shipped unproven in the first place.
+# desk IS being run), `on` forces the channel, `auto` (default) probes.
+#
+# THE BINARY IS RESOLVED ONCE, ABSOLUTELY, AND THROUGH A NAMED SEAM. This file runs from launchd,
+# where the PATH is whatever the plist exports and a bare `osascript` is not reachable on it — the
+# finding `unattended-path-lint` has carried against this line, and the reason it names
+# `bin/cc-kitty-bin` / `bin/cc-claude-bin` as the precedents rather than "add an allowlist entry".
+# The old spelling probed `command -v osascript` and posted with a second bare `osascript`, so the
+# probe and the post could in principle resolve differently, and the no-channel branch was
+# untestable: a suite cannot un-find /usr/bin/osascript through PATH, and stubbing the name is a
+# test of the stub. CC_SWEEP_OSASCRIPT replaces that PATH stub with an explicit one — one name, one
+# resolution, one override — which is what makes the branch reachable at all.
+SWEEP_OSASCRIPT="${CC_SWEEP_OSASCRIPT:-/usr/bin/osascript}"
 os_channel_available() {
   case "${CC_SWEEP_OS_CHANNEL:-auto}" in
     off) return 1 ;;
     on)  return 0 ;;
-    *)   command -v osascript >/dev/null 2>&1 ;;
+    *)   command -v "$SWEEP_OSASCRIPT" >/dev/null 2>&1 ;;
   esac
 }
 
@@ -1248,7 +1257,7 @@ os_channel_available() {
 # channel is self-damping and needs no marker store of its own.
 sweep_escalate_os() { # <title-tail> <message> → 0 = POSTED · 1 = not posted
   os_channel_available || return 1
-  sweep_bounded 10 osascript - "$1" "$2" >/dev/null 2>&1 <<'OSA' || return 1
+  sweep_bounded 10 "$SWEEP_OSASCRIPT" - "$1" "$2" >/dev/null 2>&1 <<'OSA' || return 1
 on run argv
   set v to item 1 of argv
   set m to item 2 of argv
