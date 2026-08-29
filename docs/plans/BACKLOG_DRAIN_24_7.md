@@ -136,11 +136,18 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   `qos-chokepoint` 45/2. ⚠️ **No CAUSE was measured for any of them, so the manifest is UNTOUCHED**;
   its contract is *"every entry is a MEASUREMENT, not a judgement"* and a census is that work's input,
   not that work.
-  📋 **OWED LOCALLY (the ledger is unwritable from a VM, so this entry is the channel — as 2026-08-18
-  and the entry below):** `cc-backlog venue 70f0001c657b --venue local --why "plan-open pointer span:
-  the row's 4 fields fire 0 tokens; the plan's remaining sections fire all 6 refusal classes"`, then
-  `cc-backlog done 70f0001c657b --evidence "<landed sha>"` **only if** the local drain agrees this
-  link discharged it — the plan itself stays OPEN and its remaining work is unchanged.
+  📋 **OWED LOCALLY, AND THE SHA IS FILLED IN THIS TIME.** The ledger is unwritable from a VM — RE-
+  MEASURED here rather than recalled: `~/.claude/autonomy/backlog.jsonl` does not exist in the
+  container, which is `scripts/cloud-park.sh`'s own header as a fact rather than a claim. So this
+  entry is the channel, as on 2026-08-18 and in the entry below, and the two commands are runnable
+  as typed:
+
+      cc-backlog venue 70f0001c657b --venue local --why "plan-open pointer span: the row's 4 fields fire 0 tokens; the plan's remaining sections fire all 6 refusal classes"
+      cc-backlog done  70f0001c657b --evidence "09e69f02"
+
+  The `done` **only if** the local drain agrees this link discharged the row. ⚠️ **The PLAN stays
+  OPEN either way** — §3's reconciliation and §4's A/B lanes are untouched by this link, and closing
+  the row is a statement about the row, never about the plan.
 - **2026-08-29 — drain recycle #258: method 230 — EXPOSURE IS AN ORDERED LADDER: WHAT THE MIDDLE
   STAGE EMITS GOVERNS THE MIDDLE STAGE, AND THE MIDDLE STAGE GOVERNS THE PRODUCER — SO "HOW MANY
   STAGES CAN TAKE SIGPIPE" IS NOT THE STAGE COUNT.**
