@@ -329,6 +329,22 @@ says the opposite of the policy line: *"Stop treating long cached context as quo
 authorises MORE context."* Two repo documents give directly opposite advice and neither cites the
 other.
 
+✅ **FILED AND DISCHARGED 2026-08-24, landed 2026-08-27 — this paragraph's diagnosis was right and
+its status line has expired.** Backlog `564d151b76e5`, ruled **class A** (a measurement superseding
+an unvalidated composition model; no operator value fork). The lever is struck at both sites named
+above and the two documents now cite each other — ruling, arithmetic and chain of custody in
+`scaling-bottlenecks-2026-08-09.md` **§2a**, which names *this* subsection as the link that found
+the live consequence and correctly held the cache-read result to *a bound, not a point*. The ruling
+survives that caveat: the 68% premise fails under the API-list hypothesis too (~28% ⇒ the lever is
+worth 0% to ≤ +16%, never +50%). Landed `c3acc666` (the strike at both sites) and `7bb14728` (the
+same strike propagated to the lever's origin at `../scaling-bottlenecks-2026-08-09/07-accounts-api.md`
+§6.4a and to the three `jcode-due-diligence-2026-08-11` citers). Two line references above are now
+stale by construction: `:36` still resolves, but `:150` was pushed down by the §2a insertion — chase
+the section, not the number.
+
+⚠️ **Read "nobody has filed" as of 2026-08-19.** It was true for 15 days and that was the defect;
+`Z-completeness-critic.md` **G15** is the entry that converted it into a filed decision.
+
 **Bonus: the two documents reconcile numerically once you remove cache-read.**
 `scaling-bottlenecks` rank 4 says the fleet sustains **~3.9 concurrent active 24/7**. If that figure
 was priced with cache-read as 68% of cost and cache-read is ~free, the true capacity is
@@ -476,8 +492,11 @@ process-level instruments.** Recording it so no one else re-derives it and over-
 3. **Two repo documents give opposite advice on context size and neither cites the other.**
    `scaling-bottlenecks-2026-08-09.md:36,150` ("68% of quota cost is cache-read ⇒ halving context ≈
    +50% capacity", carried into standing policy) vs `exchange-rate.md:45,223` ("cache-READ is ≤1/750
-   of an output token… it authorises MORE context"). One of them is live guidance and wrong. This
-   needs a filed decision, not another measurement.
+   of an output token… it authorises MORE context"). One of them is live guidance and wrong. ~~This
+   needs a filed decision, not another measurement.~~ ✅ **ANSWERED — decision filed 2026-08-24,
+   landed 2026-08-27 (`c3acc666`, propagated `7bb14728`).** The measured rate governs;
+   `scaling-bottlenecks` was the wrong one and is struck at both sites. Ruling: that doc's **§2a**.
+   See the discharge note under §C6 above.
 4. **The finder's `RMSE=1.73` and its published 17.7 pp residual cannot both be true** (§C5).
    Whichever way that resolves, the 5-hour exchange rate should be published with an interval and a
    condition number, and the repo should pick one of the two competing fits (the `USAGE_TELEMETRY_100P`
