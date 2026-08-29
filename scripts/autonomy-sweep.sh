@@ -185,8 +185,20 @@ log_idl() { # <disposition> <extra JSON OBJECT (optional, jq-built {…}; defaul
 json_field() { # <file> <key> → value | ""
   grep -o "\"$2\":\"[^\"]*\"" "$1" 2>/dev/null | head -1 | cut -d'"' -f4
 }
-file_mtime() { # <file> → epoch seconds | 0   (BSD `stat -f`, GNU `stat -c` — never-stuck-gate idiom)
-  stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0
+file_mtime() { # <file> → epoch seconds | 0   (BSD `stat -f`, GNU `stat -c`)
+  # 🚨 VALIDATE, never chain on the exit code alone. `stat -f %m <file> || stat -c %Y <file>` looks
+  # like the portable idiom and is not one: GNU `stat -f` means "file system status", so on Linux it
+  # reads `%m` as a FILENAME, writes the real file's filesystem block to STDOUT, and *then* exits 1.
+  # The fallback runs, its epoch is appended to that block, and the caller's `$(( now - $(…) ))`
+  # dies with `File: unbound variable` — nine of this file's own suite's cases, on every Linux
+  # lander, for a helper that is correct on the box it ships to. A dialect probe must therefore test
+  # the OUTPUT, not the status. GNU first because BSD `stat` has no `-c` at all, so it cannot
+  # half-succeed the way `-f` does here.
+  local m
+  m="$(/usr/bin/stat -c %Y "$1" 2>/dev/null)"
+  case "$m" in ''|*[!0-9]*) m="$(/usr/bin/stat -f %m "$1" 2>/dev/null)" ;; esac
+  case "$m" in ''|*[!0-9]*) m=0 ;; esac
+  printf '%s' "$m"
 }
 
 # ── 0. D4 — AUTHOR-DEATH JOIN ─────────────────────────────────────────────────────────────────────
@@ -694,8 +706,12 @@ _venue_stamp="${CC_VENUE_PASS_STAMP:-$HOME/.claude/autonomy/venue-pass.stamp}"
 _venue_every="${CC_VENUE_PASS_EVERY_S:-21600}"
 if [ -x "$_cc_venue" ] && command -v python3 >/dev/null 2>&1; then
   _venue_last=0
-  [ -f "$_venue_stamp" ] && _venue_last="$(/usr/bin/stat -f %m "$_venue_stamp" 2>/dev/null \
-                                           || /usr/bin/stat -c %Y "$_venue_stamp" 2>/dev/null || echo 0)"
+  # file_mtime, not the inline `stat -f … || stat -c …` this used to spell: that chain's first
+  # operand SUCCEEDS in writing a filesystem block to stdout before failing on GNU, and the digit
+  # validator below then folds the whole thing to 0 — which reads as "the stamp is ancient" and
+  # fires an interval-gated pass on every tick. The validator was the right guard aimed one step too
+  # late (see file_mtime).
+  [ -f "$_venue_stamp" ] && _venue_last="$(file_mtime "$_venue_stamp")"
   case "${_venue_last:-}" in ''|*[!0-9]*) _venue_last=0 ;; esac
   _venue_now="$(date +%s)"
   if [ "$((_venue_now - _venue_last))" -ge "$_venue_every" ]; then
@@ -754,8 +770,7 @@ _prem_stamp="${CC_PREMISE_PASS_STAMP:-$HOME/.claude/autonomy/premise-pass.stamp}
 _prem_every="${CC_PREMISE_PASS_EVERY_S:-21600}"
 if [ -x "$_premise" ] && command -v python3 >/dev/null 2>&1; then
   _prem_last=0
-  [ -f "$_prem_stamp" ] && _prem_last="$(/usr/bin/stat -f %m "$_prem_stamp" 2>/dev/null \
-                                         || /usr/bin/stat -c %Y "$_prem_stamp" 2>/dev/null || echo 0)"
+  [ -f "$_prem_stamp" ] && _prem_last="$(file_mtime "$_prem_stamp")"   # see the venue stamp above
   case "${_prem_last:-}" in ''|*[!0-9]*) _prem_last=0 ;; esac
   _prem_now="$(date +%s)"
   if [ "$((_prem_now - _prem_last))" -ge "$_prem_every" ]; then
