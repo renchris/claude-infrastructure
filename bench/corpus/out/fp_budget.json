@@ -1,0 +1,110 @@
+{
+ "corpus": "/home/user/claude-infrastructure/bench/corpus/out",
+ "x2": false,
+ "denominators": {
+  "control_pages": 1,
+  "control_elements": 47,
+  "corpus_pages": 13,
+  "defect_pages": 12
+ },
+ "rules": {
+  "contrast": {
+   "enabled_by_default": true,
+   "control_fp": 0,
+   "control_where": [],
+   "on_target": 2,
+   "off_target": 0,
+   "off_target_where": [],
+   "pages_firing": 2
+  },
+  "contrast-indeterminate": {
+   "enabled_by_default": true,
+   "control_fp": 0,
+   "control_where": [],
+   "on_target": 1,
+   "off_target": 1,
+   "off_target_where": [
+    "contrast-on-gradient: div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)"
+   ],
+   "pages_firing": 1
+  },
+  "grid-violation": {
+   "enabled_by_default": true,
+   "control_fp": 0,
+   "control_where": [],
+   "on_target": 2,
+   "off_target": 0,
+   "off_target_where": [],
+   "pages_firing": 2
+  },
+  "misalignment": {
+   "enabled_by_default": true,
+   "control_fp": 0,
+   "control_where": [],
+   "on_target": 1,
+   "off_target": 0,
+   "off_target_where": [],
+   "pages_firing": 1
+  },
+  "overflow": {
+   "enabled_by_default": true,
+   "control_fp": 0,
+   "control_where": [],
+   "on_target": 3,
+   "off_target": 0,
+   "off_target_where": [],
+   "pages_firing": 1
+  },
+  "spacing-rhythm": {
+   "enabled_by_default": true,
+   "control_fp": 0,
+   "control_where": [],
+   "on_target": 1,
+   "off_target": 0,
+   "off_target_where": [],
+   "pages_firing": 1
+  },
+  "token-drift": {
+   "enabled_by_default": true,
+   "control_fp": 0,
+   "control_where": [],
+   "on_target": 3,
+   "off_target": 0,
+   "off_target_where": [],
+   "pages_firing": 3
+  },
+  "touch-target": {
+   "enabled_by_default": true,
+   "control_fp": 0,
+   "control_where": [],
+   "on_target": 1,
+   "off_target": 0,
+   "off_target_where": [],
+   "pages_firing": 1
+  },
+  "type-scale": {
+   "enabled_by_default": true,
+   "control_fp": 0,
+   "control_where": [],
+   "on_target": 1,
+   "off_target": 0,
+   "off_target_where": [],
+   "pages_firing": 1
+  },
+  "xcheck-contrast-varies": {
+   "enabled_by_default": true,
+   "control_fp": 0,
+   "control_where": [],
+   "on_target": 1,
+   "off_target": 1,
+   "off_target_where": [
+    "contrast-on-gradient: div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)"
+   ],
+   "pages_firing": 1
+  }
+ },
+ "unregistered_rules": [],
+ "control_findings": 0,
+ "breaches": [],
+ "verdict": "CLEAN"
+}
