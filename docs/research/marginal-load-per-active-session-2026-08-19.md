@@ -263,6 +263,44 @@ suite, `bash -n` clean, `gate-select.sh lint` clean, `test-hermeticity-lint.sh` 
 the driver end-to-end against the real sampler on this host — a 2 s window correctly reaching
 NO-DATA and quoting nothing. **§6's run still needs the box; nothing here measures a coefficient.**
 
+### 6c · The run's own first statement was untested, and the item is now operator-gated (2026-08-29)
+
+Two things closed this item's off-box half for good, and neither of them is a coefficient.
+
+**The Darwin arm of `read_load1` was unreachable, not merely uncovered.** Every row §6's run records
+begins there, and the reader has two branches: `/proc/loadavg` on Linux, `sysctl -n vm.loadavg` on
+Darwin. `/proc/loadavg` is readable on every host this corpus runs on, so the first branch always won
+the `if` and **no test could enter the second** — which is the only branch the remaining run
+executes, and the only platform-specific parsing in the file. Darwin prints `{ 1.23 4.56 7.89 }`, so
+the value is field **two**; reading field one takes the brace, fails the numeric guard, and drops
+*every* row. The visible result of that would be the driver exiting 3 with *"the sampler recorded
+nothing"* after burning the first hour of the one command whose whole promise is walk-away. This is
+§4's own `ps -axM` lesson — *an untested parser inside a control is how a control becomes
+decorative* — aimed at the reader instead of the census, and `CC_MARG_PS_OVERRIDE` already existed to
+prevent exactly it for the attribution walk while the load reader had no equivalent seam.
+`CC_MARG_PROC_LOADAVG` is that seam (default `/proc/loadavg`, unchanged on the box, and the default
+is itself pinned by a test so a hook can never silently redirect what the sampler reads). Three rows
+now exercise the real function: the `{ … }` format parses to field 2; an erroring `sysctl` and a
+non-numeric answer are both **refused** rather than coerced to a load of 0, per §4's *"a zero load is
+a measurement, an unreadable one is not"*. RED-proved by mutating the parse to field 1 — the format
+row fails and no other test moves. Suites: **18/18 + 15/15**.
+
+**What remains is operator-only, and is recorded here because a cloud VM has no other channel.**
+The instrument is ready and nothing off-box can advance the item further: §6 needs macOS, the
+10-core box, and a live dispatch wave (C3 wants the ACTIVE count at ≥3 levels, and §6 forbids
+synthesising them by pausing the box). One command, resumable, walk away:
+
+```sh
+bash scripts/capacity-marginal-run.sh
+```
+
+Note for whoever dispatches this next: `cc-backlog block 193ae8ddce72` **exits 0 without doing
+anything** from a cloud VM — the store is `~/.claude/autonomy/backlog.jsonl`, which exists only on
+the operator's box (`cloud-land-arm-step-2026-08-25.md` §6.6, and `cc-notify --role desk` fails the
+same way). So the park is not expressible in the ledger from here and is expressed in this
+paragraph instead. **Re-dispatching this item to a cloud worker cannot advance it**; it needs the
+box, and then the close-out the driver prints on PASS.
+
 ---
 
 ## 7 · What this does not do
