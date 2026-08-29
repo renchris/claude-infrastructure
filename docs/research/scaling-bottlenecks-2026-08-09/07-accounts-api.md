@@ -112,7 +112,11 @@ cap is the budget. Any policy that optimises the 5h number is optimising the wro
 | per-turn context (in+cw+cr) | 199,628 tok | — | — | — |
 
 **Cost composition: cache-read 68.0% · cache-write 18.0% · output 14.0% · fresh input 0.0%.**
-This is the single most actionable number in the file — see §6.4.
+~~This is the single most actionable number in the file — see §6.4.~~ 🚨 **Read this as what it is:
+an API-list `$eq` split of one weekly window.** It is NOT a share of the weekly limit, and §6.4's
+attempt to spend it as one is **STRUCK — see §6.4a.** Fitted against the limit, Opus-5 cache-read
+comes out at **0.000 pp/Mtok** — a bound rather than a point (it is not separately identified from
+output), but the 68% premise fails under the rival hypothesis too.
 
 Model mix by $eq this weekly window: `next` opus 426 / sonnet 1.5 · `next4` opus 227 · `next3`
 opus 2104 / **fable 80.5** / haiku 0.0 · `next2` opus 406 / fable 1.0 / haiku 0.3. Effectively an
@@ -287,15 +291,57 @@ constraints on top:
   relogin or account rebuild that clusters the resets would convert four independent budgets into
   one synchronized one.
 
-### 6.4 · The largest quota lever is context, not accounts
+### 6.4 · ~~The largest quota lever is context, not accounts~~ 🚨 STRUCK 2026-08-29 — REFUTED
 
-**68% of every quota dollar is cache-read**, and cache-read scales linearly with per-turn context
+> 🚨 **This subsection is the ORIGIN of the "halving context ≈ +50% capacity" lever, and the lever
+> is refuted.** The ruling is `../scaling-bottlenecks-2026-08-09.md` **§2a** (class A, 2026-08-24);
+> the measurement is `../usage-telemetry-100p-2026-08-16/exchange-rate.md` finding #8 / R1. The
+> ruling struck the parent doc's rows but never reached this file, which every other site cites as
+> its source — so the lever stayed live here for five more days. See §6.4a below for what replaces it.
+
+~~**68% of every quota dollar is cache-read**, and cache-read scales linearly with per-turn context
 (median **199,628 tokens**). Halving working context ≈ **−34% quota draw ≈ +50% sustainable active
-sessions** — a bigger multiplier than a fifth account (+25%). CLAUDE.md § Context Stewardship's
-recycle thresholds are therefore a **capacity policy**, not only a quality policy, and `/handoff`
-at 35% idle fill is worth real active-hours. Second lever: **model down-tier**. Sonnet 5 is 0.6× Opus
+sessions** — a bigger multiplier than a fifth account (+25%).~~ CLAUDE.md § Context Stewardship's
+recycle thresholds are **a quality policy, not a capacity policy** — they are argued from the hard
+`Prompt is too long` ceiling and decision rot, and `/handoff` at 35% idle fill is worth real
+*judgment*, not real active-hours. Second lever (**this one stands**): **model down-tier**. Sonnet 5 is 0.6× Opus
 per token (1.67× the active-hours); Haiku 4.5 is 0.2× (5×). The fleet is ~99% Opus by $eq today,
 so this lever is entirely unspent.
+
+### 6.4a · CORRECTION 2026-08-29 — what the meter says instead
+
+§6.4 priced context from a **composition model** — the §3 `$eq` split (cache-read 68.0% /
+cache-write 18.0% / output 14.0%) — and then treated a share of *dollar-equivalent* cost as if it
+were a share of the *weekly limit*. Those are different meters, and the second was never measured
+here. It has been measured since.
+
+| | §6.4 (composition, 2026-08-09) | `exchange-rate.md` (meter, 2026-08-16) |
+|---|---|---|
+| what was priced | share of API-list `$eq` | pp drawn against the weekly limit |
+| method | one weekly window, arithmetic split | NNLS over 265 ≥2 h intervals / 4 accounts, R² = 0.82; replicated on the disjoint 5-hour bucket (128 intervals) |
+| Opus-5 cache-read | 68% of cost | **0.000 pp/Mtok** (p95 ≤ 0.0017 over ≥590 M tokens) — the fit *prefers* zero; finding #8 is labelled INFERRED, not MEASURED, precisely because `opus_cr` is not separately identified from `opus_out` |
+| what is expensive | re-reading context | **emitting** — output 1.282 pp/Mtok, cache-creation 0.105 |
+| the prescription | halve context ⇒ +50% active | *"it authorises **more** context"* |
+
+**The lever is worth 0% to ≤ +16%, never +50%** — and ≤ +16% is an upper bound under the *rival*
+hypothesis, not a live estimate. Per §2a: the cache-read coefficient is a bound rather than a point
+(`corr(out,cr)=0.936`, `cond(X)=23,556`; the free and API-list hypotheses fit at R² 0.813 vs 0.797),
+but **the 68% premise fails under both** — priced at API list, account `next`'s realised 80 pp cycle
+puts cache-read at ~28% of dollar cost, not 68%. Halving the window also does not halve
+cache-creation, which is the class that *is* charged, so even the ≤ +16% is generous.
+
+**What this does NOT touch.** §3's composition figures are left standing as what they are — an
+API-list `$eq` split of one window. The defect was never the arithmetic; it was carrying it across
+to the weekly limit without a measurement. The **down-tier** lever above is untouched (it reduces
+*output*, the class the meter actually charges). And the fleet's live policy layer was already
+correct: `hooks/cache-expiry-warning.sh` (corrected 2026-08-16) tells sessions in so many words that
+*"shrinking the context does NOT save quota"*.
+
+**Chain of custody.** `orchestration-units-2026-08-19.md` N7 (REFUTED, *"needs a filed decision"*) →
+`orchestration-units-2026-08-19/A6-VERIFY-quota-economics.md` §C6 (bound-not-a-point) →
+`Z-completeness-critic.md` G15 (nothing was filed) → `../scaling-bottlenecks-2026-08-09.md` §2a
+(filed 2026-08-24, backlog `564d151b76e5`) → this section + the `jcode-due-diligence-2026-08-11`
+cluster (2026-08-29, the sites §2a did not reach).
 
 ### 6.5 · Fail-open directions to watch (both currently safe)
 
@@ -333,9 +379,12 @@ so this lever is entirely unspent.
    10 s timeout at 150 sessions. Measured — it does not (§6.5). The scaling risk there is the
    fail-open *direction*, not the budget.
 5. **Axis I nearly assumed irrelevant:** per-minute rate limits. They are irrelevant *at the design
-   point* (§5b) — but only because cache reads are ITPM-exempt while being 68% of quota cost. That
+   point* (§5b) — but only because cache reads are ITPM-exempt while being ~~68% of quota cost~~
+   **(STRUCK 2026-08-29 — §6.4a: they are 0.000 pp/Mtok against the weekly limit)**. That
    asymmetry is the reason quota and rate-limits give opposite answers, and it is the single fact
-   that makes 150 resident affordable at all.
+   that makes 150 resident affordable at all. **The conclusion survives the correction a fortiori:**
+   cache reads are ITPM-exempt *and* ~free against the weekly limit, so 150 resident is more
+   affordable than this row claimed, not less.
 
 ---
 

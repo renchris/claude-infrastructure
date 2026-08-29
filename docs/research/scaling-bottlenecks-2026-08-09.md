@@ -105,9 +105,39 @@ it cannot revive +50%, which both hypotheses already exclude.
 
 **Downstream carriers of the struck figure**, corrected or annotated with this block:
 `memory-econ-rearchitecture-2026-08-10/prior-art.md` row 55/56 (a LIVE-status ledger — flipped).
-Left as dated audit records of what was believed on their date, not corrected:
+~~Left as dated audit records of what was believed on their date, not corrected:
 `jcode-due-diligence-2026-08-11.md:53`, `jcode-due-diligence-2026-08-11/bottleneck-audit.md:73`,
-`jcode-due-diligence-2026-08-11/ranked-levers.md:36,:54`.
+`jcode-due-diligence-2026-08-11/ranked-levers.md:36,:54`.~~
+
+### 2b · SUPERSEDED 2026-08-29 — the "dated audit records" disposition was wrong, and it missed the origin
+
+The struck sentence above was a deliberate call, and it is **reversed**. Two defects:
+
+1. **It missed the ORIGIN.** The lever was not born in this file. It was born in
+   `scaling-bottlenecks-2026-08-09/07-accounts-api.md` **§6.4**, *"The largest quota lever is context,
+   not accounts"* — the subdoc that produced the 68/18/14 composition and that every other carrier,
+   including §2a's own row 4, cites as its source. §2a struck the derived rows and left the premise
+   generating them untouched, so a reader following the citation trail arrived at live, unqualified
+   guidance. It is now struck at source: **§6.4 + the new §6.4a**, with §3's composition line
+   relabelled as what it is (an API-list `$eq` split, never a share of the weekly limit).
+2. **"Dated audit record" was the wrong classification for prescriptive text.** It fits a verdict
+   row recording what was believed (`jcode-due-diligence-2026-08-11.md:53`). It does **not** fit a
+   **ranked-lever table that tells a reader what to do**: `ranked-levers.md:36` ranked L7 **#1** and
+   said *"Do this first, whatever is decided about jcode"*, justified by the now-dead *"only lever
+   that moves both axes"*; and `:108` issued a live **stop-work order** — *"nothing else in this
+   ranking is worth building until it is settled"* — resting on a 5-minute cache-TTL figure that was
+   `CLAIMED` by one file and measured false five days later (~3600 s; `hooks/cache-expiry-warning.sh:6-16`).
+   A recommendation is not made inert by having a date on it.
+
+Corrected 2026-08-29, all by strikethrough-plus-dated-note so every original claim stays readable:
+`07-accounts-api.md` §3, §6.4, §6.4a, §7 · `jcode-due-diligence-2026-08-11.md:53, :129 (+ table
+note), :258` · `jcode-due-diligence-2026-08-11/bottleneck-audit.md:73` ·
+`jcode-due-diligence-2026-08-11/ranked-levers.md:36, :54, :102, :108`.
+
+**Not re-scored, and named rather than done:** whether L7 still ranks #1 on the resident axis alone
+once its quota half is removed. Its score `(18 × 0.95)/1 = 17.1` uses an `18` the row's own
+arithmetic (`148 − 132 = 16`) does not derive, so a re-score must first recover what the 18 was.
+That table now carries a provisional-ranking banner.
 
 ---
 
