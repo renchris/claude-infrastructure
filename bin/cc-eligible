@@ -207,6 +207,43 @@ BOX = [
     ("versioned-config-dir", r"\.claude-(?:\d+|next\d*|secondary|tertiary)\b"),  # 7d8e44dd5822
     ("installed-binaries", r"\binstalled\b.{0,40}\bbinar(?:y|ies)\b|\bbinar(?:y|ies)\b.{0,20}\binstalled\b"),  # 7d8e44dd5822
     ("cc-binary-version", r"\b2\.1\.\d{3}\b"),            # bbad96d163ab
+    # ── FOUND BY BEING THE BURNED SLOT (2026-08-29) ────────────────────────────────────────────
+    # THE LIVE FLEET AS A POPULATION TO MEASURE. Every entry above names a THING on this box — a
+    # daemon, a pane, a binary, a sysctl. This names the box's own RUNNING POPULATION, which is the
+    # denominator half of every capacity item in this repo, and it was missing: a VM has an `active
+    # session` count too (its own, always 1, always meaningless), so the failure mode is not "the
+    # worker cannot read it" but the worse one this file's header names — it reads a plausible-looking
+    # empty version and improvises against it.
+    #
+    # THE MISS THIS CLOSES, and the measurement is this dispatch. Backlog `193ae8ddce72` — "Measure
+    # marginal load per ACTIVE session … sampler must pass a correlation control" — spells no word in
+    # any list above: no launchd, no sysctl, no pane, no darwin. `cc-eligible why` on its real span
+    # returns `verdict=eligible / refused: (nothing fired)`, so it is dispatched to a Linux microVM
+    # that has no Darwin, no 10-core box and no fleet, and where the item's own DoD ref already says
+    # in writing that nothing off-box can advance it (marginal-load-per-active-session-2026-08-19.md
+    # §6c, landed 2026-08-29T16:44Z — and a cloud worker was dispatched anyway 7 h later, which is
+    # the content proof that a park recorded in PROSE is behind the same diode this whole file exists
+    # to close). That worker cannot even park the item: `cc-backlog block` exits 0 doing nothing off
+    # box, because the store is `~/.claude/autonomy/backlog.jsonl`. So the item returns to the wave
+    # `open` and is re-fired — not one burned slot per dispatch but one FOREVER, which is a strictly
+    # worse shape than `wt-slug` and `flyctl` were added for. Refused here, it counts SKIPPED with
+    # zero spawn and stays claimable LOCALLY, which is the one venue §6's run can happen in.
+    #
+    # MEASURED, and the width is the narrow one. Over docs/**/*.md `\bactive sessions?\b` matches 80
+    # lines and every one of them is this box's live fleet; the nearest thing to a second meaning is
+    # jcode's `/active` sessions manager, which enumerates live Claude Code processes out of
+    # `~/.claude/sessions/<pid>.json` — the same population under another product's name, not a
+    # second sense. The wider spellings were TESTED AND REJECTED for the tap's sake, exactly as bare
+    # `\bfly\b` was below: `\bcores?\b` 819 lines, `\bthe fleet\b` 650, `\brunnable\b` 319,
+    # `\bsession count\b` 117. `\bmarginal load\b` (2 lines) was rejected from the other side — it
+    # matches this title and essentially nothing else, i.e. it is a denylist of one item wearing a
+    # pattern's clothes, which is the "respell the same title" near-miss `wt-slug` already names.
+    #
+    # DELIBERATELY OUT, despite being clean: `\bload ?average\b|\bloadavg\b` (162 lines, all of them
+    # readings of this kernel). It would not have closed this miss — the item's span never says the
+    # word — so adding it is a hunch by this file's own rule, and a hunch is what costs the tap. It
+    # belongs to the item that exposes it, if one ever does.
+    ("active-session", r"\bactive sessions?\b"),          # 193ae8ddce72
 ]
 
 OFFBOX_LANE = [

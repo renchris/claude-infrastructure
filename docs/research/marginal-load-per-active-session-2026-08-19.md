@@ -301,6 +301,62 @@ same way). So the park is not expressible in the ledger from here and is express
 paragraph instead. **Re-dispatching this item to a cloud worker cannot advance it**; it needs the
 box, and then the close-out the driver prints on PASS.
 
+### 6d · The park is now MECHANICAL — §6c's note was behind a diode, and the next dispatch proved it (2026-08-29)
+
+§6c ends by asking whoever dispatches this item next to not dispatch it. **That request was made to
+a reader who does not exist.** `cc-dispatch` selects on the ledger's `status`, never on a paragraph,
+so the note went where every conclusion in this repo goes to die — into a store nothing re-reads at
+the moment of the decision. The proof arrived in seven hours: `278bcf72` landed §6c at
+**16:44Z**, and at **23:35Z** a cloud worker was fired at this item again. That worker is this
+paragraph's author, and the shape it landed in is worse than a burned slot per dispatch:
+
+1. the wave fires the item at a Linux microVM — no Darwin, no 10-core box, no fleet;
+2. the VM cannot do §6's run, **and cannot park it either** — `cc-backlog block` exits 0 doing
+   nothing off-box, because the store is on the operator's disk;
+3. so the item folds back to `open` and is re-selected by the next wave. **Not one burned slot, one
+   forever.**
+
+**The fix is the gate that already exists for exactly this.** `bin/cc-eligible` is the predicate
+`cc-backlog claim --venue cloud` runs at claim time — the one place a venue refusal is read rather
+than merely written — and this item read `verdict=eligible / refused: (nothing fired)` under it.
+It spells no listed word: no `launchd`, no `sysctl`, no `pane`, no `darwin`. What it spells is the
+box's **live fleet as a population to measure** — *"per ACTIVE session"* — a class the list did not
+have, and the exact structure of the two misses that file already records (`4abcbbbbc997` naming its
+worktree only as `wt-bsm-gap`, `96c57c1c4a6c` naming only `flyctl`).
+
+One spelling now closes it, measured over `docs/**/*.md` before adding, per that file's own no-hunch
+rule: `\bactive sessions?\b` — 80 lines, every one this box's live fleet. `\bcores?\b` (819),
+`\bthe fleet\b` (650), `\brunnable\b` (319) and `\bsession count\b` (117) were rejected as too wide
+for the tap; `\bmarginal load\b` (2) was rejected from the other side as a denylist of one title;
+and `\bload ?average\b|\bloadavg\b` (162, all clean) was left **out** because it would not have
+closed this miss, which makes it a hunch. The word boundary is load-bearing in the other direction
+too — this repo says `interactive session` or `inactive session` on 64 lines, and a substring
+pattern would strand all of them off-box.
+
+The refusal is not a park and is better than one: `cc-dispatch` counts it **SKIPPED with zero
+spawn**, and the item **stays claimable LOCALLY** — which is the only venue §6's run can happen in
+anyway. Nothing about its readiness changed.
+
+**What remains is still exactly §6 and nothing else**, unchanged by any of this: one ~1 h window on
+the 10-core Darwin box during a dispatch wave.
+
+```sh
+bash scripts/capacity-marginal-run.sh
+```
+
+Verified off-box: `bats tests/cc-eligible.bats tests/cc-eligible-history.bats
+tests/cc-eligible-cross-repo.bats tests/cc-backlog-venue.bats tests/cc-dispatch-venue-only.bats`
+**97/97**, both new rows RED-proved against the real predicate — deleting the entry fails the
+refusal and moves nothing else; relaxing `\bactive` to a substring fails the lookalike control.
+`shellcheck` clean, `py_compile` clean, `gate-select.sh lint` clean, `test-hermeticity-lint.sh`
+clean (556 suites, 0 new leaks), `bats-testname-eval-lint` / `bats-kill-guard-lint` /
+`test-walltime-lint` clean.
+
+**The rule this leaves behind**, and it is the sibling of the one `gc-cpu-vs-session-ceiling-2026-08-18.md`
+§3 paid nineteen commits for: *a park that only a human would read is not a park.* When the venue
+is the blocker, put the refusal in the predicate the dispatcher consults, not in the document the
+dispatcher's worker reads after it has already been fired.
+
 ---
 
 ## 7 · What this does not do
