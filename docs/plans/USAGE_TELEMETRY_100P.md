@@ -1610,7 +1610,9 @@ windows/week, carrying the fleet wall rate 1.72% → 2.20%.
 
 ### §5.7 Implementation record — what actually landed, and where it deviated from the spec
 
-Wave 1 = **S1 + S2 + S3 only**. S4–S7 are unbuilt and unchanged; S5 still gates S6.
+Wave 1 = **S1 + S2 + S3**. Wave 2 (2026-08-29) = **S4 + S5 + S7**. **S6 is the only unbuilt item**,
+and it is not unbuilt for want of time — S5 gates it on a reading of the *live* series, which is an
+operator step (below).
 
 #### S1 · data fixes — LANDED
 
@@ -1901,14 +1903,48 @@ bias is a property of the **live** series, not of a fixture. The harness now exi
 falsifiable; the reading is an operator step on the machine that holds
 `~/.claude/logs/account-utilization.jsonl`. See § S6 below.
 
+#### S6 · M3b `wk_strand_alarm` — NOT BUILT, and the gate is an OPERATOR step
+
+**This is a refusal, not an omission.** §5.2 S6 opens *"Do not build this until S5 has run and been
+read. If the horizon-stratified bias at the 12 h bucket is not near zero, this alarm is not
+shippable at any parameter setting."* S5 now exists and is falsifiable; what does not exist is the
+**reading**, and it cannot be manufactured here. The bias is a property of the live
+`~/.claude/logs/account-utilization.jsonl` — 4 accounts, ~3.6 MB, growing ~3.7 completed weekly
+windows per week — and that file lives on the operator's machine. A fixture cannot substitute for
+it: a synthetic series would be scored by a harness whose entire purpose is to be *falsifiable by
+real data*, which is the same tautology one level up.
+
+**The step, exactly:**
+
+```
+claude-accounts --strand-score --tail-h 2000
+```
+
+**How to read the answer, decided in advance so the result cannot be argued into shippability:**
+
+| the 12 h bucket reads | then |
+|---|---|
+| `n ≥ 4` and `\|bias\|` small against the `FLOOR = 4 pp` the alarm would fire on | S6 ships at `FLOOR = 4 pp`, `DWELL = 2 h`, `HORIZON_CAP = 12 h` — the 504-config sweep's clean region, every clean setting of which caps the horizon at ≤ 12 h |
+| `\|bias\|` comparable to or larger than 4 pp | **S6 does not ship at any parameter setting**, and §5.6 Q1 becomes the priority |
+| `n < 4` | not enough closed windows yet; re-run after the next resets. `n` grows ~3.7/week |
+
+**Do not re-derive this gate as "unbuilt work" on a later pass.** The remaining item on this plan
+is a measurement, not an implementation.
+
 #### Acceptance status against §5.4
 
 | command | status |
 |---|---|
-| the bats suites (roll-key · util-tail · strand · burst · core) | **111/111 green**, every case shown RED at the commit before its fix |
-| `claude-accounts --readout` renders the drain block for all four accounts | **yes** — see above |
+| the bats suites (roll-key · util-tail · strand · **strand-score** · burst · core) | **148/148 green** after wave 2, every new case shown RED against the binary immediately before its fix (13 across S4/S5/S7) |
+| `claude-accounts --readout` renders the drain block for all four accounts | **yes** — wave 1; wave 2 adds the start-time clause and the K name to the same block |
 | `claude-accounts --readout \| grep -c 'strand'` → 3 or 4 | **4** |
-| `claude-accounts --strand-score` | **not in this wave** — that flag is S5 |
+| `claude-accounts --strand-score` | **built and green** (S5). The live *reading* is the operator step above — the flag's acceptance is that the short buckets carry non-zero `n` and a bias that COULD be non-zero, which SS-1/SS-5 pin |
 
 ⚠️ `bash tests/run.sh …`, named in §5.4, **does not exist in this repo**. The suites are run with
 `bats tests/<name>.bats`; `scripts/ship-land.sh` selects and runs them at the land.
+
+⚠️ **Four cases in `tests/claude-accounts-core.bats` are red on Linux and were red before wave 2**
+— `--relogin-info: rejects …` and the three `--login-status` cases. They shell out to
+`/usr/bin/security` (the macOS keychain) through `read_creds`, which does not exist off macOS.
+Unrelated to anything in wave 2 and unchanged by it; counted out of the 148 above. Named here so a
+later session does not re-diagnose them as a regression.
