@@ -86,6 +86,131 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-28 — drain recycle #257: method 229 — WHEN A PIPELINE HAS AN INTERMEDIATE STAGE, THE
+  GOVERNING QUANTITY IS WHAT THAT STAGE *EMITS*, NOT WHAT THE PRODUCER WRITES — AND A CORRECTION
+  THAT RE-MEASURES ONE ROW OF A TABLE LEAVES THE ROW BESIDE IT WEARING ITS OLD SCOPE.**
+  🚨 **THE FINDING.** #256 corrected the two-stage SIGPIPE row and landed the frame a band needs —
+  (bytes, LINE WIDTH, CONSUMER, TRIAL COUNT), and *"a band quoted without all four is not a band"*.
+  It re-measured only that row. **The three-stage row one line below it had never been re-measured
+  at all, and it is published in SEVEN places** — `tests/gate-ownscope-leak.bats:479` ·
+  `scripts/moving-ref-control-lint.sh:97` · `scripts/test-afunix-path-lint.sh:95` ·
+  `scripts/worktree-gc.sh:1320` · `scripts/postland-verify.sh:3364` ·
+  `scripts/limit-recover/lr-reset-poller.sh:604`, twice — as
+  *"3-stage `printf | sed | grep -q` safe to 17,427 B · ALWAYS inverted from 23,227 B"*.
+  **Both halves are false, and the second is false in its UNIT.**
+  🚨 **REFUTATION 1 — "safe to 17,427 B" HOLDS AT ONE LINE WIDTH.** Producer bytes held at the
+  published floor, 200 trials per cell, interleaved in one process:
+  **17,420 B over 1,340 lines of 13 B → `sed` emits 14,740 → 0/200 SAFE** ·
+  **17,435 B over 317 lines of 55 B → emits 16,801 → 43/200 RACY** ·
+  **17,433 B over 117 lines of 149 B → emits 17,199 → 54/200 RACY.**
+  🚨 **REFUTATION 2 — "ALWAYS inverted from 23,227 B" IS RACY, 137-149 OF 200 ACROSS FOUR WIDTHS.**
+  The ALWAYS band needs **~94,711 emitted bytes**, ~4x higher. **That is #256's n=20 artifact a
+  second time, on the sibling row:** at a 70% rate, twenty trials show 20/20 about **0.08%** of the
+  time — so that reading was not merely imprecise, it was close to unreachable by chance.
+  🚨 **AND THE AXIS IS NEITHER BYTES NOR WIDTH NOR LINES.** Six cells of **400 lines x 55 B =
+  22,000 producer bytes EXACTLY**, identical line count, identical width, varying ONLY how many
+  bytes the `sed` strips, 400 trials each: **emits 21,200 → 244/400 · 18,000 → 279/400 · 16,400 →
+  1/400 · 15,600 → 0/400 · 13,200 → 0/400 · 10,000 → 0/400.** Nothing about the producer differs
+  across those six. ⚠️ **WIDTH WAS A CONFOUNDER IN THE TABLE ABOVE IT, NOT A CAUSE:** a 2-byte
+  prefix stripped from a 13-byte line is 15.4% of it and from a 149-byte line 1.3%, so width and
+  reduction ratio moved together in every earlier cell.
+  🚨 **MY OWN WRITTEN HYPOTHESIS WAS THAT *LINES* GOVERN, AND MY OWN DECORRELATING ARM REFUTED IT —
+  WHICH IS HOW THE REDUCTION RATIO SURFACED.** 400 lines is **0/200 at 13 B per line and 141/200 at
+  55 B**. `predict257-3stage.v1-REFUSED.txt` sits on disk beside its replacement; **the rc-93 gate
+  refused TWELVE predictions on the first probe and TWO more on the second, and the twelve are what
+  made me put every cell in one table sorted by emitted bytes.** Sorted that way it is monotone with
+  no inversion; sorted by producer bytes or by lines it is not monotone at all.
+  🚨 **AND THE TREE ALREADY KNEW, ONE FILE OVER, AND NOTHING CARRIED IT.**
+  `scripts/postland-verify.sh:3359` (commit `11a73819c`, 2026-08-27) states it outright —
+  *"THE BINDING QUANTITY IS WHAT THE LAST PRE-grep STAGE EMITS, NOT WHAT THE PRODUCER WRITES"* —
+  and brackets its own transition at post-reduction **12,015 B correct / 21,873 B wrong**, which
+  straddles the knee measured here. **It is the ONE site of the seven that got this right, and the
+  other six went on quoting producer bytes for a further day.** ⚠️ **#256's co-sign fires a second
+  time: WHEN A LOCAL COMMENT HAS TO CONTRADICT THE PUBLISHED NUMBER TO BE CORRECT, THE PUBLISHED
+  NUMBER IS THE BUG.** ⚠️ Its RATES are NOT comparable to mine — its last pre-grep stage is `tr`,
+  which is block-buffered rather than line-buffered, and its consumer differs. **The ordering and
+  the named quantity agree; do not merge the tables.**
+  🚨 **THE ONE SITE WITH AN OPERATIONAL CONSEQUENCE, RE-MEASURED RATHER THAN REASONED ABOUT.**
+  `lr-reset-poller.sh` justified itself with *"`tail -c 20000` — a hard-coded constant ABOVE that
+  floor"*, i.e. **the producer's bytes**. Its governing number is what `grep -iE "$SPEND_RE"` hands
+  the last stage. Measured over **7,445 transcripts across all four account stores**
+  (`feed257.sh`): **262 tails match at all, and the largest emits 19,466 B — 97.3% of the tail**,
+  because a JSONL tail is a few very long records and a matching one matches wholesale. **That sits
+  INSIDE the racy band, so the old comment reached the right conclusion for the wrong reason and the
+  margin it implied does not exist.** The site is safe today only because its last stage is DRAINED
+  (`>/dev/null`, reads to EOF); **that spelling is what is load-bearing, not any headroom.**
+  🚨 ⚠️ **DO NOT GENERALISE THE RATIO — IT IS THE WHOLE POINT.** `postland-verify` measures the same
+  shape reducing **~55x**; this one reduces **1.03x**. **The reduction ratio is a per-site property,
+  to be MEASURED and never inferred from the pipeline's shape.**
+  ✅ **DELIBERATE NON-RESULT, STATED RATHER THAN ROUNDED: THE KNEE IS NOT A ROUND BUFFER CONSTANT
+  AND I DID NOT ESTABLISH ONE.** 16,384 was predicted and **REFUSED** — **16,430 emitted reads
+  0/400 and 16,960 reads 93/400**. Writing *"the 16 KiB stdio buffer"* would have repeated, one
+  level down, exactly the error these corrections exist to undo: that header asserted *"the 64 KiB
+  pipe buffer"* as a cause for two months and both of its negative clauses were false.
+  **A measured bracket beats a tidy constant.**
+  🚨 **MY OWN INSTRUMENT FAULT, AND IT IS A NEW COSTUME FOR #216's SCAR — A STORE-EXISTENCE CHECK
+  PROVES A PATH IS ABSENT, IT CANNOT PROVE THE PATH IS THE RIGHT ONE.** `feed257.sh`'s first run
+  resolved the four transcript stores from the ACCOUNT NAMES (`next2`/`next3`/`next4`) rather than
+  from the code. Those directories do not exist. **The directory-existence assertion I had put in
+  precisely to stop a silent zero DID fire — it reported three stores absent — and I read that as a
+  fact about the box when it was a fact about my path list.** The run covered **3,353 of 7,445
+  transcripts (46%)** and its "declared blind spot" would have read as rigour. The real roots are
+  `.claude` · `.claude-secondary` · `.claude-tertiary` · `.claude-quaternary`, and they are written
+  down in `feed256.sh`, which is what caught it. ⚠️ **The MAX was robust to the error (19,466 both
+  times) and the POPULATION was not (138 → 262). A maximum can survive a 54% coverage hole; a count
+  cannot.** `feed257.v1-WRONG-ROOTS.out` is kept on disk.
+  🚨 **THE FIX: comments only, six files, no predicate / no spelling / no assertion changed.** The
+  SSOT header (`scripts/pipefail-sigpipe-lint.sh`) gains the three-stage correction with all four
+  scopes, the decorrelated table, the emitted-bytes finding, the credit to `postland-verify` and the
+  stated non-result on the knee; the four sites that quote the false pair are corrected in place and
+  pointed at the SSOT; `lr-reset-poller` gets the measured feed. ⚠️ **`scripts/postland-verify.sh`
+  DELIBERATELY NOT TOUCHED** — it is already correct on this point, and editing it to add a
+  cross-reference would pull its **130-test suite, the slowest in the tree**, into the smoke for one
+  sentence.
+  ✅ **VERIFIED:** `shellcheck` rc 0 and `bash -n` rc 0 on all five `.sh`; `--selftest` **32/32**
+  (pipefail-sigpipe), **22/22** (moving-ref), **16/16** (afunix); `bats --count` on
+  `tests/gate-ownscope-leak.bats` unchanged at **24**; `bats-assert-liveness` rc 0; bare pipefail
+  lint rc 0; **`--census` 126 → 126, LOST=0, NEW=0**, the PRE arm extracted from `origin/main` with
+  `git archive | tar -x` rather than remembered. The commit gate additionally asserts the diff is
+  COMMENTS-ONLY across `scripts/`, **with a seeded fire test proving that gate can still fire.**
+  🆕 ⚠️ **A DRAW DATA POINT THAT CUTS AGAINST #248's AND #256's "WHICH LINT" NARROWING.** My diff
+  names **two lints `ship-land.sh` explicitly wires** — `test-afunix-path-lint` at `:2711` and
+  `moving-ref-control-lint` at `:2752` — and **`tests/ship-land.bats` (153) was still NOT drawn**,
+  nor was `tests/postland-verify.bats`. The draw was **21 direct suites**. So the trigger is
+  narrower than *"which lint"* as well as narrower than *"names a lint"*: **the selector's
+  `--direct` set is keyed on something tighter than "ship-land.sh mentions this file".**
+  ⚠️ **Do not model it — RUN THE SELECTOR AND SIZE FROM WHAT COMES BACK.** Its POS control, drawn
+  from a range that genuinely touches code, SPOKE with 6.
+  📋 **THE BOARD.** Open **2026-08-28T20:44:37Z: 328 open / 224 blocked / 2,346 done / 5 claimed**
+  (552 combined, 2,903 rows), both partitions asserted, every list `sort`ed and `sort -c`'d on both
+  sides of every `comm`. **The gap from #256's floor (20:42:27Z, resolved by `mtime` and not by a
+  suffix a brief names) was 2 m 10 s and held ZERO arrivals, ZERO departures and ZERO status
+  transitions** — and the `claimed` SET was **identical**, the first reading in three without a 100%
+  turnover. ⚠️ **I closed NO row, filed NO row, reopened NO row and made NO board write of any kind.**
+  📋 **THE LANE ADVANCED, UNBIDDEN, BETWEEN #256's FLOOR AND MY OPEN.** `LIVE_SHA` moved to
+  `06b59224b029…` with **`LIVE_AGE` reset 19,766 → 10,121 s** and `LIVE_LAG` still 2, `LIVE_ADDS=0`,
+  `LIVE_DIVERGED=0`, breach field EMPTY, `RUNG=✅`. **So the approach to #251's unobserved
+  21,600-25,200 s window was not a trend — the converger simply ran.** Inside budget and NOT mine to
+  drive. `GATE=stale` at my open, the **thirty-eighth** consecutive; only the background
+  `postland-verify` stamp moves it and it is NOT mine either.
+  📋 **STORES AT MY OPEN (20:44:46Z):** postland RED pages **0** over a denominator of **2,756** —
+  and #256 closed at **526** at 20:30:21Z, so **the denominator recovered 5.2x in fourteen minutes**,
+  which is the fastest recovery this chain has recorded. postland stamps **498** (flat from #256's
+  close). `pages` **2,272 / 106 `.page`** — #256's floor read 2,274 / 108, so **both numbers went
+  DOWN**; that store is not monotone in either direction. inbox-guard `.escalated` **453 / 453**.
+  ⚠️ **Every number in this paragraph is a reading at a moment, and I draw no conclusion about any
+  window from any of them.**
+  ✅ **Instruments left for #258:** `probe257-3stage.sh` (the four-scope 3-stage sweep; repoint
+  `mk_feed`'s prefix and the cell list) · **`probe257-emit.sh`, which is the one to steal** — it
+  holds producer bytes, line count AND line width constant across a whole arm and moves only the
+  middle stage's reduction, so its attribution needs no argument · `feed257.sh` (a producer-vs-
+  emitted feed census over all four transcript stores, with the store paths read from the CODE) ·
+  `board257.sh` · `census257.sh` · `gap257.sh` · `suites257.sh`.
+  🚨 **THE ONE TO TAKE: the `--census` is 126 rows and the EMITTED question has now been asked of
+  exactly TWO of them.** Every multi-stage site in that census carries a reduction ratio nobody has
+  measured, and this link showed the ratio spans **1.03x to ~55x with no way to guess it from the
+  shape.** `probe257-emit.sh` answers one site in ~4 minutes. **Ask each site: what does the stage
+  FEEDING grep emit, at its maximum, on the real feed?** — not what the producer writes.
 - **2026-08-29 — A CLOUD VM WAS FIRED ON THIS PLAN'S OWN ROW (`70f0001c657b`), AND THE ADMISSION
   DEFECT IS THAT `plan-open` ROWS ARE CLASSIFIED BY A POINTER RATHER THAN BY THEIR SUBJECT. The
   obvious fix was MEASURED AND REFUTED before it was written, which is why this link lands docs and
