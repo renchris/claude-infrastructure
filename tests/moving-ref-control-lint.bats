@@ -132,3 +132,46 @@ setup() {
   # and the NON-VERDICT arm: exit 2 must be GATE_KILLED (retryable), never gate_red (author-fixable)
   grep -q 'moving-ref-control-lint could not RUN (exit 2)' "$REPO/scripts/ship-land.sh" || false
 }
+
+@test "PORTABILITY: the pin test survives mawk, whose awk has no ERE interval (b60eb29e97dd)" {
+  # THE VENUE-INVERTING BUG THIS PINS. The "is this a literal sha" test used to be an ERE interval,
+  # `[0-9a-f]{7,40}`. POSIX makes {n,m} OPTIONAL in awk, and mawk — Debian/Ubuntu's default awk,
+  # hence every Linux CI box and every cloud VM this repo dispatches to — does not honour it. On
+  # those boxes EVERY correctly-pinned literal sha fell past the test and was reported as MOVING:
+  # this lint's verdict inverted, in the direction that blocks a land outright.
+  #
+  # BEHAVIOURAL, not a grep for the old spelling, and driven through EVERY awk on the box rather
+  # than the ambient one: the ambient awk is exactly what makes this bug invisible on a Mac, so a
+  # test that only exercises `awk` re-creates the blind spot it exists to close.
+  local fixture="$D/portable/zz-pinned.bats"
+  mkdir -p "$D/portable"
+  {
+    printf '@test "x" {\n'
+    printf '  git -C "$REPO" %s 0fe052972:bin/cc-await-ping > "$root/x"\n' "$SHOW"
+    printf '  git -C "$REPO" %s 6dd3ea4681d9b4a0f3c2e5d7a8b9c0d1e2f30412:bin/y > "$root/y"\n' "$SHOW"
+    printf '}\n'
+  } > "$fixture"
+
+  local found=0 awkbin
+  for awkbin in mawk /usr/bin/mawk gawk /usr/bin/gawk awk /usr/bin/awk /usr/bin/nawk; do
+    command -v "$awkbin" >/dev/null 2>&1 || continue
+    found=$(( found + 1 ))
+    # PATH-shadow the lint's own `awk` so the real detector runs under this implementation.
+    mkdir -p "$D/shim"
+    printf '#!/bin/sh\nexec %s "$@"\n' "$(command -v "$awkbin")" > "$D/shim/awk"
+    chmod +x "$D/shim/awk"
+    PATH="$D/shim:$PATH" run bash "$LINT" "$D/portable"
+    [ "$status" -eq 0 ] \
+      || { echo "under $awkbin a PINNED literal sha reported MOVING (rc=$status):"; echo "$output"; false; }
+    ! printf '%s' "$output" | grep -q 'MOVING-REF' \
+      || { echo "under $awkbin the detector flagged a literal sha:"; echo "$output"; false; }
+  done
+  [ "$found" -gt 0 ] || false      # a loop that ran zero implementations asserts nothing
+
+  # …and the discrimination is still live under the ambient awk: a moving ref in the SAME shape
+  # must still red, or the fix above would have been "match nothing".
+  printf '@test "y" {\n  git %s %s:bin/z > "$root/z"\n}\n' "$SHOW" "$MOVING" > "$D/portable/zz-moving.bats"
+  run bash "$LINT" "$D/portable"
+  [ "$status" -eq 1 ] || false
+  printf '%s' "$output" | grep -q 'zz-moving.bats' || false
+}
