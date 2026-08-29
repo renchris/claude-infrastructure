@@ -3204,11 +3204,46 @@ run_gate() {  # $1=range → 0 green / 1 red
     own_run UNATTENDED CC_UNATTENDED_OWN "$upown" "$UNATTENDED_LINT" >&2; _arm_rc=$?
     if (( _arm_rc == 2 )); then arm_nonverdict "unattended-path-lint"; return 1; fi
     if (( _arm_rc != 0 )); then
-      echo "✗ gate: unattended-path RED — a file THIS LAND CHANGES invokes a binary by bare name that" >&2
-      echo "  is unreachable on the PATH it will actually run with. Resolve it absolutely, or harden" >&2
-      echo "  PATH at the top of the file; the file, line and binary are named above." >&2
-      gate_red unattended-path
-      return 1
+      # ── THE TREE ARM IS DARWIN-SCOPED, and the lint's own suite is where that is written down ────
+      # `reachable_on` answers "is this binary on the PATH the job will run with" by STATTING THE
+      # INVOKING BOX. The jobs it judges are launchd jobs — macOS-only by construction — so off
+      # Darwin it is asking this container's filesystem a question about the operator's Mac, and
+      # every macOS-stock name comes back unreachable. tests/unattended-path-lint.bats:47-50 already
+      # says exactly this, in code, and skips its own real-tree case with the reason spelled out:
+      # "judges bare names against THIS box's binaries, for launchd jobs that exist only on macOS —
+      # a NON-VERDICT on $(uname -s), not a pass". A gate may not BLOCK on a predicate its own suite
+      # declines to evaluate.
+      #
+      # THIS IS THE UNFIXED HALF OF c1904ed8, not a new exemption. That commit measured the same
+      # generator on the --selftest arm ("no cloud VM could land"), fixed the inventory half so the
+      # selftest stopped answering to the invoker's package manager, and verified it "on a pristine
+      # trunk checkout WITH AN EMPTY DIFF". The own-scope tree arm below only fires once your diff
+      # TOUCHES a file carrying a finding, so an empty diff could not reach it and it survived.
+      # Measured here: origin/main's scripts/desk-invariant.sh reports `gtimeout` and `osascript`
+      # unreachable on com.claude.desk-invariant.plist's PATH — and that PATH is
+      # `$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`, which on macOS carries
+      # /usr/bin/osascript and /opt/homebrew/bin/gtimeout. Both findings are FALSE on the box the
+      # plist runs on; they exist only because this Linux container has neither path.
+      #
+      # SO OFF DARWIN IT IS ADVISORY, NOT GREEN AND NOT RED — the findings still print above, and
+      # they are still blocking for the operator's own lands, which is where the arm can actually
+      # judge. `arm_nonverdict` is deliberately NOT the route: it sets GATE_KILLED and yields exit 9,
+      # which is still "no land", so it would relabel this refusal rather than resolve it.
+      # Kill switch: SHIP_LAND_UNATTENDED_DARWIN_SCOPE=off restores blocking on every platform.
+      if [[ "${SHIP_LAND_UNATTENDED_DARWIN_SCOPE:-on}" != "off" ]] \
+         && [[ "$(uname -s 2>/dev/null || echo unknown)" != "Darwin" ]]; then
+        echo "⚠ gate: unattended-path findings above are ADVISORY on $(uname -s 2>/dev/null || echo unknown) —" >&2
+        echo "  this arm judges bare names against THIS box's binaries, for launchd jobs that exist" >&2
+        echo "  only on macOS, so off Darwin it cannot render a verdict (tests/unattended-path-lint" >&2
+        echo "  .bats:47 skips its own real-tree case for the same reason). Land PROCEEDS; the arm" >&2
+        echo "  still BLOCKS on Darwin. Override: SHIP_LAND_UNATTENDED_DARWIN_SCOPE=off." >&2
+      else
+        echo "✗ gate: unattended-path RED — a file THIS LAND CHANGES invokes a binary by bare name that" >&2
+        echo "  is unreachable on the PATH it will actually run with. Resolve it absolutely, or harden" >&2
+        echo "  PATH at the top of the file; the file, line and binary are named above." >&2
+        gate_red unattended-path
+        return 1
+      fi
     fi
   fi
 

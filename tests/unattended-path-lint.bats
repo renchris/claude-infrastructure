@@ -326,3 +326,39 @@ darwin_only_tree_arm() {
   run bash -c "printf '%s\n' \"\$1\" | sed -n 's/.*\`\\([^\`]*\\)\` is unreachable on.*/\\1/p' | sort -u | grep -c ." _ "$output"
   [ "${output:-0}" -gt 0 ] || { echo "no binary names parsed out of the report — the parser is broken"; false; }
 }
+
+# ── the gate wiring: the TREE arm is Darwin-scoped, the SELFTEST arm is not ─────────────────────
+# Enforced here rather than only in ship-land.sh for the reason the sibling suite states
+# (tests/moving-ref-control-lint.bats, "the land gate calls it, own-scoped"): gate-select maps this
+# suite from exactly one edge — the lint — so an edit to the GATE never selects it, and the wiring
+# is the enforcing surface. (memory: enforcement-must-live-at-the-chokepoint)
+@test "the land gate scopes the TREE arm to Darwin — and still BLOCKS there" {
+  # WHY THE SCOPE EXISTS, in one line: reachable_on answers "is this binary on the PATH the job runs
+  # with" by statting the INVOKING box, and the jobs it judges are launchd jobs, which exist only on
+  # macOS. darwin_only_tree_arm() at the top of this file already declines to evaluate the real-tree
+  # case off Darwin for exactly that reason; a gate may not BLOCK on a predicate this suite skips.
+  grep -q 'SHIP_LAND_UNATTENDED_DARWIN_SCOPE' "$REPO/scripts/ship-land.sh" || false
+  grep -q 'unattended-path findings above are ADVISORY on' "$REPO/scripts/ship-land.sh" || false
+
+  # THE HALF THAT MATTERS MORE. An exemption that swallowed the arm entirely would satisfy the two
+  # greps above and silently delete enforcement on the one platform that can judge. Both the RED
+  # branch and its gate_red must survive, and the Darwin test must be a NEGATIVE match (`!= "Darwin"`)
+  # so the advisory path is the exception and blocking stays the default.
+  grep -q 'gate_red unattended-path$' "$REPO/scripts/ship-land.sh" || false
+  grep -q '!= "Darwin"' "$REPO/scripts/ship-land.sh" || false
+
+  # The SELFTEST arm is deliberately NOT scoped: c1904ed8 made it environment-independent instead
+  # (the embedded binary inventory), so re-scoping it would discard that fix rather than use it.
+  grep -q 'unattended-path-lint --selftest FAILED' "$REPO/scripts/ship-land.sh" || false
+}
+
+@test "own-scope and the NON-VERDICT arm are both still wired (neither is the Darwin scope's job)" {
+  # Three independent narrowings guard this arm and they are not interchangeable: own-scope decides
+  # WHOSE findings block, the Darwin scope decides WHERE the predicate can judge at all, and exit 2
+  # is the could-not-RUN third state. Collapsing any pair would make one of the three unreachable.
+  grep -q 'UNATTENDED_LINT=' "$REPO/scripts/ship-land.sh" || false
+  grep -q 'own_run UNATTENDED CC_UNATTENDED_OWN' "$REPO/scripts/ship-land.sh" || false
+  grep -q 'SHIP_LAND_UNATTENDED_OWN_SCOPE' "$REPO/scripts/ship-land.sh" || false
+  # exit 2 must be GATE_KILLED (retryable), never gate_red (author-fixable) — the sibling's rule.
+  grep -q 'arm_nonverdict "unattended-path-lint"' "$REPO/scripts/ship-land.sh" || false
+}
