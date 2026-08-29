@@ -34,10 +34,10 @@ mkfile() { # $1=name $2=body  [$3=set line]
 }
 census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" --census 2>/dev/null; }
 
-@test "1: the lint's own --selftest passes (32/32, both directions)" {
+@test "1: the lint's own --selftest passes (35/35, both directions)" {
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s' "$output" | grep '32/32' >/dev/null \
+  printf '%s' "$output" | grep '35/35' >/dev/null \
     || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 
@@ -308,5 +308,59 @@ $(census | grep -c 'scripts/muted\.sh:' || true) — the file is muted"; census 
   [ "$(census | grep -c 'lr-reset-poller\.sh:')" -eq 0 ] \
     || { echo "control failed: the unappended file already reads \
 $(census | grep -c 'lr-reset-poller\.sh:' || true) hit(s), so arm 20 is vacuous"; false; }
+  true
+}
+
+@test "21: MECHANISM — a function-final pipeline hands 141 to its CALLER, and the drain repairs it" {
+  # The 2026-08-29 blind spot (backlog ca97c678b18b). Clause 4 asks "does anything READ this
+  # pipeline's status?" and answers it from the candidate LINE — so in a file with no errexit it
+  # returned 0 for the one position where the reader is a FRAME up rather than a clause over: the
+  # last command of a function body, whose status IS the function's return value.
+  #
+  # Real bash, not a re-read of the detector — the same standard as arm 6. The `if` below is the
+  # caller, and it must read FALSE for a needle that is plainly on line 1.
+  seq 1 200000 > "$BATS_TEST_TMPDIR/ff.txt"
+  run bash -c "set -uo pipefail
+    has_it() { cat '$BATS_TEST_TMPDIR/ff.txt' | grep -q '^1\$'; }
+    if has_it; then echo SAW; else echo MISSED; fi"
+  [ "$output" = MISSED ] \
+    || { echo "the function-final defect did NOT reproduce ($output) — arm 22 proves nothing"; false; }
+  # ...and the canonical drain fix must repair it THROUGH the function boundary,
+  run bash -c "set -uo pipefail
+    has_it() { cat '$BATS_TEST_TMPDIR/ff.txt' | grep '^1\$' >/dev/null; }
+    if has_it; then echo SAW; else echo MISSED; fi"
+  [ "$output" = SAW ] || { echo "the drain fix did not repair the function-final case: $output"; false; }
+  # ...while still being able to say NO. A predicate that always answers yes is not a fix.
+  run bash -c "set -uo pipefail
+    has_it() { cat '$BATS_TEST_TMPDIR/ff.txt' | grep '^NOPE\$' >/dev/null; }
+    if has_it; then echo SAW; else echo MISSED; fi"
+  [ "$output" = MISSED ] || { echo "the drained function returns TRUE on a non-match: $output"; false; }
+}
+
+@test "22: the detector SEES the function-final pipeline, and still says no to its two neighbours" {
+  # Arm 21 proves the mechanism; this proves the detector reaches it — and that it did not reach it
+  # by flagging every pipeline inside a function, or every line that precedes a `}`. Three fixtures,
+  # ONE variable moving between each pair: whether the pipeline is LAST, and whether it drains.
+  mkfile fnfinal "has_flag() {
+  \"\$BIN\" -h 2>/dev/null | grep -q -- '--login-status'
+}" 'set -uo pipefail'
+  [ "$(census | grep -c 'scripts/fnfinal\.sh:')" -eq 1 ] \
+    || { echo "function-final pipeline not seen — the blind spot is back"; census | sed 's/^/  /'; false; }
+  rm -f "$FIX/scripts/fnfinal.sh"
+
+  mkfile notfinal "has_flag() {
+  \"\$BIN\" -h 2>/dev/null | grep -q -- '--login-status'
+  return 0
+}" 'set -uo pipefail'
+  [ "$(census | grep -c 'scripts/notfinal\.sh:')" -eq 0 ] \
+    || { echo "a NON-final pipeline was flagged — this widened to every pipeline in a function"; \
+         census | sed 's/^/  /'; false; }
+  rm -f "$FIX/scripts/notfinal.sh"
+
+  mkfile fndrained "has_flag() {
+  \"\$BIN\" -h 2>/dev/null | grep -- '--login-status' >/dev/null
+}" 'set -uo pipefail'
+  [ "$(census | grep -c 'scripts/fndrained\.sh:')" -eq 0 ] \
+    || { echo "the drained fix was flagged — the fix must not be the trigger"; census | sed 's/^/  /'; false; }
   true
 }

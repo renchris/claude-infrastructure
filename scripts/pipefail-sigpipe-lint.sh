@@ -240,9 +240,16 @@
 #      moment the write exceeds the 64 KiB pipe buffer. The command word is identical in both cases,
 #      so only the argument can discriminate;
 #   4. the pipeline's status is CONSUMED — an `if`/`elif`/`while`/`until` condition, a `!` operand,
-#      or (under `set -e`) a bare pipeline or a top-level `VAR=$(…)`. `local`/`declare`/`export`
+#      a trailing `&&`, a `; rc=$?` capture, THE LAST COMMAND OF A FUNCTION BODY, or (under `set -e`)
+#      a bare pipeline or a top-level `VAR=$(…)`. `local`/`declare`/`export`
 #      MASK the status (the builtin's own 0 wins), and `[ -n "$( … )" ]` discards it, so neither is
-#      a violation however exposed the pipeline inside looks;
+#      a violation however exposed the pipeline inside looks.
+#      THE FUNCTION-FINAL LEG IS THE ONE THAT IS NOT ABOUT THIS LINE (2026-08-29, backlog
+#      ca97c678b18b). Every other leg above is a property the candidate line carries; function-final
+#      is a property of the NEXT code line, and the consumer is a FRAME up rather than a clause over:
+#      `f() { p | grep -q X; }` returns 141 to `if f; then`, with no errexit and no control-flow
+#      position anywhere on the pipeline's own line. Measured 200/200 FALSE on a present match. This
+#      is the no-errexit half only — clause 4's errexit arm already flagged a bare pipeline;
 #   5. it is NOT already mitigated by a trailing `|| true` / `|| <fallback>`, which swallows the 141
 #      before anything reads it.
 #
@@ -460,6 +467,25 @@ BEGIN { FS = "" }
   # measurement; it is not folded in here. g31/g32 pin both directions of what IS fixed.
   if (line ~ /^#/ || line == "") next
 
+  # ── Clause 4c state: FUNCTION BODIES, and the deferred verdict they require ────────────────────
+  # Resolved HERE, at the top, because it is the one verdict that cannot be reached from the
+  # candidate line alone: "is this pipeline the LAST command of a function body" is a question about
+  # the NEXT code line, so a candidate that fails clause 4 is HELD and settled one line later. Every
+  # `next` below therefore has to leave this block already run, which is why it sits above them all.
+  # Blank lines, comments and heredoc bodies never reach here, so none of them breaks the adjacency —
+  # a rationale comment between the pipeline and the `}` is exactly the house style.
+  match(raw, /^[ \t]*/); ind = substr(raw, 1, RLENGTH)
+  closes = (fn_open && ind == fn_indent && line ~ /^\}/)
+  if (pend) {
+    if (closes) printf "%s:%d:%s\n", FILE, pend_fnr, pend_line
+    pend = 0
+  }
+  if (closes) fn_open = 0
+  else if (line ~ /^(function[ \t]+)?[A-Za-z_][A-Za-z0-9_:.-]*[ \t]*\([ \t]*\)[ \t]*\{[ \t]*(#.*)?$/ ||
+           line ~ /^function[ \t]+[A-Za-z_][A-Za-z0-9_:.-]*[ \t]*\{[ \t]*(#.*)?$/) {
+    fn_open = 1; fn_indent = ind
+  }
+
   if (match($0, /<<-?[ \t]*[\x27"]?[A-Za-z_][A-Za-z0-9_]*[\x27"]?/)) {
     tok = substr($0, RSTART, RLENGTH)
     sub(/^<<-?[ \t]*/, "", tok); gsub(/[\x27"]/, "", tok)
@@ -510,7 +536,38 @@ BEGIN { FS = "" }
   # the ASSIGNMENT form after the last stage separates them; g15/g16 pin both directions.
   # (No apostrophes here: this is inside the single-quoted DETECT_AWK string.)
   cap = (last ~ /;[ \t]*[A-Za-z_][A-Za-z0-9_]*=\$\?/)
-  if (amp == 0 && !cap && !consumed(line, HASE)) next
+  if (amp == 0 && !cap && !consumed(line, HASE)) {
+    # Clause 4c — THE FUNCTION-FINAL PIPELINE. consumed() decides whether anything reads this
+    # pipelines status by looking at THIS LINE, and for a file with no errexit it answers with
+    # `if (!hase) return 0` — only a control-flow position counts. But a pipeline that is the LAST
+    # command of a function body needs no control-flow position and no errexit: its status IS the
+    # return value of the function, by the shells own rule, and the caller reads that return value.
+    #
+    #     has_flag() {
+    #       "$BIN" -h 2>/dev/null | grep -q -- --login-status    ← rc of this IS rc of has_flag
+    #     }
+    #     if has_flag; then …                                    ← and the caller reads it
+    #
+    # So the status is consumed one FRAME up rather than one CLAUSE over, and nothing on the
+    # candidate line can see that. MEASURED on this shape, not argued: /bin/bash, `set -uo pipefail`,
+    # a 440,008 B / 8,001-line feed of 55 B lines with the needle on line 1, `cat feed | grep -q
+    # MATCHME` as the last command of the function — the caller reads FALSE on a PRESENT match
+    # 200/200. The same file under `set -euo pipefail` was ALREADY red (clause 4s errexit arm flags
+    # any bare pipeline), so this arm is scoped precisely to the no-errexit half, which is exactly
+    # where the blind spot lived.
+    #
+    # DEFERRED, not decided here: function-final is a property of the NEXT code line, so the verdict
+    # is HELD and settled by the clause-4c block at the top of this program.
+    #
+    # RESIDUALS, named rather than widened. (a) A one-line function — `f() { p | grep -q x; }` — is
+    # not caught: the opener regex requires the `{` to end the line, and a one-liner has no closing
+    # line to settle the deferral against. (b) A NESTED function opener overwrites the outer frames
+    # indent rather than stacking, so the final pipeline of the OUTER function is missed. Both are
+    # false-NEGATIVE directions and neither shape exists in this tree today. Widening to them
+    # changes what counts as a function body and wants its own measurement; not folded in here.
+    if (fn_open) { pend = 1; pend_fnr = FNR; pend_line = line }
+    next
+  }
 
   printf "%s:%d:%s\n", FILE, FNR, line
 }'
@@ -678,6 +735,13 @@ regen() {
   printf '%s\n' "# pipefail-sigpipe-lint allowlist — <path><TAB><violation count>."
   echo "# Grandfathered sites only. This list may only SHRINK: the lint goes RED both when a file"
   echo "# GAINS a violation and when it LOSES one without the count being lowered."
+  echo "#"
+  echo "# THE ONE LEGAL UPWARD MOVE, named so it cannot be borrowed: a DETECTOR WIDENING, in the SAME"
+  echo "# commit as the widening. Those rows are sites that were always violations and were never"
+  echo "# judged, so grandfathering them is the same act as grandfathering the original 138 — whereas"
+  echo "# a row that grows because CODE grew a violation is the exact event this ratchet exists to"
+  echo "# refuse. The two are indistinguishable in this file and distinguishable only in the diff, so"
+  echo "# a count that rises without a detector change in the same commit is the bug."
   echo "# Regenerate: scripts/pipefail-sigpipe-lint.sh --regen > scripts/pipefail-sigpipe-allow.txt"
   printf '%s\n' "$hits" | awk -F: 'NF{print $1}' | sort | uniq -c | awk '{ printf "%s\t%s\n", $2, $1 }' | sort
 }
@@ -823,6 +887,34 @@ cat <<'EOF'
 if git status --porcelain | grep -q .; then :; fi
 EOF"
   expect g31 GREEN "a comment ahead of a REAL heredoc still leaves the body as DATA"
+
+  # ── THE FUNCTION-FINAL PIPELINE (2026-08-29, backlog ca97c678b18b) ────────────────────────────
+  # Clause 4 answers "does anything READ this pipeline's status?" from THIS LINE, and in a file with
+  # no errexit it answers `if (!hase) return 0`. A pipeline that is the LAST command of a function
+  # body is read by neither route and is consumed anyway — its status IS the function's return
+  # value, one frame up. Measured on the shape: `set -uo pipefail`, 440,008 B / 8,001 lines of 55 B,
+  # needle on line 1, `cat feed | grep -q MATCHME` as the function's last command — the CALLER reads
+  # FALSE on a PRESENT match 200/200. Census 126 → 141; all 15 are genuine function-final pipelines
+  # (audited one by one) and all 15 are latent today, which is why they are grandfathered rather
+  # than rewritten — the same judgment the header makes for the original 138.
+  #
+  # THREE ARMS, because "RED on a function-final pipeline" alone would also pass against a lint that
+  # flagged EVERY pipeline inside a function, or every line before a `}`. g40 moves ONE variable —
+  # whether the pipeline is LAST — and g41 moves the other: whether the consumer drains. A widening
+  # that cannot say no to either is not a discriminator.
+  mk_noe r16 "has_flag() {
+  \"\$BIN\" -h 2>/dev/null | grep -q -- '--login-status'
+}"
+  expect r16 RED "a function-final pipeline is consumed one FRAME up — no errexit, no control-flow"
+  mk_noe g40 "has_flag() {
+  \"\$BIN\" -h 2>/dev/null | grep -q -- '--login-status'
+  return 0
+}"
+  expect g40 GREEN "the SAME pipeline one line earlier — not final, so its status is discarded"
+  mk_noe g41 "has_flag() {
+  \"\$BIN\" -h 2>/dev/null | grep -- '--login-status' >/dev/null
+}"
+  expect g41 GREEN "function-final but DRAINED — the canonical fix still fixes it here"
 
   local total=$((pass+fail))
   if [ "$fail" -gt 0 ]; then
