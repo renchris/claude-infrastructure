@@ -1610,8 +1610,10 @@ windows/week, carrying the fleet wall rate 1.72% → 2.20%.
 
 ### §5.7 Implementation record — what actually landed, and where it deviated from the spec
 
-Wave 1 = **S1 + S2 + S3 only**. Wave 2 = **S4 + S5**. S6 and S7 are unbuilt. S5 is now BUILT but
-not yet READ against the live series, and S6's gate is the reading, not the build — see below.
+Wave 1 = **S1 + S2 + S3 only**. Wave 2 = **S4 + S5 + S7** — the whole shippable list except S6.
+S5 is BUILT but not yet READ against the live series, and **S6's gate is the reading, not the
+build**, so S6 remains correctly unbuilt: one desk run of `claude-accounts --strand-score` decides
+whether it is shippable at all. See the per-item records below.
 
 #### S1 · data fixes — LANDED
 
@@ -1895,11 +1897,66 @@ instrument's *range*, not the estimator's quality, and the plan's §5.4 falsific
 24 h bucket's published band contain the realised strand of the next window to close?) is a
 forward test that cannot be run retroactively. S6 stays unbuilt.
 
+#### S7 · M1 `burn_5h_ewma_ph` — LANDED
+
+`bin/claude-accounts`: `burn_5h_ewma_ph(samples_for_acct, now) → (value|None, span_h)` beside
+`burn_wk_ewma_ph`, constants `SU_EWMA_LOOKBACK_H` / `SU_EWMA_HL_H` / `SU_EWMA_MIN_SPAN_H`;
+attached in `apply_burn` beside the weekly EWMA with its span stamped as `burn_5h_span_h`; and
+`_su_projected` switched to prefer it. Suite `tests/claude-accounts-su-ewma.bats` (RP-34..RP-37)
+plus RP-27/RP-28 in `tests/claude-accounts-core.bats` — **6/6 proven RED** against the S5 binary,
+6/6 green after; 186/191 across every `claude-accounts*` suite plus `cc-wave-plan`, the 5 reds
+being the container's, unchanged.
+
+**Both named hazards ship as tests, because both produce a plausible wrong number rather than an
+error.** The UNIT: RP-27 pins a sustained 60 %/h burn reading `60.0` under the new key and `0.6`
+under the incumbent's, a 100× separation, and RP-28 pins `_su_projected` at 0.80 rather than the
+1.0 a missing ÷100 saturates it to — an error invisible to every ranking case in the file, because
+the term is soften-only and would apply to every row at once. The ROLL SPELLING: RP-37 builds a
+fixture whose reset stamps alternate between the two spellings of the *same* minute
+(`:59:59.7` / `:00:00.4`, the live jitter), asserts the fixture really straddles, and requires a
+true 5 %/h to come back as 5 %/h — under truncation every adjacent pair reads as a roll, the
+branch injects an absolute level as a delta, and the metric ships **5.4× worse than the incumbent
+it replaces** while looking like a refinement.
+
+**Deviation 1 — it is a FUNCTION beside `burn_wk_ewma_ph`, not an inline branch in `apply_burn`**
+as §5.2 words it. The weekly EWMA it mirrors is already shaped that way, the estimator is then
+directly testable without a series file (RP-34..RP-37 pass samples in), and `apply_burn` keeps one
+attach point per metric.
+
+**Deviation 2 — `_su_projected` PREFERS the new key and falls back to `burn_5h_ph`, rather than
+switching outright.** §5.2 says to keep the old key populated for one release; a consumer that
+switches outright makes that promise vacuous in the one direction that matters — a series too thin
+for the EWMA (below the 1.3 h span floor) but fine for the single-pair form would silently lose
+the projection term altogether, which is a different behaviour change smuggled in beside the
+intended one. RP-28 pins all three arms: EWMA alone, incumbent alone, and both present with the
+EWMA winning. The `CC_ROUTE_PROJ` kill switch still kills the whole term.
+
+**Deviation 3 — RP-27's fixture is a SUSTAINED 60 %/h over 1.5 h, not §5.3's "10 → 40 over
+30 min".** Written literally as a spike at the end of a 3 h lookback, the case asserts ≈60 and the
+correct implementation returns **20.08** — because an hl = 1 h EWMA over three hours of history is
+supposed to weight the flat stretch, and does. The spec's number presumes the whole lookback burns
+at that rate, which is what the fixture now does (0 → 90 pp in 1.5 h, inside the meter's 100 pp
+ceiling). The invariant the case exists for — the 100× separation between the two keys — is
+unchanged and is asserted directly. **Class:** a spec number computed against an implied fixture
+is only reproducible with that fixture; when the two disagree, check which one the arithmetic
+actually describes before changing the code.
+
+**The blind spot ships in the docstring, as §5.2 requires, and is not quoted away.** At
+`session_pct ≥ 40` the **incumbent is more accurate** (MAE 0.0617 vs 0.0797; this form
+over-projects by +3.6 pp). That is the burst regime — the one the weekly-drain planner
+deliberately creates. The over-projection direction is soften-only and therefore fail-safe for
+routing, but the metric is wrong there and must not be cited as accurate; §5.6 Q3 names the
+measurement that would fix it.
+
+**Unchanged, deliberately:** `_excluded` still reads the raw meter, so no exclusion moves —
+§5.5 proved that by positive control (`burn_5h_ph = 5.0` changed 10,489 scores and 11,200 desk
+tiers and **0** exclusions), and nothing here touches that path.
+
 #### Acceptance status against §5.4
 
 | command | status |
 |---|---|
-| the bats suites (roll-key · util-tail · strand · burst · core) | **111/111 green** after wave 1; **159/164 across all `claude-accounts*` suites** after wave 2 (S4 + S5), every new case shown RED at the commit before its fix |
+| the bats suites (roll-key · util-tail · strand · burst · core · strand-score · su-ewma) | **111/111 green** after wave 1; **186/191 across all `claude-accounts*` suites + `cc-wave-plan`** after wave 2 (S4 + S5 + S7), every new case shown RED at the commit before its fix |
 | `claude-accounts --readout` renders the drain block for all four accounts | **yes** — see above (wave 1's live capture) |
 | `claude-accounts --readout \| grep -c 'strand'` → 3 or 4 | **4** |
 | `claude-accounts --strand-score` prints the horizon table with non-zero `n` at 24/12/6 h | **built, RUN ONLY ON FIXTURES** — 3-window fixture gives n=3 at every bucket and a bias spread of −14.23 → −0.15. The acceptance as §5.4 words it is about the LIVE series and needs one desk run |

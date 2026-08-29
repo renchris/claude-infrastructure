@@ -1813,7 +1813,74 @@ assert 12.0 < r["burn_wk_ppd"] < 16.0, r          # ~14 %/day, i.e. the same rat
 assert "burn_wk_span_h" in r and r["burn_wk_span_h"] > 6.8, r
 assert "wk_strand_pp" in r, r
 assert 0.0 < r["wk_strand_pp"] < 5.0, r           # 40 + 0.583*100 = 98.3 -> ~1.7 pp die
-assert "burn_5h_ewma_ph" not in r, r              # S7 is a LATER wave and was not built here
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router M7 + S7: burn_5h_ewma_ph is attached in %/h, BESIDE the incumbent fraction/h key" {
+  # RP-27, UPDATED IN PLACE from `assert "burn_5h_ewma_ph" not in r` — S7 was a later wave when
+  # the case above was written and is this one. The assertion it replaces was a scope marker, not
+  # an invariant, and the invariant it becomes is the UNIT hazard: a 10 -> 40 move over 30 min is
+  # 60 %/h under the new key and 0.6 fraction/h under the old, and BOTH must be present with
+  # their own scales. An implementation that reuses burn_5h_ph for the EWMA passes every other
+  # case in this file and fails here — then saturates _su_projected to 1.0 on every row.
+  run python3 -c "$LOAD"'
+import json, os
+from datetime import datetime, timezone, timedelta
+p = os.path.join(os.environ["BATS_TEST_TMPDIR"], "util-su-ewma.jsonl")
+now = datetime.now(timezone.utc)
+sra = (now + timedelta(hours=2)).isoformat()
+with open(p, "w") as f:
+    # 1.5 h at 6 min cadence burning a SUSTAINED 60 %/h (0 -> 90). Sustained, not a spike after a
+    # flat stretch: the 5h meter cannot hold 60 %/h across a 3 h lookback without passing 100 pp,
+    # so a fixture that spikes only at the end reports the lookback-weighted rate (~20 %/h here)
+    # and pins nothing about the unit. The last adjacent pair moves 6 pp in 6 min, which is the
+    # incumbent key`s 0.6 fraction/h — the same burn in the other unit, which is the hazard.
+    for i in range(15, -1, -1):
+        f.write(json.dumps({"ts": (now - timedelta(minutes=i * 6)).isoformat(),
+                            "acct": "next3", "session_pct": (15 - i) * 6.0,
+                            "weekly_pct": 40 + (15 - i) * 0.2, "session_reset_at": sra,
+                            "weekly_reset_at": (now + timedelta(hours=100)).isoformat()}) + "\n")
+rows = [row(acct="next3", session_pct=90, session_reset_h=2.0, weekly_pct=43,
+            weekly_reset_h=100.0)]
+samples, span = ca._util_tail(path=p, hours=48.0)
+ca.apply_burn(rows, cfg, samples=samples)
+r = rows[0]
+assert "burn_5h_ewma_ph" in r, r
+assert abs(r["burn_5h_ewma_ph"] - 60.0) < 0.5, r  # 60 %/h — NOT 0.6, and NOT 6000
+assert "burn_5h_ph" in r, r                       # the incumbent stays POPULATED for one release
+assert abs(r["burn_5h_ph"] - 0.6) < 0.02, r       # ...in its own unit, fraction/h
+assert "burn_5h_span_h" in r and r["burn_5h_span_h"] >= 1.3, r   # the abstain`s reason, stamped
+assert r["burn_5h_ewma_ph"] > 10.0 * r["burn_5h_ph"], r   # the two keys are not the same number
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router M7 + S7: _su_projected consumes the new key at the right SCALE, and prefers it" {
+  # RP-28. A missing /100 saturates the projection to 1.0 and is caught ONLY here: every ranking
+  # case in this file still passes with every row projecting maximum 5h pressure, because the
+  # term is soften-only and applies to all of them at once. su 0.20 + 60 %/h over 1 h = 0.80.
+  run python3 -c "$LOAD"'
+import os
+os.environ.pop("CC_ROUTE_PROJ", None)
+os.environ.pop("CC_ROUTE_PROJ_LOOKAHEAD_H", None)
+r = row(session_pct=20, session_reset_h=2.0, burn_5h_ewma_ph=60.0)
+assert abs(ca._su_projected(r, R) - 0.80) < 0.01, ca._su_projected(r, R)
+# the lookahead is still capped at the window reset — past it the pressure vanishes
+assert abs(ca._su_projected(row(session_pct=20, session_reset_h=0.5,
+                                burn_5h_ewma_ph=60.0), R) - 0.50) < 0.01
+# FALLBACK: the incumbent key still drives the projection alone, unchanged, so a thin series
+# (where the EWMA abstains and the single-pair form does not) is not a silent loss of the term.
+assert abs(ca._su_projected(row(session_pct=20, session_reset_h=2.0, burn_5h_ph=0.6), R)
+           - 0.80) < 0.01
+# ...and the EWMA WINS when both are present: it is the replacement, not a second opinion.
+both = row(session_pct=20, session_reset_h=2.0, burn_5h_ewma_ph=60.0, burn_5h_ph=0.05)
+assert abs(ca._su_projected(both, R) - 0.80) < 0.01, ca._su_projected(both, R)
+os.environ["CC_ROUTE_PROJ"] = "off"
+assert ca._su_projected(both, R) == 0.20, "the kill switch must still kill the whole term"
+os.environ.pop("CC_ROUTE_PROJ")
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
