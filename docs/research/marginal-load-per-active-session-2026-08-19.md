@@ -219,6 +219,50 @@ correctly refusing a 60 s quiet window — `C1 FAIL` (tertile swing 1.56× > 1.3
 6 unmeasurable), `VERDICT: NO-ATTRIBUTION`, exit 1, withheld fit labelled withheld. The instrument
 is ready; only the fleet is missing.
 
+### 6b · §6 was a protocol, not a recipe — and the adjudication in it is now code (2026-08-29)
+
+§6 above is two commands and three paragraphs, and the paragraphs contain a **loop, a stop rule and
+an adjudication** that were left for a person to execute at 1 h per iteration while remembering
+which term failed last time. A recipe a human has to interpret is a worksheet, and making the human
+the interpreter is the defect (global CLAUDE.md § Manual-Command Delivery). **`scripts/capacity-marginal-run.sh`
+is the interpreter.** One command, resumable, walk away:
+
+```sh
+bash scripts/capacity-marginal-run.sh                  # 6 x 1 h windows into $TMPDIR/capacity-marginal.tsv
+```
+
+**The stop rule is not "did it fail again", and that is the whole reason this needed writing.** §6
+says "the same TERM", and the terms are not interchangeable — two of the three controls fail for a
+reason about the BOX that self-resolves, and for a reason about the INSTRUMENT that never will. So
+every refusal is reduced to a per-control reason token taken from the analyzer's own why-string,
+and only an **instrument** term earns §6's second exit:
+
+| | terms | what a repeat means |
+|---|---|---|
+| **INSTRUMENT** → exit 1, §6's finding | `C1:swing` (the ×1.553 single-point-fit defect, live) · `C2:corr` (the census does not track the load it apportions — the "64% is our own automation" cause of death) · `C2:constant` ("the instrument, not the box") | more hours cannot fix it; §7.3's thread unit is the next increment, and the run prints the `cc-backlog add` for it |
+| **CONDITION** → exit 3, keep extending | `C1:span` (a quiet hour) · `C2:neff` (n_eff = span/τ + 1, so this ALWAYS clears given wall clock — "uninformative, not refuting") · `C3:flat` (a lull; §6's remedy is to run ACROSS A DISPATCH WAVE, never to synthesise levels by pausing the box) · `C3:blind` | a report about the hour you chose, not about the census |
+
+An **unrecognised** why-string counts as an instrument term on purpose: the safe side of "I cannot
+tell" is to stop and make a human read it, never to keep burning hours on a refusal whose meaning
+the driver has silently lost. Calling a quiet box an instrument failure would be this wave's own
+original sin — an instrument that always answers — wearing the opposite sign, which is why the
+condition/instrument split is asserted in both directions rather than assumed.
+
+Two properties are inherited and pinned rather than hoped for. **No coefficient escapes a failed
+control:** every non-PASS exit is asserted to print no number of its own and to leave the withheld
+fit labelled withheld — the leak that put four values spanning 30× in the archive. **The tokens are
+pinned against the REAL analyzer**, over fixtures engineered to produce each why-string, so a
+reworded string fails a test instead of collapsing every signature to `:other` and turning the stop
+rule back into "it failed again". On a PASS the handover prints the **re-grep**, never the two known
+paths — §6a's own finding was that the ban enumerated two sites and a grep found three.
+
+Verified off-box (Linux container, no fleet): `bats tests/capacity-marginal-run.bats` **15/15** and
+`tests/capacity-marginal.bats` **15/15** (30/30 together), `shellcheck` clean on the driver and the
+suite, `bash -n` clean, `gate-select.sh lint` clean, `test-hermeticity-lint.sh` clean (554 suites,
+0 new leaks), `bats-testname-eval-lint` / `bats-kill-guard-lint` / `test-walltime-lint` clean, and
+the driver end-to-end against the real sampler on this host — a 2 s window correctly reaching
+NO-DATA and quoting nothing. **§6's run still needs the box; nothing here measures a coefficient.**
+
 ---
 
 ## 7 · What this does not do

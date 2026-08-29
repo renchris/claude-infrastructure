@@ -194,7 +194,10 @@ qualifies on ~2026-08-24** under this repo's own 2.1.220 precedent if no success
   of the load numerator as not-Claude across an 8.35→46.39 daily range and A8's direct probe watched
   load FALL while a unit was added. The sampler this bullet asks for is landed
   (`scripts/capacity-marginal.sh`, controls proven able to fail in `tests/capacity-marginal.bats`);
-  the coefficient itself still wants one ~1 h on-box window (§6 of that doc). **Until it exists, none
+  the coefficient itself still wants one ~1 h on-box window (§6 of that doc) — now driven end to end
+  by `scripts/capacity-marginal-run.sh`, one resumable command that also makes §6's stop rule
+  mechanical, since only an *instrument* term (`C1:swing` / `C2:corr` / `C2:constant`) is that
+  paragraph's finding and a quiet box (`C2:neff` / `C3:flat`) is not (§6b). **Until it exists, none
   of the four may be quoted.** ✅ **The ban is now enforced in code (2026-08-26, §6a of that doc):**
   the citation sites were struck and labelled REFUTED, with **no value substituted**. There were
   **three**, not the two named here — `scripts/lib/capacity-admit.sh`,
