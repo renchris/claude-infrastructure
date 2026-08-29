@@ -352,7 +352,12 @@ for lane in $ROSTER $(printf '%s' "$MODEL" | jq -r '.lanes[].lane' | sort); do
   fi
   # TZ is pinned UTC at the top of this file, so both sides of this subtraction are UTC — a
   # LOCAL-rendered `last` against a UTC `now` is off by the offset and flips a verdict at the margin.
-  last_epoch="$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$last" +%s 2>/dev/null || printf '')"
+  # BOTH dialects, BSD first. `-j -f` is BSD-only, so on Linux this parsed nothing and every lane
+  # rendered `lane-unreadable` — a verdict that is fail-closed and therefore looked deliberate, which
+  # is why it survived. GNU's `-d` is the fallback and never the probe: on macOS `-d` means "daylight
+  # saving", so a GNU-first order would succeed there and mis-date the subtraction below.
+  last_epoch="$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$last" +%s 2>/dev/null \
+                || date -u -d "$last" +%s 2>/dev/null || printf '')"
   if [ -z "$last_epoch" ]; then
     printf '  verdict=lane-unreadable   lane=%-12s closes=%s last=%s — timestamp did not parse; NOT read as healthy\n' \
       "$lane" "$n" "$last"
