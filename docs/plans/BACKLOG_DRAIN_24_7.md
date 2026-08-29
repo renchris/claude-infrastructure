@@ -27084,3 +27084,57 @@ deployed-copy gate, whose two operands can disagree per launchd reload — which
 intermittent rail looks like from off-box. From this land on, that failure names itself:
 `scripts/autonomy-sweep.sh` files `skipped-config-divergence` in both cloud ledgers instead of the
 healthy-looking `skipped-not-deployed`.
+
+### Addendum 2026-08-29 — the venue lock that stranded six dispatches (`f85fce7c26f5`)
+
+The addendum above closes with "until this land none of them home." That land did not happen either:
+both 08-28 branches are still on `origin` and neither is an ancestor of `origin/main`. **Seven
+dispatches, nine branches, and the reason is not the return arm.** It is a second lock on the VM's
+own land path, never named in six write-ups:
+
+`scripts/bats-shellcheck-lint.sh --selftest` exits **2** on a box without `shellcheck`, and
+`ship-land.sh:3444` routes exit 2 to `bats_sc_nonverdict` → `GATE_KILLED` → **exit 9**. Its entry
+condition is `[[ -d tests ]] && ls tests/*.bats` — a property of **this repo, not of the diff** — so
+it fires on every land here, docs-only included. It went blocking at `fe6540a6` (08-11) for a good
+reason (a missing tool used to be a silent skip, so a `.bats`-only land read exactly like a clean
+one) and the gate is not weakened here. What was never costed is that the same change is a **total
+land-block for every box without the tool, which is every cloud VM**.
+
+Both locks are **provisionable in the venue**, and that is the whole unblock:
+
+```
+apt-get install -y shellcheck bats     # shellcheck 0.9.0, bats 1.10.0, Ubuntu archive
+```
+
+`bats-shellcheck-lint --selftest` moves **2 → 19/19**, and `unattended-path-lint --selftest` reads
+**44/44** since `c1904ed8`. Neither lock explains the 08-17 step — both predate it, the same
+reasoning §6.4 applies to the first — but together they are the mechanism of the recycle: the arm
+that returns cloud work is the arm that would have landed the analysis of why it stopped, and the
+VM's own land path, the only remaining channel, was locked for an unrelated reason.
+
+**Not fixable as code from here.** A `SessionStart` hook would mean editing `.claude/settings.json`,
+which the dispatch rails forbid in place. It is a venue-provisioning step and is recorded as one.
+
+Landed with this addendum: both surviving 08-28 lineages consolidated onto one branch (they held
+different `§6`s and neither was a superset), plus `tests/cloud-return.bats`'s identity repair
+(**21/27 → 27/27**, two-sided against pristine trunk).
+
+**One pick could not come, and finding out why is a third lock.** `38a8cd2a` — the
+`skipped-config-divergence` naming — is the only commit in either lineage that edits
+`scripts/autonomy-sweep.sh`, and `unattended-path-lint`'s own-scope is **per FILE**, not per line.
+Touching that file makes its three pre-existing findings blocking; all three predate the pick
+(07-18 / 08-01 / 08-13) and all three are correct as written — one is a **documented test seam**
+whose comment says in so many words that resolving it absolutely is what would make the branch
+untestable. The ratchet only shrinks and reads its manifest from the range's base revision, so there
+is no in-land way to pay that debt. The pick stays on its branch for a second time, for a second
+reason that is not about its content. No allowlist widened, no gate weakened, no seam traded for a
+green gate. Its one genuinely stale line — `scripts/autonomy-sweep.sh:timeout`, which no longer
+violates — was retired here, which is the maintenance the ratchet exists to force.
+
+The census reproduces a fourth time —
+**68% / 33% / 1%** for through-08-17, 08-18..08-25 and 08-26..08-29 — and the strand is now **222 of
+288 branches carrying 330 un-landed commits**, up from 205/286 a day earlier.
+
+**Still operator-gated, and unchanged:** `bash scripts/cloud-land-arm-diagnose.sh` on the operator's
+box. The eighth dispatch of this row should not go to a cloud VM — the one read it needs does not
+exist there.
