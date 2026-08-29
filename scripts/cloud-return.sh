@@ -10,8 +10,9 @@
 # peer is in flight, a `--goal` re-judged against a measurable end state, and an auto-land. A cloud
 # fire gave an id. Everything else was hand-work — the lead polled `cc-offload ls`, or the work sat
 # finished and unnoticed (CLOUD_BACKLOG_PIPELINE.md §2 rows 1-4). This script is the missing half:
-# it detects completion, lands the result, verifies it BY CONTENT, judges the goal, marks the
-# backlog item done, discharges custody, and WAKES the originator.
+# it detects completion, lands the result, verifies it BY CONTENT, judges the goal, settles the
+# backlog item — `done`, or `block` when the VM landed a park saying the next step is the
+# operator's (step 8) — discharges custody, and WAKES the originator.
 #
 # ── THE ORIGINATOR MUST NOT BE THE POLLER, and that is a hard design constraint ──────────────────
 # A goal-armed session CANNOT hold a backgrounded watcher: Claude Code skips /goal evaluation while
@@ -433,11 +434,33 @@ handle() { # <row-json> → prints outcome lines
   local gword; case "$grc" in 0) gword=MET ;; 1) gword=NOT-MET ;; *) gword=UNJUDGED ;; esac
   say "  goal: $gword — ${goal:-<default: landed by content>} ($GOAL_DETAIL)"
 
-  # 8. MARK THE ITEM DONE — the laptop's job; the VM cannot reach the backlog store at all.
+  # 8. SETTLE THE ITEM — the laptop's job; the VM cannot reach the backlog store at all.
   # Only a real backlog id is treated as one: `item` is free text by contract, and a 12-hex id is
   # the store's own shape, so a title never gets passed to `done` as if it were a key.
   # `done_unsettled` is a SEPARATE fact from done_note's prose, because the latch below branches on
   # it — and a latch that greps English is the same defect one layer up.
+  #
+  # 🚨 THERE ARE TWO TERMINAL DISPOSITIONS, AND ONLY ONE OF THEM USED TO EXIST HERE. `done` is the
+  # right one for work the VM finished. The other is a row the VM CANNOT finish because the next
+  # step is the operator's — a key, a `launchctl` read, a GUI action. The dispatch brief tells the
+  # worker to park those with `cc-backlog block <id> --needs "…"`, and that verb cannot reach the
+  # store from a cloud VM: it answers `unknown id`, returns 3 and writes nothing. So the park was
+  # inert exactly where it was needed, the row stayed `open`, and the next pass re-dispatched it —
+  # backlog f85fce7c26f5, ten dispatches, ten branches, one unchanged operator-gated verdict
+  # (docs/research/cloud-land-arm-step-2026-08-25.md §6.6).
+  #
+  # The VM's one channel is its branch, which is the same conclusion CLOUD_OBSERVABILITY.md §14
+  # reached for the close. So a park is a landed file — `docs/parks/<id>.md`, written by
+  # `scripts/cloud-park.sh` — and this step reads it and calls `block` instead of `done`. Two
+  # properties make that safe to act on unattended:
+  #
+  #   · it is read from the TRUNK REF, never from the branch or a working tree, so it has passed the
+  #     same content-verify (step 6) as everything else this step acts on. A park that did not land
+  #     does not park.
+  #   · it is honoured only when its last entry's `branch:` is THIS dispatch's branch. The file
+  #     outlives the park — once the operator unblocks the row and it is re-dispatched, the file is
+  #     still on trunk — and a reader keyed on existence alone would re-block the row on the next
+  #     land, forever. The branch test makes a stale entry inert without needing anyone to delete it.
   local done_note="no backlog item recorded" done_unsettled=0 done_err=""
   case "$item" in
     [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
@@ -449,7 +472,41 @@ handle() { # <row-json> → prints outcome lines
         # verb against a byte copy of the store (rc 0 in 1.96 s ⇒ contention, not policy). A caller
         # must never mute its callee's non-verdict.
         local _derr; _derr="$(mktemp -t ccret-done.XXXXXX 2>/dev/null || printf '/tmp/ccret-done.%s' "$$")"
-        if "$BACKLOG_BIN" "done" "$item" --evidence "cloud $id → $trunk: $paths" >"$_derr" 2>&1; then
+
+        # 8a. READ THE PARK, if this dispatch wrote one. `_park`: 0 none · 1 honoured · 2 malformed.
+        local _pf="docs/parks/$item.md" _pdoc="" _pbranch="" _pneeds="" _park=0
+        if [ -n "$repo" ] && [ -d "$repo" ] \
+           && [ -n "$("$GIT_BIN" -C "$repo" ls-tree "$trunk" -- "$_pf" 2>/dev/null)" ]; then
+          _pdoc="$("$GIT_BIN" -C "$repo" show "$trunk:$_pf" 2>/dev/null)"
+          # the LAST entry of an append-only log — `tail -1`, on both fields, so one dispatch's park
+          # never reads through to another's
+          _pbranch="$(printf '%s\n' "$_pdoc" | sed -n 's/^branch: *//p' | tail -1)"
+          _pneeds="$(printf '%s\n' "$_pdoc" | sed -n 's/^needs: *//p' | tail -1)"
+          if [ "$_pbranch" != "$branch" ]; then
+            say "  park: $_pf's last entry names ${_pbranch:-<no branch:>}, not $branch — an earlier dispatch's park, not this one's; ignored"
+          elif [ -z "$_pneeds" ]; then
+            _park=2
+          else
+            _park=1
+          fi
+        fi
+
+        if [ "$_park" -eq 2 ]; then
+          # A park naming this branch with no step in it must NOT fall through to `done`: the worker
+          # said "this is not finished" and the only readable half of that statement is the half
+          # that says so. Closing it here would be the loudest possible false completion.
+          done_note="REFUSED to settle $item — $_pf names this branch but carries no 'needs:' line, so the park cannot be executed and the row is not done either"
+          done_err="malformed park artifact: $_pf"
+          done_unsettled=1
+        elif [ "$_park" -eq 1 ]; then
+          if "$BACKLOG_BIN" block "$item" --needs "$_pneeds" >"$_derr" 2>&1; then
+            done_note="PARKED $item on the operator: $_pneeds"
+          else
+            done_err="$(tr '\n\t' '  ' <"$_derr" 2>/dev/null | tr -cd '\40-\176' | tail -c 300)"
+            done_note="could NOT park $item (rc≠0: ${done_err:-no output})"
+            done_unsettled=1
+          fi
+        elif "$BACKLOG_BIN" "done" "$item" --evidence "cloud $id → $trunk: $paths" >"$_derr" 2>&1; then
           done_note="marked $item done"
         else
           done_err="$(tr '\n\t' '  ' <"$_derr" 2>/dev/null | tr -cd '\40-\176' | tail -c 300)"

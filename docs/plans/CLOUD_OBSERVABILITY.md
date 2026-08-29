@@ -1922,3 +1922,45 @@ re-derived a third time:
 is still what fires `cc-backlog done`, and §13.6's ADD-rule caveat above still governs whether that
 pass is running the landed script or the old one.
 
+
+## 15 · A worker can report that it FINISHED; it must also be able to report that it is BLOCKED (2026-08-29)
+
+§14 gave a cloud worker a way to say *"this row is already done"* — land a verdict artifact, and
+`cloud-return.sh` step 8 turns the landed path into `cc-backlog done`. That is one of the two
+terminal dispositions. **The other had no channel at all.**
+
+A row whose next step belongs to the operator — a key, a `launchctl` read, a GUI action — is parked
+with `cc-backlog block <id> --needs "<step>"`, which is what every dispatch brief tells the worker
+to run. The store that verb writes is `~/.claude/autonomy/backlog.jsonl`, which exists only on the
+operator's box. From a cloud VM it answers `unknown id` and returns 3, writing nothing. So:
+
+    operator-gated row → VM parks it → nothing written → row stays `open`
+                       → `open` IS cc-dispatch's fire predicate → re-dispatched, forever
+
+Measured on `f85fce7c26f5`: **ten dispatches, ten branches, one verdict unchanged since 08-25.** It
+is not a property of that row — every operator-gated row reached from a cloud VM is this loop.
+
+**THE RULE.** A cloud worker that cannot advance its row because the next step is the operator's
+writes a park with `scripts/cloud-park.sh <id> --needs "<the one step>"` and lands it, the same way
+§14's verdict artifact is landed. `cloud-return.sh` step 8 reads `docs/parks/<id>.md` **off the
+trunk ref**, after the land is content-verified, and calls `block` instead of `done`. It does not
+invent work to justify a push, and it does not park a row it could have finished.
+
+Three properties make it safe to act on unattended, each pinned in `tests/cloud-return.bats`
+(§ THE PARK) rather than asserted here:
+
+- **Trunk-ref only.** A park that did not land does not park. On the operator's box `$repo` is a
+  live checkout somebody is working in, so a working-tree read would honour an uncommitted file.
+- **Scoped to the dispatch by `branch:`.** The file outlives the park; once the operator unblocks
+  the row and it is re-dispatched, `docs/parks/<id>.md` is still on trunk. Only the LAST entry
+  counts, and only when its `branch:` names the branch being returned — so a stale entry is inert
+  by construction, with nothing to clean up.
+- **A malformed park settles nothing.** No `needs:` line ⇒ neither `block` nor `done`, and
+  `done_unsettled=1` routes it into the existing bounded retry. Falling through to `done` over a
+  worker's own "this is not finished" is the loudest false completion available on this rail.
+
+**Honest limit, the same one §14 carries:** the rule makes a row *parkable*, not parked. The desk's
+next `cloud-return.sh` pass is what fires `cc-backlog block`, and §13.6's ADD-rule caveat governs
+whether that pass is running the landed script — the reader is an edit to an already-symlinked file
+and goes live on the fast-forward, but `scripts/cloud-park.sh` is an ADD and is absent from
+`~/.claude` until the converger runs.
