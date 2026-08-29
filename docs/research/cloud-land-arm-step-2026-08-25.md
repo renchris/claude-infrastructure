@@ -490,7 +490,25 @@ mapped a *finished* session back to `open`; this leaves a *blocked* one there. B
 state to be writable from the venue the work is done in, or the block to be expressible in something
 the VM can push — a branch, which is the only channel it has.
 
----
+**Correction, 2026-08-29 — the exit codes are no longer 0; the loop is unchanged.** Re-measured on a
+cloud VM while parking a different item (`193ae8ddce72`), verbatim:
+
+```
+$ cc-backlog block 193ae8ddce72 --needs "…"
+cc-backlog block: unknown id 193ae8ddce72                          ← rc 3, not 0
+$ cc-notify --role desk "…"
+cc-notify: verdict=unresolvable enqueued=0 reason=role-unset       ← rc 3, not 0
+  fallback=phone-unwired — push-send INERT (PUSHOVER_TOKEN/PUSHOVER_USER unset)
+```
+
+`bin/cc-backlog:1943` returns **3** on an unknown id today, and `cc-notify` returns 3 on an
+unresolvable role. So the sentence *"a no-op that reports success"* is now false of the exit code and
+still true of the effect: **the item's state is not written, so the re-dispatch loop survives
+exactly as described.** The half that changed is the detectable half — a caller that checks `rc` can
+now see the park failed, which is the difference between a silent no-op and a loud one, and it makes
+the fix cheaper than §6.6 assumed (a dispatch rail can branch on the code rather than needing a new
+return channel to notice at all). The unwired phone fallback is the reason nothing downstream did.
+
 
 ## 7 · Verification, 2026-08-28 — what was actually run, and what could not be
 
