@@ -34,10 +34,12 @@ mkfile() { # $1=name $2=body  [$3=set line]
 }
 census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" --census 2>/dev/null; }
 
-@test "1: the lint's own --selftest passes (32/32, both directions)" {
+@test "1: the lint's own --selftest passes (40/40, both directions)" {
+  # 32/32 → 40/40 on 2026-08-29: clause 4c (the function-final pipeline) added three RED arms and
+  # five GREEN controls. The count is pinned deliberately so a silently DROPPED arm cannot pass here.
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s' "$output" | grep '32/32' >/dev/null \
+  printf '%s' "$output" | grep '40/40' >/dev/null \
     || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 
@@ -309,4 +311,85 @@ $(census | grep -c 'scripts/muted\.sh:' || true) — the file is muted"; census 
     || { echo "control failed: the unappended file already reads \
 $(census | grep -c 'lr-reset-poller\.sh:' || true) hit(s), so arm 20 is vacuous"; false; }
   true
+}
+
+# ── CLAUSE 4c: THE FUNCTION-FINAL PIPELINE (2026-08-29, backlog ca97c678b18b) ────────────────────
+# Clause 4 read only the pipeline's OWN line, so it could not see the one position where a
+# pipeline's status is always FORWARDED rather than read: last in a function body, where 141 becomes
+# the function's return value and `if f; then` inverts one frame up. Census 126 → 136.
+#
+# WHY THESE ARMS EXIST BESIDE THE LINT'S OWN --selftest ARMS, which already pin both directions on
+# two-line fixtures: clause 4c introduced the detector's SECOND piece of file-level LATCHING state
+# (a brace depth and a one-line deferral) beside the heredoc tracker that arms 19/20 exist for. That
+# is the class of state whose failure is UNBOUNDED and silent — the 2026-08-27 mute is the precedent
+# — and a two-line fixture cannot tell a correct verdict apart from a latched one.
+
+@test "21: clause 4c fires ONCE at distance, and the three non-firing shapes stay green" {
+  # One file, four functions, ~200 lines of distance, and exactly ONE of them is a violation. A
+  # detector whose brace depth drifts fires on the wrong one or on all of them; a two-line fixture
+  # would show neither. The three controls are the ways this clause could WIDEN rather than extend:
+  # a later statement (the rc that returns is the printf's), a `local` (masks it outright), and a
+  # bare `{ … }` group (whose status is nobody's return value).
+  {
+    echo '#!/bin/bash'; echo 'set -uo pipefail'
+    printf '%s\n' 'notlast() {'
+    printf '%s\n' '  git status --porcelain | grep -q .'
+    printf '%s\n' '  printf ok'
+    printf '%s\n' '}'
+    printf '%s\n' 'masked() {'
+    printf '%s\n' '  local v=$(git log --oneline | head -1)'
+    printf '%s\n' '}'
+    printf '%s\n' '{'
+    printf '%s\n' '  git status --porcelain | grep -q .'
+    printf '%s\n' '}'
+    i=0; while [ "$i" -lt 200 ]; do echo ": filler $i"; i=$((i+1)); done
+    printf '%s\n' 'thereal() {'
+    printf '%s\n' '  git status --porcelain 2>/dev/null | grep -q .'
+    printf '%s\n' '}'
+  } > "$FIX/scripts/ffinal.sh"
+  # `grep -c` exits 1 on a legitimate zero, so the substitution stays inside `[ ]` (see arm 19).
+  [ "$(census | grep -c 'scripts/ffinal\.sh:')" -eq 1 ] \
+    || { echo "expected exactly 1 hit, detector said \
+$(census | grep -c 'scripts/ffinal\.sh:' || true)"; census | sed 's/^/  /'; false; }
+  # ...and it must be the RIGHT one. A count of 1 built from a false positive plus a miss reads
+  # identically to a correct verdict, which is the whole failure mode arm 19 was written against.
+  # The `2>/dev/null` is what distinguishes thereal's line from notlast's — their pipelines are
+  # otherwise byte-identical, deliberately, so that only POSITION can separate them.
+  census | grep 'scripts/ffinal\.sh:' | grep 'porcelain 2>/dev/null | grep -q \.$' >/dev/null \
+    || { echo "1 hit, but not the function-final one:"; census | grep 'scripts/ffinal\.sh:' | sed 's/^/  /'; false; }
+}
+
+@test "22: the ONE-LINE body — the half of the class whose rc is most certainly read" {
+  # Predicate helpers are written on one line BY CONVENTION, so this is where a function-final
+  # pipeline is most likely to be read as a boolean: docs/activation/pending-activation/
+  # 18-fleet-activate.sh's `is_disabled` is called as `is_disabled "$label" && …` at three sites
+  # that gate activation. There is no next line to defer to, so this shape is decided in place.
+  mkfile onel "is_disabled() { printf '%s\n' \"\$DB\" | grep -Fq \"\$1\"; }" 'set -uo pipefail'
+  census | grep 'scripts/onel\.sh:' >/dev/null || { census | sed 's/^/  /'; false; }
+  # CONTROL — the bounded-producer exemption (clause 3) must survive the one-line opener. The
+  # producer is not the first word here, so a detector that does not read past the opener calls a
+  # `head -1` external and false-positives on the exemption arm g12 exists to protect.
+  mkfile bounded "epoch1() { head -1 \"\$1\" 2>/dev/null | grep -qE '^[0-9]+\$'; }" 'set -uo pipefail'
+  [ "$(census | grep -c 'scripts/bounded\.sh:')" -eq 0 ] \
+    || { echo "bounded head -1 producer lost its exemption inside a one-line body"; census | sed 's/^/  /'; false; }
+  true
+}
+
+@test "23: STATE HYGIENE — clause 4c's brace depth does not mute the tail of a real file" {
+  # The tripwire arms 19/20 established, applied to the detector's NEW latching state. A brace
+  # depth that drifts on a long real file (quoted braces, nested functions, heredocs) leaves every
+  # later function either permanently "inside" or permanently "outside" — and a muted tail is
+  # byte-identical to a clean one. Self-calibrating: count, append a known scar, count again.
+  local subject="$REPO/hooks/completion-assert.sh"
+  [ -f "$subject" ] || skip "subject absent — this arm asserts about a specific real file"
+  mkdir -p "$FIX/scripts"
+  cp "$subject" "$FIX/scripts/real.sh"
+  local before after
+  before="$(census | grep -c 'scripts/real\.sh:' || true)"
+  printf '%s\n' 'tail_probe() {' '  git status --porcelain 2>/dev/null | grep -q .' '}' \
+    >> "$FIX/scripts/real.sh"
+  after="$(census | grep -c 'scripts/real\.sh:' || true)"
+  [ "$after" -eq "$((before + 1))" ] \
+    || { echo "appended ONE function-final scar to a real file: $before → $after (want $((before + 1))) \
+— the detector cannot see the tail, or it double-counted"; false; }
 }

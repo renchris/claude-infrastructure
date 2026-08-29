@@ -144,9 +144,20 @@
 #      moment the write exceeds the 64 KiB pipe buffer. The command word is identical in both cases,
 #      so only the argument can discriminate;
 #   4. the pipeline's status is CONSUMED — an `if`/`elif`/`while`/`until` condition, a `!` operand,
-#      or (under `set -e`) a bare pipeline or a top-level `VAR=$(…)`. `local`/`declare`/`export`
-#      MASK the status (the builtin's own 0 wins), and `[ -n "$( … )" ]` discards it, so neither is
-#      a violation however exposed the pipeline inside looks;
+#      an `&&` after it, a `; rc=$?` capture, or (under `set -e`) a bare pipeline or a top-level
+#      `VAR=$(…)`. `local`/`declare`/`export` MASK the status (the builtin's own 0 wins), and
+#      `[ -n "$( … )" ]` discards it, so neither is a violation however exposed the pipeline inside
+#      looks;
+#   4c. ...OR the pipeline stands LAST IN A FUNCTION BODY, where its rc IS the function's return
+#      value. This is the one position where the status is forwarded rather than read: nothing on
+#      the line touches it, and `if f; then` inverts one frame up exactly as `if p | grep -q X`
+#      does. It is in practice a NO-ERREXIT clause — under `set -e` the bare pipeline is already
+#      clause 4's hit — which is why the gap opened in this tree's majority `set -uo pipefail`
+#      shape and stayed open. Both spellings count: a multi-line body (decided by deferring one
+#      line and asking whether the next code line closes the function) and a ONE-LINE body,
+#      `f() { p | grep -q X; }`, which is how predicate helpers are written by convention and is
+#      therefore the half whose rc is most certainly read. A later statement after the pipeline
+#      cancels it — that command's rc is what returns;
 #   5. it is NOT already mitigated by a trailing `|| true` / `|| <fallback>`, which swallows the 141
 #      before anything reads it.
 #
@@ -285,6 +296,12 @@ function is_external(s,   t, p) {
   while (match(t, /[;\002\003][ \t]*/)) t = substr(t, RSTART + RLENGTH)
   t = ltrim(t)
   if (!p) {
+    # A ONE-LINE function body puts the opener and the producer on the SAME line, so the producer
+    # is not the first word and the `;` loop above cannot reach it — there is no `;` before the
+    # pipe. Unstripped, `epoch1() { head -1 "$1" 2>/dev/null | grep -qE …; }` reads its command
+    # word as `epoch1()` and calls a BOUNDED `head -1` external, which is a FALSE POSITIVE on the
+    # exact exemption g12 exists to protect. Stripped for the same reason a leading assignment is.
+    sub(/^(function[ \t]+[A-Za-z_][A-Za-z0-9_:.-]*([ \t]*\(\))?|[A-Za-z_][A-Za-z0-9_:.-]*[ \t]*\(\))[ \t]*\{[ \t]+/, "", t)
     sub(/^(if|elif|while|until)[ \t]+/, "", t)
     sub(/^![ \t]*/, "", t)
     sub(/^(local|declare|typeset|export|readonly)[ \t]+/, "", t)
@@ -305,11 +322,17 @@ function is_external(s,   t, p) {
   return 1
 }
 
-# Clause 4: does anything READ this pipelines status?
-function consumed(l, hase,   t, pre, i) {
+# Clause 4, half one: does this line STRUCTURALLY DISCARD the pipelines status?
+#
+# Split out of consumed() so clause 4c can reuse it, and the split is load-bearing rather than
+# tidying. consumed() answers ONE question with TWO different meanings of no: "something on this
+# line throws the status away" (masked — the pipeline is genuinely safe) and "nothing on this line
+# happens to read it" (merely unread HERE — and a function-final pipeline is read by its CALLER).
+# 4c rescues the second and must not touch the first, so the two have to be separable.
+function masked(l,   t, pre, i) {
   t = ltrim(l)
   # [ -n "$( … )" ] / [ -z … ] discard the substitutions status entirely.
-  if (t ~ /\[\[?[ \t]+-[nz][ \t]+"?\$\(/) return 0
+  if (t ~ /\[\[?[ \t]+-[nz][ \t]+"?\$\(/) return 1
   # A pipeline inside a command substitution used as an ARGUMENT is masked: the status the shell
   # reads is the OUTER commands, and a substitution that dies 141 still yields its bytes. Only
   # VAR=$( … ) — where the substitution IS the whole RHS — lets the status through to errexit.
@@ -320,13 +343,36 @@ function consumed(l, hase,   t, pre, i) {
     sub(/^![ \t]*/, "", pre)
     sub(/^(local|declare|typeset|export|readonly)[ \t]+/, "", pre)
     pre = ltrim(pre)
-    if (pre != "" && pre !~ /[A-Za-z_][A-Za-z0-9_]*\+?="?$/) return 0
+    if (pre != "" && pre !~ /[A-Za-z_][A-Za-z0-9_]*\+?="?$/) return 1
   }
+  # local/declare/export return their OWN 0 — the pipelines status never survives the assignment.
+  if (t ~ /^(local|declare|typeset|export|readonly)[ \t]/) return 1
+  return 0
+}
+
+# Clause 4c, the ONE-LINE body — where the opener, the pipeline and the closing brace share a line
+# and there is no next line to defer to. This is not a corner: predicate helpers are written this
+# way BY CONVENTION, so it is the half of the class whose rc is most certainly read
+# (`epoch1`, `is_disabled`, `partition_has` — all one-liners, all called as `if f …`).
+#
+# The pipeline is the functions LAST statement iff nothing but the closing brace follows the
+# consumer: `f() { p | grep -q X; }` yes, `f() { p | grep -q X; echo hi; }` no — there the echos
+# status is what the caller reads. Tested on the LAST STAGE, so a `;` earlier in the line (before
+# the pipe) cannot be mistaken for the terminator.
+function onelinefn(l, lst,   t) {
+  if (l !~ /^(function[ \t]+[A-Za-z_][A-Za-z0-9_:.-]*([ \t]*\(\))?|[A-Za-z_][A-Za-z0-9_:.-]*[ \t]*\(\))[ \t]*\{[ \t]/) return 0
+  t = lst
+  if (!sub(/^[^;]*;/, "", t)) return 0  # no terminator before the brace — not a body we can read
+  return (t ~ /^[ \t]*\}[ \t]*$/)
+}
+
+# Clause 4, half two: does anything READ this pipelines status?
+function consumed(l, hase,   t) {
+  if (masked(l)) return 0
+  t = ltrim(l)
   if (t ~ /^(if|elif|while|until)[ \t]/)  return 1
   if (t ~ /^![ \t]/)                      return 1
   if (!hase) return 0
-  # local/declare/export return their OWN 0 — the pipelines status never survives the assignment.
-  if (t ~ /^(local|declare|typeset|export|readonly)[ \t]/) return 0
   return 1
 }
 
@@ -368,6 +414,69 @@ BEGIN { FS = "" }
     tok = substr($0, RSTART, RLENGTH)
     sub(/^<<-?[ \t]*/, "", tok); gsub(/[\x27"]/, "", tok)
     hdterm = "^[ \t]*" tok "[ \t]*$"; inhd = 1
+  }
+
+  # ── CLAUSE 4c: A FUNCTION-FINAL PIPELINE, whose rc IS the value its caller reads ───────────────
+  # Clause 4 asks "does anything READ this pipelines status" and looks only at THIS line — a
+  # control-flow keyword, an &&, a $? capture, or (under errexit) the shell itself. A pipeline
+  # standing last in a function body is read by NONE of those and by the CALLER, every time:
+  # `f() { … ; p | grep -q X; }` makes 141 the functions return value, so `if f; then` inverts
+  # exactly as `if p | grep -q X; then` does, one frame up. The 141 is not swallowed by the
+  # function boundary; it is FORWARDED across it, which is the whole reason the shape is worth a
+  # clause of its own rather than being covered by the errexit leg.
+  #
+  # This is a NO-ERREXIT clause in practice. Under `set -e` the bare pipeline is already clause 4s
+  # (hase) hit, so nothing here double-counts; what it reaches is the `set -uo pipefail` file, which
+  # is the majority shape in this tree and the one the ec9a43a9 scar itself lived in.
+  #
+  # DEFERRED BY ONE LINE, not buffered. awk cannot look ahead, and the entire test is "does the next
+  # code line CLOSE this function". So a pipeline that clears clauses 1/2/3/5 and fails clause 4
+  # only on its unread-HERE leg is HELD; the next code line either closes the function (emit) or
+  # does not (drop). EOF drops it too — a body that runs off the end of the file is a syntax error,
+  # not a site. That keeps the detector single-pass and keeps this arm from seeing anything the
+  # other clauses do not.
+  #
+  # WHY masked() AND NOT `!consumed()` DECIDES ADMISSION. consumed() returns 0 for two unrelated
+  # reasons, and only one of them may be rescued here: `local v=$(p | head -1)` DISCARDS the status
+  # (`local` returns its own 0, so the function returns 0 whatever the pipeline did — g6/g21), while
+  # a bare `p | grep -q X` merely has nobody on its own line reading it. Rescuing the first would
+  # make this arm contradict clause 4 rather than extend it.
+  #
+  # RESIDUALS, NAMED RATHER THAN WIDENED — each is a MISS (conservative), never a false positive.
+  # No GREEN arm certifies any of them: a control that pins a residual as correct is exactly how
+  # r11/r12 spent a year certifying the bug their own widening later fixed.
+  #   · a MULTI-LINE body whose last statement sits inside a nested block — an inner `{ … }`, an
+  #     `if`/`while`, or a nested function definition. The pend check requires depth exactly 1, so
+  #     a `}` closing an inner block does not emit. (A nested ONE-LINE body is unaffected and IS
+  #     caught — it needs no depth at all; bin/cc-fleet:560 is one of the ten.)
+  #   · a two-line opener (`f()` on one line, `{` on the next), which this tree does not write.
+  #   · a $( … ) anywhere on the line, which masked() reads as an argument substitution and
+  #     discards — so partition_has in scripts/offbox-admission-lint.sh (a printf of a variable
+  #     into grep -qxF, whose -f operand carries a substitution) is missed even though it is a
+  #     status-consuming predicate. That is clause 4s pre-existing imprecision, which r13 already
+  #     names; it is not a gap this clause opened.
+  #     (NO APOSTROPHES ANYWHERE IN THIS COMMENT, and that is not style: this text lives inside the
+  #     single-quoted DETECT_AWK string, so a pair of them closes and reopens it and the shell eats
+  #     what is between. Caught here by shellcheck SC1012 while writing this list.)
+  # 1. Resolve a held candidate against THIS line — BEFORE this lines braces move the depth, so the
+  #    functions own closing brace is still read at depth 1.
+  if (pend != "") {
+    if (fdepth == 1 && line ~ /^\}[ \t]*;?[ \t]*$/) printf "%s:%d:%s\n", FILE, pend_fnr, pend_line
+    pend = ""
+  }
+  # 2. Arm on a function OPENER; then track brace depth until it returns to zero. The opener must
+  #    carry `()` or the `function` keyword — a bare `{` is a GROUP, whose status is not a return
+  #    value and whose caller is not a caller.
+  if (fdepth == 0) {
+    if (line ~ /^(function[ \t]+[A-Za-z_][A-Za-z0-9_:.-]*([ \t]*\(\))?|[A-Za-z_][A-Za-z0-9_:.-]*[ \t]*\(\))[ \t]*\{[ \t]*$/) fdepth = 1
+  } else {
+    # Net braces. Every OTHER brace shell writes is balanced within its line — ${VAR}, ${V:-d},
+    # awk \x27{print}\x27 — so the net is nonzero exactly on a block opener or closer, which is what
+    # this counts. A stray unbalanced brace inside quotes can only DISARM the arm (depth drifts, the
+    # depth-1 test stops matching), never fire it: the failure direction is a miss.
+    braces = line
+    fdepth += gsub(/\{/, "&", braces) - gsub(/\}/, "&", braces)
+    if (fdepth < 0) fdepth = 0
   }
 
   work = line
@@ -414,7 +523,15 @@ BEGIN { FS = "" }
   # the ASSIGNMENT form after the last stage separates them; g15/g16 pin both directions.
   # (No apostrophes here: this is inside the single-quoted DETECT_AWK string.)
   cap = (last ~ /;[ \t]*[A-Za-z_][A-Za-z0-9_]*=\$\?/)
-  if (amp == 0 && !cap && !consumed(line, HASE)) next
+  if (amp == 0 && !cap && !consumed(line, HASE)) {
+    # Clause 4c — nothing on THIS line reads the status, so ask whether the CALLER does.
+    # masked(), not !consumed(), gates admission (see above).
+    if (masked(line)) next
+    # A one-line body is decided NOW; there is no next line to defer to.
+    if (onelinefn(line, last)) { printf "%s:%d:%s\n", FILE, FNR, line; next }
+    if (fdepth >= 1) { pend = "1"; pend_fnr = FNR; pend_line = line }
+    next
+  }
 
   printf "%s:%d:%s\n", FILE, FNR, line
 }'
@@ -727,6 +844,61 @@ cat <<'EOF'
 if git status --porcelain | grep -q .; then :; fi
 EOF"
   expect g31 GREEN "a comment ahead of a REAL heredoc still leaves the body as DATA"
+
+  # ── THE FUNCTION-FINAL PIPELINE (2026-08-29, backlog ca97c678b18b) ────────────────────────────
+  # Clause 4 read only the pipeline's OWN line, so it could not see the one position where a
+  # pipeline's status is ALWAYS forwarded: last in a function body, where 141 becomes the function's
+  # return value and `if f; then` inverts one frame up exactly as `if p | grep -q X; then` does.
+  # Census 126 → 136 in ten sites across nine files, every one of them in a `set -uo pipefail` file
+  # — which is what made this the blind spot it was: under errexit the bare pipeline was already a
+  # clause 4 hit, so the gap opened only in the no-errexit majority shape.
+  #
+  # Like the `$?` clause before it this closes a DETECTOR blind spot rather than a live inversion:
+  # of the ten, the one with a provably status-consuming caller is is_disabled in
+  # docs/activation/pending-activation/18-fleet-activate.sh, read as `is_disabled "$label" && …` at
+  # three sites that gate activation. Its producer is `printf '%s\n' "$DISABLED_DB"` over a
+  # `launchctl print-disabled` dump — a few KB today, against a 64 KiB pipe buffer. Safe by SIZE,
+  # which is precisely the thing nothing in the tree enforces.
+  mk_noe r16 "probe() {
+  git status --porcelain 2>/dev/null | grep -q .
+}"
+  expect r16 RED "a function-final pipeline — its rc IS the value the caller reads"
+  # The live plist_label/proc_port shape: the pipeline spans lines, so the FUNCTION-FINAL line is
+  # the last STAGE. A leading-\`|\` continuation already reads as its own pipeline with an empty
+  # (hence external) producer — six such sites predate this clause — so nothing new is needed for it
+  # beyond the deferral, and this arm is what proves that.
+  mk_noe r17 "plist_label() {
+  plutil -p \"\$1\" 2>/dev/null \\
+    | sed -n 's/x/y/p' \\
+    | head -1
+}"
+  expect r17 RED "a MULTI-LINE pipeline: the last STAGE is the function-final line"
+  mk_noe r18 "is_disabled() { printf '%s\\n' \"\$DB\" | grep -Fq \"\$1\"; }"
+  expect r18 RED "a ONE-LINE body — the shape predicate helpers are written in by convention"
+
+  # ...and the four shapes that must NOT widen. A new clause that only ever says RED is not a
+  # discriminator, and this one had two live chances to over-reach: `masked` vs `!consumed` at
+  # admission (g32), and the opener strip is_external needs to read past on a one-liner (g35).
+  mk_noe g32 "probe() {
+  local v=\$(git log --oneline | head -1)
+}"
+  expect g32 GREEN "local MASKS the status even function-final — the function returns local's own 0"
+  mk_noe g33 "{
+  git status --porcelain | grep -q .
+}"
+  expect g33 GREEN "a bare { … } GROUP is not a function — its status is nobody's return value"
+  mk_noe g34 "probe() {
+  git status --porcelain | grep -q .
+  printf 'done\\n'
+}"
+  expect g34 GREEN "NOT the last statement — the later command's rc is what the caller reads"
+  # The one-line counterpart of g34 AND the control on the is_external opener strip. Unstripped,
+  # `epoch1() { head -1 … | grep -qE …; }` reads its command word as `epoch1()` and calls a BOUNDED
+  # `head -1` producer external — a false positive on the very exemption g12 exists to protect.
+  mk_noe g35 "epoch1() { head -1 \"\$1\" 2>/dev/null | grep -qE '^[0-9]+\$'; }"
+  expect g35 GREEN "a bounded head -1 producer keeps its exemption through the one-line opener"
+  mk_noe g36 "probe() { git status --porcelain | grep -q .; printf 'done\\n'; }"
+  expect g36 GREEN "one-line body, pipeline NOT last — the printf's rc is what returns"
 
   local total=$((pass+fail))
   if [ "$fail" -gt 0 ]; then
