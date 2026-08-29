@@ -266,12 +266,18 @@ def resolve_claude_bin(fallback):
     return fallback
 
 
-def _num_flag(args, name):
+def _num_flag(args, name, unit="seconds"):
     """Non-negative float value of a positional flag, or None when absent.
 
     Exit 64 (usage) on a missing or malformed value rather than defaulting: `--route fabel`
     already taught this file that a silently-defaulted flag value hands the caller a confident
-    wrong answer. A bound the caller believes it set, and did not, is worse than no bound."""
+    wrong answer. A bound the caller believes it set, and did not, is worse than no bound.
+
+    `unit` NAMES the flag's unit in that message, and it is a parameter because it was a lie the
+    moment a second unit arrived. The message was hardcoded to "seconds" for --max-wait/--max-age;
+    --strand-score --tail-h is in HOURS, so a caller mistyping it was told to supply seconds. A
+    usage error that misstates the unit is worse than a bare parse failure — it sends the reader
+    to fix the right flag with the wrong magnitude."""
     if name not in args:
         return None
     i = args.index(name)
@@ -279,7 +285,7 @@ def _num_flag(args, name):
     try:
         v = float(raw)
     except (TypeError, ValueError):
-        print(f"claude-accounts: {name} requires a number of seconds (got {raw!r})",
+        print(f"claude-accounts: {name} requires a number of {unit} (got {raw!r})",
               file=sys.stderr)
         sys.exit(64)
     if v < 0:
@@ -4953,7 +4959,7 @@ def main():
     # scripts/*.sh so the existing ~/.claude/bin/claude-accounts symlink carries it: a new file
     # would land as an ADD the live layer cannot reach until the next converge (the LIVE_ADDS trap).
     if "--strand-score" in args:
-        tail_h = _num_flag(args, "--tail-h")
+        tail_h = _num_flag(args, "--tail-h", unit="hours")
         samples, _span = _util_tail(hours=tail_h if tail_h is not None else STRAND_SCORE_TAIL_H)
         sc = strand_score(samples)
         print(json.dumps(sc, indent=2) if "--json" in args else render_strand_score(sc))

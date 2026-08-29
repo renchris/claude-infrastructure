@@ -205,6 +205,19 @@ PY
   # stdin redirections, the herestring wins, python reads the JSON body as its own program, and
   # `{"windows": 1, ...}` is a valid expression statement that exits 0 without running one
   # assertion. Use the -c form, which is how every other suite in this repo spells it.
+  # --tail-h is in HOURS and its usage error must SAY hours. _num_flag hardcoded "seconds" for
+  # --max-wait/--max-age, so the first hours-denominated caller turned that message into a lie —
+  # one that sends the reader to fix the right flag with the wrong magnitude.
+  run python3 "$CA_BIN" --strand-score --tail-h 2000
+  [ "$status" -eq 0 ] || { echo "rc=$status $output"; false; }
+  run python3 "$CA_BIN" --strand-score --tail-h abc
+  [ "$status" -eq 64 ] || { echo "rc=$status $output"; false; }
+  [[ "$output" == *"requires a number of hours"* ]] || { echo "$output"; false; }
+  # CONTROL: a seconds-denominated flag still says seconds, so the fix is a UNIT parameter and
+  # not a blanket rename of the message.
+  run python3 "$CA_BIN" --max-wait abc
+  [ "$status" -eq 64 ] || { echo "rc=$status $output"; false; }
+  [[ "$output" == *"requires a number of seconds"* ]] || { echo "$output"; false; }
   run python3 "$CA_BIN" --strand-score --json
   [ "$status" -eq 0 ] || { echo "rc=$status $output"; false; }
   run python3 -c '
