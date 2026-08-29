@@ -99,6 +99,8 @@
 #   CC_MARG_MIN_ACTIVE_LEVELS(3)    distinct active levels required by C3
 #   CC_MARG_EXEC_RE                 regex matching a session's executable path (comm), default below
 #   CC_MARG_OUT                     default sample output path
+#   CC_MARG_PROC_LOADAVG(/proc/loadavg)  the Linux load source; pointed elsewhere ONLY so the Darwin
+#                                   arm of read_load1 is reachable under test — see read_load1
 set -uo pipefail
 
 CC_MARG_TAU="${CC_MARG_TAU:-60}"
@@ -121,10 +123,18 @@ die() { printf 'capacity-marginal: %s\n' "$*" >&2; exit 2; }
 # Darwin: `sysctl -n vm.loadavg` -> `{ 1.23 4.56 7.89 }`. Linux: /proc/loadavg field 1. Empty on
 # neither, and an empty load is dropped by the sampler rather than recorded as 0 — a zero load is a
 # measurement, an unreadable one is not.
+#
+# CC_MARG_PROC_LOADAVG names the Linux source, and it exists for ONE reason: without it the DARWIN
+# arm is not merely untested off-box, it is UNREACHABLE. `/proc/loadavg` is readable on every host
+# this repo's suite runs on, so the first branch always wins and no test can enter the second — and
+# the second is the only branch the remaining work on this item executes (§6 is a multi-hour
+# unattended run on the 10-core Darwin box). The brace-skipping `$2` is the whole Darwin-specific
+# subtlety here, and an unexercised parser inside the instrument is the same defect this file's own
+# header names about `ps -axM`: a control nobody has watched run is a control nobody has checked.
 read_load1() {
-  local v=""
-  if [ -r /proc/loadavg ]; then
-    v="$(awk '{print $1}' /proc/loadavg 2>/dev/null)"
+  local v="" proc="${CC_MARG_PROC_LOADAVG:-/proc/loadavg}"
+  if [ -r "$proc" ]; then
+    v="$(awk '{print $1}' "$proc" 2>/dev/null)"
   elif command -v sysctl >/dev/null 2>&1; then
     v="$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')"
   fi
