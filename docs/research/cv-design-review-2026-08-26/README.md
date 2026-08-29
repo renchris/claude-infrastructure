@@ -10,6 +10,11 @@ cloud/API, on the pattern of Parakeet/Whisper-v3-Turbo locally and the Mistral O
 defect corpus measured three ways on this machine (`../../../bench/`). Where the agents and the
 bench disagree, the bench wins; where agents disagree with each other, both are named.
 
+> **Built since:** `IMPLEMENTATION.md` (2026-08-29) records §8 items 1 and 2, the X2 repair, and the
+> per-app weightings, each with the measurement it produced. It also **corrects two numbers in this
+> document** — the X3 gradient figures in §2 and the X2 status — because both pixel arms turned out
+> to depend on the host's font stack, and one of them was failing silently.
+
 ---
 
 ## The answer
@@ -172,6 +177,18 @@ Sampling the backdrop separately in the left and right thirds turns "unrepresent
 numbers and a verdict — no VLM call, no abstention, zero findings on the control. **That moves
 contrast-over-a-gradient out of the vision layer's queue entirely.**
 
+⚠️ **Those two numbers were host-dependent, and the arm was passing for the wrong reason**
+(2026-08-29, `IMPLEMENTATION.md` §3). It sampled the backdrop as each third's **modal** colour. On a
+gradient the backdrop is a thousand colours appearing a few times each while the text is one exact
+colour repeated, so the mode is the *text* — and the arm returned `contrast(white, white) = 1.0`
+and **nothing at all, silently**, the first time it ran on a host without Helvetica. It fired here
+only because Helvetica's antialiasing happened to leave fewer exactly-white pixels than the widest
+gradient band. Fixed by taking the **median of the pixels that are not the element's declared
+ink**; the arm now reads 6.15:1 → 1.73:1 on the title and 6.00:1 → 1.71:1 on the caption, and is
+quiet on the control and the other eleven pages. The conclusion above survives; the specific
+numbers `4.81 / 1.57` do not, and no pixel arm's number is quotable until a second host has
+reproduced it.
+
 🚨 **The centroid arm is PROVISIONAL and ships disabled** (`--x2` to enable), because trying to
 validate it found two defects in it, and both are instances of the exact failure this document warns
 about — a plausible number nobody checked. (a) It compares ink to the element's **own** box, and
@@ -181,6 +198,19 @@ background is the crop's modal colour, so on a round button the square crop's co
 background outside the circle — count as ink and swamp a 16px glyph. Both fixes are known (measure
 against the container; mask to the painted shape) and neither is done. Shipping it on would have
 handed the pipeline a confident number with no ground truth behind it.
+
+**Both are now done, and the arm still ships disabled** (2026-08-29, `IMPLEMENTATION.md` §2). It
+measures against the ancestor whose computed style makes the centring claim, and masks with an
+analytic rounded-rect built from that container's own `border-radius`: `clean` and
+`optical-centering` finally read differently (they used to emit the byte-identical finding), and
+ink on the round button falls from ~340 corner-and-rim pixels to the 59 that are the glyph. The
+repair exposed a third defect that only a correct measurement could show: the corpus's
+`translate(2px, 2px)` compensation was hand-measured on macOS/Helvetica, and on a host substituting
+Liberation Sans the true compensation is ~3.3px horizontal and ~0 vertical — so the *control* page
+carries a real ~2.4px optical error and any threshold separating it from the injected defect is a
+constant tuned to one font stack. Measured cost with `--x2`: fires on **13 of 13 pages, the control
+included**. §1's lesson again, from a new direction — a control is not clean until something
+disagrees with it.
 
 ---
 
@@ -329,6 +359,11 @@ Nothing in this list is a model purchase.
   DOM finding describe the same frame. sRGB pinned, LCD text off, reduced motion, fonts awaited.
 - `detect_dom.py` — nine general design-lint rules with an explicit `INDETERMINATE` verdict.
 - `bench_local_vlm.py` — the resolution/latency sweep.
+- `detect_xcheck.py` — the DOM-vs-pixels comparator (X1, X3 on; X2 repaired but still off).
+- `route.py` — the abstention router, stdlib-only so a gate can run it with no perception stack;
+  `--selftest` executes the routing law and `tests/design-review-router.bats` mutation-checks it.
+- `profiles.json` — the three apps' rule weightings.
+- `fp_budget.py` — the control run as a gate that exits 1, with the denominator printed.
 
 **How it reaches a session — a plain CLI, not an MCP server.** A11 checked the assumption and it was
 wrong in our favour: an MCP tool *can* return image content to Claude Code. But image data is charged
@@ -351,11 +386,17 @@ step function — but SAM is not semantic, so it will happily return a pixel-per
 band.)
 
 **To add, in order:**
-1. **The abstention router.** (The cross-check in `bench/detect_xcheck.py` already removes the gradient case from this queue.) Deterministic pass first; its `INDETERMINATE` set plus the pages it
-   cannot reason about become the VLM's queue, cropped to the region in question.
-2. **A false-positive budget.** ~20% FP is where an AI reviewer loses credibility regardless of catch
+1. ✅ **The abstention router** — built 2026-08-29 as `bench/route.py`; see `IMPLEMENTATION.md` §1.
+   (The cross-check in `bench/detect_xcheck.py` already removes the gradient case from this queue.) Deterministic pass first; its `INDETERMINATE` set plus the pages it
+   cannot reason about become the VLM's queue, cropped to the region in question. **Measured: 2
+   abstentions over 13 pages, both resolved by the cross-check, 0 crop calls** — one blind gestalt
+   call per page and nothing else.
+2. ✅ **A false-positive budget** — built as `bench/fp_budget.py`, which *exits 1*; see
+   `IMPLEMENTATION.md` §5. ~20% FP is where an AI reviewer loses credibility regardless of catch
    rate. Our two zero-FP runs are the baseline to defend; every rule added must be re-run against the
-   clean control before it ships.
+   clean control before it ships. **The re-run is now the gate rather than the instruction, and a
+   rule that appears in output without a budget entry fails the run naming itself** — measured 0
+   control findings across 10 enabled rules on 47 subject-checks.
 3. **Order-randomised comparison.** If we ever compare two designs, permute over 3–5 orderings —
    that recovers about two-thirds of the benefit of ten, and exact balancing buys essentially nothing.
    Report discrimination spread and swap-consistency, never mean agreement.
@@ -370,6 +411,14 @@ band.)
 template) is largely a marketing-aesthetics problem; `reso-management-app` (Next 16, React 19,
 Tailwind 4) is mostly design-system conformance, where the deterministic layer does nearly all the
 work; `reso-web-app` (Next 13) sits between. One review harness, three different rule weightings.
+
+✅ **Built as `bench/profiles.json`** (2026-08-29, `IMPLEMENTATION.md` §4), so a fourth app is a data
+edit. Two rules make it more than a preferences file: a weight may **lower** a severity and may never
+raise one — the rule that measured the defect stays the authority on how bad it is — and
+`tokens_authoritative: false` on the management app demotes token conformance from an assertion to an
+**abstention**, per `PIPELINE_SPEC` §1.0, because Tailwind 4 ships no token map to conform to. The
+landing app suppresses 5 findings it would never act on; the management app trades 3 unjustifiable
+assertions for 3 cropped questions.
 
 ---
 
