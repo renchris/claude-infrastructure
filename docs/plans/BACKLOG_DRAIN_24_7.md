@@ -27383,3 +27383,53 @@ What this DOES remove is narrower and real: a cloud VM can provision its own lan
 command, its land gate reaches `rc 0 / all ratchet arms GREEN` for the first time in this lane, and
 the next dispatch knows which of the two tools it must not skip and which of the two failure
 directions it is buying.
+
+### The fourth lock, and it is not a lock — every worker READS trunk through a 50-commit horizon
+
+*(2026-08-29, dispatch 9 of `f85fce7c26f5`, measured in the container. Full derivation, the control,
+and the limits: `docs/research/cloud-shallow-horizon-2026-08-29.md`.)*
+
+The three locks above are all about whether a diff can **land**. This one is about whether the diff
+is **right**, and it is met earlier than any of them — at the dispatch brief's own first instruction,
+*"read what this item cites on TRUNK, never in your own tree."*
+
+**A cloud VM's checkout arrives SHALLOW at depth 50.** Same container, same commands, before and
+after `git fetch --unshallow`:
+
+    read                                              depth 50      unshallowed
+    git rev-list --count origin/main                        50            3832
+    merge-base --is-ancestor a42f107a origin/main       rc 1 ✗          rc 0 ✓
+    git cherry census, branches tipped 08-22             0% landed      67% landed
+    git cherry census, branches tipped 08-19             0% landed      24% landed
+    git cherry census, all 305 fire-* branches           0 landed       45 landed
+    own commits credited to the 2 branches of 08-11        5119               3
+
+🚨 **`a42f107a` is this item's own cure**, and the brief tells every worker to check it against
+trunk. On the checkout the harness hands them, that check answers **FALSE** for a commit that has
+been an ancestor of `origin/main` since 08-25. Days *inside* the horizon (08-28, 08-29) score
+identically on both clones, which is what makes the effect attributable to the horizon rather than
+to the instrument.
+
+**And the horizon MOVES** — it is always the last ~50 trunk commits. Every dispatch therefore
+measures a collapse a few days back, independently "confirms" a step in the landing rate, and the
+step it confirms is its own right edge. A self-renewing false positive sitting directly underneath
+the sentence nine dispatches have re-derived: *landed work scores identically to never-pushed.*
+
+⚠️ **Silent in both directions, which is why it is a refusal and not a note.**
+`merge-base --is-ancestor` exits 1 for "no" and 1 for "below my horizon";
+`git log <sha>..origin/main -- <path>` prints nothing for "nothing changed since" and nothing for "I
+cannot reach that sha". A worker that reads a landed cure as absent re-derives it, and the diff it
+writes **reverts trunk** — hazard `6110fc45141e`, reached by a route nobody had named.
+
+**The cure** is a `TRUNCATED-HISTORY` arm in `cloud-venue-provision.sh`, first in the verdict, ahead
+of the hard lock, with `git fetch --unshallow` in the provision path. `--deepen` is deliberately not
+a fallback: a deeper wrong horizon is still a wrong horizon, and a partial cure restores the silent
+failure with a green line above it. The suite's fixture is a real `--depth 1` clone with the same
+clone *after* `--unshallow` as the positive control.
+
+**What it does NOT settle.** It does not move `d84434cd`'s reading: the rail is INTERMITTENT, the
+defect is on the operator's box, and A stays operator-gated on the one read in
+`cloud-land-arm-step-2026-08-25.md` §3. It does not touch the desk's verdict machinery either —
+`cc-cloud`'s `landed()` is an `ls-tree` of the tip tree and is horizon-proof, and `fill-paths` runs
+desk-side on a full clone. What was corrupted is the **worker's own** reads, i.e. the diagnoses; and
+this is the first link in the chain that measured its own instrument before measuring the lane.

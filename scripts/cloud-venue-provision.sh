@@ -113,14 +113,66 @@ SC_LINT="${CC_VENUE_SC_LINT:-$REPO_ROOT/scripts/bats-shellcheck-lint.sh}"
 #      the REPO, not of the diff (ship-land.sh:3421), so a repo with no suites is not locked by a
 #      missing shellcheck and must not be reported as if it were.
 # $4 = is a post-land verifier reachable on this box? (1|0) — what makes "partial" survivable.
-# Echoes "<TOKEN>\t<one line>". TOKEN ∈ LOCKED | STALE-CHECKER | UNGATED | READY | NOT-APPLICABLE | UNKNOWN.
+# $5 = the checkout's history horizon: full | shallow (empty or anything else ⇒ UNKNOWN, see below).
+# Echoes "<TOKEN>\t<one line>". TOKEN ∈ TRUNCATED-HISTORY | LOCKED | STALE-CHECKER | UNGATED |
+# READY | NOT-APPLICABLE | UNKNOWN.
 #
 # THE ORDER IS THE ORDER THE LAND MEETS THEM, and that is what makes it right rather than arbitrary:
-# LOCKED outranks STALE-CHECKER outranks UNGATED. A land that cannot start cannot be ungated, and a
-# land the statics arm reds never reaches the smoke — so naming a softer failure first would send a
-# reader to fix the thing that changes nothing yet.
+# TRUNCATED-HISTORY outranks LOCKED outranks STALE-CHECKER outranks UNGATED. A land that cannot start
+# cannot be ungated, and a land the statics arm reds never reaches the smoke — so naming a softer
+# failure first would send a reader to fix the thing that changes nothing yet.
+#
+# ── WHY THE HORIZON OUTRANKS EVEN THE HARD LOCK, THOUGH IT BLOCKS NO LAND ────────────────────────
+# Every other cell here is about whether the gate can render a verdict about a diff. This one is
+# about whether the diff is the right diff. A dispatched worker's FIRST instruction in this lane is
+# to read what its item cites ON TRUNK — `merge-base --is-ancestor <cure-sha> origin/main`,
+# `git log <sha>..origin/main -- <path>`, `git cherry origin/main <branch>` — and a cloud checkout
+# arrives SHALLOW. Measured in this container 2026-08-29 on `renchris/claude-infrastructure`:
+# `.git/shallow` present, `git rev-list --count origin/main` = **50**, and after `--unshallow`,
+# **3832**.
+#
+#   read                                        depth 50        unshallowed
+#   merge-base --is-ancestor a42f107a main      rc 1 (FALSE)    rc 0 (TRUE)
+#   git cherry census, day 2026-08-22            0% landed       67% landed
+#   git cherry census, day 2026-08-19            0% landed       24% landed
+#   git cherry census, whole 305-branch corpus   0 landed        45 landed / 371 own commits
+#   "own commits" attributed to 2 branches on
+#   2026-08-11 (fork point below the horizon)    5119            3
+#
+# Every one of those wrong answers is wrong in the SAME direction — it reports landed work as never
+# landed — and that is byte-for-byte the sentence backlog `f85fce7c26f5` has been re-derived from
+# nine times: *"the cloud return/land arm died; landed branches score identically to never-pushed."*
+# The horizon is always the last ~50 trunk commits, so it MOVES: every dispatch, whenever fired,
+# measures a step a few days back and confirms the item afresh. A self-renewing false positive.
+#
+# 🚨 AND THE FAILURE IS SILENT IN BOTH DIRECTIONS, WHICH IS WHY THIS IS A REFUSAL AND NOT A NOTE.
+# `git merge-base --is-ancestor` answers rc 1 for "no" and rc 1 for "I cannot see that far"; `git
+# log <sha>..origin/main -- <path>` prints nothing for "nothing changed since" and nothing for "that
+# sha is below my horizon". A worker that reads a landed cure as absent re-derives it, and the diff
+# it then writes REVERTS trunk — the exact hazard this repo already filed as `6110fc45141e`. A gate
+# that reds is a smaller failure than a green land of a revert, so this is met first.
+#
+# What it does NOT claim: `landed()` in bin/cc-cloud reads `git ls-tree <trunk> -- <path>`, which is
+# a read of the TIP TREE and is unaffected by the horizon; and `fill-paths` runs desk-side on a full
+# clone. The corruption measured here is of the WORKER's own reads, not of the desk's verdict
+# machinery. Unmeasured, deliberately: whether ship-land's rebase onto trunk survives a fork point
+# below the horizon. The cure is the same either way and costs one fetch.
 venue_verdict() {
-  local sc="$1" bt="$2" suites="$3" verifier="$4"
+  local sc="$1" bt="$2" suites="$3" verifier="$4" hist="${5:-}"
+  # FIRST, AND FAIL-CLOSED ON AN UNRECOGNISED OPERAND for the same reason the checker state is:
+  # a caller that forgot the operand must not be handed a clean verdict about a horizon nobody read.
+  case "$hist" in
+    shallow)
+      printf 'TRUNCATED-HISTORY\tThis checkout is SHALLOW, so every read the worker makes about trunk — is the cited cure an ancestor, has this branch landed, what changed since that sha — answers from inside its own horizon and answers WRONG in the direction that reports landed work as never landed. git merge-base --is-ancestor cannot distinguish "no" from "I cannot see that far". Deepen before reading anything.\n'
+      return 0 ;;
+    # `n-a` = not a work tree at all, so there is no trunk to read and no horizon to be wrong about.
+    # It falls through to the tool arms rather than short-circuiting: the rest of the census is still
+    # a true statement about the box even where the repo question does not arise.
+    full|n-a) : ;;
+    *)
+      printf 'UNKNOWN\tThe history horizon "%s" is not one this verdict knows (full|shallow|n-a), so there is NO verdict about this venue — not a clean one.\n' "$hist"
+      return 0 ;;
+  esac
   if [ "$suites" != 1 ]; then
     if [ "$bt" = 1 ]; then
       printf 'NOT-APPLICABLE\tThis repo has no tests/*.bats, so the .bats shellcheck ratchet never fires and there is no smoke to run. Nothing to provision.\n'
@@ -180,6 +232,37 @@ repo_has_suites() {
   [ -d "$REPO_ROOT/tests" ] && ls "$REPO_ROOT"/tests/*.bats >/dev/null 2>&1
 }
 
+# → full | shallow | n-a | unknown. ASKED OF GIT, never inferred from `.git/shallow` existing: a
+# worktree's `.git` is a file, a grafted repo can carry the marker after a deepen, and the plumbing
+# already owns the predicate. `--is-shallow-repository` is git ≥ 2.15; on anything older the answer
+# is `unknown` and the verdict refuses rather than certifying a horizon it never read.
+#
+# `n-a` IS A MEASUREMENT, NOT AN ABSTENTION, and the distinction was forced by a control rather than
+# foreseen: this file is copied into a bare directory by tests/cloud-venue-provision.bats to drive
+# the NOT-APPLICABLE cell, and the first spelling of this probe answered `unknown` there — turning a
+# clean abstention about a suite-less tree into "no verdict about this venue". A directory that is
+# not a work tree has no trunk to read and therefore no horizon to be wrong about; folding it in with
+# "git could not answer" conflates a question that does not arise with one that went unanswered. The
+# two-step is deliberate: ask whether there is a repo FIRST, then ask about its depth, so a future
+# reader cannot collapse them back.
+#
+# CC_VENUE_HISTORY overrides it for the suite in BOTH directions — unlike CC_VENUE_ABSENT, which is
+# one-directional. That asymmetry is deliberate too: this operand's optimistic value is `full`, and a
+# test that can only force `shallow` cannot drive the positive control on a box whose own clone is
+# shallow. The seam is named in the census output whenever it is used, so a forced value can never be
+# mistaken for a measurement, and the provision path REFUSES to fetch while it is set.
+history_state() {
+  local ans
+  if [ -n "${CC_VENUE_HISTORY:-}" ]; then echo "${CC_VENUE_HISTORY}"; return 0; fi
+  git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo n-a; return 0; }
+  ans="$(git -C "$REPO_ROOT" rev-parse --is-shallow-repository 2>/dev/null)" || { echo unknown; return 0; }
+  case "$ans" in
+    true)  echo shallow ;;
+    false) echo full ;;
+    *)     echo unknown ;;
+  esac
+}
+
 # THE WITNESS, AND WHY IT IS A RUN AND NOT A VERSION STRING. `--version` is a claim about the binary;
 # what the gate cares about is whether a bare run over a long-lived repo script exits 0 on THIS box,
 # which folds in the version, the locale, and any .shellcheckrc that is or is not being found. The
@@ -202,8 +285,8 @@ checker_state() {
   if shellcheck "$witness" >/dev/null 2>&1; then echo ok; else echo stale; fi
 }
 
-census() {   # prints the three reads, then the verdict line; sets VERDICT_TOKEN
-  local sc bt su vf line
+census() {   # prints the four reads, then the verdict line; sets VERDICT_TOKEN
+  local sc bt su vf hs line depth
   # Called in the plain `if` form rather than through the b() indirection: a static analyser cannot
   # see a function reached only via "$@", and reports it as dead code (SC2329). Silencing that with
   # a disable directive would trade a true statement about reachability for a comment nobody reruns.
@@ -220,7 +303,15 @@ census() {   # prints the three reads, then the verdict line; sets VERDICT_TOKEN
   printf 'repo   : tests/*.bats %s · post-land verifier %s\n' \
     "$( [ "$su" = 1 ] && echo present || echo absent )" \
     "$( [ "$vf" = 1 ] && echo reachable || echo 'NOT on this box' )"
-  line="$(venue_verdict "$sc" "$bt" "$su" "$vf")"
+  hs="$(history_state)"
+  # The DEPTH is printed beside the state, because "shallow" alone does not tell a reader how far
+  # back the wrong answers begin — and it is the number that makes the verdict's claim checkable.
+  # Counted over the trunk ref the land uses, falling back to HEAD where that ref is not fetched.
+  depth="$(git -C "$REPO_ROOT" rev-list --count origin/main 2>/dev/null \
+           || git -C "$REPO_ROOT" rev-list --count HEAD 2>/dev/null || echo '?')"
+  printf 'history: %s%s · %s commits reachable on the trunk ref\n' \
+    "$hs" "$( [ -n "${CC_VENUE_HISTORY:-}" ] && echo ' (FORCED by CC_VENUE_HISTORY — not a measurement)' )" "$depth"
+  line="$(venue_verdict "$sc" "$bt" "$su" "$vf" "$hs")"
   VERDICT_TOKEN="${line%%$'\t'*}"
   printf 'verdict: %s — %s\n' "$VERDICT_TOKEN" "${line#*$'\t'}"
 }
@@ -229,7 +320,10 @@ census() {   # prints the three reads, then the verdict line; sets VERDICT_TOKEN
 if [ "${1:-}" = "--selftest" ]; then
   fails=0; checks=0
   expect() { checks=$((checks+1)); [ "$2" = "$1" ] || { fails=$((fails+1)); printf 'SELFTEST FAIL: %s (want %s, got %s)\n' "$3" "$1" "$2"; }; }
-  tok() { venue_verdict "$1" "$2" "$3" "$4" | cut -f1; }
+  # `full` is this HELPER's default so the pre-existing cells still read as statements about the
+  # tools; venue_verdict itself has NO default and answers UNKNOWN on a missing horizon, which is
+  # what cell 17 pins. The helper's default can only ever make a cell more optimistic, never less.
+  tok() { venue_verdict "$1" "$2" "$3" "$4" "${5:-full}" | cut -f1; }
   # 1-3. each failure reaches its OWN token, and they are three different tokens — a verdict that
   #      collapsed "cannot run" into "ran vacuously" is the exact error this file was written to fix.
   expect LOCKED         "$(tok absent 1 1 0)" 'a missing checker did not read LOCKED'
@@ -248,16 +342,16 @@ if [ "${1:-}" = "--selftest" ]; then
   expect NOT-APPLICABLE "$(tok stale  0 0 0)" 'a repo with no .bats suites was reported STALE-CHECKER'
   # 9. …and NOT-APPLICABLE still distinguishes bats present from absent in its TEXT, because the
   #    next suite added to such a repo would land unrun. Token equal, sentence not.
-  expect 1 "$( [ "$(venue_verdict ok 0 0 0)" != "$(venue_verdict ok 1 0 0)" ] && echo 1 || echo 0 )" \
+  expect 1 "$( [ "$(venue_verdict ok 0 0 0 full)" != "$(venue_verdict ok 1 0 0 full)" ] && echo 1 || echo 0 )" \
            'NOT-APPLICABLE said the same thing with and without bats'
   # 10-11. the verifier operand moves only the UNGATED sentence, and never the token. It is the whole
   #      reason this venue is different from the operator's box, so it must be visible and must not
   #      be able to turn a failure into a pass.
   expect UNGATED "$(tok ok 0 1 1)" 'a reachable verifier changed the UNGATED token'
-  expect 1 "$( [ "$(venue_verdict ok 0 1 1)" != "$(venue_verdict ok 0 1 0)" ] && echo 1 || echo 0 )" \
+  expect 1 "$( [ "$(venue_verdict ok 0 1 1 full)" != "$(venue_verdict ok 0 1 0 full)" ] && echo 1 || echo 0 )" \
            'the verifier operand did not change the UNGATED sentence'
   # 12. READY is insensitive to the verifier — nothing about a green smoke depends on it.
-  expect 1 "$( [ "$(venue_verdict ok 1 1 1)" = "$(venue_verdict ok 1 1 0)" ] && echo 1 || echo 0 )" \
+  expect 1 "$( [ "$(venue_verdict ok 1 1 1 full)" = "$(venue_verdict ok 1 1 0 full)" ] && echo 1 || echo 0 )" \
            'READY was made to depend on the verifier'
   # 13. every token is reachable and distinct: a stuck verdict passes 1-12 only if it also passes this.
   expect 5 "$(printf '%s\n' "$(tok absent 1 1 0)" "$(tok stale 1 1 0)" "$(tok ok 0 1 0)" "$(tok ok 1 1 0)" "$(tok ok 1 0 0)" | sort -u | wc -l | tr -d ' ')" \
@@ -275,8 +369,34 @@ if [ "${1:-}" = "--selftest" ]; then
   # 16. the witness probe is a RUN, not a version string, and it must abstain rather than convict
   #     when there is no witness to run on — "no evidence" is never "bad".
   expect ok "$(CC_VENUE_WITNESS=/nonexistent/witness checker_state)" 'an absent witness manufactured a failure'
+  # ── the history horizon: 17-21 ──────────────────────────────────────────────────────────────────
+  # 17. NO DEFAULT. A call site that forgets the operand must not be handed a clean verdict about a
+  #     horizon nobody read — the same fail-closed law cell 14 pins for the checker state, and the
+  #     one the helper's own `${5:-full}` would otherwise hide.
+  expect UNKNOWN "$(venue_verdict ok 1 1 0 | cut -f1)" 'a missing history operand fell through to a verdict'
+  expect UNKNOWN "$(tok ok 1 1 0 sorta)" 'an unrecognised history horizon reached a real verdict'
+  # …but "there is no repo here" is a MEASUREMENT and must not be confused with "git could not
+  # answer". Pinned because a control caught this, not review: the suite copies this file into a
+  # bare directory to drive NOT-APPLICABLE, and the first spelling answered UNKNOWN there.
+  expect READY          "$(tok ok 1 1 0 n-a)" 'a non-repo horizon was treated as an unanswered one'
+  expect NOT-APPLICABLE "$(tok absent 1 0 0 n-a)" 'a non-repo horizon overrode the suite-less abstention'
+  # 18. the cell itself, on a venue that is otherwise perfect. Without this the token is unreachable.
+  expect TRUNCATED-HISTORY "$(tok ok 1 1 0 shallow)" 'a shallow checkout on a READY box did not read TRUNCATED-HISTORY'
+  # 19-20. PRECEDENCE, asserted against each token it must beat, in the order a worker meets them: a
+  #     horizon is consulted before the first read, and the first read happens before any land. A
+  #     shallow clone that ALSO cannot land must name the horizon, because fixing the lock alone
+  #     leaves the worker writing the wrong diff — and a correct-looking land of a revert is worse
+  #     than a red gate (backlog 6110fc45141e).
+  expect TRUNCATED-HISTORY "$(tok absent 0 1 0 shallow)" 'the hard lock outranked the horizon that decides WHICH diff gets written'
+  # …and it outranks the abstention too: the horizon corrupts a worker's reads in a repo with no
+  # .bats suites exactly as much as in one with them. NOT-APPLICABLE is a statement about the gate.
+  expect TRUNCATED-HISTORY "$(tok ok 1 0 0 shallow)" 'a repo with no suites hid a truncated horizon behind NOT-APPLICABLE'
+  # 21. six tokens, six distinct strings — cell 13 one wider, so a verdict stuck on the new token
+  #     cannot pass 17-20 by luck.
+  expect 6 "$(printf '%s\n' "$(tok absent 1 1 0 full)" "$(tok stale 1 1 0 full)" "$(tok ok 0 1 0 full)" "$(tok ok 1 1 0 full)" "$(tok ok 1 0 0 full)" "$(tok ok 1 1 0 shallow)" | sort -u | wc -l | tr -d ' ')" \
+           'the six tokens are not six distinct strings'
   if [ "$fails" = 0 ]; then
-    echo "cloud-venue-provision --selftest: $checks/$checks — LOCKED on an absent checker, STALE-CHECKER on one that reds a witness trunk keeps clean, UNGATED on a missing bats: three distinct failures, ordered as the land meets them and each asserted against the token it must beat; READY as the positive control; a repo with no .bats suites abstains as NOT-APPLICABLE in both directions yet still says which tool is missing; an unrecognised checker state cannot reach READY; the verifier operand moves the UNGATED sentence and never any token; all five tokens distinct; the verifier probe answers 0 off-Darwin; and the witness probe abstains when there is no witness."
+    echo "cloud-venue-provision --selftest: $checks/$checks — TRUNCATED-HISTORY on a shallow checkout, LOCKED on an absent checker, STALE-CHECKER on one that reds a witness trunk keeps clean, UNGATED on a missing bats: four distinct failures, ordered as a worker meets them (which diff, then whether the land starts, then whether anything ran) and each asserted against the token it must beat; READY as the positive control; a repo with no .bats suites abstains as NOT-APPLICABLE in both directions yet still says which tool is missing, but never hides a truncated horizon behind that abstention; neither an unrecognised checker state nor a missing/unrecognised history horizon can reach a clean verdict; the verifier operand moves the UNGATED sentence and never any token; all six tokens distinct; the verifier probe answers 0 off-Darwin; and the witness probe abstains when there is no witness."
     exit 0
   fi
   echo "cloud-venue-provision --selftest: FAILED ($fails of $checks)."
@@ -312,6 +432,32 @@ elif [ "$VERDICT_TOKEN" = UNKNOWN ]; then
   echo "⛔ no verdict about this venue — refusing to act on a state this script does not model." >&2
   exit 3
 else
+  # ── arm 0: the HISTORY HORIZON, first because it is the first thing a worker meets. It is also the
+  # cheapest and the only one that fixes a WRONG ANSWER rather than a missing one: the other arms
+  # decide whether a diff can land, this one decides whether the diff is right.
+  #
+  # `--unshallow` is the whole horizon in one call and is what a reader can re-run by hand. It is
+  # REFUSED by git on a repo that is not shallow, which is why this is reached only from the shallow
+  # verdict and why a failure here is reported rather than fatal: a venue behind a proxy that cannot
+  # complete a full fetch is still better off knowing its reads are truncated than being stopped
+  # from installing the tools. `--deepen` is not offered as a fallback on purpose — a deeper wrong
+  # horizon is still a wrong horizon, and a partial cure here would put the silent failure back with
+  # a green line above it.
+  if [ "$VERDICT_TOKEN" = TRUNCATED-HISTORY ]; then
+    if [ -n "${CC_VENUE_HISTORY:-}" ]; then
+      echo "⛔ the horizon is FORCED by CC_VENUE_HISTORY — refusing to fetch against a value that is not a measurement." >&2
+      exit 3
+    fi
+    echo "→ the checkout is shallow — fetching the full history before anything reads trunk"
+    if git -C "$REPO_ROOT" fetch --unshallow --quiet 2>/dev/null; then
+      printf '  deepened: %s commits now reachable on the trunk ref\n' \
+        "$(git -C "$REPO_ROOT" rev-list --count origin/main 2>/dev/null || echo '?')"
+    else
+      echo "⛔ git fetch --unshallow failed — this venue's reads about trunk are STILL truncated and still silent about it. Every 'is the cited sha on trunk' answer below is unsafe; re-run when the remote is reachable." >&2
+      exit 3
+    fi
+  fi
+
   # ── arm 1: the packages, from the distro. Deliberately not clever: one package manager, the two
   # packages the addendum names, and a REFUSAL rather than a sudo prompt where it cannot run
   # unattended — a dispatched session has nobody to answer a prompt, so a prompt is a hang.

@@ -127,6 +127,77 @@ setup() {
   [[ "$output" == *"unknown argument"* ]]
 }
 
+# ── the history horizon ───────────────────────────────────────────────────────────────────────────
+# The subject's --selftest drives this cell with a synthetic operand. What it cannot show is that the
+# LIVE probe reaches it from a real checkout, which is the only thing that matters: a cloud VM is
+# handed a shallow clone by the harness, not by a flag. So the fixture here is an actual
+# `git clone --depth 1`, and the positive control is the SAME clone after `--unshallow` — one repo,
+# one difference, both directions. Without the second half a probe hard-wired to `shallow` passes.
+#
+# `$REPO` is cloned rather than a synthetic history, because the verdict's precedence has to be read
+# against a repo that genuinely has tests/*.bats; a toy repo reads NOT-APPLICABLE and would prove
+# nothing about the ordering.
+
+# Builds a depth-1 clone of $REPO at $1 and installs THE VERSION UNDER TEST into it. The copy is not
+# a shortcut: a clone carries $REPO's committed HEAD, so without it every cell here would exercise
+# whatever `scripts/cloud-venue-provision.sh` last landed and pass against a subject that has none of
+# this arm in it — a fixture testing the wrong file, silently. The clone supplies the two things that
+# cannot be faked (a genuinely shallow `.git` and a tests/*.bats tree); the subject comes from here.
+#
+# Skips (never fails) where the venue cannot produce a clone — a file:// clone is refused under some
+# `protocol.file.allow` policies, and a suite that FAILED there would be reporting the sandbox's
+# policy as a defect in the subject.
+_shallow_clone() {
+  git clone --depth 1 --quiet "file://$REPO" "$1" 2>/dev/null \
+    || skip "this venue cannot make a file:// clone (protocol.file.allow?)"
+  [ "$(git -C "$1" rev-parse --is-shallow-repository 2>/dev/null)" = true ] \
+    || skip "clone --depth 1 did not produce a shallow repo here"
+  cp "$SUT" "$1/scripts/cloud-venue-provision.sh"
+}
+
+@test "a REAL shallow checkout reads TRUNCATED-HISTORY, and --check exits non-zero on it" {
+  _shallow_clone "$BATS_TEST_TMPDIR/shallow"
+  run bash "$BATS_TEST_TMPDIR/shallow/scripts/cloud-venue-provision.sh" --check
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"verdict: TRUNCATED-HISTORY"* ]] || false
+  [[ "$output" == *"history: shallow"* ]] || false
+  # the sentence must name the DIRECTION of the wrong answer, which is the whole finding: a horizon
+  # that merely "might be incomplete" reads as a caveat and gets ignored.
+  [[ "$output" == *"reports landed work as never landed"* ]]
+}
+
+@test "…and the same clone, deepened, stops reading it — the probe measures the repo" {
+  _shallow_clone "$BATS_TEST_TMPDIR/deepened"
+  git -C "$BATS_TEST_TMPDIR/deepened" fetch --unshallow --quiet 2>/dev/null \
+    || skip "this venue could not unshallow the fixture"
+  run bash "$BATS_TEST_TMPDIR/deepened/scripts/cloud-venue-provision.sh" --check
+  [[ "$output" == *"history: full"* ]] || false
+  [[ "$output" != *"TRUNCATED-HISTORY"* ]]
+}
+
+@test "the horizon outranks the hard lock, live — fixing the gate alone leaves the wrong diff" {
+  _shallow_clone "$BATS_TEST_TMPDIR/shallow-locked"
+  CC_VENUE_ABSENT="shellcheck bats" run bash "$BATS_TEST_TMPDIR/shallow-locked/scripts/cloud-venue-provision.sh" --check
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"verdict: TRUNCATED-HISTORY"* ]] || false
+  [[ "$output" != *"verdict: LOCKED"* ]]
+}
+
+@test "a forced horizon is NAMED as forced and can never be mistaken for a measurement" {
+  CC_VENUE_HISTORY=shallow run bash "$SUT" --check
+  [[ "$output" == *"FORCED by CC_VENUE_HISTORY"* ]] || false
+  [[ "$output" == *"verdict: TRUNCATED-HISTORY"* ]]
+}
+
+@test "provision REFUSES to fetch against a forced horizon rather than acting on a non-measurement" {
+  local before; before="$(cd "$REPO" && git rev-list --count HEAD)"
+  CC_VENUE_HISTORY=shallow run bash "$SUT"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"refusing to fetch"* ]] || false
+  [ "$(cd "$REPO" && git rev-list --count HEAD)" = "$before" ]
+}
+
+
 # ── the claims this file makes ABOUT ship-land.sh, pinned so they cannot rot silently ─────────────
 # Both are greps for shapes, not for prose: a comment could be reworded without the routing changing,
 # and the routing could change without the comment being touched. It is the routing that is pinned.
