@@ -249,7 +249,6 @@ hooks/session-start.sh:agent-browser
 hooks/waiting-recycle.sh:gtimeout
 hooks/waiting-recycle.sh:timeout
 scripts/autonomy-sweep.sh:gtimeout
-scripts/autonomy-sweep.sh:timeout
 scripts/lead-supervisor.sh:cc-notify
 scripts/lead-supervisor.sh:gtimeout
 scripts/lead-supervisor.sh:timeout
