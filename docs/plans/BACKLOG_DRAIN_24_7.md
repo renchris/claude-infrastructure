@@ -27138,3 +27138,175 @@ The census reproduces a fourth time —
 **Still operator-gated, and unchanged:** `bash scripts/cloud-land-arm-diagnose.sh` on the operator's
 box. The eighth dispatch of this row should not go to a cloud VM — the one read it needs does not
 exist there.
+
+### Addendum 2026-08-29 (second) — ONLY ONE OF THE TWO "LOCKS" IS A LOCK; THE OTHER IS A SILENT UNGATING (`70f0001c657b`)
+
+Written from inside a cloud VM — the venue the addendum above says the next dispatch should not go
+to — because the reads that settle this exist ONLY there. **Its prescription is NOT sufficient, and
+its framing is wrong.** Both halves matter, and neither is visible from the operator's box.
+
+**What it says:** *"Both locks are provisionable in the venue … `apt-get install -y shellcheck bats`
+… `bats-shellcheck-lint --selftest` moves 2 → 19/19."* Every clause of that is literally true, and a
+VM that runs exactly that command **still cannot land**. Measured here on Ubuntu (shellcheck 0.9.0,
+bats 1.10.0 from the archive, exactly the versions it names), on a tree at `origin/main`:
+
+    cell                        bats-shellcheck-lint      ship-land --precheck --working
+    both absent                 --selftest exit 2         rc 9   (GATE_KILLED)
+    shellcheck absent only      --selftest exit 2         rc 9   (GATE_KILLED)
+    bats absent only            --selftest 19/19          rc 0   — all ratchet arms GREEN
+    both present                --selftest 19/19          rc 0   — all ratchet arms GREEN
+
+**`bats` is not a lock.** It is not a lock at the precheck (measured, rc 0 in 58 s with `bats`
+renamed off `/usr/bin`), and it is not a lock at the land either — it fails in the OPPOSITE
+direction, silently:
+
+- `gate_bats` runs a bare `bats "$@"` (`scripts/ship-land.sh:1749`), which exits **127**.
+- `run_scoped_suite`'s discriminator is the **TAP body, never the exit code** — deliberately, and
+  rightly, since `c605a2e` — so 127 carries **zero `not ok`** and reads as a **CUT**. The exoneration
+  re-run is a second cut. It returns 2.
+- `run_smoke` maps that to `cut=1` → `SMOKE_STATE="partial"` → **`return 0`**. The land PROCEEDS.
+
+So a VM provisioned with shellcheck alone lands normally, prints `⚠ gate: smoke PARTIAL`, exits 0,
+and **nothing anywhere has executed the diff.** `ship-land.sh:2136`'s trade — *"a non-verdict never
+blocks a land; the post-land verifier decides"* — is sound on the box that HAS a post-land verifier
+and vacuous on one that does not. The verifier is a launchd job on the operator's Mac; a cloud VM has
+no launchd and no way to acquire one, and this plan already records that verifier INERT for days
+(`01ab05685857`). On this venue `partial` does not hand the verdict to a backstop — it means no
+process anywhere will ever run the code, and it says so with exit 0.
+
+**The two tools therefore have different jobs and both are required, for different reasons:
+shellcheck lets the land HAPPEN, bats lets the land MEAN something.** That is why the prescription
+must not be reduced to "install the thing that unblocks it".
+
+**The polarity is NOT a bug and is not changed here.** Making a runner-absence blocking would convict
+every legitimate load cut with the same code, which is R6 broken in the direction `ship-land.sh`
+least tolerates. The cure belongs in the venue.
+
+### The THIRD lock, which the prescribed command itself walks into: presence is not a version
+
+`apt-get install -y shellcheck` gives **0.9.0**. `run_gate`'s statics arm runs a **bare**
+`shellcheck "${sc_todo[@]}"` (`ship-land.sh:2586`) over every CHANGED shell file IN FULL and reds on
+**any** non-zero. Measured on `origin/main`'s own **unmodified** `scripts/ship-land.sh`, extracted
+through `git archive` into a full tree:
+
+    checker           locale                              rc   findings   note
+    0.9.0             LC_ALL/LANG/LC_CTYPE all unset      2    48         output CRASHES mid-stream:
+                        (this container's default)                       "commitBuffer: invalid argument"
+    0.9.0             LC_ALL=en_US.UTF-8 (not generated)  2    48         same crash — falls back to C
+    0.9.0             LC_ALL=C.UTF-8                      1    114        SC2317 noise, no crash
+    0.11.0            any of the above                    0    0          clean
+
+So the prescribed command installs a checker that **reds unmodified trunk**, and it does so twice
+over. 0.9.0's SC2317 fires on shapes 0.11 does not flag, and the repo's `.shellcheckrc` waives
+exactly SC2001 and SC2015 **by name** — deliberately: *"a lowered severity threshold would have
+waived every future info/style finding sight-unseen."* That file's own header records that its
+policy was verified against **0.11**, which is the version this repo is written for; nothing on the
+operator's box could ever have surfaced the gap, because the operator's box has 0.11.
+
+The **rc-2 crash** is the sharper half and it is a fourth face of the same generator this plan keeps
+meeting: a Haskell runtime writing this repo's em-dashes and arrows under a non-UTF-8 locale dies
+mid-output, and **the statics arm cannot tell rc 2 from rc 1** — a NON-VERDICT read as a red, which
+is precisely the conflation `bats_sc_nonverdict` exists to prevent one arm over. The version floor
+subsumes the locale (0.11 is clean at the inherited locale), so one fix closes both.
+
+**Therefore the venue step is not `apt-get install -y shellcheck bats`.** It is: install those, then
+**verify by RUNNING the checker on a witness trunk keeps clean**, and replace it from upstream when
+that run is non-zero. A `--version` string is a claim about the binary; the witness is a claim about
+this box, and it folds in the version, the locale, and whether `.shellcheckrc` is being found at all.
+`scripts/cloud-venue-provision.sh` does exactly that and reported, end to end on this VM:
+`STALE-CHECKER` → fetch v0.11.0 → `READY`, then `bats-shellcheck-lint --selftest 19/19`. With it,
+`ship-land.sh --precheck --working` is **rc 0, all ratchet arms GREEN** on this box — the first
+recorded green land gate from a cloud VM in this lane.
+
+**Landed with this addendum:**
+
+- `scripts/cloud-venue-provision.sh` (+ `--check`, `--no-upgrade`, `--selftest` **16/16**) — the
+  addendum above says *"Not fixable as code from here. A SessionStart hook would mean editing
+  `.claude/settings.json`, which the dispatch rails forbid in place."* True of a HOOK, not of a
+  SCRIPT: a dispatched session can run one command before it works, at no settings edit, no hook
+  registration, no launchd change. The file installs both tools, **upgrades the checker when the
+  witness still reds**, and then **asserts each one can SPEAK** — presence on `PATH` is not a
+  verdict, so it re-runs `bats-shellcheck-lint --selftest` and reports what that returns. Six tokens,
+  all reachable and distinct, ordered as the LAND meets them: `LOCKED` (checker absent) →
+  `STALE-CHECKER` (present but reds the witness) → `UNGATED` (bats absent) → `READY`, plus
+  `NOT-APPLICABLE` (a repo with no `tests/*.bats`, because the ratchet's entry condition is a
+  property of the REPO and not of the diff — which is also why a missing checker blocks a docs-only
+  land here) and `UNKNOWN` (an operand this verdict does not model — fail closed, never `READY`).
+  Its one test seam, `CC_VENUE_ABSENT`, is **one-directional by construction**: it can make a tool
+  look absent, never present, so no suite can certify a box that cannot land. The upstream fetch is
+  named rather than buried — it prints the URL and the sha256 of what it got, states that this is
+  provenance and not proof, and `--no-upgrade` declines it for a venue whose policy is archive-only.
+- `tests/cloud-venue-provision.bats` — **16/16**, and four of the sixteen pin the claims this work
+  makes about `ship-land.sh` rather than about itself: the exit-2 → `bats_sc_nonverdict` →
+  `GATE_KILLED` route, the `cut → partial → return 0` polarity, the bare `bats "$@"`, and the
+  repo-scoped entry condition. The whole finding is an argument about someone else's control flow,
+  and an argument about code rots when that code changes. Admitted by `offbox-admission-lint` as
+  **green off-box**, which is the property a cloud lane needs and cannot assume.
+- A comments-only correction block in `scripts/ship-land.sh` at the `cut → partial` site, stating
+  the venue caveat where a reader of that line will meet it. **Non-comment lines byte-identical to
+  `origin/main` by sha256** — the discrimination gate recycle #258 recommended stealing, run here.
+
+**Six instrument faults, all mine, all found by a control or a gate rather than by a wrong number —
+and the last three were found by the arms of this very diff, which is the point of writing them:**
+
+1. 🚨 **A `shellcheck` finding-set diff taken on a file OUTSIDE its tree is a different experiment.**
+   Comparing `git show origin/main:scripts/ship-land.sh > /tmp/x.sh` against the working copy
+   reported **one SC2015 present on main and absent at HEAD** — impossible for a comments-only diff.
+   ShellCheck resolves `source` directives relative to the FILE, so the two runs analysed different
+   dependency sets. Extracted through `git archive | tar -x` into a full tree instead: **113
+   findings both sides, identical, 0 new and 0 removed.** Never lint a checked-out blob in isolation.
+2. 🚨 **A negative control that mutates ONE occurrence proves nothing about a shape that occurs
+   eight times.** The first NEG run reported two of three `ship-land.sh` pins VACUOUS. They were not:
+   the mutator used `str.replace(old, new, 1)`, and the pinned shapes occur **2, 1 and 8** times.
+   With every occurrence replaced, all three flip — CAUGHT. *Count the occurrences before believing
+   a control that says your assertion is vacuous.*
+3. 🚨 **`[[ "$output" == *"return 0"* ]]` is a vacuous pin, and the mutant that proves it is one
+   line.** Adding a `return 1` ABOVE the `return 0` satisfies the substring test while inverting the
+   behaviour the entire finding rests on. The assertion now requires the block to contain `return 0`
+   **and no `return 1` and no `gate_red`** — presence was the easy half; absence is the half that
+   carries the claim.
+4. 🚨 **AN ENV-VAR SEAM CAPTURED AT FILE SCOPE IGNORES THE CALLER THAT SETS IT.** The witness path
+   was resolved once into a global; the selftest cell that drives it with `CC_VENUE_WITNESS=… ` got
+   the default anyway and read `stale` where it must read `ok`. Same family as fault 1 — *a control
+   that measures a different question than its subject.* Resolve a seam INSIDE the function that
+   uses it, or the seam is decoration.
+5. 🚨 **A VERDICT OVER A WORD-VALUED OPERAND FELL OPEN TO `READY`.** Widening the checker's state
+   from a 1/0 flag to `absent|stale|ok` made every unmodelled value — a typo, a future fourth cause —
+   fall through the `if` ladder to the success token, certifying a box nobody measured. Caught by a
+   cell added in the same edit, not by review. **Fail closed on the operand you did not model**, and
+   assert it: the cell is `tok wat 1 1 0 ≠ READY`.
+6. 🚨 **THE LAUNCHD-SAFE `PATH` IDIOM IS A CORRECTNESS BUG IN A SCRIPT THAT MEASURES WHICH BINARY THE
+   LAND WILL GET.** Every sibling here opens with `export PATH="/usr/bin:/bin:…:${PATH}"`, which is
+   right for a script that must survive an empty PATH and does not care which copy of a tool it
+   gets. This one's whole job is to answer *which copy will the land resolve* — and the forced
+   `/usr/bin` prefix made it read the distro 0.9.0 even after 0.11.0 was installed at
+   `/usr/local/bin`, i.e. `STALE-CHECKER` forever on a venue that is fine, re-fetching on every run.
+   Its own suite went red on the positive control the moment the upgrade arm landed. **Appended
+   instead of prepended**, and the upgrade arm now verifies against the *ambient* PATH captured
+   before that line — because a READY taken under our own PATH is a claim about a binary the gate
+   never invokes.
+
+Two of the gates caught defects in this diff that no amount of re-reading would have: the
+**dead-assertion ratchet** named 8 assertions of the new suite that `errexit` cannot reach (fixed
+with the prescribed `bats-assert-liveness-fix.py`, not by hand), and **self-path-lint** refused
+`REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"` — correctly, and with real
+consequence: `~/.claude/scripts/` are per-file symlinks, so on the live path that spelling yields
+`~/.claude`, which has no `scripts/ship-land.sh` to use as a witness. The script would then have
+reported `NOT-APPLICABLE` — **a clean verdict about the wrong tree, on the only path that matters.**
+
+Also met, and worth its own line because it happened **four times in one diff**: a comment line
+whose first word is the lower-case checker name parses as a malformed directive (SC1072/SC1073) and
+aborts analysis of the whole file. `ship-land.sh:2552` documents the trap by name and
+`bats-shellcheck-lint`'s own refusal message prescribes the cure (capitalise it — the parser is
+case-sensitive). It was documented in two places and still cost four hits: the new script, the new
+suite, and twice more in a table added later in the same session. ⚠️ **Indentation does not save
+you** — the fourth pair were `#     <name> 0.9.0 …`, five spaces in, and SC1073 fired anyway; only
+the first WORD is examined. **A hazard that is only documented is a hazard that is still live**, and
+the cheapest real fix would be a lint over `.sh` files, which `bats-shellcheck-lint` performs for
+`.bats` files only.
+
+**What this does NOT settle.** It says nothing about the 08-17 step, nothing about the return arm,
+and nothing about whether `cloud-land-arm-diagnose.sh` will name a divergence — that read still
+exists only on the operator's box and is still the standing operator-gated step. What it removes is
+narrower and real: a cloud VM can now provision its own land path in one command, and knows which of
+the two tools it must not skip.

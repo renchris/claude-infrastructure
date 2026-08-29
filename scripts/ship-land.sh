@@ -2131,6 +2131,28 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
     fi
     return 1
   fi
+  # ── VENUE CORRECTION 2026-08-29 (BACKLOG_DRAIN_24_7, second addendum of the day) ────────────────
+  # THE TRADE BELOW IS SOUND ON THE BOX THAT HAS A POST-LAND VERIFIER, AND VACUOUS ON ONE THAT DOES
+  # NOT — and the second case is now the majority of this repo's lands. "The post-land verifier
+  # decides" names a launchd job on the operator's Mac. A cloud VM has no launchd, no verifier and
+  # no way to acquire one, so on that venue `partial` does not hand the verdict to a backstop: it
+  # means NO PROCESS ANYWHERE will ever execute the diff, and it exits 0 while saying so.
+  #
+  # That matters most for the one cause this arm cannot distinguish from a load cut: A MISSING
+  # `bats`. gate_bats runs a bare `bats "$@"`, which exits 127; the discriminator ~130 lines below
+  # is the TAP BODY and never the exit code (deliberately, and rightly — c605a2e), so 127 carries
+  # ZERO `not ok`, reads as a CUT, is re-run into a second cut, and returns 2. Every selected suite
+  # takes that path, so `cut` is 1 for a reason that has nothing to do with the machine being busy.
+  # MEASURED on a cloud VM 2026-08-29, and it is the exact INVERSE of the same tool's neighbour:
+  # a missing shellcheck is a HARD LOCK (bats_sc_nonverdict → GATE_KILLED → exit 9, `--precheck
+  # --working` rc 9 on a docs-only tree), while a missing bats is not a lock at all.
+  #
+  # NOTHING HERE IS CHANGED, AND THAT IS THE FINDING, NOT AN OMISSION. Making a runner-absence
+  # blocking would convict every legitimate load cut with the same code, which is R6's rule broken
+  # in the direction this file least tolerates. The cure belongs in the VENUE, one command before
+  # the land rather than a new branch inside it: scripts/cloud-venue-provision.sh, which installs
+  # both tools and then asserts each one can SPEAK. The plan's 2026-08-29 addendum prescribed
+  # `apt-get install -y shellcheck bats` as "both locks"; only one is a lock, and the other is this.
   if [[ "$cut" -eq 1 ]]; then
     SMOKE_STATE="partial"
     echo "⚠ gate: smoke PARTIAL — $n direct suite(s) attempted in ${SMOKE_S}s, not all earned a verdict (cut or budget). A non-verdict never blocks a land; the post-land verifier decides." >&2
