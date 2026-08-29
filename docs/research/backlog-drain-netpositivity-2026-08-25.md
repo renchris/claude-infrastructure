@@ -68,15 +68,66 @@ rows, not a measurement of live ones (§7).
 
 `cc-backlog freshness` reads **`never validated: 457 of 501 live rows`**. Only 47 live rows carry a
 falsifier probe at all. When the sweep does run it works: the 2026-08-24T07:59Z pass marked 4 rows
-falsified and all 4 closed within 3 minutes. **This is a scheduling problem, not a design problem.**
+falsified and all 4 closed within 3 minutes. ~~**This is a scheduling problem, not a design
+problem.**~~
+
+🚨 **THAT LAST SENTENCE IS REFUTED — it is a COVERAGE problem, and the sweep is structurally unable
+to fix it (measured 2026-08-29, backlog `37b112d8950d`).** The claim was minted into an item ("run
+the falsifier sweep across all 457 unvalidated rows") whose two projections are both unreachable by
+the command it names. The mitigation is not "91% unapplied"; it is **fully applied to the population
+it can reach**, and that population is ~47 rows, not 457.
+
+**Why, from the code rather than from this document's summary of it.** `cc-premise` recognises a row
+via `probe_capability` (`bin/cc-premise:2121`) through exactly three arms — a **stored** `falsifier`,
+a **derived-plan** probe (the row cites a plan whose frontmatter can be re-read), and a
+**derived-postland** probe (a `post-land RED:` row). A row matching none is `"none"` → the sweep
+classes it `plain`. All three sites that can return the `falsified` verdict (`bin/cc-premise:1403`,
+`:1932`, `:2104`) **are those same three arms**, and `--close-falsified` consumes only the `falsified`
+bucket (`_close_falsified`, `:2752`). **A probe-less row therefore cannot reach a `falsified` verdict,
+and cannot be closed by the sweep, by construction.**
+
+The freshness metric is the same story from the other side. `cmd_sweep` refuses to stamp an unprobed
+row *on purpose*, and its own comment names this document's number: stamping them "would drive the
+never-validated headline to ZERO while ~400 of 564 rows had had nothing run against them… not a
+weaker metric than none, [but] a WORSE one". The invariant is pinned by shipped tests
+(`tests/backlog-freshness.bats:296` and case 15b; `tests/cc-premise-shard.bats:124,135` assert
+`unprobed` is a property of the STORE, not of the pass). **So the 457 is a count of rows no arm can
+speak for, and it falls only when generators start emitting probes — which is L2, not L1.**
+
+**The measurement.** A synthetic store of 8 live rows — 3 probe-carrying (2 whose falsifier passes,
+1 still live) and 5 probe-less — run through the item's exact prescribed command,
+`cc-premise sweep --record --close-falsified 20`:
+
+| | before | after |
+|---|---:|---:|
+| live rows | 8 | 6 |
+| never validated | 8 of 8 | **5 of 6** |
+| rows stamped | 0 | **3** — exactly the probe-carrying ones |
+| probe-less rows closed *or* validated | — | **0 of 5** |
+
+The two closures and all three stamps are the probe-capable rows. **The five probe-less rows were
+untouched on both axes.** Scaled to the live store, the sweep's reachable yield is bounded by the
+capable population, of which 44 are already validated — so **L1 cannot retire 54–89 rows and cannot
+convert ~400 rows to known freshness.** The prose arms (superseded · self-duplicate · corrected ·
+suspect · re-keyed clusters) *do* run over `plain` rows and are the one real residual value in
+sweeping them — the pass above clustered all 5 — but they are **reported, never closed**, so they
+yield triage, not retirement.
+
+**What is genuinely unknown, and the one command that settles it.** The exact capable population on
+the live store is not 47: that figure counts *stored* falsifiers only, while two derived arms also
+confer capability (the 27 blocked `post-deploy HOST RED:` rows in §3 are derived-postland-capable and
+carry no stored probe). `cc-premise sweep --json` reports `unprobed` / `deferred` / capable directly —
+**run it on the box that holds the store before sizing any successor to L1.**
 
 ### What refutes the strong form
 
 The ticket usually still points at a real artifact. All 20 sampled files from the >72 h population
 still exist at HEAD (20/20). Of 291 file:line anchors, only **6.1% had vanished** at claim time;
 58.8% had merely **moved within the same file**. **The line number and the premise rot; the file does
-not** — so a stale row is usually cheap to revalidate, which is exactly why L1 below is the top
-intervention.
+not** — so a stale row is usually cheap to revalidate, which is exactly why ~~L1~~ **L1′** below is
+the top intervention. *(The premise survives the 2026-08-29 refutation and the conclusion narrows:
+revalidation is cheap, but only for a row something can re-ask. Cheapness is why giving the rows an
+arm is worth doing; it was never evidence that the sweep already could.)*
 
 The sharpest instance is recorded in the repo's own code, `scripts/ship-land.sh:1020-1024`: *"censused
 2026-08-12, 24 of the 25 `re-land …` rows … were false — the work had landed under a different sha —
@@ -211,12 +262,24 @@ different owners.
 
 ## 6. WHAT TO ACTUALLY DO — ranked by effect per effort
 
-**L1 · Run the falsifier sweep across all 457 unvalidated live rows — AGENT, ~1 day.**
-`cc-premise sweep --record` / `cc-backlog falsify` over every live row lacking a probe, then
+**L1 · ~~Run the falsifier sweep across all 457 unvalidated live rows — AGENT, ~1 day.~~ REFUTED
+2026-08-29 — see §2. Superseded by L1′ below.**
+~~`cc-premise sweep --record` / `cc-backlog falsify` over every live row lacking a probe, then
 `--close-falsified`. Retires an estimated **54–89 rows with no work done**, and converts ~400 more
-from *unknown freshness* to *known*. Existence proof: the 2026-08-24 pass falsified 4 rows, all
-closed within 3 minutes. **#1 because it attacks residence-time decay directly and makes every later
-decision cheaper.**
+from *unknown freshness* to *known*.~~ **Both projections are unreachable by that command.** The
+sweep acts only on probe-CAPABLE rows; a row "lacking a probe" is precisely the row it cannot close
+and cannot stamp, by construction and by shipped test. The 2026-08-24 existence proof is real but
+speaks only for the ~47 capable rows — it was never evidence about the 457. Measured refutation,
+code sites and the 8-row control: §2.
+
+**L1′ · Give the probe-less rows an arm — AGENT, sizing UNKNOWN until the census runs.**
+The 457 falls only when rows become capable, so the real L1 is a *coverage* intervention and it
+collapses into **L2**, which is already the right shape (`--condition` at the mint sites) but was
+scoped prospectively — to new rows only. **Extend it retrospectively:** for the existing pool, the
+cheapest arm is `derived-plan`, since a row that cites a plan needs no hand-written probe. First
+step is a census, not a sweep: `cc-premise sweep --json` for the true `unprobed` count, and a fold
+for how many probe-less rows carry a resolvable `dodRef`. **Do not re-file L1 as written; it will
+be refuted again.**
 
 **L2 · Adopt `--condition` at the four uncured mint sites — AGENT, ~half a day.**
 `scripts/ship-land.sh:1000`, `scripts/postland-verify.sh:793-797`, `scripts/deploy-live.sh:725,870`,
@@ -224,7 +287,10 @@ decision cheaper.**
 in this repo (postland ~10×, re-land 8.6×).
 
 **L3 · Decide the operator-gated blocked rows — OPERATOR ONLY, 3–7 sittings.**
-Run L1 against the blocked pool *first*: a hand-check of 16 mechanically-verifiable blocked rows found
+~~Run L1 against the blocked pool *first*~~ — **the sweep cannot triage that pool either**: those
+rows are overwhelmingly probe-less, and the hand-check below is a *hand*-check precisely because
+nothing automated could speak for them. The finding stands; the delegation does not. A hand-check of
+16 mechanically-verifiable blocked rows found
 **8 dead outright, 1 partly dead (56%)** — including three separate filings of "plug the MacBook into
 AC power" against a machine `pmset -g ps` reports is on AC and charged. Honest sizing: **45–135 rows**
 are genuinely un-performable by any agent. **This is the only lever that touches the floor.**
@@ -313,7 +379,11 @@ wrong population, or the wrong conclusion. The counts were fine; the *folds* wer
 ### Still blind — say "unknown", not a number
 
 1. **Live staleness is projected, not measured.** The 54–89 figure applies *closed-row* rates to
-   *live* rows. **The true live rate is UNKNOWN until L1 runs.**
+   *live* rows. ~~**The true live rate is UNKNOWN until L1 runs.**~~ **Corrected 2026-08-29: L1 as
+   written can never settle it.** The sweep measures only probe-capable rows, so running it leaves
+   the live rate for the ~410+ probe-less rows exactly as unknown as before (§2). This entry was
+   the doc's own flag that the number was soft; the error was naming a remedy that cannot reach the
+   population. It stays **UNKNOWN**, now with a known reason and a real precondition — L1′.
 2. **The `project` field records the worktree directory basename, not the repo.** ~100 rows are filed
    under slugs like `.desk-land-claude-fire-…`. **Every per-project census here undercounts
    claude-infrastructure by an unknown margin** — including my own 64.1% machinery figure.
