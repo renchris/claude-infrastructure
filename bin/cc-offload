@@ -517,6 +517,30 @@ cmd_up_api() {
   local api="${CC_OFFLOAD_CREATE_API:-$ROOT/scripts/cloud-create-api.py}"
   [ -f "$api" ] || { note "cc-offload: missing $api"; return 3; }
 
+  # ── THE ABSENCE CONTRACT (backlog 0c8b39b67665) ────────────────────────────────────────────────
+  # This lane delivered `cat "$pf"` VERBATIM: no branch name, no push instruction, nothing. The
+  # branch is authorised at create (`outcomes.git_info.branches`) so the VM *may* push to it, but
+  # authorisation is not instruction — nothing ever told the session the name, and a session that
+  # is never told cannot push. Meanwhile the declaration made two lines below arms `bin/cc-cloud`'s
+  # C1 arm against exactly that ref, and CLOUD_OBSERVABILITY.md §4.1 is explicit that C1 is only
+  # readable BECAUSE the brief requires a first-act push. So this lane armed the reader and shipped
+  # none of the contract the reader assumes.
+  #
+  # REFUSE rather than fire without it. A brief with no return contract produces a session that
+  # spends an account's rate limit and is then indistinguishable from one that never booted — the
+  # same trade the preflight refusal already makes on the sibling lane: an unobservable fire is
+  # worse than no fire, and the refusal is only worth anything BEFORE the quota is spent.
+  local contract_lib="${CC_OFFLOAD_CONTRACT_LIB:-$ROOT/scripts/lib/cloud-create.sh}"
+  if [ ! -f "$contract_lib" ]; then
+    note "cc-offload: missing $contract_lib — it holds the return contract (the boot beacon a"
+    note "  cloud session must push before any work). Firing without it spends quota on a session"
+    note "  nothing here could tell apart from one that never booted. Refusing."
+    return 3
+  fi
+  # shellcheck source=../scripts/lib/cloud-create.sh
+  # shellcheck disable=SC1090,SC1091  # runtime-resolved via the seam; the ship gate runs shellcheck without -x
+  . "$contract_lib" || { note "cc-offload: could not source $contract_lib"; return 3; }
+
   # The router is the arbiter — never re-rank accounts here.
   if [ "$account" = auto ]; then
     [ -n "$ACCOUNTS_BIN" ] && account="$("$ACCOUNTS_BIN" --route general 2>/dev/null)"
@@ -574,7 +598,13 @@ cmd_up_api() {
         || note "cc-offload: custody could not be opened for $sid — the close-integrity arm is NOT armed for it."
     fi
 
-    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$(cat "$pf")" >/dev/null 2>&1
+    # The brief is the operator's task PLUS the return contract for THIS fire's branch — see the
+    # block at the top of this function. The branch is interpolated per iteration because `-n N`
+    # gives each session its own, and a contract naming a sibling's branch is worse than none.
+    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" \
+      "$(cat "$pf")
+
+$(cc_cloud_return_contract "$br")" >/dev/null 2>&1
     local drc=$?
     if [ "$drc" != 0 ]; then
       note "cc-offload: $sid created+declared but the brief did NOT queue (cc-notify exit $drc)."

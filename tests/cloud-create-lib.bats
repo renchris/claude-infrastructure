@@ -316,3 +316,51 @@ View: https://claude.ai/code/session_01REALREALREALREALREALR?from=cli&m=0"
   run git check-ref-format --branch "$a"
   [ "$status" -eq 0 ]
 }
+
+# ── 20-21 · THE ABSENCE CONTRACT (backlog 0c8b39b67665) ────────────────────────────────────────
+# CLOUD_OBSERVABILITY.md §4.1 is the whole basis on which C1 NOT-STARTED is readable: "the
+# session's brief requires its FIRST ACT to be pushing that branch — an empty commit is enough.
+# Absence then becomes informative." For three weeks that sentence was PROSE ONLY — both fire lanes
+# told the VM to push at the END ("push whatever you have before you finish"), which is a result
+# channel, not a beacon, so absence never carried the meaning bin/cc-cloud's C1 arm assigns it.
+#
+# RED-PROOF (re-runnable): `git show <pre-fix sha>:scripts/lib/cloud-create.sh` defines no
+# `cc_cloud_return_contract` at all, so both cases die at "command not found" — the strongest red
+# available for a contract whose defect was that it did not exist anywhere but a plan.
+
+@test "20 the contract's FIRST instruction is the boot beacon — an empty commit, before the work" {
+  local out
+  out="$(cc_cloud_return_contract claude/fire-20260829T000000Z-1)"
+  # The three lines of the beacon, in the only order that works: a branch that does not exist yet
+  # must be created, an empty commit is what gives the push something to carry, and the push is
+  # what the firing side can actually see.
+  local sw ec push work
+  sw="$(printf '%s\n' "$out"   | grep -n 'git switch -c claude/fire-20260829T000000Z-1' | head -1 | cut -d: -f1)"
+  ec="$(printf '%s\n' "$out"   | grep -n 'git commit --allow-empty'                     | head -1 | cut -d: -f1)"
+  push="$(printf '%s\n' "$out" | grep -n 'git push -u origin HEAD'                      | head -1 | cut -d: -f1)"
+  work="$(printf '%s\n' "$out" | grep -n 'STEP 2'                                       | head -1 | cut -d: -f1)"
+  [ -n "$sw" ] && [ -n "$ec" ] && [ -n "$push" ] && [ -n "$work" ] || {
+    echo "the contract is missing a leg: sw=$sw empty-commit=$ec push=$push work=$work"; false; }
+  [ "$sw" -lt "$ec" ] || { echo "the empty commit must follow the branch it lands on"; false; }
+  [ "$ec" -lt "$push" ] || { echo "the push must follow the commit it carries"; false; }
+  # THE POINT OF THE WHOLE CONTRACT: the beacon precedes the work. A push instruction that sits
+  # after the task is a result channel and leaves absence exactly as ambiguous as it was.
+  [ "$push" -lt "$work" ] || { echo "the beacon must PRECEDE the work (push=$push work=$work)"; false; }
+}
+
+@test "21 the beacon survives a branch that already exists, and refuses an unnamed one" {
+  # `reuse_outcome_branches: true` on the API leg, plus retries and resumed VMs, mean the branch can
+  # already be present. A bare `switch -c` dies "fatal: a branch named … already exists" — a beacon
+  # that fails in exactly the case the sidecar most needs it. Proven by RUNNING it, not by reading.
+  local repo="$BATS_TEST_TMPDIR/beacon" br=claude/fire-20260829T000000Z-2 line
+  git init -q "$repo"
+  git -C "$repo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m seed
+  git -C "$repo" branch "$br"                                  # the collision, made deliberately
+  line="$(cc_cloud_return_contract "$br" | grep 'git switch -c')"
+  ( cd "$repo" && eval "$line" ) >/dev/null 2>&1
+  [ "$(git -C "$repo" rev-parse --abbrev-ref HEAD)" = "$br" ]
+  # A contract with no branch names nothing and must not be composable at all: a beacon pushed to
+  # an empty ref name is worse than none, because the declaration would still be armed.
+  run cc_cloud_return_contract
+  [ "$status" -ne 0 ]
+}

@@ -6,6 +6,8 @@
 #   cc_cloud_session_id           stdin → session_…   "" when the output names no session
 #   cc_cloud_create_once  cfg cwd prompt  → "<outcome>\t<id>\t<msg>"
 #   cc_cloud_create       cfg cwd prompt  → same, with a BOUNDED retry over the transient class
+#   cc_cloud_branch_name          → the branch THIS fire assigns and declares
+#   cc_cloud_return_contract branch → the brief trailer that makes absence readable (§4.1)
 #
 # ── WHY THIS FILE EXISTS RATHER THAN A FOURTH COPY ────────────────────────────────────────────
 # CLOUD_OBSERVABILITY.md §10.4 graded G5 ✅ on the parts that were built and discovered the fire
@@ -236,3 +238,65 @@ cc_cloud_create() { # $1=cfgdir $2=cwd $3=prompt → "<outcome>\t<id>\t<msg>"; b
 # is unique per fire, so — unlike `--branch main`, where trunk's background traffic reads as a
 # heartbeat forever — nothing but this session can advance it. O2 becomes a real signal.
 cc_cloud_branch_name() { printf 'claude/fire-%s-%s' "$(date -u +%Y%m%dT%H%M%SZ)" "$$"; }
+
+# ── THE ABSENCE CONTRACT, AS TEXT — the other half of the branch name above ───────────────────────
+# CLOUD_OBSERVABILITY.md §4.1 is the whole basis on which C1 NOT-STARTED is readable at all:
+#
+#   "It can only be resolved by CONTRACT: the fire declares a branch and a boot budget, and the
+#    session's brief requires its FIRST ACT to be pushing that branch — an empty commit is enough.
+#    Absence then becomes informative: no ref inside the budget is BOOTING (expected); no ref past
+#    it is NOT-STARTED (actionable)."
+#
+# That sentence was PROSE ONLY for three weeks (backlog 0c8b39b67665). Both fire lanes told the VM
+# to push — and told it to push AT THE END ("push whatever you have before you finish"), which is a
+# result channel, not a beacon. So absence never carried the meaning the reader assigns it, and
+# `bin/cc-cloud`'s C1 arm was reading a signal nobody had agreed to send.
+#
+# 🚨 IT IS NOT A THEORETICAL GAP; IT IS THE MEASURED ONE. bin/cc-cloud's own `inbox` header records
+# it: 2026-08-27, **222 of 262 live sessions** had ended a turn `need_input` — they had booted,
+# worked, and asked a question — and `classify()` filed them NOT-STARTED, because a VM that has not
+# finished has no ref and the state function cannot tell that from a VM that never booted. A boot
+# beacon separates those two populations at second one, and nothing else available off-box does:
+# there is no inbound channel to a cloud VM (§4.1), and the ref is the only thing this side reads.
+#
+# ONE TEXT, BOTH LANES. The CLI leg (scripts/handoff-fire.sh) and the API leg (bin/cc-offload
+# cmd_up_api) compose their briefs in different files and hand them over by different transports —
+# argv to `claude --cloud` and a `cc-notify --cloud` send respectively. Two copies of a contract
+# that a THIRD file's verdict depends on is the drift this repo already paid for once (the two-tool
+# split, backlog 163676679912). The composer lives here, beside the branch namer, because the name
+# and the instruction to push it are one contract and neither is meaningful alone.
+#
+# `switch -c … || switch …` and not a bare `switch -c`: the API leg creates with
+# `reuse_outcome_branches: true`, and a retry or a resumed VM can meet the branch already present.
+# A beacon that dies on "fatal: a branch named … already exists" is a beacon that does not fire in
+# exactly the case the sidecar most needs it.
+cc_cloud_return_contract() { # $1 = the declared branch → the brief's return-contract block
+  local branch="${1:?cc_cloud_return_contract: a branch name is required}"
+  cat <<EOF
+── HOW TO RETURN YOUR WORK (this session runs off-box — STEP 1 comes before everything else) ──
+You are running in an Anthropic-managed VM. Nothing on the operator's machine can see your
+filesystem, your processes or your terminal, and you cannot run this repo's /ship. Your ONLY
+channel back is a git push, and it must go to exactly this branch, which the firing side assigned
+and is already watching:
+
+    $branch
+
+STEP 1 — RUN THIS FIRST, BEFORE READING FURTHER AND BEFORE TOUCHING ANY FILE:
+
+    git switch -c $branch 2>/dev/null || git switch $branch
+    git commit --allow-empty -m 'chore(cloud): boot beacon'
+    git push -u origin HEAD
+
+That empty commit is a BOOT BEACON, not bookkeeping, and it is the one thing here that is not
+optional. The firing side can observe exactly one fact about you — whether that branch exists on
+the remote — so until it does, a session that booted and is working reads identically to one that
+never started, one that died at boot and one that was refused entitlement. Without the beacon your
+silence is filed as NOT-STARTED and you are re-fired underneath yourself; with it, absence means
+never-booted and nothing else. Push it even if you are about to refuse the task.
+
+STEP 2 — the work. Push again as you go, and push whatever you have before you finish, even if the
+work is incomplete: an unpushed cloud session leaves no trace of any kind, and a push to any other
+branch is invisible and will strand. A local reconciler (scripts/cloud-reconcile.sh) discovers this
+branch and hands it to the sanctioned local lander.
+EOF
+}

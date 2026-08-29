@@ -461,3 +461,37 @@ EOF
   [ -s "$CLOUD_DECL_LOG" ]
   [ ! -f "$BATS_TEST_TMPDIR/pf-off.log" ]                # the override SKIPS the probe, not just its verdict
 }
+
+# ── 20 — the absence contract, on the leg that composes its own payload (backlog 0c8b39b67665) ──
+# CLOUD_OBSERVABILITY.md §4.1: C1 NOT-STARTED is readable ONLY because "the session's brief requires
+# its FIRST ACT to be pushing that branch — an empty commit is enough". Case 17 above pinned that
+# the payload creates and pushes the branch; it did not pin WHEN, and the payload it was written
+# against said "read this before you finish" over a terminal push. A push at the end is a result
+# channel: while the session works, the ref is absent, and bin/cc-cloud cannot tell that from a VM
+# that never booted. Measured cost, from bin/cc-cloud's own `inbox` header: 2026-08-27, 222 of 262
+# live sessions had worked and asked a question, and classify() filed them NOT-STARTED.
+#
+# RED-PROOF (re-runnable): replay this file against `git show <pre-fix sha>:scripts/handoff-fire.sh`
+# in a scratch tree. 20 goes RED — that payload contains no `--allow-empty` anywhere.
+@test "20 the payload's FIRST act is a boot beacon, not a push at the end" {
+  cloud_acct; cloud_ccloud
+  # The id-carrying banner, so the fire reaches its DECLARE and the branch under test is readable
+  # as an EFFECT (what was declared) rather than as a string this file re-derives.
+  cloud_claude "$(printf 'Created cloud session: t\x1b[8GView: https://claude.ai/code/session_01TESTTESTTESTTESTTESTT?from=cli')" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ -s "$BATS_TEST_TMPDIR/create.log" ]
+  local ec push work
+  ec="$(grep -n 'git commit --allow-empty' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  push="$(grep -n 'git push -u origin HEAD' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  work="$(grep -n 'STEP 2' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$ec" ] || { echo "the payload never instructs the boot beacon (the empty commit)"; false; }
+  [ -n "$work" ] || { echo "the payload never separates the beacon from the work"; false; }
+  [ "$ec" -lt "$push" ] || { echo "the push must follow the commit it carries (commit=$ec push=$push)"; false; }
+  [ "$push" -lt "$work" ] || { echo "the beacon must be pushed BEFORE the work (push=$push work=$work)"; false; }
+  # And it beacons the branch the fire DECLARED — a beacon on any other ref leaves the declaration
+  # armed against silence, which is the pre-fix state with extra steps.
+  local declared
+  declared="$(sed -n 's/.*--branch \(claude\/fire-[^ ]*\).*/\1/p' "$CLOUD_DECL_LOG" | head -1)"
+  [ -n "$declared" ] || { echo "nothing was declared, so the payload's branch cannot be checked"; false; }
+  grep -q "git switch -c $declared" "$BATS_TEST_TMPDIR/create.log"
+}

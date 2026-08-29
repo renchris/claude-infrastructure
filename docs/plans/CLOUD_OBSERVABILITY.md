@@ -150,6 +150,47 @@ session's brief requires its **first act** to be pushing that branch — an empt
 Absence then becomes informative: no ref inside the budget is `BOOTING` (expected); no ref past it
 is `NOT-STARTED` (actionable — re-fire, or check entitlement).
 
+#### 4.1a · That paragraph was PROSE ONLY for three weeks — now it is code (2026-08-29)
+
+🚨 **The contract above is the sole basis on which §4.3's C1 is readable, and until this commit
+nothing implemented it** (backlog `0c8b39b67665`). Both fire lanes were graded ✅ and neither
+carried it:
+
+| Lane | What it actually delivered before | Consequence |
+| --- | --- | --- |
+| CLI (`scripts/handoff-fire.sh --cloud`) | a trailer headed *"read this before you finish"* over `git switch -c <branch>` + `git push -u origin HEAD` | a **result** channel, not a beacon. The ref stays absent for the whole working life of a healthy session. |
+| API (`bin/cc-offload cmd_up_api`, the **default** `--via api`) | `cat "$pf"` **verbatim** — no branch name, no push instruction, nothing | the branch is *authorised* at create (`outcomes.git_info.branches`) but authorisation is not instruction; a session never told the name cannot push it. |
+
+So the declaration armed `bin/cc-cloud`'s C1 arm against a signal nobody had agreed to send, and
+absence never carried the meaning the reader assigns it. **The cost is measured, not hypothetical**
+— `bin/cc-cloud`'s own `inbox` header records it: 2026-08-27, **222 of 262 live sessions** had
+ended a turn `need_input` (booted, worked, asked a question) and `classify()` filed every one of
+them `NOT-STARTED`, because a VM that has not finished has no ref and the state function cannot
+tell that from a VM that never booted.
+
+**What is built.** `cc_cloud_return_contract <branch>` in `scripts/lib/cloud-create.sh` — ONE text,
+beside `cc_cloud_branch_name`, because the name and the instruction to push it are one contract and
+neither is meaningful alone. It opens with STEP 1 *"RUN THIS FIRST, BEFORE READING FURTHER AND
+BEFORE TOUCHING ANY FILE"*: `git switch -c <branch> 2>/dev/null || git switch <branch>` → `git
+commit --allow-empty` → `git push -u origin HEAD`, and only then STEP 2, the work. Both lanes
+compose their brief from it; the API lane **refuses before the create** (exit 3) if the library is
+unreachable, on the same trade its sibling's preflight already makes — an unobservable fire is
+worse than no fire, and a refusal is only worth anything before the quota is spent. The `|| git
+switch` fallback is not defensive habit: `reuse_outcome_branches: true`, retries and resumed VMs
+can all meet the branch already present, and a beacon that dies on *"a branch named … already
+exists"* is one that fails in the case the sidecar most needs it.
+
+**What pins it:** `tests/cloud-create-lib.bats` 20-21 (the composer's ordering; the beacon executed
+against a pre-existing branch), `tests/handoff-fire-cloud.bats` 20 (the CLI payload beacons the
+branch it DECLARED, before the work), `tests/cc-offload.bats` 45-46 (the API brief carries the
+contract and its own branch; an unreachable library refuses before the create). All five are RED
+against the pre-fix tree, and the composer cases die at *command not found* — the strongest red
+available for a contract whose whole defect was that it existed nowhere but this file.
+
+⚠️ **Still unexercised against a real cloud VM**, exactly as §6's 📌 note says of the instrument as
+a whole. The first fire after this lands is the validation: a healthy session should read `ALIVE`
+within seconds instead of `BOOTING`-then-`NOT-STARTED` for its whole life.
+
 ### 4.2 The discriminator the whole design rests on
 
 Measured, not assumed:

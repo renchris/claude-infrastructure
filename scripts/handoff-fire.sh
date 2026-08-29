@@ -8034,20 +8034,18 @@ if [ "$CLOUD" = 1 ]; then
   # there the name is authorised AT CREATE. cc_cloud_create's signature is `cfg cwd prompt`
   # (scripts/lib/cloud-create.sh:185): the CLI leg has NO branch parameter at all, so the payload
   # is the only place the branch can be established, and establishing it is a real `switch -c`.
+  #
+  # 🚨 THE TEXT MOVED OUT OF THIS FILE, AND THE MOVE IS THE FIX (backlog 0c8b39b67665). It used to
+  # be an inline string here saying "read this before you finish" over a push instruction — a
+  # RESULT channel. §4.1's absence contract asks for something else and asks for it FIRST: a boot
+  # beacon, an empty commit pushed before any work, which is the sole reason no-ref past the boot
+  # budget may be read as NOT-STARTED rather than as "booted fine, nothing to commit yet". That
+  # sentence lived only in the plan; neither lane implemented it. It is now
+  # `cc_cloud_return_contract` in scripts/lib/cloud-create.sh, which the API leg (bin/cc-offload
+  # cmd_up_api) appends to its brief too — one text, because a THIRD file's verdict depends on it.
   CLOUD_PAYLOAD="$(cat "$PROMPT_FILE")
-"'
-── HOW TO RETURN YOUR WORK (this session runs off-box; read this before you finish) ──
-You are running in an Anthropic-managed VM. Nothing on the operator'"'"'s machine can see your
-filesystem, your processes or your terminal, and you cannot run this repo'"'"'s /ship. Your ONLY
-channel back is a git push, and it must go to exactly this branch — CREATE IT FIRST, then push it:
 
-    git switch -c '"$CLOUD_BRANCH"'
-    git push -u origin HEAD
-
-That branch name was assigned by the firing side and is already declared as the one thing watched
-for your progress — a push anywhere else is invisible and your work will strand. Push whatever you
-have before you finish, even if the work is incomplete; an unpushed cloud session leaves no trace
-of any kind. A local reconciler (scripts/cloud-reconcile.sh) discovers the branch and lands it.'
+$(cc_cloud_return_contract "$CLOUD_BRANCH")"
 
   if [ "$DRY" = 1 ]; then
     echo "-- DRY RUN: cloud fire (no create issued, no quota spent)"

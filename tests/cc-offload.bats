@@ -622,3 +622,62 @@ EOF
     [[ "$output" == *"cc-offload $v"* ]] || false
   done
 }
+
+# ── THE ABSENCE CONTRACT ON THE API LANE (backlog 0c8b39b67665) ────────────────────────────────
+# This lane delivered `cat "$pf"` VERBATIM — no branch name, no push instruction, nothing. The
+# branch is authorised at create (`outcomes.git_info.branches`), so the VM MAY push to it, but
+# authorisation is not instruction: a session never told the name cannot push it. Meanwhile the
+# declare two lines above arms bin/cc-cloud's C1 arm against exactly that ref, and
+# CLOUD_OBSERVABILITY.md §4.1 says C1 is readable ONLY because the brief requires a first-act push.
+# So this lane armed the reader and shipped none of the contract the reader assumes — and it is the
+# DEFAULT lane (`--via api`).
+#
+# RED-PROOF (re-runnable): replay against `git show <pre-fix sha>:bin/cc-offload`. Both cases go
+# RED — the first because the delivered brief is the task file and nothing else, the second because
+# there was no contract to be missing and the fire proceeded to spend the create.
+
+@test "up --via api delivers the RETURN CONTRACT with the brief, naming the branch it declared" {
+  echo "brief" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+import sys
+print("session_apitest")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+  # The operator's own brief still reaches the session — the contract is an ADDITION, never a
+  # replacement (a fire that delivers only the trailer has lost the task).
+  grep -q 'brief' "$CALLS" || false
+  grep -q 'git commit --allow-empty' "$CALLS" \
+    || { echo "the delivered brief carries no boot beacon — absence stays ambiguous"; false; }
+  # ONE branch, and it is the one declared. A contract naming a different ref than the declaration
+  # is worse than none: the beacon lands where nothing is watching.
+  local declared
+  declared="$(sed -n 's/.*cc-cloud declare .*--branch \(claude\/fire-[^ ]*\).*/\1/p' "$CALLS" | head -1)"
+  [ -n "$declared" ] || { echo "no branch was declared"; false; }
+  grep -q "git switch -c $declared" "$CALLS" || false
+}
+
+@test "up --via api REFUSES before the create when the contract library is unreachable" {
+  # An unobservable fire is worse than no fire, and a refusal is only worth anything BEFORE the
+  # account's rate limit is spent — the same trade the sibling lane's preflight already makes.
+  echo "brief" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+import sys
+print("this create must never be reached", file=sys.stderr)
+print("session_apitest")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_CONTRACT_LIB="$BATS_TEST_TMPDIR/nope.sh" CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" \
+    run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"boot beacon"* ]] || false
+  ! grep -q 'cc-cloud declare' "$CALLS" || false          # nothing was declared
+  ! grep -q 'cc-notify --cloud' "$CALLS" || false         # and no brief was delivered
+}
