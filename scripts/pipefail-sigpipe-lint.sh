@@ -146,6 +146,49 @@
 # buffer" here would have repeated, one level down, precisely the error the corrections above
 # exist to undo: this header asserted "the 64 KiB pipe buffer" as a cause for two months and both
 # of its negative clauses were false. A bracket that is measured beats a constant that is tidy.
+#
+# ── A FIFTH CORRECTION, 2026-08-29: THE EMITTED QUANTITY GOVERNS THE MIDDLE STAGE, AND THE MIDDLE
+#    STAGE GOVERNS THE PRODUCER. EXPOSURE IS AN ORDERED LADDER, NOT A PIPELINE-WIDE PROPERTY. ─────
+# The fourth correction established WHICH QUANTITY decides. It did not say WHICH STAGE that verdict
+# is about, and every sibling comment reads it as a verdict about "the pipeline". Measured with
+# per-stage attribution via PIPESTATUS (~/.claude/autonomy/probe258-shield.sh, 200 trials per cell,
+# load 21-42, feed 400,000 B, external producer /bin/cat):
+#
+#     middle             drains?   middle emits     stage1 (producer)   stage2 (middle)
+#     sed 's/^L//'         no          390,000          200/200            200/200
+#     sort                 yes         400,000            0/200            200/200
+#     wc -l                yes               9            0/200              0/200
+#     jq -r 'select…'      yes               3            0/200              0/200
+#     NEG control: the sed row re-run on a 200 B feed reads 0/200 on both stages.
+#
+# TWO INDEPENDENT PROTECTIONS, and the ladder is what makes them independent:
+#   · stage 2 dies only if what STAGE 2 EMITS clears the knee — that is the fourth correction;
+#   · stage 1 dies only if stage 2 died FIRST and stage 1 is still writing. So a middle that emits
+#     UNDER the knee protects the producer completely, at ANY producer size. Measured at 400,090
+#     producer bytes: `sed -n 's/…/\1/p'` emitting 9,516 B reads 0/200 on both stages, while the
+#     SAME feed through `sed 's/^/x/'` emitting 416,504 B reads 200/200 on both. One producer, one
+#     producer size, one middle program — and the PRODUCER's verdict flips on the MIDDLE's output.
+#   · DRAINING is a second, SIZE-INDEPENDENT protection: it holds even when the middle DOES die.
+#     The `sort` row dies 200/200 and its producer still reads 0/200, because a stage that reads to
+#     EOF has already let the producer exit. Sufficient, not necessary.
+#
+# ⚠️ SO "HOW MANY STAGES CAN TAKE SIGPIPE" IS NOT THE STAGE COUNT: across those five cells, at one
+# producer size, it is 0, 1 or 2. A three-stage site is not automatically worse than a two-stage
+# one — it is worse only where its middle BOTH streams AND emits past the knee.
+#
+# THE REFUSED PREDICTION IS THE ONE THAT PAID (~/.claude/autonomy/predict258-site.v1-REFUSED.txt).
+# It said a STREAMING middle exposes the producer at 400,000 B; measured 0/200, because it reasoned
+# about the middle's INPUT. The middle's input is the one quantity in this system that governs
+# nothing at all — which is the same error the fourth correction exists to undo, one rung down.
+#
+# THE POPULATION, measured on this census at 2026-08-29T06:08Z with ~/.claude/autonomy/pipe258.py,
+# which segments the LOGICAL line: 126 rows → 119 two-stage, 7 three-stage, 0 four-plus. Of the
+# seven, 3 have a STREAMING middle (install.sh:1128 · scripts/banner-shots.sh:258 ·
+# scripts/banner-video.sh:167), 3 a DRAINING one (scripts/cloud-ceiling-probe.sh:179 and :351 via
+# jq; scripts/test-overwrite-guard.sh:517 via xargs), and 1 has a middle no static screen can
+# classify (scripts/test-overwrite-guard.sh:342, whose middle stage is a hook script).
+# ⚠️ 13 of those 126 rows SPAN MORE THAN ONE PHYSICAL LINE, so a stage count taken off the census's
+# own printed line is wrong for thirteen of them — segment the logical line or do not count at all.
 # ────────────────────────────────────────────────────────────────────────────────────────────────
 #
 # A variable's contents are not bounded by inspection, so the builtin exemption cannot key on the

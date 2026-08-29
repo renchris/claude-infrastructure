@@ -253,6 +253,13 @@ calibrate_inset() {
 <!doctype html><meta charset="utf-8"><title>inset</title>
 <body><script>addEventListener('load',()=>{document.body.textContent='INNERH='+innerHeight})</script>
 HTML
+  # SIGPIPE: this is the rarer shape — a THREE-stage pipeline under pipefail whose middle stage
+  # STREAMS, so the producer is exposed in principle (see the FIFTH CORRECTION in
+  # scripts/pipefail-sigpipe-lint.sh). It is LATENT here because the producer is tiny and FIXED:
+  # --dump-dom of the heredoc probe page above measured 108 B at 2026-08-29T06:22Z, against a
+  # 160 B page, and the sed emits 3 B. Both are ~3 orders of magnitude under the knee.
+  # ⚠️ WHAT WOULD CHANGE THAT is enlarging the probe PAGE, not the window size — the DOM dumped is
+  # the page's, so a probe page that grows past the pipe buffer puts this producer back in play.
   got=$("$CHROME" --headless --disable-gpu --no-sandbox --window-size=900,"$req" \
         --virtual-time-budget=800 --dump-dom "file://$probe" 2>/dev/null \
         | sed -n 's/.*INNERH=\([0-9][0-9]*\).*/\1/p' | head -1)

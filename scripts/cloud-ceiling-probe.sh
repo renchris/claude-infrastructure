@@ -175,6 +175,18 @@ config_dir_for() {
 # account and every reading silently becomes "?".
 weekly_pct_for() { # → integer, or "?" when unreadable. NEVER 0 on failure: 0 reads as "plenty left".
   local a="$1" v
+  # SIGPIPE, and why the published band does NOT describe this line. This is a THREE-stage pipeline
+  # under `set -o pipefail`, and read the way every sibling comment quotes these bands — in PRODUCER
+  # bytes — it looks unsafe: `claude-accounts --json` measured 16,788 B / 460 lines at 06:22Z, which
+  # sits inside the racy band the three-stage row brackets (16,430 B emitted safe, 16,960 → 93/400).
+  # It is not unsafe, and neither stage is safe for that reason:
+  #   · stage 2 (jq) emits 3 BYTES here — three orders of magnitude under the knee;
+  #   · stage 1 cannot be signalled at all, because jq must read to EOF before it emits, so this
+  #     producer has already exited by the time `head -1` quits.
+  # Measured on this exact shape, 200 trials, PIPESTATUS per stage: 0/200 on both stages at the real
+  # 16,788 B AND at a 400,090 B feed of the same shape (~/.claude/autonomy/probe258-site.sh).
+  # The second reason is the durable one: it holds however large claude-accounts' output grows.
+  # See the FIFTH CORRECTION in scripts/pipefail-sigpipe-lint.sh for the ladder this rests on.
   v="$(claude-accounts --json 2>/dev/null \
        | jq -r --arg a "$a" '.rows[]? | select(.acct==$a) | (.weekly_pct // empty)' 2>/dev/null | head -1)"
   case "$v" in ''|*[!0-9.]*) printf '?' ;; *) printf '%.0f' "$v" ;; esac
@@ -347,6 +359,8 @@ case "$MODE" in
     tail -40 "$LEDGER"; exit 0 ;;
   control)
     # Pick a LIMITED account live. Hardcoding one would be a control that silently stops controlling.
+    # Same three-stage shape and same reasoning as weekly_pct_for above: jq DRAINS its input, so
+    # this producer cannot take SIGPIPE at any size, and jq emits 6 B here (measured 06:22Z, 4 rows).
     limited="$(claude-accounts --json 2>/dev/null \
       | jq -r '.rows[]? | select((.weekly_pct // 0) >= 99) | .acct' 2>/dev/null | head -1)"
     [ -n "$limited" ] || {
