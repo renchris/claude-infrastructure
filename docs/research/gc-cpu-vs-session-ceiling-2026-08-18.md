@@ -114,13 +114,21 @@ own errors:
 
 **The constant that stops us was never derived from anything.**
 
-`CC_HW_DEFAULT_MAX_LOAD_PER_CORE = 2.0` (`scripts/lib/capacity-admit.sh:134`) is the number that
-becomes the load-20 ceiling on this 10-core box, and both gates expand it. Its own code comment cites
-"§9.5's measured ceiling" — and **§9.5 contains no such derivation**; it shows only that the gate
-admits at 1.55 and refuses at 2.92, which is a demonstration that a threshold thresholds. The origin
-commit `0fc3a3d33` measured the motivating incident at **2.72/core** and picked 2.0 with no stated
-rule. The verifier read the full commit body and **confirmed this verbatim** — it called it the
+`CC_HW_DEFAULT_MAX_LOAD_PER_CORE = 2.0` (`scripts/lib/capacity-admit.sh`, the `CC_HW_DEFAULT_*` literal
+block — cite it by symbol, not by line: it was `:134` when this was written and is `:161` today) is the
+number that becomes the load-20 ceiling on this 10-core box, and both gates expand it. Its own code
+comment cited "§9.5's measured ceiling" — and **§9.5 contains no such derivation**; it shows only that
+the gate admits at 1.55 and refuses at 2.92, which is a demonstration that a threshold thresholds. The
+origin commit `0fc3a3d33` measured the motivating incident at **2.72/core** and picked 2.0 with no
+stated rule. The verifier read the full commit body and **confirmed this verbatim** — it called it the
 strongest finding in the wave.
+
+✅ **The falsified citation is DISCHARGED on trunk** (2026-08-25, `docs(capacity-admit): the ceiling
+cites a section that has no derivation, and the term it parameterises already defaults off` — cite by
+subject, a land rebases). That header now states the falsification itself rather than the citation:
+it records that 2.0/core was never derived, that the origin incident sat at 2.72/core *above* the
+shipped ceiling, and that no derivation is reachable on this axis. Nothing in this paragraph is
+outstanding work; it is kept as the diagnosis the fix discharged.
 
 Worse, the repo's own instrument already documents that this axis cannot do the job
 (`scripts/capacity-alarm.sh:139-147`, verbatim):
@@ -139,10 +147,72 @@ consumers were `bun` 65%, `mediaanalysisd` 33%, `kernel_task` 25%, with the high
 **5.5%** and 52% idle). Corroborated live while writing this: **load 10.66 at 13 sessions**, against
 19.06 at 14 sessions twelve hours earlier — the same session count spanning a 1.8× load range.
 
-The honest actionable is therefore **to derive the number, not to move it**: re-run the axis-09-style
-measurement (load1 delta across N all-active sessions) and set the ceiling from a measured failure
-point. That is a two-arm experiment, not a config edit, and it is the only thing that can legitimately
-move a capacity constant.
+### 🚨 …and it does not license DERIVING it either — this paragraph refuted itself, and 19 attempts to say so never landed (2026-08-29)
+
+This section used to close: *"The honest actionable is therefore **to derive the number, not to move
+it**: re-run the axis-09-style measurement (load1 delta across N all-active sessions) and **set the
+ceiling from a measured failure point**."*
+
+**That prescription is disproved by the evidence quoted ten lines above it, in this same section.**
+The block quote establishes that the survived population CONTAINS the fatal value — fatal at
+2.53/core against 13 consecutive survived samples spanning 2.92–5.98/core — and the very next
+sentence draws the correct conclusion: *"an axis that provably cannot separate fatal from survived."*
+A quantity that cannot separate fatal from survived **has no measured failure point to set a ceiling
+from**. The instrument says so in its own words (`scripts/capacity-alarm.sh`, rung-7 header):
+*"load-per-core does not separate fatal from survived, and **no setting of these two numbers can make
+it**"* — and that population is *executable*, pinned in the selftest with 5.98/core as a known false
+ALARM, so this is a control a re-derivation has to argue with rather than a paragraph.
+
+A second, independent refutation landed after this doc was written. `fix(fire-gate): load1 does not
+move with the spawn it was gating` (2026-08-20) established that an additional **resident** session
+moves the 1-minute runnable count by ~0. So the defect is not the *value* of the literal — **the
+INPUT is wrong**, and no value of it can make the term correct. Both legs point the same way: there
+is nothing to derive on this axis, and a two-arm experiment would return a number that means nothing.
+
+**What the repo did instead, and it is already on trunk.** The load term is a **switch, never a
+ceiling** (C18): it `DEFAULT`s OFF in `capacity_gate()` (`CC_FIRE_LOAD_TERM`) and has been off on the
+Agent-tool path since Wave D. `segments` and `active` carry its intent, because they *do* move with
+the spawn. The literal stays at 2.0 deliberately — raising it is the lazy design
+`docs/plans/LOAD_INSENSITIVE_VERIFY_V2.md:156` exists to reject — and it now binds only where
+`cc_capacity_admit` leaves the term on: the two unattended recovery callers
+(`scripts/boot-resume-launch.sh`, `scripts/limit-recover/lr-fire-resume.sh`), which price that
+imprecision at a delayed resume and are budget-released after `CC_ADMIT_BUDGET` consecutive refusals.
+
+**Why this paragraph was expensive.** It is the DoD ref for backlog `e981656df348`
+(*"…was never derived from a measured failure — derive it, do NOT blind-raise; blocked on the
+marginal-load measurement"*), so every dispatch of that item read a prescription this section had
+already disproved and dutifully went looking for the unreachable derivation. **The stated blocker is
+also a misattribution:** the marginal-load measurement (backlog `193ae8ddce72`,
+`marginal-load-per-active-session-2026-08-19.md` §6) denominates `CC_ADMIT_ACTIVE_CEILING` — a
+per-**ACTIVE-session** coefficient — not this per-**core** load literal; and that doc's §6a says even
+the active ceiling is *"not blocked on §6"*, since it stands on the 127/127 refusal band. So this
+item was never gated on that measurement, and running it would not have discharged this item.
+
+**And the recurrence was not one defect but two, multiplying.** Measured here across every ref:
+**41 commits touch this file, and exactly 19 of them are prior attempts to strike this very
+prescription** — `8f4469c3` (08-19) *"the constant is underivable on this axis, not merely
+underived"*, `a2959d56` (08-24), `64a308c7`/`695bef1e` (08-25, a duplicate pair), `74448046`,
+`b4927874`, `90b004d1`, `10e3ab7d`, `b92eb06b`, `e66dd4f0` (08-26, whose own subject reads *"that
+unsatisfiable row is why it cycled five times"*), `60aa4a2b`, `ec5d8504`, `994437db` (08-27),
+`a8af4f34`, `02f5ecc9`, `655f23e1`, `38d559a7` (08-28), `1eac82dd`, `d2336b0c` (08-29). **Zero of
+the 19 reached trunk** — the prescription was still live in `origin/main` when this session read it,
+which is the content proof. Ten days, nineteen correct diagnoses, no cure, because *diagnosis was
+never the bottleneck.* Landing was.
+
+**The landing half has a named cause, and it is provisionable.** A cloud VM cannot run `/ship` until
+`shellcheck` and `bats` are installed: `scripts/bats-shellcheck-lint.sh` exits 2 (non-verdict) ⇒
+`GATE_KILLED` ⇒ `ship-land.sh` exit 9, on a *docs-only* land, because its entry condition is a
+property of the repo rather than the diff (`cloud-land-arm-step-2026-08-25.md` §8.1). This session
+hit both locks, ran `apt-get install -y shellcheck bats`, and both selftests went green (19/19 and
+44/44). Every dispatch of this item before it was a cloud dispatch of a doc fix into a venue that
+could not land a doc fix.
+
+**The rule this leaves behind:** a section that quotes a disproof and then prescribes the disproved
+remedy will regenerate work forever, because each dispatch re-reads the prescription and not the
+quote. When evidence kills a remedy, **strike the remedy in the same edit** — a doc is a store, and a
+stale prescription in a store is an instruction. And the corollary this file paid nineteen times for:
+**a fix that does not land does not exist.** Re-deriving a diagnosis that is already correct on
+nineteen branches is not diligence; check whether the cure is stranded before writing a twentieth.
 
 ## 4 · If 2.1.234 is adopted, adopt it on other grounds — and set one env var first
 
