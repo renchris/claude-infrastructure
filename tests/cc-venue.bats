@@ -185,12 +185,34 @@ EOF
 
 @test "11 an unreadable LEDGER refuses to route at all — it does not inherit the gate's exit 0" {
   mkrepo
+  # THE UNREADABILITY IS A DIRECTORY, NOT A MODE BIT, AND THAT IS THE WHOLE POINT (2026-08-29).
+  # This arm used to `chmod 000` the store. Mode bits do not apply to uid 0, so under root the file
+  # is READ FINE, parses as an empty ledger, and the id is legitimately absent — the producer
+  # answers `unknown-item` and exit 0, which is the exact value this test exists to refuse. So the
+  # test did not merely skip under root, it INVERTED: the assertion failed while the behaviour it
+  # guards was correct, and no reading of the failure output says so.
+  #
+  # That is not a hypothetical venue. Every cloud dispatch of this repo runs as root, so the land
+  # gate reds here on a suite that is green on the operator's box, for any diff whose smoke scope
+  # reaches `bin/cc-venue` — a false RED about the machine wearing a verdict about the diff, which
+  # is the 6-vs-9 confusion the land pipeline is built to keep apart (memory:
+  # claimed-outcome-vs-checked-outcome).
+  #
+  # `open()` on a DIRECTORY raises IsADirectoryError — an OSError, the same branch the mode bit was
+  # reaching for — and no uid is exempt from it, so the construction means the same thing for root
+  # and for the operator. It is also strictly stronger: `chmod 000` proved the reader handles EACCES
+  # and this proves it handles the whole OSError class the reader actually catches.
   export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/nodir/backlog.jsonl"
-  mkdir -p "$BATS_TEST_TMPDIR/nodir"; : > "$CC_BACKLOG_FILE"; chmod 000 "$CC_BACKLOG_FILE"
+  mkdir -p "$CC_BACKLOG_FILE"
   run "$CV" assess someid --json
-  chmod 644 "$CC_BACKLOG_FILE"
   [ "$status" -eq 3 ] \
     || { echo "exit 0 from a producer reads as 'considered everything, routed nothing': $output"; false; }
+  # The token must be the STORE's, not the id's — `unknown-item` here is precisely the inverted
+  # pass the mode-bit spelling produced under root, and exit 3 alone would not exclude it. Matched
+  # as a STRING and not with `jq`: on the refusal path the producer prints its reason to stderr,
+  # which `run` merges into $output, so this capture is deliberately not parseable JSON.
+  [[ "$output" == *"unknown-store"* ]] \
+    || { echo "refused, but for the wrong reason — an absent id is not an unreadable store: $output"; false; }
 }
 
 # ── the write path ─────────────────────────────────────────────────────────────────────────────
