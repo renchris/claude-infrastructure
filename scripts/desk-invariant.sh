@@ -121,10 +121,43 @@ now_epoch() { date +%s; }
 now_iso()   { date -u +%Y-%m-%dT%H:%M:%SZ; }
 alive()     { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
 
+mtime_of() { # <path> → mtime epoch on stdout; prints NOTHING and rc 1 when neither spelling reads it
+  # ONE helper rather than the ladder written out at each of the three call sites, because the three
+  # want DIFFERENT defaults on failure (0, 0, and now) and a copied ladder is how the second spelling
+  # gets forgotten at the next site. `stat -c %Y` is GNU; `stat -f %m` is BSD. With only the BSD leg
+  # every call on a Linux box took its `|| <default>` branch, which is not a degradation but an
+  # INVERSION at two of the three sites: dedup_fresh read mtime 0 and re-paged a desk it had just
+  # paged, and sweep_stale_markers read mtime `now` and never pruned a marker at any age.
+  #
+  # 🚨 THE ORDER AND THE DIGIT TEST ARE BOTH LOAD-BEARING, and the obvious ladder is WRONG.
+  # `stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null` — the spelling this tree already
+  # carries at scripts/ship-land.sh:1400 — does NOT fall through cleanly on GNU. There `-f` means
+  # "stat the FILESYSTEM", so `%m` is parsed as a second OPERAND, not a format: the run prints a
+  # whole filesystem dump to STDOUT for the operand that exists and returns rc 1 only for the one
+  # that does not. The `||` fires, so the GNU leg appends a real epoch — to a stdout that already
+  # holds six lines of `File: … Block size: …`. The caller then reads a multi-line blob, its
+  # `case $mt in *[!0-9]*)` guard converts that to the default, and the bug survives the fix.
+  # So: GNU spelling FIRST (BSD stat has no `-c` at all and rejects it cleanly, printing nothing),
+  # and every candidate is digit-checked before it is emitted rather than trusted for its rc.
+  local m
+  m="$(stat -c %Y "$1" 2>/dev/null)" || m=""
+  case "$m" in ''|*[!0-9]*) m="$(stat -f %m "$1" 2>/dev/null)" || m="" ;; esac
+  case "$m" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$m"
+}
+
 iso_to_epoch() { # <iso8601> → epoch seconds (empty on parse fail)
   local s="${1%%.*}"; s="${s%Z}"
   [ -z "$s" ] && return 0
-  TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$s" +%s 2>/dev/null || true
+  # BSD spelling first, then GNU, then `|| true` LAST so a genuinely unparseable stamp still yields
+  # EMPTY rather than a status. The GNU leg is not cosmetic. With only `date -j -f`, every call on a
+  # Linux box fell through the `|| true` and returned empty, so last_assistant_ts yielded nothing and
+  # the age gate read EVERY desk as `stale` — a fail-to-WRONG-ANSWER, not a fail-closed one, and the
+  # direction that fires respawns at a healthy desk. The trailing Z is stripped above, so the GNU leg
+  # re-appends it: `-u` alone sets the OUTPUT zone, it does not tell GNU date the INPUT was UTC.
+  TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$s" +%s 2>/dev/null \
+    || date -u -d "${s}Z" +%s 2>/dev/null \
+    || true
 }
 
 find_transcript() { # <sid> → path to its .jsonl (first match across the account roots)
@@ -257,7 +290,7 @@ fire_replacement() { # fire a fresh desk from the canned brief (role-tagged). Re
 dedup_fresh() { # <state> → 0 if we already paged (sid,state) within DEDUP_WINDOW_S
   local m="$STATE_DIR/paged-${SID}-${1}.marker" mt
   [ -f "$m" ] || return 1
-  mt="$(stat -f %m "$m" 2>/dev/null || echo 0)"
+  mt="$(mtime_of "$m" || echo 0)"
   [ $(( $(now_epoch) - mt )) -lt "$DEDUP_WINDOW_S" ]
 }
 dedup_write()  { : > "$STATE_DIR/paged-${SID}-${1}.marker" 2>/dev/null || true; }
@@ -290,7 +323,7 @@ newest_fired_pane() { # → echo the UUID of handoff-fire's most-recent cc-fired
   [ -d "$FIRED_DIR" ] || return 0
   for f in "$FIRED_DIR"/*.json; do                          # glob loop (not `ls`) — mtime-max, filename-safe
     [ -f "$f" ] || continue
-    mt="$(stat -f %m "$f" 2>/dev/null || echo 0)"
+    mt="$(mtime_of "$f" || echo 0)"
     case "$mt" in ''|*[!0-9]*) mt=0 ;; esac
     [ "$mt" -ge "$newest_mt" ] && { newest_mt="$mt"; newest="$f"; }
   done
@@ -364,7 +397,7 @@ sweep_stale_markers() {
   now="$(now_epoch)"
   for f in "$STATE_DIR"/paged-*-stale.marker; do
     [ -f "$f" ] || continue
-    mt="$(stat -f %m "$f" 2>/dev/null || echo "$now")"
+    mt="$(mtime_of "$f" || echo "$now")"
     case "$mt" in ''|*[!0-9]*) mt="$now" ;; esac
     if [ $(( now - mt )) -gt "$STALE_MARKER_MAX_AGE_S" ]; then
       rm -f "$f" 2>/dev/null && cnt=$((cnt+1))

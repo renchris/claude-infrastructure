@@ -104,7 +104,7 @@ disp() { tail -1 "$C/idl.jsonl" | jq -r '.disposition'; }
   printf 'U1\n' > "$C/roles/desk"
   sleep 60 & local sp=$!
   row U1 S1 "$sp"
-  transcript S1 "$(date -u -v-1M +%Y-%m-%dT%H:%M:%SZ)"
+  transcript S1 "$(date -u -v-1M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '1 minute ago' +%Y-%m-%dT%H:%M:%SZ)"
   run "$DI" --once
   kill "$sp" 2>/dev/null || true
   [ "$status" -eq 0 ]
@@ -117,7 +117,7 @@ disp() { tail -1 "$C/idl.jsonl" | jq -r '.disposition'; }
   printf 'U2\n' > "$C/roles/desk"
   sleep 60 & local sp=$!
   row U2 S2 "$sp"
-  transcript S2 "$(date -u -v-90M +%Y-%m-%dT%H:%M:%SZ)" "you have reached the monthly spend limit"
+  transcript S2 "$(date -u -v-90M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '90 minutes ago' +%Y-%m-%dT%H:%M:%SZ)" "you have reached the monthly spend limit"
   run "$DI" --once
   kill "$sp" 2>/dev/null || true
   [ "$(disp)" = stunned ]
@@ -312,10 +312,10 @@ FIRE
   printf 'UH\n' > "$C/roles/desk"
   sleep 60 & local sp=$!
   row UH SH "$sp"
-  transcript SH "$(date -u -v-1M +%Y-%m-%dT%H:%M:%SZ)"
+  transcript SH "$(date -u -v-1M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '1 minute ago' +%Y-%m-%dT%H:%M:%SZ)"
   : > "$C/state/paged-FRESHSID-stale.marker"                                   # mtime = now → kept
   : > "$C/state/paged-OLDSID-stale.marker"
-  touch -t "$(date -v-8d +%Y%m%d%H%M)" "$C/state/paged-OLDSID-stale.marker"   # 8d old → swept
+  touch -t "$(date -v-8d +%Y%m%d%H%M 2>/dev/null || date -d '8 days ago' +%Y%m%d%H%M)" "$C/state/paged-OLDSID-stale.marker"   # 8d old → swept
   run "$DI" --once
   kill "$sp" 2>/dev/null || true
   [ "$status" -eq 0 ]
