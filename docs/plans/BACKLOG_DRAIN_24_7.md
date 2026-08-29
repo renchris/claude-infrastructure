@@ -27182,6 +27182,47 @@ must not be reduced to "install the thing that unblocks it".
 every legitimate load cut with the same code, which is R6 broken in the direction `ship-land.sh`
 least tolerates. The cure belongs in the venue.
 
+### Measured end to end on the LAND path, not argued from the source — and the control is the finding
+
+The reading above is a claim about control flow, so it was driven. Cell: one comments-only commit to
+`scripts/ship-land.sh` on a branch off `origin/main`, adding no suite, selecting **32** direct
+suites; `SHIP_LAND_SMOKE_BUDGET_S=420`; `--dry-run`, which runs the whole gate including the smoke
+and stops before the push. The runner was made to fail with a **shim that exits 127 and prints
+nothing** — exactly what `gate_bats` sees when `bats` is absent — while the real binary stayed on
+disk, for a reason the next paragraph explains.
+
+    cell                     rc    smoke        detail
+    runner exits 127          0    PARTIAL      30 suites "attempted" in 2s, each reporting
+                                                `cut TWICE (exit 127 then 127, ZERO 'not ok' both
+                                                times)`; "gate GREEN … would push HEAD → origin/main"
+    real runner (NEG)         6    RED          0 occurrences of `exit 127`; 4 suites in 486s;
+                                                `bats RED: tests/cc-reaper.bats (failed twice)`
+
+**The same commit reads GREEN-and-pushable without a runner and RED with one.** The zero exit-127
+count in the control is what makes the PARTIAL attributable to the runner rather than to the budget,
+which is the one thing the first row could not say on its own.
+
+🚨 **AND THE RED IS THE VENUE'S, NOT THE DIFF'S — so provisioning `bats` here trades a silent
+ungating for a FALSE CONVICTION.** `tests/cc-reaper.bats` was run against **pristine `origin/main`**
+in this container: **141 `ok`, 5+ `not ok`, rc 1, 351 s.** The diff is comments-only in a different
+file. Yet the gate's own sentence is *"This is a VERDICT about your diff (O(diff), reproducible):
+fix it, do not retry unchanged"* — pointing a cloud lander at a suite that is red on unmodified
+trunk in that venue. Both states are wrong, in opposite directions, and **neither is the behaviour
+the operator's box has.** The repo already ships the instrument for the second one:
+`scripts/offbox-run.sh` plus `scripts/offbox-excluded.manifest`, which wants a measured line rather
+than a guess — that is the next step, and it is deliberately NOT taken here (see the closing note).
+
+⚠️ **Two experiments convicted themselves before this one worked, and both are findings.**
+**(a)** Removing `/usr/bin/bats` outright reds **`unattended-path-lint`** first — the diff's own new
+suite contains `command -v bats`, and that lint asks whether a named binary is *reachable*, so the
+act of hiding it made a file this land changes fail an unrelated arm. The 127-shim exists precisely
+to leave that probe undisturbed. **(b)** With the shim but on the FULL diff, **`offbox-admission-lint`
+reds** — it RUNS each newly added suite off-box and correctly recorded `state=cut`, refusing to admit
+a suite it could not evaluate. That is a genuine refinement of the finding, not noise: **a missing
+runner IS blocking for a diff that ADDS a `.bats` suite, and silent only for one that does not.**
+`UNGATED`'s sentence is therefore about the common case, and the uncommon one fails loudly and
+correctly.
+
 ### The THIRD lock, which the prescribed command itself walks into: presence is not a version
 
 `apt-get install -y shellcheck` gives **0.9.0**. `run_gate`'s statics arm runs a **bare**
@@ -27305,8 +27346,19 @@ the first WORD is examined. **A hazard that is only documented is a hazard that 
 the cheapest real fix would be a lint over `.sh` files, which `bats-shellcheck-lint` performs for
 `.bats` files only.
 
-**What this does NOT settle.** It says nothing about the 08-17 step, nothing about the return arm,
-and nothing about whether `cloud-land-arm-diagnose.sh` will name a divergence — that read still
-exists only on the operator's box and is still the standing operator-gated step. What it removes is
-narrower and real: a cloud VM can now provision its own land path in one command, and knows which of
-the two tools it must not skip.
+**What this does NOT settle, and the one thing deliberately left.** It says nothing about the 08-17
+step, nothing about the return arm, and nothing about whether `cloud-land-arm-diagnose.sh` will name
+a divergence — that read still exists only on the operator's box and is still the standing
+operator-gated step. **And it does not touch `scripts/offbox-excluded.manifest`.** The measurement
+above shows `tests/cc-reaper.bats` red on pristine trunk in this venue, and the manifest is exactly
+where that belongs — but a manifest line is a claim about WHY a suite cannot run off-box, and this
+session measured only THAT it does not. Writing the line without the why is how a manifest becomes a
+place to hide a real regression, so it is named here for the next link and not taken. The same
+applies to the other 31 selected suites: only four ever ran inside the 420 s budget, so **the
+off-box cleanliness of this repo's suite corpus is unmeasured, not clean** — that is the natural
+next cell, and it is now cheap, because the venue can run them.
+
+What this DOES remove is narrower and real: a cloud VM can provision its own land path in one
+command, its land gate reaches `rc 0 / all ratchet arms GREEN` for the first time in this lane, and
+the next dispatch knows which of the two tools it must not skip and which of the two failure
+directions it is buying.
