@@ -34,10 +34,10 @@ mkfile() { # $1=name $2=body  [$3=set line]
 }
 census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" --census 2>/dev/null; }
 
-@test "1: the lint's own --selftest passes (32/32, both directions)" {
+@test "1: the lint's own --selftest passes (42/42, both directions)" {
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s' "$output" | grep '32/32' >/dev/null \
+  printf '%s' "$output" | grep '42/42' >/dev/null \
     || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 
@@ -309,4 +309,74 @@ $(census | grep -c 'scripts/muted\.sh:' || true) — the file is muted"; census 
     || { echo "control failed: the unappended file already reads \
 $(census | grep -c 'lr-reset-poller\.sh:' || true) hit(s), so arm 20 is vacuous"; false; }
   true
+}
+
+@test "21: MECHANISM — the inversion SURVIVES THE CALL FRAME, and the drain fix repairs it" {
+  # The 2026-08-29 defect (backlog ca97c678b18b). Clause 4 asked "does anything read this status"
+  # of ONE line, so a pipeline that is the LAST command of a function body answered NO — while its
+  # status was in fact the function's return value, read by every `if f; then` in the file.
+  #
+  # ASSERTED BY RUNNING BASH, not by re-reading the detector, because the whole claim is that the
+  # 141 crosses a call frame. A lint arm alone would only prove the detector's opinion of a shape.
+  FEED="$BATS_TEST_TMPDIR/feed.txt"
+  { echo NEEDLE; i=0; while [ "$i" -lt 30000 ]; do echo 0123456789abc; i=$((i+1)); done; } > "$FEED"
+
+  # THE DEFECT: the caller reads FALSE for a needle that is plainly on line 1.
+  run bash -c 'set -uo pipefail
+has_needle() { cat "$1" | grep -q NEEDLE; }
+if has_needle "$1"; then echo TRUE; else echo FALSE; fi' _ "$FEED"
+  printf '%s' "$output" | grep -x FALSE >/dev/null \
+    || { echo "the function-final inversion did not reproduce ($output) — this box, this bash, this \
+feed size. Re-measure before weakening clause 4c; do not delete the arm."; false; }
+
+  # THE FIX the lint prescribes — drain the consumer — repairs it at the SAME feed, same frame.
+  run bash -c 'set -uo pipefail
+has_needle() { cat "$1" | grep NEEDLE >/dev/null; }
+if has_needle "$1"; then echo TRUE; else echo FALSE; fi' _ "$FEED"
+  printf '%s' "$output" | grep -x TRUE >/dev/null \
+    || { echo "the drained consumer ALSO read false ($output) — the prescribed fix does not fix it"; false; }
+
+  # CONTROL, so the first arm cannot pass on something other than SIGPIPE: the identical function
+  # over a payload that fits one write is TRUE. Without this, a broken `cat`/feed would read FALSE
+  # for a reason that has nothing to do with pipefail.
+  printf 'NEEDLE\n' > "$FEED.small"
+  run bash -c 'set -uo pipefail
+has_needle() { cat "$1" | grep -q NEEDLE; }
+if has_needle "$1"; then echo TRUE; else echo FALSE; fi' _ "$FEED.small"
+  printf '%s' "$output" | grep -x TRUE >/dev/null \
+    || { echo "control failed: the small feed also read false, so arm 21 proves nothing about SIGPIPE"; false; }
+}
+
+@test "22: clause 4c DISCRIMINATES — function-final RED, masked and non-final GREEN" {
+  # The detector half of arm 21, and it is the half that decides whether this clause is a gate or a
+  # nuisance. A clause that flagged every pipeline inside every function would be ~4x this
+  # population and would red innocent lands; each GREEN arm here is a DIFFERENT reason the status
+  # cannot reach a caller, so the suite cannot pass against that over-scoped version.
+  mkfile ff1 "is_dirty() {
+  git status --porcelain 2>/dev/null | grep -q .
+}" 'set -uo pipefail'
+  mkfile ff2 "meta_get() { sed -n \"s/^\$2=//p\" \"\$1/meta\" 2>/dev/null | head -1; }" 'set -uo pipefail'
+  run census
+  [ "$(printf '%s\n' "$output" | grep -c 'scripts/ff[12]\.sh:')" -eq 2 ] \
+    || { echo "expected BOTH function-final spellings RED, got: $output"; false; }
+  rm -f "$FIX/scripts/ff1.sh" "$FIX/scripts/ff2.sh"
+
+  # GREEN 1 — not the body's last command.        GREEN 2 — `local` MASKS the status outright.
+  # GREEN 3 — the LITERAL builtin exemption must stay reachable inside a one-line function, or the
+  #           clause silently repeals clause 3 for every function in the tree.
+  # GREEN 4 — a TOP-LEVEL bare pipeline with no errexit is unchanged: the clause is scoped to
+  #           function bodies, and widening it to every bare pipeline is the failure mode next door.
+  mkfile ok1 "is_dirty() {
+  git status --porcelain 2>/dev/null | grep -q .
+  echo done
+}" 'set -uo pipefail'
+  mkfile ok2 "f() {
+  local v=\$(cat /some/file | head -1)
+}" 'set -uo pipefail'
+  mkfile ok3 "ready() { printf '%s\\n' 'ready' | grep -q ready; }" 'set -uo pipefail'
+  mkfile ok4 "git status --porcelain 2>/dev/null | grep -q ." 'set -uo pipefail'
+  run census
+  [ -z "$output" ] \
+    || { echo "clause 4c is OVER-SCOPED — it flagged a non-final, masked, literal-producer or \
+top-level pipeline: $output"; false; }
 }

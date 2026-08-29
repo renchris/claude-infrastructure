@@ -1,15 +1,26 @@
 # pipefail-sigpipe-lint allowlist — <path><TAB><violation count>.
 # Grandfathered sites only. This list may only SHRINK: the lint goes RED both when a file
 # GAINS a violation and when it LOSES one without the count being lowered.
+# The ONE legitimate way a count RISES is a DETECTOR widening — a clause that makes sites
+# already in the tree visible for the first time. Read such a diff against the census delta:
+# additions with ZERO removals is a widening; anything else is a new violation being laundered.
 # Regenerate: scripts/pipefail-sigpipe-lint.sh --regen > scripts/pipefail-sigpipe-allow.txt
 bin/cc-announce	5
 bin/cc-blockers	1
 bin/cc-bus	1
 bin/cc-cloud	1
-bin/cc-comms-alarm-sweep	1
+bin/cc-comms-alarm-sweep	2
+bin/cc-escalations	1
+bin/cc-fleet	2
 bin/cc-idl	1
+bin/cc-pane-headless	1
+bin/cc-queue	2
 bin/cc-reaper	1
+bin/cc-teardown	1
+bin/cc-thread	1
+bin/cc-wake-headless	1
 docs/activation/pending-activation/13-mailbox-gc-activate.sh	2
+docs/activation/pending-activation/18-fleet-activate.sh	1
 docs/activation/pending-activation/32-cc-roles-kitty-normalise-activate.sh	2
 docs/activation/wiring-all.sh	2
 hooks/agent-teams-enforce.sh	2
@@ -34,16 +45,25 @@ scripts/cloud-ceiling-probe.sh	3
 scripts/comms-strand-report.sh	1
 scripts/deathwatch-watchfile.sh	1
 scripts/deploy-link-parity.sh	1
+scripts/deploy-migrations.sh	1
 scripts/desk-invariant.sh	1
+scripts/devserver-census.sh	1
+scripts/gate-cleanup.sh	1
 scripts/gate-manifest.sh	1
 scripts/handoff-disposition.sh	1
 scripts/handoff-fire.sh	5
+scripts/hook-dispatch-bench.sh	1
+scripts/lead-supervisor.sh	1
+scripts/offbox-admission-lint.sh	1
 scripts/offbox-partition.sh	1
 scripts/pane-spawn-coverage-lint.sh	1
+scripts/power-policy-verify.sh	1
 scripts/reap-guard.sh	1
+scripts/registration-state.sh	1
 scripts/s3b-lint.sh	1
 scripts/self-path-lint.sh	1
+scripts/ship-land.sh	1
 scripts/test-overwrite-guard.sh	5
 scripts/wait-contract-lint.sh	2
-scripts/worktree-gc-infra-run.sh	2
+scripts/worktree-gc-infra-run.sh	3
 tests/handoff-fire-account-sweep.bats	38
