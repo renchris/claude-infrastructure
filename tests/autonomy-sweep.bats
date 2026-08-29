@@ -213,10 +213,29 @@ osa_posts() {
   printf '%s' "$n"
 }
 ha_count()       { local f n=0; for f in "$CC_HANDOFF_ALARM_DIR"/*.json; do [ -f "$f" ] && n=$((n + 1)); done; printf '%s' "$n"; }
+# ago — a `touch -t` stamp N units in the past, in BOTH date(1) dialects.
+#
+# This suite is written on macOS, where `date -v-9d` is the spelling, and it is RUN on Linux by
+# every cloud lander — where GNU date rejects `-v`, the command substitution comes back EMPTY, and
+# `touch -t ''` fails inside setup with no assertion ever reached. Nine cases died that way, and the
+# reds were read twice as evidence about the code under test rather than about the clock helper.
+# BSD FIRST, GNU as the fallback, and the order is not arbitrary: macOS `date -d` means "daylight
+# saving", not "date string", so a GNU-first probe would succeed there and mis-date every fixture.
+ago() { # <N><unit: d|H>
+  local spec="$1" n="${1%[dH]}" unit gnu
+  unit="${spec##*[0-9]}"
+  case "$unit" in
+    d) gnu="$n days ago" ;;
+    H) gnu="$n hours ago" ;;
+    *) echo "ago: unknown unit in '$spec' (expected Nd or NH)" >&2; return 2 ;;
+  esac
+  date -v-"$spec" +%Y%m%d%H%M 2>/dev/null || date -d "$gnu" +%Y%m%d%H%M
+}
+
 mk_marker() { # <file> <pane> <mode> [young]  — aged 1 h by default (> the 900 s join deadline)
   printf '{"key_kind":"pane","pane":"%s","sid":"S-1","mode":"%s","ts":"2026-08-07T00:00:00Z"}\n' \
     "$2" "$3" > "$CC_TEARDOWN_DIR/$1"
-  [ "${4:-}" = young ] || touch -t "$(date -v-1H +%Y%m%d%H%M)" "$CC_TEARDOWN_DIR/$1"
+  [ "${4:-}" = young ] || touch -t "$(ago 1H)" "$CC_TEARDOWN_DIR/$1"
 }
 
 # ── nothing-new → abstain, no notify ───────────────────────────────────────────
@@ -313,7 +332,7 @@ mk_marker() { # <file> <pane> <mode> [young]  — aged 1 h by default (> the 900
 # reap would stay green if the horizon collapsed to 0 and ate live records; asserting only the keep
 # would stay green if the reaper never ran at all.
 
-mk_old()   { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; touch -t "$(date -v-9d +%Y%m%d%H%M)" "$1"; }
+mk_old()   { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; touch -t "$(ago 9d)" "$1"; }
 mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
 
 @test "all six event dirs: records past the horizon are reaped, young ones kept" {
@@ -337,7 +356,7 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
 @test "decisions/ is exempt: an old decision packet survives the reap" {
   mk_old "$CC_DECISIONS_DIR/old.json"
   printf '{"status":"open"}\n' > "$CC_DECISIONS_DIR/old.json"
-  touch -t "$(date -v-30d +%Y%m%d%H%M)" "$CC_DECISIONS_DIR/old.json"
+  touch -t "$(ago 30d)" "$CC_DECISIONS_DIR/old.json"
   run "${SWEEP_TO[@]}" bash "$SWEEP"
   [ "$status" -eq 0 ]
   [ -f "$CC_DECISIONS_DIR/old.json" ]
@@ -848,7 +867,7 @@ SH
   run "${SWEEP_TO[@]}" bash "$SWEEP"
   [ "$status" -eq 0 ]
   [ "$(seen_count)" -gt 0 ]                # PROVEN delivered ⇒ it carries a .seen marker
-  touch -t "$(date -v-9d +%Y%m%d%H%M)" "$CC_PAGES_DIR/p.page"
+  touch -t "$(ago 9d)" "$CC_PAGES_DIR/p.page"
   run "${SWEEP_TO[@]}" bash "$SWEEP"
   [ "$status" -eq 0 ]
   [ ! -f "$CC_PAGES_DIR/p.page" ]          # reaped…
@@ -881,7 +900,7 @@ SH
   [ "$status" -eq 0 ]
   [ "$(bannered_count)" -eq 1 ]
   [ "$(seen_count)" -eq 0 ]
-  touch -t "$(date -v-9d +%Y%m%d%H%M)" "$CC_PAGES_DIR/p.page"
+  touch -t "$(ago 9d)" "$CC_PAGES_DIR/p.page"
   run "${SWEEP_TO[@]}" bash "$SWEEP"
   [ "$status" -eq 0 ]
   grep -q '"kind":"expired-unread"' "$CC_IDL"
@@ -921,7 +940,7 @@ SH
   [ "$(ha_count)" -eq 0 ]
   [ ! -f "$CC_SWEEP_SEEN_DIR/m1.json.orphan-checked" ]
   # POSITIVE CONTROL: the same marker, aged past the deadline, DOES alarm
-  touch -t "$(date -v-1H +%Y%m%d%H%M)" "$CC_TEARDOWN_DIR/m1.json"
+  touch -t "$(ago 1H)" "$CC_TEARDOWN_DIR/m1.json"
   run "${SWEEP_TO[@]}" bash "$SWEEP"
   [ "$(ha_count)" -eq 1 ]
 }
@@ -991,7 +1010,7 @@ SH
 @test "D4 · a marker with no pane key is closed out, and the world is never probed for it" {
   printf '{"key_kind":"sid","pane":"","sid":"S-1","mode":"recycle","ts":"2026-08-07T00:00:00Z"}\n' \
     > "$CC_TEARDOWN_DIR/m1.json"
-  touch -t "$(date -v-1H +%Y%m%d%H%M)" "$CC_TEARDOWN_DIR/m1.json"
+  touch -t "$(ago 1H)" "$CC_TEARDOWN_DIR/m1.json"
   export CC_STUB_IT2_OUT="240"
   run "${SWEEP_TO[@]}" bash "$SWEEP"
   [ "$status" -eq 0 ]
