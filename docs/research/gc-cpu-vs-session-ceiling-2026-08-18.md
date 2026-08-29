@@ -139,10 +139,62 @@ consumers were `bun` 65%, `mediaanalysisd` 33%, `kernel_task` 25%, with the high
 **5.5%** and 52% idle). Corroborated live while writing this: **load 10.66 at 13 sessions**, against
 19.06 at 14 sessions twelve hours earlier — the same session count spanning a 1.8× load range.
 
-The honest actionable is therefore **to derive the number, not to move it**: re-run the axis-09-style
+~~The honest actionable is therefore **to derive the number, not to move it**: re-run the axis-09-style
 measurement (load1 delta across N all-active sessions) and set the ceiling from a measured failure
 point. That is a two-arm experiment, not a config edit, and it is the only thing that can legitimately
-move a capacity constant.
+move a capacity constant.~~ *(struck 2026-08-29 — the prescription is refuted by the evidence three
+paragraphs above it; see §3.1. Kept in place because it is what backlog `e981656df348` was filed to
+execute, and the record of why that item closed without executing it is the deliverable.)*
+
+### 3.1 AMENDMENT (2026-08-29) — the finding stands, its prescribed remedy does not, and the cure landed in code
+
+**The finding is confirmed and already fixed at the site.** `docs(capacity-admit): the ceiling cites a
+section that has no derivation, and the term it parameterises already defaults off` (`e89918f2b`,
+2026-08-25, ancestor of trunk — cite by subject, a land rebases) replaced the false
+`"§9.5's measured ceiling"` provenance with the truth. Re-verified independently here:
+`MACHINE_CAPACITY_V2` §9.5 is a **self-correction** retracting a falsified permanent-outage
+projection. It records the gate ADMITTING at 1.55/core and REFUSING at 4.0/core — a demonstration
+that a threshold thresholds — and contains no derivation of 2.0 anywhere. The origin commit
+(`feat(handoff-fire): machine-capacity admission gate at the spawn chokepoint`, `0fc3a3d3`) measured
+its motivating incident at **2.72/core** and picked 2.0 with no stated rule, so the shipped ceiling
+sits *below* the only incident that produced it.
+
+🚨 **But "set the ceiling from a measured failure point" HAS NO SOLUTION ON THIS AXIS, and this
+section already contains the proof.** The block quote above — this repo's own alarm instrument,
+`scripts/capacity-alarm.sh:139-147` — records that the survived population *contains* the fatal
+value. No threshold can separate a fatal 2.53/core from 13 survived samples at 2.92–5.98/core,
+because every survivor is above the fatality. That is a property of the axis, not of the number, so
+no measurement can supply the missing derivation later. §3 quoted this and then prescribed the
+experiment anyway; the two halves never agreed, and the prescription is the half that loses.
+
+**The named blocker could never have discharged this item, and separately it no longer blocks
+anything.** Backlog `e981656df348` was parked behind "the marginal-load measurement", which is a
+**category error**: a marginal Δload per active session is a capacity-*in-sessions* coefficient — it
+converts a ceiling into a session count, it cannot locate a failure boundary. It answers a different
+question than the one the item asked. Empirically it is worse than unhelpful: `fix(fire-gate): load1
+does not move with the spawn it was gating` (`f944d6e3`, 2026-08-20, ancestor of trunk) established
+that an additional RESIDENT session moves the 1-min runnable count by ~0, which is the same
+proportionality this section already reports the data contradicting. And `fix(capacity): strike the
+refuted 2.5-5 marginal from all three live sites` (`34a21973`, 2026-08-26) settled the dependency
+directly: `CC_ADMIT_ACTIVE_CEILING=8` stands on the 127/127 refusal band, a count over refusals that
+needs no per-session divisor, so **no capacity constant is blocked on §6 of
+`marginal-load-per-active-session-2026-08-19.md`** and that measurement may take as long as it needs.
+
+**Why the literal correctly stays at 2.0 — and why raising it is the lazy fix.** Since an added
+session does not move load1, **no value of this literal can make the term correct: the INPUT is
+wrong, not the number.** The fix therefore moved a *term switch*, never a ceiling (C18):
+`CC_FIRE_LOAD_TERM` now defaults **off** in `capacity_gate()` (`scripts/handoff-fire.sh`, the
+`${CC_FIRE_LOAD_TERM:-off}` guard), and the Agent-tool path has run it off since Wave D; `segments`
+and `active` carry the intent because they *do* move with the spawn. The literal still binds only
+where `cc_capacity_admit` leaves the term on — the two unattended recovery callers
+(`scripts/boot-resume-launch.sh`, `scripts/limit-recover/lr-fire-resume.sh`), deliberately, both
+budget-released after `CC_ADMIT_BUDGET` consecutive refusals. `docs/plans/LOAD_INSENSITIVE_VERIFY_V2.md:156`
+exists to reject raising it.
+
+**Disposition:** `e981656df348` closes as **discharged-and-refuted** on `e89918f2b`. Nothing is to be
+derived, nothing is to be raised, and the "47% of gated fires run with the gate switched off" figure
+above should be read as the fleet having already routed around a term that was measuring the wrong
+input — not as evidence that the ceiling is merely mistuned.
 
 ## 4 · If 2.1.234 is adopted, adopt it on other grounds — and set one env var first
 
