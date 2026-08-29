@@ -201,3 +201,134 @@ c07fb00eb9b6`, filed 2026-08-16, per that doc §4):
 ```
 cc-backlog add --project claude-infrastructure --title "the cc-offload venue guard decision is under-specified: BOTH filed options (fail-closed, route-by-project) pass a subject-foreign row, and a cross-repo master is inexpressible for route-by-project — restore the 08-15 subject discriminator as a conjunct at the fire" --dod-ref "docs/research/venue-foreign-master-redispatch-2026-08-17.md#3" --source 8f59467c92b0
 ```
+
+---
+
+## 9 · 2026-08-29 — the remedy LANDED, and this row survived it. Third fire of the same id.
+
+**Twelve days later `8f59467c92b0` was fired at a third cloud VM of the identical shape** (`$HOME`
+`/root`, `~/Development` absent, `/home/user` holding `claude-infrastructure` alone, GitHub scope
+`renchris/claude-infrastructure`, clone 50 commits with `.git/shallow` present, `HEAD..origin/main`
+= 0). R1-R4 were again unreachable by construction. What makes this fire worth recording is not the
+recurrence — §1 already established that — but that **the guard §3 asked for is now on trunk, is
+measurably working, and does not fire on this row.**
+
+### 9.1 · §5's "guard in the enforcing store: none" is RETRACTED
+
+`bin/cc-eligible` now carries a measured, non-spelling arm — `CROSS_REPO = "ineligible-cross-repo"`
+(`:430`), computed by `cross_repo(project)` (`:766`) and placed *before* the history arm. Its header
+block (`:404-427`) records the census that justifies it: joining each cloud declaration's `item=` to
+that item's `project` puts **106 of the 133 `NOT-STARTED` sessions (80%) on a repo the VM was never
+given** — 92 `reso-management-app`, 14 `doc_classifier` — against **13 for `claude-infrastructure`**.
+That is this class, counted at fleet scale, and it is the largest single cause of the pile.
+
+*Attribution is horizon-limited and is deliberately not asserted.* The arm's own comment dates the
+measurement **2026-08-23**. `git log -S'ineligible-cross-repo'` from this VM returns exactly one
+commit, `6250ee26` (2026-08-26) — **which is the shallow boundary itself**, so its diff shows the
+whole file as added and says nothing about when the arm landed. The landing commit lies outside the
+50-commit horizon and cannot be certified from here; only *presence on trunk* is claimed. (This is
+`DEEP_HISTORY`'s own failure mode caught in the act, one arm over.)
+
+### 9.2 · Measured: the member rows are stopped, this row is not
+
+Run end-to-end against the shipped predicate, fixture `$HOME` with two real git trees carrying
+distinct origins, lane pinned to the attached repo — i.e. the DESK's decision, reproduced:
+
+```
+CC_ELIGIBLE_CLOUD_REPO=$FX/Development/claude-infrastructure   # what a cloud fire attaches
+cc-eligible why <row>
+```
+
+| fixture row | `project` | verdict | `reach` |
+|---|---|---|---|
+| *"pnpm lint is RED on origin/main — 122 `import-x/extensions` errors"* (an R1 member) | `reso-management-app` | **`ineligible-cross-repo`** | `elsewhere — project 'reso-management-app' is renchris/reso-management-app; the VM is given only renchris/claude-infrastructure` |
+| *"MASTER: product repos — the operator's actual products, one wave per repo"* (**this row**) | `claude-infrastructure` | **`eligible`** · `refused: (nothing fired)` | `reachable-or-unmeasured — either the lane's own repo, or nothing measurable — arm fails OPEN` |
+
+So §3's table is no longer a projection about a *filed* option; it is a measurement against
+*shipped* code. Option (a) fail-closed is what landed, keyed exactly on the pair
+(`item.project`, attached repo), and every term is satisfied for this row because its label is
+correct. The class's members are now refused and **only the master row still routes** — the one item
+that has now burned three slots.
+
+### 9.3 · 🚨 The 08-15 subject discriminator would ALSO miss this row — as filed
+
+This is the new finding, and it revises §3's own recommendation. §3 closes by asking that the 08-15
+discriminator — *"an item whose text names a dispatch-set project other than its own `project`"* —
+be restored as a conjunct at the fire. Measured against this row, **that conjunct does not fire
+either**, because the arms read `SPAN_FIELDS = ("title", "dodRef", "condition", "source")`
+(`bin/cc-eligible:490`) and this row's span text is:
+
+```
+MASTER: product repos — the operator's actual products, one wave per repo docs/plans/MASTER_PRODUCT_REPOS.md
+```
+
+Tested against every name in `scripts/dispatch-projects.conf`:
+
+| read | `reso-management-app` | `doc_classifier` |
+|---|---|---|
+| the item's span fields (what every arm sees) | **0 hits** | **0 hits** |
+| the plan BODY at its `dodRef` | 10 hits | 9 hits |
+
+`9333991e4544` was catchable by the 08-15 rule only because its *title* happened to open with the
+word `doc_classifier`. This row's title names no project at all; the foreign trees appear **only in
+the plan body**, which is precisely what `MASTER_PRODUCT_REPOS.md` Phase 0 already says the span
+fields exclude (*"never the plan BODY, where every foreign tree is named"*).
+
+**Consequence: all three filed remedies pass this row** — (a) fail-closed, (b) route-by-project, and
+(c) the 08-15 subject discriminator over span text. A conjunct that would catch it must read the
+**content of the `dodRef`**, not the item's fields. That is a strictly larger change than §3
+proposed (an arm that opens a file rather than matching a string), and it is the honest cost of
+covering this shape.
+
+### 9.4 · The ~0-cost stopgap is now live, and it takes TWO steps, not one
+
+§4's cost note said a `projectName` entry in `~/.claude/plans-index.json` composes with fail-closed
+to park this row. That was conditional on fail-closed landing. **It has landed** (§9.1-9.2), and the
+member-row line of the table above is the proof that the arm it composes with actually refuses. So
+the stopgap is one data entry away — but it is *not* sufficient alone, and §4 did not say why:
+
+`cc-backlog`'s id hashes **project + title + source**, so changing `projectName` does not retro-label
+the existing row. It governs what `cc-discover` mints *next*. Parking this row therefore needs both:
+
+1. `cc-backlog block 8f59467c92b0` — the existing id, already minted under `claude-infrastructure`.
+2. the `projectName` entry — so the next mint from this plan lands under a foreign project and is
+   refused by the arm measured above, instead of re-minting a fresh `claude-infrastructure` id that
+   passes exactly as this one did.
+
+Step 2 without step 1 leaves this id firing; step 1 without step 2 leaves the plan free to mint a
+successor. Both are desk actions — `~/.claude/plans-index.json` does not exist on this VM
+(`find-plan.sh:38`, `$HOME/.claude/plans-index.json`), and the read path that honours it
+(`find-plan.sh:73`, preferring it over the path basename) is verified on trunk, unchanged.
+
+### 9.5 · The rails still fail at rc 0 — re-measured, and the 08-17 warning is now vindicated
+
+§8 closed with *"verify the block took, rather than assuming it."* Re-run from this session:
+
+```
+$ bin/cc-backlog block 8f59467c92b0 --needs "…"
+cc-backlog block: unknown id 8f59467c92b0                           # rc 0
+$ bin/cc-backlog list --all
+                                                                    # empty, rc 0
+```
+
+`~/.claude/autonomy/` does not exist here, so the store is unwritable and *both* the 08-15 and 08-17
+dispositions demonstrably did not take — this fire is the evidence. A worker trusting the exit code
+would report the item parked three times over while it stayed in the wave.
+
+### 9.6 · Not fixed here — refusal grounds re-measured, not inherited
+
+- **`bin/cc-venue`'s guard applies to this session verbatim**: *"A cloud VM must never build or run
+  the venue rule: it would be deciding its own admission, and its 50-commit clone cannot read the
+  history that justifies the exclusions."* This is that VM on that clone (`git rev-list --count
+  HEAD` → 50, `.git/shallow` present). `bin/cc-eligible` **is** the venue rule.
+- **`bats`, `shellcheck` and `shfmt` are all still ABSENT** (re-measured, not carried over from §6).
+  The repo's gate cannot be run on a change to the predicate, and a wrong refusal in that arm
+  starves the tap for every project — an unbounded cost traded against one bounded slot.
+- §9.3 *widens* the open decision rather than settling it, exactly as §3-§4 did.
+
+### 9.7 · The item itself — still NOT adjudicated
+
+R1-R4 remain **open, correct as filed, and unstarted**. `pnpm lint` on `reso-management-app`, the
+four unlanded branches, the Amplify/Fly split-brain and `doc_classifier`'s `require_role` holes were
+again never readable — the trees do not exist here. Nothing in this section refutes the plan; what
+is refuted is the venue, and now also the sufficiency of the *third* filed remedy.

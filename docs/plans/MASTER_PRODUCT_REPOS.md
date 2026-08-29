@@ -101,6 +101,32 @@ the blocker back. (`b0be87487228` did exactly that: it could not even record its
 the VM has no `~/.claude/autonomy/backlog.jsonl`, so the ledger is unwritable from the venue the
 gate sent it to.)
 
+✅ **RESOLVED FOR THE MEMBER ROWS — and NOT for this master row (measured 2026-08-29).** The missing
+arm the paragraph above asks for has **landed**: `bin/cc-eligible` now carries
+`CROSS_REPO = "ineligible-cross-repo"` (`:430`), a measured — not spelling — arm computed by
+`cross_repo(project)` (`:766`) and placed before the history arm. Its own census (`:404-427`) puts
+**106 of 133 `NOT-STARTED` cloud sessions (80%) on a repo the VM was never given** (92
+`reso-management-app`, 14 `doc_classifier`). So the sentence above — *"every open
+`reso-management-app` / `doc_classifier` row is cloud-ineligible in fact while reading `eligible`"* —
+**is now false in its second half**: those rows read `ineligible-cross-repo` and are refused at
+`claim --venue cloud`, which is exactly where it asked for the enforcement.
+
+🚨 **This master row is in the residual the arm cannot drain, and it re-fired on 2026-08-29 — the
+THIRD dispatch of `8f59467c92b0` (08-15, 08-17, 08-29).** Run against the shipped predicate with the
+lane pinned to the attached repo, an R1 member row returns `ineligible-cross-repo` while this row
+returns `eligible · refused: (nothing fired) · reach: … arm fails OPEN` — because `cross_repo` is
+keyed on `project`, and this row's project label is *accurate*. The 2026-08-17 prediction that "both
+filed options PASS this row" is therefore no longer a projection about a filed option; it is a
+measurement against landed code.
+
+**And the third remedy misses it too.** The 08-15 subject discriminator (*an item whose text names a
+dispatch-set project other than its own*) reads `SPAN_FIELDS = ("title","dodRef","condition",
+"source")` (`cc-eligible:490`). This row's span text names `reso-management-app` **0 times** and
+`doc_classifier` **0 times**; this plan's BODY names them 10 and 9 times. A conjunct that catches
+this shape must read the **content of the `dodRef`**, not the item's fields — strictly more than
+§3 of the research doc proposed. Full measurement, the two-step stopgap that *does* park it, and the
+re-measured refusal grounds → `docs/research/venue-foreign-master-redispatch-2026-08-17.md` §9.
+
 | Wave | Execution locus | Deliverable | Depends on |
 |---|---|---|---|
 | **R1 · reso: unblock the gate** | **S** (reso worktree) | `pnpm lint` green on `origin/main`; a fresh worktree can pass `ship-land` | — |
@@ -156,6 +182,32 @@ branch queue is empty or explicitly abandoned with reasons, the production deplo
 single-brained and audited, and doc_classifier's authorization holes are closed with tests.
 
 ## Status log
+- **2026-08-29 — the guard LANDED, the member rows are stopped, and THIS row was fired a third
+  time.** `8f59467c92b0` reached a third cloud VM of the identical shape (one checkout, GitHub scope
+  of one repo, no `~/Development`, 50-commit shallow clone). R1-R4 untouched and **still open,
+  correct as filed, and unstarted** — nothing about the plan is refuted, only the venue, for the
+  third time. Three things this fire measured that 08-17 could not:
+  **(1)** the missing arm 08-15/08-16/08-17 asked for is **on trunk** — `ineligible-cross-repo` in
+  `bin/cc-eligible`, measured over the whole live cloud population (106 of 133 stalled sessions,
+  80%, sent to a repo the VM was never given). 08-17's *"guard in the enforcing store: none"* is
+  retracted, and the Phase 0 claim that member rows still read `eligible` is now false.
+  **(2)** Run end-to-end against that shipped predicate, an R1 member row is **refused**
+  (`ineligible-cross-repo`) and **this row is still `eligible`** — `refused: (nothing fired)`, the
+  reach arm failing OPEN — because `cross_repo` is keyed on `project` and this row's label is
+  accurate. The 08-17 prediction is now a measurement against landed code.
+  **(3)** 🚨 **the 08-15 subject discriminator would miss it too.** Every arm reads
+  `SPAN_FIELDS = (title, dodRef, condition, source)`; this row's span text names
+  `reso-management-app` and `doc_classifier` **zero** times while this plan's body names them 10 and
+  9. So **all three** filed remedies pass this row, and a conjunct that catches it must read the
+  `dodRef`'s CONTENT — more than §3 proposed. The one thing that does park it is the ~0-cost
+  `projectName` entry, now composable with a LANDED arm, and it needs **two** steps because the id
+  hashes project+title+source: `block` the existing id *and* set `projectName`, or the plan mints a
+  fresh passing successor. Full measurement →
+  `docs/research/venue-foreign-master-redispatch-2026-08-17.md` §9.
+  **Disposition: `cc-backlog block`, still not `reopen`** — and 08-17's warning to *verify the block
+  took* is now vindicated rather than precautionary: re-measured here, `cc-backlog block` answers
+  `unknown id` at **rc 0** against an absent store, which is why the 08-15 and 08-17 dispositions
+  both failed silently and this row fired a third time.
 - **2026-08-17 — the SAME row was cloud-dispatched AGAIN, and the re-fire is the finding.**
   `8f59467c92b0` was fired into an identical VM shape (one checkout, GitHub scope of one repo, no
   `~/Development`) ~2 days after the 08-15 entry below wrote its disproof into THIS FILE. R1-R4 were
