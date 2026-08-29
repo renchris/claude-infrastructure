@@ -416,7 +416,28 @@ if [ "$IDLE_SCOPED" = 1 ]; then
   # baseline PROVES a prompt beat occurred in between, whether or not we sampled it. The offset says
   # exactly that: the arm turn's own trailing Stop (baseline+1) is excluded, and nothing else is.
   # Erring toward standing down early costs one bounce turn; erring the other way costs the goal.
-  [ "$(_beat_field "$SID" '.kind')" = "prompt" ] && BEAT_STOP_ALLOWANCE=1
+  #
+  # 🚨 UNCONDITIONAL, AND THAT IS THE WHOLE FIX (backlog b60eb29e97dd). This line used to read
+  #   [ "$(_beat_field "$SID" '.kind')" = "prompt" ] && BEAT_STOP_ALLOWANCE=1
+  # i.e. it granted the allowance only when the arm-time beat was PROMPT-kind — assuming an arm
+  # always happens inside a prompt-initiated turn. THE ONE PATH THAT INSTRUCTS THIS ARM VIOLATES
+  # THAT ASSUMPTION BY CONSTRUCTION. The wake floor (hooks/session-continue.sh) fires AT A STOP:
+  # `session-beat.sh stop` writes a Stop-kind beat, the floor then blocks that stop and feeds the
+  # model the "arm your watcher NOW, then stop" instruction. So the newest beat when the model runs
+  # the arm is STOP-kind, the allowance was 0, and the arming turn's OWN trailing Stop — seq
+  # baseline+1, which the paragraph above says must be excluded — was read as "a new turn" at the
+  # very first poll. The mode was a guaranteed no-op on the only path that asks for it: measured
+  # 2/2 in the field with banners `beat seq > 3` and `beat seq > 6` (an allowance of 0 is the only
+  # way those numbers can be printed), and reproduced here as tests/cc-await-ping.bats's RED-PROOF.
+  #
+  # The arm is the model's LAST action of its turn, so a trailing Stop beat at baseline+1 lands
+  # moments later WHATEVER the arm-time kind was. The allowance is therefore a property of the arm,
+  # not of the beat it happened to observe. Nothing is lost by granting it always: a genuine new
+  # user turn landing at exactly baseline+1 is PROMPT-kind, and `_turn_moved`'s second clause
+  # (seq > baseline AND kind = prompt) has always caught that case — which is the spec's own
+  # "any UserPromptSubmit-kind beat with seq > baseline" rule, still intact
+  # (docs/research/goal-safe-2way-comms-2026-08-13.md §4 C2).
+  BEAT_STOP_ALLOWANCE=1
   # (C4) MAIL ALREADY PENDING = you have work. Arming here would defer the judgment of state the
   #      session already holds, which is the deferral this mode exists to make impossible.
   for _k in $(_keys); do

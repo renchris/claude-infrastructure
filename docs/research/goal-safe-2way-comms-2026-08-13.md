@@ -131,6 +131,33 @@ files, the owner guard, the signal verdicts. The mode adds two exit conditions a
 | C6 chokepoint carve-out | `validate-bash.sh` allows exactly `cc-await-ping --idle-scoped …` in command position under a live goal; every other shape of the deny class stays denied, and the deny message TEACHES this form | enforcement stays at the chokepoint, and the chokepoint admits its own cure (MEMORY: enforcement-must-live-at-the-chokepoint) |
 | C7 who arms it | the goal-blocked turn: drain nudge + the deny text + the wake floor all currently say "do not arm" under a live goal — they switch to instructing THIS form when the state is awaiting | the arm is taught at the exact moment the model has nothing else to do; no memory required |
 
+### C2 correction, 2026-08-29 (backlog `b60eb29e97dd`) — the shipped offset withheld its own allowance
+
+C2 above is stated as a **kind filter** ("any UserPromptSubmit-kind beat … Stop-kind beats are
+excluded"). `cc-await-ping` implements it as an **offset** instead — deliberately, to close a
+sampling hole the filter has: the beat file holds only the LATEST boundary, so a whole turn can
+complete inside one poll and leave the watcher looking at a Stop-kind beat whose prompt predecessor
+it never sampled. `seq > baseline + 1` covers that; `seq == baseline + 1 && kind == prompt` keeps
+the filter's own case. Both are right.
+
+**What was wrong is that the `+1` was granted only when the beat observed AT ARM TIME was
+prompt-kind** — an assumption that an arm always happens inside a prompt-initiated turn. **The one
+path that instructs this arm violates it by construction.** The wake floor
+(`hooks/session-continue.sh`) fires *at a Stop*: `session-beat.sh stop` has already written a
+Stop-kind beat when the floor blocks that stop and hands the model "arm your watcher NOW, then
+stop". So the arm observes a **Stop-kind** beat, the allowance was 0, and the arming turn's own
+trailing Stop — `baseline+1`, the very beat this row says must be excluded — read as "a new turn"
+at the **first poll**. C7's arm was a deterministic no-op, and the floor's block bought nothing.
+
+Field evidence: 2/2 arms stood down immediately, banners `beat seq > 3` and `beat seq > 6` — an
+allowance of 0 is the only way those numbers can be printed. Reproduced and RED-proved in
+`tests/cc-await-ping.bats`.
+
+Fix: the allowance is **unconditional**. It is a property of *the arm* (whose turn always emits a
+trailing Stop moments later), never of the beat that arm happened to observe. Nothing is lost — a
+genuine new user turn landing at exactly `baseline+1` is prompt-kind, and the second clause has
+always caught it, which is this row's rule intact.
+
 **The cycle it produces** (DERIVED from A1–A5, each link individually measured):
 
 ```

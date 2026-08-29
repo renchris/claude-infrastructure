@@ -749,6 +749,50 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
   [[ "$output" != *"stood-down"* ]] || false
 }
 
+@test "RED-PROOF b60eb29e97dd: armed off a STOP-kind beat (the wake floor's own path), the arm turn's trailing Stop must NOT self-cancel it" {
+  # THE PATH THAT INSTRUCTS THIS ARM ALWAYS LOOKS LIKE THIS. hooks/session-continue.sh's wake floor
+  # fires AT A STOP — `session-beat.sh stop` has already written a Stop-kind beat by the time the
+  # floor blocks that stop and tells the model "arm your watcher NOW, then stop". So the newest beat
+  # the arm observes is STOP-kind, never the prompt-kind one the test above fixtures. Pre-fix the
+  # allowance was granted only on a prompt-kind observation, so it was 0 here and the arming turn's
+  # OWN trailing Stop (baseline+1) stood the watcher down at the first poll: the floor demanded an
+  # arm that deterministically no-ops. Field evidence: banners `beat seq > 3` and `beat seq > 6`,
+  # which an allowance of 0 is the only way to print.
+  beat 3 stop
+  ( sleep 1; beat 4 stop ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 4
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 2 ]                                  # still watching → ran its term
+  [[ "$output" != *"stood-down"* ]] || false
+  [[ "$output" == *"beat seq > 4"* ]] || false         # the allowance is granted, not withheld
+}
+
+@test "b60eb29e97dd: armed off a STOP-kind beat, a genuine new PROMPT at baseline+1 still cancels" {
+  # The allowance must not become a blindfold. A user typing while the arming turn is still
+  # finishing writes a PROMPT-kind beat at exactly baseline+1 — the spec's "any UserPromptSubmit-kind
+  # beat with seq > baseline" — and _turn_moved's second clause is what keeps that case live.
+  beat 3 stop
+  ( sleep 1; beat 4 prompt ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down"* ]] || false
+}
+
+@test "b60eb29e97dd: armed off a STOP-kind beat, a SECOND Stop beyond the arm turn's own does cancel" {
+  # baseline+2 means a whole further boundary pair happened after the arm turn closed: the session
+  # has moved on, and staying parked over it is the starvation pole this mode exists to close.
+  beat 3 stop
+  ( sleep 1; beat 5 stop ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down"* ]] || false
+}
+
 @test "idle-scoped: a Stop beat BEYOND baseline+1 does cancel (the sampling hole is closed)" {
   # The beat file holds only the LATEST boundary, so a whole turn can complete inside one poll and
   # leave us looking at a Stop-kind beat whose prompt predecessor we never sampled. Turns alternate,
