@@ -521,3 +521,147 @@ naming is the only thing `4bcf3f0b` adds.
 itself cannot run here at all (§6.4). The macOS-side behaviour of the sweep gate is unmeasured by
 construction; what is asserted is only that the predicate is byte-identical and that the added
 branch is unreachable unless `$0` and `CLAUDE_CONFIG_DIR` actually disagree.
+
+---
+
+## 8 · Seventh dispatch, 2026-08-29 — the first one that could land, and what unblocked it
+
+Written from a Linux cloud VM. Two things distinguish it from dispatches two through six: it
+consolidates **both** surviving stranded lineages rather than one, and it **landed**. §7's closing
+sentence — *"`scripts/ship-land.sh` itself cannot run here at all"* — is the claim this section
+retires.
+
+### 8.1 Why six dispatches stranded: a second land-blocking arm, and it is provisionable
+
+§6.4 eliminated `scripts/unattended-path-lint.sh` as the *cause of the step* (correctly — it was
+equally red during the 89% era) and, in doing so, left the impression that the VM-side land rail was
+a closed door. It is a door with **two** locks, and the second one was never named in this document:
+
+```
+scripts/bats-shellcheck-lint.sh --selftest  →  exit 2, "shellcheck not installed"
+ship-land.sh:3444   scrc == 2  →  bats_sc_nonverdict  →  GATE_KILLED=1  →  exit 9
+```
+
+Its entry condition is `[[ -d tests ]] && ls tests/*.bats` — a property of **the repo, not the
+diff** — so it is entered on every land here, a docs-only one included. It went blocking at
+`fe6540a6` (2026-08-11), deliberately and correctly: a missing tool used to be a silent skip, and
+routing the absence through the exit-2 non-verdict arm is what stopped a `.bats`-only land from
+reading exactly like a clean one. Nobody costed that the same change is a **total land-block for
+every box without the tool, which is every cloud VM**. `76358528` (on trunk, 2026-08-29T01:09Z)
+named it; this dispatch is the first to act on it.
+
+Measured here, both locks, before and after:
+
+| control | before | after `apt-get install -y shellcheck bats` |
+| --- | --- | --- |
+| `scripts/bats-shellcheck-lint.sh --selftest` | **exit 2** — non-verdict ⇒ `GATE_KILLED` | **19/19, exit 0** |
+| `scripts/unattended-path-lint.sh --selftest` | — | **44/44, exit 0** (fixed on trunk by `c1904ed8`) |
+
+**Neither lock is the 08-17 step** — both predate it, exactly as §6.4 reasons about the first — and
+neither is weakened here. The gates are right; the *venue* was under-provisioned. But together they
+are the whole mechanism of the recycle §6.6 describes from the other end: the arm that returns cloud
+work is the arm that would have landed the analysis of why it stopped, and when it is dark the VM's
+own land path was the only remaining channel — locked, for a reason unrelated to the item.
+
+🚨 **A cloud VM must provision both tools before `/ship`.** They are in Ubuntu's archive
+(`shellcheck` 0.9.0, `bats` 1.10.0) and cost one command. This is a venue step, not a code change:
+adding it to a `SessionStart` hook would mean editing `.claude/settings.json`, which the dispatch
+rails forbid in place.
+
+### 8.2 The step reproduces a fourth time, independently
+
+Re-derived here before §6 was read, by §6.2's method (every `claude/fire-*` branch on `origin`,
+own-work commits authored at or after each branch's own fire stamp, subject equality against
+`origin/main`), over **288** surviving branches:
+
+| window | branches with own work | landed | rate |
+| --- | --- | --- | --- |
+| through 08-17 | 29 | 20 | **68%** |
+| 08-18 … 08-25 | 107 | 36 | **33%** |
+| 08-26 … 08-29 | 144 | 2 | **1%** |
+
+The first two rows match §6.2's 69% and 34% branch-for-branch. The third is the one that has moved:
+§6.3 measured the cloud lane at zero for 64.8 h; it is now **two lands in four days against 144
+fires**, and those two are 08-28 fires, so the lane is still in the dark window §6.3 named rather
+than in a new one. The strand itself keeps growing — §6.3's table, extended:
+
+| date measured | `origin/claude/fire-*` branches | carrying un-landed commits | un-landed commits |
+| --- | --- | --- | --- |
+| 2026-08-27 | 183 | 151 | 205 |
+| 2026-08-28 | 237 | 205 | 286 |
+| **2026-08-29 (this session)** | **288** | **222** | **330** |
+
+### 8.3 What this dispatch landed, and what it deliberately did not
+
+Both surviving lineages held a *different* §6 and neither was a superset of the other. Consolidated
+onto one branch off `origin/main`, all cherry-picks clean:
+
+| from | commits | what they hold |
+| --- | --- | --- |
+| `…fire-20260828T124725Z-50447-1` | `aaaf67f0` `8714e820` `5ebbbad6` | §1–§7 of this document · `scripts/cloud-land-arm-diagnose.sh` · §6.6's park-is-a-no-op finding |
+| `…fire-20260828T060747Z-48435-1` | `aea92d3e` `1e5d51b5` `cdbc2fdb` | `tests/cloud-return.bats`'s identity repair · `CLOUD_OBSERVABILITY.md` §14 + the already-cured re-dispatch write-up · the strand census |
+
+**`38a8cd2a` — the `skipped-config-divergence` naming — could not come with them, and the reason is
+a THIRD lock, found by trying.** It is the only pick in either lineage that edits
+`scripts/autonomy-sweep.sh`, and `scripts/unattended-path-lint.sh`'s own-scope is **per FILE**
+(`CC_UNATTENDED_OWN`, asserted at `:1635`), unlike the per-line scope `bats-shellcheck-lint` uses.
+So touching one line of that file makes every pre-existing finding in it **blocking**, and it holds
+three, all of them on trunk since 07-18 / 08-01 / 08-13 and none of them written by the pick:
+
+| site | binary | why it is correct as written |
+| --- | --- | --- |
+| `scripts/autonomy-sweep.sh:1260` | `osascript` | a **documented test seam** — the comment three lines above states that a `command -v` with no seam "would leave the no-channel branch untestable … which is how this whole class shipped unproven in the first place." The lint's suggested fix (resolve it absolutely) destroys exactly that. |
+| `tests/autonomy-sweep.bats:59` | `gtimeout` | the first probe of a fallback chain whose later entries **are** absolute (`/opt/homebrew/bin/gtimeout`, `/usr/local/bin/gtimeout`) |
+| `tests/autonomy-sweep.bats:248` | `uuidgen` | already `2>/dev/null || echo p1` |
+
+The ratchet **only shrinks** and its manifest is read from the landing range's **base** revision, so
+an allowlist entry added here is inert for the land that adds it — by construction, there is no
+in-land way to pay this debt except by editing three sites that are right as they stand. The pick is
+therefore **left on its branch a second time**, and this is now the second distinct reason it has
+failed to land, neither of which is about its content. Recorded rather than worked around: no
+allowlist was widened, no gate weakened, and no documented seam was traded for a green gate.
+
+One line of that debt WAS retired, because it is the kind the ratchet exists to collect:
+`scripts/autonomy-sweep.sh:timeout` was allowlisted but no longer violates (the file resolves the
+bound through `command -v timeout || command -v gtimeout` at `:158` and `:505`), and the lint
+reports it stuck against pristine trunk too.
+
+**Not taken, and recorded rather than deleted:** the 48435 lineage's own §6 (`076a1912`) and
+`1d7871eb` edit the same document hunks as the 50447 lineage's §6/§7 and reach the same verdicts by
+a parallel derivation. The later, fuller lineage occupies the hunk; the unique measurements from the
+dropped one — the eight-commit strand table and the strand-growth row — are carried into §8.2 above
+rather than lost with the branch. `471984e0` and `aa556ff4` stay dropped for the reasons `076a1912`
+§6.1 gives.
+
+### 8.4 Verification
+
+Run here, and the two-sided rows are the ones that carry weight:
+
+| check | pristine `git archive origin/main` | this branch |
+| --- | --- | --- |
+| `bats tests/cc-cloud.bats` | 31/31 | **31/31** |
+| `bats tests/cloud-return.bats` | **21/27 — 6 red** | **27/27** |
+| `bats tests/autonomy-sweep.bats` | 43 ok / 18 red | 44 ok / **the identical 18** |
+| `bin/cc-cloud --selftest` | — | **24/24** |
+| `scripts/cloud-land-arm-diagnose.sh --selftest` | — | **11/11** |
+| `shellcheck -x -S warning` on the three changed shell files | — | **rc 0** |
+| `bash -n` on the same | — | **clean** |
+
+`cloud-return` is the credited fix: the six reds are present on pristine and absent here, which is
+`aea92d3e`'s repair confirmed from both sides. The 18 `autonomy-sweep` reds are `mk_marker`'s
+BSD-only `date -v` under GNU coreutils — the sorted name sets are identical, so **the set this diff
+introduces is empty**, §4's lesson met for the fourth time in this document.
+
+### 8.5 Still open — unchanged, and still one command
+
+**A's mechanism remains operator-gated and is the only thing left in this item.** Nothing in §8
+touches it: unlocking the venue lets a cloud VM land *its own analysis*, which is why this branch
+exists, but the return arm that lands the other 222 branches runs under launchd on the operator's
+box and no cloud VM can read it. §3's discriminator is now a program rather than a worksheet —
+
+```
+bash scripts/cloud-land-arm-diagnose.sh
+```
+
+— read-only, safe on a live box mid-sweep, and it prints one verdict token. Seven dispatches have
+now ended here. The eighth should not be dispatched to a cloud VM at all.
