@@ -323,3 +323,53 @@ verdict() { "$CE" check "$1" 2>&1 | head -1; }
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"verdict=eligible"* ]] || { echo "$output"; false; }
 }
+
+# ── THE AUTONOMY STORE (2026-08-29) — the incident arm ──────────────────────────────────────────
+# Every test below pins a spelling added AFTER a VM was sent the pool-sweep item and could not read
+# the pool. The refusal arms pin the class; the lookalike arms pin the width guard, which is the
+# half that protects the tap and the half a future widening edit would break silently.
+
+@test "AUTONOMY STORE: the item that exposed the miss (37b112d8950d) is refused off-box" {
+  # Verbatim from the dispatched item — the #1 intervention in
+  # docs/research/backlog-drain-netpositivity-2026-08-25.md §6. Off-box, `cc-backlog freshness`
+  # answers `0 of 0 live rows` instead of erroring, so a wrong ELIGIBLE here does not strand a
+  # worker loudly — it hands it a confident, well-formed, WRONG zero.
+  local id; id="$(add drain "L1: run the falsifier sweep across all 457 unvalidated live backlog rows, then close-falsified. cc-backlog freshness reads 'never validated: 457 of 501'.")"
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=ineligible-box"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"backlog-pool"* || "$output" == *"freshness-sweep"* ]] || { echo "named the class but not the spelling: $output"; false; }
+}
+
+@test "AUTONOMY STORE: the store's own filenames are box state, not repo files" {
+  local id; id="$(add drain "compact backlog.jsonl and rotate idl.jsonl before the next consolidation pass")"
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=ineligible-box"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"autonomy-store"* ]] || { echo "named the class but not the spelling: $output"; false; }
+}
+
+@test "AUTONOMY STORE: the pool named as a POPULATION refuses, however it is spelled" {
+  local id; id="$(add drain "count how many live rows carry no falsifier probe")"
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [[ "$output" == *"backlog-pool"* ]] || { echo "$output"; false; }
+}
+
+@test "AUTONOMY STORE width guard: bare 'backlog' stays ELIGIBLE — the tap's largest class" {
+  # THE ENTRY DELIBERATELY NOT MADE. Bare `backlog` matches 0.89% of the repo's own commit corpus
+  # against 0.16% for all three narrow spellings combined; ordinary repo work says "file a backlog
+  # row" constantly and the store is full of items citing a 12-hex id. If a future edit widens the
+  # class to the word, THIS test is the one that must fail first.
+  local id; id="$(add ctl "file a backlog row when the gate refuses, and cite the id in the commit body")"
+  run "$CE" check "$id"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=eligible"* ]] || { echo "$output"; false; }
+}
+
+@test "AUTONOMY STORE width guard: bare 'sweep' and a fixture 'rows' stay ELIGIBLE" {
+  local id; id="$(add ctl "sweep the docs directory for dead links, and add rows to the fixture table")"
+  run "$CE" check "$id"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=eligible"* ]] || { echo "$output"; false; }
+}

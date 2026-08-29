@@ -207,6 +207,37 @@ BOX = [
     ("versioned-config-dir", r"\.claude-(?:\d+|next\d*|secondary|tertiary)\b"),  # 7d8e44dd5822
     ("installed-binaries", r"\binstalled\b.{0,40}\bbinar(?:y|ies)\b|\bbinar(?:y|ies)\b.{0,20}\binstalled\b"),  # 7d8e44dd5822
     ("cc-binary-version", r"\b2\.1\.\d{3}\b"),            # bbad96d163ab
+    # ── THE AUTONOMY STORE ITSELF (2026-08-29) — found the expensive way, BY A VM THAT WAS SENT
+    # THE WORK. Item 37b112d8950d ("run the falsifier sweep across all 457 unvalidated live backlog
+    # rows, then close-falsified") is the #1 ranked intervention in
+    # docs/research/backlog-drain-netpositivity-2026-08-25.md §6, and it classified ELIGIBLE under
+    # every entry above. It was dispatched off-box, where `cc-backlog freshness` reports
+    # `never validated: 0 of 0 live rows` — the store is `~/.claude/autonomy/backlog.jsonl` and a VM
+    # has no `~/.claude` at all. This is the header's own warning arriving as an incident: the
+    # keyword list is a list of SPELLINGS, the ELIGIBLE bucket is where a missed one does damage,
+    # and the damage here was a burned worker slot on the single highest-value row in the pool.
+    #
+    # It is the `live-layer` entry's exact argument one directory down. There the artifact under
+    # discussion is not in the repo; here it is not in the repo AND its emptiness is silent —
+    # `freshness` answers `0 of 0` rather than erroring, so an off-box worker asking "how many rows
+    # are stale?" gets a well-formed, confident, WRONG zero. That is the "plausible-looking empty
+    # version" this class was written for, and it is why a sweep-the-pool item must never promote.
+    #
+    # 🚨 THE PRE-ADD CENSUS THIS FILE'S HEADER DEMANDS COULD NOT RUN, and that is recorded rather
+    # than papered over: the census reads the store, and the session that found the miss was in the
+    # VM with no store to read. So these entries are deliberately the NARROW half of the class —
+    # the store's own FILENAMES, the freshness report's own STRINGS, and the pool named as a
+    # POPULATION — and the cost was bounded against the corpus that IS readable off-box, 2,470
+    # commit-message lines of real work descriptions on trunk: 0.16% / 0.00% / 0.00%.
+    #
+    # 🚨 BARE `backlog` IS KNOWINGLY EXCLUDED AND MUST STAY EXCLUDED. It costs 0.89% of that same
+    # corpus — 5.5x these three combined — because ordinary repo work says "file a backlog row"
+    # constantly, and the store is full of items that merely cite a 12-hex id. Refusing on the word
+    # would hand the tap's largest class to the box to catch what three narrow spellings catch
+    # already. Same verdict for bare `sweep` (0.65%). The lookalikes are pinned in the suite.
+    ("autonomy-store", r"\bbacklog\.jsonl\b|\bidl\.jsonl\b|\bbacklog-validated\.json\b|/\.claude/autonomy\b"),
+    ("backlog-pool", r"\blive (?:backlog )?rows?\b|\bunvalidated\b[^.]{0,40}\brows?\b"),
+    ("freshness-sweep", r"\bcc-backlog +(?:freshness|falsify)\b|\bfalsifier sweep\b|\bclose-falsified\b|\bcc-premise +sweep\b|\bnever validated\b"),
 ]
 
 OFFBOX_LANE = [
