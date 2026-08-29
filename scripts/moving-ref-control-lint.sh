@@ -135,7 +135,18 @@ moving_ref_shows() { # $1=file
       sub(/^[^[:alnum:]_-]?show[[:space:]]+/, "", tok)
       ref = tok; sub(/:.*$/, "", ref)
       # PINNED: 7+ hex characters, an abbreviated or full sha. Everything else moves.
-      if (ref ~ /^[0-9a-f]{7,40}$/) next
+      # NO INTERVAL EXPRESSION HERE, and the reason is measured rather than defensive. This test
+      # read /^[0-9a-f]{7,40}$/, and under the mawk 1.3.4 that is /usr/bin/awk on a Linux off-box
+      # runner {7,40} matches a 7-character token and REFUSES a 9-character one, so every
+      # correctly-pinned control in the corpus (all of them abbreviate to 9) fell straight through
+      # to the violation printf. Measured 2026-08-25: 3 of this suite of 7 red, among them
+      # "the REAL tree is clean" and the lint --selftest, off one unsupported quantifier.
+      # The POLARITY is the trap. typed-send-lint bans intervals because an unmatched pattern
+      # there is a false GREEN; here the identical defect is a false RED. So the ban is
+      # unconditional in both directions, and the bound is spelled out longhand instead.
+      # (No apostrophe may appear in this block: the whole program is single-quoted in the shell,
+      # so one would close it and the file would not even parse.)
+      if (ref ~ /^[0-9a-f]+$/ && length(ref) >= 7 && length(ref) <= 40) next
       src = $0; sub(/^[[:space:]]+/, "", src)
       printf "%d:%s:%s\n", NR, (ref == "" ? "<unreadable expansion>" : ref), src
     }
