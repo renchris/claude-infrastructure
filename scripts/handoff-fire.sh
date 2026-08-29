@@ -5630,6 +5630,13 @@ if [ "${1:-}" = "__recycle" ]; then
           hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;;
         retype)
           if [ "$waited" = 60 ]; then
+            # typed-send-lint:allow — reviewed: the target is a Claude Code COMPOSER, not a shell,
+            # so it2_type_verified is structurally inapplicable here: its proof rides a `: <nonce>;`
+            # prefix, which is a no-op only to a SHELL — a composer would submit that literal text to
+            # Claude as a prompt instead of exiting. The lint's actual contract (type → read the pane
+            # back → only then send the Enter) is met inline by the three lines below, and met more
+            # strictly than the helper does it: composer_content is an EXACT-EQUALITY test on the
+            # composer buffer, where the helper greps a 500-line screen read for a substring.
             hf_bounded "$IT2" session send -s "$RSID" "/exit" >/dev/null 2>&1 || true
             sleep 1
             nc="$(composer_content "$IT2" "$RSID")" || nc=""
