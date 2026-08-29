@@ -263,6 +263,44 @@ suite, `bash -n` clean, `gate-select.sh lint` clean, `test-hermeticity-lint.sh` 
 the driver end-to-end against the real sampler on this host — a 2 s window correctly reaching
 NO-DATA and quoting nothing. **§6's run still needs the box; nothing here measures a coefficient.**
 
+### 6c · The first smoke run of the driver refused with a false statement, at this box's own loads (2026-08-29)
+
+§6b's driver was verified against fixtures and then run once, end to end, for the first time. It
+refused — correctly, on a quiet container — and printed:
+
+```
+C1 LEVEL      FAIL  load span 1.50x < 1.50x required
+```
+
+which is false as printed. The controls decided at double precision and reported at two decimals:
+`30.15 / 20.10` is `1.4999999999999998` in IEEE-754, the comparison sees that, and `%.2f` rounds it
+back up. **This is not a container artifact.** Darwin `sysctl vm.loadavg` emits two decimals, and
+those are ordinary readings for a box whose day spans 8.35..46.39 — `12.45/8.30` and `0.15/0.10`
+trip it, `3.15/2.10` and `0.45/0.30` do not, and which pair bites is binary representation carrying
+no information about the box at all. The same shape sat in two siblings: C1's tertile swing
+(`%.2f` against a `%.2f` threshold), and C2's `n_eff`, which is `span/tau + 1`, so an hour one
+second short of 1140 s reads 19.983 and prints **`n_eff 20.0 < 20`** — and a second of sampling
+drift over an hour is ordinary.
+
+Fixed by rounding each measured quantity through the SAME format string its refusal uses, so the
+verdict and its stated reason cannot disagree. The floors move by at most half a display unit
+(0.3% on the 1.5× span, 0.25% on n_eff 20, 0.17% on corr 0.30) — noise against thresholds that are
+themselves heuristics, and cheap against what it removes. **Why it was worth a commit before the
+run rather than after:** a refusal is the only output these controls have, `C1:span` and `C2:neff`
+are both CONDITION terms, so the driver's response to either is to spend another hour — and the
+window it spent it on had in fact MET the floor. §6b's stop rule is only as good as the why-strings
+it adjudicates.
+
+Both new rows are boundary NEGATIVE controls and both were **watched failing against the pre-fix
+analyzer** (`not ok 10`, `not ok 11`) before the fix landed, which is what makes them controls
+rather than decoration — the same standard §5 sets for the other fifteen.
+
+Verified off-box (Linux container, no fleet): `tests/capacity-marginal.bats` **17/17** ·
+`tests/capacity-marginal-run.bats` **15/15** — its C1/C2/C3 reason tokens are pinned against the
+REAL analyzer, so a reworded why-string would have reddened here — · `ship-land.sh --precheck`
+GREEN (statics + all fifteen ratchet arms). **No coefficient is measured, quoted or changed. §6's
+run still needs the box.**
+
 ---
 
 ## 7 · What this does not do
