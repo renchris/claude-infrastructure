@@ -214,6 +214,35 @@ stale prescription in a store is an instruction. And the corollary this file pai
 **a fix that does not land does not exist.** Re-deriving a diagnosis that is already correct on
 nineteen branches is not diligence; check whether the cure is stranded before writing a twentieth.
 
+### ✅ Closing this row — the last live copy is struck, and the close itself needs the operator's box
+
+The 20th dispatch (2026-08-29) found the doc half already landed here and **one remaining live copy
+of the disproved prescription in a file this row never named**: `hardware-procurement-2026-08-28.md`
+was written 08-28 — after the `capacity-admit.sh` comment fix, before the §3 strike above — and
+inherited it as an open item (*"`CC_HW_DEFAULT_MAX_LOAD_PER_CORE` still wants deriving (backlog
+`e981656df348`)"*). By this section's own rule that bullet **was** the 21st dispatch. Struck in
+`3fce569a` (ancestor of trunk, content-verified), which preserves in its own bullet the one genuinely
+open fact that sentence also carried — `capacity-marginal.sh`'s NO-ATTRIBUTION on a 27.6-min window,
+which belongs to `CC_ADMIT_ACTIVE_CEILING` (`193ae8ddce72`), not to this per-core literal. A sweep of
+every `.md` and `.sh` on trunk now finds **no live copy left**; the only surviving occurrences of the
+phrase are quotations that record what the text used to say.
+
+**So all three legs of `e981656df348` are discharged on trunk** — falsified citation (`b5553505`),
+disproved prescription (`951d4e82`), last stale copy (`3fce569a`) — and its stated blocker was a
+misattribution that could never have cleared it. Nothing about this row is derivable work.
+
+🚨 **The ledger close cannot be done from a cloud worker, so it is recorded here instead.** The store
+is `~/.claude/autonomy/backlog.jsonl`, which exists only on the operator's box; measured on the cloud
+worker that wrote this, `cc-backlog done e981656df348` exits **3 `unknown id`** against an empty
+store, and `cc-notify --role desk` fails the same way. *(That refines §6.6's note, which recorded
+`cc-backlog block` exiting **0 silently** — the `done` verb at least fails loudly. Neither reaches the
+store.)* **Re-dispatching this row to a cloud worker cannot advance it** — there is no code left to
+write, only a one-line close on the box:
+
+```sh
+cc-backlog done e981656df348 --evidence 3fce569a
+```
+
 ## 4 · If 2.1.234 is adopted, adopt it on other grounds — and set one env var first
 
 The upgrade is defensible for 33 releases of unrelated fixes, never for capacity. Two items gate it:
