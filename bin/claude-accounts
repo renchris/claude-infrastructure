@@ -54,6 +54,13 @@ Usage:
       the same rows as data. Three INDEPENDENT facts per backend — installed / authenticated /
       has a headless agent mode — because only the third decides routability, and a presence
       check silently skips it (an editor launcher on PATH is not an agent backend).
+  claude-accounts --strand-score [--hours N]   scores the weekly-drain nowcast against what each
+      CLOSED weekly window actually stranded, at fixed distances from its reset (96/48/24/12/6 h).
+      Reads only the utilization series — no config, no keychain, no sweep. This is the planner's
+      MUTATION TEST, not a second opinion about the fleet: the score it replaces evaluated the
+      projection at the horizon's close, where it has already converged to the truth, and so
+      agreed with the identity function on 8 of 8 windows. Acceptance is NOT that the table is
+      accurate — it is that the table CAN be non-zero. It gates S6 (USAGE_TELEMETRY_100P §5.2).
   claude-accounts --route general|fable|interactive   best account name (bare, on stdout)
       general      dispatch lane: headroom/T**2, deadline-DOMINANT — spend quota before it strands.
       interactive  a HUMAN's long-lived desk: maximise runway (absolute weekly headroom x projected
@@ -2091,6 +2098,124 @@ def completed_weekly_windows(samples, now=None):
         out.append({"acct": acct, "reset_t": reset_t, "final_pct": last["weekly_pct"],
                     "strand": max(0.0, 100.0 - last["weekly_pct"])})
     out.sort(key=lambda w: w["reset_t"])
+    return out
+
+
+STRAND_SCORE_BUCKETS = (96.0, 48.0, 24.0, 12.0, 6.0)   # hours before reset, far to near
+STRAND_SCORE_FLOOR = 0.5      # pp; pace_line's own render gate, reused so "has a strand" means
+                              # the same thing in the score as it does on the surface
+STRAND_SCORE_SPAN_H = 720.0   # 30 d of series — enough to hold several closed weekly windows
+
+
+def strand_score(samples, buckets=STRAND_SCORE_BUCKETS, now=None):
+    """M3c — score the strand nowcast against what each CLOSED weekly window actually stranded,
+    at fixed distances from its reset. The instrument that CAN fail.
+
+    WHY THE OLD SCORE WAS VACUOUS. The synthesis published 4/4 recall, 0 FP and a ~20 h median
+    lead for this arithmetic. Its fire rule was non-empty only at the window's LAST sample, where
+    the projection has already converged to `100 - weekly_pct` — the true strand — so it agreed
+    with the IDENTITY FUNCTION on 8/8 windows and could not have disagreed. Eight binary cells
+    evaluated where the answer is already known is not a measurement.
+
+    Here each (window, horizon) cell is taken at the last EVALUABLE sample still at least H hours
+    from the reset, so the projection is made where it can be wrong, and it is scored on a signed
+    error so the direction of the miss survives:
+
+        signed_error = projected_strand - realised_strand      (+ over-predicts the loss)
+
+    CAUSALITY IS ENFORCED HERE, not in the estimator. `burn_wk_ewma_ph` filters its own 48 h
+    lookback but never had to drop samples AFTER `now` — every other caller passes wall-clock
+    time, for which that set is empty. This is the first caller replaying history, so it slices
+    the series at the evaluation instant itself. Handing over the whole series would let each
+    cell see the future it is predicting, and a leak of that kind reads as a GOOD forecast.
+
+    ABSTAIN (L2). A cell with no evaluable sample at `weekly_reset_h >= H` reports nothing and is
+    excluded from its bucket's aggregate — never imputed as a hit, never scored 0.0. A bucket
+    with no cells reports `n = 0` with `bias`/`mae`/`agree_rate` as None, because 0.0 is a value
+    and reads as a measurement."""
+    now = time.time() if now is None else now
+    wins = completed_weekly_windows(samples, now=now)
+    by_acct = {}
+    for e in samples or []:
+        if e.get("_t") is not None:
+            by_acct.setdefault(e.get("acct"), []).append(e)
+    for ss in by_acct.values():
+        ss.sort(key=lambda e: e["_t"])
+
+    out_windows = []
+    for w in wins:
+        ss = by_acct.get(w["acct"]) or []
+        # The window's OWN samples, matched on the rounded reset key rather than on a time range:
+        # two adjacent windows share a boundary instant, and a range match puts that sample in
+        # both. _reset_key is the same identity completed_weekly_windows grouped on.
+        in_win = [e for e in ss
+                  if e.get("weekly_pct") is not None
+                  and _reset_key(e.get("weekly_reset_at")) is not None
+                  and _reset_key(e.get("weekly_reset_at")) * 60.0 == w["reset_t"]]
+        cells = {}
+        for h in buckets:
+            deadline = w["reset_t"] - h * 3600.0
+            # The LAST evaluable sample at or before the horizon — walking back only as far as it
+            # takes to find one the estimator can actually speak at. A cell that has to walk past
+            # the horizon is still AT LEAST H hours out, which is the property being scored.
+            for e in reversed([x for x in in_win if x["_t"] <= deadline]):
+                at_h = (w["reset_t"] - e["_t"]) / 3600.0
+                past = [x for x in ss if x["_t"] <= e["_t"]]     # the causal slice
+                b, span = burn_wk_ewma_ph(past, e["_t"], at_h)
+                if b is None:
+                    continue
+                projected = max(0.0, 100.0 - (e["weekly_pct"] + b * at_h))
+                cells[h] = {"at_reset_h": at_h, "projected_pp": projected,
+                            "weekly_pct": e["weekly_pct"], "ewma_pph": b, "span_h": span,
+                            "signed_error": projected - w["strand"]}
+                break
+        out_windows.append({"acct": w["acct"], "reset_t": w["reset_t"],
+                            "final_pct": w["final_pct"], "realised_pp": w["strand"],
+                            "cells": cells})
+
+    out_buckets = []
+    for h in buckets:
+        errs = [win["cells"][h]["signed_error"] for win in out_windows if h in win["cells"]]
+        agree = sum(1 for win in out_windows if h in win["cells"]
+                    and ((win["cells"][h]["projected_pp"] >= STRAND_SCORE_FLOOR)
+                         == (win["realised_pp"] >= STRAND_SCORE_FLOOR)))
+        n = len(errs)
+        out_buckets.append({
+            "h": h, "n": n,
+            "bias": (sum(errs) / n) if n else None,
+            "mae": (sum(abs(x) for x in errs) / n) if n else None,
+            "agree": agree if n else 0,
+            "agree_rate": (agree / n) if n else None,
+        })
+    return {"n_windows": len(out_windows), "windows": out_windows, "buckets": out_buckets}
+
+
+def render_strand_score(sc):
+    """The one rendering of strand_score. A bucket that measured nothing prints a dash, never a
+    zero — the whole reason this harness exists is that a table of zeros is what the refuted
+    score produced, and it must not be reachable by a different route."""
+    if not sc["n_windows"]:
+        return ["strand-score: no completed weekly window in the series — nothing to score.",
+                "  (a window counts only once its reset is PAST and the series observed it to "
+                f"within {WEEKLY_TAIL_GAP_H:.0f}h of the close — S1d)"]
+    out = ["strand-score — projected strand vs REALISED, by horizon "
+           "(causal replay of closed weekly windows)",
+           "", "  horizon      n   bias(pp)   MAE(pp)   sign-agree", ]
+    for b in sc["buckets"]:
+        if not b["n"]:
+            out.append(f"  {b['h']:>5.0f}h  {b['n']:>5}          —         —            —")
+            continue
+        out.append(f"  {b['h']:>5.0f}h  {b['n']:>5}   {b['bias']:>+8.2f}  {b['mae']:>8.2f}   "
+                   f"{b['agree']:>4}/{b['n']}")
+    out += ["", f"  windows scored: {sc['n_windows']} completed account-week(s)"]
+    for w in sorted(sc["windows"], key=lambda x: x["reset_t"]):
+        when = datetime.fromtimestamp(w["reset_t"], timezone.utc).strftime("%m-%d %H:%MZ")
+        out.append(f"    {w['acct']:<7} closed {w['final_pct']:.0f}% at {when} — "
+                   f"stranded {w['realised_pp']:.1f}pp")
+    out += ["",
+            "  bias > 0 = the nowcast over-predicts the loss. This table is the PREREQUISITE for",
+            "  the S6 rescue alarm: if the 12h bucket's bias is not near zero, that alarm is not",
+            "  shippable at any parameter setting (USAGE_TELEMETRY_100P §5.2 S6)."]
     return out
 
 
@@ -4764,6 +4889,20 @@ def main():
             print("no provider registry (~/.claude/providers.json) — Claude-only fleet")
             return
         print("\n".join(lines).lstrip("\n"))
+        return
+
+    # --strand-score: the planner's own MUTATION TEST, and the second branch to return before
+    # load_cfg() for the reasons --agents records above — it must answer without a sweep, without
+    # the keychain and without a config, because it is a question about the SERIES, not about the
+    # fleet's live state. It renders HISTORY (scored past windows), nothing routes on it, and it
+    # does not touch the live-state surface, so L3's one-renderer rule is not engaged; shipping it
+    # as a flag on this binary rather than a new scripts/*.sh also rides the existing
+    # ~/.claude/bin/claude-accounts symlink, so it converges on the trunk fast-forward instead of
+    # landing as an ADD the live layer cannot reach (the LIVE_ADDS trap).
+    if "--strand-score" in args:
+        span = _num_flag(args, "--hours")
+        samples, _span_h = _util_tail(hours=span if span and span > 0 else STRAND_SCORE_SPAN_H)
+        print("\n".join(render_strand_score(strand_score(samples))))
         return
 
     # --max-wait / --max-age are GLOBAL modifiers, parsed before load_cfg() because --max-wait 0

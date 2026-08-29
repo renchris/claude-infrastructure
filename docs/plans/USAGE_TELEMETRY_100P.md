@@ -1610,7 +1610,8 @@ windows/week, carrying the fleet wall rate 1.72% → 2.20%.
 
 ### §5.7 Implementation record — what actually landed, and where it deviated from the spec
 
-Wave 1 = **S1 + S2 + S3 only**. Wave 2 = **S4**. S5–S7 are unbuilt and unchanged; S5 still gates S6.
+Wave 1 = **S1 + S2 + S3 only**. Wave 2 = **S4 + S5**. S6 and S7 are unbuilt. S5 is now BUILT but
+not yet READ against the live series, and S6's gate is the reading, not the build — see below.
 
 #### S1 · data fixes — LANDED
 
@@ -1830,14 +1831,78 @@ denominator (5/8) and must never be quoted against the all-windows one (5/252). 
 carries all three. **S5 (`--strand-score`) is still the prerequisite for S6**, and nothing here
 shortens that either.
 
+#### S5 · M3c `--strand-score` — BUILT, and NOT YET READ
+
+`bin/claude-accounts`: `strand_score(samples, buckets=STRAND_SCORE_BUCKETS, now=None)` +
+`render_strand_score(sc)` beside `apply_burn`, constants `STRAND_SCORE_BUCKETS` /
+`STRAND_SCORE_FLOOR` / `STRAND_SCORE_SPAN_H`, and a `--strand-score [--hours N]` branch in
+`main()` placed **before `load_cfg()`**, beside `--agents`, so it answers with no config, no
+keychain and no sweep. Suite `tests/claude-accounts-strand-score.bats` (RP-29..RP-33) — **5/5
+proven RED** against the S4 binary, 5/5 green after; 159/164 across every `claude-accounts*`
+suite, the 5 reds being the container's, unchanged (below).
+
+🚨 **BUILDING THIS IS NOT THE GATE ON S6. READING IT IS, and the reading needs the desk's
+series.** §5.2 S6 is literal: *"Do not build this until S5 has run and been read. If the
+horizon-stratified bias at the 12 h bucket is not near zero, this alarm is not shippable at any
+parameter setting."* What is now true is that the instrument exists and has been shown capable of
+producing a non-zero answer. What is still unknown is what it says about the **real** 8+ closed
+account-weeks, because this wave ran in a container with no utilization series at all. That is one
+command on the desk, and it is the whole of S6's precondition:
+
+```
+claude-accounts --strand-score
+```
+
+**The anti-tautology property is the deliverable, and it is pinned by RP-30/RP-31 as a PAIR.**
+The refuted score was the identity function on true strand; a replacement that reports a large
+error unconditionally would be exactly as uninformative in the other direction. So RP-30 drives a
+window that burns steadily and then STOPS and requires the far buckets to miss by >10 pp while the
+6 h bucket converges inside 3 pp *and* MAE to fall monotonically toward the reset; RP-31 drives a
+window that holds its pace and requires every bucket inside 2 pp. Neither case passes an
+instrument that has only one thing to say. On a 3-window fixture the rendered table reads
+`96h −14.23 · 48h −14.22 · 24h −6.22 · 12h −0.41 · 6h −0.15`, which is the estimator's own claim —
+a good nowcaster precisely because it is a bad forecaster — measured rather than asserted.
+
+**Deviation 1 — CAUSALITY IS ENFORCED IN THE HARNESS, NOT IN THE ESTIMATOR, and this is the trap
+the whole case exists to catch.** `burn_wk_ewma_ph` filters its own 48 h lookback but has never
+dropped samples *after* `now`, because every prior caller passes wall-clock time, for which that
+set is empty. Replaying history is the first caller for which it is not. Handing it the full
+series lets the 24 h cell see the flat tail it is supposed to be predicting: on RP-30's fixture
+the leak moves that cell from 28.0 pp to ~41.5 pp — **which reads as a GOOD forecast**, i.e. the
+failure is silent and flatters the thing under test. `strand_score` slices `[x for x in ss if
+x["_t"] <= e["_t"]]` at every cell, and RP-30 asserts the un-leaked value directly.
+
+**Deviation 2 — a cell may walk BACK from its horizon to find an evaluable sample, and that is
+sound rather than a loosened rule.** §5.2 says "the last evaluable sample with `weekly_reset_h ≥
+H`". The two words carry different rules and both are kept: the search starts at the horizon and
+walks backwards, so every scored cell is *at least* H hours from the reset — never nearer, which
+is the direction that would flatter the score. `at_reset_h` is stamped on the cell so the distance
+actually used is auditable, and RP-29 pins it into `[H, H+0.3)`.
+
+**Deviation 3 — an unevaluable bucket renders `—`, and `bias`/`mae`/`agree_rate` are None, not
+0.0.** RP-32 pins it. A zero is a value and reads as a measurement; a table of zeros over cells
+that measured nothing is precisely the shape the refuted score produced, and it must not be
+reachable by a second route. The same rule kills the whole table: with no closed window the
+command says so in words and prints no columns at all.
+
+**Deviation 4 — `sign-agree` is defined against `STRAND_SCORE_FLOOR = 0.5 pp`, reusing
+`pace_line`'s own render gate** rather than testing `> 0`. "Has a strand" then means the same
+thing in the score as it does on the surface the score is judging; a second threshold would make
+the harness able to disagree with the renderer about what it was measuring.
+
+**Not claimed.** No accuracy verdict, in either direction — the fixtures demonstrate the
+instrument's *range*, not the estimator's quality, and the plan's §5.4 falsification (does the
+24 h bucket's published band contain the realised strand of the next window to close?) is a
+forward test that cannot be run retroactively. S6 stays unbuilt.
+
 #### Acceptance status against §5.4
 
 | command | status |
 |---|---|
-| the bats suites (roll-key · util-tail · strand · burst · core) | **111/111 green** after wave 1; **154/159 across all `claude-accounts*` suites** after wave 2 (S4), every new case shown RED at the commit before its fix |
+| the bats suites (roll-key · util-tail · strand · burst · core) | **111/111 green** after wave 1; **159/164 across all `claude-accounts*` suites** after wave 2 (S4 + S5), every new case shown RED at the commit before its fix |
 | `claude-accounts --readout` renders the drain block for all four accounts | **yes** — see above (wave 1's live capture) |
 | `claude-accounts --readout \| grep -c 'strand'` → 3 or 4 | **4** |
-| `claude-accounts --strand-score` | **not built** — that flag is S5 |
+| `claude-accounts --strand-score` prints the horizon table with non-zero `n` at 24/12/6 h | **built, RUN ONLY ON FIXTURES** — 3-window fixture gives n=3 at every bucket and a bias spread of −14.23 → −0.15. The acceptance as §5.4 words it is about the LIVE series and needs one desk run |
 
 ⚠️ `bash tests/run.sh …`, named in §5.4, **does not exist in this repo**. The suites are run with
 `bats tests/<name>.bats`; `scripts/ship-land.sh` selects and runs them at the land.
