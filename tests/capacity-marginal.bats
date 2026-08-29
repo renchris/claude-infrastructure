@@ -190,6 +190,54 @@ row() {
   [[ "$output" == *"swing"* ]]
 }
 
+# ── THE REFUSAL MAY NOT CONTRADICT ITSELF ───────────────────────────────────────────────────────
+# A refusal is the only output these controls have. One that states something false about its own
+# numbers — `1.50x < 1.50x required` — costs the reader a hunt for a defect in the box, and costs
+# the driver a window, on a threshold that was in fact MET. Both rows below are boundary NEGATIVE
+# controls: each is engineered to sit exactly on a floor, and each FAILED before the comparisons
+# were moved to the precision the message prints.
+
+@test "C1 does not refuse a span that MEETS the floor — 1.50x is not < 1.50x" {
+  # Measured live on the container 2026-08-29 and reproducible at this box's own operating loads
+  # (its ordinary day spans 8.35..46.39): 30.15 / 20.10 is 1.4999999999999998 in IEEE-754, so the
+  # window refused while printing a comparison that is false as printed. 3.15/2.10 and 0.45/0.30
+  # are the same ratio and do NOT trip it — which pair bites is binary representation, not the box.
+  local f="$D/boundary-span.tsv"; hdr "$f"
+  local i ts=3000000 load tot act
+  for i in $(seq 0 59); do
+    load="$(awk -v i="$i" 'BEGIN { printf "%.2f", 20.10 + 10.05 * i / 59 }')"
+    tot="$(awk -v l="$load" 'BEGIN { printf "%.3f", l / 1.20 }')"
+    act=$(( 2 + i % 6 ))
+    row "$f" "$ts" "$load" "$tot" "$(awk -v a="$act" 'BEGIN { printf "%.3f", 0.25 * a }')" "$act"
+    ts=$(( ts + 60 ))
+  done
+  run bash "$M" analyze --in "$f"
+  [[ "$output" == *"(1.50x)"* ]] || false          # the window really is ON the boundary
+  [[ "$output" != *"load span"* ]] || false
+  [[ "$output" == *"C1 LEVEL      PASS"* ]] || false
+  [ "$status" -eq 0 ]
+}
+
+@test "C2 does not refuse an n_eff that MEETS the floor — 20.0 is not < 20" {
+  # n_eff = span/tau + 1, so a window one second short of 1140 s reads 19.983 and PRINTS 20.0.
+  # Sampling drift of a single second is ordinary over an hour; the refusal it produced was not.
+  local f="$D/boundary-neff.tsv"; hdr "$f"
+  local i ts=4000000 load tot act
+  for i in $(seq 0 19); do
+    load="$(awk -v i="$i" 'BEGIN { printf "%.2f", 12 + 14 * i / 19 }')"
+    tot="$(awk -v l="$load" 'BEGIN { printf "%.3f", l / 1.20 }')"
+    act=$(( 2 + i % 6 ))
+    row "$f" "$ts" "$load" "$tot" "$(awk -v a="$act" 'BEGIN { printf "%.3f", 0.25 * a }')" "$act"
+    # 18 gaps of 60 s and one of 59 s: span 1139, n_eff 19.983, printed 20.0.
+    ts=$(( ts + $([ "$i" -eq 0 ] && echo 59 || echo 60) ))
+  done
+  run bash "$M" analyze --in "$f"
+  [[ "$output" == *"span=1139s"* ]] || false       # the window really is one second short
+  [[ "$output" != *"uninformative, not refuting"* ]] || false
+  [[ "$output" == *"C2 DYNAMICS   PASS"* ]] || false
+  [ "$status" -eq 0 ]
+}
+
 # ── DATA HYGIENE ────────────────────────────────────────────────────────────────────────────────
 
 @test "mixed census units are NO-DATA, never pooled" {

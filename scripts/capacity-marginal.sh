@@ -253,6 +253,23 @@ cmd_analyze() {
     -v minas="$CC_MARG_MIN_ACTIVE_SPREAD" -v minal="$CC_MARG_MIN_ACTIVE_LEVELS" \
     -v want_json="$json" '
     function abs(x) { return x < 0 ? -x : x }
+    # EVERY THRESHOLD IS COMPARED AT THE PRECISION ITS REFUSAL PRINTS IT. A control that decides at
+    # double precision and reports at two decimals can refuse a window while stating something
+    # false about it: measured live 2026-08-29 at this box own operating loads, a window spanning
+    # 20.10..30.15 refused with `load span 1.50x < 1.50x required`, because 30.15/20.10 is
+    # 1.4999999999999998 in IEEE-754 and the message rounds it back up. Darwin `sysctl vm.loadavg`
+    # emits two decimals, so exact-boundary ratios are ordinary here, not exotic (12.45/8.30 and
+    # 0.15/0.10 do it too; 3.15/2.10 and 0.45/0.30 do not — which pair you get is an artifact of
+    # binary representation and nothing about the box). This matters more than the tenth of a
+    # percent of threshold it moves: a refusal is the only output these controls have, and one that
+    # contradicts its own arithmetic sends the reader hunting for a defect in the box instead of
+    # extending the window. So round through the SAME format string the message uses, and the
+    # verdict and its stated reason can never disagree again.
+    function shown(v, dp) {
+      if (dp == 1) return sprintf("%.1f", v) + 0
+      if (dp == 3) return sprintf("%.3f", v) + 0
+      return sprintf("%.2f", v) + 0
+    }
     /^#/ { next }
     NF < 7 { malformed++; next }
     {
@@ -299,9 +316,9 @@ cmd_analyze() {
         if (r > rmax) rmax = r
       }
       ratio_swing = (rmin > 0) ? rmax / rmin : 0
-      if (ratio_swing == 0 || ratio_swing > ratiotol) c1_ok = 0
+      if (ratio_swing == 0 || shown(ratio_swing, 2) > shown(ratiotol, 2)) c1_ok = 0
       # A window that never moved cannot have reproduced anything — C1 is vacuous there, so it FAILS.
-      if (lspread < minspread) { c1_ok = 0; c1_why = sprintf("load span %.2fx < %.2fx required", lspread, minspread) }
+      if (shown(lspread, 2) < shown(minspread, 2)) { c1_ok = 0; c1_why = sprintf("load span %.2fx < %.2fx required", lspread, minspread) }
       else if (!c1_ok) c1_why = sprintf("tertile ratios %s swing %.2fx > %.2fx", tert_desc, ratio_swing, ratiotol)
       else c1_why = sprintf("tertile ratios %s swing %.2fx", tert_desc, ratio_swing)
 
@@ -313,9 +330,9 @@ cmd_analyze() {
       for (i = 1; i <= n; i++) { dx = L[i] - mx; dy = TOT[i] - my; sxx += dx*dx; syy += dy*dy; sxy += dx*dy }
       rr = (sxx > 0 && syy > 0) ? sxy / sqrt(sxx * syy) : 0
       c2_ok = 1
-      if (neff < minn) { c2_ok = 0; c2_why = sprintf("corr %.3f but n_eff %.1f < %d independent observations (span %ds / tau %ds) — uninformative, not refuting", rr, neff, minn, span, tau) }
+      if (shown(neff, 1) < minn) { c2_ok = 0; c2_why = sprintf("corr %.3f but n_eff %.1f < %d independent observations (span %ds / tau %ds) — uninformative, not refuting", rr, neff, minn, span, tau) }
       else if (syy <= 0) { c2_ok = 0; c2_why = sprintf("census is CONSTANT at %.2f across a %.2fx load range — the instrument, not the box", my, lspread) }
-      else if (rr < minr) { c2_ok = 0; c2_why = sprintf("corr(load1, census) = %.3f < %.2f over n_eff %.1f — the census does not track the load it apportions", rr, minr, neff) }
+      else if (shown(rr, 3) < shown(minr, 2)) { c2_ok = 0; c2_why = sprintf("corr(load1, census) = %.3f < %.2f over n_eff %.1f — the census does not track the load it apportions", rr, minr, neff) }
       else c2_why = sprintf("corr(load1, census) = %.3f over n_eff %.1f", rr, neff)
 
       # ── C3 IDENTIFIABILITY: did the active count move? ───────────────────────────────────────
