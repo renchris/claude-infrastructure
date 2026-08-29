@@ -176,3 +176,53 @@ red about the tree. `apt-get install -y shellcheck` (0.9.0; the image runs as ui
 the re-land went green first try. **Read this as the exit-9 contract working, not as a gate to
 route around** — the fix is installing the tool, never `SHIP_LAND_LANE=v1`. Worth folding into the
 cloud image or the lane's preflight so the next VM does not spend a land cycle discovering it.
+
+## 7. Fourth dispatch, 2026-08-29 21:06Z — §6's remedy fails one layer ABOVE where §6 was looking
+
+A FOURTH `anthropic_cloud` VM, ~10 hours after §6 landed (`48e7705f` 10:48Z → this 21:06Z). Every
+venue fact re-measured and unchanged: `origin/main` carries no `tenant-drift.yml`,
+`.github/workflows/` holds only `diagrams.yml` and `hermetic.yml`, `~/Development/reso-management-app`
+absent, `cc-backlog` not on `PATH`, no `~/.claude/autonomy/`. Shallow clone (`git rev-list --count
+HEAD` = 50, grafts `7fe8d62b`/`e1523389`) ⇒ `HistoryOracle.certify()` returns `shallow` ⇒ §1's
+deferral binds mechanically again. Premise still not refuted and still not confirmable here; the
+2026-08-10 measurement (`31401486855`) is now 19 days stale and §3's one-line fix must still be
+re-checked against reso's trunk before anyone writes it.
+
+**§6 told the next dispatch to put the park command in the CLOSE. That instruction is necessary and
+not sufficient, and the two reasons are both mechanical.** Read out of `scripts/cloud-inbox.py` and
+executed against the real strings:
+
+**(F1) The classifier is anchored to the START of the whole field.** `classify_ask` (line 180) does
+`RUNNABLE_RE.match(action)` on `needs_action` entire — `re.match`, no `MULTILINE`, no per-line or
+per-segment scan. So the field must *begin* with an allowlisted verb (optionally after `1. `).
+Measured over six realistic shapes of the same §4 command: bare ⇒ RUNNABLE, `"1. " + cmd` ⇒
+RUNNABLE, `"Run this: " + cmd` ⇒ **PROSE**, `"Park the item out of the cloud lane: " + cmd` ⇒
+**PROSE**, command on line 2 ⇒ **PROSE**. §5's *"`RUNNABLE_RE` allowlists the `cc-backlog` prefix,
+so §4's command classifies RUNNABLE"* and §6's *"a `cc-backlog …` line reaching it there surfaces
+under the inbox's runnable heading"* are both true only of the bare-command case. The file's own
+motivating verbatim in its docstring (`"1. Land it via desk box …; 2. Record item b60eb29e97dd
+done"`) classifies PROSE under its own regex.
+
+**(F2) — and this dominates F1, because classification never runs on a row that was already
+dropped.** `shown` (line 242) keeps a row only if `--all`, or `ask == "UNREADABLE"`, or
+`category ∈ {need_input, review_ready}`. **`--item` does not exempt it**: line 211 filters the
+population, line 245 still applies `BLOCKING`, so `cloud-inbox --item 485f8f87eb5f` prints *nothing*
+for a session whose turn did not end as a question. A cloud VM that lands its documents and closes
+reporting success is not asking anything — its category is not `need_input` — so its park request is
+invisible in the default inbox **however it is phrased**. Dispatch 3 landed `48e7705f` and `8492afe7`
+and closed on completed work; §6's remedy was therefore untestable in precisely the way §6 diagnosed
+§5's, one layer up. Three sections have now each recorded a channel as built without exercising it.
+
+**So the emitter contract is TWO conditions, not one, and both are on the session:** the turn must
+END AS AN ASK (so the control plane categorises it `need_input` and the row survives `shown`), and
+`needs_action` must BEGIN with the verb (so it classifies RUNNABLE rather than PROSE). A close that
+says *"done, here is what the operator should run"* satisfies neither. This session closes on the
+`⛔` rung with the bare §4 command leading its ask, which is the first dispatch to satisfy both.
+
+**No code change landed for this.** Widening `RUNNABLE_RE` to scan segments would classify
+remote-authored prose containing `git …` as friendly — the exact hazard the allowlist comment names
+(*"the question is not 'could a shell run this' but 'is this recognisably one of our verbs'"*) — and
+relaxing `BLOCKING` on the `--item` path is a reader-semantics change that wants its own review with
+a real fleet to measure against, which a shallow VM with no `~/.claude/autonomy/` does not have.
+Both are on-box changes. Recorded here so the fifth dispatch, if there is one, starts from a
+measured emitter contract instead of a fourth untested channel.
