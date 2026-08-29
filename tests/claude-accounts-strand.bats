@@ -223,17 +223,46 @@ print("OK")'
   # next at phase 0.32 on 2026-08-25: weekly_pct 52, 114 h left, EWMA 1.725 %/h -> a raw
   # projection of 248.7%. In that regime EVERY projector measured here is badly wrong (the
   # incumbent renders 154.6%, this EWMA 231.4%, against a truth near 100%), so the clamp keeps
-  # the shortfall regime -- where the arithmetic converges -- and discards the overshoot. The
-  # account is reported as on a WALL TRAJECTORY, which is true and actionable; "248%" is neither.
+  # the shortfall regime -- where the arithmetic converges -- and discards the overshoot.
+  #
+  # WALL ARM UPDATED IN PLACE 2026-08-29, named invariant unchanged. This case used to also
+  # assert `⚠ WALL trajectory` in the line at THIS phase, on the reasoning that the flag is
+  # "true and actionable" even where the number is not. That reasoning was falsified by the
+  # backtest in weekly-reset-utilization-2026-08-25.md §3: next@08-23 read 51% at day 3, burn
+  # 1.19x, projected 119% ⚠WALL -- and the window closed at 99%. The wall never arrived. It is
+  # the one mid-week WALL we have ground truth for and it was a FALSE ALARM, so the flag was
+  # not carrying the direction while the number was wrong; both were wrong together. It cannot
+  # be otherwise: mid-week burn_ratio has MAE 46 pp, and 6 of 8 completed windows finished
+  # BELOW 100 (85, 91, 92, 92, 98, 99, 100, 100), so a flag fired at phase 0.32 is reading a
+  # property of nearly every window rather than of this one. `wall_projection` now abstains
+  # below phase 0.90 and the row falls to its plain arm. RP-16c is the control that the flag
+  # still fires where it IS supportable -- this is a narrowed warning, never a deleted one.
   run python3 -c "$LOAD"'
 r = {"acct": "next", "weekly_pct": 52, "weekly_reset_h": 114.0, "burn_wk_ewma_ph": 1.725}
 st = ca.wk_strand_pp(r)
 assert st == 0.0, st
 line = ca.pace_line([r])
-assert "⚠ WALL trajectory" in line, line
+assert "on pace to fill the window" in line, line
+assert "⚠ WALL trajectory" not in line, line
 assert "248" not in line, line
 assert "231" not in line, line
 assert "154" not in line, line
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-16c CONTROL: the ⚠ WALL flag still fires near the wall, so RP-16 narrows it not deletes it" {
+  # Same account 8.4 h from reset (phase 0.95, above wall_projection's floor) at 99% with the
+  # EWMA carrying it past 100. Here linear and empirical have converged (-2 pp at day 7) and an
+  # account that reaches 100% is DOWN until reset, so the warning is both supportable and
+  # actionable. Without this case RP-16 is satisfied by a renderer that dropped ⚠ WALL entirely.
+  run python3 -c "$LOAD"'
+r = {"acct": "next", "weekly_pct": 99, "weekly_reset_h": 8.4, "burn_wk_ewma_ph": 0.5}
+assert ca.wk_strand_pp(r) == 0.0, ca.wk_strand_pp(r)
+line = ca.pace_line([r])
+assert "⚠ WALL trajectory" in line, line
+assert "104" not in line, line   # and the overshoot is STILL never a number
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }

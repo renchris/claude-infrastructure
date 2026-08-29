@@ -194,6 +194,32 @@ The one real cost in view is `next3`'s ~8 pp, and with 3.8 h left that is essent
   uninformative, and speaks only in the last ~2 days where linear and empirical converge
   (day 6: −17 pp; day 7: −2 pp).
 
+  ✅ **SHIPPED 2026-08-29 — `MIN_ELAPSED_FRAC` 0.05 → 0.90** (backlog `70ed289c10fb`). The floor
+  is **0.90, not the ~0.714 that "last ~2 days" implies**, and the difference is deliberate: this
+  doc's prose named a two-day window, but the decile table that actually measures the error puts
+  linear at **−35.2 pp at phase 0.7** and **−21.6 at 0.8**, converging only at **−15.8 at 0.9**
+  (`drain-telemetry-2026-08-25/axis-D-windows.md` §4). Day 5 is not honest — its own backtest here
+  reads 35 pp. Where the prose and the table disagreed, the table won.
+
+  Two things that follow, neither of them obvious from §3 alone:
+
+  1. **The replacement was already refuted, so this widening is TERMINAL, not a stopgap.** axis-D
+     §5 built the shape-corrected projector this bullet contemplates, backtested it leave-one-out,
+     and it **loses** — MAE 54.1 vs linear's 39.5, because between-window shape variance dominates
+     the mean shape and dividing by a small `S` amplifies it. It is also self-refuting: the shape
+     is a fossil of the operator's own end-of-window rush, so an estimator fitted to it goes wrong
+     toward complacency the moment the rush stops. Do not re-open this as "now we have more
+     windows"; more windows do not fix a divisor whose variance is the problem.
+  2. **The mid-week `⚠ WALL` flag went with it, and that cost a landed assertion.**
+     `tests/claude-accounts-strand.bats` RP-16 asserted the flag was *"true and actionable"* at
+     phase 0.32 even where the number was not. §3's `next@08-23` row is the one instance with
+     ground truth — 119% `⚠WALL` at day 3, closed at **99%** — a false alarm. And with 6 of 8
+     completed windows finishing below 100 (85, 91, 92, 92, 98, 99, 100, 100), a flag fired
+     mid-week reads a property of nearly every window, not of this one. RP-16's *named* invariant
+     (never render an overshoot as a number) survives untouched and is now strictly stronger; the
+     WALL arm was updated in place with this citation, and **RP-16c** was added as its control —
+     the flag still fires at phase 0.95, so this is a narrowed warning, never a deleted one.
+
 **Reproduce:** the analysis scripts are in this session's scratchpad; the one-command version of
 the retrospective is `python3 scripts/desk-strand-replay.py`.
 

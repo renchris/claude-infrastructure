@@ -1847,11 +1847,27 @@ assert "next3 strand ~5pp of 8 · p96 of its own 3h burns" in line, line
 # RP-26 — a zero-strand account still RENDERS, and renders LAST. A sorted() over a list filtered
 # on strand > 0 passes RP-25 and drops this row silently.
 assert "next no strand" in line, line
-assert "⚠ WALL trajectory" in line, line
 assert line.rstrip().split(chr(10))[-1].strip().startswith("next no strand"), line
-# ...and its burn RATIO survives unchanged, while the >100 PROJECTION does not render as a number
-assert "1.62× burn" in line, line
-assert "162" not in line and "163" not in line, line     # the RATIO, never the ~162% projection
+# ...and the >100 PROJECTION does not render as a number
+assert "162" not in line and "163" not in line, line     # never the ~162% projection
+# WALL + RATIO ARMS UPDATED IN PLACE 2026-08-29, RP-26 unchanged. This case used to assert
+# `⚠ WALL trajectory` and `1.62× burn` on THIS row -- next at weekly_reset_h 114.21, i.e. phase
+# 0.32. `wall_projection` now abstains below phase 0.90 (backlog 70ed289c10fb), because the
+# linear divisor it rides on is wrong by a mean 46 pp at day 3. The one mid-week WALL with
+# ground truth was a FALSE ALARM: next@08-23 read 51% at day 3, projected 119% ⚠WALL, and closed
+# at 99% (weekly-reset-utilization-2026-08-25.md §3). 6 of 8 completed windows finished below
+# 100, so a flag fired here reads a property of nearly every window, not of this one. The row
+# falls to its plain arm -- and RP-26, what this arm is actually FOR, is untouched: the
+# zero-strand row still renders and still renders LAST.
+assert "⚠ WALL trajectory" not in line, line
+assert "1.62× burn" not in line, line
+# CONTROL, so the two negatives above are not satisfied by a renderer that dropped both for good:
+# the same account 8 h from reset at 99% still gets the ratio AND the warning, because there
+# linear and empirical have converged (-2 pp at day 7) and 100% means DOWN until reset.
+near = ca.pace_line([row(acct="next", weekly_pct=99, weekly_reset_h=8.0, burn_wk_ewma_ph=0.5)])
+assert "⚠ WALL trajectory" in near, near
+assert "× burn" in near, near
+assert "103" not in near and "104" not in near, near     # and STILL never the >100 projection
 assert "BEHIND" not in line, line                        # 47ddbf47c DELETED it: on 2026-08-16 three freshly-reset windows each read
                                                          # BEHIND, which is correct and reads as gross under-utilisation.
 # an abstention renders as the WORD plus its reason, never as a zero (L2)

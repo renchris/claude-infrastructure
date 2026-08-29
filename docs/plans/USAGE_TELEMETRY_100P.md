@@ -527,6 +527,17 @@ and can fire in parallel with M3.
 | **M6** | **Enable OTel** in all 5 config dirs + a local collector | S | `claude_code.token.usage` rows land in the collector for a live session, and `grep ENABLE_TELEMETRY` finds it in 5/5 settings.json | The token-free numerator; scope (c) satisfied by construction |
 | **M7** | **Disconnect or repair `cc-value`'s extinct join** — it joins on a git trailer this repo measured extinct 4 days ago | S | `cc-value` either reports ABSTAIN with a named reason, or joins on a key with >0 coverage proven in its output | An instrument silently reporting over an empty join is worse than no instrument |
 
+> ⏱ **M1's success criterion needs re-specifying before M1 starts** (2026-08-29, backlog
+> `70ed289c10fb`). It reads *"the dispatcher fires while its account's burn ratio is below pace and
+> throttles as it approaches 1.0"* — and `burn_ratio` is now **absent for the first ~6 days of every
+> weekly window**, because `wall_projection`'s floor moved 0.05 → 0.90 (see the M3 note below and
+> `docs/research/weekly-reset-utilization-2026-08-25.md` §6). This is not a blocker for M1, it is a
+> correction to what M1 should route on: the mid-week signal that survives is **`wk_strand_pp`**,
+> the roll-aware EWMA nowcast M3a shipped, which was measured 4/4 recall and 0/4 false positives on
+> the shortfall regime. A dispatcher that read a missing `burn_ratio` as 0 would see every fresh
+> window as idle — the exact inversion §1 exists to prevent, and the reason `apply_burn` leaves the
+> key ABSENT rather than stamping a zero.
+
 **M5's blast radius, recorded because it caught the lead out.** M5 was first written as `L` — "one
 file move, briefing a session costs more than doing it". A reference sweep before touching anything
 showed that is false: `./CLAUDE.md` is not merely a duplicate, it is the **deployed source** of the
@@ -1470,6 +1481,15 @@ saturates to 1.0 and is caught only here.*
 **Unchanged, deliberately:** `tests/claude-accounts-burn-ratio.bats` (all 8 cases). `wall_projection`
 and its 5% abstain floor are untouched by this spec; the 5h `burn_ratio` render survives as the one
 raw-percentage figure L1 permits.
+
+> ⏱ **SUPERSEDED 2026-08-29 on the floor only** (backlog `70ed289c10fb`; the rest of this section
+> stands). The 5% floor was correct for the defect it was built for and wrong about the one
+> underneath it: dividing by elapsed fraction removes the *phase* error only under LINEAR burn, and
+> this meter's burn is back-loaded 2.3× (10.9 pp/day through phase 0.7, 25.2 after). Backtested MAE
+> **46 pp at day 3, 35 pp at day 5**, against 5.3 pp for the constant "94%". `MIN_ELAPSED_FRAC` is
+> now **0.90** and the suite is 12 cases. The mid-week `⚠ WALL` flag went with it — see
+> `docs/research/weekly-reset-utilization-2026-08-25.md` §6, which carries the evidence and the
+> reason the shape-corrected replacement is refuted rather than merely deferred.
 
 ---
 
