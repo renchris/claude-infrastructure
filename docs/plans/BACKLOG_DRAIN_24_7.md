@@ -27295,12 +27295,18 @@ recorded green land gate from a cloud VM in this lane.
   the same number, so the land's red is reproduced by trunk with none of this diff in it. Exit 6,
   "a VERDICT about your diff", over a suite the diff never touches.
   **Nothing was skipped, disabled, quarantined, or manifest-excluded to get past it** — the gate is
-  correct in refusing, its input is what is wrong, and the venue cannot fix the input. The hunk is
-  preserved as `/tmp/venue/ship-land-comment.patch` on the firing VM and, durably, on the local ref
-  `keep/venue-full-20260829` and in this repo's own history: it is added by the first commit of this
-  branch and removed by the last, so `git log -p scripts/ship-land.sh` carries the exact text. **It
-  is a one-command apply from the operator's box, where `cc-reaper` is green**, and that is the
-  named follow-on rather than a widening of this land.
+  correct in refusing, its input is what is wrong, and the venue cannot fix the input. **The hunk is
+  preserved on TRUNK, in this repo's own history, and that is the only pointer worth writing down:**
+  `ffbde0ea` adds it and `0d27839c` removes it, both landed, so
+
+      git log -p origin/main -- scripts/ship-land.sh | grep -A22 'VENUE CORRECTION 2026-08-29'
+
+  prints the exact text on any checkout, forever. *(A `/tmp` patch file and a local `keep/` ref were
+  written first and are named here only to be retracted: both live on an ephemeral VM that is
+  reclaimed with the session, so citing them would have been a pointer to nothing — the same defect
+  as citing a sha on no branch.)* **Re-applying it is a one-command `git revert 0d27839c` from the
+  operator's box, where `cc-reaper` is green**, and that is the named follow-on rather than a
+  widening of this land.
 
 **Six instrument faults, all mine, all found by a control or a gate rather than by a wrong number —
 and the last three were found by the arms of this very diff, which is the point of writing them:**
