@@ -86,6 +86,168 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-29 — drain recycle #258: method 230 — EXPOSURE IS AN ORDERED LADDER: WHAT THE MIDDLE
+  STAGE EMITS GOVERNS THE MIDDLE STAGE, AND THE MIDDLE STAGE GOVERNS THE PRODUCER — SO "HOW MANY
+  STAGES CAN TAKE SIGPIPE" IS NOT THE STAGE COUNT.**
+  🚨 **THE FINDING.** #257 established WHICH QUANTITY decides a multi-stage pipeline's verdict — what
+  the stage feeding the consumer EMITS. It did not say WHICH STAGE that verdict is about, and every
+  sibling comment in this tree reads it as a verdict about "the pipeline". Measured with per-stage
+  attribution via `PIPESTATUS` (`~/.claude/autonomy/probe258-shield.sh`, 200 trials per cell, feed
+  400,000 B, external producer `/bin/cat`, load 21-42), the three stages fail independently:
+
+      middle             drains?   middle emits     stage1 (producer)   stage2 (middle)
+      sed 's/^L//'         no          390,000          200/200            200/200
+      sort                 yes         400,000            0/200            200/200
+      wc -l                yes               9            0/200              0/200
+      jq -r 'select…'      yes               3            0/200              0/200
+      NEG control: the sed row re-run on a 200 B feed reads 0/200 on BOTH stages.
+
+  Ten predictions, all exact, written before the run and enforced at rc 93.
+  🚨 **TWO INDEPENDENT PROTECTIONS, AND THE LADDER IS WHAT MAKES THEM INDEPENDENT.**
+  · **stage 2 dies only if what STAGE 2 EMITS clears the knee** — that is #257's finding, unchanged.
+  · **stage 1 dies only if stage 2 died FIRST and stage 1 is still writing.** So a middle that emits
+    UNDER the knee protects the producer COMPLETELY, at ANY producer size. Measured at 400,090
+    producer bytes: `sed -n 's/…/\1/p'` emitting **9,516 B** reads **0/200** on both stages, while
+    the SAME feed through `sed 's/^/x/'` emitting **416,504 B** reads **200/200** on both. One
+    producer, one producer size, one middle program — and the PRODUCER's verdict flips on the
+    MIDDLE's output alone.
+  · **DRAINING is a second, SIZE-INDEPENDENT protection: it holds even when the middle DOES die.**
+    The `sort` row dies 200/200 and its producer still reads 0/200, because a stage that reads to
+    EOF has already let the producer exit. **Sufficient, not necessary** — and the two arms are
+    separable only because `sort` and `sed` both emit past the knee, so the middle's death is held
+    constant and drain is the only thing left that can differ.
+  🚨 **SO A THREE-STAGE SITE IS NOT AUTOMATICALLY WORSE THAN A TWO-STAGE ONE.** Across those five
+  cells, at ONE producer size, the number of stages that can take SIGPIPE is **0, 1 or 2**. It is
+  worse only where its middle BOTH streams AND emits past the knee.
+  🆕 🚨 **AND THE REFUSED PREDICTION IS THE ONE THAT PAID — FOR THE SECOND LINK RUNNING.**
+  `predict258-site.v1-REFUSED.txt` (preserved on disk beside its replacement, with the run that
+  refused it) predicted that a STREAMING middle exposes the producer at 400,000 B. **Measured 0/200
+  — because it reasoned about the middle's INPUT.** `sed -n '…p'` emits only its matches, 9,516 B,
+  under the knee, so it never blocks and the producer behind it is never signalled however much it
+  writes. ⚠️ **The middle stage's INPUT is the one quantity in this system that governs NOTHING AT
+  ALL, and reasoning from it is the same error #257's correction exists to undo, one rung down.**
+  **A prediction I could not have refuted by reading would have shipped as a fact.**
+  🆕 🚨 **THE POPULATION, AND IT CORRECTS THE LEAD I WAS HANDED.** #257's lead 0 named
+  `hooks/lead-crash-watchdog.sh` ×6, `scripts/test-overwrite-guard.sh` ×5, `scripts/handoff-fire.sh`
+  ×5 and `scripts/cloud-ceiling-probe.sh` ×3 as the unscreened remainder, and said to partition them
+  by STAGE COUNT first. Screened on LOGICAL lines (`~/.claude/autonomy/pipe258.py`, census taken
+  2026-08-29T06:08Z): **126 rows → 119 two-stage, 7 three-stage, 0 four-plus.** Of the seven, **3
+  have a STREAMING middle** (`install.sh:1128` · `scripts/banner-shots.sh:258` ·
+  `scripts/banner-video.sh:167`), **3 a DRAINING one** (`scripts/cloud-ceiling-probe.sh:179` and
+  `:351` via `jq`; `scripts/test-overwrite-guard.sh:517` via `xargs`), and **1 has a middle no static
+  screen can classify** (`scripts/test-overwrite-guard.sh:342`, whose middle stage is a hook script).
+  🚨 **NOT ONE of the three producer-exposed sites is in the four files the lead named** — and of
+  those four files, `handoff-fire.sh` and `lead-crash-watchdog.sh` contribute **zero** three-stage
+  sites between them. **The inherited partition was taken on PHYSICAL lines, and that is why.**
+  🆕 ⚠️ **13 OF THE 126 CENSUS ROWS SPAN MORE THAN ONE PHYSICAL LINE.** The census prints one
+  physical line per site, so a producer on an earlier line is simply invisible and any stage count
+  taken off the printed row is wrong for those thirteen. **That is #248's continuation blind spot
+  re-measured on THIS population** (it measured 14 of 306 on a different one). **Segment the LOGICAL
+  line or do not count at all.**
+  🆕 🚨 **THE SITE THAT LOOKS UNSAFE AND IS NOT, FOR NEITHER OF THE REASONS THE BAND WOULD GIVE.**
+  `scripts/cloud-ceiling-probe.sh:179` — `claude-accounts --json | jq -r … | head -1`. Its producer
+  measured **16,788 B / 460 lines** at 06:22Z, longest line 605 B, first `weekly_pct` at byte offset
+  557. **Read in PRODUCER bytes — which is how all seven sibling comments quote these bands — that
+  sits INSIDE the racy band #257 bracketed** (16,430 B emitted SAFE, 16,960 → 93/400). It is safe,
+  and neither stage is safe for that reason: **jq emits 3 B** (three orders of magnitude under the
+  knee) and **jq drains**, so the producer cannot be signalled at any size. Measured on the exact
+  shape: **0/200 on both stages at the real 16,788 B AND at a 400,090 B feed of the same shape.**
+  The second reason is the durable one — it survives the producer growing.
+  ✅ **COMMENTED, comments only, no behaviour change:** the FIFTH CORRECTION block in
+  `scripts/pipefail-sigpipe-lint.sh`'s header (the declared SSOT for these bands, which already
+  carries four) · `scripts/cloud-ceiling-probe.sh` at both jq sites · `scripts/banner-shots.sh:258`,
+  the one exposed site whose latency is worth stating: its producer is `--dump-dom` of a FIXED
+  heredoc probe page, measured **108 B against a 160 B page**, sed emits 3 B — and what would change
+  that is enlarging the probe PAGE, not the window size, which the comment says.
+  🚨 **NOT TAKEN, DELIBERATELY, AND NAMED SO NOBODY RE-DERIVES IT — THE NEXT LINK'S CHEAPEST LEAD.**
+  `install.sh:1128`. Its own comment states the law *"A dep failure WARNS and never aborts: `|| true`
+  guards the installer's own set -e"* — **and the `|| true` is on the PRODUCER line, while the very
+  next line, which reads its output through a STREAMING sed under `set -euo pipefail`, has none.**
+  Same shape as #244's `in_own` finding: the guard took the predicate and left the inline consumer of
+  it. **Measured feed 70 B** (`verdict=satisfied`, dry run) **with a ceiling bounded by
+  `requirements.txt` at 1,279 B / 20 lines**, so it is latent by three orders of magnitude — and pip's
+  own output is `>/dev/null 2>&1` inside `scripts/python-deps.sh`, which is what bounds it. **Left
+  because `install.sh` is named by 41 `.bats` files and that is a bad trade for a latent site.**
+  🚨 **SIX INSTRUMENT FAULTS, ALL MINE, ALL IN THE SCREEN'S OWN SEGMENTATION AND PLUMBING, NONE IN A
+  SUBJECT — AND EVERY ONE SURFACED AS A REFUSAL OR A HARD ERROR RATHER THAN A WRONG NUMBER.**
+  1. 🚨 **`pipe_rc=$?` CLOBBERS `PIPESTATUS` BEFORE IT IS READ.** An assignment IS a command, and
+     `PIPESTATUS` is rebuilt by the next one. Died `rcs[1]: unbound variable` under `set -u` — the
+     loud failure. **Take the array FIRST and derive the pipeline verdict from it; that derivation
+     is pipefail's own semantics anyway.**
+  2. 🚨 **`body.split("|")` IS BLIND TO QUOTING, AND EVERY jq PROGRAM AND grep ERE HERE CONTAINS A
+     PIPE.** It reported 5 three-stage and 2 four-stage rows and a plausible distribution over 126
+     parsed rows. **A count that is plausible is not a count that ran correctly** (#241, verbatim).
+  3. 🚨 **THE CENSUS IS PHYSICAL-LINE ORIENTED** (the finding above, met first as a fault).
+  4. 🚨 **THE JOIN CONTROL DEMANDED BACK THE TRAILING BACKSLASH THE JOINER CORRECTLY STRIPS**, and
+     refused 4 rows. **A fault in the CONTROL, found by reading it rather than by doubting the
+     subject** — #244's rule run in the other direction. **Normalise both sides identically or the
+     control is measuring a different question than its subject.**
+  5. 🚨 **`A || B | C` PUTS THE PIPELINE IN THE *SECOND* CLAUSE**, so breaking at `||` reported ONE
+     stage. **The tell was free: 18 one-stage rows in a PIPELINE census is not a distribution, it is
+     an error.** Split into clauses and keep the longest.
+  6. 🚨 **THE PIPELINE USUALLY LIVES INSIDE `"$( … )"`, WHICH A NAIVE QUOTE TRACKER READS AS QUOTED
+     TEXT** — 7 of 126 rows, and the refusal named all seven. **A parser of shell must model command
+     substitution or it is a parser of something else.**
+  ✅ **Each repair is pinned by a control the screen REFUSES on, not by a comment: a 9-case segmenter
+  selftest whose cases are shapes this census actually contains, a join control, a min-stages control
+  asserting every row of a pipeline census reaches ≥2 stages, and a partition that must sum.**
+  ✅ **GATES.** `shellcheck` rc 0 and `bash -n` rc 0 on all three files · `--selftest` rc 0 at
+  **32/32** (⚠️ **the inherited note said 30/30 — counts drift; take your own**) · bare
+  `pipefail-sigpipe-lint.sh` rc 0 · `--census` **126 → 126, LOST=0, NEW=0**, keyed on **(path, TEXT)**
+  because this diff inserts comment lines and every number below them shifts, with the PRE arm
+  extracted from `origin/main` via `git archive | tar -x` rather than remembered — **NOT A WIDENING,
+  seventh consecutive link.** ⚠️ **DECLARED NOT-RUN rather than claimed:** `bats-shellcheck-lint` and
+  `bats-assert-liveness` (the diff touches no `.bats`), `test-walltime-lint` (takes a DIRECTORY; no
+  timing construct added), `alarm-polarity-lint` (no file here is an alarm emitter and its POS
+  control is a KNOWN MUTE, lead item `e07dc5e09f83`) — **the seventeenth consecutive link to declare
+  rather than claim.**
+  ✅ **A DISCRIMINATION GATE WORTH STEALING FOR ANY COMMENTS-ONLY DIFF:** the commit launcher refuses
+  at rc 95 unless the three files' **NON-COMMENT lines are byte-identical to `origin/main` by
+  sha256**. That is a far stronger claim than *"the diff looks like comments"*, and it is the one a
+  reviewer actually wants (memory: `assertion-span-must-equal-its-subject`).
+  🚨 **THE BOARD — ZERO rows closed by me, ZERO filed, ZERO reopened, ZERO board writes of any kind.**
+  Open **2026-08-29T06:08:13Z: 333 open / 221 blocked / 2,347 done / 5 claimed** (554 combined, 2,906
+  rows), both partitions asserted. **Gap from #257's floor (06:05:43Z → 06:08:13Z, 2 m 30 s): ZERO
+  arrivals, ZERO departures, ONE transition — and it is a SIBLING's.** `d559f2e7cb10` went
+  open → done; folded on `.id` with a bogus-id NEG control at 0, its `.project` is
+  **reso-management-app** (*"pre-push docs gate refuses SILENTLY"*). ⚠️ **`done` moving is not the
+  chain's actuator working — FOLD ON `.project` BEFORE READING EITHER DIRECTION** (#250's converse,
+  and #255's and #257's scars are the same shape). **The `claimed` set was byte-identical across the
+  gap** — `193ae8ddce72` · `70f0001c657b` · `abf5e7509608` · `e981656df348` · `f85fce7c26f5` — the
+  second consecutive reading with zero turnover, so neither the count nor *"it always swaps"* is the
+  tell. **A COUNT IS NOT A SET; `comm` it, always.**
+  🚨 **THE LANE.** Open ledger: `RUNG=🚀 LIVE_SRC=behind LIVE_LAG=8 LIVE_ADDS=4 LIVE_DIVERGED=0
+  LIVE_AGE=17983 LIVE_BREACH_WHY=adds GATE=stale`, `LIVE_SHA=76358528ab4a…` — **I OPENED on the `🚀`
+  #257 closed on, with the same four adds and the same live sha.** ⚠️ **`LIVE_AGE` rose 17,252 →
+  17,983 across the link boundary with the sha UNMOVED, which is the sawtooth's rising edge and NOT
+  an approach to anything** (#257's correction, holding). **`GATE=stale` at every reading — the
+  forty-first, forty-second and forty-third consecutive.** **NOT mine to drive:** only the background
+  `postland-verify` stamp moves that marker, and `01ab05685857` records it INERT for days. **And the
+  condition is owned four times over** — `01ab05685857` · `05669deba7a7` · `5511ea906e2e` ·
+  `fef07efcdd0d` — so **I FILED NOTHING FOR IT, deliberately**, exactly as #257 did.
+  🚨 **STORES at open (06:08:22Z, load 21.72):** postland RED pages **0** over a denominator of
+  **2,776** — the 178th consecutive zero, taken with `find` and a directory-existence assertion so an
+  absent store reads UNKNOWN and never 0 · postland stamps **506** · `pages` **2,286 / 108** ·
+  inbox-guard `.escalated` **451 / 451** (every file in that store is an `.escalated` marker, so the
+  two counts are ONE number and not a ratio). ⚠️ **Every one of those is a number with a moment
+  attached and NO claim about the link; #245's scar is exactly the shape that tempts otherwise.**
+  ✅ **The `diff` of `~/.claude/hooks/qos-rewrite.sh` against `origin/main` was rc 0 and 0 bytes —
+  the 139th consecutive clean.** ✅ **All four kitty-aware pre-fire checks passed by minute ~2:
+  `bin/cc-in-kitty` rc 0 · `KITTY_WINDOW_ID=27` (`KITTY_PID=1427`, `TERM=xterm-kitty`,
+  `KITTY_LISTEN_ON=unix:/tmp/kitty-1427`, `CC_TERM` UNSET, `ITERM_SESSION_ID=w0t0p0:27`) · the
+  id-keyed `kitty @ ls` query returning EXACTLY ONE object with a bogus-id NEG control at 0 ·
+  `cc-notify --self` printing 27 — the THIRTY-FIRST consecutive link.**
+  ⚠️ **THE INSTRUMENTS LEFT, AND WHICH ONE TO STEAL.** `probe258-shield.sh` is the per-stage
+  attribution harness — `PIPESTATUS` captured FIRST, a shape assertion refusing at rc 94 when a cell
+  is not the three-stage thing its name claims, and a varying prediction table so a uniform result
+  cannot pass as attribution. **`pipe258.py` is the one to repoint:** it segments a shell line into
+  stages with a real context stack (single quotes, double quotes, `$( )`, `||`, `&&`, `;`), joins
+  logical lines across continuations, and gates itself on three controls before printing a single
+  row. `probe258-site.sh` is the 2×2-plus-one on the REAL site; `feed258.sh` measures each site's own
+  producer and its own middle stage, and reports NOT-MEASURED rather than 0 where it cannot run one
+  (`banner-video.sh:167` is stated that way rather than rounded). ⚠️ **`stages258.py` and
+  `logical258.py` are the two SUPERSEDED screens — kept because their refusals are the record of
+  faults 2 through 6, but do not reuse them; `pipe258.py` is the one that passes its own controls.**
 - **2026-08-28 — drain recycle #257: method 229 — WHEN A PIPELINE HAS AN INTERMEDIATE STAGE, THE
   GOVERNING QUANTITY IS WHAT THAT STAGE *EMITS*, NOT WHAT THE PRODUCER WRITES — AND A CORRECTION
   THAT RE-MEASURES ONE ROW OF A TABLE LEAVES THE ROW BESIDE IT WEARING ITS OLD SCOPE.**
