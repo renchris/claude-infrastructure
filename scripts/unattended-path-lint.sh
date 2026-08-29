@@ -1929,9 +1929,29 @@ Y=/bin/ls
   # sensor which cannot run yields a NON-VERDICT and never a verdict: this case used to return one of
   # those 13-plus-23 as `fails=1`, which took the whole --selftest to exit 1, which took
   # scripts/ship-land.sh's gate arm to `gate_red unattended-path-selftest` for ANY diff on any
-  # non-Darwin box — a docs-only one included. That is the whole of what stopped every cloud VM from
-  # landing anything: backlog f85fce7c26f5, eight dispatches, eight pushed branches, zero lands, each
-  # one re-deriving an answer that the arm beside this one then refused to let it deliver.
+  # non-Darwin box — a docs-only one included: backlog f85fce7c26f5, eight dispatches, eight pushed
+  # branches, zero lands, each one re-deriving an answer that the arm beside this one then refused
+  # to let it deliver.
+  #
+  # ⚠️ THIS ARM WAS NOT THE WHOLE CAUSE, and the sentence that used to stand here said it was.
+  # RETRACTED 2026-08-29, measured on a live Claude-Code-on-the-web VM (Ubuntu 24.04) running this
+  # file at the fixing commit. With this arm GREEN (44/44, exit 0, the two non-verdict skips named),
+  # ship-land STILL refuses the land, one arm over:
+  #
+  #   scripts/bats-shellcheck-lint.sh --selftest  →  exit 2, "shellcheck not installed"
+  #   ship-land.sh:3444  scrc==2  →  bats_sc_nonverdict  →  GATE_KILLED=1  →  exit 9
+  #
+  # That arm is entered on EVERY land in this repo — its condition is `[[ -d tests ]] && ls
+  # tests/*.bats`, which is a property of the repo and not of the diff — so a docs-only land is
+  # refused too, exactly as this one was. Cloud VMs ship no shellcheck; the operator's Mac has it
+  # from Homebrew, which is why the arm is invisible on the box that writes these comments.
+  # It went blocking at fe6540a6 (2026-08-11, "a missing shellcheck silently deleted the .bats
+  # ratchet — now a loud non-verdict"), whose own body measured the new behaviour as exit 9 — the
+  # change was deliberate and is CORRECT as a gate; what nobody costed is that it is also a total
+  # land-block for every box without the tool, which is every cloud VM.
+  # Verified both ways on that VM: `apt-get install shellcheck` moves that selftest 2 → 0 (19/19)
+  # and nothing else changes. So the cloud return/land arm needs the tool PROVISIONED, not the gate
+  # weakened — the gate is doing its job. Do not read this file's fix as the end of f85fce7c26f5.
   #
   # SKIPPED IS NOT PASSED. The skip is counted and printed, the summary line names it, and the
   # detector's 40-odd hermetic cases still run and still gate — which is what ship-land's arm reads
