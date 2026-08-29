@@ -86,6 +86,73 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-29 — A CLOUD VM WAS FIRED ON THIS PLAN'S OWN ROW (`70f0001c657b`), AND THE ADMISSION
+  DEFECT IS THAT `plan-open` ROWS ARE CLASSIFIED BY A POINTER RATHER THAN BY THEIR SUBJECT. The
+  obvious fix was MEASURED AND REFUTED before it was written, which is why this link lands docs and
+  no code.** Full measurement + the reproducible probe →
+  `docs/research/venue-plan-open-pointer-span-2026-08-29.md`.
+  🚨 **THE MECHANISM, and it is NOT the `venue-foreign-repo-*` family.** That family's rows named a
+  project the VM could not clone; here the repo is correct and the **WORK** is unhostable — §3's R1
+  is `cc-backlog` ledger ops on `~/.claude/autonomy/backlog.jsonl` (absent in the VM, and by
+  `bin/cc-cloud`'s own header unreachable from any VM), R2 is stranded-branch recovery across
+  worktrees on one disk, §4's A1/A4 are `launchctl` and venue policy, and B1-B5 are the local drain
+  chain. `bin/cc-eligible` classifies `SPAN_FIELDS = (title, dodRef, condition, source)`, which for a
+  cc-discover C2 row holds the plan's H1 and a path — **the remaining work is not in the span at
+  all.** Measured on a fixtured store: the row reads `verdict=eligible`, **`tokens: []`**, *"repo-only
+  work — no local-only state named"*. The same `classify_all()` over this plan's 10 not-DONE sections
+  fires **ALL SIX refusal classes** — `off-box-lane` (off-box · cloud-lane · cc-cloud · cc-offload ·
+  cloud-session · venue) · `spawn-rail` · `box` · `visual` · `branch-banking` · `github`. **The lane
+  admitted, off-box, the plan that BUILDS the lane** — the exact circularity `OFFBOX_LANE`'s
+  docstring exists to refuse (*"A SESSION THIS LANE CREATED CANNOT VERIFY A CHANGE TO THE LANE"*).
+  The classifier did not fail its rule; it never saw the text the rule is about. This is
+  `assertion-span-must-equal-its-subject` — the memory `SPAN_FIELDS` is itself annotated with — one
+  level up: the span is right for an item that DESCRIBES work and empty for one that POINTS AT it.
+  🚨 **AND THE IMPLIED FIX STARVES THE TAP COMPLETELY — measured over all 45 open plans in
+  `docs/plans/` BEFORE writing it.** Three candidate spans, same classifier, same corpus:
+  **full remaining body → 45/45 = 100% flip to INELIGIBLE** · **headings only → 30/45 = 67%, and it
+  MISSES this very row** (its remaining headings are scaffolding — *"§3 Reconciliation worklist"*,
+  *"§4 Pipeline architecture"* — spelling nothing local) · **headings + the `Scope (frozen)` line →
+  34/45 = 76% and it does catch it** (`off-box` comes from the frozen scope line), but only **53%**
+  of open plans carry that line, so the arm is silent on half the corpus. Over a 2.3 MB document some
+  refusal spelling appears almost surely: **one `render` in 2.3 MB is not a signal.** That is
+  cc-eligible's header cost — *"costs the cloud tap a whole class of real work, and the tap is the
+  entire point"* — reached not by adding a word but by widening the span until any word suffices.
+  ⚠️ **The 11 survivors REFUTE the framing rather than endorsing it:** `GUARDRAIL_HOOKS_V2`,
+  `MASTER_ENFORCING_STORE` and `MASTER_FLEET_FOOTPRINT` are plainly box work no span reaches, because
+  the **spelling list** does not reach them. **The residue is not a span problem and a fourth span
+  will not find it.** What the three rows say together: the `plan-open` class here is very nearly all
+  local (34/45, several survivors wrong the same way), so the honest repair is a **class-level venue
+  rule for `plan-open` rows**, not a better span — and it costs the tap its genuinely-eligible
+  remainder, i.e. a value call with a measured price. **Operator-owned; do not let a session take it.**
+  ✅ **DELIBERATELY NOT FIXED HERE, and the refusal is the rule working** — same refusal, same
+  reason, as the *A-lane routing 2026-08-18* entry below made for the spawn rail. Two independent
+  guards in the lane's own source: `OFFBOX_LANE` above, and the **shallow guard** — this clone is
+  grafted at 50 commits, `cc-eligible why` reports `"history": {"state":"shallow","depth":50}`, and
+  the PRODUCER fails closed there by design.
+  ✅ **§4's C1-C4 INFLOW LIST IS DONE ON TRUNK — audited by CONTENT this session, and nobody had
+  re-verified it.** `C1` re-land minter: **LANDED**, `scripts/ship-land.sh:953` now runs TRUNK's
+  pipeline from a detached `origin/main` worktree instead of the branch's own copy, its comment
+  citing *"BACKLOG_DRAIN_24_7 §4 C1"*. `C3` done-with-evidence: **LANDED at its first ratchet stage**,
+  `bin/cc-backlog:2618` emits `verdict=done-without-evidence` on an empty `--evidence`; the comment
+  names the sequence this plan specified — *"warn now, ratchet on the counter, refuse only once the
+  rate is provably at zero"* — so the REFUSE stage is still owed. `C4` premise-pass: **wired** in
+  `autonomy-sweep.sh` with its own cadence, bound, shard and `read-failed:<why>` reporting; its
+  *"prove ≥1 production pass that RECORDS validations"* clause is a LIVE-STORE fact and is
+  **unverifiable from this VM** — re-read `premise_rows_validated` locally before closing it.
+  🚨 **`C2` IS LANDED AND MY FIRST READING OF IT WAS WRONG — worth carrying, because the error is the
+  reusable half.** C2's text asks to make `find-plan.sh plan_status()` read the body; that function
+  still reads YAML frontmatter only, so C2 reads OPEN if you grep its wording. It is not: the defect
+  C2 NAMES — the 4-day *"advance a finished plan"* re-mint class — was killed **at the mint site**,
+  `bin/cc-discover:268`, whose comment cites *"2026-08-16, plan §4 C2"* and states why the literal
+  remedy was rejected: *"there are already three copies of `plan_status()` in this tree and the third
+  disagrees with the other two; a fourth signal invented here would be a fourth answer."* ⚠️ **Check
+  a plan item against the DEFECT IT NAMES, never against its prescribed remedy — a landed fix that
+  chose a better site reads as unstarted work under a grep.**
+  📋 **OWED LOCALLY (the ledger is unwritable from here, so this entry is the channel — same as
+  2026-08-18):** `cc-backlog venue 70f0001c657b --venue local --why "plan-open pointer span:
+  the row's 4 fields fire 0 tokens; the plan's remaining sections fire all 6 refusal classes"`,
+  then `cc-backlog done 70f0001c657b --evidence "<landed sha>"` **only if** the local drain agrees
+  this link discharged it — the plan itself stays OPEN, and its remaining work is unchanged.
 - **2026-08-28T19:0xZ — POST-FIX PRODUCTION VERDICT on `5f89ce484` (the admission-lock scope fix):
   IT WORKED, AND THE BINDING CONSTRAINT MOVED EXACTLY WHERE THE AUDIT PREDICTED — ONTO THE VENUE
   FILTER, WHICH IS OPERATOR-OWNED.** The live layer converged at 11:40Z (a green stamp after the
