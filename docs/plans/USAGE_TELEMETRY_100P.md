@@ -1854,6 +1854,53 @@ the one S4's planner deliberately creates. Over-projection is soften-only at the
 and therefore fail-safe for routing, but the metric is wrong there and must not be quoted as
 accurate. §5.6 Q3 names the measurement that would fix it.
 
+#### S5 · M3c `--strand-score` — LANDED (wave 2, 2026-08-29)
+
+`bin/claude-accounts`: `strand_score(samples, buckets, now)` + `render_strand_score(sc)` beside
+`_util_tail`, constants `STRAND_SCORE_BUCKETS` / `STRAND_SCORE_TAIL_H` / `STRAND_EPS_PP`, and a
+`--strand-score` branch in `main()` placed **before `load_cfg()`** exactly like `--agents`. New
+suite `tests/claude-accounts-strand-score.bats` (SS-1..SS-5) — **5/5 RED** against the pre-S5
+binary, green after; run three times for the intermittent named below.
+
+**Deviation 1 — an ABSTAINING ESTIMATOR is an abstain too.** §5.2 defines the abstain as "a cell
+with no evaluable sample at `weekly_reset_h ≥ H`". A cell can also have a perfectly good sample
+and be unscorable because `burn_wk_ewma_ph` refuses below its own span floor. Both are missing
+evidence, both are excluded from the aggregate and counted under `abstained`, and `bias`/`mae`
+are `None` rather than `0.0` for an empty bucket — SS-3 pins that a zero-n bucket does not report
+a perfect bias over cells it never measured.
+
+**Deviation 2 — the return carries per-cell detail, not only the four aggregates.** Each cell
+records `eval_reset_h`, `eval_weekly_pct`, `span_h`, `projected`, `realised`, `error`. Without
+`eval_reset_h` on the record there is no way to assert, from outside, that a cell was scored at
+its horizon rather than at the window's close — which is the one property separating this harness
+from the tautology it replaces. The aggregate alone is unfalsifiable.
+
+**Deviation 3 — `--tail-h N` overrides the 720 h default.** The buckets reach 96 h before a
+reset, so a tail shorter than a full window silently scores nothing; the renderer says
+`NO COMPLETED WINDOW IN THE TAIL` rather than printing a table of dashes that reads like a
+measurement.
+
+**Two vacuous passes were caught in the writing of this suite, and both are the failure mode the
+suite exists to detect** — recorded because each was green before it was correct:
+
+1. **`python3 - <<'PY' <<< "$output"` never runs the heredoc.** Two stdin redirections; the
+   herestring wins; Python reads the JSON body as its own program; `{"windows": 1, …}` is a valid
+   expression statement and exits **0** with no assertion executed. The e2e case passed, asserting
+   nothing, until the double redirect was noticed. Every other suite in this repo spells it
+   `python3 -c '…' <<< "$output"`, which is now what this one does.
+2. **A fixture whose weekly reset falls mid-minute is an intermittent.** `_reset_key` ROUNDS and
+   `completed_weekly_windows` rebuilds the reset as `key × 60`, so the tail-gap check
+   (`0 ≤ gap ≤ 3 h`) sees a gap anywhere in `[−30 s, +30 s)` against the fixture's own final
+   sample — and a negative gap disqualifies the window. Built on a bare `time.time()` the suite
+   passes or fails on the *second* it happens to run. Both fixtures now snap the reset to a whole
+   minute and place the last sample 60 s inside it.
+
+**What it does NOT do: unblock S6.** §5.2 is literal that the alarm is not shippable at any
+parameter setting unless the horizon-stratified bias at the 12 h bucket is near zero, and that
+bias is a property of the **live** series, not of a fixture. The harness now exists and is
+falsifiable; the reading is an operator step on the machine that holds
+`~/.claude/logs/account-utilization.jsonl`. See § S6 below.
+
 #### Acceptance status against §5.4
 
 | command | status |
