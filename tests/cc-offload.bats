@@ -80,6 +80,11 @@ case "$1" in
   declare) echo "declared" ;;
   retire) echo "retired $3" ;;
   show) echo "url=https://claude.ai/code/$2" ;;
+  # The boot contract (CLOUD_OBSERVABILITY.md §4.1). A MARKER, not the real prose: what this suite
+  # owns is that whatever cc-cloud renders reaches the brief and is attested in the right order.
+  # The wording itself is pinned where it is produced, by `cc-cloud --selftest`, so a copy of it
+  # here would be a second source that drifts from the first.
+  contract) case "$2" in --issued) echo "attested $3" ;; *) echo "STUB-BOOT-CONTRACT" ;; esac ;;
   *) exit 2 ;;
 esac
 EOF
@@ -488,6 +493,63 @@ EOF
   # declare must precede the send in the recorded order
   [ "$(grep -n 'cc-cloud declare' "$CALLS" | head -1 | cut -d: -f1)" -lt \
     "$(grep -n 'cc-notify --cloud' "$CALLS" | head -1 | cut -d: -f1)" ] || false
+}
+
+@test "up --via api prepends the boot contract, and attests it only AFTER the send" {
+  # THE PREMISE, DELIVERED (backlog 0c8b39b67665). cc-cloud's C1 reads an absent ref as "never
+  # booted", which is only true of a session that was TOLD to push before doing anything else
+  # (CLOUD_OBSERVABILITY.md §4.1). This route used to send `cat "$pf"` verbatim, so no session ever
+  # carried that instruction and every NOT-STARTED verdict about one rested on nothing.
+  echo "do the work" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+print("session_apitest")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+  # The contract is rendered against the branch the session is actually authorised to push …
+  grep -q 'cc-cloud contract --branch claude/fire-.* --id session_apitest' "$CALLS" || false
+  # … and it reaches the VM AHEAD of the brief, not instead of it.
+  grep -q 'cc-notify --cloud session_apitest STUB-BOOT-CONTRACT' "$CALLS" || false
+  grep -q 'do the work' "$CALLS" || false
+  # ORDER IS THE ASSERTION. The declaration is written before delivery (it must be), so at declare
+  # time "this session was told to push first" is an INTENTION. It becomes a fact only once the send
+  # returns, and the attestation has to sit on that side of it.
+  [ "$(grep -n 'cc-notify --cloud' "$CALLS" | head -1 | cut -d: -f1)" -lt \
+    "$(grep -n 'cc-cloud contract --issued session_apitest' "$CALLS" | head -1 | cut -d: -f1)" ] || false
+}
+
+@test "a boot contract that cannot be rendered ships the brief anyway — unattested, and SAID" {
+  # POSITIVE CONTROL for the arm above, and the polarity matters in both directions. An undelivered
+  # brief is strictly worse than an unattested one, so a render failure must NOT refuse the fire.
+  # What it must never do is attest regardless: a declaration claiming a contract the brief never
+  # carried is exactly the unfounded premise this whole change exists to remove.
+  echo "do the work" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git
+  cat >"$STUBDIR/cc-cloud" <<'EOF'
+#!/usr/bin/env bash
+echo "cc-cloud $*" >>"$CALLS"
+case "$1" in
+  declare) echo "declared" ;;
+  contract) exit 2 ;;
+  *) exit 2 ;;
+esac
+EOF
+  chmod +x "$STUBDIR/cc-cloud"
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+print("session_apitest")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+  grep -q 'cc-notify --cloud session_apitest do the work' "$CALLS" || false
+  [[ "$output" == *"WITHOUT it"* ]] || false
+  ! grep -q 'contract --issued' "$CALLS" || false
 }
 
 @test "up --via api derives owner/name portably (no GNU-only lazy quantifier)" {

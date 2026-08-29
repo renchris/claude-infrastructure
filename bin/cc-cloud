@@ -3,6 +3,9 @@
 # read ENTIRELY from the repo side.
 #
 #   cc-cloud preflight [--repo P] [--branch B]       can a fire HERE be observed at all? exit 1 = no
+#   cc-cloud contract --branch <b> [--id --remote]   §4.1's absence contract, EXECUTABLE: the text a
+#                                                    fire prepends to a brief so absence is readable
+#   cc-cloud contract --issued <id>                  record that the fire ACTUALLY issued it
 #   cc-cloud declare --id <id> --branch <b> [opts]   register a session BEFORE firing it
 #   cc-cloud fill-paths --id <id> | --branch <b> | --all
 #                                                    fill `paths=` POST-HOC from the VM's own commits
@@ -101,6 +104,7 @@
 #                   NO row, `--table` says UNKNOWN, `--check` FAILS. Never a vacuous pass.
 #   C1 NOT-STARTED  no ref AND no evidence of one, past declared_at+boot_s                    ROW
 #                   (or the ref exists but is STILL at its fire-time sha — see BASELINE)
+#                   READABLE AS "never booted" ONLY under the boot contract — see CONTRACT below.
 #   C2 BOOTING      same, still inside the boot budget — expected, not a fault              no row
 #   C3 LANDED       every declared path is content-present on the trunk ref                 no row
 #   C4 STALLED      ref exists, sha unchanged for > stall_s (sidecar evidence REQUIRED)       ROW
@@ -172,6 +176,48 @@
 # It is checked AFTER C3: a session whose declared content is on trunk is finished, and how its ref
 # moved is no longer a question worth alarming on.
 #
+# ── CONTRACT: the PREMISE C1 rests on, and it was prose for three weeks (backlog 0c8b39b67665) ───
+# C1 says "never started". Nothing about an absent ref says that on its own: a session that booted,
+# read its brief, worked, and had nothing to commit pushes exactly as much as one that never ran —
+# nothing. The two are ONE observation from here, and no sensor separates them, because there is no
+# inbound channel to the VM to ask.
+#
+# CLOUD_OBSERVABILITY.md §4.1 resolves it by CONTRACT rather than by sensor: the brief requires the
+# session's FIRST act to be pushing the declared branch, an empty commit being enough. Absence then
+# means something, because the session was told to produce presence before doing anything else.
+#
+# 🚨 THAT CONTRACT WAS NEVER ISSUED TO ANYONE. It existed in §4.1 and §8 step 2 as prose and in no
+# executable anywhere: `cc-offload`'s API route delivered the operator's brief verbatim, and
+# `handoff-fire.sh`'s CLI route appended a RETURN instruction ("push whatever you have before you
+# finish") which is a different contract — it makes absence readable at the END of a session and
+# says nothing about the beginning, and it never mentions the empty commit that is the whole point.
+# So every NOT-STARTED verdict this tool has ever emitted rested on a premise no session was ever
+# under. The cost is measured, twice over and independently:
+#   · 222 of 262 live sessions (2026-08-27) had ended a turn `need_input` — they had worked and
+#     ASKED A QUESTION — and were filed NOT-STARTED (see the `inbox` verb's note below).
+#   · 106 of a 133-session NOT-STARTED pile (2026-08-23, bin/cc-eligible:404) had booted onto a VM
+#     with the repo attached and correctly DECLINED an item for a repo they were not given. One
+#     spent $2.00 reaching that verdict. They are 80% of the pile and not one of them failed to
+#     start.
+#
+# Both halves are now executable and BOTH are needed — issuing without recording leaves the verdict
+# assuming, recording without issuing leaves it empty:
+#   `cc-cloud contract --branch <b>`   renders the text. ONE renderer, so a second fire path cannot
+#                                      drift a second wording of the same contract.
+#   `cc-cloud contract --issued <id>`  stamps `contract=issued` AFTER the brief carrying it was
+#                                      actually delivered — a fact, never an intention. A fire whose
+#                                      delivery fails must not leave a declaration claiming it.
+# `contract=` absent ⇒ the premise is missing, and C1's `detail` says so rather than asserting a
+# diagnosis it cannot support. Same law as the BASELINE probe above, one level up: the arm does not
+# invent the measurement it did not take.
+#
+# WHAT THIS DELIBERATELY DOES NOT DO: it does not add a state. The row schema below invites one
+# ("consumers must filter on .kind only"), but five consumers on trunk switch on the state STRING
+# — cc-backlog's cloud_map (reopens the item), custody-deathwatch (discharges the debt),
+# cloud-return, cc-eligible, cc-dispatch — and each needs its own ruling about a session whose
+# premise was never in force. That is a decision per consumer, not a rename; it is recorded in
+# CLOUD_OBSERVABILITY.md §8.2 rather than smuggled in here.
+#
 # C3 precedes C4 DELIBERATELY: a finished session stops pushing, so a STALLED-first order would
 # alarm forever on every successful cloud session — the failure mode where an alarm that always
 # fires carries the same zero bits as one that never fires.
@@ -186,7 +232,8 @@
 #
 # READ-ONLY against the network and against the git repo. `git ls-remote` performs no fetch and
 # writes no ref. The only bytes this program writes are its own declarations and sidecars under
-# CC_CLOUD_STATE, and only `declare` / `retire` / `poll` write at all.
+# CC_CLOUD_STATE, and only `declare` / `retire` / `poll` / `contract --issued` write at all
+# (`contract --branch` is a pure renderer and touches nothing).
 #
 # Env seams (the override surface is what makes --selftest and the suite hermetic):
 #   CC_CLOUD_STATE     declaration dir (~/.claude/autonomy/cloud)   CC_CLOUD_NOW    epoch override
@@ -546,7 +593,7 @@ trailer_supported() { # <claude-binary> → 0 yes, 1 no, 2 cannot tell
 classify() { # <id>
   local id="$1" f="$STATE/$1.decl" seen="$STATE/$1.seen"
   local branch remote repo paths trunk url dat boot stall life
-  local sha rc n age url_cmd first_seen sha_age base_sha base_probe seen_sha paths_src pushed
+  local sha rc n age url_cmd first_seen sha_age base_sha base_probe seen_sha paths_src pushed contract
 
   branch="$(dfield "$f" branch)"
   remote="$(dfield "$f" remote)"
@@ -555,6 +602,7 @@ classify() { # <id>
   trunk="$(dfield "$f" trunk)";       [ -n "$trunk" ] || trunk="origin/main"
   url="$(dfield "$f" url)";           [ -n "$url" ] || url="https://claude.ai/code"
   dat="$(dfield "$f" declared_at)"
+  contract="$(dfield "$f" contract)"
   boot="$(dfield "$f" boot_s)";       is_num "$boot"  || boot="$DEF_BOOT"
   stall="$(dfield "$f" stall_s)";     is_num "$stall" || stall="$DEF_STALL"
   life="$(dfield "$f" life_s)";       is_num "$life"  || life="$DEF_LIFE"
@@ -585,7 +633,16 @@ classify() { # <id>
   # evidence-of-push alone is the defect below.
   if [ -z "$sha" ] && [ "$pushed" -eq 0 ]; then
     if [ "$age" -gt "$boot" ]; then
-      printf 'NOT-STARTED\tno ref after %s (boot budget %s)\t%s\n' "$(dur "$age")" "$(dur "$boot")" "$url_cmd"
+      # THE PREMISE, SPENT HERE. "never started" is only what an absent ref means when the session
+      # was told to push before doing anything (see CONTRACT in the header). Unattested, the same
+      # ref-absence is equally explained by a session that booted, worked and had nothing to commit
+      # — measured as 80% of one 133-session pile — so the detail names the missing premise instead
+      # of the diagnosis. The STATE is unchanged on purpose: five consumers switch on that string.
+      if [ "$contract" = "issued" ]; then
+        printf 'NOT-STARTED\tno ref after %s (boot budget %s)\t%s\n' "$(dur "$age")" "$(dur "$boot")" "$url_cmd"
+      else
+        printf 'NOT-STARTED\tno ref %s; NO boot contract was issued\t%s\n' "$(dur "$age")" "$url_cmd"
+      fi
     else
       printf 'BOOTING\tno ref yet, %s into a %s budget\t-\n' "$(dur "$age")" "$(dur "$boot")"
     fi
@@ -615,7 +672,13 @@ classify() { # <id>
   base_sha="$(dfield "$f" base_sha)"
   if [ "$base_probe" = "ok" ] && [ -n "$base_sha" ] && [ "$sha" = "$base_sha" ]; then
     if [ "$age" -gt "$boot" ]; then
-      printf 'NOT-STARTED\tref still at pre-fire sha after %s\t%s\n' "$(dur "$age")" "$url_cmd"
+      # Same premise as the no-ref arm above, and it is the same sentence one level down: an
+      # UNMOVED ref is "produced nothing", which is only "never booted" under the contract.
+      if [ "$contract" = "issued" ]; then
+        printf 'NOT-STARTED\tref still at pre-fire sha after %s\t%s\n' "$(dur "$age")" "$url_cmd"
+      else
+        printf 'NOT-STARTED\tref unmoved %s; NO boot contract issued\t%s\n' "$(dur "$age")" "$url_cmd"
+      fi
     else
       printf 'BOOTING\tno push yet, %s into a %s budget\t-\n' "$(dur "$age")" "$(dur "$boot")"
     fi
@@ -691,10 +754,91 @@ do_check() {
 }
 
 # ── mutating verbs ───────────────────────────────────────────────────────────────────────────────
+
+# ── contract — §4.1's absence contract, in the only form that can be in force ────────────────────
+# Two arms, and they are the two halves of one fact (see CONTRACT in the header):
+#   --branch <b>   RENDER the text a fire prepends to its brief. Pure stdout, writes nothing.
+#   --issued <id>  RECORD that a delivered brief carried it. The only write, and it happens AFTER
+#                  the delivery it attests to.
+#
+# THE TEXT IS ADDRESSED TO THE VM AND MUST BE RUNNABLE THERE. Three measured constraints shape it,
+# and getting any of them wrong produces a contract that reads fine and cannot be executed:
+#   1. `checkout -B`, not `switch -c`. The API create authorises the branch in the create body's
+#      `outcomes.git_info.branches` (scripts/cloud-create-api.py:357), so the VM may ALREADY be on
+#      it — `switch -c` fails on an existing branch and the session's first act becomes an error.
+#      `-B` is create-or-reset-to-HEAD: correct from either starting point, and re-runnable.
+#   2. The branch name is not the session's to choose. Push is refused off the session's own working
+#      branch ("git push works only against the session's current working branch" —
+#      code.claude.com/docs/en/cloud-environments, §7.4), and that branch is the declared one.
+#   3. The EMPTY commit is the load-bearing word, not filler. A session told merely to "push your
+#      work" pushes nothing when it has no work — which is the exact observation that has to mean
+#      something. Saying "push first, even with nothing" is what converts absence into evidence.
+# It is deliberately silent about WHAT to do — that is the brief's job, and this text is prepended
+# to it. A contract that restated the task would be a second, weaker brief.
+cmd_contract() {
+  local branch="" id="" remote="origin" issued="" f
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --branch)  branch="${2:-}"; shift 2 ;;
+      --id)      id="${2:-}"; shift 2 ;;
+      --remote)  remote="${2:-}"; shift 2 ;;
+      --issued)  issued="${2:-}"; shift 2 ;;
+      *) echo "cc-cloud contract: unknown arg $1" >&2; return 2 ;;
+    esac
+  done
+
+  # ── the RECORD arm ─────────────────────────────────────────────────────────────────────────────
+  # Idempotent, and it refuses an id with no declaration: stamping a fact onto nothing would leave
+  # the attestation somewhere no verdict ever reads it, which is worse than not stamping.
+  if [ -n "$issued" ]; then
+    case "$issued" in *[!A-Za-z0-9._-]*) echo "cc-cloud contract: --issued <id> must be [A-Za-z0-9._-]+" >&2; return 2 ;; esac
+    f="$STATE/$issued.decl"
+    [ -f "$f" ] || { echo "cc-cloud contract: no such declaration: $issued (declare it first)" >&2; return 1; }
+    [ "$(dfield "$f" contract)" = "issued" ] && { printf 'contract already recorded issued for %s\n' "$issued"; return 0; }
+    printf 'contract=issued\n' >> "$f" || return 1
+    printf 'contract recorded issued for %s — absence past its boot budget now means NOT-STARTED\n' "$issued"
+    return 0
+  fi
+
+  # ── the RENDER arm ─────────────────────────────────────────────────────────────────────────────
+  [ -n "$branch" ] || { echo "cc-cloud contract: --branch <b> is REQUIRED (the contract names ONE ref, or it names nothing)" >&2; return 2; }
+  local NL='
+'
+  case "$branch$remote$id" in
+    *"$NL"*) echo "cc-cloud contract: newline in a field" >&2; return 2 ;;
+  esac
+
+  cat <<EOF
+── BOOT CONTRACT — do this BEFORE anything else, including reading the brief below ──
+You are running in an Anthropic-managed VM. Nothing on the machine that fired you can
+see your processes, your filesystem, your terminal or your transcript. Exactly ONE
+signal reaches home: whether ${branch} exists on ${remote}, and whether it moves.
+
+So make that ref exist first, before you read the task, plan, or think:
+
+    git checkout -B ${branch}
+    git commit --allow-empty -m "chore: boot ${id:-$branch}"
+    git push -u ${remote} ${branch}
+
+Do it even though you have nothing to commit yet — the empty commit IS the point.
+Use that branch name exactly: a push to any other ref is refused, and a push nobody
+is watching is the same as no push at all.
+
+WHY, so you do not skip it as ceremony: until that ref exists, "this session never
+booted" and "this session booted, worked, and had nothing to push" are the SAME
+observation from outside, and the observer must report you dead while you are working.
+Your first push is what makes your silence mean something.
+
+Then push again at every milestone, and push whatever you have before you finish
+even if it is incomplete. Each push is the only heartbeat you have.
+──────────────────────────────────────────────────────────────────────────────────────
+EOF
+}
+
 cmd_declare() {
   local id="" branch="" remote="origin" repo="$ROOT" paths="" trunk="" url="" surface="" item="" account=""
   local boot="" stall="" life="" f base="" brc=0
-  local notify_back="" goal="" goal_probe="" custody=""
+  local notify_back="" goal="" goal_probe="" custody="" contract=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --id)      id="${2:-}"; shift 2 ;;
@@ -730,6 +874,15 @@ cmd_declare() {
       --goal)        goal="${2:-}"; shift 2 ;;
       --goal-probe)  goal_probe="${2:-}"; shift 2 ;;
       --custody)     custody="${2:-}"; shift 2 ;;
+      # THE BOOT CONTRACT, ATTESTED (see CONTRACT in the header). Only ever `issued`, and only from
+      # a caller for whom delivery has ALREADY happened — the CLI route, where the brief IS the
+      # create payload. The API route delivers AFTER this declaration (it must: an undeclared live
+      # session is unobservable), so it cannot know here and uses `contract --issued <id>` once the
+      # send returns. Anything else is refused rather than stored: a field whose value is a guess
+      # would be read by classify() as a measurement.
+      --contract)    contract="${2:-}"; shift 2
+                     [ "$contract" = "issued" ] || {
+                       echo "cc-cloud declare: --contract takes only 'issued', and only when the brief carrying it was ALREADY delivered (got: '$contract')" >&2; return 2; } ;;
       --boot)    boot="${2:-}"; shift 2 ;;
       --stall)   stall="${2:-}"; shift 2 ;;
       --life)    life="${2:-}"; shift 2 ;;
@@ -811,6 +964,7 @@ cmd_declare() {
     [ -n "$goal" ]        && printf 'goal=%s\n' "$goal"
     [ -n "$goal_probe" ]  && printf 'goal_probe=%s\n' "$goal_probe"
     [ -n "$custody" ]     && printf 'custody=%s\n' "$custody"
+    [ -n "$contract" ]    && printf 'contract=%s\n' "$contract"
     is_num "$boot"  && printf 'boot_s=%s\n' "$boot"
     is_num "$stall" && printf 'stall_s=%s\n' "$stall"
     is_num "$life"  && printf 'life_s=%s\n' "$life"
@@ -818,6 +972,17 @@ cmd_declare() {
   } > "$f" || return 1
   rm -f "$STATE/$id.retired"
   printf 'declared %s (branch %s on %s) — it is now observable\n' "$id" "$branch" "$remote"
+  # The contract warning sits beside the baseline one because it is the same class of gap: a
+  # declaration written with a measurement missing, whose absence must be LOUD at the one moment a
+  # caller can still fix it. Not an error — an undeclared session is strictly worse than one
+  # declared without an attested contract, the same trade-off the baseline probe already makes.
+  if [ -z "$contract" ]; then
+    printf '  ! no boot contract attested. Absence past the boot budget will NOT be readable as\n' >&2
+    printf '    "never booted" — a session that worked and had nothing to push looks identical.\n' >&2
+    # shellcheck disable=SC2016  # the backticks are literal — this line QUOTES a command to run
+    printf '    Prepend `cc-cloud contract --branch %s --id %s` to the brief, then attest it:\n' "$branch" "$id" >&2
+    printf '      cc-cloud contract --issued %s\n' "$id" >&2
+  fi
   if [ "$brc" -ne 0 ]; then
     printf '  ! fire-time baseline UNMEASURED (remote did not answer) — a pre-existing ref on %s\n' "$branch" >&2
     printf '    cannot be told from this session pushing one; re-declare when the remote answers.\n' >&2
@@ -1159,6 +1324,69 @@ do_selftest() {
   _st_expect "control: the session that DID push is ALIVE at that same clock" ALIVE boot
   CC_CLOUD_NOW=2000000000
 
+  # ── CONTRACT (backlog 0c8b39b67665). The premise C1 rests on, now attestable. ──────────────────
+  # A helper over the detail column, because the STATE is deliberately unchanged here: what the
+  # contract buys is that the verdict stops claiming a diagnosis it cannot support, and the claim
+  # lives in `detail`. Asserting on the state alone would pass identically before and after the fix.
+  _st_detail() { # <name> <substring-expected-in-detail> <id>
+    local got; got="$(classify "$3")"; got="${got#*	}"; got="${got%%	*}"
+    case "$got" in
+      *"$2"*) _ST_PASS=$((_ST_PASS + 1)); printf 'ok   %s\n' "$1" ;;
+      *) _ST_FAIL=$((_ST_FAIL + 1)); printf 'FAIL %s (want detail containing "%s", got "%s")\n' "$1" "$2" "$got" ;;
+    esac
+  }
+  # The RENDERER. It refuses without a branch, and what it emits must be RUNNABLE on the VM: the
+  # three lines below are the contract's whole executable content, and a wording change that drops
+  # one silently turns the contract back into prose.
+  _st_rc "contract REFUSES without --branch — a contract naming no ref names nothing" 2 cmd_contract
+  _CT="$(cmd_contract --branch feat/x --id sess_1 2>/dev/null)"
+  for _need in 'git checkout -B feat/x' 'commit --allow-empty' 'git push -u origin feat/x'; do
+    case "$_CT" in
+      *"$_need"*) _ST_PASS=$((_ST_PASS + 1)); printf 'ok   the rendered contract carries: %s\n' "$_need" ;;
+      *) _ST_FAIL=$((_ST_FAIL + 1)); printf 'FAIL the rendered contract is MISSING: %s\n' "$_need" ;;
+    esac
+  done
+  # NEGATIVE CONTROL on the renderer: `switch -c` is the spelling that FAILS on a branch the API
+  # create already put the VM on, so its absence is a property under test, not an accident.
+  # shellcheck disable=SC2016  # the backticks are literal — these lines NAME a git spelling
+  case "$_CT" in
+    *"switch -c"*) _ST_FAIL=$((_ST_FAIL + 1)); printf 'FAIL the contract says `switch -c`, which errors when the VM is already on the branch\n' ;;
+    *) _ST_PASS=$((_ST_PASS + 1)); printf 'ok   the contract does NOT say `switch -c` (it errors on an existing branch)\n' ;;
+  esac
+
+  # THE VERDICT HALF, on a branch that was never pushed — the C1 fixture. `boot` cannot serve here:
+  # it has a live ref by now and reads ALIVE, which would have made both assertions vacuous.
+  _st_kv_early() { local got; got="$(dfield "$STATE/$2.decl" contract)"
+    if [ "$got" = "$3" ]; then _ST_PASS=$((_ST_PASS + 1)); printf 'ok   %s\n' "$1"
+    else _ST_FAIL=$((_ST_FAIL + 1)); printf 'FAIL %s (want "%s", got "%s")\n' "$1" "$3" "$got"; fi; }
+  cmd_declare --id ctno --branch feat/never --remote "$_ST_D/remote.git" --repo "" >/dev/null 2>&1
+  CC_CLOUD_NOW=$((2000000000 + 5000))
+  _st_detail "unattested: the C1 detail names the MISSING PREMISE, not a diagnosis" "NO boot contract" ctno
+  _st_detail "unattested: the BASELINE arm says it too — an unmoved ref is the same claim" "NO boot contract" reused
+  _st_expect "unattested, the STATE is still NOT-STARTED — no consumer's case arm moves" NOT-STARTED ctno
+  CC_CLOUD_NOW=2000000000
+
+  # …and attesting it flips exactly that, on the SAME fixture at the SAME clock — which is what
+  # makes the assertions above about the CONTRACT and not about some other property of `ctno`.
+  _st_rc "contract --issued REFUSES an id with no declaration" 1 cmd_contract --issued nosuchid
+  _st_rc "contract --issued stamps a real declaration" 0 cmd_contract --issued ctno
+  _st_rc "…and is idempotent (a fire path may attest twice)" 0 cmd_contract --issued ctno
+  _st_kv_early "the attestation is written once, not appended twice" ctno issued
+  CC_CLOUD_NOW=$((2000000000 + 5000))
+  _st_detail "attested: the C1 detail EARNS 'never booted' and names the budget" "boot budget" ctno
+  _st_expect "attested, the STATE is unchanged too — the fix is in the CLAIM, not the enum" NOT-STARTED ctno
+  CC_CLOUD_NOW=2000000000
+  cmd_contract --issued reused >/dev/null
+  CC_CLOUD_NOW=$((2000000000 + 5000))
+  _st_detail "attested: the BASELINE arm earns it too" "pre-fire sha" reused
+  CC_CLOUD_NOW=2000000000
+  # declare --contract is the CLI route's door to the same field (its brief IS the create payload,
+  # so delivery is already a fact there) — and it takes nothing but `issued`.
+  _st_rc "declare --contract REFUSES a value that is not 'issued'" 2 \
+    cmd_declare --id ctbad --branch feat/z --remote "$_ST_D/remote.git" --repo "" --contract pending
+  cmd_declare --id ctok --branch feat/z --remote "$_ST_D/remote.git" --repo "" --contract issued >/dev/null 2>&1
+  _st_kv_early "declare --contract issued records the attestation at declaration time" ctok issued
+
   # PREFLIGHT (migrated from cc-cloud-watch). The refusal that carries the point: a cloud VM clones
   # from the REMOTE, so a local-only branch is invisible to it and the session runs against the
   # default branch instead — measured 2026-08-07, origin held 1 head against 286 local branches.
@@ -1273,6 +1501,7 @@ do_selftest() {
 # ── dispatch ─────────────────────────────────────────────────────────────────────────────────────
 case "${1:-}" in
   preflight)  shift; cmd_preflight "$@"; exit $? ;;
+  contract)   shift; cmd_contract "$@"; exit $? ;;
   declare)    shift; cmd_declare "$@"; exit $? ;;
   fill-paths) shift; cmd_fill_paths "$@"; exit $? ;;
   retire)     shift; cmd_retire "$@"; exit $? ;;
@@ -1301,7 +1530,7 @@ case "${1:-}" in
   --selftest) do_selftest; exit $? ;;
   -h|--help)  sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   --json|--table|--check) ;;
-  "")  echo "cc-cloud: pick a verb (preflight|declare|fill-paths|retire|poll|is-offbox|show|list|inbox|--json|--table|--check|--selftest)" >&2; exit 2 ;;
+  "")  echo "cc-cloud: pick a verb (preflight|contract|declare|fill-paths|retire|poll|is-offbox|show|list|inbox|--json|--table|--check|--selftest)" >&2; exit 2 ;;
   *)   echo "cc-cloud: unknown arg $1" >&2; exit 2 ;;
 esac
 

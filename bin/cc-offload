@@ -571,13 +571,38 @@ cmd_up_api() {
         || note "cc-offload: custody could not be opened for $sid — the close-integrity arm is NOT armed for it."
     fi
 
-    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$(cat "$pf")" >/dev/null 2>&1
+    # THE BOOT CONTRACT RIDES IN FRONT OF THE BRIEF (CLOUD_OBSERVABILITY.md §4.1, backlog
+    # 0c8b39b67665). This route used to deliver `cat "$pf"` verbatim, so the contract that makes an
+    # absent ref MEAN something was never in force on the one route that can actually push — and
+    # every NOT-STARTED verdict about a session fired from here rested on a premise it was never
+    # under. The text is `cc-cloud`'s to render, never composed here: one contract, one wording, and
+    # the tool whose state function depends on it is the tool that says what it is.
+    # A render failure is NOT fatal — an undelivered brief is strictly worse than an unattested one
+    # — but it must be legible, and the attestation below is then withheld rather than assumed.
+    local brief contract_text="" ctrc=0
+    contract_text="$("$CLOUD_BIN" contract --branch "$br" --id "$sid" 2>/dev/null)" || ctrc=$?
+    if [ "$ctrc" = 0 ] && [ -n "$contract_text" ]; then
+      brief="$contract_text
+$(cat "$pf")"
+    else
+      brief="$(cat "$pf")"; ctrc=1
+      note "cc-offload: could not render the boot contract for $br — $sid ships WITHOUT it, and its"
+      note "  absence past the boot budget will not be readable as 'never booted'."
+    fi
+    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$brief" >/dev/null 2>&1
     local drc=$?
     if [ "$drc" != 0 ]; then
       note "cc-offload: $sid created+declared but the brief did NOT queue (cc-notify exit $drc)."
       note "  Retry just the delivery: cc-notify --cloud $sid \"\$(cat $pf)\""
       rc=11; break
     fi
+    # ATTEST ONLY NOW. The declaration is written before delivery (it must be — an undeclared live
+    # session is unobservable), so at declare time "the session was told to push first" is an
+    # intention. It becomes a fact here, one line after the send returned 0, and never before:
+    # a declaration claiming a contract that a failed delivery never carried is exactly the
+    # unfounded premise this whole change exists to remove.
+    [ "$ctrc" = 0 ] && { "$CLOUD_BIN" contract --issued "$sid" >/dev/null 2>&1 \
+      || note "cc-offload: $sid got the boot contract but it could NOT be attested — its NOT-STARTED verdicts will read as unattested."; }
     fired=$((fired+1))
     printf '%s✓%s %s on %s — anthropic_cloud VM, repo ATTACHED, branch %s\n' "$C_OK" "$C_OFF" "$sid" "$account" "$br"
     printf '  view   : https://claude.ai/code/%s\n  observe: cc-offload ls\n  land   : cc-offload land\n' "$sid"

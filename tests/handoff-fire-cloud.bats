@@ -292,6 +292,15 @@ if [ "${1:-}" = preflight ]; then
   if [ -n "${STUB_PF_LOG:-}" ]; then echo "$@" >> "$STUB_PF_LOG"; fi
   exit "${STUB_PF_RC:-0}"
 fi
+# `contract` gets its own log for the same reason `preflight` does: this file is decl.log, and
+# every `[ ! -f "$CLOUD_DECL_LOG" ]` in this suite asserts that NOTHING WAS DECLARED. Rendering a
+# contract is not declaring — it is a pure read that happens before the create even exists — so
+# logging it here would make a refused fire look like it had declared a session.
+if [ "${1:-}" = contract ]; then
+  if [ -n "${STUB_CONTRACT_LOG:-}" ]; then echo "$@" >> "$STUB_CONTRACT_LOG"; fi
+  [ "${STUB_CONTRACT_RC:-0}" = 0 ] && echo "STUB-BOOT-CONTRACT"
+  exit "${STUB_CONTRACT_RC:-0}"
+fi
 echo "$@" >> "$CLOUD_DECL_LOG"
 exit "${CLOUD_DECL_RC:-0}"
 EOF
@@ -415,6 +424,46 @@ EOF
 # so the fire proceeded to the create and exited on the create's own outcome instead of on 12.
 # 19 is green on BOTH trees BY DESIGN and is not a weaker case for it: it is the non-discrimination
 # control proving the new gate is a GATE and not a blanket refusal of the venue.
+
+@test "17b the payload carries the BOOT contract, ahead of the brief, and the declare attests it" {
+  # THE PREMISE, DELIVERED (backlog 0c8b39b67665). Case 17 pins the RETURN contract — where to push
+  # when you have something to push. That leaves the beginning unspoken, so a session that boots,
+  # works and has nothing to commit produces no ref, and cc-cloud's C1 files it "never started" on
+  # a premise no session was ever under. The boot contract is the other half, and it must arrive
+  # FIRST: its entire content is "do this before you read the brief".
+  cloud_acct; cloud_ccloud
+  # The banner must carry an ID: without one the create is `created-unidentified` (case 14) and
+  # exits 11 before ever declaring, so the attestation assertion below would pass vacuously.
+  cloud_claude "$(printf 'Created cloud session: t\x1b[8GView: https://claude.ai/code/session_01TESTTESTTESTTESTTESTT?from=cli')" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log" \
+        STUB_CONTRACT_LOG="$BATS_TEST_TMPDIR/contract.log"
+  [ "$status" -eq 0 ]
+  # rendered by cc-cloud, against the branch this fire assigned — never composed in this file
+  grep -q -- '--branch claude/fire-' "$BATS_TEST_TMPDIR/contract.log" || false
+  local ct brief
+  ct="$(grep -n 'STUB-BOOT-CONTRACT' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  brief="$(grep -n 'HOW TO RETURN YOUR WORK' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$ct" ] || { echo "the payload never carried the boot contract"; false; }
+  [ "$ct" -lt "$brief" ] || { echo "the boot contract must PRECEDE the brief (ct=$ct brief=$brief)"; false; }
+  # …and the declaration says so. On THIS route the brief IS the create payload, so a create that
+  # returned makes the attestation a fact rather than an intention.
+  grep -q -- '--contract issued' "$CLOUD_DECL_LOG" || false
+}
+
+@test "17c a contract that cannot be rendered still fires — and the declare does NOT claim one" {
+  # POSITIVE CONTROL for 17b, in the direction that matters: an undelivered fire is worse than an
+  # unattested one, so the render failure degrades. What it must never do is attest anyway — a
+  # declaration claiming a contract the payload never carried is the unfounded premise this arm
+  # exists to remove, restored through a different door.
+  cloud_acct; cloud_ccloud
+  cloud_claude "$(printf 'Created cloud session: t\x1b[8GView: https://claude.ai/code/session_01TESTTESTTESTTESTTESTT?from=cli')" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log" STUB_CONTRACT_RC=2
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no boot contract could be rendered"* ]] || false
+  ! grep -q 'STUB-BOOT-CONTRACT' "$BATS_TEST_TMPDIR/create.log" || false
+  grep -q 'HOW TO RETURN YOUR WORK' "$BATS_TEST_TMPDIR/create.log" || false   # the fire still happened
+  ! grep -q -- '--contract' "$CLOUD_DECL_LOG" || false
+}
 
 @test "17 the payload CREATES the assigned branch before pushing it — not a push to a name nothing holds" {
   cloud_acct; cloud_ccloud

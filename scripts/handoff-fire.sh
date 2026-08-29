@@ -8013,6 +8013,31 @@ if [ "$CLOUD" = 1 ]; then
   CLOUD_BRANCH="$(cc_cloud_branch_name)"
   CLOUD_CWD="$PWD"; [ -d "$CLOUD_CWD" ] || CLOUD_CWD="$REPO"
 
+  # cc-cloud is RESOLVED HERE, before the payload, because the payload now needs it. The
+  # reachability REFUSAL stays where it was — after the create, where losing a live session is the
+  # thing at stake — so this hoist moves a variable assignment and no decision.
+  CLOUD_DECL="cc-cloud"
+  if [ -n "${CC_CLOUD_BIN+set}" ]; then CLOUD_DECL="$CC_CLOUD_BIN"      # SET-including-EMPTY seam
+  elif [ -x "$(dirname "$_CC_KS")/../bin/cc-cloud" ]; then CLOUD_DECL="$(dirname "$_CC_KS")/../bin/cc-cloud"
+  elif [ -x "${HOME:-}/.claude/bin/cc-cloud" ]; then CLOUD_DECL="${HOME:-}/.claude/bin/cc-cloud"
+  fi
+
+  # ── THE BOOT CONTRACT (CLOUD_OBSERVABILITY.md §4.1, backlog 0c8b39b67665) ───────────────────────
+  # The trailer below is a RETURN contract: it tells the session where to push when it has something
+  # to push. That makes absence readable at the END and says nothing about the beginning, and it
+  # never mentions the empty commit — so a session that boots, works and has nothing to commit still
+  # produces no ref, and cc-cloud's C1 calls it "never started" on a premise it was never under.
+  # The BOOT contract is the missing half and it goes FIRST, ahead of the brief, because its whole
+  # content is "do this before anything else". Rendered by cc-cloud rather than written here: the
+  # tool whose state function depends on the contract is the tool that says what the contract is,
+  # and a second wording in a second file is how one contract becomes two that disagree.
+  CLOUD_CONTRACT=""
+  if [ -n "$CLOUD_DECL" ] && { command -v "$CLOUD_DECL" >/dev/null 2>&1 || [ -x "$CLOUD_DECL" ]; }; then
+    CLOUD_CONTRACT="$("$CLOUD_DECL" contract --branch "$CLOUD_BRANCH" 2>/dev/null || true)"
+  fi
+  [ -n "$CLOUD_CONTRACT" ] || \
+    echo "!! cloud fire: no boot contract could be rendered — absence of $CLOUD_BRANCH will not be readable as 'never booted'." >&2
+
   # The payload = the brief, plus the ONE instruction that makes the result reachable. A cloud VM
   # has no ~/.claude, no cc-notify and no /ship (§1, G6), so the local trailers below — the
   # back-channel ping, the self-retire, the pane bookkeeping — are all unrunnable there. Its push
@@ -8034,7 +8059,8 @@ if [ "$CLOUD" = 1 ]; then
   # there the name is authorised AT CREATE. cc_cloud_create's signature is `cfg cwd prompt`
   # (scripts/lib/cloud-create.sh:185): the CLI leg has NO branch parameter at all, so the payload
   # is the only place the branch can be established, and establishing it is a real `switch -c`.
-  CLOUD_PAYLOAD="$(cat "$PROMPT_FILE")
+  CLOUD_PAYLOAD="${CLOUD_CONTRACT:+$CLOUD_CONTRACT
+}$(cat "$PROMPT_FILE")
 "'
 ── HOW TO RETURN YOUR WORK (this session runs off-box; read this before you finish) ──
 You are running in an Anthropic-managed VM. Nothing on the operator'"'"'s machine can see your
@@ -8143,11 +8169,9 @@ of any kind. A local reconciler (scripts/cloud-reconcile.sh) discovers the branc
   # 600 s timer — so nothing goes between these two calls. §8.1's own finding is why the order is
   # create-then-declare and not the reverse: the id does not exist until after the fire, so it
   # cannot be declared before it.
-  CLOUD_DECL="cc-cloud"
-  if [ -n "${CC_CLOUD_BIN+set}" ]; then CLOUD_DECL="$CC_CLOUD_BIN"      # SET-including-EMPTY seam
-  elif [ -x "$(dirname "$_CC_KS")/../bin/cc-cloud" ]; then CLOUD_DECL="$(dirname "$_CC_KS")/../bin/cc-cloud"
-  elif [ -x "${HOME:-}/.claude/bin/cc-cloud" ]; then CLOUD_DECL="${HOME:-}/.claude/bin/cc-cloud"
-  fi
+  # CLOUD_DECL was resolved before the payload (the boot contract is rendered with it). Only the
+  # refusal lives here, unchanged: it must fire AFTER the create, because the cost it is guarding
+  # against is a live session nothing can see, which does not exist until the create returns.
   if [ -z "$CLOUD_DECL" ] || ! command -v "$CLOUD_DECL" >/dev/null 2>&1 && [ ! -x "$CLOUD_DECL" ]; then
     echo "!! cloud fire: session $CLOUD_ID CREATED but cc-cloud is unreachable — IT IS UNDECLARED." >&2
     echo "   Declare it by hand before the 600s orphan reaper sees a team with no live lead:" >&2
@@ -8155,8 +8179,13 @@ of any kind. A local reconciler (scripts/cloud-reconcile.sh) discovers the branc
     emit_fire_refusal cloud-declare-absent "session $CLOUD_ID created, cc-cloud unreachable — session is live and UNDECLARED"
     exit 11
   fi
+  # `--contract issued` is a FACT on this route, not an intention: unlike cc-offload's API route the
+  # brief IS the create payload here, so by the time this line runs the contract has already been
+  # delivered with it. It is passed only when one was actually rendered.
+  # shellcheck disable=SC2086  # deliberate word-split: empty expands to NO argument, not an empty one
   if ! "$CLOUD_DECL" declare --id "$CLOUD_ID" --branch "$CLOUD_BRANCH" --account "$CLOUD_ACCT" \
          --repo "$REPO" --url "https://claude.ai/code/$CLOUD_ID" \
+         ${CLOUD_CONTRACT:+--contract issued} \
          --item "handoff-fire $(basename "$PROMPT_FILE")" >&2; then
     echo "!! cloud fire: session $CLOUD_ID CREATED but the declaration FAILED — it is live and unobservable." >&2
     echo "     cc-cloud declare --id $CLOUD_ID --branch $CLOUD_BRANCH --account $CLOUD_ACCT --repo $REPO" >&2

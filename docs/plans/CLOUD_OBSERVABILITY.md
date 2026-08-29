@@ -150,6 +150,57 @@ session's brief requires its **first act** to be pushing that branch — an empt
 Absence then becomes informative: no ref inside the budget is `BOOTING` (expected); no ref past it
 is `NOT-STARTED` (actionable — re-fire, or check entitlement).
 
+🚨 **That contract was PROSE-ONLY for three weeks, and every `NOT-STARTED` verdict in that window
+rested on a premise no session was ever under** (backlog `0c8b39b67665`, closed 2026-08-29). It
+existed here and in §8 step 2 and in no executable anywhere: `cc-offload`'s API route — the only
+route whose sessions can actually push (§13.4) — delivered the operator's brief verbatim, and
+`handoff-fire.sh`'s CLI route appended a **return** instruction ("push whatever you have before you
+finish") which is a different contract entirely. A return contract makes absence readable at the
+END of a session and says nothing about its beginning, and it never mentions the empty commit that
+is the whole mechanism. So a session that booted, read its brief, worked, and had nothing to commit
+pushed exactly as much as one that never ran: nothing.
+
+The cost is measured twice, independently, and neither measurement was of a rare case:
+
+| | |
+| --- | --- |
+| 222 of 262 live sessions (2026-08-27) had ended a turn `need_input` — they had **worked and asked a question** — and the board filed every one `NOT-STARTED` | `bin/cc-cloud`'s `inbox` note |
+| 106 of a 133-session `NOT-STARTED` pile (2026-08-23) had booted onto a VM with the repo attached and correctly **declined** an item for a repo they were not given; one spent $2.00 reaching that verdict | `bin/cc-eligible:404` |
+
+**Both halves are now executable, and both are needed.** Issuing without recording leaves the
+verdict assuming; recording without issuing leaves it empty:
+
+```text
+cc-cloud contract --branch <b> [--id <id>]   render the text a fire prepends to its brief
+cc-cloud contract --issued <id>              record that a DELIVERED brief carried it
+cc-cloud declare … --contract issued         the same record, for a route where the brief IS
+                                             the create payload (delivery already happened)
+```
+
+ONE renderer, because two fire paths wording the same contract differently is how one contract
+becomes two that disagree — and the tool whose state function depends on the contract is the tool
+that says what the contract is. The declaration field is written **after** the delivery it attests
+to, never before: on the API route the declaration must exist before the brief is sent (an
+undeclared live session is unobservable, §8.1), so at declare time "this session was told to push
+first" is an *intention*, and only the send's return makes it a fact. `contract=` absent ⇒ the
+premise is missing, and C1's `detail` says so instead of asserting a diagnosis it cannot support —
+the same law as the fire-time baseline probe one level up: **the arm does not invent the
+measurement it did not take.**
+
+The rendered text carries three measured constraints, and getting any one wrong produces a contract
+that reads fine and cannot be executed:
+
+- **`git checkout -B`, not `git switch -c`.** The API create authorises the branch in the create
+  body's `outcomes.git_info.branches` (`scripts/cloud-create-api.py:357`), so the VM may already be
+  *on* it — `switch -c` fails on an existing branch and the session's first act becomes an error.
+  `-B` is create-or-reset-to-HEAD: correct from either start, and re-runnable. (§7.4's own trap 1
+  reached the opposite conclusion for the CLI route, where the VM is on `main` and has no branch
+  yet. Both are right for their route; the renderer takes the one that works from either.)
+- **The branch name is not the session's to choose.** Push is refused off the session's own working
+  branch (§7.4), and that branch is the declared one.
+- **The EMPTY commit is load-bearing, not filler.** A session told merely to "push your work"
+  pushes nothing when it has no work — which is the exact observation that has to mean something.
+
 ### 4.2 The discriminator the whole design rests on
 
 Measured, not assumed:
@@ -775,8 +826,13 @@ Before any cloud session is fired, in this order:
 
 1. `cc-cloud declare --id <id> --branch <b> --paths <what it will land> --url <session url>` —
    an undeclared cloud session is unobservable, and `declare` refuses without `--id`/`--branch`.
-2. The session's brief must require **pushing the declared branch as its first act**, so that
-   absence past the boot budget means something (§4.1).
+2. ✅ **IMPLEMENTED 2026-08-29** (backlog `0c8b39b67665`; §4.1 carries the finding). The session's
+   brief must require **pushing the declared branch as its first act**, so that absence past the
+   boot budget means something (§4.1) — and both fire paths now render that requirement with
+   `cc-cloud contract --branch <b>` and prepend it ahead of the brief, then record it on the
+   declaration (`contract=issued`). Unattested, C1's `detail` names the missing premise instead of
+   asserting "never booted". *Neither path issued anything before this: the API route sent the
+   brief verbatim, and the CLI route's trailer is a RETURN contract, not a boot one.*
 3. §5.2 must be wired first — otherwise `com.claude.team-orphan-reaper` may archive the team
    while the session is healthy.
 4. On completion, `cc-cloud retire --id <id>` — or let C3 `LANDED` render it silent, which it does
@@ -817,6 +873,38 @@ is the safe one. A reservation that never binds expires into `U0 UNKNOWN` (never
 finding** (§6.5). If the CLI create route ships a bundle of the local tree rather than cloning the
 remote, then the branch the VM pushes may not be the branch this box declared. Until one fire
 settles it, declare the branch the *brief* names and treat a mismatch as `U0`, not as absence.
+
+*Still the rule after step 2 shipped (2026-08-29): the renderer takes its `--branch` from the same
+variable the fire declares, so the two cannot disagree by construction — but that only guarantees
+the contract NAMES the declared branch, never that the VM can push it. A mismatch remains `U0`.*
+
+### 8.2 · What step 2 deliberately did NOT change: the state enum
+
+`NOT-STARTED` still fires for an unattested session. The fix is in the **claim** — the `detail`
+column — not in the vocabulary, and that is a decision rather than a shortcut.
+
+§5.1's row schema invites the other choice in as many words: *"Consumers must filter on `.kind`
+only, never on the `.state` enum, so a state added later still reaches the operator instead of
+being silently dropped."* But that is a rule for **row consumers**, and the consumers that matter
+here do not read rows at all — they read the state string out of `cc-cloud show` or `--table` and
+switch on it. Five of them are on trunk today, and each would need its own ruling about a session
+whose premise was never in force:
+
+| Consumer | What it does with the state | What a new state would do |
+| --- | --- | --- |
+| `bin/cc-backlog` `cloud_map` | `NOT-STARTED` ⇒ **reopen the item** into the wave | falls to `return 1` — the item stops being reopened |
+| `scripts/custody-deathwatch.sh:191` | `NOT-STARTED` ⇒ `GONE`, discharging the debt | `UNKNOWN` — custody stays open indefinitely |
+| `scripts/cloud-return.sh:273` | `NOT-STARTED` ⇒ "nothing to return" | "not a return state" — harmless |
+| `bin/cc-eligible` | reads the pile to explain it (`:404`) | census widens, no verdict changes |
+| `bin/cc-dispatch` | venue selection commentary | none |
+
+Two of those five change behaviour in the direction that **hides** work (an item that stops
+returning to the wave; a debt that never discharges), which is the wrong polarity for a change whose
+entire purpose is to stop over-claiming. Widening the enum is therefore real work with a per-consumer
+decision in it, not a rename — filed here rather than smuggled into `bin/cc-cloud`. **The honest
+statement of what step 2 buys is narrower and worth having on its own:** the premise C1 rests on is
+now issued, recorded, and auditable, so a `NOT-STARTED` row either earns its name or says out loud
+that it cannot.
 
 ---
 
