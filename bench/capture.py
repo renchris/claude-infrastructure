@@ -11,12 +11,19 @@ question (does a 2x capture actually buy a vision model anything, or does the
 model's own downscaling throw it away) can be measured rather than assumed.
 
 Usage: python3 capture.py <corpus-dir> [--dpr 1,2]
+
+`BENCH_CHROMIUM=/path/to/chrome` swaps the Playwright-managed `channel="chromium"`
+for an already-installed binary. The false-positive budget only means something if
+anyone can re-run it, and a host whose Chromium was provisioned outside pip (CI
+images, the web sandbox) has no `chromium` channel to select -- without this seam
+the control run is unreproducible off the machine that authored it.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import sys
 import time
@@ -142,13 +149,18 @@ def capture(corpus: pathlib.Path, dprs: list[int]) -> None:
     snaps.mkdir(exist_ok=True)
 
     timings = []
+    exe = os.environ.get("BENCH_CHROMIUM")
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            channel="chromium",
+            # An explicit binary wins over the channel; see the module docstring.
+            **({"executable_path": exe} if exe else {"channel": "chromium"}),
             args=[
                 "--force-color-profile=srgb",
                 "--disable-lcd-text",
                 "--hide-scrollbars",
+                # Only where the caller supplied the binary -- a provisioned image
+                # commonly runs as root, where Chromium's sandbox refuses to start.
+                *(["--no-sandbox"] if exe else []),
                 # Pins the host display scale so headless matches headed. Without it
                 # the two disagree on line-box rounding -- measured at ~1.5px drift
                 # accumulated over four paragraphs, with identical font metrics --
