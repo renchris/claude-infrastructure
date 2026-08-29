@@ -554,7 +554,17 @@ cmd_fold() {
       --kind)  kind="${2:-}"; shift 2 ;;
       --actor) actor="${2:-}"; shift 2 ;;
       --json)  as_json=1; shift ;;
-      --refs)  BUS_FOLD_REFS="${CC_BUS_REF_GLOB:-refs/remotes/*}"; shift ;;
+      # `**`, not `*`. git's for-each-ref matches patterns with wildmatch under WM_PATHNAME,
+      # where a single `*` does NOT cross a `/`. Every real remote-tracking ref is at least
+      # `refs/remotes/<remote>/<branch>`, and a cloud worker's branch is deeper still
+      # (`refs/remotes/origin/claude/fire-…`), so the old `refs/remotes/*` default matched
+      # EXACTLY ZERO refs — measured 0 vs 307 on this clone. `fold --refs` was therefore a
+      # silent no-op on the shipped default, which is the whole cloud→local read path this
+      # file exists to provide. It survived because both --refs tests pinned
+      # CC_BUS_REF_GLOB='refs/heads/*' — one segment deep, so the bug is unreachable from
+      # them; see the shipped-default test in tests/cc-bus.bats. Same class as the
+      # CC_BUS_ACTOR pinning the header already warns about.
+      --refs)  BUS_FOLD_REFS="${CC_BUS_REF_GLOB:-refs/remotes/**}"; shift ;;
       *) die "fold: unknown flag '$1'" ;;
     esac
   done

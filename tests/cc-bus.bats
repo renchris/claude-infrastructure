@@ -363,6 +363,45 @@ assert rows[0]["actor"] == "tester", rows
   [[ "$output" == *cafe123* ]]
 }
 
+@test "the SHIPPED default ref glob reaches a real remote-tracking branch" {
+  # REGRESSION. Both --refs tests above pin CC_BUS_REF_GLOB='refs/heads/*' — one segment
+  # deep, where a single `*` suffices — so neither could see that the SHIPPED default was
+  # `refs/remotes/*`, which git's for-each-ref matches with wildmatch under WM_PATHNAME.
+  # There `*` does not cross a `/`, and every remote-tracking ref is at least
+  # `refs/remotes/<remote>/<branch>` — so the default matched ZERO refs and `fold --refs`,
+  # the entire cloud→local read path, was a silent no-op in production while the suite was
+  # green. This test therefore pins NO glob: it asserts the default itself.
+  command -v git >/dev/null || skip "git unavailable"
+  g() { git -c user.email=t@example.com -c user.name=T "$@"; }
+  local root="$BATS_TEST_TMPDIR/shipped"; mkdir -p "$root"; cd "$root"
+  git init -q --bare origin.git
+  git clone -q origin.git work 2>/dev/null; cd work
+  mkdir -p bus/actors; echo '{"seed":1}' > bus/actors/seed.jsonl
+  g add -A; g commit -qm seed; git push -q origin HEAD:refs/heads/main
+
+  # A cloud worker pushes to a SLASHED branch name — the real shape the proxy pins it to,
+  # and one that `refs/remotes/*` cannot match even at the remote/branch level.
+  g checkout -q -b claude/fire-20260829T000000Z-1
+  CC_BUS_DIR="$root/work/bus" CC_BUS_ACTOR=vm-x "$BUS" "done" ITEM-Z --evidence d00dfeed >/dev/null
+  g add -A; g commit -qm "cloud shard"
+  git push -q origin HEAD:refs/heads/claude/fire-20260829T000000Z-1
+
+  # Return to a tree WITHOUT the record, and fetch so it exists only as a remote-tracking ref.
+  g checkout -q main 2>/dev/null || g checkout -q master
+  git fetch -q origin
+  grep -q d00dfeed bus/actors/*.jsonl && false   # CONTROL: not in the worktree
+
+  # CONTROL: the plain worktree fold must not see it.
+  run env CC_BUS_DIR="$root/work/bus" "$BUS" fold --json
+  [ "$status" -eq 0 ]
+  [[ "$output" != *d00dfeed* ]] || false
+
+  # SUBJECT: --refs with NO CC_BUS_REF_GLOB override — the shipped default must reach it.
+  run env CC_BUS_DIR="$root/work/bus" "$BUS" fold --json --refs
+  [ "$status" -eq 0 ]
+  [[ "$output" == *d00dfeed* ]]
+}
+
 @test "folding across refs de-duplicates a record present on several branches" {
   command -v git >/dev/null || skip "git unavailable"
   g() { git -c user.email=t@example.com -c user.name=T "$@"; }
