@@ -165,3 +165,14 @@ read the history that justifies either exclusion.
 **Premise, re-checked a third time: not refuted, not confirmable here.** Unchanged from §5; the
 2026-08-10 measurement is now 19 days stale and §3's one-line fix still needs re-checking against
 reso's trunk before anyone writes it.
+
+### 6b. Side-measurement: a cloud VM cannot land in this repo out of the box (exit 9)
+
+Not part of this item, recorded because it taxes every cloud dispatch that tries to land. The
+first `/ship` here died `GATE-KILLED (exit 9)` with `bats-shellcheck-lint could not RUN (exit 2)` —
+the base image ships no `shellcheck`, and that arm is fail-closed by design (landing anyway would
+leave every `.bats` suite unlinted and *say nothing*). Correctly a non-verdict about the box, not a
+red about the tree. `apt-get install -y shellcheck` (0.9.0; the image runs as uid 0) cleared it and
+the re-land went green first try. **Read this as the exit-9 contract working, not as a gate to
+route around** — the fix is installing the tool, never `SHIP_LAND_LANE=v1`. Worth folding into the
+cloud image or the lane's preflight so the next VM does not spend a land cycle discovering it.
