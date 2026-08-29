@@ -272,6 +272,60 @@ EOF
   [[ "$output" != *"args="* ]]
 }
 
+# ── THE PLATFORM ARM THE REMAINING WORK RUNS ON ─────────────────────────────────────────────────
+# Everything above is platform-neutral: it analyses a TSV. But the only step left on backlog
+# 193ae8ddce72 is §6's multi-hour unattended run on the 10-core DARWIN box, and the reader that run
+# depends on has two branches of which this suite could previously reach exactly one. `/proc/loadavg`
+# is readable on every host the suite runs on, so `read_load1`'s first branch always won and the
+# Darwin branch was UNREACHABLE — not merely uncovered. It is also the branch with the only
+# platform-specific parsing in the file: Darwin prints `{ 1.23 4.56 7.89 }`, so the value is field
+# TWO, and an off-by-one there reads the brace, fails the numeric guard and drops every row.
+# CC_MARG_PROC_LOADAVG exists to make that branch enterable; these two tests enter it.
+
+@test "the DARWIN load-average format is parsed — the arm /proc/loadavg otherwise makes unreachable" {
+  mkdir -p "$D/bin"
+  printf '#!/bin/sh\nprintf "{ 12.34 9.00 7.00 }\\n"\n' > "$D/bin/sysctl"
+  chmod +x "$D/bin/sysctl"
+  run env PATH="$D/bin:$PATH" CC_MARG_PROC_LOADAVG="$D/no-such-proc" bash -c '
+    set -uo pipefail
+    '"$(sed -n '/^read_load1() {/,/^}/p' "$REPO/scripts/capacity-marginal.sh")"'
+    read_load1'
+  [ "$status" -eq 0 ]
+  # Field 2, not the brace and not the 5-minute average.
+  [ "$output" = "12.34" ]
+}
+
+@test "an unreadable load average is REFUSED, never recorded as a load of 0" {
+  # §4: "Unreadable ⇒ the row is dropped, never recorded as 0." A zero load is a measurement of a
+  # quiet box; an unreadable one is the absence of a measurement, and coercing the second into the
+  # first would feed C1 a fabricated tertile. Asserted on both failure shapes the box can produce:
+  # a sysctl that errors, and one that answers with something that is not a number.
+  mkdir -p "$D/bin2"
+  printf '#!/bin/sh\nexit 1\n' > "$D/bin2/sysctl"; chmod +x "$D/bin2/sysctl"
+  run env PATH="$D/bin2:$PATH" CC_MARG_PROC_LOADAVG="$D/no-such-proc" bash -c '
+    set -uo pipefail
+    '"$(sed -n '/^read_load1() {/,/^}/p' "$REPO/scripts/capacity-marginal.sh")"'
+    read_load1'
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+
+  printf '#!/bin/sh\nprintf "{ n/a n/a n/a }\\n"\n' > "$D/bin2/sysctl"; chmod +x "$D/bin2/sysctl"
+  run env PATH="$D/bin2:$PATH" CC_MARG_PROC_LOADAVG="$D/no-such-proc" bash -c '
+    set -uo pipefail
+    '"$(sed -n '/^read_load1() {/,/^}/p' "$REPO/scripts/capacity-marginal.sh")"'
+    read_load1'
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}
+
+@test "the seam does not redirect the real box: the default source is still /proc/loadavg" {
+  # CC_MARG_PROC_LOADAVG is a test seam, and a test seam that changed what the sampler reads on the
+  # box would be worse than the gap it closes. Pin the default in the source text.
+  run grep -c 'CC_MARG_PROC_LOADAVG:-/proc/loadavg' "$REPO/scripts/capacity-marginal.sh"
+  [ "$status" -eq 0 ]
+  [ "$output" = "1" ]
+}
+
 @test "a bad interval is a usage error, not a busy loop" {
   run bash "$M" sample --interval-s 0 --window-s 1 --out "$D/x.tsv"
   [ "$status" -eq 2 ]
