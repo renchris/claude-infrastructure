@@ -191,6 +191,53 @@
 # own printed line is wrong for thirteen of them — segment the logical line or do not count at all.
 # ────────────────────────────────────────────────────────────────────────────────────────────────
 #
+# ── A SIXTH CORRECTION, 2026-08-29: DRAINING-vs-STREAMING IS NOT THE DISCRIMINATOR EITHER. THE
+#    MIDDLE STAGE'S REDUCTION RATIO IS, AND IT IS SET BY THE FEED'S CONTENT, NOT ITS SIZE. ────────
+# The paragraph above states the correct two-part condition in its own words — "worse only where its
+# middle BOTH streams AND emits past the knee" — and then partitions the population on the FIRST
+# part alone, into 3 STREAMING and 3 DRAINING. Nothing was mis-measured; the partition dropped a
+# clause its own sentence carries, and the three STREAMING rows were then read as the exposed set.
+# Measured with per-stage PIPESTATUS attribution, 200 trials per cell, load 11.98, external
+# producer /bin/cat except where noted (~/.claude/autonomy/probe259-ratio.sh, 9 cells, 9 written
+# predictions, 0 mismatches at rc 93):
+#
+#     cell                              feed B    emitted B   stage1     stage2
+#     install sed, REAL feed                70           10    0/200      0/200
+#     install sed, 1 match in 458,810 B 458,810           10    0/200      0/200
+#     install sed, ALL lines match      406,000      140,000  200/200    200/200
+#     the same, builtin printf producer 406,000      140,000  200/200    200/200
+#     banner sed, 1 match in 458,798 B  458,798            4    0/200      0/200
+#     video  tr -d, 458,759 B           458,759      458,759  200/200    200/200
+#     NEG: install sed, ALL match        14,500        5,000    0/200      0/200
+#
+# ROWS 2 AND 3 ARE THE FINDING: one producer program, one middle program, the same producer size to
+# within 13% — and BOTH stages flip from 0/200 to 200/200 on the middle's REDUCTION RATIO alone
+# (45,881:1 versus 2.9:1), which is a property of what the feed CONTAINS. The NEG row holds that
+# all-match content shape constant and varies only size, reading 0/200, so row 3 is a claim about
+# the emitted quantity and not about the shape. The builtin-producer row varies only the producer
+# kind and does not move, confirming once more that the producer's identity is not the variable.
+#
+# SO THE THREE "STREAMING" ROWS ABOVE ARE NOT ONE CLASS, AND ONLY ONE OF THEM IS EXPOSED:
+#   · scripts/banner-video.sh:167 — `tr -d '\r, '`, ratio ~1.0. Producer bytes ARE its governing
+#     quantity. The ONE row where the reading in the paragraph above is correct. Still latent: its
+#     ffprobe flags emit one integer.
+#   · scripts/banner-shots.sh:265 — `sed -n 's/.*INNERH=…/\1/p'` emits 4 B from a 458,798 B page.
+#     Immune at ANY producer size. Its own comment previously named the page's growth as the thing
+#     that would put it back in play; that is refuted by cell E and the comment now says so.
+#   · install.sh:1128 — `sed -n 's/.*verdict=\([a-z-]*\).*/\1/p'`. NOT TAKEN, and the measurement is
+#     why: exposure needs ~14,000 `verdict=` lines, and scripts/python-deps.sh terminates every one
+#     of its eight paths with a single `say "verdict=…"`. The hazard is unreachable by the
+#     PRODUCER'S GRAMMAR, which is a stronger and more durable statement than the "latent by three
+#     orders of magnitude" size bound it was carried under — a size bound grows with the tree and a
+#     grammar bound does not. ⚠️ Its `|| true` asymmetry (guard on the producer line, none on the
+#     line that reads it) is REAL and still unfixed; it is worth one token on a link that touches
+#     install.sh anyway, and install.sh is named by 41 .bats files.
+#
+# ⚠️ THE GENERAL FORM, because this is the third link running in which the correct quantity was
+# named and the partition was taken on something else: ASK WHAT A VERDICT IS A VERDICT ABOUT, THEN
+# CHECK THAT THE PARTITION YOU DREW USES THE SAME VARIABLE THE SENTENCE ABOVE IT NAMES.
+# ────────────────────────────────────────────────────────────────────────────────────────────────
+#
 # A variable's contents are not bounded by inspection, so the builtin exemption cannot key on the
 # command WORD — it keys on the ARGUMENT. A pure LITERAL keeps the 0/200 exemption (a literal you
 # can read is a length you can read, and that is what the row above actually measured); a parameter

@@ -253,13 +253,20 @@ calibrate_inset() {
 <!doctype html><meta charset="utf-8"><title>inset</title>
 <body><script>addEventListener('load',()=>{document.body.textContent='INNERH='+innerHeight})</script>
 HTML
-  # SIGPIPE: this is the rarer shape — a THREE-stage pipeline under pipefail whose middle stage
-  # STREAMS, so the producer is exposed in principle (see the FIFTH CORRECTION in
-  # scripts/pipefail-sigpipe-lint.sh). It is LATENT here because the producer is tiny and FIXED:
-  # --dump-dom of the heredoc probe page above measured 108 B at 2026-08-29T06:22Z, against a
-  # 160 B page, and the sed emits 3 B. Both are ~3 orders of magnitude under the knee.
-  # ⚠️ WHAT WOULD CHANGE THAT is enlarging the probe PAGE, not the window size — the DOM dumped is
-  # the page's, so a probe page that grows past the pipe buffer puts this producer back in play.
+  # SIGPIPE: a THREE-stage pipeline under pipefail. It is SAFE, and the reason is STRUCTURAL rather
+  # than a matter of size — see the SIXTH CORRECTION in scripts/pipefail-sigpipe-lint.sh.
+  # What decides a middle stage's death is what THAT STAGE EMITS, and this sed emits only the digits
+  # of the page's single INNERH= occurrence: 3 B measured on the real --dump-dom at 2026-08-29
+  # T06:22Z (108 B dumped, against a 160 B page), and 4 B on a same-shape synthetic at 07:02Z
+  # (three digits plus the newline). That quantity is fixed by the page's GRAMMAR — one INNERH=
+  # occurrence — and not by its length.
+  # ⚠️ THIS COMMENT USED TO SAY the hazard returns "if the probe PAGE grows past the pipe buffer".
+  # MEASURED AND REFUTED at 2026-08-29T07:02Z (~/.claude/autonomy/probe259-ratio.sh cell E, 200
+  # trials, PIPESTATUS per stage): a 458,798 B page through this same sed reads 0/200 on BOTH
+  # stages. Growing the page grows the PRODUCER, and a three-stage producer's own byte count
+  # governs nothing — it dies only if the middle died first. What would put this site back in play
+  # is the SED's emission clearing the knee, i.e. a page carrying thousands of INNERH= matches,
+  # which the heredoc above cannot produce.
   got=$("$CHROME" --headless --disable-gpu --no-sandbox --window-size=900,"$req" \
         --virtual-time-budget=800 --dump-dom "file://$probe" 2>/dev/null \
         | sed -n 's/.*INNERH=\([0-9][0-9]*\).*/\1/p' | head -1)
