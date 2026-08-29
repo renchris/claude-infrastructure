@@ -193,6 +193,27 @@ The one real cost in view is `next3`'s ~8 pp, and with 3.8 h left that is essent
   is to widen the abstain rule so the projection stays silent mid-week, where it is measurably
   uninformative, and speaks only in the last ~2 days where linear and empirical converge
   (day 6: −17 pp; day 7: −2 pp).
+  **✅ DONE 2026-08-29 — the cheap move, not the calibration.** `MIN_ELAPSED_FRAC = 0.05` (~8.4 h
+  elapsed) is replaced by `PROJ_SPEAK_REMAIN_H = 48.0` hours *remaining*; `bin/claude-accounts`,
+  12 bats in `tests/claude-accounts-burn-ratio.bats`, every new case RED-proved against 5 mutants.
+  The empirical trajectory is still the real remedy and still waits on ≥2 more cycles (§5.2); this
+  constant is the one knob to move when they arrive.
+  **Two things the implementation found that this section did not anticipate:**
+  1. **`burn_ratio` had to abstain WITH `proj_end_pct`.** They are the same number — `proj` is
+     `ratio × 100` — so suppressing the percentage while still rendering `0.49× burn` would have
+     suppressed the number and kept the assertion. The mid-week surfaces that survive are the
+     roll-aware 48 h nowcast (`burn_wk_ewma_ph` / `wk_strand_pp`) and `burst_percentile`, which
+     measure realised pace instead of extrapolating it.
+  2. 🚨 **Widening the abstain alone would have traded a false alarm for a FALSE REASSURANCE.**
+     The `⚠ WALL trajectory` flag was sourced from the linear projection's `proj >= 100`, so
+     abstaining mid-week silently downgraded every over-pace row to `on pace to fill the window`
+     — asserted, in the live 2026-08-25 fixture, over an account the nowcast puts at **248%**.
+     Two shipped suites caught it (`claude-accounts-strand.bats` RP-16,
+     `claude-accounts-core.bats` RP-26) and the fix is a rewire, not a revert: the flag now reads
+     the **sign** of the 48 h nowcast (`wk_wall_risk`), which is the weak claim a flag actually
+     makes, while the **magnitude** stays unrenderable for the reason `wk_strand_pp` already
+     clamps it. **Generalisable:** an abstain is not free when a downstream consumer reads the
+     abstaining value as a boolean — silence there is not silence, it is the other branch.
 
 **Reproduce:** the analysis scripts are in this session's scratchpad; the one-command version of
 the retrospective is `python3 scripts/desk-strand-replay.py`.

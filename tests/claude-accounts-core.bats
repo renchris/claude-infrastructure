@@ -1849,9 +1849,27 @@ assert "next3 strand ~5pp of 8 · p96 of its own 3h burns" in line, line
 assert "next no strand" in line, line
 assert "⚠ WALL trajectory" in line, line
 assert line.rstrip().split(chr(10))[-1].strip().startswith("next no strand"), line
-# ...and its burn RATIO survives unchanged, while the >100 PROJECTION does not render as a number
-assert "1.62× burn" in line, line
-assert "162" not in line and "163" not in line, line     # the RATIO, never the ~162% projection
+# ...and the >100 PROJECTION still never renders as a number.
+#
+# ASSERTION UPDATED IN PLACE (weekly-reset-utilization-2026-08-25 §3, §6), invariant kept. This
+# arm used to also assert `1.62× burn` — the burn RATIO riding the zero-strand row. `next` here
+# is 114 h from reset, and `wall_projection` now abstains outside the last 48 h: dividing by
+# elapsed fraction corrects the PHASE error only if burn is linear, and fleet burn is
+# back-loaded, so the projection backtests a mean 46 pp wrong at day 3. `1.62× burn` and
+# `162%` are the same claim in different units; suppressing one and printing the other would
+# have suppressed the number and kept the assertion.
+#
+# What did NOT change is the WALL flag, and keeping it is the reason this edit is safe: it now
+# reads the SIGN of the 48 h nowcast (`wk_wall_risk`) instead of the abstaining linear
+# projection. Without that rewire the wider abstain would have decayed this row to
+# `on pace to fill the window` for an account the nowcast puts at 248% — trading a false alarm
+# for a false reassurance. The CONTROL below pins the ratio where it still renders, so this arm
+# pins an ABSTAIN rather than a ratio that quietly stopped rendering everywhere.
+assert "162" not in line and "163" not in line, line     # never the ~162% projection
+assert "1.62× burn" not in line, line                    # ...nor the same number in ratio units
+near = ca.pace_line([row(acct="next", weekly_pct=90, weekly_reset_h=42.0, burn_wk_ewma_ph=1.0)])
+assert "1.20× burn" in near, near                        # CONTROL: inside 48h the ratio renders
+assert "⚠ WALL trajectory" in near, near
 assert "BEHIND" not in line, line                        # 47ddbf47c DELETED it: on 2026-08-16 three freshly-reset windows each read
                                                          # BEHIND, which is correct and reads as gross under-utilisation.
 # an abstention renders as the WORD plus its reason, never as a zero (L2)
