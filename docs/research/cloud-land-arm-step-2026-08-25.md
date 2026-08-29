@@ -759,3 +759,35 @@ documents that blocking a CLAIMED row is legitimate and that only a `done` row i
 `--force`. And `scripts/cloud-park.sh` is an ADD, so it is absent from the live `~/.claude` layer
 until the converger runs; the reader half is an edit to an already-symlinked file and goes live on
 the fast-forward, which is the half that has to be there for this park to be honoured.
+
+---
+
+## 10 · A THIRD land-blocking arm, found from another item's dispatch (2026-08-29)
+
+§8.1 named the second arm — `shellcheck`/`bats` absent, `GATE_KILLED`, exit 9 on a docs-only land —
+and `scripts/cloud-venue-provision.sh` now cures it. This is the third, found while landing backlog
+`193ae8ddce72`, and it is a different shape from both: the venue is READY, the gate *reaches a
+verdict*, and the verdict is **wrong**.
+
+**A cloud VM runs as uid 0, and mode bits do not apply to root.** `tests/cc-venue.bats` arm 11
+asserted that an unreadable ledger makes the producer refuse (exit 3), and constructed the
+unreadability with `chmod 000`. Under root the file is read fine, parses as an empty ledger, and the
+id is legitimately absent — so the producer answers `unknown-item` and **exit 0**, which is the exact
+value the arm exists to refuse. The test therefore does not skip under root, it **inverts**: it goes
+red while the behaviour it guards is correct, and nothing in the failure output says so. `ship-land`
+reports that as **exit 6 — "a VERDICT about your diff … fix it, do not retry unchanged"** — a false
+RED about the *machine* wearing the one exit code reserved for a claim about the *tree*, which is
+precisely the 6-vs-9 collapse the pipeline is built to prevent.
+
+Fixed at the construction rather than with a root skip, because a skipped arm buys nothing and this
+one can be made uid-independent for free: the store is now a **directory**, so `open()` raises
+`IsADirectoryError` — an `OSError`, the same branch the mode bit was reaching for — for every uid.
+Strictly stronger too (it exercises the class the reader actually catches, not just `EACCES`), and
+RED-proved both ways: a readable store fails the arm, and the token is asserted to be
+`unknown-store` rather than `unknown-item` so the inverted pass cannot satisfy it again.
+
+**The class, not the instance:** 15 suites in `tests/` build a negative with `chmod 000`, and every
+one of them is vacuous-or-inverted in the venue every cloud dispatch runs in. Only this one is
+repaired here — it is the one that blocked a land, and widening on the other 14 without a land to
+prove each would be the hunch this repo's denylists already have a rule against. A future dispatch
+that reds on an unreadability arm should suspect uid 0 before it suspects its own diff.

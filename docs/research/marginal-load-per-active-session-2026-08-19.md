@@ -352,6 +352,15 @@ refusal and moves nothing else; relaxing `\bactive` to a substring fails the loo
 clean (556 suites, 0 new leaks), `bats-testname-eval-lint` / `bats-kill-guard-lint` /
 `test-walltime-lint` clean.
 
+Landing this needed one repair that is not about this item and is recorded where the next cloud
+worker will look (`cloud-land-arm-step-2026-08-25.md` §10): the land gate went **exit 6** on
+`tests/cc-venue.bats` arm 11, which reproduces identically on pristine `origin/main`. A cloud VM
+runs as **uid 0**, mode bits do not apply to root, and that arm built its "unreadable ledger" with
+`chmod 000` — so the store read fine, the producer answered `unknown-item` / exit 0, and the test
+inverted: red while the behaviour it guards was correct, reported under the one exit code reserved
+for a verdict about the diff. The construction is now a directory (`IsADirectoryError`, no uid
+exempt), RED-proved both ways.
+
 **The rule this leaves behind**, and it is the sibling of the one `gc-cpu-vs-session-ceiling-2026-08-18.md`
 §3 paid nineteen commits for: *a park that only a human would read is not a park.* When the venue
 is the blocker, put the refusal in the predicate the dispatcher consults, not in the document the
