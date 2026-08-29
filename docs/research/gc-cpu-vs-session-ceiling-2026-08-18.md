@@ -117,10 +117,15 @@ own errors:
 `CC_HW_DEFAULT_MAX_LOAD_PER_CORE = 2.0` (`scripts/lib/capacity-admit.sh:134`) is the number that
 becomes the load-20 ceiling on this 10-core box, and both gates expand it. Its own code comment cites
 "§9.5's measured ceiling" — and **§9.5 contains no such derivation**; it shows only that the gate
-admits at 1.55 and refuses at 2.92, which is a demonstration that a threshold thresholds. The origin
-commit `0fc3a3d33` measured the motivating incident at **2.72/core** and picked 2.0 with no stated
-rule. The verifier read the full commit body and **confirmed this verbatim** — it called it the
-strongest finding in the wave.
+admits at 1.55 and refuses at ~~2.92~~ **4.0**/core, which is a demonstration that a threshold
+thresholds. *(Number corrected 2026-08-29 on a verbatim re-read of §9.5, whose own sentence is "A
+ceiling that refuses at 4.0/core and admits at 1.55/core is behaving as a ceiling, not as an outage."
+2.92 is the FLOOR of the survived band quoted three paragraphs below, not a refusal reading. The
+finding is untouched — only the figure it was hung on.)* The origin commit `0fc3a3d33` — **cite by
+SUBJECT**, `feat(handoff-fire): machine-capacity admission gate at the spawn chokepoint`, because
+that sha is **not an ancestor of trunk** and a land rebases — measured the motivating incident at
+**2.72/core** and picked 2.0 with no stated rule. The verifier read the full commit body and
+**confirmed this verbatim** — it called it the strongest finding in the wave.
 
 Worse, the repo's own instrument already documents that this axis cannot do the job
 (`scripts/capacity-alarm.sh:139-147`, verbatim):
@@ -139,10 +144,59 @@ consumers were `bun` 65%, `mediaanalysisd` 33%, `kernel_task` 25%, with the high
 **5.5%** and 52% idle). Corroborated live while writing this: **load 10.66 at 13 sessions**, against
 19.06 at 14 sessions twelve hours earlier — the same session count spanning a 1.8× load range.
 
-The honest actionable is therefore **to derive the number, not to move it**: re-run the axis-09-style
-measurement (load1 delta across N all-active sessions) and set the ceiling from a measured failure
-point. That is a two-arm experiment, not a config edit, and it is the only thing that can legitimately
-move a capacity constant.
+~~The honest actionable is therefore **to derive the number, not to move it**: re-run the
+axis-09-style measurement (load1 delta across N all-active sessions) and set the ceiling from a
+measured failure point. That is a two-arm experiment, not a config edit, and it is the only thing
+that can legitimately move a capacity constant.~~ **← REFUTED. See §3a.**
+
+### 3a · The prescription is REFUTED by §3 itself, and the finding is DISCHARGED (2026-08-29)
+
+*Written while driving backlog `e981656df348` ("2.0/core was never derived — derive it, do not
+blind-raise; blocked on the marginal-load measurement"), which this section is the DoD for. The
+headline is TRUE and its cure is on trunk; the prescription and the blocker are both refuted. Kept
+here rather than only in the code comment, because **this section is what a re-reader reaches**, and
+left as written it re-mints the same dead-end item.*
+
+**1 · The prescription has no solution, and its disproof is three paragraphs above it.** "Set the
+ceiling from a measured failure point" presumes this axis can locate one. The block quoted above says
+it cannot: the fatal 2026-08-05 reading of **2.53/core sits INSIDE a survived population spanning
+2.92–5.98/core**, and this section then draws that conclusion in its own words — *"an axis that
+provably cannot separate fatal from survived"* — before the closing paragraph asks for a measurement
+on that same axis anyway. No cut on a scalar separates a point interior to the other class. This
+needed no new measurement to settle, only a re-read; `scripts/capacity-alarm.sh` has carried the same
+conclusion in executable form all along, pinning **5.98/core as a known false ALARM** in its selftest.
+
+**2 · The input is wrong, not the number — so no derivation could have helped.** `fix(fire-gate):
+load1 does not move with the spawn it was gating` (**`f944d6e3`**, 2026-08-20, ancestor of trunk)
+established that an additional RESIDENT session moves the 1-min runnable count by ~0. A ceiling on a
+quantity that does not respond to the event being gated cannot be repaired by choosing a better
+ceiling. Accordingly **`CC_FIRE_LOAD_TERM` now defaults `off`** in `capacity_gate()`
+(`scripts/handoff-fire.sh:5074`) and the Agent-tool path has run it off since Wave D
+(`hooks/agent-teams-enforce.sh:229`); `segments` and `active` carry the term's intent because they DO
+move with the spawn. This is also why **raising 2.0 was never the answer** — per C18 a fix moves a
+term switch, never a ceiling.
+
+**3 · The stale provenance is already cured on trunk.** `docs(capacity-admit): the ceiling cites a
+section that has no derivation…` (**`e89918f2`**, 2026-08-25, ancestor of trunk) replaced the false
+`"2.0/core is §9.5's measured ceiling"` comment with the derivation's absence stated plainly. The
+literal stays at **2.0 deliberately**, and it still binds only where `cc_capacity_admit` leaves the
+load term on — the two unattended recovery callers (`scripts/boot-resume-launch.sh`,
+`scripts/limit-recover/lr-fire-resume.sh`), both budget-released after `CC_ADMIT_BUDGET` (3)
+consecutive refusals, which prices the imprecision at a delayed resume rather than an outage.
+
+**4 · The named blocker was the wrong instrument, and it has been formally cut.** The item was parked
+behind the marginal load per ACTIVE session. That coefficient is *capacity-in-sessions*: it converts a
+ceiling into a session count. It cannot locate a failure boundary, so it could never have discharged
+a "derive it from a failure point" ask. `fix(capacity): strike the refuted 2.5-5 marginal from all
+three live sites` (**`34a21973`**, 2026-08-26, ancestor of trunk) says so directly for the sibling
+constant — *"the ceiling is NOT blocked on §6 and the measurement can take as long as it needs"* —
+and §5 of this document already carries that ✅ while this section did not.
+
+**What is left on this axis: nothing.** Not "unmeasured" — **unanswerable as posed.** A future
+session that wants to move a capacity constant should move a *term*, on an input that responds to a
+spawn, and should not re-open this one. The genuinely open marginal-load window (§6 of
+`docs/research/marginal-load-per-active-session-2026-08-19.md`, one ~1 h on-box run) is a different
+question with a different consumer, and **`e981656df348` does not gate on it**.
 
 ## 4 · If 2.1.234 is adopted, adopt it on other grounds — and set one env var first
 
