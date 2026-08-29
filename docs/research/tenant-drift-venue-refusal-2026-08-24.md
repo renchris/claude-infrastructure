@@ -73,3 +73,53 @@ Neither `cc-backlog` verb could be run from here — this container has no
 `~/.claude/autonomy/backlog.jsonl`, so `block`/`done`/`reopen` would have created a fresh store
 that nothing reads. A write that no reader can see is a fake discharge, which is the failure this
 document exists instead of.
+
+## 5. Second dispatch, 2026-08-29 — the refusal recurred, and now it has a reader
+
+Re-dispatched to a second `anthropic_cloud` VM five days later, same lane, same clone, same
+refusal. **n=2 makes this a loop, not an incident**: §4 named the right park command and nothing
+routed it, so the item stayed OPEN, stayed cloud-labelled, and burned a second VM. Every venue fact
+above was re-measured today and is unchanged — `origin/main` carries no `tenant-drift.yml`,
+`.github/workflows/` holds only `diagrams.yml` and `hermetic.yml`, `~/Development/reso-management-app`
+does not exist, `cc-backlog` is not on `PATH`, and `~/.claude/` has no `autonomy/`.
+
+**What changed, and it is the reason this recycle is not just §4 restated.** `c8da1242`
+(2026-08-27, three days after the first refusal) built the return channel this document said did
+not exist: `cloud-create-api.py --verify` now surfaces `post_turn_summary`
+(`status_category` / `status_detail` / `needs_action`), and `scripts/cloud-inbox.py` +
+`cc-cloud inbox` read it. So a cloud VM's park request finally has a consumer. `RUNNABLE_RE`
+(`scripts/cloud-inbox.py:89`) allowlists the `cc-backlog` prefix, so §4's command classifies
+**RUNNABLE** rather than PROSE and surfaces under its own heading. ⚠️ **The inbox reads and
+classifies; it never executes** — deliberately, since the string is composed by a remote VM. This
+routes the ask to a human at the desk; it does not discharge the item. The loop closes when someone
+runs §4's line, and not before.
+
+**The self-admission guard is true of this session by measurement, so §1's deferral stands without
+needing to be remembered.** `.git/shallow` is present, `git rev-list --count HEAD` = 50, and the
+graft root is `1ca8d168` — the commit that landed this very document. `HistoryOracle.certify()`
+therefore returns `shallow` here and `cc-venue` cannot mint a `cloud` label, which is exactly the
+mechanical form of the guard at `bin/cc-venue:55`. Widening `cross_repo` from this venue would be
+deciding this session's own admission; it remains an on-box change.
+
+**The same root defect surfaced in a SECOND mechanism this dispatch, which is the new finding.**
+§1 established that `project` is a proxy for reachability rather than a measurement of it. The
+dispatch brief's EVIDENCE-AGE arm made the identical substitution on a different axis: the item's
+sentence says *"READ **reso's** own CLAUDE.md for landing policy first"*, and the arm extracted the
+bare name `CLAUDE.md`, resolved it against the item's `project` (claude-infrastructure), and warned
+that four commits had landed on it since filing — `078c96a13`, `eff291df6`, `b8124fe6a`,
+`c7e1250c8`. All four touch **this** repo's `CLAUDE.md`; none can discharge an item about reso's.
+Two things follow. First, a bare filename in an item body is ambiguous across repos and the
+staleness check cannot see it, so the cure is the same one §1 points at: **the target repo belongs
+in a field, not in prose** — fix that once and both arms stop guessing. Second, and separately:
+none of the four is an ancestor of `origin/main` here (`git merge-base --is-ancestor` rc=1 on each;
+they resolve only on `claude/fire-*` branches), while their *content* is on trunk — `CLAUDE.md:123`
+carries the `msg` section from `c7e1250c8` and `:403` the W3 clause from `eff291df6`. That is a land
+path rewriting shas, and it is why this repo's own rule is *verify landings by CONTENT, never by
+count*: an evidence-age arm that cites shas will keep naming commits that no longer exist on the
+branch it is measuring.
+
+**Premise, re-checked: still not refuted, and still not confirmable from this venue.** Nothing
+readable here contradicts any clause of the item. The last direct measurement is still run
+`31401486855` (2026-08-10T15:03Z), now **19 days stale** — the `git show origin/main:<path>` step
+the dispatch brief opens with is unrunnable against a repo with no remote here, so §3's pre-derived
+one-line fix must still be re-checked against reso's trunk before anyone writes it.
