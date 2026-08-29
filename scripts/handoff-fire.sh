@@ -5629,11 +5629,23 @@ if [ "${1:-}" = "__recycle" ]; then
         cr)
           hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;;
         retype)
+          # ROUTED, not hand-rolled (typed-send-lint, 2026-08-29). This arm always did the right
+          # three steps — type, read the composer back, CR only on an exact match — but it did them
+          # with a raw `session send`, so it was the last site in the tree that types a COMMAND LINE
+          # into a pane outside a sanctioned helper. That is not a style point: the lint has scanned
+          # RED on origin/main since, tests/typed-send-lint.bats 16 and 17 have been red with it, and
+          # a suite that is red every sweep is what keeps the post-land verifier from ever stamping
+          # trunk green (backlog 01ab05685857 — whose own title mistook that for a DEAD launchd job).
+          # it2_paste_submit_verified is the composer-side member of the sanctioned set and is a
+          # STRICT superset of what was here: it additionally proves a live CC session owns the pane
+          # before typing, pastes atomically (bracketed), judges the read-back with paste_readback_ok
+          # rather than byte-equality, and names WHICH way it failed on stderr instead of going
+          # silent. Its bounded pre-wait costs nothing on this path — `retype` is emitted only when
+          # composer_content already read the box EMPTY, so the wait loop breaks on its first pass.
+          # Non-fatal by construction (rc 2/3/4 are abstain/held/mangled, all of which correctly
+          # leave the composer untouched for the 600s refusal below to report).
           if [ "$waited" = 60 ]; then
-            hf_bounded "$IT2" session send -s "$RSID" "/exit" >/dev/null 2>&1 || true
-            sleep 1
-            nc="$(composer_content "$IT2" "$RSID")" || nc=""
-            if [ "$nc" = "/exit" ]; then hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true; fi
+            it2_paste_submit_verified "$IT2" "$RSID" "/exit" || true
           fi ;;
         *)
           echo "→ nudge@${waited}s HELD ($nd): composer is not a stranded /exit — a CR here would submit someone else's buffer"
