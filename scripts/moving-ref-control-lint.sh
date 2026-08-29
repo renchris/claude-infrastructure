@@ -113,6 +113,24 @@ in_own() {  # $1=basename · $2=own-set text · $3=1 if an own-set was supplied 
 in_allowlist() { printf '%s\n' "$2" | grep -xF "$1" >/dev/null; }
 
 # Moving-ref `git show` sites in one suite: "<lineno>:<ref>:<trimmed source>", one per line.
+#
+# 🚨 THE "IS THIS A PINNED SHA" TEST USES `length()`, NEVER AN ERE INTERVAL — A PORTABILITY FIX, NOT
+# A STYLE ONE (backlog b60eb29e97dd, 2026-08-29). The pin test below used to read
+# `ref ~ /^[0-9a-f]{7,40}$/`. POSIX makes `{n,m}` OPTIONAL in awk EREs, and mawk — Debian/Ubuntu's
+# default `awk`, hence every Linux CI box and every cloud VM this repo dispatches work to — does not
+# honour it. Measured on mawk 1.3.4 20240123: a literal `0fe052972` piped through that pattern prints
+# nothing, while macOS's BWK awk matches it. So on Linux EVERY correctly-pinned literal sha fell past
+# the test and was reported as a MOVING ref — this lint's verdict inverted, in the direction that
+# BLOCKS: it is a land gate, so a false MOVING-REF is a land that cannot proceed at all.
+#
+# It was not silent, and it had already cost something. `--selftest` reds 4/22 on such a box, the
+# first being "an abbreviated literal sha went RED — that is the prescribed fix", i.e. the lint
+# refuting its own remedy. And a cloud session working backlog b60eb29e97dd reported
+# "gate issues: lint detector, mawk interval" as the thing blocking its ship, then handed the land
+# back to the desk rather than landing it — a finished, tested fix stranded on a ref nobody fetched.
+#
+# `--re-interval` is not the cure: it is a gawk/mawk flag that BWK awk rejects outright, so it would
+# trade this venue's red for the operator's. `length()` is POSIX awk on every implementation.
 moving_ref_shows() { # $1=file
   awk '
     # Drop every span between a quote and its MATCHING partner. A dangling quote keeps the rest of
@@ -141,8 +159,9 @@ moving_ref_shows() { # $1=file
       tok = substr(t, RSTART, RLENGTH)
       sub(/^[^[:alnum:]_-]?show[[:space:]]+/, "", tok)
       ref = tok; sub(/:.*$/, "", ref)
-      # PINNED: 7+ hex characters, an abbreviated or full sha. Everything else moves.
-      if (ref ~ /^[0-9a-f]{7,40}$/) next
+      # PINNED: 7-40 hex characters, an abbreviated or full sha. Everything else moves.
+      # The length bound is length(), never an ERE interval — see the block above the function.
+      if (ref ~ /^[0-9a-f]+$/ && length(ref) >= 7 && length(ref) <= 40) next
       src = $0; sub(/^[[:space:]]+/, "", src)
       printf "%d:%s:%s\n", NR, (ref == "" ? "<unreadable expansion>" : ref), src
     }
