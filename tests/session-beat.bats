@@ -123,3 +123,71 @@ emit() { # <json-stdin> <kind>
   [ ! -e "$BATS_TEST_TMPDIR/escape.json" ]
   [ ! -e "$CC_BEAT_DIR/../../escape.json" ]
 }
+
+# ── `cont` / `turnSeq` — THE CONTINUATION AXIS (backlog b60eb29e97dd) ─────────────────────────────
+# `seq` counts BOUNDARIES; `turnSeq` counts turns that carry NEWS. They diverge exactly when one of
+# our own Stop blockers re-prompts the model, which is an unbounded chain inside ONE idle episode —
+# and the mode that needed the distinction (cc-await-ping --idle-scoped) was measured cancelling
+# itself on the arming turn's own completion, 2/2, because `seq` was the only counter it had.
+
+@test "turnSeq counts NEWS, not boundaries: a Stop-hook continuation chain does not move it" {
+  emit '{"session_id":"t1","cwd":"/tmp","prompt":"do the thing"}' prompt
+  [ "$(jq -r '.turnSeq' "$CC_BEAT_DIR/t1.json")" -eq 1 ]
+  [ "$(jq -r '.cont'    "$CC_BEAT_DIR/t1.json")" = "false" ]
+  # the turn ends, a floor blocks it, the model is re-prompted, that turn ends too — four boundaries
+  emit '{"session_id":"t1","cwd":"/tmp"}' stop
+  emit '{"session_id":"t1","cwd":"/tmp","prompt":"Stop hook feedback:\n🔔 WAKE FLOOR — arm your watcher"}' prompt
+  [ "$(jq -r '.cont' "$CC_BEAT_DIR/t1.json")" = "true" ]
+  emit '{"session_id":"t1","cwd":"/tmp"}' stop
+  [ "$(jq -r '.seq'     "$CC_BEAT_DIR/t1.json")" -eq 4 ]   # every boundary counted
+  [ "$(jq -r '.turnSeq' "$CC_BEAT_DIR/t1.json")" -eq 1 ]   # no news arrived
+}
+
+@test "turnSeq DOES move on real news, and a Stop beat carries the raised value (no sampling hole)" {
+  emit '{"session_id":"t2","cwd":"/tmp","prompt":"go"}' prompt
+  emit '{"session_id":"t2","cwd":"/tmp"}' stop
+  emit '{"session_id":"t2","cwd":"/tmp","prompt":"<task-notification>peer landed</task-notification>"}' prompt
+  [ "$(jq -r '.turnSeq' "$CC_BEAT_DIR/t2.json")" -eq 2 ]
+  [ "$(jq -r '.cont'    "$CC_BEAT_DIR/t2.json")" = "false" ]   # auto traffic, but it IS news
+  # a reader that never sampled the prompt beat still sees the raise on the next boundary
+  emit '{"session_id":"t2","cwd":"/tmp"}' stop
+  [ "$(jq -r '.turnSeq' "$CC_BEAT_DIR/t2.json")" -eq 2 ]
+  [ "$(jq -r '.kind'    "$CC_BEAT_DIR/t2.json")" = "stop" ]
+}
+
+@test "cont is NARROWER than who=auto: the three auto forms that carry news still move turnSeq" {
+  # An interrupt, a slash-command echo and a task notification are all who=auto — and all three are
+  # things that actually happened to the session. Folding them into the continuation class would
+  # re-open the starvation pole through the oracle.
+  local i=0
+  for p in '<task-notification>x</task-notification>' '<local-command-stdout>x</local-command-stdout>' '[Request interrupted by user]'; do
+    i=$(( i + 1 ))
+    emit "$(jq -nc --arg p "$p" '{session_id:"t3",cwd:"/tmp",prompt:$p}')" prompt
+    [ "$(jq -r '.who'     "$CC_BEAT_DIR/t3.json")" = "auto" ]
+    [ "$(jq -r '.cont'    "$CC_BEAT_DIR/t3.json")" = "false" ]
+    [ "$(jq -r '.turnSeq' "$CC_BEAT_DIR/t3.json")" -eq "$i" ]
+  done
+}
+
+@test "our own ⟳/⚑/⚠ advisories are continuations (we injected them; nothing happened)" {
+  emit '{"session_id":"t4","cwd":"/tmp","prompt":"go"}' prompt
+  emit '{"session_id":"t4","cwd":"/tmp","prompt":"⟳ recycle advisory"}' prompt
+  [ "$(jq -r '.cont'    "$CC_BEAT_DIR/t4.json")" = "true" ]
+  [ "$(jq -r '.turnSeq' "$CC_BEAT_DIR/t4.json")" -eq 1 ]
+}
+
+@test "an EMPTY prompt is not a continuation (fail toward standing a watcher down, never toward parking it)" {
+  emit '{"session_id":"t5","cwd":"/tmp"}' prompt
+  [ "$(jq -r '.cont'    "$CC_BEAT_DIR/t5.json")" = "false" ]
+  [ "$(jq -r '.turnSeq' "$CC_BEAT_DIR/t5.json")" -eq 1 ]
+}
+
+@test "CC_BEAT_CONT_RX is the seam, and a pre-turnSeq beat file upgrades in place from 0" {
+  CC_BEAT_CONT_RX='^ZZZ' emit '{"session_id":"t6","cwd":"/tmp","prompt":"Stop hook feedback: not cont under this rx"}' prompt
+  [ "$(jq -r '.cont' "$CC_BEAT_DIR/t6.json")" = "false" ]
+  # a beat written by the pre-b60eb29e97dd producer: seq present, turnSeq absent
+  jq -nc '{sid:"t7",pane:"p",cwd:"/tmp",pid:1,lstart:"x",t:1,kind:"stop",who:"auto",operatorT:null,seq:41}' > "$CC_BEAT_DIR/t7.json"
+  emit '{"session_id":"t7","cwd":"/tmp","prompt":"go"}' prompt
+  [ "$(jq -r '.seq'     "$CC_BEAT_DIR/t7.json")" -eq 42 ]
+  [ "$(jq -r '.turnSeq' "$CC_BEAT_DIR/t7.json")" -eq 1 ]
+}

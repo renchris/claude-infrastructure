@@ -153,6 +153,11 @@ never periodic. Default `--interval` for the mode: 5 s (beat file is one small s
 the arm-turn's stop, the continuation fires a UserPromptSubmit beat and self-cancels the awaiter —
 converging one bounce later. Discipline unchanged by this doc: the arm is the turn's LAST action on
 a clean, committed state, which the close protocol already demands.
+⚠️ **REFUTED 2026-08-29 — §4.2.** It self-cancels, measured 2/2; it does not converge. The arm is
+instructed BY a Stop block, so the arming turn is already a link in that chain and the blocker that
+ends it is still there on the re-arm's turn. The discipline sentence cannot save it either: "the
+turn's LAST action on a clean, committed state" describes the arming turn exactly, and that turn is
+the one whose completion killed the watch.
 
 **Under NO live goal:** the bare 14400 s form remains correct and remains the nag's instruction —
 nothing to starve, and the parked watcher is the idle wake. The two modes are selected by the same
@@ -173,7 +178,10 @@ C1–C7 shipped as written. Four things the build settled that the spec left ope
    interpolate `--sid <session_id>` (they each hold it already: `mailbox-drain.sh:83`,
    `session-continue.sh:133`, and the PreToolUse payload for the deny). A producer that cannot
    resolve one emits the placeholder and says so, rather than teaching a form the tool refuses.
-3. **C2 is an OFFSET, not a `kind` filter.** The beat file holds only the LATEST boundary, so a whole
+3. **C2 is an OFFSET, not a `kind` filter.** ⚠️ **SUPERSEDED — see §4.2**: the offset is the right
+   shape on the wrong axis, and it made the arming turn's own completion cancel the watch (2/2
+   measured). Kept verbatim below because it is still the FALLBACK on a box whose beat producer
+   predates `turnSeq`. The beat file holds only the LATEST boundary, so a whole
    turn can complete inside one poll and leave the watcher looking at a Stop-kind beat whose prompt
    predecessor it never sampled — and a watcher that ignores that stays parked over a session that
    has moved on, i.e. the starvation pole re-entering through the oracle. Turns alternate, so
@@ -197,6 +205,48 @@ Suites: `tests/cc-await-ping.bats` (C1–C5, all four refusals + their discrimin
 two-pole red-proof against a fixture goal that models only A2 and A3) · `tests/wake-floor.bats` ·
 `tests/mailbox-drain.bats` · `tests/validate-bash-goal-guard.bats` (17–23: the carve-out, its
 per-segment scope, and that the loop shape still swallows it).
+
+### 4.2 · CORRECTION (2026-08-29, backlog `b60eb29e97dd`) — delta 3's offset was the wrong axis, and §4's "converging one bounce later" is REFUTED
+
+Delta 3 above and §4's *Interaction with our own Stop blockers* paragraph are both wrong, and they
+are wrong together: they reason about `seq`, which counts **boundaries**, while C2's question is
+whether the session was handed **news**. Our own Stop blockers — session-continue's 🔧 / ship / wake
+floors, `completion-assert`, an unmet `/goal` — each re-prompt the model with a `Stop hook feedback:`
+user turn, so ONE idle episode emits `stop → prompt → stop → prompt …` with no external event at all.
+Every link raises `seq`. The offset excludes exactly one of them.
+
+**Measured, 2/2 on live sessions:** banners `seq > 3` and `seq > 6`, both stood down on the arming
+turn's own completion, before the idle they were scoped to had begun. §4 predicted this interaction
+and judged it self-correcting (*"converging one bounce later"*). **It does not converge**, for a
+reason the paragraph did not consider: the arm is instructed *by* a Stop-hook block, so the arming
+turn is itself a link in such a chain, and the blocker that ends it is still there on the re-arm's
+turn — the bounce is a fixed point, not a transient. Worse, the wake floor is bounded
+(`CC_WAKE_FLOOR_MAX`, default 2), so it spent its entire budget instructing an arm that
+deterministically no-ops and then allowed the stop *unarmed*: **the floor's own cure reintroduced the
+deafness the floor exists to prevent.**
+
+**The fix is a second counter, not a smarter filter on the first.** `hooks/session-beat.sh` now also
+writes `cont` (this prompt beat is our own boundary self-drive — `CC_BEAT_CONT_RX`, default
+`^Stop hook feedback:` plus our ⟳/⚑/⚠ glyphs) and `turnSeq` (carried forward by every boundary, +1
+only on a non-`cont` prompt beat). C2 baselines `turnSeq`, so the whole continuation chain is
+invisible to it *by construction* — no kind filter, no allowance, and no timing.
+
+Two properties worth stating, because they are why this axis is better and not merely different:
+
+- **The continuation class is deliberately NARROWER than the auto-traffic regex `who` uses.**
+  `<task-notification>`, `[Request interrupted` and `<local-command-stdout>` are all `who=auto` and
+  all carry genuine news (a background task finished, the operator interrupted, the operator ran a
+  slash command), so they must still stand the watcher down. Folding them in would re-open the
+  starvation pole through the oracle — the exact hazard delta 3 was trying to close.
+- **Delta 3's sampling hole closes for free.** It exists only because `seq` had to *infer* an
+  unobserved prompt beat from an offset. `turnSeq` is carried by the Stop beat too, so an
+  unsampled news turn is still visible on the next boundary of any kind, whatever it is.
+
+A beat with no `turnSeq` (a producer predating this) falls back to the delta-3 arms verbatim, and
+the arm banner says so — a fallback that behaves exactly as before is the only one that cannot make
+an unconverged box worse. RED-proved in `tests/cc-await-ping.bats` as a differential on one timeline
+(legacy beats reproduce the stand-down and pin the fallback; `turnSeq` beats survive the chain),
+plus the producer's own axis in `tests/session-beat.bats`.
 
 **Still open after B3, and now reachable:** E4 — `goal-inert-watch.sh` will fire on a *sanctioned*
 idle-scoped deferral, which is an alarm losing its polarity rather than a wrong verdict. Filed

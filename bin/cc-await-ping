@@ -71,9 +71,15 @@
 #
 # The mode is therefore two exit conditions and a fail-closed arm gate:
 #   C1 exit-on-mail   unchanged — the wake half of 2-way comms.
-#   C2 exit-on-turn   a UserPromptSubmit-kind beat newer than the baseline taken at arm ⇒ the session
-#                     was woken by something else, so this awaiter's job is over: exit 0 SILENTLY
-#                     (verdict=stood-down), leaving the next natural Stop registry-quiet.
+#   C2 exit-on-turn   a NEW-INFORMATION turn newer than the baseline taken at arm ⇒ the session was
+#                     woken by something else, so this awaiter's job is over: exit 0 SILENTLY
+#                     (verdict=stood-down), leaving the next natural Stop registry-quiet. The oracle
+#                     is the beat's `turnSeq`, NOT its `seq`: `seq` counts boundaries, and our own
+#                     Stop blockers (the floors in session-continue, completion-assert, an unmet
+#                     /goal) re-prompt the model with a `Stop hook feedback:` turn, so one idle
+#                     episode raises `seq` without a single external event. Baselining `seq` made the
+#                     ARMING TURN'S OWN COMPLETION cancel the watch — measured 2/2, and the arm is
+#                     instructed by a Stop block, so it was the normal path (backlog b60eb29e97dd).
 #   C3 single-instance   refuse while a live sibling watcher claims any key of the keyset.
 #   C4 refuse-on-pending refuse while mail is already pending — mail waiting means you have work, and
 #                     arming would defer the judgment of state you ALREADY hold.
@@ -87,6 +93,8 @@
 #
 # Env overrides (tests): CC_BEAT_DIR · CC_AWAIT_BEAT_FRESH_S (arm-time beat staleness bound, default
 # 900s) — plus the CC_MAILBOX_DIR / CC_ROLES_DIR / CC_COMMS_ALARM_DIR / CC_REGISTRY_DIR seams below.
+# The continuation class C2 ignores is the PRODUCER's to define (hooks/session-beat.sh, CC_BEAT_CONT_RX):
+# this file reads the verdict it already wrote, so the two cannot drift into disagreeing about it.
 #
 # CODES THE HARNESS SYNTHESIZES — NOT OURS, AND NOT 128+signal. If you see this watcher reported as
 # `failed with exit code 143` or `144`, it never reached any exit above; it was SIGTERMed, and the
@@ -354,6 +362,7 @@ BEAT_DIR="${CC_BEAT_DIR:-$HOME/.claude/cc-beats}"
 BEAT_FRESH_S="${CC_AWAIT_BEAT_FRESH_S:-900}"
 BEAT_BASE_SEQ=0
 BEAT_STOP_ALLOWANCE=0
+BEAT_BASE_TURN=""     # non-empty ⇒ the producer emits turnSeq and THAT is the oracle (see below)
 
 _beat_field() {  # <sid> <jq-path> → field value on stdout; empty on any failure
   local s="$1" p="$2"
@@ -407,6 +416,31 @@ if [ "$IDLE_SCOPED" = 1 ]; then
     _refuse stale-beat "The newest beat for [$SID] is $(( _now - _bt ))s old (bound ${BEAT_FRESH_S}s). An arm happens INSIDE a turn, so a live beat producer makes this seconds old — a stale one means either the producer is not running or the sid is not this session's."
   fi
   BEAT_BASE_SEQ="$(_beat_field "$SID" '.seq')"; case "$BEAT_BASE_SEQ" in ''|*[!0-9]*) BEAT_BASE_SEQ=0 ;; esac
+  # ── THE ORACLE THIS MODE ACTUALLY WANTS: turnSeq, not seq (backlog b60eb29e97dd) ────────────────
+  # `seq` counts BOUNDARIES. This mode's question is "has my session been handed NEW INFORMATION",
+  # and those are different numbers whenever one of our own Stop blockers re-prompts the model:
+  # session-continue's 🔧 / ship / wake floors, completion-assert, an unmet /goal all feed a
+  # `Stop hook feedback:` user turn back in, so ONE idle episode emits stop → prompt → stop → prompt
+  # without a single external event. Every link raises `seq`.
+  #
+  # THAT IS NOT A CORNER CASE HERE — IT IS THIS MODE'S OWN ARM PATH. The wake floor instructs the
+  # arm from inside a Stop BLOCK, so the arming turn is already a link in such a chain, and its own
+  # stop is very likely blocked again by the next floor in the array. Measured 2/2 on live sessions:
+  # banners `seq > 3` and `seq > 6`, both stood down on the arming turn's own completion, before the
+  # idle they were scoped to had begun. The floor is bounded (CC_WAKE_FLOOR_MAX, default 2), so it
+  # spent its entire budget instructing an arm that deterministically no-ops and then let the session
+  # go idle DEAF — the precise defect the floor exists to prevent, reintroduced through its cure.
+  # goal-safe-2way-comms-2026-08-13 §4 foresaw the interaction and judged it self-correcting
+  # ("converging one bounce later"). It does not converge: each re-arm meets the same blocker on the
+  # same turn, so the bounce is a fixed point, not a transient.
+  #
+  # `turnSeq` (hooks/session-beat.sh) counts only NON-continuation prompt beats and is carried
+  # forward by every boundary, so it is monotone, sampling-hole-free (an unobserved turn still shows
+  # up as a raised value on the NEXT boundary of any kind), and needs neither the kind filter nor the
+  # allowance below. Absent ⇒ the producer on this box predates the field, and the legacy seq arms
+  # stay in force verbatim: a fallback that behaves exactly as before is the only one that cannot
+  # make an undeployed box worse.
+  BEAT_BASE_TURN="$(_beat_field "$SID" '.turnSeq')"; case "$BEAT_BASE_TURN" in ''|*[!0-9]*) BEAT_BASE_TURN="" ;; esac
   # THE ALLOWANCE, and why the doc's "exclude Stop-kind beats" is implemented as an OFFSET rather
   # than a kind filter. The beat file holds only the LATEST boundary, so a filter on `kind` alone has
   # a sampling hole: a whole turn (prompt beat, then stop beat) can complete inside one poll
@@ -432,15 +466,28 @@ if [ "$IDLE_SCOPED" = 1 ]; then
     fi
   done
   echo "$_banner" >&2
-  echo "cc-await-ping: idle-scoped — will also stand down on any new turn of [$SID] (beat seq > $(( BEAT_BASE_SEQ + BEAT_STOP_ALLOWANCE )))" >&2
+  if [ -n "$BEAT_BASE_TURN" ]; then
+    echo "cc-await-ping: idle-scoped — will also stand down on any NEW-INFORMATION turn of [$SID] (beat turnSeq > $BEAT_BASE_TURN); this session's own Stop-hook continuations do not count" >&2
+  else
+    echo "cc-await-ping: idle-scoped — will also stand down on any new turn of [$SID] (beat seq > $(( BEAT_BASE_SEQ + BEAT_STOP_ALLOWANCE )); no turnSeq in this beat — the producer here predates it, so a Stop-hook continuation CAN still cancel this watch)" >&2
+  fi
 fi
 
 # ── C2: THE EXIT THAT MAKES THE DEFERRAL IDLE-SCOPED ──────────────────────────────────────────────
 # Consulted every poll, AFTER the mail check: if a ping and a new turn both happened, the ping is the
 # thing the session must not lose, and delivering it also ends the watch.
 _turn_moved() {  # 0 iff this session has taken a new turn since the arm baseline
-  local seq
+  local seq turn
   [ "$IDLE_SCOPED" = 1 ] || return 1
+  # THE turnSeq ARM (b60eb29e97dd). Monotone and carried by every boundary, so one comparison is the
+  # whole test — no kind filter, no allowance, and no way for this session's own Stop-hook
+  # continuation chain (the arming turn's completion included) to read as news. A beat that has lost
+  # the field mid-watch (a half-converged live layer) falls through to the legacy arms rather than
+  # returning a verdict from a field that is not there.
+  if [ -n "$BEAT_BASE_TURN" ]; then
+    turn="$(_beat_field "$SID" '.turnSeq')"
+    case "$turn" in ''|*[!0-9]*) : ;; *) [ "$turn" -gt "$BEAT_BASE_TURN" ] && return 0; return 1 ;; esac
+  fi
   seq="$(_beat_field "$SID" '.seq')"; case "$seq" in ''|*[!0-9]*) return 1 ;; esac
   # A Stop-kind beat at exactly baseline+1 is the arm turn's OWN trailing stop — never a new turn.
   if [ "$seq" -gt "$(( BEAT_BASE_SEQ + BEAT_STOP_ALLOWANCE ))" ]; then return 0; fi

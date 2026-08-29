@@ -33,6 +33,19 @@ beat() { # <seq> <kind> [age-seconds]
     > "$CC_BEAT_DIR/$SID.json"
 }
 
+# The SAME shape plus the continuation axis (backlog b60eb29e97dd): `seq` counts boundaries,
+# `turnSeq` counts only the turns that carried news. Kept as a second helper rather than a default
+# so every legacy-beat test above stays a live control on the fallback path. `cont` is the
+# producer's own working, asserted in tests/session-beat.bats and read by nothing here, so it is
+# deliberately absent — a fixture must not carry a field its subject never looks at.
+beatT() { # <seq> <kind> <turnSeq> [age-seconds]
+  local age="${4:-0}"
+  jq -nc --arg k "$2" --argjson s "$1" --argjson ts "$3" --argjson t "$(( $(date +%s) - age ))" \
+    '{sid:"sidGOAL",pane:"p0",cwd:"/tmp",pid:1,lstart:"x",t:$t,kind:$k,who:"auto",operatorT:null,
+      seq:$s,turnSeq:$ts}' \
+    > "$CC_BEAT_DIR/$SID.json"
+}
+
 @test "exits 0 and prints the new line when a ping lands mid-wait" {
   ( sleep 1; printf '2026-07-10T10:00:00+0000 [peer] HANDOFF-PING slug: done\n' >> "$MB" ) &
   writer=$!
@@ -756,6 +769,84 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
   # starvation pole through the oracle itself.
   beat 10 prompt
   ( sleep 1; beat 13 stop ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down"* ]] || false
+}
+
+# ── THE ARMING TURN MUST SURVIVE ITSELF (backlog b60eb29e97dd) ────────────────────────────────────
+# MEASURED DEFECT, 2/2 on live sessions: the mode baselined `seq`, which counts BOUNDARIES, so the
+# arming turn's own completion cancelled the watch (banners `seq > 3` and `seq > 6`, both stood down
+# at once). It is not a corner case — it is this mode's normal arm path. The wake floor instructs the
+# arm from inside a Stop BLOCK, so the arming turn is already one link of a `Stop hook feedback:`
+# chain and its own stop is very likely blocked again by the next floor in the array. The floor is
+# bounded (CC_WAKE_FLOOR_MAX, default 2), so it spent its whole budget instructing an arm that
+# deterministically no-ops and then let the session go idle DEAF — the exact defect it exists to
+# prevent, reintroduced through its own cure.
+#
+# The cure is a second counter, not a smarter filter: `turnSeq` moves only on a turn that carried
+# NEWS (hooks/session-beat.sh), so the whole continuation chain is invisible to C2 by construction.
+# The two tests below are a DIFFERENTIAL on the identical timeline — legacy beats reproduce the
+# defect (and pin the fallback), turnSeq beats do not — so neither half can pass vacuously.
+
+@test "idle-scoped RED CONTROL: on legacy (seq-only) beats the arm turn's continuation DOES cancel it" {
+  # The pre-fix world, kept as a live control: this is what the fallback still does on a box whose
+  # beat producer predates turnSeq, and it is why the fallback says so in its own banner.
+  beat 2 prompt                                    # the arming turn (itself Stop-hook feedback)
+  ( sleep 1; beat 3 stop; sleep 1; beat 4 prompt ) &   # its stop, blocked → re-prompt
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down"* ]] || false
+  [[ "$output" == *"the producer here predates it"* ]] || false   # and it WARNS that it can
+}
+
+@test "idle-scoped: a Stop-hook continuation chain does NOT cancel the watch (turnSeq is the oracle)" {
+  beatT 2 prompt 1                                 # armed inside a `Stop hook feedback:` turn
+  ( sleep 1; beatT 3 stop   1                      # its stop — blocked by the next floor
+    sleep 1; beatT 4 prompt 1                      # the re-prompt: a boundary, not news
+    sleep 1; beatT 5 stop   1                      # and its stop
+    sleep 1; beatT 6 prompt 1; sleep 1; beatT 7 stop 1 ) &   # a second blocker, same episode
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 8
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 2 ]                              # still watching → ran its term
+  [[ "$output" != *"stood-down"* ]] || false
+  [[ "$output" == *"turnSeq > 1"* ]] || false      # and it says which oracle it is using
+}
+
+@test "idle-scoped: NEWS still cancels it — turnSeq moving is the whole test, seq is not consulted" {
+  beatT 2 prompt 1
+  ( sleep 1; beatT 3 stop 1; sleep 1; beatT 4 prompt 2 ) &   # a task notification / typed message
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down"* ]] || false
+}
+
+@test "idle-scoped: turnSeq closes the sampling hole a Stop beat used to open" {
+  # The beat file holds only the LATEST boundary, so a whole turn can complete inside one poll. Under
+  # `seq` that had to be inferred from an offset (seq > baseline+1, which the continuation chain also
+  # satisfies). turnSeq needs no inference: every boundary CARRIES the raised value, so an unobserved
+  # news turn is still visible on the Stop beat that follows it.
+  beatT 10 prompt 4
+  ( sleep 1; beatT 13 stop 5 ) &                   # prompt beat 12 was never sampled
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down"* ]] || false
+}
+
+@test "idle-scoped: a beat that LOSES turnSeq mid-watch falls back, it does not answer from a missing field" {
+  # A half-converged live layer can hand this watcher an old-producer beat after a new-producer one.
+  # The verdict must then come from the legacy arms, never from an absent field read as zero.
+  beatT 10 prompt 4
+  ( sleep 1; beat 12 prompt ) &                    # no turnSeq at all, seq > baseline+1
   local writer=$!
   run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
   wait "$writer" 2>/dev/null || true
