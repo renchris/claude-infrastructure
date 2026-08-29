@@ -399,8 +399,17 @@ cmd_up() {
   # extra still gets the return path. `--unmanaged` is the deliberate opt-out, and it is spelled as
   # a flag rather than as "leave it blank" so an UNMANAGED fire is a decision in the argv rather
   # than an accident of environment.
+  #
+  # ⚠️ THE `:-` IS NOT DECORATION. This file runs under `set -u`, so `${ITERM_SESSION_ID##*:}` on an
+  # UNSET variable is a fatal "unbound variable" — and unset is exactly the case the three lines
+  # below exist to handle, so the guard was refusing the state its own fallback was written for. It
+  # is invisible on the operator's box (iTerm2 exports the variable into every shell) and fatal
+  # everywhere else `up` is reachable from: launchd, a hook, a fired session, a Linux runner, the
+  # suite. Measured 2026-08-29: 10 of tests/cc-offload.bats's `up` cases die here before reaching
+  # anything they assert. Same law as line 564, which already spells it `${ITERM_SESSION_ID:+…}`.
   if [ "$UP_UNMANAGED" = 0 ] && [ -z "$UP_NOTIFY_BACK" ]; then
-    UP_NOTIFY_BACK="${ITERM_SESSION_ID##*:}"
+    UP_NOTIFY_BACK="${ITERM_SESSION_ID:-}"
+    UP_NOTIFY_BACK="${UP_NOTIFY_BACK##*:}"
   fi
   if [ "$UP_UNMANAGED" = 1 ]; then UP_NOTIFY_BACK=''
   elif [ -z "$UP_NOTIFY_BACK" ]; then
