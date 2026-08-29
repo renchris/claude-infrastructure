@@ -1837,6 +1837,11 @@ n1 = row(acct="next", weekly_pct=52, weekly_reset_h=114.21, burn_wk_ewma_ph=1.72
 line = ca.pace_line([n3, n1, n2, n4])          # deliberately NOT in the expected order
 assert line.startswith("weekly drain — pp that DIE at reset"), line
 assert "nowcast at the last 48h of pace" in line, line   # a NOWCAST: no lead-time claim, §5.1 LB-2
+# S4 — the header names the rate the start-times were priced at, and ONLY once a consumer of it
+# exists. S3 deliberately shipped no K clause because M3a is pure weekly-space arithmetic; a
+# coefficient nothing on the line consumes is the metric shape §3.2 forbids.
+assert "K=" not in line, line                            # no row carries a fit ⇒ no clause
+assert ca.PACE_HEAD in line, line
 # RP-25 — sorted by pp at risk, descending: 64 / 56 / 5, then the zero-strand row
 assert line.index("next4") < line.index("next2") < line.index("next3") < line.index("next "), line
 assert "next4 strand ~64pp of 86" in line, line
@@ -1859,6 +1864,48 @@ ab = ca.pace_line([row(acct="next2", weekly_pct=13, weekly_reset_h=122.8, burn_w
 assert "next2 strand unknown (span 4.1h < 6.8h)" in ab, ab
 # no data ⇒ no block (a drain block over nothing would render at every error state)
 assert ca.pace_line([row(weekly_pct=None), row(weekly_reset_h=None)]) == ""
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router M7 + S4: the drain block carries the START-TIME clause and names the K it priced it at" {
+  # RP-21/RP-22 pin the arithmetic; this pins the one renderer (L3). Three things it must do, and
+  # each has cost something before: the header names K only when a consumer of K is on the line;
+  # the LATE verdict renders its unrecoverable floor rather than a bare hour; and the clause rides
+  # the STRAND rows only, because a start-time on an account already filling its window is a
+  # rescue nobody needs — spend that changes no decision, which is §0's definition of bloat.
+  run python3 -c "$LOAD"'
+n3 = row(acct="next3", weekly_pct=92, weekly_reset_h=2.21, session_pct=13, session_reset_h=3.37,
+         burn_wk_ewma_ph=1.140, xrate_k=0.192, xrate_src="live",
+         burst_start_by=ca.burst_start_by({"weekly_pct": 92, "weekly_reset_h": 2.21,
+                                           "session_pct": 13, "session_reset_h": 3.37}, 0.192))
+n4 = row(acct="next4", weekly_pct=14, weekly_reset_h=119.2, session_pct=5, session_reset_h=1.2,
+         burn_wk_ewma_ph=0.186, xrate_k=0.192, xrate_src="live",
+         burst_start_by=ca.burst_start_by({"weekly_pct": 14, "weekly_reset_h": 119.2,
+                                           "session_pct": 5, "session_reset_h": 1.2}, 0.192))
+n1 = row(acct="next", weekly_pct=52, weekly_reset_h=114.21, session_pct=9, session_reset_h=2.0,
+         burn_wk_ewma_ph=1.725, xrate_k=0.192, xrate_src="live",
+         burst_start_by=ca.burst_start_by({"weekly_pct": 52, "weekly_reset_h": 114.21,
+                                           "session_pct": 9, "session_reset_h": 2.0}, 0.192))
+line = ca.pace_line([n3, n1, n4])
+assert line.startswith("weekly drain — pp that DIE at reset (K=0.192 live · nowcast"), line
+assert "next4 strand ~64pp of 86" in line, line
+assert "start by T−28h (91h slack)" in line, line
+assert "⚠ LATE by 0.6h — 2.8pp already unrecoverable" in line, line
+# the zero-strand row still renders, and does NOT carry a start-time it has no use for
+tail = [l for l in line.split(chr(10)) if l.strip().startswith("next ")][0]
+assert "no strand" in tail, tail
+assert "start by" not in tail and "LATE" not in tail, tail
+# CONTROL — K abstained (S1c out of band): the strand and the start-time both still render off
+# their own inputs, but the header does NOT claim a rate. S3 Deviation 1 is load-bearing: gating
+# the strand on a coefficient it does not consume would be a fabricated dependency.
+for r in (n3, n1, n4):
+    r.pop("xrate_k"); r.pop("xrate_src")
+nk = ca.pace_line([n3, n1, n4])
+assert nk.startswith(ca.PACE_HEAD), nk
+assert "K=" not in nk, nk
+assert "next4 strand ~64pp of 86" in nk, nk
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }

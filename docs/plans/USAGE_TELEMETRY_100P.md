@@ -1770,6 +1770,49 @@ nowcaster precisely because it converges as the horizon closes, which is what ma
 forecaster. **S5 (`--strand-score`) is still the prerequisite for S6**, and nothing here
 shortens that.
 
+#### S4 · M4′ `burst_start_by` — LANDED (wave 2, 2026-08-29)
+
+`bin/claude-accounts`: `burst_start_by(r, k)` + `fmt_start_by(sb)` beside `PACE_HEAD`, constants
+`BURST_SPPH` / `P_WALL` / `MEAN_WALL_H` / `BURST_SLACK_H`; `exchange_rate` fitted **once per
+sweep** in `apply_burn` and stamped as `xrate_k` / `xrate_src`; `pace_line` gains the start-time
+clause and the header's K name. Suite `tests/claude-accounts-burst.bats` RP-21..RP-24 plus the
+renderer case in `tests/claude-accounts-core.bats` — **5/5 RED** against the pre-change binary
+(`git stash push -- bin/claude-accounts`, run, pop), green after.
+
+**The spec's own live table reproduces to the digit**, which is the useful confirmation because
+every constant here rests on n = 8: next3 `windows 1 · burn 1.822 h · freeze 1.033 h · t_needed
+2.855 h · h = −0.645 · unrecoverable 2.83 pp`, next2 `windows 6 · burn 21.41 h · freeze 6.199 h ·
+t_needed 27.61 h · h = +69.59`. RP-21 carries the deleted M4 inline as a control — the same
+fixture through `K × BURST_SPPH × weekly_reset_h` reads 9.70 pp of reach against 8 needed, i.e.
+**REACHABLE on the account that in fact stranded** — so the case discriminates the two *questions*,
+not merely two numbers.
+
+**Deviation 1 — an EXHAUSTED open window waits for its own roll.** §5.2's pseudocode guards the
+whole first block on `avail > 0`, so at `session_pct = 100` it leaves `t = 0` and the walk opens
+the next 5h window instantly — violating the grid constraint the same paragraph states one line
+above it. Shipped with `t = session_reset_h` on that branch; RP-24's last arm pins it.
+
+**Deviation 2 — the return is a dict, not the bare float RP-21 sketches**, for S2's reason and one
+more: `h` and `unrecoverable_pp` are different facts (a float cannot carry the floor), and the
+verdict thresholds belong beside the arithmetic that sets them rather than at each call site.
+
+**Deviation 3 — the clause rides the STRAND rows only.** A start-time is a constraint on
+*rescuing* a strand; on an account already on pace to fill its window it renders "no rush" about
+a rescue nobody needs, which is spend that changes no decision — §0's own definition of bloat.
+The core-suite case pins that the zero-strand row still renders and carries no start-time.
+
+**Deviation 4 — K is fitted once per sweep, not once per row.** `exchange_rate` pools every
+account's adjacent pairs, so it is fleet-wide by construction; four calls would be four identical
+passes over the same series. And the header clause is **omitted, not faked, when K abstains** —
+the strand and the start-time still render off their own inputs, because S3 Deviation 1 stands:
+M3a consumes no K and gating it on one would be a fabricated dependency.
+
+**RP-23 is the case that earns its keep.** Delete the wall-freeze term entirely and RP-21, RP-22
+and RP-24 all stay green — the burn walk alone already discriminates them. RP-23 injects
+`P_WALL = 0.0` through the module constant and pins both that the difference is the executed
+1.033 h and that the freeze is what **flips** next3's verdict (`START SOON` without it). A
+hard-coded 1.033 h inside the function fails it.
+
 #### Acceptance status against §5.4
 
 | command | status |

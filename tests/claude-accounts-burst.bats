@@ -138,6 +138,116 @@ print("OK")'
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
+@test "RP-21: burst_start_by returns LATE for next3's live shape, with the unrecoverable floor" {
+  # USAGE_TELEMETRY_100P §5.2 S4 (M4'), §5.3 RP-21. The measured live row at 2026-08-25T09:47:41Z.
+  #
+  # THIS IS THE CASE THAT SEPARATES M4' FROM THE DELETED M4, and the deletion is recorded here
+  # because this is where an implementer reads it. The synthesis's `wk_reach_pp` asked a CAPACITY
+  # question — K * BURST_SPPH * weekly_reset_h = 0.192 * 22.87 * 2.21 = 9.70 pp of reach against
+  # 8 pp needed — and answered REACHABLE with a 1.2x margin (the synthesis published 16.9 pp on a
+  # wider reach term, i.e. 2.1x). next3 in fact stranded. Capacity is nearly algebraically fixed:
+  # a metric that cannot return the unwelcome answer is not a measurement. M4' asks a
+  # rate-and-freeze-against-the-clock question and reads LATE by 0.65 h.
+  run python3 -c "$LOAD"'
+r = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+     "session_pct": 13, "session_reset_h": 3.37}
+sb = ca.burst_start_by(r, 0.192)
+assert sb is not None, sb
+assert -1.0 < sb["h"] < 0.0, sb                       # measured -0.65
+assert abs(sb["h"] + 0.645) < 0.02, sb
+assert sb["verdict"] == "LATE", sb
+assert sb["windows"] == 1, sb                         # the OPEN window alone can carry the burn
+assert abs(sb["burn_h"] - 1.822) < 0.01, sb
+assert abs(sb["freeze_h"] - 1.033) < 0.01, sb
+assert abs(sb["t_needed_h"] - 2.855) < 0.02, sb
+# the floor: freeze eats 1.03 h of the 2.21 h left, so only 1.18 h converts at K -> 5.17 pp of
+# the 8 needed. 2.83 pp cannot be saved even by a perfect burst starting this instant.
+assert abs(sb["unrecoverable_pp"] - 2.83) < 0.05, sb
+# CONTROL on the DELETED metric, inline, so the fixture provably discriminates the two QUESTIONS
+# and not merely two numbers. The old code is gone; its answer must not be.
+reach = 0.192 * ca.BURST_SPPH * r["weekly_reset_h"]
+assert reach > 8.0, reach                             # M4 said REACHABLE on the account that stranded
+assert ca.fmt_start_by(sb) == "⚠ LATE by 0.6h — 2.8pp already unrecoverable", ca.fmt_start_by(sb)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-22 CONTROL: an account with days of runway returns SLACK, and pays the 5h grid" {
+  # RP-21 is satisfied by a function that returns LATE always — the exact degeneracy that killed
+  # M4. next2's live shape needs 432 session pp, i.e. six 5h windows, and the grid's dead time is
+  # what makes that 27.6 h rather than the 21.4 h of pure burn. Without this arm the grid walk
+  # could be deleted and RP-21 would stay green.
+  run python3 -c "$LOAD"'
+r = {"acct": "next2", "weekly_pct": 17, "weekly_reset_h": 97.2,
+     "session_pct": 8, "session_reset_h": 0.54}
+sb = ca.burst_start_by(r, 0.192)
+assert sb is not None, sb
+assert sb["h"] > 60.0, sb                             # measured +69.59
+assert abs(sb["h"] - 69.59) < 0.3, sb
+assert sb["verdict"] == "SLACK", sb
+assert sb["windows"] == 6, sb
+assert abs(sb["freeze_h"] - 6.199) < 0.02, sb
+# the grid is LIVE: pure burn of 432.3 session pp at 22.87 pp/h is 18.90 h; the walk reads 21.41
+# because the open window dies at 0.54 h and five roll-waits of 0.63 h are paid after it.
+assert abs(sb["burn_h"] - 21.41) < 0.05, sb
+assert sb["burn_h"] > 432.3 / ca.BURST_SPPH + 2.0, sb
+assert sb["unrecoverable_pp"] == 0.0, sb              # nothing is lost yet
+assert ca.fmt_start_by(sb) == "start by T−28h (70h slack)", ca.fmt_start_by(sb)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-23 CONTROL: the freeze term is LIVE, not decorative" {
+  # The mutant a purely arithmetic implementation survives: drop the wall-freeze term entirely
+  # and every OTHER case here still passes, because the burn walk alone already discriminates.
+  # P_WALL is injected through the module constant, so this pins that the shipped value is the
+  # one the shipped code reads — a hard-coded 1.033 h inside the function fails here.
+  run python3 -c "$LOAD"'
+r = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+     "session_pct": 13, "session_reset_h": 3.37}
+with_wall = ca.burst_start_by(r, 0.192)["h"]
+ca.P_WALL = 0.0
+without = ca.burst_start_by(r, 0.192)["h"]
+assert abs((without - with_wall) - 1.033) < 0.01, (with_wall, without)
+# ...and the freeze is what FLIPS the verdict, which is why it is not decorative: with no wall
+# next3 is not late at all.
+assert ca.burst_start_by(r, 0.192)["verdict"] == "START SOON", "freeze does not change the verdict"
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-24 CONTROL: every abstain arm returns None, never a zero" {
+  # RP-24 proper is the null session stamp: a null stamp means NO WINDOW IS OPEN, a distinct
+  # state (15.0% of rows) that must not collapse to "0% used, go ahead" — which is what a
+  # `session_pct or 0` would do, and it would read as the most permissive possible input.
+  run python3 -c "$LOAD"'
+base = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+        "session_pct": 13, "session_reset_h": 3.37}
+def v(**kw):
+    r = dict(base); r.update(kw); return r
+assert ca.burst_start_by(v(session_pct=None, session_reset_at=None,
+                           session_reset_h=None), 0.192) is None    # RP-24
+assert ca.burst_start_by(base, None) is None            # K abstained (S1c) — no fallback rate
+assert ca.burst_start_by(base, 0.0) is None
+assert ca.burst_start_by(v(weekly_pct=100), 0.192) is None          # deficit already closed
+assert ca.burst_start_by(v(weekly_pct=None), 0.192) is None
+assert ca.burst_start_by(v(weekly_reset_h=0.0), 0.192) is None      # outside (0, 168]
+assert ca.burst_start_by(v(weekly_reset_h=200.0), 0.192) is None
+assert ca.fmt_start_by(None) is None
+# CONTROL: the base row itself is NOT None, so the arms above are abstains and not a stub.
+assert ca.burst_start_by(base, 0.192) is not None
+# an EXHAUSTED open window waits for its own roll rather than opening the next one instantly:
+# §5.2 pseudocode leaves t at 0 here, which violates the grid constraint it states one line up.
+full = ca.burst_start_by(v(session_pct=100, session_reset_h=2.0), 0.192)
+assert full["burn_h"] >= 2.0, full
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
 @test "RP-20b CONTROL: inside the last half hour it abstains, and it ranks the account's OWN history" {
   # Two arms of the same rule. (a) below BURST_MIN_RESET_H a rate is quantization, not pace.
   # (b) a sibling account's samples must not enter the distribution -- the whole claim is
