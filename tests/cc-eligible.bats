@@ -111,6 +111,37 @@ verdict() { "$CE" check "$1" 2>&1 | head -1; }
   [[ "$output" == *"verdict=eligible"* ]] || { echo "$output"; false; }
 }
 
+@test "ABOUT THIS BOX: the LIVE FLEET as a population to measure, named only as 'active session'" {
+  # Regression for backlog `193ae8ddce72`, and this one was measured from inside the failure: the
+  # item asks for a coefficient per ACTIVE session on a 10-core Darwin box with a live dispatch
+  # wave, and it spells no other listed word — no launchd, no sysctl, no pane, no darwin. Before
+  # this entry it read `eligible / (nothing fired)` and was dispatched to a Linux microVM which has
+  # none of those things, and which cannot even PARK it (`cc-backlog block` exits 0 doing nothing
+  # off-box — the store is `~/.claude/autonomy/backlog.jsonl`), so the item returns to the wave
+  # `open` and is re-fired forever. The title is the real one, trimmed.
+  #
+  # Asserting the SPELLING and not just the token is what distinguishes this from the launchd arm
+  # above: without `active-session` in the list this test still fails, and with any other box word
+  # smuggled into the fixture it would pass for the wrong reason.
+  local id; id="$(add box "Measure marginal load per ACTIVE session — the denominator of every capacity claim, currently spanning 30x; sampler must pass a correlation control")"
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=ineligible-box"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"active-session"* ]] || { echo "named the class but not the spelling: $output"; false; }
+}
+
+@test "CONTROL: 'interactive'/'inactive' session is NOT the live fleet — boundaries hold leftward" {
+  # The paired lookalike for the arm above, and it is not hypothetical: over docs/**/*.md this repo
+  # says `interactive session` or `inactive session` on 64 lines, against 80 for the real class. A
+  # pattern anchored on the substring `active session` rather than on `\bactive` would refuse all 64
+  # — an ordinary interactive-shell item stranded off-box — and the refusal assertion above would
+  # still be green, which is exactly the dead-control shape this suite's header names.
+  local id; id="$(add ctl "document how to run the migration from an interactive session, and reap inactive sessions after")"
+  run "$CE" check "$id"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=eligible"* ]] || { echo "$output"; false; }
+}
+
 @test "refusal ORDER: an item naming two classes reports the widest one" {
   # Widest-first is deliberate: an item that says both "launchd" and "render" is box work whose
   # remedy happens to be visible, not design work. The token is one string because the consumer is
