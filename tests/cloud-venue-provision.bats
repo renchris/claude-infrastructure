@@ -23,6 +23,17 @@ setup() {
   # Hermetic $HOME: nothing in the subject reads it today, and the subject is a file that runs
   # before a land, which is the worst place to discover that changed.
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # THE RUNNER WITNESS IS FORCED TO A ONE-FILE FIXTURE FOR EVERY CELL BUT ONE, AND THAT IS A COST
+  # DECISION, NOT A CORRECTNESS ONE. The subject's real witness is a gather of all ~556 tests/*.bats
+  # in one bats process — ~45s measured. Every `--check` cell below would pay it, and this suite is
+  # DIRECTLY SELECTED by a scripts/ship-land.sh change, whose whole smoke budget is 420s. So the
+  # cells that are about the checker, the horizon or the seams run against a trivial corpus, and the
+  # ONE cell that is about the real corpus pays the real price, once, deliberately. The census output
+  # prints "witness FORCED by CC_VENUE_RUNNER_WITNESS" whenever this is set, so a forced value can
+  # never be read back as a measurement — the same rule CC_VENUE_HISTORY already follows.
+  FASTC="$BATS_TEST_TMPDIR/fast-corpus"; mkdir -p "$FASTC"
+  printf '@test "the fixture corpus loads" { true; }\n' > "$FASTC/trivial.bats"
+  export CC_VENUE_RUNNER_WITNESS="$FASTC"
 }
 
 # ── the subject's own discrimination proof, run as a test so a regression in it is a red suite ────
@@ -90,6 +101,88 @@ setup() {
   [ "$status" -ne 0 ]
   [[ "$output" == *"verdict: LOCKED"* ]] || false
   [[ "$output" != *"UNGATED"* ]]
+}
+
+# ── THE FIFTH LOCK: present is not loadable ───────────────────────────────────────────────────────
+# The subject's --selftest drives STALE-RUNNER with a synthetic operand. These cells drive the LIVE
+# probe, the same way the STALE-CHECKER cell above drives the checker's — by pointing the witness at
+# a corpus that genuinely cannot be gathered, and (the half that makes it mean something) at one that
+# genuinely can. A probe hard-wired to `stale` passes the first cell alone.
+#
+# 🚨 THE FIXTURE MUST BE CHOSEN BY PROBING, NOT WRITTEN DOWN — measured, and the reason is the whole
+# finding one level down. NO SINGLE ungatherable corpus exists across bats versions, because the two
+# versions disagree about what `-c` even does:
+#     duplicate @test names   1.10.0 refuses (fatal, no TAP) · 1.13.0 ALLOWS  (disambiguates them)
+#     a shell syntax error    1.10.0 ACCEPTS (prints a count; it never sources) · 1.13.0 refuses
+# So a hard-coded bad fixture convicts this tree on whichever runner happens to tolerate it — the
+# false-conviction direction the plan's addendum warns against buying to cure a silent ungating.
+# This builds candidates and keeps the first one THIS runner actually refuses.
+mk_unloadable() {   # $1 = dir → 0 and a populated dir, or 1 if this runner refuses nothing we can write
+  local d="$1" c
+  mkdir -p "$d"
+  for c in syntax dup; do
+    rm -f "$d"/*.bats
+    printf '@test "fine" { true; }\n' > "$d/ok.bats"
+    case "$c" in
+      syntax) printf '@test "broken" {\n  if [ 1 = 1 ]; then\n}\n' > "$d/broken.bats" ;;
+      dup)    printf '@test "x" { true; }\n@test "x" { true; }\n'  > "$d/broken.bats" ;;
+    esac
+    bats -c "$d"/*.bats >/dev/null 2>&1 || return 0
+  done
+  rm -f "$d"/*.bats
+  return 1
+}
+
+@test "--check reads STALE-RUNNER when the runner cannot LOAD a suite in the corpus" {
+  local d="$BATS_TEST_TMPDIR/badcorpus"
+  mk_unloadable "$d" || skip "this bats gathers every malformed corpus we can write — the cell has no fixture"
+  CC_VENUE_RUNNER_WITNESS="$d" run bash "$SUT" --check
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"verdict: STALE-RUNNER"* ]] || false
+  [[ "$output" == *"corpus stale"* ]]
+}
+
+@test "…and a corpus it CAN load reads READY — the probe measures the corpus, not the flag" {
+  command -v shellcheck >/dev/null 2>&1 || skip "no shellcheck on this box — READY is unreachable"
+  run bash "$SUT" --check           # $CC_VENUE_RUNNER_WITNESS from setup(): one loadable suite
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict: READY"* ]] || false
+  [[ "$output" == *"corpus ok"* ]]
+}
+
+@test "an absent runner and a stale one are DIFFERENT tokens — the cure differs" {
+  local d="$BATS_TEST_TMPDIR/badcorpus2"
+  mk_unloadable "$d" || skip "this bats gathers every malformed corpus we can write"
+  CC_VENUE_RUNNER_WITNESS="$d" run bash "$SUT" --check
+  [[ "$output" == *"STALE-RUNNER"* ]] || false
+  [[ "$output" != *"UNGATED"* ]] || false
+  CC_VENUE_ABSENT="bats" run bash "$SUT" --check
+  [[ "$output" == *"UNGATED"* ]] || false
+  [[ "$output" != *"STALE-RUNNER"* ]]
+}
+
+@test "a checker failure outranks a runner failure — the statics arm reds before the smoke runs" {
+  local d="$BATS_TEST_TMPDIR/badcorpus3"
+  mk_unloadable "$d" || skip "this bats gathers every malformed corpus we can write"
+  CC_VENUE_ABSENT="shellcheck" CC_VENUE_RUNNER_WITNESS="$d" run bash "$SUT" --check
+  [[ "$output" == *"verdict: LOCKED"* ]] || false
+  [[ "$output" != *"STALE-RUNNER"* ]]
+}
+
+# THE RATCHET, and it is the cell this whole diff exists for: whatever runner is executing THIS suite
+# must be able to gather EVERY suite in this repo. Measured 2026-08-29, the distro's 1.10.0 could not
+# — 553 of 556, refusing bats-shellcheck-lint, git-identity-lint and qos-chokepoint over @test
+# descriptions that mangle alike inside heredoc fixtures — and the land read each of them as a cut,
+# attested "partial", and pushed. Nothing in the corpus asked this question, so nothing noticed.
+# ~45s, deliberately: it is the real witness, and the reason every other cell above uses a fixture.
+@test "RATCHET — the running bats can gather this repo's WHOLE corpus, not merely most of it" {
+  run env -u CC_VENUE_RUNNER_WITNESS bash "$SUT" --check
+  [[ "$output" == *"corpus ok"* ]] || {
+    echo "$output"
+    echo "The runner executing this suite cannot load part of tests/ — see the assert lines above."
+    false
+  }
+  [[ "$output" != *"witness FORCED"* ]]
 }
 
 # THE SEAM'S ASYMMETRY, asserted rather than assumed. CC_VENUE_ABSENT exists only so the two failure

@@ -86,6 +86,61 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-29 — ELEVENTH CLOUD DISPATCH ON `70f0001c657b`: THE VENUE SCRIPT LANDED A RULE AND
+  APPLIED IT TO ONE OF ITS TWO TOOLS. `bats` PRESENT ≠ `bats` ABLE TO LOAD THIS REPO, AND THE
+  DIFFERENCE IS A LAND THAT PUSHES HAVING RUN NOTHING.** Full measurement + the controls →
+  `docs/research/venue-runner-version-2026-08-29.md`. Addendum at the foot of this plan.
+  🚨 **THE FINDING.** The addendum below records the third lock as *"presence is not a version"* and
+  cures it for `shellcheck` with a WITNESS RUN. `scripts/cloud-venue-provision.sh` then installed
+  `bats` from the distro archive and certified it with `bats --version` — the exact artefact its own
+  header says twice is not a verdict. Measured on this venue, which that file had just called
+  **READY**: `bats -c` over the whole corpus loads **553 of 556** under the archive's **1.10.0** and
+  **556 of 556** under **1.13.0**, the version `.github/workflows/hermetic.yml` pins *"so the verdict
+  is comparable with the on-box verifier's"*. The three it refuses —
+  `bats-shellcheck-lint` · `git-identity-lint` · `qos-chokepoint` — all write fixture `.bats` text in
+  HEREDOCS, and bats' preprocessor is line-based, so a `@test "x"` inside one counts toward the
+  enclosing file's name uniqueness. Before 1.11 two descriptions that mangle alike are fatal for the
+  WHOLE file. **Two of the three are directly selected by any change to `scripts/ship-land.sh`.**
+  🚨 **AND IT IS THE SAME SILENT UNGATING, UNDER A GREEN LINE.** Driven on the LAND path, not argued:
+  one comments-only commit to `scripts/git-identity-lint.sh` (4 direct suites, one unloadable),
+  `--dry-run`, same commit and same box in both cells.
+
+      runner    smoke                                          verdict about the diff
+      1.10.0    PARTIAL — git-identity-lint.bats cut TWICE      none: "gate GREEN … would push"
+                (exit 1, ZERO 'not ok'), GATE-KILLED at it
+      1.13.0    green — 4 direct suite(s) in 35s                all four ran
+      NEG: the control's log holds 0 occurrences of `Duplicate test name(s)` — so the PARTIAL is the
+           runner's, not the budget's and not the diff's.
+
+  ✅ **LANDED:** a seventh verdict token **`STALE-RUNNER`**, a `runner_state()` that GATHERS this
+  repo's corpus instead of reading a version string, an upgrade arm symmetric with the checker's
+  (clone the pinned tag → its own `install.sh` → **re-measure**, so the pin decides what is fetched
+  and nothing about the verdict), and the ratchet the class needed: *the runner executing
+  `tests/cloud-venue-provision.bats` must gather the WHOLE corpus, not merely most of it.*
+  ⚠️ **`venue_verdict`'s second operand was a boolean and is now a word** — *present* and *can load
+  this repo* are different questions and a flag carries only the first. The old `1` reads `UNKNOWN`,
+  pinned by its own cell, because the live failure mode of an operand that changed type is a caller
+  that did not.
+  🚨 **THE REUSABLE HALF — NO FIXTURE IS UNGATHERABLE ACROSS BATS VERSIONS, so a hard-coded bad
+  fixture convicts the TREE on whichever runner tolerates it.** Duplicate names: fatal to 1.10,
+  **allowed** by 1.13. A shell syntax error: fatal to 1.13, **invisible** to 1.10 (whose `-c` counts
+  `@test` lines and never sources). The suite therefore builds candidates and keeps the first one THIS
+  runner refuses. Same shape as the addendum's own warning about trading a silent ungating for a false
+  conviction — met one layer down, in the test fixtures.
+  ✅ **AND THE CENSUS THE PREVIOUS ADDENDUM NAMED AS ITS NEXT CELL IS TAKEN — THE ANSWER IS NOT
+  CLEAN.** All 33 `--direct` suites of a `ship-land.sh` change, run off-box here through
+  `offbox-run.sh suites`: **green 22 · red 10 · cut 1**. `cc-reaper` reproduces its **51**; seven
+  suites OUTSIDE `offbox-excluded.manifest` name a failure, and `test-hermeticity-lint` earns no
+  verdict inside the bound. The three formerly-invisible suites now speak: `git-identity-lint`
+  **green 23/0** — a good suite the land was skipping — `bats-shellcheck-lint` 27/1,
+  `qos-chokepoint` 45/2. ⚠️ **No CAUSE was measured for any of them, so the manifest is UNTOUCHED**;
+  its contract is *"every entry is a MEASUREMENT, not a judgement"* and a census is that work's input,
+  not that work.
+  📋 **OWED LOCALLY (the ledger is unwritable from a VM, so this entry is the channel — as 2026-08-18
+  and the entry below):** `cc-backlog venue 70f0001c657b --venue local --why "plan-open pointer span:
+  the row's 4 fields fire 0 tokens; the plan's remaining sections fire all 6 refusal classes"`, then
+  `cc-backlog done 70f0001c657b --evidence "<landed sha>"` **only if** the local drain agrees this
+  link discharged it — the plan itself stays OPEN and its remaining work is unchanged.
 - **2026-08-29 — drain recycle #258: method 230 — EXPOSURE IS AN ORDERED LADDER: WHAT THE MIDDLE
   STAGE EMITS GOVERNS THE MIDDLE STAGE, AND THE MIDDLE STAGE GOVERNS THE PRODUCER — SO "HOW MANY
   STAGES CAN TAKE SIGPIPE" IS NOT THE STAGE COUNT.**
@@ -27433,3 +27488,106 @@ defect is on the operator's box, and A stays operator-gated on the one read in
 `cc-cloud`'s `landed()` is an `ls-tree` of the tip tree and is horizon-proof, and `fill-paths` runs
 desk-side on a full clone. What was corrupted is the **worker's own** reads, i.e. the diagnoses; and
 this is the first link in the chain that measured its own instrument before measuring the lane.
+
+### The fifth lock — the venue script's own rule, applied to only one of its two tools (`70f0001c657b`)
+
+*(2026-08-29, eleventh dispatch on this plan's own row, measured in the container. Full derivation,
+the controls and the limits: `docs/research/venue-runner-version-2026-08-29.md`.)*
+
+The third lock above is *presence is not a version*, and `scripts/cloud-venue-provision.sh` cures it
+for `shellcheck` with a **witness run** — its header says twice that a `--version` string is a claim
+about the binary and never about this box. It then installed `bats` from the distro archive and
+certified it with `bats --version`. On the venue that file had just called **READY**, the string read
+`Bats 1.10.0`, was true, and the box could not **load** three of its own suites.
+
+    runner                          gathers tests/*.bats   refuses
+    1.10.0 (Ubuntu archive)              553 / 556         bats-shellcheck-lint · git-identity-lint
+                                                           · qos-chokepoint
+    1.13.0 (this repo's pin)             556 / 556         —
+
+`bats` mangles each `@test` description into a function name, and before 1.11 two that mangle alike
+are a fatal `Error: Duplicate test name(s)` for the whole file. The preprocessor is line-based, so a
+`@test "x"` inside a **heredoc** — fixture text a suite writes to drive its own subject — counts.
+Those three suites all do that, legitimately. **Two of the three are directly selected by any change
+to `scripts/ship-land.sh`**, i.e. by the file the previous addendum could not land.
+
+The pin is the repo's, not a preference: `.github/workflows/hermetic.yml` installs `v1.13.0` from
+source *"so the verdict is comparable with the on-box verifier's, and every stamp it writes records
+bats 1.13.0"*, and `scripts/postland-verify.sh` cites the same version for the gather it depends on.
+
+**Driven end to end on the land path, with the control that makes it attributable.** One
+comments-only commit to `scripts/git-identity-lint.sh` (`gate-select --direct` → 4 suites, one of
+them unloadable), `SHIP_LAND_SMOKE_BUDGET_S=420`, `--dry-run`; same commit, same box, runner swapped:
+
+    runner    smoke                                            gate's verdict about the diff
+    1.10.0    PARTIAL — git-identity-lint.bats cut TWICE        none — "reconciled onto origin/main
+              (exit 1, ZERO 'not ok' both times), GATE-KILLED   + gate GREEN", "would push HEAD"
+    1.13.0    green — 4 direct suite(s) in 35s                  all four ran
+
+The control's log holds **zero** occurrences of `Duplicate test name(s)`, so the PARTIAL belongs to
+the runner and not to the budget or the diff. This is the identical `cut → partial → return 0`
+polarity the file already documents for an ABSENT runner — `ship-land.sh:2136`'s *"a non-verdict
+never blocks a land; the post-land verifier decides"*, vacuous on a venue with no verifier — arriving
+this time **under a green tool-presence line**, which is what made it invisible.
+
+**Landed with this addendum:**
+
+- `scripts/cloud-venue-provision.sh` — `runner_state()` → `absent | stale | ok`, a **gather of this
+  repo's corpus** (`bats -c`, ~45 s, executes nothing) rather than a version string; a seventh token
+  **`STALE-RUNNER`**, ranked below `STALE-CHECKER` (a land the statics arm reds never reaches the
+  smoke) and beside `UNGATED` — two values of one operand, separate tokens because the cure differs,
+  install one versus replace one; an upgrade arm symmetric with the checker's (clone the pinned tag,
+  run bats-core's own `install.sh`, print the resolved commit as provenance, **re-measure**), so the
+  pinned number decides what is fetched and **nothing about the verdict** — a witness that still
+  fails after the upgrade stays `STALE-RUNNER`, which is also how the pooled `stale` arm separates
+  *"the runner is too old"* from *"a suite here loads under no runner"*, by acting rather than
+  guessing. A **symlink**, not a copy, where the ambient PATH resolves the distro runner first: 1.13's
+  launcher locates its libexec relative to the resolved path. The assertion arm now says what the
+  runner DID — `bats LOADS this repo — 556 suite(s) gather under Bats 1.13.0` — and on `stale` NAMES
+  the suites, bounded at five plus a count.
+- ⚠️ `venue_verdict`'s second operand **was a boolean and is now a word**: *present* and *can load
+  this repo* are different questions and a flag carries only the first. The old `1` reads `UNKNOWN`,
+  with its own cell, because the live failure mode of an operand that changes type is a caller that
+  did not change with it.
+- `tests/cloud-venue-provision.bats` — 26/26, five cells new, including the ratchet the class needed:
+  **the runner executing this suite must gather the WHOLE corpus, not merely most of it.** Nothing in
+  the corpus had ever asked that question, which is why 553/556 went unnoticed for as long as it did.
+
+🚨 **The reusable half, and it cost a fixture rewrite: NO SINGLE UNGATHERABLE CORPUS EXISTS ACROSS
+BATS VERSIONS.** Duplicate names are fatal to 1.10 and **allowed** by 1.13; a shell syntax error is
+fatal to 1.13 and **invisible** to 1.10, whose `-c` counts `@test` lines and never sources. So a
+hard-coded bad fixture convicts the TREE on whichever runner tolerates it — the false-conviction
+direction the addendum above warns against buying to cure a silent ungating, met one layer down. The
+suite builds candidates and keeps the first one THIS runner refuses, skipping with a named reason if
+neither works. The same asymmetry bounds the probe honestly: an old runner cannot see the loud class,
+but still fails the **silent** one, so the probe can never report `READY` on the venue at issue.
+
+**End to end, after reverting this box to the distro runner:** `--check` read `STALE-RUNNER` where
+the same file had read `READY`; the full run fetched `bats-core v1.13.0`
+(`3bca150ec86275d6d9d5a4fd7d48ab8b6c6f3d87`), re-read `READY`, and asserted the load. Four negative
+controls ran before any of it was claimed — a stuck-`ok` probe, the token collapsed into `UNGATED`,
+the fail-closed arm deleted, and an ungatherable suite planted in `tests/` — each caught by a
+different cell.
+
+✅ **AND THE CENSUS THE ADDENDUM ABOVE NAMED AS THE NEXT CELL IS NOW TAKEN — the answer is NOT
+CLEAN.** That entry closed with *"only four ever ran inside the 420 s budget, so the off-box
+cleanliness of this repo's suite corpus is unmeasured, not clean."* Run here through
+`scripts/offbox-run.sh suites` (fresh empty `$HOME`, `env -i`, 300 s each) over the whole 33-suite
+`--direct` selection of a `scripts/ship-land.sh` change: **green 22 · red 10 · cut 1**. Three of the
+reds (`operator-readout` 43, `ship-land` 17, `qos-rewrite` 13) are already manifest entries;
+`cc-reaper` reads **141 ok / 51 not ok** — the same 51 the addendum measured on pristine trunk, which
+is the reproduction it wanted. Outside the manifest: `gate-home-isolation` 15,
+`bats-shellcheck-lint` 1, `land-gate-cas` / `land-gate-memo` / `land-inflight` / `tsv-field-collapse`
+1 each, and `test-hermeticity-lint` earns NO verdict at all inside the bound. **And the three
+formerly-invisible suites now speak**: `git-identity-lint` **green 23/0** — a perfectly good suite
+the land had been skipping — while `bats-shellcheck-lint` (27/1, an rc-126 past-the-pipe-buffer cell)
+and `qos-chokepoint` (45/2) carry findings no run in this venue could previously reach.
+
+**What this does NOT settle.** ⚠️ **`scripts/offbox-excluded.manifest` is deliberately untouched**,
+and the census is the reason it stays that way rather than the reason to write into it: a cause was
+measured for NONE of the seven, that file's own contract is *"every entry is a MEASUREMENT, not a
+judgement"*, and the addendum above already refused a `cc-reaper` line on exactly these grounds. A
+census is the INPUT to that work, not the work — and it is now cheap for the next link, which is the
+whole change. It also does not move `d84434cd`: the cloud land arm's discriminator still needs the
+three reads that exist only on the operator's box (`scripts/cloud-land-arm-diagnose.sh`), and
+`f85fce7c26f5` stays operator-gated on them.
