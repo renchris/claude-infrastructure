@@ -377,6 +377,13 @@ KUBECTL_VERBS = {
     "exec", "apply", "create", "delete", "run", "cp", "port-forward", "proxy", "patch",
     "edit", "replace", "attach", "debug", "scale", "rollout", "drain", "cordon", "taint",
 }
+# The rule-syntax suffix a verb token carries when the rule is written in the `:*` form. A rule
+# names a PREFIX, so `Bash(kubectl apply:*)` and `Bash(kubectl apply *)` are the same rule — and
+# `_tail_after` already treats `:` and ` ` as the same separator at the COMMAND boundary. This
+# strips the same suffix at the VERB boundary, which is the only place that equivalence was not
+# being honoured. Trailing `*` first, then `:` — `apply:*` → `apply:` → `apply`, `port-forward:*`
+# → `port-forward`. It cannot manufacture a verb: `applyfoo:*` → `applyfoo`, still not in the set.
+_VERB_SUFFIX = "*:"
 # The one documented survivor inside the flag-tail branch: `Bash(python -m pkg.module *)`.
 DASH_M_SURVIVES = re.compile(r"^-m\s+\w+\.[\w.]+(\s*:|\s+)")
 ALL_STARS = re.compile(r"^[\s*]+$")
@@ -430,6 +437,7 @@ def auto_mode_dropped(rule):
                 return f"`{cmd}` tail contains a substitution — auto mode drops it"
             if cmd == "kubectl":
                 first = next((t for t in tail.split() if not t.startswith("-")), "")
+                first = first.rstrip(_VERB_SUFFIX)
                 if first in KUBECTL_VERBS:
                     return f"`kubectl {first}` — on auto mode's dropped-verb list"
             if not any(not t.startswith("-") for t in tail.split()):

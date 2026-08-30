@@ -123,6 +123,38 @@ run_audit() {
   ! grep -qF "· Bash(npm run-script:*) " <<<"$OUTPUT" || false   # `run-script` is not the `run` token
 }
 
+@test "a kubectl verb drops in BOTH spellings of the same rule — \`:*\` is not narrower" {
+  # THE MISS THIS ARM EXISTS FOR (2026-08-30). `_tail_after` treats `:` and ` ` as the same
+  # separator at the COMMAND boundary — `Bash(kubectl …)` and `Bash(kubectl:…)` both reach the
+  # nSd branch — but the verb check then compared the RAW token, so `Bash(kubectl exec *)` was
+  # reported and `Bash(kubectl exec:*)` was not. Same rule, two spellings, opposite verdicts, and
+  # `:*` is the spelling every rule in this repo's own settings files is written in, so the form
+  # that actually occurs was the invisible one. Under-reporting is the failure that matters on
+  # this axis: the section's whole job is naming entries that grant nothing.
+  kube="$BATS_TEST_TMPDIR/kube.settings.local.json"
+  cat > "$kube" <<'JSON'
+{"permissions":{"allow":[
+  "Bash(kubectl exec *)","Bash(kubectl exec:*)",
+  "Bash(kubectl apply:*)","Bash(kubectl port-forward:*)",
+  "Bash(kubectl get:*)","Bash(kubectl applyfoo:*)","Bash(kubectl execute-hook:*)"
+]}}
+JSON
+  run python3 "$AUDIT" --prune "$kube"
+  [ "$status" -eq 0 ]
+  OUTPUT="$output"
+  # BOTH poles, per L4. The hit arm: the four verb rules drop, and the `:*` half is the new one.
+  [[ "$OUTPUT" == *"4 of 7 approved patterns"* ]] || false
+  dropped_line "Bash(kubectl exec *)" | grep -q "dropped-verb list"
+  dropped_line "Bash(kubectl exec:*)" | grep -q "dropped-verb list"
+  dropped_line "Bash(kubectl apply:*)" | grep -q "dropped-verb list"
+  # a hyphenated verb survives the suffix strip intact rather than being truncated to a non-verb
+  dropped_line "Bash(kubectl port-forward:*)" | grep -q "dropped-verb list"
+  # The over-fire arm: stripping the suffix must not MANUFACTURE a verb out of a longer token.
+  ! grep -qF "· Bash(kubectl get:*) " <<<"$OUTPUT" || false        # `get` is not on the verb list
+  ! grep -qF "· Bash(kubectl applyfoo:*) " <<<"$OUTPUT" || false   # not `apply`
+  ! grep -qF "· Bash(kubectl execute-hook:*) " <<<"$OUTPUT" || false  # not `exec`
+}
+
 @test "a dropped entry is REPORTED but never removed — even under CONFIRM=1" {
   CONFIRM=1 run python3 "$AUDIT" --prune "$FIX"
   [ "$status" -eq 0 ]
