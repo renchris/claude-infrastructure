@@ -258,7 +258,32 @@ print(json.dumps({'session_id':sys.argv[1],'ts':int(time.time())-int(sys.argv[4]
   [[ "$output" == *"approved 1"* ]] || false
 }
 
-@test "D3: an UNREADABLE archive dir is BLIND, never an all-clear" {
+@test "D3: an UNREADABLE archive FILE is BLIND, never an all-clear" {
+  # UID-INDEPENDENT BY CONSTRUCTION (2026-08-30). This arm used to `chmod 000` the archive dir,
+  # and mode bits do not apply to uid 0 — under root the dir reads fine, glob returns the file,
+  # and the report reached a state the arm was not written for. Every cloud dispatch of this repo
+  # runs as root, so it went red on a correct tree and blocked the land: the class registered at
+  # docs/research/cloud-land-arm-step-2026-08-25.md §10, whose instruction is to suspect uid 0
+  # before your own diff and to repair the arm that blocked a land at its CONSTRUCTION.
+  #
+  # A DIRECTORY named `*.jsonl` is the uid-independent unreadable: glob matches it, `open()` raises
+  # IsADirectoryError — an OSError, the same branch the mode bit was reaching for — and no uid is
+  # exempt. It is also the state the reader's own docstring names and the report did NOT implement:
+  # with no rows in range it concluded "nothing has actually blocked in range" over a file it could
+  # not open. Both poles are asserted, because exit-by-FLOOR-warning does not exclude that.
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"; mkdir -p "$CC_PERMARCHIVE_DIR"
+  mkdir -p "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
+  run python3 "$AUDIT"
+  [[ "$output" == *"UNREADABLE"* ]] || false
+  [[ "$output" != *"nothing has actually blocked"* ]] || false
+}
+
+@test "D3b: an UNREADABLE archive DIR is BLIND too — the branch above it in the reader" {
+  # The directory-level `os.access(ARCHDIR, R_OK|X_OK)` branch, which returns early and never
+  # reaches the per-file loop D3 exercises. It can only be built with mode bits, so it is the one
+  # assertion here that root genuinely cannot make — skipped explicitly rather than left to invert
+  # in silence, which is what made the old arm a false RED instead of a skip.
+  [ "$(id -u)" -ne 0 ] || skip "mode bits do not apply to uid 0 — see §10 of cloud-land-arm-step"
   export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"; mkdir -p "$CC_PERMARCHIVE_DIR"
   printf '%s\n' '{"session_id":"z","resolved_ts":2000000000,"resolved_by":"Stop","tool_name":"Bash","tool_input":{"command":"rm -rf /"}}' > "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
   chmod 000 "$CC_PERMARCHIVE_DIR"

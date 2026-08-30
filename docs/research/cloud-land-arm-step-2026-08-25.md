@@ -941,3 +941,50 @@ return arm ever wakes up.
 3. **Nothing here was validated on macOS**, by construction. The arm is pure Python over a git ref
    and a JSONL store, with no platform-dependent call in it, and the suite runs on both — but the
    venue it will actually gate in is the operator's box, and this VM is not it.
+
+---
+
+## 11 · The unreadability class, second instance — and it was hiding a real defect (2026-08-30)
+
+§10 registered the class (15 suites build a negative with `chmod 000`; every one is
+vacuous-or-inverted under uid 0), repaired the single arm that had blocked a land, and left the
+instruction: *a future dispatch that reds on an unreadability arm should suspect uid 0 before it
+suspects its own diff.* That instruction was followed here, and it paid twice.
+
+**The arm.** `tests/cc-permission-audit.bats` D3 — "an UNREADABLE archive dir is BLIND, never an
+all-clear" — red on a correct tree while landing backlog `78b76e1a8311`, reported by `ship-land` as
+exit 6, the code reserved for a claim about the *tree*. Reproduced on pristine `origin/main` in a
+worktree first, so the attribution is measured rather than assumed.
+
+**What made this instance different from §10's.** There, the construction could be made
+uid-independent for free. Here the assertion is about `os.access(ARCHDIR, R_OK|X_OK)` — a
+*directory-level* early return that mode bits are the only way to build, and root is exempt from
+mode bits. There is no free uid-independent spelling of that branch. So the arm was split rather
+than translated:
+
+* **D3** now builds the unreadability as a **directory named `2026-07.jsonl`**: glob matches it,
+  `open()` raises `IsADirectoryError` — an `OSError`, the same branch the mode bit was reaching for
+  — and no uid is exempt. This is §10's technique, reused.
+* **D3b** keeps the `chmod 000` construction for the directory-level branch and **skips explicitly
+  under uid 0**, naming this section. A skip buys nothing, which is why §10 refused one — but it
+  buys strictly more than an *inversion*, which is what the unsplit arm did: red on a correct tree,
+  with nothing in the output saying so. Where a branch genuinely cannot be built for every uid, an
+  honest skip is the floor.
+
+**The defect the repair uncovered.** The two states are not equivalent in the reader, and only one
+of them was implemented. `archive_report()`'s own docstring claims four states, the fourth being "a
+readable directory holding unreadable files" — but with no rows in range that path fell through to
+`⇒ the archiver is wired and running; nothing has actually blocked in range.` over a file it could
+not open. The `⚠ … counts below are a FLOOR` line printed above it does not retract that sentence,
+and the sentence is the one a reader quotes. An unreadable file yields no rows for exactly the
+reason it yields no knowledge, so zero rows there is BLIND, never an all-clear — the same verdict
+the directory branch already reached. Fixed in `bin/cc-permission-audit`, and RED-proved both ways:
+reverting the branch fails D3, and a *readable* empty fixture fails it too, so the arm is neither
+vacuous nor satisfied by the state it exists to distinguish.
+
+**The generalisable half.** §10 said widening to the other arms without a land to prove each would
+be a hunch, and that still holds — this is one more instance, not the sweep. What it adds is a
+reason to expect the repair to be worth more than the unblocking: an arm that has been inverted
+under root has never actually run in this venue, so whatever it guards has never been checked here.
+This one had a live false all-clear behind it, in the exact function whose whole purpose is to not
+emit one. Repair the arm that blocks your land, and read what it was guarding.

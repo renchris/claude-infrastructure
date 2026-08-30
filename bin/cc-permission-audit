@@ -214,7 +214,17 @@ def archive_report():
         print(f"  ⚠ {bad} unparseable row(s) skipped.")
 
     if not rows:
-        if not files and not alive:
+        if unreadable:
+            # THE FOURTH STATE, which this function's docstring already claimed ("as is a readable
+            # directory holding unreadable files") and the code did not actually implement. With no
+            # rows in range the `else` below concluded "nothing has actually blocked in range" —
+            # over files it could not open. The FLOOR warning above it does not retract that
+            # sentence, and the sentence is the one a reader quotes. An unreadable file yields no
+            # rows for exactly the reason it yields no knowledge, so zero rows is BLIND here, never
+            # an all-clear — the same verdict the unreadable-DIRECTORY branch already reaches.
+            print(f"  archive UNREADABLE in part ({unreadable} of {len(files)} file(s)) — {ARCHDIR}")
+            print("  ⇒ BLIND. This is NOT an all-clear: rows may exist and cannot be counted.")
+        elif not files and not alive:
             # No .jsonl AND no heartbeat: the archiver has not demonstrably run here.
             print(f"  archive dir present but the archiver has left NO evidence ({ARCHDIR})")
             print("  ⇒ treat as BLIND, not as an all-clear.")
