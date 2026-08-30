@@ -5629,11 +5629,27 @@ if [ "${1:-}" = "__recycle" ]; then
         cr)
           hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;;
         retype)
+          # THROUGH THE SANCTIONED HELPER, not a hand-rolled type-then-read-back. The old form
+          # open-coded the right discipline (send "/exit", sleep, re-read composer_content, CR only
+          # on an exact match) but it was the last raw typed COMMAND LINE left in the deployed
+          # layers, and scripts/typed-send-lint.sh — whose test 17 scans this very tree — was RED on
+          # it. A second copy of a safety discipline is the thing that rots: it2_paste_submit_verified
+          # already owns this surface (the brief resend and arm_goal both land through it), and it
+          # adds three properties this site had no way to grow on its own — the composer_owned
+          # ownership gate, bracketed-paste atomicity, and a LOUD mangle report instead of a silent
+          # `|| true`, which is what leaves the unsubmitted text recoverable by a human.
+          #
+          # PRE-WAIT 0, DELIBERATELY. The helper's default is a 30 s bounded wait for an empty
+          # composer; inside this watcher that wait would run on the SAME clock as $waited and drift
+          # the 60/150/300 checkpoints. It is also unneeded: recycle_nudge_decision returned `retype`
+          # precisely because it just proved the composer EMPTY. 0 keeps the helper's re-read — which
+          # closes the TOCTOU between that decision and this paste — and turns a composer that filled
+          # in between into an immediate loud HELD (rc 3) rather than a stall. Every non-zero rc is
+          # already reported by the helper on stderr, so the recycle still fails loudly at the 600 s
+          # refusal with the session alive; `|| true` here only keeps a failed nudge from aborting
+          # the watch loop, exactly as before.
           if [ "$waited" = 60 ]; then
-            hf_bounded "$IT2" session send -s "$RSID" "/exit" >/dev/null 2>&1 || true
-            sleep 1
-            nc="$(composer_content "$IT2" "$RSID")" || nc=""
-            if [ "$nc" = "/exit" ]; then hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true; fi
+            it2_paste_submit_verified "$IT2" "$RSID" "/exit" 0 || true
           fi ;;
         *)
           echo "→ nudge@${waited}s HELD ($nd): composer is not a stranded /exit — a CR here would submit someone else's buffer"
