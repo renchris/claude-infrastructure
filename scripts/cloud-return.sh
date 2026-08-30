@@ -461,6 +461,15 @@ handle() { # <row-json> → prints outcome lines
   #     outlives the park — once the operator unblocks the row and it is re-dispatched, the file is
   #     still on trunk — and a reader keyed on existence alone would re-block the row on the next
   #     land, forever. The branch test makes a stale entry inert without needing anyone to delete it.
+  #
+  # THIS IS NO LONGER THE PARK'S ONLY READER, and the reason is a defect in the routing rather than
+  # in anything above: this step runs only under `scripts/autonomy-sweep.sh` on the operator's box,
+  # which for `f85fce7c26f5` IS the arm the row reports as dark — so its park landed and the wave
+  # re-fired it 7 h 11 m later. `bin/cc-eligible` now reads the same file at `claim --venue cloud`
+  # and refuses the cloud venue while a landed park is newer than the row's last block/unblock. That
+  # is an INTERLOCK, not a second writer: this step is still what makes the transition, and the desk
+  # is still the ledger's only writer. Format changes move both readers together —
+  # `scripts/cloud-park.sh`'s header owns that contract.
   local done_note="no backlog item recorded" done_unsettled=0 done_err=""
   case "$item" in
     [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
