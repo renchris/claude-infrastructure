@@ -791,3 +791,153 @@ one of them is vacuous-or-inverted in the venue every cloud dispatch runs in. On
 repaired here — it is the one that blocked a land, and widening on the other 14 without a land to
 prove each would be the hunch this repo's denylists already have a rule against. A future dispatch
 that reds on an unreadability arm should suspect uid 0 before it suspects its own diff.
+
+---
+
+## 11 · Eleventh dispatch, 2026-08-30 — the park landed, and the wave fired anyway
+
+§9.3 ended: *"on the desk's next `cloud-return.sh` pass the row folds to `blocked`, which
+`cc-dispatch` excludes, and the eleventh dispatch does not happen."* The eleventh dispatch happened.
+This section is that session, and the finding is not about the park's design — it is about **the one
+reader the park was given.**
+
+### 11.1 The measurement, and it is this session
+
+| fact | value |
+| --- | --- |
+| the tenth dispatch's park | `docs/parks/f85fce7c26f5.md`, landed as `28dab8c4` |
+| landed at | `2026-08-29T17:43:33Z` — on `origin/main`, content-verified here by `git show` |
+| this session's branch fired at | `2026-08-30T00:54:07Z` |
+| elapsed | **7 h 11 m**, against a sweep interval of 300 s |
+| the row's state at fire time | `open` — which IS `cc-dispatch`'s fire predicate |
+
+Two independent halves of the same instrument were also re-measured here, off-box, and both
+reproduce §6.6's corrected reading exactly — a third time, on a third VM:
+
+```
+$ cc-backlog block f85fce7c26f5 --needs "…"   → cc-backlog block: unknown id f85fce7c26f5   rc 3
+$ cc-notify --role desk "…"                   → verdict=unresolvable enqueued=0 role-unset   rc 3
+```
+
+### 11.2 The park's only reader is the arm the row is about
+
+Traced on trunk rather than recalled, and it is three files deep with no branch anywhere in it:
+
+```
+docs/parks/<id>.md
+  └─ read by  scripts/cloud-return.sh   step 8      (the ONLY reader; `grep -rn` over the repo)
+       └─ called by  scripts/autonomy-sweep.sh:1019 (the ONLY caller)
+            └─ run by  launchd, on the operator's Mac, every 300 s
+                 └─ which is THE RETURN/LAND ARM THIS ROW REPORTS AS DEAD (§6.3: intermittent —
+                    up for hours, dark for days, and measured at zero for 64.8 h)
+```
+
+**So the one channel a VM has for saying "I am blocked" is gated on the very rail whose deadness it
+is trying to say.** That is a deadlock, not a defect in `cloud-park.sh`: every property §9.2 pins —
+read from the trunk ref, scoped by `branch:`, append-only, malformed-settles-nothing — is correct
+and stays. What was missing is that a park had exactly one consumer, and the item's own subject is
+that consumer being dark. §9.1 named the generator one layer in (*"a worker can report that it
+FINISHED, and cannot report that it is BLOCKED"*) and cured it for the return path; this is the same
+generator one layer out — **the cure was routed through the broken thing.**
+
+### 11.3 The fix: read the park at the gate that is demonstrably alive
+
+`bin/cc-eligible` is the predicate `cc-backlog claim --venue cloud` runs at claim time — this repo's
+one place where a venue refusal is READ rather than merely written — and it is alive by
+construction: the dispatcher that fired this session had to pass through it to do so. `de16bcd5`
+made exactly this move one day earlier for the sibling row `193ae8ddce72` (*"the request was made to
+a reader that does not exist: cc-dispatch selects on the ledger's status, never on a paragraph"*),
+and reached the same verdict about the remedy — a refusal there costs **zero spawn**, `cc-dispatch`
+counts it SKIPPED, and the row stays claimable **locally**, which is the only venue an operator-only
+step can run in anyway.
+
+`de16bcd5` closed its miss with a *spelling* (`\bactive sessions?\b`). That is not available here,
+and the reason is worth stating because it is what makes this arm general. Run against this file's
+real `classify_all`, **`f85fce7c26f5`'s own span fires nothing** — no `launchd`, no `pane`, no
+`darwin`, no `cloud lane`; `verdict=eligible / refused: (nothing fired)`. Eleven dispatches is what a
+spelling table costs when the class it is standing in for is *"a fact recorded about this row by a
+worker that went there and tried."* So the new class is **measured, not spelled**, alongside
+`ineligible-cross-repo` and `ineligible-deep-history`:
+
+> **`ineligible-parked`** — refuse `--venue cloud` ⟺ a park on the **trunk ref** is NEWER than the
+> newest `block`/`unblock` record for the row.
+
+Four properties carry it, and each is pinned by a case in `tests/cc-eligible-park.bats` rather than
+by this paragraph:
+
+- **Trunk, never the working tree.** `cloud-park.sh`'s own rule (*"the park is NOT in effect until
+  this file is on trunk"*), and here it is load-bearing in a way it is not on the return side: this
+  gate runs on a live checkout somebody is editing, so a `[ -f ]` spelling would honour any park a
+  local session happened to have in its tree.
+- **It retracts on the desk's own verbs, and needs no new chore.** The park file outlives the park —
+  it is append-only and stays on trunk — so existence alone would be a permanent refusal.
+  `cloud-return` scopes that with `branch:`; at claim time there is no branch, so this arm asks the
+  ledger instead. A `block` retires it (the row is then outside the fire predicate anyway); an
+  `unblock` retires it (the operator has decided it may run again). A `claim` retires **nothing** —
+  it is written on every dispatch, so counting it would retract the park with the very fire the park
+  exists to prevent.
+- **It leads the refusal order.** Every other class can only say *claim it locally*; this one says
+  what to **run** there, in the operator's words, carried from the worker that tried. Both refuse, so
+  no safety turns on the ordering — what turns on it is whether a `head -1` reader is sent looking
+  for a keychain or handed the command.
+- **It is an interlock, not a second ledger.** It writes nothing, and it does not substitute for the
+  `block` transition; it holds the cloud venue shut until the desk records one. The desk stays the
+  ledger's only writer, which is the invariant §9.2 was built on.
+
+### 11.4 Verification
+
+Run in this venue, which `scripts/cloud-venue-provision.sh` took to READY (shellcheck 0.11.0, bats
+1.13.0, full history — 3,854 commits on the trunk ref before any trunk read):
+
+| check | pristine `git archive origin/main` | this branch |
+| --- | --- | --- |
+| `bats tests/cc-eligible-park.bats` (new) | **5 ok / 8 red** | **13/13** |
+| `bats tests/cc-eligible.bats` | — | 33/33 |
+| `bats tests/cc-eligible-history.bats` | — | 16/16 |
+| `bats tests/cc-eligible-cross-repo.bats` | — | 11/11 |
+| `bats tests/cc-backlog-venue.bats` | — | 23/23 |
+| `bats tests/cc-backlog-venue-plan.bats` | — | 15/15 |
+| `bats tests/cc-venue.bats` | — | 29/29 |
+| `bats tests/cc-dispatch-venue.bats` · `-venue-only` | — | 23/23 · 14/14 |
+| `bash scripts/cloud-park.sh --selftest` | — | 12/12 |
+| `python3 -m py_compile bin/cc-eligible` | — | clean |
+
+**177/177 across the whole venue stack**, and the two-sided row is the one that carries weight. The
+8 reds on pristine are every case whose subject is a refusal that does not exist there; the 5 that
+pass are the ELIGIBLE controls, which is correct — they pin behaviour this change had to PRESERVE,
+and a suite whose controls also went red would be crediting itself for the whole file. The fail-open
+control is the sharpest of them: on pristine it gets **past** its `exit 0` and `verdict=eligible`
+assertions and dies on `park : not-measured`, which is the proof that the abstention is the arm's
+and not the absence of one.
+
+`bin/cc-venue` needed no change and that is asserted rather than assumed: it consumes
+`CE.assess_full`'s `classes` list generically, so the new class routes an item to `local` under its
+own token with no second implementation — `tests/cc-venue.bats` 29/29 over the change.
+
+### 11.5 What is still open — unchanged, and still one command
+
+**A's mechanism is still operator-gated and this dispatch did not touch it.** §8.5 stands verbatim:
+
+```
+bash scripts/cloud-land-arm-diagnose.sh
+```
+
+read-only, safe on a live box mid-sweep, one verdict token. What changed is only that saying so is
+now enforced by a reader that runs — the row's park is refreshed for this branch in
+`docs/parks/f85fce7c26f5.md`, and on the next `claim --venue cloud` the wave gets
+`verdict=ineligible-parked` with that command in the refusal body, at zero spawn, whether or not the
+return arm ever wakes up.
+
+**Honest limits, stated rather than smoothed over.**
+
+1. **The arm reads `origin/main` as the desk's checkout last fetched it.** A park that landed since
+   the last fetch is invisible until one happens. Deliberate: a network call inside a claim path is
+   not a trade this file makes, and the history arm already has the same dependency. In the incident
+   this closes the gap was 7 h 11 m, far longer than any plausible fetch interval.
+2. **A twelfth dispatch is prevented at the CLAIM, not at the row's status.** The ledger still reads
+   `open` until the desk records the `block`; `cc-dispatch` still selects the row and still pays the
+   claim. What it no longer pays is the **spawn** — which is the whole cost measured across dispatches
+   two through eleven.
+3. **Nothing here was validated on macOS**, by construction. The arm is pure Python over a git ref
+   and a JSONL store, with no platform-dependent call in it, and the suite runs on both — but the
+   venue it will actually gate in is the operator's box, and this VM is not it.

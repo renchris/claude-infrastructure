@@ -44,6 +44,26 @@
 #   · a detached HEAD, or a branch this dispatch does not actually sit on — the entry's whole
 #     scoping property is that `branch:` is a fact, not an intention.
 #
+# ── TWO READERS, AND THE SECOND ONE EXISTS BECAUSE THE FIRST SHARES THE ROW'S OWN FATE ──────────
+# Everything above describes `cloud-return.sh` step 8, which turns a landed park into the ledger
+# transition. It has exactly one caller — `scripts/autonomy-sweep.sh`, under launchd on the
+# operator's box — and for `f85fce7c26f5`, whose whole subject is that arm being dark for days at a
+# time, that made the park inert exactly where it was needed: the tenth dispatch's park landed at
+# 2026-08-29T17:43Z and the wave fired the row again 7 h 11 m later. The cure had been routed
+# through the broken thing.
+#
+# So `bin/cc-eligible` reads this file too, at `cc-backlog claim --venue cloud` — the gate the
+# dispatcher must pass through to fire at all. It refuses the cloud venue (`ineligible-parked`)
+# while a landed park is NEWER than the row's last block/unblock, naming the `needs:` line verbatim.
+# It writes nothing and replaces nothing: the desk stays the ledger's only writer and step 8 stays
+# the transition. It is the interlock that holds until step 8 gets to run.
+#
+# 🚨 A FORMAT CHANGE HERE NOW HAS TWO CONSUMERS. Both parse by the same two idioms this file's
+# `--selftest` asserts its writer against (`sed -n 's/^needs: *//p' | tail -1`, same for `branch:`);
+# cc-eligible additionally reads the `## <stamp>` heading, because it has no branch to scope by at
+# claim time and uses the ledger's timestamps instead. Change the entry shape and both move
+# together, or the drift is silent on every side at once.
+#
 # It does NOT commit, land, or notify. The park is finished by the ordinary rails — commit the file,
 # `/ship` it — and the operator learns of it through cloud-return's wake, which is the same channel
 # a landed close uses.

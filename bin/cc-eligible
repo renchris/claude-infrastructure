@@ -83,6 +83,15 @@ without a certification. That is also what makes "a cloud VM must never build th
 mechanical rather than a rule in a document: a VM's clone is shallow, so the producer abstains
 there by measurement.
 
+── THE PARK ARM (2026-08-30): A FACT RECORDED ABOUT THIS ROW, NOT A WORD IN ITS TITLE ─────────
+The third measured class, and the one that is not about what the item SAYS at all. A cloud worker
+that cannot advance its row lands `docs/parks/<id>.md`; the rail that turns that into a
+`cc-backlog block` runs only under launchd on this box, and it is dark for days at a time — so a
+landed park can sit on trunk while the wave re-fires the row it parks. This arm reads the park off
+the trunk ref and refuses the cloud venue until the desk records the transition, which is the one
+thing that retracts it. Full statement, the deadlock it closes and the measurement: the PARKED
+block below.
+
 The GATE stays fail-open on every unmeasurable state (`no-repo`, `shallow`, `no-horizon`) — a
 claim must never be starved by an instrument outage, which is this file's founding rule. The
 PRODUCER fails closed on the same states. Those are not in tension: the gate can only ever REFUSE
@@ -466,17 +475,58 @@ DEEP_HISTORY = "ineligible-deep-history"
 # nothing to do with a horizon.
 CROSS_REPO = "ineligible-cross-repo"
 
+# ── THE THIRD MEASURED CLASS: A LANDED PARK THE DESK HAS NOT YET ACTED ON ──────────────────────
+# MEASURED 2026-08-30, and the measurement is this dispatch. Backlog `f85fce7c26f5` has been fired
+# at a cloud VM ELEVEN times for one verdict that has not changed since 08-25, and the tenth
+# dispatch already built the cure: `scripts/cloud-park.sh` writes `docs/parks/<id>.md`, the VM lands
+# it, and `scripts/cloud-return.sh` step 8 reads it off the trunk ref and calls `cc-backlog block`
+# instead of `done`. That park LANDED, as `28dab8c4` at 2026-08-29T17:43Z. The wave fired the row
+# again 7 h 11 m later, at 2026-08-30T00:54Z.
+#
+# 🚨 THE PARK'S ONLY READER IS THE ARM THE ROW IS ABOUT, AND THAT IS A DEADLOCK, NOT A BUG IN IT.
+# `cloud-return.sh` has exactly one caller — `scripts/autonomy-sweep.sh:1019`, under launchd on the
+# operator's box, every 300 s — which is the return/land arm `f85fce7c26f5` reports as dead since
+# 2026-08-17 and `d84434cd` re-measured as INTERMITTENT (up for hours, dark for days). So the one
+# channel a VM has for saying "I am blocked" is gated on the very rail whose deadness is the thing
+# it is trying to say. The park is inert exactly when it is needed, which is the same shape as the
+# `cc-backlog block` no-op it replaced, one layer further out.
+#
+# WHY THE READER GOES HERE. This file is the ONE place a venue refusal is READ rather than merely
+# written (`cc-backlog claim --venue cloud` runs `check` at claim time), and it is demonstrably
+# ALIVE: the dispatcher that fired the eleventh session had to pass through it to do so. `de16bcd5`
+# established exactly this move one day earlier for the sibling row `193ae8ddce72` — "the request
+# was made to a reader that does not exist" — and reached the same conclusion about the remedy:
+# a refusal here costs zero spawn, cc-dispatch counts it SKIPPED, and the row stays claimable
+# LOCALLY, which is the only venue an operator-only step can run in anyway.
+#
+# THIS IS AN INTERLOCK, NOT A SECOND LEDGER. It does not write the store, does not substitute for
+# the `block` transition, and holds only until the desk records one — see `park_assess`'s
+# retraction rule, which is the whole reason a landed file cannot become a permanent refusal.
+#
+# NOT A SPELLING, deliberately, and this is the same argument the CROSS_REPO block above makes for
+# itself: "a previous cloud worker went there, tried, and recorded what it could not do" is not a
+# word in a title. `f85fce7c26f5`'s own span — measured with this file's real `classify_all` —
+# fires NOTHING: no launchd, no pane, no darwin, no `cloud lane`. Eleven dispatches is what a
+# spelling table costs when the class it is standing in for is "a fact recorded about this row".
+PARKED = "ineligible-parked"
+
+# The park log a cloud worker writes, relative to the item's repo root. ONE spelling, matching
+# `scripts/cloud-park.sh`'s `PARK_DIR` and `cloud-return.sh` step 8's `_pf` — a second spelling of a
+# path is a second thing to drift.
+PARK_DIR = "docs/parks"
+
 # Every refusing verdict with its one-line description, spelling-backed and measured alike. The
 # census renders from THIS, not from CLASSES, so a measured class cannot be invisible in the report
 # that exists to find what the classifier misses.
 SWEEP_ROWS = [(v, d) for v, d, _p in CLASSES] + [
+    (PARKED, "PARKED by a previous cloud dispatch on an operator-only step (measured)"),
     (CROSS_REPO, "ANOTHER REPO — the VM is given exactly one, and this is not it (measured)"),
     (DEEP_HISTORY, "NEEDS HISTORY the shallow cloud clone cannot see (measured)"),
 ]
 
 # The verdicts that REFUSE (exit 3). One tuple so the gate, the census and the tests can never
 # disagree about which is which — cc-premise's BLOCKING, same reason.
-BLOCKING = tuple(v for v, _d, _p in CLASSES) + (CROSS_REPO, DEEP_HISTORY)
+BLOCKING = tuple(v for v, _d, _p in CLASSES) + (PARKED, CROSS_REPO, DEEP_HISTORY)
 
 # The uncertainty verdicts. Both exit 0. They are SEPARATE tokens because they mean different
 # things to whoever reads the census: "no such item" is a caller bug, "unreadable store" is an
@@ -526,6 +576,12 @@ def load_records():
 # classifying on it could only ever add false refusals to work that is never claimed anyway.
 SPAN_FIELDS = ("title", "dodRef", "condition", "source")
 
+# THE DESK'S OWN TRANSITIONS, and only these two. `block` and `unblock` are the events that ACT on a
+# park — one honours it, the other retires it — so the newest of them is the timestamp `park_assess`
+# compares a landed park against. `claim` is deliberately NOT here: a claim happens on every
+# dispatch, so counting it would retract the park with the very fire the park exists to prevent.
+DESK_EVENTS = ("block", "unblock")
+
 
 def build_index(recs):
     """id -> the item's specification text, accumulated across its records.
@@ -534,11 +590,16 @@ def build_index(recs):
     an item may be re-added (the id is a hash of project+title+source, so a re-add is idempotent and
     carries the same words) — taking the union costs nothing and cannot lose a field that only one
     record carried.
+
+    `desk` rides along because it is the same walk: the newest `ts` of any block/unblock record for
+    the id, or "". It is NOT part of the classified span (that stays the item's SPECIFICATION,
+    SPAN_FIELDS) — it is a fact about what the desk has DONE, which is what the park arm needs and
+    no spelling can express.
     """
     idx = {}
     for r in recs:
         rid = r["id"]
-        ent = idx.setdefault(rid, {"text": "", "title": "", "project": ""})
+        ent = idx.setdefault(rid, {"text": "", "title": "", "project": "", "desk": ""})
         parts = [r.get(k) or "" for k in SPAN_FIELDS]
         text = " ".join(p for p in parts if p)
         if text:
@@ -547,6 +608,10 @@ def build_index(recs):
             ent["title"] = r["title"]
         if r.get("project") and not ent["project"]:
             ent["project"] = r["project"]
+        if r.get("event") in DESK_EVENTS:
+            ts = r.get("ts") or ""
+            if ts > ent["desk"]:                # ISO-8601 UTC 'Z' — lexicographic IS chronological
+                ent["desk"] = ts
     return idx
 
 
@@ -826,6 +891,91 @@ def cross_repo(project):
     return True, "project %r is %s; the VM is given only %s" % (project, seen, lane_origin)
 
 
+PARK_STAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+
+def _park_doc(orc, item_id):
+    """The park log for <item_id> as it exists ON THE TRUNK REF, or None.
+
+    TRUNK, never the working tree, and that is `cloud-park.sh`'s own rule rather than a preference:
+    "The park is NOT in effect until this file is on trunk." This gate runs on the operator's box,
+    where the repo is a live checkout somebody is editing — a `[ -f ]` spelling would honour a park
+    that never landed, which is exactly the claim this whole rail refuses to make about anything
+    else. `cloud-return.sh` step 8 reads it the same way, off the same ref.
+    """
+    if orc.certify() != "ok":
+        return None                            # one certification, shared with the history arm
+    return orc._git(["show", "%s:%s/%s.md" % (orc.ref, PARK_DIR, item_id)])
+
+
+def _park_last(doc):
+    """(stamp, needs) of the LAST entry in an append-only park log.
+
+    `tail -1` per field, which is `cloud-return.sh` step 8's idiom verbatim and the one
+    `cloud-park.sh --selftest` asserts its writer against. A second parser for a two-field format is
+    a second thing to drift, and the drift would be silent on both sides at once.
+
+    `branch:` is read by cloud-return and NOT here, deliberately: its job there is to stop one
+    dispatch's park being credited to another's land, and it is scoped to a branch that exists. At
+    CLAIM time there is no branch yet, so the scoping question is a different one — see
+    `park_assess`'s retraction rule, which answers it with the ledger instead.
+    """
+    stamp, needs = "", ""
+    for line in doc.splitlines():
+        if line.startswith("## "):
+            cand = line[3:].strip()
+            if PARK_STAMP.match(cand):
+                stamp = cand
+        elif line.startswith("needs:"):
+            needs = line[len("needs:"):].strip()
+    return stamp, needs
+
+
+def park_assess(item_id, orc, desk_ts):
+    """(state, needs, stamp) — has a previous cloud dispatch landed a park the desk has not acted on?
+
+    STATES: `not-measured` (uncertified repo) · `none` (no park on trunk) · `honoured` (the desk has
+    a block/unblock at or after it) · `unhonoured` and `malformed` (both REFUSE).
+
+    ── THE RETRACTION RULE, which is what stops a landed file becoming a permanent refusal ────────
+    The park file OUTLIVES the park — it is append-only and stays on trunk after the operator acts —
+    so a reader keyed on its existence alone would refuse the cloud venue for that row forever.
+    cloud-return solves that with `branch:`, which it can because it is returning a specific
+    dispatch. This gate has no branch, so it asks the ledger instead:
+
+        refuse  ⟺  a landed park is NEWER than the newest block/unblock record for the row.
+
+    That is exactly the deadlock state and nothing else: the VM stated a park, and the desk has not
+    yet turned it into a transition. Either desk action retires it — `block` because the row is then
+    outside cc-dispatch's fire predicate anyway, `unblock` because the operator has decided the row
+    may run again. So the arm is self-retracting on the desk's own verbs, with no cleanup step, no
+    new operator chore, and nothing for anyone to remember.
+
+    ── WHY A MALFORMED PARK REFUSES RATHER THAN FAILING OPEN ──────────────────────────────────────
+    This file's fail-open rule is about READING THE STORE, and it points the other way once the text
+    is in hand: "a wrong ELIGIBLE puts a worker in a VM that CANNOT do the work at all and cannot
+    tell you so … a wrong INELIGIBLE leaves the item exactly where it is today, claimable locally,
+    losing nothing." A park with no `needs:` line is a worker saying "this is not finished" in the
+    only half of the statement that survived. cloud-return refuses to settle such a row for the same
+    reason; treating it as silence here would re-open the loop for precisely the case where the
+    worker's statement was garbled.
+
+    An UNPARSEABLE STAMP is the one place the two rules meet, and it resolves to the weaker test
+    rather than to a refusal that could never retract: with no stamp to compare, ANY block/unblock
+    record counts as the desk having acted.
+    """
+    doc = _park_doc(orc, item_id)
+    if doc is None:
+        return ("not-measured" if orc.certify() != "ok" else "none"), "", ""
+    stamp, needs = _park_last(doc)
+    acted = (desk_ts >= stamp) if (stamp and desk_ts) else bool(desk_ts)
+    if acted:
+        return "honoured", needs, stamp
+    if not needs:
+        return "malformed", "", stamp
+    return "unhonoured", needs, stamp
+
+
 def repo_for(project):
     """The tree an item's project means. cc-dispatch's project_repo convention, deliberately.
 
@@ -878,6 +1028,7 @@ def assess_full(item_id, idx, measure=True):
             "history": {"state": "not-measured", "repo": "", "ref": "", "depth": CLOUD_DEPTH,
                         "unreachable": []},
             "reach": {"state": "not-measured", "lane": "", "why": ""},
+            "park": {"state": "not-measured", "needs": "", "stamp": "", "desk": ""},
         }
     text = ent["text"]
     classes = classify_all(text)
@@ -887,6 +1038,7 @@ def assess_full(item_id, idx, measure=True):
     hist = {"state": "not-measured", "repo": orc.repo, "ref": "", "depth": orc.depth,
             "unreachable": []}
     reach = {"state": "not-measured", "lane": "", "why": ""}
+    park = {"state": "not-measured", "needs": "", "stamp": "", "desk": ent.get("desk", "")}
     if measure:
         # REACH BEFORE HISTORY, in that order: a repo the VM never receives has no horizon worth
         # reporting, and "this is another repo" is the sentence that tells a reader what to do.
@@ -911,18 +1063,38 @@ def assess_full(item_id, idx, measure=True):
                 "tokens": [t for t, _w in bad],
             })
 
+        # THE PARK ARM RUNS LAST AND REPORTS FIRST, and the asymmetry is the point. It runs last
+        # because it shells to git and the pure spellings above it are free. It is INSERTED AT THE
+        # FRONT because refusal order decides which single sentence a `head -1` reader gets, and
+        # every other class can only say "claim it locally" — this one says WHAT TO RUN THERE, in
+        # the operator's own words, carried from the worker that tried. Nothing is lost beneath it:
+        # `why` reports every class that fired, and all of them refuse either way, so the ordering
+        # chooses the most actionable sentence rather than the safest one (there is no safety
+        # difference between two refusals).
+        park["state"], park["needs"], park["stamp"] = park_assess(item_id, orc, park["desk"])
+        if park["state"] in ("unhonoured", "malformed"):
+            classes.insert(0, {
+                "verdict": PARKED,
+                "description": (
+                    "PARKED by a previous cloud dispatch — the desk has not recorded the block yet"
+                    if park["state"] == "unhonoured" else
+                    "PARKED by a previous cloud dispatch, and the park carries no readable step"
+                ),
+                "tokens": [park["needs"] or "malformed park: no 'needs:' line"],
+            })
+
     if classes:
         first = classes[0]
         return {
             "id": item_id, "verdict": first["verdict"], "description": first["description"],
             "tokens": first["tokens"], "title": ent["title"], "project": project,
-            "classes": classes, "history": hist, "reach": reach,
+            "classes": classes, "history": hist, "reach": reach, "park": park,
         }
     return {
         "id": item_id, "verdict": "eligible",
         "description": "repo-only work — no local-only state named", "tokens": [],
         "title": ent["title"], "project": project, "classes": [], "history": hist,
-        "reach": reach,
+        "reach": reach, "park": park,
     }
 
 
@@ -932,6 +1104,17 @@ REFUSAL_NOTE = (
     "  refused. If the classification is wrong, the spelling that fired is named above: fix\n"
     "  bin/cc-eligible's list rather than forcing past it, so the next item of this shape is\n"
     "  classified correctly too."
+)
+
+PARKED_NOTE = (
+    "A previous cloud dispatch of this row LANDED a park saying the next step is the operator's —\n"
+    "  `docs/parks/<id>.md`, written by scripts/cloud-park.sh. That park is normally turned into a\n"
+    "  `cc-backlog block` by scripts/cloud-return.sh, which runs only under launchd on this box; the\n"
+    "  ledger carries no block/unblock at or after it, so the transition has not happened and the\n"
+    "  row is still in cc-dispatch's fire predicate. This refusal is the INTERLOCK that holds until\n"
+    "  it does — it writes nothing and substitutes for nothing. There is no spelling list to correct\n"
+    "  here. Run the step named above, then record the transition and the arm retires itself:\n"
+    "      cc-backlog block <id> --needs \"<the step above>\"   (or `unblock <id>` if it is moot)"
 )
 
 DEEP_HISTORY_NOTE = (
@@ -963,7 +1146,12 @@ def cmd_check(item_id):
         # the list, and there is no list here — sending them to edit an array over a git
         # measurement is an instruction that cannot be carried out, which is how a correct refusal
         # gets forced past instead of understood (memory: work-item-citation-refutes-its-own-remedy).
-        sys.stderr.write("  " + (DEEP_HISTORY_NOTE if verdict == DEEP_HISTORY else REFUSAL_NOTE) + "\n")
+        note = REFUSAL_NOTE
+        if verdict == DEEP_HISTORY:
+            note = DEEP_HISTORY_NOTE
+        elif verdict == PARKED:
+            note = PARKED_NOTE
+        sys.stderr.write("  " + note + "\n")
     elif verdict == UNKNOWN_ITEM:
         sys.stderr.write("cc-eligible: %s — fail-open\n" % desc)
     sys.exit(3 if verdict in BLOCKING else 0)
@@ -987,6 +1175,16 @@ REACH_NOTE = {
     "elsewhere": "the item's project is NOT the one repo the VM is given",
     "reachable-or-unmeasured": "either the lane's own repo, or nothing measurable — arm fails OPEN",
     "not-measured": "not measured",
+}
+
+PARK_NOTE = {
+    "none": "no park on trunk for this row",
+    "honoured": "a park is on trunk and the desk has recorded a block/unblock at or after it",
+    "unhonoured": "a landed park is NEWER than the desk's last block/unblock — the transition that "
+                  "would take this row out of the wave has not happened",
+    "malformed": "a landed park carries no readable 'needs:' line — the worker said this is not "
+                 "finished and the half that says what it needs did not survive",
+    "not-measured": "not measured — the repo is uncertified (see history below)",
 }
 
 HISTORY_NOTE = {
@@ -1019,6 +1217,13 @@ def cmd_why(item_id, as_json):
             w("  refused : %-27s %s\n" % (c["verdict"], ", ".join(c["tokens"])))
     else:
         w("  refused : (nothing fired)\n")
+    p = full.get("park") or {}
+    w("  park    : %s — %s\n" % (p.get("state", "not-measured"),
+                                 PARK_NOTE.get(p.get("state", ""), "")))
+    if p.get("needs") or p.get("stamp") or p.get("desk"):
+        w("            stamp=%s desk=%s\n" % (p.get("stamp") or "-", p.get("desk") or "(none)"))
+    if p.get("needs"):
+        w("            needs=%s\n" % p["needs"])
     r = full.get("reach") or {}
     w("  reach   : %s — %s\n" % (r.get("state", "not-measured"),
                                  r.get("why") or REACH_NOTE.get(r.get("state", ""), "")))
