@@ -155,9 +155,34 @@ ha_classes=""   # newline-separated `class` values of the handoff-alarm records 
 # REFUSED path, records stay unseen, and the next sweep retries. That is exactly right for a cut
 # send: we never learned whether it was enqueued, so re-surfacing is the safe error. (The D4 probe
 # treats it as NO-DATA for the same reason — see § D4.)
+#
+# 🚨 THE BARE-NAME LOOKUP BELOW IS NOT THE LATENT UNBOUNDED CALL IT HAS BEEN READ AS, AND THE
+# REASON IS THAT "RUNS FROM LAUNCHD" NAMES A LAUNCHER, NOT AN ENVIRONMENT (measured 2026-08-30).
+# The standing claim was: on the plist's own PATH neither `timeout` nor `gtimeout` resolves, so
+# TIMEOUT_BIN goes empty and sweep_bounded() falls through to the UNBOUNDED arm at the `-z` guard
+# below — inside the very sweep whose header (just above) calls an unbounded call the proven
+# machine-wide wedge class. REFUTED. com.chrisren.autonomy-sweep.plist does not hand this script
+# launchd's minimal PATH; its ProgramArguments interpose `/bin/zsh -lc`, a LOGIN shell, which
+# sources /etc/zprofile (path_helper) and ~/.zprofile BEFORE this line ever runs — and
+# ~/.zprofile:1 is `eval "$(/opt/homebrew/bin/brew shellenv)"`, which puts /opt/homebrew/bin on
+# the PATH. Measured by extracting THIS LINE from this file and eval'ing it under
+# `env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/zsh -lc`: TIMEOUT_BIN=/opt/homebrew/bin/timeout,
+# `-x` true, and the resolved binary answers 124 on a 1 s bound over a 5 s sleep (timeout(1)'s own
+# cut code). BOTH bare names resolve; `gtimeout` is /opt/homebrew/bin/gtimeout. A MUTE CONTROL —
+# the same extraction with both names rewritten to names that exist nowhere — reads EMPTY, so
+# "non-empty" is a verdict this harness can fail to reach.
+# ⚠️ THE HAZARD IS REAL BUT ITS TRIGGER IS NOT PATH MINIMALISM: it is ~/.zprofile:1 going away.
+# Nothing here announces that, and the fallthrough is SILENT when it does. Say that, rather than
+# the size-shaped claim it replaces.
+# 🚨 AND THE INSTRUMENT LESSON, WHICH IS WHY THE CLAIM SURVIVED: grepping ~/.zprofile for `PATH`
+# finds three lines and MISSES the one that decides, because `eval "$(brew shellenv)"` sets PATH
+# without the token PATH occurring. A check keyed on the NAME of the thing cannot see a setter
+# that never spells it. (The companion site is `_tmo` — at :517, NOT the :505 previously cited.)
 TIMEOUT_BIN="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
 sweep_bounded() { # <seconds> <cmd…> — rc 124 on a cut (timeout(1)'s contract)
   local s="$1"; shift
+  # The `-z` arm below is the fallthrough named above: reachable only if the login PATH stops
+  # carrying either binary, NOT because launchd's own PATH is minimal. Measured non-empty here.
   if [ -z "$TIMEOUT_BIN" ] || [ ! -x "$TIMEOUT_BIN" ]; then "$@"; return $?; fi
   "$TIMEOUT_BIN" -k 5 "$s" "$@"
 }
@@ -514,6 +539,11 @@ _grouping="$_SWEEP_DIR/backlog-grouping-sweep.sh"
 # 127 "command not found". With no `set -e` that is SILENT, and rc 127 would have been journalled
 # below as if it were the detector's own verdict: a broken caller reading exactly like a clean store.
 # Caught before landing; the block is placed high on purpose (see above), so it brings its own bound.
+# Same bare-name lookup as TIMEOUT_BIN's, and the same refutation applies verbatim — measured
+# 2026-08-30 by eval'ing THIS line under the environment the plist actually builds: non-empty,
+# /opt/homebrew/bin/timeout. See the block above TIMEOUT_BIN for the measurement, the mute control
+# and the reason the "launchd PATH is minimal" reading was wrong. This site was previously cited
+# as :505; it is here. A LINE NUMBER IS A COORDINATE IN A FILE PEOPLE EDIT — re-grep `^_tmo=`.
 _tmo="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
 # 🚨 THE BOUND IS SIZED FOR THE BAND THIS ACTUALLY RUNS IN, NOT FOR THE BENCH (2026-08-12).
 # The 60 s bound was chosen in a foreground shell. This sweep runs from launchd under
