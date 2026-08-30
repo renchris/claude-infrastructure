@@ -224,16 +224,35 @@ print("OK")'
   # projection of 248.7%. In that regime EVERY projector measured here is badly wrong (the
   # incumbent renders 154.6%, this EWMA 231.4%, against a truth near 100%), so the clamp keeps
   # the shortfall regime -- where the arithmetic converges -- and discards the overshoot. The
-  # account is reported as on a WALL TRAJECTORY, which is true and actionable; "248%" is neither.
+  # "248%" is not actionable, and the clamp is what keeps it off the surface.
+  #
+  # UPDATED IN PLACE (2026-08-30, wall_projection floor 0.05 -> 0.90), invariant unchanged. This
+  # case used to also assert `⚠ WALL trajectory` HERE, on the reasoning that a wall trajectory at
+  # phase 0.32 is "true and actionable". It was neither: the comment above already concedes every
+  # projector is badly wrong in this regime, and the backtest closed it -- the one window that
+  # rendered a mid-week WALL (51% at day 3, projected 119%) finished at 99% and no wall ever
+  # arrived, while linear MAE at this phase is 46.9 pp against 5.3 for a constant predictor
+  # (weekly-reset-utilization-2026-08-25.md §3; axis-D-windows.md §5). So the glyph is now gated
+  # on the same 0.90 floor as the number. RP-16 itself -- an overshoot is never rendered as a
+  # NUMBER -- is untouched and is asserted on BOTH sides of that floor below.
   run python3 -c "$LOAD"'
 r = {"acct": "next", "weekly_pct": 52, "weekly_reset_h": 114.0, "burn_wk_ewma_ph": 1.725}
 st = ca.wk_strand_pp(r)
 assert st == 0.0, st
 line = ca.pace_line([r])
-assert "⚠ WALL trajectory" in line, line
 assert "248" not in line, line
 assert "231" not in line, line
 assert "154" not in line, line
+# mid-week the projection abstains entirely, so there is no glyph and no ratio to be wrong with
+assert "next no strand — on pace to fill the window" in line, line
+assert "⚠" not in line, line
+# LATE-PHASE ARM: at phase 0.95 the projection speaks, the glyph fires on a genuine overshoot --
+# and the overshoot STILL never renders as a number. 99 + 3.0*8.4 = 124.2 raw; proj_end = 104.2.
+late = ca.pace_line([{"acct": "next", "weekly_pct": 99, "weekly_reset_h": 8.4,
+                      "burn_wk_ewma_ph": 3.0}])
+assert "⚠ WALL trajectory" in late, late
+assert "124" not in late, late
+assert "104" not in late, late
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }

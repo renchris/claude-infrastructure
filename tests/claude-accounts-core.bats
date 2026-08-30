@@ -1847,11 +1847,25 @@ assert "next3 strand ~5pp of 8 · p96 of its own 3h burns" in line, line
 # RP-26 — a zero-strand account still RENDERS, and renders LAST. A sorted() over a list filtered
 # on strand > 0 passes RP-25 and drops this row silently.
 assert "next no strand" in line, line
-assert "⚠ WALL trajectory" in line, line
 assert line.rstrip().split(chr(10))[-1].strip().startswith("next no strand"), line
-# ...and its burn RATIO survives unchanged, while the >100 PROJECTION does not render as a number
-assert "1.62× burn" in line, line
-assert "162" not in line and "163" not in line, line     # the RATIO, never the ~162% projection
+# UPDATED IN PLACE (2026-08-30, wall_projection floor 0.05 -> 0.90). This row used to assert
+# `⚠ WALL trajectory` and `1.62× burn` HERE. `next` sits at weekly_reset_h=114.21, i.e. phase
+# 0.32 — and that render is the false alarm the widened abstain exists to kill: SYNTHESIS-design
+# §1.5 names this very live sample, where the incumbent renders proj_end 154.6% WALL while the
+# truth is that `next` needs the p41 of its own 24h history and lands near 100%. Backtested MAE
+# at this phase is 46.9 pp against 5.3 for a constant predictor. So mid-week the projection is now
+# SILENT, and the row renders its strand verdict without a ratio or a glyph.
+assert "next no strand — on pace to fill the window" in line, line
+assert "×" not in line.split("next no strand")[1], line
+assert "⚠" not in line.split("next no strand")[1], line
+# ...and the arms that assertion used to carry are pinned where the projection DOES speak: phase
+# 0.95, where the ratio renders and the >100 PROJECTION still never renders as a number.
+late = ca.pace_line([row(acct="next", weekly_pct=99, weekly_reset_h=8.4, burn_wk_ewma_ph=1.0)])
+assert "⚠ WALL trajectory" in late, late
+assert "1.04× burn" in late, late
+assert "104" not in late, late                           # the RATIO, never the ~104% projection
+# (the `already AT 100%` arm, which must fire at ANY phase because it is a reading rather than a
+# projection, is pinned in tests/claude-accounts-burn-ratio.bats beside the abstain rule itself)
 assert "BEHIND" not in line, line                        # 47ddbf47c DELETED it: on 2026-08-16 three freshly-reset windows each read
                                                          # BEHIND, which is correct and reads as gross under-utilisation.
 # an abstention renders as the WORD plus its reason, never as a zero (L2)

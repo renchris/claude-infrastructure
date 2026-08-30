@@ -194,6 +194,30 @@ The one real cost in view is `next3`'s ~8 pp, and with 3.8 h left that is essent
   uninformative, and speaks only in the last ~2 days where linear and empirical converge
   (day 6: −17 pp; day 7: −2 pp).
 
+  ✅ **SHIPPED 2026-08-30 — `MIN_ELAPSED_FRAC` 0.05 → 0.90**, backlog `70ed289c10fb`. Two
+  amendments to the prescription above, both from evidence that already existed when it was
+  written:
+
+  1. **The floor is phase 0.90 (~17 h left), not the "last ~2 days" (phase 0.71).** The −17/−2 pp
+     figures quoted here are the *median shape's shortfall* — a **bias**, and bias vanishes
+     earlier than error does. Read against MAE over windows
+     (`drain-telemetry-2026-08-25/axis-D-windows.md` §5, n=8, leave-one-out) phase 0.7 still costs
+     **36.7 pp** where a constant predictor costs **5.3**; 0.9 is the first phase whose error is
+     not a multiple of the do-nothing baseline. `SYNTHESIS-design.md` §1.5 had already resolved
+     the A-vs-D contradiction this way. Widening only to 0.71 would have shipped a projection that
+     is still 7× worse than the number 94.
+  2. **Widening silently dropped a real warning, so the renderer grew a measured arm.** The
+     projected-`⚠ WALL` flag was the only thing naming an account that had burned to the wall, and
+     gating it on phase muted it mid-week for an account already at 100% — which is *down until
+     reset*, not "on pace to fill the window" (next3 sat at exactly 100% for 11.2 h on 2026-08-11).
+     `pace_line` now flags `⚠ AT THE WALL` from `weekly_pct >= 100` at **any** phase: that is a
+     reading, and only the inference is phase-gated.
+
+  The shape-fitted replacement floated in the first clause stays unbuilt, and axis-D §5 is the
+  reason it should stay that way — it was built, backtested and **lost** (MAE 54.1 vs linear's
+  39.5), and it is self-refuting besides: the shape is a fossil of the operator's end-of-window
+  rush, so an estimator fitted to it fails toward complacency exactly when the rush stops.
+
 **Reproduce:** the analysis scripts are in this session's scratchpad; the one-command version of
 the retrospective is `python3 scripts/desk-strand-replay.py`.
 
