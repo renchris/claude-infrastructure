@@ -86,6 +86,143 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-30 — drain recycle #260: method 232 — A CLAIM ABOUT AN EXECUTION ENVIRONMENT MUST BE
+  MEASURED IN THAT ENVIRONMENT, AND "RUNS FROM LAUNCHD" NAMES A LAUNCHER, NOT AN ENVIRONMENT.**
+  🚨 **THE FINDING: MY PREDECESSOR'S #0 LEAD — HANDED FORWARD AS "THE CHEAPEST REAL DEFECT ON THIS
+  LIST, FULLY MEASURED" — IS REFUTED, AND THE ONE COMMAND THAT REFUTES IT IS THE LEAD'S OWN
+  REASON.** The inherited reason, verbatim: *"On the plist's own PATH neither `timeout` nor
+  `gtimeout` resolves, `TIMEOUT_BIN` goes empty, and `sweep_bounded()`'s guard falls through to
+  running the command UNBOUNDED — inside the launchd sweep whose own header calls an unbounded call
+  'the proven machine-wide wedge class' it exists to prevent."* Every clause about the CODE is
+  true. The clause about the ENVIRONMENT is false, and it is the one the conclusion rests on.
+  **`com.chrisren.autonomy-sweep.plist` does not hand the script launchd's minimal PATH.** Its
+  `ProgramArguments` are `/bin/zsh -lc 'export PATH="$HOME/.claude/bin:$PATH"; export
+  CC_FIRE_CLOUD=on; ~/.claude/scripts/autonomy-sweep.sh'` — and **`zsh -l` is a LOGIN shell**, so it
+  sources `/etc/zprofile` (which runs `path_helper`) and `~/.zprofile` before the script's first
+  line executes. **`~/.zprofile:1` is `eval "$(/opt/homebrew/bin/brew shellenv)"`**, which puts
+  `/opt/homebrew/bin` on the PATH. Both bare names resolve.
+  🚨 **MEASURED TWICE, AND THE SECOND TIME ON THE SUBJECT'S OWN SOURCE LINE RATHER THAN ON MY
+  PARAPHRASE OF IT.** `~/.claude/autonomy/probe260-path.sh` ran the resolution under
+  `env -i HOME=… PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/zsh -lc`, with a deliberately CONTAMINATED
+  arm A (my own session PATH, which already carries `/opt/homebrew/bin`) present so that a uniform
+  ABSENT could not pass as a finding, and with `armB_is_clean` asserting arm B's PATH differs from
+  arm A's so that `env -i` provably took effect. **Eight predictions written into
+  `predict260-path.txt` BEFORE the run and enforced at rc 93; ONE REFUSED, and the refusal is the
+  result** — I predicted `gtimeout` would be ABSENT (the GNU name, homebrew coreutils not assumed)
+  and it RESOLVES too, at `/opt/homebrew/bin/gtimeout`. Then `probe260-line.sh` removed the
+  remaining risk that I had measured my own typing: it **EXTRACTS the two real assignment lines out
+  of the file** (uniqueness asserted at 1 each) and evals each in that same environment. **Seven
+  predictions, ALL EXACT on the first run:**
+
+      line158_extracted    1
+      line517_extracted    1
+      armB_TIMEOUT_BIN     NONEMPTY   /opt/homebrew/bin/timeout
+      armB_tmo             NONEMPTY   /opt/homebrew/bin/timeout
+      armB_bin_executable  YES        (the guard is `-z` OR `! -x`; the second half holds too)
+      mute_ctl             EMPTY      (same extraction, both binary names rewritten to names that
+                                       exist nowhere — so NONEMPTY is a verdict this harness can
+                                       FAIL to reach)
+      cut_rc               124        (POS control: the resolved binary answers timeout(1)'s own
+                                       documented cut code on a 1 s bound over a 5 s sleep)
+
+  **The `mute_ctl` row is the one that makes the other six mean anything** — without it, "non-empty"
+  is what the harness says regardless of what it is fed, and #259's claim would have been refuted by
+  an instrument incapable of confirming it.
+  🚨 **THE INSTRUMENT LESSON, AND IT IS WHY THE CLAIM SURVIVED UNCHALLENGED FOR A WHOLE LINK: THE
+  CHEAP CHECK OF THE REASON WOULD HAVE CONFIRMED THE REASON.** `/usr/bin/grep -n PATH ~/.zprofile`
+  returns THREE lines — a Python 3.11 prepend, a `~/.local/bin` prepend and a `~/.claude/shims`
+  prepend — and **MISSES THE ONE THAT DECIDES**, because `eval "$(brew shellenv)"` sets PATH
+  **without the token `PATH` occurring anywhere on the line.** A check keyed on the NAME of the
+  thing cannot see a setter that never spells it. That is memory
+  `caller-census-keyed-on-path-misses-the-name` arriving from the opposite direction: there the grep
+  keyed on the path and the caller used the name; here it keys on the name and the setter uses
+  neither.
+  ⚠️ **WHAT IS STILL TRUE, STATED AT ITS REAL TRIGGER RATHER THAN ITS INHERITED ONE.** The
+  fallthrough at the `-z` guard is a genuine and SILENT hazard. But it fires when `~/.zprofile:1`
+  goes away, **not because launchd's PATH is minimal** — and that is a narrower, more durable claim,
+  because a PATH-minimalism claim is false today and a "this one rc line is load-bearing" claim
+  stays true until someone edits that line. **Same shape as #259's own best sentence about
+  `install.sh:1128`: a GRAMMAR bound outlives a SIZE bound. Here a NAMED-DEPENDENCY bound outlives
+  an ENVIRONMENT-SHAPE one.**
+  ✅ **THREE FILES' WORTH OF CITATION CORRECTIONS, ALL SMALL, ALL FROM RUNNING RATHER THAN READING:**
+  · the companion site is **`_tmo` at `:517`**, not the `:505` carried forward — a 12-line drift, and
+  the landed comment now tells the next reader to **re-grep `^_tmo=`** rather than trust a coordinate
+  in a file people edit (#245's instrument fault 1, prophylactically).
+  · **`scripts/autonomy-sweep.sh` is named by 22 `.bats` files, not the 21 handed forward** — filtered
+  to `*.bats`, which is the filter the standing note about `lead-crash-watchdog` already warns about.
+  · **AND THE NUMBER THAT ACTUALLY GOVERNS IS NEITHER.** Both slow suites — `tests/ship-land.bats`
+  and `tests/postland-verify.bats` — **NAME the file, and the selector drew NEITHER.** The `--direct`
+  set is **8 suites / 215 tests**. The lead's stated cost (*"named by 21 `.bats` including BOTH slow
+  suites; budget ≥28800s and take it on a link whose diff is otherwise small"*) is therefore **wrong
+  in the expensive direction, and by the standing rule that produced it**: naming-count and the
+  selector's DIRECT set are different questions and only the second sizes a land. #247/#248/#256
+  established that; this is its cleanest confirmation yet, because here the two answers differ by
+  14 suites AND by both of the pathologically slow ones.
+  **THE DIFF IS COMMENTS ONLY, PROVEN RATHER THAN ASSERTED.** `commentsonly260.sh` sha256s each
+  file's NON-COMMENT lines against a clean `git archive origin/main | tar -x` extraction of trunk —
+  **584 non-comment lines on both sides, sha `2fe1725a04a2f275` identical, 30 raw lines added** —
+  and carries a **SEEDED FIRE TEST** (a non-comment edit to a copy must change the sha, and it does)
+  so a mute proof cannot pass as a clean one, plus a stripper control refusing below 100 non-comment
+  lines so that "equal" cannot mean "both empty".
+  ✅ **LINTS: `shellcheck` rc 0 · `bash -n` rc 0 · `unattended-path-lint` bare rc 0 AND `--selftest`
+  46/46 rc 0 — the row #259 restored is holding, and 46 is the count its own account names ·
+  `pipefail-sigpipe-lint` bare rc 0 · `alarm-polarity-lint` with the file positional, clean.**
+  ⚠️ **DECLARED NOT-RUN rather than claimed** (the seventeenth consecutive link to declare):
+  `bats-shellcheck-lint` and `bats-assert-liveness` — no `.bats` edited; `test-walltime-lint` — it
+  takes a DIRECTORY and no test was touched.
+  ✅ **THE WHOLE `--direct` DRAW RUN IN THE FOREGROUND BEFORE THE LAND, through `suites260.sh` (list
+  on fd 3, every child `< /dev/null`, suites-run == suites-listed at rc 93): 8 of 8 suites, 215 ok,
+  0 not ok, 0 skip, 8 plans, TERMINATOR present, load 23.31 → 23.36.** Selector rc 0, a REAL LIST
+  (not `FULL`, not empty, not silence-at-non-zero); its POS control drawn from a genuinely
+  code-touching commit on trunk SPOKE with 3.
+  🚨 **THE LANE MOVED, AND IT IS THE FIRST CLEAR READING IN FOUR LINKS.** My open (23:31Z) read
+  **`RUNG=✅ LIVE_SRC=ok LIVE_LAG=0 LIVE_ADDS=0 LIVE_DIVERGED=0 LIVE_BREACH_WHY=<empty>
+  MIG_FAILED=0`**, on a clean tree. **#257, #258 and #259 ALL opened AND closed on `🚀` with
+  `LIVE_ADDS=4` and `LIVE_BREACH_WHY=adds`; the four adds have RESOLVED and the live layer is AT
+  trunk head.** ⚠️ **`LIVE_AGE` read 75,612 s — far past the 21,600 s (`LIVE_BUDGET_MIN` 360) time
+  arm — and the rung is still `✅`.** That is the ladder behaving exactly as its own order says and
+  it is worth stating plainly, because an age past the time arm reads alarming: **the age arm is
+  only reachable when the lane is BEHIND, and at `LIVE_SRC=ok` / `LIVE_LAG=0` there is nothing for a
+  budget to be a budget OF.** **READ THE LAG AND THE BREACH FIELD, never the age alone.**
+  ⚠️ **`GATE=stale` at my open — the FORTY-SIXTH consecutive.** NOT mine to drive: only the
+  background `postland-verify` stamp moves that marker.
+  🚨 **THE N-2 HAZARD FIRED ONCE, IN THE FILE THE BRIEF PREDICTED, AND THE TWO-SECOND GREP CAUGHT IT
+  BEFORE IT RAN.** `sed 's/260/261/g; s/259/260/g'` (higher number first) over the three inherited
+  instruments left `gap260.sh` claiming to compare *"#258's LAST reading"* and globbing
+  `allids.258*.txt` — **my grandparent's list, which would have resolved the wrong predecessor and
+  printed a plausible gap table.** Repaired to `259` before its first run. `board260.sh` and
+  `census260.sh` were clean, and the `sha256` trap did not arise — **a property of the numbers, not
+  of the method: neither substitution in my pair can reach `256`.** Clones this link: `board260.sh`,
+  `census260.sh`, `gap260.sh`, `suites260.sh`. Written from scratch: `probe260-path.sh`,
+  `probe260-line.sh`, `commentsonly260.sh`, `commit260-{1,2}.sh`, `land260-1.sh`.
+  ⚠️ **THE BOARD: ZERO rows closed by me, ZERO filed, ZERO reopened, ZERO board writes of any kind.**
+  **Gap** (#259's floor 23:27:44Z → my open 23:31:12Z, **3 m 28 s**): **ZERO arrivals, ZERO
+  departures, ZERO transitions**, and the `claimed` set byte-identical at the single row
+  `b60eb29e97dd`. Board at my open: **337 open / 222 blocked / 2,346 done / 1 claimed** (559
+  combined, 2,906 rows), both partitions asserted (`open + blocked == combined` AND
+  `allids == allrows`), every list `sort -c`'d on both sides of every `comm`.
+  ⚠️ **STORES AT MY OPEN (23:31:27Z), each with its denominator and its moment, none of them
+  concluded from:** postland RED pages **0** over a denominator of **2,802** (the 184th consecutive
+  zero) · postland stamps **518** · `~/.claude/autonomy/pages` **2,303 / 99** · inbox-guard
+  `.escalated` **446 / 446**. **All four are byte-identical to #259's floor reading taken 3 m 28 s
+  earlier, which says the stores were quiet across those two moments and NOTHING about the link** —
+  #245's scar, and the reason this sentence names its window instead of its subject.
+  ⚠️ **PEER MAIL, REPORTED AND NOT WORKED:** one forwarded post-land RED arrived as session-start
+  CONTEXT (not in the mailbox FILE) naming `tests/capacity-alarm.bats::CF2` observed after the land
+  `a6449cebc580`, **NO bisect verdict (cut-wall, load 43.80), and explicitly NOT attributed to that
+  commit.** That is the same sibling commit whose one deleted allowlist row blocked every land in
+  the repo until #259 restored it. **I filed nothing** — the page-row ownership is already filed
+  four times over and a fifth row is exactly the noise the FILED test exists to prevent.
+  🚨 **THE ONE TO TAKE FORWARD, AND IT IS #243's METHOD 213 PAYING ITS FIFTH TIME: A LEAD HAS A
+  TARGET AND A REASON, AND THE REASON IS THE CHEAP HALF.** #259 recommended a change to a file named
+  by 22 suites, budgeted at ≥28800 s, on a reason that one `env -i … zsh -lc` refutes in under a
+  second. **The target was real, the code is exactly as described, and the change would still have
+  been wrong** — because a fix landed against a refuted reason documents a hazard at the wrong
+  trigger, and the next reader inherits the wrong trigger rather than the code. ⚠️ **AND THE
+  GENERALISATION THAT MAKES IT MORE THAN A CORRECTION: when a reason names an ENVIRONMENT — "on
+  launchd's PATH", "under CI", "in the sandbox", "from cron" — it is naming a thing you can EXECUTE,
+  and executing it is always cheaper than reasoning about it. The launcher's NAME is not the
+  environment it produces, and here an eleven-character `-lc` between them inverted the answer.**
 - **2026-08-29 — drain recycle #259: method 231 — DRAINING-vs-STREAMING IS NOT THE DISCRIMINATOR
   EITHER. THE MIDDLE STAGE'S REDUCTION RATIO IS, AND IT IS SET BY WHAT THE FEED *CONTAINS*, NOT BY
   HOW BIG IT IS.**
