@@ -226,6 +226,30 @@ PLIST_TARGET_ALT="${PLIST_TARGET_LAYERS// /|}"
 # asserts live `plutil -p` == repo SSOT: editing the repo plist without the operator's launchctl
 # reload would turn that gate RED for every session in the fleet until they acted. Filed separately
 # so the repo edit and the reload land together.
+#
+# ── RESTORED 2026-08-29: `scripts/autonomy-sweep.sh:timeout`, retired by a6449cebc and put back the
+#    same hour, because ONE SOURCE LINE NAMES TWO BINARIES AND THE RATCHET COUNTS THEM SEPARATELY. ──
+# a6449cebc deleted that one row on the ratchet's say-so ("the ratchet says no longer violates") and
+# deliberately kept `scripts/autonomy-sweep.sh:gtimeout` beside it, reporting `--selftest 44/44`.
+# The tree now runs 46 arms and the 46th is "GREEN on the real tree": with the row gone the bare
+# lint reports the site, that arm goes red, and the selftest's failure BLOCKS EVERY LAND IN THIS
+# REPO — not just the author's. Measured one-variable, 2026-08-29T07:2xZ, on clean `git archive`
+# extractions: a6449cebc^ (109fa07c8) selftest rc 0 / bare rc 0; a6449cebc selftest rc 1 / bare
+# rc 1; the commit changed this file only, by exactly one deleted line.
+# THE ROW WAS NEVER STALE. autonomy-sweep.sh:158 (and again :505) is
+#   TIMEOUT_BIN="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
+# — ONE line naming BOTH bare binaries, so any argument that `timeout` no longer violates applies
+# verbatim to `gtimeout`, which that same commit says still violates. The allowlist is keyed on
+# (file, binary), so a paired idiom needs a paired pair of rows, and every other file carrying this
+# idiom holds both: hooks/lead-crash-watchdog.sh, hooks/notify.sh, hooks/waiting-recycle.sh,
+# scripts/lead-supervisor.sh, scripts/watch-claude-code-2118-hold.sh. Deleting one of the two made
+# autonomy-sweep.sh the only unpaired member of a five-file population.
+# ⚠️ THE REAL DEFECT UNDERNEATH IS STILL OPEN AND IS NOT AN ALLOWLIST QUESTION: on the plist's own
+# PATH neither name resolves, TIMEOUT_BIN goes empty, and sweep_bounded()'s guard falls through to
+# running the command UNBOUNDED — inside the launchd sweep whose own header calls an unbounded call
+# the machine-wide wedge class it exists to prevent. Fixing THAT (resolve absolutely, per
+# bin/cc-kitty-bin / bin/cc-claude-bin) retires BOTH rows honestly. Retiring either one alone does
+# not, and the ratchet cannot see the difference because it counts names, not lines.
 EMBEDDED_ALLOWLIST="$(cat <<'ALLOW'
 bin/cc-dispatch:bun
 bin/cc-dispatch:cargo
@@ -249,6 +273,7 @@ hooks/session-start.sh:agent-browser
 hooks/waiting-recycle.sh:gtimeout
 hooks/waiting-recycle.sh:timeout
 scripts/autonomy-sweep.sh:gtimeout
+scripts/autonomy-sweep.sh:timeout
 scripts/lead-supervisor.sh:cc-notify
 scripts/lead-supervisor.sh:gtimeout
 scripts/lead-supervisor.sh:timeout
