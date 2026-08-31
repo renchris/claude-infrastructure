@@ -423,6 +423,12 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
   # Proved 2026-07-29 with `.git` a DANGLING gitfile — exactly what a linked worktree becomes once its
   # main .git is gone: `[ -e "$REPO/.git" ]` passes, ls-files fails, and the assert returned 0 against
   # a deliberately EMPTY live root. Recorded as a non-verdict, never as parity.
+  # This pathspec is the walk's INPUT and it is the FIRST of the two gates a class passes. It lists
+  # ten entries where install.sh globs from twelve top-level directories: githooks/ and launchd/ are
+  # absent BY DESIGN, because install.sh COPIES those two classes (into .git/hooks + the git template,
+  # and into ~/Library/LaunchAgents) rather than linking them into $CFG. The NOT-PER-FILE arms in the
+  # case block below declare the same exclusion at the second gate — stated twice on purpose, since a
+  # class dropped by an input filter alone leaves no reason behind anywhere a reader will look.
   if ! _tracked="$(git -C "$REPO" ls-files -- hooks commands scripts bin skills agents lib vendor model-config.yaml providers.json 2>/dev/null)"; then
     report "NOVERDICT" "(existence)" "git ls-files failed in $REPO — the tracked set is unknown"
     noverdict=1
@@ -504,6 +510,17 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       scripts/backlog-consolidation/*/*)  want=0 ;;
       scripts/backlog-consolidation/*.py) want=1; cls='scripts/backlog-consolidation/*.py' ;;
       scripts/*/*)               want=0 ;;   # scripts/ is globbed top-level only
+      # scripts/*.py — a class the MAP does not deploy, DECLARED here rather than left to the
+      # catch-all. install.sh's scripts/ leg globs scripts/*.sh ONLY, so the 25 top-level .py files
+      # (measured 2026-08-31) match neither scripts/*/* nor scripts/*.sh and fell through to
+      # `*) want=0` below — the same silent default that hid hooks/*.py, scripts/lib/*.py,
+      # scripts/backlog-consolidation/*.py and bin/ms365-* until each one bit, each recorded above.
+      # The want=0 VERDICT is correct; the missing part was the reason. The harm is REFUTED, not
+      # merely unmeasured: the consumer census over these paths counted DOCUMENTATION, and the one
+      # live consumer resolves through its own symlink back into the checkout and answers rc 0.
+      # So this is an exclusion carrying its reason, NOT a step towards widening the deploy — do not
+      # add scripts/*.py to install.sh on the strength of this arm.
+      scripts/*.py)              want=0 ;;
       scripts/*.sh)              want=1; cls='scripts/*.sh' ;;
       # bin/desk-* is a SEPARATE glob in install.sh:621, added because the cc-* glob does not cover
       # it and nothing else linked it: ~/.claude/bin/desk-register did not exist at all while
@@ -531,6 +548,26 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       # loop "would silently fail to link every BRAND-NEW file on the next re-vendor"). Handled by
       # its own loop below; per-file demands here would contradict install.sh outright.
       vendor/*)                  want=0 ;;
+      # ── NOT-PER-FILE ── install.sh classes deliberately NOT deployed as per-file links into $CFG.
+      # MEASURED 2026-08-31 by method 236 pointed at this file — #264 ran the same method against the
+      # DETECTOR (scripts/deploy-link-parity.sh) and this is the REPAIRER, the holder nobody had
+      # measured. install.sh globs 19 deploy classes; this block CLAIMED 16, declined vendor/ with a
+      # stated reason, and these two fell to the REASONLESS `*) want=0` below. Both verdicts were
+      # already CORRECT — no outage is being repaired here. The reasonless want=0 is itself the
+      # defect: it is indistinguishable from the oversight that hid four earlier classes in this very
+      # block, and an omission carries no reason while a declaration does.
+      #   githooks/*       install.sh COPIES these into <repo>/.git/hooks and ~/.git-template/hooks
+      #   launchd/*.plist  install.sh COPIES these into ~/Library/LaunchAgents
+      # Neither destination is $CFG/<rel>, so demanding a per-file link here would be WRONG rather
+      # than merely noisy. These two arms are also unreachable from THIS walk today — the _tracked
+      # pathspec above lists neither directory — and that is precisely why they are written down:
+      # the exclusion now holds at BOTH gates instead of resting on the input filter alone.
+      # tests/deploy-parity.bats derives install.sh's class list from install.sh's own for-headers
+      # and asserts every class lands in EXACTLY ONE of claimed-or-declared, so neither a new class
+      # nor a deleted arm can drift into an accident. Same shape, and the same reason, as
+      # scripts/deploy-link-parity.sh's NOT-PER-FILE block.
+      githooks/*)                want=0 ;;
+      launchd/*.plist)           want=0 ;;
       *)                         want=0 ;;
     esac
     [ "$want" = 1 ] || continue
