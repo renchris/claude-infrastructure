@@ -193,6 +193,26 @@ The one real cost in view is `next3`'s ~8 pp, and with 3.8 h left that is essent
   is to widen the abstain rule so the projection stays silent mid-week, where it is measurably
   uninformative, and speaks only in the last ~2 days where linear and empirical converge
   (day 6: −17 pp; day 7: −2 pp).
+  - ✅ **DONE 2026-08-31 — the cheap move shipped; the curve did not.** `wall_projection()`'s
+    floor went `MIN_ELAPSED_FRAC 0.05 → (168−48)/168 = 0.714`, expressed as a new
+    `WALL_SPEAK_H = 48.0`: the projection now speaks only in the window's last 48 h. The linear
+    divisor is **unchanged** — deliberately, per §5.2: 4 windows refute linear but cannot
+    calibrate a replacement, so the remedy is silence in the refuted phase, not a fitted curve.
+    Re-derive after ≥2 more full cycles and revisit then.
+    - **What this costs, stated plainly.** The `⚠ WALL` flag and the `N.NN× burn` clause vanish
+      from `pace_line` for most of the window. That is the intended trade: mid-week that flag
+      scores 0 true positives against ≥1 false one in this corpus (`next@08-23` projected 119%
+      and closed at 99%), and §8.2 finds the fleet has never hit a usage wall in the recorded
+      series at all. It survives intact in the last 48 h, which is where an early wall would
+      actually be actionable.
+    - **The mid-week surface is not left blank.** `wk_strand_pp` (M3a) — the roll-aware EWMA
+      nowcast over the last 48 h of *realised* pace — carries no linear assumption and is
+      untouched, so the drain block keeps naming which account is losing pp in exactly the phase
+      this projection now refuses.
+    - Pinned by `tests/claude-accounts-burn-ratio.bats` (10 cases, was 8). The boundary is held
+      to within an hour from both sides — 47 h left projects, 49 h left abstains — so a silent
+      revert to 0.05, or any re-widening, reds a named case. Mutation-proved: floor→0.05 reds 2
+      cases, `WALL_SPEAK_H`→72 reds 1, →24 reds 4.
 
 **Reproduce:** the analysis scripts are in this session's scratchpad; the one-command version of
 the retrospective is `python3 scripts/desk-strand-replay.py`.

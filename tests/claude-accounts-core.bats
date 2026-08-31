@@ -1847,11 +1847,19 @@ assert "next3 strand ~5pp of 8 · p96 of its own 3h burns" in line, line
 # RP-26 — a zero-strand account still RENDERS, and renders LAST. A sorted() over a list filtered
 # on strand > 0 passes RP-25 and drops this row silently.
 assert "next no strand" in line, line
-assert "⚠ WALL trajectory" in line, line
 assert line.rstrip().split(chr(10))[-1].strip().startswith("next no strand"), line
-# ...and its burn RATIO survives unchanged, while the >100 PROJECTION does not render as a number
-assert "1.62× burn" in line, line
-assert "162" not in line and "163" not in line, line     # the RATIO, never the ~162% projection
+# The burn RATIO and the ⚠ WALL flag it feeds are `wall_projection`s, and UPDATED IN PLACE
+# 2026-08-31: its floor widened to the window s last 48 h, because the linear divisor backtests
+# at a mean 46 pp error mid-week (weekly-reset-utilization-2026-08-25.md §3). `next` here sits at
+# 114.21 h left — phase 0.32, the refuted phase — so both are now correctly ABSENT. RP-25s sort
+# and RP-26s render-last above are unaffected and are what this case is for; the ratio arms move
+# to the phase where they still speak, so neither behaviour is left unpinned.
+assert "× burn" not in line, line
+assert "⚠ WALL" not in line, line
+assert "162" not in line and "163" not in line, line     # never the ~162% projection, in any phase
+late = ca.pace_line([row(acct="next", weekly_pct=80, weekly_reset_h=40.0, burn_wk_ewma_ph=1.725)])
+assert "next no strand — 1.05× burn, ⚠ WALL trajectory" in late, late
+assert "105" not in late, late                           # the RATIO, never the ~105% projection
 assert "BEHIND" not in line, line                        # 47ddbf47c DELETED it: on 2026-08-16 three freshly-reset windows each read
                                                          # BEHIND, which is correct and reads as gross under-utilisation.
 # an abstention renders as the WORD plus its reason, never as a zero (L2)

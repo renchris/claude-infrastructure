@@ -223,17 +223,36 @@ print("OK")'
   # next at phase 0.32 on 2026-08-25: weekly_pct 52, 114 h left, EWMA 1.725 %/h -> a raw
   # projection of 248.7%. In that regime EVERY projector measured here is badly wrong (the
   # incumbent renders 154.6%, this EWMA 231.4%, against a truth near 100%), so the clamp keeps
-  # the shortfall regime -- where the arithmetic converges -- and discards the overshoot. The
-  # account is reported as on a WALL TRAJECTORY, which is true and actionable; "248%" is neither.
+  # the shortfall regime -- where the arithmetic converges -- and discards the overshoot.
+  #
+  # ARM 2 UPDATED IN PLACE 2026-08-31, invariant unchanged. This case used to assert
+  # `⚠ WALL trajectory` on the phase-0.32 row above. That flag is `wall_projection`'s, and its
+  # floor widened to the window's last 48 h because the linear divisor backtests at a mean 46 pp
+  # error mid-week (weekly-reset-utilization-2026-08-25.md §3) — this row's own account is the
+  # measured false positive, projecting 119% ⚠ WALL at day 3 and closing at 99%. So the flag now
+  # lives in the last-48h arm below, where an early wall is both derivable and actionable, and
+  # the mid-week row is pinned SILENT rather than left unpinned. What this case is FOR is
+  # unchanged and is asserted in both phases: an overshoot never renders as a NUMBER.
   run python3 -c "$LOAD"'
-r = {"acct": "next", "weekly_pct": 52, "weekly_reset_h": 114.0, "burn_wk_ewma_ph": 1.725}
-st = ca.wk_strand_pp(r)
+mid = {"acct": "next", "weekly_pct": 52, "weekly_reset_h": 114.0, "burn_wk_ewma_ph": 1.725}
+st = ca.wk_strand_pp(mid)
 assert st == 0.0, st
-line = ca.pace_line([r])
-assert "⚠ WALL trajectory" in line, line
+line = ca.pace_line([mid])
 assert "248" not in line, line
 assert "231" not in line, line
 assert "154" not in line, line
+# mid-week the projection abstains outright, so neither the ratio nor the flag it feeds appears
+assert "× burn" not in line, line
+assert "⚠ WALL" not in line, line
+assert "next no strand" in line, line       # the ROW still renders — silence is not omission
+# ...and in the window s last 48 h the warning survives intact, still with no overshoot number.
+# 80% used with 40 h left projects to 105%: an early wall, i.e. DOWN until reset.
+late = {"acct": "next", "weekly_pct": 80, "weekly_reset_h": 40.0, "burn_wk_ewma_ph": 1.725}
+assert ca.wk_strand_pp(late) == 0.0, ca.wk_strand_pp(late)
+lline = ca.pace_line([late])
+assert "⚠ WALL trajectory" in lline, lline
+assert "1.05× burn" in lline, lline
+assert "105" not in lline, lline            # the RATIO, never the ~105% projection
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }

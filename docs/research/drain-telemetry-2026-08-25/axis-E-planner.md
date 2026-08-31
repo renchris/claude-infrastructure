@@ -142,6 +142,13 @@ Report **null**, not a verdict, when any of:
 
 1. `elapsed_fraction < 0.05` — inherited verbatim from `wall_projection`'s floor. Same reason: at 1 h into
    a week the projection is noise. Fires on 0 of the 3 windows that were <25% elapsed in the backtest.
+   ⚠ **Do NOT re-inherit that floor when this is built (note added 2026-08-31).** `wall_projection`'s
+   floor has since widened to `0.714` (`WALL_SPEAK_H = 48.0`) for a reason that does **not** apply
+   here: its divisor assumes LINEAR burn and is refuted mid-week at a mean 46 pp error
+   (`weekly-reset-utilization-2026-08-25.md` §3). This verdict is built on *realised* rates and
+   carries no such assumption, so it should keep the **literal 0.05** written above — which is why
+   the number, not the reference, is what binds. Widening it to 0.714 would silence the feasibility
+   verdict through exactly the phase where the week's plan is set.
 2. `session_pct` or `session_reset_at` absent (15.0% of samples lack `session_reset_at`) — the current
    window's remaining room is unknown, and the 5h term cannot be imputed.
 3. `weekly_reset_at` absent (1.4%), or `0 < weekly_reset_h ≤ 168` fails — bad data, not a signal.
