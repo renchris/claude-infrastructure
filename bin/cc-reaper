@@ -827,16 +827,30 @@ sanitize_key(){ printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }   # marker-filena
 # only if that session BOOTED within CC_FIRED_BOOT_MAX_S of the fire; a startedAt beyond firedAt+boot-max
 # is a different tenant → stale stamp (GC'd in the sweep). Unknown startedAt ⇒ INVALID (surface, not reap).
 iso_to_epoch_r(){ # <iso8601> → epoch seconds (empty on parse fail). Mirrors cc-classify iso_to_epoch.
+  # `date -j -f` is BSD-only; GNU has no `-j` at all and parses with `-d`. BSD first, because GNU's
+  # `-j` failure is clean, and the empty-on-parse-fail contract is kept for a genuinely bad stamp.
+  #
+  # 🚨 THE SILENT HALF, MEASURED 2026-08-31 (BACKLOG_DRAIN_24_7 off-box cause census): with only the
+  # BSD arm this returned EMPTY for every well-formed stamp on Linux, and `|| true` made that look
+  # like a parse failure rather than a missing dialect. fired_at_epoch_r's documented fallback then
+  # took over and dated the fire from the MARKER FILE'S MTIME — i.e. from now — so rule 2's
+  # stale-tenancy belt could never see a stale stamp and a later tenant of a fired pane was
+  # auto-reaped. One cell (cc-reaper.bats "stale-tenancy stamp … is NOT reaped") and a safety belt
+  # silently open. A fallback that cannot distinguish "unparseable" from "I do not speak this
+  # dialect" converts a missing feature into wrong data.
   local s="${1%%.*}"; s="${s%Z}"
   [ -z "$s" ] && return 0
-  TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$s" +%s 2>/dev/null || true
+  TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$s" +%s 2>/dev/null \
+    || date -u -d "${s}Z" +%s 2>/dev/null || true
 }
 fired_at_epoch_r(){ # <paneUUID> → fire epoch (marker firedAt; fallback: marker file mtime)
   local f="$FIRED_DIR/${1:-}.json" iso ep
   [ -f "$f" ] || return 1
   iso="$(jq -r '.firedAt // ""' "$f" 2>/dev/null)"
   ep="$(iso_to_epoch_r "$iso")"
-  [ -n "$ep" ] || ep="$(stat -f %m "$f" 2>/dev/null)"
+  # Through the ONE helper: a bare `stat -f %m` here returned GNU's filesystem block AS the epoch
+  # (non-empty, so the guard below passed it). See file_mtime_r.
+  [ -n "$ep" ] || ep="$(file_mtime_r "$f")"
   [ -n "$ep" ] || return 1
   printf '%s' "$ep"
 }
@@ -884,14 +898,27 @@ find_transcript(){ # <sid> → its .jsonl path (first match across the account r
 # Gap-3: the reaper's wall-clock. A file seam (CC_REAPER_NOW_FILE) lets a test advance it across the
 # sweep deterministically (durable product, not an mtime); in production it is just `date +%s`.
 reaper_now(){ if [ -n "${CC_REAPER_NOW_FILE:-}" ] && [ -r "$CC_REAPER_NOW_FILE" ]; then cat "$CC_REAPER_NOW_FILE" 2>/dev/null; else date +%s; fi; }
-# mtime in epoch seconds — BSD first (this is a macOS-only janitor), GNU as the fallback, and a
-# non-zero return rather than a 0 on failure: a caller comparing timestamps must be able to tell
-# "cannot read" from "the epoch", or an unreadable file reads as infinitely stale. Mirrors the
-# stat idiom already used for the lockdir age.
+# mtime in epoch seconds, with a non-zero return rather than a 0 on failure: a caller comparing
+# timestamps must be able to tell "cannot read" from "the epoch", or an unreadable file reads as
+# infinitely stale.
+#
+# 🚨 GNU FIRST, AND THE VERDICT IS THE OUTPUT — NEVER THE EXIT CODE. `stat -f %m … || stat -c %Y …`
+# reads as the portable idiom and is not one: on GNU, `-f` is `--file-system`, so `%m` is taken as a
+# FILENAME, the real path's filesystem block goes to STDOUT, and stat exits 1 — so the `||` arm's
+# epoch is APPENDED to that block instead of replacing it. Written out in full at
+# `scripts/autonomy-sweep.sh:213` and now at `scripts/land-lock.sh`'s stat_field.
+# MEASURED 2026-08-31 (BACKLOG_DRAIN_24_7 off-box cause census): this helper's `case` guard caught
+# the garbage and so failed CLOSED — safe, but it meant no mtime was ever readable off-box, which is
+# 23 of cc-reaper.bats's 49 remaining off-box reds, all through td_called. Its two siblings were not
+# so lucky: `:839` had no fallback and no guard and returned the block AS an epoch, and the lockdir
+# age below fed it straight to `$(( ))`. Both now route through here.
+# The comment this replaces called the janitor "macOS-only"; the suite that proves it is not, and a
+# helper that cannot read an mtime off-box is how that stayed invisible.
 file_mtime_r(){ # <path> → epoch seconds | empty+1
   local p="${1:-}" m
   [ -n "$p" ] || return 1
-  m="$(stat -f %m "$p" 2>/dev/null || stat -c %Y "$p" 2>/dev/null)" || return 1
+  m="$(stat -c %Y "$p" 2>/dev/null)"
+  case "$m" in ''|*[!0-9]*) m="$(stat -f %m "$p" 2>/dev/null)" ;; esac
   case "$m" in ''|*[!0-9]*) return 1 ;; esac
   printf '%s' "$m"
 }
@@ -2313,7 +2340,7 @@ acquire_sweep_lock(){
   while ! mkdir "$LOCKDIR" 2>/dev/null; do
     pid="$(cat "$LOCKDIR/pid" 2>/dev/null || true)"
     lstart="$(cat "$LOCKDIR/lstart" 2>/dev/null || true)"
-    lmt="$(stat -f %m "$LOCKDIR" 2>/dev/null || stat -c %Y "$LOCKDIR" 2>/dev/null || echo 0)"
+    lmt="$(file_mtime_r "$LOCKDIR" || echo 0)"
     lnow="$(date +%s 2>/dev/null || echo 0)"
     age=$(( lnow - lmt ))
     if [ -z "$pid" ] && [ "$age" -lt "$LOCK_STAMP_GRACE_S" ]; then

@@ -453,7 +453,7 @@ EOF
   # firedAt = 2h ago; the current session started NOW (startedAt ≫ firedAt+BOOT_MAX=+1800). Pre-fix:
   # file-exists ⇒ belt passes ⇒ reaped. Post-fix: stale tenancy ⇒ auto-reap refused AND the stamp GC'd.
   set_desk; set_live 1
-  local old_iso; old_iso="$(date -u -r "$(( $(date +%s) - 7200 ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+  local old_iso; old_iso="$(TZ=UTC epoch_fmt "$(( $(date +%s) - 7200 ))" +%Y-%m-%dT%H:%M:%SZ)"
   mkdir -p "$D/fired"; printf '{"paneUUID":"%s","cwd":"x","firedBy":"t","firedAt":"%s","selfRetire":true}\n' "$WPANE" "$old_iso" > "$D/fired/$WPANE.json"
   mock_classify finished "$D/clean" 9000 yes "$WPANE" "$(( $(date +%s) * 1000 ))"   # tenant booted NOW
   run "$R" sweep --reap
@@ -1185,7 +1185,7 @@ CLEOF
   [ "$status" -eq 0 ]
   ts=$(grep 'sweep start' "$D/reaper.log" | tail -1 | sed -E 's/^\[([0-9T:-]+)Z\].*/\1/')
   [ -n "$ts" ]
-  epoch=$(date -j -u -f "%Y-%m-%dT%H:%M:%S" "$ts" +%s)   # -u: interpret the stamp AS UTC (TZ-independent)
+  epoch=$(iso_utc_epoch "$ts")                       # the stamp is read AS UTC (TZ-independent)
   [ -n "$epoch" ]
   [ "$epoch" -ge "$((before - 120))" ]               # the 5h (18000s) mislabel dwarfs the ±120s slack
   [ "$epoch" -le "$((after + 120))" ]
@@ -2314,10 +2314,48 @@ assert_never_committed() { # <worktree>
 
 CPROJ_SID="c0c0c0c0-1111-4222-8333-444455556666"
 
-# BSD `touch -t`: set an mtime N seconds in the past. The suite already relies on BSD `date -v`
-# (the Gap-2 operator-prompt cases), so this adds no new platform assumption.
+# Set an mtime N seconds in the past. `touch -t` is POSIX; rendering the past instant is NOT, and
+# the two dialects disagree on the flag AND on what a bare number means. BSD takes an epoch with
+# `-r`; GNU rejects `-v` outright ("invalid option -- 'v'") and reads `-r` as a REFERENCE FILE, so
+# on Linux `date -r <epoch>` fails with "No such file or directory" and the fallback is reached.
+# That asymmetry is what makes BSD-first safe: the operator's box never evaluates the second arm.
+# House idiom, same order and same reason as scripts/wrap-ledger.sh:591-592.
+#
+# MEASURED 2026-08-31 (BACKLOG_DRAIN_24_7, the off-box cause census): the previous spelling was
+# `date -v-${2}S`, whose comment claimed the suite "already relies on BSD `date -v` (the Gap-2
+# operator-prompt cases), so this adds no new platform assumption." Both halves were wrong. This
+# was the suite's ONLY `date -v` — grep finds two hits, this line and the comment asserting the
+# other ones — and the assumption it added cost 51 of 192 tests off-box: `date -v` fails, the
+# command substitution is empty, `touch -t ""` sets no mtime, and every idle-age case downstream
+# reads a file that is not old. A justification citing a precedent that does not exist is how a
+# platform assumption enters a suite that had none.
 touch_ago() { # <file> <seconds-ago>
-  touch -t "$(date -v-"${2}"S +%Y%m%d%H%M.%S)" "$1"
+  local t=$(( $(date +%s) - $2 ))
+  touch -t "$(epoch_fmt "$t" +%Y%m%d%H%M.%S)" "$1"
+}
+
+# ── THE OTHER THREE BSD SPELLINGS IN THIS FILE, ALL FOUND BY THE SAME CENSUS ─────────────────────
+# Same measurement, same date: 51 of 192 red off-box, and after the reaper's own stat dialect was
+# cured (bin/cc-reaper file_mtime_r) 9 remained — every one of them a BSD-only spelling HERE, in the
+# harness, never in the subject. They are gathered as three helpers so the next one is a call and
+# not a fourth dialect: `date -r <epoch>` (BSD) vs `date -d @<epoch>` (GNU), `date -j -u -f <fmt>`
+# (BSD) vs `date -u -d <stamp>` (GNU), and `stat -f %m` (BSD) vs `stat -c %Y` (GNU).
+# BSD FIRST for the two date helpers, because GNU `date -r` means "reference FILE" and fails
+# cleanly on an epoch, so the arms cannot both answer. GNU FIRST for stat, for the reason
+# scripts/autonomy-sweep.sh:213 gives: BSD `stat` has no `-c` at all, so it cannot half-succeed the
+# way GNU `-f` does — GNU `-f` PRINTS a filesystem block to stdout and only then exits 1, so an
+# exit-code chain appends rather than replaces. Validate the OUTPUT, never the status.
+epoch_fmt() { # <epoch> <+format> → the instant rendered
+  date -r "$1" "$2" 2>/dev/null || date -d "@$1" "$2"
+}
+iso_utc_epoch() { # <YYYY-MM-DDTHH:MM:SS, read AS UTC> → epoch seconds
+  date -j -u -f "%Y-%m-%dT%H:%M:%S" "$1" +%s 2>/dev/null || date -u -d "$1Z" +%s
+}
+mtime_of() { # <path> → epoch seconds
+  local m
+  m="$(stat -c %Y "$1" 2>/dev/null)"
+  case "$m" in ''|*[!0-9]*) m="$(stat -f %m "$1" 2>/dev/null)" ;; esac
+  printf '%s' "$m"
 }
 
 mk_sess_transcript() { # <sid> <seconds-ago> — the session's OWN transcript, at a pinned mtime
@@ -2410,8 +2448,8 @@ assert_inflight_fixture() { # <sid> <agent-name> <expect-agent-newer:yes|no>
   [ -f "$D/proj-c/slug/$1.jsonl" ] || false
   [ -f "$D/proj-c/slug/$1/subagents/agent-$2.jsonl" ] || false
   local sm am
-  sm="$(stat -f %m "$D/proj-c/slug/$1.jsonl")"
-  am="$(stat -f %m "$D/proj-c/slug/$1/subagents/agent-$2.jsonl")"
+  sm="$(mtime_of "$D/proj-c/slug/$1.jsonl")"
+  am="$(mtime_of "$D/proj-c/slug/$1/subagents/agent-$2.jsonl")"
   if [ "$3" = yes ]; then [ "$am" -ge "$sm" ] || false; else [ "$am" -lt "$sm" ] || false; fi
 }
 
