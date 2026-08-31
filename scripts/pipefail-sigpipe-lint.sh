@@ -238,6 +238,42 @@
 # CHECK THAT THE PARTITION YOU DREW USES THE SAME VARIABLE THE SENTENCE ABOVE IT NAMES.
 # ────────────────────────────────────────────────────────────────────────────────────────────────
 #
+# ── AN EIGHTH CORRECTION, 2026-08-31 (backlog ca97c678b18b), and it is to CLAUSE 4 rather than to
+#    the measurements: THE STATUS-CONSUMER CAN SIT IN A DIFFERENT STACK FRAME, AND CLAUSE 4 ONLY
+#    EVER LOOKED AT THE PIPELINE LINE. ─────────────────────────────────────────────────────────────
+# `p | grep -q X` as the LAST command of a function body has its status read by every CALLER of that
+# function — the rc IS the return value — and nothing about that is visible on the pipeline line.
+# Under errexit the line was already RED (clause 4 counts a bare pipeline), so the blind spot was
+# precisely the file with `set -uo pipefail` and no `-e`, which is most of bin/ and half of scripts/.
+#
+#     set -uo pipefail          # no -e
+#     have_flag() {
+#       "$BIN" -h 2>/dev/null | grep -q -- '--login-status'
+#     }
+#     if have_flag; then …      # reads FALSE on a flag that IS advertised
+#
+# That is the ec9a43a9 scar at the top of this file, byte-for-byte in consequence, with the pipeline
+# moved one frame down and out of the line the detector reads. MEASURED on /bin/bash before writing
+# the fix, 260,007 B feed, needle on line 1: 40/40 inverted.
+#
+# Census 126 → 145. All 19 audited individually, 0 false positives; 3 are boolean PREDICATES
+# returning grep -q direct — bin/cc-comms-alarm-sweep:92 · scripts/lead-supervisor.sh:648 ·
+# docs/activation/pending-activation/18-fleet-activate.sh:110, the last fed a `launchctl
+# print-disabled` dump held in a VARIABLE, i.e. unbounded by inspection exactly as clause 3 says.
+# They are GRANDFATHERED with the rest, per the WHY A RATCHET AND NOT A FLAG-DAY judgment above;
+# what changes today is that the shape is now VISIBLE and a new one cannot be added silently.
+#
+# ⚠️ THE DETECTION IS A ONE-LINE LOOKAHEAD, NOT A BRACE COUNT, AND THAT IS FORCED. Brace counting is
+# not survivable in this tree: `${VAR}`, `$(…)`, `{1..9}` and the awk programs embedded in half these
+# files all carry braces that are not shell blocks, and a miscount does not fail loudly — it shifts
+# every later verdict in the file, which is the same silent-mute direction the commented-heredoc bug
+# above already cost us. So the detector asks the one narrow question it can answer: is the very next
+# CODE line a lone `}`? Function tracking is deliberately ASYMMETRIC to match — an opener arms it and
+# the first lone `}` disarms it, so a multi-line `{ … }` group nested in a function disarms early and
+# a real function-final pipeline below it is MISSED. Under-reporting is the safe direction for a
+# ratchet; over-reporting would put an allowlist row on a line that is not a defect. g32/g33/g34 pin
+# the three ways this could widen, and each dies to its own one-line mutation (verified, not assumed).
+#
 # A variable's contents are not bounded by inspection, so the builtin exemption cannot key on the
 # command WORD — it keys on the ARGUMENT. A pure LITERAL keeps the 0/200 exemption (a literal you
 # can read is a length you can read, and that is what the row above actually measured); a parameter
@@ -287,7 +323,9 @@
 #      moment the write exceeds the 64 KiB pipe buffer. The command word is identical in both cases,
 #      so only the argument can discriminate;
 #   4. the pipeline's status is CONSUMED — an `if`/`elif`/`while`/`until` condition, a `!` operand,
-#      or (under `set -e`) a bare pipeline or a top-level `VAR=$(…)`. `local`/`declare`/`export`
+#      a trailing `&&`, a `; rc=$?` capture, THE LAST COMMAND OF A FUNCTION BODY (its rc IS the
+#      return value every caller reads — see the eighth correction below), or (under `set -e`) a
+#      bare pipeline or a top-level `VAR=$(…)`. `local`/`declare`/`export`
 #      MASK the status (the builtin's own 0 wins), and `[ -n "$( … )" ]` discards it, so neither is
 #      a violation however exposed the pipeline inside looks;
 #   5. it is NOT already mitigated by a trailing `|| true` / `|| <fallback>`, which swallows the 141
@@ -448,8 +486,20 @@ function is_external(s,   t, p) {
   return 1
 }
 
+# Clause 4c helper: does this LAST STAGE end the body it sits in, with nothing after it?
+# Fed seg[n] (the text after the final pipe), so a true answer means the pipeline is the last
+# command before the closing brace and its status IS what the body returns.
+function func_final_tail(s,   t) {
+  if (s !~ /[}][ \t]*$/) return 0
+  t = s
+  sub(/[}][ \t]*$/, "", t)     # drop the closing brace...
+  sub(/;[ \t]*$/,   "", t)     # ...and the separator in front of it
+  if (index(t, ";") > 0) return 0   # another command follows the pipeline — not final
+  return 1
+}
+
 # Clause 4: does anything READ this pipelines status?
-function consumed(l, hase,   t, pre, i) {
+function consumed(l, hase, lastseg,   t, pre, i) {
   t = ltrim(l)
   # [ -n "$( … )" ] / [ -z … ] discard the substitutions status entirely.
   if (t ~ /\[\[?[ \t]+-[nz][ \t]+"?\$\(/) return 0
@@ -467,6 +517,14 @@ function consumed(l, hase,   t, pre, i) {
   }
   if (t ~ /^(if|elif|while|until)[ \t]/)  return 1
   if (t ~ /^![ \t]/)                      return 1
+  # Clause 4c, ONE-LINE LEG. A pipeline that ENDS a function body is read by whoever CALLS the
+  # function, so `f() { p | grep -q X; }` is consumed exactly as `if p | grep -q X` is. The
+  # multi-line leg needs a lookahead and is handled in the main block; the one-line leg is visible
+  # right here. Guarded twice, because is_early only inspects the HEAD of the last stage:
+  # the segment must END in the closing brace, and it must hold no further `;` — otherwise
+  # `f() { p | grep -q X; echo done; }` would be read as function-final when it is not.
+  if (t ~ /^(function[ \t]+)?[A-Za-z_][A-Za-z0-9_:.-]*[ \t]*(\([ \t]*\))?[ \t]*[{][ \t]/ &&
+      func_final_tail(lastseg)) return 1
   if (!hase) return 0
   # local/declare/export return their OWN 0 — the pipelines status never survives the assignment.
   if (t ~ /^(local|declare|typeset|export|readonly)[ \t]/) return 0
@@ -478,7 +536,10 @@ BEGIN { FS = "" }
   raw = $0
 
   # Heredoc bodies are DATA, not code — a scar shape quoted inside one is not executed.
-  if (inhd) { if ($0 ~ hdterm) inhd = 0; next }
+  # A pending clause-4c candidate is DROPPED here rather than carried across the body: a pipeline
+  # whose own line opened a heredoc is not the last command of anything, and carrying it would let
+  # the brace that closes the heredoc-owning construct resolve it many lines later.
+  if (inhd) { if ($0 ~ hdterm) inhd = 0; pend_no = 0; next }
 
   line = ltrim(raw)
   # A COMMENT IS NOT CODE, AND THIS TEST MUST RUN BEFORE THE OPENER TEST BELOW. It used to sit
@@ -506,6 +567,26 @@ BEGIN { FS = "" }
   # ignore quoted occurrences is a real change to what counts as an opener and wants its own
   # measurement; it is not folded in here. g31/g32 pin both directions of what IS fixed.
   if (line ~ /^#/ || line == "") next
+
+  # ── Clause 4c, MULTI-LINE LEG: resolve a deferred candidate against the first CODE line after it.
+  # A lookahead, not a brace count. Brace counting is not survivable in this tree — `${VAR}`,
+  # `$(…)`, `{1..9}` and the awk programs embedded in half these files all carry braces that are
+  # not shell blocks, and a miscount would silently shift every later verdict in the file. The
+  # question this clause actually asks is narrow enough not to need one: is the very next thing a
+  # closing brace? If it is, the pipeline was the last command in that body.
+  ffclose = (line ~ /^[}][ \t]*;?[ \t]*$/)
+  if (pend_no) {
+    if (ffclose) printf "%s:%d:%s\n", FILE, pend_no, pend_line
+    pend_no = 0
+  }
+  # Function-body tracking, deliberately ASYMMETRIC — it can only ever UNDER-report. An opener arms
+  # it and the first lone `}` disarms it, so a multi-line `{ … }` group nested in a function disarms
+  # early and the real function-final pipeline below it is then missed. That is the safe direction
+  # for a ratchet: a false negative costs a site this lint never claimed, a false positive costs an
+  # allowlist row on a line that is not a defect.
+  if (ffclose) infunc = 0
+  else if (line ~ /^[A-Za-z_][A-Za-z0-9_:.-]*[ \t]*\([ \t]*\)[ \t]*[{][ \t]*(#.*)?$/ ||
+           line ~ /^function[ \t]+[A-Za-z_][A-Za-z0-9_:.-]*[ \t]*(\([ \t]*\))?[ \t]*[{][ \t]*(#.*)?$/) infunc = 1
 
   if (match($0, /<<-?[ \t]*[\x27"]?[A-Za-z_][A-Za-z0-9_]*[\x27"]?/)) {
     tok = substr($0, RSTART, RLENGTH)
@@ -557,9 +638,27 @@ BEGIN { FS = "" }
   # the ASSIGNMENT form after the last stage separates them; g15/g16 pin both directions.
   # (No apostrophes here: this is inside the single-quoted DETECT_AWK string.)
   cap = (last ~ /;[ \t]*[A-Za-z_][A-Za-z0-9_]*=\$\?/)
-  if (amp == 0 && !cap && !consumed(line, HASE)) next
+  if (amp > 0 || cap || consumed(line, HASE, last)) { printf "%s:%d:%s\n", FILE, FNR, line; next }
 
-  printf "%s:%d:%s\n", FILE, FNR, line
+  # Clause 4c, MULTI-LINE LEG — DEFER, do not discard. A pipeline that is the last command of a
+  # function body has its status read by every caller of that function, so it is consumed exactly
+  # as an `if` condition is; the shape is simply invisible from the pipeline line alone. Under
+  # errexit the line is already RED above (clause 4 counts a bare pipeline), so what this reaches
+  # is the no-errexit file — which is where the scar hides:
+  #
+  #     set -uo pipefail          # no -e
+  #     have_flag() {
+  #       "$BIN" -h 2>/dev/null | grep -q -- --login-status
+  #     }
+  #     if have_flag; then …      # reads FALSE on a flag that IS advertised
+  #
+  # MEASURED on /bin/bash, 260,007 B feed, needle on line 1: 40/40 inverted. Byte-identical in
+  # consequence to the ec9a43a9 scar this whole lint exists for — only the pipeline moved one
+  # frame down, out of the line the detector reads.
+  #
+  # The `;` guard is the same one func_final_tail applies: is_early only inspects the HEAD of the
+  # last stage, so `p | grep -q X; shift` followed by `}` would otherwise read as function-final.
+  if (infunc && index(last, ";") == 0) { pend_line = line; pend_no = FNR }
 }'
 
 # ── scan ─────────────────────────────────────────────────────────────────────────────────────────
@@ -870,6 +969,36 @@ cat <<'EOF'
 if git status --porcelain | grep -q .; then :; fi
 EOF"
   expect g31 GREEN "a comment ahead of a REAL heredoc still leaves the body as DATA"
+
+  # ── THE FUNCTION-FINAL PIPELINE (2026-08-31, backlog ca97c678b18b) ────────────────────────────
+  # Clause 4 asked "does anything READ this pipeline status?" and answered it from the pipeline
+  # LINE alone. A pipeline that ENDS a function body is read by every CALLER of that function — its
+  # rc IS the return value — and no part of that is visible on the line. Under errexit the line was
+  # already RED (clause 4 counts a bare pipeline), so the blind spot was exactly the no-errexit
+  # file, which is most of bin/ and half of scripts/. Census 126 to 145: 19 sites, audited one by
+  # one, 0 false positives. Three of them are boolean PREDICATES returning grep -q direct —
+  # bin/cc-comms-alarm-sweep:92, scripts/lead-supervisor.sh:648 and
+  # docs/activation/pending-activation/18-fleet-activate.sh:110, the last fed a launchctl dump held
+  # in a variable — i.e. the ec9a43a9 scar this whole lint exists for, moved one frame down.
+  # MEASURED before writing the fix: 40/40 inverted on /bin/bash over a 260,007 B feed.
+  mk_noe r16 "have_flag() {
+  \"\$BIN\" -h 2>/dev/null | grep -q -- '--login-status'
+}"
+  expect r16 RED "a function-FINAL pipeline: its rc IS the return value the caller reads"
+  mk_noe r17 "is_legacy() { printf '%s\\n' \"\$DB\" | grep -qxF \"\$1\"; }"
+  expect r17 RED "the same, written as a ONE-LINE function definition"
+  # ...and the three arms that stop it being a widening. Each holds one variable against r16/r17.
+  mk_noe g32 "have_flag() {
+  \"\$BIN\" -h 2>/dev/null | grep -q -- '--login-status'
+  echo done
+}"
+  expect g32 GREEN "a pipeline with another command after it is NOT function-final"
+  mk_noe g33 "is_legacy() { printf '%s\\n' \"\$DB\" | grep -qxF \"\$1\"; shift; }"
+  expect g33 GREEN "the one-line leg, with a second command after the pipeline"
+  mk_noe g34 "{
+  git status --porcelain | grep -q .
+}"
+  expect g34 GREEN "a lone } with no function opener closes a GROUP — status goes nowhere"
 
   local total=$((pass+fail))
   if [ "$fail" -gt 0 ]; then
