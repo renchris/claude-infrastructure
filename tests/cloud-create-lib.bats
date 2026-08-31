@@ -316,3 +316,59 @@ View: https://claude.ai/code/session_01REALREALREALREALREALR?from=cli&m=0"
   run git check-ref-format --branch "$a"
   [ "$status" -eq 0 ]
 }
+
+# ── 20-22 · THE RETURN CONTRACT (backlog 0c8b39b67665) ─────────────────────────────────────────
+# CLOUD_OBSERVABILITY.md §4.1 resolves the absence ambiguity by CONTRACT — "the session's brief
+# requires its FIRST act to be pushing that branch" — and until this function that contract existed
+# in prose only. What these cases defend is the ORDER and the BRANCH, because both halves have
+# already been observed wrong on this repo's cloud lane: a payload that instructed a push to a name
+# nothing held (case 17 of tests/handoff-fire-cloud.bats), and an API lane that instructed no push
+# at all. A trailer whose beacon comes after the work is worth nothing: the whole value is that the
+# ref exists inside `boot_s` (900 s), before any result does.
+
+@test "20 the return contract instructs the BOOT BEACON, and instructs it FIRST" {
+  local out beacon empty push work
+  out="$(cc_cloud_return_contract claude/fire-testbranch)"
+  # The beacon is an EMPTY commit — the cheapest thing that moves a ref, and the one thing that
+  # cannot manufacture a path set and read as a false result downstream (cc-cloud fill-paths).
+  beacon="$(printf '%s' "$out" | grep -n 'BOOT BEACON' | head -1 | cut -d: -f1)"
+  empty="$(printf '%s' "$out" | grep -n -- '--allow-empty' | head -1 | cut -d: -f1)"
+  push="$(printf '%s' "$out" | grep -n 'git push -u origin HEAD' | head -1 | cut -d: -f1)"
+  work="$(printf '%s' "$out" | grep -n 'before you finish' | head -1 | cut -d: -f1)"
+  [ -n "$beacon" ] || { echo "the contract never names a boot beacon"; false; }
+  [ -n "$empty" ]  || { echo "the beacon is not an empty commit — it can manufacture a false result"; false; }
+  [ -n "$push" ]   || { echo "the contract never instructs a push"; false; }
+  [ -n "$work" ]   || { echo "the contract never instructs the RETURN push"; false; }
+  [ "$beacon" -lt "$work" ] || { echo "the beacon must PRECEDE the return push (beacon=$beacon return=$work)"; false; }
+  # FIRST means first: before reading, planning or editing. A beacon a worker gets to after its
+  # investigation is a beacon that fires outside the boot budget, i.e. no beacon at all.
+  printf '%s' "$out" | grep -qi 'YOUR FIRST ACT, BEFORE YOU READ' || false
+}
+
+@test "21 the contract names THE DECLARED BRANCH, and creates it idempotently" {
+  local out
+  out="$(cc_cloud_return_contract claude/fire-20260101T000000Z-1-1)"
+  printf '%s' "$out" | grep -q 'claude/fire-20260101T000000Z-1-1' || false
+  # `checkout -B`, never `switch -c`: on the API lane the VM is ALREADY standing on the authorised
+  # branch, where `switch -c` fails outright ("already exists") and takes the beacon down with it.
+  printf '%s' "$out" | grep -q "git checkout -B claude/fire-20260101T000000Z-1-1" || false
+  ! printf '%s' "$out" | grep -q 'switch -c' || false
+  # A push at an invented ref name is the pre-B1 defect; it must not come back through this text.
+  ! printf '%s' "$out" | grep -q 'HEAD:claude/' || false
+}
+
+@test "22 a worker with nothing to commit is told what to push INSTEAD of nothing" {
+  # §14/§15: silence from a VM is indistinguishable here from a session that never booted, so the
+  # contract must name the two artifacts that make a no-work session returnable. Without this the
+  # beacon invites the opposite reading — "I pushed the beacon, that is my push".
+  local out
+  out="$(cc_cloud_return_contract claude/fire-x)"
+  printf '%s' "$out" | grep -q 'docs/research' || false
+  printf '%s' "$out" | grep -q 'cloud-park.sh' || false
+}
+
+@test "23 the contract REFUSES to render without a branch — never a nameless push target" {
+  run cc_cloud_return_contract
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"branch is required"* ]] || false
+}

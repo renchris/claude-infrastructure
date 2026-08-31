@@ -231,8 +231,78 @@ cc_cloud_create() { # $1=cfgdir $2=cwd $3=prompt → "<outcome>\t<id>\t<msg>"; b
 # forever, which is §10.2c's hazard with the sign flipped: a confident verdict computed from
 # evidence that has nothing to do with the session.
 #
-# So the firing side NAMES the branch and the payload instructs the push (see the trailer
-# handoff-fire.sh appends). That also settles §10.2c's own hazard in the other direction: the name
-# is unique per fire, so — unlike `--branch main`, where trunk's background traffic reads as a
-# heartbeat forever — nothing but this session can advance it. O2 becomes a real signal.
+# So the firing side NAMES the branch and the payload instructs the push (see
+# cc_cloud_return_contract below, which BOTH lanes append). That also settles §10.2c's own hazard in
+# the other direction: the name is unique per fire, so — unlike `--branch main`, where trunk's
+# background traffic reads as a heartbeat forever — nothing but this session can advance it. O2
+# becomes a real signal.
 cc_cloud_branch_name() { printf 'claude/fire-%s-%s' "$(date -u +%Y%m%dT%H%M%SZ)" "$$"; }
+
+# cc_cloud_return_contract <branch> → the off-box return contract, on stdout. Appended to the brief
+# by EVERY cloud fire, on both lanes.
+#
+# ── WHY IT LEADS WITH A BOOT BEACON (backlog 0c8b39b67665) ──────────────────────────────────────
+# CLOUD_OBSERVABILITY.md §4.1 fixes the absence ambiguity by CONTRACT: "the session's brief requires
+# its FIRST act to be pushing that branch — an empty commit is enough". §8 step 2 restates it as a
+# fire-time precondition. Until this function, that contract existed in NO payload on either lane:
+#
+#   · the API lane (bin/cc-offload cmd_up_api — the one the live dispatcher uses) delivered the
+#     composed brief VERBATIM, with no return instruction of any kind;
+#   · the CLI lane (scripts/handoff-fire.sh) instructed a push, but framed it as "before you
+#     finish" — a RETURN push, which is the end of the session, not its first act.
+#
+# So `no ref` still conflated the four worlds §4.1 names, and the conflation is not theoretical:
+# `boot_s` is 900 s, real work takes longer than that before its first push, and `cc-backlog`'s
+# cloud_map maps NOT-STARTED → `open` — i.e. a healthy worker 20 minutes into its item has the item
+# taken off it and handed to a SECOND worker, which is the double-dispatch the ALIVE arm of that
+# same map exists to prevent. Corroborated from the other side by bin/cc-cloud's `inbox` header:
+# 222 of 262 live sessions read NOT-STARTED on 2026-08-27 because a VM that has not pushed has no
+# ref, whatever it is doing.
+#
+# The beacon costs one empty commit and moves the ref off its fire-time baseline, so C2 BOOTING →
+# C5 ALIVE at boot rather than at first result, and C1 NOT-STARTED regains the meaning §4.1 assigns
+# it: nobody ever booted. What it does NOT do is manufacture a result — an empty commit contributes
+# no paths, so `cc-cloud fill-paths` still refuses to write a path set for a beacon-only branch and
+# `cloud-return.sh` step 6 can never read it LANDED. Verified live from inside a cloud VM
+# (§16): beacon pushed 4 minutes into the session, ref present, work pushed on top afterwards.
+#
+# `checkout -B`, not `switch -c`: the two lanes hand the VM DIFFERENT starting states. The API lane
+# authorises the branch at create (`outcomes.git_info.branches`) and the VM is already standing on
+# it, where `switch -c` fails outright ("already exists"); the CLI lane bundles the tree and the
+# branch does not exist there at all. `checkout -B` creates or re-points at HEAD, so one text is
+# correct on both, and it needs no git newer than the oldest image either lane can land on.
+cc_cloud_return_contract() {
+  local br="${1:?cc_cloud_return_contract: a branch is required}"
+  cat <<EOF
+── HOW TO RETURN YOUR WORK (this session runs off-box; read this FIRST) ──
+You are running in an Anthropic-managed VM. Nothing on the operator's machine can see your
+filesystem, your processes or your terminal, and you cannot run this repo's /ship. Your ONLY
+channel back is a git push, and it must go to exactly this branch:
+
+    $br
+
+1. BOOT BEACON — YOUR FIRST ACT, BEFORE YOU READ, PLAN OR EDIT ANYTHING:
+
+    git checkout -B $br && git commit --allow-empty -m "chore(cloud-boot): beacon for $br" && git push -u origin HEAD
+
+   One empty commit. Until that ref exists, this box cannot tell a session that is working from one
+   that never started, one that died at boot, and one that was refused entitlement — all four are
+   "no ref" — so after 15 minutes a healthy session is reported NOT-STARTED and its backlog item is
+   handed to a SECOND worker while you are still holding it. The beacon is the only thing that makes
+   absence mean something. Push it even if you expect to finish in one minute, and even if you
+   already believe there is nothing to do.
+
+2. Push again whenever you have something worth returning, and ALWAYS before you finish — even if
+   the work is incomplete. An unpushed cloud session leaves no trace of any kind.
+
+    git push -u origin HEAD
+
+   A worker with nothing to COMMIT still pushes: land a verdict artifact (docs/research/*.md naming
+   the cure sha you verified) if the row is already cured or refuted, or a park
+   (scripts/cloud-park.sh <backlog-id> --needs "<the one operator step>") if the next step is the
+   operator's. Silence is not a disposition — it reads here as a session that never booted.
+
+A local reconciler (scripts/cloud-reconcile.sh) discovers the branch and hands it to the sanctioned
+local lander; scripts/cloud-return.sh closes your backlog row from what actually landed.
+EOF
+}

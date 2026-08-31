@@ -422,14 +422,40 @@ EOF
   cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
   [ -s "$BATS_TEST_TMPDIR/create.log" ]
   local sw push
-  sw="$(grep -n 'git switch -c claude/fire-' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
-  push="$(grep -n 'git push -u origin HEAD' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  # SPELLING NOTE (backlog 0c8b39b67665): this asserted `git switch -c` until the contract text
+  # moved into scripts/lib/cloud-create.sh and both lanes started sharing it. The API lane hands the
+  # VM a branch it is ALREADY standing on, where `switch -c` fails ("already exists"), so the shared
+  # text says `checkout -B` — create-or-repoint, correct on both lanes. The PROPERTY under test is
+  # unchanged and is the one B1 was filed for: the branch is established before it is pushed.
+  # BYTE OFFSETS, not line numbers: the beacon is one `&&` chain on ONE line, so a line-number
+  # compare reads 13 < 13 as a failure over text that is in exactly the right order.
+  sw="$(grep -abo 'git checkout -B claude/fire-' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  push="$(grep -abo 'git push -u origin HEAD' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
   [ -n "$sw" ] || { echo "the payload never creates the branch it tells the VM to push"; false; }
   [ -n "$push" ] || { echo "the payload never instructs the push"; false; }
-  [ "$sw" -lt "$push" ] || { echo "switch -c must PRECEDE the push (sw=$sw push=$push)"; false; }
+  [ "$sw" -lt "$push" ] || { echo "the branch must be created BEFORE the push (create=$sw push=$push)"; false; }
   # The pre-fix spelling pushed HEAD straight at an invented ref name. It must be gone, or the
   # branch would be created and then bypassed by the very next line.
   ! grep -q 'HEAD:claude/fire-' "$BATS_TEST_TMPDIR/create.log"
+}
+
+@test "17b the payload carries the BOOT BEACON — the CLI lane's half of §4.1's contract" {
+  # §4.1's absence contract is satisfiable only if the FIRE instructs the first push. Case 17 proves
+  # the branch is established; this proves the session is told to make the ref EXIST at boot, which
+  # is what lets `no ref past boot_s` mean "never booted" rather than "working, quietly".
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: t" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  local beacon finish
+  beacon="$(grep -n 'BOOT BEACON' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  finish="$(grep -n 'before you finish' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$beacon" ] || { echo "the payload never instructs a boot beacon"; false; }
+  grep -q -- '--allow-empty' "$BATS_TEST_TMPDIR/create.log" || false
+  [ -n "$finish" ] || { echo "the payload never instructs the RETURN push"; false; }
+  [ "$beacon" -lt "$finish" ] || { echo "the beacon must precede the return push"; false; }
+  # And the brief itself is still there: a trailer that REPLACED the payload would pass every
+  # assertion above while firing a session with no task.
+  grep -q 'cloud venue gate fixture payload' "$BATS_TEST_TMPDIR/create.log" || false
 }
 
 @test "18 a fire whose preflight REFUSES never reaches the create — the quota is not spent" {

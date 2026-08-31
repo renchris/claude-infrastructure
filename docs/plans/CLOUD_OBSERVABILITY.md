@@ -150,6 +150,12 @@ session's brief requires its **first act** to be pushing that branch — an empt
 Absence then becomes informative: no ref inside the budget is `BOOTING` (expected); no ref past it
 is `NOT-STARTED` (actionable — re-fire, or check entitlement).
 
+⚠️ **That contract was PROSE ONLY until 2026-08-31, and this paragraph was the only place it
+existed** — so for the whole life of the lane, `NOT-STARTED` did not mean what this section says it
+means. It is implemented now, in `cc_cloud_return_contract` (`scripts/lib/cloud-create.sh`), which
+both fire lanes append to the brief. **§16 is the record**, including what the verdict actually
+meant before it.
+
 ### 4.2 The discriminator the whole design rests on
 
 Measured, not assumed:
@@ -776,7 +782,9 @@ Before any cloud session is fired, in this order:
 1. `cc-cloud declare --id <id> --branch <b> --paths <what it will land> --url <session url>` —
    an undeclared cloud session is unobservable, and `declare` refuses without `--id`/`--branch`.
 2. The session's brief must require **pushing the declared branch as its first act**, so that
-   absence past the boot budget means something (§4.1).
+   absence past the boot budget means something (§4.1). ✅ **Built 2026-08-31, §16** — the fire
+   appends `cc_cloud_return_contract <branch>` to the brief on both lanes; before that, neither lane
+   instructed a boot push and this step was a precondition nothing satisfied.
 3. §5.2 must be wired first — otherwise `com.claude.team-orphan-reaper` may archive the team
    while the session is healthy.
 4. On completion, `cc-cloud retire --id <id>` — or let C3 `LANDED` render it silent, which it does
@@ -817,6 +825,14 @@ is the safe one. A reservation that never binds expires into `U0 UNKNOWN` (never
 finding** (§6.5). If the CLI create route ships a bundle of the local tree rather than cloning the
 remote, then the branch the VM pushes may not be the branch this box declared. Until one fire
 settles it, declare the branch the *brief* names and treat a mismatch as `U0`, not as absence.
+
+✅ **SETTLED for the API lane, 2026-08-31 (§16), from inside a VM.** The API create authorises the
+name at create (`outcomes.git_info.branches`) and the harness stands the VM ON it: this document's
+own boot-beacon fire landed on `claude/fire-20260831T201554Z-59973-1`, which is
+`cc-offload`'s `claude/fire-<utc>-<pid>-<i>` verbatim. Firing side and VM agree by construction
+there, so the mismatch caveat is a CLI-lane caveat only. It also forced one spelling change: the VM
+is already standing on the branch, where `git switch -c` fails outright, so the shared contract says
+`git checkout -B` — create-or-repoint, correct on both lanes.
 
 ---
 
@@ -1964,3 +1980,79 @@ next `cloud-return.sh` pass is what fires `cc-backlog block`, and §13.6's ADD-r
 whether that pass is running the landed script — the reader is an edit to an already-symlinked file
 and goes live on the fast-forward, but `scripts/cloud-park.sh` is an ADD and is absent from
 `~/.claude` until the converger runs.
+
+---
+
+## 16 · The boot beacon — §4.1's contract, built (2026-08-31)
+
+🚨 **§4.1 is the load-bearing paragraph of this whole document, and its second half had never been
+implemented.** The absence contract has two halves: the fire declares a branch (built 2026-08-09,
+§10.2c) *and* the brief requires a push as the session's **first act**. Only the first was ever
+code. Nothing in either fire lane instructed a boot push, so `no ref` never acquired the meaning
+§4.1 assigns it, and `C1 NOT-STARTED` — the arm the operator sees as *"nobody ever booted, re-fire
+or check entitlement"* — was in fact reporting *"this session has not pushed yet"*, which every
+healthy worker satisfies for most of its life. Filed as backlog `0c8b39b67665`.
+
+Measured on trunk before the change:
+
+| Lane | What the VM was told | Consequence |
+| --- | --- | --- |
+| **API** (`cc-offload up --via api` — what `cc-dispatch` actually fires) | the composed brief, VERBATIM. cc-dispatch writes ONE text for both venues, and on the local venue a bare push is forbidden (`land ONLY via /ship`) — so the venue whose only channel home is a push was told not to push | no beacon, no return instruction at all |
+| **CLI** (`handoff-fire.sh --cloud`) | `git switch -c <branch>; git push -u origin HEAD`, framed *"before you finish"* | a RETURN push — the end of the session, not its first act |
+
+**Why the gap is not cosmetic.** `boot_s` is 900 s and real work does not push inside 15 minutes.
+`cc-backlog`'s `cloud_map` (`bin/cc-backlog:5370`) maps `NOT-STARTED → open`, and `open` is
+`cc-dispatch`'s fire predicate — so a healthy worker 20 minutes into its item had that item taken
+off it and handed to a **second** worker, which is precisely the double-dispatch the `ALIVE → block`
+arm of that same map exists to prevent. `bin/cc-cloud`'s own `inbox` header measures the same defect
+from the control-plane side: **222 of 262** live sessions read `NOT-STARTED` on 2026-08-27 because a
+VM that has not pushed has no ref, whatever it is doing.
+
+**What was built.** `cc_cloud_return_contract <branch>` in `scripts/lib/cloud-create.sh` — ONE
+producer of the off-box return contract, appended to the brief by **both** lanes (`bin/cc-offload`
+sources the library; `handoff-fire.sh` already did). It leads with the beacon:
+
+    git checkout -B <declared branch> && git commit --allow-empty -m "…" && git push -u origin HEAD
+
+before the worker reads, plans or edits anything, and only then states the return push and — per
+§14/§15 — the two artifacts a worker with nothing to commit pushes instead of nothing. One text
+rather than two is deliberate: two lanes into one venue, one of them carrying the contract, is the
+drift `bin/cc-cloud-watch` was deleted for (§5.1).
+
+**The live control, run from inside a cloud VM** (this section's own session,
+`claude/fire-20260831T201554Z-59973-1`, ~4 minutes in): `git commit --allow-empty` +
+`git push -u origin HEAD` → `87b320f6` on the remote, inside a 900 s budget, with the real work
+pushed on top afterwards. So the beacon is available in the venue it is written for, not merely
+plausible. It also settles §8.1's mismatch caveat for the API lane (see the ✅ there): the harness
+stands the VM on the exact branch `cc-offload` declared, which is why the contract says
+`checkout -B` and not `switch -c` — the VM is already on the branch, where `switch -c` fails.
+
+**What the beacon does NOT do**, stated because a beacon that could manufacture a result would be
+worse than none: an empty commit contributes no paths, so `cc-cloud fill-paths` still refuses to
+write a path set for a beacon-only branch and `cloud-return.sh` step 6 can never read it `LANDED`.
+A false `done` is unreachable through this.
+
+**Honest limits.**
+
+- **The beacon moves the false alarm, it does not delete it.** A worker that beacons and then works
+  for over an hour reads `C4 STALLED` (`stall_s` 3600) and `cloud_map` reopens it — the same
+  double-dispatch, one hour later instead of fifteen minutes. A periodic heartbeat would close that
+  too and is deliberately NOT built here: it is a different contract (liveness, not boot) and it
+  needs a rule for what a VM pushes when it has nothing to say.
+- **A dead-at-boot session now costs one empty land attempt.** With a ref present, `cloud-return.sh`
+  admits it once the worker is not `working` and the quiet window passes, and tries to land a
+  beacon-only branch. It cannot close the row (no paths), and the refusal is cached on the branch
+  head by step 3b, so it is one attempt, not a loop.
+- **The delivered brief now carries two different park instructions.** `cc-dispatch`'s composed
+  brief still tells every worker to run `cc-backlog block <id>`, which §15 measured as inert from a
+  VM (`unknown id`, rc 3, nothing written); this contract names `scripts/cloud-park.sh`, which
+  works. Both reach the worker. The real fix is venue-conditional brief text in `cc-dispatch` —
+  the local venue genuinely should use `cc-backlog` — and it belongs to §15's item, not this one.
+- **No ADD-rule caveat this time** (contrast §13.6/§15): every file changed here already exists on
+  trunk and is already symlinked into `~/.claude`, so the change goes live on the ordinary
+  fast-forward rather than waiting on the converger.
+
+Suites: `tests/cloud-create-lib.bats` 20-23 (the contract's order, branch, no-work case, and its
+refusal to render without a branch), `tests/handoff-fire-cloud.bats` 17b (the CLI lane's payload),
+`tests/cc-offload.bats` (the API lane's delivered brief, with the red control that the trailer did
+not replace the task). All four are red-proofed against the pre-change tree.
