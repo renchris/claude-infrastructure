@@ -280,3 +280,97 @@ justify a change to. But neither is any longer what this row is waiting on: the 
 stop without them, and they revert to what they always were — a generator-class fix worth doing on
 its own merits, for the residual `filed under X, specified against Y` population, not an emergency
 this row creates.
+
+## 9. Sixth dispatch, 2026-08-31T21:45Z — §8's falsifier FIRED, and the answer it demanded is *unreached, not wrong*
+
+A SIXTH `anthropic_cloud` VM (`.git/shallow` grafts `7ba01213`/`decd3402`, `git rev-list --count
+HEAD` = 50 ⇒ `HistoryOracle.certify()` returns `shallow` ⇒ §1's deferral binds mechanically a fifth
+time). Venue facts re-measured and unchanged: `origin/main` carries no `tenant-drift.yml`,
+`.github/workflows/` holds only `diagrams.yml` and `hermetic.yml`, `~/Development` does not exist at
+all on this image, `cc-backlog` is not on `PATH`, no `~/.claude/autonomy/`. **Premise re-checked a
+fifth time: not refuted, not confirmable here** — the 2026-08-10 measurement (`31401486855`) is now
+21 days stale and §3's one-line fix still needs re-checking against reso's trunk before anyone
+writes it.
+
+**§8 wrote the falsifier and it fired on the first try.** Its words: *"If this row is fired into a
+cloud VM again while its park is the newest record on trunk, then `park_assess` is either wrong or
+unreached, and THAT is the finding — not another venue re-measurement."* Checked exactly as §8 said
+to check it: `docs/parks/485f8f87eb5f.md` is on trunk, landed as `d86dbb7b` at
+**2026-08-31T05:20:07Z** (`git merge-base --is-ancestor d86dbb7b origin/main` → rc 0), its single
+entry stamped `2026-08-31T05:19:10Z`. This dispatch opened at **2026-08-31T21:45:03Z**, **16 h 25 m
+later**. So this section is not a sixth venue re-measurement; it is the answer to §8's question.
+
+**The answer: NOT WRONG. `park_assess` produces the right verdict on the real park document, and
+this is the first section in this file to EXERCISE a remedy instead of describing one.** Two
+measurements, both run here against the text `git show origin/main:docs/parks/485f8f87eb5f.md`
+returns:
+
+- **Unit.** `_park_last` parses it to `('2026-08-31T05:19:10Z', 'dispatch on-box (a Mac with
+  ~/Development/reso-management-app): …')` — stamp and `needs:` both recovered. `park_assess` then
+  returns `unhonoured` for `desk_ts=""` (no block/unblock ever) **and** for an older desk record
+  (`2026-08-20`), and `honoured` only at or after the stamp. Both refusing states are exactly the
+  deadlock the retraction rule describes, and the string comparison orders correctly across the
+  month boundary.
+- **End-to-end, through the real verb.** A synthetic deep repo carrying that same park document on
+  `origin/main`, plus a one-line ledger holding only this row's `add` record, driven with
+  `CC_ELIGIBLE_REPO`: `python3 bin/cc-eligible check 485f8f87eb5f` prints `verdict=ineligible-parked`
+  on line 1 and **exits 3**, with `PARKED_NOTE` and the `needs:` line quoted verbatim. That is
+  precisely what `bin/cc-backlog:2461` converts into rc 4 `verdict=cloud-ineligible`, and what
+  `bin/cc-dispatch:2489` counts SKIPPED at zero spawn.
+
+So the interlock's code, as it stands on trunk, produces the refusal it promises. **That retires the
+last remedy this document had left to propose and moves the whole question one layer out**: §5, §6
+and §7 each recorded a channel as built without exercising it, §8 built the interlock and asserted it
+*"fires on the next claim once this is on trunk"* — an assertion about a **running system**, made
+from a reading of **source**. The source half is now proven. The running half is what failed.
+
+**Where it failed is bounded, and the bound is itself a measurement.** This brief was composed by
+`bin/cc-dispatch` — its FIRST STEP paragraph is `bin/cc-dispatch:2601`'s `staleness_rail` string
+verbatim — so the fire came through the spawn loop, not by hand. In that loop `venue` is the
+**selection between actuators** (`bin/cc-dispatch:2416-2428`): a cloud VM ran this, therefore
+`venue=cloud`, therefore the claim carried `--venue cloud`, therefore control reached the gate call
+site at `bin/cc-backlog:2455`. Six preconditions stand between that call site and the exit 3 proven
+above, and **not one of them is readable from a cloud VM** — every one is a fact about the desk:
+
+| | Precondition | The command on the desk that discriminates it |
+|---|---|---|
+| **(a)** | the gate is switched off in the dispatcher's environment | `CC_BACKLOG_ELIGIBLE_GATE` unset/`on`? — check launchd's env, not an interactive shell |
+| **(b)** | 🚨 `[ -x "$ebin" ]` false ⇒ **the gate is skipped in total silence** (`bin/cc-backlog:2459`) | `ls -l "$(dirname "$(readlink -f "$(command -v cc-backlog)")")/cc-eligible"` |
+| **(c)** | the `cc-eligible` actually executed predates `524806b9` (the park arm is not in the running bytes) | `grep -c park_assess "$(dirname "$(readlink -f "$(command -v cc-backlog)")")/cc-eligible"` |
+| **(d)** | `certify() != "ok"` on `~/Development/claude-infrastructure` ⇒ `_park_doc` returns None ⇒ `none` | `git -C ~/Development/claude-infrastructure rev-parse --is-shallow-repository` |
+| **(e)** | that repo's `origin/main` was stale at fire time — the park had not been fetched | `git -C ~/Development/claude-infrastructure show origin/main:docs/parks/485f8f87eb5f.md \| head -1` |
+| **(f)** | a `block`/`unblock` at or after `2026-08-31T05:19:10Z` ⇒ `honoured`, i.e. the arm **retired correctly** and the row was deliberately re-released | `jq -r 'select(.id=="485f8f87eb5f" and (.event=="block" or .event=="unblock")) \| .ts' ~/.claude/autonomy/backlog.jsonl \| tail -1` |
+
+(f) is the one benign branch and it is worth ruling out first: it would mean the interlock worked to
+specification and a desk `unblock` retracted it. Every other row is a leak. **One pure-read command
+collapses (b)(c)(d)(e) at once** — `cc-eligible check 485f8f87eb5f; echo $?`. It writes nothing, mints
+no claim, and expects `3`; a `0` names its own reason on stderr, and a `3` narrows the cause to (a)
+or (f) or to `cc-backlog`'s own copy of the helper path.
+
+**The class, and it is not new to this trunk — it landed four times the same day, one layer over.**
+A remedy verified at its SOURCE and never at its DESTINATION. `fb55f889`, `49fc3829`, `c66d5b94` and
+`8877ca44` (methods 236, 238, 239, 240) all landed on 2026-08-30/31 and all say this in different
+words; `c66d5b94`'s is the closest — a tracked tool at `~/bin` running a **drained bug the fix had
+already landed for**, because "the cause is not the drift, it is that nothing reconciles the file",
+with four hand-found instances before it and nothing ever generalising the check. §8 built the park
+interlock and tested its correctness. What it needs now is a **liveness assertion at its
+destination** — that the `cc-eligible` sitting next to the `cc-backlog` the dispatcher actually
+executes exists, is executable, and carries `park_assess` — which is a different kind of test from
+every one this rail already has.
+
+**No code change landed for this, and the reason is narrower than §7's and §8's.** The obvious
+one-line fix is real and is named above: `bin/cc-backlog:2459`'s missing-helper path is a **silent**
+fail-open, so cause (b) would leave no trace in the IDL, on stderr, or anywhere else — the file's own
+cited memory, `sensor-default-off-makes-blindness-the-shipping-path`, describes the defect it is
+currently an instance of. But it is the claim hot path of the lane's actuator, and `bin/cc-venue:55`'s
+guard binds here mechanically for the fifth time (shallow ⇒ `certify()` = `shallow` ⇒ no `cloud`
+label mintable from this venue): a cloud VM editing the gate that admits it is deciding its own
+admission. Named for the on-box session, not done — together with §1's `cross_repo` `project`-as-proxy
+defect and §5's identical substitution in the EVIDENCE-AGE arm, both still open and both still
+generator-class rather than urgent.
+
+**The falsifier for a seventh dispatch, so it starts where this one ended.** Run the ladder before
+anything else. If (f) is empty and (a)-(e) all read healthy, then the gate ran and returned something
+other than exit 3 on the live store — and `cc-eligible explain 485f8f87eb5f` on the desk is the next
+measurement, not another end-to-end reconstruction. This section already did the reconstruction, and
+it came back green.
