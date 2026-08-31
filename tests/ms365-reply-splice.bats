@@ -314,3 +314,49 @@ sys.stdout.write(draft[:m.end()] + body + draft[m.end():])' "$WORK/bare.html" "$
   done <"$FAMS"
   [ "$(grep -c . "$UNCLAIMED")" -eq 0 ]
 }
+
+@test "deploy: every bin/ family install.sh globs is walked by deploy-link-parity's forward walk" {
+  # THE THIRD CLASS ARM. install.sh's bin/ families are ONE enumeration written in THREE files,
+  # not two. scripts/deploy-link-parity.sh restates them in its own forward walk, and the comment
+  # directly above that walk calls install.sh "the map of record" — so the restatement is explicit
+  # and so is the drift risk. Arm D above makes the REPAIRER agree; this arm makes the DETECTOR
+  # agree. They are different mechanisms with different consumers: the repairer relinks what is
+  # missing, whereas this leg REPORTS a link that install.sh says should exist and does not.
+  #
+  # MEASURED 2026-08-31T01:39:00Z, which is why this arm exists rather than a comment. install.sh
+  # and scripts/deploy-parity-assert.sh both carried all three families (cc-, desk-, ms365-) after
+  # the 2026-08-31 fix, while this forward walk still globbed bin/cc-* alone: it visited 78 of 78
+  # cc-* files and 0 of the 3 desk-*/ms365-* ones. That is a blind spot in precisely the leg whose
+  # founding scar (deploy-link-parity.sh:8-9) is a live symlink that did not exist — and at that
+  # same moment bin/ms365-reply-splice.py was still absent from ~/.claude/bin, so the one detector
+  # that could have named the absence was structurally unable to look.
+  #
+  # The general lesson, which is why this is derived and not named: when you fix a selector, the
+  # question is not "did I fix both copies" but "how many copies are there". A comment recording
+  # the drift does not prevent it — only a derived assertion does. The comment at :211-228 of this
+  # very file names all three deploy files, and the arm beside it covered two.
+  LINKP="$REPO/scripts/deploy-link-parity.sh"
+  [ -f "$LINKP" ]
+  [ "$(grep -cF 'for tool in "$REPO_DIR"/bin/' "$REPO/install.sh")" -eq 1 ]
+  FAMS="$WORK/families-linkparity.txt"
+  grep -F 'for tool in "$REPO_DIR"/bin/' "$REPO/install.sh" \
+    | grep -oE '/bin/[A-Za-z0-9._-]+\*' | sed 's#^/bin/##' | sort -u >"$FAMS"
+  # Non-vacuity: the derivation must have produced a real population, else the loop below reads
+  # "all zero members pass" and this arm would go green over an empty set.
+  [ "$(grep -c . "$FAMS")" -ge 2 ]
+  [ "$(grep -cxF 'cc-*' "$FAMS")" -eq 1 ]
+
+  # The forward walk is ONE line. Assert that BEFORE reading it, so this can never be asserting
+  # about a line that has since been split in two, leaving half the families in the half we do
+  # not read (#245: a population census that cannot refuse is not a census).
+  WALKF="$WORK/walkline.txt"
+  grep -F 'for f in "$REPO"/bin/' "$LINKP" >"$WALKF"
+  [ "$(grep -c . "$WALKF")" -eq 1 ]
+
+  UNWALKED="$WORK/unwalked.txt"; : >"$UNWALKED"
+  while IFS= read -r fam; do
+    # the forward walk must glob this family, or nothing in it is ever check_one'd
+    [ "$(grep -cF -- "/bin/$fam" "$WALKF")" -ge 1 ] || printf '%s\n' "$fam" >>"$UNWALKED"
+  done <"$FAMS"
+  [ "$(grep -c . "$UNWALKED")" -eq 0 ]
+}

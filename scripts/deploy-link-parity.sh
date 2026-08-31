@@ -361,7 +361,15 @@ for f in "$REPO"/scripts/*.sh;    do check_one "scripts/$(basename "$f")"   "$CF
 for f in "$REPO"/scripts/limit-recover/*; do
   check_one "scripts/limit-recover/$(basename "$f")" "$CFG/scripts/limit-recover/$(basename "$f")"
 done
-for f in "$REPO"/bin/cc-*;        do check_one "bin/$(basename "$f")"       "$CFG/bin/$(basename "$f")"; done
+# bin/ is THREE families, not one. install.sh:815 globs cc-*, desk-* and ms365-*, and the header
+# above calls install.sh the map of record — so a family it globs and this walk does not is a
+# restatement that has silently drifted. Measured 2026-08-31T01:39:00Z: this line globbed cc-*
+# alone and therefore visited 78 of 78 cc-* files and 0 of the 3 desk-*/ms365- ones, so no
+# check_one ever ran for them. That is a blind spot in exactly the leg whose founding scar (:8-9)
+# is a live symlink that did not exist — and at that moment ~/.claude/bin/ms365-reply-splice.py
+# was in fact absent, with the live email hook prescribing it. Derived coverage is pinned by
+# tests/ms365-reply-splice.bats, which reads install.sh's families and asserts each is walked here.
+for f in "$REPO"/bin/cc-* "$REPO"/bin/desk-* "$REPO"/bin/ms365-*; do check_one "bin/$(basename "$f")"       "$CFG/bin/$(basename "$f")"; done
 for d in "$REPO"/skills/*/; do
   [ -d "$d" ] || continue
   n="$(basename "$d")"
