@@ -86,6 +86,136 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-31 — drain recycle #264: method 236 — A DETECTOR'S BLIND SPOT IS PER-CLASS, NOT
+  PER-HOLDER. AFTER YOU FIX ONE HOLDER OF A RESTATED ENUMERATION, MEASURE HOW MUCH OF THE MAP
+  THAT HOLDER ACTUALLY READS.**
+  🚨 **THE FINDING, AND IT IS MY PREDECESSOR'S OWN LESSON LANDING ONE TURN FURTHER ON.** #263's
+  transferable sentence was *"when you fix a selector, COUNT the files that restate it — and the
+  one you miss is the DETECTOR."* It counted three holders of the `bin/` enumeration, found
+  `scripts/deploy-link-parity.sh` blind to two of install.sh's three `bin/` families, taught it
+  those families, and pinned them with a derived arm. **Every clause of that was right, and it
+  answered a question about ONE ENUMERATION while the detector's blindness is a property of the
+  WHOLE MAP.** The repair was per-FAMILY; the gap is per-CLASS.
+  🚨 **MEASURED BY EXTRACTION AND EXECUTION, NEVER BY READING** (`probe264-classes.sh`, at
+  2026-08-31T02:10:51Z). Both glob sets come out of the subjects' own `for ... in` headers —
+  install.sh's from `"$REPO_DIR"/…`, the walk's from `"$REPO"/…` inside a forward-walk region whose
+  two anchors are asserted UNIQUE first (rc 9). **install.sh globs 19 deploy classes. The forward
+  walk covered 9.** Ten were unvisited, and a NON-VACUITY arm proves every one of the ten is
+  non-empty on trunk, so the zero cannot be an artefact of an empty class. **Eight of eight
+  predictions exact on the first run**, including a POS control (`hooks/*.sh` walked, 73 members)
+  and a MUTE control (a class present nowhere expands to 0).
+  🚨 **SEVEN OF THE TEN WERE ORDINARY PER-FILE CLASSES WITH NO COVERAGE AT ALL: 29 TRACKED FILES
+  THAT HAD NEVER ONCE HAD `check_one` RUN ON THEM** — `hooks/*.py`, `agents/*.md`, `lib/*.sh`,
+  `lib/*.zsh`, `scripts/lib/*.sh`, `scripts/lib/*.py`, `scripts/backlog-consolidation/*.py`.
+  ⚠️ **HONEST LIMIT, STATED FIRST BECAUSE IT IS THE HALF A LOUDER ENTRY WOULD DROP: ALL 29 ARE
+  CORRECTLY LINKED RIGHT NOW.** `probe264-shape.sh` at 02:14:14Z asked the question the detector
+  asks rather than the weaker one my first probe asked — not *does the path exist* but *is it a
+  SYMLINK resolving into the deploy checkout* — and read **29 of 29 LINK-OK, 0 elsewhere, 0 real
+  files, 0 absent**, against a POS control of **73 of 73** on the already-walked `hooks/*.sh`.
+  **This closes a DETECTOR gap and repairs no outage. A detector gap is only ever visible when
+  something else breaks, which is exactly why it survives.**
+  🚨 **AND MY OWN ALARM-SHAPED NUMBER DISSOLVED ON READING THE DESTINATIONS — #263's 40-consumer
+  scar in a new costume, mine this time.** The class probe scored **absent=29** across the unwalked
+  classes, which reads as a live outage. It is entirely my instrument: it asked for `$CFG/<rel>`
+  for every class, and three of install.sh's classes never deploy there. `githooks/*` is COPIED
+  into the repo's `.git/hooks` and `~/.git-template/hooks`; `launchd/*.plist` is COPIED into
+  `~/Library/LaunchAgents`; `vendor/*/` gets ONE DIRECTORY SYMLINK per plugin, deliberately not a
+  per-file loop. **29 of 29 of those "absences" were the wrong question asked of the wrong root.
+  Investigate a non-zero that should have been a zero, exactly as you investigate a zero.**
+  ⚠️ **The two 29s in this entry are DIFFERENT NUMBERS and their agreement is a coincidence:** 29
+  is the count of genuinely-uncovered tracked files, and 29 is also the count of my probe's false
+  absences. Do not read either as evidence for the other.
+  🚨 **THE FIX IS A WIDENING *PLUS* AN EXPLICIT EXCLUSION, BECAUSE AN OMISSION CARRIES NO REASON.**
+  The seven per-file classes are now walked. The three non-per-file classes are DECLARED in a
+  `NOT-PER-FILE` block naming each one's real destination, rather than left out silently — a
+  reasonless omission is indistinguishable from the oversight this change exists to end, which is
+  precisely how the ten survived.
+  🚨 **AND A COMMENT THAT CALLED THE GAP DELIBERATE IS WHY NOBODY COUNTED IT. THIS IS THE MOST
+  TRANSFERABLE PART.** The file read *"scripts/lib and lib are swept here but are not in the forward
+  walk above; that asymmetry is deliberate, not an oversight."* Both halves needed correcting and
+  the second is the instructive one. The FACT was true and is now false. The JUSTIFICATION never
+  covered what it claimed to: it argues that the stray direction *stands on its own* — a reason to
+  sweep MORE — and gives **no reason whatever for the forward direction to cover LESS**. **A
+  sentence that declares an asymmetry intentional must say which DIRECTION it is defending.** This
+  one defended the other one, and the word *deliberate* stopped anybody counting for three weeks.
+  ✅ **PINNED BY A DERIVED ARM AND A SEEDED FIRE TEST** in `tests/deploy-link-parity.bats`
+  (**41 → 43**). Neither set is written down in the test: install.sh's classes come out of its own
+  for-headers, the walk's out of the walk's, and the exclusions out of the `NOT-PER-FILE` rows, so
+  a class either author adds tomorrow is scored without editing the suite. **Every class must land
+  in EXACTLY ONE of walked-or-declared** — a class in neither is the defect, a class in both is a
+  contradiction — so the two sets stay a real partition rather than two lists that happen to cover
+  everything. **Tokens are compared with `grep -xF`, never as substrings: `/lib/*.sh` is a strict
+  substring of BOTH `/hooks/lib/*.sh` and `/scripts/lib/*.sh`, so a bare `-F` match would have
+  scored `lib/` as covered by a line that never mentions it** (the greedy-anchor scar).
+  ✅ **RED-PROVED AGAINST A PREDICTION WRITTEN FIRST AND GATED AT rc 93.** Pre-fix: **41 incumbents
+  green, exactly 2 `not ok`, both named** — and the column that matters, **both firing on the
+  assertions that name the defect**. Post-fix: **43 ok / 0 not ok, plan 1..43**. Subject restored
+  byte-identically by sha256 (`RESTORE=OK`).
+  🚨 **THE FIRST RUN OF THAT PROOF REFUSED, AND THE REFUSAL WAS WORTH MORE THAN THE CONFIRMATION.**
+  Arm 43 went red pre-fix on a bare `E="$(grep -cxF … )"` assignment rather than on its subject:
+  `grep -c` prints `0` and **EXITS 1** on a legitimate zero, and most classes are legitimately
+  absent from the exclusion set, so under bats + errexit the assignment failed the test. **A red
+  count says a suite noticed; only attribution says WHICH arm did and WHY.** A control credited for
+  a failure it did not cause is worse than no control. Both loops now put the substitution inside
+  `[ ]`, and the proof carries a column asserting **zero** failures of that shape. **This hazard is
+  written out in the standing brief and it still cost a run — reading it is not having it.**
+  🚨 **AND THE OTHER REFUSAL IS A FACT ABOUT #263's OWN FIX: IT IS LANDED AND IT IS NOT RUNNING.**
+  `probe264-reason.sh` predicted the SHARED checkout's copy would name the absent
+  `bin/ms365-reply-splice.py`; it read **0** and the gate refused. The reason is the `landed ≠ live`
+  split: `origin/main`'s blob carries the three-family glob, the shared checkout sits **4 commits
+  behind trunk**, and `~/.claude/scripts/deploy-link-parity.sh` is a SYMLINK into that checkout —
+  **so the detector executing today is still the blind version, on the very file whose blindness it
+  repaired.** ⚠️ **My own widening inherits that limit exactly: it lands on trunk and reports
+  nothing until the converger runs.**
+  ⚠️ **AND THE STANDING HONEST LIMIT, RE-MEASURED RATHER THAN INHERITED: `deploy-link-parity.sh`
+  HAS ZERO EXECUTION SITES** across `scripts/`, `bin/`, `hooks/`, `launchd/` and `settings.json`.
+  Its verdict has never reached the live layer, so a wider walk **cannot turn any land red and
+  cannot make anything run.** It makes a correct reporter read more of the map. **Worth doing, and
+  not worth overstating.**
+  ⚠️ **RUNNING THE SHARED COPY READ-ONLY DID SURFACE THREE LIVE-SIDE STRAYS** — files live and
+  executable in no checkout: `hooks/enforce-email-formatting.py.bak-20260824-193645`,
+  `scripts/automode-restore-defaults.sh`, `skills/outbound-drafting/SKILL.md`. **Reported, not
+  touched: they are live-layer residue, not this diff's, and each remedy is a `cp` into a repo
+  somebody has to review.**
+  ⚠️ **`48f01c02cf09` RE-MEASURED AND STAYS BLOCKED.** `~/.claude/bin/ms365-reply-splice.py` was
+  still ABSENT at 02:08:00Z — three hours after #262 fixed its source and one after #263's detector
+  fix landed. **#262 and #263 both correctly declined to close it; so do I, on a per-path presence
+  check rather than a count.** ⚠️ **This is now the clearest live instance of `landed ≠ live` on
+  the board: the source fix, the detector fix and the row all exist, and the link does not.**
+  **BOARD, both partitions asserted at every moment** (`open + blocked == combined` AND
+  `allids == allrows`), five id lists, every `comm` with both sides `sort -c`'d. **Open
+  02:07:53Z: 343 open / 212 blocked / 2,351 done / 4 claimed — 555 combined, 2,910 rows.**
+  **The tree was CLEAN at my open, so unlike #263's the opening ledger reading MEASURES the lane
+  rather than skipping it**: `RUNG=✅ DIRTY=0 LIVE_SRC=behind LIVE_LAG=4 LIVE_ADDS=0
+  LIVE_DIVERGED=0 LIVE_AGE=5720 LIVE_BREACH_WHY=<empty> MIG_FAILED=0` — **lag 4 with zero adds, an
+  empty breach and an age well inside the 21,600 s arm is a normal ✅ carrying a note, not a `🚀`.**
+  `GATE=stale`, **the fifty-sixth consecutive reading and still not mine to drive.**
+  **THE GAP** from #263's floor (02:04:05Z) to my open (02:07:53Z), **3 m 48 s: ZERO arrivals, ZERO
+  departures, ZERO transitions, and the `claimed` set identical at both ends** — the same four ids.
+  **STORES at my open (02:07:53Z), each with its denominator and directory-existence asserted
+  first:** postland RED pages **0 of 2,804** — the 197th consecutive zero · postland stamps **520**,
+  where #263 read 520 twice · `pages` **2,338 / 98** · inbox-guard `.escalated` **434 / 434**, one
+  number and not a ratio. **State the moments; draw no conclusion about any window.**
+  **ZERO ROWS CLOSED, ZERO FILED, ZERO REOPENED — and the zero is a RESULT.** The one row this link
+  could have closed was re-measured and is still true. **Nothing was hand-unblocked.**
+  **LINTS RUN:** `shellcheck` rc 0 · `bash -n` rc 0 · `bats --count` 43 · `bats-assert-liveness`
+  rc 0 · bare `pipefail-sigpipe-lint` clean · its `--selftest` **32/32** (take your own count — the
+  inherited note pins 30) · `unattended-path-lint --selftest` **46/46** · `test-walltime-lint`
+  clean over **557 suites** (#250 read 552; take your own) · `bats-shellcheck-lint --range` clean,
+  1 suite scanned. **NOT RUN and declared rather than claimed:** `alarm-polarity-lint` — neither
+  edited file is an alarm emitter and its POS control is a KNOWN MUTE (`e07dc5e09f83`, already
+  OPEN, not re-filed).
+  **THE DRAW: 2 direct suites / 61 tests, run in the FOREGROUND before the land** — 61 ok, 0 not
+  ok, 0 skip, 2 plans, **terminator ASSERTED at rc 93 rather than inferred from the absence of a
+  `not ok`** — so the land's own smoke is a second independent verdict on the same set.
+  🚨 **THE ONE THING TO TAKE. #263's rule was *count the holders of a restated enumeration*. Mine
+  is the turn after it: once you have fixed a holder, ASK HOW MUCH OF THE MAP THAT HOLDER READS —
+  because a fix is scoped to the thing that broke, and a detector's coverage is scoped to
+  everything it was ever taught. The two are different populations and nothing reconciles them.**
+  **The tell is a file whose comment names another file as its source of truth: that sentence is a
+  claim about ONE enumeration, and the file usually restates a dozen.** ⚠️ **And its corollary,
+  which cost three weeks here: a comment calling a gap *deliberate* is a claim with a DIRECTION.
+  Read which direction it defends before you let it stop you counting.**
 - **2026-08-31 — drain recycle #263: method 235 — A RESTATED ENUMERATION HAS A POPULATION, AND
   "I FIXED BOTH COPIES" IS A COMPLETENESS CLAIM NOBODY COUNTS. COUNT THE HOLDERS — AND THE ONE
   MOST LIKELY TO BE MISSED IS THE DETECTOR, BECAUSE IT IS NOT ON THE PATH THAT PLACES THE FILE.**
