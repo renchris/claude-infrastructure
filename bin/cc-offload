@@ -415,8 +415,18 @@ cmd_up() {
   # extra still gets the return path. `--unmanaged` is the deliberate opt-out, and it is spelled as
   # a flag rather than as "leave it blank" so an UNMANAGED fire is a decision in the argv rather
   # than an accident of environment.
+  # `:-` FIRST, THEN the suffix strip. This file runs under `set -u` (line 57) and a bare
+  # `${ITERM_SESSION_ID##*:}` on an UNSET variable is a fatal "unbound variable" — not a fire that
+  # degrades to fire-and-forget, but `cc-offload up` dying before the create, with the diagnostic
+  # three lines below (which exists precisely for this case) unreachable. It is not hypothetical
+  # and not an operator-terminal case: the live dispatcher fires this verb from launchd, where
+  # ITERM_SESSION_ID is never set, and it only passes --notify-back when the desk ROLE file is
+  # non-empty (bin/cc-dispatch:2783-2790) — a desk-less fleet being a supported configuration. So
+  # the two supported states compose into a crash. Measured 2026-08-31 on a VM with no iTerm:
+  # 11 of 44 cases in tests/cc-offload.bats go red for exactly this, green the moment the variable
+  # is exported.
   if [ "$UP_UNMANAGED" = 0 ] && [ -z "$UP_NOTIFY_BACK" ]; then
-    UP_NOTIFY_BACK="${ITERM_SESSION_ID##*:}"
+    UP_NOTIFY_BACK="${ITERM_SESSION_ID:-}"; UP_NOTIFY_BACK="${UP_NOTIFY_BACK##*:}"
   fi
   if [ "$UP_UNMANAGED" = 1 ]; then UP_NOTIFY_BACK=''
   elif [ -z "$UP_NOTIFY_BACK" ]; then

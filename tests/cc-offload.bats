@@ -640,13 +640,7 @@ print(" ".join(sys.argv[1:]), file=sys.stderr)
 print("session_apitest")
 EOF
   chmod +x "$STUBDIR/create-api.py"
-  # ITERM_SESSION_ID is set for the same reason every other `up` case above sets it: `cmd_up`
-  # defaults the wake target with a bare `${ITERM_SESSION_ID##*:}` under this file's own `set -u`
-  # (bin/cc-offload:419), so an unset variable is FATAL before the create. That is a real defect on
-  # the desk-less/launchd path and it is NOT this item's — it has its own fix and its own case.
-  # Setting it here keeps this case measuring the brief rather than that crash.
-  CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" ITERM_SESSION_ID="w0t0p9:PANE-UUID" \
-    run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
 }
 
 @test "up --via api delivers the brief WITH the boot-beacon return contract" {
@@ -665,4 +659,17 @@ EOF
   # RED CONTROL for the obvious way to get this wrong: a trailer that REPLACED the brief would pass
   # every assertion above while firing a session with no task.
   grep -q 'the composed brief, which says nothing about pushing' "$CALLS" || false
+}
+
+@test "a fire with NO pane and no --notify-back still fires — unset is fire-and-forget, never a crash" {
+  # `set -u` + a bare `${ITERM_SESSION_ID##*:}` made an unset variable FATAL, so `cc-offload up`
+  # died before the create on every launchd run of a desk-less fleet — the exact configuration
+  # bin/cc-dispatch:2783 supports (it passes --notify-back only when the desk ROLE file is
+  # non-empty). The degrade path three lines below that assignment could never be reached.
+  unset ITERM_SESSION_ID
+  api_fire "brief"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"FIRE-AND-FORGET"* ]] || { echo "the unset-pane degrade never printed"; false; }
+  grep -q 'cc-notify --cloud session_apitest' "$CALLS" || false
+  ! grep -q 'declare .*--notify-back' "$CALLS" || false
 }
