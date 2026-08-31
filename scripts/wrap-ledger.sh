@@ -108,6 +108,11 @@
 #   less so. Measured: scripts/lib/pane-spawn-log.sh landed with 20 instrumented spawn sites; this
 #   ledger read "BEHIND 7, within budget (25)" and rendered a plain OK while every
 #   `command -v cc_log_pane_spawn` call site short-circuited to nothing.
+#   ⚠️ AND THE EDIT HALF OF THAT SENTENCE HAS NO DOSE (2026-08-31, recycle #271). "At lag N the box
+#   runs that file's OLDER version" is true of a file the lag TOUCHES, and LIVE_LAG is the only
+#   number printed beside it, so a reader takes the commit distance as the amount of the box that is
+#   stale. It is not: measured at lag 10, exactly 2 of 513 links were stale. LIVE_STALE is that
+#   second number — see its own block below. It breaches nothing and changes no rung.
 #   So LIVE_ADDS > 0 breaches at lag ≥ 1, with no budget. It does NOT become an always-fires alarm:
 #   28.5% of the last 200 trunk commits add a file (measured), the breach lasts only until the live
 #   layer carries them, and CLAUDE.md's own 🚀 disposition has the AGENT run the converger and
@@ -782,6 +787,13 @@ count_open_custody() {
 
 # ── LIVE LAYER — the ENFORCING store, one edge past trunk (the 🚀 rung; see the header) ──
 LIVE_REPO="${WRAP_LIVE_REPO:-$HOME/Development/claude-infrastructure}"
+# LIVE_ROOT = the tree of per-file symlinks the box actually executes from. It is the OTHER half of
+# LIVE_REPO and until 2026-08-31 nothing here read it: every live-layer sensor asked a question of
+# the git graph, and none asked what is at the end of a link. Seamed so a test can point it.
+LIVE_ROOT="${WRAP_LIVE_ROOT:-$HOME/.claude}"
+# The stale scan is O(paths the lag changes), not O(the live tree) — but a pathological range would
+# still put a per-path readlink+hash on a Stop-hook path. Past the cap the answer is `?`, never 0.
+LIVE_STALE_MAX="${WRAP_LIVE_STALE_MAX:-200}"
 LIVE_BUDGET_COMMITS="${WRAP_LIVE_BUDGET_COMMITS:-25}"
 # 360 MINUTES = CC_DEPLOY_MAX_LAG_HOURS (2026-08-26, recycle #235). This was 60, calibrated for the
 # clock this arm used to read — THIS session's HEAD, where "my landing is an hour old and still not
@@ -836,6 +848,30 @@ LIVE_BREACH_WHY=""
 # `?` is its own state: the live sha could not be read HERE, so the question was asked and not
 # answered. 0 alongside LIVE_SRC=skip/n-a/unknown means "not counted", which those already say.
 LIVE_ADDS=0
+# LIVE_STALE = of the paths this lag changes, how many are REACHED BY A LIVE LINK and are executing
+# bytes that differ from HEAD's. The lag's DOSE, beside LIVE_LAG's DISTANCE. Same `?` law as
+# LIVE_ADDS, and here the law is load-bearing twice over: 0 is the HEALTHY value (nothing you run is
+# stale), so a failed read rendering as 0 would be indistinguishable from a fully-converged box.
+#
+# WHY A COMMIT COUNT IS NOT A MEASURE OF HOW MUCH OF THE BOX IS STALE (2026-08-31, recycle #271).
+# The header above says an EDITED file "rides its link: at lag N the box runs that file's OLDER
+# version". That is true of a file the lag TOUCHES, and it is the whole sentence anyone reads —
+# LIVE_LAG is the only number beside it, so a reader takes the lag as the dose. Measured on this box
+# at 2026-08-31T23:06:09Z, on a lag of TEN: 513 live-layer links resolve into the checkout, 511 are
+# BYTE-IDENTICAL to trunk, and exactly TWO are stale (bin/cc-backlog, scripts/deploy-link-parity.sh).
+# The ten commits change 11 paths and 5 of those are docs/, 3 are tests/. So the distance was 10 and
+# the dose was 2, and nothing computed the second number: recycle #270 landed a fix to one of those
+# two files, read "10 commit(s) behind; within the converge budget", and had to hand-build a probe to
+# learn its own change was inert. A lag of 1 that rewrites 300 executing files and a lag of 40 that
+# touches only docs/ render identically today, and the LARGER number is the safer state.
+#
+# IT IS STRICTLY ADDITIVE AND THAT IS THE POINT. LIVE_ADDS's own note two blocks up refuses a path
+# filter — correctly: a filter is a strictly-stronger SUPPRESSOR, and getting it wrong SILENCES a
+# real breach (MEMORY.md cost-gate-must-be-strictly-weaker). This is the complement, not that: it
+# breaches nothing, gates nothing, and changes no rung, no exit status and no existing field. It is
+# the refinement that note says a consumer should be able to make "without a fork" — which until now
+# a consumer could not, because the number it needed was never emitted.
+LIVE_STALE=0
 # LIVE_DIVERGED = commits the LIVE layer's HEAD carries that its trunk does not — the count that
 # says the converger is BLOCKED rather than merely behind. Same `?` law as LIVE_ADDS: the question
 # was asked and not answered, which is not the same as zero.
@@ -989,6 +1025,54 @@ compute_live_layer() {
     else
       LIVE_ADDS="?"
     fi
+    # ── STALE EXECUTING FILES: the lag's DOSE (see LIVE_STALE's header note). ──
+    # The scan is over the paths the lag CHANGES, not over the live tree: at lag 10 that was 11
+    # paths against 513 links, so the cost is a readlink and a hash per changed path, and the cap
+    # bounds the pathological range. A path is counted iff ALL of (a) ~/.claude/<path> exists and is
+    # a SYMLINK, (b) it resolves INTO this live checkout, and (c) the bytes at the far end differ
+    # from HEAD's blob for that path. Anything else — a docs/ page with no link, a real file that
+    # the parity reporter's own STRAY class owns, an unreadable link — is NOT counted, because this
+    # number answers "what does the box execute at the wrong version", and only (a)∧(b)∧(c) is that.
+    #
+    # THE LOOP IS NOT IN A SUBSHELL, DELIBERATELY. `printf … | while read` would run the body in a
+    # pipeline subshell and every increment would be discarded at the `done`, leaving a confident 0
+    # — the healthy value (MEMORY.md assignment-inside-command-substitution-never-escapes). The
+    # here-doc keeps it in this shell, so the counter survives.
+    #
+    # Run in THIS repo, exactly as the added-file read above is and for the same reason: HEAD is
+    # ours by construction and the live repo may never have fetched it. `git hash-object <abspath>`
+    # hashes file CONTENT and needs no membership in any tree, which is what lets the far end of a
+    # link be compared at all.
+    if git cat-file -e "${LIVE_SHA}^{commit}" 2>/dev/null; then
+      _chg="$(_bounded "${WRAP_LIVE_TIMEOUT_S:-5}" git diff --name-only "$LIVE_SHA" "$HEAD_SHA" 2>/dev/null)"
+      _crc=$?
+      _chg_n="$(printf '%s' "$_chg" | grep -c . 2>/dev/null || echo 0)"
+      case "$_chg_n" in ''|*[!0-9]*) _chg_n=0 ;; esac
+      if [ "$_crc" -ne 0 ] || [ "$_chg_n" -gt "$LIVE_STALE_MAX" ]; then
+        LIVE_STALE="?"
+      else
+        _stale=0
+        while IFS= read -r _sp; do
+          [ -n "$_sp" ] || continue
+          _slp="$LIVE_ROOT/$_sp"
+          [ -L "$_slp" ] || continue
+          _stgt="$(readlink "$_slp" 2>/dev/null)"
+          [ -n "$_stgt" ] || continue
+          case "$_stgt" in "$LIVE_REPO"/*) ;; *) continue ;; esac
+          [ -f "$_stgt" ] || continue
+          _slh="$(git hash-object "$_stgt" 2>/dev/null)"
+          _sth="$(git rev-parse "$HEAD_SHA:$_sp" 2>/dev/null)"
+          if [ -n "$_slh" ] && [ -n "$_sth" ] && [ "$_slh" != "$_sth" ]; then
+            _stale=$((_stale + 1))
+          fi
+        done <<STALE_PATHS
+$_chg
+STALE_PATHS
+        LIVE_STALE="$_stale"
+      fi
+    else
+      LIVE_STALE="?"
+    fi
   fi
 
   # A FAILED migration is the converger saying it ran and could NOT put a landed conclusion into its
@@ -1090,6 +1174,25 @@ compute_live_layer() {
     fi
   fi
   return 0
+}
+
+# The lag's DOSE, for the two readouts that already print its DISTANCE. Rendered unconditionally on
+# those lines rather than only when non-zero: they render ONLY when the live layer is already behind,
+# so this is not an alarm that fires on every clean close — it is the UNIT of the number printed
+# beside it, and 0 ("nothing you run is stale") is precisely the reading that distinguishes a benign
+# lag of 10 from a dangerous lag of 2. The lag-UNREADABLE readout is deliberately left alone: a dose
+# with no distance beside it is noise.
+#
+# DEFINED HERE, ABOVE ITS CALLERS, AND THAT ORDERING IS LOAD-BEARING. It was first written beside
+# rung_next, 160 lines BELOW the readout block that calls it — a `command not found` at every
+# within-budget close. The live run did not catch it: this session's tree was dirty, so
+# compute_live_layer() was never called and neither readout ever rendered. `shellcheck` (SC2218) was
+# the only instrument that saw it. A path the ✅-gate skips is a path your smoke test skips too.
+stale_clause() {
+  case "$LIVE_STALE" in
+    '?') printf '; stale executing file count UNREADABLE' ;;
+    *)   printf '; %s executing file(s) stale' "$LIVE_STALE" ;;
+  esac
 }
 
 # ── Compute the worst-open FACT rung + its readout ──
@@ -1229,9 +1332,9 @@ else
       # The mirror image, and it gets its own line for the same reason the one above does: naming
       # the arm that DID clear is the only way the reader can tell an applied budget from an
       # abstained one. "the converge budget" would assert both.
-      RUNG="✅"; READOUT="✅ Complete & landed — live layer converging (${LIVE_LAG} commit(s) behind; within the COMMIT budget — the live-commit clock was UNREADABLE, so the time budget was not applied)."
+      RUNG="✅"; READOUT="✅ Complete & landed — live layer converging (${LIVE_LAG} commit(s) behind$(stale_clause); within the COMMIT budget — the live-commit clock was UNREADABLE, so the time budget was not applied)."
     else
-      RUNG="✅"; READOUT="✅ Complete & landed — live layer converging (${LIVE_LAG} commit(s) behind; within the converge budget)."
+      RUNG="✅"; READOUT="✅ Complete & landed — live layer converging (${LIVE_LAG} commit(s) behind$(stale_clause); within the converge budget)."
     fi
   fi
   fi   # closes the CUSTODY_OPEN branch (its 🔧 arm above short-circuits this whole chain)
@@ -1252,6 +1355,7 @@ emit_machine() {
   printf 'LIVE_SHA=%s\n' "$LIVE_SHA"
   printf 'LIVE_LAG=%s\n' "$LIVE_LAG"
   printf 'LIVE_ADDS=%s\n' "$LIVE_ADDS"
+  printf 'LIVE_STALE=%s\n' "$LIVE_STALE"
   printf 'LIVE_DIVERGED=%s\n' "$LIVE_DIVERGED"
   printf 'LIVE_AGE=%s\n' "$LIVE_AGE"
   printf 'LIVE_BREACH_WHY=%s\n' "$LIVE_BREACH_WHY"

@@ -37,6 +37,12 @@ setup() {
   # forks git against the operator's REAL live checkout (a converger advances it on a 600s tick, so
   # a real-repo dependency would make this suite a function of that tick).
   export WRAP_LIVE_REPO="$BATS_TEST_TMPDIR/no-live-layer"
+  # …AND ITS OTHER HALF. LIVE_STALE walks the live layer's SYMLINK ROOT, which defaults to
+  # $HOME/.claude — the operator's REAL one. Unfixtured, every arm in this file would stat the live
+  # box, and the count would be a function of whoever ran the suite and of where the converger had
+  # got to (the suite-is-a-function-of-who-runs-it class this setup names three times above). An
+  # absent root = no path is linked = a counted, hermetic 0.
+  export WRAP_LIVE_ROOT="$BATS_TEST_TMPDIR/no-live-root"
   export CC_MIGRATIONS_STATE="$BATS_TEST_TMPDIR/migrations"
   unset WRAP_LIVE_BUDGET_COMMITS WRAP_LIVE_BUDGET_MIN
   # ⛔ rung: the same hermetic discipline, and it matters MORE here — ⛔ is computed
@@ -495,6 +501,23 @@ live_at_aged() {
   git -C "$WRAP_LIVE_REPO" fetch -q origin
 }
 
+# the LIVE-LAYER SYMLINK ROOT — the half of the live layer no fixture here modelled until 2026-08-31.
+# ~/.claude is a tree of per-file symlinks INTO the live checkout, so what the box executes is the
+# far end of a link, and every live-layer arm above asks its question of the git graph instead. $@ are
+# repo-relative paths to link; the target is the LIVE CLONE's working tree, which is what makes the
+# far end carry the live layer's (older) bytes by construction rather than by a copy someone staged.
+# Called with NO arguments it builds a root that links nothing — the honest fixture for "the lag
+# changed files, and none of them is one this box runs".
+mk_live_root() {
+  local root="$BATS_TEST_TMPDIR/liveroot" p
+  mkdir -p "$root"
+  for p in "$@"; do
+    mkdir -p "$root/$(dirname "$p")"
+    ln -sf "${WRAP_LIVE_REPO:?live repo path required}/$p" "$root/$p"
+  done
+  printf '%s' "$root"
+}
+
 # a failed-migration record: the converger reporting it could NOT put a landed conclusion into its
 # enforcing store (settings.json, a plist, PATH).
 mk_failed_migration() {
@@ -580,6 +603,107 @@ mk_failed_migration() {
   [ "$(field "$output" LIVE_LAG)" = "3" ]
   [ "$(field "$output" LIVE_ADDS)" = "1" ]
   [ "$(field "$output" RUNG)" = "🚀" ]
+}
+
+# ── 2e-2j. LIVE_STALE — the lag's DOSE, beside LIVE_LAG's DISTANCE (2026-08-31, recycle #271) ──
+# 2e and 2f are ONE VARIABLE APART: identical trunk, identical lag, identical kind of change, and the
+# only difference is whether the changed path is reached by a live link. They answer 0 and 1. That
+# pair IS the finding: measured on the real box at lag TEN, 513 links resolved into the checkout, 511
+# were byte-identical to trunk and exactly TWO were stale — so the distance was 10 and the dose was 2,
+# and recycle #270 landed a fix into one of those two files, read "10 commit(s) behind; within the
+# converge budget", and had to hand-build a probe to learn its own change was inert.
+@test "a lag that touches NO linked file ⇒ LIVE_STALE=0 — the distance is not the dose" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  WRAP_LIVE_ROOT="$(mk_live_root)"; export WRAP_LIVE_ROOT   # links nothing
+  advance_trunk 3
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_SRC)" = "behind" ]
+  [ "$(field "$output" LIVE_LAG)" = "3" ]     # the DISTANCE is three
+  [ "$(field "$output" LIVE_STALE)" = "0" ]   # the DOSE is zero — nothing this box runs is stale
+  [ "$(field "$output" RUNG)" = "✅" ]
+}
+
+@test "a lag that edits a LINKED file ⇒ LIVE_STALE=1 — same lag, one variable apart" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  WRAP_LIVE_ROOT="$(mk_live_root base.txt)"; export WRAP_LIVE_ROOT
+  advance_trunk 3                             # advance_trunk EDITS base.txt — the linked path
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_LAG)" = "3" ]     # identical distance to the arm above…
+  [ "$(field "$output" LIVE_STALE)" = "1" ]   # …and a dose of one
+}
+
+# THE ADDITIVE CLAIM, PINNED. This arm names LIVE_STALE nowhere and is GREEN BEFORE THE FIX BY
+# DESIGN — a uniform prediction across a table says nothing about attribution, and this is the arm
+# that says what the change must NOT do. LIVE_ADDS's own note refuses a path FILTER because a filter
+# is a strictly-stronger suppressor that can silence a real breach; this asserts the new sensor is
+# the complement of that and not a quiet instance of it.
+@test "LIVE_STALE changes no existing field — every prior verdict is byte-identical" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  WRAP_LIVE_ROOT="$(mk_live_root base.txt)"; export WRAP_LIVE_ROOT
+  advance_trunk 3
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "✅" ]         # a stale EXECUTING file still does not breach…
+  [ "$(field "$output" LIVE_SRC)" = "behind" ]
+  [ "$(field "$output" LIVE_LAG)" = "3" ]
+  [ "$(field "$output" LIVE_ADDS)" = "0" ]    # …and the add sensor is untouched by it
+  [ "$(field "$output" LIVE_DIVERGED)" = "0" ]
+  [ "$(field "$output" LIVE_BREACH_WHY)" = "" ]
+}
+
+@test "LIVE_STALE is emitted on the at/above-HEAD path too, so consumers never guess" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  WRAP_LIVE_ROOT="$(mk_live_root base.txt)"; export WRAP_LIVE_ROOT
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_SRC)" = "ok" ]
+  [ "$(field "$output" LIVE_STALE)" = "0" ]
+}
+
+# THE `?` LAW, AND IT IS LOAD-BEARING TWICE OVER HERE. For LIVE_ADDS, 0 means "no added file" and the
+# hazard of a phantom 0 is a missed breach. For LIVE_STALE, 0 is the HEALTHY value — "nothing you run
+# is stale" — so a failed read rendering as 0 would be indistinguishable from a FULLY CONVERGED BOX,
+# which is the most reassuring sentence this ledger can print. Same fixture as 2d, one field further.
+@test "live layer on a sha this repo lacks ⇒ LIVE_STALE=?, never the healthy 0" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  WRAP_LIVE_ROOT="$(mk_live_root base.txt)"; export WRAP_LIVE_ROOT
+  git -C "${WRAP_LIVE_REPO:?live repo path required}" config user.email tester@example.com
+  git -C "${WRAP_LIVE_REPO:?live repo path required}" config user.name tester
+  echo live-only >> "$WRAP_LIVE_REPO/base.txt"
+  git -C "$WRAP_LIVE_REPO" add base.txt
+  git -C "$WRAP_LIVE_REPO" commit -q -m "live-only commit"
+  advance_trunk 1
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_SRC)" = "behind" ]
+  [ "$(field "$output" LIVE_STALE)" = "?" ]
+}
+
+# THE MECHANISM ARM — it exercises the RENDERER, not just the sensor, and it is the one that catches
+# a defect no --machine assertion can see. stale_clause() was first written 160 lines BELOW the
+# readout block that calls it, which is a `command not found` at every within-budget close; this
+# session's own live run missed it entirely because a dirty tree skips compute_live_layer() and
+# neither readout ever rendered. shellcheck's SC2218 was the only instrument that saw it. This arm
+# makes the wiring a test rather than a lint.
+@test "the within-budget readout carries the DOSE beside the DISTANCE" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  WRAP_LIVE_ROOT="$(mk_live_root base.txt)"; export WRAP_LIVE_ROOT
+  advance_trunk 3
+  run bash "$LEDGER"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c .)" -eq 1 ]   # still ONE line
+  printf '%s' "$output" | grep -qi "converging"
+  printf '%s' "$output" | grep -q "3 commit(s) behind"
+  printf '%s' "$output" | grep -q "1 executing file(s) stale"
+  ! printf '%s' "$output" | grep -q "command not found" || false
 }
 
 # ── 2d. FAIL-OPEN: a live sha THIS repo cannot read is `?`, and `?` never manufactures a rung ──
