@@ -221,3 +221,105 @@ print("OK")'
   run grep -nE 'launchctl (bootstrap|load|enable)' "$m"
   [ -z "$output" ] || { echo "the migration arms launchd itself — that is the operator's step: $output"; false; }
 }
+
+# ---- the keychain-ACL gate in the ACTIVATION script (backlog ff4e6cbead11) ----------------------
+#
+# WHY these three arms exist, and why they are behavioural rather than textual. The activation
+# script's step [0] is a GATE: run one --once batch and refuse to arm unless it produced readable
+# credential rows, because under launchd there is no session to answer a keychain ACL prompt and
+# that denial renders as a clean run of NO_ITEM rows — a false "every account logged out" on the
+# one instrument that exists to detect exactly that.
+#
+# The gate failed OPEN, via two bugs that CANCELLED, so nothing ever surfaced:
+#   (1) it grepped '"state":"OK"' with NO space, while the collector emits its rows through
+#       python's json.dumps, whose DEFAULT separator is ': ' — so the probe scored 0 on every
+#       real batch. Measured 2026-08-31T00:10Z over the newest 400 rows of the live store:
+#       333 matches WITH the space, 0 WITHOUT.
+#   (2) `grep -c` prints 0 and EXITS 1 on a legitimate zero, so `$(grep -c … || echo 0)` appends
+#       a SECOND line and yields ok=$'0\n0'. `[ "$ok" -lt 1 ]` then answers rc 2 — "integer
+#       expression expected", i.e. no verdict at all — and the `if` takes its FALSE branch and
+#       arms anyway.
+# Net: it always armed, on a probe that always reported failure. Fixing (2) alone would leave the
+# always-zero probe correctly evaluated and the gate would then REFUSE FOREVER, so the two are one
+# change. Arms A and B are the two halves of that and they cannot both pass unless both are fixed:
+# fix (2) only and A fails; fix (1) only and B fails.
+#
+# Each arm EXTRACTS the subject's own source line and asserts its uniqueness first, so a reworded
+# fix keeps them honest — they pin the MECHANISM, not a spelling (a control keyed to today's
+# wording decays silently as the code improves).
+
+@test "acl-gate: the probe COUNTS what the collector actually writes, not a brittle no-space literal" {
+  ACT="$REPO/docs/activation/pending-activation/35-auth-timeseries-activate.sh"
+  [ -f "$ACT" ] || { echo "activation script absent: $ACT"; false; }
+  [ "$(grep -c '^ok=' "$ACT")" -eq 1 ] || { echo "'^ok=' is not unique in $ACT — re-derive the anchor"; false; }
+  okline="$(grep '^ok=' "$ACT")"
+  # The fixture is DERIVED by running json.dumps, never transcribed — it is the same serializer
+  # tools/auth/auth-timeseries.sh emits through, so it cannot disagree with production by typo.
+  probe="$BATS_TEST_TMPDIR/probe.jsonl"
+  python3 - "$probe" <<'PY'
+import json, sys
+rows = [{"acct": "a", "state": "OK"}, {"acct": "b", "state": "OK"},
+        {"acct": "c", "state": "NO_ITEM"}, {"acct": "d", "state": "OK"}]
+open(sys.argv[1], "w").write("".join(json.dumps(r) + "\n" for r in rows))
+PY
+  # ok= is assigned by evaluating the SUBJECT'S OWN extracted line, which shellcheck cannot
+  # follow through eval. Declaring it here makes that provenance visible instead of
+  # suppressing the warning, and stops a value leaking in from an earlier arm.
+  ok=""
+  eval "$okline"
+  [ "$ok" = "3" ] || {
+    echo "the gate counted '$ok' of the fixture's 3 OK rows. A multi-line value is bug (2)"
+    echo "(grep -c exits 1 on a zero and the || fallback appends a second line); a plain 0 is"
+    echo "bug (1) (the pattern does not match what json.dumps emits)."; false; }
+}
+
+@test "acl-gate: with ZERO readable credentials the guard REFUSES — the fail-open this row exists for" {
+  ACT="$REPO/docs/activation/pending-activation/35-auth-timeseries-activate.sh"
+  [ "$(grep -c '^ok=' "$ACT")" -eq 1 ] || { echo "'^ok=' is not unique in $ACT"; false; }
+  [ "$(grep -c '^if \[ "\$ok" -lt 1 \]; then' "$ACT")" -eq 1 ] || {
+    echo "the guard condition moved or was reworded — re-derive it before trusting this arm"; false; }
+  okline="$(grep '^ok=' "$ACT")"
+  probe="$BATS_TEST_TMPDIR/none.jsonl"
+  python3 - "$probe" <<'PY'
+import json, sys
+# exactly the shape a keychain ACL denial produces: a clean batch of NO_ITEM, zero OK
+rows = [{"acct": "a", "state": "NO_ITEM"}, {"acct": "b", "state": "NO_ITEM"}]
+open(sys.argv[1], "w").write("".join(json.dumps(r) + "\n" for r in rows))
+PY
+  # ok= is assigned by evaluating the SUBJECT'S OWN extracted line, which shellcheck cannot
+  # follow through eval. Declaring it here makes that provenance visible instead of
+  # suppressing the warning, and stops a value leaking in from an earlier arm.
+  ok=""
+  eval "$okline"
+  rc=0; eval '[ "$ok" -lt 1 ]' 2>/dev/null || rc=$?
+  [ "$rc" -eq 0 ] || {
+    echo "the guard answered rc=$rc on a probe holding ZERO OK rows. 0 = refuse (correct);"
+    echo "1 = cleanly false, so it would arm; 2 = THREW, no verdict at all, so it arms by"
+    echo "fallthrough — which is the measured fail-open. ok was '$ok'."; false; }
+}
+
+@test "acl-gate: the pattern tolerates json.dumps' separator, so serializer defaults cannot re-zero it" {
+  ACT="$REPO/docs/activation/pending-activation/35-auth-timeseries-activate.sh"
+  [ "$(grep -c '^ok=' "$ACT")" -eq 1 ] || { echo "'^ok=' is not unique in $ACT"; false; }
+  okline="$(grep '^ok=' "$ACT")"
+  # Two-sided on purpose. The fixture holds BOTH spellings json.dumps can emit plus one row that
+  # must never match, so this arm fails if the pattern is too WEAK (misses the default separator,
+  # the original bug) and equally if it is too WIDE (matches any state at all).
+  probe="$BATS_TEST_TMPDIR/sep.jsonl"
+  python3 - "$probe" <<'PY'
+import json, sys
+lines = [json.dumps({"state": "OK"}),                          # default separators: '"state": "OK"'
+         json.dumps({"state": "OK"}, separators=(",", ":")),   # compact:            '"state":"OK"'
+         json.dumps({"state": "EMPTY"})]                       # NEG control: must NOT match
+open(sys.argv[1], "w").write("\n".join(lines) + "\n")
+PY
+  # ok= is assigned by evaluating the SUBJECT'S OWN extracted line, which shellcheck cannot
+  # follow through eval. Declaring it here makes that provenance visible instead of
+  # suppressing the warning, and stops a value leaking in from an earlier arm.
+  ok=""
+  eval "$okline"
+  [ "$ok" = "2" ] || {
+    echo "the pattern matched '$ok' rows; it must match exactly the 2 OK spellings json.dumps can"
+    echo "emit and never the EMPTY row. 1 = it is pinned to one separator (the original defect);"
+    echo "3 = it matches every state and the gate would admit an all-EMPTY batch."; false; }
+}

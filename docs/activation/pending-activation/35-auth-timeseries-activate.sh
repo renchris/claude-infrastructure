@@ -68,8 +68,35 @@ if [ "$rc" = 3 ]; then
   echo "  stderr: $(cat "$probe.err" 2>/dev/null)" >&2
   rm -f "$probe" "$probe.err"; exit 1
 fi
-ok=$(grep -c '"state":"OK"' "$probe" 2>/dev/null || echo 0)
-noitem=$(grep -c '"state":"NO_ITEM"' "$probe" 2>/dev/null || echo 0)
+# 🚨 THIS GATE FAILED OPEN VIA TWO BUGS THAT CANCELLED, so nothing ever surfaced it. Both are
+# fixed here in ONE change, because fixing either alone is worse than fixing neither:
+#
+#  (1) THE PATTERN DID NOT MATCH WHAT THE COLLECTOR WRITES. It read '"state":"OK"' with no space,
+#      but $SRC emits every row through python's `json.dumps` (tools/auth/auth-timeseries.sh,
+#      `print(json.dumps(rec))`), whose DEFAULT separator is ': '. Measured 2026-08-31T00:10Z over
+#      the newest 400 rows of the live store: 333 matches WITH the space, 0 WITHOUT. So the probe
+#      scored zero on every real batch it has ever seen. The repair is an ERE tolerant of the
+#      separator rather than a second brittle literal — pinning the fix to ': ' would re-create the
+#      identical dependency on a serializer default nobody here controls.
+#
+#  (2) THE COUNT COULD NOT BE READ AS A NUMBER. `grep -c` prints 0 and EXITS 1 on a legitimate
+#      zero, so `$(grep -c … || echo 0)` appended a SECOND line and yielded ok=$'0\n0'. The guard
+#      below then answered rc 2 — "integer expression expected", which is NO VERDICT AT ALL, not a
+#      false one — and its `if` took the FALSE branch and armed anyway. Note the guard cannot tell
+#      rc 1 (cleanly "no credentials", refuse) from rc 2 (unreadable value): both are merely
+#      "non-zero" and they mean opposite things. `|| true` plus a numeric-shape case is the house
+#      spelling for this (scripts/backlog-telemetry.sh:131 carries the same note).
+#
+# NET, BEFORE THIS FIX: it always armed, on a probe that always reported failure. Fix (2) alone and
+# the always-zero probe starts being evaluated correctly and the gate REFUSES FOREVER; fix (1)
+# alone and it still cannot say no. Pinned by three behavioural arms in
+# tests/auth-timeseries-schedule.bats that EXTRACT these lines rather than restate them: one that
+# the count is right, one that a zero-OK batch is REFUSED, and one two-sided arm that the pattern
+# matches both spellings json.dumps can emit and no other state. Backlog row ff4e6cbead11.
+ok=$(grep -cE '"state":[[:space:]]*"OK"' "$probe" 2>/dev/null || true)
+case "$ok" in ''|*[!0-9]*) ok=0 ;; esac
+noitem=$(grep -cE '"state":[[:space:]]*"NO_ITEM"' "$probe" 2>/dev/null || true)
+case "$noitem" in ''|*[!0-9]*) noitem=0 ;; esac
 rows=$(wc -l < "$probe" 2>/dev/null || echo 0)
 echo "  · $rows rows, $ok OK, $noitem NO_ITEM (exit $rc)"
 if [ "$ok" -lt 1 ]; then
