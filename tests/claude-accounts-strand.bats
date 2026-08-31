@@ -223,10 +223,17 @@ print("OK")'
   # next at phase 0.32 on 2026-08-25: weekly_pct 52, 114 h left, EWMA 1.725 %/h -> a raw
   # projection of 248.7%. In that regime EVERY projector measured here is badly wrong (the
   # incumbent renders 154.6%, this EWMA 231.4%, against a truth near 100%), so the clamp keeps
-  # the shortfall regime -- where the arithmetic converges -- and discards the overshoot. The
-  # account is reported as on a WALL TRAJECTORY, which is true and actionable; "248%" is neither.
+  # the shortfall regime -- where the arithmetic converges -- and discards the overshoot.
+  #
+  # THE FIXTURE MOVED FROM 114 h TO 30 h LEFT, AND THAT IS THE POINT, not a workaround.
+  # `wall_projection` gained a SHAPE floor (docs/research/weekly-reset-utilization-2026-08-25.md
+  # §3, §6): the linear divisor is refuted mid-week, so mid-week it now abstains and pace_line
+  # renders no ratio and no flag at all. This case is about the CLAMP -- an overshoot is reported
+  # as a trajectory, never as a number -- so it is pinned where the projector is allowed to
+  # speak. The 114 h behaviour did not vanish; it is asserted in the arm below, which is the
+  # stronger form of "248% is not actionable" that the research went on to measure.
   run python3 -c "$LOAD"'
-r = {"acct": "next", "weekly_pct": 52, "weekly_reset_h": 114.0, "burn_wk_ewma_ph": 1.725}
+r = {"acct": "next", "weekly_pct": 90, "weekly_reset_h": 30.0, "burn_wk_ewma_ph": 1.725}
 st = ca.wk_strand_pp(r)
 assert st == 0.0, st
 line = ca.pace_line([r])
@@ -234,6 +241,27 @@ assert "⚠ WALL trajectory" in line, line
 assert "248" not in line, line
 assert "231" not in line, line
 assert "154" not in line, line
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-16a: the SAME overshoot MID-WEEK renders no flag at all — the shape floor" {
+  # The original RP-16 fixture, verbatim, with the assertion the 2026-08-25 backtest earned.
+  # next@08-23 read 51% at day 3, the linear form projected 119% and rendered ⚠ WALL, and the
+  # window closed at 99% -- the wall was manufactured by the model. Mid-week the projection was
+  # wrong by a mean 46 pp across four windows, so the honest render is silence, not a flag.
+  # Suppressing the flag is deliberate: a WALL warning is the most consequential thing this
+  # line carries, and one that fires four days out on a refuted model spends its credibility.
+  # A bucket that is genuinely spent is still caught by MEASUREMENT (score_general's
+  # `weekly-exhausted`, cliff_band's drain band), which is what makes this loss affordable.
+  run python3 -c "$LOAD"'
+r = {"acct": "next", "weekly_pct": 52, "weekly_reset_h": 114.0, "burn_wk_ewma_ph": 1.725}
+assert ca.wall_projection(r) == (None, None), ca.wall_projection(r)
+line = ca.pace_line([r])
+assert "⚠ WALL" not in line, line
+assert "× burn" not in line, line
+assert "next" in line, line          # the ROW still renders — abstain is not deletion
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }

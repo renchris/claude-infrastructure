@@ -192,7 +192,9 @@ The one real cost in view is `next3`'s ~8 pp, and with 3.8 h left that is essent
   empirical trajectory — but not yet: 4 windows cannot calibrate a curve. The cheap correct move
   is to widen the abstain rule so the projection stays silent mid-week, where it is measurably
   uninformative, and speaks only in the last ~2 days where linear and empirical converge
-  (day 6: −17 pp; day 7: −2 pp).
+  (day 6: −17 pp; day 7: −2 pp). **→ the widening SHIPPED 2026-08-31; the trajectory replacement
+  is still deferred. §9 records what landed, what it costs, and the residual error at the
+  boundary.**
 
 **Reproduce:** the analysis scripts are in this session's scratchpad; the one-command version of
 the retrospective is `python3 scripts/desk-strand-replay.py`.
@@ -305,3 +307,35 @@ records". The 0 replicates and is right; the control does not — those `rate_li
 the CC binary's own error enum being dumped by agents reading its strings, i.e. meta too. **The
 scan's proof that it could find anything was itself an artifact.** Use
 `cache_read_input_tokens` (present in 6,497 of 6,749 transcripts) as the control instead.
+
+---
+
+## §9 SHIPPED — §6's abstain widening is in the tool (2026-08-31)
+
+§6 named two candidate fixes and ranked them. The **cheap correct one shipped**; the other is still
+correctly deferred.
+
+| | |
+|---|---|
+| **Shipped** | `SPEAK_WITHIN_H = 48.0` in `bin/claude-accounts` — `wall_projection()` now abstains whenever `weekly_reset_h > 48`, so `burn_ratio` / `proj_end_pct` / `wall_risk` are absent for roughly the first five days of every window and present only in the last ~2 days |
+| **NOT shipped, deliberately** | replacing the linear divisor with the empirical trajectory. §5.2 stands: 4 windows refute linearity but cannot calibrate a shape. Re-derive after ≥2 more full cycles; `SPEAK_WITHIN_H` is the knob |
+| **Kept separate** | the original 5% phase floor (`MIN_ELAPSED_FRAC`) stays a distinct check. The two are nested by arithmetic today, not by design — they refuse for different reasons, and recalibrating the shape floor must not take the noise floor with it |
+
+**What the widening costs, stated rather than glossed.** The mid-week `⚠ WALL` flag is gone with the
+rest of the projection. That is the intended effect — the only mid-week WALL in §3's backtest is the
+false alarm (next@08-23: 119% projected, 99% actual) — but it does remove the sole *early* warning of
+weekly exhaustion. What remains is **measurement, not projection**: `score_general` still excludes on
+`weekly_pct` itself (`weekly-exhausted`) and `cliff_band` still bands the drain, so an account that
+actually spends its bucket mid-week is still caught, just at arrival rather than in advance.
+
+**The honest residual.** The boundary is the worst admitted case: at day 5 (48 h left) the projection
+was still measured ~35 pp off, improving to −17 pp at day 6 and −2 pp at day 7. The threshold is §6's
+own prescription ("the last ~2 days") rather than a tighter number this session picked, because
+picking a tighter one would be calibrating on the same 4 windows §5.2 says cannot calibrate anything.
+
+**Pinned by** `tests/claude-accounts-burn-ratio.bats` (13 cases — the four day-3 readings that were
+wrong by 34–70 pp now assert `NONE`, both sides of the boundary are pinned, and both floors are
+pinned as separate refusals), plus updates in place to `tests/claude-accounts-strand.bats` RP-16/RP-16a
+and `tests/claude-accounts-core.bats` case 73, whose WALL-flag and `× burn` assertions were the
+mid-week rendering this change removes. Neither assertion was deleted: each was re-pointed at a
+fixture inside the speaking window, and the mid-week suppression asserted beside it.

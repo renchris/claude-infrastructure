@@ -1847,11 +1847,22 @@ assert "next3 strand ~5pp of 8 · p96 of its own 3h burns" in line, line
 # RP-26 — a zero-strand account still RENDERS, and renders LAST. A sorted() over a list filtered
 # on strand > 0 passes RP-25 and drops this row silently.
 assert "next no strand" in line, line
-assert "⚠ WALL trajectory" in line, line
 assert line.rstrip().split(chr(10))[-1].strip().startswith("next no strand"), line
-# ...and its burn RATIO survives unchanged, while the >100 PROJECTION does not render as a number
-assert "1.62× burn" in line, line
-assert "162" not in line and "163" not in line, line     # the RATIO, never the ~162% projection
+# UPDATED IN PLACE AGAIN (docs/research/weekly-reset-utilization-2026-08-25.md §3, §6). This arm
+# used to assert `1.62× burn` and `⚠ WALL trajectory` on the `next` row. `next` sits at 114.21 h
+# left — day 3 — and that is exactly the reading the research backtested: the linear divisor
+# projected a wall for it and the window closed at 99%, one of four day-3 projections wrong by a
+# mean 46 pp. `wall_projection` now abstains outside 48 h, so the ratio and the flag are gone
+# from this row BY DESIGN. The fixture is untouched (still the live 2026-08-25 shapes) because
+# what changed is the verdict on it, not the measurement.
+assert "⚠ WALL" not in line, line
+assert "× burn" not in line, line
+# ...and the ratio-not-projection invariant those assertions carried is re-pinned where the
+# projector is allowed to speak, so widening the abstain did not quietly retire it.
+sp = ca.pace_line([row(acct="next", weekly_pct=90, weekly_reset_h=42.0, burn_wk_ewma_ph=1.725)])
+assert "1.20× burn" in sp, sp                            # 90 / (126/168) = 1.20 exactly
+assert "⚠ WALL trajectory" in sp, sp
+assert "120" not in sp, sp                               # the RATIO, never the 120% projection
 assert "BEHIND" not in line, line                        # 47ddbf47c DELETED it: on 2026-08-16 three freshly-reset windows each read
                                                          # BEHIND, which is correct and reads as gross under-utilisation.
 # an abstention renders as the WORD plus its reason, never as a zero (L2)
