@@ -38,6 +38,14 @@ setup() {
   export CC_BACKLOG_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
   printf '#!/bin/bash\necho "[]"\n' > "$BATS_TEST_TMPDIR/nosess"; chmod +x "$BATS_TEST_TMPDIR/nosess"
   export CC_BACKLOG_SESSIONS_BIN="$BATS_TEST_TMPDIR/nosess"
+  # `add` ends in dispatch_kick(), whose kick_bin() consults $PATH BEFORE $HOME — so owning $HOME
+  # does NOT stop this suite spawning the operator's DEPLOYED cc-dispatch, which would inherit these
+  # fixtures and journal test decisions into the production idl.jsonl. All three are pinned rather
+  # than just the switch, so a future test that turns the mechanism back on for a positive control
+  # still cannot reach live state (tests/cc-backlog-needs.bats:38-40 is the pattern).
+  export CC_BACKLOG_KICK=off
+  export CC_BACKLOG_KICK_MARKER="$BATS_TEST_TMPDIR/.dispatch-kick"
+  export CC_BACKLOG_KICK_BIN="$BATS_TEST_TMPDIR/no-such-dispatch"
 
   # A FAKE DEPLOY LAYER with the real production shape: bin/ is the checkout, live/ holds per-file
   # symlinks into it. Copies rather than links to the real bin/, so the link SHAPE under test is the
