@@ -86,6 +86,166 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-31 — drain recycle #263: method 235 — A RESTATED ENUMERATION HAS A POPULATION, AND
+  "I FIXED BOTH COPIES" IS A COMPLETENESS CLAIM NOBODY COUNTS. COUNT THE HOLDERS — AND THE ONE
+  MOST LIKELY TO BE MISSED IS THE DETECTOR, BECAUSE IT IS NOT ON THE PATH THAT PLACES THE FILE.**
+  🚨 **THE FINDING, AND IT IS MY PREDECESSOR'S OWN LESSON LANDING ONE FILE FURTHER ON.** #262's
+  transferable sentence was *"when you fix a selector, ask WHO ELSE HOLDS A COPY OF IT — then write
+  an arm that DERIVES one side from the other."* It asked, found `install.sh` and
+  `scripts/deploy-parity-assert.sh`, made them agree on the `bin/` families, and pinned the pair
+  with a derived arm. **The question was right and the ANSWER WAS SHORT BY ONE.** A third file
+  holds the same enumeration: `scripts/deploy-link-parity.sh`, whose forward walk read
+  `for f in "$REPO"/bin/cc-*` while the comment DIRECTLY ABOVE IT calls install.sh *"the map of
+  record"*. **A file that names its own source of truth and then restates it by hand is the exact
+  shape that drifts, and saying so in a comment is not a check.**
+  🚨 **MEASURED BY EXECUTION, NOT BY READING.** `probe263-blind.sh` EXTRACTS that loop header
+  (uniqueness asserted first at rc 9), runs it against the real checkout, and counts what it
+  visits: **78 of 78 `bin/cc-*`, 0 of 2 `bin/desk-*`, 0 of 1 `bin/ms365-*`** at
+  2026-08-31T01:39:00Z. Those three files get **no `check_one` at all**. Five predictions written
+  before the run, all five exact — including a NON-VACUITY arm asserting the unvisited classes are
+  non-empty on trunk, because a walk that visits none of an EMPTY class proves nothing (memory:
+  `sibling-guard-makes-the-fixture-vacuous`).
+  🚨 **AND THE CLASS IT CANNOT SEE IS THE ONE ITS OWN FOUNDING SCAR CREATED.** This leg exists for
+  exactly one failure, named in its header at `:8-9`: *"scripts/desk-arm-live.sh was in the checkout
+  and in the ff, but ~/.claude/scripts/desk-arm-live.sh did not exist."* The `desk-*` family was
+  added to install.sh because `desk-register` was absent while the live `/desk` command invoked it
+  (`install.sh:800`). **The detector whose job is a missing link was never taught the family that a
+  missing link created.**
+  🚨 **THE PART THAT MAKES IT MORE THAN TIDINESS: `~/.claude/bin/ms365-reply-splice.py` IS STILL
+  ABSENT.** Measured 2026-08-31T01:39:00Z — two hours after #262 fixed its source. #262 correctly
+  declined to close row `48f01c02cf09` on the ground that *"the link does not exist yet"*, and it is
+  still right. **The reason nothing has REPORTED that absence is that the one leg whose job is to
+  report it was structurally unable to look.** A source fix and a live file are two events, and the
+  instrument that would have told anybody which one had happened was blind to the whole family.
+  ⚠️ **HONEST LIMIT, STATED RATHER THAN HIDDEN, AND IT IS THE HALF A LESSER ENTRY WOULD DROP: THIS
+  IS A REPORTER, NOT A GATE.** `deploy-link-parity.sh` has **ZERO execution sites** in `scripts/`,
+  `bin/`, `hooks/`, `launchd/` or `settings.json` — `deploy-parity-assert.sh:660` already records
+  that census in its own words — so its verdict has never once reached the live layer. **My change
+  therefore cannot turn any land red, and it cannot make anything run.** It makes the correct
+  reporter non-blind. That is worth doing and it is not worth overstating (memory:
+  `detector-with-no-owner-is-not-an-actuator`).
+  ✅ **PINNED BY A DERIVED ARM** in `tests/ms365-reply-splice.bats` (**17 → 18**), built to arm D's
+  shape: it reads the families out of install.sh's OWN loop header rather than naming them, asserts
+  the forward walk is **ONE line** before reading it (so a walk since split in two cannot hide half
+  its families in the half nobody reads), and carries a non-vacuity floor — at least two families
+  derived, `cc-*` present — so it cannot pass over an empty derivation.
+  ✅ **RED-PROVED AGAINST A PREDICTION WRITTEN FIRST AND ENFORCED AT rc 93.** Pre-fix: **exactly 1
+  `not ok`, BY NAME**, with all **17** incumbents green — attribution, not a count, because a red
+  count says a suite noticed and only a name says which arm did (#244). Post-fix: **18 ok / 0 not
+  ok / 0 skip, plan `1..18`**. Foreground draw before the land: **2 of 2 suites, 59 ok, 0 not ok, 0
+  NO-PLAN, terminator asserted**, 13 s at load 56–59 — `deploy-link-parity` **41** and
+  `ms365-reply-splice` **18**. ⚠️ **Take your own suite counts; `deploy-link-parity` at 41 is not in
+  the inherited table at all.**
+
+  🚨 **THE SECOND FINDING, DELIBERATELY NOT FIXED, AND THE REASON IS METHOD 213.** The same
+  restatement excludes an entire live class: **top-level `scripts/*.py`**. `install.sh:564` globs
+  `scripts/*.sh`; the parity assert has `scripts/*/*) want=0` and `scripts/*.sh) want=1`, so a
+  top-level `.py` matches **neither arm** and falls to `*) want=0` — scored NOT-EXPECTED-LIVE,
+  silently. Measured partition at 2026-08-31T01:34:05Z: **184 of 184** top-level `scripts/*.sh` are
+  LIVE; **1 of 25** top-level `scripts/*.py` is. The POS control is what makes that zero mean
+  something — the same liveness test reads 184/184 on the sibling class, so it is not a mute column.
+  ⚠️ **AND MY OWN PREDICTION WAS REFUSED HERE, WHICH IS WHERE THE REST OF IT CAME FROM.** I
+  predicted ZERO of the class would be live; the rc-93 gate refused at ONE. `scripts/cloud-create-api.py`
+  is a live symlink into the checkout that **NONE of the three files names** — created
+  2026-08-10, claimed by no installer, no assert arm and no walk. It is invisible to the ORPHAN
+  sweep (`[ -e "$_l" ] && continue` — a link that RESOLVES is never claimed) and to the STRAY sweep
+  (`[ -L "$f" ] && continue` — symlinks are skipped). **So there is no deletion hazard, and also no
+  mechanism that would recreate it.**
+  🚨 **WHY I DID NOT WIDEN THE DEPLOY, AND THIS IS METHOD 213 PAYING FOR THE FIFTH TIME: A LEAD HAS
+  A TARGET AND A REASON — RUN THE REASON.** The reason to deploy the class would be *"consumers
+  break"*. I ran it and it is **REFUTED**. My first consumer census reported `bats-assert-liveness.py`
+  with **40 consumers** including `scripts/ship-land.sh` — an alarm-shaped number — and reading the
+  sites dissolved it: `ship-land.sh:2974` uses `${SHIP_LAND_DEAD_LINT:-scripts/bats-assert-liveness.py}`,
+  a **repo-relative** path; `bats-shellcheck-lint.sh:54` and `bin/it2-kitty:557` are **COMMENTS**;
+  the rest are tests. **My grep counted the documentation, which is #245's fault in a new costume.**
+  The one live consumer worth testing I tested by **EXECUTION**: `bin/cc-cloud` resolves `$ROOT` at
+  `:206` through its OWN symlink back to the checkout, so `$ROOT/scripts/cloud-inbox.py` lands in
+  the checkout — `cc-cloud inbox --help` from the LIVE path returns **rc 0 with real usage**.
+  **The class is unreachable AND currently inert. Widening a deploy surface by 24 symlinks against
+  no measured harm is the wrong trade, and the finding is the enumeration, not the files.**
+  ⚠️ **NAMED FOR WHOEVER WANTS IT: `scripts/*.py`, `hooks/*.py`, `skills/*/*`, `agents/`, top-level
+  `lib/` and `vendor/` are the remaining unpinned pairs — and after today they are unpinned
+  TRIPLES.** #262 called this the cheapest item on its list and it still is; the arm above is the
+  worked example, and it is about a dozen lines per class.
+
+  🚨 **LEAD 0 — THE `master-operator-gated` RE-VALIDATION: I RE-RAN FOUR AND CLOSED ZERO, AND THE
+  ZERO IS THE RESULT.** `screen263-gated.py` against my own fresh board: population **141 blocked**
+  (was 144; #262's three closes landed), POS control `85fc4f3216a7` lighting **6** classes, MUTE 0,
+  NEG 0. Distribution: **3 rows light 3 classes, 11 light 2, 45 light 1, and 82 light NOTHING
+  CHECKABLE AT ALL.** I re-ran the cited evidence of four by RUNNING it (`revalidate263.sh`, POS and
+  NEG controls on the settings grep) and **all four claims HOLD**: `11719755e13d`
+  (`~/.claude-next/hooks` still a real directory), `296cc04bc3fd` (`subagent-stop` registered in 0),
+  `504d0bc2fe50` (`read-before-write-parity` sourced by 0, shim still tracked on trunk).
+  🚨 **AND THE REFINEMENT THAT EXPLAINS THE DIFFERENCE FROM #262, WHICH IS THE TRANSFERABLE HALF:
+  A STATE CLAIM'S HALF-LIFE IS SET BY WHO OWNS THE STATE.** #262 closed three of four; I closed zero
+  of four. **That is not a rate, it is a partition.** #262's three all cited state the AGENTS churn —
+  the chain's own succession path, files present in a checkout, a live hook's content — which moves
+  every few hours. Mine all cite state only the OPERATOR can change: an un-run migration, an
+  unregistered hook, an unarmed shim. **Those do not decay; they stay true until somebody acts.**
+  `screen262-gated.py` ranks by how much falsifiable state a row cites, and the column it does not
+  have is **WHO WRITES THAT STATE**. Add it before spending another sweep: rank agent-owned state
+  first, and expect operator-owned rows to hold.
+  ⚠️ **TWO INSTRUMENT NOTES FROM THAT SWEEP, BOTH CAUGHT BY A CONTROL RATHER THAN A HUNCH.** (1) The
+  rows scope themselves to *"ZERO of the 5 config dirs"* / *"ALL FIVE settings.json"*, and **only 2
+  of those 5 exist today** (`.claude`, `.claude-next`; `.claude-next2/3/4` are ABSENT). My POS
+  control read 2, which is what surfaced it. **The conclusions are unaffected, but the SCOPE
+  sentence is stale and the claim is now quantified over a population 60% smaller than when filed**
+  (memory: `zero-claim-must-name-its-excluded-strata`). (2) `11719755e13d` cites *"55 entries"* and I
+  first read 53 — **not drift**: the row quoted `ls -ld`'s second column, which is a HARD-LINK
+  COUNT, and I had counted files. **Two different quantities wearing one word.** ⚠️ Separately,
+  `b95fd5f424a2` says MEMORY.md is *"21KB against a 24.4KB read limit"*; measured now it is **24,983
+  bytes against 24,985.6** — **3 bytes under**. Its number is stale in the WORSE direction and its
+  remedy stands.
+
+  🚨 **THE LANE — AND A `skip` IS NOT A ZERO.** Open ledger from the worktree at 01:41Z read
+  `RUNG=🔧 DIRTY=1 DIRTY_N=2 LIVE_SRC=skip LIVE_LAG=0 LIVE_ADDS=0 MIG_FAILED=0 GATE=stale`.
+  🚨 **`compute_live_layer()` runs ONLY on the ✅-eligible path, so that `LIVE_LAG=0` is an ABSENCE
+  OF MEASUREMENT on a dirty tree, not a level lane** (#254's lesson, and it is the half people get
+  wrong). **The real reading is the one taken AFTER the land.** `GATE=stale` at every moment — the
+  **fifty-fourth and fifty-fifth** consecutive, and NOT mine to drive: only the background
+  `postland-verify` stamp moves that marker.
+  🆕 ⚠️ **THE STORE THAT MOVED, AND I NEARLY REPORTED IT AS AN INSTRUMENT FAULT.** My opening script
+  read the postland denominator at **548** (01:29:17Z) and the census read **2,796** seventy-nine
+  seconds later. `probe263-store.sh` ran BOTH spellings against the SAME directory back to back —
+  `find|wc -l` and `find|grep -c .` — plus a depth-1 column and a mute control on a bogus dir. They
+  **AGREE at 2,796**, so the instrument is exonerated and the 548 was a genuine store moment: a
+  **5.1x recovery inside 79 seconds**, the fastest in a series that has run 5.2x and 5.3x both ways.
+  **RED pages read 0 at BOTH denominators — the 193rd, 194th and 195th consecutive zero. Report the
+  zero WITH its denominator AND its moment, every single time.**
+  🆕 ⚠️ **postland STAMPS 520 at my open — the store MOVED off 519**, where it had sat across all
+  three of #261's moments and all three of #262's. **State the moments; draw no conclusion about the
+  window** (#245's scar is exactly this shape). `pages` read **2,327 / 96**; inbox-guard `.escalated`
+  **434 / 434**, unchanged from #262's three readings, and note both columns are ONE number, not a
+  ratio.
+  🆕 **THE GAP AND THE BOARD.** #262's floor (01:20:10Z) → my open (01:30:36Z), **10 m 26 s**: ZERO
+  arrivals, ZERO departures, ZERO transitions, `claimed` set identical at both ends
+  (`0c8b39b67665`, `70ed289c10fb` — both on the do-not-touch list; report their status, do not work
+  them). Open board 01:30:36Z: **340 open / 216 blocked / 2 claimed / 2,351 done**, 556 combined,
+  2,909 rows, **both partitions asserted** (`open + blocked == combined` AND `allids == allrows`).
+  ⚠️ **The doc itself measured 2,422,242 chars / 28,195 lines at my open by python `len()` — far
+  above #262's close reading, so siblings HAVE landed. Do not assert your open length against an
+  inherited number; take it yourself.**
+  🚨 **THE N-2 HAZARD FIRED ONCE, IN THE PLACE THE BRIEF PREDICTS, AND THE TWO ARRIVED `.py` CLONES
+  WERE CLEAN.** `gap263.sh` arrived globbing `allids.261*.txt` with a header naming #261 — my
+  GRANDPARENT — and I repaired both by hand. **But `markers263.py` and `splice263.py` arrived
+  correctly renumbered**: `SRC` and `POS` agreeing and both pointing at MY brief, `DST` at my
+  successor's, and zero `sha[0-9]` hits. #262 received a byte-copy and warned that a rename does not
+  imply a renumber; mine did. **Twenty-second consecutive link with ZERO prose corrupted** across
+  eight clones, every diff read line by line: `board`/`census`/`poll` one comment line each,
+  `linkbody` two paths, `insert` six lines including the `mine == 263` assertion, `verify` four,
+  `suites` seven.
+  ✅ **Four kitty checks passed in my first two tool calls** — `cc-in-kitty` rc 0, `KITTY_WINDOW_ID`
+  **27**, the id-keyed query returning EXACTLY ONE object with a bogus-id NEG control at 0, and
+  `cc-notify --self` printing 27. The `qos-rewrite` diff was rc 0 / 0 bytes — heredocs safe, the
+  **143rd** consecutive clean. Mailbox `~/.claude/mailbox/27.md` unchanged at 4,059 bytes / 1 line.
+  🚨 **THREE rc-93 REFUSALS THIS LINK AND EVERY ONE PRODUCED THE FINDING RATHER THAN COSTING ME
+  ONE.** The scripts-py probe refused on "zero of the class is live" and handed me `cloud-create-api.py`;
+  the consumer probe refused on "install.sh names it" and proved the third file was unattributed;
+  the third-file probe refused on "the pin is blind" and the refusal was MY OWN GREP counting a
+  COMMENT — `tests/ms365-reply-splice.bats:214` names all three deploy files in prose while the arm
+  beside it covered two. **The comment recording the drift sat inside the suite whose arm did not
+  prevent it.** That is #262's part three, proven from the inside, and it is why this link's remedy
+  is a derived assertion and not another paragraph.**
 - **2026-08-31 — drain recycle #262: method 234 — A CONVERGENCE ITEM IS A CLAIM THAT SOME
   PRODUCER WILL EVENTUALLY RUN. NAME THE PRODUCER, THEN ASK WHETHER ITS SELECTOR CAN EVER
   CHOOSE YOUR FILE.**
