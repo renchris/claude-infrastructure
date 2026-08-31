@@ -297,7 +297,23 @@ done
 command -v jq >/dev/null || { echo "cc-blockers: jq required" >&2; exit 2; }
 
 # ── LAND-PIPELINE alarms ─────────────────────────────────────────────────────────────────────────
-mtime() { stat -f %m "$1" 2>/dev/null || true; }   # BSD stat; empty ⇒ sensor unreadable ⇒ fail open
+# mtime, epoch seconds; empty ⇒ sensor unreadable ⇒ fail open.
+# 🚨 THE OUTPUT IS THE VERDICT, NEVER THE EXIT CODE, AND THAT IS WHAT KEEPS THE FAIL-OPEN REAL.
+# This was `stat -f %m "$1" 2>/dev/null || true`, whose comment already stated the contract it could
+# not keep off BSD: GNU `-f` is --file-system, so `%m` is read as a FILENAME and stat writes the
+# path's filesystem block to STDOUT before exiting 1. The result is NON-EMPTY, so "empty ⇒
+# unreadable ⇒ fail open" never fires and a multi-line block flows into the age arithmetic instead.
+# A fail-open guard that cannot reach its own open state is worse than no guard.
+# MEASURED 2026-08-31 (BACKLOG_DRAIN_24_7 off-box cause census). Same generator as
+# scripts/land-lock.sh's stat_field and bin/cc-reaper's file_mtime_r; GNU first for the reason
+# scripts/autonomy-sweep.sh:213 gives — BSD stat has no `-c`, so it cannot half-succeed.
+mtime() {
+  local m
+  m="$(stat -c %Y "$1" 2>/dev/null)"
+  case "$m" in ''|*[!0-9]*) m="$(stat -f %m "$1" 2>/dev/null)" ;; esac
+  case "$m" in ''|*[!0-9]*) return 0 ;; esac      # unreadable ⇒ EMPTY ⇒ fail open, as documented
+  printf '%s' "$m"
+}
 hrs()   { printf '%s' "$(( ($1 + 1800) / 3600 ))"; }
 
 # Is a verification run IN PROGRESS right now? Oracle copied from postland-verify.sh:try_acquire —

@@ -720,6 +720,26 @@ owned_wait_fixture() {
 # the worker is very much alive. Deliberately NOT the argv shape owned_wait_fixture builds: a fixture
 # that named the path would be absolved by S1 and could never discriminate S1b
 # (memory fixture-shape-parity-with-real-producer). Sets OWNED_PID.
+# ── WHERE lsof LIVES IS A CLAIM ABOUT A DISTRIBUTION, NOT ABOUT A TOOL ───────────────────────────
+# Both fixtures below OBSERVE their own subject process through lsof, and both hardcoded
+# `/usr/sbin/lsof` — the macOS path. Debian and Ubuntu ship it at `/usr/bin/lsof`, so off-box the
+# barrier was unsatisfiable: the probe never saw the pid, and every case behind it died in the
+# fixture with `fixture broken` rather than with a verdict. MEASURED 2026-08-31 (BACKLOG_DRAIN_24_7
+# off-box cause census): 14 of 147 red on pristine trunk, 10 in cwd_wait_fixture and 4 in
+# foreign_cwd_fixture. Same generator as the `date`/`stat`/`sed` flag dialects cured alongside it,
+# in its PATH limb.
+# macOS first, so that box resolves exactly as it does today. 🚨 PATH IS DELIBERATELY NOT CONSULTED:
+# this resolves the OBSERVER of the fixture, and scripts/offbox-run.sh's own header records what a
+# PATH-shadowed observer costs (its `bats` walk, which had to skip both the live layer and bats'
+# libexec). Fails loudly rather than returning an empty word that would run the `-a` flags as a
+# command — a fixture that cannot observe must say so, not abstain into a green.
+fixture_lsof() {
+  local c
+  for c in /usr/sbin/lsof /usr/bin/lsof; do [ -x "$c" ] && { printf '%s' "$c"; return 0; }; done
+  echo "fixture_lsof: no lsof at /usr/sbin or /usr/bin — this fixture cannot observe" >&2
+  return 1
+}
+
 cwd_wait_fixture() {
   local wt="$CC_BACKLOG_WT_ROOT/wt-$1" sub="${2:-}" dir deadline
   # Restore the REAL probe that reap_env stubs out: this is the one fixture whose subject is genuine
@@ -760,7 +780,7 @@ cwd_wait_fixture() {
   # A green run still exits on the FIRST observation; only a starved box uses the tail.
   deadline=$(( SECONDS + FIXTURE_BARRIER_S ))
   while [ "$SECONDS" -lt "$deadline" ]; do
-    /usr/sbin/lsof -a -d cwd -w -t -- "$dir" 2>/dev/null | grep -q "^$OWNED_PID$" && return 0
+    "$(fixture_lsof)" -a -d cwd -w -t -- "$dir" 2>/dev/null | grep -q "^$OWNED_PID$" && return 0
     sleep 0.2
   done
   echo "fixture broken: pid $OWNED_PID never became observable with cwd $dir" >&2
@@ -2417,7 +2437,7 @@ foreign_cwd_fixture() {
   FOREIGN_PID=""
   deadline=$(( SECONDS + FIXTURE_BARRIER_S ))
   while [ "$SECONDS" -lt "$deadline" ]; do
-    FOREIGN_PID="$(/usr/sbin/lsof -a -d cwd -w -t -- "$wt" 2>/dev/null | while read -r p; do
+    FOREIGN_PID="$("$(fixture_lsof)" -a -d cwd -w -t -- "$wt" 2>/dev/null | while read -r p; do
                      [ "$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')" = "1" ] && echo "$p"; done | head -1)"
     [ -n "$FOREIGN_PID" ] && return 0
     sleep 0.2

@@ -795,11 +795,19 @@ emit_recycle_event() { # $1=class $2=engaged (1|0|"") $3=pane $4=detail → alwa
   return 0
 }
 
+# 🚨 THE EMPTY RETURN MEANS "UNPARSEABLE", AND ONLY BSD COULD EVER PARSE. `date -j -f` is BSD-only;
+# GNU has no `-j` and reads the stamp with `-d`. With only the BSD arm this returned "" for every
+# well-formed pair off BSD — and "" is this function's documented UNMEASURED signal, so a missing
+# DIALECT was recorded as a missing MEASUREMENT and the fire→engaged latency was silently never
+# computed. MEASURED 2026-08-31 (BACKLOG_DRAIN_24_7 off-box cause census): 3 of 15 red on pristine
+# trunk in a cloud VM, including R9's own positive control (a genuine zero-second delta must return
+# "0" so that empty can only mean UNMEASURED — the exact distinction the missing arm destroyed).
+# BSD first: GNU's `-j` failure is clean, so the operator's box stays on the path it has today.
 _iso_delta_s() { # $1=start $2=end → seconds, or "" when unparseable
   local s e
   [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 0
-  s=$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s 2>/dev/null) || return 0
-  e=$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$2" +%s 2>/dev/null) || return 0
+  s=$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s 2>/dev/null || date -u -d "$1" +%s 2>/dev/null) || return 0
+  e=$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$2" +%s 2>/dev/null || date -u -d "$2" +%s 2>/dev/null) || return 0
   [ -n "$s" ] && [ -n "$e" ] || return 0
   printf '%s' "$((e - s))"
 }

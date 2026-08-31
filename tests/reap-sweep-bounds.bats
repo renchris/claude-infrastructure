@@ -67,7 +67,12 @@ EOF
   # anchored to NOW, not to a fixed literal. A hardcoded past date makes the stamp read `none`, the
   # belt refuses, and every test below would silently measure a refusal instead of a bound.
   NOW_S="$(date +%s)"
-  FIRED_ISO="$(date -u -r "$NOW_S" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)"
+  # BSD renders an epoch with `date -r`; GNU reads `-r` as a REFERENCE FILE and needs `-d @<epoch>`.
+  # BSD first — GNU's failure on a bare number is clean ("No such file or directory"), so the
+  # operator's box never evaluates the second arm. MEASURED 2026-08-31 (BACKLOG_DRAIN_24_7 off-box
+  # cause census): with only the BSD arm this is empty on Linux, and because it runs in `setup` it
+  # took ALL 14 cases of this suite down with `fixture broken`, on pristine trunk.
+  FIRED_ISO="$(date -u -r "$NOW_S" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -d "@$NOW_S" '+%Y-%m-%dT%H:%M:%SZ')"
   STARTED_MS="$(( NOW_S * 1000 ))"
 
   # Fast (healthy) classify: one reapable candidate.
@@ -79,7 +84,14 @@ cat <<'JSON'
   "work_landed":"yes","session_id":"s1","pid":1,"lstart":"x","startedAt":STARTED}]
 JSON
 EOF
-  sed -i '' -e "s#CWD#$D/clean#" -e "s#STARTED#$STARTED_MS#" "$D/bin/classify"
+  # `sed -i ''` is the BSD spelling — BSD REQUIRES a backup suffix and takes `''` as "none", while
+  # GNU takes the same `''` as the next FILENAME and dies `sed: can't read : No such file or
+  # directory`, status 2. `-i.bak` is the one spelling both accept. MEASURED 2026-08-31
+  # (BACKLOG_DRAIN_24_7 off-box cause census): this line is in `setup`, so it took all 14 cases of
+  # this suite down on pristine trunk, and it did so BEHIND the `date -u -r` fault above — two
+  # dialects in one setup, the second invisible until the first was cured.
+  sed -i.bak -e "s#CWD#$D/clean#" -e "s#STARTED#$STARTED_MS#" "$D/bin/classify"
+  rm -f "$D/bin/classify.bak"
   chmod +x "$D/bin/teardown" "$D/bin/checkpoint" "$D/bin/classify"
 
   export CC_REAPER_TEARDOWN_BIN="$D/bin/teardown"
