@@ -476,6 +476,30 @@ if $IS_GLOBAL; then
   # /tmp cache would be split-brain. Verified by scripts/deploy-parity-assert.sh.
   link_file "$REPO_DIR/bin/claude-accounts" "$HOME/bin/claude-accounts"
 
+  # dia-cdp-launch.sh — SYMLINKED, and it is the FIFTH instance of the defect this block already
+  # records four times: a tool that IS live at ~/bin, IS tracked, and appears in NEITHER the copy
+  # list above nor any link site, so nothing reconciles it in either direction and it drifts
+  # silently. The four already named here are claude-bump-models and screenshot-to-clipboard.sh
+  # (audit 02, 2026-07-25), reso-resume-one, and reso-keepalive (2026-08-12, backlog 8550b6129d9c)
+  # — each found by hand, each fixed one at a time, and nothing ever generalised the check. It is
+  # generalised now: tests/deploy-parity.bats derives this list from these very loops and requires
+  # every ~/bin tool an executable surface names to be claimed here.
+  #
+  # MEASURED 2026-08-31: ~/bin/dia-cdp-launch.sh was a REAL FILE holding revision c8149d3c1
+  # (2026-07-30) while the checkout carried 3dcac1f32 — "an early-exit pipe consumer reads FALSE on
+  # a match, and 22 sites were doing it". So the deployed copy still ran the drained construct at
+  # its line 123, under its own `set -euo pipefail` at :37: on a MATCH the early-exiting consumer
+  # takes SIGPIPE, pipefail promotes it, and the `if` reads FALSE — the health check reports the
+  # LaunchAgent NOT loaded precisely when it IS. reso-keepalive's note above describes the same
+  # shape in the same words: the landed fix unreachable, the buggy original what actually ran.
+  #
+  # LINK, not copy, and the file itself asks for it: bin/dia-cdp-launch.sh:46 says "Sourced through
+  # $0's PHYSICAL location: ~/bin holds per-file SYMLINKS into the checkout" and carries a readlink
+  # preamble to resolve itself. It was written expecting this deploy shape and was not getting it.
+  # Its consumers reference the ~/bin path absolutely (launchd/com.chrisren.dia-cdp.plist.disabled
+  # and skills/dia-agent/SKILL.md), so ~/bin stays the destination.
+  link_file "$REPO_DIR/bin/dia-cdp-launch.sh" "$HOME/bin/dia-cdp-launch.sh"
+
   # reso-resume-one — SYMLINKED for the same reason, arrived at the hard way. It lived as an
   # UNTRACKED file at ~/.reso/bin/ while boot-resume-launch.sh:89, boot-resume.sh, lr-fire-resume.sh
   # and the resume-sessions runbook all called it, so it sat outside the ship gate, outside the

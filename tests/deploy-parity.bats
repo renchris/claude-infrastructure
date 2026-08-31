@@ -1511,3 +1511,122 @@ _classcov_extract() {  # $1=subject  $2=output case-block file — anchors asser
   # …and now the same target falls through to the reasonless default.
   [ "$(bash "$BATS_TEST_TMPDIR/seeded2.sh" bin/kitty-pane-menu </dev/null | grep -c '__DEFAULT__')" -eq 1 ]
 }
+
+# --- ~/bin CLAIM COVERAGE ------------------------------------------------------------------------
+#
+# The two arms above ask whether the AUDITORS cover what install.sh deploys, and whether install.sh
+# is the only deployer. This asks the question those cannot: does install.sh's ~/bin list cover the
+# tools that EXECUTABLE SURFACES IN THIS REPO ACTUALLY NAME AT ~/bin?
+#
+# That gap has a measured history and install.sh's own comment above the list records TWO earlier
+# instances of it: claude-bump-models and screenshot-to-clipboard.sh "were in NEITHER this list nor
+# sync.sh's, so nothing reconciled them in either direction" (audit 02, 2026-07-25). A tool that no
+# list names is reconciled by nothing in either direction, so it drifts silently and forever — and
+# the deploy auditors cannot see it, because their ~/bin coverage is one hardcoded file
+# (deploy-link-parity.sh uses $BINDIR exactly once, for bin/claude-accounts) while the STRAY leg's
+# scope is the $CFG surfaces only (its own header, "STRAY SCOPE is the EXECUTED surfaces only").
+#
+# NEITHER SIDE IS WRITTEN DOWN HERE. The claim set comes out of install.sh's OWN `for tool in`
+# headers with their continuation lines joined and the word list TAKEN WHOLE — never filtered by a
+# prefix, which is the fault that once dropped screenshot-to-clipboard.sh from a census — with its
+# bin/<glob> classes expanded by BASH'S OWN PATHNAME EXPANSION in the real tree rather than matched
+# by eye. The referenced side comes out of the surfaces themselves.
+#
+# SCOPE IS STATED, because an unscoped population is a completeness claim nobody screened: bin/,
+# scripts/, hooks/, launchd/, install.sh and sync.sh — the surfaces that RUN a tool. A doc or a
+# skill that MENTIONS ~/bin/<x> is documentation, not a consumer; skills/browsermcp/SKILL.md
+# deliberately keeps a retired wrapper's config block as history and says so at its own line 8.
+_binclaim_build() {   # $1 = install.sh path, $2 = claims out, $3 = refs out
+  local ins="$1" claims="$2" refs="$3" root
+  root="$(dirname "$ins")"
+  : >"$claims"
+
+  # (a) every `for tool in …` header, continuation lines joined, word list taken WHOLE
+  awk '/^[[:space:]]*for[[:space:]]+tool[[:space:]]+in/ {
+         buf = $0
+         while (buf ~ /\\[[:space:]]*$/) {
+           sub(/\\[[:space:]]*$/, "", buf)
+           if ((getline nxt) <= 0) break
+           buf = buf " " nxt
+         }
+         print buf
+       }' "$ins" \
+    | sed -e 's/^[[:space:]]*for[[:space:]]*tool[[:space:]]*in[[:space:]]*//' -e 's/;[[:space:]]*do.*$//' \
+    | tr ' ' '\n' | grep -e . > "$claims.words"
+
+  # (b) classify: a glob class is EXPANDED in the real tree; a plain word is a literal claim
+  while IFS= read -r w; do
+    case "$w" in
+      *'*'*)
+        local pat="${w#*\"}"; pat="${pat#*/bin/}"
+        local f
+        for f in "$root"/bin/$pat; do
+          [ -e "$f" ] && basename "$f" >>"$claims"
+        done
+        ;;
+      '$'*|do|'') : ;;
+      *) printf '%s\n' "$w" >>"$claims" ;;
+    esac
+  done < "$claims.words"
+
+  # (c) explicit single-file sites naming $HOME/bin/<name>
+  grep -oE '\$HOME/bin/[A-Za-z0-9._-]+' "$ins" | sed 's|.*/bin/||' >>"$claims"
+  sort -u -o "$claims" "$claims"
+
+  # (d) the referenced side, comment lines stripped, EXECUTABLE SURFACES ONLY
+  ( cd "$root" && git grep -hnE '(~|\$HOME)/bin/[A-Za-z0-9._-]+' -- \
+        'bin/*' 'scripts/*' 'hooks/*' 'launchd/*' 'install.sh' 'sync.sh' 2>/dev/null ) \
+    | grep -vE '^[0-9]+:[[:space:]]*(#|//)' \
+    | grep -oE '(~|\$HOME)/bin/[A-Za-z0-9._-]+' | sed 's|.*/bin/||' | sort -u > "$refs"
+}
+
+@test "HOME/bin CLAIM COVERAGE: every HOME/bin tool an EXECUTABLE surface names is claimed by install.sh" {
+  INS="$REPO_ROOT/install.sh"
+  [ -f "$INS" ]
+  # ANCHOR NON-VACUITY: at least one `for tool in` header must exist, or the extractor is reading
+  # a spelling this file no longer uses and every assertion below passes over an empty claim set.
+  [ "$(grep -cE '^[[:space:]]*for[[:space:]]+tool[[:space:]]+in' "$INS")" -ge 1 ]
+
+  CLAIMS="$BATS_TEST_TMPDIR/claims.txt"
+  REFS="$BATS_TEST_TMPDIR/refs.txt"
+  _binclaim_build "$INS" "$CLAIMS" "$REFS"
+
+  # POS CONTROL — the glob classes must have EXPANDED. Held as literal strings the claim set is the
+  # 8 literals alone; expanded it is an order of magnitude larger. This is what makes bin/cc-* claim
+  # bin/cc-tlid, and without it a correctly-deployed tool reads as unclaimed.
+  [ "$(grep -c . "$CLAIMS")" -ge 20 ]
+  # POS CONTROL — the referenced side must be non-empty, or the scoping matched nothing at all.
+  [ "$(grep -c . "$REFS")" -ge 3 ]
+
+  UNCLAIMED="$BATS_TEST_TMPDIR/unclaimed.txt"
+  comm -23 "$REFS" "$CLAIMS" > "$UNCLAIMED"
+  [ "$(grep -c . "$UNCLAIMED")" -eq 0 ] || {
+    echo "HOME/bin tools an executable surface names that install.sh claims nowhere:"
+    cat "$UNCLAIMED"
+    echo "(nothing reconciles these in either direction — install.sh's own comment above the list"
+    echo " records the same defect for claude-bump-models and screenshot-to-clipboard.sh)"
+    false
+  }
+}
+
+@test "HOME/bin CLAIM COVERAGE fire test: a name install.sh cannot claim is reported unclaimed" {
+  # The arm above passes only because every referenced tool is claimed. This proves that is what it
+  # measures: a comm that silently returned empty would look identical to a tree with no gap.
+  INS="$REPO_ROOT/install.sh"
+  [ -f "$INS" ]
+  CLAIMS="$BATS_TEST_TMPDIR/claims2.txt"
+  REFS="$BATS_TEST_TMPDIR/refs2.txt"
+  _binclaim_build "$INS" "$CLAIMS" "$REFS"
+
+  # SEED a reference install.sh cannot possibly claim, through the SAME comparison.
+  SEEDED="$BATS_TEST_TMPDIR/refs2seeded.txt"
+  cat "$REFS" > "$SEEDED"
+  echo 'zzz-no-such-bin-tool' >> "$SEEDED"
+  sort -u -o "$SEEDED" "$SEEDED"
+  # asserted to ADD exactly one name, so a seed that was already present cannot pass vacuously
+  [ "$(( $(grep -c . "$SEEDED") - $(grep -c . "$REFS") ))" -eq 1 ]
+
+  OUT="$BATS_TEST_TMPDIR/unclaimed2.txt"
+  comm -23 "$SEEDED" "$CLAIMS" > "$OUT"
+  [ "$(grep -cxF 'zzz-no-such-bin-tool' "$OUT")" -eq 1 ]
+}
