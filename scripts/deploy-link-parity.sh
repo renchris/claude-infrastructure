@@ -43,6 +43,14 @@
 # names a witness that must still exist and still mention it, so a dissolved reason FAILS LOUD
 # rather than silently exempting (memory discovery-critic-premise-goes-stale).
 #
+# AND THE THIRD STATE, WHICH IS NEITHER (2026-08-31) — UNCONVERGED: a live real file whose bytes are
+# in no INDEX but ARE in the TRUNK REF's tree. The two states above are asked of one checkout, and a
+# checkout is not the world: the live symlink source sits behind origin/main for exactly as long as
+# a land goes unconverged, so a file landed this morning reads as "in NO checkout — unversioned".
+# It is versioned; the reader is behind. Separated because the two states take OPPOSITE remedies —
+# a stray wants adopting or deleting, an unconverged file wants the converger and must NOT be
+# cp'd/added into a checkout that already has it on trunk. See content_is_on_trunk().
+#
 # STRAY SCOPE is the EXECUTED surfaces only — bin, hooks, hooks/lib, scripts, scripts/lib,
 # scripts/limit-recover, lib. Measured 2026-08-08, not assumed:
 #   · SYMLINKS are excluded entirely. Links into this checkout are the forward walk's and
@@ -74,8 +82,8 @@
 #        · 3 = missing prerequisite.
 #
 # Covered by tests/deploy-link-parity.bats, whose fixtures drive it via CC_LINKPARITY_REPO /
-# CC_LINKPARITY_CONFIG / CC_LINKPARITY_BINDIR / CC_LINKPARITY_PENDING / CC_LINKPARITY_MANIFEST
-# (fully hermetic — no case reads the real ~/.claude or the real checkout).
+# CC_LINKPARITY_CONFIG / CC_LINKPARITY_BINDIR / CC_LINKPARITY_PENDING / CC_LINKPARITY_MANIFEST /
+# CC_LINKPARITY_TRUNK (fully hermetic — no case reads the real ~/.claude or the real checkout).
 set -uo pipefail
 
 ALL=false
@@ -279,6 +287,58 @@ content_is_tracked() {  # $1 = absolute live file → 0 if its bytes are in a tr
   [ "$n" -gt 0 ]
 }
 
+# --- UNCONVERGED: the bytes ARE versioned; this checkout simply has not caught up ----------------
+#
+# STRAY's message is ABSOLUTE — "in NO checkout — unversioned, invisible to review" — but its
+# evidence is `git ls-files -s` over ONE checkout, and that reference MOVES. The live symlink source
+# is the shared checkout, and it sits behind origin/main for exactly as long as a land goes
+# unconverged. Measured 2026-08-31T22:04Z: the shared checkout was SIX commits behind origin/main,
+# and skills/outbound-drafting/SKILL.md — landed on trunk that morning — was reported STRAY, its
+# blob absent from the index (2,248 objects) and present in origin/main's tree (2,249).
+#
+# Two costs, and the second is the worse one. The verdict is false; and the printed Fix reads
+# `cp … && git -C <checkout> add …`, i.e. stage a file that is ALREADY on trunk, into the shared
+# checkout this repo's own .claude/CLAUDE.md opens by forbidding anyone to commit in. A remedy
+# computed from an incomplete classification does not merely mislabel — it prescribes.
+#
+# So ask the REF before convicting. No git, no resolvable ref, or an empty tree falls through to
+# STRAY, which is the safe direction: this clause can only ever RE-LABEL a finding, never remove
+# one. The count and the exit status are deliberately unchanged — a file whose bytes reach the live
+# layer without a link is still drift, and laundering it to clean would be a weaker gate wearing a
+# fix's clothes. What changes is which of two opposite remedies gets printed.
+TRUNK_REF="${CC_LINKPARITY_TRUNK:-origin/main}"
+TRUNK_SET=""
+TRUNK_MODE=""
+_load_trunk() {
+  [ -n "$TRUNK_MODE" ] && return 0
+  TRUNK_MODE="none"
+  # Only the git path has a ref at all. The hermetic no-git branch hashes bare content, and a git
+  # blob hash can never equal a bare digest — mixing them is the exact fault the header names.
+  [ "$TRACKED_MODE" = "git" ] || return 0
+  git -C "$REPO" rev-parse --verify --quiet "$TRUNK_REF^{commit}" >/dev/null 2>&1 || return 0
+  TRUNK_SET="$(git -C "$REPO" ls-tree -r "$TRUNK_REF" 2>/dev/null | awk '{print $3}')"
+  [ -n "$TRUNK_SET" ] || return 0
+  TRUNK_MODE="git"
+  return 0
+}
+
+content_is_on_trunk() {  # $1 = absolute live file → 0 if its bytes are in $TRUNK_REF's tree
+  local h n
+  _load_tracked
+  [ "$TRACKED_MODE" = "git" ] || return 1
+  _load_trunk
+  [ "$TRUNK_MODE" = "git" ] || return 1
+  h="$(git -C "$REPO" hash-object -- "$1" 2>/dev/null)" || return 1
+  [ -n "$h" ] || return 1
+  # -c AND NEVER -q, for the measurement written out against content_is_tracked above: TRUNK_SET is
+  # one 40-char line per tracked object — 2,249 lines / ~92 KB on this repo today, already past the
+  # 64 KiB pipe buffer where a matching `grep -q` takes the producer down with SIGPIPE and pipefail
+  # returns the MATCH as false. Counting consumes the whole stream, so nothing can invert.
+  n="$(printf '%s\n' "$TRUNK_SET" | grep -cxF -- "$h" 2>/dev/null || true)"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  [ "$n" -gt 0 ]
+}
+
 # A declared row is honoured ONLY while its witness still exists AND still mentions the artifact.
 # Prints "OK<TAB>why" when live, "STALE<TAB>witness" when the reason has dissolved, nothing when no
 # row matches. The three outcomes are distinct on purpose: a row whose producer was renamed away must
@@ -345,8 +405,15 @@ sweep_strays() {  # $1 = live-relative directory
         findings=$((findings + 1))
         ;;
       *)
-        note "STRAY" "$rel" "live and executable, in NO checkout — unversioned, invisible to review"
-        fix "cp \"$CFG/$rel\" \"$REPO/$rel\" && git -C \"$REPO\" add \"$rel\"    # or rm it, or declare it in config/live-only.manifest"
+        if content_is_on_trunk "$f"; then
+          # Versioned after all — this checkout is just behind. Never print the cp/add remedy here:
+          # the file is already on the ref, and the checkout it names is the one nobody may commit in.
+          note "UNCONVERGED" "$rel" "bytes ARE on $TRUNK_REF — versioned, but this checkout has not converged"
+          fix "bash \"$REPO/scripts/deploy-live.sh\"    # already on $TRUNK_REF — converge; do NOT cp/add it into the checkout"
+        else
+          note "STRAY" "$rel" "live and executable, in NO checkout — unversioned, invisible to review"
+          fix "cp \"$CFG/$rel\" \"$REPO/$rel\" && git -C \"$REPO\" add \"$rel\"    # or rm it, or declare it in config/live-only.manifest"
+        fi
         findings=$((findings + 1))
         ;;
     esac
