@@ -622,3 +622,34 @@ EOF
     [[ "$output" == *"cc-offload $v"* ]] || false
   done
 }
+
+# api_fire <task text> → run `up --via api` against a create stub that always succeeds. Shared by
+# every case that needs a complete API fire rather than one of its refusals.
+api_fire() {
+  echo "$1" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git 2>/dev/null
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+import sys
+print(" ".join(sys.argv[1:]), file=sys.stderr)
+print("session_apitest")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+}
+
+@test "a fire with NO pane and no --notify-back still fires — unset is fire-and-forget, never a crash" {
+  # `set -u` + a bare `${ITERM_SESSION_ID##*:}` made an unset variable FATAL, so `cc-offload up`
+  # died before the create on every launchd run of a desk-less fleet — the exact configuration
+  # bin/cc-dispatch:2783 supports (it passes --notify-back only when the desk ROLE file is
+  # non-empty). The degrade path three lines below that assignment could never be reached, and the
+  # whole suite was green ONLY because a developer's terminal exports the variable: 11 of 44 cases
+  # went red on any box without iTerm, for a reason none of them named.
+  unset ITERM_SESSION_ID
+  api_fire "brief"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"FIRE-AND-FORGET"* ]] || { echo "the unset-pane degrade never printed"; false; }
+  grep -q 'cc-notify --cloud session_apitest' "$CALLS" || false
+  ! grep -q 'declare .*--notify-back' "$CALLS" || false
+}
