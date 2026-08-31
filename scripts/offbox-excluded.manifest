@@ -287,3 +287,30 @@ tests/postland-verify-bisect-bound.bats
 # NOT a red — it named zero failing tests. It is here because a suite measured in TENS OF MINUTES
 # cannot be part of a per-commit second opinion, which is a statement about cost, not correctness.
 tests/postland-verify.bats
+# 2026-08-31, cloud VM (Ubuntu, ext4), BACKLOG_DRAIN_24_7 off-box cause census: notok=15 of 23.
+# ⚠️ THE ONLY ENTRY HERE ADDED WITH A VERIFIED CAUSE RATHER THAN A HINT, and the cause is the
+# SUBJECT, not the environment around it. ship-land.sh:1588 isolates the smoke's $HOME by APFS
+# clonefile — `cp -Rc`, named as the mechanism in its own header and "measured on this box, not
+# designed in the abstract". GNU coreutils `cp` has no `-c` at all: it exits 1 with
+# `cp: invalid option -- 'c'` before copying anything, and the filesystem here is ext4 regardless.
+# So on Linux the clone ALWAYS fails and the gate takes its documented fail-open path.
+# The split proves it is the clone and not the suite: every cell that needs a clone to SUCCEED is
+# red (a: 1,2,3,4,6 · b: 8,9,10,11 · c: 12,13,14,15,16) and every cell that asserts the FAIL-OPEN
+# or the refusal is green (d: 19 "FAIL OPEN when the isolation dir cannot be created", 20 "FAIL
+# OPEN when the APFS clone itself fails", 21 kill-switch, plus 17 the rm -rf name guard and 18 the
+# orphan reaper). The suite is CORRECT here — it is reporting, accurately, that a macOS-only
+# optimisation did not happen on a box that cannot perform it.
+# Not fixable off-box and deliberately not faked: a `cp -R` fallback would be a different mechanism
+# under the same assertions, i.e. a suite certifying a clone that never occurred.
+# DELETE THIS LINE when the isolation grows a non-APFS backend, and re-measure rather than assume.
+tests/gate-home-isolation.bats
+# ── NOT ADDED: tests/test-hermeticity-lint.bats — the census's one CUT, and it needs no line ─────
+# 2026-08-31, cloud VM, BACKLOG_DRAIN_24_7 off-box cause census: CUT at the 300s per-suite bound,
+# then run to completion unbounded in the same container — 82 ok, 0 not ok, rc 0, 502 s. GREEN
+# off-box; the cut is cost, not correctness. A line was drafted here on the reasoning that a cut
+# poisons the fold (`any cut ⇒ cut, never green`) and so withholds the partition's green from
+# everyone — and `offbox-partition.sh lint` REFUSED it: the suite is already in
+# host-suites.manifest, so it was never in the partition and its cut poisons nothing.
+# Recorded rather than deleted because it corrects the reading of the census itself: that run was
+# `offbox-run.sh suites` over a LAND's --direct selection, which is not the off-box partition, so
+# membership there implies nothing about membership here. The lint is what caught it.

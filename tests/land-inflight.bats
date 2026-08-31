@@ -80,6 +80,16 @@ write_marker() {
 # `env -i LC_ALL=C`, where the reader's "ambient" IS C, so a case written to exercise the ambient
 # dialect silently exercises the C one instead (and a hard-coded ambient record can then never
 # match). The stub branches on the LC_ALL *string*, so this needs no locale to be installed.
+#
+# 🚨 ITS STDOUT MUST BE READ SEPARATELY — `run --separate-stderr` AT ANY SITE THAT ASSERTS $output.
+# The line above is right that the STUB needs no locale installed, and that is why the trap is easy
+# to miss: it is BASH, not the stub, that objects. On a box where en_CA.UTF-8 is not GENERATED —
+# every stock container, and the off-box runner is one — bash prints
+# `bash: warning: setlocale: LC_ALL: cannot change locale (en_CA.UTF-8)` to stderr at startup, and
+# a plain `run` folds stderr into $output, so a prefix assertion matches the WARNING and not the
+# reading. MEASURED 2026-08-31 (BACKLOG_DRAIN_24_7, the off-box cause census): 1 of 9 red, and the
+# suite's own locale-independence claim is what made the cause invisible. Separating is right rather
+# than suppressing — the subject's real stderr stays readable in $stderr.
 read_live_as_session() { LC_ALL=en_CA.UTF-8 bash -c ". '$LIB'; land_inflight_live '$WT'"; }
 
 @test "REGRESSION: a land started under launchd is IN FLIGHT to a session reader (cross-locale)" {
@@ -90,9 +100,9 @@ read_live_as_session() { LC_ALL=en_CA.UTF-8 bash -c ". '$LIB'; land_inflight_liv
   /bin/sleep 30 & LIVE=$!
   write_marker launchd "$LIVE"
   grep -q 'lstart=Fri Aug 21 08:05:57' "$MARKER"      # the record really is in the C dialect…
-  run read_live_as_session                            # …read by a session-shaped (ambient) env
+  run --separate-stderr read_live_as_session           # …read by a session-shaped (ambient) env
   [ "$status" -eq 0 ]
-  [[ "$output" == "$LIVE "* ]]
+  [[ "$output" == "$LIVE "* ]]                        # $output is STDOUT only — see the helper
 }
 
 @test "the canonical rendering is the SAME string from a session and from launchd" {

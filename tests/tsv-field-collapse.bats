@@ -76,7 +76,23 @@ probe() {
 # \001 anyway, but for an unrelated reason (bash uses \001 as its internal CTLESC), and it is FALSE
 # in general: \037 splits correctly and preserves empties. bin/cc-board depends on exactly that.
 # Both facts are locked here because the doc's stated reason and its real reason differ.
-@test "mechanism: IFS=\$'\\001' does NOT split — bash's internal CTLESC, not a general rule" {
+# 🚨 AND THE CTLESC HALF IS ITSELF VERSION-BOUND — MEASURED, not assumed (2026-08-31,
+# BACKLOG_DRAIN_24_7 off-box cause census). The paragraph above says \001 does not split "because
+# bash uses \001 as its internal CTLESC". That is true of the bash this repo is written for — macOS
+# `/bin/bash` 3.2 — and FALSE of bash 5. Driven side by side on the same probe:
+#     bash 3.2  →  "x..y||"   nothing split at all, control bytes and all in $p
+#     bash 5.2.21 → "x||y"    splits, and preserves the empty cell — IDENTICAL to \037
+# So on bash 5 the \001 and \037 cells below are the same measurement, and the "not a general rule"
+# contrast this cell exists to draw does not exist at all. Pinning only the 3.2 answer made the
+# suite red on every bash-5 box (1 of 34 cells) AND, worse in the other direction, told a reader on
+# bash 5 that a run of \001 cannot shift their fields left, which is the exact wrong belief the
+# header says this section is here to prevent. Both answers are asserted, keyed on the probe's OWN
+# runtime rather than on uname: the version that matters is the one `probe` invokes.
+#
+# NOTHING IN PRODUCTION TURNS ON THIS. The convention's real sentinel is \037 (next cell,
+# "cc-board relies on this"), which splits identically under both — so this is a premise cell, and
+# recording that the premise is version-bound is strictly more than it said before.
+@test "mechanism: IFS=\$'\\001' — CTLESC on bash 3.2, an ordinary separator on bash 5" {
   # The separators are rendered as "." so the assertion is byte-accurate: \001 is invisible in a
   # terminal, and reading the raw output is how one concludes the field was "xy" when it is in fact
   # the WHOLE undivided line, control bytes and all.
@@ -84,8 +100,15 @@ probe() {
          IFS=$'\''\001'\'' read -r p q r < "$0.d"
          printf "%s|%s|%s" "${p//$'\''\001'\''/.}" "$q" "$r"'
   [ "$status" -eq 0 ]
-  # not "x||y", and not "xy||" either — nothing split at all.
-  [ "$output" = "x..y||" ]
+  # The probe runs `bash <script>`, so the deciding version is that bash's, never this shell's.
+  local pmaj; pmaj="$(bash -c 'printf %s "${BASH_VERSINFO[0]}"')"
+  if [ "$pmaj" -lt 4 ]; then
+    # not "x||y", and not "xy||" either — nothing split at all.
+    [ "$output" = "x..y||" ]
+  else
+    # splits like any other non-whitespace IFS byte, empty cell preserved — same as \037.
+    [ "$output" = "x||y" ]
+  fi
 }
 
 @test "mechanism: IFS=\$'\\037' DOES split and preserves the empty cell (cc-board relies on this)" {

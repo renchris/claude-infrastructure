@@ -289,6 +289,23 @@ mkrepo() {  # $1=dir → git tree with the lint at scripts/, dirty trunk suite, 
   [ "${#own}" -ge 87122 ] || { echo "fixture ${#own} B is under the inverting floor — it cannot discriminate" >&2; return 1; }
   [ "${#own_neg}" -ge 87122 ] || { echo "neg fixture ${#own_neg} B is under the floor" >&2; return 1; }
 
+  # 🚨 AND THE FIXTURE MUST FIT THROUGH `execve` — A PREMISE THIS CASE CANNOT ASSERT ITS WAY PAST.
+  # Linux caps EACH argv/envp string at MAX_ARG_STRLEN = 32 * PAGE_SIZE = 131072 B, independent of
+  # the 2 MB ARG_MAX total; Darwin has no such per-string cap. This fixture is 162,693 B in ONE
+  # environment variable, so on Linux the `run env …` below never reaches the lint at all: execve
+  # returns E2BIG and bats reports `/usr/bin/env: Argument list too long`, rc 126.
+  # MEASURED 2026-08-31 (BACKLOG_DRAIN_24_7 off-box cause census): boundary bisected at 131,050 B
+  # pass / 131,100 B fail, and `export` is no escape — the cap covers envp strings too (rc 126 the
+  # same way). SKIPPED rather than SHRUNK deliberately: the discrimination this case rests on was
+  # measured at 162,769 B against a reverted copy that is not reachable from here, so trimming the
+  # fixture to fit would trade a verified discrimination for a green — the exact bad trade the
+  # UNGATED/false-conviction pair in this plan warns about. The floor asserted above (87,122 B) is
+  # the author's stated bound, not a re-measured one, so it is not warrant enough to shrink on.
+  # The other 27 cells in this suite are unaffected and keep running off-box.
+  if ! env "CC_BATS_SC_OWN=$own" /usr/bin/true 2>/dev/null; then
+    skip "MAX_ARG_STRLEN < ${#own} B — this box's execve cannot carry the past-floor fixture"
+  fi
+
   # POSITIVE: the aborted file IS on a line this change wrote, so it must take the BLOCKING arm.
   #
   # AND THE ASSERTION MUST BE THE BLOCKING ARM'S OWN WORDS, not the rc and not the word

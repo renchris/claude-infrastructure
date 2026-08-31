@@ -212,6 +212,22 @@ sc_last() { tail -1 "$SC_ARGV" 2>/dev/null; }
 
   local store; store="$(git rev-parse --git-common-dir)/ship-land-memo"
   find "$store" -type f -exec chmod 000 {} \;
+
+  # 🚨 ESTABLISH THE PREMISE BEFORE ASSERTING THE CONSEQUENCE. `chmod 000` is how this case makes an
+  # entry unreadable, and it is a NO-OP for uid 0: root bypasses the DAC read check, so the entry
+  # stays readable, the memo legitimately carries its verdict, and the assertion below fails while
+  # naming the wrong subject. MEASURED 2026-08-31 (BACKLOG_DRAIN_24_7 off-box cause census): 1 of 11
+  # red in a root container — every stock CI image and every cloud VM this repo lands from — for a
+  # property of the RUNNER's uid and nothing to do with the memo. There is no root-proof spelling of
+  # "unreadable file" (a directory or a dangling link is a different errno and a different case), so
+  # the premise is checked and named rather than faked. Precedent in this corpus:
+  # tests/bats-shellcheck-lint.bats's MISSING TOOL cases skip on the same shape.
+  local probe; probe="$(find "$store" -type f | head -1)"
+  if [ -n "$probe" ] && cat "$probe" >/dev/null 2>&1; then
+    chmod -R u+rw "$store" 2>/dev/null || true
+    skip "uid $(id -u) reads through chmod 000 — this case cannot make an entry unreadable here"
+  fi
+
   gate_once
   chmod -R u+rw "$store" 2>/dev/null || true
   [ "$status" -eq 0 ]
