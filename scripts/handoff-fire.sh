@@ -5630,6 +5630,24 @@ if [ "${1:-}" = "__recycle" ]; then
           hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;;
         retype)
           if [ "$waited" = 60 ]; then
+            # typed-send-lint:allow — reviewed: the echo-verify the lint asks for IS the three lines
+            # below (type → read the pane back → CR only on an exact match), done inline because no
+            # sanctioned helper fits this SURFACE. Every one of them types into a SHELL; this pane
+            # holds a live claude COMPOSER, and the two are not interchangeable:
+            #   * it2_type_verified/_it2_type_line wrap the line as `: <nonce>; <line>`. The `:` is
+            #     the POSIX no-op that makes the nonce inert IN A SHELL — a composer has no such
+            #     grammar and would submit the whole string as prompt text, so /exit would never
+            #     run and the recycle would wedge on the pane it was sent to rescue.
+            #   * it2_paste_submit_verified IS composer-aware, but it pre-waits up to 30s for an
+            #     empty composer and abstains on composer_owned. Both are already settled here:
+            #     recycle_nudge_decision returned `retype`, which is ONLY reachable on a composer
+            #     proven empty with claude still alive, and this is one checkpoint inside a
+            #     `sleep 3` poll whose 15s vanish-check a 30s pre-wait would stall.
+            # The inline check is also STRICTER than the helpers' whole-screen grep: composer_content
+            # returns the composer's own space-stripped content and it is compared for EXACT
+            # equality, so no scrollback residue from an earlier attempt can satisfy it — which is
+            # the forgeability defect _it2_type_line's nonce exists to close, closed here by the
+            # read surface instead. The CR is sent only on that match; anything else HOLDS.
             hf_bounded "$IT2" session send -s "$RSID" "/exit" >/dev/null 2>&1 || true
             sleep 1
             nc="$(composer_content "$IT2" "$RSID")" || nc=""
