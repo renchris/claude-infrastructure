@@ -255,3 +255,131 @@ print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
+
+# ---------------------------------------------------------------------------------------------
+# S5 · M3c · strand_score / --strand-score — USAGE_TELEMETRY_100P §5.2 S5, RP-29..RP-31.
+#
+# THE WHOLE POINT IS THAT THIS HARNESS CAN FAIL. The refuted score evaluated the fire rule at
+# each window's LAST sample, where M3a has already converged to `100 - weekly_pct`, i.e. to the
+# realised strand itself — so it agreed with the identity function on 8/8 windows and could not
+# have disagreed. RP-29 is the arm that makes the replacement non-tautological: a window whose
+# pace CHANGES after the projection is made must score a NON-ZERO bias at the long horizon and
+# a smaller one at the short horizon. A harness whose every cell reads 0.00 has re-created the
+# tautology and passes every other assertion here.
+# ---------------------------------------------------------------------------------------------
+
+@test "RP-29: strand_score is scored at a DISTANCE from the reset, so it can be wrong" {
+  run python3 -c "$LOAD"'
+import time
+NOW = time.time()
+RESET = NOW - 6 * 3600.0                       # the window CLOSED 6 h ago
+def s(t, wp, reset_t):
+    return {"acct": "next2", "weekly_pct": wp, "_t": t,
+            "weekly_reset_at": iso(reset_t), "session_pct": 10,
+            "session_reset_at": iso(t + 3600.0)}
+sam = []
+# 120 h of window at 6 min: the first 96 h burn at 0.30 %/h, then the pace COLLAPSES to 0.05.
+# A nowcast made at T-96h extrapolates the fast pace across the whole window and under-predicts
+# the strand; one made at T-6h has seen the collapse. That divergence is the measurement.
+t = RESET - 120 * 3600.0
+wp = 0.0
+while t <= RESET - 0.1 * 3600.0:
+    left = (RESET - t) / 3600.0
+    sam.append(s(t, min(100.0, wp), RESET))
+    wp += (0.30 if left > 24.0 else 0.05) * 0.1
+    t += 0.1 * 3600.0
+res = ca.strand_score(sam, now=NOW)
+assert res["windows"] == 1, res["windows"]
+by = {b["h"]: b for b in res["buckets"]}
+assert by[96.0]["n"] == 1 and by[24.0]["n"] == 1 and by[6.0]["n"] == 1, res["buckets"]
+# NON-VACUOUS: the long horizon is genuinely wrong, and it is wrong in the UNDER direction
+# (it extrapolated the fast pace), which is the polarity a router would act on.
+assert by[96.0]["bias"] < -2.0, by[96.0]
+# ...and the error SHRINKS as the horizon closes — the estimator is a good nowcaster for
+# exactly the reason it is a bad forecaster (§5.1 LB-2). If these were equal the harness would
+# be scoring the identity function again.
+assert by[6.0]["mae"] < by[96.0]["mae"], (by[6.0], by[96.0])
+assert all(0.0 <= b["sign_agree"] <= 1.0 for b in res["buckets"] if b["n"]), res["buckets"]
+# every cell carries the distance it was scored AT, so a reader can audit the stratification
+assert all(c["at_reset_h"] >= c["h"] for c in res["cells"]), res["cells"]
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-30 CONTROL: a LIVE window is never scored, and an unreachable horizon reports n=0" {
+  # Two abstains that a harness fails silently. (a) The live window's realised strand is not yet
+  # known; scoring it would compare a projection against a number that has not happened — the
+  # completed_weekly_windows defect (S1d) reappearing one layer up. (b) A horizon the series
+  # cannot reach reports n=0 and is EXCLUDED, never imputed and never counted as a hit.
+  run python3 -c "$LOAD"'
+import time
+NOW = time.time()
+def s(t, wp, reset_t, acct="next3"):
+    return {"acct": acct, "weekly_pct": wp, "_t": t, "weekly_reset_at": iso(reset_t),
+            "session_pct": 10, "session_reset_at": iso(t + 3600.0)}
+# ONE live window only: its reset is 40 h in the FUTURE. 60 h of samples, so a naive rule that
+# scores on gap alone would happily populate the 48h and 96h buckets from it.
+RESET = NOW + 40 * 3600.0
+sam = []
+t = NOW - 60 * 3600.0
+wp = 10.0
+while t <= NOW:
+    sam.append(s(t, min(100.0, wp), RESET))
+    wp += 0.30 * 0.1
+    t += 0.1 * 3600.0
+res = ca.strand_score(sam, now=NOW)
+assert res["windows"] == 0, res["windows"]
+assert res["cells"] == [], res["cells"]
+assert all(b["n"] == 0 and b["bias"] is None for b in res["buckets"]), res["buckets"]
+# the renderer SAYS SO rather than printing an empty table that reads as a pass
+out = chr(10).join(ca.render_strand_score(res))
+assert "NO EVALUABLE CELLS" in out, out
+assert "6h" in out and "—" in out, out          # the zero rows still print their zero
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-31: --strand-score answers with NO config, NO keychain and NO sweep" {
+  # It is placed before load_cfg() for the same reason --agents is: a scoring harness that could
+  # only run on a healthy fleet would be unavailable in exactly the conditions worth scoring.
+  # $HOME is fixtured and there is no accounts.json here, so a branch placed after load_cfg()
+  # exits non-zero — which is how the same coupling was found on --agents.
+  local series="$BATS_TEST_TMPDIR/strand-score.jsonl"
+  python3 - "$series" <<'PY'
+import json, sys, time
+from datetime import datetime, timezone
+NOW = time.time()
+RESET = NOW - 6 * 3600.0
+def iso(t): return datetime.fromtimestamp(t, timezone.utc).isoformat().replace("+00:00", "Z")
+t, wp = RESET - 120 * 3600.0, 0.0
+with open(sys.argv[1], "w") as f:
+    while t <= RESET - 0.1 * 3600.0:
+        left = (RESET - t) / 3600.0
+        f.write(json.dumps({"ts": iso(t), "acct": "next2", "weekly_pct": min(100.0, wp),
+                            "session_pct": 10, "weekly_reset_at": iso(RESET),
+                            "session_reset_at": iso(t + 3600.0)}) + "\n")
+        wp += (0.30 if left > 24.0 else 0.05) * 0.1
+        t += 0.1 * 3600.0
+PY
+  CC_UTIL_LOG="$series" run python3 "$CA_BIN" --strand-score
+  [ "$status" -eq 0 ] || { echo "rc=$status out=$output"; false; }
+  [[ "$output" == *"strand score"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"never imputed"* ]] || { echo "$output"; false; }
+  # §5.4 acceptance 2: non-zero n at the 24h, 12h and 6h buckets, and a bias that COULD have
+  # been non-zero. A table whose every cell reads 0.00 is the tautology all over again.
+  CC_UTIL_LOG="$series" run python3 "$CA_BIN" --strand-score --json
+  [ "$status" -eq 0 ] || { echo "rc=$status out=$output"; false; }
+  local json_out="$output"
+  run python3 -c '
+import json, sys
+d = json.loads(sys.argv[1])
+by = {b["h"]: b for b in d["buckets"]}
+assert by[24.0]["n"] and by[12.0]["n"] and by[6.0]["n"], d["buckets"]
+assert any(abs(b["bias"]) > 0.01 for b in d["buckets"] if b["n"]), d["buckets"]
+assert d["windows"] == 1 and d["accounts"] == ["next2"], d
+print("OK")' "$json_out"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}

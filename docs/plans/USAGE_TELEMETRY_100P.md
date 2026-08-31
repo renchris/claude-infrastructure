@@ -1610,7 +1610,8 @@ windows/week, carrying the fleet wall rate 1.72% → 2.20%.
 
 ### §5.7 Implementation record — what actually landed, and where it deviated from the spec
 
-Wave 1 = **S1 + S2 + S3 only**. S4–S7 are unbuilt and unchanged; S5 still gates S6.
+Wave 1 = **S1 + S2 + S3**. Wave 2 = **S4 + S5 + S7**. **S6 remains unbuilt and S5 still gates it** —
+see § Wave 2 below for why that gate has *not* been discharged by S5 merely existing.
 
 #### S1 · data fixes — LANDED
 
@@ -1781,3 +1782,202 @@ shortens that.
 
 ⚠️ `bash tests/run.sh …`, named in §5.4, **does not exist in this repo**. The suites are run with
 `bats tests/<name>.bats`; `scripts/ship-land.sh` selects and runs them at the land.
+
+---
+
+### §5.8 Implementation record — WAVE 2 (S4 + S5 + S7)
+
+Wave 2 = **S4 + S5 + S7**. S6 is deliberately NOT in it, and the reason is the gate's own text:
+*"Do not build this until S5 has run and been read."* S5 now exists and its cases are green, but
+**running it is not the same as reading it** — the gate is discharged by the horizon-stratified
+bias at the 12 h bucket coming back near zero **on the live series**, and this wave was built in a
+remote container with no `~/.claude/logs/account-utilization.jsonl` and no fleet credentials. So
+the deliverable S6 waits on is a `claude-accounts --strand-score` run on the operator's machine,
+not another implementation session. That is filed at the bottom of this section.
+
+#### S4 · M4′ `burst_start_by` — LANDED
+
+`bin/claude-accounts`: `burst_start_by(r, K)` + `fmt_start_by(sb)` beside `wall_projection`,
+constants `BURST_SPPH` / `P_WALL` / `MEAN_WALL_H` / `BURST_SOON_H` / `SESSION_WINDOW_H`; stamped
+in `apply_burn` and consumed by `pace_line` through the new `pace_head(rows)`.
+Suite: `tests/claude-accounts-burst.bats` RP-21..RP-24, **4/4 proven RED** against the pre-change
+binary (`git stash push -- bin/claude-accounts`, run, pop — `AttributeError: module 'ca' has no
+attribute 'burst_start_by'` on all four), plus the renderer case RP-24b in
+`tests/claude-accounts-core.bats`, also RED.
+
+**The arithmetic reproduces §5.2 S4's live table to the digit** — this was checked before any test
+was written, because a suite written first would have pinned whatever the code happened to do:
+
+| acct | windows | burn h | freeze h | t_needed | `burst_start_by_h` | verdict | floor |
+|---|---|---|---|---|---|---|---|
+| next3 | 1 | 1.8219 | 1.0331 | 2.8550 | **−0.6450** | LATE | 2.8323 pp |
+| next2 | 6 | 21.4120 | 6.1988 | 27.6107 | **+69.5893** | SLACK | 0.0 |
+
+RP-23's mutant (`P_WALL = 0.0`) moves `burst_start_by_h` by exactly **1.0331 h** and **flips the
+verdict** LATE → START SOON, which is the assertion that stops the freeze term from being
+decorative arithmetic that every other case survives.
+
+**Deviation 1 — the return is a dict, not the bare float §5.3 RP-21 sketches**, for the same
+reason S2's is: the value, the verdict and the unrecoverable floor are three facts and a float
+carries one. `{"h", "verdict", "unrecoverable_pp", "windows", "burn_h", "freeze_h", "t_needed_h"}`.
+The intermediate terms are stamped because they are what RP-21/RP-22 assert *through* — a case
+that can only see the final number cannot tell a right answer from two compensating errors.
+
+**Deviation 2 — the start-by clause is SUPPRESSED on a no-strand row**, which §5.4's mock shows
+but §5.2 does not say. Rendered on `next` it read
+`next no strand — 1.62× burn, ⚠ WALL trajectory · start by T−16h (98h slack)`: a burst price for
+an account that is already OVERFILLING its window. True, unconsumable, and exactly the metric
+shape §3.2 forbids. An **unknown**-strand row keeps the clause — M4′ consumes no M3a, so there it
+is the only thing on the line that can speak, and dropping it would be an abstain by association.
+Both arms are pinned in RP-24b.
+
+**Deviation 3 — `pace_line` READS the K stamp rather than refitting it**, which is the opposite of
+S3's Deviation 3 and not an inconsistency. The strand is row-local arithmetic the renderer can
+redo; K is a fleet-level NNLS fit over the whole series, and `pace_line` holds rows, not samples.
+An absent stamp therefore removes the start-by clause **and nothing else** — the strand rows still
+render, per S3's Deviation 1 ruling that gating M3a on a coefficient it does not consume would be
+a fabricated dependency.
+
+**Deviation 4 — the header clause enters here, as S3 said it would**, via `pace_head(rows)`:
+`weekly drain — pp that DIE at reset (K=0.192 live · nowcast at the last 48h of pace):`. It
+carries the SOURCE (`live` / `frozen` / absent), because S1c's three-way abstain has three
+outcomes and a bare `K=0.192` cannot distinguish a fitted rate from the frozen constant. The loss
+framing (`pp that DIE at reset`) is the invariant `tests/claude-accounts-burn-ratio.bats` greps
+for and does not move.
+
+**Rendered, against §5.4's expected shape:**
+
+```
+weekly drain — pp that DIE at reset (K=0.192 live · nowcast at the last 48h of pace):
+  next4 strand ~64pp of 86 · p87 of its own 24h burns · start by T−28h (91h slack) · 4d left
+  next2 strand ~56pp of 83 · p65 of its own 24h burns · start by T−28h (70h slack) · 4d left
+  next3 strand ~5pp of 8 · p96 of its own 3h burns · ⚠ LATE by 0.6h — 2.8pp already unrecoverable · 2.2h left
+  next no strand — 1.62× burn, ⚠ WALL trajectory · 4d left
+```
+
+Every row now answers all three of the goal's questions. One cosmetic difference from §5.4's mock:
+it reads `LATE by 0.7h` where this renders `LATE by 0.6h`. The value is −0.6450 and `:.1f` is
+genuinely ambiguous there; the mock was hand-rounded. Numbers, not structure.
+
+#### S7 · M1 `burn_5h_ewma_ph` — LANDED
+
+`bin/claude-accounts`: `burn_5h_ewma_ph(samples_for_acct, now) → (value|None, span_h)` beside
+`burn_wk_ewma_ph`, constants `SU_EWMA_LOOKBACK_H` / `SU_EWMA_HL_H` / `SU_EWMA_MIN_SPAN_H` /
+`SU_EWMA_MAX_DT_H`; produced in `apply_burn`, consumed by `_su_projected`.
+Cases: `tests/claude-accounts-core.bats` — the new producer case, RP-28 and RP-28b — **3/3 RED**,
+and the S3 RP-27 case updated in place is a fourth.
+
+**Both named hazards are tested, and neither is visible in any other case in the suite.**
+RP-28 is the unit: a row with `burn_5h_ewma_ph = 60.0` (%/h), `session_pct = 20`,
+`session_reset_h = 2.0`, `PROJ_LOOKAHEAD_H = 1.0` must project **0.80**; a missing ÷100 gives
+**1.0** and reads as fleet-wide 5h pressure. RP-28b is the roll: 3 h of samples with a 5h reset at
+the midpoint must still yield a rate, where the incumbent goes blind.
+
+**Deviation 1 — RP-27's specified fixture could not carry the S7 assertion, and loosening the
+floor to make it fit was the trap.** §5.3 RP-27 says to assert `burn_5h_ewma_ph ≈ 60.0` on the
+existing `router M7: apply_burn derives rates` fixture — a 10→40 move over 30 min. That fixture
+holds three samples for `next3`, of which exactly **one** adjacent pair falls inside the EWMA's
+`dt ≤ 1 h` rule, spanning 0.5 h: it clears neither the 2-pair floor nor the 1.3 h span floor, so
+the metric correctly abstains. Extending it in place would have meant relaxing an abstain rule to
+make a test pass — the same call S3's Deviation 5 made for RP-27. New fixture instead, and it
+honours the spec's number exactly: 16 samples at 6-min spacing, `session_pct` 0 → 90, i.e.
+**60 %/h sustained for 1.5 h** — the longest a 5h window can physically hold that rate, and the
+burst regime M4′ deliberately creates.
+
+**Deviation 2 — `_su_projected` keeps `burn_5h_ph` as a FALLBACK, not merely "populated for one
+release".** §5.2 S7 says to keep the old key populated so nothing breaks silently; it does not say
+what the consumer does when the new key abstains. Reading only the new key would let S7's 1.3 h
+span floor **delete** a projection the incumbent could still make — an abstain in the estimator
+becoming a silent behaviour change in the router. Both are soften-only through `_soft`
+(`SF_FLOOR = 0.05`), so neither can exclude an account, and the fallback is pinned in RP-28.
+
+**Deviation 3 — the RP-27 assertion `"burn_5h_ewma_ph" not in r` was updated in place to
+`== 0.0`**, not deleted. Its fixture holds `session_pct` flat at 10 for 24 h, and a flat window is
+a *measurement of no burn*, not missing data: it must be stamped, because an absent key falls
+through to the incumbent. `burn_5h_span_h` is stamped unconditionally beside it for the same
+reason `burn_wk_span_h` is — a null that cannot say why reads as a missing measurement rather than
+as a refusal.
+
+**The blind spot ships in the docstring, per the spec:** at `session_pct ≥ 40` the incumbent is
+more accurate (MAE 0.0617 vs 0.0797; this EWMA over-projects by +3.6 pp). That is the burst
+regime. The direction is soften-only and therefore fail-safe for routing, but the number is wrong
+there and must not be quoted as accurate. S7 ships on **correctness and availability only**.
+
+#### S5 · M3c `--strand-score` — LANDED (built and green; NOT YET READ)
+
+`bin/claude-accounts`: `strand_score(samples, buckets, now)` + `render_strand_score(res)` beside
+`wk_strand_pp`, constants `STRAND_BUCKETS_H = (96, 48, 24, 12, 6)` and `STRAND_SIGN_FLOOR = 0.5`;
+a `--strand-score` branch in `main()` placed **before `load_cfg()`**, exactly like `--agents`.
+Cases: `tests/claude-accounts-strand.bats` RP-29..RP-31, **3/3 RED**.
+
+**RP-29 is the case that makes this a harness rather than a tautology**, and it is the only one
+that matters. Fixture: a 120 h window burning 0.30 %/h for its first 96 h, then **collapsing to
+0.05 %/h**. A nowcast made at T−96h extrapolates the fast pace and under-predicts the strand; one
+made at T−6h has seen the collapse. The case asserts the 96 h bias is `< −2.0` pp — genuinely
+wrong, in the direction a router would act on — and that the 6 h MAE is *smaller* than the 96 h
+MAE. If those were equal the harness would be scoring the identity function again, which is
+precisely how the refuted score passed 8/8.
+
+`STRAND_SIGN_FLOOR = 0.5` is deliberately the same threshold `pace_line` renders `no strand` at,
+so the sign-agreement rate scores **the claim the surface actually makes**, not a different one.
+
+**Deviation 1 — placed beside `wk_strand_pp`, not beside `_util_tail` as §5.2 S5 specifies.** It
+calls `completed_weekly_windows`, `burn_wk_ewma_ph` and `wk_strand_pp`; at `_util_tail`'s position
+all three are forward references. Python resolves them at call time either way, so this is
+readability, not behaviour.
+
+**Deviation 2 — `--window-h N` (default 800) rather than a fixed read.** The scoring span and the
+routing span are different questions: `apply_burn` reads 336 h because `burst_percentile` needs
+200 windows of history, while the scorer needs *completed weekly windows*, of which there are
+~3.7/week. A fixed constant would have silently capped how many windows can ever be scored, which
+is the `_util_tail` byte-cap defect (S1b) in a new place.
+
+**Shape check on a synthetic 12-window fleet** (4 accounts × 3 windows, seeded, with the measured
+2.3× end-of-window acceleration). 🚨 **This is a demonstration that the harness DISCRIMINATES, and
+is emphatically NOT a validation of M3a** — the fixture's pace shape is chosen, not observed:
+
+```
+strand score — M3a projected vs realised, by horizon (12 completed weekly window(s), 4 account(s))
+  positive bias = the nowcast OVER-predicted the strand
+   horizon     n    bias pp    MAE pp  sign-agree
+       96h    12     +13.23     13.23         67%
+       48h    12      +9.24      9.24         75%
+       24h    12      +0.33      0.33        100%
+       12h    12      -0.00      0.01        100%
+        6h    12      -0.04      0.04        100%
+  cells with no evaluable sample at that horizon are EXCLUDED, never imputed
+```
+
+The shape is the one §5.1 LB-2 predicted and it is the whole argument against S6: the estimator is
+a good nowcaster because it converges as the horizon closes, and the columns show exactly that
+convergence. **A near-zero 12 h bias on synthetic data proves nothing about the live series** — the
+fixture was built to converge.
+
+#### Acceptance status against §5.4
+
+| command | status |
+|---|---|
+| the bats suites (roll-key · util-tail · strand · burst · core · burn-ratio · providers · …) | **160/165 green**; the 11 new cases were each demonstrated RED against the pre-change binary |
+| the 5 not-green | **pre-existing and environment-caused, identical set before and after this diff** — `--relogin-info`, three `--login-status` cases, one `e2e --json`. They need the macOS keychain / `security` and a shorter argv limit than this container allows. Verified by stashing the diff and re-running: same five, same names. |
+| `claude-accounts --readout` renders the drain block with the start-by clause | **shape verified against §5.4's mock**, above — **not** verified live (no fleet credentials here) |
+| `claude-accounts --strand-score` prints the horizon table with non-zero n at 24/12/6 | **yes on fixture** (RP-31 asserts exactly this through the CLI, via `--json`) — **not yet run on the live series** |
+| `claude-accounts --readout \| grep -c 'strand'` → 3 or 4 | **not runnable here** — needs the live sweep |
+
+#### What Wave 2 does NOT claim, and the one operator step it leaves
+
+- **No live confirmation.** Wave 1's record carries live readings for every metric it shipped.
+  Wave 2 has none: this session ran in a remote container with no `account-utilization.jsonl`, no
+  keychain and no network path to `api.anthropic.com`. Every number above is fixture-derived and
+  labelled as such. Wave 1's live figures are not evidence for Wave 2's code.
+- **S6 is not unblocked.** Its gate is *"if the horizon-stratified bias at the 12 h bucket is not
+  near zero, this alarm is not shippable at any parameter setting"* — a statement about the **live
+  series**, which S5 can now measure and nobody has yet measured.
+- **The one step that is the operator's**, and it is one command on their own machine:
+
+  ```
+  claude-accounts --strand-score
+  ```
+
+  Read the 12 h row. Near-zero bias with a populated `n` ⇒ S6 is shippable and becomes the next
+  wave. A material bias ⇒ **S6 does not ship**, and §5.6 Q1 becomes the priority instead. Either
+  reading is a result; the absence of the reading is what blocks.

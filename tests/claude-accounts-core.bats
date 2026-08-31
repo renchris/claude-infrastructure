@@ -1813,7 +1813,15 @@ assert 12.0 < r["burn_wk_ppd"] < 16.0, r          # ~14 %/day, i.e. the same rat
 assert "burn_wk_span_h" in r and r["burn_wk_span_h"] > 6.8, r
 assert "wk_strand_pp" in r, r
 assert 0.0 < r["wk_strand_pp"] < 5.0, r           # 40 + 0.583*100 = 98.3 -> ~1.7 pp die
-assert "burn_5h_ewma_ph" not in r, r              # S7 is a LATER wave and was not built here
+# UPDATED IN PLACE for S7 (was: `assert "burn_5h_ewma_ph" not in r` — S7 was a later wave and
+# this line pinned its absence). It now pins the arm that matters more than presence: this
+# fixture holds session_pct FLAT at 10 for 24 h, and a flat window is a MEASUREMENT of no burn,
+# not missing data. It must read 0.0 and be stamped, because an absent key falls back to the
+# incumbent `burn_5h_ph` — which takes the newest adjacent pair and would answer the same 0.0
+# here, so an implementation that abstained on flatness would look correct on this row and be
+# wrong the moment the two disagree.
+assert r["burn_5h_ewma_ph"] == 0.0, r
+assert r["burn_5h_span_h"] > 5.8, r                # the span is the abstain reason, always stamped
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
@@ -2323,4 +2331,164 @@ assert d['outcome'] == 'none' and d['acct'] is None and d['score'] is None, d
 assert d['excluded'].get('capped'), d
 print('OK')"
   [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+# ---------------------------------------------------------------------------------------------
+# S7 · M1 · burn_5h_ewma_ph — USAGE_TELEMETRY_100P §5.2 S7, RED-proof cases RP-27b..RP-28b.
+#
+# THE SPEC NAMES TWO HAZARDS AND BOTH PRODUCE A PLAUSIBLE WRONG NUMBER RATHER THAN AN ERROR:
+#   (1) UNIT — the formula emits %/h; the incumbent key `burn_5h_ph` is consumed as fraction/h.
+#       Ship the new value on the old key and `_su_projected` saturates to 1.0 on every row, a
+#       100x error that reads as "every account is under 5h pressure".
+#   (2) ROLL SPELLING — under a truncating reset key the roll branch fires on 46.0% of adjacent
+#       pairs and injects an absolute LEVEL where a delta belongs: MAE 0.0282 -> 0.2110, i.e.
+#       5.4x worse than the incumbent it replaces.
+# RP-27b pins the producer's unit, RP-28 pins the consumer's scale, RP-28b pins the roll branch
+# and the span abstain. Neither hazard is visible in any other case in this suite.
+# ---------------------------------------------------------------------------------------------
+
+@test "router M7 + S7: apply_burn stamps burn_5h_ewma_ph in %/h under its OWN key" {
+  run python3 -c "$LOAD"'
+import json, os
+from datetime import datetime, timezone, timedelta
+p = os.path.join(os.environ["BATS_TEST_TMPDIR"], "util-5h-ewma.jsonl")
+now = datetime.now(timezone.utc)
+sra = (now + timedelta(hours=2)).isoformat()
+wra = (now + timedelta(hours=100)).isoformat()
+# The BURST regime, which is the one M4′ deliberately creates: 6 pp per 6 min = 60 %/h,
+# sustained 1.5 h (0 -> 90), which is the longest such rate a 5h window can physically hold.
+with open(p, "w") as f:
+    for i in range(15, -1, -1):
+        f.write(json.dumps({"ts": (now - timedelta(minutes=i * 6)).isoformat(),
+                            "acct": "next3", "session_pct": (15 - i) * 6, "weekly_pct": 40,
+                            "session_reset_at": sra, "weekly_reset_at": wra}) + "\n")
+rows = [row(acct="next3", session_pct=90, session_reset_h=2.0,
+            weekly_pct=40, weekly_reset_h=100.0)]
+samples, span = ca._util_tail(path=p, hours=48.0)
+ca.apply_burn(rows, cfg, samples=samples)
+r = rows[0]
+assert "burn_5h_ewma_ph" in r, r
+assert 55.0 < r["burn_5h_ewma_ph"] < 65.0, r      # ~60 %/h — NOT 0.6, and NOT 6.0
+assert r["burn_5h_span_h"] > 1.4, r
+assert "burn_5h_ph" in r, r                       # the incumbent is NOT overwritten (one release)
+assert r["burn_5h_ph"] < 1.5, r                   # ...and is still in FRACTION/h: 0.6, not 60
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-28 CONTROL: _su_projected consumes the new key at the right SCALE" {
+  # The missing +/100 is caught ONLY here. Without this arm RP-27b passes on an implementation
+  # that stamps a correct %/h value and then hands it unconverted to the projection.
+  run python3 -c "$LOAD"'
+import os
+os.environ.pop("CC_ROUTE_PROJ", None)
+os.environ.pop("CC_ROUTE_PROJ_LOOKAHEAD_H", None)
+Rp = dict(R); Rp["PROJ_LOOKAHEAD_H"] = 1.0
+su = ca._su_projected(row(session_pct=20, session_reset_h=2.0, burn_5h_ewma_ph=60.0), Rp)
+assert abs(su - 0.80) < 1e-9, su                  # 0.20 + 0.60*1.0 — a missing /100 gives 1.0
+# the reset still caps the lookahead, and it caps the NEW key exactly as it capped the old one
+capped = ca._su_projected(row(session_pct=20, session_reset_h=0.5, burn_5h_ewma_ph=60.0), Rp)
+assert abs(capped - 0.50) < 1e-9, capped
+# FALLBACK: the EWMA abstains below a 1.3 h span, and an abstain must not delete a projection
+# the incumbent could still make. Both are soften-only, so neither can exclude an account.
+fb = ca._su_projected(row(session_pct=20, session_reset_h=2.0, burn_5h_ph=0.6), Rp)
+assert abs(fb - 0.80) < 1e-9, fb
+# ...and the new key WINS when both are present, at its own scale.
+both = ca._su_projected(row(session_pct=20, session_reset_h=2.0,
+                            burn_5h_ewma_ph=60.0, burn_5h_ph=0.05), Rp)
+assert abs(both - 0.80) < 1e-9, both
+assert ca._excluded(row(session_pct=50, session_reset_h=3.0, burn_5h_ewma_ph=500.0), R) is None
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-28b CONTROL: the 5h EWMA crosses a roll, and abstains on a short span — never both wrong" {
+  run python3 -c "$LOAD"'
+import time
+NOW = time.time()
+def s(mins_ago, sp, wid):
+    return {"acct": "next3", "session_pct": sp, "_t": NOW - mins_ago * 60.0,
+            "session_reset_at": ca.datetime.fromtimestamp(
+                NOW + (5 - wid) * 3600.0 + wid * 18000.0, ca.timezone.utc).isoformat()}
+# 3 h at 6 min: 5h window rolls at the midpoint (90 -> 0), then accrues 0 -> 30 over 1.5 h.
+sam = []
+for i in range(30, 14, -1):
+    sam.append(s(i * 6, 90 - (30 - i) * 0, 0))
+for i in range(14, -1, -1):
+    sam.append(s(i * 6, (14 - i) * 2, 1))
+v, span = ca.burn_5h_ewma_ph(sam, NOW)
+assert v is not None, "the roll made it BLIND — the exact defect it replaces"
+assert span > 2.5, span
+assert v > 5.0, v            # post-roll accrual survives as a rate, not as a hole
+# CONTROL — a genuinely short span abstains, and reports the span it actually measured.
+short = [s(12, 10, 1), s(6, 14, 1), s(0, 18, 1)]
+v2, span2 = ca.burn_5h_ewma_ph(short, NOW)
+assert v2 is None, (v2, span2)
+assert 0.1 < span2 < 0.4, span2
+# ...and the abstain is a SPAN rule, not an always-None stub: same cadence, past the 1.3 h floor.
+long_ = [s(i * 6, (20 - i) * 2, 1) for i in range(20, -1, -1)]
+v3, span3 = ca.burn_5h_ewma_ph(long_, NOW)
+assert v3 is not None and span3 > 1.9, (v3, span3)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-24b: S4 · the drain row answers the THIRD question — does the 5h cap bind?" {
+  # §5.4's acceptance is that every row answers all three questions the goal names: how much
+  # dies (M3a), whether the demand is routine (M5), and whether the 5h grid still fits before
+  # the reset (M4′). S3 shipped the first two; this pins the third onto the same line and the
+  # exchange rate onto the caption — the header clause was deliberately HELD BACK in S3 because
+  # M3a consumes no K, and rendering a number nothing consumes is the metric shape §3.2 forbids.
+  # It enters now, with its first and only consumer.
+  run python3 -c "$LOAD"'
+n3 = row(acct="next3", weekly_pct=92, weekly_reset_h=2.21, burn_wk_ewma_ph=1.140,
+         session_pct=13, session_reset_h=3.37, session_reset_at="2026-08-25T13:09:00Z",
+         exch_k=0.192, exch_k_src="live")
+n4 = row(acct="next4", weekly_pct=14, weekly_reset_h=119.2, burn_wk_ewma_ph=0.186,
+         session_pct=8, session_reset_h=0.54, session_reset_at="2026-08-25T10:20:00Z",
+         exch_k=0.192, exch_k_src="live")
+n3["burst_start_by"] = ca.burst_start_by(n3, 0.192)
+n4["burst_start_by"] = ca.burst_start_by(n4, 0.192)
+line = ca.pace_line([n3, n4])
+assert "K=0.192 live" in line, line
+assert line.startswith("weekly drain — pp that DIE at reset"), line   # the loss framing is fixed
+assert "nowcast at the last 48h of pace" in line, line
+assert "⚠ LATE by 0.6h — 2.8pp already unrecoverable" in line, line
+assert "start by T−" in line and "h slack)" in line, line
+# ORDER on the row is fixed: how much dies, then whether it is routine, then whether it fits.
+n3_row = [l for l in line.split(chr(10)) if "next3" in l][0]
+assert n3_row.index("strand") < n3_row.index("LATE"), n3_row
+# ABSTAIN: with no K fitted the clause disappears and NOTHING ELSE DOES. S3 Deviation 1 —
+# gating the strand on a coefficient it does not consume would be a fabricated dependency.
+bare = ca.pace_line([row(acct="next3", weekly_pct=92, weekly_reset_h=2.21,
+                         burn_wk_ewma_ph=1.140)])
+assert "K=" not in bare, bare
+assert "start by" not in bare and "LATE" not in bare, bare
+assert "next3 strand ~5pp of 8" in bare, bare
+# A NO-STRAND row does NOT carry the clause: "start by T−16h (98h slack)" beside
+# "⚠ WALL trajectory" prices a burst for an account already OVERFILLING its window. True,
+# unconsumable, and the metric shape §3.2 forbids — that row already answers the question.
+n1 = row(acct="next", weekly_pct=52, weekly_reset_h=114.21, burn_wk_ewma_ph=1.725,
+         session_pct=30, session_reset_h=2.0, session_reset_at="2026-08-25T11:47:00Z",
+         exch_k=0.192, exch_k_src="live")
+n1["burst_start_by"] = ca.burst_start_by(n1, 0.192)
+assert n1["burst_start_by"]["verdict"] == "SLACK", n1["burst_start_by"]   # it WAS computed
+wall = ca.pace_line([n1])
+assert "⚠ WALL trajectory" in wall, wall
+assert "start by" not in wall, wall
+# ...but an UNKNOWN-strand row keeps it: M4′ consumes no M3a, so it is the only thing on that
+# row that can speak, and dropping it there would be an abstain by association.
+unk = row(acct="next2", weekly_pct=13, weekly_reset_h=122.8, burn_wk_span_h=4.1,
+          session_pct=8, session_reset_h=0.54, session_reset_at="2026-08-25T10:20:00Z",
+          exch_k=0.192, exch_k_src="live")
+unk["burst_start_by"] = ca.burst_start_by(unk, 0.192)
+u = ca.pace_line([unk])
+assert "strand unknown (span 4.1h < 6.8h)" in u, u
+assert "start by T−" in u, u
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
