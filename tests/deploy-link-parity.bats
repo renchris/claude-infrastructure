@@ -768,3 +768,106 @@ behind_checkout() {   # $1 = repo-relative path · $2 = its bytes
   has "STRAY"
   lacks "UNCONVERGED"
 }
+
+# --- REFERENCE PROVENANCE: the reference states its own currency, added 2026-08-31 ---------------
+# The clause above asks the trunk ref before convicting ONE file. These arms pin the sentence that
+# covers every absence verdict at once: how far behind the trunk ref is the index all of them were
+# computed against. The measurement that forced it is that the clause above landed on trunk and the
+# real destination went on printing the pre-fix verdict for a whole link, because the script is
+# reached by a per-file symlink into the very checkout whose staleness produces the false verdict —
+# 8 commits behind, with ZERO occurrences of content_is_on_trunk in the copy that executed.
+#
+# A checkout GENUINELY BEHIND its trunk ref. behind_checkout() above is not that, by measurement:
+# it produces the index/trunk disagreement the stray leg needs by REMOVING the path in a LATER
+# commit, so its HEAD is one commit AHEAD of the ref and `rev-list --count HEAD..<ref>` reads 0.
+# Correct for a question about blob membership, useless for a question about LAG. This one lands the
+# file on a side branch, points the ref there, and leaves HEAD on the branch that never got it —
+# which is the shared checkout's actual shape, and needs no destructive git to build.
+behind_by() {   # $1 = repo-relative path · $2 = its bytes → checkout sits 1 commit behind the ref
+  local base_branch
+  git -C "$CC_LINKPARITY_REPO" init -q
+  # `:?` guards the ARGUMENT, not the call — see behind_checkout above for why that matters here.
+  git -C "${CC_LINKPARITY_REPO:?repo path required}" config user.email t@t
+  git -C "${CC_LINKPARITY_REPO:?repo path required}" config user.name t
+  git -C "$CC_LINKPARITY_REPO" add -A
+  git -C "$CC_LINKPARITY_REPO" commit -qm base
+  base_branch="$(git -C "$CC_LINKPARITY_REPO" rev-parse --abbrev-ref HEAD)"
+  git -C "$CC_LINKPARITY_REPO" checkout -q -b landed-elsewhere
+  printf '%s\n' "$2" > "$CC_LINKPARITY_REPO/$1"
+  git -C "$CC_LINKPARITY_REPO" add -A
+  git -C "$CC_LINKPARITY_REPO" commit -qm landed
+  export TRUNKREF="refs/remotes/origin/main"
+  git -C "$CC_LINKPARITY_REPO" update-ref "$TRUNKREF" "$(git -C "$CC_LINKPARITY_REPO" rev-parse HEAD)"
+  git -C "$CC_LINKPARITY_REPO" checkout -q "$base_branch"
+  export CC_LINKPARITY_TRUNK="$TRUNKREF"
+}
+
+@test "a reference BEHIND its trunk ref says so, above the findings it qualifies" {
+  # The whole defect in one arm: the verdicts are evidence about an index, the index has a lag, and
+  # the lag was never printed. Position is load-bearing — a caveat underneath the list it qualifies
+  # has already been skipped by the reader it exists for.
+  behind_by "skills/demo/SKILL.md" "landed-this-morning"
+  printf 'landed-this-morning\n' > "$CC_LINKPARITY_CONFIG/skills/demo/SKILL.md"
+  run "$LP"
+  has "commit(s) BEHIND"
+  has "1 commit(s) BEHIND"
+  has "computed against THIS index"
+  # ABOVE the findings, not below: the reference line must precede the first verdict line. Ordering
+  # is decided in ONE awk pass rather than a grep|head|cut chain, so a missing side cannot arrive as
+  # an empty string that a numeric comparison then reads as a position.
+  [ "$(printf '%s\n' "$output" | awk '
+       /commit\(s\) BEHIND/ { if (r == 0) r = NR }
+       /UNCONVERGED/        { if (f == 0) f = NR }
+       END { print (r > 0 && f > 0 && r < f) ? "above" : "NOT-above(r=" r " f=" f ")" }')" = "above" ]
+}
+
+@test "CONTROL: at a lag of 0 the reference line is SILENT — a caveat on every clean run is noise" {
+  # A deliberate zero. An advisory that fires on every run carries the same information as one that
+  # cannot fire, so lag 0 must add nothing to the bare report. behind_checkout's own lag IS 0
+  # (measured: HEAD one AHEAD of the ref), which is what makes it the right fixture for this arm.
+  behind_checkout "skills/demo/SKILL.md" "landed-this-morning"
+  printf 'landed-this-morning\n' > "$CC_LINKPARITY_CONFIG/skills/demo/SKILL.md"
+  run "$LP"
+  lacks "commit(s) BEHIND"
+  lacks "is CURRENT with"
+  lacks "lag is UNKNOWN"
+  has "UNCONVERGED"          # the run still did its real work; only the caveat is absent
+}
+
+@test "--all makes a CURRENT reference say so, so a missing line cannot mean both current and unchecked" {
+  # The other half of the silence above. Without a reachable positive reading, "no reference line"
+  # means both "checked, current" and "never asked" — the shape that let this go unnoticed for a
+  # whole link (memory: lookup-miss-is-not-absence).
+  behind_checkout "skills/demo/SKILL.md" "landed-this-morning"
+  printf 'landed-this-morning\n' > "$CC_LINKPARITY_CONFIG/skills/demo/SKILL.md"
+  run "$LP" --all
+  has "is CURRENT with"
+  has "refs/remotes/origin/main"
+  lacks "commit(s) BEHIND"
+}
+
+@test "CONTROL: a git reference whose trunk ref will not resolve reads UNKNOWN, never 0" {
+  # 0 is the HEALTHY answer here, so a failed read that rendered as 0 would be indistinguishable
+  # from a converged reference — the fail-safe-mimics-healthy shape. It has to say it cannot tell.
+  behind_by "skills/demo/SKILL.md" "landed-this-morning"
+  printf 'landed-this-morning\n' > "$CC_LINKPARITY_CONFIG/skills/demo/SKILL.md"
+  export CC_LINKPARITY_TRUNK="refs/remotes/origin/no-such-branch"
+  run "$LP"
+  has "lag is UNKNOWN"
+  lacks "commit(s) BEHIND"
+  lacks "is CURRENT with"
+}
+
+@test "CONTROL: a NON-git reference prints no provenance line at all — the question is n-a, not 0" {
+  # The hermetic fixture every other arm in this file runs on has no git at all, so "how far behind
+  # its trunk ref" does not exist as a question. Reporting UNKNOWN there would put a permanent
+  # warning on every hermetic run; reporting 0 would assert currency nobody measured. It says
+  # nothing, and this arm is predicted GREEN before the fix as well as after — it PINS the silence
+  # rather than creating it, which is what stops the table below reading as complete.
+  hand_place "bin/cc-thread"
+  run "$LP"
+  lacks "commit(s) BEHIND"
+  lacks "is CURRENT with"
+  lacks "lag is UNKNOWN"
+  has "STRAY"
+}
