@@ -86,6 +86,167 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-31 — drain recycle #262: method 234 — A CONVERGENCE ITEM IS A CLAIM THAT SOME
+  PRODUCER WILL EVENTUALLY RUN. NAME THE PRODUCER, THEN ASK WHETHER ITS SELECTOR CAN EVER
+  CHOOSE YOUR FILE.**
+  🚨 **THE FINDING.** My predecessor's lead 0 was to re-validate the `master-operator-gated`
+  BLOCKED rows against their own evidence fields — 144 rows, of which #261 had re-validated
+  exactly one. I screened all 144 by how much falsifiable CURRENT STATE their own text cites
+  (`screen262-gated.py`, three controls: a POS drawn from #261's own refuted row `85fc4f3216a7`,
+  which lit all SIX classes; a MUTE class that must read 0 across the population; a bogus-condition
+  NEG at 0). **Seventeen rows light two or more classes; 82 of 144 light none, so this is a screen
+  and not a sweep.** I re-ran the cited evidence of four and **closed three**.
+  🚨 **THE THIRD ONE IS THE FINDING, AND IT IS NOT A STALE ROW — IT IS A LIVE DEFECT WEARING A
+  STALE ROW'S CLOTHES.** `48f01c02cf09` files two clauses under one heading, *converge the live
+  layer*. Its first clause had converged on its own. **Its second — "`bin/ms365-reply-splice.py`
+  is not linked into `~/.claude/bin` at all" — was TRUE, and no convergence could ever have made
+  it false.**
+  🚨 **AN ABSENCE FILED AS A LAG IS A DIFFERENT DEFECT FROM AN ABSENCE FILED AS A GAP.** A LAG
+  resolves when the producer next runs. A GAP is a file the producer's selector never chooses, and
+  it survives every advance forever. Measured 2026-08-31T00:57Z: the file is named **ZERO** times
+  across `install.sh`, `scripts/deploy-live.sh` and `scripts/deploy-parity-assert.sh`, and exists
+  in **no** live location — not `~/.claude/bin`, not `~/bin`, not `~/.reso/bin`. **The ledger read
+  `LIVE_ADDS=0` throughout, correctly: ADDS scans the LAG WINDOW, and this add fell below the
+  deployed tip long ago. A detector scoped to the lag window cannot see a gap it has already
+  passed.**
+  🚨 **AND THE CONSUMER IS THE LIVE, ENFORCING HOOK.** `hooks/enforce-email-formatting.py` —
+  verified blob-identical to `origin/main` at sha256 `af0131fa06d906cd`, so it is the code
+  sessions actually run — **tells the model to execute that tool twice**, at RECIPE step 3c and
+  inside the rule-6 denial message. **That is the `desk-register` defect `install.sh:800` already
+  records in its own words ("nothing else linked it … invoked a nonexistent binary"), one family
+  later, in the file that documents it.**
+  ✅ **FIXED, AND THE FIX HAD TO REACH THREE FILES BECAUSE ONE ENUMERATION IS WRITTEN IN THREE
+  PLACES.** `install.sh:809` globs `bin/cc-*` and `bin/desk-*`; `deploy-parity-assert.sh:511-513`
+  RESTATES those families as its own `case` arms; the hook holds the prescription. I added the
+  `ms365-*` family to the first two and made the prescription absolute.
+  🚨 **TWO INDEPENDENT DEFECTS THAT COMPOUND — FIXING EITHER ALONE LEAVES IT BROKEN.** (1) No glob
+  selected the file, so nothing linked it. (2) **The hook prescribed it as `bin/ms365-reply-splice.py`
+  — a path containing a SLASH, which the shell resolves against the CWD and never against PATH.**
+  The hook fires in every session whatever its cwd, so even a linked tool would not have resolved.
+  🚨 **AND THE PART THAT DECIDES WHETHER A FIX IS LIVE AT ALL: `install.sh` IS NOT THE MECHANISM
+  THAT KEEPS THE LIVE LAYER IN STEP.** It REFUSES a global install from a behind-trunk checkout
+  (`install.sh:109-132`) — which is the state `deploy-live` creates by design. The repairer that
+  runs **144×/day** is `deploy-parity-assert.sh`, whose verdict `deploy-live` consumes rather than
+  re-deriving. **A family in install.sh's glob but absent from the assert's arms falls to that
+  file's `*) want=0` default and is scored NOT-EXPECTED-LIVE, silently — the same disabling its own
+  `backlog-consolidation` comment describes twenty lines above the arm I edited.** So install.sh
+  alone would have fixed nothing until a human ran install.sh by hand. **When you add a deploy
+  class, find the REPAIRER, not the installer.**
+  ✅ **PINNED BY FOUR ARMS in `tests/ms365-reply-splice.bats` (13 → 17). Two pin the mechanism and
+  TWO ARE CLASS ARMS THAT DERIVE THEIR POPULATION INSTEAD OF NAMING A TOOL**, so the next family
+  cannot land in only one of the two enumerations: **A** executes install.sh's OWN extracted loop
+  header (uniqueness asserted first) against a fixture repo, with a `cc-*` POS control and a
+  never-linked NEG control · **B** asserts every mention of the tool in the hook is the absolute
+  form — **the absolute form CONTAINS the relative one as a substring**, the `land-verify` /
+  `postland-verify` scar, so it counts BOTH needles, asserts equality, and floors at 1 so it cannot
+  pass by the tool going unmentioned · **C** derives every `~/.claude/bin` tool the hook prescribes
+  and asserts install.sh would link each · **D** derives every `bin/` family install.sh globs and
+  asserts the parity assert claims each with a `want=1` arm.
+  ✅ **RED-PROVED IN TWO STAGES, EACH AGAINST A PREDICTION WRITTEN FIRST AND ENFORCED AT rc 93.**
+  Arms A–C: **3 of 3 red BY NAME**, 13 incumbents green (plan 16). Arm D: **exactly 1 red, by
+  name**, against the unfixed parity assert (plan 17). Post-fix **17 ok / 0 not ok / 0 skip**.
+  ✅ **MY OWN FOREGROUND VERDICT, since the selector answered `FULL`: the 8 suites DIRECTLY coupled
+  to the diff, run through the fd-3 runner with the terminator asserted — `suites_run=8
+  suites_listed=8`, **335 ok / 0 not ok / 0 NO-PLAN**, 156 s at load 26–30.** `ms365-reply-splice`
+  17 · `deploy-parity` **78** · `deploy-link-parity` 41 · `install-worktree-refusal` 8 ·
+  `email-drafts-only-and-alias` 25 · `email-freshness-gate` 19 · `email-reply-quote-guard` 11 ·
+  `deploy-live` 136. ⚠️ **`deploy-parity` is 78, not the 75 in the inherited table — TAKE YOUR OWN
+  COUNTS.** **NOT RUN, and named rather than claimed:** `tests/postland-verify.bats` (130,
+  pathologically slow) and `tests/deploy-parity-live.bats` (RED on trunk, manifest-excluded), plus
+  the ~34 suites that name `install.sh` only in passing.
+  🚨 **THE SELECTOR ANSWERED `FULL` — THE FAIL-CLOSED "CANNOT DECIDE" TOKEN, NOT A LIST, AND NOT A
+  KILLED SELECTOR** (it exits 0 and prints the documented token). **It does NOT amplify into a
+  whole-corpus land: `ship-land.sh:260` pins `GATE_EFFECTIVE_FULL=0` — "a land makes no full-suite
+  claim, in BOTH lanes" — and the full corpus runs once, post-land, batched.** Read the token, then
+  read what the consumer does with it. ⚠️ **And the selector POS control read **0** on
+  `$MB~1..$MB` and that was CORRECT — `$MB` is #261's `docs(drain)` commit, PROSE-ONLY. Redrawn
+  from `$MB~2..$MB~1` it SPOKE with 1. This brief warns about it in one line and it still cost a
+  minute; the warning is now three links old and has cost three links a minute each.**
+  ✅ **THREE ROWS CLOSED BY CONTENT, each with its own cited evidence re-run rather than read.**
+  · **`c446beb6ad28`** asked the operator to open a fresh terminal tab because *"the chain is
+  STALLED at recycle #214"*. **Every clause had flipped**: the newest §2.1 entry named #261, the
+  doc carried 238 drain entries, 50 briefs sat on disk, `ITERM_SESSION_ID` was set, `cc-in-kitty`
+  returned rc 0 and the id-keyed kitty query returned exactly ONE window with a bogus-id NEG at 0.
+  **It had demanded a restart for six days while the chain ran 47 further links past it.** 🚨 **And
+  the asymmetry worth carrying: `072f1d7f1b9d`, the earlier step this row explicitly SUPERSEDES,
+  was already `done`. The superseded row was closed and the superseding one was left blocked.**
+  · **`92b48ac81692`** cited two absences; both files are PRESENT and the live HEAD it pins
+  (`d8d915706e54`) has moved to `0ae99fd850a8`.
+  · **`cb10454ead99`** said live sessions still ran a pre-R1 hook permitting programmatic sends;
+  that hook is now blob-identical to trunk and names `send-mail` 10×, `reply-all-mail-message` 5×,
+  `send-draft-message` 5×, with a NEG control at 0 on the same file.
+  ⚠️ **`48f01c02cf09` STAYS OPEN AND I DID NOT CLOSE IT.** Its hook clause converged and its second
+  clause's SOURCE defect is now fixed, **but the link does not exist yet** — it appears when the
+  converger next runs the parity leg. **A row is not closed by fixing the part of it you found
+  tractable**, and a source fix is not a live file.
+  🚨 **THE INSTRUMENT FAULTS, BOTH MINE, BOTH SURFACED AS REFUSALS.** (1) **My census predicted
+  `install.sh:809`'s glob would explain the whole `~/.claude/bin` population and it was REFUSED:
+  12 non-matching files are present anyway, so MORE passes write that directory.** The refusal is
+  what sent me to the enumerated lists and then to the parity assert — **the correction was worth
+  more than the confirmation would have been.** (2) **A `wrap-ledger.sh --machine` read returned
+  EMPTY and I nearly recorded it as an absent live sha. It keys on CWD; re-taken from the worktree
+  it answers.** Investigate every zero.
+  ⚠️ **THE N-2 HAZARD FIRED THREE TIMES, ALL CAUGHT BY THE TWO-SECOND GREP BEFORE ANYTHING RAN.**
+  `gap262.sh` arrived globbing its GRANDPARENT's id lists; **`markers262.py` arrived with `SRC`
+  pointing at the grandparent's brief AND its positive control renumbered to agree with it**, so
+  unrepaired it would have confirmed the wrong document and passed; **`splice262.py` arrived as a
+  byte-copy of #261's own splicer — `SRC`, `DST` and BOTH rc-92 guards one link behind.** All four
+  numbers bumped by hand. **`SRC` and `POS` must move TOGETHER, every link.** ✅ `board`/`census`/
+  `linkbody`/`insert`/`verify` cloned clean — `insert` changed 6 lines (5 filenames + the
+  `mine == 262` assertion), `verify` 4 (all filenames), **ZERO prose corrupted, twenty-first
+  consecutive**; the `sha256` trap did not arise, which is a property of the NUMBERS and not
+  evidence the hazard is gone.
+  **THE LANE.** Open 00:50Z `RUNG=✅ LIVE_SRC=behind LIVE_LAG=2 LIVE_ADDS=0 LIVE_DIVERGED=0
+  LIVE_AGE=3879 LIVE_BREACH_WHY=<empty> MIG_FAILED=0`, `LIVE_SHA=0ae99fd850a8`, `GATE=stale` —
+  **the FIFTY-SECOND consecutive `stale`, not mine to drive.** Land lock free, `holder: (free)
+  waiters: 0`.
+  **THE BOARD.** Gap #261-floor → my open, **13 m 09 s: ZERO arrivals, ZERO departures, ZERO
+  transitions**, `claimed` empty both ends. Open 00:50:55Z **340 open / 221 blocked / 2,348 done /
+  0 claimed** (561 combined, 2,909 rows); close 01:10:40Z **341 / 216 / 2,351 / 1** (557 combined,
+  2,909 rows). Both partitions asserted at both moments; arrivals and departures from a FULL-SET
+  `comm`. **Link body: ZERO arrivals, ZERO departures, SIX transitions in 19 m 45 s — and THREE of
+  the six are my own closes.** **NOT mine: `0c8b39b67665` open → claimed, `70f0001c657b`
+  blocked → open (the drain's own SSOT row) and `ca97c678b18b` blocked → open (#240's detector-gap
+  row, which the actuator moved).** ✅ **So the off-box actuator series takes a `3` for my link
+  body with my three writes subtracted, and a `0` for the gap before it.** ⚠️ **19 m 45 s is a
+  SHORT window; read it as such and not as a rate.**
+  **THE STORES, each with its moment.** Post-land RED pages **0 at both moments — the 190th and
+  191st consecutive** — denominators **2,795 → 2,802**. ⚠️ **#261's floor read 2,804, so the
+  denominator FELL by nine before my open and rose by seven inside my link: episodic in both
+  directions, exactly as inherited.** postland stamps **519 → 519** (519 at all three of #261's
+  moments too — **state the moments, name no window**). `autonomy/pages` **2,318 / 96 →
+  2,326 / 97**. inbox-guard `.escalated` **434 / 434 at both**.
+  **THE RAILS.** qos diff clean, **143rd consecutive** (rc 0, 0 bytes). All four kitty checks
+  passed at minute ~2 — `cc-in-kitty` rc 0, `KITTY_WINDOW_ID=27`, `KITTY_PID=1427`,
+  `KITTY_LISTEN_ON=unix:/tmp/kitty-1427`, `ITERM_SESSION_ID=w0t0p0:27`, `CC_TERM` UNSET,
+  `cc-notify --self` printing 27, and the id-keyed query returning **exactly one** object with a
+  bogus-id NEG at 0 — **the THIRTY-FIFTH consecutive link.** `cc-roles list` byte-identical again
+  (`desk UNVERIFIED 5 | docs-lead UNVERIFIED 450 | drain-lead UNVERIFIED 7 | orchestrator ABSENT
+  empty`). Mailbox `~/.claude/mailbox/27.md` unchanged at **4,059 bytes, 1 line** — the
+  twenty-eighth identical reading. Gates: `shellcheck` rc 0 and `bash -n` rc 0 on both scripts,
+  `py_compile` rc 0 on the hook, `bats-assert-liveness` rc 0, bare `pipefail-sigpipe-lint` rc 0
+  (*clean, allowlist honoured*), scoped `bats-shellcheck-lint` rc 0 (*1 suite, 0 blocking*),
+  `bats --count` 17. **`alarm-polarity-lint` DECLARED NOT-RUN** — none of my files is an alarm
+  emitter and its POS control is a known mute (`e07dc5e09f83`, OPEN) — **the seventeenth
+  consecutive link to declare rather than claim.**
+  ⚠️ **Running `deploy-parity-assert.sh` from the worktree answers rc 1 *"DRIFT — the code running
+  is not the code in this checkout"*. That is the deployed-layer guard correctly refusing a verdict
+  from a non-live copy: a NON-VERDICT, not a red, and not evidence about this diff.**
+  **THE LEADS FOR MY SUCCESSOR, in order.** **(0)** **The `master-operator-gated` sweep is barely
+  begun and it is still the cheapest high-yield work on the board: 144 blocked rows, #261 did one,
+  I did four.** `screen262-gated.py` ranks them and its POS control is #261's own refuted row —
+  **re-run it against a fresh board rather than trusting my table**, and start at the 17 rows
+  lighting ≥2 classes. **(1)** **Ask method 234 of the OTHER live-layer rows.** Every row filed as
+  *converge X* is a claim that a producer will run; `census262-bin.sh` and `probe262-linkable.sh`
+  answer *"can its selector ever choose this file?"* over a whole population, with controls —
+  **repoint their directories.** **(2)** **The three-way enumeration I found is unlikely to be the
+  only one.** `install.sh` ↔ `deploy-parity-assert.sh` now agree on `bin/` families and my arm D
+  pins that, **but the same restatement exists for `scripts/`, `hooks/*.py`, `skills/*/*`,
+  `agents/`, `lib/` and `vendor/`, and NOTHING pins any of those pairs.** That is a
+  derive-both-sides arm per class and it is cheap. **(3)** **`4e6a51df2a84` (OPEN, do NOT re-file)
+  is now better evidenced from the other side:** it owns `LIVE_ADDS`'s false POSITIVE for
+  `tests/*`; I measured its false NEGATIVE — **an add BELOW the deployed tip that no selector
+  claims is invisible to `LIVE_ADDS` forever, at any lag.**
 - **2026-08-31 — drain recycle #261: method 233 — A PERMISSION BOUNDARY GATES AN ACT, NOT A TASK.
   NAME THE ACT, THEN ASK WHETHER THE FIX ACTUALLY REQUIRES IT — AND NEVER WIDEN ONE MEASURED
   DENIAL INTO A CLASS.**
