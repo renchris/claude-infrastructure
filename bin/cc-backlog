@@ -1052,6 +1052,15 @@ TSV_PAD=$'\037'
 
 # Emit only well-formed records (must have id+event) to stdout; REPORT malformed
 # lines to stderr (fail-loud). Never removes them from the file.
+#
+# SC2119/SC2120 are DECLARED, not fixed, and the distinction matters. `--strict` is an opt-in
+# switch, so the four bare call sites are correct AS bare — the whole point of the flag is that an
+# existing caller keeps its exact behaviour. shellcheck's suggestion (`valid_records "$@"`) would
+# forward the SCRIPT's argv into a records reader, which is not a no-op but a bug. Declared here
+# rather than left standing because the land gate re-proves a file whenever its blob changes: five
+# findings that were memoized green on trunk block the next lander who touches this file for any
+# reason, which is what they did to backlog e981656df348's fix.
+# shellcheck disable=SC2119,SC2120
 valid_records() { # [--strict] → rc 1 on a short read (default: warn on stderr and return 0, as before)
   # --strict makes the INCOMPLETE verdict below REACHABLE. The check has always existed and has
   # always been right; it just had nowhere to go — stderr prose that no caller parses, then
