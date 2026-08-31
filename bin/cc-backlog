@@ -1315,17 +1315,46 @@ project_default() {
 # basename and project_default already refuses the degenerate cases. Whether a real-but-undeclared
 # checkout should warn too is a separate call, not this item's.
 
+# self_path → this script's own file with every symlink resolved, for the FOUR sites that resolve a
+# co-versioned sibling or the repo root off $0. ONE implementation, because until 2026-08-31 this
+# file carried TWO answers to that question and only one of them was right.
+#
+# 🚨 A RELATIVE LINK TARGET IS RESOLVED AGAINST THE LINK'S OWN DIRECTORY, NEVER THE PROCESS'S CWD,
+# and that is the whole defect. The short form the other three sites used —
+#
+#     s="$0"; [ -L "$s" ] && s="$(readlink "$s")"
+#     bin="$(cd "$(dirname "$s")" 2>/dev/null && pwd)/<sibling>"
+#
+# — is correct only when the link target happens to be ABSOLUTE. Production invokes this file as
+# $HOME/.claude/bin/cc-backlog, and that live layer is per-file symlinks into the checkout
+# (.claude/CLAUDE.md); a relative target such as `../../Development/claude-infrastructure/bin/
+# cc-backlog` makes `readlink` yield a path relative to ~/.claude/bin, which the `cd` then resolves
+# from whatever cwd the process happens to hold. The `cd` fails, `$( )` collapses to the EMPTY
+# STRING, and the sibling resolves to the absolute nonsense `/cc-eligible` — reproduced at three
+# different cwds, all three unresolvable. It also stops at ONE hop, so a link to a link resolves to
+# the intermediate. `dispatch_conf` already carried this loop for exactly the deploy-layer reason
+# above; this is that loop, extracted rather than copied a fourth time.
+#
+# WHY IT COST TWENTY-TWO DISPATCHES. The eligibility gate below tests `[ -x "$ebin" ]` and skips
+# when it is false, which is the right fail-open — but a helper that resolved to `/cc-eligible` is
+# indistinguishable from one that ran and admitted, so `cc-backlog claim --venue cloud` returned 0
+# and the row fired off-box with its park arm never consulted. See the park-arm report below.
+self_path() {
+  local s="$0" l
+  while [ -L "$s" ]; do
+    l="$(readlink "$s" 2>/dev/null)" || break
+    case "$l" in /*) s="$l" ;; *) s="$(dirname "$s")/$l" ;; esac
+  done
+  printf '%s' "$s"
+}
+
 # dispatch_conf → the path of the dispatch-set SSOT, same env knob and same resolution as
 # bin/cc-dispatch. $0's SYMLINK is resolved first because production invokes this as
 # $HOME/.claude/bin/cc-backlog: a dirname($0)-relative read would look in ~/.claude/scripts/, where
 # a file is per-file-symlinked and a NEW one is absent until the converger runs (memory:
 # deploy-lag-checkout-behind-origin) — i.e. the validator would silently validate nothing.
 dispatch_conf() {
-  local s="$0" l
-  while [ -L "$s" ]; do
-    l="$(readlink "$s" 2>/dev/null)" || break
-    case "$l" in /*) s="$l" ;; *) s="$(dirname "$s")/$l" ;; esac
-  done
+  local s; s="$(self_path)"
   printf '%s' "${CC_DISPATCH_PROJECTS_CONF:-$(cd "$(dirname "$s")/.." 2>/dev/null && pwd)/scripts/dispatch-projects.conf}"
 }
 
@@ -2454,8 +2483,19 @@ cmd_transition() {
     # python3 that is not there, a crash — must let the claim through. ONLY exit 3 blocks.
     if [ "$venue" = cloud ] && [ "${CC_BACKLOG_ELIGIBLE_GATE:-on}" != off ]; then
       local eself ebin erc eout
-      eself="$0"; [ -L "$eself" ] && eself="$(readlink "$eself")"
+      eself="$(self_path)"
       ebin="${CC_BACKLOG_ELIGIBLE_BIN:-$(cd "$(dirname "$eself")" 2>/dev/null && pwd)/cc-eligible}"
+      # AN UNRESOLVABLE HELPER NAMES ITSELF. Fail-open is unchanged and correct — this predicate
+      # lives outside the ledger fold, so every way of failing to READ it must let the claim
+      # through — but bin/cc-eligible's own doctrine is "exit 0 with a verdict that NAMES the
+      # uncertainty", and this site was the one place that failed open in SILENCE. A skipped gate
+      # then looks exactly like a passed one, which is how a landed park could be re-dispatched
+      # with no record naming the arm that did not run (backlog e981656df348, 22 dispatches).
+      # stderr, never stdout: the caller contract is `id=$(cc-backlog claim …)` and rc 0.
+      if [ ! -x "$ebin" ]; then
+        printf 'cc-backlog claim: eligibility gate SKIPPED — cc-eligible unresolvable at %s (fail-open; set CC_BACKLOG_ELIGIBLE_BIN)\n' \
+          "$ebin" >&2
+      fi
       if [ -x "$ebin" ]; then
         eout="$("$ebin" check "$id" 2>&1)"; erc=$?
         if [ "$erc" -eq 3 ]; then
@@ -2795,8 +2835,7 @@ cmd_transition() {
 # file and bin/cc-premise live in ONE repo and deploy together as per-file symlinks, so the sibling
 # next to the resolved $0 is guaranteed to be the matching version.
 premise_bin() {
-  local self
-  self="$0"; [ -L "$self" ] && self="$(readlink "$self")"
+  local self; self="$(self_path)"
   printf '%s' "${CC_BACKLOG_PREMISE_BIN:-$(cd "$(dirname "$self")" 2>/dev/null && pwd)/cc-premise}"
 }
 
@@ -4509,7 +4548,7 @@ cmd_freshness() {
   # through $0 exactly as premise_bin does — never $PATH, never a hardcoded ~/Development path, so a
   # worktree under test measures ITSELF rather than the operator's live checkout.
   if [ -z "$repo" ]; then
-    local fself; fself="$0"; [ -L "$fself" ] && fself="$(readlink "$fself")"
+    local fself; fself="$(self_path)"
     repo="${CC_BACKLOG_REPO:-$(cd "$(dirname "$fself")/.." 2>/dev/null && pwd)}"
   fi
 
