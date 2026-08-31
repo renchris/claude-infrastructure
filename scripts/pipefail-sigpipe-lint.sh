@@ -1005,7 +1005,17 @@ EOF"
     echo "⛔ $SELF_NAME --selftest: $pass/$total — the detector no longer discriminates." >&2
     return 1
   fi
-  echo "✓ $SELF_NAME --selftest: $pass/$total (both directions; builtin producer RED on a variable or substitution, GREEN on a literal)"
+  # The summary NAMES what it discriminates, and that is load-bearing rather than decorative: a
+  # passing selftest used to print only a count, so nothing outside this file could ask WHICH
+  # shapes it covers. Backlog ca97c678b18b shipped with the falsifier
+  #   [ "$(… --selftest 2>&1 | grep -ci function-final)" -ge 1 ]
+  # which reads the arm LABELS — and those are printed only on FAILURE. The probe therefore read 0
+  # on a cured tree exactly as it did on a broken one, so the item could never self-retract and
+  # would re-dispatch forever against work already landed. A coverage claim that only a RED run
+  # will state is not a coverage claim (memory: probe-that-acts-on-absence-must-confirm-presence).
+  echo "✓ $SELF_NAME --selftest: $pass/$total (both directions; builtin producer RED on a variable" \
+       "or substitution, GREEN on a literal; function-final pipeline RED in both the multi-line and" \
+       "one-line legs)"
   return 0
 }
 
