@@ -227,9 +227,21 @@ which belongs to `CC_ADMIT_ACTIVE_CEILING` (`193ae8ddce72`), not to this per-cor
 every `.md` and `.sh` on trunk now finds **no live copy left**; the only surviving occurrences of the
 phrase are quotations that record what the text used to say.
 
-**So all three legs of `e981656df348` are discharged on trunk** — falsified citation (`b5553505`),
-disproved prescription (`951d4e82`), last stale copy (`3fce569a`) — and its stated blocker was a
-misattribution that could never have cleared it. Nothing about this row is derivable work.
+**So all three legs of `e981656df348` are discharged on trunk** — falsified citation (by CONTENT, see
+below), disproved prescription (`951d4e82`), last stale copy (`3fce569a`) — and its stated blocker was
+a misattribution that could never have cleared it. Nothing about this row is derivable work.
+
+⚠️ **The first leg is cited by CONTENT because neither its sha nor its subject survived the land.**
+This sentence used to name `b5553505`, and on trunk that short sha resolves to an unrelated commit
+(`docs(drain): recycle #255`, 2026-08-28) — so the citation did not merely rot, it now points at
+something else and reads as if it verifies. Its subject is not findable either: `git log origin/main
+--grep "the ceiling cites a section that has no derivation"` returns nothing, the commit having been
+folded into a drain. Both of this file's own fallbacks — cite the sha, else cite the subject — are
+therefore exhausted, and the leg is still discharged: `git show origin/main:scripts/lib/capacity-admit.sh`
+carries the struck header verbatim above `CC_HW_DEFAULT_MAX_LOAD_PER_CORE=2.0`, stating that the
+constant was never derived and that no derivation is reachable on this axis. **Verify this leg by
+reading that file on the trunk ref, never by resolving a sha** — content is the only citation here
+that a land cannot invalidate.
 
 🚨 **The ledger close cannot be done from a cloud worker, so it is recorded here instead.** The store
 is `~/.claude/autonomy/backlog.jsonl`, which exists only on the operator's box; measured on the cloud
@@ -242,6 +254,37 @@ write, only a one-line close on the box:
 ```sh
 cc-backlog done e981656df348 --evidence 3fce569a
 ```
+
+### 🚨 That instruction was addressed to a human, and it is why there was a 21st dispatch (2026-08-31)
+
+The paragraph above is correct on every fact and still failed at the only thing left to do, because
+**no reader executes a paragraph.** The cure landed complete at 2026-08-29T23:49Z (`3fce569a`); the
+wave fired this row again at 2026-08-31T02:10Z, **26 h 21 m later**, at a cloud worker that could no
+more reach the store than the last one could.
+
+The routing was the defect, and it is the same shape as §3's own lesson one layer out. Both rails that
+fold a row out of the dispatch wave key on ONE artifact — `scripts/cloud-return.sh` step 8 turns
+`docs/parks/<id>.md` into a desk verb, and `bin/cc-eligible` refuses `claim --venue cloud`
+(`ineligible-parked`) while a landed park is newer than the row's last block/unblock — and **no such
+file was ever written for this id.** `git ls-tree -r origin/main docs/parks/` returned three ids and
+`e981656df348` was not among them, so the row stayed claimable, the dispatcher passed the predicate,
+and the wave fired it again. §3 taught that a store holding a disproved prescription is an
+instruction; what this section left standing is the same defect in the OTHER store — **the ledger
+row still carries the disproved prescription in its own `what` text, and the dispatcher reads the
+row, never this doc.** A doc-side cure cannot suppress a dispatch, because the doc is not on the
+dispatch path.
+
+✅ **The rail is now laid: `docs/parks/e981656df348.md`**, written by `scripts/cloud-park.sh`, carrying
+the disproof and the one-line close as its `needs:`. It takes effect at `bin/cc-eligible` — which runs
+at claim time and does **not** depend on `scripts/autonomy-sweep.sh`, the arm `f85fce7c26f5` reports as
+dark and which made that row's tenth park inert for 7 h 11 m. The command in the fenced block above is
+unchanged and still the whole remaining action; it is now attached to something that reads it.
+
+**The corollary this row has paid twenty-one times for:** *a fix that does not land does not exist —
+and a fix that lands somewhere no reader looks has not landed.* Nineteen correct diagnoses reached
+zero branches; the twentieth landed the cure and addressed its last step to a human. Diagnosis was
+never the bottleneck, and in the end neither was landing: it was routing the final step to a store
+that nothing reads.
 
 ## 4 · If 2.1.234 is adopted, adopt it on other grounds — and set one env var first
 
