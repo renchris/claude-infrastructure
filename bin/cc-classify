@@ -419,8 +419,17 @@ find_successor() { # <this-sid> <this-cwd> <since-epoch-SECONDS> <all-json> → 
       .[] | select(.cwd==$cwd)
           | select((.session_id // .sessionId // "") != $sid)
           | select($since==0 or ((.startedAt // 0) / 1000) >= $since)
-          | {paneUUID, pid: ((.pid // "")|tostring)}' 2>/dev/null | head -20
+          | {paneUUID, pid: ((.pid // "")|tostring)}' 2>/dev/null | awk 'NR<=20'
 }
+# `awk NR<=20` rather than `head -20`, and it is the canonical drain fix rather than a style choice.
+# This pipeline is the LAST command of the function, so its status IS what find_successor returns —
+# and `head` exits on line 21, SIGPIPEs the jq, and `set -o pipefail` (line 41; there is no -e here)
+# promotes that 141 to the return value. Both callers today read it through `done < <( … )`, which
+# discards the status, so the inversion is LATENT rather than live — but latent is what this whole
+# class is: the ec9a43a9 scar sat unread for weeks too. awk drains, so nothing is orphaned, and it
+# emits the same 20 lines. Found by scripts/pipefail-sigpipe-lint.sh once clause 4c taught it to see
+# a function-final pipeline (backlog ca97c678b18b); the ZERO-site guard for this file is
+# tests/cc-classify.bats "class guard: the pipefail-sigpipe detector reports ZERO …".
 
 cocwd_live() { # <sid> <cwd> <all-json> → 0 if a DISTINCT LIVE session shares this cwd. That live
   # session OWNS the shared working tree (its uncommitted work, not the target's), so reaping the
