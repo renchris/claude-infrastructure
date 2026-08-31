@@ -66,6 +66,42 @@ REAP_TTL="${LAND_LOCK_REAP_TTL:-30}"  # abandoned reap-mutex age (s) — the sec
 POLL=2
 WAITERS="${LOCK_PARENT}/waiters"    # one file per QUEUED acquirer — the visible depth (P4 defect 4)
 
+# ── PORTABLE stat — TRY THE FLAG WHOSE WRONG-PLATFORM BEHAVIOUR IS AN ERROR FIRST ────────────────
+# SSOT for this class and its reasoning: hooks/lib/mailbox-pending.sh § PORTABLE MTIME. The idiom
+# this file used — a bare `stat -f %m … 2>/dev/null || echo <default>` — is macOS-first, and on
+# Linux the default IS NEVER REACHED: GNU `stat -f` is not "BSD mtime", it is --file-system, so it
+# prints a filesystem REPORT on stdout and exits 1. `|| echo <default>` does not replace stdout that
+# has already been written, so `$(…)` captures the report AND the default, concatenated.
+#
+# THAT IS WORSE HERE THAN THE WRONG NUMBER IT IS ELSEWHERE, because four of this file's five sites
+# read the capture in an ARITHMETIC context. Bash evaluates the report's first bare word as a
+# variable name, and `set -uo pipefail` (line 42) makes that FATAL. MEASURED 2026-08-31 on Ubuntu
+# (GNU coreutils 9.4), driving the real script outside any harness, over a lock dir holding a dead
+# pid:  `land-lock.sh: line 305: File: unbound variable`, rc 1 — i.e. THE MACHINE-WIDE LANDING
+# MUTEX CANNOT BE ACQUIRED AT ALL ON LINUX ONCE THE LOCK DIRECTORY EXISTS. Every reap, every TTL
+# question, every `--status` render over a held lock dies at the first stat. The fifth site
+# (lock_generation's `%i`) is not arithmetic and so does not die; it degrades worse than it looks —
+# the generation token becomes the same constant filesystem report for every generation, so the CAS
+# that is supposed to detect "the lock changed under me" compares EQUAL always.
+#
+# Order reversal is the whole cure, and it works because the failure is asymmetric: BSD `stat` has
+# no `-c` and EXITS NON-ZERO on it, so the fallback fires; GNU `stat` has a `-f` that SUCCEEDS at
+# something else, so it never does. Behaviour on macOS — the fleet — is unchanged by construction.
+# These print NOTHING when the answer is unknowable, which is what makes each call site's own
+# `|| echo <default>` mean what it has always claimed to mean.
+ll_mtime() {  # <path> → epoch seconds on stdout; prints nothing and returns 1 when unknowable
+  local m
+  m="$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || true)"
+  case "${m}" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "${m}"
+}
+ll_inode() {  # <path> → inode number on stdout; prints nothing and returns 1 when unknowable
+  local i
+  i="$(stat -c %i "$1" 2>/dev/null || stat -f %i "$1" 2>/dev/null || true)"
+  case "${i}" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "${i}"
+}
+
 # ── INTROSPECTION VERBS + THE MISUSE GUARD (P4 defect 6) ─────────────────────────────────────────
 # MEASURED: 23 ledger rows are `exit 127` — agents guessing `land-lock.sh status`. `status` was not
 # a verb, so it was treated as PAYLOAD: the machine-wide mutex was TAKEN and only then did `status`
@@ -186,7 +222,7 @@ lock_alarm_rows() {  # machine-wide: one JSON row per LIVE holder that is PAST I
     d="${parent}/lock.d"
     [[ -d "${d}" ]] || continue
     holder_live "${d}" || continue
-    age="$(( now - $(stat -f %m "${d}" 2>/dev/null || echo "${now}") ))"
+    age="$(( now - $(ll_mtime "${d}" || echo "${now}") ))"
     [[ "${age}" -gt "${TTL}" ]] || continue
     pid="$(cat "${d}/pid" 2>/dev/null || echo '?')"
     ppid="$(ps -o ppid= -p "${pid}" 2>/dev/null | tr -d ' ' || true)"
@@ -206,7 +242,7 @@ case "${1:-}" in
       if holder_live "${LOCK}"; then
         printf 'holder:   pid %s  branch %s  held %ss  (LIVE — H2: never reaped)\n' \
           "$(cat "${LOCK}/pid" 2>/dev/null || echo '?')" "$(cat "${LOCK}/branch" 2>/dev/null || echo '?')" \
-          "$(( $(date +%s) - $(stat -f %m "${LOCK}" 2>/dev/null || date +%s) ))"
+          "$(( $(date +%s) - $(ll_mtime "${LOCK}" || date +%s) ))"
       else
         printf 'holder:   present but DEAD or empty — the next acquirer reaps it\n'
       fi
@@ -302,7 +338,7 @@ write_owner() {
 lock_is_stale() {  # 0 = reapable · 1 = live, hold off
   local holder age rec_lstart
   holder="$(cat "${LOCK}/pid" 2>/dev/null || true)"
-  age="$(( $(date +%s) - $(stat -f %m "${LOCK}" 2>/dev/null || echo 0) ))"
+  age="$(( $(date +%s) - $(ll_mtime "${LOCK}" || echo 0) ))"
   if [[ -z "${holder}" ]]; then
     # mkdir'd but pid not yet written — a real owner mid-acquire; grace 5s, else TTL.
     { [[ "${age}" -ge 5 ]] || [[ "${age}" -gt "${TTL}" ]]; } && return 0
@@ -336,7 +372,7 @@ lock_generation() {
   printf '%s|%s|%s' \
     "$(cat "${LOCK}/pid" 2>/dev/null || true)" \
     "$(cat "${LOCK}/lstart" 2>/dev/null || true)" \
-    "$(stat -f %i "${LOCK}" 2>/dev/null || echo 0)"
+    "$(ll_inode "${LOCK}" || echo 0)"
 }
 
 # ATOMIC REAP. `rm -rf "${LOCK}"; mkdir "${LOCK}"` was NOT atomic and could not be made so by
@@ -360,7 +396,7 @@ reap_and_claim() {  # $1 = the generation token observed when we judged it stale
     # its own TTL. The section is milliseconds (a couple of stats, an rm, a mkdir), so anything
     # older than REAP_TTL is abandoned rather than working. Losing this race is harmless: we just
     # return and re-observe.
-    rage="$(( $(date +%s) - $(stat -f %m "${REAP_LOCK}" 2>/dev/null || date +%s) ))"
+    rage="$(( $(date +%s) - $(ll_mtime "${REAP_LOCK}" || date +%s) ))"
     [[ "${rage}" -gt "${REAP_TTL}" ]] && rm -rf "${REAP_LOCK}" 2>/dev/null
     return 1
   fi

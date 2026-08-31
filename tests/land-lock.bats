@@ -503,3 +503,143 @@ PS
   [ "$(cat "$LOCK/pid")" = "$live" ]
   kill "$live" 2>/dev/null || true
 }
+
+# ── PORTABLE stat — BOTH PLATFORM DIRECTIONS, DRIVEN ─────────────────────────────────────────────
+# scripts/land-lock.sh § PORTABLE stat. The file read every mtime through a bare BSD `stat -f %m`
+# with a `|| echo <default>` fallback that CANNOT fire on Linux: GNU's `-f` is --file-system, so it
+# prints a filesystem report on stdout and exits 1, and `|| echo` does not replace stdout already
+# written. Four of the five sites feed that capture to arithmetic, where `set -u` makes the report's
+# first bare word fatal. MEASURED 2026-08-31 (Ubuntu, GNU coreutils 9.4): the real script, outside
+# any harness, over a lock dir holding a dead pid — `line 305: File: unbound variable`, rc 1. The
+# machine-wide landing mutex could not be acquired AT ALL on Linux once the lock directory existed.
+#
+# These cases STUB `stat` rather than trusting the box, so each platform's direction is exercised on
+# BOTH platforms — the whole defect was one platform's behaviour being invisible from the other.
+# `_real_mtime` resolves the box's own answer without assuming which stat this box ships.
+_real_mtime() {  # <path> → epoch seconds, whichever stat this box has
+  local m
+  m="$(/usr/bin/stat -c %Y "$1" 2>/dev/null || true)"
+  case "$m" in ''|*[!0-9]*) m="$(/usr/bin/stat -f %m "$1" 2>/dev/null || true)" ;; esac
+  case "$m" in ''|*[!0-9]*) m=0 ;; esac
+  printf '%s' "$m"
+}
+
+# stat_stub <gnu|bsd> — a $PATH `stat` with exactly one platform's flag semantics.
+stat_stub() {
+  SSTUB="$BATS_TEST_TMPDIR/statstub.$1"; mkdir -p "$SSTUB"
+  if [ "$1" = gnu ]; then
+    cat > "$SSTUB/stat" <<'GNU'
+#!/bin/bash
+# GNU: -c is the format flag; -f is --file-system and prints a REPORT on stdout, then exits 1.
+# The VALUE is resolved through whichever real stat THIS box ships — the stub emulates a platform's
+# FLAG SEMANTICS, and hardcoding `/usr/bin/stat -c` would make it emulable only on the platform it
+# is impersonating, which is the exact blindness these two cases exist to remove.
+_v() {  # $1=gnu-format $2=bsd-format $3=path
+  local o
+  o="$(/usr/bin/stat -c "$1" "$3" 2>/dev/null)" || o=""
+  case "$o" in ''|*[!0-9]*) o="$(/usr/bin/stat -f "$2" "$3" 2>/dev/null)" || o="" ;; esac
+  [ -n "$o" ] || return 1
+  printf '%s\n' "$o"
+}
+case "${1:-}" in
+  -c) case "$2" in %Y) _v %Y %m "$3"; exit $? ;; %i) _v %i %i "$3"; exit $? ;; esac ;;
+  -f) printf '  File: "%s"\n    ID: 0 Namelen: 255 Type: ext2/ext3\nInodes: Total: 1 Free: 1\n' "${3:-}"
+      printf 'stat: cannot read file system information\n' >&2; exit 1 ;;
+esac
+exec /usr/bin/stat "$@"
+GNU
+  else
+    cat > "$SSTUB/stat" <<'BSD'
+#!/bin/bash
+# BSD/macOS: there is no -c at all; -f takes a format. Same rule as the GNU stub — the VALUE comes
+# from whichever real stat this box ships, only the FLAG semantics are impersonated.
+_v() {  # $1=gnu-format $2=bsd-format $3=path
+  local o
+  o="$(/usr/bin/stat -c "$1" "$3" 2>/dev/null)" || o=""
+  case "$o" in ''|*[!0-9]*) o="$(/usr/bin/stat -f "$2" "$3" 2>/dev/null)" || o="" ;; esac
+  [ -n "$o" ] || return 1
+  printf '%s' "$o"
+}
+case "${1:-}" in
+  -c|-c*) printf 'stat: illegal option -- c\n' >&2; exit 1 ;;
+  -f) case "$2" in
+        %m) v="$(_v %Y %m "$3")" ;;
+        %i) v="$(_v %i %i "$3")" ;;
+        *)  printf 'stat: bad format\n' >&2; exit 1 ;;
+      esac
+      [ -n "$v" ] || exit 1; printf '%s\n' "$v"; exit 0 ;;
+esac
+exec /usr/bin/stat "$@"
+BSD
+  fi
+  chmod +x "$SSTUB/stat"
+}
+
+@test "portable stat: the GNU direction — a DEAD holder is reaped, not a fatal unbound variable" {
+  stat_stub gnu
+  # the stub really is GNU-shaped: -c answers, -f writes to STDOUT and fails
+  run env PATH="$SSTUB:$PATH" stat -c %Y "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(_real_mtime "$BATS_TEST_TMPDIR")" ]
+  run env PATH="$SSTUB:$PATH" stat -f %m "$BATS_TEST_TMPDIR"
+  [ "$status" -ne 0 ]
+  [ -n "$output" ]
+
+  mkdir -p "$LOCK"
+  echo 999999 > "$LOCK/pid"                       # a pid no live process holds
+  echo "$SENTINEL_LSTART" > "$LOCK/lstart"
+  run env PATH="$SSTUB:$PATH" LAND_LOCK_WAIT=1 bash "$LL" -- bash -c 'exit 0'
+  [ "$status" -eq 0 ]
+  # the pre-fix shape is what this case exists to keep out, so name it rather than only the rc
+  run bash -c "printf '%s' \"\$1\" | grep -c 'unbound variable'" _ "$output"
+  [ "$output" = "0" ]
+}
+
+@test "portable stat: the BSD direction is unbroken — the fleet's platform still reaps" {
+  stat_stub bsd
+  # the stub really is BSD-shaped: -c is refused, -f answers
+  run env PATH="$SSTUB:$PATH" stat -c %Y "$BATS_TEST_TMPDIR"
+  [ "$status" -ne 0 ]
+  run env PATH="$SSTUB:$PATH" stat -f %m "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(_real_mtime "$BATS_TEST_TMPDIR")" ]
+
+  mkdir -p "$LOCK"
+  echo 999999 > "$LOCK/pid"
+  echo "$SENTINEL_LSTART" > "$LOCK/lstart"
+  run env PATH="$SSTUB:$PATH" LAND_LOCK_WAIT=1 bash "$LL" -- bash -c 'exit 0'
+  [ "$status" -eq 0 ]
+}
+
+@test "portable stat: NEITHER form answers ⇒ each site's own default, still no fatal" {
+  # The fail-open direction. `ll_mtime` prints NOTHING when unknowable — which is the half that
+  # makes every call site's `|| echo <default>` mean what it has always claimed to mean. A stub
+  # that answers nothing must therefore leave the script alive, never kill it in arithmetic.
+  SSTUB="$BATS_TEST_TMPDIR/statstub.none"; mkdir -p "$SSTUB"
+  printf '#!/bin/bash\nprintf "  File: junk\\n"\nexit 1\n' > "$SSTUB/stat"; chmod +x "$SSTUB/stat"
+  mkdir -p "$LOCK"
+  echo 999999 > "$LOCK/pid"
+  echo "$SENTINEL_LSTART" > "$LOCK/lstart"
+  run env PATH="$SSTUB:$PATH" LAND_LOCK_WAIT=1 bash "$LL" -- bash -c 'exit 0'
+  run bash -c "printf '%s' \"\$1\" | grep -c 'unbound variable'" _ "$output"
+  [ "$output" = "0" ]
+}
+
+@test "RATCHET: no bare BSD-first stat survives in land-lock.sh outside the two helpers" {
+  # The durable half. Order reversal is invisible at a glance and a future edit re-reaches for the
+  # idiom the rest of this fleet still uses, so the shape is pinned rather than only its effect.
+  #
+  # EXECUTABLE lines only. The file's own § PORTABLE stat comment quotes the broken idiom twice, by
+  # design — that is the record of what was wrong — and a ratchet that cannot tell a citation from a
+  # call site convicts the documentation for describing the bug it cures. (Same distinction
+  # scripts/gate-select.sh draws with `cited_only`.) The negative control is below: strip the guard
+  # and the count is 2, both of them comments.
+  run bash -c "grep -vE '^[[:space:]]*#' '$REPO/scripts/land-lock.sh' | grep 'stat -f' | grep -vc 'stat -c'"
+  [ "$output" = "0" ]
+  # …and the helpers really are the only stat call sites, so the grep above cannot pass by deletion:
+  # exactly two survive, each pairing -c FIRST with -f second.
+  run bash -c "grep -vE '^[[:space:]]*#' '$REPO/scripts/land-lock.sh' | grep -c 'stat -c %Y\|stat -c %i'"
+  [ "$output" = "2" ]
+  run bash -c "grep -vE '^[[:space:]]*#' '$REPO/scripts/land-lock.sh' | grep -c 'stat -c %Y \"\$1\" 2>/dev/null || stat -f %m'"
+  [ "$output" = "1" ]
+}
