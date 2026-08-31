@@ -86,6 +86,130 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-31 — drain recycle #265: method 237 — A MAP OF RECORD CAN HAVE TWO AUDITORS, AND
+  MEASURING ONE SAYS NOTHING ABOUT THE OTHER; AN EXCLUSION THAT IS CORRECT BUT REASONLESS IS
+  INDISTINGUISHABLE FROM THE OVERSIGHT IT CREATES.** #264 ran method 236 against the DETECTOR
+  (`scripts/deploy-link-parity.sh`) and found its forward walk covered 9 of `install.sh`'s 19 deploy
+  classes. `install.sh` has a SECOND auditor — the REPAIRER, `scripts/deploy-parity-assert.sh`,
+  whose `link_refresh()` repairs exactly its own MISSING lines and is therefore the ONE mechanism
+  that can install a new class WITHOUT an advance — and nobody had ever measured it.
+  🚨 **MEASURED BY EXTRACTION AND EXECUTION, NEVER BY READING** (`probe265-repairer.sh`,
+  2026-08-31T05:04Z, **five of five predictions exact** under an rc-93 gate). `install.sh`'s class
+  globs come out of `install.sh`'s own `for ... in "$REPO_DIR"/...` headers; the walk's INPUT
+  pathspec comes out of the subject's own `git ls-files --` line; the verdict comes from EXECUTING
+  the subject's extracted `case` block on a real member of each class. **install.sh globs 19 deploy
+  classes. The repairer CLAIMS 16, declines ONE (`vendor/*/`) through an explicit arm carrying its
+  reason, and TWO — `githooks/*` and `launchd/*.plist` — reached it only through the REASONLESS
+  `*) want=0` default.** Non-vacuity held: every class was non-empty on the tree (0 vacuous).
+  ⚠️ **HONEST LIMIT, STATED FIRST: BOTH VERDICTS WERE ALREADY CORRECT AND NO OUTAGE IS REPAIRED.**
+  `install.sh` COPIES `githooks/*` into `<repo>/.git/hooks` and `~/.git-template/hooks`, and
+  `launchd/*.plist` into `~/Library/LaunchAgents`. Neither destination is `$CFG/<rel>`, so demanding
+  a per-file link would be WRONG rather than merely noisy. **A detector gap closed, no outage
+  repaired** — the same shape as #264's.
+  🚨 **WHAT WAS MISSING IS THE REASON, AND THIS BLOCK ALREADY PROVED FOUR TIMES WHAT THAT COSTS.**
+  `hooks/*.py`, `scripts/lib/*.py`, `scripts/backlog-consolidation/*.py` and `bin/ms365-*` each
+  reached the live layer only AFTER falling through that same default, and each has a comment beside
+  its own arm recording it. **A reasonless `want=0` is indistinguishable from the oversight it
+  creates.** #264's part two said a comment calling a gap *deliberate* is a claim with a direction;
+  **this is the case where there is no comment at all, which is strictly worse — an omission carries
+  no direction to argue with.**
+  🆕 🚨 **AND THE PART THAT GENERALISES FURTHEST: THE TWO CLASSES WERE EXCLUDED TWICE, AND NEITHER
+  EXCLUSION LEFT A REASON.** They are absent from the walk's INPUT pathspec *and* they fall to the
+  default. Two independent gates, both silently correct, and a reader at either one learns nothing.
+  **When you find a class missing from a walk, ask how many gates dropped it — a class dropped by an
+  input filter alone leaves its reason nowhere a reader will look, and the second gate is where
+  everyone looks.**
+  ✅ **THE FIX IS AN EXPLICIT `NOT-PER-FILE` BLOCK, NOT A WIDENING**, matching
+  `deploy-link-parity.sh`'s block that #264 landed, plus a note at the pathspec so the exclusion is
+  stated at BOTH gates.
+  ⚠️ **AND #263's AND #264's UNSPENT LEAD IS SPENT THE SAME WAY: `scripts/*.py`.** `install.sh`'s
+  scripts leg globs `scripts/*.sh` ONLY, so the **25** top-level `.py` files match neither
+  `scripts/*/*` nor `scripts/*.sh` and fell to the same catch-all. It gets an EXPLICIT
+  `scripts/*.py) want=0` arm carrying its reason. 🚨 **RUN THE REASON FIRST, and #263 had:** the
+  consumer census counted DOCUMENTATION, and the one live consumer resolves through its own symlink
+  back into the checkout and answers rc 0. **The harm is REFUTED, so this is a declaration, not a
+  step toward widening the deploy — and the arm says so, so nobody re-derives it.**
+  ✅ **PINNED BY A DERIVED ARM AND A SEEDED FIRE TEST** in `tests/deploy-parity.bats` (**78 → 80**).
+  Neither side is written down: install.sh's classes are derived from its for-headers, the verdict
+  from the subject's own extracted case block, and **every class must land in EXACTLY ONE of
+  claimed-or-declared** — neither is the defect, both is a contradiction. A non-vacuity floor
+  (≥ 15 classes) stops a broken anchor passing over an empty population.
+  ✅ **RED-PROVED, PREDICTION FIRST, GATED AT rc 93** (`redproof265.sh`): pre-fix **78 incumbents
+  GREEN and exactly 2 `not ok`, BOTH BY NAME**, both firing on the assertions that name the defect;
+  post-fix **80 ok / 0 not ok**; subject restored byte-identically by sha256 in a trap (`RESTORE=OK`).
+  🚨 **TWO INSTRUMENT REFUSALS, BOTH IN THE HARNESS AND NEITHER IN A SUBJECT, AND BOTH WORTH MORE
+  THAN THE CONFIRMATION.** **(1) rc 9 — an anchor keyed on the VERB.** `ls-files --` also occurs as
+  `ls-files --error-unmatch`, so the anchor matched two lines; re-anchored on the walk's OWN variable
+  (`_tracked`), which no other line can carry. **#241's longer-token scar in a third costume.**
+  **(2) rc 93 — a directory-shaped class expands WITH its trailing slash**, so appending built
+  `skills/x//SKILL.md`; a `case` pattern's `*` matches `/`, so the double slash matched the subject's
+  THREE-level exclusion arm `skills/*/*/*` and scored `want=0`. **The subject was answering correctly
+  about a path the instrument malformed** — the probe now strips the slash and REFUSES any member
+  containing `//`. **Investigate a non-zero that should have been a zero exactly as you investigate a
+  zero.**
+  ⚠️ **THE `.bats` GATE BLOCKED ME, CORRECTLY, ON A LINE I WROTE:** SC2086 on `set -- $cls`, where
+  the word-splitting IS the mechanism. **Annotated narrowly (one code, on the line above) rather than
+  rewritten** — quoting it would pass one literal pathspec and expand nothing. Folded into commit 1
+  with `git commit --amend` on my own unpushed HEAD, which is free; then the lint read *"clean —
+  1 suite(s) scanned, 0 blocking finding(s), 0 unanalyzable."*
+  ⚠️ **AND THE SELECTOR POS CONTROL READ 0 AND THAT WAS CORRECT, NOT A FAULT** — drawn from
+  `81a48d828`, a `docs(drain)` PROSE-ONLY commit. Redrawn from a code-touching range it **SPOKE with
+  2**. **This brief warns about it in one line and it still cost a minute; check what your range
+  actually IS before you believe its silence.**
+  ✅ **LAND: 4 direct suites / 236 tests run in the FOREGROUND first** — 236 ok, 0 not ok, 0 skip,
+  4 plans, **terminator ASSERTED** (suites-run == suites-listed), at load 96.97 rising to 125.68 —
+  so the land's own smoke is a SECOND independent verdict on the same set. ⚠️ **Take your own counts:
+  `tests/deploy-parity.bats` is now 80, and `test-walltime-lint` reads 557 suites.**
+  ⚠️ **`tests/deploy-parity-live.bats` was IN the draw and ran GREEN here**, against its standing
+  note as RED on trunk — **not a contradiction: the host checks run against the LIVE LAYER, a
+  different subject from the trunk tree. Two populations, two verdicts.**
+  🚨 **THE LANE, AND MY OPEN MEASURED SOMETHING BECAUSE THE TREE WAS CLEAN.** 02:49:00Z
+  `RUNG=🚀 LIVE_SHA=9ff5012c9e4e LAG=6 ADDS=1 AGE=5646 BREACH=adds`; 04:59:54Z
+  `LIVE_SHA=5b21efce50a3 LAG=4 ADDS=1 AGE=11333 BREACH=adds` — **the live layer ADVANCED between my
+  own two readings, unbidden.** ⚠️ **My CLOSE reading is `RUNG=📦 LIVE_SRC=skip LIVE_LAG=0`, and
+  that zero is an ABSENCE OF MEASUREMENT, not a level lane:** with a commit unlanded
+  `compute_live_layer()` is never called (#254's lesson). **Commit first, then read the lane.**
+  🚨 **THE `🚀` IS NOT MINE AND I ATTRIBUTED IT PER-SHA BEFORE DRIVING ANYTHING.** The one ADD in the
+  lag window is a SIBLING's `docs/parks/e981656df348.md`, added by `954e5d387`; **#264's two commits
+  and my own read `--diff-filter=A` = 0.** That is premise 2's documented FALSE POSITIVE, owned by
+  OPEN row `4e6a51df2a84` — **not re-filed, and not laundered into a ✅ either.**
+  ✅ **I RAN THE CONVERGE ANYWAY, AT 05:01Z, BEFORE COMPOSING THIS ENTRY** — #264's ordering lesson,
+  and it cost nothing. `bash <shared-checkout>/scripts/deploy-live.sh`, never from the worktree, no
+  `--force`, **rc 0**. Unlike #264's it created NO link and did NOT advance: *"already deployed —
+  live layer is at the newest deployable commit 5b21efce50a3 (4 un-stamped commit(s) above)"*, which
+  is the postland stamp budget, not a refusal. **Running it is cheap and it is the only thing that
+  makes a landed fix RUN.**
+  🆕 **THE GAP WAS LIVE AND IT IS THE LARGEST IN MANY LINKS: #264's floor 02:34:30Z → my open
+  04:59:50Z, 2 h 25 m 20 s — ZERO arrivals, ZERO departures, FIVE TRANSITIONS, none of them mine.**
+  All five left `claimed`: `0c8b39b67665`, `70ed289c10fb`, `70f0001c657b` and `e981656df348` to
+  BLOCKED, `b60eb29e97dd` to OPEN. ⚠️ **`70f0001c657b` is the drain's own SSOT row — reported, not
+  worked**, and the other four are on the do-not-hand-touch list.
+  🆕 **MY OWN LINK BODY, WINDOW STATED AND MY OWN WRITES SUBTRACTED: 17 m 59 s, ZERO arrivals, ZERO
+  departures, ONE transition — and it was NOT mine.** Open 04:59:45Z **343 open / 215 blocked /
+  2,352 done / 0 claimed** (558 combined, 2,910 rows); close 05:17:44Z **342 / 215 / 2,352 / 1** (557
+  combined, 2,910 rows). Both partitions asserted at both moments. The one transition:
+  **`485f8f87eb5f` open → claimed, by the ACTUATOR** — a WOULD-UNBLOCK cloud row. **I closed NO row
+  and filed NONE, so the off-box actuator series takes a `1` for my link body and a `5` for the gap
+  before it.**
+  ⚠️ **THE STORES, WITH THEIR MOMENTS, AND THE DENOMINATOR MOVED IN BOTH WINDOWS.** postland `.page`
+  **0** at every reading — the 200th consecutive — but its DENOMINATOR fell **2,804 (02:49Z) → 2,799
+  (04:59Z)**, against #264's flat 2,804 across 27 minutes. `pages` **2,347 / 100 → 2,343 / 96 →
+  2,341 / 96**; inbox-guard `.escalated` **435 / 435 / 435**, one number and not a ratio; postland
+  STAMPS **522 at my open and 522 at my close**. 🚨 **State the moments; draw no conclusion about the
+  link — a claim about what did NOT happen needs a longer window than a claim about what did.**
+  ⚠️ **`GATE=stale` at both readings — the 60th and 61st consecutive, and NOT mine to drive**: only
+  the background `postland-verify` stamp moves it. Compare like with like: a dirty-tree reading is a
+  different population.
+  ✅ **The chain's own rails, all re-run rather than inherited:** the `qos` heredoc diff clean at 0
+  bytes (**145th**); all four kitty checks passing — `cc-in-kitty` rc 0, `KITTY_WINDOW_ID=27`, the
+  id-keyed `kitty @ ls` returning EXACTLY ONE object with a bogus-id NEG control at 0, `cc-notify
+  --self` printing 27 (**38th consecutive**); `cc-roles list` byte-identical again; the mailbox
+  unchanged at 4,059 bytes / 1 message, read at open and close. **Lints: shellcheck rc 0 · `bash -n`
+  rc 0 · `bats --count` 80 · `bats-assert-liveness` rc 0 · `pipefail-sigpipe-lint` bare rc 0 and
+  `--selftest` 32/32 · `unattended-path-lint --selftest` 46/46 · `test-walltime-lint` clean, 557
+  suites, 0 new time bombs. DECLARED NOT-RUN rather than claimed: `alarm-polarity-lint` (neither file
+  is an alarm emitter, and its POS control is a KNOWN MUTE, `e07dc5e09f83`), and
+  `deploy-parity-assert.sh` declares no `--selftest` verb.**
 - **2026-08-31 — drain recycle #264: method 236 — A DETECTOR'S BLIND SPOT IS PER-CLASS, NOT
   PER-HOLDER. AFTER YOU FIX ONE HOLDER OF A RESTATED ENUMERATION, MEASURE HOW MUCH OF THE MAP
   THAT HOLDER ACTUALLY READS.**
