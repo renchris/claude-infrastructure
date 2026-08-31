@@ -86,6 +86,105 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-31 — drain recycle #269: method 241 — AN ABSOLUTE VERDICT IS ONLY AS ABSOLUTE AS THE
+  REFERENCE IT WAS COMPUTED AGAINST, AND A REFERENCE THAT MOVES TURNS ONE INTO A TIMING ARTEFACT.
+  When a checker says a thing is in NO checkout, ask WHICH checkout it read, and whether that
+  reader is current. And read the REMEDY it prints, because a remedy computed from an incomplete
+  classification does not merely mislabel — it prescribes.**
+  **HOW I GOT THERE — #268's method 240 pointed at a claim, and #268's own claim was the next
+  member of the class.** #268 adopted `skills/outbound-drafting/SKILL.md` into the repo and recorded
+  *"STRAY 1 → 0, observed through the detector's own `CC_LINKPARITY_REPO` seam"*. My first open
+  reading, 2026-08-31T21:57Z, ran the detector at its real destination: **`3 actionable`, and
+  `skills/outbound-drafting/SKILL.md` was still one of the three.** The discharge was real, the
+  land was real, and the verification was a claim about the SEAM rather than about the DESTINATION.
+  **A seam points an instrument at a reference you chose; the destination has the reference it has.**
+  **THE MEASUREMENT, 2026-08-31T22:04Z.** The shared checkout — which IS the live symlink source and
+  IS what `deploy-link-parity.sh` compares against — was **SIX commits behind `origin/main`**. The
+  file's blob is **absent from that checkout's index (2,248 objects) and PRESENT in `origin/main`'s
+  tree (2,249)**. The other two members of the same red are in neither and are genuine strays. So
+  one of three findings was a fact about the reader, and the verdict printed over it read *"live and
+  executable, in NO checkout — unversioned, invisible to review"* — every clause of which is false
+  of a file that was committed, reviewed and landed onto trunk that same morning.
+  **THE SECOND COST IS THE WORSE ONE AND IT IS NOT A LABEL.** The Fix the detector printed for that
+  member was `cp "<live>/skills/outbound-drafting/SKILL.md" "<shared>/skills/…" && git -C "<shared
+  checkout>" add …` — stage a file that is ALREADY on trunk, into the one checkout this repo's own
+  `.claude/CLAUDE.md` opens by forbidding anyone to commit in (incident 2026-07-11: a sibling's
+  `/ship` rebase-dropped a commit made there, and `git rev-list origin/main..HEAD` read 0 while the
+  files were absent from main). **The classification was one state short, and the missing state is
+  the one whose remedy is the OPPOSITE of the one it was given.**
+  **THE FIX — ASK THE REF BEFORE CONVICTING.** `content_is_on_trunk()` lazily builds the trunk blob
+  set (seam `CC_LINKPARITY_TRUNK`, default `origin/main`) and the stray leg's default arm splits:
+  bytes on the ref ⇒ **UNCONVERGED**, remedy is the converger; bytes nowhere ⇒ **STRAY**, remedy
+  unchanged. `-c` and never `-q` on the new membership test, for the measurement already written out
+  beside `content_is_tracked`: `TRUNK_SET` is one 40-char line per tracked object, **2,249 lines /
+  ~92 KB today**, already past the 64 KiB pipe buffer where a matching `grep -q` takes the producer
+  down with SIGPIPE and pipefail returns the MATCH as false. Counting consumes the whole stream.
+  **DELIBERATELY NOT A WEAKENING, AND THAT IS THE PART TO CHECK RATHER THAN TRUST.** The finding
+  count and the exit status are IDENTICAL either side of the fix — the live run reads **`3
+  actionable`, rc 1**, before and after. A file whose bytes reach the live layer with no link is
+  still drift; laundering it to clean would be a weaker gate wearing a fix's clothes. What changes
+  is which of two opposite remedies gets printed. The clause can only ever RE-LABEL a finding, never
+  remove one: no git, an unresolvable ref, or an empty tree all fall through to STRAY.
+  **RED-PROVED, PREDICTION FIRST, GATED AT rc 93, AND ATTRIBUTED BY NAME RATHER THAN BY COUNT.**
+  `tests/deploy-link-parity.bats` **43 → 47**. The PRE arm is the real tree, extracted from
+  `origin/main` with `git archive | tar -x` and asserted to contain **zero** occurrences of the fix
+  before any red it produced was believed. PRE: **plan `1..47`, 45 ok, 2 not ok, 0 skip** — `not ok
+  44` and `not ok 45`, both mine, both named. POST: **47 ok, 0 not ok, 0 skip.** **The prediction
+  VARIES on purpose**, because a uniform one says nothing about attribution: the other two arms are
+  predicted GREEN pre-fix and are green, because they PIN rather than fix — one is the FIRE control
+  proving a real stray is still convicted with its `cp`/`add` remedy intact, the other proves an
+  unresolvable ref degrades to the louder answer. The by-name attribution carries a **mute control**
+  (a title present in no arm must read 0, else the anchor matches everything and attributes nothing).
+  **MY OWN INSTRUMENT PRODUCED THE LINK'S ONLY FALSE READING AND THE rc-93 GATE CAUGHT IT.**
+  `probe269-ref.sh`'s first run predicted bare substring counts for its three fixture classes and
+  the gate refused **all three**: every member appears **TWICE** in the detector's output — once in
+  its finding line and once in its Fix line — so a bare `grep -c <name>` reads 2 for every class and
+  **discriminates nothing**. The note line's SHAPE (`^ +<VERDICT> +<path>`) is what no Fix line can
+  produce. Repaired, the fixture is three classes with an anchor mute control at 0: bytes in the
+  index under ANOTHER name (COPY, not a finding), on the trunk ref only (the defect), and nowhere
+  (the stray that must stay). **The fault was the instrument's, not the subject's — which is the
+  only reason it is countable.**
+  **THE LANE, AND ONE READING OF IT MEASURED NOTHING.** Open 21:57Z on a clean tree at
+  `trunk..HEAD=0`: `RUNG=🚀 LIVE_SRC=behind LIVE_SHA=17034cdb2ab1 LIVE_LAG=6 LIVE_ADDS=1
+  LIVE_DIVERGED=0 LIVE_AGE=8094 LIVE_BREACH_WHY=adds MIG_FAILED=0 GATE=stale`. My pre-land reading
+  at 22:11Z, on an equally clean tree but at `trunk..HEAD=1`, read `RUNG=📦 LIVE_SRC=skip
+  LIVE_LAG=0 LIVE_ADDS=0` — **that zero is an ABSENCE OF MEASUREMENT, not a converged lane**
+  (`compute_live_layer()` is called only on the ✅-eligible path), and it is #267's measured half
+  reproducing exactly. **`GATE=stale` at every reading — the seventy-sixth through seventy-eighth
+  consecutive, and not mine to drive.**
+  **AND THE `LIVE_ADDS=1` BREACH AT MY OPEN IS THE SAME FILE, WHICH MAKES #268's FALSE-POSITIVE
+  READING AND THIS LINK'S TRUE-POSITIVE READING TWO CORRECT VERDICTS ABOUT ONE FACT.** The live path
+  is a REAL FILE of 13,268 bytes whose sha256 equals the `origin/main` blob, where a normally
+  deployed sibling (`~/.claude/skills/agent-teams/SKILL.md`) is a symlink into the checkout. So a
+  consumer reading that path today gets the correct content — #268's reading — **and** the file is
+  backed by no checkout the box can reach, so a fresh clone plus install restores nothing and an
+  edit to it is invisible to review — the parity leg's reading. **One physical fact, two auditors,
+  neither wrong. `4e6a51df2a84` stays OPEN and I neither re-filed nor drove it.**
+  **THE BOARD.** Open 2026-08-31T21:58:52Z **338 open / 214 blocked / 2,352 done / 6 claimed** (552
+  combined, 2,910 rows); pre-land close 22:11:46Z **338 / 215 / 2,352 / 5** (553 combined, 2,910
+  rows). Both partitions asserted at both moments (`open + blocked == combined` AND `allids ==
+  allrows`), arrivals and departures from a FULL-SET `comm` with `sort -c` on both sides.
+  **ZERO arrivals, ZERO departures, ONE transition in 12 m 54 s: `0c8b39b67665` claimed → blocked,
+  `claude-infrastructure`.** **I closed no row and filed none, so there was nothing of mine to
+  subtract — and I am saying so rather than reporting a raw number as though the question had not
+  arisen.** The gap before me — #268's floor 21:53:55Z to my open, **5 m 02 s** — held ZERO of all
+  three. Stores at my two moments: postland RED pages **0 of 2,811** (the 211th and 212th
+  consecutive zero, denominator stated), stamps **525 → 525**, `autonomy/pages` **2,343 → 2,343**,
+  inbox-guard `.escalated` **434 → 434**. **Four stores flat across two readings 12 m 54 s apart is
+  a statement about two moments and nothing more** — #245's scar is that the claim about the LINK is
+  the part that rots, not the number.
+  **LINTS.** `shellcheck` rc 0, `bash -n` rc 0, `bats --count` 47, `bats-assert-liveness` rc 0,
+  `bats-shellcheck-lint --range` clean (1 suite scanned, 0 blocking, 0 unanalyzable),
+  `pipefail-sigpipe-lint` bare rc 0 (*"clean (allowlist honoured)"*), census **126 → 126, LOST=0,
+  NEW=0** keyed on (path, TEXT) with `CC_PIPEFAIL_ROOT` pinned on BOTH arms and the PRE arm
+  extracted from `origin/main` rather than remembered, asserted non-empty so a dead instrument
+  cannot read as a clean tree. **`alarm-polarity-lint` DECLARED NOT-RUN** — neither changed file is
+  an alarm emitter and that lint's own positive control is a known mute (`e07dc5e09f83`, OPEN):
+  the seventeenth consecutive link to declare rather than claim. The selector drew a **REAL LIST of
+  2** (`deploy-link-parity`, `ms365-reply-splice`), neither slow suite, and its POS control SPOKE
+  with 1 from a code-touching range. I ran the whole draw myself in the foreground first — **2 of 2
+  suites, 65 ok, 0 not ok, 0 skip, one plan per suite, TERMINATOR ASSERTED at rc 93**,
+  at load ~17 — so the land's own smoke is a second independent verdict on the same set.
 - **2026-08-31 — drain recycle #268: method 240 — A STANDING RED'S *COUNT* CAN BE STABLE WHILE ITS
   ENTIRE POPULATION TURNS OVER, AND AN ACQUITTAL WRITTEN AS A COUNT CANNOT NOTICE. When a row
   acquits a gate by saying "the N it reports are pre-existing", the sentence is checked by nobody
