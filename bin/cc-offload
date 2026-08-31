@@ -399,8 +399,17 @@ cmd_up() {
   # extra still gets the return path. `--unmanaged` is the deliberate opt-out, and it is spelled as
   # a flag rather than as "leave it blank" so an UNMANAGED fire is a decision in the argv rather
   # than an accident of environment.
+  # 🚨 `${ITERM_SESSION_ID##*:}` — NOT `${ITERM_SESSION_ID:-}`-less. This file runs under `set -u`,
+  # so the bare expansion is an UNBOUND VARIABLE the instant the caller is not an iTerm pane, and it
+  # kills `up` at rc 1 before the create — the fire never happens and the message names a variable
+  # rather than a refusal. Invisible on the operator's Mac (iTerm always exports it) and fatal
+  # everywhere else: launchd, cron, a hook, a fired session, CI, and a cloud VM. Measured here as 11
+  # RED cases in tests/cc-offload.bats — every single `up` case in the suite — on a Linux box.
+  # The two-line spelling keeps the note below reachable: an empty expansion is the FIRE-AND-FORGET
+  # path this function already handles, which is the whole point of not dying at the expansion.
   if [ "$UP_UNMANAGED" = 0 ] && [ -z "$UP_NOTIFY_BACK" ]; then
-    UP_NOTIFY_BACK="${ITERM_SESSION_ID##*:}"
+    UP_NOTIFY_BACK="${ITERM_SESSION_ID:-}"
+    UP_NOTIFY_BACK="${UP_NOTIFY_BACK##*:}"
   fi
   if [ "$UP_UNMANAGED" = 1 ]; then UP_NOTIFY_BACK=''
   elif [ -z "$UP_NOTIFY_BACK" ]; then
