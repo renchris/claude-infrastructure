@@ -11,3 +11,6 @@ corpus/out/pages/
 corpus/out/shots/
 corpus/out/snapshots/
 corpus/out/blind/
+# route.py --crops writes region clips; they are re-cut from the committed
+# generators in one command and change on every Chromium bump.
+corpus/out/clip/

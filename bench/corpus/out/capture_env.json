@@ -1,0 +1,28 @@
+{
+ "platform": "Linux-6.18.44-fc-v22-x86_64-with-glibc2.39",
+ "python": "3.11.15",
+ "viewport": {
+  "width": 1280,
+  "height": 900
+ },
+ "device_scale_factors": [
+  1.0,
+  1.5
+ ],
+ "force_device_scale_factor": 1.5,
+ "pinned": [
+  "--force-color-profile=srgb",
+  "--disable-lcd-text",
+  "--hide-scrollbars",
+  "reduced_motion=reduce",
+  "color_scheme=light"
+ ],
+ "browser_version": "141.0.7390.37",
+ "executable": "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
+ "resolved_fonts": [
+  {
+   "family": "Liberation Sans",
+   "glyphs": 12
+  }
+ ]
+}

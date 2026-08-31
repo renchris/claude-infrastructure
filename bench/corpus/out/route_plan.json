@@ -1,0 +1,687 @@
+{
+ "schema": "design-route/1",
+ "profile": "bench-corpus",
+ "profile_character": "the ground-truth corpus in bench/",
+ "per_page_max": 2,
+ "advisory_rules": [],
+ "triggers_unreachable": {
+  "T4": "arbitration is second-order; no judgement exists in this directory",
+  "T5": "no no-DOM subjects (canvas/WebGL/PDF) in this corpus"
+ },
+ "pages": [
+  {
+   "page": "align-1px",
+   "settled": 1,
+   "abstentions": 0,
+   "abstentions_closed_by_xcheck": 0,
+   "t1_subjects": 0,
+   "t1_classes": 0,
+   "cross_check": "up",
+   "calls": [
+    {
+     "id": "C1",
+     "trigger": "T2",
+     "kind": "global",
+     "budget_exempt": false,
+     "asks": [
+      "hierarchy",
+      "gestalt",
+      "content-fit",
+      "semantic-coherence",
+      "optical-alignment",
+      "readability"
+     ],
+     "image": "align-1px@1.5x.png",
+     "raster": [
+      1920,
+      1350
+     ],
+     "visual_tokens": 3381,
+     "bytes": 89388,
+     "deliverable": true,
+     "context": 0
+    }
+   ],
+   "unrouted": [],
+   "coverage": {
+    "dom": "complete",
+    "pixel": "complete",
+    "judgement": "planned",
+    "subjects": 0,
+    "classes": 0,
+    "adjudicated_own_crop": 0,
+    "folded_into_global": 0,
+    "unadjudicated_by_budget": 0
+   }
+  },
+  {
+   "page": "clean",
+   "settled": 0,
+   "abstentions": 0,
+   "abstentions_closed_by_xcheck": 0,
+   "t1_subjects": 0,
+   "t1_classes": 0,
+   "cross_check": "up",
+   "calls": [
+    {
+     "id": "C1",
+     "trigger": "T2",
+     "kind": "global",
+     "budget_exempt": false,
+     "asks": [
+      "hierarchy",
+      "gestalt",
+      "content-fit",
+      "semantic-coherence",
+      "optical-alignment",
+      "readability"
+     ],
+     "image": "clean@1.5x.png",
+     "raster": [
+      1920,
+      1350
+     ],
+     "visual_tokens": 3381,
+     "bytes": 89341,
+     "deliverable": true,
+     "context": 0
+    }
+   ],
+   "unrouted": [],
+   "coverage": {
+    "dom": "complete",
+    "pixel": "complete",
+    "judgement": "planned",
+    "subjects": 0,
+    "classes": 0,
+    "adjudicated_own_crop": 0,
+    "folded_into_global": 0,
+    "unadjudicated_by_budget": 0
+   }
+  },
+  {
+   "page": "contrast-on-gradient",
+   "settled": 2,
+   "abstentions": 2,
+   "abstentions_closed_by_xcheck": 2,
+   "t1_subjects": 0,
+   "t1_classes": 0,
+   "cross_check": "up",
+   "calls": [
+    {
+     "id": "C1",
+     "trigger": "T2",
+     "kind": "global",
+     "budget_exempt": false,
+     "asks": [
+      "hierarchy",
+      "gestalt",
+      "content-fit",
+      "semantic-coherence",
+      "optical-alignment",
+      "readability"
+     ],
+     "image": "contrast-on-gradient@1.5x.png",
+     "raster": [
+      1920,
+      1350
+     ],
+     "visual_tokens": 3381,
+     "bytes": 200481,
+     "deliverable": true,
+     "context": 0
+    }
+   ],
+   "unrouted": [],
+   "coverage": {
+    "dom": "complete",
+    "pixel": "complete",
+    "judgement": "planned",
+    "subjects": 2,
+    "classes": 0,
+    "adjudicated_own_crop": 0,
+    "folded_into_global": 0,
+    "unadjudicated_by_budget": 0
+   }
+  },
+  {
+   "page": "contrast-plain",
+   "settled": 1,
+   "abstentions": 0,
+   "abstentions_closed_by_xcheck": 0,
+   "t1_subjects": 0,
+   "t1_classes": 0,
+   "cross_check": "up",
+   "calls": [
+    {
+     "id": "C1",
+     "trigger": "T2",
+     "kind": "global",
+     "budget_exempt": false,
+     "asks": [
+      "hierarchy",
+      "gestalt",
+      "content-fit",
+      "semantic-coherence",
+      "optical-alignment",
+      "readability"
+     ],
+     "image": "contrast-plain@1.5x.png",
+     "raster": [
+      1920,
+      1350
+     ],
+     "visual_tokens": 3381,
+     "bytes": 89059,
+     "deliverable": true,
+     "context": 0
+    }
+   ],
+   "unrouted": [],
+   "coverage": {
+    "dom": "complete",
+    "pixel": "complete",
+    "judgement": "planned",
+    "subjects": 0,
+    "classes": 0,
+    "adjudicated_own_crop": 0,
+    "folded_into_global": 0,
+    "unadjudicated_by_budget": 0
+   }
+  },
+  {
+   "page": "grid-offgrid",
+   "settled": 1,
+   "abstentions": 0,
+   "abstentions_closed_by_xcheck": 0,
+   "t1_subjects": 0,
+   "t1_classes": 0,
+   "cross_check": "up",
+   "calls": [
+    {
+     "id": "C1",
+     "trigger": "T2",
+     "kind": "global",
+     "budget_exempt": false,
+     "asks": [
+      "hierarchy",
+      "gestalt",
+      "content-fit",
+      "semantic-coherence",
+      "optical-alignment",
+      "readability"
+     ],
+     "image": "grid-offgrid@1.5x.png",
+     "raster": [
+      1920,
+      1350
+     ],
+     "visual_tokens": 3381,
+     "bytes": 89341,
+     "deliverable": true,
+     "context": 0
+    }
+   ],
+   "unrouted": [],
+   "coverage": {
+    "dom": "complete",
+    "pixel": "complete",
+    "judgement": "planned",
+    "subjects": 0,
+    "classes": 0,
+    "adjudicated_own_crop": 0,
+    "folded_into_global": 0,
+    "unadjudicated_by_budget": 0
+   }
+  },
+  {
+   "page": "hierarchy-inversion",
+   "settled": 2,
+   "abstentions": 0,
+   "abstentions_closed_by_xcheck": 0,
+   "t1_subjects": 0,
+   "t1_classes": 0,
+   "cross_check": "up",
+   "calls": [
+    {
+     "id": "C1",
+     "trigger": "T2",
+     "kind": "global",
+     "budget_exempt": false,
+     "asks": [
+      "hierarchy",
+      "gestalt",
+      "content-fit",
+      "semantic-coherence",
+      "optical-alignment",
+      "readability"
+     ],
+     "image": "hierarchy-inversion@1.5x.png",
+     "raster": [
+      1920,
+      1350
+     ],
+     "visual_tokens": 3381,
+     "bytes": 89802,
+     "deliverable": true,
+     "context": 0
+    }
+   ],
+   "unrouted": [],
+   "coverage": {
+    "dom": "complete",
+    "pixel": "complete",
+    "judgement": "planned",
+    "subjects": 0,
+    "classes": 0,
+    "adjudicated_own_crop": 0,
+    "folded_into_global": 0,
+    "unadjudicated_by_budget": 0
+   }
+  },
+  {
+   "page": "optical-centering",
+   "settled": 0,
+   "abstentions": 0,
+   "abstentions_closed_by_xcheck": 0,
+   "t1_subjects": 0,
+   "t1_classes": 0,
+   "cross_check": "up",
+   "calls": [
+    {
+     "id": "C1",
+     "trigger": "T2",
+     "kind": "global",
+     "budget_exempt": false,
+     "asks": [
+      "hierarchy",
+      "gestalt",
+      "content-fit",
+      "semantic-coherence",
+      "optical-alignment",
+      "readability"
+     ],
+     "image": "optical-centering@1.5x.png",
+     "raster": [
+      1920,
+      1350
+     ],
+     "visual_tokens": 3381,
+     "bytes": 89341,
+     "deliverable": true,
+     "context": 0
+    }
+   ],
+   "unrouted": [],
+   "coverage": {
+    "dom": "complete",
+    "pixel": "complete",
+    "judgement": "planned",
+    "subjects": 0,
+    "classes": 0,
+    "adjudicated_own_crop": 0,
+    "folded_into_global": 0,
+    "unadjudicated_by_budget": 0
+   }
+  },
+  {
+   "page": "overflow-clip",
+   "settled": 3,
+   "abstentions": 0,
+   "abstentions_closed_by_xcheck": 0,
+   "t1_subjects": 0,
+   "t1_classes": 0,
+   "cross_check": "up",
+   "calls": [
+    {
+     "id": "C1",
+     "trigger": "T2",
+     "kind": "global",
+     "budget_exempt": false,
+     "asks": [
+      "hierarchy",
+      "gestalt",
+      "content-fit",
+      "semantic-coherence",
+      "optical-alignment",
+      "readability"
+     ],
+     "image": "overflow-clip@1.5x.png",
+     "raster": [
+      1920,
+      1350
+     ],
+     "visual_tokens": 3381,
+     "bytes": 89292,
+     "deliverable": true,
+     "context": 0
+    }
+   ],
+   "unrouted": [],
+   "coverage": {
+    "dom": "complete",
+    "pixel": "complete",
+    "judgement": "planned",
+    "subjects": 0,
+    "classes": 0,
+    "adjudicated_own_crop": 0,
+    "folded_into_global": 0,
+    "unadjudicated_by_budget": 0
+   }
+  },
+  {
+   "page": "radius-drift",
+   "settled": 1,
+   "abstentions": 0,
+   "abstentions_closed_by_xcheck": 0,
+   "t1_subjects": 0,
+   "t1_classes": 0,
+   "cross_check": "up",
+   "calls": [
+    {
+     "id": "C1",
+     "trigger": "T2",
+     "kind": "global",
+     "budget_exempt": false,
+     "asks": [
+      "hierarchy",
+      "gestalt",
+      "content-fit",
+      "semantic-coherence",
+      "optical-alignment",
+      "readability"
+     ],
+     "image": "radius-drift@1.5x.png",
+     "raster": [
+      1920,
+      1350
+     ],
+     "visual_tokens": 3381,
+     "bytes": 89687,
+     "deliverable": true,
+     "context": 0
+    }
+   ],
+   "unrouted": [],
+   "coverage": {
+    "dom": "complete",
+    "pixel": "complete",
+    "judgement": "planned",
+    "subjects": 0,
+    "classes": 0,
+    "adjudicated_own_crop": 0,
+    "folded_into_global": 0,
+    "unadjudicated_by_budget": 0
+   }
+  },
+  {
+   "page": "spacing-gap",
+   "settled": 2,
+   "abstentions": 0,
+   "abstentions_closed_by_xcheck": 0,
+   "t1_subjects": 0,
+   "t1_classes": 0,
+   "cross_check": "up",
+   "calls": [
+    {
+     "id": "C1",
+     "trigger": "T2",
+     "kind": "global",
+     "budget_exempt": false,
+     "asks": [
+      "hierarchy",
+      "gestalt",
+      "content-fit",
+      "semantic-coherence",
+      "optical-alignment",
+      "readability"
+     ],
+     "image": "spacing-gap@1.5x.png",
+     "raster": [
+      1920,
+      1350
+     ],
+     "visual_tokens": 3381,
+     "bytes": 90070,
+     "deliverable": true,
+     "context": 0
+    }
+   ],
+   "unrouted": [],
+   "coverage": {
+    "dom": "complete",
+    "pixel": "complete",
+    "judgement": "planned",
+    "subjects": 0,
+    "classes": 0,
+    "adjudicated_own_crop": 0,
+    "folded_into_global": 0,
+    "unadjudicated_by_budget": 0
+   }
+  },
+  {
+   "page": "token-color-drift",
+   "settled": 1,
+   "abstentions": 0,
+   "abstentions_closed_by_xcheck": 0,
+   "t1_subjects": 0,
+   "t1_classes": 0,
+   "cross_check": "up",
+   "calls": [
+    {
+     "id": "C1",
+     "trigger": "T2",
+     "kind": "global",
+     "budget_exempt": false,
+     "asks": [
+      "hierarchy",
+      "gestalt",
+      "content-fit",
+      "semantic-coherence",
+      "optical-alignment",
+      "readability"
+     ],
+     "image": "token-color-drift@1.5x.png",
+     "raster": [
+      1920,
+      1350
+     ],
+     "visual_tokens": 3381,
+     "bytes": 89377,
+     "deliverable": true,
+     "context": 0
+    }
+   ],
+   "unrouted": [],
+   "coverage": {
+    "dom": "complete",
+    "pixel": "complete",
+    "judgement": "planned",
+    "subjects": 0,
+    "classes": 0,
+    "adjudicated_own_crop": 0,
+    "folded_into_global": 0,
+    "unadjudicated_by_budget": 0
+   }
+  },
+  {
+   "page": "touch-target",
+   "settled": 1,
+   "abstentions": 0,
+   "abstentions_closed_by_xcheck": 0,
+   "t1_subjects": 0,
+   "t1_classes": 0,
+   "cross_check": "up",
+   "calls": [
+    {
+     "id": "C1",
+     "trigger": "T2",
+     "kind": "global",
+     "budget_exempt": false,
+     "asks": [
+      "hierarchy",
+      "gestalt",
+      "content-fit",
+      "semantic-coherence",
+      "optical-alignment",
+      "readability"
+     ],
+     "image": "touch-target@1.5x.png",
+     "raster": [
+      1920,
+      1350
+     ],
+     "visual_tokens": 3381,
+     "bytes": 89405,
+     "deliverable": true,
+     "context": 0
+    }
+   ],
+   "unrouted": [],
+   "coverage": {
+    "dom": "complete",
+    "pixel": "complete",
+    "judgement": "planned",
+    "subjects": 0,
+    "classes": 0,
+    "adjudicated_own_crop": 0,
+    "folded_into_global": 0,
+    "unadjudicated_by_budget": 0
+   }
+  },
+  {
+   "page": "type-scale",
+   "settled": 1,
+   "abstentions": 0,
+   "abstentions_closed_by_xcheck": 0,
+   "t1_subjects": 0,
+   "t1_classes": 0,
+   "cross_check": "up",
+   "calls": [
+    {
+     "id": "C1",
+     "trigger": "T2",
+     "kind": "global",
+     "budget_exempt": false,
+     "asks": [
+      "hierarchy",
+      "gestalt",
+      "content-fit",
+      "semantic-coherence",
+      "optical-alignment",
+      "readability"
+     ],
+     "image": "type-scale@1.5x.png",
+     "raster": [
+      1920,
+      1350
+     ],
+     "visual_tokens": 3381,
+     "bytes": 91873,
+     "deliverable": true,
+     "context": 1
+    }
+   ],
+   "unrouted": [],
+   "coverage": {
+    "dom": "complete",
+    "pixel": "complete",
+    "judgement": "planned",
+    "subjects": 0,
+    "classes": 0,
+    "adjudicated_own_crop": 0,
+    "folded_into_global": 0,
+    "unadjudicated_by_budget": 0
+   }
+  }
+ ],
+ "budget": {
+  "ceiling": 12,
+  "contexts": [
+   {
+    "index": 0,
+    "spent": 12,
+    "entries": [
+     {
+      "page": "align-1px",
+      "id": "C1",
+      "kind": "global"
+     },
+     {
+      "page": "clean",
+      "id": "C1",
+      "kind": "global"
+     },
+     {
+      "page": "contrast-on-gradient",
+      "id": "C1",
+      "kind": "global"
+     },
+     {
+      "page": "contrast-plain",
+      "id": "C1",
+      "kind": "global"
+     },
+     {
+      "page": "grid-offgrid",
+      "id": "C1",
+      "kind": "global"
+     },
+     {
+      "page": "hierarchy-inversion",
+      "id": "C1",
+      "kind": "global"
+     },
+     {
+      "page": "optical-centering",
+      "id": "C1",
+      "kind": "global"
+     },
+     {
+      "page": "overflow-clip",
+      "id": "C1",
+      "kind": "global"
+     },
+     {
+      "page": "radius-drift",
+      "id": "C1",
+      "kind": "global"
+     },
+     {
+      "page": "spacing-gap",
+      "id": "C1",
+      "kind": "global"
+     },
+     {
+      "page": "token-color-drift",
+      "id": "C1",
+      "kind": "global"
+     },
+     {
+      "page": "touch-target",
+      "id": "C1",
+      "kind": "global"
+     }
+    ]
+   },
+   {
+    "index": 1,
+    "spent": 1,
+    "entries": [
+     {
+      "page": "type-scale",
+      "id": "C1",
+      "kind": "global"
+     }
+    ]
+   }
+  ],
+  "splits": [
+   {
+    "before_page": "type-scale",
+    "reason": "image ledger exhausted",
+    "at": "C1"
+   }
+  ]
+ }
+}

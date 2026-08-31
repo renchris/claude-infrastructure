@@ -17,11 +17,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import platform
 import pathlib
 import sys
 import time
 
 from playwright.sync_api import sync_playwright
+
+# On the authoring Mac the `chromium` channel resolves; in a container the browser
+# is pre-placed and the pip playwright's expected revision may not match it. An
+# explicit path is the only portable escape, and it stays opt-in so the Mac path
+# is untouched.
+CHROMIUM_EXECUTABLE = os.environ.get("BENCH_CHROMIUM_EXECUTABLE") or None
 
 # Everything a general design rule could need, and nothing else. Pulling all of
 # getComputedStyle would be ~340 properties per element and would bury the
@@ -129,6 +137,58 @@ EXTRACT_JS = """
 """
 
 
+def capture_env(browser, page, sample: pathlib.Path, vp: dict, dprs: list) -> dict:
+    """Record the instrument, so two findings files can never be silently compared.
+
+    Findings are only comparable against the render environment that produced
+    them, and the difference does not announce itself: this corpus pinned its
+    font stack to `Helvetica, ...` for reproducibility, Helvetica exists only on
+    macOS, and everywhere else the stack silently falls back. The corpus's
+    optical-alignment ground truth was a constant measured against ONE
+    rasteriser, so the same code scored a clean control on one machine and a
+    false positive on another with no diff between them. The font is resolved
+    through CDP rather than read off `font-family`, because getComputedStyle
+    returns the stack that was ASKED for -- the question here is which face
+    actually painted, and that is the only version of the question that would
+    have caught this.
+    """
+    env = {
+        "platform": platform.platform(),
+        "python": platform.python_version(),
+        "viewport": vp,
+        "device_scale_factors": dprs,
+        "force_device_scale_factor": max(dprs),
+        "pinned": [
+            "--force-color-profile=srgb",
+            "--disable-lcd-text",
+            "--hide-scrollbars",
+            "reduced_motion=reduce",
+            "color_scheme=light",
+        ],
+        "browser_version": browser.version,
+        "executable": CHROMIUM_EXECUTABLE or "playwright channel: chromium",
+        "resolved_fonts": "unavailable",
+    }
+    try:
+        page.goto(sample.as_uri(), wait_until="load")
+        cdp = page.context.new_cdp_session(page)
+        cdp.send("DOM.enable")
+        cdp.send("CSS.enable")
+        root = cdp.send("DOM.getDocument")["root"]["nodeId"]
+        node = cdp.send(
+            "DOM.querySelector", {"nodeId": root, "selector": ".section-title"}
+        )["nodeId"]
+        fonts = cdp.send("CSS.getPlatformFontsForNode", {"nodeId": node})
+        env["resolved_fonts"] = [
+            {"family": f["familyName"], "glyphs": f["glyphCount"]}
+            for f in fonts.get("fonts", [])
+        ]
+        cdp.detach()
+    except Exception as exc:  # noqa: BLE001 -- provenance is best-effort, never fatal
+        env["resolved_fonts"] = f"unavailable: {type(exc).__name__}: {exc}"
+    return env
+
+
 def capture(corpus: pathlib.Path, dprs: list[int]) -> None:
     manifest = json.loads((corpus / "manifest.json").read_text())
     vp = manifest["viewport"]
@@ -141,10 +201,12 @@ def capture(corpus: pathlib.Path, dprs: list[int]) -> None:
     shots.mkdir(exist_ok=True)
     snaps.mkdir(exist_ok=True)
 
-    timings = []
+    timings: list = []
+    env: dict = {}
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            channel="chromium",
+            channel=None if CHROMIUM_EXECUTABLE else "chromium",
+            executable_path=CHROMIUM_EXECUTABLE,
             args=[
                 "--force-color-profile=srgb",
                 "--disable-lcd-text",
@@ -165,6 +227,8 @@ def capture(corpus: pathlib.Path, dprs: list[int]) -> None:
                 reduced_motion="reduce",
             )
             page = ctx.new_page()
+            if dpr == dprs[0]:
+                env = capture_env(browser, page, pages[0], vp, dprs)
             for html in pages:
                 t0 = time.perf_counter()
                 page.goto(html.as_uri(), wait_until="load")
@@ -183,6 +247,8 @@ def capture(corpus: pathlib.Path, dprs: list[int]) -> None:
                 )
             ctx.close()
         browser.close()
+
+    (corpus / "capture_env.json").write_text(json.dumps(env, indent=1))
 
     per_dpr = {}
     for _, dpr, ms in timings:

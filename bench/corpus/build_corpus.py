@@ -199,9 +199,11 @@ DEFECTS: list[Defect] = [
             "getBoundingClientRect on the glyph is exactly centred within the button. The "
             "asymmetry lives in the distribution of ink inside the glyph's own box, which no "
             "DOM API exposes. Detecting it requires computing the centroid of the rendered "
-            "pixels and comparing it to the geometric centre."
+            "pixels and comparing it to the centre of the shape the CONTAINER paints -- not "
+            "to the mark's own box, which getBoundingClientRect reports POST-transform and "
+            "which therefore moves with the very compensation the check must verify."
         ),
-        magnitude="ink centroid ~2px left of the geometric centre",
+        magnitude="ink centroid exactly 2px left of the container's painted centre",
         severity="medium",
     ),
     Defect(
@@ -263,6 +265,13 @@ body {{
 .kpi-value {{ font-size: 24px; font-weight: 700; margin-top: 8px; }}
 
 .section-title {{ font-size: 16px; font-weight: 700; margin-top: 24px; margin-bottom: 8px; }}
+/* A second 16px heading, and it is load-bearing rather than decorative. The
+   type-scale rule infers the page's scale as the sizes used at least twice, and
+   until 2026-08-31 the 16px step's second user was the ICON GLYPH's font-size --
+   so drawing the icon instead of typing it collapsed the step and the rule
+   reported the section title as off-scale on the clean control. A scale that one
+   deletion can collapse was never a scale; a real page has two headings. */
+.actions-title {{ font-size: 16px; font-weight: 700; margin-top: 24px; }}
 .helper {{ font-size: 12px; color: {TOKENS["gray600"]}; margin-bottom: 16px; }}
 
 .panel {{
@@ -290,11 +299,22 @@ tr + tr td {{ border-top: 1px solid {TOKENS["gray200"]}; }}
   width: 44px; height: 44px; border-radius: 22px; background: {TOKENS["blue700"]};
   display: flex; align-items: center; justify-content: center;
 }}
-.glyph {{ color: #FFFFFF; font-size: 16px; line-height: 1;
-         /* Optical compensation: a triangle's ink mass sits behind its
-            bounding-box centre, so geometric centring reads as left-heavy.
-            Measured offset on this glyph at this size: 2.2px left, 1.9px up. */
-         transform: translate(2px, 2px); }}
+/* The play mark is DRAWN, not typed. It was `&#9654;` in a pinned font stack
+   until 2026-08-31, and the pin did not pin: Helvetica exists only on macOS, so
+   every other machine falls back (Liberation Sans on Linux) and rasterises the
+   glyph with a different vertical ink distribution. The compensation below was
+   a constant MEASURED against one rasteriser -- so on any other one the control
+   page renders the mark ~2px off centre, the repaired X2 arm correctly reports
+   it, and the control stops being a control. A clip-path triangle has no
+   rasteriser: its ink centroid is arithmetic, identical everywhere. */
+.glyph {{
+  width: 12px; height: 14px; background: #FFFFFF;
+  clip-path: polygon(0 0, 100% 50%, 0 100%);
+  /* Optical compensation, now DERIVED rather than measured: a triangle's ink
+     mass sits behind its bounding-box centre. For vertices (0,0) (W,H/2) (0,H)
+     the centroid is (W/3, H/2), so the ink sits W/6 = 2px left of the 12px box
+     centre and exactly on its vertical centre. Compensation is that, negated. */
+  transform: translate(2px, 0); }}
 """
 
 BODY_HTML = """
@@ -325,12 +345,14 @@ BODY_HTML = """
   </table>
 </div>
 
+<div class="actions-title">Close out</div>
+
 <div class="actions">
   <div class="action-group">
     <button class="btn-primary">Confirm all deposits</button>
     <button class="btn-secondary">Release held tables</button>
   </div>
-  <div class="glyph-btn"><span class="glyph">&#9654;</span></div>
+  <div class="glyph-btn"><span class="glyph"></span></div>
 </div>
 """
 
@@ -364,8 +386,15 @@ def build(outdir: pathlib.Path) -> dict:
         entries.append(asdict(d))
 
     manifest = {
-        "corpus_version": "1.0",
-        "built": "2026-08-26",
+        # 1.1 (2026-08-31): the play mark is drawn, not typed, and the 16px type
+        # step gained a second user. Both were the same defect -- the corpus's
+        # ground truth depended on a font that exists on one operating system, so
+        # the clean control was clean only on the machine it was authored on, and
+        # a control that is not clean cannot grade anything. Findings captured
+        # under 1.0 are not comparable on the optical-alignment or type-scale
+        # rows; every other row is unchanged.
+        "corpus_version": "1.1",
+        "built": "2026-08-31",
         "viewport": {"width": 1280, "height": 900},
         "tokens": TOKENS,
         "control": "clean.html",

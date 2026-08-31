@@ -1,6 +1,6 @@
 {
-  "corpus_version": "1.0",
-  "built": "2026-08-26",
+  "corpus_version": "1.1",
+  "built": "2026-08-31",
   "viewport": {
     "width": 1280,
     "height": 900
@@ -158,8 +158,8 @@
       "css": ".glyph-btn .glyph { transform: none; }",
       "target": ".glyph-btn .glyph",
       "detectable_by": "pixels",
-      "magnitude": "ink centroid ~2px left of the geometric centre",
-      "dom_blind_because": "Every box-model number is symmetric: the flex container centres the glyph and getBoundingClientRect on the glyph is exactly centred within the button. The asymmetry lives in the distribution of ink inside the glyph's own box, which no DOM API exposes. Detecting it requires computing the centroid of the rendered pixels and comparing it to the geometric centre.",
+      "magnitude": "ink centroid exactly 2px left of the container's painted centre",
+      "dom_blind_because": "Every box-model number is symmetric: the flex container centres the glyph and getBoundingClientRect on the glyph is exactly centred within the button. The asymmetry lives in the distribution of ink inside the glyph's own box, which no DOM API exposes. Detecting it requires computing the centroid of the rendered pixels and comparing it to the centre of the shape the CONTAINER paints -- not to the mark's own box, which getBoundingClientRect reports POST-transform and which therefore moves with the very compensation the check must verify.",
       "severity": "medium",
       "html_override": {}
     },

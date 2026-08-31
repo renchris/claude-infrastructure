@@ -1,0 +1,160 @@
+{
+  "schema": "design-route-profiles/1",
+  "built": "2026-08-31",
+  "what_this_is": [
+    "One review harness, three rule weightings. The three apps are three different",
+    "problems: reso-landing-app is a purchased marketing template, so its token",
+    "conformance is someone else's design system and the live question is whether the",
+    "page WORKS; reso-management-app is a design-system app, where conformance is the",
+    "whole job and the deterministic layer does nearly all of it, so the model's budget",
+    "goes to what no rule can reach; reso-web-app sits between.",
+    "",
+    "These are POLICY, not measurement. Nothing in this file asserts a fact about a",
+    "checkout -- no framework version, no token-source path treated as present. Per the",
+    "spec's C11 ruling, a table that bans prose as a source must be GENERATED, and the",
+    "generator (profiles.json from a live repo read) is not built here. The one field",
+    "that would carry such a fact, `token_source`, is a PROBE to run against the repo,",
+    "and until it is run the router reports coverage.dom as partial rather than letting",
+    "the token-conformance class silently empty."
+  ],
+
+  "t2_classes": {
+    "hierarchy": "relative visual weight across a whole frame; the DOM has no such relation",
+    "gestalt": "grouping is proximity + similarity + enclosure interacting; each is measurable, their resolution is not",
+    "content-fit": "whether a caption's promise matches the render is a language-to-pixel comparison",
+    "semantic-coherence": "an unlabelled control is valid HTML with a valid AX tree; the defect is that a human cannot tell what it does",
+    "optical-alignment": "geometric centre is not optical centre; the compensation is deliberate and its absence is a judgement",
+    "readability": "left-aligned numerics are geometrically perfect and read wrong"
+  },
+
+  "defaults": {
+    "ceiling": 12,
+    "per_page_max": 2,
+    "arbitration_max": 1,
+    "gap_px": 32,
+    "bleed_px": 16,
+    "severity_weight": { "high": 2.0, "medium": 1.0, "low": 0.5 },
+    "rule_weight": {},
+    "t2_emphasis": [
+      "hierarchy",
+      "gestalt",
+      "content-fit",
+      "semantic-coherence",
+      "optical-alignment",
+      "readability"
+    ],
+    "advisory_rules": []
+  },
+
+  "profiles": {
+    "reso-landing-app": {
+      "character": "marketing aesthetics",
+      "why": [
+        "A purchased template's token conformance is a measurement of somebody else's",
+        "design system. Reporting drift against tokens the team never chose spends the",
+        "reviewer's credibility on findings nobody will action -- and credibility is the",
+        "resource the ~20% false-positive cliff actually meters. So the conformance",
+        "families stay ON (a silently disabled rule is a blind spot that reads like a",
+        "clean report) and drop to ADVISORY: reported, never gating, never winning the",
+        "page's one region call against a contrast or overflow finding."
+      ],
+      "t2_emphasis": ["hierarchy", "gestalt", "readability"],
+      "per_page_max": 2,
+      "rule_weight": {
+        "token-drift": 0.25,
+        "grid-violation": 0.25,
+        "type-scale": 0.5,
+        "spacing-rhythm": 0.75,
+        "misalignment": 0.75,
+        "contrast": 1.5,
+        "contrast-indeterminate": 1.5,
+        "overflow": 1.5,
+        "touch-target": 1.25
+      },
+      "advisory_rules": ["token-drift", "grid-violation", "type-scale"],
+      "token_source": { "status": "PROBE", "probe": "ls tailwind.config.{js,ts,cjs,mjs}" }
+    },
+
+    "reso-management-app": {
+      "character": "design-system conformance",
+      "why": [
+        "Conformance is the whole job here and the deterministic layer does nearly all",
+        "of it, so the model's budget goes to what rules cannot reach at all. That is",
+        "why per_page_max is 1, not a budget cut: the residue after the screen and the",
+        "cross-check is smallest precisely where the screen is strongest, and a page",
+        "here needing a second region call is a page whose RULES are missing -- the",
+        "second finding is the signal to file that, not an image to buy.",
+        "",
+        "The token families carry full weight, and the one thing that must not happen is",
+        "a confident FAIL whose truth value depends on which of two engines resolved the",
+        "declaration. Where a token map cannot be resolved the class ABSTAINS, which",
+        "routes; it does not pass, which routes nowhere."
+      ],
+      "t2_emphasis": ["semantic-coherence", "content-fit"],
+      "per_page_max": 1,
+      "rule_weight": {
+        "token-drift": 2.0,
+        "grid-violation": 1.5,
+        "type-scale": 1.5,
+        "spacing-rhythm": 1.5,
+        "misalignment": 1.25,
+        "contrast": 1.5,
+        "contrast-indeterminate": 1.5,
+        "overflow": 1.5,
+        "touch-target": 1.5
+      },
+      "advisory_rules": [],
+      "token_source": {
+        "status": "PROBE",
+        "probe": "grep -rl '@theme' src app --include=*.css",
+        "note": "a multi-engine PostCSS chain needs an explicit precedence before any token class may assert; without one the class abstains"
+      }
+    },
+
+    "reso-web-app": {
+      "character": "between the two",
+      "why": [
+        "No emphasis is asserted because none is measured. All six T2 classes are asked",
+        "unweighted, which is the honest default for an app whose conformance surface",
+        "has not been established. Runtime-hashed class names are not invertible, so a",
+        "token-conformance finding here cannot name a source site; that is an",
+        "attribution limit, and it is a reason to abstain rather than to guess."
+      ],
+      "t2_emphasis": [
+        "hierarchy",
+        "gestalt",
+        "content-fit",
+        "semantic-coherence",
+        "optical-alignment",
+        "readability"
+      ],
+      "per_page_max": 2,
+      "rule_weight": {},
+      "advisory_rules": [],
+      "token_source": {
+        "status": "PROBE",
+        "probe": "grep -rl '@theme\\|theme:' src app --include=*.css --include=*.ts"
+      }
+    },
+
+    "bench-corpus": {
+      "character": "the ground-truth corpus in bench/",
+      "why": [
+        "The instrument's own profile, so a router run over the corpus is not silently",
+        "borrowing an app's weighting. Everything neutral, every class asked."
+      ],
+      "t2_emphasis": [
+        "hierarchy",
+        "gestalt",
+        "content-fit",
+        "semantic-coherence",
+        "optical-alignment",
+        "readability"
+      ],
+      "per_page_max": 2,
+      "rule_weight": {},
+      "advisory_rules": [],
+      "token_source": { "status": "PRESENT", "path": "corpus/out/manifest.json#tokens" }
+    }
+  }
+}

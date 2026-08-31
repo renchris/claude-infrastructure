@@ -3,7 +3,7 @@
   {
    "rule": "misalignment",
    "target": "div.panel:nth-of-type(5)",
-   "detail": "left edge at 31px is 1.0px off the shared 32px edge used by 8 other elements",
+   "detail": "left edge at 31px is 1.0px off the shared 32px edge used by 9 other elements",
    "severity": "medium"
   }
  ],
@@ -41,13 +41,13 @@
  "hierarchy-inversion": [
   {
    "rule": "token-drift",
-   "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
+   "target": "div.actions:nth-of-type(7) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
    "detail": "background-color #EFF6FF is 11.5 away from token #F9FAFB; almost certainly meant to be the token",
    "severity": "low"
   },
   {
    "rule": "contrast",
-   "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
+   "target": "div.actions:nth-of-type(7) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
    "detail": "3.38:1 against 4.5:1 required (#3B82F6 on #EFF6FF)",
    "severity": "high"
   }
@@ -98,7 +98,7 @@
  "token-color-drift": [
   {
    "rule": "token-drift",
-   "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
+   "target": "div.actions:nth-of-type(7) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
    "detail": "background-color #1D4ED3 is 5.0 away from token #1D4ED8; almost certainly meant to be the token",
    "severity": "low"
   }
@@ -106,7 +106,7 @@
  "touch-target": [
   {
    "rule": "touch-target",
-   "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-secondary:nth-of-type(2)",
+   "target": "div.actions:nth-of-type(7) > div.action-group:nth-of-type(1) > button.btn-secondary:nth-of-type(2)",
    "detail": "164x29px is under the 44px minimum target",
    "severity": "high"
   }
