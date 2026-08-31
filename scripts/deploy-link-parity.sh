@@ -375,6 +375,40 @@ for d in "$REPO"/skills/*/; do
   n="$(basename "$d")"
   for f in "$d"*; do check_one "skills/$n/$(basename "$f")" "$CFG/skills/$n/$(basename "$f")"; done
 done
+# The seven classes below were absent from this walk until 2026-08-31, and the reason they were
+# missed is the generalisation of the bin/ fix directly above it. That fix asked "who else holds a
+# copy of the bin/ enumeration?" and answered THREE files. The question it did not ask is the one
+# that matters more here: of every class install.sh globs, how many does THIS walk visit at all?
+# Measured 2026-08-31T02:10:51Z by extracting both files' own `for ... in` headers and running
+# them: install.sh globs 19 classes and this walk covered 9. Ten were unvisited, every one of them
+# non-empty on trunk, so no check_one had ever run for 29 tracked files across seven per-file
+# classes — hooks/*.py, agents/*.md, lib/*.{sh,zsh}, scripts/lib/*.{sh,py} and
+# scripts/backlog-consolidation/*.py. All 29 were correctly linked at that moment (measured:
+# 29 of 29 symlinks resolving into the deploy checkout), so this is a DETECTOR gap being closed,
+# not an outage being repaired — and a detector gap is only ever visible when something else breaks.
+# A blind spot is per-CLASS, not per-holder; fixing one family leaves the rest of the map unread.
+for f in "$REPO"/hooks/*.py;    do check_one "hooks/$(basename "$f")"   "$CFG/hooks/$(basename "$f")"; done
+for f in "$REPO"/agents/*.md;   do check_one "agents/$(basename "$f")"  "$CFG/agents/$(basename "$f")"; done
+for f in "$REPO"/lib/*.sh;      do check_one "lib/$(basename "$f")"     "$CFG/lib/$(basename "$f")"; done
+for f in "$REPO"/lib/*.zsh;     do check_one "lib/$(basename "$f")"     "$CFG/lib/$(basename "$f")"; done
+for f in "$REPO"/scripts/lib/*.sh; do check_one "scripts/lib/$(basename "$f")" "$CFG/scripts/lib/$(basename "$f")"; done
+for f in "$REPO"/scripts/lib/*.py; do check_one "scripts/lib/$(basename "$f")" "$CFG/scripts/lib/$(basename "$f")"; done
+for f in "$REPO"/scripts/backlog-consolidation/*.py; do
+  check_one "scripts/backlog-consolidation/$(basename "$f")" "$CFG/scripts/backlog-consolidation/$(basename "$f")"
+done
+
+# FORWARD-WALK EXCLUSIONS. install.sh globs these three classes too, and for each of them a
+# per-file "$CFG/<rel>" parity question is the WRONG question — they deploy to a different ROOT or
+# by a different MODEL, so walking them here would mint a finding per member against a live layer
+# that is in fact correct. They are listed rather than merely omitted because an omission carries
+# no reason, and a reasonless omission is indistinguishable from the oversight this block exists to
+# end: tests/deploy-link-parity.bats reads BOTH the walk above and this list, and asserts every
+# class install.sh globs appears in exactly one of them. A class added to install.sh tomorrow and
+# to neither is a RED, which is what stops the next family landing in only some of the holders.
+#   NOT-PER-FILE /githooks/*       copies into <repo>/.git/hooks and ~/.git-template/hooks (install.sh's githooks leg)
+#   NOT-PER-FILE /launchd/*.plist  copies into ~/Library/LaunchAgents (install.sh's LaunchAgents leg)
+#   NOT-PER-FILE /vendor/*/        ONE directory symlink per plugin, deliberately not per file (install.sh's vendor leg)
+
 # Single-file links install.sh makes by name rather than by glob.
 check_one "accounts.json"       "$CFG/accounts.json"
 check_one "bin/claude-accounts" "$BINDIR/claude-accounts"
@@ -382,9 +416,19 @@ check_one "bin/claude-accounts" "$BINDIR/claude-accounts"
 for d in hooks hooks/lib commands scripts scripts/limit-recover bin; do sweep_orphans "$CFG/$d"; done
 for d in "$CFG"/skills/*/; do [ -d "$d" ] && sweep_orphans "$d"; done
 
-# The EXECUTED surfaces only — see STRAY SCOPE in the header. scripts/lib and lib are swept here but
-# are not in the forward walk above; that asymmetry is deliberate, not an oversight. The two
-# directions answer different questions, and "is anything live here unversioned?" stands on its own.
+# The EXECUTED surfaces only — see STRAY SCOPE in the header. Until 2026-08-31 this comment read
+# "scripts/lib and lib are swept here but are not in the forward walk above; that asymmetry is
+# deliberate, not an oversight". Both halves have to be corrected, and the second is the instructive
+# one. The FACT was true and is now false — both are forward-walked as of the block above. The
+# JUSTIFICATION never covered what it claimed to: it argues that the stray direction stands on its
+# own, which is a reason to sweep MORE, and no reason at all for the forward direction to cover
+# LESS. Calling the gap deliberate is what stopped anyone counting it for three weeks, and the walk
+# above measured it at ten classes. A sentence that declares an asymmetry intentional must say which
+# DIRECTION it is defending; this one defended the wrong one.
+# The remaining asymmetry is real and is stated positively: this sweep visits bin, hooks, hooks/lib,
+# scripts, scripts/lib, scripts/limit-recover and lib, which is the EXECUTED set — commands/ and the
+# three NOT-PER-FILE classes are out of its scope for the reasons the header and the exclusion block
+# above give, not by omission.
 for d in bin hooks hooks/lib scripts scripts/lib scripts/limit-recover lib; do sweep_strays "$d"; done
 
 # PROMPT-DOCUMENT surfaces. skills/ is NESTED where every executed surface is flat, so the sweep is
