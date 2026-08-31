@@ -177,11 +177,32 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   `scripts/automode-restore-defaults.sh`, `skills/outbound-drafting/SKILL.md`. **Reported, not
   touched: they are live-layer residue, not this diff's, and each remedy is a `cp` into a repo
   somebody has to review.**
-  ⚠️ **`48f01c02cf09` RE-MEASURED AND STAYS BLOCKED.** `~/.claude/bin/ms365-reply-splice.py` was
-  still ABSENT at 02:08:00Z — three hours after #262 fixed its source and one after #263's detector
-  fix landed. **#262 and #263 both correctly declined to close it; so do I, on a per-path presence
-  check rather than a count.** ⚠️ **This is now the clearest live instance of `landed ≠ live` on
-  the board: the source fix, the detector fix and the row all exist, and the link does not.**
+  🚨 **`48f01c02cf09` — CLOSED, AND THIS PARAGRAPH IS A CORRECTION LANDED AFTER THE ENTRY IT SITS
+  IN. Read the sequence, because the sequence is the lesson.** At 02:08:00Z
+  `~/.claude/bin/ms365-reply-splice.py` was still ABSENT — three hours after #262 fixed its source
+  and one after #263's detector fix landed — and this entry was written saying the row STAYS
+  BLOCKED, which was true when composed. **Then the `🚀` rung's own remedy changed it.** Running
+  the sanctioned converge from the shared checkout (`deploy-live.sh`, no `--force`, rc 0) printed
+  *"linked /Users/chrisren/.claude/bin/ms365-reply-splice.py — 1 live link(s) created, brand-new
+  tracked file(s) had no link"*. **#262's fix reached the ENFORCING STORE the instant a converger
+  ran; the three-hour gap was never the fix, it was the absence of a run.**
+  ✅ **BOTH of that row's clauses were then measured, because a row is not closed by fixing the half
+  you found tractable** (`probe264-converge.sh`, 02:33:15Z, **six of six predictions exact under an
+  rc-93 gate**). Clause A: the tool is now a symlink into the deploy checkout, executable. Clause B,
+  asserted in the strongest available form rather than by an ancestor relation: the live hook
+  resolves to the shared checkout's copy and **its bytes are BLOB-IDENTICAL to the trunk blob for
+  the same path**, so the RECIPE rules and the R4 DENY are in effect; separately the mail-hook
+  commit the row names IS an ancestor of that HEAD and the stale sha the row quotes is no longer it.
+  The blocker the row records — *"deploy-live.sh refuses"* — is spent: it did not refuse.
+  **The surviving true content has another owner:** the tree is still 5 un-stamped commits behind,
+  which the postland-verify stamp machinery owns and `wrap-ledger` recomputes at every close.
+  🚨 **THE ORDERING SCAR, AND IT IS THE PART TO CARRY. "COMPOSE THE ENTRY BEFORE THE LAND" AND
+  "🚀 AUTO-CONVERGES AFTER THE LAND" ARE IN DIRECT CONFLICT, AND NOBODY HAD NOTICED.** The entry is
+  composed first so corrections are free; the converge is sequenced after the land by the rung
+  ladder — **and the converge CHANGES THE BOARD.** So the one action the ladder puts last is an
+  action that can falsify the entry you already pushed, which is exactly what happened here and
+  cost a third commit and a second land. ⚠️ **If your close is going to be `🚀`, run the converge
+  BEFORE you compose the entry, or expect to correct it afterwards.**
   **BOARD, both partitions asserted at every moment** (`open + blocked == combined` AND
   `allids == allrows`), five id lists, every `comm` with both sides `sort -c`'d. **Open
   02:07:53Z: 343 open / 212 blocked / 2,351 done / 4 claimed — 555 combined, 2,910 rows.**
@@ -196,8 +217,18 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   first:** postland RED pages **0 of 2,804** — the 197th consecutive zero · postland stamps **520**,
   where #263 read 520 twice · `pages` **2,338 / 98** · inbox-guard `.escalated` **434 / 434**, one
   number and not a ratio. **State the moments; draw no conclusion about any window.**
-  **ZERO ROWS CLOSED, ZERO FILED, ZERO REOPENED — and the zero is a RESULT.** The one row this link
-  could have closed was re-measured and is still true. **Nothing was hand-unblocked.**
+  **ONE ROW CLOSED, ZERO FILED, ZERO REOPENED. Nothing was hand-unblocked.** *(This line first
+  landed reading "ZERO ROWS CLOSED … the one row this link could have closed was re-measured and is
+  still true", which was correct when composed and was falsified twelve minutes later by my own
+  converge — see the `48f01c02cf09` paragraph above and the ordering scar it names.)* **Close
+  02:31:07Z: 342 open / 212 blocked / 2,351 done / 5 claimed. FLOOR 02:34:25Z, after the close:
+  342 / 211 / 2,352 / 5** — the blocked-to-done step is my own row, and `master-operator-gated`
+  reads **141 blocked**, down from the 142 it held at my open.
+  **MY OWN LINK BODY, direction NAMED rather than resolved by mtime, and my own writes subtracted:**
+  open 02:07:53Z → close 02:31:07Z, **ZERO arrivals, ZERO departures, ONE transition** — and that
+  one is **NOT mine**: `e981656df348` open → claimed, moved by the actuator, and a sibling landed
+  `docs/parks/e981656df348.md` onto trunk in the same window. **So the off-box actuator series takes
+  a 1 for my link body with nothing to subtract, over a 23 m 14 s window.**
   **LINTS RUN:** `shellcheck` rc 0 · `bash -n` rc 0 · `bats --count` 43 · `bats-assert-liveness`
   rc 0 · bare `pipefail-sigpipe-lint` clean · its `--selftest` **32/32** (take your own count — the
   inherited note pins 30) · `unattended-path-lint --selftest` **46/46** · `test-walltime-lint`
