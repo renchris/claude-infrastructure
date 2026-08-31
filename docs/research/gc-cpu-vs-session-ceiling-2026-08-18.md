@@ -286,6 +286,69 @@ zero branches; the twentieth landed the cure and addressed its last step to a hu
 never the bottleneck, and in the end neither was landing: it was routing the final step to a store
 that nothing reads.
 
+### 🚨 The rail landed and the 22nd dispatch happened anyway — the reader could not report its own absence (2026-08-31)
+
+The section above closes on *"it is now attached to something that reads it."* True of the file,
+false of the outcome. `docs/parks/e981656df348.md` landed as `954e5d38` at **2026-08-31T02:18:56Z**,
+well-formed; this row was fired at a cloud VM again at **2026-08-31T21:19:09Z**, **19 h 00 m later**.
+Nothing about the row's three legs changed — they are re-verified by content below — so the twenty-second
+dispatch's whole finding is about the interlock.
+
+**The arm itself is CORRECT, and that was measured rather than assumed.** Rebuilding the gate's exact
+inputs in the cloud venue — a certified (non-shallow) repo carrying this park at its trunk ref, against
+a fixture ledger holding this row — `cc-eligible check e981656df348` returns `verdict=ineligible-parked`,
+**rc 3**, `park : unhonoured  stamp=2026-08-31T02:15:37Z  desk=(none)`, carrying the operator step
+verbatim. The park's content, its stamp, its `needs:` line and the retraction rule are all sound.
+
+**The fault is one level below the arm: the gate that calls it could not always FIND it, and failed
+open in silence.** `bin/cc-backlog`'s claim path resolved its co-versioned sibling as
+
+```sh
+s="$0"; [ -L "$s" ] && s="$(readlink "$s")"
+bin="$(cd "$(dirname "$s")" 2>/dev/null && pwd)/cc-eligible"
+```
+
+`readlink` without `-f` returns the target **verbatim**, and a relative target is relative to the
+**link's** directory — but that `cd` runs from the **process's cwd**. Production invokes this file as
+`$HOME/.claude/bin/cc-backlog`, and that live layer is per-file symlinks into the checkout
+(`.claude/CLAUDE.md`), so a relative target such as `../../Development/claude-infrastructure/bin/cc-backlog`
+makes the `cd` fail, `$( )` collapse to the empty string, and the helper resolve to the absolute nonsense
+`/cc-eligible`. Reproduced at three different cwds, all three unresolvable. The gate then tests
+`[ -x "$ebin" ]`, finds it false, and **skips** — the correct fail-open (the predicate lives outside the
+ledger fold), but with **no record**, so a skipped gate is indistinguishable from one that ran and
+admitted. `cc-backlog claim --venue cloud` returns 0 and `cc-dispatch` fires.
+
+The same two-line form sat at **three** sites in that one file, while `dispatch_conf()` **in the same
+file** already carried the correct chain-walk under a header explaining why production needs exactly
+that. One file, two answers to one question, and only one of them right.
+
+**Fixed here:** `self_path()` extracted from `dispatch_conf` and used at all four sites, and the
+eligibility gate now NAMES an unresolvable helper on stderr instead of skipping silently.
+`tests/cc-backlog-self-path.bats` — 8 tests, RED-proved **3 red** against the pristine trunk file with
+all five controls green in both directions, so the suite pins the resolution and not merely "something
+refuses now."
+
+⚠️ **What this does NOT establish**, stated plainly so a twenty-third dispatch does not inherit a guess:
+whether the operator's live `~/.claude/bin/cc-backlog` symlink is *relative* or *absolute* is not
+observable from a cloud VM. This is a **proven defect in the interlock, not a proven cause of this
+particular fire.** Two other causes remain open on the same claim path and are equally unobservable
+off-box — a `desk` block/unblock recorded at or after the park stamp (which retires the arm *by design*),
+and the repo failing `cc-eligible`'s certification (`park : not-measured`). All three are discriminated
+by one command on the box, which prints the arm's state, its stamp, and the desk timestamp it compared
+against:
+
+```sh
+~/.claude/bin/cc-eligible why e981656df348
+```
+
+Expected once this branch is on trunk: `park : unhonoured`. Anything else names the remaining cause.
+
+**The correction this row has now paid twenty-two times for**, extending the twenty-first's: *a reader
+that cannot report its own absence is not a reader.* The park arm was built, landed, tested and correct —
+and it was never consulted, and no store recorded that it had not run. The nineteen-branch lesson was
+about a fix that never landed; this one is about a fix that landed behind a caller whose only failure
+mode was silence.
+
 ## 4 · If 2.1.234 is adopted, adopt it on other grounds — and set one env var first
 
 The upgrade is defensible for 33 releases of unrelated fixes, never for capacity. Two items gate it:
