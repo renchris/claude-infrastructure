@@ -28637,3 +28637,103 @@ census is the INPUT to that work, not the work — and it is now cheap for the n
 whole change. It also does not move `d84434cd`: the cloud land arm's discriminator still needs the
 three reads that exist only on the operator's box (`scripts/cloud-land-arm-diagnose.sh`), and
 `f85fce7c26f5` stays operator-gated on them.
+
+### Addendum 2026-08-31 — the FIFTH venue lock, and what `01ab05685857` actually left open
+
+`01ab05685857` ("postland-verify is INERT — newest GREEN stamp 46h old (max 24h), so nothing is
+re-proving trunk; this is how 3 red suites went unnoticed") is **two items wearing one title, and
+only the first has been worked.** `ship-land.sh:1349` already carries the cure for the title:
+`inert` (nothing has stamped at all; the fix is launchctl) is split from `uncertified` (it stamps
+every sweep and every verdict is red; the fix is the failing suites). That comment also records,
+in its own words, what the item's dispatch did NOT do:
+
+> The dispatch that item bought went to the launchd job; nothing went to the red suites.
+
+**This addendum is the first work on the second half.** One of those suites is identified, cured,
+and measured — and the cure is the fifth thing a cloud VM cannot land.
+
+**The red.** `scripts/typed-send-lint.sh` scans RED on `origin/main` at
+`scripts/handoff-fire.sh:5633`, taking `tests/typed-send-lint.bats` from 18/18 to **16/18**: case 17
+asserts the lint prints `clean` on the REAL tree, and case 16 falls with it because `--selftest`
+runs that same scan. The failure is a **grep over the tree** — deterministic, not load-dependent —
+so it survives the post-land retry ladder into a RED stamp on every sweep, which is exactly the
+`uncertified` population above and not the `inert` one. Two of the three sites the `ship-land.sh`
+comment named are already gone from trunk (`:2183`, `:5415`); `:5633` is the one left.
+
+**The cure is a marker, not a rewire, and the distinction is the finding.** The site is a reviewed
+counter-example: the echo-verify the lint demands is already there — type `/exit`, read the composer
+back, CR only on an exact match. What is absent is a *sanctioned helper*, and **none fits this
+surface**. Every sanctioned helper types into a SHELL; this pane holds a live claude **COMPOSER**:
+
+* `_it2_type_line` wraps the payload as `` : <nonce>; <line> ``. The `:` no-op is what makes the
+  nonce inert *in a shell*; a composer has no such grammar and would submit the whole string as
+  prompt text, so the `/exit` would never run and the recycle would wedge on the very pane it was
+  sent to rescue.
+* `it2_paste_submit_verified` IS composer-aware, but pre-waits up to 30 s for an empty composer and
+  abstains on `composer_owned`. Both are already settled at the call site — `recycle_nudge_decision`
+  returned `retype`, reachable only on a composer proven empty with claude still alive — and a 30 s
+  pre-wait would stall the 15 s vanish-check of the `sleep 3` poll it sits inside.
+
+So the fix is the lint's own documented per-line `typed-send-lint:allow` marker, **not** an
+`EMBEDDED_ALLOWLIST` row (the ratchet only shrinks). The inline check is in fact *stricter* than the
+helpers' whole-screen grep: `composer_content` returns the composer's own space-stripped content and
+it is compared for EXACT equality, so no scrollback residue can satisfy it — the forgeability defect
+the nonce exists to close, closed here by the read surface instead.
+
+    typed-send-lint.sh                 RED at :5633  ->  clean, 381 files, 2 grandfathered
+    typed-send-lint.sh --selftest      FAILED        ->  35/35
+    tests/typed-send-lint.bats         16/18         ->  18/18
+
+**THE FIFTH LOCK: `scripts/handoff-fire.sh` is now measured, and it is worse than `ship-land.sh`'s.**
+The 08-29 addendum closes by saying a cloud VM cannot land a change to `scripts/ship-land.sh` "at
+all, whatever the change is, until the off-box redness of its direct-suite set is measured and
+recorded." The same sentence is now true of `scripts/handoff-fire.sh`, and here is its measurement,
+taken on this VM with `shellcheck` 0.11.0 and `bats` 1.10.0 provisioned per that addendum:
+
+    scripts/handoff-fire.sh  ->  81 direct suites, 18 RED, rc 6
+    control: the SAME 18 suites on a pristine origin/main worktree, same container
+
+    suite                                  mine    pristine     suite                                  mine    pristine
+    account-fact-derivation                 1        1          handoff-fire-failed-cleanup             1        1
+    cc-classify                            68       68          handoff-fire-kitty-daemon               1        1
+    desk-invariant                          3        3          handoff-fire-stamp-daemon-path          1        1
+    fire-goal-disposition                   1        1          handoff-lifecycle-record                3        3
+    handoff-alarm-records                   4        4          handoff-recycle-durable-cwd             2        2
+    handoff-fire-account-sweep              1        1          it2-wrapper                             1        1
+    handoff-fire-argv-launch                1        1          kitty-split-launch-stamp                1        1
+    handoff-fire-capacity-gate              3        3          spawn-presence                          6        6
+    handoff-fire-completion-push            2        2          teammate-auto-shutdown                  2        2
+
+**Byte-identical on all eighteen** (`diff` over both tables is empty), and the diff that "caused"
+them is **18 added comment lines and nothing else** — `0` non-comment additions, `0` removals, and
+the file is identical to trunk once comments are stripped. `handoff-alarm-records`' own case 11 says
+it out loud: *"RED-PROOF: `hf_alarm` does not exist in the pristine tree, so every case above was
+red."* Yet the gate's sentence is `18 mapped to YOUR diff … This is a VERDICT about your diff
+(O(diff), reproducible): fix it, do not retry unchanged.`
+
+The mechanism is visible at `ship-land.sh:2098`: `own_red` increments for any failing suite that is
+a member of `own` — the suites reachable from the changed file — and there is **no base-branch
+comparison anywhere in that arm**. A file with a large direct-suite set therefore inherits every
+off-box red in that set as its own. This is not a new defect; it is the 08-29 finding reproduced on
+a second file, and it is why the lock is a property of the FILE's suite fan-out rather than of any
+particular change.
+
+**Nothing was skipped, disabled, quarantined, or added to `scripts/offbox-excluded.manifest` to get
+past it**, and `--no-gate` was never reached for. The gate is right to refuse; its input is what is
+wrong, and the venue cannot fix the input. A cause was measured for none of the eighteen, so writing
+them into the manifest would violate that file's own contract (*"every entry is a MEASUREMENT, not a
+judgement"*) exactly as the 08-29 addendum refused a `cc-reaper` line on the same grounds.
+
+**What remains, and who owns it.** The fix is committed and pushed on
+`claude/fire-20260831T192853Z-39249-1`; landing it is a one-command fast-forward **from the
+operator's box**, where these eighteen are green and the gate's input is sound. Until then
+`typed-send-lint` keeps scanning red on trunk, `tests/typed-send-lint.bats` keeps reporting 16/18,
+and the post-land verifier keeps stamping a correct RED that the `uncertified` arm — landed, and
+working — will keep reporting accurately.
+
+⚠️ **The item's own "3 red suites" is NOT settled here, and cannot be from this venue.** Which three
+they were is a fact about the **stamps dir** (`~/.claude/autonomy/postland/stamps`), which exists
+only on the operator's box; this container has no `~/.claude/autonomy` at all. One is identified
+above by following the `ship-land.sh` comment's own evidence. The other two need a read that must be
+taken there — and `tests/postland-verify.bats` itself is **13 ok / 14 not ok** off-box here, so it
+cannot be used as the instrument either.
