@@ -86,6 +86,140 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-31 — drain recycle #266: method 238 — A MAP OF RECORD CAN HAVE A SECOND AUTHOR, AND
+  EVERY AUDITOR DERIVED FROM THE MAP IS BLIND TO IT. WHEN YOU HAVE PINNED EVERY AUDITOR, ASK
+  WHETHER THE MAP IS THE ONLY MAP.** #264 scored the DETECTOR (`scripts/deploy-link-parity.sh`)
+  against `install.sh` and #265 scored the REPAIRER (`scripts/deploy-parity-assert.sh`) against it.
+  Both auditors derive their populations FROM `install.sh`, so neither can indict the map itself —
+  a population derived from the thing under test cannot convict it (memory:
+  `positive-control-the-denominator`). **The question neither link could ask is whether the MAP is
+  complete, and the independent population is `git ls-files`.**
+  🚨 **MEASURED BY DERIVATION AND EXPANSION, NEVER BY READING** (`probe266-map.sh`,
+  2026-08-31T19:23Z, all predictions exact on the second run). `install.sh`'s **19** glob classes
+  come out of its own `for … in "$REPO_DIR"/…` headers and its **18** literal single-file installs
+  out of its own `link_file`/`copy_file`/`run cp` call sites; membership is decided by **BASH'S OWN
+  PATHNAME EXPANSION in the real tree** rather than by matching patterns by eye (memory:
+  `make-the-actuator-the-arbiter`). **Together they deploy 629 of 2,247 tracked files.** Zero
+  vacuous: all 19 classes expanded non-empty. **13 top-level buckets are dead to `install.sh`
+  entirely** — `.claude .github assets bench bus config docs evolve-fixtures migrations
+  settings-templates templates tests tools` — predicted as a SET before the run and matched exactly.
+  🆕 🚨 **THE FINDING IS IN THE RESIDUE AND IT NAMES A SECOND AUTHOR. `scripts/kitty-setup.sh` is a
+  SECOND INSTALLER.** It links **six** `bin/` files into `$CFG/bin` ITSELF (`:216`, `:220`, `:225`,
+  `:236-238`) and compiles `bin/kitty-pane-menu-native.swift` into `$CFG/bin` (`:245`). `install.sh`
+  **RUNS it** (`:1204-1215`) but never enumerates its classes, and **neither auditor mentions
+  `kitty-setup.sh` anywhere — 0 occurrences in either file.** Five of those targets are live RIGHT
+  NOW as symlinks into the checkout, deployed by a script no auditor knows is a deployer.
+  🚨 **THE CITATION IS ONE-WAY, AND THAT IS WHY IT STAYED INVISIBLE.** `kitty-setup.sh:218-220`
+  knows about `install.sh` and says so in its own words — *"install.sh's bin/cc-* glob also deploys
+  it … `ln -sfn` makes the overlap a no-op"* — **while nothing points back.** So the targets sat in
+  the gap between **THREE** gates, each correct in its own terms: the STRAY leg excludes symlinks
+  and defers to the forward walk (`config/live-only.manifest`'s *"NOT COVERED, DELIBERATELY"*
+  clause), the forward walk's class set comes from `install.sh`, and the repairer scored them at the
+  reasonless `*) want=0`. **#265 found a class dropped by TWO gates; this is one dropped by THREE,
+  where the third gate explicitly hands responsibility to the first.**
+  ⚠️ **HONEST LIMIT, STATED FIRST: NO OUTAGE IS REPAIRED AND THE VERDICT WAS ALREADY CORRECT.** All
+  five links are present and correct today. **`want=0` is also the RIGHT answer and this keeps it**:
+  `kitty-setup.sh` is CONDITIONAL — kitty hosts only — so demanding these links elsewhere would be
+  wrong, and `link_refresh()` would mint them where nothing wants them. **This is a DECLARATION, NOT
+  a step toward widening the deploy.** The same shape as #265's, two links running.
+  🚨 **BUT THE DECLARATION MAKES A REAL ASYMMETRY VISIBLE, AND THAT IS THE PART WORTH KEEPING:
+  because these are `want=0`, `link_refresh()` CAN NEVER RESTORE ONE.** A deleted
+  `~/.claude/bin/kitty-pane-menu` is repaired by nothing and reported by nothing, where a deleted
+  `bin/cc-*` is relinked automatically. That was a silent property of a default; it is now written
+  down beside the arm.
+  🚨 **RUN THE REASON — AND IT REFUTED TWO CANDIDATES BEFORE THIS ONE SURVIVED. Both refutations
+  were worth more than the confirmation.**
+  · **`hooks/lib/smart-bash-allowlist.py` is tracked and ABSENT from the live layer** (27 of 28
+    `hooks/lib` files are live), which reads EXACTLY like the `scripts/lib/pty-run.py` incident the
+    repairer's own comments already record. **REFUTED:** its consumer resolves its own symlink chain
+    back into the checkout (`hooks/smart-bash-allowlist.sh:92-102`), the hook's comment records that
+    defect having bitten and been fixed that way, and
+    `tests/smart-bash-allowlist-compound.bats:265-278` **PINS the no-lib-link layer shape as
+    correct**. Deliberate and tested, not an outage.
+  · **The seven `scripts/` data files** (`pipefail-sigpipe-allow.txt`, `host-suites.manifest`,
+    `offbox-excluded.manifest`, `esc-exempt.manifest`, `growth-coverage.conf`,
+    `dispatch-projects.conf`, `render-diagrams.mjs`) are all absent from `~/.claude/scripts/` and
+    all resolved SELF-relatively or repo-relatively by their consumers — `$(dirname "$SELF")/…` at
+    `pipefail-sigpipe-lint.sh:347` and `growth-coverage-lint.sh:72`, `$DEPLOY_REPO/scripts/…` at
+    `deploy-live.sh:114`. **Repo-relative by design, the same shape as #265's `scripts/*.py`
+    finding. REFUTED.**
+  🆕 🚨 **AND ONE INSTRUMENT FAULT THE REASON CAUGHT IN MY OWN SCREEN, WHICH IS THE REUSABLE HALF:
+  A PREFIX-KEYED READER OF A NAMED LIST RE-CREATES THE BLIND SPOT THE LIST EXISTS TO CLOSE.** My
+  literal extractor resolved `install.sh`'s `for tool in …` list by filtering it to the
+  `claude-`/`reso-` **PREFIX**, so it silently dropped the one member that does not share that
+  prefix — `bin/screenshot-to-clipboard.sh` — and reported a DEPLOYED file as deployed by nothing.
+  **`install.sh:453` records that SAME file having been missed once before, *"in NEITHER this list
+  nor sync.sh's"*.** **Take the loop's word list WHOLE.** Corrected, the `bin/` residue is **7**,
+  not 8 — and the one file in it that no installer deploys at all is `bin/dia-cdp-launch.sh`, which
+  `skills/dia-agent` instructs an agent to run. **Named, not filed: its consumers reference it by an
+  absolute `~/bin/` path, so establish the destination before calling it a gap.**
+  ✅ **PINNED BY A DERIVED ARM AND A SEEDED FIRE TEST** in `tests/deploy-parity.bats` (**80 → 82**).
+  Both sides derived: `kitty-setup.sh`'s targets out of its own `ln -sfn` lines, the verdict by
+  **EXECUTING** the repairer's extracted `case` block under a **one-token mutation of the default
+  arm asserted to touch exactly two diff lines**. A non-vacuity floor (≥ 4 targets), a tracked-file
+  check on every derived target, a POS control and a FIRE control all precede the verdict; the fire
+  test deletes exactly the new arm — **asserted to remove ONE line, so a reworded arm REFUSES rather
+  than passing vacuously**.
+  ✅ **RED-PROVED, PREDICTION FIRST, GATED AT rc 93:** pre-fix **80 incumbents green, exactly 2 `not
+  ok`, BOTH BY NAME**; post-fix **82 ok / 0 not ok**, plan `1..82`, 0 skip. The subject's own
+  `--selftest` is rc 0 and its class table is unchanged.
+  🚨 **TWO INSTRUMENT REFUSALS, BOTH IN THE HARNESS, AND BOTH WORTH MORE THAN THE CONFIRMATION.**
+  **(1)** the map probe stripped `"$REPO_DIR"/` with a leading-quote pattern, but the quote is in
+  the MIDDLE (`"$REPO_DIR"/agents/*.md`), so **all 19 classes expanded to nothing** — caught by the
+  POS control and a non-vacuity floor, never by eye. **(2) rc 9 — `case "$rel" in` is NOT UNIQUE in
+  the repairer (3 occurrences)**, so it cannot anchor the want-decision block; re-anchored on the
+  block's own **catch-all** and walked BACK to the nearest enclosing `case`. **#241's longer-token
+  scar in a fourth costume: never anchor on a token a sibling line also spells.**
+  ⚠️ **AND A THIRD REFUSAL THAT WAS MINE, NOT THE INSTRUMENT'S:** I predicted **8** globbed
+  directories and the derivation says **14**. The rc-93 gate refused it. **A prediction I guessed
+  rather than derived is exactly the one the gate exists to catch.**
+  **THE BOARD.** Open **2026-08-31T19:19:46Z** `339 open / 216 blocked / 2,352 done / 3 claimed`
+  (555 combined, 2,910 rows); both partitions asserted at every moment (`open + blocked == combined`
+  AND `allids == allrows`), arrivals and departures from a FULL-SET `comm` with `sort -c` on both
+  sides. **THE GAP** from #265's floor (05:31:05Z) to my open — **13 h 48 m 41 s, the longest in
+  many links** — held **ZERO arrivals, ZERO departures, THREE transitions**, none of them mine
+  (I had written nothing): `37b112d8950d` open → claimed, `abf5e7509608` open → claimed,
+  `485f8f87eb5f` claimed → blocked. **All three are on the do-not-hand-touch list; reported, not
+  worked.**
+  🚨 **ZERO ROWS CLOSED, ZERO FILED, ZERO REOPENED**, so nothing needed subtracting from the
+  actuator series — **but say which window you counted anyway, because a link that closes rows and
+  reports the raw number is reporting itself.**
+  **THE STORES, each with its moment attached and no claim about the window between them.**
+  postland `.page` RED **0** at every moment (denominator 2,809 at 19:19Z) — the 205th consecutive
+  zero. postland **stamps 523** at my open, against #265's flat 522 across its three moments.
+  `~/.claude/autonomy/pages` **2,351 / 100** at 19:19Z, against #265's monotone-down
+  2,347→2,339. inbox-guard `.escalated` **436 / 436**, against #265's flat 435 — **and every file in
+  that store is an `.escalated` marker, so the two counts are ONE number, not a ratio.** **A store
+  you have only ever seen flat is a store you have not watched long enough.**
+  **THE LANE.** Open 19:19:18Z, tree CLEAN: `RUNG=🚀 DIRTY=0 LIVE_SRC=behind LIVE_SHA=5b21efce50a3
+  LIVE_LAG=7 LIVE_ADDS=2 LIVE_DIVERGED=0 LIVE_AGE=62897 LIVE_BREACH_WHY=adds MIG_FAILED=0
+  GATE=stale`. **The live sha is UNCHANGED from #265's post-land reading while `LIVE_AGE` climbed
+  11,333 → 62,897** — the lane did not advance in the 13 h between links. ⚠️ **The `🚀` is the
+  documented `LIVE_ADDS` false positive owned by OPEN row `4e6a51df2a84` (do NOT re-file): both adds
+  are siblings' `docs/parks/*.md`, and my own commits read `--diff-filter=A` = 0.** **`GATE=stale`
+  at my open — the sixty-fourth consecutive, and NOT mine to drive.**
+  ✅ **Lints: `shellcheck` rc 0 · `bash -n` rc 0 · `--selftest` rc 0 · `bats --count` 82 ·
+  `bats-assert-liveness` rc 0 · `pipefail-sigpipe-lint` bare rc 0 · scoped `bats-shellcheck-lint`
+  clean (1 suite, 0 blocking, 0 unanalyzable) · `test-walltime-lint` clean over `tests`, **557**
+  suites.** ✅ **NOT A WIDENING: `--census` keyed on (path, TEXT) with the PRE arm extracted from
+  `origin/main` via `git archive | tar -x` rather than remembered — 126 → 126, LOST=0, NEW=0.**
+  ⚠️ **`alarm-polarity-lint` DECLARED NOT-RUN** — neither changed file is an alarm emitter and that
+  lint's POS control is a known mute (`e07dc5e09f83`, OPEN). **The seventeenth consecutive link to
+  declare rather than claim.**
+  ✅ **THE WHOLE `--direct` DRAW RUN IN THE FOREGROUND BEFORE THE LAND — 4 of 4 suites, 238 ok, 0
+  not ok, 0 skip, 4 plans, TERMINATOR ASSERTED** (`suites_run == suites_listed`), 108 s at load
+  13.6 → 15.0: `deploy-live` **136** · `deploy-parity` **82** · `ms365-reply-splice` **18** ·
+  `deploy-parity-live` **2**. ⚠️ **`deploy-parity-live` ran GREEN here despite its standing note as
+  RED on trunk — NOT a contradiction, and #265 saw the same: the host checks assert the LIVE LAYER,
+  a different subject from the trunk tree. Two populations, two verdicts, both true.**
+  **Instruments left on disk:** `probe266-map.sh` (the independent-population screen — repoint
+  `REPO` and it transfers to any repo with an installer) and `probe266-shadow.sh` (which arm does a
+  real member actually reach, by execution). ⚠️ **Both are now PRE-FIX instruments: the shadow
+  probe's tally names the pre-fix state and its predictions must be repointed before reuse, or it
+  refuses at rc 93. That is failing CLOSED.**
+  🚨 **THE PROCEDURE, AND IT IS ONE QUESTION ADDED TO #265's TWO: how many holders does this map
+  have · how many gates dropped this class · AND IS THIS MAP THE ONLY MAP? The tell is one grep:
+  a `$CONFIG_DIR`- or `$BIN_DIR`-shaped WRITE in a file that is not the installer.**
 - **2026-08-31 — drain recycle #265: method 237 — A MAP OF RECORD CAN HAVE TWO AUDITORS, AND
   MEASURING ONE SAYS NOTHING ABOUT THE OTHER; AN EXCLUSION THAT IS CORRECT BUT REASONLESS IS
   INDISTINGUISHABLE FROM THE OVERSIGHT IT CREATES.** #264 ran method 236 against the DETECTOR
