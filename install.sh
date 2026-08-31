@@ -802,11 +802,20 @@ fi
 # `desk-register` (commands/desk.md:25,37) — invoked a nonexistent binary (audit 02 BROKEN-DEPLOY).
 # desk-assert was live only because someone linked it BY HAND on 2026-07-18. Glob both families
 # rather than naming files, so a new desk-* tool deploys without another install.sh edit.
+#
+# ms365-* joined them on 2026-08-31 for the SAME defect, one family later. bin/ms365-reply-splice.py
+# landed 2026-08-25 (fea855e1f) and was named ZERO times across install.sh, deploy-live.sh and
+# deploy-link-parity.sh, so it existed on trunk and in no live location at all — and no advance of
+# the live layer could ever place it, because the converger materialises what this pass selects and
+# this pass never selected it. Meanwhile the LIVE enforce-email-formatting.py hook tells the model
+# to RUN it, at RECIPE step 3c and inside the rule-6 denial, exactly as commands/desk.md told it to
+# run desk-register. Globbed, not named, per the paragraph above: a second ms365-* tool deploys
+# without another edit here.
 if $IS_GLOBAL; then
   echo ""
   echo "PATH tools → $CONFIG_DIR/bin/"
   mkdir -p "$CONFIG_DIR/bin"
-  for tool in "$REPO_DIR"/bin/cc-* "$REPO_DIR"/bin/desk-*; do
+  for tool in "$REPO_DIR"/bin/cc-* "$REPO_DIR"/bin/desk-* "$REPO_DIR"/bin/ms365-*; do
     [[ -f "$tool" ]] || continue
     link_file "$tool" "$CONFIG_DIR/bin/$(basename "$tool")"
   done

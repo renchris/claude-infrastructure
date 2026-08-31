@@ -333,7 +333,7 @@ RECIPE = """ms365 email recipe (auto-injected — settled, do not re-derive):
         draft carrying its OWN quote — as many levels deep as the original already was.
      b. download-bytes-to-file on /me/messages/<THAT DRAFT'S id>/$value, to disk. MIME works
         on drafts, and going to disk keeps a 30KB body out of context.
-     c. bin/ms365-reply-splice.py --draft-mime d.eml --body yours.html --out spliced.html
+     c. $HOME/.claude/bin/ms365-reply-splice.py --draft-mime d.eml --body yours.html --out spliced.html
         --placeholder . --assert-depth N. It cuts at Graph's own <div id="divRplyFwdMsg">
         and keeps everything below byte-identical. It REFUSES on a missing separator, a
         surviving placeholder, or a chain shallower than N.
@@ -736,7 +736,8 @@ def main():
                     "live dispute (2026-08-25). Use the PLACEHOLDER SPLICE instead: (1) create this "
                     "draft with a short placeholder Comment so Graph builds its own quote, at the "
                     "original's full depth; (2) download-bytes-to-file on the DRAFT's own "
-                    "/me/messages/<id>/$value; (3) bin/ms365-reply-splice.py --draft-mime d.eml "
+                    "/me/messages/<id>/$value; (3) $HOME/.claude/bin/ms365-reply-splice.py "
+                    "--draft-mime d.eml "
                     "--body yours.html --out spliced.html --placeholder . --assert-depth N; "
                     "(4) update-mail-message with the result — In-Reply-To/References survive, and "
                     "recipients and the `from` alias can be set in the same PATCH. Full rationale: "
