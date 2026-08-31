@@ -28437,3 +28437,34 @@ be a refactor riding a one-file measurement. It says nothing about the reds `mac
 reports (`operator-readout` 43, `ship-land` 17, `qos-rewrite` 13, `cc-reaper` 51), which the manifest
 still wants measured **there**. And it does not move `d84434cd`: the cloud land arm still needs the
 three reads that exist only on the operator's box, so `f85fce7c26f5` stays operator-gated.
+
+#### …and the land this dispatch could not take, which is the fourth lock again with a control
+
+`scripts/ship-land.sh --dry-run` on the two commits above ends **GATE RED**, and the message is the
+one the fourth lock already named: *"2 of 4 direct suite(s) named a failure (2 mapped to YOUR diff).
+This is a VERDICT about your diff (O(diff), reproducible): fix it, do not retry unchanged."*
+
+**The selection is CORRECT and the attribution is not.** `gate-select --direct` picks the four by a
+genuine `literal:scripts/land-lock.sh` edge — `cc-backlog.bats` and `cc-blockers.bats` really do
+drive the land lock in their executable text, so fixing that file really does select them. But both
+were **already red in this venue before this diff existed**, and the control says so exactly:
+
+    suite                   my tree        pristine origin/main (separate worktree, same box)
+    tests/cc-backlog.bats   133 ok / 14    133 ok / 14      ← identical
+    tests/cc-blockers.bats   42 ok / 63     42 ok / 63      ← identical
+    tests/land-lock.bats     29 ok /  0     11 ok / 14      ← the only suite this diff MOVED, and it
+                                                              moved it green
+
+Same shape as the `cc-reaper` refusal recorded above, but sharper: there the suite was pulled in by a
+change to `ship-land.sh` and was argued to be unrelated; here the edge is real, the counts are
+byte-identical across the diff, and the third row is the positive control proving the run can see a
+difference when there is one. **Nothing was skipped, disabled, quarantined or manifest-excluded to
+get past it.** The gate is right to refuse; its input is what is wrong; the venue cannot fix the
+input, and `cc-blockers`' 63 reds have no measured cause yet — measuring them is its own cell, not
+this one's, and by the finding above it must be measured on the producer before anything is written
+down about it.
+
+Committed and pushed to `claude/fire-20260831T013209Z-8912-1`; the land itself is the operator's, from
+a box where these two suites are green. **A `git merge --ff-only` of that branch is the whole step** —
+the branch is already rebased onto `origin/main` and its own suites are green here in both platform
+directions.
