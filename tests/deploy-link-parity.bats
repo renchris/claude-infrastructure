@@ -572,3 +572,118 @@ witness() {  # $1 = repo-relative path · $2 = the line that must name the artif
   lacks "zz-copy                                      live and executable, in NO checkout"
   has "COPY"
 }
+
+# ── FORWARD-WALK COVERAGE, DERIVED FROM install.sh (2026-08-31) ──────────────────────────────────
+# install.sh is the map of record and the forward walk RESTATES it. A restatement drifts, and the
+# drift is invisible because a class nobody walks produces no output — the absence of a finding and
+# the absence of a look are the same bytes on the terminal.
+#
+# HOW THIS WENT WRONG TWICE, WHICH IS WHY THE ARM IS DERIVED RATHER THAN A LIST. On 2026-08-31 the
+# walk globbed bin/cc-* while install.sh globbed three bin/ families; that was repaired, and
+# tests/ms365-reply-splice.bats pinned the bin/ families. Hours later the SAME file was measured
+# against install.sh's WHOLE glob set and covered 9 of 19 classes: the repair had been per-FAMILY
+# while the blindness was per-CLASS. Twenty-nine tracked files across seven per-file classes had
+# never once been check_one'd. Fixing one holder of an enumeration is not the same as counting them.
+#
+# WHY BOTH SIDES ARE EXTRACTED. Neither set is written down here. install.sh's classes come out of
+# its own `for ... in` headers and the walk's come out of the walk's, so a class either author adds
+# tomorrow is scored without editing this file — which is exactly the property a hand-copied list
+# cannot have, and the property whose absence produced both defects above.
+#
+# THE THIRD SET IS WHAT MAKES THE ARM HONEST. Three of install.sh's classes deploy to a different
+# ROOT or by a different MODEL (githooks → .git/hooks, launchd → ~/Library/LaunchAgents, vendor →
+# one directory symlink per plugin), so walking them would mint a false finding per member. They are
+# DECLARED in deploy-link-parity.sh's NOT-PER-FILE block rather than silently omitted, and this arm
+# requires every class to land in exactly one of the two sets. An omission carries no reason; a
+# declaration does, and only a declaration can be reviewed when it stops being true.
+derive_class_sets() {   # $1 = install.sh to read · writes inst/walk/excl into $BATS_TEST_TMPDIR
+  local inst="$1" linkp="$REPO_ROOT/scripts/deploy-link-parity.sh" hdr ftr lh lf
+  hdr='# --- the per-file symlink surfaces install.sh deploys'
+  ftr='for d in hooks hooks/lib commands scripts scripts/limit-recover bin; do sweep_orphans'
+  # Both region anchors must be UNIQUE before anything is read between them. A census that cannot
+  # refuse is not a census: a duplicated anchor would silently select the wrong span and every
+  # assertion below would be about a region nobody chose.
+  [ "$(grep -cF -- "$hdr" "$linkp")" -eq 1 ]
+  [ "$(grep -cF -- "$ftr" "$linkp")" -eq 1 ]
+  lh="$(grep -nF -- "$hdr" "$linkp" | cut -d: -f1)"
+  lf="$(grep -nF -- "$ftr" "$linkp" | cut -d: -f1)"
+  sed -n "${lh},${lf}p" "$linkp" >"$BATS_TEST_TMPDIR/region.txt"
+  # Tokens are taken WHOLE (everything after the quoted variable, up to whitespace/quote/semicolon)
+  # and compared with grep -xF. A substring compare would be wrong in both directions here:
+  # /lib/*.sh is a strict substring of /hooks/lib/*.sh and of /scripts/lib/*.sh, so a bare -F match
+  # would score lib/ as covered by a line that never mentions it.
+  grep -E '^[[:space:]]*for [A-Za-z_]+ in ' "$inst" \
+    | grep -oE '\$REPO_DIR"/[^ ";]+' | sed 's/^\$REPO_DIR"//' | sort -u >"$BATS_TEST_TMPDIR/inst.txt"
+  grep -E '^[[:space:]]*for [A-Za-z_]+ in ' "$BATS_TEST_TMPDIR/region.txt" \
+    | grep -oE '\$REPO"/[^ ";]+' | sed 's/^\$REPO"//' | sort -u >"$BATS_TEST_TMPDIR/walk.txt"
+  grep -F '#   NOT-PER-FILE ' "$linkp" | awk '{print $3}' | sort -u >"$BATS_TEST_TMPDIR/excl.txt"
+  return 0
+}
+
+@test "every deploy class install.sh globs is either forward-walked or declared NOT-PER-FILE" {
+  derive_class_sets "$REPO_ROOT/install.sh"
+
+  # NON-VACUITY, all four halves. Each derivation is a pipeline over a real file, and a pipeline
+  # that silently reads nothing yields "every member passes" over an empty set. The floors are the
+  # populations that existed when this arm was written, so they can only be tripped by a shrink.
+  [ "$(grep -c . "$BATS_TEST_TMPDIR/inst.txt")" -ge 15 ]
+  [ "$(grep -c . "$BATS_TEST_TMPDIR/walk.txt")" -ge 9 ]
+  [ "$(grep -c . "$BATS_TEST_TMPDIR/excl.txt")" -ge 3 ]
+  # ...and a known member of each set, so a derivation that produced 15 lines of the WRONG thing
+  # still fails. hooks/*.sh predates every fix here; githooks/* is the oldest excluded class.
+  [ "$(grep -cxF -- '/hooks/*.sh' "$BATS_TEST_TMPDIR/walk.txt")" -eq 1 ]
+  [ "$(grep -cxF -- '/githooks/*' "$BATS_TEST_TMPDIR/excl.txt")" -eq 1 ]
+
+  # THE SUBSTITUTION GOES INSIDE `[ ]`, NEVER INTO A BARE ASSIGNMENT. `grep -c` prints 0 and EXITS 1
+  # on a legitimate zero, so `n="$(grep -c ...)"` fails the whole test under bats+errexit — and it
+  # fails on the COMMONEST input here, since most classes are absent from the exclusion set. Both
+  # loops below were written that way first: this arm then went red on the FIXED tree, and the fire
+  # test below went red on the unfixed one for that reason instead of for the defect, which would
+  # have shipped a control credited for a failure it did not cause. Inside `[ ]` the rc is discarded.
+  UNCLAIMED="$BATS_TEST_TMPDIR/unclaimed.txt"; : >"$UNCLAIMED"
+  BOTH="$BATS_TEST_TMPDIR/both.txt"; : >"$BOTH"
+  while IFS= read -r cls; do
+    if [ "$(grep -cxF -- "$cls" "$BATS_TEST_TMPDIR/walk.txt")" -eq 0 ] \
+       && [ "$(grep -cxF -- "$cls" "$BATS_TEST_TMPDIR/excl.txt")" -eq 0 ]; then
+      printf '%s\n' "$cls" >>"$UNCLAIMED"
+    fi
+    if [ "$(grep -cxF -- "$cls" "$BATS_TEST_TMPDIR/walk.txt")" -ge 1 ] \
+       && [ "$(grep -cxF -- "$cls" "$BATS_TEST_TMPDIR/excl.txt")" -ge 1 ]; then
+      printf '%s\n' "$cls" >>"$BOTH"
+    fi
+  done <"$BATS_TEST_TMPDIR/inst.txt"
+
+  # A class in NEITHER set is the defect this arm exists for: install.sh deploys it and nothing
+  # ever reports it missing.
+  [ "$(grep -c . "$UNCLAIMED")" -eq 0 ]
+  # A class in BOTH is a contradiction — the file would be simultaneously walking it and declaring
+  # that walking it is the wrong question. Asserting it keeps the two sets a real partition rather
+  # than two lists that happen to cover everything.
+  [ "$(grep -c . "$BOTH")" -eq 0 ]
+}
+
+@test "the coverage arm can FIRE — a new install.sh class in neither set is reported unclaimed" {
+  # Without this, the arm above is a green nobody has ever seen go red, and a control that has
+  # never fired is indistinguishable from one that cannot. The seed is a class install.sh globs
+  # and deploy-link-parity neither walks nor declares — the exact shape of both real defects.
+  cp "$REPO_ROOT/install.sh" "$BATS_TEST_TMPDIR/install-seeded.sh"
+  printf 'for zzz in "$REPO_DIR"/zzzclass-xyzzy/*.zzz; do :; done\n' >>"$BATS_TEST_TMPDIR/install-seeded.sh"
+
+  derive_class_sets "$BATS_TEST_TMPDIR/install-seeded.sh"
+  # The seed must actually have entered the derived population, or the run below proves nothing
+  # about the arm and only that the seed was invisible.
+  [ "$(grep -cxF -- '/zzzclass-xyzzy/*.zzz' "$BATS_TEST_TMPDIR/inst.txt")" -eq 1 ]
+
+  UNCLAIMED="$BATS_TEST_TMPDIR/unclaimed-seeded.txt"; : >"$UNCLAIMED"
+  while IFS= read -r cls; do
+    if [ "$(grep -cxF -- "$cls" "$BATS_TEST_TMPDIR/walk.txt")" -eq 0 ] \
+       && [ "$(grep -cxF -- "$cls" "$BATS_TEST_TMPDIR/excl.txt")" -eq 0 ]; then
+      printf '%s\n' "$cls" >>"$UNCLAIMED"
+    fi
+  done <"$BATS_TEST_TMPDIR/inst.txt"
+
+  # EXACTLY one, and it is the seed: a count alone would also pass if the real tree had drifted
+  # under us, crediting this control for a failure it did not cause.
+  [ "$(grep -c . "$UNCLAIMED")" -eq 1 ]
+  [ "$(grep -cxF -- '/zzzclass-xyzzy/*.zzz' "$UNCLAIMED")" -eq 1 ]
+}
