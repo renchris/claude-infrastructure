@@ -548,6 +548,37 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       # loop "would silently fail to link every BRAND-NEW file on the next re-vendor"). Handled by
       # its own loop below; per-file demands here would contradict install.sh outright.
       vendor/*)                  want=0 ;;
+      # ── SECOND INSTALLER ── a class install.sh does not deploy because ANOTHER installer does.
+      # MEASURED 2026-08-31 by method 238. #264 scored the DETECTOR against install.sh and #265
+      # scored THIS FILE against it, but BOTH auditors derive their populations FROM install.sh, so
+      # neither can see a class install.sh itself omits (memory: positive-control-the-denominator).
+      # Scored instead against the independent population `git ls-files`: install.sh's 19 globs plus
+      # its 18 literal installs deploy 629 of 2,247 tracked files, and the residue names a SECOND
+      # AUTHOR. scripts/kitty-setup.sh links six bin/ files into $CFG/bin ITSELF (:216, :220, :225,
+      # :236-238) and compiles bin/kitty-pane-menu-native.swift into $CFG/bin (:245). install.sh
+      # RUNS it (:1204-1215) but never enumerates its classes, and neither auditor names it at all.
+      #
+      # THE CITATION IS ONE-WAY, and that is why this stayed invisible. kitty-setup.sh:218-220 knows
+      # about install.sh and says so — "install.sh's bin/cc-* glob also deploys it … ln -sfn makes
+      # the overlap a no-op" — while nothing points back. So these targets sat in the gap between
+      # THREE gates, each correct in its own terms: the STRAY leg excludes symlinks and defers to
+      # the forward walk (config/live-only.manifest's "NOT COVERED, DELIBERATELY" clause), the
+      # forward walk's class set comes from install.sh, and this block scored them at the reasonless
+      # `*) want=0` below. #265 found a class dropped by TWO gates; this is one dropped by THREE,
+      # where the third gate explicitly hands responsibility to the first.
+      #
+      # want=0 AND NOT want=1, deliberately: kitty-setup.sh is CONDITIONAL — it runs on kitty hosts
+      # only — so demanding these links anywhere else would be wrong, and link_refresh() would mint
+      # them where nothing wants them. This is a DECLARATION, not a step toward widening the deploy.
+      # The cost it makes visible is real and stays: being want=0, link_refresh() can never restore
+      # one, so a deleted ~/.claude/bin/kitty-pane-menu is repaired by nothing and reported by
+      # nothing, where a deleted bin/cc-* is relinked automatically. That asymmetry is now written
+      # down instead of being a silent property of a default. The COMPILED artifact
+      # bin/kitty-pane-menu-native is already declared from the other side, by
+      # config/live-only.manifest's build row naming kitty-setup.sh as its producer.
+      # tests/deploy-parity.bats derives kitty-setup.sh's targets from its own `ln -sfn` lines and
+      # asserts each one is claimed-or-declared here, so a seventh target cannot land silently.
+      bin/it2-kitty|bin/kitty-*)  want=0 ;;
       # ── NOT-PER-FILE ── install.sh classes deliberately NOT deployed as per-file links into $CFG.
       # MEASURED 2026-08-31 by method 236 pointed at this file — #264 ran the same method against the
       # DETECTOR (scripts/deploy-link-parity.sh) and this is the REPAIRER, the holder nobody had

@@ -1426,3 +1426,88 @@ _classcov_extract() {  # $1=subject  $2=output case-block file — anchors asser
   # …and now the same path falls through to the reasonless default.
   [ "$(bash "$BATS_TEST_TMPDIR/seeded.sh" githooks/pre-commit </dev/null | grep -c '__DEFAULT__')" -eq 1 ]
 }
+
+# ── SECOND-INSTALLER COVERAGE (2026-08-31, method 238) ─────────────────────────────────────────
+# The CLASS COVERAGE arm above scores install.sh's own classes, and by construction it cannot see a
+# class install.sh never globs. scripts/kitty-setup.sh is a SECOND installer: it links six bin/
+# files into $CFG/bin itself while install.sh merely RUNS it, and neither auditor mentions
+# kitty-setup.sh anywhere — so its targets reached the reasonless `*) want=0` default, which is the
+# same silent disabling that hid hooks/*.py, scripts/lib/*.py, scripts/backlog-consolidation/*.py
+# and bin/ms365-*, one level further out.
+#
+# NEITHER SIDE IS WRITTEN DOWN HERE, for the same reason the arm above does not write its own down:
+# the targets come out of kitty-setup.sh's OWN `ln -sfn` lines, and the verdict comes from EXECUTING
+# the assert's extracted case block. A target list transcribed into this file would agree with
+# itself forever.
+@test "SECOND INSTALLER: every scripts/kitty-setup.sh link target is CLAIMED or EXPLICITLY DECLARED" {
+  SETUP="$REPO_ROOT/scripts/kitty-setup.sh"
+  SUBJ="$REPO_ROOT/scripts/deploy-parity-assert.sh"
+  [ -f "$SETUP" ]
+  [ -f "$SUBJ" ]
+
+  TARGETS="$BATS_TEST_TMPDIR/kitty-targets.txt"
+  grep -oE 'ln -sfn "\$REPO/[^"]+"' "$SETUP" | sed -e 's|.*\$REPO/||' -e 's|"$||' | sort -u > "$TARGETS"
+  # NON-VACUITY FLOOR: a broken anchor derives zero targets and every assertion below would then
+  # pass over an empty population. Measured 6 on 2026-08-31; the floor is deliberately loose.
+  [ "$(grep -c . "$TARGETS")" -ge 4 ]
+  # …and each derived target must be a REAL tracked file, or the anchor is matching prose rather
+  # than a link site.
+  MISSING=0
+  while IFS= read -r t; do
+    [ -f "$REPO_ROOT/$t" ] || MISSING=$((MISSING + 1))
+  done < "$TARGETS"
+  [ "$MISSING" -eq 0 ]
+
+  [ "$(grep -c '^    cls=""$' "$SUBJ")" -eq 1 ]
+  _classcov_extract "$SUBJ" "$BATS_TEST_TMPDIR/case2.txt"
+  sed 's|^      \*)                         want=0 ;;$|      *)                         want=0; cls="__DEFAULT__" ;;|' \
+    "$BATS_TEST_TMPDIR/case2.txt" > "$BATS_TEST_TMPDIR/case2B.txt"
+  [ "$(diff "$BATS_TEST_TMPDIR/case2.txt" "$BATS_TEST_TMPDIR/case2B.txt" | grep -c '^[<>]')" -eq 2 ]
+  RUN2="$BATS_TEST_TMPDIR/run2.sh"
+  _classcov_runner "$BATS_TEST_TMPDIR/case2B.txt" "$RUN2"
+
+  # CONTROLS BEFORE VERDICTS, the same pair the class-coverage arm uses. POS: a covered class must
+  # come back CLAIMED, or the runner is mute. FIRE: a path in no class MUST reach the tagged
+  # default, or this arm cannot fail at all.
+  [ "$(bash "$RUN2" hooks/notify.sh </dev/null | grep -c '^1|hooks/\*\.sh$')" -eq 1 ]
+  [ "$(bash "$RUN2" zzz-no-such-class/nope.txt </dev/null | grep -c '__DEFAULT__')" -eq 1 ]
+
+  BAD2="$BATS_TEST_TMPDIR/bad2.txt"; : >"$BAD2"
+  while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    out="$(bash "$RUN2" "$t" </dev/null)"
+    case "$out" in
+      1\|*)          : ;;             # CLAIMED — want=1 (bin/cc-in-kitty is, via bin/cc-*)
+      *__DEFAULT__*) printf 'REASONLESS-DEFAULT %s\n' "$t" >>"$BAD2" ;;
+      *)             : ;;             # declined by an EXPLICIT arm carrying its reason
+    esac
+  done < "$TARGETS"
+  [ "$(grep -c . "$BAD2")" -eq 0 ] || { echo "kitty-setup.sh link targets reaching the reasonless default:"; cat "$BAD2"; false; }
+}
+
+@test "SECOND INSTALLER fire test: deleting the kitty arm puts its targets back on the default" {
+  # The arm above passes only because the declaration exists. This proves that is what it measures:
+  # remove the one arm and a kitty target must reach the tagged default again. Without this, a case
+  # block that happened to claim everything would look identical to one whose exclusion is doing
+  # the work.
+  SUBJ="$REPO_ROOT/scripts/deploy-parity-assert.sh"
+  [ -f "$SUBJ" ]
+  [ "$(grep -c '^    cls=""$' "$SUBJ")" -eq 1 ]
+  _classcov_extract "$SUBJ" "$BATS_TEST_TMPDIR/case3.txt"
+
+  sed 's|^      \*)                         want=0 ;;$|      *)                         want=0; cls="__DEFAULT__" ;;|' \
+    "$BATS_TEST_TMPDIR/case3.txt" > "$BATS_TEST_TMPDIR/case3B.txt"
+  _classcov_runner "$BATS_TEST_TMPDIR/case3B.txt" "$BATS_TEST_TMPDIR/intact2.sh"
+
+  # BASELINE: with the arm present, a kitty target must NOT read as the default.
+  [ "$(bash "$BATS_TEST_TMPDIR/intact2.sh" bin/kitty-pane-menu </dev/null | grep -c '__DEFAULT__')" -eq 0 ]
+
+  # SEED: delete exactly the kitty arm. Asserted to remove ONE line, so a reworded arm makes this
+  # test REFUSE rather than pass vacuously over a deletion that never happened.
+  grep -vxF '      bin/it2-kitty|bin/kitty-*)  want=0 ;;' "$BATS_TEST_TMPDIR/case3B.txt" > "$BATS_TEST_TMPDIR/case3C.txt"
+  [ "$(( $(grep -c . "$BATS_TEST_TMPDIR/case3B.txt") - $(grep -c . "$BATS_TEST_TMPDIR/case3C.txt") ))" -eq 1 ]
+  _classcov_runner "$BATS_TEST_TMPDIR/case3C.txt" "$BATS_TEST_TMPDIR/seeded2.sh"
+
+  # …and now the same target falls through to the reasonless default.
+  [ "$(bash "$BATS_TEST_TMPDIR/seeded2.sh" bin/kitty-pane-menu </dev/null | grep -c '__DEFAULT__')" -eq 1 ]
+}
