@@ -316,3 +316,65 @@ View: https://claude.ai/code/session_01REALREALREALREALREALR?from=cli&m=0"
   run git check-ref-format --branch "$a"
   [ "$status" -eq 0 ]
 }
+
+# ── 20-23 · THE BOOT BEACON — the writer for §4.1's absence contract ───────────────────────────
+# §4.1 is the load-bearing claim of the whole subsystem: absence is ambiguous, and only a contract
+# makes it informative. The contract was written down in 2026-08 and never implemented, so C1
+# NOT-STARTED did not mean "never booted" — it meant "has not pushed yet", which is also what C2
+# means. bin/cc-cloud:1288 measures the cost: 222 of 262 live sessions on 2026-08-27 read
+# NOT-STARTED while they were working. These cases pin the writer (backlog 0c8b39b67665).
+
+@test "20 the beacon names the ASSIGNED branch and orders switch-then-push" {
+  # The order is the same lesson as B1 (backlog 7c6ff16259a0): a push to a ref name this side
+  # invented leaves the VM working somewhere else, so the branch must be CREATED first and the
+  # push must be of HEAD, never `HEAD:<branch>`.
+  local out sw push
+  out="$(cc_cloud_boot_beacon claude/fire-20260101T000000Z-1)"
+  sw="$(printf '%s\n' "$out" | grep -n 'git switch -c claude/fire-20260101T000000Z-1' | head -1 | cut -d: -f1)"
+  push="$(printf '%s\n' "$out" | grep -n 'git push -u origin HEAD' | head -1 | cut -d: -f1)"
+  [ -n "$sw" ] || { echo "the beacon never creates the branch"; false; }
+  [ -n "$push" ] || { echo "the beacon never pushes"; false; }
+  [ "$sw" -lt "$push" ] || { echo "switch -c must PRECEDE the push (sw=$sw push=$push)"; false; }
+  ! printf '%s\n' "$out" | grep -q 'HEAD:claude/fire-' || { echo "B1's defect is back"; false; }
+}
+
+@test "21 the beacon COMMITS NOTHING — an empty commit would ride the rebase onto trunk" {
+  # §4.1 offers "an empty commit is enough"; this declines the offer deliberately. Measured on git
+  # 2.43: `git rebase` KEEPS a commit that starts empty, so the lander would put one empty beacon
+  # commit on trunk per landed cloud fire, forever — and every beacon-only branch would become a
+  # land candidate at 1-ahead instead of 0. Pushing the branch at the sha the VM already has is
+  # the identical signal to `classify()`, which skips C1/C2 the moment ls-remote answers.
+  local out
+  out="$(cc_cloud_boot_beacon claude/fire-x)"
+  ! printf '%s\n' "$out" | grep -q 'git commit' || { echo "the beacon commits — that lands on trunk"; false; }
+  [[ "$out" == *"commits nothing"* ]] || false
+}
+
+@test "22 the beacon SAYS WHY, because a model drops a step whose purpose it cannot see" {
+  # A brief is a contract with a model, not a mechanism. A bare order to push an empty branch
+  # before any work exists reads as ceremony from inside the VM. The block therefore carries the
+  # cost of absence in the words of the measurement.
+  local out
+  out="$(cc_cloud_boot_beacon claude/fire-x)"
+  [[ "$out" == *"FIRST ACT"* ]] || false
+  [[ "$out" == *"NOT-STARTED"* ]] || false
+  [[ "$out" == *"never booted"* ]] || false
+  # and it must not leave the VM stuck on a beacon it cannot push
+  [[ "$out" == *"not a reason to stop"* ]] || false
+}
+
+@test "23 a beacon with no BRANCH is REFUSED, not shipped naming nothing" {
+  # An instruction to push "somewhere" is worse than no instruction: the VM would obey it against a
+  # ref nothing watches, and the caller would never learn the session is unobservable. rc 2 with
+  # empty stdout forces the caller to say so out loud (both legs do).
+  run cc_cloud_boot_beacon ""
+  [ "$status" -eq 2 ]
+  [ -z "$output" ]
+  run cc_cloud_boot_beacon "has a space"
+  [ "$status" -eq 2 ]
+  [ -z "$output" ]
+  # POSITIVE CONTROL off the same function: a real name still composes.
+  run cc_cloud_boot_beacon "$(cc_cloud_branch_name)"
+  [ "$status" -eq 0 ]
+  [ -n "$output" ]
+}

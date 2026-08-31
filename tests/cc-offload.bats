@@ -490,6 +490,47 @@ EOF
     "$(grep -n 'cc-notify --cloud' "$CALLS" | head -1 | cut -d: -f1)" ] || false
 }
 
+@test "up --via api DELIVERS THE BOOT BEACON ahead of the brief, naming the declared branch" {
+  # THE LEG THAT NEVER HAD ONE. handoff-fire's CLI leg at least appended a return trailer naming
+  # the branch; this leg delivered `cat "$pf"` and nothing else, and the platform's own preamble
+  # says to push "when your changes are complete". So a VM that booted, worked for an hour and
+  # ended its turn asking a question had no ref and read C1 NOT-STARTED — the same verdict as one
+  # that never started. Measured 2026-08-27 (bin/cc-cloud:1288): 222 of 262 live sessions.
+  # CLOUD_OBSERVABILITY.md §4.1 / §8 step 2; backlog 0c8b39b67665.
+  _api_fixture
+  printf 'THE BRIEF BODY MARKER\n' >"$BATS_TEST_TMPDIR/t.txt"
+  run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+  local msg beacon brief br
+  msg="$(grep -n 'cc-notify --cloud session_apitest' "$CALLS" | head -1 | cut -d: -f1)"
+  [ -n "$msg" ] || { echo "no brief was delivered at all"; false; }
+  beacon="$(grep -n 'FIRST ACT' "$CALLS" | head -1 | cut -d: -f1)"
+  brief="$(grep -n 'THE BRIEF BODY MARKER' "$CALLS" | head -1 | cut -d: -f1)"
+  [ -n "$beacon" ] || { echo "the delivered message carries no boot beacon"; false; }
+  [ -n "$brief" ] || { echo "the beacon REPLACED the brief instead of leading it"; false; }
+  [ "$beacon" -lt "$brief" ] || { echo "the beacon must lead (beacon=$beacon brief=$brief)"; false; }
+  # It must name the branch that was DECLARED, not a second one: the declaration is the only thing
+  # cc-cloud watches, so a beacon pointed elsewhere pushes where nothing is looking.
+  br="$(sed -n 's/.*cc-cloud declare --id session_apitest --branch \([^ ]*\).*/\1/p' "$CALLS" | head -1)"
+  [ -n "$br" ] || { echo "no branch on the declaration to compare against"; false; }
+  grep -q "git switch -c $br " "$CALLS" || { echo "the beacon does not name the declared branch $br"; false; }
+}
+
+@test "a beacon that cannot be composed is SAID OUT LOUD, and the brief still goes" {
+  # Fail-open on the fire, never on the diagnosis. A missing composer costs observability, so the
+  # one thing that must not happen is a silent downgrade to the absence-only regime this whole
+  # subsystem exists to end — the same law as the custody-failure arm above.
+  _api_fixture
+  echo "brief" >"$BATS_TEST_TMPDIR/t.txt"
+  CC_OFFLOAD_CLOUD_LIB="$BATS_TEST_TMPDIR/no-such-lib.sh" \
+    run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]                                    # the fire is not aborted by bookkeeping …
+  [[ "$output" == *"NO BOOT BEACON"* ]] || false          # … but it is never silent
+  [[ "$output" == *"only by ABSENCE"* ]] || false
+  grep -q 'cc-notify --cloud session_apitest' "$CALLS" || false   # and the brief still reached it
+  ! grep -q 'FIRST ACT' "$CALLS" || false                 # POSITIVE CONTROL: no beacon was invented
+}
+
 @test "up --via api derives owner/name portably (no GNU-only lazy quantifier)" {
   # The first implementation used `sed -E 's#…([^/]+/[^/]+?)…'`, which BSD sed rejects outright
   # with "repetition-operator operand invalid" — green on Linux CI, dead on every Mac that runs it.

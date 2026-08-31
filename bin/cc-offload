@@ -517,6 +517,15 @@ cmd_up_api() {
   local api="${CC_OFFLOAD_CREATE_API:-$ROOT/scripts/cloud-create-api.py}"
   [ -f "$api" ] || { note "cc-offload: missing $api"; return 3; }
 
+  # THE BOOT BEACON'S COMPOSER, sourced LAZILY — this verb is the only one that fires a session,
+  # and no other verb should pay for a library it never calls. Composition, not a second copy: the
+  # text lives in scripts/lib/cloud-create.sh beside the branch name it references, so this leg and
+  # handoff-fire's CLI leg deliver ONE contract. Sourcing is best-effort; a missing composer costs
+  # observability, never the fire, and it is said out loud below rather than swallowed.
+  local beacon_lib="${CC_OFFLOAD_CLOUD_LIB:-$ROOT/scripts/lib/cloud-create.sh}"
+  # shellcheck source=/dev/null
+  [ -r "$beacon_lib" ] && . "$beacon_lib" 2>/dev/null
+
   # The router is the arbiter — never re-rank accounts here.
   if [ "$account" = auto ]; then
     [ -n "$ACCOUNTS_BIN" ] && account="$("$ACCOUNTS_BIN" --route general 2>/dev/null)"
@@ -574,7 +583,23 @@ cmd_up_api() {
         || note "cc-offload: custody could not be opened for $sid — the close-integrity arm is NOT armed for it."
     fi
 
-    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$(cat "$pf")" >/dev/null 2>&1
+    # THE BRIEF LEADS WITH THE BEACON (CLOUD_OBSERVABILITY.md §4.1, §8 step 2; backlog
+    # 0c8b39b67665). This leg never instructed a boot push at all: the create authorises the branch
+    # in `outcomes.git_info.branches` and the platform's own preamble says to push "when your
+    # changes are complete", so a VM that booted, worked for an hour and asked a question had no
+    # ref and read C1 NOT-STARTED — indistinguishable from one that never started. 222 of 262 live
+    # sessions on 2026-08-27 were exactly that (bin/cc-cloud:1288). The beacon is what makes C1
+    # mean "never booted"; it is FIRST in the message because it is first in time.
+    local beacon=""
+    if declare -F cc_cloud_boot_beacon >/dev/null 2>&1; then
+      beacon="$(cc_cloud_boot_beacon "$br")" || beacon=""
+    fi
+    if [ -z "$beacon" ]; then
+      note "cc-offload: NO BOOT BEACON for $sid (composer unreachable at ${beacon_lib}) — it will be observable only by ABSENCE: a VM that pushes nothing reads NOT-STARTED, identical to one that never booted."
+    fi
+    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" \
+      "${beacon:+$beacon
+}$(cat "$pf")" >/dev/null 2>&1
     local drc=$?
     if [ "$drc" != 0 ]; then
       note "cc-offload: $sid created+declared but the brief did NOT queue (cc-notify exit $drc)."

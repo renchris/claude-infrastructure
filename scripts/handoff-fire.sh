@@ -8034,7 +8034,21 @@ if [ "$CLOUD" = 1 ]; then
   # there the name is authorised AT CREATE. cc_cloud_create's signature is `cfg cwd prompt`
   # (scripts/lib/cloud-create.sh:185): the CLI leg has NO branch parameter at all, so the payload
   # is the only place the branch can be established, and establishing it is a real `switch -c`.
-  CLOUD_PAYLOAD="$(cat "$PROMPT_FILE")
+  #
+  # ── AND THE BEACON GOES FIRST, WHICH IS A DIFFERENT CONTRACT FROM THE TRAILER BELOW ───────────
+  # The trailer is the RETURN contract: "push whatever you have BEFORE YOU FINISH". §4.1's absence
+  # contract is the opposite end of the same session — push the branch BEFORE YOU START — and it
+  # is what makes C1 NOT-STARTED mean "never booted" instead of "has not finished yet". Written
+  # only as prose in the plan until now (backlog 0c8b39b67665); composed in ONE place
+  # (scripts/lib/cloud-create.sh) so this leg and the API leg cannot drift into two contracts.
+  # A refusal is LOUD and never silent: the fire still goes, but the session it creates is
+  # observable only by absence, which is the exact ambiguity §4 exists to remove.
+  CLOUD_BEACON="$(cc_cloud_boot_beacon "$CLOUD_BRANCH")" || CLOUD_BEACON=""
+  if [ -z "$CLOUD_BEACON" ]; then
+    echo "⚠ cloud fire: the boot beacon could not be composed for branch '${CLOUD_BRANCH:-<unnamed>}' — this session will be observable ONLY BY ABSENCE (a VM that pushes nothing reads NOT-STARTED, identical to one that never booted)" >&2
+  fi
+  CLOUD_PAYLOAD="${CLOUD_BEACON:+$CLOUD_BEACON
+}$(cat "$PROMPT_FILE")
 "'
 ── HOW TO RETURN YOUR WORK (this session runs off-box; read this before you finish) ──
 You are running in an Anthropic-managed VM. Nothing on the operator'"'"'s machine can see your

@@ -461,3 +461,40 @@ EOF
   [ -s "$CLOUD_DECL_LOG" ]
   [ ! -f "$BATS_TEST_TMPDIR/pf-off.log" ]                # the override SKIPS the probe, not just its verdict
 }
+
+# ── 20 · THE BOOT BEACON leads the payload (backlog 0c8b39b67665) ───────────────────────────────
+# The trailer asserted by case 17 is the RETURN contract — "push whatever you have BEFORE YOU
+# FINISH". CLOUD_OBSERVABILITY.md §4.1's absence contract is the opposite end of the same session,
+# and it was prose only: nothing in the tree ever told a VM to push BEFORE it starts, so C1
+# NOT-STARTED meant "has not finished yet", which is also what C2 BOOTING means. The beacon is what
+# makes absence informative, and it only does that if it arrives FIRST — after the brief it is one
+# more thing to do at the end, which is the state this fixes.
+#
+# RED-PROOF (re-runnable): replay against `git show <pre-fix sha>:scripts/handoff-fire.sh` in a
+# scratch tree — the payload's first line is the brief's own first line and no FIRST ACT block
+# exists anywhere in it.
+
+@test "20 the payload OPENS with the boot beacon, before the brief and before the return trailer" {
+  cloud_acct; cloud_ccloud
+  # The URL-bearing banner (case 19's fixture), because this case also compares the beacon's branch
+  # against the DECLARED one — and a create the id-extractor cannot name never reaches the declare.
+  cloud_claude "$(printf 'Created cloud session: t\x1b[8GView: https://claude.ai/code/session_01TESTTESTTESTTESTTESTT?from=cli')" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ -s "$BATS_TEST_TMPDIR/create.log" ]
+  local beacon brief trailer
+  beacon="$(grep -n 'FIRST ACT' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  brief="$(grep -n 'cloud venue gate fixture payload' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  trailer="$(grep -n 'HOW TO RETURN YOUR WORK' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$beacon" ] || { echo "the payload carries no boot beacon — absence stays ambiguous"; false; }
+  [ -n "$brief" ] || { echo "the brief itself is missing from the payload"; false; }
+  [ -n "$trailer" ] || { echo "the return trailer is missing"; false; }
+  [ "$beacon" -lt "$brief" ] || { echo "the beacon must PRECEDE the brief (beacon=$beacon brief=$brief)"; false; }
+  [ "$brief" -lt "$trailer" ] || { echo "the brief must precede the return trailer"; false; }
+  # It names the SAME branch the fire declares — a beacon pointed anywhere else is a push nothing
+  # watches, which is exactly the §10.2c hazard the per-fire branch name exists to close.
+  local declared
+  declared="$(sed -n 's/.*--branch \(claude\/fire-[^ ]*\).*/\1/p' "$CLOUD_DECL_LOG" | head -1)"
+  [ -n "$declared" ] || { echo "nothing was declared, so there is no branch to compare against"; false; }
+  grep -q "git switch -c $declared 2>/dev/null" "$BATS_TEST_TMPDIR/create.log" \
+    || { echo "the beacon does not name the DECLARED branch $declared"; false; }
+}

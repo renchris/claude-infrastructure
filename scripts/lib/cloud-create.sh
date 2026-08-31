@@ -236,3 +236,76 @@ cc_cloud_create() { # $1=cfgdir $2=cwd $3=prompt → "<outcome>\t<id>\t<msg>"; b
 # is unique per fire, so — unlike `--branch main`, where trunk's background traffic reads as a
 # heartbeat forever — nothing but this session can advance it. O2 becomes a real signal.
 cc_cloud_branch_name() { printf 'claude/fire-%s-%s' "$(date -u +%Y%m%dT%H%M%SZ)" "$$"; }
+
+# ── THE BOOT BEACON — the other half of the branch assignment above ────────────────────────────
+#
+# CLOUD_OBSERVABILITY.md §4.1 states the absence contract: "the session's brief requires its FIRST
+# act to be pushing that branch — an empty commit is enough. Absence then becomes informative: no
+# ref inside the budget is BOOTING; no ref past it is NOT-STARTED." Every consumer of C1 reads it
+# that way, and until this function existed NOTHING in the tree implemented it. The two fire legs
+# instructed a push only at the END — handoff-fire's return trailer says "before you finish", and
+# the API leg's own platform preamble says "PUSH to the specified branch when your changes are
+# complete". So C1 did not mean "never booted"; it meant "has not finished yet", which is the same
+# reading as C2, which is to say no reading at all.
+#
+# THE COST OF THAT, MEASURED, and it is not a corner case: bin/cc-cloud:1288 records 222 of 262
+# live sessions on 2026-08-27 that had WORKED and ended a turn asking a question, every one of them
+# filed NOT-STARTED because a VM that has not pushed has no ref. 85% of the board was wrong about
+# the one fact it exists to report. This is the writer for the reading `inbox` had to work around.
+#
+# 🚨 IT PUSHES THE BRANCH, IT DOES NOT COMMIT ONE. §4.1 offers "an empty commit is enough" and this
+# deliberately declines the offer: `git rebase` KEEPS a commit that starts empty (measured on git
+# 2.43 — a `chore` beacon commit survives the lander's rebase onto trunk verbatim), so taking §4.1
+# literally would put one empty commit on trunk per landed cloud fire, forever. Pushing the branch
+# at the sha the VM already has is the identical signal for free: `classify()` skips C1/C2 the
+# moment `ls-remote` answers with a sha, and the fire-time baseline arm cannot fire either, because
+# the per-fire branch name did not exist when `declare` probed it (`base_sha` is empty, and that
+# arm requires `base_probe=ok` AND a non-empty `base_sha`). It is also strictly better downstream:
+# a 0-ahead branch is not a land candidate, whereas an empty commit would make every beacon-only
+# branch one.
+#
+# `switch -c` FIRST, then push HEAD — never `push origin HEAD:<branch>`. That is B1's lesson
+# (backlog 7c6ff16259a0) and it is why the branch has to be the session's REAL working branch: a
+# push to a ref name this side invented leaves the VM working somewhere else, and the second push
+# never arrives. The `|| git switch` fallback is not defensive noise — the harness may already have
+# put the VM on that branch, and `switch -c` refuses an existing one.
+#
+# WHY THE REASON IS IN THE TEXT. The beacon looks like ceremony from inside the VM — a push that
+# commits nothing, before any work exists. A brief is a contract with a model, and a model drops
+# steps whose purpose it cannot see. So the block says what absence costs, in the words of the
+# measurement, rather than issuing a bare order.
+#
+# Refuses (rc 2, nothing on stdout) a branch that is empty or carries whitespace: a beacon naming
+# no branch tells the VM to push somewhere unnamed, which is worse than no beacon at all — the
+# caller must then say so LOUDLY rather than ship an instruction that cannot be followed.
+cc_cloud_boot_beacon() { # $1=branch → the FIRST-ACT block on stdout; rc 2 = refused, no output
+  local br="${1:-}"
+  [ -n "$br" ] || return 2
+  case "$br" in *[[:space:]]*) return 2 ;; esac
+  cat <<EOF
+── FIRST ACT — PUSH THIS BRANCH BEFORE YOU DO ANYTHING ELSE (the boot beacon) ──
+Before you read the task below, before you open a file, before you explore anything, run exactly
+this:
+
+    git switch -c $br 2>/dev/null || git switch $br
+    git push -u origin HEAD
+
+That is the whole beacon. It creates the branch this fire is declared against and makes it exist
+on the remote. It commits nothing, changes no file, and takes about a second.
+
+WHY IT IS FIRST AND NOT LAST. The operator's box cannot see your VM — not your filesystem, not
+your processes, not your terminal. The only thing it can observe about you is whether this branch
+exists on the remote. A session that has pushed nothing is indistinguishable there from one that
+never booted, one that died at boot, and one that was refused entitlement: all four read as "no
+ref", and past the boot budget the row is filed NOT-STARTED and re-dispatched to another VM.
+Measured 2026-08-27: 222 of 262 live cloud sessions read NOT-STARTED while they were in fact
+working, because none of them had pushed yet. Pushing now is what makes your silence mean
+something later.
+
+Then do the work on this same branch and push it normally when you have it — the beacon is the
+first push, not the only one.
+
+If the push FAILS, say so in your first message and carry on with the task: a beacon that cannot
+be pushed is a finding about this VM's git entitlement, not a reason to stop working.
+EOF
+}

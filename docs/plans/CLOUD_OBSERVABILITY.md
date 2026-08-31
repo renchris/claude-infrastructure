@@ -150,6 +150,16 @@ session's brief requires its **first act** to be pushing that branch — an empt
 Absence then becomes informative: no ref inside the budget is `BOOTING` (expected); no ref past it
 is `NOT-STARTED` (actionable — re-fire, or check entitlement).
 
+✅ **IMPLEMENTED 2026-08-31 — and until then this paragraph was the only place the contract
+existed** (backlog `0c8b39b67665`). Every consumer of `C1` read it as written; nothing wrote it.
+Both fire legs instructed a push at the END and only at the end — `handoff-fire.sh`'s return
+trailer says *"push whatever you have before you finish"*, and the API leg delivered `cat "$pf"`
+with no push instruction at all, leaving only the platform's own preamble (*"PUSH to the specified
+branch when your changes are complete"*). So `C1 NOT-STARTED` did not mean *never booted*; it meant
+*has not finished yet*, which is what `C2 BOOTING` means, which is to say it carried no information
+at all. §16 has the writer, the measurement of what the gap cost, and why the beacon pushes the
+branch without committing to it.
+
 ### 4.2 The discriminator the whole design rests on
 
 Measured, not assumed:
@@ -776,7 +786,8 @@ Before any cloud session is fired, in this order:
 1. `cc-cloud declare --id <id> --branch <b> --paths <what it will land> --url <session url>` —
    an undeclared cloud session is unobservable, and `declare` refuses without `--id`/`--branch`.
 2. The session's brief must require **pushing the declared branch as its first act**, so that
-   absence past the boot budget means something (§4.1).
+   absence past the boot budget means something (§4.1). **Automatic since 2026-08-31** — both legs
+   compose it from `cc_cloud_boot_beacon` (§16); nothing here is left to the caller to remember.
 3. §5.2 must be wired first — otherwise `com.claude.team-orphan-reaper` may archive the team
    while the session is healthy.
 4. On completion, `cc-cloud retire --id <id>` — or let C3 `LANDED` render it silent, which it does
@@ -817,6 +828,15 @@ is the safe one. A reservation that never binds expires into `U0 UNKNOWN` (never
 finding** (§6.5). If the CLI create route ships a bundle of the local tree rather than cloning the
 remote, then the branch the VM pushes may not be the branch this box declared. Until one fire
 settles it, declare the branch the *brief* names and treat a mismatch as `U0`, not as absence.
+
+↳ **The beacon (§16) does not answer this, but it changes when it is answered — from the end of a
+session to its first minute.** The *name* was already settled from both sides: the API create
+authorises it in `outcomes.git_info.branches`, and the CLI payload establishes it with a real
+`git switch -c <declared>` (B1). What a bundle-sourced VM may lack is a **pushable remote**, and
+that is a fact about the push, not about the name. Before the beacon the fire discovered it hours
+later, as an absence indistinguishable from four other causes; now the first act either produces a
+ref or produces the VM saying the push failed — and the beacon block asks for exactly that
+sentence, on the grounds that an entitlement finding is not a reason to stop working.
 
 ---
 
@@ -1964,3 +1984,77 @@ next `cloud-return.sh` pass is what fires `cc-backlog block`, and §13.6's ADD-r
 whether that pass is running the landed script — the reader is an edit to an already-symlinked file
 and goes live on the fast-forward, but `scripts/cloud-park.sh` is an ADD and is absent from
 `~/.claude` until the converger runs.
+
+
+## 16 · The boot beacon — §4.1's contract stops being prose (2026-08-31)
+
+🚨 **The absence contract was the load-bearing claim of this whole document and it had no writer.**
+§4.1 says the brief "requires its first act to be pushing that branch"; §8 step 2 repeats it as a
+fire-time precondition; `classify()`'s `C1` arm, `cc-cloud --check`, `cloud-return.sh` step 1 and
+every board that renders `NOT-STARTED` are all *readers* of it. Nothing in the tree was the writer.
+Grep for it and you find `--allow-empty` in three test fixtures and `bin/cc-value`'s date-window
+rig; you do not find a single line telling a cloud VM to push before it starts. Backlog
+`0c8b39b67665`.
+
+**What the two legs actually said, both of them the opposite of "first".**
+
+| Leg | What it told the VM about pushing | When |
+| --- | --- | --- |
+| `handoff-fire.sh --cloud` (CLI) | the return trailer: *"Push whatever you have **before you finish**"* | at the end |
+| `cc-offload up --via api` (default, and the one `cc-dispatch` fires) | nothing — the brief was delivered verbatim; only the platform preamble spoke, and it says *"PUSH to the specified branch **when your changes are complete**"* | at the end |
+
+So `C1 NOT-STARTED` meant *"has not finished yet"*. `C2 BOOTING` means *"has not finished yet,
+recently"*. Two arms of a total state function, one fact between them.
+
+**THE COST, MEASURED, and it is the majority of the board.** `bin/cc-cloud:1288` records the
+2026-08-27 sweep: **222 of 262 live sessions** had ended a turn with
+`post_turn_summary.status_category == "need_input"` — they had worked and asked a question — and
+every one was filed `NOT-STARTED`, because a VM that has not pushed has no ref. 85% of the board
+was wrong about the one fact it exists to report. `cc-cloud inbox` was built to route around that
+reading by consulting the control plane instead; this is the writer that makes the reading itself
+true, and the two are complementary rather than redundant (a ref answers *did it boot*, the inbox
+answers *what is it asking*).
+
+**THE WRITER.** `cc_cloud_boot_beacon <branch>` in `scripts/lib/cloud-create.sh`, beside the
+`cc_cloud_branch_name` it references — one composer, so the two legs cannot drift into two
+contracts. `handoff-fire.sh` prepends it to `CLOUD_PAYLOAD` ahead of the brief and the return
+trailer; `cc-offload`'s `cmd_up_api` prepends it to the message `cc-notify --cloud` delivers. It is
+**first in the message because it is first in time** — after the brief it is one more thing to do at
+the end, which is the state being fixed. A branch it cannot name is refused (rc 2, empty stdout)
+and both legs then say so **loudly** rather than shipping an instruction that cannot be followed:
+an unbeaconed session is observable only by absence, and that must be an announcement, never a
+silent downgrade.
+
+🚨 **It pushes the branch; it does not commit one — §4.1's "an empty commit is enough" is
+deliberately declined.** Measured on git 2.43: `git rebase` **keeps** a commit that starts empty, so
+the lander would put one empty beacon commit on trunk per landed cloud fire, forever. Pushing the
+branch at the sha the VM already has is the identical signal — `classify()` skips `C1`/`C2` the
+moment `ls-remote` answers with a sha, and the fire-time baseline arm cannot fire either, because
+the per-fire branch name did not exist when `declare` probed it (`base_sha` is empty, and that arm
+requires `base_probe=ok` **and** a non-empty `base_sha`). It is also strictly better downstream: a
+0-ahead branch is not a land candidate, whereas an empty commit would make every beacon-only branch
+one. `switch -c` still comes first and the push is of `HEAD`, never `HEAD:<branch>` — B1's lesson
+(`7c6ff16259a0`) is that a push to a ref name this side invented leaves the VM working elsewhere.
+
+**THE REASON TRAVELS WITH THE ORDER, and that is not padding.** A brief is a contract with a model,
+not a mechanism. From inside the VM the beacon looks like ceremony — a push that commits nothing,
+before any work exists — and a model drops a step whose purpose it cannot see. So the block states
+what absence costs, in the words of the measurement above, and it tells the VM what to do when the
+push fails (say so and carry on: an entitlement finding is not a reason to stop working).
+
+**Honest limits, three, none of them dressed up.**
+
+- **A contract is not a mechanism.** A VM that ignores the beacon still reads `NOT-STARTED`, so the
+  arm's meaning is now *"nothing ran the beacon"* — which covers *never booted*, *died at boot*,
+  *refused entitlement* and *read the brief and skipped its first line*. That is four causes down
+  from the previous reading's eight-and-unbounded, and it is not one.
+- **The pre-fire-sha race is untouched.** `declare` probes the baseline *after* the create on the
+  CLI leg, so a VM that beacons before that probe has its beacon recorded as `base_sha` and reads
+  `NOT-STARTED` until it pushes real work. §8.1's two-phase `--reserve` declare is the fix and is
+  still unimplemented; the beacon neither causes nor worsens this (any fast first push already
+  did).
+- **A beacon-only branch is now `STALLED`/`ABANDONED` rather than `NOT-STARTED`, and
+  `cloud-return.sh` will hand it to the lander.** That is the honest verdict — the VM booted and
+  produced nothing — but the land of a 0-ahead branch has not been measured, and a short-circuit in
+  step 4 for that case is *not* built here. §14 and §15 already forbid the state that reaches it (a
+  worker with nothing to do lands a verdict artifact; one that is operator-gated lands a park).
