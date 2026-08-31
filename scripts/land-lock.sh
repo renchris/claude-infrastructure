@@ -66,6 +66,45 @@ REAP_TTL="${LAND_LOCK_REAP_TTL:-30}"  # abandoned reap-mutex age (s) — the sec
 POLL=2
 WAITERS="${LOCK_PARENT}/waiters"    # one file per QUEUED acquirer — the visible depth (P4 defect 4)
 
+# ── stat DIALECT — VALIDATE THE OUTPUT, NEVER CHAIN ON THE EXIT CODE ─────────────────────────────
+# 🚨 `stat -f %m <path> 2>/dev/null || echo <default>` is NOT the portable idiom, and this file
+# spelled it five times. On BSD `-f` is "format" and `%m` is the mtime. On GNU `-f` is
+# `--file-system`, so `%m` is read as a FILENAME: stat prints the *real* path's filesystem block to
+# STDOUT — `  File: "/tmp/land-lock-…/lock.d"`, ID, Namelen, Type, Blocks, Inodes — and only THEN
+# exits 1. `2>/dev/null` hides nothing, because that block is on stdout. The `||` default is then
+# APPENDED to the block rather than replacing it, and the caller's `$(( now - $(…) ))` dies under
+# `set -u` with `File: unbound variable`.
+#
+# THE REPO ALREADY PAID FOR THIS AND ALREADY WROTE THE CURE. `scripts/autonomy-sweep.sh:213`
+# (file_mtime) documents the mechanism in these words, down to the error string;
+# `scripts/drain-chain-assert.sh:189` records the same dialect making a rotor "a silent no-op on
+# every Linux host"; `scripts/wrap-ledger.sh:273` says GNU `stat -f` must be VALIDATED rather than
+# trusted. None of the three reached HERE — the land path's own mutex — which is this plan's
+# standing generator (a landed remedy that never reached every holder) met once more.
+#
+# MEASURED 2026-08-31 in a cloud VM (BACKLOG_DRAIN_24_7, the off-box cause census): with two
+# landers contending, the loser's ship-land exits 127 mid-gate and writes no result at all.
+# `lock_is_stale` (age), `--status` (held), the hung-lock scan (age) and `reap_and_claim` (reap-TTL)
+# all take that route. `lock_generation`'s `%i` is worse because it is SILENT: it is not in an
+# arithmetic context, so the token simply carries the filesystem block instead of the inode — and
+# that block is IDENTICAL for every directory on one filesystem, so the anti-ABA guarantee its own
+# comment rests on ("`rm -rf` + `mkdir` always yields a NEW directory") is void on Linux, with no
+# error anywhere. A mutex that stops distinguishing generations is the failure this file exists to
+# prevent.
+#
+# GNU FIRST, for autonomy-sweep.sh's stated reason: BSD `stat` has no `-c` at all, so it cannot
+# half-succeed the way `-f` does. Bare `stat`, matching this file's existing spelling — the output
+# validation is what makes the resolution safe, so no new PATH assumption is added. bash 3.2-safe.
+stat_field() {  # <bsd-spec> <gnu-spec> <path> [default=0] → the numeric field, or the default
+  local v
+  v="$(stat -c "$2" "$3" 2>/dev/null)"
+  case "$v" in ''|*[!0-9]*) v="$(stat -f "$1" "$3" 2>/dev/null)" ;; esac
+  case "$v" in ''|*[!0-9]*) v="${4:-0}" ;; esac
+  printf '%s' "$v"
+}
+path_mtime() { stat_field %m %Y "$1" "${2:-0}"; }   # <path> [default] → mtime epoch seconds
+path_inode() { stat_field %i %i "$1" "${2:-0}"; }   # <path> [default] → inode number
+
 # ── INTROSPECTION VERBS + THE MISUSE GUARD (P4 defect 6) ─────────────────────────────────────────
 # MEASURED: 23 ledger rows are `exit 127` — agents guessing `land-lock.sh status`. `status` was not
 # a verb, so it was treated as PAYLOAD: the machine-wide mutex was TAKEN and only then did `status`
@@ -186,7 +225,7 @@ lock_alarm_rows() {  # machine-wide: one JSON row per LIVE holder that is PAST I
     d="${parent}/lock.d"
     [[ -d "${d}" ]] || continue
     holder_live "${d}" || continue
-    age="$(( now - $(stat -f %m "${d}" 2>/dev/null || echo "${now}") ))"
+    age="$(( now - $(path_mtime "${d}" "${now}") ))"
     [[ "${age}" -gt "${TTL}" ]] || continue
     pid="$(cat "${d}/pid" 2>/dev/null || echo '?')"
     ppid="$(ps -o ppid= -p "${pid}" 2>/dev/null | tr -d ' ' || true)"
@@ -206,7 +245,7 @@ case "${1:-}" in
       if holder_live "${LOCK}"; then
         printf 'holder:   pid %s  branch %s  held %ss  (LIVE — H2: never reaped)\n' \
           "$(cat "${LOCK}/pid" 2>/dev/null || echo '?')" "$(cat "${LOCK}/branch" 2>/dev/null || echo '?')" \
-          "$(( $(date +%s) - $(stat -f %m "${LOCK}" 2>/dev/null || date +%s) ))"
+          "$(( $(date +%s) - $(path_mtime "${LOCK}" "$(date +%s)") ))"
       else
         printf 'holder:   present but DEAD or empty — the next acquirer reaps it\n'
       fi
@@ -302,7 +341,7 @@ write_owner() {
 lock_is_stale() {  # 0 = reapable · 1 = live, hold off
   local holder age rec_lstart
   holder="$(cat "${LOCK}/pid" 2>/dev/null || true)"
-  age="$(( $(date +%s) - $(stat -f %m "${LOCK}" 2>/dev/null || echo 0) ))"
+  age="$(( $(date +%s) - $(path_mtime "${LOCK}" 0) ))"
   if [[ -z "${holder}" ]]; then
     # mkdir'd but pid not yet written — a real owner mid-acquire; grace 5s, else TTL.
     { [[ "${age}" -ge 5 ]] || [[ "${age}" -gt "${TTL}" ]]; } && return 0
@@ -336,7 +375,7 @@ lock_generation() {
   printf '%s|%s|%s' \
     "$(cat "${LOCK}/pid" 2>/dev/null || true)" \
     "$(cat "${LOCK}/lstart" 2>/dev/null || true)" \
-    "$(stat -f %i "${LOCK}" 2>/dev/null || echo 0)"
+    "$(path_inode "${LOCK}" 0)"
 }
 
 # ATOMIC REAP. `rm -rf "${LOCK}"; mkdir "${LOCK}"` was NOT atomic and could not be made so by
@@ -360,7 +399,7 @@ reap_and_claim() {  # $1 = the generation token observed when we judged it stale
     # its own TTL. The section is milliseconds (a couple of stats, an rm, a mkdir), so anything
     # older than REAP_TTL is abandoned rather than working. Losing this race is harmless: we just
     # return and re-observe.
-    rage="$(( $(date +%s) - $(stat -f %m "${REAP_LOCK}" 2>/dev/null || date +%s) ))"
+    rage="$(( $(date +%s) - $(path_mtime "${REAP_LOCK}" "$(date +%s)") ))"
     [[ "${rage}" -gt "${REAP_TTL}" ]] && rm -rf "${REAP_LOCK}" 2>/dev/null
     return 1
   fi
