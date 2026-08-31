@@ -1310,3 +1310,119 @@ _commitfix() {   # give the fixture repo a real history for one copy-class path
   [[ "$output" != *"COPYAHEAD"* ]] || { echo "no history ⇒ must not claim ahead:"; echo "$output"; false; }
   [[ "$output" == *"direction UNKNOWN"* ]] || { echo "expected an explicit UNKNOWN:"; echo "$output"; false; }
 }
+
+# ── CLASS COVERAGE (2026-08-31) ────────────────────────────────────────────────────────────────
+# install.sh is the MAP OF RECORD and this script is one of its two auditors. A fix is scoped to
+# what broke; a walk's coverage is scoped to everything it was ever taught, and NOTHING reconciles
+# those two populations — which is how four classes (hooks/*.py, scripts/lib/*.py,
+# scripts/backlog-consolidation/*.py, bin/ms365-*) each reached the live layer only after falling
+# through the reasonless `*) want=0` default, every one recorded in a comment beside its own arm.
+#
+# NEITHER SIDE IS WRITTEN DOWN HERE. install.sh's classes come out of install.sh's own `for … in`
+# headers; the verdict comes from EXECUTING this script's own extracted case block, never from
+# re-reading it. Every class must land in EXACTLY ONE of claimed-or-declared: neither is the defect
+# these arms exist to catch, and both would be a contradiction.
+_classcov_runner() {   # $1=case-block file  $2=runner path to write
+  {
+    printf '%s\n' '#!/bin/bash'
+    printf '%s\n' 'rel="$1"; want=0; cls=""'
+    cat "$1"
+    printf '%s\n' 'printf "%s|%s\n" "$want" "$cls"'
+  } > "$2"
+}
+
+_classcov_extract() {  # $1=subject  $2=output case-block file — anchors asserted UNIQUE by caller
+  local cl cs ce
+  cl=$(grep -n '^    cls=""$' "$1" | cut -d: -f1)
+  cs=$((cl + 1))
+  ce=$(awk -v s="$cs" 'NR>=s && /^    esac$/ {print NR; exit}' "$1")
+  [ -n "$ce" ] || return 1
+  sed -n "${cs},${ce}p" "$1" > "$2"
+}
+
+@test "CLASS COVERAGE: every install.sh deploy class is CLAIMED or EXPLICITLY DECLARED, never left to the default" {
+  MAP="$REPO_ROOT/install.sh"
+  SUBJ="$REPO_ROOT/scripts/deploy-parity-assert.sh"
+  [ -f "$MAP" ]
+  [ -f "$SUBJ" ]
+
+  # (1) THE MAP, derived from install.sh's own loop headers.
+  CLASSES="$BATS_TEST_TMPDIR/classes.txt"
+  grep -E '^[[:space:]]*for[[:space:]]+[A-Za-z_]+[[:space:]]+in[[:space:]]+"\$REPO_DIR"/' "$MAP" \
+    | grep -oE '"\$REPO_DIR"/[^ ";]+' | sed 's|^"\$REPO_DIR"/||' | sort -u > "$CLASSES"
+  # NON-VACUITY FLOOR: a broken anchor derives zero classes, and every assertion below would then
+  # pass over an empty population. Measured 19 on 2026-08-31; the floor is deliberately loose.
+  [ "$(grep -c . "$CLASSES")" -ge 15 ]
+
+  # (2) THE SUBJECT'S OWN ARBITER. Uniqueness first — we may never execute an unknown line.
+  [ "$(grep -c '^    cls=""$' "$SUBJ")" -eq 1 ]
+  _classcov_extract "$SUBJ" "$BATS_TEST_TMPDIR/case.txt"
+  [ "$(grep -c 'hooks/lib/\*\.sh)' "$BATS_TEST_TMPDIR/case.txt")" -eq 1 ]
+
+  # Tag ONLY the final catch-all. "Fell to the reasonless default" is then decided by EXECUTION
+  # rather than by matching patterns by eye, and the one-line diff is asserted so the mutation
+  # cannot silently touch an arm.
+  sed 's|^      \*)                         want=0 ;;$|      *)                         want=0; cls="__DEFAULT__" ;;|' \
+    "$BATS_TEST_TMPDIR/case.txt" > "$BATS_TEST_TMPDIR/caseB.txt"
+  [ "$(diff "$BATS_TEST_TMPDIR/case.txt" "$BATS_TEST_TMPDIR/caseB.txt" | grep -c '^[<>]')" -eq 2 ]
+  RUN="$BATS_TEST_TMPDIR/run.sh"
+  _classcov_runner "$BATS_TEST_TMPDIR/caseB.txt" "$RUN"
+
+  # CONTROLS BEFORE VERDICTS. POS: a covered class must come back CLAIMED, or the runner is mute.
+  [ "$(bash "$RUN" hooks/notify.sh </dev/null | grep -c '^1|hooks/\*\.sh$')" -eq 1 ]
+  # FIRE: a class present nowhere MUST reach the tagged default, or this arm cannot fail at all.
+  [ "$(bash "$RUN" zzz-no-such-class/nope.txt </dev/null | grep -c '__DEFAULT__')" -eq 1 ]
+
+  BAD="$BATS_TEST_TMPDIR/bad.txt"; : >"$BAD"
+  cd "$REPO_ROOT"
+  shopt -s nullglob
+  while IFS= read -r cls; do
+    [ -n "$cls" ] || continue
+    # shellcheck disable=SC2086
+    # The word-splitting and globbing ARE the mechanism here: $cls holds an install.sh glob
+    # (hooks/*.sh, skills/*/) and this line is how it is expanded. Quoting it would pass one
+    # literal pathspec and expand nothing — the zsh scar in reverse. Narrow, one code, deliberate.
+    set -- $cls                       # pathname expansion, never eval
+    [ "$#" -ge 1 ] || { printf 'EMPTY-CLASS %s\n' "$cls" >>"$BAD"; continue; }
+    # A directory-shaped class (skills/*/, vendor/*/) expands WITH its trailing slash; appending to
+    # that builds a double slash, and a case pattern's * matches '/', so the malformed path matches
+    # a deeper exclusion arm and scores want=0 for a reason that is entirely the harness's.
+    m="${1%/}"
+    if [ -d "$m" ]; then set -- "$m"/*; [ "$#" -ge 1 ] && m="$1"; fi
+    case "$m" in *//*) printf 'MALFORMED %s\n' "$m" >>"$BAD"; continue ;; esac
+    out="$(bash "$RUN" "$m" </dev/null)"
+    case "$out" in
+      1\|*)          : ;;             # CLAIMED — want=1
+      *__DEFAULT__*) printf 'REASONLESS-DEFAULT %s (member %s)\n' "$cls" "$m" >>"$BAD" ;;
+      *)             : ;;             # declined by an EXPLICIT arm carrying its reason
+    esac
+  done < "$CLASSES"
+  [ "$(grep -c . "$BAD")" -eq 0 ] || { echo "install.sh classes reaching the reasonless default:"; cat "$BAD"; false; }
+}
+
+@test "CLASS COVERAGE fire test: deleting a NOT-PER-FILE arm puts its class back on the default" {
+  # The arm above passes only because the declarations exist. This proves that is what it measures:
+  # remove ONE declared arm from the extracted block and its class must reach the tagged default
+  # again. Without this, a case block that happened to claim everything would look identical to one
+  # whose exclusions were doing the work.
+  SUBJ="$REPO_ROOT/scripts/deploy-parity-assert.sh"
+  [ -f "$SUBJ" ]
+  [ "$(grep -c '^    cls=""$' "$SUBJ")" -eq 1 ]
+  _classcov_extract "$SUBJ" "$BATS_TEST_TMPDIR/case.txt"
+
+  sed 's|^      \*)                         want=0 ;;$|      *)                         want=0; cls="__DEFAULT__" ;;|' \
+    "$BATS_TEST_TMPDIR/case.txt" > "$BATS_TEST_TMPDIR/caseB.txt"
+  _classcov_runner "$BATS_TEST_TMPDIR/caseB.txt" "$BATS_TEST_TMPDIR/intact.sh"
+
+  # BASELINE: with the arm present, githooks/ is declared, so it must NOT read as the default.
+  [ "$(bash "$BATS_TEST_TMPDIR/intact.sh" githooks/pre-commit </dev/null | grep -c '__DEFAULT__')" -eq 0 ]
+
+  # SEED: delete exactly the githooks arm. Asserted to remove ONE line, so a reworded arm makes this
+  # test refuse rather than pass vacuously over a deletion that never happened.
+  grep -v '^      githooks/\*)                want=0 ;;$' "$BATS_TEST_TMPDIR/caseB.txt" > "$BATS_TEST_TMPDIR/caseC.txt"
+  [ "$(( $(grep -c . "$BATS_TEST_TMPDIR/caseB.txt") - $(grep -c . "$BATS_TEST_TMPDIR/caseC.txt") ))" -eq 1 ]
+  _classcov_runner "$BATS_TEST_TMPDIR/caseC.txt" "$BATS_TEST_TMPDIR/seeded.sh"
+
+  # …and now the same path falls through to the reasonless default.
+  [ "$(bash "$BATS_TEST_TMPDIR/seeded.sh" githooks/pre-commit </dev/null | grep -c '__DEFAULT__')" -eq 1 ]
+}
