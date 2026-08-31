@@ -154,6 +154,26 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
     key on.** The same character then tripped `bats-shellcheck-lint` at **SC2088** in a diagnostic
     string one line further down: **two independent detectors on one character.** ⚠️ **TWO INCUMBENT
     titles in that suite still carry `~` (`:90`, `:278`) — named, not touched.**
+  🚨 **CORRECTION TO THE BULLET ABOVE, MADE BY MY OWN FLOOR AND LANDED SEPARATELY — THE CLAIM AS
+  FIRST WRITTEN IS TOO BROAD, AND THE NARROWING IS THE FINDING.** Checking it against the two
+  incumbents REFUTED the general form: they carry `~/bin` **MID-STRING** and bats emits them
+  **UNEXPANDED** (`ok 6 … even when ~/bin is correct`). Mine BEGAN with `~/bin`. Two variables were
+  confounded — POSITION and OUTCOME — so a **2×2** separated them (`probe267-tilde2.sh`, a seeded
+  heredoc fixture outside the worktree, all four predictions exact):
+  **LEADING tilde expands whether the test PASSES or FAILS (1/1); MID-STRING never does (0/0).
+  POSITION is the variable; outcome is not.** That is **assignment-context tilde expansion** — a
+  tilde expands after `=` and after a `:`, at the START of the value only — which is why
+  `x=~/bin rest` expands and `x="a ~/bin"` does not.
+  🚨 **AND THAT IS THE NEXT LINK'S CHEAPEST LEAD, BECAUSE IT NAMES A GUARD'S INCOMPLETE ENUMERATION
+  (methods 186 + 210).** `scripts/bats-testname-eval-lint.sh:8-9` states its own model outright:
+  *"The name is therefore expanded inside DOUBLE QUOTES, where three constructs are live: a backtick
+  pair, `$(...)`, and `$VAR` / `${VAR}`."* **A leading tilde is a FOURTH construct, and it is not a
+  double-quoted expansion at all**, so the model cannot reach it. **Measured: the lint exits rc 0
+  over 557 suites — including `tests/deploy-parity.bats`, which CONTAINS two tilde-bearing titles —
+  and it ran GREEN inside my own land.** ⚠️ **The two incumbents are SAFE (mid-string), so this is a
+  latent detector gap, not a live outage: the corpus has no leading-tilde title today, and mine was
+  removed before it landed. Red-prove it with the 2×2 fixture before touching the lint, and note the
+  lint is wired into `ship-land` — widening it is not a drive-by.**
   ⚠️ **AND A FIFTH IN MY OWN COMMIT GATE, WHICH REFUSED A CORRECT COMMIT:** it counted `~/bin` on
   every added line, convicting **5 COMMENT lines** where SC2088 fires only in command context — **a
   gate whose span exceeded its subject** (memory: `assertion-span-must-equal-its-subject`). Narrowed
