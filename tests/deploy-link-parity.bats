@@ -687,3 +687,84 @@ derive_class_sets() {   # $1 = install.sh to read · writes inst/walk/excl into 
   [ "$(grep -c . "$UNCLAIMED")" -eq 1 ]
   [ "$(grep -cxF -- '/zzzclass-xyzzy/*.zzz' "$UNCLAIMED")" -eq 1 ]
 }
+
+# --- UNCONVERGED: the third state, added 2026-08-31 --------------------------------------------
+# The two states the stray leg had were "bytes in this checkout" and "bytes nowhere". Both are
+# questions about ONE checkout, and the live symlink source is behind origin/main for as long as a
+# land goes unconverged — measured six commits behind on 2026-08-31, with a file landed that morning
+# reported as "in NO checkout — unversioned". These arms pin the separation and, more importantly,
+# pin the two OPPOSITE remedies apart.
+
+# A repo whose INDEX lacks a path that its TRUNK REF still carries — the shared checkout's exact
+# state whenever a land has not converged. Returns with $TRUNKREF set for the caller to drive.
+behind_checkout() {   # $1 = repo-relative path · $2 = its bytes
+  git -C "$CC_LINKPARITY_REPO" init -q
+  # `:?` guards the ARGUMENT, not the call: `git -C ""` is a NO-OP, so an unset/empty repo path
+  # would write these identities into whatever repo bats is standing in — and ~100 worktrees here
+  # share ONE .git/config, so one escape re-authors every session on the box.
+  git -C "${CC_LINKPARITY_REPO:?repo path required}" config user.email t@t
+  git -C "${CC_LINKPARITY_REPO:?repo path required}" config user.name t
+  printf '%s\n' "$2" > "$CC_LINKPARITY_REPO/$1"
+  git -C "$CC_LINKPARITY_REPO" add -A
+  git -C "$CC_LINKPARITY_REPO" commit -qm landed
+  export TRUNKREF="refs/remotes/origin/main"
+  git -C "$CC_LINKPARITY_REPO" update-ref "$TRUNKREF" "$(git -C "$CC_LINKPARITY_REPO" rev-parse HEAD)"
+  git -C "$CC_LINKPARITY_REPO" rm -q "$CC_LINKPARITY_REPO/$1"
+  git -C "$CC_LINKPARITY_REPO" commit -qm "not converged here"
+  export CC_LINKPARITY_TRUNK="$TRUNKREF"
+}
+
+@test "a live file whose bytes are on TRUNK but not in this INDEX is UNCONVERGED, never STRAY" {
+  # The defect: "in NO checkout — unversioned, invisible to review" is a claim about the world, and
+  # `git ls-files -s` is evidence about one reader. A file landed and not yet converged satisfies
+  # the evidence and contradicts the claim.
+  behind_checkout "skills/demo/SKILL.md" "landed-this-morning"
+  printf 'landed-this-morning\n' > "$CC_LINKPARITY_CONFIG/skills/demo/SKILL.md"
+  run "$LP"
+  [ "$status" -eq 1 ]
+  has "UNCONVERGED"
+  has "skills/demo/SKILL.md"
+  lacks "in NO checkout"
+  has "1 actionable"        # still a finding: bytes reaching the live layer unlinked IS drift
+}
+
+@test "UNCONVERGED prints the CONVERGER, never a cp/add into a checkout that already has the file" {
+  # The half that bites hardest. A remedy computed from an incomplete classification does not just
+  # mislabel — it prescribes, and here it prescribed staging an already-landed file into the shared
+  # checkout this repo's own .claude/CLAUDE.md opens by forbidding anyone to commit in.
+  behind_checkout "skills/demo/SKILL.md" "landed-this-morning"
+  printf 'landed-this-morning\n' > "$CC_LINKPARITY_CONFIG/skills/demo/SKILL.md"
+  run "$LP"
+  [ "$status" -eq 1 ]
+  has "deploy-live.sh"
+  has "do NOT cp/add it into the checkout"
+  # The wrong remedy must be gone for THIS path. Anchored on the add verb plus the path, because a
+  # bare "git add" would also match a sibling finding's fix and the assertion would pass vacuously.
+  [ "$(printf '%s' "$output" | grep -cF -- 'add "skills/demo/SKILL.md"')" -eq 0 ]
+}
+
+@test "CONTROL: a live file on NEITHER index nor trunk stays STRAY, with the cp/add remedy intact" {
+  # The FIRE control for the old class. A re-labelling that swallowed the real strays would be a
+  # weaker gate wearing a fix's clothes, and a count alone cannot tell the two apart.
+  behind_checkout "skills/demo/SKILL.md" "landed-this-morning"
+  hand_place "bin/cc-thread"
+  run "$LP"
+  [ "$status" -eq 1 ]
+  has "STRAY"
+  has "bin/cc-thread"
+  has "in NO checkout"
+  [ "$(printf '%s' "$output" | grep -cF -- 'add "bin/cc-thread"')" -eq 1 ]
+}
+
+@test "CONTROL: an unresolvable trunk ref falls back to STRAY — the clause fails toward the finding" {
+  # The new question needs a ref, and a ref can be missing (a fresh clone with no remote, the
+  # hermetic no-git branch). Failing closed here would mean laundering a real stray into silence on
+  # exactly the machines least able to notice. It must degrade to the old, louder answer.
+  behind_checkout "skills/demo/SKILL.md" "landed-this-morning"
+  printf 'landed-this-morning\n' > "$CC_LINKPARITY_CONFIG/skills/demo/SKILL.md"
+  export CC_LINKPARITY_TRUNK="refs/remotes/origin/no-such-branch"
+  run "$LP"
+  [ "$status" -eq 1 ]
+  has "STRAY"
+  lacks "UNCONVERGED"
+}
