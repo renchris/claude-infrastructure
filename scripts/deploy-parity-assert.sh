@@ -508,9 +508,18 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       # bin/desk-* is a SEPARATE glob in install.sh:621, added because the cc-* glob does not cover
       # it and nothing else linked it: ~/.claude/bin/desk-register did not exist at all while
       # commands/desk.md's first step invoked it.
-      bin/cc-*/*|bin/desk-*/*)   want=0 ;;
+      # bin/ms365-* is the THIRD family to arrive this way (2026-08-31). bin/ms365-reply-splice.py
+      # landed 2026-08-25 and matched neither glob, so it fell to the `*) want=0` default below and
+      # was scored NOT-EXPECTED-LIVE — the same silent disabling this leg's backlog-consolidation
+      # comment describes twenty lines up. It existed on trunk and in NO live location, while the
+      # live enforce-email-formatting.py hook told the model to run it at RECIPE step 3c.
+      # These arms and install.sh's glob list are ONE enumeration written in two files;
+      # tests/ms365-reply-splice.bats derives the families from install.sh and asserts every one of
+      # them is claimed here, so the next family cannot land in only one of the two again.
+      bin/cc-*/*|bin/desk-*/*|bin/ms365-*/*) want=0 ;;
       bin/cc-*)                  want=1; cls='bin/cc-*' ;;
       bin/desk-*)                want=1; cls='bin/desk-*' ;;
+      bin/ms365-*)               want=1; cls='bin/ms365-*' ;;
       skills/*/*/*)              want=0 ;;   # install.sh links skills/<name>/<file>, one level only
       skills/*/*)                want=1; cls='skills/*/*' ;;
       # Root-config SSOTs, each its own install.sh line (:436, :445) rather than a loop. accounts.json
