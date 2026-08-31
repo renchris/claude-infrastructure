@@ -113,8 +113,12 @@ usage() { sed -n '2,/^set -uo/p' "$SELF" | sed 's/^# \{0,1\}//; /^set -uo/d'; }
 # partition_has / excluded_has — asked of offbox-partition.sh, never re-derived here. A second
 # implementation of "is this suite in the partition" is the drift this whole lane keeps paying for,
 # and the set difference is that script's ONE job.
-partition_has() { printf '%s\n' "$1" | grep -qxF -f <(bash "$(partition_bin)" list 2>/dev/null) 2>/dev/null; }
-excluded_has()  { printf '%s\n' "$1" | grep -qxF -f <(bash "$(partition_bin)" excluded 2>/dev/null) 2>/dev/null; }
+# DRAINED (`grep -xF … >/dev/null`), never `grep -qxF`: each of these is a functions LAST command, so
+# its rc is the return value read at :201 (`if ! partition_has`) and :231 (`excluded_has … ||
+# continue`). A `-q` consumer exits on its match and SIGPIPEs the producer, and pipefail promotes the
+# 141 — a suite that IS in the partition would read as absent, which is this gates whole verdict.
+partition_has() { printf '%s\n' "$1" | grep -xF -f <(bash "$(partition_bin)" list 2>/dev/null) >/dev/null 2>&1; }
+excluded_has()  { printf '%s\n' "$1" | grep -xF -f <(bash "$(partition_bin)" excluded 2>/dev/null) >/dev/null 2>&1; }
 
 # ADDED suites in a range. `--diff-filter=A` is the whole rule: this gate binds on ENTRY to the
 # partition, and only an added file enters it.

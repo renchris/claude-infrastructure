@@ -287,9 +287,47 @@
 #      moment the write exceeds the 64 KiB pipe buffer. The command word is identical in both cases,
 #      so only the argument can discriminate;
 #   4. the pipeline's status is CONSUMED — an `if`/`elif`/`while`/`until` condition, a `!` operand,
-#      or (under `set -e`) a bare pipeline or a top-level `VAR=$(…)`. `local`/`declare`/`export`
-#      MASK the status (the builtin's own 0 wins), and `[ -n "$( … )" ]` discards it, so neither is
-#      a violation however exposed the pipeline inside looks;
+#      a following `&&`, a `; rc=$?` capture, or (under `set -e`) a bare pipeline or a top-level
+#      `VAR=$(…)`. `local`/`declare`/`export` MASK the status (the builtin's own 0 wins), and
+#      `[ -n "$( … )" ]` discards it, so neither is a violation however exposed the pipeline looks;
+#      …and 4c: the pipeline is the LAST command of a FUNCTION BODY and some call site reads the
+#      function's return value. Every clause above answers its question FROM ONE LINE, which is why
+#      this one was missing for the whole life of the rule rather than merely unimplemented: a
+#      function-final pipeline's reader is not on its line and cannot be — the rc leaves as the
+#      function's return value and `if fn; then` reads it anywhere in the file. The reader's
+#      positions are clause 4's own, transposed from a pipeline to a call (`if fn`, `! fn`,
+#      `fn … && act`, `fn … || act`, `fn; rc=$?`, and under errexit a bare call or a whole-RHS
+#      `VAR=$(fn)`); `fn || true`, `local v=$(fn)` and `"$(fn)"` as an argument discard it exactly
+#      as they do there. The reader-side test is the whole discriminator and not a refinement:
+#      THIRTEEN function-final exposed pipelines stand in this tree and only THREE have a reader.
+#      The other ten are read as `VAR="$(fn)"` in files with no errexit, or not read at all
+#      (bin/cc-fleet state_of · bin/cc-teardown last_record · bin/cc-thread _cursor ·
+#      devserver-census.sh proc_cwd and proc_port · launchd-parity-lint.sh plist_label ·
+#      offbox-admission-lint.sh run_suite · postland-verify.sh mk_field · registration-state.sh hdr ·
+#      worktree-gc-infra-run.sh _f). A clause that flagged function-final pipelines outright would
+#      have called all thirteen violations and been wrong on ten — which is a 77% false-positive
+#      rate on the one shape this clause exists to judge, i.e. not a stricter ratchet but a broken
+#      one. Measured, not assumed: the reader-free variant is one `sed` off this file and was run.
+#
+#      MEASURED, 2026-08-31: census 126 → 129, and ONE of the three is a live inversion rather than
+#      a blind spot. docs/activation/pending-activation/18-fleet-activate.sh:110 was
+#      `is_disabled() { printf '%s\n' "$DISABLED_DB" | grep -Fq "\"$1\" => disabled"; }` over the
+#      whole `launchctl print-disabled` dump, read at :136/:139/:237 in the `&&` positions that
+#      decide whether a daemon is activated — 30/30 FALSE at 106,914 B on a label that IS disabled,
+#      i.e. an activator that skips re-enabling exactly the jobs it exists to re-enable. All three
+#      are FIXED rather than grandfathered (no allowlist row moved), which is what the `$?` clause
+#      did with its two, and arm 24 of the bats suite pins that they stay fixed.
+#
+#      RESIDUALS, named rather than widened. The body-boundary test is textual: an opener is
+#      `name() {` / `function name {` alone on its line, a close is a lone `}`, and a one-liner is
+#      the whole definition on one line. So a close carrying a redirect (`} >/dev/null`), a `;`
+#      inside a quoted argument of a one-liner's last stage, and a function whose reader lives in
+#      ANOTHER file (a sourced lib) are all misses. Each fails CLOSED — a miss, never a false red.
+#      The cross-file one is the only one worth a number, because it is the only one whose reach
+#      grows with the tree: all ten unread candidates above were checked and NONE of their nine
+#      files is `source`d or `.`'d anywhere in bin/ hooks/ scripts/ tests/ docs/, so no site in this
+#      tree today depends on it. Widening any of the three is a change to what counts as a function
+#      body and wants its own measurement, not a fold-in here.
 #   5. it is NOT already mitigated by a trailing `|| true` / `|| <fallback>`, which swallows the 141
 #      before anything reads it.
 #
@@ -427,6 +465,11 @@ function is_external(s,   t, p) {
   # `has_tell=0` / `[` and calls a printf builtin external, which is the commonest safe form here.
   while (match(t, /[;\002\003][ \t]*/)) t = substr(t, RSTART + RLENGTH)
   t = ltrim(t)
+  # A ONE-LINE function definition puts its header in front of the producer, so without this strip
+  # `f() { echo hi | grep -q hi; }` reads its command word as `f()` and the LITERAL exemption below
+  # is unreachable — every one-line function would be called external, which is the half of the
+  # discriminator clause 3 exists to keep. (The `;` loop above cannot do it: a header has no `;`.)
+  sub(/^([A-Za-z_][A-Za-z0-9_:.-]*[ \t]*\([ \t]*\)|function[ \t]+[A-Za-z_][A-Za-z0-9_:.-]*([ \t]*\([ \t]*\))?)[ \t]*\{[ \t]*/, "", t)
   if (!p) {
     sub(/^(if|elif|while|until)[ \t]+/, "", t)
     sub(/^![ \t]*/, "", t)
@@ -473,6 +516,72 @@ function consumed(l, hase,   t, pre, i) {
   return 1
 }
 
+# Clause 4c: the pipelines status is the FUNCTIONS RETURN VALUE, and a CALL SITE reads it.
+#
+# consumed() above asks its question of ONE LINE, so it can only ever see a reader that is on that
+# line. A pipeline that is the LAST command of a function body has its reader somewhere else
+# entirely: the rc becomes the functions return value, and `if fn; then` a hundred lines away reads
+# it. Nothing on the pipelines own line says so, so every such site was invisible.
+#
+# Two helpers, and the split is what keeps this from becoming a whole-file parser: fn_name/is_fn_*
+# answer "is this pipeline the last command of a function, and which one" from the line and its
+# successor; note_call records, for every code line, the command word of any CALL in a
+# status-consuming position. The two meet at END, where a buffered candidate is emitted only if its
+# functions name was recorded. Neither half needs to know what the other found while scanning, which
+# is why one pass suffices.
+function fn_name(l,   t) {
+  t = ltrim(l); sub(/^function[ \t]+/, "", t)
+  if (match(t, /^[A-Za-z_][A-Za-z0-9_:.-]*/)) return substr(t, 1, RLENGTH)
+  return ""
+}
+
+# note_call — record the command word of a call whose status is READ. The positions are exactly
+# clause 4s, transposed from a pipeline to a call: a control-flow head, a `!`, a following &&, a
+# `; rc=$?` capture, or — under errexit only — a bare statement or a whole-RHS VAR=$( … ).
+# `local v=$(fn)`, `[ -n "$(fn)" ]` and `"$(fn)"` as an argument mask it exactly as they do there.
+function note_call(l, hase,   t, w, rest, u, ctl, a, o, s) {
+  t = ltrim(l)
+  gsub(/\|\|/, "\002", t); gsub(/&&/, "\003", t)
+  # A DEFINITION is not a call — but its BODY can hold one, so strip the header rather than bail.
+  sub(/^([A-Za-z_][A-Za-z0-9_:.-]*[ \t]*\([ \t]*\)|function[ \t]+[A-Za-z_][A-Za-z0-9_:.-]*([ \t]*\([ \t]*\))?)[ \t]*\{[ \t]*/, "", t)
+  # A whole-RHS command substitution under errexit: VAR=$(fn … ) lets the status through.
+  if (hase && match(t, /^[A-Za-z_][A-Za-z0-9_]*\+?="?\$\([ \t]*/)) {
+    u = substr(t, RSTART + RLENGTH)
+    if (match(u, /^[A-Za-z_][A-Za-z0-9_:.-]*/)) consumes[substr(u, 1, RLENGTH)] = 1
+  }
+  ctl = 0
+  if (sub(/^(if|elif|while|until)[ \t]+/, "", t)) ctl = 1
+  if (sub(/^![ \t]*/, "", t))                     ctl = 1
+  t = ltrim(t)
+  if (!match(t, /^[A-Za-z_][A-Za-z0-9_:.-]*/)) return
+  w = substr(t, 1, RLENGTH); rest = substr(t, RLENGTH + 1)
+  # The word must END here. A `|` boundary is deliberately NOT accepted: `fn | consumer` is a
+  # pipeline, and the pipeline rules above already own that line.
+  if (rest != "" && rest !~ /^[ \t;\002\003)]/) return
+  if (ctl) { consumes[w] = 1; return }
+  # && / || sit after the calls ARGUMENTS, so SEARCH along `rest` rather than anchoring at its head.
+  # Anchoring reads `excluded_has "$s" || continue` — the shape this tree actually writes — as an
+  # unconsumed bare call, which is a false NEGATIVE of exactly the kind clause 4c exists to close.
+  # A `;` ahead of either operator ends this command, so the operator belongs to a LATER one.
+  a = index(rest, "\003"); o = index(rest, "\002"); s = index(rest, ";")
+  if (s > 0 && (a == 0 || s < a) && (o == 0 || s < o)) { a = 0; o = 0 }
+  if (a > 0 && (o == 0 || a < o)) { consumes[w] = 1; return }   # fn … && act
+  if (o > 0) {
+    # `fn || true` DISCARDS the status the way clause 5 does; `fn || act` ACTS on it, so the
+    # inversion still propagates to the caller and the call IS a reader.
+    u = substr(rest, o + 1)
+    if (u ~ /^[ \t]*(true|:)([ \t;]|$)/) return
+    consumes[w] = 1; return
+  }
+  if (rest ~ /;[ \t]*[A-Za-z_][A-Za-z0-9_]*=\$\?/) { consumes[w] = 1; return }
+  if (hase) { consumes[w] = 1; return }                        # a bare call, killed by errexit
+}
+
+# Hits are BUFFERED rather than printed, because a clause-4c candidate cannot be judged until the
+# whole file has been read: its readers call site may sit above the definition or below it. Emitting
+# in FNR order at END keeps --census byte-identical for every pre-existing hit.
+function hit(fnr, src, fn) { nhit++; hln[nhit] = fnr; hsrc[nhit] = src; hfn[nhit] = fn }
+
 BEGIN { FS = "" }
 {
   raw = $0
@@ -506,6 +615,21 @@ BEGIN { FS = "" }
   # ignore quoted occurrences is a real change to what counts as an opener and wants its own
   # measurement; it is not folded in here. g31/g32 pin both directions of what IS fixed.
   if (line ~ /^#/ || line == "") next
+
+  # ── clause 4c bookkeeping, on every CODE line and BEFORE anything else consumes it ──
+  # A candidate stashed by clause 4c is function-final iff the very next CODE line closes the body.
+  # Resolving it here — ahead of the close test below, which clears infn — is what makes the
+  # ordering total: stash, then resolve on the successor, then update the body state.
+  if (pend != "") {
+    if (line ~ /^\}[ \t]*;?[ \t]*$/) hit(pendfnr, pend, pendfn)
+    pend = ""
+  }
+  note_call(line, HASE)
+  if (line ~ /^([A-Za-z_][A-Za-z0-9_:.-]*[ \t]*\([ \t]*\)|function[ \t]+[A-Za-z_][A-Za-z0-9_:.-]*([ \t]*\([ \t]*\))?)[ \t]*\{[ \t]*$/) {
+    infn = 1; curfn = fn_name(line)
+  } else if (line ~ /^\}[ \t]*;?[ \t]*$/) {
+    infn = 0; curfn = ""
+  }
 
   if (match($0, /<<-?[ \t]*[\x27"]?[A-Za-z_][A-Za-z0-9_]*[\x27"]?/)) {
     tok = substr($0, RSTART, RLENGTH)
@@ -557,9 +681,23 @@ BEGIN { FS = "" }
   # the ASSIGNMENT form after the last stage separates them; g15/g16 pin both directions.
   # (No apostrophes here: this is inside the single-quoted DETECT_AWK string.)
   cap = (last ~ /;[ \t]*[A-Za-z_][A-Za-z0-9_]*=\$\?/)
-  if (amp == 0 && !cap && !consumed(line, HASE)) next
+  if (amp == 0 && !cap && !consumed(line, HASE)) {
+    # Nothing on THIS line reads the status — but if the pipeline is the last command of a function
+    # body, the rc leaves the line as the functions return value. Two shapes, and the one-line one
+    # is not a curiosity: bin/cc-fleet:560 spells state_of() { printf … | sed … | head -1; }.
+    if (infn) { pend = line; pendfnr = FNR; pendfn = curfn; next }
+    # `last` must be the WHOLE tail of the body: at most one `;`, and nothing but the closing brace
+    # after it. `f() { a | grep -q x; echo done; }` ends with a `}` too and is NOT function-final.
+    if (line ~ /^([A-Za-z_][A-Za-z0-9_:.-]*[ \t]*\([ \t]*\)|function[ \t]+[A-Za-z_][A-Za-z0-9_:.-]*([ \t]*\([ \t]*\))?)[ \t]*\{/ &&
+        last ~ /^[^;]*;?[ \t]*\}[ \t]*;?[ \t]*$/) { hit(FNR, line, fn_name(line)); next }
+    next
+  }
 
-  printf "%s:%d:%s\n", FILE, FNR, line
+  hit(FNR, line, "")
+}
+END {
+  for (i = 1; i <= nhit; i++)
+    if (hfn[i] == "" || consumes[hfn[i]]) printf "%s:%d:%s\n", FILE, hln[i], hsrc[i]
 }'
 
 # ── scan ─────────────────────────────────────────────────────────────────────────────────────────
@@ -870,6 +1008,58 @@ cat <<'EOF'
 if git status --porcelain | grep -q .; then :; fi
 EOF"
   expect g31 GREEN "a comment ahead of a REAL heredoc still leaves the body as DATA"
+
+  # ── CLAUSE 4c — THE FUNCTION-FINAL PIPELINE (2026-08-31) ──────────────────────────────────────
+  # consumed() asks its question of ONE LINE, so the only reader it can see is on that line. A
+  # pipeline that ends a function body has its reader elsewhere: the rc becomes the return value and
+  # `if fn; then` reads it. Census 126 → 129, and one of the three is a LIVE inversion rather than a
+  # blind spot — docs/activation/pending-activation/18-fleet-activate.sh:110 piped the whole
+  # `launchctl print-disabled` dump into `grep -Fq`, measured 30/30 FALSE at 106,914 B on a label
+  # that IS disabled, read at :136/:139/:237 in the `&&` positions that decide whether a daemon gets
+  # activated. All three are fixed rather than grandfathered, which is what the $? clause did too.
+  #
+  # The GREEN arms are not decoration: without them this clause flags every function whose last
+  # command happens to be a pipeline, and the tree has three such functions whose callers spell
+  # `VAR="$(fn)"` with no errexit — which discards the status exactly as clause 4 already says.
+  mk_noe r16 "has_flag() {
+  \"\$BIN\" -h 2>/dev/null | grep -q -- '--login-status'
+}
+if has_flag; then :; fi"
+  expect r16 RED "a MULTI-LINE function-final pipeline, read by \`if fn\`"
+  mk_noe r17 "is_disabled() { printf '%s\\n' \"\$DB\" | grep -Fq \"\$1\"; }
+is_disabled x && echo yes"
+  expect r17 RED "a ONE-LINE function-final pipeline (the 18-fleet-activate shape), read by \`fn &&\`"
+  mk_noe r18 "in_set() { printf '%s\\n' \"\$1\" | grep -qxF -f /some/file; }
+in_set \"\$s\" || continue"
+  expect r18 RED "the reader is \`fn ARGS || act\` — the operator sits after the ARGUMENTS"
+  mk_noe r19 "plist_label() {
+  plutil -p \"\$1\" 2>/dev/null | head -1
+}
+if plist_label x; then :; fi"
+  expect r19 RED "a three-stage function-final pipeline ending in head -1"
+
+  mk_noe g17 "proc_port() {
+  lsof -nP -p \"\$1\" 2>/dev/null | awk '/LISTEN/ { print \$2; exit }'
+}
+port=\"\$(proc_port 1)\""
+  expect g17 GREEN "no caller READS the rc — \`VAR=\$(fn)\` with no errexit discards it (3 real sites)"
+  mk_noe g18 "has_flag() {
+  \"\$BIN\" -h 2>/dev/null | grep -q -- '--x'
+}
+has_flag || true"
+  expect g18 GREEN "\`fn || true\` discards the status the way clause 5 does"
+  mk_noe g19 "f() { git log --oneline | grep -q x; echo done; }
+if f; then :; fi"
+  expect g19 GREEN "a one-line body whose LAST command is not the pipeline — echo owns the rc"
+  mk_noe g20 "f() {
+  git log --oneline | grep -q x
+  echo done
+}
+if f; then :; fi"
+  expect g20 GREEN "the same, multi-line — the close is not the NEXT code line"
+  mk_noe g21 "f() { printf '%s\\n' 'ready' | grep -q ready; }
+if f; then :; fi"
+  expect g21 GREEN "a one-line functions LITERAL builtin producer keeps the clause-3 exemption"
 
   local total=$((pass+fail))
   if [ "$fail" -gt 0 ]; then

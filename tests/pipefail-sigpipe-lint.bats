@@ -34,10 +34,10 @@ mkfile() { # $1=name $2=body  [$3=set line]
 }
 census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" --census 2>/dev/null; }
 
-@test "1: the lint's own --selftest passes (32/32, both directions)" {
+@test "1: the lint's own --selftest passes (41/41, both directions)" {
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s' "$output" | grep '32/32' >/dev/null \
+  printf '%s' "$output" | grep '41/41' >/dev/null \
     || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 
@@ -308,5 +308,107 @@ $(census | grep -c 'scripts/muted\.sh:' || true) — the file is muted"; census 
   [ "$(census | grep -c 'lr-reset-poller\.sh:')" -eq 0 ] \
     || { echo "control failed: the unappended file already reads \
 $(census | grep -c 'lr-reset-poller\.sh:' || true) hit(s), so arm 20 is vacuous"; false; }
+  true
+}
+
+# ── CLAUSE 4c — THE FUNCTION-FINAL PIPELINE (2026-08-31) ─────────────────────────────────────────
+# consumed() asks its question of ONE LINE, so the only reader it can see is on that line. A pipeline
+# that is the LAST command of a function body has its reader somewhere else entirely: the rc becomes
+# the function's return value, and `if fn; then` a hundred lines away reads it. Every such site was
+# invisible — the detector reported a cheerful zero for the one shape whose status is, by
+# construction, a value the caller asked for.
+
+@test "21: RED on a function-final pipeline whose rc a caller READS" {
+  # Both spellings, because the tree writes both and only one of them looks like a function.
+  mkfile fnml "has_flag() {
+  \"\$BIN\" -h 2>/dev/null | grep -q -- '--login-status'
+}
+if has_flag; then :; fi" 'set -uo pipefail'
+  mkfile fnol "is_disabled() { printf '%s\\n' \"\$DB\" | grep -Fq \"\$1\"; }
+is_disabled x && echo yes" 'set -uo pipefail'
+  run census
+  printf '%s' "$output" | grep 'scripts/fnml.sh:' >/dev/null \
+    || { echo "a MULTI-LINE function-final pipeline was not flagged: $output"; false; }
+  printf '%s' "$output" | grep 'scripts/fnol.sh:' >/dev/null \
+    || { echo "a ONE-LINE function-final pipeline was not flagged: $output"; false; }
+}
+
+@test "22: GREEN when NO caller reads the rc — the discriminator, not a blanket rule" {
+  # Without this arm the clause would flag every function whose last command happens to be a
+  # pipeline, and the tree has three such functions (devserver-census.sh proc_port,
+  # launchd-parity-lint.sh plist_label, offbox-admission-lint.sh run_suite) whose every caller
+  # spells `VAR="$(fn)"` in a file with no errexit — which discards the status exactly as clause 4
+  # already says of a pipeline. Flagging those is a false positive, not a stricter ratchet.
+  mkfile nocons "proc_port() {
+  lsof -nP -p \"\$1\" 2>/dev/null | awk '/LISTEN/ { print \$2; exit }'
+}
+port=\"\$(proc_port 1)\"" 'set -uo pipefail'
+  mkfile ortrue "has_flag() {
+  \"\$BIN\" -h 2>/dev/null | grep -q -- '--x'
+}
+has_flag || true" 'set -uo pipefail'
+  mkfile notlast "f() { git log --oneline | grep -q x; echo done; }
+if f; then :; fi" 'set -uo pipefail'
+  run census
+  [ -z "$output" ] || { echo "clause 4c flagged a pipeline whose rc nobody reads: $output"; false; }
+}
+
+@test "23: MECHANISM — the function-final shape really does invert, and the fix repairs it" {
+  # Real bash, not a re-read of the detector. This is the 18-fleet-activate.sh:110 shape: the whole
+  # `launchctl print-disabled` dump held in a variable, piped into `grep -Fq`, the rc returned to a
+  # caller that decides whether a daemon gets activated. Measured 30/30 FALSE at 106,914 B on a
+  # label that IS disabled; the `case` rewrite is 0/30 and one fewer fork.
+  local pad; pad="$(seq 1 4000 | sed 's/.*/"com.pad.&" => disabled/')"
+  run bash -c 'set -uo pipefail
+    DB="\"com.a.b\" => disabled
+'"$pad"'"
+    old() { printf "%s\n" "$DB" | grep -Fq "\"$1\" => disabled"; }
+    old com.a.b'
+  [ "$status" -ne 0 ] \
+    || { echo "the defect did NOT reproduce — arms 21/22 then prove nothing about a real hazard"; false; }
+  run bash -c 'set -uo pipefail
+    DB="\"com.a.b\" => disabled
+'"$pad"'"
+    new() { case "$DB" in *"\"$1\" => disabled"*) return 0 ;; esac; return 1; }
+    if ! new com.a.b; then exit 1; fi
+    if new com.zz; then exit 2; fi
+    exit 0'
+  [ "$status" -eq 0 ] \
+    || { echo "the case rewrite is not a faithful predicate (exit $status: 1=missed a disabled label, 2=said yes to an absent one)"; false; }
+}
+
+@test "24: the three sites clause 4c found are FIXED, not grandfathered" {
+  # The $? clause (2026-08-26) set the precedent: its two newly-visible sites were repaired and
+  # neither file carries an allowlist row. Same here — a ratchet whose list GROWS every time the
+  # detector gains an eye is a detector that buys nothing. Asserted on the live files, because an
+  # allowlist row added later would silently re-open all three.
+  for f in scripts/offbox-admission-lint.sh docs/activation/pending-activation/18-fleet-activate.sh; do
+    [ -f "$REPO/$f" ] || skip "subject absent: $f"
+    # `if`, not `A && { …; false; }`: bash exempts a non-final member of an AND-list from errexit,
+    # so the brace form's `false` is unreachable and the assertion is DEAD (caught by the land gate's
+    # dead-assertion ratchet, which is the only reason this reads as an `if`).
+    if grep -F "$f" "$ALLOW" >/dev/null 2>&1; then
+      echo "$f was GRANDFATHERED rather than fixed — the list may only shrink"; false
+    fi
+  done
+  # Asserted on the DEFINITION LINES, never on the file: the fixes carry comments that name the shape
+  # they removed, and a file-wide grep for `grep -Fq` matches those comments — a test that a comment
+  # can fail is a test of prose, not of code.
+  local def
+  def="$(grep -m1 '^is_disabled()' "$REPO/docs/activation/pending-activation/18-fleet-activate.sh")"
+  case "$def" in
+    *"| grep"*) echo "is_disabled regained a pipe into grep over the disabled dump: $def"; false ;;
+    *case*) : ;;
+    *) echo "is_disabled is neither the case rewrite nor a pipe — unrecognised: $def"; false ;;
+  esac
+  # Both arms, and by REGEX rather than by `case` alternation: `-q` may sit anywhere in the flag
+  # cluster (`-q`, `-qxF`, `-xqF`), which is the same reason is_early() matches a cluster and not an
+  # anchored `[qlL]$`. A literal-prefix `case` would subsume its own later patterns (SC2221).
+  def="$(grep -E '^(partition_has|excluded_has)\(\)' "$REPO/scripts/offbox-admission-lint.sh")"
+  [ "$(printf '%s\n' "$def" | grep -c '>/dev/null')" -eq 2 ] \
+    || { echo "a function-final consumer is no longer drained: $def"; false; }
+  if printf '%s\n' "$def" | grep -E 'grep -[A-Za-z]*q' >/dev/null; then
+    echo "offbox-admission-lint.sh regained a -q consumer on a function-final pipeline: $def"; false
+  fi
   true
 }
