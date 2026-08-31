@@ -138,6 +138,25 @@ cc-backlog done 37b112d8950d --evidence "premise refuted on trunk at 21f116c7: -
 Until it is run, this row re-enters every dispatch wave and costs one worker per cycle to reach this
 same paragraph. That cost is the concrete, per-cycle form of the coverage gap L1′ names.
 
+**It re-entered a THIRD time, at 2026-08-31T05:34Z, and the third finding is that the paragraph
+above named a command without naming anything that would make it run.** The command is correct and
+still stands; what it lacked is a reader. `cloud-return.sh` step 8 closes any content-verified land
+automatically (`cc-backlog done "$item"`, `:518`), so the *first* dispatch's doc commit would have
+retired this row on 2026-08-29 had that arm been up — it is the `f85fce7c26f5` deadlock, whose one
+caller (`scripts/autonomy-sweep.sh:1075`, launchd, measured intermittent, and itself gated on
+running from the deployed path at `:1071`) is dark for days at a time. Routing a second doc through the same arm was the same bet, and lost the same way.
+
+So the third dispatch wrote no new refutation — both prior ones are ancestors of `origin/main` and
+were re-checked as such — and used the one channel that is provably alive instead:
+**`docs/parks/37b112d8950d.md`, written by `scripts/cloud-park.sh`**, carrying the `cc-backlog done`
+line above as its `needs:`. `bin/cc-eligible` reads that file at `cc-backlog claim --venue cloud`,
+and the dispatcher that fired this very session had to pass through it; with no block/unblock record
+on the row, `park_assess` returns `unhonoured` and refuses the cloud venue (`ineligible-parked`),
+naming the step verbatim. The fourth dispatch is therefore refused at zero spawn cost, the row stays
+claimable locally — the only venue a store write can run in — and the refusal self-retracts on the
+desk's own verbs. **The generalisable form: a cloud worker's terminal finding is only as durable as
+the arm that reads it, so state it where a LIVE reader is, not where the correct one would be.**
+
 ### What refutes the strong form
 
 The ticket usually still points at a real artifact. All 20 sampled files from the >72 h population
