@@ -86,6 +86,43 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-31 — drain recycle #271: method 243 — WHEN A LIST OF OBSTACLES IS ALL ONE KIND, THE
+  KIND IS THE FINDING. Five "locks" on the cloud land path were each a venue-provisioning gap: the
+  box lacks a tool, has the wrong version, or arrives truncated. #264-#267 all asked about a MAP.
+  Ask instead what the obstacles have in common — and if they are uniform, look for the one that
+  ISN'T, because that is the one nobody is provisioning around.**
+  Took the cell the fifth-lock addendum named and deferred: **measure a CAUSE for each of the seven
+  off-box reds**, which its own contract says a manifest line requires. First cold-start proof of
+  `cloud-venue-provision.sh` (TRUNCATED-HISTORY → deepen 50→3,882 → fetch shellcheck 0.11.0 +
+  bats-core 1.13.0 → READY), then the census reproduced at **identical counts on a different VM**.
+  🚨 **THE SIXTH LOCK IS OURS, NOT THE VENUE'S — and it is on the LAND PATH.**
+  `scripts/land-lock.sh` spelled `stat -f %m … || echo <default>` five times. GNU `-f` is
+  `--file-system`, so `%m` is read as a FILENAME, the filesystem block goes to **stdout**, and the
+  `||` default is APPENDED rather than replacing it: `$(( ))` dies under `set -u` with
+  `File: unbound variable`. Under CONTENTION the losing lander exits **127** mid-gate — which is why
+  eleven single-dispatch lands never met it. The fifth site is the silent one: `lock_generation`'s
+  `%i` carried the filesystem block instead of the inode, **identical for every directory on one
+  filesystem**, so the mutex's anti-ABA guarantee was void on Linux with no error anywhere.
+  ⚠️ **FOUR OF THE EIGHT CAUSES ARE THAT ONE GENERATOR, AND THE CURE WAS ALREADY WRITTEN HERE THREE
+  TIMES** — `autonomy-sweep.sh:213` documents it down to this exact error string,
+  `drain-chain-assert.sh:189` and `wrap-ledger.sh:273` each record it independently — **and none
+  reached the land mutex or the reaper.** The plan's standing generator (a landed remedy that never
+  reached every holder), met on the one path this whole thread is about.
+  ✅ **SIX OF EIGHT CURED, NOT EXCLUDED**, inverting the assumption the previous link worked under:
+  `cc-reaper` 141/51 → **192/0** · `land-gate-cas` 19/1 → **20/0** · `tsv-field-collapse` 33/1 →
+  **34/0** · `land-gate-memo` 10/1 → **11/0** · `bats-shellcheck-lint` 27/1 → **28/0** ·
+  `land-inflight` 8/1 → **9/0**. Once a cause exists rather than a count, most were never manifest
+  candidates — which is what the manifest's own *"prefer fixing the suite"* says. **One true
+  exclusion**: `gate-home-isolation`, whose subject IS an APFS `cp -Rc` clone GNU `cp` cannot
+  perform (every cell needing the clone is red, every fail-open cell green).
+  ✅ **AND THE ONE WRONG LINE WAS CAUGHT BY A GATE, NOT BY REVIEW** — `offbox-partition.sh lint`
+  refused a drafted `test-hermeticity-lint` entry as redundant, which also corrects the previous
+  addendum's census reading: that run was over a LAND's `--direct` selection, **not** the off-box
+  partition, so membership in one says nothing about the other.
+  **Standing, measured, deliberately NOT swept:** 16 `date -j` and 25 chain-on-exit-code `stat`
+  sites across 39 files (`bin/cc-classify`'s `iso_to_epoch` among them). Sweep it **per site with a
+  measurement** — crash, silent-garbage and fail-closed are indistinguishable in a grep and differ
+  entirely in consequence. Full derivation: § The SIXTH lock, at the end of this plan.
 - **2026-08-31 — drain recycle #270: method 242 — A FIX TO AN AUDITOR IS DELIVERED BY THE SAME PATH
   AS THE THING IT AUDITS, SO A LANDED FIX CAN LEAVE THE LIVE VERDICT EXACTLY AS IT WAS.** #269 asked
   which reference a verdict was computed against. This asks the question one layer under it: **which
@@ -29243,3 +29280,98 @@ census is the INPUT to that work, not the work — and it is now cheap for the n
 whole change. It also does not move `d84434cd`: the cloud land arm's discriminator still needs the
 three reads that exist only on the operator's box (`scripts/cloud-land-arm-diagnose.sh`), and
 `f85fce7c26f5` stays operator-gated on them.
+
+### The SIXTH lock, and it is the first one that is OURS — the census's causes are one generator (`70f0001c657b`)
+
+*(2026-08-31, twelfth dispatch on this plan's own row, measured in the container.)*
+
+The addendum above closed by naming the next cell precisely: *"a cause was measured for NONE of the
+seven … A census is the INPUT to that work, not the work — and it is now cheap for the next link."*
+That cell is taken here, and the answer changes what the five locks above are a list OF.
+
+**The census reproduces exactly, on a different VM, which is what makes the causes attributable.**
+`cloud-venue-provision.sh` — landed by the addendum above and never yet run on a cold box — read
+`TRUNCATED-HISTORY` on arrival (shallow at 50), deepened to 3,882 commits, fetched shellcheck
+v0.11.0 and bats-core v1.13.0 when its witness and gather runs refused the distro pair, and re-read
+`READY`. First cold-start proof of that file. The seven reds then came back at **identical counts**:
+`cc-reaper` 51, `gate-home-isolation` 15, and 1 each for `bats-shellcheck-lint`, `land-gate-cas`,
+`land-gate-memo`, `land-inflight`, `tsv-field-collapse`, with `test-hermeticity-lint` cut.
+
+🚨 **FOUR OF THE EIGHT CAUSES ARE ONE GENERATOR: A BSD/GNU DIALECT DIFFERENCE IN A COMMAND THAT
+LOOKS POSIX.** Not four instances of "off-box is different" — four instances of the *same* mistake,
+in four holders, with the cure already written down in this repo three times.
+
+    stat -f %m <path> 2>/dev/null || echo <default>
+
+On BSD `-f` is *format* and `%m` is the mtime. On GNU `-f` is `--file-system`, so `%m` is read as a
+FILENAME: stat prints the real path's filesystem block **to stdout** and only *then* exits 1.
+`2>/dev/null` hides nothing, the `||` default is **appended** to that block rather than replacing
+it, and `$(( now - $(…) ))` dies under `set -u` with `File: unbound variable`.
+`scripts/autonomy-sweep.sh:213` documents that mechanism **down to this exact error string**;
+`scripts/drain-chain-assert.sh:189` records the same dialect making a rotor *"a silent no-op on
+every Linux host"*; `scripts/wrap-ledger.sh:273` says GNU `stat -f` must be VALIDATED rather than
+trusted. **None of the three reached the land path's own mutex, and none reached the reaper.**
+
+**And that is what makes this a SIXTH LOCK rather than a seventh finding.** The five above are all
+venue-provisioning gaps — the box lacks a tool, or has the wrong version of one, or arrives with a
+truncated history. This one is in **our code, on the land path**, and it fires only under
+CONTENTION, which is why eleven single-dispatch lands never met it: with two landers racing, the
+loser's `ship-land` exits **127** mid-gate and writes no result at all. `scripts/land-lock.sh`
+spelled the idiom five times — `lock_is_stale`'s age, `--status`'s held time, the hung-lock scan,
+`reap_and_claim`'s reap-TTL, and **`lock_generation`'s `%i`, which is the silent one**: not in an
+arithmetic context, so the token simply carried the filesystem block instead of the inode — and that
+block is **identical for every directory on one filesystem**, so the anti-ABA guarantee its own
+comment rests on (*"`rm -rf` + `mkdir` always yields a NEW directory"*) was void on Linux with no
+error anywhere. A mutex that stops distinguishing generations is the failure that file exists to
+prevent.
+
+The same generator in `bin/cc-reaper` had **three faces at once**, and the third is the one worth
+carrying forward: `iso_to_epoch_r` spoke only BSD `date -j -f`, and its `|| true` made a missing
+DIALECT indistinguishable from an unparseable stamp. On Linux it returned empty for every
+well-formed `firedAt`, the documented fallback dated the fire from the **marker file's own mtime**
+— i.e. from now — and rule 2's stale-tenancy belt could therefore never see a stale stamp. **A
+safety belt silently open.** ⚠️ *A fallback that cannot distinguish "unparseable" from "I do not
+speak this dialect" converts a missing feature into wrong data*, which is strictly worse than the
+crash three lines up, because nothing reports it.
+
+**Result — the census's own numbers, re-measured after each cure:**
+
+| suite | before | after | cause |
+|---|---|---|---|
+| `cc-reaper` | red 141/51 | **green 192/0** | the generator, ×3 (2 in the subject, 1 in the harness) |
+| `land-gate-cas` | red 19/1 | **green 20/0** | the generator, in `land-lock.sh` — not a test defect at all |
+| `tsv-field-collapse` | red 33/1 | **green 34/0** | a bash-3.2 CTLESC quirk pinned as a general mechanism |
+| `land-gate-memo` | red 10/1 | **green 11/0** | `chmod 000` is a no-op for uid 0 |
+| `bats-shellcheck-lint` | red 27/1 | **green 28/0** | Linux `MAX_ARG_STRLEN` 131,072 < the 162,693 B fixture |
+| `land-inflight` | red 8/1 | **green 9/0** | bash's `setlocale` warning folded into `$output` by `run` |
+| `gate-home-isolation` | red 8/15 | **excluded, with a verified cause** | the subject IS an APFS `cp -Rc` clone |
+| `test-hermeticity-lint` | cut @300 s | **green 82/0 unbounded (502 s)** | cost, not correctness — and no line needed |
+
+**Six of the eight were CURED, not excluded**, which inverts the assumption the previous addendum
+was working under. Its refusal to write manifest lines was right for a better reason than it gave:
+the manifest's own header says *"prefer fixing the suite"*, and once a cause exists rather than a
+count, most of these were never manifest candidates. **`gate-home-isolation` is the one true
+exclusion** — every cell needing the clone to SUCCEED is red and every cell asserting the documented
+FAIL-OPEN is green, so the suite is accurately reporting that a macOS-only optimisation did not
+happen. It is not faked with a `cp -R` fallback, which would be a different mechanism under the same
+assertions.
+
+✅ **AND THE ONE LINE THAT WAS WRONG WAS CAUGHT BY A GATE, NOT BY REVIEW.** A `test-hermeticity-lint`
+entry was drafted on the reasoning that its cut poisons the fold (`any cut ⇒ cut, never green`);
+`offbox-partition.sh lint` **refused it as redundant** — already in `host-suites.manifest`, so never
+in the partition, so poisoning nothing. The correction generalises past the one suite: **that census
+ran over a LAND's `--direct` selection, which is not the off-box partition**, so membership in one
+implies nothing about the other — and the previous addendum's "green 22 · red 10 · cut 1" should be
+read as a statement about a land's selection, never about the partition's health.
+
+**What this does NOT settle, and the population it leaves standing.** It does not move `d84434cd`:
+the cloud land arm's discriminator still needs the three reads that exist only on the operator's box
+(`scripts/cloud-land-arm-diagnose.sh`), and `f85fce7c26f5` stays operator-gated on them. And the
+generator is **not swept** — deliberately, because only the sites this measurement convicts were
+touched. Standing, measured here: **16 `date -j` sites** and **25 chain-on-exit-code `stat` sites**
+across **39 files**, `bin/cc-classify`'s `iso_to_epoch` among them, which `cc-reaper`'s own comment
+names as the helper it mirrors. That is the next link and it is now cheap, because the shape is
+known and one grep finds every holder. ⚠️ It should be swept **with a measurement per site, not by
+pattern**: three of the faces here (crash, silent-garbage, fail-closed) look identical in a grep and
+differ entirely in consequence, and the fail-closed one is *safe* — a blind rewrite would be a
+change with no verdict attached to it, which is the trade this plan keeps refusing.
