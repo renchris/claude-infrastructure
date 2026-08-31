@@ -28352,3 +28352,88 @@ census is the INPUT to that work, not the work — and it is now cheap for the n
 whole change. It also does not move `d84434cd`: the cloud land arm's discriminator still needs the
 three reads that exist only on the operator's box (`scripts/cloud-land-arm-diagnose.sh`), and
 `f85fce7c26f5` stays operator-gated on them.
+
+### The sixth lock is not a lock — the CENSUS ITSELF was taken in the wrong venue (`70f0001c657b`)
+
+*(2026-08-31, twelfth dispatch on this plan's own row, measured in the container. Full derivation,
+the controls and the limits: `docs/research/offbox-census-attribution-2026-08-31.md`.)*
+
+The addendum above closed by naming its own next cell: *"a cause was measured for NONE of the seven …
+A census is the INPUT to that work, not the work — and it is now cheap for the next link."* A cause is
+now measured for all seven, each with a control. **And the manifest is still untouched, because this
+time the entries would be WRONG rather than merely unjustified.**
+
+`.github/workflows/hermetic.yml:133` runs the shard job — the one that actually executes suites — on
+**`macos-latest`**. The census that produced the seven ran in a **Linux cloud VM, as uid 0**.
+`scripts/offbox-excluded.manifest` is a claim about the first machine. **Five of the six reds are
+properties of the second that cannot occur on the first:**
+
+    suite                   cause, measured                          on macos-latest
+    gate-home-isolation     ship-land's `cp -Rc` is APFS clonefile;   cannot fire — the runner
+                            GNU cp has no -c, so isolation always     IS macOS
+                            fail-opens (its fail-open cases are the
+                            two that stay GREEN — the control)
+    bats-shellcheck-lint    the fixture is 162,692 B in ONE env       cannot fire — no per-string
+                            string; Linux MAX_ARG_STRLEN = 131,072    cap, only a 1 MiB total
+                            (measured at the boundary) ⇒ E2BIG,
+                            `env` exits 126 — the exact rc seen
+    land-gate-memo          `chmod 000` is a no-op for uid 0, so      cannot fire — runners are
+                            the "UNREADABLE entry" is read            non-root
+    land-inflight           no `en_CA.UTF-8`; bash's own setlocale    cannot fire
+                            warning lands in $output, breaking the
+                            ONE prefix-anchored compare (the two
+                            sibling cases ignore $output and pass)
+    tsv-field-collapse      §1 pins a bash 3.2 CTLESC quirk;          passes there — delisted
+                            5.2.21 splits normally (the \037          2026-08-13 at 34/34
+                            sibling passes on both — the control)
+    test-hermeticity-lint   NOT RED — green 82/0. Its "no verdict"    unmeasured there
+                            was the 300 s bound; it needs 441 s
+
+🚨 **The trap is structural, and `scripts/offbox-run.sh`'s own header names it without drawing the
+conclusion:** *"ONE IMPLEMENTATION, TWO CALLERS … same classifier, same bound, same fold."* That is
+right, and it is exactly what makes rows printed in a container look like producer rows. The
+classifier is shared; **the box is the measurement.** Reproducing a CI red is what the second caller
+is for — *originating* an exclusion from it is not. Every VM census from here reads as a claim about
+the VM until a producer run says otherwise.
+
+**The sixth suite was not the venue's, and it is a real bug this lane has been walking into.**
+`land-gate-cas`'s single red is the two-lander race, and the loser's output says why:
+`land-lock.sh: line 305: File: unbound variable`. All five stat sites in that file used a bare BSD
+`stat -f %m … || echo <default>`; GNU's `-f` is `--file-system`, printing a report **on stdout** and
+exiting 1, and `|| echo` does not replace stdout already written. Four sites feed that capture to
+arithmetic, where `set -uo pipefail` makes the report's first bare word fatal. **Driven directly,
+outside any harness, over a lock dir holding a dead pid: rc 1 pre-fix, rc 0 post-fix — i.e. the
+machine-wide landing mutex could not be acquired AT ALL on Linux once the lock directory existed.**
+The fifth site (`lock_generation`'s `%i`) is not arithmetic and degrades worse than it looks: the
+generation token becomes one constant report, so the CAS meant to catch *"the lock changed under me"*
+compares EQUAL always.
+
+The class and its cure were already written down here — `hooks/lib/mailbox-pending.sh` § PORTABLE
+MTIME, *"try the flag whose wrong-platform behaviour is an ERROR first"* — including the line *"51
+further call sites carry the same idiom … NOT yet in the backlog — the worker that found this had no
+reachable store."* This is one of those sites and the sharpest instance: elsewhere it yields a wrong
+number, here it is `set -u` fatal.
+
+**Landed with this addendum:**
+
+- `scripts/land-lock.sh` — `ll_mtime` / `ll_inode`, order-reversed per the SSOT and printing
+  **nothing** when unknowable, which is the half that makes each call site's own `|| echo <default>`
+  mean what it always claimed. A/B through the producer's own runner, same box:
+  `tests/land-lock.bats` **11 ok/14 not ok → 25/25 green**, `tests/land-gate-cas.bats` **19/1 →
+  20/20 green**. `land-lock.bats` was never in the 33-suite census selection and was red 14 on
+  pristine trunk — an eighth red nobody had counted. One fix, 15 failures cured.
+- `tests/land-lock.bats` — four cases that **stub `stat`** so each platform's flag semantics are
+  exercised on both platforms, the whole defect having been one platform's behaviour being invisible
+  from the other. The macOS direction is asserted, not argued: 25/25 under a BSD-semantics shim.
+  Negative control against pre-fix source — GNU-direction, neither-form and the ratchet all go RED;
+  the BSD-direction case is green on **both** sides by design, its job being to prove the fix did not
+  break the platform that already worked. The ratchet reads EXECUTABLE lines only, because this
+  file's own § PORTABLE stat comment quotes the broken idiom twice on purpose and a ratchet that
+  cannot tell a citation from a call site convicts the documentation for describing the bug it cures.
+
+**What this does NOT settle.** The other ~50 sites of the class stay untouched — `land-lock.sh` is
+the one the census convicted with a driven failure on this plan's own land path, and widening would
+be a refactor riding a one-file measurement. It says nothing about the reds `macos-latest` actually
+reports (`operator-readout` 43, `ship-land` 17, `qos-rewrite` 13, `cc-reaper` 51), which the manifest
+still wants measured **there**. And it does not move `d84434cd`: the cloud land arm still needs the
+three reads that exist only on the operator's box, so `f85fce7c26f5` stays operator-gated.
