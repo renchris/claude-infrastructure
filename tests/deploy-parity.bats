@@ -1630,3 +1630,86 @@ _binclaim_build() {   # $1 = install.sh path, $2 = claims out, $3 = refs out
   comm -23 "$SEEDED" "$CLAIMS" > "$OUT"
   [ "$(grep -cxF 'zzz-no-such-bin-tool' "$OUT")" -eq 1 ]
 }
+
+# ── CLAUDE.md-MANDATED SKILLS ────────────────────────────────────────────────────────────────────
+# The arms above ask whether install.sh CLAIMS what an executable surface NAMES. These ask the same
+# question of a different pair: does this repo CARRY what CLAUDE.md MANDATES?
+#
+# WHY, measured 2026-08-31. skills/outbound-drafting/SKILL.md sat live and in no checkout since
+# 2026-08-29 — 13,268 bytes, authored here (7 operator-specific measured lessons, 0 vendored
+# markers, 0 tracked copies in any sibling checkout) — while BOTH copies of CLAUDE.md delegate a
+# binding rule to it: "Full rule -> the **outbound-drafting** skill, which auto-loads before any
+# such draft". deploy-link-parity.sh's STRAY leg DID catch it and had been reporting it correctly
+# the whole time. What failed is one layer up: row bb2495b098b8's evidence acquits that leg with
+# "the change adds ZERO findings (the 3 the gate already reports on trunk are pre-existing:
+# bin/browsermcp-wrapper.sh, bin/cc-cloud-watch, bin/it2 drifted from bin/it2-wrapper)". The gate
+# still reports THREE. Not one of them is those three: all three named members resolved (two are
+# gone from the live layer, and bin/it2 is now byte-identical to bin/it2-wrapper so content-matching
+# recognises the renamed copy), and three different files arrived. THE COUNT IS STABLE AND THE
+# MEMBERSHIP IS DISJOINT, so a reader comparing counts sees an adjudicated wall.
+#
+# This pair cannot see the live layer at all — deliberately, since the STRAY leg already owns that
+# direction and this suite is hermetic. It compares two TRACKED artifacts, so it fires in the land
+# smoke on a fresh clone: CLAUDE.md's own prose against git + config/live-only.manifest. A skill may
+# be TRACKED (ours) or DECLARED (third-party, with a witness) — the defect is being NEITHER while
+# CLAUDE.md tells every session to load it.
+_skillclaim_build() {   # $1=repo root · $2=out claims · $3=out covered
+  local root="$1" claims="$2" covered="$3"
+  # (a) the CLAIM side: CLAUDE.md's own house spelling for naming a skill — a bold lowercase name
+  # immediately followed by the word "skill". Taken WHOLE; never filtered by a prefix.
+  grep -oE '\*\*[a-z0-9-]+\*\* skill' "$root/CLAUDE.md" \
+    | sed -E 's/\*\*([a-z0-9-]+)\*\* skill/\1/' | sort -u > "$claims"
+  # (b) the COVERED side, from BOTH mechanisms, each derived from its own artifact.
+  ( cd "$root" && git ls-files skills/ 2>/dev/null ) \
+    | sed -E 's#^skills/([^/]+)/.*#\1#' | sort -u > "$covered.tracked"
+  grep -oE '^skills/[^/]+/' "$root/config/live-only.manifest" 2>/dev/null \
+    | sed -E 's#^skills/([^/]+)/#\1#' | sort -u > "$covered.declared"
+  cat "$covered.tracked" "$covered.declared" | sort -u > "$covered"
+}
+
+@test "CLAUDE.md MANDATED SKILLS: every skill CLAUDE.md names is tracked here or declared live-only" {
+  [ -f "$REPO_ROOT/CLAUDE.md" ]
+  [ -f "$REPO_ROOT/config/live-only.manifest" ]
+
+  CLAIMS="$BATS_TEST_TMPDIR/skillclaims.txt"
+  COVERED="$BATS_TEST_TMPDIR/skillcovered.txt"
+  _skillclaim_build "$REPO_ROOT" "$CLAIMS" "$COVERED"
+
+  # POS CONTROL — the claim side must be non-empty, or CLAUDE.md has been reworded out of the
+  # anchor's reach and every assertion below passes over an empty set.
+  [ "$(grep -c . "$CLAIMS")" -ge 5 ]
+  # POS CONTROL — both coverage mechanisms must have produced members, or a single failed read
+  # (a git that cannot list, a renamed manifest) would convict every mandated skill at once.
+  [ "$(grep -c . "$COVERED.tracked")" -ge 20 ]
+  [ "$(grep -c . "$COVERED.declared")" -ge 1 ]
+
+  RESIDUE="$BATS_TEST_TMPDIR/skillresidue.txt"
+  comm -23 "$CLAIMS" "$COVERED" > "$RESIDUE"
+  [ "$(grep -c . "$RESIDUE")" -eq 0 ] || {
+    echo "skills CLAUDE.md mandates that this repo neither tracks nor declares:"
+    cat "$RESIDUE"
+    echo "(each is a rule every session is told to load, backed by nothing a fresh clone restores."
+    echo " Remedy per config/live-only.manifest: track it if it is ours, or add a declaration row"
+    echo " with a witness if it is third-party. skills/outbound-drafting was the first instance.)"
+    false
+  }
+}
+
+@test "CLAUDE.md MANDATED SKILLS fire test: a mandated name covered by neither is reported" {
+  # The arm above passes only because every mandated skill is covered. This proves that is what it
+  # measures — a comm that silently returned empty would look identical to a tree with no gap.
+  CLAIMS="$BATS_TEST_TMPDIR/skillclaims2.txt"
+  COVERED="$BATS_TEST_TMPDIR/skillcovered2.txt"
+  _skillclaim_build "$REPO_ROOT" "$CLAIMS" "$COVERED"
+
+  SEEDED="$BATS_TEST_TMPDIR/skillclaims2seeded.txt"
+  cat "$CLAIMS" > "$SEEDED"
+  echo 'zzz-no-such-mandated-skill' >> "$SEEDED"
+  sort -u -o "$SEEDED" "$SEEDED"
+  # asserted to ADD exactly one name, so a seed that was already present cannot pass vacuously
+  [ "$(( $(grep -c . "$SEEDED") - $(grep -c . "$CLAIMS") ))" -eq 1 ]
+
+  OUT="$BATS_TEST_TMPDIR/skillresidue2.txt"
+  comm -23 "$SEEDED" "$COVERED" > "$OUT"
+  [ "$(grep -cxF 'zzz-no-such-mandated-skill' "$OUT")" -eq 1 ]
+}
