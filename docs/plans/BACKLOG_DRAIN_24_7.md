@@ -86,6 +86,97 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-31 — drain recycle #271: method 243 — A CONVERGENCE LAG IS PUBLISHED AS A DISTANCE, AND
+  THE ONLY QUESTION ANYONE ASKS OF IT IS A DOSE.** #270 asked where the checker runs from and proved
+  its own fix inert. **#271 asked the population question under it: the lag is ten commits — HOW MUCH
+  OF THE MACHINE IS ACTUALLY RUNNING OLD BYTES?** Measured, and the answer contradicts the obvious
+  reading of the number every session closes on.
+  **THE MEASUREMENT, `probe271-stale.sh`, six predictions written first and all six exact, rc 0, at
+  2026-08-31T23:06:09Z on a lag of TEN:** 513 live-layer symlinks resolve into the shared checkout ·
+  **511 are BYTE-IDENTICAL to trunk** · **exactly TWO are stale** — `bin/cc-backlog` and
+  `scripts/deploy-link-parity.sh` · 0 untracked, partition asserted to sum. The ten commits change
+  **11** paths, of which five are `docs/`, three are `tests/`, and one is a live REAL file the parity
+  reporter's own STRAY class already owns. **So the DISTANCE was 10 and the DOSE was 2.** Controls: a
+  MUTE control naming a path present nowhere read 0; the POS control (#270's own file) classified
+  DRIFTED; every DRIFTED path was asserted to occur in `HEAD..origin/main`, so the drift is the lag
+  and **not** local dirt in the checkout (that checkout carries 22 dirty lines, all untracked, none
+  of them a drifted member).
+  🚨 **WHY THIS IS A CORRECTION AND NOT A CONFIRMATION.** #270's closing sentence — *"every landed
+  fix to anything the live layer executes is inert for as long as that decline persists"* — reads as
+  a claim about the live layer, and each clause of it is true. As a claim about the POPULATION it is
+  false by 511 to 2: **inertness is not a property of the lag, it is a property of the two paths the
+  lag happens to touch.** A lag of 1 that rewrites 300 executing files and a lag of 40 that touches
+  only `docs/` render identically today, **and the larger number is the safer state.**
+  ✅ **THE MOVE — a code fix, the cleanest discharge: `LIVE_STALE`.** `scripts/wrap-ledger.sh` now
+  answers, beside `LIVE_LAG`'s distance, how many of the paths the lag changes are reached by a live
+  link AND carry executing bytes that differ from HEAD's. Emitted in `--machine` beside `LIVE_ADDS`,
+  and attached to the two within-budget readouts that already print the distance.
+  ✅ **STRICTLY ADDITIVE, AND THAT IS THE PART TO CHECK RATHER THAN TRUST.** `LIVE_ADDS`'s own note
+  refuses a path FILTER, correctly — a filter is a strictly-stronger SUPPRESSOR and getting it wrong
+  SILENCES a real breach. This is that note's COMPLEMENT, not a quiet instance of it: no rung, no
+  exit status and no existing field changes. **Pinned by an arm that names `LIVE_STALE` nowhere and
+  is GREEN at both moments of the red-proof** — a uniform prediction across a table says nothing
+  about attribution, so one arm predicts green on purpose.
+  🚨 **`?` NEVER 0, AND HERE THAT LAW IS LOAD-BEARING TWICE OVER.** For `LIVE_ADDS` a phantom 0 is a
+  missed breach. For `LIVE_STALE` **0 is the HEALTHY value** — *"nothing you run is stale"* — so a
+  failed read rendering as 0 would be indistinguishable from a fully converged box, which is the most
+  reassuring sentence this ledger can print. Unreadable live sha, a failed bounded diff, or a
+  changed-path count past `WRAP_LIVE_STALE_MAX` (200, so a pathological range cannot put a per-path
+  readlink+hash on a Stop-hook path) all answer `?`.
+  ✅ **RED-PROVED, PREDICTION FIRST, rc 0, ATTRIBUTED BY NAME.** PRE tree extracted from `origin/main`
+  with `git archive | tar -x` and **asserted to hold ZERO occurrences of the fix token before any red
+  from it was believed**; only the SUITE copied forward, so the PRE arm runs MY tests against the OLD
+  subject. **Plan `1..93` at both moments — PRE 88 ok / 5 not ok, POST 93 ok / 0 not ok** — each arm
+  attributed out of `arms271.txt` rather than retyped, with a MUTE control naming an arm present in
+  no suite at 0. **All 87 incumbent arms green at BOTH moments.** Suite **87 → 93**.
+  ✅ **NOT A WIDENING:** `pipefail-sigpipe-lint --census` **126 → 126, LOST=0, NEW=0**, keyed on
+  **(path, TEXT)** because the diff inserts comment lines and every number below them shifts; PRE arm
+  extracted from the ref, `CC_PIPEFAIL_ROOT` pinned on both arms, join-size control non-empty. Bare
+  lint rc 0.
+  🚨 **A HERMETICITY HOLE THE SENSOR WOULD HAVE OPENED, CLOSED IN THE SAME DIFF.** `LIVE_STALE` walks
+  the live layer's SYMLINK ROOT, which defaults to `$HOME/.claude` — the operator's real one.
+  `tests/wrap-ledger.bats` already fixtures `WRAP_LIVE_REPO`, `CC_CUSTODY_DIR`, `CC_BACKLOG_BIN`,
+  `CC_DECIDE_BIN` and `WRAP_PROJECT_ROOTS` against exactly this class and names it three times in one
+  setup block; unfixtured, **every arm in the file would have stat'd the live box** and the count
+  would be a function of who ran the suite and of where the converger had got to. `WRAP_LIVE_ROOT` is
+  now fixtured beside `WRAP_LIVE_REPO`. **When you add a sensor, ask what NEW store it reads before
+  you ask whether it is correct.**
+  🚨 **ONE DEFECT FOUND BY A LINT AND BY NOTHING ELSE, AND WHERE IT HID IS THE TRANSFERABLE PART.**
+  `stale_clause()` was first written **160 lines BELOW** the readout block that calls it — a
+  `command not found` at every within-budget close. **The live run did not catch it: this session's
+  tree was dirty, so `compute_live_layer()` was never called and neither readout ever rendered.**
+  `shellcheck` SC2218 was the only instrument that saw it. **A PATH THE ✅-GATE SKIPS IS A PATH YOUR
+  SMOKE TEST SKIPS TOO** — the wiring is now an arm, not only a lint.
+  ⚠️ **THE HONEST LIMIT, STATED RATHER THAN LEFT TO BE DISCOVERED — IT IS #270's, ONE LINK ON.** The
+  moment this lands, `scripts/wrap-ledger.sh` **BECOMES a third member of the stale set it counts**,
+  and stays so until the converger advances. **The sensor's first real reading will be taken by a
+  copy that does not have it.** That is not a reason to hold the change; it is the finding arriving
+  on schedule, and the successor should expect `LIVE_STALE` to be absent from the live copy's output
+  while `git log` shows it landed.
+  ⚠️ **AND THE N-2 HAZARD BIT AGAIN, IN A NEW PLACE.** Cloning `derive270.sh` forward left
+  `ent.count("#269")` standing where the predecessor check belongs — the two-substitution rule cannot
+  reach N-2 — and it is a **print-only** line, so it fails as a confident wrong answer rather than as
+  a refusal. Repaired by hand. **`insert271.py`, `verify271.py` and `derive271.sh` did not exist and
+  were cloned this link; the presence loop is what surfaced that, before planning rather than
+  mid-flight.**
+  ⚠️ **AND THE ENTRY VERIFIER REFUSED THIS ENTRY, CORRECTLY-SHAPED AND WRONGLY-CALIBRATED — THE
+  SECOND DECAYED CONTROL OF THE LINK.** `verify271.py` carried an inherited **absolute** floor,
+  `literals < 100`, and this entry derives **93** over 7,484 chars. The floor exists to prove the
+  extractor is not MUTE; it was calibrated to a predecessor's entry LENGTH, which is not the quantity
+  it means to bound — and this brief already says in words that *"the literal count tracks the
+  ENTRY's length, not its rigour"*. Repointed to two clauses: an absolute non-vacuity floor a mute
+  extractor cannot clear, **plus a DENSITY floor that scales with the entry**, so a longer entry must
+  still yield proportionally more literals. **A floor that a correct artifact trips is a claim about
+  the floor. Read `zeros=0`, the seeded fire test and the POS lines before you believe a count.**
+  **THE LANE, taken at four moments** (open `RUNG=🚀 LIVE_SRC=behind LIVE_LAG=10 LIVE_ADDS=2
+  LIVE_AGE=7488 LIVE_BREACH_WHY=adds GATE=stale`, tree clean, `trunk..HEAD=0`): the two adds are
+  SIBLINGS', `4e6a51df2a84` stays OPEN, do not re-file and do not drive. `GATE=stale` again — the
+  eighty-fourth consecutive and **not yours to drive.**
+  **THE BOARD: ZERO ROWS CLOSED, ZERO FILED, ZERO REOPENED.** Open census 23:04:21Z — **337 open /
+  215 blocked / 2,352 done / 6 claimed** (552 combined, 2,910 rows), both partitions asserted. The
+  gap from #270's close ran **10 m 07 s** and held **ZERO arrivals, ZERO departures, ZERO
+  transitions**. Postland RED `.page` **0** at both moments, denominators stated. **The land facts
+  are in `git log --oneline origin/main`, deliberately not restated here.**
 - **2026-08-31 — drain recycle #270: method 242 — A FIX TO AN AUDITOR IS DELIVERED BY THE SAME PATH
   AS THE THING IT AUDITS, SO A LANDED FIX CAN LEAVE THE LIVE VERDICT EXACTLY AS IT WAS.** #269 asked
   which reference a verdict was computed against. This asks the question one layer under it: **which
