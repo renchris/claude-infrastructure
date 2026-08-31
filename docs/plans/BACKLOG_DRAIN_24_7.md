@@ -86,6 +86,182 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-31 — drain recycle #261: method 233 — A PERMISSION BOUNDARY GATES AN ACT, NOT A TASK.
+  NAME THE ACT, THEN ASK WHETHER THE FIX ACTUALLY REQUIRES IT — AND NEVER WIDEN ONE MEASURED
+  DENIAL INTO A CLASS.**
+  🚨 **THE FINDING. My predecessor's top surviving lead was to run method 213 over this brief's
+  OTHER environment-shaped reasons. The highest-value one was a sentence carried at the end of
+  lead 14 for many links: *"THE AUTO-MODE CLASSIFIER DENIES `pending-activation` SCRIPTS
+  OUTRIGHT."* It is the reason nobody has driven `ff4e6cbead11`, the lead's own must-carry. I
+  traced it to its origin and it is TRUE AS AN OBSERVATION AND FALSE AS A REASON, in two separate
+  ways.**
+  ⚠️ **FIRST, ITS SCOPE. The sentence descends from row `85fc4f3216a7`'s own `needs` field, which
+  says, verbatim: *"I attempted it and the Claude Code auto-mode classifier DENIED the
+  execution."* That is **n=1 against ONE command**. The brief carries it as a claim about a CLASS
+  — every `pending-activation` script, outright. A single measured denial became a population
+  verdict with nothing in between, which is method 214's completeness defect wearing a permission
+  boundary's clothes.**
+  🚨 **SECOND, AND THIS IS THE TRANSFERABLE HALF: THE BOUNDARY GATES *RUNNING* THE ACTIVATION, AND
+  FIXING THE DEFECT NEVER NEEDED TO RUN IT.** The defect is two bugs in a two-line predicate.
+  Repairing it is an `Edit`, which no Bash classifier ever sees; verifying it is an EXTRACTION of
+  those lines against a fixture, which runs nothing. **The reason named a real wall and the work
+  was never on the other side of it.** ⚠️ **And the wall was moot regardless — the activation had
+  ALREADY happened** (see § THE PREMISE THAT MOVED). **This is #260's method 232 arriving from the
+  opposite direction: there a reason named an environment and the environment had been measured
+  WRONG; here a reason names a boundary CORRECTLY and the conclusion still does not rest on it.
+  ASK WHAT ACT IS GATED, AND WHETHER YOUR FIX PERFORMS THAT ACT.**
+  ✅ **SO I TOOK THE ROW.** `docs/activation/pending-activation/35-auth-timeseries-activate.sh`
+  step [0] is a GATE: run one `--once` batch and refuse to arm unless it produced readable
+  credential rows — because under launchd nothing can answer a keychain ACL prompt, and that
+  denial renders as a clean run of `NO_ITEM` rows, a false *"every account logged out"* on the one
+  instrument built to detect exactly that. **The gate has never been able to fire.**
+  🚨 **BUG 1 — THE PATTERN DID NOT MATCH WHAT THE COLLECTOR WRITES.** It grepped `"state":"OK"`
+  with NO space. `tools/auth/auth-timeseries.sh` emits every row through `print(json.dumps(rec))`,
+  and `json.dumps`' DEFAULT separator is `': '`. **Measured 2026-08-31T00:10Z over the newest 400
+  rows of the live store: 333 matches WITH the space, 0 WITHOUT.** Confirmed THREE ways, which is
+  why it is not a one-instrument claim: against the store, by reading the emitter, and from a live
+  production row at 00:22:32Z reading `"state": "OK"`.
+  🚨 **BUG 2 — THE COUNT COULD NOT BE READ AS A NUMBER.** `grep -c` prints `0` and **EXITS 1** on
+  a legitimate zero, so `$(grep -c … || echo 0)` fires its fallback and appends a SECOND line:
+  `ok` becomes two lines of `0`. `[ "$ok" -lt 1 ]` then answers **rc 2** — *"integer expression
+  expected"*, which is NO VERDICT AT ALL — and the `if` takes its FALSE branch and arms anyway.
+  🚨 **THE TWO CANCELLED, WHICH IS THE WHOLE REASON NEITHER EVER SURFACED: bug 1 guaranteed the
+  probe scored zero, bug 2 guaranteed the zero could not be acted on. NET: IT ALWAYS ARMED, ON A
+  PROBE THAT ALWAYS REPORTED FAILURE.** ⚠️ **Fixing either alone is WORSE than fixing neither** —
+  fix 2 and the always-zero probe starts being evaluated correctly and the gate **REFUSES
+  FOREVER**; fix 1 and it still cannot say no. Both are fixed in one change.
+  ✅ **AND THE REPAIR DOES NOT RE-CREATE THE DEPENDENCY IT REMOVES.** The pattern is now an ERE
+  tolerant of the separator, not a second brittle literal — pinning it to `': '` would restore the
+  identical reliance on a serializer default nobody in this repo controls. The count uses
+  `|| true` plus a numeric-shape `case`, the spelling already in `scripts/backlog-telemetry.sh:131`
+  whose comment records this same hazard.
+
+  🚨 **THE INSTRUMENT LESSON, AND IT CAME FROM A REFUSAL: `[` HAS THREE ANSWERS AND TWO OF THEM
+  ARE "NON-ZERO".** `probe261-activation.sh` carried 13 predictions enforced at rc 93; its first
+  run scored **12 of 13 and REFUSED ONE**, and the refusal is the sharpest statement of the
+  subject's own bug. I had predicted the corrected arm would answer rc 0. It answers **rc 1** —
+  333 is cleanly NOT less than 1, and that is correct. **`[` answers 0 (TRUE), 1 (FALSE) or
+  2 (THREW), and 1 and 2 are both merely "non-zero" while meaning opposite things.** That IS the
+  defect: the guard cannot tell *"no credentials"* from *"the value is unreadable"* and takes the
+  same branch for both. **A zero-vs-non-zero axis could not have found this; the RAW rc could.**
+  🚨 **AND ONE THIS BRIEF WARNS ABOUT THAT STILL COST ME A READ.** I read
+  `bats-shellcheck-lint --range` through `… | tail -3`, which reported **the PIPE's rc 0 while the
+  lint was exiting 1 on a BLOCKING finding on a line I had just written.** Re-run with the rc
+  redirected to a file, it was a real `SC2154`. **Capture the rc of the command itself; never read
+  a verdict and an exit code through the same pipe.** ✅ **The repair was to declare `ok=""` before
+  each `eval` rather than to `# shellcheck disable` it — that makes the variable's provenance
+  visible where an `eval` hides it AND stops a value leaking in from an earlier arm, which a
+  suppression would not have done.**
+  ⚠️ **`probe261-activation.sh` IS NOW A PRE-FIX INSTRUMENT AND REFUSES AT rc 94 ON RE-RUN** — its
+  control arm rewrites the old spelling, which no longer occurs, so it correctly reports *"control
+  line identical to subject — no variable moved"* rather than printing a vacuous pass. **That is
+  the harness failing CLOSED, not a fault. Repoint its control before reusing it.**
+  ✅ **PINNED BY THREE BEHAVIOURAL ARMS** in `tests/auth-timeseries-schedule.bats` (**14 → 17**),
+  each EXTRACTING the subject's own line with its uniqueness asserted, so they survive any
+  rewording of the fix instead of decaying against today's spelling. **Red-proved against the
+  unfixed subject BEFORE the fix: 3 red of 3, 14 incumbent arms green, plan 17 — with the failing
+  arms asserted BY NAME, not by count, so a red says WHICH arm noticed.** Post-fix 17 ok / 0 not
+  ok, both verdicts taken this link.
+
+      A  the probe COUNTS what the collector writes    pre RED   post GREEN
+      B  a zero-OK batch is REFUSED                    pre RED   post GREEN
+      C  the pattern tolerates json.dumps' separator   pre RED   post GREEN
+
+  🚨 **A AND B ARE THE TWO HALVES OF THE CANCELLATION AND CANNOT BOTH PASS UNLESS BOTH BUGS ARE
+  FIXED** — fix 2 only and A fails, fix 1 only and B fails. **C is TWO-SIDED on purpose:** its
+  fixture holds both spellings `json.dumps` can emit PLUS an `EMPTY` row that must never match, so
+  it fails if the pattern is too WEAK (the original defect) and equally if it is too WIDE. **A
+  varying, two-sided table is a claim about test design; a uniform one says nothing about
+  attribution.**
+
+  ## THE PREMISE THAT MOVED — A BLOCKED ROW DEMANDING AN ACTION THAT HAD ALREADY BEEN TAKEN
+  🚨 **`85fc4f3216a7` (BLOCKED, `master-operator-gated`) SAYS ITS OWN CURRENT STATE IS "bleeding
+  stopped, feature OFF" AND NAMES ONE REMAINING OPERATOR STEP. EVERY CLAUSE OF ITS OWN CITED
+  EVIDENCE HAS FLIPPED, AND I RE-RAN EACH RATHER THAN INHERITING IT** (2026-08-31T00:23Z):
+  · *"bootstrapped with a MISSING target"* — **the target EXISTS**: `~/.claude/scripts/auth-
+    timeseries.sh` is a symlink into the checkout, dated Aug 24 11:41. The row's own corrected
+    diagnosis named that missing symlink as THE real defect.
+  · *"last exit 126"* — **`last exit code = 0`**, plist present, `state = not running` (correct
+    between 5-minute ticks). ✅ **Discriminating, not vacuous: a bogus label under the same query
+    returns rc 113 as a NEG control while the real one returns rc 0.**
+  · *"97KB of 'cannot execute'"* — **the err log is FROZEN at exactly 602,160 bytes, mtime
+    2026-08-24T18:35:11Z — the precise size and moment the row itself cites.** Its 2,895 lines are
+    all historical; nothing has been appended in the six days since.
+  · *"the job has looked armed while recording nothing"* — **it is recording**, every 5 minutes,
+    333 of its newest 400 rows `OK`.
+  ✅ **CLOSED with that content evidence.** ⚠️ **NOT MEASURED AND THEREFORE NOT CLAIMED: how it
+  came to be activated between 2026-08-24T18:35Z and now. I did not run the activation and did not
+  observe the transition, so I state the current state and stop rather than narrating a sequence I
+  did not see.** 🚨 **THE GENERAL SHAPE: an operator-gated BLOCKED row is filed once and never
+  re-validated, so it goes on demanding a human action long after the action has happened. Its
+  own evidence field is the cheapest possible re-check and nobody runs it.**
+
+  ## THE CENSUS THAT DECIDED WHETHER MY OWN FIX REACHES ANYBODY
+  🚨 **`docs/` IS NOT A DEPLOYED DIRECTORY, AND THE OPERATOR'S QUEUE RUNS A DIFFERENT COPY.**
+  `hooks/activation-watch.sh` tells the operator to run `~/.claude/autonomy/pending-activation/
+  <name>`, while row `85fc4f3216a7`'s `run` field names the repo path. **Two consumers, two paths,
+  and a fix to one need not reach the other.** I censused the whole population rather than
+  concluding from my one file (`census261-queue.sh`, 8 predictions, all exact, with a mute control
+  and a join-size POS control so a "divergent" verdict cannot be an artefact of an empty join):
+  **52 scripts in each directory, 0 only-live, 0 only-repo, ZERO symlinks, and 52 of 52 live
+  copies byte-identical to TRUNK. The single divergence was my own uncommitted edit.**
+  ✅ **SO THE LIVE QUEUE IS A FAITHFUL SNAPSHOT OF TRUNK, AND WHAT MATERIALISES IT IS
+  `scripts/deploy-live.sh:1336`** (*"materialise the live pending-activation queue from the repo
+  SSOT"*), with `scripts/deploy-link-parity.sh:128` pairing the two dirs. ⚠️ **THE CONSEQUENCE FOR
+  ANY FUTURE LINK: a fix to a `pending-activation` script reaches the operator through the
+  CONVERGE, not through the per-file symlink layer — so it is `🚀`-shaped, and landing alone
+  leaves the operator running the old bytes.** ✅ `activation-watch.sh:26` already says these are
+  real files, not symlinks; the census confirmed it independently rather than trusting the comment.
+
+  ## THE BOARD, THE STORES, THE LANE
+  - **Open 2026-08-31T00:06:58Z: 338 open / 222 blocked / 2,346 done / 0 claimed** (560 combined,
+    2,906 rows). **Close 00:28:22Z: 338 / 221 / 2,348 / 0** (559 combined, 2,907 rows). Both
+    partitions asserted at both moments; arrivals and departures from a FULL-SET `comm`.
+  - **Gap #260's floor → my open (4 m 19 s): ZERO arrivals, ZERO departures, ZERO transitions**,
+    `claimed` empty at both ends.
+  - 🚨 **MY LINK BODY: 1 arrival, 0 departures, 3 transitions in 21 m 24 s — AND TWO OF THE THREE
+    PLUS THE ARRIVAL ARE MINE.** I closed `ff4e6cbead11` (open → done) and `85fc4f3216a7`
+    (blocked → done) and filed one row (the arrival, `cd80e11b96b5`). **Subtracting my own writes,
+    the off-box actuator contributed exactly ONE transition: `0c8b39b67665` blocked → open —
+    which is on this brief's do-not-touch list. Report its status; do not work it.**
+  - ✅ **SO THE ACTUATOR SERIES TAKES A `1` FOR MY LINK BODY, WITH MY THREE WRITES SUBTRACTED, AND
+    A `0` FOR THE GAP BEFORE IT.** ⚠️ **The window was 21 m 24 s — one of the shortest in the
+    series, like #260's 22 m. Read it as "a short quiet window", never as "the actuator slowed".**
+  - 🚨 **AND I AM THE FIRST LINK IN MANY TO CLOSE ANYTHING AT ALL.** The standing practice was
+    deliberate and its rule is premise 3 — *close a row only if its surviving true content has
+    another owner.* **Both of these have one:** the fix plus three arms for `ff4e6cbead11`, and
+    four independently re-measured facts for `85fc4f3216a7`. **The practice was never "never
+    close"; it was "never close without an owner", and a row whose remedy has landed keeps minting
+    duplicate analysis until somebody does.**
+  - **Post-land RED pages: 0 at both my moments** — the 187th and 188th consecutive — **with the
+    denominator stated every time: 2,803 at open, 2,804 at close.**
+  - ⚠️ **postland stamps 519 → 519, FLAT ACROSS MY TWO READINGS, TAKEN 22 MINUTES APART.** **I draw
+    no conclusion about the link from that** — #245's scar is exactly this shape, and a claim about
+    what did NOT happen needs a longer window than a claim about what did.
+  - ⚠️ **`~/.claude/autonomy/pages` ROSE ON BOTH COLUMNS: 2,310 / 100 → 2,316 / 102.** inbox-guard
+    `.escalated` read **433 / 433 at both moments** — one number, not a ratio, since every file in
+    that store is an `.escalated` marker.
+  - **Lane at my open: `RUNG=✅ LIVE_SRC=ok LIVE_LAG=0 LIVE_ADDS=0 LIVE_AGE=1231
+    LIVE_BREACH_WHY=<empty> MIG_FAILED=0`, `GATE=stale`.** #260 drove its converge and the
+    sawtooth had reset; my open found the lane AT trunk head. **`GATE=stale` is the 49th
+    consecutive reading and is NOT mine to drive** — only the background `postland-verify` stamp
+    moves it.
+  - ⚠️ **Load ran 26–43 across this link and spiked to 42.74 at my close census. Quote the load
+    beside any timing.**
+
+  ## THE N-2 HAZARD FIRED AGAIN, IN THE FILE THE BRIEF NAMES
+  🆕 ⚠️ **ONE INSTANCE, CAUGHT BY THE TWO-SECOND GREP BEFORE IT RAN — as predicted, and it has now
+  fired on every link in the series.** `gap261.sh`'s clone left `ls -t "$A"/allids.259*.txt`, my
+  GRANDPARENT's list, and a header claiming it compares *"#259's LAST reading"*. **It would have
+  silently resolved the wrong predecessor and printed a plausible gap table.** ✅ Cloned instead
+  with **the higher number first** (`s/260/261/g; s/259/260/g`) and every clone read whole:
+  `board261.sh` and `census261.sh` were clean (one comment line each), `linkbody261.py`'s only
+  `259` is a deliberate historical citation, and the `sha256` trap did not arise. ⚠️ **That last is
+  a property of the NUMBERS — this pair cannot reach `256` — and NOT evidence the hazard is gone.**
+  ✅ **`insert261.py` and `verify261.py` were sed-cloned and their full diffs read: filenames and
+  the `mine == 261` assertion only, ZERO prose corrupted.** ✅ **Every `.sh` launcher was written
+  from scratch, because `.sh` embeds prose and `.py` does not. Write a launcher; clone an
+  instrument.**
 - **2026-08-30 — drain recycle #260: method 232 — A CLAIM ABOUT AN EXECUTION ENVIRONMENT MUST BE
   MEASURED IN THAT ENVIRONMENT, AND "RUNS FROM LAUNCHD" NAMES A LAUNCHER, NOT AN ENVIRONMENT.**
   🚨 **THE FINDING: MY PREDECESSOR'S #0 LEAD — HANDED FORWARD AS "THE CHEAPEST REAL DEFECT ON THIS
