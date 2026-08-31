@@ -339,6 +339,45 @@ content_is_on_trunk() {  # $1 = absolute live file → 0 if its bytes are in $TR
   [ "$n" -gt 0 ]
 }
 
+# --- REFERENCE PROVENANCE: how current is the index every absence verdict is computed against? ----
+#
+# content_is_on_trunk() above fixed the CLASSIFICATION half of the stale-reference problem: it asks
+# the trunk ref before calling a landed file unversioned. This is the half that fix could not perform
+# for itself. Every absence verdict this script prints — STRAY's "in NO checkout", UNLINKED, the
+# tracked-set legs — is evidence about $REPO's index, and $REPO is the shared checkout, which lags
+# origin/main for exactly as long as a land goes unconverged. Nothing in the output has ever said so,
+# so a reader has no reason to ask, and the number that would answer them is one rev-list away.
+#
+# THE MEASUREMENT THAT FORCED THIS, 2026-08-31T22:31Z. The clause above landed on trunk at 22:0xZ and
+# the destination went on printing the pre-fix verdict for the whole of the next link, because THE
+# READER IS DELIVERED BY THE SAME LAGGING PATH AS THE FILES IT AUDITS: ~/.claude/scripts/deploy-link-
+# parity.sh is a per-file symlink into $REPO's WORKING TREE (the header 200 lines up already relies on
+# that fact to resolve BASH_SOURCE). $REPO was 8 commits behind origin/main; its copy of this file
+# carried ZERO occurrences of content_is_on_trunk against trunk's 3; and so a live run at the real
+# destination, with no seam set, reported skills/outbound-drafting/SKILL.md as STRAY and printed the
+# cp//git add remedy the clause above exists to suppress. Auditor and subject share one lag, and the
+# converger declines to close it while the commits above the live sha are un-stamped.
+#
+# So the reference states its own currency. This changes NO verdict, NO finding count and NO exit
+# status — it is a caveat, not a leg — and it prints ABOVE the findings, because a qualifier that
+# changes how a list is read is worthless underneath that list.
+#
+# Three answers, deliberately distinct, and 0 is not the fallback for any failure: a lag of 0 IS the
+# healthy state, so a failed read rendering as 0 would be indistinguishable from a converged
+# reference (memory: fail-safe-default-mimics-the-healthy-state). "n-a" is the hermetic/no-git case,
+# where the question does not exist; "unknown" is a git reference whose ref or count could not be
+# read, which is a fact worth printing rather than swallowing.
+reference_lag() {   # echoes: an integer · "unknown" · "n-a"
+  local n
+  _load_tracked
+  [ "$TRACKED_MODE" = "git" ] || { printf 'n-a\n'; return 0; }
+  git -C "$REPO" rev-parse --verify --quiet "$TRUNK_REF^{commit}" >/dev/null 2>&1 || { printf 'unknown\n'; return 0; }
+  # No pipeline: rev-list --count emits exactly one integer, and routing it through `head` would put
+  # a second rc in front of the only one that means anything.
+  n="$(git -C "$REPO" rev-list --count "HEAD..$TRUNK_REF" 2>/dev/null || true)"
+  case "$n" in ''|*[!0-9]*) printf 'unknown\n' ;; *) printf '%s\n' "$n" ;; esac
+}
+
 # A declared row is honoured ONLY while its witness still exists AND still mentions the artifact.
 # Prints "OK<TAB>why" when live, "STALE<TAB>witness" when the reason has dissolved, nothing when no
 # row matches. The three outcomes are distinct on purpose: a row whose producer was renamed away must
@@ -508,6 +547,22 @@ sweep_strays "agents"
 if [ "$findings" -eq 0 ] && $QUIET; then exit 0; fi
 
 printf 'link parity: %s → %s\n' "$REPO" "$CFG"
+
+# The reference's own currency, stated before the verdicts it qualifies. Silent at a lag of 0 unless
+# --all asks: an advisory that fired on every clean run would carry exactly as much information as
+# one that could not fire at all (memory: alarm-polarity-and-attention-budget), and the positive
+# reading still has to be reachable on demand or "no line" means both "current" and "never checked".
+REF_LAG="$(reference_lag)"
+case "$REF_LAG" in
+  n-a) : ;;   # no git reference — the question is not applicable, which is not the same as "0"
+  0)   if $ALL; then printf '  reference: %s is CURRENT with %s\n' "$REPO" "$TRUNK_REF"; fi ;;
+  unknown)
+       printf '  reference: %s — cannot read %s, so the lag is UNKNOWN and no absence verdict below is attributable\n' \
+         "$REPO" "$TRUNK_REF" ;;
+  *)   printf '  reference: %s is %s commit(s) BEHIND %s — every absence verdict below is computed against THIS index, and this script may itself be a stale copy of it\n' \
+         "$REPO" "$REF_LAG" "$TRUNK_REF" ;;
+esac
+
 [ -n "$LINES" ] && printf '%s' "$LINES"
 # live-extra is counted, never hidden: it is what makes "0 actionable" mean "we looked at the live
 # side too", rather than "we only ever walked the checkout". Its own count going UP unexplained is
