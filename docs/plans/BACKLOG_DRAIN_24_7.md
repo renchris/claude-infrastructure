@@ -86,6 +86,131 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-31 — drain recycle #267: method 239 — A MAP HAS A DESTINATION, AND THE DESTINATION IS A
+  POPULATION NOBODY COUNTED. #264 asked how much of the map an auditor covers, #265 how many
+  auditors a map has, #266 whether the map is the only map. All three ask about a MAP. Ask instead
+  about a DESTINATION: of everything that lives there, how much does any author claim?**
+  **MEASURED AGAINST THE LIVE DIRECTORY, which is independent of every map** (memory:
+  `positive-control-the-denominator`). `~/bin` holds **35** entries at 2026-08-31T20:20Z: 4 symlinks
+  into the checkout, 6 real files content-identical to their tracked source, 24 with no tracked
+  `bin/` source at all, and **ONE that is tracked, live, a real file, and DIFFERENT from the
+  checkout**.
+  🚨 **THE ONE IS `bin/dia-cdp-launch.sh`, AND THE DRIFT IS A DRAINED BUG STILL RUNNING.** The live
+  copy is revision `c8149d3c1` (2026-07-30); the checkout carries `3dcac1f32` — *"an early-exit pipe
+  consumer reads FALSE on a match, and 22 sites were doing it"*. **The whole diff is ONE hunk and it
+  is that fix.** Live `:123` is `launchctl list 2>/dev/null | grep -q 'com.chrisren.dia-cdp'` under
+  the file's own `set -euo pipefail` at `:37`, so on a MATCH the consumer exits early, `launchctl`
+  takes SIGPIPE, pipefail promotes it, and the `if` reads FALSE — **the health check reports the
+  LaunchAgent NOT loaded precisely when it IS.** A fail-OPEN, in the arm that exists to catch that
+  state. **A landed remedy that never reached the enforcing store** (memory:
+  `conclusion-must-reach-the-enforcing-store`).
+  🚨 **THE CAUSE IS NOT THE DRIFT — IT IS THAT NOTHING RECONCILES THE FILE, AND `install.sh`'s OWN
+  COMMENTS RECORD FOUR EARLIER INSTANCES OF EXACTLY THAT.** `dia-cdp-launch.sh` is in NEITHER the
+  `~/bin` copy list NOR any link site, so no author writes it and no sweep compares it, in either
+  direction. The four already named in that file are `claude-bump-models` and
+  `screenshot-to-clipboard.sh` (*"were in NEITHER this list nor sync.sh's"*, audit 02, 2026-07-25),
+  `reso-resume-one`, and `reso-keepalive` (2026-08-12, backlog `8550b6129d9c`), whose note reads
+  *"That made the landed fix unreachable and the buggy original what actually ran on every boot."*
+  **That is this case in the same words, one file over. Four hand-found instances, and nothing ever
+  generalised the check.**
+  ✅ **LINK, NOT COPY, AND THE FILE ITSELF ASKS FOR IT.** `bin/dia-cdp-launch.sh:46` says *"Sourced
+  through `$0`'s PHYSICAL location: ~/bin holds per-file SYMLINKS into the checkout"* and carries a
+  readlink preamble to resolve itself. **It was written expecting a symlink deploy and was getting a
+  stale copy.** `claude-accounts` two lines above is the precedent and its comment gives the reason
+  outright: symlinking makes drift structurally impossible.
+  🚨 **WHY NO AUDITOR CAUGHT IT, MEASURED RATHER THAN ASSUMED, AND THIS IS THE NEXT LINK'S CHEAPEST
+  LEAD:** `deploy-link-parity.sh` uses `$BINDIR` **exactly ONCE** — the single hardcoded
+  `bin/claude-accounts` — against **27** uses of `$CFG`; `deploy-parity-assert.sh` uses it only
+  inside loops over install.sh's own named list; and the STRAY leg's scope is the `$CFG` surfaces by
+  its own header (*"STRAY SCOPE is the EXECUTED surfaces only"*). **So `~/bin` is walked for one
+  member of thirty-five.** ⚠️ **NOT FIXED HERE, DELIBERATELY: widening a land-blocking detector is
+  not a drive-by, and `a6449cebc` is the standing reminder of what that costs.**
+  ✅ **THE ARM GENERALISES THE CHECK AND BOTH SIDES ARE DERIVED.** `tests/deploy-parity.bats`
+  **82 → 84**. The claim set comes out of install.sh's OWN `for tool in` headers with continuation
+  lines joined and the word list **TAKEN WHOLE** — never prefix-filtered, the fault that once dropped
+  `screenshot-to-clipboard.sh` from a census — with its `bin/<glob>` classes expanded by **BASH'S OWN
+  PATHNAME EXPANSION in the real tree** (memory: `make-the-actuator-the-arbiter`). **Held as literal
+  strings the claim set is 8; expanded it is 89**, and that is what lets `bin/cc-*` claim
+  `bin/cc-tlid`. **SCOPE IS STATED** — `bin/ scripts/ hooks/ launchd/ install.sh sync.sh`, the
+  surfaces that RUN a tool — because an unscoped population is a completeness claim nobody screened
+  (method 214). A doc that MENTIONS a path is not a consumer.
+  ✅ **RED-PROVED, PREDICTION FIRST, GATED AT rc 93.** Pre-fix: plan `1..84`, **83 ok, exactly ONE
+  `not ok`, BY NAME**, its output naming `dia-cdp-launch.sh`. Post-fix: **84 ok / 0 not ok**, plan
+  `1..84`, 0 skip. A fire test seeds a name install.sh cannot claim through the SAME comparison, with
+  the seed asserted to ADD exactly one name, so an empty `comm` cannot pass as a clean tree.
+  🚨 **FOUR INSTRUMENT FAULTS, ALL MINE, ALL SURFACED AS rc-93 REFUSALS, NONE IN A SUBJECT.**
+  · **The first screen demanded the write verb and the destination ON THE SAME LINE.** install.sh
+    deploys through `link_file`/`copy_file` helpers, so it read **2** deploy writes where ≥20 were
+    predicted — **under-counting every author that wraps its deploy and over-ranking every author
+    that inlines it.** The ranking was an artifact of AUTHORING STYLE, not of deploy volume.
+  · **Stripping `#` comment lines does not reach MARKDOWN.** `browsermcp-wrapper.sh` survived via
+    `skills/browsermcp/SKILL.md:33,:40`, a config block that skill deliberately keeps as history and
+    says so at its own line 8. **Fixed by scoping the population, never by filtering the name.**
+  · **Holding install.sh's `bin/<glob>` classes as literal strings** left `cc-tlid` reading unclaimed
+    though `bin/cc-*` deploys it. Membership must be decided by bash, not by eye.
+  · 🚨 **bats TILDE-EXPANDS A TEST TITLE.** An earlier spelling emitted `not ok 83
+    /Users/chrisren/bin CLAIM COVERAGE…` and no gate could anchor on the source string. **The fix is
+    the TITLE, not the prediction — a title that transforms between source and TAP is one nothing can
+    key on.** The same character then tripped `bats-shellcheck-lint` at **SC2088** in a diagnostic
+    string one line further down: **two independent detectors on one character.** ⚠️ **TWO INCUMBENT
+    titles in that suite still carry `~` (`:90`, `:278`) — named, not touched.**
+  ⚠️ **AND A FIFTH IN MY OWN COMMIT GATE, WHICH REFUSED A CORRECT COMMIT:** it counted `~/bin` on
+  every added line, convicting **5 COMMENT lines** where SC2088 fires only in command context — **a
+  gate whose span exceeded its subject** (memory: `assertion-span-must-equal-its-subject`). Narrowed
+  to non-comment added lines.
+  🚨 **TWO CANDIDATES REFUTED BEFORE THIS ONE SURVIVED, EACH IN ONE COMMAND, AND THE REFUTATIONS WERE
+  WORTH MORE THAN THE CONFIRMATION.** · *"No auditor covers `$HOME/bin`"* — **FALSE.** Both auditors
+  bind it as a directory variable; the defect is the SIZE of the covered set, a different and smaller
+  claim. · *"`bin/dia-cdp-launch.sh` is deployed by nothing and absent from the live layer"* (#266's
+  named residue) — **DISSOLVED.** It is **PRESENT at `~/bin`**, exactly where its consumers look.
+  **#266 said to establish the destination before calling it a gap; established, it was not a gap —
+  the real defect was one level in: present, but stale, and reconciled by nobody.**
+  📋 **THE BOARD.** Gap from #266's floor (20:09:42Z) to my open (20:14:11Z) = **4 m 29 s: ZERO
+  arrivals, ZERO departures, ZERO transitions.** Open 20:14:11Z **342 open / 212 blocked / 2,352 done
+  / 4 claimed** (554 combined, 2,910 rows); close 20:48:16Z **342 / 211 / 2,352 / 5** (553 combined,
+  2,910 rows). Both partitions asserted at both moments; arrivals and departures from a FULL-SET
+  `comm`. **Link body = 34 m 10 s, ZERO arrivals, ZERO departures, TWO transitions — and NEITHER is
+  mine: I closed no row and filed none, so nothing needed subtracting.** `0c8b39b67665` open →
+  claimed and `485f8f87eb5f` blocked → open, both `claude-infrastructure`, both on the
+  do-not-hand-touch list. **So the off-box actuator series takes a `2` for my link body and a `0` for
+  the gap.** ⚠️ **Per-status deltas read 0 / −1 / +1, which looks like two movements; the full-set
+  `comm` shows ZERO arrivals and TWO transitions. Take the `comm`.**
+  📋 **THE STORES, MOMENTS STATED, NO CLAIM ABOUT THE LINK.** postland RED `.page` = **0** at both my
+  moments — the **207th and 208th** consecutive — with the denominator moving **2,803 (20:13Z) →
+  2,807 (20:15Z) → 2,810 (20:48Z)**, i.e. **+7 across 35 minutes and it moved between two readings
+  two minutes apart.** postland **stamps 524 → 524, FLAT across my two readings taken 33 m 26 s
+  apart** — and that is a statement about two moments, not about the link. `pages` **2,358 → 2,345**
+  and inbox-guard `.escalated` **436 → 436 → 434**: **both DOWN**, where #266 read pages UP and
+  escalated flat at 436. ⚠️ **Neither column is monotone in either direction; inherit no rate.**
+  📋 **THE LANE.** Open 20:14Z on a CLEAN tree: `RUNG=✅ LIVE_SRC=ok LIVE_SHA=17034cdb2ab1 LIVE_LAG=0
+  LIVE_ADDS=0 LIVE_AGE=1833 GATE=stale` — **#266's converge held and the lane was level at my open.**
+  🚨 **My close reading measured NOTHING about the lane and says so:** at `trunk..HEAD=1` the ledger
+  takes the `📦` path, `compute_live_layer()` is called ONLY on the ✅-eligible path, so
+  `LIVE_SRC=skip` and `LIVE_LAG=0` is an **ABSENCE OF MEASUREMENT** (#254's lesson, and it applies to
+  `📦` exactly as it does to a dirty tree). **`GATE=stale` at every one of my readings — the 68th
+  through 70th consecutive. NOT mine to drive.**
+  ✅ **BEHAVIOURAL VERDICT, AND IT IS THE ONLY ONE THIS LAND GETS.** 🚨 **The selector answered
+  `FULL`** — its fail-closed *"cannot decide"* token, not a list — **so `ship-land` runs NO smoke at
+  all and leans on the verifier** (#262; `ship-land.sh:260` pins `GATE_EFFECTIVE_FULL=0`, so it does
+  not amplify either). **The budget was therefore irrelevant and the foreground run was everything.**
+  Set chosen deliberately rather than drawn: every suite that EXECUTES `install.sh`, plus the suite I
+  edited — **13 suites, 456 ok, 0 not ok, 1 skip, 13 plans, terminator ASSERTED**, load 7 → 14.
+  ⚠️ **My first runner refused at rc 93 on `MISSING SUITE FULL` — the terminator catching the
+  selector's token being treated as a filename, which is the check working.**
+  ✅ **LINTS:** shellcheck `install.sh` rc 0 · `bash -n` rc 0 · `bats --count` **84** ·
+  bats-assert-liveness rc 0 · pipefail-sigpipe-lint bare rc 0 · **census (path, TEXT) 126 → 126 with
+  the PRE arm extracted from `origin/main` via `git archive | tar -x`, LOST=0 NEW=0 — NOT a
+  widening** · `deploy-parity-assert --selftest` rc 0 · bats-shellcheck-lint clean, 1 suite, 0
+  blocking · test-walltime-lint clean over `tests`, **557** suites. ⚠️ **alarm-polarity-lint DECLARED
+  NOT-RUN:** neither changed file is an alarm emitter and that lint's POS control is a known mute
+  (`e07dc5e09f83`, OPEN). **The land facts are in `git log --oneline origin/main`, deliberately not
+  restated here.**
+  ⚠️ **ZERO ROWS CLOSED, ZERO FILED, ZERO REOPENED.** The residue is a MEASUREMENT, not a row: the
+  auditors' `~/bin` scope (1 of 35 walked) is named above with its numbers so the next link can take
+  it without re-deriving anything. Instruments left on disk, all with rc-93 prediction gates:
+  `probe267-authors.sh` (whole-tree second-author census, refused first), `probe267-dest.sh`,
+  `probe267-walk.sh`, `probe267-drift.sh`, `probe267-reach.sh`, `probe267-arm.sh` (refused twice),
+  `redproof267.sh` (one suite at two moments, failing arms asserted BY NAME).
 - **2026-08-31 — drain recycle #266: method 238 — A MAP OF RECORD CAN HAVE A SECOND AUTHOR, AND
   EVERY AUDITOR DERIVED FROM THE MAP IS BLIND TO IT. WHEN YOU HAVE PINNED EVERY AUDITOR, ASK
   WHETHER THE MAP IS THE ONLY MAP.** #264 scored the DETECTOR (`scripts/deploy-link-parity.sh`)
