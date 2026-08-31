@@ -152,3 +152,112 @@ print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
+
+# ---- S4 · M4′ `burst_start_by` — the start-time constraint --------------------------------------
+#
+# WHY A START TIME AND NOT A CAPACITY VERDICT. M4 `wk_reach_pp` — "can this account still reach
+# 100%?" — is DELETED (USAGE_TELEMETRY_100P §5.5). It read REACHABLE on 99.37% of the series and on
+# 100% of the 74 samples inside the 5 wall episodes it was written to catch, because reach_pp and
+# need are both monotone in (weekly_pct, hours-remaining): it was an algebraic restatement of what
+# it supplemented. RP-21 is the case that records the deletion where an implementer reads it — on
+# next3's live shape M4 read `16.9 pp reach vs 8 needed → REACHABLE, 2.1× margin`, M4′ reads LATE,
+# and next3 in fact stranded.
+#
+# ALL THREE CONSTANTS COME FROM n = 8 BURST WINDOWS and the metric ships ON PROBATION. The
+# threshold is sized on the BURST denominator (5 of 8 walled), never the all-windows one (5/252),
+# because the thing being planned IS a burst. P_WALL is a lower bound: a wall shorter than the
+# ~13 min sweep interval is invisible to the detector.
+
+@test "RP-21: burst_start_by reads LATE on next3's live shape — the verdict M4 got backwards" {
+  # The measured live row at 2026-08-25T09:47:41Z, K = 0.192. 8 weekly pp of deficit costs 41.67
+  # session pp, which the OPEN window can supply (87 pp free) in 1.82 h — but one window carries
+  # one expected freeze of P_WALL × MEAN_WALL_H = 1.033 h, so the endgame needs 2.86 h and only
+  # 2.21 h remain. The start time is 0.65 h in the PAST.
+  run python3 -c "$LOAD"'
+r = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+     "session_pct": 13, "session_reset_h": 3.37}
+sb = ca.burst_start_by(r, 0.192)
+assert sb is not None, sb
+assert -1.0 < sb["h"] < 0.0, sb                  # measured -0.645
+assert sb["verdict"] == "LATE", sb
+assert sb["windows"] == 1, sb
+assert abs(sb["t_needed"] - 2.855) < 0.01, sb
+# THE FLOOR IS WHAT MAKES `LATE` ACTIONABLE. Freezing 1.03 h of the 2.21 h left leaves 1.18 h of
+# usable burn = K × BURST_SPPH × 1.18 = 5.17 weekly pp of the 8 needed, so 2.83 pp cannot be
+# saved even by a perfect burst starting this instant. "You are late" alone does not say that.
+assert abs(sb["unrecoverable_pp"] - 2.83) < 0.05, sb
+assert "LATE" in ca.fmt_start_by(sb) and "unrecoverable" in ca.fmt_start_by(sb), ca.fmt_start_by(sb)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-22 CONTROL: an account with days of runway reads SLACK — the degeneracy that killed M4" {
+  # Without this arm RP-21 is satisfied by a function that returns LATE always, which is exactly
+  # the always-one-answer degeneracy M4 died of, with the sign flipped. next2 live: 83 pp of
+  # deficit = 432.3 session pp = 6 windows walked across the 5h grid, 21.41 h of burn plus 6.20 h
+  # of expected freeze = 27.61 h needed against 97.2 h left.
+  run python3 -c "$LOAD"'
+r = {"acct": "next2", "weekly_pct": 17, "weekly_reset_h": 97.2,
+     "session_pct": 8, "session_reset_h": 0.54}
+sb = ca.burst_start_by(r, 0.192)
+assert sb["verdict"] == "SLACK", sb
+assert sb["h"] > 60.0, sb                        # measured +69.59
+assert sb["windows"] == 6, sb                    # the 5h grid is walked, not divided out
+assert abs(sb["t_needed"] - 27.61) < 0.05, sb
+assert sb["unrecoverable_pp"] == 0.0, sb         # nothing is lost yet, so the floor is silent
+assert ca.fmt_start_by(sb) == "start by T−28h (70h slack)", ca.fmt_start_by(sb)
+# ...and the third verdict is REACHED, not dead code: the same shape inside the 12 h band.
+soon = ca.burst_start_by({"acct": "next2", "weekly_pct": 17, "weekly_reset_h": 35.0,
+                          "session_pct": 8, "session_reset_h": 0.54}, 0.192)
+assert soon["verdict"] == "START SOON", soon
+assert 0.0 < soon["h"] <= 12.0, soon
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-23 CONTROL: the wall-freeze term is LIVE, not decorative" {
+  # THE MUTANT A PURELY ARITHMETIC IMPLEMENTATION SURVIVES. Everything else in RP-21/RP-22 is
+  # satisfied by burn-time alone; only this pins that the freeze participates. Run the same
+  # fixture with P_WALL at its measured 0.625 and at 0, and the two start times must differ by
+  # exactly one window''s expected freeze — 1 × 0.625 × 1.653 = 1.033 h. The executed value, not
+  # a guess: the freeze is 47% of next3''s entire remaining window and it is why the row is LATE.
+  run python3 -c "$LOAD"'
+r = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+     "session_pct": 13, "session_reset_h": 3.37}
+live = ca.burst_start_by(r, 0.192)["h"]
+ca.P_WALL = 0.0
+none_ = ca.burst_start_by(r, 0.192)["h"]
+assert abs((none_ - live) - 1.033) < 0.01, (live, none_)
+assert none_ > 0.0 and live < 0.0, (live, none_)   # and it is the term that flips the verdict
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-24 CONTROL: every abstain arm is null, and NO WINDOW OPEN is not zero" {
+  # L2. The second arm is the one that must not collapse: a null session stamp means no 5h window
+  # is OPEN, which is a different state from "the open window is empty". Reading it as
+  # session_pct = 0 hands the plan a free 100 pp of capacity that does not exist, and the whole
+  # metric is a claim about capacity against a clock.
+  run python3 -c "$LOAD"'
+base = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+        "session_pct": 13, "session_reset_h": 3.37}
+def w(**kw):
+    d = dict(base); d.update(kw); return d
+assert ca.burst_start_by(w(), None) is None, "K abstained (S1c) and this answered anyway"
+assert ca.burst_start_by(w(session_pct=None), 0.192) is None, "no window open read as zero"
+assert ca.burst_start_by(w(session_reset_h=None), 0.192) is None, "no window open read as zero"
+assert ca.burst_start_by(w(weekly_pct=100), 0.192) is None, "no deficit, nothing to start"
+assert ca.burst_start_by(w(weekly_reset_h=0), 0.192) is None
+assert ca.burst_start_by(w(weekly_reset_h=169.0), 0.192) is None
+assert ca.burst_start_by(w(weekly_pct=None), 0.192) is None
+assert ca.fmt_start_by(None) is None
+# ...and a session window with NOTHING left is a value, not an abstain: it just waits out the roll.
+full = ca.burst_start_by(w(session_pct=100), 0.192)
+assert full is not None and full["windows"] >= 1, full
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}

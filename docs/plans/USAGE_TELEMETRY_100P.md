@@ -1610,7 +1610,8 @@ windows/week, carrying the fleet wall rate 1.72% → 2.20%.
 
 ### §5.7 Implementation record — what actually landed, and where it deviated from the spec
 
-Wave 1 = **S1 + S2 + S3 only**. S4–S7 are unbuilt and unchanged; S5 still gates S6.
+Wave 1 = **S1 + S2 + S3 only**. Wave 2 = **S4 only**. S5–S7 are unbuilt and unchanged; S5 still
+gates S6.
 
 #### S1 · data fixes — LANDED
 
@@ -1770,13 +1771,85 @@ nowcaster precisely because it converges as the horizon closes, which is what ma
 forecaster. **S5 (`--strand-score`) is still the prerequisite for S6**, and nothing here
 shortens that.
 
+#### S4 · M4′ `burst_start_by` — LANDED (wave 2)
+
+`bin/claude-accounts`: `burst_start_by(r, k)` + `fmt_start_by(sb)` beside `fmt_burst`, constants
+`BURST_SPPH = 22.87` / `P_WALL = 0.625` / `MEAN_WALL_H = 1.653` / `BURST_START_SOON_H = 12.0`;
+`WEEK_H` and `MIN_ELAPSED_FRAC` moved a block earlier so the constant is defined above its first
+reader. `exchange_rate` fitted and stamped in `apply_burn` (`exch_k` / `exch_k_src` /
+`exch_k_sds`); `pace_head(k, src)` beside `PACE_HEAD`; the clause and the caption rendered in
+`pace_line`. Suite: `tests/claude-accounts-burst.bats` RP-21..RP-24 and
+`tests/claude-accounts-core.bats` RP-29 — **5/5 proven RED** against the S3 binary
+(`git stash push -- bin/claude-accounts`, run, pop), 5/5 green after.
+
+**The arithmetic reproduces §5.2 S4's live table exactly**, which is the check that matters: the
+table was computed by hand from the spec and the code was written from the spec, so agreement to
+the published digit is a real cross-check rather than a restatement.
+
+| acct | windows | t_needed | `burst_start_by_h` | verdict | floor |
+|---|---|---|---|---|---|
+| next3 | 1 | 2.86 | **−0.65** | LATE | 2.83 pp |
+| next2 | 6 | 27.61 | +69.59 | SLACK | — |
+| next4 | 6 | 28.29 | +90.91 | SLACK | — |
+
+RP-23's freeze delta executes at **1.0331 h**, the value §5.3 demands to ±0.01.
+
+**Deviation 1 — the return is a dict, for the reason S2's was.** §5.3 RP-21 sketches
+`burst_start_by(row, K)` compared numerically against `-1.0 < x < 0.0` *and* carrying a verdict
+string. A float cannot hold both, and the LATE floor is a third fact that only exists on one of
+the three verdicts. Shipped `{"h", "t_needed", "windows", "verdict", "unrecoverable_pp"}`; RP-21
+asserts on `sb["h"]`, and `fmt_start_by` is the single renderer so the three verdicts cannot be
+spelled two ways.
+
+**Deviation 2 — the K caption enters here, and its abstain is SILENT.** §5.7's S3 Deviation 1
+predicted exactly this: `exchange_rate` shipped, tested and live in wave 1 and then had **no
+consumer for two waves**, because M3a is pure weekly-space arithmetic. S4 is its first consumer,
+so `pace_head` now renders `(K=0.197 live · nowcast at the last 48h of pace)`. What is **refused**
+is §5.4's other half — its abstain text says a null K prints `no strand figures this sweep`, which
+would suppress the block's entire subject over a coefficient that subject does not consume. A null
+K drops the caption and the start-by clause and leaves every strand row intact. RP-29's third arm
+pins that.
+
+**Deviation 3 — `pace_line` READS the K stamp, where S3 Deviation 3 established that it
+RECOMPUTES the strand.** The asymmetry is the point, not an inconsistency. `wk_strand_pp` is
+recomputed because a renderer that reads a stamp renders *nothing* when `apply_burn` has not run —
+a silent failure on the block's own subject. K cannot be recomputed there at all: it is a fit over
+the whole series and `pace_line` holds rows, not samples, so reading it there would mean a second
+3.6 MB parse per sweep to produce a number `apply_burn` already has. The failure mode is also
+bounded in a way the strand's is not — a missing K costs one clause, not the block.
+
+**Deviation 4 — the start-by clause rides the strand gate**, exactly as the burst clause does,
+which is what §5.4's own mock shows (its `next` row is `no strand — 1.62× burn, wall trajectory`
+with no start time). This is a judgment and not a formatting choice: a start time is advice about
+closing a deficit, and an account on a wall trajectory is already spending faster than its window
+can carry, so "start earlier" is the opposite of its correct action.
+
+**Deviation 5 — RP-29 is a NEW core case, not an extension of the RP-25/26 pace-line case.** That
+fixture's rows deliberately carry no `exch_k`, so every start-by assertion added to it would have
+been vacuous; making it non-vacuous would have meant rewriting the fixture the S3 wave had just
+updated in place. The new case pins the whole path in one place — fit → stamp → read → render —
+which is the wiring that went missing for two waves.
+
+**Ships on probation, and the probation is real.** All three constants come from n = 8 burst
+windows. §5.5's monitoring plan (re-run the burst-stratified wall rate on every completed weekly
+window) is the sensor; nothing here waits for the planner to be wrong in the field.
+
+**Not verified in this session: the live surface.** The land ran in a Linux container with no
+keychain, so `claude-accounts --readout` cannot execute (`/usr/bin/security` is macOS-only) and the
+§5.4 acceptance command has not been run against the real fleet. Five pre-existing cases in the
+keychain/login CLI paths (`--relogin-info`, three `--login-status`, one `--json` e2e) are RED in
+that container **on trunk, before this diff** for the same reason. Everything module-level is
+green: 111 → 116 cases across the five claude-accounts suites, plus burn-ratio 8/8, providers
+15/15, fresh-lock-bound 5/5, parallel-collect 6/6.
+
 #### Acceptance status against §5.4
 
 | command | status |
 |---|---|
-| the bats suites (roll-key · util-tail · strand · burst · core) | **111/111 green**, every case shown RED at the commit before its fix |
-| `claude-accounts --readout` renders the drain block for all four accounts | **yes** — see above |
-| `claude-accounts --readout \| grep -c 'strand'` → 3 or 4 | **4** |
+| the bats suites (roll-key · util-tail · strand · burst · core) | **116/116 green** at wave 2 (111 at wave 1), every case shown RED at the commit before its fix |
+| `claude-accounts --readout` renders the drain block for all four accounts | **yes** at wave 1 — **not re-run at wave 2**, which landed from a container with no keychain (see S4's last note) |
+| `claude-accounts --readout \| grep -c 'strand'` → 3 or 4 | **4** at wave 1; unchanged by S4, which only appends a clause to rows that already render |
+| the footer answers the third question — `start by T−Nh` / `LATE` | **yes** at wave 2 — pinned by RP-29 at module level, not yet seen on the live surface |
 | `claude-accounts --strand-score` | **not in this wave** — that flag is S5 |
 
 ⚠️ `bash tests/run.sh …`, named in §5.4, **does not exist in this repo**. The suites are run with

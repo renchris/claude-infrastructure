@@ -1864,6 +1864,74 @@ print("OK")'
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
+@test "router M7 + S4: apply_burn fits K, and the drain block renders the start time it buys" {
+  # RP-29. THE WIRING IS THE CASE. `exchange_rate` shipped, tested and live in the S1 wave and
+  # then had NO CONSUMER for two waves — a fitted coefficient nothing read. M4′ is its first, so
+  # this pins the whole path in one place: apply_burn fits K off the series it already holds,
+  # stamps it on every row (K is a property of the METER, not of an account), and pace_line reads
+  # the stamp rather than re-parsing 3.6 MB of series inside a renderer.
+  #
+  # WHY K IS READ OFF THE STAMP WHILE THE STRAND IS RECOMPUTED. wk_strand_pp is recomputed in the
+  # renderer because a renderer that reads a stamp renders NOTHING when apply_burn has not run —
+  # a silent failure on the block\'s own subject. K cannot be recomputed there at all: pace_line
+  # holds rows, not samples. So a missing K drops the start-by clause and the caption and leaves
+  # every other clause on every row intact, which is the arm the second half of this case pins.
+  run python3 -c "$LOAD"'
+import json, os
+from datetime import datetime, timezone, timedelta
+p = os.path.join(os.environ["BATS_TEST_TMPDIR"], "util-k.jsonl")
+now = datetime.now(timezone.utc)
+wra = (now + timedelta(hours=100)).isoformat()
+sra = (now + timedelta(hours=3)).isoformat()
+# 48 h at 6 min, session sawtooth 0..99 (a 5h window rolls ~5x), weekly rising at EXACTLY
+# 0.192x the session movement. The ratio-of-sums fit therefore lands on K_FROZEN from LIVE data
+# and Sds (~476) clears K_MIN_SDS, so this exercises the fitted path and not the frozen fallback.
+# The 1.92 %/h weekly rate that implies is not a choice: K ties the two meters, so a series dense
+# enough to FIT K is necessarily one that burns the weekly bucket fast. Hence a 30 h horizon —
+# far enough out to leave a strand, near enough that the start time is inside the 12 h band.
+with open(p, "w") as f:
+    for i in range(480, -1, -1):
+        j = 480 - i
+        f.write(json.dumps({"ts": (now - timedelta(minutes=i * 6)).isoformat(),
+                            "acct": "next3", "session_pct": j % 100,
+                            "weekly_pct": 3 + j * 0.192,
+                            "session_reset_at": sra, "weekly_reset_at": wra}) + "\n")
+rows = [row(acct="next3", weekly_pct=20, weekly_reset_h=30.0, session_pct=13,
+            session_reset_h=3.37)]
+samples, span = ca._util_tail(path=p, hours=48.0)
+ca.apply_burn(rows, cfg, samples=samples)
+r = rows[0]
+assert "exch_k" in r, r                              # the fit is STAMPED, not recomputed downstream
+assert 0.175 <= r["exch_k"] <= 0.210, r              # inside K_SANE, or exchange_rate would abstain
+assert r["exch_k_src"] == "live", r                  # the FITTED path, not the frozen fallback
+assert r["exch_k_sds"] > ca.K_MIN_SDS, r
+line = ca.pace_line(rows)
+assert line.startswith("weekly drain — pp that DIE at reset"), line   # the caption INSERTS, never replaces
+assert "nowcast at the last 48h of pace" in line, line
+assert "K=0.19" in line and r["exch_k_src"] in line, line
+# The row is INSIDE the 12 h band here — 25.3 h of endgame (5 windows across the 5h grid plus
+# 5.2 h of expected freeze) against 30 h left — so this also pins that the middle verdict reaches
+# the surface, not just SLACK and LATE.
+assert "T−" in line and "slack)" in line, line
+assert "⚠ START SOON — by T−25h (4.7h slack)" in line, line
+# THE START-BY CLAUSE RIDES THE STRAND GATE, and that is a judgment: a start time is advice about
+# closing a deficit, so it is meaningless on a row with no strand. An account on a wall trajectory
+# is already spending faster than its window can carry — "start earlier" is the opposite action.
+wall = row(acct="next", weekly_pct=52, weekly_reset_h=114.21, burn_wk_ewma_ph=1.725,
+           exch_k=0.192, exch_k_src="live")
+wl = ca.pace_line([wall])
+assert "no strand" in wl and "T−" not in wl, wl
+# ...and a K that ABSTAINED (outside K_SANE) drops the clause and the caption, never the block.
+bare = row(acct="next4", weekly_pct=14, weekly_reset_h=119.2, burn_wk_ewma_ph=0.186)
+bl = ca.pace_line([bare])
+assert "strand ~" in bl, bl
+assert "K=" not in bl and "T−" not in bl, bl
+assert bl.startswith(ca.PACE_HEAD), bl
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
 @test "--assign CLI: appends one ledger row and never sweeps; unknown account exits 64" {
   local ledger="$BATS_TEST_TMPDIR/assign-cli.jsonl"
   # the fixture endpoint is unreachable — if --assign tried a sweep this would hang/fail loudly
