@@ -34,10 +34,12 @@ mkfile() { # $1=name $2=body  [$3=set line]
 }
 census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" --census 2>/dev/null; }
 
-@test "1: the lint's own --selftest passes (32/32, both directions)" {
+@test "1: the lint's own --selftest passes (37/37, both directions)" {
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s' "$output" | grep '32/32' >/dev/null \
+  # 32 → 37 on 2026-08-31 (backlog ca97c678b18b): clause 4c, the FUNCTION-FINAL pipeline. Two RED
+  # arms (r16 multi-line, r17 one-line) and three GREEN guards against widening (g32/g33/g34).
+  printf '%s' "$output" | grep '37/37' >/dev/null \
     || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 
