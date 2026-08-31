@@ -622,3 +622,47 @@ EOF
     [[ "$output" == *"cc-offload $v"* ]] || false
   done
 }
+
+# ── the delivered brief carries the RETURN CONTRACT (backlog 0c8b39b67665) ──────────────────────
+# CLOUD_OBSERVABILITY.md §4.1 makes `no ref` informative only by CONTRACT: the brief must require a
+# push as the session's FIRST act. This lane — the one the live dispatcher fires — delivered
+# `$(cat "$pf")` verbatim, i.e. cc-dispatch's composed brief, which is written for BOTH venues and
+# therefore says `land ONLY via /ship, never bare push`. The venue whose only channel home is a push
+# was the one never told to push at all, let alone to push first.
+api_fire() { # <task text> → run `up --via api` with a create stub that always succeeds
+  echo "$1" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git 2>/dev/null
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+import sys
+print(" ".join(sys.argv[1:]), file=sys.stderr)
+print("session_apitest")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  # ITERM_SESSION_ID is set for the same reason every other `up` case above sets it: `cmd_up`
+  # defaults the wake target with a bare `${ITERM_SESSION_ID##*:}` under this file's own `set -u`
+  # (bin/cc-offload:419), so an unset variable is FATAL before the create. That is a real defect on
+  # the desk-less/launchd path and it is NOT this item's — it has its own fix and its own case.
+  # Setting it here keeps this case measuring the brief rather than that crash.
+  CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" ITERM_SESSION_ID="w0t0p9:PANE-UUID" \
+    run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+}
+
+@test "up --via api delivers the brief WITH the boot-beacon return contract" {
+  api_fire "TASK — the composed brief, which says nothing about pushing."
+  [ "$status" -eq 0 ]
+  # The whole cc-notify argv is recorded, brief included, so this reads the DELIVERED text rather
+  # than the source of the function that builds it.
+  grep -q 'BOOT BEACON' "$CALLS" || { echo "the delivered brief carries no boot beacon"; false; }
+  grep -q -- '--allow-empty' "$CALLS" || false
+  # It must name THE DECLARED BRANCH — the same one the declaration watches. A beacon pushed
+  # anywhere else is invisible, which is the pre-B1 defect one lane over.
+  local br
+  br="$(sed -n 's/.*cc-cloud declare .*--branch \([^ ]*\).*/\1/p' "$CALLS" | head -1)"
+  [ -n "$br" ] || false
+  grep -q "git checkout -B $br" "$CALLS" || { echo "the contract names a branch other than the declared $br"; false; }
+  # RED CONTROL for the obvious way to get this wrong: a trailer that REPLACED the brief would pass
+  # every assertion above while firing a session with no task.
+  grep -q 'the composed brief, which says nothing about pushing' "$CALLS" || false
+}

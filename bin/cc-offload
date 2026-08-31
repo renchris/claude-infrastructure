@@ -86,6 +86,22 @@ REPO="${CC_OFFLOAD_REPO:-$ROOT}"
 # scripts/lib/cloud-create.sh rather than a second opinion about which binary can fire.
 CLOUD_CLAUDE="${CC_CLOUD_CREATE_BIN:-$HOME/.claude-220/node_modules/.bin/claude}"
 
+# ── the return contract, sourced rather than re-typed (backlog 0c8b39b67665) ─────────────────────
+# `cc_cloud_return_contract` is the ONE producer of the off-box return contract — the boot beacon
+# §4.1 makes absence meaningful with, and the push that is a VM's only channel home. The CLI lane
+# reaches it by sourcing this same library from handoff-fire.sh; this lane delivers the brief
+# itself, so it needs the text here. Sourcing is side-effect-free (the library defines functions and
+# `:=` defaults only) and CC_CLOUD_CREATE_LIB guards a double-source.
+#
+# UNRESOLVABLE IS NOT FATAL, and that asymmetry is deliberate: on the CLI lane the library IS the
+# create, so its absence refuses the fire; here it is the brief's trailer, and refusing a fire that
+# would otherwise work — over text — would cost an account's quota to protect an observability
+# property. The fire proceeds and SAYS the contract is missing, which is the loud-degrade this file
+# uses everywhere else (see the UNMANAGED line).
+CLOUD_LIB="${CC_OFFLOAD_CREATE_LIB:-$ROOT/scripts/lib/cloud-create.sh}"
+# shellcheck source=scripts/lib/cloud-create.sh
+[ -f "$CLOUD_LIB" ] && . "$CLOUD_LIB"
+
 # ── colour: explicit truecolor only. NEVER SGR-2 — it collapses to invisible on dark themes, and
 #    this output is data the operator is hunting through (claude-accounts:1424, cc-where:48). ─────
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${CC_OFFLOAD_NOCOLOR:-0}" = 0 ]; then
@@ -565,11 +581,34 @@ cmd_up_api() {
         || note "cc-offload: custody could not be opened for $sid — the close-integrity arm is NOT armed for it."
     fi
 
-    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$(cat "$pf")" >/dev/null 2>&1
+    # THE DELIVERED BRIEF = the composed brief + THE RETURN CONTRACT (backlog 0c8b39b67665).
+    # This lane used to deliver `$(cat "$pf")` verbatim, and the composed brief says nothing about
+    # pushing: cc-dispatch writes one text for both venues, and on the LOCAL venue a bare push is
+    # forbidden (`land ONLY via /ship`). So the venue whose only channel home IS a push was the one
+    # never told to make one — and, worse for the observability this whole tool exists for, never
+    # told to make it FIRST. §4.1's contract is what lets `no ref` mean "never booted"; without a
+    # beacon a worker 20 minutes into real work reads NOT-STARTED and cc-backlog's cloud_map hands
+    # its item to a second worker.
+    local brief; brief="$(cat "$pf")"
+    if command -v cc_cloud_return_contract >/dev/null 2>&1; then
+      brief="$brief
+
+$(cc_cloud_return_contract "$br")"
+    else
+      note "cc-offload: $CLOUD_LIB is unreachable — $sid is briefed WITHOUT the return contract."
+      note "  It will not push a boot beacon, so it reads NOT-STARTED until it lands something."
+    fi
+    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$brief" >/dev/null 2>&1
     local drc=$?
     if [ "$drc" != 0 ]; then
+      # The retry hint points at the DELIVERED text, not at the task file: `$pf` is the brief
+      # WITHOUT the return contract, so a hand-retry of it would re-create the very defect the
+      # block above closes — a cloud worker that was never told to push, let alone to push first.
+      local dfile=""
+      dfile="$(mktemp "${TMPDIR:-/tmp}/cc-offload-brief-XXXXXX" 2>/dev/null)" \
+        && printf '%s\n' "$brief" >"$dfile" || dfile=""
       note "cc-offload: $sid created+declared but the brief did NOT queue (cc-notify exit $drc)."
-      note "  Retry just the delivery: cc-notify --cloud $sid \"\$(cat $pf)\""
+      note "  Retry just the delivery: cc-notify --cloud $sid \"\$(cat ${dfile:-$pf})\""
       rc=11; break
     fi
     fired=$((fired+1))
