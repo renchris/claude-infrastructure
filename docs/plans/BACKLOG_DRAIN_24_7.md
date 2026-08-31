@@ -86,6 +86,130 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-31 — drain recycle #270: method 242 — A FIX TO AN AUDITOR IS DELIVERED BY THE SAME PATH
+  AS THE THING IT AUDITS, SO A LANDED FIX CAN LEAVE THE LIVE VERDICT EXACTLY AS IT WAS.** #269 asked
+  which reference a verdict was computed against. This asks the question one layer under it: **which
+  reference was the READER itself computed from, and can the fixed reader ever run where the wrong
+  verdict is printed?**
+  · **THE OPEN, 2026-08-31T22:29:08Z, tree clean, `trunk..HEAD=0`:** `RUNG=🚀 LIVE_SRC=behind
+  LIVE_SHA=eb0e8d5673b49e3b264cf63aec85ac821b2c45dc LIVE_LAG=8 LIVE_ADDS=2 LIVE_DIVERGED=0
+  LIVE_AGE=5415 LIVE_BREACH_WHY=adds MIG_FAILED=0 GATE=stale`. ⚠️ **THE LIVE SHA MOVED between
+  #269's floor and my open** — #269 read `17034cdb2ab1` at 22:20Z and I read `eb0e8d5673b4` at
+  22:29Z, so the lane is NOT frozen; it advanced unbidden, exactly as premise 1 says it can.
+  · 🚨 **THE FINDING, AND IT AROSE FROM THE FIRST TOOL CALL AFTER READING THE BRIEF.** #269 landed a
+  clause teaching the stray leg to ask the trunk ref before calling a landed file unversioned, and
+  verified it through the `CC_LINKPARITY_REPO` seam. I ran the detector at its REAL destination, no
+  seam set, from the shared checkout: **`3 actionable`, rc 1, and `skills/outbound-drafting/SKILL.md`
+  STILL READ `STRAY … live and executable, in NO checkout — unversioned`**, with the
+  `cp … && git -C <shared checkout> add …` remedy printed underneath it — the exact remedy #269's
+  clause exists to suppress, pointing at the one checkout this repo's own `.claude/CLAUDE.md` opens
+  by forbidding anyone to commit in.
+  · 🚨 **THE CAUSE, MEASURED AT 22:31:46Z, EIGHT PREDICTIONS WRITTEN FIRST AND ALL EIGHT EXACT
+  (`probe270-reader.sh`, rc 0).** `~/.claude/scripts/deploy-link-parity.sh` is a **per-file symlink
+  into the shared checkout's WORKING TREE** — the script's own header already leans on that fact to
+  resolve `BASH_SOURCE`. So **the reader is delivered by the same lagging path as the files it
+  audits.** The shared checkout was **8 commits behind `origin/main`**; #269's fix commit
+  `c2b144674` is INSIDE those 8 (`merge-base --is-ancestor` says ancestor-of-trunk YES,
+  ancestor-of-live NO); and the copy that executed carried **ZERO** occurrences of
+  `content_is_on_trunk` against trunk's **3** (blob `bf699443487c` vs `05b0db04d496`).
+  **The file being convicted and the fix that would exonerate it are stranded by ONE stall, in ONE
+  directory. #269 could only ever see one of the two.**
+  · ✅ **AND THE CONVERGER CANNOT CLOSE IT, WHICH I RAN RATHER THAN ASSUMED.**
+  `bash <shared-checkout>/scripts/deploy-live.sh`, never from the worktree, no `--force`, **rc 0**:
+  *"already deployed — live layer is at the newest deployable commit eb0e8d5673b4 (**8** un-stamped
+  commit(s) above)"*, with *"residency: 2 of 2 executing resident daemon(s) are running current
+  bytes · 1 exempt"* and *"migrate: 0 applied, 14 staged (operator-owned), 0 pending"*. The shared
+  HEAD did not move (predicted, and it did not). **A DECLINE IS NOT A REFUSAL WITH A CULPRIT** — the
+  green stamp is the post-land verifier's to write, and `ship-land` says on every land that a land
+  makes no full-suite claim.
+  · 🚨 **THE MOVE WAS A CODE FIX — `scripts/deploy-link-parity.sh` + its suite. The land facts are in
+  `git log --oneline origin/main`, deliberately not restated here: a sha I write BEFORE the land is an
+  object the land may rewrite, which is exactly what my own commit gate refuses.** The
+  reference now STATES ITS OWN CURRENCY. `reference_lag()` answers an integer, `unknown` or `n-a`,
+  and the report prints ONE line **ABOVE** the findings when the reference is behind, because a
+  qualifier printed underneath the list it qualifies has already been skipped by the reader it
+  exists for. **0 is the fallback for nothing:** a lag of 0 IS the healthy state, so a failed read
+  rendering as 0 would be indistinguishable from a converged reference (memory:
+  `fail-safe-default-mimics-the-healthy-state`). Silent at lag 0 unless `--all` asks, so the
+  advisory cannot fire on every clean run and thereby say as little as one that cannot fire at all;
+  and the positive reading stays reachable, so a missing line cannot mean both *checked, current*
+  and *never asked*.
+  · ✅ **DELIBERATELY NOT A WEAKENING, AND THAT IS THE PART TO CHECK RATHER THAN TRUST.** No verdict,
+  no finding count and no exit status changes: `pipefail-sigpipe-lint --census` **126 → 126,
+  LOST=0, NEW=0**, PRE arm **extracted from `origin/main`** with `git archive` piped to `tar` rather
+  than remembered, keyed on **(path, TEXT)** rather than `path:line` because this diff adds comment
+  lines and every number below them shifts.
+  · ✅ **RED-PROVED, PREDICTION FIRST, rc 0, ATTRIBUTED BY NAME (`redproof270.sh`):**
+  `tests/deploy-link-parity.bats` **47 → 52**; the PRE tree extracted from `origin/main` and
+  **asserted to hold ZERO occurrences of `reference_lag` before any red from it was believed**;
+  PRE **plan `1..52`, 49 ok, 3 not ok**, all three named out of `arms270.txt` rather than retyped;
+  POST **52 ok, 0 not ok**. A **MUTE control** naming an arm title present in no suite anywhere read
+  **0**. **The prediction VARIES on purpose:** two arms are predicted GREEN pre-fix because they PIN
+  rather than fix — the silence at lag 0, and the `n-a` answer on a non-git reference — and writing
+  those down as deliberate zeroes is what stops the table reading as complete.
+  · 🚨 **A FIXTURE FACT MEASURED RATHER THAN INHERITED, AND IT IS FREE FOR THE NEXT LINK:
+  #269's `behind_checkout()` DOES NOT BUILD A BEHIND CHECKOUT.** It produces the index-versus-trunk
+  disagreement its own arms need by **REMOVING the path in a LATER commit**, so its HEAD sits **one
+  commit AHEAD** of the ref and `rev-list --count HEAD..<ref>` reads **0** — measured, both
+  directions printed. Correct for a question about blob membership, **useless for a question about
+  LAG**, which is why the lag arms get `behind_by()`: it lands the file on a side branch and leaves
+  HEAD on the branch that never received it — the shared checkout's actual shape — built with **no
+  destructive git and no ref deletion**. **A fixture named after a state it does not create is a
+  control that cannot reach its own regime.**
+  · ⚠️ **AND A DEFECT IN THE HANDOFF ITSELF, WHICH COST ME A DETOUR AND IS THE CHEAPEST THING IN
+  THIS ENTRY TO PREVENT: MY BRIEF NAMED FOUR INHERITED ARTIFACTS THAT DO NOT EXIST.** It instructs
+  the successor to *"repoint its glob"* on `gap270.sh`, and names `board270.sh`, `census270.sh` and
+  `linkbody270.py` as ready to run — **#269 forward-renamed only `markers270.py` and `splice270.py`.**
+  Nothing fails loudly here: the successor discovers it one `ls` at a time. **The brief's own
+  self-fire grep checks that no instruction names YOUR number; nothing checks that an artifact it
+  tells you to REUSE is on disk.** I wrote all four from scratch. **A one-line `ls` of every
+  `<N>`-suffixed file a brief names would have caught it.**
+  · **THE BOARD, open 22:42:57Z:** **337 open / 215 blocked / 2,352 done / 6 claimed** (552 combined,
+  2,910 rows), BOTH partitions asserted at both moments, all five lists `sort -c`'d.
+  · **THE GAP, #269's floor 22:20:00Z → my open 22:43:01Z (23 m 01 s):** **ZERO arrivals, ZERO
+  departures** from the FULL set, and **ONE transition — `b60eb29e97dd` open → claimed,
+  `claude-infrastructure`** — a row this brief's own cloud cluster names as WOULD-UNBLOCK. **It is
+  the actuator's, not mine: I closed no row and filed none, so nothing needed subtracting, and I say
+  so rather than reporting a raw number as though the question had not arisen.**
+  · **THE STORES at 22:43:06Z, each with its denominator and its moment:** postland `.page` **0** of
+  **2,808** files (the 214th consecutive zero) · `~/.claude/autonomy/pages` **2,342** all / **90**
+  `.page` · inbox-guard **434**, every file being a `.escalated` marker so the two counts are ONE
+  number · postland **stamps 526**, where #269 read **525** at all three of its moments — **so the
+  stamps store DID move by one across the boundary, which is a statement about two moments and not a
+  claim about either link.**
+  · ⚠️ **`GATE=stale` at my open — the EIGHTIETH consecutive reading, and NOT mine to drive.** My
+  close-census reading is a DIFFERENT POPULATION and must not be compared with it: on a dirty tree
+  `wrap-ledger.sh` never calls `compute_live_layer()` at all, so its `LIVE_LAG=0 / LIVE_SRC=skip` is
+  an ABSENCE OF MEASUREMENT, not a converged lane. **Compare like with like.**
+  · ✅ **The four kitty checks, FORTY-THIRD consecutive:** `cc-in-kitty` rc 0 · `KITTY_WINDOW_ID=27`
+  (`KITTY_PID=1427`, `TERM=xterm-kitty`, `KITTY_LISTEN_ON=unix:/tmp/kitty-1427`) · the id-keyed
+  `kitty @ ls` query returning **EXACTLY ONE** object, cwd = my own worktree, with a bogus-id NEG
+  control at **0** · `cc-notify --self` printing `27`, `ITERM_SESSION_ID=w0t0p0:27`, `CC_TERM` UNSET.
+  The `qos-rewrite.sh` diff was empty, rc 0 — the **147th** consecutive clean. `cc-roles list` gave
+  the byte-identical four-row table again; the mailbox file is unchanged at 4,059 bytes / 1 line.
+  · ✅ **THE DRAW, and it is the same shape #269 met:** the selector answered a REAL LIST of **2** —
+  `deploy-link-parity`, `ms365-reply-splice` — with the **POS control SPOKEN at 1**, drawn from a
+  code-touching range. I ran the whole draw MYSELF in the foreground first: **2 of 2 suites, 70 ok,
+  0 not ok, 0 skip, one plan per suite, TERMINATOR ASSERTED at rc 93, 14 s at load ~18**, so the
+  land's own smoke is a second independent verdict on the same set. Lints: `shellcheck` rc 0,
+  `bash -n` rc 0, `bats-assert-liveness` rc 0, the bare pipefail ratchet rc 0, `unattended-path-lint
+  --selftest` **46/46** and bare rc 0, `bats-shellcheck-lint --range` clean, `test-walltime-lint`
+  over the `tests` DIRECTORY *"clean — 558 suite(s); 1 grandfathered, 0 new time bombs"* (it was 552
+  at #250 — take your own). **NOT RUN and declared rather than claimed:** `alarm-polarity-lint`
+  (neither file is an alarm emitter, and its POS control is a KNOWN MUTE, `e07dc5e09f83`, OPEN) and
+  the four own-scope lints (this diff touches none of their subjects).
+  · 🚨 **THE HONEST LIMIT, STATED HERE RATHER THAN LEFT FOR MY SUCCESSOR TO MEASURE: THIS FIX IS
+  INERT AT THE DESTINATION UNTIL THE CONVERGER ADVANCES, BY THE EXACT MECHANISM IT DOCUMENTS.** The
+  live run will go on printing the pre-fix output — including for this very clause — for as long as
+  the commits above the live sha stay un-stamped. **That is the finding restated, not a defect in
+  the fix, and it is why neither the commit nor this entry claims the live verdict changed.**
+  · 🚨 **THE ONE THING TO TAKE, AND IT IS THE LAYER UNDER #264 THROUGH #269: WHEN YOU FIX A CHECKER,
+  ASK WHERE THE CHECKER RUNS FROM.** A landed fix to an auditor is not a fixed auditor. If the
+  auditor is deployed by the same path as its subject, your fix inherits the subject's lag, the
+  wrong verdict keeps printing with your commit in the log, and a green suite cannot tell you —
+  because the suite runs the TRUNK copy against a SEAMED fixture and the destination runs the
+  CHECKOUT copy against the world. **Two different subjects, two different references, and nothing
+  anywhere compares them.**
 - **2026-08-31 — drain recycle #269: method 241 — AN ABSOLUTE VERDICT IS ONLY AS ABSOLUTE AS THE
   REFERENCE IT WAS COMPUTED AGAINST, AND A REFERENCE THAT MOVES TURNS ONE INTO A TIMING ARTEFACT.
   When a checker says a thing is in NO checkout, ask WHICH checkout it read, and whether that
