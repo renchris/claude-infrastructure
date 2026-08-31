@@ -230,3 +230,53 @@ relaxing `BLOCKING` on the `--item` path is a reader-semantics change that wants
 a real fleet to measure against, which a shallow VM with no `~/.claude/autonomy/` does not have.
 Both are on-box changes. Recorded here so the fifth dispatch, if there is one, starts from a
 measured emitter contract instead of a fourth untested channel.
+
+## 8. Fifth dispatch, 2026-08-31 05:14Z — the loop-breaker landed 4 h after §7 closed, and this is the first dispatch that could use it
+
+A FIFTH `anthropic_cloud` VM (`.git/shallow` grafts `109fa07c`/`decd3402`, `git rev-list --count
+HEAD` = 50 ⇒ `HistoryOracle.certify()` returns `shallow` ⇒ §1's deferral binds mechanically a fourth
+time). Every venue fact re-measured and unchanged: `origin/main` carries no `tenant-drift.yml`,
+`.github/workflows/` holds only `diagrams.yml` and `hermetic.yml`, `~/Development/reso-management-app`
+absent, `cc-backlog` not on `PATH`, no `~/.claude/autonomy/`. **Premise re-checked a fourth time:
+not refuted, not confirmable here** — the 2026-08-10 measurement (`31401486855`) is now 21 days
+stale and §3's one-line fix still needs re-checking against reso's trunk before anyone writes it.
+
+**§7's emitter contract was satisfied and the row fired anyway, which retires the whole
+control-plane line of remedy.** §7 derived two conditions on the close — end the turn as an ask, and
+begin `needs_action` with the allowlisted verb — and closed on `👤` with the bare `cc-backlog block`
+command leading its ask. It landed as `b6cd813b` at 2026-08-29T21:14Z; this session was fired at the
+same row 1 d 8 h later. So the score is now four consecutive remedies (§4 a command in a committed
+document, §5 the inbox reader, §6 the close-message emitter, §7 the two-condition contract), each
+recorded as built and each disproved by the next dispatch. The common defect is not any one channel:
+**every one of them terminated in a reader that a human or a dark launchd arm had to reach.** A
+remedy of that shape cannot break a loop whose actor is the dispatcher.
+
+**What changed between §7 and here is a reader of a different kind, and it is why this section is
+not a fifth restatement.** `da729350` gave a cloud worker `scripts/cloud-park.sh` — a landed
+`docs/parks/<id>.md` as the one channel a VM can push — and `524806b9` (2026-08-30T01:16Z, **4 h 02 m
+after §7 landed**, so §7 could not have used it) gave the park a second reader: `park_assess`
+(`bin/cc-eligible:934`) refuses the cloud venue `ineligible-parked` while a landed park is newer than
+the row's last block/unblock. **That reader is `cc-backlog claim --venue cloud` — the gate the
+dispatcher must pass through to fire at all.** It is the first mechanism in this document's five
+sections whose consumer is the loop's own actor rather than someone downstream of it, and it needs no
+operator, no inbox and no sweep to be alive. `524806b9`'s own commit subject names the defect it
+fixed in exactly these terms: *the park's only reader was the arm the park is about.*
+
+**Used, not merely described** — the failure §6 named twice. `docs/parks/485f8f87eb5f.md` is this
+dispatch's park; `--needs` carries the on-box re-dispatch step, `--why` carries the venue facts and
+points at §3. For a row that has never been blocked, `desk_ts` is empty ⇒ `acted = bool("")` is
+False ⇒ state `unhonoured` ⇒ refuse, so the interlock fires on the next claim once this is on trunk.
+Both desk verbs retract it, so it cannot become a permanent block.
+
+**The falsifier, stated so the sixth dispatch does not have to derive it.** If this row is fired into
+a cloud VM again while its park is the newest record on trunk, then `park_assess` is either wrong or
+unreached, and *that* is the finding — not another venue re-measurement. Check it first:
+`git show origin/main:docs/parks/485f8f87eb5f.md | tail -20` against the row's last block/unblock.
+
+**Still no code change, and the reason is now narrower than §7's.** The two on-box fixes stand
+unchanged — widening `cross_repo` past its `project`-as-proxy defect (§1) and the EVIDENCE-AGE arm's
+identical substitution on a bare filename (§5). Both are lane machinery a 50-commit horizon cannot
+justify a change to. But neither is any longer what this row is waiting on: the park makes the loop
+stop without them, and they revert to what they always were — a generator-class fix worth doing on
+its own merits, for the residual `filed under X, specified against Y` population, not an emergency
+this row creates.
