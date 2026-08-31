@@ -29375,3 +29375,48 @@ known and one grep finds every holder. ⚠️ It should be swept **with a measur
 pattern**: three of the faces here (crash, silent-garbage, fail-closed) look identical in a grep and
 differ entirely in consequence, and the fail-closed one is *safe* — a blind rewrite would be a
 change with no verdict attached to it, which is the trade this plan keeps refusing.
+
+#### Postscript — the land was still refused, and the control says why (this is the SEVENTH lock)
+
+The five commits above were driven to a green PRECHECK (statics + every ratchet arm) and refused at
+the **smoke**. That refusal is the finding, not an accident of this diff, and it is measured rather
+than argued.
+
+**The selection is the mechanism.** `gate-select --direct` sized the smoke at **16** suites for the
+first four commits and at **101** once `bin/cc-blockers` and `scripts/handoff-fire.sh` were touched —
+both core files with wide reverse-dependencies. Of those 101, **19 named a failure**, and the gate
+reported them exactly as it should: *"19 mapped to YOUR diff … This is a VERDICT about your diff
+(O(diff), reproducible): fix it, do not retry unchanged."*
+
+🚨 **ALL NINETEEN ARE RED ON PRISTINE `origin/main` IN THIS VENUE.** Control run in a detached
+worktree at trunk, same container, same runner, `scripts/offbox-run.sh` (env -i, fresh empty `$HOME`,
+`LC_ALL=C`): `cc-classify` 19/68 · `dispatch-cadence` 9/14 · `spawn-presence` 25/6 ·
+`handoff-fire-capacity-gate` 48/3 · `desk-invariant` 21/3 · `handoff-recycle-durable-cwd` 2/2 ·
+`teammate-auto-shutdown` 55/2 · `handoff-fire-completion-push` 9/2 · and eleven more at 1 each.
+**Not one of the nineteen is a file this diff touches.** `tsv-field-collapse` is the sharp case: it
+appears in the land's red list, reads **33/1 on pristine trunk**, and this diff takes it to **34/0** —
+its land-side red was a *pass-on-retry* of an unrelated `cc-board` cell under the smoke's ambient
+environment, on a suite this work strictly improves.
+
+**So the honest statement of the lock is: a land from a cloud VM is gated on the off-box portability
+of every suite its diff transitively selects, and that corpus is not clean.** The previous addendum
+said the corpus was *"unmeasured, not clean"* over a 33-suite selection. It is now measured over 101,
+and the answer is 19. Nothing about that is this diff's to fix, and nothing about it is a reason to
+weaken the gate: **no test was skipped, disabled, quarantined, or manifest-excluded to get past it,
+and none should be.** The gate is correct; its INPUT is the debt.
+
+⚠️ **AND THE DEBT IS NOT ONE CAUSE, WHICH IS WHY IT IS A PROGRAM AND NOT A DISPATCH.** Sampled: the
+`date -v` dialect again (`dispatch-cadence`, 13 hits), `launchctl` (5), the uid-0 `chmod 000` no-op
+this work already met in `land-gate-memo` (`spawn-presence` #18, *"an unreadable census is a VISIBLE
+fail-open"*), and container-specific fixture paths (`account-fact-derivation` #4, an `accounts.json`
+`claude_bin` that is not executable here). The generator this addendum names is the LARGEST share,
+not the whole.
+
+**Disposition.** The five commits stand on their own evidence — precheck green, and every suite this
+work touches measured green off-box, ten suites moved red→green with zero regressions. They are
+pushed to the dispatch branch rather than landed, because **the land is the one step this venue
+cannot take**, and the reason is now a measurement instead of the eleven-dispatch mystery it was.
+▶ Landing them needs either the operator's box (where all nineteen are green) or the portability
+sweep this addendum already scopes: 16 `date -j` and 25 chain-on-exit-code `stat` sites across 39
+files, plus the `date -v`/`date -r`/`sed -i ''`/`/usr/sbin` limbs this postscript adds — **per site,
+with a measurement**, never by pattern.
