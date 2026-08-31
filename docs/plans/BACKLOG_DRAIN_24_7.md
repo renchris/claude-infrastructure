@@ -86,6 +86,110 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-31 — drain recycle #268: method 240 — A STANDING RED'S *COUNT* CAN BE STABLE WHILE ITS
+  ENTIRE POPULATION TURNS OVER, AND AN ACQUITTAL WRITTEN AS A COUNT CANNOT NOTICE. When a row
+  acquits a gate by saying "the N it reports are pre-existing", the sentence is checked by nobody
+  and the number is the one thing that survives. Read the MEMBERS.**
+  **HOW I GOT THERE — #267's method 239 pointed at the destinations it named and did not measure.**
+  #267 stood at `~/bin`, counted 35 entries and found ONE drifted real file. It named five other
+  destinations. Measured 2026-08-31T21:15Z, the *enforcing* store —
+  `~/.claude/{bin,hooks,scripts,commands}` — is **376 per-file symlinks, 0 dangling, 0 drifted, and
+  exactly one copy-deployed file** (`probe268-dest.sh`, whose ARM A is a seeded six-class fixture in
+  a throwaway git repo, predictions written first and gated at rc 93, proving every class including
+  `real-DRIFTED` can FIRE). **That zero is the answer, not an absence of one: a destination reached
+  by LINKS cannot hold a stale copy, so the drift class lives exactly where the deploy is a COPY.**
+  `~/bin` was vulnerable because install.sh copies into it; `~/Library/LaunchAgents` is the other
+  copy-deployed destination and it is audited — `scripts/launchd-parity-lint.sh` walks the live dir,
+  keys by LABEL not filename, and semantic-compares with `plutil -p`; bare rc 0 over 32 live plists.
+  **AND THE ONE COPY IN THE ENFORCING STORE IS FINE AND ALREADY CLAIMED, WHICH REFUTED MY OWN
+  HYPOTHESIS BEFORE I LANDED IT.** `~/.claude/bin/it2` is `cp bin/it2-wrapper` under a DIFFERENT
+  NAME, so a basename join calls it untracked — but `scripts/deploy-parity-assert.sh:907` has a
+  dedicated `copy_verdict` naming both the source and the renamed destination,
+  `scripts/deploy-link-parity.sh:36-37` documents the rename deliberately, and
+  `config/live-only.manifest:11` declares it. **Three authors independently handle it.** It is
+  byte-identical to `origin/main:bin/it2-wrapper` by sha256. *(#267's scar, paid forward: I checked
+  a second instance of the shape BEFORE the push, not after.)*
+  **MY OWN INSTRUMENT PRODUCED THE LINK'S FIRST FALSE FINDING, AND THE rc-93 GATE CAUGHT IT: A GIT
+  PATHSPEC IS NOT A SHELL GLOB — `*` MATCHES `/`.** `git ls-files 'launchd/*.plist'` returns **31**;
+  `git ls-files ':(glob)launchd/*.plist'` and the shell glob both return **26**. The 5-file gap is
+  `launchd/staged/`, and `install.sh:948` iterates `"$REPO_DIR"/launchd/*.plist` — a SHELL glob. So
+  my "2 plists this repo installs are not live" was entirely an artefact of the selector; with the
+  right one the set is **EMPTY** and the prediction of 0 held. **Screened for the same shape in real
+  code: 4 files carry it, `tests/*.bats` reads 557 under BOTH selectors (latent, not live), and
+  every deploy auditor uses shell globs like the installer, so the dangerous conjunction does not
+  exist here.** Named because this brief builds sets with `git ls-files` constantly.
+  **THE FINDING. Row `bb2495b098b8` (done) acquits `deploy-link-parity.sh`'s STRAY leg in its own
+  evidence: *"the change adds ZERO findings (the 3 the gate already reports on trunk are
+  pre-existing: `bin/browsermcp-wrapper.sh`, `bin/cc-cloud-watch`, `bin/it2` drifted from
+  `bin/it2-wrapper`)"*. At 2026-08-31T21:25Z the gate reports THREE. NOT ONE IS THOSE THREE —
+  overlap ZERO, gated at rc 93.** All three named members resolved, each by a different mechanism
+  (two are gone from the live layer; `bin/it2` is now byte-identical, so content-matching recognises
+  the renamed copy), and three different files arrived. **The count is identical, the membership is
+  disjoint, and nothing announces that** — so a reader comparing counts sees an adjudicated wall.
+  The leg was working correctly and reporting correctly the whole time; the failure is one layer up,
+  in a sentence.
+  🚨 **WHAT THE WALL WAS HIDING: `skills/outbound-drafting/SKILL.md`, 13,268 bytes, live and in NO
+  checkout since 2026-08-29 — while BOTH copies of `CLAUDE.md` delegate a binding rule to it,
+  *"Full rule → the **outbound-drafting** skill, which auto-loads before any such draft"*.** Every
+  session that drafts a message the operator will send loads it, and a fresh clone restores nothing.
+  **Established as OURS before adopting, because adopting a third party's text is the silent fork
+  `config/live-only.manifest:68-72` exists to prevent: 0 tracked copies in ANY sibling checkout
+  under `~/Development`, 7 operator-specific measured lessons, 0 vendored markers, a real file and
+  not a symlink into another repo.** It is the case the row's own evidence predicted would be caught
+  — *"a newly hand-placed unversioned skill is always caught"* — and it was; nobody read past the
+  count.
+  ✅ **FIXED BY ADOPTION and pinned by a pair of arms in `tests/deploy-parity.bats` (84 → 86), both
+  sides DERIVED and neither reading the live layer** (that direction is the STRAY leg's, and this
+  suite is hermetic): the claim set from `CLAUDE.md`'s own house spelling for naming a skill, the
+  coverage set from `git ls-files skills/` UNION `config/live-only.manifest`'s `skills/<name>/` rows
+  — **a skill may be TRACKED (ours) or DECLARED (third-party, with a witness); the defect is being
+  NEITHER while `CLAUDE.md` tells every session to load it.** Population measured BEFORE the
+  assertion was written (a gate whose red is pre-existing blocks every land in the repo): **8
+  mandated, 7 already covered, RESIDUE EXACTLY ONE.** Three POS controls (claim set ≥5, tracked ≥20,
+  declared ≥1 — so a single failed read cannot convict every mandated skill at once) and a seeded
+  FIRE test asserted to add exactly one name.
+  ✅ **RED-PROVED, PREDICTION FIRST, GATED AT rc 93, ASSERTED BY NAME:** pre-fix **plan `1..86`, 85
+  ok, exactly ONE `not ok`** — the coverage arm, by name, its output naming `outbound-drafting`,
+  with the FIRE arm GREEN pre-fix because it seeds its own member; post-fix **86 ok / 0 not ok / 0
+  skip**. **The remedy's consequence was OBSERVED, not predicted:** driving the detector through its
+  own `CC_LINKPARITY_REPO` seam, `outbound-drafting`'s STRAY goes **1 → 0** and it becomes SHADOW
+  with a one-line `ln -sfn` that install.sh's next run performs — versioned content plus a
+  convergence step, which is the designed path and not a worse bug (memory:
+  `prescribed-remedy-worse-than-the-bug`). **Neither deploy auditor is wired as a land gate in
+  `scripts/ship-land.sh` — measured, not assumed — so the flip cannot block a land.**
+  ⚠️ **THE OTHER TWO STRAYS, READ RATHER THAN SWEPT — this is #264's lead 10 answered, not taken.**
+  `hooks/enforce-email-formatting.py.bak-20260824-193645` was the one flagged as *"evidence somebody
+  hand-edited a live hook; read it before deciding"*: `git hash-object` gives a blob that **IS
+  present in that path's own history**, and it is 15,058 bytes against the tracked hook's 46,782 —
+  **a pure historical revision holding nothing unlanded.** Adopting it would commit a `.bak` into
+  the tree; it is not repo content and I did not delete anything. `scripts/automode-restore-defaults.sh`
+  is live, executable, 5,116 bytes and referenced NOWHERE in the checkout — it has no witness file,
+  so it cannot take a manifest row honestly either. **Both are named with their evidence rather than
+  filed, because neither remedy is mine to choose.**
+  **LINTS RUN, AND THE ONES THAT DID NOT APPLY ARE DECLARED:** `bats --count` 86 ·
+  `bats-assert-liveness` rc 0 · `bats-testname-eval-lint` clean over 557 suites · bare
+  `pipefail-sigpipe-lint` rc 0 (`✓ clean (allowlist honoured)`) · `test-walltime-lint` over the
+  `tests` DIRECTORY, *"clean — 557 suite(s); 1 grandfathered, 0 new time bombs"*. **`shellcheck`
+  NOT-RUN: this diff edits no shell file.** **`alarm-polarity-lint` NOT-RUN:** nothing here is an
+  alarm emitter and that lint's POS control is a known mute (`e07dc5e09f83`, OPEN).
+  **The land facts are in `git log --oneline origin/main`, deliberately not restated here.**
+  **THE LANE AND THE STORES, each with its moment.** Open 2026-08-31T21:13:38Z on a CLEAN tree at
+  `trunk..HEAD=0`: `RUNG=✅ LIVE_SRC=behind LIVE_LAG=3 LIVE_ADDS=0 LIVE_DIVERGED=0 LIVE_AGE=5469
+  MIG_FAILED=0 GATE=stale` — **the seventy-second consecutive `GATE=stale`, NOT mine to drive.**
+  Postland RED pages **0** at denominator **2,811** (the 209th consecutive zero); `autonomy/pages`
+  **2,343**; inbox-guard `.escalated` **434**; postland stamps **524** — **flat against #267's two
+  readings, which is a statement about those moments and NOT about either link.** Board at
+  21:13:59Z: **342 open / 212 blocked / 2,352 done / 4 claimed** (554 combined, 2,910 rows), both
+  partitions asserted. **The GAP before my open (3 m 17 s) held ZERO arrivals, ZERO departures and
+  ONE transition — `70f0001c657b` open → claimed, the drain's own SSOT row, report-only.**
+  ⚠️ **ZERO ROWS CLOSED, ZERO FILED, ZERO REOPENED — so nothing needed subtracting from the actuator
+  series, and I say so rather than reporting my own writes as its output.** Row `bb2495b098b8` stays
+  **done**: its mechanism landed correctly and still works: only the parenthetical population in its
+  evidence went stale, and a stale sentence is not a reopened row. Instruments left on disk, every
+  one carrying an rc-93 prediction gate: `probe268-dest.sh` (any live destination, classified, with
+  the join SCOPED to `<repodir>/<basename>` per #267's own correction), `probe268-launchd.sh` (the
+  refusal that caught the pathspec fault), `probe268-it2.sh`, `probe268-turnover.sh`,
+  `probe268-mandated.sh`, `redproof268.sh` (one suite at two moments, failing arms BY NAME).
 - **2026-08-31 — drain recycle #267: method 239 — A MAP HAS A DESTINATION, AND THE DESTINATION IS A
   POPULATION NOBODY COUNTED. #264 asked how much of the map an auditor covers, #265 how many
   auditors a map has, #266 whether the map is the only map. All three ask about a MAP. Ask instead
