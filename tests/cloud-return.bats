@@ -671,7 +671,7 @@ declare_n() { # <count>
   printf '{"worker_status":"working"}\n' >"$STATUS_JSON"   # nothing lands; we are measuring SCOPE
   run bash "$SUT" --sweep --limit 2
   [ "$status" -eq 0 ]
-  [[ "$output" == *"2 of 5 pending managed session(s)"* ]]
+  [[ "$output" == *"2 of 5 pending managed session(s)"* ]] || false
   # 🚨 NEVER A SILENT CAP. A bounded pass that says nothing about what it skipped reads exactly like
   # one that covered everything — which is how "the lane is drained" gets asserted over 25 of 466.
   run jq -sc '[.[] | select(.outcome=="pass-scope")] | last' "$CC_CLOUD_STATE/return.jsonl"
@@ -687,8 +687,8 @@ declare_n() { # <count>
   run bash "$SUT" --sweep --limit 2
   [ "$status" -eq 0 ]
   # session_5 and session_4 carry the LATEST declared_at, so they are the pass's population.
-  [[ "$output" == *"session_5"* ]]
-  [[ "$output" == *"session_4"* ]]
+  [[ "$output" == *"session_5"* ]] || false
+  [[ "$output" == *"session_4"* ]] || false
   [[ "$output" != *"session_1"* ]]
 }
 
@@ -702,7 +702,7 @@ declare_n() { # <count>
   # cap that reads as coverage. Asserting only "the cursor file changed" would pass over a cursor
   # nothing consumes, so this asserts the OBSERVABLE consequence instead.
   [ "$first" != "$second" ]
-  [[ "$second" == *"session_3"* ]]
+  [[ "$second" == *"session_3"* ]] || false
   [[ "$second" != *"session_5"* ]]
 }
 
