@@ -332,3 +332,111 @@ R1-R4 remain **open, correct as filed, and unstarted**. `pnpm lint` on `reso-man
 four unlanded branches, the Amplify/Fly split-brain and `doc_classifier`'s `require_role` holes were
 again never readable — the trees do not exist here. Nothing in this section refutes the plan; what
 is refuted is the venue, and now also the sufficiency of the *third* filed remedy.
+
+## 10 · 2026-09-01 — fourth fire. The channel existed, had never been used, and §9.4's stopgap is refuted.
+
+**`8f59467c92b0` was fired at a fourth cloud VM of the identical shape** (`$HOME` `/root`,
+`~/Development` absent, `/home/user` holding `claude-infrastructure` alone, GitHub scope
+`renchris/claude-infrastructure`, clone 50 commits with `.git/shallow` present, `HEAD..origin/main`
+= 0). §9.7 holds unchanged: R1-R4 are open, correct as filed and unstarted, and the trees they edit
+do not exist here. This section records only what is new, which is not another count of the
+recurrence.
+
+### 10.1 · The park channel is on trunk, and no fire had used it
+
+`scripts/cloud-park.sh` is present on `origin/main` (`git ls-tree origin/main -- scripts/cloud-park.sh`
+→ blob `211ca7a4`), `--selftest` is **12/12 green** on this VM, and `docs/parks/` on trunk carried six
+entries — `193ae8ddce72`, `37b112d8950d`, `485f8f87eb5f`, `78b76e1a8311`, `e981656df348`,
+`f85fce7c26f5` — and **none for `8f59467c92b0`**. It landed after the 08-29 fire, so §9's disposition
+could not have used it; §9.5's advice to "verify the block took" had no alternative to fall back on.
+
+The channel closes exactly the hole §9.5 measured. A VM lands `docs/parks/<id>.md`; `bin/cc-eligible`
+reads it at `cc-backlog claim --venue cloud` and returns `ineligible-parked` (`:511`, `:1074-1081`),
+which is the interlock that holds even while `cloud-return.sh` step 8 — the arm that writes the
+ledger `block` — is dark under `autonomy-sweep`. This fire wrote that entry.
+
+**Erratum to §9.5, from `cloud-park.sh`'s own header.** Re-measured this session, the two inert verbs
+return **rc 3**, not rc 0:
+
+```
+$ bin/cc-backlog block 8f59467c92b0 --needs "probe"
+cc-backlog block: unknown id 8f59467c92b0                                        # rc 3
+$ bin/cc-notify --role desk "probe"
+cc-notify: verdict=unresolvable enqueued=0 uuid= reason=role-unset               # rc 0, enqueued 0
+```
+
+The conclusion of §9.5 is unchanged and its evidence is stronger: nothing was written either way, and
+the three prior dispositions demonstrably did not take. Only the exit code is corrected.
+
+### 10.2 · 🚨 §9.4's `projectName` stopgap self-erases — measured on this plan
+
+§9.4 recommended a two-step park whose step 2 was *"the `projectName` entry"* in
+`~/.claude/plans-index.json`, costed at ~0 because `find-plan.sh:73` already prefers it over the path
+basename. That read path is correct and unchanged. **The write path defeats it.**
+
+`hooks/plan-index-update.sh` runs PostToolUse on every write to `*/docs/plans/*.md`,
+`*/.claude-plans/*.md` or `~/.claude/plans/*.md` (`:125-131`). It derives `PN` purely from the path —
+`classify_path()` sets `PROJ` by stripping the `docs/plans` suffix and `PN="$(basename "$PROJ")"` —
+and then writes:
+
+```
+| .projectName = $projectName          # :154, unconditional
+```
+
+with **no** `// (.projectName)` preservation of an existing value, unlike `.firstIndexed` two lines
+below it, which *is* written defensively as `(.firstIndexed // $now)`. So a hand-set foreign
+`projectName` on this plan survives only until the next edit of the plan file — and the next edit is
+the status-log append that every one of these four fires has made, this one included. **The stopgap
+would have been erased by the act of recording it.**
+
+This is a refutation of a filed remedy, not of the plan. It also revises §9.4's cost note in the
+other direction: the entry is ~0-cost to *make* and not durable to *keep*, which is a worse trade
+than "one data entry away".
+
+### 10.3 · And step 2 was never load-bearing for this id
+
+`cc-backlog`'s ids are event-keyed. A `--condition` item hashes **project+condition** and drops title
+and source (`bin/cc-backlog:335`); the plain event key is **project+title+source** (`:961`). Under
+either keying, nothing this fire writes re-keys this row — the plan's H1 and the item's project label
+are both untouched — so the landed park governs the id that actually fires. `projectName` governs
+only what `cc-discover` C2 mints *next*, and per §10.2 it cannot durably govern even that.
+
+So the honest disposition is one step, not two: **land the park**. Step 2 as filed is both
+non-durable and, for this id, unnecessary.
+
+### 10.4 · Not fixed here — grounds re-measured, not inherited
+
+- **`bin/cc-venue:55` applies verbatim**: *"A cloud VM must never build or run the venue rule."*
+  `bin/cc-eligible` is that rule, and this is that VM on that clone (50 commits, `.git/shallow`
+  present). The dodRef-content arm §9.3 asks for is therefore still not buildable from here. **This
+  is the whole refusal, and it is sufficient on its own** — see the next bullet for the leg that is
+  not.
+- 🚨 **RETRACTED: "the gate tooling is absent" was never a refusal ground.** §6 and §9.6 each
+  recorded *"`bats`, `shellcheck` and `shfmt` are all still ABSENT"* — re-measured, honestly, and
+  **with the wrong probe**. Both used `command -v`, which answers *is it installed*, and neither
+  asked *can it be installed*. Measured this session, after `command -v` returned ABSENT for all
+  three exactly as before:
+
+  ```
+  $ apt-get install -y --no-install-recommends shellcheck bats shfmt
+  $ command -v bats shellcheck shfmt
+  /usr/bin/bats  /usr/bin/shellcheck  /usr/bin/shfmt          # all three, rc 0
+  ```
+
+  All three install from the VM's ordinary apt repositories in seconds. So the claim that "the repo
+  gate cannot be run on a change to the predicate" is **false**, and has been false at every one of
+  the four fires. It is the exact shape the global memory-hygiene rule names by name — *"negative
+  tool-claims: 'tool Y can't do Z' inferred from one failed call; verify before encoding, a
+  wrapper/flag/version usually explains it"* — and it survived three re-measurements because each
+  re-ran the same insufficient probe and read agreement as confirmation.
+
+  **This does not reopen the decision**, because it was never the load-bearing leg: `cc-venue:55`
+  refuses a cloud VM the venue rule outright, on grounds of self-admission and the 50-commit
+  horizon, and neither is about tooling. What changes is what future fires may *claim*: cite the
+  guard, and stop citing the tooling. It also means the land gate's own `.bats` shellcheck ratchet —
+  which exits 9, GATE-KILLED, when `shellcheck` is missing — is **self-inflicted on a cloud VM and
+  one `apt-get` from green.** This fire hit that exit 9 on a three-file markdown diff and cleared it
+  that way.
+- §10.2 **settles** one filed option by refuting it, where §3, §4 and §9.3 each widened the decision.
+  The open question — a cross-repo master targets TWO trees, so the single-value options cannot
+  express it — is unchanged and still the desk's.
