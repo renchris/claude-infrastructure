@@ -29618,3 +29618,61 @@ census is the INPUT to that work, not the work — and it is now cheap for the n
 whole change. It also does not move `d84434cd`: the cloud land arm's discriminator still needs the
 three reads that exist only on the operator's box (`scripts/cloud-land-arm-diagnose.sh`), and
 `f85fce7c26f5` stays operator-gated on them.
+
+### Addendum 2026-09-01 — the fourth lock's cure does not reach the clone, measured on `564d151b76e5`
+
+*(Dispatched cloud worker, drain row `564d151b76e5`. Landed `06989a10` + `a9b1ecc9`.)*
+
+**The row's premise was DISCHARGED on trunk before this dispatch and the residual was one file the
+row never named.** The `"halving context ≈ +50% capacity"` lever was struck at both cited sites by
+`a299123b` (2026-08-24), which also made the two documents cite each other — precisely what the row
+said was missing — and `7bb14728` (2026-08-29) propagated the strike to the lever's origin and the
+`jcode-due-diligence` cluster. What was still live: `orchestration-units-2026-08-19/A6-VERIFY-quota-economics.md`
+§C6 and its open question 3, the one member of the citer set with no discharge note, still asserting
+in the present tense that *"nobody has filed"* and *"this needs a filed decision"*. Both false since
+08-24. That file is the link `scaling-bottlenecks-2026-08-09.md` §2a names as having FOUND the live
+consequence, so it is the citer a reader following the trail lands on. Discharge note appended
+beside the preserved diagnosis, per the INTEGRATE rule and the convention the peer citers use.
+
+🚨 **THE FOURTH LOCK FIRED AGAIN, THREE DAYS AFTER ITS CURE LANDED — because the cure is in the
+PROVISIONER and the harness hands the worker an already-shallow clone.** § *"The fourth lock, and it
+is not a lock"* above prescribed a `TRUNCATED-HISTORY` arm in `scripts/cloud-venue-provision.sh`; it
+landed, it is ranked first (`:221`), and `git fetch --unshallow` is in its provision path (`:590`).
+It never ran here. Measured in this container: `.git/shallow` present, `git rev-list --count
+origin/main` = **50** with a 2026-08-29 root, **all 13** commits related to this row scoring
+off-trunk under `merge-base --is-ancestor`; after `git fetch --unshallow`, **3,897** commits and the
+correct ancestry. So the dispatch brief's own FIRST STEP — *"read what this item cites on TRUNK,
+never in your own tree"* — was unsound as typed, on the row whose whole subject is a stale doc.
+
+**Two instances on this ONE row, which is the reach argument rather than an anecdote.** A worker on
+2026-08-29 wrote the same residual fix (`04d76a33`, `claude/fire-20260829T121210Z-16575-1`, never
+landed) and recorded in its commit body that *"a299123b0 is NOT an ancestor of origin/main; its
+content landed under `c3acc666`"* — both halves false, `c3acc666` being an entry in THIS file that
+touched neither document. This session read identically before unshallowing. **The horizon needs
+curing where the clone is MADE**; until then `git rev-parse --is-shallow-repository` is the
+precondition for trusting any ancestry verdict a dispatched worker reports, and a worker's cited
+shas must be re-verified against full history rather than inherited from a predecessor's body.
+
+📋 **OWED LOCALLY — `~/.claude/autonomy/backlog.jsonl` does not exist in this container (measured,
+not recalled: `cc-backlog done` answered `unknown id`), so this entry is the channel.** Runnable as
+typed:
+
+    cc-backlog done 564d151b76e5 --evidence "a9b1ecc9"
+
+⚠️ **And the row is the smaller half — here is the strand census for this ONE lever.** Thirteen
+commits since 2026-08-24 strike it or propagate the strike. **Two reached trunk** (`a299123b`,
+`7bb14728`). **Eleven are stranded across eleven distinct `origin/claude/fire-*` branches** — one
+per dispatch, 08-24 through 08-29, each a correct diagnosis written from inside a 50-commit horizon
+that reported the previous one's cure as missing:
+
+    ON-TRUNK   a299123b 08-24 · 7bb14728 08-29
+    STRANDED   7ae89e4b 08-24 · 8c388dad 08-25 · 5a86d4d3 08-26 · b6ccc5d1 08-26 · 3b3d057b 08-27
+               e5271b0b 08-27 · ce4e9000 08-27 · 6f6acc14 08-28 · b95f9bc2 08-28 · 3e73ae00 08-28
+               04d76a33 08-29
+
+That is the loop stated as a number: **11 of 13 (85%) of the work done on this row was re-derivation
+of a cure already on trunk, and none of it landed.** The row's own re-dispatch note quotes the
+precedent `149789b69fc4` — six files, discharged 39 minutes later, re-dispatched 7 days on with the
+same list — and this is the same shape at 11×. Closing the row says nothing about the fourth lock's
+own cure, which this addendum re-opens with a measurement rather than a judgement: **the arm is
+correct and unreached.**
