@@ -52,7 +52,11 @@
 # cp'd/added into a checkout that already has it on trunk. See content_is_on_trunk().
 #
 # STRAY SCOPE is the EXECUTED surfaces only — bin, hooks, hooks/lib, scripts, scripts/lib,
-# scripts/limit-recover, lib. Measured 2026-08-08, not assumed:
+# scripts/backlog-consolidation, scripts/limit-recover, lib. Measured 2026-08-08, not assumed —
+# and scripts/backlog-consolidation was added 2026-09-01, not because anything here was re-argued
+# but because the FORWARD walk gained seven classes on 2026-08-31 and this sentence could not see
+# that happen. A scope claim is falsified by its siblings growing, so the sweep's list is now pinned
+# against the walk's by a test arm rather than by this paragraph (see the NOT-STRAY-SWEPT block).
 #   · SYMLINKS are excluded entirely. Links into this checkout are the forward walk's and
 #     sweep_orphans' business; a link pointing anywhere else is explicitly not ours to judge
 #     (tests/deploy-link-parity.bats:156). Cost of honouring that: a hand-placed link to a non-repo
@@ -585,11 +589,37 @@ for d in "$CFG"/skills/*/; do [ -d "$d" ] && sweep_orphans "$d"; done
 # LESS. Calling the gap deliberate is what stopped anyone counting it for three weeks, and the walk
 # above measured it at ten classes. A sentence that declares an asymmetry intentional must say which
 # DIRECTION it is defending; this one defended the wrong one.
-# The remaining asymmetry is real and is stated positively: this sweep visits bin, hooks, hooks/lib,
-# scripts, scripts/lib, scripts/limit-recover and lib, which is the EXECUTED set — commands/ and the
-# three NOT-PER-FILE classes are out of its scope for the reasons the header and the exclusion block
-# above give, not by omission.
-for d in bin hooks hooks/lib scripts scripts/lib scripts/limit-recover lib; do sweep_strays "$d"; done
+# The remaining asymmetry is real and is stated positively: this sweep visits the EXECUTED set —
+# commands/ and the three NOT-PER-FILE classes are out of its scope for the reasons the header and
+# the exclusion block above give, not by omission.
+#
+# AND THE LIST BELOW IS THE FIFTH RESTATED ENUMERATION OF THE LIVE LAYER IN THIS FILE, WHICH IS WHY
+# IT HAD SILENTLY FALLEN BEHIND THE FIRST (2026-09-01). The paragraph above corrects a claim about
+# this sweep's scope, and the widening it describes was the FORWARD walk's: seven classes were added
+# there on 2026-08-31 and neither live-side sweep followed. That is not a second oversight, it is the
+# same one — a scope sentence measured 2026-08-08 is not falsified by anything it says, it is
+# falsified by a SIBLING enumeration growing, and no reader of either one can see the other move.
+# Derived from both files' own loop headers and diffed: the forward walk visits eleven live
+# directories, this sweep reached nine, and of the two it did not reach, commands/ is DECLARED below
+# and scripts/backlog-consolidation was owned by nobody. Measured behaviourally rather than argued:
+# a hermetic fixture with one unversioned real file planted per scope class reported the plant in
+# scripts/ and in scripts/lib/ and said NOTHING about the one in scripts/backlog-consolidation/ —
+# the bin/cc-mail defect class, in a directory the forward walk had just declared part of the
+# deployed surface. 0 real files live there today (5 symlinks), so this closes a DETECTOR gap rather
+# than repairing an outage, and a detector gap is only ever visible when something else breaks.
+#
+# The declaration below is what stops the next widening re-opening it. tests/deploy-link-parity.bats
+# pins install.sh's classes against the forward walk and has since 2026-08-31; it had no counterpart
+# in this direction, so the walk could grow and this line could not notice. The new arm derives BOTH
+# sides from their own loop headers and requires every forward-walked directory to be swept here or
+# declared NOT-STRAY-SWEPT — never merely absent, because an omission carries no reason.
+#   NOT-STRAY-SWEPT commands   prompt documents: live-only content there is the NORMAL path, not a
+#                              defect (see STRAY SCOPE in the header). The config ROOT is not a
+#                              member of this question at all — install.sh reaches it by singleton
+#                              link_file calls with no loop header, and it holds 338 real files
+#                              (settings.json and its backups, measured 2026-09-01T02:04Z), which is
+#                              what sweeping it would convict.
+for d in bin hooks hooks/lib scripts scripts/lib scripts/backlog-consolidation scripts/limit-recover lib; do sweep_strays "$d"; done
 
 # PROMPT-DOCUMENT surfaces. skills/ is NESTED where every executed surface is flat, so the sweep is
 # driven one level down — sweep_strays lists a single directory and skips subdirectories, so passing
@@ -737,8 +767,20 @@ esac
 
 [ -n "$LINES" ] && printf '%s' "$LINES"
 # live-extra is counted, never hidden: it is what makes "0 actionable" mean "we looked at the live
-# side too", rather than "we only ever walked the checkout". Its own count going UP unexplained is
-# the signal that a copy-deploy surface grew.
+# side too", rather than "we only ever walked the checkout".
+#
+# TWO CORRECTIONS TO THAT SENTENCE, both measured 2026-09-01T02:04Z by running this script with
+# --all and folding its own emitted lines, which nobody had done since the field was added.
+#   · IT SUMS TWO CLASSES, and the reading "its count going up means a copy-deploy surface grew"
+#     describes only one of them. extra_n = 10 = ONE copy (bin/it2 ← bin/it2-wrapper) plus NINE
+#     live-only.manifest declarations. Nine tenths of anything this field does is the MANIFEST, so a
+#     row added tomorrow moves it and reads as a copy surface growing. The classes are already
+#     distinguished in --all's output (COPY vs DECLARED) and only in the summary are they one number.
+#   · ITS POPULATION IS sweep_strays's DIRECTORY LIST, not the live layer. Both increments are inside
+#     that sweep, so a copy surface appearing where the sweep does not go moves nothing — which is
+#     exactly what happened to scripts/backlog-consolidation. `linked`, `live-extra` and `unmapped`
+#     are counts over three DIFFERENT populations (the walk's globs, this sweep's list, and the
+#     territory), printed on one line, and only the third derives from the territory.
 printf '  %d linked · %d staged-pending · %d live-extra · %s unmapped · %d actionable\n' \
   "$linked_n" "$pending_n" "$extra_n" "$UNMAPPED_SHOWN" "$findings"
 
