@@ -1949,3 +1949,113 @@ _rawdeploy_extract() {  # $1=install.sh  $2=out TSV: line \t kind \t srcclass \t
   # …while a SIBLING declaration is untouched, so the seed removed one arm and not the block.
   [ "$(bash "$BATS_TEST_TMPDIR/rseeded.sh" accounts.json </dev/null | grep -c '__DEFAULT__')" -eq 0 ]
 }
+
+# SECOND INSTALLER, BY SHAPE — method 249, MEASURED 2026-09-01.
+# The SECOND INSTALLER arm above derives kitty-setup.sh's targets with a grep keyed on the LITERAL
+# source prefix ln -sfn "$REPO/ . That is a shape claim about how a source is SPELLED, and it is
+# narrower than the mechanism: kitty-setup.sh:203 links "$SRC_CONF", assigned at :194 to
+# $REPO/config/kitty.conf — same installer, same verb, same flag, one variable hop, invisible.
+# Measured: 8 `ln -sfn` lines, 7 repo-sourced, the literal key derives 6, and the seventh reached the
+# reasonless default. Its own non-vacuity floor (-ge 4) cannot see a 6-vs-7 shortfall, because a floor
+# bounds a population's SIZE and says nothing about its MEMBERSHIP.
+# So this arm derives by the SHAPE OF THE LINE and resolves one variable hop, and — the part that
+# ends the regress — PARTITIONS every link line and asserts the two halves SUM. A source spelling
+# neither branch understands lands in neither total and REFUSES, instead of being absorbed silently
+# the way every key-shaped extractor absorbs it.
+@test "SECOND INSTALLER BY SHAPE: every kitty-setup.sh link target is CLAIMED or DECLARED, however its source is spelled" {
+  SETUP="$REPO_ROOT/scripts/kitty-setup.sh"
+  SUBJ="$REPO_ROOT/scripts/deploy-parity-assert.sh"
+  [ -f "$SETUP" ]
+  [ -f "$SUBJ" ]
+
+  LINES="$BATS_TEST_TMPDIR/ks-lines.txt"
+  REPOSRC="$BATS_TEST_TMPDIR/ks-repo.txt"
+  OTHER="$BATS_TEST_TMPDIR/ks-other.txt"
+  grep -nE '^[[:space:]]*ln -sfn ' "$SETUP" > "$LINES" || true
+  : >"$REPOSRC"; : >"$OTHER"
+  while IFS= read -r kline; do
+    [ -n "$kline" ] || continue
+    ksrc=$(printf '%s\n' "$kline" | sed -e 's|^[0-9]*:[[:space:]]*ln -sfn "||' -e 's|".*$||')
+    case "$ksrc" in
+      '$REPO/'*) printf '%s\n' "${ksrc#\$REPO/}" >>"$REPOSRC" ;;
+      '$'*)
+        kvar=${ksrc#\$}
+        # ONE variable hop, via sed so an unresolved name cannot fail the test with an exit code.
+        kval=$(sed -n "s|^${kvar}=\"\\(.*\\)\"\$|\\1|p" "$SETUP" | head -1)
+        case "$kval" in
+          '$REPO/'*) printf '%s\n' "${kval#\$REPO/}" >>"$REPOSRC" ;;
+          *)         printf '%s\n' "$ksrc" >>"$OTHER" ;;
+        esac ;;
+      *) printf '%s\n' "$ksrc" >>"$OTHER" ;;
+    esac
+  done < "$LINES"
+
+  KTOTAL="$(grep -c . "$LINES")"
+  KREPO="$(grep -c . "$REPOSRC")"
+  KOTHER="$(grep -c . "$OTHER")"
+  # NON-VACUITY FLOOR: measured 8 link lines / 7 repo-sourced on 2026-09-01; deliberately loose.
+  [ "$KTOTAL" -ge 6 ]
+  [ "$KREPO" -ge 5 ]
+  # THE PARTITION MUST SUM. This is the assertion the literal key could not make: a link line whose
+  # source is spelled some third way is counted by neither branch, and this refuses rather than
+  # quietly shrinking the population it then reports full coverage over.
+  [ "$((KREPO + KOTHER))" -eq "$KTOTAL" ]
+  # …and every derived repo-sourced target must be a REAL tracked file, or the anchor matched prose.
+  KMISSING=0
+  while IFS= read -r kt; do
+    [ -n "$kt" ] || continue
+    [ -f "$REPO_ROOT/$kt" ] || KMISSING=$((KMISSING + 1))
+  done < "$REPOSRC"
+  [ "$KMISSING" -eq 0 ]
+
+  [ "$(grep -c '^    cls=""$' "$SUBJ")" -eq 1 ]
+  _classcov_extract "$SUBJ" "$BATS_TEST_TMPDIR/case4.txt"
+  sed 's|^      \*)                         want=0 ;;$|      *)                         want=0; cls="__DEFAULT__" ;;|' \
+    "$BATS_TEST_TMPDIR/case4.txt" > "$BATS_TEST_TMPDIR/case4B.txt"
+  [ "$(diff "$BATS_TEST_TMPDIR/case4.txt" "$BATS_TEST_TMPDIR/case4B.txt" | grep -c '^[<>]')" -eq 2 ]
+  RUN4="$BATS_TEST_TMPDIR/run4.sh"
+  _classcov_runner "$BATS_TEST_TMPDIR/case4B.txt" "$RUN4"
+
+  # CONTROLS BEFORE VERDICTS. POS: a covered class must come back CLAIMED, or the runner is mute.
+  # FIRE: a path in no class MUST reach the tagged default, or this arm cannot fail at all.
+  [ "$(bash "$RUN4" hooks/notify.sh </dev/null | grep -c '^1|hooks/\*\.sh$')" -eq 1 ]
+  [ "$(bash "$RUN4" zzz-no-such-class/nope.txt </dev/null | grep -c '__DEFAULT__')" -eq 1 ]
+
+  BAD4="$BATS_TEST_TMPDIR/bad4.txt"; : >"$BAD4"
+  while IFS= read -r kt; do
+    [ -n "$kt" ] || continue
+    kout="$(bash "$RUN4" "$kt" </dev/null)"
+    case "$kout" in
+      1\|*)          : ;;             # CLAIMED — want=1 (bin/cc-in-kitty is, via bin/cc-*)
+      *__DEFAULT__*) printf 'REASONLESS-DEFAULT %s\n' "$kt" >>"$BAD4" ;;
+      *)             : ;;             # declined by an EXPLICIT arm carrying its reason
+    esac
+  done < "$REPOSRC"
+  [ "$(grep -c . "$BAD4")" -eq 0 ] || { echo "kitty-setup.sh link targets reaching the reasonless default:"; cat "$BAD4"; false; }
+}
+
+@test "SECOND INSTALLER BY SHAPE fire test: deleting the config arm puts its target back on the default" {
+  # The arm above passes only because the config/kitty.conf declaration exists. This proves that is
+  # what it measures: remove the one arm and the non-bin target must reach the tagged default again.
+  SUBJ="$REPO_ROOT/scripts/deploy-parity-assert.sh"
+  [ -f "$SUBJ" ]
+  _classcov_extract "$SUBJ" "$BATS_TEST_TMPDIR/case5.txt"
+  sed 's|^      \*)                         want=0 ;;$|      *)                         want=0; cls="__DEFAULT__" ;;|' \
+    "$BATS_TEST_TMPDIR/case5.txt" > "$BATS_TEST_TMPDIR/case5B.txt"
+  [ "$(diff "$BATS_TEST_TMPDIR/case5.txt" "$BATS_TEST_TMPDIR/case5B.txt" | grep -c '^[<>]')" -eq 2 ]
+  _classcov_runner "$BATS_TEST_TMPDIR/case5B.txt" "$BATS_TEST_TMPDIR/intact3.sh"
+
+  # BASELINE: with the arm present, the config target must NOT read as the default.
+  [ "$(bash "$BATS_TEST_TMPDIR/intact3.sh" config/kitty.conf </dev/null | grep -c '__DEFAULT__')" -eq 0 ]
+
+  # SEED: delete exactly the config arm. Asserted to remove ONE line, so a reworded arm makes this
+  # fail loudly rather than seeding nothing and passing vacuously.
+  grep -vxF '      config/kitty.conf)         want=0 ;;' "$BATS_TEST_TMPDIR/case5B.txt" > "$BATS_TEST_TMPDIR/case5C.txt"
+  [ "$(($(grep -c . "$BATS_TEST_TMPDIR/case5B.txt") - $(grep -c . "$BATS_TEST_TMPDIR/case5C.txt")))" -eq 1 ]
+  _classcov_runner "$BATS_TEST_TMPDIR/case5C.txt" "$BATS_TEST_TMPDIR/seeded3.sh"
+
+  # …and now that same target falls through to the reasonless default.
+  [ "$(bash "$BATS_TEST_TMPDIR/seeded3.sh" config/kitty.conf </dev/null | grep -c '__DEFAULT__')" -eq 1 ]
+  # …while the SIBLING kitty declaration is untouched, so the seed removed one arm and not the block.
+  [ "$(bash "$BATS_TEST_TMPDIR/seeded3.sh" bin/kitty-pane-menu </dev/null | grep -c '__DEFAULT__')" -eq 0 ]
+}
