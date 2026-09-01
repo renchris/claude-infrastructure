@@ -182,6 +182,50 @@ branch queue is empty or explicitly abandoned with reasons, the production deplo
 single-brained and audited, and doc_classifier's authorization holes are closed with tests.
 
 ## Status log
+- **2026-09-01 — FOURTH fire, and this one is PARKED rather than written down.** `8f59467c92b0`
+  reached a fourth cloud VM of the identical shape (`$HOME` `/root`, `~/Development` absent,
+  `/home/user` holding `claude-infrastructure` alone, clone 50 commits with `.git/shallow` present,
+  `HEAD..origin/main` = 0). R1-R4 untouched and **still open, correct as filed, and unstarted** —
+  the venue is refuted, not the plan, for the fourth time. What is new is not another measurement of
+  the recurrence but that the channel to stop it now exists and had never been used:
+  **(1) `scripts/cloud-park.sh` is on trunk and `docs/parks/` carried no entry for this id.** It is
+  a cloud worker's only way to park its own row: the VM lands `docs/parks/<id>.md`, `bin/cc-eligible`
+  reads it at `cc-backlog claim --venue cloud` and returns `ineligible-parked`, and
+  `cloud-return.sh` step 8 turns it into the ledger `block`. The 08-15, 08-17 and 08-29 dispositions
+  were prose plus `cc-backlog block` — and re-measured here, `block` returns **rc 3** (`unknown id`,
+  writes nothing) and `cc-notify --role desk` returns `enqueued=0 reason=role-unset`, because
+  `~/.claude/autonomy/` does not exist on a VM. That is why three dispositions bought nothing and
+  this one is a landed file instead. *(Corrects §9.5's `rc 0` reading, per `cloud-park.sh`'s own
+  header erratum.)* The park is landed at the sha this entry ships in.
+  **(2) 🚨 §9.4's ~0-cost `projectName` stopgap DOES NOT HOLD — it self-erases, and on this very
+  plan.** `hooks/plan-index-update.sh:154` writes `.projectName = $projectName` **unconditionally**
+  into `~/.claude/plans-index.json` on every PostToolUse edit of any `*/docs/plans/*.md`, from the
+  purely path-derived `classify_path()` basename, with no `// (.projectName)` preservation of an
+  existing value. So a hand-set foreign `projectName` survives only until the next edit of this plan
+  file — which is the status-log append every one of these fires makes, including this one. The
+  stopgap would have been erased by the act of recording it.
+  **(3) And it was never needed for this id.** `cc-backlog`'s `--condition` keying hashes
+  project+condition and drops title and source (`bin/cc-backlog:335`); the plain event key is
+  project+title+source (`:961`). Under either, nothing this fire writes re-keys the row, so the
+  landed park governs the id that actually fires. `projectName` governs only what `cc-discover`
+  mints *next* — and per (2) it cannot durably govern even that.
+  **Disposition: PARKED via `docs/parks/8f59467c92b0.md`, not `reopen`** — blocked on where it is
+  sent. The operator-only step on the record is *re-file R1-R4 as per-repo plans inside the
+  `reso-management-app` and `doc_classifier` trees*; no claude-infrastructure worker, cloud or local,
+  can reach those two checkouts under the dedicated-worktree rail. Not fixed here on ONE ground:
+  `bin/cc-venue:55` forbids a cloud VM from building or running the venue rule, and `bin/cc-eligible`
+  is that rule.
+  **(4) 🚨 And the SECOND ground every prior fire cited is RETRACTED.** §6 and §9.6 both recorded
+  *"`bats`, `shellcheck` and `shfmt` are all ABSENT"* as a co-equal reason the predicate could not be
+  changed. Both probed with `command -v` — *is it installed* — and neither asked *can it be
+  installed*. Measured here: `apt-get install -y --no-install-recommends shellcheck bats shfmt`
+  succeeds in seconds and all three resolve under `/usr/bin`. The tooling was never a refusal ground
+  at any of the four fires; it is the "negative tool-claim inferred from one failed call" the global
+  memory-hygiene rule names, and it survived three re-measurements because each re-ran the same
+  insufficient probe. The decision does not reopen — `cc-venue:55` is sufficient alone — but future
+  fires should cite the guard and stop citing the tooling. Corollary, hit by this land: the gate's
+  `.bats` shellcheck ratchet exits **9 GATE-KILLED** when `shellcheck` is missing, so on a cloud VM
+  a *markdown-only* diff is unlandable until one `apt-get` runs.
 - **2026-08-29 — the guard LANDED, the member rows are stopped, and THIS row was fired a third
   time.** `8f59467c92b0` reached a third cloud VM of the identical shape (one checkout, GitHub scope
   of one repo, no `~/Development`, 50-commit shallow clone). R1-R4 untouched and **still open,
