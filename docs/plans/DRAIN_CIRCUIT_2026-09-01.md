@@ -7,41 +7,87 @@ status: in-progress
 **Scope (frozen):** audit both 24/7 drain lanes end-to-end, fix the measured defects that stop the
 pipeline draining `cc-backlog` (telemetry + effective-work), and leave the loop self-sustaining.
 
-**The answer to the operator's question, first.** No. Neither lane is self-sustaining, and the
-reason is structural rather than a tuning problem: **the cloud lane's landing arm is scheduled by
-nothing**, so every cloud session's output strands on a branch and its backlog item can never
-close; and **the local lane's subject has become its own output**, so it commits at ~10× the rate
-it closes backlog items. The telemetry could not have told you this, because the one shipped
-surface built to answer "is the fleet landing anything, or churning?" counts *commits*, not
-*backlog closure*, and rendered a healthy number all week.
+**The answer to the operator's question, first.** No. Neither lane is self-sustaining. **The
+garbage collector is eating the drain pipeline's landing arm**: `cc-reaper` has SIGTERMed
+`cloud-return.sh --sweep` — the process that brings finished cloud work home — 153 times, because
+the whitelist that was added on 2026-08-16 under the header *"THE LAND PATH IS NEVER GARBAGE"*
+enumerated `ship-land` and `desk-land` and missed the outer driver of the cloud land path. So every
+cloud session's output strands on a branch and its backlog item can never close. Separately, **the
+local lane's subject has become its own output**, so it commits at ~10× the rate it closes backlog
+items. The telemetry could not have told you either thing, because the one shipped surface built to
+answer "is the fleet landing anything, or churning?" counts *commits*, not *backlog closure*, and
+rendered a healthy number all week.
 
 ---
 
 ## 1. What was measured (all first-hand, this session)
 
-### 1.1 The cloud lane is a half-circuit
+### 1.1 The cloud lane's landing arm is wired, invoked, and killed on every run
 
-| Arm | Mechanism | Scheduled? |
+⚠️ **This section was WRONG in the first draft of this document and the error is worth recording,
+because it is the repo's own `caller-census-keyed-on-path-misses-the-name` lesson committed live.**
+The first draft claimed "the landing arm is scheduled by nothing", on a `grep -rl cloud-reconcile`
+over every plist that returned 0 against a control that returned 1–3 for known-scheduled jobs. The
+control passed and the null was real — **for that name**. The scheduled arm does not call
+`cloud-reconcile.sh`; it calls **`cloud-return.sh`**, and the one hit my grep did find in a
+scheduled job (`autonomy-sweep.sh:1065`) really was a comment, which made the wrong conclusion look
+confirmed. `scripts/cloud-reconcile.sh` is the *manual* `CONFIRM=1` path and is indeed unscheduled;
+that is not the defect.
+
+The real shape:
+
+| Arm | Mechanism | State |
 |---|---|---|
 | **FIRE** | `com.claude.dispatcher` → `cc-dispatch --once`, `StartInterval` **300 s** | ✅ loaded + running (pid 74864) |
-| **LAND** | `scripts/cloud-reconcile.sh` (gate G6, "THE CLOUD LANDING PATH") | ❌ **nothing invokes it, ever** |
+| **LAND** | `com.chrisren.autonomy-sweep` (300 s) → `autonomy-sweep.sh:1075` → `timeout -k 10 900 bash cloud-return.sh --sweep` | ✅ loaded + running (pid 94244) — and **killed mid-land every time** |
 
-Verified with a **positive control**, because a null from a blind grep is not absence:
+**`cc-reaper` is the killer, in its own log** (`~/.claude/logs/cc-reaper.log`, 153 `cloud-return`
+rows):
 
 ```
-CONTROL (known-scheduled)        SUBJECT (the land arm)
-  cc-dispatch      → 1 plist      cloud-reconcile      → 0 plists
-  cc-reaper        → 2 plists     cc-offload           → 0 plists
-  deploy-live      → 3 plists     cloud-return         → 0 plists
-  postland-verify  → 2 plists     thrash-block-recover → 0 plists
-                                  branch-prune-landed  → 0 plists
+[2026-08-25T17:29:06Z] garbage: TERM orphan-bash pid=12874 age=1505s argv=<bash …/scripts/cloud-return.sh --sweep>
+[2026-08-25T19:58:06Z] garbage: TERM orphan-tool pid=11480 age=899s  argv=</opt/homebrew/bin/timeout -k 10 900 bash …/cloud-return.sh --swe>
+[2026-08-25T20:15:41Z] garbage: TERM orphan-bash pid=11500 age=1955s argv=<bash …/scripts/cloud-return.sh --sweep>
 ```
 
-Both namespaces (`com.claude.*` and `com.chrisren.*`) were in the grep's population; `crontab -l`
-is empty; and the single in-tree reference from a scheduled job — `scripts/autonomy-sweep.sh:1065`
-— is a **comment**, not a call.
+and the receiving end, in the sweep's own stderr (`~/.claude/logs/autonomy-sweep.err.log`, mtime
+2026-08-30, the same line recurring at :954, :1033, :1048 as the deployed copy moved):
 
-**The false premise, in the dispatcher's own header** (`bin/cc-dispatch:5-6`):
+```
+/Users/chrisren/.claude/scripts/autonomy-sweep.sh: line 1048: 28017 Killed: 9  "$_tmo" -k 10 900 bash "$_cloudret" --sweep > /dev/null 2>&1
+```
+
+**The mechanism, end to end.** `autonomy-sweep` is launchd-parented, so both the `timeout` wrapper
+and the `bash cloud-return.sh` beneath it run at `ppid 1`. `cc-reaper`'s garbage arm selects
+`orphan-tool` on a `timeout` older than 120 s and `orphan-bash` on a bash older than 600 s, in each
+case **only when the process's own argv misses the whitelist** (`bin/cc-reaper:627`). That whitelist
+reads:
+
+```
+lead-supervisor|cc-dispatch|cc-discover|cc-reaper|qos-census|compressor-sentinel|postland-verify|
+session-search|devserver-gc|deploy-live|cc-relogin|lr-reset-poller|teammate-reap|capacity-alarm|
+power-policy|log-rotation|restic|worktree-gc|caffeinate|cc-await-ping|mailbox-wake-arm|
+ship-land|desk-land|kitty|tmux|iTerm|launchd
+```
+
+`ship-land` and `desk-land` are there. **`cloud-return` and `cloud-reconcile` are not** — verified
+by grepping the whitelist literal itself. A land needs far longer than 600 s (a single-branch
+dry-run this session ran 452 s before being killed), so the sweep has never once been allowed to
+finish. `cc-reaper:620-626` even carries the comment *"THE LAND PATH IS NEVER GARBAGE (2026-08-16)
+… neither carried a whitelist token — so the arm classified an IN-PROGRESS LAND as the residue of a
+dead session."* That fix named two spellings of the land path and missed the third — the repo's own
+`denylist-enumerates-spellings-not-the-class` lesson, recurring in the file that records it.
+
+**Corroborating null, with a passing control.** `log_idl cloud-return …` at `autonomy-sweep.sh:1079`
+is unconditional — every path through that block logs, including `skipped-not-deployed`. The IDL
+holds **0 `cloud-return` rows in 19,660 lines**, while the same instrument shows 1,079 `cc-dispatch`
+rows in the last 2,000. So control never reaches :1079 at all. And the sweep's own ledger,
+`~/.claude/autonomy/cloud/return.jsonl`, last wrote **2026-08-26T21:57:54Z** — five days ago — with
+its final outcomes `land-refused` (`land_rc` 65) and `land-refused-cached` (`prior_rc` 70). **Two
+stacked failures: the sweep is killed before it can land, and in the window when it did run, the
+land was refusing.**
+
+**A second, independent defect — the dispatcher's stated premise** (`bin/cc-dispatch:5-6`):
 
 > It does NOT land work itself — the spawned session's lead lands via the existing ship-land rails.
 
@@ -124,13 +170,18 @@ have made this visible on day one:
 - **conversion** — claims → dones over the window (this week: 244 → 1, **0.4 %**);
 - **stranded** — count and age of ELIGIBLE-but-unlanded cloud branches (**272, oldest 14 d**).
 
-### 1.6 The generator: correct mechanisms, unwired
+### 1.6 The generator: correct mechanisms that never get to finish
 
-Every part is well built. `cloud-reconcile.sh` is careful, gate-delegating, fail-loud.
-`scripts/thrash-block-recover.sh` already exists and correctly handles precisely the rule-B
-`cc-backlog-reap` block oscillation in §1.3. **Neither is wired to anything.** The reason is the
-same for both: wiring is a C10 **operator-gated activation**, and the activation queue is
-**11 deep and all 11 are rotting >24 h**:
+Every part is well built. `cloud-return.sh` is wired and invoked every 300 s — and killed.
+`cloud-reconcile.sh` is careful, gate-delegating and fail-loud — and is the manual `CONFIRM=1`
+path, unscheduled by design. `scripts/thrash-block-recover.sh` already exists and correctly handles
+precisely the rule-B `cc-backlog-reap` oscillation in §1.3 — and is wired to nothing.
+
+So the generator is **not** "nobody built it". It is that a correct mechanism reaches production
+and is then defeated by a *sibling* mechanism that cannot see it: the reaper's whitelist is an
+enumeration of spellings rather than a statement of the class, and the drain's own landing arm is
+outside it. Where a mechanism instead needs an operator to switch it on, it rots in a queue that is
+**11 deep with all 11 past 24 h**:
 
 ```
 13-mailbox-gc · 18-fleet · 27-worktree-gc-infra · 30-teammate-reap-alarm · 33-escalation-watch
@@ -145,24 +196,52 @@ binding design constraint below, and it is measured, not assumed.
 
 ## 2. Phase 0 — orchestration
 
-**Execution locus per wave.** W1 and W2 are **S** (dispatched handoff sessions) — the default; each
-is a self-contained implementation with its own gate run, and neither needs the lead's context.
-W0 is **L** (lead-inline): it is one bounded read-only measurement whose output shapes both briefs.
+**Execution locus per wave.** W1 is **L** (lead-inline): the corrected fix is a whitelist token plus
+its RED-proving fixture in one file, far below the cost of briefing a session, and it is the one
+change that unblocks everything else. W2 and W3 are **S** (dispatched handoff sessions) — the
+default; each is a self-contained implementation with its own gate run and neither needs the lead's
+context. W0 was **L** and is done (its output is §1.1).
 
 | Wave | Locus | Deliverable | Owns |
 |---|---|---|---|
-| **W0** | L | Land-path viability: does a *recent* branch rebase + gate clean? | lead |
-| **W1** | S | **Close the circuit** — reconcile inside an already-running job | `bin/cc-dispatch`, `scripts/cloud-reconcile.sh`, tests |
+| **W0** | L | ✅ DONE — root-cause the land arm; result is §1.1 | lead |
+| **W1** | L | **Stop the reaper eating the land** — whitelist `cloud-return`/`cloud-reconcile` + fixture pair | `bin/cc-reaper`, `tests/cc-reaper.bats` |
 | **W2** | S | **Make the churn visible** — drain conversion + stranded in `cc-value` | `bin/cc-value`, tests |
+| **W3** | S | **Re-aim the local lane at the backlog** — arm the §4.1 goal + closure floor | the drain-chain brief + `scripts/drain-chain-assert.sh` |
 
-Single owner per file; W1 and W2 share none. Lead context budget: hold ≥50 %, succeed at W2 fire.
+Single owner per file; no wave shares one. Lead context budget: hold ≥50 %, succeed after W1 lands.
+Dependency: W1 blocks nothing formally, but until it lands the cloud lane cannot drain, so W2's
+stranded metric will legitimately keep reading high — that is the metric working, not failing.
 
-### The binding constraint on W1 (from §1.6)
+### The corrected fix for W1, and why it is one line plus a test
 
-**The fix must not require a new operator activation.** `com.claude.dispatcher` is already loaded
-and already runs every 300 s; a reconcile pass added *inside* it inherits that schedule and cannot
-rot in the pending queue. A new `com.claude.cloud-reconcile.plist` would be correct code that
-becomes the 12th rotting activation — the defect this document exists to end.
+The first draft of this plan proposed adding a reconcile pass to `bin/cc-dispatch`, on the reasoning
+that no land arm existed and a new launchd job would rot in the 11-deep activation queue. **That
+premise is now known false** (§1.1): the arm exists, is scheduled, and runs. Building a second one
+would have been a parallel rail beside a working one that is merely being killed — a strictly worse
+outcome, and exactly the "mint a second renderer" defect in another costume.
+
+The real fix is to add `cloud-return` (and `cloud-reconcile`, for the manual path) to the
+`cc-reaper` whitelist at `bin/cc-reaper:627`, so the land path stops being classified as the residue
+of a dead session. It must be proven with the fixture pair that file already uses: **the land shapes
+survive while an unrelated orphan bash in the same closed world still dies**, so the exemption
+cannot silently widen into "nothing is collected".
+
+⚠️ **The whitelist is not the whole cure, and W1 must say so rather than declare victory.** Two
+things stay open after it and are named here so they are not lost:
+1. `timeout -k 10 900` at `autonomy-sweep.sh:1075` bounds the whole sweep at 900 s. A single-branch
+   land ran 452 s this session. With 272 eligible branches a serial sweep cannot finish in one
+   tick — so the bound must either rise, or the sweep must become explicitly incremental
+   (land N per tick, journal what it deferred; a silent cap reads as "covered everything").
+2. When the sweep *did* run, `return.jsonl` recorded `land-refused` with `land_rc` 65 and 70. Those
+   refusal codes are unexplained and are a second, independent failure. W1 does not have to fix
+   them, but it must not claim the lane is healthy while they stand.
+
+### The constraint that still binds every wave (from §1.6)
+
+**No fix may ship as a new operator activation.** The queue is 11 deep and all 11 are rotting past
+24 h; a new activation is correct code that becomes the 12th. Prefer repairing an already-scheduled
+mechanism — which, now that §1.1 is right, is exactly what W1 does.
 
 ### The second constraint on W1: it must survive `cc-reaper`
 
