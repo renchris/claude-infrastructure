@@ -194,6 +194,23 @@ The one real cost in view is `next3`'s ~8 pp, and with 3.8 h left that is essent
   uninformative, and speaks only in the last ~2 days where linear and empirical converge
   (day 6: −17 pp; day 7: −2 pp).
 
+  ✅ **SHIPPED 2026-09-01** (backlog `70ed289c10fb`). `MIN_ELAPSED_FRAC` in `bin/claude-accounts`
+  goes `0.05 → 6/7`: the projection — `burn_ratio`, `proj_end_pct`, `wall_risk` and the pace-line
+  `⚠ WALL` flag with them — is silent below the day-6 mark and speaks only in the last ~24 h.
+  The **shape-corrected** alternative was NOT taken, and axis-D of the drain-telemetry wave is why
+  it should not be: fitted leave-one-out it *loses* (MAE 54.1 vs linear's 39.5) because
+  between-window shape variance dominates the mean shape, and the shape is a fossil of the
+  operator's own end-of-window rush — if the planner reading this succeeds the rush stops, the
+  shape flattens, and a shape-fitted estimator fails toward complacency.
+  **What the widening costs, stated:** the mid-week `⚠ WALL` flag. It was a false alarm on the one
+  window that raised it (119% projected, 99% actual), and under the constant predictor every window
+  is a wall trajectory, so mid-week it carried no information either way. `wk_strand_pp` (a nowcast
+  at the last 48 h of pace, no lead-time claim) is what still speaks mid-week.
+  `tests/claude-accounts-burn-ratio.bats` is 11 cases: the day-3 backtest rows above are now
+  silence fixtures, a boundary pair pins the floor at the day-6 mark, and the three in-range cases
+  moved above it unchanged. Both mutants red — restoring `0.05` reds exactly the three new
+  abstain cases; a never-speaks floor reds exactly the four in-range ones.
+
 **Reproduce:** the analysis scripts are in this session's scratchpad; the one-command version of
 the retrospective is `python3 scripts/desk-strand-replay.py`.
 

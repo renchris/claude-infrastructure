@@ -230,10 +230,24 @@ r = {"acct": "next", "weekly_pct": 52, "weekly_reset_h": 114.0, "burn_wk_ewma_ph
 st = ca.wk_strand_pp(r)
 assert st == 0.0, st
 line = ca.pace_line([r])
-assert "⚠ WALL trajectory" in line, line
 assert "248" not in line, line
 assert "231" not in line, line
 assert "154" not in line, line
+# AMENDED 2026-09-01 (backlog 70ed289c10fb), invariant unchanged: the clamp is still what this
+# case is for, and no overshoot renders as a number. What moved is WHERE the ⚠ WALL flag may be
+# claimed. This fixture sits at phase 0.32 -- mid-week -- and the backtest of exactly this row
+# (51% at day 3) projected 119% against a 99% actual; across mid-week the linear projector errs
+# by a mean 46 pp, so `wall_projection` now abstains below 6/7 elapsed and this row raises no
+# flag at all. The flag is re-asserted below in the LAST DAY, where linear and empirical have
+# converged (-17 pp at day 6, -2 pp at day 7) and hitting 100% early really is imminent.
+assert "⚠ WALL" not in line, line
+assert "× burn" not in line, line
+w = {"acct": "next", "weekly_pct": 95, "weekly_reset_h": 20.0, "burn_wk_ewma_ph": 1.0}
+assert ca.wk_strand_pp(w) == 0.0, w
+wline = ca.pace_line([w])
+assert "⚠ WALL trajectory" in wline, wline
+assert "1.08× burn" in wline, wline
+assert "107" not in wline, wline          # still the RATIO, never the >100 projection
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
