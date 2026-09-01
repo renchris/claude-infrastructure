@@ -107,7 +107,13 @@ echo "checkout:    $REPO"
 
 # ── read the world ONCE (read-only launchctl only; nothing above the CONFIRM gate mutates) ─────────
 DISABLED_DB="$("$LAUNCHCTL" print-disabled "gui/$UID_" 2>/dev/null || true)"
-is_disabled() { printf '%s\n' "$DISABLED_DB" | grep -Fq "\"$1\" => disabled"; }
+# `case`, not `printf … | grep -Fq`: this functions rc IS its return value, read at :136/:139/:237 in
+# `&&` positions that decide whether a daemon gets activated. Under `set -o pipefail` a `grep -q`
+# closes the pipe on its match and SIGPIPEs the producer, and the 141 becomes the pipelines status —
+# so a label that IS disabled reads NOT disabled. `$DISABLED_DB` is the whole `launchctl
+# print-disabled` dump, which passes the pipe buffer on any box with a long disabled list, and the
+# quoted pattern parts below are matched literally (quoting disables globbing in a `case` pattern).
+is_disabled() { case "$DISABLED_DB" in *"\"$1\" => disabled"*) return 0 ;; esac; return 1; }
 # `print`, never `list | grep`: print resolves the label in THIS domain and fails non-zero when it is
 # absent, whereas a grep over `list` can match a substring of an unrelated label and reads a job that
 # has already exited as present — it cannot tell loaded-and-healthy from loaded-and-failing.
