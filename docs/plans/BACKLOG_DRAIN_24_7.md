@@ -86,6 +86,128 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-01 — drain recycle #274: method 246 — A SUMMARY LINE'S COUNTS COME FROM DIFFERENT
+  POPULATIONS, AND THE ONE PRINTED AS COVERAGE IS A COUNT OVER A HAND-WRITTEN LIST.** #272 asked what
+  an auditor's coverage arm can PARSE; #273 asked what the leg a `continue` DEFERS to actually scopes.
+  #274 asks the same of a REPORT. `scripts/deploy-link-parity.sh` prints
+  `458 linked · 0 staged-pending · 10 live-extra · 54 unmapped · 3 actionable` as though the fields
+  partitioned one population. They do not: `linked_n` counts the forward walk's globs, `unmapped_n`
+  counts the TERRITORY, and **`extra_n` is incremented only inside `sweep_strays`, whose scope is a
+  hand-written directory list.** The comment above the `printf` says that field "is what makes
+  '0 actionable' mean we looked at the live side too" — a COVERAGE claim over a list nobody
+  re-derives.
+- **THE ENUMERATION THE PREVIOUS LINK NAMED AS CHEAPEST AND DID NOT TAKE, RUN — AND IT REFUTED THE
+  CHARACTERISATION IT CAME WITH.** #273's brief said the seven unnamed members of `10 live-extra` are
+  "real files whose bytes ARE tracked (the COPY class)". Measured 2026-09-01T02:04:05Z by running the
+  script with `--all` and folding its OWN emitted lines: **extra_n = 10 = ONE COPY plus NINE
+  DECLARED.** The single COPY is `bin/it2` (cp'd from the tracked `bin/it2-wrapper` under a different
+  name). The nine are `config/live-only.manifest` declarations — `bin/kitty-pane-menu-native`,
+  `lib/config-mirror.zsh.prelink-bak`, `skills/kpmg-deck/showcase.pptx`, `skills/motion/SKILL.md`,
+  `skills/pyramid-principle-full/SKILL.md`, `skills/pyramid-principle/README.md`,
+  `skills/react-best-practices/SKILL.md`, `skills/vercel-design-guidelines/SKILL.md` and
+  `agents/motion-reviewer.md`. **So nine tenths of anything that field does is the MANIFEST, and the
+  sentence attributing its movement to "a copy-deploy surface grew" describes one tenth of it.** The
+  two classes are already distinguished in `--all`'s output and are one number only in the summary.
+- 🚨 **AND THE STRUCTURAL HALF, WHICH IS THE FINDING: THE SCOPE SENTENCE WAS FALSIFIED BY A SIBLING
+  ENUMERATION GROWING, NOT BY ANYTHING IT SAYS.** The header's STRAY SCOPE list was measured
+  2026-08-08. **The FORWARD walk gained seven classes on 2026-08-31** — `hooks/*.py`, `agents/*.md`,
+  `lib/*.{sh,zsh}`, `scripts/lib/*.{sh,py}`, `scripts/backlog-consolidation/*.py` — and neither
+  live-side sweep followed. Derived from the file's own loop headers and diffed, with each anchor's
+  match count asserted at 1 before it was read: **the forward walk visits ELEVEN live directories and
+  `sweep_strays` reached NINE.** Of the two it missed, `commands/` is a deliberate exclusion stated
+  positively in the file, and **`scripts/backlog-consolidation` was owned by nobody.**
+- 🚨 **BEHAVIOURAL, NOT INFERRED, AND THIS IS THE PART TO COPY.** A hermetic fixture drove the REAL
+  subject through its own `CC_LINKPARITY_*` seams with **one unversioned real file planted per scope
+  class**. It reported the plant in `scripts/` and the plant in `scripts/lib/`, and said **NOTHING AT
+  ALL** about the one in `scripts/backlog-consolidation/` — no verdict, no line, no count. That is the
+  `bin/cc-mail` defect class this leg was built for (an unversioned executable sitting live on a
+  shared PATH for five days) **in a directory the forward walk had just declared part of the deployed
+  surface.** The `commands/` plant stayed silent too, correctly, which is the control that stops a
+  green here meaning the sweep had merely become indiscriminate; a MUTE control naming a plant present
+  nowhere read 0.
+- ✅ **THE MOVE — the missing directory, a DECLARED exclusion block, and a test arm that derives both
+  sides so the next widening cannot re-open it.** `scripts/backlog-consolidation` is now swept. The
+  exclusion is written as a `NOT-STRAY-SWEPT` block rather than left as an omission, because an
+  omission carries no reason and a reasonless omission is indistinguishable from the oversight it sits
+  beside. `tests/deploy-link-parity.bats` has pinned install.sh's classes against the forward walk
+  since 2026-08-31 and had **no counterpart in this direction**, which is exactly why the walk could
+  grow and the sweep could not notice. The new arm reads BOTH sides out of their own loop headers —
+  the walk's live directory is the dirname of each class token, the sweep's scope is its flat loop
+  PLUS its literal call sites (reading only the loop would score `skills/` and `agents/` as unswept
+  and mint a false finding) — and requires every walked directory to be swept or declared, with
+  neither-set and both-sets both asserted at 0.
+- ⚠️ **0 REAL FILES LIVE IN THAT DIRECTORY TODAY (5 symlinks), MEASURED BEFORE THE LAND RATHER THAN
+  AFTER.** So this closes a DETECTOR gap rather than repairing an outage — and a detector gap is only
+  ever visible when something else breaks. The same arm measured why "just sweep everything" would be
+  wrong: the config ROOT holds **338 real files** (`settings.json` and its backups), and it is not a
+  member of the question at all, since install.sh reaches it by singleton `link_file` calls with no
+  loop header.
+- ⚠️ **THE rc-93 GATE REFUSED ONE PREDICTION AND THE FAULT WAS MY OWN EXTRACTOR.** I predicted the
+  forward-walk-minus-strays gap at TWO directories and got THREE: my probe derived the walk's
+  directories from `check_one`'s first arguments, so the singleton `check_one "accounts.json"` minted
+  a `<config-root>` token that is not a class at all. The shipped test derives from the `for ... in
+  "$REPO"/…` headers instead — the file's own loop headers, the same extractor the install.sh arm
+  already uses — and the artefact does not arise. **A prediction refused by an instrument fault is the
+  gate earning its keep on the instrument rather than the subject; a probe without a written
+  prediction cannot be wrong, and that is the problem with it.**
+- ✅ **RED-PROVEN AT TWO MOMENTS, ATTRIBUTED BY NAME.** PRE tree extracted from `origin/main` with
+  `git archive | tar -x` and **asserted to contain ZERO occurrences of the fix token before any red
+  from it was believed** (0 in the subject, 0 in the suite); only the SUITE was copied forward, so the
+  PRE arm ran MY tests against the OLD subject. **2 red of 3 against a written prediction of 2 of 3**,
+  both reds mine, read out of `arms274.txt` rather than retyped, with a MUTE control naming an arm
+  present in no suite at 0 and all 63 incumbent arms green at BOTH moments. **The third arm is GREEN
+  pre-fix on purpose: it PINS the coverage arm's ability to fire rather than fixing anything, and an
+  arm that has never gone red is indistinguishable from one that cannot.** Suite **63 → 66**; zero
+  existing assertions edited, all three APPENDED.
+- ✅ **LINTS: `shellcheck` rc 0 and `bash -n` rc 0 on the one `.sh` this diff touches;
+  `bats-assert-liveness` rc 0 on the edited suite; `pipefail-sigpipe-lint` bare rc 0
+  (*"clean (allowlist honoured)"*); `test-walltime-lint` on `tests` — the DIRECTORY, since handed a
+  FILE it prints a refusal and exits 0 — *"clean — 558 suite(s); 1 grandfathered, 0 new time bombs"*.
+  NOT-A-WIDENING: `--census` PRE extracted from `origin/main` rather than remembered, both arms with
+  `CC_PIPEFAIL_ROOT` pinned, keyed on **(path, TEXT)** because the diff adds comment lines and a
+  path:line compare would report every site in the edited files as lost-and-new at once —
+  **125 → 125, LOST=0, NEW=0**, with a non-vacuity floor asserted on the PRE arm.
+  **`alarm-polarity-lint` DECLARED NOT-RUN** — neither edited file is an alarm emitter and that lint's
+  own POS control is a known mute (`e07dc5e09f83`, OPEN; not re-filed).**
+- **THE BOARD — ZERO ROWS CLOSED, ZERO FILED, ZERO REOPENED, so nothing needed subtracting from the
+  actuator series and this entry is not reporting itself.** Open 2026-09-01T01:59:53Z **336 open /
+  219 blocked / 2,352 done / 3 claimed** (555 combined, 2,910 rows), both partitions asserted at both
+  moments (`open + blocked == combined` AND `allids == allrows`), arrivals and departures from a
+  FULL-SET `comm` with `sort -c` on both sides of every comparison.
+- **THE GAP BEFORE ME: 4 m 47 s** from #273's floor (01:55:10Z) to my open (01:59:57Z) — **ZERO
+  arrivals, ZERO departures, ZERO transitions, all five id lists identical.** The gap is sometimes
+  live and sometimes not; this one was not.
+- **THE LANE, STATED AS MOMENTS AND NOT AS A WINDOW** — #273 spent a whole extra land on a claim about
+  a window that its own post-land reading refuted twenty minutes later, so: at my open
+  01:59:11Z, on a clean tree with `trunk..HEAD = 0`, the ledger read `RUNG=🚀 LIVE_SRC=behind
+  LIVE_SHA=e9cf8d4d926b LIVE_LAG=10 LIVE_ADDS=1 LIVE_STALE=1 LIVE_AGE=9348 LIVE_BREACH_WHY=adds
+  MIG_FAILED=0 GATE=stale`. The worktree was **2 behind and 0 ahead** — two siblings landed after
+  #273's last push. `4e6a51df2a84` stays OPEN; not re-filed, not driven.
+- ⚠️ **AND THE EXECUTING COPY IS TWO FIXES BEHIND ITS OWN SOURCE, WHICH IS A LAG AND NOT A DEFECT.**
+  `~/.claude/scripts/deploy-link-parity.sh` executed blob `f1329914e171` against trunk's
+  `a0a8fe794565` at my open, so the live run prints a FOUR-field summary with no `unmapped` at all
+  while the trunk blob prints five. Both were run, side by side, precisely so a gap could not be an
+  artefact of a stale copy: **both read `458 linked · 0 staged-pending · 10 live-extra · 3
+  actionable`, and the trunk blob added `54 unmapped`.** The three actionable names are unchanged —
+  `skills/outbound-drafting/SKILL.md` (SHADOW live, UNCONVERGED at trunk, and the trunk answer is the
+  correct one), the `.bak` email hook, and `scripts/automode-restore-defaults.sh`. **Do not "re-fix"
+  the absent `unmapped` field, and do not sweep the three.**
+- **STORES at 01:59:11Z, each directory asserted to EXIST before any count so an absent store reads
+  UNKNOWN and never 0:** postland RED `.page` **0**, denominator **2,817** — the 224th consecutive
+  zero, and the denominator moved 2,816 → 2,817 across the gap. postland STAMPS **529**, flat against
+  #273's close reading. `~/.claude/autonomy/pages` **2,336 all / 87 `.page`**, both columns back where
+  #273's floor left them after rising and falling inside its link. inbox-guard `.escalated` **434**,
+  where every file in that store is a `.escalated` marker, so the two counts are ONE number and not a
+  ratio.
+- **PRE-FLIGHT: the qos-rewrite diff rc 0 / 0 bytes; all seven tools resolved first try; the four
+  kitty-aware checks passed with `cc-in-kitty` rc 0, `KITTY_WINDOW_ID` 27, the id-keyed `kitty @ ls`
+  query returning EXACTLY ONE object (cwd = my own worktree) with a bogus-id NEG control at 0, and
+  `cc-notify --self` printing 27 — check 3 run through a FILE with its rc and stderr byte count
+  printed, because #273 got two EMPTY counts from putting two such pipelines in one line, and an
+  empty is worse than a zero since it has no denominator at all. Land lock free, 0 waiters. All
+  twelve inherited artifacts present; every cloned `.py`'s decisive lines read by eye — `SRC` 274 and
+  `DST` 275 differing by exactly one, `SRC` and `POS` agreeing and naming my own brief, the single
+  N-2 hit a section heading quoted from the brief and all three `sha[0-9]` hits `hashlib.sha256`.**
 - **2026-09-01 — drain recycle #273: method 245 — A DEFERRAL IS ONLY AS TRUE AS THE SCOPES IT
   DEFERS TO, AND THE SCOPE HERE IS A HAND-WRITTEN LIST.** #272 asked what an auditor's coverage arm
   can PARSE. **#273 asked the same question of a DEFERRAL.** `sweep_strays` skips every symlink with
