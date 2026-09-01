@@ -628,7 +628,9 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
       # THE THIRD SPELLING OF THE LAND PATH (2026-09-01). The 08-16 fix above named ship-land and
       # desk-land -- the INNER links -- and the 08-17 fix reached them through a bound. Both were
       # right, and neither covered the OUTER driver of the CLOUD land path: cloud-return.sh, which
-      # autonomy-sweep.sh:1075 invokes on its 300 s cadence wrapped in a 900 s bound. So this arm
+      # autonomy-sweep.sh invokes on its 300 s cadence wrapped in a 900 s bound (grep `_cloudret=`
+      # for the site -- it moved from §2d to §0a on 2026-09-01 and a LINE NUMBER IS A COORDINATE IN A
+      # FILE PEOPLE EDIT). So this arm
       # went on collecting it -- 153 cloud-return rows in cc-reaper.log, as orphan-tool on the bound
       # at age 899s and as orphan-bash on the payload at age 1955s -- with the receiving end logging
       # Killed: 9 on that same line of autonomy-sweep.err.log. A land runs a full gate and outruns

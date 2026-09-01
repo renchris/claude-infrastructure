@@ -1687,7 +1687,7 @@ EOF
 
 # ── THE CLOUD LAND PATH WAS THE THIRD SPELLING (2026-09-01). The two fixes above named the land
 # path's INNER links (ship-land, desk-land) and then reached them through a bound. Neither covered
-# the CLOUD lane's OUTER driver: `autonomy-sweep.sh:1075` runs `timeout -k 10 900 bash
+# the CLOUD lane's OUTER driver: `autonomy-sweep.sh` §0a (grep `_cloudret=`) runs `timeout -k 10 900 bash
 # cloud-return.sh --sweep` every 300 s, and `cloud-return` carried no token — so this arm collected
 # the cloud landing sweep 153 times (cc-reaper.log), with the receiving end logging `Killed: 9`.
 # Because a land outruns the 600 s floor by construction, the sweep never once finished: 272 cloud
