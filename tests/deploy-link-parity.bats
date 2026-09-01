@@ -1000,3 +1000,107 @@ behind_by() {   # $1 = repo-relative path · $2 = its bytes → checkout sits 1 
   has "0 actionable"
   has "every landed file is live"
 }
+
+# ── THE DANGLING CLASS BEYOND sweep_orphans's HAND-WRITTEN SCOPE (2026-09-01) ────────────────────
+#
+# sweep_strays skips every symlink, deferring in a comment to "the forward walk / sweep_orphans".
+# That is a PARTITION CLAIM over the live symlink population naming two owners, and the forward walk
+# cannot own the rename/delete case at all: check_one returns at `[ -f "$src" ]`, since a
+# renamed-away target IS a repo file that no longer exists. So the whole class rested on
+# sweep_orphans's directory list — six names plus skills/*/, one level deep — which is the fourth
+# restated enumeration of the live layer in that file and the only one no arm quantified over.
+#
+# MEASURED 2026-09-01T01:18Z on the live layer: 514 symlinks resolve into the checkout, the ORPHAN
+# leg's scope reaches 446, and it misses 68. A hermetic run with one broken link planted per scope
+# class reported ONE of five and printed "0 unmapped" over the other four — the `[ -f "$tgt" ]` test
+# in sweep_unmapped dropped them before the non-vacuity denominator ever counted them.
+#
+# The arms below plant the broken link in the classes the list cannot reach. The last two predict
+# GREEN on purpose: one pins that the in-scope case is still reported exactly ONCE (the new deferral
+# ledger), the other that a resolving directory symlink is still not a finding (the -f test kept its
+# real job when it stopped doubling as the dangling filter).
+
+@test "a dangling link in scripts/lib — swept for STRAYS, never for ORPHANS — is reported" {
+  mkdir -p "$CC_LINKPARITY_CONFIG/scripts/lib"
+  ln -sfn "$CC_LINKPARITY_REPO/scripts/lib/renamed-away.sh" \
+          "$CC_LINKPARITY_CONFIG/scripts/lib/renamed-away.sh"
+  run "$LP"
+  [ "$status" -eq 1 ]
+  has "ORPHAN"
+  has "scripts/lib/renamed-away.sh"
+  has "rm \"$CC_LINKPARITY_CONFIG/scripts/lib/renamed-away.sh\""
+}
+
+@test "a dangling link at the CONFIG ROOT is reported — model-config.yaml lives there" {
+  # Not a hypothetical directory: model-config.yaml, providers.json and accounts.json are all
+  # root-level live links into the checkout today, and the root is in NEITHER sweep list.
+  ln -sfn "$CC_LINKPARITY_REPO/model-config.yaml" "$CC_LINKPARITY_CONFIG/model-config.yaml"
+  run "$LP"
+  [ "$status" -eq 1 ]
+  has "ORPHAN"
+  has "model-config.yaml"
+}
+
+@test "a dangling link in a skills SUBdirectory is reported — sweep_orphans is one level deep" {
+  # sweep_orphans iterates "$CFG"/skills/*/ and then "$d"/*, so skills/<n>/<file> is swept and
+  # skills/<n>/<sub>/<file> is not. 37 of the 68 uncovered live links are this shape.
+  mkdir -p "$CC_LINKPARITY_CONFIG/skills/demo/references"
+  ln -sfn "$CC_LINKPARITY_REPO/skills/demo/references/gone.md" \
+          "$CC_LINKPARITY_CONFIG/skills/demo/references/gone.md"
+  run "$LP"
+  [ "$status" -eq 1 ]
+  has "ORPHAN"
+  has "skills/demo/references/gone.md"
+}
+
+@test "MECHANISM: every dir swept for strays but NOT for orphans has its dangling case reported" {
+  # Both lists are DERIVED from the subject, never transcribed, so this arm survives any rewording
+  # of the fix and scores a directory added to either loop tomorrow without editing this file. It
+  # names no directory: today the set difference is {lib, scripts/lib}, and that is a fact about the
+  # source, not about this test. A spelling arm dies the day someone rewords; this one does not.
+  local linkp="$REPO_ROOT/scripts/deploy-link-parity.sh"
+  [ "$(grep -cE '^for d in .*; do sweep_orphans' "$linkp")" -eq 1 ]
+  [ "$(grep -cE '^for d in .*; do sweep_strays' "$linkp")" -eq 1 ]
+  grep -E '^for d in .*; do sweep_orphans' "$linkp" | sed 's/^for d in //; s/; do.*//' \
+    | tr ' ' '\n' | sort -u > "$BATS_TEST_TMPDIR/orph.txt"
+  grep -E '^for d in .*; do sweep_strays' "$linkp" | sed 's/^for d in //; s/; do.*//' \
+    | tr ' ' '\n' | sort -u > "$BATS_TEST_TMPDIR/stray.txt"
+  comm -13 "$BATS_TEST_TMPDIR/orph.txt" "$BATS_TEST_TMPDIR/stray.txt" > "$BATS_TEST_TMPDIR/gap.txt"
+  # NON-VACUITY: if the two lists ever coincide this arm would pass without asserting anything.
+  [ "$(wc -l < "$BATS_TEST_TMPDIR/gap.txt")" -ge 1 ]
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    mkdir -p "$CC_LINKPARITY_CONFIG/$d"
+    ln -sfn "$CC_LINKPARITY_REPO/$d/vanished.sh" "$CC_LINKPARITY_CONFIG/$d/vanished.sh"
+    run "$LP"
+    [ "$status" -eq 1 ]
+    has "$d/vanished.sh"
+    rm -f "$CC_LINKPARITY_CONFIG/$d/vanished.sh"
+  done < "$BATS_TEST_TMPDIR/gap.txt"
+}
+
+@test "CONTROL: an IN-scope dangling link is still reported exactly ONCE, not twice" {
+  # A DELIBERATE ZERO — green before the fix and after it. Two legs now sweep the same class, so
+  # without the ORPHANED ledger one broken link would be classified twice with one remedy: the exact
+  # double-classification the SEEN ledger was introduced to prevent, one leg over. Counting the
+  # ORPHAN lines is what discriminates; a `has "ORPHAN"` would hold in both states and assert nothing.
+  ln -sfn "$CC_LINKPARITY_REPO/scripts/renamed-away.sh" "$CC_LINKPARITY_CONFIG/scripts/renamed-away.sh"
+  run "$LP" --all
+  [ "$status" -eq 1 ]
+  [ "$(printf '%s\n' "$output" | grep -c '^  ORPHAN ')" -eq 1 ]
+  [ "$(printf '%s\n' "$output" | grep -c 'renamed-away.sh')" -eq 2 ]
+}
+
+@test "CONTROL: a RESOLVING directory symlink is still never a finding (the vendor/ leg)" {
+  # The -f test used to double as the dangling filter. Splitting the two jobs must not cost it its
+  # real one: vendor/ deploys ONE directory symlink per plugin, declared NOT-PER-FILE, and a
+  # per-file verdict on it would mint a false finding per member.
+  mkdir -p "$CC_LINKPARITY_REPO/vendor/plugin"
+  printf 'v\n' > "$CC_LINKPARITY_REPO/vendor/plugin/file.sh"
+  mkdir -p "$CC_LINKPARITY_CONFIG/vendor"
+  ln -sfn "$CC_LINKPARITY_REPO/vendor/plugin" "$CC_LINKPARITY_CONFIG/vendor/plugin"
+  run "$LP"
+  [ "$status" -eq 0 ]
+  lacks "ORPHAN"
+  has "0 unmapped"
+}
