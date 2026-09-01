@@ -42,8 +42,40 @@
 #   cc-value --session <uuid>    a specific session's landed-commit contribution
 #   cc-value selftest            RED-provable hermetic self-check (fixture repo+backlog+telemetry)
 #
+# ── WHY THE CHURN DETECTOR WAS REBUILT (2026-09-01, DRAIN_CIRCUIT §1.5) ───────────────────────
+# The original predicate was `spend > 0 AND value == 0`, and it was STRUCTURALLY UNREACHABLE on
+# this fleet: the local drain lands 42-86 commits a day, so `value` is never 0, so `churn` was
+# never true. It rendered `value 87 · v/spend 2.6 · churn=false` across an entire week in which
+# the cloud lane closed exactly ZERO backlog rows and 272 eligible branches sat unlanded. An alarm
+# that cannot fire says as little as one that always does (memory alarm-polarity-and-attention-
+# budget), and this one had been saying it for a week.
+#
+# `value` KEEPS ITS MEANING — other consumers read it (cc-board's VALUE column, --me). The fix is
+# ADDITIVE: two new terms, each independent of the number that did the masking, and a `churn` that
+# is now the OR of named arms reported in `churn_reasons` so the operator sees WHICH one fired.
+#
+#   • no-conversion — distinct backlog ids CLAIMED in the window vs how many of those same ids
+#     reached `done`. Measured live the day this landed: 247 claim events over 17 distinct ids for
+#     1 conversion (5.8%). This is the arm that fires today, and it is independent of the commit
+#     count by construction — it never reads a commit at all.
+#   • lane-silent — per-lane closes from the `lane` field on the `done` record, for the roster of
+#     24/7 drains (CC_VALUE_LANES). SUMMING the fleet is exactly what let the local lane's commit
+#     volume mask the cloud lane's zero, so the lanes are split and each is asked separately.
+#
+# 🚨 A VALUE-PER-SPEND RATE FLOOR WAS CONSIDERED AND DELIBERATELY NOT BUILT. It is the obvious
+# third arm and it is a PROXY THAT RESTATES WHAT IT SUPPLEMENTS: its numerator is `value`, the very
+# quantity whose blindness is the defect above. Measured on the live store during the zero-drain
+# week, v/spend read 21.2 — comfortably above any floor a reasonable person would set — because 190
+# of the 191 units were unattributed local-lane commits, many of them re-attempts at the same
+# stranded item. A floor on that numerator inherits its blindness and would have stayed silent all
+# week too. `ratio` is still REPORTED (it is a real efficiency signal); it is simply not a gate.
+#
 # Config (all env, test-overridable):
 #   CC_VALUE_WINDOW_H     value window in hours                     (default 24)
+#   CC_VALUE_LANES        space-sep roster of 24/7 drain lanes checked for silence
+#                                                                   (default "cloud local-drain")
+#   CC_VALUE_CONV_MIN_IDS distinct claimed ids below which the conversion arm ABSTAINS (default 8)
+#   CC_VALUE_CONV_MIN_PCT conversion floor, % of claimed ids that reached done   (default 25)
 #   CC_VALUE_REPOS        ':'-sep repo roots to scan for landed commits
 #                         (default: this repo ∪ git-toplevels of active telemetry cwds)
 #   CC_VALUE_CHURN_MIN_PCT quota-spend floor below which churn is not flagged (default 8)
@@ -60,6 +92,9 @@ REF="${CC_VALUE_REF:-origin/main}"
 TDIR="${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}"
 BACKLOG="${CC_BACKLOG_FILE:-$HOME/.claude/autonomy/backlog.jsonl}"
 STALE_S="${CC_VALUE_STALE_S:-900}"     # a telemetry row older than this = not "active" for spend
+LANE_ROSTER="${CC_VALUE_LANES:-cloud local-drain}"
+CONV_MIN_IDS="${CC_VALUE_CONV_MIN_IDS:-8}"
+CONV_MIN_PCT="${CC_VALUE_CONV_MIN_PCT:-25}"
 
 command -v jq >/dev/null 2>&1 || { echo "cc-value: jq required" >&2; exit 2; }
 
@@ -209,6 +244,44 @@ tasks_closed() {
     | length' 2>/dev/null || echo 0
 }
 
+# ── backlog CONVERSION + per-lane closes over the window ──────────────────────────────────────
+# Emits ONE json object. The `readable` flag is the whole point of this function's shape: when the
+# store cannot be read, every count is null — NEVER 0 — and the churn arms that depend on it are
+# skipped rather than fired. A fail-safe default that mimics the healthy state is unfalsifiable
+# (memory fail-safe-default-mimics-the-healthy-state); an absent producer must be distinguishable
+# from a producer reporting zero, and here the discriminator is a field, not a count.
+#
+# Window scoping is by ISO STRING comparison against the same `ts` the store writes, matching
+# scripts/backlog-telemetry.sh so the two readers of this store cannot disagree about which records
+# are in the window. A record with no `ts` compares as "" and falls outside — correct: an undated
+# record cannot be placed in a window, and guessing it into one would manufacture the certainty
+# this ledger exists to measure the absence of.
+backlog_window_stats() { # <since_epoch> → json
+  local since_epoch="$1" iso out
+  local unknown='{"readable":false,"claims":null,"claim_ids":null,"converted":null,"dones":null,"lanes":null}'
+  [ -f "$BACKLOG" ] && [ -r "$BACKLOG" ] || { printf '%s' "$unknown"; return 0; }
+  iso="$(epoch_to_iso "$since_epoch")"
+  [ -n "$iso" ] || { printf '%s' "$unknown"; return 0; }
+  out="$(jq -R 'fromjson? // empty' "$BACKLOG" 2>/dev/null | jq -s --arg since "$iso" '
+    [ .[] | select(has("id") and has("event") and ((.ts // "") >= $since)) ] as $w
+    | ( [ $w[] | select(.event == "claim") ] ) as $cl
+    | ( $cl | map(.id) | unique ) as $cids
+    | ( [ $w[] | select(.event == "done") ] ) as $dn
+    | ( $dn | map(.id) | unique ) as $dids
+    | { readable: true,
+        claims:    ($cl | length),
+        claim_ids: ($cids | length),
+        # CONVERTED joins claim→done on the ID, the only join this store supports: a claim record
+        # carries no lane and its `by` is a shell pid. Each needle is BOUND before the membership
+        # test — `A | index(.)` re-points `.` at A and asks whether the haystack contains itself.
+        converted: ( [ $cids[] | . as $i | select( ($dids | index($i)) != null ) ] | length ),
+        dones:     ($dn | length),
+        lanes:     ( $dn | map(.lane // "unattributed") | group_by(.)
+                     | map({ key: .[0], value: length }) | from_entries ) }' 2>/dev/null)"
+  # An empty result means jq died, which must read as UNKNOWN and not as an empty window.
+  case "$out" in ''|' ') printf '%s' "$unknown" ;; *) printf '%s' "$out" ;; esac
+}
+
 # ── accounts json (quota/spend proxy) ─────────────────────────────────────────────────────────
 accounts_json() {
   if [ -n "${CC_ACCTS_JSON:-}" ]; then printf '%s' "$CC_ACCTS_JSON"; return 0; fi
@@ -224,6 +297,7 @@ build_json() {
   local tasks;   tasks="$(tasks_closed "$since_epoch")"
   local repos;   repos="$(repo_set | jq -R . | jq -s -c .)"
   local accts;   accts="$(accounts_json)"
+  local blstats; blstats="$(backlog_window_stats "$since_epoch")"
 
   # uuid→acct join map, and per-session used%/active, as compact json fed to the assembler.
   local telj
@@ -239,6 +313,10 @@ build_json() {
     --argjson accts "$accts" \
     --argjson window "$WINDOW_H" \
     --argjson churnmin "$CHURN_MIN" \
+    --argjson bl "$blstats" \
+    --argjson convminids "$CONV_MIN_IDS" \
+    --argjson convminpct "$CONV_MIN_PCT" \
+    --arg laneroster "$LANE_ROSTER" \
     --argjson now "$nowt" '
     # uuid → acct (only sessions we can see in telemetry)
     ($tel | map(select(.acct!="")) | map({key:.sid,value:.acct}) | from_entries) as $u2a |
@@ -260,6 +338,29 @@ build_json() {
     # an account can burn quota and then go idle, and it must still be visible to the churn detector
     # (otherwise a spent-then-parked account silently escapes the net-negative check).
     ( [ $q | to_entries[] | select((.value.s // 0) >= $churnmin) | .key ] ) as $spend_accts |
+    # ── conversion + per-lane split (see the header) ───────────────────────────────────────────
+    ( $laneroster | split(" ") | map(select(length > 0)) ) as $LANES |
+    ( if ($bl.readable and ($bl.claim_ids // 0) > 0)
+      then ((($bl.converted * 1000 / $bl.claim_ids) | floor) / 10) else null end ) as $conv_pct |
+    ( if ($bl.readable and ($bl.claim_ids // 0) > 0)
+      then ((($bl.claims * 10 / $bl.claim_ids) | floor) / 10) else null end ) as $reclaim |
+    ( [ $LANES[] | . as $ln
+        | { lane: $ln, closes: (if $bl.readable then (($bl.lanes[$ln]) // 0) else null end) } ] ) as $lane_rows |
+    ( [ $lane_rows[] | select(.closes == 0) | .lane ] ) as $silent_lanes |
+    # THE CHURN ARMS. Each is reported by NAME so a fired alarm says which fact fired it; `churn`
+    # is simply whether any did. Every arm is gated on spend ≥ the floor — an idle fleet burning
+    # nothing is not churning, it is resting, and the two must not render alike.
+    ( [ ( if ($fleet_value == 0
+              and ($tel | map(select(.active)) | length) > 0
+              and $fleet_spend >= $churnmin) then "zero-value" else empty end ),
+        # ABSTAINS below the sample floor and whenever the store was unreadable: a conversion
+        # computed over 2 ids is noise, and one computed over an absent store is a fabrication.
+        ( if ($bl.readable
+              and ($bl.claim_ids // 0) >= $convminids
+              and $conv_pct != null and $conv_pct < $convminpct
+              and $fleet_spend >= $churnmin) then "no-conversion" else empty end ),
+        ( if ($bl.readable and $fleet_spend >= $churnmin)
+          then ($silent_lanes[] | "lane-silent:" + .) else empty end ) ] ) as $churn_reasons |
     {
       window_h: $window,
       now: $now,
@@ -275,7 +376,18 @@ build_json() {
         # value produced per 1% of quota spent (the DoD "{commits+tasks} ÷ spend"), 1 decimal.
         # High ⇒ efficient; trending toward 0 with active spend ⇒ approaching churn.
         ratio: (if $fleet_spend > 0 then (($fleet_value / $fleet_spend * 10) | round / 10) else null end),
-        churn: ($fleet_value == 0 and ($tel|map(select(.active))|length) > 0 and $fleet_spend >= $churnmin)
+        # backlog_readable is the UNKNOWN-vs-0 discriminator: false ⇒ every conversion/lane number
+        # below is null and no arm that reads them can fire.
+        backlog_readable: $bl.readable,
+        conversion: (if $bl.readable
+                     then { claims: $bl.claims, claim_ids: $bl.claim_ids,
+                            converted: $bl.converted, dones: $bl.dones,
+                            pct: $conv_pct, reclaim: $reclaim,
+                            min_ids: $convminids, min_pct: $convminpct }
+                     else null end),
+        lanes: $lane_rows,
+        churn_reasons: $churn_reasons,
+        churn: (($churn_reasons | length) > 0)
       },
       accounts: (
         ( ($active_accts + ($c.byacct|keys) + $spend_accts) | unique ) | map(. as $a | {
@@ -317,7 +429,21 @@ render_table() {
       + (if .commits_unattributed>0 then " (\(.commits_unattributed) unattributed)" else "" end)
       + " · \(.tasks) tasks closed   |  spend ~\(.spend_pct)% (Σ5h · \(.active_sessions) active)"
       + (if .ratio!=null then " · v/spend \(.ratio)" else "" end)
-      + (if .churn then "   ⚠ FLEET CHURN — spend, 0 landed" else "" end))
+      + (if .churn then "   ⚠ FLEET CHURN — \(.churn_reasons | join(", "))" else "" end)),
+    # CONVERSION is rendered on EVERY run, fired or not — the number that would have made a week of
+    # zero drain visible on day one, and a number nobody reads once is a number nobody reads.
+    # Both counts always, never one: raw claims alone reads as a busy fleet, distinct ids alone as
+    # a modest amount of work in flight, and only the gap between them shows the re-claiming.
+    (.fleet | if .backlog_readable | not then
+        "  DRAIN   conversion UNKNOWN — the backlog store was unreadable (this is not zero)"
+      else (.conversion |
+        "  DRAIN   \(.claims) claim(s) over \(.claim_ids) distinct id(s) → \(.converted) reached done"
+        + (if .pct == null then " (n/a)" else " (\(.pct)%, floor \(.min_pct)%)" end)
+        + (if .reclaim == null then "" else " · reclaim \(.reclaim)x per id" end))
+      end),
+    (.fleet | if .backlog_readable | not then empty
+      else "  LANES   " + ([.lanes[] | "\(.lane) \(.closes)"] | join(" · "))
+           + "   (closes in window, from the lane field on the done record)" end)
   ' 2>/dev/null
   # per-account lines (separate pass → stable column widths via awk)
   printf '%s' "$j" | jq -r '.accounts[] |
@@ -395,14 +521,21 @@ run_selftest() {
   # i5 (done long ago, then a `venue` sweep stamped today) reads closed-TODAY under a status-only
   # half-fix that lets any record restamp `ts` — the over-count that replaces it. Expected tasks == 2
   # (i1, i4): naive fold answers 1, status-only half-fix answers 3.
+  #
+  # The two in-window closes carry a `lane` (one per roster lane) BY DESIGN: without them this
+  # otherwise-healthy fixture renders both 24/7 drains as silent and the ledger correctly alarms —
+  # which would make the baseline world un-silent and every check below read against a fired alarm.
+  # A close recording no lane is a real live condition (92.8% of them), but it is the CLOSE-
+  # ATTRIBUTION gap that scripts/backlog-telemetry.sh measures, not the state a "healthy fleet"
+  # control should be in.
   local BL="$tmp/backlog.jsonl"
   {
     printf '{"id":"i1","event":"add","ts":"%s"}\n' "$(epoch_to_iso "$IN")"
-    printf '{"id":"i1","event":"done","ts":"%s","evidence":"x"}\n' "$(epoch_to_iso "$IN")"
+    printf '{"id":"i1","event":"done","ts":"%s","evidence":"x","lane":"cloud"}\n' "$(epoch_to_iso "$IN")"
     printf '{"id":"i2","event":"done","ts":"%s"}\n' "$(epoch_to_iso "$IN")"
     printf '{"id":"i2","event":"reopen","ts":"%s"}\n' "$(epoch_to_iso "$IN")"
     printf '{"id":"i3","event":"done","ts":"%s"}\n' "$(epoch_to_iso "$OUT")"
-    printf '{"id":"i4","event":"done","ts":"%s"}\n' "$(epoch_to_iso "$IN")"
+    printf '{"id":"i4","event":"done","ts":"%s","lane":"local-drain"}\n' "$(epoch_to_iso "$IN")"
     printf '{"id":"i4","event":"link","ts":"%s","condition":"c"}\n' "$(epoch_to_iso "$IN")"
     printf '{"id":"i5","event":"done","ts":"%s"}\n' "$(epoch_to_iso "$OUT")"
     printf '{"id":"i5","event":"venue","ts":"%s","venuePlan":"local"}\n' "$(epoch_to_iso "$IN")"
@@ -433,7 +566,13 @@ run_selftest() {
   check "done-then-link still reads CLOSED (raw-event fold ⇒ 1)"        '.fleet.tasks==2'
   check "venue on an OLD done does NOT restamp into window (⇒ 3)"       '.fleet.tasks==2'
   check "fleet value = commits+tasks = 4"                   '.fleet.value==4'
-  check "value>0 ⇒ fleet NOT churn"                         '.fleet.churn==false'
+  # THE SILENT CONTROL. A healthy world — value>0, both roster lanes closing, too few claims to
+  # judge conversion — must fire NO arm at all. This is the check that makes the alarm falsifiable:
+  # `churn_reasons==[]` fails the moment any arm becomes always-on, which is the failure mode the
+  # predicate this replaced actually had (it was always-OFF, the same defect mirrored).
+  check "healthy world ⇒ NO churn arm fires (reasons empty)"  '.fleet.churn==false and (.fleet.churn_reasons|length)==0'
+  check "per-lane split reads the done record's lane field"   '([.fleet.lanes[]|select(.lane=="cloud")|.closes]|first)==1'
+  check "conversion ABSTAINS below the id floor, not fires"   '.fleet.conversion.claim_ids==0 and (.fleet.churn_reasons|index("no-conversion"))==null'
   check "next3 spends 12% + 0 commits + 0 fleet? — NOT (fleet closed a task)"  '(.accounts[]|select(.acct=="next3")|.churn)==false'
   check "session uuid-AAA reads its own 1 commit"           '(.sessions[]|select(.sid=="uuid-AAA")|.commits)==1'
   check "repos scanned == 1 (explicit CC_VALUE_REPOS)"      '(.repos|length)==1'
@@ -449,6 +588,21 @@ run_selftest() {
     printf '  ok   %s\n' "churn RED-proof: 0 value + active spend ⇒ FLEET CHURN"; pass=$((pass+1))
   else
     printf '  FAIL %s\n' "churn RED-proof: 0 value + active spend ⇒ FLEET CHURN"; fail=$((fail+1))
+  fi
+  # UNKNOWN ≠ 0. That same world points CC_BACKLOG_FILE at a path that does not exist, so the
+  # conversion producer is UNREACHABLE. It must report itself unreachable — conversion null, lane
+  # closes null, backlog_readable false — and the two arms that read it must ABSTAIN rather than
+  # convict on numbers nobody produced. The `zero-value` arm still fires, from git alone, which is
+  # what proves the abstention is scoped to the unreachable producer and not a blanket silence.
+  if printf '%s' "$JC" | jq -e '.fleet.backlog_readable==false
+        and .fleet.conversion==null
+        and ([.fleet.lanes[]|.closes]|all(.==null))
+        and (.fleet.churn_reasons|index("no-conversion"))==null
+        and ([.fleet.churn_reasons[]|select(startswith("lane-silent:"))]|length)==0
+        and (.fleet.churn_reasons|index("zero-value"))!=null' >/dev/null 2>&1; then
+    printf '  ok   %s\n' "unreachable backlog ⇒ UNKNOWN (null), arms abstain — not read as zero"; pass=$((pass+1))
+  else
+    printf '  FAIL %s\n' "unreachable backlog ⇒ UNKNOWN (null), arms abstain — not read as zero"; fail=$((fail+1))
   fi
   # per-account churn RED-proof: same empty-value world → next3 (spends, 0 commits, 0 tasks) IS churn.
   if printf '%s' "$JC" | jq -e '(.accounts[]|select(.acct=="next3")|.churn)==true' >/dev/null 2>&1; then
