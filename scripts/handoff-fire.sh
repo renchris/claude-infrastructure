@@ -5629,11 +5629,37 @@ if [ "${1:-}" = "__recycle" ]; then
         cr)
           hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;;
         retype)
+          # ROUTED THROUGH THE SANCTIONED COMPOSER HELPER (backlog 01ab05685857). This arm already
+          # read the composer back before its CR — what it did NOT do is route through a helper the
+          # tree can recognise, and that distinction is not cosmetic in either direction:
+          #   · scripts/typed-send-lint.sh convicts a raw `session send` carrying a command line by
+          #     SHAPE, because a hand-rolled read-back is exactly what a reviewer cannot audit at a
+          #     glance — it re-derives a four-step contract inline and can drop a step silently.
+          #     Un-fixed, that conviction was a STANDING RED on origin/main: tests/typed-send-lint.bats
+          #     asserts the lint prints `clean` on the real tree, the wrapper is not in
+          #     scripts/host-suites.manifest, and its failure is a deterministic grep — so it survived
+          #     the retry ladder into a RED stamp every sweep and no tree ever certified. That is the
+          #     substance of the item this fix closes: the verifier was alive and stamping the whole
+          #     time (`inert` vs `uncertified`, split at ship-land.sh's postland_net_live), and what
+          #     nothing was doing was clearing the red it kept naming.
+          #   · it2_paste_submit_verified is the COMPOSER-side member of the sanctioned set and is
+          #     strictly stronger here: it gates on composer_owned (a raw send assumes ownership),
+          #     re-proves the composer EMPTY at paste time rather than trusting the decision taken a
+          #     moment earlier by recycle_nudge_decision, brackets the paste, and withholds the CR
+          #     unless paste_readback_ok proves the read-back for THIS payload. For a 0-newline,
+          #     5-char "/exit" that read-back reduces to the same byte-equality this arm tested, so
+          #     the accept condition is unchanged — only its provenance is.
+          # PRE-WAIT 0 IS DELIBERATE, not a default declined. The helper's 30s default would park
+          # this watcher inside a 3s poll loop that must keep answering the pane-VANISHED check and
+          # its own 600s bound; and waiting is not what this arm wants anyway — a composer that has
+          # become non-empty since the decision is a DRAFT, i.e. exactly the case the gate above
+          # HOLDS on. 0 ⇒ check once, act or refuse, never sleep.
           if [ "$waited" = 60 ]; then
-            hf_bounded "$IT2" session send -s "$RSID" "/exit" >/dev/null 2>&1 || true
-            sleep 1
-            nc="$(composer_content "$IT2" "$RSID")" || nc=""
-            if [ "$nc" = "/exit" ]; then hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true; fi
+            nrc=0; it2_paste_submit_verified "$IT2" "$RSID" "/exit" 0 || nrc=$?
+            if [ "$nrc" != 0 ]; then
+              echo "→ nudge@${waited}s retype NOT submitted (verified paste rc=$nrc) — the composer is unproven, so the /exit stays untyped"
+              emit_recycle_event recycle-nudge-held "" "$RSID" "retype refused at ${waited}s (it2_paste_submit_verified rc=$nrc)" || true
+            fi
           fi ;;
         *)
           echo "→ nudge@${waited}s HELD ($nd): composer is not a stranded /exit — a CR here would submit someone else's buffer"
