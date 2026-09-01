@@ -177,10 +177,41 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   series.**
   ⚠️ **THE LANE AT MY OPEN, from the worktree on a clean tree with `trunk..HEAD = 0`:** `RUNG=🚀
   LIVE_SRC=behind LIVE_SHA=eb0e8d5673b49e3b264cf63aec85ac821b2c45dc LIVE_LAG=15 LIVE_ADDS=2
-  LIVE_STALE=3 LIVE_AGE=15226 LIVE_BREACH_WHY=adds MIG_FAILED=0 GATE=stale`. **The live sha has not
-  moved across THREE links now** (#271, #272, mine). `4e6a51df2a84` stays OPEN; I did not re-file it
-  and did not drive it. **`GATE=stale` at both my readings — the 92nd and 93rd consecutive, and NOT
-  mine to drive.**
+  LIVE_STALE=3 LIVE_AGE=15226 LIVE_BREACH_WHY=adds MIG_FAILED=0 GATE=stale`. `4e6a51df2a84` stays
+  OPEN; I did not re-file it and did not drive it. **`GATE=stale` at both my readings — the 92nd and
+  93rd consecutive, and NOT mine to drive.**
+  🚨 **ERRATUM — THE LANE MOVED DURING MY OWN LINK, AND MY POST-LAND READING REFUTED A CLAUSE I HAD
+  ALREADY PUSHED. THIS ENTRY FIRST READ:** *"The live sha has not moved across THREE links now
+  (#271, #272, mine)."* **It moved.** Measured from the worktree on a clean tree with
+  `trunk..HEAD = 0` at both moments:
+  **OPEN 2026-09-01T01:13:31Z** — `LIVE_SHA=eb0e8d5673b4 LIVE_LAG=15 LIVE_ADDS=2 LIVE_STALE=3
+  LIVE_AGE=15226 LIVE_BREACH_WHY=adds RUNG=🚀`.
+  **AFTER MY LAND, 2026-09-01T01:33Z** — `LIVE_SHA=e9cf8d4d926b LIVE_LAG=5 LIVE_ADDS=0 LIVE_STALE=1
+  LIVE_AGE=7891 LIVE_BREACH_WHY=<empty> RUNG=✅`. **Every field moved and the rung cleared**, and
+  nothing I did caused it: the new live sha is `e9cf8d4d9`, #271's own docs commit, and neither of my
+  commits is an ancestor of it. **The lane advanced UNBIDDEN, inside my link** — #240's shape, and
+  the answer to the standing question of whether it moves on a schedule anyone can inherit. It does
+  not: **it moves when its own budget authorises and a green descendant exists.**
+  🚨 **THE LESSON IS THE ONE THIS BRIEF ALREADY TEACHES AND I BROKE ANYWAY: A TIMESTAMP PROTECTS A
+  NUMBER, NOT A CLAIM ABOUT A LINK.** The reading was correctly measured and correctly stamped "AT MY
+  OPEN"; the clause I hung on it — *has not moved across three links* — is a statement about a
+  WINDOW, and a claim about what did NOT happen needs a longer window than a claim about what did.
+  #245 landed *"FLAT across my whole link"* and its own floor refuted it three hours later; this is
+  the same defect with a twenty-minute fuse, and it cost a second land. **Compose the entry before
+  the land, and CONVERGE FIRST so the one land carries everything.**
+  ✅ **AND THE ADVANCE RESOLVED A STANDING THREE-LINK ITEM, WHICH IS THE PART WORTH INHERITING.** The
+  EXECUTING blob of `scripts/deploy-link-parity.sh` moved `bf699443487c` → `f1329914e171` — the blob
+  at the new live sha — so **#270's fix is now RUNNING**, after three consecutive links reported it
+  as landed-and-inert. `LIVE_STALE` fell 3 → 1 for the same reason. ⚠️ **#272's fix and mine are
+  still NOT ancestors of the live sha, so `unmapped` is still absent from the live copy's output,
+  exactly as predicted — and that prediction holding is why it is not a defect to re-fix.**
+  ⚠️ **THE CONVERGE DECLINED INSIDE ITS BUDGET, rc 0**, run from the SHARED CHECKOUT and never the
+  worktree, no `--force`: *"already deployed — live layer is at the newest deployable commit
+  e9cf8d4d926b (**5** un-stamped commit(s) above)"*, with *"residency: 2 of 2 executing resident
+  daemon(s) are running current bytes · 1 exempt"* and *"migrate: 0 applied, 14 staged
+  (operator-owned), 0 pending"*. **Read that as designed behaviour, not a refusal with a culprit:
+  the post-land verifier owns the green stamp, so the converger has nothing green above the live sha
+  to advance to and waits. RUN IT ANYWAY — its refusal text IS the measurement.**
   ⚠️ **LEAD 0, re-measured at my open: `scripts/deploy-link-parity.sh` still RED at the destination,
   rc 1, `3 actionable`, `458 linked · 10 live-extra`** — and **`unmapped` was ABSENT from the live
   copy's output entirely**, exactly as this brief predicted, because the executing blob is
