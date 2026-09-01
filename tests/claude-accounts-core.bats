@@ -2324,3 +2324,66 @@ assert d['excluded'].get('capped'), d
 print('OK')"
   [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
+
+# --- read_creds failure attribution -----------------------------------------------------------
+# Hermetic per this suite's own contract: a config_dir that hashes to a nonexistent keychain
+# service, and LOG_PATH rebound onto BATS_TEST_TMPDIR. Never reads a real credential.
+#
+# 🚨 Do NOT try to isolate the log by overriding HOME. `security find-generic-password` resolves
+# the login keychain through HOME, so a temp HOME makes EVERY read return rc 44 and the
+# "stays silent on a non-failure" arm passes vacuously — the harness breaking the subject.
+_readcreds_probe() {   # <src> <timeout-s>  -> prints "state|logbody"
+  CC_KEYCHAIN_TIMEOUT_S="$2" python3 - "$1" "$BATS_TEST_TMPDIR" <<'PY'
+import importlib.util, os, sys
+src, tmp = sys.argv[1], sys.argv[2]
+shim = os.path.join(tmp, "ca_mod.py")
+open(shim, "w").write(open(src).read())          # spec_from_file_location needs a .py name
+spec = importlib.util.spec_from_file_location("ca", shim)
+ca = importlib.util.module_from_spec(spec); spec.loader.exec_module(ca)
+log = os.path.join(tmp, "kc.log"); ca.LOG_PATH = log
+open(log, "w").close()
+_, state = ca.read_creds("/nonexistent/cc-hermetic-fixture", "nobody-cc-test")
+print(state + "|" + open(log).read().replace("\n", " "))
+PY
+}
+
+@test "read_creds NAMES which failure path fired, with elapsed and returncode" {
+  # Before this, all four returns collapsed to the bare label 'keychain-error', p.stderr (the one
+  # string carrying the OSStatus) was discarded, and nothing was logged at all — so the
+  # 2026-09-01T04:43Z fleet-wide outage could be reconstructed only from route.jsonl, and WHICH
+  # path fired remained unknowable. That matters because probe_account copies this state into
+  # row["error"], which _excluded() tests FIRST, so one unexplained hiccup drops an account from
+  # every lane; when it hits all four, `claude` silently falls back to its pinned account.
+  out="$(_readcreds_probe "$CA_BIN" 0.000001)"
+  # `[ ]` (the test BUILTIN), never `[[ ]]` (a shell KEYWORD): under bats' errexit only the
+  # builtin form aborts the test from a non-final line, so a mid-test `[[ ]]` is a dead
+  # assertion that can never fail. scripts/bats-assert-liveness.py blocks the land on it.
+  [ "${out%%|*}" = "keychain-error" ]
+  # grep -c, never grep -q: under pipefail an early-exiting -q SIGPIPEs its own producer, so
+  # the pipeline can report FAILURE on the very input it just matched (MEMORY.md
+  # grep-q-under-pipefail-inverts-the-verdict). Count, then assert on the count.
+  run bash -c "printf '%s' \"\${1}\" | grep -c 'path=timeout'" _ "${out#*|}"
+  [ "$output" -ge 1 ]
+  run bash -c "printf '%s' \"\${1}\" | grep -c 'elapsed_ms='" _ "${out#*|}"
+  [ "$output" -ge 1 ]
+}
+
+@test "read_creds stays silent when the item is merely absent" {
+  # rc 44 is 'no-keychain-item' -> auth logged-out, a GENUINE credential fact, not an instrument
+  # failure. It must not be logged, or the log stops discriminating the thing it exists to show.
+  out="$(_readcreds_probe "$CA_BIN" 10)"
+  [ "${out%%|*}" = "no-keychain-item" ]
+  run bash -c "printf '%s' \"\${1}\" | grep -c 'keychain-error'" _ "${out#*|}"
+  [ "$output" = 0 ]
+}
+
+@test "MUTANT: a read_creds that logs nothing must fail the attribution test" {
+  # Control-can-fail, aimed at the exact line that carries the value.
+  mutant="$BATS_TEST_TMPDIR/mutant-ca"
+  sed 's/^        _log_keychain_failure(config_dir, "timeout".*$/        pass/' "$CA_BIN" > "$mutant"
+  grep -q '^        pass$' "$mutant"
+  out="$(_readcreds_probe "$mutant" 0.000001)"
+  [ "${out%%|*}" = "keychain-error" ]             # still the same state...
+  run bash -c "printf '%s' \"\${1}\" | grep -c 'path=timeout'" _ "${out#*|}"
+  [ "$output" = 0 ]                               # ...but the attribution is gone
+}
