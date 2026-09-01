@@ -2501,8 +2501,17 @@ cmd_transition() {
       # then looks exactly like a passed one, which is how a landed park could be re-dispatched
       # with no record naming the arm that did not run (backlog e981656df348, 22 dispatches).
       # stderr, never stdout: the caller contract is `id=$(cc-backlog claim …)` and rc 0.
+      #
+      # 🚨 IT CARRIES A MACHINE TOKEN, and that is not decoration (backlog e981656df348, dispatch 23).
+      # The sentence alone reached a caller that could only have latched on the English, and this
+      # file's own refusals already answer that with `verdict=<token>` because bin/cc-dispatch must
+      # discriminate POSITIVELY (memory: new-enum-member-falls-into-fail-closed-default). A skip is
+      # the harder case than a refusal: it rides an rc-0 ADMIT, so nothing about the exit code
+      # distinguishes it and the token is the ONLY handle. `gate=` rather than `verdict=` on purpose
+      # — a verdict is a decision this gate did not reach, and reusing the word would make a
+      # non-evaluation indexable as one. bin/cc-dispatch's `claim_gate_skip` is the reader.
       if [ ! -x "$ebin" ]; then
-        printf 'cc-backlog claim: eligibility gate SKIPPED — cc-eligible unresolvable at %s (fail-open; set CC_BACKLOG_ELIGIBLE_BIN)\n' \
+        printf 'cc-backlog claim: eligibility gate SKIPPED gate=eligibility-unresolved — cc-eligible unresolvable at %s (fail-open; set CC_BACKLOG_ELIGIBLE_BIN)\n' \
           "$ebin" >&2
       fi
       if [ -x "$ebin" ]; then
