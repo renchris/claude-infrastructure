@@ -80,6 +80,31 @@ DO_SEAL="${ROTATE_SEAL:-1}"
 CHAIN_SUF=".chain"                 # must match cc-idl's CC_IDL_CHAIN default (<idl>.chain)
 seal_note=""                       # folded into the run's audit record
 
+# ── DRAIN HEALTH (part 3 of "ride a job that already exists") ────────────────────────────────
+# scripts/backlog-telemetry.sh computes net-flow, per-lane close attribution and the claims→dones
+# conversion, and its `--assert` exits 1 on a stalled lane or a futile drain. Until 2026-09-01 it
+# was invoked BY NOTHING: no plist, no fleet.manifest row, no hook, no digest. A correct instrument
+# that nothing runs is indistinguishable from one that was never built, and for a week the pipeline
+# burned cloud sessions at zero drain while no shipped surface said so.
+#
+# 🚨 IT IS WIRED HERE RATHER THAN INTO A NEW ACTIVATION, DELIBERATELY. The activation queue is 11
+# deep with ALL 11 rotting past 24h (DRAIN_CIRCUIT §1.6), so a fix shipped as a 12th activation is
+# correct code that rots exactly like the other eleven. This job is already loaded, already hourly,
+# already Background/Nice-10, and its header already establishes the precedent for the IDL seal:
+# ride the launchd job that exists. The assert costs ~0.9s over a 15.5k-record store — a rounding
+# error against the gzip work above it, and nowhere near the 300s-tick band where this box has a
+# history of memory-storm panics.
+#
+# DEBOUNCED to once per UTC day OR any change of verdict, because the metric is a 7-day trend and
+# an alarm re-stating an unchanged fact 24 times a day is one nobody reads by the time it matters
+# (memory alarm-polarity-and-attention-budget). What the arm DID is folded into this job's existing
+# per-run IDL record every tick — `drain:"emitted"|"debounced"|"off"|"skip-…"` — so "ran and had
+# nothing new to say" stays distinguishable from "never ran", which is the same B-3 convention the
+# rotation summary already follows.
+DO_DRAIN="${ROTATE_DRAIN_ASSERT:-1}"
+DRAIN_STAMP="${ROTATE_DRAIN_STAMP:-$HOME/.claude/autonomy/.drain-health.stamp}"
+drain_note=""                      # folded into the run's audit record, same as seal_note
+
 usage() { sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; }
 case "${1:-}" in -h|--help) usage; exit 0 ;; esac
 
@@ -279,9 +304,67 @@ rotate_one() { # <path>
 
 log_idl() { # <extra-json-fragment>
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
-  printf '{"ts":"%s","tool":"rotate-autonomy-logs","rotated":%d,"skipped":%d,"max_bytes":%d,"keep":%d,"seal":"%s"%s}\n' \
-    "$(now_iso)" "$rotated" "$skipped" "$MAX_BYTES" "$KEEP" "${seal_note:-off}" "${1:-}" \
+  printf '{"ts":"%s","tool":"rotate-autonomy-logs","rotated":%d,"skipped":%d,"max_bytes":%d,"keep":%d,"seal":"%s","drain":"%s"%s}\n' \
+    "$(now_iso)" "$rotated" "$skipped" "$MAX_BYTES" "$KEEP" "${seal_note:-off}" "${drain_note:-off}" "${1:-}" \
     >> "$IDL" 2>/dev/null || true
+}
+
+# ── the drain-health arm (see the header) ────────────────────────────────────────────────────
+# Resolve the telemetry script the same way resolve_cc_idl resolves its binary: explicit override,
+# then the live layer, then this script's sibling repo copy (worktrees + tests). Absence is a SKIP
+# with a NAMED note, never a silent pass — a missing producer must not read like a quiet one.
+resolve_drain_telemetry() {
+  local c
+  if [ -n "${DRAIN_TELEMETRY_BIN:-}" ]; then
+    [ -f "$DRAIN_TELEMETRY_BIN" ] && { printf '%s' "$DRAIN_TELEMETRY_BIN"; return 0; }; return 1
+  fi
+  for c in "$HOME/.claude/scripts/backlog-telemetry.sh" \
+           "$(cd "$(dirname "$0")" 2>/dev/null && pwd)/backlog-telemetry.sh"; do
+    [ -f "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  return 1
+}
+
+# Emit the drain-health record when the day rolled over OR the verdict changed. Returns 0 always:
+# bounding log growth is this job's contract and a telemetry hiccup must never cost a rotation.
+drain_health_check() {
+  [ "$DO_DRAIN" = "1" ] || { drain_note="off"; return 0; }
+  local bin out rc verdict line claims ids converted today prev key
+  bin="$(resolve_drain_telemetry)" || { drain_note="telemetry-absent"; return 0; }
+
+  # `--days 1` keeps the rendered series to one row; the fold always walks the whole store, so the
+  # 7-day conversion and every lane verdict below are unaffected by it.
+  out="$(bash "$bin" --days 1 --assert 2>&1)"; rc=$?
+  # rc 2 is the tool REFUSING (absent/unreadable store) — an absent instrument, not a green fleet.
+  if [ "$rc" -ne 0 ] && [ "$rc" -ne 1 ]; then drain_note="assert-rc$rc"; return 0; fi
+
+  # The fleet-scope line carries the conversion verdict and its three counts. Parsed from the one
+  # line that has scope=fleet so a lane line can never be mistaken for it.
+  line="$(printf '%s\n' "$out" | grep 'scope=fleet' | head -1)"
+  verdict="$(printf '%s' "$line" | sed -n 's/.*verdict=\([a-z-]*\).*/\1/p')"
+  [ -n "$verdict" ] || verdict="unparsed"
+  claims="$(printf '%s' "$line" | sed -n 's/.*claims=\([0-9]*\).*/\1/p')"
+  ids="$(printf '%s' "$line" | sed -n 's/.*ids=\([0-9]*\).*/\1/p')"
+  converted="$(printf '%s' "$line" | sed -n 's/.*converted=\([0-9]*\).*/\1/p')"
+  case "$claims"    in ''|*[!0-9]*) claims=null ;; esac
+  case "$ids"       in ''|*[!0-9]*) ids=null ;; esac
+  case "$converted" in ''|*[!0-9]*) converted=null ;; esac
+
+  today="$(date -u +%Y-%m-%d)"
+  key="$today rc$rc $verdict"
+  prev=""
+  [ -f "$DRAIN_STAMP" ] && prev="$(head -1 "$DRAIN_STAMP" 2>/dev/null)"
+  if [ "$prev" = "$key" ]; then drain_note="debounced"; return 0; fi
+
+  mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
+  printf '{"ts":"%s","tool":"drain-health","rc":%d,"assert":"%s","verdict":"%s","claims":%s,"claim_ids":%s,"converted":%s,"source":"%s"}\n' \
+    "$(now_iso)" "$rc" "$([ "$rc" -eq 0 ] && printf 'green' || printf 'red')" \
+    "$verdict" "$claims" "$ids" "$converted" "$bin" \
+    >> "$IDL" 2>/dev/null || true
+  mkdir -p "$(dirname "$DRAIN_STAMP")" 2>/dev/null || true
+  printf '%s\n' "$key" > "$DRAIN_STAMP" 2>/dev/null || true
+  drain_note="emitted"
+  return 0
 }
 
 # ── --repair-chain-epoch: the ONE-TIME fix for a chain orphaned before this wiring existed ───
@@ -392,10 +475,15 @@ done
 # (single-line, always-current) unsealed tail the next run picks up.
 seal_idl_tail
 
+# The drain-health arm runs AFTER the seal and BEFORE the run record, for the same reason the seal
+# does: its own record is then part of the unsealed tail the next run picks up, so the assert's
+# verdicts enter the hash chain exactly like every other IDL row.
+drain_health_check
+
 # One audit record per run (lands in the freshly-recreated idl.jsonl when idl was a rotated target).
 extra=""
 [ -n "$summary" ] && extra=",\"files\":[$summary]"
 log_idl "$extra"
 
-echo "rotate-autonomy-logs: rotated=$rotated skipped=$skipped seal=$seal_note (max=${MAX_BYTES}B keep=$KEEP)"
+echo "rotate-autonomy-logs: rotated=$rotated skipped=$skipped seal=$seal_note drain=$drain_note (max=${MAX_BYTES}B keep=$KEEP)"
 exit 0

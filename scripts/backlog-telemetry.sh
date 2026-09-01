@@ -31,6 +31,31 @@
 # rows stay unattributed forever: retroactively inferring a lane would manufacture exactly the
 # certainty this readout exists to measure the absence of.
 #
+# ── CONVERSION: claims → dones, RAW AND DISTINCT, and why BOTH are printed ──────────────────────
+# The pile can be worked at full tilt and still not drain, and until 2026-09-01 no shipped surface
+# in this repo could see that: five files read the `claim` event and not one of them divided it by
+# dones. Measured on the live store the day this was added — 277 claim events over 20 DISTINCT ids
+# in seven days, of which 3 ids reached `done`. Each of those two numbers alone tells a different
+# lie: 277 claims reads as a busy fleet, and 20 ids reads as a modest amount of work in flight. It
+# is the RATIO BETWEEN THEM (13.9 claims per id) plus the conversion (15.0%) that says the drain is
+# re-attempting the same handful of items and finishing almost none of them. So both are rendered,
+# on the daily series and on the rolling line, and neither is ever shown without the other.
+#
+# 🚨 CONVERSION IS FLEET-SCOPE, NOT PER-LANE, AND THAT IS A FACT ABOUT THE STORE, NOT A SHORTCUT.
+# The `lane` field exists on `done` records and is what CLOSE ATTRIBUTION reads above. It does NOT
+# exist on `claim` records: measured 3054 of 3054 claims in the live store carry no lane at all. A
+# per-lane conversion would therefore have to attribute claims by `by` (a `<host>-<pid>` shell id,
+# not a lane) or by `venue` (where a row was ROUTED, the false-corroboration trap this file already
+# refuses at the top). So `verdict=drain-futile` is emitted ONCE, inside LANE HEALTH, labelled
+# fleet-scope. When a claim record starts carrying a lane, this becomes a per-lane arm and not
+# before.
+#
+# THE POLARITY OF THIS ARM, same law as the one below it. Conversion over a handful of ids is
+# noise, and an alarm that fires on a two-item sample would be read past by the time it meant
+# something. Below CC_BLTM_CONV_MIN_IDS distinct claimed ids the verdict is `drain-unmeasured` —
+# an ABSTENTION with its own token, never a silent pass and never a red. That is the difference
+# between UNKNOWN and 0 that this repo keeps paying to re-learn.
+#
 # ROUTING ACTIVITY is rendered too, in its own section, under a header that says what it is not.
 # Omitting it entirely was the first draft and it was worse: on the day attribution lands, EVERY lane
 # reads `lane-unattributed` and the operator learns nothing at all about the cloud drain — including
@@ -52,8 +77,9 @@
 #     --days N   how many days of the daily series to print (default 14; the fold always walks the
 #                WHOLE store, so open/blocked are correct on the first printed day).
 #     --json     emit the computed model instead of the rendered tables (one JSON object).
-#     --assert   rc 1 if any roster lane renders `verdict=lane-stalled`. Never rc 1 for
-#                `lane-unattributed` — see THE POLARITY RULE below.
+#     --assert   rc 1 if any roster lane renders `verdict=lane-stalled`, or the fleet renders
+#                `verdict=drain-futile`. Never rc 1 for `lane-unattributed` or `drain-unmeasured`
+#                — see THE POLARITY RULE below.
 #
 # THE POLARITY RULE. `--assert` is deliberately blind to `lane-unattributed`, which is the state
 # EVERY lane is in until attributed closes accumulate. An alarm that fires on every run from the day
@@ -84,6 +110,11 @@ lane_cadence_h() {
     *)           printf '%s' "${CC_BLTM_CADENCE_OTHER_H:-168}" ;;
   esac
 }
+
+# CONVERSION thresholds. Floor as a PERCENT of distinct claimed ids that reached `done` inside the
+# same 7-day window, and the minimum sample below which the arm abstains rather than firing.
+CONV_MIN_PCT="${CC_BLTM_CONV_MIN_PCT:-25}"
+CONV_MIN_IDS="${CC_BLTM_CONV_MIN_IDS:-8}"
 
 DAYS=14
 MODE=render
@@ -181,9 +212,15 @@ MODEL="$(jq -s \
         | ( state_of($r.event) ) as $new
         | .firstTs = (if .firstTs == "" then ($r.ts // "") else .firstTs end)
         | .lastTs  = ($r.ts // .lastTs)
-        | .day[$d] = ( .day[$d] // { filed: 0, closed: 0, open: 0, blocked: 0 } )
+        | .day[$d] = ( .day[$d] // { filed: 0, closed: 0, open: 0, blocked: 0, claims: 0, cids: {} } )
         | (if $r.event == "add"  then .day[$d].filed  += 1 else . end)
         | (if $r.event == "done" then .day[$d].closed += 1 else . end)
+        # CLAIMS, raw and distinct, in the SAME bucket the rest of the series is built from. `cids`
+        # is a set keyed on the id, so a row re-claimed 23 times adds 23 to `claims` and 1 here —
+        # which is the entire point: the gap between the two IS the churn signal.
+        | (if $r.event == "claim"
+           then (.day[$d].claims += 1 | .day[$d].cids[$r.id] = true)
+           else . end)
         | ( if $new == null then .
             else
               ( .st[$r.id] // null ) as $old
@@ -216,6 +253,8 @@ MODEL="$(jq -s \
               filed:   .value.filed,
               closed:  .value.closed,
               net:     (.value.filed - .value.closed),
+              claims:  (.value.claims // 0),
+              claimIds: ((.value.cids // {}) | length),
               open:    .value.open,
               blocked: .value.blocked,
               live:    (.value.open + .value.blocked) }) ) as $series
@@ -247,6 +286,22 @@ MODEL="$(jq -s \
   | ( $series | map(.closed) ) as $allClosed
   | ( $series[-7:] ) as $last7
 
+  # ── CONVERSION over the SAME 7 days the rolling line reports ────────────────────────────────────
+  # Scoped by the dates of $last7 rather than by a `now - 7d` cutoff, so the conversion number and
+  # the filed/closed number above it can never describe different windows. A claimed id counts as
+  # CONVERTED when that same id also carries a `done` inside the window: the claim and the close are
+  # joined on the id, which is the only join the store actually supports (see the header — claims
+  # carry no lane, and `by` is a shell pid).
+  | ( $last7 | map(.date) ) as $w7dates
+  # Each membership test BINDS its needle first. `A | index(.)` re-points `.` at A itself, so the
+  # unbound spelling asks whether the haystack contains the haystack — which jq answers with a type
+  # error on an array of strings and, on other shapes, would silently answer the wrong question.
+  | ( $recs | map( ((.ts // "")[0:10]) as $d | select( ($w7dates | index($d)) != null ) ) ) as $w7recs
+  | ( $w7recs | map(select(.event == "claim")) ) as $w7claims
+  | ( $w7claims | map(.id) | unique ) as $w7cids
+  | ( $w7recs | map(select(.event == "done") | .id) | unique ) as $w7dids
+  | ( $w7cids | map( . as $i | select( ($w7dids | index($i)) != null ) ) | length ) as $w7conv
+
   | { now: $nowIso, nowEpoch: $now,
       scan: { rawLines: $rawLines, seen: $nSeen, good: $nGood, malformed: $nBad, verdict: $scan },
       span: { first: $F.firstTs, last: $F.lastTs, days: ($series | length) },
@@ -258,6 +313,17 @@ MODEL="$(jq -s \
                  closed: ($last7 | map(.closed) | add // 0),
                  net:    ($last7 | map(.net)    | add // 0),
                  days:   ($last7 | length) },
+      # `pct` and `reclaim` are null (UNKNOWN), never 0, when nothing was claimed at all: a window
+      # with no claims has no conversion, and rendering that as 0% would convict an idle week of
+      # being a futile one.
+      conversion7: { claims:    ($w7claims | length),
+                     claimIds:  ($w7cids | length),
+                     converted: $w7conv,
+                     dones:     ($w7dids | length),
+                     pct:       (if ($w7cids | length) == 0 then null
+                                 else (($w7conv * 1000 / ($w7cids | length)) | floor) / 10 end),
+                     reclaim:   (if ($w7cids | length) == 0 then null
+                                 else ((($w7claims | length) * 10 / ($w7cids | length)) | floor) / 10 end) },
       closes: { total: ($closes | length), attributed: (($closes | length) - $unattributed),
                 unattributed: $unattributed },
       lanes: $lanes,
@@ -280,17 +346,29 @@ printf 'span: %s → %s  (%s day(s) with events)\n' \
 printf '\n'
 
 printf 'DAILY SERIES  (last %s day(s) with events; open/blocked are the LAST-OF-DAY fold)\n' "$DAYS"
-printf '%-12s %7s %7s %7s %7s %8s %7s\n' date filed closed net open blocked LIVE
-printf '%s\n' '------------ ------- ------- ------- ------- -------- -------'
-jqm ".series[-${DAYS}:][] | [.date, .filed, .closed, .net, .open, .blocked, .live] | @tsv" \
-  | while IFS="$(printf '\t')" read -r d f c n o b l; do
-      printf '%-12s %7s %7s %7s %7s %8s %7s\n' "$d" "$f" "$c" "$n" "$o" "$b" "$l"
+printf '  claims = raw claim EVENTS · cids = DISTINCT ids claimed. claims >> cids means the same\n'
+printf '  handful of items is being re-claimed, which a raw event count alone renders as activity.\n'
+printf '%-12s %7s %7s %7s %7s %6s %7s %8s %7s\n' date filed closed net claims cids open blocked LIVE
+printf '%s\n' '------------ ------- ------- ------- ------- ------ ------- -------- -------'
+jqm ".series[-${DAYS}:][] | [.date, .filed, .closed, .net, .claims, .claimIds, .open, .blocked, .live] | @tsv" \
+  | while IFS="$(printf '\t')" read -r d f c n cl ci o b l; do
+      printf '%-12s %7s %7s %7s %7s %6s %7s %8s %7s\n' "$d" "$f" "$c" "$n" "$cl" "$ci" "$o" "$b" "$l"
     done
 printf '\n'
 
 W7F="$(jqm '.window7.filed')"; W7C="$(jqm '.window7.closed')"; W7N="$(jqm '.window7.net')"
 W7D="$(jqm '.window7.days')"
 printf 'ROLLING 7-DAY  filed=%s closed=%s net=%s over %s active day(s)\n' "$W7F" "$W7C" "$W7N" "$W7D"
+
+# CONVERSION, on the same window. Rendered from the model in ONE jq expression so the null (UNKNOWN)
+# case cannot be printed as a number by a shell that read an empty string — `pct` is null when
+# nothing was claimed, and "n/a" is what an absent ratio must look like.
+C7CLAIMS="$(jqm '.conversion7.claims')"; C7IDS="$(jqm '.conversion7.claimIds')"
+C7CONV="$(jqm '.conversion7.converted')"
+C7PCT="$(jqm 'if .conversion7.pct == null then "n/a" else (.conversion7.pct|tostring) + "%" end')"
+C7RCL="$(jqm 'if .conversion7.reclaim == null then "n/a" else (.conversion7.reclaim|tostring) + "x" end')"
+printf 'CONVERSION 7D  claims=%s over %s distinct id(s) → %s converted to done (%s) · reclaim=%s per id\n' \
+  "$C7CLAIMS" "$C7IDS" "$C7CONV" "$C7PCT" "$C7RCL"
 printf 'NOW            open=%s blocked=%s claimed=%s LIVE=%s\n' \
   "$(jqm '.current.open')" "$(jqm '.current.blocked')" "$(jqm '.current.claimed')" "$(jqm '.current.live')"
 printf 'PEAK LIVE      %s on %s\n' "$(jqm '.peak.live')" "$(jqm '.peak.date')"
@@ -374,6 +452,30 @@ for lane in $ROSTER $(printf '%s' "$MODEL" | jq -r '.lanes[].lane' | sort); do
       "$lane" "$n" "$cad" "$age_h" "$last"
   fi
 done
+
+# ── DRAIN FUTILITY — the fleet-scope arm. One line, always, with its own verdict token. ──────────
+# Placed inside LANE HEALTH because it answers the same operator question, and labelled fleet-scope
+# because claims carry no lane (header). Three outcomes and no fourth: ABSTAIN below the sample
+# floor, OK at or above the conversion floor, FUTILE below it. The abstention is a first-class
+# verdict rather than a silent skip — "too few claims to judge" and "conversion is fine" are
+# different facts, and a reader who cannot tell them apart has been told nothing.
+if [ "$C7IDS" -lt "$CONV_MIN_IDS" ]; then
+  printf '  verdict=drain-unmeasured  scope=fleet       claims=%s ids=%s — below the %s-id sample floor; NOT read as healthy\n' \
+    "$C7CLAIMS" "$C7IDS" "$CONV_MIN_IDS"
+else
+  # Integer compare on tenths: `pct` is one decimal and `[ ]` has no float dialect. jq does the
+  # arithmetic (it owns every other number in this file) and the shell only compares.
+  PCT10="$(printf '%s' "$MODEL" | jq -r '(.conversion7.pct // 0) * 10 | floor')"
+  MIN10=$(( CONV_MIN_PCT * 10 ))
+  if [ "$PCT10" -lt "$MIN10" ]; then
+    printf '  verdict=drain-futile      scope=fleet       claims=%s ids=%s converted=%s (%s) floor=%s%% reclaim=%s\n' \
+      "$C7CLAIMS" "$C7IDS" "$C7CONV" "$C7PCT" "$CONV_MIN_PCT" "$C7RCL"
+    STALLED=$(( STALLED + 1 ))
+  else
+    printf '  verdict=drain-converting  scope=fleet       claims=%s ids=%s converted=%s (%s) floor=%s%% reclaim=%s\n' \
+      "$C7CLAIMS" "$C7IDS" "$C7CONV" "$C7PCT" "$CONV_MIN_PCT" "$C7RCL"
+  fi
+fi
 printf '\n'
 
 # ── ROUTING ACTIVITY — fenced, and named for what it is NOT. ─────────────────────────────────────
@@ -388,7 +490,7 @@ printf '%s' "$MODEL" | jq -r '.routing[] | [.venue, .events, (if .last == "" the
 
 if [ "$ASSERT" -eq 1 ]; then
   if [ "$STALLED" -gt 0 ]; then
-    printf '\nbacklog-telemetry: ⛔ %s lane(s) stalled or silent — verdict=assert-red\n' "$STALLED" >&2
+    printf '\nbacklog-telemetry: ⛔ %s lane(s) stalled/silent or the drain is futile — verdict=assert-red\n' "$STALLED" >&2
     exit 1
   fi
   printf '\nbacklog-telemetry: verdict=assert-green\n'
