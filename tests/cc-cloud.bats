@@ -750,7 +750,7 @@ setup() {
 
   run cloud list --json --only sa
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"id":"sa"'* ]]
+  [[ "$output" == *'"id":"sa"'* ]] || false
   [[ "$output" != *'"id":"sb"'* ]]
 }
 
@@ -764,8 +764,8 @@ setup() {
 
   run cloud poll --only sa
   [ "$status" -eq 0 ]
-  [[ "$output" == *"sa"* ]]
-  [[ "$output" != *"sb"* ]]
+  [[ "$output" == *"sa"* ]] || false
+  [[ "$output" != *"sb"* ]] || false
   # The mutation is the observable, not the printed line: only the scoped id gets a sidecar. Scoping
   # `list` alone would have left `poll` growing without bound underneath the caller's fixed budget.
   [ -f "$CC_CLOUD_STATE/sa.seen" ]
@@ -792,7 +792,7 @@ setup() {
   cloud declare --id sa --branch claude/a --remote "$b" >/dev/null 2>&1
   run cloud list --json --only "sa,ghost-never-declared"
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"id":"sa"'* ]]
+  [[ "$output" == *'"id":"sa"'* ]] || false
   # An id the store does not hold must produce NO row. Iterating `--only` as an id list instead
   # would let a caller's typo mint a phantom declaration — the opposite of what a filter is for.
   [[ "$output" != *"ghost-never-declared"* ]]
@@ -812,7 +812,7 @@ setup() {
 
   run cloud gc --days 14
   [ "$status" -eq 0 ]
-  [[ "$output" == *"archived cold"* ]]
+  [[ "$output" == *"archived cold"* ]] || false
   [ -f "$CC_CLOUD_STATE/archive/cold.decl" ]
   [ ! -f "$CC_CLOUD_STATE/cold.decl" ]
   # A LIVE declaration is never touched at any age — this is the arm that keeps a GC from becoming
@@ -856,7 +856,7 @@ setup() {
   printf 'retired_at=%s\n' "$((T0 - 30 * 86400))" > "$CC_CLOUD_STATE/warm.retired"
   run cloud gc --days 14 --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" == *"would-archive warm"* ]]
+  [[ "$output" == *"would-archive warm"* ]] || false
   [ -f "$CC_CLOUD_STATE/warm.decl" ]          # --dry-run said so and wrote nothing
   run cloud gc --days 14
   [ "$status" -eq 0 ]
