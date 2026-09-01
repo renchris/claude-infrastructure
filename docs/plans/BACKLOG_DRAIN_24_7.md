@@ -30440,9 +30440,70 @@ census above, which already names that rc-126 past-the-pipe-buffer cell. Neither
 and neither is written into it here, for the reason that file's contract states: a cause was
 measured for neither, and an entry is a MEASUREMENT, not a judgement.
 
+🚨 **AND THE LAND WAS REFUSED BY THE FALSE CONVICTION THIS FILE PREDICTED — measured with the
+control, on the very commit that cures the horizon.** The second 2026-08-29 addendum warned that
+provisioning `bats` here *"trades a silent ungating for a FALSE CONVICTION"*, pointing a cloud lander
+at suites red on unmodified trunk in this venue. That is exactly what happened, and it is the first
+instance recorded on the LAND rather than on a single suite. `--precheck --working` was **GREEN on
+every static and ratchet arm**; the full `--dry-run` then went `rc 6`, and its sentence is
+*"4 of 21 direct suite(s) named a failure (**4 mapped to YOUR diff**) … This is a VERDICT about your
+diff (O(diff), reproducible): fix it, do not retry unchanged."* All four were run again on a
+**pristine `origin/main` worktree in this same container**, `e148e65b`, which touches none of them:
+
+    suite                             this diff    pristine trunk   attributable?
+    tests/operator-readout.bats            43            43 *       NO — manifest entry (:118),
+                                                                    and 43 is the census figure verbatim
+    tests/cc-dispatch-v2.bats              17            17         NO — identical on unmodified trunk
+    tests/cc-dispatch-fire-evidence.bats    2             2         NO — identical on unmodified trunk
+    tests/cc-dispatch-projects.bats         1             1         NO — cell 10, an unreadable-conf
+                                                                    test, vacuous as root: chmod 000
+                                                                    denies nothing to uid 0
+    (* operator-readout's trunk figure is the census above, not re-run here; it is a manifest entry.)
+
+**Every count matches on both sides, so the attribution is measured rather than argued** — and the
+gate's own attributor called all four mine. `4 mapped to YOUR diff` is therefore not a report about
+the diff at all; it is the venue's standing red re-attributed to whoever happens to be landing. The
+diff's OWN suite is the one that moved: `cc-dispatch-projects` cell 16 reds before the change and
+greens after, with cell 10 red on both sides. ⚠️ **Two of the three non-manifest suites are selected
+BY this change** (they are `bin/cc-dispatch`'s direct suites), which is what makes this the worst
+case for the heuristic: the venue's red and the diff's selection coincide, and nothing in the
+gate's output separates them. A cloud lander with no control run has no way to tell this from a real
+regression, and the instruction it is given — *fix it, do not retry unchanged* — points at trunk.
+
+⚠️ **`scripts/offbox-excluded.manifest` is again deliberately untouched, and for the file's own
+stated reason rather than convenience:** a CAUSE was measured for neither `cc-dispatch-v2` nor
+`cc-dispatch-fire-evidence` — only that they are red here and equally red on unmodified trunk — and
+that file's contract is *"every entry is a MEASUREMENT, not a judgement."* The 2026-08-29 census
+refused a `cc-reaper` line on exactly these grounds and this follows it. What is new and cheap for
+the next link is the **control method**: one `git worktree add /tmp/ctrl-trunk origin/main` plus the
+same suite, which converts "is this mine?" from a judgement into a two-minute reading and is the
+thing every prior dispatch lacked.
+
+**Consequence for this row: the commit is PARKED on its branch, not landed** —
+`claude/fire-20260901T044951Z-22938-1`, pushed. `ship-land` is fail-closed by design and correctly
+refuses to launder a red gate; the red is the venue's and cannot be fixed from inside it without
+either editing the manifest on an unmeasured cause or skipping suites, both of which this plan
+forbids. **The land is therefore operator-gated on the same box the rest of `f85fce7c26f5` is**, and
+this is a fourth, independent route to that same gate: not the return path, not the shallow horizon,
+but the gate's attributor convicting the lander of the venue's own reds.
+
+📋 **OWED LOCALLY — `~/.claude/autonomy/backlog.jsonl` does not exist in this container (measured,
+not recalled: `cc-backlog done 70f0001c657b` answered `unknown id`), so this entry is the channel,
+per the precedent one addendum above.** 🚨 **The owed op is `block`, NOT `done`** — the cure is
+committed and pushed but NOT landed, so there is no landed sha to close it with, and `block` is what
+parks the row OUT of the dispatch wave. That is the point rather than a formality: re-dispatching
+this row into another cloud VM meets the identical wall, and **that is the loop the eleven stranded
+branches above ARE.** Blocking is what stops it; reopening would re-cycle it. Runnable as typed:
+
+    cc-backlog block 70f0001c657b --needs "land branch claude/fire-20260901T044951Z-22938-1 (2 commits, 327653ff + 44fa3f96) from the operator's box via the project-local /ship — the cloud venue's gate reds on 4 suites that are equally red on unmodified trunk there, so no in-container land can be honest"
+
+    cc-notify --role desk "70f0001c657b parked: the shallow-horizon cure is committed on claude/fire-20260901T044951Z-22938-1 and needs a land from your box; the cloud gate convicts it of the venue's own reds"
+
 **What this does NOT settle.** The clone is still made shallow — this cures the worker's READS, not
 the clone. `git rev-parse --is-shallow-repository` remains the precondition for trusting any ancestry
 verdict in a dispatched worker's report, and a predecessor's cited shas must still be re-verified
 against full history rather than inherited from its commit body. It does not move `d84434cd` or the
-operator gate on `f85fce7c26f5`. And it cannot reach a worker whose brief was composed by a
-`cc-dispatch` older than this commit — the eleven stranded branches above stay stranded.
+operator gate on `f85fce7c26f5`. It cannot reach a worker whose brief was composed by a `cc-dispatch`
+older than this commit — the eleven stranded branches above stay stranded. And it does not fix the
+attributor: naming which of a smoke's reds are the VENUE's rather than the diff's needs a trunk
+control the gate does not currently take, which is the next cell and is not taken here.
