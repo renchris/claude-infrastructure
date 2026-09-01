@@ -3708,7 +3708,26 @@ rebase_onto_trunk() {  # $1=trunk → 0 = rebased (possibly via a rerere replay)
     gd="$(git rev-parse --git-path rebase-merge 2>/dev/null || true)"
     ga="$(git rev-parse --git-path rebase-apply 2>/dev/null || true)"
     [[ -d "$gd" || -d "$ga" ]] || return 1
-    if git diff --cached -U0 2>/dev/null | grep -qE '^\+(<{7}|={7}|>{7})([ 	]|$)'; then
+    # COUNTS, NEVER `grep -q` — the same cure :2323 applies one gate further out, for the same
+    # reason and in the same direction. Under `set -o pipefail` (:185) an early-exiting `grep -q`
+    # closes the pipe at the FIRST match; `git diff` then takes SIGPIPE on its next write, pipefail
+    # promotes the 141, and this `if` reads FALSE — so a replayed rerere resolution that DID stage
+    # conflict markers falls straight through to `rebase --continue` and lands them. FAIL-OPEN, in
+    # the land gate, on the one branch whose entire job is to refuse.
+    # MEASURED 2026-09-01, 20 trials per size, markers at the HEAD of the staged diff: correct
+    # 20/20 with 4 KB of following diff, 0/20 with 200 KB. A NEG control staging no markers reads
+    # ABSENT 0/20 at both sizes, so neither number can be an arm that always answers yes.
+    # AND IT IS NOT LATENT BY ARGUMENT, BECAUSE THE FEED IS NOT A LIST WE WRITE: at a rebase step
+    # the staged diff is the REPLAYED COMMIT'S OWN diff. Over the last 300 origin/main commits
+    # (2026-09-01), 3 are at or past the 87,151 B always-inverted floor and 2 more sit in the racy
+    # band — 1.7%, max 742,498 B at 67933debb489. The rerere-replay path is rare; the size that
+    # breaks it is ordinary.
+    # THE GUARD FOR THIS CLASS COULD NOT SEE THIS LINE, WHICH IS WHY IT SURVIVED THREE DRAINS IN
+    # THIS FILE: pipefail-sigpipe-lint splits the logical line on `|` with no quote awareness, so
+    # the `|` inside this very pattern made its last stage a fragment of the regex rather than the
+    # grep, and clause 2 never ran. Neither --census nor the allowlist has ever carried a row for
+    # scripts/ship-land.sh. See that file's QUOTE-BLIND SPLIT residual block for the population.
+    if [ "$(git diff --cached -U0 2>/dev/null | grep -cE '^\+(<{7}|={7}|>{7})([ 	]|$)')" -ge 1 ]; then
       echo "✗ ship-land: a replayed rerere resolution staged conflict markers — refusing to continue the rebase." >&2
       return 1
     fi

@@ -391,6 +391,47 @@ in_scan_set() { # $1=repo-relative path → 0 if this lint judges it
 # One awk program, fed one file at a time. Kept in awk rather than bash+grep because the analysis is
 # positional (which stage is LAST, which command word is FIRST) and a line-regex cannot see that.
 # shellcheck disable=SC2016  # the $1/$2/$0 below are AWK fields — single quotes are the point.
+#
+# ── A SEVENTH CORRECTION, 2026-09-01: THE QUOTE-BLIND SPLIT — GATE ONE OF TWO ───────────────────
+# Every clause above is a judgement about `last` — and `last` is chosen one line down by
+# `n = split(work, seg, "|")`, a split that knows nothing about quoting. A consumer whose OWN
+# ARGUMENT contains a `|` therefore never reaches the clause ladder at all: seg[n] is a fragment of
+# the PATTERN, is_early() reads false on it, and the line is dropped before clause 2 renders any
+# verdict. There are two gates in this detector, all six corrections above are about the second,
+# and the first carries no reasons — which is exactly why nobody had audited it.
+#
+# THE SHAPE IT HIDES IS NOT AN ODD ONE, IT IS THE COMMONEST THING A GUARD WRITES. An alternation is
+# how a predicate lists the alternatives it must catch, so the sites this split drops skew hard
+# toward guards: of the fourteen measured below, SEVEN are hooks or lints whose inversion PERMITS
+# the thing they exist to refuse — hooks/rm-safe-allowlist.sh:53 (the dangerous-rm gate),
+# hooks/ship-rail-push-allow.sh:62 (the force-push gate), hooks/git-worktree-guard.sh:48 and :69
+# (branch-delete and worktree-remove), hooks/lead-crash-watchdog.sh:390,
+# scripts/unattended-path-lint.sh:1107, scripts/wait-contract-lint.sh:67.
+#
+# MEASURED 2026-09-01 BY RUNNING THIS FILE'S OWN PROGRAM TWICE, not by re-implementing it: the
+# shipped DETECT_AWK was extracted verbatim, and a mutant built from it differing in exactly ONE
+# existing line (the split made quote-aware) — assertion-gated at one removed line, and that line
+# the split. Over the same population, same clause-1 filter, same HASE per file:
+#   control 125 rows, and the control REPRODUCES `--census` EXACTLY (0 rows of disagreement; that
+#     consistency arm is what makes the other two numbers mean anything);
+#   quote-aware 139 rows;  LOST = 0;  NEW = 14.  125 + 14 = 139, the partition sums.
+# Instrument: ~/.claude/autonomy/{mkawk280.py,qmask280.awk,probe280-split.sh}, all four arms exact.
+#
+# ONE OF THE FOURTEEN IS LIVE-CAPABLE RATHER THAN LATENT, and it was drained in the same diff:
+# scripts/ship-land.sh:3711, the rebase-continue conflict-marker refusal, whose feed is the
+# REPLAYED COMMIT'S OWN staged diff — measured 0/20 correct at 200 KB, with 5 of the last 300 trunk
+# commits at or past the racy floor. The other thirteen are bounded by inspection today (a single
+# command line, a process name, one file's code), and LATENT IS NOT SAFE: every one of those feeds
+# is an operational quantity that only grows and nothing announces the crossing.
+#
+# RESIDUAL, NAMED RATHER THAN WIDENED, for the reason the heredoc-latch block above gives about its
+# own four remaining files. Making the split quote-aware is a real change to what counts as a
+# pipeline: it mints 14 findings on the tree as it stands, and a bare lint that goes red BLOCKS
+# EVERY LAND IN THIS REPO through ship-land's own gate — the a6449cebc outage shape, arrived at
+# from the other direction. It wants its own link: drain or grandfather the fourteen FIRST, in the
+# same diff as the split, and re-run the detector on the unmodified tree before touching either
+# (method 213). tests/pipefail-sigpipe-lint.bats pins BOTH directions of the blindness, so a fix
+# that lands without deleting this block goes red rather than quietly disagreeing with it.
 DETECT_AWK='
 function ltrim(s) { sub(/^[ \t]+/, "", s); return s }
 

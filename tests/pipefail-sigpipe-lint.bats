@@ -310,3 +310,36 @@ $(census | grep -c 'scripts/muted\.sh:' || true) — the file is muted"; census 
 $(census | grep -c 'lr-reset-poller\.sh:' || true) hit(s), so arm 20 is vacuous"; false; }
   true
 }
+
+@test "21: GATE ONE — the stage split is QUOTE-BLIND, pinned in both directions" {
+  # Every clause this suite exercises judges `last`, and `last` is chosen by
+  # `n = split(work, seg, "|")` — a split with no quote awareness. A consumer whose OWN pattern
+  # contains a `|` therefore never reaches the clause ladder: seg[n] is a fragment of the regex,
+  # is_early() reads false on it, and the line is dropped before any clause renders a verdict.
+  # ONE VARIABLE BETWEEN THE TWO FIXTURES: same producer, same early-exiting consumer, same
+  # position; only the alternation differs.
+  mkfile alt   "if cat \"\$F\" | grep -qE 'aaa|bbb'; then :; fi" 'set -uo pipefail'
+  mkfile noalt "if cat \"\$F\" | grep -qE 'aaa'; then :; fi"     'set -uo pipefail'
+  run census
+  [ "$status" -eq 0 ]
+  # THE FIRE HALF FIRST. Without it, "hidden" is indistinguishable from a census that reports
+  # nothing at all — which is the failure mode this whole file exists to refuse.
+  [ "$(printf '%s\n' "$output" | grep -c 'scripts/noalt\.sh')" -eq 1 ] \
+    || { echo "the plain form was not reported either — this arm is vacuous"; echo "$output"; false; }
+  # AND THE BLIND HALF. Green here is a statement about a KNOWN GAP, not about a clean tree: it is
+  # declared in the lint's own QUOTE-BLIND SPLIT block with its measured population, and arm 22
+  # pins that declaration so the two cannot drift apart.
+  [ "$(printf '%s\n' "$output" | grep -c 'scripts/alt\.sh')" -eq 0 ]
+  true
+}
+
+@test "22: GATE ONE — the quote-blind residual is DECLARED, not merely known" {
+  # A blind spot that is measured and then not written down is indistinguishable from one nobody
+  # found (an omission carries no reason). This arm is what makes the declaration load-bearing:
+  # a link that makes the split quote-aware must delete that block, and arm 21 goes red in the
+  # same moment — so the fix cannot land while the file still claims the gap is open.
+  [ "$(grep -c 'QUOTE-BLIND SPLIT' "$LINT")" -ge 1 ] \
+    || { echo "the quote-blind residual block is gone from the lint"; false; }
+  [ "$(grep -c 'quote-aware' "$LINT")" -ge 1 ]
+  true
+}
