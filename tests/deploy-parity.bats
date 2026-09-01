@@ -1805,3 +1805,147 @@ _skillclaim_build() {   # $1=repo root · $2=out claims · $3=out covered
   # …while a SIBLING declaration is untouched, so the seed removed one arm and not the block.
   [ "$(bash "$BATS_TEST_TMPDIR/lseeded.sh" statusline.sh </dev/null | grep -c '__DEFAULT__')" -eq 0 ]
 }
+
+# ── RAW-INSTALL COVERAGE (2026-09-01, method 247 pointed at method 246's OWN remedy) ─────────────
+# The LITERAL INSTALL COVERAGE arm above closed the gap the for-header extractor left — and it did
+# so with an extractor keyed on TWO VERB NAMES, `link_file` and `copy_file`. A key on a verb name is
+# itself a shape claim, so ask it the same question: what places bytes WITHOUT calling either verb?
+#
+# Measured 2026-09-01 over the real install.sh: 8 bare `run ln`/`run cp` lines, of which 3 are
+# DEPLOYS (the rest are the two verbs' own bodies, a backup, and an intra-repo seed), and those 3
+# partition 1/1/1 by SOURCE — one loop-driven (reachable from a for-header), one `$REPO_DIR` literal
+# (CLAUDE.md: in NEITHER existing population, reaching the reasonless `*) want=0` AND absent from the
+# assert's walk-input pathspec), and one whose source is a LIVE path and therefore cannot be named in
+# `$REPO_DIR` units by ANY extractor keyed on them.
+#
+# NEITHER SIDE IS WRITTEN DOWN HERE. The population comes out of install.sh's own byte-placing lines
+# via a FOURTH extractor — keyed on the SHAPE of the line, deliberately not on either verb name,
+# because an arm that reuses the extractor whose blind spot it is checking cannot see past it — and
+# the verdict for the namable class comes from EXECUTING the assert's own case block.
+_rawdeploy_extract() {  # $1=install.sh  $2=out TSV: line \t kind \t srcclass \t src \t dest
+  : > "$2"
+  grep -nE '^[[:space:]]*run (ln|cp)( |$)' "$1" | while IFS= read -r _line; do
+    _no="${_line%%:*}"; _body="${_line#*:}"
+    _toks="$(printf '%s\n' "$_body" | grep -oE '"[^"]*"')"
+    # sed, not head/tail: a first-line read through a pipe can SIGPIPE its producer, and this file
+    # is not the place to find out whether pipefail is on.
+    _src="$(printf '%s\n' "$_toks" | sed -n '1p' | tr -d '"')"
+    _dst="$(printf '%s\n' "$_toks" | sed -n '$p' | tr -d '"')"
+    _kind=DEPLOY
+    case "$_dst" in
+      *.bak)        _kind=BACKUP ;;      # a migration backup, not a deploy
+      '$REPO_DIR'*) _kind=INTRA-REPO ;;  # seeds a file INSIDE the checkout (accounts.json.example)
+    esac
+    case "$_src" in
+      '$src'|'$dest') _kind=VERB-BODY ;; # link_file/copy_file's own locals — the verbs themselves
+    esac
+    _sc=OTHER
+    case "$_src" in
+      '$REPO_DIR/'*)             _sc=REPO-LITERAL ;;
+      '$HOME/'*|'$CONFIG_DIR/'*) _sc=LIVE-PATH ;;
+      '$'*)                      _sc=VARIABLE ;;
+    esac
+    printf '%s\t%s\t%s\t%s\t%s\n' "$_no" "$_kind" "$_sc" "$_src" "$_dst" >> "$2"
+  done
+}
+
+@test "RAW INSTALL COVERAGE: every install.sh raw run-ln/run-cp deploy is loop-driven, claimed, or declared" {
+  MAP="$REPO_ROOT/install.sh"
+  SUBJ="$REPO_ROOT/scripts/deploy-parity-assert.sh"
+  [ -f "$MAP" ]
+  [ -f "$SUBJ" ]
+
+  RAW="$BATS_TEST_TMPDIR/raw.tsv"
+  _rawdeploy_extract "$MAP" "$RAW"
+  # NON-VACUITY FLOOR: a broken anchor derives zero lines and every assertion below then passes over
+  # an empty set. Measured 8 on 2026-09-01; the floor is deliberately loose.
+  [ "$(grep -c . "$RAW")" -ge 6 ]
+  # …and a KNOWN member, so a derivation that produced six lines of the wrong thing still fails.
+  [ "$(awk -F'\t' '$4=="$REPO_DIR/CLAUDE.md"{n++} END{print n+0}' "$RAW")" -eq 1 ]
+
+  # (2) BOTH PARTITIONS MUST SUM. A raw line is exactly one of VERB-BODY / BACKUP / INTRA-REPO /
+  # DEPLOY, and a DEPLOY is exactly one of VARIABLE / LIVE-PATH / REPO-LITERAL by its source. A shape
+  # that escapes the classifier lands in neither total, so the arm REFUSES rather than passing over
+  # it — which is the property the for-header and verb-name extractors both lacked.
+  TOT="$(awk 'END{print NR+0}' "$RAW")"
+  KVB="$(awk -F'\t' '$2=="VERB-BODY"{n++}  END{print n+0}' "$RAW")"
+  KBK="$(awk -F'\t' '$2=="BACKUP"{n++}     END{print n+0}' "$RAW")"
+  KIR="$(awk -F'\t' '$2=="INTRA-REPO"{n++} END{print n+0}' "$RAW")"
+  KDP="$(awk -F'\t' '$2=="DEPLOY"{n++}     END{print n+0}' "$RAW")"
+  [ "$((KVB + KBK + KIR + KDP))" -eq "$TOT" ]
+  DVAR="$(awk -F'\t'  '$2=="DEPLOY" && $3=="VARIABLE"{n++}     END{print n+0}' "$RAW")"
+  DLIVE="$(awk -F'\t' '$2=="DEPLOY" && $3=="LIVE-PATH"{n++}    END{print n+0}' "$RAW")"
+  DLIT="$(awk -F'\t'  '$2=="DEPLOY" && $3=="REPO-LITERAL"{n++} END{print n+0}' "$RAW")"
+  [ "$((DVAR + DLIVE + DLIT))" -eq "$KDP" ]
+
+  # (3) THE NAMABLE CLASS, decided by the SUBJECT'S OWN ARBITER rather than by re-reading it.
+  [ "$(grep -c '^    cls=""$' "$SUBJ")" -eq 1 ]
+  _classcov_extract "$SUBJ" "$BATS_TEST_TMPDIR/rcase.txt"
+  sed 's|^      \*)                         want=0 ;;$|      *)                         want=0; cls="__DEFAULT__" ;;|' \
+    "$BATS_TEST_TMPDIR/rcase.txt" > "$BATS_TEST_TMPDIR/rcaseB.txt"
+  # The tag must touch exactly the catch-all, or the mutation silently moved an arm.
+  [ "$(diff "$BATS_TEST_TMPDIR/rcase.txt" "$BATS_TEST_TMPDIR/rcaseB.txt" | grep -c '^[<>]')" -eq 2 ]
+  RRUN="$BATS_TEST_TMPDIR/rrun.sh"
+  _classcov_runner "$BATS_TEST_TMPDIR/rcaseB.txt" "$RRUN"
+  # CONTROLS BEFORE VERDICTS. POS: a globbed class member must still come back CLAIMED, or the
+  # runner is mute and every verdict below is an artefact.
+  [ "$(bash "$RRUN" hooks/notify.sh </dev/null | grep -c '^1|hooks/\*\.sh$')" -eq 1 ]
+  # FIRE: a source present nowhere MUST reach the tagged default, or this arm cannot fail at all.
+  [ "$(bash "$RRUN" zzz-no-such-raw-install/nope.txt </dev/null | grep -c '__DEFAULT__')" -eq 1 ]
+
+  RBAD="$BATS_TEST_TMPDIR/rawbad.txt"; : >"$RBAD"
+  awk -F'\t' '$2=="DEPLOY" && $3=="REPO-LITERAL"{sub(/^\$REPO_DIR\//,"",$4); print $4}' "$RAW" \
+    | sort -u > "$BATS_TEST_TMPDIR/rawlit.txt"
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    out="$(bash "$RRUN" "$rel" </dev/null)"
+    case "$out" in
+      *__DEFAULT__*) printf 'REASONLESS-DEFAULT %s\n' "$rel" >>"$RBAD" ;;
+      *)             : ;;   # CLAIMED (want=1) or declined by an EXPLICIT arm carrying its reason
+    esac
+  done < "$BATS_TEST_TMPDIR/rawlit.txt"
+  [ "$(grep -c . "$RBAD")" -eq 0 ] || { echo "install.sh raw deploys reaching the reasonless default:"; cat "$RBAD"; false; }
+
+  # (4) THE TWO CLASSES NO $REPO_DIR-KEYED ARM CAN SCORE, each pinned at its measured count so a
+  # SECOND one of either shape refuses here rather than arriving unannounced.
+  # VARIABLE source: install.sh:776, the vendor DIRECTORY link. `ln -sfn` and not `ln -sf` is
+  # load-bearing — install.sh's own comment says a re-run whose target changed would otherwise
+  # create the new link INSIDE the existing dir symlink — so the spelling is what identifies it.
+  [ "$DVAR" -eq 1 ]
+  [ "$(awk -F'\t' '$2=="DEPLOY" && $3=="VARIABLE"{print $1}' "$RAW" \
+       | while IFS= read -r n; do sed -n "${n}p" "$MAP"; done | grep -c 'ln -sfn')" -eq 1 ]
+  # LIVE-PATH source: install.sh:703's ~/bin/restore-file convenience symlink. Its source is
+  # $HOME/.claude/..., i.e. the LIVE layer rather than the checkout, so it is unnamable in the units
+  # every other arm here uses. Pinned by DESTINATION for that reason.
+  [ "$DLIVE" -eq 1 ]
+  [ "$(awk -F'\t' '$2=="DEPLOY" && $3=="LIVE-PATH" && $5=="$HOME/bin/restore-file"{n++} END{print n+0}' "$RAW")" -eq 1 ]
+  true
+}
+
+@test "RAW INSTALL COVERAGE fire test: deleting the CLAUDE.md declaration puts its source back on the default" {
+  # Without this the arm above is a green nobody has seen go red, and a control that has never fired
+  # is indistinguishable from one that cannot. Deleting ONE declaration must put exactly its own
+  # source back on the reasonless default and leave its siblings alone.
+  SUBJ="$REPO_ROOT/scripts/deploy-parity-assert.sh"
+  [ -f "$SUBJ" ]
+  [ "$(grep -c '^    cls=""$' "$SUBJ")" -eq 1 ]
+  _classcov_extract "$SUBJ" "$BATS_TEST_TMPDIR/rcase.txt"
+  sed 's|^      \*)                         want=0 ;;$|      *)                         want=0; cls="__DEFAULT__" ;;|' \
+    "$BATS_TEST_TMPDIR/rcase.txt" > "$BATS_TEST_TMPDIR/rcaseB.txt"
+  _classcov_runner "$BATS_TEST_TMPDIR/rcaseB.txt" "$BATS_TEST_TMPDIR/rintact.sh"
+
+  # BASELINE: with the arm present, CLAUDE.md is declared and must NOT read as the default.
+  [ "$(bash "$BATS_TEST_TMPDIR/rintact.sh" CLAUDE.md </dev/null | grep -c '__DEFAULT__')" -eq 0 ]
+
+  # SEED: delete exactly the CLAUDE.md arm. Asserted to remove ONE line, so a reworded arm makes
+  # this test refuse rather than pass vacuously over a deletion that never happened.
+  grep -v '^      CLAUDE\.md)                 want=0 ;;$' "$BATS_TEST_TMPDIR/rcaseB.txt" \
+    > "$BATS_TEST_TMPDIR/rcaseC.txt"
+  [ "$(( $(grep -c . "$BATS_TEST_TMPDIR/rcaseB.txt") - $(grep -c . "$BATS_TEST_TMPDIR/rcaseC.txt") ))" -eq 1 ]
+  _classcov_runner "$BATS_TEST_TMPDIR/rcaseC.txt" "$BATS_TEST_TMPDIR/rseeded.sh"
+
+  # …and now that same source falls through to the reasonless default.
+  [ "$(bash "$BATS_TEST_TMPDIR/rseeded.sh" CLAUDE.md </dev/null | grep -c '__DEFAULT__')" -eq 1 ]
+  # …while a SIBLING declaration is untouched, so the seed removed one arm and not the block.
+  [ "$(bash "$BATS_TEST_TMPDIR/rseeded.sh" accounts.json </dev/null | grep -c '__DEFAULT__')" -eq 0 ]
+}
