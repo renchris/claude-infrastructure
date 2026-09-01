@@ -86,6 +86,110 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-01 — drain recycle #273: method 245 — A DEFERRAL IS ONLY AS TRUE AS THE SCOPES IT
+  DEFERS TO, AND THE SCOPE HERE IS A HAND-WRITTEN LIST.** #272 asked what an auditor's coverage arm
+  can PARSE. **#273 asked the same question of a DEFERRAL.** `sweep_strays` skips every symlink with
+  the comment *"every symlink belongs to the forward walk / sweep_orphans"* — a partition claim over
+  the live symlink population naming exactly TWO owners. **The forward walk cannot own the
+  rename/delete case at all:** `check_one` returns at `[ -f "$src" ]`, and a renamed-away target IS
+  a repo file that no longer exists, which is the founding reason `sweep_orphans` exists. So the
+  whole class rested on `sweep_orphans`'s hand-written directory list — six names plus `skills/*/`,
+  **ONE level deep**. That is the FOURTH restated enumeration of the live layer in this file and the
+  only one no arm quantifies over: `tests/deploy-link-parity.bats` reads that very loop header, but
+  only as a **REGION TERMINATOR** for the forward walk it audits.
+  **THE MEASUREMENT, `probe273-orphan.sh`, nineteen predictions written first, rc-93 gated, at
+  2026-09-01T01:18:24Z:** **514** live symlinks under `~/.claude` resolve INTO this checkout · the
+  ORPHAN leg's scope **REACHES 446** · **and it MISSES 68**, partition asserted to sum. Folded: **12**
+  `scripts/lib` · **5** `lib` · **5** `scripts/backlog-consolidation` · **4** `agents` · **~37** in
+  skills SUBdirectories · and `model-config.yaml`, `providers.json` and `accounts.json` at the config
+  root. **Both sweeps' lists were derived from the source, never transcribed, and they DISAGREE:**
+  `lib` and `scripts/lib` are swept for STRAYS and never for ORPHANS; `commands` is swept for ORPHANS
+  and never for STRAYS. So `sweep_strays` deferred a broken link in `scripts/lib` to a leg that does
+  not run there.
+  🚨 **BEHAVIOURAL, NOT INFERRED.** A hermetic fixture drove the REAL subject through its own
+  `CC_LINKPARITY_*` seams with one dangling link planted per scope class. **It reported ONE of five,
+  printed `0 unmapped` over the other four, and closed with "1 actionable".** The third silence is
+  the one worth naming: **the `[ -f "$tgt" ]` test in `sweep_unmapped` dropped the broken ones BEFORE
+  `unmapped_scanned` counted them**, so they were absent even from the non-vacuity denominator #272
+  built to stop a failed enumeration rendering as the healthy 0.
+  ✅ **THE MOVE — a code fix deriving from the TERRITORY, not from a list.** `sweep_unmapped` already
+  walks every live symlink; it now reports a dangling one as ORPHAN with the same `rm` remedy,
+  deferring to `sweep_orphans` through a second ledger (`ORPHANED` / `_orphaned`) built exactly like
+  `SEEN` / `_claimed` — **a pure-builtin `case`, never `printf | grep -qxF`**, which is the fail-OPEN
+  pipeline drained from this file on 2026-08-31 and whose inversion would fire precisely ON THE
+  MATCH. **Defined ABOVE both readers**, because bash resolves a function at CALL time and a
+  definition beside its second reader is `command not found` on every real run while every fixture
+  whose first leg reports nothing stays green. **A directory added to any producer tomorrow is
+  covered the moment its first link is deployed.**
+  ⚠️ **0 of the 68 were dangling at that moment**, so this closes a DETECTOR gap rather than repairing
+  an outage — and a detector gap is only ever visible when something else breaks.
+  🚨 **TWO LANDED CLAIMS CORRECTED IN PASSING, both in #272's own header, and the first is the
+  instructive one.** *"`bin/claude-*` live-linked by NO installer … install.sh cannot restore them
+  and `link_refresh()` can never repair one."* **The conclusion holds; two clauses did not.** The
+  five `claude-*` names DO appear at `install.sh:458` — but that loop **`copy_file`s them to
+  `~/bin`**, where all five are REAL FILES today, a different root and a different model;
+  `it2-wrapper` is copied to `$CFG/bin/it2`, **a different NAME**. And **`link_refresh()` lives in
+  `deploy-live.sh`, not install.sh.** ⚠️ **"The name appears in install.sh" and "install.sh deploys
+  this path" are different claims, and a grep answers only the first.** The second correction is my
+  own change's doing: *"every member is BY CONSTRUCTION correctly linked"* is no longer true of the
+  leg, so the not-counted-into-`findings` paragraph now splits the two verdicts outright — a member
+  that RESOLVES goes unaudited, a member that does NOT resolve does not execute at all. **Keeping the
+  second out of `findings` to protect the first's quietness would be the alarm-budget argument used
+  to silence the actionable half of its own population.**
+  ✅ **RED-PROVED, PREDICTION FIRST, rc 0, ATTRIBUTED BY NAME.** PRE tree from `origin/main` via
+  `git archive | tar -x`, **asserted to hold ZERO occurrences of `_orphaned` before any red from it
+  was believed**; only the SUITE copied forward, so the PRE arm runs MY tests against the OLD
+  subject. **Plan `1..63` at both moments — PRE 59 ok / 4 not ok, POST 63 ok / 0 not ok** — every red
+  attributed out of `arms273.txt` rather than retyped, anchored on the emitted `not ok ` line's shape
+  because `bats --tap` writes no ` - ` separator, MUTE control at 0, **and ALL 57 INCUMBENT ARMS GREEN
+  AT BOTH MOMENTS.** Suite **57 → 63**.
+  🚨 **TWO OF THE SIX PREDICT GREEN PRE-FIX ON PURPOSE, and a varying prediction is the only kind
+  that says anything about attribution:** one pins that an IN-scope dangling link is still reported
+  exactly ONCE (the new ledger's whole job), the other that a RESOLVING directory symlink is still
+  never a finding — the `-f` test kept its real job when it stopped doubling as the dangling filter,
+  and `vendor/` deploys one directory symlink per plugin by design. **The MECHANISM arm names no
+  directory:** it derives BOTH lists from the subject, asserts the set difference is non-empty so it
+  cannot pass vacuously, and requires the dangling case reported for every member — so it survives
+  any rewording of the fix.
+  ⚠️ **MY OWN COMMIT GATE REFUSED THE FIRST COMMIT AT rc 95, AND IT WAS RIGHT.** The discrimination
+  gate counted the forbidden `printf | grep -qxF` spelling file-wide and matched **the sentence
+  inside `_orphaned` that DOCUMENTS it** — #241's scar in its own costume, one link later. Repaired
+  by stripping comment lines first and feeding the SEEDED FIRE TEST through the same pipeline, so a
+  control cannot skip a stage its subject goes through. **A gate that is too wide is worth keeping
+  until it has fired once; this one fired.**
+  ✅ **NOT A WIDENING:** `pipefail-sigpipe-lint --census` **125 → 125, LOST=0, NEW=0**, keyed on
+  **(path, TEXT)** because the diff shifts line numbers, PRE arm extracted from `origin/main` rather
+  than remembered. Bare lint rc 0 · `shellcheck` rc 0 · `bash -n` rc 0 · `bats-assert-liveness` rc 0 ·
+  `bats-shellcheck-lint --range` clean, 1 suite scanned, 0 blocking. **DECLARED NOT-RUN, never claimed
+  green:** `alarm-polarity-lint` — neither file is an alarm emitter and its POS control is a known
+  MUTE (`e07dc5e09f83`, already OPEN, do NOT re-file).
+  ✅ **THE DRAW, RUN IN THE FOREGROUND BEFORE THE LAND: 2 suites, 81 ok, 0 not ok, 0 skip, one plan
+  per suite, TERMINATOR ASSERTED (ran=2 listed=2), 28 s at load ~19-24** — `deploy-link-parity`
+  **63** · `ms365-reply-splice` **18**. The second is the #269/#270 shape reproducing a third time: a
+  suite is in the draw because it asserts something ABOUT this file, not because it tests it.
+  ⚠️ **The selector's POS control drawn from `$MB~2..$MB~1` read 0 and that was CORRECT** — that range
+  is a `docs(drain)` commit, prose-only. Redrawn from `$MB~3..$MB~2` it **SPOKE with 3**. This brief
+  warns about it in one line and it still cost a minute.
+  ⚠️ **THE BOARD: ZERO arrivals, ZERO departures, ZERO transitions in the 5 m 25 s gap after #272's
+  floor** — 338 open / 218 blocked / 2,352 done / 2 claimed (556 combined, 2,910 rows) at
+  2026-09-01T01:13:16Z, both partitions asserted, `sort -c` on all five lists, full-set `comm` on
+  every one. **I closed NO row and filed NONE, so nothing needed subtracting from the actuator
+  series.**
+  ⚠️ **THE LANE AT MY OPEN, from the worktree on a clean tree with `trunk..HEAD = 0`:** `RUNG=🚀
+  LIVE_SRC=behind LIVE_SHA=eb0e8d5673b49e3b264cf63aec85ac821b2c45dc LIVE_LAG=15 LIVE_ADDS=2
+  LIVE_STALE=3 LIVE_AGE=15226 LIVE_BREACH_WHY=adds MIG_FAILED=0 GATE=stale`. **The live sha has not
+  moved across THREE links now** (#271, #272, mine). `4e6a51df2a84` stays OPEN; I did not re-file it
+  and did not drive it. **`GATE=stale` at both my readings — the 92nd and 93rd consecutive, and NOT
+  mine to drive.**
+  ⚠️ **LEAD 0, re-measured at my open: `scripts/deploy-link-parity.sh` still RED at the destination,
+  rc 1, `3 actionable`, `458 linked · 10 live-extra`** — and **`unmapped` was ABSENT from the live
+  copy's output entirely**, exactly as this brief predicted, because the executing blob is
+  `bf699443487c` against trunk's `d0bb483e8af4`. **#270's fix, #272's, and now mine all land into a
+  file that cannot run at the destination it fixes. Do not "re-fix" it.**
+  ⚠️ **Stores at 2026-09-01T01:13:31Z: postland `.page` = 0 (denominator 2,817 — the 222nd
+  consecutive zero) · stamps 528 · pages 2,336 all / 87 `.page` · inbox-guard `.escalated` 434.**
+  All four identical to #272's floor readings, which is a statement about two moments 5 minutes
+  apart and nothing more.
 - **2026-09-01 — drain recycle #272: method 244 — AN AUDITOR'S COVERAGE ARM QUANTIFIES OVER
   WHATEVER ITS EXTRACTOR CAN PARSE, AND THE TERRITORY IS BIGGER THAN THE MAP.** #271 asked what
   population a NUMBER is a claim about and corrected its predecessor 511 to 2. **#272 asked the same
