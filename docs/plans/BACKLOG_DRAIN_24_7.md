@@ -30382,3 +30382,67 @@ precedent `149789b69fc4` — six files, discharged 39 minutes later, re-dispatch
 same list — and this is the same shape at 11×. Closing the row says nothing about the fourth lock's
 own cure, which this addendum re-opens with a measurement rather than a judgement: **the arm is
 correct and unreached.**
+
+### Addendum 2026-09-01 (second) — the fourth lock's cure now rides the BRIEF, because that is the only surface that reaches a worker in time (`70f0001c657b`)
+
+*(Dispatched cloud worker, twelfth dispatch on this plan's own row. The entry above predicted the
+next instance; this one IS it, and the reach argument is now three instances on two rows.)*
+
+**It fired again, on the dispatch that read the entry saying it would.** Measured here before
+anything else was read: `git rev-parse --is-shallow-repository` = **true**, `.git/shallow` present,
+`git rev-list --count origin/main` = **50** with a root of 2026-08-30; after one
+`git fetch --unshallow` (3.6 s), **3,915**. The brief this session was handed opens with *"FIRST
+STEP — read what this item cites on TRUNK"* and prescribes three reads, and all three were unsound
+as typed at the moment they were prescribed.
+
+**Why the existing arm could not have caught it, stated as a reach and not a bug.**
+`scripts/cloud-venue-provision.sh` is correct — its `TRUNCATED-HISTORY` token is ranked first
+(`:221`) and `git fetch --unshallow` is in its provision path (`:590`), and running it here produced
+`history: full · 3915 commits` and a `READY` verdict. But **nothing in the VM runs the provisioner
+before the worker starts reading**, and the provisioner is not what the worker is pointed at: the
+brief is. The cure was one layer too late for the reads it protects, on all three instances.
+
+**Landed with this addendum:**
+
+- `bin/cc-dispatch:2656` — the staleness rail now opens with the horizon precondition, ahead of the
+  three trunk reads rather than beside them: `git -C <repo> rev-parse --is-shallow-repository`, and
+  on `true`, `git -C <repo> fetch --unshallow`. Guarded by the probe because git **refuses**
+  `--unshallow` on a complete clone, so an unguarded call would fail loudly on the desk's own full
+  checkouts. `--deepen` is refused for the provisioner's own stated reason, quoted forward: a deeper
+  wrong horizon is still a wrong horizon, and a partial cure restores the silent failure with a
+  green line above it. The rail states the asymmetry that makes this a refusal rather than a note —
+  the horizon errs in ONE direction, reporting landed work as never-landed, which is exactly the
+  direction that produces a trunk-reverting diff.
+- `tests/cc-dispatch-projects.bats` — a cell whose load-bearing assertion is **ordering**, by byte
+  offset (`grep -bo`): a precondition composed *after* the reads it protects is not a precondition,
+  and every content-only assertion would pass on that broken arrangement. It also pins the two
+  commands to the item's OWN repo and asserts `--deepen` appears nowhere.
+
+⚠️ **The RED control had to be TRUNK, not the suite's `$PRISTINE`, and getting that wrong is
+instructive.** `$PRISTINE` is pinned at `67c86d89`, which predates the staleness rail entirely — the
+sibling cell asserts it composes no `FIRST STEP` at all. Controlled against it, the new cell goes red
+for the wrong reason (absence of the whole rail, not absence of the guard within it) and would keep
+passing if the rail were later deleted outright. The defect this cell pins is narrower and lives on
+**current** trunk: a rail that HAS the three reads and nothing making them answerable. So the control
+reads `git show origin/main:bin/cc-dispatch` and asserts exactly that pair, and **skips** where trunk
+is unreachable — a control that could not be read is not a control, and a network-less box must not
+be told its tree regressed. Verified both ways: the cell reds on the pre-change `bin/cc-dispatch`
+(`--is-shallow-repository` absent from the composed brief) and greens after.
+
+**Venue state, for the next link.** Both tools arrived **absent** here, i.e. the `LOCKED` verdict —
+the silent-ungating cell of the second 2026-08-29 addendum, not a hypothetical. The provisioner
+fetched shellcheck **v0.11.0** upstream (the distro's 0.9.0 reds unmodified trunk, as recorded) and
+bats-core **v1.13.0** at `3bca150ec86275d6d9d5a4fd7d48ab8b6c6f3d87`, then re-read `READY` and
+asserted `bats LOADS this repo — 558 suite(s) gather`. Two pre-existing reds reproduce and are
+**not** this diff's: `cc-dispatch-projects` cell 10 (an unreadable-conf test, vacuous as root —
+`chmod 000` denies nothing) and `bats-shellcheck-lint` **27 ok / 1 not ok**, byte-identical to the
+census above, which already names that rc-126 past-the-pipe-buffer cell. Neither is in the manifest
+and neither is written into it here, for the reason that file's contract states: a cause was
+measured for neither, and an entry is a MEASUREMENT, not a judgement.
+
+**What this does NOT settle.** The clone is still made shallow — this cures the worker's READS, not
+the clone. `git rev-parse --is-shallow-repository` remains the precondition for trusting any ancestry
+verdict in a dispatched worker's report, and a predecessor's cited shas must still be re-verified
+against full history rather than inherited from its commit body. It does not move `d84434cd` or the
+operator gate on `f85fce7c26f5`. And it cannot reach a worker whose brief was composed by a
+`cc-dispatch` older than this commit — the eleven stranded branches above stay stranded.
