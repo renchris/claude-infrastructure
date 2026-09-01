@@ -2491,7 +2491,7 @@ cmd_transition() {
     # the ledger fold, so every way of failing to read it — absent helper, unreadable store, a
     # python3 that is not there, a crash — must let the claim through. ONLY exit 3 blocks.
     if [ "$venue" = cloud ] && [ "${CC_BACKLOG_ELIGIBLE_GATE:-on}" != off ]; then
-      local eself ebin erc eout
+      local eself ebin erc eout egate
       eself="$(self_path)"
       ebin="${CC_BACKLOG_ELIGIBLE_BIN:-$(cd "$(dirname "$eself")" 2>/dev/null && pwd)/cc-eligible}"
       # AN UNRESOLVABLE HELPER NAMES ITSELF. Fail-open is unchanged and correct — this predicate
@@ -2533,7 +2533,44 @@ cmd_transition() {
           } >&2
           return 4
         fi
+        # THE ADMIT CARRIES ITS REASON THROUGH (backlog e981656df348, dispatch 24). Reaching here
+        # means the gate RAN and did not refuse — the branch every one of this row's 24 dispatches
+        # actually took — and until now `$eout` was computed and dropped on exactly this path, the
+        # same shape as bin/cc-dispatch deleting $cerrf on rc 0. bin/cc-eligible's `check` now ends
+        # a non-blocking assessment with one `gate=eligibility-admitted park=… history=… reach=…`
+        # line; re-emitting it here is what puts it in the stderr this claim's caller captures.
+        #
+        # THE FALLBACK IS THE DIAGNOSTIC, not defensive padding. A helper that answers rc 0 with no
+        # state line is a helper whose BYTES PREDATE the token — candidate (c) of
+        # docs/research/tenant-drift-venue-refusal-2026-08-24.md §337 ("the cc-eligible actually
+        # executed predates the park arm"), which is otherwise indistinguishable from a modern
+        # helper that simply found nothing. `park=unreported` says which, positively, so a reader
+        # is never left inferring a version from an absence.
+        egate="$(printf '%s\n' "$eout" | grep -m1 -F 'gate=eligibility-admitted' 2>/dev/null || true)"
+        [ -n "$egate" ] || egate="gate=eligibility-admitted park=unreported history=unreported reach=unreported (the helper answered rc ${erc} and emitted no state line — its bytes predate the token)"
+        printf 'cc-backlog claim: %s\n' "$egate" >&2
       fi
+    fi
+    # A DELIBERATE OFF-SWITCH IS STILL AN UNRUN GATE, and the reader needs to know which (backlog
+    # e981656df348, dispatch 24). `CC_BACKLOG_ELIGIBLE_GATE=off` skips the block above ENTIRELY —
+    # including the warning the 22nd dispatch added and the admit line the paragraph above emits —
+    # so a switched-off gate was byte-identical, on every channel, to one that ran and admitted.
+    # That is candidate (a) of docs/research/tenant-drift-venue-refusal-2026-08-24.md §337, whose
+    # only listed discriminator is "check launchd's env, not an interactive shell" — a fact about a
+    # daemon's environment at a moment that has passed, i.e. unanswerable after the fact, on the box
+    # or off it. Written as its own guard rather than an `else` because the block above is already
+    # two conditions deep and an `else` there would read as the helper's fallback, not the switch's.
+    #
+    # A RECORD, NOT A WARNING, and that distinction PRESERVES the prior decision rather than
+    # reversing it. tests/cc-backlog-self-path.bats pinned "the kill switch still skips the gate
+    # entirely, and SILENTLY" because an override is not an outage, and an alarm on every deliberate
+    # claim is one a reader learns to skip. That still holds and that test is untouched: no
+    # `SKIPPED` warning is emitted here. What is added is the machine token alone — the same `gate=`
+    # contract the unresolved path carries — so the fact reaches bin/cc-dispatch's journal without
+    # ever reaching a human as an alarm.
+    if [ "$venue" = cloud ] && [ "${CC_BACKLOG_ELIGIBLE_GATE:-on}" = off ]; then
+      printf 'cc-backlog claim: gate=eligibility-disabled — CC_BACKLOG_ELIGIBLE_GATE=off, the off-box eligibility predicate was not evaluated for %s\n' \
+        "$id" >&2
     fi
     # (6) SIBLING-CONDITION LEASE — the row lease above asks "is THIS ROW held?"; this asks "is this
     # WORK held?", which is a different question the moment one piece of work has two rows. See

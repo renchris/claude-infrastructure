@@ -1131,7 +1131,12 @@ DEEP_HISTORY_NOTE = (
 
 def cmd_check(item_id):
     idx = build_index(load_records())
-    verdict, desc, hits, title = assess(item_id, idx)
+    # `assess_full`, NOT `assess` — and it is the SAME WORK, not more of it. `assess` is a
+    # four-field projection of this exact call (`full["verdict"], full["description"], …`), so the
+    # measured arms have already run and their states are already in hand by the time a verdict
+    # exists. Reading them here costs one dict lookup; the git shell-outs are the same either way.
+    full = assess_full(item_id, idx)
+    verdict, desc, hits, title = full["verdict"], full["description"], full["tokens"], full["title"]
     # LINE 1 is the machine-readable token: cc-backlog's caller sees only a head-biased excerpt
     # (head -1, 200 chars), so the verdict must ride the first line or it does not exist
     # (memory: claimed-outcome-vs-checked-outcome).
@@ -1154,8 +1159,33 @@ def cmd_check(item_id):
         elif verdict == PARKED:
             note = PARKED_NOTE
         sys.stderr.write("  " + note + "\n")
-    elif verdict == UNKNOWN_ITEM:
-        sys.stderr.write("cc-eligible: %s — fail-open\n" % desc)
+    else:
+        # 🚨 AN ADMIT MUST SAY WHAT IT SAW (backlog e981656df348, dispatch 24). This is the third
+        # and last silent path in the same seam, and it is the one that actually fires. The 22nd
+        # dispatch made the gate speak when it could not FIND this helper; the 23rd made that
+        # speech reach a store. Both instrumented the rare branch. The common branch — the helper
+        # runs, answers rc 0, and the claim proceeds — emitted `verdict=eligible` on stdout and
+        # NOTHING here, so these three states were indistinguishable to every downstream reader:
+        #
+        #   park=none          the arm read the trunk ref and there is genuinely no park
+        #   park=not-measured  the arm could not measure at all — an uncertified repo, i.e. a
+        #                      shallow or ref-less checkout. THE PARK IS UNREAD, NOT ABSENT.
+        #   park=honoured      a park is on trunk and the desk retired it (the benign branch)
+        #
+        # `not-measured` is the one that matters and the one that was invisible: it is candidate
+        # (d) of docs/research/tenant-drift-venue-refusal-2026-08-24.md §337's table, listed there
+        # with `git rev-parse --is-shallow-repository` as its only discriminator — a command
+        # somebody has to think to run on the box, at the right moment, about the right repo.
+        # A gate that cannot distinguish "I looked and there was nothing" from "I could not look"
+        # is not a measurement, and it reported both as the same silence for 24 dispatches.
+        #
+        # ON STDERR AND AFTER THE FLUSH, so `verdict=` keeps line 1 byte-for-byte: every `head -1`
+        # consumer is untouched. TOKENS, never prose, for claim_gate_state's reason — the sentence
+        # beside them may be reworded, the `gate=`/`park=` keys may not.
+        sys.stderr.write("gate=eligibility-admitted park=%s history=%s reach=%s\n"
+                         % (full["park"]["state"], full["history"]["state"], full["reach"]["state"]))
+        if verdict == UNKNOWN_ITEM:
+            sys.stderr.write("cc-eligible: %s — fail-open\n" % desc)
     sys.exit(3 if verdict in BLOCKING else 0)
 
 
