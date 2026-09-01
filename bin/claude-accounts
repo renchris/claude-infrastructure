@@ -2326,7 +2326,11 @@ def fmt_burst(bp):
 
 
 WEEK_H = 168.0          # the weekly bucket's span; reset stamps are exactly 7 d apart
-MIN_ELAPSED_FRAC = 0.05  # ~8.4 h — below this a projection is noise, so we ABSTAIN
+# The abstain floor, WIDENED 2026-09-01 from 0.05 (~8.4 h elapsed) to the day-6 mark (~24 h left).
+# 0.05 was sized for the ARITHMETIC blowing up near zero elapsed; it said nothing about whether the
+# linear divisor above it is TRUE, and measurement says it is not until the window's last day.
+# The evidence, and what the widening costs, are in wall_projection's ABSTAIN section.
+MIN_ELAPSED_FRAC = 6.0 / 7.0  # 0.857 — speak only where linear and empirical have converged
 
 
 def wall_projection(r):
@@ -2346,6 +2350,34 @@ def wall_projection(r):
     a 1% reading projects to 168%, so an un-floored projection would page on every fresh window —
     manufacturing the very false alarm the metric exists to remove. Returning None is the honest
     answer to "too early to say", per the repo's abstain-never-impute rule.
+
+    THE FLOOR IS THE LINEAR MODEL'S OWN REFUTATION, not just a guard on small denominators
+    (widened 0.05 -> 6/7 on 2026-09-01; weekly-reset-utilization-2026-08-25 §3/§6 +
+    drain-telemetry-2026-08-25/axis-D-windows §4a/§5). Dividing by elapsed_fraction removes the
+    PHASE error only if burn is LINEAR. Weekly burn is not: over 11,287 adjacent pairs across 12
+    window instances (phase decorrelated from calendar, r = +0.030), phase 0.0-0.7 runs at
+    10.9 pp/day and phase 0.7-1.0 at 25.2 pp/day — a 2.3x end-of-window acceleration. Backtesting
+    THIS function at day 3: 12% -> 28% projected vs 98% actual; 17% -> 40% vs 100%; 25% -> 58% vs
+    92%; 51% -> 119% "⚠ WALL" vs 99%. Mean absolute error 46 pp at day 3, 35 pp at day 5,
+    18.3 pp at phase 0.9, 2 pp at day 7. A CONSTANT predictor (leave-one-out mean of the other
+    windows' finals, ~94) scores 5.3 pp over the same 8 windows — mid-week this projection is
+    8.7x worse than a number that ignores its input, i.e. mid-window weekly_pct carries
+    essentially no information about where the window lands. So the floor now sits where linear
+    and empirical have CONVERGED (day 6: -17 pp; day 7: -2 pp) and the projection is silent
+    across the whole mid-week regime where it was measurably uninformative.
+
+    WHY WIDEN RATHER THAN FIT THE CURVE. The shape-corrected divisor was built and backtested
+    leave-one-out and LOSES — MAE 54.1 vs linear's 39.5 overall — because between-window shape
+    variance dominates the mean shape and a small S amplifies it. Worse, the shape is a fossil of
+    the operator's end-of-window rush: if the planner that reads this succeeds, the rush stops,
+    the shape flattens toward linear, and an estimator fitted to today's shape fails in the
+    direction of complacency. 4 windows refute the linear model; they cannot calibrate a curve.
+
+    WHAT THE WIDENING COSTS, STATED. The mid-week `⚠ WALL` flag. On the one backtested window
+    that raised it the flag was a false alarm (119% projected, 99% actual), and under the constant
+    predictor EVERY window is a wall trajectory — so mid-week the flag carries no information in
+    either direction. `wk_strand_pp` (M3a, a nowcast at the last 48 h of pace) is the surface that
+    still speaks mid-week, and it makes no lead-time claim.
     """
     wp, wrh = r.get("weekly_pct"), r.get("weekly_reset_h")
     if wp is None or not isinstance(wrh, (int, float)):
@@ -2460,7 +2492,14 @@ def pace_line(rows):
     unchanged on them, because an account on a wall trajectory has no strand and is still the
     most important thing on the line; what does NOT survive is rendering a weekly projection
     ABOVE 100 as a number, which is the regime where every projector measured here is wrong by
-    50-130 pp. An abstention renders as the word plus its reason, never as a zero."""
+    50-130 pp. An abstention renders as the word plus its reason, never as a zero.
+
+    ...AND FROM 2026-09-01 THE RATIO ITSELF IS SILENT UNTIL THE WINDOW'S LAST DAY. `wall_projection`
+    now abstains below 6/7 elapsed (its ABSTAIN section carries the measurement), so a mid-week
+    zero-strand row falls to the bare `on pace to fill the window` arm — which is the STRAND
+    nowcast speaking, a different instrument, not the projection. The ratio and the `⚠ WALL` flag
+    return in the last ~24 h, where linear and empirical have converged. Mid-week they were wrong
+    by a mean 46 pp, so what this row loses is a number that was misinforming it."""
     def _strand(x):
         # Computed here, not read off the stamp, for the same reason wall_projection is called
         # rather than read off `burn_ratio`: the renderer must not silently render nothing when

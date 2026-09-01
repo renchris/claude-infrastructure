@@ -1847,13 +1847,27 @@ assert "next3 strand ~5pp of 8 · p96 of its own 3h burns" in line, line
 # RP-26 — a zero-strand account still RENDERS, and renders LAST. A sorted() over a list filtered
 # on strand > 0 passes RP-25 and drops this row silently.
 assert "next no strand" in line, line
-assert "⚠ WALL trajectory" in line, line
 assert line.rstrip().split(chr(10))[-1].strip().startswith("next no strand"), line
-# ...and its burn RATIO survives unchanged, while the >100 PROJECTION does not render as a number
-assert "1.62× burn" in line, line
-assert "162" not in line and "163" not in line, line     # the RATIO, never the ~162% projection
+# RP-26b, ADDED 2026-09-01 (backlog 70ed289c10fb) — this row is at phase 0.32, i.e. MID-WEEK, and
+# the ratio it used to carry here was `1.62× burn, ⚠ WALL trajectory`. That is the false alarm
+# itself: the backtest of this exact fixture (51% at day 3) projected 119% against a 99% actual,
+# and the linear projector errs by a mean 46 pp across the whole mid-week regime. `wall_projection`
+# now abstains below 6/7 elapsed, so the row keeps its place in the sort and loses only the number
+# that was misinforming it. ASSERTION MOVED, NOT DELETED — the WALL flag is re-sited below, in the
+# window where it is still true. Re-adding `1.62× burn` here restores the 46 pp error class.
+assert "× burn" not in line, line
+assert "⚠ WALL" not in line, line
+assert "162" not in line and "163" not in line, line     # never the ~162% projection either
 assert "BEHIND" not in line, line                        # 47ddbf47c DELETED it: on 2026-08-16 three freshly-reset windows each read
                                                          # BEHIND, which is correct and reads as gross under-utilisation.
+# RP-26b re-sited: in the LAST DAY the projection speaks again, and the ⚠ WALL flag with it —
+# at day 6 linear and empirical have converged (-17 pp, then -2 pp at day 7), so an account that
+# will hit 100% and be DOWN until reset is still named. 95% with 20h left = 1.08× burn.
+wall = ca.pace_line([row(acct="next", weekly_pct=95, weekly_reset_h=20.0, burn_wk_ewma_ph=0.5)])
+assert "next no strand" in wall, wall
+assert "1.08× burn" in wall, wall
+assert "⚠ WALL trajectory" in wall, wall
+assert "107" not in wall and "108" not in wall, wall     # the RATIO, never the >100 projection
 # an abstention renders as the WORD plus its reason, never as a zero (L2)
 ab = ca.pace_line([row(acct="next2", weekly_pct=13, weekly_reset_h=122.8, burn_wk_span_h=4.1)])
 assert "next2 strand unknown (span 4.1h < 6.8h)" in ab, ab
