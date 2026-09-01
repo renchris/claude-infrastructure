@@ -2056,3 +2056,33 @@ Suites: `tests/cloud-create-lib.bats` 20-23 (the contract's order, branch, no-wo
 refusal to render without a branch), `tests/handoff-fire-cloud.bats` 17b (the CLI lane's payload),
 `tests/cc-offload.bats` (the API lane's delivered brief, with the red control that the trailer did
 not replace the task). All four are red-proofed against the pre-change tree.
+
+### 16.1 · It was built FOUR times before it landed once (2026-09-01)
+
+🚨 **Read this before treating any row on this lane as unbuilt.** The section above is dated
+2026-08-31 and describes work that did not reach trunk. Backlog `0c8b39b67665` was dispatched a
+**fifth** time on 2026-09-01, and the fifth worker found four independent, complete implementations
+already pushed and stranded — `0b9920cb`, `b3bd322e`, `a1b37ac2` and `faf78977`, none an ancestor of
+`origin/main`, each with its own suites and its own appended §. Nothing on this row was ever blocked
+on knowing what to build; four dispatches were spent entirely on re-derivation.
+
+The mechanism is `scripts/cloud-return.sh`'s own admission rule (quoted in its header): `--sweep`
+acts only on declarations carrying the W2 management fields, so an **unmanaged** dispatch produces a
+branch the return path is by design not allowed to land. The row stays `open`, and `open` is
+`cc-dispatch`'s fire predicate. Re-measured 2026-09-01 by patch-equivalence over the uncensored
+post-prune window: **234 of 291 `claude/*` branches (80%) carry unlanded work, 353 commits** — and
+08-26 → 08-28, the three days this row's first two implementations were written into, landed **4%
+of 134 branches**.
+
+🚨 **Every landedness figure computed from inside a cloud VM is wrong until the clone is deepened.**
+This venue's checkout is shallow (50 of 3,908 commits), which makes `git merge-base` fail against
+almost every branch and reads out as *269 of 290 branches have disjoint histories*. After
+`git fetch --unshallow` the true count of disjoint branches is **zero**. `git rev-parse
+--is-shallow-repository` before any such measurement, always.
+
+⚠️ **That loop is NOT the one this section's beacon closes, and conflating them is how it stayed
+open for three days.** The beacon fixes *absence is ambiguous* — a worker that has not pushed reads
+`NOT-STARTED` and is double-dispatched inside `boot_s`. It does nothing for *a pushed branch nobody
+lands*. Both end in a re-dispatch of a row that is not open, which is the whole reason the first was
+mistaken for the whole problem. Measurement, the four shas, and what was deliberately not fixed →
+`docs/research/cloud-boot-contract-restrand-2026-09-01.md`.
