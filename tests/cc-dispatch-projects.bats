@@ -372,6 +372,53 @@ mkrepo() {
   ! grep -q 'FIRST STEP' "$C/brief-proj-b-1.txt" || false
 }
 
+# ── the rail's trunk reads are PRECEDED by the horizon check that makes them answerable ──────────
+@test "brief: the deepen precondition comes BEFORE the trunk reads — a shallow clone answers all three wrong and silently" {
+  # BACKLOG_DRAIN_24_7 § "the fourth lock" + its 2026-09-01 addendum. The rail above tells the
+  # worker to settle the item against trunk before writing anything. A dispatched worker's checkout
+  # arrives SHALLOW at depth 50, and all three prescribed reads then answer from inside that horizon
+  # in ONE direction — landed reads as never-landed — while reporting nothing about the truncation:
+  # `merge-base --is-ancestor` exits 1 both for "no" and for "I cannot see that far", and
+  # `git log <sha>..origin/main` prints nothing for both. So the rail's own cure inverts into the
+  # hazard it exists to close: the worker re-derives a landed fix and the diff REVERTS trunk.
+  # Measured twice on ONE row (564d151b76e5): 11 of its 13 commits were re-derivation of a cure
+  # already on trunk, stranded across 11 branches. cloud-venue-provision.sh carries the correct arm
+  # and never runs in that VM — the brief is the only surface that reaches the worker in time.
+  seed_items proj-b:1
+  local rb; rb="$(mkrepo proj-b)"; conf "proj-b  repo=$rb"
+  fresh; CC_DISPATCH_CEILING=6 "$DISP" --once >/dev/null 2>&1
+  local b="$C/brief-proj-b-1.txt"
+
+  # the guard and the cure, both runnable as typed and both naming the item's OWN repo
+  grep -q "git -C $rb rev-parse --is-shallow-repository" "$b" || false
+  grep -q "git -C $rb fetch --unshallow" "$b" || false
+  # --deepen is REFUSED on purpose: a deeper wrong horizon is still a wrong horizon, and a partial
+  # cure puts the silent failure back with a green line above it.
+  ! grep -q -- '--deepen' "$b" || false
+
+  # ORDERING IS THE WHOLE PROPERTY — a precondition printed after the reads it protects is not a
+  # precondition. Assert the deepen offset precedes the first trunk-read offset in the composed text.
+  local deepen_at read_at
+  deepen_at="$(grep -bo -- '--is-shallow-repository' "$b" | head -1 | cut -d: -f1)"
+  read_at="$(grep -bo -- 'rev-list --count HEAD..origin/main' "$b" | head -1 | cut -d: -f1)"
+  [ -n "$deepen_at" ] && [ -n "$read_at" ] || false
+  [ "$deepen_at" -lt "$read_at" ] || false
+
+  # RED — and the baseline has to be TRUNK, not $PRISTINE. $PRISTINE predates the staleness rail
+  # entirely (the sibling cell above asserts it composes no FIRST STEP at all), so it would go red
+  # here for the wrong reason: absence of the whole rail, not absence of the guard within it. The
+  # defect this cell pins is narrower and lives on CURRENT trunk — a rail that HAS the three trunk
+  # reads and nothing making them answerable. Read trunk's own composer and assert exactly that
+  # pair. Skipped rather than failed where trunk is unreachable: a control we could not read is not
+  # a control, and a network-less box must not be told its tree regressed.
+  local trunk_rail
+  if ! trunk_rail="$(git -C "$REPO" show origin/main:bin/cc-dispatch 2>/dev/null)"; then
+    skip "origin/main:bin/cc-dispatch unreadable here — the RED control needs trunk's own composer"
+  fi
+  printf '%s' "$trunk_rail" | grep -q 'rev-list --count HEAD..origin/main' || false  # the reads ...
+  ! printf '%s' "$trunk_rail" | grep -q -- '--is-shallow-repository' || false        # ... unguarded
+}
+
 # ── one queue: cross-project fairness under the existing S7 key ───────────────────────────────────
 @test "one queue: the OLDEST item wins across projects — a long-undrained foreign item outranks the incumbent's whole queue" {
   # proj-b's items are seeded FIRST, so they carry the oldest ts — this is the live shape: the 5

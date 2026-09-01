@@ -2650,10 +2650,36 @@ dispatch() { # <dry|run|decide>
       # the worker is told to re-check at CONSUMPTION rather than trust what it was handed, which is
       # the same rule the evidence-freshness sibling (f46261b23ec2) proposes for the item's TEXT.
       #
+      # THE HORIZON PRECONDITION, and why it is prepended to the rail rather than left to the
+      # provisioner (BACKLOG_DRAIN_24_7 § "the fourth lock" + its 2026-09-01 addendum). Every read
+      # the rail prescribes below is a question about trunk, and a SHALLOW checkout answers all
+      # three from inside its own ~50-commit horizon while reporting nothing about the truncation:
+      # `git merge-base --is-ancestor` exits 1 for "no" and 1 for "I cannot see that far", and
+      # `git log <sha>..origin/main -- <path>` prints nothing for "unchanged since" and nothing for
+      # "that sha is below my horizon". So the rail's own cure — read it on trunk before you write —
+      # inverts: a cure that landed weeks ago reads as NEVER LANDED, the worker re-derives it, and
+      # the diff reverts trunk. That is 6110fc45141e reached by the route the rail was built to
+      # close, from inside the rail.
+      #
+      # `scripts/cloud-venue-provision.sh` already carries the correct arm (TRUNCATED-HISTORY, first
+      # in the verdict, `--unshallow` in its provision path) and it is NOT the reach: the harness
+      # hands a dispatched worker an ALREADY-SHALLOW clone and nothing in that VM runs the
+      # provisioner. Measured twice on ONE row (`564d151b76e5`, 2026-08-29 and 2026-09-01): 50
+      # commits with a root days old, all 13 of the row's commits scoring off-trunk, and 3,897 with
+      # the correct ancestry after one fetch — 11 of those 13 commits were re-derivation of a cure
+      # already on trunk, stranded across 11 distinct branches. Re-measured on this dispatch: 50 →
+      # 3,915. The brief is the one surface that reaches the worker before its first trunk read, so
+      # the precondition rides HERE, ahead of the reads it protects.
+      #
+      # `--unshallow` and not `--deepen`, for the provisioner's own stated reason: a deeper wrong
+      # horizon is still a wrong horizon, and a partial cure restores the silent failure with a
+      # green line above it. Guarded by `--is-shallow-repository` because git REFUSES --unshallow on
+      # a complete clone, so an unguarded call would fail loudly on the desk's own full checkouts.
+      #
       # NO BACKTICKS ANYWHERE IN THIS LIST — these are double-quoted shell strings, so a backtick
       # would command-substitute at compose time and write its OUTPUT into the worker's brief.
       local staleness_rail
-      staleness_rail="FIRST STEP — read what this item cites on TRUNK, never in your own tree. Run: git -C $irepo fetch origin -q && git rev-list --count HEAD..origin/main (0 means your tree IS trunk; anything else means every file you are about to read predates it), then 'git show origin/main:<path>' for each file the item names, and check the cited sha against origin/main with 'git log --oneline <sha>..origin/main -- <path>'. A post-land RED reproduces FAITHFULLY in a stale tree, and against a fix that already landed, so a correct-looking diagnosis can produce a diff that REVERTS trunk (cc-backlog 6110fc45141e). If the cure is already on trunk, the item is DONE — close it with that sha as evidence rather than re-deriving it."
+      staleness_rail="FIRST STEP — read what this item cites on TRUNK, never in your own tree. Before ANY of those reads, deepen: run git -C $irepo rev-parse --is-shallow-repository, and if it prints true run git -C $irepo fetch --unshallow (a dispatched worker's checkout arrives SHALLOW at depth 50, and every trunk read below then answers from inside that horizon and answers WRONG in one direction only — 'git merge-base --is-ancestor' exits 1 both for 'no' and for 'I cannot see that far', 'git log <sha>..origin/main' prints nothing for both — so a cure that landed weeks ago reads as NEVER LANDED and you re-derive it; measured on one row, 11 of its 13 commits were re-derivation of a cure already on trunk and none of them landed). Then run: git -C $irepo fetch origin -q && git rev-list --count HEAD..origin/main (0 means your tree IS trunk; anything else means every file you are about to read predates it), then 'git show origin/main:<path>' for each file the item names, and check the cited sha against origin/main with 'git log --oneline <sha>..origin/main -- <path>'. A post-land RED reproduces FAITHFULLY in a stale tree, and against a fix that already landed, so a correct-looking diagnosis can produce a diff that REVERTS trunk (cc-backlog 6110fc45141e). If the cure is already on trunk, the item is DONE — close it with that sha as evidence rather than re-deriving it."
       if ! printf '%s\n' \
         "TASK — ${title:-backlog item $id} — cc-backlog item $id (project $iproj, repo $irepo)." \
         "DoD ref: ${dod:-none}. Scope (frozen): drive this ONE item to finished-verified-landed." \
