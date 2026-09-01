@@ -149,6 +149,7 @@ unmapped_scanned=0   # non-vacuity denominator: 0 unmapped is the HEALTHY value,
 LINES=""
 FIXES=""
 SEEN=""     # repo-relative paths the forward walk claimed; the STRAY leg defers to them
+ORPHANED="" # live-relative paths sweep_orphans already reported; the reverse leg defers to them
 
 note() { LINES="${LINES}$(printf '  %-9s %-44s %s' "$1" "$2" "$3")"$'\n'; }
 fix()  { FIXES="${FIXES}  ▶ $1"$'\n'; }
@@ -198,6 +199,22 @@ _claimed() {  # $1 = repo-relative path · whole-line membership in the forward 
   # time, so a definition below sweep_strays would be `command not found` on every real run while
   # every fixture whose forward walk claims nothing stays green.
   case $'\n'"$SEEN" in *$'\n'"$1"$'\n'*) return 0 ;; esac
+  return 1
+}
+
+_orphaned() {  # $1 = live-relative path · whole-line membership in sweep_orphans's own ledger
+  # The SECOND deferral ledger in this file, and it exists for the same reason as the first: two
+  # legs now sweep for a dangling link, so without a claim the one link is classified TWICE.
+  #
+  # Same pure-builtin `case` as _claimed — never `printf '%s' "$ORPHANED" | grep -qxF`, which is the
+  # fail-OPEN pipeline drained from this file on 2026-08-31: under `set -uo pipefail` grep exits on
+  # the MATCH, the producer takes SIGPIPE, pipefail promotes the rc to 141, and the `&& continue`
+  # that defers never fires — so the deferral inverts precisely when it is needed.
+  #
+  # Defined HERE, above both readers, not beside its second one: bash resolves a function at CALL
+  # time, so a definition below sweep_unmapped would be `command not found` on every real run while
+  # every fixture whose sweep_orphans reports nothing stays green.
+  case $'\n'"$ORPHANED" in *$'\n'"$1"$'\n'*) return 0 ;; esac
   return 1
 }
 
@@ -254,6 +271,10 @@ sweep_orphans() {
     [ -e "$l" ] && continue
     tgt="$(readlink "$l")"
     case "$tgt" in "$REPO"/*) ;; *) continue ;; esac
+    # Claim it for this leg. The reverse leg below sweeps the SAME dangling class over the whole
+    # live tree, so without a claim one broken link is reported twice with one remedy — the exact
+    # double-classification the SEEN ledger was introduced to prevent, one leg over.
+    ORPHANED="${ORPHANED}${l#"$CFG"/}"$'\n'
     note "ORPHAN" "${l#"$CFG"/}" "→ $tgt (gone from the checkout)"
     fix "rm \"$l\""
     findings=$((findings + 1))
@@ -448,8 +469,13 @@ sweep_strays() {  # $1 = live-relative directory
   local d="$1" f base rel verdict why
   [ -d "$CFG/$d" ] || return 0
   for f in "$CFG/$d"/*; do
-    [ -e "$f" ] || continue          # no match, or a dangling link — sweep_orphans owns those
-    [ -L "$f" ] && continue          # every symlink belongs to the forward walk / sweep_orphans
+    [ -e "$f" ] || continue          # no match, or a dangling link — the two legs below own those
+    # Every symlink belongs to the forward walk, sweep_orphans or sweep_unmapped. That used to name
+    # only the first TWO, and the omission was load-bearing rather than stylistic: sweep_orphans
+    # sweeps a hand-written directory list, so for the 68 live symlinks outside it a broken link was
+    # deferred here to a leg that never ran. Named in THREE parts now because a deferral is only as
+    # true as the scopes it defers to, and the third one derives from the territory.
+    [ -L "$f" ] && continue
     [ -d "$f" ] && continue          # structural dirs and __pycache__ residue are not tools
     base="$(basename "$f")"; rel="$d/$base"
     # Already classified by the forward walk (it reported SHADOW) — one file, one verdict, one remedy.
@@ -593,9 +619,16 @@ sweep_strays "agents"
 #    2  model-config.yaml           install.sh:545 and :554 link them BY NAME. The singleton block
 #       providers.json              at :520-523 carries two of install.sh's SEVEN
 #                                   `link_file "$REPO_DIR/<x>"` sites.
-#    6  bin/claude-* · bin/it2-wrapper  live-linked into this checkout by NO installer in the tree:
-#                                   install.sh cannot restore them and link_refresh() can never
-#                                   repair one.
+#    6  bin/claude-* · bin/it2-wrapper  live-linked into this checkout by NO installer in the tree.
+#                                   RE-MEASURED 2026-09-01: the five claude-* names DO appear in
+#                                   install.sh:458, but that loop `copy_file`s them to ~/bin, where
+#                                   all five are REAL FILES today — a different root and a different
+#                                   model. it2-wrapper is copied to $CFG/bin/it2, a different NAME.
+#                                   So no producer creates these six links, install.sh cannot
+#                                   restore one, and link_refresh() (which lives in deploy-live.sh,
+#                                   not install.sh) repairs only install.sh's own classes. Stated
+#                                   with the destinations because "the name appears in install.sh"
+#                                   and "install.sh deploys this path" are different claims.
 #    2  tools/auth/auth-timeseries.sh · scripts/cloud-create-api.py   (:469 globs scripts/*.sh only)
 #
 # WHY A NEW LEG RATHER THAN A WIDER WALK. tests/deploy-link-parity.bats:623 already asserts that
@@ -607,21 +640,61 @@ sweep_strays "agents"
 # TERRITORY, so it cannot go stale: a class added to any producer tomorrow surfaces the moment its
 # first file is deployed, whether or not anyone remembers to widen a glob.
 #
-# NOT COUNTED INTO `findings`, DELIBERATELY, AND THAT IS THE PART TO CHECK RATHER THAN TRUST. Every
-# member is BY CONSTRUCTION correctly linked — this is a gap in the map, not a deployment failure,
-# and the remedy is a walk-or-declare decision rather than a per-file command. Folding 54 correct
-# files into a report that currently reads "3 actionable" would bury the three real ones (memory:
-# alarm-polarity-and-attention-budget). It is counted in the summary line for exactly the reason
-# live-extra is, stated below: so the number is visible without being an alarm.
+# THE UNMAPPED COUNT IS NOT COUNTED INTO `findings`, DELIBERATELY, AND THAT IS THE PART TO CHECK
+# RATHER THAN TRUST. A member that RESOLVES is by construction correctly linked — a gap in the map,
+# not a deployment failure — and its remedy is a walk-or-declare decision rather than a per-file
+# command. Folding 54 correct files into a report that reads "3 actionable" would bury the three
+# real ones (memory: alarm-polarity-and-attention-budget). It is counted in the summary line for
+# exactly the reason live-extra is: so the number is visible without being an alarm.
+#
+# A member that does NOT resolve is the opposite case and IS a finding, added 2026-09-01. The two
+# are one walk because they are one enumeration of the territory, but they are two verdicts: an
+# unmapped-but-linked file executes correctly and merely goes unaudited, while an unmapped-and-
+# BROKEN one does not execute at all. Keeping the second out of `findings` to protect the first's
+# quietness would be the alarm-budget argument used to silence the actionable half of its own
+# population.
 sweep_unmapped() {
   local l tgt rel
   # The prune set is the non-deployed stores; everything remaining under $CFG is a candidate. A
-  # directory symlink cannot appear here: the vendor/ leg is declared NOT-PER-FILE above and its
-  # target is a directory, which the -f test below rejects.
+  # resolving directory symlink is rejected by the -f test below (the vendor/ leg, declared
+  # NOT-PER-FILE above) — but only AFTER the dangling arm has run, because a broken link is broken
+  # whatever its target was going to be, and -f cannot tell those two states apart.
   while IFS= read -r l; do
     [ -n "$l" ] || continue
     tgt="$(readlink "$l" 2>/dev/null)" || continue
     case "$tgt" in "$REPO"/*) ;; *) continue ;; esac
+    # DANGLING, and this is the leg that owns it for the whole tree. sweep_orphans reports the same
+    # class, but only inside its own hand-written directory list — six names plus skills/*/, ONE
+    # level deep. That list is the fourth restated enumeration of the live layer in this file and
+    # the one no arm quantifies over, so its gaps were silent in every column:
+    #   · the forward walk cannot reach a dangling link at all — check_one returns at
+    #     `[ -f "$src" ]`, since a renamed-away target is exactly a repo file that no longer exists,
+    #     which is the founding reason sweep_orphans exists;
+    #   · sweep_strays skips every symlink, deferring in a comment to "the forward walk /
+    #     sweep_orphans" — a partition claim naming two owners, true only inside their scopes;
+    #   · and the `[ -f "$tgt" ]` test that used to stand here dropped the broken ones BEFORE
+    #     unmapped_scanned counted them, so they were absent even from the non-vacuity denominator
+    #     built to stop a failed enumeration rendering as the healthy 0.
+    # MEASURED 2026-09-01T01:18Z: 514 live symlinks resolve into this checkout and sweep_orphans's
+    # scope reaches 446 of them, missing 68 — 12 under scripts/lib, 5 under lib, 5 under
+    # scripts/backlog-consolidation, 4 agents, ~37 in skills subdirectories, and model-config.yaml,
+    # providers.json and accounts.json at the config root. A hermetic run with one broken link
+    # planted per class reported ONE of five and printed "0 unmapped" over the other four.
+    # 0 of the 68 were dangling at that moment, so this closes a detector gap rather than repairing
+    # an outage — and a detector gap is only ever visible when something else breaks.
+    # Deriving from the TERRITORY is what makes it hold: a directory added to any producer tomorrow
+    # is covered the moment its first link is deployed, with no list to keep in step.
+    if [ ! -e "$tgt" ]; then
+      _orphaned "${l#"$CFG"/}" && continue
+      note "ORPHAN" "${l#"$CFG"/}" "→ $tgt (gone from the checkout)"
+      fix "rm \"$l\""
+      findings=$((findings + 1))
+      continue
+    fi
+    # A resolving DIRECTORY symlink is not an unmapped file: the vendor/ leg is declared
+    # NOT-PER-FILE above and deploys one directory link per plugin, deliberately. The test stays
+    # `-f` for that reason and no longer doubles as the dangling filter, which is what hid the case
+    # above inside a guard that reads as being about file type.
     [ -f "$tgt" ] || continue
     unmapped_scanned=$((unmapped_scanned + 1))
     rel="${tgt#"$REPO"/}"
