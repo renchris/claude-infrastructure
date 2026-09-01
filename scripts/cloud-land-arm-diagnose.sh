@@ -137,9 +137,37 @@ else
 fi
 
 hr; echo "B · what a LOGIN shell exports — the plist runs '/bin/zsh -lc', which sources .zshenv/.zprofile/.zlogin and NOT .zshrc"
+# 🚨 `env -u CLAUDE_CONFIG_DIR`, AND WITHOUT IT THIS SCRIPT REPORTS THE ANALYST INSTEAD OF THE JOB.
+# A child shell INHERITS its caller's exported environment, so `/bin/zsh -lc` run from a session
+# that exports CLAUDE_CONFIG_DIR reads that session's value back — the login files never get the
+# chance to decide, because the variable is already set. The measurement therefore returned whatever
+# the person running the diagnostic happened to have, and every Claude Code session on a non-default
+# config dir has one. Measured 2026-09-01 from a `.claude-tertiary` session: this script rendered
+#   VERDICT: DIVERGENCE … the gate refuses its own caller and BOTH cloud rails skip on every tick
+# and told the operator that aligning the two would land "the 116+ cloud branches already on origin".
+# All of it false. Three independent readings say the production gate PASSES:
+#   · `launchctl getenv CLAUDE_CONFIG_DIR` is EMPTY (note: it exits 0 whether or not the variable is
+#     set, so its rc is not the answer — the VALUE is);
+#   · this same login shell with the variable unset resolves to $HOME/.claude, which is $0's own dir;
+#   · decisively, the sweep's live stderr log shows it EXECUTING the call —
+#     `line 1048: 28017 Killed: 9 "$_tmo" -k 10 900 bash "$_cloudret" --sweep` — and under a real
+#     divergence that command is never invoked at all, so a kill row is proof the gate let it run.
+# launchd starts this job from its own environment, not from an interactive session's, so removing
+# the variable is what makes the child resemble the thing being measured.
+#
+# The `verdict()` selftest could not have caught this: it takes `_login_cfg` as a PARAMETER and so
+# tests the PREDICATE, while the defect was entirely in the MEASUREMENT feeding it. A harness that
+# hands its subject the right answer cannot discover that the subject asked the wrong question.
 if [ -x /bin/zsh ]; then
-  /bin/zsh -lc 'echo "  CLAUDE_CONFIG_DIR=[${CLAUDE_CONFIG_DIR}]  HOME=[$HOME]"' 2>&1 | head -3
-  _login_cfg="$(/bin/zsh -lc 'printf %s "${CLAUDE_CONFIG_DIR:-}"' 2>/dev/null)"
+  env -u CLAUDE_CONFIG_DIR /bin/zsh -lc 'echo "  CLAUDE_CONFIG_DIR=[${CLAUDE_CONFIG_DIR}]  HOME=[$HOME]"' 2>&1 | head -3
+  _login_cfg="$(env -u CLAUDE_CONFIG_DIR /bin/zsh -lc 'printf %s "${CLAUDE_CONFIG_DIR:-}"' 2>/dev/null)"
+  # Say so when the caller's own value differs from the job's, rather than silently discarding it:
+  # "this session is configured differently from the daemon" is a real and useful fact, and it is a
+  # DIFFERENT fact from "the daemon's gate is broken", which is what conflating them used to assert.
+  if [ "${CLAUDE_CONFIG_DIR:-}" != "" ] && [ "${CLAUDE_CONFIG_DIR%/}" != "${_login_cfg:-$HOME/.claude}" ]; then
+    echo "  NOTE: YOUR shell exports CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR} — that is this session's"
+    echo "        config dir, NOT the job's, and it is deliberately excluded from the compare below."
+  fi
 else
   echo "  /bin/zsh absent — UNREADABLE, not clean."
   _login_cfg=""
