@@ -325,6 +325,25 @@ value_env() {
   [ "$output" = "0" ]
 }
 
+@test "E4b a STALE producer is reported as such, not as a clean read" {
+  # Measured on the first real run: the live layer was 17 commits behind trunk, so the arm resolved
+  # a PRE-LAND backlog-telemetry.sh that emits no fleet-scope line. The rc is still the assert's own
+  # verdict and is journaled, but `drain:"emitted"` beside `verdict:"unparsed"` would read as a
+  # working arm in the one field every tick writes. A stub standing in for the stale producer.
+  seed_futile
+  export CC_IDL="$HOME/.claude/autonomy/idl.jsonl"
+  export ROTATE_TARGETS="$CC_IDL"
+  printf '#!/bin/bash\necho "old renderer with no fleet line"\nexit 1\n' > "$D/stale-telemetry.sh"
+  export DRAIN_TELEMETRY_BIN="$D/stale-telemetry.sh"
+  : > "$CC_IDL"
+
+  run bash "$ROTATE"
+  [ "$status" -eq 0 ]
+  has "drain=emitted-unparsed" "$output"
+  run bash -c "grep '\"tool\":\"drain-health\"' '$CC_IDL' | jq -c '[.verdict, .claims, .rc]'"
+  [ "$output" = '["unparsed",null,1]' ]
+}
+
 @test "E5 NO new launchd activation was added by this change" {
   # The binding design constraint: the activation queue is 11 deep with all 11 rotting past 24h, so
   # a fix shipped as a 12th activation rots exactly like them. The assert rides com.claude.log-

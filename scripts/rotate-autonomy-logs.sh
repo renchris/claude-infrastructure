@@ -342,6 +342,12 @@ drain_health_check() {
   # line that has scope=fleet so a lane line can never be mistaken for it.
   line="$(printf '%s\n' "$out" | grep 'scope=fleet' | head -1)"
   verdict="$(printf '%s' "$line" | sed -n 's/.*verdict=\([a-z-]*\).*/\1/p')"
+  # UNPARSED is a real state, not a formatting nit: measured the day this shipped, the live layer
+  # was 17 commits behind trunk, so this arm resolved a PRE-LAND backlog-telemetry.sh that emits no
+  # fleet-scope line at all. The rc is still the assert's own verdict and worth journaling, but the
+  # run record must not report that as a clean read — `drain:"emitted"` beside `verdict:"unparsed"`
+  # reads as a working arm. It gets its own note, so a stale producer is visible in the one field
+  # every tick writes.
   [ -n "$verdict" ] || verdict="unparsed"
   claims="$(printf '%s' "$line" | sed -n 's/.*claims=\([0-9]*\).*/\1/p')"
   ids="$(printf '%s' "$line" | sed -n 's/.*ids=\([0-9]*\).*/\1/p')"
@@ -363,7 +369,7 @@ drain_health_check() {
     >> "$IDL" 2>/dev/null || true
   mkdir -p "$(dirname "$DRAIN_STAMP")" 2>/dev/null || true
   printf '%s\n' "$key" > "$DRAIN_STAMP" 2>/dev/null || true
-  drain_note="emitted"
+  if [ "$verdict" = "unparsed" ]; then drain_note="emitted-unparsed"; else drain_note="emitted"; fi
   return 0
 }
 
