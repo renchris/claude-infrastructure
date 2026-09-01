@@ -22,9 +22,20 @@
 # two retry ladders). `--max-wait 0` forbids all of it: serve the cache or abstain. An abstention is
 # not an error here — it falls back to the pinned account, which is exactly the status quo.
 #
-# --max-age 600 is the shipped grace band, and it is free by measurement: at <=10 min staleness the
-# stale pick is now-excluded in 0.8% of pairs (median score-ratio 1.000), and across 931 recorded
-# routing decisions the band has never once been entered (max observed age 89 s).
+# --max-age 600 is the shipped grace band. At <=10 min staleness the stale pick is now-excluded in
+# 0.8% of pairs (median score-ratio 1.000), which is the half of the original claim that survives.
+#
+# 🚨 THE OTHER HALF WAS A CATEGORY ERROR AND IS DELETED (measured 2026-09-01). This used to read
+# "across 931 recorded routing decisions the band has never once been entered (max observed age
+# 89 s)". Every one of those 931 rows carries `slot:"lead"`, not `slot:"interactive"` — they come
+# from `bin/cc-route`, which invokes `--route <kind>` with NO `--max-wait` and NO `--max-age`, so
+# it reads at the 90 s TTL and SWEEPS on a miss. Its ages are bounded below 90 s *by construction*.
+# The sentence therefore proved a property of a code path that is not this one, and it proved it
+# with an instrument that could not have observed a violation. The desk row schema carries no
+# `quota_age_s` at all (it is computed, then written to stderr, which line :74 discards with
+# `2>/dev/null`), so the true desk band-entry rate is bounded only to somewhere in 2.2%..72.3% —
+# i.e. the band is very possibly entered routinely. Do not restore a number here without a desk-lane
+# instrument that can record one; the fix is `quota_age_s` on the interactive row, not more prose.
 #
 # Kill switch: CC_CLAUDE_ROUTE=off restores the pinned ACCOUNT CHOICE exactly — the pinned body is
 # reached with the same arguments and the same environment. It is NOT byte-identical on stderr: the
@@ -94,6 +105,42 @@ _cc_route_config_dir() {
   _CC_ROUTE_NOTE="routed → $acct"
   _CC_ROUTE_ACCT="$acct"
   _CC_ROUTE_BIN="$bin"
+}
+
+# _cc_record_launch → append ONE row naming where this launch actually went.
+#
+# 🚨 WHY. Before this existed, the launcher-side fallback rate was unmeasurable from disk, both
+# retroactively and prospectively. `_cc_route_config_dir`'s contract says it "NEVER writes: it is
+# a pure decision", and every one of its six fallback returns (routing off · router absent · rc!=0
+# · map unreadable · map declares no dir · dir absent) set only `_CC_ROUTE_NOTE`, whose sole
+# consumers are two `[[ -t 2 ]]`-gated stderr prints that scroll away. So the ONE fact that
+# matters — which account the operator's session was actually born on — was written nowhere.
+#
+# `claude-accounts` cannot close this. Its `log_route_decision` fires at ONE call site, after
+# get_data() and ranked(), so (a) it never sees a cache-miss abstention (the `CacheOnlyUnavailable`
+# raise precedes it — precisely the abstention the `--max-wait 0` design exists to produce), and
+# (b) three of the six launcher fallbacks fire AFTER a `route` row was already written, which makes
+# that row an upper bound on routed launches rather than a count. Only this function stands at the
+# point that knows the destination.
+#
+# Written as `slot:"launch"` so it never contaminates the `slot:"interactive"` series that the
+# router's own analysis reads. Detached and fully swallowed: a launcher may never block, fail, or
+# print because a telemetry append did not work.
+_cc_record_launch() {
+  emulate -L zsh
+  local dest outcome f
+  case "${CC_LAUNCH_RECORD:-on}" in off|0|false) return 0 ;; esac
+  if [[ -n "$_CC_ROUTED_DIR" ]]; then
+    outcome=routed; dest="$_CC_ROUTE_ACCT"
+  else
+    outcome=pinned; dest=pinned
+  fi
+  f="${CC_ROUTE_RECORDS_DIR:-$HOME/.claude/route}/route.jsonl"
+  (
+    mkdir -p "${f:h}" 2>/dev/null || exit 0
+    printf '{"ts":"%s","slot":"launch","outcome":"%s","acct":"%s","note":"%s"}\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$outcome" "$dest" "${_CC_ROUTE_NOTE//\"/\'}" >> "$f"
+  ) >/dev/null 2>&1 &!
 }
 
 # _cc_charge_on_commit <bin> <acct> → arms the phantom charge, sets _CC_LAUNCH_SENTINEL.
@@ -182,6 +229,7 @@ _cc_install_router() {
     # is launch-time identity, which no later correction can undo.
     if (( ! _resume )) && [[ -z "${CLAUDE_CONFIG_DIR:-}" && -z "${CC_ACCOUNT_PINNED:-}" ]]; then
       _cc_route_config_dir
+      _cc_record_launch
       if [[ -n "$_CC_ROUTED_DIR" ]]; then
         [[ -t 2 ]] && print -u2 "◆ ${_CC_ROUTE_NOTE}"
         _cc_charge_on_commit "$_CC_ROUTE_BIN" "$_CC_ROUTE_ACCT"

@@ -274,3 +274,62 @@ mkrouter_recording() {   # $1 stdout, $2 exit code, $3 log path
   real="$(runlauncher "claude")"
   [[ "$real" == *"cfg=unset"* ]]
 }
+
+# The lib is zsh. Every assertion below therefore drives it through `zsh -f -c` exactly as the
+# routing tests above do — sourcing it from bats' own bash would fail on zsh-only syntax and would
+# be testing the harness, not the subject.
+rec() {   # rec <records-dir> <routed-dir> <acct> <note> [env-prefix...]
+  local dir="$1" rd="$2" acct="$3" note="$4"; shift 4
+  env "$@" CC_ROUTE_RECORDS_DIR="$dir" zsh -f -c "
+      source '$LIB'
+      _CC_ROUTED_DIR='$rd'; _CC_ROUTE_ACCT='$acct'; _CC_ROUTE_NOTE='$note'
+      _cc_record_launch
+      sleep 0.5" 2>/dev/null
+}
+
+@test "every launch records WHERE it went — routed and pinned alike" {
+  # The gap this closes: _cc_route_config_dir is contractually pure ("NEVER writes"), and all six
+  # of its fallback returns set only _CC_ROUTE_NOTE, whose consumers are two [[ -t 2 ]]-gated
+  # stderr prints. So the account a session was actually born on was written NOWHERE, and the
+  # launcher-side fallback rate was unmeasurable both retroactively and prospectively.
+  d="$BATS_TEST_TMPDIR/rec"; f="$d/route.jsonl"
+  rec "$d" "$HOME/.claude-quaternary" next4 "routed to next4"
+  grep -q '"slot":"launch"' "$f"
+  grep -q '"outcome":"routed"' "$f"
+  grep -q '"acct":"next4"' "$f"
+
+  # The previously invisible case, and the one that matters: the router abstained and the launcher
+  # silently fell through to the pinned account.
+  rec "$d" "" "" "pinned - no fresh quota data"
+  [ "$(wc -l < "$f" | tr -d ' ')" = 2 ]
+  tail -1 "$f" | grep -q '"outcome":"pinned"'
+  tail -1 "$f" | grep -q 'no fresh quota data'
+}
+
+@test "the launch recorder is switchable off and survives an unwritable store" {
+  # A launcher may never block, fail or print because telemetry did not work.
+  d="$BATS_TEST_TMPDIR/rec2"; f="$d/route.jsonl"
+  rec "$d" "" "" "pinned - router absent" CC_LAUNCH_RECORD=off
+  [ ! -f "$f" ]
+
+  run rec /dev/null/nope "" "" "pinned - router absent"
+  [ "$status" -eq 0 ]
+}
+
+@test "MUTANT: a recorder blind to the pinned branch must fail the fallback case" {
+  # Control-can-fail. The whole value is recording the ABSTENTION; a recorder that only fires on
+  # the routed branch reproduces the exact blind spot this closes, and must go red.
+  mutant="$BATS_TEST_TMPDIR/mutant-rec.zsh"
+  sed 's/^    outcome=pinned; dest=pinned$/    return 0/' "$LIB" > "$mutant"
+  grep -q '^    return 0$' "$mutant"
+  d="$BATS_TEST_TMPDIR/rec3"; f="$d/route.jsonl"
+
+  CC_ROUTE_RECORDS_DIR="$d" zsh -f -c "
+      source '$mutant'
+      _CC_ROUTED_DIR=''; _CC_ROUTE_ACCT=''; _CC_ROUTE_NOTE='pinned - every account capped'
+      _cc_record_launch; sleep 0.5" 2>/dev/null
+  [ ! -f "$f" ]            # the mutant is silent on exactly the case that matters
+
+  rec "$d" "" "" "pinned - every account capped"    # the real lib is not
+  tail -1 "$f" | grep -q '"outcome":"pinned"'
+}
