@@ -346,19 +346,34 @@ origin/main`. Two line references above are now stale by construction: `:36` sti
 ⚠️ **Read "nobody has filed" as of 2026-08-19.** It was true for 15 days and that was the defect;
 `Z-completeness-critic.md` **G15** is the entry that converted it into a filed decision.
 
-🚨 **Method note for the next re-derivation — a SHALLOW CLONE reports a landed sha as off-trunk, and
-it fails in exactly the direction that manufactures work.** A cloud worker draining this item on
-2026-08-29 ran the prescribed `git merge-base --is-ancestor a299123b origin/main`, got a non-zero
-exit, and wrote into its commit body that *"the sha named in the dispatch brief is NOT an ancestor of
-origin/main; its content landed under c3acc666"*. Both halves are false. The checkout was cloned at
-`--depth 50` (`git rev-parse --is-shallow-repository` → `true`, trunk reading 50 commits with a
-2026-08-29 root), so every commit older than the graft point is simply **absent**, and
-`--is-ancestor` cannot distinguish *absent* from *not an ancestor* — it reports the same failure for
-both. After `git fetch --unshallow` (3,897 commits) `a299123b` is an ancestor and `c3acc666` is a
-`BACKLOG_DRAIN_24_7.md` journal entry that never touched either document. **Run
-`git rev-parse --is-shallow-repository` before trusting any ancestry verdict in a dispatched
-worker's checkout**; a `false` ancestry reading is what turns "already cured" into "cure it again",
-which is the loop this whole item is a specimen of.
+🚨 **Method note — this section has now been mis-read twice by the SHALLOW-HORIZON defect, and the
+second reading is on record here because the defect is already named and still arrived.** The
+mechanism is not new and is not this note's finding: `docs/research/cloud-shallow-horizon-2026-08-29.md`
+derives it in full, and `../../plans/BACKLOG_DRAIN_24_7.md` § *"The fourth lock, and it is not a lock"*
+is its journal entry. In one line — a dispatched cloud checkout arrives at `--depth 50`, and
+`git merge-base --is-ancestor` exits 1 both for *"not an ancestor"* and for *"below my horizon"*, so a
+landed cure reads as absent and the worker re-derives it.
+
+Two instances, both on THIS item:
+
+1. **2026-08-29.** A worker wrote this same discharge note (`04d76a33`, branch
+   `claude/fire-20260829T121210Z-16575-1`, never landed) and recorded in its body that *"the sha named
+   in the dispatch brief, a299123b0, is NOT an ancestor of origin/main; its content landed under
+   c3acc666"*. Both halves are false: after `--unshallow`, `a299123b` is an ancestor, and `c3acc666`
+   is a `BACKLOG_DRAIN_24_7.md` journal entry that never touched either document.
+2. **2026-09-01 (this note).** Same reading, same container shape: `.git/shallow` present, trunk
+   reading **50** commits with a 2026-08-29 root, all 13 related commits scoring off-trunk — then
+   3,897 commits and the correct ancestry after `git fetch --unshallow`.
+
+⚠️ **So the datum worth keeping is not the defect but its REACH.** The cure landed as a
+`TRUNCATED-HISTORY` arm inside `scripts/cloud-venue-provision.sh` (`:221`, ranked first, with
+`--unshallow` in the provision path at `:590`), and it is correct — but it fires only for a worker
+that RUNS the provisioner, and a dispatched session's checkout is handed to it already shallow by the
+harness. Three days after that arm landed, this container still arrived at depth 50 and the dispatch
+brief's own FIRST STEP — *"read what this item cites on TRUNK"* — was unsound as typed. Until the
+horizon is cured where the clone is MADE, `git rev-parse --is-shallow-repository` is the precondition
+for trusting any ancestry verdict in a dispatched worker, and the shas in the note above were
+re-verified against the full history rather than inherited from `04d76a33`.
 
 **Bonus: the two documents reconcile numerically once you remove cache-read.**
 `scaling-bottlenecks` rank 4 says the fleet sustains **~3.9 concurrent active 24/7**. If that figure
