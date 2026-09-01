@@ -636,6 +636,40 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       statusline.sh)             want=0 ;;
       bin/it2-wrapper)           want=0 ;;
       bin/claude-accounts|bin/dia-cdp-launch.sh) want=0 ;;
+      # ── RAW INSTALLS ── install.sh's THIRD deploy mechanism: a bare `run ln` / `run cp` that
+      # calls NEITHER link_file NOR copy_file.
+      # MEASURED 2026-09-01 by method 247 pointed at the remedy method 246 had just landed. That
+      # remedy added a THIRD extractor to tests/deploy-parity.bats keyed on install.sh's singleton
+      # `link_file`/`copy_file` call sites — and a key on TWO VERB NAMES is itself a shape claim, so
+      # it inherited a blind spot of exactly the kind it exists to close. install.sh places bytes
+      # THREE ways, not two: 19 `for … in "$REPO_DIR"/…` globs · 8 singleton link_file/copy_file
+      # literals · and 3 RAW `run ln`/`run cp` sites, which partition 1/1/1 by their SOURCE:
+      #   install.sh:776  "$vsrc"                        loop-driven, and its for-header IS one of
+      #                   the 19 — so this one is reachable from the existing map.
+      #   install.sh:797  "$REPO_DIR/CLAUDE.md"          namable in the very units both extractors
+      #                   use, and in NEITHER population. It reached the reasonless `*) want=0`
+      #                   below AND is absent from the _tracked pathspec above: dropped by BOTH
+      #                   gates, the same three-gate shape as the kitty-setup.sh block.
+      #   install.sh:703  "$HOME/.claude/scripts/restore-file.sh" → "$HOME/bin/restore-file"
+      #                   a LIVE-PATH source, so it is not namable in $REPO_DIR units AT ALL and no
+      #                   extractor keyed on $REPO_DIR can ever produce it, whatever its verb. That
+      #                   is the sharper half: a shape the map cannot express is one no member of
+      #                   the population can ever demonstrate.
+      # The want=0 verdict is CORRECT and UNCHANGED — install.sh:797 COPIES CLAUDE.md to
+      # $CFG/CLAUDE.md as a REAL file deliberately (its own comment: "a symlink into the repo would
+      # break across branch switches"), so a `MISSING: ln -sf` demand here would be WRONG rather
+      # than merely noisy. This arm is also unreachable from THIS walk today, exactly as the
+      # githooks/launchd pair is, and that is precisely why it is written down: the exclusion now
+      # holds at BOTH gates instead of resting on the input filter alone.
+      # No outage is being repaired. Both destinations were read individually at 2026-09-01T03:16Z:
+      # ~/.claude/CLAUDE.md is a real file byte-identical to the repo copy and ~/bin/restore-file is
+      # a symlink to the live script. This closes a DETECTOR gap, as githooks/*, launchd/*.plist and
+      # the literal installs each did before it.
+      # tests/deploy-parity.bats derives this population from install.sh's own `run ln`/`run cp`
+      # lines — a FOURTH extractor, keyed on the SHAPE of a byte-placing line rather than on either
+      # verb name — and asserts both partitions SUM, so a raw deploy of a new shape cannot land
+      # silently in only one of the two files again.
+      CLAUDE.md)                 want=0 ;;
       *)                         want=0 ;;
     esac
     [ "$want" = 1 ] || continue
