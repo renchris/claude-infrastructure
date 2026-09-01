@@ -374,3 +374,105 @@ anything else. If (f) is empty and (a)-(e) all read healthy, then the gate ran a
 other than exit 3 on the live store — and `cc-eligible explain 485f8f87eb5f` on the desk is the next
 measurement, not another end-to-end reconstruction. This section already did the reconstruction, and
 it came back green.
+
+## 10. Seventh dispatch, 2026-09-01T06:08:25Z — §9's ladder has an off-box rung, and it is a hole
+
+A SEVENTH `anthropic_cloud` VM (`.git/shallow` grafts `ec1e2cce`/`fb55f889`, `git rev-list --count
+HEAD` = 50 ⇒ `HistoryOracle.certify()` returns `shallow` ⇒ §1's deferral binds mechanically a sixth
+time). Venue facts re-measured and unchanged: `origin/main` carries no `tenant-drift.yml`,
+`.github/workflows/` holds only `diagrams.yml` and `hermetic.yml`, `~/Development` does not exist,
+`cc-backlog` is not on `PATH`, no `~/.claude/autonomy/`. **Premise re-checked a sixth time: not
+refuted, not confirmable here** — run `31401486855` (2026-08-10) is now 22 days stale and §3's
+one-line fix still needs re-checking against reso's trunk before anyone writes it.
+
+**§9's falsifier fired.** Its park entry is stamped `2026-08-31T21:53:11Z` and landed as `10689706`
+at 21:53:51Z; this dispatch opened **8 h 15 m** later. So did §8's, a second time. Three consecutive
+sections have now each landed a park and been re-dispatched over it.
+
+**§9 tabulated six preconditions and called all six desk-side facts. That is true of five of them.
+Row (e) — "the repo's `origin/main` was stale at fire time" — is a question about CODE, and the code
+is on trunk and readable from here.** Read it, and the answer is not that the ref *might* have been
+stale; it is that **nothing in the dispatch path ever refreshes it**:
+
+- `bin/cc-eligible` contains **zero** `fetch` calls. Correctly — it is a predicate, read-only over
+  the tree it is handed.
+- `bin/cc-backlog` contains **zero**.
+- `bin/cc-dispatch` has exactly two, at `:1473` (inside `warm_worktree`) and `:2727` (the `wcwd`
+  freshness probe). **Both sit under `if [ "$venue" != cloud ]`** (`:2704`, the F3 guard) — and F3's
+  own comment records that *"the live dispatcher runs `CC_DISPATCH_VENUE_ONLY=cloud`"*. On the box
+  that actually fires, neither runs. Both are also downstream of the claim (`:2522`) regardless.
+
+So the park's **writer is a remote push** (`scripts/cloud-park.sh`, from a VM) and the park's
+**reader is a local remote-tracking ref** (`_park_doc` → `git show <ref>:docs/parks/<id>.md`,
+deliberately, because a `[ -f ]` spelling would honour an unpushed park), and the dispatcher supplies
+no edge between them. The ref is refreshed only by arms with **no ordering relation to the park's
+landing** — `postland-verify.sh`, `stranded-sweep.sh`, `cloud-return.sh`, a hand `git pull`. That is
+not "usually fresh enough": it is a correctness-critical read with no happens-after edge to its
+writer, so whether the interlock fires at all is decided by a race it cannot see.
+
+**Losing that race is silent, and that is the expensive half.** Measured end-to-end in this venue
+against a real bare remote and two real clones — the production topology, one clone standing in for
+the desk and one for the cloud worker (`tests/cc-dispatch-trunk-refresh.bats` cases 1-3):
+
+| desk clone | `cc-eligible check` | exit |
+|---|---|---|
+| park on the real trunk, ref not fetched | `verdict=eligible`, `park : none — no park on trunk for this row` | **0 — fires** |
+| identical, after one `git fetch` | `verdict=ineligible-parked`, operator step verbatim | **3 — skipped** |
+
+Same repo, same item, same park, same ledger; the fetch is the only variable. Note the middle
+column: the gate does not **abstain** on a ref it could not vouch for, it **asserts absence** — `git
+show` answers "no such path" identically for a stale ref and a repo that was never parked. That is
+`bin/cc-eligible`'s own doctrine violated one layer above where `853a1fee` restored it (*"exit 0 with
+a verdict that NAMES the uncertainty"*), and it is the same generator §9 named: **a remedy verified
+at its source and never at its destination.**
+
+**It also explains why the 22nd dispatch's fix did not stop this fire.** `853a1fee` (self_path) is
+correct and landed 2026-08-31T21:56:42Z — **8 h 12 m** before this fire, along with `619b0744`
+(04:39:19Z, +1 h 29 m). Both were live. But fixing how a reader is *resolved*, and giving it a store
+to report into, changes nothing about a reader whose *input* nothing refreshes.
+
+**A correction to how the park rail was tested, which is why six sections could not see this.**
+`tests/cc-eligible-park.bats`'s `sync_trunk` is `git update-ref refs/remotes/origin/main <local
+sha>` — one repo, no remote, no fetch. It is the right fixture for the questions that suite asks
+(does the arm honour trunk? does the desk record retract it?) and it **cannot exhibit this failure by
+construction**: staleness only exists where a second machine can move the trunk without the reader
+hearing. The rail was proven correct against a fixture that had abolished its hardest input.
+
+**FIXED, and this is the first section in this file to land code rather than a channel.**
+`refresh_trunk()` in `bin/cc-dispatch`, called immediately before the claim and **only when
+`venue = cloud`** (the only claim that consults the park arm), so a local claim is byte-for-byte what
+it was. Memoized per project per pass — a wave of N cloud rows in one project costs one fetch, not N
+— in two lists rather than one list plus a shared rc, so an unreachable repo cannot convict its
+neighbours. Fails open, because starving the queue on a dead sensor is this file's I6 error, but
+**not silently**: rc 1 journals `gate=trunk-unrefreshed` into the IDL, which is `619b0744`'s
+correction (*a report that reaches no store is not a report*) applied to the arm above it. Kill
+switch `CC_DISPATCH_TRUNK_REFRESH=off`.
+
+**Why this was landable from a cloud VM, when §§1, 5-9 all deferred.** The guard at `bin/cc-venue:55`
+is keyed on the **dangerous effect**, not on the venue: *a cloud label may only be written from a
+certification, and a shallow clone cannot certify*. This change writes no label, does not touch
+`bin/cc-eligible` (the venue rule itself), and its only possible effect on admission is to let the
+gate SEE parks it was missing — strictly **more** refusals, never fewer. `cc-eligible`'s own
+asymmetry doctrine settles the direction: *"a wrong INELIGIBLE only leaves an item exactly where it
+already is — claimable locally, losing nothing."* A VM narrowing its own admission is not deciding
+its own admission in the direction the guard exists to stop. §1's `cross_repo` widening remains
+deferred on exactly the reasoning it always had, and is untouched here.
+
+**What this does NOT claim.** That staleness caused *this* fire. Whether the desk's ref was current at
+06:08:25Z is not observable from here, and asserting it would be this document's own recorded defect —
+recording a remedy as proven at its source. Causes (a), (c), (d) and (f) stay open and §9's ladder
+still discriminates them; `cc-eligible why 485f8f87eb5f` on the box remains the one command that
+does. What is established is narrower and does not depend on which cause fired: **the ordering
+guarantee the interlock needs did not exist, and now it does.**
+
+**The falsifier for an eighth dispatch.** If this row is fired into a cloud VM again while its park is
+the newest record on trunk **and** `bin/cc-dispatch` on the firing box carries `refresh_trunk`, then
+freshness was never the missing edge and the cause is one of §9's remaining rows — go straight to
+`cc-eligible why 485f8f87eb5f` on the desk and do not re-measure the venue. Check the second clause
+first: `grep -c refresh_trunk "$(readlink -f "$(command -v cc-dispatch)")"`. A `0` there means the
+fix simply had not converged to the live layer, which is a deploy fact, not a new defect.
+
+**Still open on-box, both generator-class and neither urgent to this row:** §1's `cross_repo`
+`project`-as-proxy defect, and §5's identical substitution in the dispatch brief's EVIDENCE-AGE arm
+(a bare `CLAUDE.md` in an item body resolved against the item's own project). The durable cure for
+both is the one §1 named: **the target repo belongs in a field, not in prose.**
