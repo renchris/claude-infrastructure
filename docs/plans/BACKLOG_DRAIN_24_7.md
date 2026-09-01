@@ -86,6 +86,114 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-01 — drain recycle #280: method 252 — A CLAUSE LADDER CAN ONLY JUDGE WHAT A SPLITTER
+  HANDS IT, AND THE SHAPE THIS ONE DROPS IS THE COMMONEST THING A GUARD WRITES.** ZERO rows closed,
+  ZERO filed, ZERO reopened. TWO commits.
+  **THE QUESTION.** #279 established that a file which FILTERS its input and then PARTITIONS it has
+  two gates, and that every coverage arm anybody writes asserts against the second, because the
+  second is where the reasons live. It asked that question of an ASSERT. #280 asks it of a
+  DETECTOR — the one whose entire job is to find this repo's fail-open pipelines —
+  `scripts/pipefail-sigpipe-lint.sh`, whose six landed corrections are all judgements about `last`.
+  **`last` is chosen one line down, by `n = split(work, seg, "|")`, a split that knows nothing about
+  quoting.**
+  **THE FIRST GATE, AND WHAT IT DROPS.** A consumer whose OWN ARGUMENT contains a `|` never reaches
+  the clause ladder at all: `seg[n]` is a fragment of the PATTERN rather than the command, `is_early()`
+  reads false on it, and the line is discarded before clause 2 renders any verdict. **An alternation
+  is how a predicate lists the alternatives it must catch**, so the sites this split drops skew hard
+  toward guards — which is the finding, not a side note.
+  **MEASURED BY RUNNING THE DETECTOR'S OWN PROGRAM TWICE, NEVER BY RE-IMPLEMENTING IT.** `DETECT_AWK`
+  was extracted verbatim into a control, and a mutant built from it differing in exactly **ONE**
+  existing line — the split made quote-aware — with the mutation asserted at one REMOVED line and
+  that line the split. Same population, same clause-1 filter, same `HASE` per file:
+  **control 125 rows, and the control REPRODUCES `--census` EXACTLY, 0 rows of disagreement** — that
+  consistency arm is what makes the other two numbers mean anything at all; **quote-aware 139;
+  LOST = 0; NEW = 14; 125 + 14 = 139**, the partition asserted to sum. **SEVEN of the fourteen are
+  hooks or lints whose inversion PERMITS the thing they exist to refuse:**
+  `hooks/rm-safe-allowlist.sh:53` (the dangerous-`rm` gate) · `hooks/ship-rail-push-allow.sh:62` (the
+  force-push gate) · `hooks/git-worktree-guard.sh:48` and `:69` · `hooks/lead-crash-watchdog.sh:390` ·
+  `scripts/unattended-path-lint.sh:1107` · `scripts/wait-contract-lint.sh:67`.
+  **ONE OF THE FOURTEEN IS LIVE-CAPABLE, AND IT IS IN THE LAND GATE.** `scripts/ship-land.sh:3711`,
+  the branch that refuses to continue a rerere-replayed rebase when conflict markers are staged, read
+  `if git diff --cached -U0 2>/dev/null | grep -qE '^\+(<{7}|={7}|>{7})…'`. Under that file's own
+  `set -o pipefail` (`:185`) `grep -q` exits at the first match, `git diff` takes SIGPIPE on its next
+  write, pipefail promotes the 141, and the `if` reads FALSE — **so the branch whose whole job is to
+  refuse was skipped and the rebase continued with the markers staged.** MEASURED, 20 trials per size,
+  markers at the HEAD of the staged diff: **correct 20/20 with 4 KB of following diff, 0/20 with
+  200 KB**, with a NEG control staging no markers reading ABSENT 0/20 at both sizes so neither number
+  is an arm that always answers yes.
+  **AND IT IS NOT LATENT BY ARGUMENT, BECAUSE THE FEED IS NOT A LIST WE WRITE.** At a rebase step the
+  staged diff is the REPLAYED COMMIT'S OWN diff. Over the last **300** `origin/main` commits, **3** are
+  at or past the 87,151 B always-inverted floor for a two-stage external producer and **2** more sit in
+  the racy band — **1.7%, max 742,498 B at `67933debb489`**. The rerere-replay path is rare; the size
+  that breaks it is ordinary.
+  **WHY IT SURVIVED THREE DRAINS IN ITS OWN FILE.** `ship-land.sh` documents this hazard by name and
+  applies this exact cure at `:2093`, `:2098`/`:2114` and `:2323`. This was the FOURTH consumer, and
+  it kept the hazardous spelling because **no guard could see it**: `scripts/ship-land.sh` has never
+  carried a row in `--census` or in `pipefail-sigpipe-allow.txt`. **Absent from BOTH populations is
+  not exempt — it is invisible** (method 210, and this is its third payment).
+  **THE INCUMBENT THAT SHOULD HAVE CAUGHT IT WAS GREEN, AND THAT IS THE HONEST-LIMITS COLUMN.**
+  `tests/land-rerere-continue.bats:102` is titled *"fully-staged content carrying conflict markers is
+  REFUSED, never continued"* — the same contract, in the suite whose whole subject is this branch.
+  Run against a pristine `origin/main` extraction it is **4 ok / 0 not ok**, and 4/0 after the fix
+  too, with the contract case asserted PRESENT in the plan so a green cannot mean an absent test. Its
+  fixture is a two-file resolution, far under the floor: **it pins the LOGIC and says nothing about
+  the SIZE.** That is what the new behavioural arm adds, and it is all it adds.
+  **THE MOVE.** `scripts/ship-land.sh` gains the drained form and its rationale;
+  `scripts/pipefail-sigpipe-lint.sh` gains a **QUOTE-BLIND SPLIT** residual block — its population,
+  its instrument, and the order the next link must work in. `tests/ship-land.bats` **155 → 157**,
+  `tests/pipefail-sigpipe-lint.bats` **20 → 22**, all four arms APPENDED, zero existing assertions
+  edited. RED-PROVED against a `git archive origin/main` extraction asserted to carry ZERO occurrences
+  of the fix, only the suites copied forward: **control reds 0, mutated 3, the partition sums, every
+  new red one of mine BY NAME, mute control 0.** Arm 21 is a **DELIBERATE GREEN** — it pins the
+  blindness, which IS the pre-fix state, so it cannot go red there; writing that zero down is what
+  stops the table reading as complete.
+  **DECLARED, NOT WIDENED, AND THE REASON IS AN OUTAGE THIS LOG ALREADY RECORDS.** Making the split
+  quote-aware mints 14 findings on the tree as it stands; a bare lint that goes red **blocks every
+  land in this repo** through ship-land's own gate — `a6449cebc`'s shape, arrived at from the other
+  direction. The block follows the heredoc-latch residual's own precedent in the same file, and names
+  the order: drain or grandfather the fourteen FIRST, in the same diff as the split, and run the
+  detector on the unmodified tree before touching either (method 213).
+  **TWO INSTRUMENT FAULTS, BOTH MINE, BOTH SURFACED AS A REFUSAL RATHER THAN A WRONG NUMBER.** (1) The
+  first quote-aware masker was naive about `$( )` inside double quotes and about backslash-escaped
+  quotes, so it read 5 sites as LOST; the rc-93 gate refused a written prediction of 0, and the repair
+  is the instrument's, not the subject's — re-run, LOST = 0. **A mutant that loses sites is a claim
+  about your masker, not about the tree.** (2) The red proof's fix-token was the bare string
+  `grep -cE`, which already occurs ONCE on trunk at `ship-land.sh:454` on unrelated business, so the
+  harness refused a correct extraction at rc 94. **Key a fix-token on the ARTIFACT'S SHAPE** — producer,
+  redirection and drained consumer together — **never on a bare word your own tree already spells**
+  (#241's scar, third costume).
+  **A STALE LEAD RETIRED FOR ONE COMMAND, WHICH IS METHOD 213 PAYING AGAIN.** This brief has carried
+  *"THE HIGHEST-VALUE ONE ON THAT LIST IS `scripts/ship-land.sh:2323`… TAKE IT"* since #245. It is
+  **already drained** — the line now reads *"MEMBERSHIP BY `case` OVER A NEWLINE-FENCED STRING"* and
+  the allowlist row for that file is gone. **Run the lead's REASON before you plan around its target.**
+  **THE STANDING RED MOVED FOR THE FIRST TIME IN FOURTEEN LINKS, AND IT MOVED BY ITSELF.**
+  `scripts/deploy-link-parity.sh` reads **`459 linked · 0 staged-pending · 10 live-extra · 54 unmapped
+  · 2 actionable`**, rc 1, at 19:31Z — **2, not 3.** `skills/outbound-drafting/SKILL.md` dropped out
+  because the shared checkout is no longer behind (**0** at my open, 15 at #279's), which is exactly
+  what this brief predicted would happen and told the next reader not to "fix". The two survivors are
+  unchanged: the `.bak` hook revision and `scripts/automode-restore-defaults.sh`.
+  **THE OPEN MOMENTS, STAMPED AND NOT CONCLUDED FROM.** Lane at 19:32:01Z `RUNG=✅ LIVE_SRC=ok
+  LIVE_SHA=0d6293152237 LIVE_LAG=0 LIVE_ADDS=0 LIVE_STALE=0 LIVE_AGE=2311 LIVE_BREACH_WHY= GATE=stale`
+  — the first `✅` open in this chain since #266, and `GATE=stale` for the 116th consecutive reading,
+  which is not mine to drive. Board at 19:31:50Z **343 open / 224 blocked / 2,353 done / 4 claimed**
+  (567 combined, 2,924 rows), both partitions asserted. Gap from #279's floor, 12 m 27 s: **ZERO
+  arrivals, ZERO departures, TWO transitions** — `8f59467c92b0` open → claimed and `e981656df348`
+  blocked → open, both `claude-infrastructure`, neither mine. Stores at 19:32:01Z: postland `.page`
+  **0** over a denominator of **2,828** · `pages` **2,374 all / 81 `.page`** · inbox-guard `.escalated`
+  **432** · stamps **536**.
+  **GATES.** `shellcheck` rc 0 on both scripts · `bash -n` rc 0 · `bats-assert-liveness` rc 0 on both
+  suites · `pipefail-sigpipe-lint --selftest` **32/32** · the bare lint clean · census **PRE = POST =
+  125, LOST = 0, NEW = 0**, keyed on (path, TEXT) with the PRE arm extracted from `origin/main` via
+  `git archive` rather than remembered · `unattended-path-lint --selftest` **47/47** ·
+  `test-walltime-lint tests` clean over **560** suite(s) · `bats-shellcheck-lint --range` clean, 2
+  suites scanned, 0 blocking. `alarm-polarity-lint` **NOT RUN and declared** rather than claimed: no
+  file here is an alarm emitter and its POS control is a known mute (`e07dc5e09f83`, OPEN).
+  **THE TRANSFERABLE SENTENCE.** **A CLAUSE LADDER IS AN ARGUMENT ABOUT A THING SOMETHING ELSE HANDED
+  IT. FIND THE LINE THAT TOKENISES, AND ASK WHAT SPELLING OF THE SUBJECT IT CANNOT PARSE** — a split
+  that is not quote-aware, a regex that is not multi-line, a field-splitter that is not
+  escape-aware. **The clauses carry every reason and attract every reviewer; the tokeniser carries
+  none and attracts nobody, and what it silently drops is a population no member of the population
+  can ever demonstrate.**
 - **2026-09-01 — drain recycle #279: method 251 — THE WALK'S *INPUT* IS A GATE TOO, AND THE ONE ARM
   GUARDING IT IS KEYED ON GLOB HEADERS.** ZERO rows closed, ZERO filed, ZERO reopened. TWO commits.
   **THE QUESTION.** #275 asked what a green gate's map is DERIVED FROM; #276 what a remedy keyed on a
