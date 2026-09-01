@@ -152,3 +152,143 @@ print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
+
+# ---------------------------------------------------------------------------------------------
+# S4 · M4′ · burst_start_by — RP-21..RP-24. USAGE_TELEMETRY_100P §5.2 S4, §5.3.
+#
+# THE PRIMITIVE IS A START TIME, NOT A CAPACITY VERDICT, and RP-21 is the case that records why.
+# The synthesis's M4 (`wk_reach_pp`) asked "can this account still reach 100%" — a question that
+# is nearly algebraically fixed — and answered `16.9 pp reach vs 8 needed → REACHABLE, 2.1×
+# margin` for next3 on the day next3 in fact stranded. M4′ asks a rate-and-freeze-against-the-
+# clock question, which can come out either way, and reads the same row LATE by 0.65 h with
+# 2.83 pp already unrecoverable. M4 is DELETED; this comment is where an implementer reads that.
+#
+# RP-22 is what makes RP-21 a test rather than a tautology: a function returning LATE
+# unconditionally passes RP-21 and is exactly the degeneracy that killed M4.
+# ---------------------------------------------------------------------------------------------
+
+@test "RP-21: burst_start_by returns LATE for next3's live shape — the verdict M4 got backwards" {
+  # The measured live row, 2026-08-25T09:47:41Z, at the frozen K. Every intermediate is pinned,
+  # not just the answer, because the answer is a difference of two numbers either of which can be
+  # wrong in a way the difference hides: need 8/0.192 = 41.67 session pp · one window at
+  # BURST_SPPH = 1.822 h · freeze 1 × 0.625 × 1.653 = 1.033 h · t_needed 2.855 h against 2.21 h
+  # of runway = −0.645 h. The floor: 8 − 0.192 × 22.87 × (2.21 − 1.033) = 2.83 pp.
+  run python3 -c "$LOAD"'
+r = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+     "session_pct": 13, "session_reset_h": 3.37}
+sb = ca.burst_start_by(r, 0.192)
+assert sb is not None, sb
+assert sb["verdict"] == "LATE", sb
+assert -1.0 < sb["h"] < 0.0, sb
+assert abs(sb["h"] - (-0.645)) < 0.01, sb
+assert sb["windows"] == 1, sb
+assert abs(sb["need_spp"] - 41.667) < 0.01, sb
+assert abs(sb["freeze_h"] - 1.0331) < 0.001, sb
+assert abs(sb["t_needed_h"] - 2.855) < 0.01, sb
+assert abs(sb["unrecoverable_pp"] - 2.83) < 0.01, sb
+# the RENDER names the floor: "you are late" without "and this much is already gone" invites
+# the reader to burst anyway and lose the same pp with the tokens spent.
+out = ca.fmt_start_by(sb)
+assert out.startswith("⚠ LATE by "), out
+assert "pp already unrecoverable" in out, out
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-22 CONTROL: an account with days of runway returns SLACK — LATE-always fails here" {
+  # next2's live shape. Six windows because the deficit needs 432.3 session pp and one window
+  # buys at most 100, so the walk pays four roll waits as well as the burn — 21.41 h of walk
+  # plus 6.20 h of expected freeze against 97.2 h of runway = +69.59 h. Without this case,
+  # RP-21 is satisfied by `return {"verdict": "LATE", ...}`.
+  run python3 -c "$LOAD"'
+r = {"acct": "next2", "weekly_pct": 17, "weekly_reset_h": 97.2,
+     "session_pct": 8, "session_reset_h": 0.54}
+sb = ca.burst_start_by(r, 0.192)
+assert sb is not None, sb
+assert sb["verdict"] == "SLACK", sb
+assert sb["h"] > 60.0, sb
+assert abs(sb["h"] - 69.59) < 0.05, sb
+assert sb["windows"] == 6, sb
+assert sb["unrecoverable_pp"] == 0.0, sb
+assert ca.fmt_start_by(sb) == "start by T−28h (70h slack)", ca.fmt_start_by(sb)
+# ...and the THIRD verdict is live too, so the ladder is not two-valued. Same shape, moved so
+# that only ~8 h of slack remains: START SOON, and NOT rendered with the LATE clause.
+soon = ca.burst_start_by({"acct": "next2", "weekly_pct": 17, "weekly_reset_h": 36.0,
+                          "session_pct": 8, "session_reset_h": 0.54}, 0.192)
+assert soon["verdict"] == "START SOON", soon
+assert 0 < soon["h"] <= ca.START_SOON_H, soon
+assert "unrecoverable" not in ca.fmt_start_by(soon), ca.fmt_start_by(soon)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-23 CONTROL: the wall-freeze term is LIVE, not decorative — the arithmetic-only mutant" {
+  # Run RP-21's fixture twice, once at the measured P_WALL and once with it forced to 0, and
+  # assert the two start times differ by exactly one window's expected freeze: 1 × 0.625 × 1.653
+  # = 1.033 h. An implementation that computes the 5h walk correctly and drops the freeze
+  # survives RP-21 and RP-22 (both keep their verdicts) and dies here.
+  run python3 -c "$LOAD"'
+r = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+     "session_pct": 13, "session_reset_h": 3.37}
+with_wall = ca.burst_start_by(r, 0.192)["h"]
+saved = ca.P_WALL
+try:
+    ca.P_WALL = 0.0
+    without = ca.burst_start_by(r, 0.192)["h"]
+finally:
+    ca.P_WALL = saved
+assert abs((without - with_wall) - 1.033) < 0.01, (with_wall, without)
+# and with no freeze at all the same row is no longer late — the term is what makes the verdict
+assert ca.burst_start_by(r, 0.192)["verdict"] == "LATE"
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-24: no window open ⇒ ABSTAIN, not zero; and every other abstain arm is live" {
+  # A null session stamp means NO 5h WINDOW IS OPEN. Collapsing that to "0% used" would hand the
+  # walk a full 100 pp of free burn in the current window and produce the most optimistic start
+  # time on the row with the least information — an abstain-shaped input answered confidently.
+  run python3 -c "$LOAD"'
+base = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+        "session_pct": 13, "session_reset_h": 3.37}
+def d(**kw):
+    x = dict(base); x.update(kw); return x
+assert ca.burst_start_by(d(session_pct=None, session_reset_h=None,
+                           session_reset_at=None), 0.192) is None, "null window not abstained"
+assert ca.burst_start_by(d(session_reset_at=None), 0.192) is None, "null reset stamp"
+assert ca.burst_start_by(base, None) is None, "null K not abstained"        # S1c abstained
+assert ca.burst_start_by(d(weekly_pct=100), 0.192) is None, "deficit <= 0"
+assert ca.burst_start_by(d(weekly_reset_h=0.0), 0.192) is None, "reset_h outside (0,168]"
+assert ca.burst_start_by(d(weekly_reset_h=200.0), 0.192) is None, "reset_h outside (0,168]"
+assert ca.fmt_start_by(None) is None
+# CONTROL for all five: the same base row, unmutated, still ANSWERS. Without this an
+# unconditional `return None` passes every assertion above.
+assert ca.burst_start_by(base, 0.192) is not None
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-24b: an account already AT the 5h wall waits out the roll — §5.2's pseudocode does not" {
+  # DEVIATION, PINNED. §5.2 S4's pseudocode guards the open window with `if avail > 0:` and has
+  # no else, so an account at session_pct = 100 leaves t at 0 and the walk opens its first full
+  # window IMMEDIATELY — free burn out of a window that is exhausted. That is the one shape
+  # where M4′ would under-report the start time for the account under the MOST pressure, which
+  # is the fail-open direction. The wait is the same one the `rem > 0` arm already performs.
+  run python3 -c "$LOAD"'
+walled = {"acct": "next3", "weekly_pct": 60, "weekly_reset_h": 40.0,
+          "session_pct": 100, "session_reset_h": 4.4}
+open_w = dict(walled); open_w["session_pct"] = 0
+w, o = ca.burst_start_by(walled, 0.192), ca.burst_start_by(open_w, 0.192)
+assert w is not None and o is not None, (w, o)
+# the walled row must need MORE time, by roughly the roll it has to sit out
+assert w["t_needed_h"] > o["t_needed_h"], (w["t_needed_h"], o["t_needed_h"])
+assert w["burn_h"] >= walled["session_reset_h"], w        # the wait is actually in the walk
+assert w["h"] < o["h"], (w["h"], o["h"])
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}

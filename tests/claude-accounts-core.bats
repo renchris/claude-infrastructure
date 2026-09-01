@@ -1813,7 +1813,15 @@ assert 12.0 < r["burn_wk_ppd"] < 16.0, r          # ~14 %/day, i.e. the same rat
 assert "burn_wk_span_h" in r and r["burn_wk_span_h"] > 6.8, r
 assert "wk_strand_pp" in r, r
 assert 0.0 < r["wk_strand_pp"] < 5.0, r           # 40 + 0.583*100 = 98.3 -> ~1.7 pp die
-assert "burn_5h_ewma_ph" not in r, r              # S7 is a LATER wave and was not built here
+# UPDATED IN PLACE (S7 landed). This line used to read `assert "burn_5h_ewma_ph" not in r` with
+# the note "S7 is a LATER wave"; that wave is now built, so the assertion becomes the SAME
+# invariant stated positively -- the 5h EWMA ships under its OWN key, in %/h, and the incumbent
+# burn_5h_ph keeps its own key in its own unit beside it. The fixture holds session_pct pinned
+# at 10, so the honest 5h rate here is exactly ZERO, and zero is a value: an implementation that
+# left the key absent on a flat meter would be indistinguishable from one that abstained.
+assert "burn_5h_ewma_ph" in r, r
+assert r["burn_5h_ewma_ph"] == 0.0, r
+assert r["burn_5h_span_h"] > 5.0, r
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
@@ -1873,6 +1881,59 @@ ab = ca.pace_line([row(acct="next2", weekly_pct=13, weekly_reset_h=122.8, burn_w
 assert "next2 strand unknown (span 4.1h < 6.8h)" in ab, ab
 # no data ⇒ no block (a drain block over nothing would render at every error state)
 assert ca.pace_line([row(weekly_pct=None), row(weekly_reset_h=None)]) == ""
+# ...and with NO exchange rate stamped, the row keeps its bare clock and the header stays the
+# S3 spelling. This is the degrade path for RP-28 below and it must not render half a clause.
+assert "start by" not in line, line
+assert "K=" not in line, line
+assert "next4 strand ~64pp of 86 · 4d left" in line, line
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router M7 + S4: the drain row answers the THIRD question — by when must the burst start" {
+  # RP-28 (renderer arm of §5.2 S4). S3 shipped rows answering two of the goal's three questions
+  # — how much dies, and whether the demand is routine — and closed each with a bare `4d left`.
+  # The clock alone is not the answer to "by when": closing an 83 pp deficit costs six 5h
+  # windows, four roll waits and an expected freeze, so the start time sits ~28 h before the
+  # reset whatever the clock says. M4′ renders that, and ONLY on rows that have something to
+  # lose: a zero-strand row has no burst to schedule and keeps its clock.
+  run python3 -c "$LOAD"'
+K = 0.192
+n4 = row(acct="next4", weekly_pct=14, weekly_reset_h=119.2, burn_wk_ewma_ph=0.186,
+         session_pct=8, session_reset_h=0.5, exch_k=K, exch_k_src="live")
+n2 = row(acct="next2", weekly_pct=17, weekly_reset_h=97.2, burn_wk_ewma_ph=0.281,
+         session_pct=8, session_reset_h=0.54, exch_k=K, exch_k_src="live")
+n3 = row(acct="next3", weekly_pct=92, weekly_reset_h=2.21, burn_wk_ewma_ph=1.140,
+         session_pct=13, session_reset_h=3.37, exch_k=K, exch_k_src="live",
+         burst={"pct": 95.6, "h": 3.0, "n": 2576, "need_pph": 3.62, "never": False})
+n1 = row(acct="next", weekly_pct=52, weekly_reset_h=114.21, burn_wk_ewma_ph=1.725,
+         session_pct=50, session_reset_h=2.0, exch_k=K, exch_k_src="live")
+line = ca.pace_line([n3, n1, n2, n4])
+# the header names K — and ONLY now that something consumes it. S3 shipped this header without
+# the clause deliberately, because rendering a coefficient nothing reads is the metric shape
+# §3.2 forbids; M4′ is the first consumer.
+assert line.startswith("weekly drain — pp that DIE at reset (K=0.192 live · "), line
+assert "nowcast at the last 48h of pace" in line, line
+# the two SLACK rows carry the start time and the slack, in §5.2s AFTER shape
+assert "next4 strand ~64pp of 86 · start by T−28h (91h slack)" in line, line
+assert "next2 strand ~56pp of 83 · start by T−28h (70h slack)" in line, line
+# ...and the LATE row names the FLOOR. "You are late" without "and this much is already gone"
+# invites the reader to burst anyway and lose the same pp with the tokens spent.
+assert "next3 strand ~5pp of 8 · p96 of its own 3h burns · ⚠ LATE by 0.6h" in line, line
+assert "2.8pp already unrecoverable" in line, line
+# a ZERO-STRAND row keeps its bare clock: there is no burst to schedule on it
+assert "next no strand — 1.62× burn, ⚠ WALL trajectory · 4d left" in line, line
+# K UNFITTED (S1c abstained) costs the START-BY clause and NOTHING ELSE. §5.2s abstain text
+# says a null K prints `no strand figures this sweep`; that was written before S3 established
+# the strand is pure weekly-space arithmetic that consumes no K, and it is now false — saying
+# it would tell a reader the strand figures are missing while they sit right there on the rows.
+n2b = dict(n2); n2b["exch_k"] = None; n2b["exch_k_src"] = None
+ab = ca.pace_line([n2b])
+assert "K unfitted" in ab, ab
+assert "no start-time figures this sweep" in ab, ab
+assert "next2 strand ~56pp of 83" in ab, ab          # the strand is STILL THERE
+assert "start by" not in ab, ab
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
