@@ -374,6 +374,106 @@ verification. Everything in this section was independently re-measured against t
 
 ---
 
+## 3c. W3 — the three fixes shipped, and the two further kills the work uncovered
+
+`686acbd70` implements §3b items 1-4. Item 5 is FILED, not built, for a reason given below.
+
+### The numbers, measured against the live store on 2026-09-01
+
+| | Before | After |
+|---|---|---|
+| `cc-cloud list --json --state`, unscoped, 583 declarations | **216.4 s** | scoped to the working set |
+| a complete `cloud-return --sweep --limit 25` pass (poll + state + 25 control-plane verifies) | never finished | **43 s, rc 0** |
+| `cloud_return_rc` | `137, 4, 4, 4, 4, 4, 137, 137, 137` — no success since 2026-08-24 | **0** |
+| RETURN-READY sessions reached in one bounded pass | 0 | **19 of 25** |
+
+The 216 s figure is the fixed cost §3b predicted at 210 s, re-measured independently. The pass now
+journals a `pass-scope` ledger row every tick (`pending_total`, `taken`, `deferred`, `cursor_from`,
+`cursor_to`) so the cap can never read as coverage.
+
+### THE FIFTH KILL — the sweep itself is the reaper's single largest subject
+
+§3b C observed that the land block is reached about 1 pass in 48 and attributed it to the sweep's
+earlier expensive stages. The stages are not the mechanism. Two measurements:
+
+**Over the live IDL, 2026-09-01T01:12→05:17Z (~48 ticks), filtering `tool=="autonomy-sweep"`:**
+
+```
+join            6 rows      ← §0, the first block
+backlog-health  0 rows      ← §2b
+config-parity   0 rows      ← §2c
+cloud-return    0 rows      ← §2d, whose log_idl is UNCONDITIONAL
+```
+
+`log_idl cloud-return` journals on every path including `skipped-not-deployed`, so zero rows cannot
+mean "it ran and had nothing to do". Control never arrived.
+
+**In `~/.claude/logs/cc-reaper.log`, by subject, all time:**
+
+```
+719  autonomy-sweep.sh     ← the single largest subject in the file
+676  account-fact-derive
+374  mailbox-wake-arm.sh
+153  cloud-return.sh       ← the W1 case, now fixed
+```
+
+with rows like `garbage: TERM orphan-bash pid=94244 age=1793s argv=</bin/bash …/autonomy-sweep.sh>`,
+ages **1362-2063 s**. So the sweep is started every 300 s, runs for 25-35 minutes, and is collected
+as garbage long before its lower half — and has been for weeks. This is the same defect W1 fixed,
+in the same log, one level up: the fourth spelling of the land path.
+
+**Why W3 did NOT simply whitelist it, which is the apparently-obvious fix.** `cc-reaper` is
+currently this job's ONLY watchdog. launchd does not stack a second instance of a running job, so a
+sweep that hangs stops the cadence entirely; today's TERM at ~1400 s is precisely what lets the next
+tick start. Exempting it converts a periodic job into a permanently wedged one — strictly worse, and
+unlike the reordering it is not order-only. The real repair is a self-bound on the sweep, which is a
+different change with a different blast radius. **The reordering is what makes the lane drain
+regardless**: at t≈0 s the cloud block completes inside its own 900 s bound with ~450 s of margin
+against the earliest kill on record.
+
+### THE SIXTH — ship-land's smoke budget convicted a green branch, and named it a verdict
+
+The first real land attempt (`session_0112CMfyhNwqKdeLmiMDB6gT`, branch
+`claude/fire-20260901T035401Z-22411-1`) was REFUSED, exit 70 → lander 6 → gate-red:
+
+```
+✗ gate: bats RED: tests/cc-relogin-poll.bats (failed twice)
+⏱ gate: smoke budget 120s exhausted — remaining suite(s) not started, land PROCEEDS
+✗ gate: smoke RED — 1 of 4 direct suite(s) named a failure (1 mapped to YOUR diff).
+  This is a VERDICT about your diff (O(diff), reproducible): fix it, do not retry unchanged.
+```
+
+**It is not reproducible and it is not about the diff.** Checked out at that exact branch and run
+standalone, `tests/cc-relogin-poll.bats` is **64/64, rc 0, in 58.35 s**. The bats process in the
+gate log died `Terminated: 15`. The budget is **120 s for all four suites combined**, one of which
+alone costs 58 s, and the box was at **load average 35.7** with a full postland-verify suite in
+flight. A bound smaller than what it bounds can only convict — this repo's own
+`exoneration-bound-must-fit-what-it-bounds` and `bound-must-fit-the-band-not-the-bench`, in the
+gate that guards the lane this document is about.
+
+The gate was NOT weakened to get past it. `SHIP_LAND_SMOKE_BUDGET_S` is the override ship-land
+itself prints, and raising it lets every suite run to a real verdict instead of being cut into a
+false one — the assertion set is unchanged and strictly more of it executes. **The standing risk
+this leaves:** at the shipped 120 s, any branch whose smoke fan-out exceeds ~2 suites under load is
+refused with a message that tells the reader not to retry it. That is a false-refusal generator
+sitting directly on the drain path, and it is not W3's file to change.
+
+### §3b item 5 is FILED, not built — `96e532227df8`
+
+The redundancy is confirmed and worse than recorded: **47 distinct items carry 2 or more
+declarations**, the worst carrying **30**. The fire predicate never reads the decl store's own
+`item=` link, which it already has.
+
+It is filed rather than shipped because its precondition is genuinely unmet. The guard is safe only
+once the lane shows a non-zero drain rate; applied now, over 466 pending declarations with the drain
+not yet observed in production, it does not de-duplicate cloud dispatch — it **halts** it for ~72
+items, converting visible churn into a silent stall. The filed row carries that gate
+(`backlog-telemetry lane=cloud closes>0`) and the shape it should take: a sibling of `cc-dispatch`'s
+§1b DONE-GUARD, disk-only via `id_for_item` plus the absence of a `.returned` marker, never a
+probing lookup — the same reason §1b refuses to content-verify at pull time.
+
+---
+
 ## 4. Status log
 
 - **2026-09-01** — Audit complete across both lanes; 24-agent adversarial wave corroborated it and
@@ -412,14 +512,40 @@ verification. Everything in this section was independently re-measured against t
   numerator is the masked one (it read 21.2 during the zero-drain week); reasoning is in the commit
   body.
 
-- **2026-09-01 — W3 IN FLIGHT** (pane 197, worktree `drain-loop-w3`), owning the four §3b items.
-  ⚠️ Its `/goal` never armed — `handoff-fire` abstained on a torn frame and two `cc-pane send`
-  retries did not reach its transcript. It has the full brief and DoD and is working (1 commit on
-  its branch at the time of writing), but without the Stop-hook backstop it may close before the
-  DoD is met. Filed as an operator step: backlog `d7d5a8533f58`.
+- **2026-09-01 — W3 DONE** (pane 197, worktree `drain-loop-w3`), all four §3b items shipped.
+  `686acbd70` — bounded pass (`--limit`, default 25) + a persisted cursor + newest-first ordering,
+  with `cc-cloud --only` scoping `poll` and `list --state` so the fixed cost stops being O(every
+  declaration ever created); pid-liveness lock reap + a TTL sized to the caller's bound (1200 s, and
+  NARROWER than the old 3600 s) + `autonomy-sweep` clearing the lock when its own child returns
+  137/143; the cloud block hoisted from §2d to **§0a, the top of the pass**; and `cc-cloud gc`.
+  `37727f17f` re-anchors the three live comments that pointed at the moved call.
+  Suites: cloud-return 39/39, cc-cloud 39/39, autonomy-sweep 61/61, **six mutants RED-proved**
+  (including the control that a reap must not steal from a live pass).
+  **Measured:** a complete bounded pass is **43 s, rc 0** against **216.4 s** for the unscoped state
+  read alone; **19 of 25** sessions reach RETURN-READY in one pass; the deferral is journalled every
+  tick (`pass-scope`: `pending_total 468 · taken 25 · deferred 443`), never a silent cap.
+  **§3c** records the two further kills this work uncovered: the sweep ITSELF is `cc-reaper`'s
+  single largest subject (**719** TERM rows, ages 1362-2063 s), which is the real reason the land
+  block was reached ~1 tick in 48 — and why whitelisting it is a TRAP, since the reaper is currently
+  that job's only watchdog; and ship-land's **120 s smoke budget for four suites combined** refused
+  a branch by naming a suite that is **64/64 in 58 s** standalone, under load 35.7, while telling
+  the reader "reproducible: fix it, do not retry unchanged". §3b item 5 is FILED with its
+  precondition (`96e532227df8`), not built — 47 items carry 2+ declarations (worst: 30), but the
+  guard only de-duplicates once the lane drains; applied today it HALTS cloud dispatch for ~72 items.
+  ⚠️ The goal-never-armed finding from the in-flight entry stands as history: `handoff-fire` abstained
+  on a torn frame and two `cc-pane send` retries never reached this pane's transcript, so W3 ran the
+  whole wave with no Stop-hook backstop (operator step `d7d5a8533f58`). It did not close early, but
+  that was discipline rather than mechanism.
 
-- **Still open after tonight**: the four §3b kills (the 900 s bound vs ~675 s fixed cost, the
-  SIGKILL-stranded lock, the ~1-in-48 reach, the unbounded declaration population) plus the
-  dispatcher re-fire predicate — W3 owns them. The local lane's self-reference (§1.4, recycle #277,
-  no goal armed, zero backlog rows claimed) has NO wave assigned and is the remaining half of the
+- **Still open after tonight**: the four §3b kills are FIXED (W3, above). What remains is
+  (a) **the sweep's own runtime** — it needs a self-bound so it stops being garbage-collected at
+  ~1400 s; whitelisting is refused for the reason in §3c; (b) **ship-land's smoke budget**, a
+  false-refusal generator sitting directly on the drain path, in a file no wave owns;
+  (c) the **dispatcher re-fire predicate** (`96e532227df8`), gated on the lane showing a non-zero
+  drain rate; and (d) the local lane's self-reference (§1.4, recycle #277, no goal armed, zero
+  backlog rows claimed), which still has NO wave assigned and is the remaining half of the
   operator's "deferring rather than completing" complaint.
+  ⚠️ **No cloud branch has LANDED yet.** The repaired path reaches the lander and the lander returns
+  real verdicts; the two branches tried both refused on their OWN gates (one falsely at the 120 s
+  budget, then genuinely 2-of-28 with a budget that fit). A successful land is a property of the
+  stranded branches, not of the repair — adjudication is task #174's.
