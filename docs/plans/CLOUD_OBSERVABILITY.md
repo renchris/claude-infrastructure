@@ -776,7 +776,9 @@ Before any cloud session is fired, in this order:
 1. `cc-cloud declare --id <id> --branch <b> --paths <what it will land> --url <session url>` —
    an undeclared cloud session is unobservable, and `declare` refuses without `--id`/`--branch`.
 2. The session's brief must require **pushing the declared branch as its first act**, so that
-   absence past the boot budget means something (§4.1).
+   absence past the boot budget means something (§4.1). ✅ **IMPLEMENTED 2026-09-01, §16** — it was
+   prose here and nowhere else for the whole life of the pipeline; `bin/cc-dispatch` now emits it
+   on every `venue=cloud` fire.
 3. §5.2 must be wired first — otherwise `com.claude.team-orphan-reaper` may archive the team
    while the session is healthy.
 4. On completion, `cc-cloud retire --id <id>` — or let C3 `LANDED` render it silent, which it does
@@ -817,6 +819,14 @@ is the safe one. A reservation that never binds expires into `U0 UNKNOWN` (never
 finding** (§6.5). If the CLI create route ships a bundle of the local tree rather than cloning the
 remote, then the branch the VM pushes may not be the branch this box declared. Until one fire
 settles it, declare the branch the *brief* names and treat a mismatch as `U0`, not as absence.
+
+✅ **SETTLED 2026-09-01 for the route that actually fires, and there is no mismatch.** The live
+actuator is `cc-offload up --via api` (§5.1's note), which MINTS the branch name itself —
+`bin/cc-offload:526`, `br="claude/fire-<utc>-<pid>-<i>"` — passes it to `scripts/cloud-create-api.py`
+as `--branch`, and declares the same string. Verified from inside a session this dispatcher fired:
+the VM's checked-out branch was `claude/fire-20260901T200442Z-37476-1`, byte-identical to the
+declaration. The caveat above described the DEPRECATED CLI-create leg, which is no longer the fire
+path; it is retained because that leg still exists behind `--via cli`.
 
 ---
 
@@ -1964,3 +1974,56 @@ next `cloud-return.sh` pass is what fires `cc-backlog block`, and §13.6's ADD-r
 whether that pass is running the landed script — the reader is an edit to an already-symlinked file
 and goes live on the fast-forward, but `scripts/cloud-park.sh` is an ADD and is absent from
 `~/.claude` until the converger runs.
+
+---
+
+## 16 · §8 step 2, §14 and §15 reach the worker — the brief is the only channel (2026-09-01)
+
+🚨 **All three rules were PROSE-ONLY, and prose in this file reaches nobody.** §4.1 is explicit that
+there is no inbound path to a cloud VM, so the dispatch brief is the *sole* channel to a cloud
+worker. Every one of these rules is an obligation on that worker, and none of them was ever emitted
+by any fire path: `grep` for "first act" across `bin/ scripts/ commands/ hooks/` returned this
+document and nothing else. §8 step 2 is the load-bearing one — it is the **only** basis on which
+C1 `NOT-STARTED` means "never booted". Without it `no ref` conflates a session that never started
+with a live one that has simply not pushed yet, which is precisely the ambiguity §4.1 was written
+to dissolve, so the whole absence contract collapses back into it.
+
+**Measured from inside a cloud session this dispatcher fired** (branch
+`claude/fire-20260901T200442Z-37476-1`, three minutes in, alive and working on this very row):
+
+```text
+git ls-remote --heads origin claude/fire-20260901T200442Z-37476-1   → rc=0, EMPTY
+cc-backlog done 0c8b39b67665 --evidence …                           → "unknown id"; writes nothing
+cc-notify --role desk "…"                                           → verdict=unresolvable enqueued=0
+                                                                      (phone fallback inert, PUSHOVER_* unset)
+```
+
+Line 1 is §4.2's REACHABLE-and-ABSENT: a healthy worker scored `C2 BOOTING`, and would have scored
+`C1 NOT-STARTED` at the 900 s budget with nothing wrong with it. Lines 2 and 3 are the other half,
+and they are worse than an omission: **the incumbent brief handed an off-box worker three terminal
+dispositions and all three were no-ops.** `scripts/cloud-park.sh`'s own header stated this in
+August — "NEITHER IS REACHABLE FROM A CLOUD VM" — and the brief was never changed, so §15's cure
+shipped with no producer, exactly as §5.2's `is-offbox` did.
+
+**THE CHANGE.** `bin/cc-dispatch` composes a venue-conditional brief. On `venue = cloud`:
+
+| | Was (inert off-box) | Now |
+| --- | --- | --- |
+| boot | *nothing* | the FIRST ACT line: `git commit --allow-empty` + `git push -u origin HEAD`, placed **before** the staleness rail, naming the consequence (`NOT-STARTED`, re-dispatch) |
+| rails | "land ONLY via /ship (never bare push)" | push this branch; the desk lands it — `cloud-return.sh` requires the branch pushed and **unlanded** |
+| done | `cc-backlog done <id>` | push the work; `cloud-return.sh` derives the paths and closes the row |
+| nothing to do | *nothing* | §14's verdict artifact under `docs/research/`, with the `git merge-base --is-ancestor` assertion |
+| operator-gated | `cc-backlog block` + `cc-notify --role desk` | §15's `scripts/cloud-park.sh <id> --needs "…"`, landed |
+
+**It keys on `$venue`, never on `venuePlan`** — the label read off the argv that will actually run
+(G5). `--cloud` is default-off per box, so a cloud-PLANNED row routinely fires locally; a brief
+keyed on the plan would hand a local worker `cloud-park.sh` (which refuses a non-cloud branch) and
+take away the `cc-backlog` verbs that do work there. Pinned by
+`tests/cc-dispatch-cloud-brief.bats` (6 cases, RED-proofed against the pristine `0d6293152`), whose
+two SCOPING arms are that case and the plain-local one.
+
+**Honest limit.** This makes the rules *reach* the worker; it does not make the worker obey them.
+The absence contract is a contract, and a brief is the strongest instrument available on a channel
+with no inbound path — there is no mechanism on this box that can force the push. What it does buy
+is that `NOT-STARTED` now discriminates, because a compliant worker is distinguishable from a dead
+one at all, which was not previously true of any worker.

@@ -2681,7 +2681,18 @@ dispatch() { # <dry|run|decide>
       # the 5 oldest open items in the ledger, so under the S7 key it is the FIRST thing this change
       # dispatches. A brief that names a nonexistent landing command sends a worker to invent one.
       irepo="$(project_repo "$iproj")"
-      if [ -f "$irepo/.claude/commands/ship.md" ]; then
+      # A CLOUD WORKER NEVER LANDS, so the /ship rail is not merely irrelevant to it — it is the
+      # OPPOSITE of what it must do, and leaving it in place would make the brief contradict its own
+      # completion line below. `scripts/cloud-return.sh` requires the branch PUSHED and unlanded: it
+      # derives the path set from the VM's own commits, then hands the branch to the desk's land
+      # (`scripts/cloud-reconcile.sh` → desk-land → ship-land) and content-verifies the result on
+      # trunk. A worker that landed for itself would strand that pipeline at the "nothing to return"
+      # arm, and a worker that read "never bare push" literally would not push at all — which is
+      # exactly the absence §8 step 2 exists to forbid. Venue-conditional for the same reason the
+      # tail below is: on a local fire every word of the incumbent rails is still correct.
+      if [ "$venue" = cloud ]; then
+        rails="gate green before commit; commit on THIS branch and PUSH it — that is your completion signal, and the desk lands it for you. Do NOT run /ship, do NOT push to trunk, do NOT land anything yourself. C10 — never edit settings.json/live hooks/launchd in place."
+      elif [ -f "$irepo/.claude/commands/ship.md" ]; then
         rails="dedicated worktree + own branch; gate green before commit; land ONLY via the project-local /ship (never bare push); C10 — never edit settings.json/live hooks/launchd in place."
       else
         rails="dedicated worktree + own branch; gate green before commit. This project has NO /ship rail — commit on your own branch and SURFACE it for the operator; never bare-push, never land yourself. C10 — never edit settings.json/live hooks/launchd in place."
@@ -2743,17 +2754,70 @@ dispatch() { # <dry|run|decide>
       #
       # NO BACKTICKS ANYWHERE IN THIS LIST — these are double-quoted shell strings, so a backtick
       # would command-substitute at compose time and write its OUTPUT into the worker's brief.
+      # ── THE CLOUD RIDER (backlog 0c8b39b67665; CLOUD_OBSERVABILITY.md §8 step 2, §14, §15) ──────
+      # THE BRIEF IS THE ONLY CHANNEL TO A CLOUD VM. §4.1 is explicit that there is no inbound path
+      # to one, so a rule stated only in the design doc is a rule no worker ever reads — and all
+      # three of the rules below were exactly that. §8 step 2 ("the session's brief must require
+      # pushing the declared branch as its first act") is the SOLE basis on which C1 NOT-STARTED
+      # means "never booted": without it, `no ref` conflates a session that never started with a
+      # live one that has simply not pushed yet, and the whole absence contract collapses into the
+      # ambiguity §4.1 was written to resolve. It was never emitted by any fire path — grep for it
+      # across bin/ scripts/ commands/ returns the doc and nothing else.
+      #
+      # MEASURED FROM INSIDE A CLOUD VM, 2026-09-01, on a session this dispatcher fired
+      # (session branch claude/fire-20260901T200442Z-37476-1, 3 minutes in, alive and working):
+      #   git ls-remote --heads origin <declared branch>  → rc=0, EMPTY  ⇒ §4.2's REACHABLE+ABSENT
+      # i.e. a healthy worker read C2 BOOTING and would have read C1 NOT-STARTED at the 900s budget.
+      #
+      # THE OTHER TWO LINES OF THE INCUMBENT TAIL ARE NOT MERELY MISSING, THEY ARE WRONG HERE, and
+      # that is why they are replaced rather than appended to. Measured in the same VM:
+      #   cc-backlog done <id> --evidence …  → "unknown id", writes nothing
+      #   cc-notify --role desk "…"          → verdict=unresolvable enqueued=0 (and the phone
+      #                                        fallback is inert: PUSHOVER_* unset)
+      # The store those verbs write is ~/.claude/autonomy/backlog.jsonl, which exists only on the
+      # operator's box (scripts/cloud-park.sh's own header states this; it is why that script was
+      # built). So the incumbent brief hands an off-box worker three terminal dispositions and all
+      # three are no-ops — which is the ten-dispatch loop measured on f85fce7c26f5. The cloud tail
+      # therefore routes each disposition through the ONE medium a VM has, its branch: the work
+      # itself, a §14 verdict artifact, or a §15 park. Both readers are already on trunk
+      # (scripts/cloud-return.sh step 8, bin/cc-eligible's park arm) and had no producer.
+      #
+      # VENUE-CONDITIONAL, never unconditional. `$venue` is resolved ~150 lines up and is read off
+      # the argv that will ACTUALLY RUN (G5), so this cannot disagree with what launches. A local
+      # worker keeps the incumbent tail verbatim — those verbs are reachable there, and cloud-park
+      # is not (it refuses a non-cloud dispatch's branch scoping by construction).
+      #
+      # NO BACKTICKS AND NO COMMAND SUBSTITUTION IN THE STRINGS BELOW, for the reason the sibling
+      # note gives: these are double-quoted shell strings composed at fire time.
+      local cloud_boot=""
+      if [ "$venue" = cloud ]; then
+        cloud_boot="CLOUD VENUE — you are on an off-box VM and this branch is your ONLY channel back to the desk. Do this BEFORE the FIRST STEP below, as your first act: git commit --allow-empty -m 'chore: cloud boot marker' && git push -u origin HEAD. Until that ref exists on origin, the desk cannot tell a live session from one that never booted (both read as no-ref), and past the 15-minute boot budget you are scored NOT-STARTED and this item is re-dispatched over the top of you — CLOUD_OBSERVABILITY.md §4.1 and §8 step 2."
+      fi
       local staleness_rail
       staleness_rail="FIRST STEP — read what this item cites on TRUNK, never in your own tree. Run: git -C $irepo fetch origin -q && git rev-list --count HEAD..origin/main (0 means your tree IS trunk; anything else means every file you are about to read predates it), then 'git show origin/main:<path>' for each file the item names, and check the cited sha against origin/main with 'git log --oneline <sha>..origin/main -- <path>'. A post-land RED reproduces FAITHFULLY in a stale tree, and against a fix that already landed, so a correct-looking diagnosis can produce a diff that REVERTS trunk (cc-backlog 6110fc45141e). If the cure is already on trunk, the item is DONE — close it with that sha as evidence rather than re-deriving it."
+      local -a brief_tail
+      if [ "$venue" = cloud ]; then
+        brief_tail=(
+          "On completion: commit and PUSH your work to this branch — that is the completion signal. Do NOT run cc-backlog from here: its store is the operator's box-local ~/.claude/autonomy/backlog.jsonl, so every verb answers 'unknown id' and writes nothing. The desk's scripts/cloud-return.sh derives your landed paths from your own commits, content-verifies them on trunk, and calls cc-backlog done $id for you."
+          "If there is NOTHING TO COMMIT — the row is already cured, refuted, or unworkable — you must STILL push, because a worker that pushes nothing is indistinguishable from one that never booted and the row is re-dispatched forever. Land the verdict as docs/research/<topic>-<date>.md naming the cure sha (assert it with git merge-base --is-ancestor <sha> origin/main), the verification you actually ran, and the evidence. Do NOT invent code work to justify a push, and do NOT push nothing — CLOUD_OBSERVABILITY.md §14."
+          "If blocked on an OPERATOR-only step (a key, a launchctl bootout, any human action you cannot do): run scripts/cloud-park.sh $id --needs \"<the exact step>\" and PUSH it. That lands docs/parks/$id.md, which the desk reads off the trunk ref and turns into cc-backlog block — parking the item OUT of the dispatch wave. cc-backlog block and cc-notify --role desk are both unreachable from this VM, so neither is a substitute. Do NOT reopen an operator-gated item — that re-cycles it. CLOUD_OBSERVABILITY.md §15."
+          "If blocked on info or a decision instead (not an operator step): name the blocker in the same landed verdict artifact as above. Landing the statement is the only way a fact reaches the desk from this venue — cc-backlog reopen and cc-notify --role desk write nothing here."
+        )
+      else
+        brief_tail=(
+          "On completion: cc-backlog done $id --evidence \"<landed sha>\"."
+          "If blocked on an OPERATOR-only step (a key, a launchctl bootout, any human action you cannot do): cc-backlog block $id --needs \"<the exact step>\" — this PARKS the item OUT of the dispatch wave (no re-dispatch loop, no burned worker slot) until the operator acts, then cc-notify --role desk \"<the step>\". Do NOT reopen an operator-gated item — that re-cycles it."
+          "If blocked on info or a decision instead (not an operator step): cc-backlog reopen $id and cc-notify --role desk \"<the blocker>\"."
+        )
+      fi
       if ! printf '%s\n' \
         "TASK — ${title:-backlog item $id} — cc-backlog item $id (project $iproj, repo $irepo)." \
         "DoD ref: ${dod:-none}. Scope (frozen): drive this ONE item to finished-verified-landed." \
+        ${cloud_boot:+"$cloud_boot"} \
         ${pcontract:+"$pcontract"} \
         "$staleness_rail" \
         "Rails: $rails" \
-        "On completion: cc-backlog done $id --evidence \"<landed sha>\"." \
-        "If blocked on an OPERATOR-only step (a key, a launchctl bootout, any human action you cannot do): cc-backlog block $id --needs \"<the exact step>\" — this PARKS the item OUT of the dispatch wave (no re-dispatch loop, no burned worker slot) until the operator acts, then cc-notify --role desk \"<the step>\". Do NOT reopen an operator-gated item — that re-cycles it." \
-        "If blocked on info or a decision instead (not an operator step): cc-backlog reopen $id and cc-notify --role desk \"<the blocker>\"." \
+        "${brief_tail[@]}" \
         > "$pfile"; then
         # --by $SID: this is a SELF-RELEASE of the claim we took two lines up. cc-backlog's
         # live-claim reopen guard refuses a FOREIGN reopen of a live claim (and $SID — our own
