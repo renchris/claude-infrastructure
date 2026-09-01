@@ -871,3 +871,132 @@ behind_by() {   # $1 = repo-relative path · $2 = its bytes → checkout sits 1 
   lacks "lag is UNKNOWN"
   has "STRAY"
 }
+
+# ── THE REVERSE DIRECTION: does the MAP cover the TERRITORY? (2026-08-31) ────────────────────────
+# Every other arm in this file drives the script through its map — the forward walk's globs, or one
+# of the two hand-written sweep directory lists. The arm at :623 asks the coverage question already,
+# and it is green, because its population is `grep -E '^[[:space:]]*for [A-Za-z_]+ in ' install.sh`:
+# loop headers only. install.sh's SEVEN single-file `link_file "$REPO_DIR/<x>"` sites have no loop
+# header, and scripts/kitty-setup.sh — the second installer — is never read at all, so neither is a
+# member of that arm's question rather than an uncovered member of it.
+#
+# MEASURED against the live layer 2026-08-31T23:56:23Z: 512 distinct checkout paths carry a per-file
+# live symlink and the forward walk claimed 458. The 54 it never visits are not a hypothesis; they
+# are already deployed and executing, which is what makes the blind region demonstrably real rather
+# than merely possible. These arms drive the new leg through the fixture instead, so they pass on a
+# fresh clone, in a worktree and in CI.
+#
+# A NESTED SKILL FILE IS THE FIXTURE ON PURPOSE: it is the largest of the five real classes (39 of
+# the 54) and it is the one whose two enumerations are provably the same class at two depths —
+# install.sh:745-754 links every file under a skill RECURSIVELY, the forward walk visits depth 1.
+
+@test "the reverse walk names a live-linked file no forward-walk glob visits (UNMAPPED)" {
+  mkdir -p "$CC_LINKPARITY_REPO/skills/demo/references" "$CC_LINKPARITY_CONFIG/skills/demo/references"
+  printf 'nested\n' > "$CC_LINKPARITY_REPO/skills/demo/references/buried.md"
+  ln -sfn "$CC_LINKPARITY_REPO/skills/demo/references/buried.md" \
+          "$CC_LINKPARITY_CONFIG/skills/demo/references/buried.md"
+  run "$LP" --all
+  [ "$status" -eq 0 ]
+  has "UNMAPPED"
+  has "skills/demo/references/buried.md"
+  # the COUNT as well as the line: a leg that named the file but tallied 0 would still let the
+  # summary say the map covers the territory, which is the sentence this whole class exists to stop.
+  has "1 unmapped"
+}
+
+@test "CONTROL: a forward-walked file is CLAIMED, so a clean layer reads 0 unmapped" {
+  # setup() links hooks/established.sh, which hooks/*.sh DOES glob. If _claimed() failed to match —
+  # the fail-OPEN direction, and the one a pipeline membership test would produce — this reads 1.
+  # Without this arm the leg could pass the case above by reporting EVERY live link as unmapped.
+  run "$LP"
+  [ "$status" -eq 0 ]
+  has "1 linked"
+  has "0 unmapped"
+  lacks "UNMAPPED"
+}
+
+@test "CONTROL: with no live link into the checkout the field is ?, never 0" {
+  # 0 unmapped is the HEALTHY value — "the map covers the territory" — so a failed or empty
+  # enumeration rendering as 0 would be indistinguishable from a fully-mapped layer, and it is the
+  # most reassuring sentence this report can print. The denominator decides, not the numerator.
+  rm "$CC_LINKPARITY_CONFIG/hooks/established.sh"
+  run "$LP"
+  [ "$status" -eq 1 ]
+  has "? unmapped"
+  lacks "0 unmapped"
+}
+
+@test "a SHADOW is still classified ONCE once SEEN passes the pipe buffer (SEEN's own PIPE arm)" {
+  # THE SECOND READER OF SEEN, found by the first. Writing sweep_unmapped's membership test made the
+  # question "what else reads SEEN" unavoidable, and the answer was the stray leg's deferral, which
+  # until 2026-08-31 read `printf '%s' "$SEEN" | grep -qxF -- "$rel" && continue`.
+  #
+  # Under the script's own `set -uo pipefail` that pipeline's rc IS the deferral, and it inverts on
+  # the MATCH: grep -q exits the instant it finds the path, printf takes SIGPIPE, pipefail promotes
+  # the rc to 141, `&& continue` never fires, and a file the forward walk already reported SHADOW is
+  # classified a SECOND time — the exact double-classification SEEN was introduced to prevent.
+  #
+  # THE FIXTURE MUST OVERFLOW THE 64 KiB PIPE BUFFER OR THIS CASE IS VACUOUS, for the same reason
+  # the PIPE1 arm above states it, and the once-only arm above THAT is why it matters: that arm pins
+  # this very contract and was green over this defect for its whole life, because its SEEN is a few
+  # hundred bytes. The real layer measured 12,113 B at 458 claimed paths — latent, at ~33% of floor,
+  # on a feed that only grows.
+  #
+  # 400 x ~255 B is chosen from the MEASURED regime rather than picked: the two-stage builtin
+  # pipeline is SAFE to 37,121 B, racy from 55,721 and ALWAYS inverted past 87,122. Sizing past the
+  # always-inverted floor makes a re-introduced pipeline fail EVERY run, not one in twenty.
+  # 🚨 THE NEEDLE MUST SIT NEAR THE START OF THE FEED, WHICH IS WHY THE PADDING IS NAMED `zz`.
+  # SIZE ALONE IS NOT ENOUGH and this arm was written the other way first: with the padding sorted
+  # BEFORE the needle, the forward walk appends `hooks/shadowed.sh` near the END of SEEN, grep
+  # matches only after printf has already written all 102 KB, nothing is ever signalled, and the arm
+  # passed against the UNFIXED script. That is #241's measured protocol restated as a fixture
+  # constraint — every band in the table was measured with the needle on LINE 1 — and it is the
+  # difference between a behavioural arm and a green nobody can attribute. The forward walk's glob
+  # is lexicographic, so `shadowed.sh` precedes every `zz…` pad.
+  PAD=""
+  while [ "${#PAD}" -lt 240 ]; do PAD="${PAD}padding"; done
+  PAD="${PAD:0:240}"
+  i=0
+  while [ "$i" -lt 400 ]; do
+    printf 'pad\n' > "$CC_LINKPARITY_REPO/hooks/zz${i}-${PAD}.sh"
+    ln -sfn "$CC_LINKPARITY_REPO/hooks/zz${i}-${PAD}.sh" "$CC_LINKPARITY_CONFIG/hooks/zz${i}-${PAD}.sh"
+    i=$((i + 1))
+  done
+  # NON-VACUITY, asserted rather than assumed: the claimed-path bytes must actually clear the
+  # always-inverted floor, or this arm passes against the UNFIXED script and credits itself.
+  [ "$(cd "$CC_LINKPARITY_REPO" && find hooks -name 'zz*.sh' -type f | wc -c)" -gt 87122 ]
+
+  land_new "hooks/shadowed.sh"
+  printf 'new\n' > "$CC_LINKPARITY_CONFIG/hooks/shadowed.sh"     # identical bytes ⇒ matches COPY
+
+  # 🚨 ASSERT THE COLUMN THAT ACTUALLY DIFFERS. Written first as `[ grep -c == 2 ]` + `1 actionable`
+  # and it passed against the UNFIXED subject, because BOTH of those hold in BOTH states: the second
+  # classification here is COPY, whose note is gated behind $ALL, and COPY neither adds a finding nor
+  # a fix line. Measured on ONE fixture with BOTH subjects (probe272-shadow.sh) —
+  #     PRE   400 linked · 0 staged-pending · 1 live-extra · 1 actionable   (--all: 3 mentions)
+  #     POST  400 linked · 0 staged-pending · 0 live-extra · 0 unmapped · 1 actionable   (--all: 2)
+  # — so live-extra is the discriminating column and --all is what makes the duplicate line visible.
+  # The idiom itself was confirmed to invert 20/20 at this feed with the needle on line 1, and 0/20
+  # with it last, so a green here is a statement about the ASSERTION, never about the pipeline.
+  run "$LP" --all
+  [ "$status" -eq 1 ]
+  has "SHADOW"
+  has "0 live-extra"
+  # the note + its fix line, not 3: the duplicate is a COPY line for a path already reported SHADOW
+  [ "$(printf '%s' "$output" | grep -c "hooks/shadowed.sh")" -eq 2 ]
+}
+
+@test "CONTROL: UNMAPPED never changes the verdict — predicted GREEN before the fix too" {
+  # A DELIBERATE ZERO. This arm is green on the unfixed script as well as the fixed one, and saying
+  # so is the point: it pins that the new class adds no finding and moves no exit status, which is
+  # exactly the claim the other three arms CANNOT make. A uniform prediction across a table says
+  # nothing about attribution; a varying one is a claim about what the design can and cannot catch.
+  mkdir -p "$CC_LINKPARITY_REPO/skills/demo/references" "$CC_LINKPARITY_CONFIG/skills/demo/references"
+  printf 'nested\n' > "$CC_LINKPARITY_REPO/skills/demo/references/buried.md"
+  ln -sfn "$CC_LINKPARITY_REPO/skills/demo/references/buried.md" \
+          "$CC_LINKPARITY_CONFIG/skills/demo/references/buried.md"
+  run "$LP"
+  [ "$status" -eq 0 ]
+  has "0 actionable"
+  has "every landed file is live"
+}
