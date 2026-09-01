@@ -1,0 +1,14 @@
+# python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+#
+# Unpinned deliberately: this is a measuring instrument, and the one thing it
+# must not do is silently keep reporting last year's numbers. Every result in
+# docs/research/cv-design-review-2026-08-26/ names the machine and renderer it
+# was taken on, because the pixel layer's findings are NOT portable across
+# either -- X3 shipped silent on a different Chromium and nothing noticed.
+#
+# If a capture's browser is a different build than playwright pins, point
+# BENCH_CHROMIUM at the binary rather than re-downloading one:
+#   BENCH_CHROMIUM=/opt/pw-browsers/chromium-*/chrome-linux/chrome ./run.sh
+numpy
+pillow
+playwright
