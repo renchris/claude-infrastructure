@@ -159,7 +159,14 @@ hr; echo "B · what a LOGIN shell exports — the plist runs '/bin/zsh -lc', whi
 # tests the PREDICATE, while the defect was entirely in the MEASUREMENT feeding it. A harness that
 # hands its subject the right answer cannot discover that the subject asked the wrong question.
 if [ -x /bin/zsh ]; then
+  # shellcheck disable=SC2016
+  #   NOT expanding here is the entire measurement. SC2016 says "expressions don't expand in single
+  #   quotes" — correct, and required: the value must be resolved by the CHILD login shell, which is
+  #   what stands in for the launchd job. Double quotes would expand it in THIS shell and hand the
+  #   child a constant, which is a spelling of the very defect this block was fixed for.
   env -u CLAUDE_CONFIG_DIR /bin/zsh -lc 'echo "  CLAUDE_CONFIG_DIR=[${CLAUDE_CONFIG_DIR}]  HOME=[$HOME]"' 2>&1 | head -3
+  # shellcheck disable=SC2016
+  #   Same reason as the line above — the child resolves it, deliberately.
   _login_cfg="$(env -u CLAUDE_CONFIG_DIR /bin/zsh -lc 'printf %s "${CLAUDE_CONFIG_DIR:-}"' 2>/dev/null)"
   # Say so when the caller's own value differs from the job's, rather than silently discarding it:
   # "this session is configured differently from the daemon" is a real and useful fact, and it is a
