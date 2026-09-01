@@ -264,9 +264,23 @@ mkrepo() {
 
 @test "conf parse: an unreadable conf degrades to the pinned project alone — narrower, never a wider blind fire" {
   seed_items proj-a:1 proj-b:1
-  printf 'proj-b  repo=/x\n' > "$CONF"; chmod 000 "$CONF"
+  # THE UNREADABILITY IS A DANGLING SYMLINK, NOT A MODE BIT (ported from tests/cc-venue.bats:186,
+  # 2026-08-29, which fixed the identical defect one file over). Mode bits do not apply to uid 0, so
+  # under root `chmod 000` leaves the conf READ FINE: proj-b parses, the dispatch set is WIDER than
+  # the pinned project, and the case fails while the behaviour it guards is correct. It did not skip
+  # under root, it INVERTED — and every cloud dispatch of this repo runs as root, so this reds the
+  # land gate for any diff whose smoke scope reaches bin/cc-dispatch, a false RED about the machine
+  # wearing a verdict about the diff (the 6-vs-9 confusion the land pipeline exists to keep apart).
+  #
+  # `[ -r ]` FOLLOWS the link, and no uid is exempt from a target that does not exist — so the
+  # construction means the same thing for root and for the operator. It is also the SAME branch the
+  # mode bit was reaching for (conf_rows' `[ -r "$PROJECTS_CONF" ] || return 0` guard), which a
+  # directory would NOT have been: `[ -r ]` is true of a readable directory, and the degrade would
+  # then come from awk failing further down. Keeping the branch is the point of the spelling.
+  ln -s "$BATS_TEST_TMPDIR/no-such-conf-target" "$CONF"
+  [ ! -r "$CONF" ] || { echo "fixture broken: the conf is still readable as uid $(id -u)"; false; }
   fresh; CC_DISPATCH_CEILING=0 "$DISP" --once >/dev/null 2>&1
-  chmod 644 "$CONF"
+  rm -f "$CONF"
   [ "$(qprojects)" = "proj-a" ] || false
   [ "$(dec ' and .project=="proj-b" and .verdict=="skip"')" -eq 1 ] || false
 }
