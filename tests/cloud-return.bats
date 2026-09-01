@@ -640,3 +640,149 @@ reconcile_calls() { grep -c '^reconcile ' "$CALLS" 2>/dev/null || printf '0'; }
   [ "$status" -eq 0 ]
   [ "$(reconcile_calls)" -eq 2 ]
 }
+
+# ══ THE PASS MUST FIT ITS BOUND ═════════════════════════════════════════════════════════════════
+#
+# The defect these pin (docs/plans/DRAIN_CIRCUIT_2026-09-01.md §3b A/B/D): an unbounded pass over a
+# store that only grows spent ~675 s of its caller's 900 s bound on FIXED cost before attempting a
+# single land, was SIGKILLed every tick, and left its single-flight lock behind each time — so the
+# next ~12 ticks exited 4 without doing any work either. The `cloud_return_rc` timeline holds no
+# success at all: 137, 4, 4, 4, 4, 4, 137, 137, 137.
+#
+# Each arm below pins ONE half of the repair, and the two that could quietly widen into a defect of
+# their own — a cap that hides what it skipped, and a lock reap that steals from a live pass — carry
+# an explicit control that must FAIL if the guard is removed.
+
+# N managed declarations, declared oldest-first so `declared_at` ordering is assertable.
+declare_n() { # <count>
+  local i t; t=$(( $(date +%s) - 10000 ))
+  for i in $(seq 1 "$1"); do
+    "$CCLOUD" declare --id "session_$i" --branch claude/vm --remote "$REMOTE" --repo "$WORK" \
+      --trunk trunkref --account next3 --custody "session_$i" --notify-back PANE-UUID >/dev/null 2>&1
+    # Stamp declared_at explicitly: seq is faster than the clock, so every row would otherwise share
+    # one second and "newest first" would have no observable content to be right or wrong about.
+    sed -i '' "s/^declared_at=.*/declared_at=$((t + i * 100))/" "$CC_CLOUD_STATE/session_$i.decl"
+  done
+  push_vm
+}
+
+@test "--limit BOUNDS the pass: 2 of 5 examined, and the other 3 are named as deferred" {
+  declare_n 5
+  printf '{"worker_status":"working"}\n' >"$STATUS_JSON"   # nothing lands; we are measuring SCOPE
+  run bash "$SUT" --sweep --limit 2
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"2 of 5 pending managed session(s)"* ]]
+  # 🚨 NEVER A SILENT CAP. A bounded pass that says nothing about what it skipped reads exactly like
+  # one that covered everything — which is how "the lane is drained" gets asserted over 25 of 466.
+  run jq -sc '[.[] | select(.outcome=="pass-scope")] | last' "$CC_CLOUD_STATE/return.jsonl"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.taken')" = "2" ]
+  [ "$(printf '%s' "$output" | jq -r '.deferred')" = "3" ]
+  [ "$(printf '%s' "$output" | jq -r '.pending_total')" = "5" ]
+}
+
+@test "NEWEST FIRST — staleness compounds, so the freshest branches get the budget" {
+  declare_n 5
+  printf '{"worker_status":"working"}\n' >"$STATUS_JSON"
+  run bash "$SUT" --sweep --limit 2
+  [ "$status" -eq 0 ]
+  # session_5 and session_4 carry the LATEST declared_at, so they are the pass's population.
+  [[ "$output" == *"session_5"* ]]
+  [[ "$output" == *"session_4"* ]]
+  [[ "$output" != *"session_1"* ]]
+}
+
+@test "the CURSOR reaches the tail — a fixed limit alone would re-examine one head forever" {
+  declare_n 5
+  printf '{"worker_status":"working"}\n' >"$STATUS_JSON"
+  run bash "$SUT" --sweep --limit 2; first="$output"
+  run bash "$SUT" --sweep --limit 2; second="$output"
+  # THE CONTROL THAT CAN FAIL: without the persisted cursor both passes take the same newest two,
+  # `second` is identical to `first`, and the older 60% of the store is never looked at again — a
+  # cap that reads as coverage. Asserting only "the cursor file changed" would pass over a cursor
+  # nothing consumes, so this asserts the OBSERVABLE consequence instead.
+  [ "$first" != "$second" ]
+  [[ "$second" == *"session_3"* ]]
+  [[ "$second" != *"session_5"* ]]
+}
+
+@test "the probing calls are SCOPED — --limit alone would bound nothing that costs" {
+  declare_n 3
+  printf '{"worker_status":"working"}\n' >"$STATUS_JSON"
+  # A recording pass-through, not a stub: the real cc-cloud's verdicts ARE the input under test.
+  printf '#!/usr/bin/env bash\necho "cc-cloud $*" >>"%s"\nexec "%s" "$@"\n' "$CALLS" "$CCLOUD" \
+    >"$STUBDIR/cc-cloud-rec"
+  chmod +x "$STUBDIR/cc-cloud-rec"
+  CC_RETURN_CLOUD_BIN="$STUBDIR/cc-cloud-rec" run bash "$SUT" --sweep --limit 1
+  [ "$status" -eq 0 ]
+  # 🚨 THE LOAD-BEARING ASSERTION. `poll` and `list --state` each spend one bounded ls-remote PER
+  # DECLARATION IN THE STORE. Unscoped, they stay O(every declaration ever created) — 583 today,
+  # +20-80/day — so a --limit that did not reach them would bound only the cheap half while the
+  # fixed cost went on growing underneath it, and the pass would still be unfinishable next month.
+  grep -q 'cc-cloud poll --only ' "$CALLS"
+  grep -q 'cc-cloud list --json --state --only ' "$CALLS"
+}
+
+# ══ A KILLED PASS MUST NOT WEDGE THE NEXT TWELVE TICKS ══════════════════════════════════════════
+
+# A pid that is certainly free: spawn, reap, reuse the number.
+dead_pid() { bash -c 'exit 0' & local p=$!; wait "$p" 2>/dev/null; printf '%s' "$p"; }
+
+@test "a lock whose HOLDER IS DEAD is reaped at once, even while its timestamp is fresh" {
+  declare_managed
+  seen_at $(( $(date +%s) - 10000 ))
+  mkdir -p "$CC_CLOUD_STATE/.return.lock"
+  dead_pid > "$CC_CLOUD_STATE/.return.lock/pid"
+  date +%s > "$CC_CLOUD_STATE/.return.lock/at"      # FRESH: the age window alone would refuse
+  run bash "$SUT" --sweep --dry-run
+  # This is the `4, 4, 4, 4, 4` run in the production timeline. `timeout -k` sends SIGKILL, the
+  # EXIT/INT/TERM trap cannot run on one, so the lock outlives every cut pass by construction — and
+  # a 3600 s age window against a 300 s cadence turned each kill into ~12 dead ticks.
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"reaping the lock"* ]] || [[ "${lines[*]}" == *"reaping"* ]]
+}
+
+@test "CONTROL: a lock held by a LIVE pid inside the window is still REFUSED (rc 4)" {
+  declare_managed
+  mkdir -p "$CC_CLOUD_STATE/.return.lock"
+  printf '%s\n' "$$" > "$CC_CLOUD_STATE/.return.lock/pid"   # this shell: certainly alive
+  date +%s > "$CC_CLOUD_STATE/.return.lock/at"
+  run bash "$SUT" --sweep --dry-run
+  # THE CONTROL THAT CAN FAIL. The instruction on this repair was explicit: do not widen the reap to
+  # where a genuinely concurrent pass could be stolen from. Without this arm, "reap harder" passes
+  # the test above by simply deleting every lock it meets, and two passes would then land the same
+  # branch concurrently — a strictly worse failure than the one being fixed.
+  [ "$status" -eq 4 ]
+  [ -d "$CC_CLOUD_STATE/.return.lock" ]
+}
+
+@test "an UNREADABLE holder is not called dead — it falls through to the age window" {
+  declare_managed
+  mkdir -p "$CC_CLOUD_STATE/.return.lock"
+  : > "$CC_CLOUD_STATE/.return.lock/pid"                    # no pid recorded at all
+  date +%s > "$CC_CLOUD_STATE/.return.lock/at"
+  run bash "$SUT" --sweep --dry-run
+  # A pid we cannot READ is a miss, not an absence: treating it as a dead holder would make an
+  # unstamped lock unstealable-from into always-stealable (memory: lookup-miss-is-not-absence).
+  [ "$status" -eq 4 ]
+}
+
+@test "a pass whose BOUND IS EXCEEDED leaves the lock reapable on the very next tick" {
+  declare_managed
+  seen_at $(( $(date +%s) - 10000 ))
+  # The real shape: `timeout -k 10 <bound>` escalating to SIGKILL, so no trap runs and the lock dir
+  # survives with its holder's pid in it. CC_RETURN_SLEEP is not a seam this script has, so the cut
+  # is produced the way production produces it — an external SIGKILL to a pass mid-flight.
+  bash "$SUT" --sweep --dry-run >/dev/null 2>&1 &
+  victim=$!
+  # Let it take the lock, then kill it the way its caller's `-k` does.
+  for _ in 1 2 3 4 5 6 7 8 9 10; do [ -d "$CC_CLOUD_STATE/.return.lock" ] && break; sleep 0.1; done
+  kill -9 "$victim" 2>/dev/null || true
+  wait "$victim" 2>/dev/null || true
+  if [ ! -d "$CC_CLOUD_STATE/.return.lock" ]; then
+    skip "the pass completed before it could be cut — this arm needs the lock still held"
+  fi
+  # THE DoD CLAUSE: the bound WAS exceeded, and the next tick must still be able to work.
+  run bash "$SUT" --sweep --dry-run
+  [ "$status" -eq 0 ]
+}

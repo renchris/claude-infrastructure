@@ -722,3 +722,160 @@ setup() {
   [ "$status" -eq 0 ]
   [ -f "$CC_CLOUD_STATE/absdecl.decl" ] || { echo "an unreachable remote turned into a refusal"; false; }
 }
+
+# ══ --only: THE SCOPE, because the probing verbs cost O(ALL DECLARATIONS EVER CREATED) ═══════════
+#
+# The defect (docs/plans/DRAIN_CIRCUIT_2026-09-01.md §3b A/D): `poll` and `list --state` each spend
+# one bounded ls-remote PER DECLARATION, and this store only grows — 17 rows on 2026-08-08, 583 on
+# 2026-09-01, +20-80/day, nothing ever removed. Timed live, `list --json --state` cost 210 s over
+# 583 rows, which with `poll` and the Background QoS tax consumed ~675 s of cloud-return's 900 s
+# bound before a single land was attempted. That is a cost CURVE, not a slow function: no bound
+# sized today survives the week, so the caller must be able to say which handful it can afford.
+
+@test "--only SCOPES the probing read; without it the whole store is walked" {
+  have_subject
+  local b; b="$(bare only1)"
+  push_ref "$b" claude/a >/dev/null
+  push_ref "$b" claude/b >/dev/null
+  cloud declare --id sa --branch claude/a --remote "$b" >/dev/null 2>&1
+  cloud declare --id sb --branch claude/b --remote "$b" >/dev/null 2>&1
+
+  # POSITIVE CONTROL FIRST, off the same fixture: unscoped, BOTH rows are there. Without this the
+  # scoped assertion below would pass just as well over a store that answers nothing at all —
+  # a filter that returns an empty set is indistinguishable from a broken read (lookup-miss-is-
+  # not-absence), and this suite's own header says an absence claim needs a firing pair.
+  run cloud list --json
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c '"id":"s[ab]"')" -eq 2 ]
+
+  run cloud list --json --only sa
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"id":"sa"'* ]]
+  [[ "$output" != *'"id":"sb"'* ]]
+}
+
+@test "--only scopes POLL too — the sidecar mutator is half the per-declaration cost" {
+  have_subject
+  local b; b="$(bare only2)"
+  push_ref "$b" claude/a >/dev/null
+  push_ref "$b" claude/b >/dev/null
+  cloud declare --id sa --branch claude/a --remote "$b" >/dev/null 2>&1
+  cloud declare --id sb --branch claude/b --remote "$b" >/dev/null 2>&1
+
+  run cloud poll --only sa
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"sa"* ]]
+  [[ "$output" != *"sb"* ]]
+  # The mutation is the observable, not the printed line: only the scoped id gets a sidecar. Scoping
+  # `list` alone would have left `poll` growing without bound underneath the caller's fixed budget.
+  [ -f "$CC_CLOUD_STATE/sa.seen" ]
+  [ ! -f "$CC_CLOUD_STATE/sb.seen" ]
+}
+
+@test "an EMPTY --only means NO SCOPE, never 'scope to nothing'" {
+  have_subject
+  local b; b="$(bare only3)"
+  push_ref "$b" claude/a >/dev/null
+  cloud declare --id sa --branch claude/a --remote "$b" >/dev/null 2>&1
+  run cloud list --json --only ""
+  [ "$status" -eq 0 ]
+  # The failure directions are not symmetric. "No scope" degrades to the behaviour this store has
+  # always had; "scope to nothing" would render a full store as an empty one — a silent all-clear
+  # over every pending row, produced by nothing worse than a quoting slip in a caller.
+  [[ "$output" == *'"id":"sa"'* ]]
+}
+
+@test "--only is a FILTER over the store, never a source of ids" {
+  have_subject
+  local b; b="$(bare only4)"
+  push_ref "$b" claude/a >/dev/null
+  cloud declare --id sa --branch claude/a --remote "$b" >/dev/null 2>&1
+  run cloud list --json --only "sa,ghost-never-declared"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"id":"sa"'* ]]
+  # An id the store does not hold must produce NO row. Iterating `--only` as an id list instead
+  # would let a caller's typo mint a phantom declaration — the opposite of what a filter is for.
+  [[ "$output" != *"ghost-never-declared"* ]]
+}
+
+# ══ gc: ARCHIVE, never delete, and only what is RETIRED and COLD ════════════════════════════════
+
+@test "gc archives a COLD RETIRED declaration and leaves a LIVE one untouched" {
+  have_subject
+  local b; b="$(bare gc1)"
+  push_ref "$b" claude/a >/dev/null
+  cloud declare --id cold --branch claude/a --remote "$b" >/dev/null 2>&1
+  cloud declare --id live --branch claude/a --remote "$b" >/dev/null 2>&1
+  cloud retire --id cold >/dev/null 2>&1
+  # Retired 30 days before the fixture clock.
+  printf 'retired_at=%s\n' "$((T0 - 30 * 86400))" > "$CC_CLOUD_STATE/cold.retired"
+
+  run cloud gc --days 14
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"archived cold"* ]]
+  [ -f "$CC_CLOUD_STATE/archive/cold.decl" ]
+  [ ! -f "$CC_CLOUD_STATE/cold.decl" ]
+  # A LIVE declaration is never touched at any age — this is the arm that keeps a GC from becoming
+  # the thing that loses the work it was meant to bound.
+  [ -f "$CC_CLOUD_STATE/live.decl" ]
+}
+
+@test "gc MOVES, it does not delete — the forensic record stays one mv away" {
+  have_subject
+  local b; b="$(bare gc2)"
+  push_ref "$b" claude/a >/dev/null
+  cloud declare --id cold --branch claude/a --remote "$b" >/dev/null 2>&1
+  cloud retire --id cold >/dev/null 2>&1
+  printf 'retired_at=%s\n' "$((T0 - 30 * 86400))" > "$CC_CLOUD_STATE/cold.retired"
+  printf 'sha=deadbeef\nsince=1\n' > "$CC_CLOUD_STATE/cold.seen"
+
+  run cloud gc --days 14
+  [ "$status" -eq 0 ]
+  # `id_for_item` and `ids_for_branch` DELIBERATELY do not skip retired declarations — a retired
+  # session is an ANSWER to "what happened to my item", and a delete would convert that terminal
+  # answer into ABSENCE, which every caller has to read as "cannot tell". Every sidecar travels
+  # with its declaration, so nothing is left behind to be read as a live orphan either.
+  [ -f "$CC_CLOUD_STATE/archive/cold.retired" ]
+  [ -f "$CC_CLOUD_STATE/archive/cold.seen" ]
+  [ ! -f "$CC_CLOUD_STATE/cold.seen" ]
+}
+
+@test "gc leaves a WARM retirement alone, and --dry-run writes nothing" {
+  have_subject
+  local b; b="$(bare gc3)"
+  push_ref "$b" claude/a >/dev/null
+  cloud declare --id warm --branch claude/a --remote "$b" >/dev/null 2>&1
+  cloud retire --id warm >/dev/null 2>&1
+  printf 'retired_at=%s\n' "$((T0 - 3600))" > "$CC_CLOUD_STATE/warm.retired"   # retired an hour ago
+  run cloud gc --days 14
+  [ "$status" -eq 0 ]
+  [ -f "$CC_CLOUD_STATE/warm.decl" ]
+
+  # POSITIVE CONTROL off the same fixture: age it past the window and the same command DOES act —
+  # otherwise "left alone" would be satisfied by a gc that can never archive anything.
+  printf 'retired_at=%s\n' "$((T0 - 30 * 86400))" > "$CC_CLOUD_STATE/warm.retired"
+  run cloud gc --days 14 --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"would-archive warm"* ]]
+  [ -f "$CC_CLOUD_STATE/warm.decl" ]          # --dry-run said so and wrote nothing
+  run cloud gc --days 14
+  [ "$status" -eq 0 ]
+  [ -f "$CC_CLOUD_STATE/archive/warm.decl" ]
+}
+
+@test "gc ABSTAINS on an unreadable retirement stamp, and COUNTS the abstention" {
+  have_subject
+  local b; b="$(bare gc4)"
+  push_ref "$b" claude/a >/dev/null
+  cloud declare --id nostamp --branch claude/a --remote "$b" >/dev/null 2>&1
+  cloud retire --id nostamp >/dev/null 2>&1
+  printf 'retired_at=not-a-number\n' > "$CC_CLOUD_STATE/nostamp.retired"
+
+  run cloud gc --days 14
+  [ "$status" -eq 0 ]
+  # A marker whose age cannot be READ is exactly the case where "is it cold?" has no answer, and
+  # acting on a non-verdict is the one move this store forbids everywhere else. The abstention is
+  # counted rather than silent, so it cannot read as "there was nothing to archive".
+  [ -f "$CC_CLOUD_STATE/nostamp.decl" ]
+  [[ "$output" == *"1 skipped"* ]]
+}
