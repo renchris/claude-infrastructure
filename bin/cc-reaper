@@ -625,7 +625,26 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
       # Verified as a fixture pair below (tests/cc-reaper.bats): the land shapes survive while an
       # unrelated orphan bash in the same closed world still dies, so the exemption cannot silently
       # widen into "nothing is collected".
-      wl="lead-supervisor|cc-dispatch|cc-discover|cc-reaper|qos-census|compressor-sentinel|postland-verify|session-search|devserver-gc|deploy-live|cc-relogin|lr-reset-poller|teammate-reap|capacity-alarm|power-policy|log-rotation|restic|worktree-gc|caffeinate|cc-await-ping|mailbox-wake-arm|ship-land|desk-land|kitty|tmux|iTerm|launchd"
+      # THE THIRD SPELLING OF THE LAND PATH (2026-09-01). The 08-16 fix above named ship-land and
+      # desk-land -- the INNER links -- and the 08-17 fix reached them through a bound. Both were
+      # right, and neither covered the OUTER driver of the CLOUD land path: cloud-return.sh, which
+      # autonomy-sweep.sh:1075 invokes on its 300 s cadence wrapped in a 900 s bound. So this arm
+      # went on collecting it -- 153 cloud-return rows in cc-reaper.log, as orphan-tool on the bound
+      # at age 899s and as orphan-bash on the payload at age 1955s -- with the receiving end logging
+      # Killed: 9 on that same line of autonomy-sweep.err.log. A land runs a full gate and outruns
+      # the 600 s floor by construction, so the landing sweep of the cloud lane was never once
+      # allowed to finish: 272 branches left ELIGIBLE-and-unlanded, and the backlog items behind them
+      # could not reach done. See docs/plans/DRAIN_CIRCUIT_2026-09-01.md section 1.1.
+      # cloud-reconcile is the manual CONFIRM=1 path to the same lander and is added with it, so the
+      # operator-run form is not collected either.
+      # This is denylist-enumerates-spellings-not-the-class, third instance, in the file that records
+      # it. The durable form would be a class test, but the class here is holding the landing lock,
+      # which is not a property visible in argv -- so an enumeration is still what this arm can check,
+      # and the honest mitigation is the fixture pair in tests/cc-reaper.bats, which fails loudly the
+      # next time a land shape arrives without a token.
+      # NOTE TO A FUTURE EDITOR: this comment block sits INSIDE a single-quoted awk program. No
+      # apostrophes, and no single quotes of any kind, may appear below this line in the block.
+      wl="lead-supervisor|cc-dispatch|cc-discover|cc-reaper|qos-census|compressor-sentinel|postland-verify|session-search|devserver-gc|deploy-live|cc-relogin|lr-reset-poller|teammate-reap|capacity-alarm|power-policy|log-rotation|restic|worktree-gc|caffeinate|cc-await-ping|mailbox-wake-arm|ship-land|desk-land|cloud-return|cloud-reconcile|kitty|tmux|iTerm|launchd"
       for (p in comm) {
         if (p in above) continue
         if (comm[p]=="claude.exe") continue
