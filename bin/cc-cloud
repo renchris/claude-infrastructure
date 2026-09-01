@@ -9,13 +9,17 @@
 #                                                    (--branch selects by declared branch, for a
 #                                                    caller about to DELETE that ref)
 #   cc-cloud retire  --id <id>                       terminal; the id stops being reconciled
-#   cc-cloud poll                                    advance the last-seen sidecar (the ONLY mutator)
+#   cc-cloud poll [--only <id,…>]                    advance the last-seen sidecar (the ONLY mutator)
+#   cc-cloud gc [--days N] [--dry-run]               ARCHIVE (never delete) cold retired declarations
 #   cc-cloud is-offbox <id>                          exit 0 iff <id> is declared and not retired
 #   cc-cloud show <id> | --item <backlog-id>         the declaration + its live state, human-readable
 #                                                    (--item resolves through the declaration's own
 #                                                    `item=` link; rc 1 = no declaration names it)
-#   cc-cloud list [--json] [--state]                 the declaration inventory from DISK — no probe
-#                                                    (--state opts INTO the state function, §9.3)
+#   cc-cloud list [--json] [--state] [--only <id,…>] the declaration inventory from DISK — no probe
+#                                                    (--state opts INTO the state function, §9.3;
+#                                                     --only SCOPES the population, because --state
+#                                                     costs one ls-remote PER DECLARATION and this
+#                                                     store only grows — see `only_set` below)
 #   cc-cloud --json | --table | --check | --selftest
 #
 # ── ONE tool, because two reading one observable set is worse than either ─────────────────────────
@@ -252,6 +256,43 @@ ids() { # every declared, non-retired id, sorted
     [ -f "$STATE/$b.retired" ] && continue
     printf '%s\n' "$b"
   done | sort
+}
+
+# ── --only — THE SCOPE, because the probing verbs cost O(ALL DECLARATIONS EVER CREATED) ───────────
+# `poll` and `list --state` each spend one bounded `ls-remote` PER DECLARATION, and this store only
+# grows: 17 declarations on 2026-08-08, 583 on 2026-09-01, +20-80/day. Timed live against the real
+# store on 2026-09-01, `list --json --state` alone took 210 s over 583 rows (0.36 s/row) and `poll`
+# adds another ls-remote per non-retired row — so the CALLER's fixed cost, before it does a single
+# unit of actual work, was ~675 s of the 900 s bound `autonomy-sweep` gives it, and it rose every
+# day. That is a cost curve, not a slow function: no bound sized today survives next week.
+#
+# The scope is therefore a property of the VERB, not of the caller. A caller that has already
+# decided on DISK which handful of ids it can afford this tick says so, and the probe population
+# becomes that handful. Without `--only` every verb behaves exactly as before — this is additive,
+# and the unscoped form stays the one a human runs.
+#
+# IT IS A FILTER OVER THE STORE, NEVER A SOURCE OF IDS. An id named in `--only` that is not declared
+# (or is retired, where the verb already skips retired) simply does not appear — the same answer the
+# store gives for any id it does not hold. Reading `--only` as an id list to iterate instead would
+# make a caller's typo mint a phantom row, which is the opposite of what a filter is for.
+ONLY_SET=""
+only_set() { # <comma/space/newline-separated ids> → sets ONLY_SET (empty arg = no scoping)
+  # 🚨 AN EMPTY --only MEANS "NO SCOPE", NOT "SCOPE TO NOTHING", and the distinction is load-bearing
+  # in the caller's failure direction. cloud-return builds this list from a disk-side selection that
+  # can legitimately be empty; if empty meant "match nothing" the caller would still be safe, but if
+  # a QUOTING slip ever passed an empty string where a list was meant, "no scope" degrades to the
+  # unscoped behaviour this store has always had, whereas "scope to nothing" would render a full
+  # store as an empty one — a silent all-clear over 466 pending rows. The caller therefore never
+  # calls the probing verbs at all when its selection is empty (it exits first), and this default
+  # is the one that cannot manufacture a false emptiness (memory: lookup-miss-is-not-absence).
+  local raw; raw="$(printf '%s' "${1:-}" | tr ' \t\n' ',,,')"
+  [ -n "$raw" ] || { ONLY_SET=""; return 0; }
+  ONLY_SET=",$raw,"
+}
+in_only() { # <id> → 0 if unscoped or the id is in scope, 1 otherwise
+  [ -n "$ONLY_SET" ] || return 0
+  case "$ONLY_SET" in *",$1,"*) return 0 ;; esac
+  return 1
 }
 
 # ── id_for_item — the BACKLOG-SIDE lookup, so a caller holding a work item can reach its session ──
@@ -845,9 +886,18 @@ cmd_retire() {
 # writer; keeping it out of --json is what lets the renderers stay pure reads.
 cmd_poll() {
   local id f sha rc prev n seen
+  ONLY_SET=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --only)   only_set "${2:-}"; shift 2 ;;
+      --only=*) only_set "${1#--only=}"; shift ;;
+      *) echo "cc-cloud poll: unknown arg $1" >&2; return 2 ;;
+    esac
+  done
   n="$(now)"
   while IFS= read -r id; do
     [ -n "$id" ] || continue
+    in_only "$id" || continue
     f="$STATE/$id.decl"; seen="$STATE/$id.seen"
     sha="$(remote_sha "$(dfield "$f" repo)" "$(dfield "$f" remote)" "$(dfield "$f" branch)")"; rc=$?
     [ "$rc" -eq 0 ] || { printf 'UNKNOWN %s (sensor failed — sidecar untouched)\n' "$id"; continue; }
@@ -860,6 +910,68 @@ cmd_poll() {
       printf 'unchanged %s at %.7s\n' "$id" "$sha"
     fi
   done < <(ids)
+}
+
+# ── gc — ARCHIVE, never delete, and only what is RETIRED and COLD ────────────────────────────────
+# The store is append-only by construction: every fire mints a declaration and nothing has ever
+# removed one, so `list` walks 583 files to answer a question about ~20 live sessions and the walk
+# grows 20-80 rows a day. `--only` above bounds what gets PROBED; this bounds what gets WALKED, so
+# the disk read stops being a function of history too.
+#
+# 🚨 IT MOVES, IT DOES NOT DELETE, and that is the whole design. `id_for_item` and `ids_for_branch`
+# DELIBERATELY do not skip retired declarations — their headers say why: a retired session is an
+# ANSWER to "what happened to my item", and dropping it converts a terminal answer into ABSENCE,
+# which every caller must treat as "cannot tell". A delete would silently do exactly that. An
+# archive keeps every byte one `mv` away, so the forensic answer still exists and is reachable, and
+# a mistake here is reversible by hand rather than by a restore.
+#
+# TWO CONDITIONS, BOTH REQUIRED. `.retired` is the declaration's own terminal marker — the only
+# statement this store makes that cannot decay (every arm of the state function is a function of the
+# clock, which is why `list` refuses to replay a stored verdict at all). And COLD: the retirement
+# must be older than the window, because a session retired four minutes ago may still be the subject
+# of a consumer's in-flight read. A live declaration is never touched at any age.
+#
+# The window is generous on purpose (14 d). This reclaims a walk, not disk — there is no pressure
+# that a shorter window would relieve, and the cost of being wrong is a forensic answer that moved.
+cmd_gc() { # [--days N] [--dry-run] → archives cold retired declarations under $STATE/archive/
+  local days="${CC_CLOUD_GC_DAYS:-14}" dry=0 f b rt age n=0 skipped=0 arch cutoff now_s
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --days)    days="${2:-14}"; shift 2 ;;
+      --days=*)  days="${1#--days=}"; shift ;;
+      --dry-run) dry=1; shift ;;
+      *) echo "cc-cloud gc: unknown arg $1" >&2; return 2 ;;
+    esac
+  done
+  case "$days" in ''|*[!0-9]*) echo "cc-cloud gc: --days wants an integer" >&2; return 2 ;; esac
+  [ -d "$STATE" ] || { printf 'gc: no state dir — nothing declared\n'; return 0; }
+  arch="$STATE/archive"; now_s="$(now)"; cutoff=$(( days * 86400 ))
+  for f in "$STATE"/*.decl; do
+    [ -f "$f" ] || continue
+    b="${f##*/}"; b="${b%.decl}"
+    [ -f "$STATE/$b.retired" ] || continue                 # live: never touched, at any age
+    rt="$(dfield "$STATE/$b.retired" retired_at)"
+    # An unparseable or absent stamp is NOT a licence to archive: a marker whose age cannot be read
+    # is exactly the case where "is it cold?" has no answer, and acting on a non-verdict is the one
+    # move this store forbids everywhere else. It is COUNTED, so the abstention is visible.
+    case "$rt" in ''|*[!0-9]*) skipped=$((skipped + 1)); continue ;; esac
+    age=$(( now_s - rt )); [ "$age" -lt 0 ] && age=0
+    [ "$age" -ge "$cutoff" ] || continue
+    if [ "$dry" = 1 ]; then
+      printf 'would-archive %s (retired %sd ago)\n' "$b" "$(( age / 86400 ))"
+    else
+      mkdir -p "$arch" 2>/dev/null || { echo "cc-cloud gc: cannot create $arch" >&2; return 1; }
+      # Every sidecar moves with its declaration — .retired, .seen, .returned, .land-refused — so
+      # the archived set is the WHOLE record of that session and nothing is left behind to be read
+      # as a live orphan by a consumer globbing one suffix.
+      mv "$STATE/$b".* "$arch/" 2>/dev/null || { skipped=$((skipped + 1)); continue; }
+      printf 'archived %s (retired %sd ago)\n' "$b" "$(( age / 86400 ))"
+    fi
+    n=$((n + 1))
+  done
+  printf 'gc: %s declaration(s) %s · %s skipped (unreadable retirement stamp) · window %sd · archive %s\n' \
+    "$n" "$([ "$dry" = 1 ] && printf 'would be archived' || printf 'archived')" "$skipped" "$days" "$arch"
+  return 0
 }
 
 # THE PRIMITIVE the three lying instruments need. Exit 0 means "this id is running off-box, so your
@@ -1013,11 +1125,14 @@ all_ids() {
 cmd_list() {
   local fmt="table" probe=0 id f seen branch remote item dat base bprobe lsha lsince n age any=0
   local url line state detail rcmd
+  ONLY_SET=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --json)  fmt=json; shift ;;
-      --table) fmt=table; shift ;;
-      --state) probe=1; shift ;;
+      --json)   fmt=json; shift ;;
+      --table)  fmt=table; shift ;;
+      --state)  probe=1; shift ;;
+      --only)   only_set "${2:-}"; shift 2 ;;
+      --only=*) only_set "${1#--only=}"; shift ;;
       *) echo "cc-cloud list: unknown arg $1" >&2; return 2 ;;
     esac
   done
@@ -1031,6 +1146,7 @@ cmd_list() {
   fi
   while IFS= read -r id; do
     [ -n "$id" ] || continue
+    in_only "$id" || continue
     any=1
     f="$STATE/$id.decl"; seen="$STATE/$id.seen"
     branch="$(dfield "$f" branch)"
@@ -1277,6 +1393,7 @@ case "${1:-}" in
   fill-paths) shift; cmd_fill_paths "$@"; exit $? ;;
   retire)     shift; cmd_retire "$@"; exit $? ;;
   poll)       shift; cmd_poll "$@"; exit $? ;;
+  gc)         shift; cmd_gc "$@"; exit $? ;;
   is-offbox)  shift; cmd_is_offbox "${1:-}"; exit $? ;;
   show)       shift; cmd_show "$@"; exit $? ;;
   list)       shift; cmd_list "$@"; exit $? ;;
@@ -1301,7 +1418,7 @@ case "${1:-}" in
   --selftest) do_selftest; exit $? ;;
   -h|--help)  sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   --json|--table|--check) ;;
-  "")  echo "cc-cloud: pick a verb (preflight|declare|fill-paths|retire|poll|is-offbox|show|list|inbox|--json|--table|--check|--selftest)" >&2; exit 2 ;;
+  "")  echo "cc-cloud: pick a verb (preflight|declare|fill-paths|retire|poll|gc|is-offbox|show|list|inbox|--json|--table|--check|--selftest)" >&2; exit 2 ;;
   *)   echo "cc-cloud: unknown arg $1" >&2; exit 2 ;;
 esac
 

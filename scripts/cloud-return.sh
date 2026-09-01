@@ -96,17 +96,27 @@ RECONCILE_BIN="${CC_RETURN_RECONCILE_BIN:-$ROOT/scripts/cloud-reconcile.sh}"
 STATUS_BIN="${CC_RETURN_STATUS_BIN:-$ROOT/scripts/cloud-create-api.py}"
 
 MODE="" ONE="" DRY=0
+# THE PER-TICK BOUND. Default 25, not unlimited, because the failure this fixes is a pass that could
+# never finish: measured 2026-09-01, `--sweep` over 466 managed declarations spent ~675 s of its
+# caller's 900 s bound on FIXED cost before attempting a single land, and was SIGKILLed every time
+# (`cloud_return_rc` timeline: 137, 4, 4, 4, 4, 4, 137, 137, 137 — no success since 2026-08-24).
+# An unbounded default would leave that true for anyone who forgets the flag, so the safe value is
+# the default and `--limit 0` is the explicit opt-out. `--id` is unaffected: a person named one.
+LIMIT="${CC_RETURN_LIMIT:-25}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --sweep) MODE=sweep; shift ;;
     --id) MODE=one; ONE="${2:-}"; shift 2 ;;
     --id=*) MODE=one; ONE="${1#--id=}"; shift ;;
+    --limit) LIMIT="${2:-}"; shift 2 ;;
+    --limit=*) LIMIT="${1#--limit=}"; shift ;;
     --dry-run) DRY=1; shift ;;
     -h|--help) sed -n '2,40p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "cloud-return: unknown argument '$1'" >&2; exit 2 ;;
   esac
 done
 [ -n "$MODE" ] || { echo "cloud-return: pass --sweep or --id <session-id>" >&2; exit 2; }
+case "$LIMIT" in ''|*[!0-9]*) echo "cloud-return: --limit wants a non-negative integer (0 = unbounded)" >&2; exit 2 ;; esac
 [ -n "$CLOUD_BIN" ] || { echo "cloud-return: cc-cloud not found — the declaration store is unreadable" >&2; exit 3; }
 command -v jq >/dev/null 2>&1 || { echo "cloud-return: jq required" >&2; exit 3; }
 
@@ -127,18 +137,58 @@ ledger() { # <id> <outcome> <detail-json-object>
 # A land can outlast the 300 s sweep cadence, so two passes CAN overlap. The lock is a directory
 # (atomic on every filesystem this runs on) with an age-based reap: a pass killed by its caller's
 # timeout must not wedge the rail forever, which is the failure mode a lockfile without a reaper has.
+#
+# 🚨 THE AGE REAP ALONE WAS THE SECOND KILL IN THE CHAIN, AND IT COST TWELVE TICKS PER INCIDENT.
+# The trap below is `EXIT INT TERM` — none of which run on SIGKILL — and this caller bounds the pass
+# with `timeout -k 10 900`, whose `-k` is precisely a SIGKILL. So every cut pass left the lock
+# directory behind by construction, and a 3600 s reap window against a 300 s cadence meant the next
+# ~12 ticks all exited 4 without doing one unit of work. That is the run of `4`s in the caller's own
+# journal (`cloud_return_rc`: 137, 4, 4, 4, 4, 4, 137, …) — the kill is the event, and the eleven
+# following non-events are this window.
+#
+# TWO REPAIRS, AND THE FIRST IS THE REAL ONE.
+#
+# (1) ASK WHETHER THE HOLDER IS ALIVE. The lock already recorded its holder's pid and nothing ever
+#     read it. A pid that no longer exists is a DEAD holder — a fact, available immediately, that no
+#     amount of waiting improves — so the reap is instant and the SIGKILL costs zero ticks instead
+#     of twelve. Pid reuse is the standing objection and it is handled rather than hoped away: a
+#     LIVE pid still has to satisfy the age window below, so a recycled pid can at worst restore the
+#     old timeout behaviour, never steal from a running pass.
+#
+# (2) SIZE THE WINDOW TO THE CALLER'S BOUND, NOT TO A ROUND NUMBER. 3600 s was never derived from
+#     anything this script does. The pass is bounded by its caller at 900 s (+10 s for the `-k`
+#     grace), so a genuinely-running pass CANNOT exceed that; anything older is dead whatever its
+#     pid says. `CC_RETURN_LOCK_TTL_S` defaults to 1200 s — the caller's bound plus a third — which
+#     is narrower than 3600 s, not wider. Narrowing matters: the instruction here was explicitly not
+#     to widen the window to where a genuinely concurrent pass could be stolen from, and a
+#     pid-liveness check plus a bound-derived TTL is the shape that reaps faster while stealing
+#     less. A caller that bounds differently sets the env var; hardcoding its number here would be
+#     this repo's resident-rule-restates-a-perishable-fact defect in a lock.
 LOCK="$STATE/.return.lock"
+LOCK_TTL_S="${CC_RETURN_LOCK_TTL_S:-1200}"
+case "$LOCK_TTL_S" in ''|*[!0-9]*) LOCK_TTL_S=1200 ;; esac
 lock_acquire() {
   mkdir -p "$STATE" 2>/dev/null || return 1
   if mkdir "$LOCK" 2>/dev/null; then printf '%s\n' "$$" >"$LOCK/pid" 2>/dev/null; return 0; fi
-  local age start
+  local age start pid why=""
   start="$(cat "$LOCK/at" 2>/dev/null)"; case "$start" in ''|*[!0-9]*) start=0 ;; esac
   age=$(( $(now) - start ))
-  if [ "$start" -gt 0 ] && [ "$age" -lt 3600 ]; then return 1; fi
-  # Stale (or never stamped): take it over and say so, rather than refusing forever.
-  warn "reaping a lock held for ${age}s — a previous pass did not release it"
+  pid="$(cat "$LOCK/pid" 2>/dev/null | head -1)"; case "$pid" in ''|*[!0-9]*) pid="" ;; esac
+  # A holder we can PROVE is gone is reaped now. `kill -0` is the liveness question and nothing
+  # else: rc 0 = alive, anything else = not ours to wait for. An UNREADABLE pid is deliberately not
+  # treated as dead — that is a miss, not an absence, and it falls through to the age window, which
+  # is the arm that can still decide it (memory: lookup-miss-is-not-absence).
+  if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+    why="its holder (pid $pid) is gone — a killed pass runs no EXIT trap"
+  elif [ "$start" -gt 0 ] && [ "$age" -lt "$LOCK_TTL_S" ]; then
+    return 1
+  else
+    why="it has been held for ${age}s, past the ${LOCK_TTL_S}s window"
+  fi
+  warn "reaping the lock: $why"
   rm -rf "$LOCK" 2>/dev/null
   mkdir "$LOCK" 2>/dev/null || return 1
+  printf '%s\n' "$$" >"$LOCK/pid" 2>/dev/null
   return 0
 }
 # shellcheck disable=SC2329
@@ -658,15 +708,94 @@ else
     say "(no MANAGED cloud declarations — a fire opts in by recording notify_back/custody at declare time)"
     exit 0
   fi
+
+  # ── THE WORKING SET: still-pending, NEWEST FIRST, cursor-rotated, then bounded ──────────────────
+  # Every step here is a DISK read. That placement is the whole point: the admission decision above
+  # already costs one directory walk, and deciding WHICH handful to probe has to happen on the same
+  # side of the network boundary, or the bound cannot bound anything.
+  #
+  # 1. DROP WHAT IS ALREADY LATCHED. `handle()`'s first act is to short-circuit on `<id>.returned` —
+  #    but it does that AFTER this script has already paid a poll and a state probe for that id.
+  #    Filtering here is the same verdict, taken one file-existence check earlier, on the side of the
+  #    boundary where it is free.
+  # 2. NEWEST FIRST. Staleness compounds rather than merely accumulating: the oldest ELIGIBLE branch
+  #    (14 d) hit a rebase conflict on its dry run while recent ones were clean, so an oldest-first
+  #    order spends the whole per-tick budget on the branches least likely to land and never reaches
+  #    the ones that would (docs/plans/DRAIN_CIRCUIT_2026-09-01.md §2 "Known-clean vs known-conflicting").
+  # 3. THE CURSOR, WHICH IS WHY NEWEST-FIRST DOES NOT STARVE THE TAIL. Newest-first plus a fixed
+  #    limit would re-examine the same head every tick forever and the older 90% would never be
+  #    looked at again — a cap that reads as coverage, which is precisely the failure this whole
+  #    change exists to end. The cursor is an offset into the ordered working set, advanced by the
+  #    size of each pass and wrapped at the end, so the tail is reached on a later tick rather than
+  #    never. It is deliberately an OFFSET and not a remembered id: the set churns underneath it
+  #    (new fires prepend, returns drop out), and an offset degrades to "start somewhere else next
+  #    time", which is self-healing, where a dangling id would need its own miss-vs-absence rule.
+  WANT="$(printf '%s\n' "$WANT" | while IFS= read -r _r; do
+      [ -n "$_r" ] || continue
+      _i="$(printf '%s' "$_r" | jq -r '.id')"
+      [ -f "$STATE/$_i.returned" ] && continue
+      printf '%s\n' "$_r"
+    done)"
+  WANT="$(printf '%s\n' "$WANT" | jq -sc 'map(select(. != null)) | sort_by(.declared_at // 0) | reverse | .[]' 2>/dev/null)"
+  if [ -z "$WANT" ]; then
+    say "(every MANAGED cloud declaration has already been returned — nothing pending)"
+    exit 0
+  fi
+  TOTAL="$(printf '%s\n' "$WANT" | grep -c . || true)"
+
+  CURSOR_F="$STATE/.return.cursor"
+  CURSOR="$(cat "$CURSOR_F" 2>/dev/null | head -1)"; case "$CURSOR" in ''|*[!0-9]*) CURSOR=0 ;; esac
+  [ "$CURSOR" -lt "$TOTAL" ] || CURSOR=0
+
+  if [ "$LIMIT" -gt 0 ] && [ "$TOTAL" -gt "$LIMIT" ]; then
+    # The offset window, taken with awk rather than `tail -n +K | head -n N`. A window that runs off
+    # the end is NOT wrapped around to the head in the same pass: a short final slice simply resets
+    # the cursor, so no id is examined twice in one tick and the next tick starts clean at the top.
+    #
+    # 🚨 awk BECAUSE `head` CLOSES THE PIPE AND `printf` IS STILL WRITING. `head -n 25` exits the
+    # moment it has its 25 lines, so the upstream `printf` of all 468 rows takes SIGPIPE and prints
+    # `printf: write error: Broken pipe` to stderr — observed on the first live run of this pass.
+    # Here it was only noise, because the substitution had already captured what it needed and this
+    # script does not run under `set -e`. It is still fixed rather than tolerated: under `pipefail`
+    # a truncating consumer makes the pipeline's rc the WRITER's failure, which is exactly how a
+    # producer that succeeded gets read as a producer that failed (memory:
+    # grep-q-under-pipefail-inverts-the-verdict). awk consumes the whole stream, so nothing closes
+    # early and there is no signal to misread.
+    WANT="$(printf '%s\n' "$WANT" | awk -v s="$((CURSOR + 1))" -v n="$LIMIT" 'NR >= s && NR < s + n')"
+    TAKEN="$(printf '%s\n' "$WANT" | grep -c . || true)"
+    NEXT=$((CURSOR + TAKEN)); [ "$NEXT" -lt "$TOTAL" ] || NEXT=0
+    DEFERRED=$((TOTAL - TAKEN))
+  else
+    TAKEN="$TOTAL"; NEXT=0; DEFERRED=0
+  fi
+  printf '%s\n' "$NEXT" >"$CURSOR_F" 2>/dev/null || true
+
+  # 🚨 NEVER A SILENT CAP. A bounded pass that says nothing about what it skipped reads exactly like
+  # a pass that covered everything, and a reader of this ledger would conclude the lane was drained
+  # when it had examined 25 of 466. The deferral is therefore a first-class ledger row with the
+  # cursor position in it, so "we are working through a backlog" and "there is no backlog" can never
+  # be confused for one another (memory: zero-claim-must-name-its-excluded-strata).
+  say "cloud-return: $TAKEN of $TOTAL pending managed session(s) this pass (cursor $CURSOR → $NEXT, $DEFERRED deferred, limit ${LIMIT})"
+  ledger "-" pass-scope "$(jq -cn --argjson t "$TOTAL" --argjson k "$TAKEN" --argjson d "$DEFERRED" \
+    --argjson c "$CURSOR" --argjson n "$NEXT" --argjson l "$LIMIT" \
+    '{pending_total:$t, taken:$k, deferred:$d, cursor_from:$c, cursor_to:$n, limit:$l}')"
 fi
 
-# Only now — with a non-empty population — does the network get touched. `poll` is the ONLY writer
-# of the push-history sidecar and step 3 cannot decide anything without it; calling the owner's
-# mutator is the point, since a local copy of "has this sha moved" would be a second opinion about
-# the one fact this rail turns on.
-"$CLOUD_BIN" poll >/dev/null 2>&1 || warn "cc-cloud poll did not complete; quiet windows may read as unmeasured"
+# Only now — with a non-empty, BOUNDED population — does the network get touched. `poll` is the ONLY
+# writer of the push-history sidecar and step 3 cannot decide anything without it; calling the
+# owner's mutator is the point, since a local copy of "has this sha moved" would be a second opinion
+# about the one fact this rail turns on.
+#
+# 🚨 BOTH PROBING CALLS ARE SCOPED TO THE WORKING SET, and scoping them is what makes the bound real.
+# Unscoped, each of these costs one `ls-remote` PER DECLARATION IN THE STORE — 583 today, +20-80/day
+# — so `--limit` would have bounded only the cheap part while the fixed cost went on growing without
+# limit underneath it. Timed live 2026-09-01: `list --json --state` 210 s over 583 rows, `poll` a
+# second pass of the same shape, ~675 s of a 900 s budget consumed before the first land. `--only`
+# makes both O(the working set), which is bounded by construction.
+SCOPE="$(printf '%s\n' "$WANT" | jq -r '.id' 2>/dev/null | tr '\n' ',')"
+"$CLOUD_BIN" poll --only "$SCOPE" >/dev/null 2>&1 || warn "cc-cloud poll did not complete; quiet windows may read as unmeasured"
 
-ROWS="$("$CLOUD_BIN" list --json --state 2>/dev/null)"
+ROWS="$("$CLOUD_BIN" list --json --state --only "$SCOPE" 2>/dev/null)"
 [ -n "$ROWS" ] || { warn "the state read returned nothing after a non-empty inventory — abstaining"; exit 0; }
 
 # Re-select the same ids from the STATE-bearing rows: the admission decision was made on disk, and

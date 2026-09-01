@@ -5,7 +5,9 @@
 # a desk WAKE. launchd-runnable (a 300s tick) and supervisor-callable.
 #
 # Each run:
-#   0. D4 author-death JOIN: teardown INTENT markers with no close OUTCOME whose pane is still
+#   0a. CLOUD RETURN: land finished cloud work FIRST — measured, this sweep is TERMed as garbage
+#       at ~1400 s and never reached its lower half (see the placement note at that block).
+#   0b. D4 author-death JOIN: teardown INTENT markers with no close OUTCOME whose pane is still
 #      present become synthetic `handoff-orphan` records (see § D4 below).
 #   1. Collect NEW records (deduped by a per-record .seen marker) from:
 #        pages/                  supervisor page stamps
@@ -226,7 +228,223 @@ file_mtime() { # <file> → epoch seconds | 0   (BSD `stat -f`, GNU `stat -c`)
   printf '%s' "$m"
 }
 
-# ── 0. D4 — AUTHOR-DEATH JOIN ─────────────────────────────────────────────────────────────────────
+# ── HOISTED HELPERS — §0a below is now the highest block that needs them ─────────────────────────
+# These were defined at §2b, which used to be the highest block with an external call. §0a is now
+# higher and needs them for the identical reason §2b gave: sweep_bounded() and its TIMEOUT_BIN are
+# defined ~500 lines BELOW here, and bash resolves a function only at CALL time, so invoking it up
+# here would exit 127 "command not found" — and with `set -e` not in force (line 44 is
+# `set -uo pipefail`) that is SILENT, journalled as if it were the callee's own verdict. A broken
+# caller would read exactly like a clean fleet. So the high blocks bring their own bound.
+_sw="${BASH_SOURCE[0]}"
+while [ -L "$_sw" ]; do
+  _swd="$(cd "$(dirname "$_sw")" && pwd)"; _sw="$(readlink "$_sw")"
+  case "$_sw" in /*) ;; *) _sw="$_swd/$_sw" ;; esac
+done
+_SWEEP_DIR="$(cd "$(dirname "$_sw")" && pwd)"
+# Same bare-name lookup as TIMEOUT_BIN's, and the same refutation applies verbatim — measured
+# 2026-08-30 by eval'ing THIS line under the environment the plist actually builds: non-empty,
+# /opt/homebrew/bin/timeout. See the block above TIMEOUT_BIN for the measurement, the mute control
+# and the reason the "launchd PATH is minimal" reading was wrong. This site has now been cited as
+# :505 and as :547 — A LINE NUMBER IS A COORDINATE IN A FILE PEOPLE EDIT; re-grep `^_tmo=`.
+_tmo="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
+# 🚨 THE BOUND IS SIZED FOR THE BAND THIS ACTUALLY RUNS IN, NOT FOR THE BENCH (2026-08-12).
+# The 60 s bound was chosen in a foreground shell. This sweep runs from launchd under
+# `ProcessType: Background` + `Nice 5` — the Darwin background QoS band, live PRI 4, confined to the
+# E-cores. Same work, same box, same minute, measured three ways:
+#     foreground 17.5 s   ·   BACKGROUND 68.1 s   ·   utility 20.3 s
+# So `--fold` overran a 60 s bound by ~8 s on EVERY sweep and returned rc 124 — 10 of 10 recorded
+# runs carry `fold_rc:"124"` / `fold_conservation:"no-verdict"`. The consequence is not a slow probe,
+# it is an UNREACHABLE FLIP CRITERION: the §2b caller says to switch `--fold` to `--fold --apply`
+# "when fold_conservation has read `ok` across a run of sweeps", and run to completion the fold
+# reports `conservation=ok · 19 groups seen · 18 would fold · 0 ambiguous` — the criterion is already
+# satisfied and no instrument on this box could observe it.
+# (MEMORY: bound-must-fit-the-band-not-the-bench, and cap-whose-population-is-empty — the GREEN
+# state did not exist.)
+#
+# Two changes; the first is the load-bearing one. Run these probes at `utility` instead of inheriting
+# Background — the band every other actuator here already moved to
+# (launchd/com.claude.postland-verify.plist:62). That is NOT a promotion to foreground: it lifts the
+# E-core confinement and nothing else, so the sweep still yields to the operator's work. The bound
+# then goes to 180 s — 2.6× the measured background cost, 8.9× the measured utility cost — so it
+# remains a real bound while fitting the worst band ever observed rather than the best.
+_qos=""; [ -x /usr/sbin/taskpolicy ] && _qos=/usr/sbin/taskpolicy   # fail-open: no taskpolicy ⇒ plain exec
+_bounded() {
+  if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then
+    ${_qos:+$_qos -c utility} "$_tmo" -k 5 "${CC_SWEEP_BOUND_S:-180}" "$@"
+  else
+    ${_qos:+$_qos -c utility} "$@"
+  fi
+}
+
+# ── 0a. CLOUD RETURN — FIRST, because a block this sweep never REACHES does nothing ──────────────
+# 🚨 WHY THIS IS THE FIRST THING THE SWEEP DOES, AND IT IS A MEASUREMENT, NOT A PREFERENCE.
+# This block was §2d — after the D4 join, the page/alarm collection, the expire-sweep actuator, the
+# backlog-health probes and the config-parity check. Every one of those comments argues, correctly,
+# for being ABOVE the nothing-new early exit. None of them noticed that being above that exit is
+# worth nothing if control never arrives at all.
+#
+# Measured 2026-09-01 over the live IDL, window 01:12→05:17Z (~4 h ≈ 48 ticks at the 300 s cadence),
+# filtering `tool=="autonomy-sweep"`:
+#
+#     join            6 rows          ← §0, the first block
+#     backlog-health  0 rows          ← §2b
+#     config-parity   0 rows          ← §2c
+#     cloud-return    0 rows          ← THIS block, which is unconditional and logs even when it skips
+#
+# `log_idl cloud-return` below is UNCONDITIONAL — every path through here journals, including
+# `skipped-not-deployed` — so zero rows cannot mean "it ran and had nothing to do". It means control
+# never got here. Corroborated from the other side, in `~/.claude/logs/cc-reaper.log`:
+# `autonomy-sweep.sh` is that log's single largest subject at 719 TERM rows, collected as
+# `orphan-bash` at ages 1362-2063 s. So the sweep is started every 300 s, runs for ~25-35 minutes,
+# is killed as garbage long before its lower half, and has been for weeks.
+#
+# THAT MAKES ORDER THE FIX, not a tuning knob. Run at t≈0 s this block completes inside its own
+# 900 s bound with ~450 s of margin against the EARLIEST kill ever recorded (1362 s); run at §2d it
+# was reached about once in 48 ticks (docs/plans/DRAIN_CIRCUIT_2026-09-01.md §3b C). Nothing below
+# depends on anything this block sets except the refusal router immediately after it, which travels
+# with it, so the move is order-only.
+#
+# WHY NOT INSTEAD WHITELIST THE SWEEP IN cc-reaper, which is the apparently-obvious fix: the reaper
+# is currently this job's ONLY watchdog. launchd does not stack a second instance of a running job,
+# so a sweep that hangs stops the cadence entirely, and today the TERM at ~1400 s is what lets the
+# next tick start. Exempting it would convert a periodic job into a permanently wedged one — a
+# strictly worse failure, and unlike this reordering it is not order-only. The sweep's own runtime
+# is a real defect and it is FILED rather than fixed here (see the close), because fixing it means
+# giving the sweep a self-bound, which is a different change with a different blast radius.
+#
+# ── everything below this line is the §2d rationale, unchanged, and still true ────────────────────
+# A cloud session finishing has no way to reach this box: no pane, no pid, no transcript, and the
+# VM has no route home except the git remote it cloned from. So SOMETHING local has to notice, land
+# the result and wake the originator — and it cannot be the originator, because a goal-armed session
+# may not hold a backgrounded watcher at all (Claude Code skips /goal evaluation while any
+# non-terminal background Bash exists, and hooks/validate-bash.sh denies the park outright). This
+# job is loaded, runs every 300 s, and is not a session, which is exactly the shape that gap needs.
+#
+# ABOVE THE nothing-new EARLY EXIT, and now above everything else, for a reason that only sharpened:
+# a finished cloud session produces NO page and NO alarm — it is silent by construction — so wiring
+# the return below that gate would run it only on sweeps that already had other news, i.e. never on
+# the quiet fleet where the work is actually sitting.
+#
+# 🚨 THE BOUND MUST FIT A LAND, AND 240 s DID NOT. This shipped at 240 s "to stay under the 300 s
+# cadence", which sounded disciplined and was exactly backwards: `ship-land` runs the full gate and
+# takes minutes (592 s worst case on record), so the bound cut a healthy land at 240 s and the
+# return path filed the SIGTERM as a gate refusal — a bound smaller than what it bounds can only
+# convict (memory: exoneration-bound-must-fit-what-it-bounds). It is now 900 s, sized to the thing
+# it actually bounds. Overlap is not the hazard the old comment imagined: launchd does not stack a
+# second instance of a running job, and the pass is single-flight (lock, exit 4) and idempotent, so
+# a long land simply means fewer sweeps while it runs. The return path also now abstains on
+# 124/137/143 rather than convicting, so even a cut leaves no false artifact.
+#
+# 🚨 AND THE PASS MUST FIT THE BOUND, WHICH IS THE OTHER HALF AND WAS MISSING (2026-09-01).
+# A bound that fits one land is still useless if the pass cannot reach its first land. Timed live:
+# `cc-cloud list --json --state` cost 210 s over 583 declarations, `poll` a second walk of the same
+# shape, `handle()` a 0.409 s control-plane verify per returnable session, and the Background QoS
+# band taxes all of it ×1.47 — ~675 s of the 900 s consumed as FIXED cost, before one land. And it
+# was a COST CURVE, not a constant: the store grows 20-80 declarations a day and nothing ever
+# removed one, so any bound sized today expires within the week. `--limit` (with a persisted cursor,
+# newest-first) plus cc-cloud's new `--only` scoping makes the fixed cost O(the working set) instead
+# of O(every declaration ever created). The deferral is JOURNALLED by the callee, never silent — a
+# bounded pass that says nothing about what it skipped reads exactly like a pass that covered
+# everything.
+#
+# rc is CAPTURED, never `|| true`: 0 = the pass completed, 4 = another pass held the lock (normal,
+# not a fault), 124 = the bound cut a land mid-flight (the next tick resumes it), anything else is a
+# broken rail — and collapsing those into one would make a dead return path read exactly like a
+# quiet one, which is the failure this whole block exists to end.
+#
+# 🚨 ONLY THE DEPLOYED COPY MAY ACT, and this guard was bought at full price. Every other block here
+# is a pure read, so running this script from a checkout has always been harmless. This one LANDS
+# BRANCHES, MARKS BACKLOG ITEMS DONE AND SPENDS QUOTA — and `tests/autonomy-sweep.bats` executes the
+# real sweep once per test, while `postland-verify` runs that suite from a throwaway worktree of the
+# landed tree. Measured 2026-08-11, minutes after the wiring landed: FOUR concurrent
+# `cloud-return --sweep` passes out of `~/.claude/autonomy/postland/wt-run-54668/`, acting on the
+# operator's live declaration store, racing each other for the backlog ledger (one `done` won, the
+# others were refused) and re-pinging the originator on every pass.
+# The invocation PATH is the discriminator, and it is exact: launchd runs
+# `~/.claude/scripts/autonomy-sweep.sh` (the deployed symlink), while a suite or a verifier worktree
+# runs the checkout's own path. `$0` is read UNRESOLVED for exactly this reason — resolving it would
+# follow the deployed symlink back into the checkout and erase the only difference there is.
+# A skipped call is LOGGED with its reason, never silent: "not the deployed copy" and "the tool is
+# absent" are different facts, and neither is "the fleet is quiet".
+_cloudret="$_SWEEP_DIR/cloud-return.sh"
+_cloudret_rc="skipped"
+_cc_cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; _cc_cfg="${_cc_cfg%/}"
+# 🚨 EXACT PATH, NOT A PREFIX — and the prefix form was defeated by the very harness it was written
+# to exclude. Caught in the act 2026-08-17T07:56Z:
+#   RUNNING: /Users/chrisren/.claude/autonomy/postland/wt-run-61088/scripts/cloud-return.sh
+# holding the live `.return.lock` and sweeping the operator's real declaration store. postland-verify
+# mints its throwaway worktrees UNDER the config dir (`$_cc_cfg/autonomy/postland/wt-run-XXXXX/`), so
+# a verifier copy's `$0` matches `"$_cc_cfg"/*` exactly as well as the deployed copy's does. The
+# discriminator could not discriminate: EVERY postland run of this suite has been landing branches,
+# marking backlog rows done and spending quota against live state — which is the same incident the
+# comment above records from 2026-08-11 (four concurrent passes out of `wt-run-54668`), never
+# actually closed, because the guard that closed it tested a prefix that contains its own harness
+# (memory: guard-refusal-fires-on-its-own-harness).
+# Two live symptoms were downstream of this and are now explained: the refusal artifacts whose land
+# failed on `mkstemp … postland-run.VRdnYH/…` (a verifier's private TMPDIR, reaped when its run
+# ended — fixed on the other side in cloud-reconcile too), and the absence of any `cloud-return` row
+# in the sweep's own IDL journal while `return.jsonl` filled up: the launchd sweep was not the writer.
+# There is exactly ONE deployed path and it is nameable, so name it. `$0` stays UNRESOLVED for the
+# reason above — resolving it follows the deployed symlink into the checkout and erases the only
+# difference there is.
+_cloudret_deployed=0
+[ "$0" = "$_cc_cfg/scripts/autonomy-sweep.sh" ] && _cloudret_deployed=1
+if [ "$_cloudret_deployed" != 1 ]; then
+  _cloudret_rc="skipped-not-deployed"
+elif [ -x "$_cloudret" ]; then
+  if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then "$_tmo" -k 10 900 bash "$_cloudret" --sweep --limit "${CC_SWEEP_RETURN_LIMIT:-25}" >/dev/null 2>&1
+  else bash "$_cloudret" --sweep --limit "${CC_SWEEP_RETURN_LIMIT:-25}" >/dev/null 2>&1; fi
+  _cloudret_rc=$?
+  # 🚨 THE KILLER CLEANS UP AFTER ITSELF. `timeout -k 10 900` escalates to SIGKILL, and the callee's
+  # `trap … EXIT INT TERM` cannot run on one — so a cut pass leaves its single-flight lock directory
+  # behind by construction. The callee now reaps a dead holder itself (pid liveness + a TTL sized to
+  # this bound), and that is the primary repair; this is the second, independent one, and it belongs
+  # HERE because this is the only party that KNOWS a kill happened. rc 137/143 is exactly that
+  # knowledge — the caller observing its own child's death signal — and acting on it costs the next
+  # tick nothing instead of making it re-derive the fact from a timestamp.
+  # It is deliberately narrow: only on 137/143, only the lock this call's child could have held.
+  # A lock reaped on any other rc — including 124, where the `-k` grace may still be running the
+  # child's own trap — would be a caller stealing from a pass that is still alive.
+  case "$_cloudret_rc" in
+    137|143)
+      _retlock="${CC_CLOUD_STATE:-$_cc_cfg/autonomy/cloud}/.return.lock"
+      [ -d "$_retlock" ] && rm -rf "$_retlock" 2>/dev/null
+      ;;
+  esac
+fi
+log_idl cloud-return "$(jq -cn --arg c "$_cloudret_rc" \
+  '{cloud_return_rc:$c,
+    note:"0 = pass completed (per-session outcomes in the cloud return ledger; the pass-scope row records how many of the pending set it took and how many it deferred); 4 = another pass held the lock; 124 = the bound cut the pass, next tick resumes (the return path itself abstains on a cut land rather than filing a refusal); 137/143 = the bound SIGKILLed it and this caller cleared the stranded single-flight lock; skipped = tool absent (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never land, mark done or spend quota"}')"
+
+# ── the REFUSAL LOOP (W3) — immediately after the return pass, and under ITS OWN guard ────────────
+# The return pass above is what WRITES `<id>.land-refused`, so routing in the same tick closes the
+# circuit at the earliest moment it can be closed: a refusal filed at 12:00 reaches the VM at 12:00
+# rather than at 12:05. It is a separate call rather than a step inside cloud-return on purpose —
+# detecting a refusal and answering one are different jobs with different blast radii, and the
+# return path must stay able to run on a box where nothing may be sent off-box.
+#
+# 🚨 THE SAME DEPLOYED-COPY DISCRIMINATOR, FOR A STRICTER REASON. cloud-return lands branches and
+# marks items done; this SPENDS QUOTA ON A REMOTE MACHINE and hands it a brief it will act on. Four
+# concurrent suite copies of the return sweep have already been measured acting on the operator's
+# live store (2026-08-11); the same four copies here would have sent four identical refusal briefs
+# to a real VM. `$0` is read UNRESOLVED for the reason recorded above — resolving it follows the
+# deployed symlink back into the checkout and erases the only difference there is.
+# The router is single-flight and idempotent per refusal (keyed on the artifact's own content), so
+# a long land simply means fewer routing passes, never a double-send.
+_cloudrfz="$_SWEEP_DIR/cloud-refusal-route.sh"
+_cloudrfz_rc="skipped"
+if [ "$_cloudret_deployed" != 1 ]; then
+  _cloudrfz_rc="skipped-not-deployed"
+elif [ -x "$_cloudrfz" ]; then
+  if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then "$_tmo" -k 10 180 bash "$_cloudrfz" --sweep >/dev/null 2>&1
+  else bash "$_cloudrfz" --sweep >/dev/null 2>&1; fi
+  _cloudrfz_rc=$?
+fi
+log_idl cloud-refusal-route "$(jq -cn --arg c "$_cloudrfz_rc" \
+  '{cloud_refusal_rc:$c,
+    note:"0 = pass completed (per-refusal outcomes in the refusal-route ledger); 4 = another pass held the lock; 124 = the bound cut the pass, next tick resumes (a refusal is idempotent per artifact, so nothing is double-sent); skipped = tool absent (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never send off-box"}')"
+
+# ── 0b. D4 — AUTHOR-DEATH JOIN (was §0; §0a now precedes it — see the placement note there) ───────
 # The one class no push and no watcher covers: the detached watcher ITSELF dies (reboot, box kill —
 # detach() survives a group SIGKILL but not the machine). Nothing then closes the pane and nothing
 # reports that nothing did. Joined here, at sweep cadence, from three independent readings:
@@ -525,54 +743,14 @@ fi
 # indistinguishable from a clean store (memory: claimed-outcome-vs-checked-outcome). Each rc is
 # captured and journalled, so "the detector could not run" and "the store is healthy" stay apart.
 # `set -e` is not in force here (line 44 is `set -uo pipefail`), so a non-zero cannot abort the sweep.
-_sw="${BASH_SOURCE[0]}"
-while [ -L "$_sw" ]; do
-  _swd="$(cd "$(dirname "$_sw")" && pwd)"; _sw="$(readlink "$_sw")"
-  case "$_sw" in /*) ;; *) _sw="$_swd/$_sw" ;; esac
-done
-_SWEEP_DIR="$(cd "$(dirname "$_sw")" && pwd)"
 _trigger="$_SWEEP_DIR/backlog-consolidation-trigger.sh"
 _ratchet="$_SWEEP_DIR/backlog-ratchet.sh"
 _grouping="$_SWEEP_DIR/backlog-grouping-sweep.sh"
-# SELF-CONTAINED BOUND, not sweep_bounded(). That helper and its TIMEOUT_BIN are defined ~100 lines
-# BELOW this point, and bash resolves a function only at call time — so calling it here would exit
-# 127 "command not found". With no `set -e` that is SILENT, and rc 127 would have been journalled
-# below as if it were the detector's own verdict: a broken caller reading exactly like a clean store.
-# Caught before landing; the block is placed high on purpose (see above), so it brings its own bound.
-# Same bare-name lookup as TIMEOUT_BIN's, and the same refutation applies verbatim — measured
-# 2026-08-30 by eval'ing THIS line under the environment the plist actually builds: non-empty,
-# /opt/homebrew/bin/timeout. See the block above TIMEOUT_BIN for the measurement, the mute control
-# and the reason the "launchd PATH is minimal" reading was wrong. This site was previously cited
-# as :505; it is here. A LINE NUMBER IS A COORDINATE IN A FILE PEOPLE EDIT — re-grep `^_tmo=`.
-_tmo="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
-# 🚨 THE BOUND IS SIZED FOR THE BAND THIS ACTUALLY RUNS IN, NOT FOR THE BENCH (2026-08-12).
-# The 60 s bound was chosen in a foreground shell. This sweep runs from launchd under
-# `ProcessType: Background` + `Nice 5` — the Darwin background QoS band, live PRI 4, confined to the
-# E-cores. Same work, same box, same minute, measured three ways:
-#     foreground 17.5 s   ·   BACKGROUND 68.1 s   ·   utility 20.3 s
-# So `--fold` overran a 60 s bound by ~8 s on EVERY sweep and returned rc 124 — 10 of 10 recorded
-# runs carry `fold_rc:"124"` / `fold_conservation:"no-verdict"`. The consequence is not a slow probe,
-# it is an UNREACHABLE FLIP CRITERION: the caller below says to switch `--fold` to `--fold --apply`
-# "when fold_conservation has read `ok` across a run of sweeps", and run to completion the fold
-# reports `conservation=ok · 19 groups seen · 18 would fold · 0 ambiguous` — the criterion is already
-# satisfied and no instrument on this box could observe it.
-# (MEMORY: bound-must-fit-the-band-not-the-bench, and cap-whose-population-is-empty — the GREEN
-# state did not exist.)
-#
-# Two changes; the first is the load-bearing one. Run these probes at `utility` instead of inheriting
-# Background — the band every other actuator here already moved to
-# (launchd/com.claude.postland-verify.plist:62). That is NOT a promotion to foreground: it lifts the
-# E-core confinement and nothing else, so the sweep still yields to the operator's work. The bound
-# then goes to 180 s — 2.6× the measured background cost, 8.9× the measured utility cost — so it
-# remains a real bound while fitting the worst band ever observed rather than the best.
-_qos=""; [ -x /usr/sbin/taskpolicy ] && _qos=/usr/sbin/taskpolicy   # fail-open: no taskpolicy ⇒ plain exec
-_bounded() {
-  if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then
-    ${_qos:+$_qos -c utility} "$_tmo" -k 5 "${CC_SWEEP_BOUND_S:-180}" "$@"
-  else
-    ${_qos:+$_qos -c utility} "$@"
-  fi
-}
+# `_SWEEP_DIR`, `_tmo`, `_qos` and `_bounded()` are HOISTED to §0a, above the D4 join, and their
+# rationale travelled with them — re-grep `^_tmo=`. They used to be defined here because this was
+# the highest block that needed them; §0a is now higher and needs them for the same reason (a
+# self-contained bound, because sweep_bounded() and TIMEOUT_BIN are still defined ~500 lines below
+# and bash resolves a function only at call time, so calling it up there would exit 127 SILENTLY).
 _trig_rc="skipped"; _rat_rc="skipped"; _fold_rc="skipped"; _fold_note="skipped"; _fold_groups=0
 # `_fold_applied` defaults to "skipped", NOT to "ok" — the apply arm below runs only on a clean dry
 # verdict, and a default of ok would report a write that never happened on every sweep that held back.
@@ -1004,112 +1182,9 @@ log_idl config-parity "$(jq -cn --arg d "$_drift_rc" \
   '{settings_drift_rc:$d,
     note:"rc 0 = the 5 config dirs agree; 1 = drift, ONE condition-keyed item filed; 3 = could not compare (NOT clean); skipped = tool absent"}')"
 
-# ── 2d. CLOUD RETURN — the only detached poller a cloud fire can have ─────────────────────────────
-# A cloud session finishing has no way to reach this box: no pane, no pid, no transcript, and the
-# VM has no route home except the git remote it cloned from. So SOMETHING local has to notice, land
-# the result and wake the originator — and it cannot be the originator, because a goal-armed session
-# may not hold a backgrounded watcher at all (Claude Code skips /goal evaluation while any
-# non-terminal background Bash exists, and hooks/validate-bash.sh denies the park outright). This
-# job is loaded, runs every 300 s, and is not a session, which is exactly the shape that gap needs.
-#
-# ABOVE THE nothing-new EARLY EXIT, for the same reason as 2b/2c and more sharply: a finished cloud
-# session produces NO page and NO alarm — it is silent by construction — so wiring the return below
-# that gate would run it only on sweeps that already had other news, i.e. never on the quiet fleet
-# where the work is actually sitting.
-#
-# 🚨 THE BOUND MUST FIT A LAND, AND 240 s DID NOT. This shipped at 240 s "to stay under the 300 s
-# cadence", which sounded disciplined and was exactly backwards: `ship-land` runs the full gate and
-# takes minutes (592 s worst case on record), so the bound cut a healthy land at 240 s and the
-# return path filed the SIGTERM as a gate refusal — a bound smaller than what it bounds can only
-# convict (memory: exoneration-bound-must-fit-what-it-bounds). It is now 900 s, sized to the thing
-# it actually bounds. Overlap is not the hazard the old comment imagined: launchd does not stack a
-# second instance of a running job, and the pass is single-flight (lock, exit 4) and idempotent, so
-# a long land simply means fewer sweeps while it runs. The return path also now abstains on
-# 124/137/143 rather than convicting, so even a cut leaves no false artifact.
-#
-# rc is CAPTURED, never `|| true`: 0 = the pass completed, 4 = another pass held the lock (normal,
-# not a fault), 124 = the bound cut a land mid-flight (the next tick resumes it), anything else is a
-# broken rail — and collapsing those into one would make a dead return path read exactly like a
-# quiet one, which is the failure this whole block exists to end.
-#
-# 🚨 ONLY THE DEPLOYED COPY MAY ACT, and this guard was bought at full price. Every other block here
-# is a pure read, so running this script from a checkout has always been harmless. This one LANDS
-# BRANCHES, MARKS BACKLOG ITEMS DONE AND SPENDS QUOTA — and `tests/autonomy-sweep.bats` executes the
-# real sweep once per test, while `postland-verify` runs that suite from a throwaway worktree of the
-# landed tree. Measured 2026-08-11, minutes after the wiring landed: FOUR concurrent
-# `cloud-return --sweep` passes out of `~/.claude/autonomy/postland/wt-run-54668/`, acting on the
-# operator's live declaration store, racing each other for the backlog ledger (one `done` won, the
-# others were refused) and re-pinging the originator on every pass.
-# The invocation PATH is the discriminator, and it is exact: launchd runs
-# `~/.claude/scripts/autonomy-sweep.sh` (the deployed symlink), while a suite or a verifier worktree
-# runs the checkout's own path. `$0` is read UNRESOLVED for exactly this reason — resolving it would
-# follow the deployed symlink back into the checkout and erase the only difference there is.
-# A skipped call is LOGGED with its reason, never silent: "not the deployed copy" and "the tool is
-# absent" are different facts, and neither is "the fleet is quiet".
-_cloudret="$_SWEEP_DIR/cloud-return.sh"
-_cloudret_rc="skipped"
-_cc_cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; _cc_cfg="${_cc_cfg%/}"
-# 🚨 EXACT PATH, NOT A PREFIX — and the prefix form was defeated by the very harness it was written
-# to exclude. Caught in the act 2026-08-17T07:56Z:
-#   RUNNING: /Users/chrisren/.claude/autonomy/postland/wt-run-61088/scripts/cloud-return.sh
-# holding the live `.return.lock` and sweeping the operator's real declaration store. postland-verify
-# mints its throwaway worktrees UNDER the config dir (`$_cc_cfg/autonomy/postland/wt-run-XXXXX/`), so
-# a verifier copy's `$0` matches `"$_cc_cfg"/*` exactly as well as the deployed copy's does. The
-# discriminator could not discriminate: EVERY postland run of this suite has been landing branches,
-# marking backlog rows done and spending quota against live state — which is the same incident the
-# comment above records from 2026-08-11 (four concurrent passes out of `wt-run-54668`), never
-# actually closed, because the guard that closed it tested a prefix that contains its own harness
-# (memory: guard-refusal-fires-on-its-own-harness).
-# Two live symptoms were downstream of this and are now explained: the refusal artifacts whose land
-# failed on `mkstemp … postland-run.VRdnYH/…` (a verifier's private TMPDIR, reaped when its run
-# ended — fixed on the other side in cloud-reconcile too), and the absence of any `cloud-return` row
-# in the sweep's own IDL journal while `return.jsonl` filled up: the launchd sweep was not the writer.
-# There is exactly ONE deployed path and it is nameable, so name it. `$0` stays UNRESOLVED for the
-# reason above — resolving it follows the deployed symlink into the checkout and erases the only
-# difference there is.
-_cloudret_deployed=0
-[ "$0" = "$_cc_cfg/scripts/autonomy-sweep.sh" ] && _cloudret_deployed=1
-if [ "$_cloudret_deployed" != 1 ]; then
-  _cloudret_rc="skipped-not-deployed"
-elif [ -x "$_cloudret" ]; then
-  if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then "$_tmo" -k 10 900 bash "$_cloudret" --sweep >/dev/null 2>&1
-  else bash "$_cloudret" --sweep >/dev/null 2>&1; fi
-  _cloudret_rc=$?
-fi
-log_idl cloud-return "$(jq -cn --arg c "$_cloudret_rc" \
-  '{cloud_return_rc:$c,
-    note:"0 = pass completed (per-session outcomes in the cloud return ledger); 4 = another pass held the lock; 124 = the bound cut the pass, next tick resumes (the return path itself abstains on a cut land rather than filing a refusal); skipped = tool absent (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never land, mark done or spend quota"}')"
-
-# ── the REFUSAL LOOP (W3) — immediately after the return pass, and under ITS OWN guard ────────────
-# The return pass above is what WRITES `<id>.land-refused`, so routing in the same tick closes the
-# circuit at the earliest moment it can be closed: a refusal filed at 12:00 reaches the VM at 12:00
-# rather than at 12:05. It is a separate call rather than a step inside cloud-return on purpose —
-# detecting a refusal and answering one are different jobs with different blast radii, and the
-# return path must stay able to run on a box where nothing may be sent off-box.
-#
-# 🚨 THE SAME DEPLOYED-COPY DISCRIMINATOR, FOR A STRICTER REASON. cloud-return lands branches and
-# marks items done; this SPENDS QUOTA ON A REMOTE MACHINE and hands it a brief it will act on. Four
-# concurrent suite copies of the return sweep have already been measured acting on the operator's
-# live store (2026-08-11); the same four copies here would have sent four identical refusal briefs
-# to a real VM. `$0` is read UNRESOLVED for the reason recorded above — resolving it follows the
-# deployed symlink back into the checkout and erases the only difference there is.
-# The router is single-flight and idempotent per refusal (keyed on the artifact's own content), so
-# a long land simply means fewer routing passes, never a double-send.
-_cloudrfz="$_SWEEP_DIR/cloud-refusal-route.sh"
-_cloudrfz_rc="skipped"
-if [ "$_cloudret_deployed" != 1 ]; then
-  _cloudrfz_rc="skipped-not-deployed"
-elif [ -x "$_cloudrfz" ]; then
-  if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then "$_tmo" -k 10 180 bash "$_cloudrfz" --sweep >/dev/null 2>&1
-  else bash "$_cloudrfz" --sweep >/dev/null 2>&1; fi
-  _cloudrfz_rc=$?
-fi
-log_idl cloud-refusal-route "$(jq -cn --arg c "$_cloudrfz_rc" \
-  '{cloud_refusal_rc:$c,
-    note:"0 = pass completed (per-refusal outcomes in the refusal-route ledger); 4 = another pass held the lock; 124 = the bound cut the pass, next tick resumes (a refusal is idempotent per artifact, so nothing is double-sent); skipped = tool absent (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never send off-box"}')"
-
 # ── 2e. CUSTODY DEATHWATCH — the arm that runs when NOBODY IS HOME ────────────────────────────────
-# The two blocks above only ever speak to an address the FIRE recorded. Measured 2026-08-23: 1055 of
+# The cloud return + refusal blocks (now §0a, hoisted to the top of the pass) only ever speak to an
+# address the FIRE recorded. Measured 2026-08-23: 1055 of
 # cloud-return's 1116 wake attempts resolved to "the declaration names no notify-back target —
 # nothing to wake", because a launchd-dispatched fire has no ITERM_SESSION_ID and its cwd is `/`.
 # So the news existed 1116 times and reached someone 61 times, and the 175 undischarged cloud debts
@@ -1149,12 +1224,12 @@ log_idl custody-deathwatch "$(jq -cn --arg c "$_custdw_rc" \
 # would be that defect committed by the change that names it, which is exactly how 2b above got its
 # comment. So the caller lands in the same diff as the tool.
 #
-# ABOVE THE nothing-new EARLY EXIT, for the same reason as 2b/2c/2d and most sharply of all: a lost
+# ABOVE THE nothing-new EARLY EXIT, for the same reason as 0a/2b/2c and most sharply of all: a lost
 # succession is SILENT BY CONSTRUCTION. It produces no pane, no page, no alarm and no ledger row —
 # that silence IS the failure — so wiring it below the gate would run it only on sweeps that already
 # had other news, i.e. never on the quiet fleet where a dead chain is actually sitting.
 #
-# PURE READ, so no deployed-copy guard: unlike 2d it lands nothing, marks nothing and spends no
+# PURE READ, so no deployed-copy guard: unlike 0a it lands nothing, marks nothing and spends no
 # quota — it stats files and greps a ledger. Running it from a checkout or a verifier worktree is
 # harmless, which is the standing rule for every read-only block here.
 #
