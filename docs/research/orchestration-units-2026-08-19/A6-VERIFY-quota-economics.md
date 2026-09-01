@@ -329,6 +329,37 @@ says the opposite of the policy line: *"Stop treating long cached context as quo
 authorises MORE context."* Two repo documents give directly opposite advice and neither cites the
 other.
 
+✅ **FILED AND DISCHARGED 2026-08-24 — this paragraph's diagnosis was right and its status line has
+expired.** Backlog `564d151b76e5`, ruled **class A** (a measurement superseding an unvalidated
+composition model; no operator value fork). The lever is struck at both sites named above and the two
+documents now cite each other — ruling, arithmetic and chain of custody in
+`scaling-bottlenecks-2026-08-09.md` **§2a**, which names *this* subsection as the link that found the
+live consequence and correctly held the cache-read result to *a bound, not a point*. The ruling
+survives that caveat: the 68% premise fails under the API-list hypothesis too (~28% ⇒ the lever is
+worth 0% to ≤ +16%, never +50%). Landed **`a299123b`** (2026-08-24 — the strike at both sites, and the
+mutual citation) and **`7bb14728`** (2026-08-29 — the same strike propagated to the lever's ORIGIN at
+`../scaling-bottlenecks-2026-08-09/07-accounts-api.md` §6.4a and to the three
+`jcode-due-diligence-2026-08-11` citers). Both verified with `git merge-base --is-ancestor <sha>
+origin/main`. Two line references above are now stale by construction: `:36` still resolves, but
+`:150` was pushed down by the §2a insertion — chase the section, not the number.
+
+⚠️ **Read "nobody has filed" as of 2026-08-19.** It was true for 15 days and that was the defect;
+`Z-completeness-critic.md` **G15** is the entry that converted it into a filed decision.
+
+🚨 **Method note for the next re-derivation — a SHALLOW CLONE reports a landed sha as off-trunk, and
+it fails in exactly the direction that manufactures work.** A cloud worker draining this item on
+2026-08-29 ran the prescribed `git merge-base --is-ancestor a299123b origin/main`, got a non-zero
+exit, and wrote into its commit body that *"the sha named in the dispatch brief is NOT an ancestor of
+origin/main; its content landed under c3acc666"*. Both halves are false. The checkout was cloned at
+`--depth 50` (`git rev-parse --is-shallow-repository` → `true`, trunk reading 50 commits with a
+2026-08-29 root), so every commit older than the graft point is simply **absent**, and
+`--is-ancestor` cannot distinguish *absent* from *not an ancestor* — it reports the same failure for
+both. After `git fetch --unshallow` (3,897 commits) `a299123b` is an ancestor and `c3acc666` is a
+`BACKLOG_DRAIN_24_7.md` journal entry that never touched either document. **Run
+`git rev-parse --is-shallow-repository` before trusting any ancestry verdict in a dispatched
+worker's checkout**; a `false` ancestry reading is what turns "already cured" into "cure it again",
+which is the loop this whole item is a specimen of.
+
 **Bonus: the two documents reconcile numerically once you remove cache-read.**
 `scaling-bottlenecks` rank 4 says the fleet sustains **~3.9 concurrent active 24/7**. If that figure
 was priced with cache-read as 68% of cost and cache-read is ~free, the true capacity is
@@ -476,8 +507,11 @@ process-level instruments.** Recording it so no one else re-derives it and over-
 3. **Two repo documents give opposite advice on context size and neither cites the other.**
    `scaling-bottlenecks-2026-08-09.md:36,150` ("68% of quota cost is cache-read ⇒ halving context ≈
    +50% capacity", carried into standing policy) vs `exchange-rate.md:45,223` ("cache-READ is ≤1/750
-   of an output token… it authorises MORE context"). One of them is live guidance and wrong. This
-   needs a filed decision, not another measurement.
+   of an output token… it authorises MORE context"). One of them is live guidance and wrong. ~~This
+   needs a filed decision, not another measurement.~~ ✅ **ANSWERED — decision filed 2026-08-24,
+   landed `a299123b`, propagated `7bb14728`.** The measured rate governs; `scaling-bottlenecks` was
+   the wrong one and is struck at both sites. Ruling: that doc's **§2a**. See the discharge note
+   under §C6 above.
 4. **The finder's `RMSE=1.73` and its published 17.7 pp residual cannot both be true** (§C5).
    Whichever way that resolves, the 5-hour exchange rate should be published with an interval and a
    condition number, and the repo should pick one of the two competing fits (the `USAGE_TELEMETRY_100P`
