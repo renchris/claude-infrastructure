@@ -579,6 +579,36 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       # tests/deploy-parity.bats derives kitty-setup.sh's targets from its own `ln -sfn` lines and
       # asserts each one is claimed-or-declared here, so a seventh target cannot land silently.
       bin/it2-kitty|bin/kitty-*)  want=0 ;;
+      # ── SECOND INSTALLER, NON-bin TARGET ── the SEVENTH kitty-setup.sh link, and the one the arm
+      # above could not name. MEASURED 2026-09-01 by method 249: the block above closed a gap, and a
+      # remedy is an EXTRACTOR, so ask what ITS key cannot name. tests/deploy-parity.bats derived
+      # kitty-setup.sh's targets with a grep keyed on the LITERAL SOURCE PREFIX ln -sfn "$REPO/ ,
+      # while kitty-setup.sh:203 links "$SRC_CONF", assigned at :194 to $REPO/config/kitty.conf.
+      # Same installer, same verb, same flag; the source is spelled through ONE VARIABLE HOP and the
+      # key goes blind. Measured by executing this case block with the catch-all tagged: 8 `ln -sfn`
+      # lines, 7 repo-sourced, the shipped key derives 6, and the seventh landed on the reasonless
+      # `*) want=0` below. The block above states "a seventh target cannot land silently" — this IS
+      # the seventh target, and it had already landed silently. A completeness claim inherits the
+      # blind spots of the extractor that produced it, and the sentence never carries them.
+      #
+      # want=0 AND NOT want=1, for the SAME reason as the bin/ arm plus one of its own: kitty-setup.sh
+      # is CONDITIONAL (kitty hosts only), and this destination is NOT $CFG/<rel> at all — it is
+      # $HOME/.config/kitty/kitty.conf, so a per-file link here would be WRONG rather than merely
+      # noisy, exactly as for githooks/* and launchd/*.plist below. No outage is being repaired: all
+      # seven targets were measured LIVE and correctly linked into the checkout at 2026-09-01T04:00Z.
+      # The reasonless want=0 is the whole defect — a verdict that was already right, arrived at by a
+      # default that carries no reason. link_refresh() can never restore this one either, the same
+      # asymmetry the bin/ arm above writes down.
+      #
+      # Unreachable from THIS walk today, and that is the second, INDEPENDENT invisibility: the
+      # _tracked pathspec at :432 lists no config/ directory (measured 0 occurrences against a mute
+      # control of 1 for bin), so this path can never be enumerated here — a shape the map cannot
+      # EXPRESS, which no member of the population can ever demonstrate. Written down anyway, so the
+      # exclusion holds at BOTH gates rather than resting on the input filter alone.
+      # tests/deploy-parity.bats now ALSO derives kitty-setup.sh's targets by the SHAPE of the link
+      # line, resolving one variable hop, and asserts the two partitions SUM — so an EIGHTH target
+      # refuses instead of being absorbed, whatever its source is spelled as.
+      config/kitty.conf)         want=0 ;;
       # ── NOT-PER-FILE ── install.sh classes deliberately NOT deployed as per-file links into $CFG.
       # MEASURED 2026-08-31 by method 236 pointed at this file — #264 ran the same method against the
       # DETECTOR (scripts/deploy-link-parity.sh) and this is the REPAIRER, the holder nobody had
