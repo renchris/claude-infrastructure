@@ -86,6 +86,122 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-01 — drain recycle #279: method 251 — THE WALK'S *INPUT* IS A GATE TOO, AND THE ONE ARM
+  GUARDING IT IS KEYED ON GLOB HEADERS.** ZERO rows closed, ZERO filed, ZERO reopened. TWO commits.
+  **THE QUESTION.** #275 asked what a green gate's map is DERIVED FROM; #276 what a remedy keyed on a
+  VERB NAME cannot see; #277 what a remedy's key cannot NAME; #278 what the population a partition
+  sums over is a population *OF*. Every one of those six extractors in `tests/deploy-parity.bats`
+  asserts against the same thing — the `case "$rel"` decision table in
+  `scripts/deploy-parity-assert.sh`, which is that file's **SECOND** gate. #279 asks the prior
+  question: **a partition can only sum over a set it does not choose, so WHO CHOOSES IT?**
+  **THE FIRST GATE.** The walk's input is one `git -C "$REPO" ls-files -- <pathspec>` line, and a path
+  that pathspec does not list never reaches the case block at all — neither claimed, nor declared, nor
+  defaulted, because it never enters. ONE arm guards it: *"anti-rot: every REPO_DIR directory
+  install.sh deploys appears in the assert's pathspec"*. **Read its extractor as a NOUN, which is the
+  tell method 250 leaves.** `for [a-z_]+ in "$REPO_DIR"/[a-z]+` is not *"every directory install.sh
+  deploys"* — it is **FOR-LOOP GLOB HEADERS**. This very file's own comments record that install.sh
+  places bytes THREE ways (19 glob classes · 8 singleton `link_file`/`copy_file` literals · 3 raw
+  `run ln`/`run cp` sites), **so a pathspec member deployed by either of the latter two is a member
+  that key can never produce, whatever the arm is green about.**
+  **MEASURED, BOTH EXTRACTORS RUN VERBATIM, TWENTY PREDICTIONS GATED AT rc 93, ALL EXACT.** The
+  shipped extractor derives **15** raw matches and **10** distinct members, and **all 10 are
+  DIRECTORIES**. The pathspec holds **10 ENTRIES**: **8** directories and **2 FILES**, the partition
+  asserted to sum. The two sets disagree by exactly two in each direction. **`SHIPPED \ PATHSPEC` is
+  the CONSISTENCY arm** and reads `githooks launchd`, both honoured on the arm's other branch —
+  without that column the disagreement below could have been MY extraction's and no other number would
+  have meant anything. **`PATHSPEC \ SHIPPED` reads `model-config.yaml providers.json`**, each placed
+  by exactly ONE `link_file` literal (`install.sh:545`, `:554`) and each **CLAIMED `want=1` as
+  `root SSOT (link)`** by the case block, proven by EXECUTING that block with the catch-all TAGGED
+  (tag asserted at exactly 2 diff lines) beside a POS control and a FIRE control.
+  **A CLAIM AT GATE TWO OVER A PATH GATE ONE NEVER DELIVERS IS A CLAIM THAT NEVER RUNS**, and it reads
+  as coverage. For this pair that is not hypothetical: the root-SSOT drift assert exists *because*
+  `~/.claude/model-config.yaml` was a real, drifted 36 KB file for four days while the assert nearest
+  the failure reported parity over it.
+  **THE SECOND, INDEPENDENT COLUMN WAS THE COMMENT ABOVE THE PATHSPEC, AND IT COST ONE GREP.** It read
+  *"ten entries where install.sh globs from twelve top-level directories"*. **It is TEN directories** —
+  and the arithmetic it invited (12 − 2 = 10) compared **ENTRIES to DIRECTORIES**, two different units,
+  so it read as summing while counting different things. **Before you subtract two counts, ask what
+  each one counts ONE of.**
+  **THE MOVE.** `tests/deploy-parity.bats` gains a **SEVENTH** extractor and its fire test — **94 → 96
+  arms, both APPENDED, zero existing assertions edited.** It enumerates install.sh's LITERAL singleton
+  sources (`[^"$]` excludes the loop-driven ones, which the glob population already owns), classifies
+  each by EXECUTING the assert's own extracted `case` block, and asserts every CLAIMED source is one
+  the pathspec DELIVERS, with the partition asserted to SUM over sources.
+  `scripts/deploy-parity-assert.sh` gains **no arm at all** — all nine literal sources are already
+  claimed-or-declared; it gains the corrected enumeration and the citation. **That diff is
+  COMMENTS-ONLY and PROVEN so** — sha256 over the NON-COMMENT lines of a clean `origin/main`
+  extraction and of my copy are identical (**538** code lines both sides), with a MUTATE control
+  confirming a one-token code change DOES move that sha.
+  **THE RED PROOF IS DISCRIMINATING, AND ITS TWO REFUSALS ARE WORTH MORE THAN ITS PASS.** One mutation
+  (delete the two root-SSOT entries from the pathspec) planted in a pristine `git archive origin/main`
+  extraction asserted to hold ZERO occurrences of the fix, only the SUITE copied forward, mutation
+  asserted at exactly one changed line. **The rc-93 gate refused twice before it was right.** First:
+  the UNMUTATED extraction already carried **2** not-ok of its own, both live-layer-dependent arms —
+  **a control's red set must be SUBTRACTED, never assumed empty.** Second: **I predicted my 2 arms
+  would go red and EIGHT did.** Attributed (`mutated \ control`, 0 healed, partition 2 + 8 == 10), the
+  honest reading is narrower than the sentence I was about to write: **SIX BEHAVIOURAL arms catch it
+  too**, because they run the assert and read its output. What this arm adds is detection at the **MAP**
+  rather than at the **BEHAVIOUR** — those six pin the two members that exist TODAY, each by a
+  hand-written fixture, while this one derives its population from install.sh's own call sites, so a
+  NINTH literal singleton source added tomorrow is covered without anyone remembering to write one.
+  **The comparison that holds outright is the STRUCTURAL one: the anti-rot arm, whose job is this exact
+  invariant, is GREEN under the same mutation.** That limit is written into the file, not left here.
+  **ARM E — NO OUTAGE, MEASURED BEFORE THE LAND.** All nine literal sources partition **3 CLAIMED / 6
+  DECLARED / 0** reaching the reasonless default, **0 stranded**, and both root SSOTs were read
+  individually at 05:56Z: both are symlinks into the checkout. **This closes a DETECTOR gap, exactly as
+  `githooks/*`, `launchd/*.plist`, the literal installs, `CLAUDE.md`, `config/kitty.conf` and the BY
+  ACTION arm each did before it.**
+  **AND ONE INSTRUMENT FAULT, CAUGHT BY A POSITIVE CONTROL RATHER THAN BY A HUNCH.** The first delivery
+  census ran INLINE and read `gate1_delivers=NO` for all nine sources — including `bin/*`, whose
+  directory is plainly in the pathspec. **A uniform answer across every cell indicts the harness:** the
+  Bash tool is zsh, which does not word-split an unquoted parameter, so `for e in $SPEC` iterated ONE
+  word. Re-run as a `#!/bin/bash` FILE with a POS control that must read YES and a NEG that must read
+  NO, the same census reads 3 / 6 / 0. **A second instrument fault came from `bats-assert-liveness`,
+  which flagged two `! cmd` assertions of mine as DEAD under errexit — the answer now travels as a
+  VALUE, which is live in every position.**
+  **THE LANE, STAMPED MOMENTS ONLY.** Open 05:50:56Z from the worktree on a clean tree at
+  `trunk..HEAD = 0`: `RUNG=🚀 LIVE_SHA=785417c7fafa LIVE_LAG=15 LIVE_ADDS=2 LIVE_STALE=7 LIVE_AGE=10651
+  LIVE_BREACH_WHY=adds MIG_FAILED=0 GATE=stale`. **The two adds were NAMED, not assumed** — both
+  siblings' prose, `docs/research/desk-router-abstention-2026-09-01.md` and
+  `docs/plans/DRAIN_CIRCUIT_2026-09-01.md` — the `4e6a51df2a84` class exactly; that row **stays OPEN,
+  do NOT re-file, do NOT drive**. `GATE=stale` again, not mine to drive. **The executing blob of
+  `scripts/deploy-link-parity.sh` EQUALLED trunk's at my open (`6c58711286ff` both sides), confirming
+  #278's reading that the lag closed itself.** The standing red is unchanged: `458 linked · 0
+  staged-pending · 10 live-extra · 54 unmapped · 3 actionable`, rc 1, at 05:52Z.
+  **THE BOARD.** Open 05:51:18Z **339 open / 220 blocked / 2,353 done / 3 claimed** (559 combined,
+  2,915 rows), both partitions asserted, `sort -c` on all five lists. The gap from #278's floor
+  (05:46:11Z → 05:51:18Z, **5 m 07 s**) held **ZERO arrivals, ZERO departures, ZERO transitions**.
+  Stores at my open: postland `.page` **0** over a denominator of **2,824** · `pages` **2,353 all / 87
+  `.page`** · inbox-guard `.escalated` **435** · postland stamps **533**.
+  **GREEN, RUN IN THE FOREGROUND BEFORE THE LAND**, from a draw I derived myself — **4 suites, 252 ok,
+  0 not ok, 0 skip, one plan per suite, TERMINATOR asserted (ran=4 listed=4), 144 s at load 27.8→25.4**:
+  `deploy-live` **136** · `deploy-parity` **96** · `ms365-reply-splice` **18** · `deploy-parity-live`
+  **2**. That last one read rc 0 with BOTH tests where this brief inherits it as RED on trunk and
+  manifest-excluded — **not a contradiction: the host checks run against the LIVE LAYER, a different
+  subject from the trunk tree. Two populations, two verdicts, both true.** The selector drew the same
+  FOUR-suite set as #275 through #278 — **the SEVENTH repeat measurement from the same two subject
+  files** — and its POS control read **0** on a prose-only range and **SPOKE with 7** when re-drawn
+  from a code-touching one. Lints: `shellcheck` rc 0 / 0 bytes · `bash -n` rc 0 · `bats --count` 96 ·
+  `bats-assert-liveness` rc 0 · the scoped `bats-shellcheck-lint` *"clean — 1 suite(s) scanned, 0
+  blocking finding(s)"* · `pipefail-sigpipe-lint` bare rc 0 and `--census` **125 → 125, LOST=0, NEW=0**
+  with the PRE arm EXTRACTED from `origin/main` rather than remembered (a FIFTH consecutive link at
+  125) · `unattended-path-lint --selftest` **47/47** and bare rc 0 · `test-walltime-lint` *"clean — 558
+  suite(s); 1 grandfathered, 0 new time bombs"* · `test-hermeticity-lint --selftest` **147/147**.
+  **DECLARED NOT-RUN rather than claimed** (the seventeenth consecutive link to declare):
+  `alarm-polarity-lint` — neither file is an alarm emitter and its POS control is a KNOWN MUTE
+  (`e07dc5e09f83`, already OPEN, do NOT re-file).
+  **ARTIFACTS**, all under `~/.claude/autonomy/`: `open279.sh` · `ledger279.sh` · `probe279-gate.sh`
+  (the POPULATION harness for a claim of the form *"this arm guards that gate"* — it runs BOTH
+  extractors verbatim, `comm`s them two ways, and carries the consistency arm without which no other
+  number means anything) · `classify279.sh` (the two-gate census, written as a FILE after the inline
+  version read a uniform zsh-induced zero) · `redproof279.sh` and its repair `redproof279b.sh` (the
+  DISCRIMINATING two-moment harness: **subtract the control's reds, then ask whether the incumbent and
+  the new arm DISAGREE** — a fire test proves an arm notices its own declaration going away and proves
+  nothing about whether the new extractor sees what the old one cannot) · `commentsonly279.sh` ·
+  `lints279.sh` · `suites279.sh` · `commit279-{1,2}.sh`. Four kitty checks passed: `cc-in-kitty` rc 0,
+  `KITTY_WINDOW_ID` **27**, the id-keyed `kitty @ ls` query run THROUGH A FILE (rc 0, **0** stderr
+  bytes, 90,500 json bytes) returning EXACTLY ONE object with a bogus-id NEG control at 0 — the
+  fifty-second consecutive — and `cc-notify --self` printing 27. Pane cwd was the WORKTREE.
 - **2026-09-01 — drain recycle #278: method 250 — A REMEDY CAN REPAIR ITS KEY AND INHERIT ITS
   POPULATION. ASK WHAT THE POPULATION IS A POPULATION *OF*.** ZERO rows closed, ZERO filed, ZERO
   reopened. TWO commits.
