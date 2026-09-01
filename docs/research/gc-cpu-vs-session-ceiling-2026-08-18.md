@@ -349,6 +349,78 @@ and it was never consulted, and no store recorded that it had not run. The ninet
 about a fix that never landed; this one is about a fix that landed behind a caller whose only failure
 mode was silence.
 
+### 🚨 The 23rd dispatch: the gate reported its absence into a channel its only caller deletes (2026-09-01)
+
+The three legs are re-verified by content in this venue and unchanged; nothing below revisits them.
+The 22nd dispatch's fix **landed** — `self_path()` and the naming warning are on trunk, and
+`tests/cc-backlog-self-path.bats` is there with them — at **2026-08-31T21:52:36Z**. This row was fired
+at a cloud VM again at **2026-09-01T03:48:27Z**, **5 h 56 m later**. So the 22nd's cure did not hold
+either, and this time the reason is one further layer out and is **provable off-box, statically, on
+trunk** — no `~/.claude`, no fleet, no operator command needed to establish it.
+
+**`bin/cc-dispatch` captures the claim's stderr and deletes it before any rc-0 path can read it.**
+The claim call site is:
+
+```sh
+if [ -n "$cerrf" ]; then "$backlog" "${claim_args[@]}" >/dev/null 2>"$cerrf"; crc=$?
+cexc="$(claim_excerpt "$cerrf")"
+[ -n "$cerrf" ] && rm -f "$cerrf" 2>/dev/null || true
+```
+
+Every consumer of `$cexc` below that is guarded by `[ "$crc" -eq 4 ]` (sibling-held, done-latched,
+premise-refuted, cloud-ineligible) or by the `[ "$crc" -ne 0 ]` failure arm. **A skipped gate fails
+OPEN — the predicate lives outside the ledger fold, so `crc` is 0** — which is precisely the exit code
+on which `$cexc` is computed and thrown away, one line before the temp file is removed. The IDL then
+records a plain `claimed`. The warning the 22nd dispatch added is emitted on the only code path that
+destroys it.
+
+That is the 22nd's own correction with its second half missing. *A reader that cannot report its own
+absence is not a reader* — and **a report that reaches no store is not a report.** The 22nd made the
+gate speak; it spoke into `2>"$cerrf"`, followed by `rm -f`.
+
+**Fixed here, in the two files that own the seam.** `bin/cc-backlog`'s warning now carries a machine
+token — `gate=eligibility-unresolved`, `gate=` rather than `verdict=` because a verdict is a decision
+this gate never reached and reusing the word would make a non-evaluation indexable as one.
+`bin/cc-dispatch` gains `claim_gate_skip()` (matching that token with `grep -F`, so it matches
+verbatim or not at all — never the English, which may be reworded), reads it **before** the `rm`, and
+journals `idl gate-skipped` on the rc-0 path. Its own action token on `idl_unplaced`'s precedent: it
+is neither a `skipped` nor a `failed` — nothing refused the item and nothing broke — and it is
+deliberately non-terminal, because the fire still happens. The fail-open is unchanged and must be.
+
+**What that buys the next reader.** `jq 'select(.action=="gate-skipped")' idl.jsonl` answers *"did the
+eligibility gate — and therefore `bin/cc-eligible`'s park arm — actually run for this id?"* That
+question has been unanswerable off-box through 23 dispatches and was reconstructed from land
+timestamps every time. It is now a record.
+
+⚠️ **What this does NOT establish**, stated plainly so a 24th dispatch does not inherit a guess: this
+is a proven defect in the observability path, **not a proven cause of this particular fire**. The
+22nd's three candidate causes remain open and remain unobservable from a cloud VM — a relative
+`~/.claude/bin/cc-backlog` symlink (now fixed either way), a `desk` block/unblock recorded at or after
+the park stamp (which retires the arm *by design*), and the repo failing `cc-eligible`'s
+certification. What changes is that the first of those is no longer *silent*: after this lands, a fire
+whose gate did not run leaves a record saying so, and the discriminating command below no longer has
+to be run from memory of when things landed.
+
+```sh
+~/.claude/bin/cc-eligible why e981656df348
+```
+
+**A pre-existing red found in passing, and it is NOT this diff's** — named because it is the same
+disease this row has been dying of. `tests/cc-dispatch-v2.bats` is **0 ok / 17 not ok** in a cloud
+venue, against the *pristine* trunk files: its `setup()` runs `git archive "$A2_BASE_SHA"` for
+`A2_BASE_SHA="ec92e68c"`, commented *"immutable ancestor of origin/main"*, and that object does not
+exist in a fresh clone even after `git fetch --unshallow` — `fatal: Not a valid object name`. It is
+the sha-rot this file's own ⚠️ above documents (`b5553505` resolving to an unrelated commit), one
+layer down and load-bearing: the suite is dead in every cloud venue and reports it as 17 test
+failures rather than as a missing fixture. Measured identically with and without this diff, so it is
+attributed, not driven — filing it needs the box.
+
+**The correction this row has now paid twenty-three times for**, completing the 22nd's: *a report that
+reaches no store is not a report.* Nineteen diagnoses reached no branch; the twentieth reached a
+branch and addressed its last step to a human; the twenty-first reached a store nothing read; the
+twenty-second reached a reader whose caller deleted it. Each cure was correct and each landed one
+layer short of a consumer.
+
 ## 4 · If 2.1.234 is adopted, adopt it on other grounds — and set one env var first
 
 The upgrade is defensible for 33 releases of unrelated fixes, never for capacity. Two items gate it:

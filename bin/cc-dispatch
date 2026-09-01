@@ -850,6 +850,37 @@ claim_excerpt() {
   printf '%s%s' "$line1" "${cause:+ · cause: $cause}"
 }
 
+# claim_gate_skip <stderr-file> → an admission gate's own report that it did NOT RUN, or "".
+#
+# WHY IT IS A SECOND READER AND NOT A CLAUSE IN claim_excerpt. Everything claim_excerpt extracts is
+# a REFUSAL, and every consumer of its output below is guarded by `[ "$crc" -eq 4 ]` or
+# `[ "$crc" -ne 0 ]`. A skipped gate is the opposite shape: it fails OPEN, so the claim succeeds,
+# `crc` is 0, and $cexc is computed and dropped on the next line when $cerrf is removed. Folding
+# this into claim_excerpt would put the fact in a variable no rc-0 path reads.
+#
+# THIS COST BACKLOG e981656df348 A TWENTY-THIRD DISPATCH. That row's cure landed 2026-08-25; the
+# interlock built to fold it out of the wave is bin/cc-eligible's park arm, reached through
+# `cc-backlog claim --venue cloud`. The 22nd dispatch found that gate resolving its helper to
+# `/cc-eligible`, skipping, and admitting in silence — and fixed the silence by printing to stderr.
+# It landed at 2026-08-31T21:52Z and the row fired again 5 h 56 m later, because the stderr it now
+# prints to is captured by THIS file into a temp file that is read for refusals and deleted. The
+# gate reported its own absence into the one channel its only production caller drops.
+#
+# So the correction the 22nd dispatch drew — a reader that cannot report its own absence is not a
+# reader — has a second half: a report that reaches no store is not a report. This function plus the
+# `idl gate-skipped` record below is that half; the IDL is the store, and it is what lets the NEXT
+# diagnosis read whether the arm ran instead of reconstructing it from timestamps.
+#
+# POSITIVE DISCRIMINATION ON THE TOKEN, never on the sentence (`grep -F`, so it matches VERBATIM or
+# not at all). bin/cc-backlog owns the `gate=` half of its warning as a contract; the prose beside
+# it is for a human and may be reworded without breaking this. Bounded and sanitized exactly like
+# claim_excerpt — this lands in a JSON record, and an unbounded copy of a stranger's stderr does
+# not belong in one.
+claim_gate_skip() {
+  { [ -n "${1:-}" ] && [ -s "$1" ]; } || return 0
+  grep -m1 -F 'gate=eligibility-unresolved' "$1" 2>/dev/null | tr -cd '\40-\176' | cut -c1-200
+}
+
 # self_release <id> <token> → releases the claim we took but never started work on, and ECHOES the
 # journal marker that is actually TRUE of the release (", self-release" or nothing).
 #
@@ -2426,12 +2457,17 @@ dispatch() { # <dry|run|decide>
     [ "$venue" = cloud ] || venue="$(fire_venue "${fire_args[@]}")"
     claim_args=(claim "$id" --by "$SID" --role dispatcher)
     if [ "$venue" = cloud ]; then claim_args+=(--venue cloud); fi
-    local cerrf crc cexc
+    local cerrf crc cexc cwarn
     cerrf="$(mktemp "${TMPDIR:-/tmp}/cc-dispatch-claim.XXXXXX" 2>/dev/null || true)"
     if [ -n "$cerrf" ]; then "$backlog" "${claim_args[@]}" >/dev/null 2>"$cerrf"; crc=$?
     else                     "$backlog" "${claim_args[@]}" >/dev/null 2>&1;       crc=$?
     fi
     cexc="$(claim_excerpt "$cerrf")"
+    # BOTH READS HAPPEN BEFORE THE rm, and the ordering is the defect rather than an optimisation:
+    # $cerrf is the only copy of the claim's stderr and the next line destroys it. See
+    # claim_gate_skip's header — the fact it extracts is reachable ONLY at rc 0, i.e. after every
+    # consumer of $cexc has been passed by.
+    cwarn="$(claim_gate_skip "$cerrf")"
     [ -n "$cerrf" ] && rm -f "$cerrf" 2>/dev/null || true
     if [ "$crc" -eq 4 ] && [ "${cexc#*verdict=sibling-held}" != "$cexc" ]; then
       # verdict=sibling-held — another ROW naming the SAME WORK is claimed and live, and the actuator
@@ -2494,6 +2530,25 @@ dispatch() { # <dry|run|decide>
     fi
     if [ "$crc" -ne 0 ]; then
       FAILED=$((FAILED + 1)); idl failed "$id: claim rc=$crc${cexc:+ — $cexc}"; continue
+    fi
+    # AN ADMISSION GATE THAT DID NOT RUN IS A RECORDED FACT, not a silent one. Reaching here means
+    # the claim SUCCEEDED, which is exactly what a skipped gate produces: the predicate lives
+    # outside the ledger fold, so every way of failing to read it fails OPEN. That is correct and
+    # is not changed here — the item is still claimed and still fired. What changes is that the
+    # dispatcher no longer records `claimed` as though the gate had run and admitted.
+    #
+    # ITS OWN ACTION TOKEN, on idl_unplaced's precedent: this is neither a `skipped` nor a `failed`
+    # — nothing refused the item and nothing broke — and folding it into either would mislabel a
+    # blind admit as a decision, then feed thrash_map a fault record for a claim that worked. It is
+    # deliberately NOT terminal (see idl's `fired|failed|skipped` case): the fire still happens, and
+    # a terminal mark here would make the pass's accounting say the item was placed by this record.
+    #
+    # WHAT A READER DOES WITH IT: `jq 'select(.action=="gate-skipped")' idl.jsonl` answers "did the
+    # eligibility gate — and therefore bin/cc-eligible's park arm — actually run for this id?" That
+    # question has been unanswerable off-box through 23 dispatches of e981656df348, and it had to be
+    # reconstructed from land timestamps every time.
+    if [ -n "$cwarn" ]; then
+      idl gate-skipped "$id: admission gate did NOT run — $cwarn · the claim was admitted WITHOUT the eligibility predicate, so bin/cc-eligible's park arm was never consulted for this fire"
     fi
     # G5 — WHERE THE OWNING ACCOUNT IS RECORDED, and why it is here rather than on the claim.
     # An off-box session spends ONE account's rate limit, and "which one" is the first question

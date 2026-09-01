@@ -158,3 +158,101 @@ add_boxy() {
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" != *"eligibility gate SKIPPED"* ]] || { echo "$output"; false; }
 }
+
+# ── THE DISPATCHER SEAM: the warning must survive its only production caller ──────────────────────
+#
+# THE TWENTY-THIRD DISPATCH'S FINDING. The suite above proves bin/cc-backlog NAMES an unresolvable
+# helper. It does not prove anyone HEARS it, and the fix landed into a caller that drops it.
+#
+# bin/cc-dispatch runs the claim as `"$backlog" claim … >/dev/null 2>"$cerrf"`, reads $cerrf through
+# claim_excerpt into $cexc, `rm -f`s the file on the next line, and then routes $cexc ONLY through
+# arms guarded by `[ "$crc" -eq 4 ]` / `[ "$crc" -ne 0 ]`. A SKIPPED gate fails OPEN — rc 0 — which
+# is precisely the exit code on which $cexc is computed and discarded. So the one sentence that says
+# "the park arm never ran" is emitted on the only path that deletes it, and the IDL records a plain
+# `claimed`.
+#
+# That is the 22nd dispatch's own lesson unclosed: a reader that cannot report its own absence is
+# not a reader — and reporting to a channel the caller drops is the same absence one layer out.
+#
+# DISCRIMINATED ON A TOKEN, NEVER ON THE ENGLISH. `gate=eligibility-unresolved` is the machine half
+# of the warning; the prose beside it is for a human and may be reworded. A latch that greps the
+# sentence would re-break on the first rewording, which is the defect bin/cc-dispatch's own
+# `claim_excerpt` header (and cloud-return.sh step 8) already names.
+#
+# Extracted with `sed` and sourced, the seam pattern tests/cc-backlog-condition-lease.bats:257
+# established: the function is the contract, and running a whole dispatch pass to reach it would
+# test the pass instead.
+
+seam_lib() {
+  local out="$BATS_TEST_TMPDIR/seam.sh"
+  sed -n '/^claim_gate_skip()/,/^}/p' "$REPO/bin/cc-dispatch" > "$out"
+  grep -q '^claim_gate_skip()' "$out" || return 1
+  printf '%s' "$out"
+}
+
+@test "SEAM: the skip warning carries a machine token, not just prose" {
+  local id; id="$(add_boxy "$CB_REAL")"
+  cd /
+  run env CC_BACKLOG_ELIGIBLE_BIN="$BATS_TEST_TMPDIR/nope/cc-eligible" \
+      "$CB_REAL" claim "$id" --by cloudvm-8 --venue cloud
+  [ "$status" -eq 0 ] || { echo "fail-open lost: $output"; false; }
+  [[ "$output" == *"gate=eligibility-unresolved"* ]] \
+    || { echo "no token — the caller can only latch on English: $output"; false; }
+}
+
+@test "SEAM: cc-dispatch extracts the skip from a claim's stderr" {
+  local lib; lib="$(seam_lib)" || skip "could not extract claim_gate_skip from bin/cc-dispatch"
+  # The REAL artifact, not a hand-typed approximation of it (memory:
+  # control-must-replay-the-real-artifact): drive cc-backlog to produce the stderr under test.
+  local id; id="$(add_boxy "$CB_REAL")"
+  cd /
+  env CC_BACKLOG_ELIGIBLE_BIN="$BATS_TEST_TMPDIR/nope/cc-eligible" \
+      "$CB_REAL" claim "$id" --by cloudvm-9 --venue cloud >/dev/null 2>"$BATS_TEST_TMPDIR/err"
+  run bash -c ". '$lib'; claim_gate_skip '$BATS_TEST_TMPDIR/err'"
+  [ "$status" -eq 0 ] || { echo "rc=$status"; false; }
+  [[ "$output" == *"gate=eligibility-unresolved"* ]] \
+    || { echo "the dispatcher cannot see its own gate's absence: $output"; false; }
+  [ "${#output}" -le 200 ] || { echo "unbounded excerpt: ${#output} chars"; false; }
+}
+
+@test "SEAM CONTROL: a clean claim yields no skip record" {
+  # Without this, a claim_gate_skip that returned its whole input would pass the test above and
+  # journal a gate-skipped record on every successful cloud claim.
+  local lib; lib="$(seam_lib)" || skip "could not extract claim_gate_skip from bin/cc-dispatch"
+  local link id; link="$(rel_link)"; id="$(add_boxy "$link")"
+  cd /
+  "$link" claim "$id" --by cloudvm-10 --venue cloud >/dev/null 2>"$BATS_TEST_TMPDIR/err" || true
+  run bash -c ". '$lib'; claim_gate_skip '$BATS_TEST_TMPDIR/err'"
+  [ -z "$output" ] || { echo "cried wolf on a healthy gate: $output"; false; }
+}
+
+@test "SEAM CONTROL: an absent or empty stderr file is silent, not an error" {
+  local lib; lib="$(seam_lib)" || skip "could not extract claim_gate_skip from bin/cc-dispatch"
+  run bash -c ". '$lib'; claim_gate_skip '$BATS_TEST_TMPDIR/no-such-file'"
+  [ "$status" -eq 0 ] || { echo "rc=$status on a missing file"; false; }
+  [ -z "$output" ] || { echo "$output"; false; }
+  : > "$BATS_TEST_TMPDIR/empty"
+  run bash -c ". '$lib'; claim_gate_skip '$BATS_TEST_TMPDIR/empty'"
+  [ "$status" -eq 0 ] || { echo "rc=$status on an empty file"; false; }
+  [ -z "$output" ] || { echo "$output"; false; }
+}
+
+@test "SEAM: the rc-0 path JOURNALS the skip — the arm's absence reaches a store" {
+  # The whole point. cc-dispatch must not compute the warning and drop it: a skipped gate is a
+  # fail-open ADMIT, so `crc` is 0 and every incumbent consumer of $cexc is unreachable. Asserted
+  # against the source because reaching this line in a live pass needs a whole fixture fleet — but
+  # asserted STRUCTURALLY, on the guard that was the defect, not on the presence of a word.
+  local src="$REPO/bin/cc-dispatch"
+  grep -q 'claim_gate_skip' "$src" \
+    || { echo "no extractor at all"; false; }
+  # the capture must happen BEFORE the stderr file is removed
+  local cap rm_ln
+  cap="$(grep -n 'cwarn="\$(claim_gate_skip' "$src" | head -1 | cut -d: -f1)"
+  rm_ln="$(grep -n 'rm -f "\$cerrf"' "$src" | head -1 | cut -d: -f1)"
+  [ -n "$cap" ] || { echo "the warning is never captured from the claim's stderr"; false; }
+  [ -n "$rm_ln" ] || { echo "could not locate the cerrf cleanup"; false; }
+  [ "$cap" -lt "$rm_ln" ] || { echo "captured at line $cap, AFTER the rm at $rm_ln"; false; }
+  # and it must be journalled on a path that is reachable at rc 0
+  grep -q 'idl gate-skipped' "$src" \
+    || { echo "the skip is captured and never journalled — dropped exactly as before"; false; }
+}
