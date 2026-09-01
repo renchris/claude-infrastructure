@@ -5982,8 +5982,18 @@ pre_fire_account_sweep() {
       # and 0 is precisely what unlocks the Phase-1 relogin gate below, so an unread `ps` would
       # authorise a headless token redeem underneath N live sessions. Emit the word instead: it
       # is not "0", so the gate refuses and the account takes the operator bridge line.
+      #
+      # `.k_stale` is the SAME REFUSAL through a second door. claude-accounts inherit_k now carries
+      # the previous sweep count onto a row whose own census failed, so `.k` is a number again
+      # where it used to be null — deliberately, because ROUTING is better served by a count from
+      # 600s ago than by excluding the whole fleet. This gate is the opposite kind of consumer: it
+      # redeems a refresh token, irreversibly, on the claim that NOBODY holds it, and a 600s-old
+      # zero is not that claim (a session can start in a second). So the marker, not the type, is
+      # what this reads — and an inherited count refuses exactly as a null one does.
+      # Version-skew safe: a producer that never sets .k_stale yields false and nothing changes.
       .rows[] | select(.auth_actionable == true)
-      | [.acct, .auth, (if (.k | type) == "number" then .k else "unmeasured" end)] | @tsv
+      | [.acct, .auth,
+         (if (.k | type) == "number" and (.k_stale | not) then .k else "unmeasured" end)] | @tsv
     else "SKEW" end' 2>/dev/null || true)"
   if [ "$broken" = SKEW ]; then
     echo "⚠ pre-fire account sweep: claude-accounts emits no .auth_actionable (version skew) — auth gate SKIPPED (fire proceeds)" >&2
@@ -6017,7 +6027,8 @@ pre_fire_account_sweep() {
     # that stamp the grant returns invalid_grant by construction, so Phase 1 would spend 90s
     # proving what the keychain already stated. Straight to the bridge line instead.
     rtexp="$(printf '%s' "$info" | jq -r '.refresh_token_expired // false' 2>/dev/null || echo false)"
-    # `$k` is "unmeasured" when the producer could not read `ps`. It is compared for EQUALITY to 0,
+    # `$k` is "unmeasured" when the producer could not read `ps` THIS SWEEP — including when it
+    # carried an inherited count forward for routing (`.k_stale`, filtered above). It is compared for EQUALITY to 0,
     # so UNKNOWN refuses by construction — the same direction heal() takes under the same input.
     # Defaulting it (`${k:-0}`) survives only for an ABSENT field (version skew), never for a
     # measurement failure, which now has its own spelling.
@@ -6040,7 +6051,7 @@ pre_fire_account_sweep() {
       [ "${k:-0}" != 0 ] && why="$k live session(s) — token owned by a running CC (never relogin under it)"
       # UNKNOWN is not "a running CC" — say which one it is, or the bridge line reports a live
       # session nobody observed and the operator debugs the wrong thing.
-      [ "$k" = unmeasured ] && why="live-session count UNMEASURABLE (ps failed) — refusing to relogin on a gate that cannot be proven"
+      [ "$k" = unmeasured ] && why="live-session count UNMEASURABLE this sweep (ps failed; an inherited count is not proof) — refusing to relogin on a gate that cannot be proven"
       stranded=$((stranded+1)); summary="$summary ⚠$acct($auth)"
       stranded_lines="$stranded_lines
 - $acct — $auth · $why · last-known $lastknown · fix: \`$CC_ACCOUNTS_BIN --relogin-info $acct\` → account-relogin skill (Phase 2, browser)"

@@ -176,6 +176,44 @@ info() { printf '%s' "$2" > "$CC_STUB_INFO_DIR/$1.json"; }
   echo "$output" | grep -q "stranded=1"
 }
 
+@test "token-invalid with an INHERITED live count (k_stale) → NOT eligible; a 600s-old zero is not proof" {
+  # claude-accounts inherit_k (desk-router-abstention-2026-09-01 §4) now carries the previous
+  # sweep's pane count onto a row whose own `ps` census failed, marked `k_stale`. That is right for
+  # ROUTING — the alternative was excluding all four accounts at once and silently concentrating
+  # every launch on the pinned one — and it means `.k` is a NUMBER where this gate used to receive
+  # null. So the fix re-opened the exact hole the case above closed, through a second door: `k: 0`
+  # is the one value that unlocks a headless token redeem, and this row now carries it.
+  #
+  # This gate is the opposite kind of consumer from the router. It redeems a refresh token,
+  # irreversibly, on the claim that NOBODY holds it — and a zero measured up to 600s ago is not
+  # that claim, because a session can start in a second. The loser of that race holds a retired
+  # token: a logout manufactured by a measurement nobody re-took. So the gate keys on the MARKER,
+  # not on the type, and an inherited count refuses exactly as a null one does.
+  rows '{"rows":[{"acct":"next2","auth":"token-invalid","k":0,"k_stale":true}]}'
+  info next2 "{\"config_dir\":\"/x\",\"keychain_service\":\"svc\",\"keychain_state\":\"present\",\"claude_bin\":\"$BIN/claude-heal-ok\",\"oauth_scopes\":\"a b\",\"has_refresh_token\":true}"
+  run bash "$HF" account-sweep
+  [ "$status" -eq 0 ]
+  # `grep P >/dev/null`, not `grep -q P`: the pipefail-SIGPIPE ratchet holds this file at its
+  # grandfathered count, and that list may only SHRINK. The drained form is what it asks for.
+  ! echo "$output" | grep "healed via Phase-1" >/dev/null || false  # the redeem was NEVER attempted
+  ! echo "$output" | grep "FAILED" >/dev/null || false
+  echo "$output" | grep "UNMEASURABLE" >/dev/null
+  echo "$output" | grep "stranded=1" >/dev/null
+}
+
+@test "the SAME row with a live k:0 still heals — the refusal keys on staleness, not on caution" {
+  # The control for the case above, and the reason it is not merely "refuse whenever k is 0". A
+  # gate that refused every zero would strand every genuinely idle account behind a browser
+  # relogin forever, which is the failure mode the Phase-1 path exists to remove. One field
+  # separates the two fixtures.
+  rows '{"rows":[{"acct":"next2","auth":"token-invalid","k":0,"k_stale":false}]}'
+  info next2 "{\"config_dir\":\"/x\",\"keychain_service\":\"svc\",\"keychain_state\":\"present\",\"claude_bin\":\"$BIN/claude-heal-ok\",\"oauth_scopes\":\"a b\",\"has_refresh_token\":true}"
+  run bash "$HF" account-sweep
+  [ "$status" -eq 0 ]
+  echo "$output" | grep "healed via Phase-1 headless relogin" >/dev/null
+  echo "$output" | grep "stranded=0" >/dev/null
+}
+
 @test "another heal/login in flight (lock held) → relogin DEFERRED, not counted stranded" {
   rows '{"rows":[{"acct":"next2","auth":"token-invalid","k":0}]}'
   info next2 "{\"config_dir\":\"/x\",\"keychain_service\":\"svc\",\"keychain_state\":\"present\",\"claude_bin\":\"$BIN/claude-heal-ok\",\"oauth_scopes\":\"a b\",\"has_refresh_token\":true}"

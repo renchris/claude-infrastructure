@@ -151,25 +151,52 @@ feedback loop, and this doc does not claim otherwise.
 Six tests added across the two suites, each with a mutant that reproduces the pre-fix blindness and
 goes red.
 
-## NOT shipped — filed, with the reason
+## Filed, then shipped — inherit the last sweep's `k` (backlog `1f6208064577`)
 
-**Inherit the last sweep's `k`** (`bin/claude-accounts:3040-3042` add `"k"` to `_prev_snapshot`'s
-projection; `:1330` stamp the inherited value with a staleness marker, bounded by the existing 600 s
-grace). Preferred over raising `timeout=10` (spends TTL margin a sweep already breaches at p90) and
-over removing `ProcessType Background` (deliberate, and would not close the tail).
+*Filed here as NOT shipped, with the reason: it is a routing-**eligibility** policy change and needed
+its own mutant-proven suite. It got one, and landed as its own item; the design below is what was
+built, unchanged.*
+
+**Inherit the last sweep's `k`** — `_prev_snapshot` projects `k`/`k_stale`/`k_as_of`; a new
+`inherit_k()` stamps the inherited value with a staleness marker, bounded by the existing 600 s
+`cache_grace_s`. Preferred over raising `timeout=10` (spends TTL margin a sweep already breaches at
+p90) and over removing `ProcessType Background` (deliberate, and would not close the tail).
+
+**The bound is on the MEASUREMENT, never the copy.** `get_data` writes inherited rows back into the
+cache and `_prev_snapshot` reads them back out, so an account re-inherits its own inherited value
+every sweep; dating each copy "now" would make a count of any age read as fresh forever. That is not
+a hypothetical — it is the bug `inherit_lastgood`'s `quota_as_of` clause was written to fix, on the
+same store. `k_as_of` carries the original stamp forward, so inheritance self-terminates after 600 s
+of continuous census failure and the fleet correctly returns to `unmeasured`.
 
 **Safety detail that makes it viable:** `heal()`'s rotation gate reads `k_live` from the
-`probe_account(..., k_live, ...)` **argument**, not `row["k"]`, so stamping at `:1330` leaves that
-gate reading `None` and still refusing — preserving the half of the `None` contract that must never
-weaken. `handoff-fire.sh:6020-6043` would need stale-marker awareness.
+`probe_account(..., k_live, ...)` **argument**, not `row["k"]`. Inheritance runs in `collect()`
+*after* the probes and touches only `row["k"]`, so that gate still reads `None` and still refuses —
+preserving the half of the `None` contract that must never weaken. `handoff-fire.sh`'s Phase-1
+relogin gate is the same class of consumer and got the stale-marker awareness this section called
+for: its jq now emits `unmeasured` for `.k_stale`, because the fix turned a `null` that gate
+correctly refused into a `0` that would have unlocked a headless token redeem.
 
-**Why not this session:** it is a routing-**eligibility** policy change and needs its own
-mutant-proven suite; and the instrument that would let anyone evaluate it landed only in the two
-commits above and has produced no data yet. Shipping the policy change ahead of its own measurement
-would repeat exactly the error §6 documents.
+**Observability, since §6 is the reason this waited:** `k_src` gains a fourth value,
+`panes-stale`, which reaches the route-meta line, the utilization series and the readout (`7*`);
+`k_stale=`/`k_as_of=` are emitted separately on the route line because the `CC_ROUTE_KWORK` kill
+switch collapses `k_src` to `off` in exactly the configuration where the pane census is the only
+census. So the rate at which decisions ride an inherited count is measurable from disk from the
+first sweep, rather than being another claim nothing can refute.
+
+Suite: `tests/claude-accounts-stale-k.bats` (8 cases) + 2 in
+`tests/handoff-fire-account-sweep.bats`. Four mutants were executed against them — inheritance
+disabled, the bound moved to copy age, `panes-stale` collapsed into `panes`, and inheritance moved
+*ahead* of the probes — and each reds exactly the cases that own its claim.
 
 ## Open / cannot determine
 
+- The `concurrency-unmeasured` abstention rate AFTER inheritance. `inherit_k` closes the transient
+  case by construction, but the residual — sweeps where the census has been dead longer than 600 s,
+  and the share of decisions now riding `panes-stale` — is a number no sweep has produced yet.
+  `k_src=panes-stale` and `k_stale=` on the route line are what make it answerable; re-read them
+  against `route.jsonl` once the record has days in it, rather than assuming §2's 10.0% simply fell
+  to the `keychain-error` + `no data` remainder.
 - *Why* `ps -wwEo command=` exceeds 10 s (0.070–0.083 s foreground now, 1,176 procs). The
   `KERN_PROCARGS2`-under-I/O-throttle mechanism is inference from the plist declaration plus the
   `took_ms` distribution — nothing samples the producer's scheduling band while it runs.
