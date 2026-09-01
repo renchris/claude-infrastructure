@@ -377,22 +377,63 @@ def keychain_service(config_dir):
     return f"Claude Code-credentials-{h}"
 
 
+KEYCHAIN_TIMEOUT_S = float(os.environ.get("CC_KEYCHAIN_TIMEOUT_S", "10"))
+
+
+def _log_keychain_failure(config_dir, path, elapsed_ms, rc=None, stderr=None):
+    """Name WHICH of read_creds' four failure returns fired, and with what evidence.
+
+    🚨 WHY THIS EXISTS. `keychain-error` is a SINGLE label over four physically different
+    events — a 10 s timeout, a non-zero `security` exit, unparseable stdout, and a non-object
+    payload — and until 2026-09-01 the function logged NOTHING, discarded `p.stderr` (the one
+    string carrying the OSStatus that names the real cause), and recorded no elapsed time. The
+    label was therefore unfalsifiable: an 8-agent-hour reconstruction of the 2026-09-01T04:43Z
+    fleet-wide outage could establish only that the failure was load-ASSOCIATED (62/69
+    keychain-error sweeps carry a transcript-walk budget breach within ±90 s, vs 29.2% of 500
+    control sweeps, Fisher p = 8.1e-13) and could NOT establish which return fired — so the
+    tempting fix, raising the timeout, could not be evaluated at all, because nothing on this
+    box can say whether the timeout has ever fired even once.
+
+    That matters far past cosmetics: `probe_account` copies this state into `row["error"]`, and
+    `_excluded()` tests `row["error"]` FIRST, ahead of every other rule and on all three lanes.
+    So one unexplained `security` hiccup removes an account from routing outright — and when it
+    hits all four, `--route` returns none and the `claude` launcher silently falls back to its
+    pinned account. Measured: all 23 interactive `none` decisions in route.jsonl excluded all
+    four accounts, 20 of them for a single uniform reason.
+
+    Deliberately a LOG line, not a new auth state: `keychain-error` is consumed by
+    ACTIONABLE_AUTH, LOGIN_FIXABLE, the glyph map and BAD_AUTH, and a new enum member would
+    land in each of their fall-through arms unreviewed. Diagnose first; re-shape the enum only
+    once the distribution is known."""
+    detail = f"path={path} elapsed_ms={elapsed_ms:.0f}"
+    if rc is not None:
+        detail += f" rc={rc}"
+    if stderr:
+        detail += " stderr=" + " ".join(stderr.split())[:200]
+    log_event(f"read_creds {os.path.basename(config_dir.rstrip('/'))}: keychain-error {detail}")
+
+
 def read_creds(config_dir, kc_account):
     """-> (payload dict | None, state) — state in {present, no-keychain-item, keychain-error}."""
+    t0 = time.monotonic()
     try:
         p = subprocess.run(
             ["/usr/bin/security", "find-generic-password", "-s", keychain_service(config_dir),
              "-a", kc_account, "-w"],
-            capture_output=True, text=True, timeout=10)
+            capture_output=True, text=True, timeout=KEYCHAIN_TIMEOUT_S)
     except subprocess.TimeoutExpired:
+        _log_keychain_failure(config_dir, "timeout", (time.monotonic() - t0) * 1000)
         return None, "keychain-error"
+    ms = (time.monotonic() - t0) * 1000
     if p.returncode == 44:                       # errSecItemNotFound
         return None, "no-keychain-item"
     if p.returncode != 0:                        # locked keychain / ACL / other
+        _log_keychain_failure(config_dir, "returncode", ms, rc=p.returncode, stderr=p.stderr)
         return None, "keychain-error"
     try:
         d = json.loads(p.stdout)
     except json.JSONDecodeError:
+        _log_keychain_failure(config_dir, "json-decode", ms, rc=p.returncode)
         return None, "keychain-error"
     # A keychain password that is valid JSON but NOT an object (null, a list, a bare string)
     # used to reach .get() and raise AttributeError, which only json.JSONDecodeError was
@@ -400,6 +441,7 @@ def read_creds(config_dir, kc_account):
     # a corrupt item, not a missing one: "keychain-error", never "no-keychain-item" (the
     # latter maps to auth=logged-out at the caller and would trigger a pointless relogin).
     if not isinstance(d, dict):
+        _log_keychain_failure(config_dir, "non-object", ms, rc=p.returncode)
         return None, "keychain-error"
     return (d.get("claudeAiOauth") or None), "present"
 
