@@ -555,8 +555,14 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       # Scored instead against the independent population `git ls-files`: install.sh's 19 globs plus
       # its 18 literal installs deploy 629 of 2,247 tracked files, and the residue names a SECOND
       # AUTHOR. scripts/kitty-setup.sh links six bin/ files into $CFG/bin ITSELF (:216, :220, :225,
-      # :236-238) and compiles bin/kitty-pane-menu-native.swift into $CFG/bin (:245). install.sh
-      # RUNS it (:1204-1215) but never enumerates its classes, and neither auditor names it at all.
+      # :236-238), COPIES bin/it2-wrapper to $CFG/bin/it2 (:215) and compiles
+      # bin/kitty-pane-menu-native.swift into $CFG/bin (:245). install.sh RUNS it (:1204-1215) but
+      # never enumerates its classes, and neither auditor names it at all.
+      # The :215 clause was added 2026-09-01 by method 250, and its ABSENCE was the tell: this
+      # sentence enumerated the COMPILE — already a non-link verb — and omitted the COPY, so the file
+      # demonstrably knew this installer places bytes by more than one verb while every coverage arm
+      # over it enumerated `ln -sfn` lines alone. A completeness claim inherits the blind spots of the
+      # extractor that produced it, and this one was written from the link lines.
       #
       # THE CITATION IS ONE-WAY, and that is why this stayed invisible. kitty-setup.sh:218-220 knows
       # about install.sh and says so — "install.sh's bin/cc-* glob also deploys it … ln -sfn makes
@@ -577,7 +583,11 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       # bin/kitty-pane-menu-native is already declared from the other side, by
       # config/live-only.manifest's build row naming kitty-setup.sh as its producer.
       # tests/deploy-parity.bats derives kitty-setup.sh's targets from its own `ln -sfn` lines and
-      # asserts each one is claimed-or-declared here, so a seventh target cannot land silently.
+      # asserts each one is claimed-or-declared here. That sentence once ended "so a seventh target
+      # cannot land silently", and the seventh had already landed silently — see the block below. It
+      # is narrow a second way too: an `ln -sfn` anchor enumerates LINK LINES, and this installer also
+      # COPIES (:215) and COMPILES (:245), so two of its nine deploys are in no link-line population
+      # at all. The BY ACTION arm named at the foot of the next block is what gates those.
       bin/it2-kitty|bin/kitty-*)  want=0 ;;
       # ── SECOND INSTALLER, NON-bin TARGET ── the SEVENTH kitty-setup.sh link, and the one the arm
       # above could not name. MEASURED 2026-09-01 by method 249: the block above closed a gap, and a
@@ -608,6 +618,21 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       # tests/deploy-parity.bats now ALSO derives kitty-setup.sh's targets by the SHAPE of the link
       # line, resolving one variable hop, and asserts the two partitions SUM — so an EIGHTH target
       # refuses instead of being absorbed, whatever its source is spelled as.
+      # ── AND BY ACTION ── method 250, MEASURED 2026-09-01, asking of THAT remedy what it asks of its
+      # own subject. The BY SHAPE arm repaired the KEY and inherited the POPULATION: its anchor is
+      # `^[[:space:]]*ln -sfn `, so its partition sums over LINK LINES and no byte placed by another
+      # verb can enter it. #276 landed that lesson for install.sh one link earlier (a coverage arm
+      # keyed on a verb name is itself a shape claim) and it was not carried to this installer.
+      # Measured by executing this case block with the catch-all tagged: kitty-setup.sh deploys NINE
+      # repo sources by THREE actions — 7 `ln -sfn`, 1 `cp` (:215), 1 `swiftc` compile (:245) — the
+      # two link-line extractors derive 6 and 7, and bin/it2-wrapper plus
+      # bin/kitty-pane-menu-native.swift are in NEITHER coverage population. All nine are
+      # claimed-or-declared today and 0 reach the reasonless default, so no outage is repaired; both
+      # extra destinations were read live and present at 2026-09-01T04:58Z. tests/deploy-parity.bats
+      # gains a SIXTH extractor that enumerates by the REPO SOURCE and classifies by the DESTINATION —
+      # no verb name in the classifier — with both partitions asserted to SUM. Proven discriminating
+      # rather than merely added: one `cp` of an undeclared source planted in a pristine origin/main
+      # extraction turns the new arm RED and leaves the BY SHAPE arm GREEN.
       config/kitty.conf)         want=0 ;;
       # ── NOT-PER-FILE ── install.sh classes deliberately NOT deployed as per-file links into $CFG.
       # MEASURED 2026-08-31 by method 236 pointed at this file — #264 ran the same method against the
@@ -654,6 +679,14 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       #   bin/it2-wrapper        install.sh:814 COPIES it to $CFG/bin/it2, a RENAMED destination.
       #                          Both are scored under COPYMISS/COPYSTALE, deliberately not the
       #                          `MISSING: ln -sf` shape link_refresh() consumes.
+      #                          ⚠️ bin/it2-wrapper has TWO authors: scripts/kitty-setup.sh:215 copies
+      #                          it to the same destination, for its own reason (that ~/.claude/bin/it2
+      #                          is historically a real copy, so the kitty divert must be refreshed
+      #                          explicitly). This arm is therefore load-bearing for the SECOND
+      #                          installer as well, and retiring install.sh's copy would delete the
+      #                          only thing standing between kitty-setup.sh's copy and the reasonless
+      #                          default below. Named 2026-09-01 by method 250; the BY ACTION fire
+      #                          test in tests/deploy-parity.bats holds exactly that coupling.
       #   bin/claude-accounts    install.sh:477 and :501 link these into $HOME/bin, which is NOT
       #   bin/dia-cdp-launch.sh  under $LIVE at all, so a per-file demand here would be WRONG
       #                          rather than noisy. tests/deploy-parity.bats's HOME/bin CLAIM
