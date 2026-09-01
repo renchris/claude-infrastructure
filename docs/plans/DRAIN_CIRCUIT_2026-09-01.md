@@ -377,7 +377,49 @@ verification. Everything in this section was independently re-measured against t
 ## 4. Status log
 
 - **2026-09-01** — Audit complete across both lanes; 24-agent adversarial wave corroborated it and
-  corrected §1.1 (see `3feac4443`). W0 done. **W1 done and live**: `1ca324beb` adds
+  corrected §1.1 (see `3feac4443`). W0 done. **W1 done**: `1ca324beb` adds
   `cloud-return|cloud-reconcile` to the `cc-reaper` whitelist with a RED-proven fixture pair
-  (mutant fails on its `got` assertion; full suite 193/193). W2, W3 and the five §3b items are
-  specified and not started.
+  (mutant fails on its `got` assertion; full suite 193/193). Landed and content-verified on trunk;
+  **not yet live** — the live layer is pinned at the `postland-verify` green stamp with un-stamped
+  commits above it, which is normal converge lag and not this diff's to drive.
+
+- **2026-09-01 — W2 DONE and verified BY EXECUTION, not by its report** (`ff901ddcb`, `406157795`).
+  `scripts/backlog-telemetry.sh` is now `100755` on trunk and renders the conversion metric that
+  existed nowhere in the repo. Running the trunk copy against the live store:
+
+  ```
+  CONVERSION 7D  claims=248 over 17 distinct id(s) → 1 converted to done (5.8%) · reclaim=14.5x per id
+  verdict=drain-futile  scope=fleet  claims=248 ids=17 converted=1 (5.8%) floor=25% reclaim=14.5x
+  --assert rc: 1
+  ```
+
+  and `bin/cc-value`, whose churn arm was structurally unreachable (it required fleet value to be
+  exactly 0 while the local lane lands dozens of commits a day), now fires truthfully:
+
+  ```
+  FLEET  value 199 = 198 commits landed …  ⚠ FLEET CHURN — no-conversion, lane-silent:cloud
+  DRAIN  23 claim(s) over 12 distinct id(s) → 0 reached done (0%, floor 25%) · reclaim 1.9x per id
+  LANES  cloud 0 · local-drain 1
+  ```
+
+  Note the shape of the fix: `value` still reads 199 and its meaning is unchanged — the churn arm
+  was ADDED beside it and names its reason, rather than redefining a number other consumers read.
+  **The §1.6 constraint held**: no new launchd job. The assert rides `com.claude.log-rotation`
+  (already hourly) via `scripts/rotate-autonomy-logs.sh`, debounced per UTC day or verdict change,
+  with the disposition folded into that job's existing IDL record. 17-case bats suite green,
+  including a healthy-window control that stays SILENT, a mutant proving it can fail, and
+  UNKNOWN-vs-0 on an unreachable producer. W2 deliberately did NOT rate-floor `value/spend` — its
+  numerator is the masked one (it read 21.2 during the zero-drain week); reasoning is in the commit
+  body.
+
+- **2026-09-01 — W3 IN FLIGHT** (pane 197, worktree `drain-loop-w3`), owning the four §3b items.
+  ⚠️ Its `/goal` never armed — `handoff-fire` abstained on a torn frame and two `cc-pane send`
+  retries did not reach its transcript. It has the full brief and DoD and is working (1 commit on
+  its branch at the time of writing), but without the Stop-hook backstop it may close before the
+  DoD is met. Filed as an operator step: backlog `d7d5a8533f58`.
+
+- **Still open after tonight**: the four §3b kills (the 900 s bound vs ~675 s fixed cost, the
+  SIGKILL-stranded lock, the ~1-in-48 reach, the unbounded declaration population) plus the
+  dispatcher re-fire predicate — W3 owns them. The local lane's self-reference (§1.4, recycle #277,
+  no goal armed, zero backlog rows claimed) has NO wave assigned and is the remaining half of the
+  operator's "deferring rather than completing" complaint.
