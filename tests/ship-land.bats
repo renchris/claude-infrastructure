@@ -3628,3 +3628,79 @@ POST
   [ "$head_status" -eq 1 ]
   true
 }
+
+_markers_extract() {  # extract the LIVE decision; sourcing ship-land.sh would RUN a land
+  local ln n
+  # THE ANCHOR IS THE CONFLICT-MARKER PATTERN ITSELF — `{7}` is intrinsic to the question ("is a
+  # seven-character marker staged"), so it cannot drift the way a verb name or a message can, and
+  # a fix that rewords the refusal leaves this arm running. Asserted UNIQUE before it is read: a
+  # range extraction from a non-unique anchor silently lifts a different region that still parses.
+  n="$(grep -cF '{7}' "$SHIPLAND")"
+  [ "$n" -eq 1 ] || { echo "marker-gate anchor count moved: $n (expected 1)"; return 1; }
+  ln="$(grep -nF '{7}' "$SHIPLAND" | cut -d: -f1)"
+  {
+    echo '#!/bin/bash'
+    echo '# $1 = a repo dir already holding a STAGED diff. Exit 1 = markers reported, 0 = clean.'
+    echo 'set -uo pipefail'
+    echo 'cd "$1" || exit 9'
+    sed -n "${ln}p" "$SHIPLAND"
+    echo '  exit 1'
+    echo 'fi'
+    echo 'exit 0'
+  } > "$BATS_TEST_TMPDIR/markers.sh"
+  # fail-loud extraction guard: the DECISION, not merely some lines, must have come across
+  [ "$(grep -c 'git diff --cached' "$BATS_TEST_TMPDIR/markers.sh")" -eq 1 ]
+}
+
+_markers_repo() { # $1=markers(1|0) $2=filler bytes → prints a repo dir with that diff STAGED
+  local d="$BATS_TEST_TMPDIR/r$1_$2"
+  mkdir -p "$d"
+  git -C "$d" init -q
+  git -C "$d" config user.email t@e
+  git -C "$d" config user.name t
+  if [ "$1" -eq 1 ]; then
+    printf '%s\n' '<<<<<<< HEAD' ours '=======' theirs '>>>>>>> other' > "$d/a.txt"
+  else
+    printf '%s\n' 'plain a' 'plain b' > "$d/a.txt"
+  fi
+  awk -v n="$2" 'BEGIN { for (i = 0; i * 40 < n; i++) print "filler line padding padding pad" i }' > "$d/z.txt"
+  git -C "$d" add -A
+  printf '%s' "$d"
+}
+
+@test "rebase conflict-marker refusal: it still reports markers behind a LARGE staged diff" {
+  _markers_extract
+  # THE PROPERTY THE DEFECT BROKE, and the one that survives any rewording of the fix: whether a
+  # conflict marker is staged is not a function of how much OTHER diff follows it. Under
+  # `set -o pipefail` an early-exiting `grep -q` closed the pipe at the marker, `git diff` took
+  # SIGPIPE on its next write, pipefail promoted the 141, and the `if` read FALSE — so the branch
+  # whose whole job is to REFUSE was skipped and the rebase continued with the markers staged.
+  # DETERMINISTIC BY CONSTRUCTION rather than by luck: 200,000 B is past the measured
+  # always-inverted floor for a two-stage external producer (87,151 B), so a re-introduced `-q`
+  # fails EVERY run, not one in twenty. Sized from the measured regime, and that is why this
+  # number and not another.
+  run bash "$BATS_TEST_TMPDIR/markers.sh" "$(_markers_repo 1 200000)"
+  [ "$status" -eq 1 ] || { echo "a large staged diff WITH conflict markers read as clean"; false; }
+  # POS control at a size the pre-fix form also answered correctly, so a harness that cannot run at
+  # all reads red here too rather than passing vacuously.
+  run bash "$BATS_TEST_TMPDIR/markers.sh" "$(_markers_repo 1 4000)"
+  [ "$status" -eq 1 ]
+  # NEG controls: a diff with NO markers must still read clean at BOTH sizes, so this arm cannot
+  # pass by always answering "markers present".
+  run bash "$BATS_TEST_TMPDIR/markers.sh" "$(_markers_repo 0 200000)"
+  [ "$status" -eq 0 ]
+  run bash "$BATS_TEST_TMPDIR/markers.sh" "$(_markers_repo 0 4000)"
+  [ "$status" -eq 0 ]
+  true
+}
+
+@test "rebase conflict-marker refusal: the decision DRAINS its producer" {
+  # The class guard beside the behavioural one. COMMENT LINES ARE STRIPPED FIRST: the paragraph
+  # above the fix documents the `grep -q` hazard by name, and a raw grep would convict the very
+  # file that carries the cure.
+  code="$(grep -v '^[[:space:]]*#' "$SHIPLAND" | grep -F '{7}')"
+  [ -n "$code" ] || { echo "the conflict-marker decision has no non-comment line"; false; }
+  [ "$(printf '%s\n' "$code" | grep -c -e '-cE')" -eq 1 ]
+  [ "$(printf '%s\n' "$code" | grep -c -e 'grep -q')" -eq 0 ]
+  true
+}
