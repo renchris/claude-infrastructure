@@ -484,7 +484,9 @@ CROSS_REPO = "ineligible-cross-repo"
 # again 7 h 11 m later, at 2026-08-30T00:54Z.
 #
 # 🚨 THE PARK'S ONLY READER IS THE ARM THE ROW IS ABOUT, AND THAT IS A DEADLOCK, NOT A BUG IN IT.
-# `cloud-return.sh` has exactly one caller — `scripts/autonomy-sweep.sh:1019`, under launchd on the
+# `cloud-return.sh` has exactly one caller — `scripts/autonomy-sweep.sh` §0a (grep `_cloudret=`;
+# it was §2d until 2026-09-01, when it moved to the TOP of the pass because the sweep is TERMed as
+# garbage at ~1400 s and was reaching the old position about 1 tick in 48), under launchd on the
 # operator's box, every 300 s — which is the return/land arm `f85fce7c26f5` reports as dead since
 # 2026-08-17 and `d84434cd` re-measured as INTERMITTENT (up for hours, dark for days). So the one
 # channel a VM has for saying "I am blocked" is gated on the very rail whose deadness is the thing
