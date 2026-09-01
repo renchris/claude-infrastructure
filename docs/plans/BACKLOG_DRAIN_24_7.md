@@ -86,6 +86,124 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-01 — drain recycle #278: method 250 — A REMEDY CAN REPAIR ITS KEY AND INHERIT ITS
+  POPULATION. ASK WHAT THE POPULATION IS A POPULATION *OF*.** ZERO rows closed, ZERO filed, ZERO
+  reopened. TWO commits.
+  **THE QUESTION.** #275 asked what a green gate's map is derived from; #276 what a remedy keyed on a
+  VERB NAME cannot see; #277 what a remedy's key cannot NAME, and closed that gap by re-keying on the
+  SHAPE of the link line with one variable hop resolved. #278 asks it of #277's own remedy, one rung
+  further out: **a key and a population are two different things, and repairing the first leaves the
+  second exactly where the author found it.**
+  **THE DEFECT.** `tests/deploy-parity.bats`'s BY SHAPE arm anchors on `^[[:space:]]*ln -sfn `, so
+  the partition it asserts sums over **LINK LINES**. `scripts/kitty-setup.sh` does not only link. It
+  **COPIES** at `:215` (`bin/it2-wrapper` → `$BIN_DIR/it2`) and **COMPILES** at `:245`
+  (`bin/kitty-pane-menu-native.swift`). Two of its nine repo-sourced deploys are therefore in NEITHER
+  coverage population, and no arm gates them. **#276 landed exactly this lesson for `install.sh` one
+  link earlier — a coverage arm keyed on a verb name is itself a shape claim — and it was never
+  carried across to the SECOND INSTALLER.**
+  **MEASURED BY EXECUTION, ON AN AXIS INDEPENDENT OF BOTH PRIOR KEYS.** `probe278-verb.sh` enumerates
+  by the REPO SOURCE and classifies by the DESTINATION — **no verb name appears in the classifier at
+  all** — resolving one variable hop, with both partitions asserted to SUM. FOURTEEN predictions gated
+  at rc 93, all exact on the second run: **12** repo-sourced lines, **9** deploys, **3** non-deploys,
+  **9** distinct sources; the shipped BY SHAPE extractor run VERBATIM derives **8** link lines and
+  **7** repo sources; **MINE \ SHIPPED = 2** (`bin/it2-wrapper`, `bin/kitty-pane-menu-native.swift`)
+  and the **CONSISTENCY arm read SHIPPED \ MINE = 0**, so the disagreement is the shipped
+  extractor's and not mine. Run through the assert's OWN extracted `case` block with the catch-all
+  **TAGGED** (asserted to touch exactly 2 diff lines; memory `make-the-actuator-the-arbiter`), with a
+  **POS** control (`hooks/notify.sh` → `1|hooks/*.sh`) and a **FIRE** control (a path in no class must
+  reach the tag): **1 CLAIMED, 8 declared with a reason, 0 reaching the reasonless default.**
+  **AND THE rc-93 GATE REFUSED ONCE, ON THE INSTRUMENT AND NOT THE SUBJECT, WHICH IS THE PART TO
+  CARRY.** The first draft predicted 11 lines / 9 deploys and read 12 / 10: `kitty-setup.sh:205` is
+  `if [ "$(readlink "$KCONF_DIR/kitty.conf" …)" = "$SRC_CONF" ]` — a VERIFICATION whose token shape is
+  **identical** to a deploy's, a repo-sourced token beside a non-repo path token. A destination-keyed
+  classifier convicts it. **A repo source inside a TEST is being READ, not placed**, and the repair is
+  structural rather than another verb list: a line carrying a `[` test bracket is not a deploy. This
+  is #274's rule from the other side — when your own extractor mints a member, the member is the
+  instrument's, not the subject's.
+  **THE SECOND, INDEPENDENT COLUMN, because set arithmetic alone is a hypothesis.** The SECOND
+  INSTALLER block's own prose enumerates *"links six bin/ files … and compiles
+  bin/kitty-pane-menu-native.swift (:245)"* — **`:245` appears once and `:215` zero times.** So the
+  file already knew this installer places bytes by more than one verb, named the compile, and omitted
+  the copy, while every coverage arm over it enumerated `ln -sfn` lines alone. **A completeness claim
+  inherits the blind spots of the extractor that produced it, and this one was written from the link
+  lines.** That sentence is now corrected in place, with the reason it was wrong beside it.
+  **ZERO OUTAGES — MEASURED BEFORE THE LAND (arm E).** Both extra destinations were read individually
+  at 04:58Z: `~/.claude/bin/it2` and `~/.claude/bin/kitty-pane-menu-native`, present and executable.
+  **This closes a DETECTOR gap, exactly as `githooks/*`, `launchd/*.plist`, the literal installs,
+  `CLAUDE.md` and `config/kitty.conf` each did before it. Ask arm E BEFORE you land, not after.**
+  **THE FRAGILITY THAT IS NOT COSMETIC, AND IT IS WHY THE FIRE TEST TARGETS WHAT IT DOES.**
+  `bin/it2-wrapper` is declared — under **LITERAL INSTALLS**, for `install.sh:814`'s sake, not for
+  kitty-setup.sh's. The second author is recorded nowhere. **Retiring install.sh's copy would delete
+  the only arm standing between kitty-setup.sh's copy and the reasonless default**, and no link-line
+  extractor can see that coupling because `bin/it2-wrapper` is in neither link-line population.
+  **THE DISCRIMINATING RED PROOF — a fire test proves an arm notices its own declaration going away;
+  it does NOT prove the new extractor sees anything the old one cannot.** `redproof278.sh` extracts
+  `origin/main` (`e148e65bd`) with `git archive | tar -x`, asserts the extraction contains **ZERO**
+  occurrences of the fix before believing any red from it, copies only the SUITE forward so my tests
+  run against the OLD subject, and plants **ONE** `cp` of an undeclared repo source in kitty-setup.sh
+  (mutation asserted at exactly 1 diff line). **TWELVE predictions, all exact: on the unmutated tree
+  both arms GREEN and a MUTE control naming an arm that exists nowhere reads 0 ok / 0 not ok; on the
+  mutated tree the BY ACTION arm goes RED naming `REASONLESS-DEFAULT config/zzz-probe-278.txt` while
+  the BY SHAPE arm stays GREEN.** One mutation, two arms, and they disagree — which is the only form
+  of evidence that a new extractor is strictly stronger rather than merely additional.
+  **THE MOVE.** `tests/deploy-parity.bats` gains a **SIXTH** extractor and its fire test — **92 → 94
+  arms, zero existing assertions edited, both APPENDED.** `scripts/deploy-parity-assert.sh` gains no
+  arm at all, because every one of the nine sources is already claimed-or-declared; what it gains is
+  the corrected enumeration, the second author of `bin/it2-wrapper`, and the citation of the new arm.
+  **That diff is COMMENTS-ONLY and it is proven, not asserted:** sha256 over the NON-COMMENT lines of
+  a clean `origin/main` extraction and of my copy are IDENTICAL (538 code lines both sides), with a
+  MUTATE control confirming a one-token code change DOES move that sha — so the comparison can fail.
+  **THE TRANSFERABLE SENTENCE, AND IT IS THE ONE TO CARRY: FIVE LINKS HAVE NOW EACH CLOSED A GAP BY
+  NARROWING AN EXTRACTOR IN A NEW DIRECTION — a `for` header, a VERB NAME, a LINE SHAPE, a SOURCE
+  SPELLING, and now an ACTION. Every one of those is a KEY. The regress does not end with a better
+  key and it does not end with a partition either, because a partition is only ever asserted OVER A
+  POPULATION: #277 asserted its partition perfectly and summed over the wrong set. So ask the
+  population question BEFORE the key question — what is the ACTION being audited, enumerate every
+  member of it, and only then partition.**
+  **AND THE COROLLARY GAINS A TENTH HALF: (j) A REMEDY CAN BE CORRECT, GATED, PARTITIONED AND
+  ASSERTED TO SUM, AND STILL BE SCOPED TO A POPULATION ITS SUBJECT IS LARGER THAN — because the
+  author who has just learned their key was too narrow fixes the key, and the population came free
+  with the anchor they were already editing.**
+  **VERIFIED GREEN BEFORE THE LAND, IN THE FOREGROUND:** `tests/deploy-parity.bats` **94 ok / 0 not
+  ok / 0 skip**, one plan `1..94`, at load ~25. Lints all rc 0 at 05:04Z: `shellcheck -x` 0 bytes ·
+  `bash -n` · `pipefail-sigpipe-lint` bare *"clean (allowlist honoured)"*, `--census` **125** with
+  `CC_PIPEFAIL_ROOT` pinned (matching #275, #276 and #277 for a FOURTH link) ·
+  `unattended-path-lint --selftest` **47/47** — note **47**, where this brief inherits *"the tree runs
+  46 arms"*; a sibling's landed change moved it, so take your own · `test-walltime-lint tests`
+  *"clean — 558 suite(s); 1 grandfathered, 0 new time bombs"* (matching #277 against #250's 552) ·
+  `test-hermeticity-lint` clean over 558 suites · `bats-shellcheck-lint` a correct NON-VERDICT
+  pre-commit (0 changed `.bats` lines in `origin/main...HEAD`), re-run after the commit.
+  **THE LANE, STAMPED MOMENTS ONLY AND NO CLAIM ABOUT THE WINDOW.** Open 04:53:13Z from the worktree
+  on a clean tree at `trunk..HEAD = 0`: `RUNG=✅ LIVE_SRC=behind LIVE_LAG=7 LIVE_ADDS=0 LIVE_STALE=1
+  LIVE_DIVERGED=0 LIVE_AGE=7189 LIVE_BREACH_WHY= MIG_FAILED=0 GATE=stale` — the inherited `adds`
+  breach is still resolved and `4e6a51df2a84` stays OPEN, not re-filed, not driven. **`GATE=stale`
+  again; not mine to drive.** The ledger read runs from `ledger278.sh`, which `cd`s internally and
+  prints `cwd=`, `dirty=` and `trunk_to_head=` beside every reading — #277's second finding is that
+  `wrap-ledger.sh` keys on CWD and, run from the wrong one, ANSWERS rather than refusing.
+  **AND ONE INHERITED FACT THAT HAS FLIPPED: `scripts/deploy-link-parity.sh`'s executing blob now
+  EQUALS trunk's** (`6c58711286ff` both sides at 04:52Z, where this brief inherits the executing side
+  as `f1329914e171`), **and `54 unmapped` is now PRESENT in the live copy's output** where the brief
+  says to expect it absent. The standing red is otherwise unchanged at `458 linked · 0 staged-pending
+  · 10 live-extra · 54 unmapped · 3 actionable`, rc 1, twelfth consecutive link at 3. **The lag closed
+  itself; do not re-fix any of the three fixes it was behind on.**
+  **THE BOARD.** Gap #277-floor → my open, **24 m 32 s**: TWO arrivals (`004d154032e8`,
+  `32d12fde0469`), ZERO departures, TWO transitions, both open → CLAIMED and both
+  `claude-infrastructure` — `70f0001c657b` (**the drain's own SSOT row — reported, not worked**) and
+  `badb132df232`. Open census 04:53:22Z: **336 open / 217 blocked / 2,353 done / 6 claimed** (553
+  combined, 2,912 rows), both partitions asserted (`open + blocked == combined` AND
+  `allids == allrows`), all five id lists `sort -c`'d. Post-land RED pages **0 over a denominator of
+  2,821** at 04:52Z — the 238th consecutive zero, and the denominator is EPISODIC in both directions,
+  so the number means nothing without its moment.
+  **WHAT I RAN, ALL FROM SCRATCH:** `open278.sh` (one file: tool table, the `qos` diff at **rc 0 / 0
+  bytes**, the four kitty checks, my N, the mailbox, git state, land-lock, `cc-roles`, the live
+  deploy-link-parity run, the executing-vs-trunk blob compare) · `ledger278.sh` · `probe278-verb.sh` ·
+  `awkcheck278.sh` (the awk classifier I ship in the suite, cross-checked against the probe's python
+  one over the same subject — **AGREE, 9 = 9, zero either-only**, because two implementations of one
+  extractor that disagree mean no coverage number means anything) · `redproof278.sh` ·
+  `commentsonly278.sh` · `lints278.sh`. Four kitty checks passed: `cc-in-kitty` rc 0, `KITTY_WINDOW_ID`
+  **27**, the id-keyed `kitty @ ls` query run THROUGH A FILE (rc 0, **0** stderr bytes, 90,789 json
+  bytes) returning EXACTLY ONE object with a bogus-id NEG control at 0 — the fifty-first consecutive —
+  and `cc-notify --self` printing 27. Pane cwd was the WORKTREE this link.
 - **2026-09-01 — drain recycle #277: method 249 — A REMEDY IS AN EXTRACTOR, AND THIS ONE WAS KEYED ON
   HOW A *SOURCE* IS SPELLED.** ZERO rows closed, ZERO filed, ZERO reopened. TWO commits, ONE push.
   **THE QUESTION.** #274 asked what population a printed count counts over; #275 what a coverage arm's
