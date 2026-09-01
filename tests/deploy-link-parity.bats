@@ -1104,3 +1104,110 @@ behind_by() {   # $1 = repo-relative path · $2 = its bytes → checkout sits 1 
   lacks "ORPHAN"
   has "0 unmapped"
 }
+
+# ── THE STRAY DIRECTION'S OWN COVERAGE ARM (2026-09-01) ─────────────────────────────────────────
+# The arm above pins install.sh's classes against the FORWARD walk. Nothing pinned the forward walk
+# against the LIVE-SIDE sweep, so on 2026-08-31 the walk gained seven classes and sweep_strays's
+# hand-written list did not follow — measured behaviourally: an unversioned real file planted in
+# scripts/backlog-consolidation/ produced no verdict at all, which is the bin/cc-mail defect class
+# in a directory the walk had just declared part of the deployed surface. A scope sentence is not
+# falsified by anything it says; it is falsified by a sibling enumeration growing, and no reader of
+# either one can see the other move. This is that reader.
+derive_stray_sets() {  # $1 = the deploy-link-parity.sh to read (a seeded COPY in the fire test)
+  local linkp="$1" hdr ftr lh lf
+  hdr='# --- the per-file symlink surfaces install.sh deploys'
+  ftr='for d in hooks hooks/lib commands scripts scripts/limit-recover bin; do sweep_orphans'
+  # Region anchors unique BEFORE anything between them is read — a census that cannot refuse is not
+  # a census, and a duplicated anchor would silently select a span nobody chose.
+  [ "$(grep -cF -- "$hdr" "$linkp")" -eq 1 ]
+  [ "$(grep -cF -- "$ftr" "$linkp")" -eq 1 ]
+  lh="$(grep -nF -- "$hdr" "$linkp" | cut -d: -f1)"
+  lf="$(grep -nF -- "$ftr" "$linkp" | cut -d: -f1)"
+  sed -n "${lh},${lf}p" "$linkp" >"$BATS_TEST_TMPDIR/sregion.txt"
+  # The walk's LIVE-SIDE directory is the dirname of each class token: /skills/*/ → skills,
+  # /scripts/backlog-consolidation/*.py → scripts/backlog-consolidation. The trailing slash is
+  # stripped FIRST, or dirname of /skills/*/ is /skills/* and the two sides never join.
+  grep -E '^[[:space:]]*for [A-Za-z_]+ in ' "$BATS_TEST_TMPDIR/sregion.txt" \
+    | grep -oE '\$REPO"/[^ ";]+' | sed -e 's/^\$REPO"//' -e 's#/$##' -e 's#/[^/]*$##' -e 's#^/##' \
+    | sort -u >"$BATS_TEST_TMPDIR/walkdirs.txt"
+  # sweep_strays's scope is TWO things: a flat loop list, and the call sites that pass a literal.
+  # Reading only the loop would score skills/ and agents/ as unswept and mint a false finding.
+  { grep -F -- '; do sweep_strays "$d"; done' "$linkp" | sed -e 's/^for d in //' -e 's/;.*$//' | tr ' ' '\n'
+    grep -oE 'sweep_strays "[^"$]+' "$linkp" | sed -e 's/^sweep_strays "//' -e 's#/$##'
+  } | grep -v '^$' | sort -u >"$BATS_TEST_TMPDIR/straydirs.txt"
+  grep -F '#   NOT-STRAY-SWEPT ' "$linkp" | awk '{print $3}' | sort -u >"$BATS_TEST_TMPDIR/sexcl.txt"
+  return 0
+}
+
+@test "every forward-walked directory is either stray-swept or declared NOT-STRAY-SWEPT" {
+  derive_stray_sets "$REPO_ROOT/scripts/deploy-link-parity.sh"
+
+  # NON-VACUITY on all three derivations plus a known member of each, so a pipeline that read the
+  # wrong thing cannot pass by producing an empty set that every member trivially satisfies.
+  [ "$(grep -c . "$BATS_TEST_TMPDIR/walkdirs.txt")" -ge 11 ]
+  [ "$(grep -c . "$BATS_TEST_TMPDIR/straydirs.txt")" -ge 10 ]
+  [ "$(grep -c . "$BATS_TEST_TMPDIR/sexcl.txt")" -ge 1 ]
+  [ "$(grep -cxF -- 'scripts/backlog-consolidation' "$BATS_TEST_TMPDIR/walkdirs.txt")" -eq 1 ]
+  [ "$(grep -cxF -- 'hooks' "$BATS_TEST_TMPDIR/straydirs.txt")" -eq 1 ]
+  [ "$(grep -cxF -- 'commands' "$BATS_TEST_TMPDIR/sexcl.txt")" -eq 1 ]
+
+  # Every substitution goes INSIDE `[ ]`: grep -c prints 0 and EXITS 1 on a legitimate zero, which
+  # is the commonest input here, and a bare assignment would fail the test under bats+errexit.
+  UNCLAIMED="$BATS_TEST_TMPDIR/sunclaimed.txt"; : >"$UNCLAIMED"
+  BOTH="$BATS_TEST_TMPDIR/sboth.txt"; : >"$BOTH"
+  while IFS= read -r d; do
+    if [ "$(grep -cxF -- "$d" "$BATS_TEST_TMPDIR/straydirs.txt")" -eq 0 ] \
+       && [ "$(grep -cxF -- "$d" "$BATS_TEST_TMPDIR/sexcl.txt")" -eq 0 ]; then
+      printf '%s\n' "$d" >>"$UNCLAIMED"
+    fi
+    if [ "$(grep -cxF -- "$d" "$BATS_TEST_TMPDIR/straydirs.txt")" -ge 1 ] \
+       && [ "$(grep -cxF -- "$d" "$BATS_TEST_TMPDIR/sexcl.txt")" -ge 1 ]; then
+      printf '%s\n' "$d" >>"$BOTH"
+    fi
+  done <"$BATS_TEST_TMPDIR/walkdirs.txt"
+
+  # In NEITHER set is the defect: the walk deploys there and no leg would ever report a hand-placed
+  # unversioned file in it. In BOTH is a contradiction that would let the two lists stop being a
+  # partition and start being two lists that happen to cover everything.
+  [ "$(grep -c . "$UNCLAIMED")" -eq 0 ]
+  [ "$(grep -c . "$BOTH")" -eq 0 ]
+}
+
+@test "the stray-coverage arm can FIRE — a new forward-walk class in neither set is unclaimed" {
+  # Without this the arm above is a green nobody has watched go red, and a control that has never
+  # fired is indistinguishable from one that cannot. The seed is a class the walk visits and the
+  # sweep neither visits nor declares — the exact shape of the scripts/backlog-consolidation defect.
+  cp "$REPO_ROOT/scripts/deploy-link-parity.sh" "$BATS_TEST_TMPDIR/lp-seeded.sh"
+  awk '/^for d in hooks hooks\/lib commands scripts scripts\/limit-recover bin; do sweep_orphans/ \
+         { print "for f in \"$REPO\"/zzzstray-xyzzy/*.zzz; do :; done" } { print }' \
+    "$BATS_TEST_TMPDIR/lp-seeded.sh" >"$BATS_TEST_TMPDIR/lp-seeded2.sh"
+  mv "$BATS_TEST_TMPDIR/lp-seeded2.sh" "$BATS_TEST_TMPDIR/lp-seeded.sh"
+
+  derive_stray_sets "$BATS_TEST_TMPDIR/lp-seeded.sh"
+  # The seed must have entered the derived population, or the loop below proves nothing about the
+  # arm and only that the seed was invisible to the extractor.
+  [ "$(grep -cxF -- 'zzzstray-xyzzy' "$BATS_TEST_TMPDIR/walkdirs.txt")" -eq 1 ]
+
+  UNCLAIMED="$BATS_TEST_TMPDIR/sunclaimed-seeded.txt"; : >"$UNCLAIMED"
+  while IFS= read -r d; do
+    if [ "$(grep -cxF -- "$d" "$BATS_TEST_TMPDIR/straydirs.txt")" -eq 0 ] \
+       && [ "$(grep -cxF -- "$d" "$BATS_TEST_TMPDIR/sexcl.txt")" -eq 0 ]; then
+      printf '%s\n' "$d" >>"$UNCLAIMED"
+    fi
+  done <"$BATS_TEST_TMPDIR/walkdirs.txt"
+  [ "$(grep -cxF -- 'zzzstray-xyzzy' "$UNCLAIMED")" -eq 1 ]
+}
+
+@test "a hand-placed unversioned file under scripts/backlog-consolidation is reported STRAY" {
+  # BEHAVIOURAL, and it survives any rewording of the fix: it plants the defect class rather than
+  # pinning the text of a list. The commands/ plant is the discriminating control — it is DECLARED
+  # not-stray-swept, so a green here cannot come from the sweep having simply become indiscriminate.
+  export CC_LINKPARITY_MANIFEST="$BATS_TEST_TMPDIR/manifest"; : >"$CC_LINKPARITY_MANIFEST"
+  mkdir -p "$CC_LINKPARITY_CONFIG/scripts/backlog-consolidation"
+  printf 'hand placed by a peer session\n' > "$CC_LINKPARITY_CONFIG/scripts/backlog-consolidation/handplaced.py"
+  printf 'hand placed by a peer session\n' > "$CC_LINKPARITY_CONFIG/commands/handplaced.md"
+  run "$LP"
+  [ "$status" -eq 1 ]
+  [ "$(printf '%s\n' "$output" | grep -c '^  STRAY .*scripts/backlog-consolidation/handplaced.py')" -eq 1 ]
+  [ "$(printf '%s\n' "$output" | grep -c 'commands/handplaced.md')" -eq 0 ]
+}
