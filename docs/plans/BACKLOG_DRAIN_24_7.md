@@ -86,6 +86,146 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-01 — drain recycle #275: method 247 — WHEN TWO COVERAGE ARMS GATE ONE FILE, ASK WHAT
+  THEIR *MAP* IS BUILT FROM, NOT WHETHER THEY PASS.** #273 asked what the leg a `continue` defers to
+  actually scopes; #274 asked what population each field of a printed summary line counts over.
+  **#275 asks the same of the ARMS rather than of the file they gate.** `tests/deploy-parity.bats`'s
+  *"every install.sh deploy class is CLAIMED or EXPLICITLY DECLARED, never left to the default"* and
+  `tests/deploy-link-parity.bats`'s *"every deploy class install.sh globs is either forward-walked or
+  declared NOT-PER-FILE"* both build their map from install.sh's `for … in "$REPO_DIR"/…` **LOOP
+  HEADERS**, and both say so in their own comments. That map is install.sh's 19 **GLOBS**. install.sh
+  also deploys through **SINGLETON `link_file`/`copy_file` calls with a literal source**, and a
+  literal source appears in no for-header — **so the second half of the deployed population is gated
+  by neither arm.**
+  🚨 **THE FIRST HYPOTHESIS WAS REFUTED AND THE REFUTATION IS WHAT FOUND THE REAL ONE.** The two
+  extractors are spelled differently — one requires the `$REPO_DIR` glob to be the FIRST list word,
+  the other accepts any `for X in ` header and then finds `$REPO_DIR"` anywhere on the line — so I
+  predicted they enumerate different sets. Measured 2026-09-01T02:39:21Z with both spellings run
+  verbatim over the real `install.sh` (blob `1053a1c6187d`): **19 and 19, with 0 only-in-A and 0
+  only-in-B.** Identical populations. What the same run surfaced instead was the count beside them:
+  **29 `link_file`/`copy_file` call sites, of which 8 have a literal `$REPO_DIR/<path>` source and are
+  therefore reachable from no for-header at all.**
+  🚨 **THE TELL WAS IN THE SUBJECT'S OWN PROSE, AND THIS IS THE TRANSFERABLE HALF.**
+  `scripts/deploy-parity-assert.sh:556` already counts *"its 19 globs plus its **18 literal
+  installs**"* as **two** populations, in a comment written 2026-08-31. **The file knew about a second
+  enumeration that every arm scoring it knew nothing about.** When a subject's own prose partitions
+  its population into N parts, count how many of those parts a gate can see.
+  🚨 **MEASURED BY EXECUTION, NOT BY EYE.** Each of the 8 literal sources was put through this file's
+  **own extracted `case` block** with the final catch-all tagged (`probe275-singleton.sh`; memory:
+  `make-the-actuator-the-arbiter`), the tag asserted to touch exactly 2 diff lines, with a **POS
+  control** — a globbed member must come back `1|hooks/*.sh` — and a **FIRE control** — a source
+  present nowhere must reach the tagged default. **`githooks/pre-commit` was already DECLARED ·
+  `model-config.yaml` and `providers.json` CLAIMED as root SSOTs · and FIVE reached the REASONLESS
+  `*) want=0`: `accounts.json`, `statusline.sh`, `bin/it2-wrapper`, `bin/claude-accounts`,
+  `bin/dia-cdp-launch.sh`.** The forward walk of `deploy-link-parity.sh` reaches none of the eight
+  either — all 16 of its globs were case-matched against each source and every answer was `walked=no`.
+  ⚠️ **NO OUTAGE IS BEING REPAIRED, AND THAT WAS MEASURED BEFORE THE LAND RATHER THAN AFTER.** All
+  eight destinations were correctly deployed at 2026-09-01T02:41Z, read individually:
+  `~/.claude/accounts.json`, `~/.claude/model-config.yaml`, `~/.claude/providers.json` and
+  `~/bin/claude-accounts` are links into the checkout; `~/.claude/statusline.sh` and
+  `~/.claude/bin/it2` are real files, which is CORRECT for copy classes. **This closes a DETECTOR
+  gap**, exactly as `githooks/*` and `launchd/*.plist` did on 2026-08-31 — and the reasonless
+  `want=0` is itself the defect, because **an omission carries no reason while a declaration does.**
+  🚨 **`accounts.json` IS THE SHARPEST CASE AND IT IS A DIFFERENT SHAPE FROM THE OTHER FOUR: ITS
+  REASON WAS ALREADY WRITTEN DOWN, AND WRITING IT DOWN WAS NOT ENOUGH.** The comment above the
+  root-SSOT arm says in so many words *"accounts.json is deliberately ABSENT: install.sh:428 links
+  it, but it is gitignored … asserting it here would demand a link over a file this leg cannot
+  see."* Correct in every clause. But the reason lived in **prose beside an arm rather than in an
+  arm**, so the gate could not hold it, and the path fell to the same reasonless default as the four
+  that had no reason at all. **A justification in a comment is not a declaration in a case.**
+  ✅ **THE MOVE — the five declaring arms plus the coverage arm that stops it recurring.**
+  `scripts/deploy-parity-assert.sh` gains `accounts.json`, `statusline.sh`, `bin/it2-wrapper` and
+  `bin/claude-accounts|bin/dia-cdp-launch.sh` as explicit `want=0` arms, each carrying its own
+  reason (gitignored · COPY class scored under COPYMISS/COPYSTALE · COPY class with a RENAMED
+  destination · destination is `$HOME/bin`, outside `$LIVE` entirely). **Behaviour is unchanged by
+  construction — `want` was 0 and stays 0 — so this is purely the reason arriving at the gate.**
+  `tests/deploy-parity.bats` gains **LITERAL INSTALL COVERAGE** and its fire test, deriving the
+  population from install.sh's own `link_file`/`copy_file` call sites — **a THIRD extractor,
+  deliberately NOT the for-header one, because a coverage arm that reuses the extractor whose blind
+  spot it is checking cannot see past it** — with a non-vacuity floor of 6 against 8 measured, a
+  known-member assertion on `accounts.json`, and a fire test that deletes one declaration and
+  requires exactly its own source back on the default **while a sibling stays declared**. **86 → 88
+  arms; zero existing assertions edited, both APPENDED.**
+  ✅ **RED-PROVED AT TWO MOMENTS, SIX PREDICTIONS WRITTEN BEFORE THE RUN AND ALL SIX EXACT AT rc 93**
+  (`redproof275.sh`). PRE tree extracted from `origin/main` with `git archive | tar -x` (2,251 files)
+  and **asserted to contain ZERO occurrences of the fix before any red from it was believed**; only
+  the SUITE copied forward, so the PRE arm runs MY tests against the OLD subject. **Both new arms RED
+  pre-fix, naming all five reasonless defaults by name in the TAP; both green post-fix**, attributed
+  BY NAME out of `arms275.txt` rather than retyped, with a MUTE control naming an arm that exists
+  nowhere reading 0.
+  🚨 **AND THE DELIBERATE ZERO IS THE CELL THAT MATTERS: the pre-existing CLASS COVERAGE arm AND its
+  fire test both ran GREEN against the unfixed subject.** They are correct about their own
+  population and blind to this one — **which is precisely why the defect survived.** A red count says
+  a suite noticed; only attribution says WHICH arm did; and only the green half says what the
+  existing tests CANNOT see.
+  ⚠️ **ONE INSTRUMENT FAULT, IN MY OWN PROBE, CAUGHT BY AN IMPLAUSIBLE NUMBER.**
+  `probe275-extractor.sh`'s ARM D reported all 19 classes as "in the widest enumeration but in
+  neither A nor B" — a 19-of-19 disjointness between two sets derived from ONE file, which cannot be
+  true. The cause was mine and not the subject's: **BSD `sed` has no `\?`**, so `s|^\$REPO_DIR"\?||`
+  stripped nothing and the set was compared prefix-on against prefix-off. **The rc-93 gate did not
+  catch it — the gate's predictions were all about ARM A — and nothing but the implausibility did.**
+  The gate is not a substitute for reading your own columns.
+  ✅ **LINTS, all run this link:** `shellcheck` rc 0 · `bash -n` rc 0 · the assert's own `--selftest`
+  rc 0 · `bats --count` 88 · `bats-assert-liveness` rc 0 · bare `pipefail-sigpipe-lint` rc 0 ·
+  scoped `bats-shellcheck-lint --range` rc 0 (*"clean — 1 suite(s) scanned, 0 blocking finding(s), 0
+  unanalyzable"*) · `test-walltime-lint tests` clean, **558 suite(s), 1 grandfathered, 0 new time
+  bombs** · `unattended-path-lint --selftest` **46/46**. **`pipefail-sigpipe-lint --census` 125 →
+  125, LOST=0 NEW=0** — NOT a widening — with the PRE arm extracted from `origin/main` rather than
+  remembered and keyed on **(path, TEXT)**. ⚠️ **Take your own census number: the inherited brief
+  says 151 and I measured 125.** `alarm-polarity-lint` **DECLARED NOT-RUN** — neither file is an
+  alarm emitter and that lint's POS control is a known mute (`e07dc5e09f83`, OPEN, do not re-file).
+  ✅ **THE DRAW, RUN IN THE FOREGROUND BEFORE THE LAND: 4 suites, 244 ok, 0 not ok, 0 skip, one plan
+  per suite, TERMINATOR ASSERTED (ran=4 listed=4), 116 s at load 18→35** —
+  `deploy-live` **136** · `deploy-parity` **88** · `ms365-reply-splice` **18** ·
+  `deploy-parity-live` **2**. ⚠️ **That last one is the suite this brief calls RED on trunk and
+  manifest-excluded; run from the worktree at 02:48Z it read rc 0. That is a stamped moment about a
+  different subject (#235's two-populations note), not a claim that the standing note is wrong.**
+  ⚠️ **Take your own suite counts: `deploy-parity` was 86 when I opened and is 88 now because I
+  appended two.**
+  ⚠️ **THE LANE — MOMENTS ONLY, AND ONE OF MY OWN READINGS MEASURED NOTHING.**
+  **OPEN 2026-09-01T02:35:12Z (clean tree, `trunk..HEAD = 0`):** `RUNG=🚀 LIVE_SRC=behind
+  LIVE_SHA=e9cf8d4d926b LIVE_LAG=12 LIVE_ADDS=1 LIVE_STALE=1 LIVE_AGE=11510
+  LIVE_BREACH_WHY=adds MIG_FAILED=0 GATE=stale`. **The `1` add is a SIBLING's, attributed PER-SHA:
+  `8f268131f` (`docs/parks/8f59467c92b0.md`) — the same one #273 and #274 both named.
+  `4e6a51df2a84` stays OPEN; do NOT re-file, do NOT drive.**
+  🚨 **MY CLOSE READING AT 02:50:48Z REPORTED `LIVE_SRC=skip LIVE_LAG=0 LIVE_ADDS=0` AND IT MEASURED
+  NOTHING** — `trunk..HEAD` was **1**, and `compute_live_layer()` is called only on the ✅-eligible
+  path. **A clean tree is not sufficient; the commit count must be 0 too. I say so rather than
+  reporting those zeros as a converged lane.**
+  ⚠️ **`GATE=stale` at both readings — the NINETY-NINTH and HUNDREDTH consecutive. NOT mine to
+  drive.**
+  ⚠️ **THE STORES, EACH WITH ITS MOMENT AND ITS DENOMINATOR.** **postland RED pages 0 at both — the
+  227th and 228th consecutive — but the denominators are `558` (02:35:12Z) and `2,819` (02:50:48Z),
+  a 5.05× RECOVERY inside my link.** #274 read `2,817 → 2,819 → 558` and called that collapse the
+  largest in the series; **it had recovered fifteen minutes later.** A zero over 558 files and a zero
+  over 2,819 are not the same claim. **The other page store rose in both columns: `2,345 all / 87
+  .page` → `2,349 / 90`.** **inbox-guard `.escalated` 434 at both — FLAT, as for #268–#274.**
+  **postland STAMPS 530 at both.**
+  ⚠️ **THE BOARD.** **Gap (#274's floor 02:31:44Z → my open 02:36:11Z, 4 m 27 s): ZERO arrivals, ZERO
+  departures, ONE transition** — `0c8b39b67665` blocked → open. **My link body (02:36:11Z →
+  02:50:39Z, 14 m 37 s): ZERO arrivals, ZERO departures, ONE transition** — **the SAME row**,
+  `0c8b39b67665` open → **claimed**. Both partitions asserted at both moments (`open + blocked ==
+  combined` AND `allids == allrows`), all five lists `sort -c`'d, arrivals and departures from a
+  FULL-SET `comm`. Open **340 / 215 / 2,352 / 3** (555 combined, 2,910 rows); close **339 / 215 /
+  2,352 / 4** (554 combined, 2,910 rows). **I closed NO row and filed NONE, so nothing needed
+  subtracting — and the actuator moved one row TWICE across the two windows, which a single-window
+  count would have read as two different rows.**
+  ✅ **PRE-FIRE STATE.** `qos-rewrite.sh` diff **rc 0, 0 bytes**. All four kitty checks passed —
+  `cc-in-kitty` rc 0, `KITTY_WINDOW_ID=27`, `KITTY_PID=1427`, the id-keyed `kitty @ ls` query run
+  **through a FILE** (rc 0, 0 stderr bytes, 93,069 json bytes) returning **exactly ONE** object whose
+  cwd is my own worktree, with a bogus-id NEG control at **0**, `cc-notify --self` printing 27 and
+  `ITERM_SESSION_ID=w0t0p0:27` with `CC_TERM` UNSET. Land lock free, 0 waiters; worktree **0 behind,
+  0 ahead** at my open. Mailbox `~/.claude/mailbox/27.md` **4,059 bytes, 1 line — unchanged**.
+  `cc-roles list` byte-identical again. **All twelve inherited artifacts present**, the inherited
+  pointer **152 bytes**, every cloned `.py`'s decisive lines read by eye — `SRC` 275 and `DST` 276
+  differing by exactly one, `SRC` and `POS` agreeing and naming my own brief, `insert275.py`
+  asserting `mine == 275`, and the terminal `echo` of all five inherited `.sh` launchers reading
+  `true`.
+  ⚠️ **AND ONE INHERITED SCRIPT NEEDED ITS ARGUMENT REPAIRED, NOT ITS GLOB:** `gap275.sh` resolves
+  the PREDECESSOR side by `mtime` but hardcodes MY side at the bare suffix `275`. My first board
+  snapshot used `275open` and every `comm` read **MISSING SIDE** — which is the right failure, loud
+  rather than empty. **Re-take the snapshot at the suffix the script expects, or repair the script;
+  do not read a MISSING SIDE as a zero.**
 - **2026-09-01 — drain recycle #274: method 246 — A SUMMARY LINE'S COUNTS COME FROM DIFFERENT
   POPULATIONS, AND THE ONE PRINTED AS COVERAGE IS A COUNT OVER A HAND-WRITTEN LIST.** #272 asked what
   an auditor's coverage arm can PARSE; #273 asked what the leg a `continue` DEFERS to actually scopes.
