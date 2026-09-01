@@ -1713,3 +1713,95 @@ _skillclaim_build() {   # $1=repo root · $2=out claims · $3=out covered
   comm -23 "$SEEDED" "$COVERED" > "$OUT"
   [ "$(grep -cxF 'zzz-no-such-mandated-skill' "$OUT")" -eq 1 ]
 }
+
+# ── LITERAL-INSTALL COVERAGE (2026-09-01, method 246 pointed at the two coverage ARMS) ──────────
+# The CLASS COVERAGE arm above and tests/deploy-link-parity.bats's forward-walk arm both build
+# their map from install.sh's `for … in "$REPO_DIR"/…` LOOP HEADERS, and both say so in their own
+# comments. That map is install.sh's 19 GLOBS. install.sh ALSO deploys through SINGLETON
+# link_file/copy_file calls with a literal source, and those are in NEITHER coverage population —
+# so the population that the arms exist to protect has a second half that no arm gates.
+#
+# The tell was in the subject's own prose: deploy-parity-assert.sh:556 counts "its 19 globs plus
+# its 18 literal installs" as two populations, while every arm scoring it knew only the first.
+# Measured 2026-09-01: 8 literal-source sites, and FIVE of them reached the reasonless
+# `*) want=0` — the exact state githooks/* and launchd/*.plist were in before 2026-08-31, and the
+# state bin/ms365-reply-splice.py was in when it existed on trunk and in no live location.
+#
+# NEITHER SIDE IS WRITTEN DOWN HERE. The population comes out of install.sh's own call sites via a
+# THIRD extractor — deliberately not the for-header one, because a coverage arm that reuses the
+# extractor whose blind spot it is checking cannot see past it — and the verdict comes from
+# EXECUTING the assert's own extracted case block, never from re-reading it.
+@test "LITERAL INSTALL COVERAGE: every install.sh singleton deploy source is CLAIMED or EXPLICITLY DECLARED" {
+  MAP="$REPO_ROOT/install.sh"
+  SUBJ="$REPO_ROOT/scripts/deploy-parity-assert.sh"
+  [ -f "$MAP" ]
+  [ -f "$SUBJ" ]
+
+  # (1) THE MAP — install.sh's literal link_file/copy_file sources. A `$REPO_DIR/<literal>` first
+  # argument, i.e. every deploy site that is NOT driven by a loop variable and therefore not
+  # reachable from any for-header.
+  LITERALS="$BATS_TEST_TMPDIR/literals.txt"
+  grep -E '^[[:space:]]*(link_file|copy_file) "\$REPO_DIR/[^"$]+"' "$MAP" \
+    | grep -oE '"\$REPO_DIR/[^"$]+"' | tr -d '"' | sed 's|^\$REPO_DIR/||' | sort -u > "$LITERALS"
+  # NON-VACUITY FLOOR: a broken anchor derives zero sources and every assertion below then passes
+  # over an empty set. Measured 8 on 2026-09-01; the floor is deliberately loose.
+  [ "$(grep -c . "$LITERALS")" -ge 6 ]
+  # …and a KNOWN member, so a derivation that produced six lines of the wrong thing still fails.
+  # accounts.json is the oldest of the three root-SSOT singletons and the one whose exclusion had
+  # a written reason but no arm.
+  [ "$(grep -cxF 'accounts.json' "$LITERALS")" -eq 1 ]
+
+  # (2) THE SUBJECT'S OWN ARBITER, by execution. Uniqueness first — never execute an unknown line.
+  [ "$(grep -c '^    cls=""$' "$SUBJ")" -eq 1 ]
+  _classcov_extract "$SUBJ" "$BATS_TEST_TMPDIR/lcase.txt"
+  sed 's|^      \*)                         want=0 ;;$|      *)                         want=0; cls="__DEFAULT__" ;;|' \
+    "$BATS_TEST_TMPDIR/lcase.txt" > "$BATS_TEST_TMPDIR/lcaseB.txt"
+  # The tag must touch exactly the catch-all, or the mutation silently moved an arm.
+  [ "$(diff "$BATS_TEST_TMPDIR/lcase.txt" "$BATS_TEST_TMPDIR/lcaseB.txt" | grep -c '^[<>]')" -eq 2 ]
+  RUN="$BATS_TEST_TMPDIR/lrun.sh"
+  _classcov_runner "$BATS_TEST_TMPDIR/lcaseB.txt" "$RUN"
+
+  # CONTROLS BEFORE VERDICTS. POS: a GLOBBED class member must still come back CLAIMED, or the
+  # runner is mute and every verdict below is an artefact.
+  [ "$(bash "$RUN" hooks/notify.sh </dev/null | grep -c '^1|hooks/\*\.sh$')" -eq 1 ]
+  # FIRE: a source present nowhere MUST reach the tagged default, or this arm cannot fail at all.
+  [ "$(bash "$RUN" zzz-no-such-literal/nope.txt </dev/null | grep -c '__DEFAULT__')" -eq 1 ]
+
+  BAD="$BATS_TEST_TMPDIR/badliteral.txt"; : >"$BAD"
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    out="$(bash "$RUN" "$rel" </dev/null)"
+    case "$out" in
+      *__DEFAULT__*) printf 'REASONLESS-DEFAULT %s\n' "$rel" >>"$BAD" ;;
+      *)             : ;;   # CLAIMED (want=1) or declined by an EXPLICIT arm carrying its reason
+    esac
+  done < "$LITERALS"
+  [ "$(grep -c . "$BAD")" -eq 0 ] || { echo "install.sh literal installs reaching the reasonless default:"; cat "$BAD"; false; }
+}
+
+@test "LITERAL INSTALL COVERAGE fire test: deleting a literal-install arm puts its source back on the default" {
+  # Without this the arm above is a green nobody has seen go red, and a control that has never
+  # fired is indistinguishable from one that cannot. Deleting ONE declaration must put exactly its
+  # own source back on the reasonless default.
+  SUBJ="$REPO_ROOT/scripts/deploy-parity-assert.sh"
+  [ -f "$SUBJ" ]
+  [ "$(grep -c '^    cls=""$' "$SUBJ")" -eq 1 ]
+  _classcov_extract "$SUBJ" "$BATS_TEST_TMPDIR/lcase.txt"
+  sed 's|^      \*)                         want=0 ;;$|      *)                         want=0; cls="__DEFAULT__" ;;|' \
+    "$BATS_TEST_TMPDIR/lcase.txt" > "$BATS_TEST_TMPDIR/lcaseB.txt"
+  _classcov_runner "$BATS_TEST_TMPDIR/lcaseB.txt" "$BATS_TEST_TMPDIR/lintact.sh"
+
+  # BASELINE: with the arm present, accounts.json is declared and must NOT read as the default.
+  [ "$(bash "$BATS_TEST_TMPDIR/lintact.sh" accounts.json </dev/null | grep -c '__DEFAULT__')" -eq 0 ]
+
+  # SEED: delete exactly the accounts.json arm. Asserted to remove ONE line, so a reworded arm
+  # makes this test refuse rather than pass vacuously over a deletion that never happened.
+  grep -v '^      accounts\.json)             want=0 ;;$' "$BATS_TEST_TMPDIR/lcaseB.txt" > "$BATS_TEST_TMPDIR/lcaseC.txt"
+  [ "$(( $(grep -c . "$BATS_TEST_TMPDIR/lcaseB.txt") - $(grep -c . "$BATS_TEST_TMPDIR/lcaseC.txt") ))" -eq 1 ]
+  _classcov_runner "$BATS_TEST_TMPDIR/lcaseC.txt" "$BATS_TEST_TMPDIR/lseeded.sh"
+
+  # …and now that same source falls through to the reasonless default.
+  [ "$(bash "$BATS_TEST_TMPDIR/lseeded.sh" accounts.json </dev/null | grep -c '__DEFAULT__')" -eq 1 ]
+  # …while a SIBLING declaration is untouched, so the seed removed one arm and not the block.
+  [ "$(bash "$BATS_TEST_TMPDIR/lseeded.sh" statusline.sh </dev/null | grep -c '__DEFAULT__')" -eq 0 ]
+}

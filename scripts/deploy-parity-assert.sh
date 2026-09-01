@@ -599,6 +599,43 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       # scripts/deploy-link-parity.sh's NOT-PER-FILE block.
       githooks/*)                want=0 ;;
       launchd/*.plist)           want=0 ;;
+      # ── LITERAL INSTALLS ── install.sh's SINGLETON deploy sites, as opposed to its glob loops.
+      # MEASURED 2026-09-01 by method 246 pointed at the two coverage ARMS rather than at this
+      # block. Both of them — tests/deploy-parity.bats's CLASS COVERAGE arm and
+      # tests/deploy-link-parity.bats's forward-walk arm — build their map from install.sh's
+      # `for … in "$REPO_DIR"/…` LOOP HEADERS, and both say so in their own comments. So the map
+      # is install.sh's 19 GLOBS, and install.sh's LITERAL link_file/copy_file calls are in
+      # NEITHER coverage population. This file's own line 556 already counts them as a separate
+      # population ("its 19 globs plus its 18 literal installs"), which is the tell: the file knew
+      # about a second enumeration that no arm gated.
+      # Measured: 8 literal-source sites, of which githooks/pre-commit was already declared above,
+      # model-config.yaml and providers.json are CLAIMED as root SSOTs, and the five below fell to
+      # the REASONLESS `*) want=0`. All eight verdicts were already CORRECT and all eight
+      # destinations were correctly deployed at 2026-09-01T02:41Z — no outage is being repaired
+      # here, exactly as with githooks/launchd above. The reasonless want=0 is the defect, for the
+      # same reason it was there: an omission carries no reason while a declaration does, and this
+      # is the population in which bin/ms365-reply-splice.py's silent NOT-EXPECTED-LIVE would
+      # recur without any arm going red.
+      #   accounts.json          install.sh:537 LINKS it, but it is GITIGNORED (real email
+      #                          addresses), so the _tracked walk feeding this case can never
+      #                          emit it — the reason already written at the root-SSOT arm above,
+      #                          now holding at the gate instead of only in prose beside it.
+      #   statusline.sh          install.sh:807 COPIES it to $CFG/statusline.sh — the COPY leg's
+      #   bin/it2-wrapper        install.sh:814 COPIES it to $CFG/bin/it2, a RENAMED destination.
+      #                          Both are scored under COPYMISS/COPYSTALE, deliberately not the
+      #                          `MISSING: ln -sf` shape link_refresh() consumes.
+      #   bin/claude-accounts    install.sh:477 and :501 link these into $HOME/bin, which is NOT
+      #   bin/dia-cdp-launch.sh  under $LIVE at all, so a per-file demand here would be WRONG
+      #                          rather than noisy. tests/deploy-parity.bats's HOME/bin CLAIM
+      #                          COVERAGE arm is what owns that surface.
+      # tests/deploy-parity.bats now derives this population from install.sh's own link_file /
+      # copy_file call sites — a THIRD extractor, deliberately not the for-header one — and asserts
+      # every literal source lands in claimed-or-declared, so a ninth literal install cannot land
+      # in only one of the two files again.
+      accounts.json)             want=0 ;;
+      statusline.sh)             want=0 ;;
+      bin/it2-wrapper)           want=0 ;;
+      bin/claude-accounts|bin/dia-cdp-launch.sh) want=0 ;;
       *)                         want=0 ;;
     esac
     [ "$want" = 1 ] || continue
