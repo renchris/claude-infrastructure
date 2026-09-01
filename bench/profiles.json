@@ -1,0 +1,108 @@
+{
+  "schema": 1,
+  "note": [
+    "Per-app rule weightings. Two blocks, and the split is the whole point.",
+    "`weights` is POLICY: which rule families matter for an app is a product",
+    "decision, and authoring it here is correct. `measured` is MEASUREMENT and is",
+    "deliberately absent -- PIPELINE_SPEC C11 rules that a table which bans prose",
+    "as a source must be GENERATED, and it made that ruling immediately after",
+    "publishing three wrong cells in its own fix. `stack_reference` below is the",
+    "C11 table copied verbatim for orientation ONLY; nothing reads it. Fill",
+    "`measured` with `python3 profiles.py --measure <checkout>` and any cell that",
+    "disagrees with that read loses, automatically, with no ruling required."
+  ],
+  "families": {
+    "correctness": {
+      "rules": ["contrast", "overflow", "touch-target"],
+      "description": "WCAG and functional failures. A number, a threshold, a verdict.",
+      "pinned": true,
+      "pinned_because": "Not a taste axis. No app may weight this below 1.0 -- 'it is a marketing site' is not a reason to ship 2.54:1 text, and a weighting file is exactly where that argument would otherwise get made once and then never be re-read."
+    },
+    "conformance": {
+      "rules": ["token-drift", "grid-violation", "type-scale"],
+      "description": "Does this page use the design system it declares?",
+      "pinned": false,
+      "requires_token_map": true
+    },
+    "geometry": {
+      "rules": ["spacing-rhythm", "misalignment"],
+      "description": "Rhythm and alignment against the page's own dominant convention.",
+      "pinned": false
+    },
+    "aesthetics": {
+      "rules": [
+        "hierarchy",
+        "gestalt",
+        "content-fit",
+        "semantic-coherence",
+        "optical-alignment",
+        "readability"
+      ],
+      "description": "The six unscreenable classes. No rule reaches these; they are the vision layer's unconditional route (T2), and the weight sets how much of the per-page image budget they get.",
+      "pinned": false,
+      "deterministic": false
+    }
+  },
+  "profiles": {
+    "default": {
+      "label": "no app profile matched",
+      "weights": {
+        "correctness": 1.0,
+        "conformance": 1.0,
+        "geometry": 1.0,
+        "aesthetics": 1.0
+      },
+      "vision_budget_images": 3,
+      "why": "Everything on, nothing tuned. A profile is an argument that an app is unusual; absent that argument, it is not."
+    },
+    "reso-landing-app": {
+      "label": "marketing aesthetics",
+      "weights": {
+        "correctness": 1.0,
+        "conformance": 0.25,
+        "geometry": 0.6,
+        "aesthetics": 1.0
+      },
+      "vision_budget_images": 4,
+      "why": "A purchased template. It has no token map this team owns, so conformance drift is the template's convention rather than a defect, and reporting it once per component is how an AI reviewer spends its credibility before it says anything true. What actually matters here is whether the page persuades -- hierarchy, rhythm, whether the eye lands where the offer is -- and none of that is reachable by a rule.",
+      "conformance_downweight_is_not_a_licence": "0.25 records findings and marks them advisory. It does not stop them being computed, because the moment the team adopts a token map the weight goes back up and the history has to be there."
+    },
+    "reso-management-app": {
+      "label": "design-system conformance",
+      "weights": {
+        "correctness": 1.0,
+        "conformance": 1.0,
+        "geometry": 1.0,
+        "aesthetics": 0.4
+      },
+      "vision_budget_images": 1,
+      "why": "An internal dashboard. Conformance is nearly the whole job and the deterministic layer does nearly all of it, at 80ms and zero model cost. The aesthetics weight is not zero because hierarchy inversion is the one judgement class that bites hardest on a dense operational screen -- but one global image answers it.",
+      "abstain_because": [
+        "Panda CSS and Tailwind 4 sit in one PostCSS chain, so there is no single token map, and C11 measured the Tailwind half as having no token map at all (@theme count = 0).",
+        "A conformance FAIL whose truth value depends on which resolver ran is worse than an abstention. The conformance family therefore abstains rather than asserts wherever `measured.token_map.precedence` is unset."
+      ]
+    },
+    "reso-web-app": {
+      "label": "between the two, and currently unaddressable",
+      "weights": {
+        "correctness": 1.0,
+        "conformance": 0.0,
+        "geometry": 0.8,
+        "aesthetics": 0.7
+      },
+      "vision_budget_images": 2,
+      "why": "Chakra 2 + Emotion 11. Class names are runtime css-<hash> and are not invertible, so the conformance surface is 100% INDETERMINATE today.",
+      "zero_means_abstain_not_skip": "Weight 0.0 on conformance routes every conformance subject to INDETERMINATE. It does NOT silently skip them -- a skipped check and a clean check are the same bytes, and that is the failure this pipeline exists to avoid.",
+      "one_line_that_changes_this": "compiler: { emotion: { autoLabel: 'dev-only', labelFormat: '[local]' } } in next.config -- free in production, and it moves this app's attribution verdict from LOW to MEDIUM."
+    }
+  },
+  "measured": {},
+  "stack_reference": {
+    "authoritative": false,
+    "read_this_instead": "python3 profiles.py --measure <checkout>",
+    "source": "PIPELINE_SPEC.md 2 C11, measured from node_modules 2026-08-26",
+    "reso-landing-app": "Next 14.2.11, React 18.3.1, Tailwind 3.4.7, purchased template",
+    "reso-management-app": "Next 16.3.0 installed (16.2.6 declared), React 19.2.8 installed (19.2.4 declared), Panda CSS 1.9 AND Tailwind 4.2.4 in one PostCSS chain",
+    "reso-web-app": "Next 15.5.24, React 19.2.8, Chakra 2 + Emotion 11, no Tailwind, no Panda"
+  }
+}

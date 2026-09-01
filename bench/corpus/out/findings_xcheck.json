@@ -1,190 +1,288 @@
 {
  "align-1px": [
   {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-centre-indeterminate",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "the rendered ink of '\u25b6' sits 0.50px right and 3.73px down of the centre of the shape its container paints. Whether that reads as centred is a judgement about this glyph at this size, and there is no font-independent zero to compare it against -- UNVERIFIED",
+   "severity": "medium",
+   "verdict": "indeterminate",
+   "layer": "xcheck",
+   "facts": {
+    "offset_x_px": 0.5,
+    "offset_y_px": 3.73,
+    "mark_half_extent_px": [
+     6.5,
+     6.5
+    ],
+    "ink_fraction_in_shape": 0.0652,
+    "container_shape": "44x44px r=22px"
+   }
   }
  ],
  "clean": [
   {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-centre-indeterminate",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "the rendered ink of '\u25b6' sits 0.50px right and 3.73px down of the centre of the shape its container paints. Whether that reads as centred is a judgement about this glyph at this size, and there is no font-independent zero to compare it against -- UNVERIFIED",
+   "severity": "medium",
+   "verdict": "indeterminate",
+   "layer": "xcheck",
+   "facts": {
+    "offset_x_px": 0.5,
+    "offset_y_px": 3.73,
+    "mark_half_extent_px": [
+     6.5,
+     6.5
+    ],
+    "ink_fraction_in_shape": 0.0652,
+    "container_shape": "44x44px r=22px"
+   }
   }
  ],
  "contrast-on-gradient": [
   {
    "rule": "xcheck-contrast-varies",
+   "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
+   "detail": "contrast is not one number across this text: 6.15:1 at the left edge and 1.80:1 at the right. Any single computed value is a fiction, and the right end is the one that fails a reader",
+   "severity": "high",
+   "verdict": "asserted",
+   "layer": "xcheck",
+   "facts": {
+    "contrast_left": 6.15,
+    "contrast_right": 1.8,
+    "resolves": "contrast-indeterminate"
+   }
+  },
+  {
+   "rule": "xcheck-contrast-varies",
    "target": "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
-   "detail": "contrast is not one number across this text: 4.81:1 at the left edge and 1.57:1 at the right. Any single computed value is a fiction, and the right end is the one that fails a reader",
-   "severity": "high"
+   "detail": "contrast is not one number across this text: 6.00:1 at the left edge and 1.78:1 at the right. Any single computed value is a fiction, and the right end is the one that fails a reader",
+   "severity": "high",
+   "verdict": "asserted",
+   "layer": "xcheck",
+   "facts": {
+    "contrast_left": 6.0,
+    "contrast_right": 1.78,
+    "resolves": "contrast-indeterminate"
+   }
   },
   {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-centre-indeterminate",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "the rendered ink of '\u25b6' sits 0.50px right and 3.73px down of the centre of the shape its container paints. Whether that reads as centred is a judgement about this glyph at this size, and there is no font-independent zero to compare it against -- UNVERIFIED",
+   "severity": "medium",
+   "verdict": "indeterminate",
+   "layer": "xcheck",
+   "facts": {
+    "offset_x_px": 0.5,
+    "offset_y_px": 3.73,
+    "mark_half_extent_px": [
+     6.5,
+     6.5
+    ],
+    "ink_fraction_in_shape": 0.0652,
+    "container_shape": "44x44px r=22px"
+   }
   }
  ],
  "contrast-plain": [
   {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-centre-indeterminate",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "the rendered ink of '\u25b6' sits 0.50px right and 3.73px down of the centre of the shape its container paints. Whether that reads as centred is a judgement about this glyph at this size, and there is no font-independent zero to compare it against -- UNVERIFIED",
+   "severity": "medium",
+   "verdict": "indeterminate",
+   "layer": "xcheck",
+   "facts": {
+    "offset_x_px": 0.5,
+    "offset_y_px": 3.73,
+    "mark_half_extent_px": [
+     6.5,
+     6.5
+    ],
+    "ink_fraction_in_shape": 0.0652,
+    "container_shape": "44x44px r=22px"
+   }
   }
  ],
  "grid-offgrid": [
   {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-centre-indeterminate",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "the rendered ink of '\u25b6' sits 0.50px right and 3.73px down of the centre of the shape its container paints. Whether that reads as centred is a judgement about this glyph at this size, and there is no font-independent zero to compare it against -- UNVERIFIED",
+   "severity": "medium",
+   "verdict": "indeterminate",
+   "layer": "xcheck",
+   "facts": {
+    "offset_x_px": 0.5,
+    "offset_y_px": 3.73,
+    "mark_half_extent_px": [
+     6.5,
+     6.5
+    ],
+    "ink_fraction_in_shape": 0.0652,
+    "container_shape": "44x44px r=22px"
+   }
   }
  ],
  "hierarchy-inversion": [
   {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-centre-indeterminate",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.4px left and 0.6px down of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "the rendered ink of '\u25b6' sits 0.41px right and 2.73px down of the centre of the shape its container paints. Whether that reads as centred is a judgement about this glyph at this size, and there is no font-independent zero to compare it against -- UNVERIFIED",
+   "severity": "medium",
+   "verdict": "indeterminate",
+   "layer": "xcheck",
+   "facts": {
+    "offset_x_px": 0.41,
+    "offset_y_px": 2.73,
+    "mark_half_extent_px": [
+     6.0,
+     6.5
+    ],
+    "ink_fraction_in_shape": 0.0645,
+    "container_shape": "44x44px r=22px"
+   }
   }
  ],
  "optical-centering": [
   {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-centre-indeterminate",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.5px left and 0.7px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "the rendered ink of '\u25b6' sits 1.50px left and 1.73px down of the centre of the shape its container paints. Whether that reads as centred is a judgement about this glyph at this size, and there is no font-independent zero to compare it against -- UNVERIFIED",
+   "severity": "medium",
+   "verdict": "indeterminate",
+   "layer": "xcheck",
+   "facts": {
+    "offset_x_px": -1.5,
+    "offset_y_px": 1.73,
+    "mark_half_extent_px": [
+     6.5,
+     6.5
+    ],
+    "ink_fraction_in_shape": 0.0652,
+    "container_shape": "44x44px r=22px"
+   }
   }
  ],
  "overflow-clip": [
   {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-centre-indeterminate",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "the rendered ink of '\u25b6' sits 0.50px right and 3.73px down of the centre of the shape its container paints. Whether that reads as centred is a judgement about this glyph at this size, and there is no font-independent zero to compare it against -- UNVERIFIED",
+   "severity": "medium",
+   "verdict": "indeterminate",
+   "layer": "xcheck",
+   "facts": {
+    "offset_x_px": 0.5,
+    "offset_y_px": 3.73,
+    "mark_half_extent_px": [
+     6.5,
+     6.5
+    ],
+    "ink_fraction_in_shape": 0.0652,
+    "container_shape": "44x44px r=22px"
+   }
   }
  ],
  "radius-drift": [
   {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-centre-indeterminate",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "the rendered ink of '\u25b6' sits 0.50px right and 3.73px down of the centre of the shape its container paints. Whether that reads as centred is a judgement about this glyph at this size, and there is no font-independent zero to compare it against -- UNVERIFIED",
+   "severity": "medium",
+   "verdict": "indeterminate",
+   "layer": "xcheck",
+   "facts": {
+    "offset_x_px": 0.5,
+    "offset_y_px": 3.73,
+    "mark_half_extent_px": [
+     6.5,
+     6.5
+    ],
+    "ink_fraction_in_shape": 0.0652,
+    "container_shape": "44x44px r=22px"
+   }
   }
  ],
  "spacing-gap": [
   {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-centre-indeterminate",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "the rendered ink of '\u25b6' sits 0.50px right and 3.73px down of the centre of the shape its container paints. Whether that reads as centred is a judgement about this glyph at this size, and there is no font-independent zero to compare it against -- UNVERIFIED",
+   "severity": "medium",
+   "verdict": "indeterminate",
+   "layer": "xcheck",
+   "facts": {
+    "offset_x_px": 0.5,
+    "offset_y_px": 3.73,
+    "mark_half_extent_px": [
+     6.5,
+     6.5
+    ],
+    "ink_fraction_in_shape": 0.0652,
+    "container_shape": "44x44px r=22px"
+   }
   }
  ],
  "token-color-drift": [
   {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-centre-indeterminate",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "the rendered ink of '\u25b6' sits 0.50px right and 3.73px down of the centre of the shape its container paints. Whether that reads as centred is a judgement about this glyph at this size, and there is no font-independent zero to compare it against -- UNVERIFIED",
+   "severity": "medium",
+   "verdict": "indeterminate",
+   "layer": "xcheck",
+   "facts": {
+    "offset_x_px": 0.5,
+    "offset_y_px": 3.73,
+    "mark_half_extent_px": [
+     6.5,
+     6.5
+    ],
+    "ink_fraction_in_shape": 0.0652,
+    "container_shape": "44x44px r=22px"
+   }
   }
  ],
  "touch-target": [
   {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-centre-indeterminate",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "the rendered ink of '\u25b6' sits 0.50px right and 3.73px down of the centre of the shape its container paints. Whether that reads as centred is a judgement about this glyph at this size, and there is no font-independent zero to compare it against -- UNVERIFIED",
+   "severity": "medium",
+   "verdict": "indeterminate",
+   "layer": "xcheck",
+   "facts": {
+    "offset_x_px": 0.5,
+    "offset_y_px": 3.73,
+    "mark_half_extent_px": [
+     6.5,
+     6.5
+    ],
+    "ink_fraction_in_shape": 0.0652,
+    "container_shape": "44x44px r=22px"
+   }
   }
  ],
  "type-scale": [
   {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-centre-indeterminate",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "the rendered ink of '\u25b6' sits 0.50px right and 2.73px down of the centre of the shape its container paints. Whether that reads as centred is a judgement about this glyph at this size, and there is no font-independent zero to compare it against -- UNVERIFIED",
+   "severity": "medium",
+   "verdict": "indeterminate",
+   "layer": "xcheck",
+   "facts": {
+    "offset_x_px": 0.5,
+    "offset_y_px": 2.73,
+    "mark_half_extent_px": [
+     6.5,
+     6.5
+    ],
+    "ink_fraction_in_shape": 0.0652,
+    "container_shape": "44x44px r=22px"
+   }
   }
  ]
 }

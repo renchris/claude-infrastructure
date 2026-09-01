@@ -4,7 +4,10 @@
    "rule": "misalignment",
    "target": "div.panel:nth-of-type(5)",
    "detail": "left edge at 31px is 1.0px off the shared 32px edge used by 8 other elements",
-   "severity": "medium"
+   "severity": "medium",
+   "verdict": "asserted",
+   "layer": "dom",
+   "facts": {}
   }
  ],
  "clean": [],
@@ -13,13 +16,43 @@
    "rule": "contrast-indeterminate",
    "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
    "detail": "cannot compute a ratio: backdrop is an image/gradient on div.hero:nth-of-type(1). Requirement 3.0:1 is UNVERIFIED for this text",
-   "severity": "high"
+   "severity": "high",
+   "verdict": "indeterminate",
+   "layer": "dom",
+   "facts": {
+    "required_ratio": 3.0,
+    "foreground": "#FFFFFF",
+    "reason": "backdrop is an image/gradient on div.hero:nth-of-type(1)",
+    "rect": {
+     "x": 56,
+     "y": 56,
+     "w": 1168,
+     "h": 28,
+     "right": 1224,
+     "bottom": 84
+    }
+   }
   },
   {
    "rule": "contrast-indeterminate",
    "target": "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
    "detail": "cannot compute a ratio: backdrop is an image/gradient on div.hero:nth-of-type(1). Requirement 4.5:1 is UNVERIFIED for this text",
-   "severity": "high"
+   "severity": "high",
+   "verdict": "indeterminate",
+   "layer": "dom",
+   "facts": {
+    "required_ratio": 4.5,
+    "foreground": "#FFFFFF",
+    "reason": "backdrop is an image/gradient on div.hero:nth-of-type(1)",
+    "rect": {
+     "x": 56,
+     "y": 92,
+     "w": 1168,
+     "h": 16,
+     "right": 1224,
+     "bottom": 108
+    }
+   }
   }
  ],
  "contrast-plain": [
@@ -27,7 +60,10 @@
    "rule": "contrast",
    "target": "div.helper:nth-of-type(4)",
    "detail": "2.54:1 against 4.5:1 required (#9CA3AF on #FFFFFF)",
-   "severity": "high"
+   "severity": "high",
+   "verdict": "asserted",
+   "layer": "dom",
+   "facts": {}
   }
  ],
  "grid-offgrid": [
@@ -35,7 +71,10 @@
    "rule": "grid-violation",
    "target": "div.section-title:nth-of-type(3)",
    "detail": "margin-top is 13px, not a multiple of the 8px grid",
-   "severity": "low"
+   "severity": "low",
+   "verdict": "asserted",
+   "layer": "dom",
+   "facts": {}
   }
  ],
  "hierarchy-inversion": [
@@ -43,13 +82,19 @@
    "rule": "token-drift",
    "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
    "detail": "background-color #EFF6FF is 11.5 away from token #F9FAFB; almost certainly meant to be the token",
-   "severity": "low"
+   "severity": "low",
+   "verdict": "asserted",
+   "layer": "dom",
+   "facts": {}
   },
   {
    "rule": "contrast",
    "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
    "detail": "3.38:1 against 4.5:1 required (#3B82F6 on #EFF6FF)",
-   "severity": "high"
+   "severity": "high",
+   "verdict": "asserted",
+   "layer": "dom",
+   "facts": {}
   }
  ],
  "optical-centering": [],
@@ -58,19 +103,28 @@
    "rule": "overflow",
    "target": "div.panel:nth-of-type(5) > table > tbody > tr:nth-of-type(2) > td.cell-venue:nth-of-type(2)",
    "detail": "content is 40px tall inside a 24px box with overflow hidden; text is clipped",
-   "severity": "high"
+   "severity": "high",
+   "verdict": "asserted",
+   "layer": "dom",
+   "facts": {}
   },
   {
    "rule": "overflow",
    "target": "div.panel:nth-of-type(5) > table > tbody > tr:nth-of-type(3) > td.cell-venue:nth-of-type(2)",
    "detail": "content is 40px tall inside a 24px box with overflow hidden; text is clipped",
-   "severity": "high"
+   "severity": "high",
+   "verdict": "asserted",
+   "layer": "dom",
+   "facts": {}
   },
   {
    "rule": "overflow",
    "target": "div.panel:nth-of-type(5) > table > tbody > tr:nth-of-type(4) > td.cell-venue:nth-of-type(2)",
    "detail": "content is 40px tall inside a 24px box with overflow hidden; text is clipped",
-   "severity": "high"
+   "severity": "high",
+   "verdict": "asserted",
+   "layer": "dom",
+   "facts": {}
   }
  ],
  "radius-drift": [
@@ -78,7 +132,10 @@
    "rule": "token-drift",
    "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(2)",
    "detail": "border-radius 6px differs from the page's dominant 8px",
-   "severity": "low"
+   "severity": "low",
+   "verdict": "asserted",
+   "layer": "dom",
+   "facts": {}
   }
  ],
  "spacing-gap": [
@@ -86,13 +143,19 @@
    "rule": "spacing-rhythm",
    "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(3)",
    "detail": "gap 39.0px breaks the 16.0px rhythm used by its siblings under div.kpi-row:nth-of-type(2)",
-   "severity": "medium"
+   "severity": "medium",
+   "verdict": "asserted",
+   "layer": "dom",
+   "facts": {}
   },
   {
    "rule": "grid-violation",
    "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(3)",
    "detail": "margin-left is 23px, not a multiple of the 8px grid",
-   "severity": "low"
+   "severity": "low",
+   "verdict": "asserted",
+   "layer": "dom",
+   "facts": {}
   }
  ],
  "token-color-drift": [
@@ -100,7 +163,10 @@
    "rule": "token-drift",
    "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
    "detail": "background-color #1D4ED3 is 5.0 away from token #1D4ED8; almost certainly meant to be the token",
-   "severity": "low"
+   "severity": "low",
+   "verdict": "asserted",
+   "layer": "dom",
+   "facts": {}
   }
  ],
  "touch-target": [
@@ -108,7 +174,10 @@
    "rule": "touch-target",
    "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-secondary:nth-of-type(2)",
    "detail": "164x29px is under the 44px minimum target",
-   "severity": "high"
+   "severity": "high",
+   "verdict": "asserted",
+   "layer": "dom",
+   "facts": {}
   }
  ],
  "type-scale": [
@@ -116,7 +185,10 @@
    "rule": "type-scale",
    "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(4) > div.kpi-label:nth-of-type(1)",
    "detail": "font-size 17px is used once and sits off the page scale [12.0, 14.0, 16.0, 24.0]; nearest step is 16px",
-   "severity": "medium"
+   "severity": "medium",
+   "verdict": "asserted",
+   "layer": "dom",
+   "facts": {}
   }
  ]
 }

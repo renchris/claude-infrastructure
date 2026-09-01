@@ -182,6 +182,14 @@ background outside the circle — count as ink and swamp a 16px glyph. Both fixe
 against the container; mask to the painted shape) and neither is done. Shipping it on would have
 handed the pipeline a confident number with no ground truth behind it.
 
+**Both fixes landed 2026-09-01 and both defects were reproduced live first — see §8.1.** The arm
+stays behind `--x2` (the ratified Cut list puts "X2 centroid *on* by default" on it) but what the
+flag now gates is a validated measurement rather than an unvalidated one, and what it emits is an
+**abstention**, never an assertion. Fixing the first two defects exposed a third that neither report
+predicted and that is the more general lesson: **the offset has no font-independent zero.** The same
+glyph at the same size measures 3.7px low on Chromium/Linux and 1.9px high on the macOS Helvetica
+this corpus was authored against, so any absolute threshold encodes a font rather than a defect.
+
 ---
 
 ## 3. Local models: no
@@ -330,6 +338,12 @@ Nothing in this list is a model purchase.
 - `detect_dom.py` — nine general design-lint rules with an explicit `INDETERMINATE` verdict.
 - `bench_local_vlm.py` — the resolution/latency sweep.
 
+**Added 2026-09-01** (§8.1): `route.py` (the abstention router) · `profiles.py` + `profiles.json`
+(per-app rule weightings) · `fp_budget.py` (the false-positive ship gate) · `test_pipeline.py`
+(20 acceptance tests, each asserting a property that was once wrong) · `run.sh` (all of it, in
+dependency order). `capture.py` gained a `BENCH_CHROMIUM` escape hatch so a pre-provisioned browser
+of a different build number is a config line rather than a hard launch failure.
+
 **How it reaches a session — a plain CLI, not an MCP server.** A11 checked the assumption and it was
 wrong in our favour: an MCP tool *can* return image content to Claude Code. But image data is charged
 against `MAX_MCP_OUTPUT_TOKENS` (default 25,000), and the `anthropic/maxResultSizeChars` escape hatch
@@ -351,9 +365,9 @@ step function — but SAM is not semantic, so it will happily return a pixel-per
 band.)
 
 **To add, in order:**
-1. **The abstention router.** (The cross-check in `bench/detect_xcheck.py` already removes the gradient case from this queue.) Deterministic pass first; its `INDETERMINATE` set plus the pages it
+1. ✅ **BUILT 2026-09-01 — `bench/route.py`; see §8.1.** **The abstention router.** (The cross-check in `bench/detect_xcheck.py` already removes the gradient case from this queue.) Deterministic pass first; its `INDETERMINATE` set plus the pages it
    cannot reason about become the VLM's queue, cropped to the region in question.
-2. **A false-positive budget.** ~20% FP is where an AI reviewer loses credibility regardless of catch
+2. ✅ **BUILT 2026-09-01 — `bench/fp_budget.py`; see §8.1. The mined-corpus denominator (B0) is still open.** **A false-positive budget.** ~20% FP is where an AI reviewer loses credibility regardless of catch
    rate. Our two zero-FP runs are the baseline to defend; every rule added must be re-run against the
    clean control before it ships.
 3. **Order-randomised comparison.** If we ever compare two designs, permute over 3–5 orderings —
@@ -370,6 +384,135 @@ band.)
 template) is largely a marketing-aesthetics problem; `reso-management-app` (Next 16, React 19,
 Tailwind 4) is mostly design-system conformance, where the deterministic layer does nearly all the
 work; `reso-web-app` (Next 13) sits between. One review harness, three different rule weightings.
+
+---
+
+## 8.1 Built 2026-09-01 — items 1, 2 and the per-app weightings, plus the X2 repair
+
+`bench/` now runs end to end: `./run.sh [corpus] [--app NAME]` builds the corpus, captures it,
+runs both detectors, routes the abstentions, runs the false-positive gate and runs 20 acceptance
+tests. **20/20 pass and the gate is green.** New files: `route.py`, `profiles.py` +
+`profiles.json`, `fp_budget.py`, `test_pipeline.py`, `run.sh`.
+
+⚠️ **Everything below was re-measured on Chromium 1194 / Linux, not on the M1 Max.** That matters
+in one direction only, and the split is itself the most portable result here:
+
+| Layer | macOS run (2026-08-26) vs Linux run (2026-09-01) |
+|---|---|
+| **`detect_dom`** | **Identical. 16 findings, 0 divergent, on all 13 pages.** The computed-style layer is renderer-independent, which is the strongest available argument for gating CI on it and nothing else |
+| **`detect_xcheck`** | **Not portable, and it failed silently.** See X3 below |
+
+### The X2 repair, and the third defect the first two exposed
+
+Both documented defects reproduced before being fixed, which is why the fix is trustworthy:
+
+- **(a) Invariance, confirmed.** `span.glyph` reported its ink at `(3.91, 9.23)` against a box centre
+  of `(6.00, 8.00)` on `clean.html` **and** on `optical-centering.html` — identical to two decimal
+  places, with the compensating `translate(2px, 2px)` present in one and absent in the other. The
+  measurement was exactly invariant under the thing it existed to verify.
+- **(b) Swamping, quantified.** On the 44px round button the ink fraction was **0.290**, of which the
+  corners outside the `r=22px` circle are **0.215** — the page background carried **~74%** of the
+  "ink" and the 16px glyph carried the rest.
+- **The fix.** Ink is measured inside an analytic rounded-rect mask built from the container's own
+  rect and `border-radius` — the DOM supplies geometry, the pixels supply ink — and its centroid is
+  compared to the *mask's* centroid. This recovers the injected magnitude exactly: **dx `+0.50px` on
+  clean against `−1.50px` on optical-centering, a delta of 2.00px against a `translate` of exactly
+  2px**, and ink fraction inside the shape falls **0.290 → 0.065**, the glyph alone.
+- **(c) The new one: there is no font-independent zero,** so X2 asserts nothing. It emits
+  `INDETERMINATE` carrying the numbers, and asserts only when the centroid has moved further from the
+  container's centre than the mark's own ink half-extent — a bound no glyph metric can explain,
+  because past it the mark does not straddle the centre at all.
+
+🚨 **The committed `findings_xcheck.json` was carrying 26 unvalidated assertions, two of them on the
+clean control, and nothing was checking.** The old X2 fired **two `xcheck-optical-centre` findings on
+every one of the 13 pages** — 26 of 27 records in the file. The README's "0 control FP" for the
+cross-check was measured with X2 *off* and was true; the committed artifact was generated with `--x2`
+and was not. Had the arm ever been enabled by default it would have been a 100%-false-positive rule.
+It is now 13 honest abstentions plus the real gradient findings.
+
+### X3 was renderer-dependent and shipped SILENT
+
+The arm this document credits with removing contrast-over-a-gradient from the vision queue **found
+nothing at all** on Chromium/Linux. It took the modal colour of each third, which on white-on-gradient
+hero text is **the text's own white** — measured `[255,255,255]` in the left third — so it compared
+white against white, computed a 0.28 spread against a 1.5 tolerance, and reported a clean page. The
+documented `4.81 / 1.57` held only on the renderer it was written against.
+
+Fixed by excluding pixels near the *declared* foreground and taking the **median** of what remains,
+which is stable under a smooth gradient. Validated in both directions, which is the part that makes it
+more than a re-tune: on the solid control it recovers `rgb(29, 78, 216)` — the authored `#1D4ED8` —
+**exactly**, and on `contrast-plain` it reproduces the cascade's own `2.54:1` and stays correctly
+silent, because there is no disagreement to report. On the gradient it now reads **6.00:1 at the left
+edge and 1.78:1 at the right.**
+
+**The generalisable lesson, and it is the same one §7 records about the fence rule:** a
+pixel-sampling claim is only true of the renderer it was measured on, and its failure mode is
+silence. A cross-check that resolves nothing is indistinguishable from a page with nothing to
+resolve — which is precisely why the router's subtraction had to be gated on evidence that the layer
+*ran*, not on the file existing.
+
+### The abstention router (`route.py`)
+
+Two triggers, because on this corpus the other three have volume zero and the ratified build order
+cuts the stage to its honest size.
+
+- **T1** = `INDETERMINATE` − what the cross-check closed, collapsed by class. **Gated on the
+  cross-check having run on *this page*, not on the file existing** — a present-but-empty file
+  resolves nothing and looks exactly like nothing needing resolution. Measured: removing the page's
+  key takes T1 subjects on `contrast-on-gradient` from **1 to 2**. An outage *widens* the model queue,
+  which is the one place a larger queue is the right response to a layer failure.
+- **T2** = the six unscreenable classes, once per page, unconditional, never cut for budget. Nothing
+  screens them, so cutting one deletes its only coverage rather than deferring it.
+- **The NEVER list is enforced, not documented.** `_assert_no_numbers` raises on a routed question
+  carrying a digit, so an edit that quietly asks the eye to measure something fails at the call.
+  Numbers still travel — as `facts` riding beside the question, which is a different thing.
+- **A third partition the stage designs did not have: `unroutable`.** A question can be worded without
+  a number and still have no visual answer, because its answer is an *identity* rather than a
+  judgement. "Is this the design token?" is not a thing anyone can see. Those abstentions are reported
+  as a **coverage hole** with the thing that would close it — neither queued (an image spent on an
+  unanswerable question) nor dropped (a dropped abstention is indistinguishable from a pass). This is
+  what `reso-web-app`'s conformance surface resolves to today, and the hole names its own fix.
+- It **never rasterises** (a crop from a second browser pass is a different frame) and **never
+  gates CI**. Advisory triage only. Taste stays human.
+
+### The false-positive gate (`fp_budget.py`)
+
+Exit 0 or 1, and it has teeth: with the grid unit deliberately mis-set to 5px it reports **11 asserted
+findings on the control and exits 1**; restored, it exits 0. Three claims kept separate, because
+collapsing them is how a comfortable number gets quoted:
+
+1. **Zero asserted findings on the control is the gate**, enforceable at n = 1, with no baseline-diff
+   suppression. **An abstention is not a false positive** — it asserts nothing, its cost is images
+   rather than credibility, and counting it as one would push the pipeline toward silent passes.
+2. **No per-page rate is printed below n = 16 clean pages.** At n = 1 it prints the deficit and the
+   command that fixes the denominator, not a rate.
+3. **The budget is stated per 1,000 subject-checks.** Current corpus: **619 subject-checks on the
+   control**, bound **4.85 per 1,000**. The mined-clean-pages corpus is still the missing denominator
+   and `--control-dir` is where it plugs in.
+
+### Per-app weightings (`profiles.json`)
+
+| Profile | correctness | conformance | geometry | aesthetics | images |
+|---|---|---|---|---|---|
+| `reso-landing-app` — marketing aesthetics | **1.0 pinned** | 0.25 | 0.6 | 1.0 | 4 |
+| `reso-management-app` — design-system conformance | **1.0 pinned** | 1.0 | 1.0 | 0.4 | 1 |
+| `reso-web-app` — currently unaddressable | **1.0 pinned** | 0.0 | 0.8 | 0.7 | 2 |
+
+Three properties are load-bearing and each is tested:
+
+- **`correctness` is pinned at 1.0 and `load()` refuses a profile that lowers it.** Every other weight
+  is a product judgement; contrast, overflow and target size are not. "It is a marketing site" is a
+  real argument about token drift and is not an argument about 2.54:1 text — and a weighting file is
+  exactly where that conflation would be made once, by someone reasonable, and never re-read.
+- **Weight 0 means ABSTAIN, never SKIP.** A skipped check and a clean check are the same bytes.
+- **The stack facts are not in the file.** C11 rules that a table which bans prose as a source must be
+  *generated*, and it earned that ruling by publishing three wrong cells in the fix that made it. The
+  `measured` block ships **empty**; `profiles.py --measure <checkout>` reads `node_modules` for real
+  and records `declared` vs `installed` separately, because C11 found them disagreeing. The C11 table
+  is carried as `stack_reference` marked non-authoritative, and **nothing reads it**.
+
+**Still open, unchanged:** the mined clean corpus (B0) is the ship gate this cannot self-certify, and
+the north-star taste yardstick from §7 remains absent.
 
 ---
 

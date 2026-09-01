@@ -11,3 +11,6 @@ corpus/out/pages/
 corpus/out/shots/
 corpus/out/snapshots/
 corpus/out/blind/
+# Derived per-app; `route.py --app X` and `--app Y` write different bytes to the
+# same path, so committing it would make the tree dirty on every profile switch.
+corpus/out/route_plan.json

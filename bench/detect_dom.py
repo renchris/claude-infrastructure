@@ -121,14 +121,28 @@ class Page:
         return (255, 255, 255, 1.0), "ok"  # document canvas
 
 
-def find(snap: dict, tokens: dict) -> list[dict]:
+def find(snap: dict, tokens: dict, stats: dict | None = None) -> list[dict]:
     pg = Page(snap)
     els = pg.els
     out: list[dict] = []
+    subject_checks = 0
 
-    def rep(rule, target, detail, severity="medium"):
+    def rep(rule, target, detail, severity="medium", verdict="asserted", facts=None):
         out.append(
-            {"rule": rule, "target": target, "detail": detail, "severity": severity}
+            {
+                "rule": rule,
+                "target": target,
+                "detail": detail,
+                "severity": severity,
+                # `asserted` is a claim about the page and counts against the
+                # false-positive ship gate; `indeterminate` is this layer's most
+                # valuable output -- it asserts nothing and becomes the abstention
+                # router's queue. Collapsing the two is what turns an honest
+                # abstention into a confident pass, which routes nowhere.
+                "verdict": verdict,
+                "layer": "dom",
+                "facts": facts or {},
+            }
         )
 
     text_els = [e for e in els if e["text"]]
@@ -154,6 +168,7 @@ def find(snap: dict, tokens: dict) -> list[dict]:
         if m is None or share < 0.5:
             continue
         for i, g in enumerate(gaps):
+            subject_checks += 1
             if abs(g - m) > 1.0:
                 rep(
                     "spacing-rhythm",
@@ -165,6 +180,7 @@ def find(snap: dict, tokens: dict) -> list[dict]:
     # --- 2. grid adherence: spacing values should be multiples of the unit ----
     for e in els:
         for side in ("margin-top", "margin-left", "margin-bottom", "margin-right"):
+            subject_checks += 1
             v = px(e["styles"].get(side))
             if v and v % GRID != 0 and v not in (1.0, 2.0, 4.0) and v < 100:
                 rep(
@@ -179,6 +195,7 @@ def find(snap: dict, tokens: dict) -> list[dict]:
     counts = collections.Counter(sizes)
     scale = {s for s, n in counts.items() if n >= 2}
     for e in text_els:
+        subject_checks += 1
         s = px(e["styles"]["font-size"])
         if s not in scale and scale:
             near = min(scale, key=lambda x: abs(x - s))
@@ -198,6 +215,7 @@ def find(snap: dict, tokens: dict) -> list[dict]:
     m, share = mode_of(radii)
     if m and share >= 0.4:
         for e in els:
+            subject_checks += 1
             r = px(e["styles"]["border-radius"])
             # A pill/circle is a deliberate shape, not radius drift.
             if (
@@ -219,6 +237,7 @@ def find(snap: dict, tokens: dict) -> list[dict]:
     seen = {}
     for e in els:
         for prop in ("color", "background-color"):
+            subject_checks += 1
             c = parse_rgb(e["styles"].get(prop, ""))
             if not c or c[3] < 0.99:
                 continue
@@ -247,6 +266,7 @@ def find(snap: dict, tokens: dict) -> list[dict]:
 
     # --- 6. contrast, with an honest third answer ---------------------------
     for e in text_els:
+        subject_checks += 1
         fg = parse_rgb(e["styles"]["color"])
         if not fg:
             continue
@@ -264,6 +284,13 @@ def find(snap: dict, tokens: dict) -> list[dict]:
                 f"cannot compute a ratio: {why}. Requirement {need}:1 is UNVERIFIED "
                 f"for this text",
                 "high",
+                verdict="indeterminate",
+                facts={
+                    "required_ratio": need,
+                    "foreground": hexof(fg),
+                    "reason": why,
+                    "rect": e["rect"],
+                },
             )
             continue
         ratio = contrast(fg, bg)
@@ -277,6 +304,7 @@ def find(snap: dict, tokens: dict) -> list[dict]:
 
     # --- 7. overflow / clipping ---------------------------------------------
     for e in els:
+        subject_checks += 1
         ov = " ".join(
             [e["styles"].get("overflow", ""), e["styles"].get("overflow-y", "")]
         )
@@ -291,6 +319,7 @@ def find(snap: dict, tokens: dict) -> list[dict]:
 
     # --- 8. touch-target size -----------------------------------------------
     for e in els:
+        subject_checks += 1
         role = e["tag"] in INTERACTIVE
         if not role:
             continue
@@ -307,6 +336,7 @@ def find(snap: dict, tokens: dict) -> list[dict]:
     edges = collections.Counter(round(e["rect"]["x"], 1) for e in els)
     strong = {x for x, n in edges.items() if n >= 3}
     for e in els:
+        subject_checks += 1
         x = round(e["rect"]["x"], 1)
         if x in strong:
             continue
@@ -319,6 +349,10 @@ def find(snap: dict, tokens: dict) -> list[dict]:
                     f"{s}px edge used by {edges[s]} other elements",
                 )
                 break
+
+    if stats is not None:
+        stats["subject_checks"] = subject_checks
+        stats["elements"] = len(els)
     return out
 
 

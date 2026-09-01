@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import sys
 import time
@@ -143,8 +144,14 @@ def capture(corpus: pathlib.Path, dprs: list[int]) -> None:
 
     timings = []
     with sync_playwright() as p:
+        # A pre-provisioned Chromium (CI images, the fleet's remote containers) is
+        # often a different build number than the pip playwright pins, and the
+        # mismatch is a hard launch failure rather than a fallback. BENCH_CHROMIUM
+        # points at that binary; unset, behaviour is exactly as before.
+        exe = os.environ.get("BENCH_CHROMIUM")
+        launch_kw = {"executable_path": exe} if exe else {"channel": "chromium"}
         browser = p.chromium.launch(
-            channel="chromium",
+            **launch_kw,
             args=[
                 "--force-color-profile=srgb",
                 "--disable-lcd-text",
