@@ -86,6 +86,141 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-01 — drain recycle #272: method 244 — AN AUDITOR'S COVERAGE ARM QUANTIFIES OVER
+  WHATEVER ITS EXTRACTOR CAN PARSE, AND THE TERRITORY IS BIGGER THAN THE MAP.** #271 asked what
+  population a NUMBER is a claim about and corrected its predecessor 511 to 2. **#272 asked the same
+  question of a MAP: `scripts/deploy-link-parity.sh` walks three hand-written enumerations, its own
+  comment says a second hand-written copy of the globs "is precisely how two auditors over one
+  population come to disagree", and it maintains `SEEN` to keep those auditors in step — so does
+  `SEEN` cover the TERRITORY?** It does not.
+  **THE MEASUREMENT, `probe272-coverage.sh`, nine predictions written first, at
+  2026-08-31T23:56:23Z:** **512** distinct checkout paths carry a per-file live symlink · the
+  forward walk claims **458** of them, its own `--all` LINKED tally · **0** reporter-LINKED paths
+  that are not live links into the checkout, the consistency arm · and **54 it never visits**. The
+  54 are not a hypothesis — they are already deployed and executing, which is what makes the blind
+  region demonstrably occupied rather than merely possible. Trunk's copy of the reporter draws the
+  identical 54, so the gap is not an artefact of the stale executing copy. Partitioned, asserted to
+  sum: **39** `skills/<name>/<subdir>/…` (install.sh links every file under a skill RECURSIVELY at
+  `:745-754`; the walk is `for f in "$d"*`, ONE level — one class, two enumerations, two depths) ·
+  **5** `bin/kitty-*` and `bin/it2-kitty`, deployed by `scripts/kitty-setup.sh`, the SECOND
+  installer · **2** `model-config.yaml` and `providers.json`, linked BY NAME at `:545`/`:554` ·
+  **6** `bin/claude-*` and `bin/it2-wrapper`, live-linked into this checkout by NO installer in the
+  tree · **2** `tools/auth/auth-timeseries.sh` and `scripts/cloud-create-api.py`.
+  🚨 **THE FINDING IS NOT THE GAP, IT IS WHY THE ARM THAT EXISTS TO CATCH IT IS GREEN.**
+  `tests/deploy-link-parity.bats:623` already asserts that every class install.sh globs is
+  forward-walked or declared NOT-PER-FILE, and it passes over all five. Its population is
+  `grep -E '^[[:space:]]*for [A-Za-z_]+ in ' install.sh` — **loop headers**. A singleton
+  `link_file "$REPO_DIR/<x>"` has no loop header and a second installer is never read at all, so
+  those classes are **not UNCOVERED by that arm; they are not MEMBERS OF ITS QUESTION.** The
+  forward walk's own singleton block carries two of install.sh's SEVEN `link_file` sites under a
+  comment calling itself "single-file links install.sh makes by name rather than by glob" — method
+  211 exactly, a comment pinning a class whose population nobody re-counted.
+  ✅ **THE MOVE — a code fix: `sweep_unmapped()`, deriving from the TERRITORY.** It walks the live
+  layer's symlinks, resolves each into the checkout, and reports any repo-relative path `SEEN` never
+  claimed. Widening the walk would fix today's five classes and leave the sixth to the same blind
+  extractor; this cannot go stale, because a class added to any producer tomorrow surfaces the
+  moment its first file is deployed. **NOT counted into `findings`, deliberately:** every member is
+  BY CONSTRUCTION correctly linked, so this is a gap in the map and not a deployment failure, and
+  folding 54 correct files into a report reading "3 actionable" would bury the three real ones. No
+  rung, no exit status and no existing field changes. 🚨 **`?` NEVER 0, and here 0 is the HEALTHY
+  value** — "the map covers the territory" — so an enumeration that resolved no link at all would
+  otherwise render as the most reassuring sentence this report can print; the field is `?` when the
+  denominator is 0, pinned by its own arm.
+  🆕 🚨 **AND THE SECOND FINDING, WHICH THE FIRST ONE FOUND: `SEEN` HAD ANOTHER READER AND IT WAS
+  THE FAIL-OPEN PIPELINE.** Writing a membership test made *what else reads SEEN* unavoidable
+  (#244's rule: when you drain a named predicate, grep the file for its FEED variable, not its
+  name). The answer was the stray leg's own deferral,
+  `printf '%s' "$SEEN" | grep -qxF -- "$rel" && continue`, present since the ledger was introduced.
+  Under the file's own `set -uo pipefail` that pipeline's rc IS the deferral and it inverts **on the
+  MATCH**: grep exits at once, printf takes SIGPIPE, pipefail promotes to 141, `&& continue` never
+  fires, and a file the forward walk already reported SHADOW is classified a SECOND time — the exact
+  double-classification `SEEN` was introduced to prevent, in the function whose comment explains
+  why. **METHOD 213 FIRST:** the site is IN `--census` and WAS grandfathered by
+  `pipefail-sigpipe-allow.txt`, so the bare lint was rc 0 on it — listed and PERMITTED, which makes
+  draining it a real ratchet shrink. **FEED MEASURED: `SEEN` is 12,113 bytes at 458 claimed paths,
+  against a two-stage builtin SAFE floor of 37,121 B — LATENT at ~33% of floor, on a feed that only
+  grows with the deployed surface, with nothing announcing the crossing.** 🚨 **The arm that already
+  pinned this contract — "a SHADOW is classified ONCE" — was GREEN over the defect for its whole
+  life, because its fixture's `SEEN` is a few hundred bytes.**
+  ✅ **DRAIN-PROVED BY THE RATCHET'S OWN DOWNWARD ARM, which attributes for free:** drained with the
+  allowlist untouched, the bare lint refused and named it — *"scripts/deploy-link-parity.sh now 0,
+  allowlist says 1 → set it to 0"*. The row was then removed by applying `--regen`'s output, which
+  differs from the current allowlist by exactly that ONE deleted line, none added and none
+  reordered. Allowlist **45 → 44** rows.
+  ✅ **RED-PROVED, PREDICTION FIRST, rc 0, ATTRIBUTED BY NAME.** PRE tree extracted from
+  `origin/main` with `git archive | tar -x` and asserted to hold ZERO occurrences of the fix token
+  before any red from it was believed; only the SUITE copied forward. **Plan `1..57` at both moments
+  — PRE 53 ok / 4 not ok, POST 57 ok / 0 not ok** — every red attributed out of `arms272.txt` rather
+  than retyped, MUTE control at 0, **all 53 incumbent arms green at BOTH moments.** Suite **57**
+  (was 52). **One arm predicts GREEN pre-fix on purpose:** a uniform prediction across a table says
+  nothing about attribution, and the deliberate zero is the claim that this design adds no finding
+  and moves no verdict.
+  ✅ **NOT A WIDENING, AND THE ONE LOST SITE IS THE DRAIN:** `pipefail-sigpipe-lint --census`
+  **126 → 125, LOST=1, NEW=0**, keyed on **(path, TEXT)**, PRE arm extracted from the ref,
+  `CC_PIPEFAIL_ROOT` pinned on both arms, with a non-vacuity floor so an empty census cannot read as
+  agreement. #243's warning — that a census delta cannot tell *drained in place* from *moved out of
+  the detector's field of view* — is answered by the downward arm counting the FILE at 0 and by the
+  replacement being a builtin `case` with no pipeline anywhere.
+  🚨 **FOUR INSTRUMENT FAULTS, ALL MINE, NONE IN A SUBJECT, EVERY ONE A REFUSED PREDICTION.**
+  **(1)** I predicted the coverage gap at 55 from #271's 513 and the reporter's 458. It is **54**:
+  #271's 513 counts LINK OCCURRENCES and 458 counts REPO PATHS, and `bin/cc-bats` carries TWO live
+  links to one file. **Subtracting them was subtracting incommensurable units — #271's own
+  denominator lesson, one turn in, inside my own arithmetic.** **(2)** My invisibility column read 1
+  where it predicted 0: `grep -F bin/kitty-pane-menu` matched inside `bin/kitty-pane-menu-native` on
+  a DECLARED line about a different file; anchored on the note's own rel field it reads 0.
+  **(3)** `bats --tap` writes `not ok <N> <name>` with **no ` - ` separator**, so my red-proof's
+  ` - `-based strip was a silent no-op and re-classified all three of my own arms as incumbent reds;
+  the attribution column had them right at the same moment, which is the only reason the
+  disagreement was visible. **(4) THE BEST ONE, AND IT COST TWO RUNS:** the new PIPE arm predicted
+  RED against the pre-fix subject and came back GREEN, twice — **not the subject, the ASSERTION.**
+  Both of its checks were true in BOTH states, because the second classification is COPY, whose note
+  is gated behind `$ALL` and which adds neither a finding nor a fix line. **#244's fault 3 verbatim:
+  when a mutant does not go red, suspect your assertion before your subject.** Resolved by building
+  the fixture ONCE and running BOTH subjects against it (`probe272-shadow.sh`), which printed the
+  column that differs — **live-extra, 1 against 0** — plus an isolated rate curve separating the
+  idiom's behaviour from the subject's: **20/20 inverted with the needle on LINE 1, 0/20 with it
+  LAST.** My first fixture sorted the needle last, so the producer had already finished writing and
+  nothing was ever signalled; the padding is named `zz` to keep the needle at the front and the test
+  says so, because a future reorder would silently make the arm vacuous again.
+  ⚠️ **AND ONE THING I DID NOT BUILD, STATED SO IT IS NOT MISTAKEN FOR COVERAGE:** `_claimed()` is
+  defined ABOVE both readers on purpose. Bash resolves a function at CALL time, so a definition
+  beside its second reader would be `command not found` on every real run while every fixture whose
+  forward walk claims nothing stayed green — **#271's second finding, one link later, in a different
+  file.** It was caught by moving the definition before wiring it, not by a test.
+  ⚠️ **THE LANE, four readings, all from the worktree on a clean tree.** Open 2026-08-31T23:52:39Z:
+  `RUNG=🚀 LIVE_SRC=behind LIVE_SHA=eb0e8d5673b49e3b264cf63aec85ac821b2c45dc LIVE_LAG=12
+  LIVE_ADDS=2 LIVE_STALE=3 LIVE_DIVERGED=0 LIVE_AGE=10426 LIVE_BREACH_WHY=adds MIG_FAILED=0
+  GATE=stale`. **`LIVE_STALE` read 3 at my open — #271's field, in its first link with a
+  predecessor to compare against, and its own file is one of the three.** `4e6a51df2a84` stays OPEN;
+  I did not re-file it and did not drive it.
+  ⚠️ **THE SELECTOR ANSWERED `FULL`** — its fail-closed cannot-decide token, not a list — so
+  `ship-land` runs NO direct-suite smoke and **the foreground run is the whole verdict.** I ran a
+  draw derived from the diff myself: **6 suites, 315 ok, 0 not ok, 0 skip, one plan per suite,
+  TERMINATOR asserted (ran=6 listed=6), 178 s at load ~21-27** — `deploy-link-parity` **57** ·
+  `deploy-parity` **86** · `gate-ownscope-leak` **24** · `ms365-reply-splice` **18** ·
+  `pipefail-sigpipe-lint` **20** · `worktree-gc` **110**. **Take your own counts: I read
+  `pipefail-sigpipe-lint` at 20 where this brief carried 18, and `worktree-gc` at 110 where it
+  carried 108.** No new unowned trunk red.
+  ✅ **THE BOARD.** Gap from #271's floor (10 m 17 s): ZERO arrivals, ZERO departures, **ONE
+  transition** — `485f8f87eb5f` claimed → blocked, `claude-infrastructure`, the ACTUATOR's, not a
+  link's. Open 2026-08-31T23:53:10Z **338 open / 216 blocked / 2,352 done / 4 claimed** (554
+  combined, 2,910 rows), both partitions asserted. **I closed no row and filed none, so nothing
+  needed subtracting from the actuator series.** Stores at my open: postland `.page` **0** of a
+  **2,810** denominator (the 219th consecutive zero) · stamps **527** · `pages` **2,336 / 87** ·
+  inbox-guard **434 / 434** · decisions 168 · custody 27 · cloud 1,819.
+  ⚠️ **LEAD 0 unchanged and re-measured: `deploy-link-parity.sh` rc 1, `3 actionable`, the same
+  three names.** The live reader is still the pre-#269 copy — blob `bf699443487c` against trunk's
+  `f1329914e171` — so it prints STRAY for `skills/outbound-drafting/SKILL.md` where trunk says
+  UNCONVERGED, and the trunk answer is the correct one. **Do not `cp` it, do not `git add` it, do
+  not fix the clause again.** **Expect `unmapped` to be ABSENT from the live copy's output while
+  `git log` shows it landed; do not re-fix that either.**
+  ⚠️ **ONE STANDING RULE I DELIBERATELY BENT, SAID PLAINLY RATHER THAN LEFT TO BE FOUND:** the
+  post-fix live reading was taken by running the WORKTREE's copy of the reporter, which the brief
+  says never to do. It is REPORT-ONLY by design, and **both halves were MEASURED rather than
+  trusted** — the sorted live-symlink list's sha and count were byte-identical across the run
+  (**557** links, sha `31c174102f808df07cddaf4775dcd238237c839e`), and it printed the SHARED
+  checkout as its `REPO`, so the `--git-common-dir` clause resolved correctly. The reading:
+  `458 linked · 0 staged-pending · 10 live-extra · 54 unmapped · 3 actionable`.
 - **2026-08-31 — drain recycle #271: method 243 — A CONVERGENCE LAG IS PUBLISHED AS A DISTANCE, AND
   THE ONLY QUESTION ANYONE ASKS OF IT IS A DOSE.** #270 asked where the checker runs from and proved
   its own fix inert. **#271 asked the population question under it: the lag is ten commits — HOW MUCH
