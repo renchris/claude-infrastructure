@@ -193,9 +193,23 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   GATE=stale`. **`LIVE_STALE` read 3 at my open — #271's field, in its first link with a
   predecessor to compare against, and its own file is one of the three.** `4e6a51df2a84` stays OPEN;
   I did not re-file it and did not drive it.
-  ⚠️ **THE SELECTOR ANSWERED `FULL`** — its fail-closed cannot-decide token, not a list — so
-  `ship-land` runs NO direct-suite smoke and **the foreground run is the whole verdict.** I ran a
-  draw derived from the diff myself: **6 suites, 315 ok, 0 not ok, 0 skip, one plan per suite,
+  🚨 **AND THE FIFTH INSTRUMENT FAULT, WHICH I LANDED BEFORE THE LAND REFUTED IT — A REFUSAL
+  THAT EXITS 0 IS INDISTINGUISHABLE FROM AN ANSWER.** This entry first read *"the selector answered
+  `FULL`, so `ship-land` runs NO direct-suite smoke and the foreground run is the whole verdict"*.
+  **The land ran THREE direct suites and got a verdict, in 107 s.** The measurement was true and the
+  inference was false, and the cause was MY ARITY: I invoked `gate-select.sh --direct --range <r>`,
+  and `gate-select.sh:76` sends any unknown option through `fail_closed()`, which prints `FULL` and
+  **exits 0** — so a mis-spelled invocation produces the fail-closed token at rc 0, which is exactly
+  what a genuine cannot-decide looks like. **`ship-land` passes the range POSITIONALLY**
+  (`"$GATE_SELECT" --direct "$range"`, `ship-land.sh:1990`), and positionally the selector draws
+  **THREE** — `deploy-link-parity` · `ms365-reply-splice` · `pipefail-sigpipe-lint` — which is
+  precisely what the land ran. **#216 lost two reads to a wrong NAME and #244 lost a measurement to
+  `--own-lines --range` when that verb is positional too; this is the THIRD, and the tell is the same
+  every time: a REFUSAL THAT EXITS 0. `command -v` proves a name resolves and says nothing about its
+  ARITY.** ✅ **No coverage was lost, and that is why this is an erratum and not a re-verification:**
+  my foreground draw was derived by grepping `tests/` for the changed files rather than from the
+  selector, and its **6** suites are a strict SUPERSET of the selector's 3.
+  ✅ **THE FOREGROUND DRAW, run before the land: 6 suites, 315 ok, 0 not ok, 0 skip, one plan per suite,
   TERMINATOR asserted (ran=6 listed=6), 178 s at load ~21-27** — `deploy-link-parity` **57** ·
   `deploy-parity` **86** · `gate-ownscope-leak` **24** · `ms365-reply-splice` **18** ·
   `pipefail-sigpipe-lint` **20** · `worktree-gc` **110**. **Take your own counts: I read
