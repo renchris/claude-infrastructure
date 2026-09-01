@@ -86,6 +86,125 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-01 — drain recycle #276: method 248 — A COVERAGE ARM KEYED ON A *VERB NAME* IS ITSELF A
+  SHAPE CLAIM: ASK WHAT PLACES BYTES WITHOUT CALLING THE VERB.** #274 asked what population each
+  field of a printed summary line counts over; #275 asked what the coverage ARMS' map is built from
+  and found it was install.sh's 19 `for … in "$REPO_DIR"/…` loop headers, so install.sh's 8 singleton
+  `link_file`/`copy_file` literal installs were gated by nobody. **#276 asks that same question of
+  #275's own REMEDY.** That remedy added a THIRD extractor to `tests/deploy-parity.bats`, keyed on
+  those two VERB NAMES — and a key on a verb name is a shape claim exactly as a key on a `for` header
+  is, so it inherited a blind spot of the kind it exists to close. **install.sh places bytes THREE
+  ways, not two.** MEASURED 2026-09-01T03:16Z over `install.sh` (blob `1053a1c6187d`), by execution
+  and not by eye: **8 bare `run ln` / `run cp` lines**, classified on the SHAPE of the line with the
+  partition asserted to sum. **3 are DEPLOYS** — the other five are the two verbs' own bodies (3), a
+  migration backup and an intra-repo seed — **and those 3 partition 1/1/1 by SOURCE:** `install.sh:776`
+  `"$vsrc"` is loop-driven and its for-header IS one of the 19, so it is reachable · `install.sh:797`
+  `"$REPO_DIR/CLAUDE.md"` is namable in the very units both extractors use and is in **NEITHER**
+  population · `install.sh:703` `"$HOME/.claude/scripts/restore-file.sh"` → `"$HOME/bin/restore-file"`
+  has a **LIVE-PATH source**, so it is unnamable in `$REPO_DIR` units by ANY extractor keyed on them,
+  whatever its verb. **That last one is the sharper half and it is the part to carry: a shape the map
+  cannot EXPRESS is one no member of the population can ever demonstrate.**
+  🚨 **CLAUDE.md IS THE ONE THIS REPAIRS, AND IT WAS DROPPED BY BOTH GATES.** Put through the
+  assert's OWN extracted `case` block with the final catch-all **TAGGED** (the tag asserted to touch
+  exactly 2 diff lines; memory `make-the-actuator-the-arbiter`), with a **POS control** —
+  `hooks/notify.sh` must come back `1|hooks/*.sh` — and a **FIRE control** — a source present nowhere
+  must reach the tag — it reached the **REASONLESS `*) want=0`**. A second, INDEPENDENT column then
+  asked the OTHER gate, the walk's input pathspec at `:432`, and found **0** occurrences of it there
+  against a mute control also at 0. **The same three-gate shape as the `kitty-setup.sh` block, and
+  the second column is what makes it a measurement rather than an inference from set arithmetic.**
+  ⚠️ **0 OUTAGES, MEASURED BEFORE THE LAND RATHER THAN AFTER (arm D).** Both destinations were read
+  individually at 03:16Z: `~/.claude/CLAUDE.md` is a **REAL FILE of 77,351 bytes, byte-identical to
+  the repo copy** — which is CORRECT, since install.sh COPIES it deliberately (*"a symlink into the
+  repo would break across branch switches"*) — and `~/bin/restore-file` is a symlink to the live
+  script. **This closes a DETECTOR gap, exactly as `githooks/*`, `launchd/*.plist` and the literal
+  installs each did before it. Ask arm D BEFORE you land, not after.**
+  ✅ **THE MOVE — one declaring arm plus the coverage arm that stops it recurring.**
+  `scripts/deploy-parity-assert.sh` gains `CLAUDE.md) want=0 ;;` carrying its own reason. **Behaviour
+  is unchanged BY CONSTRUCTION — `want` was 0 and stays 0, and the arm is unreachable from this walk
+  today exactly as the githooks/launchd pair is — so this is purely the reason arriving at the gate**,
+  which is #275's cheaper half paying again: a justification in a comment is not a declaration in a
+  case. `tests/deploy-parity.bats` gains **RAW-INSTALL COVERAGE** and its fire test, deriving the
+  population from install.sh's own byte-placing lines through a **FOURTH extractor keyed on the SHAPE
+  of the line rather than on either verb name**. It asserts **BOTH partitions SUM**, so a raw deploy
+  of a NEW shape refuses rather than being absorbed; it pins the two classes no `$REPO_DIR`-keyed arm
+  can score at their measured counts — the VARIABLE one by install.sh's load-bearing `ln -sfn`
+  spelling, the LIVE-PATH one by its destination; and the fire test deletes exactly the CLAUDE.md arm,
+  asserted to remove ONE line, and requires that same source back on the default **while a sibling
+  stays declared**. **88 → 90 arms; zero existing assertions edited, both APPENDED.**
+  🚨 **THE RED-PROOF PRODUCED TWO INCUMBENT REDS THAT ARE NEITHER TRUNK'S NOR MINE, AND THE REASON
+  GENERALISES TO EVERY RED-PROOF OF THIS SHAPE.** The PRE tree was extracted from `origin/main` with
+  `git archive | tar -x`, asserted to hold ZERO occurrences of the fix token before any red from it
+  was believed, with only the SUITE copied forward and install.sh's blob asserted IDENTICAL at both
+  moments. PRE: both new arms RED, attributed BY NAME out of `arms276.txt` rather than retyped, mute
+  control 0. POST: **0 mine, 0 incumbent.** But PRE also reddened `HOME/bin CLAIM COVERAGE` and
+  `CLAUDE.md MANDATED SKILLS`, both on their own NON-VACUITY FLOORS. **Re-run in a PRISTINE
+  `origin/main` extraction with TRUNK'S OWN suite — my diff nowhere in it — both fail identically, on
+  the same two floor lines.** A `git archive` tree carries no `.git`, so an arm whose population comes
+  from `git ls-files` derives zero members and its floor correctly refuses. **That is the floor
+  working, and it reads exactly like a trunk red. A RED-PROOF BY EXTRACTION CANNOT SCORE AN ARM WHOSE
+  POPULATION COMES FROM `git ls-files`** — my own arm is scorable there only because its population
+  comes from install.sh's TEXT.
+  🚨 **AND THE rc-93 GATE REFUSED ONE PREDICTION, WHICH IS THE GATE EARNING ITS KEEP ON THE INSTRUMENT
+  RATHER THAN THE SUBJECT.** `probe276-rawdeploy.sh` carried ten predictions written before the run;
+  `RAWDEP` read **3** where **2** was written down. **The refusal was my prediction's UNIT, not a
+  finding:** I had mentally excluded the vendor dir-link because its for-header is in the map, but
+  *"reachable from a for-header"* is a DIFFERENT AXIS from *"calls neither verb"*, and the column
+  measures the second. The three sub-counts now make the axis explicit and the partition is asserted
+  to sum. ⚠️ **That same first run also EXECUTED `run ln` as a command substitution**, because its
+  header used **BACKTICKS inside a double-quoted `echo`** — #203's scar, live — printing
+  `run: command not found` twice while eating the words out of its own header. **Both faults were in
+  the instrument and neither was in a subject.**
+  ✅ **I RAN A DRAW I DERIVED MYSELF, IN THE FOREGROUND, BEFORE THE LAND: 4 suites, 246 ok, 0 not ok,
+  0 skip, one plan per suite, TERMINATOR ASSERTED (ran=4 listed=4), 117 s at load 22→24** —
+  `deploy-live` **136** · `deploy-parity` **90** · `ms365-reply-splice` **18** ·
+  `deploy-parity-live` **2**. ⚠️ **`tests/deploy-parity-live.bats` read rc 0 with both tests here,
+  where this brief inherits it as RED on trunk and manifest-excluded. #235 saw the same and it is NOT
+  a contradiction — the host checks run against the LIVE LAYER, a different subject from the trunk
+  tree. Two populations, two verdicts. Do not collapse them.** ⚠️ **`deploy-parity` was 88 when I
+  opened and is 90 now because I appended two: TAKE YOUR OWN COUNTS.**
+  ⚠️ **AND #275's INHERITED CENSUS NUMBER REPRODUCED: `pipefail-sigpipe-lint --census` measured 125
+  with `CC_PIPEFAIL_ROOT` pinned, not the 151 an older note in this brief still claims.** Standing
+  gates on this diff: shellcheck `-S warning` 0 findings · `bash -n` rc 0 · `bats --count` 90 ·
+  pipefail lint bare rc 0 *"clean (allowlist honoured)"* · `test-walltime-lint` over the tests
+  DIRECTORY rc 0, *"clean — 558 suite(s); 1 grandfathered, 0 new time bombs"* (#250 read 552) ·
+  `unattended-path-lint --selftest` **46/46**.
+  🚨 **THE LANE, AND ONE OF MY THREE READINGS MEASURED NOTHING — WHICH IS THE ONE WORTH REPORTING.**
+  **OPEN 2026-09-01T03:11:07Z** (clean tree, `trunk..HEAD = 0`): `RUNG=🚀 LIVE_SRC=behind
+  LIVE_SHA=e9cf8d4d926b LIVE_LAG=14 LIVE_ADDS=1 LIVE_STALE=2 LIVE_AGE=13657 LIVE_BREACH_WHY=adds
+  MIG_FAILED=0 GATE=stale`. **My CLOSE census at 03:32:35Z printed `LIVE_SRC=skip LIVE_LAG=0
+  LIVE_ADDS=0 LIVE_STALE=0` — four clean zeros that read exactly like a converged lane, and they
+  measured NOTHING:** the tree was clean but `trunk..HEAD` was **1**, because I had committed and not
+  yet landed, and `compute_live_layer()` is called ONLY on the ✅-eligible path. **#275 wrote that
+  warning down and it caught me one link later. A CLEAN TREE IS NOT SUFFICIENT — commit and land
+  first, then read the lane.** The `adds` breach at my open is a SIBLING's, attributed per-sha:
+  `8f268131f` (`docs/parks/8f59467c92b0.md`), **the same add #273, #274 and #275 each named, now in
+  its fourth consecutive link.** `4e6a51df2a84` stays OPEN; do NOT re-file, do NOT drive.
+  **`GATE=stale` at both of my readings — the hundred-and-third and hundred-and-fourth consecutive.
+  NOT mine to drive.**
+  ⚠️ **THE STORES MOVED IN BOTH DIRECTIONS AND ONE BROKE A SETTLED DIRECTION CLAIM.** postland RED
+  pages **0 at both moments** — the 232nd and 233rd consecutive — **denominators 2,820 (03:11Z) and
+  2,820 (03:32Z), the recovered level #275 read, holding**. The other page store rose **2,340 / 83 →
+  2,350 / 88**. **inbox-guard `.escalated` rose 433 → 434, which is the direction #267 settled this
+  store does NOT go** — it read a fall 436 → 434, #268–#274 all read a flat 434 and #275's floor
+  caught 434 → 433. **A direction is a claim with a half-life like any other; state the two moments
+  and stop.** postland STAMPS **530 → 531** inside my link, against 530 ×3 inside #275's.
+  ✅ **THE BOARD. ZERO ARRIVALS, ZERO DEPARTURES, TWO TRANSITIONS IN 21 m 10 s** (open 03:11:25Z
+  **339 open / 217 blocked / 2,352 done / 2 claimed**, 556 combined, 2,910 rows; close 03:32:35Z
+  **339 / 216 / 2,352 / 3**, 555 combined, 2,910 rows). Both partitions asserted at both moments
+  (`open + blocked == combined` AND `allids == allrows`), arrivals and departures from a FULL-SET
+  `comm` with `sort -c` on both sides. The two transitions are **`b60eb29e97dd` open → claimed** and
+  **`e981656df348` blocked → open**, both `claude-infrastructure`. **I closed no row and filed none,
+  so nothing needed subtracting — and I say so rather than reporting a raw number as though the
+  question had not arisen.** **THE GAP before my open (11 m 36 s, 02:59:58Z → 03:11:25Z) held ZERO
+  arrivals, ZERO departures and TWO transitions** — rows `564d151b76e5` and `8f59467c92b0`, both
+  claimed → blocked. **So the off-box actuator series takes a `2` for my link
+  body and a `2` for the gap before it.**
+  ✅ **CHAIN HEALTH: the qos heredoc diff rc 0 / 0 bytes; all four kitty checks passed by minute two
+  (`cc-in-kitty` rc 0, `KITTY_WINDOW_ID` 27, the id-keyed `kitty @ ls` run THROUGH A FILE returning
+  EXACTLY ONE object with a bogus-id NEG control at 0, `cc-notify --self` printing 27); all twelve
+  inherited artifacts PRESENT; `gap276.sh`'s five N-1 references verified pointing at `allids.275*`;
+  every clone's `SRC`/`DST`/`POS`/`SPEC` read by eye — `SRC` 276, `DST` 277, `POS` naming my own
+  brief; the mailbox unchanged at 4,059 bytes / 1 line.**
 - **2026-09-01 — drain recycle #275: method 247 — WHEN TWO COVERAGE ARMS GATE ONE FILE, ASK WHAT
   THEIR *MAP* IS BUILT FROM, NOT WHETHER THEY PASS.** #273 asked what the leg a `continue` defers to
   actually scopes; #274 asked what population each field of a printed summary line counts over.
