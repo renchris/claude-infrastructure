@@ -1685,6 +1685,43 @@ EOF
   [ "$got" = "90202 90203 " ]
 }
 
+# ── THE CLOUD LAND PATH WAS THE THIRD SPELLING (2026-09-01). The two fixes above named the land
+# path's INNER links (ship-land, desk-land) and then reached them through a bound. Neither covered
+# the CLOUD lane's OUTER driver: `autonomy-sweep.sh:1075` runs `timeout -k 10 900 bash
+# cloud-return.sh --sweep` every 300 s, and `cloud-return` carried no token — so this arm collected
+# the cloud landing sweep 153 times (cc-reaper.log), with the receiving end logging `Killed: 9`.
+# Because a land outruns the 600 s floor by construction, the sweep never once finished: 272 cloud
+# branches sat ELIGIBLE-and-unlanded and their backlog items could not reach `done`.
+#
+# BOTH SHAPES IN ONE CLOSED WORLD, because the live invocation presents BOTH: the `timeout` wrapper
+# trips orphan-tool at 120 s and the bash beneath it trips orphan-bash at 600 s, and whitelisting
+# only one of them leaves the sweep just as dead. The unrelated orphans beside them must still die,
+# so this cannot widen into "the arm collects nothing".
+@test "garbage: the CLOUD land sweep survives as both wrapper and payload, and unrelated orphans still die" {
+  mk_garbage_fixtures
+  cat > "$GA" <<'EOF'
+90301 1 45:00 bash
+90302 1 10:00 timeout
+90303 1 45:00 bash
+90304 1 45:00 bash
+90305 1 10:00 timeout
+EOF
+  cat > "$GB" <<'EOF'
+90301 bash /Users/x/Development/claude-infrastructure/scripts/cloud-return.sh --sweep
+90302 /opt/homebrew/bin/timeout -k 10 900 bash /Users/x/Development/claude-infrastructure/scripts/cloud-return.sh --sweep
+90303 /bin/bash /Users/x/Development/claude-infrastructure/scripts/cloud-reconcile.sh --all
+90304 /bin/bash /Users/x/some/unrelated/orphan.sh
+90305 /opt/homebrew/bin/timeout -k 10 900 bash /Users/x/some/unrelated/thing.sh
+EOF
+  run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  got="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
+  # 90301-90303 are the land path in its three live spellings and must survive. 90304 and 90305 are
+  # the controls: same two shapes, unwhitelisted payload, and they prove the arm still collects.
+  # RED before the fix: 90301, 90302 and 90303 appear in this list too.
+  [ "$got" = "90304 90305 " ]
+}
+
 # ── THE PID THAT CHANGED HANDS (2026-08-16). The kill-time re-verification checked `ucomm` only, and
 # orphan-bash / stuck-wrapper / dead-lead-watchdog all carry the ERE `^bash$` — so for the three
 # classes that dominate the candidate set it asked "is this a bash?" of a pid it had already decided
