@@ -2059,3 +2059,144 @@ _rawdeploy_extract() {  # $1=install.sh  $2=out TSV: line \t kind \t srcclass \t
   # …while the SIBLING kitty declaration is untouched, so the seed removed one arm and not the block.
   [ "$(bash "$BATS_TEST_TMPDIR/seeded3.sh" bin/kitty-pane-menu </dev/null | grep -c '__DEFAULT__')" -eq 0 ]
 }
+
+# SECOND INSTALLER, BY ACTION — method 250, MEASURED 2026-09-01.
+# The BY SHAPE arm above repaired the KEY (how a source is spelled) and inherited the POPULATION: its
+# anchor is `^[[:space:]]*ln -sfn `, so its partition sums over LINK LINES and can never notice a byte
+# placed by any other verb. #276 landed exactly that lesson for install.sh one link earlier — a
+# coverage arm keyed on a verb name is itself a shape claim — and it was not carried across to the
+# SECOND INSTALLER. Measured: scripts/kitty-setup.sh deploys NINE repo sources by THREE actions —
+# seven `ln -sfn`, one `cp` (:215, bin/it2-wrapper -> $BIN_DIR/it2) and one `swiftc` compile (:245,
+# bin/kitty-pane-menu-native.swift). The two link-line extractors derive 6 and 7 of the nine; the copy
+# and the compile are in NEITHER coverage population, so no arm gates them.
+# The SECOND INSTALLER block's own prose is the second, INDEPENDENT column and it says the same thing:
+# it cites the compile (:245) once and the copy (:215) not at all, so the file already knows this
+# installer places bytes by more than one verb while its coverage arm enumerates one.
+# NO OUTAGE is being repaired. All nine are claimed-or-declared today (bin/cc-in-kitty CLAIMED via
+# bin/cc-*, the other eight declared with a reason, 0 reaching the default) and both extra
+# destinations were read individually at the live layer, present, at 2026-09-01T04:58Z. What is
+# fragile is WHY: bin/it2-wrapper is declared under LITERAL INSTALLS for install.sh:814's sake, so
+# retiring install.sh's copy would delete the only arm standing between kitty-setup.sh's copy and the
+# reasonless default — which is precisely what the fire test below demonstrates.
+# This arm enumerates by the REPO SOURCE and classifies by the DESTINATION; no verb name appears in
+# the classifier at all. Both partitions are asserted to SUM, so a tenth deploy of any shape lands in
+# neither total and REFUSES, instead of being absorbed the way every key-shaped extractor absorbs it.
+@test "SECOND INSTALLER BY ACTION: every kitty-setup.sh repo-sourced deploy is CLAIMED or DECLARED, whatever verb places the bytes" {
+  SETUP="$REPO_ROOT/scripts/kitty-setup.sh"
+  SUBJ="$REPO_ROOT/scripts/deploy-parity-assert.sh"
+  [ -f "$SETUP" ]
+  [ -f "$SUBJ" ]
+
+  ALN="$BATS_TEST_TMPDIR/ka-all.txt"
+  DLN="$BATS_TEST_TMPDIR/ka-deploy-lines.txt"
+  NLN="$BATS_TEST_TMPDIR/ka-nondeploy-lines.txt"
+  DSRC="$BATS_TEST_TMPDIR/ka-deploy-srcs.txt"
+  : >"$ALN"; : >"$DLN"; : >"$NLN"; : >"$DSRC"
+  # Pass 1 builds the ONE-HOP table (VAR="$REPO/<rel>"); pass 2 walks every line, collects the
+  # repo-sourced tokens and the non-repo path tokens, and calls a line a DEPLOY when it carries both.
+  # A repo source inside a `[` TEST is being READ, not placed — kitty-setup.sh:205's readlink compare
+  # has exactly a deploy's token shape, and an earlier draft of this classifier convicted it.
+  awk -v ALN="$ALN" -v DLN="$DLN" -v NLN="$NLN" -v DSRC="$DSRC" '
+NR==FNR {
+  if (match($0, /^[A-Za-z_][A-Za-z0-9_]*="\$REPO\/[^"]+"$/)) {
+    eq = index($0, "="); v = substr($0, 1, eq - 1); r = substr($0, eq + 2)
+    sub(/"$/, "", r); sub(/^\$REPO\//, "", r); hop[v] = r
+  }
+  next
+}
+{
+  line = $0; s = line; nsrc = 0; ndst = 0
+  while (match(s, /"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?(\/[^"]*)?"/)) {
+    tok = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
+    body = substr(tok, 3, length(tok) - 3); gsub(/[{}]/, "", body)
+    slash = index(body, "/")
+    if (slash > 0) { v = substr(body, 1, slash - 1); tail = substr(body, slash + 1) }
+    else           { v = body; tail = "" }
+    if (v == "REPO" && tail != "")      { nsrc++; src[nsrc] = tail }
+    else if (tail == "" && (v in hop))  { nsrc++; src[nsrc] = hop[v] }
+    else if (tail != "")                { ndst++ }
+  }
+  if (nsrc == 0) next
+  if (index(line, "[") > 0) ndst = 0
+  print FNR > ALN
+  if (ndst > 0) { print FNR > DLN; for (i = 1; i <= nsrc; i++) print src[i] > DSRC }
+  else          { print FNR > NLN }
+}
+' "$SETUP" "$SETUP"
+
+  KALL="$(grep -c . "$ALN")"
+  KDEP="$(grep -c . "$DLN")"
+  KNON="$(grep -c . "$NLN")"
+  sort -u "$DSRC" > "$BATS_TEST_TMPDIR/ka-srcs.txt"
+  KSRC="$(grep -c . "$BATS_TEST_TMPDIR/ka-srcs.txt")"
+  # NON-VACUITY FLOOR: measured 12 repo-sourced lines / 9 deploys / 9 distinct sources on 2026-09-01.
+  # Deliberately loose — and note what a floor is NOT: it bounds a population's SIZE and says nothing
+  # about its MEMBERSHIP, which is why the partition assertion below carries the real weight.
+  [ "$KALL" -ge 9 ]
+  [ "$KDEP" -ge 7 ]
+  [ "$KSRC" -ge 7 ]
+  # THE PARTITION MUST SUM, over LINES. A repo-sourced line neither branch understands is counted by
+  # neither and this refuses, rather than quietly shrinking the population it reports coverage over.
+  [ "$((KDEP + KNON))" -eq "$KALL" ]
+  # …and every derived source must be a real file in the checkout, or the token scan matched prose.
+  KMISS=0
+  while IFS= read -r ks; do
+    [ -n "$ks" ] || continue
+    [ -f "$REPO_ROOT/$ks" ] || KMISS=$((KMISS + 1))
+  done < "$BATS_TEST_TMPDIR/ka-srcs.txt"
+  [ "$KMISS" -eq 0 ]
+
+  [ "$(grep -c '^    cls=""$' "$SUBJ")" -eq 1 ]
+  _classcov_extract "$SUBJ" "$BATS_TEST_TMPDIR/case6.txt"
+  sed 's|^      \*)                         want=0 ;;$|      *)                         want=0; cls="__DEFAULT__" ;;|' \
+    "$BATS_TEST_TMPDIR/case6.txt" > "$BATS_TEST_TMPDIR/case6B.txt"
+  [ "$(diff "$BATS_TEST_TMPDIR/case6.txt" "$BATS_TEST_TMPDIR/case6B.txt" | grep -c '^[<>]')" -eq 2 ]
+  RUN6="$BATS_TEST_TMPDIR/run6.sh"
+  _classcov_runner "$BATS_TEST_TMPDIR/case6B.txt" "$RUN6"
+
+  # CONTROLS BEFORE VERDICTS. POS: a covered class must come back CLAIMED, or the runner is mute.
+  # FIRE: a path in no class MUST reach the tagged default, or this arm cannot fail at all.
+  [ "$(bash "$RUN6" hooks/notify.sh </dev/null | grep -c '^1|hooks/\*\.sh$')" -eq 1 ]
+  [ "$(bash "$RUN6" zzz-no-such-class/nope.txt </dev/null | grep -c '__DEFAULT__')" -eq 1 ]
+
+  BAD6="$BATS_TEST_TMPDIR/bad6.txt"; : >"$BAD6"
+  while IFS= read -r ks; do
+    [ -n "$ks" ] || continue
+    kout="$(bash "$RUN6" "$ks" </dev/null)"
+    case "$kout" in
+      1\|*)          : ;;             # CLAIMED — want=1 (bin/cc-in-kitty is, via bin/cc-*)
+      *__DEFAULT__*) printf 'REASONLESS-DEFAULT %s\n' "$ks" >>"$BAD6" ;;
+      *)             : ;;             # declined by an EXPLICIT arm carrying its reason
+    esac
+  done < "$BATS_TEST_TMPDIR/ka-srcs.txt"
+  [ "$(grep -c . "$BAD6")" -eq 0 ] || { echo "kitty-setup.sh deploy sources reaching the reasonless default:"; cat "$BAD6"; false; }
+}
+
+@test "SECOND INSTALLER BY ACTION fire test: deleting the it2-wrapper arm puts the COPIED source back on the default" {
+  # The arm above passes only because bin/it2-wrapper is declared — and it is declared under LITERAL
+  # INSTALLS, for install.sh:814's sake, not for kitty-setup.sh's. Deleting that one line is therefore
+  # not a hypothetical: it is what retiring install.sh's copy would do, and it puts the SECOND
+  # installer's copied source straight onto the reasonless default. No link-line extractor can see
+  # that coupling, because bin/it2-wrapper is not in either link-line population.
+  SUBJ="$REPO_ROOT/scripts/deploy-parity-assert.sh"
+  [ -f "$SUBJ" ]
+  _classcov_extract "$SUBJ" "$BATS_TEST_TMPDIR/case7.txt"
+  sed 's|^      \*)                         want=0 ;;$|      *)                         want=0; cls="__DEFAULT__" ;;|' \
+    "$BATS_TEST_TMPDIR/case7.txt" > "$BATS_TEST_TMPDIR/case7B.txt"
+  [ "$(diff "$BATS_TEST_TMPDIR/case7.txt" "$BATS_TEST_TMPDIR/case7B.txt" | grep -c '^[<>]')" -eq 2 ]
+  _classcov_runner "$BATS_TEST_TMPDIR/case7B.txt" "$BATS_TEST_TMPDIR/intact4.sh"
+
+  # BASELINE: with the arm present, the copied source must NOT read as the default.
+  [ "$(bash "$BATS_TEST_TMPDIR/intact4.sh" bin/it2-wrapper </dev/null | grep -c '__DEFAULT__')" -eq 0 ]
+
+  # SEED: delete exactly the it2-wrapper arm. Asserted to remove ONE line, so a reworded arm makes
+  # this fail loudly rather than seeding nothing and passing vacuously.
+  grep -vxF '      bin/it2-wrapper)           want=0 ;;' "$BATS_TEST_TMPDIR/case7B.txt" > "$BATS_TEST_TMPDIR/case7C.txt"
+  [ "$(($(grep -c . "$BATS_TEST_TMPDIR/case7B.txt") - $(grep -c . "$BATS_TEST_TMPDIR/case7C.txt")))" -eq 1 ]
+  _classcov_runner "$BATS_TEST_TMPDIR/case7C.txt" "$BATS_TEST_TMPDIR/seeded4.sh"
+
+  # …and now that same source falls through to the reasonless default.
+  [ "$(bash "$BATS_TEST_TMPDIR/seeded4.sh" bin/it2-wrapper </dev/null | grep -c '__DEFAULT__')" -eq 1 ]
+  # …while the SIBLING literal-install declaration is untouched, so the seed removed one arm, not the block.
+  [ "$(bash "$BATS_TEST_TMPDIR/seeded4.sh" statusline.sh </dev/null | grep -c '__DEFAULT__')" -eq 0 ]
+}
