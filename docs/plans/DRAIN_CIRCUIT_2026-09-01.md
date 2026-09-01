@@ -298,7 +298,86 @@ it. W1 should land newest-first and treat a conflict as a per-branch PARK, never
 
 ---
 
+## 3b. The full kill chain — measured by the 24-agent audit wave, and it is worse than §1.1
+
+§1.1 established that `cc-reaper` collects the landing sweep, and W1 fixed that. A parallel
+adversarial audit (24 agents, one verifier refused mid-run — see the caveat at the end) measured
+the rest of the chain, and the reaper is only **one of four** reasons the lane cannot drain. The
+landed whitelist fix is therefore **necessary and not sufficient**, and nothing below should be read
+as cured by it.
+
+**A. The 900 s bound is smaller than the pass's FIXED cost, before a single land is attempted.**
+`autonomy-sweep.sh:1075` bounds the sweep at 900 s. Timed live against the real store:
+
+| Step, before any land runs | Measured |
+|---|---|
+| `cc-cloud list --json --state` over 583 declarations (one bounded `ls-remote` each, 0.36 s/row) | **210 s** |
+| `cc-cloud poll` — another `ls-remote` per 489 non-retired declarations | + |
+| `handle()` — one `cloud-create-api.py --verify` control-plane call (0.409 s) per 304 returnable MANAGED sessions | + |
+| Background QoS band tax (`ProcessType=Background`, `Nice=5`); A/B over 40 `ls-remote` calls: 12.0 s foreground vs 17.7 s | **×1.47** |
+| **Fixed cost consumed with ZERO lands done** | **~675 s of 900 s** |
+
+A land is then ship-land's full statics + ratchets + smoke gate — minutes each. The pass cannot
+finish, so it is SIGKILLed. The IDL's `cloud_return_rc` timeline is the signature and contains no
+success at all: `137, 4, 4, 4, 4, 4, 137, 137, 137`.
+
+**B. Every SIGKILL strands the single-flight lock, costing up to twelve more ticks.**
+`cloud-return.sh:140` traps `EXIT INT TERM` — none of which run on SIGKILL — and `lock_acquire`
+(:131-146) only reaps a lock older than **3600 s**, against a **300 s** sweep cadence. So each kill
+is followed by roughly an hour of `rc=4` lock-outs. That is what the run of `4`s above is.
+
+**C. The land block is barely REACHED — about 1 pass in 48.** In the IDL archive spanning
+2026-08-29T09:28 → 2026-09-01T01:09 (2.65 days, ~18 passes/day) there is exactly **one**
+`cloud-return` row, while `join` (early in the sweep) fired 46 times and `config-parity`
+(immediately above the land block) fired 4. Most passes die before line 1079 in the sweep's own
+earlier, expensive stages.
+
+**D. It is monotonically worsening and cannot self-recover.** `cloud-return.sh` has no `--limit`,
+no shard and no cap, and `cc-cloud poll` has no scoping, so per-pass cost is **O(all declarations
+ever created)** — 17 on 2026-08-08, **582 today**, growing 20-80/day (Aug 25: 81, Aug 26: 48,
+Aug 27: 50, Aug 28: 57). Each new declaration adds ~0.8 s of `ls-remote` plus ~0.5 s of verify to a
+budget fixed at 900 s. The `returned` event history matches exactly: 25/14/59/18 per day on
+Aug 14-17, **0 for Aug 18-22**, 1 on Aug 23, 5 on Aug 25, and **0 ever since**.
+
+**What is NOT the blocker, ruled out by measurement** — so nobody re-derives them: no caller was
+ever removed (`git log --all -S'cloud-reconcile' -- '*.plist' 'hooks/*'` is empty; all six
+`cc-offload land` commits are feature ADDs); the deployed layer is correctly symlinked; and the
+eligibility gate is reachable — all 582 declarations carry a `branch=` field, so nothing falls into
+the NO-DECL skip.
+
+**The work is real.** 239 of the 273 eligible branches carry genuinely unlanded content (170 exactly
+one commit ahead of trunk, 73 two or more, 30 nothing to land). But it is heavily redundant: the 313
+branches are **72 distinct backlog items**, with 18 items accounting for 242 branches (77%) because
+each was re-claimed and re-implemented 8-25 times. Only **95 distinct file paths** across all of them
+are absent from `origin/main`, and a greedy set-cover says **52 branches capture every one**. Every
+re-attempt produced its own blob for the same file, so the branches **cannot be merged, only chosen
+between** — there is no 313-branch recovery, and 159 of 313 (51%) are already-landed duplicates or
+superseded by a landed sibling.
+
+**The consequent fix list, in dependency order** (none of these is W1, which is done):
+1. `cloud-return.sh --limit N` + a persisted cursor, so a tick does bounded work instead of
+   restarting an unbounded sweep. Newest-first (staleness compounds — §2).
+2. Have `autonomy-sweep` clear `$CC_CLOUD_STATE/.return.lock` when *its own child* returns 137/143
+   — it knows it did the killing — and/or size the reap window to the caller's bound plus slack
+   rather than a hardcoded 3600 s.
+3. Move the cloud-return call above the sweep's expensive premise/venue stages, or split it into its
+   own job so it does not share a tick with work that consumes the whole tick.
+4. GC dead declarations (94 of 582 are `.retired`) so the population is bounded by live work rather
+   than by history.
+5. Stop the dispatcher firing an item that already has an unlanded `claude/fire-*` branch declared
+   against it — the decl store already records branch and item, and this is what produced 8-25
+   attempts per item.
+
+⚠️ **Audit caveat.** One verifier (`verify:reap-loop`) died on an API safeguard error and never
+returned, so exactly one of the reap-oscillation findings in §1.3 carries no adversarial
+verification. Everything in this section was independently re-measured against the live store.
+
+---
+
 ## 4. Status log
 
-- **2026-09-01** — audit complete, all §1 findings first-hand and control-verified. Plan written.
-  W0/W1/W2 not yet started.
+- **2026-09-01** — Audit complete across both lanes; 24-agent adversarial wave corroborated it and
+  corrected §1.1 (see `3feac4443`). W0 done. **W1 done and live**: `1ca324beb` adds
+  `cloud-return|cloud-reconcile` to the `cc-reaper` whitelist with a RED-proven fixture pair
+  (mutant fails on its `got` assertion; full suite 193/193). W2, W3 and the five §3b items are
+  specified and not started.
