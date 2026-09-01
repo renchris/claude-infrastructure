@@ -876,9 +876,38 @@ claim_excerpt() {
 # it is for a human and may be reworded without breaking this. Bounded and sanitized exactly like
 # claim_excerpt — this lands in a JSON record, and an unbounded copy of a stranger's stderr does
 # not belong in one.
+# TWO TOKENS, ONE MEANING: the gate did not evaluate. `eligibility-unresolved` is the OUTAGE (the
+# helper could not be resolved) and `eligibility-disabled` is the DELIBERATE override
+# (CC_BACKLOG_ELIGIBLE_GATE=off) — different causes, but identical consequence for the only question
+# this record answers, which is whether bin/cc-eligible's park arm was consulted for this fire. Both
+# are matched with `-F` so each is verbatim or nothing; the English beside them stays rewordable, and
+# the record itself carries whichever fired, so a reader never loses the distinction.
 claim_gate_skip() {
   { [ -n "${1:-}" ] && [ -s "$1" ]; } || return 0
-  grep -m1 -F 'gate=eligibility-unresolved' "$1" 2>/dev/null | tr -cd '\40-\176' | cut -c1-200
+  grep -m1 -F -e 'gate=eligibility-unresolved' -e 'gate=eligibility-disabled' "$1" 2>/dev/null \
+    | tr -cd '\40-\176' | cut -c1-200
+}
+
+# claim_gate_state <stderr-file> → the gate's own report of what it SAW when it admitted, or "".
+#
+# THE SIBLING OF claim_gate_skip, AND THE ONE THAT COVERS THE COMMON BRANCH (backlog e981656df348,
+# dispatch 24). claim_gate_skip answers "did the gate run at all". It cannot answer the next
+# question, and the next question is the one 24 dispatches of that row have actually needed: the
+# gate DID run, so what did its park arm see? Three states arrive at this file as the same rc 0 and,
+# until bin/cc-eligible's admit line landed, as the same silence:
+#
+#   park=none          there is genuinely no park on trunk for this id
+#   park=not-measured  the arm could not measure — an uncertified (shallow / ref-less) checkout, so
+#                      THE PARK WAS UNREAD RATHER THAN ABSENT, and a landed park does not refuse
+#   park=honoured      a park is on trunk and the desk retired it — the interlock working correctly
+#
+# Only the middle one is a leak, and it looked exactly like the other two. `refresh_trunk` above
+# fixed the ref being STALE; nothing reported the ref being UNCERTIFIABLE. Read before the `rm` for
+# claim_gate_skip's reason verbatim: this fact exists only at rc 0, which is the exit code on which
+# $cerrf is destroyed. Bounded and sanitized identically — it lands in a JSON record.
+claim_gate_state() {
+  { [ -n "${1:-}" ] && [ -s "$1" ]; } || return 0
+  grep -m1 -F 'gate=eligibility-admitted' "$1" 2>/dev/null | tr -cd '\40-\176' | cut -c1-200
 }
 
 # refresh_trunk <project> → 0 the remote-tracking ref is current as of this pass, 1 it could not be.
@@ -2548,7 +2577,7 @@ dispatch() { # <dry|run|decide>
         idl note "$id: gate=trunk-unrefreshed — could not fetch origin for project '${cproj:-?}' before the cloud eligibility gate; its park/trunk reads are as of the last unrelated fetch, so an INELIGIBLE it does not report may only mean it could not see one"
       fi
     fi
-    local cerrf crc cexc cwarn
+    local cerrf crc cexc cwarn cgate
     cerrf="$(mktemp "${TMPDIR:-/tmp}/cc-dispatch-claim.XXXXXX" 2>/dev/null || true)"
     if [ -n "$cerrf" ]; then "$backlog" "${claim_args[@]}" >/dev/null 2>"$cerrf"; crc=$?
     else                     "$backlog" "${claim_args[@]}" >/dev/null 2>&1;       crc=$?
@@ -2559,6 +2588,7 @@ dispatch() { # <dry|run|decide>
     # claim_gate_skip's header — the fact it extracts is reachable ONLY at rc 0, i.e. after every
     # consumer of $cexc has been passed by.
     cwarn="$(claim_gate_skip "$cerrf")"
+    cgate="$(claim_gate_state "$cerrf")"
     [ -n "$cerrf" ] && rm -f "$cerrf" 2>/dev/null || true
     if [ "$crc" -eq 4 ] && [ "${cexc#*verdict=sibling-held}" != "$cexc" ]; then
       # verdict=sibling-held — another ROW naming the SAME WORK is claimed and live, and the actuator
@@ -2638,8 +2668,28 @@ dispatch() { # <dry|run|decide>
     # eligibility gate — and therefore bin/cc-eligible's park arm — actually run for this id?" That
     # question has been unanswerable off-box through 23 dispatches of e981656df348, and it had to be
     # reconstructed from land timestamps every time.
+    # AND WHEN IT DID RUN, WHAT IT SAW. The record above covers the gate being absent; this one
+    # covers it being PRESENT, which is the branch that actually fires and the branch that was
+    # never recorded. `elif`, not a second `if`: the two are mutually exclusive by construction
+    # (bin/cc-backlog emits at most one `gate=` line per claim), and chaining them says so rather
+    # than leaving a reader to prove it.
+    #
+    # `note`, not its own action token, and that is deliberate on idl_unplaced's precedent one step
+    # further: gate-skipped earned a token because it marks an ANOMALY a reader should be able to
+    # select for. An admit is the normal path — a token for it would make `select(.action=="…")`
+    # match nearly every claim and buy nothing, while the same jq over `.action=="note"` with a
+    # `gate=` grep still answers the question. Non-terminal for gate-skipped's reason: the fire
+    # happens either way and this record must not claim to have placed the item.
+    #
+    # WHAT A READER DOES WITH IT: `jq -r 'select(.action=="note") | .detail' idl.jsonl | grep
+    # 'gate=eligibility-admitted'` answers "when the park arm ran for this id, could it MEASURE?" A
+    # `park=not-measured` there is an uncertified checkout on the box — the interlock reading a
+    # repo it cannot certify and admitting anyway — and it is the one remaining desk-side cause of
+    # this row's re-dispatch that no off-box session has ever been able to see.
     if [ -n "$cwarn" ]; then
       idl gate-skipped "$id: admission gate did NOT run — $cwarn · the claim was admitted WITHOUT the eligibility predicate, so bin/cc-eligible's park arm was never consulted for this fire"
+    elif [ -n "$cgate" ]; then
+      idl note "$id: admission gate RAN — $cgate · bin/cc-eligible's park arm was consulted and did not refuse; a park=not-measured here means the arm could not read the trunk ref, i.e. the park was UNREAD rather than absent"
     fi
     # G5 — WHERE THE OWNING ACCOUNT IS RECORDED, and why it is here rather than on the claim.
     # An off-box session spends ONE account's rate limit, and "which one" is the first question

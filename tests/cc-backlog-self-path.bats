@@ -256,3 +256,189 @@ seam_lib() {
   grep -q 'idl gate-skipped' "$src" \
     || { echo "the skip is captured and never journalled — dropped exactly as before"; false; }
 }
+
+# ── THE ADMIT PATH: dispatch 24's finding ────────────────────────────────────────────────────────
+#
+# Everything above instruments the gate being ABSENT. This section instruments the gate being
+# PRESENT, which is the branch that actually fires and the one no dispatch had ever recorded.
+#
+# `cc-eligible check` used to end a non-blocking assessment with `verdict=eligible` on stdout and
+# NOTHING on stderr, so three outcomes arrived at bin/cc-backlog as one silence:
+#
+#   park=none          there is genuinely no park on trunk for this id
+#   park=not-measured  the arm could NOT MEASURE — an uncertified (shallow / ref-less) checkout, so
+#                      a landed park is UNREAD rather than absent and cannot refuse
+#   park=honoured      a park is on trunk and the desk retired it (the interlock working correctly)
+#
+# Only the middle one is a leak and it looked exactly like the other two. It is candidate (d) of
+# docs/research/tenant-drift-venue-refusal-2026-08-24.md §337, listed there with
+# `git rev-parse --is-shallow-repository` as its only discriminator — a command somebody has to
+# think to run, on the box, at the right moment, about the right repo. `refresh_trunk` fixed the
+# ref being STALE; nothing reported the ref being UNCERTIFIABLE.
+#
+# THE CONTROLS CARRY THE WEIGHT HERE MORE THAN ANYWHERE ABOVE, because the failure mode of a
+# "did it speak" assertion is a binary that speaks on every path. So the refused claim, the local
+# claim and the skip-only stderr are each asserted to carry NO admit token, in both readers.
+
+# add_plain <bin> [nonce] → an item whose title names nothing local-only, so the gate ADMITS it.
+#
+# THE NONCE IS LOAD-BEARING, not cosmetic. Two rows with the SAME title are the same WORK to
+# cc-backlog's condition lease, so a test that adds two and claims both gets `verdict=sibling-held`
+# rc 4 on the second — a correct refusal that never reaches the gate under test. Any test needing a
+# second admissible item must give it a distinct one.
+add_plain() {
+  "$1" add --title "tidy a docstring in the backlog parser ${2:-alpha}" \
+      --project probe --source "self-path-admit-$BATS_TEST_NUMBER" 2>/dev/null | tr -d '\n'
+}
+
+@test "ADMIT NAMES WHAT IT SAW: a gate that runs and admits reports its park state" {
+  # THE REGRESSION TEST for this section. Pre-fix the claim succeeded in total silence.
+  local link id; link="$(rel_link)"; id="$(add_plain "$link")"
+  [ -n "$id" ] || { echo "add produced no id"; false; }
+  cd /
+  run "$link" claim "$id" --by cloudvm-20 --venue cloud
+  [ "$status" -eq 0 ] || { echo "the gate refused a plain item (rc=$status): $output"; false; }
+  [[ "$output" == *"gate=eligibility-admitted"* ]] \
+    || { echo "the gate ran and admitted in silence — the defect: $output"; false; }
+  # the STATE, not merely the token: a line that always said `park=` and never a value would pass a
+  # presence test while answering nothing.
+  [[ "$output" =~ park=[a-z-]+ ]] \
+    || { echo "no park state on the admit line: $output"; false; }
+}
+
+@test "ADMIT: an UNCERTIFIABLE repo reports not-measured, not absence" {
+  # The whole reason this section exists. This fixture's project resolves to a directory that is
+  # not a git repo at all, so `certify()` cannot succeed and `_park_doc` returns None — the exact
+  # shape of a shallow or ref-less checkout on the box. The arm must say it could not look, rather
+  # than reporting the same thing it reports when it looked and found nothing.
+  local link id; link="$(rel_link)"; id="$(add_plain "$link")"
+  cd /
+  run "$link" claim "$id" --by cloudvm-21 --venue cloud
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"park=not-measured"* ]] \
+    || { echo "an unreadable park is indistinguishable from no park: $output"; false; }
+}
+
+@test "ADMIT CONTROL: a REFUSED cloud claim carries no admit token" {
+  # Without this, an admit line printed unconditionally would pass every assertion above while
+  # journalling "the gate admitted" over the dispatcher's own refusals.
+  local link id; link="$(rel_link)"; id="$(add_boxy "$link")"
+  cd /
+  run "$link" claim "$id" --by cloudvm-22 --venue cloud
+  [ "$status" -eq 4 ] || { echo "the control item was not refused (rc=$status): $output"; false; }
+  [[ "$output" != *"gate=eligibility-admitted"* ]] || { echo "$output"; false; }
+}
+
+@test "ADMIT CONTROL: a --venue local claim carries no gate token at all" {
+  # The gate is venue-scoped and must stay so: a local claim is byte-for-byte what it was.
+  local link id; link="$(rel_link)"; id="$(add_plain "$link")"
+  cd /
+  run "$link" claim "$id" --by localbox-20 --venue local
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"gate=eligibility-"* ]] || { echo "$output"; false; }
+}
+
+@test "OFF: the kill switch now leaves a RECORD, while still not warning" {
+  # EXTENDS the incumbent decision above rather than reversing it. That test pins "an override is
+  # not an outage, so it must not WARN", and it still passes untouched: no `SKIPPED` alarm is
+  # emitted here. What is added is the machine token alone, because a switched-off gate was
+  # otherwise byte-identical on every channel to one that ran and admitted — candidate (a) of
+  # tenant-drift-venue-refusal-2026-08-24.md §337, whose only discriminator is a daemon's
+  # environment at a moment that has already passed.
+  local link id; link="$(rel_link)"; id="$(add_plain "$link")"
+  cd /
+  run env CC_BACKLOG_ELIGIBLE_GATE=off "$link" claim "$id" --by cloudvm-23 --venue cloud
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"gate=eligibility-disabled"* ]] \
+    || { echo "a deliberately disabled gate is still an unrun gate: $output"; false; }
+  [[ "$output" != *"eligibility gate SKIPPED"* ]] \
+    || { echo "an override was reported as an outage: $output"; false; }
+  [[ "$output" != *"gate=eligibility-admitted"* ]] \
+    || { echo "a gate that never ran claimed to have admitted: $output"; false; }
+}
+
+@test "PRE-TOKEN HELPER: a silent admit is reported as unreported, never as a measurement" {
+  # Candidate (c) of that same table — "the cc-eligible actually executed predates the park arm".
+  # A helper whose bytes are older than the admit line answers rc 0 and says nothing, which is
+  # indistinguishable from a modern helper that measured and found nothing unless the caller says
+  # so positively. The stub IS the old contract: line 1 verdict, silence after it.
+  printf '#!/bin/bash\necho "verdict=eligible"\nexit 0\n' > "$BATS_TEST_TMPDIR/old-eligible"
+  chmod +x "$BATS_TEST_TMPDIR/old-eligible"
+  local id; id="$(add_plain "$CB_REAL")"
+  cd /
+  run env CC_BACKLOG_ELIGIBLE_BIN="$BATS_TEST_TMPDIR/old-eligible" \
+      "$CB_REAL" claim "$id" --by cloudvm-24 --venue cloud
+  [ "$status" -eq 0 ] || { echo "fail-open lost: $output"; false; }
+  [[ "$output" == *"park=unreported"* ]] \
+    || { echo "an old helper's silence was passed off as a reading: $output"; false; }
+}
+
+# seam_state_lib → claim_gate_state extracted from the real bin/cc-dispatch, same idiom as seam_lib.
+seam_state_lib() {
+  local out="$BATS_TEST_TMPDIR/seam-state.sh"
+  sed -n '/^claim_gate_state()/,/^}/p' "$REPO/bin/cc-dispatch" > "$out"
+  grep -q '^claim_gate_state()' "$out" || return 1
+  printf '%s' "$out"
+}
+
+@test "SEAM: cc-dispatch extracts the ADMIT state from a claim's stderr" {
+  local lib; lib="$(seam_state_lib)" || skip "no claim_gate_state in bin/cc-dispatch"
+  local link id; link="$(rel_link)"; id="$(add_plain "$link")"
+  cd /
+  "$link" claim "$id" --by cloudvm-25 --venue cloud >/dev/null 2>"$BATS_TEST_TMPDIR/err"
+  run bash -c ". '$lib'; claim_gate_state '$BATS_TEST_TMPDIR/err'"
+  [ "$status" -eq 0 ] || { echo "rc=$status"; false; }
+  [[ "$output" == *"gate=eligibility-admitted"* ]] \
+    || { echo "the dispatcher cannot see what its gate measured: $output"; false; }
+  [ "${#output}" -le 200 ] || { echo "unbounded excerpt: ${#output} chars"; false; }
+}
+
+@test "SEAM: claim_gate_skip also matches the DISABLED token" {
+  # Two causes, one consequence: the park arm was not consulted. A reader that only knew the
+  # outage spelling would journal `claimed` over a gate somebody had switched off.
+  local lib; lib="$(seam_lib)" || skip "could not extract claim_gate_skip from bin/cc-dispatch"
+  local link id; link="$(rel_link)"; id="$(add_plain "$link")"
+  cd /
+  env CC_BACKLOG_ELIGIBLE_GATE=off "$link" claim "$id" --by cloudvm-26 --venue cloud \
+      >/dev/null 2>"$BATS_TEST_TMPDIR/err"
+  run bash -c ". '$lib'; claim_gate_skip '$BATS_TEST_TMPDIR/err'"
+  [[ "$output" == *"gate=eligibility-disabled"* ]] \
+    || { echo "a disabled gate reads as a healthy one: $output"; false; }
+}
+
+@test "SEAM CONTROL: the two readers are mutually exclusive on one stderr" {
+  # The dispatcher chains them with elif, which is only sound if no single claim can produce both.
+  # Asserted on the real artifact in both directions rather than argued from the source.
+  local lskip lstate; lskip="$(seam_lib)" || skip "no claim_gate_skip"
+  lstate="$(seam_state_lib)" || skip "no claim_gate_state"
+  local link id; link="$(rel_link)"; id="$(add_plain "$link")"
+  cd /
+  # a healthy gate: admit token, no skip token
+  "$link" claim "$id" --by cloudvm-27 --venue cloud >/dev/null 2>"$BATS_TEST_TMPDIR/ok-err"
+  run bash -c ". '$lskip'; claim_gate_skip '$BATS_TEST_TMPDIR/ok-err'"
+  [ -z "$output" ] || { echo "skip reader cried wolf on a healthy gate: $output"; false; }
+  # an unresolvable helper: skip token, no admit token
+  local id2; id2="$(add_plain "$CB_REAL" bravo)"
+  env CC_BACKLOG_ELIGIBLE_BIN="$BATS_TEST_TMPDIR/nope/cc-eligible" \
+      "$CB_REAL" claim "$id2" --by cloudvm-28 --venue cloud >/dev/null 2>"$BATS_TEST_TMPDIR/no-err"
+  run bash -c ". '$lstate'; claim_gate_state '$BATS_TEST_TMPDIR/no-err'"
+  [ -z "$output" ] || { echo "a skipped gate reported a measurement: $output"; false; }
+}
+
+@test "SEAM: the rc-0 path JOURNALS the admit — what the arm saw reaches a store" {
+  # The same structural assertion the skip record earned, for the same reason: reaching this line
+  # in a live pass needs a whole fixture fleet, and the defect was never a missing word but a
+  # capture ordered AFTER the only copy of the stderr is destroyed.
+  local src="$REPO/bin/cc-dispatch"
+  local cap rm_ln
+  cap="$(grep -n 'cgate="\$(claim_gate_state' "$src" | head -1 | cut -d: -f1)"
+  rm_ln="$(grep -n 'rm -f "\$cerrf"' "$src" | head -1 | cut -d: -f1)"
+  [ -n "$cap" ] || { echo "the admit state is never captured from the claim's stderr"; false; }
+  [ -n "$rm_ln" ] || { echo "could not locate the cerrf cleanup"; false; }
+  [ "$cap" -lt "$rm_ln" ] || { echo "captured at line $cap, AFTER the rm at $rm_ln"; false; }
+  grep -q 'admission gate RAN' "$src" \
+    || { echo "the state is captured and never journalled — dropped exactly as before"; false; }
+  # and it must be the ALTERNATIVE to the skip record, never a second unconditional one
+  grep -q 'elif \[ -n "\$cgate" \]' "$src" \
+    || { echo "the two records are not exclusive — a skipped gate could journal both"; false; }
+}
