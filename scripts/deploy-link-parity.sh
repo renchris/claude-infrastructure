@@ -143,6 +143,9 @@ findings=0
 pending_n=0
 linked_n=0
 extra_n=0
+unmapped_n=0
+unmapped_scanned=0   # non-vacuity denominator: 0 unmapped is the HEALTHY value, so an enumeration
+                     # that resolved nothing must not render as one. See sweep_unmapped below.
 LINES=""
 FIXES=""
 SEEN=""     # repo-relative paths the forward walk claimed; the STRAY leg defers to them
@@ -171,6 +174,31 @@ pending_owner() {
     done
   done
   return 0
+}
+
+_claimed() {  # $1 = repo-relative path · whole-line membership in the forward walk's own ledger
+  # THE ONE READER OF SEEN, and it is a pure-builtin `case` rather than the
+  # `printf '%s' "$SEEN" | grep -qxF -- "$rel"` this file carried until 2026-08-31.
+  #
+  # That spelling is the fail-OPEN pipeline the pipefail ratchet exists to stop, and here the
+  # inversion is silent in the WRONG direction: under this file's own `set -uo pipefail`, `grep -q`
+  # exits the instant it MATCHES, the producer takes SIGPIPE, pipefail promotes the pipeline's rc to
+  # 141, and the `&& continue` that defers to the forward walk never fires — so a path the walk
+  # already claimed is classified a SECOND time. That is exactly the double-classification the SEEN
+  # ledger was introduced to prevent, and the comment introducing it says so.
+  #
+  # FEED MEASURED 2026-09-01T00:0xZ ON THE REAL LAYER: SEEN is 12,113 bytes at 458 claimed paths,
+  # against a two-stage builtin SAFE floor of 37,121 B (racy from 55,721). So it was LATENT, with
+  # about 3.1x of headroom — roughly 1,400 claimed paths. Latent is not safe: SEEN grows with the
+  # deployed surface, monotonically, and nothing announces the crossing. The arm pinning "a SHADOW
+  # is classified ONCE" was green over the defect for its whole life because its fixture's SEEN is a
+  # few hundred bytes; a behavioural arm sized from the measured regime now sits beside it.
+  #
+  # Defined HERE, above both readers, not beside its second one: bash resolves a function at CALL
+  # time, so a definition below sweep_strays would be `command not found` on every real run while
+  # every fixture whose forward walk claims nothing stays green.
+  case $'\n'"$SEEN" in *$'\n'"$1"$'\n'*) return 0 ;; esac
+  return 1
 }
 
 check_one() {  # $1 = repo-relative path · $2 = absolute live destination
@@ -425,7 +453,7 @@ sweep_strays() {  # $1 = live-relative directory
     [ -d "$f" ] && continue          # structural dirs and __pycache__ residue are not tools
     base="$(basename "$f")"; rel="$d/$base"
     # Already classified by the forward walk (it reported SHADOW) — one file, one verdict, one remedy.
-    printf '%s' "$SEEN" | grep -qxF -- "$rel" && continue
+    _claimed "$rel" && continue
     if content_is_tracked "$f"; then
       extra_n=$((extra_n + 1))
       $ALL && note "COPY" "$rel" "real file, but its bytes are tracked — deployed by copy"
@@ -543,6 +571,77 @@ for d in bin hooks hooks/lib scripts scripts/lib scripts/limit-recover lib; do s
 for d in "$CFG"/skills/*/; do [ -d "$d" ] && sweep_strays "skills/$(basename "$d")"; done
 sweep_strays "agents"
 
+# ── THE REVERSE DIRECTION — UNMAPPED (2026-08-31) ───────────────────────────────────────────────
+# Every leg above is driven by a MAP: check_one by the hand-written glob headers at :466-523, and
+# both live-side sweeps by their own hand-written directory lists. :151 already states the hazard —
+# "the forward walk's globs are the map of record, and a second hand-written copy of them is
+# precisely how two auditors over one population come to disagree" — and SEEN exists to keep those
+# auditors in step. Nothing had ever asked the question SEEN can answer: does the map cover the
+# TERRITORY? It does not.
+#
+# MEASURED 2026-08-31T23:56:23Z against the live layer, with the reverse walk's own totals: 512
+# distinct checkout paths carry a per-file live symlink, the forward walk claimed 458, and the 54 it
+# never visits partition into five classes that sum to it —
+#   39  skills/<name>/<subdir>/...  install.sh:745-754 links every file under a skill RECURSIVELY
+#                                   (`find "$skilldir" -type f`); the walk at :482-485 is
+#                                   `for f in "$d"*`, ONE level. One class, two enumerations, two
+#                                   depths. (tests/…:496 pins depth-1 for the STRAY leg only — that
+#                                   is an honest scope for "did an unversioned file appear", and it
+#                                   says nothing about the forward direction.)
+#    5  bin/kitty-* · bin/it2-kitty deployed by scripts/kitty-setup.sh, the SECOND installer, which
+#                                   no coverage arm reads at all.
+#    2  model-config.yaml           install.sh:545 and :554 link them BY NAME. The singleton block
+#       providers.json              at :520-523 carries two of install.sh's SEVEN
+#                                   `link_file "$REPO_DIR/<x>"` sites.
+#    6  bin/claude-* · bin/it2-wrapper  live-linked into this checkout by NO installer in the tree:
+#                                   install.sh cannot restore them and link_refresh() can never
+#                                   repair one.
+#    2  tools/auth/auth-timeseries.sh · scripts/cloud-create-api.py   (:469 globs scripts/*.sh only)
+#
+# WHY A NEW LEG RATHER THAN A WIDER WALK. tests/deploy-link-parity.bats:623 already asserts that
+# every class install.sh globs is walked or declared NOT-PER-FILE, and it is GREEN over all five of
+# the above, because its population is `grep -E '^[[:space:]]*for [A-Za-z_]+ in ' install.sh`. A
+# singleton `link_file` has no loop header and a second installer is never read, so those classes
+# are not UNCOVERED by that arm — they are not MEMBERS OF ITS QUESTION. Widening the walk fixes
+# today's five and leaves the sixth to the same blind extractor. This leg derives from the
+# TERRITORY, so it cannot go stale: a class added to any producer tomorrow surfaces the moment its
+# first file is deployed, whether or not anyone remembers to widen a glob.
+#
+# NOT COUNTED INTO `findings`, DELIBERATELY, AND THAT IS THE PART TO CHECK RATHER THAN TRUST. Every
+# member is BY CONSTRUCTION correctly linked — this is a gap in the map, not a deployment failure,
+# and the remedy is a walk-or-declare decision rather than a per-file command. Folding 54 correct
+# files into a report that currently reads "3 actionable" would bury the three real ones (memory:
+# alarm-polarity-and-attention-budget). It is counted in the summary line for exactly the reason
+# live-extra is, stated below: so the number is visible without being an alarm.
+sweep_unmapped() {
+  local l tgt rel
+  # The prune set is the non-deployed stores; everything remaining under $CFG is a candidate. A
+  # directory symlink cannot appear here: the vendor/ leg is declared NOT-PER-FILE above and its
+  # target is a directory, which the -f test below rejects.
+  while IFS= read -r l; do
+    [ -n "$l" ] || continue
+    tgt="$(readlink "$l" 2>/dev/null)" || continue
+    case "$tgt" in "$REPO"/*) ;; *) continue ;; esac
+    [ -f "$tgt" ] || continue
+    unmapped_scanned=$((unmapped_scanned + 1))
+    rel="${tgt#"$REPO"/}"
+    _claimed "$rel" && continue
+    unmapped_n=$((unmapped_n + 1))
+    $ALL && note "UNMAPPED" "$rel" "live-linked, but no forward-walk glob visits it — deployed by a producer no coverage arm reads"
+  done < <(find "$CFG" -type l \
+                -not -path "$CFG/projects/*"    -not -path "$CFG/backups/*" \
+                -not -path "$CFG/logs/*"        -not -path "$CFG/autonomy/*" \
+                -not -path "$CFG/cc-registry/*" -not -path "$CFG/mailbox/*" 2>/dev/null)
+  return 0
+}
+sweep_unmapped
+
+# 0 unmapped is the HEALTHY reading — "the map covers the territory" — so a failed enumeration must
+# never render as one. If the reverse walk resolved NO link into this checkout at all, the question
+# was asked and not answered, and the field is `?` (memory: alarm-must-key-on-the-store-not-the-
+# sensor; #271's LIVE_STALE carries the identical law for the identical reason).
+if [ "$unmapped_scanned" -gt 0 ]; then UNMAPPED_SHOWN="$unmapped_n"; else UNMAPPED_SHOWN="?"; fi
+
 # --- report -------------------------------------------------------------------------------------
 if [ "$findings" -eq 0 ] && $QUIET; then exit 0; fi
 
@@ -567,8 +666,8 @@ esac
 # live-extra is counted, never hidden: it is what makes "0 actionable" mean "we looked at the live
 # side too", rather than "we only ever walked the checkout". Its own count going UP unexplained is
 # the signal that a copy-deploy surface grew.
-printf '  %d linked · %d staged-pending · %d live-extra · %d actionable\n' \
-  "$linked_n" "$pending_n" "$extra_n" "$findings"
+printf '  %d linked · %d staged-pending · %d live-extra · %s unmapped · %d actionable\n' \
+  "$linked_n" "$pending_n" "$extra_n" "$UNMAPPED_SHOWN" "$findings"
 
 if [ "$findings" -gt 0 ]; then
   printf '\n  ✗ deploy parity broken — landed code that does not run, or live code that is in no repo.\n'

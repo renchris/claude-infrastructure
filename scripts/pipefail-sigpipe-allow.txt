@@ -33,7 +33,6 @@ scripts/branch-reaper.sh	4
 scripts/cloud-ceiling-probe.sh	3
 scripts/comms-strand-report.sh	1
 scripts/deathwatch-watchfile.sh	1
-scripts/deploy-link-parity.sh	1
 scripts/desk-invariant.sh	1
 scripts/gate-manifest.sh	1
 scripts/handoff-disposition.sh	1
