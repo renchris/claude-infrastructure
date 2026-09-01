@@ -1194,6 +1194,17 @@ lint_tree() {
   [ -d "$root/hooks" ] || [ -d "$root/launchd" ] || { echo "unattended-path-lint: '$root' has neither hooks/ nor launchd/ — nothing this lint governs (NON-VERDICT)" >&2; return 2; }
 
   local findings=0 blocking=0 used_allow="" report=""
+  # `scanned_paths` — every repo-relative file this run actually handed to the scanner. An allowlist
+  # row whose path is NOT in here was never exercised, so its unusedness is a fact about THIS RUN's
+  # reach and says nothing whatever about the tree. See the stuck branch.
+  local scanned_paths=""
+  # `still_invoked` — every (path, binary) whose SITE still names that binary at command position,
+  # recorded BEFORE any box-dependent filter runs. It is what lets the stuck-ratchet branch below
+  # tell the file's own two cases apart, and it exists for the reason the ordering comment in the
+  # hook half already gives: "A stuck entry must mean 'this site was FIXED', never 'I could not see
+  # the binary from here'." That rule was enforced against `installed_somewhere` and NOT against
+  # `reachable_on`, which is the other box probe and sits one line earlier — see the stuck branch.
+  local still_invoked=""
 
   # Newline-delimited membership, tested with bash's own pattern match rather than `printf | grep`.
   # The grep spelling forks once per SCANNED WORD — thousands of forks — and was most of a 16s run
@@ -1224,7 +1235,7 @@ lint_tree() {
   local hooks_list; hooks_list="$(hook_population "$root")"
   if [ -n "$hooks_list" ]; then
     local files=()
-    while IFS= read -r f; do [ -n "$f" ] && files+=("$root/$f"); done <<< "$hooks_list"
+    while IFS= read -r f; do [ -n "$f" ] && { files+=("$root/$f"); scanned_paths="$scanned_paths$f"$'\n'; }; done <<< "$hooks_list"
     if [ "${#files[@]}" -gt 0 ]; then
       local out; out="$(scan_shell "${files[@]}")" || return 2
       local seen="" hardened_cache=""
@@ -1240,6 +1251,7 @@ lint_tree() {
           *) tgt="$(file_effective_path "$f" "$root")"; hardened_cache="$hardened_cache|$rel=$tgt|" ;;
         esac
         if [ -n "$tgt" ]; then desc="the PATH this hook hardens to"; else tgt="$STOCK_PATH"; fi
+        has_line "$still_invoked" "$rel:$w" || still_invoked="$still_invoked$rel:$w"$'\n'
         reachable_on "$tgt" "$w" && continue
         seen="$seen$rel:$w"$'\n'
         # ORDER MATTERS. The allowlist is consulted BEFORE the is-it-installed-anywhere filter, so an
@@ -1273,12 +1285,14 @@ lint_tree() {
       while IFS= read -r tgt; do
         [ -n "$tgt" ] || continue
         [ -f "$root/$tgt" ] || continue
+        has_line "$scanned_paths" "$tgt" || scanned_paths="$scanned_paths$tgt"$'\n'
         local out; out="$(scan_shell "$root/$tgt")" || return 2
         local seen=""
         while IFS=$'\t' read -r f l w; do
           [ -n "$w" ] || continue
           plausible_binary "$w" || continue
           has_line "$seen" "$tgt:$w" && continue
+          has_line "$still_invoked" "$tgt:$w" || still_invoked="$still_invoked$tgt:$w"$'\n'
           reachable_on "$ppath" "$w" && continue
           seen="$seen$tgt:$w"$'\n'
           # Same ordering rule as the hook half above — allowlist before installability.
@@ -1305,7 +1319,7 @@ lint_tree() {
       return 2
     fi
     local bfiles=()
-    while IFS= read -r f; do [ -n "$f" ] && bfiles+=("$root/$f"); done <<< "$bats_list"
+    while IFS= read -r f; do [ -n "$f" ] && { bfiles+=("$root/$f"); scanned_paths="$scanned_paths$f"$'\n'; }; done <<< "$bats_list"
     if [ "${#bfiles[@]}" -gt 0 ]; then
       local out; out="$(scan_shell "${bfiles[@]}")" || return 2
       local seen=""
@@ -1314,6 +1328,7 @@ lint_tree() {
         plausible_binary "$w" || continue
         local rel="${f#"$root"/}"
         has_line "$seen" "$rel:$w" && continue
+        has_line "$still_invoked" "$rel:$w" || still_invoked="$still_invoked$rel:$w"$'\n'
         # Unreachable on ANY runner's PATH is a finding. A test cannot tell which job fired it, so it
         # has to hold for all of them — the same "MAY run stock and cannot tell" logic as the hook
         # half, applied to a floor that is narrower than stock in the /sbin dimension and wider in
@@ -1354,13 +1369,65 @@ lint_tree() {
   # So: a stuck entry BLOCKS when its path is own (or when no own-set was supplied ⇒ strict), and
   # is ADVISORY otherwise. Case 1 — the only case with an author who can act — is unchanged. This
   # is the same treatment self-path-lint already gives its own stuck-ratchet branch.
-  local stuck_other=""
+  #
+  # 🚨 CASE 3 IS NOW SEPARATED BY CONSTRUCTION, AND OWN-SCOPE NEVER COULD DO IT. Own-scope answers
+  # "is this the author's file", which is the right question for cases 1 and 2 and the WRONG one for
+  # case 3: an author whose diff legitimately touches a file the BOX changed under is convicted of a
+  # ratchet they did not shrink. Measured 2026-09-01 in a cloud (Linux) venue, on a `git worktree`
+  # of origin/main with no local change at all: `bin/cc-dispatch:bun` and `:cargo` read STUCK,
+  # because the dispatcher plist's PATH is `$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:
+  # /usr/bin:/bin` and this container ships `/usr/local/bin/bun` — reachable HERE, and not on the
+  # operator's Mac where bun lives in `~/.bun/bin`. Nothing about the tree differed. The first land
+  # to touch `bin/cc-dispatch` from a cloud worker was refused with a verdict that named no defect,
+  # and deleting the rows on the ratchet's say-so would have re-broken the gate on the box — which
+  # is exactly a6449cebc, whose retraction is written out at the top of this file.
+  #
+  # THE DISCRIMINATOR IS THE SITE, NOT THE BOX. `still_invoked` holds every (path, binary) whose
+  # site still names that binary at command position, recorded before `reachable_on` — so a key in
+  # it CANNOT have been fixed by anybody: the bare invocation is right there. That is the file's own
+  # invariant ("a stuck entry must mean 'this site was FIXED'") applied to the second box probe. The
+  # ordering comment in the hook half enforced it against `installed_somewhere` and stopped one line
+  # short of `reachable_on`, which is the other half of the same question.
+  #
+  # It does NOT weaken case 1. An author who really fixes a site — deletes the call, or resolves it
+  # absolutely — removes the word, so the key leaves `still_invoked` and the row blocks exactly as
+  # before. What it stops blocking is a row the tree never changed.
+  #
+  # 🚨 AND CASE 4 — THE RUN NEVER READ THE FILE AT ALL, which is not a case about the tree either.
+  # An allowlist row is marked used by the scan of its own file; if that file was never handed to
+  # the scanner, the row is unused for a reason that has nothing to do with whether its site still
+  # violates. Measured 2026-09-01 on a pristine-trunk worktree: `bin/cc-dispatch` is reached ONLY
+  # through `launchd/com.claude.dispatcher.plist`, and `plist_target_scripts` returns EMPTY for it,
+  # so the file is in no population, its two rows are never exercised, and they read STUCK.
+  #
+  # ⚠️ THE CAUSE IS NOT THE PLATFORM — IT IS THAT THE PLIST IS NOT WELL-FORMED XML, and this arm
+  # could not say so. Its header comment (line 4) contains `cc-dispatch --once`, and `--` is
+  # ILLEGAL inside an XML comment: expat rejects the file at line 4 col 87, so `plist_arg_strings`'
+  # python reader exits 1 and yields nothing. Verified by removing that one `-`: the same file then
+  # parses and returns its ProgramArguments. PlistBuddy (the Darwin reader) is more lenient, so this
+  # is invisible on the operator's box and total on every box that takes the python path — the two
+  # readers this file's own header insists "cannot disagree about a pathological plist" do disagree
+  # about this one. The plist is NOT fixed here: it is a launchd file (C10), and per the note above
+  # `plist_target_scripts` a repo plist edit without the operator's reload turns launchd-parity-lint
+  # red fleet-wide. Filed for the operator instead; this branch makes the lint HONEST about it
+  # meanwhile, which is the part that does not need the box.
+  #
+  # A ROW WHOSE FILE WAS NEVER READ CANNOT CONVICT ANYBODY. This is the same shape as the row that
+  # found it (backlog e981656df348): a reader that cannot report its own absence is not a reader —
+  # here, a scan that could not reach a file reported "that file's allowlist row is stale" rather
+  # than "I never looked". Checked FIRST, before both other classes, because it is the only one
+  # that is not a claim about the tree at all.
+  local stuck_other="" stuck_box="" stuck_unscanned=""
   while IFS= read -r key; do
     [ -n "$key" ] || continue
     has_line "$used_allow" "$key" && continue
     # The allowlist key is `<path>:<binary>`; own-sets hold PATHS, so scope on the path half.
     # `%:*` and not `%%:*` — a path may contain a colon, the binary name may not.
-    if [ -z "$have_own" ] || has_line "$own" "${key%:*}"; then
+    if ! has_line "$scanned_paths" "${key%:*}"; then
+      stuck_unscanned="$stuck_unscanned  $key"$'\n'
+    elif has_line "$still_invoked" "$key"; then
+      stuck_box="$stuck_box  $key"$'\n'
+    elif [ -z "$have_own" ] || has_line "$own" "${key%:*}"; then
       stuck="$stuck  $key"$'\n'
     else
       stuck_other="$stuck_other  $key"$'\n'
@@ -1380,6 +1447,26 @@ lint_tree() {
     echo "unattended-path-lint: stuck ratchet entries OUTSIDE this land's diff — advisory, not blocking:" >&2
     printf '%s' "$stuck_other" >&2
     echo "  (whoever fixed or removed those sites owes the allowlist line; it is not this land's.)" >&2
+  fi
+  if [ -n "$stuck_unscanned" ]; then
+    # NON-VERDICT, never blocking and never "stale": this run could not read the file the row is
+    # about. Deleting these rows would retire a guard nobody measured — a6449cebc, at the top.
+    echo "unattended-path-lint: allowlist rows whose FILE THIS RUN NEVER SCANNED — a non-verdict," >&2
+    echo "  not a stuck ratchet. Nothing here READ the file the row is about — commonly a plist" >&2
+    echo "  whose ProgramArguments do not parse, so the scripts it runs are in no population:" >&2
+    printf '%s' "$stuck_unscanned" >&2
+    echo "  Do NOT delete these rows — nothing here measured them. Re-run on the box that owns" >&2
+    echo "  those jobs to get a real verdict." >&2
+  fi
+  if [ -n "$stuck_box" ]; then
+    # SURFACED, never blocking, and named for what it is so nobody discharges it by deleting a row.
+    # These sites STILL invoke the binary; only this machine's inventory changed. On another box the
+    # row is load-bearing, so retiring it here would break the gate there (a6449cebc, at the top).
+    echo "unattended-path-lint: allowlist rows unused ON THIS BOX ONLY — the site still invokes the" >&2
+    echo "  binary; it is merely reachable on this machine's PATH. Advisory, and NOT a stuck ratchet:" >&2
+    printf '%s' "$stuck_box" >&2
+    echo "  Do NOT delete these rows to clear this notice — retire the SITE (resolve it absolutely)," >&2
+    echo "  which retires the row honestly on every box at once." >&2
   fi
   if [ -n "$stuck" ]; then
     echo "unattended-path-lint: STUCK RATCHET — these sites are allowlisted but no longer violate:" >&2
@@ -1588,6 +1675,22 @@ EOF'
   #    ratchet becoming a permanent exemption list.
   newtree t9; mk t9 hooks/a.sh 'true'
   ( CC_UNATTENDED_ALLOWLIST="hooks/a.sh:zzunobtainium" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t9" >/dev/null 2>&1 ); expect 1 "$?" 'a stuck ratchet entry did not fail'
+
+  # 9a. GREEN — an allowlist row whose FILE THIS RUN NEVER SCANNED is a NON-VERDICT, never stuck.
+  #     Case 9 above is its paired RED and the two differ in exactly one thing: there the row names
+  #     a file the run DID read and found clean (a real fix, the ratchet must shrink); here it names
+  #     a path in no population at all, so nothing measured it. Before this case the two were one
+  #     verdict, and the arm told an author to delete a row it had never exercised.
+  #
+  #     WHY IT IS NOT HYPOTHETICAL (backlog e981656df348, 2026-09-01): `bin/cc-dispatch` is reached
+  #     only through launchd/com.claude.dispatcher.plist, whose header comment contains `--` and is
+  #     therefore not well-formed XML — the python reader yields nothing, the file lands in no
+  #     population, and its two rows read STUCK on a pristine origin/main worktree with no local
+  #     change of any kind. That refused the first cloud land to touch the file, naming no defect,
+  #     and the instruction it printed ("delete their lines") would have retired a guard that is
+  #     load-bearing on the box. Deleting a row on this arm's say-so is a6449cebc exactly.
+  newtree t9a; mk t9a hooks/a.sh 'true'
+  ( CC_UNATTENDED_ALLOWLIST="bin/never-in-any-population.sh:zzunobtainium" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t9a" >/dev/null 2>&1 ); expect 0 "$?" 'an allowlist row whose file was never scanned was reported as a stuck ratchet'
 
   # 10. RED CONTROL on the PLIST half — a plist whose own PATH cannot reach the binary, running a
   #     script that calls it bare. Without this the plist half is vacuous, which is exactly the
@@ -2057,7 +2160,7 @@ PLIST
   [ "$skips" -gt 0 ] && real_tree_clause=""
 
   if [ "$fails" -eq 0 ]; then
-    echo "unattended-path-lint --selftest: $checks/$checks — RED on a bare binary inside \"\$( )\" (the shape a greedy tokenizer missed), on a bare binary at command position, on a stuck ratchet entry, on a plist whose INLINE export PATH cannot reach the binary, on a /sbin-only binary in the bats corpus under a runner whose PATH stops at /bin, on that binary reached through bats' own \`run\` wrapper, on a bare binary inside a case BODY (invisible to this lint for its whole life, until the label state landed) and on one after a REAL pipe (so the label fix was not bought by blinding the scanner to piped invocations); GREEN on a case LABEL in EITHER arity — the shape that minted two allowlist rows and contorted a real test into \`[ = ] || [ = ]\`, and whose one-arm form was wrongly believed already handled — on an absolute path, a name inside a single-quoted regex, a name in a comment, a heredoc body, a stock binary, a grandfathered site, a plist whose inline PATH does reach, the same corpus file under a runner whose PATH carries /sbin, and prose following an arithmetic expansion nested in a command substitution (the desync that minted two allowlist rows out of nothing); LOUD on a missing root, a root with no governed layers, and a corpus with no runner plist; own-scope blocks INSIDE / advises OUTSIDE across all three arity states; GREEN on a python-shebang file whose prose sits where a shell scanner reads command position, against a RED control of the SAME BYTES under a bash shebang and a RED control on a shebang-less file (so the language guard is keyed on the shebang and did not widen into scanning nothing)${real_tree_clause}. EVERY fixture above names a binary installed NOWHERE (zzunobtainium) or one installed only inside the sandbox (zzreachable), so each verdict is a property of the fixture and not of the invoker's tool inventory — the defect that made this arm answer to \`apt-get install shellcheck\`."
+    echo "unattended-path-lint --selftest: $checks/$checks — RED on a bare binary inside \"\$( )\" (the shape a greedy tokenizer missed), on a bare binary at command position, on a stuck ratchet entry, on a plist whose INLINE export PATH cannot reach the binary, on a /sbin-only binary in the bats corpus under a runner whose PATH stops at /bin, on that binary reached through bats' own \`run\` wrapper, on a bare binary inside a case BODY (invisible to this lint for its whole life, until the label state landed) and on one after a REAL pipe (so the label fix was not bought by blinding the scanner to piped invocations); GREEN on a case LABEL in EITHER arity — the shape that minted two allowlist rows and contorted a real test into \`[ = ] || [ = ]\`, and whose one-arm form was wrongly believed already handled — on an absolute path, a name inside a single-quoted regex, a name in a comment, a heredoc body, a stock binary, a grandfathered site, an allowlist row whose FILE this run never scanned (a non-verdict about this run's reach, never a stale row — the shape that refused the first cloud land to touch bin/cc-dispatch), a plist whose inline PATH does reach, the same corpus file under a runner whose PATH carries /sbin, and prose following an arithmetic expansion nested in a command substitution (the desync that minted two allowlist rows out of nothing); LOUD on a missing root, a root with no governed layers, and a corpus with no runner plist; own-scope blocks INSIDE / advises OUTSIDE across all three arity states; GREEN on a python-shebang file whose prose sits where a shell scanner reads command position, against a RED control of the SAME BYTES under a bash shebang and a RED control on a shebang-less file (so the language guard is keyed on the shebang and did not widen into scanning nothing)${real_tree_clause}. EVERY fixture above names a binary installed NOWHERE (zzunobtainium) or one installed only inside the sandbox (zzreachable), so each verdict is a property of the fixture and not of the invoker's tool inventory — the defect that made this arm answer to \`apt-get install shellcheck\`."
     [ "$skips" -gt 0 ] && echo "unattended-path-lint --selftest: $skips arm(s) SKIPPED as a NON-VERDICT on this platform (named above) — the detector's own cases all ran, and the tree-level question is asked directly by ship-land's own-scope run."
     exit 0
   fi
