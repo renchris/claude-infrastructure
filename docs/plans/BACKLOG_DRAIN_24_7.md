@@ -86,6 +86,97 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-01 — drain recycle #277: method 249 — A REMEDY IS AN EXTRACTOR, AND THIS ONE WAS KEYED ON
+  HOW A *SOURCE* IS SPELLED.** ZERO rows closed, ZERO filed, ZERO reopened. TWO commits, ONE push.
+  **THE QUESTION.** #274 asked what population a printed count counts over; #275 what a coverage arm's
+  map is derived from; #276 what a remedy keyed on a VERB NAME cannot see. #277 asks it of #276's own
+  neighbourhood one rung up: **a remedy is an extractor, every extractor is a key — and this key was
+  not a shape at all, it was a claim about how a SOURCE IS SPELLED.**
+  **THE DEFECT, AND ITS OWN FILE CARRIED THE COUNTER-EXAMPLE.** `scripts/deploy-parity-assert.sh`'s
+  SECOND INSTALLER block declares `bin/it2-kitty|bin/kitty-*` and states, verbatim, *"a seventh target
+  cannot land silently"*. It can, and it already had. `tests/deploy-parity.bats:1449` derived
+  kitty-setup.sh's targets with a grep keyed on the LITERAL source prefix `ln -sfn "$REPO/`, while
+  `scripts/kitty-setup.sh:203` links `"$SRC_CONF"`, assigned at `:194` to `$REPO/config/kitty.conf`.
+  **Same installer, same verb, same flag, ONE VARIABLE HOP — and the key goes blind.**
+  **MEASURED BY EXECUTION, AND THE PARTITION IS ASSERTED TO SUM.** `probe277-srcvar.sh`, ELEVEN
+  predictions gated at rc 93, all exact, ZERO refusals: kitty-setup.sh has **8** `ln -sfn` lines;
+  classified by the SHAPE of the line with one variable hop resolved, **7 are repo-sourced and 1 is
+  not** (the BIN_DIR→SHIM_DIR shim), and **7 + 1 = 8 is ASSERTED**, so a shape escaping the classifier
+  refuses rather than vanishing. **The shipped key derives 6.** The consistency arm read **0**
+  shipped-only members, so the disagreement is the shipped key's and not my extractor's. Run through
+  the assert's OWN extracted `case` block with the catch-all **TAGGED** (the tag asserted to touch
+  exactly 2 diff lines; memory `make-the-actuator-the-arbiter`), with a **POS** control
+  (`hooks/notify.sh` → `1|hooks/*.sh`) and a **FIRE** control (a path in no class must reach the tag),
+  the missed target `config/kitty.conf` reached the **REASONLESS `*) want=0`**.
+  **THE SECOND, INDEPENDENT COLUMN, because set arithmetic alone is a hypothesis.** The walk's own
+  `ls-files` pathspec at `:432` lists **no config/ directory — 0 occurrences, against a mute control
+  of 1 for `bin`**. So the path is invisible at BOTH gates, and the second cannot even ENUMERATE it —
+  a shape the map cannot EXPRESS, which no member of the population can ever demonstrate.
+  **AND THE FLOOR COULD NOT HAVE CAUGHT IT.** That arm's non-vacuity floor is `-ge 4` and it derives
+  6, so 6-vs-7 passes it. **A floor bounds a population's SIZE and says nothing about its MEMBERSHIP.**
+  **ZERO OUTAGES — MEASURED BEFORE THE LAND (arm E).** All seven repo-sourced targets were read
+  individually at 04:00Z and every one is a symlink resolving into the checkout, including
+  `~/.config/kitty/kitty.conf`. **This closes a DETECTOR gap, exactly as `githooks/*`,
+  `launchd/*.plist`, the literal installs and `CLAUDE.md` each did before it. Ask arm E BEFORE you
+  land.**
+  **THE MOVE — deliberately the same shape as #276's: one declaring arm plus the coverage arm that
+  stops it recurring.** `deploy-parity-assert.sh` gains `config/kitty.conf) want=0 ;;` carrying its
+  own reason; **behaviour is unchanged BY CONSTRUCTION** — `want` was 0 and stays 0, and the arm is
+  unreachable from that walk today exactly as the githooks/launchd pair is. `want=0` and NOT `want=1`
+  for two reasons: kitty-setup.sh is CONDITIONAL (kitty hosts only), and the destination is not
+  `$CFG/<rel>` at all. `tests/deploy-parity.bats` gains a **FIFTH extractor keyed on the SHAPE of the
+  link line, resolving one variable hop, ASSERTING BOTH PARTITIONS SUM**, plus its fire test deleting
+  exactly the config arm (asserted to remove ONE line) while a sibling stays declared. **90 → 92 arms;
+  ZERO existing assertions edited, both APPENDED.**
+  **RED-PROVEN AT TWO MOMENTS, AND THE PRISTINE CONTROL EARNED ITS KEEP A SECOND TIME.** PRE tree
+  extracted from `origin/main` with `git archive | tar -x`, asserted to hold ZERO occurrences of the
+  fix, with a seeded counter control at 38 proving the counter speaks; only the SUITE copied forward.
+  **PRE: both new arms RED by NAME** (read out of `arms277.txt`, never retyped, with a MUTE control
+  proving an unknown name classifies as incumbent). **POST: 92 ok, 0 not ok, 0 mine, 0 incumbent.**
+  The two incumbent PRE reds (`HOME/bin CLAIM COVERAGE`, `CLAUDE.md MANDATED SKILLS`) are NEITHER
+  mine NOR trunk's: **a PRISTINE extraction running TRUNK'S OWN suite reddens the identical two**,
+  because a `git archive` extraction carries no `.git` and an arm fed by `git ls-files` derives zero
+  members, so its floor correctly refuses. **A NON-VERDICT, not a red — #276's control, and it is the
+  one command that separates "your diff broke it" from "the harness cannot see it".**
+  **THE FOREGROUND DRAW, RUN BEFORE THE LAND:** 4 suites, **248 ok, 0 not ok, 0 skip**, one plan per
+  suite, TERMINATOR asserted (ran=4 listed=4), 111 s at load 17→18 — `deploy-live` **136** ·
+  `deploy-parity` **92** · `ms365-reply-splice` **18** · `deploy-parity-live` **2**. The IDENTICAL
+  draw to #275's and #276's, from the same two subject files; the fifth repeat measurement in that
+  table, and it still says the DRAW sizes a land. ⚠️ **`deploy-parity-live` read rc 0 with both tests
+  in the foreground while this brief inherits it RED on trunk and manifest-excluded — the host checks
+  run against the LIVE LAYER, a different subject. Two populations, two verdicts, both true.**
+  **LINTS:** shellcheck rc 0 / 0 bytes · `bash -n` rc 0 · `bats --count` 92 · bats-assert-liveness
+  rc 0 · scoped bats-shellcheck-lint *"clean — 1 suite(s) scanned, 0 blocking finding(s)"* ·
+  pipefail-sigpipe-lint bare rc 0 · `--census` **125**, `CC_PIPEFAIL_ROOT` pinned on BOTH arms, with
+  the PRE arm EXTRACTED from `origin/main` rather than remembered — **LOST=0 NEW=0** ·
+  unattended-path-lint `--selftest` **46/46** rc 0 and bare rc 0 (method 213: the land block is not
+  live) · test-walltime-lint *"clean — 558 suite(s); 1 grandfathered, 0 new time bombs"* (#250 read
+  552, #249 read 551 — take your own). **alarm-polarity-lint DECLARED NOT-RUN**: neither changed file
+  is an alarm emitter and its POS control is a known mute (`e07dc5e09f83`, OPEN). Seventeenth
+  consecutive link to declare rather than claim.
+  **THE LANE, STAMPED MOMENTS ONLY.** OPEN 03:54:17Z from the worktree, clean tree, `trunk..HEAD` 0:
+  `RUNG=🚀 LIVE_SRC=behind LIVE_SHA=e9cf8d4d926b LIVE_LAG=16 LIVE_ADDS=1 LIVE_STALE=2 LIVE_AGE=16247
+  LIVE_BREACH_WHY=adds MIG_FAILED=0 GATE=stale`. The one `adds` is the SAME SIBLING'S
+  `docs/parks/8f59467c92b0.md` #273–#276 all named, now in its FIFTH consecutive link;
+  `4e6a51df2a84` stays OPEN, do NOT re-file, do NOT drive.
+  🚨 **AND #250's NEAR-MISS WENT LIVE THIS LINK, WHICH IS WHY IT IS WORTH A SENTENCE.** My pane's cwd
+  is the SHARED CHECKOUT this link (it was the worktree at #219–#276), so my FIRST ledger read — same
+  command, wrong cwd — returned `RUNG=🔧 LIVE_SRC=skip LIVE_LAG=0 LIVE_ADDS=0` **and `GATE=green`**.
+  Four zeros and a green that measured NOTHING: `wrap-ledger.sh` keys on cwd, the shared checkout is
+  dirty and 16 behind, and `compute_live_layer()` is called ONLY on the ✅-eligible path. **A
+  dirty-tree `GATE=green` is a DIFFERENT POPULATION, not a streak-break — compare like with like.**
+  Re-read from the worktree it is `GATE=stale`, the ONE-HUNDRED-AND-SIXTH consecutive. **RUN CHECK 3
+  AND INHERIT NEITHER CWD.**
+  **THE BOARD.** Gap 03:50:10Z → 03:54:49Z (**4 m 39 s**): ZERO arrivals, ZERO departures, **ONE
+  transition** — `abf5e7509608` open → CLAIMED, project `claude-infrastructure`, a cloud WOULD-UNBLOCK
+  row; do NOT hand-touch it. OPEN 03:54:45Z **337 open / 216 blocked / 2,352 done / 5 claimed** (553
+  combined, 2,910 rows), both partitions asserted at both moments.
+  **THE TRANSFERABLE SENTENCE.** Four links have now each closed a gap by replacing one key with a
+  narrower-in-a-different-direction key: **a `for` header, a VERB NAME, a LINE SHAPE, a SOURCE
+  SPELLING.** The end of that regress is not a better key. **It is to enumerate the ACTION by its
+  shape, classify every member, and ASSERT THE PARTITION SUMS — so the member no key can name lands
+  in neither total and REFUSES, instead of being absorbed silently the way every keyed extractor
+  absorbs it.**
 - **2026-09-01 — drain recycle #276: method 248 — A COVERAGE ARM KEYED ON A *VERB NAME* IS ITSELF A
   SHAPE CLAIM: ASK WHAT PLACES BYTES WITHOUT CALLING THE VERB.** #274 asked what population each
   field of a printed summary line counts over; #275 asked what the coverage ARMS' map is built from
