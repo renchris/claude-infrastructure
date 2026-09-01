@@ -5630,10 +5630,43 @@ if [ "${1:-}" = "__recycle" ]; then
           hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;;
         retype)
           if [ "$waited" = 60 ]; then
-            hf_bounded "$IT2" session send -s "$RSID" "/exit" >/dev/null 2>&1 || true
-            sleep 1
-            nc="$(composer_content "$IT2" "$RSID")" || nc=""
-            if [ "$nc" = "/exit" ]; then hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true; fi
+            # THROUGH THE SANCTIONED COMPOSER HELPER, not a raw `session send` + a hand-rolled
+            # equality check. This arm shipped with the nudge gate as an open-coded
+            # paste→read-back→CR, which is the right CONTRACT written a second time — and
+            # scripts/typed-send-lint.sh flagged it from its first exposure, correctly: it is a
+            # raw typed COMMAND LINE outside a verified-typing helper, i.e. exactly the class the
+            # ratchet exists to keep out of new code, and it stood as the tree's only violation.
+            # it2_paste_submit_verified is the composer-side member of that set and is strictly
+            # stronger than what it replaces on all three steps: the paste is BRACKETED (atomic,
+            # so a torn write cannot leave half a line), the read-back is paste_readback_ok rather
+            # than byte equality (a 40-column composer scrolls its head off screen — the measured
+            # false-MANGLED class at :2166), and a mismatch withholds the CR *loudly* instead of
+            # falling through in silence.
+            #
+            # ITS OWNERSHIP GATE IS TURNED OFF HERE DELIBERATELY, AND ONLY BECAUSE IT IS ALREADY
+            # DISCHARGED — AppleEvent-free. composer_owned resolves through as_tty, whose iTerm2
+            # branch is an osascript, and this watcher is the one context in this file that may
+            # not use AppleEvents at all (the __recycle header: "ONLY AppleEvent-free work …
+            # proven detached"). Leaving the gate on would not make this safer, it would make it
+            # INERT: as_tty always exits 0 and prints empty on a failed query, so a detached
+            # AppleEvent failure reads as "not owned" and the helper abstains — the nudge would
+            # silently stop happening on exactly the transport it was written for. What proves
+            # ownership instead is stronger evidence over the two surfaces that ARE proven
+            # detached: `cc_alive` (ps over the pane's own tty) says claude is running, and the
+            # decision we are acting on says recycle_nudge_decision PARSED a composer box on that
+            # pane and found it empty. That pair is the contract this block's header already
+            # states in words ("An EMPTY composer with claude still alive at the 60s checkpoint");
+            # it was never actually asserted in code until now.
+            if cc_alive; then
+              CC_FIRE_COMPOSER_GATE=off it2_paste_submit_verified "$IT2" "$RSID" "/exit" >/dev/null || {
+                rrc=$?
+                echo "→ nudge@${waited}s retype NOT submitted (rc $rrc): the read-back did not prove a clean /exit in the composer — holding, because a blind CR here is what submits a merged buffer"
+                emit_recycle_event recycle-nudge-held "" "$RSID" "retype rc=$rrc at ${waited}s" || true
+              }
+            else
+              echo "→ nudge@${waited}s retype HELD: no affirmative 'claude is alive' verdict on the pane — a retype needs the composer it would type into"
+              emit_recycle_event recycle-nudge-held "" "$RSID" "retype-no-cc-verdict at ${waited}s" || true
+            fi
           fi ;;
         *)
           echo "→ nudge@${waited}s HELD ($nd): composer is not a stranded /exit — a CR here would submit someone else's buffer"
