@@ -881,6 +881,74 @@ claim_gate_skip() {
   grep -m1 -F 'gate=eligibility-unresolved' "$1" 2>/dev/null | tr -cd '\40-\176' | cut -c1-200
 }
 
+# refresh_trunk <project> → 0 the remote-tracking ref is current as of this pass, 1 it could not be.
+#
+# WHY THE ADMISSION GATE NEEDS THIS AND NOTHING ELSE PROVIDES IT. `cc-backlog claim --venue cloud`
+# consults bin/cc-eligible's park arm, and that arm's whole subject is a file a PREVIOUS CLOUD
+# DISPATCH pushed to GitHub: `docs/parks/<id>.md`. It reads it with `git show <ref>:<path>` off the
+# LOCAL remote-tracking ref — deliberately, because "the park is NOT in effect until this file is on
+# trunk" (scripts/cloud-park.sh) and a `[ -f ]` spelling would honour a park sitting unpushed in
+# whatever checkout the gate happened to run in. So the writer is a remote push and the reader is a
+# local ref, and SOMETHING has to connect them. Nothing did:
+#
+#   · bin/cc-eligible contains no `fetch` (it is a predicate — read-only over the tree it is given).
+#   · bin/cc-backlog contains no `fetch`.
+#   · this file's only two fetches are inside warm_worktree and the wcwd freshness probe below it,
+#     and BOTH sit under `if [ "$venue" != cloud ]` (F3) — while the live dispatcher runs
+#     `CC_DISPATCH_VENUE_ONLY=cloud`, so on the box that actually fires, neither ever runs.
+#
+# The ref is therefore refreshed only by ARMS WITH NO RELATION TO THIS ONE — postland-verify,
+# stranded-sweep, cloud-return, a hand `git pull` — none of which is ordered against the park's
+# landing. That is not "usually fresh enough": it is a correctness-critical read with no happens-
+# after edge to its writer, so whether the interlock fires is decided by a race it cannot see.
+#
+# WHAT LOSING THE RACE LOOKS LIKE, WHICH IS THE HALF THAT MADE IT EXPENSIVE. The gate does not
+# abstain on a stale ref — it cannot tell one from a repo that was never parked, because `git show`
+# answers "no such path" for both. It ASSERTS `park : none — no park on trunk for this row`, returns
+# `verdict=eligible`, exit 0, and the dispatcher fires. Measured end-to-end against a real remote and
+# a real clone (tests/cc-dispatch-trunk-refresh.bats): one `git fetch` is the only variable that
+# turns that into `verdict=ineligible-parked`, exit 3, carrying the operator step verbatim. This is
+# bin/cc-eligible's own doctrine violated one layer up from where 853a1fee restored it — "exit 0 with
+# a verdict that NAMES the uncertainty" — and it is why backlog 485f8f87eb5f reached a SEVENTH cloud
+# dispatch 8 h 15 m after its own park landed, with 853a1fee's fix live for 8 h 12 m of that.
+#
+# ONCE PER PROJECT PER PASS, not once per claim: a wave of N cloud rows in one project costs one
+# fetch, not N. Memoized in a newline-delimited string rather than an associative array — this file
+# targets bash 3.2 and declares none.
+#
+# FAILS OPEN AND SAYS SO. A fetch failure must not starve the queue (this file's I6 rule for every
+# sensor), so the claim proceeds; but the gate downstream is then reading a ref of unknown age, and
+# a non-measurement that looks like a measurement is the defect above. rc 1 gets journalled at the
+# call site, so the NEXT diagnosis reads whether the ref was current instead of reconstructing it
+# from timestamps — 619b0744's correction, that a report reaching no store is not a report.
+#
+# Kill switch: CC_DISPATCH_TRUNK_REFRESH=off restores the incumbent behaviour exactly.
+#
+# THE MEMO IS PER-PROJECT IN BOTH DIRECTIONS — two lists, not one list plus a shared rc. A wave can
+# span projects, and a single cached exit code would report the LAST fetch's outcome for every
+# project after it: one unreachable repo would convict its neighbours, or a reachable one would
+# absolve them. That is the same "a count over a population it cannot name" error the close rules
+# name, in a control flow.
+TRUNK_REFRESH_OK=""
+TRUNK_REFRESH_BAD=""
+refresh_trunk() {
+  local p="$1" r
+  [ "${CC_DISPATCH_TRUNK_REFRESH:-on}" != off ] || return 0
+  [ -n "$p" ] || return 0
+  # `${…:-}` on both reads, under this file's `set -u`: the initializers sit at the top level, so an
+  # unset memo means the function is running somewhere the file was not fully loaded — a test that
+  # extracts it, or a future refactor that moves the declarations. That must degrade to "not yet
+  # refreshed" and fetch, never abort the dispatcher mid-pass with an unbound-variable trap.
+  case "$NL${TRUNK_REFRESH_OK:-}" in *"$NL$p$NL"*) return 0 ;; esac
+  case "$NL${TRUNK_REFRESH_BAD:-}" in *"$NL$p$NL"*) return 1 ;; esac
+  r="$(project_repo "$p")"
+  if [ -n "$r" ] && git -C "$r" rev-parse --git-dir >/dev/null 2>&1 \
+     && git -C "$r" fetch origin -q 2>/dev/null; then
+    TRUNK_REFRESH_OK="${TRUNK_REFRESH_OK:-}$p$NL"; return 0
+  fi
+  TRUNK_REFRESH_BAD="${TRUNK_REFRESH_BAD:-}$p$NL"; return 1
+}
+
 # self_release <id> <token> → releases the claim we took but never started work on, and ECHOES the
 # journal marker that is actually TRUE of the release (", self-release" or nothing).
 #
@@ -2456,7 +2524,30 @@ dispatch() { # <dry|run|decide>
     # silent: the legacy flag routes to the same selection, never to the deprecated leg.
     [ "$venue" = cloud ] || venue="$(fire_venue "${fire_args[@]}")"
     claim_args=(claim "$id" --by "$SID" --role dispatcher)
-    if [ "$venue" = cloud ]; then claim_args+=(--venue cloud); fi
+    if [ "$venue" = cloud ]; then
+      claim_args+=(--venue cloud)
+      # BEFORE THE GATE, NOT AFTER IT — the ordering IS the fix. `--venue cloud` is the only claim
+      # that consults bin/cc-eligible's park arm, and that arm reads a remote-tracking ref which this
+      # dispatcher, on the box that actually fires, never refreshes (refresh_trunk's header has the
+      # measurement). Every other fetch in this file is downstream of the claim and venue-scoped
+      # away from the cloud lane, so a park landed by the previous dispatch of this very row could be
+      # invisible to the gate built to read it. Scoped to `venue = cloud` so a local claim is
+      # byte-for-byte what it was, and journalled on failure because a gate reading a ref of unknown
+      # age is exactly the non-measurement this rail keeps mistaking for a measurement.
+      #
+      # RESOLVED HERE RATHER THAN READ FROM $iproj, and that is not a style choice: `iproj` is
+      # `local` to this loop body and is not ASSIGNED until the brief-composition block ~130 lines
+      # below. Reading it here would pass the empty string, refresh_trunk's `[ -n "$p" ]` arm would
+      # return 0, and the fix would be a silent no-op — the precise shape of the defect it exists to
+      # close. Same expression and same source as that block, so the two cannot name different
+      # projects for one item.
+      local cproj
+      cproj="$(printf '%s' "$dispatchable" | jq -r --arg i "$id" '.[]|select(.id==$i)|.project // empty' 2>/dev/null | head -1)" || cproj=""
+      [ -n "$cproj" ] || cproj="$PROJECT"
+      if ! refresh_trunk "$cproj"; then
+        idl note "$id: gate=trunk-unrefreshed — could not fetch origin for project '${cproj:-?}' before the cloud eligibility gate; its park/trunk reads are as of the last unrelated fetch, so an INELIGIBLE it does not report may only mean it could not see one"
+      fi
+    fi
     local cerrf crc cexc cwarn
     cerrf="$(mktemp "${TMPDIR:-/tmp}/cc-dispatch-claim.XXXXXX" 2>/dev/null || true)"
     if [ -n "$cerrf" ]; then "$backlog" "${claim_args[@]}" >/dev/null 2>"$cerrf"; crc=$?
