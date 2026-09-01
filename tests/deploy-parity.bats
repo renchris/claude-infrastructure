@@ -2200,3 +2200,201 @@ NR==FNR {
   # …while the SIBLING literal-install declaration is untouched, so the seed removed one arm, not the block.
   [ "$(bash "$BATS_TEST_TMPDIR/seeded4.sh" statusline.sh </dev/null | grep -c '__DEFAULT__')" -eq 0 ]
 }
+
+# ── GATE ONE ── the WALK INPUT, one level up from the decision table every arm above asserts.
+# MEASURED 2026-09-01 by method 251, which is method 250 pointed at the other gate. Six extractors
+# now cover this file's SECOND gate — install.sh's class list, its singleton literals, its raw
+# run-ln/run-cp lines, and kitty-setup.sh's targets by shape and by action — and every one of them
+# asks the same question: does the `case "$rel"` table CLAIM or DECLARE this path? None of them can
+# ask the prior question, which is whether the walk ever hands that table the path at all.
+#
+# The assert's FIRST gate is its `git ls-files -- <pathspec>` line, and the one arm guarding it is
+# "anti-rot: every REPO_DIR directory install.sh deploys appears in the assert's pathspec". Read its
+# extractor as a NOUN, which is the tell method 250 leaves: `for [a-z_]+ in "$REPO_DIR"/[a-z]+` is
+# not "every directory install.sh deploys", it is FOR-LOOP GLOB HEADERS. install.sh places bytes
+# three ways and only one of them is a glob loop, so a pathspec member deployed by a SINGLETON
+# link_file/copy_file literal is a member that key can never produce, however green the arm is.
+#
+# MEASURED, both extractors run VERBATIM: the shipped one derives 10 members and all 10 are
+# directories; the pathspec holds 10 ENTRIES — 8 directories and 2 FILES. The two sets disagree by
+# exactly two in each direction. SHIPPED \ PATHSPEC is {githooks, launchd}, both honoured on the
+# arm's other branch, which is the consistency arm: without it a disagreement could have been my
+# extraction's and no other number here would mean anything. PATHSPEC \ SHIPPED is
+# {model-config.yaml, providers.json}, each placed by exactly one link_file literal (install.sh:545,
+# :554) and each CLAIMED want=1 as `root SSOT (link)` by the case block.
+#
+# A CLAIM AT GATE TWO OVER A PATH GATE ONE NEVER DELIVERS IS A CLAIM THAT NEVER RUNS, and it reads
+# as coverage. That is not hypothetical for this pair: the root-SSOT drift assert exists because
+# ~/.claude/model-config.yaml was a real, drifted 36 KB file for four days while the assert nearest
+# the failure reported parity over it.
+#
+# HONEST LIMIT, MEASURED RATHER THAN ASSERTED, and it is narrower than the sentence that stood here
+# first. Deleting those two words from a pristine origin/main extraction goes red in EIGHT arms, not
+# two: this arm, its fire test, and SIX BEHAVIOURAL arms — the five root-SSOT cases and the symlink
+# class table — which run the assert and read its output, so they see the leg stop firing. What is
+# added here is therefore NOT the only detection of that mutation. It is detection at the MAP rather
+# than at the BEHAVIOUR, and the difference is which population is covered: those six pin the two
+# members that exist TODAY, each by a hand-written fixture, while this one derives its population
+# from install.sh's own call sites, so a NINTH literal singleton source added tomorrow is covered
+# without anyone remembering to write a fixture for it. The comparison that does hold outright is
+# the STRUCTURAL one: the anti-rot arm above, whose job is this exact invariant, stays GREEN through
+# the same mutation, because its key cannot produce a root file name at all.
+#
+# NO OUTAGE IS REPAIRED. Both live paths were read individually at 2026-09-01T05:56Z and both are
+# symlinks into the checkout; all nine literal sources partition 3 CLAIMED / 6 DECLARED / 0 default,
+# with 0 stranded. This closes a DETECTOR gap, exactly as githooks/*, launchd/*.plist, the literal
+# installs, CLAUDE.md, config/kitty.conf and the by-action arm each did before it.
+_gate1_spec() {        # $1=subject  $2=output — the walk's pathspec, one entry per line
+  sed -n 's/.*git -C "\$REPO" ls-files -- \(.*\) 2>\/dev\/null.*/\1/p' "$1" \
+    | tr ' ' '\n' | grep -v '^$' | sort -u > "$2"
+}
+
+_gate1_answer() {      # $1=spec file  $2=rel — would the walk hand this path to the case block?
+  # Prints YES/NO and always returns 0, deliberately: a `! _gate1_delivers …` assertion is DEAD
+  # under errexit (it always passes), and scripts/bats-assert-liveness.py flags exactly that. The
+  # answer therefore travels as a VALUE, which is live in every position this file uses it in.
+  local e
+  while IFS= read -r e; do
+    [ -n "$e" ] || continue
+    case "$2" in "$e") printf 'YES\n'; return 0 ;; "$e"/*) printf 'YES\n'; return 0 ;; esac
+  done < "$1"
+  printf 'NO\n'
+  return 0
+}
+
+@test "WALK INPUT COVERAGE: every install.sh singleton deploy source the case block CLAIMS is one the pathspec delivers" {
+  MAP="$REPO_ROOT/install.sh"
+  SUBJ="$REPO_ROOT/scripts/deploy-parity-assert.sh"
+  [ -f "$MAP" ]
+  [ -f "$SUBJ" ]
+
+  # (1) GATE ONE. Uniqueness first — a second ls-files line would make the population ambiguous and
+  # this must refuse rather than silently pick one.
+  [ "$(grep -c 'git -C "\$REPO" ls-files -- ' "$SUBJ")" -eq 1 ]
+  SPEC="$BATS_TEST_TMPDIR/g1-spec.txt"
+  _gate1_spec "$SUBJ" "$SPEC"
+  # NON-VACUITY FLOOR: an empty spec makes _gate1_answer say NO for everything, which would
+  # turn this arm into a permanent RED rather than a vacuous green — but a spec of one entry would
+  # not. Measured 10 entries on 2026-09-01; the floor is deliberately loose, and note what a floor
+  # is NOT: it bounds SIZE and says nothing about MEMBERSHIP.
+  [ "$(grep -c . "$SPEC")" -ge 8 ]
+
+  # CONTROLS BEFORE VERDICTS. The delivery predicate must answer BOTH ways over the real spec, or a
+  # NO below is the predicate's and not the subject's.
+  [ "$(_gate1_answer "$SPEC" hooks/notify.sh)" = YES ]
+  [ "$(_gate1_answer "$SPEC" zzz-no-such-top-level/x.txt)" = NO ]
+
+  # (2) THE POPULATION, derived from install.sh's own singleton call sites. `[^"$]` excludes the
+  # loop-driven sites (bin/$tool, bin/$_reso_tool) whose source is not a literal: those belong to
+  # the glob population the anti-rot arm above already owns.
+  SRCS="$BATS_TEST_TMPDIR/g1-srcs.txt"
+  grep -oE '(link_file|copy_file) "\$REPO_DIR/[^"$]+"' "$MAP" \
+    | sed 's|.*\$REPO_DIR/||; s|"$||' | sort -u > "$SRCS"
+  # Measured 9 distinct literal sources on 2026-09-01 (8 until lib/account-map.generated.sh; the
+  # count is taken here rather than transcribed from a comment for exactly that reason).
+  [ "$(grep -c . "$SRCS")" -ge 7 ]
+  # …and every derived source must be a real path in the checkout, or the token scan matched prose.
+  GMISS=0
+  while IFS= read -r gs; do
+    [ -n "$gs" ] || continue
+    [ -e "$REPO_ROOT/$gs" ] || GMISS=$((GMISS + 1))
+  done < "$SRCS"
+  [ "$GMISS" -eq 0 ]
+
+  # (3) THE SUBJECT'S OWN ARBITER decides CLAIMED, exactly as every arm above it does.
+  [ "$(grep -c '^    cls=""$' "$SUBJ")" -eq 1 ]
+  _classcov_extract "$SUBJ" "$BATS_TEST_TMPDIR/case8.txt"
+  sed 's|^      \*)                         want=0 ;;$|      *)                         want=0; cls="__DEFAULT__" ;;|' \
+    "$BATS_TEST_TMPDIR/case8.txt" > "$BATS_TEST_TMPDIR/case8B.txt"
+  [ "$(diff "$BATS_TEST_TMPDIR/case8.txt" "$BATS_TEST_TMPDIR/case8B.txt" | grep -c '^[<>]')" -eq 2 ]
+  RUN8="$BATS_TEST_TMPDIR/run8.sh"
+  _classcov_runner "$BATS_TEST_TMPDIR/case8B.txt" "$RUN8"
+  [ "$(bash "$RUN8" hooks/notify.sh </dev/null | grep -c '^1|hooks/\*\.sh$')" -eq 1 ]
+  [ "$(bash "$RUN8" zzz-no-such-class/nope.txt </dev/null | grep -c '__DEFAULT__')" -eq 1 ]
+
+  # (4) THE PARTITION, over SOURCES, asserted to SUM. A source no branch understands is counted by
+  # neither and this refuses, rather than quietly shrinking the population it reports coverage over.
+  GCLAIM=0; GDECL=0; GDEF=0
+  STRAND="$BATS_TEST_TMPDIR/g1-stranded.txt"; : >"$STRAND"
+  while IFS= read -r gs; do
+    [ -n "$gs" ] || continue
+    gout="$(bash "$RUN8" "$gs" </dev/null)"
+    case "$gout" in
+      1\|*)          GCLAIM=$((GCLAIM + 1))
+                     [ "$(_gate1_answer "$SPEC" "$gs")" = YES ] \
+                       || printf 'CLAIMED-BUT-UNDELIVERED %s\n' "$gs" >>"$STRAND" ;;
+      *__DEFAULT__*) GDEF=$((GDEF + 1)) ;;
+      *)             GDECL=$((GDECL + 1)) ;;
+    esac
+  done < "$SRCS"
+  [ "$((GCLAIM + GDECL + GDEF))" -eq "$(grep -c . "$SRCS")" ]
+  [ "$GCLAIM" -ge 1 ]
+  [ "$(grep -c . "$STRAND")" -eq 0 ] || {
+    echo "install.sh singleton sources CLAIMED by the case block but dropped by the walk's pathspec:"
+    cat "$STRAND"; false; }
+}
+
+@test "WALK INPUT COVERAGE fire test: deleting the two root SSOT pathspec entries strands them, and the anti-rot arm cannot see it" {
+  # THE POINT OF THIS TEST IS THE DISAGREEMENT, NOT THE RED. An arm added beside an incumbent that
+  # already passes proves nothing by going red on a defect the incumbent also catches. So: plant ONE
+  # mutation and read BOTH arms. If they do not disagree, the arm above is additional rather than
+  # stronger and this file has measured nothing.
+  # Measured 2026-09-01 on a pristine origin/main extraction, control reds SUBTRACTED rather than
+  # assumed empty (the extraction carries two of its own, both live-layer-dependent arms): the
+  # mutation caused EIGHT reds, this pair among them, and the anti-rot arm was GREEN in all of them.
+  # The other six are behavioural — see this block's HONEST LIMIT paragraph, which states what that
+  # does and does not leave for the arm above to be worth.
+  MAP="$REPO_ROOT/install.sh"
+  SUBJ="$REPO_ROOT/scripts/deploy-parity-assert.sh"
+  [ -f "$MAP" ]
+  [ -f "$SUBJ" ]
+
+  SPEC="$BATS_TEST_TMPDIR/f-spec.txt"
+  _gate1_spec "$SUBJ" "$SPEC"
+  [ "$(grep -c . "$SPEC")" -ge 8 ]
+
+  # BASELINE: with the entries present, both root SSOTs are delivered.
+  [ "$(_gate1_answer "$SPEC" model-config.yaml)" = YES ]
+  [ "$(_gate1_answer "$SPEC" providers.json)" = YES ]
+
+  # SEED: remove exactly the two root-SSOT entries. Asserted to remove TWO lines, so a renamed SSOT
+  # makes this fail loudly rather than seeding nothing and passing vacuously.
+  MSPEC="$BATS_TEST_TMPDIR/f-spec-mutated.txt"
+  grep -vxF -e 'model-config.yaml' -e 'providers.json' "$SPEC" > "$MSPEC"
+  [ "$(($(grep -c . "$SPEC") - $(grep -c . "$MSPEC")))" -eq 2 ]
+
+  # (a) MY ARM'S PREDICATE GOES RED: both are still CLAIMED want=1 by the case block, and now the
+  #     walk never delivers them — a claim that never runs.
+  [ "$(_gate1_answer "$MSPEC" model-config.yaml)" = NO ]
+  [ "$(_gate1_answer "$MSPEC" providers.json)" = NO ]
+  _classcov_extract "$SUBJ" "$BATS_TEST_TMPDIR/case9.txt"
+  sed 's|^      \*)                         want=0 ;;$|      *)                         want=0; cls="__DEFAULT__" ;;|' \
+    "$BATS_TEST_TMPDIR/case9.txt" > "$BATS_TEST_TMPDIR/case9B.txt"
+  [ "$(diff "$BATS_TEST_TMPDIR/case9.txt" "$BATS_TEST_TMPDIR/case9B.txt" | grep -c '^[<>]')" -eq 2 ]
+  _classcov_runner "$BATS_TEST_TMPDIR/case9B.txt" "$BATS_TEST_TMPDIR/run9.sh"
+  [ "$(bash "$BATS_TEST_TMPDIR/run9.sh" model-config.yaml </dev/null | grep -c '^1|')" -eq 1 ]
+  [ "$(bash "$BATS_TEST_TMPDIR/run9.sh" providers.json </dev/null | grep -c '^1|')" -eq 1 ]
+
+  # (b) THE INCUMBENT ANTI-ROT ARM STAYS GREEN OVER THE SAME MUTATION. Its extractor is run
+  #     VERBATIM here, and its predicate re-applied over the MUTATED spec: every directory it can
+  #     name is still satisfied, because its key cannot produce a root file name at all.
+  DIRS="$BATS_TEST_TMPDIR/f-dirs.txt"
+  grep -oE 'for [a-z_]+ in "\$REPO_DIR"/[a-z]+' "$MAP" | sed 's|.*/||' | sort -u > "$DIRS"
+  [ "$(grep -c . "$DIRS")" -ge 8 ]
+  ANTIROT_FAILS=0
+  while IFS= read -r fd; do
+    [ -n "$fd" ] || continue
+    if [ "$fd" = githooks ] || [ "$fd" = launchd ]; then
+      [ "$(grep -c "REPO/$fd" "$SUBJ")" -ge 1 ] || ANTIROT_FAILS=$((ANTIROT_FAILS + 1))
+    else
+      case " $(tr '\n' ' ' < "$MSPEC") " in *" $fd "*) ;; *) ANTIROT_FAILS=$((ANTIROT_FAILS + 1)) ;; esac
+    fi
+  done < "$DIRS"
+  [ "$ANTIROT_FAILS" -eq 0 ]
+
+  # …and a MUTE control on that re-application: a directory present in NO spec entry must make it
+  # fail, or the loop above is green because it never evaluates anything.
+  MUTE_FAILS=0
+  case " $(tr '\n' ' ' < "$MSPEC") " in *" zzz-not-a-dir "*) ;; *) MUTE_FAILS=1 ;; esac
+  [ "$MUTE_FAILS" -eq 1 ]
+}

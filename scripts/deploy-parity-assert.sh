@@ -424,11 +424,27 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
   # main .git is gone: `[ -e "$REPO/.git" ]` passes, ls-files fails, and the assert returned 0 against
   # a deliberately EMPTY live root. Recorded as a non-verdict, never as parity.
   # This pathspec is the walk's INPUT and it is the FIRST of the two gates a class passes. It lists
-  # ten entries where install.sh globs from twelve top-level directories: githooks/ and launchd/ are
-  # absent BY DESIGN, because install.sh COPIES those two classes (into .git/hooks + the git template,
-  # and into ~/Library/LaunchAgents) rather than linking them into $CFG. The NOT-PER-FILE arms in the
-  # case block below declare the same exclusion at the second gate — stated twice on purpose, since a
-  # class dropped by an input filter alone leaves no reason behind anywhere a reader will look.
+  # TEN ENTRIES: EIGHT of the TEN top-level directories install.sh globs, plus TWO ROOT SSOT FILES.
+  # githooks/ and launchd/ are the two absent BY DESIGN, because install.sh COPIES those two classes
+  # (into .git/hooks + the git template, and into ~/Library/LaunchAgents) rather than linking them
+  # into $CFG. The NOT-PER-FILE arms in the case block below declare the same exclusion at the second
+  # gate — stated twice on purpose, since a class dropped by an input filter alone leaves no reason
+  # behind anywhere a reader will look.
+  #   CORRECTED 2026-09-01 by method 251. This sentence read "ten entries where install.sh globs from
+  #   twelve top-level directories". It is TEN directories, measured by running the coverage arm's own
+  #   extractor verbatim — and the arithmetic it invited (12 − 2 = 10) compared ENTRIES to DIRECTORIES,
+  #   two different units, so it read as summing while counting different things (#272's scar: before
+  #   you subtract two counts, ask what each one counts ONE of). The true partition is 8 directories +
+  #   2 files = 10 entries, and its second half is the part no coverage arm could see: model-config.yaml
+  #   and providers.json are placed by SINGLETON link_file literals (:545, :554), not by glob loops, so
+  #   tests/deploy-parity.bats's "anti-rot" arm — whose key is `for … in "$REPO_DIR"/[a-z]+`, i.e. GLOB
+  #   HEADERS — can never produce either name and stays green if they are deleted from this line. Both
+  #   are CLAIMED want=1 as `root SSOT (link)` below, and a claim at the second gate over a path the
+  #   first gate never delivers is a claim that never runs. tests/deploy-parity.bats now carries a
+  #   WALK INPUT COVERAGE arm asserting every singleton source this table CLAIMS is one this pathspec
+  #   delivers, with both partitions asserted to SUM. No outage was repaired: all nine literal sources
+  #   partition 3 CLAIMED / 6 DECLARED / 0 default with 0 stranded, and both root SSOTs were read live
+  #   and healthy at 2026-09-01T05:56Z.
   if ! _tracked="$(git -C "$REPO" ls-files -- hooks commands scripts bin skills agents lib vendor model-config.yaml providers.json 2>/dev/null)"; then
     report "NOVERDICT" "(existence)" "git ls-files failed in $REPO — the tracked set is unknown"
     noverdict=1
