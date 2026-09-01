@@ -86,17 +86,42 @@ logged() { cat "$CC_DISPATCH_FIRE_LOG" 2>/dev/null; }
   [ "$status" -eq 0 ]
 }
 
+# mode_of <file> → the permission bits, on either stat dialect.
+#
+# 🚨 A `stat -f … || stat -c …` CHAIN DOES NOT WORK, and the reason is why these two cases were red
+# rather than merely unportable. Both assertions read a real property of a real file and were spelled
+# BSD-only; on GNU coreutils `-f` is not an unknown flag that errors into a fallback, it means
+# `--file-system` — so `stat -f %z FILE` prints a filesystem report and EXITS 0. A `||` fallback can
+# never fire, and `$sz` becomes a multi-line block that fails `[ ]` with "integer expression
+# expected". scripts/compressor-sentinel.sh:1040 carries that same chain and is latently wrong on
+# Linux for the same reason; it is not the idiom to copy.
+#
+# So the dialect is PROBED, not guessed: GNU stat has `--version`, BSD stat does not. Size skips
+# stat entirely — `wc -c` is POSIX and identical on both.
+#
+# WHY THIS IS IN SCOPE FOR A CLOUD LAND AT ALL. Every cloud dispatch of this repo runs Linux, so
+# these two cases red for every land whose smoke scope reaches bin/cc-dispatch, while the behaviour
+# they guard is correct — a false RED about the machine wearing a verdict about the diff, the 6-vs-9
+# confusion the land pipeline exists to keep apart (tests/cc-venue.bats:186 documents the same
+# inversion from the root/mode-bit direction). Darwin keeps its exact spelling and its verdict.
+mode_of() {
+  if stat --version >/dev/null 2>&1; then stat -c '%a' "$1"; else stat -f '%Lp' "$1"; fi
+}
+
 @test "the log is 0600 — a fire's output can quote a prompt" {
   keep abc123 next3 0
-  run bash -c "/usr/bin/stat -f '%Lp' '$CC_DISPATCH_FIRE_LOG'"
+  run mode_of "$CC_DISPATCH_FIRE_LOG"
   [ "$output" = "600" ]
 }
 
 @test "each fire's excerpt is bounded, so one runaway cannot fill the disk" {
-  /usr/bin/head -c 200000 /dev/zero | tr '\0' 'x' > "$BATS_TEST_TMPDIR/big.txt"
+  head -c 200000 /dev/zero | tr '\0' 'x' > "$BATS_TEST_TMPDIR/big.txt"
   keep big next3 0
-  local sz; sz="$(/usr/bin/stat -f %z "$CC_DISPATCH_FIRE_LOG")"
+  local sz; sz="$(wc -c < "$CC_DISPATCH_FIRE_LOG" | tr -d '[:space:]')"
   [ "$sz" -lt 20000 ]
+  # 0 would satisfy `< 20000` vacuously — the bound must be proven over a file that actually has
+  # content, which is exactly what the broken chain above was silently failing to establish.
+  [ "$sz" -gt 0 ] || { echo "the log is empty, so the bound proves nothing: sz=$sz"; false; }
 }
 
 # ── the caller wires it on BOTH arms, and surfaces the anchor ─────────────────────────
