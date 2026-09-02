@@ -88,7 +88,7 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 - **2026-09-01 — drain recycle #280: method 252 — A CLAUSE LADDER CAN ONLY JUDGE WHAT A SPLITTER
   HANDS IT, AND THE SHAPE THIS ONE DROPS IS THE COMMONEST THING A GUARD WRITES.** ZERO rows closed,
-  ZERO filed, ZERO reopened. TWO commits.
+  ZERO filed, ZERO reopened. FOUR commits.
   **THE QUESTION.** #279 established that a file which FILTERS its input and then PARTITIONS it has
   two gates, and that every coverage arm anybody writes asserts against the second, because the
   second is where the reasons live. It asked that question of an ASSERT. #280 asks it of a
@@ -166,6 +166,59 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   *"THE HIGHEST-VALUE ONE ON THAT LIST IS `scripts/ship-land.sh:2323`… TAKE IT"* since #245. It is
   **already drained** — the line now reads *"MEMBERSHIP BY `case` OVER A NEWLINE-FENCED STRING"* and
   the allowlist row for that file is gone. **Run the lead's REASON before you plan around its target.**
+  **AND THEN THE LAND ITSELF FOUND THE SAME DEFECT AGAIN, IN A DIFFERENT RATCHET, AND THAT IS THE
+  HALF OF THIS LINK WORTH KEEPING.** `ship-land` refused at rc 6 on `tests/cc-dispatch-projects.bats::16`,
+  twice. Attributed rather than conceded: that suite and `bin/cc-dispatch` are BOTH blob-identical
+  between my HEAD and `origin/main`, the suite names neither file my diff touches, and it FAILED TWICE
+  rather than passing on retry. **The cell's RED control replays the pre-fix composer with
+  `git -C "$REPO" show origin/main:bin/cc-dispatch` and asserts the guard is ABSENT from it — and the
+  guard landed in `22b8824c6`, the SAME commit that added the cell. The control expired at its own
+  land**, and from that instant compared the fix against itself. `ship-land` runs that suite in its
+  own gate tree, so **every land in this repo was refused, on a tree nobody had broken** — the
+  `a6449cebc` shape a second time, and this brief had already warned that a ratchet's arms and its
+  detector are different instruments.
+  ⚠️ **AND MY OWN FIRST CONTROL READ GREEN, WHICH IS THE INSTRUMENT LESSON.** A local clone at the
+  same trunk sha ran the suite 20/20 — because the clone's `origin` was MY WORKTREE, so its
+  `origin/main` was an older ref. **A control keyed on a moving reference reads green from the inside;
+  ask what reference produced the verdict before you believe it** (method 269, and this is the second
+  time this link paid it).
+  🚨 **THE RATCHET FOR EXACTLY THIS CLASS WAS GREEN OVER IT, FOR THE SAME REASON AS THE MORNING'S
+  FINDING.** `scripts/moving-ref-control-lint.sh` read *"clean — 560 suite(s); 0 moving-ref controls"*
+  while that defect sat on trunk blocking every land. Its `strip()` drops each span between a quote
+  and its *"matching partner"* by naive pairing, so in `trunk_rail="$(git -C "$REPO" show
+  origin/main:… )"` it paired the opening quote with the one before `$REPO` and the token fell inside
+  the dropped span. **A command substitution nested in double quotes re-opens an UNQUOTED context;
+  naive pairing cannot know that — which is method 252 in a second tokeniser, found the same day, by
+  the land refusing rather than by looking.** ⚠️ **And it is the identical fault my OWN first masker
+  had that morning, caught then by an rc-93 gate.**
+  ✅ **BOTH HALVES LANDED, AND THE WIDENING IS MEASURED AT ZERO.** The cell is pinned to `e31eb3d05`,
+  the fix commit's parent, which cannot move — **the PARENT'S OWN SHA and not `<fix>^`, because a
+  caret is not hex and the ratchet's pinned-ref test calls the whole token MOVING: its help text
+  spells a remedy its own detector refuses, measured both ways.** `strip()` gains a context stack with
+  the DANGLING-quote contract unchanged and still fail-CLOSED. Run over the corpus, shipped 0 rows and
+  context-stack 1, **LOST 0, NEW 1 — and that one row is the site that was blocking the repo**, so
+  after the pin the ratchet reports `clean — 560 suite(s); 0 grandfathered, 0 moving-ref controls`
+  with **no allowlist row added**. A widening that minted findings on the tree as it stands would have
+  wanted its own link; this one mints none.
+  ⚠️ **WHY THE SYNTHETIC FIXTURES MISSED IT, AND IT IS THE REUSABLE HALF:** `--selftest`'s `mainref`
+  case spells the violation as a BARE COMMAND; the live one spells it as an assignment from a command
+  substitution. **The fixture never reached the regime.** `--selftest` **22/22 → 23/23** with the
+  `cmdsub` case added, and its summary sentence — a hardcoded enumeration nothing checks — repointed
+  to name both the new count and the new case. `tests/moving-ref-control-lint.bats` **8 → 10**, both
+  APPENDED: one for the shape that got past it, one asserting a quoted MENTION is still not a control,
+  because a tokeniser fix that simply stopped stripping would pass the first and convict forty
+  innocent files. RED-PROVED: PRE 9 ok / 1 not ok with the one red named, POST 10/10, zero incumbents
+  moved, mute control 0, and the no-widening arm a **DELIBERATE GREEN**. The cell's own repair is
+  proved the other way round, because its fix lives in the suite: TRUNK's copy run inside a worktree
+  whose `origin/main` is current is **19 ok / 1 not ok on arm 16**, and the repaired copy is **20/20 in
+  the same repo at the same moment.**
+  ⚠️ **FOUR REFUSALS, ALL MINE, NONE IN A SUBJECT — AND THREE WERE THE SAME FAULT.** An assertion
+  counting `grep -q` FILE-WIDE convicted the replacement's own PROSE; one counting `@test` convicted
+  the fixture an arm BUILDS; one counting apostrophes inside the awk program counted the program's own
+  DELIMITERS, then counted its opener after an off-by-one anchor. **A gate whose span exceeds its
+  subject convicts its neighbours, and it will do it three different ways in one link.** The fourth was
+  an apostrophe in a comment I wrote INSIDE that single-quoted awk program — the scar the sibling lint
+  records in its own header, paid anyway.
   **THE STANDING RED MOVED FOR THE FIRST TIME IN FOURTEEN LINKS, AND IT MOVED BY ITSELF.**
   `scripts/deploy-link-parity.sh` reads **`459 linked · 0 staged-pending · 10 live-extra · 54 unmapped
   · 2 actionable`**, rc 1, at 19:31Z — **2, not 3.** `skills/outbound-drafting/SKILL.md` dropped out
