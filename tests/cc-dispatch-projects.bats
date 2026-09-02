@@ -31,7 +31,8 @@
 # observing those effects when the condition is reversed.
 
 BASE_SHA="67c86d89"   # immutable ancestor of origin/main; carries the pre-change bin/cc-dispatch
-DEEPEN_BASE="e31eb3d0"  # 22b8824c^ — the last composer with the trunk reads UNGUARDED by --unshallow
+DEEPEN_BASE="e31eb3d0"
+VINTAGE_BASE="1cdd601f"  # f9cbe177f^ — the last composer with the staleness rail and NO vintage  # 22b8824c^ — the last composer with the trunk reads UNGUARDED by --unshallow
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -504,11 +505,16 @@ mkrepo() {
   # RED — trunk's own composer, for the deepen cell's reason: $PRISTINE predates the whole brief rail
   # and would go red for the wrong reason. Skipped rather than failed where trunk is unreachable.
   local trunk_src
-  if ! trunk_src="$(git -C "$REPO" show origin/main:bin/cc-dispatch 2>/dev/null)"; then
-    skip "origin/main:bin/cc-dispatch unreadable here — the RED control needs trunk's own composer"
+  if ! trunk_src="$(git -C "$REPO" show "$VINTAGE_BASE:bin/cc-dispatch" 2>/dev/null)"; then
+    skip "$VINTAGE_BASE:bin/cc-dispatch unreadable here — the RED control needs the pre-vintage composer"
   fi
-  printf '%s' "$trunk_src" | grep -q 'staleness_rail=' || false        # it DOES compose a brief ...
-  ! printf '%s' "$trunk_src" | grep -q 'DISPATCHER VINTAGE' || false   # ... with no vintage in it
+  # PINNED, AND COUNTS RATHER THAN `grep -q`, for the deepen cell's two reasons — this control was
+  # keyed on origin/main and INVERTED the moment f9cbe177f landed the vintage it asserts is absent
+  # (measured RED against trunk on 2026-09-02, the third time this class blocked this repo in one
+  # day), and its feed is that whole 270 KB file, past the always-inverted floor for an early-exit
+  # consumer. 1cdd601f is f9cbe177f^ and cannot move.
+  [ "$(printf '%s' "$trunk_src" | grep -c 'staleness_rail=')" -ge 1 ] || false      # it DOES compose a brief ...
+  [ "$(printf '%s' "$trunk_src" | grep -c 'DISPATCHER VINTAGE')" -eq 0 ] || false   # ... with no vintage in it
 }
 
 # ── one queue: cross-project fairness under the existing S7 key ───────────────────────────────────
