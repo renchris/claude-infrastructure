@@ -173,7 +173,7 @@ lock_acquire() {
   local age start pid why=""
   start="$(cat "$LOCK/at" 2>/dev/null)"; case "$start" in ''|*[!0-9]*) start=0 ;; esac
   age=$(( $(now) - start ))
-  pid="$(cat "$LOCK/pid" 2>/dev/null | head -1)"; case "$pid" in ''|*[!0-9]*) pid="" ;; esac
+  pid="$(head -1 "$LOCK/pid" 2>/dev/null)"; case "$pid" in ''|*[!0-9]*) pid="" ;; esac
   # A holder we can PROVE is gone is reaped now. `kill -0` is the liveness question and nothing
   # else: rc 0 = alive, anything else = not ours to wait for. An UNREADABLE pid is deliberately not
   # treated as dead — that is a miss, not an absence, and it falls through to the age window, which
@@ -191,8 +191,9 @@ lock_acquire() {
   printf '%s\n' "$$" >"$LOCK/pid" 2>/dev/null
   return 0
 }
-# shellcheck disable=SC2329
+# shellcheck disable=SC2329,SC2317
 #   Invoked from the EXIT/INT/TERM trap below, which shellcheck cannot see — it is not dead.
+#   SC2317 is the same falsehood one level down: the BODY reads unreachable for the same reason.
 lock_release() { rm -rf "$LOCK" 2>/dev/null || true; }
 
 # ── the control-plane sensor ─────────────────────────────────────────────────────────────────────
@@ -767,7 +768,7 @@ else
   TOTAL="$(printf '%s\n' "$WANT" | grep -c . || true)"
 
   CURSOR_F="$STATE/.return.cursor"
-  CURSOR="$(cat "$CURSOR_F" 2>/dev/null | head -1)"; case "$CURSOR" in ''|*[!0-9]*) CURSOR=0 ;; esac
+  CURSOR="$(head -1 "$CURSOR_F" 2>/dev/null)"; case "$CURSOR" in ''|*[!0-9]*) CURSOR=0 ;; esac
   [ "$CURSOR" -lt "$TOTAL" ] || CURSOR=0
 
   if [ "$LIMIT" -gt 0 ] && [ "$TOTAL" -gt "$LIMIT" ]; then
