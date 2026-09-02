@@ -743,6 +743,32 @@ mechanical_arm() {   # rc 0 = armed (fall through to the armed path) · rc 1 = d
   # The operator asked to stop → never manufacture a continuation. Checked HERE as well as in the
   # armed path so a kill-switch turn does not churn a sentinel into existence just to delete it.
   kill_switch_active && return 1
+  # ── PEER EXEMPTION (2026-09-02) ────────────────────────────────────────────────────────────────
+  # Both sibling floors stand down for a peer: ship_floor at :865-869, wake_floor at :587-608. This
+  # arm checked NEITHER, so one hook gave three different answers about the same class of session —
+  # a confirmed Agent-Teams assignee with its own dirty files was exempt from the ship floor, exempt
+  # from the wake floor, and blocked here.
+  #
+  # That asymmetry is worse than it looks, because an assignee's close is not its own: it is the
+  # LEAD's harvest. Blocking it forces the assignee to keep taking turns over dirt the lead is about
+  # to collect and commit, and the assignee cannot discharge it — the merge is not its to do. The
+  # dirty tree is real, so the ledger is right; the ACTOR is wrong, which is the who-vs-when split
+  # this hook's own attribution work (session-writes.sh:13-22) exists to respect.
+  #
+  # Semantics copied from ship_floor deliberately — rc 0 (confirmed) OR rc 2 (cannot tell) both
+  # exempt. NOT wake_floor's, which also exempts argv-only and treats a REFUTED rc 1 as non-exempt
+  # (:589-594): the three floors are not interchangeable and this is the one that matches an arm
+  # whose remedy is "commit your own paths".
+  local _ma_aid _ma_c
+  if _ma_aid="$(agent_assignee_argv)" && [ -n "$_ma_aid" ]; then
+    agent_team_member_confirms "$_ma_aid"; _ma_c=$?
+    if [ "$_ma_c" -eq 0 ] || [ "$_ma_c" -eq 2 ]; then
+      log_idl cleared "mechanical-assignee"
+      return 1
+    fi
+  fi
+  # A session already torn down is not going to commit anything; nudging it is pure noise.
+  wf_teardown_marked && { log_idl cleared "mechanical-teardown"; return 1; }
 
   local swlib
   swlib="${SESSION_WRITES_LIB:-$_scd/lib/session-writes.sh}"
