@@ -138,6 +138,10 @@ STUB
   # No local head is left, exactly as push_branch does, because a cloud branch exists only on the
   # remote. Deliberately NOT an empty commit: the shipped rail prescribes a bare ref creation, and
   # the fixture has to replay the artifact the rail actually produces.
+  # shellcheck disable=SC2317
+  #   Same structural falsehood as the file-header's SC2329: this helper is defined in setup() and
+  #   invoked from the @test subshells, which shellcheck cannot see, so its body reads unreachable.
+  #   Narrow rather than added to the header's list, so a genuinely dead line elsewhere still blocks.
   push_boot_ping() {  # $1=branch
     git -C "$REPO" push -q origin "refs/heads/main:refs/heads/$1"
     true
