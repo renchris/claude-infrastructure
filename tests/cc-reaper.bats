@@ -1564,6 +1564,7 @@ EOF
 90008 556 40:00 bash
 90018 90008 39:00 claude.exe
 90013 1 45:00 bash
+90009 555 40:00 bash
 EOF
   cat > "$GB" <<'EOF'
 90001 ps -A -o pid= -o ppid=
@@ -1577,6 +1578,7 @@ EOF
 90008 bash /Users/x/.claude/bin/cc-close-attrib /Users/x/.claude-220/node_modules/.bin/claude --model m
 90018 /Users/x/.claude-220/node_modules/.bin/claude --model m
 90013 bash /Users/x/.claude/hooks/lead-crash-watchdog.sh
+90009 bash /opt/homebrew/Cellar/bats-core/1.13.0/libexec/bats-core/bats tests/account-cliff-routing.bats tests/cc-close-attrib.bats tests/cc-reaper.bats
 EOF
 }
 
@@ -1789,6 +1791,25 @@ EOF
   echo "$output" | grep -q 'would reap.*orphan-ps pid=90001'
   echo "$output" | grep -q 'would reap.*stuck-wrapper pid=90007'
   [ ! -s "$KLOG" ]                                     # the collector was never invoked
+}
+
+@test "stuck-wrapper is ANCHORED: the wrapper dies, a corpus that merely NAMES it survives" {
+  # ONE CLOSED WORLD, BOTH DIRECTIONS. 90007 is a genuine stuck `cc-close-attrib` wrapper and must
+  # still be collected — without that half, an over-wide anchor that collects NOTHING would pass.
+  # 90009 is the real-world shape that was being eaten: postland-verify runs its corpus as
+  # `bash …/bats <558 test files>`, and one of those files is `tests/cc-close-attrib.bats`, so the
+  # unanchored substring test matched a command line that merely NAMES this tool.
+  #
+  # NOT A HYPOTHETICAL. 2026-09-02, reaper log: `TERM stuck-wrapper pid=175 age=1810s
+  # argv=<bash …/bats …>`; the verifier's runner log two minutes later: "corpus TRUNCATED … KILLED
+  # by signal 15 from OUTSIDE this runner". postland-verify is the only writer of the GREEN stamp
+  # and `deploy-live` is fail-closed on it, so this arm was freezing the LIVE ~/.claude layer.
+  # Repo memory: pgrep-f-matches-agent-briefs — argv carries whole briefs, so anchor on POSITION.
+  mk_garbage_fixtures
+  run "$R" garbage
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'would reap.*stuck-wrapper pid=90007' || false   # the wrapper still dies
+  ! echo "$output" | grep -q 'pid=90009' || false                           # the corpus survives
 }
 
 @test "garbage: CC_REAPER_GARBAGE=0 kill switch disables the arm" {
