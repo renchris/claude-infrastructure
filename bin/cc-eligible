@@ -584,6 +584,39 @@ SPAN_FIELDS = ("title", "dodRef", "condition", "source")
 # dispatch, so counting it would retract the park with the very fire the park exists to prevent.
 DESK_EVENTS = ("block", "unblock")
 
+# 🚨 …AND THE EVENT NAME IS NOT ENOUGH, BECAUSE `block`/`unblock` ARE NOT EXCLUSIVELY THE DESK'S
+# (backlog e981656df348, dispatch 25 — the first finding on the `honoured` branch).
+#
+# The comment above excludes `claim` on the ground that it "happens on every dispatch, so counting
+# it would retract the park with the very fire the park exists to prevent." That argument is about
+# the ACTOR, not the verb, and it does not stop at `claim`: `cc-backlog reap` is an automaton under
+# launchd, not the desk, and it writes `block` at FOUR sites and `unblock` at one — every one of
+# them `--by cc-backlog-reap`. Rule A blocks a row once dead-worker reopens hit MAX_ATTEMPTS, and
+# the message it writes literally instructs `cc-backlog unblock <id>`; cloud_map's `open` path
+# writes the unblock itself. A cloud worker CANNOT close its own row from a VM (the store is on the
+# box), so every cloud dispatch of a parked row leaves a stale claim, and reap is therefore the
+# arm most likely to touch exactly the rows this gate is protecting.
+#
+# WHAT THAT COST, MEASURED HERE against the live park and a reap-written transition dated after it:
+# `park_assess` returned `honoured`, `check` returned `verdict=eligible` rc 0, and the dispatcher
+# fired — with the report reading "the desk has recorded a block/unblock at or after it" when no
+# desk had recorded anything. That is worse than a silent leak: `honoured` is the state every reader
+# of this file is told is THE INTERLOCK WORKING CORRECTLY, so dispatch 24's new
+# `gate=eligibility-admitted park=honoured` record would have reported the leak as health.
+#
+# POSITIVE, VERBATIM, AND NARROW. Matched with `==` against the identities the reaper actually
+# stamps, never a substring or a prefix — an actor this list does not name counts as the desk, which
+# is the fail-open direction (a wrong ELIGIBLE strands a worker; a wrong INELIGIBLE leaves the row
+# claimable locally, losing nothing) and keeps an operator's bare `cc-backlog unblock <id>`, which
+# carries no `by` at all, retracting the park exactly as it does today.
+#
+# THIS CANNOT MAKE A PARK PERMANENT, which is the property the retraction rule exists to hold. The
+# desk's own `block`/`unblock` still retires it on the first use, with no cleanup step and no new
+# chore; what changes is only that an AUTOMATON can no longer retire it on the desk's behalf. A park
+# nothing but reap has touched is precisely the deadlock state — the VM stated a park and the desk
+# has not acted — so continuing to refuse there is the arm doing its job, not a new failure mode.
+REAP_ACTORS = ("cc-backlog-reap",)
+
 
 def build_index(recs):
     """id -> the item's specification text, accumulated across its records.
@@ -594,14 +627,21 @@ def build_index(recs):
     record carried.
 
     `desk` rides along because it is the same walk: the newest `ts` of any block/unblock record for
-    the id, or "". It is NOT part of the classified span (that stays the item's SPECIFICATION,
-    SPAN_FIELDS) — it is a fact about what the desk has DONE, which is what the park arm needs and
-    no spelling can express.
+    the id THAT THE DESK ITSELF WROTE, or "". It is NOT part of the classified span (that stays the
+    item's SPECIFICATION, SPAN_FIELDS) — it is a fact about what the desk has DONE, which is what
+    the park arm needs and no spelling can express.
+
+    `deskAuto` is the same quantity over the records this walk SKIPPED — the newest reap-written
+    block/unblock — and it exists so the skip is legible rather than silent. Without it a reader
+    seeing `unhonoured` cannot tell "no transition exists" from "a transition exists and this arm
+    declined to count it", which is the same absence-vs-non-measurement confusion that cost this
+    row its 22nd, 23rd and 24th dispatches. It is REPORTED and never compared; only `desk` decides.
     """
     idx = {}
     for r in recs:
         rid = r["id"]
-        ent = idx.setdefault(rid, {"text": "", "title": "", "project": "", "desk": ""})
+        ent = idx.setdefault(rid,
+                             {"text": "", "title": "", "project": "", "desk": "", "deskAuto": ""})
         parts = [r.get(k) or "" for k in SPAN_FIELDS]
         text = " ".join(p for p in parts if p)
         if text:
@@ -612,8 +652,12 @@ def build_index(recs):
             ent["project"] = r["project"]
         if r.get("event") in DESK_EVENTS:
             ts = r.get("ts") or ""
-            if ts > ent["desk"]:                # ISO-8601 UTC 'Z' — lexicographic IS chronological
-                ent["desk"] = ts
+            # THE ACTOR, not just the verb — see REAP_ACTORS. `by` absent means nobody claimed
+            # authorship, which is what an operator's bare `cc-backlog unblock <id>` writes, so it
+            # counts as the desk and the incumbent retraction is untouched.
+            key = "deskAuto" if (r.get("by") or "") in REAP_ACTORS else "desk"
+            if ts > ent[key]:                   # ISO-8601 UTC 'Z' — lexicographic IS chronological
+                ent[key] = ts
     return idx
 
 
@@ -945,7 +989,12 @@ def park_assess(item_id, orc, desk_ts):
     cloud-return solves that with `branch:`, which it can because it is returning a specific
     dispatch. This gate has no branch, so it asks the ledger instead:
 
-        refuse  ⟺  a landed park is NEWER than the newest block/unblock record for the row.
+        refuse  ⟺  a landed park is NEWER than the newest DESK-WRITTEN block/unblock for the row.
+
+    "Desk-written" is load-bearing and is enforced in `build_index`, not here: `block`/`unblock` are
+    also written by the `cc-backlog reap` automaton, whose transitions are excluded by actor (see
+    REAP_ACTORS). Counting those retracted the park with the very re-dispatch it exists to prevent,
+    and reported it as `honoured` — the state a reader is told means the interlock is working.
 
     That is exactly the deadlock state and nothing else: the VM stated a park, and the desk has not
     yet turned it into a transition. Either desk action retires it — `block` because the row is then
@@ -1030,7 +1079,8 @@ def assess_full(item_id, idx, measure=True):
             "history": {"state": "not-measured", "repo": "", "ref": "", "depth": CLOUD_DEPTH,
                         "unreachable": []},
             "reach": {"state": "not-measured", "lane": "", "why": ""},
-            "park": {"state": "not-measured", "needs": "", "stamp": "", "desk": ""},
+            "park": {"state": "not-measured", "needs": "", "stamp": "", "desk": "",
+                     "deskAuto": ""},
         }
     text = ent["text"]
     classes = classify_all(text)
@@ -1040,7 +1090,8 @@ def assess_full(item_id, idx, measure=True):
     hist = {"state": "not-measured", "repo": orc.repo, "ref": "", "depth": orc.depth,
             "unreachable": []}
     reach = {"state": "not-measured", "lane": "", "why": ""}
-    park = {"state": "not-measured", "needs": "", "stamp": "", "desk": ent.get("desk", "")}
+    park = {"state": "not-measured", "needs": "", "stamp": "", "desk": ent.get("desk", ""),
+            "deskAuto": ent.get("deskAuto", "")}
     if measure:
         # REACH BEFORE HISTORY, in that order: a repo the VM never receives has no horizon worth
         # reporting, and "this is another repo" is the sentence that tells a reader what to do.
@@ -1254,6 +1305,11 @@ def cmd_why(item_id, as_json):
                                  PARK_NOTE.get(p.get("state", ""), "")))
     if p.get("needs") or p.get("stamp") or p.get("desk"):
         w("            stamp=%s desk=%s\n" % (p.get("stamp") or "-", p.get("desk") or "(none)"))
+    # NAMED, NEVER SILENT. A reap-written block/unblock is the one thing that looks like a desk
+    # transition and is not; saying so here is what stops the next reader re-deriving it.
+    if p.get("deskAuto"):
+        w("            skipped=%s (block/unblock written by the reap automaton, not the desk —\n"
+          "                      it does not retract a park; see REAP_ACTORS)\n" % p["deskAuto"])
     if p.get("needs"):
         w("            needs=%s\n" % p["needs"])
     r = full.get("reach") or {}

@@ -421,6 +421,56 @@ branch and addressed its last step to a human; the twenty-first reached a store 
 twenty-second reached a reader whose caller deleted it. Each cure was correct and each landed one
 layer short of a consumer.
 
+### 🚨 The 25th dispatch: the leak was on the branch every reader is told is the interlock WORKING (2026-09-02)
+
+The three legs are re-verified by content in this venue and unchanged; nothing here revisits them,
+and `3fce569a` remains the cure. Dispatch 24 landed `gate=eligibility-admitted park=<state>` and
+made the park arm's three outcomes visible for the first time, naming `honoured` — *"a park is on
+trunk and the desk retired it"* — as the benign one. **It is not benign, and it is where the leak
+is.** That branch is the one no dispatch had examined, precisely because until 24 landed, all three
+states arrived as the same silence.
+
+`bin/cc-eligible`'s retraction rule is *refuse ⟺ a landed park is NEWER than the newest
+block/unblock for the row*, over `DESK_EVENTS = ("block", "unblock")`. Its own header excludes
+`claim` because *"a claim happens on every dispatch, so counting it would retract the park with the
+very fire the park exists to prevent"* — an argument about the **ACTOR**, not the verb, and it does
+not stop at `claim`. `cc-backlog reap` is an automaton under launchd, not the desk, and it writes
+`block` at four sites and `unblock` at one, every one `--by cc-backlog-reap`. Rule A blocks a row
+once dead-worker reopens hit `MAX_ATTEMPTS`, and the message it writes instructs `cc-backlog unblock
+<id>`; cloud_map's `open` path writes the unblock itself. A cloud worker cannot close its own row
+from a VM, so **every** cloud dispatch of a parked row leaves a stale claim — which makes reap the
+arm most likely to touch exactly the rows this gate protects.
+
+**Measured, against the live 5-entry park at its trunk ref.** With a reap-written unblock (or block)
+dated after the park stamp, `cc-eligible check` returns `verdict=eligible` exit 0 and `why` reports
+`park : honoured — the desk has recorded a block/unblock at or after it` — when no desk had recorded
+anything. Dispatch 24's new record would have printed `gate=eligibility-admitted park=honoured`,
+reporting the leak as health. This is candidate (b) of the 22nd's list (*"a desk block/unblock
+recorded at or after the park stamp, which retires the arm BY DESIGN"*) shown to fire with no desk
+involved — so it is a defect, not the design.
+
+**Two candidates positively excluded here**, so a 26th dispatch does not re-derive them. (i) The park
+arm is CORRECT against the file as it now stands: every prior verification used the 1-entry version
+and it now has five, so `_park_last`'s last-wins parse was untested at its current size — measured
+`verdict=ineligible-parked` rc 3, `park : unhonoured stamp=2026-09-01T20:23:01Z desk=(none)`,
+carrying the operator step verbatim. (ii) `reap`'s dead-worker **reopen** does not retract a park
+(`reopen` ∉ `DESK_EVENTS`) — the most plausible-looking self-sustaining loop, now excluded rather
+than left as a guess.
+
+**Fixed in the one file that owns the rule.** `REAP_ACTORS` excludes reap-written transitions from
+`desk` BY ACTOR, matched positively and verbatim; an actor the list does not name counts as the desk,
+which is the fail-open direction and keeps an operator's bare `cc-backlog unblock <id>` — carrying no
+`by` at all — retracting exactly as before. The skipped transition is reported as `skipped=<ts>`
+instead of dropped, so `unhonoured` can never be confused with "no transition exists". It cannot make
+a park permanent: the desk's own verbs still retire it on first use.
+
+⚠️ **What this does NOT establish:** whether a reap write is what fired *this* dispatch is not
+observable from a VM — the ledger is on the box. What is new is the kind of finding, not another
+layer of it: **the first defect on the ADMITTING branch, after three consecutive correct fixes to the
+observability path.** The corollary this row has now paid twenty-five times for, extending the 23rd's:
+*a report that reaches no store is not a report — and a state named "working correctly" is the last
+place anyone looks for the fault.*
+
 ## 4 · If 2.1.234 is adopted, adopt it on other grounds — and set one env var first
 
 The upgrade is defensible for 33 releases of unrelated fixes, never for capacity. Two items gate it:
