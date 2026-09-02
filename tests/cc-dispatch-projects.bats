@@ -437,8 +437,13 @@ mkrepo() {
   if ! trunk_rail="$(git -C "$REPO" show "$DEEPEN_BASE:bin/cc-dispatch" 2>/dev/null)"; then
     skip "$DEEPEN_BASE:bin/cc-dispatch unreadable here — the RED control needs the pre-fix composer"
   fi
-  printf '%s' "$trunk_rail" | grep -q 'rev-list --count HEAD..origin/main' || false  # the reads ...
-  ! printf '%s' "$trunk_rail" | grep -q -- '--is-shallow-repository' || false        # ... unguarded
+  # COUNTS, NEVER `grep -q`. The feed is that whole file — 270,638 B at the pin, past the measured
+  # always-inverted floor for a two-stage external producer (87,151 B) — so the early-exiting form
+  # closed the pipe at the match and printed `printf: write error: Broken pipe` on every run that
+  # reached here. Nothing here sets pipefail, so the noise was cosmetic rather than a wrong verdict;
+  # the drain removes the noise and the dependence on that fact at once.
+  [ "$(printf '%s' "$trunk_rail" | grep -c 'rev-list --count HEAD..origin/main')" -ge 1 ] || false
+  [ "$(printf '%s' "$trunk_rail" | grep -c -- '--is-shallow-repository')" -eq 0 ] || false
 }
 
 # ── the dispatcher reports its OWN vintage, so "landed" and "ran" stop being one claim ────────────
