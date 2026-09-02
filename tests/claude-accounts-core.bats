@@ -1922,8 +1922,27 @@ assert "next2 strand ~56pp of 83 · start by T−28h (70h slack)" in line, line
 # invites the reader to burst anyway and lose the same pp with the tokens spent.
 assert "next3 strand ~5pp of 8 · p96 of its own 3h burns · ⚠ LATE by 0.6h" in line, line
 assert "2.8pp already unrecoverable" in line, line
-# a ZERO-STRAND row keeps its bare clock: there is no burst to schedule on it
-assert "next no strand — 1.62× burn, ⚠ WALL trajectory · 4d left" in line, line
+# a ZERO-STRAND row keeps its bare clock: there is no burst to schedule on it.
+# AMENDED 2026-09-01 against 0eb64b73, which widened the wall_projection abstain floor to 6/7 on
+# the finding that the LINEAR divisor is false mid-week (46 pp MAE at day 3; the `1.62× burn,
+# ⚠ WALL trajectory` this line used to assert IS the false alarm — that exact fixture, 51% at
+# day 3, backtested 119% against a 99% actual). This case is NOT about the ratio: it is about
+# the START-BY clause being absent on a row with nothing to lose. So it asserts THAT, and
+# nothing about the middle phrase, which now belongs to RP-26b above.
+assert "next no strand" in line, line
+assert line.rstrip().split(chr(10))[-1].strip().endswith("· 4d left"), line
+assert "start by" not in line.split("next no strand")[1], line
+# CONTROL, and it is the arm that keeps the assertion above from being satisfied by an
+# always-bare tail: in the LAST DAY wall_projection speaks again, so the row carries a ratio —
+# and it must STILL take the bare clock rather than a start time, because zero strand means
+# there is no burst to schedule however loud the row is.
+lastday = ca.pace_line([row(acct="next", weekly_pct=95, weekly_reset_h=20.0,
+                            burn_wk_ewma_ph=0.5, session_pct=13, session_reset_h=3.37,
+                            exch_k=K, exch_k_src="live")])
+assert "1.08× burn" in lastday, lastday
+assert "⚠ WALL trajectory" in lastday, lastday
+assert lastday.rstrip().endswith("· 20.0h left"), lastday
+assert "start by" not in lastday, lastday
 # K UNFITTED (S1c abstained) costs the START-BY clause and NOTHING ELSE. §5.2s abstain text
 # says a null K prints `no strand figures this sweep`; that was written before S3 established
 # the strand is pure weekly-space arithmetic that consumes no K, and it is now false — saying

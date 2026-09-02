@@ -1938,9 +1938,52 @@ ships on **availability and roll-awareness**: the incumbent's newest-adjacent-pa
 | `bats tests/claude-accounts-burst.bats` | **10/10 green** (5 pre-existing + 5 new), 5/5 new RED pre-change |
 | `bats tests/claude-accounts-strand-score.bats` | **5/5 green**, 5/5 RED pre-change; 3/5 RED under the causality mutant |
 | `bats tests/claude-accounts-5h-ewma.bats` | **5/5 green**, 5/5 RED pre-change; each hazard mutant kills exactly its own case |
-| `bats tests/claude-accounts-core.bats` | unchanged against trunk — the same 4 pre-existing environment failures (`--relogin-info`, three `--login-status`) before and after, all keychain/argv-size bound and none in this diff |
+| `bats tests/claude-accounts-core.bats` | unchanged against a trunk control — the same keychain/argv-size-bound failures (`--relogin-info`, `--login-status` ×3, `read_creds` ×3) with this commit stashed and applied. All pass on the operator's box; none are in this diff |
 | `bats tests/{strand,burn-ratio,roll-key,util-tail}.bats` | **green**, unchanged |
+| `bats tests/cc-relogin-poll.bats` | the land gate named its case 58. **17 not-ok on BARE TRUNK in this container and 17 with these commits applied — identical — and case 58 itself is GREEN both ways.** Not this diff, which reaches nothing in that suite |
 | `claude-accounts --strand-score` on the live series | 🚨 **NOT RUN — the operator's gate.** This container holds no `~/.claude/logs/account-utilization.jsonl`; the flag is proven on synthetic fixtures only |
+
+**The land gate refused wave 2 once, and the refusal was CORRECT — record it, because the trap is
+structural rather than a mistake.** Between this session reading trunk and the gate running,
+`0eb64b73` widened `wall_projection`'s abstain floor from 0.05 to **6/7** on the finding that the
+LINEAR divisor is refuted mid-week (46 pp MAE at day 3; a constant predictor scores 5.3 pp). RP-28
+was written before that landed and asserted `next no strand — 1.62× burn, ⚠ WALL trajectory` on a
+row at phase 0.32 — **the exact false alarm `0eb64b73` deleted**, on the very fixture whose backtest
+refuted it (51% at day 3 → 119% projected vs 99% actual). Every other suite passed on the gate's box
+because trunk had already amended core RP-26 and strand RP-16 in place; RP-28 was the one live
+assertion that did not exist yet when it did so.
+
+Amended the way `0eb64b73` amended its own two: **the invariant is kept and the spelling is
+dropped.** RP-28 is not about the ratio — it is about the START-BY clause being ABSENT on a row with
+nothing to lose — so it now asserts that, plus a **last-day control** (`weekly_pct=95`,
+`weekly_reset_h=20`) where `wall_projection` speaks again, pinning that a zero-strand row takes the
+bare clock *however loud it is*. Without that arm the assertion would be satisfied by a renderer
+whose tail is always bare. Mutation-proved after the amendment: rendering the start-by on
+zero-strand rows still turns RP-28 red.
+
+**Generalisable, and it is the reason this paragraph exists:** an assertion that greps a *rendered
+spelling* becomes a tripwire on its own subject's next correction. §5.7 S3 Deviation 6 recorded this
+same class one wave earlier — a burn-ratio case grepping the literal caption `lands exactly at the
+100% wall` — and RP-28 walked into it again from the other side, by pinning a phrase that a
+concurrent measurement was about to delete. Pin what the case is FOR.
+
+**The SECOND refusal was a REPLAY, and the way to tell is arithmetic, not judgement.** Cycle 2's
+verdict was byte-identical to cycle 1's — the same two suites, the same `line 1938`, the same
+`File "<string>", line 44`. But the fix had already landed on the branch and had MOVED that case:
+RP-28's closing status check sits at line **1957** in the fixed tree, and the string the verdict
+failed on (`1.62× burn, ⚠ WALL trajectory · 4d left`) is **absent from it**. A gate reporting a
+failure at a line the tree does not have, on a string the tree does not contain, ran older bytes.
+Re-doing the fix was therefore impossible; the correct response was to rebase onto the trunk that had
+moved another 6 commits and push again, so the next gate run reads current bytes.
+
+⚠️ **Do not read this as "the gate was wrong."** The land race is the SAME structural fact both
+cycles: trunk moved 35 commits during cycle 1 and 6 more during cycle 2, so a branch verified against
+the trunk it was cut from is never the branch the gate runs. The remedy is the same each time —
+re-fetch, rebase, re-run, push — and the tell for a replay is to compare the verdict's own line
+numbers and asserted strings against the tree, before changing anything. Trunk was independently
+converging on the same class while this ran: `96748250` and `ff977ada` both repair *"a RED control
+keyed on origin/main that expired at its own land and reddened every land in the repo"*, and
+`31e289a8` records five refusals that were one fault.
 
 **S6 IS STILL NOT SHIPPABLE, AND THIS WAVE DID NOT MAKE IT SO.** §5.2 S6 opens *"do not build this
 until S5 has run and been read"*, and the reading is the gate — not S5's existence. The one act that
