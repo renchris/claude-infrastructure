@@ -133,6 +133,16 @@ STUB
     true
   }
 
+  # A BOOT PING — the absence contract (CLOUD_OBSERVABILITY.md §4.1/§16) made real. The VM pushes
+  # its declared branch as its first act, at the commit it was placed on, and commits nothing.
+  # No local head is left, exactly as push_branch does, because a cloud branch exists only on the
+  # remote. Deliberately NOT an empty commit: the shipped rail prescribes a bare ref creation, and
+  # the fixture has to replay the artifact the rail actually produces.
+  push_boot_ping() {  # $1=branch
+    git -C "$REPO" push -q origin "refs/heads/main:refs/heads/$1"
+    true
+  }
+
   decl() {  # $1=id  $2=branch  [$3=paths]
     { printf 'id=%s\n' "$1"
       printf 'branch=%s\n' "$2"
@@ -789,6 +799,46 @@ dead_pid() {
   CONFIRM=1 run cr --land claude/present
   [ "$status" -eq 0 ]
   landed_branches | /usr/bin/grep -q '^claude/present$'
+}
+
+# ── the boot ping (CLOUD_OBSERVABILITY.md §4.1/§16) ──────────────────────────────────────────
+# The contract puts a ref on the remote for every cloud session that boots, INCLUDING the ones
+# that then produce nothing. Those branches are new to this path — before the contract they had no
+# ref at all and never reached a lander — so the emptiness has to be a verdict of its own here.
+@test "--land on a boot-pinged branch is NOTHING TO LAND (66), and the lander is never called" {
+  decl s-ping claude/ping
+  push_boot_ping claude/ping
+
+  CONFIRM=1 run cr --land claude/ping
+  [ "$status" -eq 66 ]
+  # The whole point of 66: the expensive, destructive half of the path is not entered at all.
+  [ ! -s "$LAND_STUB_LOG" ]
+  [[ "$output" == *"nothing to land"* ]] || false
+
+  # POSITIVE CONTROL — off the SAME fixture, a branch that carries one file DOES reach the lander,
+  # so 66 is a statement about content and not about this suite failing to land anything.
+  decl s-work claude/work
+  push_branch claude/work 1
+  CONFIRM=1 run cr --land claude/work
+  [ "$status" -eq 0 ]
+  landed_branches | /usr/bin/grep -q '^claude/work$'
+}
+
+@test "--all SKIPS a boot-pinged branch without counting it as a failure, and lands the rest" {
+  decl s-ping claude/ping
+  push_boot_ping claude/ping
+  decl s-work claude/work
+  push_branch claude/work 1
+
+  CONFIRM=1 run cr --all
+  # 0, not 70: a branch with nothing in it is not a branch that failed to land. A non-zero here
+  # would make every dead cloud session read as a landing fault for the whole sweep.
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"claude/ping"* ]] || false
+  landed_branches | /usr/bin/grep -q '^claude/work$'
+  # …and the empty one was never handed to the lander at all.
+  landed_branches | /usr/bin/grep -q '^claude/ping$' && false
+  true
 }
 
 # ── usage ────────────────────────────────────────────────────────────────────────────────────

@@ -2767,7 +2767,22 @@ dispatch() { # <dry|run|decide>
       # the 5 oldest open items in the ledger, so under the S7 key it is the FIRST thing this change
       # dispatches. A brief that names a nonexistent landing command sends a worker to invent one.
       irepo="$(project_repo "$iproj")"
-      if [ -f "$irepo/.claude/commands/ship.md" ]; then
+      # ── AND A CLOUD WORKER CANNOT LAND AT ALL, SO THE /ship RAIL IS NOT MERELY IRRELEVANT ────
+      # It is the OPPOSITE of what the pipeline needs. `scripts/cloud-return.sh` requires the branch
+      # PUSHED AND UNLANDED: it derives the path set from the VM's own commits, hands the branch to
+      # the desk land, and content-verifies the result on trunk. A worker that landed for itself
+      # strands that pipeline; a worker that reads "never bare push" literally does not push at all,
+      # which is precisely the absence §8 step 2 exists to forbid — so the incumbent rails and the
+      # boot ping above would contradict each other on the one venue that has both.
+      #
+      # CREDIT WHERE IT IS DUE, and the credit is itself the finding: this half is adopted from
+      # 0cc728a2 (branch claude/fire-20260901T200442Z-37476-1, 2026-09-01), the NINTH stranded
+      # implementation of this row. It is re-derived here against current trunk rather than
+      # cherry-picked because that commit predates the unshallow clause now in the staleness rail
+      # and would revert it. See docs/research/cloud-boot-contract-restrandings-2026-09-02.md.
+      if [ "$venue" = cloud ]; then
+        rails="gate green before commit; commit on THIS branch and PUSH it — the push IS your completion signal and the desk lands it for you (scripts/cloud-return.sh). Do NOT run /ship, do NOT push to trunk, do NOT land anything yourself. C10 — never edit settings.json/live hooks/launchd in place."
+      elif [ -f "$irepo/.claude/commands/ship.md" ]; then
         rails="dedicated worktree + own branch; gate green before commit; land ONLY via the project-local /ship (never bare push); C10 — never edit settings.json/live hooks/launchd in place."
       else
         rails="dedicated worktree + own branch; gate green before commit. This project has NO /ship rail — commit on your own branch and SURFACE it for the operator; never bare-push, never land yourself. C10 — never edit settings.json/live hooks/launchd in place."
@@ -2855,8 +2870,44 @@ dispatch() { # <dry|run|decide>
       #
       # NO BACKTICKS ANYWHERE IN THIS LIST — these are double-quoted shell strings, so a backtick
       # would command-substitute at compose time and write its OUTPUT into the worker's brief.
+      # ── `git -C $irepo` IS A DESK FACT, AND A CLOUD WORKER IS NOT ON THE DESK ────────────────
+      # Every rail below used to hardcode the ITEM's repo path. That path is resolved by
+      # `project_repo` on THIS box (/Users/…), and a cloud VM's checkout is somewhere else
+      # entirely — measured on this dispatch: the brief said `git -C /Users/chrisren/Development/
+      # claude-infrastructure fetch origin -q` to a worker whose repo is /home/user/…, so every
+      # command in the staleness rail was inert on the one venue that needs it MOST (the VM's
+      # clone is the shallow one). A worker either substitutes its own path — inventing what the
+      # rail should have said — or runs the line and gets `cannot change to …: No such file`.
+      # Off-box, the checkout IS the cwd, so the prefix is dropped rather than translated: this
+      # composer cannot know the VM's path either, and a guessed one is a second wrong answer.
+      local gitc="git -C $irepo"
+      [ "$venue" = cloud ] && gitc="git"
+      # ── THE ABSENCE CONTRACT, ACTUATED (CLOUD_OBSERVABILITY.md §4.1/§8 step 2, §16) ───────────
+      # §4.1 has said since the design was written that a cloud session's brief must require
+      # pushing the declared branch as its FIRST act, because absence is otherwise ambiguous: a VM
+      # that never booted, one that died at boot, one refused entitlement and one that simply has
+      # nothing to commit all read as "no ref" from here, and `cc-cloud classify` files every one
+      # of them C1 NOT-STARTED. That requirement was PROSE ONLY for as long as it existed — no
+      # brief, no hook and no script ever emitted it (backlog 0c8b39b67665) — so the one verdict
+      # the whole state function rests on has never had the evidence it names.
+      #
+      # It rides HERE because the brief is the only surface that reaches a cloud worker at all,
+      # and it is CLOUD-ONLY: a local worker is on this box, its branch is readable without a
+      # remote, and telling it to push at t=0 would put an untested branch on origin for every
+      # local dispatch.
+      #
+      # A BARE REF CREATION, NOT AN EMPTY COMMIT — §4.1's "an empty commit is enough" is true of
+      # the sensor and false of everything downstream. The desk lander replays a branch's commits
+      # onto trunk with `commit-tree` (scripts/cloud-reconcile.sh reauthor_branch), which happily
+      # replays an empty one, so the literal contract would have put one content-free commit on
+      # main per cloud fire. `git push -u origin HEAD` creates exactly the same ref, is the same
+      # single observation to `ls-remote`, and leaves nothing to land.
+      local boot_rail=""
+      if [ "$venue" = cloud ]; then
+        boot_rail="BOOT PING — your FIRST act, before the FIRST STEP below and before you read anything. You are running OFF-BOX on a cloud VM: the repo path named above belongs to the DESK and does not exist for you, so work in the checkout you are already in and drop any git -C <path> prefix. Run exactly: git push -u origin HEAD. Why it is not busywork: from the desk, a cloud session that has pushed nothing is indistinguishable from one that never booted, one that died at boot, and one that was refused entitlement — all four read as no ref (docs/plans/CLOUD_OBSERVABILITY.md section 4.1), and every one of them is filed NOT-STARTED. This push is the ONLY evidence this box can read that you exist, and it is free: it creates the branch at the commit you are already on, adds no commit and lands nothing, so the return path still settles your row on the content you push later. Do NOT make an empty commit for it — the desk lander replays the commits of a branch onto trunk, and an empty one would land there as noise."
+      fi
       local staleness_rail
-      staleness_rail="FIRST STEP — read what this item cites on TRUNK, never in your own tree. Before ANY of those reads, deepen: run git -C $irepo rev-parse --is-shallow-repository, and if it prints true run git -C $irepo fetch --unshallow (a dispatched worker's checkout arrives SHALLOW at depth 50, and every trunk read below then answers from inside that horizon and answers WRONG in one direction only — 'git merge-base --is-ancestor' exits 1 both for 'no' and for 'I cannot see that far', 'git log <sha>..origin/main' prints nothing for both — so a cure that landed weeks ago reads as NEVER LANDED and you re-derive it; measured on one row, 11 of its 13 commits were re-derivation of a cure already on trunk and none of them landed). Then run: git -C $irepo fetch origin -q && git rev-list --count HEAD..origin/main (0 means your tree IS trunk; anything else means every file you are about to read predates it), then 'git show origin/main:<path>' for each file the item names, and check the cited sha against origin/main with 'git log --oneline <sha>..origin/main -- <path>'. A post-land RED reproduces FAITHFULLY in a stale tree, and against a fix that already landed, so a correct-looking diagnosis can produce a diff that REVERTS trunk (cc-backlog 6110fc45141e). If the cure is already on trunk, the item is DONE — close it with that sha as evidence rather than re-deriving it."
+      staleness_rail="FIRST STEP — read what this item cites on TRUNK, never in your own tree. Before ANY of those reads, deepen: run $gitc rev-parse --is-shallow-repository, and if it prints true run $gitc fetch --unshallow (a dispatched worker's checkout arrives SHALLOW at depth 50, and every trunk read below then answers from inside that horizon and answers WRONG in one direction only — 'git merge-base --is-ancestor' exits 1 both for 'no' and for 'I cannot see that far', 'git log <sha>..origin/main' prints nothing for both — so a cure that landed weeks ago reads as NEVER LANDED and you re-derive it; measured on one row, 11 of its 13 commits were re-derivation of a cure already on trunk and none of them landed). Then run: $gitc fetch origin -q && git rev-list --count HEAD..origin/main (0 means your tree IS trunk; anything else means every file you are about to read predates it), then 'git show origin/main:<path>' for each file the item names, and check the cited sha against origin/main with 'git log --oneline <sha>..origin/main -- <path>'. A post-land RED reproduces FAITHFULLY in a stale tree, and against a fix that already landed, so a correct-looking diagnosis can produce a diff that REVERTS trunk (cc-backlog 6110fc45141e). If the cure is already on trunk, the item is DONE — close it with that sha as evidence rather than re-deriving it."
       # DISPATCHER VINTAGE — the rail above tells the worker to settle the item against trunk and, if
       # the cure is there, to close on it. That disposition is right for a cure in the ITEM's
       # subject and WRONG for one in this rail's own machinery, because the machinery reaches the
@@ -2865,17 +2916,41 @@ dispatch() { # <dry|run|decide>
       # See dispatcher_stamp's header for why the dispatcher is the only process that can say this.
       local dstamp; dstamp="$(dispatcher_stamp)"
       local vintage_rail
-      vintage_rail="DISPATCHER VINTAGE — the bytes that composed this brief are bin/cc-dispatch blob $dstamp. One read settles whether they are current: git -C $irepo rev-parse origin/main:bin/cc-dispatch. EQUAL means the dispatcher that fired you IS trunk. DIFFERENT means it is BEHIND, so a remedy you find on trunk was not necessarily the code that ran when you were fired — landed is not live, and 'the fix already landed' does not answer 'did the fix run'. Say which in your close instead of assuming either; a mismatch here is a convergence fact about the deploy layer, not a new defect in the fix you are reading."
+      vintage_rail="DISPATCHER VINTAGE — the bytes that composed this brief are bin/cc-dispatch blob $dstamp. One read settles whether they are current: $gitc rev-parse origin/main:bin/cc-dispatch. EQUAL means the dispatcher that fired you IS trunk. DIFFERENT means it is BEHIND, so a remedy you find on trunk was not necessarily the code that ran when you were fired — landed is not live, and 'the fix already landed' does not answer 'did the fix run'. Say which in your close instead of assuming either; a mismatch here is a convergence fact about the deploy layer, not a new defect in the fix you are reading."
+      # ── THE THREE TERMINAL DISPOSITIONS, AND OFF-BOX ALL THREE VERBS ARE NO-OPS ──────────────
+      # `cc-backlog` and `cc-notify` write ~/.claude/autonomy/*, which exists only on the operator
+      # box. From a VM they answer `unknown id` / `role-unresolvable`, return 3 and write NOTHING —
+      # confirmed from inside a cloud VM on this dispatch, and the same measurement 0cc728a2 made a
+      # day earlier. So the incumbent tail hands an off-box worker three ways to finish and every
+      # one of them is silent: the row stays `open`, `open` IS cc-dispatch's fire predicate, and the
+      # next pass fires it again. That is the ten-dispatch loop of f85fce7c26f5 — and, measured on
+      # THIS row (0c8b39b67665), nine implementations on nine branches with none on trunk.
+      #
+      # The cloud tail therefore routes each disposition through the one medium a VM has, its
+      # branch. Both readers already exist on trunk and had no producer: `scripts/cloud-return.sh`
+      # step 8 (a landed `docs/parks/<id>.md` ⇒ `cc-backlog block`) and its path-set fill (landed
+      # content ⇒ `cc-backlog done`). §14 and §15 of the design doc are the contracts.
+      local t_done t_block t_info
+      if [ "$venue" = cloud ]; then
+        t_done="On completion: commit and PUSH this branch. Do NOT run cc-backlog done — the backlog store is on the operator box and the verb writes nothing from here; the desk closes the row from your landed content."
+        t_block="If blocked on an OPERATOR-only step (a key, a launchctl bootout, any human action you cannot do): run bash scripts/cloud-park.sh $id --needs \"<the exact step>\", then commit and PUSH it. That landed park is what the desk turns into cc-backlog block. Do NOT run cc-backlog block or cc-notify from here — both are no-ops off-box, and a row that reads open is re-dispatched over the top of you."
+        t_info="If the row is already cured, refuted, or unworkable: land a VERDICT ARTIFACT — a docs/research/<topic>-<date>.md naming the cure sha (assert it with git merge-base --is-ancestor <sha> origin/main), what you actually ran, and the evidence — then commit and PUSH. Do NOT push nothing: a branch with no commits is indistinguishable from a VM that never booted, and the row re-dispatches forever. Do NOT invent code work to justify a push either."
+      else
+        t_done="On completion: cc-backlog done $id --evidence \"<landed sha>\"."
+        t_block="If blocked on an OPERATOR-only step (a key, a launchctl bootout, any human action you cannot do): cc-backlog block $id --needs \"<the exact step>\" — this PARKS the item OUT of the dispatch wave (no re-dispatch loop, no burned worker slot) until the operator acts, then cc-notify --role desk \"<the step>\". Do NOT reopen an operator-gated item — that re-cycles it."
+        t_info="If blocked on info or a decision instead (not an operator step): cc-backlog reopen $id and cc-notify --role desk \"<the blocker>\"."
+      fi
       if ! printf '%s\n' \
         "TASK — ${title:-backlog item $id} — cc-backlog item $id (project $iproj, repo $irepo)." \
         "DoD ref: ${dod:-none}. Scope (frozen): drive this ONE item to finished-verified-landed." \
+        ${boot_rail:+"$boot_rail"} \
         ${pcontract:+"$pcontract"} \
         "$staleness_rail" \
         "$vintage_rail" \
         "Rails: $rails" \
-        "On completion: cc-backlog done $id --evidence \"<landed sha>\"." \
-        "If blocked on an OPERATOR-only step (a key, a launchctl bootout, any human action you cannot do): cc-backlog block $id --needs \"<the exact step>\" — this PARKS the item OUT of the dispatch wave (no re-dispatch loop, no burned worker slot) until the operator acts, then cc-notify --role desk \"<the step>\". Do NOT reopen an operator-gated item — that re-cycles it." \
-        "If blocked on info or a decision instead (not an operator step): cc-backlog reopen $id and cc-notify --role desk \"<the blocker>\"." \
+        "$t_done" \
+        "$t_block" \
+        "$t_info" \
         > "$pfile"; then
         # --by $SID: this is a SELF-RELEASE of the claim we took two lines up. cc-backlog's
         # live-claim reopen guard refuses a FOREIGN reopen of a live claim (and $SID — our own
@@ -3476,6 +3551,46 @@ STUB
   t "(c6) and the brief names that project + its resolved repo" \
     grep -q "project b, repo $tmp/repo-b" "$tmp/f9.txt"
   rm -f "$tmp/f9.txt"
+
+  # (c7) THE ABSENCE CONTRACT RIDES THE BRIEF, AND ONLY OFF-BOX (CLOUD_OBSERVABILITY.md §4.1/§16,
+  # backlog 0c8b39b67665). §8 step 2 has required a cloud worker to push its declared branch as its
+  # first act since the design was written, and no brief, hook or script ever emitted it — so the
+  # one verdict the whole state function rests on (C1 NOT-STARTED = "it never booted") had never
+  # had the evidence it names. Both halves are asserted, because either alone is the wrong change:
+  # a rail that never fires buys nothing, and one that fires LOCALLY would put an untested branch
+  # on origin for every local dispatch.
+  #
+  # The second pair is the same finding one layer down and was measured on a live dispatch: every
+  # rail hardcoded `git -C <the DESK's path>`, which does not exist on a VM, so the staleness rail
+  # — the one that protects the shallow clone a cloud worker actually gets — was inert on exactly
+  # the venue that needs it most.
+  reset; rm -f "$tmp/f7.txt"
+  seed_items '[{"id":"i7","project":"a","status":"open","title":"t7","venuePlan":"cloud"}]'
+  seed_plan '[{"id":"i7","account":"next3","fire_line":["--prompt-file","'"$tmp"'/f7.txt","--account","next3"]}]'
+  CC_FIRE_CLOUD=on CC_DISPATCH_OFFLOAD_BIN="$tmp/offload-stub.sh" "$SELF" --once >/dev/null 2>&1
+  t "(c7) a CLOUD brief carries the boot ping"            grep -q 'BOOT PING' "$tmp/f7.txt"
+  t "(c7) …and names the ONE command, not a description" grep -q 'git push -u origin HEAD' "$tmp/f7.txt"
+  t "(c7) …and forbids the empty commit that would land as trunk noise" \
+    grep -q 'Do NOT make an empty commit' "$tmp/f7.txt"
+  t "(c7) …and its rails are repo-RELATIVE: no desk path a VM cannot reach" \
+    bash -c "! grep -q 'git -C /' '$tmp/f7.txt'"
+  # THE TAIL, which is the other half of the same defect: a brief whose three terminal dispositions
+  # are all no-ops off-box leaves the row `open`, and `open` is the fire predicate. Adopted from
+  # 0cc728a2, the ninth stranded implementation of this row.
+  t "(c7) a CLOUD brief does NOT tell an off-box worker to /ship" \
+    bash -c "! grep -q 'project-local /ship' '$tmp/f7.txt'"
+  t "(c7) …it says the PUSH is the completion signal"     grep -q 'push IS your completion signal' "$tmp/f7.txt"
+  t "(c7) …it routes an operator gate through cloud-park" grep -q 'scripts/cloud-park.sh i7 --needs' "$tmp/f7.txt"
+  t "(c7) …and a cured/refuted row through a VERDICT ARTIFACT" grep -q 'VERDICT ARTIFACT' "$tmp/f7.txt"
+  t "(c7) …never through cc-backlog done, which writes nothing off-box" \
+    bash -c "! grep -q 'cc-backlog done i7' '$tmp/f7.txt'"
+  # NEGATIVE CONTROL, same harness, same predicate: a LOCAL brief has no ping and KEEPS the -C.
+  reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'
+  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","'"$tmp"'/f1.txt","--account","next3"]}]'
+  "$SELF" --once >/dev/null 2>&1
+  t "(c7) a LOCAL brief has NO boot ping"                bash -c "! grep -q 'BOOT PING' '$tmp/f1.txt'"
+  t "(c7) …and keeps its absolute git -C <repo> prefix"  grep -q 'git -C /' "$tmp/f1.txt"
+  t "(c7) …and keeps the on-box terminal dispositions"   grep -q 'cc-backlog done i1' "$tmp/f1.txt"
 
   # (c2) STRING fire_line (the real wave-plan shape, program-prefixed) → split argv, program
   # token dropped, brief still composed.

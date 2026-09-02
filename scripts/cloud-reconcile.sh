@@ -71,6 +71,13 @@
 # authorship of the commits that go on OUR trunk, and the VM's originals stay where they were.
 #
 # EXITS. 0 ok · 64 usage · 65 refusal (no CONFIRM · branch absent from the remote · retired) ·
+#   66 --land only: NOTHING TO LAND — the named branch carries no content against its trunk, i.e.
+#   the VM pushed the branch (so it booted, per the §4.1 absence contract) and committed no work to
+#   it. A NON-VERDICT, deliberately not 0 and not 70: 0 would send `cloud-return.sh` on to verify a
+#   path set that cannot exist, and 70 would file a land-refused artifact and wake the originator
+#   with LAND REFUSED over a branch with nothing wrong with it. Distinct from the desk-land 66
+#   listed below, which this script never propagates (a lander non-zero is always reported as 70).
+#   `--all` skips such a branch and does not count it as a failure. ·
 #   69 SENSOR FAILED (remote unreachable — never read as absence) · 70 at least one branch failed
 #   to land — which now includes "the range needed re-authoring and could not be re-authored", a
 #   per-branch failure like any other rather than a new exit code its callers would not read.
@@ -375,6 +382,38 @@ fetch_branch() {  # <repo> <branch> → 0 ok (FETCH_DETAIL non-empty ⇒ healed)
   fi
   FETCH_DETAIL="local '$b' has diverged, is checked out nowhere, and even a forced re-fetch from '$REMOTE' failed. This is not the stale-residue case."
   return 2
+}
+
+# ── A BRANCH THAT CARRIES NO CONTENT IS NOT A LAND, AND IT IS NOT A FAILURE EITHER ───────────
+# CLOUD_OBSERVABILITY.md §16. The absence contract (§4.1) asks a cloud worker to push its branch as
+# its first act so that "no ref" stops meaning four different things at once. The moment that lands,
+# a session that boots and then produces nothing HAS a ref — so it stops being C1 NOT-STARTED, which
+# `cloud-return.sh` skips, and starts being C5 ALIVE / C4 STALLED, which `cloud-return.sh` LANDS.
+# Nothing downstream was ready for that: the land would fetch, re-author, rebase and push a branch
+# whose commits change no file, and report the result as a refusal — a false alarm, per dead
+# session, latched against the originator.
+#
+# So the emptiness is checked HERE, before the fetch is spent on it, and it is reported as its own
+# non-verdict (exit 66) rather than as a refusal (70) or as a land that happened (0). A refusal
+# would file a land-refused artifact and wake the originator with LAND REFUSED over a branch that
+# has nothing wrong with it; a 0 would send the return path on to content-verify a path set nobody
+# can derive, leave custody churning and mark the row returned.
+#
+# THREE-DOT, and fail OPEN. `trunk...branch` is the merge-base range — the same one `diff_size` and
+# `cc-cloud fill-paths` use — so a branch that is merely BEHIND trunk still reads as carrying its
+# own content. A `git diff` that cannot run at all is 2 (cannot tell) and the caller proceeds to the
+# incumbent land: a sensor that could not run is not a verdict (§4.2), and the direction that
+# abstains toward the existing behaviour is the safe one.
+CONTENT_DETAIL=""
+branch_carries_content() {  # <repo> <trunk-ref> <branch> → 0 content · 1 none · 2 cannot tell
+  local repo="$1" trunk="$2" b="$3" drc=0
+  CONTENT_DETAIL=""
+  "$GIT_BIN" -C "$repo" diff --quiet "$trunk...refs/heads/$b" >/dev/null 2>&1 || drc=$?
+  case "$drc" in
+    0) CONTENT_DETAIL="its commits change no file against $trunk"; return 1 ;;
+    1) return 0 ;;
+    *) CONTENT_DETAIL="git diff could not compare $trunk with refs/heads/$b (rc $drc)"; return 2 ;;
+  esac
 }
 
 diff_size() {  # <repo> <trunk-ref> <branch> → changed-file count (large sentinel if undecidable)
@@ -686,6 +725,12 @@ EOF
   rc=0; fetch_branch "$C_REPO" "$TARGET" || rc=$?
   [ "$rc" -eq 0 ] || die 65 "could not bring '$TARGET' into $C_REPO as a local head — $FETCH_DETAIL"
   [ -n "$FETCH_DETAIL" ] && echo "→ $TARGET — $FETCH_DETAIL"
+  rc=0; branch_carries_content "$C_REPO" "$C_TRUNK" "$TARGET" || rc=$?
+  if [ "$rc" -eq 1 ]; then
+    echo "· $TARGET — $CONTENT_DETAIL. The VM pushed the branch (so it booted) and committed no work to it: nothing to land, and nothing failed."
+    exit 66
+  fi
+  [ "$rc" -eq 2 ] && echo "? $TARGET — $CONTENT_DETAIL; proceeding with the land rather than treating a sensor failure as a verdict." >&2
   derive_paths "$C_ID"
   rc=0; reauthor_branch "$C_REPO" "$C_TRUNK" "$TARGET" "$C_ID" || rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -724,6 +769,12 @@ while IFS= read -r b || [ -n "$b" ]; do
     continue
   fi
   [ -n "$FETCH_DETAIL" ] && echo "→ $b — $FETCH_DETAIL"
+  rc=0; branch_carries_content "$C_REPO" "$C_TRUNK" "$b" || rc=$?
+  if [ "$rc" -eq 1 ]; then
+    echo "· $b — skipped: $CONTENT_DETAIL (booted and pushed, committed no work). Not a failure — it is not counted against this sweep."
+    continue
+  fi
+  [ "$rc" -eq 2 ] && echo "? $b — $CONTENT_DETAIL; proceeding with the land rather than treating a sensor failure as a verdict." >&2
   derive_paths "$C_ID"
   rc=0; reauthor_branch "$C_REPO" "$C_TRUNK" "$b" "$C_ID" || rc=$?
   if [ "$rc" -ne 0 ]; then
