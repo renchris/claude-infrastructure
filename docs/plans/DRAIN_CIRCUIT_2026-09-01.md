@@ -517,6 +517,78 @@ tell the child its bound rather than the value living in two places that cannot 
 IDL's history is 137 or 4. Until one pass reports 0, the lane is not fixed — it has only been made
 to close a single item during W3's own supervised run.
 
+### W5 — the deadline is BUILT and LANDED; the acceptance number is blocked one layer down
+
+`8da7f30b2` (`fix(cloud-return): the caller bounds this pass in TIME`) implements §3d, landed and
+content-verified on trunk (4 paths, `land-verify` ✓, stranded-sweep clean).
+
+**What it does.** `autonomy-sweep.sh` now holds the bound in ONE variable, `_cloudret_bound`, which
+both arms `timeout -k 10` and is exported as `CC_RETURN_BOUND_S`; the child's single-flight lock TTL
+derives from the same figure, deleting the hand-written `1200` that was "900 plus a third". In the
+handle loop the child stops STARTING work when `elapsed + reserve` no longer fits 80% of that bound,
+where **the reserve is measured, not assumed** — the pass times each `handle()` and carries the
+worst forward, floored (first unit only) at the caller's own 120 s smoke budget. That is the part a
+count cannot do: when land cost rises the reserve rises on the very pass that observed it. The stop
+is journalled as its own `pass-deadline` ledger row, never folded into the cursor's `deferred`, and
+the cursor is rewound to what the pass actually did so the unstarted tail returns next tick instead
+of waiting a full rotation.
+
+**One defect the tests surfaced, and it is the interesting one.** Newest-first governed ADMISSION
+but not PROCESSING: the re-selection iterated the STATE rows and kept whichever ids matched,
+discarding the sort it had just paid for. Invisible while every admitted row got handled — and
+decisive the moment a budget can run out partway, because whoever starts first is who spends it. A
+deadline over an unordered loop would have spent the budget on exactly the stale branches the sort
+exists to deprioritise.
+
+**Suites** cloud-return 44/44, autonomy-sweep 62/62, with **seven mutants RED-proved**, each on its
+own assertion: the check deleted · the `pass-deadline` row deleted · the cursor rewind deleted · the
+check firing unconditionally (caught by the FITS control, so the suite proves it fires for the right
+*reason*, not merely that it can fire) · the handle order reverted · a literal `900` beside a correct
+export · a correct `timeout` with no export. The deadline arms run on the REAL clock against a
+genuinely slow fixture: every other arm in that suite freezes `CC_RETURN_NOW`, and a frozen clock
+makes elapsed permanently 0 — a deadline that cannot fire, certified by a harness that collapsed the
+two states it exists to tell apart.
+
+🚨 **AND THE ACCEPTANCE NUMBER IS STILL NOT OBSERVED, FOR A REASON ONE LAYER BELOW THIS WAVE.**
+`cloud_return_rc` is written by the DEPLOYED sweep, and the deployed sweep is a symlink into the
+shared checkout's working tree — which `deploy-live.sh` refuses to advance:
+
+```
+deploy-live: waiting — no GREEN tree is a DESCENDANT of live HEAD 850d25a309f5 (the newest one,
+             1eb128f88087, is BEHIND it); lag 9 commit(s) / 1h, inside the degrade budget (25 / 6h)
+```
+
+The converger is fail-closed on `postland-verify`'s stamp, and **that verifier is being CUT, not
+going red**. Its newest stamp is for this wave's own commit and reads:
+
+```
+{"commit":"8da7f30b2…","verdict":"cut","failing":[],"run_s":2157,"suites":558,"env":{"load":"14.42"}}
+```
+
+`cut` is a machine event, not a verdict about the tree — `failing` is empty. A second run was in
+flight at 2026-09-02T08:30Z under load 21.4/66.6/54.2. So the chain is: full-suite run cut by load →
+`last-green` stays behind live HEAD → `deploy-live` correctly refuses → the live rail keeps executing
+the PRE-deadline bytes → every tick is still 137. **Nothing about that indicts the deadline check**,
+and nothing in this wave can drive it: it is the same class as §3c's smoke-budget finding — a bound
+sized against a quiet machine, on a box whose load never gets quiet.
+
+**What WAS measured about the fix on real data.** A bounded pass over a copy of the live declaration
+store (613 declarations, 496 pending managed, 25 taken) under `CC_RETURN_BOUND_S=900`:
+
+```
+rc=0 elapsed=49s   cloud-return: 25 of 496 pending managed session(s) (cursor 275 → 300, 471 deferred)
+```
+
+Stated with its limit: that run is `--dry-run`, so it exercises the pass's FIXED cost (49 s, agreeing
+with W3's 43 s) and not the lands, which are what the deadline exists to stop mid-slice. It proves
+the overhead is not the binding constraint; the deadline's behaviour under real lands is proved by
+the suite, and will be proved on the rail by the first `cloud_return_rc` of 0 after the live layer
+converges.
+
+**Also observed, live, while this wave ran**: pid 42611 — `cloud-return.sh --sweep --limit 25` out of
+the live checkout — held the lock for 7m48s of its 900 s bound with no deadline check in it. That is
+the defect still executing, on the old bytes, as designed until convergence.
+
 
 ## 4. Status log
 
@@ -580,6 +652,19 @@ to close a single item during W3's own supervised run.
   on a torn frame and two `cc-pane send` retries never reached this pane's transcript, so W3 ran the
   whole wave with no Stop-hook backstop (operator step `d7d5a8533f58`). It did not close early, but
   that was discipline rather than mechanism.
+
+- **2026-09-02 — W5 DONE as built-and-landed, NOT as accepted** (`8da7f30b2`, worktree
+  `drain-deadline-w5`). §3d's deadline check is in the handle loop, the bound flows from the caller
+  that owns the `timeout`, the deferral is its own ledger row and the cursor resumes at the row the
+  pass did not start. cloud-return 44/44 · autonomy-sweep 62/62 · 7 mutants RED-proved. Landed and
+  content-verified. **The acceptance number — a `cloud_return_rc` of 0 — is NOT observed, and the
+  binding constraint is now one layer below this wave**: `deploy-live.sh` is fail-closed on
+  `postland-verify`, whose newest stamp is for this wave's own commit and reads `verdict:"cut"` with
+  `failing:[]` at load 14.42 (a machine event, not a verdict), so `last-green` stays BEHIND live HEAD
+  and the deployed sweep goes on executing the pre-deadline bytes. Full detail, plus the 49 s / rc 0
+  bounded dry-run over a copy of the real 613-declaration store and the limits of that measurement,
+  in §3d's W5 subsection. This is the same class as §3c's smoke budget: a bound sized against a quiet
+  machine, on a box that is never quiet.
 
 - **Still open after tonight**: the four §3b kills are FIXED (W3, above). What remains is
   (a) **the sweep's own runtime** — it needs a self-bound so it stops being garbage-collected at
