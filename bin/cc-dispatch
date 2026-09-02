@@ -978,6 +978,42 @@ refresh_trunk() {
   TRUNK_REFRESH_BAD="${TRUNK_REFRESH_BAD:-}$p$NL"; return 1
 }
 
+# dispatcher_stamp → the git blob sha of the bytes of THIS running dispatcher, or "unknown (<why>)".
+#
+# WHY A DISPATCHER REPORTS ITS OWN VINTAGE TO THE WORKER IT FIRES. Every remedy this rail has landed
+# for the re-dispatch loop — the park interlock, refresh_trunk above, the admission-gate record — is
+# a change to bytes that reach the loop's ACTUATOR only through the per-file symlink layer, whose
+# convergence has no ordering relation to the landing (memory: deploy-lag-checkout-behind-origin;
+# the same happens-after hole refresh_trunk closed one layer down, about the park's ref). So "the fix
+# is on trunk" and "the fix ran" are different claims, and three consecutive sections of
+# docs/research/tenant-drift-venue-refusal-2026-08-24.md asserted the first while meaning the second.
+# §9 said what the rail needs is a liveness assertion AT ITS DESTINATION and looked for it on the
+# desk. It arrives in the brief: the dispatcher is the one process that both holds the bytes in
+# question and speaks to someone who can check them.
+#
+# A BLOB SHA AND NOT A VERSION STRING, because it needs no maintenance and is directly comparable:
+# `git rev-parse origin/main:bin/cc-dispatch` prints the same object name, so ONE read settles it.
+# A hand-bumped version constant is a second copy of the truth that goes stale exactly when it
+# matters — the defect this file's conf handling already refuses in three other places.
+#
+# `git hash-object` needs NO repository (measured: rc 0 with cwd outside any checkout), which is the
+# property that makes this safe on the deploy layer, where $_self resolves into the checkout but the
+# process's cwd is wherever launchd left it.
+#
+# FAILS OPEN AND SAYS SO, never silently omits the line. An absent stamp is indistinguishable from a
+# dispatcher too old to emit one, and this whole rail exists because three outcomes arrived at every
+# reader as one silence (bin/cc-backlog's admission-gate record, same argument). "unknown (<why>)"
+# names the uncertainty positively — bin/cc-eligible's doctrine, one layer up.
+dispatcher_stamp() {
+  local h
+  [ -n "${_self:-}" ] && [ -r "${_self:-}" ] || { printf 'unknown (own path unresolved)'; return 0; }
+  h="$(git hash-object -- "$_self" 2>/dev/null)" || h=""
+  case "$h" in
+    [0-9a-f]*) printf '%s' "$h" ;;
+    *)         printf 'unknown (git hash-object gave no object name)' ;;
+  esac
+}
+
 # self_release <id> <token> → releases the claim we took but never started work on, and ECHOES the
 # journal marker that is actually TRUE of the release (", self-release" or nothing).
 #
@@ -2821,11 +2857,21 @@ dispatch() { # <dry|run|decide>
       # would command-substitute at compose time and write its OUTPUT into the worker's brief.
       local staleness_rail
       staleness_rail="FIRST STEP — read what this item cites on TRUNK, never in your own tree. Before ANY of those reads, deepen: run git -C $irepo rev-parse --is-shallow-repository, and if it prints true run git -C $irepo fetch --unshallow (a dispatched worker's checkout arrives SHALLOW at depth 50, and every trunk read below then answers from inside that horizon and answers WRONG in one direction only — 'git merge-base --is-ancestor' exits 1 both for 'no' and for 'I cannot see that far', 'git log <sha>..origin/main' prints nothing for both — so a cure that landed weeks ago reads as NEVER LANDED and you re-derive it; measured on one row, 11 of its 13 commits were re-derivation of a cure already on trunk and none of them landed). Then run: git -C $irepo fetch origin -q && git rev-list --count HEAD..origin/main (0 means your tree IS trunk; anything else means every file you are about to read predates it), then 'git show origin/main:<path>' for each file the item names, and check the cited sha against origin/main with 'git log --oneline <sha>..origin/main -- <path>'. A post-land RED reproduces FAITHFULLY in a stale tree, and against a fix that already landed, so a correct-looking diagnosis can produce a diff that REVERTS trunk (cc-backlog 6110fc45141e). If the cure is already on trunk, the item is DONE — close it with that sha as evidence rather than re-deriving it."
+      # DISPATCHER VINTAGE — the rail above tells the worker to settle the item against trunk and, if
+      # the cure is there, to close on it. That disposition is right for a cure in the ITEM's
+      # subject and WRONG for one in this rail's own machinery, because the machinery reaches the
+      # loop's actuator through a converger with no ordering relation to the landing. So the stamp
+      # rides immediately AFTER the rail, as the qualifier on its conclusion: landed is not live.
+      # See dispatcher_stamp's header for why the dispatcher is the only process that can say this.
+      local dstamp; dstamp="$(dispatcher_stamp)"
+      local vintage_rail
+      vintage_rail="DISPATCHER VINTAGE — the bytes that composed this brief are bin/cc-dispatch blob $dstamp. One read settles whether they are current: git -C $irepo rev-parse origin/main:bin/cc-dispatch. EQUAL means the dispatcher that fired you IS trunk. DIFFERENT means it is BEHIND, so a remedy you find on trunk was not necessarily the code that ran when you were fired — landed is not live, and 'the fix already landed' does not answer 'did the fix run'. Say which in your close instead of assuming either; a mismatch here is a convergence fact about the deploy layer, not a new defect in the fix you are reading."
       if ! printf '%s\n' \
         "TASK — ${title:-backlog item $id} — cc-backlog item $id (project $iproj, repo $irepo)." \
         "DoD ref: ${dod:-none}. Scope (frozen): drive this ONE item to finished-verified-landed." \
         ${pcontract:+"$pcontract"} \
         "$staleness_rail" \
+        "$vintage_rail" \
         "Rails: $rails" \
         "On completion: cc-backlog done $id --evidence \"<landed sha>\"." \
         "If blocked on an OPERATOR-only step (a key, a launchctl bootout, any human action you cannot do): cc-backlog block $id --needs \"<the exact step>\" — this PARKS the item OUT of the dispatch wave (no re-dispatch loop, no burned worker slot) until the operator acts, then cc-notify --role desk \"<the step>\". Do NOT reopen an operator-gated item — that re-cycles it." \
