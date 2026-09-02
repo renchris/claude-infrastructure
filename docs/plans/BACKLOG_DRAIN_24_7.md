@@ -86,6 +86,135 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-02 — drain recycle #282: method 254 — TWO RESIDUALS NAMED AS INDEPENDENT WERE ONE, AND
+  THE OBVIOUS REPAIR WAS THE WRONG ONE.** ZERO rows closed, ZERO filed, ZERO reopened. TWO commits.
+  **The land facts live in `git log --oneline origin/main`, and the push is deliberately not
+  claimed here**: this entry is composed BEFORE the land, and a claim about an event that has not
+  happened cannot be stamped at all (#237). #281's own brief said "TWO commits, ONE push" over a
+  land that carried FOUR, which is that rule failing in exactly this slot.
+  **THE INHERITED LEAD, TAKEN — AND IT IS THE RESIDUAL MY PREDECESSOR NAMED RATHER THAN WIDENED.**
+  #281 landed `qmask()` into `scripts/pipefail-sigpipe-lint.sh` and left a sentence naming two
+  gaps as independent: it does not join CONTINUATION lines, and it treats a dangling quote as
+  opening a context that runs to end of line. Read cold, the second is a fail-OPEN in a detector
+  wired into `ship-land` as a blocking gate — an unpartnered quote masks every `|` after it, the
+  stage split does not cut, the line collapses to ONE segment, and the site is dropped before
+  clause 2 renders any verdict. The sibling masker `strip280.awk` takes the OPPOSITE contract on
+  the same input class ("a quote with no partner is a LITERAL, so the tail stays RAW"), and its own
+  selftest pins it. **Two siblings, one axis, opposite fail directions, and only one of them
+  landed.** I set out to adopt #280's contract and the measurement stopped me.
+  **METHOD 213 FIRST — RUN THE REASON.** Instead of arguing about reachability, I instrumented the
+  SHIPPED program at its split site: **one INSERTED line, nothing removed**, with `qdangle()`
+  DERIVED from the shipped `qmask()` by two asserted-unique replacements (the signature and the
+  return) rather than re-implemented, and the instrumented program asserted to emit findings
+  BYTE-IDENTICAL to the control before any other number was read. Over the real scanned population,
+  2026-09-02: **2,125 lines across 240 files end with the quote context still open**, and on **135
+  of them across 58 files at least one `|` was masked**. The class is not exotic — it is this
+  tree's house style, multi-line `jq` and `awk` programs, led by `bin/cc-backlog` at 105 lines and
+  `scripts/handoff-fire.sh` at 86.
+  **AND ONE LANDED CLAUSE IS AN OVER-CLAIM, CORRECTED IN THE FILE.** #281 wrote *"LOST = 0 says the
+  mask never eats an operator pipe on this tree."* That is not what LOST = 0 says. LOST counts
+  **findings** the quote-aware program stopped reporting, so a masked operator pipe only becomes a
+  LOST row if that site was already a finding. **The mask does eat operator pipes.** What LOST = 0
+  established is the much narrower and still-true thing: doing so costs no verdict.
+  **THE LIVE EXAMPLE, VERIFIED RATHER THAN ASSERTED.** `bin/cc-blockers:1271` is the CLOSING line
+  of a multi-line `jq` program. Its first apostrophe CLOSES that program, so the `|` after it is a
+  shell operator — and it is masked: **2 raw pipes, 1 survivor**, read out of the real extracted
+  `qmask()` fed the real line. No verdict moves only because the consumer is a `while … read` loop,
+  which `is_early()` does not match — **measured 0, beside a positive control at 1 so the zero is
+  not mute**. The harmlessness is an accident of the consumer, not a property of the mask.
+  **THE FINDING, AND IT IS WHY I DID NOT FLIP THE CONTRACT.** By shell grammar a physical line
+  carrying an unpartnered quote is one of exactly two things: the **OPENING** line of a multi-line
+  quoted construct, whose tail is genuinely DATA and must not be judged, or the **CLOSING** line of
+  one, whose tail is genuinely CODE and should be. **The discriminator lives on a PREVIOUS line**,
+  so no line-local contract can be right about both. The two residuals are therefore ONE: the
+  dangling-quote contract is the visible half of the missing continuation join, it is not
+  line-locally repairable, and the join is owned by `ca97c678b18b` (BLOCKED — an off-box worker
+  holds it) with `pipe258.py` already a working joiner nobody has wired in.
+  **PRICED IN THE SUBJECT'S OWN UNIT, THE ALTERNATIVE BUYS NOTHING AND COSTS THE COMMON CASE.**
+  Same two-extractor harness, same population, a mutant differing in exactly TWO existing lines —
+  both quote-OPEN lines, asserted by name: **control reproduces `--census` EXACTLY at 125, mutant
+  125, LOST = 0, NEW = 0**, partition asserted to sum. It does not even repair `cc-blockers:1271`,
+  whose first apostrophe HAS a later partner on the line. What it would break is the 2,125-line
+  common case, whose tails would then be judged as code. **A zero with no firing control is
+  nothing at all (#243), so the arm beside it is a FIRE control: on a built fixture the shipped
+  contract renders NO finding and the mutant renders one.** The alternative CAN change a verdict;
+  on this tree it changes none.
+  **SO THE MOVE IS A PIN, AND A PIN EARNS NOTHING FROM A GREEN SUITE.** `tests/pipefail-sigpipe-
+  lint.bats` **24 → 25**, appended. Arm 25 carries two fixtures differing in ONE variable — whether
+  an unpartnered quote precedes the pipeline — and the paired-quote twin is its FIRE control, so
+  the green cannot be an artefact of a shape the lint never reports. **Its attribution is a
+  mutant**: the two quote-OPEN lines of the shipped `qmask()` take a partner test, the REAL suite
+  runs against the REAL lint, and the result is **exactly ONE red, and it is arm 25** — read off
+  the emitted TAP line's own shape rather than a retyped name (#272's parser scar), with the plan
+  pinned at 25, the baseline asserted green first, and the subject restored byte-identical by
+  sha256 in a trap.
+  **NOT A WIDENING, AND THE `.sh` HALF IS PROVEN COMMENT-ONLY BY CONTENT.** `--census` **125 in,
+  125 out**, keyed on **(path, TEXT)** rather than `path:line` because this diff adds comment lines
+  and shifts every number below them, with the key extractor's own POS control at **44 distinct
+  paths** so a zero cannot come from a mute reader. The scripts-side claim is sha256 over
+  NON-COMMENT lines against a clean `git archive origin/main` extraction — **equal** — beside a
+  MUTE control asserting the two files DO differ with comments kept, so the gate cannot pass over a
+  change it simply could not see.
+  **TWENTY GATED PREDICTIONS ACROSS THREE PROBES, ONE REFUSED — AND IT WAS MINE, IN THE
+  INSTRUMENT.** The example probe anchored on the substring `] | @tsv`, which reads **3** in that
+  file because two sibling `jq` programs end the same way. #245's fix exactly: a WHOLE-LINE anchor
+  CARRYING ITS LEADING WHITESPACE, plus a control asserting the substring still reads 3, so the
+  narrowing landed on 1 rather than on nothing. **That is the fifth consecutive link whose only
+  faults were in the measuring apparatus, and it surfaced as a refusal rather than a wrong number.**
+  **LINTS RUN, AND THE ONES NOT RUN DECLARED BY NAME.** `shellcheck` **0 findings** · `bash -n`
+  rc 0 · `--selftest` **32/32** (the inherited brief said 30/30 — take your own) · bare ratchet
+  `✓ clean (allowlist honoured)` · `bats --count` 25 · `bats-assert-liveness` rc 0 ·
+  `bats-shellcheck-lint --range` *"clean — 1 suite(s) scanned, 0 blocking finding(s), 0
+  unanalyzable"* · `test-walltime-lint tests` *"clean — 561 suite(s); 1 grandfathered, 0 new time
+  bombs"* (**561, where #281 read 560 — a sibling landed twice inside my link**) ·
+  `unattended-path-lint --selftest` **47/47**. **DECLARED NOT-RUN:** `alarm-polarity-lint`
+  (neither file is an alarm emitter, and its POS control is a KNOWN MUTE — `e07dc5e09f83`, OPEN, do
+  not re-file) and the seven own-scope lints whose subjects this diff does not touch.
+  **THE BOARD.** Gap from #281's floor (06:38:31Z) to my open (06:43:12Z), **4 m 41 s**: ZERO
+  arrivals, ZERO departures, ZERO transitions — a statement about a 4-minute window and nothing
+  more. My link body, open 06:43:12Z **344 open / 231 blocked / 2,360 done / 5 claimed** (575
+  combined, 2,940 rows) to close 07:09:27Z **344 / 230 / 2,360 / 6** (574 combined, 2,940 rows),
+  **26 m 15 s**: ZERO arrivals, ZERO departures, **ONE transition** — `abf5e7509608`
+  blocked → claimed, `claude-infrastructure`, and **NOT mine**: I closed no row and filed none, so
+  nothing needed subtracting, and I say so rather than reporting a raw number as though the
+  question had not arisen (#261). Both partitions asserted at both moments; all five lists
+  `sort -c`'d; arrivals and departures from a FULL-SET `comm` with the direction NAMED rather than
+  resolved by `mtime`.
+  **THE STORES, single readings at 07:09:48Z and NOT deltas — I did not take them at my open, and
+  say so rather than implying a window.** postland RED pages **0 over a denominator of 2,843** (my
+  open read the same zero over 2,842) · the other page store **2,425 all / 81 `.page`** ·
+  inbox-guard **433**, every file a `.escalated` marker so it is ONE number and not a ratio ·
+  postland stamps **545** · decisions 169 · custody 27 · cloud 1,951.
+  **THE LANE, AND THE READING THAT MEASURED NOTHING IS LABELLED AS SUCH.** My open (06:42Z, clean
+  tree, `trunk..HEAD = 0`) read `RUNG=✅ LIVE_SRC=behind LIVE_LAG=7 LIVE_ADDS=0 LIVE_AGE=4074`
+  — well inside the 21,600 s time arm — with the shared checkout **7 behind** trunk where #281 read
+  9 and #280 read 0. My close census read `LIVE_SRC=skip` and **that is a non-reading, not a
+  converged lane**: `compute_live_layer()` is called ONLY on the ✅-eligible path and by then
+  `trunk..HEAD` was 1. `GATE=stale` at both — the one-hundred-and-twenty-first consecutive, and
+  still not mine to drive. The qos heredoc diff: **rc 0, 0 bytes**.
+  **THE STANDING RED IS UNCHANGED AT 2 ACTIONABLE, AND ITS REFERENCE MOVED AGAIN.**
+  `deploy-link-parity.sh` rc 1: **461 linked · 0 staged-pending · 10 live-extra · 54 unmapped · 2
+  actionable** at 06:42Z, against #281's **459** linked at the same 2 actionable — and its own
+  reference line says the shared checkout is **7 commit(s) BEHIND** where #281 read 9 and #280 read
+  0. **The linked count MOVED and the actionable count did not; a stable number computed against a
+  moving reference is not the same claim twice** (method 269). Both survivors unchanged:
+  `hooks/enforce-email-formatting.py.bak-20260824-193645` and
+  `scripts/automode-restore-defaults.sh`. The executing blob still equals trunk's — `6c58711286ff`
+  on both sides, a FIFTH consecutive link.
+  **THE FOUR KITTY CHECKS, ALL FOUR, BY MINUTE ~2.** `cc-in-kitty` rc 0 · `KITTY_WINDOW_ID=27`,
+  `KITTY_PID=1427`, `TERM=xterm-kitty`, `ITERM_SESSION_ID=w0t0p0:27`, `CC_TERM` UNSET · the
+  id-keyed `kitty @ ls` query run THROUGH A FILE (rc 0, 0 stderr bytes, 227,850 json bytes)
+  returning **EXACTLY ONE** object with a bogus-id NEG control at 0, `cwd` = my own worktree ·
+  `cc-notify --self` printed **27**. `cc-roles list` returned the byte-identical four-row table
+  again; the mailbox file is **4,059 bytes, 1 line**, unchanged and already consumed.
+  **WHAT I LEAVE #283.** The dangling-quote residual is now MEASURED and PINNED, so do not re-take
+  it and do not flip the contract — arm 25 will refuse you, and the reason is in the file. The
+  honest remaining work on that axis is the continuation join itself, and it is `ca97c678b18b`'s,
+  which is **BLOCKED**: do not take it, do not reopen it. The next unspent thing on this detector
+  is the one #280 named and nobody has run — the four files that still latch at EOF from a `<<TOK`
+  inside quoted CODE rather than inside a comment, where the residual sentence says plainly that
+  tightening the opener test *"wants its own measurement"*. That measurement is the shape this link
+  just demonstrated: instrument the shipped program, do not re-implement it.
 - **2026-09-02 — drain recycle #281: method 253 — THE ARITHMETIC DECIDES THE SCOPE, AND HERE IT
   RULED OUT THE OPTION THAT READ AS CHEAPER.** ZERO rows closed, ZERO filed, ZERO reopened. FOUR
   commits, ONE push.
