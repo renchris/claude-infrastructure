@@ -142,6 +142,47 @@ case "$TP" in "~"*) TP="$HOME${TP#\~}" ;; esac
 [ -f "$TP" ] || abstain "transcript-missing"
 [ -n "$CWD" ] || abstain "no-cwd"
 
+# ── OPERATOR KILL-SWITCH (2026-09-02) ────────────────────────────────────────────────────────────
+# The resident CLAUDE.md documents "…and stop" / "no auto-continue" / "just do X" as suspending
+# auto-continue for that turn. That was only ever HALF true: it clears session-continue's sentinel
+# (session-continue.sh:971) and suppresses all three of its floors (:745, :656, :863) — and this
+# hook had NO kill-switch check anywhere in 962 lines, so the very Stop the operator just disarmed
+# could still be blocked here. An escape hatch that stops one of two blockers is not an escape
+# hatch: the operator experiences "I said stop and it kept going" and cannot tell which hook did it.
+#
+# Sited HERE, above the close-tell gate, deliberately — the operator's instruction outranks every
+# assertion below it, D6/D7 shape contracts included, so nothing below should get a vote.
+# Regex and reader are ported VERBATIM from session-continue.sh:187-208 rather than re-derived: one
+# spelling of the switch, or the two hooks disagree about what "stop" means, which is exactly the
+# two-oracles-over-one-population defect this session's audit found in the custody count.
+# Bias to DETECT (session-continue.sh:203-204): a false positive costs one un-asserted close that
+# the next turn re-raises; a false negative is the bug being fixed.
+CA_KILL_RE='(^|[^[:alnum:]])and( then)? stop([^[:alnum:]]|$)|no[ _-]?auto[ _-]?continue|(^|[^[:alnum:]])just do [^[:space:]]|(^|[^[:alnum:]])stop here([^[:alnum:]]|$)|come back to this|^[[:space:]]*(stop|halt)[[:space:].!]*$'
+ca_last_user_msg() {
+  jq -r 'select(.type=="user")
+         | .message.content
+         | if type=="string" then .
+           elif type=="array" then ([.[]?|select(.type=="text")|.text]|join("\n"))
+           else empty end
+         | select(. != "")' "$TP" 2>/dev/null | tail -1
+}
+if [ "${CC_CLOSE_KILLSWITCH:-1}" != "0" ]; then
+  _ca_km="$(ca_last_user_msg || true)"
+  # DRAINED, not `grep -q`, to satisfy scripts/pipefail-sigpipe-lint.sh's ratchet. HONEST SCOPE OF
+  # THE CLAIM: the shape the ratchet names is real in general — under `set -o pipefail` an
+  # early-exiting consumer can SIGPIPE its producer and the pipeline then reads FALSE on a MATCH —
+  # but it was NOT reproducible at this site. Probed directly at 256 KiB with the match at byte 0
+  # (the most favourable case for an early exit): `grep -q` still returned the match, because the
+  # producer here is the bash BUILTIN printf, not a forked streamer. So this is defence against a
+  # pattern, not the fix of a demonstrated defect, and no test asserts a behaviour difference —
+  # a test that passes on both branches would be a false assurance, so none was kept. Draining is
+  # free and correct by construction; the note exists so a later reader does not infer a bug that
+  # was never shown.
+  if [ -n "$_ca_km" ] && printf '%s' "$_ca_km" | grep -iE "$CA_KILL_RE" >/dev/null; then
+    abstain "kill-switch"
+  fi
+fi
+
 # ── the wrap-ledger memo's EVENT key (P0-4, scripts/wrap-ledger.sh § THE MEMO) ──
 # Seven Stop-hook call sites each pay a full ~180 ms / 19-git ledger on every close. They are one
 # event, so they should observe one snapshot: handing the ledger this session's transcript is what

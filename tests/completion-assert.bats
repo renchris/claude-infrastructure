@@ -1636,3 +1636,40 @@ Two things remain yours before this is fully wired up.")" "$w" "d7-e2e"
   [ "$status" -eq 0 ]; [ -z "$output" ]
   /usr/bin/grep -q '"reason":"ledger-clean"' "$COMPLETION_IDL"
 }
+
+# ── OPERATOR KILL-SWITCH (2026-09-02) ────────────────────────────────────────────────────────────
+# The resident CLAUDE.md promises "…and stop" / "no auto-continue" / "just do X" suspends
+# auto-continue for that turn. It cleared session-continue and NOT this hook, so the operator's
+# escape hatch stopped one of two blockers — measured: an identical close blocked here after the
+# operator had said "just do the readme and stop".
+# The three arms below are the full proof: the switch abstains, its ABSENCE still fires (so this is
+# not a blanket suppressor), and the seam OFF fires again (so the new code is the cause).
+mkfix_user() { # <assistant-close> <last-user-msg> → transcript path
+  local text="$1" umsg="$2" path="$BATS_TEST_TMPDIR/txu-${BATS_TEST_NUMBER}-$RANDOM.jsonl"
+  {
+    jq -nc '{type:"user",message:{role:"user",content:"audit the hooks"}}'
+    jq -nc --arg u "$umsg" '{type:"user",message:{role:"user",content:$u}}'
+    jq -nc --arg t "$text" '{type:"assistant",message:{content:[{type:"text",text:$t}]}}'
+  } > "$path"
+  printf '%s' "$path"
+}
+
+@test "KILL-SWITCH: '…and stop' over a contradicting ledger ⇒ ABSTAIN" {
+  local w; w="$(mkrepo_unlanded ks1)"
+  run run_ca "$(mkfix_user "Done. Landed at abc1234, all green." "just do the readme and stop")" "$w" "ks-1"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  /usr/bin/grep -q '"reason":"kill-switch"' "$COMPLETION_IDL"
+}
+
+@test "KILL-SWITCH CONTROL: the same close with NO kill phrase ⇒ still FIRES" {
+  local w; w="$(mkrepo_unlanded ks2)"
+  run run_ca "$(mkfix_user "Done. Landed at abc1234, all green." "please do the readme too")" "$w" "ks-2"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+
+@test "KILL-SWITCH SEAM: CC_CLOSE_KILLSWITCH=0 restores the pre-fix block" {
+  local w; w="$(mkrepo_unlanded ks3)"
+  export CC_CLOSE_KILLSWITCH=0
+  run run_ca "$(mkfix_user "Done. Landed at abc1234, all green." "just do the readme and stop")" "$w" "ks-3"
+  [ "$status" -eq 0 ]; fired "$output"
+}
