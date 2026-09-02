@@ -87,8 +87,8 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 - **2026-09-02 — drain recycle #281: method 253 — THE ARITHMETIC DECIDES THE SCOPE, AND HERE IT
-  RULED OUT THE OPTION THAT READ AS CHEAPER.** ZERO rows closed, ZERO filed, ZERO reopened. TWO
-  commits.
+  RULED OUT THE OPTION THAT READ AS CHEAPER.** ZERO rows closed, ZERO filed, ZERO reopened. FOUR
+  commits, ONE push.
   **THE INHERITED LEAD, TAKEN.** #280 found that `scripts/pipefail-sigpipe-lint.sh` has TWO gates,
   that all six of its landed corrections are about the second, and that gate one —
   `n = split(work, seg, "|")` — is quote-blind, so a consumer whose OWN argument contains a `|`
@@ -158,9 +158,41 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   `pipefail-sigpipe-lint --selftest` **32/32**; the **bare** lint rc 0 (the one that blocks every
   land); `unattended-path-lint --selftest` **47/47**; `test-walltime-lint tests` clean at **560
   suite(s), 1 grandfathered, 0 new time bombs**; `bats-assert-liveness` rc 0; the scoped
-  `bats-shellcheck-lint` clean over 1 suite. **Two shellcheck findings are PRE-EXISTING and are
-  named rather than driven:** `scripts/s3b-lint.sh:75` (SC2181) and `scripts/smoke-test.sh:236`
-  (SC2034) are identical on an `origin/main` extraction, and my hunks are at `:35` and `:103`.
+  `bats-shellcheck-lint` clean over 1 suite.
+  🚨 **AND THE LAND REFUSED ONCE, ON A CLAIM THIS ENTRY ORIGINALLY MADE — WHICH IS THE BEST
+  ARGUMENT IN THIS FILE FOR COMPOSING THE ENTRY BEFORE THE PUSH.** It first read: *"Two
+  shellcheck findings are PRE-EXISTING and are named rather than driven — `scripts/s3b-lint.sh:75`
+  (SC2181) and `scripts/smoke-test.sh:236` (SC2034) are identical on an `origin/main` extraction,
+  and my hunks are at `:35` and `:103`."* **Every clause of that was TRUE and the conclusion was
+  WRONG.** `ship-land` refused at `✗ gate: shellcheck RED` — *before* the smoke, which then ran
+  green over all 106 suites anyway — because its shellcheck gate is scoped to **the files in THIS
+  LAND'S DIFF**, and by touching those two files I had adopted their debt.
+  **PRE-EXISTING is a claim about AUTHORSHIP. OWN-SCOPE is a claim about the GATE'S POPULATION.
+  They are different questions, and only the second decides whether the land proceeds.** The
+  standing *"🔧 you did not CAUSE is not your loose end"* rule is about attribution, and it does
+  not reach a gate whose population is defined by PATHS rather than by blame. **A drive-by edit to
+  a file adopts every own-scope verdict that file carries — price that in before you touch one.**
+  Both repaired honestly rather than suppressed: the SC2181 arm now tests its command directly
+  (its two siblings compare `$?` to 1 and 2, which has no direct form; *"did it succeed"* does),
+  and the SC2034 local was a genuine dead write — ONE occurrence repo-wide, written and never
+  read — so it is gone. `s3b-lint --selftest` is still **3/3** after editing its own selftest, and
+  shellcheck is rc 0 across the whole own-scope. **A refused land cost nothing: nothing went in
+  flight and the rc-11 marker was never taken.**
+  🚨 **AND THE GATE I WROTE TO POLICE THAT CORRECTION FAILED OPEN, WHICH IS THE THIRD
+  INSTRUMENT FAULT OF THIS LINK AND THE WORST OF THE THREE.** The inline check meant to assert the
+  falsified sentence was gone RAN, FAILED, PRINTED ITS TRACEBACK — and the `git commit` beneath it
+  ran anyway, because a `python3 - <<PY` heredoc inside a Bash-tool call is not `set -e` and its
+  non-zero exit stops nothing. **My three commit LAUNCHERS all spell every gate
+  `|| { echo rcNN; exit NN; }`; this one check was written inline and therefore was decoration.**
+  That is the brief's own standing rule — *DO NOT MEASURE ANYTHING THAT DECIDES SOMETHING IN AN
+  INLINE Bash-TOOL CALL* — earning its keep against the link that wrote it down.
+  ⚠️ **AND IT WAS WRONG TWICE: ITS SPAN WAS THE WHOLE 30,000-LINE DOCUMENT, NOT MY ENTRY.** The
+  token it counted also occurs in a predecessor's entry at line 28,535 (*"Not mine, named rather
+  than driven"*), and my own correction QUOTES the sentence it retracts, so a document-wide count
+  could only ever convict. **Re-run entry-scoped — sliced from my own mark to #280's heading — it
+  reads 0 in my entry and 1 in the document, and the commit's content was correct all along**
+  (memory: `assertion-span-must-equal-its-subject`). **A gate that fails OPEN and a gate whose span
+  exceeds its subject are the same defect twice: neither is a statement about the thing you meant.**
   **THE DRAW IS THE LARGEST IN THIS CHAIN'S TABLE AND THAT IS `handoff-fire.sh`'s DOING:** **106
   direct suites**, against #255's 62, because two of the thirteen sites live in that file. **Neither
   pathologically slow suite came in** — `tests/ship-land.bats` and `tests/postland-verify.bats` are
