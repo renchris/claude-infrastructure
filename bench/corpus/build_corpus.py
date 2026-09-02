@@ -277,12 +277,20 @@ th {{ background: {TOKENS["gray50"]}; color: {TOKENS["gray600"]}; font-size: 12p
 tr + tr td {{ border-top: 1px solid {TOKENS["gray200"]}; }}
 
 .actions {{ display: flex; gap: {TOKENS["gap"]}; align-items: center; margin-top: 24px; }}
+/* Button labels are the page's second and third use of the 16px step. That is
+   deliberate: the type-scale rule calls a size "on the scale" only once at least
+   two elements share it, so a step exercised EXACTLY twice is one edit away from
+   turning the control noisy -- and it did, the moment the play mark stopped
+   being a 16px font glyph. Ground truth a single unrelated change can flip is
+   not ground truth. line-height stays pinned at 16px so raising the font size
+   moves no box: both buttons remain 48px tall, and the touch-target and
+   hierarchy-inversion variants keep the exact geometry they were authored for. */
 .btn-primary {{
-  background: {TOKENS["blue700"]}; color: #FFFFFF; font-weight: 600; font-size: 14px;
+  background: {TOKENS["blue700"]}; color: #FFFFFF; font-weight: 600; font-size: 16px;
   border: none; border-radius: 8px; padding: 16px 20px; line-height: 16px; cursor: pointer;
 }}
 .btn-secondary {{
-  background: #FFFFFF; color: {TOKENS["gray600"]}; font-weight: 400; font-size: 14px;
+  background: #FFFFFF; color: {TOKENS["gray600"]}; font-weight: 400; font-size: 16px;
   border: 1px solid {TOKENS["gray200"]}; border-radius: 8px; padding: 15px 20px;
   line-height: 16px; cursor: pointer;
 }}
@@ -290,11 +298,26 @@ tr + tr td {{ border-top: 1px solid {TOKENS["gray200"]}; }}
   width: 44px; height: 44px; border-radius: 22px; background: {TOKENS["blue700"]};
   display: flex; align-items: center; justify-content: center;
 }}
-.glyph {{ color: #FFFFFF; font-size: 16px; line-height: 1;
-         /* Optical compensation: a triangle's ink mass sits behind its
-            bounding-box centre, so geometric centring reads as left-heavy.
-            Measured offset on this glyph at this size: 2.2px left, 1.9px up. */
-         transform: translate(2px, 2px); }}
+/* The mark is drawn in CSS rather than set as U+25B6, and that is ground-truth
+   discipline, not styling taste. As a font glyph its ink offset is whatever the
+   host's fallback face happens to do: authored on macOS/Helvetica the ink sat
+   up-left and the compensation below was measured as translate(2px, 2px), and on
+   a Linux box with DejaVu the same glyph's ink sits DOWN-right, so that same
+   compensation pushes it further off and the control page stops being optically
+   clean. Measured 2026-09-02: ink centroid 3.4px BELOW the button's centre on
+   clean.html, i.e. the corpus graded a correct detector as a false positive
+   purely because a font was missing. A border triangle has no font in it. Its
+   ink is a right triangle with vertices (0,0) (14,8) (0,16), whose centroid is
+   at x = 14/3 -- exactly 14/2 - 14/3 = 2.33px left of its own box centre, on
+   every machine, forever. The compensation is that number rather than a
+   measurement, which is what makes this corpus able to grade anything. */
+.glyph {{
+  width: 0; height: 0;
+  border-top: 8px solid transparent;
+  border-bottom: 8px solid transparent;
+  border-left: 14px solid #FFFFFF;
+  transform: translateX(2.33px);
+}}
 """
 
 BODY_HTML = """
@@ -330,7 +353,7 @@ BODY_HTML = """
     <button class="btn-primary">Confirm all deposits</button>
     <button class="btn-secondary">Release held tables</button>
   </div>
-  <div class="glyph-btn"><span class="glyph">&#9654;</span></div>
+  <div class="glyph-btn"><span class="glyph"></span></div>
 </div>
 """
 

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import sys
 import time
@@ -141,10 +142,18 @@ def capture(corpus: pathlib.Path, dprs: list[int]) -> None:
     shots.mkdir(exist_ok=True)
     snaps.mkdir(exist_ok=True)
 
+    # `channel="chromium"` resolves against the Playwright build the pip package
+    # was pinned to. On a box where the browser is provisioned separately (CI
+    # images, the remote sandbox) that lookup fails with "please run playwright
+    # install" even though a perfectly good binary is on disk, so let the caller
+    # name it. Absent the override the original channel lookup is unchanged.
+    exe = os.environ.get("BENCH_CHROMIUM") or None
+    launch_kwargs = {"executable_path": exe} if exe else {"channel": "chromium"}
+
     timings = []
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            channel="chromium",
+            **launch_kwargs,
             args=[
                 "--force-color-profile=srgb",
                 "--disable-lcd-text",

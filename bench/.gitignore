@@ -11,3 +11,12 @@ corpus/out/pages/
 corpus/out/shots/
 corpus/out/snapshots/
 corpus/out/blind/
+
+# Same rule for the review pipeline's own output. `review.py` and `route.py`
+# default their --out to the corpus dir, so a run in place drops these here;
+# every one of them is a re-derivable function of the generators plus the
+# detectors, and the crops in particular are PNGs that change on every render.
+corpus/out/annotated/
+corpus/out/queue/
+corpus/out/review.json
+corpus/out/vlm_queue.json

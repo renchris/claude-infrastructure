@@ -26,12 +26,19 @@ Three measurements, all taken on this machine today, carry the argument:
 | Detector | DOM-determined | Pixels-only | False positives on the clean control |
 |---|---|---|---|
 | **Deterministic rules** (~250 lines, 80 ms/page) | **9 / 9** | 0 / 2 (1 honest abstention) | **0** |
-| **DOM-vs-pixels cross-check** (~180 lines NumPy, no model) | — | **1 / 2** | **0** |
+| **DOM-vs-pixels cross-check** (~180 lines NumPy, no model) | — | **2 / 2** † | **0** |
 | **Claude vision, blind** (8 pages, no ground truth) | 2 / 4 | **2 / 2** | **0** |
 | **Local `Qwen3.8-27B-4bit`** (MLX, this Mac) | not run | 1 of 3 resolutions correct | invented a defect at 2 of 3 resolutions |
 
 **The union of the first three is 11 of 11**, and each covers precisely what the others cannot. That
 complementarity *is* the architecture. The fourth row is why no local model is in it.
+
+† **The cross-check row was 1 / 2 when this was written.** Its second arm shipped disabled because
+validating it found two defects in it; both were repaired on 2026-09-02 and it now scores 2 / 2 with
+the same 0 false positives, which also makes it the only layer that covers both pixels-only defects
+without a model. The repair, what it cost, and the third defect it uncovered on the way — a *silent
+false negative* in the arm that was already shipped, on the exact page built to exercise it — are in
+§11.
 
 ⚠️ **This table is a correction.** The first version scored three pixels-only defects and reported
 6 of 7. Building the cross-check exposed the reason: the `optical-centering` variant injected an
@@ -182,6 +189,12 @@ background outside the circle — count as ink and swamp a 16px glyph. Both fixe
 against the container; mask to the painted shape) and neither is done. Shipping it on would have
 handed the pipeline a confident number with no ground truth behind it.
 
+✅ **Both fixes landed 2026-09-02 and the arm is now on by default** (`--x2` is a no-op kept so an old
+invocation does not break). It scores **1 / 1 on `optical-centering` with 0 findings on the control**,
+against 0 / 1 with **2** control false positives before. The quarantine was the right call and the
+paragraph above stands as written; §11 records what the repair actually took, including the two
+further defects it exposed that this paragraph did not predict.
+
 ---
 
 ## 3. Local models: no
@@ -329,6 +342,11 @@ Nothing in this list is a model purchase.
   DOM finding describe the same frame. sRGB pinned, LCD text off, reduced motion, fonts awaited.
 - `detect_dom.py` — nine general design-lint rules with an explicit `INDETERMINATE` verdict.
 - `bench_local_vlm.py` — the resolution/latency sweep.
+- `detect_xcheck.py` — the DOM-vs-pixels comparator, all three arms live (§11).
+- `route.py` — the abstention router, with a `--selftest` that RED-proves it both ways.
+- `profiles.py` — the per-app rule weightings, and the invariant that keeps them safe.
+- `fp_budget.py` — the false-positive gate; exits non-zero on a noisy control.
+- `review.py` — the CLI: `review.json` + an annotated PNG per page + the cropped queue.
 
 **How it reaches a session — a plain CLI, not an MCP server.** A11 checked the assumption and it was
 wrong in our favour: an MCP tool *can* return image content to Claude Code. But image data is charged
@@ -351,9 +369,9 @@ step function — but SAM is not semantic, so it will happily return a pixel-per
 band.)
 
 **To add, in order:**
-1. **The abstention router.** (The cross-check in `bench/detect_xcheck.py` already removes the gradient case from this queue.) Deterministic pass first; its `INDETERMINATE` set plus the pages it
+1. ✅ **The abstention router** — `bench/route.py`, built 2026-09-02. (The cross-check in `bench/detect_xcheck.py` already removes the gradient case from this queue.) Deterministic pass first; its `INDETERMINATE` set plus the pages it
    cannot reason about become the VLM's queue, cropped to the region in question.
-2. **A false-positive budget.** ~20% FP is where an AI reviewer loses credibility regardless of catch
+2. ✅ **A false-positive budget** — `bench/fp_budget.py`, built 2026-09-02. ~20% FP is where an AI reviewer loses credibility regardless of catch
    rate. Our two zero-FP runs are the baseline to defend; every rule added must be re-run against the
    clean control before it ships.
 3. **Order-randomised comparison.** If we ever compare two designs, permute over 3–5 orderings —
@@ -370,6 +388,7 @@ band.)
 template) is largely a marketing-aesthetics problem; `reso-management-app` (Next 16, React 19,
 Tailwind 4) is mostly design-system conformance, where the deterministic layer does nearly all the
 work; `reso-web-app` (Next 13) sits between. One review harness, three different rule weightings.
+✅ Built 2026-09-02 as `bench/profiles.py` — see §11 for the invariant that makes a weighting safe.
 
 ---
 
@@ -407,3 +426,145 @@ instinct for any cut-off subagent — disk-truth audit every slot, re-run anythi
 complete, never accept a partial. Its *machinery* is not: it is built for a quota or login cliff and
 recovers by transcript transplant to another account. A mid-stream API stall has no reset to wait for
 and no account to move to. Audit with it; recover by re-firing.
+
+---
+
+## 11. The pipeline, built and measured (2026-09-02)
+
+Items 1 and 2 of §8's build list, the per-app weightings, and the X2 repair §2 quarantined. Five new
+files in `bench/`, run end to end from a clean rebuild on every claim below. Everything here is a
+measurement taken on 2026-09-02, on Linux/Chromium 141 rather than the M1 Max the rest of this
+document was written on — which turned out to matter, twice.
+
+| Layer | DOM-determined | Pixels-only | False positives on the control |
+|---|---|---|---|
+| `detect_dom.py` (unchanged) | **9 / 9** | 0 / 2 (1 honest abstention) | **0** |
+| `detect_xcheck.py` **all three arms** | — | **2 / 2** | **0** |
+
+The cross-check now covers **both** pixels-only defects that are measurements, leaving exactly one —
+`hierarchy-inversion` — for the vision layer. That is the whole point of the split, and it is now the
+observed shape of the queue rather than a prediction about it.
+
+### What repairing X2 actually cost, and the two defects it exposed
+
+The two known defects were real and both fixes worked as §2 predicted. Neither was the expensive part.
+
+**X3 was silently returning nothing, on the page built to exercise it.** The arm that *shipped* — the
+one this document's §2 quotes a working transcript from — found zero findings on `contrast-on-gradient`
+here. Its comment says it samples "the modal non-ink colour"; its code sampled the modal colour, and on
+a gradient the ink wins that vote outright, because every backdrop column is a slightly different
+colour while the glyph pixels are all one colour. The left third of the caption came back `#FFFFFF` —
+the text's *own* colour — for a reported contrast of **1.00:1**. The fix is to drop pixels near the
+foreground and take the **median** of the rest, a mode being meaningless on a ramp where no value
+repeats. Now: 6.15:1 left, 1.73:1 right, and the gradient case leaves the vision queue as designed.
+**This is the failure mode the document's own thesis is about, found in the document's own code**, and
+the only reason it surfaced is that a second machine rendered the page differently. A detector that
+returns nothing looks exactly like a page with nothing wrong.
+
+**The control was not optically clean, and could not have been.** The play mark was `&#9654;` at 16px
+with a `translate(2px, 2px)` compensation whose constant was *measured on macOS/Helvetica*. On a box
+with DejaVu the same glyph's ink sits down-right instead of up-left, so that compensation pushes it
+further off: measured 3.4px below the button's centre on `clean.html`. A correct X2 therefore fires on
+the control, and the corpus grades a working detector as a false positive because a font is missing.
+Fixed at the source — the mark is now a CSS border triangle, whose ink is a right triangle with
+vertices (0,0) (14,8) (0,16) and whose centroid is at `14/3`, exactly `14/2 − 14/3 = 2.33px` left of
+its own box centre, on every machine. The compensation is that number rather than a measurement.
+**A ground truth that depends on an installed font is not ground truth**, and this corpus had shipped
+one for a week. (Second-order: removing the glyph's `font-size` left the 16px type step used exactly
+once, and `type-scale` promptly fired on the control. Button labels now carry it, `line-height` pinned
+so no box moves. A scale step exercised exactly twice is one edit from turning the control noisy.)
+
+X2 after both repairs, on the same corpus: **0 / 1 with 2 control false positives → 1 / 1 with 0.** The
+measured offset moves from `+0.27, +3.44` on the compensated page to `−1.73, +1.44` on the
+uncompensated one — a clean 2px shift in both axes, which is the proof that defect (a) is really gone.
+Measuring against the container rather than the element's own post-transform box is what makes the
+compensation *visible* to the measurement instead of cancelling out of it.
+
+Two implementation notes worth keeping, because both were only found by building it:
+
+- **The shape mask needs its holes filled.** Masking by "differs from the colour sampled outside the
+  box" removes the square crop's corners exactly as §2 prescribed — and also removes white ink on a
+  coloured control sitting on a white page, which is at distance *zero* from that colour. The glyph
+  punches a hole in the shape it sits inside. Row-and-column span closure fixes it for every shape UI
+  actually paints, and the AND of the two cannot leak past the mask's own extent.
+- **The antialiased rim is bigger than the mark.** A 44px circle's rim is ~138 perimeter pixels against
+  a 16px glyph's ~90, and every one of them differs from the fill. Without a 2px erosion the rim *is*
+  the measurement — the same swamping failure as defect (b), wearing different clothes.
+
+### The router (`route.py`)
+
+Three disjoint states, and the disjointness is the design: **DETERMINED** (a rule returned a number —
+never sent to a model), **RESOLVED** (an abstention the pixel cross-check answered), **QUEUED**.
+
+Measured over the 13-page corpus: **17 determined · 2 resolved · 13 queued**, and the queue is
+**2.1% of elements**. The 13 are one page-level residue job each — the "does this page make sense"
+question no rule is shaped to ask — and **zero abstentions**, because the cross-check answered both.
+That is §2's claim about the seam, now a number: the entire gradient case costs no vision spend.
+
+The queue's crops are integer nearest-neighbour zoomed to ≥768px long edge and capped at the tier's
+2576px, and a full frame that would exceed ~3.75 MP records `pixels_lost` in the job rather than
+downscaling quietly. Every job ships the DOM's exact geometry as `facts` plus a `forbid` line: the
+grounder supplies identity, the DOM supplies geometry, and shipping the geometry *with* the crop is
+what makes that rule enforceable instead of aspirational. **`route.py` calls no model and has no
+`--judge` flag**, deliberately — §7's June 2026 ratification is not reopened here.
+
+`route.py --selftest` RED-proves it in both directions, because a healthy router and a blind one look
+identical from outside: on this corpus success means QUEUED reads 0 abstentions, and so does a router
+that has stopped *seeing* abstentions. It withholds the cross-check's answer and asserts the
+abstention comes back out as a real cropped file on disk, then restores it and asserts it does not.
+Writing that test found a third bug: `768 // 1264` is 0 but `768 // 500` is **1**, so floor division
+left a 500px crop un-zoomed and 268px below the minimum the function existed to guarantee.
+
+### The false-positive budget (`fp_budget.py`)
+
+Two budgets, because conflating them is how a bench flatters itself. **Control FP: budget 0, got 0** —
+a hard gate that exits non-zero, since a rule firing on the control makes its findings everywhere else
+worth nothing. **Off-target FP on the variants: 17 on-target, 2 off-target of 19 → 10.5%**, against
+the ~20% credibility budget.
+
+Both remaining off-target findings are the *same* two, and they are **correct reports**: the
+`contrast-on-gradient` injection puts the gradient behind `.hero-title` as well as `.hero-caption`, and
+the manifest's target names only the caption. They are counted against us anyway. A scorer that
+exonerates whatever it recognises is not a scorer, so the printed number is a **ceiling** on the true
+rate rather than an estimate of it.
+
+### Per-app weightings (`profiles.py`)
+
+`reso-management` ×1.6 conformance / queue 2 · `reso-landing` ×0.4 conformance with `token-drift`
+suppressed outright / queue 5 · `reso-web` between / queue 3. On a purchased template, drift from
+*our* tokens is not a finding, it is a restatement of the fact that we bought the template —
+`reso-landing` drops 3 of 17 findings on that basis and nothing else changes.
+
+**The invariant that makes a weighting safe, and it is checked rather than asserted: a weight may
+suppress or reorder, never create.** No profile runs a detector, lowers a threshold or relaxes a
+tolerance, so the zero-FP control result holds under all four *by construction* — and `fp_budget.py`
+re-scores the control under every profile on every run rather than trusting that sentence.
+**Accessibility has a floor of 1.0 that no profile may go under**, which is a policy: a marketing
+page's contrast failure is a contrast failure. Conformance-to-our-design-system is the only axis a
+profile may turn down, because it is the only one that is genuinely a claim about which codebase you
+are in.
+
+### Reproducing it
+
+```bash
+cd bench && python3 -m venv .venv && .venv/bin/pip install numpy pillow playwright
+.venv/bin/python corpus/build_corpus.py corpus/out
+.venv/bin/python capture.py corpus/out          # BENCH_CHROMIUM=<path> if not a playwright install
+.venv/bin/python detect_dom.py corpus/out       # control: 0 findings
+.venv/bin/python detect_xcheck.py corpus/out    # control: 0 findings; 2/2 pixels-only
+.venv/bin/python route.py corpus/out --selftest # both directions
+.venv/bin/python fp_budget.py corpus/out        # the gate; non-zero exit on a breach
+.venv/bin/python review.py corpus/out --profile reso-management --out /tmp/review
+```
+
+`capture.py` gained one env var, `BENCH_CHROMIUM`, because `channel="chromium"` resolves against the
+build the pip package was pinned to and fails with "please run playwright install" on any box where
+the browser was provisioned separately. Absent the override nothing changes.
+
+### What this does not settle
+
+§9's list is unchanged, and A15's point survives everything above: this wave assumed perception was
+the constraint, and the most probable failure is still a system that sees fine, critiques plausibly,
+and changes nothing. What was built here is the *cheap* half — the half that answers with numbers and
+declines to guess. Whether anything acts on its output is not yet measured. The residue job is one
+question per page and no session has yet been observed answering one.
