@@ -297,3 +297,95 @@ verdict() { "$CE" check "$1" 2>&1 | head -1; }
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" != *"cloud-ineligible"* ]] || { echo "$output"; false; }
 }
+
+# ── THE ACTOR, NOT JUST THE VERB (backlog e981656df348, dispatch 25) ────────────────────────────
+#
+# The case above pins that `claim` retracts nothing, on the ground that it "is written on every
+# dispatch, so an arm that counted it would be retracted by the very fire the park is trying to
+# stop." That argument is about WHO wrote the record, and it does not stop at `claim`: `cc-backlog
+# reap` is an automaton under launchd, not the desk, and it writes `block` at four sites and
+# `unblock` at one — every one `--by cc-backlog-reap`. A cloud worker cannot close its own row from
+# a VM, so every cloud dispatch of a parked row leaves a stale claim and reap is the arm most likely
+# to touch exactly the rows this gate protects.
+#
+# MEASURED against the pristine trunk file before the fix: `verdict=eligible`, exit 0, reported as
+# `park : honoured — the desk has recorded a block/unblock at or after it` when no desk had recorded
+# anything. That is the worst of the three park states to be wrong in, because `honoured` is the one
+# every reader is told means the interlock is working.
+#
+# EVERY case here is paired with a control that must STILL retract, because an over-broad exclusion
+# turns a landed park into a permanent refusal — the exact failure the retraction rule exists to
+# prevent, and one a suite that only tested the refusal direction would score green.
+
+@test "REAP: an unblock written by the reap automaton retracts NOTHING" {
+  mkrepo
+  local id; id="$(add park-reap-unblock "make the widget green")"
+  park "$id" "$OLD_STAMP" "run the diagnose"
+  sync_trunk
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "not refused before the reap write: $output"; false; }
+  run "$CB" unblock "$id" --by cc-backlog-reap
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "the reaper retracted the park on the desk's behalf: $output"; false; }
+  [[ "$output" == *"verdict=ineligible-parked"* ]] || { echo "$output"; false; }
+}
+
+@test "REAP: a block written by the reap automaton retracts NOTHING" {
+  # Rule A's ceiling write. Its own message instructs `cc-backlog unblock <id>`, so this is the
+  # first half of the two-step that permanently retired the park.
+  mkrepo
+  local id; id="$(add park-reap-block "make the widget green")"
+  park "$id" "$OLD_STAMP" "run the diagnose"
+  sync_trunk
+  run "$CB" block "$id" --needs "persistent thrash — the worker cannot land" --by cc-backlog-reap
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=ineligible-parked"* ]] || { echo "$output"; false; }
+}
+
+@test "CONTROL: a desk unblock carrying an explicit --by STILL retracts" {
+  # The exclusion is by ACTOR and must be narrow: an operator who names themselves is still the
+  # desk. Without this, the fix above would read as "any --by retracts nothing".
+  mkrepo
+  local id; id="$(add park-desk-by "make the widget green")"
+  park "$id" "$OLD_STAMP" "run the diagnose"
+  sync_trunk
+  run "$CB" unblock "$id" --by chrisren
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  run "$CE" check "$id"
+  [ "$status" -eq 0 ] || { echo "an operator's own unblock did not retract: $output"; false; }
+  [[ "$output" == *"verdict=eligible"* ]] || { echo "$output"; false; }
+}
+
+@test "REAP: the skipped transition is NAMED, never silently dropped" {
+  # dispatch 22-24's whole lesson: a reader that cannot report its own absence is not a reader. An
+  # `unhonoured` that silently ignored an existing transition would be indistinguishable from one
+  # where no transition exists, which is the absence-vs-non-measurement confusion this row has paid
+  # for three times.
+  mkrepo
+  local id; id="$(add park-reap-named "make the widget green")"
+  park "$id" "$OLD_STAMP" "run the diagnose"
+  sync_trunk
+  run "$CB" unblock "$id" --by cc-backlog-reap
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  run "$CE" why "$id"
+  [[ "$output" == *"skipped="* ]] \
+    || { echo "the arm dropped a real transition without saying so: $output"; false; }
+  [[ "$output" == *"reap automaton"* ]] || { echo "$output"; false; }
+}
+
+@test "REAP: a reap write does not reach the gate either — claim --venue cloud still refuses" {
+  # End-to-end through the consumer that actually costs a spawn. The unit assertion above is over
+  # cc-eligible; this is the one that says the dispatcher does not fire.
+  mkrepo
+  local id; id="$(add park-reap-gate "make the widget green")"
+  park "$id" "$OLD_STAMP" "run the diagnose"
+  sync_trunk
+  run "$CB" unblock "$id" --by cc-backlog-reap
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  run "$CB" claim "$id" --by "cloud-1" --venue cloud
+  [ "$status" -eq 4 ] || { echo "the claim was GRANTED over a live park: $output"; false; }
+  [[ "$output" == *"verdict=cloud-ineligible"* ]] || { echo "$output"; false; }
+}
