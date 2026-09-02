@@ -719,7 +719,7 @@ declare_n() { # <count>
   # session_5 and session_4 carry the LATEST declared_at, so they are the pass's population.
   [[ "$output" == *"session_5"* ]] || false
   [[ "$output" == *"session_4"* ]] || false
-  [[ "$output" != *"session_1"* ]]
+  [[ "$output" != *"session_1"* ]] || false
   # …AND THEY ARE HANDLED IN THAT ORDER, not merely admitted in it. Invisible while every admitted
   # row got processed; decisive the moment the deadline arms below can stop a pass partway, because
   # whoever is started first is who spends the budget. Caught by exactly that: this suite's
@@ -820,7 +820,7 @@ EOF
   CC_RETURN_BOUND_S=600 run bash "$SUT" --sweep --limit 5
   [ "$status" -eq 0 ]
   [[ "$output" == *"5 managed session(s) examined"* ]] || false
-  [[ "$output" != *"stopped starting new work"* ]]
+  [[ "$output" != *"stopped starting new work"* ]] || false
   run jq -sc '[.[] | select(.outcome=="pass-deadline")] | length' "$CC_CLOUD_STATE/return.jsonl"
   [ "$output" = "0" ]
 }
