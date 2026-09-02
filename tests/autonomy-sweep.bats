@@ -1383,7 +1383,13 @@ STUB
   local tb=""; local c
   for c in "$(command -v timeout 2>/dev/null || true)" /opt/homebrew/bin/timeout \
            /usr/local/bin/timeout /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
-    [ -n "$c" ] && [ -x "$c" ] && { tb="$c"; break; }
+    # `if`, not an `&&` chain: this is LOOP CONTROL, not an assertion, and the dead-assertion
+    # analyzer cannot tell the two apart from the shape alone. Its fixer appended `|| false`, which
+    # is correct for an assertion and a defect here — the first candidate that does not exist would
+    # then fail the test under errexit, on exactly the boxes where the later candidates are the
+    # ones that resolve (memory: prescribed-remedy-worse-than-the-bug). The `if` form says what this
+    # actually is, and the analyzer agrees.
+    if [ -n "$c" ] && [ -x "$c" ]; then tb="$c"; break; fi
   done
   [ -n "$tb" ] || skip "no timeout(1)/gtimeout(1) resolvable — this caller applies no bound here"
 
