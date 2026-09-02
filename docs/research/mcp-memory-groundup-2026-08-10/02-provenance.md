@@ -206,6 +206,16 @@ datapoint, closed on *"branch `cc-001759-77337` does not exist; `.mcp.json` stil
 | 3 | Fleet self-imposed caps | — |
 | 4 | Account quota | — |
 
+> **Footnote added 2026-09-02 — the `~3.9 sustained-active` in row 1b is dead as a number, though
+> the row stands as written.** This table's job is to record what each wave believed on its date, so
+> the row is left intact. But a reader must not carry the figure away: `~3.9` was priced off a
+> composition model putting cache-read at 68% of quota cost, refuted by direct meter measurement
+> (Opus-5 cache-read **0.000 pp/Mtok**). The model-free replacement is **6.2–11.0**
+> (`orchestration-units-2026-08-19/A6-VERIFY-quota-economics.md` §C4); the ruling is
+> `scaling-bottlenecks-2026-08-09.md` §2a and this site was swept in its §2c. **Neither wave's
+> ranking changes** — a quota that binds later than believed cannot promote the cap row above the
+> CPU-load and compressor-segment rows that both waves put ahead of it.
+
 **Verdict headline, `bottleneck-refute.md:3-8`:** *"**RAM total has never been the binding
 constraint** — the box has died 5x of a STRUCTURE limit (VM-compressor segment table, exhausted at
 28-33% packing with 20GB free and `memoryPressure=false`) ... Live control at this instant: **14-15

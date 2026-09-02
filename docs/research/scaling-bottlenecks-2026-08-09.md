@@ -139,6 +139,41 @@ once its quota half is removed. Its score `(18 × 0.95)/1 = 17.1` uses an `18` t
 arithmetic (`148 − 132 = 16`) does not derive, so a re-score must first recover what the 18 was.
 That table now carries a provisional-ranking banner.
 
+### 2c · COMPLETED 2026-09-02 — the two prior sweeps both missed a live site in THIS file
+
+§2a struck the lever at rank 4 (`:36`) and in the standing-policy list; §2b chased it to its origin
+and through the jcode cluster. Both then declared the propagation complete. **Neither looked at §4
+of the file they were editing**, where the same two refuted numbers were still standing as
+prescriptive text: `~3.9 sustained 24/7` presented as a co-binding quota constraint, and
+*"cheaper contexts"* named as part of *"the real '15 sessions lag' fix"* — the lever's own
+conclusion, in the section a reader reaches for when they want to know what to do. Corrected above,
+in the block and in the note beneath it.
+
+**Why both sweeps missed it, which is the transferable part.** Both worked by following
+*citations* — grep the quoted premise, chase what cites it, strike each carrier. §4 quotes nothing.
+It **restates** the finding in the summary's own words: no `68%`, no `halving`, no citation to
+`07-accounts-api` for a grep to land on. A citation-following sweep is structurally blind to a
+paraphrase, and a document's own summary section is exactly where paraphrases live. **The rule this
+yields: after striking a finding, re-read the whole of every file you edited — the summary and
+"what this means" sections first — before you claim the propagation is complete.** Proximity is not
+coverage; §2a's edit at `:36` and the live text at `:179` were 143 lines apart in one file.
+
+Also corrected 2026-09-02, same convention (original text kept readable, dated note attached), for
+the two derived carriers still quoting the cache-read-priced `3.9` with no correction:
+`memory-econ-rearchitecture-2026-08-10/bottleneck-refute.md` (the one-line verdict at `:7` and the
+ranked constraint table at `:52` — a table with a *"Binds at"* column is prescriptive under §2b's
+own test) and `mcp-memory-groundup-2026-08-10/02-provenance.md:203`. The latter is genuinely a
+dated side-by-side of what each wave believed, so it keeps its row intact and takes only a footnote
+— the narrow case §2b's *"dated audit record"* classification does fit.
+
+**Sweep basis, so a fourth pass knows what was actually checked.** `git grep` over `origin/main`
+for `3.9 (concurrent|sustained)`, `68% of (quota )?(cost|spend)`, `halving context`,
+`halve the context`, `shrink context`, `cheaper contexts`, and `smaller contexts` across
+`docs/`, `hooks/`, `bin/`, `scripts/`, `commands/`, `skills/`. Every remaining hit is now either
+struck, corrected, a footnoted audit record, or the correction text itself. The live policy layer
+was clean before any of the three passes (`hooks/cache-expiry-warning.sh` has always told sessions
+that shrinking context does not save quota) — only the docs were stale, throughout.
+
 ---
 
 **Felt lag, precisely (12):** turn-end lag is **3.7 s p50 / 7.7 s p90** and 92% of it is ONE call —
@@ -179,6 +214,10 @@ ACTIVE concurrency:    ~4–8 sustained is what BOTH the box (load slope 2.5–5
                        (~3.9 sustained 24/7; 10 for ~39% of the week) support. This is the real
                        "15 sessions lag" fix: fewer simultaneously-ACTIVE turns, cheaper turns,
                        cheaper contexts — not fewer resident sessions.
+                       ^^ STRUCK IN PART 2026-09-02 (§2c). The ~4–8 CONCLUSION STANDS, but on
+                          the box alone: the quota half (~3.9) was priced off the refuted
+                          cache-read composition and measures 6.2–11.0, so quota no longer
+                          binds here — and "cheaper contexts" is the dead lever itself.
 150+ TOTAL:            residency on-box + the active half split between on-box actives and
                        OFF-BOX sessions. Off-box is 2 small fixes away (06): the payload pushes
                        to an invented branch name (vendor allows only the session's current
@@ -188,6 +227,18 @@ ACTIVE concurrency:    ~4–8 sustained is what BOTH the box (load slope 2.5–5
                        Per-session token draw (T3) still unmeasured — the honest off-box number
                        until then is ~10, not 110.
 ```
+
+**Correcting the ACTIVE-concurrency line (2026-09-02, §2c).** Read it as: **~4–8 sustained, bound
+by the BOX** — the load slope of 2.5–5 runnable threads per genuinely-active session against the
+load-20 gate (§2 r2). The quota is no longer a co-binding constraint at that level: rank 4's
+`~3.9 sustained 24/7` was priced off the cache-read-at-68% composition that §2a refuted, and the
+model-free replacement is **6.2–11.0** (`orchestration-units-2026-08-19/A6-VERIFY-quota-economics.md`
+§C4), which sits at or above the box's own ceiling. `10 for ~39% of the week` is unaffected and
+stands. And the prescription's third term, *"cheaper contexts"*, **is the struck lever** — it is
+`+50% capacity by halving context` in summary form, and it dies with it. The surviving two terms are
+the right ones and are now better-founded, not worse: **fewer simultaneously-ACTIVE turns** (the box
+constraint) and **cheaper turns** (output and cache-creation are the classes the meter actually
+charges, at 1.282 and 0.105 pp/Mtok). Context volume is not a term in the quota at all.
 
 **Render/headless correction:** hidden/occluded windows being free means plain kitty tabs already
 deliver the "headless" render win with zero build. Wave E's substrate matters for a different
