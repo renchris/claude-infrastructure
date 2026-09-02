@@ -182,6 +182,50 @@ branch queue is empty or explicitly abandoned with reasons, the production deplo
 single-brained and audited, and doc_classifier's authorization holes are closed with tests.
 
 ## Status log
+- **2026-09-02 — FIFTH fire, the first one AFTER a park was on trunk, so the park's efficacy is now
+  MEASURED rather than hoped for: it did not hold.** `8f59467c92b0` reached a fifth cloud VM of the
+  identical shape (`$HOME` `/root`, `~/Development` absent, `/home/user` holding
+  `claude-infrastructure` alone, clone 50 commits with `.git/shallow` present, `HEAD..origin/main`
+  = 0). R1-R4 untouched and **still open, correct as filed, and unstarted** — the venue is refuted,
+  not the plan, for the fifth time. Four things this fire measured that 09-01 could not:
+  **(1) The park file and the arm are both CORRECT, and the failure is UPSTREAM of the arm.** Run
+  end-to-end here against the shipped predicate — a certified repo holding this exact park, a store
+  carrying this row with no `block`/`unblock` — `bin/cc-eligible check 8f59467c92b0` returns
+  `ineligible-parked` at **rc 3** and names the `needs:` line verbatim. So 09-01's channel is not
+  the thing that broke; something ahead of `cc-backlog claim --venue cloud` is.
+  **(2) 🚨 The 09-01 park was INERT FOR THIS DISPATCH BY CONSTRUCTION, and would have settled the
+  row as `done`.** `cloud-return.sh` step 8 honours the last entry only when its `branch:` names the
+  branch it is returning (`scripts/cloud-park.sh` header, *"a stale entry is inert by construction
+  rather than by cleanup"*). The 09-01 entry names `claude/fire-20260901T012151Z-85215-1`, so on
+  this dispatch's return step 8 finds no entry for its branch and **falls through to
+  `cc-backlog done`** — marking finished a row whose four waves are unstarted. That is a worse
+  outcome than the re-fire it was meant to stop, and it is a property of every re-fire of an
+  already-parked row, not of this one. This fire appended its own entry
+  (`## 2026-09-02T00:57:23Z`, branch `claude/fire-20260902T005055Z-82369-1`); re-measured after the
+  append, the arm reads the NEW last entry and still refuses.
+  **(3) NEW DEFECT, measured: the park arm fails OPEN on every shallow clone, for a certification it
+  does not use.** `_park_doc()` (`bin/cc-eligible:899`) returns `None` whenever
+  `orc.certify() != "ok"` — it shares the HISTORY oracle's certification, and `certify()`
+  (`:708-711`) returns `shallow` on a grafted clone. But reading a park needs no horizon at all:
+  `git show <ref>:docs/parks/<id>.md` resolves perfectly on a shallow clone, as this session did to
+  read the 09-01 entry before writing anything. Measured by varying only `CC_ELIGIBLE_REPO` over one
+  store and one park: this VM's shallow checkout → `park=not-measured`, verdict `eligible`, rc 0; a
+  full repo holding only that park file → `ineligible-parked`, rc 3. The comment at `_park_doc`
+  ("one certification, shared with the history arm") is the whole cause — the two arms need
+  different certifications, and the park arm inherited the stricter one.
+  **(4) Whether (3) is what let THIS fire through is NOT measurable from here, and is not claimed.**
+  The claim-time gate runs on the operator's box, where the checkout is full and `certify()` is
+  `ok`. Two candidates only the desk can check: **(a)** `_park_doc` reads `orc.ref`, i.e.
+  `origin/main` **in `~/Development/claude-infrastructure`**, which is only as fresh as that
+  checkout's last fetch — a park landed ~23 h before this fire is invisible to a ref not fetched
+  since; **(b)** a dispatch path that never passes `cc-backlog claim --venue cloud`, which is the
+  arm's only caller.
+  **Disposition: PARKED via a second entry in `docs/parks/8f59467c92b0.md`** — same `needs:` as
+  09-01, deliberately unchanged so the desk sees one consistent instruction. Not fixed here on the
+  one ground 09-01 also cited: `bin/cc-venue`'s guard forbids a cloud VM building or running the
+  venue rule (its 50-commit clone cannot read the history justifying the arms), and
+  `bin/cc-eligible` is that rule — and the fix in (3) is a change to which items that rule refuses.
+  09-01's retraction of the tooling ground stands and is not re-litigated.
 - **2026-09-01 — FOURTH fire, and this one is PARKED rather than written down.** `8f59467c92b0`
   reached a fourth cloud VM of the identical shape (`$HOME` `/root`, `~/Development` absent,
   `/home/user` holding `claude-infrastructure` alone, clone 50 commits with `.git/shallow` present,
