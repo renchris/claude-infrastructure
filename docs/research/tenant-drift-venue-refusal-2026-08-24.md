@@ -476,3 +476,119 @@ fix simply had not converged to the live layer, which is a deploy fact, not a ne
 `project`-as-proxy defect, and §5's identical substitution in the dispatch brief's EVIDENCE-AGE arm
 (a bare `CLAUDE.md` in an item body resolved against the item's own project). The durable cure for
 both is the one §1 named: **the target repo belongs in a field, not in prose.**
+
+## 11. Eighth dispatch, 2026-09-02T01:44:27Z — §10 called its own second clause desk-only. It is not, and the answer is that the firing binary was STALE
+
+An EIGHTH `anthropic_cloud` VM. Venue facts unchanged and **not re-derived** — §6 settled the
+refusal on POLICY (this session's configuration scopes GitHub to `renchris/claude-infrastructure`,
+every other repo denied), so `renchris/reso-management-app` → `.github/workflows/tenant-drift.yml`
+is unreachable ex ante. **Premise re-checked a seventh time: not refuted, not confirmable here** —
+run `31401486855` (2026-08-10) is now 23 days stale and §3's one-line fix still needs re-checking
+against reso's trunk before anyone writes it.
+
+**§10's falsifier fired, and this is the fourth consecutive dispatch over a landed park.** §10's
+entry is stamped `2026-09-01T06:27:26Z` and landed as `c5e9f821`; this dispatch opened **19 h 01 m**
+later. Its first clause therefore holds.
+
+**Its SECOND clause is the one this section answers, and §10 was wrong that it needed the desk.**
+§10 wrote: *"Check the second clause first: `grep -c refresh_trunk "$(readlink -f "$(command -v
+cc-dispatch)")"`"* — a command on the firing box. But **the brief is composed BY the binary in
+question and delivered to a worker who can read it**, so the brief's own bytes date the bytes that
+fired. Measured, byte-for-byte, in this venue:
+
+| | bytes | verdict |
+|---|---|---|
+| this dispatch's `staleness_rail`, as received | 762 | — |
+| `22b8824c^:bin/cc-dispatch` composer, `$irepo` expanded | 762 | **IDENTICAL** |
+| `22b8824c:bin/cc-dispatch` (and `origin/main`) | 1502 | differs |
+
+`22b8824c` added the `--unshallow` precondition to that string; the brief that fired this session
+does not carry it. `22b8824c` is an ancestor of trunk tip `1cdd601f`, whose commit time is
+`2026-09-02T00:59:01Z` — **45 minutes before this fire** (4 h 46 m by `22b8824c`'s own committer
+date). So the `bin/cc-dispatch` that fired this row **predated a commit that had been on trunk for
+at least 45 minutes.** Not "might have been stale": measured stale, from a VM, with no desk access.
+
+**The rail has had the liveness assertion §9 asked for all along, and never read it.** §9's closing
+demand was *"a liveness assertion at its DESTINATION"*, and six sections looked for it on the box.
+The dispatcher is the one process that both holds the bytes in question and speaks to someone who
+can check them — it has been stamping its own vintage into every brief since `edb9652e`, in prose,
+where nobody thought to read it as a version.
+
+**But a fingerprint is not an identifier, and that bound is why this section lands code.**
+`staleness_rail` has had exactly TWO versions in its entire life (`edb9652e` 2026-08-11,
+`22b8824c` 2026-09-01; `git log -G` over the full 3,944-commit history after `--unshallow`), and
+`bin/cc-premise` — which composes the brief's PREMISE CHECK / CITED NAMES / EVIDENCE AGE block, so
+it is a second independent fingerprint — last changed `9a6986b2` on 2026-08-23. **Resolution: 21
+days.** That is enough to prove the binary is behind trunk and NOT enough to say whether
+`refresh_trunk` (`d877dc7e`, landed 2026-09-01T06:43:13Z, *inside* that interval) was among the
+bytes that ran. §10's actual question stays open — but it is now open for a *measurable* reason
+rather than an unreachable one, which is the difference between this section and the six before it.
+
+**FIXED — `dispatcher_stamp()` + a `DISPATCHER VINTAGE` line in every brief.** The dispatcher emits
+the git blob sha of its own resolved `$_self`, and the brief names the one read that settles it:
+`git -C <the item's repo> rev-parse origin/main:bin/cc-dispatch`. Equal ⇒ the dispatcher IS trunk;
+different ⇒ it is behind, and a remedy the worker finds on trunk was not necessarily the code that
+ran. A blob sha rather than a hand-bumped version constant because it needs no maintenance and is
+**directly comparable** — one read, no archaeology. `git hash-object` needs no repository (measured:
+rc 0 with cwd outside any checkout), which is what makes it safe on the deploy layer where `$_self`
+resolves into the checkout but cwd is wherever launchd left it. Fails open and **says so**
+(`unknown (<why>)`), never omits the line: an absent stamp is indistinguishable from a dispatcher
+too old to emit one, which is `4a26a751`'s "three outcomes, one silence" defect reintroduced by its
+own fix. Pinned by `tests/cc-dispatch-projects.bats` cell 17, whose load-bearing assertion is the
+VALUE, not the text — the emitted object name must equal `git hash-object` of the very binary that
+composed the brief, because a stamp naming a blob nobody can resolve is worse than no stamp: it
+reads as a measurement. RED-proved against trunk's own composer (cell 17 red pre, green post;
+suite 21/21; `shellcheck` clean; `bats-shellcheck-lint` clean).
+
+**Why this was landable from a cloud VM.** §10's reasoning verbatim, and this change is strictly
+milder: it writes no venue label, does not touch `bin/cc-eligible`, and cannot move admission in
+either direction — it adds a line to a brief. `bin/cc-venue:55`'s guard is keyed on the dangerous
+effect, and there is none here.
+
+**What this does NOT claim.** That a stale `bin/cc-dispatch` caused this fire. §9's causes (a), (c),
+(d) and (f) stay open, and `cc-eligible why 485f8f87eb5f` on the box is still the one command that
+discriminates them. What is established is narrower: **the loop's actuator was demonstrably behind
+trunk at fire time, and from the ninth dispatch onward no one has to infer that from prose.**
+
+**The generator, stated once.** §8, §9 and §10 each landed a remedy into `bin/cc-dispatch` and
+asserted its effect on the next fire. Every one of those assertions is about the LIVE bytes, reached
+through a per-file symlink layer whose convergence has **no ordering relation to the landing**
+(memory: `deploy-lag-checkout-behind-origin`; the global close rules call this the `🚀` rung —
+*landed is not live*). §10 diagnosed exactly this shape one layer down — a reader with no
+happens-after edge to its writer — and then reproduced it one layer up, about its own fix. That is
+the fourth instance, and the first one measured.
+
+**The falsifier for a ninth dispatch, and it is now ONE READ.** Your brief carries a
+`DISPATCHER VINTAGE` line. Run the comparison it names before anything else.
+· **EQUAL** ⇒ the dispatcher was at trunk, every landed remedy was live, freshness and convergence
+are both retired — go straight to `cc-eligible why 485f8f87eb5f` on the desk and re-measure nothing.
+· **DIFFERENT** ⇒ name the blob and say how far behind; that is a convergence fact about the deploy
+layer, not a new defect in this rail, and `bash scripts/deploy-live.sh` on the box is the action.
+· **No such line in your brief** ⇒ the dispatcher predates this section, which is itself the answer
+to the same question.
+
+### 11b. Scope (grown), and it is the same generator found from inside
+
+`tests/cc-dispatch-projects.bats` cell 16 — the cell `22b8824c` landed with its own fix — was **red
+on pristine trunk**, verified in a clean `origin/main` worktree carrying none of this session's
+code. Its RED control read `git show origin/main:bin/cc-dispatch` and asserted trunk had the trunk
+reads *unguarded*; that inverted the instant its own fix landed, so the cell reds fleet-wide on a
+tree with no defect in it. The suite's own header states the rule that was broken — *"once this
+lands, `origin/main` BECOMES the new version and every 'the old tree does not do this' assertion
+would invert"* — which is why `BASE_SHA` is pinned. **A RED control naming a moving ref is not a
+control; it is a prediction that the fix will never land.** Repaired by pinning `DEEPEN_BASE` to
+`e31eb3d0` (`22b8824c^`), and re-RED-proved: the repaired cell still goes red against that pre-guard
+composer as its subject, so it is not vacuous.
+
+### 11c. Surfaced, not fixed — `tests/cc-dispatch-v2.bats` is 17/17 red on trunk over a sha the land path destroyed
+
+Measured in a pristine `origin/main` worktree: **all 17 cells fail in `setup`**, because
+`A2_BASE_SHA="ec92e68c"` does not resolve in this repository at all (`git cat-file -t` → *"Not a
+valid object name"*), so its `git archive | tar -x` control recovers nothing. This is §5's finding
+with a bigger blast radius — *a land path rewriting shas, which is why this repo's own rule is
+verify by CONTENT, never by count* — reached here through a suite's RED baseline rather than an
+evidence-age arm. Not fixed: it needs an archaeology pass to find bytes for a commit the land path
+removed from the object store, it is a different suite from this diff, and widening into it is the
+scope-metastasis the close rules forbid. Filed as prose rather than a backlog row only because
+`cc-backlog` is not on this VM's `PATH` and there is no `~/.claude/autonomy/` — the same constraint
+§4 recorded. **Whoever is next on the box: `cc-backlog add` it.**
