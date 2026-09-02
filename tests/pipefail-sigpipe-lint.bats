@@ -34,14 +34,23 @@ mkfile() { # $1=name $2=body  [$3=set line]
 }
 census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" --census 2>/dev/null; }
 
-@test "1: the lint's own --selftest passes (34/34, both directions)" {
+@test "1: the lint's own --selftest passes (37/37, both directions)" {
   # 32 -> 34 on 2026-09-02: clause 3's head/tail producer arm gained r16/r17, the FIRE controls for
   # the g11/g12 pair that had pinned only the GREEN direction. Updated deliberately, per the line
   # below, and the two new arms are attribution-proved: reverting the arm to its pre-fix `-?[1-9]`
   # makes exactly these two go red and nothing else.
+  #
+  # 34 -> 37 later the same day (the NINTH correction): the same arm gained r18/r19/g17, which pin
+  # it on the axis its own REASON is denominated in. The reason is "a LINE-oriented consumer cannot
+  # exit mid-line", and every arm above tried only line-oriented consumers — so the arm was green
+  # against `head -c` and `read -n`, which is_early also admits and which exit mid-line. r18/r19 are
+  # those two consumers; g17 is the discrimination cell, same producer and same consumer COMMAND
+  # WORD as r18 with only the flag differing, and it must stay GREEN. Attribution-proved the same
+  # way: reverting the one changed line makes exactly r18 and r19 red, g17 and r16/r17 unaffected
+  # (~/.claude/autonomy/mut284-pin.sh, seven gated predictions, subject restored by sha256).
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s' "$output" | grep '34/34' >/dev/null \
+  printf '%s' "$output" | grep '37/37' >/dev/null \
     || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 
