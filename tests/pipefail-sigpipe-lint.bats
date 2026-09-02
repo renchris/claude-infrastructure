@@ -34,7 +34,7 @@ mkfile() { # $1=name $2=body  [$3=set line]
 }
 census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" --census 2>/dev/null; }
 
-@test "1: the lint's own --selftest passes (37/37, both directions)" {
+@test "1: the lint's own --selftest passes (48/48, both directions)" {
   # 32 -> 34 on 2026-09-02: clause 3's head/tail producer arm gained r16/r17, the FIRE controls for
   # the g11/g12 pair that had pinned only the GREEN direction. Updated deliberately, per the line
   # below, and the two new arms are attribution-proved: reverting the arm to its pre-fix `-?[1-9]`
@@ -48,9 +48,19 @@ census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" 
   # WORD as r18 with only the flag differing, and it must stay GREEN. Attribution-proved the same
   # way: reverting the one changed line makes exactly r18 and r19 red, g17 and r16/r17 unaffected
   # (~/.claude/autonomy/mut284-pin.sh, seven gated predictions, subject restored by sha256).
+  #
+  # 37 -> 48 on 2026-09-02 (the TENTH and ELEVENTH corrections, backlog ca97c678b18b). Clause 4d
+  # gained r21-r24 + g33/g34/g36 (the function-final class, RED and GREEN) and g35/g37 (the two
+  # DECLARED misses — an if-block tail, and arm C's trailing `||`, refused one clause earlier);
+  # clause 2 gained g38/r25 for the awk END-only `exit`. EVERY ONE uses mk_noe rather than mk, and
+  # that is the whole point: WITH errexit consumed() already returns 1 for any unmasked statement, so
+  # an arm written with mk would pass whether or not clause 4d exists — a control that cannot
+  # discriminate. Attribution-proved the same way as the arms above: deleting the clause-4d stash
+  # block makes exactly r21/r22/r23/r24/r25 red and nothing else (43/48, measured), and reverting
+  # clause 2's awk arm to `/^awk([ \t]).*exit/` makes exactly g38 red (47/48, measured).
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s' "$output" | grep '37/37' >/dev/null \
+  printf '%s' "$output" | grep '48/48' >/dev/null \
     || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 
@@ -423,7 +433,9 @@ $(census | grep -c 'lr-reset-poller\.sh:' || true) hit(s), so arm 20 is vacuous"
   # judged — or the CLOSING line of one, whose tail is genuinely CODE and should be. A line-local
   # masker cannot tell those apart, because the discriminator is on a PREVIOUS line. So this is not
   # a contract worth flipping; it is the visible half of the missing continuation join, which
-  # ca97c678b18b owns and pipe258.py already implements.
+  # nobody owns and pipe258.py already implements. (⚠️ this used to name ca97c678b18b as the owner.
+  # That row was the FUNCTION-FINAL blind spot, closed 2026-09-02 by clause 4d and pinned by tests
+  # 26-28 and 30 below; the continuation join is a SEPARATE, still-unowned gap.)
   #
   # The two fixtures differ in ONE variable — whether an unpartnered quote precedes the pipeline —
   # and the second is the FIRE control: it proves the detector DOES see this exact producer and
@@ -437,5 +449,126 @@ $(census | grep -c 'lr-reset-poller\.sh:' || true) hit(s), so arm 20 is vacuous"
     || { echo "the paired-quote twin was not reported — this arm is vacuous"; echo "$output"; false; }
   [ "$(printf '%s\n' "$output" | grep -c 'scripts/datum\.sh')" -eq 0 ] \
     || { echo "a multi-line construct's opening line was judged as code"; echo "$output"; false; }
+  true
+}
+
+@test "26: CLAUSE 4d — a function-final pipeline is READ BY ITS CALLER, so it is judged" {
+  # THE GAP (backlog ca97c678b18b, filed by #240 and re-evidenced by #243 and #245 without ever
+  # being closed). Clause 4 answered "does anything read this pipeline's status" with `if (!hase)
+  # return 0` — outside errexit, only a control-flow position ON THE SAME PHYSICAL LINE counted. A
+  # shell function returns the status of the last command it ran, so a pipeline that ends a function
+  # body is read by the CALLER, which is never on that line. #243 measured the blindness with one
+  # variable and a positive control: an inline `if`-position pipeline was SEEN (census 1) while the
+  # same pipeline made function-final was census 0.
+  #
+  # The two fixtures differ in ONE variable — whether a statement follows the pipeline inside the
+  # body — and the second is the DISCRIMINATION cell, not a decoration. Without it this arm would
+  # also pass against a clause that simply flagged every pipeline in a file with no `set -e`, which
+  # is the false positive a widening here would most plausibly ship.
+  mkfile fin  "f() {
+  cat \"\$F\" | grep -q needle
+}" 'set -uo pipefail'
+  mkfile notfin "f() {
+  cat \"\$F\" | grep -q needle
+  echo done
+}" 'set -uo pipefail'
+  run census
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c 'scripts/fin\.sh')" -eq 1 ] \
+    || { echo "the function-final pipeline is invisible again — clause 4d is gone"; echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c 'scripts/notfin\.sh')" -eq 0 ] \
+    || { echo "a pipeline whose rc IS discarded was flagged — 4d has lost its lookahead"; echo "$output"; false; }
+  true
+}
+
+@test "27: CLAUSE 4d — the ONE-LINE function, and the mask that still governs it" {
+  # `f() { p | grep -q x; }` is the same fact with no lookahead available, so it is decided in
+  # place; `local v=$(...)` is the control that clause 4a still outranks 4d, because `local` returns
+  # its OWN 0 and no position in the file can make the pipeline's status reach anybody.
+  mkfile one  "is_x() { printf '%s\\n' \"\$DB\" | grep -qxF \"\$1\"; }" 'set -uo pipefail'
+  mkfile masked "f() {
+  local v=\"\$(cat \"\$F\" | head -1)\"
+}" 'set -uo pipefail'
+  run census
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c 'scripts/one\.sh')" -eq 1 ] \
+    || { echo "the one-line function body is invisible"; echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c 'scripts/masked\.sh')" -eq 0 ] \
+    || { echo "clause 4d overran the mask — local returns its own 0"; echo "$output"; false; }
+  true
+}
+
+@test "28: CLAUSE 4d — the two DECLARED MISSES, pinned so a widening MOVES a test" {
+  # Neither of these is a success. Both are genuine function-final positions in shell semantics and
+  # both are refused: the if-block tail by the column-zero brace test (the next code line is `fi`),
+  # and arm C — a trailing `|| return` — one clause EARLIER, at clause 5's trailing-|| exoneration.
+  # #243 measured arm C at census 0 and wrote "there is no spelling that keeps the predicate
+  # behaviourally testable AND inside the detector's view"; bin/cc-pane:199 is the live site and
+  # carries a behavioural arm in tests/cc-pane.bats instead of an allowlist row, for exactly this
+  # reason. Pinned HERE so that closing either gap has to move an assertion rather than rediscover
+  # the gap — which is how this one came to be filed three separate times.
+  mkfile ifblock "f() {
+  if [ -n \"\$x\" ]; then
+    cat \"\$F\" | grep -q needle
+  fi
+}" 'set -uo pipefail'
+  mkfile armc "f() {
+  cat \"\$F\" | grep -q needle || return 1
+}" 'set -uo pipefail'
+  # THE FIRE CONTROL, or both zeros below could be a census that reports nothing at all.
+  mkfile plain "f() {
+  cat \"\$F\" | grep -q needle
+}" 'set -uo pipefail'
+  run census
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c 'scripts/plain\.sh')" -eq 1 ] \
+    || { echo "the fire control did not fire — this arm is vacuous"; echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c 'scripts/ifblock\.sh')" -eq 0 ] \
+    || { echo "the if-block miss is now REPORTED — update this arm deliberately"; echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c 'scripts/armc\.sh')" -eq 0 ] \
+    || { echo "arm C is now REPORTED — clause 5 changed; update this arm deliberately"; echo "$output"; false; }
+  true
+}
+
+@test "29: CLAUSE 2 — an awk \`exit\` inside END is the DRAIN, not the hazard" {
+  # awk runs END only after the input is exhausted, so a program whose sole `exit` is in END has
+  # already drained its producer. The old arm was `/^awk([ \t]).*exit/` — `exit` anywhere — which
+  # convicted `... | awk BEGIN{h=1} { … } END{exit h}`, i.e. precisely how you write an early-exit
+  # predicate in the DRAINED form. It prescribed replacing the fix with itself. Surfaced only once
+  # clause 4d could see scripts/compressor-sentinel.sh:1092, which is that shape and function-final.
+  #
+  # The inline twin is the control that stops this being a blanket awk exoneration.
+  mkfile endexit "f() {
+  cat \"\$F\" | awk 'BEGIN{h=1} { if (\$1 == \"x\") h=0 } END{exit h}'
+}" 'set -uo pipefail'
+  mkfile inlexit "f() {
+  cat \"\$F\" | awk '\$1 == \"x\" { print; exit }'
+}" 'set -uo pipefail'
+  run census
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c 'scripts/inlexit\.sh')" -eq 1 ] \
+    || { echo "an INLINE awk exit went unreported — this arm is vacuous"; echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c 'scripts/endexit\.sh')" -eq 0 ] \
+    || { echo "an END-only exit is convicted again — the lint prescribes replacing the fix with itself"; echo "$output"; false; }
+  true
+}
+
+@test "30: CLAUSE 4d — what the widening cost is RECORDED, and the mechanism is keyed" {
+  # Same law as test 22: a widening that mints findings on the real tree is a repo-wide land outage,
+  # so the numbers that say what it minted are the reason it could ship. LOST = 0 / NEW = 28 against
+  # a control that reproduced --census exactly at 125, all 28 verified as true positives by reading
+  # them, and all 28 drained in the landing diff — so the allowlist did not move and the tree's
+  # census returned to 125.
+  [ "$(grep -c 'A TENTH CORRECTION' "$LINT")" -ge 1 ] \
+    || { echo "the landed-measurement block for clause 4d is gone from the lint"; false; }
+  # keyed on the FUNCTIONS, not on prose: a reword may not silently remove the mechanism.
+  [ "$(grep -c 'function fn_closer' "$LINT")" -eq 1 ]
+  [ "$(grep -c 'function oneline_fnfinal' "$LINT")" -eq 1 ]
+  [ "$(grep -c 'function masked' "$LINT")" -eq 1 ]
+  # COMMENT LINES STRIPPED FIRST — this suite's own recurring scar is a grep that also matches the
+  # sentence explaining the token (test 22 records it). The stash and its flush are one mechanism
+  # and both halves must be present in CODE.
+  [ "$(grep -vE '^[[:space:]]*#' "$LINT" | grep -c 'pend = line; pend_lno = FNR')" -eq 1 ]
+  [ "$(grep -vE '^[[:space:]]*#' "$LINT" | grep -c 'if (fn_closer(raw))')" -eq 1 ]
   true
 }

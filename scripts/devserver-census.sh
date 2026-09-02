@@ -99,7 +99,7 @@ discover_pids() {
     | awk '{ pid=$1; $1=""; sub(/^ /,""); if ($0 ~ /^next-server([ (]|$)/) print pid }'
 }
 
-proc_cwd()   { "$LSOF_CMD" -a -p "$1" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1; }
+proc_cwd()   { "$LSOF_CMD" -a -p "$1" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | sed -n '1p'; }
 proc_rss_kb(){ "$PS_CMD" -o rss= -p "$1" 2>/dev/null | tr -d ' '; }
 
 # CPU seconds as an integer. ps renders [[dd-]hh:]mm:ss.ss — parse right-to-left so every width works.
@@ -125,7 +125,7 @@ proc_age_s() {
 # 127.0.0.1-bound and sorts after the *:PORT dev port in lsof output, so filter to the wildcard form.
 proc_port() {
   "$LSOF_CMD" -nP -p "$1" -a -i 2>/dev/null \
-    | awk '/LISTEN/ { split($9,a,":"); if (a[1] == "*") { print a[2]; exit } }'
+    | awk '/LISTEN/ && !f { split($9,a,":"); if (a[1] == "*") { print a[2]; f=1 } }'
 }
 
 # Established connections ON THE DEV PORT only — never a bare per-pid count (see header D-b).

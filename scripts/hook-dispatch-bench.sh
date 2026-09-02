@@ -321,7 +321,7 @@ jtop() { # <json> — the NAME of the heaviest bucket. Diagnostic, not attributi
   # This is deliberately not "the member bucket": a member that forks `git` parks most of its
   # runnable time in the `git` bucket, so a per-member figure would read ~0 and be mistaken for
   # "the bench did nothing". Attribution is carried by the per-cycle idle subtraction instead.
-  printf '%s' "$1" | sed -n 's/.*"buckets":{"\([^"]*\)".*/\1/p' | head -1
+  printf '%s' "$1" | sed -n 's/.*"buckets":{"\([^"]*\)".*/\1/p' | sed -n '1p'
 }
 
 # MODE is what the arm DOES; LABEL is how it is keyed. They differ only under --control,

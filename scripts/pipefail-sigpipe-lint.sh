@@ -457,8 +457,10 @@ in_scan_set() { # $1=repo-relative path → 0 if this lint judges it
 # one because only one was ever counted.
 #
 # RESIDUAL, NAMED RATHER THAN WIDENED: qmask() is a quote/substitution masker, not a shell parser.
-# It does not join CONTINUATION lines (that gap is owned by ca97c678b18b and pipe258.py is a
-# working joiner nobody has wired in), and it treats a dangling quote as opening a context that
+# It does not join CONTINUATION lines (⚠️ this used to say that gap was "owned by ca97c678b18b";
+# it is not, and the row is CLOSED by the tenth correction below. ca97c678b18b was the FUNCTION-FINAL
+# blind spot and nothing else — the continuation join is UNOWNED, and pipe258.py is still a working
+# joiner nobody has wired in), and it treats a dangling quote as opening a context that
 # runs to end of line. Neither shows up in today numbers — LOST = 0 says the mask never eats an
 # operator pipe on this tree — but both are claims about a tree that grows.
 #
@@ -534,7 +536,7 @@ function qmask(s,   i, c, d, n, st, out) {
 }
 
 # Clause 2: does this last stage exit before draining its input?
-function is_early(s,   t) {
+function is_early(s,   t, u) {
   t = ltrim(s); sub(/^[({][ \t]*/, "", t); t = ltrim(t)
   if (t ~ /^(\/usr\/bin\/|\/bin\/)?(grep|egrep|fgrep)([ \t]|$)/) {
     # The q/l/L may sit ANYWHERE in a flag cluster — `-qi`, `-qE`, `-iq` are all early-exit. An
@@ -546,7 +548,28 @@ function is_early(s,   t) {
   if (t ~ /^head([ \t]|$)/)          return 1
   if (t ~ /^read([ \t]|$)/)          return 1
   if (t ~ /^sed([ \t]).*[;\x27" \t]q([ \t;\x27"]|$)/) return 1
-  if (t ~ /^awk([ \t]).*exit/)       return 1
+  # ── AN ELEVENTH CORRECTION, 2026-09-02: AN `exit` IN AN `END` BLOCK IS THE DRAIN, NOT THE HAZARD.
+  # This arm used to be `/^awk([ \t]).*exit/` — `exit` anywhere in the program. But awk runs END only
+  # AFTER the input is exhausted, so a program whose sole `exit` is in END has already drained its
+  # producer and can no more SIGPIPE it than `grep -c` can. Worse than a miss in either direction:
+  # `... | awk BEGIN{hit=1} { … } END{exit hit}` is precisely how you write an early-exit PREDICATE
+  # in the drained form, so the old arm convicted the FIX and prescribed replacing it with itself.
+  # Surfaced by the tenth correction rather than found separately — scripts/compressor-sentinel.sh:1092
+  # is that shape and is function-final, so it only became visible once clause 4d could see it, and
+  # landing 4d without this would have shipped a drain prescription for already-drained code.
+  # Measured on the same two-extractor harness as the corrections above: LOST = 1 (that one site,
+  # which is the claim), NEW = 0, and the two other `awk`-consumer rows in the census (bin/cc-idl:172,
+  # bin/cc-reaper:2812) both carry an inline `exit` and are UNMOVED — the control that stops this
+  # from being a blanket awk exoneration. g38/r25 pin both directions.
+  # RESIDUAL, NAMED: the END strip is `[^}]*`, so it does not survive a BRACE NESTED INSIDE END
+  # (`END{if(x){…}}`), where the strip stops early and the arm falls back to the old, stricter
+  # answer. That is the safe direction — a missed exoneration, never a missed hazard — and no such
+  # program exists in this tree today (all three END blocks here are brace-free).
+  if (t ~ /^awk([ \t])/) {
+    u = t
+    gsub(/END[ \t]*\{[^}]*\}/, "", u)
+    if (u ~ /exit/) return 1
+  }
   return 0
 }
 
@@ -673,10 +696,16 @@ function is_external(s, cons,   t, p) {
 }
 
 # Clause 4: does anything READ this pipelines status?
-function consumed(l, hase,   t, pre, i) {
+# Clause 4a — is this pipelines status SWALLOWED before it can become the enclosing statements
+# status at all? Split out of consumed() by the tenth correction below, because clause 4d needs the
+# same question answered and answering it twice is how the two answers drift. Every test here is a
+# MASK: the status never reaches the statement, so no position anywhere can rescue it. That is a
+# different fact from "the status reaches the statement and nothing on this line reads it", which is
+# what the errexit test below is about — and only the second kind is what a closing brace repairs.
+function masked(l,   t, pre, i) {
   t = ltrim(l)
   # [ -n "$( … )" ] / [ -z … ] discard the substitutions status entirely.
-  if (t ~ /\[\[?[ \t]+-[nz][ \t]+"?\$\(/) return 0
+  if (t ~ /\[\[?[ \t]+-[nz][ \t]+"?\$\(/) return 1
   # A pipeline inside a command substitution used as an ARGUMENT is masked: the status the shell
   # reads is the OUTER commands, and a substitution that dies 141 still yields its bytes. Only
   # VAR=$( … ) — where the substitution IS the whole RHS — lets the status through to errexit.
@@ -687,13 +716,74 @@ function consumed(l, hase,   t, pre, i) {
     sub(/^![ \t]*/, "", pre)
     sub(/^(local|declare|typeset|export|readonly)[ \t]+/, "", pre)
     pre = ltrim(pre)
-    if (pre != "" && pre !~ /[A-Za-z_][A-Za-z0-9_]*\+?="?$/) return 0
+    if (pre != "" && pre !~ /[A-Za-z_][A-Za-z0-9_]*\+?="?$/) return 1
   }
+  # local/declare/export return their OWN 0 — the pipelines status never survives the assignment.
+  # This test used to sit BELOW the errexit one, where it could only ever be reached with HASE=1;
+  # with HASE=0 the errexit test returned first and the answer was the same 0. So hoisting it into
+  # the mask changes no verdict (asserted: LOST=0 NEW=0 across the refactor arm), and it puts the
+  # test where its REASON already was — an assignments status is not the pipelines, wherever it sits.
+  if (t ~ /^(local|declare|typeset|export|readonly)[ \t]/) return 1
+  return 0
+}
+
+function consumed(l, hase,   t) {
+  if (masked(l)) return 0
+  t = ltrim(l)
   if (t ~ /^(if|elif|while|until)[ \t]/)  return 1
   if (t ~ /^![ \t]/)                      return 1
   if (!hase) return 0
-  # local/declare/export return their OWN 0 — the pipelines status never survives the assignment.
-  if (t ~ /^(local|declare|typeset|export|readonly)[ \t]/) return 0
+  return 1
+}
+
+# ── A TENTH CORRECTION, 2026-09-02: CLAUSE 4 ASKED "DOES ANYTHING ON THIS LINE READ THE STATUS" AND
+#    A FUNCTIONS CALLER IS NOT ON THIS LINE. (backlog ca97c678b18b) ───────────────────────────────
+# consumed() answers with `if (!hase) return 0`: outside errexit, only a control-flow position on the
+# SAME physical line counts as a read. A pipeline that is the LAST statement of a function body is
+# read by nothing on its line and by the CALLER of the function — because a shell function returns
+# the status of the last command it ran. So the whole predicate ships inverted at exactly the same
+# rate, and the detector says nothing, in a file with no `set -e`.
+#
+# THE BLINDNESS WAS MEASURED BEFORE IT WAS FILED, three arms with one variable, `-q` seeded into each
+# so the detector had something to find (#243):
+#   A  inline `if`-position pipeline (the PRE state)   lint rc 1   census 1   SEES
+#   B  function-final pipeline                         lint rc 0   census 0   BLIND
+#   C  function, pipeline in `|| return 1` position    lint rc 0   census 0   BLIND
+# Arm A is the POSITIVE CONTROL and it fired, so the two zeros are the detectors and not the
+# harnesss. THIS CORRECTION IS ARM B ONLY, and arm C is left standing with its reason written down
+# rather than folded in: arm C is refused one clause EARLIER (clause 5, the trailing-|| exoneration),
+# so repairing it is an edit to a different clause with a different population and its own drain
+# load. r21-r24/g33/g34/g36 pin arm B in both directions; g35 and g37 pin the two DECLARED misses so a
+# later widening has to move a test rather than discover the gap again.
+#
+# WHY A DEFERRED EMIT AND NOT A BRACE COUNT. "Last statement of the body" is a structural fact and
+# this detector is line-local by construction (the header says so: the analysis is positional and a
+# line-regex cannot see it). Counting braces to recover the structure is the obvious move and it is
+# the wrong one HERE — qmask() tracks quotes and `$(`, not `${`, so every `"${VAR}"` in the file
+# would count as a nesting level and the depth would be noise. The property this clause actually
+# needs is one line of lookahead: a candidate is function-final IFF the next CODE line is the
+# functions closing brace. So the candidate is STASHED and the following line adjudicates it.
+#
+# CONSERVATIVE BY CONSTRUCTION, AND THE MISSES ARE DECLARED. `^\}` is required at COLUMN ZERO — this
+# trees function closers are unindented and a nested brace group is not — so a pipeline that is last
+# inside an `if` block at the end of a function (next code line `fi`) is NOT reported, and neither is
+# one closing an indented group. Both are genuine function-final positions in shell semantics. A
+# narrow clause that is right beats a wide one that guesses at structure; g35 pins the `fi` miss so
+# it is a decision on the record and not an accident.
+function fn_closer(r) { return (r ~ /^\}[ \t]*(#.*)?$/) }
+
+# The ONE-LINE function — `f() { p | grep -q x; }` — is the same fact with no lookahead available,
+# so it is decided in place. Both halves must hold: the line OPENS a function (the `()` or the
+# `function` keyword, never a bare `{`, or every top-level brace group would qualify) and the
+# pipeline is the LAST command before the closing brace (nothing but an optional `;` between them).
+function oneline_fnfinal(l, lastseg,   t, tail) {
+  t = ltrim(l)
+  if (t !~ /^[A-Za-z_][A-Za-z0-9_:.-]*[ \t]*\([ \t]*\)[ \t]*\{/ &&
+      t !~ /^function[ \t]+[A-Za-z_][A-Za-z0-9_:.-]*[ \t]*(\([ \t]*\))?[ \t]*\{/) return 0
+  if (t !~ /\}[ \t]*$/) return 0
+  tail = lastseg
+  sub(/[ \t]*;?[ \t]*\}[ \t]*$/, "", tail)
+  if (index(tail, ";") > 0) return 0     # another command runs after the pipeline — not final
   return 1
 }
 
@@ -730,6 +820,20 @@ BEGIN { FS = "" }
   # ignore quoted occurrences is a real change to what counts as an opener and wants its own
   # measurement; it is not folded in here. g31/g32 pin both directions of what IS fixed.
   if (line ~ /^#/ || line == "") next
+
+  # Clause 4d — THE FUNCTION-FINAL FLUSH (tenth correction; see fn_closer above). `pend` holds a
+  # site that passed every hazard clause and failed clause 4 for the one repairable reason: its
+  # status reaches the enclosing statement and nothing on its own line reads it. This is the first
+  # code line after it, so it is the adjudicator — if it is the functions closing brace, the stashed
+  # pipeline was the bodys last command and its rc IS what the caller reads.
+  #
+  # This block sits ABOVE every `next` in the rule on purpose. A candidate must be cleared by ANY
+  # following code line, including the many that leave early, or a pipeline three statements from
+  # the end of a function would be emitted the moment a `}` eventually arrived.
+  if (pend != "") {
+    if (fn_closer(raw)) printf "%s:%d:%s\n", FILE, pend_lno, pend
+    pend = ""
+  }
 
   if (match($0, /<<-?[ \t]*[\x27"]?[A-Za-z_][A-Za-z0-9_]*[\x27"]?/)) {
     tok = substr($0, RSTART, RLENGTH)
@@ -782,10 +886,23 @@ BEGIN { FS = "" }
   # the ASSIGNMENT form after the last stage separates them; g15/g16 pin both directions.
   # (No apostrophes here: this is inside the single-quoted DETECT_AWK string.)
   cap = (last ~ /;[ \t]*[A-Za-z_][A-Za-z0-9_]*=\$\?/)
-  if (amp == 0 && !cap && !consumed(line, HASE)) next
+  if (amp == 0 && !cap && !consumed(line, HASE)) {
+    # Nothing on THIS line reads it. Clause 4d: if the status is not masked — i.e. it really is this
+    # statements status and not a substitutions or an assignments — then a function that ENDS here
+    # hands it to its caller. The one-line function is decided now; the multi-line one is stashed for
+    # the next code line to adjudicate.
+    if (!masked(line)) {
+      if (oneline_fnfinal(line, last)) { printf "%s:%d:%s\n", FILE, FNR, line; next }
+      pend = line; pend_lno = FNR
+    }
+    next
+  }
 
   printf "%s:%d:%s\n", FILE, FNR, line
-}'
+}
+# A candidate still pending at EOF was never adjudicated, so it is NOT function-final: no closing
+# brace ever followed it. Dropping it is the answer, and stating that is the point of the block.
+END { pend = "" }'
 
 # ── scan ─────────────────────────────────────────────────────────────────────────────────────────
 # Only files that enable pipefail (clause 1) — and never this lint or its own bats suite, both of
@@ -1122,6 +1239,67 @@ cat <<'EOF'
 if git status --porcelain | grep -q .; then :; fi
 EOF"
   expect g31 GREEN "a comment ahead of a REAL heredoc still leaves the body as DATA"
+
+  # ── clause 4d, the FUNCTION-FINAL arms (tenth correction, backlog ca97c678b18b) ──────────────
+  # Every one of these uses mk_noe. With errexit the clause is dead code — consumed() already
+  # returns 1 for any unmasked statement — so an arm written with mk would pass whether or not the
+  # clause exists, i.e. it would be a control that cannot discriminate. THAT is what #243's arm B
+  # measured (`lint rc 0, census 0`) and it is the state these pin shut.
+  mk_noe r21 "f() {
+  cat /some/file | grep -q pat
+}"
+  expect r21 RED "function-final pipeline with NO set -e — its rc IS the caller's answer (arm B)"
+  mk_noe r22 "is_x() { printf '%s\\n' \"\$DB\" | grep -qxF \"\$1\"; }"
+  expect r22 RED "the ONE-LINE function whose whole body is the pipeline"
+  mk_noe r23 "f() {
+  v=\"\$(cat /some/file | head -1)\"
+}"
+  expect r23 RED "a whole-RHS assignment IS the statement's status, so function-final reaches it"
+  # The flush deliberately runs BELOW the comment/blank filter, so prose between the pipeline and
+  # the brace must not clear the candidate — which is the ONLY shape that matters in a tree whose
+  # house style is a paragraph of rationale before every closing brace.
+  mk_noe r24 "f() {
+  cat /some/file | grep -q pat
+  # a closing comment, which is what this tree actually writes
+}"
+  expect r24 RED "a comment between the pipeline and the brace does not clear the candidate"
+
+  # ── and the four GREENs that stop 4d being \"flag every pipeline in a file with no set -e\" ────
+  mk_noe g33 "f() {
+  cat /some/file | grep -q pat
+  echo done
+}"
+  expect g33 GREEN "NOT function-final — a statement runs after it, so the rc is discarded"
+  mk_noe g34 "f() {
+  local v=\"\$(cat /some/file | head -1)\"
+}"
+  expect g34 GREEN "function-final but MASKED — local returns its OWN 0, so no position rescues it"
+  # g35 and g37 are DECLARED MISSES, not successes. Both are genuine function-final positions in
+  # shell semantics; both are refused, g35 by the column-zero brace test and g37 one clause earlier
+  # by the trailing-|| exoneration. They are pinned so that widening to either has to MOVE a test
+  # rather than rediscover the gap — which is how ca97c678b18b came to be filed three times.
+  mk_noe g35 "f() {
+  if [ -n \"\$x\" ]; then
+    cat /some/file | grep -q pat
+  fi
+}"
+  expect g35 GREEN "DECLARED MISS: last inside an if-block — next code line is fi, not the brace"
+  mk_noe g36 "is_x() { printf '%s\\n' \"\$DB\" | grep -qxF \"\$1\"; echo done; }"
+  expect g36 GREEN "one-line function with a command AFTER the pipeline — not final"
+  mk_noe g37 "f() {
+  cat /some/file | grep -q pat || return 1
+}"
+  expect g37 GREEN "DECLARED MISS: arm C — a trailing || is refused at clause 5, before 4d"
+
+  # ── clause 2, the eleventh correction: END-only exit is the DRAIN, not the hazard ─────────────
+  mk_noe g38 "f() {
+  cat /some/file | awk 'BEGIN{h=1} { if (\$1 == \"x\") h=0 } END{exit h}'
+}"
+  expect g38 GREEN "awk whose ONLY exit is in END has already drained — that spelling IS the fix"
+  mk_noe r25 "f() {
+  cat /some/file | awk '\$1 == \"x\" { print; exit }'
+}"
+  expect r25 RED "an INLINE awk exit still convicts — g38 is not a blanket awk exoneration"
 
   local total=$((pass+fail))
   if [ "$fail" -gt 0 ]; then

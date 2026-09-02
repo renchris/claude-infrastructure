@@ -100,7 +100,7 @@ done
 
 # Read a `# key: value` header from a migration. Only the FIRST match counts, and only from the
 # comment block — a later occurrence inside the body is code, not a declaration.
-hdr() { sed -n "s/^# $1: *//p" "$2" 2>/dev/null | head -1; }
+hdr() { sed -n "s/^# $1: *//p" "$2" 2>/dev/null | sed -n '1p'; }
 
 # The ledger records one file per state dir. Absent from all of them = never seen by the converger.
 ledger_state() {

@@ -502,7 +502,7 @@ case "$rc" in
       # silent wrong number is worse than a loud absent one (the whole reason this block changed).
       verdict error 1 "stage=parse reason=no-counts-line"
     fi
-    _f() { printf '%s\n' "$_counts" | sed -n "s/.*[[:space:]]$1=\([^[:space:]]*\).*/\1/p" | head -1; }
+    _f() { printf '%s\n' "$_counts" | sed -n "s/.*[[:space:]]$1=\([^[:space:]]*\).*/\1/p" | sed -n '1p'; }
     set -- "$(_f removed)" "$(_f disposed)" "$(_f kept)" "$(_f branches_deleted)" "$(_f refusals)"
     # THE EFFECT ASSERTION. Everything above this line is the janitor's own account of itself;
     # this is the only rung that reads the world. `removed=65 kept=126` was a true sentence on

@@ -73,7 +73,7 @@ done
 
 meta_get() { # $1=dir $2=key
   [ -f "$1/meta" ] || return 1
-  sed -n "s/^$2=//p" "$1/meta" 2>/dev/null | head -1
+  sed -n "s/^$2=//p" "$1/meta" 2>/dev/null | sed -n '1p'
 }
 
 # ── resolution: hdl-id first, then the DECLARED session id ────────────────────────────────────────

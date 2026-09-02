@@ -26,7 +26,7 @@ has_valid_status() {
   local f="$1"
   head -1 "$f" 2>/dev/null | grep -qx -- '---' || return 1
   sed -n '2,/^---$/p' "$f" 2>/dev/null \
-    | grep -qiE '^status:[[:space:]]*(open|in-progress|in_progress|complete|completed|superseded)([[:space:]]|$)'
+    | grep -iE '^status:[[:space:]]*(open|in-progress|in_progress|complete|completed|superseded)([[:space:]]|$)' >/dev/null
 }
 
 # is_new_plan <file> → 0 if the file is NEW (git-untracked, else mtime-fresh).

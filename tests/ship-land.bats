@@ -424,7 +424,7 @@ herm_tool() {   # writes a tool whose embedded selftest names a constant scratch
 
   run bash "$SHIPLAND" --trunk main
   [ "$status" -eq 7 ]
-  echo "$output" | grep -qi "reject"
+  echo "$output" | grep -i "reject" >/dev/null
 }
 
 @test "verify-fail: PERSISTENT concurrent drop → bounded auto-retry exhausts → exit 8, clean rollback" {
@@ -501,7 +501,7 @@ herm_tool() {   # writes a tool whose embedded selftest names a constant scratch
   CC_DECISIONS_DIR="$SHIP_LAND_DECISIONS_DIR" run bash "$REPO/bin/cc-decide" list --open
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'shipland-esc-'
-  echo "$output" | grep -q '^open '
+  echo "$output" | grep '^open ' >/dev/null
 }
 
 @test "esc-scan FAIL-CLOSED: option-like SHIP_LAND_ESC_RE ('-foo') is applied via -- → exit 3, not fail-open" {
@@ -515,7 +515,7 @@ herm_tool() {   # writes a tool whose embedded selftest names a constant scratch
   export SHIP_LAND_ESC_RE='-foo'
   run bash "$SHIPLAND" --trunk main --dry-run
   [ "$status" -eq 3 ]
-  echo "$output" | grep -qi "PARKED"
+  echo "$output" | grep -i "PARKED" >/dev/null
 }
 
 @test "esc-scan FAIL-CLOSED: an invalid SHIP_LAND_ESC_RE (grep rc≥2) → exit 3, never CLEAN" {
@@ -529,7 +529,7 @@ herm_tool() {   # writes a tool whose embedded selftest names a constant scratch
   export SHIP_LAND_ESC_RE='['
   run bash "$SHIPLAND" --trunk main --dry-run
   [ "$status" -eq 3 ]
-  echo "$output" | grep -qi "PARKED"
+  echo "$output" | grep -i "PARKED" >/dev/null
 }
 
 # ── EFFECT/DISCLOSURE class split + the declared exemption manifest ───────────────────────────────
@@ -706,7 +706,7 @@ EOF
 
   run env SHIP_LAND_SHARED_CHECKOUT="$WORK" bash "$SHIPLAND" --trunk main
   [ "$status" -eq 4 ]
-  echo "$output" | grep -qi "REFUSING"
+  echo "$output" | grep -i "REFUSING" >/dev/null
 }
 
 @test "dirty tree: uncommitted changes → exit 2" {
@@ -721,7 +721,7 @@ EOF
   # on main, nothing ahead of origin/main
   run bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
-  echo "$output" | grep -qi "nothing to land"
+  echo "$output" | grep -i "nothing to land" >/dev/null
 }
 
 @test "v2 INVERSION: a GREEN land never advances gate-green — the verifier owns that marker" {

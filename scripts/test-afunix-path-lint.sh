@@ -102,8 +102,9 @@ in_own() {  # $1=basename · $2=own-set text · $3=1 if an own-set was supplied 
   # the RIGHT ceiling to watch is the EMITTED one: this own-set is CHANGED PATHS, the whole .bats
   # corpus is 16,945 bytes of them, and the `sed 's:.*/::'` below reduces those to basenames, so
   # what reaches grep is smaller still. Measure it AFTER the sed. That ceiling still only grows.
-  # (backlog ca97c678b18b: pipefail-sigpipe-lint
-  # cannot SEE a function-final pipeline, so no ratchet would have caught this.)
+  # (backlog ca97c678b18b — "pipefail-sigpipe-lint cannot SEE a function-final pipeline, so no
+  # ratchet would have caught this" — is CLOSED as of 2026-09-02: clause 4d now judges this exact
+  # shape, so the drain below IS ratcheted and a regression here is a RED, not a silence.)
   printf '%s\n' "$2" | sed 's:.*/::' | grep -xF "$1" >/dev/null
 }
 

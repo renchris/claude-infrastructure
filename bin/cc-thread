@@ -22,7 +22,11 @@ MBOX="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
 [ -d "$MBOX" ] || { echo "no mailbox dir at $MBOX" >&2; exit 1; }
 
 _count() { [ -f "$1" ] && grep -c '' "$1" 2>/dev/null || echo 0; }
-_cursor() { cat "$1" 2>/dev/null | tr -dc '0-9' | head -c 9; }
+# DRAINED, not `head -c`: this body IS the pipeline, so its rc is what the caller reads, and a
+# BYTE-oriented early-exit consumer exits mid-line and SIGPIPEs `tr` under this file's pipefail
+# (measured 20/20 in the lint's ninth correction). `cut -c1-9` reads to EOF. A cursor file holds one
+# short integer today — the point is that nothing announces the day it does not.
+_cursor() { cat "$1" 2>/dev/null | tr -dc '0-9' | cut -c1-9; }
 
 # pane-uuid → friendly name, via cc-sessions when it is available (best-effort, never fatal).
 _name_of() {

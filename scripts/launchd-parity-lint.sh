@@ -94,7 +94,7 @@ bad() { printf '  RED  %s\n' "$1"; viol=$((viol+1)); }
 plist_label() {
   plutil -p "$1" 2>/dev/null \
     | sed -n 's/^[[:space:]]*"Label"[[:space:]]*=>[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' \
-    | head -1
+    | sed -n '1p'
 }
 
 IDX="$(mktemp "${TMPDIR:-/tmp}/launchd-parity-idx.XXXXXX")" || exit 2

@@ -2158,7 +2158,7 @@ record_gate_cut() {  # $1=rc $2=logfile [$3=file — default the whole corpus] �
 tap_plan() {  # $1=log → the TAP plan count bats printed (`1..N`), or "" if it never printed one.
   # bats prints the plan only AFTER gathering the file's tests, so a plan is evidence about how
   # many tests this file was found to hold — which is exactly what a truncated harness gets wrong.
-  sed -n 's/^1\.\.\([0-9][0-9]*\).*$/\1/p' "$1" 2>/dev/null | head -1
+  sed -n 's/^1\.\.\([0-9][0-9]*\).*$/\1/p' "$1" 2>/dev/null | sed -n '1p'
 }
 
 tap_named_failures() {  # $1=log $2=known test count ("" or 0 ⇒ unknown) $3=suite file (for the

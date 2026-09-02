@@ -89,7 +89,10 @@ UUIDS
 
 is_legacy_uuid() { # <token>
   [ -n "${1:-}" ] || return 1
-  printf '%s\n' "$LEGACY_UUIDS" | grep -qxF "$1"
+  # DRAINED, not -q: this pipeline is the FUNCTION-FINAL statement, so its rc IS the answer every
+  # caller reads, and `grep -q` exits on the match and SIGPIPEs the printf under this file's
+  # pipefail — inverting the predicate precisely WHEN IT MATCHES. $LEGACY_UUIDS is a whole store.
+  printf '%s\n' "$LEGACY_UUIDS" | grep -xF "$1" >/dev/null
 }
 
 # classify <file> → prints "R0" | "R1" | "R2" (fixture-origin, naming the rule) or "" (real/keep)

@@ -296,7 +296,7 @@ recent_api_limit() { # <jsonl> → 0 if a structured USAGE-CAP api error is amon
   # old set missed entirely, so a spend-capped clean+landed session read `finished` and was reapable.
   tail -n 60 "$f" 2>/dev/null \
     | jq -rc 'select((.isApiErrorMessage//false)==true) | (.message.content // [] | map(.text // "") | join(" "))' 2>/dev/null \
-    | grep -qiE 'session limit|weekly limit|usage limit|limit ·|resets|monthly spend limit|spend limit|billing'
+    | grep -iE 'session limit|weekly limit|usage limit|limit ·|resets|monthly spend limit|spend limit|billing' >/dev/null
 }
 
 parse_blocked_model() { # <refusal-text> → best-effort model name (e.g. "Fable 5"), empty if unparseable

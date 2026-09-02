@@ -107,7 +107,10 @@ echo "checkout:    $REPO"
 
 # ── read the world ONCE (read-only launchctl only; nothing above the CONFIRM gate mutates) ─────────
 DISABLED_DB="$("$LAUNCHCTL" print-disabled "gui/$UID_" 2>/dev/null || true)"
-is_disabled() { printf '%s\n' "$DISABLED_DB" | grep -Fq "\"$1\" => disabled"; }
+# DRAINED, not -q: this body IS the pipeline, so its rc is the answer the caller reads, and a -q
+# that matches SIGPIPEs the printf under pipefail — the predicate inverts exactly when it fires.
+# $DISABLED_DB is a whole `launchctl print-disabled` dump, which only grows.
+is_disabled() { printf '%s\n' "$DISABLED_DB" | grep -F "\"$1\" => disabled" >/dev/null; }
 # `print`, never `list | grep`: print resolves the label in THIS domain and fails non-zero when it is
 # absent, whereas a grep over `list` can match a substring of an unrelated label and reads a job that
 # has already exited as present — it cannot tell loaded-and-healthy from loaded-and-failing.

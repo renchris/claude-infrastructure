@@ -645,7 +645,10 @@ is_registered_desk(){ # $1=telemetry session_id → 0 iff it is the registered m
 pid_alive_owner(){ # $1=pid → 0 iff alive AND its process command marks it a claude session owner
   local p="$1"
   [ -n "$p" ] && kill -0 "$p" 2>/dev/null || return 1
-  ps -p "$p" -o command= 2>/dev/null | grep -qiF "$OWNER_PAT"
+  # DRAINED, not -q: this pipeline is the FUNCTION-FINAL statement, so its rc IS the verdict the
+  # caller reads. Under this file's pipefail a matching `grep -q` exits first and SIGPIPEs `ps`,
+  # promoting 141 — so an owner that IS running reads as absent, the direction that reaps.
+  ps -p "$p" -o command= 2>/dev/null | grep -iF "$OWNER_PAT" >/dev/null
 }
 
 # ── GC — drop a LIVE-OWNER telemetry row that has been stale past the horizon (item fdc101e8b0c7). ──

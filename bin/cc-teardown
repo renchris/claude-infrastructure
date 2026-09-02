@@ -1053,7 +1053,7 @@ EOF
   # lease instead of the branch each scenario exists to prove. The lease itself is proven separately
   # and adversarially in tests/reap-freshness.bats (incl. its RED-proof against the pristine tree).
   # each scenario rm's records first + every cc-teardown run writes exactly one → find gives that record.
-  last_record()   { find "$d/rec" -name '*.json' 2>/dev/null | head -1; }
+  last_record()   { find "$d/rec" -name '*.json' 2>/dev/null | sed -n '1p'; }
   last_decision() { local f; f="$(last_record)"; [ -n "$f" ] && jq -r '.decision' "$f"; }
   last_blv()      { local f; f="$(last_record)"; [ -n "$f" ] && jq -r '.both_legs_verified' "$f"; }
   last_reason()   { local f; f="$(last_record)"; [ -n "$f" ] && jq -r '.reason' "$f"; }

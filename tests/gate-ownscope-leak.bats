@@ -466,11 +466,15 @@ PROBE
 # land gate. scripts/deploy-link-parity.sh:264 wrote this scar out once already; #240 drained
 # test-walltime-lint's copy; these are the rest.
 #
-# WHY A TEST AND NOT A COMMENT. scripts/pipefail-sigpipe-lint.sh's clause 4 asks whether anything
-# READS the pipeline's status, and a function-final pipeline's status is read by the CALLER, which
-# the clause cannot observe. Measured: its --census sees 0 of the three in_own sites and the
-# allowlist grandfathers none of them, so they are not exempt — they are INVISIBLE. (backlog
-# ca97c678b18b owns that detector gap; this pins the sites so a fix cannot regress while it waits.)
+# WHY A TEST AND NOT A COMMENT — AND WHY IT STAYS ONE NOW THAT THE GAP IS CLOSED. Clause 4 of
+# scripts/pipefail-sigpipe-lint.sh asked whether anything READS the pipeline's status, and a
+# function-final pipeline's status is read by the CALLER, which the clause could not observe.
+# Measured then: its --census saw 0 of the three in_own sites and the allowlist grandfathered none,
+# so they were not exempt — they were INVISIBLE. That detector gap (backlog ca97c678b18b) is CLOSED
+# as of 2026-09-02 by the lint's clause 4d, so these sites are now ratcheted too. This file is NOT
+# redundant to that ratchet and is not deleted: the lint judges a SHAPE, while these arms assert the
+# BEHAVIOUR the shape exists to protect, and a lint's own coverage is exactly what #245 showed can
+# be silently absent. Two independent guards over one hazard is the point.
 #
 # THE REGIME IS MEASURED, NOT ASSUMED (2026-08-26, load ~13, 20 trials per size). The transition is
 # a RACE with a band, not a step, and it differs by pipeline SHAPE — so the single 64 KiB constant

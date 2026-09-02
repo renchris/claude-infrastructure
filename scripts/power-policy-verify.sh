@@ -75,7 +75,10 @@ ac_block() { awk '/^AC Power:/{inac=1;next} /^[A-Za-z].*Power:[[:space:]]*$/{ina
 
 # ac_value — value of a single-token key in the AC block; absent ⇒ "0" (the macOS default-off state).
 ac_value() { # <key> <file>
-  ac_block "$2" | awk -v k="$1" '$1==k{print $NF; f=1; exit} END{if(!f) print "0"}'
+  # DRAINED (`!f` guard, no `exit`): this body IS the pipeline, so its rc is what the caller reads,
+  # and an awk that exits on the FIRST match SIGPIPEs `ac_block` under this file's pipefail. The
+  # first-wins semantics are unchanged; only the exit is.
+  ac_block "$2" | awk -v k="$1" '$1==k && !f {print $NF; f=1} END{if(!f) print "0"}'
 }
 
 verify() {

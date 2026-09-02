@@ -120,7 +120,7 @@ json_field() { # <file> <key> → the string value, or "" (jq when present; sed 
   # Covers BOTH spellings the stores actually hold: the printf-JSON writers emit compact
   # `"verdict":"x"`, completion-push is pretty-printed `"verdict": "x"`. A predicate that matched
   # only one would silently reclassify a whole store.
-  sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$1" 2>/dev/null | head -1
+  sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$1" 2>/dev/null | sed -n '1p'
 }
 
 json_str() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }

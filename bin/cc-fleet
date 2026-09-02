@@ -557,7 +557,7 @@ STUB
     CC_FLEET_ACTIVATE_DIR="$d/act" CC_FLEET_NOW=2000000000 CC_FLEET_RECONCILE=on \
     "$SELF" "$1" 2>/dev/null
   }
-  state_of() { printf '%s\n' "$1" | sed -n 's/.*"state":"\([^"]*\)".*/\1/p' | head -1; }
+  state_of() { printf '%s\n' "$1" | sed -n 's/.*"state":"\([^"]*\)".*/\1/p' | sed -n '1p'; }
   # if/then/else, never `A && B || C`: with `set -u` and no errexit here, the && || form silently
   # runs the FAILURE branch when the success branch's own status is nonzero (shellcheck SC2015).
   eq()     { if [ "$2" = "$3" ]; then okp "$1"; else badp "$1 (got [$2], want [$3])"; fi; }

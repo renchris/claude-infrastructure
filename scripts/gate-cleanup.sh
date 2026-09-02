@@ -72,7 +72,7 @@ ps_all() {  # → "<pid> <ppid> <command…>" per line
 
 cwd_of() {  # <pid> → its cwd, or empty when unknowable (a process we may not inspect)
   if [ -n "${CC_GATE_CLEANUP_CWD:-}" ]; then "$CC_GATE_CLEANUP_CWD" "$1"; return 0; fi
-  lsof -a -d cwd -p "$1" -Fn 2>/dev/null | sed -n 's/^n//p' | head -1
+  lsof -a -d cwd -p "$1" -Fn 2>/dev/null | sed -n 's/^n//p' | sed -n '1p'
 }
 
 under_worktree() {  # <path> → 0 when at or under $WORKTREE
