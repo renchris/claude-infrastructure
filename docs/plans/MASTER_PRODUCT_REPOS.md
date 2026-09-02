@@ -182,6 +182,64 @@ branch queue is empty or explicitly abandoned with reasons, the production deplo
 single-brained and audited, and doc_classifier's authorization holes are closed with tests.
 
 ## Status log
+- **2026-09-02T08:20Z — SIXTH fire, and it is the one that NARROWS the cause from three candidates
+  to one.** `8f59467c92b0` reached a sixth cloud VM of the identical shape (`$HOME` `/root`,
+  `~/Development` absent, `/home/user` holding `claude-infrastructure` alone, clone 50 commits with
+  `.git/shallow` present, `HEAD..origin/main` = 0). R1-R4 untouched and **still open, correct as
+  filed, and unstarted** — the venue is refuted, not the plan, for the sixth time. What makes this
+  fire different from the five before it is that **every known defect in the park interlock was
+  already fixed and on trunk, and the park itself was landed and visible** — so the recurrence can
+  no longer be explained by any of them. Timeline, all UTC: `d877dc7e` *"the park interlock reads a
+  ref the dispatcher never fetches"* lands **09-01T06:43:13**, putting an explicit `refresh_trunk`
+  in front of the cloud claim gate (`cc-dispatch:2593-2614`); `1cdd601f` lands the fifth fire's park
+  **09-02T00:59:01**; `9a17fea6` lands the `REAP_ACTORS` fix **09-02T06:02:15**; the desk lands
+  trunk HEAD `f56ea619` **09-02T08:09:58**; this fire is composed **09-02T08:20:30**.
+  **(1) Candidate (a) — a stale `orc.ref` — is REFUTED.** This was 09-02's leading hypothesis
+  (*"a park landed ~23 h before this fire is invisible to a ref not fetched since"*). Measured:
+  `git merge-base --is-ancestor 1cdd601f origin/main` is true, and `f56ea619` was landed **10 m 32 s**
+  before this fire, so `origin/main` in the desk's checkout demonstrably held the park at claim time —
+  and `d877dc7e` had already made that refresh explicit a day earlier.
+  **(2) Candidate (c) — an automaton retiring the park — is REFUTED for this row**, by reading all
+  three reap writers rather than by supposing. The cure sweep's `unblock` (`cc-backlog:6167`) selects
+  only blocks with `.by == "cc-backlog-reap"` *and* a `needs` matching three reap-authored sentences;
+  a step-8 park block has neither (`cloud-return.sh:644` calls `block` with **no** `--by`, carrying
+  the park's operator step). The two `reopen` sites (`:5954`, `:6049`) live in the stale-*claim* loop
+  and cannot select a `blocked` row. So once step 8 writes the block, nothing re-opens it. 🚨 One
+  thing worth recording because it is **not** what `9a17fea6` closed: a step-8 block is desk-keyed
+  and necessarily stamped *after* the park it answers, so it retires the park by timestamp the
+  instant it is written — `park_assess` reads `honoured` from the park's own consequence. That is
+  harmless *only* because no reap path re-opens a desk-blocked row; it is one selector away from a
+  permanent leak, and the retraction rule's ground (*"block because the row is then outside
+  cc-dispatch's fire predicate anyway"*) is an assumption about other code, not a property of the arm.
+  **(3) 🚨 Candidate (b) SURVIVES and is now the only one left: a fire composed without passing
+  `cc-backlog claim --venue cloud`.** Established structurally — the park arm has exactly **one**
+  caller (`cc-eligible:17`, `:497`), reached only from `cc-dispatch:2593` and only when `venue=cloud`
+  (which needs `venuePlan=cloud` **and** `CC_FIRE_CLOUD=on`); and `bin/cc-offload`, the actuator that
+  actually creates the session, contains **no** reference to `cc-eligible`, no claim, and no park
+  read. Any path reaching the actuator without the claim is unguarded by construction, and no further
+  work on the predicate can see it.
+  **(4) The one check that decides it is the DESK's, because a VM cannot run it.** `cc-dispatch`
+  journals its own decision per id — `idl claimed … venue=cloud` (`:2747`), `idl skipped …
+  cloud-ineligible` (`:2685`), `idl note … gate=trunk-unrefreshed` (`:2613`). Whether **any** such
+  record exists for `8f59467c92b0` at ~`2026-09-02T08:20Z` settles (b) outright: a record means the
+  gate ran and admitted, and the question is which arm; **no** record means this fire never passed the
+  gate, and the fix belongs at the actuator rather than in the predicate.
+  **(5) 🚨 The refusal ground the 09-01 and 09-02 entries cited is RETRACTED.** Both declined to
+  touch `bin/cc-eligible` on `bin/cc-venue`'s guard. That reading does not survive: the guard keys on
+  the **effect** — *"a cloud label may only be written from a certification, and a shallow clone
+  cannot certify"* — which governs `cc-venue --apply` **writing** a cloud label, not editing the
+  predicate's source; and `9a17fea6` is a landed counter-example, a cloud VM changing
+  `bin/cc-eligible` with 274 tests green, on trunk 2 h 18 m before this fire. Same shape as 09-01's
+  retraction of the tooling ground — a refusal that survived re-citation because nobody re-ran the
+  probe. The honest ground is narrower and is about the finding, not about permission: the surviving
+  candidate says the predicate may not be consulted at all, so another change to it is the shape of a
+  correct analysis that lands and moves nothing. Fire 5's `_park_doc` shallow fail-open
+  (`cc-eligible:943`) stays **open** for the same reason — real, but the admitting gate runs on the
+  desk's full clone, so it cannot be what fired this dispatch.
+  **Disposition: PARKED via a third entry in `docs/parks/8f59467c92b0.md`** — same `needs:` as 09-01
+  and 09-02, deliberately unchanged so the desk sees one consistent instruction. The entry names
+  **this** branch, so `cloud-return.sh` step 8 calls `block` instead of falling through to
+  `cc-backlog done`.
 - **2026-09-02 — FIFTH fire, the first one AFTER a park was on trunk, so the park's efficacy is now
   MEASURED rather than hoped for: it did not hold.** `8f59467c92b0` reached a fifth cloud VM of the
   identical shape (`$HOME` `/root`, `~/Development` absent, `/home/user` holding
