@@ -233,7 +233,8 @@ print(f'{int(p2)}{int(p3)}')
   # If blockers are closed, report that cleanly so the upgrade path is obvious.
   echo -n "  [8/8] upstream blocker-issue gate... "
   local major_minor_patch="${version#v}"
-  local patch_num="${major_minor_patch##*.}"
+  # (no patch_num here: the version test below reads BASH_REMATCH[1], and the stripped-suffix local
+  # that used to sit on this line was written and never read — SC2034, and it blocks the land.)
   local should_check=0
   # Only check for 2.1.115+ (blockers were introduced 2.1.116 onward)
   if [[ "$major_minor_patch" =~ ^2\.1\.([0-9]+)$ ]] && [[ "${BASH_REMATCH[1]}" -ge 115 ]]; then
