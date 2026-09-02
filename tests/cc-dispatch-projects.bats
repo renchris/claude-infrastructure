@@ -433,6 +433,71 @@ mkrepo() {
   ! printf '%s' "$trunk_rail" | grep -q -- '--is-shallow-repository' || false        # ... unguarded
 }
 
+# ── the dispatcher reports its OWN vintage, so "landed" and "ran" stop being one claim ────────────
+@test "brief: the dispatcher stamps the blob sha of its own bytes, and the stamp is the REAL hash" {
+  # backlog 485f8f87eb5f, eighth dispatch. Every remedy for that row's re-dispatch loop — the park
+  # interlock, refresh_trunk, the admission-gate record — changed bytes that reach the loop's
+  # ACTUATOR only through the per-file symlink layer, whose convergence has no ordering relation to
+  # the landing. Three consecutive sections asserted "this fires on the next claim" from a reading of
+  # SOURCE. Measured on the eighth fire: its brief's staleness_rail was byte-identical to 22b8824c^
+  # and differed from trunk, so the live dispatcher predated a commit that had been on trunk for at
+  # least 45 minutes. That measurement was only possible because a prose string happened to have
+  # changed — a fingerprint with 21 days of resolution, which could date the binary but could NOT
+  # say whether refresh_trunk (landed inside that interval) was live. This makes the stamp explicit.
+  seed_items proj-b:1
+  local rb; rb="$(mkrepo proj-b)"; conf "proj-b  repo=$rb"
+  fresh; CC_DISPATCH_CEILING=6 "$DISP" --once >/dev/null 2>&1
+  local b="$C/brief-proj-b-1.txt"
+
+  grep -q 'DISPATCHER VINTAGE — the bytes that composed this brief are bin/cc-dispatch blob ' "$b" || false
+  # the comparison is RUNNABLE AS TYPED and names the item's OWN repo, never the pinned one
+  grep -q "git -C $rb rev-parse origin/main:bin/cc-dispatch" "$b" || false
+  # the disposition when the two differ — a convergence fact to REPORT, not a defect to re-fix
+  grep -q 'landed is not live' "$b" || false
+
+  # THE LOAD-BEARING ASSERTION IS NOT THE TEXT, IT IS THE VALUE. A stamp that names a blob nobody
+  # can resolve is worse than no stamp: it reads as a measurement. Assert the emitted object name is
+  # the real hash of the very binary that composed the brief.
+  local stamped real
+  stamped="$(grep -o 'bin/cc-dispatch blob [0-9a-f]\{40\}' "$b" | head -1 | awk '{print $3}')"
+  real="$(git hash-object -- "$DISP")"
+  [ -n "$stamped" ] && [ -n "$real" ] || false
+  [ "$stamped" = "$real" ] || false
+
+  # NO BACKTICK: same rule as the rail above — these are double-quoted shell strings, so a backtick
+  # would command-substitute at compose time and write its OUTPUT into the worker's brief.
+  ! grep -q '`' "$b" || false
+
+  # ORDERING — the stamp qualifies the rail's own conclusion ("if the cure is on trunk, close on
+  # it"), which is right for a cure in the ITEM and wrong for one in this machinery. A qualifier
+  # printed before the claim it qualifies is not one.
+  local rail_at stamp_at
+  rail_at="$(grep -bo 'If the cure is already on trunk' "$b" | head -1 | cut -d: -f1)"
+  stamp_at="$(grep -bo 'DISPATCHER VINTAGE' "$b" | head -1 | cut -d: -f1)"
+  [ -n "$rail_at" ] && [ -n "$stamp_at" ] || false
+  [ "$rail_at" -lt "$stamp_at" ] || false
+
+  # FAIL-OPEN, AND IT SAYS SO. An omitted line is indistinguishable from a dispatcher too old to
+  # emit one — the "three outcomes, one silence" defect this rail keeps rediscovering. Extracted
+  # rather than driven, because $_self is always readable in-process: run the function alone with
+  # the path unresolved and assert it NAMES the uncertainty at rc 0.
+  local fn="$C/stamp-fn.sh"
+  sed -n '/^dispatcher_stamp() {$/,/^}$/p' "$DISP" > "$fn"
+  [ -s "$fn" ] || false                      # positive control: the function was actually extracted
+  run bash -c ". '$fn'; _self=''; dispatcher_stamp"
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == unknown* ]] || false
+
+  # RED — trunk's own composer, for the deepen cell's reason: $PRISTINE predates the whole brief rail
+  # and would go red for the wrong reason. Skipped rather than failed where trunk is unreachable.
+  local trunk_src
+  if ! trunk_src="$(git -C "$REPO" show origin/main:bin/cc-dispatch 2>/dev/null)"; then
+    skip "origin/main:bin/cc-dispatch unreadable here — the RED control needs trunk's own composer"
+  fi
+  printf '%s' "$trunk_src" | grep -q 'staleness_rail=' || false        # it DOES compose a brief ...
+  ! printf '%s' "$trunk_src" | grep -q 'DISPATCHER VINTAGE' || false   # ... with no vintage in it
+}
+
 # ── one queue: cross-project fairness under the existing S7 key ───────────────────────────────────
 @test "one queue: the OLDEST item wins across projects — a long-undrained foreign item outranks the incumbent's whole queue" {
   # proj-b's items are seeded FIRST, so they carry the oldest ts — this is the live shape: the 5
