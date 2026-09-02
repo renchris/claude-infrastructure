@@ -368,6 +368,13 @@ _bounded() {
 # absent" are different facts, and neither is "the fleet is quiet".
 _cloudret="$_SWEEP_DIR/cloud-return.sh"
 _cloudret_rc="skipped"
+# THE ONE PLACE THIS NUMBER LIVES. It bounds the `timeout` below AND is exported to the child so it
+# can pace itself against the same figure; the child derives its single-flight lock TTL from it too.
+# It is deliberately NOT raised to make lands fit — this pass shares a 300 s launchd tick with the
+# rest of the sweep, so a longer bound makes it a worse neighbour. The repair is the child stopping
+# in time, not the caller waiting longer.
+_cloudret_bound="${CC_SWEEP_RETURN_BOUND_S:-900}"
+case "$_cloudret_bound" in ''|*[!0-9]*) _cloudret_bound=900 ;; esac
 _cc_cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; _cc_cfg="${_cc_cfg%/}"
 # 🚨 EXACT PATH, NOT A PREFIX — and the prefix form was defeated by the very harness it was written
 # to exclude. Caught in the act 2026-08-17T07:56Z:
@@ -392,7 +399,19 @@ _cloudret_deployed=0
 if [ "$_cloudret_deployed" != 1 ]; then
   _cloudret_rc="skipped-not-deployed"
 elif [ -x "$_cloudret" ]; then
-  if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then "$_tmo" -k 10 900 bash "$_cloudret" --sweep --limit "${CC_SWEEP_RETURN_LIMIT:-25}" >/dev/null 2>&1
+  # 🚨 THE BOUND IS A VALUE THIS CALLER OWNS, AND THE CHILD IS TOLD IT.
+  # `--limit` is a COUNT; this `timeout` is a DEADLINE. W3 landed the count, it went live, and the
+  # pass was STILL SIGKILLed on every tick afterwards (`cloud_return_rc`: 137 at 02:40, 03:17,
+  # 04:12, 05:11 and 05:51 on 2026-09-02) — because no count reconciles with a deadline when one
+  # taken session can fall through to a full `ship-land` gate measured in minutes. The child now
+  # enforces the deadline itself, stopping before it STARTS a unit it cannot afford, which needs it
+  # to know the number. Exporting it is the whole point: hardcoding 900 on both sides would put one
+  # fact in two places that cannot check each other, and the first change to this bound would leave
+  # the child confidently pacing against a budget nobody applies any more.
+  # The UNBOUNDED arm exports NOTHING. No `timeout` means no deadline, and a child pacing itself
+  # against a killer that does not exist would defer real work for no reason.
+  if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then
+    CC_RETURN_BOUND_S="$_cloudret_bound" "$_tmo" -k 10 "$_cloudret_bound" bash "$_cloudret" --sweep --limit "${CC_SWEEP_RETURN_LIMIT:-25}" >/dev/null 2>&1
   else bash "$_cloudret" --sweep --limit "${CC_SWEEP_RETURN_LIMIT:-25}" >/dev/null 2>&1; fi
   _cloudret_rc=$?
   # 🚨 THE KILLER CLEANS UP AFTER ITSELF. `timeout -k 10 900` escalates to SIGKILL, and the callee's
@@ -414,7 +433,7 @@ elif [ -x "$_cloudret" ]; then
 fi
 log_idl cloud-return "$(jq -cn --arg c "$_cloudret_rc" \
   '{cloud_return_rc:$c,
-    note:"0 = pass completed (per-session outcomes in the cloud return ledger; the pass-scope row records how many of the pending set it took and how many it deferred); 4 = another pass held the lock; 124 = the bound cut the pass, next tick resumes (the return path itself abstains on a cut land rather than filing a refusal); 137/143 = the bound SIGKILLed it and this caller cleared the stranded single-flight lock; skipped = tool absent (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never land, mark done or spend quota"}')"
+    note:"0 = pass completed (per-session outcomes in the cloud return ledger; the pass-scope row records how many of the pending set it took and how many it deferred, and a `pass-deadline` row — a SEPARATE fact — records a pass that stopped starting work because this caller bound it in time, so an early stop can never read as full coverage); 4 = another pass held the lock; 124 = the bound cut the pass, next tick resumes (the return path itself abstains on a cut land rather than filing a refusal); 137/143 = the bound SIGKILLed it and this caller cleared the stranded single-flight lock; skipped = tool absent (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never land, mark done or spend quota"}')"
 
 # ── the REFUSAL LOOP (W3) — immediately after the return pass, and under ITS OWN guard ────────────
 # The return pass above is what WRITES `<id>.land-refused`, so routing in the same tick closes the

@@ -720,6 +720,13 @@ declare_n() { # <count>
   [[ "$output" == *"session_5"* ]] || false
   [[ "$output" == *"session_4"* ]] || false
   [[ "$output" != *"session_1"* ]]
+  # …AND THEY ARE HANDLED IN THAT ORDER, not merely admitted in it. Invisible while every admitted
+  # row got processed; decisive the moment the deadline arms below can stop a pass partway, because
+  # whoever is started first is who spends the budget. Caught by exactly that: this suite's
+  # deadline-resume arm read `session_2` first, since the re-selection used to iterate the STATE
+  # rows and keep whichever ids matched, discarding the sort it had just paid for.
+  [ "$(printf '%s\n' "$output" | grep -c '^· session_')" -eq 2 ]
+  [ "$(printf '%s\n' "$output" | grep -m1 '^· session_' | cut -d' ' -f2)" = "session_5" ]
 }
 
 @test "the CURSOR reaches the tail — a fixed limit alone would re-examine one head forever" {
@@ -751,6 +758,105 @@ declare_n() { # <count>
   # fixed cost went on growing underneath it, and the pass would still be unfinishable next month.
   grep -q 'cc-cloud poll --only ' "$CALLS"
   grep -q 'cc-cloud list --json --state --only ' "$CALLS"
+}
+
+# ══ THE COUNT IS NOT THE BOUND — THE DEADLINE ARMS (§3d) ════════════════════════════════════════
+#
+# The defect: `--limit` above is landed, live and wired, AND THE SWEEP WAS STILL SIGKILLED ON EVERY
+# PASS (`cloud_return_rc` 137 at 02:40, 03:17, 04:12, 05:11, 05:51 on 2026-09-02 — and no rc 0 in
+# that journal's whole history). A count and a deadline are different units: one taken session can
+# fall through to a full `ship-land` gate measured in minutes, so no constant count fits 900 s.
+#
+# 🚨 THE CLOCK IN THESE ARMS IS REAL, AND THAT IS THE POINT. Every other arm in this suite freezes
+# `CC_RETURN_NOW` for determinism. A frozen clock makes elapsed permanently 0 — a deadline that
+# cannot fire, proved by a harness that collapsed the two states it exists to tell apart. So the
+# over-budget fixture is genuinely slow (its status probe sleeps) and the bound is genuinely small.
+
+# A status probe that costs real wall time — one "unit" of work with a knowable price.
+slow_status() { # <seconds>
+  cat >"$STUBDIR/slow-status.py" <<EOF
+import os, sys, time
+time.sleep($1)
+sys.stdout.write(open(os.environ["STATUS_JSON"]).read())
+EOF
+  export CC_RETURN_STATUS_BIN="$STUBDIR/slow-status.py"
+}
+
+@test "OVER the caller's bound: the pass STOPS STARTING work, exits 0, and says so" {
+  declare_n 5
+  printf '{"worker_status":"working"}\n' >"$STATUS_JSON"   # nothing lands; we are measuring PACING
+  slow_status 1
+  # bound 3 s → budget 2 s at 80%. Unit 1 always runs (a pass that admits itself and does nothing is
+  # a stall wearing a bound's clothes); it measures a unit at ~1 s, and 1 s elapsed + a 1 s reserve
+  # no longer fits 2 s, so unit 2 is never STARTED.
+  CC_RETURN_BOUND_S=3 CC_RETURN_UNIT_RESERVE_S=1 run bash "$SUT" --sweep --limit 5
+  # 🚨 THE ACCEPTANCE IS THE EXIT CODE. Under the caller's `timeout -k 10` this same shape was 137
+  # forever; a clean 0 over an incomplete pass is the whole deliverable.
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"stopped starting new work"* ]] || false
+  [[ "$output" == *"1 managed session(s) examined"* ]] || false
+
+  # 🚨 A DEADLINE DEFERRAL IS ITS OWN FACT. Folded into the cursor's `deferred` it would be
+  # indistinguishable from "the limit had more rows than it took"; omitted entirely it reads as
+  # "nothing pending", which is the absence-is-evidence inversion this rail refuses everywhere.
+  run jq -sc '[.[] | select(.outcome=="pass-deadline")] | last' "$CC_CLOUD_STATE/return.jsonl"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.started')" = "1" ]
+  [ "$(printf '%s' "$output" | jq -r '.unstarted')" = "4" ]
+  [ "$(printf '%s' "$output" | jq -r '.bound_s')" = "3" ]
+  # …and the LIMIT's own row is untouched by it: it took all 5, and deferred none for its reason.
+  run jq -sc '[.[] | select(.outcome=="pass-scope")] | last' "$CC_CLOUD_STATE/return.jsonl"
+  [ "$(printf '%s' "$output" | jq -r '.taken')" = "5" ]
+  [ "$(printf '%s' "$output" | jq -r '.deferred')" = "0" ]
+}
+
+@test "the CONTROL: work that FITS the bound is fully processed and defers nothing" {
+  declare_n 5
+  printf '{"worker_status":"working"}\n' >"$STATUS_JSON"
+  slow_status 0
+  # Same code path, same fixture, a bound the work fits. If the check fired here it would be a
+  # deadline that stops work it had time for — a stall dressed as prudence — and the suite would be
+  # certifying only that the guard CAN fire, never that it fires for the right reason.
+  CC_RETURN_BOUND_S=600 run bash "$SUT" --sweep --limit 5
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"5 managed session(s) examined"* ]] || false
+  [[ "$output" != *"stopped starting new work"* ]]
+  run jq -sc '[.[] | select(.outcome=="pass-deadline")] | length' "$CC_CLOUD_STATE/return.jsonl"
+  [ "$output" = "0" ]
+}
+
+@test "NO caller bound, NO deadline — the child never invents one" {
+  declare_n 3
+  printf '{"worker_status":"working"}\n' >"$STATUS_JSON"
+  slow_status 1
+  # The caller's unbounded arm (no `timeout` on the box) exports nothing. Pacing against a killer
+  # that does not exist would defer real work for no reason, so the check disables itself. Note the
+  # units here are the SAME 1 s ones the first arm stopped on — only the exported bound differs.
+  run bash "$SUT" --sweep --limit 3
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"3 managed session(s) examined"* ]] || false
+  [[ "$output" != *"stopped starting new work"* ]]
+}
+
+@test "a deadline stop RESUMES at the row it did not start, rather than rotating past it" {
+  declare_n 5
+  printf '{"worker_status":"working"}\n' >"$STATUS_JSON"
+  slow_status 1
+  # limit 4 of 5 → the pre-loop cursor write already advanced to 4, which was right when the whole
+  # slice ran and is wrong now: rows 2-4 were admitted and never examined, and would wait a full
+  # rotation. The stop rewinds to what it actually did.
+  CC_RETURN_BOUND_S=3 CC_RETURN_UNIT_RESERVE_S=1 run bash "$SUT" --sweep --limit 4
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"session_5"* ]] || false          # newest first: row 1 is session_5
+  [ "$(head -1 "$CC_CLOUD_STATE/.return.cursor")" = "1" ]
+  # THE OBSERVABLE CONSEQUENCE, not just the file: the next pass starts at session_4 — the row this
+  # one stopped before — and does not re-examine the head it already did. Asserting the cursor file
+  # alone would pass over a cursor nothing consumes.
+  slow_status 0
+  CC_RETURN_BOUND_S=600 run bash "$SUT" --sweep --limit 4
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"session_4"* ]] || false
+  [[ "$output" != *"session_5"* ]]
 }
 
 # ══ A KILLED PASS MUST NOT WEDGE THE NEXT TWELVE TICKS ══════════════════════════════════════════
