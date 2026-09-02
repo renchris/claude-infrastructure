@@ -1,0 +1,660 @@
+{
+ "app": "bench",
+ "character": "the corpus itself",
+ "shot": "@1.5x",
+ "weights": {},
+ "correctness_floor": [
+  "contrast",
+  "contrast-indeterminate",
+  "overflow",
+  "touch-target",
+  "xcheck-contrast-varies",
+  "xcheck-zero-ink"
+ ],
+ "discharge_enabled": true,
+ "pages": {
+  "align-1px": {
+   "page": "align-1px",
+   "settled": 1,
+   "abstained": 0,
+   "discharged": [],
+   "queued": 0,
+   "report": [
+    {
+     "rule": "misalignment",
+     "target": "div.panel:nth-of-type(5)",
+     "severity": "medium",
+     "weight": 1.0,
+     "weighted_severity": 2.0,
+     "weight_reason": "neutral",
+     "suppressed": false,
+     "detail": "left edge at 31px is 1.0px off the shared 32px edge used by 8 other elements"
+    }
+   ],
+   "requests": [
+    {
+     "kind": "gestalt",
+     "rule": null,
+     "container": null,
+     "targets": [],
+     "collapsed_from": 0,
+     "rect": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 900
+     },
+     "visual_tokens": 1518,
+     "weight": 1.0,
+     "weighted_severity": 0.0,
+     "weight_reason": "not a rule; no abstention triggers this",
+     "trigger": "no-rule-covers-relational-judgement",
+     "question": "Whole page, no facts supplied. Where does the eye land first, and is that where it should land? Does anything read as more important than it is? Say what does not make sense.",
+     "prohibition": "Return no number, no coordinate and no score. A rating here would be a taste verdict wearing a measurement's clothes, and taste stays with the operator (June 2026). This output is advisory and can never reach an exit code."
+    }
+   ],
+   "dropped_over_budget": 0,
+   "visual_tokens": 1518,
+   "page_w": 1280,
+   "page_h": 900
+  },
+  "clean": {
+   "page": "clean",
+   "settled": 0,
+   "abstained": 0,
+   "discharged": [],
+   "queued": 0,
+   "report": [],
+   "requests": [
+    {
+     "kind": "gestalt",
+     "rule": null,
+     "container": null,
+     "targets": [],
+     "collapsed_from": 0,
+     "rect": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 900
+     },
+     "visual_tokens": 1518,
+     "weight": 1.0,
+     "weighted_severity": 0.0,
+     "weight_reason": "not a rule; no abstention triggers this",
+     "trigger": "no-rule-covers-relational-judgement",
+     "question": "Whole page, no facts supplied. Where does the eye land first, and is that where it should land? Does anything read as more important than it is? Say what does not make sense.",
+     "prohibition": "Return no number, no coordinate and no score. A rating here would be a taste verdict wearing a measurement's clothes, and taste stays with the operator (June 2026). This output is advisory and can never reach an exit code."
+    }
+   ],
+   "dropped_over_budget": 0,
+   "visual_tokens": 1518,
+   "page_w": 1280,
+   "page_h": 900
+  },
+  "contrast-on-gradient": {
+   "page": "contrast-on-gradient",
+   "settled": 2,
+   "abstained": 2,
+   "discharged": [
+    {
+     "rule": "contrast-indeterminate",
+     "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
+     "detail": "cannot compute a ratio: backdrop is an image/gradient on div.hero:nth-of-type(1). Requirement 3.0:1 is UNVERIFIED for this text",
+     "severity": "high",
+     "discharged_by": [
+      "xcheck-contrast-varies"
+     ]
+    },
+    {
+     "rule": "contrast-indeterminate",
+     "target": "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
+     "detail": "cannot compute a ratio: backdrop is an image/gradient on div.hero:nth-of-type(1). Requirement 4.5:1 is UNVERIFIED for this text",
+     "severity": "high",
+     "discharged_by": [
+      "xcheck-contrast-varies"
+     ]
+    }
+   ],
+   "queued": 0,
+   "report": [
+    {
+     "rule": "xcheck-contrast-varies",
+     "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
+     "severity": "high",
+     "weight": 1.0,
+     "weighted_severity": 3.0,
+     "weight_reason": "neutral",
+     "suppressed": false,
+     "detail": "contrast is not one number across this text: 5.55:1 at the left edge and 1.57:1 at the right. Any single computed value is a fiction, and the right end is the one that fails a reader"
+    },
+    {
+     "rule": "xcheck-contrast-varies",
+     "target": "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
+     "severity": "high",
+     "weight": 1.0,
+     "weighted_severity": 3.0,
+     "weight_reason": "neutral",
+     "suppressed": false,
+     "detail": "contrast is not one number across this text: 4.81:1 at the left edge and 1.38:1 at the right. Any single computed value is a fiction, and the right end is the one that fails a reader"
+    }
+   ],
+   "requests": [
+    {
+     "kind": "gestalt",
+     "rule": null,
+     "container": null,
+     "targets": [],
+     "collapsed_from": 0,
+     "rect": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 900
+     },
+     "visual_tokens": 1518,
+     "weight": 1.0,
+     "weighted_severity": 0.0,
+     "weight_reason": "not a rule; no abstention triggers this",
+     "trigger": "no-rule-covers-relational-judgement",
+     "question": "Whole page, no facts supplied. Where does the eye land first, and is that where it should land? Does anything read as more important than it is? Say what does not make sense.",
+     "prohibition": "Return no number, no coordinate and no score. A rating here would be a taste verdict wearing a measurement's clothes, and taste stays with the operator (June 2026). This output is advisory and can never reach an exit code."
+    }
+   ],
+   "dropped_over_budget": 0,
+   "visual_tokens": 1518,
+   "page_w": 1280,
+   "page_h": 900
+  },
+  "contrast-plain": {
+   "page": "contrast-plain",
+   "settled": 1,
+   "abstained": 0,
+   "discharged": [],
+   "queued": 0,
+   "report": [
+    {
+     "rule": "contrast",
+     "target": "div.helper:nth-of-type(4)",
+     "severity": "high",
+     "weight": 1.0,
+     "weighted_severity": 3.0,
+     "weight_reason": "neutral",
+     "suppressed": false,
+     "detail": "2.54:1 against 4.5:1 required (#9CA3AF on #FFFFFF)"
+    }
+   ],
+   "requests": [
+    {
+     "kind": "gestalt",
+     "rule": null,
+     "container": null,
+     "targets": [],
+     "collapsed_from": 0,
+     "rect": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 900
+     },
+     "visual_tokens": 1518,
+     "weight": 1.0,
+     "weighted_severity": 0.0,
+     "weight_reason": "not a rule; no abstention triggers this",
+     "trigger": "no-rule-covers-relational-judgement",
+     "question": "Whole page, no facts supplied. Where does the eye land first, and is that where it should land? Does anything read as more important than it is? Say what does not make sense.",
+     "prohibition": "Return no number, no coordinate and no score. A rating here would be a taste verdict wearing a measurement's clothes, and taste stays with the operator (June 2026). This output is advisory and can never reach an exit code."
+    }
+   ],
+   "dropped_over_budget": 0,
+   "visual_tokens": 1518,
+   "page_w": 1280,
+   "page_h": 900
+  },
+  "grid-offgrid": {
+   "page": "grid-offgrid",
+   "settled": 1,
+   "abstained": 0,
+   "discharged": [],
+   "queued": 0,
+   "report": [
+    {
+     "rule": "grid-violation",
+     "target": "div.section-title:nth-of-type(3)",
+     "severity": "low",
+     "weight": 1.0,
+     "weighted_severity": 1.0,
+     "weight_reason": "neutral",
+     "suppressed": false,
+     "detail": "margin-top is 13px, not a multiple of the 8px grid"
+    }
+   ],
+   "requests": [
+    {
+     "kind": "gestalt",
+     "rule": null,
+     "container": null,
+     "targets": [],
+     "collapsed_from": 0,
+     "rect": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 900
+     },
+     "visual_tokens": 1518,
+     "weight": 1.0,
+     "weighted_severity": 0.0,
+     "weight_reason": "not a rule; no abstention triggers this",
+     "trigger": "no-rule-covers-relational-judgement",
+     "question": "Whole page, no facts supplied. Where does the eye land first, and is that where it should land? Does anything read as more important than it is? Say what does not make sense.",
+     "prohibition": "Return no number, no coordinate and no score. A rating here would be a taste verdict wearing a measurement's clothes, and taste stays with the operator (June 2026). This output is advisory and can never reach an exit code."
+    }
+   ],
+   "dropped_over_budget": 0,
+   "visual_tokens": 1518,
+   "page_w": 1280,
+   "page_h": 900
+  },
+  "hierarchy-inversion": {
+   "page": "hierarchy-inversion",
+   "settled": 2,
+   "abstained": 0,
+   "discharged": [],
+   "queued": 0,
+   "report": [
+    {
+     "rule": "contrast",
+     "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
+     "severity": "high",
+     "weight": 1.0,
+     "weighted_severity": 3.0,
+     "weight_reason": "neutral",
+     "suppressed": false,
+     "detail": "3.38:1 against 4.5:1 required (#3B82F6 on #EFF6FF)"
+    },
+    {
+     "rule": "token-drift",
+     "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
+     "severity": "low",
+     "weight": 1.0,
+     "weighted_severity": 1.0,
+     "weight_reason": "neutral",
+     "suppressed": false,
+     "detail": "background-color #EFF6FF is 11.5 away from token #F9FAFB; almost certainly meant to be the token"
+    }
+   ],
+   "requests": [
+    {
+     "kind": "gestalt",
+     "rule": null,
+     "container": null,
+     "targets": [],
+     "collapsed_from": 0,
+     "rect": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 900
+     },
+     "visual_tokens": 1518,
+     "weight": 1.0,
+     "weighted_severity": 0.0,
+     "weight_reason": "not a rule; no abstention triggers this",
+     "trigger": "no-rule-covers-relational-judgement",
+     "question": "Whole page, no facts supplied. Where does the eye land first, and is that where it should land? Does anything read as more important than it is? Say what does not make sense.",
+     "prohibition": "Return no number, no coordinate and no score. A rating here would be a taste verdict wearing a measurement's clothes, and taste stays with the operator (June 2026). This output is advisory and can never reach an exit code."
+    }
+   ],
+   "dropped_over_budget": 0,
+   "visual_tokens": 1518,
+   "page_w": 1280,
+   "page_h": 900
+  },
+  "optical-centering": {
+   "page": "optical-centering",
+   "settled": 1,
+   "abstained": 0,
+   "discharged": [],
+   "queued": 0,
+   "report": [
+    {
+     "rule": "xcheck-optical-centre",
+     "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
+     "severity": "medium",
+     "weight": 1.0,
+     "weighted_severity": 2.0,
+     "weight_reason": "neutral",
+     "suppressed": false,
+     "detail": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) centres this mark's box exactly, but its rendered ink sits 1.6px left of that container's centre (vertical offset +1.8px, not gated: font metrics own it). It will read as misaligned however correct the CSS is"
+    }
+   ],
+   "requests": [
+    {
+     "kind": "gestalt",
+     "rule": null,
+     "container": null,
+     "targets": [],
+     "collapsed_from": 0,
+     "rect": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 900
+     },
+     "visual_tokens": 1518,
+     "weight": 1.0,
+     "weighted_severity": 0.0,
+     "weight_reason": "not a rule; no abstention triggers this",
+     "trigger": "no-rule-covers-relational-judgement",
+     "question": "Whole page, no facts supplied. Where does the eye land first, and is that where it should land? Does anything read as more important than it is? Say what does not make sense.",
+     "prohibition": "Return no number, no coordinate and no score. A rating here would be a taste verdict wearing a measurement's clothes, and taste stays with the operator (June 2026). This output is advisory and can never reach an exit code."
+    }
+   ],
+   "dropped_over_budget": 0,
+   "visual_tokens": 1518,
+   "page_w": 1280,
+   "page_h": 900
+  },
+  "overflow-clip": {
+   "page": "overflow-clip",
+   "settled": 3,
+   "abstained": 0,
+   "discharged": [],
+   "queued": 0,
+   "report": [
+    {
+     "rule": "overflow",
+     "target": "div.panel:nth-of-type(5) > table > tbody > tr:nth-of-type(2) > td.cell-venue:nth-of-type(2)",
+     "severity": "high",
+     "weight": 1.0,
+     "weighted_severity": 3.0,
+     "weight_reason": "neutral",
+     "suppressed": false,
+     "detail": "content is 40px tall inside a 24px box with overflow hidden; text is clipped"
+    },
+    {
+     "rule": "overflow",
+     "target": "div.panel:nth-of-type(5) > table > tbody > tr:nth-of-type(3) > td.cell-venue:nth-of-type(2)",
+     "severity": "high",
+     "weight": 1.0,
+     "weighted_severity": 3.0,
+     "weight_reason": "neutral",
+     "suppressed": false,
+     "detail": "content is 40px tall inside a 24px box with overflow hidden; text is clipped"
+    },
+    {
+     "rule": "overflow",
+     "target": "div.panel:nth-of-type(5) > table > tbody > tr:nth-of-type(4) > td.cell-venue:nth-of-type(2)",
+     "severity": "high",
+     "weight": 1.0,
+     "weighted_severity": 3.0,
+     "weight_reason": "neutral",
+     "suppressed": false,
+     "detail": "content is 40px tall inside a 24px box with overflow hidden; text is clipped"
+    }
+   ],
+   "requests": [
+    {
+     "kind": "gestalt",
+     "rule": null,
+     "container": null,
+     "targets": [],
+     "collapsed_from": 0,
+     "rect": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 900
+     },
+     "visual_tokens": 1518,
+     "weight": 1.0,
+     "weighted_severity": 0.0,
+     "weight_reason": "not a rule; no abstention triggers this",
+     "trigger": "no-rule-covers-relational-judgement",
+     "question": "Whole page, no facts supplied. Where does the eye land first, and is that where it should land? Does anything read as more important than it is? Say what does not make sense.",
+     "prohibition": "Return no number, no coordinate and no score. A rating here would be a taste verdict wearing a measurement's clothes, and taste stays with the operator (June 2026). This output is advisory and can never reach an exit code."
+    }
+   ],
+   "dropped_over_budget": 0,
+   "visual_tokens": 1518,
+   "page_w": 1280,
+   "page_h": 900
+  },
+  "radius-drift": {
+   "page": "radius-drift",
+   "settled": 1,
+   "abstained": 0,
+   "discharged": [],
+   "queued": 0,
+   "report": [
+    {
+     "rule": "token-drift",
+     "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(2)",
+     "severity": "low",
+     "weight": 1.0,
+     "weighted_severity": 1.0,
+     "weight_reason": "neutral",
+     "suppressed": false,
+     "detail": "border-radius 6px differs from the page's dominant 8px"
+    }
+   ],
+   "requests": [
+    {
+     "kind": "gestalt",
+     "rule": null,
+     "container": null,
+     "targets": [],
+     "collapsed_from": 0,
+     "rect": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 900
+     },
+     "visual_tokens": 1518,
+     "weight": 1.0,
+     "weighted_severity": 0.0,
+     "weight_reason": "not a rule; no abstention triggers this",
+     "trigger": "no-rule-covers-relational-judgement",
+     "question": "Whole page, no facts supplied. Where does the eye land first, and is that where it should land? Does anything read as more important than it is? Say what does not make sense.",
+     "prohibition": "Return no number, no coordinate and no score. A rating here would be a taste verdict wearing a measurement's clothes, and taste stays with the operator (June 2026). This output is advisory and can never reach an exit code."
+    }
+   ],
+   "dropped_over_budget": 0,
+   "visual_tokens": 1518,
+   "page_w": 1280,
+   "page_h": 900
+  },
+  "spacing-gap": {
+   "page": "spacing-gap",
+   "settled": 2,
+   "abstained": 0,
+   "discharged": [],
+   "queued": 0,
+   "report": [
+    {
+     "rule": "spacing-rhythm",
+     "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(3)",
+     "severity": "medium",
+     "weight": 1.0,
+     "weighted_severity": 2.0,
+     "weight_reason": "neutral",
+     "suppressed": false,
+     "detail": "gap 39.0px breaks the 16.0px rhythm used by its siblings under div.kpi-row:nth-of-type(2)"
+    },
+    {
+     "rule": "grid-violation",
+     "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(3)",
+     "severity": "low",
+     "weight": 1.0,
+     "weighted_severity": 1.0,
+     "weight_reason": "neutral",
+     "suppressed": false,
+     "detail": "margin-left is 23px, not a multiple of the 8px grid"
+    }
+   ],
+   "requests": [
+    {
+     "kind": "gestalt",
+     "rule": null,
+     "container": null,
+     "targets": [],
+     "collapsed_from": 0,
+     "rect": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 900
+     },
+     "visual_tokens": 1518,
+     "weight": 1.0,
+     "weighted_severity": 0.0,
+     "weight_reason": "not a rule; no abstention triggers this",
+     "trigger": "no-rule-covers-relational-judgement",
+     "question": "Whole page, no facts supplied. Where does the eye land first, and is that where it should land? Does anything read as more important than it is? Say what does not make sense.",
+     "prohibition": "Return no number, no coordinate and no score. A rating here would be a taste verdict wearing a measurement's clothes, and taste stays with the operator (June 2026). This output is advisory and can never reach an exit code."
+    }
+   ],
+   "dropped_over_budget": 0,
+   "visual_tokens": 1518,
+   "page_w": 1280,
+   "page_h": 900
+  },
+  "token-color-drift": {
+   "page": "token-color-drift",
+   "settled": 1,
+   "abstained": 0,
+   "discharged": [],
+   "queued": 0,
+   "report": [
+    {
+     "rule": "token-drift",
+     "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
+     "severity": "low",
+     "weight": 1.0,
+     "weighted_severity": 1.0,
+     "weight_reason": "neutral",
+     "suppressed": false,
+     "detail": "background-color #1D4ED3 is 5.0 away from token #1D4ED8; almost certainly meant to be the token"
+    }
+   ],
+   "requests": [
+    {
+     "kind": "gestalt",
+     "rule": null,
+     "container": null,
+     "targets": [],
+     "collapsed_from": 0,
+     "rect": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 900
+     },
+     "visual_tokens": 1518,
+     "weight": 1.0,
+     "weighted_severity": 0.0,
+     "weight_reason": "not a rule; no abstention triggers this",
+     "trigger": "no-rule-covers-relational-judgement",
+     "question": "Whole page, no facts supplied. Where does the eye land first, and is that where it should land? Does anything read as more important than it is? Say what does not make sense.",
+     "prohibition": "Return no number, no coordinate and no score. A rating here would be a taste verdict wearing a measurement's clothes, and taste stays with the operator (June 2026). This output is advisory and can never reach an exit code."
+    }
+   ],
+   "dropped_over_budget": 0,
+   "visual_tokens": 1518,
+   "page_w": 1280,
+   "page_h": 900
+  },
+  "touch-target": {
+   "page": "touch-target",
+   "settled": 1,
+   "abstained": 0,
+   "discharged": [],
+   "queued": 0,
+   "report": [
+    {
+     "rule": "touch-target",
+     "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-secondary:nth-of-type(2)",
+     "severity": "high",
+     "weight": 1.0,
+     "weighted_severity": 3.0,
+     "weight_reason": "neutral",
+     "suppressed": false,
+     "detail": "164x29px is under the 44px minimum target"
+    }
+   ],
+   "requests": [
+    {
+     "kind": "gestalt",
+     "rule": null,
+     "container": null,
+     "targets": [],
+     "collapsed_from": 0,
+     "rect": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 900
+     },
+     "visual_tokens": 1518,
+     "weight": 1.0,
+     "weighted_severity": 0.0,
+     "weight_reason": "not a rule; no abstention triggers this",
+     "trigger": "no-rule-covers-relational-judgement",
+     "question": "Whole page, no facts supplied. Where does the eye land first, and is that where it should land? Does anything read as more important than it is? Say what does not make sense.",
+     "prohibition": "Return no number, no coordinate and no score. A rating here would be a taste verdict wearing a measurement's clothes, and taste stays with the operator (June 2026). This output is advisory and can never reach an exit code."
+    }
+   ],
+   "dropped_over_budget": 0,
+   "visual_tokens": 1518,
+   "page_w": 1280,
+   "page_h": 900
+  },
+  "type-scale": {
+   "page": "type-scale",
+   "settled": 1,
+   "abstained": 0,
+   "discharged": [],
+   "queued": 0,
+   "report": [
+    {
+     "rule": "type-scale",
+     "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(4) > div.kpi-label:nth-of-type(1)",
+     "severity": "medium",
+     "weight": 1.0,
+     "weighted_severity": 2.0,
+     "weight_reason": "neutral",
+     "suppressed": false,
+     "detail": "font-size 17px is used once and sits off the page scale [12.0, 14.0, 16.0, 24.0]; nearest step is 16px"
+    }
+   ],
+   "requests": [
+    {
+     "kind": "gestalt",
+     "rule": null,
+     "container": null,
+     "targets": [],
+     "collapsed_from": 0,
+     "rect": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 900
+     },
+     "visual_tokens": 1518,
+     "weight": 1.0,
+     "weighted_severity": 0.0,
+     "weight_reason": "not a rule; no abstention triggers this",
+     "trigger": "no-rule-covers-relational-judgement",
+     "question": "Whole page, no facts supplied. Where does the eye land first, and is that where it should land? Does anything read as more important than it is? Say what does not make sense.",
+     "prohibition": "Return no number, no coordinate and no score. A rating here would be a taste verdict wearing a measurement's clothes, and taste stays with the operator (June 2026). This output is advisory and can never reach an exit code."
+    }
+   ],
+   "dropped_over_budget": 0,
+   "visual_tokens": 1518,
+   "page_w": 1280,
+   "page_h": 900
+  }
+ }
+}

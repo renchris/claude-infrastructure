@@ -11,3 +11,6 @@ corpus/out/pages/
 corpus/out/shots/
 corpus/out/snapshots/
 corpus/out/blind/
+# route.py cuts these from shots/ on demand; the plan that asks for them
+# (route_plan.json) is the evidence, and it names every rect.
+corpus/out/crops/

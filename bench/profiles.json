@@ -1,0 +1,94 @@
+{
+  "_note": [
+    "Per-app rule weightings. One review harness, three different problems.",
+    "",
+    "A weight multiplies a finding's severity score. 0 suppresses the rule for that",
+    "app; 1.0 is neutral; above 1.0 promotes. The point is not tuning -- it is that",
+    "the same rule means different things in different codebases. `token-drift` in a",
+    "design system is the system failing; in a purchased marketing template it is a",
+    "report that the template is not our token file, which we already knew.",
+    "",
+    "CORRECTNESS RULES CANNOT BE WEIGHTED DOWN. route.py clamps contrast,",
+    "touch-target, overflow and every *-indeterminate rule to a floor of 1.0 and",
+    "says so in the plan. That floor is the June 2026 ruling made mechanical: gates",
+    "adjudicate correctness and coverage, taste stays human. A profile that could",
+    "silently mute an accessibility failure would be a taste knob on a correctness",
+    "gate, which is the one thing this pipeline may not grow."
+  ],
+  "correctness_floor": [
+    "contrast",
+    "contrast-indeterminate",
+    "touch-target",
+    "overflow",
+    "xcheck-zero-ink",
+    "xcheck-contrast-varies"
+  ],
+  "apps": {
+    "reso-landing-app": {
+      "character": "marketing aesthetics",
+      "why": [
+        "Next 14, purchased template. Its tokens are the vendor's, not ours, so",
+        "conformance findings against our token file are reports about provenance",
+        "rather than about quality. What actually matters on a landing page is the",
+        "judgement the deterministic layer cannot make: does the eye land in the",
+        "right place, does the page read as one thing. So the rules go quiet and",
+        "the gestalt budget goes up."
+      ],
+      "weights": {
+        "token-drift": 0.2,
+        "grid-violation": 0.2,
+        "type-scale": 0.4,
+        "spacing-rhythm": 0.6,
+        "misalignment": 0.6,
+        "xcheck-optical-centre": 1.0
+      },
+      "gestalt": true,
+      "vlm_budget_per_page": 3
+    },
+    "reso-management-app": {
+      "character": "design-system conformance",
+      "why": [
+        "Next 16, React 19, Tailwind 4 + Panda. An internal operator tool with a",
+        "real token source, where drift IS the defect and the deterministic layer",
+        "does nearly all the work. The model is asked least here, because the",
+        "questions it answers are the ones this app has fewest of.",
+        "",
+        "Its Tailwind engine has no declared token source (measured 2026-08-26:",
+        "zero @theme blocks in the app-shell CSS entry), so a K-family verdict on a",
+        "Tailwind-authored colour is an abstention, not a pass -- see PIPELINE_SPEC",
+        "1.0. That is a routing fact, not a weighting one, and it is why this app's",
+        "gestalt budget being low does not mean its VLM queue is empty."
+      ],
+      "weights": {
+        "token-drift": 1.3,
+        "grid-violation": 1.2,
+        "type-scale": 1.2,
+        "spacing-rhythm": 1.2,
+        "misalignment": 1.0,
+        "xcheck-optical-centre": 1.0
+      },
+      "gestalt": true,
+      "vlm_budget_per_page": 1
+    },
+    "reso-web-app": {
+      "character": "between the two",
+      "why": [
+        "Next 13, guest-facing but ours. Neither a vendor template nor a strict",
+        "system, so nothing is weighted away and nothing is promoted."
+      ],
+      "weights": {},
+      "gestalt": true,
+      "vlm_budget_per_page": 2
+    },
+    "bench": {
+      "character": "the corpus itself",
+      "why": [
+        "Neutral by construction. The corpus grades detectors, so a weighting here",
+        "would grade the weighting instead."
+      ],
+      "weights": {},
+      "gestalt": true,
+      "vlm_budget_per_page": 2
+    }
+  }
+}

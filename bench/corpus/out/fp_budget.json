@@ -1,0 +1,49 @@
+{
+ "ceiling": 0.2,
+ "runs": [
+  {
+   "shot": "@1x",
+   "control_findings": [],
+   "off_target": [],
+   "novel_findings": 19,
+   "by_rule": {
+    "contrast": 2,
+    "contrast-indeterminate": 2,
+    "grid-violation": 2,
+    "misalignment": 1,
+    "overflow": 3,
+    "spacing-rhythm": 1,
+    "token-drift": 3,
+    "touch-target": 1,
+    "type-scale": 1,
+    "xcheck-contrast-varies": 2,
+    "xcheck-optical-centre": 1
+   },
+   "false_positives": 0,
+   "total_findings": 19,
+   "fp_rate": 0.0
+  },
+  {
+   "shot": "@1.5x",
+   "control_findings": [],
+   "off_target": [],
+   "novel_findings": 19,
+   "by_rule": {
+    "contrast": 2,
+    "contrast-indeterminate": 2,
+    "grid-violation": 2,
+    "misalignment": 1,
+    "overflow": 3,
+    "spacing-rhythm": 1,
+    "token-drift": 3,
+    "touch-target": 1,
+    "type-scale": 1,
+    "xcheck-contrast-varies": 2,
+    "xcheck-optical-centre": 1
+   },
+   "false_positives": 0,
+   "total_findings": 19,
+   "fp_rate": 0.0
+  }
+ ]
+}
