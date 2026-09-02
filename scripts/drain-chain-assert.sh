@@ -102,6 +102,53 @@
 # when the condition clears, with no human in the loop — the difference between an alarm with a
 # consumer and an alarm with a pager.
 #
+# ── THE TWO ARMS THAT MADE THIS FILE STRUCTURALLY UNABLE TO SAY `dead` (2026-08-31) ─────────────
+# The predicate above is right and it still never fired. Across its whole deployed life this
+# detector has filed ZERO `local-drain-chain-dead` rows at any status — and it MISSED a real
+# 40.5-hour death: brief #259 was written 2026-08-28T23:56:02Z and #260 not until
+# 2026-08-30T16:28:25Z (145,943 s; Aug 29 fired no recycle at all). Two independent structural
+# blind arms, either of which alone is sufficient to explain the silence:
+#
+#   (a) THE BRIEF GLOB POINTED AT A DIRECTORY THE CHAIN DOES NOT WRITE. The default was
+#       `/tmp/fire-drain-recycle*.txt`; §4.1's template says /tmp, but the live chain has written
+#       `$HOME/.claude/autonomy/fire-drain-recycle<N>.txt` for its whole modern life. Measured
+#       2026-08-31 against the running chain: `--json` reported `brief:null, brief_age_s:null` with
+#       279 briefs on disk. So `FRESH` was PERMANENTLY 0, and with it BOTH arms that can only speak
+#       about a chain that has recycled at all — the handover grace and the progress oracle — were
+#       unreachable. The whole predicate rewrite of 2026-08-18 was dead code on this box.
+#       A SECOND HOP OF THE SAME ARM: the fire is logged to handoffs.jsonl with the POINTER it is
+#       fired with (`fire-pointer-<N>.txt`, 152 bytes, "read the brief in full"), never the 300 KB
+#       brief the glob matches — the chain grew that indirection when the brief outgrew a prompt.
+#       So hop 1's `prompt_file == $BRIEF` join could not match either, and fixing the glob alone
+#       would have converted a permanent false ALIVE into a permanent false DEAD at every tick.
+#       The join is therefore on the RECYCLE NUMBER (the digit run in the basename), which is
+#       spelling-independent — an enumeration of the four filename spellings seen so far would be
+#       the `denylist-enumerates-spellings-not-the-class` defect one layer in.
+#
+#   (b) GUARD 3 — "ANY LIVE CLAIM COUNTS, WHOEVER HOLDS IT" — IS REFUTED AS WRITTEN, AND ITS OWN
+#       REASONING IS WHAT REFUTES IT. It was argued below on the premise that "a Lane A cloud
+#       worker draining a row is the chain doing its job as much as Lane B is". Lane A is not
+#       draining: DRAIN_CIRCUIT_2026-09-01 §1.3 measures 1 of 17 dispatched items ever reaching
+#       `done`, because the dispatcher claims, the worker never lands, `cc-backlog-reap` blocks
+#       then unblocks, and the row is re-claimed five minutes later, forever. That oscillation
+#       keeps `venue:"cloud"` leases live around the clock, so this disjunct is a CONSTANT — and a
+#       disjunct that is always true makes every arm after it unreachable. That is precisely this
+#       file's own stated lesson (`liveness-proxy-cannot-be-output-age`,
+#       `alarm-polarity-and-attention-budget`): a proxy the healthy and the dead population both
+#       satisfy carries no bits. Measured over the 40.5 h window: 24 claims, ALL of them
+#       `venue:"cloud"`, and a live sample on 2026-08-31 read `alive/live-lease` on two cloud
+#       leases whose holder PIDs were both already dead.
+#       THE FIX IS THE NARROWEST ONE THAT RESTORES THE BITS: a `venue:"cloud"` lease no longer
+#       proves THIS chain alive. It is not ignored — it is counted, reported as `cloud_leases`,
+#       and NAMED in the filed row's title, because a "nothing is working them" claim that hides a
+#       stratum is the `zero-claim-must-name-its-excluded-strata` defect. Every other holder still
+#       counts, and a row whose venue cannot be read counts as local: the abstention still runs
+#       toward ALIVE, which remains the only direction this alarm may be wrong in.
+#       WHY THIS IS THE RIGHT SUBJECT: every `dead` title this file writes prescribes a LANE B
+#       remedy ("restart it with the Lane B recycle-fire template in §4.1"). A detector whose only
+#       remedy is Lane B's must be keyed on Lane B's liveness, or it is answering a question it
+#       cannot act on.
+#
 # ── THE THREE FAIL-OPEN GUARDS, EACH ONE LOAD-BEARING ──────────────────────────────────────────
 #   1. NO STORE / NO TOOL / UNREADABLE FOLD ⇒ alive:skipped. "I could not ask" must never render as
 #      "the answer was no" (backlog-grouping-sweep.sh's own lesson). A detector that convicts on an
@@ -149,7 +196,10 @@
 #   drain-chain-assert.sh --file     file/update ONE condition-keyed row when dead
 #   drain-chain-assert.sh --json     the verdict as one JSON object (machine consumers)
 # Env:
-#   CC_DRAIN_BRIEF_GLOB       default "$TMPDIR-ish/fire-drain-recycle*.txt" — §4.1's brief path
+#   CC_DRAIN_BRIEF_GLOB       a NEWLINE-separated list of globs; default = the live chain's own
+#                             directory ($CLAUDE_CONFIG_DIR/autonomy) FIRST, then /tmp (§4.1's
+#                             historical path, kept so an old-shaped chain is still seen). A
+#                             single-line value is one glob, which is what every prior caller passed
 #   CC_DRAIN_CHAIN_MAX_AGE_S  default 86400 (§6's "younger than 24h") — a CEILING on the brief, and
 #                             deliberately unchanged: shortening it convicts a healthy long recycle
 #   CC_DRAIN_PROGRESS_MAX_AGE_S default 3600 — how long the fired session's transcript may be silent
@@ -164,7 +214,19 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(dirname "$HERE")"
 BACKLOG_BIN="${CC_BACKLOG_BIN:-$REPO/bin/cc-backlog}"
-BRIEF_GLOB="${CC_DRAIN_BRIEF_GLOB:-/tmp/fire-drain-recycle*.txt}"
+# A LIST, newline-separated, because the chain's real directory and §4.1's documented /tmp path are
+# both legitimate places to find a brief and neither may shadow the other. Newlines rather than
+# spaces so a home directory containing one cannot silently split a path in half. A caller passing a
+# single glob (every existing one, including tests/drain-chain-assert.bats) is a one-element list.
+# $HOME/.claude is listed BESIDE $CLAUDE_CONFIG_DIR rather than only as its fallback: an agent
+# session runs under an isolated config dir (`.claude-tertiary` here) while autonomy-sweep runs under
+# `~/.claude`, so resolving only the caller's own dir makes the answer depend on WHO ASKED — the
+# detector would see the chain from the sweep and not from a session, or the reverse. Newest match
+# across all globs wins, so listing a directory that does not exist costs nothing.
+BRIEF_GLOB="${CC_DRAIN_BRIEF_GLOB:-$(printf '%s\n%s\n%s' \
+  "${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}/autonomy/fire-drain-recycle*.txt" \
+  "${HOME:-}/.claude/autonomy/fire-drain-recycle*.txt" \
+  "/tmp/fire-drain-recycle*.txt")}"
 MAX_AGE="${CC_DRAIN_CHAIN_MAX_AGE_S:-86400}"
 PROGRESS_MAX_AGE="${CC_DRAIN_PROGRESS_MAX_AGE_S:-3600}"
 HANDOVER_GRACE="${CC_DRAIN_HANDOVER_GRACE_S:-900}"
@@ -219,7 +281,7 @@ _ENGAGE_LIB="$REPO/hooks/lib/engagement.sh"
 # VERDICT + WHY are ONE pair computed once and rendered by every arm, so the number a gate refuses
 # on, the number a row is filed with and the number a human reads are the same read of the same
 # store. Two reads would be two populations five minutes apart.
-VERDICT="alive"; WHY="skipped"; LIVE=0; BRIEF_AGE=-1; BRIEF=""; LEASES=0
+VERDICT="alive"; WHY="skipped"; LIVE=0; BRIEF_AGE=-1; BRIEF=""; LEASES=0; CLOUD_LEASES=0
 PROGRESS_AGE=-1; PANE=""; SID=""; TRANSCRIPT=""; PROGRESS_WHY=""
 
 emit() { # render + exit, per mode. Called exactly once.
@@ -228,16 +290,17 @@ emit() { # render + exit, per mode. Called exactly once.
       jq -cn --arg v "$VERDICT" --arg w "$WHY" --arg b "$BRIEF" \
              --arg pn "$PANE" --arg sd "$SID" --arg tr "$TRANSCRIPT" --arg pw "$PROGRESS_WHY" \
              --argjson l "$LIVE" --argjson a "$BRIEF_AGE" --argjson c "$LEASES" \
+             --argjson cl "$CLOUD_LEASES" \
              --argjson p "$PROGRESS_AGE" --argjson pm "$PROGRESS_MAX_AGE" \
              --argjson hg "$HANDOVER_GRACE" \
         '{verdict:$v, why:$w, live_rows:$l, brief:(if $b=="" then null else $b end),
-          brief_age_s:(if $a < 0 then null else $a end), live_leases:$c,
+          brief_age_s:(if $a < 0 then null else $a end), live_leases:$c, cloud_leases:$cl,
           progress_age_s:(if $p < 0 then null else $p end),
           progress_why:(if $pw=="" then null else $pw end),
           pane:(if $pn=="" then null else $pn end), sid:(if $sd=="" then null else $sd end),
           transcript:(if $tr=="" then null else $tr end),
           progress_max_age_s:$pm, handover_grace_s:$hg,
-          note:"verdict alive|dead. why: drained = zero live rows, the SUCCESS state, never files; handover-grace = a recycle fired inside CC_DRAIN_HANDOVER_GRACE_S, the blind window at every handover where nothing about the successor is knowable yet; live-lease = a non-done row is claimed inside CC_BACKLOG_STALE_CLAIM_S; progressing = the session that brief was fired into has a real assistant turn and a transcript younger than CC_DRAIN_PROGRESS_MAX_AGE_S; skipped/read-failed = could not ask, which is never a conviction. dead means the pile is non-empty and NOTHING is working it: no-brief-no-lease = no recycle inside CC_DRAIN_CHAIN_MAX_AGE_S; stalled = the fired session was found and is emitting nothing (the wedge); unverifiable = a fresh brief past the grace whose successor could not be resolved at all. A FRESH BRIEF IS NEVER SUFFICIENT ON ITS OWN — it is the age of a file the chain wrote when it last STARTED (backlog d6d4b85ebd4c)."}'
+          note:"verdict alive|dead. why: drained = zero live rows, the SUCCESS state, never files; handover-grace = a recycle fired inside CC_DRAIN_HANDOVER_GRACE_S, the blind window at every handover where nothing about the successor is knowable yet; live-lease = a non-done row is claimed inside CC_BACKLOG_STALE_CLAIM_S BY A HOLDER THAT IS NOT venue:cloud (cloud_leases is counted separately and never proves THIS chain alive: Lane A claims oscillate claim->block->unblock->re-claim forever at 1 done per 17 dispatches, so a cloud lease is a constant and a constant disjunct carries no bits); progressing = the session that brief was fired into has a real assistant turn and a transcript younger than CC_DRAIN_PROGRESS_MAX_AGE_S; skipped/read-failed = could not ask, which is never a conviction. dead means the pile is non-empty and NOTHING is working it: no-brief-no-lease = no recycle inside CC_DRAIN_CHAIN_MAX_AGE_S; stalled = the fired session was found and is emitting nothing (the wedge); unverifiable = a fresh brief past the grace whose successor could not be resolved at all. A FRESH BRIEF IS NEVER SUFFICIENT ON ITS OWN — it is the age of a file the chain wrote when it last STARTED (backlog d6d4b85ebd4c)."}'
       exit 0 ;;
     assert)
       [ "$VERDICT" = dead ] || exit 0
@@ -291,14 +354,19 @@ case "$LIVE" in ''|*[!0-9]*) WHY="read-failed"; LIVE=0; emit ;; esac
 # Newest match wins. The glob is unquoted ON PURPOSE — that is the expansion — and `nullglob` keeps
 # a no-match from handing the literal pattern to stat as a filename.
 shopt -s nullglob
-for _f in $BRIEF_GLOB; do
-  [ -f "$_f" ] || continue
-  _m="$(_mtime "$_f")"
-  case "${_m:-}" in ''|*[!0-9]*) continue ;; esac
-  _age=$(( NOW - _m ))
-  [ "$_age" -lt 0 ] && _age=0          # a clock skew is not a fresh brief, but it is not -1 either
-  if [ "$BRIEF_AGE" -lt 0 ] || [ "$_age" -lt "$BRIEF_AGE" ]; then BRIEF_AGE="$_age"; BRIEF="$_f"; fi
-done
+while IFS= read -r _g; do
+  [ -n "$_g" ] || continue
+  for _f in $_g; do
+    [ -f "$_f" ] || continue
+    _m="$(_mtime "$_f")"
+    case "${_m:-}" in ''|*[!0-9]*) continue ;; esac
+    _age=$(( NOW - _m ))
+    [ "$_age" -lt 0 ] && _age=0        # a clock skew is not a fresh brief, but it is not -1 either
+    if [ "$BRIEF_AGE" -lt 0 ] || [ "$_age" -lt "$BRIEF_AGE" ]; then BRIEF_AGE="$_age"; BRIEF="$_f"; fi
+  done
+done <<EOF
+$BRIEF_GLOB
+EOF
 shopt -u nullglob
 
 # A fresh brief is a NECESSARY condition and never a sufficient one — see the header. `FRESH` gates
@@ -317,12 +385,27 @@ if [ "$FRESH" = 1 ] && [ "$BRIEF_AGE" -lt "$HANDOVER_GRACE" ]; then WHY="handove
 # `lastTs` is ISO-8601 from the fold; `fromdateiso8601` in jq, and a row whose stamp will not parse
 # is counted as NOT a live lease — it cannot prove aliveness, and disjunct B is the arm that has to
 # PROVE something for the alarm to stay silent.
-LEASES="$(printf '%s' "$ROWS" | jq --argjson now "$NOW" --argjson ttl "$STALE_CLAIM" '
-  [ .[]
-    | select(.status == "claimed")
-    | select( ((.lastTs // "") | if . == "" then null else (try fromdateiso8601 catch null) end)
-              as $t | $t != null and ($now - $t) < $ttl ) ] | length' 2>/dev/null)"
-case "${LEASES:-}" in ''|*[!0-9]*) LEASES=0 ;; esac
+#
+# THE VENUE SPLIT (arm (b) in the header). `venue` is written by `cc-backlog claim` itself and is
+# already in the fold — 744 `cloud` / 88 `local` / 2224 legacy-absent over the whole ledger — so this
+# is a read of the store's own field, not a second state model of it. Only an EXPLICIT `cloud` is
+# subtracted; absent and every other spelling still counts, so an unreadable or unfamiliar venue
+# abstains toward ALIVE exactly as guard 3 requires. The cloud figure is kept, not discarded: it is
+# reported and it goes into the dead title, because a "nothing is working them" claim that silently
+# drops a stratum is the defect `zero-claim-must-name-its-excluded-strata` names.
+_lease_count() { # <jq-select-expr> → count, or 0 on any unreadable fold
+  local n
+  n="$(printf '%s' "$ROWS" | jq --argjson now "$NOW" --argjson ttl "$STALE_CLAIM" "
+    [ .[]
+      | select(.status == \"claimed\")
+      | select( ((.lastTs // \"\") | if . == \"\" then null else (try fromdateiso8601 catch null) end)
+                as \$t | \$t != null and (\$now - \$t) < \$ttl )
+      | select($1) ] | length" 2>/dev/null)"
+  case "${n:-}" in ''|*[!0-9]*) n=0 ;; esac
+  printf '%s' "$n"
+}
+LEASES="$(_lease_count '(.venue // "") != "cloud"')"
+CLOUD_LEASES="$(_lease_count '(.venue // "") == "cloud"')"
 if [ "$LEASES" -gt 0 ]; then WHY="live-lease"; emit; fi
 
 # ── disjunct A: is the session that brief was fired into STILL PROGRESSING? ────────────────────
@@ -337,12 +420,34 @@ _resolve_progress() {
   # hop 1 — brief → the pane it was fired into. handoffs.jsonl carries one row per fire with the
   # `prompt_file` verbatim, so the join is on the very file whose age we just measured rather than
   # on "whatever pane looks like a drain". LAST match wins: a brief path can be re-fired.
+  #
+  # THE EXACT-PATH JOIN IS NECESSARY AND NO LONGER SUFFICIENT. The live chain fires with a 152-byte
+  # POINTER (`fire-pointer-<N>.txt`, "read fire-drain-recycle<N>.txt in full") because the brief
+  # outgrew a promptable payload, so handoffs.jsonl records the pointer and the exact match against
+  # the brief can never fire. The fallback joins on the RECYCLE NUMBER — the digit run in each
+  # basename — which is the class, not a list of the four spellings observed so far
+  # (`fire-drain-recycle<N>.txt`, `…<N>.pointer.txt`, `…<N>-pointer.txt`, `fire-pointer-<N>.txt`);
+  # enumerating those is the `denylist-enumerates-spellings-not-the-class` defect and the fifth
+  # spelling would be silently blind again. Exact match still wins where it exists, so a chain that
+  # fires the brief directly is unaffected.
   PANE="${CC_DRAIN_PANE:-}"
   if [ -z "$PANE" ]; then
     PROGRESS_WHY="no-handoff-log"
     [ -r "$HANDOFF_LOG" ] || return 1
     PANE="$(jq -r --arg b "$BRIEF" 'select((.prompt_file? // "") == $b)
                                     | (.target_pane? // empty)' "$HANDOFF_LOG" 2>/dev/null | tail -1)"
+    if [ -z "$PANE" ]; then
+      local num
+      num="$(printf '%s' "${BRIEF##*/}" | tr -dc '0-9')"
+      if [ -n "$num" ]; then
+        PANE="$(jq -r --arg n "$num" '
+          (.prompt_file? // "") as $p
+          | select($p != "")
+          | ($p | split("/") | last | gsub("[^0-9]"; "")) as $m
+          | select($m == $n)
+          | (.target_pane? // empty)' "$HANDOFF_LOG" 2>/dev/null | tail -1)"
+      fi
+    fi
   fi
   PROGRESS_WHY="no-fire-row-for-brief"
   [ -n "$PANE" ] || return 1
@@ -406,19 +511,24 @@ fi
 # Three distinguishable dead states, and the title says which — a false row must be diagnosable
 # from the row itself.
 VERDICT="dead"
+# NAME THE EXCLUDED STRATUM IN THE TITLE. "Nothing is working them" is false-sounding to anyone who
+# can see live cloud claims, and a reader who cannot reconcile the two re-derives the whole thing.
+# Empty when there is nothing to disclose, so the ordinary title does not carry dead words.
+CLOUD_CLAUSE=""
+[ "$CLOUD_LEASES" -gt 0 ] && CLOUD_CLAUSE="$(printf ' (%s live venue:cloud lease(s) are held and deliberately do NOT count: Lane A claims oscillate claim->block->unblock->re-claim without landing, so they are live around the clock and prove nothing about THIS chain — DRAIN_CIRCUIT_2026-09-01 §1.3)' "$CLOUD_LEASES")"
 if [ "$FRESH" != 1 ]; then
   WHY="no-brief-no-lease"
   TITLE="$(printf 'the 24/7 backlog drain chain is DEAD — %s live row(s) and nothing is working them: no fire-drain-recycle brief inside %ss (newest: %s) and 0 live leases inside %ss. Restart it with the Lane B recycle-fire template in docs/plans/BACKLOG_DRAIN_24_7.md §4.1' \
     "$LIVE" "$MAX_AGE" \
     "$([ "$BRIEF_AGE" -ge 0 ] && printf '%ss old' "$BRIEF_AGE" || printf 'none')" \
-    "$STALE_CLAIM")"
+    "$STALE_CLAIM")$CLOUD_CLAUSE"
 elif [ "$PROGRESS_AGE" -ge 0 ]; then
   WHY="stalled"
   TITLE="$(printf 'the 24/7 backlog drain chain is DEAD — %s live row(s) and nothing is working them: the recycle fired %ss ago into pane %s is WEDGED, emitting nothing for %ss (ceiling %ss, transcript %s) and holding 0 live leases inside %ss. A fresh brief only proves the chain last STARTED. Clear the pane (a PreToolUse modal no agent can answer is the measured cause — backlog 7da9c4451540) and restart it with the Lane B recycle-fire template in docs/plans/BACKLOG_DRAIN_24_7.md §4.1' \
-    "$LIVE" "$BRIEF_AGE" "$PANE" "$PROGRESS_AGE" "$PROGRESS_MAX_AGE" "$TRANSCRIPT" "$STALE_CLAIM")"
+    "$LIVE" "$BRIEF_AGE" "$PANE" "$PROGRESS_AGE" "$PROGRESS_MAX_AGE" "$TRANSCRIPT" "$STALE_CLAIM")$CLOUD_CLAUSE"
 else
   WHY="unverifiable"
   TITLE="$(printf 'the 24/7 backlog drain chain is DEAD — %s live row(s) and nothing is working them: a fire-drain-recycle brief %ss old (%s) whose successor CANNOT BE RESOLVED (%s), 0 live leases inside %ss, and the %ss handover grace has expired. Restart it with the Lane B recycle-fire template in docs/plans/BACKLOG_DRAIN_24_7.md §4.1' \
-    "$LIVE" "$BRIEF_AGE" "$BRIEF" "$PROGRESS_WHY" "$STALE_CLAIM" "$HANDOVER_GRACE")"
+    "$LIVE" "$BRIEF_AGE" "$BRIEF" "$PROGRESS_WHY" "$STALE_CLAIM" "$HANDOVER_GRACE")$CLOUD_CLAUSE"
 fi
 emit

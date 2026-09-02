@@ -30014,6 +30014,49 @@ Brief body invariants (regenerate the specifics each recycle; never drop these):
   rows reads ALIVE (`why=drained`) — that is this invariant's terminal success state, not a
   silence to be alarmed about, and the distinction is what keeps the detector from becoming the
   store's next generator.
+  🚨 **THE PREDICATE ABOVE IS RIGHT AND IT WAS STILL UNREACHABLE. TWO BLIND ARMS, FIXED
+  2026-08-31 — and the detector had by then MISSED A 40.5-HOUR DEATH.** Brief #259 was written
+  `2026-08-28T23:56:02Z` and #260 not until `2026-08-30T16:28:25Z` — **145,943 s**, with Aug 29
+  firing no recycle at all — and this detector filed nothing, as it has filed nothing at any status
+  across its entire deployed life. Either arm alone explains the silence:
+  · **(a) THE BRIEF GLOB NAMED A DIRECTORY THE CHAIN DOES NOT WRITE.** The default was
+    `/tmp/fire-drain-recycle*.txt`, per this section's own text; the chain writes
+    `$CLAUDE_CONFIG_DIR/autonomy/fire-drain-recycle<N>.txt`. Sampled live against the running chain:
+    `--json` answered `brief:null, brief_age_s:null` with **279 briefs on disk**. So `FRESH` was
+    permanently 0 and BOTH arms that can only speak about a chain that has recycled — the handover
+    grace and the whole progress oracle — were dead code. The 2026-08-18 predicate rewrite never
+    executed on this box. *A second hop of the same arm:* the fire is logged to `handoffs.jsonl`
+    with the **pointer** it is fired with, never the brief, so hop 1's `prompt_file == $BRIEF` join
+    could not match either — fixing the glob alone would have converted a permanent false ALIVE
+    into a permanent false DEAD at every tick. The join is now on the recycle NUMBER, which is the
+    class rather than a list of the four filename spellings seen so far.
+  · **(b) GUARD 3 — "any live claim counts, whoever holds it" — IS REFUTED BY ITS OWN PREMISE.** It
+    was argued on "a Lane A cloud worker draining a row is the chain doing its job as much as Lane
+    B is". Lane A is not draining: DRAIN_CIRCUIT_2026-09-01 §1.3 measures **1 of 17** dispatched
+    items ever reaching `done`, because the dispatcher claims, nothing lands, `cc-backlog-reap`
+    blocks then unblocks, and the row is re-claimed five minutes later, forever. That oscillation
+    keeps `venue:"cloud"` leases live around the clock, so this disjunct is a CONSTANT — and a
+    constant disjunct makes every arm after it unreachable, which is this section's own
+    `alarm-polarity-and-attention-budget` lesson. Inside the 40.5 h window the ledger carries **24
+    claims and all 24 are `venue:"cloud"`**; a live sample on 2026-08-31 read `alive/live-lease` on
+    two cloud leases whose holder PIDs were **both already dead**.
+    **The narrowest fix that restores the bits:** a `venue:"cloud"` lease no longer proves THIS
+    chain alive. It is not ignored — counted as `cloud_leases`, and NAMED in the filed row's title,
+    because a "nothing is working them" claim that hides a stratum is
+    `zero-claim-must-name-its-excluded-strata`. Every other holder still counts and an unreadable
+    venue counts as local, so the abstention still runs toward ALIVE. The justification for keying
+    on Lane B is that **every `dead` title this detector writes prescribes a Lane B remedy** ("restart
+    it with the recycle-fire template in §4.1") — a detector whose only remedy is Lane B's must be
+    keyed on Lane B's liveness or it is answering a question it cannot act on.
+  · **THE POSITIVE CONTROL IS THE INCIDENT ITSELF, NOT A PARAPHRASE** —
+    `tests/drain-chain-assert.bats` replays the #259→#260 window at its real 145,943 s gap beside a
+    live `venue:cloud` lease and requires `dead`/`no-brief-no-lease`; the same fixture with the
+    lease relabelled `local` must read ALIVE, so the case pins the venue axis and not "an old brief
+    is dead". A HEALTHY control (the live chain's real shape: brief in the real directory, fire
+    logged with the pointer, engaged pane, cloud leases held beside it) must stay silent and file
+    nothing. Both were red-proved against the real pre-fix artifact via `CC_DRAIN_SUBJECT`. *An
+    alarm that has never fired in its deployed life is indistinguishable from one that cannot*
+    (memory `fail-safe-default-mimics-the-healthy-state`).
 - Weekly report: adds vs closes; net-positive week ⇒ the INFLOW list (C1-C4) gets the next
   fix, not more drain horsepower.
 
