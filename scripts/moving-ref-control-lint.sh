@@ -135,17 +135,43 @@ moving_ref_shows() { # $1=file
   awk '
     # Drop every span between a quote and its MATCHING partner. A dangling quote keeps the rest of
     # the line RAW — the fail-closed direction: better to look at too much than to blind the match.
-    function strip(s,   out, i, c, j, dq, sq) {
+    # A CONTEXT STACK, not naive pairing. A command substitution nested in double quotes re-opens an
+    # UNQUOTED context, so in  x="$(git -C "$REPO" show <ref>:<path>)"  the inner "$REPO" is a quoted
+    # span of its OWN. Pairing the outer opener with that inner opener drops the whole tail, and the
+    # show token this lint exists to find goes with it. Live fixture and the reason this landed:
+    # tests/cc-dispatch-projects.bats:429, which reddened every land in this repo on 2026-09-02 while
+    # this lint reported 560 suites clean. Backslash escapes are honoured for the same reason.
+    # THE DANGLING-QUOTE CONTRACT IS UNCHANGED and has its own selftest case: a quote with NO partner
+    # is treated as a LITERAL, so the remainder of the line stays RAW. That is the fail-CLOSED
+    # direction — a stripper that swallows the tail lets a violation walk.
+    # NO APOSTROPHE MAY APPEAR ANYWHERE IN THIS PROGRAM: it is carried in a single-quoted bash
+    # string, and one stray apostrophe truncates it into a detector that scans everything, matches
+    # nothing, and reports a clean tree. The sibling lint records the same scar in its own header.
+    function partner(s, i, c,   j) { j = index(substr(s, i + 1), c); return (j == 0 ? 0 : i + j) }
+    function strip(s,   out, i, c, dq, sq, n, st) {
       dq = sprintf("%c", 34); sq = sprintf("%c", 39)
-      out = ""; i = 1
+      n = 0; out = ""; i = 1
       while (i <= length(s)) {
         c = substr(s, i, 1)
-        if (c == dq || c == sq) {
-          j = index(substr(s, i + 1), c)
-          if (j == 0) { out = out substr(s, i); break }
-          i = i + j + 1
+        if (n > 0 && st[n] == 1) {                       # inside a single-quoted span
+          if (c == sq) { n-- }
+          i++
           continue
         }
+        if (n > 0 && st[n] == 2) {                       # inside a double-quoted span
+          if (c == "\\") { i += 2; continue }
+          if (c == dq) { n--; i++; continue }
+          if (c == "$" && substr(s, i + 1, 1) == "(") { n++; st[n] = 3; i += 2; continue }
+          i++
+          continue
+        }
+        if (c == "\\") { out = out c substr(s, i + 1, 1); i += 2; continue }
+        if ((c == sq || c == dq) && partner(s, i, c) > 0) {
+          n++; st[n] = (c == sq ? 1 : 2); i++
+          continue
+        }
+        if (c == "$" && substr(s, i + 1, 1) == "(") { n++; st[n] = 3; out = out "$("; i += 2; continue }
+        if (c == ")" && n > 0 && st[n] == 3) { n--; out = out c; i++; continue }
         out = out c; i++
       }
       return out
@@ -227,10 +253,15 @@ lint_dir() {
 # ── --selftest: every case proves a RED path fires or a GREEN path does not, both directions ──────
 if [ "${1:-}" = "--selftest" ]; then
   d="$(mktemp -d)"; trap 'rm -rf "$d"' EXIT
-  for c in mainref headref bareref branchref expansion dangling pinned pinnedfull mention prose nogit push catfile showref; do mkdir -p "$d/$c"; done
+  for c in cmdsub mainref headref bareref branchref expansion dangling pinned pinnedfull mention prose nogit push catfile showref; do mkdir -p "$d/$c"; done
   mk() { printf '#!/usr/bin/env bats\n%s\n@test "x" { true; }\n' "$2" > "$d/$1/zz-fixture.bats"; }
 
   # RED — the moving refs, each spelling the corpus has actually used or could plausibly use.
+  # RED — the same moving ref inside a COMMAND SUBSTITUTION, which is how the corpus actually spells
+  # it when the pre-fix text is captured into a variable. The inner "$REPO" is a quoted span of its
+  # own, and naive pairing mis-paired the outer opener with it and dropped the show. Live fixture:
+  # tests/cc-dispatch-projects.bats:429, which reddened every land in this repo on 2026-09-02.
+  mk cmdsub    'setup() { if ! r="$(git -C "$REPO" show origin/main:bin/cc-thing 2>/dev/null)"; then :; fi; }'
   mk mainref   'setup() { git -C "$REPO" show origin/main:bin/cc-thing > "$PRE" 2>/dev/null; }'
   mk headref   'setup() { git -C "$REPO" show HEAD:bin/cc-thing > "$PRE" 2>/dev/null; }'
   mk bareref   'setup() { git show main:bin/cc-thing > "$PRE"; }'
@@ -266,6 +297,7 @@ setup() { true; }'
   red()   { lint_dir "$d/$1" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: $2"; fails=1; }; }
   green() { lint_dir "$d/$1" "" >/dev/null 2>&1  || { echo "SELFTEST FAIL: $2"; fails=1; }; }
 
+  red   cmdsub     "a show inside a COMMAND SUBSTITUTION did not go RED — naive quote pairing dropped the token"
   red   mainref    "origin/main:<path> did not go RED — the whole subject of this lint"
   red   headref    "HEAD:<path> did not go RED — HEAD moves with every commit"
   red   bareref    "a bare branch name (main:<path>) did not go RED"
@@ -298,7 +330,7 @@ setup() { true; }'
   esac
   lint_dir "$d/nope" "" >/dev/null 2>&1; [ "$?" -eq 2 ] || { echo "SELFTEST FAIL: a missing scan dir did not exit 2 (LOUD)"; fails=1; }
   if [ "$fails" -eq 0 ]; then
-    echo "moving-ref-control-lint --selftest: 22/22 — RED on origin/main, HEAD, a bare branch, a slashed branch, an unreadable expansion, a show through \$GIT_BIN, and a site behind a dangling quote; GREEN on an abbreviated sha, a full sha, the phrase MENTIONED in an asserted string, a comment, push HEAD:refs/heads/main, cat-file and show-ref; ratchet fires both ways; own-scope blocks INSIDE / advises OUTSIDE / passes set-empty / stays strict when absent; real tree clean; LOUD on a bad dir."
+    echo "moving-ref-control-lint --selftest: 23/23 — RED on origin/main, HEAD, a bare branch, a slashed branch, an unreadable expansion, a show through \$GIT_BIN, a show inside a COMMAND SUBSTITUTION (the live shape this lint could not see until 2026-09-02), and a site behind a dangling quote; GREEN on an abbreviated sha, a full sha, the phrase MENTIONED in an asserted string, a comment, push HEAD:refs/heads/main, cat-file and show-ref; ratchet fires both ways; own-scope blocks INSIDE / advises OUTSIDE / passes set-empty / stays strict when absent; real tree clean; LOUD on a bad dir."
     exit 0
   fi
   echo "moving-ref-control-lint --selftest: FAILED — the lint does not discriminate."

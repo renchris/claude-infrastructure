@@ -175,3 +175,31 @@ setup() {
   [ "$status" -eq 1 ] || false
   printf '%s' "$output" | grep -q 'zz-moving.bats' || false
 }
+
+@test "TOKENISER: a moving ref inside a command substitution is SEEN — the shape that got past it" {
+  # THE REGIME THE SYNTHETIC FIXTURES NEVER REACHED (memory: control-fixture-must-reach-the-bugs-
+  # regime). --selftest's `mainref` case spells the violation as a bare command; the live one that
+  # walked past this lint for a day and reddened every land in the repo spelled it as an assignment
+  # from a command substitution — and the inner "$REPO" inside that substitution is what naive quote
+  # pairing mis-paired. The phrase is ASSEMBLED, never spelled, for the reason the file header gives.
+  mkdir -p "$D/corp"
+  printf '#!/usr/bin/env bats\nsetup() { if ! r="$(git -C "$REPO" %s %s:bin/cc-thing 2>/dev/null)"; then :; fi; }\n@test "x" { true; }\n' \
+    "$SHOW" "$MOVING" > "$D/corp/zz-cmdsub.bats"
+  run bash "$LINT" "$D/corp"
+  [ "$status" -eq 1 ] || { echo "the command-substitution spelling was NOT flagged"; echo "$output"; false; }
+  printf '%s' "$output" | grep -q 'zz-cmdsub.bats' || false
+  true
+}
+
+@test "TOKENISER: the fix did not widen — a MENTION inside a quoted string is still not a control" {
+  # The other direction, and it is the one a careless repair breaks: strip() exists so that a phrase
+  # QUOTED as data (the corpus does this in prose and in asserted strings) is not read as an
+  # invocation. A tokeniser fix that simply stopped stripping would pass the arm above and convict
+  # forty innocent files. One variable between the two fixtures: whether the substitution is there.
+  mkdir -p "$D/corp2"
+  printf '#!/usr/bin/env bats\nsetup() { grep -q "git %s %s:<path>" "$C/brief.txt" || false; }\n@test "x" { true; }\n' \
+    "$SHOW" "$MOVING" > "$D/corp2/zz-mention.bats"
+  run bash "$LINT" "$D/corp2"
+  [ "$status" -eq 0 ] || { echo "a quoted MENTION was flagged as a control"; echo "$output"; false; }
+  true
+}
