@@ -667,7 +667,35 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
           if (comm[p]=="zsh" && args[p] ~ /^(-zsh|zsh|\/bin\/zsh)( |$)/ && secs[p]>=600) { printf "orphan-zsh\t%s\t^zsh$\t%s\t%s\t-\n", p, secs[p], asig(p); continue }
           if (comm[p]=="bash" && args[p] !~ ("(" wl ")") && args[p] !~ /lead-crash-watchdog/ && secs[p]>=600) { printf "orphan-bash\t%s\t^bash$\t%s\t%s\t%s\n", p, secs[p], asig(p), substr(args[p],1,80); continue }
         }
-        if (comm[p]=="bash" && args[p] ~ /cc-close-attrib/ && secs[p]>=1800) printf "stuck-wrapper\t%s\t^bash$\t%s\t%s\t-\n", p, secs[p], asig(p)
+        # ANCHORED ON ARGV POSITION, BECAUSE THE UNANCHORED FORM ATE THE VERIFIER (2026-09-02).
+        # NOTE FOR EDITORS: this whole awk program is SINGLE-QUOTED by the shell, so an apostrophe
+        # anywhere in these comments terminates it and awk is handed a fragment. Write around it.
+        # The old test was args[p] ~ /cc-close-attrib/ — a SUBSTRING test over a whole command line,
+        # and a command line is not a name. postland-verify runs its corpus as
+        # "bash .../bats tests/account-cliff-routing.bats ... tests/cc-close-attrib.bats ..." over
+        # 558 files, one of which is NAMED after this tool, so the corpus matched at 1800 s every
+        # time it ran that long. Reaper log 07:46:19: TERM stuck-wrapper pid=175 age=1810s
+        # argv=<bash .../bats ...>. The verifier runner log, 07:48:24: "corpus TRUNCATED - zero
+        # not-ok in a non-zero run - the run was KILLED by signal 15 from OUTSIDE this runner".
+        # The consequence is not one lost run: postland-verify is the ONLY writer of a GREEN stamp
+        # and deploy-live is fail-closed on that stamp, so this arm was freezing the LIVE ~/.claude
+        # layer - measured the same morning as "no GREEN tree is a DESCENDANT of live HEAD", with a
+        # landed drain-lane fix unable to reach the rail it fixes.
+        # This is the repo memory pgrep-f-matches-agent-briefs: argv carries whole briefs, so a
+        # -f style match counts every process that merely MENTIONS the token, and the remedy
+        # recorded there is exactly this - anchor on POSITION. The wrapper is
+        # [bash ]<path>/cc-close-attrib <wrapped cmd>, so the token must be the command word, at
+        # argv[0] or argv[1]. All three real spellings still match; a corpus that merely names the
+        # file does not.
+        #
+        # AND IT DELIBERATELY DOES NOT GAIN THE wl TEST ITS SIBLING ABOVE HAS. wl is matched
+        # against the whole argv too, and the subjects of THIS arm are claude sessions whose argv
+        # carries an operator-written brief - briefs in this repo routinely say ship-land,
+        # postland-verify, cc-dispatch. A whitelist test here would make reapability depend on the
+        # PROSE of a prompt: the identical defect pointed the other way, letting a genuinely stuck
+        # wrapper live because its brief mentioned a daemon. Position answers both directions at
+        # once, which a name list cannot.
+        if (comm[p]=="bash" && args[p] ~ /^([^ ]*bash )?[^ ]*cc-close-attrib( |$)/ && secs[p]>=1800) printf "stuck-wrapper\t%s\t^bash$\t%s\t%s\t-\n", p, secs[p], asig(p)
       }
     }')"
   # lead-crash-watchdog daemons whose lead is DEAD — file-driven (the .pid file holds the lead pid,
