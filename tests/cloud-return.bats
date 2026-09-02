@@ -838,6 +838,47 @@ EOF
   [[ "$output" != *"stopped starting new work"* ]]
 }
 
+@test "a LAND already in flight is never abandoned to meet the deadline" {
+  # The requirement the other arms do not reach: the check gates STARTING, not interrupting. A
+  # half-run ship-land — lock taken, gate half-evaluated, branch half-pushed — is strictly worse than
+  # a deferred one, so the unit that overruns the budget must still finish. Here the LANDER is what
+  # costs the time, which is the real shape of the failure (§3d: one taken session can fall through
+  # to a full statics+ratchets+smoke gate measured in minutes) rather than a slow status probe.
+  declare_n 3
+  local i
+  for i in 1 2 3; do
+    { printf 'sha=%s\n' "$(git -C "$WORK" rev-parse refs/heads/claude/vm)"
+      printf 'since=%s\n' "$(( $(date +%s) - 10000 ))"; } >"$CC_CLOUD_STATE/session_$i.seen"
+  done
+  printf '{"worker_status":"idle","status_bucket":"review_ready"}\n' >"$STATUS_JSON"
+  # A slow lander that is otherwise the suite's real re-authoring stub — the land must be genuine,
+  # because what is being asserted is that its FULL effect survives the deadline.
+  printf '#!/usr/bin/env bash\nsleep 2\nexec "%s" "$@"\n' "$STUBDIR/reconcile.sh" >"$STUBDIR/slow-reconcile.sh"
+  chmod +x "$STUBDIR/slow-reconcile.sh"
+  local before; before="$(git -C "$WORK" rev-parse refs/heads/trunkref)"
+
+  CC_RETURN_RECONCILE_BIN="$STUBDIR/slow-reconcile.sh" CC_RETURN_BOUND_S=2 \
+    run bash "$SUT" --sweep --limit 3
+  [ "$status" -eq 0 ]
+  # 🚨 THE LOAD-BEARING PAIR. One land was STARTED and ran to completion — trunkref carries its
+  # re-authored commit, which the stub only writes on its last line — and the pass then stopped
+  # instead of starting a second one it could not afford.
+  #
+  # 🚨 AND THE MUTANT THAT LOOKS RIGHT DOES NOT PROVE IT — which is itself worth recording. Cutting
+  # the unit by backgrounding `handle` and SIGKILLing it at the budget leaves this arm GREEN, because
+  # the lander is a separate PROCESS: killing the pass does not kill its grandchild, so the land
+  # completed anyway. (Read forward into the live failure: the historical `timeout -k 10 900`
+  # SIGKILLs did not necessarily stop the `ship-land` they had already started either — the pass
+  # died and its lander did not.) The faithful mutant is dropping the always-run-one clause, which
+  # RED-proves this arm while the FITS control stays green — so it pins a property no other arm does.
+  [ "$(git -C "$WORK" rev-parse refs/heads/trunkref)" != "$before" ]
+  [ "$(grep -c '^reconcile ' "$CALLS")" -eq 1 ]
+  [[ "$output" == *"stopped starting new work"* ]] || false
+  run jq -sc '[.[] | select(.outcome=="pass-deadline")] | last' "$CC_CLOUD_STATE/return.jsonl"
+  [ "$(printf '%s' "$output" | jq -r '.started')" = "1" ]
+  [ "$(printf '%s' "$output" | jq -r '.unstarted')" = "2" ]
+}
+
 @test "a deadline stop RESUMES at the row it did not start, rather than rotating past it" {
   declare_n 5
   printf '{"worker_status":"working"}\n' >"$STATUS_JSON"
