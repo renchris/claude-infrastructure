@@ -86,6 +86,153 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-02 — drain recycle #283: method 255 — A CORRECT VERDICT RESTING ON A WRONG REASON
+  GENERALISES AS FAR AS THE REASON, NOT AS FAR AS THE VERDICT.** ZERO rows closed, ZERO filed,
+  ZERO reopened. TWO commits. **The land facts live in `git log --oneline origin/main` and the push
+  is deliberately not claimed here**: this entry is composed BEFORE the land, and a claim about an
+  event that has not happened cannot be stamped at all (#237).
+  **THE SUBJECT, AND HOW I GOT TO IT.** #282's named residual is `ca97c678b18b`'s continuation-line
+  join, which is BLOCKED, so I ran the other half of the standing lead instead — #245's
+  `scripts/ship-land.sh:2323`, the flake-exoneration carve-out — and found it **already drained,
+  with no census row and no allowlist row for that file at all**. That is § RESIDUAL's own list
+  rotting exactly as method 214 says it does; it still names `scripts/ship-land.sh` as present and
+  grandfathered. Asking WHY the detector was silent on the two `grep -q` pipelines the file still
+  carries (`is_shell_file` and `is_python_file`, both `head -1 "$1" | grep -qiE`) is what produced
+  the link, and the answer was neither of the two I expected: it is a DELIBERATE, REASONED
+  exoneration in clause 3, and the reason is wrong.
+  **THE DEFECT: THE BOUND IS STATED IN LINES AND THE PHENOMENON IS DENOMINATED IN BYTES.** Clause 3
+  of `scripts/pipefail-sigpipe-lint.sh` read
+  `if (t ~ /^(head|tail)[ \t]+(-n[ \t]*)?-?[1-9]([ \t]|$)/) return 0   # bounded: <=9 lines, one
+  write`. **Both halves of that comment are one mistake: <=9 lines is not one write**, because a
+  line is unbounded in bytes and nine of them are nine times unbounded. **The sibling arm EIGHT
+  LINES ABOVE already had the unit right**, in its own words — *"ONE write only while what it
+  writes is BOUNDED BY INSPECTION ... The command WORD is identical in both cases, so only the
+  argument can decide"* — and this arm decided from the command word and a LINE count with the
+  argument never inspected. A producer exonerated here is dropped before clause 2 renders any
+  verdict, in a detector wired into `ship-land` as a blocking gate.
+  **THE FIRST PREDICTION WAS REFUSED, AND THAT REFUSAL IS WHY THE REST IS TRUSTED.** I predicted
+  `head -1 <one 218,900-byte line> | grep -q` would orphan the producer >=15 of 20 and **measured
+  0 of 20**, beside a `cat` FIRE control at 20/20 with producer rc 141 on every trial. The unit
+  criticism is right and the conclusion I drew from it was wrong, for a reason the probe did not
+  model: **a LINE-ORIENTED early-exiting consumer cannot exit part-way through a line**, so it
+  drains everything a one-line producer will ever write. **The `-1` exoneration is CORRECT and the
+  comment gave a reason that is not the reason it holds.**
+  **AND THE WRONG REASON IS EXACTLY WHAT EXTENDED IT TO EIGHT MORE VALUES.** The repaired argument
+  covers `-1` and nothing else; the regex admitted `-[1-9]`. Measured 2026-09-02: **`head -9 F |
+  grep -q` with the needle on line 1 and 226,584 bytes after it reads 20 of 20 FALSE, producer
+  rc 141 on every trial.** Two negatives separate the claim from its neighbours — the same
+  nine-line shape with a tiny body reads **0/20** (it is the BYTES after the match point, not the
+  line count) and the same big body with the needle on line 9 reads **0/20** (it is an EARLY match,
+  not merely N>1) — with `cat` over the same fixture at **20/20** as the FIRE control.
+  **NOT A WIDENING IN EFFECT, MEASURED BEFORE THE LAND RATHER THAN AFTER** (#281's discipline, and
+  the counter-example to `a6449cebc`). The shipped `DETECT_AWK` was **extracted verbatim** as a
+  control and a mutant built from it differing in **exactly ONE existing line — this arm**, asserted
+  at one changed line and that line named by a property of the line rather than by its number.
+  **Control reproduces `--census` EXACTLY at 125 rows; mutant 125; LOST = 0; NEW = 0; the partition
+  sums.** The eight values retired exonerate **NOTHING** on this tree today, so the detector gets
+  strictly stronger at zero cost in findings and no drains, and the bare ratchet never went red for
+  one moment.
+  **THE FIRE CONTROL REFUSED FIRST, AND DEBUGGING IT RE-DERIVED A KNOWN GAP FROM THE OTHER SIDE.**
+  My first fire control wrote the subject as a bare FUNCTION-FINAL pipeline in a fixture with no
+  errexit and read **0 from the mutant where I predicted 1** — which would have made `NEW = 0`
+  unreadable, since a zero from a mute instrument is byte-identical to a real one (#243, #282). The
+  cause is not the arm under test: clause 4 answers `if (!hase) return 0` for a bare statement, so
+  the line was dropped one clause LATER than the one being measured. **That is the function-final
+  invisibility `ca97c678b18b` owns, met from the other side.** The repaired fixture puts the
+  pipeline in an `if`, which clause 4 admits unconditionally, leaving clause 3 the only clause free
+  to decide — and it renders a **2x2**: `head -9` ctl=0 mut=1, `head -1` ctl=0 mut=0. **The mutant
+  changes a verdict only on the half the measurement condemns, which is the whole claim.**
+  **AND AN INDEPENDENT COLUMN DISAGREED WITH THE ACTUATOR, WHICH IS #282's SECOND FINDING ONE LINK
+  LATER.** A reader sharing nothing with the awk program counted **20 lines carrying `head|tail
+  -[2-9]` before a pipe**, against the actuator's NEW = 0. **Neither number is wrong and the
+  DISAGREEMENT is not news either**: on every one of the 20 the `head`/`tail` is a MIDDLE or LAST
+  stage, and clause 3 only ever judges `seg[1]`. **20 read as a population and was a SCREEN.** A
+  screen narrows; only an instrument keyed on the thing you care about decides.
+  **AND THAT READER LIED IN A SECOND WAY WORTH WRITING DOWN.** Its first version captured the walk
+  in `$( … )` with a `case` inside it. `/bin/bash` is 3.2.57, where a `case` pattern's `)` inside a
+  command substitution is mis-parsed as the substitution's own terminator: it printed a syntax
+  error, an unbound-variable error and a `command not found` — **and still rendered a confident
+  `= 0`.** **A zero out of a broken reader is the exact thing every control in this file exists to
+  refuse.** The repair is to write to a FILE and count the file, and a MUTE control (a token present
+  nowhere) reads 0 beside it.
+  **THE MOVE, AND IT IS A FIX PLUS A PIN.** The arm is narrowed to `-?1`, its comment replaced by an
+  eighth correction stating the four cells, the two negative controls and the fire control; and
+  `--selftest` gains **r16/r17**, the FIRE CONTROLS for the `g11`/`g12` GREEN pair directly above
+  them — **each pair differing in exactly ONE variable, the line count**, deliberately not merged
+  into a loop over four subjects (the shape that has twice in this repo produced a test whose title
+  outran what it ran). **Attribution is a mutant, not a story**: with the arm reverted to
+  `-?[1-9]`, the REAL selftest run against the REAL lint reports **32/34 with exactly TWO failures,
+  and both are mine**, read off the emitted `✗` lines rather than a retyped name, baseline asserted
+  green first and the subject restored **byte-identically by sha256** in a trap.
+  **TWELVE GATED PREDICTIONS ACROSS THREE PROBES PLUS SIX ON THE MUTANT; TWO REFUSED, AND BOTH
+  REFUSALS WERE WORTH MORE THAN THE SIXTEEN CONFIRMATIONS.** One corrected the reason the fix rests
+  on; the other exposed a fire control that could not fire. **SIX CONSECUTIVE LINKS NOW WHERE EVERY
+  FAULT FOUND WAS IN THE MEASURING APPARATUS AND NONE IN A SUBJECT, AND EVERY ONE SURFACED AS A
+  REFUSAL RATHER THAN A WRONG NUMBER.**
+  **GREEN, ALL RUN THIS LINK.** `shellcheck` 0 findings · `bash -n` ok · `--selftest` **32 -> 34**
+  (updated deliberately, and the bats pin at `tests/pipefail-sigpipe-lint.bats:37` moved with it) ·
+  bare lint rc 0 `clean (allowlist honoured)` · `--census` **125 in, 125 out**, keyed on
+  **(path, TEXT)** rather than `path:line` because the diff inserts ~30 comment lines and shifts
+  every number below them, PRE arm extracted from `origin/main` by `git archive` rather than
+  remembered, with the key extractor's own POS control at **44 distinct paths** ·
+  `test-walltime-lint tests` *"clean — 561 suite(s); 1 grandfathered, 0 new time bombs"* ·
+  `unattended-path-lint --selftest` **47/47**. **Eight suites run in the FOREGROUND before the
+  land, 333 tests, 0 not-ok, 0 skips, 8 plans, terminator asserted ran==listed==8**:
+  `worktree-gc` **110** · `cc-classify` **87** · `pipefail-sigpipe-lint` **25** ·
+  `gate-ownscope-leak` **24** · `bats-shellcheck-lint` **28** · `git-worktree-guard` **14** ·
+  `land-lint-scope-derived` **13** · `cc-pane` **32**. ⚠️ **TAKE YOUR OWN COUNTS: this brief's
+  inherited table says `bats-shellcheck-lint` 27 and `worktree-gc` 108; they read 28 and 110.**
+  **THE BOARD.** Open **2026-09-02T07:39:48Z 344 open / 233 blocked / 2,360 done / 3 claimed** (577
+  combined, 2,940 rows); close **08:03:15Z 345 / 234 / 2,360 / 1** (579 combined, 2,940 rows). Both
+  partitions asserted at both moments, `sort -c` on both sides of every `comm`, direction NAMED
+  rather than resolved by `mtime`. **ZERO arrivals, ZERO departures, TWO transitions in 24 m 03 s**
+  — `70ed289c10fb` claimed -> open and `e981656df348` claimed -> blocked, both
+  `claude-infrastructure`, **and NEITHER is mine: I closed no row and filed none, so nothing needed
+  subtracting**, which is a different statement from a raw count and is why it is spelled out.
+  The gap from #282's floor was **4 m 35 s and held NOTHING** — zero arrivals, zero departures,
+  zero transitions, all five lists identical.
+  **THE STORES, TWO MOMENTS EACH, AND ONE OF THEM MOVED IN BOTH DIRECTIONS.** postland RED pages
+  **0 at both**, denominators **2,845 and 2,845**. The other page store read **2,437 all / 86
+  `.page`** at 07:40Z and **2,440 / 85** at 08:03Z — **the two columns moved in OPPOSITE directions
+  inside one 23-minute link**, which is the fifty-ninth distinct behaviour in fifty-nine links and
+  is the reason no rate and no direction in this file may be inherited. inbox-guard `.escalated`
+  **433 flat** across both. postland stamps **546 -> 547**.
+  **THE LANE.** Open 07:39Z, clean and level: `RUNG=✅ LIVE_SRC=behind LIVE_LAG=11 LIVE_ADDS=0
+  LIVE_AGE=7488 LIVE_DIVERGED=0 LIVE_BREACH_WHY=` empty — well inside the 21,600 s time arm.
+  **My close reading is a NON-READING and is labelled as one**: `LIVE_SRC=skip LIVE_SHA=` empty,
+  because `compute_live_layer()` is called only on the ✅-eligible path and my tree was dirty. That
+  is the trap #282 documented on its own close census, and it reads exactly like a converged lane.
+  **`GATE=stale` at my open and my close, unchanged and NOT mine to drive** — only the background
+  `postland-verify` stamp moves it.
+  **THE STANDING RED IS STILL TWO, AND ITS REFERENCE MOVED A FOURTH TIME.**
+  `scripts/deploy-link-parity.sh` rc 1 at 07:39Z: **461 linked · 0 staged-pending · 10 live-extra ·
+  54 unmapped · 2 actionable** — `linked` and `actionable` both identical to #282's, while the
+  reporter's own reference went **0 (#280) -> 9 (#281) -> 7 (#282) -> 11 (mine)**. **Four
+  references, one unmoved verdict.** The two survivors are unchanged and neither is a sweep:
+  `hooks/enforce-email-formatting.py.bak-20260824-193645` (a pure historical revision, holding
+  nothing unlanded) and `scripts/automode-restore-defaults.sh` (live, executable, referenced
+  NOWHERE in the checkout — which is precisely what blocks the manifest row, since the WITNESS
+  column is that file's anti-rot device). **The executing blob still equals trunk's** —
+  `6c58711286ff` on both sides, a SIXTH consecutive link.
+  **THE RAILS.** kitty pane **27**, `KITTY_PID=1427`, `TERM=xterm-kitty`,
+  `KITTY_LISTEN_ON=unix:/tmp/kitty-1427`, `ITERM_SESSION_ID=w0t0p0:27`, `CC_TERM` UNSET,
+  `bin/cc-in-kitty` rc 0, `cc-notify --self` printing 27, and the id-keyed `kitty @ ls` query run
+  **THROUGH A FILE** (rc 0, **0 stderr bytes**, 208,663 json bytes) returning **EXACTLY ONE
+  object** with a bogus-id NEG control at 0 and its `cwd` the worktree. The qos heredoc `diff` was
+  **rc 0 with 0 bytes**; that is all it claims, and this file's three disagreeing counters for it
+  are left alone because nobody can derive them. Mailbox `~/.claude/mailbox/27.md` unchanged at
+  **4,059 bytes / 1 line**. `cc-roles list` byte-identical to every prior reading. `land-lock`
+  free, 0 waiters. Board writes: **none** — this link wrote to no store but the document.
+  **THE ONE THING TO CARRY.** #281 asked what unit a decision is denominated in; #282 asked where
+  the deciding information lives when two options tie. **#283's is the one that comes after a
+  verdict you agree with: IS THE STATED REASON THE REASON, AND HOW FAR DOES *IT* REACH?** Here the
+  verdict (`head -1` is safe) was right, the reason given for it (`<=9 lines, one write`) was
+  wrong, and **the wrong reason is the only thing that ever justified the other eight values.**
+  Nobody would have audited the arm, because its verdict was correct on every case anyone had
+  tried. **A wrong reason beside a right verdict is invisible to every test of the verdict — and it
+  is load-bearing for the generalisation nobody wrote down.** The cheap tell is a bound whose unit
+  differs from the unit of the thing it bounds, and the cheapest place to look for one is beside a
+  SIBLING clause that already got the unit right.
 - **2026-09-02 — drain recycle #282: method 254 — TWO RESIDUALS NAMED AS INDEPENDENT WERE ONE, AND
   THE OBVIOUS REPAIR WAS THE WRONG ONE.** ZERO rows closed, ZERO filed, ZERO reopened. TWO commits.
   **The land facts live in `git log --oneline origin/main`, and the push is deliberately not
