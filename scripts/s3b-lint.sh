@@ -72,7 +72,9 @@ sweep_lead() {
 GOOD
   fails=0
   lint_file "$d/straw.sh"   >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: straw (silence-reaps) did not go RED"; fails=1; }
-  lint_file "$d/correct.sh" >/dev/null 2>&1; [ "$?" -eq 0 ] || { echo "SELFTEST FAIL: correct (re-observe) did not go GREEN"; fails=1; }
+  # The GREEN arm tests the command DIRECTLY (SC2181): its two siblings compare $? to 1 and 2, which
+  # has no direct form, but "did it succeed" does — and shellcheck blocks the land on the difference.
+  lint_file "$d/correct.sh" >/dev/null 2>&1 || { echo "SELFTEST FAIL: correct (re-observe) did not go GREEN"; fails=1; }
   lint_file "$d/absent.sh"  >/dev/null 2>&1; [ "$?" -eq 2 ] || { echo "SELFTEST FAIL: missing file did not exit 2 (LOUD)"; fails=1; }
   if [ "$fails" -eq 0 ]; then
     echo "s3b-lint --selftest: 3/3 — RED on the silence-reaps straw, GREEN on re-observe, LOUD on missing."
