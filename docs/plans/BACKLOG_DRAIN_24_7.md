@@ -31396,3 +31396,92 @@ still gets a shallow clone and still needs `git fetch --unshallow` as its litera
 `70f0001c657b` stays operator-gated on that land. It changes no code — `0ce20c39` is the fix and it
 is three days old on trunk. And it does not touch the dispatch brief's FIRST STEP, which remains
 unsound as typed in a shallow container for the same reason the previous addendum gave.
+
+### Addendum 2026-09-02 (second) — a cloud fire's OWN sha is never the sha that lands, so the addendum above declared a landed cure "stranded" (`b60eb29e97dd`)
+
+*(Dispatched cloud worker, drain row `b60eb29e97dd` — the SECOND dispatch of a row discharged on
+trunk on 2026-08-29. No code change. Docs-only, one file, append-only. This entry exists to CORRECT
+the closing paragraph of the addendum immediately above, which is wrong in a way that would send the
+next worker to re-land a cure that is already on trunk.)*
+
+**The row itself: unchanged and still discharged by `0ce20c39`, re-verified here rather than
+recalled.** `BEAT_STOP_ALLOWANCE=1` is unconditional on `origin/main`. The previous addendum's
+no-`bats` method was re-run independently in this container against the real binary and against a
+mutant carrying the pre-fix line, mutant written into `bin/` for the reason that addendum gives.
+Four cases, both directions: trunk HELD its term (exit 2, banner `beat seq > 4`); the mutant stood
+down at the first poll printing **`beat seq > 3`** — the field banner quoted in the row itself. The
+two guards (a genuine PROMPT at baseline+1 cancels; a Stop at baseline+2 cancels) passed under BOTH
+binaries, so the allowance is not a blindfold. The row is `done`, evidence `0ce20c39`.
+
+🚨 **THE CORRECTION, and it is the whole reason this entry is here. The addendum above closes with
+*"It does not land `327653ff`/`44fa3f96` … the dispatch brief's FIRST STEP remains unsound as
+typed"* and parks `70f0001c657b` on that land. That cure LANDED, 8 h 59 m before that addendum was
+written.** `327653ff` is a *cloud VM's own commit*, and it lives — still, today — only on
+`origin/claude/fire-20260901T044951Z-22938-1`. The land path (`cloud-reconcile` → `desk-land` →
+`ship-land`) both REBASED it and RE-AUTHORED it, so the VM's sha and the trunk sha are **different
+objects with identical content** — and the author DATE is what survives, which is the field that
+makes the pair recognisable:
+
+    327653ff  author Claude <noreply@…>   adate 2026-09-01 04:59:58 +0000  parent e148e65b  VM branch only
+    22b8824c  author Chris Ren <ren.…>    adate 2026-09-01 04:59:58 +0000  parent e31eb3d0  ANCESTOR of origin/main
+                                          cdate 2026-09-01 13:58:52 -0700
+    both: bin/cc-dispatch +28 / BACKLOG_DRAIN_24_7.md +64 / tests/cc-dispatch-projects.bats +47
+
+🚨 **And you cannot predict WHICH, which is exactly why the sha is not the oracle.** The addendum
+above — `1ff275ba`, written from a cloud VM by the previous dispatch of *this* row — is on trunk
+**with its VM sha and its `Claude <noreply@anthropic.com>` authorship intact**. Same repo, same
+lane, one day apart: one cloud commit landed re-authored under a new sha, the other landed
+untouched. So *"my sha is not on trunk"* means **nothing** on its own from a VM, in either
+direction, and no rule of thumb about the lane rescues it.
+
+`44fa3f96` is not a valid object name in a full clone at all — a second VM-local sha. So
+`git merge-base --is-ancestor 327653ff origin/main` answers **false forever**, before the land and
+after it, and reading that as *"the cure is stranded"* is the same confident-wrong-answer failure
+the addendum above diagnosed one layer down, in the same read, on the same day. **The shallow fix
+does not fix this one:** unshallowing gave this container 3,984 commits and `327653ff` still scores
+NOT-on-trunk, correctly, because that object genuinely is not on trunk — its *content* is.
+⚠️ **Provenance for cloud-fired work must be asked by SUBJECT or CONTENT, never by the VM's sha**
+(`git log --oneline origin/main --grep "<subject>"`, or `-S` over the changed line once
+`--is-shallow-repository` reads false). The operative consequence is on the desk, not here:
+`70f0001c657b`'s stated gate — "land the shallow-READ cure" — is **already satisfied**; whether that
+row has other reasons to stay parked is not visible from a container with no store.
+
+📋 **AND THE CURE STILL DID NOT RUN, which is a different fact from "it did not land" — measured on
+this dispatch, by the brief's own bytes.** `f9cbe177` (2026-09-02 02:15:02 +0000, on trunk) already
+established this method and this gap for row `485f8f87eb5f`. This fire is the **second row and a
+later vintage**, and the gap had not closed:
+
+    this dispatch's staleness_rail, as received        761 B
+    22b8824c^:bin/cc-dispatch composer, $irepo filled  761 B   BYTE-IDENTICAL
+    origin/main:bin/cc-dispatch composer, same fill   1501 B   differs
+
+Fired `2026-09-02T10:54:16Z` (branch stamp) — **13 h 55 m after `22b8824c` landed the `--unshallow`
+precondition, and 8 h 39 m after `f9cbe177` landed the `DISPATCHER VINTAGE` rail.** The received
+brief carries neither: no `--unshallow` clause, and **no vintage rail at all**, which is itself the
+reading `f9cbe177` designed — that rail fails open and says so, so its total absence dates the
+composer as pre-`f9cbe177` without needing the stamp it would have printed. The live
+`bin/cc-dispatch` was behind trunk at fire time, *across the landing of the very commit that
+measured it being behind*. **Landed is not live, and two rows now say so at two different vintages.**
+This is a convergence fact about the deploy layer — not a defect in `0ce20c39`, and not something a
+VM can repair.
+
+**What this cost, concretely:** the FIRST STEP as received prescribes `git rev-list --count
+HEAD..origin/main` (printed `0`, "your tree IS trunk" — true and useless here) and
+`git log --oneline <sha>..origin/main -- <path>`, in a container that arrived at `.git/shallow`
+depth 50. Those reads scored `0ce20c39` — the cure, three days old on trunk — as **not-on-trunk**,
+along with six sibling commits. Only `git rev-parse --is-shallow-repository` returning `true` broke
+the tie. **The fourth lock fired a FOURTH time, on the dispatch immediately after the one that
+recorded the third**, because the remedy reaches workers through a layer that had not moved.
+
+📋 **OWED LOCALLY — `~/.claude/autonomy/backlog.jsonl` does not exist in this container** (measured:
+`cc-backlog` resolves, the store does not), so this entry is the channel, as for the three addenda
+above. The op is `done` — the row is discharged on trunk, not blocked and not open. Runnable as
+typed:
+
+    cc-backlog done b60eb29e97dd --evidence "0ce20c3934d96c34f9305e3e8e08c7dd9adf8c44"
+
+**What this does NOT settle.** It changes no code: `0ce20c39` is the fix and `22b8824c` is the
+brief's fix, both on trunk. It cannot converge the live layer — that is the desk's, and it is the
+one action that would stop this row's class from re-firing. And it does not re-park or unpark
+`70f0001c657b`; it only records that the gate that row names has been satisfied since
+2026-09-01 13:58 -0700.
