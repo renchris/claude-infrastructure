@@ -1645,10 +1645,16 @@ Two things remain yours before this is fully wired up.")" "$w" "d7-e2e"
 # The three arms below are the full proof: the switch abstains, its ABSENCE still fires (so this is
 # not a blanket suppressor), and the seam OFF fires again (so the new code is the cause).
 mkfix_user() { # <assistant-close> <last-user-msg> → transcript path
+  # The user message goes in via --rawfile, never --arg: the PIPEFAIL case below is multi-megabyte
+  # and `jq --arg` blew ARG_MAX ("Argument list too long"), which failed the test in the HARNESS and
+  # looked exactly like a subject red — on BOTH branches, so the mutant proof read as evidence when
+  # it was noise. --rawfile appends a trailing newline; harmless for every matcher here.
   local text="$1" umsg="$2" path="$BATS_TEST_TMPDIR/txu-${BATS_TEST_NUMBER}-$RANDOM.jsonl"
+  local ufile="$BATS_TEST_TMPDIR/umsg-${BATS_TEST_NUMBER}-$RANDOM.txt"
+  printf '%s' "$umsg" > "$ufile"
   {
     jq -nc '{type:"user",message:{role:"user",content:"audit the hooks"}}'
-    jq -nc --arg u "$umsg" '{type:"user",message:{role:"user",content:$u}}'
+    jq -nc --rawfile u "$ufile" '{type:"user",message:{role:"user",content:$u}}'
     jq -nc --arg t "$text" '{type:"assistant",message:{content:[{type:"text",text:$t}]}}'
   } > "$path"
   printf '%s' "$path"
@@ -1672,4 +1678,18 @@ mkfix_user() { # <assistant-close> <last-user-msg> → transcript path
   export CC_CLOSE_KILLSWITCH=0
   run run_ca "$(mkfix_user "Done. Landed at abc1234, all green." "just do the readme and stop")" "$w" "ks-3"
   [ "$status" -eq 0 ]; fired "$output"
+}
+
+# The pipefail/SIGPIPE arm — and the regime is LINE COUNT, not byte count. `grep -q` leaves as soon
+# as a LINE matches, so the producer only dies when bulk output still follows that line. A single
+# huge line cannot trigger it (grep must reach the newline to decide), which is how a 256 KiB
+# one-line fixture cleared this site by mistake before it was rebuilt this way — the trap named in
+# memory control-fixture-must-reach-the-bugs-regime. Mutant-proven: restore `grep -q` and this goes
+# red with rc 141 while every other KILL-SWITCH arm stays green.
+@test "KILL-SWITCH PIPEFAIL: kill phrase on line 1 of a 200k-line message ⇒ still ABSTAIN" {
+  local w; w="$(mkrepo_unlanded ks4)"
+  local big; big="$(awk 'BEGIN{print "just do the readme and stop"; for(i=0;i<200000;i++)print "filler line " i;}')"
+  run run_ca "$(mkfix_user "Done. Landed at abc1234, all green." "$big")" "$w" "ks-4"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  /usr/bin/grep -q '"reason":"kill-switch"' "$COMPLETION_IDL"
 }

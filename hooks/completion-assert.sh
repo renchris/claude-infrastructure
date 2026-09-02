@@ -159,25 +159,34 @@ case "$TP" in "~"*) TP="$HOME${TP#\~}" ;; esac
 # the next turn re-raises; a false negative is the bug being fixed.
 CA_KILL_RE='(^|[^[:alnum:]])and( then)? stop([^[:alnum:]]|$)|no[ _-]?auto[ _-]?continue|(^|[^[:alnum:]])just do [^[:space:]]|(^|[^[:alnum:]])stop here([^[:alnum:]]|$)|come back to this|^[[:space:]]*(stop|halt)[[:space:].!]*$'
 ca_last_user_msg() {
-  jq -r 'select(.type=="user")
+  # `jq -c` then decode — NOT `jq -r … | tail -1`. With -r the message's OWN newlines reach the
+  # stream, so `tail -1` takes the last LINE of the last message instead of the last RECORD: a
+  # multi-line operator message is silently truncated to its final line, and a kill phrase anywhere
+  # above it is invisible. Measured: a 200k-line message with "…and stop" on line 1 read back as the
+  # empty string. Compact JSON keeps one record per line, which is exactly why the MSG extractor at
+  # :157-160 already uses this shape; the kill-switch reader was ported from a sibling hook that
+  # does not, and inherited the bug. session-continue.sh:190-201 still has it (filed separately).
+  local _j
+  _j="$(jq -c 'select(.type=="user")
          | .message.content
          | if type=="string" then .
            elif type=="array" then ([.[]?|select(.type=="text")|.text]|join("\n"))
            else empty end
-         | select(. != "")' "$TP" 2>/dev/null | tail -1
+         | select(. != "")' "$TP" 2>/dev/null | tail -1)"
+  [ -n "$_j" ] || return 1
+  printf '%s' "$_j" | jq -r '. // empty' 2>/dev/null
 }
 if [ "${CC_CLOSE_KILLSWITCH:-1}" != "0" ]; then
   _ca_km="$(ca_last_user_msg || true)"
-  # DRAINED, not `grep -q`, to satisfy scripts/pipefail-sigpipe-lint.sh's ratchet. HONEST SCOPE OF
-  # THE CLAIM: the shape the ratchet names is real in general — under `set -o pipefail` an
-  # early-exiting consumer can SIGPIPE its producer and the pipeline then reads FALSE on a MATCH —
-  # but it was NOT reproducible at this site. Probed directly at 256 KiB with the match at byte 0
-  # (the most favourable case for an early exit): `grep -q` still returned the match, because the
-  # producer here is the bash BUILTIN printf, not a forked streamer. So this is defence against a
-  # pattern, not the fix of a demonstrated defect, and no test asserts a behaviour difference —
-  # a test that passes on both branches would be a false assurance, so none was kept. Draining is
-  # free and correct by construction; the note exists so a later reader does not infer a bug that
-  # was never shown.
+  # DRAINED, not `grep -q`. Under this file's `set -uo pipefail` an early-exiting consumer SIGPIPEs
+  # its producer and the pipeline adopts THAT status, so the condition reads FALSE on a MATCH.
+  # MEASURED HERE, rc 141, on the shape a real operator message actually has: the phrase on an early
+  # LINE with bulk text after it (3.6 MB / 200k lines) — `grep -q` returned false, drained returned
+  # the match. A first probe used one enormous SINGLE line and wrongly cleared the site: grep cannot
+  # match a line before its newline, so a one-line fixture can never make it exit early, however
+  # large. That is the size-dependent-control trap in memory control-fixture-must-reach-the-bugs-
+  # regime, and the regime here is LINE COUNT, not byte count. `grep >/dev/null` reads to EOF, so
+  # the producer is never signalled. printf being a builtin does not exempt it above the pipe buffer.
   if [ -n "$_ca_km" ] && printf '%s' "$_ca_km" | grep -iE "$CA_KILL_RE" >/dev/null; then
     abstain "kill-switch"
   fi
