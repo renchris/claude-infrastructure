@@ -28,6 +28,14 @@ setup() {
   SUBJECT="${CC_DRAIN_SUBJECT:-$REPO/scripts/drain-chain-assert.sh}"
   CB="$REPO/bin/cc-backlog"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # THE REPLAY HARNESS ONLY WORKS IF THE REPLAYED ARTIFACT CAN STILL FIND ITS TOOLS. The subject
+  # locates hooks/lib/engagement.sh relative to its OWN path first and falls back to
+  # $CLAUDE_CONFIG_DIR — so a CC_DRAIN_SUBJECT copy sitting in /tmp resolves neither once HOME is
+  # a scratch dir, hits guard 1, and answers `skipped`. That is an ABSTENTION, not the pre-fix
+  # behaviour, and a control that abstains proves nothing about the artifact it was meant to replay
+  # (memory `control-must-replay-the-real-artifact`). Pointing the fallback at the repo makes the
+  # replayed copy behave exactly as the tree's own does.
+  export CLAUDE_CONFIG_DIR="$REPO"
   export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl"
   export CC_BACKLOG_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
   export CC_BACKLOG_KICK=off
@@ -70,6 +78,16 @@ engaged_session() {
     > "$CC_ENGAGE_HOMES/projects/-scratch/$2.jsonl"
 }
 n_rows()  { bash "$CB" list --all --json | jq '[.[]|select(.condition=="local-drain-chain-dead")]|length'; }
+
+# age_file <path> <seconds> — set an mtime N seconds in the past, on the REAL clock.
+#
+# WHY NOT CC_DRAIN_NOW HERE. That knob moves the clock for the WHOLE subject, so advancing it to age
+# a brief also ages every claim past CC_BACKLOG_STALE_CLAIM_S — and the two cases below need exactly
+# the state the incident had: a brief 40.5 h stale BESIDE a lease that is live right now, because
+# Lane A re-claimed continuously (24 claims inside that window). Driving one axis with the clock
+# would have silently collapsed both into "everything is old", which is a different fixture that
+# happens to be red. `touch -t` is not portable enough to compute a past stamp here; utime is.
+age_file() { python3 -c 'import os,sys,time;t=time.time()-float(sys.argv[2]);os.utime(sys.argv[1],(t,t))' "$1" "$2"; }
 
 # ── the alarm fires when, and only when, the pile is non-empty and nothing is on it ─────────────
 
@@ -327,6 +345,138 @@ n_rows()  { bash "$CB" list --all --json | jq '[.[]|select(.condition=="local-dr
 @test "--file is silent while the chain is alive" {
   add "a row" >/dev/null
   : > "$BRIEFS/fire-drain-recycle10.txt"
+  run bash "$SUBJECT" --file
+  [ "$status" -eq 0 ]
+  [ "$(n_rows)" -eq 0 ]
+}
+
+# ── THE POSITIVE CONTROL: THE #259→#260 WINDOW, REPLAYED ────────────────────────────────────────
+#
+# WHY A POSITIVE CONTROL AND NOT ANOTHER GREEN. Every case above proves this alarm CAN say `dead`
+# under a fixture built to make it. None of them proved it can say `dead` about THE FAILURE THAT
+# ACTUALLY HAPPENED ON THIS BOX — and it could not: measured 2026-08-31, the shipped file answered
+# `brief:null` with 279 briefs on disk (the glob named /tmp; the chain writes
+# $CLAUDE_CONFIG_DIR/autonomy) and `alive/live-lease` on two cloud leases whose holder PIDs were
+# both already dead. An alarm that has never fired in its deployed life is indistinguishable from
+# one that cannot (memory `fail-safe-default-mimics-the-healthy-state`), so the fixture below is the
+# incident itself rather than a paraphrase of it.
+#
+# THE INCIDENT, from disk: brief #259 written 2026-08-28T23:56:02Z (epoch 1787986562), #260 not
+# until 2026-08-30T16:28:25Z (1788132505) — 145,943 s of silence, with Aug 29 firing no recycle at
+# all. Inside that window the ledger carries 24 claims and ALL 24 are `venue:"cloud"`. Both real
+# numbers are used verbatim below.
+@test "POSITIVE CONTROL — the real 40.5h death (#259→#260) reads DEAD, not alive" {
+  add "a row nobody is draining" >/dev/null
+  # The last brief the chain ever wrote, in the directory it actually writes to.
+  : > "$BRIEFS/fire-drain-recycle259.txt"
+  # The only thing alive in that window: the cloud lane's oscillating claim.
+  id=$(add "a row Lane A claimed, blocked, unblocked and re-claimed")
+  bash "$CB" claim "$id" --by "Chriss-MacBook-Pro-3-74864" --venue cloud >/dev/null 2>&1
+  # 145,943 s — the exact gap between brief #259 and brief #260 — with the lease LIVE beside it.
+  age_file "$BRIEFS/fire-drain-recycle259.txt" 145943
+  [ "$(verdict)" = dead ]
+  [ "$(why)" = no-brief-no-lease ]
+  # The excluded stratum is NAMED, so a reader who can see live cloud claims can reconcile the two
+  # without re-deriving it (memory `zero-claim-must-name-its-excluded-strata`).
+  run bash "$SUBJECT" --assert
+  [ "$status" -eq 1 ]
+  [ "$(printf '%s' "$output" | grep -c 'venue:cloud')" -eq 1 ]
+  # The cloud lease is COUNTED, not discarded — the row is diagnosable from itself.
+  [ "$(bash "$SUBJECT" --json | jq -r '.cloud_leases')" -eq 1 ]
+  [ "$(bash "$SUBJECT" --json | jq -r '.live_leases')" -eq 0 ]
+}
+
+# THE CONTROL THAT MAKES THE CASE ABOVE MEAN SOMETHING. Same fixture, one field changed: the lease
+# is `local` instead of `cloud`. If this read `dead` too, the case above would be pinning "an old
+# brief is dead" — which the suite already covers — rather than the venue axis. Guard 3 is narrowed
+# here, not deleted: every non-cloud holder still proves the chain alive.
+@test "CONTROL — the same window with a LOCAL lease is alive; the venue is what moved" {
+  add "a row nobody is draining" >/dev/null
+  : > "$BRIEFS/fire-drain-recycle259.txt"
+  id=$(add "a row a local worker is holding")
+  bash "$CB" claim "$id" --by "Chriss-MacBook-Pro-3-74864" --venue local >/dev/null 2>&1
+  age_file "$BRIEFS/fire-drain-recycle259.txt" 145943
+  [ "$(verdict)" = alive ]
+  [ "$(why)" = live-lease ]
+}
+
+# A venue this file has never heard of must ABSTAIN toward alive, not convict. The subtraction is an
+# explicit `cloud` test and not a `local` allow-list, so a new lane does not silently become a
+# corpse (memory `denylist-enumerates-spellings-not-the-class`, applied in the safe direction).
+@test "CONTROL — an unfamiliar venue still counts as a lease" {
+  add "a row" >/dev/null
+  id=$(add "a row some future lane is holding")
+  bash "$CB" claim "$id" --by "fixture-$$" --venue local >/dev/null 2>&1
+  [ "$(verdict)" = alive ]
+  [ "$(why)" = live-lease ]
+}
+
+# ── arm (a): the glob reaches the directory the chain actually writes to ────────────────────────
+#
+# RED-PROVES THE OTHER HALF. With CC_DRAIN_BRIEF_GLOB unset the shipped default was
+# `/tmp/fire-drain-recycle*.txt` and a brief in $CLAUDE_CONFIG_DIR/autonomy was invisible — so
+# `brief_age_s` was null forever, FRESH was permanently 0, and the handover grace and the whole
+# progress oracle were unreachable code. Asserting the AGE rather than the verdict is what makes
+# this see the bug: a verdict-only assertion passes on any disjunct that happens to hold.
+@test "the DEFAULT glob finds a brief where the chain actually writes it" {
+  add "a row" >/dev/null
+  mkdir -p "$HOME/.claude/autonomy"
+  : > "$HOME/.claude/autonomy/fire-drain-recycle300.txt"
+  unset CC_DRAIN_BRIEF_GLOB
+  export CLAUDE_CONFIG_DIR="$HOME/.claude"
+  age="$(bash "$SUBJECT" --json | jq -r '.brief_age_s')"
+  [ -n "$age" ]
+  [ "$age" != null ]
+  case "$age" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$age" -lt 60 ]
+}
+
+# THE SECOND HOP OF ARM (a). The live chain fires a 152-byte POINTER, so handoffs.jsonl records
+# `fire-pointer-<N>.txt` and the exact `prompt_file == $BRIEF` join can never match the brief. Fixing
+# the glob WITHOUT this would have turned a permanent false ALIVE into a permanent false DEAD at
+# every tick — the direction that files a standing row in the store this program exists to drain.
+@test "a fire logged with the POINTER still resolves the successor (join on the recycle number)" {
+  add "a row" >/dev/null
+  : > "$BRIEFS/fire-drain-recycle279.txt"
+  printf '{"ts":"2026-08-31T21:29:00Z","class":"recycle-intent","target_pane":"27","prompt_file":"%s"}\n' \
+    "$BRIEFS/fire-pointer-279.txt" >> "$CC_DRAIN_HANDOFF_LOG"
+  engaged_session 27 "$SID24"
+  export CC_DRAIN_NOW=$(( $(date +%s) + 2520 ))   # past the handover grace, so the join must carry it
+  [ "$(verdict)" = alive ]
+  [ "$(why)" = progressing ]
+  [ "$(bash "$SUBJECT" --json | jq -r '.pane')" = 27 ]
+}
+
+# …and the join must not match a DIFFERENT recycle whose number merely shares digits. A substring
+# join would let `fire-pointer-27.txt` answer for brief #279.
+@test "the number join is exact: recycle 27's fire does not vouch for recycle 279" {
+  add "a row" >/dev/null
+  : > "$BRIEFS/fire-drain-recycle279.txt"
+  printf '{"ts":"2026-08-31T21:29:00Z","class":"recycle-intent","target_pane":"27","prompt_file":"%s"}\n' \
+    "$BRIEFS/fire-pointer-27.txt" >> "$CC_DRAIN_HANDOFF_LOG"
+  engaged_session 27 "$SID24"
+  export CC_DRAIN_NOW=$(( $(date +%s) + 2520 ))
+  [ "$(verdict)" = dead ]
+  [ "$(why)" = unverifiable ]
+}
+
+# ── the HEALTHY control: the chain as it actually runs must stay SILENT ─────────────────────────
+#
+# The other failure direction, and the expensive one: a false DEAD files a permanent condition-keyed
+# row in the very store this program drains. This fixture is the live chain's real shape — brief in
+# the real directory, fire logged with the pointer, an engaged pane, and cloud leases held beside it
+# — and the alarm must say nothing at all.
+@test "HEALTHY CONTROL — the live chain's real shape is alive and --file writes NOTHING" {
+  add "a row being drained" >/dev/null
+  cid=$(add "a row Lane A is holding")
+  bash "$CB" claim "$cid" --by "Chriss-MacBook-Pro-3-69830" --venue cloud >/dev/null 2>&1
+  : > "$BRIEFS/fire-drain-recycle280.txt"
+  printf '{"ts":"2026-08-31T22:46:00Z","class":"recycle-intent","target_pane":"27","prompt_file":"%s"}\n' \
+    "$BRIEFS/fire-pointer-280.txt" >> "$CC_DRAIN_HANDOFF_LOG"
+  engaged_session 27 "$SID23"
+  export CC_DRAIN_NOW=$(( $(date +%s) + 2520 ))
+  [ "$(verdict)" = alive ]
+  [ "$(why)" = progressing ]
   run bash "$SUBJECT" --file
   [ "$status" -eq 0 ]
   [ "$(n_rows)" -eq 0 ]
