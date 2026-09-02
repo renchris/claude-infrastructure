@@ -1616,7 +1616,7 @@ windows/week, carrying the fleet wall rate 1.72% → 2.20%.
 
 ### §5.7 Implementation record — what actually landed, and where it deviated from the spec
 
-Wave 1 = **S1 + S2 + S3 only**. S4–S7 are unbuilt and unchanged; S5 still gates S6.
+Wave 1 = **S1 + S2 + S3**. Wave 2 = **S4**. S5–S7 are unbuilt and unchanged; S5 still gates S6.
 
 #### S1 · data fixes — LANDED
 
@@ -1732,6 +1732,8 @@ header clause enters with S4.
 **Deviation 2 — `burst_start_by` / the `start by T−Nh` clause is absent**, by scope. S4 is a
 later wave. Every row therefore answers two of the goal's three questions — how much dies, and
 whether the demand is routine — and not the third.
+> **Discharged by wave 2** (S4, below): the clause and the header's K now render, so every strand
+> row answers all three.
 
 **Deviation 3 — `pace_line` COMPUTES the strand rather than reading its own stamp**, exactly as
 it already calls `wall_projection` instead of reading `burn_ratio`. A renderer that reads a
@@ -1776,14 +1778,97 @@ nowcaster precisely because it converges as the horizon closes, which is what ma
 forecaster. **S5 (`--strand-score`) is still the prerequisite for S6**, and nothing here
 shortens that.
 
+#### S4 · M4′ `burst_start_by` — LANDED
+
+`bin/claude-accounts`: `burst_start_by(r, k)` + `fmt_start_by(bs)` beside `fmt_burst`, constants
+`BURST_SPPH` / `P_WALL` / `MEAN_WALL_H` / `SESSION_WINDOW_H` / `START_SOON_H`; K stamped in
+`apply_burn`; `PACE_HEAD` replaced by `pace_head(rows)`; the clause rendered in `pace_line`.
+Cases **RP-21..RP-24** in `tests/claude-accounts-burst.bats` and two in
+`tests/claude-accounts-core.bats` (the pace-line case EXTENDED in place, plus a new abstain-arm
+case), **RP-21..RP-24b 5/5 RED** against the S3 binary (`AttributeError: module 'ca' has no
+attribute 'burst_start_by'`), the two core cases RED on `KeyError: 'k_wk_per_spp'` and on the
+header. 10/10 burst and 82/89 core green after — the 7 are the suite's pre-existing macOS-only
+failures (`security` keychain, `--login-status` e2e), identical on the unchanged tree.
+
+**The live block, all three of the goal's questions answered per row for the first time:**
+
+```
+weekly drain — pp that DIE at reset (K=0.192 live · nowcast at the last 48h of pace):
+  next4 strand ~64pp of 86 · p94 of its own 24h burns · start by T−27h (93h slack)
+  next2 strand ~56pp of 83 · p71 of its own 24h burns · start by T−26h (71h slack)
+  next3 strand ~5pp of 8 · p96 of its own 3h burns · ⚠ LATE by 0.6h — 2.8pp already unrecoverable
+  next no strand — on pace to fill the window · 4d left
+```
+
+**Return shape is a dict**, not the bare float §5.3 RP-21 sketches — the same reason S2's was: RP-21
+asserts a numeric range *and* a verdict string on one return, which a float cannot carry. Keys:
+`h` · `verdict` · `windows` · `burn_h` · `freeze_h` · `t_needed_h` · `unrecoverable_pp`.
+
+**Deviation 1 — the header's K clause enters here, and the STRAND still does not gate on it.** §5.2's
+abstain text says a null K prints `no strand figures this sweep`. S3 Deviation 1 already refused that
+half (M3a is pure weekly-space arithmetic and consumes no K; gating it on one would be a fabricated
+dependency) and this wave carries the refusal forward: a null K kills the **start-by** clause only,
+the strand renders unchanged, and the row falls back to the plain `· Nh left` countdown so it still
+says when the window closes. Pinned by the new core case.
+
+**Deviation 2 — four header states, not two.** `K unfitted (…)` (a fit was taken and REFUSED for
+leaving `K_SANE`) and `K unread` (no fit attempted — `apply_burn` did not run) are different facts
+and are spelled differently; collapsing them is the L2 defect this block exists to remove. And a
+**frozen** K is not an abstain at all: it renders as `K=0.192 frozen`, the figures still print, and
+the reader is told they came off the pooled literal rather than a live fit. `exchange_rate` gained a
+non-breaking `with_raw=True` returning the ungated fit as a 4th element **for the message only** —
+`K unfitted` with no number cannot say whether the meter drifted by 0.001 or by 0.05, which is
+exactly what decides whether the band or the plan is what changed. The 3-tuple stays the contract
+every consumer routes on.
+
+**Deviation 3 — K is read off a STAMP, and this is the one place that is correct.** S3 Deviation 3
+established that `pace_line` COMPUTES rather than reads, so it cannot silently render nothing when
+`apply_burn` has not run. `burst_start_by` is still computed in the renderer; only its *input* K
+comes from a stamp, because K needs the SERIES and the renderer is handed rows. The absence of the
+stamp is therefore a state the header NAMES, which is the property the compute-don't-read rule was
+protecting.
+
+**Deviation 4 — the start-by clause REPLACES the `· Nh left` tail on a strand row** rather than
+riding beside it. The slack figure already carries the time, and two clocks in two units on one row
+is `needs 88%/d over 2.2h` again. Zero-strand rows keep the plain countdown.
+
+**Deviation 5 — a fifth case, RP-24b, and the arithmetic bug it exists for was in the SPEC.**
+§5.2 S4's pseudocode guards the open window with `if avail > 0:` and has no `else`, so an account
+whose 5h window is **already walled** (`session_pct = 100`, `avail = 0`) falls straight through to
+the grid walk and starts burning at `t = 0` inside a window that cannot burn — understating
+`t_needed` by the entire remaining 5h countdown, which is the direction that turns a LATE row into
+SLACK. This is not a corner case: **5 of the 8 measured burst windows walled**, and a walled account
+is precisely the state the planner creates. Shipped with the `else` arm (`t = max(0, session_reset_h)`)
+and RP-24b holds it: deleting that arm leaves RP-17..RP-24 all green and reds RP-24b alone.
+Its control compares the walled row against **the same wall about to roll** — identical demand,
+window count and freeze, the sole difference being the 4 h of waiting — because the first version
+compared it against an *open* window and asserted a derived consequence (`one fewer window`) that
+the run refuted.
+
+**RP-23 is the case that earned its keep, and its own first assertion was wrong.** It mutates
+`P_WALL` to 0 and asserts the executed difference (1.033 h). I first asserted the mutated verdict
+was `SLACK`; it is `START SOON` — 2.21 h of window against 1.82 h of burn leaves +0.39 h, which is
+inside the 12 h band. The freeze term is still load-bearing exactly as claimed (the verdict flips
+off `LATE`, and `unrecoverable_pp` falls 2.83 → 0), but the *spelling* of the flip was a guess and
+the executed value refuted it. Same class as S2's `p100`: an assertion written from the argument
+rather than from the run — **twice in one wave** (RP-24b's first control was the other), which is
+the generalisable lesson here: a control must pin the MECHANISM by holding every other term fixed,
+never a consequence the author derived on the way to writing it.
+
+**What is NOT claimed.** The probation stands: `n = 8` burst windows is the entire evidence base for
+`BURST_SPPH`, `P_WALL` and `MEAN_WALL_H`, `P_WALL` is a lower bound (a freeze under ~13 min is
+invisible to the detector), and no lead-time claim appears anywhere on the surface. **S5
+(`--strand-score`) is still the prerequisite for S6**, and nothing here shortens it.
+
 #### Acceptance status against §5.4
 
 | command | status |
 |---|---|
-| the bats suites (roll-key · util-tail · strand · burst · core) | **111/111 green**, every case shown RED at the commit before its fix |
+| the bats suites (roll-key · util-tail · strand · burst · core) | **wave 1: 111/111 green** · **wave 2: burst 10/10, core 82/89**; across all ten `claude-accounts*` suites **166 cases, 8 failing — every one of the 8 identical on the unchanged tree** (7 macOS-only `security`/keychain + 1 `--json` e2e, none reachable on Linux). Every new case shown RED at the commit before its fix |
 | `claude-accounts --readout` renders the drain block for all four accounts | **yes** — see above |
 | `claude-accounts --readout \| grep -c 'strand'` → 3 or 4 | **4** |
-| `claude-accounts --strand-score` | **not in this wave** — that flag is S5 |
+| the footer answers all three of the goal's questions per row | **yes, from wave 2** — how much dies (M3a) · routine or a stunt (M5) · by when it must start (M4′) |
+| `claude-accounts --strand-score` | **still not built** — that flag is S5 |
 
 ⚠️ `bash tests/run.sh …`, named in §5.4, **does not exist in this repo**. The suites are run with
 `bats tests/<name>.bats`; `scripts/ship-land.sh` selects and runs them at the land.

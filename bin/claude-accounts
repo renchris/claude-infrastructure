@@ -2050,7 +2050,7 @@ K_MIN_SDS = 300.0             # session pp of movement below which the trailing 
 K_SANE = (0.175, 0.210)       # outside this the PLAN changed (or the meter did) -> abstain
 
 
-def exchange_rate(samples, hours=168.0):
+def exchange_rate(samples, hours=168.0, with_raw=False):
     """weekly pp per session pp, fitted on the trailing window. Ratio-of-sums over adjacent
     non-rolling pairs (dt <= 0.5 h) -- NEVER a mean-of-ratios (quantization biases that upward at
     small windows: 0.158 below 5 session pp vs 0.192 above 30) and NEVER binned by burn intensity
@@ -2062,7 +2062,13 @@ def exchange_rate(samples, hours=168.0):
     1,350 and 1,019. A permutation test on the late-vs-early difference gives p = 0.0948 — so it
     is not proven to be a real change, and a FROZEN literal has no path to learn that it became
     one. Abstaining outside K_SANE is the only reading that stays honest under both hypotheses:
-    a silently widened band launders a plan change into a number."""
+    a silently widened band launders a plan change into a number.
+
+    `with_raw=True` appends the UNGATED fit as a 4th element, for the abstain MESSAGE only. The
+    3-tuple stays the contract every consumer routes on, because the whole point of the band is
+    that an out-of-band fit must never reach arithmetic; but `K unfitted` with no number attached
+    cannot tell a reader whether the meter drifted by 0.001 or by 0.05, and that is the fact
+    which decides whether the band or the plan is the thing that changed."""
     now = time.time()
     cutoff = now - max(0.0, hours) * 3600.0
     by = {}
@@ -2090,11 +2096,11 @@ def exchange_rate(samples, hours=168.0):
             sum_ds += ds
             sum_dw += dw
     if sum_ds < K_MIN_SDS:
-        return K_FROZEN, sum_ds, "frozen"
+        return (K_FROZEN, sum_ds, "frozen", None) if with_raw else (K_FROZEN, sum_ds, "frozen")
     k = sum_dw / sum_ds
     if not (K_SANE[0] <= k <= K_SANE[1]):
-        return None, sum_ds, None
-    return k, sum_ds, "live"
+        return (None, sum_ds, None, k) if with_raw else (None, sum_ds, None)
+    return (k, sum_ds, "live", k) if with_raw else (k, sum_ds, "live")
 
 
 WEEKLY_TAIL_GAP_H = 3.0       # a window is "observed to its end" only if a sample lands this close
@@ -2204,6 +2210,18 @@ def apply_burn(rows, cfg, samples=None):
         bp = burst_percentile(r, samples)
         if bp is not None:
             r["burst"] = bp
+
+    # S4: the FIRST consumer of exchange_rate — S1c built and tested it and, until now, nothing in
+    # the binary read it. K is stamped rather than computed in pace_line for the one reason a
+    # renderer may read a stamp instead of computing: K needs the SERIES, and pace_line is handed
+    # rows. Its absence is therefore a state the header must NAME (see pace_head), not a number to
+    # invent — and only the start-by clause dies with it. The strand is pure weekly-space
+    # arithmetic and consumes no K at all, so gating it on one would be a fabricated dependency.
+    k, _sds, k_src, k_raw = exchange_rate(samples, with_raw=True)
+    for r in rows:
+        r["k_wk_per_spp"] = k
+        r["k_src"] = k_src
+        r["k_raw"] = k_raw
 
     # M2 + M3a: the roll-aware weekly EWMA and the strand nowcast it feeds. The span is stamped
     # beside the value because it is the ABSTAIN's reason, and a null that cannot say why reads
@@ -2323,6 +2341,122 @@ def fmt_burst(bp):
     if bp["never"]:
         return f"needs more than it has EVER burned in {bp['h']:.0f}h"
     return f"p{min(99.0, bp['pct']):.0f} of its own {bp['h']:.0f}h burns"
+
+
+# S4 / M4' — every constant below is read off the 8 measured burst windows in
+# USAGE_TELEMETRY_100P §5.1 LB-3, and none of them is a judgement call.
+BURST_SPPH = 22.87            # median sustained fill, session-pp/h (= 4.39 weekly pp/h at K=0.192)
+P_WALL = 0.625                # 5 of the 8 burst windows walled. A LOWER BOUND: inter-sample gaps
+                              # are p50 6.4 min, so a >=2-sample detector cannot see a freeze
+                              # shorter than ~13 min. Under-stating the freeze under-states LATE.
+MEAN_WALL_H = 1.653           # mean frozen tail after a wall (median 1.425)
+SESSION_WINDOW_H = 5.0        # the 5h grid: window N+1 cannot open before window N resets
+START_SOON_H = 12.0           # the BURST-stratified band. Empirically the cap binds on 0.0% of
+                              # samples beyond 12 h remaining and on 14-17% inside the final 6 h.
+
+
+def burst_start_by(r, k):
+    """M4' — by WHEN must the endgame burst begin? Returns None (abstain) or
+    {"h", "verdict", "windows", "burn_h", "freeze_h", "t_needed_h", "unrecoverable_pp"}.
+
+    THE PRIMITIVE IS A START TIME, NOT A CAPACITY VERDICT, and that is the whole difference from
+    the synthesis's M4, which is DELETED rather than weakened. M4 compared `wk_reach_pp` against
+    `need`; both are monotone in (weekly_pct, hours-remaining), so the comparison is
+    near-algebraically fixed — recomputed over the whole series it read REACHABLE on 10,556 of
+    10,623 evaluable samples (99.37%), and during the five wall episodes it existed to detect it
+    read REACHABLE on 100% of 74 samples and never once flipped. P(4/4 REACHABLE | null
+    instrument) = 0.9937^4 = 97.5%, i.e. its published evidence carries ~0.04 bits.
+
+    WHAT REPLACED IT, AND WHY THAT QUESTION CAN COME OUT EITHER WAY. All 8 measured burst windows
+    delivered 13-20 weekly pp whether or not they walled, so the loss is not capacity inside the
+    window — it is the FROZEN TAIL that follows one. The shippable constraint is therefore
+    scheduling: begin early enough that the burn PLUS the expected freeze PLUS the 5h grid still
+    fit before the weekly reset. On next3's live shape M4 read `16.9 pp reach vs 8 needed —
+    REACHABLE, 2.1x margin`; this reads LATE by 0.65 h with a 2.83 pp floor, and next3 in fact
+    stranded.
+
+    THE GRID IS NOT A ROUNDING DETAIL. Dividing the demand by the rate is the same arithmetic
+    minus the waits, and on an account needing six windows that is 21.4 h against a true 27.6 h.
+
+    ABSTAIN (L2), four distinct states, none of which may collapse to zero:
+      * k is None       — S1c left the sane band; there is no session-pp demand to schedule.
+      * no window open  — a null session stamp is a STATE. Reading it as session_pct = 0 would
+                          grant 100 pp of imaginary room and turn every LATE into SLACK.
+      * deficit <= 0    — the window is already full; there is nothing to buy.
+      * weekly_reset_h outside (0, 168] — a rolled or corrupt stamp, not a deadline.
+
+    SHIPS ON PROBATION: n = 8 burst windows is the entire evidence base for BURST_SPPH, P_WALL and
+    MEAN_WALL_H, and P_WALL is a lower bound. The threshold is sized on the BURST denominator
+    (5/8), never the all-windows one (5/252) — the 1.98% headline averages over a population that
+    is overwhelmingly idle, and the planner's whole purpose is to move accounts OUT of it."""
+    if not isinstance(k, (int, float)) or k <= 0:
+        return None
+    wp, wrh = r.get("weekly_pct"), r.get("weekly_reset_h")
+    if wp is None or not isinstance(wrh, (int, float)) or not (0 < wrh <= WEEK_H):
+        return None
+    sp, srh = r.get("session_pct"), r.get("session_reset_h")
+    if sp is None or not isinstance(srh, (int, float)):
+        return None
+    deficit_wk = 100.0 - wp
+    if deficit_wk <= 0:
+        return None
+
+    need_spp = deficit_wk / k
+    t = 0.0
+    rem = need_spp
+    windows = 0
+    avail = 100.0 - sp                       # the OPEN window's remaining room
+    if avail > 0:
+        burn_h = min(min(avail, rem) / BURST_SPPH, max(0.0, srh))
+        took = burn_h * BURST_SPPH
+        rem -= took
+        t += burn_h
+        if took > 0:
+            windows += 1
+        if rem > 0:
+            t = max(0.0, srh)                # wait out the roll before the next window can open
+    else:
+        # THE OPEN WINDOW IS ALREADY FULL — it buys nothing, and nothing can start until it rolls.
+        # Falling through to the grid walk here would start burning at t=0 in a window that is
+        # WALLED, understating t by the whole remaining 5h countdown. This is not a corner case:
+        # 5 of the 8 measured burst windows walled, and a walled account is precisely the state
+        # the planner creates.
+        t = max(0.0, srh)
+    full_h = 100.0 / BURST_SPPH
+    while rem > 0:
+        take = min(100.0, rem)
+        t += take / BURST_SPPH
+        rem -= take
+        windows += 1
+        if rem > 0:
+            t += SESSION_WINDOW_H - full_h   # the rest of that 5h window is dead time
+
+    freeze = windows * P_WALL * MEAN_WALL_H
+    t_needed = t + freeze
+    h = wrh - t_needed
+    verdict = "SLACK" if h > START_SOON_H else ("START SOON" if h > 0 else "LATE")
+    # The FLOOR, and it is the number a reader acts on: what a perfect burst starting this
+    # instant still cannot save. Freeze eats the front of the remaining window; whatever burn
+    # time survives buys K * BURST_SPPH weekly pp per hour.
+    unrecoverable = max(0.0, deficit_wk - k * BURST_SPPH * max(0.0, wrh - freeze))
+    return {"h": h, "verdict": verdict, "windows": windows, "burn_h": t,
+            "freeze_h": freeze, "t_needed_h": t_needed, "unrecoverable_pp": unrecoverable}
+
+
+def fmt_start_by(bs):
+    """The one rendering of burst_start_by, so its three verdicts cannot be spelled two ways.
+
+    A LATE row leads with what is already LOST, not with the overrun, because the overrun is
+    recoverable attention and the floor is not. SLACK and START SOON share a form — the deadline
+    plus the slack — so that a row does not change shape as the week runs down; only the glyph
+    does."""
+    if not bs:
+        return None
+    if bs["verdict"] == "LATE":
+        return (f"⚠ LATE by {-bs['h']:.1f}h — "
+                f"{bs['unrecoverable_pp']:.1f}pp already unrecoverable")
+    lead = "⚠ START SOON — " if bs["verdict"] == "START SOON" else ""
+    return f"{lead}start by T−{bs['t_needed_h']:.0f}h ({bs['h']:.0f}h slack)"
 
 
 WEEK_H = 168.0          # the weekly bucket's span; reset stamps are exactly 7 d apart
@@ -2469,7 +2603,46 @@ def wk_strand_pp(r):
     return max(0.0, 100.0 - (wp + b * wrh))
 
 
-PACE_HEAD = "weekly drain — pp that DIE at reset (nowcast at the last 48h of pace):"
+PACE_HEAD_LEAD = "weekly drain — pp that DIE at reset"
+PACE_HEAD_TAIL = "nowcast at the last 48h of pace"
+
+
+def pace_head(rows):
+    """The block's caption, carrying the state of K.
+
+    THE K CLAUSE ENTERS WITH S4, NOT WITH S3, and the delay was the point. §5.4's mock header put
+    `K=0.192 live` beside the strand nowcast, but M3a is pure weekly-space arithmetic and consumes
+    no exchange rate; rendering a coefficient that nothing on the line spends is the metric shape
+    §3.2 forbids. `burst_start_by` is the first thing here that actually spends K, so this is where
+    the clause belongs.
+
+    THREE STATES, THREE SENTENCES, because they are three different claims:
+      * `K=0.192 live`   — fitted on the trailing window and inside the sane band.
+      * `K=0.192 frozen` — the trailing movement was too thin to fit; this is the pooled literal.
+                           NOT an abstain: the start-by figures still render, off a constant, and
+                           the reader is told that is what they are.
+      * `K unfitted (…)` — a fit was taken and REFUSED for leaving [0.175, 0.210]. That means the
+                           plan or the meter changed, and widening the band silently would launder
+                           the change into a number. The trailing value is quoted because it is
+                           what says whether the band or the plan is what moved.
+      * `K unread`       — no fit was attempted (apply_burn did not run). A different fact from a
+                           refusal, and spelled differently: a null that cannot say why reads as a
+                           missing feature rather than as a measurement that was declined."""
+    stamped = [r for r in rows if "k_wk_per_spp" in r]
+    if not stamped:
+        clause = "K unread — no start-by figures this sweep"
+    else:
+        k = stamped[0].get("k_wk_per_spp")
+        if isinstance(k, (int, float)):
+            clause = f"K={k:.3f} {stamped[0].get('k_src') or 'unknown'}"
+        else:
+            raw = stamped[0].get("k_raw")
+            band = f"[{K_SANE[0]:.3f}, {K_SANE[1]:.3f}]"   # .3f, not str(): 0.210 is the claim,
+            why = (f"trailing {raw:.3f} outside {band}"    # and str(0.210) renders "0.21"
+                   if isinstance(raw, (int, float))
+                   else f"trailing fit outside {band}")
+            clause = f"K unfitted ({why}) — no start-by figures this sweep"
+    return f"{PACE_HEAD_LEAD} ({clause} · {PACE_HEAD_TAIL}):"
 
 
 def pace_line(rows):
@@ -2535,10 +2708,16 @@ def pace_line(rows):
         else:
             p = f"{r['acct']} strand ~{s:.0f}pp of {deficit:.0f}"
         b = fmt_burst(r.get("burst"))
+        sb = fmt_start_by(burst_start_by(r, r.get("k_wk_per_spp"))) if s is not None and s >= 0.5 \
+            else None
         if b and s is not None and s >= 0.5:
             p += f" · {b}"
-        parts.append(f"  {p} · {left} left")
-    return "\n".join([PACE_HEAD] + parts) if parts else ""
+        # S4 — the third question, and it REPLACES the bare countdown on a strand row rather than
+        # riding beside it. The slack figure already carries the time, and a row quoting two
+        # clocks in two units is `needs 88%/d over 2.2h` again. A row with no strand, or one whose
+        # start-by abstained, keeps the plain countdown: it still has to say when the window dies.
+        parts.append(f"  {p} · {sb}" if sb else f"  {p} · {left} left")
+    return "\n".join([pace_head(rows)] + parts) if parts else ""
 
 
 def _excluded(r, R, cliff=True, k_of=None):

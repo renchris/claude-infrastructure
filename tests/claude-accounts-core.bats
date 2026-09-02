@@ -1814,6 +1814,14 @@ assert "burn_wk_span_h" in r and r["burn_wk_span_h"] > 6.8, r
 assert "wk_strand_pp" in r, r
 assert 0.0 < r["wk_strand_pp"] < 5.0, r           # 40 + 0.583*100 = 98.3 -> ~1.7 pp die
 assert "burn_5h_ewma_ph" not in r, r              # S7 is a LATER wave and was not built here
+# S4 — apply_burn is the FIRST consumer of exchange_rate (S1c built it and, until now, nothing in
+# the binary read it). It is stamped here rather than computed in pace_line for the one reason a
+# renderer may read a stamp: K needs the SERIES, and the renderer is handed rows. Its absence is
+# therefore a state the header has to name, not a number to invent — which is what the abstain
+# arms below pin. This fixture holds session_pct FLAT, so Sum(ds) = 0, far under K_MIN_SDS: the
+# fit is too thin and the frozen literal is the honest answer.
+assert r["k_wk_per_spp"] == ca.K_FROZEN, r
+assert r["k_src"] == "frozen", r
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
@@ -1829,14 +1837,21 @@ print("OK")'
   # Restoring either spelling to satisfy an older assertion re-introduces what they cost.
   run python3 -c "$LOAD"'
 # live shapes measured 2026-08-25T09:47:41Z; strand = 100 - (weekly_pct + ewma * reset_h)
-n4 = row(acct="next4", weekly_pct=14, weekly_reset_h=119.2, burn_wk_ewma_ph=0.186)
-n2 = row(acct="next2", weekly_pct=17, weekly_reset_h=97.2, burn_wk_ewma_ph=0.281)
-n3 = row(acct="next3", weekly_pct=92, weekly_reset_h=2.21, burn_wk_ewma_ph=1.140,
+K = dict(k_wk_per_spp=0.192, k_src="live")     # S4: stamped by apply_burn, read by the renderer
+n4 = row(acct="next4", weekly_pct=14, weekly_reset_h=119.2, burn_wk_ewma_ph=0.186, **K)
+n2 = row(acct="next2", weekly_pct=17, weekly_reset_h=97.2, burn_wk_ewma_ph=0.281, **K)
+n3 = row(acct="next3", weekly_pct=92, weekly_reset_h=2.21, burn_wk_ewma_ph=1.140, **K,
          burst={"pct": 95.6, "h": 3.0, "n": 2576, "need_pph": 3.62, "never": False})
-n1 = row(acct="next", weekly_pct=52, weekly_reset_h=114.21, burn_wk_ewma_ph=1.725)
+n1 = row(acct="next", weekly_pct=52, weekly_reset_h=114.21, burn_wk_ewma_ph=1.725, **K)
 line = ca.pace_line([n3, n1, n2, n4])          # deliberately NOT in the expected order
 assert line.startswith("weekly drain — pp that DIE at reset"), line
 assert "nowcast at the last 48h of pace" in line, line   # a NOWCAST: no lead-time claim, §5.1 LB-2
+# S4 — the header carries K, which S3 deliberately did NOT render: M3a is pure weekly-space
+# arithmetic and consumes no exchange rate, so a K clause beside it would have been a fabricated
+# dependency. burst_start_by is the first thing on this surface that actually spends K, so the
+# clause enters with it and names the SOURCE, because a frozen literal and a live fit are
+# different claims about the same number.
+assert line.startswith("weekly drain — pp that DIE at reset (K=0.192 live · nowcast"), line
 # RP-25 — sorted by pp at risk, descending: 64 / 56 / 5, then the zero-strand row
 assert line.index("next4") < line.index("next2") < line.index("next3") < line.index("next "), line
 assert "next4 strand ~64pp of 86" in line, line
@@ -1844,6 +1859,21 @@ assert "next2 strand ~56pp of 83" in line, line
 assert "next3 strand ~5pp of 8" in line, line
 # M5 rides the strand row: how much dies, and whether the demand is routine or a stunt
 assert "next3 strand ~5pp of 8 · p96 of its own 3h burns" in line, line
+# ...and with S4 each strand row answers the THIRD question the goal names — by when must the
+# burst start. next3 is the account that in fact stranded: 8 pp needs 1.82 h of burn plus a
+# 1.03 h expected freeze against 2.21 h of window, so the burst window has already closed and
+# 2.8 pp cannot be saved even by a perfect burst starting this instant. The deleted M4 scored
+# this same row REACHABLE with a 2.1x margin.
+assert "next3 strand ~5pp of 8 · p96 of its own 3h burns · ⚠ LATE by 0.6h — 2.8pp already unrecoverable" in line, line
+# CONTROL: the two accounts with days of runway read SLACK, so the verdict DISCRIMINATES — an
+# always-LATE stub is the mirror image of the always-REACHABLE degeneracy that killed M4.
+assert "next4 strand ~64pp of 86 · start by T−27h (93h slack)" in line, line
+assert "next2 strand ~56pp of 83 · start by T−26h (71h slack)" in line, line
+assert "LATE" not in line.split(chr(10))[1], line          # the top row is not the late one
+# The start-by clause REPLACES the bare `· Nh left` tail on a strand row: the slack figure already
+# carries the time, and two countdowns in different units on one row is the `needs 88%/d over
+# 2.2h` defect again. A row with NO strand keeps the plain countdown — see RP-26 below.
+assert "next4 strand ~64pp of 86 · start by T−27h (93h slack) ·" not in line, line
 # RP-26 — a zero-strand account still RENDERS, and renders LAST. A sorted() over a list filtered
 # on strand > 0 passes RP-25 and drops this row silently.
 assert "next no strand" in line, line
@@ -1873,6 +1903,48 @@ ab = ca.pace_line([row(acct="next2", weekly_pct=13, weekly_reset_h=122.8, burn_w
 assert "next2 strand unknown (span 4.1h < 6.8h)" in ab, ab
 # no data ⇒ no block (a drain block over nothing would render at every error state)
 assert ca.pace_line([row(weekly_pct=None), row(weekly_reset_h=None)]) == ""
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "S4: a missing exchange rate kills the start-by clause and NOTHING else, and says which" {
+  # THE TWO WAYS K CAN BE ABSENT ARE DIFFERENT CLAIMS AND ARE SPELLED DIFFERENTLY. `unfitted` is a
+  # measurement that was taken and REFUSED — the trailing fit left [0.175, 0.210], which means the
+  # plan or the meter changed and a silently widened band would launder that into a number.
+  # `unread` is no measurement at all (apply_burn did not run). Collapsing the two is the L2 defect
+  # this whole block exists to remove: a null that cannot say why reads as a missing feature.
+  run python3 -c "$LOAD"'
+r0 = dict(acct="next2", weekly_pct=17, weekly_reset_h=97.2, burn_wk_ewma_ph=0.281,
+          session_pct=10, session_reset_h=3.0, k=2, credits_on=False,
+          fable_pct=20, fable_reset_h=24.0)
+# (a) FITTED AND REFUSED. The band renders to THREE places — str(0.210) is "0.21", and the
+# trailing zero is part of the claim about where the ceiling sits.
+unfit = ca.pace_line([dict(r0, k_wk_per_spp=None, k_src=None)])
+assert "K unfitted" in unfit and "[0.175, 0.210]" in unfit, unfit
+assert "no start-by figures this sweep" in unfit, unfit
+# ...and when the refused fit itself is known it is QUOTED, because 0.201 and 0.250 are the
+# difference between "the band is too tight" and "the plan changed".
+raw = ca.pace_line([dict(r0, k_wk_per_spp=None, k_src=None, k_raw=0.2012)])
+assert "K unfitted (trailing 0.201 outside [0.175, 0.210])" in raw, raw
+# (b) NEVER READ — a different sentence, because it is a different fact
+unread = ca.pace_line([r0])
+assert "K unread — no start-by figures this sweep" in unread, unread
+assert "unfitted" not in unread, unread
+# (c) THE STRAND SURVIVES BOTH. M3a is pure weekly-space arithmetic and consumes no K; gating it
+# on a coefficient it does not use would be a fabricated dependency (S3 Deviation 1). Only the
+# start-by clause dies, and the row falls back to the plain countdown so it still says when the
+# window closes.
+for out in (unfit, unread):
+    assert "next2 strand ~56pp of 83" in out, out
+    assert "start by T−" not in out, out
+    assert "LATE" not in out, out
+    assert out.rstrip().endswith("· 4d left"), out
+# (d) A FROZEN K IS NOT AN ABSTAIN — it is the literal, and it renders as one so the reader can
+# tell a pooled constant from a live fit. The clause is present.
+froz = ca.pace_line([dict(r0, k_wk_per_spp=ca.K_FROZEN, k_src="frozen")])
+assert "(K=0.192 frozen · nowcast" in froz, froz
+assert "start by T−" in froz, froz
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
