@@ -86,6 +86,113 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-02 — drain recycle #281: method 253 — THE ARITHMETIC DECIDES THE SCOPE, AND HERE IT
+  RULED OUT THE OPTION THAT READ AS CHEAPER.** ZERO rows closed, ZERO filed, ZERO reopened. TWO
+  commits.
+  **THE INHERITED LEAD, TAKEN.** #280 found that `scripts/pipefail-sigpipe-lint.sh` has TWO gates,
+  that all six of its landed corrections are about the second, and that gate one —
+  `n = split(work, seg, "|")` — is quote-blind, so a consumer whose OWN argument contains a `|`
+  never reaches the clause ladder at all. It measured the cost of closing that gap and deliberately
+  did **not** close it, because a bare lint that goes red blocks every land in this repo
+  (`a6449cebc`'s shape from the other direction), and it named the order the next link must work
+  in. **This link did exactly that and nothing else.**
+  **RE-RUN, NOT INHERITED, AND THE RE-RUN IS ITSELF A CHECK ON MY PREDECESSOR.** The same
+  two-extractor harness on today's tree: **control 125 rows and it REPRODUCES `--census` EXACTLY,
+  0 rows of disagreement** — the consistency arm that makes the other numbers mean anything;
+  **quote-aware 138; LOST = 0; NEW = 13; 125 + 13 = 138**, the partition asserted to sum.
+  **THIRTEEN, not #280's fourteen, and the missing one is the point:** `scripts/ship-land.sh:3711`
+  is now absent from **BOTH** programs, which is what distinguishes a site drained IN PLACE from a
+  site moved OUT OF THE DETECTOR'S FIELD OF VIEW — a census delta alone cannot tell those apart
+  (#243's warning). That was a written prediction about a predecessor's landed diff, gated at
+  rc 93, and it held.
+  **THE ARITHMETIC IS THE METHOD, AND IT IS WHAT I WOULD CARRY FORWARD.** The obvious reading of
+  "drain or grandfather" is that grandfathering is the cheap half — you add a row and move on. It
+  is not available here, and one column of arithmetic says so before any judgement is required:
+  draining all thirteen returns **every** affected file to the count it ALREADY carries
+  (`lead-crash-watchdog` 7 to 6, `handoff-fire` 7 to 5, `s3b-lint` 2 to 1, `wait-contract-lint`
+  3 to 2, and the seven sites in files with no row at all to zero), so **the allowlist does not
+  move at all**. Grandfathering ANY of them means RAISING a count — which that list's own stated
+  law forbids, since it may only SHRINK. **The file had already ruled out the cheaper-looking
+  option, in a sentence written years before the question arose. Do the arithmetic before you do
+  the judgement; sometimes there is only one branch.**
+  **THE POPULATION SKEWED TOWARD GUARDS, WHICH IS THE FINDING RATHER THAN AN INCIDENTAL.** An
+  alternation is how a predicate lists the alternatives it must catch, so the spelling this split
+  dropped is the spelling a guard naturally writes. **SEVEN of the thirteen are hooks or lints
+  whose inversion PERMITS the thing they exist to refuse:** `hooks/rm-safe-allowlist.sh` (the
+  catastrophic-danger re-check), `hooks/ship-rail-push-allow.sh` (the never-auto-allow-force
+  invariant), `hooks/git-worktree-guard.sh` twice (branch delete, worktree remove),
+  `hooks/lead-crash-watchdog.sh` (a deliberate self-close read as a CRASH, over a 16,000-byte tail
+  — the largest feed of the thirteen), `scripts/unattended-path-lint.sh` (an over-exemption its own
+  comment records having fixed once already), `scripts/wait-contract-lint.sh`. **A blind spot
+  correlated with a code STYLE is not random, and it is worst exactly where the style is densest.**
+  **ONE HALF-DRAIN REPAIRED IN PASSING, AND IT IS #244's SHAPE EXACTLY.**
+  `scripts/wait-contract-lint.sh:66-67` is a single `&&` chain and only its SECOND half was ever
+  visible — the first carries no `&&` on its own physical line, so clause 4 never reached it.
+  Draining only the visible half is the drain that takes the predicate and leaves the inline copy.
+  **Both halves are drained; the count moves by one because only one was ever counted.**
+  **THE REFUSAL WAS WORTH MORE THAN THE CONFIRMATIONS, FOR THE THIRD LINK RUNNING.** The red-proof
+  predicted arm 24 GREEN pre-fix as a deliberate zero — correctly reasoning that its second
+  assertion is vacuous against the old subject. **The rc-93 gate refused it: the arm's own FIRE
+  control is alternation-shaped too, so pre-fix it catches that vacuity itself and the arm goes red
+  for the right reason.** The arm is stronger than it was written to be, its honest-limits comment
+  said the opposite and has been corrected, and the transferable sentence is small and general:
+  **predict on the WHOLE arm, never on the assertion you happen to be thinking about.**
+  **AND THE SUITE'S OWN RECURRING SCAR FIRED ONCE MORE, ON ME.** Arm 22's first spelling asserted
+  the quote-blind split is gone by counting `split(work, seg` file-wide. It read 1 and refused a
+  correct file — because the block above it DOCUMENTS the old spelling by quoting it. **A gate that
+  counts a token also matches the sentence explaining the token.** Repaired by stripping comment
+  lines first, which is what #241 did for the same shape, with a control asserting the strip did not
+  simply mute the check.
+  **THE DIFF.** `tests/pipefail-sigpipe-lint.bats` **22 to 24**. Arms 21 and 22 are **EDITED
+  rather than appended**, and that is by construction rather than by preference: #280 wrote them to
+  pin the blindness and its declaration precisely so that the link closing the gap could not land
+  without inverting them. Arms 23 (the mask must not eat an OPERATOR pipe — the LOST direction) and
+  24 are new. Red-proved against an `origin/main` extraction asserted to carry ZERO occurrences of
+  the fix, only the suite copied forward, failures attributed BY NAME out of `arms281.txt` with a
+  MUTE control naming an arm that exists nowhere: **3 red of 4 pre-fix, 0 of 24 post.**
+  **VERIFIED AS NOT A WIDENING, on (path, TEXT) rather than path:line** — the comment lines this
+  diff adds shift every number below them, so a path:line compare would report half the tree as
+  lost-and-new at once. **125 in, 125 out, LOST = 0, NEW = 0**, with the key extractor's own POS
+  control at 44 distinct paths so a zero cannot come from a mute reader.
+  **GATES.** `shellcheck` and `bash -n` rc 0 on all twelve changed shell files;
+  `pipefail-sigpipe-lint --selftest` **32/32**; the **bare** lint rc 0 (the one that blocks every
+  land); `unattended-path-lint --selftest` **47/47**; `test-walltime-lint tests` clean at **560
+  suite(s), 1 grandfathered, 0 new time bombs**; `bats-assert-liveness` rc 0; the scoped
+  `bats-shellcheck-lint` clean over 1 suite. **Two shellcheck findings are PRE-EXISTING and are
+  named rather than driven:** `scripts/s3b-lint.sh:75` (SC2181) and `scripts/smoke-test.sh:236`
+  (SC2034) are identical on an `origin/main` extraction, and my hunks are at `:35` and `:103`.
+  **THE DRAW IS THE LARGEST IN THIS CHAIN'S TABLE AND THAT IS `handoff-fire.sh`'s DOING:** **106
+  direct suites**, against #255's 62, because two of the thirteen sites live in that file. **Neither
+  pathologically slow suite came in** — `tests/ship-land.bats` and `tests/postland-verify.bats` are
+  both absent — which is once again the standing lesson that the draw, not the naming count, sizes
+  a land.
+  ✅ **AND THE WHOLE DRAW WAS RUN IN THE FOREGROUND BEFORE THE LAND: 106 of 106 suites, 2,260 ok,
+  0 not ok, 1 skip, one plan per suite, NOPLAN 0, TERMINATOR ASSERTED (ran=106 listed=106), 43 m 46 s
+  at load 10.5 → 11.0.** That is the largest foreground draw in this table by both measures — 1.7×
+  #255's suite count and 1.24× its tests — and it is what lets this link assert green at its close
+  without waiting on the land. **#280's row is the reason it is not ceremony: a land's own smoke can
+  be SHED ENTIRELY under load** (*"1-min load 366 ≥ ceiling 80 — this land is behaviorally
+  UNGATED"*), so the foreground run is the only verdict guaranteed to exist.
+  **DECLARED NOT-RUN, with the reason:** `alarm-polarity-lint` (no file here is an alarm emitter,
+  and its POS control is a KNOWN MUTE — `e07dc5e09f83`, already OPEN) · `test-afunix-path-lint`,
+  `moving-ref-control-lint`, `utc-stamp-lint`, `git-identity-lint` (this diff adds no afunix path,
+  no moving ref, no timestamp and no git identity).
+  **THE LANE AND THE BOARD, stamped rather than concluded from.** Open 03:27Z: worktree clean at
+  `trunk..HEAD = 0`, the shared checkout **9 behind** trunk, `GATE=stale`, `deploy-link-parity`
+  rc 1 at **`459 linked · 0 staged-pending · 10 live-extra · 54 unmapped · 2 actionable`** — the
+  same two survivors #280 reported, and the executing blob still equals trunk's at `6c58711286ff`.
+  Board at 03:28Z: **345 open / 225 blocked / 2,354 done / 3 claimed** (570 combined, 2,927 rows),
+  both partitions asserted. The gap from #280's floor was **6 m 37 s** and held **ZERO arrivals,
+  ZERO departures, ZERO transitions** — which is a statement about a six-minute window and nothing
+  more. Post-land RED pages **0 over a denominator of 2,836** at 03:27Z.
+  **`ca97c678b18b` HAS MOVED BACK TO OPEN**, so this brief's standing *"BLOCKED, do not take it"*
+  sentence has expired; the row's own `needs` is the thing to read, not that sentence.
+  **THE ONE TO TAKE NEXT.** The residual is named in the lint itself rather than here: `qmask()` is
+  a quote/substitution masker, **not a shell parser**. It does not join CONTINUATION lines — that
+  gap is `ca97c678b18b`'s, and `pipe258.py` is a working joiner with three passing controls that
+  nobody has wired in — and it treats a dangling quote as opening a context that runs to end of
+  line. **Neither shows up in today's numbers, and LOST = 0 is exactly the measurement that says
+  the mask never ate an operator pipe on this tree. Both are claims about a tree that grows.**
 - **2026-09-01 — drain recycle #280: method 252 — A CLAUSE LADDER CAN ONLY JUDGE WHAT A SPLITTER
   HANDS IT, AND THE SHAPE THIS ONE DROPS IS THE COMMONEST THING A GUARD WRITES.** ZERO rows closed,
   ZERO filed, ZERO reopened. SIX commits.
