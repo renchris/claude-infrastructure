@@ -29743,15 +29743,39 @@ The proven local-drain design (9 recycles) plus the one missing property — sel
 Fire command (from any claude-infrastructure checkout; the drain session runs this ON ITSELF at
 every pause-point — end of effort, ~60% context fill, or any natural seam):
 
-    bash scripts/handoff-fire.sh --recycle --prompt-file /tmp/fire-drain-recycle<N>.txt \
-      --account auto \
-      --goal '<effort E> reaches 0 open rows (blocked tail reported, not hidden) — proven by
-      cc-backlog list --open --json | jq output printed showing 0 open for condition <E>, plus the
-      filed-vs-closed tally for this recycle (closed >= filed); the HANDOFF-PING to the lead is
-      SENT and its `enqueued=1` printed BEFORE the fire; then recycle #<N+1> is FIRED
-      (handoff-fire --recycle) as the LAST action and its engagement line is printed; do not end
-      the recycle net-positive on filings and do not close any row without same-moment content
-      evidence'
+    bash scripts/drain-recycle-fire.sh --num <N+1> \
+      --prompt-file "$HOME/.claude/autonomy/fire-pointer-<N+1>.txt" \
+      --account auto
+
+🚨 **THE FIRE IS A SCRIPT NOW, AND THE REASON IS 183 MEASURED LINKS THAT FIRED WITHOUT A GOAL.**
+Until 2026-08-31 this block was the hand-retyped `handoff-fire.sh --recycle … --goal '<effort E>
+reaches 0 open rows …'` form, and the chain had **DIVERGED FROM IT WITHOUT ANYONE NOTICING**.
+`~/.claude/logs/handoffs.jsonl` records `goal_requested` on each fire's OWN row, and the tally over
+every `recycle-intent` row is **183 `false` against 46 `true`** — every one of the last forty is
+`false`. So for the entire modern life of this chain nothing mechanically bound a recycle to closing
+a backlog row, and DRAIN_CIRCUIT_2026-09-01 §1.4 measures the consequence: **304 trunk commits
+against 30 backlog closures over 7 days**, ~10 commits per closure, with the whole file footprint
+being this pipeline's own machinery. Each recycle audits the recycle before it.
+
+**Two things caused the divergence and neither is anyone's carelessness.** (1) The brief outgrew a
+promptable payload — #279's is 308 KB — so the chain invented a 152-byte POINTER
+(`fire-pointer-<N>.txt`, "read `fire-drain-recycle<N>.txt` in full") and fires that instead. That
+was correct; what went with it was the `--goal`, because a hand-retyped command loses whatever the
+retyper does not think of. (2) `handoff-fire.sh --recycle` **INHERITS the predecessor's live goal**
+when none is passed, so one link that dropped it makes every link after it goal-less by
+construction — which is exactly the 183-to-46 shape. *A rule that is retyped is a rule that decays.*
+`scripts/drain-recycle-fire.sh` is the chokepoint (memory
+`enforcement-must-live-at-the-chokepoint`): the goal is not an argument you may forget, it is what
+you invoke. It builds the condition, validates the three shapes `check_goal_arm` refuses (one line ·
+no leading slash · under 4000 chars) BEFORE any side effect, passes every other flag through, and
+**refuses to fire a link whose pointer is unreadable** — the one failure the chain cannot survive.
+
+⚠️ **FALLBACK, so a half-applied state cannot cost a link.** If `scripts/drain-recycle-fire.sh` is
+not on this checkout, fire `handoff-fire.sh --recycle --prompt-file <pointer> --account auto --goal
+'<the condition>'` directly and take the condition verbatim from
+`bash scripts/drain-recycle-fire.sh --num <N+1> --print-goal` (or, failing that, from the closure
+floor in invariant 4 below). **Never fire with no goal at all** — that is the state this whole
+section exists to end.
 
 🚨 **THE PING CLAUSE ABOVE IS LOAD-BEARING AND IT IS WHY #124's PING DOES NOT EXIST** (backlog
 `29460aeb90a8`, condition `drain-link-lands-without-pinging`; cause established by #167, having been
@@ -29801,11 +29825,42 @@ Brief body invariants (regenerate the specifics each recycle; never drop these):
    retracting → close on that evidence); re-measure dated titles; landedness by CONTENT.
 3. Close line format: `<effort>: N open / M blocked (K operator-gated)` — a zero without its
    blocked tail is the exact defect that produced this plan (§1.1).
-4. Conservation: close ≥ file, printed in the close.
+4. 🚨 **THE CLOSURE FLOOR — conservation is no longer prose, and it OUTRANKS invariant 6.**
+   `bash scripts/drain-recycle-fire.sh --closure-report <this recycle's start, ISO-8601 Z>` prints
+   its own predicate and a `closed=<C> filed=<F> blocked=<B> floor=MET|UNMET` line, and **MET
+   requires `C >= 1` AND `C >= F`**. Run it and PRINT it in the close; the goal condition names that
+   exact command, so the evaluator judges a tool's output rather than your self-report (memory
+   `claimed-outcome-vs-checked-outcome`).
+   **Why this is now a floor and not a line item.** Invariant 4 has said "close ≥ file, printed in
+   the close" since this template was written, and invariant 6 has said the chain is the
+   deliverable and firing the successor "outranks finishing one more row". Read together, a link
+   that files three rows, closes none, and fires its successor has obeyed the RANKED invariant and
+   merely skipped the unranked one — and over 278 cycles it did: 30 closures against 304 commits,
+   and a live 24-hour reading on 2026-08-31 of `closed=1 filed=11 floor=UNMET`. Ranking is what was
+   missing, so the floor is now stated FIRST in the goal condition and the fire LAST, which is the
+   same lesson §4.1 already learned from #124's missing ping: *a duty with no position ahead of the
+   fire is unreachable the moment the session takes the goal at its word.*
+   **The honest escape, which is not a loophole.** With 568 open rows the floor is low, not a trap —
+   invariant 2's falsifier pass over the claimed effort is the cheapest way to meet it, and a
+   retraction-close is a real close. If a FULL falsifier pass over your claimed effort genuinely
+   closes nothing, print the per-row evidence for that before firing. What the floor forbids is
+   ending **silently** net-negative. What it will not accept: filing rows, editing this pipeline's
+   own machinery, or counting another lane's closures.
 5. Operator-gated rows: platter via the cc-do/operator-readout rail, never burn turns on them.
 6. THE CHAIN IS THE DELIVERABLE: firing recycle #N+1 (or, at true zero live rows, writing the
    chain-complete entry in this plan) outranks finishing one more row. A recycle that runs out
    of context mid-effort still fires its successor with the effort in-flight.
+   🚨 **DEMOTED BELOW INVARIANT 4 (2026-08-31). It still outranks finishing ONE MORE row; it no
+   longer outranks finishing ANY row.** Read on its own this invariant made a link that closed
+   nothing and fired its successor fully compliant, and DRAIN_CIRCUIT_2026-09-01 §1.4 measured
+   what that produced: a chain whose subject became its own previous output — 304 commits, 30
+   closures, and a file footprint that is entirely this pipeline's machinery
+   (`tests/` 143, `docs/research/` 132, `scripts/` 112, `docs/plans/` 110, `bin/` 58). Self-
+   perpetuation ranked above the work is the whole control system when nothing else is ranked at
+   all. The ordering now: **meet invariant 4's floor, then ping, then fire.** The fire itself is
+   still unconditional — `drain-recycle-fire.sh` never refuses over the floor, because a link that
+   ends with no successor is the one failure this chain cannot survive. What changed is that the
+   goal will not let you REACH the fire having discharged nothing.
 7. 🚨 **THE BACK-CHANNEL MUST NAME SOMETHING THAT RESOLVES — NOT THE PREDECESSOR PANE, AND NOT AN
    UNCLAIMED ROLE** (backlog `2aa51822cca8`, condition `drain-brief-names-a-dead-originator`; lead
    note to #106, then measured by #106).
