@@ -150,7 +150,7 @@ run_suite() {
   if [ "$rc" -eq 2 ]; then printf 'unusable\n'; return 0; fi
   # The TSV carries a header line plus one row; take the row for THIS suite by name, never by
   # position — a runner that grows a column or a warning line must not silently reclassify.
-  printf '%s\n' "$tsv" | awk -F'\t' -v s="$suite" '$1 == s { print $2; found=1 } END { if (!found) print "unusable" }' | head -1
+  printf '%s\n' "$tsv" | awk -F'\t' -v s="$suite" '$1 == s { print $2; found=1 } END { if (!found) print "unusable" }' | awk 'NR<=1'
 }
 
 # ── the refusal, which is also the cure ──────────────────────────────────────────────────────────

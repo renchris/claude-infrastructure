@@ -562,7 +562,7 @@ _gs_verify_kill() { # <pid> <ucomm-ere> <TERM|KILL> [<argv-signature>] — re-ve
   if [ -n "${CC_REAPER_GARBAGE_KILL:-}" ]; then "$CC_REAPER_GARBAGE_KILL" "$pid" "$re" "$sig" "$argsig"; return $?; fi
   c="$(/bin/ps -p "$pid" -o ucomm= 2>/dev/null | sed 's/^ *//;s/ *$//')"
   [ -n "$c" ] || return 1
-  printf '%s\n' "$c" | /usr/bin/grep -qE "$re" || return 1
+  printf '%s\n' "$c" | /usr/bin/grep -E "$re" >/dev/null || return 1
   if [ "$argsig" != "-" ]; then
     a="$(/bin/ps -p "$pid" -o args= 2>/dev/null)"
     case "$a" in
@@ -1053,7 +1053,7 @@ work_landed() {
   # content path: `git cherry` patch-id equivalence ('+' = genuinely unlanded); tree-diff-0 = squash backstop.
   local cherry_out
   if cherry_out="$("$GIT_BIN" -C "$cwd" cherry "$TRUNK" HEAD 2>/dev/null)"; then
-    printf '%s\n' "$cherry_out" | grep -q '^+' || return 0
+    printf '%s\n' "$cherry_out" | grep '^+' >/dev/null || return 0
   fi
   "$GIT_BIN" -C "$cwd" diff --quiet "$TRUNK" HEAD 2>/dev/null && return 0
   return 1

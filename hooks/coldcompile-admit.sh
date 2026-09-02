@@ -106,7 +106,7 @@ case "$CMD" in
 esac
 if [ "$_simple" -eq 1 ]; then
   # A leading `VAR=value` is what makes qos DECLINE a simple command, so such a command is ours.
-  printf '%s' "$CMD" | grep -qE '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=' 2>/dev/null || exit 0
+  printf '%s' "$CMD" | grep -E '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=' >/dev/null 2>&1 || exit 0
 fi
 
 # ── resolve the CHECKOUT directory, THROUGH SYMLINKS FIRST ────────────────────────────────────
@@ -150,7 +150,7 @@ done < "$TABLE"
 # CLASS ALLOWLIST — the class is interpolated into the emitted command line, so a config file must
 # not be able to inject a shell metacharacter into it. Same reasoning as qos-rewrite.sh's band and
 # ceiling allowlists: a config file must not be able to break a tool call.
-printf '%s' "$CLASS" | grep -qE '^[A-Za-z0-9-]+$' 2>/dev/null || exit 0
+printf '%s' "$CLASS" | grep -E '^[A-Za-z0-9-]+$' >/dev/null 2>&1 || exit 0
 
 # ── resolve the gate and CHECK IT EXECUTABLE ──────────────────────────────────────────────────
 if [ -n "${CC_COLDCOMPILE_GATE+set}" ]; then

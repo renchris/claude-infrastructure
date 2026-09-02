@@ -447,7 +447,7 @@ while : ; do
   fi
   # Only the contention case is retryable. Every other rc is a real verdict and falls straight
   # through — a retry loop over a genuine error is how a bounded gate becomes a storm.
-  printf '%s\n' "$out" | grep -q 'another pass holds' || break
+  printf '%s\n' "$out" | grep 'another pass holds' >/dev/null || break
   _attempt=$((_attempt + 1))
   [ "$_attempt" -ge "$LOCK_RETRIES" ] && break
   sleep "$LOCK_BACKOFF"

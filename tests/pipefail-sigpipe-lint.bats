@@ -34,10 +34,10 @@ mkfile() { # $1=name $2=body  [$3=set line]
 }
 census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" --census 2>/dev/null; }
 
-@test "1: the lint's own --selftest passes (32/32, both directions)" {
+@test "1: the lint's own --selftest passes (45/45, both directions)" {
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s' "$output" | grep '32/32' >/dev/null \
+  printf '%s' "$output" | grep '45/45' >/dev/null \
     || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 
@@ -341,5 +341,142 @@ $(census | grep -c 'lr-reset-poller\.sh:' || true) hit(s), so arm 20 is vacuous"
   [ "$(grep -c 'QUOTE-BLIND SPLIT' "$LINT")" -ge 1 ] \
     || { echo "the quote-blind residual block is gone from the lint"; false; }
   [ "$(grep -c 'quote-aware' "$LINT")" -ge 1 ]
+  true
+}
+
+# ── GATE TWO, THE OTHER HALF: THE POSITIONS WHERE THE READER IS NOT ON THIS LINE ─────────────────
+# Backlog ca97c678b18b. clause 4 asks "does anything read this pipeline's status" and answers it
+# only for the line in front of it, so the two positions where the reader is ELSEWHERE — a `||`
+# that branches on the status, and a function body whose last statement IS its return value — were
+# dropped before the ladder rendered any verdict. #243 measured both at rc 0 / census 0 against an
+# inline positive control that fired, so the zeros were the detector's and not the harness's.
+
+@test "23: a || that BRANCHES on the status consumes it; one that discards it still does not" {
+  # ONE VARIABLE between the two fixtures: same producer, same early-exiting consumer, same
+  # position, same `||`. Only the FALLBACK differs. Without the green arm this is a widening that
+  # convicts clause 5's true half — `|| true` really does swallow the 141, and must stay green.
+  mkfile cfret  "git status --porcelain | grep -q . || return 1" 'set -uo pipefail'
+  mkfile cfexit "launchctl list | grep -qE 'com\.x' || exit 2"   'set -uo pipefail'
+  mkfile cfcont "printf '%s' \"\$text\" | grep -qF -- \"--x \$n\" || continue" 'set -uo pipefail'
+  mkfile swallow "git status --porcelain | grep -q . || true"    'set -uo pipefail'
+  mkfile assign  "git status --porcelain | grep -q . || rc=1"    'set -uo pipefail'
+  # POSITIONAL, exactly as the && arm is: a `;` or `)` before the || means it belongs to an earlier
+  # command or an enclosing expression. An unattributable || keeps the old, conservative drop.
+  mkfile elsewhere "f=\"\$(git log --oneline | head -1)\"; [ -n \"\$f\" ] || return 1" 'set -uo pipefail'
+  run census
+  [ "$status" -eq 0 ]
+  for red in cfret cfexit cfcont; do
+    [ "$(printf '%s\n' "$output" | grep -c "scripts/$red\.sh")" -eq 1 ] \
+      || { echo "|| control flow was NOT reported ($red)"; echo "$output"; false; }
+  done
+  for green in swallow assign elsewhere; do
+    [ "$(printf '%s\n' "$output" | grep -c "scripts/$green\.sh")" -eq 0 ] \
+      || { echo "clause 5's true half was widened away ($green)"; echo "$output"; false; }
+  done
+  true
+}
+
+@test "24: a FUNCTION-FINAL pipeline is read; one that is merely inside a function is not" {
+  # The claim is about the POSITION, so notfinal is the arm that makes it a claim at all: it
+  # differs from final in exactly one thing, whether a statement follows. masked and innerblock
+  # pin the two ways the position can be present and the reading still wrong — a status the line
+  # itself eats, and a `}` that closes something other than the function.
+  mkfile final     "f() {
+  git status --porcelain | grep -q .
+}" 'set -uo pipefail'
+  mkfile comment   "f() {
+  git status --porcelain | grep -q .
+  # a trailing rationale, which is this tree's house style
+}" 'set -uo pipefail'
+  mkfile notfinal  "f() {
+  git status --porcelain | grep -q .
+  :
+}" 'set -uo pipefail'
+  mkfile masked    "f() {
+  local v=\$(git log | head -1)
+}" 'set -uo pipefail'
+  mkfile innerblock "f() {
+  {
+    git status --porcelain | grep -q .
+  }
+  :
+}" 'set -uo pipefail'
+  run census
+  [ "$status" -eq 0 ]
+  for red in final comment; do
+    [ "$(printf '%s\n' "$output" | grep -c "scripts/$red\.sh")" -eq 1 ] \
+      || { echo "function-final pipeline was NOT reported ($red)"; echo "$output"; false; }
+  done
+  for green in notfinal masked innerblock; do
+    [ "$(printf '%s\n' "$output" | grep -c "scripts/$green\.sh")" -eq 0 ] \
+      || { echo "arm B over-fired ($green) — it is keying on the wrong thing"; echo "$output"; false; }
+  done
+  true
+}
+
+@test "25: MECHANISM — both new positions really do invert, and both drains really do repair" {
+  # Not a re-read of the detector: real bash, real SIGPIPE, real pipefail, in the two positions
+  # the detector could not see. The payload after the match is what makes it fire.
+  BIG="$BATS_TEST_TMPDIR/big25.txt"; seq 1 200000 > "$BIG"
+
+  # ARM C — the pattern IS present, so a correct predicate returns 0. The || makes 141 a BRANCH.
+  run bash -c "set -uo pipefail
+f() { cat '$BIG' | grep -q '^1\$' || return 1; }
+f"
+  [ "$status" -ne 0 ] \
+    || { echo "arm C did not reproduce — this test proves nothing"; false; }
+  run bash -c "set -uo pipefail
+f() { cat '$BIG' | grep '^1\$' >/dev/null || return 1; }
+f"
+  [ "$status" -eq 0 ] \
+    || { echo "the drain did not repair the || position (status=$status)"; false; }
+
+  # ARM B — nothing on the line reads it, and the CALLER reads it anyway.
+  run bash -c "set -uo pipefail
+f() { cat '$BIG' | grep -q '^1\$'; }
+if f; then exit 0; else exit 1; fi"
+  [ "$status" -ne 0 ] \
+    || { echo "arm B did not reproduce — this test proves nothing"; false; }
+  run bash -c "set -uo pipefail
+f() { cat '$BIG' | grep '^1\$' >/dev/null; }
+if f; then exit 0; else exit 1; fi"
+  [ "$status" -eq 0 ] \
+    || { echo "the drain did not repair the function-final position (status=$status)"; false; }
+
+  # …and the repaired form must still be able to say NO, or it is not a predicate.
+  run bash -c "set -uo pipefail
+f() { cat '$BIG' | grep '^NOPE\$' >/dev/null; }
+if f; then exit 0; else exit 1; fi"
+  [ "$status" -ne 0 ] \
+    || { echo "the drained predicate returns TRUE on a non-match"; false; }
+}
+
+@test "26: clause 2 — an exit reachable only from END drains, and one in the MAIN rule does not" {
+  # Surfaced by arm 23: clause 5 had been hiding this imprecision, so it never had to answer for
+  # itself. mainexit is the control that keeps the carve-out a NARROWING and not an acquittal of
+  # awk — same command word, same `exit`, and only its REACHABILITY differs.
+  mkfile mainexit "if ps aux | awk '{ print; exit }'; then :; fi"                       'set -uo pipefail'
+  mkfile endexit  "if ps aux | awk '\$1 == \"x\" { f = 1 } END { exit !f }'; then :; fi" 'set -uo pipefail'
+  run census
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c 'scripts/mainexit\.sh')" -eq 1 ] \
+    || { echo "an awk exiting from its main rule was not reported — the carve-out is too wide"; echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c 'scripts/endexit\.sh')" -eq 0 ] \
+    || { echo "correct draining code is still convicted"; echo "$output"; false; }
+
+  # MECHANISM: END really does run after the drain, so the producer really is safe.
+  BIG="$BATS_TEST_TMPDIR/big26.txt"; seq 1 200000 > "$BIG"
+  run bash -c "set -uo pipefail; cat '$BIG' | awk '\$1 == 1 { f = 1 } END { exit !f }'"
+  [ "$status" -eq 0 ] \
+    || { echo "the END form took SIGPIPE — the carve-out is unsound (status=$status)"; false; }
+}
+
+@test "27: the EIGHTH CORRECTION's residuals are DECLARED, not merely known" {
+  # Same discipline as arm 22. A blind spot measured and then not written down is indistinguishable
+  # from one nobody found, and arms 23/24 green-on-the-residual would then read as a clean tree.
+  [ "$(grep -c 'AN EIGHTH CORRECTION' "$LINT")" -ge 1 ] \
+    || { echo "the eighth correction block is gone from the lint"; false; }
+  [ "$(grep -c 'THREE RESIDUALS' "$LINT")" -ge 1 ] \
+    || { echo "the residual declaration is gone — arms 23/24 no longer bound anything"; false; }
   true
 }

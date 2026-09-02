@@ -80,7 +80,7 @@ scrub_benign() { # <line> — drop (a) 20xxxxxx dates, (b) size-unit-suffixed co
 viol=0
 while IFS= read -r hit; do
   case "$hit" in *pane-id-lint:allow*) continue ;; esac
-  scrub_benign "$hit" | grep -qE "$PANE_RE" || continue
+  scrub_benign "$hit" | grep -E "$PANE_RE" >/dev/null || continue
   printf '  %s\n' "$hit"
   viol=$((viol + 1))
 done < <(

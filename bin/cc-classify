@@ -645,7 +645,7 @@ work_landed() { # <cwd> → 0 if clean AND the branch's content is on trunk (P0-
   # equivalent is already on trunk, '+' when genuinely unlanded. Zero '+' ⇒ every ahead commit landed.
   local cherry_out
   if cherry_out="$("$GIT_BIN" -C "$cwd" cherry "$TRUNK" HEAD 2>/dev/null)"; then
-    printf '%s\n' "$cherry_out" | grep -q '^+' || return 0
+    printf '%s\n' "$cherry_out" | grep '^+' >/dev/null || return 0
   fi
   # multi-commit-squash backstop: HEAD's tree already equals trunk's (net content landed).
   "$GIT_BIN" -C "$cwd" diff --quiet "$TRUNK" HEAD 2>/dev/null && return 0

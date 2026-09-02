@@ -566,7 +566,7 @@ work_landed(){ # $1=cwd → 0 clean+landed, 1 otherwise
   # equivalent is on trunk; zero '+' ⇒ every ahead commit is durably landed. tree-diff-0 = squash backstop.
   local cherry_out
   if cherry_out="$(sup_git -C "$cwd" cherry "$TRUNK" HEAD 2>/dev/null)"; then
-    printf '%s\n' "$cherry_out" | grep -q '^+' || return 0
+    printf '%s\n' "$cherry_out" | grep '^+' >/dev/null || return 0
   fi
   sup_git -C "$cwd" diff --quiet "$TRUNK" HEAD 2>/dev/null && return 0
   return 1

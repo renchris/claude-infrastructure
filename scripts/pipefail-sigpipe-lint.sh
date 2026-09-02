@@ -432,11 +432,77 @@ in_scan_set() { # $1=repo-relative path → 0 if this lint judges it
 # same diff as the split, and re-run the detector on the unmodified tree before touching either
 # (method 213). tests/pipefail-sigpipe-lint.bats pins BOTH directions of the blindness, so a fix
 # that lands without deleting this block goes red rather than quietly disagreeing with it.
+#
+# ── AN EIGHTH CORRECTION, 2026-09-02: CLAUSE 4 ASKS "DOES ANYTHING READ THIS PIPELINE'S STATUS"
+#    AND ANSWERS IT ONLY FOR THIS LINE. THE TWO POSITIONS WHERE THE READER IS ELSEWHERE ─────────
+# Backlog ca97c678b18b, filed by #240 and made stronger without re-filing by three later links, all
+# of which hit the same wall from a different side. #243 measured it head-on, with `-q` seeded into
+# three arms so the detector had something to find:
+#
+#     A  inline `if`-position pipeline (the PRE state)    lint rc 1   census 1   SEES
+#     B  function-final pipeline                          lint rc 0   census 0   BLIND
+#     C  function, pipeline in `|| return 1` position     lint rc 0   census 0   BLIND
+#
+# Arm A is the POSITIVE CONTROL and it fired, so the two zeros are the detector's and not the
+# harness's. #245 then found `bin/cc-pane` with 0 rows in --census AND 0 rows in the allowlist, and
+# named the general form: ABSENT FROM BOTH POPULATIONS IS NOT EXEMPT, IT IS INVISIBLE.
+#
+# BOTH ARMS ARE ONE FAULT, AND IT IS A SCOPE FAULT RATHER THAN A MISSING CLAUSE. consumed() is
+# handed ONE LINE and asked a question about a VALUE, and a value outlives the line that produced
+# it. Where it goes next is the whole of what was missing:
+#
+#   · ARM C — `p | grep -q X || return 1`. Clause 5 dropped every `||` as mitigation, on the
+#     reasoning that a trailing fallback "swallows the 141 before anything reads it". True of
+#     `|| true`; FALSE of control flow, which does not discard the status, it BRANCHES on it. A
+#     SIGPIPE on a line whose pattern DID match runs the return, so the caller reads FALSE for a
+#     match — the ec9a43a9 defect exactly, with the `if` replaced by a `||`. The `&&` arm below has
+#     recognised this since the cc-cloud scar; clause 5 is the same recognition never made in the
+#     other direction, and it fired FIRST, so the ladder never rendered a verdict at all.
+#   · ARM B — a pipeline that is the LAST statement of a function body. Its 141 IS the function's
+#     return value and the CALLER reads it. Nothing on the line reads it, which is exactly why a
+#     line-scoped clause 4 cannot see it, and the reason it stayed invisible is that this position
+#     is the house spelling for a predicate: `is_x() { … | grep -q y; }`. #243 wrote down the
+#     consequence: there is NO spelling that keeps a predicate behaviourally testable AND inside
+#     the detector's view.
+#
+# MEASURED by running this file's own program twice over one population (method 213 — control first,
+# on the UNMODIFIED tree): control 125 rows, reproducing `--census` exactly; widened 137; LOST 0;
+# NEW 12; 125 + 12 = 137, the partition sums. NINE of the twelve are arm C and THREE are arm B, and
+# SEVEN OF THE TWELVE ARE GUARDS WHOSE INVERSION PERMITS OR REFUSES THE VERY THING THEY EXIST TO
+# DECIDE — among them `bin/cc-classify:648`, `bin/cc-reaper:1056` and `scripts/lead-supervisor.sh:569`,
+# all three the SAME `git cherry` "is this branch landed" test on a DESTRUCTIVE reaping path, where
+# the inversion reads a genuinely UNLANDED branch as safe to delete. All twelve are DRAINED in this
+# same diff, so the census returns to 125 with the row set byte-identical to the control and the
+# allowlist untouched — the shape the QUOTE-BLIND block above prescribes, and not the a6449cebc
+# outage shape a bare widening would have produced.
+#
+# A THIRTEENTH ROW WAS MINTED AND IT WAS THE DETECTOR'S FAULT, NOT THE SITE'S. `bin/cc-notify:1328`
+# is `printf … | awk … END { exit !f } || return 1` — CORRECT code, because an `exit` reachable only
+# from END runs after the input is DRAINED and can never orphan a producer. Clause 2 had read any
+# awk mentioning `exit` as early-exiting since it was written; clause 5 was hiding the imprecision,
+# so it never had to answer for itself, and arm C surfaced it the moment it stopped. TIGHTENED
+# rather than grandfathered: grandfathering CORRECT code writes a permanent false claim into a list
+# whose whole discipline is that it may only shrink. Free, and measured to be — zero of the 125
+# grandfathered rows carry the shape, so the narrowing LOSES nothing — with fixture r22 (an awk that
+# exits from its MAIN rule) still RED as the control that keeps it a narrowing and not an acquittal.
+#
+# THREE RESIDUALS, NAMED RATHER THAN WIDENED — each a place the same "the reader is elsewhere" fault
+# survives, and none of them reachable by a site in this tree today:
+#   1. A pipeline that is the last statement of a nested block that is itself function-final —
+#      `f() { if c; then p | grep -q x; fi; }` — still reads as unread. The lookahead is ONE line
+#      deep, deliberately: chasing it means tracking `fi`/`done`/`esac` as well as braces.
+#   2. `VAR=$(p | head -1)` in function-final position IS the function's status in bash. Excluded
+#      from arm B because errexit already convicts it at clause 4 (fixture r3), leaving only the
+#      no-errexit spelling — which no site in this tree has.
+#   3. An awk spelled `END { … } { … exit … }`, END written before the main rule, is now acquitted
+#      wrongly. Nobody writes that ordering, and a full awk parse is the only thing that settles it.
+# The fourth residual is not mine and is untouched: the quote-blind split above still drops a
+# consumer whose own pattern carries a `|`, and arms 21/22 of the suite keep that declaration honest.
 DETECT_AWK='
 function ltrim(s) { sub(/^[ \t]+/, "", s); return s }
 
 # Clause 2: does this last stage exit before draining its input?
-function is_early(s,   t) {
+function is_early(s,   t, e) {
   t = ltrim(s); sub(/^[({][ \t]*/, "", t); t = ltrim(t)
   if (t ~ /^(\/usr\/bin\/|\/bin\/)?(grep|egrep|fgrep)([ \t]|$)/) {
     # The q/l/L may sit ANYWHERE in a flag cluster — `-qi`, `-qE`, `-iq` are all early-exit. An
@@ -448,7 +514,21 @@ function is_early(s,   t) {
   if (t ~ /^head([ \t]|$)/)          return 1
   if (t ~ /^read([ \t]|$)/)          return 1
   if (t ~ /^sed([ \t]).*[;\x27" \t]q([ \t;\x27"]|$)/) return 1
-  if (t ~ /^awk([ \t]).*exit/)       return 1
+  # An `exit` does not make an awk early-exit if it can only fire in END: END runs after the input
+  # is DRAINED, so the producer has already written everything and can no longer be orphaned. The
+  # text before the FIRST exit says which kind this is. Surfaced by arm C below — `awk … END { exit
+  # !f } || return 1` in bin/cc-notify:1328 is CORRECT code, and clause 5 had been hiding it rather
+  # than clause 2 acquitting it, so the imprecision had never had to answer for itself. Measured:
+  # zero of the 125 grandfathered rows carry this shape, so tightening here loses nothing.
+  # NAMED RESIDUAL: an awk spelled `END { … } { … exit … }` — END written before the main rule —
+  # would be acquitted wrongly. No such site exists here and the ordering is not a shape anyone
+  # writes; a full awk parse is the only thing that would settle it and it is not worth one.
+  if (t ~ /^awk([ \t])/) {
+    if (t !~ /exit/) return 0
+    e = index(t, "exit")
+    if (substr(t, 1, e - 1) ~ /END[ \t]*\{/) return 0
+    return 1
+  }
   return 0
 }
 
@@ -514,6 +594,27 @@ function consumed(l, hase,   t, pre, i) {
   return 1
 }
 
+# Arm B support. Clause 4 asks whether anything reads this pipelines status; arm B asks it of a
+# position clause 4 cannot see, so it must first ask whether there IS a status to read. A pipeline
+# whose value is swallowed on the SAME line — by `local`/`export` (the builtins own 0 wins), by a
+# `[ … ]` test, by an assignment, or by sitting inside a command substitution used as an argument —
+# does not become the functions return value however final it is. Those are exactly the forms
+# consumed() already returns 0 for on their own merits, and stashing them would convict them twice.
+function is_bare(l,   t, d, b) {
+  t = ltrim(l)
+  if (t ~ /^(if|elif|while|until)[ \t]/)                   return 0
+  if (t ~ /^![ \t]/)                                       return 0
+  if (t ~ /^(local|declare|typeset|export|readonly)[ \t]/) return 0
+  if (t ~ /^\[/)                                           return 0
+  # VAR=$( p | head -1 ) as the last line of a function IS the functions status in bash, so this is
+  # a NAMED RESIDUAL and not a claim of safety: it is excluded because errexit already convicts it
+  # at clause 4 (fixture r3), leaving only the no-errexit spelling, which no site in this tree has.
+  if (t ~ /^[A-Za-z_][A-Za-z0-9_]*\+?=/)                   return 0
+  d = index(t, "$("); b = index(t, "|")
+  if (d > 0 && b > 0 && d < b)                             return 0
+  return 1
+}
+
 BEGIN { FS = "" }
 {
   raw = $0
@@ -548,6 +649,27 @@ BEGIN { FS = "" }
   # measurement; it is not folded in here. g31/g32 pin both directions of what IS fixed.
   if (line ~ /^#/ || line == "") next
 
+  # ── ARM B: the function-scope tracker and the ONE-LINE lookahead it feeds ────────────────────
+  # A functions body is opened by a line that is nothing but a header and a brace, and closed by a
+  # brace at the HEADERS OWN indentation — which is what separates it from a `{ …; }` group or a
+  # nested block, both of which are indented deeper. Tracking real brace depth would mean parsing
+  # `${…}`, braces inside strings, and brace expansion; this is the house shape and it is checkable.
+  match(raw, /^[ \t]*/); curind = substr(raw, 1, RLENGTH)
+
+  # FLUSH BEFORE this line may open or close anything: a stashed candidate is a violation iff the
+  # next CODE line is its own functions closing brace. Comments and blanks never reach here (they
+  # next above), so a rationale sitting between the pipeline and the } does not discard the finding.
+  if (pend != "") {
+    if (fdepth > 0 && fdepth == pdepth && curind == findent[fdepth] && line ~ /^\}/)
+      printf "%s:%d:%s\n", FILE, pline, pend
+    pend = ""
+  }
+
+  if (fdepth > 0 && curind == findent[fdepth] && line ~ /^\}/) fdepth--
+  else if (line ~ /^(function[ \t]+[A-Za-z_][A-Za-z0-9_:.-]*([ \t]*\(\))?|[A-Za-z_][A-Za-z0-9_:.-]*[ \t]*\(\))[ \t]*\{[ \t]*$/) {
+    fdepth++; findent[fdepth] = curind
+  }
+
   if (match($0, /<<-?[ \t]*[\x27"]?[A-Za-z_][A-Za-z0-9_]*[\x27"]?/)) {
     tok = substr($0, RSTART, RLENGTH)
     sub(/^<<-?[ \t]*/, "", tok); gsub(/[\x27"]/, "", tok)
@@ -562,7 +684,25 @@ BEGIN { FS = "" }
 
   last = seg[n]
   if (!is_early(last))      next      # clause 2
-  if (last ~ /\002/)        next      # clause 5 — a trailing || swallows the 141
+
+  # ── ARM C: clause 5, and the half of it that was never true ─────────────────────────────────
+  # A trailing `|| true` / `|| <fallback>` swallows the 141 before anything reads it — EXCEPT when
+  # the fallback is CONTROL FLOW. `p | grep -q X || return 1` does not discard the status, it
+  # BRANCHES on it: a SIGPIPE on a line whose pattern DID match runs the return, so the caller reads
+  # FALSE for a match. That is the same consumption the `&&` arm below already recognises, in the
+  # other direction, and clause 5 was dropping it before any verdict was rendered.
+  or_cf = 0
+  orp = index(last, "\002")
+  if (orp > 0) {
+    pre_or = substr(last, 1, orp - 1)
+    # As with the && below: a `)` or `;` before it means the || belongs to an enclosing expression
+    # or to a later command, not to this pipeline. Unattributable ⇒ keep the old conservative drop.
+    if (pre_or ~ /[;)]/) next
+    or_t = ltrim(substr(last, orp + 1)); sub(/^[{(][ \t]*/, "", or_t); or_t = ltrim(or_t)
+    if (or_t ~ /^(return|exit|continue|break)([ \t;}&|]|$)/) or_cf = 1
+    if (!or_cf) next
+  }
+
   if (!is_external(seg[1])) next      # clause 3
 
   # Clause 3b — the NEUTRALISE fix. A producer wrapped as `{ p || true; } | consumer` cannot fail
@@ -598,7 +738,14 @@ BEGIN { FS = "" }
   # the ASSIGNMENT form after the last stage separates them; g15/g16 pin both directions.
   # (No apostrophes here: this is inside the single-quoted DETECT_AWK string.)
   cap = (last ~ /;[ \t]*[A-Za-z_][A-Za-z0-9_]*=\$\?/)
-  if (amp == 0 && !cap && !consumed(line, HASE)) next
+  if (amp == 0 && !cap && !or_cf && !consumed(line, HASE)) {
+    # ARM B. Nothing on THIS line reads the status — but if this is the last statement of a function
+    # body, the status IS the functions return value and the CALLER reads it. Clause 4 answers
+    # "does anything here read it"; a function-final pipeline is the position where the reader is
+    # not here. Stash it and let the next code line say whether the body ends.
+    if (fdepth > 0 && is_bare(line)) { pend = line; pline = FNR; pdepth = fdepth }
+    next
+  }
 
   printf "%s:%d:%s\n", FILE, FNR, line
 }'
@@ -911,6 +1058,64 @@ cat <<'EOF'
 if git status --porcelain | grep -q .; then :; fi
 EOF"
   expect g31 GREEN "a comment ahead of a REAL heredoc still leaves the body as DATA"
+
+  # ── ARM C: `|| <control flow>` CONSUMES the status; `|| <anything else>` swallows it (2026-09-02)
+  # Every arm here is mk_noe, deliberately: with errexit the bare pipeline is convicted by clause 4
+  # on its own, so a RED would prove nothing about clause 5. Without it, the `||` is the ONLY reason
+  # a verdict can differ, which is what makes r16/g17 a discriminator rather than two assertions.
+  mk_noe r16 "git status --porcelain | grep -q . || return 1"
+  expect r16 RED "|| return CONSUMES the 141 — it branches on the status, it does not discard it"
+  mk_noe r17 "launchctl list | grep -qE 'com\.x' || exit 2"
+  expect r17 RED "|| exit is the same consumption, one scope out"
+  mk_noe r18 "printf '%s' \"\$text\" | grep -qF -- \"--x \$n\" || continue"
+  expect r18 RED "|| continue — the cc-spawn-verify shape: a matching pane is SKIPPED"
+  mk_noe g17 "git status --porcelain | grep -q . || true"
+  expect g17 GREEN "a plain || fallback still swallows the 141 — clause 5's true half"
+  mk_noe g18 "git status --porcelain | grep -q . || rc=1"
+  expect g18 GREEN "a non-control-flow fallback is not a branch on the status"
+  # POSITIONAL, exactly as the && arm is: a `;` or `)` before the || means it belongs to an earlier
+  # command or an enclosing expression, and an unattributable || keeps the old conservative drop.
+  mk_noe g19 "f=\"\$(git log --oneline | head -1)\"; [ -n \"\$f\" ] || return 1"
+  expect g19 GREEN "the || belongs to the [ -n ] test, not to the pipeline inside the substitution"
+
+  # ── ARM B: a FUNCTION-FINAL pipeline, whose rc IS the return value its caller reads ────────────
+  # The reader is not on this line and clause 4 can only see this line, so the detector called it
+  # unread. r20/g20 differ in ONE thing — whether a statement follows — which is the whole claim.
+  mk_noe r20 "f() {
+  git status --porcelain | grep -q .
+}"
+  expect r20 RED "function-final pipeline — the caller reads its 141 as the function's verdict"
+  mk_noe g20 "f() {
+  git status --porcelain | grep -q .
+  :
+}"
+  expect g20 GREEN "NOT final — arm B must key on the POSITION, not on being inside a function"
+  mk_noe r21 "f() {
+  git status --porcelain | grep -q .
+  # a trailing rationale, which is this tree's house style
+}"
+  expect r21 RED "a comment between the pipeline and the } must not discard the finding"
+  mk_noe g21 "f() {
+  local v=\$(git log | head -1)
+}"
+  expect g21 GREEN "local masks the status even in final position — is_bare, not just position"
+  # The closer is a brace at the HEADER's OWN indentation. Without that, the inner group's } would
+  # be read as the function's and every block-final pipeline in the tree would convict.
+  mk_noe g22 "f() {
+  {
+    git status --porcelain | grep -q .
+  }
+  :
+}"
+  expect g22 GREEN "an inner block's } is not the function's — the closer is indentation-matched"
+
+  # ── clause 2: an `exit` reachable only from END cannot orphan a producer (2026-09-02) ──────────
+  # Surfaced by arm C, which stopped hiding bin/cc-notify:1328. The pair is the discriminator: the
+  # same command word, the same `exit`, and only its REACHABILITY differs.
+  mk_noe r22 "if ps aux | awk '{ print; exit }'; then :; fi"
+  expect r22 RED "an awk that exits from its MAIN rule orphans the producer"
+  mk_noe g23 "if ps aux | awk '\$1 == \"x\" { f = 1 } END { exit !f }'; then :; fi"
+  expect g23 GREEN "an exit reachable only from END runs AFTER the input is drained"
 
   local total=$((pass+fail))
   if [ "$fail" -gt 0 ]; then

@@ -125,7 +125,7 @@ proc_age_s() {
 # 127.0.0.1-bound and sorts after the *:PORT dev port in lsof output, so filter to the wildcard form.
 proc_port() {
   "$LSOF_CMD" -nP -p "$1" -a -i 2>/dev/null \
-    | awk '/LISTEN/ { split($9,a,":"); if (a[1] == "*") { print a[2]; exit } }'
+    | awk '/LISTEN/ { split($9,a,":"); if (a[1] == "*" && p == "") p = a[2] } END { if (p != "") print p }'
 }
 
 # Established connections ON THE DEV PORT only — never a bare per-pid count (see header D-b).
