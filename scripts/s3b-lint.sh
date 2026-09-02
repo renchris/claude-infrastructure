@@ -32,7 +32,9 @@ lint_file() {
   # reaper-horizon-lint.sh shipped with (a grep hit is file:line:CONTENT, so comments read as code).
   local code; code="$(grep -vE '^[[:space:]]*#' "$sup")"
   local fail=0
-  if printf '%s\n' "$code" | grep -qiE "(${SILENCE}).{0,40}(${DISPOSE})|(${DISPOSE}).{0,40}(${SILENCE})"; then
+  # DRAINED, never `grep -q`: $code is a whole file's non-comment source. See :39's sibling and
+  # scripts/pipefail-sigpipe-lint.sh.
+  if printf '%s\n' "$code" | grep -iE "(${SILENCE}).{0,40}(${DISPOSE})|(${DISPOSE}).{0,40}(${SILENCE})" >/dev/null; then
     echo "  RED  S-3b  disposition on the same line as a silence trigger — a '<silence> -> <dispose>' shortcut; would kill a healthy long turn"
     fail=1
   fi

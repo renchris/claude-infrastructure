@@ -63,8 +63,12 @@ lint_file() {
   # a raw pull owned by nobody: cc-await-ping invoked directly.
   printf '%s\n' "$code" | grep -qE '\bcc-await-ping\b' && raw_wait=1
   # a hand-rolled poll-loop: a while-loop that sleeps while re-reading a mailbox / line count.
-  printf '%s\n' "$code" | grep -qiE 'while.*(sleep|cc-await)' \
-    && printf '%s\n' "$code" | grep -qiE 'mailbox|wc -l|tail -n|\.md"?$|ping' && poll=1
+  # DRAINED, never `grep -q` — BOTH halves. Only the second was ever visible to the detector (the
+  # first has no `&&` on its own physical line, so clause 4 never reached it), and draining one half
+  # of a single `&&` chain is the shape #244 named: the drain takes the predicate and leaves the
+  # inline copy of it. See scripts/pipefail-sigpipe-lint.sh.
+  printf '%s\n' "$code" | grep -iE 'while.*(sleep|cc-await)' >/dev/null \
+    && printf '%s\n' "$code" | grep -iE 'mailbox|wc -l|tail -n|\.md"?$|ping' >/dev/null && poll=1
   # the contracted form: the wait goes through cc-wait (writes a contract before blocking).
   printf '%s\n' "$code" | grep -qE '\bcc-wait\b' && contracted=1
 

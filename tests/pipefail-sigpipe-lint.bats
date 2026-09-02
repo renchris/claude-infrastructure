@@ -311,35 +311,88 @@ $(census | grep -c 'lr-reset-poller\.sh:' || true) hit(s), so arm 20 is vacuous"
   true
 }
 
-@test "21: GATE ONE — the stage split is QUOTE-BLIND, pinned in both directions" {
-  # Every clause this suite exercises judges `last`, and `last` is chosen by
-  # `n = split(work, seg, "|")` — a split with no quote awareness. A consumer whose OWN pattern
-  # contains a `|` therefore never reaches the clause ladder: seg[n] is a fragment of the regex,
-  # is_early() reads false on it, and the line is dropped before any clause renders a verdict.
-  # ONE VARIABLE BETWEEN THE TWO FIXTURES: same producer, same early-exiting consumer, same
-  # position; only the alternation differs.
+@test "21: GATE ONE — the stage split is QUOTE-AWARE, pinned in both directions" {
+  # Every clause this suite exercises judges `last`, and `last` is chosen by the stage split. That
+  # split used to be `split(work, seg, "|")` with no quote awareness, so a consumer whose OWN
+  # pattern contains a `|` never reached the clause ladder: seg[n] was a fragment of the regex,
+  # is_early() read false on it, and the line was dropped before any clause rendered a verdict.
+  # It now runs through qmask(). ONE VARIABLE BETWEEN THE TWO FIXTURES: same producer, same
+  # early-exiting consumer, same position; only the alternation differs — so BOTH must be reported,
+  # and the pair is what says the fix is about the SPLIT and not about the pattern.
+  #
+  # This arm was written by #280 asserting the opposite, deliberately, so that the link which fixed
+  # the split could not land without inverting it. That is the whole point of pinning a known gap.
   mkfile alt   "if cat \"\$F\" | grep -qE 'aaa|bbb'; then :; fi" 'set -uo pipefail'
   mkfile noalt "if cat \"\$F\" | grep -qE 'aaa'; then :; fi"     'set -uo pipefail'
   run census
   [ "$status" -eq 0 ]
-  # THE FIRE HALF FIRST. Without it, "hidden" is indistinguishable from a census that reports
+  # THE FIRE HALF FIRST. Without it, a passing arm is indistinguishable from a census that reports
   # nothing at all — which is the failure mode this whole file exists to refuse.
   [ "$(printf '%s\n' "$output" | grep -c 'scripts/noalt\.sh')" -eq 1 ] \
     || { echo "the plain form was not reported either — this arm is vacuous"; echo "$output"; false; }
-  # AND THE BLIND HALF. Green here is a statement about a KNOWN GAP, not about a clean tree: it is
-  # declared in the lint's own QUOTE-BLIND SPLIT block with its measured population, and arm 22
-  # pins that declaration so the two cannot drift apart.
-  [ "$(printf '%s\n' "$output" | grep -c 'scripts/alt\.sh')" -eq 0 ]
+  # AND THE HALF THAT WAS BLIND UNTIL 2026-09-02.
+  [ "$(printf '%s\n' "$output" | grep -c 'scripts/alt\.sh')" -eq 1 ] \
+    || { echo "the alternation form is hidden again — the split has lost its quote awareness"; echo "$output"; false; }
   true
 }
 
-@test "22: GATE ONE — the quote-blind residual is DECLARED, not merely known" {
-  # A blind spot that is measured and then not written down is indistinguishable from one nobody
-  # found (an omission carries no reason). This arm is what makes the declaration load-bearing:
-  # a link that makes the split quote-aware must delete that block, and arm 21 goes red in the
-  # same moment — so the fix cannot land while the file still claims the gap is open.
-  [ "$(grep -c 'QUOTE-BLIND SPLIT' "$LINT")" -ge 1 ] \
-    || { echo "the quote-blind residual block is gone from the lint"; false; }
-  [ "$(grep -c 'quote-aware' "$LINT")" -ge 1 ]
+@test "22: GATE ONE — what the widening cost is RECORDED, not merely done" {
+  # #280 measured this gap and declared it; this arm used to pin that declaration. The gap is now
+  # closed, so what has to be load-bearing is the other half: the MEASUREMENT that made the fix
+  # safe to land. A widening that mints findings on the real tree is a repo-wide land outage
+  # (a6449cebc's shape), so the numbers that say it minted none are the reason this could ship.
+  [ "$(grep -c 'WHAT IT COST TO LAND' "$LINT")" -ge 1 ] \
+    || { echo "the landed-measurement block is gone from the lint"; false; }
+  # keyed on the FUNCTION, not on prose: a reword may not silently remove the mechanism.
+  [ "$(grep -c 'function qmask' "$LINT")" -eq 1 ]
+  [ "$(grep -c 'split(qmask(work), seg' "$LINT")" -eq 1 ]
+  # and the quote-BLIND spelling must be gone from the split itself — COMMENT LINES STRIPPED FIRST.
+  # A bare count here reads 1 and refuses a correct file, because the block above documents the old
+  # spelling by quoting it. That is this suite's own recurring scar: a grep that counts a token also
+  # matches the sentence explaining it, so the fixed file convicts itself.
+  [ "$(grep -vE '^[[:space:]]*#' "$LINT" | grep -c 'split(work, seg')" -eq 0 ]
+  # and the control that proves the strip did not simply mute the check:
+  [ "$(grep -vE '^[[:space:]]*#' "$LINT" | grep -c 'split(qmask(work), seg')" -eq 1 ]
+  true
+}
+
+@test "23: GATE ONE — the mask does not eat an OPERATOR pipe (the LOST direction)" {
+  # qmask() masks pipes inside quotes so the split cuts only on shell operators. The failure mode
+  # in the OTHER direction is a mask that is too greedy: mask an operator pipe and the line reads
+  # as no pipeline at all, so it is dropped — a site LOST rather than gained, and a census that
+  # SHRINKS looks like progress. Measured LOST = 0 over the whole tree when this landed; this arm
+  # is the fixture that keeps saying so.
+  #
+  # The middle stage carries the alternation, so a mask that swallowed the two real `|` around it
+  # would leave n = 1 and the line would never be judged.
+  mkfile mid "if cat \"\$F\" | grep -E 'aaa|bbb' | grep -q ccc; then :; fi" 'set -uo pipefail'
+  run census
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c 'scripts/mid\.sh')" -eq 1 ] \
+    || { echo "an operator pipe was masked — the site was LOST, not gained"; echo "$output"; false; }
+  true
+}
+
+@test "24: the canonical fix for the newly-visible class is GREEN" {
+  # All thirteen sites this widening revealed were drained with the same one-token cure the header
+  # prescribes: `grep -qE PAT` becomes `grep -E PAT >/dev/null`. If that form were itself flagged
+  # the fix would have nowhere to go and the ratchet could only ever grow.
+  #
+  # ITS FIRE CONTROL IS WHAT MAKES THIS ARM REAL, and that was not obvious when it was written. The
+  # second assertion alone IS vacuous pre-fix: the quote-blind split cut inside the pattern and
+  # never reached clause 2, so the drained twin read 0 for the wrong reason. It was written down as
+  # a deliberate zero on exactly that reading — and the red-proof's rc-93 gate refused the
+  # prediction, because the FIRE control in front of it is ALSO alternation-shaped, so pre-fix it
+  # catches the vacuity itself and this arm goes red for the right reason.
+  # A vacuity guard whose own subject is affected by the fix turns a deliberate zero into a genuine
+  # red. Predict on the WHOLE arm, never on the assertion you happen to be thinking about.
+  mkfile drained "if cat \"\$F\" | grep -E 'aaa|bbb' >/dev/null; then :; fi" 'set -uo pipefail'
+  mkfile early   "if cat \"\$F\" | grep -qE 'aaa|bbb'; then :; fi"          'set -uo pipefail'
+  run census
+  [ "$status" -eq 0 ]
+  # the FIRE control: the undrained twin must be reported, or "green" here means nothing.
+  [ "$(printf '%s\n' "$output" | grep -c 'scripts/early\.sh')" -eq 1 ] \
+    || { echo "the undrained twin was not reported — this arm is vacuous"; echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c 'scripts/drained\.sh')" -eq 0 ]
   true
 }

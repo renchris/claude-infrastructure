@@ -45,7 +45,9 @@ case "$ncmd" in
 esac
 
 # (1) branch -d/-D guard — refuse to delete a branch that has a worktree.
-if printf '%s' "$ncmd" | grep -qE 'git branch([[:space:]]|.)*-(d|D|-delete)'; then
+# DRAINED, never `grep -q`: this guard's inversion PERMITS the branch delete it exists to refuse —
+# see scripts/pipefail-sigpipe-lint.sh.
+if printf '%s' "$ncmd" | grep -E 'git branch([[:space:]]|.)*-(d|D|-delete)' >/dev/null; then
   if [ -n "$crepo" ]; then wtlist="$(git -C "$crepo" worktree list 2>/dev/null)"; else wtlist="$(git worktree list 2>/dev/null)"; fi
   for tok in $(printf '%s' "$ncmd" | sed -E 's/.*git branch//' | tr ' ' '\n' | grep -vE '^-'); do
     [ -n "$tok" ] || continue
@@ -66,7 +68,8 @@ if printf '%s' "$ncmd" | grep -qE 'git branch([[:space:]]|.)*-(d|D|-delete)'; th
 fi
 
 # (2) worktree remove guard — refuse if a live claude is cwd'd in the path (or it's open).
-if printf '%s' "$ncmd" | grep -qE 'git worktree remove([[:space:]]|$)'; then
+# DRAINED, never `grep -q`: this guard's inversion PERMITS the worktree removal it exists to refuse.
+if printf '%s' "$ncmd" | grep -E 'git worktree remove([[:space:]]|$)' >/dev/null; then
   wt="$(printf '%s' "$ncmd" | sed -E 's/.*git worktree remove//' | tr ' ' '\n' | grep -vE '^-' | tail -1)"
   [ -n "${wt:-}" ] || exit 0
   wtabs="$(cd "$wt" 2>/dev/null && pwd -P || echo "$wt")"
