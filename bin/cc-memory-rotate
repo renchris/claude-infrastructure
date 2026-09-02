@@ -268,7 +268,9 @@ protect_reason() {
     user) echo type; return 0 ;;
     feedback|reference) if [ "$stage" -eq 1 ]; then echo type; return 0; fi ;;
   esac
-  if printf '%s' "$ln" | grep -qiE 'DEFERRED|NOT pushed|pending|gated on|BLOCKED|backlog|(^|[^[:alnum:]])open([^[:alnum:]]|$)'; then
+  # DRAINED, never `grep -q`: under pipefail a matching -q exits first, the producer takes SIGPIPE,
+  # and the 141 is promoted to the `if` — see scripts/pipefail-sigpipe-lint.sh.
+  if printf '%s' "$ln" | grep -iE 'DEFERRED|NOT pushed|pending|gated on|BLOCKED|backlog|(^|[^[:alnum:]])open([^[:alnum:]]|$)' >/dev/null; then
     echo marker; return 0
   fi
   mt=$(fmtime "$DIR/$f"); [ -n "$mt" ] || mt=$NOW

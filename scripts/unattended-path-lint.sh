@@ -1104,7 +1104,10 @@ plist_effective_path() { # $1=plist -> stdout: a PATH string, or the LOGIN_SHELL
     #    `/bin/bash -c` was classified LOGIN_SHELL and skipped ENTIRELY, i.e. the largest at-risk
     #    bucket was exempted by the check meant to be conservative. A `-l` appears only as its own
     #    argument or inside a combined flag cluster (-lc, -cl).
-    if printf '%s\n' "$args" | grep -qE '^-[a-zA-Z]*l[a-zA-Z]*$|^--login$'; then
+    # DRAINED, never `grep -q`: this classifier decides whether a bucket is EXEMPTED, so an
+    # inversion re-creates the over-exemption the comment above records. See
+    # scripts/pipefail-sigpipe-lint.sh.
+    if printf '%s\n' "$args" | grep -E '^-[a-zA-Z]*l[a-zA-Z]*$|^--login$' >/dev/null; then
       printf 'LOGIN_SHELL\n'; return 0
     fi
   fi

@@ -387,7 +387,9 @@ classify_death() {
   #    trailing last-prompt record). Bare "handoff-fire"/"self-close" are excluded —
   #    infra-dev sessions discuss them without firing, which would mask a real crash.
   body=$(tail -c 16000 "$t" 2>/dev/null || true)
-  if printf '%s' "$body" | grep -qiE 'DISPOSITION: *CLOSE|Firing as the last action|the recycle IS the continuation|retiring this pane|becomes the successor|a recycle keeps|recycle keeps (this|the) pane|recycled at [0-9]+%|— recycled|Context Stewardship free-win'; then
+  # DRAINED, never `grep -q`: $body is a 16,000-byte tail — a quarter of the 64 KiB pipe buffer and
+  # the largest feed of the thirteen — and inversion misreads a deliberate self-close as a CRASH.
+  if printf '%s' "$body" | grep -iE 'DISPOSITION: *CLOSE|Firing as the last action|the recycle IS the continuation|retiring this pane|becomes the successor|a recycle keeps|recycle keeps (this|the) pane|recycled at [0-9]+%|— recycled|Context Stewardship free-win' >/dev/null; then
     printf 'RECYCLE\tdeliberate-self-close\t%s\t%s' "${kb:-0}" "${recs:-0}"; return 0
   fi
   # 3) otherwise a genuine but un-attributed crash (large context ⇒ likely OOM)

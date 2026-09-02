@@ -59,7 +59,9 @@ esac
 # The positive match below already requires an exact flag-free `HEAD:<branch>` tail, so none of
 # these can reach the allow — but re-checking keeps the "never auto-allow force" invariant
 # explicit and local, and guards against any future loosening of the matcher.
-if printf '%s' "$CMD" | grep -qE '(^|[[:space:]])(--force([[:space:]]|=|$)|-f([[:space:]]|$)|--force-with-lease|--mirror|--delete|--prune|-u([[:space:]]|$)|--set-upstream)|[[:space:]]\+[^[:space:]]*HEAD'; then
+# DRAINED, never `grep -q`: inverting THIS check auto-allows a force push — the never-auto-allow-force
+# invariant this block exists to keep explicit. See scripts/pipefail-sigpipe-lint.sh.
+if printf '%s' "$CMD" | grep -E '(^|[[:space:]])(--force([[:space:]]|=|$)|-f([[:space:]]|$)|--force-with-lease|--mirror|--delete|--prune|-u([[:space:]]|$)|--set-upstream)|[[:space:]]\+[^[:space:]]*HEAD' >/dev/null; then
   exit 0
 fi
 

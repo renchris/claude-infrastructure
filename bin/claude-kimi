@@ -250,7 +250,9 @@ _cmd_selftest() {
 
   # ST-f: no hardcoded Anthropic model id leaks into Kimi routing (would silently bill Anthropic
   #        rates against a Kimi endpoint / route a real Anthropic call). Comments stripped first.
-  if sed 's/[[:space:]]*#.*$//' "$0" | grep -qE 'claude-(opus|sonnet|haiku|fable)-[0-9]'; then
+  # DRAINED, never `grep -q`: the producer here is a STREAMING sed over this file's own source, so
+  # a -q match orphans it and pipefail inverts the check — see scripts/pipefail-sigpipe-lint.sh.
+  if sed 's/[[:space:]]*#.*$//' "$0" | grep -E 'claude-(opus|sonnet|haiku|fable)-[0-9]' >/dev/null; then
     bad "an Anthropic model id appears in CODE (should route only via \$KIMI_MODEL)"
   else
     ok "no Anthropic model id hardcoded in routing code"

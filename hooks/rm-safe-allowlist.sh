@@ -50,7 +50,9 @@ CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null) \
 # ── Catastrophic danger re-check: on match, DEFER (exit 0, no allow) ───────────────────────
 # rm -rf / (system damage), sudo rm, fork bomb. (Belt-and-suspenders; the whitelist below
 # already cannot match these, but re-checking keeps the invariant explicit and local.)
-if printf '%s' "$CMD" | grep -qE '(^|[^a-zA-Z0-9_])sudo[[:space:]]+rm|rm[[:space:]]+-[a-zA-Z]*[[:space:]]*/[[:space:]]*$|rm[[:space:]]+-[a-zA-Z]*[[:space:]]+/[[:space:]]*($|[^a-zA-Z0-9._/-])|:\(\)\{[[:space:]]*:'; then
+# DRAINED, never `grep -q`: inverting THIS check turns the catastrophic-danger re-check into a
+# silent pass — see scripts/pipefail-sigpipe-lint.sh.
+if printf '%s' "$CMD" | grep -E '(^|[^a-zA-Z0-9_])sudo[[:space:]]+rm|rm[[:space:]]+-[a-zA-Z]*[[:space:]]*/[[:space:]]*$|rm[[:space:]]+-[a-zA-Z]*[[:space:]]+/[[:space:]]*($|[^a-zA-Z0-9._/-])|:\(\)\{[[:space:]]*:' >/dev/null; then
   exit 0
 fi
 

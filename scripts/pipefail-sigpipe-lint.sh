@@ -392,13 +392,14 @@ in_scan_set() { # $1=repo-relative path → 0 if this lint judges it
 # positional (which stage is LAST, which command word is FIRST) and a line-regex cannot see that.
 # shellcheck disable=SC2016  # the $1/$2/$0 below are AWK fields — single quotes are the point.
 #
-# ── A SEVENTH CORRECTION, 2026-09-01: THE QUOTE-BLIND SPLIT — GATE ONE OF TWO ───────────────────
-# Every clause above is a judgement about `last` — and `last` is chosen one line down by
-# `n = split(work, seg, "|")`, a split that knows nothing about quoting. A consumer whose OWN
-# ARGUMENT contains a `|` therefore never reaches the clause ladder at all: seg[n] is a fragment of
-# the PATTERN, is_early() reads false on it, and the line is dropped before clause 2 renders any
+# ── A SEVENTH CORRECTION, 2026-09-01: THE QUOTE-BLIND SPLIT — GATE ONE OF TWO — NOW FIXED ───────
+# Every clause above is a judgement about `last` — and `last` used to be chosen one line down by
+# `n = split(work, seg, "|")`, a split that knew nothing about quoting. A consumer whose OWN
+# ARGUMENT contains a `|` therefore never reached the clause ladder at all: seg[n] was a fragment of
+# the PATTERN, is_early() read false on it, and the line was dropped before clause 2 rendered any
 # verdict. There are two gates in this detector, all six corrections above are about the second,
-# and the first carries no reasons — which is exactly why nobody had audited it.
+# and the first carried no reasons — which is exactly why nobody had audited it.
+# The split now runs through qmask() below; this block records what that cost and revealed.
 #
 # THE SHAPE IT HIDES IS NOT AN ODD ONE, IT IS THE COMMONEST THING A GUARD WRITES. An alternation is
 # how a predicate lists the alternatives it must catch, so the sites this split drops skew hard
@@ -424,16 +425,79 @@ in_scan_set() { # $1=repo-relative path → 0 if this lint judges it
 # command line, a process name, one file's code), and LATENT IS NOT SAFE: every one of those feeds
 # is an operational quantity that only grows and nothing announces the crossing.
 #
-# RESIDUAL, NAMED RATHER THAN WIDENED, for the reason the heredoc-latch block above gives about its
-# own four remaining files. Making the split quote-aware is a real change to what counts as a
-# pipeline: it mints 14 findings on the tree as it stands, and a bare lint that goes red BLOCKS
-# EVERY LAND IN THIS REPO through ship-land's own gate — the a6449cebc outage shape, arrived at
-# from the other direction. It wants its own link: drain or grandfather the fourteen FIRST, in the
-# same diff as the split, and re-run the detector on the unmodified tree before touching either
-# (method 213). tests/pipefail-sigpipe-lint.bats pins BOTH directions of the blindness, so a fix
-# that lands without deleting this block goes red rather than quietly disagreeing with it.
+# WHAT IT COST TO LAND, MEASURED 2026-09-02 ON THE SAME HARNESS, RE-RUN RATHER THAN INHERITED:
+# thirteen, not fourteen, because #280 had already drained the fourteenth (ship-land.sh:3711) — and
+# that site is absent from BOTH programs now, which is the check that distinguishes a real drain
+# from a move out of the detector field of view (#243). Control 125 rows and REPRODUCES `--census`
+# exactly; quote-aware 138; LOST = 0; NEW = 13; 125 + 13 = 138, the partition asserted to sum.
+# Instrument: ~/.claude/autonomy/{mkawk281.py,qmask281.awk,probe281-widen.sh}, 8 arms, all exact.
+#
+# ALL THIRTEEN WERE DRAINED, AND THE ALLOWLIST DID NOT MOVE — that is the arithmetic that decided
+# the scope rather than taste. Every affected file lands back on the count it already carried:
+# lead-crash-watchdog 7 to 6, handoff-fire 7 to 5, s3b-lint 2 to 1, wait-contract-lint 3 to 2, and
+# the six files that carried NO row at all (cc-memory-rotate, claude-kimi, git-worktree-guard x2,
+# rm-safe-allowlist, ship-rail-push-allow, smoke-test, unattended-path-lint) return to zero.
+# Grandfathering ANY of them would have meant RAISING a count, which this list's own law forbids —
+# it may only SHRINK. So the option that reads as cheaper is the one this file already rules out.
+#
+# THE POPULATION SKEWED TOWARD GUARDS, AND THAT IS THE FINDING, not an incidental. An alternation
+# is how a predicate lists the alternatives it must catch, so the spelling this split dropped is
+# the spelling a guard naturally writes: SEVEN of the thirteen are hooks or lints whose inversion
+# PERMITS the thing they exist to refuse — hooks/rm-safe-allowlist.sh (the dangerous-rm re-check),
+# hooks/ship-rail-push-allow.sh (the never-auto-allow-force invariant), hooks/git-worktree-guard.sh
+# x2 (branch-delete and worktree-remove), hooks/lead-crash-watchdog.sh (a deliberate self-close read
+# as a crash), scripts/unattended-path-lint.sh (an over-exemption its own comment records fixing),
+# scripts/wait-contract-lint.sh. A blind spot correlated with a code STYLE is not random, and it is
+# worst exactly where that style is densest.
+#
+# ONE HALF-DRAIN REPAIRED WHILE HERE: wait-contract-lint.sh:66-67 is a single `&&` chain and only
+# its SECOND half was ever visible (the first carries no `&&` on its own physical line, so clause 4
+# never reached it). Draining only the visible half would have been #244's shape exactly — the
+# drain takes the predicate and leaves the inline copy. Both halves are drained; the count moves by
+# one because only one was ever counted.
+#
+# RESIDUAL, NAMED RATHER THAN WIDENED: qmask() is a quote/substitution masker, not a shell parser.
+# It does not join CONTINUATION lines (that gap is owned by ca97c678b18b and pipe258.py is a
+# working joiner nobody has wired in), and it treats a dangling quote as opening a context that
+# runs to end of line. Neither shows up in today numbers — LOST = 0 says the mask never eats an
+# operator pipe on this tree — but both are claims about a tree that grows.
 DETECT_AWK='
 function ltrim(s) { sub(/^[ \t]+/, "", s); return s }
+
+# GATE ONE. Mask every `|` that is INSIDE a quote or a substitution to \004, so the stage split
+# below cuts on pipes that are shell OPERATORS and not on pipes that are pattern bytes. The
+# segments are unmasked immediately after the split, so every clause still judges the real text.
+#
+# A context STACK, not a flag: a `|` is literal inside single quotes; inside double quotes it is
+# literal too, EXCEPT within a $( ) where it is an operator again; and a backslash escapes the next
+# byte in either. The naive one-flag version of this function read FIVE sites as LOST — a claim
+# about the masker, not about the tree — and the rc-93 prediction gate is what refused it.
+# (No apostrophes anywhere below: this is a single-quoted bash string. \047 = quote, \042 = dquote,
+# \134 = backslash, \044 = dollar.)
+function qmask(s,   i, c, d, n, st, out) {
+  n = 0; out = ""; i = 1
+  while (i <= length(s)) {
+    c = substr(s, i, 1)
+    d = substr(s, i + 1, 1)
+    if (n > 0 && st[n] == 1) {
+      if (c == "\047") { n-- }
+      else if (c == "|") { out = out "\004"; i++; continue }
+    } else if (n > 0 && st[n] == 2) {
+      if (c == "\134") { out = out c d; i += 2; continue }
+      if (c == "\042") { n-- }
+      else if (c == "\044" && d == "(") { n++; st[n] = 3; out = out c d; i += 2; continue }
+      else if (c == "|") { out = out "\004"; i++; continue }
+    } else {
+      if (c == "\134") { out = out c d; i += 2; continue }
+      if (c == "\047") { n++; st[n] = 1 }
+      else if (c == "\042") { n++; st[n] = 2 }
+      else if (c == "\044" && d == "(") { n++; st[n] = 3; out = out c d; i += 2; continue }
+      else if (c == ")" && n > 0 && st[n] == 3) { n-- }
+    }
+    out = out c; i++
+  }
+  return out
+}
 
 # Clause 2: does this last stage exit before draining its input?
 function is_early(s,   t) {
@@ -557,7 +621,8 @@ BEGIN { FS = "" }
   work = line
   gsub(/\|\|/, "\002", work)          # || is an OR-list, not a pipe
   gsub(/&&/,   "\003", work)          # ditto &&
-  n = split(work, seg, "|")
+  n = split(qmask(work), seg, "|")
+  for (qi = 1; qi <= n; qi++) gsub("\004", "|", seg[qi])
   if (n < 2) next
 
   last = seg[n]

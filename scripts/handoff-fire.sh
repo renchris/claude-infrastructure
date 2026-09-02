@@ -2894,10 +2894,12 @@ pid_is_cc() { # $1=pid → 0 live CC process / 1 not
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
   comm="$(ps -o comm= -p "$pid" 2>/dev/null || true)"
   [ -n "$comm" ] || return 1
-  printf '%s' "$comm" | grep -qE 'node|claude' && return 0
+  # DRAINED, never `grep -q`: both halves decide whether a pane still holds a live claude, and an
+  # inversion reports a LIVE one as gone — see scripts/pipefail-sigpipe-lint.sh.
+  printf '%s' "$comm" | grep -E 'node|claude' >/dev/null && return 0
   a0="$(ps -o args= -p "$pid" 2>/dev/null | awk 'NR==1{print $1}' || true)"
   [ -n "$a0" ] || return 1
-  printf '%s' "$a0" | grep -qE 'node|claude'
+  printf '%s' "$a0" | grep -E 'node|claude' >/dev/null
 }
 
 # ---- PANE PROCESS STATE — THREE-VALUED, and the shell verdict is POSITIVE (2026-08-06) ----------

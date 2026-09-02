@@ -100,7 +100,9 @@ main() {
   echo -n "  [3/5] doctor regression... "
   local doctor_out
   if doctor_out=$(CLAUDE_SKIP_AUTH=1 timeout 10 "$binary" doctor 2>&1); then
-    if echo "$doctor_out" | grep -qiE 'getAppState|toolUseContext\.|crash|segfault|panic|EFATAL'; then
+    # DRAINED, never `grep -q`: inversion reads a crashing doctor as clean. The reporting grep three
+    # lines down already drains. See scripts/pipefail-sigpipe-lint.sh.
+    if echo "$doctor_out" | grep -iE 'getAppState|toolUseContext\.|crash|segfault|panic|EFATAL' >/dev/null; then
       echo "FAIL"
       echo "    doctor output contains crash markers" >&2
       echo "$doctor_out" | grep -iE 'getAppState|toolUseContext\.|crash|segfault|panic|EFATAL' >&2
