@@ -88,7 +88,7 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 - **2026-09-01 — drain recycle #280: method 252 — A CLAUSE LADDER CAN ONLY JUDGE WHAT A SPLITTER
   HANDS IT, AND THE SHAPE THIS ONE DROPS IS THE COMMONEST THING A GUARD WRITES.** ZERO rows closed,
-  ZERO filed, ZERO reopened. FOUR commits.
+  ZERO filed, ZERO reopened. SIX commits.
   **THE QUESTION.** #279 established that a file which FILTERS its input and then PARTITIONS it has
   two gates, and that every coverage arm anybody writes asserts against the second, because the
   second is where the reasons live. It asked that question of an ASSERT. #280 asks it of a
@@ -225,6 +225,27 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   because the shared checkout is no longer behind (**0** at my open, 15 at #279's), which is exactly
   what this brief predicted would happen and told the next reader not to "fix". The two survivors are
   unchanged: the `.bak` hook revision and `scripts/automode-restore-defaults.sh`.
+  🆕 🚨 **AND THE REPAIRED RATCHET IMMEDIATELY FOUND A SECOND LIVE INSTANCE, ONE CELL LATER, WHICH IS
+  THE ARGUMENT FOR LANDING THE DETECTOR BESIDE THE REPAIR RATHER THAN FILING IT.** The vintage cell of
+  the same suite replays `origin/main:bin/cc-dispatch` and asserts `DISPATCHER VINTAGE` is ABSENT from
+  it; `f9cbe177f` landed that vintage, so it inverted at its own land exactly as the deepen cell had.
+  **Measured against trunk at `fff43ffc6`: 1 not ok. Pinned to `1cdd601f` (`f9cbe177f^`, which carries
+  the staleness rail and no vintage): 21/21.** So this class refused every land in this repo THREE
+  TIMES IN ONE DAY, in one file, and the naive tokeniser could see none of them — the second was
+  already live while the first was being fixed.
+  ⚠️ **AND A SIBLING WAS FIXING THE FIRST ONE CONCURRENTLY, WITH THE SAME DIAGNOSIS AND A DIFFERENT
+  SPELLING** (a `DEEPEN_BASE` variable against my literal). The rebase conflicted on that hunk;
+  `resolve280.py` takes THEIRS — it landed first, mine was the duplicate — keeps only my drain below
+  it, and asserts the outcome BY CONTENT rather than by counting markers with `in`, which is a false
+  positive on any line carrying a run of equals signs. **Two sessions reaching the same defect within
+  the hour is itself the measurement: this was not an exotic corner.**
+  ⚠️ **FIVE REFUSALS, ALL MINE, AND EVERY ONE THE SAME FAULT IN A DIFFERENT COSTUME:** an assertion
+  counting `grep -q` file-wide convicted the replacement's own PROSE · one counting `@test` convicted
+  the fixture an arm BUILDS · one counting apostrophes inside an awk program counted the program's own
+  DELIMITERS, then its opener after an off-by-one anchor · one counting a moving-ref spelling convicted
+  the sibling's COMMENT explaining why it pinned away from it. **A gate whose span exceeds its subject
+  convicts its neighbours, and it will do it five different ways in one link — every one caught before
+  a write, and none of them in a subject.**
   **THE OPEN MOMENTS, STAMPED AND NOT CONCLUDED FROM.** Lane at 19:32:01Z `RUNG=✅ LIVE_SRC=ok
   LIVE_SHA=0d6293152237 LIVE_LAG=0 LIVE_ADDS=0 LIVE_STALE=0 LIVE_AGE=2311 LIVE_BREACH_WHY= GATE=stale`
   — the first `✅` open in this chain since #266, and `GATE=stale` for the 116th consecutive reading,
