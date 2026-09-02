@@ -554,6 +554,41 @@ function is_early(s,   t) {
 # A producer only orphans itself if it still has a write to make when the consumer exits, so the
 # test is "more than one write", not "external". Measured: `head -1 BIG | grep -q` 0/300 and
 # `tail -1 BIG | grep -q` 0/300 (one line out, then exit) against `cat BIG | grep -q` 300/300.
+#
+# ── AN EIGHTH CORRECTION, 2026-09-02: THE head/tail ARM WAS STATED IN LINES AND THE PHENOMENON IS
+#    DENOMINATED IN BYTES, AND THE ARM ADMITTED NINE VALUES WHERE ONE WAS MEASURED. ──────────────
+# The arm below used to read `-?[1-9]` with the reason "bounded: <=9 lines, one write". Both halves
+# of that sentence are the same mistake: <=9 lines is not one write, because a line is unbounded in
+# bytes and nine of them are nine times unbounded. The sibling arm EIGHT LINES ABOVE gets the unit
+# right for echo/printf, in its own words — "ONE write only while what it writes is BOUNDED BY
+# INSPECTION ... The command WORD is identical in both cases, so only the argument can decide" —
+# and this arm decided from the command word and a LINE count, with the argument never inspected.
+#
+# WHAT THE MEASUREMENT SAID, and the first prediction was REFUSED, which is why the rest is trusted:
+#   · `head -1 <one 218,900-byte line> | grep -q` — predicted >=15/20 orphaned, measured 0 of 20.
+#     A LINE-ORIENTED early-exiting consumer cannot exit part-way through a line, so it drains
+#     everything a ONE-line producer will ever write. The -1 exoneration is CORRECT and the reason
+#     the old comment gave for it was not the reason it holds.
+#   · `head -9 F | grep -q` with the needle on line 1 and 226,584 bytes after it — 20 of 20 FALSE,
+#     producer rc 141 on every trial. With N>1 the consumer exits on line 1 while the producer
+#     still owes lines 2..N, and THOSE bytes are bounded by nothing.
+#   · Two negatives separate the claim from its neighbours: the same nine-line shape with a tiny
+#     body reads 0/20 (it is the BYTES after the match point, not the line count), and the same big
+#     body with the needle on line 9 reads 0/20 (it is an EARLY match, not merely N>1).
+#   · FIRE control beside them: `cat` over the same fixture, 20/20 with producer rc 141.
+#
+# NOT A WIDENING IN EFFECT, measured before landing rather than after (this is the same discipline
+# the seventh correction above used): the shipped DETECT_AWK was extracted verbatim as a control and
+# a mutant built from it differing in exactly ONE existing line — this one — asserted at one changed
+# line and that line the arm. Control reproduces `--census` EXACTLY at 125 rows; mutant 125;
+# LOST = 0; NEW = 0; the partition sums. The eight values retired here exonerate NOTHING on this
+# tree today, so the detector gets strictly stronger at zero cost in findings and no drains.
+# ⚠️ AN INDEPENDENT READER COUNTED 20 LINES CARRYING `head|tail -[2-9]` BEFORE A PIPE, AND NONE OF
+# THEM IS A MEMBER: on every one the head/tail is a MIDDLE or LAST stage, and this clause only ever
+# judges seg[1]. That column is a SCREEN, not a verdict — it narrows, it does not decide.
+# Instrument: ~/.claude/autonomy/{mkawk283.py,probe283-headline.sh,probe283-multiline.sh,
+# probe283-arm.sh}; twelve gated predictions, one refused, and the refusal is what corrected the
+# reason above rather than merely confirming it.
 function is_external(s,   t, p) {
   t = s
   # A pipeline nested in a command substitution has its OWN producer — take the innermost, or a
@@ -583,7 +618,10 @@ function is_external(s,   t, p) {
     if (t ~ /\$/ || t ~ /`/) return 1                  # variable/substitution-sourced — UNBOUNDED
     return 0                                           # pure literal — ONE write, 0/200 at 4 KiB
   }
-  if (t ~ /^(head|tail)[ \t]+(-n[ \t]*)?-?[1-9]([ \t]|$)/) return 0   # bounded: ≤9 lines, one write
+  # ONE line only. A line-oriented early-exiting consumer cannot exit mid-line, so a one-line
+  # producer is always drained; -2 through -9 are NOT covered by that argument and measured 20/20
+  # FALSE. See the eighth correction above for the four cells and the two negative controls.
+  if (t ~ /^(head|tail)[ \t]+(-n[ \t]*)?-?1([ \t]|$)/) return 0
   return 1
 }
 
@@ -964,7 +1002,18 @@ EOF"
   mk g11 "if tail -1 \"\$LOG\" | grep -q '\"segi\":'; then :; fi"
   expect g11 GREEN "tail -1 producer — one line out then exit, measured 0/300"
   mk g12 "if head -1 \"\$f\" 2>/dev/null | grep -qx -- '---'; then :; fi"
-  expect g12 GREEN "head -1 producer — bounded, measured 0/300"
+  expect g12 GREEN "head -1 producer — one line out, and a line-oriented consumer drains it"
+  # ── the head/tail producer arm pinned in BOTH directions, 2026-09-02 ──
+  # r16/r17 are the FIRE CONTROLS for g11/g12 directly above: each pair differs in exactly ONE
+  # variable — the line count — so a green suite over g11/g12 alone credits the arm with nothing.
+  # Before the eighth correction in clause 3 these two read GREEN, because the arm exonerated all
+  # nine values of `-[1-9]` on a reason measured only for `-1`. Do not merge the four into a loop:
+  # the discrimination IS the pairing, and a loop over four subjects is the shape that has twice in
+  # this repo produced a test whose title outran what it ran.
+  mk r16 "if head -9 \"\$f\" 2>/dev/null | grep -qx -- '---'; then :; fi"
+  expect r16 RED "head -9 producer — the consumer exits on line 1 and lines 2..9 are unbounded"
+  mk r17 "if tail -5 \"\$LOG\" | grep -q '\"segi\":'; then :; fi"
+  expect r17 RED "tail -5 producer — the same defect through the other spelling of the same arm"
   mk g13 "printf '  %s\\n' \"\$(sed -n 's/a/b/p' /some/file | head -1)\""
   expect g13 GREEN "\$( … ) as an ARGUMENT — the outer command's status wins"
   mk_noe g14 "{ strings -a \"\$bin\" 2>/dev/null || true; } | grep -q 'Claude-Session' && return 0"
