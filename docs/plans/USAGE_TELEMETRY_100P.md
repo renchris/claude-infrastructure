@@ -791,6 +791,11 @@ change in the list and ranks last because it provably does not move the goal.
 | **S6** | M3b | `wk_strand_alarm` ≤12 h, latching, causal | **S5 must clear it first** | S |
 | **S7** | M1 | `burn_5h_ewma_ph` — correctness/availability only | S1 | S |
 
+**Build status** (the spec above is unchanged; this row is the ledger): **S1 · S2 · S3 landed**
+wave 1 (§5.7) · **S4 · S5 · S7 landed** wave 2 (§5.7b) · **S6 open**, and open *by this spec's own
+rule* rather than by effort — it needs S5 read against the live series, which is one operator
+command (§5.7b *The S6 gate*).
+
 **L3 (one renderer) is held.** Every live metric renders through `readout_lines`
 (`bin/claude-accounts:3141`) via `pace_line` (`:2006`, called at `:3375` and `:3696`). No new live
 surface. The one new flag, `--strand-score` (S5), is argued as an exception in its own entry.
@@ -1618,6 +1623,11 @@ windows/week, carrying the fleet wall rate 1.72% → 2.20%.
 
 Wave 1 = **S1 + S2 + S3 only**. S4–S7 are unbuilt and unchanged; S5 still gates S6.
 
+**Wave 2 = S4 + S5 + S7** (2026-09-02, §5.7b below). The §5.2 change list is then **complete
+except S6**, which is not deferred for effort — it is gated by this spec's own rule, and S5 is
+what supplies the reading that opens the gate. See §5.7b's closing subsection for the one
+operator step that stands between S5 and S6.
+
 #### S1 · data fixes — LANDED
 
 `bin/claude-accounts`: `_reset_key` / `_rolled` (:1877), `_util_tail(path, hours=48.0,
@@ -1787,3 +1797,217 @@ shortens that.
 
 ⚠️ `bash tests/run.sh …`, named in §5.4, **does not exist in this repo**. The suites are run with
 `bats tests/<name>.bats`; `scripts/ship-land.sh` selects and runs them at the land.
+
+---
+
+### §5.7b Wave 2 implementation record — S4 + S5 + S7 (2026-09-02)
+
+Wave 2 = **S4 + S5 + S7**. With it the §5.2 change list is complete **except S6**, which is
+gated — see *The S6 gate* at the end of this section. Every case below was demonstrated RED
+against the pre-wave binary (`git stash push -- bin/claude-accounts`, run, pop) and green after.
+
+#### S4 · M4′ `burst_start_by` — the start-time constraint — LANDED
+
+`bin/claude-accounts`: `burst_start_by(r, K)` + `fmt_start_by(sb)` beside `fmt_burst`, constants
+`BURST_SPPH` / `P_WALL` / `MEAN_WALL_H` / `SESSION_WINDOW_H` / `START_BY_SOON_H`; attached in
+`apply_burn`; rendered by `pace_line` through the new `pace_head(rows)`.
+Suite `tests/claude-accounts-burst.bats` RP-21..RP-24, **4/4 RED** pre-change; the render case
+`router M7 + S4: the drain block answers the THIRD question` in `tests/claude-accounts-core.bats`
+is a fifth RED.
+
+**It reproduces §5.2 S4's live table exactly, from the spec's own inputs** — which is the closest
+thing to an out-of-sample check available for arithmetic whose evidence base is 8 windows:
+
+| acct | fixture | windows | t_needed | `burst_start_by_h` | verdict | unrecoverable |
+|---|---|---|---|---|---|---|
+| next3 | `wp=92, wrh=2.21, sp=13, srh=3.37` | 1 | **2.855** | **−0.645** | **LATE** | **2.832 pp** |
+| next2 | `wp=17, wrh=97.2, sp=8, srh=0.54` | 6 | **27.611** | **+69.589** | SLACK | 0 |
+
+The spec's table reads 2.86 / −0.65 / 2.83 and 27.61 / +69.59, and its `burn h` column (21.41 for
+next2) is `t` before the freeze — matched to the digit. **RP-22's `windows == 6` is the assertion
+that carries the design**: 432.3 session pp at 22.87 pp/h is 18.9 h of pure burn, and the answer
+is 27.6 h because the 5h grid is *walked*, not divided. A function that divided would pass RP-21
+and fail here, and dividing is exactly the shape LB-3 deleted.
+
+**Deviation 1 — the return is a dict, not the bare float §5.3 RP-21 sketches**, for S2's reason
+restated: `h`, `verdict`, `windows`, `t_needed` and `unrecoverable_pp` are five facts and a float
+carries one. RP-21 asserts `-1.0 < sb["h"] < 0.0` rather than on the return itself.
+
+**Deviation 2 — `pace_line` READS the start-by stamp instead of computing it**, which is the
+opposite of §5.7 Deviation 3's rule for the strand. The rule is unchanged and this is inside it:
+the strand is computed in the renderer because a renderer that reads a stamp renders *nothing*
+when `apply_burn` has not run, and it *can* be computed there. `burst_start_by` cannot — it
+consumes K, K is fitted from the series, and `pace_line` is handed rows. Same as `burst` (S2),
+which has been read off its stamp since it landed for the identical reason.
+
+**Deviation 3 — the start-by clause REPLACES the `Nh left` tail, and rides the STRAND gate rather
+than every row.** Both halves come from reading §5.4's mock literally. It shows the clause on the
+strand rows (`start by T−28h (91h slack)`) and `114h left` on the no-strand row, so (a) it is a
+replacement, not an addition — the deadline and `deadline − schedule` are two spellings of one
+fact on a row already carrying three numbers — and (b) it rides `s >= 0.5`, the same gate
+`fmt_burst` rides. A start time answers *when must the burst begin so the deficit does not
+strand*, which is a question only where the nowcast says something will. A wall-trajectory row has
+nothing to rescue, and a `strand unknown` row would be having a schedule rendered over a nowcast
+that refused. Both keep `left`, because a deadline with no plan is still the deadline; the core
+case asserts the no-strand arm on a row whose start time is computable, so this is the gate being
+pinned rather than an abstain.
+
+**Deviation 4 — the 5h-grid walk is bounded at `WEEK_H`.** The loop terminates on `rem` for any K
+in `K_SANE` (≤ 6 windows), but `burst_start_by` is a public function and a caller passing a tiny K
+would spin for thousands of iterations to build a schedule that stopped meaning anything the
+moment it exceeded the window. Past 168 h the verdict is LATE however much further it would have
+run, so stopping there costs nothing and removes the unbounded arm.
+
+**Deviation 5 — the `K=… <src>` header clause is rendered by `pace_head(rows)`, and it reads the
+fit off the ROWS.** §5.7 S3 Deviation 1 deferred this clause to S4 on the rule that §3.2 forbids
+rendering a number nothing consumes; S4 is the first consumer, so it enters here. K is fitted once
+per sweep in `apply_burn` and stamped as `k_exchange` / `k_exchange_src` on every row rather than
+held in a module global — a fleet scalar in hidden state is a scalar nobody can watch abstain, and
+`k_exchange_src` is what makes a missing start-by clause readable as *the fit refused* rather than
+*the metric is broken*. The abstain arm is asserted in the same case: with K null the start-by
+figures vanish, `Nh left` returns, and **the strand figures are untouched** — the proof that S3's
+refusal to fabricate a K dependency was load-bearing and not pedantry.
+
+#### S5 · M3c `--strand-score` — the harness that can fail — LANDED
+
+`bin/claude-accounts`: `strand_score(samples, buckets, now)` + `render_strand_score(sc, samples)`
+beside `_util_tail`, constants `STRAND_SCORE_BUCKETS` / `STRAND_SCORE_LOOKBACK_H` /
+`STRAND_SCORE_FLOOR_PP`; CLI branch in `main()` placed **before `load_cfg()`**, beside `--agents`.
+New suite `tests/claude-accounts-strand-score.bats` (RP-30..RP-34), **5/5 RED** pre-change.
+
+**What the harness does on a fixture built to defeat it.** RP-30 feeds two completed windows whose
+burn accelerates 2.3× in the last 30% — the shape measured across 12 window instances in
+`drain-telemetry-2026-08-25/axis-D-windows.md`. The nowcast reads the early, slow pace and projects
+far more strand than dies, and the harness says so:
+
+```
+  horizon      n   bias(pp)   MAE(pp)   sign-agree
+      96h      6      +33.2      33.2        100%
+      48h      6      +25.7      25.7        100%
+      24h      6      +12.1      12.1        100%
+      12h      6      +11.8      11.8        100%
+       6h      6      +11.9      11.9        100%
+```
+
+(rendered against a 6-window synthetic series; **these are not fleet numbers** — no live series
+exists in the environment this wave was built in, and §5.4's real acceptance is the operator step
+below.) The decay from +33 pp to +12 pp *is* the nowcast/forecast split, produced by a harness
+rather than asserted. RP-31 is its control: under a constant burn the same code reads |bias| < 2
+at every horizon, so the large number in RP-30 is a reading and not a constant.
+
+**Deviation 1 — the scored quantity is `signed_error` FIRST and MAE second, and both ship.** §5.3
+names n, bias, MAE and sign-agreement; the ordering is the point. MAE alone cannot distinguish an
+estimator that is randomly wrong from one that is consistently wrong *in the direction that loses
+the quota*, and S6 is a rescue alarm — an alarm on a 20-pp-optimistic estimator does not fire
+late, it fires never.
+
+**Deviation 2 — sign-agreement needed a threshold the spec does not name**, and it is
+`STRAND_SCORE_FLOOR_PP = 0.5`, taken from `pace_line`'s own `s < 0.5` arm rather than invented.
+Agreement is "the projection and the outcome agree on whether there WAS a strand"; borrowing the
+renderer's threshold means the harness scores the question the surface actually asks.
+
+**Deviation 3 — the abstain is asserted from BOTH sides, because it has two failure modes and the
+spec names one.** §5.3's rule is that an empty cell is excluded, never imputed. RP-32 pins that
+(a 20 h-observed window reports `n=0` at 96/48/24 h and still contributes at 12/6 h), and RP-33
+pins the mirror image the old score fell into: the **live** window is never graded.
+`completed_weekly_windows` already refuses it, and RP-33 exists so a future loosening of that rule
+cannot silently start grading the nowcast against a strand it is itself still producing.
+
+**Deviation 4 — the walk back from each horizon is bounded at `STRAND_SCORE_MAX_DRIFT_H = 12 h`,
+and the bound is semantic rather than a performance guard.** §5.3's rule is "the last evaluable
+sample with `weekly_reset_h ≥ H`", which is unbounded: if the newest candidates all abstain it
+keeps walking, and a call made at H+40 h then gets scored in H's row. That silently defeats the
+stratification — the whole reason the buckets exist is that a call at 96 h and a call at 24 h are
+different questions. Past 12 h of drift the cell reports `n=0`, which says the true thing: *at
+this distance from the reset the nowcast had nothing to say.* (It bounds the loop too, and the
+per-candidate lookback slice is a `bisect` on a per-account key built once, so the harness cannot
+read a sample from after the instant it is scoring — the look-ahead it exists to rule out.)
+
+**Deviation 5 — `--strand-score` also takes `--json`.** Not in the spec, and it costs four lines:
+the flag is the input to a decision (S6 ships or does not) that will be re-taken on later data by
+something other than a human reading a table.
+
+**The L3 exception is argued in the code, not only here** — the branch's comment carries it, since
+that is where the next reader meets it. It renders scored *history*, nothing routes on it, and it
+is a flag on the existing binary rather than a `scripts/*.sh` so that it rides the
+`~/.claude/bin/claude-accounts` symlink and converges on the trunk fast-forward instead of landing
+as an ADD the live layer cannot reach (the `LIVE_ADDS` trap).
+
+#### S7 · M1 `burn_5h_ewma_ph` — correctness and availability — LANDED
+
+`bin/claude-accounts`: `burn_5h_ewma_ph(samples_for_acct, now)` beside `burn_wk_ewma_ph`,
+constants `BURN_5H_LOOKBACK_H` / `BURN_5H_HL` / `BURN_5H_MIN_SPAN_H` / `BURN_5H_MAX_DT_H`;
+attached in `apply_burn` (which keeps `burn_5h_ph` populated); consumed by `_su_projected`.
+Cases `router M7 + S7: burn_5h_ewma_ph is %/h under its OWN key` and its `_su_projected` CONTROL
+in `tests/claude-accounts-core.bats`, **2/2 RED** pre-change.
+
+**Both named hazards are pinned as tests, not as comments.** The UNIT: the producer case asserts
+`59 < burn_5h_ewma_ph < 61` on a 10→94 move at 60 %/h — not "a positive number", because
+0.6 fraction/h is the same rate spelled the way the incumbent key is consumed, and an
+implementation that reuses `burn_5h_ph` passes every other case in the file while saturating
+`_su_projected` to 1.0 on every row. The SCALE: the consumer control asserts `0.80`, and also that
+the new key wins over the old when both are present and that the `session_reset_h` cap still binds.
+The ROLL SPELLING is `_reset_key` via `_rolled`, and the roll arm is asserted to keep speaking
+rather than to abstain.
+
+**Deviation 1 — `_su_projected` FALLS BACK to `burn_5h_ph` rather than switching outright.** §5.2
+S7 says keep the old key populated for one release; it does not say what the consumer reads during
+that release. Reading the new key when present and the old otherwise means the release in which
+both exist cannot be off by 100× in either direction, and the control asserts both arms.
+
+**Deviation 2 — `tests/claude-accounts-core.bats:1815` updated in place.** That line read
+`assert "burn_5h_ewma_ph" not in r` with the comment *"S7 is a LATER wave"* — a wave marker, not
+an invariant, and it went red the moment S7 shipped. It is replaced by the invariant it was
+standing in for: a **flat** 5h meter reads `0.0`, it does not read **absent**. Those are different
+states (no movement vs. no measurement) and collapsing them is how a consumer reads a refusal as
+an idle account.
+
+**Deviation 3 — the blind spot ships in the docstring, as §5.2 requires, and is not softened.** At
+`session_pct ≥ 40` the incumbent is more accurate (MAE 0.0617 vs 0.0797, EWMA over-projecting by
++3.6 pp, n = 133). That is the burst regime — the one S4's planner deliberately creates. The
+over-projection is soften-only and therefore fail-safe for *routing*; it is still wrong as a
+*measurement*, and §5.6 Q3's resolution cannot be forced, because that stratum only grows when the
+fleet bursts.
+
+#### The S6 gate — what stands between here and the last item
+
+S6 (`wk_strand_alarm`) is **not deferred for effort.** §5.2 S6 is literal: *"Do not build this
+until S5 has run and been read. If the horizon-stratified bias at the 12 h bucket is not near
+zero, this alarm is not shippable at any parameter setting."* S5 now exists and its own tests
+prove it discriminates. What it has not had is a **run against the live series**, which lives at
+`~/.claude/logs/account-utilization.jsonl` on the operator's box and exists nowhere else — the
+wave-2 environment has no copy, so every number in §5.7b's S5 block is synthetic by construction
+and none of them can open this gate.
+
+**The one operator step:**
+
+```
+claude-accounts --strand-score
+```
+
+Read the `bias` column. **12 h bucket near zero ⇒ S6 is shippable at `FLOOR = 4 pp`,
+`DWELL = 2 h`, `HORIZON_CAP = 12 h`** (the 504-config causal sweep's clean region, every member
+of which caps the horizon at ≤ 12 h). **Not near zero ⇒ S6 does not ship at any parameter
+setting**, and §5.6 Q1 becomes the priority instead. Either reading is a result; the absence of a
+reading is the only state that is not.
+
+⚠️ **`n` is the first column for a reason.** §5.6 Q1 wants ≥ 20 completed account-weeks at the
+24 h bucket and the fleet accumulates ~3.7/week, so an early run will report small `n` — which is
+a real answer (*not yet decidable*) and must not be read as a bias of zero. That is the same
+failure as the score this harness replaces, arriving from the other direction.
+
+#### Acceptance status against §5.4 — after wave 2
+
+| command | status |
+|---|---|
+| the bats suites (roll-key · util-tail · strand · burst · **strand-score** · core) | **green**; the 13 wave-2 cases each shown RED against the pre-wave binary |
+| `claude-accounts --readout` renders the drain block | unchanged from wave 1, now with the start-by clause and the `K=` header |
+| `claude-accounts --strand-score` | **built and green** — the horizon table renders, with per-bucket `n` first and `n=0` cells excluded from every aggregate |
+| the operator's falsification at the next weekly reset | **open** — it is the S6 gate above |
+
+⚠️ **The wave-2 environment had no live series and no macOS keychain**, so `--readout` was not
+re-measured against real accounts here and 6 cases in `claude-accounts-core.bats` (plus
+`accounts-board`, `account-fact-derivation`) fail on `/usr/bin/security` being absent — verified
+identical at the pre-wave baseline, i.e. environmental and not this wave's. The live `--readout`
+render of the new clause is therefore **unverified against real accounts** and rides the same
+operator step above.

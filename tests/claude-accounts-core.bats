@@ -1813,7 +1813,96 @@ assert 12.0 < r["burn_wk_ppd"] < 16.0, r          # ~14 %/day, i.e. the same rat
 assert "burn_wk_span_h" in r and r["burn_wk_span_h"] > 6.8, r
 assert "wk_strand_pp" in r, r
 assert 0.0 < r["wk_strand_pp"] < 5.0, r           # 40 + 0.583*100 = 98.3 -> ~1.7 pp die
-assert "burn_5h_ewma_ph" not in r, r              # S7 is a LATER wave and was not built here
+# UPDATED IN PLACE when S7 landed. This line read `assert "burn_5h_ewma_ph" not in r` — a
+# wave marker, not an invariant, and it duly went red the moment S7 shipped. What it is
+# replaced with is the invariant it was standing in for: a FLAT 5h meter reads 0.0, it does
+# not read ABSENT. Those are different states (no movement vs. no measurement) and the
+# distinction is the whole of L2 — a consumer that cannot tell them apart reads a refusal as
+# an idle account. The span is asserted beside it because the span is what the abstain names.
+assert "burn_5h_ewma_ph" in r, r
+assert r["burn_5h_ewma_ph"] == 0.0, r             # session_pct is constant 10 across the fixture
+assert r["burn_5h_span_h"] > 5.0, r
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router M7 + S7: burn_5h_ewma_ph is %/h under its OWN key, and survives a window roll" {
+  # RP-27b (USAGE_TELEMETRY_100P §5.2 S7 / M1). A SEPARATE case rather than an extension of the
+  # S3 one above, for the reason §5.7 already records against RP-27: that fixture holds a flat
+  # session meter, and extending it in place would have meant moving a floor to make a test pass.
+  #
+  # THE UNIT IS THE HAZARD. 10 -> 40 over 30 min is 60 %/h, and 0.6 fraction/h is the SAME rate
+  # spelled the way _su_projected consumes burn_5h_ph. An implementation that reuses the
+  # incumbent key passes every other case in this file and saturates the projection to 1.0 on
+  # every row — which renders as "the whole fleet is under 5h pressure", a 100x error wearing a
+  # plausible face. The assertion is therefore on 60, not on "a positive number".
+  #
+  # THE ROLL ARM IS THE OTHER HALF. The incumbent newest-adjacent-pair form goes blind across a
+  # reset (d < 0 leaves the field absent) exactly when a window is being driven; here the new
+  # window's level is taken as a LOWER bound, so the estimator keeps speaking.
+  run python3 -c "$LOAD"'
+import json, os
+from datetime import datetime, timezone, timedelta
+p = os.path.join(os.environ["BATS_TEST_TMPDIR"], "util-5h.jsonl")
+now = datetime.now(timezone.utc)
+sra = (now + timedelta(hours=1)).isoformat()
+recs = []
+for i in range(28, -1, -1):                     # 2.8 h at 6 min, session 10 -> 94 at 60 %/h
+    recs.append({"ts": (now - timedelta(minutes=i * 6)).isoformat(), "acct": "next3",
+                 "session_pct": 10 + (28 - i) * 6.0, "weekly_pct": 40,
+                 "session_reset_at": sra, "weekly_reset_at": (now + timedelta(hours=100)).isoformat()})
+with open(p, "w") as f:
+    for r in recs:
+        f.write(json.dumps(r) + "\n")
+rows = [row(acct="next3", weekly_pct=40, weekly_reset_h=100.0)]
+samples, span = ca._util_tail(path=p, hours=48.0)
+ca.apply_burn(rows, cfg, samples=samples)
+r = rows[0]
+assert "burn_5h_ewma_ph" in r, r
+assert 59.0 < r["burn_5h_ewma_ph"] < 61.0, r    # %/h — NOT 0.6, and NOT 0.006
+assert r["burn_5h_span_h"] > 2.5, r
+assert "burn_5h_ph" in r, r                     # the incumbent is kept populated for one release
+# ROLL: the last third of the window resets to a new one. The estimator must NOT go silent.
+mid = len(recs) // 2
+sra2 = (now + timedelta(hours=6)).isoformat()
+for e in recs[mid:]:
+    e["session_reset_at"] = sra2
+    e["session_pct"] = round(e["session_pct"] - 84.0, 3) if e["session_pct"] >= 84 else 2.0
+with open(p, "w") as f:
+    for e in recs:
+        f.write(json.dumps(e) + "\n")
+rows2 = [row(acct="next3", weekly_pct=40, weekly_reset_h=100.0)]
+samples2, _ = ca._util_tail(path=p, hours=48.0)
+ca.apply_burn(rows2, cfg, samples=samples2)
+assert "burn_5h_ewma_ph" in rows2[0], rows2[0]  # a roll is a LOWER bound, never an abstain
+assert rows2[0]["burn_5h_ewma_ph"] > 0.0, rows2[0]
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router M7 + S7 CONTROL: _su_projected consumes the new key at the right SCALE" {
+  # RP-28. The ONE place %/h meets fraction/h. A missing /100 does not raise and does not render
+  # an obviously wrong number — it saturates to 1.0, and 1.0 is a value the projection is allowed
+  # to take. Only an assertion on the exact intermediate catches it, which is why this control
+  # exists separately from RP-27b: RP-27b pins the PRODUCER's unit, this pins the CONSUMER's.
+  #
+  # Also pins the fallback: with only the incumbent key present the row must read the OLD scale,
+  # so the release in which both keys exist cannot be off by 100x in either direction.
+  run python3 -c "$LOAD"'
+Rp = dict(R); Rp["PROJ_LOOKAHEAD_H"] = 1.0
+r = row(session_pct=20, session_reset_h=2.0, burn_5h_ewma_ph=60.0)
+got = ca._su_projected(r, Rp)
+assert abs(got - 0.80) < 1e-9, got               # 0.20 + 0.60*1.0 — NOT 1.0
+r2 = row(session_pct=20, session_reset_h=2.0, burn_5h_ph=0.60)
+assert abs(ca._su_projected(r2, Rp) - 0.80) < 1e-9, ca._su_projected(r2, Rp)
+# the new key WINS when both are present, and it is still read in %/h
+r3 = row(session_pct=20, session_reset_h=2.0, burn_5h_ewma_ph=60.0, burn_5h_ph=0.05)
+assert abs(ca._su_projected(r3, Rp) - 0.80) < 1e-9, ca._su_projected(r3, Rp)
+# CAP still binds: the window dies before the lookahead elapses
+r4 = row(session_pct=20, session_reset_h=0.5, burn_5h_ewma_ph=60.0)
+assert abs(ca._su_projected(r4, Rp) - 0.50) < 1e-9, ca._su_projected(r4, Rp)
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
@@ -1873,6 +1962,73 @@ ab = ca.pace_line([row(acct="next2", weekly_pct=13, weekly_reset_h=122.8, burn_w
 assert "next2 strand unknown (span 4.1h < 6.8h)" in ab, ab
 # no data ⇒ no block (a drain block over nothing would render at every error state)
 assert ca.pace_line([row(weekly_pct=None), row(weekly_reset_h=None)]) == ""
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router M7 + S4: the drain block answers the THIRD question — by when must the burst start" {
+  # RP-29. Before S4 every row answered two of the goal's three questions (how much dies, and
+  # whether the demand is routine) and not the third. This pins the third, end to end: apply_burn
+  # fits K and stamps the start time; pace_line renders it.
+  #
+  # WHY THE CLAUSE REPLACES `Nh left` RATHER THAN JOINING IT. `left` is the deadline; a start-by
+  # clause is that same deadline minus the schedule. Rendering both puts two spellings of one
+  # fact on one row, and the row already carries three numbers.
+  #
+  # WHY THE HEADER CARRIES K ONLY NOW. §3.2 forbids rendering a number nothing consumes, and
+  # burst_start_by is K's FIRST consumer — S3 shipped the strand nowcast with no K clause because
+  # M3a is pure weekly-space arithmetic. The abstain arm below is the load-bearing half: when the
+  # fit refuses, the start-by figures vanish and the STRAND figures do not, because they were
+  # never coupled to it.
+  run python3 -c "$LOAD"'
+import json, os
+from datetime import datetime, timezone, timedelta
+p = os.path.join(os.environ["BATS_TEST_TMPDIR"], "util-s4.jsonl")
+now = datetime.now(timezone.utc)
+with open(p, "w") as f:
+    for i in range(240, -1, -1):
+        f.write(json.dumps({"ts": (now - timedelta(minutes=i * 6)).isoformat(), "acct": "next3",
+                            "session_pct": 10, "weekly_pct": 26 + (240 - i) * 0.0583,
+                            "session_reset_at": (now + timedelta(hours=3)).isoformat(),
+                            "weekly_reset_at": (now + timedelta(hours=100)).isoformat()}) + "\n")
+rows = [row(acct="next3", weekly_pct=40, weekly_reset_h=100.0, session_pct=10,
+            session_reset_h=3.0, session_reset_at="2026-08-25T13:07:00Z")]
+samples, _ = ca._util_tail(path=p, hours=48.0)
+ca.apply_burn(rows, cfg, samples=samples)
+r = rows[0]
+assert r["k_exchange_src"] == "frozen", r          # 84 session pp of movement is under K_MIN_SDS
+assert abs(r["k_exchange"] - 0.192) < 1e-9, r
+assert "burst_start_by_h" in r, r
+assert 75.0 < r["burst_start_by_h"] < 85.0, r      # 100h reset - ~19.1h of burn+grid+freeze
+assert r["burst_start_by"]["windows"] == 4, r      # the 5h GRID is walked, not divided
+line = ca.pace_line(rows)
+assert "K=0.192 frozen · nowcast" in line, line
+assert "start by T−19h" in line, line
+assert "left" not in line, line                    # the start time REPLACES the bare deadline
+# ...and it rides the STRAND gate, not every row. A wall-trajectory row has nothing to rescue,
+# so it keeps the bare deadline even though the fit is live and a schedule is computable. This
+# is the same gate fmt_burst rides; a start time beside `no strand` is a schedule for a
+# non-problem, and the row already carries three numbers.
+nostrand = row(acct="next", weekly_pct=95, weekly_reset_h=20.0, burn_wk_ewma_ph=0.5,
+               session_pct=10, session_reset_h=3.0, session_reset_at="2026-08-25T13:07:00Z",
+               k_exchange=0.192, k_exchange_src="live")
+nostrand["burst_start_by"] = ca.burst_start_by(nostrand, 0.192)
+assert nostrand["burst_start_by"] is not None, nostrand   # computable...
+ns = ca.pace_line([nostrand])
+assert "no strand" in ns, ns
+assert "start by" not in ns, ns                          # ...and deliberately not rendered
+assert "left" in ns, ns
+# ABSTAIN ARM: K refused. The start-by clause goes, the deadline comes back, and the STRAND
+# figure is untouched — it never consumed K in the first place.
+for x in rows:
+    x.pop("burst_start_by", None); x.pop("burst_start_by_h", None)
+    x["k_exchange"] = None; x["k_exchange_src"] = None
+noK = ca.pace_line(rows)
+assert "K=" not in noK, noK
+assert "start by" not in noK, noK
+assert "strand ~" in noK, noK
+assert "left" in noK, noK
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
