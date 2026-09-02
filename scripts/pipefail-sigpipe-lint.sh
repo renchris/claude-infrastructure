@@ -461,6 +461,40 @@ in_scan_set() { # $1=repo-relative path → 0 if this lint judges it
 # working joiner nobody has wired in), and it treats a dangling quote as opening a context that
 # runs to end of line. Neither shows up in today numbers — LOST = 0 says the mask never eats an
 # operator pipe on this tree — but both are claims about a tree that grows.
+#
+# ── THAT RESIDUAL, MEASURED 2026-09-02, AND IT IS ONE RESIDUAL RATHER THAN TWO ─────────────────
+# The paragraph above names the two gaps as independent. They are not: the second is a CONSEQUENCE
+# of the first and cannot be repaired without it. By shell grammar a physical line carrying an
+# unpartnered quote is one of exactly two things — the OPENING line of a multi-line quoted
+# construct, whose tail is genuinely DATA and must not be judged, or the CLOSING line of one, whose
+# tail is genuinely CODE and should be. The discriminator lives on a PREVIOUS line, so no
+# line-local contract can be right about both, and the choice this function makes is not a bug to
+# fix but the visible half of the missing join.
+#
+# ONE CLAUSE ABOVE IS AN OVER-CLAIM AND IS CORRECTED HERE. "LOST = 0 says the mask never eats an
+# operator pipe on this tree" is not what LOST = 0 says: LOST counts FINDINGS the quote-aware
+# program stopped reporting, so a masked operator pipe only becomes a LOST row if that site was a
+# finding to begin with. Measured over the same scanned population: 2,125 lines across 240 files
+# end with the quote context still open, and on 135 of them across 58 files at least one `|` was
+# masked. The mask eats operator pipes; what LOST = 0 established is that doing so costs no verdict.
+#
+# THE LIVE EXAMPLE, verified rather than asserted: bin/cc-blockers:1271, the closing line of a
+# multi-line jq program. Its first apostrophe CLOSES that program, so the `|` after it is an
+# operator — and it is masked, measured 2 raw pipes and 1 survivor. No verdict moves only because
+# the consumer is a `while ... read` loop, which is_early() does not match (measured 0, beside a
+# positive control at 1 so the zero is not mute). The harmlessness is an accident of the consumer,
+# not a property of the mask.
+#
+# AND THE OBVIOUS REPAIR IS WRONG FOR THIS TREE, which is why arm 25 of the suite now pins it. The
+# sibling masker strip280.awk takes the opposite contract — "a quote with no partner is a LITERAL,
+# so the tail stays RAW" — and adopting it here changes NOTHING: same two-extractor harness, same
+# population, control reproduces --census exactly at 125, mutant 125, LOST = 0, NEW = 0, with a
+# FIRE control proving the mutant CAN change a verdict, so the zero is a result and not a silence.
+# It does not even repair cc-blockers:1271, whose first apostrophe has a later partner on the line.
+# What it would break is the common case: this tree writes 2,125 opening lines of multi-line jq and
+# awk programs, and under a partner test their tails are judged as code.
+# Instrument: ~/.claude/autonomy/{mkawk282.py,mkmut282.py,probe282-dangle.sh,probe282-contract.sh,
+# probe282-example.sh}, 20 gated predictions across three probes, one refused and repaired.
 DETECT_AWK='
 function ltrim(s) { sub(/^[ \t]+/, "", s); return s }
 

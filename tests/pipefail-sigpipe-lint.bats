@@ -396,3 +396,33 @@ $(census | grep -c 'lr-reset-poller\.sh:' || true) hit(s), so arm 20 is vacuous"
   [ "$(printf '%s\n' "$output" | grep -c 'scripts/drained\.sh')" -eq 0 ]
   true
 }
+
+@test "25: GATE ONE — an unpartnered quote opens a context, and the tail is DATA" {
+  # THIS ARM EXISTS TO REFUSE A PLAUSIBLE IMPROVEMENT, which is why it pins behaviour nobody has
+  # complained about. qmask() enters a quote context on an opening quote whether or not that quote
+  # is ever closed on the line, so an unpartnered quote masks every `|` after it and the line is
+  # dropped before clause 2 runs. Read cold that looks like a fail-OPEN, and the obvious repair is
+  # the contract the sibling masker strip280.awk already uses — "a quote with no partner is a
+  # LITERAL, so the tail stays RAW". Measured 2026-09-02, that repair is WRONG FOR THIS TREE.
+  #
+  # By shell grammar a physical line carrying an unpartnered quote is one of exactly two things: the
+  # OPENING line of a multi-line quoted construct, whose tail is genuinely DATA and must not be
+  # judged — or the CLOSING line of one, whose tail is genuinely CODE and should be. A line-local
+  # masker cannot tell those apart, because the discriminator is on a PREVIOUS line. So this is not
+  # a contract worth flipping; it is the visible half of the missing continuation join, which
+  # ca97c678b18b owns and pipe258.py already implements.
+  #
+  # The two fixtures differ in ONE variable — whether an unpartnered quote precedes the pipeline —
+  # and the second is the FIRE control: it proves the detector DOES see this exact producer and
+  # consumer when they are code, so the first fixture's green cannot be an artefact of a shape the
+  # lint never reports.
+  mkfile datum "PROG='cat \"\$f\" | grep -q needle"
+  mkfile code  "cat \"\$f\" | grep -q needle"
+  run census
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c 'scripts/code\.sh')" -eq 1 ] \
+    || { echo "the paired-quote twin was not reported — this arm is vacuous"; echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c 'scripts/datum\.sh')" -eq 0 ] \
+    || { echo "a multi-line construct's opening line was judged as code"; echo "$output"; false; }
+  true
+}
