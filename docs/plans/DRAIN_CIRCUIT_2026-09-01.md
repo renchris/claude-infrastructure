@@ -474,6 +474,38 @@ probing lookup — the same reason §1b refuses to content-verify at pull time.
 
 ---
 
+## 3d. THE LIMIT AND THE BOUND ARE STILL NOT RECONCILED (measured 2026-09-02, post-W3)
+
+W3's `--limit` is landed AND live AND wired — `~/.claude/scripts/autonomy-sweep.sh:395` passes
+`--limit "${CC_SWEEP_RETURN_LIMIT:-25}"`, and the live `cloud-return.sh` parses it at :105-119.
+**And the sweep is still SIGKILLed on every pass.** `cloud_return_rc` in the IDL, all recorded after
+W3 landed (2026-09-01T12:55) and after its bytes reached the live layer:
+
+```
+2026-09-02T02:40:35Z rc=137   2026-09-02T04:12:48Z rc=137   2026-09-02T05:51:11Z rc=137
+2026-09-02T03:17:03Z rc=137   2026-09-02T05:11:02Z rc=137
+```
+
+**Why, as the class rather than the instance.** `--limit` is a COUNT (25 pending managed sessions,
+rotated by a persisted cursor at :774-788). The caller's bound is a DEADLINE. Nothing reconciles
+them, and no better constant can: each taken session may trigger `handle()` →
+`cloud-reconcile --land` → `desk-land` → `ship-land`, a full statics+ratchets+smoke gate measured in
+minutes. 25 of those do not fit 900 s at any constant. This is the repo's own
+`bound-must-fit-the-band-not-the-bench` lesson recurring — a bound sized against one population is a
+permanent non-verdict against another.
+
+**The fix is a deadline check, not a smaller number.** In the `while IFS= read -r ROW` loop at
+`scripts/cloud-return.sh:838-844`, before calling `handle "$ROW"`, stop STARTING new work once
+elapsed exceeds a safe fraction of the caller's bound, and journal that deferral SEPARATELY from the
+cursor's own `deferred` count — a silent stop reads as "nothing pending". A count cannot adapt to
+land duration; a deadline can, and it degrades gracefully as land cost changes. The caller should
+tell the child its bound rather than the value living in two places that cannot check each other.
+
+**Acceptance is one number never yet observed**: a `cloud_return_rc` of **0**. Every row in the
+IDL's history is 137 or 4. Until one pass reports 0, the lane is not fixed — it has only been made
+to close a single item during W3's own supervised run.
+
+
 ## 4. Status log
 
 - **2026-09-01** — Audit complete across both lanes; 24-agent adversarial wave corroborated it and
