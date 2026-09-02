@@ -30689,3 +30689,73 @@ operator gate on `f85fce7c26f5`. It cannot reach a worker whose brief was compos
 older than this commit — the eleven stranded branches above stay stranded. And it does not fix the
 attributor: naming which of a smoke's reds are the VENUE's rather than the diff's needs a trunk
 control the gate does not currently take, which is the next cell and is not taken here.
+
+### Addendum 2026-09-02 — the graft boundary answers provenance questions WRONGLY, measured on `b60eb29e97dd`
+
+*(Dispatched cloud worker, drain row `b60eb29e97dd`. No code change: the row's cure was already on
+trunk. Docs-only, one file.)*
+
+**The row was DISCHARGED on trunk before this dispatch, by a commit that names the row id in its own
+body.** The row read: *"`cc-await-ping --idle-scoped` cannot survive the turn that arms it — beat seq
+is captured at arm time and the arming turn's own completion trips the stand-down (2/2, seq>3 and
+seq>6) — so the wake floor demands an arm that deterministically no-ops."* `0ce20c39`
+(2026-08-29 15:05:54 +0000, ancestor of `origin/main`, footer `backlog b60eb29e97dd`) made
+`BEAT_STOP_ALLOWANCE=1` unconditional. The pre-fix line granted the baseline+1 allowance only when
+the arm-time beat was PROMPT-kind; the one path that instructs this arm — the wake floor in
+`hooks/session-continue.sh` — fires AT A STOP, so the observed beat is STOP-kind, the allowance was
+0, and the arming turn's own trailing Stop stood the watcher down at the first poll. Nothing to
+re-derive and nothing to write.
+
+🚨 **THE FOURTH LOCK FIRED A THIRD TIME, and this instance names its own boundary: the 50-commit
+window's OLDEST commit was `16cd3a36` — the addendum two entries above, the one whose subject is
+this very lock.** Measured in this container before any repair: `.git/shallow` present (2 grafts),
+`git rev-list --count HEAD` = **50**, horizon root = `16cd3a36` (2026-09-01); after
+`git fetch --unshallow`, **3,953** commits and the correct ancestry. The cure `0ce20c39` sits three
+days before that root and was therefore invisible. The shallow-READ cure the previous addendum
+committed is still stranded — `327653ff` and `44fa3f96` both score NOT-on-trunk from a full clone —
+so `70f0001c657b` remains correctly parked, and this entry is the third instance it predicted rather
+than a new fault.
+
+🚨 **THE NEW SYMPTOM, and it is worse than the one already recorded: at a graft boundary git does not
+FAIL a provenance question, it answers it wrongly and confidently.** The previous addendum's
+signature was `merge-base --is-ancestor` scoring true commits off-trunk — a *negative* result, which
+at least reads as suspicious. This row produced a *positive* one. A graft makes the boundary commit
+report itself as the creator of every file in the tree, so inside the 50-commit window:
+
+    git log --oneline -- bin/cc-await-ping        →  16cd3a36            (one commit, ever)
+    git show 16cd3a36 -- bin/cc-await-ping        →  "new file mode 100755", +1321 lines
+    git log -S 'BEAT_STOP_ALLOWANCE' -- <that>    →  16cd3a36            (sole introducer)
+
+after `--unshallow`, the same three reads return **15+ commits**, an ordinary diff, and
+`0ce20c39` + `97e294eb`. A worker asking *"who introduced this line, and is the fix already here?"*
+gets a complete, plausible, wrong answer — a docs-only commit credited with authoring a 1,321-line
+tool it never touched — with no null result anywhere to trip on. **`git log -S` is not a safe
+provenance oracle in a dispatched worker until `git rev-parse --is-shallow-repository` reads
+`false`.** That check is the precondition for the read, not just for the ancestry verdict.
+
+**How the cure was verified without `bats`, which is the reusable half.** The cloud container has no
+`bats` binary (`bin/cc-bats` is a QoS wrapper around one that is not installed), so the suite's three
+discriminating `b60eb29e97dd` cases were replicated standalone against the real binary, fixtured
+exactly as `tests/cc-await-ping.bats` does it (`CC_BEAT_DIR`, `CC_MAILBOX_DIR`, `CC_AWAIT_IT2_BIN=`),
+and run against **both** trunk and a mutant carrying the pre-fix line. Trunk: the stop-armed watcher
+HELD its term (exit 2) and its banner read `beat seq > 4`, the allowance granted. Mutant: stood down
+at the first poll and printed `beat seq > 3` — **the field banner quoted in the row itself**,
+reproduced verbatim. Both guards (a genuine PROMPT at baseline+1 cancels; a Stop at baseline+2
+cancels) passed in both directions, so the allowance is not a blindfold. ⚠️ **The mutant must be
+written into `bin/`**: `cc-await-ping` resolves `hooks/lib/mailbox-pending.sh` relative to
+`dirname "$0"`, so a copy in a temp dir refuses `no-mailbox-lib` (exit 6) *before reaching the code
+under test* — a refusal that is easily misread as the mutant surviving its RED-PROOF. That applies to
+any `bin/` script verified this way, not just this one.
+
+📋 **OWED LOCALLY — `~/.claude/autonomy/backlog.jsonl` does not exist in this container (measured,
+not recalled: `cc-backlog done b60eb29e97dd` answered `unknown id`), so this entry is the channel,
+per the two addenda above.** The op is `done`, with the landed cure as evidence — the row is
+discharged on trunk, not blocked and not open. Runnable as typed:
+
+    cc-backlog done b60eb29e97dd --evidence "0ce20c3934d96c34f9305e3e8e08c7dd9adf8c44"
+
+**What this does NOT settle.** It does not land `327653ff`/`44fa3f96`, so the next dispatched worker
+still gets a shallow clone and still needs `git fetch --unshallow` as its literal first action;
+`70f0001c657b` stays operator-gated on that land. It changes no code — `0ce20c39` is the fix and it
+is three days old on trunk. And it does not touch the dispatch brief's FIRST STEP, which remains
+unsound as typed in a shallow container for the same reason the previous addendum gave.
