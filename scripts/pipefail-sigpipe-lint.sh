@@ -589,7 +589,52 @@ function is_early(s,   t) {
 # Instrument: ~/.claude/autonomy/{mkawk283.py,probe283-headline.sh,probe283-multiline.sh,
 # probe283-arm.sh}; twelve gated predictions, one refused, and the refusal is what corrected the
 # reason above rather than merely confirming it.
-function is_external(s,   t, p) {
+#
+# ── A NINTH CORRECTION, 2026-09-02: THE EIGHTH CORRECTION IS RIGHT AND ITS REASON IS A CLAIM ABOUT
+#    THE CONSUMER, IN A CLAUSE THAT WAS HANDED ONLY THE PRODUCER. ─────────────────────────────────
+# Read the sentence above as a claim in its own right: "a LINE-ORIENTED early-exiting consumer
+# cannot exit part-way through a line". Every word of it is true and it is the reason the -1
+# exoneration holds. It is also denominated in the CONSUMER, and clause 3 was called as
+# is_external(seg[1]) - the producer alone. Clause 2 had already decided early-exit yes/no and
+# discarded WHICH consumer, so the justification covered a strict SUBSET of the consumers the
+# exoneration was applied to. That is the eighth correction happening again one clause over: a
+# verdict correct on every case anybody had tried, resting on a reason that reaches less far than
+# the code does.
+# THE SUBSET IS NOT HYPOTHETICAL - is_early admits two BYTE-oriented consumers by construction:
+# its head arm is /^head([ \t]|$)/, which matches `head -c N`, and its read arm matches
+# `read -n N` / `read -N N`. Neither has to reach a newline to exit.
+#
+# WHAT THE MEASUREMENT SAID. Producer held CONSTANT at `head -1` over one 218,901-byte line; the
+# CONSUMER is the only variable, so a difference between cells cannot be attributed to anything
+# else. 20 trials per cell, producer status read as NON-ZERO rather than -eq 141:
+#   · `head -1 BIG | grep -q`    line-oriented   0 of 20 orphaned, producer rc 0    (the reason holds)
+#   · `head -1 BIG | head -c 10` BYTE-oriented  20 of 20 orphaned, producer rc 141  (it does not)
+#   · `head -1 BIG | read -n 1`  BYTE-oriented  20 of 20 orphaned, producer rc 141  (nor here)
+#   · negative: `head -1 TINY | head -c 10`      0 of 20 - it is the BYTES still owed at the exit
+#     point, not the identity of the consumer.
+#   · FIRE control: `cat MULTI | grep -q` 20 of 20, rc 141.
+# THE FIRE CONTROL REFUSED FIRST AND THE REFUSAL IS WHY THE REST IS TRUSTED: run 1 put that control
+# on the ONE-LINE fixture and predicted 20 of 20, measuring 0. On a one-line file a line-oriented
+# consumer cannot exit early whoever produces the bytes, so `cat` and `head -1` are the same
+# experiment and the control could not discriminate - the named shape "your fixture makes the two
+# candidate answers agree". Repaired with a MULTI-line fixture, which also bought a free re-check:
+# `head -1 MULTI | grep -q` is 0 of 20, so the eighth correction survives on a many-line file too.
+#
+# NOT A WIDENING IN EFFECT: the conjunction of a head/tail -1 producer with a byte-oriented
+# early-exit consumer is EMPTY on this tree today (0), against 6 `head -c` consumers and 192 lines
+# carrying a head/tail -1 before a pipe - and that 192 is a SCREEN, not a population, since this
+# clause only ever judges seg[1]. So this closes a DETECTOR blind spot at zero cost in findings and
+# no drains, exactly as the eighth correction did.
+# Instrument: ~/.claude/autonomy/probe284-consumer.sh; nine gated predictions, one refused.
+function is_byteearly(s,   t) {
+  t = ltrim(s); sub(/^[({][ \t]*/, "", t); t = ltrim(t)
+  # The flag may sit anywhere in a cluster and may be joined to its value (`-c10`), which is why
+  # this cannot be an anchored test - the same reason is_early gives for its own q/l/L cluster scan.
+  if (t ~ /^(\/usr\/bin\/|\/bin\/)?head([ \t]|$)/ && t ~ /(^|[ \t])-[A-Za-z]*c([ \t0-9]|$)/) return 1
+  if (t ~ /^read([ \t]|$)/ && t ~ /(^|[ \t])-[A-Za-z]*[nN][ \t]*[0-9]/) return 1
+  return 0
+}
+function is_external(s, cons,   t, p) {
   t = s
   # A pipeline nested in a command substitution has its OWN producer — take the innermost, or a
   # line like  echo "x: $(sed … | head -1)"  reads its command word as echo and is missed.
@@ -618,10 +663,12 @@ function is_external(s,   t, p) {
     if (t ~ /\$/ || t ~ /`/) return 1                  # variable/substitution-sourced — UNBOUNDED
     return 0                                           # pure literal — ONE write, 0/200 at 4 KiB
   }
-  # ONE line only. A line-oriented early-exiting consumer cannot exit mid-line, so a one-line
-  # producer is always drained; -2 through -9 are NOT covered by that argument and measured 20/20
-  # FALSE. See the eighth correction above for the four cells and the two negative controls.
-  if (t ~ /^(head|tail)[ \t]+(-n[ \t]*)?-?1([ \t]|$)/) return 0
+  # ONE line only, AND ONLY AGAINST A LINE-ORIENTED CONSUMER. A line-oriented early-exiting consumer
+  # cannot exit mid-line, so a one-line producer is always drained; -2 through -9 are NOT covered by
+  # that argument and measured 20/20 FALSE. See the eighth correction above for those four cells,
+  # and the NINTH for why this arm is handed `cons` at all: the reason on this line is a claim about
+  # the CONSUMER, and a byte-oriented one exits mid-line and orphans the producer 20/20.
+  if (t ~ /^(head|tail)[ \t]+(-n[ \t]*)?-?1([ \t]|$)/) return is_byteearly(cons)
   return 1
 }
 
@@ -700,7 +747,7 @@ BEGIN { FS = "" }
   last = seg[n]
   if (!is_early(last))      next      # clause 2
   if (last ~ /\002/)        next      # clause 5 — a trailing || swallows the 141
-  if (!is_external(seg[1])) next      # clause 3
+  if (!is_external(seg[1], last)) next   # clause 3 — the consumer decides the -1 arm (ninth corr.)
 
   # Clause 3b — the NEUTRALISE fix. A producer wrapped as `{ p || true; } | consumer` cannot fail
   # the pipeline: the group swallows the 141 before pipefail sees it, so the early exit is KEPT.
@@ -1014,6 +1061,22 @@ EOF"
   expect r16 RED "head -9 producer — the consumer exits on line 1 and lines 2..9 are unbounded"
   mk r17 "if tail -5 \"\$LOG\" | grep -q '\"segi\":'; then :; fi"
   expect r17 RED "tail -5 producer — the same defect through the other spelling of the same arm"
+  # ── the CONSUMER half of that same arm, pinned in both directions, 2026-09-02 (ninth correction) ──
+  # g12 above pins `head -1 | grep -qx` GREEN and is correct, but it credits the arm with nothing on
+  # the axis the arm's own reason is denominated in: the reason is "a LINE-oriented consumer cannot
+  # exit mid-line", and g12 only ever tries a line-oriented one. r18 is its fire control and the pair
+  # differs in exactly ONE variable — the consumer's FLAG, not its command word. g17 is the third
+  # cell that makes the pair a discrimination rather than a coincidence: same producer, same consumer
+  # COMMAND WORD as r18, line-oriented flag, and it must stay GREEN. That is the sibling builtin
+  # arm's lesson applied here — the command word is identical in all three, so only the argument can
+  # decide. Measured 20/20 orphaned with producer rc 141 on r18 and r19, 0/20 on g12 and g17.
+  # Do not merge these into a loop, for the reason r16/r17 give directly above.
+  mk r18 "if head -1 \"\$f\" | head -c 10 >/dev/null; then :; fi"
+  expect r18 RED "head -1 producer, BYTE-oriented consumer — head -c exits mid-line, 20/20 orphaned"
+  mk r19 "if head -1 \"\$f\" | read -r -n 1 v; then :; fi"
+  expect r19 RED "head -1 producer, read -n consumer — the other byte-oriented spelling is_early admits"
+  mk g17 "if head -1 \"\$f\" | head -5 >/dev/null; then :; fi"
+  expect g17 GREEN "head -1 producer, LINE-oriented consumer — same command word as r18, only the flag differs"
   mk g13 "printf '  %s\\n' \"\$(sed -n 's/a/b/p' /some/file | head -1)\""
   expect g13 GREEN "\$( … ) as an ARGUMENT — the outer command's status wins"
   mk_noe g14 "{ strings -a \"\$bin\" 2>/dev/null || true; } | grep -q 'Claude-Session' && return 0"
