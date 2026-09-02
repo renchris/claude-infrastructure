@@ -86,6 +86,130 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-02 — drain recycle #284: method 256 — WHEN A REASON IS CORRECTED, ASK WHAT UNIT THE NEW
+  REASON IS DENOMINATED IN, AND WHETHER THE CLAUSE THAT USES IT CAN SEE THAT UNIT AT ALL.**
+  **ZERO rows closed, ZERO filed, ZERO reopened.** **TWO commits, ONE push.**
+  **THE SUBJECT, AND HOW I GOT TO IT.** #283 corrected clause 3 of `scripts/pipefail-sigpipe-lint.sh`
+  from `-?[1-9]` to `-?1` and replaced a wrong reason with the one that actually holds: *"a
+  LINE-ORIENTED early-exiting consumer cannot exit part-way through a line, so a one-line producer is
+  always drained."* Every word of that is true and it was measured over four cells. So I did not look
+  for a wrong verdict — I read the NEW reason as a claim in its own right and asked what it is a claim
+  ABOUT. **It is a claim about the CONSUMER, and clause 3 was called as `is_external(seg[1])` — the
+  producer alone.** Clause 2 had already decided early-exit yes/no and thrown away WHICH consumer, so
+  the justification covered a strict SUBSET of the consumers the exoneration was applied to. That is
+  #283's own method one clause over, and it is the shape a correction leaves behind: fixing a reason
+  does not by itself put the reason and the code in the same frame.
+  **THE SUBSET IS NOT HYPOTHETICAL.** `is_early` admits two BYTE-oriented consumers by construction:
+  its head arm is `/^head([ \t]|$)/`, which matches `head -c N`, and its read arm matches `read -n N`
+  / `read -N N`. Neither has to reach a newline to exit.
+  **WHAT THE MEASUREMENT SAID** (`~/.claude/autonomy/probe284-consumer.sh`, 20 trials per cell,
+  producer status read as NON-ZERO and never `-eq 141`). The producer is held CONSTANT at `head -1`
+  over one 218,901-byte line, so the CONSUMER is the only variable and a difference between cells
+  cannot be attributed to anything else:
+  `head -1 BIG | grep -q` line-oriented **0 of 20**, producer rc 0 ·
+  `head -1 BIG | head -c 10` BYTE-oriented **20 of 20**, producer rc 141 ·
+  `head -1 BIG | read -n 1` BYTE-oriented **20 of 20**, producer rc 141 ·
+  negative `head -1 TINY | head -c 10` **0 of 20** — it is the BYTES still owed at the exit point,
+  not the identity of the consumer · FIRE control `cat MULTI | grep -q` **20 of 20**, rc 141.
+  **THE FIRE CONTROL REFUSED FIRST AND THAT IS WHY THE REST IS TRUSTED.** Run 1 put that control on
+  the ONE-LINE fixture and predicted 20 of 20; it measured **0**. Neither the subject nor the reading
+  was at fault: on a one-line file a line-oriented consumer cannot exit early whoever produces the
+  bytes, so `cat` and `head -1` are the SAME EXPERIMENT and the control could not discriminate —
+  the named shape *"your fixture makes the two candidate answers agree"*, and the reason under test
+  re-derived from the other side. Repairing it with a MULTI-line fixture bought a free re-check of
+  #283's own arm: `head -1 MULTI | grep -q` is **0 of 20**, so the eighth correction survives on a
+  many-line file too, which no cell in the first design could reach. **The refusal is recorded in the
+  probe rather than smoothed away.**
+  **THE FIX.** `is_external` takes the consumer as a second argument and the `-1` arm returns
+  `is_byteearly(cons)` instead of an unconditional 0; the call site passes `last`, which clause 2
+  already had in scope one line above. `is_byteearly` scans for the flag anywhere in a cluster and
+  joined to its value (`-c10`), for the same reason `is_early` gives for its own q/l/L cluster scan.
+  **NOT A WIDENING IN EFFECT, MEASURED BEFORE THE LAND** (#281's discipline). `--census` PRE arm
+  extracted from `origin/main` by `git archive` rather than remembered, `CC_PIPEFAIL_ROOT` pinned on
+  BOTH arms so the only variable is the DETECTOR, keyed on **(path, TEXT)** and never `path:line`
+  because this diff inserts ~45 comment lines and shifts every number below them: **125 in, 125 out,
+  LOST = 0, NEW = 0**, with the key extractor's own POS control at **44 distinct paths** so a zero
+  cannot come from a mute reader. **The conjunction of a head/tail -1 producer with a byte-oriented
+  consumer is EMPTY on this tree today (0)**, against 6 `head -c` consumers and 192 lines carrying a
+  head/tail -1 before a pipe — **and that 192 is a SCREEN, not a population**, since this clause only
+  ever judges `seg[1]`. The detector gets strictly stronger at zero cost in findings and no drains.
+  **THE THREE NEW SELFTEST ARMS ARE ATTRIBUTION-PROVED, because a test that is green before and after
+  credits itself with nothing.** `--selftest` **34 → 37**. `r18`/`r19` are the two byte-oriented
+  consumers; **`g17` is the discrimination cell — same producer, same consumer COMMAND WORD as `r18`,
+  only the flag differs, and it must stay GREEN.** That is the sibling builtin arm's own lesson
+  applied here: the command word is identical in all three, so only the argument can decide.
+  Deliberately NOT merged into a loop, for the reason `r16`/`r17` give directly above them.
+  `~/.claude/autonomy/mut284-pin.sh` mutates the REAL subject back — ONE line, anchored by a
+  **PROPERTY** of the line (it names `head`, `tail`, `-?1` and the new call) and never by its number,
+  since ~45 lines moved above it today — runs the REAL selftest and reads which arms go red off the
+  emitted line's own shape: **baseline 37/37 with 0 failures, mutant exactly TWO failures, both mine,
+  `g17` and `r16`/`r17` unaffected, mute control silent, subject restored byte-identically by sha256
+  in a trap.** Seven gated predictions, all exact.
+  **GREEN, ALL RUN THIS LINK:** `shellcheck` rc 0 / 0 bytes · `bash -n` rc 0 · `--selftest` 37/37 ·
+  bare lint rc 0 (*clean, allowlist honoured*) · `bats-assert-liveness` rc 0 · `bats --count` 25 ·
+  `bats-shellcheck-lint --range` *clean — 1 suite(s) scanned, 0 blocking finding(s), 0 unanalyzable* ·
+  and **the eight suites naming the subject run in the FOREGROUND — 333 ok, 0 not ok, 0 skip, 8
+  plans, terminator asserted ran == listed == 8.** ⚠️ **That is MY OWN screen and not gate-select's
+  draw, and it is stated as one** — asked after the commit existed, the selector drew a REAL LIST of
+  **five**, every one of them inside my eight, so the land's smoke is a second independent verdict on
+  a subset of what I already ran.
+  **DECLARED NOT-RUN:** `alarm-polarity-lint` (no file here is an alarm emitter, and its POS control
+  is a KNOWN MUTE — row `e07dc5e09f83`, OPEN) · the afunix / moving-ref / utc-stamp / git-identity
+  selftests (this diff touches none of their subjects or seams).
+  **REPRODUCED RATHER THAN INHERITED:** `--census` **125** with `CC_PIPEFAIL_ROOT` pinned, matching
+  #275–#283 for a TENTH link · `unattended-path-lint --selftest` **47/47** · `test-walltime-lint
+  tests` *"clean — 561 suite(s); 1 grandfathered, 0 new time bombs"*, matching #282 and #283.
+  ⚠️ **CORRECTED FROM THE INHERITED TABLE: `cc-classify` is 87 tests, not 83; `worktree-gc` 110;
+  `git-worktree-guard` 14; `cc-pane` 32. TAKE YOUR OWN COUNTS.**
+  **THE BOARD.** Gap from #283's floor (08:19:51Z) to my open (08:30:38Z), **10 m 47 s**: ONE arrival
+  (`d8147be371cd`), ZERO departures, ONE transition (`8f59467c92b0` open → claimed,
+  `claude-infrastructure`, and on this brief's own *"do NOT hand-touch"* list). **My link body,
+  08:30:38Z → 08:49:29Z, 18 m 51 s: TWO arrivals, ZERO departures, THREE transitions** — open
+  2948 rows / 351 open / 234 blocked / 2,360 done / 3 claimed; close 2950 rows / 350 / 234 / 2,362 /
+  4. Both partitions asserted at both moments (`open + blocked == combined` AND `allids == allrows`),
+  arrivals and departures from a FULL-SET `comm` with `sort -c` on both sides, direction NAMED rather
+  than resolved by `mtime`. **The actuator closed TWO rows this link** (`277dcafbb74b` and
+  `d868bca290dc`, both open → done) and moved `485f8f87eb5f` blocked → claimed. **NONE of the five is
+  mine: I closed no row and filed none, so nothing needed subtracting**, and I say so rather than
+  reporting a raw number as though the question had not arisen.
+  **THE STORES, TWO MOMENTS EACH, AND I NAME NO DIRECTION OFF TWO READINGS.** postland RED pages **0**
+  at both, denominators **2,846 / 2,846**. The other page store **2,464 all / 90 `.page` (08:30Z) →
+  2,470 / 87 (08:49Z)** — the columns SPLIT again, and #283's link is the standing warning against
+  publishing that shape before the third reading. inbox-guard `.escalated` **433 → 430**. postland
+  stamps **547 → 547**, flat across my two readings taken 19 minutes apart, and I draw NO conclusion
+  about the link from that (#245's scar).
+  **THE LANE.** Open 08:30:11Z, clean and level with trunk, `RUNG=✅ LIVE_SRC=behind LIVE_LAG=14
+  LIVE_ADDS=0 LIVE_AGE=10537 LIVE_DIVERGED=0 LIVE_BREACH_WHY=` empty — well inside the 21,600 s time
+  arm. 🚨 **My close reading is a NON-READING and is labelled as one:** `RUNG=📦 LIVE_SRC=skip
+  LIVE_SHA=` empty, because `compute_live_layer()` is called ONLY on the ✅-eligible path and I was
+  holding an unpushed commit at that moment. **That is the third consecutive link to meet this trap,
+  and it reads exactly like a converged lane.** The real second reading is taken AFTER the land.
+  **THE STANDING RED IS STILL TWO AND ITS REFERENCE HAS NOW MOVED A FIFTH TIME.**
+  `scripts/deploy-link-parity.sh` rc 1 at 08:30Z: **461 linked · 0 staged-pending · 10 live-extra ·
+  54 unmapped · 2 actionable** — `linked` and `actionable` both byte-identical to #282's and #283's,
+  while the reporter's own stated reference read **14 commit(s) BEHIND** against #283's 11, #282's 7,
+  #281's 9 and #280's 0, and **17 behind by my close**. **Five different references, one unmoved
+  verdict.** The two survivors are unchanged and named in #283's entry. ✅ **The executing blob still
+  equals trunk's — `6c58711286ff` on BOTH sides — a SEVENTH consecutive link.**
+  **CHAIN FACTS.** `qos-rewrite.sh` diff rc 0 / 0 bytes. All four kitty checks passed by minute ~2:
+  `cc-in-kitty` rc 0, `KITTY_WINDOW_ID=27`, `KITTY_PID=1427`, `TERM=xterm-kitty`, the id-keyed
+  `kitty @ ls` query run THROUGH A FILE (rc 0, 0 stderr bytes, 159,852 json bytes) returning EXACTLY
+  ONE object with a bogus-id NEG control at 0 and `cwd` = my own worktree, `cc-notify --self` = 27,
+  `ITERM_SESSION_ID=w0t0p0:27`, `CC_TERM` UNSET. `GATE=stale` at open and close — NOT mine to drive.
+  Mailbox `~/.claude/mailbox/27.md` unchanged at 4,059 bytes / 1 line. `cc-roles list` byte-identical
+  again. Land-lock free, 0 waiters. Board writes: **none** — this link wrote to no store but the
+  document. All twelve inherited artifacts were present, and the decisive lines of every clone were
+  read BY EYE before use: `SRC`/`DST` 284/285, `POS` 284, `SPEC` `sections284.txt`, `MINE=284`,
+  `gap284.sh` resolving `allids.283*` with the stale number at ZERO occurrences, `derive284.sh`
+  naming `#283`, and every launcher's terminal line a bare `true`.
+  **THE ONE THING TO CARRY.** #282 asked where the deciding information lives when two options tie;
+  #283 asked whether the stated reason is the reason. **#284's is the one that comes after a reason
+  has just been FIXED: what unit is the NEW reason denominated in, and can the clause that uses it
+  see that unit at all?** A correction moves the sentence; it does not move the argument list. Here
+  the new reason was true, measured and load-bearing, and it was a claim about a value the function
+  was never passed — so the fix inherited the exact defect it repaired, one frame over. **The cheap
+  tell is a reason whose subject is a NOUN the enclosing function does not take as an argument.**
+  Read the corrected comment and ask which of its nouns the code can actually name.
 - **2026-09-02 — drain recycle #283: method 255 — A CORRECT VERDICT RESTING ON A WRONG REASON
   GENERALISES AS FAR AS THE REASON, NOT AS FAR AS THE VERDICT.** ZERO rows closed, ZERO filed,
   ZERO reopened. TWO commits. **The land facts live in `git log --oneline origin/main` and the push
