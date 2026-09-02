@@ -435,6 +435,29 @@ handle() { # <row-json> → prints outcome lines
       ledger "$id" land-cut "$(jq -cn --arg b "$branch" '{branch:$b, note:"killed from outside (bound/SIGTERM) — a non-verdict, never a gate refusal"}')"
       return 0
     fi
+
+    # 🚨 NOTHING TO LAND IS NOT A REFUSAL, AND IT IS NOT A RETURN (CLOUD_OBSERVABILITY.md §16).
+    # 66 is the lander saying the branch carries no content against trunk: the VM pushed its branch
+    # as §4.1's absence contract requires — which is what makes it visible here at all instead of
+    # reading C1 NOT-STARTED — and then committed no work to it.
+    #
+    # This arm exists because the contract MOVES those sessions across this script's own boundary.
+    # An un-pushed VM is NOT-STARTED and returns at step 1 with "nothing to return"; a boot-pinged
+    # one is ALIVE/STALLED and arrives HERE, at the land. Without this arm it would take the
+    # refusal path: an artifact latched to the branch head, a LAND REFUSED wake to the originator,
+    # and custody left open — all three about a branch with nothing wrong with it. Falling through
+    # to the success path would be worse: content-verify over a path set nobody can derive, then
+    # `done_unsettled` cycling every 300 s.
+    #
+    # No artifact and no wake, so this stays exactly as quiet as the NOT-STARTED case it replaces.
+    # The row keeps whatever cc-cloud says about it (STALLED once the sidecar has history), which
+    # is the honest verdict and a strictly better one than NOT-STARTED: the session DID boot, and
+    # `cc-cloud inbox --id <id>` can read what it asked before it stopped.
+    if [ "$land_rc" -eq 66 ]; then
+      say "· $id — booted and pushed $branch, but its commits carry no content: nothing to return. Read what it was doing with: cc-cloud inbox --id $id"
+      ledger "$id" nothing-to-land "$(jq -cn --arg b "$branch" '{branch:$b, note:"branch carries no content against trunk (boot ping only) — a non-verdict, never a gate refusal"}')"
+      return 0
+    fi
     if [ "$land_rc" -ne 0 ]; then
       # THE W3 SEAM. A refusal is recorded as an artifact with everything the routing loop will
       # need, the originator is woken WITH the failure, and custody stays OPEN — an un-landed result

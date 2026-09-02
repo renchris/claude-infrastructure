@@ -1964,3 +1964,81 @@ next `cloud-return.sh` pass is what fires `cc-backlog block`, and §13.6's ADD-r
 whether that pass is running the landed script — the reader is an edit to an already-symlinked file
 and goes live on the fast-forward, but `scripts/cloud-park.sh` is an ADD and is absent from
 `~/.claude` until the converger runs.
+
+
+## 16 · §4.1's absence contract stops being prose — and what that costs downstream (2026-09-02)
+
+§4.1 fixed the ambiguity of absence by **contract**: the fire declares a branch, and the session's
+brief requires pushing it as the first act, so that no-ref past the boot budget means something.
+§8 made it step 2 of the fire-time protocol. **Nothing ever emitted it.** No brief, no hook, no
+script — so `C1 NOT-STARTED`, the arm the whole state function rests on, has never once had the
+evidence its own definition names (`cc-backlog 0c8b39b67665`).
+
+🚨 **AND IT HAD ALREADY BEEN FIXED NINE TIMES, ON NINE BRANCHES, WITH NONE ON TRUNK.** `0cc728a2`
+(09-01) · `ea2b988f` · `faf78977` (08-31) · `f578e350` (08-28) · `adec5241` (08-27) · `5d7d7d84` ·
+`648c1a1d` · `b9440fa8` (08-26) · `52a39c70` (08-25) — each a full tested diff, seven of them in the
+fire lanes rather than the dispatcher, every one written by a worker that correctly established the
+contract was prose. This is §15's ten-dispatch loop landing on the row whose subject is the
+mechanism that would have made it visible. The lane is not the cause: **116** re-authored cloud
+commits are on trunk, the most recent the day before. The evidence that would name the cause is on
+the operator box only — `~/.claude/autonomy/cloud/<id>.land-refused` for those nine ids. Full
+measurement, and what this VM could and could not observe:
+`docs/research/cloud-boot-contract-restrandings-2026-09-02.md`.
+
+### 16.1 · A bare ref creation, not an empty commit — §4.1's wording is corrected here
+
+"An empty commit is enough" is true of the sensor and false of everything downstream.
+`scripts/cloud-reconcile.sh`'s `reauthor_branch` replays a branch's commits with `commit-tree`,
+which replays an empty one happily, so the literal contract puts one content-free commit on `main`
+per cloud fire. `git push -u origin HEAD` creates the same ref, is the same single observation to
+`ls-remote`, and leaves nothing to land. The rail says so explicitly, because eight of the nine
+implementations above prescribe the empty commit.
+
+### 16.2 · The ping MOVES a population across `cloud-return.sh`'s boundary, and that is the half to get right
+
+This is the part the nine did not build, and shipping the rail without it is a regression rather
+than a fix.
+
+| | before the ping | after it |
+| --- | --- | --- |
+| a VM that boots and commits nothing | no ref ⇒ **C1 NOT-STARTED** ⇒ `cloud-return.sh` step 1, *"nothing to return"* | a ref ⇒ **C5 ALIVE / C4 STALLED** ⇒ **the land** |
+
+The land would fetch, re-author, rebase and push a branch whose commits change no file, then report
+a refusal: an artifact latched to the branch head, a `LAND REFUSED` wake to the originator, custody
+left open. Three alarms per dead session, about a branch with nothing wrong with it — and dead
+sessions are the *majority* population (§7.5, and the 222/262 of §4.4's control-plane reading).
+
+So emptiness became its own verdict. `cloud-reconcile.sh --land` answers **66 — nothing to land**
+for a branch carrying no content against its trunk (merge-base range, `--all` skips it and does not
+count a failure); `cloud-return.sh` reads 66 as a **non-verdict** — no artifact, no wake, no latch —
+leaving it exactly as quiet as the NOT-STARTED case it replaces. Deliberately neither 0 (which would
+send the return path on to content-verify a path set nobody can derive) nor 70 (a refusal). Pinned
+in `tests/cloud-reconcile.bats` and `tests/cloud-return.bats`.
+
+### 16.3 · Two more things the brief got wrong off-box
+
+- **`git -C <the desk's path>` is inert on a VM.** Every rail hardcoded the item's repo as resolved
+  on the operator's box. Measured on this dispatch: the brief said
+  `git -C /Users/chrisren/… fetch --unshallow` to a worker whose checkout is `/home/user/…`, so the
+  staleness rail — the one that exists to protect the shallow clone a cloud worker actually gets —
+  was inert on the only venue that has one. Cloud briefs drop the prefix; local briefs are unchanged.
+- **All three terminal dispositions were no-ops off-box** (adopted from `0cc728a2`, re-derived
+  against current trunk). The brief told an off-box worker to `/ship`, then to close with
+  `cc-backlog done`, park with `cc-backlog block` and wake with `cc-notify --role desk`. A VM cannot
+  land, and those verbs write `~/.claude/autonomy/*`, which exists only on the desk. The cloud tail
+  now routes every disposition through the one medium a VM has — its branch: the work itself, §14's
+  verdict artifact, or §15's `scripts/cloud-park.sh` park.
+
+### 16.4 · The clause of the row that is REFUTED, and the change that would actually move the board
+
+The row called the contract *"the sole basis"* for reading C1 as "never booted". **Not since
+2026-08-27.** `scripts/cloud-inbox.py` reads the control plane per session — `worker_status`,
+`status_bucket`, `post_turn_summary.*` — and separates "never ran a turn" from "ran turns, pushed
+nothing" with no worker cooperation at all (§4.4's measurement: 222 of 262 sessions filed
+NOT-STARTED had ended a turn asking a question).
+
+The ping is therefore the *weaker* discriminator and the one `classify()` can afford: git-only,
+offline, inside an `ls-remote` it already makes. **The larger fix is orthogonal and unfiled: wire
+`inbox`'s projection into `cc-cloud classify()`**, so the board stops rendering NOT-STARTED over
+sessions the control plane can see working. That is what moves 85% of the board; nothing in §16
+does it.

@@ -571,6 +571,30 @@ park_entry_on_vm() { # <id> <branch-named-in-the-entry> <needs>
   grep -q 'HANDOFF-PING cloud/session_test: LAND REFUSED' "$CALLS" || false
 }
 
+@test "NOTHING TO LAND (66) is a non-verdict too — no artifact, no wake, no latch, row untouched" {
+  # The absence contract (CLOUD_OBSERVABILITY.md §4.1/§16) moves a whole population ACROSS this
+  # script's boundary. Before it, a VM that booted and committed nothing had no ref, read C1
+  # NOT-STARTED and returned at step 1 with "nothing to return". Once it pushes its branch as its
+  # first act, the same session reads ALIVE/STALLED and arrives HERE, at the land — where the
+  # reconciler answers 66 (the branch carries no content). Without this arm it takes the refusal
+  # path: an artifact latched to the head, a LAND REFUSED wake, custody left open — three alarms
+  # about a branch with nothing wrong with it, once per dead session.
+  declare_managed --item deadbeef1234
+  seen_at 1000
+  LAND_RC=66 CC_RETURN_NOW=999999 run "$SUT" --sweep
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"nothing to return"* ]] || false
+  [[ "$output" != *"REFUSED"* ]] || false
+  [ ! -f "$CC_CLOUD_STATE/session_test.land-refused" ]
+  [ ! -f "$CC_CLOUD_STATE/session_test.returned" ]
+  ! grep -q 'HANDOFF-PING' "$CALLS" || false
+  # POSITIVE CONTROL off the same fixture: a REAL gate red still files the artifact and wakes, so
+  # this arm is a statement about 66 and not about the fixture being unable to reach either path.
+  LAND_RC=6 CC_RETURN_NOW=999999 run "$SUT" --sweep
+  [ -f "$CC_CLOUD_STATE/session_test.land-refused" ]
+  grep -q 'HANDOFF-PING cloud/session_test: LAND REFUSED' "$CALLS" || false
+}
+
 @test "ship-land's OWN killed token abstains too, whatever exit code reaches us" {
   # The signal can arrive as 124, 137 or 143 depending on who cut it and how, so the lander's own
   # verdict token is read as corroboration rather than trusting one number to carry the fact.
@@ -661,7 +685,13 @@ declare_n() { # <count>
       --trunk trunkref --account next3 --custody "session_$i" --notify-back PANE-UUID >/dev/null 2>&1
     # Stamp declared_at explicitly: seq is faster than the clock, so every row would otherwise share
     # one second and "newest first" would have no observable content to be right or wrong about.
-    sed -i '' "s/^declared_at=.*/declared_at=$((t + i * 100))/" "$CC_CLOUD_STATE/session_$i.decl"
+    # NOT `sed -i ''` — that is the BSD in-place idiom, and on GNU sed the empty string IS the
+    # script, which makes the real script a FILENAME: `sed: can't read s/^declared_at=…`, exit 2,
+    # and tests 32-35 fail on Linux while passing on the operator's mac. A cloud worker runs on
+    # Linux, so the one venue that most needs to verify this suite was the one that could not.
+    sed "s/^declared_at=.*/declared_at=$((t + i * 100))/" "$CC_CLOUD_STATE/session_$i.decl" \
+      >"$CC_CLOUD_STATE/session_$i.decl.new" \
+      && mv "$CC_CLOUD_STATE/session_$i.decl.new" "$CC_CLOUD_STATE/session_$i.decl"
   done
   push_vm
 }
