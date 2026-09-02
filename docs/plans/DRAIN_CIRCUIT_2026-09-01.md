@@ -41,6 +41,18 @@ The real shape:
 | **FIRE** | `com.claude.dispatcher` → `cc-dispatch --once`, `StartInterval` **300 s** | ✅ loaded + running (pid 74864) |
 | **LAND** | `com.chrisren.autonomy-sweep` (300 s) → `autonomy-sweep.sh:1075` → `timeout -k 10 900 bash cloud-return.sh --sweep` | ✅ loaded + running (pid 94244) — and **killed mid-land every time** |
 
+🚨 **CORRECTION, 2026-09-02 — `cc-reaper` was *a* killer, not *the* killer, and it had already
+stopped before it was fixed.** The 153 TERMs below are real and the whitelist gap was real, but
+binned by day they run **2026-08-19 (29) · 08-20 (24) · 08-21 (22) · 08-22 (9) · 08-23 (14) ·
+08-24 (17) · 08-25 (11) · 08-26 (1)** and then **zero**. The fix (`1ca324beb`) landed on 09-01,
+five days after the reaper stopped selecting this subject. So it prevents recurrence of a genuine
+defect and it did **not** unblock this week's lane; the active blocker from 08-26 onward is the
+900 s bound (§3b A, and §3d for what is still true after W3). The headline this section originally
+carried — "the garbage collector is eating the landing arm" — was true of 08-19..08-26 and was
+asserted as though it were true of now. Recorded rather than silently rewritten: the reasoning
+error is that a log's *existence* was read as a log's *currency*, which is the same shape as
+`scan-revision-predates-the-fix` in this repo's own memory.
+
 **`cc-reaper` is the killer, in its own log** (`~/.claude/logs/cc-reaper.log`, 153 `cloud-return`
 rows):
 
