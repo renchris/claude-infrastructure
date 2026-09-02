@@ -31,6 +31,7 @@
 # observing those effects when the condition is reversed.
 
 BASE_SHA="67c86d89"   # immutable ancestor of origin/main; carries the pre-change bin/cc-dispatch
+DEEPEN_BASE="e31eb3d0"  # 22b8824c^ — the last composer with the trunk reads UNGUARDED by --unshallow
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -418,16 +419,23 @@ mkrepo() {
   [ -n "$deepen_at" ] && [ -n "$read_at" ] || false
   [ "$deepen_at" -lt "$read_at" ] || false
 
-  # RED — and the baseline has to be TRUNK, not $PRISTINE. $PRISTINE predates the staleness rail
-  # entirely (the sibling cell above asserts it composes no FIRST STEP at all), so it would go red
-  # here for the wrong reason: absence of the whole rail, not absence of the guard within it. The
-  # defect this cell pins is narrower and lives on CURRENT trunk — a rail that HAS the three trunk
-  # reads and nothing making them answerable. Read trunk's own composer and assert exactly that
-  # pair. Skipped rather than failed where trunk is unreachable: a control we could not read is not
-  # a control, and a network-less box must not be told its tree regressed.
+  # RED — and the baseline cannot be $PRISTINE, which predates the staleness rail entirely (the
+  # sibling cell above asserts it composes no FIRST STEP at all): it would go red here for the wrong
+  # reason — absence of the whole rail, not absence of the guard within it. The defect this cell
+  # pins is narrower: a rail that HAS the three trunk reads and nothing making them answerable.
+  #
+  # 🚨 PINNED TO AN IMMUTABLE SHA, NOT TO origin/main, AND THAT IS THE CELL'S OWN HISTORY. This
+  # control was written as `git show origin/main:bin/cc-dispatch` and INVERTED the instant its own
+  # fix landed: from 22b8824c onward trunk carries the guard, so "trunk has the reads unguarded"
+  # became false and the cell went red fleet-wide on a tree with no defect in it. Measured on a
+  # pristine origin/main worktree carrying none of this suite's later changes. This file's own
+  # header states the rule that was broken — "once this lands, origin/main BECOMES the new version
+  # and every 'the old tree does not do this' assertion would invert" — which is why BASE_SHA is
+  # pinned. A RED control naming a moving ref is not a control; it is a prediction that the fix will
+  # never land. DEEPEN_BASE is 22b8824c^, an ancestor of origin/main forever.
   local trunk_rail
-  if ! trunk_rail="$(git -C "$REPO" show origin/main:bin/cc-dispatch 2>/dev/null)"; then
-    skip "origin/main:bin/cc-dispatch unreadable here — the RED control needs trunk's own composer"
+  if ! trunk_rail="$(git -C "$REPO" show "$DEEPEN_BASE:bin/cc-dispatch" 2>/dev/null)"; then
+    skip "$DEEPEN_BASE:bin/cc-dispatch unreadable here — the RED control needs the pre-fix composer"
   fi
   printf '%s' "$trunk_rail" | grep -q 'rev-list --count HEAD..origin/main' || false  # the reads ...
   ! printf '%s' "$trunk_rail" | grep -q -- '--is-shallow-repository' || false        # ... unguarded
