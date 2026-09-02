@@ -589,6 +589,65 @@ converges.
 the live checkout — held the lock for 7m48s of its 900 s bound with no deadline check in it. That is
 the defect still executing, on the old bytes, as designed until convergence.
 
+### W5b — WHY the verifier keeps getting cut: `cc-reaper` was killing it, and the rule is a substring
+
+Chasing "why is `deploy-live` waiting" produced a named culprit rather than a load excuse.
+`bin/cc-reaper`'s `stuck-wrapper` arm read:
+
+```awk
+if (comm[p]=="bash" && args[p] ~ /cc-close-attrib/ && secs[p]>=1800) …
+```
+
+**That is a SUBSTRING test over a whole command line, and a command line is not a name.**
+`postland-verify` runs its corpus as `bash …/bats tests/account-cliff-routing.bats …
+tests/cc-close-attrib.bats …` over 558 files — **one of which is named after that tool** — so the
+corpus matched at the 1800 s threshold every time it ran that long. Two independent logs, and then
+a second reproduction 64 minutes later while this wave watched:
+
+```
+reaper  07:46:19Z  garbage: TERM stuck-wrapper pid=175 age=1810s argv=<bash …/bats …>
+runner  07:48:24Z  corpus TRUNCATED — zero not-ok in a non-zero run — the run was KILLED by
+                   signal 15 from OUTSIDE this runner
+reaper  08:50:11Z  garbage: TERM stuck-wrapper pid=72748 age=3406s argv=<bash …/bats …>   (×3)
+stamp   08:52:09Z  {"commit":"9b308d70a…","verdict":"cut"}
+```
+
+The age lands exactly on the corpus start (07:16:01 + 1810 s). Four of six reaper TERMs of a bats
+corpus today are followed within ~2.5 min by a `cut` stamp; it is intermittent only because the
+reaper's own classifier times out under load and yields no candidates at all.
+
+**The blast radius is the whole deploy pipeline.** `postland-verify` is the ONLY writer of a GREEN
+stamp and `deploy-live` is fail-closed on that stamp — so a garbage collector was holding the live
+`~/.claude` layer shut. That is why W5's landed fix cannot reach the rail it fixes.
+
+**Fixed in `9f9a64bb4`** by anchoring on argv POSITION, not by lengthening a name list — this repo's
+own `pgrep-f-matches-agent-briefs` lesson, whose recorded remedy is exactly that. All three real
+wrapper spellings still match; both corpus shapes stop matching. The control pair is one closed
+world in both directions and **both halves are RED-proved**: the pre-fix unanchored regex fails the
+*survives* half, and an over-wide anchor that collects nothing fails the *dies* half, so the fix
+cannot widen into collect-nothing. `tests/cc-reaper.bats` 194/194.
+
+**Deliberately NOT given the `wl` whitelist test its sibling arm has.** `wl` is matched against the
+whole argv too, and this arm's subjects are `claude` sessions whose argv carries an operator-written
+brief — briefs in this repo routinely say `ship-land`, `postland-verify`, `cc-dispatch`. A whitelist
+there would make reapability depend on the PROSE of a prompt: the identical defect pointed the other
+way, letting a genuinely stuck wrapper live. Position answers both directions; a name list neither.
+
+🚨 **This is the FOURTH time this file has been found eating its own infrastructure** — `orphan-bash`
+on `cloud-return.sh` (§1.1), `orphan-tool` on that call's own 900 s `timeout` (the comment at :655),
+`stuck-wrapper` on `postland-verify` (here), against a file that already carries the header *"THE
+LAND PATH IS NEVER GARBAGE"* above a list that missed the third spelling. The enumeration-vs-class
+defect there is **recurrent, not incidental**, and the next fix to it should be a rule about
+position/identity rather than another name.
+
+⚠️ **AND THE FIX IS INERT UNTIL THE THING IT UNBLOCKS RUNS.** `~/.claude/bin/cc-reaper` is a symlink
+into the live checkout, which only advances via `deploy-live`, which is fail-closed on the green
+stamp the *old* reaper keeps killing. That is the repo's own `deployed-layer-bootstrap-circle`, and
+it is filed as `5bc548efd14d` with a falsifier that retracts when `last-green` reaches live HEAD.
+The circle is not deadlocked — 4 of 14 runs today reached green, because the kill is intermittent —
+so it resolves on its own; it just cannot be *driven* from this side. `deploy-live` reported
+`lag 20 commit(s) / 3h` against a degrade budget of `25 / 6h` at the time of writing.
+
 
 ## 4. Status log
 
@@ -665,6 +724,16 @@ the defect still executing, on the old bytes, as designed until convergence.
   bounded dry-run over a copy of the real 613-declaration store and the limits of that measurement,
   in §3d's W5 subsection. This is the same class as §3c's smoke budget: a bound sized against a quiet
   machine, on a box that is never quiet.
+
+- **2026-09-02 — W5b: the convergence blocker has a NAME** (`9f9a64bb4`). `cc-reaper`'s
+  `stuck-wrapper` arm matched the SUBSTRING `cc-close-attrib` anywhere in a command line, and
+  `postland-verify`'s 558-file corpus carries `tests/cc-close-attrib.bats` in its argv — so the
+  reaper was TERMing the only party allowed to write a GREEN stamp, which `deploy-live` is
+  fail-closed on. Two logs and two in-session reproductions (07:46/07:48 and 08:50/08:52). Fixed by
+  anchoring on argv POSITION, with a both-directions control pair, both halves RED-proved;
+  cc-reaper 194/194. It is the FOURTH kill by that file on its own infrastructure. The fix is inert
+  until `deploy-live` converges (the reaper is itself a live symlink) — the bootstrap circle, filed
+  `5bc548efd14d`, self-retracting. Detail in §3d W5b.
 
 - **Still open after tonight**: the four §3b kills are FIXED (W3, above). What remains is
   (a) **the sweep's own runtime** — it needs a self-bound so it stops being garbage-collected at
