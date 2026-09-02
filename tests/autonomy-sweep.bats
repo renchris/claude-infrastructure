@@ -1372,3 +1372,46 @@ STUB
   grep -q "invoked=cloud-return from=$deployed --sweep" "$marker" || false
   grep -q "invoked=cloud-refusal-route from=$deployed --sweep" "$marker" || false
 }
+
+@test "ONE bound: the value that arms the timeout is the value the child is TOLD" {
+  # §3d. `--limit` is a COUNT and this caller's `timeout` is a DEADLINE; W3 shipped the count and the
+  # pass was still SIGKILLed on every tick (cloud_return_rc 137 × 5 on 2026-09-02, no rc 0 ever). The
+  # child now paces itself against the caller's bound — which requires knowing it. Writing `900` on
+  # both sides would be one fact in two places that cannot check each other, and the first change to
+  # the bound would leave the child pacing against a budget nobody applies. This arm is what makes
+  # that impossible to reintroduce silently: it moves ONE variable and asserts BOTH consequences.
+  local tb=""; local c
+  for c in "$(command -v timeout 2>/dev/null || true)" /opt/homebrew/bin/timeout \
+           /usr/local/bin/timeout /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$c" ] && [ -x "$c" ] && { tb="$c"; break; }
+  done
+  [ -n "$tb" ] || skip "no timeout(1)/gtimeout(1) resolvable — this caller applies no bound here"
+
+  local cfg="$BATS_TEST_TMPDIR/cfg2" deployed
+  deployed="$cfg/scripts"; mkdir -p "$deployed"
+  export CLAUDE_CONFIG_DIR="$cfg"
+  export CC_CLOUD_STATE="$BATS_TEST_TMPDIR/cloudstate2"; mkdir -p "$CC_CLOUD_STATE"
+  cp "$SWEEP" "$deployed/autonomy-sweep.sh"; chmod +x "$deployed/autonomy-sweep.sh"
+  mkdir -p "$deployed/lib" && cp "$REPO"/scripts/lib/*.sh "$deployed/lib/" 2>/dev/null
+
+  local marker="$BATS_TEST_TMPDIR/bound-marker"; : >"$marker"
+  cat >"$deployed/cloud-return.sh" <<STUB
+#!/bin/bash
+echo "told=\${CC_RETURN_BOUND_S:-UNSET}" >>"$marker"
+sleep 5
+echo "ran-to-completion" >>"$marker"
+STUB
+  chmod +x "$deployed/cloud-return.sh"
+  printf '#!/bin/bash\nexit 0\n' >"$deployed/cloud-refusal-route.sh"
+  chmod +x "$deployed/cloud-refusal-route.sh"
+
+  CC_SWEEP_RETURN_BOUND_S=1 "${SWEEP_TO[@]}" bash "$deployed/autonomy-sweep.sh" >/dev/null 2>&1 || true
+
+  # (1) THE CHILD WAS TOLD THE BOUND, and told the one this run actually used — not a literal.
+  grep -q '^told=1$' "$marker" || false
+  # (2) THE TIMEOUT WAS ARMED WITH THE SAME VALUE. The positive control against a bound that is
+  # merely announced: a stub that sleeps 5 s reaches its last line if and only if the cut did not
+  # come from `CC_SWEEP_RETURN_BOUND_S`. A hardcoded 900 beside a correct export passes (1) and
+  # fails here, which is precisely the two-copies defect this arm exists to catch.
+  ! grep -q '^ran-to-completion$' "$marker" || false
+}

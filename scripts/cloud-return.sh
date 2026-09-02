@@ -66,13 +66,24 @@
 #   CC_CLOUD_STATE · CC_RETURN_QUIET_S · CC_RETURN_CLOUD_BIN · CC_RETURN_NOTIFY_BIN ·
 #   CC_RETURN_CUSTODY_BIN · CC_RETURN_BACKLOG_BIN · CC_RETURN_RECONCILE_BIN · CC_RETURN_STATUS_BIN
 #   (the control-plane sensor: <bin> --account A --verify ID → json on stdout) · CC_RETURN_GIT_BIN ·
-#   CC_RETURN_NOW (epoch override) · CC_RETURN_LEDGER
+#   CC_RETURN_NOW (epoch override) · CC_RETURN_LEDGER · CC_RETURN_BOUND_S (the CALLER's wall-clock
+#   bound on this whole pass, in seconds — see THE DEADLINE below; 0/unset = unbounded) ·
+#   CC_RETURN_DEADLINE_PCT · CC_RETURN_UNIT_RESERVE_S
 #
 # bash 3.2-safe.
 set -uo pipefail
 
 SELF="$0"; while [ -L "$SELF" ]; do _t="$(readlink "$SELF")"; case "$_t" in /*) SELF="$_t" ;; *) SELF="$(dirname "$SELF")/$_t" ;; esac; done
 ROOT="$(cd "$(dirname "$SELF")/.." && pwd -P)"
+
+# 🚨 THE PASS CLOCK STARTS HERE, ON THE REAL CLOCK, AND DELIBERATELY NOT ON `now()`.
+# `now()` below honours `CC_RETURN_NOW`, which the suite freezes so that quiet-window and lock-age
+# arms are deterministic. A FROZEN clock makes elapsed permanently 0, i.e. a deadline that can never
+# fire — the check would then be untestable in exactly the harness that has to prove it fires
+# (memory: harness-default-collapses-the-states-under-test). The deadline is a question about wall
+# time against the caller's `timeout`, which is also wall time, so it reads the same clock the
+# killer does. A suite proves it by making the fixture genuinely slow, not by moving a fake clock.
+START_S="$(date +%s)"
 
 STATE="${CC_CLOUD_STATE:-$HOME/.claude/autonomy/cloud}"
 QUIET_S="${CC_RETURN_QUIET_S:-180}"
@@ -117,6 +128,47 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$MODE" ] || { echo "cloud-return: pass --sweep or --id <session-id>" >&2; exit 2; }
 case "$LIMIT" in ''|*[!0-9]*) echo "cloud-return: --limit wants a non-negative integer (0 = unbounded)" >&2; exit 2 ;; esac
+
+# ── THE DEADLINE ─────────────────────────────────────────────────────────────────────────────────
+# 🚨 `--limit` IS A COUNT AND THE CALLER'S BOUND IS A DEADLINE, AND NOTHING RECONCILED THEM.
+# W3 landed `--limit`, it went live, it is wired — and the sweep was still SIGKILLed on every single
+# pass afterwards (`cloud_return_rc` in the caller's IDL: 137 at 02:40, 03:17, 04:12, 05:11, 05:51
+# on 2026-09-02, with no rc 0 anywhere in that journal's history). A count cannot be reconciled with
+# a deadline by choosing a better count, because the two are not in the same unit: each taken
+# session may fall through to `cloud-reconcile --land` → `desk-land` → `ship-land`, a full
+# statics+ratchets+smoke gate measured in MINUTES, and 25 of those do not fit 900 s at any constant.
+# Lowering the count trades a kill for a stall and rots the moment land cost moves — this repo's own
+# bound-must-fit-the-band-not-the-bench lesson, recurring in a second unit.
+#
+# So the bound is read as TIME and enforced as time: stop STARTING new work while there is not
+# enough of the caller's budget left to finish a unit. Three properties, each load-bearing.
+#
+# (1) THE VALUE COMES FROM THE CALLER, NEVER FROM HERE. `autonomy-sweep.sh` owns the `timeout`, so
+#     it owns the number and exports it. Hardcoding 900 in this file would put one fact in two
+#     places that cannot check each other, and the day the caller's bound changed this copy would go
+#     on being confidently wrong (memory: resident-policy-must-not-restate-perishable-facts). Unset
+#     or 0 means the caller applied NO bound — the `else` arm of that call site runs unbounded — and
+#     then there is nothing to be early for, so the check disables itself rather than inventing one.
+#
+# (2) THE RESERVE IS MEASURED, NOT ASSUMED. A pure fraction still has to guess what one more unit
+#     costs. This pass already knows: it times each `handle()` and carries the WORST one forward as
+#     the price of the next. The floor under that estimate exists only for the first unit, where
+#     there is no observation yet, and it is deliberately the caller's own documented smoke budget
+#     (120 s) rather than a round number — the smallest plausible cost of a unit that reaches the
+#     lander. This is what "adapts to land cost" means concretely: when lands get slower the reserve
+#     grows on the very pass that observed it, with nobody re-tuning a constant.
+#
+# (3) IT GATES STARTING, NEVER INTERRUPTING. A `handle()` already in flight runs to completion even
+#     if it overruns — a half-run `ship-land` (lock taken, gate half-evaluated, branch half-pushed)
+#     is strictly worse than a deferred one, and the `-k` grace plus the caller's own 137/143 lock
+#     reap exist precisely to clean up after the case where it does overrun.
+BOUND_S="${CC_RETURN_BOUND_S:-0}"; case "$BOUND_S" in ''|*[!0-9]*) BOUND_S=0 ;; esac
+# The safe fraction. 80% leaves the pass's own tail — the final ledger row, the cursor write, the
+# EXIT trap — plus slack for a unit that runs over its predecessor's measured cost.
+DEADLINE_PCT="${CC_RETURN_DEADLINE_PCT:-80}"; case "$DEADLINE_PCT" in ''|*[!0-9]*) DEADLINE_PCT=80 ;; esac
+UNIT_RESERVE_S="${CC_RETURN_UNIT_RESERVE_S:-120}"; case "$UNIT_RESERVE_S" in ''|*[!0-9]*) UNIT_RESERVE_S=120 ;; esac
+BUDGET_S=$(( BOUND_S * DEADLINE_PCT / 100 ))
+elapsed_s() { echo $(( $(date +%s) - START_S )); }
 [ -n "$CLOUD_BIN" ] || { echo "cloud-return: cc-cloud not found — the declaration store is unreadable" >&2; exit 3; }
 command -v jq >/dev/null 2>&1 || { echo "cloud-return: jq required" >&2; exit 3; }
 
@@ -164,8 +216,16 @@ ledger() { # <id> <outcome> <detail-json-object>
 #     pid-liveness check plus a bound-derived TTL is the shape that reaps faster while stealing
 #     less. A caller that bounds differently sets the env var; hardcoding its number here would be
 #     this repo's resident-rule-restates-a-perishable-fact defect in a lock.
+#
+# 🚨 AND THE TTL IS NOW DERIVED FROM THE BOUND THE CALLER ACTUALLY EXPORTED, not from a second copy
+# of it. `1200` was "900 plus a third" written out by hand — correct on the day, and a silent lie the
+# moment the caller's bound moved, which is the same one-fact-in-two-places defect the deadline check
+# above exists to avoid. When `CC_RETURN_BOUND_S` is set, the window IS bound + a third; the literal
+# remains only as the no-caller-bound fallback, and `CC_RETURN_LOCK_TTL_S` still overrides both.
 LOCK="$STATE/.return.lock"
-LOCK_TTL_S="${CC_RETURN_LOCK_TTL_S:-1200}"
+if [ "${CC_RETURN_LOCK_TTL_S:-}" != "" ]; then LOCK_TTL_S="$CC_RETURN_LOCK_TTL_S"
+elif [ "$BOUND_S" -gt 0 ]; then LOCK_TTL_S=$(( BOUND_S + BOUND_S / 3 ))
+else LOCK_TTL_S=1200; fi
 case "$LOCK_TTL_S" in ''|*[!0-9]*) LOCK_TTL_S=1200 ;; esac
 lock_acquire() {
   mkdir -p "$STATE" 2>/dev/null || return 1
@@ -825,8 +885,16 @@ ROWS="$("$CLOUD_BIN" list --json --state --only "$SCOPE" 2>/dev/null)"
 # Re-select the same ids from the STATE-bearing rows: the admission decision was made on disk, and
 # the verdicts have to come from the arbiter that probes.
 IDS="$(printf '%s\n' "$WANT" | jq -r '.id')"
-MANAGED="$(printf '%s\n' "$ROWS" | jq -c --argjson want "$(printf '%s\n' "$IDS" | jq -R . | jq -sc .)" \
-  'select(.id as $i | $want | index($i))' 2>/dev/null)"
+# 🚨 AND IT KEEPS THE WORKING SET'S ORDER, which the deadline above is what makes load-bearing.
+# The admission step sorts newest-first because staleness compounds (see the cursor block). This
+# re-selection used to iterate the STATE rows and keep whichever ids matched, so the pass was
+# admitted newest-first and then HANDLED in `cc-cloud list`'s own order — which was invisible while
+# every admitted row was processed, and decides everything the moment a budget can run out partway:
+# whoever is started first gets the budget, so an unordered handle loop spends it on exactly the
+# stale branches the sort exists to deprioritise. Driving the iteration from `$want` instead of from
+# the rows makes the order the one that was decided on, rather than one nobody chose.
+MANAGED="$(printf '%s\n' "$ROWS" | jq -sc --argjson want "$(printf '%s\n' "$IDS" | jq -R . | jq -sc .)" \
+  '. as $rows | $want[] as $i | ($rows[] | select(.id == $i))' 2>/dev/null)"
 if [ "$MODE" = one ]; then
   ROW="$(printf '%s\n' "$MANAGED" | head -1)"
   [ -n "$ROW" ] || { warn "no state row for '$ONE'"; exit 2; }
@@ -836,12 +904,58 @@ fi
 [ -n "$MANAGED" ] || { say "(no MANAGED cloud declarations)"; exit 0; }
 
 N=0
+WORST_UNIT_S=0
+DEADLINE_STOP=0
+DL_UNSTARTED=0
 while IFS= read -r ROW; do
   [ -n "$ROW" ] || continue
+  # THE CHECK, and it is BEFORE `handle` on purpose (property 3 above): it decides whether to START,
+  # and nothing here can interrupt a unit that already began. `RESERVE` is the worst unit this pass
+  # has actually seen, floored by the first-unit estimate; before any observation the floor IS the
+  # estimate. `N -gt 0` guarantees at least one unit is attempted whatever the arithmetic says — a
+  # pass that admits itself and then does nothing is a stall wearing a bound's clothes, and it would
+  # also freeze the cursor on the same head forever.
+  if [ "$DEADLINE_STOP" = 1 ]; then
+    DL_UNSTARTED=$((DL_UNSTARTED + 1)); continue
+  fi
+  if [ "$BUDGET_S" -gt 0 ] && [ "$N" -gt 0 ]; then
+    RESERVE=$WORST_UNIT_S; [ "$RESERVE" -ge "$UNIT_RESERVE_S" ] || RESERVE=$UNIT_RESERVE_S
+    if [ $(( $(elapsed_s) + RESERVE )) -ge "$BUDGET_S" ]; then
+      DEADLINE_STOP=1; DL_UNSTARTED=$((DL_UNSTARTED + 1)); continue
+    fi
+  fi
   N=$((N + 1))
+  _unit_start="$(date +%s)"
   handle "$ROW"
+  _unit=$(( $(date +%s) - _unit_start ))
+  [ "$_unit" -le "$WORST_UNIT_S" ] || WORST_UNIT_S=$_unit
 done <<EOF
 $MANAGED
 EOF
+
+# 🚨 A DEADLINE STOP IS JOURNALLED AS ITS OWN FACT, SEPARATELY FROM THE CURSOR'S `deferred`.
+# The pass-scope row above already counts what the LIMIT left behind. Folding a deadline stop into
+# that same number would make a pass that ran out of time indistinguishable from one that simply
+# had more rows than its limit — and a stop that says nothing at all reads as "nothing pending",
+# the absence-is-evidence inversion this file refuses everywhere else (memory:
+# zero-claim-must-name-its-excluded-strata). The row carries what a reader needs to tell whether the
+# bound is the binding constraint: how much of the budget was spent, what one unit was measured to
+# cost, and how many admitted rows were never started because of it.
+if [ "$DEADLINE_STOP" = 1 ]; then
+  # THE CURSOR RESUMES WHERE THIS PASS STOPPED. The pre-loop write advanced it past the whole
+  # admitted slice, which was right when the whole slice ran; it is wrong now, because the tail of
+  # the slice was never examined and would wait a full rotation. Rewinding to "the ones we did"
+  # still ADVANCES (N ≥ 1 here by the `N -gt 0` guard above), so the concern the comment at the
+  # cursor block names — the same head re-examined forever — cannot recur.
+  if [ -n "${CURSOR_F:-}" ] && [ "$N" -gt 0 ]; then
+    printf '%s\n' "$(( ${CURSOR:-0} + N ))" >"$CURSOR_F" 2>/dev/null || true
+  fi
+  say "cloud-return: stopped starting new work at $(elapsed_s)s of a ${BOUND_S}s caller bound (budget ${BUDGET_S}s, worst unit ${WORST_UNIT_S}s) — $DL_UNSTARTED admitted session(s) deferred to the next tick"
+  ledger "-" pass-deadline "$(jq -cn --argjson e "$(elapsed_s)" --argjson b "$BUDGET_S" \
+    --argjson bo "$BOUND_S" --argjson u "$DL_UNSTARTED" --argjson n "$N" --argjson w "$WORST_UNIT_S" \
+    --argjson c "$(( ${CURSOR:-0} + N ))" \
+    '{elapsed_s:$e, budget_s:$b, bound_s:$bo, started:$n, unstarted:$u, worst_unit_s:$w, cursor_to:$c,
+      why:"the caller bounds this pass in TIME; new work stops when the budget cannot fit another unit at its measured cost. Distinct from the pass-scope `deferred` count, which is what the LIMIT left behind."}')"
+fi
 say "cloud-return: $N managed session(s) examined."
 exit 0
