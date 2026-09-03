@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 # The weekly-drain planner's arithmetic — exchange_rate (S1c), completed_weekly_windows (S1d),
-# burn_wk_ewma_ph and wk_strand_pp (S3). USAGE_TELEMETRY_100P §5.2 / §5.3, cases RP-9..RP-16.
+# burn_wk_ewma_ph and wk_strand_pp (S3), and strand_score (S5). USAGE_TELEMETRY_100P §5.2 / §5.3,
+# cases RP-9..RP-16 and RP-30..RP-33.
 #
 # WHAT THIS SUITE IS FOR. The fleet strands 43 pp per 8 completed account-weeks and no surface
 # names which account is losing it. Every figure that claim rests on comes out of the two
@@ -268,4 +269,180 @@ assert ca.wk_strand_pp({"weekly_pct": None, "weekly_reset_h": 10.0, "burn_wk_ewm
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+# ── S5 · M3c · strand_score — the instrument that CAN fail ─────────────────────────────────────
+#
+# WHY THIS EXISTS. The synthesis's score evaluated the fire rule at each window's LAST sample,
+# where the projection has already converged to `100 - weekly_pct` — i.e. to the true strand — so
+# it agreed with the identity function on 8 of 8 windows and produced 8 binary cells that could
+# not have come out any other way. `control-must-replay-the-real-artifact.md` and
+# `verification-harness-vacuous-pass-traps.md` are the two traps it walked into at once.
+#
+# THE FIXTURE IS BUILT TO MAKE THE NOWCAST WRONG, and that is the point of the suite. A window
+# that burns steadily and then FREEZES for its last two days is the shape the fleet actually
+# strands in: at 48 h out, extrapolating the burn says the window fills exactly; it did not.
+
+SCORE_FIXTURE='
+RESET_T = round((NOW - 10 * 3600) / 60.0) * 60.0        # 10 h ago, minute-aligned so the
+                                                        # _reset_key round-trip is exact
+def window(segs, acct="next3", end_h=0.5, reset_t=None):
+    """One weekly window at 6-min cadence. segs = [(hours, %/h), ...] walked from the window
+    start; the meter saturates at 100, because the real one does."""
+    rt = RESET_T if reset_t is None else reset_t
+    start_h = sum(h for h, _ in segs)
+    out, wp, t = [], 0.0, -start_h
+    for hours, rate in segs:
+        for _ in range(int(round(hours / 0.1))):
+            if t > -end_h + 1e-9:
+                break
+            out.append({"acct": acct, "weekly_pct": round(min(100.0, wp), 4), "session_pct": 10,
+                        "_t": rt + t * 3600.0,
+                        "weekly_reset_at": iso(rt),
+                        "session_reset_at": iso(rt + 3 * 3600.0)})
+            wp += rate * 0.1
+            t += 0.1
+    return out
+
+FREEZE = [(118.0, 0.6), (50.0, 0.0)]      # burns to 70.8%, then dies for two days: strands 29.1
+SPRINT = [(120.0, 0.2), (48.0, 1.6)]      # idles at 0.2 %/h, then fills the window in its last 2 d
+'
+
+@test "RP-30: strand_score scores at FIXED horizons, and the far horizons are WRONG" {
+  # 118 h at 0.6 %/h reaches 70.8%, then the window freezes for its last 50 h and closes there,
+  # stranding 29.1 pp. The nowcast made 48 h out extrapolates the live burn and lands 24 pp under
+  # the truth — which is the whole reason a horizon-stratified score is not the tautology the
+  # last-sample rule was. Made 6 h out, after the freeze dominates the EWMA, it is nearly exact.
+  # A harness whose every cell reads 0.0 has not been run against anything.
+  run python3 -c "$LOAD$SCORE_FIXTURE"'
+res = ca.strand_score(window(FREEZE), now=NOW)
+assert res["windows"] == 1, res["windows"]
+b = {x["h"]: x for x in res["buckets"]}
+# the FAR horizons: the burn extrapolates over the freeze, so the loss is UNDER-stated
+assert b[48.0]["n"] == 1 and b[48.0]["bias"] < -20.0, b[48.0]
+assert b[96.0]["n"] == 1 and b[96.0]["bias"] < -20.0, b[96.0]
+# the NEAR horizon: the freeze is in the EWMA now, and the nowcast converges
+assert b[6.0]["n"] == 1 and abs(b[6.0]["bias"]) < 2.0, b[6.0]
+# the stratification is the finding — a scorer that collapsed the horizons would hide it
+assert abs(b[48.0]["bias"]) > 10 * abs(b[6.0]["bias"]) + 5.0, (b[48.0], b[6.0])
+# AGREEMENT IS NOT ACCURACY, and this window is the case that separates them: both horizons get
+# the DECISION right (it strands), and the far one is still 24 pp out on how much. Scoring only
+# the decision is how a 24 pp error reads as a clean bucket — which is why bias and MAE are
+# reported beside it and why S6 stays gated on reading all three.
+assert b[48.0]["agree"] == 1.0 and b[6.0]["agree"] == 1.0, (b[48.0], b[6.0])
+assert b[48.0]["mae"] > 20.0 and b[6.0]["mae"] < 2.0, (b[48.0], b[6.0])
+# realised belongs to the WINDOW, identical in every cell; only the projection moves
+assert all(abs(c["realised"] - 29.1) < 0.3 for x in res["buckets"] for c in x["cells"]), res
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-30b CONTROL: the score is SIGNED, and a far cell can get the DECISION wrong" {
+  # The opposite window shape, and it is the one that makes the aggregate a measurement rather
+  # than a constant. An account that idles for five days and then sprints fills its window: 48 h
+  # out the nowcast projects 66 pp of loss against a realised ZERO — a large POSITIVE bias and a
+  # sign DISAGREEMENT, where FREEZE gives a large negative one. A scorer reporting |error| would
+  # average these two into a confident-looking number that describes neither.
+  run python3 -c "$LOAD$SCORE_FIXTURE"'
+res = ca.strand_score(window(SPRINT), now=NOW)
+b = {x["h"]: x for x in res["buckets"]}
+assert b[48.0]["n"] == 1 and b[48.0]["bias"] > 20.0, b[48.0]        # OVER-states the loss
+assert b[48.0]["agree"] == 0.0, b[48.0]                             # ...and calls it wrong
+assert b[48.0]["cells"][0]["realised"] < 0.5, b[48.0]               # the window actually FILLED
+assert b[6.0]["n"] == 1 and abs(b[6.0]["bias"]) < 2.0, b[6.0]
+assert b[6.0]["agree"] == 1.0, b[6.0]
+# the two shapes must not cancel: SIGNED bias is what shows a projector is biased rather than
+# merely noisy, and it is the number S6 would be gated on.
+both = ca.strand_score(window(FREEZE) + window(SPRINT, acct="next4"), now=NOW)
+bb = {x["h"]: x for x in both["buckets"]}[48.0]
+assert bb["n"] == 2, bb
+assert bb["mae"] > 20.0, bb                       # both cells are badly wrong
+assert abs(bb["bias"]) < bb["mae"], bb            # ...in OPPOSITE directions
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-31 CONTROL: the estimator is CAUSAL — a cell never sees past its own instant" {
+  # THE MUTANT THIS CATCHES IS THE OBVIOUS IMPLEMENTATION. burn_wk_ewma_ph filters on
+  # `now - _t <= LOOKBACK`, and for a sample AFTER `now` that difference is NEGATIVE — so it
+  # passes, and its EWMA weight 2**(-(now-t)/hl) is not merely included but EXPONENTIALLY LARGE
+  # (a sample 48 h ahead weighs 64x). Handing the whole account series to a cell evaluated 48 h
+  # out therefore lets the freeze that had not happened yet DOMINATE the rate: the projection
+  # collapses onto the realised strand, the harness scores hindsight, and every bucket reports a
+  # bias near zero. That is the tautology this suite exists to prevent, wearing a lead time.
+  run python3 -c "$LOAD$SCORE_FIXTURE"'
+sam = window(FREEZE)
+res = ca.strand_score(sam, now=NOW)
+c = {x["h"]: x for x in res["buckets"]}[48.0]["cells"][0]
+assert c["signed_error"] < -20.0, c         # a non-causal read of this fixture scores ~0
+assert abs(c["at_h"] - 48.0) < 0.15, c      # and it is scored AT the horizon, not near the end
+assert abs(c["signed_error"] - (c["projected"] - c["realised"])) < 1e-9, c
+# the same fixture with everything after the horizon DELETED must score the cell identically —
+# that is what causal MEANS, and it is the assertion a hindsight scorer cannot pass. The window
+# tail is restored only so completed_weekly_windows still sees a window observed to its close.
+cut = c["reset_t"] - 48.0 * 3600.0
+tr = ca.strand_score([e for e in sam if e["_t"] <= cut + 1]
+                     + [e for e in sam if e["_t"] > cut][-6:], now=NOW)
+tc = {x["h"]: x for x in tr["buckets"]}[48.0]["cells"][0]
+assert abs(tc["projected"] - c["projected"]) < 1e-9, (c, tc)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-32 CONTROL: a bucket with no evaluable sample reports n=0 and is EXCLUDED, not imputed" {
+  # Two abstain arms, and neither may be scored as a hit — imputing one is how a harness reports
+  # perfect agreement over cells it never evaluated.
+  #   (a) the series does not reach back to the horizon at all;
+  #   (b) it does, but burn_wk_ewma_ph refuses on its own span floor (6.8 h), and walking to an
+  #       OLDER witness only makes the span shorter, so the whole bucket abstains.
+  # A 12 h window supplies both: nothing at 24 h or beyond, and no 6.8 h of history at the 6 h
+  # horizon either.
+  run python3 -c "$LOAD$SCORE_FIXTURE"'
+res = ca.strand_score(window([(6.0, 0.6), (6.0, 0.0)]), now=NOW)
+assert res["windows"] == 1, res           # the WINDOW is completed — this is not a missing window
+b = {x["h"]: x for x in res["buckets"]}
+for h in (96.0, 48.0, 24.0, 12.0, 6.0):
+    assert b[h]["n"] == 0, (h, b[h])
+    assert b[h]["bias"] is None and b[h]["mae"] is None and b[h]["agree"] is None, b[h]
+    assert b[h]["cells"] == [], b[h]
+# an abstained bucket renders as the WORD, never as a blank or a zero (L2)
+txt = chr(10).join(ca.render_strand_score(res))
+assert "no evaluable sample" in txt, txt
+assert "0.00" not in txt, txt
+# ...and the full fixture, which DOES evaluate, is the control that the floor is not blanket
+assert {x["h"]: x for x in ca.strand_score(window(FREEZE), now=NOW)["buckets"]}[6.0]["n"] == 1
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-33: --strand-score answers with no keychain, no sweep and no accounts.json" {
+  # Placed before load_cfg() for the same reason --agents is. Fixtured $HOME has no accounts.json
+  # and the usage endpoint is unreachable; if this branch fell through to a sweep it would hang
+  # or exit non-zero, which is exactly how the --agents coupling was found.
+  python3 -c "$LOAD$SCORE_FIXTURE"'
+import json
+for e in window(FREEZE):
+    e["ts"] = iso(e.pop("_t"))
+    print(json.dumps(e))' > "$CC_UTIL_LOG"
+  run python3 "$CA_BIN" --strand-score
+  [ "$status" -eq 0 ] || { echo "rc=$status $output"; false; }
+  [[ "$output" == *"strand-score"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"1 completed window(s)"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"sign-agree"* ]] || { echo "$output"; false; }
+  # the far horizon is present AND wrong — §5.4's acceptance is precisely that a bucket's bias
+  # COULD have been non-zero, not that it is small
+  [[ "$output" == *"48h"* ]] || { echo "$output"; false; }
+  run python3 "$CA_BIN" --strand-score --json
+  [ "$status" -eq 0 ] || { echo "rc=$status $output"; false; }
+  [[ "$output" == *'"windows": 1'* ]] || { echo "$output"; false; }
+  # an EMPTY series says so rather than rendering an empty table that reads as a clean result
+  : > "$CC_UTIL_LOG"
+  run python3 "$CA_BIN" --strand-score
+  [ "$status" -eq 0 ] || { echo "rc=$status $output"; false; }
+  [[ "$output" == *"nothing to score yet"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"sign-agree"* ]] || { echo "$output"; false; }
 }
