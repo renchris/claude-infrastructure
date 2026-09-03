@@ -865,8 +865,51 @@ also have been aimed at the wrong phase.
 
 ```
 foreground        13 s → 1 s      byte-identical over all 633 rows (age_s normalised: it is a clock)
-background band   674 s → 4 s     same band, same store, bounded run, rc 0
+background band   674 s → 4 s     ⚠️ SUPERSEDED — see "the honest speedup" below
 ```
+
+### The honest speedup — and why the line above it was not one
+
+🚨 **`674 s → 4 s` pairs two numbers taken at different LOADS, which makes it an artefact of the box
+and not a measurement of the change.** The 674 s is a real production observation, reconstructed from
+a pass's own ledger timestamps at load ~23. The 4 s was measured later at load ~14. Neither is wrong;
+putting an arrow between them is. That is this repo's own `scalar-sample-of-a-varying-quantity`
+lesson, committed here before anyone caught it — a quantity that varies across its subject was
+sampled once per arm and then differenced.
+
+**Paired, back-to-back, same box, alternating old/new so both arms see the same load:**
+
+| band | old | new | ratio | load |
+|---|---|---|---|---|
+| background (the sweep's band) | 56 s · 59 s | 3 s · 4 s | **~16×** | 9.9 · 10.2 |
+| foreground | 16 s · 15 s | 1 s · 1 s | **~15×** | same |
+
+**The claim that survives is a RATIO, ~15×, stable across both bands** — which is what a constant
+factor should look like, and unlike an absolute figure it does not rot with the box's load. Applied
+to the production observation: 674 s of admission at load ~23 becomes ~45 s, which fits a 720 s
+budget with room for real lands.
+
+### The pass itself, end to end, in the production shape
+
+Not the isolated call but `cloud-return.sh --sweep --limit 25` under `timeout -k 10 900`,
+`taskpolicy -c background`, `CC_RETURN_BOUND_S=900` — against a COPY of the live declaration store
+(642 declarations) and `--dry-run`, so a checkout copy can never land a branch or mark an item done:
+
+```
+NEW reader   rc=0  elapsed=94s    25 examined · pass-scope written · NO pass-deadline row
+OLD reader   rc=0  elapsed=149s   25 examined · pass-scope written · NO pass-deadline row   (control)
+```
+
+🚨 **Read the control honestly: at load ~8 the OLD reader completes too.** This pair does NOT show
+the fix rescuing a pass that would otherwise die — at that load nothing was dying. What it shows is
+the pass's fixed cost falling from 149 s to 94 s of a 720 s budget on a quiet box, while the
+production 137s were all recorded on a loaded one. **The fix's value is specifically at high load,
+which is exactly when the lane was failing**, and the mechanism is the ~15× above rather than
+anything visible in these two numbers.
+
+**Its limit, stated rather than glossed:** `--dry-run` exercises the FIXED cost in full — which is
+the 674 s this change removes — and does not exercise the lands. The deadline's behaviour once lands
+are running is W5's suite's claim, not this one's.
 
 **Verification.** `--json`, `--table` and `--json --only` all byte-identical against `origin/main`'s
 reader over the live store. Suites green: cc-cloud 43/43 (4 new), cloud-return 45/45,
