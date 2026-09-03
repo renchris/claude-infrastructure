@@ -242,17 +242,49 @@ census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" 
   #     Whether the producer sees EPIPE depends on whether grep exits before the write completes, so
   #     near the buffer it is genuinely probabilistic.
   #
-  # 57344 (56 KiB raw -> 58069 bytes written) is 0/120 at loadavg 15.3, with 7.4 KB of margin, and
-  # still 14x the 4 KiB arm above — so it proves what this arm exists to prove (the exemption holds
-  # for a LARGE sub-buffer payload, not merely a tiny one) without sitting on the cliff. Do not
-  # raise it back toward 64 KiB: the band above is where the flake lives. The 128 KB arm below is
-  # the one that must fail, and it saturates, so the two arms still bracket the buffer.
-  run bash -c 'set -uo pipefail; V="MATCHME
-$(head -c 57344 /dev/zero | tr "\0" x | fold -w 80)"; printf "%s\n" "$V" | grep -q MATCHME'
-  [ "$status" -eq 0 ] || { echo "builtin producer failed UNDER the pipe buffer (56 KiB) — the literal exemption would be unsound too"; false; }
-  run bash -c 'set -uo pipefail; V="MATCHME
-$(head -c 131072 /dev/zero | tr "\0" x | fold -w 80)"; printf "%s\n" "$V" | grep -q MATCHME'
-  [ "$status" -ne 0 ] || { echo "builtin producer survived 128 KB — clause 3's NARROWING is over-scoped and 127 sites are false positives"; false; }
+  # ── 2026-09-03: A SINGLE TRIAL IS THE WRONG INSTRUMENT FOR THIS, AND MOVING THE SIZE IS NOT THE
+  #    CURE. Both halves measured; row 418628734437 is OPEN and owns them. ───────────────────────
+  # The remedy this arm carried — 57344, "0/120 at loadavg 15.3, with 7.4 KB of margin" — was true
+  # at the load it was measured at and does not generalise. Re-measured 2026-09-03 at loadavg 44,
+  # which is the load the LAND GATE actually runs at, N=200 per size:
+  #
+  #       raw 40960 (written 41481)   4/200 = 2.0%   every failure exit 141, silent
+  #       raw 57344 (written 58069)   4/200 = 2.0%   every failure exit 141, silent
+  #       raw 65821 (written 66652)  20/20  = 100%   the saturated control, instrument proven live
+  #
+  # The rate is FLAT from 40 KiB to 57 KiB. So under load this is not a buffer-edge band that more
+  # byte margin escapes: it is a scheduling race whose rate does not depend on the sub-buffer size
+  # at all, and a curve across 4096/16384/32768/40960/49152/57344 at N=60 is consistent with one
+  # uniform low rate rather than with a floor (the only nonzero cell was 40960, BELOW two cells
+  # that read clean — which is what noise looks like, not a boundary).
+  # That exhausts the row's candidate (b) "move it away from the edge". What survives is its
+  # candidate (a): ASSERT A RATE. It is also the stronger claim, because the property this arm
+  # exists to prove is a rate DIFFERENCE — sub-buffer essentially always survives, over-buffer
+  # essentially never does — and sampling each side once cannot state that.
+  #
+  # 18/20 and 0/20 are chosen from the measurement, not from taste: at the measured p = 0.02 the
+  # sub-buffer side fails this gate about 0.07% of the time against 2% for a single trial, a ~30x
+  # reduction, while the over-buffer side saturates and needs no slack. If the sub-buffer side ever
+  # drops below 18/20, that is a real finding about the exemption and not a flake — read the
+  # per-trial exit codes before touching this number, because 141 is SIGPIPE and anything else is a
+  # different defect entirely.
+  sub_ok=0
+  for _i in $(seq 1 20); do
+    if bash -c 'set -uo pipefail; V="MATCHME
+$(head -c 57344 /dev/zero | tr "\0" x | fold -w 80)"; printf "%s\n" "$V" | grep -q MATCHME' >/dev/null 2>&1; then
+      sub_ok=$((sub_ok+1))
+    fi
+  done
+  [ "$sub_ok" -ge 18 ] || { echo "builtin producer survived UNDER the pipe buffer only $sub_ok/20 — the literal exemption would be unsound too"; false; }
+
+  over_ok=0
+  for _i in $(seq 1 20); do
+    if bash -c 'set -uo pipefail; V="MATCHME
+$(head -c 131072 /dev/zero | tr "\0" x | fold -w 80)"; printf "%s\n" "$V" | grep -q MATCHME' >/dev/null 2>&1; then
+      over_ok=$((over_ok+1))
+    fi
+  done
+  [ "$over_ok" -eq 0 ] || { echo "builtin producer survived 128 KB on $over_ok/20 trials — clause 3's NARROWING is over-scoped and 127 sites are false positives"; false; }
 }
 
 @test "8: the tree as it stands is GREEN against the committed allowlist" {
