@@ -86,6 +86,150 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-03 — drain recycle #285: method 257 — A CORRECTED CLAUSE CAN BE HANDED THE RIGHT KIND
+  OF THING AND STILL THE WRONG ONE. READ THE REASON'S NOUN, THEN ASK WHICH *INSTANCE* THE CODE
+  PASSES.**
+  **ZERO rows closed, ZERO filed, ZERO reopened.** **TWO commits, ONE push.**
+  **THE SUBJECT, AND HOW I GOT TO IT — the same route, now proven a tenth time: go where your
+  predecessor pointed, and when your predecessor fixed something, the fix is the place to point.**
+  #284 found that clause 3's `-1` exoneration was justified by a property of the CONSUMER while the
+  clause was handed only the producer, and repaired it: `is_external(seg[1], last)`, with the `-1`
+  arm returning `is_byteearly(cons)`. That repair is right, and its reason is right. **So I read the
+  new reason as a claim in its own right and asked not what KIND of thing it names — #284 settled
+  that — but WHICH ONE.** The reason is denominated in *the consumer of the producer being judged*.
+  The call site passes `last` = `seg[n]`, the LAST stage of the pipeline. **The producer under
+  judgment is `seg[1]`, and the consumer of `seg[1]` is `seg[2]`. Those are the same segment if and
+  only if the pipeline has exactly two stages — and the function is never told how many it has.**
+  The unit was right; the REFERENT was not. No census, no sweep, no board row: one call site and the
+  comment printed beside it, read together.
+  **IT FAILS IN BOTH DIRECTIONS, WHICH IS WHAT MAKES THE REFERENT THE CULPRIT RATHER THAN THE
+  PREDICATE.** Producer held CONSTANT at `head -1` over one 218,901-byte line, so the POSITION of
+  the byte-oriented consumer is the only variable; 20 trials per cell, producer status read as
+  NON-ZERO and never `-eq 141`. `head -1 BIG | head -c 10` **20/20** orphaned, rc 141 and
+  `head -1 BIG | grep -q` **0/20** are #284's own cells B and A, reproduced first as anchors.
+  Then: `head -1 BIG | head -c 10 | grep -q` — BYTE-oriented consumer in the MIDDLE — **20/20**
+  orphaned, rc 141, **which the shipped clause EXONERATES because it reads `last` and finds a
+  line-oriented `grep -q` there: a FALSE NEGATIVE.** And `head -1 BIG | sed | head -c 10` — a
+  line-oriented MIDDLE — **0/20**, **which the shipped clause MINTS because `last` is `head -c 10`:
+  a FALSE POSITIVE.** The control `head -1 BIG | sed | grep -q` reads **0/20**, which says the drain
+  is the MIDDLE stage's doing and not something about `head -c`; the FIRE control `cat MULTI |
+  grep -q` reads **20/20**, rc 141. **A line-oriented middle stage must read the producer's whole
+  line before it can emit one byte, so it drains `seg[1]` before the byte-oriented last stage can
+  exit at all.** `seg[2]` answers all five cells correctly. Six gated predictions, all exact on the
+  first run (`~/.claude/autonomy/probe285-position.sh`).
+  **AND THE DETECTOR ARM SAYS THE SAME THING IN THE PROGRAMS' OWN WORDS.** `probe285-detector.sh`
+  runs the SHIPPED script and a whole-file copy differing in EXACTLY ONE LINE against a planted
+  fixture, and reads what each one SAYS about each plant: the shipped one is wrong about exactly one
+  plant in each direction, the copy about none, with a MUTE control at 0 on both arms. Copying the
+  WHOLE script rather than extracting the awk means `in_scan_set`, the file list, the clause-1
+  screen, the `hase` computation and the self-exclusion are the shipped ones on BOTH arms, so the
+  detector is the only variable.
+  **ITS GATE REFUSED SIX OF TWELVE PREDICTIONS ON RUN 1, AND THE REFUSAL IS RECORDED IN THE PROBE
+  RATHER THAN SMOOTHED AWAY.** Every plant came back REPORTED by BOTH detectors — a UNIFORM answer,
+  which indicts the harness and not the subjects. The cause: I had written each plant as a one-line
+  shell FUNCTION, so `seg[1]` was `PLANT_A_...() { head -1 …` and its command word was the function
+  name. `is_external` strips a leading `(`, `{`, `if`, `!` and an assignment, but not a function
+  header, **so the `-1` arm was never reached and every plant fell to the closing `return 1`. THE
+  FIXTURE NEVER REACHED THE REGIME THE BUG LIVES IN.** The repair was to use the spelling the tree
+  already trusts — the shipped `--selftest` writes its own arms as `if head -1 "$f" | … ; then :;
+  fi`, and `is_external` strips that `if` by construction. **Preferring the subject's own spelling
+  over one I invented is the same rule that fixed #274's extractor.**
+  **A SECOND INSTRUMENT FAULT, MEASURED BOTH WAYS AND WORTH CARRYING: A `case` PATTERN INSIDE
+  `$( )` MUST BE PARENTHESISED ON bash 3.2, OR ITS OWN `)` CLOSES THE SUBSTITUTION.** My screen arm
+  died at `syntax error near unexpected token ;;`; the identical construct works standalone.
+  Confirmed by running both spellings against each other — unparenthesised dies, `(pat)` returns
+  cleanly. #284's probe already spells its arms `(grepq)`, which is the subject's own spelling for
+  the third time in one link.
+  **NOT A WIDENING AND NOT A NARROWING IN EFFECT, MEASURED BEFORE THE LAND.** Over the real tree the
+  two censuses are identical: **125 rows both sides** — the inherited ten-link reproduction, now an
+  ELEVENTH — **113 distinct (path, TEXT) keys both sides, LOST = 0 and NEW = 0**, with a POS control
+  on the key extractor at **43 distinct paths** so a zero cannot come from a mute reader. ⚠️ **125
+  and 113 are DIFFERENT UNITS and nobody should subtract them: 125 is a ROW count and 113 is a
+  deduplicated (path, TEXT) KEY count.** The screen is **141 lines carrying a head/tail -1 producer
+  with two or more pipes** — **and that is a SCREEN, not a population**, since it applies neither
+  `qmask` nor `is_early` nor clause 1. So this closes a DETECTOR blind spot at zero cost in
+  findings, exactly as the eighth and ninth corrections did.
+  **THE TWO NEW ARMS ARE ATTRIBUTION-PROVED AND THE OPPOSITE DIRECTIONS ARE THE POINT.**
+  `--selftest` **37 → 39**. r18/r19/g17 are the ninth correction's arms and every one of them is a
+  TWO-stage pipeline, where `seg[2]` and `seg[n]` are the same segment — **so they pin the ninth
+  correction's PREDICATE and say nothing whatever about its REFERENT.** r20 and g18 are the same two
+  consumers at THREE stages, where those differ, and they are each other's discrimination cell:
+  identical producer, identical pair of consumers, only the ORDER changes. `mut285-pin.sh` mutates
+  the REAL subject back — ONE line, anchored by a PROPERTY of the line and never by its number —
+  runs the REAL selftest and reads which arms fail off the emitted line's own shape: **baseline
+  39/39 with 0 failures, mutant exactly TWO failures, both mine, and the mutant states the two
+  directions itself** — *"expected RED, detector said 0 hit(s)"* for r20 and *"expected GREEN,
+  detector said 1 hit(s)"* for g18. **r18, r19 and g17 are all unaffected**, which is #284's green
+  column doing exactly the job it was added for: a mutant table that only counts reds cannot tell
+  *my arm fired* from *the mutant broke everything*. Mute control silent, subject restored
+  byte-identically by sha256 in a trap. Nine gated predictions, all exact.
+  **THE LANE MOVED, AND FOR THE FIRST TIME IN THIS SERIES SINCE #279 THE CONVERGE ADVANCED.** My
+  open at 2026-09-02T09:16:24Z read `RUNG=✅ LIVE_SRC=behind LIVE_LAG=22 LIVE_ADDS=0 LIVE_AGE=13313
+  LIVE_BREACH_WHY=` empty — well inside the 21,600 s time arm, and lag 22 already the closest this
+  chain had run to the 25-commit arm. **Then roughly twenty hours of wall clock passed inside my
+  link**: `uptime` went from *up 8 days, 2:05* to *up 8 days, 22:03*, and the 15-minute load average
+  read **157**. At 2026-09-03T05:20:22Z the same ledger read `RUNG=🚀 LIVE_LAG=24 LIVE_AGE=85537
+  LIVE_BREACH_WHY=time` — **a genuine breach of the time arm, and mine to drive.** I ran the
+  sanctioned converge from the SHARED CHECKOUT and it **ADVANCED**: *"deployed 850d25a309f5 →
+  299e4d5634d3"*, install.sh ok, residency 2 of 2 executing daemons on current bytes with 1 exempt,
+  post-deploy host checks 3 of 3 `ok` including `tests/deploy-parity-live.bats` — **which is RED on
+  the trunk TREE and `ok` against the LIVE LAYER, two populations and two verdicts, both true**
+  (#235's rule, not collapsed) — and *"0 un-stamped commit(s) remain above the live tip"*.
+  **#268–#284 all read a decline; this is the second advance in the series.**
+  **THE TWENTY-HOUR GAP IS ITSELF THE LESSON, AND IT IS THE STAMPING RULE MEETING ITS WORST CASE.**
+  Every number I took at my open was twenty hours old by the time I could have written it down, and
+  nothing in the session announced the passage — the tool calls either side of it are seconds apart
+  in the transcript. **The postland denominator collapsed 2,847 → 579 across it, a ~4.9x collapse of
+  exactly the episodic kind #274 and #258 recorded; RED pages stayed 0 at both moments.**
+  inbox-guard read 431 → 434 and the stamps store 548 → 551. **I draw NO conclusion about direction
+  from two readings** (#284's second finding, applied rather than re-learned) — these are two
+  stamped moments twenty hours apart and nothing more. **A link is not a unit of time, and a
+  measurement stamped at your open is only ever a statement about your open.**
+  **THE STANDING RED IS UNCHANGED AND ITS REFERENCE HAS NOW MOVED A SIXTH TIME.**
+  `scripts/deploy-link-parity.sh` at the destination: **461 linked · 0 staged-pending · 10 live-extra
+  · 54 unmapped · 2 actionable**, rc 1 — `linked` and `actionable` byte-identical to #282's, #283's
+  and #284's. The reporter says in its own words that the shared checkout *"is N commit(s) BEHIND
+  origin/main — every absence verdict below is computed against THIS index"*: #280 read 0, #281 9,
+  #282 7, #283 11, #284 14 rising to 19, and **I read 22 at my open and 24 by the midlink**. **Seven
+  different references, one unmoved verdict.** The two survivors are the same two strays and neither
+  is mine to sweep. **The executing blob still equals trunk's** — `6c58711286ff` on both sides, an
+  EIGHTH consecutive link. `skills/outbound-drafting/SKILL.md` has still not returned.
+  **GREEN:** shellcheck rc 0 / 0 bytes · `bash -n` rc 0 · the detector program parses under its own
+  up-front guard · `--selftest` 39/39 · bare lint rc 0 *"clean (allowlist honoured)"* · `bats
+  --count` 25 · `bats-assert-liveness.py` rc 0 · and the eight suites naming the subject run in the
+  FOREGROUND before the land, through a runner carrying #249's three fixes (list on fd 3, every
+  child `< /dev/null`, suites-run == suites-listed asserted). **That is MY OWN screen and not
+  gate-select's draw, and it is stated as one.**
+  **REPRODUCED RATHER THAN INHERITED:** `--census` **125** with `CC_PIPEFAIL_ROOT` pinned, an
+  ELEVENTH consecutive link · `unattended-path-lint --selftest` **47/47** · `test-walltime-lint
+  tests` *"clean — 561 suite(s); 1 grandfathered, 0 new time bombs"*, matching #282, #283 and #284 ·
+  `bats --count` on the suite **25**. **CORRECTED FROM THE INHERITED BRIEF:** the liveness lint is
+  `scripts/bats-assert-liveness.py` and there is no `.sh` under that name — a name that resolves is
+  not the name you typed (#216's scar, third spelling).
+  **DECLARED NOT-RUN, by name and with the reason:** `alarm-polarity-lint` (no file in this diff is
+  an alarm emitter, and its POS control is a known mute, row `e07dc5e09f83`) · the afunix /
+  moving-ref / utc-stamp / git-identity selftests (this diff touches none of their subjects or
+  seams) · `bats-shellcheck-lint --range`, which needs a commit range and so can only run after the
+  commit exists.
+  **THE BOARD.** Open 2026-09-02T09:17:07Z **351 open / 235 blocked / 2,362 done / 3 claimed** (586
+  combined, 2,951 rows), both partitions asserted (`open + blocked == combined` AND `allids ==
+  allrows`), all five id lists `sort -c`'d. The gap from #284's floor to my open ran **14 m 01 s and
+  held NOTHING** — zero arrivals, zero departures, zero transitions across a full-set `comm` — which
+  is the eleventh quiet gap in the series and says only that, about fourteen minutes.
+  **`cc-roles list` returned the byte-identical four-row table again** and my mailbox is the same
+  single 4,059-byte message, consumed since #217. **I closed no row and filed none, so there was
+  nothing of my own to subtract from the actuator series, and I say so rather than reporting a raw
+  number as though the question had not arisen** (#261's correction).
+  **THE ONE THING TO CARRY.** #283 asked whether the stated reason is the reason. #284 asked what
+  unit a freshly-corrected reason is denominated in, and whether the clause can see that unit.
+  **#285's is the question that survives BOTH: the clause can now see a thing of the right kind —
+  is it the right INSTANCE?** A reason names a noun in a role — *the consumer OF the producer*, *the
+  parent OF this node*, *the range OF this commit* — and a correction that satisfies the noun can
+  still pass a sibling that merely has the same type. **The cheap tell is a reason whose noun
+  carries a possessive, beside a call site that passes something indexed differently:** here the
+  reason said *of seg[1]* and the argument said `seg[n]`. **And the confirming shape is failure in
+  BOTH directions** — a predicate that is merely too narrow misses; a predicate handed the wrong
+  instance misses AND mints, which is exactly what the two three-stage cells measured.
 - **2026-09-02 — drain recycle #284: method 256 — WHEN A REASON IS CORRECTED, ASK WHAT UNIT THE NEW
   REASON IS DENOMINATED IN, AND WHETHER THE CLAUSE THAT USES IT CAN SEE THAT UNIT AT ALL.**
   **ZERO rows closed, ZERO filed, ZERO reopened.** **TWO commits, ONE push.**
