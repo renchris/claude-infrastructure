@@ -2,15 +2,29 @@
 # Updated whenever Anthropic ships a new model or allowlist changes.
 # Pair with claude-bump-models + claude-lint-models (see ~/bin/ + ~/.claude/scripts/).
 #
-# Last updated: 2026-07-24  (Opus 5 lateral bump: claude-opus-5 → opus_latest, ADOPTION STAGED behind
+# Last updated: 2026-09-03  (Fable 5.1 lateral bump PARKED in frontier_staged — the model is live on the
+#              API but NO installed CC binary registers it, so the sweep must not run; see § Fable 5.1.
+#              Same date: Sonnet 5 pricing corrected to the now-permanent $2/$10, Opus 4.1 marked retired.
+#              Prior 2026-07-24: Opus 5 lateral bump: claude-opus-5 → opus_latest, ADOPTION STAGED behind
 #              the auto-mode gate — see § Opus 5 adoption. Prior 2026-07-17: Fable 5 PERMANENT — in ALL Max + Team
 #                            Premium plans at 50% of limits from 2026-07-20; the "window" era is
 #                            CLOSED, no more downgrade. Prior: 2026-06-30 Sonnet 5 lateral bump +
 #                            Fable redeploy.)
 
 versions:
-  frontier_latest: claude-fable-5           # NEW TIER ABOVE OPUS (2026-06-09) — not an opus rename
-  frontier_prior: ""                        # first frontier-tier model; no prior to sweep from
+  frontier_latest: claude-fable-5           # NEW TIER ABOVE OPUS (2026-06-09) — not an opus rename.
+                                            # HELD at 5 on 2026-09-03: Fable 5.1 shipped but no installed
+                                            # CC binary registers it (§ Fable 5.1). Fable 5 is still Active
+                                            # (retires not sooner than 2027-06-09) — nothing here is stale.
+  frontier_prior: ""                        # STAYS EMPTY until the 5.1 flip. Setting it to claude-fable-5
+                                            # is what makes every Fable ref "stale" to claude-lint-models
+                                            # (it collects literals from `_prior$` keys) and what arms
+                                            # claude-bump-models to rewrite them. Both would be WRONG today:
+                                            # Fable 5 is the only Fable this machine can actually run.
+  frontier_staged: claude-fable-5-1         # PARKED 2026-09-03 (§ Fable 5.1). Ignored by claude-lint/
+                                            # bump-models — they key on *_latest / *_prior only (verified:
+                                            # bump iterates ${family}_{latest,prior}; lint selects
+                                            # `test("_prior$")`). Same staging pattern Opus 5 used.
   # Opus 5 ACTIVATED (staging complete) — the auto-mode live-test passed and opus_latest was
   # flipped to claude-opus-5 (opus_prior → claude-opus-4-8, opus_staged cleared). The flip landed in
   # the LIVE config on 2026-07-25 but was never committed back; this file is now the single versioned
@@ -24,6 +38,121 @@ versions:
   sonnet_latest: claude-sonnet-5            # LATERAL 2026-06-30 (was claude-sonnet-4-6); 1M ctx, 128K out
   sonnet_prior: claude-sonnet-4-6
   haiku_latest: claude-haiku-4-5
+
+# ─────────────────────────────────────────────────────────────────────────────
+# § FABLE 5.1 (lateral bump 2026-09-03) — STAGED, and BLOCKED ON THE BINARY, not on auto mode.
+# Anthropic shipped Claude Fable 5.1 (`claude-fable-5-1`) and Claude Mythos 5.1
+# (`claude-mythos-5-1`, Project Glasswing only — we are not participants, so it is recorded
+# for completeness and never routed to). Fable 5.1 succeeds Fable 5 as the frontier tier.
+#
+# WHY STAGED — a DIFFERENT gate than Opus 5's. Opus 5 was blocked on auto-mode allowlist
+# membership, which an agent cannot self-verify. Fable 5.1 is blocked one level lower: the
+# model ID is not in the binary at all. Measured 2026-09-03 against the Bun-compiled
+# claude.exe of every installed version:
+#
+#     strings -a <claude.exe> | grep -c -- <model-id>
+#     version        fable-5-1   fable-5   opus-5   opus-4-8   sonnet-5
+#     2.1.220              0        32       47         59         36
+#     2.1.219              0        32       45         59         36
+#     2.1.114 (stable)     0         0        0          -          -
+#
+# The four non-zero columns are POSITIVE CONTROLS: the instrument works, so the zero is a
+# real absence and not a blind read. (A plain `grep` on claude.exe returns 0 for EVERY model
+# including ones we demonstrably run — it is blind on a Bun-compiled binary. `strings` first,
+# always, and never report a null without the controls beside it.) Note `claude-fable-5` is a
+# PREFIX of `claude-fable-5-1`, so the 32 would also have counted any 5.1 hits; it did not.
+# ⇒ Until a CC build registers the ID, `--model claude-fable-5-1` cannot resolve, and
+#   `claude-bump-models --apply` MUST NOT RUN: it would rewrite frontier roles + the auto-mode
+#   allowlist to an ID the harness cannot dispatch, breaking every /frontier-run spawn at once.
+#   API/SDK callers are unaffected — the model is live there today.
+#
+# ECONOMICS — the headline is the CACHE READ, not the sticker. Base price is IDENTICAL to
+# Fable 5 ($10/$50) and so is the tokenizer, so token counts and cost math carry over. What
+# changed: cache hits/refreshes are priced at 0.025× base input ($0.25/MTok) against 0.1×
+# ($1/MTok) on Fable 5 and every other model. Cache writes are unchanged. For our workload —
+# long agentic sessions that re-read a large cached prefix on every turn — the dominant input
+# line item drops 4×, so 5.1 is materially CHEAPER per session than 5 at the same sticker.
+# This partially re-opens the delta that § Opus 5 adoption recorded as collapsed: the routing
+# note there ("Opus 5 ≈ Fable at HALF cost") was computed on base rates only. Re-do that
+# comparison on effective cost-per-task at activation, not on the $10-vs-$5 headline.
+# Anthropic's own prompting guide points the same way: 5.1 @ medium ≈ Fable 5 at lower cost,
+# and @ low it is "often competitive with Claude Opus and Claude Sonnet models on cost per
+# task while scoring higher" — i.e. the frontier tier may now win slots it used to lose.
+#
+# THREE BREAKING CHANGES vs Fable 5 (docs: /models/fable-5-1/whats-new-fable-5-1):
+#  1. FORCED TOOL USE → 400. `tool_choice` of `{"type":"any"}` or `{"type":"tool",...}` is
+#     rejected (also on count_tokens); `auto` and `none` are unchanged. Thinking is always on
+#     and a forced call would skip it. ⚠️ CHECK AT ACTIVATION: our Dynamic Workflow `schema:`
+#     option forces a StructuredOutput tool call. If the binary implements that as forced
+#     tool_choice rather than strict tool use, every schema-bearing workflow agent pinned to
+#     Fable 5.1 400s. Probe one schema agent before routing any workflow slot to 5.1.
+#  2. THINKING BLOCKS ARE MODEL-BOUND, one-directionally: 5.1 reads earlier models' blocks,
+#     no earlier model reads 5.1's. A conversation moving ONTO 5.1 keeps its reasoning; one
+#     moving OFF it (a refusal fallback to Opus 5 / Opus 4.8) loses it for those turns. Drops
+#     are silent unless you send `thinking-binding-controls-2026-08-01` and read
+#     `input_transformations`. Dropped blocks are not billed.
+#  3. EDITING EARLIER TURNS INVALIDATES THINKING BLOCKS → 400 "bound to a different
+#     conversation". LOW RISK FOR US, twice over: the check is enforced only for accounts
+#     created on or after 2026-08-31 (all four of ours predate that; for older accounts the
+#     API records the mismatch but acts only if the request opts in), and Claude Code,
+#     claude.ai, Managed Agents and the Agent SDK all keep the prefix intact by construction.
+#     It binds our hand-built `messages` arrays, if we ever grow one — not our CC sessions.
+#
+# FIVE ADDITIVE (each behind its own beta header):
+#  - Per-message effort, `mid-conversation-output-config-2026-07-01` — change effort mid
+#    conversation WITHOUT invalidating the prompt cache. Also supported on Opus 5. This is the
+#    first lever that would let a lead raise effort for one hard step and drop back, instead of
+#    the launcher-wide --effort flag we are stuck with today (GH #25591).
+#  - Turn-scoped system messages, `mid-conversation-system-clear-at-2026-08-21` —
+#    `clear_at: "next_user_message"`; the message keeps system authority for one turn, then
+#    stops rendering and costs no input tokens, while staying in `messages` byte-for-byte.
+#    This is the correct shape for our per-turn reminder injections.
+#  - `thinking.display: "updates"`, `thinking-display-updates-2026-08-18` — progress updates
+#    between tool calls delivered as readable text while raw reasoning stays hidden.
+#  - The cache-read price above.
+#  - Content provenance: statistical text watermark on all output, C2PA Content Credentials on
+#    files retrieved via the Files API. No tokens, no request changes.
+#
+# SEVEN BEHAVIOR DELTAS (no code change; all prompt-fixable — see the prompting guide):
+#  parallel tool calling is more variable (may issue one call/turn where 5 batched several, in
+#  coding + computer-use loops where the next reads are implied rather than named) · fewer
+#  user-facing progress updates during long tool runs, more pronounced at higher effort ·
+#  answers from memory more often at `low` effort (calls search/retrieval less) · denser prose ·
+#  LESS formatting in chat, so anti-formatting rules written for older models now over-suppress ·
+#  unmarked quotations when summarising sources · whole-file rewrites for small edits.
+#
+# UNCHANGED from Fable 5: adaptive thinking always on (`disabled` and `budget_tokens` both
+# 400) · `display` defaults to `"omitted"` · prefill 400s · non-default temperature/top_p/top_k
+# 400 · 512-token minimum cacheable prefix · 1M context (default AND max) · 128K max output ·
+# same tokenizer · 30-day data retention, no ZDR · refusal categories and fallback-credit
+# behaviour. Permitted server-side fallback targets for 5.1: claude-opus-4-8 and claude-opus-5.
+#
+# ACTIVATION (do these in order; the first is the gate everything else waits on):
+#   1. Find the CC build that registers `claude-fable-5-1` — re-run the strings probe above
+#      against candidate versions, positive controls included. Install PARALLEL
+#      (`npm i --prefix ~/.claude-<ver> @anthropic-ai/claude-code@<ver>`), never in place, and
+#      keep 2.1.220 for a one-line rollback. Carry `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`
+#      forward — 2.1.219 defaulted nested spawn depth to 3, which re-opens the still-open
+#      #68619 runaway (4M tok/5min) on this spawn-heavy fleet.
+#   2. Confirm ENTITLEMENT, which is separate from registration and may be server-date-gated
+#      (Fable 5 was): `--model claude-fable-5-1 --print "ok"` must return a real completion and
+#      `claude-accounts` must show a live budget. A registered-but-unentitled ID fails at spawn.
+#   3. Confirm PLAN INCLUSION before treating 5.1 as free. frontier_access.source is
+#      `plan-usage` on the strength of Anthropic's 2026-07-17 Fable 5 announcement (all Max +
+#      Team Premium plans, 50% of limits). That statement was about Fable 5 and does NOT
+#      transitively cover 5.1 — read the current plan docs, and check whether the local Fable
+#      quota meter keys on the exact string `claude-fable-5` (which 5.1 would not match) or on
+#      a prefix (which it would). A meter that silently stops counting is worse than one that
+#      errors.
+#   4. Only then: frontier_latest → claude-fable-5-1, frontier_prior → claude-fable-5, clear
+#      frontier_staged, `claude-bump-models --apply`, add claude-fable-5-1 to
+#      auto_mode_allowlist.non_firstParty_max ALONGSIDE claude-fable-5, flip the launcher
+#      default, re-run claude-lint-models.
+#   5. RE-SWEEP effort (see effort_defaults § fable51). Anthropic is explicit that effort level
+#      names do NOT correspond to the same amount of thinking across models — the Fable 5 sweep
+#      does not transfer, exactly as the Opus 4.8 → Opus 5 sweep did not.
+# Until then: Fable 5 remains frontier_latest and every Fable role keeps working unchanged.
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
 # § OPUS 5 ADOPTION (lateral bump 2026-07-24) — STAGED, not a blind sweep.
@@ -144,15 +273,33 @@ frontier_access:
                                             # SHUT 06-12 (exhausted) → REDEPLOYED 07-01 (this window, Jul 1–7).
   fallback: claude-opus-5                 # what frontier roles degrade to when inactive
 
-# Pricing per MTok, input/output USD (source: claude-api skill catalog, 2026-06-09).
+# Pricing per MTok, input/output USD. Verified against platform.claude.com/docs/en/about-claude/pricing
+# on 2026-09-03 (supersedes the 2026-06-09 claude-api-skill snapshot, which had gone stale on Sonnet 5).
 # Used by research-subagents.md cost math — Fable slots cost 2× Opus slots.
+# ⚠️ These pairs are [input, output] BASE rates and deliberately stay 2-element — consumers index them
+# positionally. Cache-read rates are the third real dimension and are recorded in comments, not in the
+# array: the standard multiplier is 0.1× base input EXCEPT on Fable 5.1 / Mythos 5.1, which are 0.025×.
+# For a long agentic session the cache read is the dominant input cost, so a base-rate-only comparison
+# systematically misprices the frontier tier. Cache WRITES are 1.25× (5m) / 2× (1h) on every model.
 pricing_per_mtok:
-  claude-fable-5: [10, 50]
+  claude-fable-5-1: [10, 50]                 # NEW 2026-09-03 — same base as Fable 5, but cache reads are
+                                             # $0.25/MTok (0.025×) vs Fable 5's $1 (0.1×): 4× cheaper on the
+                                             # line that dominates our sessions. Batch $5/$25. § Fable 5.1.
+  claude-mythos-5-1: [10, 50]                # Project Glasswing only — we have no access. Listed so a cost
+                                             # model that meets the ID does not treat it as unknown.
+  claude-fable-5: [10, 50]                   # cache reads $1/MTok (0.1×). STILL the routed frontier model.
   claude-opus-5: [5, 25]                     # NEW 2026-07-24 — same price as Opus 4.8, ≈Fable quality on
                                              # most benchmarks ⇒ Fable's cost-justified delta has collapsed
                                              # for most work (routing note in § Opus 5 adoption above).
+                                             # ⚠️ That verdict is BASE-RATE-ONLY; re-check it against Fable
+                                             # 5.1's 0.025× cache reads before reusing it. Cache read $0.50.
   claude-opus-4-8: [5, 25]                   # still served (Opus 5 fallback); kept for prior-pinned cost math
-  claude-sonnet-5: [3, 15]                  # standard; INTRO $2/$10 through 2026-08-31 then $3/$15
+  claude-sonnet-5: [2, 10]                   # CORRECTED 2026-09-03 (was [3,15]). The $2/$10 launch price is
+                                             # now the STANDARD price — Anthropic cancelled the increase:
+                                             # "The previously scheduled increase to $3/$15 ... on September
+                                             # 1, 2026 will not occur." The old row was a dated prediction
+                                             # that this file kept asserting two days after it was refuted,
+                                             # and research-subagents cost math was reading it. Cache $0.20.
   claude-sonnet-4-6: [3, 15]                # still served — kept for prior-pinned cost math
   claude-haiku-4-5: [1, 5]
 
@@ -390,13 +537,36 @@ effort_defaults:
   # `medium`/`low` for routine — and Fable @ a LOWER level ≈ Opus @ max quality, so
   # max-everywhere over-deliberates and burns the 5-hour window (the very cost that
   # reverted lead_default off Fable on 2026-06-09). The lever is the launcher's
-  # --effort flag (per-spawn effort unsupported, GH #25591): claude-fable-h (high) /
-  # claude-fable-q (medium) vs claude-fable (max) — /effort re-tiers live. Applies to
-  # the claude-fable launcher, /frontier-run panels, and the call-time
-  # research_adversarial / workflow_judge / eval_judge / teammate_frontier slots.
+  # --effort flag (per-spawn effort unsupported, GH #25591).
+  # ⚠️ STALE LEVER, corrected 2026-09-03: this block used to name `claude-fable-h` (high) /
+  # `claude-fable-q` (medium) / `claude-fable` (max) as the way to pick a Fable effort tier.
+  # Launcher consolidation v2 DELETED every launcher name except `claude` and `claude-prev`,
+  # so all three are gone and the instruction was unrunnable. Today the levers are: `/effort`
+  # live in-session, `claude-x` (xhigh) / `claude-h` (high) wrappers, or `--effort <level>`
+  # passed through `claude` (last-wins over the launcher's injected default). The surviving
+  # Fable-specific artifact is the cost warning inside `claude()` in ~/.zshrc, which fires on
+  # a `*claude-fable-5*` glob — that glob DOES also match `claude-fable-5-1`, so the warning
+  # keeps working through the 5.1 flip without an edit.
+  # Applies to /frontier-run panels and the call-time research_adversarial / workflow_judge /
+  # eval_judge / teammate_frontier slots.
   fable_default: high                       # Fable surfaces — NOT max (article 2026-06-11)
   fable_capability_sensitive: xhigh         # derivation panels, security/arch judgment
-  fable_routine: medium                     # routine claude-fable use (was implicitly max)
+  fable_routine: medium                     # routine Fable use (was implicitly max)
+  # Fable 5.1 SURFACES (on activation) — DO NOT inherit the fable_* values above. Anthropic is
+  # explicit in "Prompting Claude Fable 5.1": "Re-run the sweep even if you already ran one on
+  # Claude Fable 5: effort level names don't correspond to the same amount of thinking across
+  # models." Same lesson the Opus 4.8 → Opus 5 sweep taught. `high` is 5.1's API default and the
+  # stated starting point; gains over Fable 5 are largest at the HIGHER settings, while `medium`
+  # roughly matches Fable 5 at lower cost and `low` is often competitive with Opus/Sonnet on
+  # cost-per-task while scoring higher. Two effort-specific traps: at `low` it calls search and
+  # retrieval tools LESS (add a verification nudge for anything needing fresh information), and
+  # at `xhigh`/`max` it thinks longer before a long deliverable (leave max_tokens headroom or it
+  # truncates). These are STARTING POINTS to sweep from, not measured optima — no probe has run.
+  fable51_default: high                     # 5.1's own API default and Anthropic's start point
+  fable51_capability_sensitive: xhigh       # derivation panels, security/arch judgment
+  fable51_routine: medium                   # ≈ Fable 5 quality at lower cost
+  fable51_cheap: low                        # NEW TIER — competitive with Opus/Sonnet on cost/task;
+                                            # pair with a search nudge (low suppresses retrieval)
   # Opus 5 SURFACES (on adoption) follow their OWN ladder — do NOT inherit default:max.
   # Anthropic migration guide + Opus 5 system card: `high` is Opus 5's default; `max` is
   # "prone to overthinking" and shows self-correction / re-verification loops at high effort
@@ -414,14 +584,26 @@ effort_defaults:
   opus5_coding_agentic: medium              # FrontierCode peaks here; test medium vs high per task
   opus5_routine: low                        # scoped / latency-sensitive (low is strong on Opus 5)
 
-# Upcoming retirement dates (from Anthropic model-deprecations page).
+# Upcoming retirement dates (from Anthropic model-deprecations page; re-verified 2026-09-03).
 # Bump this list + re-run claude-lint-models when Anthropic announces changes.
+# NB every entry here is a RETIREMENT, i.e. the date requests start failing. Anthropic also
+# publishes a "not sooner than" floor for Active models; those are NOT deprecations and are
+# recorded in the § note below rather than as keys, so the lint's stale-literal sweep — which
+# reads this map's keys — cannot mistake a healthy model for a doomed one.
 deprecations:
-  claude-3-haiku: "2026-04-20"              # 3 days out — urgent if referenced
+  claude-3-haiku: "2026-04-20"              # (PAST — retired)
   claude-opus-4: "2026-06-15"               # undated 4.0 variants (PAST — retired)
   claude-sonnet-4: "2026-06-15"             # (PAST — retired)
-  claude-opus-4-1: "2026-08-05"             # → migrate to claude-opus-5 (platform docs 2026-07-24);
-                                            # not referenced in this toolchain, listed for completeness.
+  claude-opus-4-1: "2026-08-05"             # (PAST — RETIRED 2026-08-05, confirmed on the deprecations
+                                            # page 2026-09-03; this row was a future date until then).
+                                            # Was → claude-opus-5. Not referenced in this toolchain.
+#
+# Retirement FLOORS for models we actually route to (Active; "not sooner than", re-read 2026-09-03):
+#   claude-fable-5-1  2027-09-01   ·  claude-fable-5   2027-06-09   ·  claude-opus-5    2027-07-24
+#   claude-opus-4-8   2027-05-28   ·  claude-sonnet-5  2027-06-30   ·  claude-sonnet-4-6 2027-02-17
+#   claude-haiku-4-5  2026-10-15  ← NEAREST. Haiku 4.5 is research_retrieval (the Explore tier);
+#                                   it is ~13 months out, so no action, but it is the first of our
+#                                   routed models to come up and there is no Haiku 5 to move to yet.
 
 # Roadmap note: on ANY model release, run the `/model-upgrade` skill
 # (~/.claude/skills/model-upgrade/SKILL.md). It distinguishes the three cases:
