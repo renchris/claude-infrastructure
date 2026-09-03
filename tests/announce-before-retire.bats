@@ -546,8 +546,18 @@ mutant_bare_awk() {  # → writes fn-noguard.sh
   grep -qF 'SC_UNLANDED_N=0 SC_UNLANDED_BR="" SC_UNLANDED_TRUNK=""' "$HF"   # …and pre-seeds, for set -u
   grep -qF '"${SC_UNLANDED_N:-0}" "${SC_UNLANDED_BR:-}" "${SC_UNLANDED_TRUNK:-}"' "$HF"
   # ORDER: the capture must precede the announce, or the call site reads the pre-seeded zero forever.
-  cap="$(grep -nF 'SC_UNLANDED_N="$_sc_ahead"' "$HF" | head -1 | cut -d: -f1)"
-  ann="$(grep -nF 'sc_announce_before_retire "$SC_SID"' "$HF" | head -1 | cut -d: -f1)"
+  # DRAINED 2026-09-03 with the eleventh correction to pipefail-sigpipe-lint. Both lines used to be
+  # `grep -nF … "$HF" | head -1 | cut -d: -f1`: an early-exiting consumer in the MIDDLE of a
+  # three-stage pipeline, which orphans the grep the moment it still owes a write when `head -1`
+  # exits, and pipefail then hands this file's `set -euo pipefail` a 141. It was invisible to the
+  # lint until that correction because clause 2 only ever asked about the LAST stage, which here is
+  # a draining `cut`. Measured latent rather than live at the time of the drain — each needle
+  # matches exactly once in a 10,622-line file, so nothing is owed after `head -1` exits, 0/20 with
+  # a FIRE control on the identical shape at 20/20 — and latent is bounded only by how often a
+  # needle happens to occur in a file this chain edits. One awk process reads the whole thing with
+  # no pipe at all, so the class is structurally absent rather than allowlisted.
+  cap="$(awk -v s='SC_UNLANDED_N="$_sc_ahead"' 'index($0, s) { print NR; exit }' "$HF")"
+  ann="$(awk -v s='sc_announce_before_retire "$SC_SID"' 'index($0, s) { print NR; exit }' "$HF")"
   [ -n "$cap" ] && [ -n "$ann" ] || false                            # both anchors found (anti-vacuity)
   [ "$cap" -lt "$ann" ] || false
 }

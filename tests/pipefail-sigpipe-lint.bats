@@ -34,7 +34,7 @@ mkfile() { # $1=name $2=body  [$3=set line]
 }
 census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" --census 2>/dev/null; }
 
-@test "1: the lint's own --selftest passes (39/39, both directions)" {
+@test "1: the lint's own --selftest passes (41/41, both directions)" {
   # 32 -> 34 on 2026-09-02: clause 3's head/tail producer arm gained r16/r17, the FIRE controls for
   # the g11/g12 pair that had pinned only the GREEN direction. Updated deliberately, per the line
   # below, and the two new arms are attribution-proved: reverting the arm to its pre-fix `-?[1-9]`
@@ -58,9 +58,23 @@ census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" 
   # The same referent failing in OPPOSITE directions is what makes it the call site's bug rather
   # than is_byteearly's. Attribution-proved the same way: reverting the one changed line makes
   # exactly r20 and g18 fail and nothing else (~/.claude/autonomy/mut285-pin.sh).
+  #
+  # 39 -> 41 on 2026-09-03 (the ELEVENTH correction), and it also RENAMES g18 to r22 and flips its
+  # expectation. Two things were wrong one rung above the tenth correction. First, clause 2 still
+  # read seg[n] while clause 3 read the first pair, so the conjunction described a PAIR THAT DOES
+  # NOT EXIST for n >= 3; the ladder now walks the n-1 adjacent pairs and reports the first that
+  # orphans. Second — and this is what flips g18 — every ground-truth cell from the eighth
+  # correction on measured "the PRODUCER status", i.e. seg[1], while this lint's verdict is about
+  # the PIPELINE status, and pipefail is denominated in EVERY stage. Re-measured on g18's own
+  # fixture with all three statuses read in the same trial: seg1 0/20, seg2 20/20, PIPELINE 20/20.
+  # The paragraph above is therefore right that a line-oriented middle drains the producer and wrong
+  # that this makes the line green — the middle is then orphaned itself. r21/g19 are the new pair:
+  # an early exit in the MIDDLE with a DRAINING last stage, which the seg[n] ladder could not see at
+  # all, and its discrimination cell. Attribution-proved: reverting the block makes exactly r21, r22
+  # and nothing else fail (~/.claude/autonomy/mut286-pin.sh).
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s' "$output" | grep '39/39' >/dev/null \
+  printf '%s' "$output" | grep '41/41' >/dev/null \
     || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 
