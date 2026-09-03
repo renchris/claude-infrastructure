@@ -86,6 +86,127 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-03 — drain recycle #287: method 259 — TWO CLAUSES CAN AGREE ABOUT THE INSTANCE AND STILL
+  BE DENOMINATED IN DIFFERENT SCOPES; A TOKEN IS NOT AN OPERATOR UNTIL YOU KNOW WHAT BRACKETS IT.**
+  ZERO rows closed, ZERO filed, ZERO reopened. TWO commits, ONE push. Subject reached by the route
+  this chain has now proven twelve times: go where your predecessor pointed, and when the
+  predecessor FIXED something, read the clause BESIDE the fix.
+  · **THE FINDING.** #286 (the eleventh correction) made clauses 2 and 3 of
+  `scripts/pipefail-sigpipe-lint.sh` agree about WHICH adjacent pair they judge, and the ladder now
+  walks the n-1 pairs. **Clause 5 runs BEFORE that loop and drops the whole LINE**, and it read
+  `if (last ~ /\002/) next`, commented *"a trailing || swallows the 141"*. **The word doing the work
+  is TRAILING and the code tests only PRESENCE** — a `||` anywhere in the last segment. Its own
+  sibling **clause 3b, twelve lines below, tests the SAME token and ALSO requires a group opener**,
+  because a `||` inside a group returns the GROUP's status. **The two clauses agreed about the token
+  and disagreed about its SCOPE, and only one of them was right.**
+  · **THE FILE ALREADY CARRIED THE DECIDING KNOWLEDGE, ONE ARM AWAY, WHICH IS THE PART THAT
+  GENERALISES.** Selftest `g14` pins `{ p || true; } | consumer` GREEN and says *in its own label*
+  that the group NEUTRALISES the 141 — a claim about WHERE the group is. **Nothing pinned the mirror
+  image, so nothing refused it.** A ladder is audited clause by clause; a SCOPE is a relation
+  between a clause and its brackets, and no arm anybody writes tests a relation.
+  · **WHAT THE MEASUREMENT SAID.** Producer held CONSTANT at `cat BIG`, last command CONSTANT at
+  `grep -q NEEDLE`, **only the bracketing varying**, so a difference between cells cannot be
+  attributed to either end. 20 trials per cell, status read as NON-ZERO rather than `-eq 141`, with
+  PIPESTATUS read in the SAME shell that ran the pipeline: `cat BIG | grep -q N` **20/20**
+  PIPESTATUS `[141 0]` (fire anchor) · `… || true` **0/20** (the `||` IS top level and does swallow)
+  · **`cat BIG | { grep -q N || true; }` 20/20, PIPESTATUS `[141 0]` — BYTE-IDENTICAL to the anchor**
+  · `( grep -q N || true )` **20/20** (`( )` and `{ }` scope alike) · `( grep -q N ) || true`
+  **0/20** · NEG over an 18-byte body **0/20** (it is the BYTES still owed) · mirror
+  `{ cat BIG || true; } | grep -q N` **0/20**. **The group returns 0 and pipefail still takes the max
+  over EVERY stage, so the 141 survives untouched** — and clause 5 exonerated the line before any
+  other clause ran. **A FALSE NEGATIVE, and only one, because clause 5 is a SCREEN: a screen keyed on
+  the wrong scope can only ever MISS** (#286's directional rule, applied rather than re-learned).
+  · **THE REPAIR IS A DEPTH WALK AND NOT A REGEX, AND THE FIFTH CELL IS WHY.** A group in the last
+  stage with the `||` OUTSIDE it still swallows, **so a repair reading *"any group opener
+  disqualifies"* would MINT that correct line.** Only tracking nesting depth separates cell four from
+  cell five, which is why clause 5 is now a function.
+  · **AND IT FAILS SAFE ON A FRAGMENT IT CANNOT PARSE — WHICH COST A MEASURED FALSE POSITIVE FIRST,
+  AND THEN A RATCHET SHRINK.** The detector reads PHYSICAL lines and 13 census rows span more than
+  one; on a continuation line the quote state is unbalanced BY CONSTRUCTION and a closing quote reads
+  as an opening one. `bin/cc-claude-bin:64`, whose `|| pin=""` closes an assignment opened on line
+  63, had its `||` read as QUOTED and was minted — **correct code, because over the LOGICAL line the
+  `||` is top level.** **BOTH HALVES OF THE GUARD ARE LOAD-BEARING AND THE FIRST CUT HAD ONE:**
+  exonerating on unbalanced-quotes ALONE is far too blunt, because the tail segment of any
+  `VAR="$( a | b )"` ends on an unmatched closing quote — **it exonerated SEVEN sites the shipped
+  detector flags, a ratchet SHRINK, which is the direction `a6449cebc` took to block every land in
+  this repo.** The ambiguity only bites when a `||` was SKIPPED because of the quote state, so both
+  must hold. **Measured across the three cuts: NEW 1 / LOST 0, then NEW 0 / LOST 7, then NEW 0 /
+  LOST 0.** A screen that convicts on a fragment it cannot parse converts a known blind spot into a
+  wrong verdict.
+  · **NOT A WIDENING IN EFFECT, MEASURED BEFORE THE LAND.** Control = the SHIPPED SCRIPT; mutant = a
+  whole-file copy differing only in the clause-5 call site and the function it calls. `mklint287.py`
+  **generalises #286's one-contiguous-run assertion to EXACTLY THE TWO RUNS NAMED** — an awk function
+  must be defined at program top level, so a call site plus a definition are necessarily disjoint —
+  each located by an anchor asserted unique, with **head, MIDDLE and tail byte-identical**, so a
+  THIRD run would mean the replace hit something it was not aimed at. 21 gated assertions.
+  `--census` keyed on **(path, TEXT)**, `CC_PIPEFAIL_ROOT` pinned on BOTH arms: **ROWS 125 → 125,
+  KEYS 116 → 116, LOST = 0, NEW = 0**, POS control **44 distinct paths**. Hermetic plants reading
+  what each program SAYS about each shape: **6 gated predictions, all exact** — the shipped one
+  silent on both group-scoped plants, the copy silent on neither, and BOTH silent on the widening
+  bound.
+  · **ATTRIBUTION-PROVED, AND THE HARNESS'S OWN CONTROL WAS MUTE FIRST — THE THIRD INSTRUMENT FAULT
+  OF THE LINK AND THE ONLY ONE THAT WOULD HAVE SHIPPED.** `mut287-pin.sh` mutates the REAL subject
+  back at ONE line anchored by a PROPERTY of its text, runs the REAL `--selftest`, and reads the
+  failing arms out of the mutant's own emitted text: **baseline 44/44 / 0 failures; mutant exactly
+  TWO, both mine**, each stating its own direction, with a six-arm GREEN column (`g8 g14 g19 r20 r21
+  r22`) asserted UNAFFECTED so the table cannot confuse *my arm fired* with *the mutant broke
+  everything*. Subject restored byte-identically by sha256 in a trap. **Its first cut keyed on
+  `✗ r23 ` — but `expect()` emits the arm's LABEL and the arm NAME appears NOWHERE in the output, so
+  `mine` read 0 on a run whose two failures were both mine, and every green row printed UNAFFECTED
+  for a token that CAN NEVER APPEAR.** A column that cannot fire is not a second opinion. **The
+  rc-93 gate is the only reason that surfaced**; repaired by DERIVING each arm's label from the
+  subject (**44/44 resolved**, a POS control that goes loud on a reword) rather than transcribing it.
+  · **THE SECOND FINDING, AND IT IS ABOUT THIS CHAIN'S OWN MOST-REPRODUCED NUMBER.**
+  `--census` = **125 rows** reproduced for a THIRTEENTH consecutive link, *"matching #275–#286"*.
+  **But the KEY count read 116 against the 113 this brief has carried, on a tree with ZERO commits
+  landed since #286's land** (`git rev-list --count 8e7775d41..origin/main` = 0) **and `install.sh`
+  untouched since 2026-08-31, before that land.** So the tree is byte-identical to the one #286
+  measured, `install.sh` carries **3** census rows in mine and **0** in #286's stored key file, and
+  **the disagreement is entirely in the INSTRUMENT.** **ROWS and KEYS are two counts of one
+  population and only the second ever moved — and only the first was ever re-derived.** A number
+  that reproduces perfectly across thirteen links is not evidence that the thing under it is stable;
+  it is evidence about the count. (My predicate is stated so the next link can refute it: key =
+  path + TAB + the text after the SECOND colon, taken verbatim with `index()`. **Never by blanking
+  `$1`/`$2` — assigning to a field REBUILDS `$0` with OFS and turns every colon inside the site text
+  into a space**, which is the instrument fault I found and repaired in my own first cut.)
+  · **ARMS.** `r23` (brace spelling) and `r24` (paren spelling) RED; **`g20` GREEN as the widening
+  bound**. `--selftest` **41/41 → 44/44**, the suite's count pin updated deliberately with its
+  reason. `tests/pipefail-sigpipe-lint.bats` stays **25** (test 1's assertion edited, no test added).
+  · **GATES.** shellcheck rc 0 · `bash -n` rc 0 · `bats --count` 25 · bats-assert-liveness rc 0 ·
+  the bare lint rc 0 over the whole tree · `unattended-path-lint --selftest` **47/47** ·
+  `test-walltime-lint tests` clean at **562** suite(s) · scoped `bats-shellcheck-lint` clean, 1 suite
+  scanned, 0 blocking. **`alarm-polarity-lint` DECLARED NOT-RUN** — neither changed file is an alarm
+  emitter and that lint's own POS control is a KNOWN MUTE (`e07dc5e09f83`, OPEN, not re-filed):
+  the SEVENTEENTH consecutive link to declare rather than claim.
+  · **THE FOREGROUND DRAW, run before the land so the land's smoke is a SECOND verdict.** The
+  selector, asked only AFTER the commit existed (#283's scar), returned a REAL LIST of **5** with its
+  POS control speaking at **1**: `cc-classify` **87** · `gate-ownscope-leak` **24** ·
+  `git-worktree-guard` **14** · `land-lint-scope-derived` **13** · `pipefail-sigpipe-lint` **25** —
+  **163 ok, 0 not ok, 0 skip, 5 plans, terminator ran == listed == 5**, 2 m 55 s at load 18–22.
+  · **THE BOARD.** Open **355 / 229 blocked / 2,364 done / 4 claimed** (584 combined, 2,952 rows) at
+  2026-09-03T07:10:08Z, both partitions asserted. The gap from #286's FLOOR (07:06:20Z) to my open
+  (07:10:12Z) — **3 m 52 s — held NOTHING: zero arrivals, zero departures, zero transitions**, from a
+  FULL-SET `comm` with `sort -c` on both sides. I closed no row and filed none, so nothing needed
+  subtracting from the actuator series.
+  · **THE LANE.** Open 07:09:09Z: `RUNG=✅ LIVE_SRC=behind LIVE_LAG=2 LIVE_ADDS=0 LIVE_AGE=5064
+  LIVE_BREACH_WHY=` empty — **a plain ✅ carrying a note, not a `🚀`**, the budget being 25 commits /
+  6 h. `GATE=stale` at every moment, the ONE-HUNDRED-AND-THIRTY-FIRST consecutive and **not mine to
+  drive**. Postland RED pages **0**, denominator **2,855** at 07:10:25Z (#286 read 2,849 ×2 then
+  2,850). The other page store **2,510 all / 89 `.page`**; inbox-guard **434 / 434**; stamps **551**.
+  **No direction published off any of them.**
+  · **THE STANDING RED is unchanged at 2 actionable** — `461 linked · 0 staged-pending · 10
+  live-extra · 54 unmapped · 2 actionable` at 07:09Z, `linked` and `actionable` byte-identical to
+  #282–#286. **Its reference sentence, which #286 found ABSENT, is BACK and reads 2 commits BEHIND —
+  and a second instrument agrees** (`git rev-list --count HEAD..origin/main` on the shared checkout
+  = 2). The executing blob still equals trunk's at `6c58711286ff`, a TENTH consecutive link.
+  · **THE QUESTION AFTER #286's, and it is the one that survives a ladder whose clauses already
+  agree: THEY NAME THE SAME OBJECT — DO THEY MEAN THE SAME SCOPE?** Read every clause that names a
+  TOKEN and ask what BRACKETS decide its effect. A `||`, an `&&`, a `;`, a redirect: each is an
+  operator only at the level it sits at, and a clause that greps for the character has asked whether
+  it is PRESENT, never whether it is IN FORCE. **The cheap tell is two clauses in one file testing
+  the same character with different guards** — here `last ~ /\002/` beside
+  `seg[ci] ~ /\{/ && seg[ci] ~ /\002/`, twelve lines apart. **The one with the extra guard is
+  usually right, and it is telling you what the other one forgot.**
 - **2026-09-03 — drain recycle #286: method 258 — TWO CLAUSES CAN EACH BE HANDED A CORRECT INSTANCE
   AND STILL BE DENOMINATED IN DIFFERENT ONES. A LADDER IS A CONJUNCTION, AND A CONJUNCTION OF
   CORRECT CLAUSES CAN DESCRIBE A THING THAT DOES NOT EXIST.**
