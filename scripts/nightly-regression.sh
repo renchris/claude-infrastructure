@@ -21,6 +21,9 @@
 #   5. postland_inertness — the post-land verification net's OWN liveness: stamps dir present but a
 #      settled (>2h) trunk commit unstamped = the net stopped stamping (blind-check law). Abstains
 #      green when the net isn't adopted (no stamps dir). Env seam: CC_NIGHTLY_POSTLAND_DIR/_AGE.
+#   5b. postland_green_starvation — the OTHER half of that law: a net that stamps but never stamps
+#      GREEN proves nothing, and step 5 cannot see it (a `cut`/`red` stamp satisfies it). Reds when
+#      trunk has carried UNPROVEN content past the green budget. Seam: CC_NIGHTLY_POSTLAND_GREEN_MAX/_SCAN.
 #   6. e2e-transitive-skip — the step-4 skip must hold TRANSITIVELY: a declared gate may not run an
 #      e2e suite from inside itself unless that call carries an inline `# e2e:reviewed-hermetic`.
 #
@@ -73,6 +76,14 @@ POSTLANDV="${CC_NIGHTLY_POSTLAND_VERIFY:-$REPO/scripts/postland-verify.sh}"   # 
 PAGE_KEY="${CC_NIGHTLY_PAGE_KEY:-nightly-regression}"
 POSTLAND_DIR="${CC_NIGHTLY_POSTLAND_DIR:-$HOME/.claude/autonomy/postland}"   # post-land verification net; stubbable
 POSTLAND_AGE="${CC_NIGHTLY_POSTLAND_AGE:-7200}"                              # a trunk commit older than this MUST be stamped
+# The GREEN budget: how long trunk may carry content nothing has proven. 24h is the figure the
+# starvation this check exists for was measured against (backlog 01ab05685857: breaches of 57h, 53h
+# and 26h, none of which paged). SCAN bounds the walk down trunk — 200 is deploy-live's own SCAN_N,
+# so both instruments look through the same window and cannot disagree about what is visible.
+POSTLAND_GREEN_MAX="${CC_NIGHTLY_POSTLAND_GREEN_MAX:-86400}"
+POSTLAND_GREEN_SCAN="${CC_NIGHTLY_POSTLAND_GREEN_SCAN:-200}"
+case "$POSTLAND_GREEN_MAX"  in ''|*[!0-9]*) POSTLAND_GREEN_MAX=86400 ;; esac
+case "$POSTLAND_GREEN_SCAN" in ''|*[!0-9]*|0) POSTLAND_GREEN_SCAN=200 ;; esac
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 now_epoch() { date +%s; }
@@ -411,6 +422,66 @@ postland_inertness() {
   return 1
 }
 
+# Blind-check law, SECOND HALF. Step 5 keys on a stamp EXISTING, and the producer's own vocabulary
+# says a `cut` stamp means nothing was proven (postland-verify.sh:stamp_is_verdict separates
+# green|red|hung from cut, and the runner re-queues a cut tree precisely because it decided nothing).
+# So a verifier that stamps every tick and never earns a green reads ALIVE at step 5 while trunk goes
+# unproven for days — measured on this box as three breaches of the 24h budget, 57h/53h/26h, none of
+# which paged anywhere the operator reads (backlog 01ab05685857). "The net is running" and "the net
+# is proving something" are two facts, and only the first had an instrument.
+#
+# THE MEASURE IS THE UNPROVEN SPAN, NEVER THE NEWEST GREEN'S AGE — the row's own wording ("newest
+# GREEN stamp 46h old") is the sampled value, not the condition, and keying on it reds a healthy
+# machine. Stamps are TREE-keyed, so a tree already proven is deliberately never re-run: a trunk that
+# sits quiet for 30h keeps a 30h-old green and is FULLY proven the whole time. What harms is trunk
+# CARRYING content nothing has re-proven, so the quantity is the age of the OLDEST trunk commit still
+# unproven — which is also immune to the converse false positive (a 26h-quiet trunk that moved ten
+# minutes ago has a 26h-old newest green and nothing wrong with it).
+#
+# Abstains GREEN on three facts, each of them somebody else's: no stamps dir (the net is not adopted),
+# no stamp at all (step 5 owns that — two checks on one fact is two pages for one repair), and trunk
+# unresolvable (no subject). An unreadable commit clock abstains too: a check that cannot read its own
+# quantity has no verdict, and inventing one here would page over a corrupt object, not over famine.
+stamp_verdict() { # <stamp-file> → green|red|hung|cut ("" when absent/unparseable)
+  sed -n 's/.*"verdict":"\([a-z]*\)".*/\1/p' "${1:-/nonexistent}" 2>/dev/null | head -1
+}
+postland_green_starvation() {
+  local stamps="$POSTLAND_DIR/stamps" offbox="$POSTLAND_DIR/offbox"
+  local sha tree ct oldest="" oldest_ct="" n=0 newest_v="" acquitted="" age
+  [ -d "$stamps" ] || return 0                                   # net not adopted → abstain
+  set -- "$stamps"/*.json
+  [ -e "$1" ] || return 0                                        # never stamped → step 5's fact
+  git -C "$REPO" fetch origin main >/dev/null 2>&1 || true        # best-effort freshness
+  git -C "$REPO" rev-parse origin/main >/dev/null 2>&1 || return 0
+  # Fed by a HERE-DOC, not a pipe: a pipe runs the loop in a subshell and every count below would be
+  # discarded at the `done`, so the check would abstain on exactly the trunk it was built to convict.
+  while IFS=' ' read -r sha tree ct; do
+    [ -n "$tree" ] || continue
+    grep -q '"verdict":"green"' "$stamps/$tree.json" 2>/dev/null && break   # proven from here down
+    n=$((n+1)); oldest="$sha"; oldest_ct="$ct"
+    [ -n "$newest_v" ] || newest_v="$(stamp_verdict "$stamps/$tree.json")"
+    # The off-box lane's acquittal is a WEAKER claim (a hermetic SUBSET), so it never cancels this
+    # red — the host-coupled suites stay unproven either way. It is reported because it is the one
+    # fact that changes the repair: a starving verifier over a CI-acquitted tree is a machine
+    # problem, and a span nothing anywhere has proven is a code problem. Both fields, like
+    # deploy-live.sh:is_offbox_green — a bare file drop must not launder a subset into an acquittal.
+    [ -n "$acquitted" ] || { grep -q '"verdict":"green"' "$offbox/$tree.json" 2>/dev/null \
+      && grep -q '"scope":"offbox-hermetic"' "$offbox/$tree.json" 2>/dev/null && acquitted="$sha"; }
+  done <<EOF
+$(git -C "$REPO" log -n "$POSTLAND_GREEN_SCAN" --format='%H %T %ct' origin/main 2>/dev/null)
+EOF
+  [ "$n" -gt 0 ] || return 0                                     # trunk tip itself is green → alive
+  case "${oldest_ct:-}" in ''|*[!0-9]*) return 0 ;; esac         # unreadable clock → no verdict
+  age=$(( $(now_epoch) - oldest_ct ))
+  [ "$age" -gt "$POSTLAND_GREEN_MAX" ] || return 0
+  local acq="none — nothing anywhere has proven this span"
+  [ -n "$acquitted" ] && acq="$(printf 'yes, off-box hermetic green from %.12s down' "$acquitted")"
+  printf 'postland net GREEN-STARVED: trunk has carried UNPROVEN content for %ss (max %ss) — %s commit(s) sit above the newest green, oldest %.12s; newest verdict over that span: %s; off-box acquittal: %s\n' \
+    "$age" "$POSTLAND_GREEN_MAX" "$n" "$oldest" "${newest_v:-none (unstamped)}" \
+    "$acq"                                                       # captured → quoted on the RED page
+  return 1
+}
+
 # S3 (audit 08): step 4 SKIPS *-e2e.sh as side-effectful — but the skip is NOT TRANSITIVE.
 # premortem-gate.sh:64 runs telemetry-e2e.sh AND p8-e2e.sh from inside itself. Both were verified
 # hermetic (mktemp sandboxes, no live ~/.claude writes), so the skip's intent is not violated TODAY —
@@ -588,6 +659,11 @@ regress() {
 
   # 5. the post-land net's own liveness: exists-but-stopped-stamping is an INERT check (pages).
   run_check "postland-inertness" postland_inertness
+
+  # 5b. …and stamping-but-never-GREEN is the same blindness one step on: the net runs, step 5 is
+  # satisfied, and trunk goes unproven. Separate check, separate name — folding it into step 5 would
+  # report one repair under the other's name, and they are repaired differently.
+  run_check "postland-green-starvation" postland_green_starvation
 
   # 6. the e2e skip must be TRANSITIVE (S3) — a gate may not smuggle an unreviewed e2e past step 4.
   run_check "e2e-transitive-skip" transitive_e2e_assert
