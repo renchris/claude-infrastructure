@@ -2042,3 +2042,26 @@ offline, inside an `ls-remote` it already makes. **The larger fix is orthogonal 
 `inbox`'s projection into `cc-cloud classify()`**, so the board stops rendering NOT-STARTED over
 sessions the control plane can see working. That is what moves 85% of the board; nothing in §16
 does it.
+
+### 16.5 · The row is discharged — and the re-dispatch that discharged it proves the cure was not live (2026-09-03)
+
+`0c8b39b67665` is **DISCHARGED by `0efcc073`** (ancestor of `origin/main`, re-asserted on a
+*deepened* clone; `cc-dispatch selftest` 180/180 here, all twelve `(c7)` arms green). No tenth
+implementation was written and none was warranted.
+
+🚨 **But the row was re-fired anyway, 28 h after its cure landed, by a dispatcher that could not
+have told its worker so.** The 09-03 brief carries neither the `--unshallow` clause (`22b8824c`,
+09-01) nor the `DISPATCHER VINTAGE` line (`f9cbe177`, 09-02) — both **unconditional**, composed at
+`bin/cc-dispatch:2909`/`:2918` with no `$venue` guard — so the bytes that composed it predate
+`22b8824c`: three landed `cc-dispatch` commits behind. Everything else about that brief follows from
+the vintage and needs no second cause: the desk path prefix, the on-box terminal verbs, no boot
+ping. It bit inside the session too — the shallow clone made `git log -S` name the wrong commit for
+the very clause whose absence caused it.
+
+So §16 fixed the brief and did not fix the **loop**: the actuator that fires re-dispatches converges
+on no schedule tied to the landing that cures them, and `bin/cc-dispatch` is a symlinked *edit*, not
+an ADD, so §13.6's caveat does not even cover this. One read on the desk separates the three
+candidate causes (checkout behind trunk · stale/copied symlink · older worktree) and no read from a
+VM can: `git -C ~/Development/claude-infrastructure rev-parse HEAD:bin/cc-dispatch` against
+`readlink -f ~/.claude/bin/cc-dispatch`. Measurement and limits:
+`docs/research/cloud-boot-contract-verdict-2026-09-03.md`.
