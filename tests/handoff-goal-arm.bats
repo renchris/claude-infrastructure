@@ -338,3 +338,48 @@ _write_terminal_goal_transcript() { # $1=sid — armed then ACHIEVED: nothing li
   run inherit_recycle_goal "sid-that-never-existed"
   [ "$status" -eq 0 ]
 }
+
+# ── 5 · THE LEDGER IS THE ONLY READER ON THE RECYCLE PATH ────────────────────────────────────
+# arm_goal explains every failure on stderr, and on --recycle stderr reaches nobody: the session
+# that ran the fire is the one --recycle replaces, so it is gone before this speaks. Verified on
+# 2026-09-03T19:15:19Z (pane 213) — that firing session's transcript contains zero "MANGLED"
+# lines, and the ledger detail could not say whether the screen was unreadable or the content
+# disagreed, nor what was on it. FIRE_PASTE_LAST_READBACK is the observation
+# it2_paste_submit_verified hands back; these pin that it reaches the row.
+
+# The three arming outcomes, as file-scope stubs. FIRE_PASTE_LAST_READBACK is the observation
+# it2_paste_submit_verified hands back and arm_goal folds into the ledger detail; arm_goal reaches
+# this suite through the units.sh extraction, which shellcheck cannot follow — so every write below
+# reads as unused here and each stub carries its own narrow disable rather than one blanket one.
+# shellcheck disable=SC2034  # read by arm_goal (units.sh)
+_stub_paste_mangled_content() { FIRE_PASTE_LAST_READBACK="alsofixthemargin/goalx"; return 4; }
+# shellcheck disable=SC2034  # read by arm_goal (units.sh)
+_stub_paste_mangled_unreadable() { FIRE_PASTE_LAST_READBACK="<unreadable>"; return 4; }
+# shellcheck disable=SC2034  # read by arm_goal (units.sh)
+_stub_paste_held() { FIRE_PASTE_LAST_READBACK="half-typedoperatorthought"; return 3; }
+
+@test "mangled: the ledger row carries WHAT the read-back saw (RED before the fix)" {
+  command -v jq >/dev/null 2>&1 || skip "ledger rows need jq"
+  it2_paste_submit_verified() { _stub_paste_mangled_content; }
+  run arm_goal it2 P9 "close the gate"
+  [ "$status" -eq 0 ]
+  run jq -r 'select(.class=="goal-arm")|[.verdict,.detail]|@tsv' "$LOG"
+  [[ "$output" == mangled*"saw: alsofixthemargin/goalx" ]]
+}
+
+@test "mangled: an UNREADABLE screen is distinguishable from a content mismatch in the row" {
+  command -v jq >/dev/null 2>&1 || skip "ledger rows need jq"
+  it2_paste_submit_verified() { _stub_paste_mangled_unreadable; }
+  run arm_goal it2 P9 "close the gate"
+  run jq -r 'select(.class=="goal-arm")|.detail' "$LOG"
+  [[ "$output" == *"saw: <unreadable>" ]]
+}
+
+@test "held: the ledger row names the draft the arm deferred to (RED before the fix)" {
+  command -v jq >/dev/null 2>&1 || skip "ledger rows need jq"
+  it2_paste_submit_verified() { _stub_paste_held; }
+  run arm_goal it2 P9 "close the gate"
+  [ "$status" -eq 0 ]
+  run jq -r 'select(.class=="goal-arm")|[.verdict,.detail]|@tsv' "$LOG"
+  [[ "$output" == held*"saw: half-typedoperatorthought" ]]
+}

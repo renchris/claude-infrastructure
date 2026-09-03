@@ -206,6 +206,25 @@ phased_hf_bounded() {
   return 1
 }
 
+# Three-phase sibling of the above, for the post-paste POLL: read 1 serves the empty pre screen,
+# reads 2..$TORN_READS serve a frame caught MID-REPAINT (no input box between two borders, so
+# composer_content returns rc 1 = UNKNOWN), and every read after that serves the settled composer.
+# File-scope, one-liner at the call sites, for the same reason phased_hf_bounded is: an inline
+# multi-line function body inside a @test defeats bats-assert-liveness.py's depth tracking and
+# every statement after it reports as a dead non-final assertion.
+torn_hf_bounded() {
+  local verb="$3" n
+  if [ "$verb" = read ]; then
+    echo r >> "$READS_FILE"; n="$(wc -l < "$READS_FILE")"
+    if   [ "$n" -le 1 ]; then cat "$PRE_FILE"
+    elif [ "$n" -le "${TORN_READS:-2}" ]; then cat "$TORN_FILE"
+    else cat "$POST_FILE"; fi
+    return 0
+  fi
+  if [ "$verb" = send ]; then printf '%s\n' "SEND:$6" >> "$SENT_LOG"; return 0; fi
+  return 1
+}
+
 @test "verified paste: happy path — empty pre, exact read-back, CR sent (rc 0)" {
   PRE_FILE="$BATS_TEST_TMPDIR/pre.txt"; POST_FILE="$BATS_TEST_TMPDIR/post.txt"
   READS_FILE="$BATS_TEST_TMPDIR/reads"; : > "$READS_FILE"
@@ -395,4 +414,98 @@ _hf_strip() { printf '%s' "$1" | LC_ALL=C tr -cd '[:print:]' | LC_ALL=C tr -d '[
   [ "$status" -eq 4 ]
   grep -c 'SEND:' "$SENT_LOG" | grep -qx 1
   ! grep -q $'SEND:\r' "$SENT_LOG"
+}
+
+# ── 7. THE READ-BACK IS POLLED, NOT SAMPLED (2026-09-03) ─────────────────────────────────────
+# Live failure: 2026-09-03T19:15:19Z, pane 213, a 572-char single-line `/goal` payload on the
+# --recycle path. verdict=mangled, CR withheld, and the goal the operator then submitted by hand
+# is byte-identical to what handoff-fire pasted. The post-paste side took ONE sample 0.5 s after
+# the send — at the exact moment the just-engaged successor is repainting — while the pre-paste
+# side has always polled for 30 s. 5 mangles in 94 arms, 3 of 62 recycles against 2 of 26 fresh
+# fires: mode-independent and stochastic, which is what a transient read looks like and what a
+# geometry mismatch (deterministic per width, 94aa89bc6) does not.
+#
+# The acceptance predicate is UNCHANGED. These cases pin that the extra chances only buy time —
+# a genuine mangle still spends every try and still gets no CR.
+
+@test "read-back: a TORN frame right after the paste is RE-READ, not convicted (RED before the fix)" {
+  PRE_FILE="$BATS_TEST_TMPDIR/pre.txt"; POST_FILE="$BATS_TEST_TMPDIR/post.txt"
+  TORN_FILE="$BATS_TEST_TMPDIR/torn.txt"
+  READS_FILE="$BATS_TEST_TMPDIR/reads"; : > "$READS_FILE"
+  SCREEN_FILE="$PRE_FILE";  mk_screen "$GLYPH "
+  SCREEN_FILE="$POST_FILE"; mk_screen "$GLYPH /goal reply with DONE"
+  # a frame caught mid-repaint: no input box between two borders ⇒ composer_content rc 1
+  printf 'half-drawn assistant output\nno box on screen yet\n' > "$TORN_FILE"
+  hf_bounded() { torn_hf_bounded "$@"; }
+  run it2_paste_submit_verified it2 sid "/goal reply with DONE"
+  [ "$status" -eq 0 ]
+  grep -c 'SEND:' "$SENT_LOG" | grep -qx 2                       # paste + CR
+  tail -1 "$SENT_LOG" | grep -q $'SEND:\r'                       # the CR came LAST
+}
+
+@test "read-back: FIRE_PASTE_READBACK_TRIES=1 restores the single sample (a seam that can turn off)" {
+  PRE_FILE="$BATS_TEST_TMPDIR/pre.txt"; POST_FILE="$BATS_TEST_TMPDIR/post.txt"
+  TORN_FILE="$BATS_TEST_TMPDIR/torn.txt"
+  READS_FILE="$BATS_TEST_TMPDIR/reads"; : > "$READS_FILE"
+  SCREEN_FILE="$PRE_FILE";  mk_screen "$GLYPH "
+  SCREEN_FILE="$POST_FILE"; mk_screen "$GLYPH /goal reply with DONE"
+  printf 'half-drawn assistant output\nno box on screen yet\n' > "$TORN_FILE"
+  hf_bounded() { torn_hf_bounded "$@"; }
+  FIRE_PASTE_READBACK_TRIES=1 run it2_paste_submit_verified it2 sid "/goal reply with DONE"
+  [ "$status" -eq 4 ]
+  ! grep -q $'SEND:\r' "$SENT_LOG"
+}
+
+# The verdict half of this one is a TRUE control — cases 17 and 34 assert it and pass on BOTH
+# sides of the fix, which is what pins that polling did not loosen the acceptance predicate. The
+# try-count assertion below is new behaviour and is RED pre-fix; both live in one case so a reader
+# cannot separate "still refuses" from "actually spent the budget it claims to spend".
+@test "read-back: a PERSISTENT hybrid spends every try and still gets no CR" {
+  PRE_FILE="$BATS_TEST_TMPDIR/pre.txt"; POST_FILE="$BATS_TEST_TMPDIR/post.txt"
+  READS_FILE="$BATS_TEST_TMPDIR/reads"; : > "$READS_FILE"
+  SCREEN_FILE="$PRE_FILE";  mk_screen "$GLYPH "
+  SCREEN_FILE="$POST_FILE"; mk_screen "$GLYPH also fix the margin/goal reply with DONE"
+  hf_bounded() { phased_hf_bounded "$@"; }
+  FIRE_PASTE_READBACK_TRIES=4 run it2_paste_submit_verified it2 sid "/goal reply with DONE"
+  [ "$status" -eq 4 ]
+  grep -c 'SEND:' "$SENT_LOG" | grep -qx 1                       # the paste only
+  [ "$(wc -l < "$READS_FILE")" -eq 5 ]                            # 1 pre-paste + 4 read-back tries
+  ! grep -q $'SEND:\r' "$SENT_LOG"                                # final: a negation lives only here
+}
+
+# The recycle path DESTROYS the session that ran the fire, so every stderr line these branches
+# print reaches nobody — verified on the 19:15 instance, whose firing transcript contains zero
+# "MANGLED" lines. The ledger row is the only durable record, so it has to carry the observation.
+
+@test "read-back: a MANGLE records WHAT it saw, for the ledger (RED before the fix)" {
+  PRE_FILE="$BATS_TEST_TMPDIR/pre.txt"; POST_FILE="$BATS_TEST_TMPDIR/post.txt"
+  READS_FILE="$BATS_TEST_TMPDIR/reads"; : > "$READS_FILE"
+  SCREEN_FILE="$PRE_FILE";  mk_screen "$GLYPH "
+  SCREEN_FILE="$POST_FILE"; mk_screen "$GLYPH also fix the margin/goal reply with DONE"
+  hf_bounded() { phased_hf_bounded "$@"; }
+  local rc=0
+  FIRE_PASTE_READBACK_TRIES=2 it2_paste_submit_verified it2 sid "/goal reply with DONE" 2>/dev/null || rc=$?
+  [ "$rc" -eq 4 ]
+  [ "${FIRE_PASTE_LAST_READBACK:-}" = "alsofixthemargin/goalreplywithDONE" ]
+}
+
+@test "read-back: an UNREADABLE screen is recorded as such, not as empty content" {
+  PRE_FILE="$BATS_TEST_TMPDIR/pre.txt"; TORN_FILE="$BATS_TEST_TMPDIR/torn.txt"
+  READS_FILE="$BATS_TEST_TMPDIR/reads"; : > "$READS_FILE"
+  SCREEN_FILE="$PRE_FILE"; mk_screen "$GLYPH "
+  printf 'half-drawn assistant output\nno box on screen yet\n' > "$TORN_FILE"
+  TORN_READS=99                                                   # the screen never settles
+  hf_bounded() { torn_hf_bounded "$@"; }
+  local rc=0
+  FIRE_PASTE_READBACK_TRIES=2 it2_paste_submit_verified it2 sid "/goal x" 2>/dev/null || rc=$?
+  [ "$rc" -eq 4 ]
+  [ "${FIRE_PASTE_LAST_READBACK:-}" = "<unreadable>" ]
+}
+
+@test "read-back: a HELD composer records the draft it deferred to" {
+  mk_screen "$GLYPH half-typed operator thought"
+  local rc=0
+  it2_paste_submit_verified it2 sid "/goal x" 2>/dev/null || rc=$?
+  [ "$rc" -eq 3 ]
+  [ "${FIRE_PASTE_LAST_READBACK:-}" = "half-typedoperatorthought" ]
 }
