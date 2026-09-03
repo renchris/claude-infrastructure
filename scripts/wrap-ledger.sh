@@ -376,6 +376,14 @@ if [ "$MODE" = "machine" ] && [ -n "$WL_TRANSCRIPT" ]; then
     _wl_k="v1|$WL_TRANSCRIPT|$_wl_ms|$PWD|$SESSION_FLAG|${WRAP_SESSION_ID:-}|${CLAUDE_SESSION_ID:-}"
     _wl_k="$_wl_k|${WRAP_TRUNK:-}|${WRAP_DOD_DIR:-}|${WRAP_DOD_FILE:-}|${WRAP_GATE_GREEN:-}"
     _wl_k="$_wl_k|${CC_BACKLOG_BIN:-}|${CC_DECIDE_BIN:-}|${CC_CUSTODY_BIN:-}|${CC_CUSTODY_DIR:-}"
+    # THE PANE ID JOINS THE KEY (backlog a9ede190ee3b). Custody is now PANE-ATTRIBUTED, so the pane
+    # is an input that changes the answer — and it is the one input that can change while every
+    # other component of this key stays byte-identical. A RESUMED session keeps its transcript (same
+    # path, same mtime) and its cwd but gets a RENUMBERED pane (memory
+    # resumed-session-loses-terminal-identity: no PATH, no $ITERM_SESSION_ID, pane renumbered), so
+    # without this the memo would serve the predecessor's attributed count under the successor's
+    # identity — silently, and in the direction that hides custody the successor does own.
+    _wl_k="$_wl_k|${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"
     _wl_k="$_wl_k|${WRAP_LIVE_REPO:-}|${WRAP_LIVE_BUDGET_COMMITS:-}|${WRAP_LIVE_BUDGET_MIN:-}"
     _wl_k="$_wl_k|${CC_MIGRATIONS_STATE:-}|${WRAP_LAND_INFLIGHT_LIB:-}"
     if _wl_d="$(_wl_digest "$_wl_k")"; then
@@ -764,13 +772,40 @@ count_blocking_decisions() {
 # into the rung: open custody on an otherwise-✅ tree is 🔧 — in-flight dispatched work IS a loose
 # end, and the ✅ certificate must not render over it. Awaiting ARMED is the legitimate non-close
 # state (session-continue's wake floor enforces the armed half); "safe to close" is not.
-# CUSTODY_SRC: cwd (counted; the v1 key — a shared cwd shares the view, per-session worktrees make
-# it exact) · none (no binary — most repos/machines; not counted) · error (unreadable store) ·
+# ── ATTRIBUTED (backlog a9ede190ee3b, 2026-09-03) ────────────────────────────────────────────────
+# This counted `cc-custody count --open --cwd "$PWD"` — cwd and ONLY cwd. In a SHARED checkout
+# (claude-infrastructure is one: many sessions cd into it) that convicts every session that merely
+# shares the directory, making ✅ unreachable for a session with nothing open and firing on the
+# healthy case — the alarm-polarity defect, since a count that cannot tell an originator from a
+# bystander carries no bits. hooks/session-continue.sh's wake floor was fixed for exactly this
+# (backlog 9581119669f9) and re-derives the attributed count itself; the other three consumers of
+# CUSTODY_OPEN — this file's rung, hooks/operator-readout.sh and hooks/completion-assert.sh — all
+# read the unattributed field. This ports that landed decision so there is ONE count, not two.
+#
+# THE CRUX — WHAT AN UNATTRIBUTABLE ROW DOES — IS ALREADY ANSWERED ON TRUNK, TWICE, IN WRITING, so
+# nothing here is a new judgment: bin/cc-custody:35-38 (POLARITY: over-count rather than silently
+# drop, chosen deliberately), :44-46 (the same rule for the TTL/stale class), and
+# hooks/session-continue.sh:608-612 applying it to this exact question — "an unattributable row
+# still counts, and the message HEDGES". So `theirs` is DROPPED and `unk` is KEPT.
+#
+# MEASURED, so the unattributable class is not hypothetical: 441 open rows store-wide, 117 (26.5%)
+# carry neither `originatorPane` nor `notifyBack` — all cc-offload cloud fires from a context with
+# no ITERM_SESSION_ID. This repo's own cwd key reads 0 today, so the defect is LATENT here: real by
+# construction, not blocking a close.
+#
+# notifyBack is a SECOND ownership spelling, not a fallback — handoff-fire arms it as either the
+# bare pane ("386") or "<worktree>-<pane>" ("wt-pool-2-415"), so the "-" anchor is required: a bare
+# suffix match would let pane 15 claim pane 415's row. Identical jq to the wake floor's, deliberately.
+#
+# CUSTODY_SRC: pane (counted, ATTRIBUTED — rows this pane owns plus rows nothing can attribute
+# away from it) · cwd (counted, UNATTRIBUTED — no pane identity, or no jq, or the store would not
+# render JSON; the pre-2026-09-03 behaviour, kept because attribution is then IMPOSSIBLE, not
+# negative) · none (no binary — most repos/machines; not counted) · error (unreadable store) ·
 # skip (not computed — a worse rung already governs). Fail-OPEN like YOURS/BLOCKED: an unreadable
 # custody store never manufactures a rung.
-CUSTODY_OPEN=0; CUSTODY_SRC="skip"
+CUSTODY_OPEN=0; CUSTODY_SRC="skip"; CUSTODY_MINE=0; CUSTODY_UNK=0
 count_open_custody() {
-  local bin n
+  local bin n j pane pair
   if [ -n "${CC_CUSTODY_BIN:-}" ]; then bin="$CC_CUSTODY_BIN"
   else
     for bin in "$(dirname "$0")/../bin/cc-custody" "$HOME/.claude/bin/cc-custody" \
@@ -779,10 +814,33 @@ count_open_custody() {
     done
   fi
   [ -n "$bin" ] && [ -x "$bin" ] || { CUSTODY_OPEN=0; CUSTODY_SRC="none"; return 0; }
+  # The RAW pane key, the same expression hooks/session-continue.sh:302 captures and the same value
+  # handoff-fire writes as originatorPane — never a canonicalised mailbox key, which those writers
+  # never write.
+  pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; pane="${pane##*:}"
+  if [ -n "$pane" ] && command -v jq >/dev/null 2>&1 \
+     && j="$(_bounded "${WRAP_CUSTODY_TIMEOUT_S:-5}" "$bin" list --open --cwd "$PWD" --json 2>/dev/null)" \
+     && [ -n "$j" ]; then
+    pair="$(printf '%s' "$j" | jq -r --arg p "$pane" '
+            def known: ((.originatorPane // "") != "") or ((.notifyBack // "") != "");
+            def mine:  ((.originatorPane // "") == $p)
+                    or ((.notifyBack // "") == $p)
+                    or ((.notifyBack // "") | endswith("-" + $p));
+            [ (map(select(known and mine)) | length), (map(select(known | not)) | length) ]
+            | map(tostring) | join(" ")' 2>/dev/null || true)"
+    CUSTODY_MINE="${pair%% *}"; CUSTODY_UNK="${pair##* }"
+    case "$CUSTODY_MINE" in ''|*[!0-9]*) CUSTODY_MINE=0 ;; esac
+    case "$CUSTODY_UNK"  in ''|*[!0-9]*) CUSTODY_UNK=0  ;; esac
+    if [ -n "$pair" ]; then
+      CUSTODY_OPEN=$(( CUSTODY_MINE + CUSTODY_UNK )); CUSTODY_SRC="pane"; return 0
+    fi
+  fi
+  # No pane identity (or no jq, or the store would not render JSON) ⇒ attribution is IMPOSSIBLE, not
+  # negative. Keep the pre-attribution count and let CUSTODY_SRC=cwd carry the uncertainty.
   n="$(_bounded "${WRAP_CUSTODY_TIMEOUT_S:-5}" "$bin" count --open --cwd "$PWD" 2>/dev/null)" \
     || { CUSTODY_OPEN=0; CUSTODY_SRC="error"; return 0; }
   case "$n" in ''|*[!0-9]*) CUSTODY_OPEN=0; CUSTODY_SRC="error"; return 0 ;; esac
-  CUSTODY_OPEN="$n"; CUSTODY_SRC="cwd"
+  CUSTODY_OPEN="$n"; CUSTODY_MINE=0; CUSTODY_UNK="$n"; CUSTODY_SRC="cwd"
 }
 
 # ── LIVE LAYER — the ENFORCING store, one edge past trunk (the 🚀 rung; see the header) ──
@@ -1258,7 +1316,15 @@ else
     # In-flight dispatched work outranks every remaining arm INCLUDING no-trunk: the originator's
     # own tree being clean/landed says nothing while its wave has not returned, and the ✅
     # certificate (which needs RUNG=✅) must be unreachable here mechanically, not by discipline.
-    RUNG="🔧"; READOUT="🔧 Loose ends — ${CUSTODY_OPEN} dispatched session(s) have NOT returned (cc-custody list --open --cwd .); await them ARMED (cc-await-ping), then collect+land and \`cc-custody return\` — or \`cc-custody abandon <token> --why …\`."
+    # TWO SPELLINGS, because the two facts differ (the wake floor draws the same distinction, and
+    # for the same reason): rows this pane OWNS support the originator claim, rows nothing can
+    # attribute do not — and asserting originatorship over a sibling's dispatch is what told an
+    # innocent session to await work that could never reach it.
+    if [ "$CUSTODY_SRC" = "pane" ] && [ "$CUSTODY_MINE" -eq 0 ]; then
+      RUNG="🔧"; READOUT="🔧 Loose ends — ${CUSTODY_UNK} dispatched session(s) are open against this cwd and the store cannot say whose (cc-custody list --open --cwd . --json — no originatorPane/notifyBack on those rows). If you fired them, await them ARMED (cc-await-ping) then collect+land and \`cc-custody return\`; if a sibling session sharing this checkout did, this is that pane's debt — \`cc-custody abandon <token> --why …\`."
+    else
+      RUNG="🔧"; READOUT="🔧 Loose ends — ${CUSTODY_OPEN} dispatched session(s) have NOT returned (cc-custody list --open --cwd .); await them ARMED (cc-await-ping), then collect+land and \`cc-custody return\` — or \`cc-custody abandon <token> --why …\`."
+    fi
   else
   if [ -n "$TRUNK" ]; then compute_live_layer; count_operator_steps; fi
   if [ -z "$TRUNK" ]; then
@@ -1366,6 +1432,11 @@ emit_machine() {
   printf 'REMAINDER=%s\n' "$REMAINDER"
   printf 'CUSTODY_OPEN=%s\n' "$CUSTODY_OPEN"
   printf 'CUSTODY_SRC=%s\n' "$CUSTODY_SRC"
+  # The two halves CUSTODY_OPEN is the sum of. Emitted separately so a consumer can say "yours" vs
+  # "cannot say whose" without re-deriving the attribution — the same consume-don't-re-derive law
+  # that governs RUNG and CUSTODY_OPEN themselves. Both 0 when CUSTODY_SRC is none/error/skip.
+  printf 'CUSTODY_MINE=%s\n' "$CUSTODY_MINE"
+  printf 'CUSTODY_UNK=%s\n' "$CUSTODY_UNK"
   printf 'YOURS=%s\n' "$YOURS"
   printf 'YOURS_SRC=%s\n' "$YOURS_SRC"
   printf 'BLOCKED=%s\n' "$BLOCKED"
@@ -1439,7 +1510,18 @@ emit_full() {
   [ "$MIG_FAILED" -gt 0 ] && live_disp="${live_disp} · ${MIG_FAILED} FAILED migration(s) — conclusion never reached its enforcing store"
   printf 'Live layer:     %s\n' "$live_disp"
   local custody_disp; case "$CUSTODY_SRC" in
-    cwd)   custody_disp="$( [ "$CUSTODY_OPEN" -gt 0 ] && printf '%s dispatched session(s) NOT returned — cc-custody list --open --cwd .' "$CUSTODY_OPEN" || printf 'none open for this cwd' )" ;;
+    # ATTRIBUTED: say which half is which. "YOU fired" supports the originator claim; "cannot say
+    # whose" does not, and stating that difference is what keeps the line informative for the
+    # session that actually fired the wave (the same two spellings the wake floor already uses).
+    pane)  custody_disp="$( if [ "$CUSTODY_OPEN" -eq 0 ]; then printf 'none open that are yours'
+                            elif [ "$CUSTODY_MINE" -gt 0 ] && [ "$CUSTODY_UNK" -gt 0 ]; then
+                              printf '%s YOU fired + %s unattributable — cc-custody list --open --cwd . --json' "$CUSTODY_MINE" "$CUSTODY_UNK"
+                            elif [ "$CUSTODY_MINE" -gt 0 ]; then
+                              printf '%s dispatched session(s) YOU fired, NOT returned — cc-custody list --open --cwd . --json' "$CUSTODY_MINE"
+                            else
+                              printf '%s open here, none attributable to this pane — cc-custody list --open --cwd . --json' "$CUSTODY_UNK"
+                            fi )" ;;
+    cwd)   custody_disp="$( [ "$CUSTODY_OPEN" -gt 0 ] && printf '%s dispatched session(s) NOT returned, UNATTRIBUTED (no pane identity) — cc-custody list --open --cwd .' "$CUSTODY_OPEN" || printf 'none open for this cwd' )" ;;
     none)  custody_disp="not tracked (no cc-custody binary)" ;;
     error) custody_disp="unknown — custody store unreadable (not counted)" ;;
     *)     custody_disp="not counted (a worse rung governs)" ;;

@@ -1757,26 +1757,109 @@ _cust_stub() { # $1=name $2=body-line → echoes an executable stub path
   local s="$BATS_TEST_TMPDIR/$1"
   printf '%s\n' '#!/usr/bin/env bash' "$2" > "$s"; chmod +x "$s"; printf '%s' "$s"
 }
+# ── THE SELF-CONSISTENT SHIM (backlog a9ede190ee3b) ──────────────────────────────────────────────
+# The stubs above are ARGUMENT-BLIND: `echo 2` answers `count --open` and `list --json` identically.
+# Once the reader attributes, that stub hands "2" to jq as a JSON array, jq fails, and the reader
+# falls through to its unattributed path — so the test would keep passing while never once
+# exercising the arm it is named after. Both verbs here replay ONE array (`count` is `jq length` of
+# the same file `list` cats), so the shim cannot disagree with itself the way two literals can.
+# Pattern lifted verbatim from tests/wake-floor.bats:525-541, which owns the same oracle.
+_cust_json() { # $1=tag $2=json-array → echoes an executable stub path
+  local s="$BATS_TEST_TMPDIR/custj-$1" j="$BATS_TEST_TMPDIR/custj-$1.json"
+  printf '%s' "$2" > "$j"
+  { printf '%s\n' '#!/usr/bin/env bash' 'case "$1" in'
+    printf "  list)  cat '%s' ;;\n" "$j"
+    printf "  count) jq 'length' < '%s' ;;\n" "$j"
+    printf '%s\n' 'esac'; } > "$s"
+  chmod +x "$s"; printf '%s' "$s"
+}
+# PIN THE PANE. `_ouid` is otherwise whatever pane RAN the suite, so an attributed count would be a
+# function of the runner — the same hazard tests/session-continue.bats:41-44 pins for.
+CPANE="CCCCCCCC-1111-2222-3333-444444444444"
 
-@test "custody: open dispatches on an otherwise-✅ tree ⇒ RUNG 🔧 + CUSTODY keys" {
+@test "custody: open dispatches THIS PANE fired ⇒ RUNG 🔧 + attributed CUSTODY keys" {
   local w; w="$(_cust_repo cust)"
-  local STUB BSTUB; STUB="$(_cust_stub cust-stub 'echo 2')"; BSTUB="$(_cust_stub b-stub 'echo []')"
-  run bash -c "cd '$w' && CC_CUSTODY_BIN='$STUB' CC_DECIDE_BIN='$BSTUB' CC_BACKLOG_BIN='$BSTUB' WRAP_TRUNK=origin/main bash '$BATS_TEST_DIRNAME/../scripts/wrap-ledger.sh' --machine"
+  local STUB BSTUB; BSTUB="$(_cust_stub b-stub 'echo []')"
+  STUB="$(_cust_json cust "$(jq -nc --arg p "$CPANE" '[{originatorPane:$p,slug:"a"},{notifyBack:$p,slug:"b"}]')")"
+  run bash -c "cd '$w' && ITERM_SESSION_ID='w0t0p0:$CPANE' CC_CUSTODY_BIN='$STUB' CC_DECIDE_BIN='$BSTUB' CC_BACKLOG_BIN='$BSTUB' WRAP_TRUNK=origin/main bash '$BATS_TEST_DIRNAME/../scripts/wrap-ledger.sh' --machine"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '^RUNG=🔧'
+  printf '%s' "$output" | grep -q '^CUSTODY_OPEN=2'
+  printf '%s' "$output" | grep -q '^CUSTODY_MINE=2'
+  printf '%s' "$output" | grep -q '^CUSTODY_UNK=0'
+  printf '%s' "$output" | grep -q '^CUSTODY_SRC=pane'
+  printf '%s' "$output" | grep -q 'dispatched session(s) have NOT returned'
+}
+
+@test "custody: a SIBLING's rows are DROPPED — ✅ stays reachable in a shared checkout" {
+  # THE DEFECT. claude-infrastructure is a shared checkout: many sessions cd into it. The cwd-only
+  # count convicted every one of them, so ✅ was unreachable for a session with nothing open and the
+  # alarm fired on the healthy case. Same shape as session_unlanded_mine — a sibling's state must
+  # not be able to convict you.
+  local w; w="$(_cust_repo custS)"
+  local STUB BSTUB; BSTUB="$(_cust_stub bS-stub 'echo []')"
+  STUB="$(_cust_json custS '[{"originatorPane":"DDDDDDDD-9999-8888-7777-666666666666","slug":"theirs"}]')"
+  run bash -c "cd '$w' && ITERM_SESSION_ID='w0t0p0:$CPANE' CC_CUSTODY_BIN='$STUB' CC_DECIDE_BIN='$BSTUB' CC_BACKLOG_BIN='$BSTUB' WRAP_TRUNK=origin/main bash '$BATS_TEST_DIRNAME/../scripts/wrap-ledger.sh' --machine"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '^RUNG=✅'
+  printf '%s' "$output" | grep -q '^CUSTODY_OPEN=0'
+  printf '%s' "$output" | grep -q '^CUSTODY_SRC=pane'
+}
+
+@test "custody: an UNATTRIBUTABLE row is KEPT, and the readout hedges instead of asserting" {
+  # Porting a decision landed twice in writing (bin/cc-custody:35-38 POLARITY, :44-46 for the stale
+  # class): over-count rather than silently drop, because a per-pane key loses custody across the
+  # measured resume-loses-pane-id case. Measured: 117 of 441 open rows store-wide (26.5%) carry
+  # neither field — all cc-offload cloud fires from a context with no ITERM_SESSION_ID.
+  local w; w="$(_cust_repo custU)"
+  local STUB BSTUB; BSTUB="$(_cust_stub bU-stub 'echo []')"
+  STUB="$(_cust_json custU '[{"slug":"no-origin-field"}]')"
+  run bash -c "cd '$w' && ITERM_SESSION_ID='w0t0p0:$CPANE' CC_CUSTODY_BIN='$STUB' CC_DECIDE_BIN='$BSTUB' CC_BACKLOG_BIN='$BSTUB' WRAP_TRUNK=origin/main bash '$BATS_TEST_DIRNAME/../scripts/wrap-ledger.sh' --machine"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '^RUNG=🔧'          # kept, not dropped
+  printf '%s' "$output" | grep -q '^CUSTODY_OPEN=1'
+  printf '%s' "$output" | grep -q '^CUSTODY_MINE=0'
+  printf '%s' "$output" | grep -q '^CUSTODY_UNK=1'
+  printf '%s' "$output" | grep -q 'cannot say whose'   # …and hedged, not asserted
+}
+
+@test "custody: notifyBack's '-' anchor — pane 15 cannot claim pane 415's row" {
+  # notifyBack is armed as either the bare pane ("386") or "<worktree>-<pane>" ("wt-pool-2-415"),
+  # so the match is endswith("-" + $p). A bare suffix match would let 15 claim 415.
+  local w; w="$(_cust_repo custA)"
+  local STUB BSTUB; BSTUB="$(_cust_stub bA-stub 'echo []')"
+  STUB="$(_cust_json custA '[{"notifyBack":"wt-pool-2-415","slug":"pane-415s"}]')"
+  run bash -c "cd '$w' && ITERM_SESSION_ID='w0t0p0:15' CC_CUSTODY_BIN='$STUB' CC_DECIDE_BIN='$BSTUB' CC_BACKLOG_BIN='$BSTUB' WRAP_TRUNK=origin/main bash '$BATS_TEST_DIRNAME/../scripts/wrap-ledger.sh' --machine"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '^CUSTODY_MINE=0'    # not mine…
+  printf '%s' "$output" | grep -q '^CUSTODY_UNK=0'     # …and attributable, so not kept either
+  printf '%s' "$output" | grep -q '^RUNG=✅'
+  # CONTROL, same fixture: the pane that DOES own it claims it, so the anchor is not simply inert.
+  run bash -c "cd '$w' && ITERM_SESSION_ID='w0t0p0:415' CC_CUSTODY_BIN='$STUB' CC_DECIDE_BIN='$BSTUB' CC_BACKLOG_BIN='$BSTUB' WRAP_CACHE=off WRAP_TRUNK=origin/main bash '$BATS_TEST_DIRNAME/../scripts/wrap-ledger.sh' --machine"
+  printf '%s' "$output" | grep -q '^CUSTODY_MINE=1'
+}
+
+@test "custody CONTROL: NO pane identity ⇒ the unattributed cwd count, unchanged" {
+  # Attribution is then IMPOSSIBLE, not negative — so the pre-2026-09-03 behaviour is kept verbatim
+  # and CUSTODY_SRC=cwd is what carries the uncertainty. Green on both branches.
+  local w; w="$(_cust_repo custN)"
+  local STUB BSTUB; BSTUB="$(_cust_stub bN-stub 'echo []')"
+  STUB="$(_cust_json custN '[{"slug":"x"},{"slug":"y"}]')"
+  run bash -c "cd '$w' && unset ITERM_SESSION_ID CC_PANE_ID; CC_CUSTODY_BIN='$STUB' CC_DECIDE_BIN='$BSTUB' CC_BACKLOG_BIN='$BSTUB' WRAP_TRUNK=origin/main bash '$BATS_TEST_DIRNAME/../scripts/wrap-ledger.sh' --machine"
   [ "$status" -eq 0 ]
   printf '%s' "$output" | grep -q '^RUNG=🔧'
   printf '%s' "$output" | grep -q '^CUSTODY_OPEN=2'
   printf '%s' "$output" | grep -q '^CUSTODY_SRC=cwd'
-  printf '%s' "$output" | grep -q 'dispatched session(s) have NOT returned'
 }
 
-@test "custody CONTROL: count 0 ⇒ the ✅ path is untouched (SRC=cwd, counted zero)" {
+@test "custody CONTROL: count 0 ⇒ the ✅ path is untouched (counted zero)" {
   local w; w="$(_cust_repo cust0)"
-  local STUB BSTUB; STUB="$(_cust_stub cust0-stub 'echo 0')"; BSTUB="$(_cust_stub b0-stub 'echo []')"
-  run bash -c "cd '$w' && CC_CUSTODY_BIN='$STUB' CC_DECIDE_BIN='$BSTUB' CC_BACKLOG_BIN='$BSTUB' WRAP_TRUNK=origin/main bash '$BATS_TEST_DIRNAME/../scripts/wrap-ledger.sh' --machine"
+  local STUB BSTUB; BSTUB="$(_cust_stub b0-stub 'echo []')"
+  STUB="$(_cust_json cust0 '[]')"
+  run bash -c "cd '$w' && ITERM_SESSION_ID='w0t0p0:$CPANE' CC_CUSTODY_BIN='$STUB' CC_DECIDE_BIN='$BSTUB' CC_BACKLOG_BIN='$BSTUB' WRAP_TRUNK=origin/main bash '$BATS_TEST_DIRNAME/../scripts/wrap-ledger.sh' --machine"
   [ "$status" -eq 0 ]
   printf '%s' "$output" | grep -q '^RUNG=✅'
   printf '%s' "$output" | grep -q '^CUSTODY_OPEN=0'
-  printf '%s' "$output" | grep -q '^CUSTODY_SRC=cwd'
 }
 
 @test "custody fail-OPEN: an erroring custody binary never manufactures a rung (SRC=error)" {
