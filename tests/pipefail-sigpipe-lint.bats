@@ -34,7 +34,7 @@ mkfile() { # $1=name $2=body  [$3=set line]
 }
 census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" --census 2>/dev/null; }
 
-@test "1: the lint's own --selftest passes (48/48, both directions)" {
+@test "1: the lint's own --selftest passes (53/53, both directions)" {
   # 32 -> 34 on 2026-09-02: clause 3's head/tail producer arm gained r16/r17, the FIRE controls for
   # the g11/g12 pair that had pinned only the GREEN direction. Updated deliberately, per the line
   # below, and the two new arms are attribution-proved: reverting the arm to its pre-fix `-?[1-9]`
@@ -101,9 +101,28 @@ census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" 
   # cell. Attribution-proved: reverting the one changed line makes exactly r25, r26 and g21 fail and
   # nothing else (~/.claude/autonomy/mut288-pin.sh). Census 125 -> 126 -> 125 across the repair and
   # its drain, LOST=0, NEW=0 net; the allowlist is untouched.
+  #
+  # 48 -> 53 on 2026-09-03 (the FOURTEENTH correction; landed as the thirteenth in its own branch
+  # and renumbered on rebase, which is why its arm names start at r27). Every arm before these
+  # spells the pipeline on the line whose status is read; clause 4 asked its question of that line,
+  # and a function's LAST command hands its status to the CALLER, one frame up, on a line the clause
+  # never looks at. That is the ec9a43a9 scar moved one frame: the same predicate written as a named
+  # helper read GREEN. Measured with producer and consumer held constant (`cat BIG` 202,506 B |
+  # `grep -q NEEDLE`, 20 trials, "the `if` took the FALSE branch on a match that IS present"):
+  # inline anchor 20/20, function-final 20/20 byte-identical, a `:` after the pipeline 0/20,
+  # `return 0` after it 0/20. r27 is the subject; g23 is the CALLER cell (same function called bare
+  # — nothing reads the rc, so FINAL alone cannot be the trigger, and firing on it would have minted
+  # the tree's three `x="$(fn)"` helpers); g24 is the FINAL cell; g25/r28 pin the three-state
+  # consumed() the clause needs — `local v=$(p|q)` masks whoever calls (0/20) while the same
+  # substitution as a plain assignment is final and does reach the caller (20/20). Attribution-
+  # proved, three mutants, each failing exactly its own arms and nothing else: dropping the 4c
+  # emission fails exactly r27+r28; dropping the caller half fails exactly g23; undoing the
+  # consumed() reorder fails exactly g25. Census 125 -> 126 -> 125: the one site revealed
+  # (hooks/validate-plan-structure.sh:29) is DRAINED in the same diff, so the allowlist does not
+  # move. LOST=0 throughout.
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s' "$output" | grep '48/48' >/dev/null \
+  printf '%s' "$output" | grep '53/53' >/dev/null \
     || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 
@@ -491,4 +510,51 @@ $(census | grep -c 'lr-reset-poller\.sh:' || true) hit(s), so arm 20 is vacuous"
   [ "$(printf '%s\n' "$output" | grep -c 'scripts/datum\.sh')" -eq 0 ] \
     || { echo "a multi-line construct's opening line was judged as code"; echo "$output"; false; }
   true
+}
+
+@test "26: MECHANISM — a function's LAST command hands its status to the caller, and the drain repairs it" {
+  # Not a re-read of the detector: real bash, real SIGPIPE, real pipefail, one frame up. Test 6
+  # proves the inline scar; this proves the SAME scar survives being named, which is the whole of
+  # the fourteenth correction. The producer must still be writing when the consumer exits, so the
+  # payload after the match is what makes it fire.
+  seq 1 200000 > "$BATS_TEST_TMPDIR/big.txt"
+  B="$BATS_TEST_TMPDIR/big.txt"
+  # the FIRE ANCHOR, inline — if this does not reproduce, the three cells below prove nothing
+  run bash -c "set -uo pipefail; if cat '$B' | grep -q '^1\$'; then echo TRUE; else echo FALSE; fi"
+  [ "$output" = FALSE ] || { echo "the inline defect did NOT reproduce (got $output)"; false; }
+  # ...and the same pipeline as a function's LAST command must be byte-identical to it
+  run bash -c "set -uo pipefail; f() { cat '$B' | grep -q '^1\$'; }; if f; then echo TRUE; else echo FALSE; fi"
+  [ "$output" = FALSE ] \
+    || { echo "the function-final scar did not reproduce — clause 4c pins nothing (got $output)"; false; }
+  # the BOUND: one statement from the end, the caller reads the LAST statement instead
+  run bash -c "set -uo pipefail; f() { cat '$B' | grep -q '^1\$'; :; }; if f; then echo TRUE; else echo FALSE; fi"
+  [ "$output" = TRUE ] \
+    || { echo "a non-final pipeline reached the caller — clause 4c's FINAL bound is wrong"; false; }
+  # and the prescribed drain must repair it through the function, while still able to say NO
+  run bash -c "set -uo pipefail; f() { cat '$B' | grep '^1\$' >/dev/null; }; if f; then echo TRUE; else echo FALSE; fi"
+  [ "$output" = TRUE ] || { echo "the drain fix did not repair the function (got $output)"; false; }
+  run bash -c "set -uo pipefail; f() { cat '$B' | grep '^NOPE\$' >/dev/null; }; if f; then echo TRUE; else echo FALSE; fi"
+  [ "$output" = FALSE ] || { echo "the fix returns TRUE on a non-match — it is not a predicate"; false; }
+}
+
+@test "27: the one site the fourteenth correction revealed is DRAINED, and the drain still discriminates" {
+  # hooks/validate-plan-structure.sh's has_valid_status is the ec9a43a9 scar moved one frame: the
+  # pipeline is the function's last command and `! has_valid_status "$FILE"` reads its status. It is
+  # drained in the same diff as the detector that revealed it, which is why the census did not move.
+  # Both directions are asserted — a `grep -qiE` that never matches is also "green" to a grep -c.
+  H="$REPO/hooks/validate-plan-structure.sh"
+  run grep -n "grep -qiE '\^status:" "$H"
+  [ "$status" -ne 0 ] || { echo "the early-exit form is back: $output"; false; }
+  # ...and the predicate still answers correctly on all three inputs
+  printf -- '---\ntitle: x\nstatus: open\n---\nbody\n' > "$BATS_TEST_TMPDIR/ok.md"
+  printf -- '---\ntitle: x\n---\nbody\n'               > "$BATS_TEST_TMPDIR/nostatus.md"
+  printf -- 'no frontmatter\n'                          > "$BATS_TEST_TMPDIR/none.md"
+  fn="$(sed -n '/^has_valid_status() {/,/^}/p' "$H")"
+  [ -n "$fn" ] || { echo "has_valid_status could not be extracted — this arm is vacuous"; false; }
+  run bash -c "set -uo pipefail; $fn; has_valid_status '$BATS_TEST_TMPDIR/ok.md'"
+  [ "$status" -eq 0 ] || { echo "a VALID status line was rejected (status=$status)"; false; }
+  run bash -c "set -uo pipefail; $fn; has_valid_status '$BATS_TEST_TMPDIR/nostatus.md'"
+  [ "$status" -ne 0 ] || { echo "frontmatter with no status line was accepted"; false; }
+  run bash -c "set -uo pipefail; $fn; has_valid_status '$BATS_TEST_TMPDIR/none.md'"
+  [ "$status" -ne 0 ] || { echo "a file with no frontmatter at all was accepted"; false; }
 }

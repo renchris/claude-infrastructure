@@ -22,11 +22,19 @@ command -v jq &>/dev/null || exit 0
 PLANS_DIR="${CC_PLANS_DIR:-$HOME/.claude/plans}"
 
 # has_valid_status <file> → 0 if frontmatter carries status: <one of the 4 values>.
+#
+# THE GREP DRAINS (`grep -iE … >/dev/null`, not `grep -qiE …`) and that is load-bearing, not style.
+# This pipeline is the FINAL command of the function, so its status IS what `! has_valid_status` at
+# the bottom of this file reads — the ec9a43a9 scar moved one frame up. `-q` exits on the match, sed
+# takes SIGPIPE on its next write, and `set -o pipefail` (line 20) promotes that 141: the hook would
+# then REFUSE a plan whose status line is plainly present. Latent today only because a frontmatter
+# block fits the 64 KiB pipe buffer, and nothing announces that crossing.
+# (scripts/pipefail-sigpipe-lint.sh, THIRTEENTH CORRECTION — this is the one site it revealed.)
 has_valid_status() {
   local f="$1"
   head -1 "$f" 2>/dev/null | grep -qx -- '---' || return 1
   sed -n '2,/^---$/p' "$f" 2>/dev/null \
-    | grep -qiE '^status:[[:space:]]*(open|in-progress|in_progress|complete|completed|superseded)([[:space:]]|$)'
+    | grep -iE '^status:[[:space:]]*(open|in-progress|in_progress|complete|completed|superseded)([[:space:]]|$)' >/dev/null
 }
 
 # is_new_plan <file> → 0 if the file is NEW (git-untracked, else mtime-fresh).
