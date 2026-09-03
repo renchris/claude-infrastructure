@@ -877,3 +877,32 @@ the whitelist left the old test green, which is what exposed it.
 that needs a tick of the deployed sweep. The arithmetic now admits one: 4 + 229 = 233 s of a 720 s
 budget, leaving ~487 s for units the deadline can spend and stop cleanly inside. The 229 s of scoped
 probes is unchanged and is the next binding term if it ever grows.
+
+### §3f status at hand-off — LANDED, content-verified, NOT YET LIVE
+
+`7e0f6c9f1` is on `origin/main`; `land-verify` reported *3 path(s) present + content-identical*.
+Suites on the landed tree: cc-cloud 43/43 · cloud-return 45/45 · autonomy-sweep 62/62 ·
+cloud-reconcile 33/33 · cloud-inbox 7/7 = **190/190**. `shellcheck -S warning` 0 findings, matching
+`origin/main`'s baseline of 0.
+
+**The acceptance number is still unobserved, and the reason is one layer down — the same one §W5
+hit.** `~/.claude/bin/cc-cloud` is a symlink into the SHARED CHECKOUT's working tree, and
+`deploy-live` refuses to advance it:
+
+```
+deploy-live: already deployed — live layer is at the newest deployable commit 24c598bac1c7
+             (6 un-stamped commit(s) above)
+```
+
+`~/.claude/autonomy/postland/last-green` reads `24c598bac1c7…` — the pre-land HEAD. The converger is
+fail-closed on `postland-verify`'s stamp, that verifier was observed RUNNING on the new trunk
+(`timeout -k 10 10800 … bats <the corpus>`), and until it stamps green the live rail keeps executing
+the OLD reader. **So every `cloud_return_rc` written before that stamp is still evidence about the
+pre-fix bytes and must not be read as evidence about this change.** Nothing here indicts the fix;
+it is the §W5 convergence dependency, unchanged.
+
+**Two land-gate facts worth keeping**, both about the gate rather than the tree: the first attempt
+was refused `GATE RED` off a `GATE-KILLED` — `tests/cc-notify.bats` cut by the 120 s smoke budget
+with ZERO `not ok`, which is backlog `b54edfb6da6e` (one budget across all suites) firing on an
+unrelated suite. Re-run at `SHIP_LAND_SMOKE_BUDGET_S=900` the smoke went green in 285 s. The second
+refusal WAS real and was mine: 36 fresh SC2154 from `printf -v`, which shellcheck cannot follow.
