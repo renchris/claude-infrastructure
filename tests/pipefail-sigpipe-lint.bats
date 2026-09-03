@@ -34,7 +34,7 @@ mkfile() { # $1=name $2=body  [$3=set line]
 }
 census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" --census 2>/dev/null; }
 
-@test "1: the lint's own --selftest passes (59/59, both directions)" {
+@test "1: the lint's own --selftest passes (62/62, both directions)" {
   # 32 -> 34 on 2026-09-02: clause 3's head/tail producer arm gained r16/r17, the FIRE controls for
   # the g11/g12 pair that had pinned only the GREEN direction. Updated deliberately, per the line
   # below, and the two new arms are attribution-proved: reverting the arm to its pre-fix `-?[1-9]`
@@ -159,9 +159,26 @@ census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" 
   # makes exactly r30+r31 fail and nothing else (~/.claude/autonomy/mut291-pin.sh, subject restored
   # by sha256). Census 125 -> 125, KEYS 116 -> 116, LOST=0, NEW=0 keyed on (path, TEXT) with
   # CC_PIPEFAIL_ROOT pinned on both arms; the allowlist is untouched.
+  #
+  # 59 -> 62 on 2026-09-03 (the SEVENTEENTH correction). Clause 4's `amp` was the one consumer of
+  # the \002/\003 masking that did not re-walk the quotes — toplevel_or() and group_wraps_or() both
+  # do, so the deciding knowledge was already in the file, one clause away. The masking is
+  # quote-BLIND by construction (it gsubs the RAW line before qmask runs), so amp failed BOTH ways:
+  # a ) inside a quoted regex zeroed it and exonerated a real && (fail-OPEN, 2 sites, both DRAINED
+  # in this commit), and an && inside a single-quoted awk program convicted a line with no shell &&
+  # at all (fail-CLOSED, 2 sites, and unlike the first half these were LIVE in --census).
+  # Of the 28 lines carrying an && in their last stage, 7 turned on a byte whose syntactic role the
+  # old test could not see; 3 more were right for a reason that does not hold.
+  # r32 is the fail-OPEN half, g33 the fail-CLOSED half, g34 the discrimination cell against a
+  # toplevel_amp that ignored `seen`. RED-PROVED 2 of 3 against the unfixed detector (60/62 with
+  # exactly r32 and g33 failing; g34 green pre-fix because it PINS the guard rather than fixing it).
+  # Census 125 -> 125 for the correction alone (LOST 2, NEW 2, keyed on (path, TEXT), PRE arm
+  # extracted read-only from origin/main), then 125 -> 123 once the two newly-visible fail-OPEN
+  # sites were drained. The allowlist SHRANK 44 -> 42 rows, by --regen, and the diff is exactly the
+  # two rows the correction stopped convicting.
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s' "$output" | grep '59/59' >/dev/null \
+  printf '%s' "$output" | grep '62/62' >/dev/null \
     || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 
