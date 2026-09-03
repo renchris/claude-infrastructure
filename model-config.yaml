@@ -193,6 +193,31 @@ versions:
 #              [ "$CC_ACCT_IS_FABLE" = 1 ] && { model="claude-fable-5"; effort="high"; }
 #        scripts/limit-recover/lr-handoff.sh:338
 #              FIRE_ARGV+=(--model claude-fable-5 --effort "${EFFORT:-high}")
+#
+#      (iii) 🚨 A THIRD AXIS, AND IT IS NOT A MODEL ID AT ALL — THE QUOTA METER KEYS ON THE
+#          SCOPE'S **DISPLAY NAME**. Verified 2026-09-03. `accounts.json:33` sets
+#          `"scoped_display_name": "Fable"`; `bin/claude-accounts:1267` does
+#          `fp, fr = pick(u, "weekly_scoped", cfg["frontier"]["scoped_display_name"])`, and
+#          `pick()` returns `(None, None)` on any mismatch. A miss lands in `:2835`
+#          `return None, "no-fable-limit"`, which `:2921` documents as DELIBERATELY meaning
+#          "no entitlement, not 100% headroom". Consequence: if Anthropic labels the 5.1
+#          weekly scope anything other than the literal `Fable`, every account is excluded
+#          from the fable lane, `claude-accounts --rank fable` comes back empty, and
+#          `handoff-fire.sh:7713` halts the fire rather than firing blind. A grep for
+#          `claude-fable-5` will NEVER find this — it is a different string in a different
+#          file. Check it the first time a 5.1 call lands: run one `--print`, then
+#          `claude-accounts --fresh --json` and confirm a Fable-scoped percentage MOVED.
+#          UNVERIFIABLE until then: nothing on this box can predict Anthropic's scope label.
+#
+#      (iv) THE EMITTERS ARE A SAFETY BUG, NOT ONLY A CORRECTNESS ONE. `hooks/frontier-spawn-
+#          gate.sh` gates ONLY the SSOT model or the family alias — `case "$req_model" in
+#          fable|"$fmodel") ;; *) exit 0 ;; esac`. After a flip to 5.1, `$fmodel` is 5.1, so
+#          every surviving hardcoded `claude-fable-5` spawn falls through `*) exit 0` and
+#          **BYPASSES THE PER-SESSION FRONTIER SPAWN CAP ENTIRELY**
+#          (`frontier_discovery_budget.max_fable_spawns_per_session`, currently 6). A partial
+#          keying sweep therefore does not merely under-count the frontier tier — it removes
+#          the only bound on how much of it a single session can spend.
+#
 #      THE ASYMMETRY IS THE TRAP. The zshrc cost warning (~/.zshrc:489) uses a GLOB —
 #      `[[ " ${CLAUDE_NEXT_MODEL:-} $* " == *claude-fable-5* ]]` — which DOES match
 #      `claude-fable-5-1`. So a flip made without 3b yields the worst possible split: the human
