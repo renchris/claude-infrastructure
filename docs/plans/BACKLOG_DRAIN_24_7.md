@@ -86,6 +86,110 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-03 — drain recycle #290: method 262 — A CLAUSE POPULATION OF ZERO IS A CLAIM ABOUT WHAT
+  REACHED THE CLAUSE, AND ONLY THE LADDER'S EXITS CAN SAY WHERE THE REST WENT.** ZERO rows closed,
+  ZERO filed, ZERO reopened. TWO commits, ONE push. #289 left clause 4b's zero as its cheapest lead
+  and named two candidate reasons — the SHAPE is gone, or the CLAUSE is mute. Measured with an
+  instrumented whole-file copy of the shipped detector, it is NEITHER, and the third answer is the
+  one that generalises.
+  **THE SHAPE IS NOT GONE:** twelve non-comment code lines in this tree carry both a pipe and a `$?`
+  capture, screened with a POS control that finds a planted instance and a NEG that does not.
+  **THE CLAUSE IS NOT MUTE:** a seeded fixture in a pinned root fires it at exactly 1, with the
+  drained form as a NEG control landing one exit earlier. **ALL TWELVE DIE UPSTREAM, SIX AND SIX, AT
+  TWO DIFFERENT EXITS** — six at the `n < 2` split, where the pipe sits inside a quoted regex so the
+  line is not a pipeline at all (all six in `scripts/test-hermeticity-lint.sh`, feeding a
+  herestring), and six where no adjacent pair passes clauses 2/3 because the consumer drains. Two of
+  that second six are the very sites the clause was built for, drained by #240 and #241. Every one
+  of the twelve drops is correct.
+  **SO THE ZERO HAS A DENOMINATOR AND IT IS 470, NOT 74,344**, measured 2026-09-03T18:51:05Z at head
+  `95ae4da92`. A clause population is a count over the survivors of every filter above it, so the
+  members that never arrived are invisible to it — #289's six clause populations were each correct
+  and none of them could have answered this. What answers it is instrumenting the ladder's EXITS
+  rather than its clauses and asserting they PARTITION the entry count: SEEN 74,344 = NLT2 69,293 +
+  C5TOP 521 + C5SAFE 81 + NOPAIR 3,979 + C4DROP 345 + XMINT 125, **residual 0**; and rows == XMINT +
+  X4C == 125, so clause 4c emitted none. The instrumented copy's `--census` was asserted
+  BYTE-IDENTICAL to the shipped one, and every replacement reverted back to the source to prove
+  head, MIDDLE and tail unchanged.
+  **AND THE CELL THAT DECIDES WHETHER THE CLAUSE SURVIVES: THE TWO INSTRUMENTS DISAGREE ABOUT IT.**
+  Disabling it (`cap` forced to 0) leaves `--census` BYTE-IDENTICAL at 125 rows and takes
+  `--selftest` from 56/56 to 55/56, failing exactly `r14` and nothing else. A reader who runs the
+  census today sees a clause that never fires and has every reason to delete it — arguing from the
+  one instrument that cannot see it AT ALL. That is `a6449cebc` exactly, and the rule is now written
+  beside the clause: **`--selftest`, never `--census`, may retire clause 4b.**
+  **THE ATTRIBUTION HARNESS REFUSED ITS OWN FIRST PREDICTION AND THE REFUSAL WAS THE INSTRUMENT.**
+  It derives `r14`'s label from the subject rather than typing it, and read 0 at rc 93 — because the
+  source spells the label inside a double-quoted string as `a \$? capture` while `expect()` emits
+  the expanded `a $? capture`. A column must replicate its subject's own normalisation or it
+  measures a different question, and this one failed in the FLATTERING direction: it would have
+  reported that the selftest does not name the arm, when it does. Subject restored byte-identically
+  by sha256 in a trap.
+  **AND THE COMMIT GATE MADE THE SAME CLASS OF MISTAKE ONE LAYER OUT, WHICH IS WHY THE ENTRY IS
+  COMPOSED BEFORE THE LAND.** Commit 2's conflict-marker gate asserted `"<<<<<<<" not in doc` and
+  refused a correct commit at rc 95. There are ZERO conflict markers in that document and TWO PROSE
+  LINES that discuss conflict-marker handling — `:29607` and `:30536`, both sentences about a
+  resolution script. The gate matched the text DOCUMENTING the thing instead of the thing, which is
+  the failure mode this brief already names for the `=======` half and prescribes the cure for:
+  test `line.startswith(...)`, never substring containment. Repaired to print BOTH counts side by
+  side (`startswith` 0 against a bare substring 2), so the disagreement is visible rather than
+  fatal. **A correction was free because nothing had been pushed.**
+  **SCREENED AND CLEARED, WRITTEN DOWN AS A ZERO WITH CONTROLS:** the four `NOPAIR` sites whose last
+  stage is a function or an external command are genuinely draining. `busy_reason` in
+  `bin/cc-ignition-gate` reads as early-exit to a grep for `exit 0` and is not — both sit in an awk
+  `END` block, which runs only after stdin is at EOF. `is_early` is a textual test and cannot see
+  inside a function, which is a real structural limit; it costs nothing here.
+  **FREE FINDING:** a comment cited `g31/g32` as pinning both directions of the
+  comment-ahead-of-a-heredoc fix. There is no `g32` and there never was — the pair is `r15/g31`,
+  whose own comment forty lines below says so. Repaired; a citation naming an arm nobody wrote sends
+  the next reader looking for a guard that does not exist.
+  **NOT A WIDENING** (method 213, before the land): control = `origin/main`'s copy extracted
+  read-only with `git archive | tar -x`, mutant = this tree, `CC_PIPEFAIL_ROOT` pinned to the SAME
+  tree on BOTH arms so only the PROGRAM varies, keyed on (path, TEXT) verbatim because the diff
+  inserts 31 comment lines. **ROWS 125 → 125, KEYS 116 → 116, LOST = 0, NEW = 0**, POS control 44
+  distinct paths, bare lint rc 0, `--selftest` 56/56, `shellcheck` rc 0, `bash -n` rc 0. The diff is
+  comments only, so no census row could move and none did.
+  **THE LANE, ALL MOMENTS STAMPED.** Open 18:43:13Z: `RUNG=🚀 LIVE_SRC=behind LIVE_LAG=10
+  LIVE_ADDS=6 LIVE_AGE=24203 LIVE_BREACH_WHY=adds`, `GATE=stale`. The adds were classified BEFORE
+  the rung was read: all seven in my own window are `docs/`, zero under `scripts/`, `bin/` or
+  `hooks/`, and the partition was asserted to sum — the known false positive `4e6a51df2a84`, not
+  re-filed and not driven. `LIVE_AGE` also stood above the 21,600 s time arm, which the `adds` arm
+  short-circuits ahead of.
+  **BOARD, both partitions asserted at every moment.** Open 18:42:57Z: **359 open / 229 blocked /
+  2,369 done / 6 claimed**, 588 combined over 2,963 rows. The gap from #289's floor ran 4 m 22 s and
+  held **ZERO arrivals, ZERO departures, ZERO transitions** across a full-set `comm` with `sort -c`
+  on both sides. `master-operator-gated` read **open=2 blocked=155** — #289 read 155 blocked as 154
+  at its own open, so re-fold rather than inherit it.
+  **STORES at 18:43:13Z:** postland `.page` **0** over a denominator of **2,854**; the other page
+  store **2,548 all / 91 `.page`**; inbox-guard **439**; postland stamps **554**. No ordinal is
+  quoted for any of these, because the ordinal is inherited and nobody has ever derived it.
+  **THE FOREGROUND DRAW, RUN BEFORE THE LAND SO THE LAND'S OWN SMOKE IS A SECOND INDEPENDENT
+  VERDICT.** The selector answered a REAL LIST of FIVE on `$MB..HEAD` (asked only AFTER both commits
+  existed, per #283/#284), with a POS control drawn from a code-touching range speaking at SIX.
+  `tests/cc-classify.bats` **87** · `gate-ownscope-leak` **24** · `git-worktree-guard` **14** ·
+  `land-lint-scope-derived` **13** · `pipefail-sigpipe-lint` **27** — **165 ok, 0 not ok, 0 skip,
+  5 plans, terminator ran == listed == 5**, at load 27.9 falling to 19.4.
+  **AND THE FIRST RUN OF THAT DRAW PRODUCED A PHANTOM NON-VERDICT THAT WAS ENTIRELY MINE.** It read
+  `plans=4 != listed=5` and an `ok` total four short of the declared counts — the exact shape of a
+  suite that silently did not report. Every suite was green and always had been. Two facts, both
+  about the RUNNER and neither about the tree, and the next link inherits both:
+  · **`suites<N>.sh` TAKES NO ARGUMENT.** It hardcodes `LIST="$A/draw<N>.txt"`, so a list path
+    handed to it is silently ignored. That is the arity trap #216, #244, #282 and #285 each hit
+    through a different door — the NAME resolved and the ARITY did not.
+  · **THE RUNNER WRITES BATS OUTPUT TO `$LOG` AND ITS OWN SUMMARY TO STDOUT.** Redirecting that
+    stdout into the SAME path puts two writers on one file with independent offsets: the summary
+    lands at offset 0 and EATS the first suite's plan line and its opening `ok` lines. Send the
+    summary somewhere else (`> suites<N>.summary.txt`) and the log has one writer.
+  **The discriminator was to stop reading the damaged log and re-run the one suite alone** —
+  `bats tests/cc-classify.bats` printed `1..87` with 87 ok, 0 not ok, 0 skip — then to re-run the
+  whole draw with the streams separated, which read 165/165 and `NOPLAN=0`. **A log is an artifact
+  with a writer, and a count taken from a corrupted log is not a weaker measurement, it is a
+  measurement of something else.**
+  **NOT RUN, declared rather than claimed:** `bats-shellcheck-lint` and `bats-assert-liveness` (this
+  diff edits no `.bats`), `alarm-polarity-lint` (no alarm emitter here, and its POS control is a
+  known mute — `e07dc5e09f83`, already OPEN, not re-filed).
+  **THE ONE TO CARRY:** when a population reads zero, the two obvious explanations are both claims
+  about the ENDPOINTS — the tree and the clause. The answer usually lives in the PATH between them,
+  and no count taken at the destination can reach it. **Instrument the DROP SITES, and assert that
+  the exits partition what entered.**
 - **2026-09-03 — drain recycle #289: method 261 — A TOKENISER CAN INVENT A BOUNDARY, NOT ONLY DROP
   ONE, AND THE ESCAPE THAT DECLARES A TOKEN NOT AN OPERATOR IS EXACTLY WHERE IT HAPPENS.** ZERO rows
   closed, ZERO filed, ZERO reopened. TWO commits, ONE push. #288 pointed at the rest of
