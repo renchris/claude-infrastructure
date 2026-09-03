@@ -86,6 +86,152 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-03 — drain recycle #291: method 263 — A CLAUSE THAT IS A CONJUNCTION RENDERS ONE VERDICT
+  OVER SEVERAL QUESTIONS, AND ITS ZERO MUST BE ATTRIBUTED TO A CONJUNCT — BECAUSE ONE OF THEM MAY BE
+  AN EXTRACTOR THAT CANNOT *NAME* THE POPULATION AT ALL.** ZERO rows closed, ZERO filed, ZERO
+  reopened. TWO commits, ONE push. #290 asked what set a zero is a zero *over* and answered it for
+  clause 4b by partitioning the ladder's EXITS. It left the identical question open for `X4C`, the
+  function-final late emit, which also reads zero. That zero is over a REAL population, and the
+  answer is one rung further in: the drop is inside a three-way conjunction, and the conjunct that
+  fails is a caller-side EXTRACTOR that is structurally blind to the only spelling the tree uses.
+  **THE STATE MACHINE, INSTRUMENTED RATHER THAN COUNTED.** Clause 4c fires at a closing brace when
+  `curfn != "" && pend && (curfn in callrd)`. A census of its output cannot say which conjunct
+  failed, so all three were reported SEPARATELY at every brace, alongside every `pend` arming, every
+  function the tokeniser opened and both `callrd` writers — a whole-file instrumented copy whose own
+  `--census` was asserted BYTE-IDENTICAL to the shipped program (125 rows) and every replacement
+  reverted back to the source to prove head, middle and tail unchanged. Measured
+  2026-09-03T20:32:37Z at head `cffdb0828`: **85 pipelines arm `pend` · 82 are cleared by a
+  following code line and are correctly not function-final · 3 survive to the brace · 0 of those 3
+  have `curfn` in `callrd`.** So `X4C` is not a zero over nothing; it is a zero over three.
+  **AND ALL THREE OF THE THREE ARE CALLED ONLY AS `x="$(fn)"`** — `scripts/devserver-census.sh`
+  `proc_port`, `scripts/launchd-parity-lint.sh` `plist_label`, `scripts/offbox-admission-lint.sh`
+  `run_suite`. `collect_caller()` tokenises each segment into COMMAND WORDS, and a function invoked
+  inside a command substitution is not one: `v="$(f)"` yields the word `v="$`, so the name never
+  enters `callrd` whatever the caller then does with the status. `callrd` has exactly one consumer,
+  so the effect is a fail-OPEN in clause 4c. **The entire population the clause could see was
+  spelled in the one framing it cannot name.**
+  **PROVEN WITH A SEEDED FIXTURE IN A PINNED ROOT, FOUR CELLS, ONE VARIABLE.** Function body,
+  producer and consumer held constant; only the CALL framing varies. `if f; then :; fi` fires at 1
+  and writes `callrd[f]` — the POS control, and it is r27's framing. `v="$(f)"; rc=$?` fires at 0.
+  `if v="$(f)"; then :; fi` fires at 0. Bare `f` fires at 0, correctly. **A `$?` capture is the most
+  direct read of a status there is, and it was invisible.** Every prediction was written down first
+  and gated at rc 93; all four were exact.
+  **WHY NO ARM CAUGHT IT, WHICH IS THE PART THAT GENERALISES.** Clause 4c is pinned in five
+  directions by `r27`/`g23`/`g24`/`g25`/`r28`, and **every one of the five calls `f` as a bare
+  word.** Five arms, five framings of what happens *around* the call, and one framing of the call
+  itself. A control population that varies everything except the axis under test reads as thorough
+  and covers one point.
+  **THE FIX** is four lines in `collect_caller`: where the extracted word is not an identifier, take
+  the first identifier following a `$(` in the same segment. It reaches BOTH reading forms through
+  machinery already present — `prevw` for the `$?` capture, `cond` for condition position.
+  **NOT A WIDENING IN EFFECT** (method 213, measured before the land): the PRE arm was `origin/main`
+  extracted read-only with `git archive | tar -x` rather than remembered, `CC_PIPEFAIL_ROOT` pinned
+  to the SAME tree on both arms so only the program varies, keyed on (path, TEXT) verbatim because
+  the diff adds comment lines and every number below them shifts. **ROWS 125 → 125, KEYS 116 → 116,
+  LOST = 0, NEW = 0**, POS control 44 distinct paths, bare lint rc 0 on both arms, allowlist
+  untouched. `--selftest` **56/56 → 59/59**, the delta being exactly the three new arms.
+  **ATTRIBUTION, NOT A RED COUNT.** Reverting the one extractor arm fails **exactly `r30` and
+  `r31`** and nothing else, with the six-arm GREEN column (`r27` `g23` `g24` `g25` `r28` `g32`)
+  asserted unaffected and the subject restored byte-identically by sha256 in a `finally`. Eight
+  gated predictions, all exact. Each arm's LABEL is DERIVED from the subject and then NORMALISED the
+  way bash normalises it inside a double-quoted string — a label compared in its escaped spelling
+  matches nothing, which is how an attribution harness reports a silent all-pass.
+  **`g32` IS THE DISCRIMINATION CELL AND THE WIDENING IS UNSOUND WITHOUT IT:** a bare `v="$(f)"`
+  reads no status and must stay GREEN, so the repair cannot pass by convicting every substitution
+  call. **`r30`/`r31`/`g32` read GREEN/GREEN/GREEN pre-fix — 2 red of 3.**
+  **THE THREE REAL SITES ARE LEFT ALONE AND THAT IS THE HONEST VERDICT:** none of the three callers
+  reads the status and none of the three files sets errexit, so today those drops are correct — but
+  correct by accident, not by this clause, which would drop them identically if the caller did read.
+  **FREE FINDING, PAID FOR IMMEDIATELY.** A comment beside `r15`/`g31` read *"there is no g32 and
+  there never was"*. It was true when written and this link made it false; the sentence is amended
+  rather than left to send the next reader looking for the wrong arm.
+  **AND THE SCAR, WHICH IS THIS BRIEF'S OWN RULE COLLECTED IN PERSON.** An earlier draft of that
+  amendment contained an apostrophe, inside `DETECT_AWK`, which is a single-quoted bash string — the
+  silent truncation the file's own header warns about. I had checked for apostrophes in the region I
+  AIMED at and then edited a different region last. Worse, the first reading of the failure printed
+  `rc=0`, because the rc came from a `tail` at the end of the pipe and not from the lint — #250's
+  fault, in a link that had already quoted it. The battery now counts apostrophes inside
+  `DETECT_AWK` mechanically and captures every rc directly, and the commit gate carries both.
+  **THREE MORE INSTRUMENT FAULTS, ALL MINE, ALL SURFACED AS REFUSALS.** A `sed`-clone of the probe
+  builder moved an assertion's CONDITION from 9 to 5 and left its MESSAGE saying 9 — the half-rotted
+  sentence, in a `.py`, where nothing checks a comment; the repair was to DELETE the literal rather
+  than correct it, and the replacement is a tag-distinctness check that a duplicated tag makes fire.
+  An inherited `out.count(anchor) == 0` assertion refused a CORRECT build, because it is wrong for a
+  replacement that APPENDS to its anchor; it now counts against what the replacements themselves
+  contain, and two targeted controls prove it still refuses both a missed replacement and a stray
+  anchor copy. And a commit gate keyed on a pattern carrying `$ ( [ \ *` matched **0** times through
+  zsh and refused a correct commit; counted in python with a POS/NEG pair it reads 1 and 0.
+  **PREDICATES.** The drop-site claim is *"which conjunct of clause 4c each closing brace failed,
+  read out of a whole-file copy in which five sites print to stderr instead of acting, with that
+  copy's `--census` asserted byte-identical to the shipped one"* — never a grep over source text.
+  The caller claim is *"every call site of the three named functions, read by eye, plus the file's
+  own `set` line for errexit"*. The fixture claim is *"four one-file arms in a `mktemp` root pinned
+  by `CC_PIPEFAIL_ROOT`, bodies byte-identical, seeds BUILT with quoted heredocs and never derived
+  from the subject"*. The not-a-widening claim is as stated above. The suite verdicts are *"per-suite
+  `ok`/`not ok`/`# skip` counts out of the TAP with the plan line quoted and the terminator asserted
+  ran == listed, from a log with ONE writer"*. The board counts are *"the row's `.status` field
+  folded on `.id`, both partitions asserted at every moment"*.
+  **THE BOARD.** #290's floor → my open, 4 m 30 s: ZERO arrivals, ZERO departures, ZERO transitions,
+  across a full-set `comm` with `sort -c` on both sides of all five lists. My open at
+  2026-09-03T20:25:35Z: **360 open / 235 blocked / 2,375 done / 3 claimed**, 595 combined over 2,973
+  rows, both partitions asserted. I closed no row and filed none, so nothing needed subtracting.
+  `master-operator-gated` read **2 / 157** at my open, against 2 / 156 at #290's close and 2 / 155 at
+  its open — it moves every link; re-fold it.
+  **THE LANE.** Open at 20:25:02Z: `RUNG=🚀 LIVE_SRC=behind LIVE_SHA=236c0c76c4a6 LIVE_LAG=12
+  LIVE_ADDS=1 LIVE_AGE=5065 LIVE_BREACH_WHY=adds`, `GATE=stale`, dirty 0, taken from inside the
+  worktree because `wrap-ledger` keys on cwd. The standing red is unchanged at **2 actionable** with
+  `461 linked · 0 staged-pending · 10 live-extra · 54 unmapped`, and its reference sentence read
+  **12** against #288's 4 — the shared checkout's distance behind trunk, which rises whenever links
+  land and says nothing about the numerator. The executing blob still equals trunk's for both paths
+  measured. Postland RED pages **0**, denominator **2,861** at 20:25:28Z.
+  **THE DRAW.** The selector answered a REAL LIST of five after the commit existed, POS control
+  spoke with five, and the whole draw ran in the foreground first: **165 ok, 0 not ok, 0 skip, 5
+  plans, terminator ran == listed == 5**, at load 27–47. Neither slow suite came in.
+  **THE INSTRUMENTS ARE ON DISK AND THE FIRST IS THE ONE TO STEAL.** `mkprobe291b.py` +
+  `probespec291-x4c.txt` instrument a CONJUNCTION rather than a ladder — the general move is that
+  when a clause ANDs several questions together, its verdict is one bit and its failure is not, so
+  report the conjuncts separately and the zero attributes itself. `seed291.sh` is the four-cell
+  framing fixture; `measure291.sh` asks of a proposed widening what it MINTS before it is landed;
+  `mut291-pin.py` is the label-derived attribution harness.
+  **THE LAND REFUSED AT rc 6, THE RULE WAS RIGHT, AND ITS PREMISE WAS MEASURABLE.** `ship-land`
+  said *"pass-on-retry in a DIRECT suite of this change; intermittence in changed code is a finding,
+  not a flake"* over `tests/pipefail-sigpipe-lint.bats::7`. That premise is IN CHANGED CODE, and
+  file-level blob equality cannot exonerate here because the file IS mine — so three sharper
+  instruments, in increasing strength. **(1) ARM-LEVEL byte identity:** test 7's own arm is
+  BYTE-IDENTICAL to `origin/main`'s at 3,048 chars, with test 1 — which I DID edit — as the POS
+  control proving the comparison discriminates. **(2) REACHABILITY BY TRIPWIRE:** the lint replaced
+  by a recorder that logs its own execution and exits 97; a direct call records 1 line, and arm 7
+  records **0** — it never executes the lint at all, and it passes under the tripwire for that
+  reason. **(3) A RATE CURVE at the load the land gate actually runs at.**
+  **AND THE THIRD INSTRUMENT REFUTED THE FIX I WAS ABOUT TO MAKE, WHICH IS THE FINDING.** The arm
+  carries a landed remedy — 57344, *"0/120 at loadavg 15.3, with 7.4 KB of margin"*, plus *"do not
+  raise it back toward 64 KiB: the band above is where the flake lives"*. Re-measured 2026-09-03 at
+  **loadavg 44**, N = 200 per size: **raw 40960 → 4/200 = 2.0% · raw 57344 → 4/200 = 2.0% · raw
+  65821 → 20/20**, every sub-buffer failure exit **141** and SILENT, with the saturated control
+  proving the instrument live. **The rate is FLAT from 40 KiB to 57 KiB.** So under load this is not
+  a buffer-edge band that more byte margin escapes; it is a scheduling race whose rate does not
+  depend on the sub-buffer size, and a curve across 4096/16384/32768/40960/49152/57344 at N = 60 put
+  its only nonzero cell at 40960, BELOW two cells that read clean — noise, not a floor. **A measured
+  constant is a claim with a scope, and this one's scope was a load regime the land gate does not
+  run in.** The remedy was correct where it was measured and does not generalise.
+  **SO THE REMEDY IS THE ROW'S OWN CANDIDATE (a), NOT (b) AGAIN: ASSERT A RATE.** Arm 7 now runs each
+  side twenty times and requires **≥ 18/20** below the buffer and **0/20** above it. That is also the
+  stronger claim, because what the arm exists to prove is a rate DIFFERENCE and sampling each side
+  once cannot state one; at the measured p = 0.02 it fails about 0.07% of the time against 2% for a
+  single trial. **RED-PROVED IN BOTH DIRECTIONS:** feeding the sub-buffer side the over-buffer size
+  goes red naming its own message, feeding the over-buffer side a 512-byte payload goes red naming
+  its own, baseline green, subject restored byte-identically by sha256 in a trap, and the new arm
+  read 0/8 on repeat at loadavg 43–53. **`418628734437` is OPEN and owns this; it is NOT re-filed and
+  NOT closed — its candidate (b) is now measured as exhausted and (a) is landed.**
+  **ONE MORE INSTRUMENT FAULT, MINE, CAUGHT BY READING A COLUMN:** the saturated control printed its
+  exit codes as `20 0`, because `$?` was read after a `||` and so reported the counter increment
+  rather than the payload. The COUNT was right and the CODE column meant nothing — a function may
+  have one output channel or two disjoint ones, never one shared.
+  **THE ONE TO CARRY: WHEN A CLAUSE IS A CONJUNCTION, ITS ZERO IS NOT A FINDING UNTIL YOU KNOW WHICH
+  CONJUNCT PRODUCED IT — AND WHEN ONE CONJUNCT IS A LOOKUP, ASK WHETHER ITS KEY CAN NAME THE
+  POPULATION AT ALL.** A lookup that MISSES and a lookup that CANNOT NAME are the same zero, and
+  only the second is a defect. **And its sibling, paid for twice this link: A MEASURED CONSTANT
+  CARRIES THE REGIME IT WAS MEASURED IN. Re-measure it in the regime that will consume it.**
 - **2026-09-03 — drain recycle #290: method 262 — A CLAUSE POPULATION OF ZERO IS A CLAIM ABOUT WHAT
   REACHED THE CLAUSE, AND ONLY THE LADDER'S EXITS CAN SAY WHERE THE REST WENT.** ZERO rows closed,
   ZERO filed, ZERO reopened. TWO commits, ONE push. #289 left clause 4b's zero as its cheapest lead
