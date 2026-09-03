@@ -1,5 +1,5 @@
 ---
-status: open
+status: done
 ---
 
 # STOP_CHAIN_WAVE2 — driving the six filed Stop-chain defects to completion
@@ -288,6 +288,71 @@ pointer lines. Do **not** build anything.
 approved-shutdown member is removed from `config.json` and its transcript becomes permanently
 unreachable by name (measured: `context2`, 638 KB, and the four operator-cancelled `stop-*` members).
 **Harvest BEFORE teardown, never after.**
+
+---
+
+---
+
+## OUTCOME — all six closed 2026-09-03 (INTEGRATE: the sections above are the plan as written;
+## this section is what implementing it MEASURED, including where the plan was wrong)
+
+| Wave | Row | Landed | Suites |
+|---|---|---|---|
+| W3 | `c9c3445be29d` | `bf6385171` | session-continue 32/32 |
+| W1 (session-continue half) | `61a3b40d8695` | `4993f2b55` | telemetry 12/12 |
+| W4 | `79e2b74796af` | `1416abc10` | completion-assert 121/121 |
+| W1 (goal-inert half) + W2 | `0f4147dcb20b` | `8be512f22` | goal-inert-watch 28/28 |
+| W6 | `d8147be371cd` | `efe703403` | docs only |
+| W5 | `a9ede190ee3b` | `5ecff6f14` | wrap-ledger 97/97 · memo 24/24 |
+
+### Four things the plan did not anticipate, each of which changed the work
+
+1. **W1 — the wake floor's FIRE was silent too, not just its abstentions.** The plan (and the filed
+   row) framed this as missing telemetry on *abstain* paths. Probed against trunk with a pane
+   identity present and no sentinel armed, the hook emitted `{decision:"block"}` and wrote **zero**
+   IDL rows. The single loudest disposition the hook has was indistinguishable from never running.
+2. **W1 — the test that pinned the gap was measuring something else, and its verdict was
+   PANE-DEPENDENT.** `tests/session-continue-telemetry.bats` never pinned `ITERM_SESSION_ID`, so
+   `_ouid` was whatever pane ran bats: under a stripped environment the floors return early at the
+   `_ouid` guard, under a real pane they run to completion and the wake floor BLOCKS. Both produced
+   the same green from different paths, and neither was the "disarmed steady state" the test is
+   named after. Re-scoped to the sentinel contract it was written for, and the pane is now pinned.
+3. **W4 — the prescribed guard shape covers only 22 of the 33 co-fires.** §W4 said to reuse
+   `continue_sentinel_for "$cwd"` as `boundary-handoff.sh:415-428` does. Measured while
+   implementing: session-continue's two FLOORS run *exclusively* on the branch where that sentinel
+   does NOT exist (`if [ ! -f "$f" ]`), so a sentinel-only guard leaves the 11 `ship-floor` co-fires
+   live. Keying on the ship floor's sidecar fails the other way — it is latched per HEAD-sha, so it
+   would silence completion-assert for every later Stop on that sha, when a done-claim is exactly
+   what should still be caught. **Shipped instead: a per-Stop marker** written when session-continue
+   blocks and cleared by it at the top of every Stop. Because session-continue is chain position 4
+   and completion-assert position 6 (`settings.json` — configuration, not a timing sample), its
+   presence means "on THIS Stop" with no wall-clock window. A TTL was rejected: it fails CLOSED
+   (wrongly suppressing) on two fast Stops.
+4. **W5 — the argument-blind stubs would have passed VACUOUSLY, not failed.** §W5 predicted
+   `tests/wrap-ledger.bats` would BREAK on the attributed reader. It would not have: `echo 2`
+   answers `count` and `list --json` identically, jq fails on `2`, and the reader falls through to
+   its unattributed path — so the suite stays green while never exercising the new arm. The danger
+   was a silent vacuous pass, not a red.
+
+### One gate red, and it was real
+
+`scripts/tsv-pad-lint.sh` refused the goal-inert land: the new `IFS=$'\t' read` of `goal_liveness`'s
+output carried no padding def and no exemption. Discharged by reviewed exemption (`d691234e5`) —
+every non-last cell of that producer is a literal or a `|tostring` number, and the only
+empty-reachable cell is the goal condition, which is LAST. **Found while discharging it:**
+`scripts/wrap-ledger.sh` reads the same producer with the identical line at `:648` and was already
+exempt, but that entry's argument described only `count_blocking_decisions` — the goal read had been
+riding a reason that does not mention it. Argument widened to discharge both readers explicitly.
+
+### W6's real finding, restated because it outlives the row
+
+The row asked to BUILD `cc-agent-harvest`. It had been on disk, tested and live, for **25 days**
+(`5e9ef347c`). `grep -rn "cc-agent-harvest" skills/ commands/ CLAUDE.md` returned **0** — the
+doctrine is taught in three places and none named the tool. A shipped tool nothing references is
+indistinguishable from one that does not exist, and that is a strictly worse failure than a backlog
+that grows. Pointers landed in `efe703403`, both carrying the sequencing rule that makes the tool
+useless if missed: **harvest BEFORE teardown** — an approved shutdown removes the member from
+`config.json` and the name → prompt → transcript join dies with it.
 
 ---
 
