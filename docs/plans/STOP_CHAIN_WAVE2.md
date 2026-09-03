@@ -61,12 +61,37 @@ So both halves of the filed claim are true, and the consequence is real: for the
 "abstained" and "never ran" are byte-identical, which is the B-3 ambiguity `boundary-handoff.sh:17-19`
 exists to remove.
 
-Work: add `log_idl`/`abstain` calls to every exit path of `wake_floor` (`session-continue.sh:416-697`)
-and wire `hooks/lib/idl-log.sh` into `goal-inert-watch.sh` (which does not call `idl_init` at all —
-check this first; it may be a larger change than one line).
+Work: add `log_idl`/`abstain` calls to the decision-bearing exit paths of `wake_floor`
+(`session-continue.sh:416-697` — **13 exit paths / 15 dispositions** enumerated) and wire
+`hooks/lib/idl-log.sh` into `goal-inert-watch.sh` (`_gi_abstain` at `:92` is a bare `exit 0`, **10 call
+sites**; it does not call `idl_init` at all).
+
+**THREE THINGS THE FILED ITEM DID NOT ANTICIPATE** (measured; they change the work):
+
+1. **It is THREE arms, not two — `ship_floor` has the same defect**: 17 exits, logs 1.
+2. 🚨 **The wake_floor gap is not an oversight, it is a LANDED DECISION, and one test pins it.**
+   `session-continue.sh:53-57` deliberately forbids logging the disarmed steady state, and
+   `tests/session-continue-telemetry.bats:75-78` asserts `idl_count -eq 0` on **exactly the path the
+   floors run on**. Naively adding logging REVERSES a landed decision and turns that test red — a
+   red an implementer would misread as their own regression.
+   **The volume premise behind it is now measurably weak** (~30 fleet Stops/day against 63k IDL
+   rows/day), so the cure is not to argue the reversal: **log only the 9 decision-bearing exits and
+   re-scope that test** to the steady-state path it was actually protecting. That avoids the reversal
+   entirely and is the recommended option.
+3. **For `goal-inert-watch` the risk is the reason VOCABULARY, not row counts.** Logging *enrols* a
+   hook currently absent from every consumer table. `idl-abstain-alarm` (the only wired pager)
+   defaults unlisted reasons to DORMANT, so it stays green **provided the new tokens avoid its blind
+   set** — check that set before choosing reason strings. `cc-audit` would alarm but has no automated
+   caller and already alarms on three hooks today. `hooks/desk-brief-inject.sh:25-35` is the landed
+   precedent for exactly this enrolment.
 
 ⚠️ **Check before landing:** any consumer that counts IDL rows or asserts the ABSENCE of these hooks.
-`mechanical-assignee 1` proves new reasons do show up in production immediately.
+`mechanical-assignee 1` proves new reasons show up in production immediately.
+
+🚨 **SHIP W1's goal-inert half AND W2 IN ONE DIFF.** The W2 gate relaxation *changes which exit paths
+exist*, so wiring IDL first and relaxing second would log a path set that the next commit deletes.
+Split W1 instead along the file boundary: `session-continue.sh` (wake_floor + ship_floor) is its own
+commit; `goal-inert-watch.sh` logging ships together with its W2 relaxation.
 
 ### W2 · `0f4147dcb20b` — goal-inert-watch cannot see "stopped evaluating" — **DRIVABLE after W1**
 
@@ -78,6 +103,20 @@ record ⇒ the hook abstains forever. It detects only *never-evaluated-since-arm
 **The threshold is NOT a new value choice.** Gate 3b already ships one: *≥2 real typed user turns
 since the arm sentinel* (`:137-153`, and `:35-38` explains why 2 and not 1 — a single interrupt must
 not fire it). Re-anchor the same threshold on the newest evaluation rather than on the arm sentinel.
+**Wall-clock age would be wrong** — an idle session accrues age without accruing turns.
+
+**QUANTIFIED, so this is not a theoretical gap.** Over **1,511 `goal_status` attachments across 626
+transcripts / all four account roots**: sentinel and evaluation records are cleanly distinguishable
+(`sentinel` appears only on arm/clear, `reason` only on evaluations, **zero ambiguous records**), and
+evaluations are timestamped on the **envelope, not the attachment** — read the envelope. Measured
+blind spot: **25 windows where a live goal went ≥2 turns unevaluated with a non-sentinel newest
+record — 12.6% of all inert windows are invisible to the hook today.**
+
+**The remedy is a one-predicate swap, and the primitive already exists.** `hooks/lib/goal-state.sh`
+ships `goal_live_condition` — exactly the needed relaxation — and `goal_liveness`, which already
+returns the evaluation count and epoch. **`goal-inert-watch.sh` sources neither and hand-rolls a
+near-copy of both.** Use the lib rather than editing the copy; that is also what makes the IDL wiring
+in W1 tractable, since the lib's exit paths are already named.
 
 ### W3 · `c9c3445be29d` — session-continue's reader is blind to multi-line — **DRIVABLE, REPRODUCED**
 
