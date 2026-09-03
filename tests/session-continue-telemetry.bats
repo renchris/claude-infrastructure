@@ -29,6 +29,12 @@ setup() {
   export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mbox";   mkdir -p "$CC_MAILBOX_DIR"
   export CONTINUE_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
   export CONTINUE_LOG="$BATS_TEST_TMPDIR/session-continue.log"
+  # PIN THE PANE (the same discipline tests/session-continue.bats:41-44 already applies). Without it
+  # `_ouid` is whatever pane RAN the suite, so the two floors take different exits depending on the
+  # runner: under a stripped environment they return at the `_ouid` guard, and under a real pane they
+  # run to completion. A verdict that flips by runner is not a control.
+  PANE="CCCCCCCC-1111-2222-3333-444444444444"
+  export ITERM_SESSION_ID="w0t0p0:$PANE"
   CWD="$BATS_TEST_TMPDIR/wt"; mkdir -p "$CWD"
 }
 
@@ -73,9 +79,52 @@ mkuser_tx() { # transcript whose LAST user message is $1
 }
 
 @test "the disarmed steady state writes NOTHING (no per-Stop IDL spam)" {
-  actuate sidA
+  # RE-SCOPED 2026-09-03 (backlog 61a3b40d8695). This assertion was authored for the SENTINEL
+  # actuator — "no sentinel ⇒ nothing to record" — but the two FLOORS were added to the same hook
+  # later and run on exactly this fixture, so with a pane identity present the payload below did not
+  # exercise a steady state at all: it made the WAKE FLOOR emit {decision:"block"}, and the hook
+  # recorded nothing, so the assertion passed while measuring the precise ambiguity the IDL exists to
+  # remove. Worse, its verdict was pane-dependent — under a stripped environment the floor returned
+  # early at the `_ouid` guard and the same green came from a completely different path.
+  # The floors are now disabled here so this owns the sentinel contract it was written for, and the
+  # floors' own dispositions are pinned by the three tests below.
+  CC_WAKE_FLOOR=0 CC_SHIP_FLOOR=0 actuate sidA
   [ "$(idl_count)" -eq 0 ]
   [ ! -s "$CONTINUE_LOG" ]
+}
+
+# ── THE FLOORS' DISPOSITIONS (B-3: a fire must never be byte-identical to never having run) ───────
+# Measured over 978,400 IDL records / 17 files before this landed: 323 session-continue records and
+# NOT ONE carrying a wake-floor reason of any kind, while the ship floor logged 1 of its 17 exits.
+@test "a wake-floor BLOCK is recorded — the loudest disposition was the silent one" {
+  run bash -c "printf '{\"cwd\":\"%s\",\"session_id\":\"sidA\",\"transcript_path\":\"\"}' '$CWD' \
+                 | ITERM_SESSION_ID='w0t0p0:$PANE' bash '$HOOK' 2>/dev/null"
+  printf '%s' "$output" | grep -q '"decision":"block"'   # it really did block…
+  [ "$(idl_last '.disposition')" = "fired" ]             # …and said so
+  [ "$(idl_last '.reason')" = "wake-floor" ]
+  [ "$(idl_last '.count')" = "1" ]
+}
+
+@test "a wake floor standing down on the operator kill-switch records WHY" {
+  local tx; tx="$(mkuser_tx 'just do the one typo and stop')"
+  run bash -c "printf '{\"cwd\":\"%s\",\"session_id\":\"sidA\",\"transcript_path\":\"%s\"}' '$CWD' '$tx' \
+                 | ITERM_SESSION_ID='w0t0p0:$PANE' bash '$HOOK' 2>/dev/null"
+  printf '%s' "$output" | grep -qv '"decision":"block"' || false   # allowed the stop
+  [ "$(idl_last '.disposition')" = "abstained" ]
+  [ "$(idl_last '.reason')" = "wake-floor-kill-switch" ]
+}
+
+@test "MUST-NOT-LOG control: the floor's ordinary no-trigger decline stays silent" {
+  # L4 — an always-log bug must go red here. Once the floor has fired, a later idle with no mail and
+  # no custody is the genuine common case: it is not a judgment, and logging it would put a row on
+  # most Stops of most sessions, which is the cost the narrowing exists to avoid.
+  run bash -c "printf '{\"cwd\":\"%s\",\"session_id\":\"sidA\",\"transcript_path\":\"\"}' '$CWD' \
+                 | ITERM_SESSION_ID='w0t0p0:$PANE' bash '$HOOK' 2>/dev/null"
+  [ "$(idl_count)" -eq 1 ]                                # the fire above
+  run bash -c "printf '{\"cwd\":\"%s\",\"session_id\":\"sidA\",\"transcript_path\":\"\"}' '$CWD' \
+                 | ITERM_SESSION_ID='w0t0p0:$PANE' bash '$HOOK' 2>/dev/null"
+  [ -z "$output" ]                                        # declined
+  [ "$(idl_count)" -eq 1 ]                                # …and added no row
 }
 
 @test "the kill switch records why the sentinel was cleared" {
