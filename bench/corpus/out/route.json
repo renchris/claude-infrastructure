@@ -1,0 +1,355 @@
+{
+ "app": "default",
+ "profile_summary": "No app-specific knowledge. Every rule counts the same.",
+ "control": "clean",
+ "budget": {
+  "crops": 6,
+  "gestalt": 1
+ },
+ "pages": {
+  "align-1px": {
+   "asserted": 1,
+   "abstained": 0,
+   "queue": [
+    {
+     "kind": "gestalt",
+     "rule": "unruled-residue",
+     "pass": 1,
+     "of": 1,
+     "question": "Blind of our findings: what is wrong with this page that a measurement could not state? Hierarchy, attention, whether the page makes sense. Name nothing that has a number in the answer.",
+     "weight": 1.0,
+     "prohibition": "Identity only. Do not measure, estimate or compute any distance, size or position from this image -- every number is already known exactly from the DOM and is supplied alongside. Answer only the question asked.",
+     "image": "shots/align-1px@1.5x.png",
+     "device_scale": 1.5
+    }
+   ],
+   "blocked": []
+  },
+  "clean": {
+   "asserted": 0,
+   "abstained": 0,
+   "queue": [
+    {
+     "kind": "gestalt",
+     "rule": "unruled-residue",
+     "pass": 1,
+     "of": 1,
+     "question": "Blind of our findings: what is wrong with this page that a measurement could not state? Hierarchy, attention, whether the page makes sense. Name nothing that has a number in the answer.",
+     "weight": 1.0,
+     "prohibition": "Identity only. Do not measure, estimate or compute any distance, size or position from this image -- every number is already known exactly from the DOM and is supplied alongside. Answer only the question asked.",
+     "image": "shots/clean@1.5x.png",
+     "device_scale": 1.5
+    }
+   ],
+   "blocked": []
+  },
+  "contrast-on-gradient": {
+   "asserted": 2,
+   "abstained": 2,
+   "queue": [
+    {
+     "kind": "crop",
+     "rule": "contrast-indeterminate",
+     "targets": [
+      "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
+      "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)"
+     ],
+     "question": "cannot compute a ratio: backdrop is an image/gradient on div.hero:nth-of-type(1). Requirement 3.0:1 is UNVERIFIED for this text",
+     "weight": 1.0,
+     "prohibition": "Identity only. Do not measure, estimate or compute any distance, size or position from this image -- every number is already known exactly from the DOM and is supplied alongside. Answer only the question asked.",
+     "image": "crops/contrast-on-gradient--contrast-indeterminate--0.png",
+     "source_shot": "contrast-on-gradient@1.5x.png",
+     "device_scale": 1.5,
+     "crop_px": [
+      1848,
+      174
+     ],
+     "exceeds_hires_tier": false,
+     "dom_facts": {
+      "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)": {
+       "rect": {
+        "x": 56,
+        "y": 56,
+        "w": 1168,
+        "h": 28,
+        "right": 1224,
+        "bottom": 84
+       },
+       "detail": "cannot compute a ratio: backdrop is an image/gradient on div.hero:nth-of-type(1). Requirement 3.0:1 is UNVERIFIED for this text"
+      },
+      "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)": {
+       "rect": {
+        "x": 56,
+        "y": 92,
+        "w": 1168,
+        "h": 16,
+        "right": 1224,
+        "bottom": 108
+       },
+       "detail": "cannot compute a ratio: backdrop is an image/gradient on div.hero:nth-of-type(1). Requirement 4.5:1 is UNVERIFIED for this text"
+      }
+     }
+    },
+    {
+     "kind": "gestalt",
+     "rule": "unruled-residue",
+     "pass": 1,
+     "of": 1,
+     "question": "Blind of our findings: what is wrong with this page that a measurement could not state? Hierarchy, attention, whether the page makes sense. Name nothing that has a number in the answer.",
+     "weight": 1.0,
+     "prohibition": "Identity only. Do not measure, estimate or compute any distance, size or position from this image -- every number is already known exactly from the DOM and is supplied alongside. Answer only the question asked.",
+     "image": "shots/contrast-on-gradient@1.5x.png",
+     "device_scale": 1.5
+    }
+   ],
+   "blocked": []
+  },
+  "contrast-plain": {
+   "asserted": 1,
+   "abstained": 0,
+   "queue": [
+    {
+     "kind": "gestalt",
+     "rule": "unruled-residue",
+     "pass": 1,
+     "of": 1,
+     "question": "Blind of our findings: what is wrong with this page that a measurement could not state? Hierarchy, attention, whether the page makes sense. Name nothing that has a number in the answer.",
+     "weight": 1.0,
+     "prohibition": "Identity only. Do not measure, estimate or compute any distance, size or position from this image -- every number is already known exactly from the DOM and is supplied alongside. Answer only the question asked.",
+     "image": "shots/contrast-plain@1.5x.png",
+     "device_scale": 1.5
+    }
+   ],
+   "blocked": []
+  },
+  "grid-offgrid": {
+   "asserted": 1,
+   "abstained": 0,
+   "queue": [
+    {
+     "kind": "gestalt",
+     "rule": "unruled-residue",
+     "pass": 1,
+     "of": 1,
+     "question": "Blind of our findings: what is wrong with this page that a measurement could not state? Hierarchy, attention, whether the page makes sense. Name nothing that has a number in the answer.",
+     "weight": 1.0,
+     "prohibition": "Identity only. Do not measure, estimate or compute any distance, size or position from this image -- every number is already known exactly from the DOM and is supplied alongside. Answer only the question asked.",
+     "image": "shots/grid-offgrid@1.5x.png",
+     "device_scale": 1.5
+    }
+   ],
+   "blocked": []
+  },
+  "hierarchy-inversion": {
+   "asserted": 2,
+   "abstained": 0,
+   "queue": [
+    {
+     "kind": "gestalt",
+     "rule": "unruled-residue",
+     "pass": 1,
+     "of": 1,
+     "question": "Blind of our findings: what is wrong with this page that a measurement could not state? Hierarchy, attention, whether the page makes sense. Name nothing that has a number in the answer.",
+     "weight": 1.0,
+     "prohibition": "Identity only. Do not measure, estimate or compute any distance, size or position from this image -- every number is already known exactly from the DOM and is supplied alongside. Answer only the question asked.",
+     "image": "shots/hierarchy-inversion@1.5x.png",
+     "device_scale": 1.5
+    }
+   ],
+   "blocked": []
+  },
+  "invisible-text": {
+   "asserted": 1,
+   "abstained": 0,
+   "queue": [
+    {
+     "kind": "gestalt",
+     "rule": "unruled-residue",
+     "pass": 1,
+     "of": 1,
+     "question": "Blind of our findings: what is wrong with this page that a measurement could not state? Hierarchy, attention, whether the page makes sense. Name nothing that has a number in the answer.",
+     "weight": 1.0,
+     "prohibition": "Identity only. Do not measure, estimate or compute any distance, size or position from this image -- every number is already known exactly from the DOM and is supplied alongside. Answer only the question asked.",
+     "image": "shots/invisible-text@1.5x.png",
+     "device_scale": 1.5
+    }
+   ],
+   "blocked": []
+  },
+  "optical-centering": {
+   "asserted": 1,
+   "abstained": 0,
+   "queue": [
+    {
+     "kind": "gestalt",
+     "rule": "unruled-residue",
+     "pass": 1,
+     "of": 1,
+     "question": "Blind of our findings: what is wrong with this page that a measurement could not state? Hierarchy, attention, whether the page makes sense. Name nothing that has a number in the answer.",
+     "weight": 1.0,
+     "prohibition": "Identity only. Do not measure, estimate or compute any distance, size or position from this image -- every number is already known exactly from the DOM and is supplied alongside. Answer only the question asked.",
+     "image": "shots/optical-centering@1.5x.png",
+     "device_scale": 1.5
+    }
+   ],
+   "blocked": []
+  },
+  "optical-overshoot": {
+   "asserted": 0,
+   "abstained": 1,
+   "queue": [
+    {
+     "kind": "crop",
+     "rule": "xcheck-optical-centre-indeterminate",
+     "targets": [
+      "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph"
+     ],
+     "question": "optical compensation is declared (matrix(1, 0, 0, 1, 7, 2)) and 4.7px of ink offset right survives it. Whether that residual is the intended compensation or an error is a judgement about this glyph's shape, not a measurement -- UNVERIFIED",
+     "weight": 1.0,
+     "prohibition": "Identity only. Do not measure, estimate or compute any distance, size or position from this image -- every number is already known exactly from the DOM and is supplied alongside. Answer only the question asked.",
+     "image": "crops/optical-overshoot--xcheck-optical-centre-indeterminate--0.png",
+     "source_shot": "optical-overshoot@1.5x.png",
+     "device_scale": 1.5,
+     "crop_px": [
+      114,
+      120
+     ],
+     "exceeds_hires_tier": false,
+     "dom_facts": {
+      "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph": {
+       "rect": {
+        "x": 414.18,
+        "y": 523.33,
+        "w": 12.31,
+        "h": 16,
+        "right": 426.49,
+        "bottom": 539.33
+       },
+       "detail": "optical compensation is declared (matrix(1, 0, 0, 1, 7, 2)) and 4.7px of ink offset right survives it. Whether that residual is the intended compensation or an error is a judgement about this glyph's shape, not a measurement -- UNVERIFIED"
+      }
+     }
+    },
+    {
+     "kind": "gestalt",
+     "rule": "unruled-residue",
+     "pass": 1,
+     "of": 1,
+     "question": "Blind of our findings: what is wrong with this page that a measurement could not state? Hierarchy, attention, whether the page makes sense. Name nothing that has a number in the answer.",
+     "weight": 1.0,
+     "prohibition": "Identity only. Do not measure, estimate or compute any distance, size or position from this image -- every number is already known exactly from the DOM and is supplied alongside. Answer only the question asked.",
+     "image": "shots/optical-overshoot@1.5x.png",
+     "device_scale": 1.5
+    }
+   ],
+   "blocked": []
+  },
+  "overflow-clip": {
+   "asserted": 3,
+   "abstained": 0,
+   "queue": [
+    {
+     "kind": "gestalt",
+     "rule": "unruled-residue",
+     "pass": 1,
+     "of": 1,
+     "question": "Blind of our findings: what is wrong with this page that a measurement could not state? Hierarchy, attention, whether the page makes sense. Name nothing that has a number in the answer.",
+     "weight": 1.0,
+     "prohibition": "Identity only. Do not measure, estimate or compute any distance, size or position from this image -- every number is already known exactly from the DOM and is supplied alongside. Answer only the question asked.",
+     "image": "shots/overflow-clip@1.5x.png",
+     "device_scale": 1.5
+    }
+   ],
+   "blocked": []
+  },
+  "radius-drift": {
+   "asserted": 1,
+   "abstained": 0,
+   "queue": [
+    {
+     "kind": "gestalt",
+     "rule": "unruled-residue",
+     "pass": 1,
+     "of": 1,
+     "question": "Blind of our findings: what is wrong with this page that a measurement could not state? Hierarchy, attention, whether the page makes sense. Name nothing that has a number in the answer.",
+     "weight": 1.0,
+     "prohibition": "Identity only. Do not measure, estimate or compute any distance, size or position from this image -- every number is already known exactly from the DOM and is supplied alongside. Answer only the question asked.",
+     "image": "shots/radius-drift@1.5x.png",
+     "device_scale": 1.5
+    }
+   ],
+   "blocked": []
+  },
+  "spacing-gap": {
+   "asserted": 2,
+   "abstained": 0,
+   "queue": [
+    {
+     "kind": "gestalt",
+     "rule": "unruled-residue",
+     "pass": 1,
+     "of": 1,
+     "question": "Blind of our findings: what is wrong with this page that a measurement could not state? Hierarchy, attention, whether the page makes sense. Name nothing that has a number in the answer.",
+     "weight": 1.0,
+     "prohibition": "Identity only. Do not measure, estimate or compute any distance, size or position from this image -- every number is already known exactly from the DOM and is supplied alongside. Answer only the question asked.",
+     "image": "shots/spacing-gap@1.5x.png",
+     "device_scale": 1.5
+    }
+   ],
+   "blocked": []
+  },
+  "token-color-drift": {
+   "asserted": 1,
+   "abstained": 0,
+   "queue": [
+    {
+     "kind": "gestalt",
+     "rule": "unruled-residue",
+     "pass": 1,
+     "of": 1,
+     "question": "Blind of our findings: what is wrong with this page that a measurement could not state? Hierarchy, attention, whether the page makes sense. Name nothing that has a number in the answer.",
+     "weight": 1.0,
+     "prohibition": "Identity only. Do not measure, estimate or compute any distance, size or position from this image -- every number is already known exactly from the DOM and is supplied alongside. Answer only the question asked.",
+     "image": "shots/token-color-drift@1.5x.png",
+     "device_scale": 1.5
+    }
+   ],
+   "blocked": []
+  },
+  "touch-target": {
+   "asserted": 1,
+   "abstained": 0,
+   "queue": [
+    {
+     "kind": "gestalt",
+     "rule": "unruled-residue",
+     "pass": 1,
+     "of": 1,
+     "question": "Blind of our findings: what is wrong with this page that a measurement could not state? Hierarchy, attention, whether the page makes sense. Name nothing that has a number in the answer.",
+     "weight": 1.0,
+     "prohibition": "Identity only. Do not measure, estimate or compute any distance, size or position from this image -- every number is already known exactly from the DOM and is supplied alongside. Answer only the question asked.",
+     "image": "shots/touch-target@1.5x.png",
+     "device_scale": 1.5
+    }
+   ],
+   "blocked": []
+  },
+  "type-scale": {
+   "asserted": 1,
+   "abstained": 0,
+   "queue": [
+    {
+     "kind": "gestalt",
+     "rule": "unruled-residue",
+     "pass": 1,
+     "of": 1,
+     "question": "Blind of our findings: what is wrong with this page that a measurement could not state? Hierarchy, attention, whether the page makes sense. Name nothing that has a number in the answer.",
+     "weight": 1.0,
+     "prohibition": "Identity only. Do not measure, estimate or compute any distance, size or position from this image -- every number is already known exactly from the DOM and is supplied alongside. Answer only the question asked.",
+     "image": "shots/type-scale@1.5x.png",
+     "device_scale": 1.5
+    }
+   ],
+   "blocked": []
+  }
+ }
+}

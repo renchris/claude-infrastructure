@@ -11,3 +11,7 @@ corpus/out/pages/
 corpus/out/shots/
 corpus/out/snapshots/
 corpus/out/blind/
+# route.py cuts these out of shots/, so they are twice-derived. route.json is
+# committed and records the box each one was cut from, which is the part worth
+# reviewing; the PNGs themselves change on every Chromium bump.
+corpus/out/crops/

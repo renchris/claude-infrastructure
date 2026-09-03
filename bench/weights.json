@@ -1,0 +1,77 @@
+{
+  "_doc": [
+    "Per-app rule weightings. One review harness, three different questions.",
+    "",
+    "A weight governs ATTENTION -- ordering, and which residue is worth a model",
+    "call. It never governs whether a finding is reported. Nothing here can",
+    "suppress a finding, and the rules in `never_downweighted` are clamped at 1.0",
+    "in every profile, because a WCAG failure is not less true on a landing page.",
+    "",
+    "The split comes from the measured difference between the three apps, not from",
+    "taste: reso-landing-app is a purchased Next 14 template whose design system is",
+    "SOMEBODY ELSE'S, so scoring it against our tokens measures the wrong thing and",
+    "the real question is whether the page lands -- which is the pixels layer's job.",
+    "reso-management-app is ours end to end (Next 16 / React 19 / Tailwind 4), so",
+    "conformance IS the question and the deterministic layer answers nearly all of",
+    "it, leaving little residue worth paying a model for."
+  ],
+  "never_downweighted": [
+    "contrast",
+    "contrast-indeterminate",
+    "touch-target",
+    "overflow",
+    "xcheck-zero-ink",
+    "xcheck-contrast-varies"
+  ],
+  "profiles": {
+    "default": {
+      "summary": "No app-specific knowledge. Every rule counts the same.",
+      "why": "The neutral profile a new surface starts on, so an unweighted run is a deliberate choice rather than a missing config.",
+      "default_weight": 1.0,
+      "weights": {},
+      "vlm_budget": { "crops": 6, "gestalt": 1 }
+    },
+    "reso-landing-app": {
+      "summary": "Marketing aesthetics. Down-weight conformance, spend the budget on gestalt.",
+      "why": "Next 14, purchased template. Its tokens, scale and grid are the vendor's, so drift against OUR system is noise -- an off-scale type step is how the template was sold. What actually fails here is whether the hero lands, whether the eye goes where the offer is, whether the page reads as considered: none of it deterministic. So conformance rules drop to a fraction and the gestalt lane gets the largest budget of the three.",
+      "default_weight": 1.0,
+      "weights": {
+        "token-drift": 0.3,
+        "grid-violation": 0.25,
+        "type-scale": 0.4,
+        "spacing-rhythm": 0.5,
+        "misalignment": 0.6,
+        "xcheck-optical-centre": 0.8,
+        "xcheck-optical-centre-indeterminate": 1.2
+      },
+      "vlm_budget": { "crops": 8, "gestalt": 3 }
+    },
+    "reso-management-app": {
+      "summary": "Design-system conformance. The deterministic layer does nearly all the work.",
+      "why": "Next 16 / React 19 / Tailwind 4, ours end to end, with a real token set. Here a 6px radius against an 8px token or a 17px step off a 12/14/16/24 scale is a genuine defect with a known fix and a file to fix it in, so conformance rules are weighted ABOVE parity. The residue left for a model is correspondingly small, and the budget says so -- paying for gestalt passes over a dashboard whose every number the DOM already knows is the spend this whole architecture exists to avoid.",
+      "default_weight": 1.0,
+      "weights": {
+        "token-drift": 1.5,
+        "grid-violation": 1.4,
+        "type-scale": 1.5,
+        "spacing-rhythm": 1.3,
+        "misalignment": 1.2,
+        "touch-target": 1.2,
+        "xcheck-optical-centre": 1.1
+      },
+      "vlm_budget": { "crops": 4, "gestalt": 1 }
+    },
+    "reso-web-app": {
+      "summary": "Between the two. Partial system, public-facing.",
+      "why": "Next 13, some of our system and some inherited. Conformance matters but is not the whole question, so weights sit near parity and the budget sits between the other two. This profile is a placeholder in the honest sense: nothing has been measured on it, and it should be replaced by evidence rather than kept because it looks reasonable.",
+      "default_weight": 1.0,
+      "weights": {
+        "token-drift": 0.9,
+        "grid-violation": 0.8,
+        "type-scale": 1.0,
+        "spacing-rhythm": 1.0
+      },
+      "vlm_budget": { "crops": 6, "gestalt": 2 }
+    }
+  }
+}
