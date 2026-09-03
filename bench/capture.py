@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import sys
 import time
@@ -143,8 +144,17 @@ def capture(corpus: pathlib.Path, dprs: list[int]) -> None:
 
     timings = []
     with sync_playwright() as p:
+        # The pinned `chromium` channel is what we want when the machine's
+        # Playwright and its browser bundle agree. They do not always: a CI or
+        # container image ships one build and pip resolves a wheel expecting
+        # another, and the failure is a hard "Executable doesn't exist at
+        # .../chromium-<n>" that no capture flag can reach. BENCH_CHROMIUM names
+        # the binary directly for exactly that case; channel and executable_path
+        # are mutually exclusive, so it replaces rather than supplements.
+        exe = os.environ.get("BENCH_CHROMIUM")
+        launch_kw = {"executable_path": exe} if exe else {"channel": "chromium"}
         browser = p.chromium.launch(
-            channel="chromium",
+            **launch_kw,
             args=[
                 "--force-color-profile=srgb",
                 "--disable-lcd-text",
