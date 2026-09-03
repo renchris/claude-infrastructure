@@ -195,7 +195,10 @@ DEFAULT_RELPATHS='.claude/autonomy/idl.jsonl
 .claude/logs/capacity-alarm.jsonl
 .claude/logs/compressor-sentinel.jsonl
 .claude/logs/compressor-sentinel-snap.log
-.claude/logs/pane-spawns.jsonl'
+.claude/logs/pane-spawns.jsonl
+.claude/logs/account-assignments.jsonl
+.claude/logs/account-utilization.jsonl
+.claude/logs/auth-timeseries.jsonl'
 
 @test "DEFAULT_TARGETS covers every unbounded autonomy/log writer the audit named" {
   export HOME="$BATS_TEST_TMPDIR/home"
@@ -214,6 +217,20 @@ DEFAULT_RELPATHS='.claude/autonomy/idl.jsonl
   # not the other way round. pane-spawns.jsonl is the new one: an append-only row per pane-spawn,
   # and a log that nothing rotates is the surface growth-coverage.conf's `logs` row only CLAIMS is
   # reaped — that row is true of the listed files and of nothing else.
+  #
+  # 20th/21st/22nd (account-assignments.jsonl, account-utilization.jsonl, auth-timeseries.jsonl) —
+  # reconciled 2026-09-03, and this is the THIRD time this fixture has gone stale the same way, so
+  # the recurrence is worth naming. The three had landed in DEFAULT_TARGETS without a fixture here,
+  # leaving trunk RED on this case for every session that touched scripts/rotate-autonomy-logs.sh:
+  # the land gate maps a suite to a diff by FILE TOUCH, so the red is attributed to whoever edits
+  # that script next rather than to whoever grew the list. Same resolution as the 17th-19th, and
+  # for the same reason — the SHIPPING side wins (memory spec-named-mechanism-may-be-prose-only).
+  #
+  # WHY THIS LIST IS STILL HARDCODED RATHER THAN DERIVED FROM $ROT, which would end the recurrence
+  # permanently: it is the INDEPENDENT oracle. Deriving the expectation from the subject would make
+  # the test unable to notice the subject DROPPING a target — a gate keyed on its own signal, which
+  # cannot fail in the direction that matters. Re-reding on correct growth is the price of that
+  # independence and is the cheaper error; the fix is one line and takes thirty seconds.
   mkdir -p "$HOME/.claude/autonomy" "$HOME/.claude/logs" "$HOME/.claude/autonomy/postland"
   local rel n=0
   while IFS= read -r rel; do
@@ -221,7 +238,7 @@ DEFAULT_RELPATHS='.claude/autonomy/idl.jsonl
     mkbytes "$HOME/$rel" 250            # 250 >= ROTATE_MAX_BYTES(100) → must rotate
     n=$((n + 1))
   done <<< "$DEFAULT_RELPATHS"
-  [ "$n" -eq 19 ]
+  [ "$n" -eq 22 ]
   run bash "$ROT"                        # no args, no ROTATE_TARGETS → the default list
   [ "$status" -eq 0 ]
   while IFS= read -r rel; do
@@ -229,7 +246,7 @@ DEFAULT_RELPATHS='.claude/autonomy/idl.jsonl
     [ "$(rot_count "$HOME/$rel")" -eq 1 ]
     [ "$(wc -c < "$HOME/$rel" | tr -d ' ')" -eq 0 ]   # recreated empty in place
   done <<< "$DEFAULT_RELPATHS"
-  grep -q '"rotated":19' "$CC_IDL"
+  grep -q '"rotated":22' "$CC_IDL"
   grep -q '"skipped":0' "$CC_IDL"
 }
 
