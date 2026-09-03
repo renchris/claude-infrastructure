@@ -34,7 +34,7 @@ mkfile() { # $1=name $2=body  [$3=set line]
 }
 census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" --census 2>/dev/null; }
 
-@test "1: the lint's own --selftest passes (41/41, both directions)" {
+@test "1: the lint's own --selftest passes (48/48, both directions)" {
   # 32 -> 34 on 2026-09-02: clause 3's head/tail producer arm gained r16/r17, the FIRE controls for
   # the g11/g12 pair that had pinned only the GREEN direction. Updated deliberately, per the line
   # below, and the two new arms are attribution-proved: reverting the arm to its pre-fix `-?[1-9]`
@@ -86,9 +86,24 @@ census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" 
   # swallows (0/20), so "any group opener disqualifies" would mint a correct line. Attribution-
   # proved: reverting the block makes exactly r23, r24 and nothing else fail
   # (~/.claude/autonomy/mut287-pin.sh). Census 125 -> 125, LOST=0, NEW=0.
+  #
+  # 44 -> 48 on 2026-09-03 (the THIRTEENTH correction), and this title was ALSO stale at 41/41 while
+  # the assertion below read 44 — a pin whose title is a completeness claim nobody re-counts, which
+  # is method 211 pointed at this very file. The twelfth correction taught clause 5 to ask what
+  # BRACKETS a ||. Clause 3b is the sibling it learned that from and was still two PRESENCE tests
+  # with no relation between them: a `{` somewhere and a `||` somewhere. An operator has two
+  # operands, and the exoneration is sound only when the PIPELINE IS THE LEFT one. Measured with the
+  # producer and the last command held constant and only the operand position varying, 20 trials per
+  # cell: `{ false || printf | grep -q; }` is 20/20 orphaned while `{ printf | grep -q || true; }` is
+  # 0/20. r25 is the live site this exonerated — hooks/hook-chain.sh:264, drained in the same commit
+  # — r26 is the same two characters inside a quoted awk program where neither is an operator, g21
+  # is the ( ) spelling of g14 that the brace-character test MINTED, and g22 is the discrimination
+  # cell. Attribution-proved: reverting the one changed line makes exactly r25, r26 and g21 fail and
+  # nothing else (~/.claude/autonomy/mut288-pin.sh). Census 125 -> 126 -> 125 across the repair and
+  # its drain, LOST=0, NEW=0 net; the allowlist is untouched.
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s' "$output" | grep '44/44' >/dev/null \
+  printf '%s' "$output" | grep '48/48' >/dev/null \
     || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 
