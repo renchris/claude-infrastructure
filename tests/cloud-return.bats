@@ -857,7 +857,19 @@ EOF
   chmod +x "$STUBDIR/slow-reconcile.sh"
   local before; before="$(git -C "$WORK" rev-parse refs/heads/trunkref)"
 
-  CC_RETURN_RECONCILE_BIN="$STUBDIR/slow-reconcile.sh" CC_RETURN_BOUND_S=2 \
+  # 🚨 `CC_RETURN_LAND_RESERVE_S=0` IS AN AMENDMENT, NOT A LOOSENING (W4). This arm's subject is
+  # NON-INTERRUPTION — a land, once begun, finishes — and to test that it first has to BEGIN. W4
+  # added an admission gate one level below the loop's: a land is not STARTED unless its measured
+  # price fits what is left of the budget, and with no price on disk that price floors at
+  # `LAND_RESERVE_S` (120 s), which does not fit this deliberately tiny 2 s bound. Correct behaviour,
+  # and it would have made this arm assert its own premise away. Whether the gate fires for the right
+  # reason is a different property with its own arms below; here it is stood down so this one can
+  # still ask its own question.
+  # The bound is 6 s rather than the 2 s this arm carried before W4, for the same reason: the new
+  # gate reads the clock where the old always-run-one clause did not, so a budget smaller than the
+  # pass's own fixed cost (one `cc-cloud list --state`, one `poll`) made admission a coin flip —
+  # observed failing 1 run in 2. 6 s leaves the fixed cost room and still cannot fit a second unit.
+  CC_RETURN_RECONCILE_BIN="$STUBDIR/slow-reconcile.sh" CC_RETURN_BOUND_S=6 CC_RETURN_LAND_RESERVE_S=0 \
     run bash "$SUT" --sweep --limit 3
   [ "$status" -eq 0 ]
   # 🚨 THE LOAD-BEARING PAIR. One land was STARTED and ran to completion — trunkref carries its
@@ -962,4 +974,178 @@ dead_pid() { bash -c 'exit 0' & local p=$!; wait "$p" 2>/dev/null; printf '%s' "
   # THE DoD CLAUSE: the bound WAS exceeded, and the next tick must still be able to work.
   run bash "$SUT" --sweep --dry-run
   [ "$status" -eq 0 ]
+}
+
+# ══ THE PRICE OF A LAND OUTLIVES THE PASS THAT PAID IT (W4) ═════════════════════════════════════
+#
+# The defect the deadline above still had: `WORST_UNIT_S` was re-initialised to 0 on every pass, so
+# the reserve floored at `UNIT_RESERVE_S` (120 s), the `N -gt 0` clause admitted unit #1
+# unconditionally, and if that unit was a real land it outlived the caller's whole bound and the
+# pass was killed — destroying the one observation that would have stopped it. The next pass started
+# from 0 again. Fifteen `cloud_return_rc` rows on 2026-09-03, every one 137 or 124, not one 0.
+#
+# The estimate is now two estimates over two populations (`handle()` is nearly free for every row
+# that does not reach the lander, and `~/.claude/land.log` prices a land at p50 246 s · p90 680 s ·
+# max 14,783 s), each persisted with the epoch it was observed at.
+
+land_cost_of() { # <file> → the seconds field of a cost sidecar
+  awk '{print $2}' "$1" 2>/dev/null
+}
+
+@test "a bound that cannot fit ONE land STOPS instead of starting it — and says which of the two it is" {
+  declare_managed
+  seen_at 1000
+  # What a previous pass measured and this one inherits. 1400 s is the shape the live rail actually
+  # produces (the smoke phase alone was 1081 s this week); the point is that it is larger than the
+  # whole 720 s budget, so no elapsed makes it fit.
+  printf '%s 1400\n' "$(date +%s)" >"$CC_CLOUD_STATE/.return.land_cost"
+  CC_RETURN_BOUND_S=900 CC_RETURN_NOW=999999 run bash "$SUT" --sweep --limit 5
+  # 🚨 THE ACCEPTANCE IS THE EXIT CODE. This exact fixture is what the live rail was SIGKILLed on.
+  echo "DoD-1 rc=$status" >&3
+  printf '%s\n' "$output" | sed 's/^/DoD-1 | /' >&3
+  [ "$status" -eq 0 ]
+  ! grep -q '^reconcile ' "$CALLS" || false
+  [[ "$output" == *"NOT starting the land"* ]] || false
+  # …and the deferral names WHICH deferral it is. "this tick is out of budget" resolves itself on the
+  # next tick; "one land does not fit this bound" never does, and is the operator's to act on.
+  [[ "$output" == *"DOES NOT FIT THIS BOUND AT ALL"* ]] || false
+  run jq -sc '[.[] | select(.outcome=="land-deferred")] | last' "$CC_CLOUD_STATE/return.jsonl"
+  [ "$(printf '%s' "$output" | jq -r '.fits_bound')" = "false" ]
+  [ "$(printf '%s' "$output" | jq -r '.land_reserve_s')" = "1400" ]
+  [ "$(printf '%s' "$output" | jq -r '.budget_s')" = "720" ]
+  # A DEFERRAL IS A NON-VERDICT ABOUT THE BRANCH — the same standing a cut land already has here.
+  [ ! -f "$CC_CLOUD_STATE/session_test.land-refused" ]
+  [ ! -f "$CC_CLOUD_STATE/session_test.returned" ]
+  ! grep -q 'HANDOFF-PING' "$CALLS" || false
+}
+
+@test "THE CONTROL: with NO price on disk the same fixture STARTS the land — which is the pre-fix behaviour" {
+  declare_managed
+  seen_at 1000
+  # Identical to the arm above in every respect except the one thing under test. If the gate fired
+  # here it would be deferring work it had time for, and the suite would only be proving the guard
+  # CAN fire rather than that it fires for the right reason.
+  CC_RETURN_BOUND_S=900 CC_RETURN_NOW=999999 run bash "$SUT" --sweep --limit 5
+  [ "$status" -eq 0 ]
+  [ "$(reconcile_calls)" = "1" ]
+  [[ "$output" != *"NOT starting the land"* ]] || false
+}
+
+@test "a STALE price is not a price — an expired record reads as no observation, so one branch cannot latch the lane shut" {
+  declare_managed
+  seen_at 1000
+  # The same 1400 s figure as the first arm, observed a week ago. A max-forever would defer this
+  # land for the rest of the machine's life; the record expires instead, and the lane re-measures.
+  printf '%s 1400\n' "$(( $(date +%s) - 604800 ))" >"$CC_CLOUD_STATE/.return.land_cost"
+  CC_RETURN_BOUND_S=900 CC_RETURN_LAND_RESERVE_S=1 CC_RETURN_NOW=999999 run bash "$SUT" --sweep --limit 5
+  [ "$status" -eq 0 ]
+  [ "$(reconcile_calls)" = "1" ]
+  [[ "$output" != *"NOT starting the land"* ]] || false
+}
+
+@test "THE PRICE SURVIVES THE KILL — a land cut mid-flight leaves a floor on disk, and the next pass reads it back" {
+  declare_managed
+  seen_at 1000
+  # 🚨 THE PASS ITSELF MUST DIE, AND THE FIRST CUT OF THIS ARM DID NOT KILL IT. Running the fixture
+  # under `timeout -k 2 6` looked faithful and was not: `timeout` signals the whole process GROUP
+  # (docs/plans/DRAIN_CIRCUIT_2026-09-01.md §3e), so the lander died, the pass observed rc 143, took
+  # its own land-cut path and ran to completion — after which the POST-land write recorded the price
+  # and the arm passed with the floor deleted. It certified nothing. The live shape is a SIGKILL to
+  # the pass while its lander is still running, which is exactly what the lock arm below reproduces.
+  export MARK="$BATS_TEST_TMPDIR/landing"
+  export LANDPID="$BATS_TEST_TMPDIR/landpid"
+  printf '#!/usr/bin/env bash\necho $$ >"$LANDPID"\ntouch "$MARK"\nsleep 20\n' >"$STUBDIR/hang-reconcile.sh"
+  chmod +x "$STUBDIR/hang-reconcile.sh"
+
+  CC_RETURN_RECONCILE_BIN="$STUBDIR/hang-reconcile.sh" CC_RETURN_BOUND_S=900 \
+    CC_RETURN_LAND_RESERVE_S=1 CC_RETURN_NOW=999999 \
+    bash "$SUT" --sweep --limit 5 >/dev/null 2>&1 &
+  victim=$!
+  for _ in $(seq 1 100); do [ -f "$MARK" ] && break; sleep 0.1; done
+  [ -f "$MARK" ] || skip "the land never started — this arm needs a pass to kill mid-land"
+  kill -9 "$victim" 2>/dev/null || true
+  wait "$victim" 2>/dev/null || true
+  kill -9 "$(cat "$LANDPID" 2>/dev/null)" 2>/dev/null || true   # the grandchild outlives the pass
+
+  # THE OBSERVATION OUTLIVED THE PROCESS THAT TOOK IT. Written BEFORE the work, because the process
+  # that would have written it afterwards is the one that just died — which is the entire defect:
+  # every pass re-learned a land's price and every kill destroyed the lesson.
+  [ -f "$CC_CLOUD_STATE/session_test.land-cost" ]
+  echo "DoD-2 the pass was SIGKILLed mid-land; the sidecar it left behind:" >&3
+  echo "DoD-2 | session_test.land-cost = $(cat "$CC_CLOUD_STATE/session_test.land-cost")" >&3
+  [ "$(land_cost_of "$CC_CLOUD_STATE/session_test.land-cost")" -ge 600 ]
+
+  # 🚨 AND THE OBSERVABLE CONSEQUENCE, not just the file. The next pass, given the same bound the
+  # last one died on, now knows what a land here costs and declines to start one — which is the
+  # whole difference between this and being SIGKILLed on every tick forever.
+  rm -rf "$CC_CLOUD_STATE/.return.lock"
+  : >"$CALLS"
+  CC_RETURN_BOUND_S=900 CC_RETURN_LAND_RESERVE_S=1 CC_RETURN_NOW=999999 run bash "$SUT" --sweep --limit 5
+  [ "$status" -eq 0 ]
+  ! grep -q '^reconcile ' "$CALLS" || false
+  [[ "$output" == *"NOT starting the land"* ]] || false
+  run jq -sc '[.[] | select(.outcome=="land-deferred")] | last' "$CC_CLOUD_STATE/return.jsonl"
+  [ "$(printf '%s' "$output" | jq -r '.session_land_cost_s')" -ge 600 ]
+}
+
+@test "a land that COMPLETES supersedes its own floor — downward, so one cut cannot price every later land at a whole bound" {
+  declare_managed
+  seen_at 1000
+  # A land with a real, small duration, so BOTH sidecars carry a measurement rather than a zero that
+  # cannot be told from "never observed".
+  printf '#!/usr/bin/env bash\nsleep 1\nexec "%s" "$@"\n' "$STUBDIR/reconcile.sh" >"$STUBDIR/slow1.sh"
+  chmod +x "$STUBDIR/slow1.sh"
+  CC_RETURN_RECONCILE_BIN="$STUBDIR/slow1.sh" CC_RETURN_BOUND_S=900 CC_RETURN_LAND_RESERVE_S=1 \
+    CC_RETURN_NOW=999999 run bash "$SUT" --sweep --limit 5
+  [ "$status" -eq 0 ]
+  [ "$(reconcile_calls)" = "1" ]
+  # The floor written before the land was ~899 s (the bound less the elapsed). The land completed in
+  # about a second, and the measurement is what must remain — a floor left in place would price
+  # every later land at the whole bound and defer it forever.
+  [ "$(land_cost_of "$CC_CLOUD_STATE/session_test.land-cost")" -lt 60 ]
+  [ "$(land_cost_of "$CC_CLOUD_STATE/.return.land_cost")" -lt 60 ]
+}
+
+@test "a LAND never enters the NON-LANDING price — the two populations are priced apart" {
+  declare_managed
+  seen_at 1000
+  printf '#!/usr/bin/env bash\nsleep 2\nexec "%s" "$@"\n' "$STUBDIR/reconcile.sh" >"$STUBDIR/slow2.sh"
+  chmod +x "$STUBDIR/slow2.sh"
+  CC_RETURN_RECONCILE_BIN="$STUBDIR/slow2.sh" CC_RETURN_BOUND_S=900 CC_RETURN_LAND_RESERVE_S=1 \
+    CC_RETURN_NOW=999999 run bash "$SUT" --sweep --limit 5
+  [ "$status" -eq 0 ]
+  [ "$(reconcile_calls)" = "1" ]
+  # The unit cost ≥2 s BECAUSE it landed. Folding that into the non-landing estimate would put one
+  # population's price on another's, after which the loop admits one row per tick and the cursor
+  # rotation — the only thing that ever reaches the tail — slows by the whole limit.
+  if [ -f "$CC_CLOUD_STATE/.return.unit_cost" ]; then
+    [ "$(land_cost_of "$CC_CLOUD_STATE/.return.unit_cost")" -lt 2 ]
+  fi
+}
+
+@test "the NON-LANDING price is MEASURED and written down" {
+  declare_n 3
+  printf '{"worker_status":"working"}\n' >"$STATUS_JSON"   # nothing lands; this prices the cheap arm
+  slow_status 1
+  CC_RETURN_BOUND_S=600 run bash "$SUT" --sweep --limit 3
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"3 managed session(s) examined"* ]] || false
+  [ "$(land_cost_of "$CC_CLOUD_STATE/.return.unit_cost")" -ge 1 ]
+}
+
+@test "…and a pass SEEDS its reserve from it — the half a pass cannot learn about itself in time" {
+  declare_n 3
+  printf '{"worker_status":"working"}\n' >"$STATUS_JSON"
+  slow_status 1
+  # What a slower pass left behind: a unit here has cost 8 s. Units now cost ~1 s, and the reserve
+  # FLOOR is 0, so the persisted figure is the only thing in the run that can stop it.
+  #   seeded   → unit 1 runs (~1 s), and 1 + 8 no longer fits the 8 s budget: ONE examined.
+  #   unseeded → the reserve is unit 1's own 1 s, every row fits, and all THREE are examined.
+  # That gap is the whole value of persisting: a pass cannot learn a price in time to act on it,
+  # because the always-run-one clause has already spent the money by the time it knows.
+  printf '%s 8\n' "$(date +%s)" >"$CC_CLOUD_STATE/.return.unit_cost"
+  CC_RETURN_BOUND_S=10 CC_RETURN_UNIT_RESERVE_S=0 run bash "$SUT" --sweep --limit 3
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"1 managed session(s) examined"* ]] || false
+  [[ "$output" == *"stopped starting new work"* ]] || false
 }
