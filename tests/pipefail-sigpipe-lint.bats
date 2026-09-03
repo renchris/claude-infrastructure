@@ -34,7 +34,7 @@ mkfile() { # $1=name $2=body  [$3=set line]
 }
 census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" --census 2>/dev/null; }
 
-@test "1: the lint's own --selftest passes (37/37, both directions)" {
+@test "1: the lint's own --selftest passes (39/39, both directions)" {
   # 32 -> 34 on 2026-09-02: clause 3's head/tail producer arm gained r16/r17, the FIRE controls for
   # the g11/g12 pair that had pinned only the GREEN direction. Updated deliberately, per the line
   # below, and the two new arms are attribution-proved: reverting the arm to its pre-fix `-?[1-9]`
@@ -48,9 +48,19 @@ census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" 
   # WORD as r18 with only the flag differing, and it must stay GREEN. Attribution-proved the same
   # way: reverting the one changed line makes exactly r18 and r19 red, g17 and r16/r17 unaffected
   # (~/.claude/autonomy/mut284-pin.sh, seven gated predictions, subject restored by sha256).
+  #
+  # 37 -> 39 on 2026-09-03 (the TENTH correction): r18/g17 are both TWO-stage pipelines, where the
+  # consumer OF THE PRODUCER and the LAST stage are the same segment — so they pin the ninth
+  # correction's predicate and say nothing about its REFERENT. The call site passed seg[n] where the
+  # reason names seg[2]. r20/g18 are the same two consumers at THREE stages, where those differ:
+  # keyed on seg[n], r20 was GREEN (a false negative — a byte-oriented consumer in the MIDDLE, 20/20
+  # orphaned) and g18 was RED (a false positive — a line-oriented middle drains the producer, 0/20).
+  # The same referent failing in OPPOSITE directions is what makes it the call site's bug rather
+  # than is_byteearly's. Attribution-proved the same way: reverting the one changed line makes
+  # exactly r20 and g18 fail and nothing else (~/.claude/autonomy/mut285-pin.sh).
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s' "$output" | grep '37/37' >/dev/null \
+  printf '%s' "$output" | grep '39/39' >/dev/null \
     || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 

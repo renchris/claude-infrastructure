@@ -626,6 +626,42 @@ function is_early(s,   t) {
 # clause only ever judges seg[1]. So this closes a DETECTOR blind spot at zero cost in findings and
 # no drains, exactly as the eighth correction did.
 # Instrument: ~/.claude/autonomy/probe284-consumer.sh; nine gated predictions, one refused.
+#
+# ── A TENTH CORRECTION, 2026-09-03: THE NINTH IS RIGHT ABOUT THE *KIND* OF THING THE CLAUSE NEEDS
+#    AND WRONG ABOUT *WHICH ONE*. ──────────────────────────────────────────────────────────────
+# (No apostrophes anywhere below: this is inside the single-quoted DETECT_AWK string, and one of
+# them truncates the whole detector into a silent clean tree.)
+# The ninth correction gave clause 3 a consumer to look at, and its reason is denominated in "the
+# consumer" - but read that noun precisely and it is THE CONSUMER OF THE PRODUCER BEING JUDGED.
+# The call site passed `last` = seg[n], the LAST stage of the pipeline. The producer under judgment
+# is seg[1], and the consumer of seg[1] is seg[2]. Those are the same segment IF AND ONLY IF n == 2,
+# and this function is never told n. So the unit was right and the REFERENT was not: a corrected
+# clause can be handed the right KIND of thing and still the wrong one.
+#
+# IT FAILED IN BOTH DIRECTIONS, WHICH IS WHY THE REFERENT IS THE CULPRIT AND NOT THE PREDICATE.
+# Producer held CONSTANT at `head -1` over one 218,901-byte line; the POSITION of the byte-oriented
+# consumer is the only variable. 20 trials per cell, producer status read as NON-ZERO:
+#   · `head -1 BIG | head -c 10`                  n=2  20/20 orphaned, rc 141   (anchor, #284 cell B)
+#   · `head -1 BIG | grep -q`                     n=2   0/20                    (anchor, #284 cell A)
+#   · `head -1 BIG | head -c 10 | grep -q`  BYTE MIDDLE 20/20 orphaned, rc 141
+#         -> keyed on `last` (`grep -q`, line-oriented) the clause EXONERATED it. FALSE NEGATIVE.
+#   · `head -1 BIG | sed | head -c 10`      line MIDDLE  0/20
+#         -> keyed on `last` (`head -c 10`) the clause MINTED it. FALSE POSITIVE. A line-oriented
+#            middle stage must read the whole line from the producer before it can emit one byte,
+#            so it DRAINS seg[1] before the byte-oriented last stage can exit at all.
+#   · `head -1 BIG | sed | grep -q`         both line    0/20  (the drain is done by the MIDDLE)
+#   · FIRE control `cat MULTI | grep -q`                20/20, rc 141
+# seg[2] answers all five correctly. Instrument: ~/.claude/autonomy/probe285-position.sh (six gated
+# predictions, all exact) and probe285-detector.sh, which runs the SHIPPED script and a whole-file
+# copy differing in exactly ONE line against a planted fixture and reads what each one SAYS about
+# each plant: the shipped one is wrong about exactly one plant in each direction, the copy none.
+#
+# NOT A WIDENING AND NOT A NARROWING IN EFFECT: over the real tree the two censuses are identical -
+# 125 rows both sides, 113 distinct (path, TEXT) keys both sides, LOST = 0 and NEW = 0, with a POS
+# control on the key extractor at 43 distinct paths so a zero cannot come from a mute reader. 141
+# lines carry a head/tail -1 producer with two or more pipes, but that is a SCREEN and not a
+# population - it applies neither qmask nor is_early nor clause 1. So this closes a DETECTOR blind
+# spot at zero cost in findings, as the eighth and ninth corrections did.
 function is_byteearly(s,   t) {
   t = ltrim(s); sub(/^[({][ \t]*/, "", t); t = ltrim(t)
   # The flag may sit anywhere in a cluster and may be joined to its value (`-c10`), which is why
@@ -668,6 +704,9 @@ function is_external(s, cons,   t, p) {
   # that argument and measured 20/20 FALSE. See the eighth correction above for those four cells,
   # and the NINTH for why this arm is handed `cons` at all: the reason on this line is a claim about
   # the CONSUMER, and a byte-oriented one exits mid-line and orphans the producer 20/20.
+  # The TENTH correction is about WHICH consumer `cons` is: the caller now passes seg[2], the
+  # consumer OF THIS PRODUCER, not seg[n]. They are the same segment only when the pipeline has two
+  # stages, and this function never sees how many it has.
   if (t ~ /^(head|tail)[ \t]+(-n[ \t]*)?-?1([ \t]|$)/) return is_byteearly(cons)
   return 1
 }
@@ -747,7 +786,7 @@ BEGIN { FS = "" }
   last = seg[n]
   if (!is_early(last))      next      # clause 2
   if (last ~ /\002/)        next      # clause 5 — a trailing || swallows the 141
-  if (!is_external(seg[1], last)) next   # clause 3 — the consumer decides the -1 arm (ninth corr.)
+  if (!is_external(seg[1], seg[2])) next  # clause 3 — the consumer OF seg[1] decides the -1 arm (tenth)
 
   # Clause 3b — the NEUTRALISE fix. A producer wrapped as `{ p || true; } | consumer` cannot fail
   # the pipeline: the group swallows the 141 before pipefail sees it, so the early exit is KEPT.
@@ -1077,6 +1116,19 @@ EOF"
   expect r19 RED "head -1 producer, read -n consumer — the other byte-oriented spelling is_early admits"
   mk g17 "if head -1 \"\$f\" | head -5 >/dev/null; then :; fi"
   expect g17 GREEN "head -1 producer, LINE-oriented consumer — same command word as r18, only the flag differs"
+  # ── WHICH consumer, pinned in both directions, 2026-09-03 (tenth correction) ──────────────────
+  # r18/g17 above are both TWO-stage, where seg[2] and seg[n] are the same segment — so they pin the
+  # ninth correction's predicate and say nothing at all about its REFERENT. These two are the same
+  # two consumers at THREE stages, where the two differ, and they are each other's discrimination
+  # cell: identical producer, identical pair of consumers, only the ORDER changes. Keyed on `last`
+  # r20 was GREEN (a false negative) and g18 was RED (a false positive) — the same referent failing
+  # in opposite directions, which is what makes this the call site's bug and not is_byteearly's.
+  # Measured 20/20 orphaned with producer rc 141 on r20 and 0/20 on g18.
+  # Do not merge these into a loop, for the reason r16/r17 give above.
+  mk r20 "if head -1 \"\$f\" | head -c 10 | grep -q x; then :; fi"
+  expect r20 RED "BYTE-oriented consumer in the MIDDLE — it is seg[1]'s own consumer and it orphans it 20/20"
+  mk g18 "if head -1 \"\$f\" | sed s/x/x/ | head -c 10 >/dev/null; then :; fi"
+  expect g18 GREEN "line-oriented MIDDLE drains the producer's whole line before the byte-oriented last stage can exit"
   mk g13 "printf '  %s\\n' \"\$(sed -n 's/a/b/p' /some/file | head -1)\""
   expect g13 GREEN "\$( … ) as an ARGUMENT — the outer command's status wins"
   mk_noe g14 "{ strings -a \"\$bin\" 2>/dev/null || true; } | grep -q 'Claude-Session' && return 0"
