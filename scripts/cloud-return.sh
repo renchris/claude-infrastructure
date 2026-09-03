@@ -169,6 +169,64 @@ DEADLINE_PCT="${CC_RETURN_DEADLINE_PCT:-80}"; case "$DEADLINE_PCT" in ''|*[!0-9]
 UNIT_RESERVE_S="${CC_RETURN_UNIT_RESERVE_S:-120}"; case "$UNIT_RESERVE_S" in ''|*[!0-9]*) UNIT_RESERVE_S=120 ;; esac
 BUDGET_S=$(( BOUND_S * DEADLINE_PCT / 100 ))
 elapsed_s() { echo $(( $(date +%s) - START_S )); }
+
+# ── THE PRICE OF A UNIT IS LEARNED ACROSS PASSES, NOT INSIDE ONE ─────────────────────────────────
+# The check above measures its own reserve and then throws the measurement away, destroyed by the
+# very event it exists to prevent. `WORST_UNIT_S` starts at 0 every pass, so the reserve floors to
+# `UNIT_RESERVE_S` (120 s); the `N -gt 0` clause admits unit #1 unconditionally; if unit #1 falls
+# through to a real land it outlives the caller's whole bound, the pass dies, and the observation
+# dies with it. The next pass re-initialises to 0 and repeats identically. Measured on the live
+# journal 2026-09-03: fifteen `cloud_return_rc` rows, every one 137 or 124, not one 0 — against a
+# cursor that was advancing and a lock that was never contended, so nothing else was wrong.
+#
+# 🚨 AND THE COST IS BIMODAL, WHICH IS WHY ONE SCALAR OVER ALL UNITS IS THE WRONG SPAN. `handle()`
+# returns early and nearly free for the overwhelming majority of rows — already returned · BOOTING ·
+# NOT-STARTED · worker still running · not yet quiet · a refusal already earned on this head. Only
+# step 4 reaches the lander, and that step is the entire cost: measured over 2,329 rows of
+# `~/.claude/land.log`, `total_s` runs p50 246 s · p90 680 s · max 14,783 s. A single worst-unit
+# figure carried across passes would let one 14,783 s outlier price every cheap unit out of the
+# budget forever — a stall wearing a bound's clothes, which is precisely what the always-run-one
+# clause exists to prevent (memory: assertion-span-must-equal-its-subject). So there are TWO
+# estimates over TWO populations:
+#
+#   * `.return.unit_cost` — the worst NON-LANDING unit. Seeds `WORST_UNIT_S` and gates admission to
+#     the loop. Sub-second in practice, which is what keeps the rotation moving.
+#   * `.return.land_cost`, plus a per-session `<id>.land-cost` — the price of a LAND. Gates starting
+#     one, inside `handle()`, one level below the loop's check and on the same principle.
+#
+# Neither is a max-forever. Each record carries the epoch it was observed at and expires, so a
+# pessimism earned by one pathological branch heals by itself instead of latching the lane shut —
+# the failure mode of a ratchet, and this file's own `bound-must-fit-the-band-not-the-bench` lesson
+# pointed the other way.
+LAND_RESERVE_S="${CC_RETURN_LAND_RESERVE_S:-120}"; case "$LAND_RESERVE_S" in ''|*[!0-9]*) LAND_RESERVE_S=120 ;; esac
+COST_TTL_S="${CC_RETURN_COST_TTL_S:-21600}"; case "$COST_TTL_S" in ''|*[!0-9]*) COST_TTL_S=21600 ;; esac
+UNIT_COST_F="$STATE/.return.unit_cost"
+LAND_COST_F="$STATE/.return.land_cost"
+# Set by `handle()` when it invokes the lander, read by the loop. A landing unit is priced by the
+# land sidecar and MUST NOT enter the non-landing estimate, or one land re-poisons the very figure
+# the split above exists to keep clean.
+UNIT_LANDED=0
+
+# `<epoch> <seconds>`. Anything unparseable, or older than the TTL, reads as NO OBSERVATION — 0,
+# never a cheap one: a corrupt or stale sidecar must fail toward "I have not measured this", which
+# the callers floor at their own reserve, and never toward "a unit is free", which would silently
+# restore the behaviour this whole file is fixing.
+cost_read() { # <file> → seconds (0 = no usable observation)
+  # 🚨 `2>/dev/null` BEFORE the input redirection, not after. Redirections are applied left to
+  # right, so with the input first the shell's own "No such file or directory" is written to a
+  # stderr that has not been silenced yet — and the commonest call of all is against a sidecar that
+  # does not exist. Caught by a mutation run, where three of these lines were sitting in the middle
+  # of the pass's own output.
+  local _e _v
+  if ! read -r _e _v 2>/dev/null <"$1"; then echo 0; return 0; fi
+  case "${_e:-}" in ''|*[!0-9]*) echo 0; return 0 ;; esac
+  case "${_v:-}" in ''|*[!0-9]*) echo 0; return 0 ;; esac
+  if [ "$COST_TTL_S" -gt 0 ] && [ $(( $(date +%s) - _e )) -ge "$COST_TTL_S" ]; then echo 0; return 0; fi
+  echo "$_v"
+}
+cost_write() { # <file> <seconds>
+  printf '%s %s\n' "$(date +%s)" "$2" >"$1" 2>/dev/null || true
+}
 [ -n "$CLOUD_BIN" ] || { echo "cloud-return: cc-cloud not found — the declaration store is unreadable" >&2; exit 3; }
 command -v jq >/dev/null 2>&1 || { echo "cloud-return: jq required" >&2; exit 3; }
 
@@ -469,13 +527,76 @@ handle() { # <row-json> → prints outcome lines
     fi
   fi
 
+  # 3c. THE LAND IS THE EXPENSIVE STEP, SO THE LAND IS WHAT IS GATED.
+  #
+  # Same principle as the loop's deadline one level up, taken where the loop cannot take it: the
+  # loop admits a unit without knowing whether that unit will fall through to a lander, and by the
+  # time it knows, the minutes are already spent. Everything above this line is disk and one bounded
+  # status probe; everything below is `ship-land`'s full statics+ratchets+smoke gate. This is the
+  # boundary, so this is where "can I afford it" is a question with an answer.
+  #
+  # THE PRICE IS THE MAX OF TWO OBSERVATIONS, and each answers something the other cannot. The pass
+  # figure prices A land — it is what stops the FIRST land of a fresh store from being started blind,
+  # which is the defect. The per-session figure prices THIS land, and it is what keeps one enormous
+  # branch from pricing every other session out: the estimates rot independently, and a global max
+  # would let the worst branch on the box speak for all of them.
+  #
+  # 🚨 STARTING, NEVER INTERRUPTING — the property the loop's own check documents at (3) above, and
+  # the reason this is a pre-check rather than a watchdog. Once `RECONCILE_BIN` is invoked it runs to
+  # completion; a land deferred HERE has taken no lock, evaluated no gate and pushed nothing, files
+  # no artifact, latches nothing, and is resumed by the very next tick exactly as an un-examined row
+  # would be.
+  if [ "$state" != LANDED ] && [ "$BUDGET_S" -gt 0 ]; then
+    local land_est land_sess land_res land_fits land_note
+    land_est="$(cost_read "$LAND_COST_F")"
+    land_sess="$(cost_read "$STATE/$id.land-cost")"
+    [ "$land_sess" -le "$land_est" ] || land_est="$land_sess"
+    land_res="$land_est"; [ "$land_res" -ge "$LAND_RESERVE_S" ] || land_res="$LAND_RESERVE_S"
+    if [ $(( $(elapsed_s) + land_res )) -ge "$BUDGET_S" ]; then
+      # 🚨 NEVER A SILENT SKIP — and the two cases are DIFFERENT FACTS, so they are said differently.
+      # "This tick has spent its budget" resolves on the next tick and needs nobody. "One land does
+      # not fit this bound AT ALL" never resolves on its own: it is a finding with exactly two
+      # remedies, both of them the operator's — give the pass a bound one land fits
+      # (`CC_SWEEP_RETURN_BOUND_S`), or take the land off the sweep's 300 s tick, which the caller
+      # deliberately declines to do because a longer bound makes it a worse neighbour to the rest of
+      # the sweep. Collapsing the two would hide a permanent stall inside a routine deferral.
+      land_fits=1; [ "$land_res" -lt "$BUDGET_S" ] || land_fits=0
+      land_note="a land is priced at ${land_res}s and $(elapsed_s)s of the ${BUDGET_S}s budget is spent"
+      [ "$land_fits" = 1 ] || land_note="$land_note — WHICH DOES NOT FIT THIS BOUND AT ALL: no tick can ever start it. Raise CC_SWEEP_RETURN_BOUND_S, or move the land off the sweep tick"
+      say "· $id — NOT starting the land: $land_note. Nothing filed, nothing latched; the next tick resumes it."
+      ledger "$id" land-deferred "$(jq -cn --arg b "$branch" --argjson e "$(elapsed_s)" \
+        --argjson bu "$BUDGET_S" --argjson bo "$BOUND_S" --argjson r "$land_res" \
+        --argjson p "$land_est" --argjson s "$land_sess" --argjson f "$land_fits" \
+        '{branch:$b, elapsed_s:$e, budget_s:$bu, bound_s:$bo, land_reserve_s:$r,
+          land_cost_s:$p, session_land_cost_s:$s, fits_bound:($f == 1),
+          why:"the land was never STARTED because its measured price does not fit what is left of the bound this caller set. A non-verdict about the branch — no refusal artifact, no wake, no latch, and the next tick resumes it. fits_bound=false is a FINDING and does not resolve on its own: the bound cannot fit one land at any elapsed, so no tick can ever start this land until the bound changes."}')"
+      return 0
+    fi
+  fi
+
   # 4. LAND. Delegated whole — the lock, the identity re-author, the gate and the content-verify all
   # live in the sanctioned lander and re-implementing any of them here would be a second, weaker
   # envelope.
   local land_out land_rc=0
   if [ "$state" != LANDED ]; then
     say "→ $id — landing $branch via $(basename "$RECONCILE_BIN")"
+    # 🚨 THE FLOOR GOES DOWN BEFORE THE WORK, NOT AFTER, AND THAT ORDER IS THE WHOLE FIX. A land
+    # that is CUT is the single observation the estimate most needs and the one no post-hoc
+    # measurement can ever take, because the process that would record it is the process that dies.
+    # So a lower bound is written first: the land ran at least until the caller's bound fired, i.e.
+    # `BOUND_S - elapsed`. It is superseded by the true figure the moment the land completes —
+    # including downward, which is what stops one cut from pricing every later land at a whole bound
+    # forever.
+    local land_start land_took
+    land_start="$(date +%s)"
+    if [ "$BOUND_S" -gt 0 ]; then cost_write "$STATE/$id.land-cost" "$(( BOUND_S - $(elapsed_s) ))"; fi
+    UNIT_LANDED=1
     land_out="$(CONFIRM=1 "$RECONCILE_BIN" --land "$branch" 2>&1)"; land_rc=$?
+    land_took=$(( $(date +%s) - land_start ))
+    # A refusal costs the same wall time a success does, so it prices a land exactly as well; what
+    # is being estimated is the gate's duration, not its verdict.
+    cost_write "$STATE/$id.land-cost" "$land_took"
+    [ "$land_took" -le "$(cost_read "$LAND_COST_F")" ] || cost_write "$LAND_COST_F" "$land_took"
     printf '%s\n' "$land_out" | sed 's/^/    /'
 
     # 🚨 A LAND THAT WAS KILLED IS A NON-VERDICT, NOT A REFUSAL — measured 2026-08-11 on the second
@@ -904,7 +1025,11 @@ fi
 [ -n "$MANAGED" ] || { say "(no MANAGED cloud declarations)"; exit 0; }
 
 N=0
-WORST_UNIT_S=0
+# SEEDED FROM DISK, not from zero. A pass that starts every estimate at zero can only ever learn
+# within itself, and what it learns is destroyed by the kill it exists to prevent — see the
+# two-populations block above. This is the NON-LANDING price; the land has its own, checked in
+# `handle()` where the money is actually spent.
+WORST_UNIT_S="$(cost_read "$UNIT_COST_F")"
 DEADLINE_STOP=0
 DL_UNSTARTED=0
 while IFS= read -r ROW; do
@@ -926,9 +1051,17 @@ while IFS= read -r ROW; do
   fi
   N=$((N + 1))
   _unit_start="$(date +%s)"
+  UNIT_LANDED=0
   handle "$ROW"
   _unit=$(( $(date +%s) - _unit_start ))
-  [ "$_unit" -le "$WORST_UNIT_S" ] || WORST_UNIT_S=$_unit
+  # A LANDING UNIT IS PRICED BY THE LAND SIDECAR AND NEVER BY THIS ONE. Folding a land's minutes
+  # into the non-landing estimate would put one population's price on another's — after which this
+  # loop would admit exactly one row per tick and the cursor rotation, which is what reaches the
+  # tail at all, would slow by the limit. The land is already gated where it is priced.
+  if [ "$UNIT_LANDED" != 1 ] && [ "$_unit" -gt "$WORST_UNIT_S" ]; then
+    WORST_UNIT_S=$_unit
+    cost_write "$UNIT_COST_F" "$_unit"
+  fi
 done <<EOF
 $MANAGED
 EOF

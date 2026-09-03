@@ -748,6 +748,22 @@ so it resolves on its own; it just cannot be *driven* from this side. `deploy-li
   budget, then genuinely 2-of-28 with a budget that fit). A successful land is a property of the
   stranded branches, not of the repair — adjudication is task #174's.
 
+- **2026-09-03 — W4 DONE as built-and-landed, NOT as accepted** (worktree `drain-loop-w4`; full
+  record §3g, which opens by reconciling itself with §3f — W7 measured that the observed 137s were
+  dominated by `cc-cloud list`'s admission read, not by a land, so what W4 fixes is the NEXT binding
+  term rather than the one that was firing). The deadline now survives the kill: the price of a land is persisted with the epoch it
+  was observed at, written BEFORE the land so a cut records a lower bound, and read back to gate
+  STARTING a land inside `handle()` rather than admitting a unit blind. The brief's (a)-or-(b) fork
+  was refuted by measurement — `land.log` prices a land at p50 246 s / p90 680 s / max 14,783 s, both
+  of the first two inside the existing 720 s budget — so neither raising the caller's bound (which
+  `autonomy-sweep.sh:373-375` refuses in its own words, because §0a puts this block FIRST and the
+  rest of the sweep waits behind it) nor admitting zero units (which starves the cheap 95% to guard
+  against the expensive 5%) was taken. cloud-return 53/53, seven mutants RED-proved by anchored
+  edits, two of which survived their first run because the ARM was wrong — see §3f, both are worth
+  reading. ⚠️ **Still no daemon-produced `cloud_return_rc: 0`**, and this wave cannot produce one:
+  that row comes from the deployed sweep, which advances only through `deploy-live`'s GREEN stamp
+  (§W5, §W5b). The mechanism proof is the deliverable; the row is the later confirmation.
+
 ---
 
 ## 3e. THE SIGKILL IS ATTRIBUTED — `timeout` kills itself (W6, 2026-09-03)
@@ -906,3 +922,150 @@ was refused `GATE RED` off a `GATE-KILLED` — `tests/cc-notify.bats` cut by the
 with ZERO `not ok`, which is backlog `b54edfb6da6e` (one budget across all suites) firing on an
 unrelated suite. Re-run at `SHIP_LAND_SMOKE_BUDGET_S=900` the smoke went green in 285 s. The second
 refusal WAS real and was mine: 36 fresh SC2154 from `printf -v`, which shellcheck cannot follow.
+
+## 3g. W4 — THE PRICE OF A LAND NOW OUTLIVES THE PASS THAT PAID IT (2026-09-03)
+
+**The defect W5's deadline still had, and it is one line.** `scripts/cloud-return.sh:907` set
+`WORST_UNIT_S=0` at the top of every pass. The reserve therefore floored at `UNIT_RESERVE_S` (120 s)
+on the first unit, the `N -gt 0` clause admitted unit #1 unconditionally — deliberately and
+correctly, since a pass that admits itself and does nothing is a stall wearing a bound's clothes —
+and if unit #1 fell through to a real land it outlived the caller's whole 900 s bound. The pass was
+killed and **the observation died with it**. The next pass re-initialised to 0 and repeated
+identically, forever: the estimate was learned per-pass and destroyed by the very event it exists to
+prevent. Fifteen `cloud_return_rc` rows on 2026-09-03, every one 137 or 124, not one 0 — against a
+cursor that was advancing and a lock that was never contended, so nothing else was wrong.
+
+⚠️ **RECONCILED WITH §3f, WHICH LANDED THE SAME DAY AND FOUND A DIFFERENT CULPRIT FOR THE SAME
+137s — read that section first.** This wave was briefed on the premise that unit #1 was a real land
+outliving the bound. **§3f refutes that for the one `pass-deadline` row that exists**: `worst_unit_s:
+4`, and 674 of 907 s went to `cc-cloud list`'s admission read *before the loop ever ran*. So the
+observed kills were dominated by a fixed cost, not by a land, and W7's constant-factor fix is what
+actually reclaims the budget. Two things survive that correction, and the honest framing is that
+they are complementary rather than rival:
+
+  * **The mechanism named below is real and unchanged** — `WORST_UNIT_S=0` per pass, an estimate
+    destroyed by the event it exists to prevent — and no measurement in §3f touches it.
+  * **It is now the NEXT binding term, and reachable rather than hypothetical.** With ~487 s of
+    usable budget restored, one land priced at the measured p90 of 680 s still does not fit, and the
+    pre-W4 loop starts it unconditionally and is killed exactly as before, destroying the
+    observation again. §3f gives the pass a budget to spend; this stops it spending that budget on a
+    unit it cannot finish.
+
+The claim this section does NOT make, as a result: that the fifteen 137/124 rows were caused by
+lands. They were not, on the only evidence there is.
+
+### The measurement that decided the design, and it refutes both options as the brief posed them
+
+The brief offered a fork: (a) raise `CC_SWEEP_RETURN_BOUND_S` so one land fits, or (b) admit zero
+loudly. **Neither is right on its own, because the cost is BIMODAL and the brief's 1366 s figure is
+the tail, not the body.** Measured over all 2,329 `total_s` rows of `~/.claude/land.log`:
+
+```
+n=2329   min 0   p50 246 s   p90 680 s   max 14,783 s
+```
+
+p50 and p90 both fit inside the 720 s budget the existing 900 s bound already yields. So (a) is
+unnecessary — and it is also *contradicted in the tree*: `autonomy-sweep.sh:373-375` says in its own
+words that the bound is "deliberately NOT raised to make lands fit — this pass shares a 300 s
+launchd tick with the rest of the sweep, so a longer bound makes it a worse neighbour", and §0a
+exists precisely because this block is FIRST and everything else waits behind it. And (b) alone
+would have converted a SIGKILL loop into a no-op loop: `handle()` returns early and nearly free for
+the overwhelming majority of rows (already returned · BOOTING · NOT-STARTED · worker running · not
+quiet · refusal already earned on this head), so admitting zero UNITS starves the cheap 95% to
+protect against the expensive 5%.
+
+**The right cut is one level down: gate the LAND, not the unit.** Step 4 of `handle()` is the entire
+cost; everything above it is disk and one bounded status probe. So the pass stops before STARTING a
+land it cannot afford, and keeps doing all the cheap work it always could. That also fixes the span:
+one scalar over all units is the wrong statistic for a bimodal population (memory:
+`assertion-span-must-equal-its-subject`), and a global max would let one 14,783 s outlier price
+every cheap unit out of the budget forever.
+
+### What landed
+
+Two estimates over two populations, each persisted with the epoch it was observed at:
+
+| Sidecar | Population | Gates |
+|---|---|---|
+| `.return.unit_cost` | the worst NON-LANDING unit | seeds `WORST_UNIT_S`; admission to the loop |
+| `.return.land_cost` + per-session `<id>.land-cost` | the price of a land | starting a land, inside `handle()` |
+
+Three properties carry the fix:
+
+1. **The floor is written BEFORE the land, not after.** A cut land is the observation the estimate
+   most needs and the one no post-hoc measurement can ever take, because the process that would
+   record it is the process that dies. The pre-land write is a lower bound and an honest one — the
+   land ran at least until the bound fired, i.e. `BOUND_S - elapsed` — and the true figure supersedes
+   it the moment the land completes, **including downward**, which is what stops one cut from pricing
+   every later land at a whole bound forever.
+2. **Nothing is a max forever.** Each record carries its epoch and expires (`CC_RETURN_COST_TTL_S`,
+   6 h), so a pessimism earned by one pathological branch heals by itself instead of latching the
+   lane shut. A stale or unparseable record reads as NO OBSERVATION, never as a cheap one.
+3. **The per-session figure is what keeps one branch from speaking for all of them.** A deferral
+   distinguishes the two cases in its own words and in its ledger row: "this tick is out of budget"
+   resolves on the next tick and needs nobody; `fits_bound:false` — one land does not fit this bound
+   at ANY elapsed — never resolves on its own and is the operator's to act on, with both remedies
+   named.
+
+A land deferred here has taken no lock, evaluated no gate and pushed nothing: it files no artifact,
+sends no wake and latches nothing, which is the same standing a cut land already had.
+
+### Proof
+
+**DoD 1 — a pass given a bound it cannot fit exits 0 having stopped itself**, where the live rail was
+SIGKILLed on this exact shape:
+
+```
+DoD-1 rc=0
+DoD-1 | · session_test — NOT starting the land: a land is priced at 1400s and 0s of the 720s budget
+DoD-1 | is spent — WHICH DOES NOT FIT THIS BOUND AT ALL: no tick can ever start it. Raise
+DoD-1 | CC_SWEEP_RETURN_BOUND_S, or move the land off the sweep tick. Nothing filed, nothing latched.
+```
+
+**DoD 2 — the estimate survives the kill.** The pass is SIGKILLed mid-land (bats reports its own
+`Killed: 9`), and the next pass reads the floor back and declines:
+
+```
+DoD-2 | session_test.land-cost = 1788458374 900
+```
+
+**DoD 3 — 53/53 with seven mutants RED-proved by ANCHORED edits**, each asserting its anchor matched
+exactly once before writing, because a `sed` that matches nothing reads exactly like a surviving
+mutant: the land gate deleted · the unit price not seeded from disk · the floor written after the
+land instead of before · the completed measurement never superseding the floor · the non-landing
+measurement never written · the expiry removed · a land folded into the non-landing price. The
+control that can FAIL is the same fixture with **no price on disk**, which reproduces the pre-fix
+behaviour and starts a land it cannot finish.
+
+🚨 **Two of those seven survived the first run, and both were defects in this wave's own work, not
+in the subject.** (i) The `SURVIVES THE KILL` arm ran the fixture under `timeout -k 2 6` — which
+*looks* faithful and is not, because `timeout` signals the whole process GROUP (§3e): the lander
+died, the pass observed rc 143, took its own land-cut path and ran to completion, after which the
+POST-land write recorded the price and the arm passed with the floor deleted. It certified nothing.
+The faithful shape is a SIGKILL to the pass while its lander still runs. (ii) The seed arm's
+discriminator did not discriminate: unit #1's own in-pass measurement already produced the same stop,
+so the persisted value changed no outcome. Both are the same lesson — an arm can be green for a
+reason that has nothing to do with its subject.
+
+**And the mutation run found a live defect nobody's assertion covered**: `cost_read` had
+`2>/dev/null` AFTER its input redirection, and redirections apply left to right, so the shell's own
+"No such file or directory" for a sidecar that does not exist yet went to an un-silenced stderr —
+three of them in the middle of the pass's own output. Fixed.
+
+**One landed arm was amended, and it is an amendment rather than a loosening.** `a LAND already in
+flight is never abandoned to meet the deadline` (W5) asserts NON-INTERRUPTION, and to test that the
+land must first BEGIN; its deliberately tiny 2 s bound cannot fit a land priced at the 120 s
+cold-start floor. It now says `CC_RETURN_LAND_RESERVE_S=0` explicitly and runs at a 6 s bound — the
+2 s budget was smaller than the pass's own fixed cost, which made admission a coin flip once the new
+gate started reading the clock (observed failing 1 run in 2). Its subject is unchanged; whether the
+new gate fires for the right reason is a different property with its own arms.
+
+### What is NOT observed, and will not be from here
+
+**No daemon-produced `cloud_return_rc: 0` row exists yet, and this wave cannot produce one.** The
+row is written by the DEPLOYED sweep, which reaches this file through the live `~/.claude` layer,
+which only advances via `deploy-live` — fail-closed on `postland-verify`'s GREEN stamp, which took
+~1.5 days for W3's land and is the same converge lag §W5 and §W5b document. The mechanism proof
+above is the deliverable; the daemon row is the later confirmation, and claiming it now would be
+asserting a fact about a git ref while the machine ran older bytes — the `🚀` rung, whose whole
+point is that landed is not live (`docs/research/inertness-generator-2026-08-07.md` §3).
