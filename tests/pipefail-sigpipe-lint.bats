@@ -34,7 +34,7 @@ mkfile() { # $1=name $2=body  [$3=set line]
 }
 census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" --census 2>/dev/null; }
 
-@test "1: the lint's own --selftest passes (56/56, both directions)" {
+@test "1: the lint's own --selftest passes (59/59, both directions)" {
   # 32 -> 34 on 2026-09-02: clause 3's head/tail producer arm gained r16/r17, the FIRE controls for
   # the g11/g12 pair that had pinned only the GREEN direction. Updated deliberately, per the line
   # below, and the two new arms are attribution-proved: reverting the arm to its pre-fix `-?[1-9]`
@@ -143,9 +143,25 @@ census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" 
   # other way — collect_caller's header reasons that over-splitting there is BOUNDED, because it can
   # only invent a command WORD. True, and silent about THIS consumer, where an invented boundary
   # invents a STAGE. Same fault, one consumer over, with an exposure nobody had asked about.
+  #
+  # 56 -> 59 on 2026-09-03 (the SIXTEENTH correction), and it is the CALLER half of the fourteenth.
+  # collect_caller names command WORDS, so a function called inside a substitution — `v="$(f)"`,
+  # whose first word is `v="$` — never entered callrd, and clause 4c is its only consumer. The
+  # clause therefore DROPPED a function-final early-exit pipeline whose caller reads the rc, which
+  # is a fail-OPEN, and its census read 0 so the drop looked like an empty class.
+  # What made it findable was instrumenting the 4c state machine rather than counting its output:
+  # 85 pipelines arm `pend`, 82 are cleared by a following code line, 3 reach the closing brace —
+  # and all 3 of those 3 are called ONLY through a substitution, so the clause could see none of
+  # the population it exists for. The five arms pinning 4c all call f as a bare word.
+  # r30 (a $? capture) and r31 (condition position) are the two reading forms; g32 is the
+  # discrimination cell — a bare `v="$(f)"` reads no status and stays GREEN, so the widening cannot
+  # pass by convicting every substitution call. Attribution proved: reverting the one extractor arm
+  # makes exactly r30+r31 fail and nothing else (~/.claude/autonomy/mut291-pin.sh, subject restored
+  # by sha256). Census 125 -> 125, KEYS 116 -> 116, LOST=0, NEW=0 keyed on (path, TEXT) with
+  # CC_PIPEFAIL_ROOT pinned on both arms; the allowlist is untouched.
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s' "$output" | grep '56/56' >/dev/null \
+  printf '%s' "$output" | grep '59/59' >/dev/null \
     || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 

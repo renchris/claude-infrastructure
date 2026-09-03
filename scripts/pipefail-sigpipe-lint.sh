@@ -944,6 +944,35 @@ function collect_caller(l,   t, i, c, seg, w, cond, prevw) {
     if (w ~ /^(then|do)([ \t]|$)/) cond = 0
     if (w ~ /^[A-Za-z_][A-Za-z0-9_]*=\$\?/ && prevw != "") callrd[prevw] = 1
     sub(/[ \t;&|()].*$/, "", w)
+    # ── SIXTEENTH CORRECTION 2026-09-03: A FUNCTION CALLED INSIDE A COMMAND SUBSTITUTION IS NOT A
+    #    COMMAND WORD, AND THIS EXTRACTOR COULD NOT NAME IT. ──────────────────────────────────────
+    # Every line above tokenises the segment into COMMAND WORDS, so `v="$(f)"` yields the word
+    # `v="$` and f never entered callrd — whatever the caller then did with the status. callrd has
+    # exactly one consumer, clause 4c, so the effect was a fail-OPEN: a function-final early-exit
+    # pipeline whose caller reads the rc through a substitution was DROPPED rather than reported,
+    # and dropped for a reason that is not about the caller at all.
+    #
+    # WHAT MADE IT INVISIBLE IS THAT THE ZERO LOOKED HONEST. Clause 4c emitted 0 rows on this tree,
+    # measured by the shipped program. Instrumenting the 4c state machine (every pend arming, every
+    # closing brace with its three conjuncts reported SEPARATELY) says: 85 pipelines arm pend, 82
+    # are cleared by a following code line, 3 survive to the brace — and all 3 of those 3 are called
+    # ONLY as `x="$(fn)"` (devserver-census.sh proc_port, launchd-parity-lint.sh plist_label,
+    # offbox-admission-lint.sh run_suite). So the entire population clause 4c could see was spelled
+    # in the one framing it cannot name. The five arms pinning 4c (r27/g23/g24/g25/r28) all call f
+    # as a BARE word, which is why no arm caught it and why the census could not either.
+    # Those three drops happen to be correct — none of the three callers reads the status and none
+    # of the three files sets errexit — but they are correct by accident, not by this clause.
+    #
+    # NOT A WIDENING IN EFFECT (method 213, measured BEFORE the land): --census 125 -> 125 rows,
+    # 116 -> 116 keys, LOST 0, NEW 0, keyed on (path, TEXT) verbatim with CC_PIPEFAIL_ROOT pinned
+    # to the same tree on both arms; --selftest 56/56 on both; bare lint rc 0 on both. It changes
+    # what the detector CAN see, not what it says about this tree today.
+    # r30 pins the $? capture, r31 condition position, g32 the discrimination cell — a bare
+    # `v="$(f)"` reads no status and must stay GREEN, so this cannot pass by convicting every
+    # substitution call.
+    if (w !~ /^[A-Za-z_][A-Za-z0-9_]*$/ && match(seg, /\$\([ \t]*[A-Za-z_][A-Za-z0-9_]*/)) {
+      w = substr(seg, RSTART, RLENGTH); sub(/^\$\([ \t]*/, "", w)
+    }
     if (w ~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
       if (cond || c == "\002" || c == "\003") callrd[w] = 1
       prevw = w
@@ -1139,10 +1168,12 @@ FNR == 1 { inhd = 0; curfn = ""; pend = 0 }   # pass two starts clean, whatever 
   # (measured: the swallowed set is exactly the two files above). Tightening the opener test to
   # ignore quoted occurrences is a real change to what counts as an opener and wants its own
   # measurement; it is not folded in here. r15/g31 pin both directions of what IS fixed.
-  # (This read `g31/g32` until 2026-09-03. There is no g32 and there never was — the pair is
-  # r15/g31, and their own comment forty lines below says so. A citation naming an arm that does
-  # not exist sends the next reader looking for a guard nobody wrote; #241 lost a run to exactly
-  # this, and the repair is one token.)
+  # (This read `g31/g32` until 2026-09-03. The pair pinning THIS is r15/g31, and their own comment
+  # forty lines below says so. A citation naming an arm that does not exist sends the next reader
+  # looking for a guard nobody wrote; #241 lost a run to exactly this, and the repair is one token.
+  # A g32 now EXISTS, added later the same day, and it is unrelated to heredocs: it is the
+  # substitution-caller discrimination cell of clause 4c. Named here so the sentence above cannot
+  # be read as a claim that the arm is still absent.)
   if (line ~ /^#/ || line == "") next
 
   if (match($0, /<<-?[ \t]*[\x27"]?[A-Za-z_][A-Za-z0-9_]*[\x27"]?/)) {
@@ -1727,6 +1758,34 @@ cat <<'EOF'
 if git status --porcelain | grep -q .; then :; fi
 EOF"
   expect g31 GREEN "a comment ahead of a REAL heredoc still leaves the body as DATA"
+
+  # ── THE SUBSTITUTION CALLER (2026-09-03, the SIXTEENTH correction) ────────────────────────────
+  # r27/g23/g24/g25/r28 pin clause 4c in five directions and EVERY ONE calls f as a bare command
+  # word. collect_caller tokenises command words, so a call inside a substitution was invisible:
+  # `v="$(f)"` yields the word `v="$` and f never reached callrd. Measured on this tree before the
+  # fix: 85 pipelines arm `pend`, 3 survive to the closing brace, and all 3 are called ONLY through
+  # a substitution — so clause 4c saw none of the population it exists for, and its zero read as a
+  # retired class rather than as a blind spot.
+  # Producer, consumer and function body are held CONSTANT across all three cells; only the CALL
+  # framing varies, so a difference between two of them cannot be attributed to either end.
+  # r30 is the $? capture (the most direct status read there is), r31 is condition position, and
+  # g32 is the discrimination cell WITHOUT which the widening could pass by convicting every
+  # substitution call. Pre-fix these read GREEN/GREEN/GREEN, i.e. 2 red of 3.
+  mk_noe r30 "f() {
+  cat \"\$x\" | grep -q pat
+}
+v=\"\$(f)\"; rc=\$?"
+  expect r30 RED "clause 4c through a substitution — a \$? capture DOES read the rc"
+  mk_noe r31 "f() {
+  cat \"\$x\" | grep -q pat
+}
+if v=\"\$(f)\"; then :; fi"
+  expect r31 RED "clause 4c through a substitution — condition position DOES read the rc"
+  mk_noe g32 "f() {
+  cat \"\$x\" | grep -q pat
+}
+v=\"\$(f)\""
+  expect g32 GREEN "r30's discrimination cell — a BARE substitution assignment reads no status"
 
   local total=$((pass+fail))
   if [ "$fail" -gt 0 ]; then
