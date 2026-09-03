@@ -1616,7 +1616,8 @@ windows/week, carrying the fleet wall rate 1.72% → 2.20%.
 
 ### §5.7 Implementation record — what actually landed, and where it deviated from the spec
 
-Wave 1 = **S1 + S2 + S3 only**. S4–S7 are unbuilt and unchanged; S5 still gates S6.
+Wave 1 = **S1 + S2 + S3**. Wave 2 = **S4 + S5** (2026-09-03), landing in that order; **S4 is in
+this commit and S5 is in the next**. S6 and S7 remain unbuilt, and S5 still gates S6.
 
 #### S1 · data fixes — LANDED
 
@@ -1775,6 +1776,59 @@ commit messages. §5.1 LB-2's four kills stand and the estimator is sold as what
 nowcaster precisely because it converges as the horizon closes, which is what makes it a bad
 forecaster. **S5 (`--strand-score`) is still the prerequisite for S6**, and nothing here
 shortens that.
+
+#### S4 · M4′ `burst_start_by` — LANDED (wave 2, 2026-09-03)
+
+`bin/claude-accounts`: `burst_start_by(r, k)` + `fmt_start_by(sb)` beside `pace_need_ppd`,
+constants `BURST_SPPH` / `P_WALL` / `MEAN_WALL_H` / `BURST_GRID_H` / `START_BY_SOON_H`. K is
+stamped in `apply_burn` (`exchange_rate_k` / `_src` / `_sds`) and the clause is rendered on the
+existing `pace_line` row. Suite `tests/claude-accounts-start-by.bats` (RP-28..RP-33), **6/6 proven
+RED against the pre-change binary**, 6/6 green after.
+
+**It reproduces §5.2 S4's live table to the last digit** on all four accounts — next3
+1 window / 1.82 h burn / 1.03 h freeze / t_needed 2.86 / **−0.65 LATE, floor 2.83 pp**; next2
+6 / 21.41 / 6.20 / 27.61 / **+69.59 SLACK**; next4 6 / 22.10 / 6.20 / 28.29 / **+90.91**; and
+`next` 3 / 11.69 / 3.10 / 14.79 / **+99.42** (that row's session pair is not printed in §5.2's
+table; it reproduces at `session_pct = 50`, `session_reset_h = 2.32`, which is the only pair
+consistent with its published 3 windows). The bare `need_spp / BURST_SPPH` divide anyone would
+write reads **18.90 h against next2's true 27.61 h** — 8.7 h early, on an account it would then
+call SLACK. RP-28 is that number.
+
+**Deviation 1 — §5.2's pseudocode has no `else` arm, and its absence is a defect rather than a
+simplification.** The open window is guarded by `if avail > 0:`; under that reading an account at
+`session_pct = 100` begins burning at `t = 0`, inside a window that has no headroom and cannot be
+reopened for `session_reset_h`. The error is exactly `session_reset_h`, always in the optimistic
+direction, and it appears **only when the account is walled** — the one state M4′ exists to call.
+Shipped with `else: t = srh`, i.e. the same grid rule the `if` arm already applies. RP-30 pins it
+by holding the wall fixed and moving only the reset, because a nearly-full window is *not* the
+control it looks like: 1 pp of headroom enters a window for 0.044 h of burn and is charged a whole
+window of expected freeze, so it comes out worse than the wall. That is a real property of the
+per-window freeze model — it over-charges a tiny partial window — and it is **left alone**: the
+three constants are on probation on n = 8, and re-modelling them from this chair would be a change
+the evidence has not asked for. Named here so the next reader meets it as a known shape.
+
+**Deviation 2 — the K clause DID enter the header, and `PACE_HEAD` is now a stem plus a
+parenthetical.** §5.4's mock reads `(K=0.192 live · nowcast …)` and S3 shipped without it because
+M3a consumes no K; S4 is K's first consumer, so it arrives here as promised. But
+`tests/claude-accounts-burn-ratio.bats:147` greps the SOURCE for `pp that DIE at reset` as the
+invariant that the block still names the loss, and §5.7 S3 Deviation 6 is the record of what
+happens when a live assertion is written against a spelling rather than an invariant. So the
+caption is built from `PACE_HEAD_STEM` + `PACE_HEAD_TAIL`, the grep stays true under a caption
+that grew, and `_pace_head(rows)` emits the K clause **only when a row carries a real K** — when
+`exchange_rate` abstains, the header and the start-by clause go silent together rather than
+asserting a coefficient the fit has withdrawn.
+
+**Deviation 3 — `pace_line` COMPUTES `burst_start_by` rather than reading its stamp**, for the
+reason `_strand` is computed (S3 Deviation 3): a renderer that reads a stamp renders nothing at
+all when `apply_burn` has not run, which is a silent failure. K is the one exception — it needs
+the series — so it rides the stamp, and its absence correctly silences this clause **alone**.
+
+**The rendering refusal, applied in advance this time.** S2 shipped its abstain at the number and
+leaked it at the string for nine days (`p100`). A `LATE` row is therefore never rendered as
+`start by T−0h`: that is arithmetically true and reads as an instruction that can still be
+followed. It renders `⚠ LATE by 0.6h — 2.8pp already unrecoverable`, which is the part the reader
+can act on. RP-32 pins all three verdict arms, because one spelling shared between two verdicts is
+the same defect in the other direction.
 
 #### Acceptance status against §5.4
 
