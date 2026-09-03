@@ -2085,3 +2085,145 @@ the two prior addenda recorded at two other boundary commits (`16cd3a36`, then `
 HORIZON, not any commit, so no "distrust sha X" note can catch it. **`git rev-parse
 --is-shallow-repository` reading `false` is the only precondition that makes a provenance answer in
 a cloud container admissible.**
+
+
+## 18 · The second lane, and the cure that did not run on the session sent to verify it (2026-09-02)
+
+§16 landed at 04:46:15Z. The next cloud dispatch of this same row fired at **10:53:06Z** — the
+session §16's own artifact nominated as the probe (`cloud-boot-contract-restrandings-2026-09-02.md`
+§7: the ping's effect "cannot be observed from here; it is observable on the next cloud dispatch as
+a ref appearing inside the boot budget"). **No ref appeared, because that session's brief was
+composed by a `bin/cc-dispatch` older than the cure.** Full measurement:
+`docs/research/cloud-boot-contract-second-lane-2026-09-02.md`.
+
+### 18.1 · Landed is not live, measured on this row's own cure
+
+The brief that VM received carries none of three rails that are on trunk: the BOOT PING
+(`0efcc073`, 04:46:15Z), the DISPATCHER VINTAGE line (`f9cbe177`, 02:15:02Z) and the `--unshallow`
+clause (`22b8824c`, 09-01 20:58:52Z) — so the live dispatcher is **≥13 h 54 m behind trunk**. Its
+clone did arrive shallow, the hazard `22b8824c` exists to prevent, 13 h after that fix landed.
+
+🚨 **And the staleness SENSOR itself under-reported by exactly the curing commit.** `bin/cc-premise`'s
+EVIDENCE AGE arm counts churn off `origin/main`. It told that worker **2 commit(s)** had landed on
+`docs/plans/CLOUD_OBSERVABILITY.md` since the row was filed, listing `da729350` and `7a67b326`. Its
+own query, re-run on a deepened clone against the same timestamp, answers **3** — the missing one is
+`0efcc073`. The one signal built to say *"your cure may already be on trunk"* pointed away from the
+cure, on the row whose subject is that cure. §13.6's ADD/EDIT distinction does not cover this: the
+dispatcher is an EDIT to an already-symlinked file and should have gone live on the fast-forward, so
+what this measures is the fast-forward not having happened. The settling read is on the desk:
+`git rev-parse origin/main:bin/cc-dispatch` against `~/.claude/bin/cc-dispatch`.
+
+### 18.2 · §16's "nothing emitted it" is overstated — the fire lane emitted it with the WRONG TIMING
+
+§16 says "No brief, no hook, no script". True of the *first-act* ping; not true of
+`scripts/handoff-fire.sh`, whose cloud payload — the lane `bin/cc-offload` delegates its entire
+create to — has instructed `git switch -c <branch>` + `git push -u origin HEAD` since `ca7db1a1`
+(2026-08-09), refined by `3516251c` (08-21), **both predating this row's filing on 08-23**. What it
+lacked was the timing: the block is headed *"read this before you finish"* and says *"push whatever
+you have before you finish"*.
+
+**A completion-timed push disambiguates nothing.** A VM that boots and dies, one that never booted,
+and one refused entitlement all reach the end with nothing to push — three no-refs, three C1
+NOT-STARTEDs. Only t=0 separates them. `tests/handoff-fire-cloud.bats` test 17 could not catch this
+because it pins `switch -c` **before** `push` — an ordering claim that stays green over a payload
+asking for both at the very end.
+
+So §16 fixed the dispatcher lane and left this one, and the payload is now restructured into a
+**BOOT PING** beat ahead of the unchanged return rail. A bare ref creation per §16.1, never
+`commit --allow-empty`. It is safe only because §16.2's exit-66 arms are already on trunk: they are
+what keep the moved boot-and-die population from generating a land-refused artifact, a `LAND
+REFUSED` wake and open custody apiece. Pinned by four new arms (`17b`-`17e`) that fail on the
+pristine payload for four different reasons while incumbent test 17 stays green.
+
+### 18.3 · §18.2's own diff then stranded, and the sensor under-reported IDENTICALLY a day later
+
+Written from the **third consecutive cloud dispatch** of this row (fired 2026-09-03 17:01:23Z),
+which is what makes the two facts below measurements rather than predictions.
+
+**The census, on a deepened clone, of every implementation this row has produced:**
+
+| | Commits | On trunk? |
+|---|---|---|
+| the cure | `0efcc073` | **yes** — dispatcher lane, 09-02 |
+| the nine `0efcc073` named | `0cc728a2` `ea2b988f` `faf78977` `f578e350` `adec5241` `5d7d7d84` `648c1a1d` `b9440fa8` `52a39c70` | no |
+| written *after* it | `dee6a41e` (dup) · `c2c5cb66` (§18.2's diff) · `c240e96a` (a §14 verdict artifact) | no |
+
+**Twelve stranded, one landed.** §18.2 diagnosed the fire lane correctly, tested it, pushed it — and
+then joined the population it was documenting. `c240e96a`, the 09-03 08:59Z dispatch, correctly
+established that the row was already discharged for the dispatcher lane and stranded too. **A
+worker being right is not what gets a row closed**; every one of these thirteen sessions was right.
+This commit is `c2c5cb66`'s content, re-verified against current trunk (zero drift on all four
+touched files since its base `299e4d56`) rather than re-derived, because a thirteenth independent
+re-derivation is precisely the waste the census measures.
+
+**The staleness sensor reproduced its §18.1 under-report exactly.** `bin/cc-premise`'s EVIDENCE AGE
+arm told *this* worker **2 commit(s)** had landed on `docs/plans/CLOUD_OBSERVABILITY.md` since the
+row was filed, naming `da729350` and `7a67b326`. Re-run on a deepened clone against the same
+timestamp it answers **3**, and the omitted one is `0efcc073` — the curing commit — for the second
+consecutive day. So this is not a one-off: the arm built to say *"your cure may already be on
+trunk"* omits, specifically, the cure, on the row whose subject is that cure. The mechanism is
+visible from here and is the shallow clone, not the query: a fresh cloud checkout carries only
+recent history, so `git log --since` silently answers over a truncated graph and reports a smaller
+number with no error. That makes §18.1's convergence gap and this sensor gap the **same** defect —
+`--unshallow` runs too late or not at all — and it is why the omission tracks the newest commit
+every time.
+
+**The brief this session received still carried none of the three rails**, ≥36 h after `0efcc073`
+landed: no `BOOT PING`, no `DISPATCHER VINTAGE` line, a desk-absolute `git -C /Users/chrisren/…`
+prefix handed to a VM whose checkout is `/home/user/…`, no `--unshallow` clause (and the clone did
+arrive shallow), and all three terminal dispositions naming `cc-backlog`/`cc-notify`, neither of
+which is on `PATH` here and whose `~/.claude/autonomy/` does not exist. The desk-side read that
+settles it is unchanged and is still the only one that can:
+`git rev-parse origin/main:bin/cc-dispatch` against `~/.claude/bin/cc-dispatch`.
+
+### 18.4 · Dispatch #14 — the fire-lane diff stranded a second time, and §18.3's sensor attribution is REFUTED
+
+Written from the **fourteenth** cloud dispatch of `0c8b39b67665` (fired 2026-09-03T23:40:11Z). It
+carries `c2c5cb66`'s content a second time — as `ba1e629c`, which is §18.2's diff plus §18.3's
+census — because that commit stranded exactly as its own §18.3 predicted it might. The census is
+now **thirteen stranded, one landed**, and the only re-derivation in this dispatch is the conflict
+resolution: `ba1e629c` cherry-picks onto current trunk with one conflict, in this file, where a
+sibling took `## 17` (`95ae4da9`, the `b60eb29e97dd` park). Renumbered to `## 18`; the code, the
+tests and the research artifact apply unchanged.
+
+**THE ONE NEW MEASUREMENT, AND IT CORRECTS §18.1/§18.3.** Those sections attributed
+`bin/cc-premise`'s EVIDENCE AGE under-report to the VM's shallow clone — *"the mechanism is visible
+from here and is the shallow clone, not the query"*. **It is not, and the depths refute it from
+inside the VM.** This brief reported 2 commits on this file; a deepened clone answers 4. The two
+omitted sit at depth **36** and **85** from the `origin/main` tip; the two reported sit at **201**
+and **232**. A depth horizon cannot omit a shallower commit while reporting a deeper one, so the
+horizon is not the filter — **recency** is.
+
+The arm runs `git rev-list --count --since=<ts> origin/main` (`bin/cc-premise:1333`) **on the desk,
+at compose time**, over a ref it never fetches (`cc-premise` contains no `fetch`). So the sensor gap
+is a **stale `origin/main` on the desk**, upstream of the brief, and it **bounds** that ref: at or
+after `da729350` (08-29T17:43Z), strictly before `0efcc073` (09-02T04:46Z). The brief's three
+missing unconditional rails — `BOOT PING` (`0efcc073`), `DISPATCHER VINTAGE` (`f9cbe177`),
+`--unshallow` (`22b8824c`, 09-01T20:58Z) — bound the live **bytes** independently, and the two
+windows intersect at **`[08-29T17:43Z, 09-01T20:58Z]`: one desk state, ~3 days behind trunk**.
+
+**Consequence.** §18.1/§18.3's unification — sensor gap and convergence gap are the same defect — is
+right; the defect it named is wrong. `--unshallow` is a worker-side rail against a worker-side
+hazard and **cannot** close the sensor half, so no clause added to the brief will. The two cures are
+desk-side: the live layer converging (which closes both halves at once), or `cc-premise` ceasing to
+read a ref it never fetched — the latter not attempted here because that arm sits in the claim path
+of every wave row and `--sweep` already spends ~675 s over 466 declarations, so an unmemoized fetch
+per item would be a regression. A *current* dispatcher would already have avoided this: `d877dc7e`
+(09-01T06:43Z) added `refresh_trunk()`, one fetch per project per pass, for exactly this reason.
+Measurement and the excluded hypothesis: `docs/research/cloud-boot-contract-second-lane-2026-09-02.md` §7.
+
+**Verification, this dispatch, on a deepened clone** (`--is-shallow-repository` = `false`, 4,040
+commits): `tests/handoff-fire-cloud.bats` **23/23** with the fix; the four new arms (`17b`-`17e`)
+**red** on the pristine `origin/main` payload for four distinct reasons with incumbent `17` green in
+both directions; ten cloud + handoff-fire suites run **270 tests with 7 failures**, and the **same 7
+fail byte-identically on a detached `origin/main` worktree** (`handoff-fire-completion-push`'s two
+osascript arms, `cloud-venue-provision`'s five runner arms) — **zero attributable to this diff**.
+`bash -n` clean; `utc-stamp-lint` and `moving-ref-control-lint` clean. `bats` is absent from this
+image and was installed from bats-core to run any of it.
+
+**Terminal disposition, per §16.3.** `cc-backlog` and `cc-notify` are not on `PATH` here and
+`~/.claude/autonomy/` does not exist, so this lands as its own work plus a §14 verdict artifact. The
+desk closes `0c8b39b67665` on `0efcc073` for the dispatcher lane and on this commit for the fire
+lane. **A park is deliberately NOT written**: §17's preference for §15's park applies to an
+*already-cured* row, and this row is not cured — the fire lane is live work, and §15's rule is
+explicit that a worker "does not park a row it could have finished".

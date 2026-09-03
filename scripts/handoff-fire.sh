@@ -8082,20 +8082,60 @@ if [ "$CLOUD" = 1 ]; then
   # there the name is authorised AT CREATE. cc_cloud_create's signature is `cfg cwd prompt`
   # (scripts/lib/cloud-create.sh:185): the CLI leg has NO branch parameter at all, so the payload
   # is the only place the branch can be established, and establishing it is a real `switch -c`.
+  # ── AND THE TWO COMMANDS ARE THE SESSION'S FIRST ACT, NOT ITS LAST (CLOUD_OBSERVABILITY.md
+  # §4.1/§8 step 2, §16; backlog 0c8b39b67665) ──────────────────────────────────────────────────
+  # This block used to be headed "read this before you finish" and said "push whatever you have
+  # BEFORE YOU FINISH" — i.e. it prescribed exactly the right two commands with COMPLETION timing.
+  # That is a return rail, and it is not the absence contract, because the two answer different
+  # questions. A completion-timed push cannot disambiguate absence AT ALL: a VM that boots and dies,
+  # one that never booted, and one refused entitlement all reach the end with nothing to push, so
+  # all three produce no ref and `cc-cloud classify` files all three C1 NOT-STARTED. Only a push at
+  # t=0 separates "never started" from "started and produced nothing".
+  #
+  # 0efcc073 actuated the contract on the OTHER lane (bin/cc-dispatch's brief composer) and did not
+  # reach this one — its own §16 says "no brief, no hook and no script" emitted the ping, which is
+  # true of the FIRST-ACT ping and overstated about this file, which has carried the commands with
+  # end-of-session timing since ca7db1a1 (2026-08-09). So the dispatcher lane was fixed and every
+  # `--cloud` fire through here (cc-offload delegates its whole create to this path) still declared
+  # a branch whose absence meant four things at once.
+  #
+  # A BARE REF CREATION, NOT `commit --allow-empty` — §16.1. `cloud-reconcile.sh`'s reauthor_branch
+  # replays a branch's commits with `commit-tree` and replays an empty one happily, so an empty
+  # commit would put one content-free commit on trunk per cloud fire. `push -u origin HEAD` creates
+  # the same ref, is the same single observation to `ls-remote`, and leaves nothing to land.
+  #
+  # SAFE TO MOVE THAT POPULATION ONLY BECAUSE THE DOWNSTREAM HALF IS ALREADY ON TRUNK (§16.2). The
+  # ping moves a boot-and-die session from "no ref ⇒ NOT-STARTED ⇒ nothing to return" to "a ref ⇒
+  # ALIVE/STALLED ⇒ the land". `cloud-reconcile.sh --land` answers 66 (NOTHING TO LAND) for a branch
+  # carrying no content against trunk and `cloud-return.sh` reads 66 as a non-verdict — no artifact,
+  # no LAND REFUSED wake, no latch — so the moved population stays exactly as quiet as it was.
+  # Without those two arms this change would be a regression, which is why it is landing after them
+  # and not before.
   CLOUD_PAYLOAD="$(cat "$PROMPT_FILE")
 "'
-── HOW TO RETURN YOUR WORK (this session runs off-box; read this before you finish) ──
-You are running in an Anthropic-managed VM. Nothing on the operator'"'"'s machine can see your
-filesystem, your processes or your terminal, and you cannot run this repo'"'"'s /ship. Your ONLY
-channel back is a git push, and it must go to exactly this branch — CREATE IT FIRST, then push it:
+── BOOT PING — YOUR FIRST ACT, before you read anything else and before any other command ──
+You are running in an Anthropic-managed VM. Run exactly these two commands now:
 
     git switch -c '"$CLOUD_BRANCH"'
     git push -u origin HEAD
 
-That branch name was assigned by the firing side and is already declared as the one thing watched
-for your progress — a push anywhere else is invisible and your work will strand. Push whatever you
-have before you finish, even if the work is incomplete; an unpushed cloud session leaves no trace
-of any kind. A local reconciler (scripts/cloud-reconcile.sh) discovers the branch and lands it.'
+Why this is not busywork: from the firing side, a cloud session that has pushed nothing is
+indistinguishable from one that never booted, one that died at boot, and one that was refused
+entitlement — all four read as NO REF, and every one of them is filed NOT-STARTED
+(docs/plans/CLOUD_OBSERVABILITY.md section 4.1). This push is the ONLY evidence that side can read
+that you exist, and it is free: it creates the branch at the commit you are already on, adds no
+commit and lands nothing, so the return path still settles your row on the content you push later.
+Do NOT make an empty commit for it — the lander replays a branch'"'"'s commits onto trunk, and an
+empty one would land there as noise.
+
+── HOW TO RETURN YOUR WORK (this session runs off-box; read this before you finish) ──
+Nothing on the operator'"'"'s machine can see your filesystem, your processes or your terminal, and
+you cannot run this repo'"'"'s /ship. Your ONLY channel back is a git push, and it must go to the
+same branch you created above. That branch name was assigned by the firing side and is already
+declared as the one thing watched for your progress — a push anywhere else is invisible and your
+work will strand. Push whatever you have before you finish, even if the work is incomplete; an
+unpushed cloud session leaves no trace of any kind. A local reconciler
+(scripts/cloud-reconcile.sh) discovers the branch and lands it.'
 
   if [ "$DRY" = 1 ]; then
     echo "-- DRY RUN: cloud fire (no create issued, no quota spent)"
