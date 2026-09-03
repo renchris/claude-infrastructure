@@ -102,6 +102,12 @@ def to_row(d, now):
         "auth": d.get("auth", "ok"),
         "k": d.get("k", 0),
         "k_work": d.get("k", 0) if legacy else d.get("k_work"),
+        # k_stale rides along or a `panes-stale` sweep replays as an ABSTENTION it never was:
+        # on such a row the recorded `k` is null by contract (the census was inherited into a
+        # separate field so the token-rotation gates keep refusing), so a replay reading only
+        # k/k_work derives k_src 'unmeasured' and re-excludes a row the router admitted and
+        # charged. Absent on every pre-2026-09 row, where .get gives None and nothing changes.
+        "k_stale": d.get("k_stale"),
         "k_src": "work" if legacy else d.get("k_src"),
         "k_phantom_desk": 0,
         "desk_incumbent": False,
