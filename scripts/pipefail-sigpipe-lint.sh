@@ -287,9 +287,13 @@
 #      moment the write exceeds the 64 KiB pipe buffer. The command word is identical in both cases,
 #      so only the argument can discriminate;
 #   4. the pipeline's status is CONSUMED — an `if`/`elif`/`while`/`until` condition, a `!` operand,
-#      or (under `set -e`) a bare pipeline or a top-level `VAR=$(…)`. `local`/`declare`/`export`
-#      MASK the status (the builtin's own 0 wins), and `[ -n "$( … )" ]` discards it, so neither is
-#      a violation however exposed the pipeline inside looks;
+#      a following `&&`, a `; rc=$?` capture, or (under `set -e`) a bare pipeline or a top-level
+#      `VAR=$(…)`. `local`/`declare`/`export` MASK the status (the builtin's own 0 wins), and
+#      `[ -n "$( … )" ]` discards it, so neither is a violation however exposed the pipeline inside
+#      looks. A pipeline that is the FINAL command of a function body is ALSO consumed, by whatever
+#      reads the FUNCTION's status — the two are the same value — so it counts iff some caller in
+#      the same file reads it (`if fn`, `! fn`, `fn && …`, `fn; rc=$?`). See the FOURTEENTH
+#      CORRECTION at consumed() for why that caller half is part of the clause and not a widening;
 #   5. it is NOT already mitigated by a trailing `|| true` / `|| <fallback>`, which swallows the 141
 #      before anything reads it.
 #
@@ -755,7 +759,77 @@ function is_external(s, cons,   t, p) {
   return 1
 }
 
-# Clause 4: does anything READ this pipelines status?
+# ── A FOURTEENTH CORRECTION, 2026-09-03: CLAUSE 4 ASKED ITS QUESTION OF THE LINE, AND A FUNCTIONS
+#    LAST LINE IS ANSWERED BY ITS CALLER ────────────────────────────────────────────────────────
+# Clause 4 asks "does anything READ this pipelines status?" and, since the $? correction, answers it
+# from the line the pipeline is ON: a control-flow keyword, a !, a following &&, a ; rc=$? capture,
+# or errexit. For a pipeline that is the LAST command of a function body every one of those is
+# absent and the answer is still YES, because a functions return value IS the status of its last
+# command. The reader is one frame up, on a line the clause never looks at.
+#
+# THE SHAPE IS THIS TREES OWN AND IT IS THE ORIGINAL SCAR MOVED ONE FRAME. ec9a43a9s capability
+# probe spelled the pipeline inline inside the `if`; the same predicate written as a named helper —
+#     has_valid_status() { sed -n ... "$f" | grep -qiE ...; }
+#     if [ "$IS_AUTHORED" = true ] && ! has_valid_status "$FILE"; then
+# — is byte-for-byte the same defect and read GREEN. That is hooks/validate-plan-structure.sh:28-29,
+# drained in this same diff; it is the ONE site the correction reveals on todays tree.
+#
+# WHAT THE MEASUREMENT SAID, on this harness (GNU bash 5.2.21, Linux x86_64), 20 trials per cell.
+# Producer held CONSTANT at `cat BIG` (202,506 B, the match on line 1) and the consumer CONSTANT at
+# `grep -q NEEDLE`; ONLY the framing varies, so a difference between two cells cannot be attributed
+# to either end. Read as "the `if` took the FALSE branch on a match that IS present":
+#   · `if cat BIG | grep -q N; then`                          20/20   FIRE ANCHOR
+#   · `f() { cat BIG | grep -q N; }; if f; then`              20/20   BYTE-IDENTICAL to the anchor
+#   · `f() { cat BIG | grep -q N; :; }; if f; then`            0/20   not final — the `:` rc wins
+#   · `f() { cat BIG | grep -q N; return 0; }; if f; then`     0/20   not final — the return rc wins
+# The last two are the bound: this clause is denominated in FINAL, and a pipeline one statement from
+# the end of a function is as invisible to the caller as it always was.
+#
+# AND THE CALLER HALF IS PART OF THE CLAUSE, NOT AN EXTRA. Clause 4s reason is "does anything READ
+# it" — for a function-final pipeline the reader is the caller, so a clause that fired on FINAL
+# alone would be denominated in something its own reason does not name. Measured on the four
+# function-final candidates this tree actually has: `has_valid_status` is read (`&& ! has_valid_status`
+# in an `if`), and `proc_port`, `plist_label` and offbox-admission-lints `run_suite` are each called
+# ONLY as `x="$(fn ...)"` — a substitution whose status is discarded in a file with no errexit, which
+# is the same exoneration g13 already pins one frame down. Firing on FINAL alone would have minted
+# all three. This is the same lesson as the ninth correction: the reason names a thing, so hand the
+# clause that thing.
+#
+# CONSUMED() THEREFORE RETURNS THREE VALUES AND NOT TWO, and the fold was the actual blocker.
+# 1 = something on THIS line reads it · 0 = something on this line MASKS it, so no caller anywhere
+# can ever see it · 2 = nothing on this line reads it, which is a DIFFERENT claim. `local v=$(p|q)`
+# and `if (!hase) return 0` both answered 0, and 4c must widen the second while leaving the first
+# untouched — `local` returns its own 0, so a function ending in one returns 0 whoever calls it.
+# The local/declare/export arm accordingly moves ABOVE the errexit test: it is a masking fact about
+# the LINE, true whether or not the file sets -e, and below that test it was unreachable for every
+# file that does not. g23 pins it, and it is the arm a "FINAL means consumed" cut would fail.
+#
+# RESIDUALS, NAMED RATHER THAN WIDENED — all three UNDER-detect, which is the ratchets safe
+# direction: (a) only SAME-FILE callers count, so a helper in a sourced lib read by another file is
+# invisible; (b) function-final is read off the house shape `name() {` … `}` with the closing brace
+# at column 0, so a one-line function or an indented closer is not seen; (c) a bare `return` (no
+# argument) after the pipeline also passes the status out, and is treated as any other statement,
+# i.e. as ending the candidacy.
+#
+# AND A FOURTH, WHICH IS A SIBLING FACE OF THE SAME QUESTION IN A DIFFERENT CLAUSE — MEASURED HERE
+# AND DELIBERATELY NOT TAKEN, so nobody re-derives it. `ca97c678b18b`s own evidence trail
+# (BACKLOG_DRAIN_24_7.md, #243 arm C and #245) records that a pipeline in `|| return 1` position is
+# equally invisible, and it is: clause 5 exonerates on a top-level `||`, whose stated reason is that
+# the fallback "swallows the 141 before anything reads it". Measured on this harness, producer and
+# consumer held CONSTANT, 20 trials, only the fallback varying —
+#   · `cat BIG | grep -q N || true`      inside a function, `if f`   0/20  — genuinely swallowed
+#   · `cat BIG | grep -q N || return 1`  inside a function, `if f`  20/20  — the fallback ACTS on it
+# — so the reason is true of an INERT fallback and false of every other one. The principled repair
+# is therefore "exonerate only `|| true` / `|| :`", and its cost on this tree is NEW = 128,
+# LOST = 0: it more than doubles the census (125 -> 253) and wants its own drain campaign and its
+# own allowlist movement. A narrower cut convicting only `return|exit|continue|break` costs NEW = 2
+# (bin/cc-spawn-verify:313 `|| continue`, bin/dia-cdp-launch.sh:98 `|| return 1`) — but that line is
+# drawn to make the number small, not by the mechanism: `|| lpid=""` and `|| echo "missing"` act on
+# the false verdict too. Taking it would be picking the band and then justifying it, which is the
+# defect the fourth correction above already names. Left to its own row, with the numbers measured.
+#
+# Clause 4: does anything READ this pipelines status?  1 = read here · 0 = MASKED here · 2 = no
+# reader here (a function-final pipeline may still have one in its caller — clause 4c).
 function consumed(l, hase,   t, pre, i) {
   t = ltrim(l)
   # [ -n "$( … )" ] / [ -z … ] discard the substitutions status entirely.
@@ -774,10 +848,50 @@ function consumed(l, hase,   t, pre, i) {
   }
   if (t ~ /^(if|elif|while|until)[ \t]/)  return 1
   if (t ~ /^![ \t]/)                      return 1
-  if (!hase) return 0
   # local/declare/export return their OWN 0 — the pipelines status never survives the assignment.
+  # ABOVE the errexit test since the FOURTEENTH CORRECTION: this is a MASK, not an absence of
+  # readers, and 4c must not park it as a candidate. Below the test it never ran without set -e.
   if (t ~ /^(local|declare|typeset|export|readonly)[ \t]/) return 0
+  if (!hase) return 2
   return 1
+}
+
+# Clause 4c, FOURTEENTH CORRECTION 2026-09-03 — the CALLER half, collected in a first pass because a
+# caller may sit either side of the definition. It marks the command word of every ;/&&/||-separated
+# segment whose OWN status is read: any segment inside an if/elif/while/until condition list or after
+# a leading !, any segment a top-level && or || gates, and any segment a `; rc=$?` capture follows.
+# A trailing segment with none of those is NOT marked — `a && b` reads a, and b is the lists status,
+# which nothing in a no-errexit file then looks at.
+#
+# NOT QUOTE-AWARE, and that is a bounded choice rather than an oversight: qmask() masks `|` only, so
+# a ; or && inside a string over-SPLITS. Over-splitting can only invent extra command words, and a
+# word is consulted only when it is also the name of a function DEFINED in this file whose final
+# command is a pipeline already convicted by clauses 2, 3 and 5 — so the exposure is one invented
+# word colliding with that name. LOST is impossible in this direction: an over-split cannot hide a
+# real caller, only add a spurious one.
+function collect_caller(l,   t, i, c, seg, w, cond, prevw) {
+  t = ltrim(l)
+  if (t ~ /^#/ || t == "") return
+  cond = 0
+  if (match(t, /^(if|elif|while|until)[ \t]+/)) { t = ltrim(substr(t, RLENGTH + 1)); cond = 1 }
+  if (t ~ /^![ \t]/) cond = 1
+  gsub(/\|\|/, "\002", t)
+  gsub(/&&/,   "\003", t)
+  seg = ""; prevw = ""
+  for (i = 1; i <= length(t) + 1; i++) {
+    c = (i <= length(t)) ? substr(t, i, 1) : ";"
+    if (c != ";" && c != "\002" && c != "\003") { seg = seg c; continue }
+    w = ltrim(seg); sub(/^![ \t]*/, "", w); sub(/^[({][ \t]*/, "", w); w = ltrim(w)
+    # a `then`/`do` closes the condition list — what follows it is the BODY, not a tested status
+    if (w ~ /^(then|do)([ \t]|$)/) cond = 0
+    if (w ~ /^[A-Za-z_][A-Za-z0-9_]*=\$\?/ && prevw != "") callrd[prevw] = 1
+    sub(/[ \t;&|()].*$/, "", w)
+    if (w ~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
+      if (cond || c == "\002" || c == "\003") callrd[w] = 1
+      prevw = w
+    } else prevw = ""
+    seg = ""
+  }
 }
 
 # Clause 5, TWELFTH CORRECTION 2026-09-03: A || SWALLOWS THE PIPELINES STATUS ONLY AT THE TOP LEVEL
@@ -922,6 +1036,20 @@ function group_wraps_or(s,   t, i, c, d, q, endi, sawor) {
 }
 
 BEGIN { FS = "" }
+# PASS ONE (clause 4c). scan() hands the file TWICE, so NR == FNR is the first read: collect the
+# function names whose status some caller reads, then start over. It needs its own heredoc tracker —
+# a scar quoted in a heredoc is data on both passes, and the pass-2 tracker has not run yet.
+NR == FNR {
+  if (inhd1) { if ($0 ~ hdterm1) inhd1 = 0; next }
+  if (ltrim($0) ~ /^#/) next
+  collect_caller($0)
+  if (match($0, /<<-?[ \t]*[\x27"]?[A-Za-z_][A-Za-z0-9_]*[\x27"]?/)) {
+    tok1 = substr($0, RSTART, RLENGTH); sub(/^<<-?[ \t]*/, "", tok1); gsub(/[\x27"]/, "", tok1)
+    hdterm1 = "^[ \t]*" tok1 "[ \t]*$"; inhd1 = 1
+  }
+  next
+}
+FNR == 1 { inhd = 0; curfn = ""; pend = 0 }   # pass two starts clean, whatever pass one latched
 {
   raw = $0
 
@@ -960,6 +1088,21 @@ BEGIN { FS = "" }
     sub(/^<<-?[ \t]*/, "", tok); gsub(/[\x27"]/, "", tok)
     hdterm = "^[ \t]*" tok "[ \t]*$"; inhd = 1
   }
+
+  # Clause 4c — FUNCTION-FINAL, and the candidate is emitted one line LATE because "final" is only
+  # knowable from what follows. `pend` holds the previous code lines pipeline when clause 4 found no
+  # reader ON it; the closing brace is what turns that into a verdict, and any other code line
+  # clears it. Blank lines and comments are already `next`ed above and so stay transparent, which is
+  # right: a comment between the pipeline and the brace does not make the pipeline non-final.
+  if (line ~ /^\}[ \t]*(#.*)?$/) {
+    if (curfn != "" && pend && (curfn in callrd)) printf "%s:%d:%s\n", FILE, pend_fnr, pend_txt
+    curfn = ""; pend = 0; next
+  }
+  if (line ~ /^(function[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*\(\)[ \t]*\{?[ \t]*$/) {
+    curfn = line; sub(/^function[ \t]+/, "", curfn); sub(/[ \t]*\(\).*$/, "", curfn)
+    pend = 0; next
+  }
+  pend = 0
 
   work = line
   gsub(/\|\|/, "\002", work)          # || is an OR-list, not a pipe
@@ -1017,7 +1160,13 @@ BEGIN { FS = "" }
   # the ASSIGNMENT form after the last stage separates them; g15/g16 pin both directions.
   # (No apostrophes here: this is inside the single-quoted DETECT_AWK string.)
   cap = (last ~ /;[ \t]*[A-Za-z_][A-Za-z0-9_]*=\$\?/)
-  if (amp == 0 && !cap && !consumed(line, HASE)) next
+  # 2 = no reader ON THIS LINE, which is not 0 = MASKED here. Only the former may become a
+  # function-final candidate; a masked pipeline is masked whoever calls the function (FOURTEENTH).
+  cv = consumed(line, HASE)
+  if (amp == 0 && !cap && cv != 1) {
+    if (cv == 2 && curfn != "") { pend = 1; pend_fnr = FNR; pend_txt = line }
+    next
+  }
 
   printf "%s:%d:%s\n", FILE, FNR, line
 }'
@@ -1059,7 +1208,11 @@ scan() {
     grep -E '^[[:space:]]*set[[:space:]]+-[a-zA-Z]*o[[:space:]]+pipefail|^[[:space:]]*set[[:space:]]+-o[[:space:]]+pipefail' "$f" >/dev/null 2>&1 || continue
     local hase=0
     grep -E '^[[:space:]]*set[[:space:]]+-[a-zA-Z]*e[a-zA-Z]*([[:space:]]|$)|^[[:space:]]*set[[:space:]]+-o[[:space:]]+errexit' "$f" >/dev/null 2>&1 && hase=1
-    awk -v FILE="$f" -v HASE="$hase" "$DETECT_AWK" "$f"
+    # TWICE, and that is clause 4c: pass one collects the callers whose status-read reaches a
+    # function-final pipeline, pass two judges. A caller may sit either side of the definition, so
+    # one pass cannot answer it. NR == FNR is the pass discriminator, which is why the same path is
+    # named twice rather than the file being read from a variable.
+    awk -v FILE="$f" -v HASE="$hase" "$DETECT_AWK" "$f" "$f"
   done
 }
 
@@ -1406,6 +1559,48 @@ EOF"
   expect g15 GREEN "a \$? INSIDE the producer is the inner command's, never the pipeline's"
   mk_noe g16 "rc=\$?; git log --oneline | head -5"
   expect g16 GREEN "a \$? capture BEFORE the pipeline reads the PREVIOUS command's status"
+
+  # ── FUNCTION-FINAL, pinned in all five directions, 2026-09-03 (fourteenth correction) ────────
+  # Every arm above spells the pipeline on the line whose status is read. A functions LAST command
+  # hands its status to the CALLER, one frame up, on a line clause 4 never looks at — and g9 already
+  # pins the same bare pipeline GREEN when nothing reads it, so FINAL alone cannot be the trigger.
+  # Producer, consumer and file all held CONSTANT across r27/g23/g24; only the framing varies, so a
+  # difference between two cells cannot be attributed to either end. Measured on `cat BIG` (202,506
+  # bytes, match on line 1) | `grep -q NEEDLE`, 20 trials, read as "the `if` took the FALSE branch on
+  # a match that IS present": inline anchor 20/20, function-final 20/20 (byte-identical), a `:` after
+  # the pipeline 0/20, `return 0` after it 0/20.
+  # Do not merge these into a loop, for the reason r16/r17 give above.
+  mk_noe r27 "f() {
+  cat \"\$x\" | grep -q pat
+}
+if f; then :; fi"
+  expect r27 RED "function-final pipeline, caller reads the rc — 20/20, byte-identical to the inline anchor"
+  mk_noe g23 "f() {
+  cat \"\$x\" | grep -q pat
+}
+f"
+  expect g23 GREEN "r27's caller cell — same function, called BARE: nothing reads the rc (g9 one frame up)"
+  mk_noe g24 "f() {
+  cat \"\$x\" | grep -q pat
+  :
+}
+if f; then :; fi"
+  expect g24 GREEN "r27's FINAL cell — one statement from the end, so the caller reads the \`:\` — 0/20"
+  # The MASK cell, and the arm the three-state consumed() exists for. `local` returns its OWN 0, so a
+  # function ending in one returns 0 whoever calls it (measured 0/20) — while the SAME substitution
+  # as a plain assignment is final and does reach the caller (20/20). One variable between them:
+  # whether `local` shares the line. A cut that folded MASKED and NO-READER together would mint g25.
+  mk_noe g25 "f() {
+  local v=\$(cat \"\$x\" | head -1)
+}
+if f; then :; fi"
+  expect g25 GREEN "function-final \`local\` MASKS the status — 0/20, and it is masked whoever calls f"
+  mk_noe r28 "f() {
+  local v
+  v=\$(cat \"\$x\" | head -1)
+}
+if f; then :; fi"
+  expect r28 RED "g25's discrimination cell — a bare assignment is final and DOES reach the caller, 20/20"
 
   # ── THE COMMENTED-HEREDOC MUTE (2026-08-27) ───────────────────────────────────────────────────
   # The heredoc tracker is the detector's ONLY file-level latching state, and its opener test used
