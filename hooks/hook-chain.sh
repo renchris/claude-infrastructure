@@ -261,7 +261,14 @@ selftest() {
     local label="$1" exp="$2" sub="$3" chain="$4"; shift 4
     local o s
     o="$(printf '%s' "$PAY" | env "$@" "$SELF" "$chain" 2>/dev/null)"; s=$?
-    if [ "$s" -eq "$exp" ] && { [ -z "$sub" ] || printf '%s' "$o" | grep -q -- "$sub"; }; then
+    # `grep -c` and not `grep -q`: the brace group here does NOT neutralise the pipeline. Its `||`
+    # is a real operator at a real top level, but the PIPELINE IS ITS RIGHT OPERAND, so nothing
+    # swallows a 141 — measured 20/20 orphaned on both a builtin and an external producer. Under
+    # `set -uo pipefail` (line 101) an early-exiting `grep -q` therefore makes a MATCH read as a
+    # non-match and this `if` take the wrong branch. pipefail-sigpipe-lint's clause 3b exonerated
+    # this line for twelve links because it tested only that a `{` and a `||` were both PRESENT;
+    # the same commit teaches it to ask which operand the pipeline is.
+    if [ "$s" -eq "$exp" ] && { [ -z "$sub" ] || [ "$(printf '%s' "$o" | grep -c -- "$sub")" -ge 1 ]; }; then
       printf '  ok   %s\n' "$label"; pass=$((pass+1))
     else
       printf '  FAIL %s (status=%s want=%s out=%s)\n' "$label" "$s" "$exp" "$o"; fail=$((fail+1))

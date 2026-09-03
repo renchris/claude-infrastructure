@@ -853,6 +853,74 @@ function toplevel_or(s,   i, c, d, q, qor) {
   return 0
 }
 
+# Clause 3b, THIRTEENTH CORRECTION 2026-09-03: AN OPERATOR HAS TWO OPERANDS, AND THIS EXONERATION
+# IS ONLY SOUND WHEN THE PIPELINE IS THE LEFT ONE. The twelfth correction gave clause 5 a depth walk
+# so that a || is judged by what BRACKETS it. Clause 3b is the sibling that taught it that lesson,
+# and it was still two PRESENCE tests with no relation asserted between them: does seg[ci] contain a
+# brace, and does it contain a ||. Neither asks whether the group WRAPS the producer - and the file
+# already disagreed with itself about that. is_external, twelve lines above, reads PAST every ; and
+# every \002 because "the producer is the LAST of them", i.e. it takes the producer to be the ||
+# RIGHT operand. Clause 3b exonerated on the assumption that it is the LEFT one. Same token, same
+# scope, opposite operands - and only one of them can be right about any given line.
+#
+# WHAT THE MEASUREMENT SAID. Producer and last command held byte-identical within every cell and
+# ONLY the operand position varying, 20 trials per cell, status read as NON-ZERO rather than
+# -eq 141, PIPESTATUS captured in the shell that RAN the pipeline (never through an eval, which
+# leaves a ONE-element array and a per-stage column that cannot fire):
+#   . { false || printf | grep -q; }        20/20 non-zero - the pipeline is the RIGHT operand, so
+#        the || swallows NOTHING. hooks/hook-chain.sh:264 was exactly this shape and the shipped
+#        clause 3b exonerated it: a FALSE NEGATIVE, drained in this same commit.
+#   . { printf | grep -q || true; }          0/20 - the SAME group and the SAME ||, with the pipeline
+#        moved to the LEFT operand. Nothing else differs, so the operand position is the variable.
+#   . ( cat || true ) | grep -q              0/20 - ( ) and { } scope alike, so keying on the BRACE
+#        CHARACTER minted a correct line. The twelfth correction wrote that sentence about clause 5
+#        and it is equally true here.
+#   . awk "{ if (a || b) print }" | grep -q 20/20 - a brace and a || that are neither of them
+#        operators, both inside a quoted program. Two presence tests cannot tell them apart.
+#   . NEG on bytes: every shape above over a body that fits the pipe buffer reads 0/20, so the
+#        finding stays denominated in the bytes still owed at the exit point.
+# Instruments: ~/.claude/autonomy/probe288-operand.sh and probe288-builtin.sh.
+#
+# RESIDUAL, NAMED RATHER THAN WIDENED - AND IT IS A HOLE IN THE EXONERATION ITSELF, NOT IN THIS
+# REPAIR. The neutralisation g14 pins is PRODUCER-KIND DEPENDENT, and no clause here tests that:
+#     { cat BIG    || true; } | grep -q N     stage1 = 0,    0/20 - the || runs, the group exits 0
+#     { printf BIG || true; } | grep -q N     stage1 = 141, 20/20 - it does NOT
+# A group in a pipeline runs in a SUBSHELL. An EXTERNAL producer is a separate process, so SIGPIPE
+# kills IT, the subshell survives, and the || true runs. A BUILTIN producer is executed BY that
+# subshell, so SIGPIPE kills the SUBSHELL ITSELF and the || true never runs at all - the thing that
+# was supposed to swallow the failure is dead before it can. Both sites that reach this clause today
+# have EXTERNAL producers (bin/cc-cloud:581 is strings -a), so this closes nothing and mints nothing
+# now; it is written down because the next site in this shape may be a printf, and because g14s own
+# label calls the neutralisation general when it is not. Measured 2026-09-03, 20 trials per cell.
+#
+# ALSO NAMED: the group must be the WHOLE stage, so a trailing redirection - { p || true; } 2>/dev/n
+# - is not exonerated by this function. ZERO sites in the tree have that shape today; the clause
+# fires exactly twice, measured by instrumenting the shipped program rather than by grepping it
+# (~/.claude/autonomy/probe288-3b.sh, whose census is asserted equal to the shipped one at 125).
+function group_wraps_or(s,   t, i, c, d, q, endi, sawor) {
+  t = ltrim(s)
+  c = substr(t, 1, 1)
+  if (c != "(" && c != "{") return 0        # the stage does not BEGIN with a group opener
+  d = 0; q = 0; endi = 0; sawor = 0; i = 1
+  while (i <= length(t)) {
+    c = substr(t, i, 1)
+    if (q == 1) { if (c == "\047") q = 0; i++; continue }
+    if (q == 2) { if (c == "\134") { i += 2; continue } if (c == "\042") q = 0; i++; continue }
+    if (c == "\134") { i += 2; continue }
+    if (c == "\047") { q = 1; i++; continue }
+    if (c == "\042") { q = 2; i++; continue }
+    if (c == "(" || c == "{") { d++; i++; continue }
+    if (c == ")" || c == "}") { d--; if (d <= 0) { endi = i; break } i++; continue }
+    if (c == "\002" && d >= 1) sawor = 1    # an UNQUOTED || strictly inside the group
+    i++
+  }
+  if (endi == 0 || !sawor) return 0         # never closed here, or no || inside it
+  t = substr(t, endi + 1)
+  sub(/^[ \t]+/, "", t)
+  if (t != "") return 0                     # something follows the group: it is not the whole stage
+  return 1
+}
+
 BEGIN { FS = "" }
 {
   raw = $0
@@ -917,7 +985,7 @@ BEGIN { FS = "" }
     # the pipeline: the group swallows the 141 before pipefail sees it, so the early exit is KEPT.
     # That matters where draining is expensive — bin/cc-cloud greps a 245 MB binary, where the drain
     # form costs 904 ms and this one 11 ms (measured on an equivalent 38 MB stream), both 0/50.
-    if (seg[ci] ~ /\{/ && seg[ci] ~ /\002/) continue
+    if (group_wraps_or(seg[ci])) continue
     pi = ci; break
   }
   if (pi == 0) next
@@ -1300,6 +1368,23 @@ EOF"
   expect r24 RED "the ( ) spelling of the same scope — the brace character is not the variable"
   mk g20 "if cat \"\$f\" | ( grep -q x ) || true; then :; fi"
   expect g20 GREEN "a group in the last stage with the || OUTSIDE it still swallows — the widening bound"
+  # ── WHICH OPERAND, pinned in both directions, 2026-09-03 (thirteenth correction) ───────────────
+  # g14 above pins the shape this exoneration exists for, and its label calls the group a
+  # NEUTRALISER. r25 is the shape the shipped clause exonerated on the strength of that label while
+  # nothing about it was neutralised: a real group and a real ||, with the PIPELINE as the || RIGHT
+  # operand, measured 20/20 orphaned. It is hooks/hook-chain.sh:264, drained in this same commit.
+  # r26 is the same two characters with NEITHER of them an operator. g21 is the widening bound in
+  # the other direction — the ( ) spelling of g14, which the brace-character test MINTED — and g22
+  # is the discrimination cell: same group, same ||, pipeline moved to the LEFT operand, which must
+  # stay GREEN. Do not merge these into a loop, for the reason r16/r17 give above.
+  mk_noe r25 "if [ \"\$s\" -eq \"\$e\" ] && { [ -z \"\$sub\" ] || printf '%s' \"\$o\" | grep -q -- \"\$sub\"; }; then :; fi"
+  expect r25 RED "the pipeline is the || RIGHT operand — the group swallows NOTHING"
+  mk_noe r26 "awk '{ if (a || b) print }' \"\$f\" | grep -q x && return 0"
+  expect r26 RED "a brace and a || inside a QUOTED program are neither of them operators"
+  mk_noe g21 "( strings -a \"\$bin\" 2>/dev/null || true ) | grep -q 'Claude-Session' && return 0"
+  expect g21 GREEN "the ( ) spelling of g14 — the brace character is not the variable"
+  mk_noe g22 "{ printf '%s' \"\$o\" | grep -q x || true; } && return 0"
+  expect g22 GREEN "g14's group with the pipeline as the || LEFT operand — the discrimination cell"
   # ── THE `$?` CAPTURE (2026-08-26) ────────────────────────────────────────────────────────────
   # Clause 4 asks "does anything READ this pipeline's status?" — and, for a file with no errexit,
   # answered a DIFFERENT question: `if (!hase) return 0`, i.e. "only a control-flow position or
