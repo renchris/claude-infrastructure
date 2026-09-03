@@ -368,6 +368,10 @@ _bounded() {
 # absent" are different facts, and neither is "the fleet is quiet".
 _cloudret="$_SWEEP_DIR/cloud-return.sh"
 _cloudret_rc="skipped"
+# Empty, never 0, on every not-run path: an absent measurement and "ran instantly on an idle box"
+# must not render as the same bytes (DRAIN_CIRCUIT_2026-09-01.md 3h).
+_cloudret_took=""
+_cloudret_load=""
 # THE ONE PLACE THIS NUMBER LIVES. It bounds the `timeout` below AND is exported to the child so it
 # can pace itself against the same figure; the child derives its single-flight lock TTL from it too.
 # It is deliberately NOT raised to make lands fit — this pass shares a 300 s launchd tick with the
@@ -410,10 +414,19 @@ elif [ -x "$_cloudret" ]; then
   # the child confidently pacing against a budget nobody applies any more.
   # The UNBOUNDED arm exports NOTHING. No `timeout` means no deadline, and a child pacing itself
   # against a killer that does not exist would defer real work for no reason.
+  _cloudret_t0="$(date +%s)"
   if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then
     CC_RETURN_BOUND_S="$_cloudret_bound" "$_tmo" -k 10 "$_cloudret_bound" bash "$_cloudret" --sweep --limit "${CC_SWEEP_RETURN_LIMIT:-25}" >/dev/null 2>&1
   else bash "$_cloudret" --sweep --limit "${CC_SWEEP_RETURN_LIMIT:-25}" >/dev/null 2>&1; fi
   _cloudret_rc=$?
+  _cloudret_took=$(( $(date +%s) - _cloudret_t0 ))
+  # 1-min load, bare. `sysctl -n vm.loadavg` prints "{ 8.06 9.02 10.45 }". Read AFTER the pass so
+  # it describes the box the pass actually ran on. FAILS TO EMPTY, never to 0 — an unreadable load
+  # is unmeasured, and a 0 would read as a quiet box, which is precisely the reading this field
+  # exists to make impossible: an rc=0 on a quiet box and an rc=0 under load are different claims
+  # and the row could not previously tell them apart.
+  _cloudret_load="$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')"
+  case "$_cloudret_load" in ''|*[!0-9.]*) _cloudret_load="" ;; esac
   # 🚨 THE KILLER CLEANS UP AFTER ITSELF. `timeout -k 10 900` escalates to SIGKILL, and the callee's
   # `trap … EXIT INT TERM` cannot run on one — so a cut pass leaves its single-flight lock directory
   # behind by construction. The callee now reaps a dead holder itself (pid liveness + a TTL sized to
@@ -431,8 +444,8 @@ elif [ -x "$_cloudret" ]; then
       ;;
   esac
 fi
-log_idl cloud-return "$(jq -cn --arg c "$_cloudret_rc" \
-  '{cloud_return_rc:$c,
+log_idl cloud-return "$(jq -cn --arg c "$_cloudret_rc" --arg e "$_cloudret_took" --arg l "$_cloudret_load" \
+  '{cloud_return_rc:$c, elapsed_s:($e|tonumber? // null), load1:($l|tonumber? // null),
     note:"0 = pass completed (per-session outcomes in the cloud return ledger; the pass-scope row records how many of the pending set it took and how many it deferred, and a `pass-deadline` row — a SEPARATE fact — records a pass that stopped starting work because this caller bound it in time, so an early stop can never read as full coverage); 4 = another pass held the lock; 124 = the bound cut the pass, next tick resumes (the return path itself abstains on a cut land rather than filing a refusal); 137/143 = the bound SIGKILLed it and this caller cleared the stranded single-flight lock; skipped = tool absent (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never land, mark done or spend quota"}')"
 
 # ── the REFUSAL LOOP (W3) — immediately after the return pass, and under ITS OWN guard ────────────
