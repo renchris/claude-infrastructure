@@ -1914,7 +1914,13 @@ def _su_projected(r, R):
     su = (r.get("session_pct") or 0) / 100.0
     if not _term_on("CC_ROUTE_PROJ"):
         return su
-    b = r.get("burn_5h_ph")
+    # S7: prefer the roll-aware EWMA, and DIVIDE IT BY 100 — it is denominated in %/h while this
+    # arithmetic is in fractions (`su + b * ahead`, su in [0,1]). Consuming it raw saturates
+    # every row to 1.0 and reads as "the whole fleet is under 5h pressure", a 100x error with a
+    # plausible face. The incumbent `burn_5h_ph` remains the fallback for one release, in its own
+    # unit, so nothing that still writes only the old key silently loses its projection.
+    b = r.get("burn_5h_ewma_ph")
+    b = b / 100.0 if isinstance(b, (int, float)) else r.get("burn_5h_ph")
     if not isinstance(b, (int, float)) or b <= 0:
         return su
     ahead = _cliff_env("CC_ROUTE_PROJ_LOOKAHEAD_H", R.get("PROJ_LOOKAHEAD_H", PROJ_LOOKAHEAD_H))
@@ -2221,6 +2227,13 @@ def apply_burn(rows, cfg, samples=None):
         r["burn_wk_span_h"] = span
         if v is not None:
             r["burn_wk_ewma_ph"] = v
+        # S7 / M1: the 5h meter's roll-aware EWMA, in %/h, under its OWN key. `burn_5h_ph` above
+        # stays populated for one release — the old key is a FRACTION/h and overwriting it with a
+        # percentage is the 100x saturation hazard, so the two never share a name.
+        v5, span5 = burn_5h_ewma_ph(ss, now)
+        r["burn_5h_span_h"] = span5
+        if v5 is not None:
+            r["burn_5h_ewma_ph"] = v5
         s = wk_strand_pp(r)
         if s is not None:
             r["wk_strand_pp"] = s
@@ -2561,6 +2574,63 @@ def burn_wk_ewma_ph(samples_for_acct, now, weekly_reset_h):
         span += dt_h
         pairs += 1
     if pairs < 2 or span < WK_EWMA_MIN_SPAN_H or den <= 0:
+        return None, span
+    return num / den, span
+
+
+SU_EWMA_LOOKBACK_H = 6.0     # the trailing window; a 5h meter has nothing older to say
+SU_EWMA_MIN_SPAN_H = 1.3     # below this a +-1 pp step exceeds 25% of the 5h meter's realised mean
+SU_EWMA_HL = 1.0             # half-life, hours
+
+
+def burn_5h_ewma_ph(samples_for_acct, now):
+    """S7 / M1 — roll-aware EWMA of the 5h meter, in %/h, as (value|None, measured_span_h).
+
+    IT SHIPS ON CORRECTNESS AND AVAILABILITY, NOT ON ACCURACY, and the claim is deliberately
+    that narrow. The incumbent `burn_5h_ph` is a single newest-adjacent-pair difference: one
+    quantized 1 pp step is its entire signal, and it goes blind for a whole lookahead every time
+    the 5h window rolls, because a negative delta reads as unknown. Here a roll is not a discard
+    — the new window's level IS the post-roll accrual, as a lower bound.
+
+    NAMED BLIND SPOT, and it must stay in this docstring rather than in a plan file: at
+    `session_pct >= 40` the INCUMBENT IS MORE ACCURATE (MAE 0.0617 against this estimator's
+    0.0797; the EWMA over-projects by +3.6 pp). That is the burst regime — precisely the one the
+    weekly planner creates. The over-projection direction is soften-only, so it is fail-safe for
+    routing, but the metric is wrong there and must not be quoted as accurate. §5.6 Q3 names the
+    measurement that would fix it.
+
+    THE UNIT IS THE HAZARD. This emits %/h and ships under its OWN key. `burn_5h_ph` is consumed
+    by `_su_projected` as FRACTION/h (`su + b * ahead`, `su` in [0,1]), so a %/h value written
+    onto that key saturates the projection to 1.0 on every row and reads as "every account is
+    under 5h pressure" — a 100x error wearing a plausible face.
+
+    THE ROLL SPELLING IS THE SECOND HAZARD. `_rolled` keys on `_reset_key`, which ROUNDS to the
+    minute. Under truncation the reset stamp straddles the minute boundary, the roll branch fires
+    on 46.0% of adjacent pairs and injects an absolute level as a delta: MAE degrades
+    0.0282 -> 0.2110, i.e. 5.4x worse than the incumbent it replaces.
+
+    ABSTAIN (L2) on the RAW MEASURED SPAN — the sum of dt over usable pairs, never the requested
+    lookback — and on fewer than 2 usable pairs. NEVER abstain on a roll."""
+    ss = sorted((e for e in samples_for_acct or []
+                 if e.get("session_pct") is not None and e.get("_t") is not None
+                 and now - e["_t"] <= SU_EWMA_LOOKBACK_H * 3600.0),
+                key=lambda e: e["_t"])
+    num = den = span = 0.0
+    pairs = 0
+    for a, b in zip(ss, ss[1:]):
+        dt_h = (b["_t"] - a["_t"]) / 3600.0
+        if not (0 < dt_h <= 1.0):
+            continue
+        if _rolled(a, b, "session_reset_at", "session_pct"):
+            d = b["session_pct"]                      # the new window's level, a LOWER bound
+        else:
+            d = max(0.0, b["session_pct"] - a["session_pct"])
+        w = 2.0 ** (-((now - b["_t"]) / 3600.0) / SU_EWMA_HL)
+        num += w * d
+        den += w * dt_h
+        span += dt_h
+        pairs += 1
+    if pairs < 2 or span < SU_EWMA_MIN_SPAN_H or den <= 0:
         return None, span
     return num / den, span
 

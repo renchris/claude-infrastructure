@@ -1813,7 +1813,75 @@ assert 12.0 < r["burn_wk_ppd"] < 16.0, r          # ~14 %/day, i.e. the same rat
 assert "burn_wk_span_h" in r and r["burn_wk_span_h"] > 6.8, r
 assert "wk_strand_pp" in r, r
 assert 0.0 < r["wk_strand_pp"] < 5.0, r           # 40 + 0.583*100 = 98.3 -> ~1.7 pp die
-assert "burn_5h_ewma_ph" not in r, r              # S7 is a LATER wave and was not built here
+# UPDATED IN PLACE when S7 landed. This line used to read `"burn_5h_ewma_ph" not in r` with the
+# note "S7 is a LATER wave". It is built now, and the fixture holds session_pct FLAT at 10 for
+# 24 h — so the honest assertion is a measured ZERO, not an absence. Restoring the old spelling
+# would pin the wave boundary rather than the behaviour, which is the tripwire class §5.7
+# Deviation 6 records: greping a spelling turns a live assertion into a trap on its own subject.
+assert r["burn_5h_ewma_ph"] == 0.0, r             # an idle account measures 0 %/h; it is not absent
+assert r["burn_5h_span_h"] > 5.0, r               # ...and the span says the zero was MEASURED
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-27b/RP-28 S7: burn_5h_ewma_ph is %/h, crosses a roll, and _su_projected divides by 100" {
+  # THE TWO HAZARDS OF S7, EACH AS AN ASSERTION, because each silently produces a plausible
+  # wrong number:
+  #   UNIT — the EWMA emits %/h; burn_5h_ph is consumed as FRACTION/h (su + b * ahead, su in
+  #     [0,1]). Reusing the old key, or forgetting the divide at the consumer, saturates every
+  #     row to 1.0 and reads as "the whole fleet is under 5h pressure". A 100x error.
+  #   ROLL — _rolled keys on _reset_key, which ROUNDS. Under truncation the stamp straddles the
+  #     minute boundary, the roll branch fires on 46.0% of adjacent pairs and injects an absolute
+  #     level as a delta: MAE 0.0282 -> 0.2110, i.e. 5.4x worse than the incumbent it replaces.
+  run python3 -c "$LOAD"'
+import json, os
+from datetime import datetime, timezone, timedelta
+p = os.path.join(os.environ["BATS_TEST_TMPDIR"], "util-5h.jsonl")
+now = datetime.now(timezone.utc)
+sra = (now + timedelta(hours=2)).isoformat()
+with open(p, "w") as f:
+    for i in range(60, -1, -1):                   # 6 h at 6 min, session 0 -> 30 = 5.0 %/h
+        f.write(json.dumps({"ts": (now - timedelta(minutes=i * 6)).isoformat(),
+                            "acct": "next3", "session_pct": (60 - i) * 0.5, "weekly_pct": 40,
+                            "session_reset_at": sra, "weekly_reset_at": None}) + "\n")
+rows = [row(acct="next3", session_pct=30, session_reset_h=2.0)]
+samples, _ = ca._util_tail(path=p, hours=48.0)
+ca.apply_burn(rows, cfg, samples=samples)
+r = rows[0]
+assert 4.5 < r["burn_5h_ewma_ph"] < 5.5, r        # ~5 %/h — NOT 0.05 and NOT 120
+assert r["burn_5h_span_h"] > 5.0, r
+assert "burn_5h_ph" in r, r                       # the incumbent is kept for one release
+assert 0.045 < r["burn_5h_ph"] < 0.055, r         # ...in its OWN unit, fraction/h. Never shared.
+# RP-28 — the consumer divides. 20% used + 60 %/h over a 1 h lookahead = 0.80, not 1.0.
+R2 = dict(R); R2["PROJ_LOOKAHEAD_H"] = 1.0
+proj = ca._su_projected(row(session_pct=20, session_reset_h=2.0, burn_5h_ewma_ph=60.0), R2)
+assert abs(proj - 0.80) < 1e-9, proj
+# ...and the fallback still reads the OLD key in the OLD unit, so a row that carries only it
+# keeps its projection instead of silently losing one.
+old = ca._su_projected(row(session_pct=20, session_reset_h=2.0, burn_5h_ph=0.60), R2)
+assert abs(old - 0.80) < 1e-9, old
+# ROLL: the incumbent goes blind for a whole lookahead when the 5h window rolls (a negative
+# delta reads as unknown); the EWMA takes the new level as a lower bound instead.
+p2 = os.path.join(os.environ["BATS_TEST_TMPDIR"], "util-5h-roll.jsonl")
+old_sra = (now - timedelta(hours=1)).isoformat()
+with open(p2, "w") as f:
+    for i in range(60, 0, -1):                    # ~6 h in the OLD window, climbing to 80
+        f.write(json.dumps({"ts": (now - timedelta(minutes=i * 6)).isoformat(),
+                            "acct": "next3", "session_pct": 80 - (i - 1) * 1.35, "weekly_pct": 40,
+                            "session_reset_at": old_sra, "weekly_reset_at": None}) + "\n")
+    # ...then the NEWEST pair straddles the roll: new stamp, meter back near 0. That one pair is
+    # the ENTIRE signal the incumbent has, so it reads unknown and the router loses its
+    # projection for a whole lookahead — every time a window rolls, i.e. once every 5 h per
+    # account.
+    f.write(json.dumps({"ts": now.isoformat(),
+                        "acct": "next3", "session_pct": 2, "weekly_pct": 40,
+                        "session_reset_at": sra, "weekly_reset_at": None}) + "\n")
+rr = [row(acct="next3", session_pct=2, session_reset_h=2.0)]
+sam2, _ = ca._util_tail(path=p2, hours=48.0)
+ca.apply_burn(rr, cfg, samples=sam2)
+assert "burn_5h_ph" not in rr[0], rr[0]           # the incumbent: a rolled pair reads as unknown
+assert rr[0]["burn_5h_ewma_ph"] > 0.0, rr[0]      # the EWMA still speaks — that IS the S7 win
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
