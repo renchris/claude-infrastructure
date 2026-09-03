@@ -5632,10 +5632,32 @@ if [ "${1:-}" = "__recycle" ]; then
           hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;;
         retype)
           if [ "$waited" = 60 ]; then
-            hf_bounded "$IT2" session send -s "$RSID" "/exit" >/dev/null 2>&1 || true
-            sleep 1
-            nc="$(composer_content "$IT2" "$RSID")" || nc=""
-            if [ "$nc" = "/exit" ]; then hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true; fi
+            # ROUTED THROUGH THE SANCTIONED COMPOSER HELPER (2026-09-03, backlog 01ab05685857).
+            # What stood here was `session send "/exit"` · sleep · byte-equality read-back ·
+            # conditional CR — it2_paste_submit_verified's own three steps, re-implemented inline,
+            # and therefore the LAST raw typed send in this tree. That made it the one site failing
+            # tests/typed-send-lint.bats:301 ("GREEN on the REAL tree"), a suite in the postland
+            # TREE corpus whose subject is a grep over the tree — so it reds DETERMINISTICALLY on
+            # every 5-minute sweep, survives the retry ladder every time, and was the standing
+            # reason no GREEN stamp could be written and the live layer stayed pinned. The item that
+            # named this read the symptom as a dead launchd job; scripts/ship-land.sh's
+            # postland_net_live already records that the job was alive and stamping RED, and that
+            # the red suites were what nobody actioned. This is that action.
+            #
+            # BEHAVIOUR PRESERVED, NOT WIDENED. recycle_nudge_decision returns `retype` only when
+            # composer_content PARSED the box and found it EMPTY — exactly this helper's
+            # precondition, so its bounded pre-wait breaks on the first check and adds no latency.
+            # `/exit` is 5 chars with no newline, so paste_readback_ok can reach only its INLINE
+            # arm: byte-equality against "/exit", the identical test this block already ran. The
+            # tail arm needs >= PASTE_TAIL_MIN (64) chars and the placeholder arm is an anchored
+            # ^[Pastedtext#N]$; neither is reachable for this payload, so nothing is loosened.
+            # GAINED: the composer_owned ownership proof, a bracketed paste rather than a raw type,
+            # and a loud abstain/mangle report. Any non-zero rc leaves the composer UNTOUCHED and
+            # the watcher keeps waiting, so the 600s refusal below still fires with the session
+            # alive and the operator's text intact — this gate's own stated recoverable outcome.
+            nrc=0; it2_paste_submit_verified "$IT2" "$RSID" "/exit" || nrc=$?
+            [ "$nrc" = 0 ] || emit_recycle_event recycle-nudge-held "" "$RSID" \
+              "retype@${waited}s NOT submitted — verified paste rc $nrc" || true
           fi ;;
         *)
           echo "→ nudge@${waited}s HELD ($nd): composer is not a stranded /exit — a CR here would submit someone else's buffer"
