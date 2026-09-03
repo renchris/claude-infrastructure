@@ -2284,11 +2284,47 @@ paste_readback_ok() { # $1=pasted-text $2=space-stripped read-back → rc 0 prov
 # no unverified paste primitive survives in this file. A brief is multi-line and >800 chars, which
 # is exactly why paste_readback_ok exists — the old byte-equality read-back would have called every
 # real brief MANGLED.
+#
+# ---- THE READ-BACK IS POLLED, NOT SAMPLED (2026-09-03) ---------------------------------------
+# The pre-paste side of this function polls for 30 s; the post-paste side used to take ONE sample
+# 0.5 s after the send and treat it as final. A TUI screen is a SAMPLE, not a STATE (memory
+# tui-capture-is-a-sample-not-a-state), and this side reads the pane at its single busiest moment:
+# on the recycle path the successor has just been proven ENGAGED, i.e. it is mid-turn and
+# repainting, so a torn frame with no parseable input box is an ordinary event there.
+#
+# WHAT THE POPULATION SHOWS. 94 arms in ~/.claude/logs/handoffs.jsonl: 83 set, 5 mangled — 3 of 62
+# recycles and 2 of 26 fresh fires, i.e. the same ~6% either way, so the failure is not a property
+# of the fire mode. Before 94aa89bc6 (the narrow-pane tail form) the same verdict was DETERMINISTIC
+# per width — "narrow panes did not fail sometimes; they failed always". What survives that fix is
+# stochastic and mode-independent, which is the signature of a transient read, not a geometry
+# mismatch. Live instance 2026-09-03T19:15:19Z pane 213: a 572-char single-line `/goal` payload
+# read back MANGLED, the CR was withheld, and the operator submitted the composer by hand — the
+# goal that landed, read out of that session's own transcript, is byte-identical to what we pasted.
+#
+# THE POLL CANNOT LOOSEN THE VERDICT. The accepted forms are unchanged; only the number of chances
+# to observe one is. A draft typed into the window makes the read-back LONGER than the payload and
+# fails paste_readback_ok on length, exactly as it did with one sample — so the hybrid this
+# function exists to refuse is still refused. Budget is expressed in TRIES × the existing settle
+# knob so it costs nothing on the common path (first sample proves) and stays sub-second under the
+# suites, which pin FIRE_TYPE_SETTLE=0.01.
+#
+# ---- AND THE FAILURE IS RECORDED WHERE SOMEONE CAN READ IT ------------------------------------
+# Every branch below explains itself on stderr, and on the recycle path stderr provably reaches
+# NOBODY: the session that ran the fire is the session --recycle replaces, so it is gone before
+# arm_goal speaks (verified — the 19:15 firing session's transcript contains zero "MANGLED" lines).
+# The ledger row was then the only durable record, and its detail could not tell an unreadable
+# screen from a content mismatch, nor say what was seen (memory
+# fail-loud-into-a-log-nobody-reads-is-silent). FIRE_PASTE_LAST_READBACK is the out-parameter that
+# closes that: deliberately NOT `local`, set on rc 3 and rc 4, consumed by arm_goal into the
+# handoffs.jsonl detail. It is an observation, never a verdict — nothing branches on it.
+#
 #   rc 0 pasted+verified+submitted · 1 send failed · 2 abstained (ownership / unreadable screen) ·
 #   3 HELD (composer stayed non-empty through the pre-wait) · 4 MANGLED (read-back mismatch — CR NOT sent)
 it2_paste_submit_verified() { # $1=it2-bin $2=pane-uuid $3=text [$4=max-pre-wait-s]
   local it2="$1" id="$2" text="$3" wait="${4:-${FIRE_PASTE_PREWAIT:-30}}"
   local ivl="${FIRE_PASTE_PREIVL:-5}" t=0 c crc got
+  local tries="${FIRE_PASTE_READBACK_TRIES:-8}" n=0
+  FIRE_PASTE_LAST_READBACK=""
   if [ "${CC_FIRE_COMPOSER_GATE:-on}" != off ] && ! composer_owned "$id"; then
     echo "⚠ verified paste ABSTAINED — no proof a live CC session owns pane $id" >&2
     return 2
@@ -2298,6 +2334,7 @@ it2_paste_submit_verified() { # $1=it2-bin $2=pane-uuid $3=text [$4=max-pre-wait
     [ "$crc" = 0 ] && [ -z "$c" ] && break
     if [ "$t" -ge "$wait" ]; then
       if [ "$crc" = 0 ]; then
+        FIRE_PASTE_LAST_READBACK="$(printf '%.120s' "$c")"
         echo "⚠ verified paste HELD ${wait}s — composer occupied: '$(printf '%.80s' "$c")' (an unsubmitted draft; pasting would append to it and a CR would submit the hybrid)" >&2
         return 3
       fi
@@ -2307,12 +2344,21 @@ it2_paste_submit_verified() { # $1=it2-bin $2=pane-uuid $3=text [$4=max-pre-wait
     /bin/sleep "$ivl"; t=$((t + ivl))
   done
   hf_bounded "$it2" session send -s "$id" "${BP_START}${text}${BP_END}" >/dev/null 2>&1 || return 1
-  /bin/sleep "${FIRE_TYPE_SETTLE:-0.5}"
-  got="$(composer_content "$it2" "$id")" && crc=0 || crc=1
-  if [ "$crc" != 0 ] || ! paste_readback_ok "$text" "$got"; then
-    echo "⚠ verified paste MANGLED — read-back saw '$(printf '%.80s' "${got:-<unreadable>}")', expected $(paste_readback_expect "$text"); CR NOT sent. The paste is sitting UNSUBMITTED in pane $id's composer (no safe scrub exists — measured 2.1.220: Ctrl-U/Esc are inert there); clear it by hand or submit it deliberately." >&2
-    return 4
-  fi
+  while :; do
+    /bin/sleep "${FIRE_TYPE_SETTLE:-0.5}"
+    got="$(composer_content "$it2" "$id")" && crc=0 || crc=1
+    [ "$crc" = 0 ] && paste_readback_ok "$text" "$got" && break
+    n=$((n + 1))
+    if [ "$n" -ge "$tries" ]; then
+      # Three distinguishable observations, because the remedy differs: an unreadable box is a
+      # screen problem, an empty one means the paste never landed, and content is a real mismatch.
+      if [ "$crc" != 0 ]; then FIRE_PASTE_LAST_READBACK="<unreadable>"
+      elif [ -z "$got" ];  then FIRE_PASTE_LAST_READBACK="<empty>"
+      else                      FIRE_PASTE_LAST_READBACK="$(printf '%.120s' "$got")"; fi
+      echo "⚠ verified paste MANGLED — ${tries} read-back(s) saw '$(printf '%.80s' "$FIRE_PASTE_LAST_READBACK")', expected $(paste_readback_expect "$text"); CR NOT sent. The paste is sitting UNSUBMITTED in pane $id's composer (no safe scrub exists — measured 2.1.220: Ctrl-U/Esc are inert there); clear it by hand or submit it deliberately." >&2
+      return 4
+    fi
+  done
   hf_bounded "$it2" session send -s "$id" $'\r' >/dev/null 2>&1
 }
 
@@ -4600,12 +4646,12 @@ arm_goal() { # $1=it2-bin $2=pane $3=condition → always 0; prints a parseable 
     0) : ;;
     3)
       echo "⚠ goal NOT armed — pane $pane's composer stayed occupied through the pre-paste wait (an unsubmitted draft; pasting would have appended to it). The session HAS its brief and is working. Re-arm by typing '/goal $cond' into it once the composer is clear. goal-arm verdict=held reason=composer-occupied" >&2
-      emit_goal_event held "composer occupied through pre-paste wait for pane $pane" || true
+      emit_goal_event held "composer occupied through pre-paste wait for pane $pane; saw: ${FIRE_PASTE_LAST_READBACK:-<unrecorded>}" || true
       command -v cc-notify >/dev/null 2>&1 && cc-notify "$pane" "GOAL-ARM DEFERRED: your composer held unsubmitted text, so the Stop-hook goal was NOT armed (nothing was typed over it). When the composer is clear, arm it yourself by submitting exactly: /goal $cond" >/dev/null 2>&1 || true
       return 0 ;;
     4)
       echo "⚠ goal NOT armed — post-paste read-back did not match, CR NOT sent; the /goal text sits UNSUBMITTED in pane $pane's composer. goal-arm verdict=mangled reason=readback-mismatch" >&2
-      emit_goal_event mangled "post-paste read-back mismatch for pane $pane; CR withheld, paste left unsubmitted" || true
+      emit_goal_event mangled "post-paste read-back mismatch for pane $pane; CR withheld, paste left unsubmitted; saw: ${FIRE_PASTE_LAST_READBACK:-<unrecorded>}" || true
       command -v cc-notify >/dev/null 2>&1 && cc-notify "$pane" "GOAL-ARM MANGLED (no harm done): a /goal paste landed in your composer but the read-back did not match, so it was NOT submitted. If the composer shows only the /goal line, press Enter to arm it; otherwise clear the composer and submit exactly: /goal $cond" >/dev/null 2>&1 || true
       return 0 ;;
     *)
