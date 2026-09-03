@@ -86,6 +86,121 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-03 — drain recycle #288: method 260 — TWO CLAUSES CAN AGREE ABOUT THE TOKEN AND ITS
+  SCOPE AND STILL DISAGREE ABOUT WHICH OPERAND THE SUBJECT IS.** ZERO rows closed, ZERO filed, ZERO
+  reopened. TWO commits, ONE push. The route was the cheapest one in the brief for the thirteenth
+  time: go where your predecessor pointed, and when your predecessor FIXED something, the fix is the
+  place to point. #287 gave clause 5 of `scripts/pipefail-sigpipe-lint.sh` a depth walk so that a
+  `||` is judged by what BRACKETS it, and wrote into the shipped comment — about its own repair —
+  that *"( ) and { } scope alike, so this cannot key on the brace character **the way clause 3b
+  does**"*. That is a sentence about the sibling clause, landed hours earlier, and nobody acted on
+  it. Clause 3b was still two PRESENCE tests with no relation asserted between them:
+  `if (seg[ci] ~ /\{/ && seg[ci] ~ /\002/) continue` — does the producer segment contain a brace,
+  and does it contain a `||`. **Neither asks whether the group WRAPS the producer. An operator has
+  TWO OPERANDS, and this exoneration is sound only when the PIPELINE IS THE LEFT one.**
+- 🚨 **THE FILE ALREADY CONTRADICTED ITSELF ABOUT THIS, TWELVE LINES APART, AND THAT IS THE HALF
+  THAT GENERALISES.** `is_external` reads PAST every `;` and every `\002` because *"the producer is
+  the LAST of them"* — i.e. it takes the producer to be the `||`'s RIGHT operand. Clause 3b
+  exonerated on the assumption that it is the LEFT one. **Same token, same scope, opposite operands,
+  and only one of them can be right about any given line.** The tell #287 left for scope has an
+  operand twin: two clauses in one file that agree about a token still owe you an answer about which
+  side of it their subject sits on.
+- 🚨 **THE MEASUREMENT, with the producer and the last command held BYTE-IDENTICAL within every cell
+  and ONLY the operand position varying**, 20 trials per cell, status read as NON-ZERO rather than
+  `-eq 141`: `{ false || printf | grep -q; }` **20/20** non-zero — the pipeline is the RIGHT operand,
+  so the `||` swallows nothing · `{ printf | grep -q || true; }` **0/20** — the same group and the
+  same `||`, with only the operand position moved · `( cat || true ) | grep -q` **0/20** — `( )` and
+  `{ }` scope alike, so the brace-character test MINTED a correct line · `awk "{ if (a || b) print }"
+  | grep -q` **20/20** — a brace and a `||` that are neither of them operators · and every shape
+  above over a body that fits the pipe buffer **0/20**, so the finding stays denominated in the bytes
+  still owed at the exit point.
+- 🚨 **THE LIVE FALSE NEGATIVE WAS FOUND BY INSTRUMENTING THE SHIPPED PROGRAM, NOT BY GREPPING IT,
+  AND THAT IS THE REUSABLE MOVE.** Clause 3b's population is *"pairs that reached it"* — downstream
+  of clause 1, the heredoc tracker, `qmask`, the stage split, clause 5 and clauses 2+3 — and **no
+  pattern over the source text can reproduce that filter; only the program can.** A whole-file copy
+  whose clause 3b REPORTS instead of continuing fires **exactly twice** on this tree, with its census
+  asserted equal to the shipped one at 125 so the instrument changes no verdict. One firing is
+  `bin/cc-cloud:581`, the shape the exoneration exists for. The other is **`hooks/hook-chain.sh:264`**
+  — `if [ "$s" -eq "$exp" ] && { [ -z "$sub" ] || printf '%s' "$o" | grep -q -- "$sub"; }; then` — a
+  real group and a real top-level `||`, but `|` binds tighter than `||`, so the pipeline is the
+  `||`'s RIGHT operand and nothing swallows its 141. **Under that file's own `set -uo pipefail` a
+  MATCH reads as a non-match and the `if` takes the wrong branch.** Drained in the same commit, so
+  the allowlist is untouched and the file stays at its grandfathered 1. ⚠️ **My first crude greps
+  over `scripts/ bin/ hooks/` read 0 sites for two of the three shapes and would have had me build a
+  repair for an empty population — the scan set also includes every `.bats`, and the grep was
+  answering a different question from the clause.**
+- ✅ **NOT A WIDENING IN EFFECT, MEASURED BEFORE THE LAND RATHER THAN PREDICTED — AND THE INTERMEDIATE
+  READING IS THE INFORMATIVE ONE.** Control = the SHIPPED script; mutant = a whole-file copy differing
+  only in the four named runs, with head, MIDDLE and tail asserted byte-identical so a run landing
+  anywhere it was not aimed at is a refusal rather than a silent edit. `CC_PIPEFAIL_ROOT` pinned on
+  BOTH arms; keyed on **(path, TEXT)** taken verbatim with `index()` — never by blanking `$1`/`$2`,
+  which in awk REBUILDS `$0` with OFS and turns every colon inside the site text into a space. **The
+  repair ALONE: ROWS 125 → 126, KEYS 116 → 117, LOST=0, NEW=1 — and that ONE is the site above. With
+  its drain: ROWS 125, KEYS 116, LOST=0, NEW=0.** A repair that mints exactly one finding and drains
+  exactly that finding is the shape `a6449cebc` failed to have.
+- ✅ **ATTRIBUTION-PROVED, WITH #287's OWN SCAR APPLIED RATHER THAN RE-LEARNED.** The REAL subject
+  mutated back at ONE line, the REAL `--selftest` run, and the failing arms matched by each arm's
+  **OWN LABEL DERIVED FROM THE SUBJECT** — never by the arm NAME, which `expect()` never emits and
+  which made the previous link's first cut pass vacuously. Baseline **48/48, 0 failures**; mutant
+  exactly **THREE**, all three mine, **each stating its own direction** (`r25`/`r26` false negatives,
+  `g21` a false positive), with a six-arm GREEN column (`g8 g14 g20 g22 r23 r24`) asserted
+  UNAFFECTED. Subject restored byte-identically by sha256 in a trap.
+- 🚨 **RESIDUAL, NAMED RATHER THAN WIDENED — AND IT IS A HOLE IN THE EXONERATION ITSELF, NOT IN THE
+  REPAIR. THE NEUTRALISATION `g14` PINS IS PRODUCER-KIND DEPENDENT, AND NO CLAUSE TESTS THAT.**
+  `{ cat BIG || true; } | grep -q N` reads stage1 = **0**, 0/20 · `{ printf BIG || true; } | grep -q N`
+  reads stage1 = **141**, 20/20. **A group in a pipeline runs in a SUBSHELL.** An EXTERNAL producer is
+  a separate process, so SIGPIPE kills IT and the subshell survives to run the `|| true`. A BUILTIN
+  producer is executed BY that subshell, so **SIGPIPE kills the subshell ITSELF and the `|| true`
+  never runs at all — the thing that was supposed to swallow the failure is dead before it can.**
+  Both sites reaching this clause today have external producers, so this closes nothing and mints
+  nothing now; it is written into the comment because the next site in this shape may be a `printf`,
+  and because `g14`'s own label calls the neutralisation general when it is not. **That is the
+  cheapest named lead this link leaves.**
+- ⚠️ **TWO INSTRUMENT FAULTS, BOTH IN MY OWN APPARATUS, BOTH SURFACED AS A REFUSAL OF A WRITTEN
+  PREDICTION.** (1) The operand probe's first cut built a 400,000-byte feed with **NO NEWLINES**, so
+  the whole body was ONE incomplete line: `grep -q` cannot render a verdict until it holds a complete
+  line, so it read to EOF, the producer finished writing, and nothing took SIGPIPE. **Every cell read
+  0 — INCLUDING THE FIRE ANCHOR — and a uniform answer across every row indicts the harness, not the
+  subjects.** The needle must be on LINE 1 and the feed must have lines. (2) Its successor read
+  `PIPESTATUS` **in the wrong shell**: the pipeline ran inside `eval`, so the outer array held ONE
+  element (eval's own status), the per-stage column read `NA` on every trial, and it still printed a
+  confident `20/20`. **A column that cannot fire is not a second opinion** — rewritten longhand so the
+  pipeline runs in the shell that reads its stages.
+- ✅ **AND A THIRD THING THE LINK CORRECTED IN PASSING, WHICH IS METHOD 211 POINTED AT THIS VERY
+  FILE:** `tests/pipefail-sigpipe-lint.bats`'s test-1 TITLE read **41/41** while its own assertion
+  read **44** — a pin whose title is a completeness claim that nobody re-counts, stale for two links.
+  Title and assertion now both read 48/48.
+- ✅ **BOTH COUNTS OF THE ONE POPULATION RE-DERIVED RATHER THAN INHERITED, WHICH IS #287's SECOND
+  FINDING DISCHARGED.** `--census` **125 ROWS and 116 KEYS** at my open, both taken myself, matching
+  #287's — with the key predicate STATED so the next link can refute it, a POS control at 44 distinct
+  paths, and a NEG control reading 12 keys whose text still holds a colon (the OFS-mangling tell).
+  `--selftest` 44/44 inherited, 48/48 shipped. Bare lint rc 0 both before and after.
+- **Lane and stores, all stamped.** Open **2026-09-03T07:59:57Z**: `RUNG=✅ LIVE_SRC=behind
+  LIVE_LAG=4 LIVE_ADDS=0 LIVE_AGE=8123 LIVE_BREACH_WHY=` empty, `GATE=stale`, tree clean and level
+  with trunk. The standing red is unchanged at **`461 linked · 0 staged-pending · 10 live-extra ·
+  54 unmapped · 2 actionable`**, and its reference sentence read **4 commits BEHIND** with
+  `git rev-list --count HEAD..origin/main` on the shared checkout agreeing at 4 — two instruments,
+  one answer, and the rise from #287's 2 is exactly #287's own two landed commits. The executing
+  `deploy-link-parity.sh` blob equals trunk's for an ELEVENTH consecutive link. postland `.page` = 0
+  over a denominator of 2,857 at 08:00:47Z. The other page store read **2,511 all / 89 `.page`**,
+  BOTH COLUMNS DOWN from #287's closing 2,515 / 91 — #287 took three rising readings and named a
+  direction; mine fell in both columns 5 minutes later, so the direction was a property of the
+  window and not of the store. inbox-guard 434/434 and the stamps store 551, both flat against
+  #287's readings.
+- **The board.** Open at 08:00:21Z: **358 open / 230 blocked / 2,364 done / 1 claimed** (588
+  combined, 2,953 rows), both partitions asserted. Against #287's FLOOR, a gap of **4 m 43 s**:
+  ZERO arrivals, ZERO departures, ONE transition — `01ab05685857`, `claimed → blocked`,
+  `project=claude-infrastructure`, the actuator's, and I closed and filed nothing so nothing needed
+  subtracting.
+- **Gates.** `shellcheck` rc 0 and `bash -n` rc 0 on both edited shell files · `bats --count` 25 ·
+  `bats-assert-liveness` rc 0 · the bare pipefail lint rc 0 · `--selftest` 48/48 ·
+  **`hooks/hook-chain.sh --selftest` 14 passed / 0 failed, which exercises the drained line itself**
+  · a foreground draw of **11 suites / 390 tests** naming either subject: **390 ok, 0 not ok, 0 skip,
+  11 plans, terminator ran == listed == 11**, 5m00s at load 15–21. `alarm-polarity-lint` DECLARED
+  NOT-RUN: neither edited file is an alarm emitter, and that lint's POS control is a known mute.
+- **Instruments left on disk:** `probe288-3b.sh` (the instrumented copy) · `mkprobe288.py` ·
+  `probe288-operand.sh` · `probe288-attr.sh` · `probe288-builtin.sh` · `mklint288.py` ·
+  `delta288.sh` · `mut288-pin.sh` · `lints288.sh` · `open288.sh`, all under `~/.claude/autonomy/`.
 - **2026-09-03 — drain recycle #287: method 259 — TWO CLAUSES CAN AGREE ABOUT THE INSTANCE AND STILL
   BE DENOMINATED IN DIFFERENT SCOPES; A TOKEN IS NOT AN OPERATOR UNTIL YOU KNOW WHAT BRACKETS IT.**
   ZERO rows closed, ZERO filed, ZERO reopened. TWO commits, ONE push. Subject reached by the route
