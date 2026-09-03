@@ -329,7 +329,7 @@ resolve_drain_telemetry() {
 # bounding log growth is this job's contract and a telemetry hiccup must never cost a rotation.
 drain_health_check() {
   [ "$DO_DRAIN" = "1" ] || { drain_note="off"; return 0; }
-  local bin out rc verdict line claims ids converted today prev key
+  local bin out rc verdict line claims ids converted today prev key eline effort eratio
   bin="$(resolve_drain_telemetry)" || { drain_note="telemetry-absent"; return 0; }
 
   # `--days 1` keeps the rendered series to one row; the fold always walks the whole store, so the
@@ -356,16 +356,32 @@ drain_health_check() {
   case "$ids"       in ''|*[!0-9]*) ids=null ;; esac
   case "$converted" in ''|*[!0-9]*) converted=null ;; esac
 
+  # ── THE EFFORT ARM, parsed from its OWN scope line and folded into the debounce key ────────────
+  # `--assert` reds on either arm, so without this the record could carry assert:"red" beside
+  # verdict:"drain-converting" — a red with a green reason, which tells a reader nothing about what
+  # fired. Worse, the debounce key was rc+conversion only: the fleet is ALREADY red on
+  # `drain-futile` today, so an effort flip from productive to self-referential would change neither
+  # term and would be debounced into invisibility — the detector firing into a record that cannot
+  # represent it. `scope=repo` is matched, never `scope=fleet`, so the two arms cannot be confused
+  # for one another by either parse.
+  eline="$(printf '%s\n' "$out" | grep 'scope=repo' | head -1)"
+  effort="$(printf '%s' "$eline" | sed -n 's/.*verdict=\([a-z-]*\).*/\1/p')"
+  # Same UNPARSED discipline as above, and for the same measured reason: a live layer behind trunk
+  # resolves a producer that emits no scope=repo line at all, and "absent" must not read as "fine".
+  [ -n "$effort" ] || effort="unparsed"
+  eratio="$(printf '%s' "$eline" | sed -n 's/.*ratio=\([0-9.]*\)x.*/\1/p')"
+  case "$eratio" in ''|*[!0-9.]*) eratio=null ;; esac
+
   today="$(date -u +%Y-%m-%d)"
-  key="$today rc$rc $verdict"
+  key="$today rc$rc $verdict $effort"
   prev=""
   [ -f "$DRAIN_STAMP" ] && prev="$(head -1 "$DRAIN_STAMP" 2>/dev/null)"
   if [ "$prev" = "$key" ]; then drain_note="debounced"; return 0; fi
 
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
-  printf '{"ts":"%s","tool":"drain-health","rc":%d,"assert":"%s","verdict":"%s","claims":%s,"claim_ids":%s,"converted":%s,"source":"%s"}\n' \
+  printf '{"ts":"%s","tool":"drain-health","rc":%d,"assert":"%s","verdict":"%s","claims":%s,"claim_ids":%s,"converted":%s,"effort":"%s","effort_ratio":%s,"source":"%s"}\n' \
     "$(now_iso)" "$rc" "$([ "$rc" -eq 0 ] && printf 'green' || printf 'red')" \
-    "$verdict" "$claims" "$ids" "$converted" "$bin" \
+    "$verdict" "$claims" "$ids" "$converted" "$effort" "$eratio" "$bin" \
     >> "$IDL" 2>/dev/null || true
   mkdir -p "$(dirname "$DRAIN_STAMP")" 2>/dev/null || true
   printf '%s\n' "$key" > "$DRAIN_STAMP" 2>/dev/null || true

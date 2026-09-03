@@ -268,3 +268,160 @@ lane_of() { # <id> → the lane recorded on that id's LAST done record ("" when 
   [[ "$output" == *"verdict=lane-stalled"* ]] || false
   [[ "$output" == *"lane=cloud"* ]] || false
 }
+
+# ── ARM 3 — EFFORT: commits produced vs rows discharged (DRAIN_CIRCUIT §1.4) ─────────────────────
+#
+# THE DEFECT: every other arm reads the backlog and only the backlog, so a lane that closes one row
+# a day on cadence while landing forty-nine commits into its own machinery renders `lane-ok`. F6 is
+# the red-proof and it is a proof of BLINDNESS, not of a wrong number: the pinned pre-fix renderer,
+# handed the identical 10x fixture that F2 reds on, prints no effort verdict at all.
+#
+# F1/F2 are the A/B, and ONLY the commit count moves between them — same store, same lanes, same
+# closes, same window. A pair that changed two inputs could not say which one the verdict followed.
+
+# A git repo at $D/repo with <n> empty commits dated TODAY on branch `main`. Dated relative to now
+# for E4's reason: a literal date drifts out of the reported window and the case dies green.
+effort_repo() { # <n commits>
+  local n="$1" i day
+  day="$(TZ=UTC date -u +%Y-%m-%d)"
+  rm -rf "$D/repo"; mkdir -p "$D/repo"
+  git -C "$D/repo" init -q -b main 2>/dev/null \
+    || { git -C "$D/repo" init -q; git -C "$D/repo" checkout -q -b main; }
+  git -C "$D/repo" config user.email t@example.invalid
+  git -C "$D/repo" config user.name  telemetry-fixture
+  for i in $(seq 1 "$n"); do
+    GIT_AUTHOR_DATE="${day}T12:00:00+0000" GIT_COMMITTER_DATE="${day}T12:00:00+0000" \
+      git -C "$D/repo" commit -q --allow-empty -m "c$i"
+  done
+  export CC_BLTM_REPO="$D/repo" CC_BLTM_TRUNK=main
+}
+
+# <n> DISTINCT rows filed and closed TODAY, lanes cycling the whole roster so that no lane renders
+# `lane-silent` — which increments the same STALLED counter this arm does, and would otherwise make
+# an --assert rc unattributable to the effort verdict.
+effort_store() { # <n distinct closes>
+  local n="$1" i lane ts
+  ts="$(TZ=UTC date -u +%Y-%m-%dT%H:%M:%SZ)"
+  : > "$CC_BACKLOG_FILE"
+  for i in $(seq 1 "$n"); do
+    case $(( i % 3 )) in 0) lane=cloud ;; 1) lane=local-drain ;; *) lane=session ;; esac
+    printf '{"id":"e%011d","ts":"%s","event":"add","title":"row %d"}\n'            "$i" "$ts" "$i"    >> "$CC_BACKLOG_FILE"
+    printf '{"id":"e%011d","ts":"%s","event":"done","lane":"%s","evidence":"x"}\n' "$i" "$ts" "$lane" >> "$CC_BACKLOG_FILE"
+  done
+}
+
+@test "F1 CONTROL: 20 commits against 10 closes is 2.0x — effort-productive, and --assert is GREEN" {
+  effort_repo 20
+  effort_store 10
+  run bash "$TELEM" --assert
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=effort-productive"* ]] || false
+  [[ "$output" == *"ratio=2x"* ]] || false
+  [[ "$output" == *"scope=repo"* ]] || false
+}
+
+@test "F2 RED: the SAME store at 100 commits is 10.0x — effort-self-referential, and --assert reds" {
+  effort_repo 100
+  effort_store 10
+  run bash "$TELEM" --assert
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"verdict=effort-self-referential"* ]] || false
+  [[ "$output" == *"ratio=10x"* ]] || false
+  # The ceiling is INCLUSIVE, and that is the boundary §1.4 named (10.1x was the measured defect).
+  [[ "$output" == *"ceiling=10x"* ]] || false
+}
+
+@test "F3 production with ZERO closes is the DEFECT'S LIMIT, not too small a sample to judge" {
+  effort_repo 50
+  # Rows filed today and none closed — the state a floor placed on the denominator would abstain on.
+  effort_store 4
+  jq -c 'select(.event != "done")' "$CC_BACKLOG_FILE" > "$D/nodones" && mv "$D/nodones" "$CC_BACKLOG_FILE"
+  run bash "$TELEM"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=effort-self-referential"* ]] || false
+  [[ "$output" == *"closes=0 ratio=inf"* ]] || false
+}
+
+@test "F4 an unreadable repo is UNKNOWN, never a clean zero rendered as the healthiest number" {
+  effort_repo 100
+  effort_store 10
+  export CC_BLTM_REPO="$D/not-a-git-repo-at-all"
+  run bash "$TELEM"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=effort-unmeasured"* ]] || false
+  [[ "$output" == *"commits=unknown"* ]] || false
+  # The failure must not be laundered into the green verdict by a zero numerator.
+  [[ "$output" != *"verdict=effort-productive"* ]] || false
+}
+
+@test "F5 a QUIET week abstains — the sample floor is on the numerator, where the sample lives" {
+  # THE CLOSE COUNT IS DELIBERATELY ABOVE THE FLOOR AND THE COMMIT COUNT BELOW IT (25 vs 5, floor
+  # 20). An earlier version of this case used 10 closes and asserted nothing: with BOTH terms under
+  # the floor, moving it from the numerator to the denominator abstains either way and the case
+  # passed against its own mutant. Only a fixture that straddles the floor can tell the two apart —
+  # under the denominator reading this store renders 0.2x and `effort-productive`, and this reds.
+  effort_repo 5
+  effort_store 25
+  run bash "$TELEM"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=effort-unmeasured"* ]] || false
+  [[ "$output" == *"commits=5"* ]] || false
+  [[ "$output" != *"verdict=effort-productive"* ]] || false
+}
+
+@test "F6 RED-PROOF: the PINNED PRE-FIX renderer is BLIND to F2's fixture — no effort verdict at all" {
+  # A LITERAL sha, never origin/main: that ref advances past this fix and the control would then
+  # replay the FIXED artifact and compare it to itself (tests/backlog-telemetry.bats arm 1).
+  local pretelem="$D/telem-prefix"
+  git -C "$REPO" show 3457755d7:scripts/backlog-telemetry.sh > "$pretelem" 2>/dev/null || true
+  [ -s "$pretelem" ] || skip "pre-fix commit 3457755d7 unavailable (shallow clone?)"
+  # The replay must actually BE pre-fix, or this arm passes for the wrong reason.
+  ! grep -q 'effort7' "$pretelem" || false
+
+  effort_repo 100
+  effort_store 10
+  run bash "$pretelem" --assert
+  # The pre-fix renderer sees a 10x window and reports it as healthy: it has no term for the ratio.
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"effort"* ]] || false
+  [[ "$output" == *"verdict=lane-ok"* ]] || false
+}
+
+@test "F7 invoked through a SYMLINK, the arm resolves the CHECKOUT — not the live layer" {
+  # THE BUG THIS PINS shipped into the land gate and was caught there by scripts/self-path-lint.sh.
+  # `~/.claude/scripts/` is a tree of PER-FILE symlinks into the checkout, and the hourly carrier
+  # (resolve_drain_telemetry in rotate-autonomy-logs.sh) PREFERS that live path — so an unresolved
+  # `dirname "$0"/..` lands on `~/.claude`, which carries no .git, and the arm renders
+  # effort-unmeasured FOREVER on the one invocation that actually runs, while reading correct from
+  # every worktree. Blind in production, green in development, invisible to a direct-path test.
+  #
+  # So the fixture reproduces the LAYOUT, not just the call: a checkout that is a real repo, and a
+  # separate live tree holding only a symlink. CC_BLTM_REPO is deliberately UNSET — the point is
+  # what the script derives on its own.
+  #
+  # Paths keep a LITERAL segment and the identity is TRANSIENT (`git -c`, never `git -C … config`):
+  # an all-expansion `-C "$var"` is a documented no-op when the var is empty, which drops the write
+  # into the caller's own repo — the 2026-08-05 leak that re-authored 9 commits here and 214 on reso.
+  mkdir -p "$D/checkout/scripts" "$D/livelayer/scripts"
+  cp "$TELEM" "$D/checkout/scripts/backlog-telemetry.sh"
+  git -C "$D/checkout" init -q -b main 2>/dev/null \
+    || { git -C "$D/checkout" init -q; git -C "$D/checkout" checkout -q -b main; }
+  local day i; day="$(TZ=UTC date -u +%Y-%m-%d)"
+  for i in $(seq 1 30); do
+    GIT_AUTHOR_DATE="${day}T12:00:00+0000" GIT_COMMITTER_DATE="${day}T12:00:00+0000" \
+      git -C "$D/checkout" -c user.email=t@example.invalid -c user.name=symlink-fixture \
+        commit -q --allow-empty -m "c$i"
+  done
+  # The default trunk ref, so this case exercises the shipped default rather than an override.
+  git -C "$D/checkout" update-ref refs/remotes/origin/main HEAD
+  ln -sf "$D/checkout/scripts/backlog-telemetry.sh" "$D/livelayer/scripts/backlog-telemetry.sh"
+
+  effort_store 10
+  unset CC_BLTM_REPO CC_BLTM_TRUNK
+  run bash "$D/livelayer/scripts/backlog-telemetry.sh"
+  [ "$status" -eq 0 ]
+  # 30 commits / 10 closes. Against an UNRESOLVED $0 the root is "$D/livelayer", which has no .git,
+  # and this reads effort-unmeasured — so the case discriminates on exactly the defect.
+  [[ "$output" == *"ratio=3x"* ]] || false
+  [[ "$output" != *"verdict=effort-unmeasured"* ]] || false
+}

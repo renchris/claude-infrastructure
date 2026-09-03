@@ -37,6 +37,12 @@ setup() {
   # not declared its own.
   export CC_TELEMETRY_DIR="$D/telemetry-absent"
   export CC_VALUE_CACHE="$D/cc-value-cache.json"
+  # Same seam, one store over: the EFFORT arm's repo defaults to the checkout the subject lives in,
+  # which is the operator's REAL git history — an unpinned default here would let this suite's
+  # verdicts (and, since the effort verdict is part of the rotation host's debounce key, its
+  # journalling decisions) follow whatever was committed today. Pointed at a non-repo so the arm
+  # deterministically abstains; the cases that exercise it declare their own.
+  export CC_BLTM_REPO="$D/effort-repo-absent"
 }
 
 # Timestamps are generated relative to NOW, never hardcoded: every lane verdict in the subject is an
@@ -353,4 +359,69 @@ value_env() {
   # and the host it rides really is the one that runs rotate-autonomy-logs.sh
   run grep -c 'rotate-autonomy-logs.sh' "$REPO/launchd/com.claude.log-rotation.plist"
   [ "$output" = "1" ]
+}
+
+# ── E6/E7 — the EFFORT arm's own journalling. Added with DRAIN_CIRCUIT §1.4's commits-per-closure
+# arm: `--assert` now reds on EITHER arm, so a record that carries only the conversion verdict can
+# report assert:"red" beside verdict:"drain-converting" — a red with a green reason. And because the
+# debounce key was rc+conversion only, an effort flip on an already-red fleet (which is the live
+# state: drain-futile) would change neither term and never journal at all.
+
+# A repo with <n> commits dated today, for the effort numerator.
+effort_repo_at() { # <n>
+  local n="$1" i day; day="$(date -u +%Y-%m-%d)"
+  rm -rf "$D/erepo"; mkdir -p "$D/erepo"
+  git -C "$D/erepo" init -q -b main 2>/dev/null \
+    || { git -C "$D/erepo" init -q; git -C "$D/erepo" checkout -q -b main; }
+  git -C "$D/erepo" config user.email t@example.invalid
+  git -C "$D/erepo" config user.name  effort-fixture
+  for i in $(seq 1 "$n"); do
+    GIT_AUTHOR_DATE="${day}T12:00:00+0000" GIT_COMMITTER_DATE="${day}T12:00:00+0000" \
+      git -C "$D/erepo" commit -q --allow-empty -m "c$i"
+  done
+  export CC_BLTM_REPO="$D/erepo" CC_BLTM_TRUNK=main
+}
+
+@test "E6 the drain-health record carries the EFFORT verdict, not just the conversion one" {
+  seed_futile
+  effort_repo_at 60
+  export CC_IDL="$HOME/.claude/autonomy/idl.jsonl"
+  export ROTATE_TARGETS="$CC_IDL"
+  export DRAIN_TELEMETRY_BIN="$TELEM"
+  : > "$CC_IDL"
+
+  run bash "$ROTATE"
+  [ "$status" -eq 0 ]
+  has "drain=emitted" "$output"
+  # The row must name BOTH arms. Without the effort field a reader of a red record cannot tell
+  # which one fired, which is the whole reason the field exists.
+  run bash -c "grep '\"tool\":\"drain-health\"' '$CC_IDL' | jq -r '.effort'"
+  [ "$output" = "effort-self-referential" ]
+  run bash -c "grep '\"tool\":\"drain-health\"' '$CC_IDL' | jq -r '.verdict'"
+  [ "$output" = "drain-futile" ]
+}
+
+@test "E7 an EFFORT flip re-journals even though rc and the conversion verdict never move" {
+  seed_futile                 # the fleet is already red on conversion, and STAYS red across both ticks
+  effort_repo_at 60           # 60 commits, no closes in the futile fixture → effort-self-referential
+  export CC_IDL="$HOME/.claude/autonomy/idl.jsonl"
+  export ROTATE_TARGETS="$CC_IDL"
+  export DRAIN_TELEMETRY_BIN="$TELEM"
+  : > "$CC_IDL"
+
+  bash "$ROTATE" >/dev/null
+  # Only the EFFORT input moves: the repo drops below the commit sample floor and the arm abstains.
+  # rc stays 1 (drain-futile) and the conversion verdict is untouched, so the OLD debounce key is
+  # byte-identical across the two ticks and this second row exists only because effort is in it.
+  effort_repo_at 3
+  run bash "$ROTATE"
+  [ "$status" -eq 0 ]
+  has "drain=emitted" "$output"
+
+  run grep -c '"tool":"drain-health"' "$CC_IDL"
+  [ "$output" = "2" ]
+  run bash -c "grep '\"tool\":\"drain-health\"' '$CC_IDL' | jq -r '[.rc, .verdict] | @tsv' | sort -u | wc -l | tr -d ' '"
+  [ "$output" = "1" ]   # both ticks: same rc, same conversion verdict — the old key could not move
+  run bash -c "grep '\"tool\":\"drain-health\"' '$CC_IDL' | jq -r '.effort' | paste -sd, -"
+  [ "$output" = "effort-self-referential,effort-unmeasured" ]
 }
