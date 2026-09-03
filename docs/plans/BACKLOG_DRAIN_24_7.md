@@ -86,6 +86,121 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-03 — drain recycle #286: method 258 — TWO CLAUSES CAN EACH BE HANDED A CORRECT INSTANCE
+  AND STILL BE DENOMINATED IN DIFFERENT ONES. A LADDER IS A CONJUNCTION, AND A CONJUNCTION OF
+  CORRECT CLAUSES CAN DESCRIBE A THING THAT DOES NOT EXIST.**
+  **ZERO rows closed, ZERO filed, ZERO reopened.** **TWO commits, ONE push.**
+  **THE SUBJECT, AND HOW I GOT TO IT — the same route, now proven an eleventh time: go where your
+  predecessor pointed, and when your predecessor fixed something, the fix is the place to point.**
+  #285 corrected clause 3 of `scripts/pipefail-sigpipe-lint.sh` to be handed `seg[2]`, the consumer
+  OF the producer it judges, rather than `seg[n]`. That repair is right. **So I read the clause
+  BESIDE it, and found it had not been corrected with it.** The ladder read
+  `if (!is_early(last)) next` — the consumer of the LAST pair — immediately above
+  `if (!is_external(seg[1], seg[2])) next` — the producer and consumer of the FIRST pair. **Each
+  line is correct in isolation. Their CONJUNCTION is a claim about a pair that does not exist
+  whenever the pipeline has three or more stages, and the two pairs coincide exactly when n == 2,
+  which is every case any test in this tree covered.**
+  **AND THE GROUND TRUTH UNDERNEATH WAS READ ON THE WRONG STAGE TOO, WHICH IS THE HALF I DID NOT
+  EXPECT.** The eighth, ninth and tenth corrections each measured *the PRODUCER status*, meaning
+  `seg[1]`. This lint's verdict is about the PIPELINE status, and pipefail is denominated in EVERY
+  stage — one orphaned middle fails the pipeline exactly as loudly as an orphaned first stage. **The
+  two readings agree for n == 2 and diverge the moment a middle stage exists to be orphaned.**
+  **MEASURED — 20 trials per cell, every status read as NON-ZERO rather than `-eq 141`, with seg1,
+  seg2 and the PIPELINE read separately in the SAME trial:** `head -1 BIG | sed -n p | head -c 10`
+  reads **seg1 0/20 · seg2 20/20 · PIPELINE 20/20** — **that is the arm #285 landed as GREEN.** Its
+  stated reason, that a line-oriented middle drains the producer's whole line before the
+  byte-oriented last stage can exit, is TRUE, and true about `seg[1]` alone; the middle then owes
+  that whole line to a consumer that stops at ten bytes. **The same shape over a ONE-LINE body is
+  0/20 everywhere**, which keeps the claim denominated in the bytes still owed rather than in the
+  shape. `cat BIG | head -c 10 | wc -c` reads **seg1 20/20 · PIPELINE 20/20 while the shipped ladder
+  was SILENT** — clause 2 asked about `wc -c`, which does not exit early, and dropped the line
+  before any other clause ran. Its discrimination cell `cat BIG | cat | wc -c` — identical producer,
+  identical last stage, only the MIDDLE differs — is 0/20. Anchors reproduced before any new number
+  was read: `cat MULTI | grep -q` 20/20, `head -1 BIG | grep -q` 0/20.
+  **BOTH DIRECTIONS, BUT NOTE THE ASYMMETRY AGAINST #285's, BECAUSE IT SHARPENS THE RULE RATHER THAN
+  REPEATING IT.** #285's wrong referent produced a false negative AND a false positive, and said
+  that a both-directions failure is what distinguishes a wrong instance from a merely narrow
+  predicate. **Mine produces two false NEGATIVES and nothing else — because clause 2 is a SCREEN
+  that runs FIRST and drops the line, and a screen keyed on the wrong instance can only ever MISS.**
+  A clause that RENDERS a verdict fails both ways; a clause that GATES one fails a single way. **Ask
+  which kind you are looking at before you read a one-directional failure as exoneration.**
+  **THE FIX** walks the n-1 adjacent pairs and reports the first that orphans, so clauses 2, 3 and
+  3b are asked of ONE pair. For n == 2 it reduces to the tenth correction exactly.
+  **NOT A WIDENING IN EFFECT, MEASURED BEFORE THE LAND.** Control = the shipped script; mutant = a
+  whole-file copy differing only in that block, with head and tail asserted byte-identical.
+  `--census` keyed on **(path, TEXT)**, `CC_PIPEFAIL_ROOT` pinned on both arms: **125 rows / 113
+  keys → 127 rows / 115 keys, LOST = 0, NEW = 2**, POS control at **43 distinct paths**. ⚠️ **ROWS
+  and KEYS are different units and must never be subtracted.** Both new sites are
+  `grep -nF … | head -1 | cut -d: -f1` in `tests/announce-before-retire.bats`, **both DRAINED in the
+  same diff**, so the edited tree reads **125 rows** again and the bare ratchet stays rc 0.
+  **Measured LATENT rather than live before draining** — each needle matches exactly once in a
+  10,622-line file, so the producer owes nothing after `head -1` exits, **0/20, with a FIRE control
+  on the identical shape at 20/20** proving the zero is real and a NEG control over a one-line file
+  at 0/20. Latent is bounded only by how often a needle happens to occur in a file this chain edits.
+  They are drained to one `awk … index($0,s){print NR;exit}` process with no pipe at all, so the
+  class is structurally absent rather than allowlisted.
+  **ATTRIBUTION-PROVED.** The real subject mutated back to the pre-fix ladder — one contiguous block
+  anchored by a PROPERTY of its text, never a line number — the real `--selftest` run, and the
+  failing arms read out of the mutant's own emitted text WITH their directions: **baseline 41/41 and
+  0 failures; mutant exactly TWO failures, both mine, each stating `expected RED, detector said 0
+  hit(s)` itself**; the green column — r18, r19, g17, r20, g19 — **all unaffected**, so the table
+  cannot confuse *my arm fired* with *the mutant broke everything*; subject restored byte-identically
+  by sha256 in a trap.
+  **VERIFIED THIS TURN:** shellcheck rc 0 · `bash -n` rc 0 · `--selftest` **41/41** · bare lint rc 0
+  *clean (allowlist honoured)* · census **125 rows** · `bats-assert-liveness.py` rc 0 on both edited
+  suites — ⚠️ **it is a `.py`; #285 recorded that there is no `.sh` of that name and the wrong
+  spelling yields a clean-looking NOT-RUN** · `bats --count` 57 · `bats-shellcheck-lint --range`
+  *clean — 2 suite(s) scanned, 0 blocking, 0 unanalyzable* · `unattended-path-lint --selftest`
+  **47/47** · `test-walltime-lint tests` *clean — **562** suite(s); 1 grandfathered, 0 new time
+  bombs* (#285 read 561 — a sibling's, reported and not concluded from). **My foreground draw was
+  built by NAMING and ran BEFORE the land: 10 suites, 380 ok, 0 not ok, 0 skip, 10 plans, terminator
+  ran == listed == 10.** The selector, asked only AFTER the commit existed, returned a REAL LIST of
+  **6**, and **all six are inside those ten** — two different populations, named as such. POS control
+  spoke with 5. **DECLARED NOT-RUN:** `alarm-polarity-lint` — no file here is an alarm emitter and
+  its own POS control is a known mute (`e07dc5e09f83`, OPEN, do not re-file).
+  **THREE INSTRUMENT FAULTS, ALL THREE MINE, ALL THREE SURFACED AS A REFUSAL RATHER THAN A WRONG
+  NUMBER — which is the only reason they are countable.** (1) A pipefail self-assertion spelled
+  `[ \t]` in a **BRE**, where that is the set {space, backslash, t} and cannot match the literal TAB
+  `set -o` actually prints: the gate could only ever refuse, on a tree where pipefail was
+  demonstrably on. (2) A probe that built its `bash -c` program by nesting quotes around a needle
+  **containing a double quote**: bash died with `unexpected EOF` on all 20 trials, and because a
+  failed `bash -c` exits non-zero the cell counted **a false 20/20 — in the FLATTERING direction,
+  making a latent site look live.** The needle now crosses into the child through the ENVIRONMENT.
+  (3) A commit gate asserting the drained spelling is gone **matched the comment I had just written
+  documenting the drain** — #241's fault in its third costume — repaired by stripping comment lines
+  first, with a seeded fire test proving the stripper did not make it mute.
+  **THE STORES, EVERY NUMBER STAMPED.** Board at open 2026-09-03T06:14:45Z: **354 open / 230 blocked
+  / 2,364 done / 4 claimed** (584 combined, 2,952 rows), both partitions asserted. Gap from #285's
+  floor to my open — **4 m 54 s** — **NOTHING: zero arrivals, zero departures, zero transitions**
+  across a full-set `comm` with `sort -c` on both sides. Postland RED pages **0** at
+  06:14:14Z over a denominator of **2,849**, and 0 again at 06:15:15Z — the 259th and 260th
+  consecutive. The other page store read **2,511 all / 90 `.page`**; inbox-guard **434/434**; stamps
+  **551**. `deploy-link-parity` rc 1 at the destination, **461 linked · 0 staged-pending · 10
+  live-extra · 54 unmapped · 2 actionable** — `linked` and `actionable` byte-identical to #282–#285.
+  ⚠️ **AND THE REFERENCE SENTENCE THAT MOVED SIX TIMES IS NOW ABSENT ENTIRELY**: the reporter prints
+  *"is N commit(s) BEHIND"* only on its non-zero arm, and the shared checkout measured **0** behind
+  `origin/main`. **An absent sentence is a READING here, not a non-reading — but only because I went
+  and asked git the same question directly.** The executing `deploy-link-parity.sh` blob equals
+  trunk's on both sides, a NINTH consecutive link. `GATE=stale` at every moment — the 130th
+  consecutive, and NOT mine to drive. Lane at open: **`RUNG=✅ LIVE_SRC=ok LIVE_LAG=0 LIVE_ADDS=0
+  LIVE_AGE=1780 LIVE_BREACH_WHY=` empty** — #285's own converge had advanced the live layer to its
+  landed head, so this link opened on a converged lane for the first time in several.
+  **RESIDUAL, NAMED RATHER THAN SWEPT:** `cat BIG | wc -c | grep -q` measures 0/20 on every stage and
+  is still REPORTED, before this change and after it. That is not this correction's business — it is
+  `is_external`'s exoneration list, which knows `head -1` and a literal `printf` emit one bounded
+  write and does not know that a REDUCER like `wc` does. **It wants its own measurement; naming it
+  rather than folding it in.**
+  **THE ONE TO TAKE:** #283 asked whether the stated reason is the reason. #284 asked what UNIT a
+  corrected reason is in. #285 asked which INSTANCE the clause is handed. **#286 asks the one after
+  that: the clauses are each handed a correct instance — ARE THEY THE SAME ONE?** A ladder is a
+  conjunction, and its clauses are written one at a time, corrected one at a time, and tested one at
+  a time. **Nothing anywhere tests that they are talking about the same thing.** The cheap tell is a
+  ladder whose clauses index the same array at different subscripts, and the confirming move is to
+  ask what the VERDICT is denominated in — because a ground truth measured on one member of a
+  compound is not a ground truth about the compound.
+  Instruments: `~/.claude/autonomy/{probe286-pair.sh,probe286-verdict.sh,probe286-detector.sh,`
+  `probe286-feed.sh,mklint286.py,mut286-pin.sh,lints286.sh,suites286.sh}` — **47 gated predictions,
+  all exact after the three refusals above.**
 - **2026-09-03 — drain recycle #285: method 257 — A CORRECTED CLAUSE CAN BE HANDED THE RIGHT KIND
   OF THING AND STILL THE WRONG ONE. READ THE REASON'S NOUN, THEN ASK WHICH *INSTANCE* THE CODE
   PASSES.**
