@@ -1141,3 +1141,59 @@ which only advances via `deploy-live` — fail-closed on `postland-verify`'s GRE
 above is the deliverable; the daemon row is the later confirmation, and claiming it now would be
 asserting a fact about a git ref while the machine ran older bytes — the `🚀` rung, whose whole
 point is that landed is not live (`docs/research/inertness-generator-2026-08-07.md` §3).
+
+---
+
+## 3g. THE ACCEPTANCE NUMBER IS OBSERVED — and it is a WEAKER test than we believed (2026-09-03)
+
+**`cloud_return_rc` of 0 is in the IDL.** Three of them, and the live layer does now run both fixes —
+`~/.claude/bin/cc-cloud` is byte-identical to trunk's and contains `dload`/`jesc_v`;
+`~/.claude/scripts/cloud-return.sh` carries `LAND_COST_F`. The shared checkout (which those symlinks
+resolve into, i.e. the live layer's source) fast-forwarded `24c598bac → 236c0c76c` at **19:08:13Z**,
+and `236c0c76c` contains both `7e0f6c9f1` and `3457755d7`.
+
+```
+17:58:32Z  rc=0    ← BEFORE convergence: the OLD reader
+18:25:50Z  rc=137
+19:07:35Z  rc=null
+19:13:27Z  rc=137  ← AFTER convergence
+19:47:09Z  rc=0    ← after: pass-deadline elapsed_s 791, started 4, unstarted 21
+20:37:27Z  rc=0    ← after: pass-deadline elapsed_s 791, started 2, unstarted 23
+```
+
+The two post-convergence zeros are passes that did **real work** — `pass-scope` taken 25, four
+`land-refused` verdicts and an `abstain` between them, then a clean stop at 791 s of a 900 s bound
+via the deadline instead of a SIGKILL at 910. That is precisely the designed behaviour, and it is
+what the lane was built to do.
+
+🚨 **BUT THE 17:58 ROW REFUTES THE ACCEPTANCE CRITERION ITSELF, AND IT IS OURS TO OWN.** §3d chose
+rc 0 as the acceptance number on the premise that it had *never occurred* and therefore could only
+occur once the pass was repaired. The 17:58 pass was **not vacuous** — it wrote `pass-scope` taken
+25, a `land-refused`, and a `pass-deadline` at `elapsed_s: 640, started: 1`. So a clean, working,
+rc-0 pass happened **with the old reader, before either fix reached the live layer**. rc 0 was
+already reachable; what it needed was for the pass to reach the deadline check before the bound
+fired, which on a quiet box it could.
+
+**The unexcluded confound is LOAD, and it is large.** Measured on this box across exactly the window
+in which 137s turned into 0s: **~23.3 → ~14.6 → ~8.1–10.2**. The failing regime was a loaded box;
+the passing regime was a quiet one. That is the same confound this wave's own A/B already surfaced —
+at load ~8 the OLD reader completed a full pass in 149 s — and it means these three zeros **cannot
+carry a causal claim** for either fix. `wrong-cause-corroborated-by-true-metric`, with the true
+metric being our own acceptance number.
+
+**What is honestly established, and what is not:**
+
+| claim | status |
+|---|---|
+| both fixes are LIVE, content-verified in the enforcing store | **established** |
+| the admission read is ~15× cheaper, paired, in both bands | **established** (§3f) |
+| a pass now stops cleanly at its budget instead of being SIGKILLed | **established** — two `pass-deadline` rows, `elapsed_s: 791`, real work started |
+| *these three zeros were caused by the fixes* | **NOT established** — one predates convergence; load fell ~23 → ~8 across the window |
+
+**The acceptance test should have been load-controlled, and its replacement is a RATE, not an
+event.** A single rc 0 is satisfiable by a quiet box. The discriminating measurement is the ratio of
+0 to 137 over a window that *spans* loads — or, better, the rc paired with the pass's own
+`elapsed_s` and the box's load average, neither of which the `cloud_return_rc` row currently carries.
+**Filed rather than built here:** add `load` and `elapsed_s` to the `cloud-return` IDL row, so the
+next person asking "did the fix work" can stratify instead of counting events. Until then the fixes
+stand on §3f's paired ratio and the suites, not on these three rows.
