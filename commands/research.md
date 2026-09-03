@@ -77,7 +77,7 @@ State projected cost band + wall-clock band so the human decides on cost not pla
 
 | Tier | Allocation | Use |
 |---|---|---|
-| `deep-research` (Opus 4.8)² | 60% | Multi-axis breadth-first worker (default) |
+| `deep-research` (Opus 5)² | 60% | Multi-axis breadth-first worker (default) |
 | `Explore` (Haiku 4.5) | 25% | Codebase / file:line lookups |
 | `deep-research` (frontier¹) | 10% | Adversarial / red-team briefs |
 | `deep-research` (frontier¹) | 5% | Rare multi-hop depth-coordination |
@@ -86,9 +86,9 @@ State projected cost band + wall-clock band so the human decides on cost not pla
 
 &nbsp;&nbsp;Two corrections landed 2026-09-03, both of which this footnote had been asserting falsely: there is **no window** (`frontier_access.permanent: true` since 2026-07-20 — the "2026-06-09 → 2026-06-23" window died two windows ago), and there is **no claude-next eval track** (launcher consolidation v2 deleted every launcher name except `claude` and `claude-prev`, so a track condition no reader can satisfy was gating the whole frontier tier). Fable **5.1** (`claude-fable-5-1`) shipped 2026-09-03 and is parked in `versions.frontier_staged`, NOT routed: no installed CC binary registers the ID. It becomes the frontier model only when `frontier_latest` flips — which is why this footnote now names the key instead of the model.
 
-² Quality-first (2026-06-30): the 60% worker slot defaults to **Opus 4.8** (`deep-research`), not Sonnet. Sonnet 5 @ max is ≤ Opus 4.8 quality AND ~15% pricier/task (Artificial Analysis), so its old "cheaper-at-iso-quality" free win broke. Sonnet 5 re-enters only via a probe-certified low/med-effort Workflow — spec: `~/.claude/model-routing-freewin-probe.md`.
+² Quality-first (2026-06-30): the 60% worker slot defaults to the Opus tier (`deep-research`), not Sonnet — today `versions.opus_latest` = **Opus 5**, flipped from Opus 4.8 on 2026-07-24. The MEASUREMENT that set this rule is unchanged and is deliberately still stated against the model it was run on: Sonnet 5 @ max is ≤ **Opus 4.8** quality AND ~15% pricier/task (Artificial Analysis), so its old "cheaper-at-iso-quality" free win broke. Sonnet 5 re-enters only via a probe-certified low/med-effort Workflow — spec: `~/.claude/model-routing-freewin-probe.md`. ⚠️ That probe has NOT been re-run against Opus 5, so the rule is inherited, not re-measured.
 
-Highly-canonical retrieval exception: route to `deep-research` (Opus 4.8), not `Explore` (Haiku lacks reasoning to disambiguate version-drift in canonical sources). Allocation shifts 25% → 20% Explore, 65% Opus 4.8 worker.
+Highly-canonical retrieval exception: route to `deep-research` (Opus 5), not `Explore` (Haiku lacks reasoning to disambiguate version-drift in canonical sources). Allocation shifts 25% → 20% Explore, 65% Opus-tier worker.
 
 **Adversarial coverage**: 15–20% floor (1 brief of 4 types — hostile reviewer · devil's advocate · red-team · negative space). Raise to 25–33% under high-stakes irreversibility OR shared-source workers.
 
