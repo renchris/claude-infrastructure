@@ -1138,7 +1138,11 @@ FNR == 1 { inhd = 0; curfn = ""; pend = 0 }   # pass two starts clean, whatever 
   # inside quoted CODE rather than inside a comment. None of the four swallows a site today
   # (measured: the swallowed set is exactly the two files above). Tightening the opener test to
   # ignore quoted occurrences is a real change to what counts as an opener and wants its own
-  # measurement; it is not folded in here. g31/g32 pin both directions of what IS fixed.
+  # measurement; it is not folded in here. r15/g31 pin both directions of what IS fixed.
+  # (This read `g31/g32` until 2026-09-03. There is no g32 and there never was — the pair is
+  # r15/g31, and their own comment forty lines below says so. A citation naming an arm that does
+  # not exist sends the next reader looking for a guard nobody wrote; #241 lost a run to exactly
+  # this, and the repair is one token.)
   if (line ~ /^#/ || line == "") next
 
   if (match($0, /<<-?[ \t]*[\x27"]?[A-Za-z_][A-Za-z0-9_]*[\x27"]?/)) {
@@ -1217,6 +1221,32 @@ FNR == 1 { inhd = 0; curfn = ""; pend = 0 }   # pass two starts clean, whatever 
   # matching $? anywhere on the line flagged it (census 151 to 154, one false positive). Requiring
   # the ASSIGNMENT form after the last stage separates them; g15/g16 pin both directions.
   # (No apostrophes here: this is inside the single-quoted DETECT_AWK string.)
+  #
+  # ── THIS CLAUSES POPULATION IS NOW ZERO, AND THAT IS NOT A REASON TO RETIRE IT (2026-09-03) ──
+  # Both sites named above were drained — test-walltime-lint.sh by #240, git-identity-lint.sh by
+  # #241 — so a reader who runs --census today sees a clause that never fires and has every reason
+  # to delete it. Do not. The zero was TRACED rather than assumed, and it is real for a reason
+  # neither obvious candidate ("the shape is gone" / "the clause is mute") names:
+  #   - the SHAPE is not gone. 12 non-comment code lines in this tree carry a pipe AND a $? capture.
+  #   - the CLAUSE is not mute. A seeded fixture in a pinned root fires it at exactly 1, with the
+  #     drained form as a NEG control landing one exit earlier.
+  #   - all 12 die UPSTREAM, six and six, at two DIFFERENT exits: six at the n < 2 split (the pipe
+  #     is inside a quoted regex, so the line is not a pipeline at all) and six where no adjacent
+  #     pair passes clauses 2/3 (the consumer drains). Every one of those drops is correct, and the
+  #     four whose last stage is a function or an external command were read: none is early-exit
+  #     (busy_reason looks early on a grep for `exit 0`, but both sit in an awk END block, which
+  #     runs only after stdin is at EOF).
+  # So the population is 0 over the 470 lines that REACHED here, never over the 74,344 the tokeniser
+  # saw. Measured at head 95ae4da92 by instrumenting every exit of this ladder and asserting the six
+  # exits PARTITION the entry count exactly: 74,344 in, residual 0.
+  #
+  # AND THE PART THAT DECIDES WHETHER THIS CLAUSE SURVIVES: THE TWO INSTRUMENTS DISAGREE ABOUT IT.
+  # Disabling it (cap forced to 0) leaves --census BYTE-IDENTICAL at 125 rows and takes --selftest
+  # from 56/56 to 55/56, failing exactly r14 and nothing else. A retirement argued from the census
+  # is therefore argued from the one instrument that cannot see this clause AT ALL. That is
+  # a6449cebc exactly — a ratchets downward arm trusted without running the detector, which blocked
+  # every land in this repo for its author and everybody else. The rule here is narrow and it is
+  # the whole point of this paragraph: --selftest, never --census, is what may retire clause 4b.
   cap = (last ~ /;[ \t]*[A-Za-z_][A-Za-z0-9_]*=\$\?/)
   # 2 = no reader ON THIS LINE, which is not 0 = MASKED here. Only the former may become a
   # function-final candidate; a masked pipeline is masked whoever calls the function (FOURTEENTH).
