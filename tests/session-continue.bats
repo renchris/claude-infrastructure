@@ -139,6 +139,73 @@ mkuser_tx_string() {
   fired "$output"                                         # no kill phrase ⇒ normal block
 }
 
+# ── (a2) THE MULTI-LINE READER, AND WHY A COMMAND BODY IS NOT OPERATOR PROSE ──────────────────────
+# Every kill-switch fixture ABOVE is a single line, which is exactly why the reader's blindness
+# survived here after the same bug was fixed in the sibling hook (299e4d563). `jq -r … | tail -1`
+# puts the message's OWN newlines into the stream, so tail takes the last LINE, not the last RECORD.
+# Six short lines reach the regime — no size is needed, because the defect is line COUNT.
+#
+# The arms are built to fail independently: CONTROL and LAST-LINE are green on both branches (so a
+# blanket suppressor cannot pass), FIRST-LINE is the reader, and META is the isMeta guard.
+mkuser_tx_multi() { # <line1> … <lineN> → transcript path whose last user record is those lines
+  local path="$BATS_TEST_TMPDIR/txm-${BATS_TEST_NUMBER}-$RANDOM.jsonl" body=""
+  local l; for l in "$@"; do body="${body}${l}"$'\n'; done
+  jq -nc --arg t "${body%$'\n'}" '{type:"user",message:{content:[{type:"text",text:$t}]}}' > "$path"
+  printf '%s' "$path"
+}
+# a typed operator message, then the harness-injected body of a slash command (isMeta=true) after it
+mkuser_tx_meta() { # <typed-msg> <injected-line1> … → transcript path
+  local path="$BATS_TEST_TMPDIR/txmeta-${BATS_TEST_NUMBER}-$RANDOM.jsonl" typed="$1" body=""; shift
+  local l; for l in "$@"; do body="${body}${l}"$'\n'; done
+  {
+    jq -nc --arg t "$typed" '{type:"user",message:{content:[{type:"text",text:$t}]}}'
+    jq -nc --arg t "${body%$'\n'}" \
+      '{type:"user",isMeta:true,message:{content:[{type:"text",text:$t}]}}'
+  } > "$path"
+  printf '%s' "$path"
+}
+
+@test "(a2) CONTROL: a single-line kill phrase still clears + allows" {
+  arm "grind" sidA
+  run actuate sidA "$(mkuser_tx_multi "just fix the typo and stop")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "(a2) CONTROL: a multi-line message with NO kill phrase still BLOCKS (not a suppressor)" {
+  arm "grind" sidA
+  run actuate sidA "$(mkuser_tx_multi "here is what I want:" "read the plan" \
+                        "then land it" "thanks" "one more thing" "run the gate")"
+  fired "$output"
+}
+
+@test "(a2) THE BUG: kill phrase on the FIRST line of a multi-line message ⇒ clear + allow" {
+  arm "finish the refactor" sidA
+  run actuate sidA "$(mkuser_tx_multi "just do the one typo and stop" "context follows:" \
+                        "the file is hooks/x.sh" "line four" "line five" "line six")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "(a2) kill phrase on the LAST line of a multi-line message ⇒ clear + allow" {
+  arm "finish the refactor" sidA
+  run actuate sidA "$(mkuser_tx_multi "context first:" "the file is hooks/x.sh" \
+                        "line three" "line four" "line five" "no auto-continue")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "(a2) META: an injected /ship-shaped body carrying 'stop here' must NOT disarm the actuator" {
+  # A `/foo` invocation injects the command or skill FILE's text as a user record flagged isMeta —
+  # and those files discuss stopping (commands/ship.md:42 literally contains "stop here"). Once the
+  # reader above stops truncating, that body becomes visible and would disarm the actuator, so
+  # typing /ship would suppress the continuation on exactly the turn that lands code. The operator's
+  # own typed message is the earlier record, and it is benign — so the correct answer is BLOCK.
+  arm "finish the refactor" sidA
+  run actuate sidA "$(mkuser_tx_meta "/ship" \
+                        "Land the current work onto the remote trunk, safely." \
+                        "The gate runs first; a red gate is real." \
+                        "If the landing range escalates, stop here and surface it.")"
+  fired "$output"
+}
+
 # ── (b) SID-BIND ──────────────────────────────────────────────────────────────────
 @test "(b) successor (different sid) clears + allows an inherited sentinel" {
   arm "predecessor's leftover step" sidPRED

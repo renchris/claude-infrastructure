@@ -192,12 +192,38 @@ last_user_msg() {
   tp=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)
   case "$tp" in "~"*) tp="$HOME${tp#\~}" ;; esac
   [ -n "$tp" ] && [ -f "$tp" ] || return 1
-  jq -r 'select(.type=="user")
+  # `jq -c` then decode — NOT `jq -r … | tail -1`. With -r the message's OWN newlines reach the
+  # stream, so `tail -1` takes the last LINE of the last message instead of the last RECORD: a
+  # multi-line operator message is silently truncated to its final line, and a kill phrase anywhere
+  # above it is invisible. This is the same defect 299e4d563 fixed in completion-assert.sh, whose
+  # reader was ported FROM this one; it was filed separately (c9c3445be29d) because a second hook
+  # needs its own proof. Reproduced here before fixing: with the phrase on line 1 of a six-line
+  # message the actuator BLOCKED a stop the operator had asked for — the D-8 bug.
+  #
+  # NOT ported from that commit: its `grep -q`/pipefail drain. That inversion needs `set -o
+  # pipefail`, and this file sets no shell options at all, so it provably cannot occur here and no
+  # test could distinguish the branches. Copying it would be harmless but claiming it fixed a second
+  # bug would repeat the error that commit's own body documents.
+  #
+  # ── AND `.isMeta != true`: A COMMAND/SKILL BODY IS NOT OPERATOR PROSE ─────────────────────────
+  # A `/foo` invocation injects the command or skill FILE's TEXT as a user record, and those files
+  # discuss stopping: `commands/ship.md:42` contains "stop here". Fixing the reader above is exactly
+  # what makes that body visible, so without this clause the fix would DISARM the floors whenever the
+  # operator typed `/ship` — the same regression 9cab1f800 had to correct in the sibling hook after
+  # 299e4d563 shipped it unnamed. Carried in the SAME diff here so this hook never spends a commit
+  # in that state. `isMeta` is the harness's own flag for an injected record, not a heuristic of
+  # ours: measured over 2,566 non-sidechain user records, of the 133 carrying a kill phrase 124 are
+  # isMeta=true command/skill bodies and all 9 that are not are fire/recycle briefs — genuine
+  # instructions TO this session, which SHOULD disarm.
+  local _j
+  _j="$(jq -c 'select(.type=="user" and (.isMeta != true))
          | .message.content
          | if type=="string" then .
            elif type=="array" then ([.[]?|select(.type=="text")|.text]|join("\n"))
            else empty end
-         | select(. != "")' "$tp" 2>/dev/null | tail -1
+         | select(. != "")' "$tp" 2>/dev/null | tail -1)"
+  [ -n "$_j" ] || return 1
+  printf '%s' "$_j" | jq -r '. // empty' 2>/dev/null
 }
 # Bias to DETECT: a false positive merely allows one stop the model re-arms on its next 🔧 turn; a
 # false negative is the D-8 bug (forcing work when told to stop).
