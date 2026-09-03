@@ -89,22 +89,56 @@
 # foreground-bash case goes back to reporting a false all-clear).
 set -uo pipefail
 
-_gi_abstain() { exit 0; }
+# ── B-3 TELEMETRY (backlog 61a3b40d8695, goal-inert half) ─────────────────────────────────────────
+# This hook had written ZERO IDL records — measured over 978,400 records across 17 files (current +
+# 16 rotations), it appears in none of them. `_gi_abstain` was a bare `exit 0` at 10 call sites and
+# `idl_init` was never called, so "this session has no goal" (the correct, common no-op), "the
+# transcript was unreadable" (blind), and "this hook never ran at all" were byte-identical. That is
+# the ambiguity boundary-handoff.sh:17-19 exists to remove, and it matters more here than for most
+# hooks: this file IS a compensating control for a silent failure, so a silent compensating control
+# is worth nothing.
+#
+# REASON VOCABULARY IS THE LOAD-BEARING CHOICE, NOT THE ROW COUNT. Logging ENROLS this hook in
+# scripts/idl-abstain-alarm.sh, which pages INERT when `abstained == total AND blind_share >=
+# CC_ABSTAIN_BLIND_PCT` and reports the green DORMANT-100 otherwise. So the blind-set tokens (no-jq,
+# no-stdin, no-transcript-path, transcript-missing) are used ONLY where this hook genuinely could
+# not look, and every reached-guard disposition gets its own non-blind token. The dominant reason in
+# production will be `no-goal` — most sessions never arm one — which is a guard that WAS reached and
+# legitimately not met, so the hook lands on DORMANT-100 (green, surfaced for review) rather than
+# paging. hooks/desk-brief-inject.sh:25-35 is the landed precedent for exactly this enrolment, and
+# it made the same call for the same reason.
+_giscd="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+_gilib="$_giscd/lib/idl-log.sh"
+[ -f "$_gilib" ] || { _git="${BASH_SOURCE[0]}"; [ -L "$_git" ] && _git="$(readlink "$_git")"
+  _gilib="$(cd "$(dirname "$_git")" 2>/dev/null && pwd)/lib/idl-log.sh"; }
+[ -f "$_gilib" ] || _gilib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/idl-log.sh"
+[ -f "$_gilib" ] || _gilib="$HOME/.claude/hooks/lib/idl-log.sh"
+SID=""
+# shellcheck source=lib/idl-log.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+if [ -r "$_gilib" ] && . "$_gilib" 2>/dev/null && command -v idl_init >/dev/null 2>&1; then
+  idl_init "${GOAL_INERT_IDL:-${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}}" "goal-inert-watch" SID
+else
+  # Telemetry must never be able to break a Stop hook: degrade to a no-op writer, never to an error.
+  log_idl() { :; }
+fi
+
+_gi_abstain() { log_idl abstained "${1:-unspecified}" "${2:-}"; exit 0; }
 
 input="$(cat 2>/dev/null || true)"
-[ -n "$input" ] || _gi_abstain
-command -v jq >/dev/null 2>&1 || _gi_abstain
+[ -n "$input" ] || _gi_abstain "no-stdin"
+command -v jq >/dev/null 2>&1 || _gi_abstain "no-jq"
 
 # ── (1) a Stop payload, with the task list CC hands us ────────────────────────────────────────────
 TP="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
 SID="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null || true)"
-[ -n "$TP" ] || _gi_abstain
+[ -n "$TP" ] || _gi_abstain "no-transcript-path"
 case "$TP" in "~"*) TP="$HOME${TP#\~}" ;; esac
-[ -f "$TP" ] || _gi_abstain
+[ -f "$TP" ] || _gi_abstain "transcript-missing"
 
 # The `background_tasks` KEY is what makes this a Stop/SubagentStop payload. Its presence is the
 # check; its emptiness is not (trap (c)) — an empty list routes to arm 3b, never to silence.
-printf '%s' "$input" | jq -e 'has("background_tasks")' >/dev/null 2>&1 || _gi_abstain
+printf '%s' "$input" | jq -e 'has("background_tasks")' >/dev/null 2>&1 || _gi_abstain "not-a-stop-payload"
 
 # ── (3a) deferring background work, by DISPLAY name, restricted to the decidable types ────────────
 # `cip()`'s producer already filters to status running|pending, so anything present here is
@@ -115,34 +149,69 @@ DEFERRERS="$(printf '%s' "$input" | jq -r '
     | select(((.status // "running") | IN("completed","failed","killed")) | not)
     | "\(.type): \(.command // .description // "-")" ] | .[]' 2>/dev/null || true)"
 
-# ── (2) an ARMED, never-evaluated goal ────────────────────────────────────────────────────────────
-# grep narrows a possibly-huge transcript cheaply; jq then enforces type=="attachment" (trap b).
-GOAL="$(grep -a 'goal_status' "$TP" 2>/dev/null | jq -rc --slurp '
-  [ .[] | select(.type == "attachment")
-        | .attachment | select(.type == "goal_status") ] | last // empty' 2>/dev/null || true)"
-[ -n "$GOAL" ] || _gi_abstain
-
-IS_SENTINEL="$(printf '%s' "$GOAL" | jq -r '.sentinel // false' 2>/dev/null || echo false)"
-IS_MET="$(printf '%s' "$GOAL" | jq -r '.met // false' 2>/dev/null || echo false)"
-# armed-and-unevaluated == the arm marker is still the most recent goal record.
-[ "$IS_SENTINEL" = "true" ] && [ "$IS_MET" = "false" ] || _gi_abstain
-COND="$(printf '%s' "$GOAL" | jq -r '.condition // ""' 2>/dev/null || true)"
+# ── (2) A LIVE GOAL — armed-and-never-evaluated, OR evaluated-then-STOPPED ────────────────────────
+# WAS: `sentinel==true && met==false`, i.e. the arm marker must still be the NEWEST goal record.
+# That detects only *never-evaluated-since-arming* and is blind to *stopped-evaluating* — the very
+# failure this hook exists for. A goal that evaluated once and then went inert writes a non-sentinel
+# newest record, so the old gate abstained on it forever (backlog 0f4147dcb20b).
+#
+# QUANTIFIED, so this is not a theoretical gap. Over 1,511 goal_status attachments across 626
+# transcripts and all four account roots: sentinel and evaluation records are cleanly separable
+# (`sentinel` appears only on arm/clear, `reason` only on evaluations, ZERO ambiguous records), and
+# there are 25 windows where a live goal went ≥2 turns unevaluated with a non-sentinel newest
+# record — 12.6% of all inert windows, invisible to this hook until now.
+#
+# USE THE LIB, DO NOT EDIT THE COPY. hooks/lib/goal-state.sh already ships `goal_liveness`, which
+# returns the state, the evaluation count SINCE THE LAST ARM, and what the newest record was — and
+# this file hand-rolled a near-copy of it. Two readers of one record dictionary is exactly the shape
+# that lets a class of bug survive in one of them (MEMORY.md sibling-auditors-must-share-the-state-
+# model), which is what happened here: the lib's dictionary already documented the non-sentinel
+# unmet record as LIVE while this gate treated it as absent.
+_gslib="$_giscd/lib/goal-state.sh"
+[ -f "$_gslib" ] || _gslib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/goal-state.sh"
+[ -f "$_gslib" ] || _gslib="$HOME/.claude/hooks/lib/goal-state.sh"
+# shellcheck source=lib/goal-state.sh
+# shellcheck disable=SC1091
+[ -r "$_gslib" ] && . "$_gslib" 2>/dev/null
+command -v goal_liveness >/dev/null 2>&1 || _gi_abstain "no-goal-state-lib"
+GI_TSV="$(goal_liveness "$TP" 2>/dev/null)" || _gi_abstain "goal-unreadable"
+IFS=$'\t' read -r GI_STATE GI_EVALS GI_LAST _GI_EPOCH COND <<< "$GI_TSV"
+case "$GI_EVALS" in ''|*[!0-9]*) GI_EVALS=0 ;; esac
+# `absent` (no goal ever armed) is the common no-op and gets its own token; `cleared`/`failed` mean
+# the goal is gone. Neither is blind — the guard was reached and the fire condition is not met.
+[ "$GI_STATE" = "live" ] || _gi_abstain "no-goal:${GI_STATE:-?}"
 
 # ── (3b) BLIND arm — nothing REPORTABLE is deferring, so prove the skip from elapsed turns ────────
 # Only reached when the payload names no deferrer, so the extra transcript pass costs nothing on the
 # hot path. TURNS counts REAL typed user messages after the arm sentinel: a tool_result carries an
 # ARRAY content and a system-injected turn carries isMeta, so both are excluded — leaving only
 # messages that could not exist unless the session went idle first.
+# THE THRESHOLD IS NOT A NEW VALUE CHOICE — it is arm 3b's, re-anchored. `:35-38` explains why ≥2
+# and not ≥1: an INTERRUPTED turn produces a user message with no Stop at all, so a single interrupt
+# must not fire this. What changes is what it counts FROM. GOAL_LN is the newest goal_status
+# ATTACHMENT, which for a never-evaluated goal IS the arm sentinel (so the blind arm is unchanged)
+# and for a stopped-evaluating goal is the last EVALUATION — exactly the re-anchoring W2 needs.
+#
+# WALL-CLOCK AGE WOULD BE WRONG and was rejected: an idle session accrues age without accruing
+# turns, so an age threshold would fire on a session that is simply not being used.
+#
+# THE NAMED ARM NOW NEEDS THE THRESHOLD TOO, BUT ONLY IN THE STOPPED CASE. With a never-evaluated
+# goal, a visible deferrer is sufficient on its own (unchanged — 0 turns required). With a goal that
+# HAS evaluated, a live background task means CC will defer the NEXT evaluation, which is one Stop
+# of normal, correct behaviour; firing on that would page at nearly every Stop of every goal session.
+# Requiring the same ≥2 unevaluated turns is what makes the relaxed gate report INERTNESS rather
+# than deferral.
 GI_ARM=named
-if [ -z "$DEFERRERS" ]; then
-  GI_ARM=blind
+[ -n "$DEFERRERS" ] || GI_ARM=blind
+TURNS=0
+if [ "$GI_ARM" = "blind" ] || [ "$GI_LAST" != "arm" ]; then
   GOAL_LN="$(grep -an 'goal_status' "$TP" 2>/dev/null | jq -Rrn '
     [ inputs
       | capture("^(?<ln>[0-9]+):(?<rec>.*)$")
       | select((.rec | fromjson? // empty | select(.type == "attachment") | .attachment.type)
                == "goal_status")
       | (.ln | tonumber) ] | last // empty' 2>/dev/null || true)"
-  [ -n "$GOAL_LN" ] || _gi_abstain
+  [ -n "$GOAL_LN" ] || _gi_abstain "goal-line-unresolvable"
   TURNS="$(tail -n +"$((GOAL_LN + 1))" "$TP" 2>/dev/null | jq -Rrn '
     [ inputs
       | (fromjson? // empty)
@@ -150,7 +219,9 @@ if [ -z "$DEFERRERS" ]; then
       | select((.isMeta // .message.isMeta // false) | not)
       | select((.message.content? | type) == "string") ] | length' 2>/dev/null || echo 0)"
   case "$TURNS" in ''|*[!0-9]*) TURNS=0 ;; esac
-  [ "$TURNS" -ge 2 ] || _gi_abstain
+  [ "$TURNS" -ge 2 ] || _gi_abstain "below-turn-threshold:${TURNS}" \
+    "$(jq -cn --argjson t "$TURNS" --argjson e "$GI_EVALS" --arg a "$GI_ARM" --arg l "$GI_LAST" \
+      '{turns:$t,evals:$e,arm:$a,last:$l}' 2>/dev/null)"
 fi
 
 # ── (4) damping — fingerprint is the STATE (the condition), never a clock ─────────────────────────
@@ -166,8 +237,16 @@ if [ -r "$_dampsh" ]; then
   # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
   . "$_dampsh" 2>/dev/null || true
   if command -v damp_should_send >/dev/null 2>&1; then
-    _fp="GOAL-INERT:$(printf '%s' "$COND" | cksum 2>/dev/null | tr -dc '0-9' || true)"
-    damp_should_send "goal-inert-${SID:-unknown}" "$_fp" || _gi_abstain
+    # THE FINDING CLASS JOINS THE FINGERPRINT (W2). It used to be the condition alone, i.e. ONE page
+    # per goal ever — which would let the never-evaluated page permanently suppress the newly-visible
+    # stopped-evaluating page, since both carry the same condition. They are DIFFERENT findings about
+    # the same goal ("it never started" vs "it started and stopped"), and the second is the one this
+    # relaxation exists to surface. Deliberately the CLASS and not the evaluation count: keying on
+    # `evals` would re-page on every stall of a goal that is otherwise progressing, so the budget
+    # stays at most two pages per goal.
+    _gi_class=never; [ "$GI_LAST" = "arm" ] || _gi_class=stalled
+    _fp="GOAL-INERT:${_gi_class}:$(printf '%s' "$COND" | cksum 2>/dev/null | tr -dc '0-9' || true)"
+    damp_should_send "goal-inert-${SID:-unknown}" "$_fp" || _gi_abstain "damped:${_gi_class}"
   fi
 fi
 
@@ -196,10 +275,19 @@ else
 "   a FOREGROUND bash still registered as running — invisible here by construction.")"
 fi
 
+# The goal line states the EVALUATION COUNT, because the two findings this hook can now make are
+# distinguished by exactly that number and the operator's reading of them differs: 0 means the goal
+# never started, N means it ran and then stopped — the second was invisible before W2.
+if [ "$GI_LAST" = "arm" ]; then
+  GI_ECHO="   goal (armed, 0 evaluations so far): \"$SHORT\""
+else
+  GI_ECHO="   goal (armed, ${GI_EVALS} evaluation(s), then STOPPED — none in your last ${TURNS} turns): \"$SHORT\""
+fi
+
 MSG="$(printf '%s\n' \
 "⚠️  YOUR /goal IS NOT BEING EVALUATED — Claude Code skipped it at this Stop." \
 "" \
-"   goal (armed, 0 evaluations so far): \"$SHORT\"" \
+"$GI_ECHO" \
 "" \
 "$CAUSE" \
 "" \
@@ -208,5 +296,8 @@ MSG="$(printf '%s\n' \
 "   Detail: docs/research/goal-in-handoff-2026-08-08.md" \
 "     §§ RESOLVED 2026-08-09 · The foreground blind spot 2026-08-14")"
 
+log_idl fired "goal-inert:${GI_ARM}" "$(jq -cn --arg a "$GI_ARM" --arg l "$GI_LAST" \
+  --argjson e "$GI_EVALS" --argjson t "$TURNS" --argjson n "$N" \
+  '{arm:$a,last:$l,evals:$e,turns:$t,deferrers:$n}' 2>/dev/null)"
 jq -nc --arg m "$MSG" '{systemMessage:$m}' 2>/dev/null || true
 exit 0

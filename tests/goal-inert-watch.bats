@@ -272,11 +272,17 @@ EOF
   run bash -c "printf '%s' '$(payload "$t" "$SHELL_TASK" "m2-control")' | '$H'"
   [ -z "$output" ]
 
+  # THE ANCHOR MOVED WITH W2 (backlog 0f4147dcb20b) AND THIS MUTATION MOVED WITH IT. The gate used
+  # to be `IS_SENTINEL == true`, which is what made the hook blind to a goal that evaluated and then
+  # STOPPED; the live gate is now "state is live" plus, once a goal HAS evaluated, the same ≥2
+  # unevaluated-turn threshold arm 3b always used. So the discrimination this test protects is no
+  # longer sentinel-vs-not, it is deferral-vs-INERTNESS — and neutering it produces the identical
+  # defect the original mutation produced: a nag at a goal that is evaluating perfectly.
   m="$D/mutant2.sh"
-  sed 's/\[ "\$IS_SENTINEL" = "true" \] && //' "$H" > "$m"
+  sed 's/if \[ "\$GI_ARM" = "blind" \] || \[ "\$GI_LAST" != "arm" \]; then/if [ "$GI_ARM" = "blind" ]; then/' "$H" > "$m"
   chmod +x "$m"
-  grep -q 'IS_SENTINEL' "$m"                                  # variable still assigned…
-  ! grep -q '\[ "$IS_SENTINEL" = "true" \] &&' "$m" || false  # …but no longer gates the fire
+  grep -q 'GI_LAST' "$m"                                             # variable still read…
+  ! grep -q '\[ "$GI_LAST" != "arm" \]; then' "$m" || false          # …but no longer gates the fire
   export CC_PAGE_DAMP_DIR="$D/damp-m2m"
   run bash -c "printf '%s' '$(payload "$t" "$SHELL_TASK" "m2-mutant")' | '$m'"
   [ "$status" -eq 0 ]
@@ -311,4 +317,122 @@ EOF
   [ "$(grep -c 'goal_status' "$t")" -ge 2 ]
   # …yet zero of those lines are attachments, which is why the hook stays silent.
   [ "$(jq -rc --slurp '[ .[] | select(.type=="attachment") ] | length' < "$t")" -eq 0 ]
+}
+
+# ── W2 (backlog 0f4147dcb20b): the goal that EVALUATED and then STOPPED ───────────────────────────
+# The old gate 2 required the arm sentinel to still be the NEWEST goal record, so it detected only
+# *never-evaluated-since-arming* and abstained forever on *stopped-evaluating* — the failure this
+# hook exists for. Quantified over 1,511 goal_status attachments / 626 transcripts / all four
+# account roots: 25 windows where a live goal went ≥2 turns unevaluated behind a non-sentinel newest
+# record, i.e. 12.6% of all inert windows were invisible.
+#
+# The threshold is NOT a new value choice — it is arm 3b's own ≥2 real typed turns (`:35-38` says
+# why 2 and not 1), re-anchored on the newest goal record instead of on the arm sentinel. Wall-clock
+# age was rejected: an idle session accrues age without accruing turns.
+
+# ARMED → evaluated once → then $1 real user turns with NO further evaluation record.
+mk_stalled() {
+  mk_armed >/dev/null
+  cat >> "$D/t.jsonl" <<'EOF'
+{"type":"attachment","timestamp":"2026-08-09T07:20:00Z","attachment":{"type":"goal_status","met":false,"condition":"land every leg of the migration","iterations":1,"reason":"not yet"}}
+EOF
+  i=0
+  while [ "$i" -lt "${1:-2}" ]; do
+    printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}' >> "$D/t.jsonl"
+    printf '%s\n' '{"type":"user","message":{"role":"user","content":"still going?"}}' >> "$D/t.jsonl"
+    i=$((i + 1))
+  done
+  printf '%s' "$D/t.jsonl"
+}
+
+@test "W2 FIRES BLIND: a goal that evaluated then went 2 turns unevaluated is INERT" {
+  t="$(mk_stalled 2)"
+  run bash -c "printf '%s' '$(payload "$t" '[]' "w2-blind")' | '$H'"
+  [ "$status" -eq 0 ]
+  [ -n "$output" ]
+  printf '%s' "$output" | jq -r '.systemMessage' | grep -q 'then STOPPED'   # the NEW finding, named
+}
+
+@test "W2 FIRES NAMED: the same stall with a visible deferrer names the culprit" {
+  t="$(mk_stalled 2)"
+  run bash -c "printf '%s' '$(payload "$t" "$SHELL_TASK" "w2-named")' | '$H'"
+  [ "$status" -eq 0 ]
+  [ -n "$output" ]
+  printf '%s' "$output" | jq -r '.systemMessage' | grep -q 'cc-await-ping'
+}
+
+@test "W2 CONTROL: ONE turn since the evaluation is not enough (deferral, not inertness)" {
+  # The discriminator against an always-fires hook: with a goal that HAS evaluated, a live
+  # background task means CC will defer the NEXT evaluation, which is one Stop of correct behaviour.
+  t="$(mk_stalled 1)"
+  run bash -c "printf '%s' '$(payload "$t" "$SHELL_TASK" "w2-ctl1")' | '$H'"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "W2 CONTROL: a CLEARED goal never fires, however many turns pass" {
+  t="$(mk_armed)"
+  cat >> "$t" <<'EOF'
+{"type":"attachment","timestamp":"2026-08-09T07:30:00Z","attachment":{"type":"goal_status","met":true,"sentinel":true,"condition":"land every leg of the migration"}}
+{"type":"user","message":{"role":"user","content":"next thing"}}
+{"type":"user","message":{"role":"user","content":"and another"}}
+EOF
+  run bash -c "printf '%s' '$(payload "$t" "$SHELL_TASK" "w2-ctl2")' | '$H'"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "W2: the two findings do not damp each other (never-evaluated then stalled)" {
+  # The fingerprint used to be the condition ALONE, i.e. one page per goal ever — so the
+  # never-evaluated page would have permanently suppressed the stopped-evaluating one, which is the
+  # finding this whole relaxation exists to surface. Same session, same condition, same damp dir.
+  export CC_PAGE_DAMP_DIR="$D/damp-w2both"
+  t="$(mk_armed_stale 2)"
+  run bash -c "printf '%s' '$(payload "$t" '[]' "w2-both")' | '$H'"
+  [ -n "$output" ]                                    # finding 1: never evaluated
+  t="$(mk_stalled 2)"
+  run bash -c "printf '%s' '$(payload "$t" '[]' "w2-both")' | '$H'"
+  [ -n "$output" ]                                    # finding 2: evaluated, then stopped
+  printf '%s' "$output" | jq -r '.systemMessage' | grep -q 'then STOPPED'
+}
+
+# ── W1b (backlog 61a3b40d8695): this hook wrote NO IDL record, ever ───────────────────────────────
+# Measured over 978,400 records across 17 files: goal-inert-watch appears in none of them. So "this
+# session has no goal" (the correct, common no-op), "the transcript was unreadable" (blind) and
+# "this hook never ran" were byte-identical — and a compensating control for a SILENT failure is
+# worth nothing if it is itself silent.
+@test "W1b: an abstention is recorded, with a reason that names the state" {
+  export GOAL_INERT_IDL="$D/gi-idl.jsonl"
+  t="$(mk_prose_only)"                                 # a real transcript, no goal in it
+  run bash -c "printf '%s' '$(payload "$t" '[]' "w1b-1")' | '$H'"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  [ -s "$GOAL_INERT_IDL" ]
+  [ "$(jq -r '.hook' "$GOAL_INERT_IDL" | tail -1)" = "goal-inert-watch" ]
+  [ "$(jq -r '.disposition' "$GOAL_INERT_IDL" | tail -1)" = "abstained" ]
+  [ "$(jq -r '.reason' "$GOAL_INERT_IDL" | tail -1)" = "no-goal:absent" ]
+  [ "$(jq -r '.sid' "$GOAL_INERT_IDL" | tail -1)" = "w1b-1" ]
+}
+
+@test "W1b: a fire is recorded too, carrying the arm and the counts" {
+  export GOAL_INERT_IDL="$D/gi-idl2.jsonl"
+  t="$(mk_armed)"
+  run bash -c "printf '%s' '$(payload "$t" "$SHELL_TASK" "w1b-2")' | '$H'"
+  [ -n "$output" ]
+  [ "$(jq -r '.disposition' "$GOAL_INERT_IDL" | tail -1)" = "fired" ]
+  [ "$(jq -r '.reason' "$GOAL_INERT_IDL" | tail -1)" = "goal-inert:named" ]
+  [ "$(jq -r '.deferrers' "$GOAL_INERT_IDL" | tail -1)" = "1" ]
+}
+
+@test "W1b: the blind-set tokens are used ONLY where the hook genuinely could not look" {
+  # Reason vocabulary decides whether scripts/idl-abstain-alarm.sh reports this hook as the green
+  # DORMANT-100 or PAGES it as INERT: INERT needs abstained==total AND a high blind share. A
+  # reached-guard disposition wearing a blind token would manufacture that page.
+  export GOAL_INERT_IDL="$D/gi-idl3.jsonl"
+  run bash -c "printf '%s' '$(payload "/no/such/transcript.jsonl" '[]' "w1b-3")' | '$H'"
+  [ "$(jq -r '.reason' "$GOAL_INERT_IDL" | tail -1)" = "transcript-missing" ]   # genuinely blind
+  t="$(mk_armed)"                                                               # reached the guard…
+  run bash -c "printf '%s' '$(payload "$t" '[]' "w1b-3b")' | '$H'"
+  [ -z "$output" ]
+  jq -r '.reason' "$GOAL_INERT_IDL" | tail -1 | grep -q '^below-turn-threshold:0$'
+  # …and that token is NOT one the alarm treats as blind
+  ! grep -qw "$(jq -r '.reason' "$GOAL_INERT_IDL" | tail -1 | cut -d: -f1)" \
+      <<<'no-jq no-session-id no-stdin no-telemetry stale-telemetry no-transcript-path transcript-missing not-a-repo no-cwd no-assistant-text' || false
 }
