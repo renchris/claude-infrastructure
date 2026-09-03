@@ -1725,3 +1725,71 @@ mkfix_user() { # <assistant-close> <last-user-msg> → transcript path
   run run_ca "$(mkfix_user "Done. Landed at abc1234, all green." "just do the readme and stop")" "$w" "ks-6"
   [ "$status" -eq 0 ]; [ -z "$output" ]
 }
+
+# ── THE DOUBLE-BLOCK YIELD (backlog 79e2b74796af) ─────────────────────────────────────────────────
+# session-continue.sh and this hook can both emit {decision:"block"} on ONE Stop — the harness does
+# not short-circuit (hooks/hook-chain.sh:78 states it as contract) — so the model receives two
+# separate messages about the same ledger facts, 0.77 s apart. Measured over the retained IDL window
+# against 1,335 evaluations: 33 same-Stop double-fires, this hook on `false-done` in 33/33.
+#
+# THE WRITER IN THE E2E ARM IS THE REAL session-continue.sh, never a hand-written marker. The two
+# hooks must agree on a path AND a file format, which is exactly the pair that drifts when a test
+# stubs one side (MEMORY.md sibling-auditors-must-share-the-state-model). Both resolve it through
+# hooks/lib/continue-sentinel.sh, so CLAUDE_CONFIG_DIR is the only thing the fixture has to share.
+dbl_setup() { # <tag> → echoes the repo cwd, with both hooks pointed at one fixture config dir
+  export CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/dblcfg-$1"; mkdir -p "$CLAUDE_CONFIG_DIR/state"
+  export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/dblmbox-$1"; mkdir -p "$CC_MAILBOX_DIR"
+  export CONTINUE_IDL="$BATS_TEST_TMPDIR/dblidl-$1.jsonl"
+  export CONTINUE_LOG="$BATS_TEST_TMPDIR/dbllog-$1"
+  mkrepo_unlanded "$1"
+}
+
+@test "double-block E2E: session-continue blocks ⇒ this hook YIELDS its ledger arm (one message)" {
+  local w; w="$(dbl_setup dbl1)"
+  # the REAL writer: arm the continuation, then run its Stop from that cwd — it blocks and, in doing
+  # so, writes the per-Stop marker this hook reads.
+  ( cd "$w" && CLAUDE_CODE_SESSION_ID=dbl-1 bash "$REPO/hooks/session-continue.sh" set "finish it" ) >/dev/null
+  local sc_out
+  sc_out="$(printf '{"cwd":"%s","session_id":"dbl-1","transcript_path":""}' "$w" \
+              | bash "$REPO/hooks/session-continue.sh" 2>/dev/null)"
+  printf '%s' "$sc_out" | grep -q '"decision":"block"'        # precondition: it really did block
+  run run_ca "$(mkfix "Done. All 12 tests pass, shellcheck clean. Landed at abc1234.")" "$w" "dbl-1"
+  [ "$status" -eq 0 ]; [ -z "$output" ]                        # …so this hook must stay silent
+  grep -q 'double-block-yield' "$COMPLETION_IDL"               # and say WHY, not vanish
+}
+
+@test "double-block CONTROL: with session-continue SILENT, the ledger arm still fires" {
+  local w; w="$(dbl_setup dbl2)"
+  # No sentinel armed and the floors off ⇒ session-continue emits nothing and writes no marker.
+  printf '{"cwd":"%s","session_id":"dbl-2","transcript_path":""}' "$w" \
+    | CC_WAKE_FLOOR=0 CC_SHIP_FLOOR=0 bash "$REPO/hooks/session-continue.sh" >/dev/null 2>&1
+  run run_ca "$(mkfix "Done. All 12 tests pass, shellcheck clean. Landed at abc1234.")" "$w" "dbl-2"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+
+@test "double-block CONTROL: the marker is per-STOP — a later silent Stop convicts again" {
+  # Over-suppression is the failure mode a sentinel- or sidecar-keyed guard would have had: both
+  # persist, so they would silence this hook for every later Stop. session-continue clears the
+  # marker at the top of each Stop, so the yield lasts exactly one.
+  local w; w="$(dbl_setup dbl3)"
+  ( cd "$w" && CLAUDE_CODE_SESSION_ID=dbl-3 bash "$REPO/hooks/session-continue.sh" set "finish it" ) >/dev/null
+  printf '{"cwd":"%s","session_id":"dbl-3","transcript_path":""}' "$w" \
+    | bash "$REPO/hooks/session-continue.sh" >/dev/null 2>&1          # STOP 1 — blocks, marks
+  ( cd "$w" && bash "$REPO/hooks/session-continue.sh" clear ) >/dev/null 2>&1
+  printf '{"cwd":"%s","session_id":"dbl-3","transcript_path":""}' "$w" \
+    | CC_WAKE_FLOOR=0 CC_SHIP_FLOOR=0 bash "$REPO/hooks/session-continue.sh" >/dev/null 2>&1  # STOP 2 — silent, clears
+  run run_ca "$(mkfix "Done. All 12 tests pass, shellcheck clean. Landed at abc1234.")" "$w" "dbl-3"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+
+@test "double-block SEAM: CC_DOUBLE_BLOCK_GUARD=0 restores the old double-block" {
+  # The kill switch is what attributes the yield to THIS code rather than to the fixture.
+  local w; w="$(dbl_setup dbl4)"
+  ( cd "$w" && CLAUDE_CODE_SESSION_ID=dbl-4 bash "$REPO/hooks/session-continue.sh" set "finish it" ) >/dev/null
+  printf '{"cwd":"%s","session_id":"dbl-4","transcript_path":""}' "$w" \
+    | bash "$REPO/hooks/session-continue.sh" >/dev/null 2>&1
+  run env CC_DOUBLE_BLOCK_GUARD=0 bash -c \
+    "printf '{\"session_id\":\"dbl-4\",\"transcript_path\":\"%s\",\"cwd\":\"%s\"}' \
+       '$(mkfix "Done. All 12 tests pass, shellcheck clean. Landed at abc1234.")' '$w' | bash '$HOOK'"
+  [ "$status" -eq 0 ]; fired "$output"
+}
