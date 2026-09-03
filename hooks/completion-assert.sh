@@ -629,6 +629,63 @@ if [ "$RUNG" = "⛔" ]; then
   facts="${facts}BLOCKED ON YOU — ${_ca_blocked} decision(s) filed this session are open (cc-decide list --open); that IS your rung; "
 fi
 
+# ── THE DOUBLE-BLOCK YIELD (backlog 79e2b74796af) ────────────────────────────────────────────────
+# session-continue.sh and this hook can both emit {decision:"block"} on ONE Stop. The harness does
+# not short-circuit — hooks/hook-chain.sh:78 states it as contract ("every member always runs… even
+# when one blocks") and the IDL proves it (hook #6 wrote a record after hook #4 fired) — so the model
+# receives two separate messages about the same facts. Measured, sid 3c60afff, 0.77 s apart:
+#   00:38:27.213Z  🔧 Loose ends remain — … 1 file(s) you edited THIS TURN still uncommitted …
+#   00:38:27.980Z  Completion-assert: your close reads as done … dirty tree — 1 file(s) YOU edited …
+#
+# ⚠ A FLEET GREP OF 2,177 STOP-FEEDBACK MESSAGES FOUND ZERO NAMING TWO HOOKS. That is not evidence
+# of absence: they arrive as TWO MESSAGES, not one, so that search measures what the operator sees,
+# not what fires. Do not re-run it and conclude this is fixed.
+#
+# SCOPE — the ledger arm ONLY, and this is determined by evidence, not caution. Over the retained
+# window (2026-08-25 → 09-03) against 1,335 completion-assert evaluations there were 33 same-Stop
+# double-fires (2.5%): completion-assert was on its `false-done` arm in 33/33, and ZERO involved a
+# shape arm. So a full yield (mirroring boundary-handoff's compose-guard) would buy nothing extra
+# and would silently drop close-shape corrections. D1–D7 therefore keep firing, and `contra_shape`
+# below preserves the UNSUPPRESSED value so that suppressing the ledger arm cannot make D6/D7 newly
+# reachable on this Stop — turning one double-block into a differently-worded one.
+#
+# THE JOIN IS THE PER-STOP MARKER, NOT THE SENTINEL FILE. The obvious guard — reuse
+# `continue_sentinel_for "$cwd"` exactly as boundary-handoff.sh:415-428 does — covers only part of
+# this defect, because session-continue's two FLOORS run exclusively on the path where that sentinel
+# does NOT exist (`if [ ! -f "$f" ]`). Of the 33 measured co-fires, session-continue was on its
+# `continue` arm in 22 (sentinel present) and its `ship-floor` arm in 11 (sentinel absent), so a
+# sentinel-only guard would leave a third of the defect live. It also over-suppresses in the other
+# direction: the ship floor's own sidecar is latched per HEAD-sha, so keying on it would silence
+# this hook for every later Stop on that sha, when a done-claim is exactly what should still be
+# caught. The marker is written only when session-continue actually blocks and is cleared by that
+# hook at the top of every Stop, so its presence means "on THIS Stop" without any clock.
+#
+# LIB UNAVAILABLE ⇒ SKIP, NEVER WRONGLY SUPPRESS — boundary-handoff's fallback discipline verbatim.
+contra_shape="$contra"
+if [ "$contra" -eq 1 ] && [ "${CC_DOUBLE_BLOCK_GUARD:-1}" != 0 ]; then
+  _ca_scs=""
+  if [ -n "${CC_CONTINUE_SENTINEL:-}" ]; then
+    _ca_scs="$CC_CONTINUE_SENTINEL"
+  else
+    _ca_cslib="$_cascd/lib/continue-sentinel.sh"
+    [ -f "$_ca_cslib" ] || { _ca_cst="$0"; [ -L "$_ca_cst" ] && _ca_cst="$(readlink "$_ca_cst")"
+      _ca_cslib="$(cd "$(dirname "$_ca_cst")" 2>/dev/null && pwd)/lib/continue-sentinel.sh"; }
+    [ -f "$_ca_cslib" ] || _ca_cslib="$CFG/hooks/lib/continue-sentinel.sh"
+    [ -f "$_ca_cslib" ] || _ca_cslib="$HOME/.claude/hooks/lib/continue-sentinel.sh"
+    # shellcheck source=lib/continue-sentinel.sh
+    # shellcheck disable=SC1090,SC1091
+    if [ -f "$_ca_cslib" ] && . "$_ca_cslib" 2>/dev/null \
+       && command -v continue_sentinel_for >/dev/null 2>&1; then
+      _ca_scs="$(continue_sentinel_for "$CWD")"
+    fi
+  fi
+  if [ -n "$_ca_scs" ] && [ -f "${_ca_scs}.blocked" ]; then
+    _ca_dblarm="$(cut -d' ' -f3 "${_ca_scs}.blocked" 2>/dev/null || true)"
+    _ca_exon="${_ca_exon}double-block-yield:session-continue-${_ca_dblarm:-?} "
+    contra=0
+  fi
+fi
+
 # ── ARM 2 (operator surface) — see the contract block above. MUST precede the ledger-clean
 #    abstain: the whole point is the close that is ledger-CLEAN yet still unactionable. ──
 d1=0; d2=0; d3=0; d4=0
@@ -829,7 +886,7 @@ done <<< "$MSG"
 # arrived (item 3b464e94b3ff; full derivation at the latch block). CC_CLOSE_SHAPE=0 disables the
 # arm outright (R8).
 d6=0; _d6_missing=""
-if [ "${CC_CLOSE_SHAPE:-1}" != 0 ] && [ "$contra" -eq 0 ] \
+if [ "${CC_CLOSE_SHAPE:-1}" != 0 ] && [ "$contra_shape" -eq 0 ] \
    && { [ "$RUNG" = "✅" ] || [ "$RUNG" = "👤" ]; } && ! _ca_assignee; then
   _d6_ok=1
   # POSITIVE write evidence only (rc 0). rc 1 (none recorded) and rc 2 (cannot tell) both skip:
@@ -922,7 +979,7 @@ fi
 # carve-out D6 makes, via the same oracle. A missing/unsourceable lib ⇒ no demand, never a block.
 # CC_CLOSE_ACT=0 disables the arm outright, mirroring CC_CLOSE_SHAPE.
 d7=0
-if [ "${CC_CLOSE_ACT:-1}" != 0 ] && [ "$contra" -eq 0 ] && [ "$RUNG" = "👤" ] && ! _ca_assignee; then
+if [ "${CC_CLOSE_ACT:-1}" != 0 ] && [ "$contra_shape" -eq 0 ] && [ "$RUNG" = "👤" ] && ! _ca_assignee; then
   if _ca_source_close_shape && command -v close_act_ok >/dev/null 2>&1; then
     close_act_ok "$MSG" || d7=1
   fi
@@ -971,7 +1028,7 @@ FIRED="$STATE_DIR/$SKEY.fired"
 # would otherwise not have fired at all, or add one sentence to a fire that already happened.
 CLASS=assert; CLASS_MAX="$MAX"
 if [ "$d6" -eq 1 ]; then CLASS=shape; CLASS_MAX="${COMPLETION_SHAPE_MAX:-2}"
-elif [ "$d7" -eq 1 ] && [ "$contra" -eq 0 ] \
+elif [ "$d7" -eq 1 ] && [ "$contra_shape" -eq 0 ] \
      && [ "$d1" -eq 0 ] && [ "$d2" -eq 0 ] && [ "$d3" -eq 0 ] && [ "$d4" -eq 0 ] && [ "$d5" -eq 0 ]
 then CLASS=act; CLASS_MAX="${COMPLETION_ACT_MAX:-2}"; fi
 case "$CLASS_MAX" in ''|*[!0-9]*) CLASS_MAX=2 ;; esac

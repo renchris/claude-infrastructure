@@ -193,6 +193,29 @@ cwd=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)
 f=$(sentinel_for "$cwd")
 cur_sid=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
 [ -n "$cur_sid" ] || cur_sid="${CLAUDE_CODE_SESSION_ID:-}"
+
+# ── THE DOUBLE-BLOCK MARKER (backlog 79e2b74796af) ───────────────────────────────────────────────
+# This hook and completion-assert can both emit {decision:"block"} on ONE Stop, and the harness does
+# not short-circuit — hooks/hook-chain.sh:78 states it as contract ("every member always runs"), so
+# the model receives TWO separate messages about the same facts, 0.77 s apart. Measured over the
+# retained IDL window against 1,335 completion-assert evaluations: 33 same-Stop double-fires (2.5%),
+# completion-assert on its `false-done` arm in 33/33.
+#
+# THE MARKER IS PER-STOP BY CONSTRUCTION, NOT BY A TIME WINDOW. `session-continue.sh` runs at
+# position 4 of the Stop chain and `completion-assert.sh` at position 6 (settings.json), so the
+# writer always precedes the reader. Clearing the marker HERE — at the top of every Stop, before any
+# decision — is what makes its presence mean "I blocked on THIS Stop" rather than "I blocked at some
+# point": a Stop where this hook stays silent leaves no marker for the reader to find, because this
+# line already removed the previous one. A wall-clock TTL was rejected: it would fail CLOSED (the
+# reader wrongly suppressing) on two fast Stops, and this ordering needs no clock at all. The mtime
+# is still written as a belt-and-braces bound for the case where this hook is disabled outright and
+# so never runs to clear its own marker.
+SC_BLOCKED_MARK="${f}.blocked"
+rm -f "$SC_BLOCKED_MARK" 2>/dev/null || true
+mark_blocked() { # $1 = which arm blocked (recorded for forensics, not read by the guard)
+  printf '%s %s %s\n' "${cur_sid:-?}" "$(date +%s 2>/dev/null || echo 0)" "$1" \
+    > "$SC_BLOCKED_MARK" 2>/dev/null || true
+}
 # SC_SID — the telemetry's sid field. Aliased to $cur_sid rather than re-parsed: the cherry-picked
 # commit (cd064644) computed its own SC_SID from the same stdin, but trunk had since hoisted
 # $cur_sid for the SID-BIND path. Two independent parses of one value is how they drift.
@@ -1045,10 +1068,12 @@ if [ ! -f "$f" ]; then
   rm -f "${f}.count" "${f}.sid" "${f}.cwd" 2>/dev/null
   if ! mechanical_arm; then
     if ! _sf_json="$(ship_floor)"; then
+      mark_blocked ship-floor
       printf '%s' "$_sf_json"
       exit 0      # decision:block travels in the JSON; the hook itself always exits 0
     fi
     if ! _wf_json="$(wake_floor)"; then
+      mark_blocked wake-floor
       printf '%s' "$_wf_json"
       exit 0
     fi
@@ -1146,6 +1171,7 @@ fi
 # decision:block blocks the stop; reason is fed back to the model as the next turn. systemMessage rides
 # ALONGSIDE the block (a universal top-level field, precedent at :502) so the human sees the delivery the
 # model just got — without it the in-loop desk, the heaviest mail consumer, stays the one silent channel.
+mark_blocked continue
 if [ -n "$_sysmsg" ]; then
   jq -nc --arg r "$reason" --arg s "$_sysmsg" '{decision:"block",reason:$r,systemMessage:$s}'
 else
