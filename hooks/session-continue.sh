@@ -55,6 +55,26 @@
 # logging it would add a line per turn-close to an already-18 MB IDL while telling us nothing the
 # D-11 forensics need. Every state CHANGE is logged: armed · cleared (cli / kill-switch /
 # sid-mismatch / cap) · fired.
+#
+# ── NARROWED 2026-09-03 (backlog 61a3b40d8695): THE FLOORS WERE NEVER "THE STEADY STATE" ─────────
+# The paragraph above was written for the SENTINEL actuator and then silently inherited by the two
+# FLOORS added later, which is how the loudest disposition this hook has — a wake floor emitting
+# {decision:"block"} — came to write nothing at all. Measured over 978,400 IDL records across 17
+# files: 323 session-continue records and NOT ONE carrying any wake-floor reason; the ship floor has
+# 17 exits and logs 1. So for both floors "abstained" and "never ran" were byte-identical, which is
+# exactly the B-3 ambiguity boundary-handoff.sh:17-19 exists to remove.
+#
+# The volume premise still holds and is why this is a NARROWING rather than a reversal: ~30 fleet
+# Stops/day against ~63k IDL rows/day, so the decision-bearing exits cost nothing measurable while a
+# per-Stop row would. The line drawn here is DECISION vs ABSENCE, not verbosity:
+#   LOGGED   — the floor evaluated and chose: fired · budget spent · TTL backoff · kill-switch ·
+#              headless · goal-live · teardown/assignee · attribution-refused · sha-latched.
+#   SILENT   — the capability was structurally absent (seam off, no jq, no lib, no pane id, no
+#              readable ledger), or the state is the common no-op (already armed · already declined
+#              with nothing pending · rung is neither 📦 nor 🚀). None of those is a judgment, and
+#              each fires on most Stops of most sessions.
+# `ship-floor-not-mine` is the row that earns this outright: it is the only evidence separating
+# "correctly declined to nudge over a sibling's commits" from "this floor never ran".
 IDL="${CONTINUE_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 CLOG="${CONTINUE_LOG:-$HOME/.claude/logs/session-continue.log}"
 SC_SID="?"
@@ -498,6 +518,7 @@ wake_floor() { # → echoes JSON on stdout when it wants to BLOCK; otherwise sil
       jq -nc --arg m "ℹ Wake floor stood down (pane-less session — a watcher is not its wake path), but ${pend} message(s) are unread in this session's inbox. A headless session has no next turn to drain on: something must call cc-wake-headless ${_ouid} to give it one." \
         '{systemMessage:$m}' 2>/dev/null || true
     fi
+    log_idl abstained "wake-floor-headless" "$(jq -cn --argjson p "$pend" '{pend:$p}' 2>/dev/null)"
     return 0
   fi
 
@@ -536,6 +557,7 @@ wake_floor() { # → echoes JSON on stdout when it wants to BLOCK; otherwise sil
       printf 'session-continue: wake floor ABSTAINS (a /goal is LIVE and mail is already pending — the goal-forced turns deliver it, and the idle-scoped arm would refuse over pending mail anyway).\n' >&2
       jq -nc --arg m "ℹ Wake floor stood down (a /goal is live); ${pend} pending message(s) will surface at the next turn boundary the goal forces." \
         '{systemMessage:$m}' 2>/dev/null || true
+      log_idl abstained "wake-floor-goal-live" "$(jq -cn --argjson p "$pend" '{pend:$p}' 2>/dev/null)"
       return 0
     fi
   fi
@@ -629,6 +651,7 @@ wake_floor() { # → echoes JSON on stdout when it wants to BLOCK; otherwise sil
         jq -nc --arg m "ℹ Wake floor stood down (${_wf_why}), but ${pend} message(s) are still unread in this session's inbox — they will surface on its next turn, if it has one." \
           '{systemMessage:$m}' 2>/dev/null || true
       fi
+      log_idl abstained "wake-floor-teardown" "$(jq -cn --argjson p "$pend" --arg w "$_wf_why" '{pend:$p,why:$w}' 2>/dev/null)"
       return 0
     fi
   fi
@@ -674,13 +697,18 @@ wake_floor() { # → echoes JSON on stdout when it wants to BLOCK; otherwise sil
     [ "$pend" -gt 0 ] && warnmsg="⚠ ${pend} message(s) waiting and NO wake path armed — nothing will wake this session. Arm it with: ${armcmd}"
     printf 'session-continue: wake floor exhausted (%s/%s) — allowing stop, unarmed.\n' "$cnt" "$maxa" >&2
     jq -nc --arg m "$warnmsg" '{systemMessage:$m}' 2>/dev/null || true
+    log_idl abstained "wake-floor-budget" "$(jq -cn --argjson c "$cnt" --argjson m "$maxa" --argjson p "$pend" '{count:$c,max:$m,pend:$p}' 2>/dev/null)"
     return 0
   fi
   # Re-attempt no sooner than the TTL (a burst of short turns must not re-block every one of them).
-  [ "$(( now - ts ))" -ge "$ttl" ] 2>/dev/null || return 0
+  if [ "$(( now - ts ))" -ge "$ttl" ] 2>/dev/null; then :; else
+    log_idl abstained "wake-floor-ttl" "$(jq -cn --argjson a "$(( now - ts ))" --argjson t "$ttl" '{age_s:$a,ttl_s:$t}' 2>/dev/null)"
+    return 0
+  fi
   # The operator asked to stop → never block; the exhausted-branch warning is the right surface.
   if kill_switch_active; then
     jq -nc --arg m "⚠ No inbox wake path armed — this session will not be woken by peer mail. Arm: ${armcmd}" '{systemMessage:$m}' 2>/dev/null || true
+    log_idl abstained "wake-floor-kill-switch"
     return 0
   fi
 
@@ -717,6 +745,9 @@ ${reason}"
   [ -n "$_custmsg" ] && reason="${_custmsg}
 
 ${reason}"
+  log_idl fired "wake-floor" "$(jq -cn --argjson c "$(( cnt + 1 ))" --argjson m "$maxa" --argjson p "$pend" \
+    --argjson cm "$cust_mine" --argjson cu "$cust_unk" --arg g "$([ -n "$_wf_goal" ] && echo yes || echo no)" \
+    '{count:$c,max:$m,pend:$p,cust_mine:$cm,cust_unk:$cu,goal_live:$g}' 2>/dev/null)"
   jq -nc --arg r "$reason" --arg m "🔔 Wake floor: arming this session's inbox watcher (no wake path was armed)." \
     '{decision:"block",reason:$r,systemMessage:$m}'
   return 1
@@ -912,13 +943,16 @@ mechanical_arm() {   # rc 0 = armed (fall through to the armed path) · rc 1 = d
 ship_floor() { # → echoes JSON to BLOCK (rc 1); rc 0 otherwise (never emits on rc 0). Never fails.
   [ "${CC_SHIP_FLOOR:-1}" = 1 ] || return 0
   command -v jq >/dev/null 2>&1 || return 0
-  kill_switch_active && return 0
+  kill_switch_active && { log_idl abstained "ship-floor-kill-switch"; return 0; }
   local _sf_aid _sf_c
   if _sf_aid="$(agent_assignee_argv)" && [ -n "$_sf_aid" ]; then
     agent_team_member_confirms "$_sf_aid"; _sf_c=$?
-    { [ "$_sf_c" -eq 0 ] || [ "$_sf_c" -eq 2 ]; } && return 0
+    { [ "$_sf_c" -eq 0 ] || [ "$_sf_c" -eq 2 ]; } && {
+      log_idl abstained "ship-floor-assignee" "$(jq -cn --arg a "$_sf_aid" --argjson c "$_sf_c" '{assignee:$a,confirm_rc:$c}' 2>/dev/null)"
+      return 0
+    }
   fi
-  wf_teardown_marked && return 0
+  wf_teardown_marked && { log_idl abstained "ship-floor-teardown"; return 0; }
 
   local wrap led rung ahead shas trunk
   # Reuse the mechanical arm's ledger read when it got that far (review #7 — the two floors run in
@@ -950,14 +984,20 @@ ship_floor() { # → echoes JSON to BLOCK (rc 1); rc 0 otherwise (never emits on
   # shellcheck source=lib/session-writes.sh
   # shellcheck disable=SC1091
   . "$swlib" 2>/dev/null || return 0
+  # ATTRIBUTION REFUSED is a DECISION, not an absence: the floor read the ledger, saw unlanded work,
+  # and declined because the commits are not this session's (the #105 sibling-dirt rule). That is the
+  # single most important row this floor can write — it is the one that distinguishes "correctly did
+  # not nudge you over a sibling's commits" from "never evaluated at all".
   if [ "$rung" = "📦" ]; then
     command -v session_unlanded_mine >/dev/null 2>&1 || return 0
     trunk="$(printf '%s' "$led" | grep -E '^TRUNK=' | head -1 | cut -d= -f2-)"
     { [ -n "$trunk" ] && [ "$trunk" != none ]; } || return 0
-    session_unlanded_mine "$TP_MECH" "$cwd" "$trunk" >/dev/null 2>&1 || return 0
+    session_unlanded_mine "$TP_MECH" "$cwd" "$trunk" >/dev/null 2>&1 || {
+      log_idl abstained "ship-floor-not-mine" "$(jq -cn --arg r "$rung" '{rung:$r}' 2>/dev/null)"; return 0; }
   else
     command -v session_writes_paths >/dev/null 2>&1 || return 0
-    session_writes_paths "$TP_MECH" >/dev/null 2>&1 || return 0
+    session_writes_paths "$TP_MECH" >/dev/null 2>&1 || {
+      log_idl abstained "ship-floor-not-mine" "$(jq -cn --arg r "$rung" '{rung:$r}' 2>/dev/null)"; return 0; }
   fi
 
   # One shot per HEAD-sha + a per-session cap, in one sidecar. A same-sid same-sha re-idle is
@@ -974,9 +1014,11 @@ ship_floor() { # → echoes JSON to BLOCK (rc 1); rc 0 otherwise (never emits on
     case "$pcnt" in ''|*[!0-9]*) pcnt=0 ;; esac
     [ "$psid" = "${cur_sid:-?}" ] || { pcnt=0; psha=""; }
   fi
-  [ "$psha" = "$head_sha" ] && return 0
+  [ "$psha" = "$head_sha" ] && {
+    log_idl abstained "ship-floor-latched" "$(jq -cn --arg r "$rung" --arg s "$head_sha" '{rung:$r,sha:$s}' 2>/dev/null)"; return 0; }
   if [ "$pcnt" -ge "$maxs" ]; then
     printf 'session-continue: ship floor budget spent (%s/%s) — allowing stop on %s.\n' "$pcnt" "$maxs" "$rung" >&2
+    log_idl abstained "ship-floor-budget" "$(jq -cn --arg r "$rung" --argjson c "$pcnt" --argjson m "$maxs" '{rung:$r,count:$c,max:$m}' 2>/dev/null)"
     return 0
   fi
   printf '%s %s %s' "${cur_sid:-?}" "$head_sha" "$(( pcnt + 1 ))" > "$sfile" 2>/dev/null || true
