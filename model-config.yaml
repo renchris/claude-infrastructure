@@ -128,12 +128,36 @@ versions:
 # behaviour. Permitted server-side fallback targets for 5.1: claude-opus-4-8 and claude-opus-5.
 #
 # ACTIVATION (do these in order; the first is the gate everything else waits on):
-#   1. Find the CC build that registers `claude-fable-5-1` — re-run the strings probe above
-#      against candidate versions, positive controls included. Install PARALLEL
-#      (`npm i --prefix ~/.claude-<ver> @anthropic-ai/claude-code@<ver>`), never in place, and
-#      keep 2.1.220 for a one-line rollback. Carry `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`
-#      forward — 2.1.219 defaulted nested spawn depth to 3, which re-opens the still-open
-#      #68619 runaway (4M tok/5min) on this spawn-heavy fleet.
+#   1. Upgrade the binary. ANSWERED 2026-09-03 — bisected, so this is no longer homework.
+#      Probe: `strings -a <claude.exe> | grep -c -- <id>`, every row carrying its positive
+#      control so a zero is provably a zero (a plain `grep` on the Bun-compiled claude.exe
+#      reads 0 for EVERY model, including ones we demonstrably run):
+#
+#          version            fable-5-1   mythos-5-1   control opus-5
+#          2.1.220 (ours)          0           0             47
+#          2.1.229                 0           0             48
+#          2.1.236 (`stable`)      0           0             48
+#          2.1.242                 0           0             48
+#          2.1.248                 0           0             18
+#          2.1.250                 0           0             18
+#          2.1.252                 0           0             19
+#          2.1.259 (`latest`)     11           6             18
+#
+#      So the minimum registering build lies in 2.1.253–2.1.259, and 2.1.259 is VERIFIED to
+#      carry both ids. 2.1.257/258 were not probed (the run was interrupted) — narrow further
+#      only if you care which; otherwise go to `latest`. Note the npm `stable` dist-tag
+#      (2.1.236) does NOT have it, so "move to stable" is not a route to 5.1.
+#      Install PARALLEL (`npm i --prefix ~/.claude-<ver> @anthropic-ai/claude-code@<ver>`),
+#      never in place, and keep 2.1.220 for a one-line rollback. Carry
+#      `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1` forward — 2.1.219 defaulted nested spawn depth
+#      to 3, which re-opens the still-open #68619 runaway (4M tok/5min) on this spawn-heavy
+#      fleet; a jump of ~39 versions is well past where that default was last audited, so
+#      re-read the spawn/subagent defaults before firing a wave on the new binary.
+#      ⚠️ This is a 2.1.220 → 2.1.259 jump. Registration is the ONLY axis measured above.
+#      Everything else our harness depends on — hooks, Stop-hook semantics, auto mode, the
+#      effort ladder, Agent Teams, permissions, MCP — is unmeasured across those 39 versions.
+#      Run the `cc-upgrade-gate` skill against the candidate BEFORE adopting it; that gate
+#      exists for exactly this and is cheaper than discovering a broken way-of-working live.
 #   2. Confirm ENTITLEMENT, which is separate from registration and may be server-date-gated
 #      (Fable 5 was): `--model claude-fable-5-1 --print "ok"` must return a real completion and
 #      `claude-accounts` must show a live budget. A registered-but-unentitled ID fails at spawn.
