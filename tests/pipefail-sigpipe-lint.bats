@@ -72,9 +72,23 @@ census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" 
   # an early exit in the MIDDLE with a DRAINING last stage, which the seg[n] ladder could not see at
   # all, and its discrimination cell. Attribution-proved: reverting the block makes exactly r21, r22
   # and nothing else fail (~/.claude/autonomy/mut286-pin.sh).
+  #
+  # 41 -> 44 on 2026-09-03 (the TWELFTH correction). The eleventh made clauses 2 and 3 agree about
+  # WHICH adjacent pair they judge. Clause 5 runs BEFORE that loop, drops the whole LINE, and was
+  # keyed on a || occurring anywhere in seg[n] — while clause 3b, twelve lines below, tests the same
+  # token and ALSO requires a group opener, because a || inside a group returns the GROUP's status.
+  # So the two clauses agreed about the token and disagreed about its SCOPE, and g14 already pinned
+  # the producer-side half while nothing pinned its mirror. Measured with the producer and the last
+  # command held constant and only the bracketing varying: `cat BIG | { grep -q N || true; }` is
+  # 20/20 non-zero at PIPESTATUS [141 0], byte-identical to the unmitigated shape, because the group
+  # returns 0 and pipefail takes the max over every stage. r23/r24 are the brace and paren
+  # spellings; g20 is the widening bound — a group in the last stage with the || OUTSIDE it still
+  # swallows (0/20), so "any group opener disqualifies" would mint a correct line. Attribution-
+  # proved: reverting the block makes exactly r23, r24 and nothing else fail
+  # (~/.claude/autonomy/mut287-pin.sh). Census 125 -> 125, LOST=0, NEW=0.
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s' "$output" | grep '41/41' >/dev/null \
+  printf '%s' "$output" | grep '44/44' >/dev/null \
     || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 
