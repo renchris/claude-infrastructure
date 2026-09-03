@@ -1616,8 +1616,9 @@ windows/week, carrying the fleet wall rate 1.72% → 2.20%.
 
 ### §5.7 Implementation record — what actually landed, and where it deviated from the spec
 
-Wave 1 = **S1 + S2 + S3**. Wave 2 = **S4 + S5** (2026-09-03), landing in that order; **S4 is in
-this commit and S5 is in the next**. S6 and S7 remain unbuilt, and S5 still gates S6.
+Wave 1 = **S1 + S2 + S3**. Wave 2 = **S4 + S5** (2026-09-03). **S6 and S7 remain unbuilt**, and S5
+still gates S6 — S5 is now *runnable*, which is not the same as *read*, and §5.2 S6's condition is
+that its 12 h bias has been read off a real series.
 
 #### S1 · data fixes — LANDED
 
@@ -1830,14 +1831,75 @@ followed. It renders `⚠ LATE by 0.6h — 2.8pp already unrecoverable`, which i
 can act on. RP-32 pins all three verdict arms, because one spelling shared between two verdicts is
 the same defect in the other direction.
 
+#### S5 · M3c `--strand-score` — LANDED (wave 2, 2026-09-03)
+
+`bin/claude-accounts`: `strand_score(samples, buckets, now)` + `render_strand_score(sc)` beside
+`wk_strand_pp`, constants `STRAND_SCORE_BUCKETS` / `STRAND_SCORE_TAIL_H` / `STRAND_SIGN_EPS`, and
+a `--strand-score [--hours N] [--json]` branch in `main()` placed **before `load_cfg()`**, beside
+`--agents`. Suite `tests/claude-accounts-strand-score.bats` (RP-34..RP-38), **5/5 proven RED**,
+5/5 green after.
+
+**The harness is non-vacuous, and RP-34 is the proof rather than the hope.** Its fixture is one
+window whose meter climbs at 1.0 %/h until 24 h before the reset and 0.1 %/h after — a burst that
+stopped. It closes at 78.35%, so 21.65 pp really died. Scored:
+
+```
+  horizon    n    bias(pp)   MAE(pp)   sign-agree
+      96h    0           —         —            —   (no evaluable sample at this horizon)
+      48h    1       -21.65     21.65         0.0%
+      24h    1       -21.65     21.65         0.0%
+      12h    1        -1.40      1.40       100.0%
+       6h    1        -0.29      0.29       100.0%
+```
+
+At 24 h out the nowcast sees 76% climbing at 1.0 %/h, projects the window full, and says **no
+strand** while 21.65 pp is about to die. At 6 h it lands inside 0.3 pp. That spread is §5.1 LB-2 as
+a measurement — *a good nowcaster for exactly the reason it is a bad forecaster* — and it is the
+cell shape the score this replaces could not produce, because that one evaluated at each window's
+own close where the projection has already converged to `100 − weekly_pct`.
+
+**Deviation 1 — placed beside `wk_strand_pp`, not beside `_util_tail`.** §5.2 S5 says the latter;
+this is the scoring harness *for* M3a and consumes `burn_wk_ewma_ph` and `wk_strand_pp`, so a
+reader meets it after its ingredients rather than 450 lines before them. Nothing else moved.
+
+**Deviation 2 — `sign-agreement` is scored against `STRAND_SIGN_EPS = 0.5 pp`, the surface's own
+threshold, not against `> 0`.** §5.2 says "sign-agreement rate" without naming the boundary. A bare
+`> 0` counts a 0.02 pp projection as having called a 21 pp loss, which is the vacuity this whole
+flag exists to refuse; 0.5 pp is the literal `s < 0.5` arm `pace_line` renders on, so `agree`
+answers the question the footer actually asks. RP-37 pins both arms — a stranding window the
+nowcast missed (0%) **and** a filled window it correctly called empty (100%), so `agree` cannot
+degenerate into a synonym for "the projection was non-zero".
+
+**Deviation 3 — the tail default is 720 h, and the ACHIEVED span is printed.** §5.2 names no
+lookback. Completed weekly windows are 168 h apart, so the 48 h `apply_burn` reads buys none of
+them; 30 d is the smallest default that can hold several. The flag prints the span `_util_tail`
+actually reached rather than the one it asked for — a short tail is the entire explanation for an
+empty table, and `_util_tail` returns the achieved span precisely so no consumer can report the
+requested one (S1 Deviation 1).
+
+**What is NOT claimed, and what S6 still waits on.** This flag has been proven to *discriminate*
+— on a fixture built so that it must. It has **not** been run against the live series in this
+session (a container with no `~/.claude` utilization log), so **the 12 h bucket's real bias is
+still unread**, and §5.2 S6's gate is unchanged and unmet: *if the horizon-stratified bias at 12 h
+is not near zero, `wk_strand_alarm` is not shippable at any parameter setting.* Running
+`claude-accounts --strand-score` on the operator's box is the next step, and it is a read, not a
+build.
+
 #### Acceptance status against §5.4
 
 | command | status |
 |---|---|
-| the bats suites (roll-key · util-tail · strand · burst · core) | **111/111 green**, every case shown RED at the commit before its fix |
-| `claude-accounts --readout` renders the drain block for all four accounts | **yes** — see above |
-| `claude-accounts --readout \| grep -c 'strand'` → 3 or 4 | **4** |
-| `claude-accounts --strand-score` | **not in this wave** — that flag is S5 |
+| the bats suites (roll-key · util-tail · strand · burst · core · **start-by · strand-score**) | **wave 1: 111/111. Wave 2 adds 11**, every one shown RED against the pre-change binary and green after. Whole-family sweep on this change: **188 ok / 25 not-ok, and the 25 are a byte-identical set to trunk's own** — macOS-only arms (`security` keychain, the SessionStart board hook) that cannot pass in a Linux container. Zero regressions. |
+| `claude-accounts --readout` renders the drain block for all four accounts | **yes** (wave 1) — unverified in wave 2, see below |
+| `claude-accounts --readout \| grep -c 'strand'` → 3 or 4 | **4** (wave 1) — unverified in wave 2, see below |
+| `claude-accounts --strand-score` → non-zero `n` at 24 h, 12 h and 6 h, and a bias that COULD have been non-zero | **built and proven on a fixture** (RP-38 asserts exactly this contract against the real binary under a hermetic `$HOME`). **Not yet run on the live series.** |
+
+⚠️ **Wave 2 was built in a Linux container with no `~/.claude` utilization series and no keychain,
+so no clause of it has been seen on the live surface.** Wave 1's live confirmations above stand as
+written; nothing in wave 2 re-measures them. The two operator-side reads that close this gap are
+`claude-accounts --readout` (does the `start by T−Nh` / `⚠ LATE` clause render, and does the header
+carry `K=`) and `claude-accounts --strand-score` (what is the 12 h bias — the gate on S6). Both are
+reads; neither is a build.
 
 ⚠️ `bash tests/run.sh …`, named in §5.4, **does not exist in this repo**. The suites are run with
 `bats tests/<name>.bats`; `scripts/ship-land.sh` selects and runs them at the land.
