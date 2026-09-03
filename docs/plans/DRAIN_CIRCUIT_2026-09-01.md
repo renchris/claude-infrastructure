@@ -220,7 +220,7 @@ context. W0 was **L** and is done (its output is §1.1).
 | **W1** | L | **Stop the reaper eating the land** — whitelist `cloud-return`/`cloud-reconcile` + fixture pair | `bin/cc-reaper`, `tests/cc-reaper.bats` |
 | **W2** | S | **Make the churn visible** — drain conversion + stranded in `cc-value` | `bin/cc-value`, tests |
 | **W3** | S | **Re-aim the local lane at the backlog** — arm the §4.1 goal + closure floor | the drain-chain brief + `scripts/drain-chain-assert.sh` |
-| **W8** | L | ✅ DONE — **§1.4's missing instrument**: the effort arm + its carrier record (§3h) | `scripts/backlog-telemetry.sh`, `scripts/rotate-autonomy-logs.sh` (drain_health_check only), their two suites |
+| **W8** | L | ✅ DONE — **§1.4's missing instrument**: the effort arm + its carrier record (§3i) | `scripts/backlog-telemetry.sh`, `scripts/rotate-autonomy-logs.sh` (drain_health_check only), their two suites |
 
 **W8's locus is L, and it needs its one line of justification.** The wave's first act was a
 *measurement* against two live stores whose result decided whether there was any implementation at
@@ -752,7 +752,7 @@ so it resolves on its own; it just cannot be *driven* from this side. `deploy-li
   drain rate; and (d) the local lane's self-reference (§1.4, recycle #277, no goal armed, zero
   backlog rows claimed), which still has NO wave assigned and is the remaining half of the
   operator's "deferring rather than completing" complaint.
-  ↳ **(d) is TAKEN by W8 — see the 2026-09-03 entry below and §3h.** Its "no goal armed" clause was
+  ↳ **(d) is TAKEN by W8 — see the 2026-09-03 entry below and §3i.** Its "no goal armed" clause was
   already false when written: `1eb128f88` landed the goal chokepoint on 09-01.
   ⚠️ **No cloud branch has LANDED yet.** The repaired path reaches the lander and the lander returns
   real verdicts; the two branches tried both refused on their OWN gates (one falsely at the 120 s
@@ -776,7 +776,7 @@ so it resolves on its own; it just cannot be *driven* from this side. `deploy-li
   (§W5, §W5b). The mechanism proof is the deliverable; the row is the later confirmation.
 
 - **2026-09-03 — W8 DONE: §1.4 is measured, and its fix turned out to already be landed** (worktree
-  `drain-loop-w4`; full record §3h). The wave opened by checking the brief's premise and found the
+  `drain-loop-w4`; full record §3i). The wave opened by checking the brief's premise and found the
   closure-floor chokepoint (`1eb128f88`, 09-01) live and holding: the commits-per-closure ratio went
   **49.0x on 09-01 → 4.1x on 09-02 → 3.6x on 09-03**, with 16 of the 19 rows closed in that window
   carrying no `venue=cloud`. So the deliverable is not a second fix — it is the **instrument that
@@ -1231,7 +1231,7 @@ stand on §3f's paired ratio and the suites, not on these three rows.
 
 ---
 
-## 3h. §1.4 HAD A FIX AND NO INSTRUMENT — the effort arm (W8, 2026-09-03)
+## 3i. §1.4 HAD A FIX AND NO INSTRUMENT — the effort arm (W8, 2026-09-03)
 
 §1.4 is the remaining half of the operator's "deferring rather than completing" complaint: the local
 lane produced **304 trunk commits against 30 backlog closures** over seven days, its whole file
