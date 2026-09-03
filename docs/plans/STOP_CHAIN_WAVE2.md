@@ -179,24 +179,52 @@ real by construction, not blocking a close today.
 `list --json` replays an array and `count` answers `jq length` **from that same array**, so the shim
 cannot disagree with itself. `tests/operator-readout.bats` is safe (it stubs the ledger, not the CLI).
 
-### W6 · `d8147be371cd` — agent-report recovery — **CLOSE IT; NOT BUILDABLE AS SPECIFIED**
+### W6 · `d8147be371cd` — agent-report recovery — **CLOSE AS DUPLICATE; THE TOOL SHIPPED 25 DAYS AGO**
 
-Measured in the originating session's own transcript: **13 Agent tool_use calls, and every single
-`tool_result` is only the spawn ack** (`"Spawned successfully… agent_id: <name>@session-<lead-sid>"`).
-There is no second `tool_result` carrying a report. The report was never going to arrive — this is
-fire-and-forget by design in this runtime, not a dropped delivery.
+🚨 **This section was wrong when first written, and the correction is the most valuable finding in the
+plan. Read the correction, not the original claim.**
 
-And `agent_id` is `name@lead-session`, which contains **no transcript uuid**, so `cc-agent-report <name>`
-cannot resolve its target. Yesterday's recovery worked by mtime proximity + content matching, which is
-a heuristic, not a mapping.
+**What I first wrote (WRONG, kept per INTEGRATE-never-overwrite):** *"13 Agent tool_use calls and every
+tool_result is only a spawn ack… the report was never going to arrive… `agent_id` carries no transcript
+uuid, so the tool cannot resolve its target… not buildable as specified."*
 
-**The real remedy already exists and is already documented.** The `research-subagents` skill's field 7
-is a *mandatory Delivery contract*: name the absolute artifact path each subagent writes, "because a
-subagent's prose is invisible and only a file is delivered". This wave proved it — every brief named an
-output path and every report arrived. The defect was non-compliance, not a missing tool.
+**What is actually true, measured:**
 
-**Disposition: `cc-backlog done` with that reasoning.** Optionally strengthen the skill's wording from
-"should" to a refusal, but do not build the tool.
+1. **It is not a defect at all — it is the `name:` parameter.** Over **341 Agent calls / 21 days /
+   both transcript roots**: calls passing `name:` delivered a report **0 / 207**; calls WITHOUT `name:`
+   delivered ≥500 chars **117 / 118 = 99.2%**. Passing `name:` makes the call a **teammate** spawn,
+   whose contract has no return value; an unnamed call is a subagent, which returns normally. One input
+   field decides it deterministically. Every one of my 13 calls passed `name:`.
+2. **The mapping IS derivable.** `~/.claude*/teams/session-<lead-sid>/config.json` stores each member's
+   name plus its VERBATIM prompt, and the member's transcript opens with that same prompt — an exact
+   byte join, name → prompt → transcript.
+3. **`bin/cc-agent-harvest` ALREADY EXISTS.** 342 lines, landed **`5e9ef347c` on 2026-08-09**,
+   symlinked live into `~/.claude/bin/`, `tests/cc-agent-harvest.bats` **8/8 green**. Run against this
+   very team it resolved all 8 members by name and harvested the three wave-2 reports I believed lost
+   (readout2 20,189 chars · sidefx2 11,352 · blockers2 584). It refuses ambiguous joins with exit 3,
+   having shipped a false attribution once on a prefix join.
+4. **Also refuted:** "sends to already-dead agents return success" — the one clean instance
+   (`stop-blockers`) returned `success:false, "No agent named … is reachable"`. I misread my own output.
+
+**THE ONE REAL GAP, and it is ~10 minutes:** `grep -rn "cc-agent-harvest" skills/ commands/ hooks/
+CLAUDE.md` → **zero matches**. The doctrine is documented three times — `skills/agent-teams/SKILL.md:75-80`,
+`skills/research-subagents/SKILL.md:225-241` and `:253-256` (that last one is the manual recovery recipe,
+written a month before I re-derived it by hand) — and **not one of them names the tool that does it.**
+Fix = one pointer line in each of those two skills.
+
+**Why this matters more than the row it closes.** The operator's question was whether this workflow
+files more than it solves. Here it filed a row to build something that had been on disk, tested and
+live, for 25 days — because a shipped tool nobody references is indistinguishable from a tool that does
+not exist. That is a discoverability failure, and it is a strictly worse failure mode than a backlog
+that grows.
+
+**Disposition:** `cc-backlog done d8147be371cd` as duplicate-and-partially-refuted, then land the two
+pointer lines. Do **not** build anything.
+
+**Sequencing rule discovered with it:** the name→transcript join key is DESTROYED by shutdown — an
+approved-shutdown member is removed from `config.json` and its transcript becomes permanently
+unreachable by name (measured: `context2`, 638 KB, and the four operator-cancelled `stop-*` members).
+**Harvest BEFORE teardown, never after.**
 
 ---
 
