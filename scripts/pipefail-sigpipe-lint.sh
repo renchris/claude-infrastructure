@@ -828,6 +828,22 @@ function is_external(s, cons,   t, p) {
 # the false verdict too. Taking it would be picking the band and then justifying it, which is the
 # defect the fourth correction above already names. Left to its own row, with the numbers measured.
 #
+# ── WHAT `ca97c678b18b` COVERS AND WHAT IT DOES NOT, 2026-09-03 — read before following that id ──
+# The correction above IS that rows discharge in code: it is keyed on the CONDITION
+# `pipefail-lint-function-final-pipeline`, landed as 75d1bd46, pinned by selftest arms r27/r28 (RED)
+# and g23/g24/g25 (the three GREEN bounds), and the one site it revealed —
+# hooks/validate-plan-structure.sh:29 — is drained in the same diff. Re-verified on trunk here:
+# --selftest 53/53, full scan clean.
+#
+# TWO SIBLING BLINDNESSES CARRY THAT SAME ID IN OLDER PROSE AND ARE NOT DISCHARGED BY IT, because a
+# cc-backlog row is keyed on ONE condition and neither of these is that condition:
+#   · the `|| return 1` face, measured two paragraphs up and deliberately not taken;
+#   · the CONTINUATION-LINE join, at the qmask() residual above (~line 464, "that gap is owned by
+#     ca97c678b18b"), for which pipe258.py is a working joiner nobody has wired in.
+# Both sentences point at WORK, not at a live row on that id. File each under its own condition key
+# before taking it — re-using this one is how a discharged row acquires an undischarged meaning,
+# which is the same carry-back failure every correction in this file exists to undo.
+#
 # Clause 4: does anything READ this pipelines status?  1 = read here · 0 = MASKED here · 2 = no
 # reader here (a function-final pipeline may still have one in its caller — clause 4c).
 function consumed(l, hase,   t, pre, i) {
