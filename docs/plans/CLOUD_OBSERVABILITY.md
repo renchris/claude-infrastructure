@@ -2042,3 +2042,46 @@ offline, inside an `ls-remote` it already makes. **The larger fix is orthogonal 
 `inbox`'s projection into `cc-cloud classify()`**, so the board stops rendering NOT-STARTED over
 sessions the control plane can see working. That is what moves 85% of the board; nothing in §16
 does it.
+
+
+## 17 · §14's rail was satisfied three times and the row still re-fired — the dark half is DESK-side (2026-09-03)
+
+`b60eb29e97dd` was dispatched **four** times. Its cure landed `0ce20c39` on 2026-08-29 (footer
+`backlog b60eb29e97dd`, `merge-base --is-ancestor` YES on a full clone). Three dispatches before
+this one reached that verdict correctly and each **landed a content-verifiable path on trunk** —
+which is precisely what §14 says closes the row.
+
+**MEASURED, AND IT CORRECTS §14's HONEST LIMIT.** §14 reads as though the verdict artifact's *class*
+is what closes a row (`a docs/research/*.md naming the cure sha`). It is not. `cloud-return.sh`
+step 6 computes `landed_ok` as a per-path `ls-tree "$trunk" -- "$p"` presence test over the `paths=`
+set `fill-paths` derives from the VM's own commits (cloud-return.sh:552-563) — **no path-class
+filter anywhere**. The prior dispatches' appends to `docs/plans/BACKLOG_DRAIN_24_7.md` satisfied it
+exactly as a `docs/research/*.md` would have. So the VM half of §14's rail has been green three
+times, and the row still re-entered the wave.
+
+**The failing half is therefore desk-side, and this venue cannot discriminate which:** the
+declaration carries no `item_id` (step 8 then says "no backlog item recorded" and settles nothing),
+or it lacks the W2 management fields so `--sweep` never admits it (§ THE SWEEP'S POPULATION), or the
+`autonomy-sweep` arm is dark — the same arm §15 already records as dark for `f85fce7c26f5`. All
+three live in `~/.claude/*` and in launchd, neither of which a VM can read.
+
+**CONSEQUENCE FOR AN ALREADY-CURED ROW: PREFER §15's PARK OVER A FOURTH §14 ARTIFACT.** Not because
+the row is operator-gated on its merits — it is cured, and its terminal op is `done` — but because
+the park has a **second reader that does not depend on the sweep**: `bin/cc-eligible` refuses
+`claim --venue cloud` with `ineligible-parked` while a landed park is newer than the row's last
+block/unblock. That interlock takes the row out of the wave whether or not `cloud-return.sh` ever
+runs, which is the one property three verified lands did not have. It costs nothing at the close:
+`done` is accepted while `blocked` (bin/cc-backlog:156), so the park gates the *dispatcher*, never
+the operator's closing command. Landing a fifth artifact would route the cure through the arm
+measured dark — the generalisation §15 already drew from `f85fce7c26f5` and did not extend to the
+already-cured class.
+
+**SHALLOW-CLONE LOCK, FIFTH INSTANCE, AND THE BOUNDARY MOVED AGAIN.** This container's clone was
+shallow at 50 commits (root `1cdd601f`). Inside that horizon `merge-base --is-ancestor 0ce20c39
+origin/main` answered **NO** — the cure scored *off-trunk*, which is the wrong-and-confident answer
+the two prior addenda recorded at two other boundary commits (`16cd3a36`, then `1cdd601f`). After
+`git fetch --unshallow`: 4,002 commits, ancestor YES, and `git log -S BEAT_STOP_ALLOWANCE=1` names
+`0ce20c39` + `97e294eb`. Three boundaries, three different false attributors: the liar is the
+HORIZON, not any commit, so no "distrust sha X" note can catch it. **`git rev-parse
+--is-shallow-repository` reading `false` is the only precondition that makes a provenance answer in
+a cloud container admissible.**
