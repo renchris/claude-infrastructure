@@ -151,7 +151,7 @@ feedback loop, and this doc does not claim otherwise.
 Six tests added across the two suites, each with a mutant that reproduces the pre-fix blindness and
 goes red.
 
-## NOT shipped — filed, with the reason
+## NOT shipped — filed, with the reason  *(RESOLVED 2026-09-02 — see § RESOLVED below)*
 
 **Inherit the last sweep's `k`** (`bin/claude-accounts:3040-3042` add `"k"` to `_prev_snapshot`'s
 projection; `:1330` stamp the inherited value with a staleness marker, bounded by the existing 600 s
@@ -167,6 +167,54 @@ weaken. `handoff-fire.sh:6020-6043` would need stale-marker awareness.
 mutant-proven suite; and the instrument that would let anyone evaluate it landed only in the two
 commits above and has produced no data yet. Shipping the policy change ahead of its own measurement
 would repeat exactly the error §6 documents.
+
+## § RESOLVED — the `k` inheritance shipped (2026-09-02, backlog `1f6208064577`)
+
+`inherit_k()` in `bin/claude-accounts`, behind `CC_ROUTE_K_INHERIT` (R8 pattern, default on), with
+`tests/claude-accounts-k-inherit.bats` — 13 cases, **ten mutants executed and confirmed RED**, one
+per invariant below. Verified against a trunk baseline: the account and router suites carry an
+identical failure set before and after the diff.
+
+**The mechanism, and the ONE place it departs from the sketch above.** The filing prescribed
+stamping `row["k"]` at the sweep's finalisation loop, having established that `heal()`'s rotation
+gate is safe because it reads the `k_live` **argument**. That reasoning is correct and it is not
+sufficient — it enumerates one consumer of the live-census contract where there are **three**, and
+the other two read `row["k"]` off `--json`, not an argument:
+
+| consumer | what it does with `k` | under a stamped `row["k"]` |
+|---|---|---|
+| `heal()` rotation gate | refuses on `k_live is None` | safe — reads the argument |
+| `handoff-fire.sh:5986,:6020-6043` | `[ "${k:-0}" = 0 ]` authorises a **Phase-1 headless refresh-token redeem** | a 600 s-old census reads 0 and the redeem proceeds underneath a session started inside that window |
+| `cc-relogin-poll` skipped-busy gate | same shape, same field | same |
+
+Both spell the `None` case `unmeasured` **on purpose**, so that an unread `ps` refuses. Stamping
+`row["k"]` re-keys them onto a stale value in the **fail-open** direction, on a token redeem. So
+the inherited count lands in its own field (`k_stale` + `k_stale_as_of`), `k` keeps meaning *live
+pane census, or None*, and the fallback rung is added at the ONE derivation the router already
+has — `k_src()` gains a fourth value `panes-stale`, and `_k_base()` (extracted, because `k_eff`
+and `k_eff_desk` had already spelled the first two rungs identically) gains a third rung. The
+filing's own "`handoff-fire.sh` would need stale-marker awareness" therefore **does not apply**:
+that file is untouched, by construction rather than by audit.
+
+**Invariants pinned, each with its RED mutant:** `k` is never written · the stamp lands after the
+probes, so `k_live` reaches `heal()` as `None` · a live census is never overwritten by an inherited
+one · `> cache_grace_s` is refused, not clamped · a **future** stamp fails closed · the chain ages
+off the ORIGINAL measurement (`k_stale_as_of` carried forward per hop, as `inherit_lastgood` already
+does for `quota_as_of`) so an inherited count cannot become immortal — measured: 6 hops at 90 s,
+then refusal · the cache projection forwards all three fields · `CC_ROUTE_K_INHERIT=off` restores
+the pre-fix exclusion for stamped rows too, not just new ones.
+
+**On §6's objection — "the instrument that would let anyone evaluate it has produced no data yet".**
+It binds this change too, so the change carries its own: `record_utilization` now writes `k_stale`
+and `k_stale_as_of` beside the existing `k_src`, and route-meta gains `k_stale_age_s`. `k_src` alone
+would say THAT a charge was inherited but never what it was or how old, which is the shape §6
+documents — a claim about a code path with an instrument that cannot observe its violation. With
+these, a replay can separate a decision made on a live census from one made at the far end of the
+grace, and the 600 s bound is falsifiable from disk rather than argued from the quota study.
+
+**Still true, and not addressed here:** the starvation itself (§4's `ProcessType Background` +
+`LowPriorityIO` on the only sweeper) is untouched. This makes the router survive a starved sweep;
+it does not make the sweep stop starving. Every item under *Open / cannot determine* stands.
 
 ## Open / cannot determine
 
