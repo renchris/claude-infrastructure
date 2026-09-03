@@ -1335,6 +1335,24 @@ the checkout the subject lives in — the operator's real git history — so an 
 have let that suite's verdicts, and the rotation host's journalling decisions, follow whatever
 happened to be committed that day.
 
+### Scope (grown): +unblock a pre-existing trunk red that was gating this land
+
+The land's smoke phase went red on `tests/rotate-autonomy-logs.bats` case 12, and the gate named it
+*"1 mapped to YOUR diff … a VERDICT about your diff"*. It was not. Verified by running that one case
+in a **detached worktree at `origin/main` carrying none of this wave's changes** — it fails there
+too. The land gate maps a suite to a diff by **file touch**, so a red that trunk already carried is
+attributed to whoever edits `scripts/rotate-autonomy-logs.sh` next rather than to whoever caused it.
+
+The cause is the recurrence that case's own comment already documents twice: `DEFAULT_TARGETS` ships
+**22** paths and the test's independent `DEFAULT_RELPATHS` fixture pinned **19** — the three
+`account-assignments.jsonl`, `account-utilization.jsonl` and `auth-timeseries.jsonl` landed without
+it, so they counted as SKIPPED and broke both `"rotated":19` and `"skipped":0`. Resolved the way the
+comment's own precedent says (the SHIPPING side wins), and the case now documents the third
+occurrence. **The list is deliberately still hardcoded rather than derived from the script**, which
+would end the recurrence permanently: it is the INDEPENDENT oracle, and deriving the expectation
+from the subject would leave it unable to notice the subject DROPPING a target — a gate keyed on its
+own signal, which cannot fail in the direction that matters. 14/14.
+
 ### What is NOT claimed
 
 The ratio moved before this wave and not because of it; this arm measures, it does not drain. And
