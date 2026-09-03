@@ -662,6 +662,50 @@ function is_early(s,   t) {
 # lines carry a head/tail -1 producer with two or more pipes, but that is a SCREEN and not a
 # population - it applies neither qmask nor is_early nor clause 1. So this closes a DETECTOR blind
 # spot at zero cost in findings, as the eighth and ninth corrections did.
+#
+# ── AN ELEVENTH CORRECTION, 2026-09-03: THE TENTH FIXED WHICH INSTANCE *ONE* CLAUSE IS HANDED. THE
+#    CLAUSE BESIDE IT WAS STILL DENOMINATED IN A DIFFERENT ONE. ────────────────────────────────────
+# Clause 2 and clause 3 are one question about one ADJACENT PAIR - does this consumer exit while
+# this producer still owes bytes - and a pipeline of n stages has n-1 pairs. After the tenth
+# correction the ladder read:
+#     if (!is_early(last))              next   # the consumer of the LAST pair
+#     if (!is_external(seg[1], seg[2])) next   # the producer and consumer of the FIRST pair
+# Each line is correct in isolation. Their CONJUNCTION describes a pair that does not exist whenever
+# n >= 3, and they coincide exactly when n == 2 - which is every case any test in this tree covered.
+#
+# AND THE GROUND TRUTH BENEATH IT WAS READ ON THE WRONG STAGE TOO. The eighth through tenth
+# corrections all measured "the PRODUCER status", meaning seg[1]. This lints verdict is about the
+# PIPELINE status, and pipefail is denominated in EVERY stage: one orphaned middle fails the
+# pipeline just as loudly as an orphaned first stage. The two readings agree for n == 2 and can
+# disagree the moment a middle stage exists to be orphaned.
+#
+# WHAT THE MEASUREMENT SAID. 20 trials per cell, every status read as NON-ZERO rather than -eq 141,
+# with seg1 / seg2 / PIPELINE read separately in the SAME trial:
+#   · `head -1 BIG | sed -n p | head -c 10`  seg1 0/20 · seg2 20/20 · PIPELINE 20/20
+#         -> this is the arm the tenth correction landed as GREEN (g18). Its stated reason - a
+#            line-oriented middle drains the whole line before the last stage can exit - is TRUE of
+#            seg[1] and does not make the LINE safe: the middle then owes 218,891 bytes to a
+#            consumer that stops at 10. The arm is now r22, RED, with this measurement as its reason.
+#   · same shape over a ONE-LINE body               all three 0/20  (it is the bytes still owed)
+#   · `cat BIG | head -c 10 | wc -c`        seg1 20/20 · PIPELINE 20/20, and the shipped ladder was
+#            SILENT: clause 2 read `wc -c`, which does not exit early. A FALSE NEGATIVE.
+#   · `cat BIG | cat | wc -c`               0/20 everywhere - the discrimination cell for the one
+#            above: identical producer, identical last stage, only the MIDDLE differs.
+#   · anchors reproduced first: `cat MULTI | grep -q` 20/20, `head -1 BIG | grep -q` 0/20.
+# Instruments: ~/.claude/autonomy/probe286-pair.sh (11 gated predictions, all exact) and
+# probe286-verdict.sh (12, all exact).
+#
+# WHAT IT COSTS ON THIS TREE, MEASURED BEFORE LANDING. Control = the shipped script; mutant = a
+# whole-file copy differing only in this block (mklint286.py asserts head and tail byte-identical).
+# --census keyed on (path, TEXT): 125 rows / 113 keys -> 127 rows / 115 keys, LOST = 0, NEW = 2,
+# POS control 43 distinct paths. Both new sites are `grep -nF ... | head -1 | cut -d: -f1` in
+# tests/announce-before-retire.bats, and both are DRAINED in the same diff. Measured LATENT before
+# draining - each needle matches exactly once today (96 and 128 bytes), so the producer owes nothing
+# after head -1 exits, 0/20 - with a FIRE control on the identical shape at 20/20 proving the zero
+# is real. Latent is not safe: the feed is how often a needle occurs in a 10,622-line file this
+# chain edits, and nothing announces the crossing.
+# Instrument: ~/.claude/autonomy/probe286-detector.sh (15 gated predictions, all exact) and
+# probe286-feed.sh.
 function is_byteearly(s,   t) {
   t = ltrim(s); sub(/^[({][ \t]*/, "", t); t = ltrim(t)
   # The flag may sit anywhere in a cluster and may be joined to its value (`-c10`), which is why
@@ -784,15 +828,26 @@ BEGIN { FS = "" }
   if (n < 2) next
 
   last = seg[n]
-  if (!is_early(last))      next      # clause 2
   if (last ~ /\002/)        next      # clause 5 — a trailing || swallows the 141
-  if (!is_external(seg[1], seg[2])) next  # clause 3 — the consumer OF seg[1] decides the -1 arm (tenth)
 
-  # Clause 3b — the NEUTRALISE fix. A producer wrapped as `{ p || true; } | consumer` cannot fail
-  # the pipeline: the group swallows the 141 before pipefail sees it, so the early exit is KEPT.
-  # That matters where draining is expensive — bin/cc-cloud greps a 245 MB binary, where the drain
-  # form costs 904 ms and this one 11 ms (measured on an equivalent 38 MB stream), both 0/50.
-  if (seg[1] ~ /\{/ && seg[1] ~ /\002/) next
+  # Clauses 2 and 3, ELEVENTH CORRECTION 2026-09-03 — they ask ONE question about ONE ADJACENT PAIR,
+  # and a pipeline of n stages has n-1 of them. The tenth correction handed clause 3 the consumer of
+  # seg[1]; clause 2 went on reading seg[n]. For n == 2 those are the same pair, which is every case
+  # any test in this tree covers. For n >= 3 the conjunction was a claim about a pair that does not
+  # exist — a producer from the first pair and a consumer from the last. pipefail is denominated in
+  # EVERY stage, so the verdict is: does ANY adjacent pair orphan its producer.
+  pi = 0
+  for (ci = 1; ci < n; ci++) {
+    if (!is_early(seg[ci + 1]))             continue   # clause 2, asked of THIS pair
+    if (!is_external(seg[ci], seg[ci + 1])) continue   # clause 3, asked of THIS pair
+    # Clause 3b — the NEUTRALISE fix. A producer wrapped as `{ p || true; } | consumer` cannot fail
+    # the pipeline: the group swallows the 141 before pipefail sees it, so the early exit is KEPT.
+    # That matters where draining is expensive — bin/cc-cloud greps a 245 MB binary, where the drain
+    # form costs 904 ms and this one 11 ms (measured on an equivalent 38 MB stream), both 0/50.
+    if (seg[ci] ~ /\{/ && seg[ci] ~ /\002/) continue
+    pi = ci; break
+  }
+  if (pi == 0) next
 
   # Clause 4. An && FOLLOWING the pipeline consumes its status by itself — errexit is irrelevant,
   # because the whole point of `p | grep -q X && act` is that a false p suppresses act. Missing
@@ -1127,8 +1182,26 @@ EOF"
   # Do not merge these into a loop, for the reason r16/r17 give above.
   mk r20 "if head -1 \"\$f\" | head -c 10 | grep -q x; then :; fi"
   expect r20 RED "BYTE-oriented consumer in the MIDDLE — it is seg[1]'s own consumer and it orphans it 20/20"
-  mk g18 "if head -1 \"\$f\" | sed s/x/x/ | head -c 10 >/dev/null; then :; fi"
-  expect g18 GREEN "line-oriented MIDDLE drains the producer's whole line before the byte-oriented last stage can exit"
+  # ── WHICH PAIR, pinned in both directions, 2026-09-03 (eleventh correction) ───────────────────
+  # r22 is the arm the tenth correction landed GREEN, as g18. Its reason — a line-oriented middle
+  # drains the producer's whole line before the byte-oriented last stage can exit — is TRUE, and it
+  # is true about seg[1] only. The middle then owes that whole line to a consumer that stops after
+  # ten bytes. Measured on the identical fixture, all three statuses read in the SAME trial:
+  # seg1 0/20, seg2 20/20, PIPELINE 20/20 — so the LINE is a defect and only the first stage is
+  # innocent. The same shape over a ONE-LINE body is 0/20 everywhere, which keeps this denominated
+  # in the bytes still owed rather than in the shape.
+  # r21 is the case a ladder keyed on seg[n] cannot see AT ALL: the early exit is in the middle and
+  # the last stage drains, so clause 2 answered about `wc -c` and dropped the line before clause 3
+  # ran (seg1 20/20, PIPELINE 20/20). g19 is its discrimination cell — identical producer, identical
+  # last stage, a middle that does not exit early — and it must stay GREEN, or the pair loop would
+  # be passing by convicting every three-stage line rather than by locating the pair.
+  # Do not merge these into a loop, for the reason r16/r17 give above.
+  mk r22 "if head -1 \"\$f\" | sed s/x/x/ | head -c 10 >/dev/null; then :; fi"
+  expect r22 RED "line-oriented MIDDLE drains seg[1] and is then orphaned itself 20/20 — the verdict is the PIPELINE's"
+  mk r21 "if cat \"\$f\" | head -c 10 | wc -c >/dev/null; then :; fi"
+  expect r21 RED "early exit in the MIDDLE with a DRAINING last stage — invisible to a ladder keyed on seg[n]"
+  mk g19 "if cat \"\$f\" | cat | wc -c >/dev/null; then :; fi"
+  expect g19 GREEN "r21's discrimination cell: same producer, same last stage, a middle that does not exit early"
   mk g13 "printf '  %s\\n' \"\$(sed -n 's/a/b/p' /some/file | head -1)\""
   expect g13 GREEN "\$( … ) as an ARGUMENT — the outer command's status wins"
   mk_noe g14 "{ strings -a \"\$bin\" 2>/dev/null || true; } | grep -q 'Claude-Session' && return 0"
