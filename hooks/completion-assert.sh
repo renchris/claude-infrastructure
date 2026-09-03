@@ -166,8 +166,22 @@ ca_last_user_msg() {
   # empty string. Compact JSON keeps one record per line, which is exactly why the MSG extractor at
   # :157-160 already uses this shape; the kill-switch reader was ported from a sibling hook that
   # does not, and inherited the bug. session-continue.sh:190-201 still has it (filed separately).
+  # ── AND `.isMeta != true`: A COMMAND/SKILL BODY IS NOT OPERATOR PROSE (2026-09-03) ────────────
+  # A `/foo` invocation injects the command or skill FILE'S TEXT as a user record, and those files
+  # discuss stopping: `commands/ship.md:42` contains "stop here". Once the reader above was fixed,
+  # that body became visible and DISARMED this hook — so typing `/ship` turned the close gate off on
+  # exactly the turn that lands code. Confirmed live against trunk before this fix by replaying a
+  # real /ship record: the hook went silent. That regression shipped in 299e4d563 and was not named
+  # in its body; this is the correction.
+  #
+  # `isMeta` is the harness's own flag for an injected record, not a heuristic of ours — and it
+  # separates the populations cleanly. Measured over 2,566 non-sidechain user records: of 133
+  # carrying a kill phrase, 124 are isMeta=true (command/skill bodies) and 9 are isMeta=false — and
+  # all 9 are fire/recycle briefs, i.e. genuine instructions TO this session, which SHOULD disarm.
+  # A length or first-line heuristic was considered and rejected: both are proxies for the property
+  # the harness already states outright.
   local _j
-  _j="$(jq -c 'select(.type=="user")
+  _j="$(jq -c 'select(.type=="user" and (.isMeta != true))
          | .message.content
          | if type=="string" then .
            elif type=="array" then ([.[]?|select(.type=="text")|.text]|join("\n"))

@@ -1644,6 +1644,19 @@ Two things remain yours before this is fully wired up.")" "$w" "d7-e2e"
 # operator had said "just do the readme and stop".
 # The three arms below are the full proof: the switch abstains, its ABSENCE still fires (so this is
 # not a blanket suppressor), and the seam OFF fires again (so the new code is the cause).
+# A command/skill body arrives as a user record flagged isMeta — the harness's own marker.
+mkfix_meta() { # <assistant-close> <injected-body> → transcript path
+  local text="$1" body="$2" path="$BATS_TEST_TMPDIR/txm-${BATS_TEST_NUMBER}-$RANDOM.jsonl"
+  local bfile="$BATS_TEST_TMPDIR/body-${BATS_TEST_NUMBER}-$RANDOM.txt"
+  printf '%s' "$body" > "$bfile"
+  {
+    jq -nc '{type:"user",message:{role:"user",content:"do the thing"}}'
+    jq -nc --rawfile u "$bfile" '{type:"user",isMeta:true,message:{role:"user",content:$u}}'
+    jq -nc --arg t "$text" '{type:"assistant",message:{content:[{type:"text",text:$t}]}}'
+  } > "$path"
+  printf '%s' "$path"
+}
+
 mkfix_user() { # <assistant-close> <last-user-msg> → transcript path
   # The user message goes in via --rawfile, never --arg: the PIPEFAIL case below is multi-megabyte
   # and `jq --arg` blew ARG_MAX ("Argument list too long"), which failed the test in the HARNESS and
@@ -1692,4 +1705,23 @@ mkfix_user() { # <assistant-close> <last-user-msg> → transcript path
   run run_ca "$(mkfix_user "Done. Landed at abc1234, all green." "$big")" "$w" "ks-4"
   [ "$status" -eq 0 ]; [ -z "$output" ]
   /usr/bin/grep -q '"reason":"kill-switch"' "$COMPLETION_IDL"
+}
+
+# A `/foo` invocation injects the command or skill FILE'S text as a user record, and those files
+# discuss stopping — commands/ship.md:42 contains "stop here". Once the multi-line reader was fixed
+# (299e4d563) that body became visible and DISARMED this hook, so typing /ship turned the close gate
+# off on exactly the turn that lands code. Keyed on the harness's own isMeta flag, not on a length or
+# first-line heuristic: measured over 2,566 non-sidechain user records, 124 of the 133 carrying a
+# kill phrase are isMeta=true command bodies, and all 9 that are not are fire/recycle briefs — real
+# instructions to the session, which SHOULD disarm (pinned by the second test).
+@test "KILL-SWITCH isMeta: an injected /ship body must NOT disarm the assert" {
+  local w; w="$(mkrepo_unlanded ks5)"
+  run run_ca "$(mkfix_meta "Done. Landed at abc1234, all green." "$(cat "$REPO/commands/ship.md")")" "$w" "ks-5"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+
+@test "KILL-SWITCH isMeta CONTROL: a TYPED kill phrase still disarms" {
+  local w; w="$(mkrepo_unlanded ks6)"
+  run run_ca "$(mkfix_user "Done. Landed at abc1234, all green." "just do the readme and stop")" "$w" "ks-6"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
 }
