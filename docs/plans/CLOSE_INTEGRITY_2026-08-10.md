@@ -97,6 +97,27 @@ G3 Bash-write attribution (real, 20% exoneration bucket; premises change under w
   `open` (ts, originator cwd+pane, target pane, marker, slug, notifyBack) · `return <marker|slug>` ·
   `abandon <marker> --why` · `list --open [--cwd]` · `count --open --cwd`. cwd-keyed v1
   (CUSTODY_SRC=cwd; per-session worktrees make cwd unique; shared-checkout collision documented).
+  - **SUPERSEDED 2026-09-03 (backlog `a9ede190ee3b`) — the oracle is now FIVE-state, not three.**
+    The shared-checkout collision the line above merely *documented* turned out to be the defect:
+    in a shared checkout the cwd count convicts every session that shares the directory, so `✅` was
+    unreachable for a session with nothing open and the alarm fired on the healthy case.
+    `hooks/session-continue.sh`'s wake floor had already been fixed for exactly this
+    (backlog `9581119669f9`) and re-derived an attributed count itself, leaving the other three
+    consumers of `CUSTODY_OPEN` reading the unattributed field — two counts of one thing.
+    `wrap-ledger.sh::count_open_custody` now attributes via `list --open --cwd --json`, keyed on the
+    RAW pane id (`originatorPane`, or `notifyBack` in either of its two spellings, `-`-anchored).
+    **`CUSTODY_SRC` states: `pane` (attributed) · `cwd` (unattributed — no pane identity/no jq/no
+    JSON, kept because attribution is then IMPOSSIBLE, not negative) · `none` · `error` · `skip`**,
+    and `CUSTODY_MINE` / `CUSTODY_UNK` are emitted alongside `CUSTODY_OPEN` so a consumer can say
+    "yours" vs "cannot say whose" without re-deriving it.
+    **The unattributable row is KEPT, not dropped** — porting a decision already landed twice in
+    writing (`bin/cc-custody:35-38` POLARITY and `:44-46` for the stale class: over-count rather
+    than silently drop), because a per-pane key loses custody across the measured
+    resume-loses-pane-id case. Measured: 441 open rows store-wide, 117 (26.5%) carry neither field,
+    all `cc-offload` cloud fires from a context with no `ITERM_SESSION_ID`.
+    The memo key (`_wl_k`) gained the pane id in the same diff: a resumed session keeps its
+    transcript and cwd but is renumbered, so without it the memo would serve the predecessor's
+    attributed count under the successor's identity.
 - Producers: handoff-fire.sh fire path calls `cc-custody open` beside `mark_fired_peer`;
   return path: `sc_announce_before_retire` + mailbox-drain.sh on `HANDOFF-PING <slug>` call
   `cc-custody return`.

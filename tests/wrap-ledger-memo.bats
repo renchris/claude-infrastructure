@@ -450,3 +450,36 @@ _wl_live_fixture() {
   [ "$floor" -ge 6 ]
   [ "$floor" -gt "$warm" ]
 }
+
+# ── THE PANE JOINS THE KEY (backlog a9ede190ee3b) ────────────────────────────────────────────────
+# Custody is now PANE-ATTRIBUTED, which makes the pane an input that changes the answer — and the
+# ONE input that can change while every other component of the key stays byte-identical. A RESUMED
+# session keeps its transcript (same path, same mtime) and its cwd but gets a RENUMBERED pane
+# (memory resumed-session-loses-terminal-identity: no PATH, no $ITERM_SESSION_ID, pane renumbered).
+# Without the pane in the key the memo serves the PREDECESSOR's attributed count under the
+# SUCCESSOR's identity — silently, and in the direction that HIDES custody the successor does own,
+# which is the same silent-wrong-ledger shape as 5da21949's grave above.
+@test "the key carries the PANE: a renumbered successor is not served its predecessor's count" {
+  cj="$D/pane-cust.json"
+  printf '%s' '[{"originatorPane":"PANE-B","slug":"owned-by-B"}]' > "$cj"
+  cstub="$D/cc-custody-pane"
+  { printf '#!/usr/bin/env bash\n'; printf 'case "$1" in\n'
+    printf "  list)  cat '%s' ;;\n" "$cj"
+    printf "  count) jq 'length' < '%s' ;;\n" "$cj"
+    printf 'esac\n'; } > "$cstub"
+  chmod +x "$cstub"; export CC_CUSTODY_BIN="$cstub"
+
+  # PANE A owns nothing in that store ⇒ the row is a sibling's ⇒ dropped ⇒ ✅.
+  run env ITERM_SESSION_ID="w0t0p0:PANE-A" bash "$LEDGER" --machine --transcript "$TP"
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" CUSTODY_SRC)" = "pane" ]
+  [ "$(field "$output" CUSTODY_OPEN)" = "0" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+
+  # SAME event — same transcript, same mtime, same cwd, same seams — but PANE B, which DOES own it.
+  # A key blind to the pane would serve the ✅ above and hide B's own unreturned wave.
+  run env ITERM_SESSION_ID="w0t0p0:PANE-B" bash "$LEDGER" --machine --transcript "$TP"
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" CUSTODY_MINE)" = "1" ]
+  [ "$(field "$output" RUNG)" = "🔧" ]
+}
