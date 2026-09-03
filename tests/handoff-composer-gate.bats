@@ -189,6 +189,33 @@ setup() {
   [ "$output" = "unknown" ]
 }
 
+@test "nudge: the retype ACTUATION routes through the verified paste — never a raw send, never absent" {
+  # The four tests above pin what the watcher may DO; this pins what it actually does, and it is
+  # the half no lint can hold. scripts/typed-send-lint.sh already forbids a raw `session send` of
+  # a command line anywhere in this file — so the RAW half below is belt-and-braces — but a lint
+  # reads a DELETED arm as clean, and deleting it silently retires the only recovery for a
+  # typed-but-lost /exit (the pane then rides to the 600s refusal with nothing tried).
+  #
+  # Read out of the SHIPPED file rather than retyped: the arm is inline in the watcher loop, so
+  # there is no function boundary to source, and a copy pasted in here would keep passing after
+  # the arm moved (memory: a retyped copy is a dead assertion).
+  #
+  # CODE ONLY, never prose — full-line comments are dropped before the raw-send check for the
+  # reason scripts/typed-send-lint.sh states about its own detector: this arm's comment explains
+  # what it no longer does, in the words it no longer does it in, and a checker that reads its
+  # subject's rationale as the subject's behaviour reports the fix as the bug.
+  local arm code
+  arm="$(awk '/^[[:space:]]*retype\)/{f=1} f{print} f && /;;[[:space:]]*$/{exit}' "$HF")"
+  if [ -z "$arm" ]; then echo "no retype) arm in $HF — the typed-but-lost /exit recovery is gone"; false; fi
+  code="$(printf '%s\n' "$arm" | grep -v '^[[:space:]]*#')"
+  if ! printf '%s' "$code" | grep -q 'it2_paste_submit_verified "$IT2" "$RSID" "/exit" 0'; then
+    echo "the retype arm no longer pastes /exit through it2_paste_submit_verified at pre-wait 0:"; echo "$code"; false
+  fi
+  if printf '%s' "$code" | grep -qE 'session[[:space:]]+send'; then
+    echo "the retype arm carries a RAW session send again — the blind-CR class this suite exists to end:"; echo "$code"; false
+  fi
+}
+
 # ── 4. the verified paste ────────────────────────────────────────────────────────────────────
 
 # Phase-swapping stub: pre-check reads serve $PRE_FILE, later reads serve $POST_FILE. The phase

@@ -5632,10 +5632,22 @@ if [ "${1:-}" = "__recycle" ]; then
           hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;;
         retype)
           if [ "$waited" = 60 ]; then
-            hf_bounded "$IT2" session send -s "$RSID" "/exit" >/dev/null 2>&1 || true
-            sleep 1
-            nc="$(composer_content "$IT2" "$RSID")" || nc=""
-            if [ "$nc" = "/exit" ]; then hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true; fi
+            # ONE gated retype, through the SANCTIONED verified-paste helper instead of a raw
+            # `session send` plus a hand-rolled read-back. The contract is the one this arm already
+            # implemented inline — paste, READ THE COMPOSER BACK, CR only on proof — so nothing
+            # about the nudge's polarity moves; what changes is who owns the three steps.
+            # Three things the helper does that the inline copy did not:
+            #   · it RE-PROVES the composer empty before pasting. recycle_nudge_decision read the
+            #     box moments earlier, and a draft arriving in that window is exactly the
+            #     `draft+/exit` hybrid the whole nudge gate exists to refuse to submit.
+            #   · it pastes BRACKETED rather than sending bare bytes at a live composer.
+            #   · it judges the read-back with paste_readback_ok, which knows a 40-column composer
+            #     shows only a scrolled TAIL — the byte-equality here rejected pristine pastes.
+            # Pre-wait 0 is deliberate: this is a checkpoint inside a 3s watcher loop, so an
+            # occupied composer must answer HOLD immediately and never park the loop.
+            # stderr is NOT swallowed — abstain / HELD / MANGLED are the loud verdicts this path
+            # exists to surface, and the inline version silenced all three.
+            it2_paste_submit_verified "$IT2" "$RSID" "/exit" 0 || true
           fi ;;
         *)
           echo "→ nudge@${waited}s HELD ($nd): composer is not a stranded /exit — a CR here would submit someone else's buffer"
