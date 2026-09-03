@@ -143,10 +143,34 @@ inversion provably cannot occur here and no test could distinguish the branches.
 harmless, but claiming it fixes a second bug would repeat exactly the error `c18a55c09`'s own body
 documents.
 
-**Frequency, measured honestly:** only **3 of 2,542** typed operator messages (≤4 KB, command bodies
-excluded) carry a kill phrase. An earlier count of 183 was inflated by `/ship` command text — police
-that denominator. So this is *rare but silent*, and it is a deliberate operator override: low
-frequency, high stakes.
+**Frequency, measured over 6,244 transcripts / 5 roots / 45 days / 14,779 main-session user messages:**
+64.8% of messages are multi-line (27.3% for operator-typed prose alone). Of 607 kill-phrase-bearing
+messages the current reader misses **97.5%** — but read the misses before believing the number: 423 are
+the `/ship` command body, 94 `/limit-recover`, and the rest are fire briefs with incidental phrasing.
+**The only two genuine operator kill messages in 45 days were one-liners, and both were caught.**
+Observed harm is therefore **0/2** — n=2 bounds nothing. This is a **latent defect with a fully live
+mechanism**, not a demonstrated incident. Say it that way in the commit; do not inflate it.
+
+🚨 **THE CONSEQUENCE THAT MUST BE NAMED — AND IT IS ALREADY LIVE ON TRUNK.**
+Post-fix, **592 messages begin matching that did not before, and the biggest class is `/ship` itself**:
+`commands/ship.md:42` contains the words *"stop here"*. So a corrected reader means **typing `/ship`
+trips the kill switch and disarms the floors for that turn.**
+
+**This is not hypothetical and it is not W3's to introduce — `299e4d563` already shipped it.** The
+completion-assert kill-switch landed yesterday reads the same command body, so **on trunk today,
+running `/ship` suppresses completion-assert for that turn** — i.e. the close gate is weakest on
+exactly the turn that lands code. That consequence was not named in `299e4d563`'s commit body. It
+should have been.
+
+**The remedy is better than either current state, and it is evidence-determined:** the kill-switch
+reader should **skip slash-command expansions** — they are command *bodies*, not operator prose, and
+they are mechanically identifiable (`<command-name>` marker; the same exclusion made this plan's own
+frequency measurement honest, taking 183 apparent hits down to 3 real ones). That removes the
+false-positive class at its root, restores the close gate during `/ship`, and leaves the genuine
+override working.
+
+**Do this as part of W3, and back-apply it to `completion-assert.sh`** so the two readers stay one
+spelling — the same two-oracles rule that governs W5.
 
 ### W4 · `79e2b74796af` — the double-block — **DRIVABLE; the shape is settled by evidence**
 
