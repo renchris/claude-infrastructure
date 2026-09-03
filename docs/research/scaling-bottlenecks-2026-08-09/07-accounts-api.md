@@ -126,26 +126,69 @@ all-Opus fleet.
 
 ## 4 · Duty-cycle model — how many ACTIVE sessions 4 accounts sustain
 
-4 × 164 = **654 active session-hours/week** (cross-check via §2a: 4 × $4,035 / $22.7 = **711 h**;
-the two routes agree within 9%).
+> 🚨 **STRUCK 2026-09-03 — this whole section is the ORIGIN of the `~3.9` figure, and it commits the
+> very unit error §6.4a names.** §6.4a struck the *prescription* built on §3's composition split and
+> explicitly left §3's own figures standing, because *"the defect was never the arithmetic; it was
+> carrying it across to the weekly limit without a measurement."* **§4 is that carry-across.** It
+> divides each account's weekly `$eq` budget by §3's `$eq per ACTIVE hour` (22.7) to get
+> active-hours/week, and `$eq` is an API-list dollar-equivalent, not the weekly meter — the same
+> conflation of two meters, 160 lines above the strike that named it. Every downstream `~3.9` in the
+> repo cites this table. Corrected below; see §4a for what replaces it and `../scaling-bottlenecks-2026-08-09.md` **§2e** for why four prior sweeps ran past it.
 
-| operating window | sustained concurrent **ACTIVE** |
-|---|---|
-| 24/7 (168 h/wk) | **3.9** |
-| 12 h/day (84 h/wk) | 7.8 |
-| 40 h/wk | 16.4 |
-| **hours/week the fleet can hold 10 active** | **65 h — 39% of the week** |
+~~4 × 164 = **654 active session-hours/week** (cross-check via §2a: 4 × $4,035 / $22.7 = **711 h**;
+the two routes agree within 9%).~~ → **~1,580 active session-hours/week (1,042–1,848)**, below.
 
-At p90 demand ($34.5/active-h) the 24/7 figure falls to **2.8**.
+| operating window | ~~sustained concurrent **ACTIVE** ($eq model, REFUTED)~~ | **sustained concurrent ACTIVE (measured)** |
+|---|---|---|
+| 24/7 (168 h/wk) | ~~**3.9**~~ | **9.4 (6.2–11.0)** — measured, model-free |
+| 12 h/day (84 h/wk) | ~~7.8~~ | **18.8 (12.4–22.0)** — arithmetic rescale |
+| 40 h/wk | ~~16.4~~ | **39.5 (26.1–46.2)** — arithmetic rescale |
+| **hours/week the fleet can hold 10 active** | ~~**65 h — 39% of the week**~~ | **~158 h — 94% of the week** (104 h–all of it) |
+
+~~At p90 demand ($34.5/active-h) the 24/7 figure falls to **2.8**.~~ 🚨 The replacement has no
+demand-percentile decomposition and does not need one: it is fitted against the weekly meter's own
+slope, so realised demand is already inside the measurement rather than an input to it.
 
 **Resident sessions are free, and that is measured, not assumed.** next3 burnt 83 active-hours over
 a 138 h window while carrying 5 resident sessions ⇒ **~12% active duty per resident session**.
-Project that: 150 resident at 12% duty = 18 active = 4.6× the sustainable rate. Holding the design
-point's ~10 active 24/7 needs **2.4× more weekly quota than four Max accounts carry**.
+Project that: 150 resident at 12% duty = 18 active = ~~4.6×~~ → **1.9× (1.6–2.9×)** the sustainable
+rate. ~~Holding the design point's ~10 active 24/7 needs **2.4× more weekly quota than four Max
+accounts carry**.~~ 🚨 **This inverts at the median: 10 ÷ 9.4 = 1.06, so four Max accounts very
+nearly do carry ~10 active 24/7** (0.9× at the top of the measured range, 1.6× at the bottom).
 
-**⇒ The "~10 ACTIVE" half of §S6.2 does not survive as a steady state.** It survives as a burst
+~~**⇒ The "~10 ACTIVE" half of §S6.2 does not survive as a steady state.** It survives as a burst
 with a duty cycle attached. Restate the design point as *150 resident · ≤10 active · ≤65 active-hours
-per week fleet-wide*, or add accounts (§6.2).
+per week fleet-wide*, or add accounts (§6.2).~~
+
+**⇒ CORRECTED 2026-09-03: the "~10 ACTIVE" half of §S6.2 does survive as a steady state, marginally.**
+10 sustained active sits inside the measured 6.2–11.0 — at the top of it, so it is a *tight* steady
+state rather than an impossible one, and it is the **150 resident** half that fails (§1a/§1b memory,
+and the box's own ~4–8 active load gate). Restate the design point as *≤10 active fleet-wide, quota
+not binding at that level*; the accounts do not need adding for this reason.
+
+### 4a · CORRECTION 2026-09-03 — what the meter says instead
+
+The replacement is `../orchestration-units-2026-08-19/A6-VERIFY-quota-economics.md` **§C4**, which
+measured the weekly meter's own slope against `k_work` (the utilization log's transcript-writer
+census, `bin/claude-accounts:1356`) over 7,653 rows, 2026-08-10 → 08-19 — **no token model, so it is
+immune to the identifiability caveat §6.4a inherits from §2a**:
+
+| | §4 (composition, 2026-08-09) | §C4 (weekly-meter slope, 2026-08-19) |
+|---|---|---|
+| what was divided | account weekly **`$eq`** budget ÷ §3's `$eq`/active-h | the weekly **limit's own %/day** ÷ measured %/day per working unit |
+| method | one weekly window, arithmetic | 5 account-windows, 21–162 h each; median **6.08 %/day per continuously-working unit** against a sustainable 14.29 %/day |
+| fleet sustained active, 24/7 | **3.9** | **9.4 (6.2–11.0)** |
+| independent check | — | predicts `next` at 15.6 %/day → 109% by reset; `claude-accounts --readout` independently rendered *"~111% by reset"* |
+
+**Three derivations converge.** §C4's *"bonus reconciliation"* removes cache-read from this section's
+own arithmetic — `3.9 / 0.32 = 12.2` — and lands at the top of its independently measured 6.2–11.0.
+So the `$eq` route and the meter route agree **once the refuted 68% cache-read share is taken out**,
+which is the strongest available evidence that this section's arithmetic was sound and only its
+*meter* was wrong.
+
+**The hours figure, stated as what it is.** `~1,580 h/week` is `9.4 × 168` — an **arithmetic
+restatement** of §C4's measured concurrency, not a second measurement, and the same is true of the
+12 h/day and 40 h/wk rows above. Only the 24/7 row is measured.
 
 ---
 
@@ -269,10 +312,16 @@ KMAX conflates two different scarcities and can serve neither. Split them:
 |---|---|---|---|---|
 | **`KMAX`** (resident) | how many sessions may *exist* per account | 8 | **≥ 40** (`ceil(150/4)` + headroom) | residency costs ~0 quota (§4); the only real resident costs are local (render/pty/RAM), owned by §S6.7 |
 | **NEW: active-concurrency gate** | how many sessions may be *mid-turn* per account | — | **5** | the measured infra-limiter band (§5c) and GH#62426's 5-6 |
-| **NEW: weekly-hours budget** | active-hours/week fleet-wide | — | **≤ 654 h** (≈ 65 h at 10 active) | §4; this is the actual scarce resource |
+| **NEW: weekly-hours budget** | active-hours/week fleet-wide | — | ~~**≤ 654 h** (≈ 65 h at 10 active)~~ → **≤ ~1,580 h** (1,042–1,848; ≈ 158 h at 10 active) | §4a 🚨 ~~this is the actual scarce resource~~ — **corrected 2026-09-03: it is not.** §C4 measures the crossover at **~26 resident panes (17–30)**, so quota does not bind at the operator's ~15 and this gate is slack at the design point |
 
-Sizing the fleet from the target instead: sustaining **10 active 24/7** needs 1,680 active-h/week ÷
-164 = **≈ 10 Max accounts**, not 4. Four accounts sustain 4.
+~~Sizing the fleet from the target instead: sustaining **10 active 24/7** needs 1,680 active-h/week ÷
+164 = **≈ 10 Max accounts**, not 4. Four accounts sustain 4.~~
+
+🚨 **CORRECTED 2026-09-03.** Sustaining **10 active 24/7** needs 1,680 active-h/week ÷ ~395 h per
+account (`~1,580 / 4`) = **≈ 4.3 Max accounts** (3.6–6.5 across the measured range), not ≈ 10. Four
+accounts sustain **6.2–11.0**, not 4. The "add accounts" prescription this row carried is withdrawn:
+at the design point the fleet is short by at most a fraction of one account, and inside measurement
+error of needing none.
 
 ### 6.3 · Sessions-per-account split
 
@@ -393,13 +442,23 @@ cluster (2026-08-29, the sites §2a did not reach).
 | # | wall | binds at | axis | owner |
 |---|---|---|---|---|
 | 1 | **`router.KMAX = 8`** | **32 resident** | resident | **this file — one integer, local** |
-| 2 | weekly quota, 24/7 | **~4 active sustained** | active | this file |
+| 2 | weekly quota, 24/7 | ~~**~4 active sustained**~~ → **~9.4 active sustained (6.2–11.0)** 🚨 corrected 2026-09-03, §4a | active | this file |
 | 3 | render | ~140 panes | resident | §S6.7 |
 | 4 | 5h quota (burst) | ~24 active for one 5h block | active | this file |
 | 5 | ptys | ~509 | resident | §S6.7 (corrected census) |
 | 6 | OTPM | ~150 active | active | vendor |
 
-Quota never appears before position 2, and never on the resident axis at all.
+~~Quota never appears before position 2, and never on the resident axis at all.~~
+
+🚨 **Half of that survives 2026-09-03; half does not.** Quota still never appears before position 2
+on the **active** axis — the corrected ~9.4 stays well under the 5h-burst row's ~24 and OTPM's ~150,
+so the active ordering is unchanged. But *"never on the resident axis at all"* is now false: §C4
+converts its measured 9.4 working units through the measured duty cycle (0.36) to a **crossover at
+~26 resident panes (17–30)**, against row 1's hard `KMAX` refusal at **32**. Those two intervals
+overlap, so which of quota and KMAX binds first on the resident axis is **within measurement error
+and no longer settled** — it is not re-ranked here, because deciding it needs a duty-cycle
+measurement at the design point rather than at today's ~15, and that measurement does not exist.
+Row 1 keeps position 1 as the only one of the two that is a *proven* refusal on the shipped binary.
 
 ---
 

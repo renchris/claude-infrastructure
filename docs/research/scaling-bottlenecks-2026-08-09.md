@@ -33,7 +33,7 @@ of the render floor" was a ratio between two emulators, one absent).
 | 1c | └ toolchain bursts (the crash igniter) | D3's 15% segment bar = **19.9 GB of anon at panic packing** — the entire S6.2 remainder; and S6.2's "19 GB left for bursts" recomputes to **−4 GB** at the corrected constant | ~1 cold compile | 05, 01 |
 | 2 | **Active-session load** (the felt daily ceiling) | **2.5–5 runnable threads per genuinely-active session** (measured 27→44 load at 9 active), not 1.6 (a mixed-fleet average) | **~4–8 concurrent active** on the load-20 gate — matches the felt ~12–15-session pain and all 127/127 historic gate refusals | 09 |
 | 3 | **Fleet-self-imposed caps** | router `KMAX=8` × 4 accounts — **refuses the 33rd session** (proven on the shipped binary; `handoff-fire.sh:5266` turns rc 2 into HALT). oauth refresh herd: one credential/expiry instant per ~37 sessions, rotating tokens ⇒ a losing racer logs out the whole account, and `heal()` refuses to run while sessions are live ⇒ can never fire at 150. git shared store crosses `gc.auto` (6700 loose) within hours at 15×. `.claude.json`: 171 KB whole-file rewrite, no lockfile. | 32 · any refresh instant · hours · races now | 07, 08 |
-| 4 | **Account quota (active half only)** | residency ≈ free; 4 Max accounts sustain ~~**~3.9 concurrent active 24/7**~~ → **6.2–11.0 measured** (~654 active-h/week); 10 active affordable ~39% of the week. ~~**68% of quota cost is cache-read at median ~200K contexts ⇒ halving context ≈ +50% active capacity** — bigger than a fifth account.~~ 🚨 **STRUCK 2026-08-24 — REFUTED by measurement; see §2a.** | active work, not residency | 07 |
+| 4 | **Account quota (active half only)** | residency ≈ free; 4 Max accounts sustain ~~**~3.9 concurrent active 24/7**~~ → **6.2–11.0 measured** (~~~654 active-h/week); 10 active affordable ~39% of the week~~ → **~1,580 active-h/week (1,042–1,848); 10 active affordable ~94% of the week** 🚨 **corrected 2026-09-03, §2e — those two were the same refuted 3.9 restated in hours**. ~~**68% of quota cost is cache-read at median ~200K contexts ⇒ halving context ≈ +50% active capacity** — bigger than a fifth account.~~ 🚨 **STRUCK 2026-08-24 — REFUTED by measurement; see §2a.** | active work, not residency | 07 |
 | — | **NOT walls** (each with evidence) | render (idle panes 0.001 cores; occluded windows free; unit = drawn OS window ~0.05 cores; corrected wall 226–440 all-visible-all-active panes; sane 150-topology = 0.4–0.6 cores) · ptys (~30%, 1/pane+16 static) · pid-wrap (REFUTED: 923 pids/s ⇒ wrap every 108 s, live-observed; the panic correlation was a 2%-prior coincidence) · Mach ports (incident #0 re-explained as WindowServer CPU serialization — amplifier gone under kitty) · fd/kqueue/logd/disk/Spotlight/FS | — | 02, 08, 09 |
 
 ### 2a · CORRECTION 2026-08-24 — the quota row's cache-read premise is refuted, and with it the "halving context" lever
@@ -207,6 +207,53 @@ prescriptive carrier; every remaining hit is a strike, a footnoted audit record,
 and all four documents rank quota behind burst ignition and CPU load, so a later-binding quota
 strengthens the verdict it appears in. This is a number correction, not a re-ranking.
 
+### 2e · COMPLETED 2026-09-03 — the fifth pass found the ORIGIN of `~3.9` still fully live, and this time conclusions DID move
+
+Four passes struck this number in fourteen derived carriers and **none of them struck the section
+that produces it.** `scaling-bottlenecks-2026-08-09/07-accounts-api.md` **§4 · Duty-cycle model** —
+the table every downstream `~3.9` cites — stood entirely uncorrected until today, together with the
+two policy sites that spend it (§6.2's gate row and closing sizing prose) and §8's wall-ordering row.
+
+**Why this is not §2b repeating itself.** §2b already learned *"strike at the origin, not just the
+carriers"* and acted on it — it struck §6.4 of that very file, and added §6.4a. The miss is finer and
+worse: **§6.4a scoped its own strike to the section it was standing in, and said so.** Its *"What
+this does NOT touch"* paragraph deliberately preserved §3's composition figures, on the correct
+ground that *"the defect was never the arithmetic; it was carrying it across to the weekly limit
+without a measurement."* **§4 is that carry-across, 160 lines above the strike that named it** — it
+divides each account's weekly `$eq` budget by §3's `$eq`-per-active-hour to obtain active-hours/week,
+conflating an API-list dollar-equivalent with the weekly meter, which is the identical error in the
+identical file.
+
+**The rule this yields, and it is the sharpest of the four.** §2c said *re-read every file you
+edited*; §2d said *grep the bare number, not your remembered phrasing*. Both are sweeps over
+**carriers**. Neither catches this, because §4 is not a carrier — it is a **producer**, and it was
+never in any sweep's candidate set. **When a strike preserves a premise on the ground that the
+premise itself is sound, it must enumerate every consumer of that premise before it may claim to be
+scoped.** A "what this does not touch" paragraph is a *claim about the rest of the document*, and it
+is exactly as reliable as the enumeration behind it — here, none. Concretely: after striking a
+derived figure, grep for the **inputs** it was derived from (`$eq`, `22.7`, `164`, `654`) as well as
+the figure, and read every arithmetic site that consumes them.
+
+🚨 **And unlike §2c and §2d, conclusions moved here — three of them.** The prior passes could
+honestly say *"a quota bound that binds later strengthens the verdict it sits in"*, because they
+touched only verdict rows that already ranked quota last. §4 and §6.2 are where the number was
+*spent*, so correcting it reverses what they prescribe:
+
+| site | said | now |
+|---|---|---|
+| `07-accounts-api.md` §4 close | *"the '~10 ACTIVE' half of §S6.2 does not survive as a steady state"* | it **does** survive — 10 sits at the top of the measured 6.2–11.0; the half that fails is *150 resident* |
+| `07-accounts-api.md` §6.2 | *"sustaining 10 active 24/7 needs ≈ **10** Max accounts, not 4"* | **≈ 4.3** (3.6–6.5); the add-accounts prescription is withdrawn |
+| `07-accounts-api.md` §8 | *"quota … never on the resident axis at all"* | §C4's crossover is **~26 resident panes (17–30)** against `KMAX`'s 32 — overlapping, so no longer settled |
+
+Nothing about **context stewardship** changes, in either direction: it was never argued from quota
+(§2a's closing note), and the correction runs the other way regardless — more sustainable capacity,
+not less.
+
+**Sweep basis for this pass.** Bare-number `3\.9` over `docs/ hooks/ bin/ scripts/ commands/ skills/`
+per §2d's rule, **plus** the producer sweep this section adds: `654`, `22\.7`, `\$eq per ACTIVE`,
+`164`, `4\.6×`, `2\.4×`, `sustainable rate`. Every remaining hit is a strike, a footnoted audit
+record, or correction text.
+
 ---
 
 **Felt lag, precisely (12):** turn-end lag is **3.7 s p50 / 7.7 s p90** and 92% of it is ONE call —
@@ -245,6 +292,8 @@ decision — opened this session (see §6).
                        Otherwise the honest on-box ceiling is ~100–130 resident.
 ACTIVE concurrency:    ~4–8 sustained is what BOTH the box (load slope 2.5–5) and the quota
                        (~3.9 sustained 24/7; 10 for ~39% of the week) support. This is the real
+                       ^^ BOTH parenthesised figures struck — see the note below and §2e;
+                          ~3.9 → 6.2–11.0 measured, ~39% → ~94% of the week.
                        "15 sessions lag" fix: fewer simultaneously-ACTIVE turns, cheaper turns,
                        cheaper contexts — not fewer resident sessions.
                        ^^ STRUCK IN PART 2026-09-02 (§2c). The ~4–8 CONCLUSION STANDS, but on
@@ -266,8 +315,11 @@ by the BOX** — the load slope of 2.5–5 runnable threads per genuinely-active
 load-20 gate (§2 r2). The quota is no longer a co-binding constraint at that level: rank 4's
 `~3.9 sustained 24/7` was priced off the cache-read-at-68% composition that §2a refuted, and the
 model-free replacement is **6.2–11.0** (`orchestration-units-2026-08-19/A6-VERIFY-quota-economics.md`
-§C4), which sits at or above the box's own ceiling. `10 for ~39% of the week` is unaffected and
-stands. And the prescription's third term, *"cheaper contexts"*, **is the struck lever** — it is
+§C4), which sits at or above the box's own ceiling. ~~`10 for ~39% of the week` is unaffected and
+stands.~~ 🚨 **Wrong, corrected 2026-09-03 (§2e): `~39%` is the SAME refuted number in hours.** It
+is `654 h ÷ (10 × 168)`, and 654 h/week is `3.9 × 168` — the very figure the sentence before it
+strikes. On the model-free replacement the fleet holds 10 active for **~94% of the week** (62% to
+all of it). And the prescription's third term, *"cheaper contexts"*, **is the struck lever** — it is
 `+50% capacity by halving context` in summary form, and it dies with it. The surviving two terms are
 the right ones and are now better-founded, not worse: **fewer simultaneously-ACTIVE turns** (the box
 constraint) and **cheaper turns** (output and cache-creation are the classes the meter actually

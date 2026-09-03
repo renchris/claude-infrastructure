@@ -30,7 +30,21 @@ terminals, or building kitty/cmux drivers speculatively.
 | D3 | **Build ONE seam, TWO drivers: `iterm2` + `headless`** | at Level 3 ~95 of 100 agents need no pane; at Level 4 ~999 of 1000. Headless is the driver that scales |
 | D4 | **kitty/cmux drivers only when/if we actually switch** | ~150 lines each behind a proven interface; building them now is guessing |
 | D5 | **The `it2` facade is how Agent Teams work anywhere** | Claude Code shells out to an EXTERNAL `it2` CLI (`ERROR: iTerm2 detected but no it2 CLI`); it has **0 KittyBackend / 0 GhosttyBackend** (40 ITermBackend, 32 TmuxBackend). We already intercept `it2` in `bin/it2-wrapper` |
-| D6 | **The real ceiling is QUOTA, not hardware** | live read 2026-07-31: next2 **95%** weekly, next 69%, next4 62%, next3 35%. 100 concurrent = 21.5 GB / 3.6 cores — *fits*. Level 4 volume is quota-bound on 4 Max plans |
+| D6 | **The real ceiling is QUOTA, not hardware** 🚨 **at Level 3 this INVERTS — see the note** | live read 2026-07-31: next2 **95%** weekly, next 69%, next4 62%, next3 35%. 100 concurrent = 21.5 GB / 3.6 cores — *fits*. Level 4 volume is quota-bound on 4 Max plans |
+
+> 🚨 **D6 footnote, added 2026-09-03 — the ordering holds at Level 4 and reverses below it.**
+> D6's own 07-31 evidence (a live weekly-% read) is not disturbed; what has changed is that the
+> quota ceiling has since been *measured* rather than inferred.
+> `../research/orchestration-units-2026-08-19/A6-VERIFY-quota-economics.md` §C4 fits the weekly
+> meter's own slope against the working-session census (model-free, 7,653 rows) and gets **9.4
+> sustained working units fleet-wide (6.2–11.0)**, crossing hardware only **above ~26 resident
+> panes (17–30)** — so at the operator's ~15 the fleet spends ~57% of its sustainable weekly
+> budget and *hardware binds first*. D6 stands for **Level 4 (1000)**, where 26 is left far
+> behind. It does **not** hold at Level 3 (100) or at today's fleet, and any Level-3 sizing that
+> leans on "quota-bound" should be re-read against §C4. Related: the `~3.9 sustained active`
+> figure that circulated repo-wide alongside this row was priced off a refuted cache-read
+> composition and is struck at its origin —
+> `../research/scaling-bottlenecks-2026-08-09.md` §2e.
 
 ---
 
