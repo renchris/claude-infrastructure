@@ -40,6 +40,7 @@ prediction moving from argued to observed, on the project that had not yet been 
 | 08-19 | `38de29ec5e59` | `doc_classifier` | label-foreign — **third burn of the same item**, and the first fired *after* its disproof was on trunk (§ THIRD BURN below) |
 | 08-20 | `38de29ec5e59` | `doc_classifier` | label-foreign — **THIRD burn of the same item**, and the row was still `open` at fire time (§ SIXTH OCCURRENCE) |
 | 08-20 | `20caf9661ea4` | `reso-management-app` | label-foreign — first **DECISION** item; three days after the cause was located and published (§ below) |
+| 09-03 | `9ce3c6350e2f` | `claude-infrastructure` | **subject-foreign** — the label is *correct* and route-by-project would still misroute it; **two weeks** after the previous row (§ EIGHTH below) |
 
 The 08-17 `reso-management-app` row is a **repeat of the 08-14/08-16 route**, not a fifth route. The class has stopped producing
 new spellings and is now producing recurrences on a known mechanism — which is why nothing about the
@@ -1682,3 +1683,157 @@ here indefensible: both arms turn on facts about live reso code — whether the 
 is still wanted, and what the test suite actually asserts. Answering from the brief's prose would be
 the anti-goal `bin/cc-venue` §5 names — *"a wrongly-routed item improvises a plausible answer against
 history it cannot read, and reports success."*
+
+---
+
+# EIGHTH OCCURRENCE — the label is RIGHT, and that is the finding (2026-09-03)
+
+**Backlog `9ce3c6350e2f`**, project **`claude-infrastructure`** — the attached repo, correctly
+labelled — dispatched `--venue cloud`. Title:
+
+> reso docs still gate the frontier tier on the deleted claude-next eval track
+> (`project-pass.md`, `CONTEXT_EXHAUSTION_GUARDRAILS.md`)
+
+Two weeks after the 08-20 row, the longest quiet gap this table records. The class did not stop; it
+produced its **first row whose `project` label is not a mislabel at all**, which is a different
+finding from the seven above and is the only reason this section exists.
+
+## Where the two cited names live — the brief's own open question, answered from trunk
+
+The dispatch brief flagged both names as unresolvable: *"CITED NAME(S) with no directory component
+and no carrier on origin/main … they may live OUTSIDE this repo … resolve the location before
+reading this as evidence either way."* Trunk answers it in one grep:
+
+```
+$ git grep -n 'project-pass\|CONTEXT_EXHAUSTION' origin/main
+origin/main:skills/model-upgrade/SKILL.md:75:   - project `.claude/commands/project-pass.md`, `docs/research/CONTEXT_EXHAUSTION_GUARDRAILS.md`
+origin/main:templates/model-classification.json:28:    "Development/reso-management-app/.claude/commands/project-pass.md",
+origin/main:templates/model-classification.json:29:    "Development/reso-management-app/docs/research/CONTEXT_EXHAUSTION_GUARDRAILS.md"
+```
+
+Both are **`reso-management-app`** files. Neither has ever existed in this repo — not at HEAD, not on
+any ref, not under any directory:
+
+```
+$ git log --all --pretty=format: --name-only | sort -u | grep -icE 'project-pass|CONTEXT_EXHAUSTION'
+0
+```
+
+So the row is unworkable here for the ordinary reason, confirmed against the API rather than assumed:
+
+```
+$ mcp__github__get_file_contents renchris/reso-management-app .claude/commands/project-pass.md
+Access denied: repository "renchris/reso-management-app" is not configured for this session.
+Allowed repositories: renchris/claude-infrastructure.
+```
+
+`add_repo` is **not present** in this session's tool surface, so the escape hatch that error names is
+also closed. `/Users` and `~/Development` are absent; `/home/user` contains exactly one entry,
+`claude-infrastructure`.
+
+## NEW FACT 1 — this row defeats remedy option (b), and it is the first that does so on the merits
+
+Every row above is *label-foreign* (`project` names a repo the session cannot reach) or, once, the
+08-15 *subject-foreign* row where the label passed and the text was about `doc_classifier`. Option
+**(b) route by `item.project`** fixes the first kind by construction and was arguably a clerical fix
+for the second.
+
+**It cannot fix this one, and not because the label is wrong — because the label is right.**
+`claude-infrastructure` genuinely owns this item. This repo carries the register that names those two
+reso files: `skills/model-upgrade/SKILL.md:75` lists them in the model-upgrade skill's *canonical
+reference list* (the walk a future tier insertion is required to make), and
+`templates/model-classification.json:28-29` classifies them `review` — *"current routing guidance
+interleaved with historical citations … NEVER auto-rewritten"*. The row is a claude-infrastructure
+register whose **targets** are extraterritorial. Route-by-project would dispatch it to
+`claude-infrastructure` — where it already is — and it would be unworkable on arrival again.
+
+Option **(a) fail closed at fire time** does refuse it, if the predicate is over *the pair* (what the
+brief cites, what the session can reach) rather than over the `project` field. That is the
+distinction the 08-16 doc's §3 draws between gating the *claim* and gating the *fire*, and this row
+is the first evidence that the two options are not merely differently-placed — for a subject-foreign
+row with a defensible label, **(b) is not a weaker (a); it is a non-remedy.** The open decision filed
+2026-08-16 now carries that as a discriminator rather than only a cost count.
+
+## NEW FACT 2 — half the premise is not foreign, it is UNTRACKED-LOCAL, and nothing sees that either
+
+The title asserts two things. The first — *reso docs still gate the frontier tier* — is foreign, as
+above. The second — *the **deleted** claude-next eval track* — is **unverifiable from any venue that
+is not the operator's box**, and this is not a venue-scope problem:
+
+- The deletion is performed by `docs/activation/pending-activation/29-launcher-consolidation-activate.sh`,
+  which edits **`~/.zshrc`** (*"DELETE `claude-next{,2,3,4}` · `claude-opus5{,-2,-3,-4}` · `cc-next{,2,3,4}`"*, `:19`).
+  `~/.zshrc` is on no ref.
+- Whether it has run is recorded by a `.done` marker beside the script. **Zero `.done` markers are
+  tracked**, across all 52 activation scripts (`git ls-tree -r origin/main -- docs/activation/ | grep -c '\.done$'` → `0`),
+  and `.gitignore` says nothing about them. The marker is desk-local by construction.
+- `LAUNCHER_SPEC.md`, which that script names as *"the binding target state … in claude-infrastructure"*,
+  is **not on trunk** either.
+
+So a cloud worker cannot establish the antecedent the whole item rests on. Worse for the guard: the
+spelling that would betray it reads clean. Driving `cc-eligible`'s pure classifier directly — `check`
+itself cannot run here, it needs the ledger and answers `verdict=unknown-store … fail-open`:
+
+| text passed to `classify_all` | classes | verdict |
+|---|---|---|
+| the item's full title | `[]` | `eligible` — *"repo-only work — no local-only state named"* |
+| `project-pass.md` | `[]` | `eligible` |
+| `CONTEXT_EXHAUSTION_GUARDRAILS.md` | `[]` | `eligible` |
+| `reso-management-app` | `[]` | `eligible` |
+| `/Users/chrisren/Development/reso-management-app/.claude/commands/project-pass.md` | `[]` | `eligible` |
+| **`~/.zshrc claude-next launcher`** | `[]` | **`eligible`** |
+
+The last row is the one worth keeping. `~/.zshrc` is *precisely* the class `cc-eligible`'s own header
+enumerates — *"A cloud VM has no `~/.claude`, no local browser, no dev server, no pane registry, no
+keychain"* — and the predicate does not recognise it. This is a **measurement, not a proposed arm**,
+for the reason that file's header (`:25-37`) states and the 08-17 session already re-stated: adding
+`~/.zshrc` to the list would widen a denylist by one spelling, at the claim rather than at the fire,
+against a class the list cannot enumerate.
+
+## Measured from inside this session
+
+| what | value |
+|---|---|
+| clone | arrived **shallow**; `git fetch --unshallow` → `is-shallow-repository` **false**, `rev-list --count HEAD` **4010** |
+| `HEAD..origin/main` | **0** — this tree *is* trunk (`a8b181f2`); every read below is a trunk read |
+| dispatcher vintage | `git rev-parse origin/main:bin/cc-dispatch` → `646b8a652e71…` — **EQUAL** to the blob named in the brief. The dispatcher that fired this session **is** trunk; no landed-not-live gap to discount |
+| `/Users`, `~/Development` | both absent |
+| GitHub scope | `renchris/claude-infrastructure`, one repository; `add_repo` absent |
+| the two cited files | 0 hits over the checkout, 0 over all refs, 0 in all history |
+| cure already on trunk? | **no cure exists to find** — the artifacts the item would change are not in this repo, so the brief's `git log <sha>..origin/main -- <path>` check has no path to run against |
+
+## The item itself — NOT adjudicated, and this time the refusal has a second leg
+
+No claim is made about what `project-pass.md` or `CONTEXT_EXHAUSTION_GUARDRAILS.md` say. They were
+never readable from this session.
+
+The novelty is that **even the half that IS in this repo must not be touched here.** Trunk carries the
+same gate the item complains of, in files this session can edit — `model-config.yaml:117`
+(`tracks: [claude-next]`), `:104` (*"Fable exists ONLY on the claude-next eval track"*),
+`commands/research.md:85`, `hooks/agent-teams-enforce.sh:517`. Editing them would be acting on the
+exact proposition NEW FACT 2 shows is unverifiable from here. The Follow-On Gate's **F2
+(well-researched, grounded in this session's disk-truth investigation)** fails, and it fails for a
+reason that is a fact about the venue rather than about the diligence of the worker: *the evidence for
+"deleted" lives in a file no ref carries.*
+
+Recorded, not acted on, so the desk session that can read `~/.zshrc` inherits it rather than
+re-deriving it — and note it is not one edit but a rename, because the gate's substance appears to
+survive its spelling. There are still two tracks (`claude` at 2.1.219 and `claude-prev` at the pinned
+2.1.114, per this repo's `CLAUDE.md`), and 2.1.114 still does not know `claude-fable-5`. What changed
+is which name the live track answers to. Three things travel together wherever that gate is written,
+in reso and here alike:
+
+1. the track name, `claude-next` → whatever the consolidated entrypoint is called;
+2. the fallback, `Opus 4.8` → `Opus 5` (`CLAUDE.md`: *"Default model = Opus 5 @ effort high"*);
+3. the window — `commands/research.md:85` still reads `(window 2026-06-09 → 2026-06-23)`, which
+   `model-config.yaml` itself calls the **prior** window, *"pulled early 06-12"*. Fable has been
+   `permanent: true` since 2026-07-20 with `end` a far-future sentinel.
+
+`grep -rn frontier_access` over `bin scripts hooks lib` finds **no code consumer of `.tracks`** — the
+gate is prose in every instance, which is why it drifted unnoticed and why fixing it is a doc walk,
+not a code change.
+
+## Disposition
+
+Parked, not closed: `docs/parks/9ce3c6350e2f.md`, per §15. The `needs:` line is the one step, and it
+is a **venue** step rather than an operator-credential step — the first park in this class whose
+blocker is *which machine*, not *which human*.
