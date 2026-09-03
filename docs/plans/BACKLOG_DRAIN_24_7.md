@@ -86,6 +86,98 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-03 — drain recycle #289: method 261 — A TOKENISER CAN INVENT A BOUNDARY, NOT ONLY DROP
+  ONE, AND THE ESCAPE THAT DECLARES A TOKEN NOT AN OPERATOR IS EXACTLY WHERE IT HAPPENS.** ZERO rows
+  closed, ZERO filed, ZERO reopened. TWO commits, ONE push. #288 pointed at the rest of
+  `scripts/pipefail-sigpipe-lint.sh`'s clause ladder and left the instrument to read it with; the
+  ladder was clean and the thing HANDING it its subject was not. Every correction from the eighth to
+  the fourteenth asks what the clauses mis-judge. They judge `seg[]`, and `seg[]` is whatever the
+  split produced: `qmask()`'s two backslash arms read `out = out c d`, emitting the escape AND the
+  escaped byte verbatim, so a `\|` was written into the masked string as a bare `|` and
+  `n = split(qmask(work), seg, "|")` CUT ON IT. A `\|` is a literal pipe in both contexts and a
+  shell operator in neither.
+  · **THE DEFECT IS NOT "QUOTED PIPES LEAK", AND THAT READING WAS WRITTEN DOWN AND REFUSED.** An
+  unescaped `|` inside double quotes IS masked correctly; the backslash arm short-circuits the arm
+  that would have masked it. **So the more explicitly a pipe is marked literal, the more certainly
+  this function called it an operator.** The single-quote branch has no backslash arm and was always
+  right — asserted by a control, not assumed.
+  · **THE MEASUREMENT, producer and consumer held BYTE-IDENTICAL at `cat "$f" | grep -c …` and ONLY
+  the pattern varying** — and `grep -c` is the DRAINED form this lint prescribes as the fix, in
+  `is_early`'s own words: `grep -c "warn"` GREEN · `grep -c "warn\|xyz "` GREEN · **`grep -c
+  "warn\|read "` RED** · `grep -c "warn|read "` GREEN · the single-quoted spelling GREEN. **The RED
+  cell is the ratchet reporting the remedy it prescribes** — `a6449cebc`'s class, a lint refusing a
+  land for a reason that is not about the code — **one keystroke from anyone whose BRE alternation
+  has a right side beginning grep/head/read/sed/awk.**
+  · **THE FOURTEENTH CORRECTION ASKED THIS EXACT QUESTION OF ITS OWN CONSUMER AND ANSWERED IT THE
+  OTHER WAY, WHICH IS WHY THIS STAYED INVISIBLE.** `75d1bd46b` gave `collect_caller` a sentence
+  reasoning that over-splitting THERE is bounded: it can only invent a command WORD, and a word
+  matters only where it collides with a function name in the same file. Every clause of that is true
+  and it is silent about the ORIGINAL consumer, where an invented boundary invents a **STAGE** — and
+  a stage is what clauses 2, 3 and 5 are denominated in. **Same fault one consumer over, with an
+  exposure nobody had asked about. When a sibling bounds a hazard, ask which consumer it bounded it
+  for.**
+  · **THE POPULATION WAS READ WITH THE PROGRAM, NEVER A GREP** (#288's move, generalised from one
+  clause to six): a whole-file copy in which six clauses PRINT what they judge, that copy's
+  `--census` asserted byte-identical to the shipped one at **125 rows / 116 keys**. It reports **8
+  escaped-pipe emissions over 5 sites in 3 files** — `hooks/validate-plan-structure.sh:87`,
+  `scripts/permission-gate-lint.sh:205-207`, `scripts/plan-phase-scan.sh:261` — **and not one of
+  them is a shell pipeline.**
+  · **NOT A WIDENING IN EITHER DIRECTION** (method 213, before the land): control = `origin/main`'s
+  copy read-only, mutant = my tree, `CC_PIPEFAIL_ROOT` pinned on BOTH arms, keys `(path, TEXT)`
+  verbatim — **ROWS 125 → 125, KEYS 116 → 116, LOST = 0, NEW = 0**, POS control 44 distinct paths,
+  bare lint rc 0. It costs nothing today because all five reachable sites drop at **clause 2** — and
+  the prediction that clause 5's fail-safe was holding them was **REFUSED**, by disabling that arm in
+  BOTH tokenisers and reading the same census from each.
+  · 🚨 **THE SECOND FINDING, HANDED OVER FREE BY THE SAME PROBE, AND IT IS THE ONE TO CARRY: A
+  CLAUSE'S POPULATION AND ITS EFFECT ARE DIFFERENT NUMBERS, AND EVERY AUDIT ANYBODY WRITES TESTS THE
+  SECOND.** Clause 5's fail-safe arm has a **POPULATION of 82** lines and an **EFFECT of ONE**.
+  Disabling it moves the census by exactly one row — `bin/cc-claude-bin:64`, the single site it was
+  built for — so **81 of its 82 members are exonerations a clause below would have made anyway.** Its
+  stated reason ("a continuation line has unbalanced quotes by construction") describes that one
+  member and says nothing about the other 81, among which sat a complete, well-formed line this very
+  tokeniser fault had fragmented. **A redundant exoneration is where a wrong reason survives
+  indefinitely, because removing the clause beneath it would silently promote every one of them.**
+  · **SELFTEST 53/53 → 56/56, and only ONE of the three arms attributes.** `g26` is the defect cell;
+  `g27` is the REASON's bound (the alternation is not the variable — where the invented boundary
+  LANDS is); `r29` is the widening bound. Reverting the two backslash arms fails **exactly `g26`**,
+  matched by its OWN LABEL derived from the subject rather than by the arm NAME, which `expect()`
+  never emits, with an **EIGHT-arm GREEN column** (`g8 g14 g20 g21 g22 r25 g25 r28` — the last two
+  the fourteenth correction's own) asserted unaffected and the subject restored by sha256.
+  · **ALSO REPAIRED ARM 22's OWN GATE, WHICH FIRED ON THIS COMMIT.** Two of its four counts were BARE
+  while the two below stripped comment lines, and the paragraph BETWEEN them names exactly that
+  hazard — **the arm documented the scar and defended against it on half of itself.** My comment
+  names the splitting call while explaining what the split cuts on, so the bare count read 2 on a
+  correct file. **The dodge available was to reword the comment, which this suite and the lint header
+  both forbid; the needle moved instead.** Proved still able to fire on a seeded mutant at 0.
+  · ⚠️ **AND A PROCESS FACT THAT INVALIDATED A MEASUREMENT RATHER THAN A CLAIM, WORTH MORE THAN ANY
+  NUMBER HERE: MY LINK HELD 27,673 SECONDS OF WALL CLOCK BETWEEN TWO TOOL CALLS.** Open
+  **2026-09-03T08:53:45Z**; the very next suite run stamped **16:34Z**, and `uptime` corroborated it
+  (9 d 1:56 → 9 d 9:19). **In that window `75d1bd46b` — the fourteenth correction, THE SAME FILE —
+  landed.** My first census delta then read control 126 against mutant 125, and **the extra row was
+  the SIBLING's**, their clause-4 widening revealing `hooks/validate-plan-structure.sh:29`. Nothing
+  about my diff had changed. **An unmoved count says nothing if the reference moved underneath it;
+  this is the version where the reference moved because I was IDLE, and a link has no clock of its
+  own.** Everything above was re-derived against the rebased tree — probes rebuilt, the `C4DROP`
+  anchor repointed (that same commit had rewritten it), the arms renamed out of the `g23 g24 r27`
+  names it had taken, every table re-run — rather than carried over. **Take the ledger again after
+  any pause you did not measure.**
+  · **THE LANE.** Open **08:53:45Z**: `RUNG=✅ LIVE_SRC=behind LIVE_LAG=6 LIVE_ADDS=0 LIVE_AGE=11351
+  LIVE_BREACH_WHY=` empty, `GATE=stale`. Mid-link after the idle window the ledger read `RUNG=🔧
+  LIVE_SRC=skip` off a dirty tree — **a NON-READING, not a converged lane** (#282–#284's trap, and
+  the AGE arm is why it matters here: 11,351 s plus 27,673 s of idle is well past the 21,600 s time
+  arm). Post-land and post-converge readings are stamped in the close, not predicted here.
+  · **STORES, each with its denominator and its moment.** Postland RED pages **0 of 2,857** at
+  08:53:56Z. Board at **08:54:08Z**: 359 open / 227 blocked / 2,364 done / 3 claimed, 586 combined,
+  2,953 rows, both partitions asserted. Gap vs #288's floor across **4 m 20 s**: ZERO arrivals, ZERO
+  departures, **ONE transition** (`0c8b39b67665`, open → claimed, the actuator's).
+  `deploy-link-parity` still **2 actionable**, `461 linked` — and its reference sentence read **6**,
+  which is #288's two landed commits plus this window's siblings, not a fault. Executing
+  `qos-rewrite.sh` blob EQUAL to trunk's. Selftest arms and census re-derived rather than inherited.
+  · **THE PROCEDURE GAINS ITS TWENTY-SIXTH QUESTION.** #280 asked *what does the tokeniser DROP?*
+  **#289 asks the mirror: WHAT DOES IT INVENT — and which consumer of its output is denominated in
+  the thing it invented?** Then, of any clause you are about to trust or repair: **what is its
+  POPULATION, what is its EFFECT, and does the reason written beside it describe the first or only
+  the second?**
 - **2026-09-03 — drain recycle #288: method 260 — TWO CLAUSES CAN AGREE ABOUT THE TOKEN AND ITS
   SCOPE AND STILL DISAGREE ABOUT WHICH OPERAND THE SUBJECT IS.** ZERO rows closed, ZERO filed, ZERO
   reopened. TWO commits, ONE push. The route was the cheapest one in the brief for the thirteenth
