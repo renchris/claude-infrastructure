@@ -174,6 +174,39 @@ struck, corrected, a footnoted audit record, or the correction text itself. The 
 was clean before any of the three passes (`hooks/cache-expiry-warning.sh` has always told sessions
 that shrinking context does not save quota) — only the docs were stale, throughout.
 
+### 2d · COMPLETED 2026-09-03 — §2c's own sweep regex could not match three of the four sites it missed
+
+The fourth pass found **four** live prescriptive carriers of the refuted `~3.9`, all of which §2c's
+"Sweep basis" above had declared clean. Corrected here, same convention:
+
+| Site | Why it was still live |
+|---|---|
+| `memory-econ-rearchitecture-2026-08-10.md:40` | §1 **verdict**, rung 3 — the parent doc of the axis §2c *did* correct. Its subdoc was fixed; its own summary was not. |
+| `memory-econ-rearchitecture-2026-08-10/bottleneck-refute.md:119` | §5 summary item 4, in the **same file** as the `:7` and `:57` sites §2c corrected. |
+| `jcode-due-diligence-2026-08-11/ranked-levers.md:20` | the **Why it matters** paragraph — the file's load-bearing claim. §2b struck this file's citation-carrying rows (`:44`, `:62`, `:110`, `:116`) and stopped. |
+| `jcode-due-diligence-2026-08-11/ranked-levers.md:125` | the last **Unknowns** bullet, same file. |
+
+**The transferable part, and it sharpens §2c rather than repeating it.** §2c diagnosed
+*paraphrase-blindness* and prescribed re-reading every file you edited. Correct, but insufficient:
+three of these four sites were unreachable by §2c's **own published grep terms**, which required a
+literal space and only the adjectives `concurrent|sustained`. Measured against the text:
+
+- `~3.9 active 24/7` — a **different adjective**; `3.9 (concurrent|sustained)` cannot match it.
+- `quota sustains ~3.9` / `active` — the phrase is **line-wrapped**, and `grep` is line-based.
+- `~3.9-sustained-active` — **hyphenated**, so the space in the pattern fails.
+
+Only `ranked-levers.md:20` matched the regex, and it survived because that file had been assumed
+finished by §2b. **The rule: a propagation sweep must grep the bare NUMBER (`3\.9`, `68%`) and read
+every hit, never a number-plus-expected-wording pattern.** A regex carrying the phrasing you
+remember is a citation-following sweep wearing a grep's clothes — it inherits exactly the blindness
+§2c named, because a paraphrase changes the adjective, the hyphenation and the line breaks first.
+The bare-number sweep over `docs/ hooks/ bin/ scripts/ commands/ skills/` now returns no unstruck
+prescriptive carrier; every remaining hit is a strike, a footnoted audit record, or correction text.
+
+**No conclusion moved in any of the four.** Each is a quota bound that binds *later* than believed,
+and all four documents rank quota behind burst ignition and CPU load, so a later-binding quota
+strengthens the verdict it appears in. This is a number correction, not a re-ranking.
+
 ---
 
 **Felt lag, precisely (12):** turn-end lag is **3.7 s p50 / 7.7 s p90** and 92% of it is ONE call —

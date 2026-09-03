@@ -116,8 +116,13 @@ esbuild fan-outs, GB-scale tsc/eslint singles (`crash-rootcause-2026-08-09.md` �
 3. **The felt lag to memory.** The daily "box lags at ~15" is ACTIVE-load (r1) + a 3.7s Stop-hook
    tail — 0 of 127 gate refusals ever came from memory; all 91 whole-machine stalls in 47,108
    sentinel samples were segment ramps (axis 12) — lag is the storm's first symptom, not RAM filling.
-4. **Self-imposed refusals for kernel walls.** KMAX refuses the 33rd session; quota sustains ~3.9
-   active — both fire long before RAM at current per-session cost.
+4. **Self-imposed refusals for kernel walls.** KMAX refuses the 33rd session; quota sustains
+   ~~**~3.9 active**~~ → **6.2–11.0 active** (🚨 **corrected 2026-09-03** — same ruling as the
+   header and rung 3 above: the 3.9 was priced off the cache-read composition refuted at
+   `../scaling-bottlenecks-2026-08-09.md` §2a; replacement is
+   `../orchestration-units-2026-08-19/A6-VERIFY-quota-economics.md` §C4, model-free. The
+   2026-09-02 pass corrected :7 and :57 and missed this restatement in the same file) — both
+   fire long before RAM at current per-session cost.
 5. **The wrong victim.** GUI dialogs (kitty "4.73TB", iTerm2 "~500GB") attribute coalition/VSZ to
    the visible terminal — two investigation cycles + one terminal migration spent on decoys
    (`crash-rootcause-2026-08-09.md` §1).
