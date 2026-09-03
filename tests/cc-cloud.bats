@@ -879,3 +879,114 @@ setup() {
   [ -f "$CC_CLOUD_STATE/nostamp.decl" ]
   [[ "$output" == *"1 skipped"* ]]
 }
+
+# ── THE PER-FILE READER (W7, drain circuit §3f) ───────────────────────────────────────────────────
+# `cmd_list --json` used to answer each of eighteen fields with its own full-file scan through
+# `dfield`, and escape each through its own `$( )` subshell: 11,394 file scans and ~12,000 forks to
+# project a 633-file store. Foreground that is 13 s and invisible; in the background QoS band the
+# autonomy sweep runs in, the same call ate 674 s of a 900 s bounded pass — three quarters of the
+# cloud lane's wall clock, before the network or one unit of work (`worst_unit_s: 4` in that pass's
+# own ledger row). `dload` reads each file ONCE and `jesc_v` escapes without forking.
+#
+# The projection is unchanged, so the only NEW failure modes are the ones a per-file reader has and
+# a per-field reader cannot: state carried between rows, a value that is not re-escaped, a
+# duplicated key resolved the other way, and a key that was never meant to be assignable at all.
+# Each case below fails against exactly one of those.
+
+@test "W7 no BLEED between rows — a declaration missing a field reads EMPTY, not the previous row's" {
+  have_subject
+  # Row 1 is rich, row 2 is minimal. A reader that resets per-file gives row 2 empties; one that
+  # reuses its variables gives it row 1's values, and the store silently reports a session's goal,
+  # account and custody as belonging to a session that never declared them. `dfield` could not fail
+  # this way — it re-read the file for every field — so it is the cost of reading once.
+  mkdir -p "$CC_CLOUD_STATE"
+  printf 'id=rich\nbranch=claude/rich\nremote=origin\nrepo=/r\ntrunk=origin/main\npaths=a.sh,b.sh\naccount=next3\nitem=deadbeef\nnotify_back=5\ngoal=land it\ngoal_probe=ok\ncustody=rich\nbase_probe=ok\nbase_sha=abc123\nurl=https://x/1\ndeclared_at=1999999000\n' > "$CC_CLOUD_STATE/rich.decl"
+  printf 'id=sparse\nbranch=claude/sparse\ndeclared_at=1999999500\n' > "$CC_CLOUD_STATE/sparse.decl"
+
+  run "$CLOUD" list --json
+  [ "$status" -eq 0 ]
+
+  # POSITIVE CONTROL FIRST: row 1 must actually carry the values, or "row 2 is empty" would be
+  # satisfied by a reader that read nothing at all.
+  rich="$(printf '%s\n' "$output" | jq -c 'select(.id=="rich")')"
+  [ "$(printf '%s' "$rich" | jq -r '.account')" = "next3" ]
+  [ "$(printf '%s' "$rich" | jq -r '.goal')" = "land it" ]
+  [ "$(printf '%s' "$rich" | jq -r '.custody')" = "rich" ]
+  [ "$(printf '%s' "$rich" | jq -r '.paths')" = "a.sh,b.sh" ]
+
+  sparse="$(printf '%s\n' "$output" | jq -c 'select(.id=="sparse")')"
+  [ -n "$sparse" ] || { echo "the sparse declaration was not projected at all"; false; }
+  for k in account goal goal_probe custody paths notify_back repo trunk base_sha url_unused; do
+    [ "$k" = url_unused ] && continue        # `url` has a documented non-empty default; not a bleed site
+    v="$(printf '%s' "$sparse" | jq -r --arg k "$k" '.[$k]')"
+    [ -z "$v" ] || { echo "BLEED: sparse.$k = '$v' — it was only ever set on the PREVIOUS row"; false; }
+  done
+  # `base_probe` has a fixed non-empty fallback, so its bleed shows up as the WRONG constant.
+  [ "$(printf '%s' "$sparse" | jq -r '.base_probe')" = "unmeasured" ]
+}
+
+@test "W7 escaping survives the fork removal — a quote and a backslash still produce valid JSON" {
+  have_subject
+  # `jesc_v` is `jesc` assigned instead of printed. If the escape were dropped or reordered the row
+  # stops parsing, which no amount of eyeballing the diff would have caught.
+  mkdir -p "$CC_CLOUD_STATE"
+  printf 'id=esc\nbranch=claude/esc\ndeclared_at=1999999000\ngoal=say "hi" and \\ then stop\npaths=a"b.sh,c\\d.sh\n' > "$CC_CLOUD_STATE/esc.decl"
+
+  run "$CLOUD" list --json
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | python3 -c 'import json,sys; [json.loads(l) for l in sys.stdin if l.strip()]'
+  row="$(printf '%s\n' "$output" | jq -c 'select(.id=="esc")')"
+  [ "$(printf '%s' "$row" | jq -r '.goal')"  = 'say "hi" and \ then stop' ]
+  [ "$(printf '%s' "$row" | jq -r '.paths')" = 'a"b.sh,c\d.sh' ]
+}
+
+@test "W7 a DUPLICATED key resolves first-wins, exactly as the per-field reader did" {
+  have_subject
+  # `dfield` returned on its FIRST match. A per-file reader that keeps overwriting silently answers
+  # LAST-wins, and every consumer of this projection would read a different value than before with
+  # nothing in the diff to say so. Not expected input — but "the same answer the old reader gave"
+  # is the only acceptable one for a change whose whole claim is that nothing changed.
+  mkdir -p "$CC_CLOUD_STATE"
+  printf 'id=dup\nbranch=claude/first\ndeclared_at=1999999000\naccount=FIRST\naccount=SECOND\nbranch=claude/second\n' > "$CC_CLOUD_STATE/dup.decl"
+
+  run "$CLOUD" list --json
+  [ "$status" -eq 0 ]
+  row="$(printf '%s\n' "$output" | jq -c 'select(.id=="dup")')"
+  [ "$(printf '%s' "$row" | jq -r '.account')" = "FIRST" ]
+  [ "$(printf '%s' "$row" | jq -r '.branch')"  = "claude/first" ]
+}
+
+@test "W7 a field VALUE is stored, never executed — the no-eval invariant survives the rewrite" {
+  have_subject
+  # `dfield`'s own note is the invariant: a declaration is data written by a dispatcher, so
+  # evaluating it would be an injection seam. `dload` assigns through `printf -v`, which writes
+  # THROUGH a name and never parses the value — so a value that is shell must come back as bytes.
+  #
+  # WHAT GUARDS THIS, stated precisely because the first draft of this test credited the wrong
+  # mechanism and stayed green against a mutant of it: the guard is `printf -v` plus the `${p}_`
+  # NAME PREFIX, not the `DLOAD_KEYS` whitelist. The prefix is why a `PATH=` line in a .decl can
+  # only ever reach `D_PATH`; measured on this box, `printf -v` also refuses an invalid identifier
+  # outright rather than evaluating an array subscript. The whitelist's job is to bound the name
+  # set that the per-file reset clears — a different property, pinned by the BLEED case above.
+  mkdir -p "$CC_CLOUD_STATE"
+  rm -f "$BATS_TEST_TMPDIR/pwned"
+  printf 'id=inj\nbranch=claude/inj\ndeclared_at=1999999000\naccount=safe\ngoal=$(touch %s/pwned)\npaths=`touch %s/pwned2`\n' \
+    "$BATS_TEST_TMPDIR" "$BATS_TEST_TMPDIR" > "$CC_CLOUD_STATE/inj.decl"
+  # An ordinary declaration after it: if the reader had been derailed, this row would not survive.
+  printf 'id=after\nbranch=claude/after\ndeclared_at=1999999500\naccount=next2\n' > "$CC_CLOUD_STATE/after.decl"
+
+  run "$CLOUD" list --json
+  [ "$status" -eq 0 ]
+  [ ! -f "$BATS_TEST_TMPDIR/pwned" ]  || { echo "EXECUTED: a .decl value ran as a command substitution"; false; }
+  [ ! -f "$BATS_TEST_TMPDIR/pwned2" ] || { echo "EXECUTED: a .decl value ran as a backtick command"; false; }
+
+  # POSITIVE CONTROL: the value is not merely un-run, it is PRESENT and verbatim. A reader that
+  # dropped the field entirely would also leave no file behind, and would pass the two lines above.
+  inj="$(printf '%s\n' "$output" | jq -c 'select(.id=="inj")')"
+  [ -n "$inj" ] || { echo "the declaration was not projected at all"; false; }
+  [ "$(printf '%s' "$inj" | jq -r '.goal')"  = "\$(touch $BATS_TEST_TMPDIR/pwned)" ]
+  [ "$(printf '%s' "$inj" | jq -r '.paths')" = '`touch '"$BATS_TEST_TMPDIR"'/pwned2`' ]
+  [ "$(printf '%s' "$inj" | jq -r '.account')" = "safe" ]
+  after="$(printf '%s\n' "$output" | jq -c 'select(.id=="after")')"
+  [ "$(printf '%s' "$after" | jq -r '.account')" = "next2" ]
+}

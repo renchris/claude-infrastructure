@@ -222,6 +222,13 @@ now() { if [ -n "${CC_CLOUD_NOW:-}" ]; then printf '%s' "$CC_CLOUD_NOW"; else da
 
 # ── helpers ──────────────────────────────────────────────────────────────────────────────────────
 jesc() { local s="$1"; s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; printf '%s' "$s"; }
+# The same escape, ASSIGNED rather than PRINTED — because `$(jesc …)` is a fork, and `cmd_list`
+# spends nineteen of them per row across the whole store. Identical string transform, same order,
+# no subshell: `printf -v` writes through a name the caller supplies. See `dload` for the measurement
+# that made a constant factor here worth removing.
+jesc_v() { # <outvar> <value>
+  local s="$2"; s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; printf -v "$1" '%s' "$s"
+}
 is_num() { case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac; return 0; }
 
 # Bound `detail` by BYTES, not characters, and only ever at a byte boundary we chose.
@@ -243,6 +250,58 @@ dfield() { # <file> <key> → value (empty if absent)
   [ -f "$f" ] || return 0
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in "$k="*) printf '%s' "${line#*=}"; return 0 ;; esac
+  done < "$f"
+  return 0
+}
+
+# ── dload — ONE read per FILE, where `dfield` is one read per FIELD ───────────────────────────────
+# 🚨 THE FIXED COST OF THE INVENTORY WAS 74% OF THE CLOUD LANE'S ENTIRE PASS BUDGET, AND NONE OF IT
+# WAS WORK. `dfield` streams a whole declaration to answer for ONE key, which is right and cheap for
+# a caller that wants one. `cmd_list --json` wants EIGHTEEN, and it wants them for every declaration
+# in the store: 633 x 18 = 11,394 full-file scans, ~148,000 bash-level `read` iterations, to project
+# a store that is 633 files of thirteen lines.
+#
+# In the foreground that is 13 s and invisible, which is why it survived. The autonomy sweep runs
+# under launchd `ProcessType Background` — the background QoS band, PRI 4 — and the SAME call
+# measured 674 s of a 900 s bounded pass on 2026-09-03, i.e. the pass spent three quarters of its
+# wall clock on this projection before it touched the network or ran a single unit of work, then was
+# SIGKILLed by its own bound with `worst_unit_s: 4` in the ledger. A/B on this box, same command,
+# same second: foreground 13 s, background band still unfinished at 42 min. This is the repo's
+# `bound-must-fit-the-band-not-the-bench` lesson in its purest form — nothing here is wrong in the
+# band it was written in (memory: bound-must-fit-the-band-not-the-bench).
+#
+# So the fix is a constant factor, not a bound: read each file ONCE. No cap moves, no timeout moves,
+# no work is skipped, and the projection is byte-identical — the deadline machinery above it is
+# untouched and simply gets a budget to spend.
+#
+# NO `eval`, deliberately. The `dfield` note above is the invariant: a declaration is data written by
+# a dispatcher, so evaluating it would be an injection seam. `printf -v` assigns THROUGH a variable
+# NAME and never parses the value, so a field holding `$(rm -rf …)` is stored as those bytes.
+#
+# THE NAME IS SAFE FOR A DIFFERENT REASON THAN THE VALUE, and it is worth being exact because the
+# first draft of this comment was not. What confines the name is the `${p}_` PREFIX: a `PATH=` line
+# in a declaration can only ever reach `D_PATH`, never `PATH`. `printf -v` also refuses an invalid
+# identifier outright rather than evaluating it — verified on this box against an array-subscript
+# payload, which did not run. `DLOAD_KEYS` is NOT that guard; its job is below.
+#
+# WHAT `DLOAD_KEYS` IS ACTUALLY FOR: it bounds the set of names a declaration can assign to exactly
+# the set the reset loop clears. That equality is the whole safety property of reading once — a key
+# outside it would set a variable that the NEXT file's reset never clears, which is precisely the
+# bleed this function must not have. It is a correctness bound, not a security one.
+#
+# FIRST occurrence wins, matching `dfield`'s `return 0` on its first match exactly. A duplicated key
+# is not expected, but "the same value the old reader would have produced" is the only acceptable
+# answer for a projection whose consumers cannot tell which reader ran.
+DLOAD_KEYS='id branch remote repo trunk paths base_probe base_sha url account item notify_back goal goal_probe custody declared_at sha since'
+dload() { # <file> <prefix> → sets <prefix>_<key> for every whitelisted key; absent keys become empty
+  local f="$1" p="$2" line k v got=' '
+  for k in $DLOAD_KEYS; do printf -v "${p}_$k" '%s' ''; done
+  [ -f "$f" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    k="${line%%=*}"
+    [ "$k" = "$line" ] && continue          # no '=' at all: not a field line
+    case "$got" in *" $k "*) continue ;; esac
+    case " $DLOAD_KEYS " in *" $k "*) v="${line#*=}"; printf -v "${p}_$k" '%s' "$v"; got="$got$k " ;; esac
   done < "$f"
   return 0
 }
@@ -1125,6 +1184,23 @@ all_ids() {
 cmd_list() {
   local fmt="table" probe=0 id f seen branch remote item dat base bprobe lsha lsince n age any=0
   local url line state detail rcmd
+  # `dload` and `jesc_v` assign these through `printf -v`, which shellcheck cannot follow — every
+  # one would otherwise be an SC2154 "referenced but not assigned". Declaring them is deliberately
+  # NOT a `disable=SC2154`: that would switch the check off for the whole function, and this keeps
+  # it live for anything in here that is genuinely a typo. It also makes the working set LOCAL, so
+  # the projection stops leaving globals behind for the next caller.
+  #
+  # Exactly the names this function READS, no more: a declared-but-unread name is an SC2034, and
+  # padding the list to match DLOAD_KEYS would have traded one lint for another. `dload` still
+  # writes the rest of its key set under both prefixes; those are unreferenced here, so they stay
+  # global and are rewritten (and re-cleared) on every call, which is the same lifetime they had
+  # before this declaration existed.
+  local D_branch='' D_remote='' D_item='' D_declared_at='' D_base_sha='' D_base_probe='' D_url=''
+  local D_account='' D_paths='' D_notify_back='' D_goal='' D_goal_probe='' D_custody=''
+  local D_repo='' D_trunk='' S_sha='' S_since=''
+  local E_id='' E_branch='' E_remote='' E_item='' E_dat='' E_account='' E_paths='' E_nb=''
+  local E_goal='' E_gp='' E_cust='' E_itemid='' E_repo='' E_trunk='' E_base='' E_lsha=''
+  local E_lsince='' E_url='' E_state='' E_detail='' E_rcmd='' E_ret=''
   ONLY_SET=""
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1149,15 +1225,17 @@ cmd_list() {
     in_only "$id" || continue
     any=1
     f="$STATE/$id.decl"; seen="$STATE/$id.seen"
-    branch="$(dfield "$f" branch)"
-    remote="$(dfield "$f" remote)"
-    item="$(dfield "$f" item)"
-    dat="$(dfield "$f" declared_at)"
-    base="$(dfield "$f" base_sha)"
-    bprobe="$(dfield "$f" base_probe)"; [ "$bprobe" = ok ] || bprobe="unmeasured"
-    lsha="$(dfield "$seen" sha)"
-    lsince="$(dfield "$seen" since)"
-    url="$(dfield "$f" url)"; [ -n "$url" ] || url="https://claude.ai/code"
+    # TWO file reads for this row, not eighteen — see `dload` above for what that cost the sweep.
+    dload "$f" D; dload "$seen" S
+    branch="$D_branch"
+    remote="$D_remote"
+    item="$D_item"
+    dat="$D_declared_at"
+    base="$D_base_sha"
+    bprobe="$D_base_probe"; [ "$bprobe" = ok ] || bprobe="unmeasured"
+    lsha="$S_sha"
+    lsince="$S_since"
+    url="$D_url"; [ -n "$url" ] || url="https://claude.ai/code"
     if is_num "$dat"; then age=$((n - dat)); [ "$age" -lt 0 ] && age=0; else age=0; fi
     # THE ARBITER, not a copy of it: state/detail/recover come from `classify` verbatim.
     state=""; detail=""; rcmd=""
@@ -1168,29 +1246,36 @@ cmd_list() {
       [ -n "$state" ] || state="UNKNOWN"
     fi
     if [ "$fmt" = json ]; then
+      # Every value is escaped THROUGH a variable, not through a command substitution. The emitted
+      # bytes are identical; what changes is that a 633-row projection stops forking ~12,000 times.
+      jesc_v E_id "$id"; jesc_v E_branch "$branch"; jesc_v E_remote "$remote"; jesc_v E_item "$item"
+      jesc_v E_account "$D_account"
+      is_num "$dat" && E_dat="$dat" || E_dat=null
       printf '{"id":"%s","branch":"%s","remote":"%s","item":"%s","declared_at":%s,"age_s":%s,' \
-        "$(jesc "$id")" "$(jesc "$branch")" "$(jesc "$remote")" "$(jesc "$item")" \
-        "$(is_num "$dat" && printf '%s' "$dat" || printf 'null')" "$age"
-      printf '"account":"%s",' "$(jesc "$(dfield "$f" account)")"
+        "$E_id" "$E_branch" "$E_remote" "$E_item" "$E_dat" "$age"
+      printf '"account":"%s",' "$E_account"
       # The management fields ride the SAME projection as everything else. A consumer that had to
       # open the .decl itself would be a second reader of this store with its own parser — the
       # shape that has already cost this repo a checker holding a stale copy of what it audits
       # (memory: uniform-error-ratio-indicts-the-model). One call to the owning tool, or none.
+      jesc_v E_paths "$D_paths"; jesc_v E_nb "$D_notify_back"
+      jesc_v E_goal "$D_goal";   jesc_v E_gp "$D_goal_probe"
+      jesc_v E_cust "$D_custody"; jesc_v E_itemid "$D_item"
+      jesc_v E_repo "$D_repo";   jesc_v E_trunk "$D_trunk"
       printf '"paths":"%s","notify_back":"%s","goal":"%s","goal_probe":"%s","custody":"%s","item_id":"%s",' \
-        "$(jesc "$(dfield "$f" paths)")" "$(jesc "$(dfield "$f" notify_back)")" \
-        "$(jesc "$(dfield "$f" goal)")" "$(jesc "$(dfield "$f" goal_probe)")" \
-        "$(jesc "$(dfield "$f" custody)")" "$(jesc "$(dfield "$f" item)")"
-      printf '"repo":"%s","trunk":"%s",' \
-        "$(jesc "$(dfield "$f" repo)")" "$(jesc "$(dfield "$f" trunk)")"
+        "$E_paths" "$E_nb" "$E_goal" "$E_gp" "$E_cust" "$E_itemid"
+      printf '"repo":"%s","trunk":"%s",' "$E_repo" "$E_trunk"
+      jesc_v E_base "$base"; jesc_v E_lsha "$lsha"; jesc_v E_url "$url"
+      is_num "$lsince" && E_lsince="$lsince" || E_lsince=null
       printf '"base_probe":"%s","base_sha":"%s","last_sha":"%s","last_seen_at":%s,"url":"%s",' \
-        "$bprobe" "$(jesc "$base")" "$(jesc "$lsha")" \
-        "$(is_num "$lsince" && printf '%s' "$lsince" || printf 'null')" "$(jesc "$url")"
+        "$bprobe" "$E_base" "$E_lsha" "$E_lsince" "$E_url"
       if [ "$probe" -eq 1 ]; then
+        jesc_v E_state "$state"; jesc_v E_detail "$(clip "$detail")"; jesc_v E_rcmd "$rcmd"
         printf '"state":"%s","detail":"%s","recover":"%s",' \
-          "$(jesc "$state")" "$(jesc "$(clip "$detail")")" "$(jesc "$rcmd")"
+          "$E_state" "$E_detail" "$E_rcmd"
       fi
-      printf '"retired":%s}\n' \
-        "$([ -f "$STATE/$id.retired" ] && printf 'true' || printf 'false')"
+      if [ -f "$STATE/$id.retired" ]; then E_ret=true; else E_ret=false; fi
+      printf '"retired":%s}\n' "$E_ret"
     else
       local obs
       if [ -f "$STATE/$id.retired" ]; then obs="RETIRED"
