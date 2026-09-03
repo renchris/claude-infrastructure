@@ -780,6 +780,79 @@ function consumed(l, hase,   t, pre, i) {
   return 1
 }
 
+# Clause 5, TWELFTH CORRECTION 2026-09-03: A || SWALLOWS THE PIPELINES STATUS ONLY AT THE TOP LEVEL
+# OF THE LAST STAGE. The eleventh correction made clauses 2 and 3 agree about WHICH adjacent pair
+# they judge. Clause 5 runs BEFORE that loop and drops the whole LINE, and it was keyed on a ||
+# occurring ANYWHERE in seg[n]. Its own sibling clause 3b, twelve lines below, tests the SAME token
+# and ALSO requires a group opener - because a || inside a group returns the GROUPs status, not the
+# pipelines. So the two clauses agreed about the token and disagreed about its SCOPE, and the file
+# already carried the deciding knowledge one clause away: g14 pins { p || true; } | consumer GREEN
+# and says in its own label that the group NEUTRALISES the 141, which is a claim about WHERE the
+# group is. Nothing pinned the mirror image, so nothing refused it.
+#
+# WHAT THE MEASUREMENT SAID. Producer held CONSTANT at `cat BIG` and the last command CONSTANT at
+# `grep -q NEEDLE`; ONLY the bracketing around the || varies, so a difference between two cells
+# cannot be attributed to either end. 20 trials per cell, status read as NON-ZERO rather than
+# -eq 141, with PIPESTATUS read in the SAME shell that ran the pipeline:
+#   · `cat BIG | grep -q N`                20/20 non-zero, PIPESTATUS [141 0]   FIRE ANCHOR
+#   · `cat BIG | grep -q N || true`         0/20   - the || IS top level, and it does swallow
+#   · `cat BIG | { grep -q N || true; }`   20/20 non-zero, PIPESTATUS [141 0] - BYTE-IDENTICAL to
+#        the anchor. The group returns 0 and pipefail still takes the max over EVERY stage, so the
+#        141 survives untouched. The shipped clause 5 exonerated this line: a FALSE NEGATIVE.
+#   · `cat BIG | ( grep -q N || true )`    20/20 non-zero - ( ) and { } scope alike, so this cannot
+#        key on the brace character the way clause 3b does.
+#   · `cat BIG | ( grep -q N ) || true`     0/20 - the NEG that bounds the repair in the OTHER
+#        direction: a group in the last stage with the || OUTSIDE it still swallows, so a repair
+#        reading "any group opener disqualifies" would MINT this correct line. Only a depth walk
+#        separates the two, which is why this is a function and not a regex.
+#   · NEG on bytes: the brace shape over an 18-byte body reads 0/20, so the finding stays
+#        denominated in the bytes still owed at the exit point and not in the bracketing alone.
+#   · MIRROR, already correct and already pinned by g14: `{ cat BIG || true; } | grep -q N` 0/20.
+# Instruments: ~/.claude/autonomy/probe287-scope.sh (7 gated predictions, all exact) and
+# probe287-stage.sh. r23/r24/g20 pin all three directions.
+#
+# Quotes are tracked so that a group opener or a || inside a STRING cannot move the depth, and the
+# closer arm is guarded at zero: the pipe split hands this function a FRAGMENT, so an unbalanced
+# `)` from an enclosing substitution must not drive the depth negative and swallow a real top-level
+# || below it. That guard is what keeps g8 - v=$(git log | head -1) || true - GREEN.
+#
+# AND IT FAILS SAFE ON A FRAGMENT IT CANNOT PARSE, WHICH THE FIRST CUT DID NOT AND WHICH COST A
+# MEASURED FALSE POSITIVE. This detector reads PHYSICAL lines; 13 of the census rows span more than
+# one. On a continuation line the quote state is unbalanced BY CONSTRUCTION, and a closing quote
+# reads as an opening one - so bin/cc-claude-bin:64, whose `|| pin=""` closes an assignment opened
+# on line 63, had its || read as QUOTED and was minted. That line is correct code: over the LOGICAL
+# line the || is top level and does swallow the 141. Clause 5 is a SCREEN, and a screen that
+# convicts on a fragment it cannot parse converts a known blind spot into a wrong verdict. So an
+# fragment whose quote state is unbalanced AT A POINT WHERE IT ACTUALLY MATTERS returns 1 - the
+# shipped exoneration, unchanged.
+#
+# BOTH HALVES OF THAT CONDITION ARE LOAD-BEARING AND THE FIRST CUT HAD ONLY ONE. Returning 1 on
+# `q != 0` alone is far too blunt: the tail segment of any `VAR="$( a | b )"` ends on an unmatched
+# closing quote, so it exonerated SEVEN sites the shipped detector flags - a ratchet SHRINK, which
+# is the direction a6449cebc took to block every land in this repo. The ambiguity only bites when a
+# || was SKIPPED because of the quote state, so both must hold: a skipped ||, and an unbalanced
+# fragment to make the skip untrustworthy. A line with no || at all is unaffected, which is what
+# those seven are. Measured across the three cuts: NEW 1 / LOST 0, then NEW 0 / LOST 7, then
+# NEW 0 / LOST 0.
+# (\002 is the masked ||; \047 quote, \042 dquote, \134 backslash.)
+function toplevel_or(s,   i, c, d, q, qor) {
+  d = 0; q = 0; qor = 0; i = 1
+  while (i <= length(s)) {
+    c = substr(s, i, 1)
+    if (q == 1) { if (c == "\047") q = 0; else if (c == "\002") qor = 1; i++; continue }
+    if (q == 2) { if (c == "\134") { i += 2; continue } if (c == "\042") q = 0; else if (c == "\002") qor = 1; i++; continue }
+    if (c == "\134") { i += 2; continue }
+    if (c == "\047") { q = 1; i++; continue }
+    if (c == "\042") { q = 2; i++; continue }
+    if (c == "(" || c == "{") { d++; i++; continue }
+    if (c == ")" || c == "}") { if (d > 0) d--; i++; continue }
+    if (c == "\002" && d == 0) return 1
+    i++
+  }
+  if (q != 0 && qor) return 1          # a || we SKIPPED, on a fragment we cannot trust - exonerate
+  return 0
+}
+
 BEGIN { FS = "" }
 {
   raw = $0
@@ -828,7 +901,7 @@ BEGIN { FS = "" }
   if (n < 2) next
 
   last = seg[n]
-  if (last ~ /\002/)        next      # clause 5 — a trailing || swallows the 141
+  if (toplevel_or(last))    next      # clause 5 - a TOP-LEVEL trailing || swallows the 141
 
   # Clauses 2 and 3, ELEVENTH CORRECTION 2026-09-03 — they ask ONE question about ONE ADJACENT PAIR,
   # and a pipeline of n stages has n-1 of them. The tenth correction handed clause 3 the consumer of
@@ -1206,6 +1279,27 @@ EOF"
   expect g13 GREEN "\$( … ) as an ARGUMENT — the outer command's status wins"
   mk_noe g14 "{ strings -a \"\$bin\" 2>/dev/null || true; } | grep -q 'Claude-Session' && return 0"
   expect g14 GREEN "{ p || true; } NEUTRALISES the 141 and keeps the early exit"
+  # ── WHICH SCOPE, pinned in all three directions, 2026-09-03 (twelfth correction) ───────────────
+  # g14 directly above pins a || inside the PRODUCER's group GREEN, and its own label says the group
+  # NEUTRALISES the 141 — which is a claim about WHERE the group is. Clause 5 tested the same token
+  # in the LAST stage and never asked that question, so the mirror image of g14 was exonerated by a
+  # clause whose sibling twelve lines away already knew better. Nothing pinned the mirror, so
+  # nothing refused it.
+  # Measured with the producer and the last command held CONSTANT and ONLY the bracketing varying,
+  # 20 trials per cell, status read as NON-ZERO, PIPESTATUS read in the same shell as the pipeline:
+  # `cat BIG | { grep -q N || true; }` is 20/20 non-zero at PIPESTATUS [141 0] — BYTE-IDENTICAL to
+  # the unmitigated `cat BIG | grep -q N`, because the group returns 0 and pipefail still takes the
+  # max over EVERY stage. g20 is the arm that stops this being a widening: a group in the last stage
+  # with the || OUTSIDE it still swallows (0/20), so a repair reading "any group opener disqualifies"
+  # would MINT that correct line. Only a depth walk separates r24 from g20, which is why clause 5 is
+  # now a function. r23/r24 measured 20/20 orphaned; g20 and g8 measured 0/20.
+  # Do not merge these into a loop, for the reason r16/r17 give above.
+  mk r23 "if cat \"\$f\" | { grep -q x || true; }; then :; fi"
+  expect r23 RED "|| inside the LAST stage's brace group does NOT swallow the pipeline's 141"
+  mk r24 "if cat \"\$f\" | ( grep -q x || true ); then :; fi"
+  expect r24 RED "the ( ) spelling of the same scope — the brace character is not the variable"
+  mk g20 "if cat \"\$f\" | ( grep -q x ) || true; then :; fi"
+  expect g20 GREEN "a group in the last stage with the || OUTSIDE it still swallows — the widening bound"
   # ── THE `$?` CAPTURE (2026-08-26) ────────────────────────────────────────────────────────────
   # Clause 4 asks "does anything READ this pipeline's status?" — and, for a file with no errexit,
   # answered a DIFFERENT question: `if (!hase) return 0`, i.e. "only a control-flow position or
