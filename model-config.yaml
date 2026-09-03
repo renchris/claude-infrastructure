@@ -141,21 +141,34 @@ versions:
 #      `plan-usage` on the strength of Anthropic's 2026-07-17 Fable 5 announcement (all Max +
 #      Team Premium plans, 50% of limits). That statement was about Fable 5 and does NOT
 #      transitively cover 5.1 — read the current plan docs before assuming it carries over.
-#   3b. 🚨 REWRITE THE EXACT-EQUALITY FABLE TESTS **IN THE SAME DIFF AS THE FLIP.** This is
-#      measured, not a worry (census 2026-09-03). Every consumer that decides "is this a Fable
-#      session?" does it with SHELL STRING EQUALITY against the literal `claude-fable-5`, and
-#      `claude-fable-5-1` is not equal to `claude-fable-5`. On a flip each of these silently
-#      evaluates FALSE — no error, no log, just a Fable session that nothing accounts as one:
+#   3b. 🚨 REWRITE THE HARDCODED `claude-fable-5` SITES **IN THE SAME DIFF AS THE FLIP.** This
+#      is measured, not a worry (census 2026-09-03). `claude-fable-5-1` is not equal to
+#      `claude-fable-5`, and NOTHING here does a prefix match. There are TWO classes, with two
+#      different failure modes — fix both; a fix to only one is worse than neither, because it
+#      makes the adoption look done.
+#
+#      (i) DETECTORS — test `$MODEL` against the literal. On a flip each silently evaluates
+#          FALSE: no error, no log, just a Fable session that nothing accounts as one.
 #        scripts/handoff-fire.sh:7928   [ "$MODEL" = "claude-fable-5" ] && FABLE_EFFECTIVE=1
 #        scripts/handoff-fire.sh:7713   [ "$MODEL" = "claude-fable-5" ] && kind=fable
 #        scripts/handoff-fire.sh:7838   [ "$MODEL" = "claude-fable-5" ] && probe_model=...
 #        scripts/handoff-fire.sh:7485   [ "${MODEL:-}" = "claude-fable-5" ] && return 0
-#        scripts/handoff-fire.sh:7436   fable) MODEL="claude-fable-5" ;;        ← alias mapping
-#        bin/reso-resume-one:349-352    model=claude-fable-5 ;;                 ← 4 account arms
-#        bin/cc-route:325 · bin/cc-wave-plan:891                                ← test assertions
-#        scripts/limit-recover/lr-fire-resume.sh
+#        bin/cc-route:325 · bin/cc-wave-plan:891   ← selftest assertions; these would go
+#          VACUOUSLY GREEN, still asserting the OLD id, so the suite cannot catch (i) for you.
 #      7928 is the load-bearing one: `FABLE_EFFECTIVE` is how the fire path knows it is spending
 #      the frontier meter at all.
+#
+#      (ii) EMITTERS — WRITE the literal (they are keyed on an alias or on CC_ACCT_IS_FABLE, not
+#          on the model string, so they do not "go false"). After a flip they keep launching
+#          Fable **5** while the SSOT says the frontier is 5.1 — the config reads adopted and
+#          the fleet is not. Arguably the worse half, and invisible to any check that only greps
+#          for equality tests.
+#        scripts/handoff-fire.sh:7436          fable) MODEL="claude-fable-5" ;;   ← alias mapping
+#        bin/reso-resume-one:349-352           model=claude-fable-5 ;;    ← 4 per-account arms
+#        scripts/limit-recover/lr-fire-resume.sh:225
+#              [ "$CC_ACCT_IS_FABLE" = 1 ] && { model="claude-fable-5"; effort="high"; }
+#        scripts/limit-recover/lr-handoff.sh:338
+#              FIRE_ARGV+=(--model claude-fable-5 --effort "${EFFORT:-high}")
 #      THE ASYMMETRY IS THE TRAP. The zshrc cost warning (~/.zshrc:489) uses a GLOB —
 #      `[[ " ${CLAUDE_NEXT_MODEL:-} $* " == *claude-fable-5* ]]` — which DOES match
 #      `claude-fable-5-1`. So a flip made without 3b yields the worst possible split: the human
