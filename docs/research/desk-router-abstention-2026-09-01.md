@@ -151,7 +151,9 @@ feedback loop, and this doc does not claim otherwise.
 Six tests added across the two suites, each with a mutant that reproduces the pre-fix blindness and
 goes red.
 
-## NOT shipped — filed, with the reason
+## Filed, then shipped 2026-09-03 — inherit the last sweep's `k`
+
+### What was filed (kept verbatim — the prescription the implementation departed from)
 
 **Inherit the last sweep's `k`** (`bin/claude-accounts:3040-3042` add `"k"` to `_prev_snapshot`'s
 projection; `:1330` stamp the inherited value with a staleness marker, bounded by the existing 600 s
@@ -163,10 +165,67 @@ over removing `ProcessType Background` (deliberate, and would not close the tail
 gate reading `None` and still refusing — preserving the half of the `None` contract that must never
 weaken. `handoff-fire.sh:6020-6043` would need stale-marker awareness.
 
-**Why not this session:** it is a routing-**eligibility** policy change and needs its own
+**Why not that session:** it is a routing-**eligibility** policy change and needs its own
 mutant-proven suite; and the instrument that would let anyone evaluate it landed only in the two
 commits above and has produced no data yet. Shipping the policy change ahead of its own measurement
 would repeat exactly the error §6 documents.
+
+### What shipped, and the one place it departs
+
+The projection change and the 600 s bound landed as filed. **The stamp did not: the inherited
+census goes into a SEPARATE field (`k_stale` + `k_as_of`), and `row["k"]` keeps its `None`.**
+
+The filing note's own safety paragraph is what argues against its own prescription. It establishes
+that the rotation gate survives a stamp on `row["k"]` — but it establishes that for exactly ONE
+consumer, `heal()`, and by an accident of that call site (it reads the argument, not the row). The
+sentence immediately after concedes the general case: `handoff-fire.sh` reads `.k` out of `--json`
+and compares it for **equality to 0** to authorise a Phase-1 headless relogin. Stamping `row["k"]`
+would hand that gate a *remembered* zero, and a redeem under N live sessions retires the token the
+losers hold — a 400 `invalid_grant`, the logout-manufactured-by-an-unmeasured-`ps` failure the
+`None` contract was created to abolish. Every `.k` consumer not updated in the same diff would fail
+**open**, in that direction.
+
+The separate field inverts it. An un-updated reader still sees `k = null`, so it still refuses:
+**the un-updated case is the safe case.** `handoff-fire.sh` therefore needed no behavioural change
+— only a comment at that jq site saying why `.k_stale` must never be added to it, which is the
+"stale-marker awareness" the note asked for, discharged by making the marker unreachable rather
+than by teaching one more consumer about it.
+
+Two things the note did not name, both found while building it:
+
+- **`k` alone gives ONE sweep of memory, which is the wrong horizon.** The inherited row is written
+  back into the cache with `k = None`, and `_prev_snapshot` reads rows back out of it — so the next
+  starved sweep reads `None` and abstains anyway. The dominant failure is a *run* of starved sweeps
+  (§4: p50 10.2 s, p90 34.0 s against a 90 s TTL). `k_stale` and its **original** `k_as_of` are both
+  carried forward unchanged, so the 600 s bound is measured on the last real `ps`, not on the last
+  *attempt* — the same re-dating defect `inherit_lastgood` was fixed for at `:1108`.
+- **`scripts/desk-strand-replay.py` had to learn the field or it would invent abstentions.** On a
+  `panes-stale` row the recorded `k` is null, so a replay reading only `k`/`k_work` re-derives
+  `unmeasured` and re-excludes a decision the router admitted and charged — turning routed sweeps
+  into phantom abstentions in every strand analysis drawn from the series.
+
+`k_src` gains a fourth value, `panes-stale`, rather than re-labelling `panes`: both take the
+RESIDENT cap (it is the same census either way, so the gate is unchanged), but a replay has to be
+able to tell a measurement of this sweep from a memory of an earlier one. `route-meta` gains
+`k_stale=` and `k_stale_age_s=` for the same reason — a decision charged from a 9-minute-old census
+is a different claim from one charged at 5 s, and `k_src` alone cannot say which.
+
+| | change | file |
+|---|---|---|
+| 3 | `inherit_k` + `_k_census`; `_prev_snapshot` carries `k`/`k_stale`/`k_as_of`; `k_src` gains `panes-stale`; recorder and `route-meta` carry the value and its age; the board renders `3*` | `bin/claude-accounts` |
+| 4 | the jq relogin gate stays `.k`-only, with the reason stated where the edit would be made | `scripts/handoff-fire.sh` |
+| 5 | the replay reconstructs `k_stale`, so a `panes-stale` sweep replays as routed | `scripts/desk-strand-replay.py` |
+
+Twelve tests in `tests/claude-accounts-k-inherit.bats`, three of them mutants aimed at the exact
+lines that carry the split (a stamp on `row["k"]`; an unbounded grace; a projection that drops the
+provenance keys), plus a control that RED-proves the replay coupling.
+
+**Still open — the measurement §6 asks for.** This changes eligibility *before* the desk-lane
+instrument has produced a body of data, which is the risk the original filing named. What makes
+that acceptable rather than the same error again is that the change is now *observable*: every
+inherited decision records `k_src=panes-stale` with `k_stale_age_s`, so the question "how often did
+the router route on memory, and how old was it" is answerable from disk for the first time. Re-read
+the series before deciding whether 600 s is the right bound.
 
 ## Open / cannot determine
 

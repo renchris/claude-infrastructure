@@ -6030,6 +6030,16 @@ pre_fire_account_sweep() {
       # and 0 is precisely what unlocks the Phase-1 relogin gate below, so an unread `ps` would
       # authorise a headless token redeem underneath N live sessions. Emit the word instead: it
       # is not "0", so the gate refuses and the account takes the operator bridge line.
+      #
+      # `.k_stale` — the census claude-accounts inherits from the last sweep under its 600s
+      # grace — is DELIBERATELY NOT READ HERE, and must not be added. It exists to unblock
+      # ROUTING eligibility, where an instrument failure says nothing about whether an account
+      # is usable. This gate is the other kind: it decides whether to redeem a refresh token,
+      # and a redeem under N live sessions retires the token the losers hold (400 invalid_grant
+      # — a logout manufactured by an unmeasured `ps`). That needs a PROVEN zero, and a
+      # remembered zero is not one. Reading `.k` alone is what keeps this refusal automatic:
+      # `k` is null by contract on an inherited row, so the word "unmeasured" still reaches the
+      # gate below and it still refuses, with no change on this side.
       .rows[] | select(.auth_actionable == true)
       | [.acct, .auth, (if (.k | type) == "number" then .k else "unmeasured" end)] | @tsv
     else "SKEW" end' 2>/dev/null || true)"

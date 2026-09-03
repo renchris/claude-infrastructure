@@ -1117,6 +1117,80 @@ def inherit_lastgood(row, ledger, prev):
     return False
 
 
+K_GRACE_S_DEFAULT = 600      # == cache_grace_s's own default; see inherit_k
+
+
+def _age_s(iso):
+    """Seconds since an ISO stamp, or None if it is absent/unparseable. None means UNKNOWN age,
+    and every caller here treats unknown as OUT of grace — a stamp we cannot date cannot be
+    proven inside a bound."""
+    h = hrs_until(iso)
+    return None if h is None else -h * 3600.0
+
+
+def inherit_k(row, prev, grace_s, ts=None):
+    """Carry the last MEASURED pane census onto a row whose own `ps` census failed, into
+    `k_stale`/`k_as_of` — never into `row['k']`. Returns True if anything was inherited.
+
+    WHY THIS EXISTS (desk-router-abstention-2026-09-01 §4). `k is None` is charged by
+    `_excluded` as `concurrency-unmeasured`, and 68 of 230 recorded desk decisions abstained on
+    it — the single largest exclusion reason. The producer is one starved instrument: the ONLY
+    sweeper runs at `ProcessType: Background` + `LowPriorityIO`, where `ps -wwEo command=` blows
+    its hardcoded `timeout=10` on 501/501 recorded failures while the same walk measures 0.054s
+    in the foreground. Because ONE instrument feeds all four accounts, its failure excludes the
+    WHOLE FLEET at once, and the router's refusal does not stop the launch: `claude()` falls
+    through to `_claude_pinned`. A mechanism built to SPREAD load therefore converted "spread
+    across four accounts" into "concentrate every launch on the most-drained account" (§7:
+    `next` at 73.0% weekly against next3's 33.2%) for up to 600s at a time.
+
+    WHY A SEPARATE FIELD, and not a stamp on `row['k']` as the filing note proposed. `k is None`
+    feeds TWO gates, and only ONE of them may weaken:
+
+      · ROUTING eligibility (`_excluded`) — an instrument failure says nothing about whether the
+        account is usable, so abstaining here is the defect this fixes.
+      · TOKEN ROTATION — `heal()`'s `k_live > 0` gate, and `handoff-fire.sh`'s Phase-1 headless
+        relogin gate, which reads `.k` out of `--json` and compares it for EQUALITY to 0. A
+        redeem under N live sessions retires the token the losers hold: a 400 invalid_grant, i.e.
+        a LOGOUT manufactured by an unmeasured `ps`. That gate needs a PROVEN zero, and a
+        remembered zero is not one.
+
+    Stamping `row['k']` would have made every consumer that was not updated fail OPEN, in exactly
+    that direction. A separate field inverts it: an un-updated reader keeps seeing `k = None` and
+    keeps refusing, so the un-updated case is the SAFE case. `heal()` is doubly safe — it reads
+    `k_live` from probe_account's ARGUMENT, not from the row — but that is a property of one call
+    site, and this contract must not depend on it.
+
+    BOUNDED BY THE MEASUREMENT'S OWN AGE, not by the last sweep's. `k_as_of` is carried forward
+    unchanged across re-inheritance (see _prev_snapshot), so a run of starved sweeps expires the
+    memory 600s after the last real `ps`, not 600s after the last attempt. 600s is `cache_grace_s`
+    — deliberately the SAME bound the lock-degrade path already serves quota under, because this
+    is the same claim about the same sweep and a second constant would be free to drift from it.
+
+    NOT the alternatives, and why (§ NOT shipped). Raising `timeout=10` spends TTL margin a sweep
+    already breaches at p90 34s; removing `ProcessType: Background` is deliberate and would not
+    close the tail. Both treat a starved instrument as a tuning problem; this treats a one-sweep
+    gap in a slow-moving count as what it is."""
+    if row.get("k") is not None:
+        return False
+    pr = (prev or {}).get("rows", {}).get(row.get("acct"))
+    if not pr:
+        return False
+    if pr.get("k") is not None:
+        # Genuinely measured in that sweep ⇒ the sweep's own time dates it.
+        val = pr["k"]
+        as_of = (datetime.fromtimestamp(ts, timezone.utc).isoformat() if ts else None)
+    elif pr.get("k_stale") is not None:
+        val, as_of = pr["k_stale"], pr.get("k_as_of")     # provenance, never re-dated
+    else:
+        return False
+    age = _age_s(as_of)
+    if age is None or age < 0 or age > grace_s:
+        return False
+    row["k_stale"] = val
+    row["k_as_of"] = as_of
+    return True
+
+
 def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
     """Probe ONE account -> (row, lastgood_entry | None).
 
@@ -1370,6 +1444,12 @@ def collect(cfg, no_heal=False, prev=None):
         # not measure, so k_eff's census fallback — not a fabricated 0 — is what cached rows
         # replay for the TTL.
         row["k_work"] = wcounts.get(acct["name"]) if wcounts is not None else None
+        # AFTER the probes, never before: probe_account's `k_live` argument is what heal()'s
+        # rotation-safety gate reads, and it must keep seeing the None that a failed `ps`
+        # produced. Inheriting here reaches the ROUTER (k_src/k_eff/_excluded read the row) and
+        # cannot reach that gate, which is the whole point of the split — see inherit_k.
+        inherit_k(row, prev, cfg.get("cache_grace_s", K_GRACE_S_DEFAULT),
+                  ts=(prev or {}).get("ts"))
         if entry:
             ledger[acct["name"]] = entry
             lastgood_dirty = True
@@ -1644,14 +1724,30 @@ def urgency_exp(R):
     return _cliff_env("CC_ROUTE_URGENCY_EXP", R.get("URGENCY_EXP", URGENCY_EXP_DEFAULT))
 
 
+def _k_census(r):
+    """The pane census this row can be charged with: the live count, else the inherited one.
+
+    ONE derivation, for the same reason k_src is one: k_eff and k_eff_desk both re-spell this
+    fallback, and a row the desk lane charged from `k_stale` while the general lane charged 0
+    would be two opinions about the same measurement. Returns None when neither exists — the
+    caller decides what absence means (k_src calls it 'unmeasured'; the two k_eff's would
+    otherwise re-fabricate the zero the None contract abolished)."""
+    k = r.get("k")
+    return k if k is not None else r.get("k_stale")
+
+
 def k_eff(r):
     """Concurrency the router CHARGES an account: working sessions where the sweep could measure
     them, the pane census where it could not (an older cache, a walk past its budget — absence
     degrades to the stricter count, never to zero), plus live fire-time phantoms. The census is
     a ceiling on burn, not a measure of it — routing on it excluded the account the goal most
-    needed burned."""
+    needed burned.
+
+    A census INHERITED from the last sweep (k_stale, ≤600s, see inherit_k) is charged exactly
+    like a live one. That is deliberate and it is the strict direction: the alternative the
+    fallback used to take was `r.get("k", 0)` → 0, i.e. charging an unmeasured row NOTHING."""
     kw = r.get("k_work")
-    base = kw if (kw is not None and _term_on("CC_ROUTE_KWORK")) else r.get("k", 0)
+    base = kw if (kw is not None and _term_on("CC_ROUTE_KWORK")) else _k_census(r)
     return (base or 0) + (r.get("k_phantom") or 0)
 
 
@@ -1659,13 +1755,22 @@ KMAX_RESIDENT_DEFAULT = 40    # ceil(150/4) + headroom — see k_cap's docstring
 
 
 def k_src(r):
-    """WHICH instrument produced this row's concurrency charge: 'work' | 'panes' | 'unmeasured'.
+    """WHICH instrument produced this row's concurrency charge:
+    'work' | 'panes' | 'panes-stale' | 'unmeasured'.
 
     One derivation, because the cap, the KF gradient, the exclusion reason and route-meta's
-    `k_src=` field all have to agree about it. They previously each re-spelled the same ternary."""
+    `k_src=` field all have to agree about it. They previously each re-spelled the same ternary.
+
+    'panes-stale' is a FOURTH value, not a re-labelling of 'panes', because the two differ in
+    the one place a replay has to be able to tell them apart: 'panes' is a measurement of THIS
+    sweep, 'panes-stale' is a memory of an earlier one carried under the 600s grace. Both take
+    the RESIDENT cap (k_cap) — the instrument is the same census either way — so the split costs
+    nothing at the gate and buys attribution at the recorder."""
     if r.get("k_work") is not None and _term_on("CC_ROUTE_KWORK"):
         return "work"
-    return "panes" if r.get("k") is not None else "unmeasured"
+    if r.get("k") is not None:
+        return "panes"
+    return "panes-stale" if r.get("k_stale") is not None else "unmeasured"
 
 
 def k_cap(r, R):
@@ -1698,7 +1803,12 @@ def k_cap(r, R):
     as a land takes to converge — a required-key addition fails CLOSED fleet-wide in that window.
 
     'unmeasured' has no cap because it has no charge; `_excluded` refuses it before reaching here.
-    The value returned for it is the resident cap purely so KF cannot divide by a None."""
+    The value returned for it is the resident cap purely so KF cannot divide by a None.
+    'panes-stale' takes the RESIDENT cap too, and not because it falls through this branch by
+    accident: an inherited count is the pane census remembered, so it answers the resident
+    question and must be capped by the resident gate. Charging it against KMAX (8) would refuse
+    the 9th resident session fleet-wide for as long as `ps` stayed starved — reintroducing the
+    33rd-session wall this split exists to remove, on the exact rows least able to argue back."""
     if k_src(r) == "work":
         return R["KMAX"]
     return R.get("KMAX_RESIDENT", KMAX_RESIDENT_DEFAULT)
@@ -1717,7 +1827,7 @@ def k_eff_desk(r):
     if not _term_on("CC_ROUTE_DESK_ASSIGN_EXEMPT"):
         return k_eff(r)
     kw = r.get("k_work")
-    base = kw if (kw is not None and _term_on("CC_ROUTE_KWORK")) else r.get("k", 0)
+    base = kw if (kw is not None and _term_on("CC_ROUTE_KWORK")) else _k_census(r)
     ph = r.get("k_phantom_desk")
     if ph is None:
         ph = r.get("k_phantom")
@@ -2556,9 +2666,16 @@ def _excluded(r, R, cliff=True, k_of=None):
     if su >= R["S_CUT"] and (sr is None or sr >= R["EPS_H"]):
         return "5h-cutoff"
     # NEITHER instrument could measure this row's concurrency (ps failed AND the transcript walk
-    # was unusable). Refuse — but as DATA, not policy, so it exits 3 and callers may degrade to a
-    # proxy rather than reading a measurement failure as "the fleet is at capacity". The old
-    # all-zero `ps` return made this case admit instead, which is the fail-open direction.
+    # was unusable) AND no census from the last 600s survives to inherit. Refuse — but as DATA,
+    # not policy, so it exits 3 and callers may degrade to a proxy rather than reading a
+    # measurement failure as "the fleet is at capacity". The old all-zero `ps` return made this
+    # case admit instead, which is the fail-open direction.
+    #
+    # The inheritance is what makes this reason RARE rather than routine. It was the single
+    # largest exclusion in the record — 68 of 230 desk decisions, every one of them taking out
+    # all four accounts at once, because one starved `ps` is the sole producer for the whole
+    # fleet (desk-router-abstention-2026-09-01 §4). It still fires, and must: past the grace the
+    # memory is not evidence about now, and refusing is then the honest answer.
     if k_src(r) == "unmeasured":
         return "concurrency-unmeasured"
     if (k_of or k_eff)(r) >= k_cap(r, R):
@@ -3030,7 +3147,11 @@ def record_utilization(rows, path=None, min_interval_s=UTIL_MIN_INTERVAL_S):
                     # every row, which is the strict end, and so could not settle whether next4's
                     # 15pp strand was a real concurrency lockout or an artifact of that assumption.
                     # Free to record — same sweep, same row, both fields already on it.
-                    "k_work": r.get("k_work"), "k_src": k_src(r),
+                    # k_stale beside them for the same replay reason: on a k_src="panes-stale"
+                    # row `k` is null by contract, so a replay reading only `k`/`k_work` would
+                    # compute k_eff = 0 for a row the router charged a real census — the one
+                    # arithmetic error that turns an admitted row into an unexplainable one.
+                    "k_work": r.get("k_work"), "k_src": k_src(r), "k_stale": r.get("k_stale"),
                     "session_pct": r.get("session_pct"), "weekly_pct": r.get("weekly_pct"),
                     "fable_pct": r.get("fable_pct"),
                     "session_reset_at": r.get("session_reset_at"),
@@ -3116,10 +3237,20 @@ def _prev_snapshot(cfg):
         # quota_as_of/stale_quota ride along so inherit_lastgood can carry provenance forward
         # instead of re-dating inherited numbers to "now" on every sweep. The burn-delta loop
         # (the only other consumer) reads a fixed field tuple and ignores the extra keys.
+        #
+        # k/k_stale/k_as_of ride along for inherit_k, and all THREE are needed, not just `k`.
+        # `k` alone would carry the pane census exactly ONE sweep past its measurement: the
+        # inherited row is written back into the cache with k=None (the None contract), so the
+        # next starved sweep would read None here and abstain again. The dominant failure is a
+        # RUN of starved sweeps (p90 34s against a 90s TTL), which is precisely the case one
+        # sweep of memory cannot cover. Carrying k_stale + its ORIGINAL k_as_of is the same
+        # provenance fix inherit_lastgood needed at :1108 — and it is what makes the 600s grace
+        # a bound on the MEASUREMENT's age rather than on the last sweep's.
         return {"ts": old.get("ts"),
                 "rows": {r["acct"]: {k: r.get(k) for k in
                                      ("session_pct", "weekly_pct", "fable_pct",
-                                      "quota_as_of", "stale_quota")}
+                                      "quota_as_of", "stale_quota",
+                                      "k", "k_stale", "k_as_of")}
                          for r in old.get("rows", [])}}
     except (OSError, json.JSONDecodeError, KeyError):
         return None
@@ -3483,6 +3614,21 @@ def _fmt_asof(iso):
     return dt.strftime("%H:%M") if dt.date() == now.date() else dt.strftime("%a %d")
 
 
+def _fmt_k(r):
+    """A row's live-session count as a cell: '3' measured · '3*' inherited · '?' unmeasured.
+
+    THREE states, not two, because they are three different facts and the display is the one
+    consumer allowed to degrade rather than refuse. '?' says nobody looked; '3*' says the last
+    look found 3 and it is inside the 600s grace the router charged it under. Rendering an
+    inherited count bare would let the board assert a measurement it did not take — the same
+    defect `*` already marks on an inherited quota percent, which is why it is the same mark."""
+    k = r.get("k")
+    if k is not None:
+        return str(k)
+    ks = r.get("k_stale")
+    return "?" if ks is None else f"{ks}*"
+
+
 def _fmt_when(iso):
     """A FUTURE stamp → absolute LOCAL wall-clock: 'Sat 19:39' inside a week, 'Sat Aug 08'
     beyond it. Same rule the /accounts chat readout applies to resets, and for the same
@@ -3771,7 +3917,7 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
                 f"{pctc(r, 'fable_pct'):>{_NW_PCT}}  {wk_n:<{_NW_WKR}} {login_n}".rstrip())
         else:
             out.append("| " + " | ".join([
-                name, ("?" if r.get("k") is None else str(r["k"])), pctc(r, "session_pct"),
+                name, _fmt_k(r), pctc(r, "session_pct"),
                 _md_cell(r.get("session_reset_at"), r.get("session_reset_h")),
                 pctc(r, "weekly_pct"), pctc(r, "fable_pct"),
                 _md_cell(wr, r.get("weekly_reset_h")), login]) + " |")
@@ -4000,8 +4146,12 @@ def render_table(rows, cfg, win, cached, prev=None):
         # `k` is None when `ps` could not be read (concurrency()'s None contract). The DISPLAY is
         # the one consumer that may degrade — it renders "?" rather than a fabricated 0, so the
         # board never shows an idle fleet it did not observe. It is NOT dimmed: unknown is news.
+        # `*` = inherited from the last sweep under the 600s grace (_fmt_k). Not dimmed on the
+        # stale branch either: `kv == 0` dims a PROVEN idle account, and a remembered zero has
+        # not been proven — dimming it would render "we did not look" in the ink of "we looked
+        # and nothing was there", which is the one distinction this cell exists to carry.
         kv = r.get("k")
-        k = c(f"{'?' if kv is None else kv:>4}", GRAY, dim=(kv == 0))
+        k = c(f"{_fmt_k(r):>4}", GRAY, dim=(kv == 0))
         if "error" in r and not r.get("poll_throttled"):
             # auth-broken (logged-out / token-invalid / keychain-error / expired-stale / no-data):
             # error text prominent, plus the STRANDED last-known weekly when the ledger has it
@@ -5027,7 +5177,15 @@ def main():
                               f"k_src={'off' if not _term_on('CC_ROUTE_KWORK') else k_src(w)}",
                               f"k_cap={k_cap(w, cfg['router'])}",
                               f"k_work={w.get('k_work') if w.get('k_work') is not None else '-'}",
+                              # `k` stays MEASURED-ONLY here (`-` when `ps` failed) so the field
+                              # keeps meaning one thing across the whole record; the inherited
+                              # census is a separate field, and its AGE is the falsifiable half
+                              # — a decision charged from a 9-minute-old census is a different
+                              # claim from one charged at 5 seconds, and `k_src=panes-stale`
+                              # alone cannot tell a replay which it was.
                               f"k={w.get('k') if w.get('k') is not None else '-'}",
+                              f"k_stale={w.get('k_stale') if w.get('k_stale') is not None else '-'}",
+                              f"k_stale_age_s={int(_a) if (_a := _age_s(w.get('k_as_of'))) is not None else '-'}",
                               f"k_eff={k_eff(w)}",
                               f"kwork_to={KWORK_TIMEOUTS}",
                               # §14's re-pick threshold, DECLARED BY THE ROUTER (backlog
