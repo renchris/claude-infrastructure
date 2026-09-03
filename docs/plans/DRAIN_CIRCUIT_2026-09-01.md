@@ -747,3 +747,54 @@ so it resolves on its own; it just cannot be *driven* from this side. `deploy-li
   real verdicts; the two branches tried both refused on their OWN gates (one falsely at the 120 s
   budget, then genuinely 2-of-28 with a budget that fit). A successful land is a property of the
   stranded branches, not of the repair — adjudication is task #174's.
+
+---
+
+## 3e. THE SIGKILL IS ATTRIBUTED — `timeout` kills itself (W6, 2026-09-03)
+
+**The sender is the `timeout` process.** GNU coreutils `timeout` 9.1 (`/opt/homebrew/bin/timeout`),
+invoked without `--foreground`, puts ITSELF and its child in a new process group and delivers the
+`-k` escalation to that whole group with `kill(0, SIGKILL)`. `SIGKILL` cannot be ignored, so
+coreutils' own anti-self-signal guard is a no-op for signal 9 and `timeout` dies before it can reach
+`status = EXIT_TIMEDOUT`. The shell therefore reports its direct child — the `timeout` pid — as
+`Killed: 9` and yields 137. Nothing external is involved.
+
+**The brief's premise was false, and it is the premise every wave since W3 inherited**: *"a `timeout`
+killing its own child surfaces as 124, so this SIGKILL arrives from OUTSIDE."* True of the child's
+death, false of `timeout`'s own. That is why three correct fixes changed nothing — the cause was
+never in the code they changed, and `cc-reaper`, jetsam, `compressor-sentinel`, `capacity-alarm`,
+`lead-supervisor` and `qos-census` are all uninvolved.
+
+**Proved by intervention, not correlation.** A bystander (`/tmp/w6-pgid-victim.sh`, matching no
+pattern on this box) placed in `timeout`'s process group DIES with it — a scope only a group-directed
+signal has, and one no argv matcher can select. Flipping the single flag that governs group
+signalling (`--foreground`) leaves that same bystander ALIVE and removes the job-control line, with
+every daemon still running. Control: a child that dies on SIGTERM returns 124, so the harness can
+produce the other verdict. Repeatability 5/5 within ~3 s each. Full arms, verbatim output and the
+honest limit: `docs/research/sigkill-attribution-2026-09-03.md`.
+
+**The precondition holds by construction**, which is why it is 137 on every row and not sometimes
+124: `cloud-return.sh:776` is `trap 'lock_release' EXIT INT TERM`, and a bash trap runs only between
+commands — when the bound fires the pass is inside `handle()` → `ship-land`, minutes long, so the
+child cannot exit inside the `-k 10` grace. Same signature at a different bound on the sibling call
+(`autonomy-sweep.sh:461`, `timeout -k 10 180 … cloud-refusal-route.sh`), killed in the same ticks.
+
+**The honest limit.** `dtrace` and `ktrace` both refuse without root (SIP). What is proven is that
+this mechanism reproduces the exact signature deterministically in isolation and is removed by the
+one flag that governs it; no external sender is REQUIRED to explain any observation. The one method
+that would close the residual "also" case is a root `dtrace proc:::signal-send` probe naming the
+sender pid — filed as an operator step, not guessed at.
+
+**Corollary, flagged not fixed.** `postland-verify.sh:34-35` defines CUT as a machine event and
+`:2837` names its discriminator as *"a peer pkill shows rc>128 / a job-control line"* — exactly what
+`timeout -k`'s own escalation produces, and the suite runs under `timeout -k 10 10800` (observed
+live, pid 46358, 02:50 elapsed). So CUT cannot distinguish an external pkill from our own bound
+firing. That matters because CUT is what holds `last-green` behind live HEAD and blocks
+`deploy-live` per §W5. Stated as a RISK: the §W5 stamp's `run_s: 2157` is not a 10800 s bound, so
+that particular cut was something else, and establishing an actual misfire needs the per-run rc.
+
+**This licenses no bound change.** The bound is not the defect; the reading of 137 was. `--foreground`
+is not a fix either — the child is still SIGKILLed and the pass still cut; it only stops the blast
+reaching `timeout` and the group. W5's deadline remains the right owner of the real remaining
+question (one `handle()` unit can exceed the whole remaining budget once started), now free of a
+phantom killer.
