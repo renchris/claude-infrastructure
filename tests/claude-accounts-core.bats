@@ -1878,6 +1878,49 @@ print("OK")'
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
+@test "RP-29 S4: the drain row carries the START TIME, and the caption carries K's provenance" {
+  # ADDED, not folded into the case above, deliberately: that fixture has no session_reset_at and
+  # no stamped K, so it pins the row WITHOUT the M4′ clause and is the control for this one. The
+  # third fact on each row — how much dies (M3a) · is the demand routine (M5) · by when must it
+  # START (M4′) — is what completes §5.4's shape.
+  run python3 -c "$LOAD"'
+def drain(**kw):
+    base = dict(session_reset_at="2026-08-25T13:00:00Z", k_wk_per_sess=0.192, k_source="live")
+    base.update(kw); return row(**base)
+n4 = drain(acct="next4", weekly_pct=14, weekly_reset_h=119.2, burn_wk_ewma_ph=0.186,
+           session_pct=8, session_reset_h=0.54)
+n3 = drain(acct="next3", weekly_pct=92, weekly_reset_h=2.21, burn_wk_ewma_ph=1.140,
+           session_pct=13, session_reset_h=3.37)
+line = ca.pace_line([n3, n4])
+# the caption NAMES K and its source. It enters with S4 and not before: M3a consumes no K, so on
+# the S3 header this clause would have advertised a dependency that did not exist.
+assert line.startswith("weekly drain — pp that DIE at reset (K=0.192 live · "), line
+assert "nowcast at the last 48h of pace" in line, line
+# LATE leads with the floor — "late by X" is actionable only beside "and this much is already gone"
+assert "next3 strand ~5pp of 8 · ⚠ LATE by 0.6h — 2.8pp already unrecoverable" in line, line
+assert "next4 strand ~64pp of 86 · start by T−28h (91h slack)" in line, line
+# the start-by clause REPLACES the bare `· Nh left`: the slack already carries the horizon, and
+# two horizons on one row is how a reader ends up subtracting them.
+assert "119h left" not in line and "2.2h left" not in line, line
+# A NULL K ABSTAINS ON THE START TIMES AND KEEPS THE STRAND FIGURES. §5.4s mock says a null K
+# prints `no strand figures this sweep`; that is wrong in the other direction — the strand
+# nowcast never reads K, and killing a block over a coefficient it did not use is a fabricated
+# dependency. The caption must SAY the times are gone (an abstain renders as the word, L2).
+null_k = ca.pace_line([drain(acct="next3", weekly_pct=92, weekly_reset_h=2.21,
+                             burn_wk_ewma_ph=1.140, session_pct=13, session_reset_h=3.37,
+                             k_wk_per_sess=None, k_source=None)])
+assert "K unfitted" in null_k and "no start-by times" in null_k, null_k
+assert "next3 strand ~5pp of 8" in null_k, null_k
+assert "LATE" not in null_k and "start by" not in null_k, null_k
+assert "2.2h left" in null_k, null_k
+# ...and a sweep that never ran mentions K at all: absent stamp is not the same as a refusal.
+assert "K" not in ca.pace_line([row(acct="next3", weekly_pct=92, weekly_reset_h=2.21,
+                                    burn_wk_ewma_ph=1.140)]).split(chr(10))[0]
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
 @test "--assign CLI: appends one ledger row and never sweeps; unknown account exits 64" {
   local ledger="$BATS_TEST_TMPDIR/assign-cli.jsonl"
   # the fixture endpoint is unreachable — if --assign tried a sweep this would hang/fail loudly
