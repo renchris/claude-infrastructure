@@ -31891,3 +31891,70 @@ still gets a shallow clone and still needs `git fetch --unshallow` as its litera
 `70f0001c657b` stays operator-gated on that land. It changes no code — `0ce20c39` is the fix and it
 is three days old on trunk. And it does not touch the dispatch brief's FIRST STEP, which remains
 unsound as typed in a shallow container for the same reason the previous addendum gave.
+
+### Addendum 2026-09-03 — `b60eb29e97dd` came back a THIRD time: an addendum records a discharge, it does not perform one
+
+*(Dispatched cloud worker, drain row `b60eb29e97dd`. No code change: the row's cure is on trunk and
+was already on trunk at the previous dispatch. Docs-only, one file, append-only.)*
+
+**The row is still discharged, re-verified from a FULL clone.** `0ce20c39` (2026-08-29, ancestor of
+`origin/main`, footer `backlog b60eb29e97dd`) made `BEAT_STOP_ALLOWANCE=1` unconditional; the pre-fix
+line granted the baseline+1 allowance only on a PROMPT-kind arm-time beat, and the one path that
+instructs this arm — the wake floor in `hooks/session-continue.sh` — fires AT A STOP, so the
+allowance was 0 and the arming turn's own trailing Stop stood the watcher down at the first poll.
+The previous addendum (`1ff275ba`, 2026-09-02) concluded exactly this and named the ledger op it owed
+the desk. **The op was not run, so the row re-entered the wave.**
+
+🚨 **THE FOURTH LOCK FIRED A FOURTH TIME, AND ITS BOUNDARY MOVED — which is the finding.** This
+container's clone was shallow again, and inside that window `git log --oneline -8 --
+bin/cc-await-ping` returned exactly ONE commit: **`1cdd601f`**, whose real diff is
+`docs/parks/8f59467c92b0.md` + `docs/plans/MASTER_PRODUCT_REPOS.md` and touches **zero** lines of the
+tool. The previous addendum measured the identical wrong-and-confident answer with **`16cd3a36`** as
+the credited author. Same symptom, *different* boundary commit: **the false attributor is the
+HORIZON, not any particular commit**, so a "distrust this sha" note would not have caught it — only
+`git rev-parse --is-shallow-repository` reading false does. After `git fetch --unshallow`: **3,993**
+commits, `git log -S 'BEAT_STOP_ALLOWANCE=1' -- bin/cc-await-ping` names `0ce20c39` + `97e294eb`, and
+`merge-base --is-ancestor 0ce20c39 origin/main` scores the cure on trunk.
+
+**Re-verified, again without bats** (no `bats` binary in this container either), replicating the
+suite's three discriminating `b60eb29e97dd` cases standalone against the real binary and against a
+pre-fix MUTANT — the mutant placed in `bin/` so `hooks/lib/mailbox-pending.sh` still resolves off
+`dirname "$0"` and the refusal path is not mistaken for survival:
+
+| case | fixture | trunk | pre-fix mutant |
+|---|---|---|---|
+| A (RED-PROOF) | base seq 3 **stop** → seq 4 **stop** | **exit 2, held its term, banner `beat seq > 4`** | **exit 0, stood down at first poll, banner `beat seq > 3`** |
+| B (guard) | base seq 3 **stop** → seq 4 **prompt** | exit 0, stood down | exit 0, stood down |
+| C (guard) | base seq 3 **stop** → seq 5 **stop** | exit 0, stood down | exit 0, stood down |
+
+Case A discriminates; B and C hold in both directions, so the unconditional allowance is not a
+blindfold. The mutant's `beat seq > 3` is the field banner **the row itself quotes**, reproduced
+verbatim — an allowance of 0 is the only way to print it.
+
+🚨 **THE LOOP IS THE REAL DEFECT, AND ITS READER ALREADY SHIPPED.** Three dispatches have now
+correctly concluded *"done on trunk"* and **not one could close the row**:
+`~/.claude/autonomy/backlog.jsonl` does not exist in a cloud container — measured, not recalled
+(`cc-backlog done b60eb29e97dd` answers *"unknown id"*, i.e. the ledger loaded and the row is absent,
+not a store error) — so an off-box worker can only ever OWE the op. That owed op is not new either:
+`c8da1242`'s own commit body quotes a **still earlier** session's `needs_action` verbatim — *"1. Land
+it via desk box …; 2. Record item b60eb29e97dd done"* — and that commit shipped `cc-cloud inbox`
+precisely so such asks have a reader. **So the channel exists and the diagnosis has been correct
+three times running; what has never happened is the desk running one command.** Until it does, this
+row re-enters every wave, burns a worker slot, and produces a fourth identical addendum. A docs
+addendum is a record, not an actuator.
+
+**OWED TO THE DESK — runnable as typed, on the desk box:**
+
+```
+cc-backlog done b60eb29e97dd --evidence 0ce20c3934d96c34f9305e3e8e08c7dd9adf8c44
+```
+
+The op is `done`, not `block`: nothing here is operator-gated in the sense that would justify parking
+it. Blocking would park a finished row; reopening would re-cycle it.
+
+**What this does NOT settle.** It does not land `327653ff`/`44fa3f96`, so the next dispatched worker
+still gets a shallow clone and `git fetch --unshallow` remains its required first action — the
+brief's FIRST STEP is still unsound as typed in a shallow container, for the third dispatch running.
+It does not build the actuator that would let an off-box worker close its own row; `cc-cloud inbox`
+reads and classifies and deliberately never executes (`c8da1242`), and an actuator needs its own
+review, allowlist and consent gate. And it changes no code, because there is no code left to change.
