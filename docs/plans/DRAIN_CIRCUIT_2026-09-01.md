@@ -937,6 +937,35 @@ that needs a tick of the deployed sweep. The arithmetic now admits one: 4 + 229 
 budget, leaving ~487 s for units the deadline can spend and stop cleanly inside. The 229 s of scoped
 probes is unchanged and is the next binding term if it ever grows.
 
+🚨 **CORRECTION to the sentence immediately above — the next binding term is NOT the probes, it is a
+LAND, and a sibling session measured it the same day.** `3457755d7` (`fix(cloud-return): the price of
+a land outlives the pass that paid it`) found the complementary defect in W5's own deadline:
+`WORST_UNIT_S=0` at the top of every pass, so the measured reserve is destroyed by exactly the event
+it exists to predict, and the `N -gt 0` clause then admits unit #1 unconditionally. At their measured
+**p90 land of 680 s**, one unit does not fit the ~487 s this change hands back — so the land, not the
+229 s of probes, is what binds next. That commit reconciles with this one explicitly and declines to
+claim the fifteen observed 137s, which `worst_unit_s: 4` already attributes to fixed cost. **Read the
+two together: this one gives the pass a budget to spend, that one stops it spending the budget on a
+unit it cannot finish.** Neither is sufficient alone.
+
+### The two fixes RUN TOGETHER — nobody had done that, and they compose
+
+Both landed the same day, in different files (`bin/cc-cloud` here, `scripts/cloud-return.sh` there),
+so nothing forced them to meet. Run from the full trunk tree at `236c0c76c`, production shape —
+`timeout -k 10 900` · `taskpolicy -c background` · `CC_RETURN_BOUND_S=900` · `--limit 25` — against a
+COPY of the live declaration store under `--dry-run`:
+
+```
+rc=0   elapsed=145s of a 900s bound (budget 720)   25 examined
+       1 pass-scope · 18 `waiting` verdicts (so the scoped probes DID run) · NO pass-deadline row
+```
+
+An earlier attempt at this scored 111 s and is NOT the number to quote: it ran from a partial tree
+where `cloud-create-api.py` was absent, so 18 of 25 rows returned `abstain` — correct behaviour by
+the subject, and a nearly-vacuous measurement, because a row that abstains never pays for the work
+the timing is supposed to cover. The 145 s figure is from the full tree where those same rows reach a
+real verdict.
+
 ### §3f status at hand-off — LANDED, content-verified, NOT YET LIVE
 
 `7e0f6c9f1` is on `origin/main`; `land-verify` reported *3 path(s) present + content-identical*.
