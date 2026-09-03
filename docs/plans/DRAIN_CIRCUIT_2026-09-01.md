@@ -220,6 +220,15 @@ context. W0 was **L** and is done (its output is §1.1).
 | **W1** | L | **Stop the reaper eating the land** — whitelist `cloud-return`/`cloud-reconcile` + fixture pair | `bin/cc-reaper`, `tests/cc-reaper.bats` |
 | **W2** | S | **Make the churn visible** — drain conversion + stranded in `cc-value` | `bin/cc-value`, tests |
 | **W3** | S | **Re-aim the local lane at the backlog** — arm the §4.1 goal + closure floor | the drain-chain brief + `scripts/drain-chain-assert.sh` |
+| **W8** | L | ✅ DONE — **§1.4's missing instrument**: the effort arm + its carrier record (§3h) | `scripts/backlog-telemetry.sh`, `scripts/rotate-autonomy-logs.sh` (drain_health_check only), their two suites |
+
+**W8's locus is L, and it needs its one line of justification.** The wave's first act was a
+*measurement* against two live stores whose result decided whether there was any implementation at
+all — the fix was already landed, so a dispatched session briefed to "fix §1.4" would have built a
+second one. Once the answer was "instrument, not fix", the deliverable was one arm in one file plus
+its test, below the cost of briefing a session. Note that W3's row above claims this territory and
+did not deliver it: W3 was re-tasked onto the four §3b kills, which is why §4 recorded (d) as having
+no wave.
 
 Single owner per file; no wave shares one. Lead context budget: hold ≥50 %, succeed after W1 lands.
 Dependency: W1 blocks nothing formally, but until it lands the cloud lane cannot drain, so W2's
@@ -743,6 +752,8 @@ so it resolves on its own; it just cannot be *driven* from this side. `deploy-li
   drain rate; and (d) the local lane's self-reference (§1.4, recycle #277, no goal armed, zero
   backlog rows claimed), which still has NO wave assigned and is the remaining half of the
   operator's "deferring rather than completing" complaint.
+  ↳ **(d) is TAKEN by W8 — see the 2026-09-03 entry below and §3h.** Its "no goal armed" clause was
+  already false when written: `1eb128f88` landed the goal chokepoint on 09-01.
   ⚠️ **No cloud branch has LANDED yet.** The repaired path reaches the lander and the lander returns
   real verdicts; the two branches tried both refused on their OWN gates (one falsely at the 120 s
   budget, then genuinely 2-of-28 with a budget that fit). A successful land is a property of the
@@ -763,6 +774,26 @@ so it resolves on its own; it just cannot be *driven* from this side. `deploy-li
   reading. ⚠️ **Still no daemon-produced `cloud_return_rc: 0`**, and this wave cannot produce one:
   that row comes from the deployed sweep, which advances only through `deploy-live`'s GREEN stamp
   (§W5, §W5b). The mechanism proof is the deliverable; the row is the later confirmation.
+
+- **2026-09-03 — W8 DONE: §1.4 is measured, and its fix turned out to already be landed** (worktree
+  `drain-loop-w4`; full record §3h). The wave opened by checking the brief's premise and found the
+  closure-floor chokepoint (`1eb128f88`, 09-01) live and holding: the commits-per-closure ratio went
+  **49.0x on 09-01 → 4.1x on 09-02 → 3.6x on 09-03**, with 16 of the 19 rows closed in that window
+  carrying no `venue=cloud`. So the deliverable is not a second fix — it is the **instrument that
+  was missing**, without which the working fix regresses as silently as the `--goal` did for 183
+  fires. `backlog-telemetry.sh` gains an EFFORT arm (commits produced vs rows discharged,
+  `scope=repo`, sharing the conversion arm's exact window and denominator, `--assert`-participating,
+  abstaining on a numerator sample floor and on an unreadable repo). The live store reads **7.0x,
+  green, ceiling 10** — so it cannot fire on the day it lands, and F2 proves it can fire at all.
+  ⚠️ **The carrier had to change too, and that was this wave's own defect**: `rotate-autonomy-logs.sh`
+  parsed only `scope=fleet` and debounced on rc + conversion verdict, so on a fleet ALREADY red with
+  `drain-futile` an effort flip would have journalled `assert:"red"` beside `verdict:"drain-converting"`
+  and then been debounced into invisibility. `effort`/`effort_ratio` are now in the record and in the
+  key. No new launchd activation (§1.6 constraint holds). backlog-telemetry 23/23 ·
+  drain-conversion-churn 19/19 · five mutants RED-proved — **one of which (F5) exposed a vacuous
+  fixture of my own**, straddle-the-floor being the only shape that discriminates. Untouched and
+  named: close attribution is at 7.7% coverage, which is why `lane=local-drain` still reads
+  `lane-stalled` and why this arm is scoped fleet-wide rather than per-lane.
 
 ---
 
@@ -1197,3 +1228,116 @@ event.** A single rc 0 is satisfiable by a quiet box. The discriminating measure
 **Filed rather than built here:** add `load` and `elapsed_s` to the `cloud-return` IDL row, so the
 next person asking "did the fix work" can stratify instead of counting events. Until then the fixes
 stand on §3f's paired ratio and the suites, not on these three rows.
+
+---
+
+## 3h. §1.4 HAD A FIX AND NO INSTRUMENT — the effort arm (W8, 2026-09-03)
+
+§1.4 is the remaining half of the operator's "deferring rather than completing" complaint: the local
+lane produced **304 trunk commits against 30 backlog closures** over seven days, its whole file
+footprint being the drain's own machinery, each recycle auditing the recycle before it. The status
+log recorded it as the item with **no wave assigned**.
+
+### The fix already existed. Measured first, because the brief's premise deserved a check.
+
+`scripts/drain-recycle-fire.sh` landed `1eb128f88` on 2026-09-01 and is the chokepoint that puts the
+closure floor into the recycle GOAL — the one surface on this box that can refuse to let a session
+stop. It is live (a per-file symlink, so it converged on the land rather than waiting on
+`deploy-live`). Measured this session against the live stores:
+
+| day | trunk commits | distinct ids closed | ratio |
+|---|---|---|---|
+| 08-29 | 49 | 1 | **49.0x** |
+| 08-31 | 31 | 6 | 5.2x |
+| 09-01 | 49 | 1 | **49.0x** |
+| 09-02 | 41 | 10 | 4.1x |
+| 09-03 | 32 | 9 | 3.6x |
+
+The chokepoint landed at 09-01T21:51 local (09-02T04:51Z), and **16 of the 19 rows closed on 09-02
+and 09-03 carry no `venue=cloud`** — they are the local lane's own. So the mechanism is holding, and
+building a second fix for a defect whose fix is working would have been the wave's easiest mistake.
+
+### What was actually missing: nothing could SEE it, and nothing would see it regress
+
+Every arm of `backlog-telemetry.sh` read the backlog and only the backlog, so all of them were blind
+to the same axis — **what the fleet spent its day on**. A lane closing one row a day, on cadence,
+while landing forty-nine commits into its own machinery rendered `verdict=lane-ok`. That is §1.5 one
+level up: the instrument that exists reads healthy over the defect, exactly as `cc-value` read
+`value 87` through the zero-drain week.
+
+A fix with no instrument regresses silently, and this one already has a precedent for doing so: the
+chain dropped its `--goal` for **183 fires running** and no number on this box moved.
+
+### What landed
+
+An **EFFORT arm** in `scripts/backlog-telemetry.sh` — commits produced against rows discharged, over
+the same seven days every other arm reports, with `verdict=effort-productive` /
+`effort-self-referential` / `effort-unmeasured`, participating in `--assert`. Design points, each of
+which is a refusal of a trap this repo has already paid for:
+
+- **Scope is `repo`, labelled, and it is the same fact as `drain-futile`'s `scope=fleet` — not a
+  shortcut.** A commit carries an author and a message, not the `lane` this file attributes closes
+  by. Splitting the numerator per lane would mean inferring a lane from a commit, the identical
+  guess the file refuses at the top for `venue`. It counts what §1.4 counted, the way §1.4 counted
+  it, so the number is comparable to the one that named the bug.
+- **One window, indexed twice.** The shell hands jq a commits-per-day map; jq sums it over the same
+  `$w7dates` the conversion arm already scopes itself by, and the denominator is literally
+  `$w7dids`. There is no second definition of "a close" and no second window.
+- **The sample floor is on the NUMERATOR.** Below `CC_BLTM_EFFORT_MIN_COMMITS` (20) the arm
+  abstains — a quiet week is not a self-referential one. It is deliberately NOT on the closes:
+  `closes == 0` with real production is not too small a sample to judge, it is the **limit** of the
+  defect, and a floor placed there would abstain exactly where the alarm has to fire.
+- **A failed probe is UNKNOWN, never 0.** `COMMITS_BY_DAY` is the JSON literal `null` when git
+  cannot be read, and an empty map when git answered with no commits. Rendered as a clean zero, a
+  broken instrument would print the healthiest number this file can produce.
+- **The polarity is checked in both directions before shipping.** The live store reads **7.0x** over
+  7 days (green, ceiling 10) while the sick regime read 10.1x and 49x — so the arm neither fires on
+  the day it lands nor is incapable of firing.
+
+### The carrier could not have carried it, and that was this wave's own defect
+
+`rotate-autonomy-logs.sh` (the hourly host W2 wired the assert onto — still no new activation, per
+§1.6) parses the verdict from `grep 'scope=fleet'`, and its debounce key was `day + rc + conversion
+verdict`. So the new arm would have ridden the rc while the journalled reason still read
+`drain-converting` — a red with a green reason — and, because **the fleet is already red on
+`drain-futile`**, an effort flip would have changed neither key term and been **debounced into
+invisibility**. The record now carries `effort` and `effort_ratio`, parsed from its own `scope=repo`
+line, and `effort` is part of the debounce key.
+
+### Proof
+
+`tests/backlog-telemetry.bats` 23/23 (F1-F7 new), `tests/drain-conversion-churn.bats` 19/19 (E6/E7
+new). Six mutants RED-proved by anchored edits: the unresolved `$0` (F7), the `null` guard (F4), the floor's side (F5), the
+zero-closes branch (F3), the ceiling's inclusivity (F2), and the `--assert` increment (F2's rc).
+
+⚠️ **F5 initially survived its own mutant and the fixture was the reason.** It used 5 commits against
+10 closes with a floor of 20 — *both* terms under the floor — so moving the floor from the numerator
+to the denominator abstained either way and the case passed against the very defect its name claims
+to pin. Only a fixture that STRADDLES the floor discriminates (now 5 commits / 25 closes: under the
+denominator reading it renders 0.2x and `effort-productive`, and reds). A control whose two arms
+agree asserts nothing, and a control named after the property is not a control that tests it.
+
+🚨 **The land gate caught a live-layer blindness that every test I had written was structurally
+unable to see, and it is the §1.6 generator wearing a new face.** The arm derived its repo with
+`dirname "${BASH_SOURCE[0]}"/..`, and `scripts/self-path-lint.sh` refused the land (rc 6). It was
+right: `~/.claude/scripts/` is a tree of PER-FILE symlinks into the checkout, and
+`resolve_drain_telemetry` in `rotate-autonomy-logs.sh` **prefers that live path** — so the hourly
+caller, the only invocation that actually runs, would have resolved its root to `~/.claude`, which
+carries no `.git`, and rendered `effort-unmeasured` **forever**. Correct from every worktree, blind
+in production, and invisible to a direct-path test: an instrument built to stop a silent regression
+would itself have regressed silently on day one. `$0` is now resolved through its symlinks before
+any `..` is taken (the canonical BSD-safe loop; no `readlink -f`), and **F7 pins the LAYOUT rather
+than the call** — a fixture checkout that is a real repo plus a separate live tree holding only a
+symlink, invoked with `CC_BLTM_REPO` unset. RED-proved by restoring the exact pre-fix line.
+
+Also fixed: `tests/drain-conversion-churn.bats` now pins `CC_BLTM_REPO`. The arm's repo defaults to
+the checkout the subject lives in — the operator's real git history — so an unpinned default would
+have let that suite's verdicts, and the rotation host's journalling decisions, follow whatever
+happened to be committed that day.
+
+### What is NOT claimed
+
+The ratio moved before this wave and not because of it; this arm measures, it does not drain. And
+`lane=local-drain` still renders `lane-stalled` because close attribution sits at **7.7% coverage**
+(2,355 of 2,553 closes carry no `lane`) — the effort arm is scoped fleet-wide precisely so it does
+not inherit that gap, but the gap itself is untouched and is not this wave's.

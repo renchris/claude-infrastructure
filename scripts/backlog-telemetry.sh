@@ -56,6 +56,49 @@
 # an ABSTENTION with its own token, never a silent pass and never a red. That is the difference
 # between UNKNOWN and 0 that this repo keeps paying to re-learn.
 #
+# ── EFFORT: COMMITS PRODUCED vs ROWS DISCHARGED — the arm that reads a SECOND store ─────────────
+# Every arm above this one reads the backlog and only the backlog, so all of them are blind to the
+# same thing: WHAT THE FLEET SPENT ITS DAY ON. A lane that closes one row a day, on cadence, while
+# landing forty-nine commits into its own machinery renders `verdict=lane-ok` here — measured, on
+# 2026-08-29 and again on 2026-09-01, both 49 commits against 1 distinct close. That is not a
+# hypothetical false green; it is DRAIN_CIRCUIT_2026-09-01 §1.4, the operator's own complaint
+# ("deferring rather than completing"), and §1.5 records that no shipped surface could see it:
+# `cc-value` counts commits and reads 87 = healthy over the week the drain produced nothing.
+#
+# The defect has a fix — the closure floor in the recycle goal (`scripts/drain-recycle-fire.sh`,
+# landed 1eb128f88) — and had NO INSTRUMENT. A fix with no instrument is a fix that regresses
+# silently, which is how §1.4 arrived in the first place: the chain dropped its `--goal` 183 fires
+# running and nothing on this box divided one number by the other.
+#
+# 🚨 THE SCOPE IS THE REPOSITORY, NOT A LANE, AND THAT IS THE SAME FACT AS ABOVE, NOT A SHORTCUT.
+# A commit carries an author and a message; it does not carry the `lane` this file attributes closes
+# by. Splitting the numerator per lane would mean inferring a lane from a commit — the identical
+# guess this file refuses at the top for `venue`, one store over. So EFFORT is emitted ONCE, labelled
+# `scope=repo`, and it counts every commit on the trunk of the drain repo against every distinct row
+# the fleet discharged. That is exactly the ratio §1.4 measured (304 commits / 30 closes = 10.1x),
+# computed the same way, so the number this arm prints is comparable to the number that named the bug.
+#
+# THE WINDOW IS SHARED BY CONSTRUCTION, NOT BY COINCIDENCE. The shell hands jq a commits-PER-DAY map
+# and jq sums it over `$w7dates` — the same date list the conversion arm above already scopes itself
+# by. A numerator and a denominator computed over two windows that merely look alike is the error
+# this avoids; here there is one window object and both terms index it.
+#
+# POLARITY, and it has three outcomes because the sample lives in the NUMERATOR:
+#   · git unreadable / no trunk ref / the map absent → `effort-unmeasured`. UNKNOWN, never 0: a
+#     failed probe rendered as a clean zero would read as a repo that committed nothing, which is
+#     the healthiest possible number, printed for a broken instrument.
+#   · fewer than CC_BLTM_EFFORT_MIN_COMMITS commits in the window → `effort-unmeasured`. A quiet
+#     week is not a self-referential one, and a ratio over three commits is noise. The floor is on
+#     the commit count and NOT on the closes: closes==0 with real production is not too small a
+#     sample to judge, it is the LIMIT of the defect, and a floor placed there would abstain exactly
+#     where the alarm has to fire.
+#   · at or above CC_BLTM_EFFORT_MAX_RATIO commits per distinct close → `effort-self-referential`,
+#     and it counts toward --assert. Below it, `effort-productive`.
+# The default ceiling is 10, which is the operator's own number from §1.4. It is checked against the
+# live store both ways before shipping: the sick regime read 10.1x and 49x, the current one reads
+# 7.0x over 7 days and 4.1x over 2 — so this arm neither fires on the day it lands nor is incapable
+# of firing, and tests/backlog-telemetry.bats pins both directions on a fixture.
+#
 # ROUTING ACTIVITY is rendered too, in its own section, under a header that says what it is not.
 # Omitting it entirely was the first draft and it was worse: on the day attribution lands, EVERY lane
 # reads `lane-unattributed` and the operator learns nothing at all about the cloud drain — including
@@ -115,6 +158,29 @@ lane_cadence_h() {
 # same 7-day window, and the minimum sample below which the arm abstains rather than firing.
 CONV_MIN_PCT="${CC_BLTM_CONV_MIN_PCT:-25}"
 CONV_MIN_IDS="${CC_BLTM_CONV_MIN_IDS:-8}"
+
+# EFFORT thresholds and the second store this arm reads. The repo defaults to the one this script
+# lives in — the drain's own file footprint is entirely this repository (§1.4: tests/ 143, docs/
+# research/ 132, scripts/ 112, docs/plans/ 110, bin/ 58) — and every term is injectable so a fixture
+# reaches this arm without touching the real checkout.
+EFFORT_MAX_RATIO="${CC_BLTM_EFFORT_MAX_RATIO:-10}"
+EFFORT_MIN_COMMITS="${CC_BLTM_EFFORT_MIN_COMMITS:-20}"
+# $0 IS RESOLVED THROUGH ITS SYMLINKS BEFORE ANY `..` IS TAKEN, and this is not defensive style —
+# it is the difference between this arm working and being permanently blind. `~/.claude/scripts/` is
+# a tree of PER-FILE symlinks into the checkout, and `resolve_drain_telemetry` in
+# rotate-autonomy-logs.sh prefers exactly that live path, so the hourly caller reaches this file as
+# `~/.claude/scripts/backlog-telemetry.sh`. Naively, `dirname "$0"/..` is then `~/.claude` — which
+# carries no `.git` — and the arm would render `effort-unmeasured` forever, on the one invocation
+# that actually runs, while reading correct from any worktree. scripts/self-path-lint.sh caught this
+# in the land gate before it shipped. No `readlink -f`: that is GNU-only and this box is BSD.
+_bltm_self="${BASH_SOURCE[0]}"
+while [ -L "$_bltm_self" ]; do
+  _bltm_dir="$(cd "$(dirname "$_bltm_self")" && pwd)"
+  _bltm_self="$(readlink "$_bltm_self")"
+  case "$_bltm_self" in /*) ;; *) _bltm_self="$_bltm_dir/$_bltm_self" ;; esac
+done
+EFFORT_REPO="${CC_BLTM_REPO:-$(cd "$(dirname "$_bltm_self")/.." 2>/dev/null && pwd || true)}"
+EFFORT_TRUNK="${CC_BLTM_TRUNK:-origin/main}"
 
 DAYS=14
 MODE=render
@@ -176,6 +242,33 @@ if [ "$N_BAD" -gt 0 ] && [ "$SCAN_VERDICT" = ok ]; then SCAN_VERDICT=malformed; 
 NOW_EPOCH="$(date -u +%s)"
 NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+# ── READ THE SECOND STORE: commits per day on the drain repo's trunk ────────────────────────────
+# Produces a {"YYYY-MM-DD": n} map, or the JSON literal `null` when the repository cannot be read.
+# `null` is load-bearing and is NOT an empty map: an empty map means "git answered, and there were
+# no commits", while null means "git could not be asked". The model renders those as 0 and as
+# UNKNOWN respectively, which is the whole polarity of this arm.
+#
+# rc is checked at BOTH steps rather than piped into a counter. `git log ... | wc -l` would render a
+# git that failed outright as a clean 0 — the suppressed-stderr trap named in the constraints above,
+# and the one that would turn a broken instrument into the healthiest number this file can print.
+#
+# TZ is pinned UTC at the top of this file, so `--date=short` renders the same calendar day the
+# store's `Z` timestamps are bucketed by. Without that pin the two stores would disagree by up to a
+# day at every boundary and the ratio would silently mix windows.
+COMMITS_BY_DAY=null
+if [ -n "$EFFORT_REPO" ] \
+   && git -C "$EFFORT_REPO" rev-parse --verify --quiet "$EFFORT_TRUNK" >/dev/null 2>&1; then
+  COMMIT_DAYS_FILE="$(mktemp -t bltm-commits.XXXXXX)"
+  trap 'rm -f "$RECORDS_FILE" "$TAGGED_FILE" "$COMMIT_DAYS_FILE"' EXIT
+  # 60 days is comfortably wider than any window this file reports; jq selects the days it needs.
+  if git -C "$EFFORT_REPO" log "$EFFORT_TRUNK" --since='60 days ago' \
+       --date=short --format='%cd' > "$COMMIT_DAYS_FILE" 2>/dev/null; then
+    COMMITS_BY_DAY="$(jq -Rs 'split("\n") | map(select(length > 0))
+                              | group_by(.) | map({ key: .[0], value: length }) | from_entries' \
+                      "$COMMIT_DAYS_FILE")" || COMMITS_BY_DAY=null
+  fi
+fi
+
 # ── THE MODEL ────────────────────────────────────────────────────────────────────────────────────
 # One jq pass produces every number this file prints. Doing the arithmetic in ONE place is what keeps
 # --json and the rendered tables from ever disagreeing: they are the same object, formatted twice.
@@ -187,6 +280,8 @@ MODEL="$(jq -s \
   --argjson nSeen "$N_SEEN" \
   --argjson nGood "$N_GOOD" \
   --argjson nBad "$N_BAD" \
+  --argjson commitsByDay "$COMMITS_BY_DAY" \
+  --argjson effortMinCommits "$EFFORT_MIN_COMMITS" \
   --arg scan "$SCAN_VERDICT" '
   # ── the six STATE verbs, and only those. Everything else is an annotation. ──────────────────────
   def state_of($e):
@@ -302,6 +397,19 @@ MODEL="$(jq -s \
   | ( $w7recs | map(select(.event == "done") | .id) | unique ) as $w7dids
   | ( $w7cids | map( . as $i | select( ($w7dids | index($i)) != null ) ) | length ) as $w7conv
 
+  # ── EFFORT over that SAME $w7dates window — commits produced vs distinct rows discharged ────────
+  # `$w7dids` is already the distinct ids that reached `done` in the window, so this denominator and
+  # the conversion arm are literally the same value — there is no second definition of "a close".
+  # The numerator indexes the commit map by the same date list. A day the map does not mention
+  # contributes 0 commits, which is correct — git answered for that day and there were none.
+  | ( if $commitsByDay == null then null
+      else ( $w7dates | map( $commitsByDay[.] // 0 ) | add // 0 ) end ) as $w7commits
+  | ( $w7dids | length ) as $w7closes
+  | ( if   $w7commits == null                   then "effort-unmeasured"
+      elif $w7commits < $effortMinCommits       then "effort-unmeasured"
+      elif $w7closes == 0                       then "effort-self-referential"
+      else null end ) as $effortPre
+
   | { now: $nowIso, nowEpoch: $now,
       scan: { rawLines: $rawLines, seen: $nSeen, good: $nGood, malformed: $nBad, verdict: $scan },
       span: { first: $F.firstTs, last: $F.lastTs, days: ($series | length) },
@@ -324,6 +432,16 @@ MODEL="$(jq -s \
                                  else (($w7conv * 1000 / ($w7cids | length)) | floor) / 10 end),
                      reclaim:   (if ($w7cids | length) == 0 then null
                                  else ((($w7claims | length) * 10 / ($w7cids | length)) | floor) / 10 end) },
+      # `ratio` is null (UNKNOWN) whenever the arm abstains AND whenever the window discharged
+      # nothing — those are different facts and `verdict` is what separates them. A reader that
+      # took `ratio: null` for "fine" would be reading the worst state this arm can report as the
+      # best, so the verdict token is emitted here rather than derived downstream.
+      effort7: { commits:  $w7commits,
+                 closes:   $w7closes,
+                 minCommits: $effortMinCommits,
+                 ratio:    (if $w7commits == null or $w7closes == 0 then null
+                            else (($w7commits * 10 / $w7closes) | floor) / 10 end),
+                 verdict:  $effortPre },
       closes: { total: ($closes | length), attributed: (($closes | length) - $unattributed),
                 unattributed: $unattributed },
       lanes: $lanes,
@@ -474,6 +592,37 @@ else
   else
     printf '  verdict=drain-converting  scope=fleet       claims=%s ids=%s converted=%s (%s) floor=%s%% reclaim=%s\n' \
       "$C7CLAIMS" "$C7IDS" "$C7CONV" "$C7PCT" "$CONV_MIN_PCT" "$C7RCL"
+  fi
+fi
+
+# ── EFFORT — commits produced against rows discharged, over the SAME 7 days. ─────────────────────
+# Sits with the futility arm because it answers the other half of one question: futility says the
+# fleet re-attempts rows without finishing them, effort says it finished nothing because it spent
+# the window somewhere else. Either alone reads as an explanation; the pair is a diagnosis.
+E7COMMITS="$(jqm 'if .effort7.commits == null then "unknown" else (.effort7.commits|tostring) end')"
+E7CLOSES="$(jqm '.effort7.closes')"
+E7VERDICT="$(jqm '.effort7.verdict // ""')"
+E7RATIO="$(jqm 'if .effort7.ratio == null then "n/a" else (.effort7.ratio|tostring) + "x" end')"
+if [ "$E7VERDICT" = "effort-unmeasured" ]; then
+  printf '  verdict=effort-unmeasured scope=repo        commits=%s closes=%s — below the %s-commit sample floor or the repo could not be read; NOT read as healthy\n' \
+    "$E7COMMITS" "$E7CLOSES" "$EFFORT_MIN_COMMITS"
+elif [ "$E7VERDICT" = "effort-self-referential" ]; then
+  # closes == 0 with real production. The ratio is undefined and the state is the DEFECT's limit.
+  printf '  verdict=effort-self-referential scope=repo  commits=%s closes=0 ratio=inf ceiling=%sx — the window produced commits and discharged no row\n' \
+    "$E7COMMITS" "$EFFORT_MAX_RATIO"
+  STALLED=$(( STALLED + 1 ))
+else
+  # Integer compare on tenths, same reason as the conversion arm: `ratio` is one decimal and `[ ]`
+  # has no float dialect. jq owns the arithmetic; the shell only compares.
+  RATIO10="$(jqm '(.effort7.ratio // 0) * 10 | floor')"
+  CEIL10=$(( EFFORT_MAX_RATIO * 10 ))
+  if [ "$RATIO10" -ge "$CEIL10" ]; then
+    printf '  verdict=effort-self-referential scope=repo  commits=%s closes=%s ratio=%s ceiling=%sx — the lane is producing machinery, not closures\n' \
+      "$E7COMMITS" "$E7CLOSES" "$E7RATIO" "$EFFORT_MAX_RATIO"
+    STALLED=$(( STALLED + 1 ))
+  else
+    printf '  verdict=effort-productive scope=repo        commits=%s closes=%s ratio=%s ceiling=%sx\n' \
+      "$E7COMMITS" "$E7CLOSES" "$E7RATIO" "$EFFORT_MAX_RATIO"
   fi
 fi
 printf '\n'
