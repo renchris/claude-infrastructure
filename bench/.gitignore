@@ -11,3 +11,11 @@ corpus/out/pages/
 corpus/out/shots/
 corpus/out/snapshots/
 corpus/out/blind/
+
+# The vision layer's work queue and its crops. Derived per profile per run, and
+# they restate findings_*.json plus geometry the snapshot already holds -- four
+# profiles is ~60k of JSON that changes whenever a capture does. fp_budget.json
+# is the exception and IS tracked: it is the defended zero-false-positive
+# baseline the README cites, so a run that moves it must show up as a diff.
+corpus/out/queue_*.json
+corpus/out/crops/

@@ -1,0 +1,127 @@
+{
+ "ceiling": 0.2,
+ "profiles": {
+  "default": {
+   "control_claims": [],
+   "control_abstentions": [],
+   "total_claims": 17,
+   "fp_rate": 0.0,
+   "per_rule": {
+    "misalignment": 1,
+    "xcheck-contrast-varies": 2,
+    "contrast": 2,
+    "grid-violation": 2,
+    "token-drift": 3,
+    "xcheck-optical-centre": 1,
+    "overflow": 3,
+    "spacing-rhythm": 1,
+    "touch-target": 1,
+    "type-scale": 1
+   },
+   "per_rule_control": {},
+   "side_effects": [
+    {
+     "page": "contrast-on-gradient",
+     "rule": "xcheck-contrast-varies",
+     "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
+     "detail": "contrast is not one number across this text: 6.15:1 at the left edge (#2C5DBE) and 1.73:1 at the right (#A5C7FB). Any single computed value is a fiction, and the right end is the one that fails a reader",
+     "severity": "high",
+     "weight": 1.0,
+     "score": 3.0
+    }
+   ],
+   "pass": true
+  },
+  "reso-management-app": {
+   "control_claims": [],
+   "control_abstentions": [],
+   "total_claims": 17,
+   "fp_rate": 0.0,
+   "per_rule": {
+    "misalignment": 1,
+    "xcheck-contrast-varies": 2,
+    "contrast": 2,
+    "grid-violation": 2,
+    "token-drift": 3,
+    "xcheck-optical-centre": 1,
+    "overflow": 3,
+    "spacing-rhythm": 1,
+    "touch-target": 1,
+    "type-scale": 1
+   },
+   "per_rule_control": {},
+   "side_effects": [
+    {
+     "page": "contrast-on-gradient",
+     "rule": "xcheck-contrast-varies",
+     "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
+     "detail": "contrast is not one number across this text: 6.15:1 at the left edge (#2C5DBE) and 1.73:1 at the right (#A5C7FB). Any single computed value is a fiction, and the right end is the one that fails a reader",
+     "severity": "high",
+     "weight": 1.0,
+     "score": 3.0
+    }
+   ],
+   "pass": true
+  },
+  "reso-landing-app": {
+   "control_claims": [],
+   "control_abstentions": [],
+   "total_claims": 12,
+   "fp_rate": 0.0,
+   "per_rule": {
+    "misalignment": 1,
+    "xcheck-contrast-varies": 2,
+    "contrast": 2,
+    "xcheck-optical-centre": 1,
+    "overflow": 3,
+    "spacing-rhythm": 1,
+    "touch-target": 1,
+    "type-scale": 1
+   },
+   "per_rule_control": {},
+   "side_effects": [
+    {
+     "page": "contrast-on-gradient",
+     "rule": "xcheck-contrast-varies",
+     "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
+     "detail": "contrast is not one number across this text: 6.15:1 at the left edge (#2C5DBE) and 1.73:1 at the right (#A5C7FB). Any single computed value is a fiction, and the right end is the one that fails a reader",
+     "severity": "high",
+     "weight": 1.5,
+     "score": 4.5
+    }
+   ],
+   "pass": true
+  },
+  "reso-web-app": {
+   "control_claims": [],
+   "control_abstentions": [],
+   "total_claims": 17,
+   "fp_rate": 0.0,
+   "per_rule": {
+    "misalignment": 1,
+    "xcheck-contrast-varies": 2,
+    "contrast": 2,
+    "grid-violation": 2,
+    "token-drift": 3,
+    "xcheck-optical-centre": 1,
+    "overflow": 3,
+    "spacing-rhythm": 1,
+    "touch-target": 1,
+    "type-scale": 1
+   },
+   "per_rule_control": {},
+   "side_effects": [
+    {
+     "page": "contrast-on-gradient",
+     "rule": "xcheck-contrast-varies",
+     "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
+     "detail": "contrast is not one number across this text: 6.15:1 at the left edge (#2C5DBE) and 1.73:1 at the right (#A5C7FB). Any single computed value is a fiction, and the right end is the one that fails a reader",
+     "severity": "high",
+     "weight": 1.25,
+     "score": 3.75
+    }
+   ],
+   "pass": true
+  }
+ }
+}
