@@ -798,3 +798,82 @@ is not a fix either — the child is still SIGKILLed and the pass still cut; it 
 reaching `timeout` and the group. W5's deadline remains the right owner of the real remaining
 question (one `handle()` unit can exceed the whole remaining budget once started), now free of a
 phantom killer.
+
+---
+
+## 3f. THE BUDGET WAS SPENT BEFORE THE WORK STARTED — and it was `cc-cloud list` (W7, 2026-09-03)
+
+**The pass was never losing its budget inside `handle()`. It was losing it to the inventory read.**
+W5's deadline gates STARTING a unit and deliberately never interrupts a land in flight, so the open
+question after W6 was stated as *"a single `handle()` unit can exceed the entire remaining budget
+once started"*. **The ledger refutes that**, and it is the only `pass-deadline` row that exists:
+
+```json
+{"ts":"2026-09-03T13:51:34Z","outcome":"pass-deadline","elapsed_s":907,"budget_s":720,
+ "bound_s":900,"started":1,"unstarted":15,"worst_unit_s":4,"cursor_to":76}
+```
+
+`worst_unit_s: 4`. The one unit this pass started cost **four seconds**. The deadline check fired at
+elapsed **907** — already past the 900 s bound — so `timeout` was in its `-k` grace when the row was
+written, and the SIGKILL landed three seconds later. The budget was gone before the loop.
+
+**Where it went, from the pass's own rows.** `START_S` = 13:51:34 − 907 = **13:36:27**. The
+`pass-scope` row for the same pass (`cursor_from: 75`) is stamped **13:47:41** — and that row is
+written BEFORE the first network call. So:
+
+| phase | seconds | share | what it is |
+|---|---|---|---|
+| admission — `cc-cloud list --json`, filter, sort, cursor | **674** | 74% | disk only, no probe, no work |
+| the two scoped probes over 25 ids (`poll --only`, `list --state --only`) | 229 | 25% | network, already bounded by `--only` |
+| `handle()` × 1 | **4** | 0.4% | the actual work |
+
+**The mechanism, measured first-hand.** `cmd_list --json` answered each of eighteen fields with its
+own full-file scan through `dfield`, and escaped each through its own `$( )` subshell — **11,394
+file scans and ~12,000 forks** to project a store of 633 thirteen-line files. A/B on this box, same
+command, same store:
+
+```
+foreground        13 s      (which is why this survived: it is invisible where humans run it)
+background band   still unfinished at 42 min, killed          ← the band launchd actually uses
+```
+
+`~/Library/LaunchAgents/com.chrisren.autonomy-sweep.plist` sets **`ProcessType Background`**. That is
+the background QoS band, PRI 4, on a box whose load average sits above 20. This is the repo's own
+`bound-must-fit-the-band-not-the-bench` lesson in its purest form: nothing in `cmd_list` is wrong in
+the band it was written in, and it is catastrophic in the band it runs in.
+
+**The fix is a constant factor, and touches no bound.** `dload` reads each declaration ONCE into
+`D_<key>`/`S_<key>`; `jesc_v` escapes through `printf -v` instead of a subshell. No cap, timeout,
+limit or retry moves — per §3e that would have been acting on a 137, which is forbidden and would
+also have been aimed at the wrong phase.
+
+```
+foreground        13 s → 1 s      byte-identical over all 633 rows (age_s normalised: it is a clock)
+background band   674 s → 4 s     same band, same store, bounded run, rc 0
+```
+
+**Verification.** `--json`, `--table` and `--json --only` all byte-identical against `origin/main`'s
+reader over the live store. Suites green: cc-cloud 43/43 (4 new), cloud-return 45/45,
+autonomy-sweep 62/62, cloud-reconcile 33/33, cloud-inbox 7/7 — **190/190**.
+
+**Four mutants, each red on its own assertion** — the new failure modes are exactly the ones a
+per-file reader has and a per-field reader cannot:
+
+| mutant | red |
+|---|---|
+| the per-file reset hoisted out of the per-file path (initialises once, never clears) | bleed only |
+| `jesc_v` does not escape | escaping only |
+| `dload` resolves a duplicated key LAST-wins instead of first-wins | duplicate only |
+| `eval` instead of `printf -v` | no-eval + escaping (both genuinely depend on verbatim storage) |
+
+**One claim was wrong on the first pass and is corrected in the code.** The whitelist was documented
+as the injection guard. It is not: the `${p}_` NAME PREFIX is what confines a `PATH=` line to
+`D_PATH`, and `printf -v` refuses an invalid identifier rather than evaluating an array subscript
+(probed on this box — it did not run). `DLOAD_KEYS` bounds the name set to exactly what the reset
+clears, which is a *correctness* property and is what the bleed case pins. A mutant that disabled
+the whitelist left the old test green, which is what exposed it.
+
+**What this does NOT yet prove.** The acceptance number is still a live `cloud_return_rc` of 0, and
+that needs a tick of the deployed sweep. The arithmetic now admits one: 4 + 229 = 233 s of a 720 s
+budget, leaving ~487 s for units the deadline can spend and stop cleanly inside. The 229 s of scoped
+probes is unchanged and is the next binding term if it ever grows.
