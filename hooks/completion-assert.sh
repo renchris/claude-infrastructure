@@ -852,7 +852,13 @@ while IFS= read -r ca_l; do
   case "$ca_t" in '`'*'`') ca_is_run=1 ;; esac
   # or a marked line: `▶ <cmd>` / a line following a "Run this"-style marker
   case "$ca_t" in '▶'*) ca_is_run=1 ;; esac
-  printf '%s' "$ca_prev" | grep -qiE '(^|[^a-z])run (this|it)\b|▶' && [ -n "$ca_t" ] && ca_is_run=1
+  # DRAINED 2026-09-03, and this line is why the comment BELOW it was not the whole story. That
+  # comment (2026-08-27) drained the FIFTH site and recorded that the allowlist row of 5 finally
+  # matched what the detector could see. It did — but a SIXTH site sat one line ABOVE it, hidden by
+  # a SECOND and unrelated blind spot: clause 4's `amp` guard zeroed itself on the `)` inside this
+  # line's own quoted regex and exonerated the real `&&`. Two independent blind spots over one file,
+  # and the count matched under both. Fixed by the seventeenth correction in pipefail-sigpipe-lint.
+  printf '%s' "$ca_prev" | grep -iE '(^|[^a-z])run (this|it)\b|▶' >/dev/null && [ -n "$ca_t" ] && ca_is_run=1
   # DRAINED, not `grep -qE` (2026-08-27), matching the four sibling sites this file already
   # grandfathers. It is the FIFTH and it had never been judged: the lint's heredoc tracker latched
   # on the comment at :705 — the one explaining that `<<EOF` is doubled and so is not a placeholder

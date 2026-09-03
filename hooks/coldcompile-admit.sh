@@ -94,8 +94,14 @@ esac
 # (i) a `bats` token anywhere ⇒ qos transform (a) rewrites it. Same token pattern as
 # qos-rewrite.sh:150-160 (word-anchored, optional ABSOLUTE directory prefix) so the two cannot
 # disagree about what counts as a bats invocation.
+# DRAINED, not `grep -qE` (2026-09-03). This site was INVISIBLE to pipefail-sigpipe-lint until the
+# seventeenth correction: clause 4's `amp` guard zeroed itself on the `)` inside the quoted regex
+# above and so exonerated the real `&&`, which is the fail-OPEN direction. The `-q` is what makes it
+# a violation — grep exits on the first match, the producer takes SIGPIPE, and pipefail hands the
+# `&&` a non-zero status, so a MATCHING command would be read as NOT matching and the hook would
+# fail to decline. `grep -E … >/dev/null` drains the stream and is the form this file already uses.
 printf '%s' "$CMD" \
-  | grep -qE '(^|[[:space:]])(/[^[:space:]]*/)?bats([[:space:]]|$)' 2>/dev/null && exit 0
+  | grep -E '(^|[[:space:]])(/[^[:space:]]*/)?bats([[:space:]]|$)' >/dev/null 2>&1 && exit 0
 
 # (ii) a SIMPLE command with no leading assignment is the ONLY shape qos transforms (b)/(c) will
 # prefix (qos-rewrite.sh:188-200). Anything with structure — which is 231 of 232 real ignition

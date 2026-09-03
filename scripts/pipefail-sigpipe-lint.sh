@@ -1036,6 +1036,60 @@ function collect_caller(l,   t, i, c, seg, w, cond, prevw) {
 # those seven are. Measured across the three cuts: NEW 1 / LOST 0, then NEW 0 / LOST 7, then
 # NEW 0 / LOST 0.
 # (\002 is the masked ||; \047 quote, \042 dquote, \134 backslash.)
+# Clause 4s `amp`, QUOTE-AWARE — THE SEVENTEENTH CORRECTION, 2026-09-03.
+# The \002/\003 masking at the stage split is quote-BLIND BY CONSTRUCTION: it gsubs the RAW line
+# before qmask() runs, precisely so that a `||` cannot be split as two pipes. The consequence is
+# that an && inside a single-quoted awk program or a regex becomes \003 exactly like a shell
+# operator. toplevel_or() below and group_wraps_or() further down BOTH compensate by re-walking the
+# quotes themselves — the file already carried the deciding knowledge, one clause away. Clause 4s
+# amp was the ONE consumer of the masking that did not, and it read `index(last, "\003")` with a
+# `pre_amp ~ /[;)]/` guard that is a plain regex over unmasked text. It failed BOTH ways:
+#   · fail-OPEN  — a ) or ; inside a QUOTED regex zeroed amp and exonerated a real &&. Measured 2
+#     sites, hooks/coldcompile-admit.sh:98 and hooks/completion-assert.sh:855. The second is the
+#     instructive one: it sits ONE LINE ABOVE a 2026-08-27 comment certifying this files count as
+#     complete at five, hidden by a SECOND, independent blind spot from the heredoc one that comment
+#     describes. Both are drained in this same commit.
+#   · fail-CLOSED — an && inside a single-quoted awk program convicted a line with no shell && at
+#     all. Measured 2 sites, bin/cc-idl:172 and bin/cc-reaper:2812, and unlike the first half these
+#     were LIVE in --census: two of the shipped 125 rows were minted for a reason that is not true.
+# Measured before landing (method 213), PRE arm extracted read-only from origin/main with
+# `git archive | tar -x` and CC_PIPEFAIL_ROOT pinned to the SAME tree on both arms, keyed on
+# (path, TEXT): ROWS 125 -> 125, KEYS 116 -> 116, LOST 2, NEW 2 — a CORRECTION, not a widening.
+# The population is 28 lines carrying an && in their last stage, of which 7 turned on a byte whose
+# syntactic role this test could not see: 2 fail-OPEN, 2 fail-CLOSED, and 3 where the guard reached
+# the right verdict for a reason that does not hold.
+# Semantics are otherwise IDENTICAL to the old pair — the first top-level \003 wins, and any
+# UNQUOTED ; or ) before it means the && belongs to something else. ONE variable changed.
+# r32 pins the fail-OPEN half, g33 the fail-CLOSED half, g34 is the discrimination cell.
+function toplevel_amp(s,   i, c, q, seen) {
+  q = 0; seen = 0; i = 1
+  while (i <= length(s)) {
+    c = substr(s, i, 1)
+    if (q == 1) { if (c == "\047") q = 0; i++; continue }
+    if (q == 2) { if (c == "\134") { i += 2; continue } if (c == "\042") q = 0; i++; continue }
+    if (c == "\134") { i += 2; continue }
+    if (c == "\047") { q = 1; i++; continue }
+    if (c == "\042") { q = 2; i++; continue }
+    if (c == "\003") { return seen ? 0 : i }
+    if (c == ";" || c == ")") seen = 1
+    i++
+  }
+  # Falling out means either no top-level \003, or one we SKIPPED because the segment ends inside an
+  # open quote. `last` is seg[n], a FRAGMENT of the line — the stage split can cut a line mid-quote,
+  # so the quote state of a fragment is not the quote state of the line. toplevel_or() states the
+  # identical policy at its own tail (a || we SKIPPED, on a fragment we cannot trust); it exonerates
+  # on that case and so does this. (No apostrophes anywhere here: this comment lives INSIDE the
+  # single-quoted DETECT_AWK string, and one apostrophe truncates the whole detector. Written with
+  # two, it read 30/62 — every RED arm failing and every GREEN arm passing, the signature of a
+  # detector that matches nothing. scan()s parse gate does NOT catch this: the truncated program
+  # still PARSES. The --selftest is what catches it, which is the argument for running it every time.)
+  # Discovered because the first g34 fixture was exactly such a fragment: its && was inside an
+  # unbalanced quote, so `seen` was never consulted and the arm could not discriminate the term it
+  # was written to pin. The mutant harness refused the prediction, which is the only reason anybody
+  # looked. g34 now carries balanced quotes in its last stage.
+  return 0
+}
+
 function toplevel_or(s,   i, c, d, q, qor) {
   d = 0; q = 0; qor = 0; i = 1
   while (i <= length(s)) {
@@ -1237,8 +1291,9 @@ FNR == 1 { inhd = 0; curfn = ""; pend = 0 }   # pass two starts clean, whatever 
   # (`[ -n "$(find … | head -1)" ] && continue`); a `;` before it means the && belongs to a later
   # command entirely (`f="$(… | head -1)"; [ -n "$f" ] && …`). Both are safe, and both appeared in
   # the tree the moment this clause landed.
-  amp = index(last, "\003")
-  if (amp > 0) { pre_amp = substr(last, 1, amp - 1); if (pre_amp ~ /[;)]/) amp = 0 }
+  # QUOTE-AWARE since the seventeenth correction — see toplevel_amp() for what the old
+  # `index(last, "\003")` + `pre_amp ~ /[;)]/` pair could not see, and in which two directions.
+  amp = toplevel_amp(last)
   # Clause 4b — a $? CAPTURE reads the status, errexit or not. Clause 4 asks whether anything READS
   # this pipelines status, but answers it with `if (!hase) return 0`, i.e. only errexit or a
   # control-flow position counts. `p | grep -q X; rc=$?` is the most DIRECT read of a pipelines
@@ -1786,6 +1841,28 @@ if v=\"\$(f)\"; then :; fi"
 }
 v=\"\$(f)\""
   expect g32 GREEN "r30's discrimination cell — a BARE substitution assignment reads no status"
+
+  # ── clause 4's `amp` is QUOTE-AWARE (SEVENTEENTH CORRECTION 2026-09-03) ────────────────────────
+  # The \002/\003 masking at the split is quote-BLIND by construction — it gsubs the RAW line before
+  # qmask() runs — so an && inside a single-quoted awk program or regex becomes \003 exactly like a
+  # shell operator, and the old `pre_amp ~ /[;)]/` guard was a plain regex over unmasked text.
+  # toplevel_or() and group_wraps_or() BOTH re-walk the quotes themselves for precisely this reason;
+  # amp was the one consumer of the masking that did not, and it failed in BOTH directions.
+  # r32 is the fail-OPEN half and g33 the fail-CLOSED half; each was RED-PROVED against the unfixed
+  # detector (2 of 3, with g34 green pre-fix because it PINS the guard rather than fixing it).
+  mk_noe r32 "printf '%s' \"\$CMD\" | grep -qE '(^|x)bats' 2>/dev/null && exit 0"
+  expect r32 RED "a real && after a ) that is INSIDE a quoted regex — the fail-OPEN half"
+  mk_noe g33 "rec=\"\$(printf '%s' \"\$recs\" | awk -F'x' '\$1==P && \$2==L {print \$3; exit}')\""
+  expect g33 GREEN "an && that is only ever INSIDE a quoted awk program is not a shell operator"
+  # g34 is the discrimination cell for the OTHER failure direction: a toplevel_amp that ignored
+  # `seen` and returned every && would mint this line, which is the documented safe shape.
+  # ITS QUOTES MUST BALANCE INSIDE THE LAST STAGE. The first version of this arm wrapped the
+  # substitution in double quotes — `f="$(… | head -1)"; …` — so seg[n] began mid-quote and the &&
+  # was SKIPPED as unparseable fragment rather than exonerated by `seen`. It passed in both states
+  # and pinned nothing; the mutant harness refusing its prediction is what surfaced it. Both
+  # assertions true in both states is the arm fault, not a subject fault.
+  mk_noe g34 "f=\$(find . -name x | head -1); [ -n \"\$f\" ] && exit 0"
+  expect g34 GREEN "a BARE ) and ; before the && — the && belongs to a later command (unchanged)"
 
   local total=$((pass+fail))
   if [ "$fail" -gt 0 ]; then
