@@ -82,7 +82,9 @@ State projected cost band + wall-clock band so the human decides on cost not pla
 | `deep-research` (frontier¹) | 10% | Adversarial / red-team briefs |
 | `deep-research` (frontier¹) | 5% | Rare multi-hop depth-coordination |
 
-¹ Frontier = Fable 5 (`claude-fable-5`, $10/$50) via call-time Agent `model: "fable"` override while `~/.claude/model-config.yaml` → `frontier_access.active` is true AND the session is on the claude-next eval track (window 2026-06-09 → 2026-06-23); otherwise Opus 4.8. Agent frontmatter stays `model: opus` — the override is always call-time.
+¹ Frontier = whatever `~/.claude/model-config.yaml` → `versions.frontier_latest` says, via a call-time Agent `model: "fable"` override, while `frontier_access.active` is true; otherwise `frontier_access.fallback`. **Read the SSOT live — do not trust the parenthetical.** As of 2026-09-03 that resolves to Fable 5 (`claude-fable-5`, $10/$50) with an Opus 5 fallback. Agent frontmatter stays `model: opus` — the override is always call-time.
+
+&nbsp;&nbsp;Two corrections landed 2026-09-03, both of which this footnote had been asserting falsely: there is **no window** (`frontier_access.permanent: true` since 2026-07-20 — the "2026-06-09 → 2026-06-23" window died two windows ago), and there is **no claude-next eval track** (launcher consolidation v2 deleted every launcher name except `claude` and `claude-prev`, so a track condition no reader can satisfy was gating the whole frontier tier). Fable **5.1** (`claude-fable-5-1`) shipped 2026-09-03 and is parked in `versions.frontier_staged`, NOT routed: no installed CC binary registers the ID. It becomes the frontier model only when `frontier_latest` flips — which is why this footnote now names the key instead of the model.
 
 ² Quality-first (2026-06-30): the 60% worker slot defaults to **Opus 4.8** (`deep-research`), not Sonnet. Sonnet 5 @ max is ≤ Opus 4.8 quality AND ~15% pricier/task (Artificial Analysis), so its old "cheaper-at-iso-quality" free win broke. Sonnet 5 re-enters only via a probe-certified low/med-effort Workflow — spec: `~/.claude/model-routing-freewin-probe.md`.
 
