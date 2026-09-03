@@ -64,6 +64,14 @@ class Defect:
     dom_blind_because: str = ""
     # Severity a human designer would assign, for weighting.
     severity: str = "medium"
+    # What a correct detector should DO with this defect.
+    #   "assert"  -> name it. The default.
+    #   "abstain" -> return INDETERMINATE and route it to the vision layer.
+    # The second value exists because the deterministic layer's most valuable
+    # output is its abstention, and until the corpus carried this field nothing
+    # graded that output -- an arm that abstained correctly and an arm that
+    # missed the defect entirely scored identically.
+    expect: str = "assert"
     html_override: dict[str, str] = field(default_factory=dict)
 
 
@@ -202,6 +210,54 @@ DEFECTS: list[Defect] = [
             "pixels and comparing it to the geometric centre."
         ),
         magnitude="ink centroid ~2px left of the geometric centre",
+        severity="medium",
+    ),
+    Defect(
+        id="invisible-text",
+        klass="invisible-content",
+        summary=(
+            "The helper line renders nothing: its colour is transparent, so the "
+            "box is healthy, the layout is unchanged and the text is simply gone."
+        ),
+        css=".helper { color: transparent; }",
+        target=".helper",
+        detectable_by="pixels",
+        dom_blind_because=(
+            "getComputedStyle returns rgba(0, 0, 0, 0), and every contrast implementation "
+            "that takes an rgb triple drops the alpha -- so the ratio computes as black on "
+            "white, 21:1, and passes. Nothing about the box model is wrong: the element has "
+            "its full width, its full height and its full text content. This is the shape "
+            "of the real bug, which is usually a background-clip:text technique whose "
+            "background failed to paint. A dedicated rule could catch THIS member of the "
+            "family; the point of the zero-ink cross-check is that it catches the family "
+            "without needing to know which member turned up -- transparent colour, near-zero "
+            "opacity, an occluding sibling, a clip-path, a webfont that never loaded."
+        ),
+        magnitude="0% of the element's pixels differ from its own backdrop",
+        severity="high",
+    ),
+    Defect(
+        id="optical-overshoot",
+        klass="optical-alignment",
+        summary=(
+            "The play glyph's optical compensation overshoots: 7px of translate "
+            "where the glyph's ink bias is about 2px, so it now reads right-heavy."
+        ),
+        css=".glyph-btn .glyph { transform: translate(7px, 2px); }",
+        target=".glyph-btn .glyph",
+        detectable_by="pixels",
+        expect="abstain",
+        dom_blind_because=(
+            "Same blindness as optical-centering -- the box model is symmetric and the ink "
+            "distribution is not exposed by any DOM API. But this variant is here to grade "
+            "the OTHER answer. A compensation IS declared, so the pixels-vs-DOM comparator "
+            "can measure the residual exactly and still cannot say whether it is wrong: how "
+            "much compensation a given glyph needs at a given size is a judgement about that "
+            "glyph's shape. A detector that asserted here would be inventing a threshold it "
+            "has no basis for. The correct output is INDETERMINATE, and this page is what "
+            "proves the arm produces one."
+        ),
+        magnitude="~4.7px of ink offset survives a declared 7px compensation",
         severity="medium",
     ),
     Defect(
@@ -364,8 +420,13 @@ def build(outdir: pathlib.Path) -> dict:
         entries.append(asdict(d))
 
     manifest = {
-        "corpus_version": "1.0",
-        "built": "2026-08-26",
+        # 1.1 adds `expect`, plus the two variants that exercise the arms it
+        # grades: invisible-text for zero-ink, optical-overshoot for the
+        # abstention branch of the optical-centre cross-check. Both were added
+        # because score.py refused to pass a run in which a declared rule was
+        # never put in front of the control.
+        "corpus_version": "1.1",
+        "built": "2026-09-03",
         "viewport": {"width": 1280, "height": 900},
         "tokens": TOKENS,
         "control": "clean.html",
@@ -373,6 +434,7 @@ def build(outdir: pathlib.Path) -> dict:
             "total_variants": len(DEFECTS) + 1,
             "dom_detectable": sum(1 for d in DEFECTS if d.detectable_by == "dom"),
             "pixels_only": sum(1 for d in DEFECTS if d.detectable_by == "pixels"),
+            "expect_abstain": sum(1 for d in DEFECTS if d.expect == "abstain"),
         },
         "scoring": {
             "true_positive": "names the right defect class AND points at the right target",
@@ -396,7 +458,10 @@ if __name__ == "__main__":
     print(f"corpus -> {out}")
     print(
         f"  {c['total_variants']} pages: 1 control + {c['dom_detectable']} DOM-detectable "
-        f"+ {c['pixels_only']} pixels-only"
+        f"+ {c['pixels_only']} pixels-only "
+        f"({c['expect_abstain']} of which a correct detector ABSTAINS on)"
     )
     for d in m["defects"]:
-        print(f"  [{d['detectable_by']:6}] {d['id']:22} {d['magnitude']}")
+        print(
+            f"  [{d['detectable_by']:6}/{d['expect']:7}] {d['id']:22} {d['magnitude']}"
+        )

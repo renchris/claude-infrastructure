@@ -1,6 +1,6 @@
 {
-  "corpus_version": "1.0",
-  "built": "2026-08-26",
+  "corpus_version": "1.1",
+  "built": "2026-09-03",
   "viewport": {
     "width": 1280,
     "height": 900
@@ -20,9 +20,10 @@
   },
   "control": "clean.html",
   "counts": {
-    "total_variants": 13,
+    "total_variants": 15,
     "dom_detectable": 9,
-    "pixels_only": 3
+    "pixels_only": 5,
+    "expect_abstain": 1
   },
   "scoring": {
     "true_positive": "names the right defect class AND points at the right target",
@@ -41,6 +42,7 @@
       "magnitude": "7px deviation from a 16px rhythm",
       "dom_blind_because": "",
       "severity": "medium",
+      "expect": "assert",
       "html_override": {}
     },
     {
@@ -53,6 +55,7 @@
       "magnitude": "1px horizontal",
       "dom_blind_because": "",
       "severity": "low",
+      "expect": "assert",
       "html_override": {}
     },
     {
@@ -65,6 +68,7 @@
       "magnitude": "2px of 8px",
       "dom_blind_because": "",
       "severity": "low",
+      "expect": "assert",
       "html_override": {}
     },
     {
@@ -77,6 +81,7 @@
       "magnitude": "17px, off-scale by 1px",
       "dom_blind_because": "",
       "severity": "medium",
+      "expect": "assert",
       "html_override": {}
     },
     {
@@ -89,6 +94,7 @@
       "magnitude": "5/255 on the blue channel; below the human just-noticeable difference",
       "dom_blind_because": "",
       "severity": "low",
+      "expect": "assert",
       "html_override": {}
     },
     {
@@ -101,6 +107,7 @@
       "magnitude": "13px, 5px off the 8px grid",
       "dom_blind_because": "",
       "severity": "low",
+      "expect": "assert",
       "html_override": {}
     },
     {
@@ -113,6 +120,7 @@
       "magnitude": "2.54:1 against a 4.5:1 requirement",
       "dom_blind_because": "",
       "severity": "high",
+      "expect": "assert",
       "html_override": {}
     },
     {
@@ -125,6 +133,7 @@
       "magnitude": "scrollHeight exceeds clientHeight",
       "dom_blind_because": "",
       "severity": "high",
+      "expect": "assert",
       "html_override": {}
     },
     {
@@ -137,6 +146,7 @@
       "magnitude": "30px against a 44px floor",
       "dom_blind_because": "",
       "severity": "high",
+      "expect": "assert",
       "html_override": {}
     },
     {
@@ -149,6 +159,7 @@
       "magnitude": "ratio falls from ~8.6:1 at the left edge to ~1.2:1 at the right",
       "dom_blind_because": "getComputedStyle returns background-color rgba(0,0,0,0) for the caption and a background-image string for the ancestor. There is no numeric backdrop colour to contrast against, so the standard ratio computation has no second operand and axe-core reports 'incomplete' rather than a violation. The actual backdrop luminance varies across the element's own width.",
       "severity": "high",
+      "expect": "assert",
       "html_override": {}
     },
     {
@@ -161,6 +172,33 @@
       "magnitude": "ink centroid ~2px left of the geometric centre",
       "dom_blind_because": "Every box-model number is symmetric: the flex container centres the glyph and getBoundingClientRect on the glyph is exactly centred within the button. The asymmetry lives in the distribution of ink inside the glyph's own box, which no DOM API exposes. Detecting it requires computing the centroid of the rendered pixels and comparing it to the geometric centre.",
       "severity": "medium",
+      "expect": "assert",
+      "html_override": {}
+    },
+    {
+      "id": "invisible-text",
+      "klass": "invisible-content",
+      "summary": "The helper line renders nothing: its colour is transparent, so the box is healthy, the layout is unchanged and the text is simply gone.",
+      "css": ".helper { color: transparent; }",
+      "target": ".helper",
+      "detectable_by": "pixels",
+      "magnitude": "0% of the element's pixels differ from its own backdrop",
+      "dom_blind_because": "getComputedStyle returns rgba(0, 0, 0, 0), and every contrast implementation that takes an rgb triple drops the alpha -- so the ratio computes as black on white, 21:1, and passes. Nothing about the box model is wrong: the element has its full width, its full height and its full text content. This is the shape of the real bug, which is usually a background-clip:text technique whose background failed to paint. A dedicated rule could catch THIS member of the family; the point of the zero-ink cross-check is that it catches the family without needing to know which member turned up -- transparent colour, near-zero opacity, an occluding sibling, a clip-path, a webfont that never loaded.",
+      "severity": "high",
+      "expect": "assert",
+      "html_override": {}
+    },
+    {
+      "id": "optical-overshoot",
+      "klass": "optical-alignment",
+      "summary": "The play glyph's optical compensation overshoots: 7px of translate where the glyph's ink bias is about 2px, so it now reads right-heavy.",
+      "css": ".glyph-btn .glyph { transform: translate(7px, 2px); }",
+      "target": ".glyph-btn .glyph",
+      "detectable_by": "pixels",
+      "magnitude": "~4.7px of ink offset survives a declared 7px compensation",
+      "dom_blind_because": "Same blindness as optical-centering -- the box model is symmetric and the ink distribution is not exposed by any DOM API. But this variant is here to grade the OTHER answer. A compensation IS declared, so the pixels-vs-DOM comparator can measure the residual exactly and still cannot say whether it is wrong: how much compensation a given glyph needs at a given size is a judgement about that glyph's shape. A detector that asserted here would be inventing a threshold it has no basis for. The correct output is INDETERMINATE, and this page is what proves the arm produces one.",
+      "severity": "medium",
+      "expect": "abstain",
       "html_override": {}
     },
     {
@@ -173,6 +211,7 @@
       "magnitude": "secondary carries roughly 3x the visual weight of the primary",
       "dom_blind_because": "Both buttons have entirely valid styles; nothing is out of range and no token is violated. The defect is the RELATION between them and the intent behind it. A rule could encode 'primary must outweigh secondary', but that requires knowing which is semantically primary and how to compare visual weight -- a judgement, not a measurement.",
       "severity": "high",
+      "expect": "assert",
       "html_override": {}
     }
   ]

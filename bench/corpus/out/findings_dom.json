@@ -52,7 +52,9 @@
    "severity": "high"
   }
  ],
+ "invisible-text": [],
  "optical-centering": [],
+ "optical-overshoot": [],
  "overflow-clip": [
   {
    "rule": "overflow",
