@@ -510,6 +510,64 @@ function ltrim(s) { sub(/^[ \t]+/, "", s); return s }
 # literal too, EXCEPT within a $( ) where it is an operator again; and a backslash escapes the next
 # byte in either. The naive one-flag version of this function read FIVE sites as LOST — a claim
 # about the masker, not about the tree — and the rc-93 prediction gate is what refused it.
+#
+# ── A FIFTEENTH CORRECTION, 2026-09-03: A TOKENISER CAN INVENT A BOUNDARY, NOT ONLY DROP ONE —
+#    AND HERE THE ESCAPE THAT DECLARES A PIPE NOT AN OPERATOR IS WHAT MADE IT READ AS ONE. ───────
+# Every correction from the eighth to the fourteenth asks what the clause LADDER mis-judges. This
+# one is upstream of all of them: the clauses judge seg[], and seg[] is whatever the split produced.
+# The backslash arms below used to read `out = out c d` — emit the escape AND the escaped byte
+# VERBATIM — so a `\|` was written into the masked string as a bare `|` and the split below,
+# `n = split(qmask(work), seg, "|")`, CUT ON IT. A `\|` is a literal pipe in both contexts and a shell operator in neither: inside a BRE it is
+# the grep alternation, at top level it is an escaped pipe. Neither is a stage boundary.
+#
+# THE DEFECT IS NOT "QUOTED PIPES LEAK", AND THE PROBE REFUSED THAT READING BEFORE IT WAS WRITTEN
+# DOWN. The masking arm below handles an unescaped `|` inside double quotes correctly; the backslash
+# arm SHORT-CIRCUITS it. So the more explicitly a pipe is marked literal, the more certainly this
+# function called it an operator. The single-quote branch has no backslash arm at all, so it was
+# always correct — asserted by g27 below, not assumed.
+#
+# WHAT THE MEASUREMENT SAID. Producer and consumer held BYTE-IDENTICAL across every cell at
+# `cat "$f" | grep -c …` — the DRAINED form this lint prescribes as the fix (is_early, in its own
+# words: "-c and bare grep DRAIN: they are the fix") — with ONLY the pattern varying:
+#   · grep -c "warn"            no alternation                       GREEN → GREEN
+#   · grep -c "warn\|xyz "      alternation, next word not a command GREEN → GREEN
+#   · grep -c "warn\|read "     alternation, next word IS a command  RED   → GREEN   ← the defect
+#   · grep -c "warn|read "      an UNESCAPED pipe in the quotes      GREEN → GREEN   ← refused first
+#   · grep -c SQwarn\|read SQ   the single-quoted spelling           GREEN → GREEN   ← the sq bound
+# The RED cell is the one that matters: the fabricated boundary made `read "` the last stage, and
+# is_early matched it, so THE RATCHET REPORTED THE REMEDY IT PRESCRIBES. That is the `a6449cebc`
+# class — a lint refusing a land for a reason that is not about the code — one keystroke away from
+# anyone who writes a BRE alternation whose right side begins with grep/head/read/sed/awk.
+#
+# THE FOURTEENTH CORRECTION ASKED THE SAME QUESTION OF ITS OWN CONSUMER AND GOT A DIFFERENT ANSWER,
+# WHICH IS WHY THIS ONE WAS INVISIBLE. collect_caller carries a sentence reasoning that over-
+# splitting there is BOUNDED: it can only invent a command WORD, and a word matters only if it
+# collides with a function name. True, and it says nothing about THIS consumer — where an invented
+# boundary invents a STAGE, and a stage is exactly what clauses 2, 3 and 5 are denominated in.
+# The same fault, one consumer over, with an exposure nobody had asked about.
+#
+# NOT A WIDENING IN EITHER DIRECTION, measured before landing (method 213). Control = the SHIPPED
+# script, mutant = a whole-file copy differing in exactly these two runs, with every replacement
+# REVERTED back to the source to prove head, MIDDLE and tail identical. CC_PIPEFAIL_ROOT pinned on
+# both arms, `--census` keyed on (path, TEXT) taken verbatim: ROWS 125 → 125, KEYS 116 → 116,
+# LOST = 0, NEW = 0. It costs nothing on this tree because all five reachable sites drop at
+# clause 2 — measured, not assumed, and the prediction that the clause-5 fail-safe was holding them
+# was REFUSED by disabling that arm in BOTH tokenisers and reading the same census from each.
+#
+# HOW THE POPULATION WAS READ, because no grep can do it: an instrumented whole-file copy in which
+# six clauses PRINT what they judge, with that copy `--census` asserted byte-identical to the
+# shipped one (~/.claude/autonomy/{mkprobe289.py,probe289-ladder.sh,mkqmask289.py}). It reports 8
+# escaped-pipe emissions over 5 sites in 3 files — hooks/validate-plan-structure.sh:87,
+# scripts/permission-gate-lint.sh:205-207, scripts/plan-phase-scan.sh:261 — and NOT ONE of them is
+# a shell pipeline. Instruments: probe289-disc.sh (5 cells, one refused) and probe289-arm.sh.
+#
+# AND THE MEASUREMENT WORTH MORE THAN THE FIX, handed over free by the same probe: the clause-5
+# fail-safe arm has a POPULATION of 82 lines and an EFFECT of ONE. Disabling it moves the census by
+# exactly one row — bin/cc-claude-bin:64, the single site it was built for — so 81 of its 82 members
+# are exonerations a clause below would have made anyway. Its stated reason ("a continuation line
+# has unbalanced quotes by construction") describes that one member and says nothing about the other
+# 81, among which was a complete, well-formed line this very fault had fragmented. A clause POPULATION
+# and a clause EFFECT are different numbers, and every audit anybody writes tests the second.
 # (No apostrophes anywhere below: this is a single-quoted bash string. \047 = quote, \042 = dquote,
 # \134 = backslash, \044 = dollar.)
 function qmask(s,   i, c, d, n, st, out) {
@@ -521,12 +579,12 @@ function qmask(s,   i, c, d, n, st, out) {
       if (c == "\047") { n-- }
       else if (c == "|") { out = out "\004"; i++; continue }
     } else if (n > 0 && st[n] == 2) {
-      if (c == "\134") { out = out c d; i += 2; continue }
+      if (c == "\134") { out = out c (d == "|" ? "\004" : d); i += 2; continue }
       if (c == "\042") { n-- }
       else if (c == "\044" && d == "(") { n++; st[n] = 3; out = out c d; i += 2; continue }
       else if (c == "|") { out = out "\004"; i++; continue }
     } else {
-      if (c == "\134") { out = out c d; i += 2; continue }
+      if (c == "\134") { out = out c (d == "|" ? "\004" : d); i += 2; continue }
       if (c == "\047") { n++; st[n] = 1 }
       else if (c == "\042") { n++; st[n] = 2 }
       else if (c == "\044" && d == "(") { n++; st[n] = 3; out = out c d; i += 2; continue }
@@ -1601,6 +1659,24 @@ if f; then :; fi"
 }
 if f; then :; fi"
   expect r28 RED "g25's discrimination cell — a bare assignment is final and DOES reach the caller, 20/20"
+
+  # ── THE ESCAPED PIPE (2026-09-03, the FIFTEENTH correction) ───────────────────────────────────
+  # Upstream of every clause above: they judge seg[], and seg[] is whatever qmask left to split on.
+  # It emitted a `\|` VERBATIM, so the split cut on a pattern byte. g26 is the defect and the only
+  # DISCRIMINATING arm of the three — its consumer is `grep -c`, the drained form this lint
+  # prescribes, and the fabricated boundary made `read "` the last stage so is_early matched it.
+  # Revert either backslash arm in qmask and g26 alone goes red.
+  # g27 is the REASON's bound rather than the verdict's: the same alternation whose right side is
+  # not a command word was always green, so the defect is denominated in WHERE the invented boundary
+  # LANDS and not in the alternation. r29 is the widening bound — a genuine violation carrying the
+  # same escaped pipe must still be reported. g27 and r29 hold in BOTH states by design; only g26
+  # attributes, and the mutant harness asserts exactly that.
+  mk g26 "cat \"\$f\" | grep -c \"warn\\|read \""
+  expect g26 GREEN "an escaped pipe in a BRE is a pattern byte — the DRAINED form must not be minted"
+  mk g27 "cat \"\$f\" | grep -c \"warn\\|xyz \""
+  expect g27 GREEN "the same alternation whose right side is not a command word — the reason's bound"
+  mk r29 "cat \"\$f\" | grep -q \"warn\\|read \""
+  expect r29 RED "a real violation carrying the same escaped pipe stays RED — the widening bound"
 
   # ── THE COMMENTED-HEREDOC MUTE (2026-08-27) ───────────────────────────────────────────────────
   # The heredoc tracker is the detector's ONLY file-level latching state, and its opener test used

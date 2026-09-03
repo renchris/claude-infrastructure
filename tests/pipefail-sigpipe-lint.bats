@@ -34,7 +34,7 @@ mkfile() { # $1=name $2=body  [$3=set line]
 }
 census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" --census 2>/dev/null; }
 
-@test "1: the lint's own --selftest passes (53/53, both directions)" {
+@test "1: the lint's own --selftest passes (56/56, both directions)" {
   # 32 -> 34 on 2026-09-02: clause 3's head/tail producer arm gained r16/r17, the FIRE controls for
   # the g11/g12 pair that had pinned only the GREEN direction. Updated deliberately, per the line
   # below, and the two new arms are attribution-proved: reverting the arm to its pre-fix `-?[1-9]`
@@ -120,9 +120,32 @@ census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" 
   # consumed() reorder fails exactly g25. Census 125 -> 126 -> 125: the one site revealed
   # (hooks/validate-plan-structure.sh:29) is DRAINED in the same diff, so the allowlist does not
   # move. LOST=0 throughout.
+  #
+  # 53 -> 56 on 2026-09-03 (the FIFTEENTH correction), and it is UPSTREAM of every one above: they
+  # all ask what the clause LADDER mis-judges, and the ladder judges seg[], which is whatever the
+  # split produced. qmask() emitted a `\|` VERBATIM, so the stage split cut on a pattern byte and
+  # the clauses were handed a boundary that does not exist. The defect is NOT "quoted pipes leak" —
+  # that reading was written down as a prediction and REFUSED: an unescaped `|` inside double quotes
+  # is masked correctly, and the backslash arm short-circuits the arm that would have masked it. So
+  # the escape which declares a pipe not to be an operator is the one thing that made this read it
+  # as one. Measured with producer and consumer held byte-identical at `cat "$f" | grep -c …` — the
+  # DRAINED form this lint prescribes as the fix — and only the pattern varying: `grep -c
+  # "warn\|read "` was RED while `grep -c "warn"`, `grep -c "warn\|xyz "`, `grep -c "warn|read "`
+  # and the single-quoted spelling were all GREEN. The RED cell is the ratchet reporting its own
+  # remedy, which is a6449cebc's class. g26 is that cell, g27 is the reason's bound (the alternation
+  # is not the variable; where the invented boundary LANDS is), and r29 is the widening bound — a
+  # real violation carrying the same escaped pipe must stay RED. Only g26 attributes: reverting the
+  # two backslash arms makes exactly g26 fail and nothing else, with a six-arm GREEN column asserted
+  # unaffected (~/.claude/autonomy/mut289-pin.sh, subject restored by sha256). Census 125 -> 125,
+  # KEYS 116 -> 116, LOST=0, NEW=0; the allowlist is untouched.
+  #
+  # The FOURTEENTH correction asked the same question of its own new consumer and answered it the
+  # other way — collect_caller's header reasons that over-splitting there is BOUNDED, because it can
+  # only invent a command WORD. True, and silent about THIS consumer, where an invented boundary
+  # invents a STAGE. Same fault, one consumer over, with an exposure nobody had asked about.
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s' "$output" | grep '53/53' >/dev/null \
+  printf '%s' "$output" | grep '56/56' >/dev/null \
     || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 
@@ -429,8 +452,19 @@ $(census | grep -c 'lr-reset-poller\.sh:' || true) hit(s), so arm 20 is vacuous"
   [ "$(grep -c 'WHAT IT COST TO LAND' "$LINT")" -ge 1 ] \
     || { echo "the landed-measurement block is gone from the lint"; false; }
   # keyed on the FUNCTION, not on prose: a reword may not silently remove the mechanism.
-  [ "$(grep -c 'function qmask' "$LINT")" -eq 1 ]
-  [ "$(grep -c 'split(qmask(work), seg' "$LINT")" -eq 1 ]
+  #
+  # COMMENT LINES ARE STRIPPED ON ALL FOUR COUNTS, 2026-09-03 (the FIFTEENTH correction). These two
+  # were BARE while the two below already stripped, and the paragraph between them names exactly why
+  # the bare form is wrong — so this arm documented the scar and then defended against it on half of
+  # itself. It refused a correct file when the fifteenth correction's comment named the splitting
+  # call while explaining what the split cuts on: count 2, arm red, nothing wrong with the file.
+  # The dodge available at that moment was to reword the comment, which is the move this suite and
+  # the lint header both forbid — key on the ARTIFACT'S SHAPE, never reword around a needle. So the
+  # needle moved instead. The population these counts want is THE MECHANISM, and a comment is not
+  # the mechanism; stripping is the right population and not a weakening. Proved still able to fire:
+  # remove the call from the code line and the stripped count reads 0, so the arm still fails.
+  [ "$(grep -vE '^[[:space:]]*#' "$LINT" | grep -c 'function qmask')" -eq 1 ]
+  [ "$(grep -vE '^[[:space:]]*#' "$LINT" | grep -c 'split(qmask(work), seg')" -eq 1 ]
   # and the quote-BLIND spelling must be gone from the split itself — COMMENT LINES STRIPPED FIRST.
   # A bare count here reads 1 and refuses a correct file, because the block above documents the old
   # spelling by quoting it. That is this suite's own recurring scar: a grep that counts a token also
