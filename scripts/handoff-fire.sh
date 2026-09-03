@@ -5631,11 +5631,28 @@ if [ "${1:-}" = "__recycle" ]; then
         cr)
           hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;;
         retype)
+          # ROUTED THROUGH THE SANCTIONED COMPOSER HELPER, not a hand-rolled type-then-read
+          # (2026-09-03). The first draft of this arm sent `/exit` with a bare `session send`,
+          # slept 1s, and re-read the composer itself — the same three steps the helper performs,
+          # written out again. Two costs, and the second is the one that mattered:
+          #   · it2_paste_submit_verified is the ONLY sanctioned paste route into a live composer
+          #     in this tree (the blind it2_paste_submit was DELETED at a771a1611d28), and it adds
+          #     what a copy cannot: the composer_owned ownership gate, the bounded pre-wait that
+          #     defers to an operator draft rather than pasting over it, bracketed-paste atomicity,
+          #     and paste_readback_ok's two proof forms instead of one byte-equality test. Every
+          #     one of those is fail-safe here — an abstention costs one best-effort nudge, and the
+          #     600s refusal below still reports loudly.
+          #   · scripts/typed-send-lint.sh reads a raw `session send` of a COMMAND LINE outside a
+          #     sanctioned helper as a violation, and it is right to: this arm typed a command line
+          #     that nothing sanctioned had verified. tests/typed-send-lint.bats asserts the lint is
+          #     clean on the REAL tree, so that suite went RED on trunk the moment this landed, and
+          #     stayed red — deterministically, every postland sweep, which is what starved the
+          #     GREEN stamp deploy-live is fail-closed on (backlog 01ab05685857).
+          # The pre-wait is SHORT here, unlike the fire path's 30s: this arm only ever runs on a
+          # composer recycle_nudge_decision has just PROVEN empty, so the wait exists solely to
+          # cover the race where the operator typed in between — where deferring is the whole point.
           if [ "$waited" = 60 ]; then
-            hf_bounded "$IT2" session send -s "$RSID" "/exit" >/dev/null 2>&1 || true
-            sleep 1
-            nc="$(composer_content "$IT2" "$RSID")" || nc=""
-            if [ "$nc" = "/exit" ]; then hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true; fi
+            it2_paste_submit_verified "$IT2" "$RSID" "/exit" "${HF_RECYCLE_RETYPE_PREWAIT_S:-5}" || true
           fi ;;
         *)
           echo "→ nudge@${waited}s HELD ($nd): composer is not a stranded /exit — a CR here would submit someone else's buffer"
