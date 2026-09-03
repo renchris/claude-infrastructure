@@ -17,11 +17,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import sys
 import time
 
 from playwright.sync_api import sync_playwright
+
+# Where the browser lives. By default we ask Playwright for its `chromium`
+# channel, which is what a developer Mac has. A CI box or container often ships
+# one pinned build under PLAYWRIGHT_BROWSERS_PATH whose revision does not match
+# the installed Playwright package, and `channel=` then resolves to a path that
+# does not exist. Naming the binary explicitly is the documented escape hatch,
+# and it changes nothing about the render -- the pinned flags below are what
+# make the capture reproducible, not which copy of Chromium executes them.
+CHROMIUM_PATH = os.environ.get("DR_CHROMIUM_PATH") or None
 
 # Everything a general design rule could need, and nothing else. Pulling all of
 # getComputedStyle would be ~340 properties per element and would bury the
@@ -144,7 +154,11 @@ def capture(corpus: pathlib.Path, dprs: list[int]) -> None:
     timings = []
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            channel="chromium",
+            **(
+                {"executable_path": CHROMIUM_PATH}
+                if CHROMIUM_PATH
+                else {"channel": "chromium"}
+            ),
             args=[
                 "--force-color-profile=srgb",
                 "--disable-lcd-text",
