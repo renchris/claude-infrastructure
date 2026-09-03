@@ -79,6 +79,19 @@ text goes to its own transcript and pane and nowhere else. Measured 2026-08-03: 
 finished, went idle, and delivered nothing until explicitly asked. **State in every teammate brief
 that findings go out via `SendMessage`**, or the work completes and stays invisible.
 
+🛟 **If it already happened, the report is recoverable — run `cc-agent-harvest --session <lead-sid>`.**
+It joins each member to its transcript through `~/.claude*/teams/session-<lead-sid>/config.json`,
+which stores every member's name alongside its VERBATIM prompt, and the member's transcript opens
+with that same prompt — an exact byte join, name → prompt → transcript. It refuses an ambiguous join
+with exit 3 rather than guessing. Quantified over 341 Agent calls / 21 days / both transcript roots:
+calls passing `name:` delivered a report **0 / 207**; calls WITHOUT `name:` delivered **117 / 118**
+(99.2%). One input field decides it, so this is a certainty about named spawns, not a risk.
+
+🚨 **HARVEST BEFORE TEARDOWN — the join key is DESTROYED by shutdown.** An approved-shutdown member
+is removed from `config.json`, and its transcript then becomes permanently unreachable by name
+(measured: one 638 KB report and four operator-cancelled members, all unrecoverable). Collect first,
+close the panes second.
+
 ## Decision Rule
 
 | Task Type | Pattern |

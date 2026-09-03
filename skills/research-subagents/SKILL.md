@@ -251,10 +251,24 @@ not override it.** Enforced at the spawn chokepoint by
 `hooks/agent-teams-enforce.sh` § DELIVERY-CONTRACT NEGATION GUARD (advisory; fires only
 on suppression-clause **AND** no-absolute-path).
 
-**Recovering an already-stranded report** — the findings are not lost, only unrouted.
-The agent's session JSONL lives in the project transcript dir
-(`~/.claude*/projects/<slug>/<session-id>.jsonl`); identify it by its opening
-`<teammate-message>` brief and extract the last long assistant `text` block.
+**Recovering an already-stranded report — `cc-agent-harvest --session <your-sid>` DOES THIS FOR YOU.**
+Landed 2026-08-09 (`5e9ef347c`), 342 lines, symlinked live into `~/.claude/bin/`, 8/8 green in
+`tests/cc-agent-harvest.bats`. It joins name → prompt → transcript through
+`~/.claude*/teams/session-<lead-sid>/config.json` (which stores each member's VERBATIM prompt, and
+the member's transcript opens with that same prompt), and refuses an ambiguous join with exit 3
+rather than guessing — it shipped a false attribution once on a prefix join, which is why.
+
+🚨 **HARVEST BEFORE TEARDOWN.** The join key is destroyed by shutdown: an approved-shutdown member is
+removed from `config.json` and its transcript becomes permanently unreachable by name. Collect
+first, close the panes second.
+
+*Do it by hand only if the tool is unavailable:* the agent's session JSONL lives in the project
+transcript dir (`~/.claude*/projects/<slug>/<session-id>.jsonl`); identify it by its opening
+`<teammate-message>` brief and extract the last long assistant `text` block. **This paragraph is why
+the pointer above now exists.** It was written a month before a session re-derived the same recipe
+by hand and then filed a backlog row to BUILD the tool — which had been on disk, tested and live,
+for 25 days. A shipped tool that nothing references is indistinguishable from one that does not
+exist, and that is a strictly worse failure than a backlog that grows.
 
 **Why this is a field and not advice.** In the 2026-08-04 12-agent wave
 (`docs/research/SUBAGENT_LIFECYCLE_SIGNAL_DISCONNECT_2026-08-04.md`), agent
