@@ -135,8 +135,14 @@ if u_span_h >= need_h:
     # not one, so a sum of per-account floors is the conservative fleet figure.
     per = {}
     for r in util:
-        if r.get("stale"):
+        if r.get("stale") or r.get("k_stale"):
             continue                               # an inherited number is not a measurement
+        # `stale` covers inherited QUOTA; `k_stale` covers an inherited CENSUS (claude-accounts
+        # inherit_k, added 2026-09-04) and the two are independent — a healthy account with live
+        # quota can carry a census inherited through a starved `ps`. Without this arm one sweep's
+        # count would be re-counted as an observation on every sweep that re-inherited it, and
+        # this floor is a MAX over observations: a stretch of starvation would freeze the fleet
+        # figure at whatever the last live census happened to catch.
         w, k = r.get("weekly_pct"), r.get("k")
         if not isinstance(k, int) or not isinstance(w, (int, float)):
             continue

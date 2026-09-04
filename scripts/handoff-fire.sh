@@ -6030,8 +6030,21 @@ pre_fire_account_sweep() {
       # and 0 is precisely what unlocks the Phase-1 relogin gate below, so an unread `ps` would
       # authorise a headless token redeem underneath N live sessions. Emit the word instead: it
       # is not "0", so the gate refuses and the account takes the operator bridge line.
+      #
+      # `.k_stale == true` is the SAME fact wearing a number. claude-accounts:inherit_k now
+      # carries the previous census forward when THIS sweep could not read `ps`, so that routing
+      # stops excluding the whole fleet (desk-router-abstention-2026-09-01 §4) — but an inherited
+      # count is up to cache_grace_s (600s) old, and this gate is a rotation-safety invariant
+      # that must be PROVEN, not estimated. A number here would re-open exactly the fail-open the
+      # null spelling was written to close. Only a LIVE census unlocks Phase 1; everything else
+      # takes the bridge line, unchanged from before k was ever inherited.
+      # NOTE no apostrophes below or above: this jq program is a single-quoted argument inside a
+      # command substitution, and one apostrophe silently ends it — the whole gate then falls
+      # through to "no accounts broken", i.e. reports an unhealthy fleet as healthy.
       .rows[] | select(.auth_actionable == true)
-      | [.acct, .auth, (if (.k | type) == "number" then .k else "unmeasured" end)] | @tsv
+      | [.acct, .auth,
+         (if ((.k | type) == "number" and (.k_stale != true)) then .k else "unmeasured" end)]
+      | @tsv
     else "SKEW" end' 2>/dev/null || true)"
   if [ "$broken" = SKEW ]; then
     echo "⚠ pre-fire account sweep: claude-accounts emits no .auth_actionable (version skew) — auth gate SKIPPED (fire proceeds)" >&2

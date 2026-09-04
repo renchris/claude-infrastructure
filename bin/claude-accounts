@@ -1117,6 +1117,70 @@ def inherit_lastgood(row, ledger, prev):
     return False
 
 
+def _age_s(iso):
+    """Seconds since an ISO stamp (negative for the future); None when unparseable/absent.
+    One parser — hrs_until's — so a stamp cannot mean two different instants in one file."""
+    h = hrs_until(iso)
+    return None if h is None else -h * 3600.0
+
+
+def inherit_k(row, prev, grace_s):
+    """Carry the LAST sweep's pane census into a row whose live census came back unmeasured.
+
+    THE DEFECT THIS CLOSES (desk-router-abstention-2026-09-01 §4). `concurrency()` returns None
+    for the WHOLE fleet when its `ps` census blows its 10s budget, so `k` is None on all four
+    rows at once, `k_src` reads "unmeasured", and `_excluded` refuses every account with
+    `concurrency-unmeasured` — 68 of 230 recorded interactive decisions, the single largest
+    cause of desk-router abstention. And the refusal does not stop the launch: `claude()` falls
+    through to `_claude_pinned`, so a mechanism built to SPREAD load converts "spread across four
+    accounts" into "concentrate every launch on the pinned account" — which measurement (§7) puts
+    at 73.0% mean weekly utilisation, the most-drained of the four. Abstaining is the WORSE
+    outcome, not the safe one.
+
+    THE INHERITED NUMBER IS NOT A MEASUREMENT, and every consumer that treats it as one is
+    corrected rather than left to guess: `k_stale` is stamped beside the value, carried in the
+    cache, in `--json`, in the utilization series and in route-meta's `k_age_s`. The one gate
+    where a stale count would FAIL OPEN — handoff-fire's Phase-1 headless relogin, which redeems
+    a refresh token only under a proven `k == 0` — reads `k_stale` and refuses exactly as it did
+    when `k` was null (scripts/handoff-fire.sh, the `.k`/`k_stale` jq arm).
+
+    WHAT THIS DOES NOT TOUCH: heal()'s rotation-safety gate. It reads `k_live` from its own
+    argument, not `row["k"]`, and this is stamped in collect() AFTER the probes return — so the
+    gate still sees None under a starved census and still refuses. That half of the None contract
+    is a rotation-race invariant and may never weaken; the routing half is a data-availability
+    heuristic and is what was costing the fleet.
+
+    BOUNDED, and bounded against the ORIGINAL measurement. The inherited row is written back into
+    the cache and re-read by _prev_snapshot on the next sweep, so an account re-inherits its own
+    inherited value for as long as `ps` stays starved. Stamping "now" each pass would re-date the
+    census forever and the bound would never bind — the exact re-dating defect inherit_lastgood
+    documents for quota_as_of. Carry the original stamp; past grace_s (cache_grace_s, 600s — the
+    same band --max-age already serves a cache within) stop inheriting and let the row read
+    unmeasured again, which is the honest answer once the number is older than the grace the rest
+    of this tool grants a whole sweep.
+
+    -> True when a value was inherited."""
+    if row.get("k") is not None:
+        return False
+    pr = (prev or {}).get("rows", {}).get(row["acct"])
+    if not pr or pr.get("k") is None:
+        return False
+    if pr.get("k_stale"):
+        as_of = pr.get("k_as_of")                 # already-inherited: keep its ORIGINAL stamp
+    else:
+        ts = (prev or {}).get("ts")
+        as_of = datetime.fromtimestamp(ts, timezone.utc).isoformat() if ts else None
+    age = _age_s(as_of)
+    # A stamp we cannot date is not "fresh enough", it is unknown — refuse, the same direction
+    # every other unprovable gate in this file takes.
+    if age is None or age > grace_s:
+        return False
+    row["k"] = pr["k"]
+    row["k_stale"] = True
+    row["k_as_of"] = as_of
+    return True
+
+
 def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
     """Probe ONE account -> (row, lastgood_entry | None).
 
@@ -1365,11 +1429,17 @@ def collect(cfg, no_heal=False, prev=None):
 
     lastgood_dirty = False
     rows = []
+    k_grace_s = cfg.get("cache_grace_s", 600)
     for acct, (row, entry) in zip(accounts, results):
         # Uniformly, success and exception paths alike: absent (None) whenever the walk could
         # not measure, so k_eff's census fallback — not a fabricated 0 — is what cached rows
         # replay for the TTL.
         row["k_work"] = wcounts.get(acct["name"]) if wcounts is not None else None
+        # HERE, not inside probe_account, and that placement is the safety property: k_live is
+        # the argument heal() gates rotation on, and it must keep reading None under a starved
+        # census. By the time this runs the probes are done, so the inherited value reaches
+        # routing and reaches nothing that redeems a token. (§4 / inherit_k's docstring.)
+        inherit_k(row, prev, k_grace_s)
         if entry:
             ledger[acct["name"]] = entry
             lastgood_dirty = True
@@ -1522,6 +1592,13 @@ def _cliff_factor(r):
 #               time beside the pane census (working_concurrency). The census keeps its jobs
 #               (display, heal's k==0 rotation gate); only the router's charge changes.
 #               Kill: CC_ROUTE_KWORK=off.
+#   k_stale     the PANE census on this row was INHERITED from the previous sweep, because this
+#               sweep's ps blew its budget (inherit_k; k_as_of dates the original measurement,
+#               route-meta reports it as k_age_s). Routing reads the number — abstaining is the
+#               worse outcome, since the launcher then concentrates every launch on the pinned
+#               account. Every ROTATION gate refuses it exactly as it refuses None: heal() is
+#               handed k_live, not the row, and handoff-fire's Phase-1 relogin tests k_stale.
+#               Bounded by cache_grace_s; past that the row reads unmeasured again.
 #   k_phantom   fire-time assignments (`--assign`, written by handoff-fire at the moment of
 #               choice) counted for ASSIGN_TTL_MIN — the router's short-term memory, so a burst
 #               of fires walks DOWN the ranking inside the cache TTL instead of stacking.
@@ -1666,6 +1743,24 @@ def k_src(r):
     if r.get("k_work") is not None and _term_on("CC_ROUTE_KWORK"):
         return "work"
     return "panes" if r.get("k") is not None else "unmeasured"
+
+
+def k_cell(r):
+    """The census CELL both renderers print — one derivation, not two spellings.
+
+    `?` = unmeasured (concurrency()'s None contract: the display may degrade, and it renders `?`
+    rather than a fabricated 0, so the board never shows an idle fleet it did not observe). A
+    trailing `*` = an INHERITED count (inherit_k), the same mark this table already gives
+    inherited quota, for the same reason: the number is real but it is not THIS sweep's
+    observation, and rendering the two identically asserts a measurement nobody took.
+
+    Named rather than inlined because it is printed from two places (the human board and the
+    markdown table), and a rule spelled twice is the copy-that-nothing-compares defect this
+    subsystem keeps re-growing — see tests/account-fact-derivation.bats' opening note."""
+    kv = r.get("k")
+    if kv is None:
+        return "?"
+    return f"{kv}*" if r.get("k_stale") else str(kv)
 
 
 def k_cap(r, R):
@@ -3030,7 +3125,13 @@ def record_utilization(rows, path=None, min_interval_s=UTIL_MIN_INTERVAL_S):
                     # every row, which is the strict end, and so could not settle whether next4's
                     # 15pp strand was a real concurrency lockout or an artifact of that assumption.
                     # Free to record — same sweep, same row, both fields already on it.
+                    # k_stale/k_as_of: `k` is an INHERITED census on these rows (inherit_k), and
+                    # an analysis that reads it as an observation double-counts a single sweep's
+                    # measurement across every sweep that re-inherited it. scripts/pool-floor.sh
+                    # is the live consumer that must skip them — its own rule, already written
+                    # for quota, is "an inherited number is not a measurement".
                     "k_work": r.get("k_work"), "k_src": k_src(r),
+                    "k_stale": bool(r.get("k_stale")), "k_as_of": r.get("k_as_of"),
                     "session_pct": r.get("session_pct"), "weekly_pct": r.get("weekly_pct"),
                     "fable_pct": r.get("fable_pct"),
                     "session_reset_at": r.get("session_reset_at"),
@@ -3107,19 +3208,24 @@ def write_board(cfg, lines):
 
 
 def _prev_snapshot(cfg):
-    """Last sweep's percents (TTL-ignored, cfg-key-checked) — feeds the burn-delta display."""
+    """Last sweep's percents AND its pane census (TTL-ignored, cfg-key-checked).
+
+    Two consumers: the burn-delta display (percents) and inherit_k (`k`), which is why the
+    projection is a field tuple rather than the percent triple it started as."""
     try:
         with open(cfg["cache_file"]) as f:
             old = json.load(f)
         if old.get("cfg_key") != _cfg_key(cfg):
             return None
         # quota_as_of/stale_quota ride along so inherit_lastgood can carry provenance forward
-        # instead of re-dating inherited numbers to "now" on every sweep. The burn-delta loop
-        # (the only other consumer) reads a fixed field tuple and ignores the extra keys.
+        # instead of re-dating inherited numbers to "now" on every sweep; k_as_of/k_stale are
+        # the same provenance pair for the census (inherit_k). The burn-delta loop (the only
+        # other consumer) reads a fixed field tuple and ignores the extra keys.
         return {"ts": old.get("ts"),
-                "rows": {r["acct"]: {k: r.get(k) for k in
+                "rows": {r["acct"]: {f: r.get(f) for f in
                                      ("session_pct", "weekly_pct", "fable_pct",
-                                      "quota_as_of", "stale_quota")}
+                                      "quota_as_of", "stale_quota",
+                                      "k", "k_as_of", "k_stale")}
                          for r in old.get("rows", [])}}
     except (OSError, json.JSONDecodeError, KeyError):
         return None
@@ -3771,7 +3877,7 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
                 f"{pctc(r, 'fable_pct'):>{_NW_PCT}}  {wk_n:<{_NW_WKR}} {login_n}".rstrip())
         else:
             out.append("| " + " | ".join([
-                name, ("?" if r.get("k") is None else str(r["k"])), pctc(r, "session_pct"),
+                name, k_cell(r), pctc(r, "session_pct"),
                 _md_cell(r.get("session_reset_at"), r.get("session_reset_h")),
                 pctc(r, "weekly_pct"), pctc(r, "fable_pct"),
                 _md_cell(wr, r.get("weekly_reset_h")), login]) + " |")
@@ -3997,11 +4103,10 @@ def render_table(rows, cfg, win, cached, prev=None):
         pad = " " * max(0, 8 - len(label) - len(mark))
         name = (c(label, bold=True) if a in ("ok", "healed") else label) \
             + c(mark, CLAY, bold=True) + pad
-        # `k` is None when `ps` could not be read (concurrency()'s None contract). The DISPLAY is
-        # the one consumer that may degrade — it renders "?" rather than a fabricated 0, so the
-        # board never shows an idle fleet it did not observe. It is NOT dimmed: unknown is news.
+        # k_cell owns the `?` / `*` rule (see its docstring). Dimming is the board's own: only a
+        # LIVE zero is uninteresting enough to dim — unknown, and an inherited count, are news.
         kv = r.get("k")
-        k = c(f"{'?' if kv is None else kv:>4}", GRAY, dim=(kv == 0))
+        k = c(f"{k_cell(r):>4}", GRAY, dim=(kv == 0 and not r.get("k_stale")))
         if "error" in r and not r.get("poll_throttled"):
             # auth-broken (logged-out / token-invalid / keychain-error / expired-stale / no-data):
             # error text prominent, plus the STRANDED last-known weekly when the ledger has it
@@ -5028,6 +5133,17 @@ def main():
                               f"k_cap={k_cap(w, cfg['router'])}",
                               f"k_work={w.get('k_work') if w.get('k_work') is not None else '-'}",
                               f"k={w.get('k') if w.get('k') is not None else '-'}",
+                              # HOW OLD the census charging this decision is. `-` = live (this
+                              # sweep's own ps read); a number = inherit_k carried the previous
+                              # sweep's count through a starved census, and the decision is
+                              # standing on data that old. §6's lesson, applied to its own fix:
+                              # the policy change ships WITH the instrument that can falsify it,
+                              # so "how often does routing survive on an inherited k, and how
+                              # stale was it when it did" is answerable from disk rather than
+                              # from the absence of complaints.
+                              f"k_age_s={_ka:.0f}" if (_ka := (_age_s(w.get("k_as_of"))
+                                                               if w.get("k_stale") else None))
+                              is not None else "k_age_s=-",
                               f"k_eff={k_eff(w)}",
                               f"kwork_to={KWORK_TIMEOUTS}",
                               # §14's re-pick threshold, DECLARED BY THE ROUTER (backlog

@@ -176,6 +176,35 @@ info() { printf '%s' "$2" > "$CC_STUB_INFO_DIR/$1.json"; }
   echo "$output" | grep -q "stranded=1"
 }
 
+@test "token-invalid with an INHERITED live count (k_stale) → NOT eligible: a stale count proves nothing" {
+  # claude-accounts:inherit_k (desk-router-abstention-2026-09-01 §4) carries the PREVIOUS sweep's
+  # pane census forward when this sweep's `ps` was starved, so that a measurement failure stops
+  # excluding the whole fleet from ROUTING. That is a data-availability heuristic and it is right.
+  # This gate is not: it is the rotation-safety invariant, and it must be PROVEN. An inherited
+  # count is up to cache_grace_s (600s) old, so `k: 0, k_stale: true` says "nobody was running
+  # ten minutes ago", not "nobody is running" — and 0 is the one value that unlocks a headless
+  # token redeem. Reading the number would re-open, wearing an integer, exactly the fail-open the
+  # `k: null` case above closes.
+  rows '{"rows":[{"acct":"next2","auth":"token-invalid","k":0,"k_stale":true}]}'
+  info next2 "{\"config_dir\":\"/x\",\"keychain_service\":\"svc\",\"keychain_state\":\"present\",\"claude_bin\":\"$BIN/claude-heal-ok\",\"oauth_scopes\":\"a b\",\"has_refresh_token\":true}"
+  run bash "$HF" account-sweep
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -q "healed via Phase-1" || false   # the redeem was NEVER attempted
+  ! echo "$output" | grep -q "FAILED" || false
+  echo "$output" | grep -q "UNMEASURABLE"
+  echo "$output" | grep -q "stranded=1"
+
+  # MUTANT — the same row WITHOUT the marker is a live zero, and the gate opens. Proves this case
+  # discriminates on k_stale rather than on anything else about the fixture.
+  rows '{"rows":[{"acct":"next2","auth":"token-invalid","k":0}]}'
+  rm -f "$HANDOFF_ACCOUNT_SWEEP_STAMP"
+  run bash "$HF" account-sweep
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "healed via Phase-1 headless relogin" || {
+    echo "MUTANT DID NOT FIRE: a LIVE k:0 does not reach the redeem, so the assertion above"
+    echo "proves nothing about k_stale."; echo "$output"; false; }
+}
+
 @test "another heal/login in flight (lock held) → relogin DEFERRED, not counted stranded" {
   rows '{"rows":[{"acct":"next2","auth":"token-invalid","k":0}]}'
   info next2 "{\"config_dir\":\"/x\",\"keychain_service\":\"svc\",\"keychain_state\":\"present\",\"claude_bin\":\"$BIN/claude-heal-ok\",\"oauth_scopes\":\"a b\",\"has_refresh_token\":true}"
