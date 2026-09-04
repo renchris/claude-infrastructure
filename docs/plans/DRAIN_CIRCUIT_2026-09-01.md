@@ -1175,7 +1175,7 @@ point is that landed is not live (`docs/research/inertness-generator-2026-08-07.
 
 ---
 
-## 3h. THE ACCEPTANCE NUMBER IS OBSERVED — and it is a WEAKER test than we believed (2026-09-03)
+## 3g. THE ACCEPTANCE NUMBER IS OBSERVED — and it is a WEAKER test than we believed (2026-09-03)
 
 **`cloud_return_rc` of 0 is in the IDL.** Three of them, and the live layer does now run both fixes —
 `~/.claude/bin/cc-cloud` is byte-identical to trunk's and contains `dload`/`jesc_v`;
