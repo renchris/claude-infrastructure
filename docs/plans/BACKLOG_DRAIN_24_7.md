@@ -86,6 +86,116 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-04 — drain recycle #300: method 272 — A ROW'S NUMERALS AND A ROW'S SHAPE ROT
+  INDEPENDENTLY, AND A MECHANISED FILER PROTECTS ONLY THE FIRST.** #299 established that a row's
+  retraction path is a property of who filed it. #300 asked what a self-maintaining row actually
+  maintains, and the answer is narrower than it looks: its VERDICT and its COUNT, never the
+  STRUCTURE of the sentence it publishes — and the sentence is the only part a human or a
+  successor session ever reads.
+  **#299's NAMED LEAD, RUN AND REFUTED AS STATED — and the refutation was written down first.**
+  The lead said to census `find -L ~/.claude/hooks -type f -name '*.sh'` against the union of the
+  five registries' program words. Measured 12:00:30Z: **104 deployed, 38 registered in NO config
+  dir.** That is far too many to be a defect census, which was the prediction in
+  `probespec300-272.txt` before the instrument existed. **Twenty-nine of the 38 sit under a
+  SUBDIRECTORY — 28 in `hooks/lib/` and 1 in `hooks/tests/` — and a sourced library is registered
+  nowhere BY DESIGN.** Asked of the right population, the lead's question leaves **nine** top-level
+  hooks.
+  **AND ALL NINE ARE INVOKED, SO THE GAP THE LEAD NAMED DOES NOT EXIST.** Callers in the checkout,
+  measured 12:02:46Z with comment lines stripped: `accounts-board.sh` 27 (+1 plist) ·
+  `escalation-watch.sh` 22 · `hook-chain.sh` 39 · `memory-index-drain.sh` 5 ·
+  `migrate-plans-index.sh` 2 · `reset-hard-shadow-allow.sh` 17 · `session-index-sweep.sh` 31
+  (+1 plist) · `subagent-stop.sh` 30 · `task-completed-index.sh` 1. **`hook-chain.sh` is itself
+  unregistered and has 39 callers: it is a DISPATCHER, which is precisely why "unregistered" says
+  nothing about whether a hook runs.** I predicted at least one genuine orphan and **the rc-93
+  gate REFUSED it — zero.** #299 wrote that a no-caller claim must have its reason RUN because its
+  own would have been false; mine would have been false too, one link later, in the same way.
+  Controls: POS `completion-assert.sh` 147 callers · NEG bogus basename 0 · seeded grep spelling 1.
+  **AND THE REVERSE DIRECTION, WHICH NO SENTENCE IN THIS CHAIN HAD ASKED: does every registered
+  program word name a file that EXISTS? ZERO absent, over 416 registration lines across the five
+  registries**, with a seeded absent path proving that screen can fire. A registration naming a
+  missing program would be a hook that is wired and cannot run, and its failure mode is silence.
+  Reporting the zero is the result; it is a zero WITH a control, which is the only kind worth
+  writing down.
+  **🚨 THE LEAD'S OPERATOR IS THE DEFECT, AND IT IS THE TRANSFERABLE HALF. UNION IS MAXIMALLY
+  FORGIVING ON EXACTLY THE AXIS IN QUESTION.** A hook registered in ONE dir and in no other counts
+  as "registered somewhere" — which is the state #299 measured six times over, so the instrument
+  the lead prescribed is structurally blind to the defect its own link discovered. The question a
+  session has is not *is this wired anywhere* but *is it wired in the registry MY session reads*,
+  and mine reads `CLAUDE_CONFIG_DIR=/Users/chrisren/.claude-next`. **Per-dir coverage of the 104
+  deployed, 12:01:46Z: `.claude` 66 · `.claude-next` 60 · `.claude-secondary` 65 ·
+  `.claude-tertiary` 65 · `.claude-quaternary` 65.** In-`.claude`-not-in-`.claude-next` = **6**;
+  the reverse = **0**. **That reproduces #299's six by a fully independent route — a filename-set
+  `comm`, not a program-word `jq` — and it names the identical six files.** Two instruments
+  agreeing is worth more than either alone.
+  **🚨 THE PAIR, AND BOTH HALVES ROTTED, IN OPPOSITE PLACES.** `6a428f48fd2e` (BLOCKED since
+  2026-08-11T06:22:48Z) asserts *"account 1 (.claude-next) configures 69 hook commands vs 74 in
+  accounts 2/3/4"*. Re-asked of the five `settings.json` directly at 12:06:27Z, never of another
+  row: **`.claude` 85 · `.claude-next` 79 · the other three 84 each, all three agreeing.** **Both
+  operands of its comparison moved by exactly +10 across 24 days, and the DIFFERENCE it was filed
+  to express held at exactly 5.** Its numerals are dead and its claim is untouched. **THREE
+  predictions REFUSED at rc 93 and every one made the disposition safer: it DOES carry a condition
+  key, it DOES carry a stored falsifier, and it WAS re-touched (`lastTs` 2026-08-18T03:14:24Z).**
+  It is not #299's unaskable hand-filed shape at all, its stored falsifier reads 0 for all six
+  basenames in `.claude-next` and is correctly NOT firing, and **it STAYS BLOCKED — I came to
+  close it and the gate is what stopped me.** ⚠️ **A STALE NUMERAL IS NOT A DEAD PREMISE**, and
+  this chain has twice closed rows because a number moved (#262, #299); both were right, and the
+  rule that made them right does not generalise.
+  **THE OTHER HALF ROTTED IN ITS SHAPE WHILE ITS COUNT STAYED PERFECT.** `02e67ee88123` is
+  condition-keyed, falsified by the detector itself, re-asked hours earlier, and its count of 6 is
+  exactly right. **Its TITLE reads "MISSING in: .claude-next .claude-quaternary .claude-secondary
+  .claude-tertiary", which parses as a CROSS PRODUCT — six guardrails absent from four dirs.** The
+  detector's own per-row output says otherwise: **five are missing in `.claude-next` ALONE, and the
+  sixth, `pr-gate.sh`, is missing in FOUR — registered only in `~/.claude`, so for four of five
+  accounts that gate has never run.** Per-dir incidence is `.claude-next` 6 · the other three 1
+  each. **The verdict was never wrong; the union that composes the title discards the per-item
+  shape, and a flat union renders those two opposite states identically.**
+  **THE MOVE — FIXED IN THE FILER, WHICH IS THE CLEANEST DISCHARGE.**
+  `scripts/settings-drift-assert.sh` composed that title with
+  `sed -n 's/.*missing in://p' | tr ' ' '\n' | sort -u`, under a comment already asking the right
+  question — *"the operator's first question is always which account runs looser"* — while the code
+  answered a narrower one, which is #240's shape exactly. It now emits each divergent dir WITH its
+  incidence, heaviest first: `.claude-next(6) .claude-secondary(1) .claude-tertiary(1)
+  .claude-quaternary(1)`. **Selftest 15 → 17**, and the two new arms are pinned by a fixture whose
+  two entries have DIFFERENT missing-dir sets — the shape a union cannot express.
+  **THE CONTROL IS THE PART THAT MAKES THIS A RESULT: a mutant restoring the flat union reds
+  EXACTLY the two new arms and nothing else** (baseline 17 ok / 0 FAIL; mutant 15 ok / 2 FAIL;
+  predicted 2, got 2, rc-93 gate satisfied; anchor uniqueness asserted at 1, no-op and
+  byte-identical mutants both refused).
+  ⚠️ **AND THE ASSERTIONS THAT WERE ALREADY THERE COULD NEVER HAVE CAUGHT IT.** The selftest's
+  `grep -q 'MISSING in: z'` and `tests/settings-drift.bats`'s `grep -q 'MISSING in: c'` are
+  UNANCHORED substrings that match the flat union AND the weighted form. They assert the dir is
+  NAMED and say nothing about the shape, which is the entire content of that line. Both are now
+  `-qF 'MISSING in: z(1)'` / `'MISSING in: c(1)'`, and the suite's downward-ratchet floor is raised
+  **15 → 17** as its own comment instructs. **A control pinned to a spelling that any correct fix
+  leaves standing is not a second opinion.**
+  **THE BOARD**, 11:58:11Z, both partitions asserted (`370 + 243 == 613`, `3011 == 3011`),
+  `sort -c` on all five lists: **370 open / 243 blocked / 2,392 done / 6 claimed**, 613 combined,
+  3,011 rows. The unaskable partition re-derived: **243 carry neither a condition key nor a
+  falsifier · 14 carry both · 113 carry one, summing to 370.** Against #299's FLOOR across
+  4 m 39 s: **ONE arrival, ZERO departures, ZERO transitions** — `64c7f0973f99`, filed AND closed
+  inside 94 seconds by a mechanised `master-operator-gated` filer, `claude-infrastructure`, **not
+  mine** (I had filed nothing).
+  **THE LANE, 11:57:42Z, taken from the worktree:** `RUNG=✅ LIVE_SRC=behind
+  LIVE_SHA=a03a4b6386ab LIVE_LAG=6 LIVE_ADDS=0 LIVE_STALE=1 LIVE_AGE=21374 LIVE_BREACH_WHY=` empty,
+  `GATE=stale`. 🚨 **That is 226 seconds of margin against the 21,600-second time arm, where #299
+  had 471 — the margin has been shrinking every link and the next one should expect to open on
+  `🚀` and drive the converge.** `deploy-link-parity` rc 1: **468 linked · 0 staged-pending ·
+  10 live-extra · 55 unmapped · 2 actionable**, the same two strays, each read from its own call.
+  Post-land RED pages **3 over 68** at 11:57:13Z. All four executing blobs read SAME on both sides.
+  ⚠️ **TWO INSTRUMENT FAULTS, BOTH MINE, BOTH CAUGHT BY A CONTROL RATHER THAN A HUNCH.**
+  (1) **`cc-backlog list` WITHOUT `--all` EXCLUDES `done`**, so folding the one arrival returned 0
+  with the NEG control also at 0 — a shape indistinguishable from a wrong id. **A live POS control
+  (`02e67ee88123`, matchcount 1) is what separated "wrong id" from "wrong arity"**; #216's scar in
+  its seventh costume, and #231's rule is what named it. (2) **The postland-verifier census read
+  17 naive phrase hits against ONE argv[0]-anchored verifier** — #285's false alarm, now five times
+  larger than #299's three, because a sibling session's argv carries a brief that mentions the
+  phrase. **The whole-line anchor fixes the COLUMN fault and does nothing about the POPULATION
+  fault; only `^<pid> /bin/bash …/postland-verify.sh` does.**
+  **TRANSFERABLE:** ask of any self-maintaining row WHAT ITS FALSIFIER ACTUALLY RE-ASKS. A stored
+  falsifier keeps a VERDICT current and a COUNT current; the prose the filer composes around them
+  is regenerated by code nothing tests, and an aggregation there — a union, a max, a total — can
+  discard the very structure that makes the row actionable. **A count that survives is not a
+  sentence that survives.**
 - **2026-09-04 — drain recycle #299: method 271 — A ROW'S RETRACTION PATH IS A PROPERTY OF WHO
   FILED IT, NOT OF WHETHER ITS CLAIM IS TRUE. WHEN A CLASS HAS A MECHANISED FILER, A HAND-FILED
   INSTANCE OF THAT SAME CLASS IS IMMORTAL.** #298 established that a census's population is what its
