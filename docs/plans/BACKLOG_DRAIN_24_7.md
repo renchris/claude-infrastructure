@@ -86,6 +86,130 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-04 — drain recycle #294: method 266 — A FIELD'S COMMENT AND A FIELD'S CODE CAN NAME
+  DIFFERENT POPULATIONS, AND WHEN THEY DO, THE EVENT THAT COLLAPSES THE CODE'S WINDOW IS OFTEN THE
+  ONE THAT CREATES THE HARM.** ZERO rows closed, ZERO filed, ZERO reopened, ONE row UPDATED. ONE
+  commit, ONE push. #293 asked what a number is a count *of*, and whether it is the POPULATION or the
+  EFFECT. This is that question asked of a field's own DOCUMENTATION: `wrap-ledger.sh`:905 said
+  LIVE_ADDS counts *"paths HEAD carries that the live layer's TREE does not"*, and the code at :1075
+  is one `git diff --diff-filter=A LIVE_SHA HEAD` — a diff of two REFS that never reads the live
+  filesystem at all. **Both sentences describe a real quantity. They are not the same quantity, and
+  they diverge exactly when it matters.**
+  **THE DIVERGENCE, MEASURED END TO END RATHER THAN ARGUED.** At **02:28:45Z** my ledger read
+  `RUNG=✅ LIVE_SRC=ok LIVE_SHA=7cc801e7ae0e LIVE_LAG=0 LIVE_ADDS=0 LIVE_STALE=0 GATE=stale` — a
+  clean, fully-converged lane by every field it prints — while **FIVE tracked runtime files landed on
+  trunk had no live counterpart at all**: `bin/cc-lid`, `commands/keep-laptop-alive.md`,
+  `hooks/lib/memory-index-locate.sh`, `hooks/memory-index-drain.sh`, `scripts/memory-fleet-sweep.sh`.
+  Each one's add-commit is an **ANCESTOR** of `LIVE_SHA`. Both shipped auditors saw all five and this
+  field saw none: `deploy-parity-assert` printed **5 MISSING** at rc 1, and `deploy-link-parity`
+  printed **`463 linked · 0 staged-pending · 10 live-extra · 55 unmapped · 7 actionable`** against
+  the **2** that had been byte-identical for fourteen links.
+  **AT LAG 0 THE FIELD IS IDENTICALLY ZERO BY CONSTRUCTION.** The diff range is empty, so `LIVE_ADDS`
+  cannot report an absent file — not rarely, not usually, but *ever*. I wrote four predictions down
+  before touching anything and ran the sanctioned converge from the shared checkout at **02:34:15Z**:
+  **rc 0, exactly five links created**; `deploy-parity-assert` MISSING **5 → 0**; `deploy-link-parity`
+  **463 → 468 linked** and **7 → 2 actionable**; and the ledger **byte-identical, field for field,
+  across a change that made five inert files live**. **Population 5, effect on the ledger ZERO.** All
+  four predictions were exact, including the fourth, which existed only to be refuted — *"if any
+  ledger field changes, my whole reading of this is wrong."* It did not change.
+  **THE GENERATOR IS WORSE THAN THE ARITHMETIC, AND IT IS THE PART TO CARRY.** `LIVE_SHA` is
+  `git -C "$LIVE_REPO" rev-parse HEAD` — the shared CHECKOUT's ref, which **anything** may
+  fast-forward. An ungated `git pull` of that checkout therefore drives `LIVE_LAG` to 0 and **empties
+  this window**, while creating no symlink for any file those commits ADDED. `deploy-live.sh`'s own
+  `last_advance_hours()` header already names that state (*"an ungated hand-pull having moved the
+  checkout"*, §2.E path B) and `deploy-parity-assert` printed it in my face: *"A raw ff/pull moved the
+  shared checkout. It advances FILES but creates NO symlinks."* **So the remedy-shaped event
+  extinguishes the alarm without performing the remedy** — and the field's rung goes from a correct
+  `🚀` to a false `✅` by the very act of a converge that delivered nothing.
+  **WHICH MAKES ONE SENTENCE IN #293's CLOSE THE THING TO CORRECT, AND IT IS A KIND CORRECTION.**
+  #293's floor read `RUNG=✅ LIVE_SHA=7cc801e7ae0e LIVE_LAG=0 LIVE_ADDS=0` thirteen minutes after its
+  close and recorded *"a green descendant appeared and the converger took it without being asked."*
+  **Nothing was deployed.** The lag went to zero because the checkout moved, and the ten adds #293 had
+  correctly flagged — five of which had no link — fell out of the window by arithmetic. The reading
+  was true about the FIELDS and false about the LANE, and #293 could not have known it from those
+  fields, because those fields structurally cannot say it. **Taking the fourth moment was right; the
+  instrument it was taken with is what needed the second column.**
+  **THE HALF OF `4e6a51df2a84`'s BLOCKED SUB-PROBLEM THAT IS NOW SOLVED.** That row has been open
+  since 2026-08-11 over the MIRROR defect — this same field's FALSE POSITIVES on `tests/` adds — and
+  its 2026-08-13 update parks a fixer on *"the candidate needs a positive list from the converger, and
+  scripts/deploy-live.sh publishes no explicit deployed-dir set today, which is the actual sub-problem
+  to solve."* It publishes no dir set. **It does publish the deployed SHA**, which is the DENOMINATOR
+  half: `deploy-live.sh`:187 defines `LAST_ADVANCE` as `$POSTLAND_DIR/deploy-last-advance` and :2061
+  writes `"<epoch> <sha>"`, OUR advances only. On disk at my open it read
+  `1788474346 bdb1d911f7b535f77d827c49adb93481f7ae0638` — the converger had last delivered
+  **18 commits BELOW** the checkout's HEAD.
+  **FOUR CANDIDATE DENOMINATORS, ALL MEASURED AGAINST ONE LIVE STATE AT 02:41:09Z, SO THE NEXT FIXER
+  INHERITS NUMBERS AND NOT A PROPOSAL.** CANDIDATE 0, the shipped one, `adds(checkout-HEAD..trunk)` =
+  **1**. CANDIDATE A, re-denominate on the last sanctioned advance, `adds(last-advance..trunk)` =
+  **13**. CANDIDATE B, A intersected with the live layer's linked top-levels, DERIVED from the live
+  links themselves with an 11-entry positive control rather than typed, = **7**. CANDIDATE C, B minus
+  every path already present under `$HOME/.claude`, = **0**. **A AND B ARE BOTH REFUTED AS SHIPPABLE,
+  and this is method 213 applied to a change nobody landed**: both read non-zero over a live layer
+  with NOTHING missing, so either alone would breach at every close during any busy landing day — the
+  exact always-firing alarm that row exists to complain about, arriving from the other direction.
+  **Only CANDIDATE C agreed with both auditors in both states**: 0 converged, and 5 at the 02:28:45Z
+  moment, matching `5 MISSING` and `5 UNLINKED` exactly.
+  **AND ONE REFINEMENT TO THAT ROW'S OWN ORIGINAL REMEDY, MEASURED RATHER THAN REASONED: A TOP-LEVEL
+  FILTER IS NOT SUFFICIENT.** `hooks/tests/pr-gate.test.sh` sits *under* a linked top-level and is a
+  tests path; separately `~/.claude/hooks/tests` **does** exist while `~/.claude/tests` and
+  `~/.claude/migrations` do **not**. The linked set is not derivable from the top-level name.
+  **WHY I LANDED A COMMENT AND NOT A DIFF, AND THE NUMBER IS THE WHOLE ARGUMENT.** C's residual is
+  named: deriving the want-list FROM THE LIVE LAYER'S OWN LINKS means a genuinely new deployed
+  top-level has no link yet, so its adds are wrongly exonerated — which is that row's 2026-08-13
+  known-false-negative, sharpened. The want-list must come from the CHECKOUT side, and the only
+  producer of one is `scripts/deploy-parity-assert.sh`, **measured at 24.35s / 24.94s / 25.07s over
+  three runs against `wrap-ledger.sh --machine`'s 0.32s twice — 78x, on the path every session's
+  close runs.** `wrap-ledger` cannot consult the only correct want-list producer, and that row's own
+  text says wrap-ledger *"wants its own change with its own controls in both directions"* — a request
+  for a dedicated link, not a rider on a discovery one. **So the landable is the corrected comment**:
+  the field's stated population now matches the one it measures, and it carries the four numbers, the
+  store a fixer needs and the cost that rules out the obvious remedy. Comment-only: **34 added / 2
+  removed with ZERO non-comment lines on either side**, `bash -n` rc 0, `shellcheck -x` rc 0 at 0
+  bytes, `pipefail-sigpipe-lint` rc 0 clean, and the machine output asserted **EQUIVALENT across 35
+  field lines** against `origin/main`'s copy — with the two excluded fields PRINTED rather than
+  hidden, and a seeded positive control proving the comparison can fail.
+  **TWO INSTRUMENT FAULTS, BOTH MINE, BOTH CAUGHT BY READING RATHER THAN BY A NUMBER.** (1) **A
+  POSITIVE CONTROL WHOSE EXPECTED COUNT IS ZERO IS INDISTINGUISHABLE FROM A NEGATIVE CONTROL AND
+  PROVES NOTHING.** My board verifier declared three POS controls; one was the row's own id, which
+  does not appear in the row's body, so it read `source=0 store=0` and passed while establishing
+  nothing at all. The other two were real (4 and 2). **A control's job is to be able to FAIL; assert
+  its expected count is non-zero before you count it as a control.** (2) **On bash 3.2 a
+  `case … in "$VAR"/*)` INSIDE a `$( )` closes the substitution at that `)`** — my first measurement
+  script died there with `syntax error near unexpected token 'newline'` and then `$1: unbound
+  variable`, which reads like a quoting bug three lines away. Use a prefix test, not a `case`.
+  **THE CLONE RULE DID NOT CORRUPT THE INODE THIS LINK, AND THAT IS A FACT ABOUT THE DIGITS, NOT
+  ABOUT THE GUARD.** `suites<N>.sh` carries `1535747925:3929360201` against `16777234:745521400`;
+  `293` occurs at offset 2 of `3929360201`, which is why #291, #292 and #293 were each corrupted —
+  and `294` occurs in none of the four runs, so `s/294/295/g` could not reach it. **The multiset
+  sweep ran anyway and read SAME on all four.** `fixclones294.py` was written FRESH from the survey
+  of my own emitted clones: five repairs, every count asserted BEFORE the write and the stale token
+  re-counted after, plus a PRESERVE map holding nine true-and-historical tokens — the five
+  `probe293-*.sh` filenames and the four inode numbers — asserted still present afterwards. **All
+  fourteen gates passed on the first run and nothing was written until they had.** The three-way
+  split held for the eighth link running: `gap295.sh` six occurrences over five lines all STALE,
+  `markers295.py` / `derive295.sh` / `repoint295.py` one each STALE, `mkprobe295.py` HALF-ROTTED —
+  its parent claim false, its record of #293's five clones true — and `suites295.sh` untouched DATA.
+  **STANDING READINGS, EACH WITH ITS MOMENT.** The `qos` heredoc diff: rc 0, **0 bytes**. The four
+  kitty checks at 02:28:45Z: `cc-in-kitty` rc 0, `KITTY_WINDOW_ID=27`, an id-keyed `kitty @ ls` read
+  through a FILE at rc 0 / 0 stderr bytes / **173,290 json bytes** returning **exactly one** object
+  with a bogus-id NEG control at 0 and `cwd` = the worktree, and `cc-notify --self` printing 27.
+  `land-lock.sh --status` `holder: (free)`, **0** `postland-verify` processes by an argv-POSITION
+  anchor. The executing-vs-trunk blobs MATCHED on all three I compared, including
+  `scripts/pipefail-sigpipe-lint.sh` at `6c7eb983cace` on both sides — **#293's `LIVE_STALE=6` file
+  has converged**. `GATE=stale` at every moment, not mine to drive. Board at 02:29:27Z: **364 open /
+  243 blocked / 2,387 done / 2 claimed**, 2,996 rows, both partitions asserted. The gap against
+  #293's floor ran **5 m 55 s** and held **FOUR arrivals, ZERO departures, TWO transitions** — the
+  shortest window in the table and not the quietest, which is the point of measuring it. Census at
+  02:29:32Z: postland RED pages **0** over a denominator of **2,867**; the other page store
+  **2,558 all / 69 `.page`**; inbox-guard **436**; stamps **556**. `gate-select.sh --direct` printed
+  **`FULL`**, its fail-closed cannot-decide, for the second link running. And `origin/main` moved
+  underneath me mid-link, `7cc801e7ae0e → 5f50b3ce9aa7`, which is why every number above carries the
+  moment it was taken at.
+  **THE TRANSFERABLE SENTENCE: A FIELD'S DOCUMENTATION IS A CLAIM ABOUT A POPULATION, AND IT IS NOT
+  EVIDENCE ABOUT THE POPULATION ITS CODE MEASURES — SO READ THE IMPLEMENTATION BEFORE YOU BELIEVE THE
+  COMMENT, AND THEN ASK WHAT EVENT WOULD MAKE THE TWO DIVERGE.** Here that event was the ordinary
+  one: a fast-forward. **A window-shaped sensor is blind at window zero, and window zero is exactly
+  where an all-clear gets rendered.**
 - **2026-09-04 — drain recycle #293: method 265 — A LEAD HAS A CLAIM AND A SCREEN, AND THE SCREEN
   CAN BE DENOMINATED IN A DIFFERENT POPULATION THAN THE CLAIM. RUN IT ANYWAY: IT ANSWERS A QUESTION
   THE CLAIM DID NOT ASK.** ZERO rows closed, ZERO filed, ZERO reopened. ONE commit, ONE push.
