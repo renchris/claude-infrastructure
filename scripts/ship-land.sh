@@ -885,7 +885,7 @@ inflight_release() {  # idempotent · only ever removes a marker THIS process wr
 # conclusion-must-reach-the-enforcing-store — a ref nothing reads is inert).
 # shellcheck disable=SC2329  # invoked indirectly — its callers are the two trap handlers below.
 land_failure_inbox() {  # $1=exit code $2=cause word
-  local rc="$1" cause="$2" head name ref cmd bl id oracle fout frc land_root land_proj _lgcd _lmain
+  local rc="$1" cause="$2" head name ref cmd bl id oracle fout frc land_root land_proj _lgcd _lmain _cand _local_present fout2 frc2
   # ONLY past the in-flight claim, i.e. only once a land actually STARTED. Preflight refusals
   # (dirty tree, shared checkout, a second concurrent fire) are the author's own immediate,
   # visible feedback and filing them would drown the inbox in noise the author already read.
@@ -1029,9 +1029,60 @@ land_failure_inbox() {  # $1=exit code $2=cause word
   # No ref ⇒ no probe: a falsifier over `<unrecorded>` could only ever answer "cannot tell", and a
   # probe that cannot answer is worse than none (memory: sensor-default-off-makes-blindness-the-
   # shipping-path). Same for a checkout that predates the oracle.
-  oracle="${REPO_ROOT}/scripts/land-content-verify.sh"
-  if [[ -n "$id" && -n "$ref" && -x "$oracle" ]]; then
-    fout="$("$bl" falsify "$id" --probe "bash ${oracle} ${ref}" 2>&1)"; frc=$?
+  # 🚨 THE PATH STORED IN THE PROBE MUST OUTLIVE THE WORKTREE THAT STORES IT — and until 2026-09-04
+  # it did not, which killed this whole arm silently. `REPO_ROOT` (:698) is the DYING land's own
+  # checkout, so the stored probe read `bash /…/.worktrees/<branch>/scripts/land-content-verify.sh
+  # <ref>`; the moment that worktree was reaped the probe exited 127. cc-premise reads 126/127 as
+  # "the probe never ran" and fails OPEN (bin/cc-premise:266), so the row could never self-retract.
+  # The retraction arm therefore failed in the direction that PRESERVES the pile, for exactly the
+  # rows it was built to retire. MEASURED 2026-09-04 on the live store: 47 of the 48 probe-bearing
+  # live re-land rows exited 127; re-pointed at a durable copy of the SAME oracle against the SAME
+  # ref, 9 exit 0 — nine rows that had been moot for weeks and had no way to say so.
+  #
+  # This is the SAME worktree-ephemerality bug already fixed one line above for the project label
+  # (:989-995, "land_root is the durable checkout resolved in main_outer") and, before that, for the
+  # `--run` command (:900-915). The fix stopped one line short each time: row ed20da9f2023 carries
+  # `--run cd /Users/chrisren/Development/claude-infrastructure` beside a probe pointing into
+  # `.worktrees/backlog-telemetry`. Same handler, same variable available, two different answers.
+  #
+  # SO THE INVARIANT IS ENFORCED BY CONSTRUCTION, NOT BY THE ACCIDENT OF LAND_MAIN_ROOT BEING SET.
+  # `land_root` is durable whenever main_outer resolved it, but a land whose REPO_ROOT is already a
+  # `.worktrees/<branch>` path and which never reached main_outer would resolve `land_root` right
+  # back to that ephemeral path. A candidate under `/.worktrees/` is therefore REFUSED outright
+  # rather than ranked, because for this one field "ephemeral" is not a worse answer, it is a probe
+  # that is guaranteed to be dead before anyone reads it (memory: bound-must-fit-the-band). The
+  # deployed layer's own copy is the durable backstop: `$HOME/.claude/scripts/` is a per-file
+  # symlink into the shared checkout, so it survives even a checkout that moves.
+  #
+  # `--no-fetch` rides the stored string because the probe's RE-RUNNER is unattended — cc-premise's
+  # 6-hourly sweep runs up to 150 of them — and a probe that fetches is a network call on somebody
+  # else's schedule. It reads the local `origin/<trunk>` ref, so a stale checkout answers "not on
+  # trunk" (exit 1), which is the PRESERVING direction: a probe that cannot see the land keeps the
+  # row rather than retracting real work.
+  # 🚨 THE DEPLOYED COPY REPLACES AN EPHEMERAL PATH; IT NEVER INVENTS AN ORACLE THE CHECKOUT LACKS.
+  # That distinction is the whole ordering, and getting it wrong broke a NEGATIVE CONTROL that has
+  # been in this suite since the arm was built: "P4 inbox: the backlog row carries the EXACT re-land
+  # command" asserts that a fixture with NO scripts/land-content-verify.sh stores NO probe, which is
+  # this block's own stated rule two paragraphs up ("Same for a checkout that predates the oracle").
+  # Ranking $HOME/.claude ahead of the local candidates satisfied every re-land row and quietly made
+  # that rule unreachable — the fallback answered for a checkout that has no oracle at all. So the
+  # local candidates decide WHETHER there is a probe, and $HOME decides only WHICH PATH is stored
+  # once they have said yes and every one of them is ephemeral.
+  local _cand _local_present=0
+  oracle=""
+  for _cand in "${land_root}/scripts/land-content-verify.sh" \
+               "${REPO_ROOT}/scripts/land-content-verify.sh"; do
+    [[ -x "$_cand" ]] || continue
+    _local_present=1
+    case "$_cand" in */.worktrees/*) continue ;; esac
+    oracle="$_cand"; break
+  done
+  if [[ -z "$oracle" && "$_local_present" -eq 1 \
+        && -x "$HOME/.claude/scripts/land-content-verify.sh" ]]; then
+    oracle="$HOME/.claude/scripts/land-content-verify.sh"
+  fi
+  if [[ -n "$id" && -n "$ref" && -n "$oracle" ]]; then
+    fout="$("$bl" falsify "$id" --probe "bash ${oracle} ${ref} --no-fetch" 2>&1)"; frc=$?
     if [[ "$frc" -eq 5 ]]; then
       # rc 5 ⇒ the probe exits 0 RIGHT NOW ⇒ the oracle says this ref's content is ALREADY on
       # trunk: the land died AFTER its content landed, and there is nothing to re-land. So this is
@@ -1047,10 +1098,28 @@ land_failure_inbox() {  # $1=exit code $2=cause word
         >/dev/null 2>&1 || true
       printf '· ship-land: re-land row %s CLOSED at filing — %s is already on trunk\n' "$id" "$ref" >&2
     elif [[ "$frc" -ne 0 ]]; then
-      # Every other non-zero has no remedy from here, but it leaves the same probe-less row — so
-      # saying so IS the fix. An unreported one is indistinguishable from a healthy filing.
-      printf '⚠ ship-land: re-land row %s was filed WITHOUT a falsifier (cc-backlog falsify rc=%s) — it cannot self-retract, so retract it by hand once %s is on trunk.\n  %s\n' \
-        "$id" "$frc" "$ref" "${fout:-<no output>}" >&2
+      # EVERY OTHER NON-ZERO USED TO END HERE AS A REPORT, AND A REPORT IS NOT A REMEDY. Reporting
+      # was the right first fix (an unreported probe-less row is indistinguishable from a healthy
+      # filing) but it left the row in the same place: no probe, so neither of the retractor's two
+      # buckets, so permanently live. MEASURED 2026-09-04: 14 of the 63 live re-land rows are
+      # probe-less, and re-running the oracle against the ref reconstructed from their own `--run`
+      # field says most of them are already moot. They were filed correctly and then made mute.
+      #
+      # `--no-run` is the right verb and not a bypass: rc 5 — the ONE refusal that means "this probe
+      # already exits 0" — is handled above by CLOSING the row, so by the time control reaches here
+      # the screen has either not run or has answered something that is not the retracting
+      # direction. `--no-run` says "do not EXECUTE the probe", not "ignore the answer", and
+      # cc-backlog still runs its filing-day screen and still WARNS that nothing was executed.
+      # A probe stored unscreened is worth strictly more than no probe: the sweep re-runs it every
+      # six hours and its first run is that screen, six hours late.
+      fout2="$("$bl" falsify "$id" --probe "bash ${oracle} ${ref} --no-fetch" --no-run 2>&1)"; frc2=$?
+      if [[ "$frc2" -eq 0 ]]; then
+        printf '· ship-land: re-land row %s carries a falsifier stored UNSCREENED (cc-backlog falsify rc=%s on the screened attempt); the sweep runs it first.\n' \
+          "$id" "$frc" >&2
+      else
+        printf '⚠ ship-land: re-land row %s was filed WITHOUT a falsifier (cc-backlog falsify rc=%s, --no-run retry rc=%s) — it cannot self-retract, so retract it by hand once %s is on trunk.\n  %s\n' \
+          "$id" "$frc" "$frc2" "$ref" "${fout2:-${fout:-<no output>}}" >&2
+      fi
     fi
   fi
   return 0
