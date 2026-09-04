@@ -359,7 +359,16 @@ if [ -n "$WANT" ]; then
 else
   WHERE="the index lives at <config-dir>/projects/<slug>/memory/MEMORY.md — inside memory/, NOT one level up at the project root (an index outside memory/ is invisible to the cross-account mirror), and topic files beside it"
 fi
-NUDGE="MEMORY CHECK (periodic): if this session surfaced a DURABLE, generalizable rule, a decision (+ its why), a confirmed constraint, or user feedback that is NOT already in MEMORY.md, persist it now — append one index line to MEMORY.md and create the topic file with frontmatter; $WHERE. SKIP (do not encode as a permanent rule): transient errors, environment/worktree-specific one-offs, lucky paths, negative tool-claims (verify before encoding), anything already indexed. Nothing durable this session? Ignore this."
+# ORDER INVERTED 2026-09-03, and the order is load-bearing in two directions. This said "append
+# one index line to MEMORY.md and create the topic file" — index FIRST. But the index write is the
+# one that can be REFUSED (hooks/lib/memory-index-budget.sh denies a crossing write at PreToolUse),
+# so on a full index the session lost the pointer AND had not yet written the body: the whole rule
+# evaporated at exactly the moment the system was under pressure and most needed to keep it.
+# File-first makes the durable half unconditional — a refused pointer then costs a pointer, not a
+# lesson, and the remedy is one-in-one-out on an index whose body already exists. It is also the
+# precondition for any gate that must READ a rule's topic file at the moment its index line is
+# written (routing on durability needs the frontmatter to exist).
+NUDGE="MEMORY CHECK (periodic): if this session surfaced a DURABLE, generalizable rule, a decision (+ its why), a confirmed constraint, or user feedback that is NOT already in MEMORY.md, persist it now — FIRST create the topic file with frontmatter, THEN append its one-line pointer to MEMORY.md (that order matters: the pointer can be refused when the index is full, and a rule whose body is already on disk survives that refusal); $WHERE. SKIP (do not encode as a permanent rule): transient errors, environment/worktree-specific one-offs, lucky paths, negative tool-claims (verify before encoding), anything already indexed. Nothing durable this session? Ignore this."
 
 # Build with jq: the message interpolates measured values, and shell quoting is
 # not JSON quoting — a hand-rolled heredoc would be a quoting bug waiting to land.
