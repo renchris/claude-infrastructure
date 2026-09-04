@@ -261,3 +261,72 @@ TELL="The cc-inbox-guard cost profile deserves its own scoped pass — 52.8s of 
   run run_da "$(mktx "$TELL")"
   [ "$(grep -c '"hook":"dispatch-assert"' "$DISPATCH_ASSERT_IDL")" -eq 2 ]
 }
+
+# ── DROP is a discharging disposition (backlog-zero W2a) ──────────────────────────────────────────
+# WHY. Before this arm every remedy the gate offered WROTE a row — (a) fire, (b) add, (c) add+block,
+# (d) decide — and discharged_since() could only see a written artifact, so "not worth doing" had no
+# expressible form and the only way out was to eat blocks to the cap. Measured 2026-09-04: 131 fires
+# in 14 days, the largest single producer of the live ad-hoc pile
+# (docs/research/backlog-zero-2026-09-04/inflow.md §3, §5.1). A dropped item leaves no artifact BY
+# CONSTRUCTION, so the model's own sentence is the only evidence there can be.
+
+@test "a naming-tell whose turn also DROPS it ⇒ ABSTAIN (a dropped item needs no record)" {
+  run run_da "$(mktx "$TELL Actually, dropping it: the sweep is 52.8s once a day and nobody waits on it.")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  # a DROP is not a RECORD: the IDL must be able to count the rows this arm prevents
+  grep -q '"reason":"dropped"' "$DISPATCH_ASSERT_IDL"
+  [ "$(grep -c '"reason":"already-recorded"' "$DISPATCH_ASSERT_IDL")" -eq 0 ]
+}
+
+@test "each drop idiom discharges (dropping / not worth / letting it go)" {
+  local drops=(
+    "dropping it: the cost is one sweep a day."
+    "On reflection this is not worth doing — the caller is gone."
+    "I am letting this go rather than filing it."
+  )
+  local i=0
+  for d in "${drops[@]}"; do
+    i=$((i+1))
+    rm -rf "$DISPATCH_ASSERT_STATE_DIR"; : > "$CC_BACKLOG_FILE"
+    run run_da "$(mktx "$TELL $d")" "drop-$i"
+    [ "$status" -eq 0 ]
+    if [ -n "$output" ]; then echo "drop idiom #$i STILL FIRED: $d" >&2; false; fi
+  done
+}
+
+@test "a LIVE pending obligation is discharged by a drop stated on the re-check turn" {
+  local tx; tx="$(mktx "$TELL")"
+  run run_da "$tx" drp1; fired "$output"
+  jq -nc '{type:"user",timestamp:"2026-07-25T10:01:00.000Z",message:{content:"hook: make it durable"}}' >> "$tx"
+  jq -nc '{type:"assistant",timestamp:"2026-07-25T10:01:05.000Z",message:{content:[{type:"text",text:"Dropping the scoped pass: it costs more to track than to redo."}]}}' >> "$tx"
+  run run_da "$tx" drp1
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q '"reason":"dropped"' "$DISPATCH_ASSERT_IDL"
+}
+
+@test "CONTROL — the drop matcher does not swallow an ordinary close (no drop phrase ⇒ still FIRES)" {
+  run run_da "$(mktx "$TELL I will pick it up next time.")"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+
+@test "the remedy text offers DROP and no longer templates a per-session --source" {
+  run run_da "$(mktx "$TELL")"
+  fired "$output"
+  printf '%s' "$output" | grep -q 'NOT WORTH DOING'
+  printf '%s' "$output" | grep -q -- '--condition'
+  [ "$(printf '%s' "$output" | grep -c -- '--source \\"sid-')" -eq 0 ]
+  [ "$(printf '%s' "$output" | grep -c -- '--source \\"\$SID')" -eq 0 ]
+}
+
+@test "the RE-CHECK remedy text also offers DROP and templates --condition" {
+  local tx; tx="$(mktx "$TELL")"
+  run run_da "$tx" rc1; fired "$output"
+  jq -nc '{type:"user",timestamp:"2026-07-25T10:01:00.000Z",message:{content:"hook: make it durable"}}' >> "$tx"
+  jq -nc '{type:"assistant",timestamp:"2026-07-25T10:01:05.000Z",message:{content:[{type:"text",text:"Noted."}]}}' >> "$tx"
+  run run_da "$tx" rc1
+  fired "$output"
+  printf '%s' "$output" | grep -q 're-check 2/2'
+  printf '%s' "$output" | grep -q 'NOT WORTH DOING'
+  printf '%s' "$output" | grep -q -- '--condition'
+  [ "$(printf '%s' "$output" | grep -c -- '--source \\"sid-')" -eq 0 ]
+}

@@ -136,6 +136,17 @@ kill_switch() {
     '(^|[^[:alnum:]])and( then)? stop([^[:alnum:]]|$)|no[ _-]?auto[ _-]?continue|(^|[^[:alnum:]])just do [^[:space:]]|(^|[^[:alnum:]])stop here([^[:alnum:]]|$)|come back to this|^[[:space:]]*(stop|halt)[[:space:].!]*$'
 }
 
+# ── THIS turn's main-agent texts (all assistant text at/after the turn start). Computed BEFORE the
+#    pending re-check because discharged_since()'s drop arm reads it: a drop is stated in the turn
+#    that is closing, whichever path we are on, so both the re-check and the fresh scan need it. The
+#    emptiness ABSTAIN stays on the fresh path only — a pending obligation must still be re-checked
+#    on a turn that produced no assistant text.
+T19="$(iso_cut "$T_TURN")"
+TURN_TEXT="$(jq -r --arg t "$T19" \
+  'select(.type=="assistant" and (.isSidechain != true) and (((.timestamp // "")[0:19]) >= $t))
+   | [.message.content[]? | select(.type=="text") | .text] | join("\n")
+   | select(. != "")' "$TP" 2>/dev/null || true)"
+
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 find "$STATE_DIR" \( -name '*.pending' -o -name '*.fired' \) -mtime +7 -delete 2>/dev/null || true
 SKEY="$(printf '%s|%s|%s' "$CFG" "$SID" "$CWD" | shasum 2>/dev/null | cut -c1-16)"
@@ -144,8 +155,13 @@ PENDING="$STATE_DIR/$SKEY.pending"
 FIREDLOG="$STATE_DIR/$SKEY.fired"
 
 # ── discharged_since <iso-seconds-prefix> → 0 when ANY durable record exists at/after it. ──
+# DISCHARGE_KIND is set on every call: "record" for arms 1-3 (a written artifact), "dropped" for
+# arm 4. The two are not the same event and the IDL must not fold them — the whole point of arm 4 is
+# to be COUNTABLE against the row it prevents, and a shared reason string would make the change
+# unmeasurable by the census that motivated it.
 discharged_since() {
   local since="$1" since_ep f m
+  DISCHARGE_KIND=record
   # (1) backlog event — any verb; the ledger was engaged. EXCEPT a worker's own claim re-key
   # (`reclaim:true`, cc-backlog reclaim): that record is written by a SessionStart hook, not by the
   # model deciding anything, so it is not evidence that identified work was enqueued. A /compact or
@@ -172,6 +188,19 @@ discharged_since() {
       jq -e --arg t "$since" '((.created // "")[0:19]) >= $t' "$f" >/dev/null 2>&1 && return 0
     done
   fi
+  # (4) DROP — stated in this turn's own text. The other three arms can only see a WRITTEN artifact,
+  # so before this arm existed every remedy this gate offered created a row: measured 2026-09-04, the
+  # gate fired 131 times in 14 days and DROP was not among its options, which is why it is the largest
+  # single producer of the live ad-hoc pile (docs/research/backlog-zero-2026-09-04/inflow.md §3, §5.1).
+  # A dropped item needs no record BY CONSTRUCTION — there is nothing to look for — so the evidence
+  # can only be the model saying so. Broad matcher, per this file's doctrine; the asymmetry is
+  # deliberate and bounded: a false match costs one un-fired nag (the pre-gate status quo), while
+  # refusing to hear a drop costs a permanent row that nothing drains.
+  if [ -n "${TURN_TEXT:-}" ] \
+     && printf '%s' "$TURN_TEXT" | grep -iqE 'dropping|not worth|letting (this|that|it) go'; then
+    DISCHARGE_KIND=dropped
+    return 0
+  fi
   return 1
 }
 
@@ -181,24 +210,23 @@ if [ -f "$PENDING" ]; then
   case "$p_count" in ''|*[!0-9]*) p_count=0 ;; esac
   if kill_switch; then rm -f "$PENDING" 2>/dev/null; abstain "kill-switch"; fi
   if [ -z "$p_since" ]; then rm -f "$PENDING" 2>/dev/null; abstain "pending-corrupt"; fi
-  if discharged_since "$p_since"; then rm -f "$PENDING" 2>/dev/null; abstain "discharged"; fi
+  if discharged_since "$p_since"; then
+    rm -f "$PENDING" 2>/dev/null
+    [ "$DISCHARGE_KIND" = dropped ] && abstain "dropped"
+    abstain "discharged"
+  fi
   if [ "$p_count" -ge "$MAX" ]; then rm -f "$PENDING" 2>/dev/null; abstain "capped:${p_count}>=${MAX}"; fi
   p_count=$((p_count + 1))
   printf '%s %s\n' "$p_since" "$p_count" > "$PENDING" 2>/dev/null || true
   log_idl fired "undischarged-obligation" \
     "$(jq -cn --arg since "$p_since" --argjson count "$p_count" --argjson max "$MAX" \
         '{since:$since,count:$count,max:$max}' 2>/dev/null || echo '{}')"
-  reason="Dispatch-assert (re-check ${p_count}/${MAX}): the follow-on work this session named is STILL not durable — no backlog event, no fired-pane registry row, no decision packet since it was named. Prose is write-only; nothing drains a paragraph. Write ONE record now: \`cc-backlog add --title \"<one-line>\" --project \"<project-basename>\" --source \"$SID\"\` (auto-drains via cc-dispatch) — or fire it, or \`cc-backlog block <id> --needs \"<operator step>\"\` after adding, or \`cc-decide open --class C --what \"…\"\` if it is a decision. If nothing was actually named (false match), close again — this check stops at the cap."
+  reason="Dispatch-assert (re-check ${p_count}/${MAX}): the follow-on work this session named is STILL not durable — no backlog event, no fired-pane registry row, no decision packet since it was named. Prose is write-only; nothing drains a paragraph. Write ONE record now: \`cc-backlog add --title \"<one-line>\" --project \"<project-basename>\" --condition \"<lowercase-hyphen-state>\"\` (auto-drains via cc-dispatch) — or fire it, or \`cc-backlog block <id> --needs \"<operator step>\"\` after adding, or \`cc-decide open --class C --what \"…\"\` if it is a decision — or, if it is NOT WORTH DOING, say so in one line in your close (\"dropping <it>: <why>\") and close; a dropped item needs no record. If nothing was actually named (false match), close again — this check stops at the cap."
   jq -nc --arg r "$reason" '{decision:"block",reason:$r}'
   exit 0
 fi
 
-# ── Fresh scan: THIS turn's main-agent texts (all assistant text at/after the turn start). ──
-T19="$(iso_cut "$T_TURN")"
-TURN_TEXT="$(jq -r --arg t "$T19" \
-  'select(.type=="assistant" and (.isSidechain != true) and (((.timestamp // "")[0:19]) >= $t))
-   | [.message.content[]? | select(.type=="text") | .text] | join("\n")
-   | select(. != "")' "$TP" 2>/dev/null || true)"
+# ── Fresh scan: the naming-tell gate over THIS turn's text (hoisted above). ──
 [ -n "$TURN_TEXT" ] || abstain "no-assistant-text"
 
 # Follow-on-naming idioms. Broad by design (completion-assert doctrine: broad matcher, fact gate) —
@@ -209,7 +237,10 @@ NAME_TELL='deserves (its|a) own|(its|their) own (scoped |dedicated |separate )?(
 printf '%s' "$TURN_TEXT" | grep -iqE "$NAME_TELL" || abstain "no-naming-tell"
 
 kill_switch && abstain "kill-switch"
-discharged_since "$T19" && abstain "already-recorded"
+if discharged_since "$T19"; then
+  [ "$DISCHARGE_KIND" = dropped ] && abstain "dropped"
+  abstain "already-recorded"
+fi
 
 # Session total cap — bounds worst-case interactive annoyance across many naming turns.
 NTOT="$(grep -c . "$FIREDLOG" 2>/dev/null || echo 0)"; case "$NTOT" in ''|*[!0-9]*) NTOT=0 ;; esac
@@ -222,7 +253,7 @@ log_idl fired "narrated-not-dispatched" \
   "$(jq -cn --arg since "$T19" --argjson total "$((NTOT+1))" '{since:$since,session_fires:$total}' \
       2>/dev/null || echo '{}')"
 
-reason="Dispatch-assert: this turn NAMES follow-on work, but no durable record of it exists — no backlog event, no fired pane, no decision packet since the turn began. A paragraph is not a queue: nothing drains prose (operator crux 2026-07-25 — the cc-inbox-guard pass sat narrated, undispatched, until the operator re-asked). Before closing, make it durable — ONE of: (a) dispatchable now → fire it; (b) queue it → \`cc-backlog add --title \"<one-line>\" --project \"<project-basename>\" --dod-ref \"<doc#anchor>\" --source \"$SID\"\` (cc-dispatch auto-drains open items); (c) operator-gated → add, then \`cc-backlog block <id> --needs \"<exact operator step>\"\`; (d) a decision, not work → \`cc-decide open --class C --what \"…\"\`. Then close normally. False match (nothing actually named)? Close again — this check re-fires at most $((MAX-1)) more time(s). (dispatch-assert 1/${MAX})"
+reason="Dispatch-assert: this turn NAMES follow-on work, but no durable record of it exists — no backlog event, no fired pane, no decision packet since the turn began. A paragraph is not a queue: nothing drains prose (operator crux 2026-07-25 — the cc-inbox-guard pass sat narrated, undispatched, until the operator re-asked). Before closing, make it durable — ONE of: (a) dispatchable now → fire it; (b) queue it → \`cc-backlog add --title \"<one-line>\" --project \"<project-basename>\" --dod-ref \"<doc#anchor>\" --condition \"<lowercase-hyphen-state>\"\` (cc-dispatch auto-drains open items; a condition is a STABLE key — \`--source \"<session-id>\"\` re-mints the same title under a fresh id every session, which is why title dedupe never catches it); (c) operator-gated → add, then \`cc-backlog block <id> --needs \"<exact operator step>\"\`; (d) a decision, not work → \`cc-decide open --class C --what \"…\"\`; (e) NOT WORTH DOING → say so in one line in your close (\"dropping <it>: <why>\") and close; a dropped item needs no record. Then close normally. False match (nothing actually named)? Close again — this check re-fires at most $((MAX-1)) more time(s). (dispatch-assert 1/${MAX})"
 
 jq -nc --arg r "$reason" '{decision:"block",reason:$r}'
 exit 0
