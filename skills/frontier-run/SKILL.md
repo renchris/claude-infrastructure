@@ -15,9 +15,19 @@ updated — never silent token burn.
 1. Read `~/.claude/model-config.yaml` → `frontier_access`. Require
    `active: true` AND today ≤ `end`. If closed: report it, offer a degraded
    panel on `fallback` (label every finding as fallback-tier), stop otherwise.
-2. Require the eval track — the `Agent` tool `model: "fable"` override only
-   resolves on CC ≥ 2.1.170 (`claude-next` / `claude-fable`). On the stable
-   track: report and stop.
+2. Require a CC build that REGISTERS the model — the `Agent` tool
+   `model: "fable"` override resolves only on CC ≥ 2.1.170. Check the running
+   binary's version, never a launcher name. 🚨 This step used to read "require
+   the eval track (`claude-next` / `claude-fable`)": launcher consolidation v2
+   deleted that track, so the gate named a condition **no session could
+   satisfy** — and a hard stop-at-first-failure gate on an unsatisfiable
+   conjunct reads as "the frontier tier is unavailable", permanently. The only
+   path that still fails this step is the deliberately-pinned legacy
+   `claude-previous` / `cc-previous` (2.1.114), which does not know the model;
+   the live launcher is `claude` (2.1.260). On the legacy path: report and stop.
+   ⚠️ Do not re-derive a track gate from `frontier_access.tracks` — it is a
+   documented STALE LABEL with **no code consumer**, and the shipped enforcer
+   `hooks/frontier-spawn-gate.sh` reads only `active` + `end`.
 3. **Print cost before spawning — do not await approval**: Fable 5 = $10/$50
    per MTok ≈ 2× Opus, drawn from the 5-hour plan windows. Estimate the band
    (N agents × 150-250K context) and print it. Consent is the bounded-autonomy

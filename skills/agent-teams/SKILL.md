@@ -245,7 +245,11 @@ per-call. There is no effort field on the Agent tool in either version.
 
 ⚠️ This **corrects** the **research-subagents** skill (`~/.claude/skills/research-subagents/SKILL.md`; the old `~/.claude/rules/` location no longer exists), which reads as if
 `model: "fable"` on a bare `deep-research` subagent runs on Fable. That holds (if ever)
-ONLY on the claude-next eval track — NOT universally. On any other track, route
+ONLY on a CC build that registers the frontier model id (≥ 2.1.170; the live launcher
+`claude` is 2.1.260) — NOT universally, and NOT on the pinned legacy 2.1.114 path. ⚠️ This
+sentence used to say "ONLY on the claude-next eval track", which consolidation v2 deleted:
+gate on the BINARY VERSION, which a session can check, never on a launcher name that no
+longer exists. Where the override does not take effect, route
 non-session-model work through an assignee, or hand off to the desk's external
 2-way orchestration (which spawns independent model-pinned CC instances outside the
 internal subagent system). Never trust a bare-subagent `model:` override to take effect.

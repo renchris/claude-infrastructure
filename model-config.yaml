@@ -464,8 +464,12 @@ versions:
 # 50% of weekly limits 2026-07-01 → 2026-07-07, then usage-credit-only. PRIOR window 2026-06-09 →
 # 2026-06-23 (pulled early 06-12).
 #
-# STILL BINDING (unchanged by permanence): Fable exists ONLY on the claude-next eval track
-# (CC 2.1.170+); the held stable 2.1.114 track does not know the model — never pin it there. The
+# STILL BINDING (unchanged by permanence): Fable exists only on a CC build that REGISTERS the id
+# (2.1.170+); the held stable 2.1.114 path does not know the model — never pin it there. ⚠️ This
+# line read "ONLY on the claude-next eval track" until 2026-09-04, contradicting the `tracks:` key
+# 17 lines below, which already records that consolidation v2 DELETED that launcher. A "STILL
+# BINDING" header naming a deleted track is the strongest form of this rot: it reads as a live gate
+# no session can pass. The condition is and always was a BINARY VERSION, which is checkable. The
 # now-obsolete downgrade recipe (kept only as the mechanism if Anthropic ever reverses — not
 # expected): `/model-upgrade --downgrade` flipped active:false + retired the `claude-fable` wrapper
 # in ~/.zshrc (claude-next() defaults to $CLAUDE_NEXT_MODEL:-claude-opus-4-8), then claude-lint-models.
