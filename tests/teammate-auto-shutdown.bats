@@ -378,7 +378,30 @@ teamcfg_cwd() {
 txtool() { printf '{"type":"assistant","timestamp":"%s.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"%s","name":"Bash","input":{}}]}}\n' "$(iso "$2")" "${3:-tu1}" > "$D/proj/slug/$1.jsonl"; }
 # the tool RETURNED (a user tool_result record appended) ⇒ turn finished
 txtoolresult() { printf '{"type":"user","timestamp":"%s.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"%s"}]}}\n' "$(iso "$2")" "${3:-tu1}" >> "$D/proj/slug/$1.jsonl"; }
-wait_gone() { local i=0; while [ -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i=$((i+1)); done; [ ! -e "$1" ]; }
+# THE WORKTREE-REMOVAL ASSERTION HAS NO CLOCK IN IT (backlog 26d4010f1b22). It used to be a 60-turn
+# poll at 0.05s -- a 3-SECOND wall-clock bound on an asynchronous `git worktree remove`, sized on an
+# idle box. It went `not ok 15 worktree-by-name` in the one window where a 37-suite sweep, a sibling
+# full-corpus run and ship-land's 547-branch stranded-sweep overlapped, and reproduced GREEN 4/4
+# once quiet. NOT the capacity gate: this suite asserts no refusal, and the C1 pin can only make
+# that gate MORE permissive, so it cannot manufacture a failure.
+#
+# ENLARGING THE CONSTANT IS THE REJECTED FIX -- at the designed steady state of 20-40 concurrent
+# sessions elapsed time is unbounded above, so any constant is a future permanent red. What was
+# actually wrong here is ORDER, and the deterministic signal was already present on the NEXT line of
+# every call site: the reap writes "worktree removed: ..." AFTER it unlinks the directory, which is
+# exactly what the wait_log comment below records. Waiting on the reap's OWN completion record first
+# makes the directory check a plain assertion over a finished operation -- `gone` has no loop, no
+# poll and no ceiling, so nobody chasing a red can re-tune it into a guess. The bound that survives
+# is wait_log's, and it bounds a LOG FLUSH AFTER A COMPLETED OPERATION, not the operation itself.
+#
+# It still fails for the right reason: a reap that never happens leaves the line unwritten, wait_log
+# returns non-zero, and the test is red before `gone` is ever reached.
+#
+# ⚠ wait_for (:88) STILL CARRIES THE SHAPE and is deliberately untouched, because no such signal
+# exists for it: it waits for a stub's call log to APPEAR, so the artifact IS the completion record
+# and there is nothing earlier to wait on. Removing its clock means making the hook's DETACHED child
+# waitable, which is its own change and is still open on the same backlog row.
+gone() { [ ! -e "$1" ]; }
 # BOUNDED POLL FOR A LOG LINE — the same remedy 366dadddb gave the shared-cwd guard, now given to
 # the SHAPE rather than to one arm. `wait_gone` bounds the wait on the DIRECTORY disappearing, but
 # the reap writes "worktree removed: …" AFTER unlinking it, so a grep placed straight after
@@ -401,8 +424,8 @@ wait_log() { local i=0; while [ "$i" -lt 100 ]; do if grep -qF "$1" "$LOGF"; the
   run hookrun "$member" "$team" "$sid" "$D/repo"     # payload cwd seeds `git worktree list`
   [ "$status" -eq 0 ]
   grep -q "Auto-shutdown idle teammate: $member" "$LOGF"     # resolved ⇒ reached the reap
-  wait_gone "$wt"                                            # and the OWNED worktree was removed
-  wait_log "worktree removed: $wt"
+  wait_log "worktree removed: $wt"                           # the reap's OWN completion record...
+  gone "$wt"                                                 # and the OWNED worktree was removed
 }
 
 # (B) SHARED cwd — THE data-loss guard. On the implicit-team model every member's config `cwd` is the
@@ -447,8 +470,8 @@ wait_log() { local i=0; while [ "$i" -lt 100 ]; do if grep -qF "$1" "$LOGF"; the
   tx "$sid" 9000
   run hookrun "$member" "$team" "$sid" /nonexistent-cwd
   [ "$status" -eq 0 ]
-  wait_gone "$wt"
   wait_log "worktree removed: $wt"
+  gone "$wt"
 }
 
 # (C) TOOL-IN-FLIGHT — a teammate mid-tool_use is LIVE. Observed 2026-07-29: a teammate actively
@@ -518,8 +541,8 @@ wait_log() { local i=0; while [ "$i" -lt 100 ]; do if grep -qF "$1" "$LOGF"; the
   run hookrun "$member" "$team" "$sid" /nonexistent-cwd     # payload cwd dead too ⇒ must use config seeds
   [ "$status" -eq 0 ]
   grep -q "Auto-shutdown idle teammate: $member" "$LOGF"
-  wait_gone "$wt"                                            # the member's OWN worktree was removed…
-  wait_log "worktree removed: $wt"
+  wait_log "worktree removed: $wt"                           # the reap's OWN completion record...
+  gone "$wt"                                                 # the member's OWN worktree was removed…
   [ -d "$D/repo4" ]                                          # …and the shared repo root was NOT touched
 }
 
