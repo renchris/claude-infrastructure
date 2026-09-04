@@ -200,6 +200,19 @@ elapsed_s() { echo $(( $(date +%s) - START_S )); }
 # pointed the other way.
 LAND_RESERVE_S="${CC_RETURN_LAND_RESERVE_S:-120}"; case "$LAND_RESERVE_S" in ''|*[!0-9]*) LAND_RESERVE_S=120 ;; esac
 COST_TTL_S="${CC_RETURN_COST_TTL_S:-21600}"; case "$COST_TTL_S" in ''|*[!0-9]*) COST_TTL_S=21600 ;; esac
+# THE FLOOR'S OWN TTL, and it is short because a floor is not a MEASUREMENT. A completed land
+# recorded 194 s because a land took 194 s; a floor records "at least this much" about a land that
+# was CUT and never finished, which is a lower bound on an unknown, not an observation of it. Giving
+# the two the same 6 h shelf life is what let one cut price the lane out of landing for a quarter of
+# a day (see the pre-land floor at the land site below). 900 s is three sweep ticks: long enough
+# that the next tick still inherits the caution, short enough that a wrong bound cannot outlive the
+# pass after next.
+FLOOR_TTL_S="${CC_RETURN_FLOOR_TTL_S:-900}"; case "$FLOOR_TTL_S" in ''|*[!0-9]*) FLOOR_TTL_S=900 ;; esac
+# What a floor may be written as when there is NO global observation to cap it against — the median
+# completed land measured on this box 2026-09-04 (the on-disk `*.land-cost` values were
+# 5·21·38·122·194·369·505·520·522·620·652·667·823, and `.return.land_cost` read 194). It is a
+# stand-in for one unmeasured tick, not a policy: the first land that completes overwrites it.
+LAND_FLOOR_DEFAULT_S="${CC_RETURN_LAND_FLOOR_DEFAULT_S:-194}"; case "$LAND_FLOOR_DEFAULT_S" in ''|*[!0-9]*) LAND_FLOOR_DEFAULT_S=194 ;; esac
 UNIT_COST_F="$STATE/.return.unit_cost"
 LAND_COST_F="$STATE/.return.land_cost"
 # Set by `handle()` when it invokes the lander, read by the loop. A landing unit is priced by the
@@ -217,15 +230,22 @@ cost_read() { # <file> → seconds (0 = no usable observation)
   # stderr that has not been silenced yet — and the commonest call of all is against a sidecar that
   # does not exist. Caught by a mutation run, where three of these lines were sitting in the middle
   # of the pass's own output.
-  local _e _v
-  if ! read -r _e _v 2>/dev/null <"$1"; then echo 0; return 0; fi
+  #
+  # THE THIRD FIELD IS THE PROVENANCE, and it is optional so an older sidecar still parses: `floor`
+  # marks a value written BEFORE the work as a lower bound rather than measured after it. It buys
+  # exactly one thing — a shorter shelf life — because a lower bound on an unknown must not outlive
+  # a real measurement (memory: init-state-is-not-runtime-state).
+  local _e _v _k _ttl
+  if ! read -r _e _v _k 2>/dev/null <"$1"; then echo 0; return 0; fi
   case "${_e:-}" in ''|*[!0-9]*) echo 0; return 0 ;; esac
   case "${_v:-}" in ''|*[!0-9]*) echo 0; return 0 ;; esac
-  if [ "$COST_TTL_S" -gt 0 ] && [ $(( $(date +%s) - _e )) -ge "$COST_TTL_S" ]; then echo 0; return 0; fi
+  _ttl="$COST_TTL_S"
+  [ "${_k:-}" = floor ] && _ttl="$FLOOR_TTL_S"
+  if [ "$_ttl" -gt 0 ] && [ $(( $(date +%s) - _e )) -ge "$_ttl" ]; then echo 0; return 0; fi
   echo "$_v"
 }
-cost_write() { # <file> <seconds>
-  printf '%s %s\n' "$(date +%s)" "$2" >"$1" 2>/dev/null || true
+cost_write() { # <file> <seconds> [floor]
+  printf '%s %s %s\n' "$(date +%s)" "$2" "${3:-}" >"$1" 2>/dev/null || true
 }
 [ -n "$CLOUD_BIN" ] || { echo "cloud-return: cc-cloud not found — the declaration store is unreadable" >&2; exit 3; }
 command -v jq >/dev/null 2>&1 || { echo "cloud-return: jq required" >&2; exit 3; }
@@ -587,14 +607,42 @@ handle() { # <row-json> → prints outcome lines
     # `BOUND_S - elapsed`. It is superseded by the true figure the moment the land completes —
     # including downward, which is what stops one cut from pricing every later land at a whole bound
     # forever.
-    local land_start land_took
+    #
+    # 🚨 …AND THE FLOOR IS CAPPED, BECAUSE AN UNCAPPED FLOOR POISONS THE PRICE IT EXISTS TO PROTECT.
+    # `BOUND_S - elapsed` is a lower bound on a land that was cut, and against a 720 s budget it can
+    # write 652 s. That figure is MAX-ed into the affordability test above and, at the SAME 6 h TTL
+    # as a completed measurement, refuses every land for a quarter of a day. Measured on the ledger:
+    #
+    #   {"outcome":"land-deferred","elapsed_s":94,"budget_s":720,
+    #    "land_reserve_s":652,"land_cost_s":652,"fits_bound":true}
+    #
+    # A land refused at 94 s of a 720 s budget — 626 s left — because a cut had priced it at 652.
+    # Four of the thirteen `*.land-cost` files on disk held >=600 s while the GLOBAL observed price
+    # was a healthy 194, so the pessimism was per-session and entirely self-inflicted.
+    #
+    # THE CAP IS THE GLOBAL OBSERVED PRICE, which is the honest answer to "how long does a land take
+    # here": it is measured over completed lands across every session, so it cannot be moved by the
+    # branch that is being cut. With no global observation yet, LAND_FLOOR_DEFAULT_S stands in — the
+    # median completed land on this box — rather than the bound, because the first cut on a fresh
+    # store must not be the one that prices the store. The floor still floors: a cut that ran LONGER
+    # than the cap is recorded at the cap, not at 0, so the caution survives, bounded.
+    local land_start land_took land_floor land_floor_cap
     land_start="$(date +%s)"
-    if [ "$BOUND_S" -gt 0 ]; then cost_write "$STATE/$id.land-cost" "$(( BOUND_S - $(elapsed_s) ))"; fi
+    if [ "$BOUND_S" -gt 0 ]; then
+      land_floor=$(( BOUND_S - $(elapsed_s) ))
+      land_floor_cap="$(cost_read "$LAND_COST_F")"
+      [ "$land_floor_cap" -gt 0 ] || land_floor_cap="$LAND_FLOOR_DEFAULT_S"
+      [ "$land_floor" -le "$land_floor_cap" ] || land_floor="$land_floor_cap"
+      [ "$land_floor" -ge 0 ] || land_floor=0
+      cost_write "$STATE/$id.land-cost" "$land_floor" floor
+    fi
     UNIT_LANDED=1
     land_out="$(CONFIRM=1 "$RECONCILE_BIN" --land "$branch" 2>&1)"; land_rc=$?
     land_took=$(( $(date +%s) - land_start ))
     # A refusal costs the same wall time a success does, so it prices a land exactly as well; what
     # is being estimated is the gate's duration, not its verdict.
+    # No `floor` marker: this one WAS measured, so it earns the full COST_TTL_S and supersedes the
+    # bound written above — including downward, which is what stops one cut pricing every later land.
     cost_write "$STATE/$id.land-cost" "$land_took"
     [ "$land_took" -le "$(cost_read "$LAND_COST_F")" ] || cost_write "$LAND_COST_F" "$land_took"
     printf '%s\n' "$land_out" | sed 's/^/    /'
@@ -617,6 +665,7 @@ handle() { # <row-json> → prints outcome lines
       ledger "$id" land-cut "$(jq -cn --arg b "$branch" '{branch:$b, note:"killed from outside (bound/SIGTERM) — a non-verdict, never a gate refusal"}')"
       return 0
     fi
+
 
     # 🚨 NOTHING TO LAND IS NOT A REFUSAL, AND IT IS NOT A RETURN (CLOUD_OBSERVABILITY.md §16).
     # 66 is the lander saying the branch carries no content against trunk: the VM pushed its branch
