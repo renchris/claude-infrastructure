@@ -154,3 +154,67 @@ setup() {
   [ -L "$HOME/.claude-secondary/tasks" ]
   [ -e "$HOME/.claude-secondary/tasks" ]
 }
+
+# ── the FORK report (2026-09-04) ───────────────────────────────────────────────────────────────────
+# Safe mode cannot convert a forked real dir, by design (converting is not race-safe with live
+# panes). That is correct and stays. What was wrong is that it skipped SILENTLY, while all three
+# sibling outcomes in the same loop print — so the one condition that PERSISTS across every future
+# run was the only one nothing announced. ~/.claude-next carried a frozen `commands` for seven weeks
+# and the operator found it by typing a slash command that did not exist there.
+
+@test "EFFECT: safe mode REPORTS a forked real dir instead of skipping it silently" {
+  command -v zsh >/dev/null 2>&1 || skip "zsh unavailable"
+  export HOME="$D/fh-fork"
+  mkdir -p "$HOME/.claude/commands" "$HOME/.claude-next/commands"
+  printf '{}\n' > "$HOME/.claude/.claude.json"
+  printf 'shared\n' > "$HOME/.claude/commands/real.md"
+  printf 'forked\n' > "$HOME/.claude-next/commands/stale.md"
+  run zsh -fc "source '$MIRROR'; _cc_sync_config_mirror \"\$HOME/.claude-next\" 2>&1"
+  [ "$status" -eq 0 ]
+  # COUNT, never `grep -q`: under pipefail a matching -q SIGPIPEs its producer and the pipeline
+  # reports failure on the very input it matched. And the assertion is `[ ] || {…}`, never
+  # `A && {…}` — errexit cannot reach the latter, so it passes whatever the subject does.
+  n_fork="$(printf '%s\n' "$output" | grep -c "FORKED real 'commands'" || true)"
+  [ "${n_fork:-0}" -ge 1 ] || {
+    echo "SILENT SKIP: safe mode passed over a forked real dir and said nothing" >&2; return 1; }
+  # …and it must still NOT have touched it — reporting is not converting.
+  # Separate statements, not `A && B`: errexit does not fire inside an && list, so the compound
+  # form asserts nothing when A is false.
+  [ -d "$HOME/.claude-next/commands" ]
+  [ ! -L "$HOME/.claude-next/commands" ]
+  [ -f "$HOME/.claude-next/commands/stale.md" ]
+}
+
+@test "NON-VACUITY: strip the report line and the same fixture goes silent" {
+  command -v zsh >/dev/null 2>&1 || skip "zsh unavailable"
+  # Replays the PRE-FIX subject: the mutant restores the bare `(( convert )) || continue`. If this
+  # goes on printing, the test above is passing on some other line and proves nothing about the fix.
+  local mut="$D/mirror-mutant.zsh"
+  # python3, not sed: the line being mutated contains `||` and `{`, which collide with sed's
+  # delimiter and flag parsing. A mutant built by a quoting accident is an inert control.
+  python3 -c '
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+out, hit = [], 0
+for line in open(src):
+    if "FORKED real" in line and "(( convert ))" in line:
+        out.append("      (( convert )) || continue\n"); hit += 1
+    else:
+        out.append(line)
+open(dst, "w").writelines(out)
+sys.exit(0 if hit == 1 else 1)
+' "$MIRROR" "$mut" || { echo "MUTANT NOT APPLIED — anchor matched $? times, not once; control is inert" >&2; return 1; }
+  n_marker="$(grep -c "FORKED real" "$mut" || true)"
+  [ "${n_marker:-0}" -eq 0 ] || {
+    echo "MUTANT NOT APPLIED — marker survives, so this control is inert" >&2; return 1; }
+  export HOME="$D/fh-fork-mut"
+  mkdir -p "$HOME/.claude/commands" "$HOME/.claude-next/commands"
+  printf '{}\n' > "$HOME/.claude/.claude.json"
+  printf 'forked\n' > "$HOME/.claude-next/commands/stale.md"
+  run zsh -fc "source '$mut'; _cc_sync_config_mirror \"\$HOME/.claude-next\" 2>&1"
+  [ "$status" -eq 0 ]
+  n_mut="$(printf '%s\n' "$output" | grep -c "FORKED real" || true)"
+  [ "${n_mut:-0}" -eq 0 ] || {
+    echo "MUTANT STILL REPORTS — the assertion above is not keyed on the fix" >&2; return 1; }
+  return 0
+}

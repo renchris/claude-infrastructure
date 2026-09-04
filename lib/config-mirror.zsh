@@ -109,7 +109,20 @@ _cc_sync_config_mirror() {
       [[ "$_CC_LINK" == "$e" ]] && continue                               # already the right symlink
     fi
     if [[ -e "$dst/$name" && ! -L "$dst/$name" ]]; then                   # a forked real file/dir
-      (( convert )) || continue                                           # safe mode: don't touch it
+      # SAFE MODE SKIPS A FORK, BUT IT MUST NOT DO SO SILENTLY. Every other outcome in this loop
+      # announces itself on stderr — un-shared transient, un-shared isolated, reaped dangling — and
+      # the fork was the only one that did not, while being the ONLY one that persists indefinitely:
+      # the three noisy cases are all self-healing on the next run, and this one is by construction
+      # unreachable without --convert. So the mirror ran at every session start, correctly, and was
+      # structurally incapable of reporting the single condition it could not fix.
+      # MEASURED 2026-09-04: ~/.claude-next carried forked real `commands` (frozen 2026-07-18),
+      # `hooks` (53 entries vs 82) and `scripts` (55 vs 193) for SEVEN WEEKS. The operator found it
+      # by typing a slash command that had landed, been converged to the live layer, and verified in
+      # ~/.claude — and getting "No commands match". Nothing on the box had said a word.
+      # The ACTUATOR reports, deliberately: a separate detector would have to re-implement the
+      # isolate list, the transient-name skip and the already-correct-symlink test, and would drift
+      # from them silently. This line cannot disagree with the decision it is reporting.
+      (( convert )) || { print -u2 "config-mirror: FORKED real '$name' in ${dst:t} — shadows ~/.claude/$name; safe mode cannot fix it, run with --convert (all that account's panes closed)"; continue; }
       mv -f "$dst/$name" "$dst/$name.premirror-bak" 2>/dev/null
     fi
     ln -sfn "$e" "$dst/$name"
