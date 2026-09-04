@@ -298,6 +298,25 @@ Two things remain yours before this is fully wired up.")" "$w" "a2-d1"
   grep -q '"arm":"handoff"' "$COMPLETION_IDL"
 }
 
+# ── D1 carries the DO-IT-YOURSELF gate (backlog-zero W2a) ────────────────────────────────────────
+# WHY. D4's text already made filing the EXCEPTION on 2026-08-25; D1's said only "File each
+# operator-only step", and D1 produces the worst-draining class — measured 2026-09-04, 148 live
+# `needs` rows, 1 falsifier, p90 age 31.8 d, and 68 of them carry a `--run` the filing agent could
+# have executed (docs/research/backlog-zero-2026-09-04/inflow.md §5.2). A gate that only ever says
+# "file it" is why the row exists.
+@test "D1's reason opens with the gate: file it only if you genuinely cannot" {
+  local w; w="$(mkrepo_landed a2d1gate)"
+  run run_ca "$(mkfix "✅ Complete & live on trunk — landed, all green.
+
+Two things remain yours before this is fully wired up.")" "$w" "a2-d1-gate"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | grep -q 'escape hatch'
+  printf '%s' "$output" | grep -q 'genuinely cannot'
+  printf '%s' "$output" | grep -q 'If you can run it, run it now'
+  # the original remedy survives beside it — this is a prepend, not a replacement
+  printf '%s' "$output" | grep -q 'cc-backlog needs'
+}
+
 # ── D1 abstain: the SAME close, but the step IS filed for THIS session ⇒ nothing to nag about ──
 # PIN THE D7 AXIS OFF (2026-08-23). Filing that row is also what makes wrap-ledger compute RUNG=👤
 # — CC_BACKLOG_BIN is its env seam too — and this close states no act line, so D7 convicts it. That
@@ -507,6 +526,21 @@ Say the word and I'll pick up either; otherwise this is a clean stopping point."
   # subject had just changed on purpose (memory: stale-assertion-becomes-an-inverted-guard).
   printf '%s' "$output" | grep -q 'DROPPED'
   grep -q '"arm":"offer"' "$COMPLETION_IDL"
+}
+
+# ── CONTROL for the W2a D1 prepend: D4's text is UNCHANGED and the new sentence is D1's alone ──
+@test "D4's reason still carries its own gate and NOT D1's (the prepend touched one arm)" {
+  local w; w="$(mkrepo_landed a2d4ctl)"
+  run run_ca "$(mkfix "✅ Done — closeable. verify.sh prints Complete, everything landed, both trees clean.
+
+Two things are in this worktree but were never part of this session's scope, if you want a next thread:
+- cc-010333-23674 — 38 commits ahead of origin/main, still stranded.
+- DESIGN_GATE_V2 sequence — the worktree's older frozen DoD.
+
+Say the word and I'll pick up either; otherwise this is a clean stopping point.")" "$w" "a2-d4-ctl"
+  fired "$output"
+  printf '%s' "$output" | grep -q 'FILING IS THE EXCEPTION'
+  [ "$(printf '%s' "$output" | grep -c 'escape hatch')" -eq 0 ]
 }
 
 # ── The guard that keeps D4 from punishing CORRECT behaviour: the same remaining work, stated as
