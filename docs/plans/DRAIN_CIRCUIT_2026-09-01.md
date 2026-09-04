@@ -795,6 +795,28 @@ so it resolves on its own; it just cannot be *driven* from this side. `deploy-li
   named: close attribution is at 7.7% coverage, which is why `lane=local-drain` still reads
   `lane-stalled` and why this arm is scoped fleet-wide rather than per-lane.
 
+- **2026-09-04 — W9: §3h's filed row is BUILT, after its first landing was auto-reverted** (cloud
+  session; full record in §3h's W9 subsection). `2c6b8cdf` built `elapsed_s` + `load1` on the
+  `cloud-return` IDL row and reached trunk on 09-03; `postland-verify` bisected a red
+  `tests/autonomy-sweep.bats` to it and auto-reverted it (`d1209750`, backlog `65e7b6542009`) with no
+  reason recorded beyond the file name. Re-landed with the two reproducible defects of that change
+  actually fixed rather than by reverting the revert: **(1)** its load reader indexed AROUND the
+  `vm.loadavg` braces, so an unbraced build would have handed the field the FIVE-minute average while
+  looking correct — the trap `capacity-alarm.sh:1023-1029` documents for this exact sysctl, now using
+  that file's `gsub` form; **(2)** its test asserted `load1` was a number against whatever the HOST
+  reported, which is a claim about the box and is red on anything but Darwin — reproduced here on
+  Linux against a correct subject. The reader now resolves `sysctl` through a `CC_SWEEP_SYSCTL` seam
+  (`capacity-alarm.sh:274`'s ladder), so every arm asserts on a value it supplied and the whole class
+  of machine-event conviction is gone. ⚠️ **NOT claimed: that either defect caused the original red** —
+  it was observed on macOS, where neither reproduces, and postland's record names the file, not the
+  case. 4 arms, **6 mutants RED-proved**, each on the arm that owns its property; the first draft of
+  those arms was itself VACUOUS (a `$( )` subshell swallowed the fixture's exports, so the one
+  null-asserting arm passed for an unrelated reason) and each arm now re-asserts its fixtured rc
+  before reading a field. Also repairs the duplicate `## 3g.` heading the revert reintroduced.
+  autonomy-sweep 70/70 · shellcheck 0, matching trunk. The two lint suites that are red here
+  (`bats-shellcheck-lint` 2, `bats-assert-liveness` 5) are **identically red on trunk without this
+  diff** and are not this wave's.
+
 ---
 
 ## 3e. THE SIGKILL IS ATTRIBUTED — `timeout` kills itself (W6, 2026-09-03)
@@ -1175,7 +1197,7 @@ point is that landed is not live (`docs/research/inertness-generator-2026-08-07.
 
 ---
 
-## 3g. THE ACCEPTANCE NUMBER IS OBSERVED — and it is a WEAKER test than we believed (2026-09-03)
+## 3h. THE ACCEPTANCE NUMBER IS OBSERVED — and it is a WEAKER test than we believed (2026-09-03)
 
 **`cloud_return_rc` of 0 is in the IDL.** Three of them, and the live layer does now run both fixes —
 `~/.claude/bin/cc-cloud` is byte-identical to trunk's and contains `dload`/`jesc_v`;
@@ -1228,6 +1250,79 @@ event.** A single rc 0 is satisfiable by a quiet box. The discriminating measure
 **Filed rather than built here:** add `load` and `elapsed_s` to the `cloud-return` IDL row, so the
 next person asking "did the fix work" can stratify instead of counting events. Until then the fixes
 stand on §3f's paired ratio and the suites, not on these three rows.
+
+### The two fields are BUILT — and the first landing of them was auto-reverted (W9, 2026-09-04)
+
+`2c6b8cdf` built exactly the row above and reached trunk on 09-03. `postland-verify` then bisected a
+red `tests/autonomy-sweep.bats` to it and **auto-reverted it** (`d1209750`, backlog `65e7b6542009`),
+with no reason recorded beyond the file name. This wave re-lands it with the defects that landing
+carried actually fixed, rather than by re-applying the revert.
+
+**Two reproducible defects in that change, both found first-hand and neither of them the row's idea:**
+
+1. 🚨 **It indexed AROUND the braces.** `sysctl -n vm.loadavg` prints `{ 8.06 9.02 10.45 }`, and the
+   reader was `awk '{print $2}'` — which is the 1-minute average *only on the braced shape*. A build
+   that omits the braces hands the field the **five**-minute average while still looking entirely
+   correct. That is not a new hazard: `scripts/capacity-alarm.sh:1023-1029` documents it for this
+   exact sysctl, in this repo, and says in its own words that the braces are stripped rather than
+   indexed around precisely because the wrong reading "would silently shift every index by one".
+   The reader is now capacity-alarm's `gsub(/[{}]/, "")` form, field-stable on both shapes.
+2. **The test asserted a property of the BOX, not of the subject.** Its ARM A required `load1` to be
+   a NUMBER against whatever the host reported. `vm.loadavg` is a Darwin sysctl and exists nowhere
+   else, so that arm is red on any box that cannot report a load average — **reproduced here: it
+   fails on Linux with `load1 is not a number: null`**, on a tree where the subject is correct. In a
+   corpus that AUTO-REVERTS on red, a host-dependent assertion is a machine event convicting a diff,
+   which is the same class as §3c's smoke budget and §3i's rotate-lint mis-attribution. The reader
+   now resolves its `sysctl` through a `CC_SWEEP_SYSCTL` seam — the ladder every other sysctl site in
+   this repo already uses (`capacity-alarm.sh:274`) — so each arm asserts on a value it supplied.
+
+⚠️ **What is NOT established: that either defect is the red that triggered the auto-revert.** The red
+was observed on the operator's macOS box, where `sysctl -n vm.loadavg` answers and the braced shape
+holds, so neither reproduces there; and postland's record names the file, not the case. This wave can
+only say it fixed every defect it could reproduce and removed the host dependence that makes a
+non-reproducible conviction possible. Claiming the cause would be asserting a fact about a machine
+this session cannot read.
+
+**What landed.** `elapsed_s` (the pass's own wall time, stamped either side of the invocation block
+and nowhere else, because nothing may come between that block and the `$?` that reads it) and
+`load1`. Both are **NULL, never 0**, on every not-run path and on an unreadable instrument: `skipped`
+and `skipped-not-deployed` never invoke the pass, and a 0 there reads as "ran, instantly, on an idle
+box" — the single most misleading value either field can take, and exactly the confusion the fields
+exist to end (memory: `fail-safe-default-mimics-the-healthy-state`). The `jq` guard is `tonumber? //
+null`, a `?` and not a bare `tonumber`, so the empty string survives to JSON `null` instead of
+erroring the whole row away.
+
+**Four arms, six mutants, each red on the arm that owns its property** — the interesting column is
+which arms *stay green*, because that is what says an arm discriminates rather than merely fires:
+
+| mutant | red |
+|---|---|
+| the pre-fix reader, indexing around the braces | **unbraced arm only** — the braced arm passes under either reader, which is why the unbraced one exists |
+| the not-run defaults set to `0` | not-run arm |
+| `// 0` instead of `// null` | unreadable-load arm + not-run arm |
+| the load read deleted | both load arms |
+| `elapsed_s` dropped from the row | both arms that read it |
+| the `CC_SWEEP_SYSCTL` seam ignored | both load arms |
+
+🚨 **And the first draft of the arms was VACUOUS, which is this wave's own defect.** The shared
+fixture was written `deployed="$(_deploy_sweep tag)"`, putting every `export` inside a
+command-substitution **subshell** — so `CLAUDE_CONFIG_DIR` never reached the test, the sweep was never
+the deployed copy, and all four arms ran the not-run path. The three arms asserting a number went red
+and named it. **The arm asserting `null` went GREEN**, for a reason with nothing to do with its
+subject — and that is the arm that can fail, so the whole block would have certified nothing
+(memory: `verification-harness-vacuous-pass-traps`; the same shape as §3i's F5 and §3g's two mutants
+that survived their first run). Each arm now re-asserts the rc it fixtured for *before* it reads a
+field, so a broken fixture is a named failure and never a pass.
+
+**Also fixed here: trunk carried two `## 3g.` headings.** `2c6b8cdf` had renumbered this section to
+`§3h` because a sibling took `§3g` for W4 the same day; the auto-revert undid that renumbering along
+with the code, while W8's `§3i` had already landed above it. So the revert left the document with a
+duplicate `3g`, a vacant `3h`, and a `3i` — the numbering restored here.
+
+**Suites:** autonomy-sweep 70/70 (4 new) · `shellcheck -S warning` 0 findings on the subject, matching
+trunk's 0. ⚠️ Run on **Linux**, not on the operator's box: the four new arms are host-independent by
+construction (that is the point of the seam), but the rest of this suite has never been claimed
+platform-neutral, and a green here is not a green there.
 
 ---
 

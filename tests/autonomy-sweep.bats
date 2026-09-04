@@ -1577,3 +1577,154 @@ STUB
   "${SWEEP_TO[@]}" bash "$deployed/autonomy-sweep.sh" >/dev/null 2>&1 || true
   [ "$(jq -r 'select(.disposition=="thrash-recover")|.thrash_recover_rc' "$CC_IDL" | tail -1)" = "3" ]
 }
+
+# ── §3h · THE cloud-return ROW COULD NOT TELL A FIXED PASS FROM A QUIET BOX ───────────────────────
+# The drain circuit's acceptance number was a `cloud_return_rc` of 0, chosen (§3d) on the premise
+# that a 0 had never occurred and so could only happen once the pass was repaired. It cannot carry
+# that weight: an rc-0 was journalled 2026-09-03T17:58Z on the PRE-fix bytes, and across that same
+# window the box went from load ~23 to ~8 — with the OLD reader itself completing a full pass in
+# 149 s at load ~8. rc alone cannot separate "the fix worked" from "the box went quiet", and the row
+# held nothing else to stratify by. `elapsed_s` and `load1` are what make the next such question
+# answerable by measurement instead of by argument.
+#
+# 🚨 EVERY ARM BELOW INJECTS ITS OWN sysctl THROUGH CC_SWEEP_SYSCTL, AND THAT IS THE POINT.
+# `vm.loadavg` is a Darwin sysctl. This change's first landing (2c6b8cdf) asserted that `load1` was
+# a NUMBER against whatever the host happened to report, which is a claim about the BOX, not about
+# the subject — it is red on any box that cannot report a load average, and in a corpus that
+# AUTO-REVERTS on red that is a machine event convicting a diff. It was reverted post-land
+# (d1209750). A stub makes the value the arm asserts on the value the arm supplied, on every box.
+_sysctl_stub() { # $1 = dir, $2… = lines to print for `-n vm.loadavg` (none ⇒ exit 1, unreadable)
+  local d="$1"; shift
+  mkdir -p "$d"
+  { printf '#!/bin/bash\n'
+    if [ "$#" -eq 0 ]; then printf 'exit 1\n'
+    else printf 'printf %%s\\\\n %s\n' "$(printf '%q ' "$@")"; fi
+  } >"$d/sysctl"
+  chmod +x "$d/sysctl"
+}
+
+# The deployed-copy fixture every arm here shares. The cloud-return block runs ONLY from the exact
+# deployed path (`$0` == "$CLAUDE_CONFIG_DIR/scripts/autonomy-sweep.sh"), so the row cannot be
+# produced any other way.
+#
+# 🚨 IT SETS `DEPLOYED`; IT DOES NOT ECHO IT. Written first as `deployed="$(_deploy_sweep tag)"`,
+# which put every `export` below inside a command-substitution SUBSHELL — so CLAUDE_CONFIG_DIR never
+# reached the test, the sweep was never the deployed copy, and all four arms read the not-run path.
+# The three that assert a number went red and named the defect; the null-asserting arm went GREEN
+# for a reason with nothing to do with its subject (memory: verification-harness-vacuous-pass-traps).
+# That arm is the one that can fail, so a vacuous pass there is the whole suite asserting nothing —
+# which is why each arm below re-asserts the rc it fixtured for before it reads a field.
+_deploy_sweep() { # $1 = tag → sets DEPLOYED in the CALLER's shell
+  local cfg="$BATS_TEST_TMPDIR/cfg-$1"
+  DEPLOYED="$cfg/scripts"; mkdir -p "$DEPLOYED"
+  export CLAUDE_CONFIG_DIR="$cfg"
+  export CC_CLOUD_STATE="$BATS_TEST_TMPDIR/cloudstate-$1"; mkdir -p "$CC_CLOUD_STATE"
+  export CC_IDL="$BATS_TEST_TMPDIR/idl-$1.jsonl"; : >"$CC_IDL"
+  cp "$SWEEP" "$DEPLOYED/autonomy-sweep.sh"; chmod +x "$DEPLOYED/autonomy-sweep.sh"
+  mkdir -p "$DEPLOYED/lib" && cp "$REPO"/scripts/lib/*.sh "$DEPLOYED/lib/" 2>/dev/null
+  printf '#!/bin/bash\nexit 0\n' >"$DEPLOYED/cloud-refusal-route.sh"
+  chmod +x "$DEPLOYED/cloud-refusal-route.sh"
+}
+
+_cloudret_row() { # → the last cloud-return IDL row, or a named failure
+  local row; row="$(grep 'cloud_return_rc' "$CC_IDL" | tail -1)"
+  [ -n "$row" ] || { echo "no cloud-return IDL row was written at all"; return 1; }
+  printf '%s' "$row"
+}
+
+@test "3h: a pass that RAN reports elapsed_s and the ONE-minute load, from a braced sysctl" {
+  local stub row
+  _deploy_sweep 3ha
+  stub="$BATS_TEST_TMPDIR/stub-3ha"
+  # The real Darwin shape, braces included.
+  _sysctl_stub "$stub" '{ 8.06 9.02 10.45 }'
+  printf '#!/bin/bash\nexit 0\n' >"$DEPLOYED/cloud-return.sh"
+  chmod +x "$DEPLOYED/cloud-return.sh"
+
+  CC_SWEEP_SYSCTL="$stub/sysctl" "${SWEEP_TO[@]}" bash "$DEPLOYED/autonomy-sweep.sh" >/dev/null 2>&1 || true
+  row="$(_cloudret_row)" || false
+  # THE FIXTURE RE-ASSERTED BEFORE ANY FIELD IS READ. Without this, a fixture that fails to make the
+  # sweep the deployed copy sends every arm down the not-run path, where the fields are null by
+  # design — and the null-asserting arm below then passes for a reason with nothing to do with its
+  # subject. That happened on the first draft of this block.
+  printf '%s' "$row" | jq -e '.cloud_return_rc == "0"' >/dev/null \
+    || { echo "fixture wrong — the pass did not RUN: $(printf '%s' "$row" | jq -c '.cloud_return_rc')"; false; }
+  printf '%s' "$row" | jq -e '.elapsed_s | type == "number"' >/dev/null \
+    || { echo "elapsed_s is not a number: $(printf '%s' "$row" | jq -c '.elapsed_s')"; false; }
+  # 🚨 THE VALUE, NOT MERELY THE TYPE. 8.06 is the ONE-minute average; 9.02 is the five. A reader
+  # that indexes around the braces (`awk '{print $2}'`) yields 8.06 here too — which is why the
+  # UNBRACED arm below exists, and why a type-only assertion cannot tell the two readers apart.
+  [ "$(printf '%s' "$row" | jq -r '.load1')" = "8.06" ] \
+    || { echo "load1=$(printf '%s' "$row" | jq -c '.load1') — expected the 1-minute average 8.06"; false; }
+}
+
+@test "3h: the braces are STRIPPED, not indexed around — an unbraced sysctl still yields the 1-minute average" {
+  # scripts/capacity-alarm.sh:1023-1029 documents this trap for this exact sysctl: `$2` is the
+  # 1-minute average ONLY on the braced shape, so a build that omits the braces silently hands the
+  # field the FIVE-minute average while still looking correct. This is the arm that discriminates
+  # between the two readers — the braced arm above passes under either one.
+  local stub row
+  _deploy_sweep 3hb
+  stub="$BATS_TEST_TMPDIR/stub-3hb"
+  _sysctl_stub "$stub" '8.06 9.02 10.45'
+  printf '#!/bin/bash\nexit 0\n' >"$DEPLOYED/cloud-return.sh"
+  chmod +x "$DEPLOYED/cloud-return.sh"
+
+  CC_SWEEP_SYSCTL="$stub/sysctl" "${SWEEP_TO[@]}" bash "$DEPLOYED/autonomy-sweep.sh" >/dev/null 2>&1 || true
+  row="$(_cloudret_row)" || false
+  # THE FIXTURE RE-ASSERTED BEFORE ANY FIELD IS READ. Without this, a fixture that fails to make the
+  # sweep the deployed copy sends every arm down the not-run path, where the fields are null by
+  # design — and the null-asserting arm below then passes for a reason with nothing to do with its
+  # subject. That happened on the first draft of this block.
+  printf '%s' "$row" | jq -e '.cloud_return_rc == "0"' >/dev/null \
+    || { echo "fixture wrong — the pass did not RUN: $(printf '%s' "$row" | jq -c '.cloud_return_rc')"; false; }
+  [ "$(printf '%s' "$row" | jq -r '.load1')" = "8.06" ] \
+    || { echo "load1=$(printf '%s' "$row" | jq -c '.load1') — an unbraced read must still be the 1-minute average, not 9.02"; false; }
+}
+
+@test "3h: an UNREADABLE load is null, never 0 — and the pass's own elapsed_s survives it" {
+  # Two independent facts in one row, and the arm proves they cannot be collapsed: the pass RAN
+  # (so elapsed_s is real) while the instrument did not answer (so load1 is unmeasured). A `// 0`
+  # fallback would print the healthiest value this field can take over a broken instrument
+  # (memory: fail-safe-default-mimics-the-healthy-state).
+  local stub row
+  _deploy_sweep 3hc
+  stub="$BATS_TEST_TMPDIR/stub-3hc"
+  _sysctl_stub "$stub"                       # no lines ⇒ the stub exits 1
+  printf '#!/bin/bash\nexit 0\n' >"$DEPLOYED/cloud-return.sh"
+  chmod +x "$DEPLOYED/cloud-return.sh"
+
+  CC_SWEEP_SYSCTL="$stub/sysctl" "${SWEEP_TO[@]}" bash "$DEPLOYED/autonomy-sweep.sh" >/dev/null 2>&1 || true
+  row="$(_cloudret_row)" || false
+  # THE FIXTURE RE-ASSERTED BEFORE ANY FIELD IS READ. Without this, a fixture that fails to make the
+  # sweep the deployed copy sends every arm down the not-run path, where the fields are null by
+  # design — and the null-asserting arm below then passes for a reason with nothing to do with its
+  # subject. That happened on the first draft of this block.
+  printf '%s' "$row" | jq -e '.cloud_return_rc == "0"' >/dev/null \
+    || { echo "fixture wrong — the pass did not RUN: $(printf '%s' "$row" | jq -c '.cloud_return_rc')"; false; }
+  printf '%s' "$row" | jq -e '.elapsed_s | type == "number"' >/dev/null \
+    || { echo "the pass RAN — elapsed_s must still be a number, got $(printf '%s' "$row" | jq -c '.elapsed_s')"; false; }
+  printf '%s' "$row" | jq -e '.load1 == null' >/dev/null \
+    || { echo "an unreadable load reported load1=$(printf '%s' "$row" | jq -c '.load1') — must be null"; false; }
+}
+
+@test "3h: a NOT-RUN pass reports both fields as null, never 0" {
+  # THE ARM THAT CAN FAIL. `skipped` never invokes the pass, and a 0 here would read as "ran,
+  # instantly, on an idle box" — the single most misleading value either field could take, and
+  # exactly the confusion §3h exists to end. A `0` not-run default, or a bare `tonumber` without
+  # the `?` guard, lands here.
+  local stub row
+  _deploy_sweep 3hd
+  stub="$BATS_TEST_TMPDIR/stub-3hd"
+  _sysctl_stub "$stub" '{ 8.06 9.02 10.45 }'   # readable, so a null can only come from the not-run path
+  rm -f "$DEPLOYED/cloud-return.sh"             # the tool is absent ⇒ rc `skipped`
+
+  CC_SWEEP_SYSCTL="$stub/sysctl" "${SWEEP_TO[@]}" bash "$DEPLOYED/autonomy-sweep.sh" >/dev/null 2>&1 || true
+  row="$(_cloudret_row)" || false
+  printf '%s' "$row" | jq -e '.cloud_return_rc | startswith("skipped")' >/dev/null \
+    || { echo "fixture wrong — the pass RAN: $(printf '%s' "$row" | jq -c '.cloud_return_rc')"; false; }
+  printf '%s' "$row" | jq -e '.elapsed_s == null' >/dev/null \
+    || { echo "a NOT-RUN pass reported elapsed_s=$(printf '%s' "$row" | jq -c '.elapsed_s') — must be null"; false; }
+  printf '%s' "$row" | jq -e '.load1 == null' >/dev/null \
+    || { echo "a NOT-RUN pass reported load1=$(printf '%s' "$row" | jq -c '.load1') — must be null"; false; }
+}

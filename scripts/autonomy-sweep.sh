@@ -368,6 +368,22 @@ _bounded() {
 # absent" are different facts, and neither is "the fleet is quiet".
 _cloudret="$_SWEEP_DIR/cloud-return.sh"
 _cloudret_rc="skipped"
+# EMPTY, NEVER 0, on every not-run path (§3h). `skipped` / `skipped-not-deployed` never invoke the
+# pass at all, and a 0 in these two fields would read as "ran, instantly, on an idle box" — the
+# single most misleading value either could take, and precisely the confusion they exist to end
+# (memory: fail-safe-default-mimics-the-healthy-state).
+_cloudret_took=""
+_cloudret_load=""
+# THE SYSCTL SEAM, and it is the reason this arm is testable at all. `vm.loadavg` is a Darwin sysctl
+# and exists nowhere else, so an assertion that the row carries a NUMBER would be a claim about the
+# HOST rather than about this code — red on every box that cannot report a load average. In a corpus
+# that AUTO-REVERTS on red, a host-dependent assertion is a machine event convicting a diff, which is
+# how this change's first landing (2c6b8cdf) was reverted. Resolved absolutely by default, the same
+# ladder every other sysctl site in this repo uses (scripts/capacity-alarm.sh:274).
+_cloudret_sysctl="${CC_SWEEP_SYSCTL:-}"
+if [ -z "$_cloudret_sysctl" ]; then
+  if [ -x /usr/sbin/sysctl ]; then _cloudret_sysctl=/usr/sbin/sysctl; else _cloudret_sysctl=sysctl; fi
+fi
 # THE ONE PLACE THIS NUMBER LIVES. It bounds the `timeout` below AND is exported to the child so it
 # can pace itself against the same figure; the child derives its single-flight lock TTL from it too.
 # It is deliberately NOT raised to make lands fit — this pass shares a 300 s launchd tick with the
@@ -410,10 +426,26 @@ elif [ -x "$_cloudret" ]; then
   # the child confidently pacing against a budget nobody applies any more.
   # The UNBOUNDED arm exports NOTHING. No `timeout` means no deadline, and a child pacing itself
   # against a killer that does not exist would defer real work for no reason.
+  # PLACEMENT IS LOAD-BEARING: t0 is stamped immediately before the invocation block and the
+  # measurement taken immediately after `$?` is read, because nothing may come between that block
+  # and the `$?` that reads it.
+  _cloudret_t0="$(date +%s)"
   if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then
     CC_RETURN_BOUND_S="$_cloudret_bound" "$_tmo" -k 10 "$_cloudret_bound" bash "$_cloudret" --sweep --limit "${CC_SWEEP_RETURN_LIMIT:-25}" >/dev/null 2>&1
   else bash "$_cloudret" --sweep --limit "${CC_SWEEP_RETURN_LIMIT:-25}" >/dev/null 2>&1; fi
   _cloudret_rc=$?
+  _cloudret_took=$(( $(date +%s) - _cloudret_t0 ))
+  # The 1-minute load average, read AFTER the pass so it describes the box the pass actually ran on.
+  # 🚨 THE BRACES ARE STRIPPED, NOT INDEXED AROUND. `vm.loadavg` prints `{ 8.06 9.02 10.45 }`, so a
+  # bare `$2` is the 1-minute average ONLY on the braced shape — a build that omits the braces would
+  # hand this field the 5-MINUTE average while still looking entirely correct. That exact trap is
+  # already documented for this exact sysctl at scripts/capacity-alarm.sh:1023-1029, and the first
+  # landing of this change reintroduced it. After the gsub, field 1 is the 1-minute average on BOTH
+  # shapes. A non-numeric field means the format changed — an unreadable instrument, never a value.
+  # FAILS TO EMPTY, never to 0: an unreadable load is unmeasured, and a 0 would read as a quiet box,
+  # which is the one reading this field exists to make impossible.
+  _cloudret_load="$("$_cloudret_sysctl" -n vm.loadavg 2>/dev/null | awk '
+    NR == 1 { gsub(/[{}]/, ""); if ($1 ~ /^[0-9]+(\.[0-9]+)?$/) print $1 }')"
   # 🚨 THE KILLER CLEANS UP AFTER ITSELF. `timeout -k 10 900` escalates to SIGKILL, and the callee's
   # `trap … EXIT INT TERM` cannot run on one — so a cut pass leaves its single-flight lock directory
   # behind by construction. The callee now reaps a dead holder itself (pid liveness + a TTL sized to
@@ -431,9 +463,12 @@ elif [ -x "$_cloudret" ]; then
       ;;
   esac
 fi
-log_idl cloud-return "$(jq -cn --arg c "$_cloudret_rc" \
-  '{cloud_return_rc:$c,
-    note:"0 = pass completed (per-session outcomes in the cloud return ledger; the pass-scope row records how many of the pending set it took and how many it deferred, and a `pass-deadline` row — a SEPARATE fact — records a pass that stopped starting work because this caller bound it in time, so an early stop can never read as full coverage); 4 = another pass held the lock; 124 = the bound cut the pass, next tick resumes (the return path itself abstains on a cut land rather than filing a refusal); 137/143 = the bound SIGKILLed it and this caller cleared the stranded single-flight lock; skipped = tool absent (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never land, mark done or spend quota"}')"
+# `tonumber? // null` — a `?` guard, not a bare `tonumber`: the empty string must survive all the way
+# to JSON `null`, and a bare `tonumber` on "" is an ERROR that would take the whole row with it while
+# a `// 0` fallback would print the healthiest number this row can carry over an absent measurement.
+log_idl cloud-return "$(jq -cn --arg c "$_cloudret_rc" --arg e "$_cloudret_took" --arg l "$_cloudret_load" \
+  '{cloud_return_rc:$c, elapsed_s:($e|tonumber? // null), load1:($l|tonumber? // null),
+    note:"0 = pass completed (per-session outcomes in the cloud return ledger; the pass-scope row records how many of the pending set it took and how many it deferred, and a `pass-deadline` row — a SEPARATE fact — records a pass that stopped starting work because this caller bound it in time, so an early stop can never read as full coverage); 4 = another pass held the lock; 124 = the bound cut the pass, next tick resumes (the return path itself abstains on a cut land rather than filing a refusal); 137/143 = the bound SIGKILLed it and this caller cleared the stranded single-flight lock; skipped = tool absent (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never land, mark done or spend quota. elapsed_s = how long the pass actually took, against the bound this row implies; load1 = the 1-minute load average of the box it ran on, read after the pass. Both are NULL, never 0, whenever the pass did not run or the load was unreadable — an absent measurement and a fast pass on a quiet box are different facts. They exist because rc ALONE cannot tell a repaired pass from a quiet box: an rc 0 was journalled 2026-09-03T17:58Z on the PRE-fix bytes while the load fell ~23 to ~8, so the honest test is a RATE stratified by load, never a count of rc-0 events"}')"
 
 # ── the REFUSAL LOOP (W3) — immediately after the return pass, and under ITS OWN guard ────────────
 # The return pass above is what WRITES `<id>.land-refused`, so routing in the same tick closes the
