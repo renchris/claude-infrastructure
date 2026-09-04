@@ -55,9 +55,12 @@
 #                         [handoff-fire args...]
 #                                     generate recycle N+1's brief + pointer, arm the goal, and
 #                                     --recycle THIS pane into it (the ordinary link-to-link fire)
-#   drain-recycle-fire.sh --num <N> --lane L --first [--split-right] [--account auto]
+#   drain-recycle-fire.sh --num <N> --lane L --project P [--repo <P's checkout>] --first
+#                         [--split-right] [--account auto]
 #                                     open a NEW pane for a chain's first link (never recycles the
-#                                     caller); provisions the default lane worktree if absent
+#                                     caller); provisions the default lane worktree if absent, cut
+#                                     from --repo (defaulted for claude-infrastructure and
+#                                     reso-management-app)
 #   drain-recycle-fire.sh --num <N+1> --prompt-file <pointer> [handoff-fire args...]
 #                                     fire a caller-supplied brief verbatim (tests, a hand lane)
 #   drain-recycle-fire.sh --num <N+1> [--lane L --project P --min M] --print-goal
@@ -71,6 +74,8 @@
 #   CC_BACKLOG_FILE     the ledger (default $CLAUDE_CONFIG_DIR/autonomy/backlog.jsonl)
 #   CC_DRAIN_PROJECT    default claude-infrastructure — the project the lane drains
 #   CC_DRAIN_LANE       default infra · CC_DRAIN_MIN_CLOSED default 3
+#   CC_DRAIN_INFRA      the claude-infrastructure checkout the brief calls scripts/ from (default
+#                       $HOME/Development/claude-infrastructure; passed through to drain-brief.sh)
 #   CC_DRAIN_FLOOR_LANE the `lane` a done record must carry to count (default local-drain)
 #   CC_DRAIN_FIRE_BIN   default $REPO/scripts/handoff-fire.sh — the fire path, injectable for tests
 #   CC_DRAIN_BRIEF_BIN  default $REPO/scripts/drain-brief.sh — the generator, injectable for tests
@@ -170,7 +175,7 @@ goal_condition() {
 
 # ── argv ────────────────────────────────────────────────────────────────────────────────────────
 NUM=""; PROMPT=""; MODE="fire"; SINCE=""; LANE="${CC_DRAIN_LANE:-infra}"; MIN="${CC_DRAIN_MIN_CLOSED:-3}"
-WORKTREE=""; FIRST=0
+WORKTREE=""; FIRST=0; PROJ_REPO=""; INFRA="${CC_DRAIN_INFRA:-${HOME:-}/Development/claude-infrastructure}"
 PASS=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -180,6 +185,8 @@ while [ $# -gt 0 ]; do
     --project)          PROJECT="${2:?--project needs a label}"; shift 2 ;;
     --min)              MIN="${2:?--min needs a number}"; shift 2 ;;
     --worktree)         WORKTREE="${2:?--worktree needs an absolute path}"; shift 2 ;;
+    --repo)             PROJ_REPO="${2:?--repo needs the project repo path (for --first provisioning)}"; shift 2 ;;
+    --infra)            INFRA="${2:?--infra needs the claude-infrastructure checkout path}"; shift 2 ;;
     --first)            FIRST=1; shift ;;
     --print-goal)       MODE="print"; shift ;;
     --closure-report)   MODE="closure"; SINCE="${2:?--closure-report needs an ISO-8601 Z timestamp}"; shift 2 ;;
@@ -208,6 +215,24 @@ case "$COND" in /*) die "the condition must not start with '/'" ;; esac
 
 if [ "$MODE" = print ]; then printf '%s\n' "$COND"; exit 0; fi
 
+# --first provisioning is VALIDATED HERE, BEFORE the brief is generated: a refusal below must leave
+# no brief behind, or the re-fire that follows the fix is refused as "already exists". THE PROJECT'S
+# REPO decides where a new lane worktree is cut from — handoff-fire's --worktree cuts from --repo —
+# so a lane for reso-management-app must name reso's checkout or it would get a claude-infrastructure
+# worktree labelled reso. Known repos are defaulted; any other project must pass --repo.
+if [ "$FIRST" -eq 1 ] && [ ! -d "$WORKTREE" ]; then
+  [ "$WORKTREE" = "${HOME:-}/Development/.worktrees/drain/lane-$LANE" ] \
+    || die "--first: worktree $WORKTREE does not exist and is not the default handoff-fire can provision (…/.worktrees/drain/lane-$LANE)"
+  if [ -z "$PROJ_REPO" ]; then
+    case "$PROJECT" in
+      claude-infrastructure) PROJ_REPO="$REPO" ;;
+      reso-management-app)   PROJ_REPO="${HOME:-}/Development/reso-management-app" ;;
+      *) die "--first: project $PROJECT has no default repo — pass --repo <path> so the lane worktree is cut from the right checkout" ;;
+    esac
+  fi
+  [ -d "$PROJ_REPO/.git" ] || [ -f "$PROJ_REPO/.git" ] || die "--first: --repo $PROJ_REPO is not a git checkout"
+fi
+
 # ── THE BRIEF IS GENERATED HERE, NOT INHERITED (2026-09-04) ─────────────────────────────────────
 # With no --prompt-file the wrapper regenerates the successor's brief and pointer from the
 # checked-in template (scripts/drain-brief.sh) with THIS window's since/min stamped in. That is the
@@ -218,23 +243,19 @@ BRIEF_BIN="${CC_DRAIN_BRIEF_BIN:-$HERE/drain-brief.sh}"
 if [ -z "$PROMPT" ]; then
   [ -r "$BRIEF_BIN" ] || die "no drain-brief.sh at $BRIEF_BIN and no --prompt-file given"
   PROMPT="$(bash "$BRIEF_BIN" --num "$NUM" --lane "$LANE" --project "$PROJECT" --worktree "$WORKTREE" \
-             --since "$SINCE" --min "$MIN")" || die "drain-brief.sh refused to generate recycle #$NUM (lane $LANE) — see its stderr; nothing fired"
+             --infra "$INFRA" --since "$SINCE" --min "$MIN")" || die "drain-brief.sh refused to generate recycle #$NUM (lane $LANE) — see its stderr; nothing fired"
 fi
 [ -n "$PROMPT" ] || die "--prompt-file is required to fire (the pointer the brief lives behind)"
 [ -r "$PROMPT" ] || die "--prompt-file $PROMPT is not readable — refusing to fire a link with no brief"
 [ -r "$FIRE_BIN" ] || die "no handoff-fire at $FIRE_BIN"
 
 # --first: the chain's FIRST link is fired from a lead's pane as a NEW pane on the lane's worktree,
-# so it must not --recycle (that would relaunch the LEAD's pane). Every later link recycles itself.
-# An existing worktree is entered with --cwd; a missing one is provisioned by handoff-fire's own
-# --worktree path (off origin/main, under its WTROOT), which lands at exactly the default path the
-# brief names. A custom --worktree that does not exist is refused: the brief would `cd` into nothing.
+# so it must not --recycle (that would relaunch the LEAD's pane). An existing worktree is entered
+# with --cwd; a missing default one is provisioned by handoff-fire's --worktree, cut from --repo.
 if [ "$FIRST" -eq 1 ]; then
   if [ -d "$WORKTREE" ]; then
     exec bash "$FIRE_BIN" --prompt-file "$PROMPT" --goal "$COND" --cwd "$WORKTREE" "${PASS[@]+"${PASS[@]}"}"
   fi
-  [ "$WORKTREE" = "${HOME:-}/Development/.worktrees/drain/lane-$LANE" ] \
-    || die "--first: worktree $WORKTREE does not exist and is not the default handoff-fire can provision (…/.worktrees/drain/lane-$LANE)"
-  exec bash "$FIRE_BIN" --prompt-file "$PROMPT" --goal "$COND" --worktree "drain/lane-$LANE" "${PASS[@]+"${PASS[@]}"}"
+  exec bash "$FIRE_BIN" --prompt-file "$PROMPT" --goal "$COND" --worktree "drain/lane-$LANE" --repo "$PROJ_REPO" "${PASS[@]+"${PASS[@]}"}"
 fi
 exec bash "$FIRE_BIN" --recycle --prompt-file "$PROMPT" --goal "$COND" "${PASS[@]+"${PASS[@]}"}"

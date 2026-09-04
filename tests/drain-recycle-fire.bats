@@ -386,9 +386,29 @@ armed_goal() { grep -A1 -x -- '--goal' "$ARGV" | tail -1; }
   [ "$(grep -c -x -- '--recycle' "$ARGV")" -eq 0 ]
   [ "$(grep -c -x -- '--cwd' "$ARGV")" -eq 0 ]
   [ "$(grep -A1 -x -- '--worktree' "$ARGV" | tail -1)" = "drain/lane-infra" ]
+  [ "$(grep -A1 -x -- '--repo' "$ARGV" | tail -1)" = "$REPO" ]
   [ "$(grep -c "cd $HOME/Development/.worktrees/drain/lane-infra " "$CC_DRAIN_BRIEF_DIR/fire-drain-infra-recycle300.txt")" -eq 1 ]
   rm -f "$ARGV"
   run bash "$SUBJECT" --num 301 --lane infra --first --worktree "$BATS_TEST_TMPDIR/nowhere"
   [ "$status" -eq 2 ]
   [ ! -f "$ARGV" ]
+}
+
+# A lane for another project is cut from THAT project's checkout — handoff-fire's --worktree cuts
+# from --repo — and an unknown project must name one rather than silently getting an infra worktree.
+@test "--first for reso passes reso's checkout as --repo; an unknown project without --repo refuses" {
+  mkdir -p "$HOME/Development/reso-management-app/.git"
+  run bash "$SUBJECT" --num 1 --lane reso --project reso-management-app --first
+  [ "$status" -eq 0 ]
+  [ "$(grep -A1 -x -- '--worktree' "$ARGV" | tail -1)" = "drain/lane-reso" ]
+  [ "$(grep -A1 -x -- '--repo' "$ARGV" | tail -1)" = "$HOME/Development/reso-management-app" ]
+  [ "$(grep -c 'land-status.sh' "$CC_DRAIN_BRIEF_DIR/fire-drain-reso-recycle1.txt")" -eq 1 ]
+  rm -f "$ARGV"
+  run bash "$SUBJECT" --num 1 --lane docclf --project doc_classifier --first
+  [ "$status" -eq 2 ]
+  [ ! -f "$ARGV" ]
+  mkdir -p "$BATS_TEST_TMPDIR/docclf/.git"
+  run bash "$SUBJECT" --num 1 --lane docclf --project doc_classifier --first --repo "$BATS_TEST_TMPDIR/docclf"
+  [ "$status" -eq 0 ]
+  [ "$(grep -A1 -x -- '--repo' "$ARGV" | tail -1)" = "$BATS_TEST_TMPDIR/docclf" ]
 }
