@@ -2,8 +2,11 @@
 # Updated whenever Anthropic ships a new model or allowlist changes.
 # Pair with claude-bump-models + claude-lint-models (see ~/bin/ + ~/.claude/scripts/).
 #
-# Last updated: 2026-09-03  (Fable 5.1 lateral bump PARKED in frontier_staged — the model is live on the
-#              API but NO installed CC binary registers it, so the sweep must not run; see § Fable 5.1.
+# Last updated: 2026-09-03  (Fable 5.1 lateral bump ADOPTED — frontier_latest is claude-fable-5-1, landed in
+#              ONE diff with the keying rewrite that the flip is unsafe without; see § Fable 5.1.
+#              It was PARKED in frontier_staged earlier the same day, correctly: no installed CC binary
+#              registered the id until the launcher moved to 2.1.260. That staging note is kept as history
+#              in § Fable 5.1 because the SHAPE recurs, not because it still describes today.
 #              Same date: Sonnet 5 pricing corrected to the now-permanent $2/$10, Opus 4.1 marked retired.
 #              Prior 2026-07-24: Opus 5 lateral bump: claude-opus-5 → opus_latest, ADOPTION STAGED behind
 #              the auto-mode gate — see § Opus 5 adoption. Prior 2026-07-17: Fable 5 PERMANENT — in ALL Max + Team
@@ -12,19 +15,26 @@
 #                            Fable redeploy.)
 
 versions:
-  frontier_latest: claude-fable-5           # NEW TIER ABOVE OPUS (2026-06-09) — not an opus rename.
-                                            # HELD at 5 on 2026-09-03: Fable 5.1 shipped but no installed
-                                            # CC binary registers it (§ Fable 5.1). Fable 5 is still Active
-                                            # (retires not sooner than 2027-06-09) — nothing here is stale.
-  frontier_prior: ""                        # STAYS EMPTY until the 5.1 flip. Setting it to claude-fable-5
-                                            # is what makes every Fable ref "stale" to claude-lint-models
-                                            # (it collects literals from `_prior$` keys) and what arms
-                                            # claude-bump-models to rewrite them. Both would be WRONG today:
-                                            # Fable 5 is the only Fable this machine can actually run.
-  frontier_staged: claude-fable-5-1         # PARKED 2026-09-03 (§ Fable 5.1). Ignored by claude-lint/
-                                            # bump-models — they key on *_latest / *_prior only (verified:
-                                            # bump iterates ${family}_{latest,prior}; lint selects
-                                            # `test("_prior$")`). Same staging pattern Opus 5 used.
+  frontier_latest: claude-fable-5-1          # FLIPPED 2026-09-03 (was claude-fable-5). The tier itself
+                                            # was inserted 2026-06-09 and is not an opus rename. The flip
+                                            # waited on THREE gates, all now cleared: the binary registers
+                                            # the id (launcher on 2.1.260), cc-upgrade-gate is GREEN, and
+                                            # the plan meter was measured to move on 5.1 usage. Landed in
+                                            # ONE diff with the keying rewrite, per § Fable 5.1 step 3b —
+                                            # a flip without it removes the frontier spawn cap.
+  frontier_prior: claude-fable-5            # SET at the flip. This is what arms claude-lint-models'
+                                            # stale-literal sweep (it collects from `_prior$` keys) and
+                                            # claude-bump-models' rewrite pair. Correct NOW and wrong
+                                            # BEFORE: while the binary could not dispatch 5.1, this key
+                                            # would have convicted the only Fable we could run as stale.
+                                            # Fable 5 remains Active upstream (retires not sooner than
+                                            # 2027-06-09); `prior` means "not what we route", not "dead".
+  frontier_staged: ""                       # CLEARED at the flip — the staging slot is empty again and
+                                            # ready for the next frontier release. Kept (not deleted) so
+                                            # the next bump has somewhere to park: a *_staged key is
+                                            # invisible to both tools, which key on *_latest / *_prior
+                                            # only (bump iterates ${family}_{latest,prior}; lint selects
+                                            # `test("_prior$")`). Same slot Opus 5 used.
   # Opus 5 ACTIVATED (staging complete) — the auto-mode live-test passed and opus_latest was
   # flipped to claude-opus-5 (opus_prior → claude-opus-4-8, opus_staged cleared). The flip landed in
   # the LIVE config on 2026-07-25 but was never committed back; this file is now the single versioned
@@ -40,7 +50,7 @@ versions:
   haiku_latest: claude-haiku-4-5
 
 # ─────────────────────────────────────────────────────────────────────────────
-# § FABLE 5.1 (lateral bump 2026-09-03) — BINARY GATE CLEARED; STAGED PENDING THE KEYING FLIP.
+# § FABLE 5.1 (lateral bump 2026-09-03) — ADOPTED. Binary gate cleared, keying flip landed.
 # Anthropic shipped Claude Fable 5.1 (`claude-fable-5-1`) and Claude Mythos 5.1
 # (`claude-mythos-5-1`, Project Glasswing only — we are not participants, so it is recorded
 # for completeness and never routed to). Fable 5.1 succeeds Fable 5 as the frontier tier.
@@ -58,11 +68,24 @@ versions:
 #     by the gate itself "known-open upstream, not an upgrade blocker".
 #     ⇒ The operator mandate the gate encodes — "we ALWAYS upgrade immediately to a new model IF
 #     all our ways of working continue to work" — is SATISFIED for the binary.
+#   · cc-upgrade-gate on 2.1.260 × **claude-fable-5-1**: VERDICT GREEN, 13 pass / 0 fail / 1 skip
+#     — the same shape as the opus-5 run above, i.e. the gate was run against the model being
+#     adopted and not only against the incumbent. (#13 mcp-reachability resolved 5 servers on
+#     this run vs 7 on the opus one — a live-server count, not a gate failure.)
 #   · Entitlement and plan inclusion: both CONFIRMED by measurement (steps 2 and 3 below).
-#   · WHAT IS STILL NOT DONE, and it is the only thing left: `frontier_latest` is STILL
-#     `claude-fable-5`. Routing 5.1 requires the 3b keying rewrite and the SSOT flip IN ONE
-#     DIFF. Until that lands, 5.1 is reachable only by an explicit `--model claude-fable-5-1`;
-#     no role, panel or lane routes to it. That is a deliberate stop, not an oversight.
+#   · ✅ THE KEYING FLIP IS DONE — this file now reads claude-fable-5-1, and it landed in ONE
+#     diff with the 3b rewrite (step 3b and step 4 below both closed). Every role, panel and
+#     lane routes to 5.1; the per-session frontier spawn cap covers BOTH ids by prefix.
+#   · MEASURED, and it is what makes the alias lane safe: on 2.1.260 the bare family alias
+#     `fable` resolves to **claude-fable-5-1** — `--model fable --print --output-format json`
+#     returned `modelUsage` keyed `claude-fable-5-1`. This mattered because the 2.1.257
+#     CHANGELOG says "Changed `fable` and `best` in Claude apps gateway sessions to keep
+#     resolving to Fable 5 for now, since gateways not yet configured for Fable 5.1 reject it".
+#     That caveat does NOT bite this fleet on 2.1.260 (the binary's own resolver reads
+#     `Lp() = el("fable") ?? fable51`), and our fire path is immune either way because
+#     handoff-fire resolves the alias to the FULL id from this file before exec. Re-measure the
+#     alias at the NEXT frontier bump rather than trusting this line — it is a fact about one
+#     binary, not about the alias mechanism.
 #
 # WHY IT WAS STAGED — a DIFFERENT gate than Opus 5's, and worth keeping because the SHAPE
 # recurs. Opus 5 was blocked on auto-mode allowlist membership, which an agent cannot
@@ -80,10 +103,25 @@ versions:
 # including ones we demonstrably run — it is blind on a Bun-compiled binary. `strings` first,
 # always, and never report a null without the controls beside it.) Note `claude-fable-5` is a
 # PREFIX of `claude-fable-5-1`, so the 32 would also have counted any 5.1 hits; it did not.
-# ⇒ Until a CC build registers the ID, `--model claude-fable-5-1` cannot resolve, and
-#   `claude-bump-models --apply` MUST NOT RUN: it would rewrite frontier roles + the auto-mode
-#   allowlist to an ID the harness cannot dispatch, breaking every /frontier-run spawn at once.
-#   API/SDK callers are unaffected — the model is live there today.
+# ⇒ WHILE THAT WAS TRUE, `--model claude-fable-5-1` could not resolve and
+#   `claude-bump-models --apply` MUST NOT HAVE RUN: it would have rewritten frontier roles + the
+#   auto-mode allowlist to an ID the harness could not dispatch, breaking every /frontier-run
+#   spawn at once. (API/SDK callers were unaffected — the model was live there from day one.)
+#   RESOLVED by the launcher move to 2.1.260. The exact boundary is now known and is not a
+#   range: npm never published 2.1.253–2.1.256, so **2.1.257 is the minimum registering build**
+#   and there is no gap left to bisect.
+#   🚨 THE PREFIX HAZARD SURVIVES THIS, AND IT IS NEW TO THIS BUMP. `claude-fable-5` is a strict
+#   PREFIX of `claude-fable-5-1` — the first time in this file's history that an old id prefixes
+#   its successor. `~/bin/claude-bump-models:133` replaces with an UNANCHORED
+#   `sed -i.bump-bak "s|$OLD|$NEW|g"`, so now that frontier_prior is set, the armed pair is
+#   `claude-fable-5|claude-fable-5-1` and an --apply over any file already containing 5.1 would
+#   corrupt it to `claude-fable-5-1-1`. Exposure is currently ZERO and that is a property of the
+#   sweep's TARGET SET, not of the tool: model-classification.json's effective targets are 60
+#   reso team-brief files, none of which contain any Fable id (its README.md/agents/*.md globs
+#   are dead — matched as "$root/$glob" against roots that already ARE those dirs). ⚠️ So the
+#   guard is: do NOT add `scripts/`, `bin/` or `hooks/` to model-classification.json's `update`
+#   list without anchoring that sed first. `scripts/claude-lint-models.sh:82` is prefix-SAFE
+#   (`grep -qE "${literal}([^-0-9]|$)"`) — two tools, one SSOT, opposite safety.
 #
 # ECONOMICS — the headline is the CACHE READ, not the sticker. Base price is IDENTICAL to
 # Fable 5 ($10/$50) and so is the tokenizer, so token counts and cost math carry over. What
@@ -162,9 +200,14 @@ versions:
 #          2.1.252                 0           0             19
 #          2.1.259 (`latest`)     11           6             18
 #
-#      So the minimum registering build lies in 2.1.253–2.1.259, and 2.1.259 is VERIFIED to
-#      carry both ids. 2.1.257/258 were not probed (the run was interrupted) — narrow further
-#      only if you care which; otherwise go to `latest`. Note the npm `stable` dist-tag
+#      ✅ CLOSED, and the boundary is EXACT rather than a range: **2.1.257 is the minimum
+#      registering build.** npm never published 2.1.253–2.1.256 (the version list jumps
+#      2.1.252 → 2.1.257), so there is no gap left to narrow. The 2.1.257 binary carries a real
+#      model-id Set — `["claude-fable-5-1","claude-fable-5","claude-mythos-5-1",…]` — plus a
+#      short-alias table and the gateway forms, i.e. registration proper and not embedded
+#      changelog text. ⚠️ Prefer **2.1.258+** over the strict minimum anyway: 2.1.255 introduced
+#      a macOS 12 launch regression fixed in 2.1.258 (irrelevant on this desk at macOS 15.7.9,
+#      but free to avoid). We run 2.1.260. Note the npm `stable` dist-tag
 #      (2.1.236) does NOT have it, so "move to stable" is not a route to 5.1.
 #      Install PARALLEL (`npm i --prefix ~/.claude-<ver> @anthropic-ai/claude-code@<ver>`),
 #      never in place, and keep 2.1.220 for a one-line rollback. Carry
@@ -181,11 +224,26 @@ versions:
 #      completion on 2.1.260. Also covered mechanically by cc-upgrade-gate check_02, which walks
 #      every account and asserts modelUsage carries the model with is_error=false — so the
 #      standalone entitlement probe this step used to prescribe is REDUNDANT with gate 1.
-#   3. ✅ PLAN INCLUSION — CONFIRMED 2026-09-03, and it is a MEASUREMENT, not a doc reading.
-#      This was recorded as "not stated anywhere reachable": the launch post and model docs
+#   3. ✅ PLAN INCLUSION — CONFIRMED 2026-09-03 TWICE OVER, by measurement AND (later) by doc.
+#      It was FIRST recorded as "not stated anywhere reachable": the launch post and model docs
 #      describe API/platform availability, which is a different question from plan-usage
-#      inclusion, and no Anthropic source we could reach states a Max percentage for 5.1.
-#      Settled empirically instead, by A/B on the meter itself:
+#      inclusion, and no Anthropic source reached at that time stated a Max percentage for 5.1.
+#      ⚠️ THAT HALF IS NOW SUPERSEDED — the source exists and was found by a probe whose report
+#      was never delivered to the session that commissioned it (recovered from its transcript
+#      2026-09-03): support article "Claude Fable models on your plan", updated 2026-09-02,
+#      <https://support.claude.com/en/articles/15424964-claude-fable-models-on-your-plan>:
+#      *"Claude Fable 5 and Claude Fable 5.1 are available on all paid plans"* and, on Max /
+#      Team-premium / Enterprise-premium seats, *"both are a standard part of your plan… up to
+#      50% of your weekly usage limits… at no extra cost"*. The word **both** is what settles it
+#      — Anthropic naming 5 and 5.1 under one limit, not inheritance by assumption.
+#      🚨 THE TRAP THE A/B COULD NOT SEE, and it is why the doc still mattered after the
+#      measurement: *"On Pro plans and standard seats on Team plans: Fable 5 and Fable 5.1
+#      aren't included in your plan's usage limits. You can use them with usage credits."* Our
+#      four accounts are Max, so this is not our exposure today — but a headline scan of
+#      third-party coverage reads as "5.1 is not included", which is the OPPOSITE of the Max
+#      answer, and any future non-Max seat on this box inherits the credits-only path silently.
+#      Pricing is UNCHANGED from Fable 5 ($10/$50), so pricing_per_mtok needed no edit.
+#      The empirical half, which remains the primary evidence — A/B on the meter itself:
 #        next2 weekly Fable = 1%  ··········
 #        → three `--model claude-fable-5-1 --print` calls on that account
 #        next2 weekly Fable = 2%  ▏·········
@@ -199,7 +257,10 @@ versions:
 #      of four came back live. Never read the Fable column from cache when deciding this; a
 #      transient instrument failure that excludes the whole fleet looks exactly like an
 #      entitlement loss.
-#   3b. 🚨 REWRITE THE HARDCODED `claude-fable-5` SITES **IN THE SAME DIFF AS THE FLIP.** This
+#   3b. ✅ DONE 2026-09-03, in the same commit as step 4 — as this step demanded. What follows is
+#      the CENSUS AS WRITTEN, kept because the classes and the reasoning generalise to the next
+#      bump; three corrections from doing the work are recorded at the end of the step.
+#      🚨 REWRITE THE HARDCODED `claude-fable-5` SITES **IN THE SAME DIFF AS THE FLIP.** This
 #      is measured, not a worry (census 2026-09-03). `claude-fable-5-1` is not equal to
 #      `claude-fable-5`, and NOTHING here does a prefix match. There are TWO classes, with two
 #      different failure modes — fix both; a fix to only one is worse than neither, because it
@@ -265,15 +326,45 @@ versions:
 #      still gets warned about Fable's cost, while every mechanical arm that counts it reads
 #      "not Fable". Warned about the money, not counting the money. Prefer matching the glob's
 #      shape (a prefix/case test covering both IDs) over swapping one literal for another, so
-#      the NEXT frontier bump does not re-create this.
-#   4. Only then: frontier_latest → claude-fable-5-1, frontier_prior → claude-fable-5, clear
-#      frontier_staged, `claude-bump-models --apply`, add claude-fable-5-1 to
-#      auto_mode_allowlist.non_firstParty_max ALONGSIDE claude-fable-5, flip the launcher
-#      default, re-run claude-lint-models.
-#   5. RE-SWEEP effort (see effort_defaults § fable51). Anthropic is explicit that effort level
+#      the NEXT frontier bump does not re-create this. ← THIS IS WHAT WAS DONE: every detector
+#      became `case … in claude-fable-5*)`, not a swapped literal.
+#
+#      THREE CORRECTIONS TO THE CENSUS ABOVE, found by executing it. Grep, never trust its line
+#      numbers:
+#        (a) EVERY line number above has DRIFTED ~46 lines from sibling landings (7485/7713/
+#            7838/7928 as written; 7531/7759/7884/7974 when the rewrite ran). They are kept
+#            as-written because they are the record of what was surveyed, not a map to use.
+#        (b) `bin/cc-route:325` IS MISFILED AS A DETECTOR — it is not one, and it was
+#            deliberately left unchanged. `:268` is a FIXTURE inside a stub YAML (carrying a
+#            deliberate `claude-trap-9` landmine) and `:325` is its assertion: a hermetic pair
+#            testing the PARSER, not the live model. Changing the assertion without the fixture
+#            breaks the selftest, and pinning a parser test to the current id breaks it at every
+#            future bump. `bin/cc-wave-plan` is the opposite case and WAS changed — its `:821`
+#            is a production emitter, so emitter and assertion moved together.
+#        (c) TWO LIVE SITES THE CENSUS MISSED, both fixed in the same diff:
+#            `scripts/handoff-fire.sh` dry-run display (the probe line hardcoded the id while the
+#            real probe used `$MODEL` — a second, disagreeing oracle), and
+#            `hooks/frontier-spawn-gate.sh:30` itself, which is axis (iv) above: the gate whose
+#            bypass this step warns about could not be fixed by any grep for a model literal,
+#            because THAT LINE CONTAINS NO MODEL LITERAL AT ALL (`fable|"$fmodel")`). A residual
+#            grep for `claude-fable-5([^-]|$)` is structurally blind to it. It now reads
+#            `fable|claude-fable-5*|"$fmodel")`.
+#   4. ✅ DONE 2026-09-03, one commit with 3b: frontier_latest → claude-fable-5-1, frontier_prior
+#      → claude-fable-5, frontier_staged cleared, claude-fable-5-1 added to
+#      auto_mode_allowlist.non_firstParty_max ALONGSIDE claude-fable-5, frontier_access.model
+#      flipped. The launcher default needed no flip — it is `--model "${CLAUDE_NEXT_MODEL:-claude-opus-5}"`,
+#      i.e. Opus by design; Fable is selected per-fire, never as the shell default.
+#      `claude-bump-models --apply` is a deliberate NO-OP here and must stay unrun until its
+#      unanchored sed is fixed — see the prefix hazard above; its effective target set contains
+#      no Fable id, so it has nothing to do and everything to corrupt.
+#   5. ⏳ OPEN — the only remaining item. RE-SWEEP effort (see effort_defaults § fable51).
+#      Anthropic is explicit that effort level
 #      names do NOT correspond to the same amount of thinking across models — the Fable 5 sweep
-#      does not transfer, exactly as the Opus 4.8 → Opus 5 sweep did not.
-# Until then: Fable 5 remains frontier_latest and every Fable role keeps working unchanged.
+#      does not transfer, exactly as the Opus 4.8 → Opus 5 sweep did not. The fable51_* keys
+#      below are LABELLED STARTING POINTS carried over from Fable 5; no probe has run against
+#      5.1. Until one does, they are an assumption wearing a measurement's clothes.
+# STATUS: Fable 5.1 IS frontier_latest and every Fable role routes to it. Fable 5 stays Active
+# upstream and remains accepted wherever a session pins it explicitly.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -364,8 +455,15 @@ versions:
 # discovery panels, and the call-time research_adversarial / workflow_judge /
 # eval_judge / teammate_frontier slots (bounded, judgment-dense — kept on Fable).
 frontier_access:
-  model: claude-fable-5
-  tracks: [claude-next]                     # NEVER the stable `claude` 2.1.114 track
+  model: claude-fable-5-1                   # FLIPPED 2026-09-03 with versions.frontier_latest. This key
+                                            # is what `handoff-fire.sh --model fable` and
+                                            # hooks/frontier-spawn-gate.sh actually resolve, so it and
+                                            # frontier_latest must move together or the alias and the
+                                            # spawn cap disagree about which model is "the frontier".
+  tracks: [claude-next]                     # ⚠️ STALE LABEL, kept only because consumers may read it:
+                                            # consolidation v2 deleted the `claude-next` launcher. There
+                                            # is ONE track now (`claude` → ~/.claude-260). Treat this as
+                                            # "not the held 2.1.114 legacy path", not as a live track name.
   source: plan-usage                        # PERMANENT plan inclusion: Fable 5 is included in ALL Max +
                                             # Team Premium plans at ≤50% of limits (Anthropic 2026-07-17,
                                             # effective 2026-07-20). No longer credits-only after a window.
@@ -445,7 +543,7 @@ pricing_per_mtok:
 auto_mode_allowlist:
   firstParty: [claude-opus-4-7, claude-opus-4-6, claude-sonnet-4-6]
   anthropicAws: [claude-opus-4-7, claude-opus-4-6, claude-sonnet-4-6]
-  non_firstParty_max: [claude-opus-4-8, claude-opus-5, claude-fable-5]   # STRICTER — our account. 4-8 confirmed in auto mode 2026-06-09. claude-fable-5 VERIFIED in auto mode 2026-06-09: the claude-next lead session itself runs `--permission-mode auto --model claude-fable-5` and operates fully autonomously (that live session IS the test — `auto-mode config` doesn't print allowModels). Fable teammates: eval-track (2.1.170) teams only — the stable 2.1.114 binary doesn't know the model and fails LOUDLY at spawn (not a silent demotion, so allowlisting it here is safe for both tracks).
+  non_firstParty_max: [claude-opus-4-8, claude-opus-5, claude-fable-5, claude-fable-5-1]   # STRICTER — our account. 4-8 confirmed in auto mode 2026-06-09. claude-fable-5 VERIFIED in auto mode 2026-06-09 by a live lead session running `--permission-mode auto --model claude-fable-5` autonomously (that session WAS the test — `auto-mode config` doesn't print allowModels). claude-fable-5-1 ADDED 2026-09-03 on stronger evidence than any row above it: cc-upgrade-gate check_03 on 2.1.260 drove a real auto-mode TOOL TURN on claude-fable-5-1 with is_error=false, no demotion and permission_denials=[] — a mechanical check rather than an operator's impression, and repeatable via `scripts/cc-upgrade-gate.sh <bin> claude-fable-5-1 <acct>`. claude-fable-5 stays listed: it is still Active upstream and a pinned-prior session must not be rejected by this hook. Fable teammates: an older binary that does not know the id fails LOUDLY at spawn (not a silent demotion), so listing both here is safe.
   non_firstParty_non_max: [claude-opus-4-7, claude-opus-4-6, claude-sonnet-4-6]
 
 # Hardcoded by Anthropic in cli.js — not user-configurable (as of 2.1.112).

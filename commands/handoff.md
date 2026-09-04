@@ -385,12 +385,20 @@ with `HANDOFF_ACCOUNT_SWEEP=off`. Run it standalone any time with `handoff-fire.
 
 | Receiver's work | Fire flags | Session runs |
 |---|---|---|
-| Implementation / research / synthesis lead (THE DEFAULT) | *(none)* | Opus 4.8 @ **max** (`effort_defaults.default` — certified: xhigh regresses on grounding-heavy work) |
-| ultracode / Dynamic Workflows lead | *(none)* + `ultracode` keyword in the payload | same Opus 4.8 @ max — the keyword changes ORCHESTRATION, not effort; workflow slots pin their own per-agent model/effort (`workflow_judge`, `workflow_synthesis_worker`) |
+| Implementation / research / synthesis lead (THE DEFAULT) | *(none)* | `versions.opus_latest` @ **high** (`effort_defaults.default` — certified: xhigh regresses on grounding-heavy work) |
+| ultracode / Dynamic Workflows lead | *(none)* + `ultracode` keyword in the payload | same `opus_latest` @ default effort — the keyword changes ORCHESTRATION, not effort; workflow slots pin their own per-agent model/effort (`workflow_judge`, `workflow_synthesis_worker`) |
 | Bounded verify / judge-only session | `--effort xhigh` | Opus @ xhigh (`verify_judge` — ties max at lower cost ONLY for bounded-grounding work) |
-| Fable frontier (derivation panels, judgment) | `--model fable --probe` | Fable 5 @ **high** (`fable_default` — NOT max: Fable@high ≈ Opus@max; max over-deliberates + burns the window) |
-| Fable capability-sensitive (security/arch judgment) | `--model fable --effort xhigh --probe` | Fable 5 @ xhigh (`fable_capability_sensitive`) |
-| Fable routine | `--model fable --effort medium --probe` | Fable 5 @ medium (`fable_routine`) |
+| Fable frontier (derivation panels, judgment) | `--model fable --probe` | `frontier_access.model` @ **high** (`fable51_default` — NOT max: Fable@high ≈ Opus@max; max over-deliberates + burns the window) |
+| Fable capability-sensitive (security/arch judgment) | `--model fable --effort xhigh --probe` | `frontier_access.model` @ xhigh (`fable51_capability_sensitive`) |
+| Fable routine | `--model fable --effort medium --probe` | `frontier_access.model` @ medium (`fable51_routine`) |
+| Fable cheap (NEW tier at 5.1) | `--model fable --effort low --probe` | `frontier_access.model` @ low (`fable51_cheap` — 5.1 at low is competitive with Opus/Sonnet on cost-per-task) |
+
+⚠️ **The right-hand column names SSOT KEYS, not models, deliberately** — a routing claim that spells a
+model out has no path to learn the tier moved, which is how the Fable rows above came to say "Fable 5"
+three versions after the flip. `frontier_access.model` is `claude-fable-5-1` as of 2026-09-03, and
+`--model fable` resolves to it through `handoff-fire.sh`'s SSOT reader, so alias and id land on the same
+model. The `fable51_*` effort keys are STARTING POINTS carried over from Fable 5 and have NOT been probed
+against 5.1 — effort names do not mean the same amount of thinking across models.
 
 Mechanics: `--effort`/`--model` are appended AFTER the launcher-injected defaults (last-wins, verified),
 so overrides always stick. The script WARNS (does not block) when `frontier_access.active` != true — the

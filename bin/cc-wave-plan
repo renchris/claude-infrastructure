@@ -818,7 +818,7 @@ case "$slot" in
     if [ -n "${STUB_FABLE_NONE:-}" ]; then
       model=claude-opus-4-8; reason="frontier unavailable → designed Opus fallback"
       [ "$slot" = adversarial ] && eff=xhigh || eff=max
-    else model=claude-fable-5; eff=xhigh; reason="frontier window open"; fi ;;
+    else model=claude-fable-5-1; eff=xhigh; reason="frontier window open"; fi ;;
   *) echo "unknown slot" >&2; exit 2 ;;
 esac
 jq -cn --arg s "$slot" --arg m "$model" --arg a stub --arg e "$eff" --arg r "$reason" \
@@ -888,7 +888,7 @@ STUB
 
   # Window WIDE OPEN — the fable id IS emitted (guard is not over-firing).
   check "open: window 600m -> judgment-dense keeps the fable model @ xhigh" 0 \
-    bash -c "STUB_WIN_MIN=600 '$SELF' --items '[{\"id\":\"j\",\"slot\":\"judgment-dense\"}]' --json | jq -e '.[0]|select(.model==\"claude-fable-5\" and .effort==\"xhigh\")'"
+    bash -c "STUB_WIN_MIN=600 '$SELF' --items '[{\"id\":\"j\",\"slot\":\"judgment-dense\"}]' --json | jq -e '.[0]|select(.model==\"claude-fable-5-1\" and .effort==\"xhigh\")'"
   check "open: fable-none route also degrades to opus (cc-route's own edge)" 0 \
     bash -c "STUB_WIN_MIN=600 STUB_FABLE_NONE=1 '$SELF' --items '[{\"id\":\"j\",\"slot\":\"judgment-dense\"}]' --json | jq -e '.[0].model==\"claude-opus-4-8\"'"
 
