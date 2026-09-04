@@ -86,6 +86,17 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-04 — recycle #301 (lane infra):** closed 02d53c4b4078, c92cbba78fc2, 5bc548efd14d,
+  737525ee6892 · blocked none · released none · landed 25862d6af ·
+  `closed=14 closed_pre=3 closed_other=10 filed=8 net=6 blocked=9 min=3 lane=local-drain project=claude-infrastructure floor=MET`.
+  Three moot BY CONTENT: the chain-is-dead row (I am the chain), the capacity-admit auto-revert
+  (bats 15/15 at e84ba11e3), and cc-reaper's "inert until deploy-live converges" — ~/.claude/bin/cc-reaper
+  is a per-file symlink into the shared checkout, so `cmp` against origin/main is IDENTICAL and the fix
+  was never inert. 737525ee6892 audited scripts/boot-resume-launch.sh (its title says bin/): it IS the
+  pane-32 `kitty @ launch -- prog` shape and survives ONLY because reso-resume-one's tail execs an
+  interactive shell — a cross-file contract nothing pinned, now 3 cases + a mutant control. Its own
+  `done` stamped `lane:null` (the ancestry probe saw no claude ancestor), so a local-drain close reads
+  as `closed_other` and the floor undercounts this link by one.
 - **2026-09-04 — recycle #300 (lane infra):** closed 07ac6d58d88d · blocked 159c2211b0f2,
   eed2530a4165 · released 26d4010f1b22, 11fdba2b3148, 5bc548efd14d · landed c5e2eb5a5, e05a2fcf4 ·
   `closed=7 closed_pre=1 closed_other=36 filed=9 net=-2 blocked=22 min=3 lane=local-drain project=claude-infrastructure floor=UNMET`.
