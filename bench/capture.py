@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import sys
 import time
@@ -143,8 +144,14 @@ def capture(corpus: pathlib.Path, dprs: list[int]) -> None:
 
     timings = []
     with sync_playwright() as p:
+        # `channel="chromium"` resolves against the Playwright build that pip
+        # installed. A container that ships a pre-baked browser (and forbids
+        # `playwright install`) has a different build number, so allow the exact
+        # binary to be named. Channel and executable_path are mutually exclusive.
+        exe = os.environ.get("BENCH_CHROMIUM_PATH")
+        launch_kwargs = {"executable_path": exe} if exe else {"channel": "chromium"}
         browser = p.chromium.launch(
-            channel="chromium",
+            **launch_kwargs,
             args=[
                 "--force-color-profile=srgb",
                 "--disable-lcd-text",

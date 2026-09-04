@@ -26,6 +26,22 @@ import pathlib
 import re
 import sys
 
+# Every rule this module can emit. Declared rather than discovered so
+# `fp_budget.py` can name a rule the corpus never exercises -- a rule that has
+# never fired has never been re-run against the control either, which is the one
+# precondition §8 item 2 puts on shipping it.
+RULES = (
+    "spacing-rhythm",
+    "grid-violation",
+    "type-scale",
+    "token-drift",
+    "contrast",
+    "contrast-indeterminate",
+    "overflow",
+    "touch-target",
+    "misalignment",
+)
+
 GRID = 8
 CONTRAST_MIN = 4.5
 CONTRAST_MIN_LARGE = 3.0

@@ -1,190 +1,170 @@
 {
  "align-1px": [
   {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-indeterminate",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) centres this child exactly by the box model, but the child's rendered ink sits 0.2px right and 3.8px down of the container's centre. Whether that offset is deliberate optical compensation or a defect is UNVERIFIED -- it depends on the glyph's own ink asymmetry, which no substrate here exposes",
+   "severity": "medium",
+   "measure": {
+    "dx": 0.167,
+    "dy": 3.769
+   }
   }
  ],
  "clean": [
   {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-indeterminate",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) centres this child exactly by the box model, but the child's rendered ink sits 0.2px right and 3.8px down of the container's centre. Whether that offset is deliberate optical compensation or a defect is UNVERIFIED -- it depends on the glyph's own ink asymmetry, which no substrate here exposes",
+   "severity": "medium",
+   "measure": {
+    "dx": 0.167,
+    "dy": 3.769
+   }
   }
  ],
  "contrast-on-gradient": [
   {
    "rule": "xcheck-contrast-varies",
-   "target": "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
-   "detail": "contrast is not one number across this text: 4.81:1 at the left edge and 1.57:1 at the right. Any single computed value is a fiction, and the right end is the one that fails a reader",
+   "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
+   "detail": "contrast is not one number across this text: 5.89:1 at the left edge and 1.73:1 at the right. Any single computed value is a fiction, and the right end is the one that fails a reader",
    "severity": "high"
   },
   {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "rule": "xcheck-contrast-varies",
+   "target": "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
+   "detail": "contrast is not one number across this text: 5.74:1 at the left edge and 1.71:1 at the right. Any single computed value is a fiction, and the right end is the one that fails a reader",
+   "severity": "high"
   },
   {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-indeterminate",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) centres this child exactly by the box model, but the child's rendered ink sits 0.2px right and 3.8px down of the container's centre. Whether that offset is deliberate optical compensation or a defect is UNVERIFIED -- it depends on the glyph's own ink asymmetry, which no substrate here exposes",
+   "severity": "medium",
+   "measure": {
+    "dx": 0.167,
+    "dy": 3.769
+   }
   }
  ],
  "contrast-plain": [
   {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-indeterminate",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) centres this child exactly by the box model, but the child's rendered ink sits 0.2px right and 3.8px down of the container's centre. Whether that offset is deliberate optical compensation or a defect is UNVERIFIED -- it depends on the glyph's own ink asymmetry, which no substrate here exposes",
+   "severity": "medium",
+   "measure": {
+    "dx": 0.167,
+    "dy": 3.769
+   }
   }
  ],
  "grid-offgrid": [
   {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-indeterminate",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) centres this child exactly by the box model, but the child's rendered ink sits 0.2px right and 3.8px down of the container's centre. Whether that offset is deliberate optical compensation or a defect is UNVERIFIED -- it depends on the glyph's own ink asymmetry, which no substrate here exposes",
+   "severity": "medium",
+   "measure": {
+    "dx": 0.167,
+    "dy": 3.769
+   }
   }
  ],
  "hierarchy-inversion": [
   {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.4px left and 0.6px down of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-indeterminate",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) centres this child exactly by the box model, but the child's rendered ink sits 0.2px right and 2.8px down of the container's centre. Whether that offset is deliberate optical compensation or a defect is UNVERIFIED -- it depends on the glyph's own ink asymmetry, which no substrate here exposes",
+   "severity": "medium",
+   "measure": {
+    "dx": 0.167,
+    "dy": 2.769
+   }
   }
  ],
  "optical-centering": [
   {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.5px left and 0.7px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-indeterminate",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) centres this child exactly by the box model, but the child's rendered ink sits 1.8px left and 1.8px down of the container's centre. Whether that offset is deliberate optical compensation or a defect is UNVERIFIED -- it depends on the glyph's own ink asymmetry, which no substrate here exposes",
+   "severity": "medium",
+   "measure": {
+    "dx": -1.833,
+    "dy": 1.769
+   }
   }
  ],
  "overflow-clip": [
   {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-indeterminate",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) centres this child exactly by the box model, but the child's rendered ink sits 0.2px right and 3.8px down of the container's centre. Whether that offset is deliberate optical compensation or a defect is UNVERIFIED -- it depends on the glyph's own ink asymmetry, which no substrate here exposes",
+   "severity": "medium",
+   "measure": {
+    "dx": 0.167,
+    "dy": 3.769
+   }
   }
  ],
  "radius-drift": [
   {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-indeterminate",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) centres this child exactly by the box model, but the child's rendered ink sits 0.2px right and 3.8px down of the container's centre. Whether that offset is deliberate optical compensation or a defect is UNVERIFIED -- it depends on the glyph's own ink asymmetry, which no substrate here exposes",
+   "severity": "medium",
+   "measure": {
+    "dx": 0.167,
+    "dy": 3.769
+   }
   }
  ],
  "spacing-gap": [
   {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-indeterminate",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) centres this child exactly by the box model, but the child's rendered ink sits 0.2px right and 3.8px down of the container's centre. Whether that offset is deliberate optical compensation or a defect is UNVERIFIED -- it depends on the glyph's own ink asymmetry, which no substrate here exposes",
+   "severity": "medium",
+   "measure": {
+    "dx": 0.167,
+    "dy": 3.769
+   }
   }
  ],
  "token-color-drift": [
   {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-indeterminate",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) centres this child exactly by the box model, but the child's rendered ink sits 0.2px right and 3.8px down of the container's centre. Whether that offset is deliberate optical compensation or a defect is UNVERIFIED -- it depends on the glyph's own ink asymmetry, which no substrate here exposes",
+   "severity": "medium",
+   "measure": {
+    "dx": 0.167,
+    "dy": 3.769
+   }
   }
  ],
  "touch-target": [
   {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-indeterminate",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) centres this child exactly by the box model, but the child's rendered ink sits 0.2px right and 3.8px down of the container's centre. Whether that offset is deliberate optical compensation or a defect is UNVERIFIED -- it depends on the glyph's own ink asymmetry, which no substrate here exposes",
+   "severity": "medium",
+   "measure": {
+    "dx": 0.167,
+    "dy": 3.769
+   }
   }
  ],
  "type-scale": [
   {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-indeterminate",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) centres this child exactly by the box model, but the child's rendered ink sits 0.2px right and 2.8px down of the container's centre. Whether that offset is deliberate optical compensation or a defect is UNVERIFIED -- it depends on the glyph's own ink asymmetry, which no substrate here exposes",
+   "severity": "medium",
+   "measure": {
+    "dx": 0.167,
+    "dy": 2.769
+   }
   }
  ]
 }
