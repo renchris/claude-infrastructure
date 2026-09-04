@@ -88,15 +88,32 @@ set -uo pipefail
 # Resolving the chain makes the core reachable from wherever the layer points, so the hook
 # works the moment the checkout advances and does not also depend on someone remembering to
 # mint a symlink for each new sibling file.
+# PATH-FREE DIRNAME. `dirname` lives in /usr/bin, not /bin, so under a reduced PATH the two
+# call sites below printed `dirname: command not found` on stderr while still correctly
+# deferring. The DECISION was right and the hook was NOISY, which is the failure the
+# "a missing python3 defers rather than failing in the allow direction" case measures: a hook
+# whose contract is to say NOTHING cannot satisfy it by saying the right nothing loudly. Pure
+# parameter expansion needs no PATH at all, and it is the spelling the fallback below already
+# uses. `/foo` -> `/` and a bare name -> `.`, matching dirname on the shapes reached here.
+_dirof() {
+  local _d="$1"
+  case "$_d" in
+    */*) _d="${_d%/*}"; [[ -n "$_d" ]] || _d=/ ;;
+    *)   _d="." ;;
+  esac
+  printf '%s\n' "$_d"
+}
 _self="${BASH_SOURCE[0]}"
 while [[ -L "$_self" ]]; do
-  _link=$(readlink "$_self") || break
+  # readlink is /usr/bin too — same class, same remedy: a missing one must break the loop
+  # quietly rather than narrate the reduced PATH to the harness.
+  _link=$(readlink "$_self" 2>/dev/null) || break
   case "$_link" in
     /*) _self="$_link" ;;
-    *)  _self="$(cd -P -- "$(dirname -- "$_self")" 2>/dev/null && pwd)/$_link" ;;
+    *)  _self="$(cd -P -- "$(_dirof "$_self")" 2>/dev/null && pwd)/$_link" ;;
   esac
 done
-_CORE="$(cd -P -- "$(dirname -- "$_self")" 2>/dev/null && pwd)/lib/smart-bash-allowlist.py"
+_CORE="$(cd -P -- "$(_dirof "$_self")" 2>/dev/null && pwd)/lib/smart-bash-allowlist.py"
 # Fall back to the invoked-path sibling, so a future layer that DOES link the core still
 # works even if the resolution above cannot run.
 [[ -r "$_CORE" ]] || _CORE="${BASH_SOURCE[0]%/*}/lib/smart-bash-allowlist.py"
