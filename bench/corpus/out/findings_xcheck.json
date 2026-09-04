@@ -1,190 +1,145 @@
 {
  "align-1px": [
   {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-centre-v",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "vertical ink offset is +3.23px, but this mark is a text glyph and its vertical ink position is set by the font's baseline metrics, which no artifact here carries. Vertical centring is UNVERIFIED",
+   "severity": "low",
+   "verdict": "INDETERMINATE",
+   "routeTo": "optical-alignment"
   }
  ],
  "clean": [
   {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-centre-v",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "vertical ink offset is +3.23px, but this mark is a text glyph and its vertical ink position is set by the font's baseline metrics, which no artifact here carries. Vertical centring is UNVERIFIED",
+   "severity": "low",
+   "verdict": "INDETERMINATE",
+   "routeTo": "optical-alignment"
   }
  ],
  "contrast-on-gradient": [
   {
    "rule": "xcheck-contrast-varies",
+   "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
+   "detail": "contrast is not one number across this text: 6.15:1 across its left third and 1.76:1 across its right. Any single computed value is a fiction, and the right end is the one that fails a reader",
+   "severity": "high",
+   "verdict": "FAIL"
+  },
+  {
+   "rule": "xcheck-contrast-varies",
    "target": "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
-   "detail": "contrast is not one number across this text: 4.81:1 at the left edge and 1.57:1 at the right. Any single computed value is a fiction, and the right end is the one that fails a reader",
-   "severity": "high"
+   "detail": "contrast is not one number across this text: 6.00:1 across its left third and 1.75:1 across its right. Any single computed value is a fiction, and the right end is the one that fails a reader",
+   "severity": "high",
+   "verdict": "FAIL"
   },
   {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-centre-v",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "vertical ink offset is +3.23px, but this mark is a text glyph and its vertical ink position is set by the font's baseline metrics, which no artifact here carries. Vertical centring is UNVERIFIED",
+   "severity": "low",
+   "verdict": "INDETERMINATE",
+   "routeTo": "optical-alignment"
   }
  ],
  "contrast-plain": [
   {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-centre-v",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "vertical ink offset is +3.23px, but this mark is a text glyph and its vertical ink position is set by the font's baseline metrics, which no artifact here carries. Vertical centring is UNVERIFIED",
+   "severity": "low",
+   "verdict": "INDETERMINATE",
+   "routeTo": "optical-alignment"
   }
  ],
  "grid-offgrid": [
   {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-centre-v",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "vertical ink offset is +3.23px, but this mark is a text glyph and its vertical ink position is set by the font's baseline metrics, which no artifact here carries. Vertical centring is UNVERIFIED",
+   "severity": "low",
+   "verdict": "INDETERMINATE",
+   "routeTo": "optical-alignment"
   }
  ],
  "hierarchy-inversion": [
   {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.4px left and 0.6px down of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-centre-v",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "vertical ink offset is +2.23px, but this mark is a text glyph and its vertical ink position is set by the font's baseline metrics, which no artifact here carries. Vertical centring is UNVERIFIED",
+   "severity": "low",
+   "verdict": "INDETERMINATE",
+   "routeTo": "optical-alignment"
   }
  ],
  "optical-centering": [
   {
    "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.5px left and 0.7px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "the container centres this mark exactly, but its rendered ink mass sits 2.00px left of the container's centre (band 1.25px) -- it will read as misaligned however correct the CSS is",
+   "severity": "medium",
+   "verdict": "FAIL"
   }
  ],
  "overflow-clip": [
   {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-centre-v",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "vertical ink offset is +3.23px, but this mark is a text glyph and its vertical ink position is set by the font's baseline metrics, which no artifact here carries. Vertical centring is UNVERIFIED",
+   "severity": "low",
+   "verdict": "INDETERMINATE",
+   "routeTo": "optical-alignment"
   }
  ],
  "radius-drift": [
   {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-centre-v",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "vertical ink offset is +3.23px, but this mark is a text glyph and its vertical ink position is set by the font's baseline metrics, which no artifact here carries. Vertical centring is UNVERIFIED",
+   "severity": "low",
+   "verdict": "INDETERMINATE",
+   "routeTo": "optical-alignment"
   }
  ],
  "spacing-gap": [
   {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-centre-v",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "vertical ink offset is +3.23px, but this mark is a text glyph and its vertical ink position is set by the font's baseline metrics, which no artifact here carries. Vertical centring is UNVERIFIED",
+   "severity": "low",
+   "verdict": "INDETERMINATE",
+   "routeTo": "optical-alignment"
   }
  ],
  "token-color-drift": [
   {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-centre-v",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "vertical ink offset is +3.23px, but this mark is a text glyph and its vertical ink position is set by the font's baseline metrics, which no artifact here carries. Vertical centring is UNVERIFIED",
+   "severity": "low",
+   "verdict": "INDETERMINATE",
+   "routeTo": "optical-alignment"
   }
  ],
  "touch-target": [
   {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-centre-v",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "vertical ink offset is +3.23px, but this mark is a text glyph and its vertical ink position is set by the font's baseline metrics, which no artifact here carries. Vertical centring is UNVERIFIED",
+   "severity": "low",
+   "verdict": "INDETERMINATE",
+   "routeTo": "optical-alignment"
   }
  ],
  "type-scale": [
   {
-   "rule": "xcheck-optical-centre",
-   "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2)",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 1.2px left and 0.4px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
-  },
-  {
-   "rule": "xcheck-optical-centre",
+   "rule": "xcheck-optical-centre-v",
    "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
-   "detail": "the DOM centres this box exactly, but its rendered ink sits 2.2px left and 1.9px up of the geometric centre -- it will read as misaligned however correct the CSS is",
-   "severity": "medium"
+   "detail": "vertical ink offset is +2.23px, but this mark is a text glyph and its vertical ink position is set by the font's baseline metrics, which no artifact here carries. Vertical centring is UNVERIFIED",
+   "severity": "low",
+   "verdict": "INDETERMINATE",
+   "routeTo": "optical-alignment"
   }
  ]
 }
