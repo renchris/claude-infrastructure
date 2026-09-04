@@ -86,6 +86,14 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-04 — drain recycle #301 (pane 27, the retired chain): `deploy-live.sh` enforced a
+  threshold it did not print.** Its time arm compared FLOORED hours (`[ $((age/3600)) -gt 6 ]`), so it
+  enforced 25200s while every line it prints says 6h — a 3599s band per cycle in which a freeze took
+  the benign `exit 0` and wrote no page. Found by driving the 🚀 rung's own converge: at age 24042s it
+  said "inside the degrade budget (25 / 6h)" while `wrap-ledger` said PAST, and `bin/cc-blockers:673`
+  reads the SAME env var and already compares seconds. Fixed (seconds compared, hours display-only,
+  rendered h+m); `tests/deploy-live.bats` +L3b, 144 ok; `mut301.py` reds L3b alone. **No successor is
+  fired: pane 27 is retired by `0b4279107f2e`, lane `infra` replaces it. 0 rows closed, 0 filed.**
 - **2026-09-04 12:40Z — THE CHAIN IS REBUILT, NOT RECYCLED (lead session 53f08288; plan
   `docs/plans/BACKLOG_ZERO_2026-09-04.md`).** Measured: #250–#298 = 49 links, **7 rows closed, 105
   filed**, ~$27 of quota per link; the brief reached 3,366 lines with ZERO occurrences of `cc-backlog
