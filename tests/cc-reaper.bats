@@ -1442,7 +1442,7 @@ hold_lock() { mkdir -p "$CC_REAPER_LOCKDIR"; printf '%s\n' "$1" > "$CC_REAPER_LO
 
 @test "sweep lock: a DEAD holder's lock is broken, the sweep proceeds (a crash cannot dormant it)" {
   mock_classify active "$D/clean" 10 no PANE-1
-  mkdir -p "$CC_REAPER_LOCKDIR"; printf '999998\n' > "$CC_REAPER_LOCKDIR/pid"
+  mkdir -p "$CC_REAPER_LOCKDIR"; printf '9999998\n' > "$CC_REAPER_LOCKDIR/pid"
   printf 'Fri Jan  1 00:00:00 2027\n' > "$CC_REAPER_LOCKDIR/lstart"
   touch -t 202601010000 "$CC_REAPER_LOCKDIR"           # age past the stamp grace
   run "$R" sweep --reap
@@ -1550,62 +1550,109 @@ EOF
          CC_REAPER_GARBAGE_KILL="$D/gs-killer" KILL_LOG="$KLOG" \
          CC_REAPER_WATCHDOG_DIR="$D/gs-wd"
   : > "$KLOG"
-  # pid ppid etime ucomm — the closed world. 9xxxx pids never exist on the host, so the KILL
-  # escalation pass (which does a REAL kill -0 existence check) skips them by construction.
+  # pid ppid etime ucomm — the closed world.
+  #
+  # THE PID SPACE IS PART OF THE FIXTURE, AND A 5-DIGIT PID WAS INSIDE THE HOST'S (2026-09-04).
+  # This block used to say "9xxxx pids never exist on the host, so the KILL escalation pass (which
+  # does a REAL kill -0 existence check) skips them by construction". The seam
+  # CC_REAPER_GARBAGE_KILL replaces kill(1) at the SIGNAL, but the escalation loop's `kill -0`
+  # liveness probe (bin/cc-reaper, `if [ "$reap" = 1 ] && [ "${#_GS_T_PID[@]}" -gt 0 ]`) is NOT
+  # behind it — it is a real syscall against the real process table, and it is the only thing
+  # standing between a fixture pid and a KILL row in the collector log.
+  #
+  # macOS allocates pids in 1..99999 — so 90001..90018 were not "never on the host", they were
+  # ORDINARY host pids. This file's own kill-discipline comment measures the desk box at ~40 pids/s,
+  # wrapping that whole space in ~41 min, i.e. every one of these pids is handed to a real process
+  # roughly once per postland corpus run. When one was live at sweep time, `kill -0` succeeded, the
+  # escalation ran, and the exact-set assertion in "garbage --reap: exactly the residue dies" ("the
+  # KILL escalation reached only the one pid that truly exists") saw a second pid and went RED.
+  # That is a post-land RED with no defect in the subject at all, on a box the fixture assumed away
+  # — the same shape as the live-$HOME and ambient-CC_BEAT_DIR leaks recorded in setup(). It could
+  # not reproduce on Linux, where pid_max is 32768-4194304 and low pids are allocated first.
+  #
+  # THE FIX IS TO LEAVE THE PID SPACE ENTIRELY, not to widen the assertion. Every sentinel pid here
+  # is 7 digits: above macOS's 99999 ceiling AND above Linux's 4194304 (2^22) pid_max ceiling, so
+  # `kill -0` returns ESRCH on every platform BY CONSTRUCTION rather than by luck. The dead-lead
+  # sentinels below (9999997/9999998/9999999) are the same class and moved with them — 999999 was
+  # inside Linux's ceiling, the identical leak pointed at the other platform.
+  # RULE FOR A FUTURE EDITOR: a hardcoded pid in this suite must be >= 4194305, or it is a fixture
+  # that reads the host.
   cat > "$GA" <<'EOF'
-90001 1 25:00 ps
-90002 1 00:30 ps
-90003 1 45:00 zsh
-90004 1 45:00 zsh
-90014 90004 20:00 claude.exe
-90005 1 45:00 bash
-90006 1 45:00 bash
-90007 555 40:00 bash
-90008 556 40:00 bash
-90018 90008 39:00 claude.exe
-90013 1 45:00 bash
-90009 555 40:00 bash
+9000001 1 25:00 ps
+9000002 1 00:30 ps
+9000003 1 45:00 zsh
+9000004 1 45:00 zsh
+9000014 9000004 20:00 claude.exe
+9000005 1 45:00 bash
+9000006 1 45:00 bash
+9000007 555 40:00 bash
+9000008 556 40:00 bash
+9000018 9000008 39:00 claude.exe
+9000013 1 45:00 bash
+9000009 555 40:00 bash
 EOF
   cat > "$GB" <<'EOF'
-90001 ps -A -o pid= -o ppid=
-90002 ps -A -o pid= -o ppid=
-90003 -zsh
-90004 -zsh
-90014 /Users/x/.claude-220/node_modules/.bin/claude --model m
-90005 bash /Users/x/Development/claude-infrastructure/scripts/lead-supervisor.sh --daemon
-90006 bash /Users/x/.claude/hooks/session-register.sh
-90007 bash /Users/x/.claude/bin/cc-close-attrib /Users/x/.claude-220/node_modules/.bin/claude --model m
-90008 bash /Users/x/.claude/bin/cc-close-attrib /Users/x/.claude-220/node_modules/.bin/claude --model m
-90018 /Users/x/.claude-220/node_modules/.bin/claude --model m
-90013 bash /Users/x/.claude/hooks/lead-crash-watchdog.sh
-90009 bash /opt/homebrew/Cellar/bats-core/1.13.0/libexec/bats-core/bats tests/account-cliff-routing.bats tests/cc-close-attrib.bats tests/cc-reaper.bats
+9000001 ps -A -o pid= -o ppid=
+9000002 ps -A -o pid= -o ppid=
+9000003 -zsh
+9000004 -zsh
+9000014 /Users/x/.claude-220/node_modules/.bin/claude --model m
+9000005 bash /Users/x/Development/claude-infrastructure/scripts/lead-supervisor.sh --daemon
+9000006 bash /Users/x/.claude/hooks/session-register.sh
+9000007 bash /Users/x/.claude/bin/cc-close-attrib /Users/x/.claude-220/node_modules/.bin/claude --model m
+9000008 bash /Users/x/.claude/bin/cc-close-attrib /Users/x/.claude-220/node_modules/.bin/claude --model m
+9000018 /Users/x/.claude-220/node_modules/.bin/claude --model m
+9000013 bash /Users/x/.claude/hooks/lead-crash-watchdog.sh
+9000009 bash /opt/homebrew/Cellar/bats-core/1.13.0/libexec/bats-core/bats tests/account-cliff-routing.bats tests/cc-close-attrib.bats tests/cc-reaper.bats
 EOF
 }
 
 @test "garbage --reap: exactly the residue dies — orphan ps/zsh/bash + stuck wrapper; nothing protected" {
   mk_garbage_fixtures
-  # dead-lead watchdog: lead 999999 is dead by construction; the daemon pid must be LIVE for the
+  # dead-lead watchdog: lead 9999999 is dead by construction; the daemon pid must be LIVE for the
   # arm to bother. A CHILD we spawn, never "$$": this test's own pid is an ANCESTOR of the sweep it
   # is about to run, and the arm now refuses those outright (see the ancestor case below), so
   # asserting a TERM on "$$" would from here on assert the guard is broken.
   sleep 120 & GSPID=$!
-  printf '%s' "$GSPID" > "$D/gs-wd/sid-a.daemon"; printf '999999' > "$D/gs-wd/sid-a.pid"
+  printf '%s' "$GSPID" > "$D/gs-wd/sid-a.daemon"; printf '9999999' > "$D/gs-wd/sid-a.pid"
   # a watchdog whose daemon is ALREADY dead must be ignored (nothing to reap)
-  printf '999998' > "$D/gs-wd/sid-b.daemon"; printf '999997' > "$D/gs-wd/sid-b.pid"
+  printf '9999998' > "$D/gs-wd/sid-b.daemon"; printf '9999997' > "$D/gs-wd/sid-b.pid"
   run "$R" garbage --reap
   kill "$GSPID" 2>/dev/null || true
   [ "$status" -eq 0 ]
   # exact TERM set over the closed world:
-  #   90001 orphan-ps (25:00 ≥ 60s) · 90003 orphan-zsh (no claude below) ·
-  #   90006 orphan-bash (not whitelisted) · 90007 stuck-wrapper (no live claude child) · the child watchdog
+  #   9000001 orphan-ps (25:00 ≥ 60s) · 9000003 orphan-zsh (no claude below) ·
+  #   9000006 orphan-bash (not whitelisted) · 9000007 stuck-wrapper (no live claude child) · the child watchdog
   # and the protections each have a twin candidate that must NOT appear:
-  #   90002 too-young ps · 90004 zsh WITH a live claude child · 90005 whitelisted daemon ·
-  #   90008 wrapper WITH a live claude child · 90013 the watchdog class is file-driven, never argv-driven
+  #   9000002 too-young ps · 9000004 zsh WITH a live claude child · 9000005 whitelisted daemon ·
+  #   9000008 wrapper WITH a live claude child · 9000013 the watchdog class is file-driven, never argv-driven
   got_terms="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
-  want_terms="$(printf '%s\n' 90001 90003 90006 90007 "$GSPID" | sort -n | tr '\n' ' ')"
+  want_terms="$(printf '%s\n' 9000001 9000003 9000006 9000007 "$GSPID" | sort -n | tr '\n' ' ')"
   [ "$got_terms" = "$want_terms" ]
   # the KILL escalation reached only the one pid that truly exists (the child)
   ! awk '$1=="KILL"{print $2}' "$KLOG" | grep -qvx "$GSPID"
+}
+
+# THE RATCHET FOR THE ASSERTION DIRECTLY ABOVE. That last line is the only exact-set assertion in
+# this suite over the KILL pass, and it holds only while every fixture pid is unreachable by the
+# REAL `kill -0` the escalation loop runs (the collector seam does not cover that probe — see
+# mk_garbage_fixtures). While the fixture used 5-digit pids that invariant was a platform accident:
+# true on Linux, false on macOS, where 1..99999 IS the pid space. This test asserts the invariant
+# itself, deterministically and on every platform, so a future editor who writes a small pid into
+# the closed world is told WHY here instead of watching one assertion go intermittently red on one
+# box. 4194304 is Linux's 2^22 pid_max ceiling — the highest of any platform this suite runs on.
+@test "garbage fixtures live OUTSIDE the host pid space — the KILL exact-set assertion depends on it" {
+  mk_garbage_fixtures
+  while read -r p _; do
+    [ -n "$p" ] || continue
+    [ "$p" -gt 4194304 ]                 # above every platform's pid ceiling, not merely above this one's
+    ! kill -0 "$p" 2>/dev/null || false  # …and therefore ESRCH by construction, never by luck
+  done < "$GA"
+  # the dead-lead sentinels are the same class: the watchdog branch requires the LEAD pid to be dead
+  for p in 9999997 9999998 9999999; do
+    [ "$p" -gt 4194304 ]
+    ! kill -0 "$p" 2>/dev/null || false
+  done
 }
 
 # ── THE ANCESTOR GUARD (2026-08-15, backlog 8efd655b0fe1). The kill discipline enumerates what must
@@ -1618,10 +1665,10 @@ EOF
 @test "garbage: an ANCESTOR of the sweep is REFUSED, and a same-shaped non-ancestor is not" {
   mk_garbage_fixtures
   # sid-anc: this test's pid — an ancestor of the cc-reaper the next line runs. MUST be refused.
-  printf '%s' "$$" > "$D/gs-wd/sid-anc.daemon"; printf '999999' > "$D/gs-wd/sid-anc.pid"
+  printf '%s' "$$" > "$D/gs-wd/sid-anc.daemon"; printf '9999999' > "$D/gs-wd/sid-anc.pid"
   # sid-ctl: a child we spawn — same class, same fixture shape, NOT an ancestor. MUST be signalled.
   sleep 120 & GSPID=$!
-  printf '%s' "$GSPID" > "$D/gs-wd/sid-ctl.daemon"; printf '999998' > "$D/gs-wd/sid-ctl.pid"
+  printf '%s' "$GSPID" > "$D/gs-wd/sid-ctl.daemon"; printf '9999998' > "$D/gs-wd/sid-ctl.pid"
   run "$R" garbage --reap
   kill "$GSPID" 2>/dev/null || true
   [ "$status" -eq 0 ]
@@ -1644,20 +1691,20 @@ EOF
 @test "garbage: an in-progress land is never collected, and an unrelated orphan beside it still is" {
   mk_garbage_fixtures
   cat > "$GA" <<'EOF'
-90101 1 45:00 bash
-90102 1 45:00 bash
-90103 1 45:00 bash
+9000101 1 45:00 bash
+9000102 1 45:00 bash
+9000103 1 45:00 bash
 EOF
   cat > "$GB" <<'EOF'
-90101 bash scripts/ship-land.sh
-90102 /bin/bash /Users/x/.claude/scripts/desk-land.sh --branch claude/fire-20260812T120520Z-80623-1
-90103 /bin/bash /Users/x/some/unrelated/orphan.sh
+9000101 bash scripts/ship-land.sh
+9000102 /bin/bash /Users/x/.claude/scripts/desk-land.sh --branch claude/fire-20260812T120520Z-80623-1
+9000103 /bin/bash /Users/x/some/unrelated/orphan.sh
 EOF
   run "$R" garbage --reap
   [ "$status" -eq 0 ]
   got="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
-  # the control (90103) fired, so the fixture reaches the actuator; the two lands did not.
-  [ "$got" = "90103 " ]
+  # the control (9000103) fired, so the fixture reaches the actuator; the two lands did not.
+  [ "$got" = "9000103 " ]
 }
 
 # ── THE WHITELIST BOUND TO ONE CLASS OUT OF FOUR (2026-08-17). After the land path was whitelisted,
@@ -1670,21 +1717,21 @@ EOF
 @test "garbage: the whitelist reaches a daemon invoked THROUGH timeout, and unrelated tools still die" {
   mk_garbage_fixtures
   cat > "$GA" <<'EOF'
-90201 1 10:00 timeout
-90202 1 10:00 timeout
-90203 1 10:00 sleep
+9000201 1 10:00 timeout
+9000202 1 10:00 timeout
+9000203 1 10:00 sleep
 EOF
   cat > "$GB" <<'EOF'
-90201 /opt/homebrew/bin/timeout -k 10 900 bash /Users/x/.claude/scripts/postland-verify.sh --run-if-needed
-90202 /opt/homebrew/bin/timeout -k 10 900 bash /Users/x/some/unrelated/thing.sh
-90203 sleep 3000
+9000201 /opt/homebrew/bin/timeout -k 10 900 bash /Users/x/.claude/scripts/postland-verify.sh --run-if-needed
+9000202 /opt/homebrew/bin/timeout -k 10 900 bash /Users/x/some/unrelated/thing.sh
+9000203 sleep 3000
 EOF
   run "$R" garbage --reap
   [ "$status" -eq 0 ]
   got="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
-  # 90201 is whitelisted THROUGH its bound and must survive; 90202 (same shape, unwhitelisted
-  # payload) and 90203 (a bare tool) are the controls that prove the arm still collects.
-  [ "$got" = "90202 90203 " ]
+  # 9000201 is whitelisted THROUGH its bound and must survive; 9000202 (same shape, unwhitelisted
+  # payload) and 9000203 (a bare tool) are the controls that prove the arm still collects.
+  [ "$got" = "9000202 9000203 " ]
 }
 
 # ── THE CLOUD LAND PATH WAS THE THIRD SPELLING (2026-09-01). The two fixes above named the land
@@ -1702,26 +1749,26 @@ EOF
 @test "garbage: the CLOUD land sweep survives as both wrapper and payload, and unrelated orphans still die" {
   mk_garbage_fixtures
   cat > "$GA" <<'EOF'
-90301 1 45:00 bash
-90302 1 10:00 timeout
-90303 1 45:00 bash
-90304 1 45:00 bash
-90305 1 10:00 timeout
+9000301 1 45:00 bash
+9000302 1 10:00 timeout
+9000303 1 45:00 bash
+9000304 1 45:00 bash
+9000305 1 10:00 timeout
 EOF
   cat > "$GB" <<'EOF'
-90301 bash /Users/x/Development/claude-infrastructure/scripts/cloud-return.sh --sweep
-90302 /opt/homebrew/bin/timeout -k 10 900 bash /Users/x/Development/claude-infrastructure/scripts/cloud-return.sh --sweep
-90303 /bin/bash /Users/x/Development/claude-infrastructure/scripts/cloud-reconcile.sh --all
-90304 /bin/bash /Users/x/some/unrelated/orphan.sh
-90305 /opt/homebrew/bin/timeout -k 10 900 bash /Users/x/some/unrelated/thing.sh
+9000301 bash /Users/x/Development/claude-infrastructure/scripts/cloud-return.sh --sweep
+9000302 /opt/homebrew/bin/timeout -k 10 900 bash /Users/x/Development/claude-infrastructure/scripts/cloud-return.sh --sweep
+9000303 /bin/bash /Users/x/Development/claude-infrastructure/scripts/cloud-reconcile.sh --all
+9000304 /bin/bash /Users/x/some/unrelated/orphan.sh
+9000305 /opt/homebrew/bin/timeout -k 10 900 bash /Users/x/some/unrelated/thing.sh
 EOF
   run "$R" garbage --reap
   [ "$status" -eq 0 ]
   got="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
-  # 90301-90303 are the land path in its three live spellings and must survive. 90304 and 90305 are
+  # 9000301-9000303 are the land path in its three live spellings and must survive. 9000304 and 9000305 are
   # the controls: same two shapes, unwhitelisted payload, and they prove the arm still collects.
-  # RED before the fix: 90301, 90302 and 90303 appear in this list too.
-  [ "$got" = "90304 90305 " ]
+  # RED before the fix: 9000301, 9000302 and 9000303 appear in this list too.
+  [ "$got" = "9000304 9000305 " ]
 }
 
 # ── THE PID THAT CHANGED HANDS (2026-08-16). The kill-time re-verification checked `ucomm` only, and
@@ -1769,7 +1816,7 @@ EOF
 
 @test "garbage DRY-RUN reports the refusal too — the two modes may not disagree" {
   mk_garbage_fixtures
-  printf '%s' "$$" > "$D/gs-wd/sid-anc.daemon"; printf '999999' > "$D/gs-wd/sid-anc.pid"
+  printf '%s' "$$" > "$D/gs-wd/sid-anc.daemon"; printf '9999999' > "$D/gs-wd/sid-anc.pid"
   run "$R" garbage
   [ "$status" -eq 0 ]
   # A dry run that printed "would reap" over a pid REAP refuses is a false report of what happens.
@@ -1788,15 +1835,15 @@ EOF
   mk_garbage_fixtures
   run "$R" garbage
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q 'would reap.*orphan-ps pid=90001'
-  echo "$output" | grep -q 'would reap.*stuck-wrapper pid=90007'
+  echo "$output" | grep -q 'would reap.*orphan-ps pid=9000001'
+  echo "$output" | grep -q 'would reap.*stuck-wrapper pid=9000007'
   [ ! -s "$KLOG" ]                                     # the collector was never invoked
 }
 
 @test "stuck-wrapper is ANCHORED: the wrapper dies, a corpus that merely NAMES it survives" {
-  # ONE CLOSED WORLD, BOTH DIRECTIONS. 90007 is a genuine stuck `cc-close-attrib` wrapper and must
+  # ONE CLOSED WORLD, BOTH DIRECTIONS. 9000007 is a genuine stuck `cc-close-attrib` wrapper and must
   # still be collected — without that half, an over-wide anchor that collects NOTHING would pass.
-  # 90009 is the real-world shape that was being eaten: postland-verify runs its corpus as
+  # 9000009 is the real-world shape that was being eaten: postland-verify runs its corpus as
   # `bash …/bats <558 test files>`, and one of those files is `tests/cc-close-attrib.bats`, so the
   # unanchored substring test matched a command line that merely NAMES this tool.
   #
@@ -1808,8 +1855,8 @@ EOF
   mk_garbage_fixtures
   run "$R" garbage
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q 'would reap.*stuck-wrapper pid=90007' || false   # the wrapper still dies
-  ! echo "$output" | grep -q 'pid=90009' || false                           # the corpus survives
+  echo "$output" | grep -q 'would reap.*stuck-wrapper pid=9000007' || false   # the wrapper still dies
+  ! echo "$output" | grep -q 'pid=9000009' || false                           # the corpus survives
 }
 
 @test "garbage: CC_REAPER_GARBAGE=0 kill switch disables the arm" {
@@ -2879,20 +2926,20 @@ EOF
 @test "garbage: the mailbox wake-arm wrapper is never collected, and an unrelated orphan beside it still is" {
   mk_garbage_fixtures
   cat > "$GA" <<'FIX'
-90301 1 45:00 bash
-90302 1 45:00 bash
-90303 1 45:00 bash
+9000301 1 45:00 bash
+9000302 1 45:00 bash
+9000303 1 45:00 bash
 FIX
   cat > "$GB" <<'FIX'
-90301 /bin/bash /Users/x/.claude/hooks/mailbox-wake-arm.sh
-90302 /bin/bash /Users/x/.claude/hooks/../bin/cc-await-ping 388 --timeout 14340 --interval 15
-90303 /bin/bash /Users/x/some/unrelated/orphan.sh
+9000301 /bin/bash /Users/x/.claude/hooks/mailbox-wake-arm.sh
+9000302 /bin/bash /Users/x/.claude/hooks/../bin/cc-await-ping 388 --timeout 14340 --interval 15
+9000303 /bin/bash /Users/x/some/unrelated/orphan.sh
 FIX
   run "$R" garbage --reap
   [ "$status" -eq 0 ]
   got="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
-  # the control (90303) fired, so the fixture reaches the actuator; both wake-path halves did not.
-  [ "$got" = "90303 " ]
+  # the control (9000303) fired, so the fixture reaches the actuator; both wake-path halves did not.
+  [ "$got" = "9000303 " ]
 }
 
 # ── livelocked (backlog aabf363ff409, operator-caught 2026-07-26) ──────────────────────────────────
