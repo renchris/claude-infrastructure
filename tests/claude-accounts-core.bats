@@ -1813,7 +1813,16 @@ assert 12.0 < r["burn_wk_ppd"] < 16.0, r          # ~14 %/day, i.e. the same rat
 assert "burn_wk_span_h" in r and r["burn_wk_span_h"] > 6.8, r
 assert "wk_strand_pp" in r, r
 assert 0.0 < r["wk_strand_pp"] < 5.0, r           # 40 + 0.583*100 = 98.3 -> ~1.7 pp die
-assert "burn_5h_ewma_ph" not in r, r              # S7 is a LATER wave and was not built here
+# UPDATED IN PLACE, not rewritten (S7 landed). The line here used to read
+#   assert "burn_5h_ewma_ph" not in r
+# which was a WAVE MARKER, not an invariant — it pinned "S7 has not happened yet", and the only
+# way to satisfy it after S7 is to un-ship S7. What it was PROTECTING is the thing below: the
+# weekly keys and the 5h keys are separate fields in separate units, and the whole S7 hazard is
+# one being written into the other. That is now asserted directly, which is what the case was for.
+assert "burn_5h_ewma_ph" in r, r
+assert r["burn_5h_ph"] == 0.0, r                  # session_pct is FLAT on this fixture
+assert r["burn_5h_ewma_ph"] == 0.0, r             # ...so both 5h rates read zero, in both units
+assert r["burn_wk_ewma_ph"] != r["burn_5h_ewma_ph"], r   # never the weekly rate under the 5h key
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }

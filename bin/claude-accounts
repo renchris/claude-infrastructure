@@ -1909,7 +1909,14 @@ def _su_projected(r, R):
     su = (r.get("session_pct") or 0) / 100.0
     if not _term_on("CC_ROUTE_PROJ"):
         return su
-    b = r.get("burn_5h_ph")
+    # S7/M1 — the roll-aware EWMA when it spoke, the incumbent single-pair rate otherwise.
+    # 🚨 THE /100 IS THE WHOLE HAZARD. `burn_5h_ewma_ph` is in %/h; `burn_5h_ph` is in
+    # fraction/h; `su` is a fraction. Reading the new key without the divide adds a number ~100x
+    # too large to a value in [0, 1], so `min(1.0, ...)` saturates on essentially every row and
+    # the fleet reads as uniformly under 5h pressure — a soften with a plausible story and no
+    # error anywhere. Two units is why it is two keys and not one (§5.2 S7 hazard 1).
+    e = r.get("burn_5h_ewma_ph")
+    b = (e / 100.0) if isinstance(e, (int, float)) else r.get("burn_5h_ph")
     if not isinstance(b, (int, float)) or b <= 0:
         return su
     ahead = _cliff_env("CC_ROUTE_PROJ_LOOKAHEAD_H", R.get("PROJ_LOOKAHEAD_H", PROJ_LOOKAHEAD_H))
@@ -2170,7 +2177,16 @@ def apply_burn(rows, cfg, samples=None):
             if 0.03 <= dh <= 1.5:
                 d = (b["session_pct"] - a["session_pct"]) / 100.0
                 if d >= 0:
+                    # KEPT POPULATED FOR ONE RELEASE (§5.2 S7). `burn_5h_ewma_ph` supersedes it,
+                    # but a key that vanishes takes its consumers down silently — _su_projected
+                    # falls back to the raw meter and no surface says why.
                     r["burn_5h_ph"] = d / dh
+        # S7/M1: the roll-aware 5h EWMA. Availability and roll-awareness, not accuracy — see the
+        # docstring's named blind spot, which is the burst regime the planner itself creates.
+        v5, span5 = burn_5h_ewma(ss, now)
+        r["burn_5h_span_h"] = span5
+        if v5 is not None:
+            r["burn_5h_ewma_ph"] = v5
         wk = [e for e in ss
               if now - e["_t"] <= 48.0 * 3600 and e.get("weekly_pct") is not None]
         if len(wk) >= 2:
@@ -2236,6 +2252,66 @@ def apply_burn(rows, cfg, samples=None):
             r["burn_ratio"] = ratio
             r["proj_end_pct"] = proj
             r["wall_risk"] = proj >= 100.0
+
+
+# ---- M1 — the roll-aware 5h EWMA (USAGE_TELEMETRY_100P §5.2 S7) --------------------------------
+SU_EWMA_LOOKBACK_H = 6.0    # trailing window read
+SU_EWMA_HL_H = 1.0          # half-life
+SU_EWMA_MIN_SPAN_H = 1.3    # RAW measured span below which +-1 pp quantization dominates
+SU_EWMA_MAX_DT_H = 1.0      # a wider pair is a gap in the series, not a measurement
+
+
+def burn_5h_ewma(samples_for_acct, now):
+    """Roll-aware EWMA of the 5h meter, in **%/h**, as (value|None, measured_span_h).
+
+    🚨 THE UNIT IS THE HAZARD, AND IT SHIPS UNDER A NEW KEY BECAUSE OF IT. This emits %/h.
+    `burn_5h_ph`, the field it supersedes, is fraction/h — `_su_projected` adds `b * ahead` to a
+    `su` in [0, 1]. Writing %/h into the old key saturates that sum to 1.0 on essentially every
+    row: a 100x error that does not look like an error, it looks like "every account is under 5h
+    pressure", i.e. a fleet-wide soften with a plausible story. The consumer divides by 100.
+
+    WHAT IT WINS, AND IT IS NOT ACCURACY. The incumbent takes the single newest adjacent pair, so
+    it is one quantization step wide and it DISCARDS the pair outright when the 5h window rolled
+    between the two samples (`d < 0`). Windows roll every five hours by construction, so the
+    incumbent goes blind on a fixed schedule. Here a roll is not a discard: the new window's level
+    IS the post-roll accrual, taken as a lower bound, exactly as burn_wk_ewma_ph does weekly.
+
+    🚨 NAMED BLIND SPOT, and it must not be quoted as accurate there: at session_pct >= 40 the
+    INCUMBENT is more accurate (MAE 0.0617 vs 0.0797) and this estimator over-projects by +3.6 pp.
+    That is the burst regime — the one M4' deliberately creates. The direction is soften-only and
+    therefore fail-safe for routing, but it is wrong, and §5.6 Q3 names the measurement that fixes
+    it. It reaches `_soft`'s SF multiplier (floored at SF_FLOOR, so it can never EXCLUDE) and the
+    desk lane's DESK_5H_FLOOR tier key; it does NOT reach `_excluded`, which reads the raw meter.
+
+    ABSTAIN (L2) on the RAW MEASURED SPAN — the sum of dt over usable pairs, never the weighted
+    span and never the requested lookback. Below SU_EWMA_MIN_SPAN_H a +-1 pp step exceeds 25% of
+    the 5h meter's realised mean. NEVER abstain on a roll: a roll is the case this exists for.
+
+    THE ROLL SPELLING IS LOAD-BEARING and must stay `_rolled`/`_reset_key` (minute-ROUNDED, S1a).
+    Under truncation the roll branch fires on 46.0% of pairs and injects an ABSOLUTE level as a
+    delta: MAE degrades 0.0282 -> 0.2110, i.e. 5.4x worse than the incumbent it replaces."""
+    ss = sorted((e for e in samples_for_acct or []
+                 if e.get("session_pct") is not None and e.get("_t") is not None
+                 and now - e["_t"] <= SU_EWMA_LOOKBACK_H * 3600.0),
+                key=lambda e: e["_t"])
+    num = den = span = 0.0
+    pairs = 0
+    for a, b in zip(ss, ss[1:]):
+        dt_h = (b["_t"] - a["_t"]) / 3600.0
+        if not (0 < dt_h <= SU_EWMA_MAX_DT_H):
+            continue
+        if _rolled(a, b, "session_reset_at", "session_pct"):
+            d = b["session_pct"]                       # the new window's level, a LOWER bound
+        else:
+            d = max(0.0, b["session_pct"] - a["session_pct"])
+        w = 2.0 ** (-((now - b["_t"]) / 3600.0) / SU_EWMA_HL_H)
+        num += w * d
+        den += w * dt_h
+        span += dt_h
+        pairs += 1
+    if pairs < 2 or span < SU_EWMA_MIN_SPAN_H or den <= 0:
+        return None, span
+    return num / den, span
 
 
 def pace_need_ppd(r):
