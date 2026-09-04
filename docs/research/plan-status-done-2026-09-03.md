@@ -127,7 +127,33 @@ broken.
 exact awk program against fixtures rather than by assertion. Its header comment now names the
 three-copy sync obligation the other two carry.
 
-`shellcheck -x` clean on all three.
+`shellcheck -x` clean on all three. `bats-shellcheck-lint`, `bats-assert-liveness`,
+`bats-kill-guard-lint` and `bats-testname-eval-lint` clean on both edited suites — the first of those
+caught a real SC1010 in the new code (`f="$(tracked_plan done)"`, where the bare word parses as the
+loop keyword), fixed by quoting.
+
+### The whole selected gate, with every failure attributed
+
+`scripts/gate-select.sh origin/main..HEAD` selects **222** suites — the transitive closure, mostly
+because `setup-plan-symlinks.sh` is a SessionStart hook. All 222 were run on this branch, and every
+suite that failed was then re-run on a detached `origin/main` worktree on the same box:
+
+```
+222 suites run · 58 with failures · 58 identical to trunk · 0 regressions
+```
+
+Two suites differed on a single run — `deathwatch-watchfile` (branch 8/1 vs trunk 7/3) and
+`tsv-field-collapse` (branch 33/1 vs trunk 32/2). In both the *branch* was the healthier side, and in
+both a 3× repeat run gave byte-identical results on branch and trunk (8/1 and 32/2 respectively). They
+are concurrency flake from two suite runners sharing the box, not signal.
+
+The large pre-existing red baseline on this VM (`cc-classify` 19/68, `cc-dispatch-v2` 0/17,
+`operator-readout` 61/43, …) is Linux-vs-macOS environment, not trunk breakage — these hooks target
+the operator's desk. It is reported here only to make "identical to trunk" a checkable claim.
+
+Independent of the suites, the alias is provably **inert against all existing state**: the only
+`status: done` fixture anywhere in the tree is the one added by this change, and the only plan in the
+corpus carrying the word is the one commit `f3161344` renames. Its sole effect is on future typos.
 
 ## 4. Dispatcher vintage
 
