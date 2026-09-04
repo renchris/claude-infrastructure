@@ -432,6 +432,66 @@ EOF
   ! grep -q 'HEAD:claude/fire-' "$BATS_TEST_TMPDIR/create.log"
 }
 
+# ── 17b-17e: the ping is the FIRST act, which is a different claim from 17's ORDERING ────────────
+# CLOUD_OBSERVABILITY.md §4.1/§8 step 2, backlog 0c8b39b67665. 17 pins `switch -c` before `push`
+# and would stay green over a payload that asks for both AT THE END — which is what this file said
+# for three weeks ("read this before you finish" / "push whatever you have before you finish").
+# That is a RETURN rail, and it cannot disambiguate absence: a VM that boots and dies, one that
+# never booted and one refused entitlement all reach the end with nothing to push, so all three
+# produce no ref and classify() files all three C1 NOT-STARTED. Only t=0 timing separates them, so
+# the timing is what these arms pin — each red on the pristine tree for a different reason.
+@test "17b the payload names the push as the session's FIRST ACT, not an end-of-session step" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: t" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ -s "$BATS_TEST_TMPDIR/create.log" ]
+  grep -qi 'BOOT PING' "$BATS_TEST_TMPDIR/create.log" \
+    || { echo "the payload carries no boot ping at all"; false; }
+  grep -qi 'FIRST ACT' "$BATS_TEST_TMPDIR/create.log" \
+    || { echo "the payload never tells the VM the push is its first act"; false; }
+}
+
+@test "17c the boot ping PRECEDES the return rail — completion timing must not be the only timing" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: t" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  local ping push ret
+  ping="$(grep -n 'BOOT PING' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  push="$(grep -n 'git push -u origin HEAD' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  ret="$(grep -n 'HOW TO RETURN YOUR WORK' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$ping" ] && [ -n "$push" ] && [ -n "$ret" ] \
+    || { echo "missing one of: boot ping / push / return rail (ping=$ping push=$push ret=$ret)"; false; }
+  # The FIRST push instruction has to sit under the ping, above the return block. Reversed, the
+  # only push a worker meets while reading top-down is the end-of-session one again.
+  [ "$ping" -lt "$push" ] || { echo "the ping must introduce the push (ping=$ping push=$push)"; false; }
+  [ "$push" -lt "$ret" ] || { echo "the first push must precede the return rail (push=$push ret=$ret)"; false; }
+}
+
+@test "17d the ping is a BARE REF CREATION — never an empty commit, which the lander replays onto trunk" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: t" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  # §16.1: reauthor_branch replays a branch's commits with commit-tree and replays an empty one
+  # happily, so `commit --allow-empty` would put one content-free commit on main per cloud fire.
+  # Eight of the nine stranded implementations of this row prescribed exactly that.
+  ! grep -q -- '--allow-empty' "$BATS_TEST_TMPDIR/create.log" \
+    || { echo "the payload prescribes an empty commit, which lands on trunk as noise"; false; }
+  grep -qi 'Do NOT make an empty commit' "$BATS_TEST_TMPDIR/create.log" \
+    || { echo "the payload never forbids the empty commit the row's own wording invites"; false; }
+}
+
+@test "17e the ping SAYS WHY — a bare order is the one an LLM drops when the task looks urgent" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: t" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  # The whole rail depends on an LLM obeying prose (the restrandings doc calls it the weaker
+  # discriminator for exactly this reason), so the reason has to travel with the instruction.
+  grep -qi 'never booted' "$BATS_TEST_TMPDIR/create.log" \
+    || { echo "the ping does not say what its absence would be confused with"; false; }
+  grep -qi 'NOT-STARTED' "$BATS_TEST_TMPDIR/create.log" \
+    || { echo "the ping does not name the verdict it exists to disambiguate"; false; }
+}
+
 @test "18 a fire whose preflight REFUSES never reaches the create — the quota is not spent" {
   cloud_acct; cloud_ccloud
   cloud_claude "Created cloud session: this create must never be reached" 0
