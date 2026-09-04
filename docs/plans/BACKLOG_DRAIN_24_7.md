@@ -86,6 +86,18 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-04 — recycle #300 (lane infra):** closed 07ac6d58d88d · blocked 159c2211b0f2,
+  eed2530a4165 · released 26d4010f1b22, 11fdba2b3148, 5bc548efd14d · landed c5e2eb5a5, e05a2fcf4 ·
+  `closed=7 closed_pre=1 closed_other=36 filed=9 net=-2 blocked=22 min=3 lane=local-drain project=claude-infrastructure floor=UNMET`.
+  07ac6d58d88d decided cc-pane `send`'s contract (ONE verb; control-only payload raw, anything else
+  through osa_type_verified) and deleted its typed-send-lint ratchet row. 26d4010f1b22 got its first
+  step: the census it demanded is 94 sites / 29 suites, and the one arm it MEASURED red is now
+  ordered on the reap's own completion record instead of a 3s clock. ⚠ THE FLOOR CANNOT READ ITSELF:
+  `cc-backlog`'s lane derivation returned EMPTY for my first close — ps under load 20+ yields an
+  empty ancestry row and the walk breaks with saw_claude=0, which is 2359 of 2604 `done` records
+  fleet-wide. Re-stamping with `CC_BACKLOG_LANE=local-drain` (the sanctioned explicit declaration)
+  is what made closed_pre read 1 rather than 0; every later close here used it. A successor that
+  does not set it will report floor=UNMET however many rows it closes.
 - **2026-09-04 — drain recycle #301 (pane 27, the retired chain): `deploy-live.sh` enforced a
   threshold it did not print.** Its time arm compared FLOORED hours (`[ $((age/3600)) -gt 6 ]`), so it
   enforced 25200s while every line it prints says 6h — a 3599s band per cycle in which a freeze took
