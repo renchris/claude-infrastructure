@@ -340,3 +340,39 @@ fire_hook() { # fire_hook <hook-path> <tool> <tool_input-json>
   run fire_hook "$linkdir/backup-before-write.sh" Edit "$(edit_grow "$idx" 100)"
   printf '%s' "$output" | jq -e '.hookSpecificOutput.permissionDecision == "deny"' >/dev/null
 }
+
+# ── PATH NORMALIZATION (added 2026-09-03) ────────────────────────────────────────────────────
+# mib_is_memory_index was a match over SPELLINGS, not over files. Three ways of naming the very
+# same index silently SKIPPED the gate while the plain spelling denied the identical edit — and
+# the third is the one that matters in production: the observed `Bash >>` appends use a
+# `cd .../memory && … >> MEMORY.md` RELATIVE form, which is exactly the spelling that skipped.
+# A gate reachable only by accident is the defect class this whole subject exists to close.
+
+@test "every spelling of the same index is in scope — /./ , // , and the RELATIVE form" {
+  mib_is_memory_index "/a/b/memory/MEMORY.md"
+  mib_is_memory_index "/a/b/memory/./MEMORY.md"
+  mib_is_memory_index "/a/b/memory//MEMORY.md"
+}
+
+@test "the relative spelling the Bash >> appends actually use is in scope" {
+  mkdir -p "$BATS_TEST_TMPDIR/proj/memory"
+  cd "$BATS_TEST_TMPDIR/proj"
+  mib_is_memory_index "memory/MEMORY.md"
+  mib_is_memory_index "./memory/MEMORY.md"
+}
+
+# NEGATIVE CONTROLS — normalization must not widen the gate onto files the loader never reads.
+# A repo file merely called MEMORY.md has no loader limit to breach, and denying its edit would
+# wedge unrelated work.
+@test "normalization does not widen scope: non-index paths still skip the gate" {
+  hasnt_idx() { if mib_is_memory_index "$1"; then return 1; fi; }
+  hasnt_idx "/a/b/notmemory/MEMORY.md"
+  hasnt_idx "/a/b/memory/OTHER.md"
+  hasnt_idx "/repo/MEMORY.md"
+  hasnt_idx "/a/b/memory/sub/MEMORY.md"
+}
+
+@test "mib_norm_path collapses without touching a path that is already canonical" {
+  [ "$(mib_norm_path /a/b/memory/MEMORY.md)" = "/a/b/memory/MEMORY.md" ]
+  [ "$(mib_norm_path /a//b/./memory//MEMORY.md)" = "/a/b/memory/MEMORY.md" ]
+}

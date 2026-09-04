@@ -114,8 +114,32 @@ mib_resulting_measure() {
 #   discriminator that covers every mirror without enumerating any of them. A repo file that merely
 #   happens to be called MEMORY.md is NOT in scope — this gate exists for the loader limit, and a
 #   file the loader never reads has no limit to breach.
+#
+# 🚨 NORMALIZE FIRST (2026-09-03). The bare glob below is a match over SPELLINGS, not over files,
+# so three ways of naming the very same index SILENTLY SKIPPED the gate while the plain spelling
+# denied the identical edit:
+#     <dir>/memory/./MEMORY.md     the `/./` breaks the literal `/memory/MEMORY.md` tail
+#     <dir>/memory//MEMORY.md      the doubled separator breaks it the same way
+#     memory/MEMORY.md             RELATIVE — `*/memory/MEMORY.md` needs a component BEFORE
+#                                  `/memory/`, and a leading `*` cannot supply one
+# The third is not hypothetical: the observed `Bash >>` appends use a `cd .../memory && … >>`
+# relative form, which is exactly the spelling that skips. A denylist over spellings is the defect;
+# normalizing the path to one canonical form and matching that is the fix.
+#
+# RESOLUTION BASE, STATED EXPLICITLY: a relative path is resolved against the CALLER'S $PWD, which
+# for a PreToolUse hook is the session cwd. This is pure string normalization on purpose — no
+# `readlink -f`, because the file may not exist yet (a first Write creates it) and BSD readlink
+# fails on a missing path, which would fail this discriminator OPEN on exactly the create case.
+mib_norm_path() {
+  local p="$1"
+  case "$p" in /*) : ;; *) p="$PWD/$p" ;; esac
+  while :; do case "$p" in *//*) p="${p//\/\///}" ;; *) break ;; esac; done
+  while :; do case "$p" in */./*) p="${p//\/.\///}" ;; *) break ;; esac; done
+  printf '%s' "$p"
+}
+
 mib_is_memory_index() {
-  case "$1" in */memory/MEMORY.md) return 0 ;; *) return 1 ;; esac
+  case "$(mib_norm_path "$1")" in */memory/MEMORY.md) return 0 ;; *) return 1 ;; esac
 }
 
 # mib_verdict <tool_name> <file_path> <tool_input_json>
