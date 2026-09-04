@@ -461,10 +461,17 @@ in_scan_set() { # $1=repo-relative path → 0 if this lint judges it
 # one because only one was ever counted.
 #
 # RESIDUAL, NAMED RATHER THAN WIDENED: qmask() is a quote/substitution masker, not a shell parser.
-# It does not join CONTINUATION lines (that gap is owned by ca97c678b18b and pipe258.py is a
-# working joiner nobody has wired in), and it treats a dangling quote as opening a context that
-# runs to end of line. Neither shows up in today numbers — LOST = 0 says the mask never eats an
-# operator pipe on this tree — but both are claims about a tree that grows.
+# It does not join CONTINUATION lines (pipe258.py is a working joiner nobody has wired in), and it
+# treats a dangling quote as opening a context that runs to end of line. Neither shows up in today
+# numbers — LOST = 0 says the mask never eats an operator pipe on this tree — but both are claims
+# about a tree that grows.
+# ⚠️ THE OWNER NAMED HERE WAS WRONG AND THE ID IS NOW SPENT, 2026-09-04. This paragraph said the
+# join gap "is owned by ca97c678b18b", and tests/pipefail-sigpipe-lint.bats repeated it. That row is
+# the FUNCTION-FINAL gap — condition key `pipefail-lint-function-final-pipeline` — and the
+# FOURTEENTH CORRECTION below CURED it (clause 4c, landed 75d1bd46; re-measured on the shipped
+# detector 2026-09-04, the shape reports beside a FIRE control). The continuation join is a
+# different gap and it has NO row: attributing it to a cured row is how a residual outlives the
+# thing that was supposed to carry it. File it under its own condition before citing an id for it.
 #
 # ── THAT RESIDUAL, MEASURED 2026-09-02, AND IT IS ONE RESIDUAL RATHER THAN TWO ─────────────────
 # The paragraph above names the two gaps as independent. They are not: the second is a CONSEQUENCE
