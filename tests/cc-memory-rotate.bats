@@ -217,11 +217,64 @@ mkbulk() {
   cmp -s "$d/MEMORY.md" "$BATS_TEST_TMPDIR/exh.before"
 }
 
-@test "min-keep floor stops the rotation short of the target" {
+# CONTRACT CHANGED 2026-09-03 — this test previously asserted the DEFECT. Its own name said so:
+# "min-keep floor stops the rotation SHORT OF THE TARGET", and it pinned
+# `verdict=rotated moved=2` on a fixture where two moves cannot reach TARGET. That is a partial
+# loss reported as a success: the breach persists AND two durable lessons have left the hot
+# surface for nothing. The selection loop decrements the projection by whatever each line weighs
+# and stops on REMAIN<=MIN_KEEP, so on a skewed index it drains cheap entries and leaves the
+# heavy ones. All-or-nothing replaces it; the floor is still pinned, by its effect on the verdict.
+@test "min-keep floor: a rotation that cannot reach the target moves NOTHING and names the floor" {
   d="$(mkmem floor)"; mkbulk "$d"
+  cp "$d/MEMORY.md" "$BATS_TEST_TMPDIR/floor.before"
   MEMORY_ROTATE_MIN_KEEP=8 run "$SCRIPT" "$d/MEMORY.md"
-  has "$output" 'verdict=rotated moved=2'        # 10 entries, floor 8 ⇒ exactly 2 move
-  [ "$(grep -c '^- \[' "$d/MEMORY.md")" -eq 8 ]
+  [ "$status" -eq 4 ]                            # 10 entries, floor 8 ⇒ at most 2 movable,
+  has "$output" 'verdict=exhausted'              # and 2 × ~151 B cannot reach TARGET from 1668 B
+  has "$output" 'bound=min_keep'                 # the diagnostic that sent three analyses wrong
+  has "$output" 'entries=10'
+  hasnt "$output" 'verdict=rotated'
+  [ "$(grep -c '^- \[' "$d/MEMORY.md")" -eq 10 ]
+  cmp -s "$d/MEMORY.md" "$BATS_TEST_TMPDIR/floor.before"
+}
+
+# POSITIVE CONTROL on the assertion above: all-or-nothing must not degrade into a blanket refusal.
+@test "min-keep floor still permits a rotation it does not block" {
+  d="$(mkmem floorok)"; mkbulk "$d"
+  run "$SCRIPT" "$d/MEMORY.md"                   # setup floor is 2 ⇒ 8 movable ⇒ TARGET reached
+  [ "$status" -eq 0 ]
+  has "$output" 'verdict=rotated'
+  [ "$(eff "$d/MEMORY.md")" -le 1000 ]
+}
+
+@test "hub protection counts BARE .md citations, not only [[wikilinks]]" {
+  d="$(mkmem hubbare)"; mkbulk "$d"
+  # Measured on reso's always-loaded project rules file: 0 wikilinks, 31 bare `name.md`
+  # citations. Four sibling topic files cite a01 by bare filename ⇒ inb>=4 ⇒ hub ⇒ must SURVIVE
+  # a rotation that succeeds around it (a01 is the oldest, so it would otherwise move first).
+  local i
+  for i in c1 c2 c3 c4; do
+    printf -- '---\nname: %s\ndescription: d\nmetadata:\n  type: project\n---\nsee a01.md\n' "$i" >"$d/$i.md"
+    touch -t "$OLD" "$d/$i.md"
+  done
+  run "$SCRIPT" "$d/MEMORY.md"
+  has "$output" 'verdict=rotated'
+  grep -qF '](a01.md)' "$d/MEMORY.md"
+}
+
+@test "the index and the demotion records never make an entry look like a hub" {
+  d="$(mkmem hubexcl)"; mkbulk "$d"
+  # MEMORY.md, MEMORY-ARCHIVE.md, the COLD file and every PRE-COMPACT snapshot carry a
+  # `](name.md)` link for EVERY entry BY CONSTRUCTION. If the bare-filename scan counted them,
+  # almost the whole index would cross the hub threshold in one step and this actuator would
+  # become a permanent no-op — the exact failure mode it exists to end. a01 is the oldest entry,
+  # so it moves first unless something wrongly protects it.
+  mkdir -p "$d/archive"
+  printf -- '- [a01](a01.md) — x\n- [a02](a02.md) — x\n' >"$d/MEMORY-ARCHIVE.md"
+  printf -- '- [a01](a01.md) — x\n' >"$d/archive/MEMORY_ARCHIVE_2026-H2-COLD.md"
+  printf -- '- [a01](a01.md) — x\n' >"$d/MEMORY_INDEX_PRE-COMPACT_2026-09-03.md"
+  run "$SCRIPT" "$d/MEMORY.md"
+  has "$output" 'verdict=rotated'
+  hasnt "$(cat "$d/MEMORY.md")" '](a01.md)'
 }
 
 @test "a fresh lock refuses; a stale lock is reclaimed" {

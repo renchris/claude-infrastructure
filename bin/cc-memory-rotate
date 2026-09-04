@@ -275,7 +275,40 @@ protect_reason() {
   fi
   mt=$(fmtime "$DIR/$f"); [ -n "$mt" ] || mt=$NOW
   if [ $(( NOW - mt )) -lt "$MIN_AGE_S" ]; then echo young; return 0; fi
-  inb=$(grep -lF -- "[[${nm}]]" "$DIR"/*.md 2>/dev/null | grep -cv "/${f}\$" || true)
+  # HUB SCAN, WIDENED 2026-09-03. Two blind spots, and routing makes both worse:
+  #   (1) it counted ONLY `[[wikilink]]` syntax. Measured on reso's always-loaded project rules
+  #       file: 0 wikilinks, 31 bare `name.md` citations — 31 live consumers invisible to the very
+  #       protection that exists to keep load-bearing rules hot.
+  #   (2) it scanned ONLY the memory dir, while the routing phase moves consumers OUT of that dir
+  #       by design — so every successfully routed rule would become hub=0 by construction.
+  #
+  # 🚨 THE INDEX AND THE DEMOTION RECORDS ARE EXCLUDED FROM THE BARE-FILENAME COUNT, and that
+  # exclusion is load-bearing: MEMORY.md, MEMORY-ARCHIVE.md and every COLD/snapshot file carry a
+  # `](name.md)` link for EVERY entry by construction. Counting them would put almost the whole
+  # index at inb>=3 in one step, converting a targeted protection into a universal keep and this
+  # actuator into a permanent no-op — the exact failure mode it was built to end.
+  # Built at function level, NOT inside the command substitution: a `case … continue` nested in
+  # `$( { … } | … )` is a parse error on bash 3.2 (`syntax error near unexpected token ';;'`).
+  _hits=$(grep -lF -- "[[${nm}]]" "$DIR"/*.md 2>/dev/null || true)
+  for _c in "$DIR"/*.md; do
+    [ -f "$_c" ] || continue
+    case "${_c##*/}" in MEMORY.md|MEMORY-ARCHIVE.md|MEMORY_ARCHIVE_*|MEMORY_INDEX_*) continue ;; esac
+    if grep -lF -- "$f" "$_c" >/dev/null 2>&1; then
+      _hits="$_hits
+$_c"
+    fi
+  done
+  if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ -d "$CLAUDE_PROJECT_DIR/.claude/rules" ]; then
+    _r=$(grep -lF -- "$f" "$CLAUDE_PROJECT_DIR"/.claude/rules/*.md 2>/dev/null || true)
+    if [ -n "$_r" ]; then
+      _hits="$_hits
+$_r"
+    fi
+  fi
+  inb=0
+  if [ -n "$_hits" ]; then
+    inb=$(printf '%s\n' "$_hits" | grep -v "/${f}\$" | sort -u | grep -c . || true)
+  fi
   case "$inb" in ''|*[!0-9]*) inb=0 ;; esac
   if [ "$inb" -ge 4 ]; then echo hub; return 0; fi
   return 0
@@ -382,7 +415,7 @@ while :; do
       vlog "keep [$r] ${f:-<line $li>}"
     else
       mt=$(fmtime "$DIR/$f"); [ -n "$mt" ] || mt=$NOW
-      ELIG="$ELIG$mt$TAB$li$TAB$f
+      ELIG="$ELIG$mt$TAB${#LINES[$li]}$TAB$li$TAB$f
 "
     fi
     j=$(( j + 1 ))
@@ -398,15 +431,24 @@ while :; do
   PROJ_L=$NL
   if [ "$HAVE_PTR" -eq 0 ]; then PROJ=$(( PROJ + ${#PTR_LINE} + 1 )); PROJ_L=$(( PROJ_L + 1 )); fi
   MOVE_LNOS=""; MOVED=0; REMAIN=$NENT
+  # Why the selection loop stopped: `floor` = it hit MIN_KEEP, `pool` = it ran out of eligible
+  # entries. That distinction is the whole diagnostic value of the exhausted census — see BOUND.
+  STOP_REASON=pool
+  # SIZE TERM ADDED 2026-09-03 (record is now mtime<TAB>size<TAB>lineno<TAB>file). Oldest-first
+  # stays the PRIMARY key — that is the ratified eviction policy and this is not the phase that
+  # changes it — but the tiebreak is now size DESCENDING rather than filename. Nothing anywhere
+  # ordered by size, while the loop below decrements the projection by whatever each line happens
+  # to weigh, so on a skewed index it drained cheap entries first and left the heavy ones. Filename
+  # remains the final tiebreak, so the order is still total and deterministic.
   if [ -n "$ELIG" ]; then
-    SORTED=$(printf '%s' "$ELIG" | sort -t "$TAB" -k1,1n -k3,3)
+    SORTED=$(printf '%s' "$ELIG" | sort -t "$TAB" -k1,1n -k2,2nr -k4,4)
   else
     SORTED=""
   fi
-  while IFS="$TAB" read -r _mt li f; do
+  while IFS="$TAB" read -r _mt _sz li f; do
     if [ -z "${li:-}" ]; then continue; fi
     if [ "$PROJ" -le "$TARGET" ] && [ "$PROJ_L" -le "$TARGET_LINES" ]; then break; fi
-    if [ "$REMAIN" -le "$MIN_KEEP" ]; then break; fi
+    if [ "$REMAIN" -le "$MIN_KEEP" ]; then STOP_REASON=floor; break; fi
     PROJ=$(( PROJ - ${#LINES[$li]} - 1 ))
     PROJ_L=$(( PROJ_L - 1 ))
     MOVE_LNOS="$MOVE_LNOS $li"
@@ -434,18 +476,18 @@ EOF
       if [ -z "${li:-}" ]; then continue; fi
       r2=$(protect_reason "$j2" "${LINES[$li]}" "$f" 2)
       if [ -z "$r2" ]; then
-        ELIG2="$ELIG2$mt$TAB$li$TAB$f
+        ELIG2="$ELIG2$mt$TAB${#LINES[$li]}$TAB$li$TAB$f
 "
       fi
     done <<EOF
 $TYPEKEPT
 EOF
     if [ -n "$ELIG2" ]; then
-      SORTED2=$(printf '%s' "$ELIG2" | sort -t "$TAB" -k1,1n -k3,3)
-      while IFS="$TAB" read -r _mt li f; do
+      SORTED2=$(printf '%s' "$ELIG2" | sort -t "$TAB" -k1,1n -k2,2nr -k4,4)
+      while IFS="$TAB" read -r _mt _sz li f; do
         if [ -z "${li:-}" ]; then continue; fi
         if [ "$PROJ" -le "$TARGET" ] && [ "$PROJ_L" -le "$TARGET_LINES" ]; then break; fi
-        if [ "$REMAIN" -le "$MIN_KEEP" ]; then break; fi
+        if [ "$REMAIN" -le "$MIN_KEEP" ]; then STOP_REASON=floor; break; fi
         PROJ=$(( PROJ - ${#LINES[$li]} - 1 ))
         PROJ_L=$(( PROJ_L - 1 ))
         MOVE_LNOS="$MOVE_LNOS $li"
@@ -457,9 +499,39 @@ EOF
     fi
   fi
 
+  # ── ALL-OR-NOTHING (2026-09-03) ────────────────────────────────────────────────────────────
+  # A PARTIAL move is strictly worse than no move, and it reports as SUCCESS. The loops above
+  # decrement the projection by whatever each line happens to weigh and stop on REMAIN<=MIN_KEEP,
+  # so on a skewed index they can move many cheap entries, never reach TARGET, and print
+  # `moved=11` — which reads as healed while the breach persists AND eleven durable lessons have
+  # left the hot surface for nothing. Demonstrated in a lab at the measured real-index skew.
+  # If the projection does not reach BOTH targets, move NOTHING and fall through to the exhausted
+  # census below, which now names what actually bound.
+  # This is also the precondition for lowering the keep-floor: without it, that change converts
+  # "the rotor does nothing" into "the rotor destroys the cheapest entries and still does nothing".
+  if [ "$MOVED" -gt 0 ] && { [ "$PROJ" -gt "$TARGET" ] || [ "$PROJ_L" -gt "$TARGET_LINES" ]; }; then
+    vlog "all-or-nothing: projection ${PROJ}/${TARGET} bytes ${PROJ_L}/${TARGET_LINES} lines after ${MOVED} candidate(s) — moving NOTHING"
+    MOVE_LNOS=""; MOVED=0; STAGE2=0; SHORT_PARTIAL=1
+  fi
+
   if [ "$MOVED" -eq 0 ]; then
-    printf 'verdict=exhausted size=%s lines=%s kept: tail=%s type=%s hub=%s young=%s marker=%s dangling=%s pinned=%s unparseable=%s min_keep=%s\n' \
-      "$SIZE" "$NLINES" "$K_TAIL" "$K_TYPE" "$K_HUB" "$K_YOUNG" "$K_MARK" "$K_DANGLING" "$K_PIN" "$K_PARSE" "$MIN_KEEP"
+    # BOUND names the true cause in one token. Three separate analyses — including
+    # commands/compact-memory.md's own — read this census and went to the WRONG line of code,
+    # because `min_keep=40` was the only number printed and it looked like the culprit. On the
+    # index that motivated this, the real bound is `protections` (the feedback-*/reference-* name
+    # keep covers 25 of 28 entries and never yields at any stage); the floor is never even reached.
+    NELIG=0
+    if [ -n "$ELIG" ]; then NELIG=$(printf '%s\n' "$ELIG" | grep -c . || true); fi
+    BOUND=protections
+    if [ "$NELIG" -gt 0 ] || [ "${SHORT_PARTIAL:-0}" -eq 1 ]; then
+      # An eligible pool existed, so protections are NOT what bound this run. Name which of the
+      # two real causes it was: the keep-floor cut the selection short, or the pool drained and
+      # still could not reach TARGET.
+      if [ "${STOP_REASON:-pool}" = floor ]; then BOUND=min_keep; else BOUND=target-unreachable; fi
+    fi
+    printf 'verdict=exhausted size=%s lines=%s entries=%s eligible=%s bound=%s kept: tail=%s type=%s hub=%s young=%s marker=%s dangling=%s pinned=%s unparseable=%s min_keep=%s\n' \
+      "$SIZE" "$NLINES" "$NENT" "$NELIG" "$BOUND" \
+      "$K_TAIL" "$K_TYPE" "$K_HUB" "$K_YOUNG" "$K_MARK" "$K_DANGLING" "$K_PIN" "$K_PARSE" "$MIN_KEEP"
     exit 4
   fi
 
