@@ -86,6 +86,102 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-04 — drain recycle #298: method 270 — A CENSUS'S POPULATION IS NOT ITS PATHSPEC, IT IS
+  WHAT ITS WALK CAN REACH. AND A REPAIR TO AN INSTRUMENT IS ITSELF AN INSTRUMENT CLAIM THAT NOBODY
+  RE-RUNS.** ZERO rows closed, ZERO filed, ZERO reopened, ZERO updated. #297 fixed the SPELLING a
+  consumer census keys on — the assignment, never the path. This link asks the question underneath
+  it: can the census's POPULATION even be the thing that executes? On this box it cannot, by any
+  recursive grep, and the tree already contains both the correct statement of that fact and two
+  landed sentences that contradict it.
+  **THE DOCUMENTED REPAIR IS REFUTED, AND IT HAD THE SAME BLINDNESS AS THE DEFECT IT CORRECTED.**
+  `docs/proposals/ARMED_SUCCESSION_LIFECYCLE.md:423-425` records that a verifier caught a
+  zero-reader sweep using `grep -r`, which does not follow the symlinks in `~/.claude/bin`, and that
+  the sweep was **re-run with `grep -R`** and then listed among the load-bearing facts "re-checked at
+  source". Measured 2026-09-04T10:38:50Z over `~/.claude/{bin,scripts,hooks}`: **`grep -R` reaches 9
+  of 429 files — 2.1%** — and all nine are *real* files (four `__pycache__/*.pyc`, `bin/it2`,
+  `bin/kitty-pane-menu-native`, and the two strays the standing red already names). It opened **not
+  one** of the ~420 symlinked scripts. `find -L … -type f -exec grep` reaches all 429.
+  **The second sweep was a false negative by the SAME method as the first**, which is the class
+  `corrected-instrument-can-lie-again`: the repair was adopted on a verifier's word, never itself
+  run, and it converted an unknowing false negative into a BELIEVED-VERIFIED one at identical
+  coverage. The conclusion is not disproved by this; it is **unsupported by what was run**.
+  **A ONE-VARIABLE FIXTURE SETTLES IT, AND THE FIRST FIXTURE I BUILT COULD NOT.** Fixture B — a real
+  file plus a symlink whose target is OUTSIDE the walked tree, which is the live layer's actual
+  shape — is read by `-r` and by `-R` IDENTICALLY: one file, and neither ever emits the link's own
+  path, while `find -L` emits both. So "the target points outside the tree" is NOT the variable;
+  `-R` simply does not follow a walk-met symlink here (BSD grep 2.6.0-FreeBSD). Fixture A, whose
+  symlink target sat INSIDE the tree, is invalid in two independent ways at once and both were mine:
+  the ordinary walk reaches the target anyway, so a COUNT arm cannot separate "followed the link"
+  from "found the target directly"; and BSD `find -L` **de-duplicates**, omitting the link's own path
+  when its target is already reachable in-tree, so the PATH arm reads 0 **even for the instrument
+  that works** — the exact value a dead instrument returns. That arm was my POS control and it
+  refused at rc 94, which is the only reason the fixture was repaired rather than believed.
+  **THE TREE STATES THE FACT AND ITS CONTRADICTION, IN THREE PLACES, AND NOTHING RECONCILES THEM.**
+  CORRECT: `bin/cc-ctx-audit:242` — *"BSD `grep -R` sees only 7 of 407 files under `~/.claude` … and
+  its null is therefore not absence"* — and it built a symlink-following census because of it.
+  Measured today that reads 9 of 429; the drift is `__pycache__` and strays accreting, the sentence
+  holds, and my prediction of 7 was refused by the gate, correctly. FALSE: the
+  `ARMED_SUCCESSION_LIFECYCLE.md` clause above, and `docs/research/SESSION_CLOSE_AND_LAG_2026-07-26.md:19`.
+  **THE SECOND FALSE ONE RESTS A CRASH POST-MORTEM'S EXONERATION ON A 2.1% INSTRUMENT.** Its bullet
+  reads *"Not our own signal-senders. `pkill`/`killall`/`kill -TERM` appear **nowhere** in the live
+  `~/.claude/{hooks,bin,scripts}` tree (grep -R, symlink-following)"*. Re-asked with `find -L … -exec
+  grep -El`, those three directories carry those tokens in **29** files today — `cc-teardown`,
+  `cc-notify`, `gate-cleanup.sh`, `handoff-fire.sh`, `ship-land.sh` and `postland-verify.sh` among
+  them. **And the window matters, so it was asked twice:** at the checkout as of that document's own
+  date, `2a979c15158c`, the count is **12**, including `hooks/teammate-auto-shutdown.sh` and
+  `hooks/validate-bash.sh`. **The population was non-empty when the sentence was written — false
+  then, not merely stale now.** ⚠️ **The honest bound, and it is #297's shape repeated: this removes
+  the EVIDENCE, not automatically the CONCLUSION.** A file containing `pkill` is not a file that
+  killed those sessions, and §1.2's end-to-end verified class is untouched. What the correction says
+  is that "not our own signal-senders" must be re-established from REACHABILITY — which sender ran,
+  in the window — never from a recursive grep's null over a tree it cannot walk.
+  **BOTH SENTENCES ARE CORRECTED IN PLACE, PRESERVING THE ORIGINAL CLAIM ABOVE EACH CORRECTION**, so
+  the record shows what was believed and what refuted it.
+  **AND THE POPULATION GAP THE METHOD PREDICTS IS REAL, MEASURED, AND — THE BORING HALF — DEFENDED.**
+  Asking one needle of both populations: the CHECKOUT census names **41** files under `scripts/`, the
+  LIVE census **37**, live is a strict SUBSET (0 live-only), and the difference is **4**, every one
+  ABSENT-FROM-LIVE rather than stale: `bats-assert-liveness.py`, `growth-coverage.conf`,
+  `host-suites.manifest`, `offbox-excluded.manifest`. Partition asserted to sum. My prediction that
+  at least one would be a STALE live copy was refused; all four are simply not on the box.
+  **They are absent BY DESIGN and the design is enforced.** Each is a data/SSOT file whose consumer
+  resolves it through a readlink loop — `scripts/growth-coverage-lint.sh:72` is the sharp case,
+  `SSOT="${GROWTH_COVERAGE_SSOT:-$(dirname "$SELF")/growth-coverage.conf}"`, which is #291's scar
+  exactly. **Reading `_resolve_self` is not running it**, so it was run both ways: invoked through
+  its live symlink and through the checkout path, it resolves `ssot=` to the CHECKOUT both times and
+  emits BYTE-IDENTICAL output. The load-bearing arm is the NEGATIVE one — with
+  `GROWTH_COVERAGE_SSOT` pointed at a file that does not exist it exits **2** with *"SSOT unreadable
+  … FAIL-CLOSED"*, naming the file — because without it, "both invocations agree" is equally
+  consistent with a lint that never opens its SSOT at all. The enforcing guard is green and real:
+  `scripts/self-path-lint.sh --selftest` **32/32**, bare rc 0, *"clean — 387 shell file(s) scanned;
+  25 grandfathered, 0 new unresolved self-paths"*.
+  **INSTRUMENT FAULTS, FOUR, ALL MINE, NONE IN A SUBJECT, AND EVERY ONE SURFACED AS A REFUSAL.**
+  (1) The invalid fixture above, broken two ways at once. (2) A VERDICT line whose printed conclusion
+  required `rc == 0` when the question was whether two invocations AGREE — the lint exits 1 because
+  it legitimately REPORTS COVERAGE GAPS, so my own summary line printed NO over a result that was
+  YES; a predicate whose code answers a narrower question than its label, #240's shape. (3) A
+  prediction that the checkout-only members would include a stale live copy — refused, and the true
+  answer is cleaner than the prediction. (4) A first coverage reading taken with `grep -rl` piped to
+  `head`, where the captured rc is the PIPE's; the counts were re-taken through `grep -c .` on the
+  LIST so a legitimate zero is a zero and never a suppressed failure.
+  **THE TRANSFERABLE SENTENCE: WHEN AN INSTRUMENT IS REPAIRED, RUN THE REPAIR — A FIX ADOPTED ON
+  ADVICE INHERITS ITS OWN COVERAGE CLAIM, AND ON THIS BOX NO RECURSIVE GREP READS THE LIVE LAYER AT
+  ALL. The working spelling is `find -L <dir> -type f -exec grep -l <needle> {} +`, and the tell is
+  free: if a census of a symlinked tree does not return a file you know is in it, the census is
+  wrong, not the file.**
+  **THE LANE, at 2026-09-04T06:40:01Z:** `RUNG=🚀 LIVE_SRC=behind LIVE_SHA=7cc801e7ae0e LIVE_LAG=15
+  LIVE_ADDS=3 LIVE_STALE=16 LIVE_AGE=15982 LIVE_BREACH_WHY=adds GATE=stale`, with
+  `deploy-link-parity` at `468 linked · 0 staged-pending · 10 live-extra · 55 unmapped · 2
+  actionable` and its reference sentence at 15 commits behind. The `adds` breach is the known false
+  positive `4e6a51df2a84`; `GATE=stale` is owned by `live-layer-stamp-lag` and
+  `deploy-install-stale-deadlock`. Executing blobs: `deploy-link-parity.sh`, `qos-rewrite.sh` and
+  `pipefail-sigpipe-lint.sh` IDENTICAL on both sides, `wrap-ledger.sh` DIFFER — a live-LINKED EDIT,
+  one of `LIVE_STALE`'s 16, the third consecutive link to read that same four-way split.
+  **THE BOARD, open 2026-09-04T06:40:24Z:** 366 open / 245 blocked / 2,389 done / 1 claimed, 611
+  combined, 3,001 rows, both partitions asserted. Against #297's floor (3 m 52 s earlier): ZERO
+  arrivals, ZERO departures, ONE transition — `c18e7ea9e6b1` blocked → open, `claude-infrastructure`,
+  not mine. **THE STORES, same moment:** RED pages 1 over 72 `.page` (the same
+  `postland-red-1fcb63efb7cf.page`, owner `675e9c81c884`, NOT re-filed), stamps 557, inbox-guard
+  438/438, STATE store-alone 588 of 2,889 with the rest one live `wt-run-*` checkout.**
 - **2026-09-04 — drain recycle #297: method 269 — A STORE'S CONSUMERS ARE FOUND BY THE VARIABLE THAT
   RESOLVES IT, NEVER BY ITS PATH. A PATH IS SPELLED ONCE, AT THE ASSIGNMENT; EVERY READ AFTER THAT IS
   A VARIABLE.** ZERO rows closed, ZERO filed, ZERO reopened, ZERO updated. #296 asked what population
