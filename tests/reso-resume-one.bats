@@ -26,7 +26,7 @@
 # Measured mutants (2026-08-10), each red on exactly its own tests:
 #   · matcher → `-re {Resume from summary} { send "\r" }` : NO selection at 8 and 20 cols, `compact`
 #     at 80 — both halves of the live defect, in one mutant.
-#   · fable arm → `model=claude-fable-5 effort=high`      : argv reads `--effort high`.
+#   · fable arm → `model=claude-fable-5-1 effort=high`      : argv reads `--effort high`.
 #   · resolve_repo → the constant                         : "branch does not exist in
 #     reso-management-app", worktree never recreated.
 
@@ -174,7 +174,7 @@ mk_reaped_worktree() { # <repo-name> <branch> <wtpath>
   # separate claims and only the second one moves the session.
   run env CC_RR_STUB_COLS=80 timeout 90 "$RRO" fable4 "$WT" SID-EFFORT --effort max
   [ "$status" -eq 0 ]
-  [[ "$(spawn_argv)" == *"--model claude-fable-5"* ]] || false
+  [[ "$(spawn_argv)" == *"--model claude-fable-5-1 "* ]] || false
   [[ "$(spawn_argv)" == *"--effort max"* ]] || false
   [[ "$(spawn_argv)" != *"--effort high"* ]]
 }
@@ -184,7 +184,7 @@ mk_reaped_worktree() { # <repo-name> <branch> <wtpath>
   # the default would move every existing caller — boot-resume.sh and the runbook pass no flag.
   run env CC_RR_STUB_COLS=80 timeout 90 "$RRO" fable4 "$WT" SID-DEFAULT
   [ "$status" -eq 0 ]
-  [[ "$(spawn_argv)" == *"--model claude-fable-5"* ]] || false
+  [[ "$(spawn_argv)" == *"--model claude-fable-5-1 "* ]] || false
   [[ "$(spawn_argv)" == *"--effort high"* ]]
 }
 
@@ -196,7 +196,7 @@ mk_reaped_worktree() { # <repo-name> <branch> <wtpath>
   # behaviour change on this path, not tidying, and this is the only test that says so.
   run env CC_RESUME_EFFORT=xhigh CC_RR_STUB_COLS=80 timeout 90 "$RRO" fable2 "$WT" SID-ENVEFFORT
   [ "$status" -eq 0 ]
-  [[ "$(spawn_argv)" == *"--model claude-fable-5"* ]] || false
+  [[ "$(spawn_argv)" == *"--model claude-fable-5-1 "* ]] || false
   [[ "$(spawn_argv)" == *"--effort xhigh"* ]]
 }
 
