@@ -187,7 +187,12 @@ if [ -n "$M" ]; then
   LLIM=$(mim_line_limit 2>/dev/null) || LLIM=""
   if [ -n "$LIM" ] && [ -n "$LLIM" ]; then
     if [ "$U" -gt "$LIM" ] 2>/dev/null || [ "$L" -gt "$LLIM" ] 2>/dev/null; then
-      RV=$("$ROTOR" "$MEM" 2>/dev/null) || true
+      # `--rules-file` is passed here too, and it is not decoration: ordinary rotation now ROUTES
+      # what route_veto allows to the always-loaded rules file and cold-records only the rest, so
+      # without this the whole-index remedy would still be a pure demotion on the one path that
+      # already knows where this project's rules file is. The rotor degrades to the cold record on
+      # its own if the destination is unusable, so passing it can only add the routing option.
+      RV=$("$ROTOR" "$MEM" --rules-file "$RULES" 2>/dev/null) || true
       case "${RV:-}" in
         verdict=rotated*)
           CTX="${CTX:+$CTX }MEMORY INDEX WAS OVER ITS LOADER CAP (${U}/${LIM} chars, ${L}/${LLIM} lines) and was AUTO-ROTATED in this turn: ${RV#verdict=rotated }. Moved lines are VERBATIM in the cold record — restore = paste the line back."
