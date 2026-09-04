@@ -11,3 +11,7 @@ corpus/out/pages/
 corpus/out/shots/
 corpus/out/snapshots/
 corpus/out/blind/
+# `route.py` emits the vision queue's crops here -- 3.3 MB of PNG re-derived from
+# shots/ on every run. route.json, which records what was queued and why, IS
+# committed: it is the evidence that the router routed, and it is 25 KB.
+corpus/out/queue/

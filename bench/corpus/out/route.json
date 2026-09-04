@@ -1,0 +1,526 @@
+{
+ "profile": "bench",
+ "stance": "unweighted -- the measuring instrument, not an app",
+ "judgement_queue": true,
+ "queue_budget": 99,
+ "pages": {
+  "align-1px": {
+   "decided": [
+    {
+     "rule": "misalignment",
+     "target": "div.panel:nth-of-type(5)",
+     "detail": "left edge at 31px is 1.0px off the shared 32px edge used by 8 other elements",
+     "severity": "medium",
+     "priority": 2.0,
+     "profile": "bench"
+    }
+   ],
+   "abstentions": [],
+   "discharged": [],
+   "queue": [
+    {
+     "page": "align-1px",
+     "reason": "judgement",
+     "target": "(whole page)",
+     "priority": 1.0,
+     "why_queued": "no rule reaches hierarchy, attention or whether the page makes sense; this is the residue by construction, not a gap in the rules",
+     "question": "Look at this page as a first-time reader would in the first second. Does the element that is meant to be primary read as primary? Is anything visually heavier than its importance? Does the page make sense? These are judgements, not measurements -- do not report a number, and do not report anything a rule could have caught.",
+     "dom_facts": {},
+     "crop": "queue/align-1px--page.png",
+     "crop_zoom": 1.56,
+     "forbid": "Do not measure. Every distance, size and colour on this page is already known exactly and is given in dom_facts; a coordinate you estimate from this image is a guess competing with a fact."
+    }
+   ],
+   "over_budget": 0
+  },
+  "clean": {
+   "decided": [],
+   "abstentions": [],
+   "discharged": [],
+   "queue": [
+    {
+     "page": "clean",
+     "reason": "judgement",
+     "target": "(whole page)",
+     "priority": 1.0,
+     "why_queued": "no rule reaches hierarchy, attention or whether the page makes sense; this is the residue by construction, not a gap in the rules",
+     "question": "Look at this page as a first-time reader would in the first second. Does the element that is meant to be primary read as primary? Is anything visually heavier than its importance? Does the page make sense? These are judgements, not measurements -- do not report a number, and do not report anything a rule could have caught.",
+     "dom_facts": {},
+     "crop": "queue/clean--page.png",
+     "crop_zoom": 1.56,
+     "forbid": "Do not measure. Every distance, size and colour on this page is already known exactly and is given in dom_facts; a coordinate you estimate from this image is a guess competing with a fact."
+    }
+   ],
+   "over_budget": 0
+  },
+  "contrast-on-gradient": {
+   "decided": [
+    {
+     "rule": "xcheck-contrast-varies",
+     "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
+     "detail": "contrast is not one number across this text: 7.79:1 at the left edge and 1.48:1 at the right. Any single computed value is a fiction, and the right end is the one that fails a reader",
+     "severity": "high",
+     "priority": 3.0,
+     "profile": "bench"
+    },
+    {
+     "rule": "xcheck-contrast-varies",
+     "target": "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
+     "detail": "contrast is not one number across this text: 7.56:1 at the left edge and 1.47:1 at the right. Any single computed value is a fiction, and the right end is the one that fails a reader",
+     "severity": "high",
+     "priority": 3.0,
+     "profile": "bench"
+    }
+   ],
+   "abstentions": [],
+   "discharged": [
+    {
+     "rule": "contrast-indeterminate",
+     "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
+     "detail": "cannot compute a ratio: backdrop is an image/gradient on div.hero:nth-of-type(1). Requirement 3.0:1 is UNVERIFIED for this text",
+     "severity": "high",
+     "priority": 3.0,
+     "profile": "bench",
+     "discharged_by": "xcheck-contrast-varies"
+    },
+    {
+     "rule": "contrast-indeterminate",
+     "target": "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
+     "detail": "cannot compute a ratio: backdrop is an image/gradient on div.hero:nth-of-type(1). Requirement 4.5:1 is UNVERIFIED for this text",
+     "severity": "high",
+     "priority": 3.0,
+     "profile": "bench",
+     "discharged_by": "xcheck-contrast-varies"
+    }
+   ],
+   "queue": [
+    {
+     "page": "contrast-on-gradient",
+     "reason": "judgement",
+     "target": "(whole page)",
+     "priority": 1.0,
+     "why_queued": "no rule reaches hierarchy, attention or whether the page makes sense; this is the residue by construction, not a gap in the rules",
+     "question": "Look at this page as a first-time reader would in the first second. Does the element that is meant to be primary read as primary? Is anything visually heavier than its importance? Does the page make sense? These are judgements, not measurements -- do not report a number, and do not report anything a rule could have caught.",
+     "dom_facts": {},
+     "crop": "queue/contrast-on-gradient--page.png",
+     "crop_zoom": 1.56,
+     "forbid": "Do not measure. Every distance, size and colour on this page is already known exactly and is given in dom_facts; a coordinate you estimate from this image is a guess competing with a fact."
+    }
+   ],
+   "over_budget": 0
+  },
+  "contrast-on-pattern": {
+   "decided": [],
+   "abstentions": [
+    {
+     "rule": "xcheck-backdrop-indeterminate",
+     "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
+     "detail": "contrast under this text swings between 1.22:1 and 10.36:1 across 6 samples and does not vary monotonically -- the backdrop is patterned, so neither a single ratio nor a two-number summary describes it. Whether this text is legible is a question about what a reader sees, and it is UNVERIFIED",
+     "severity": "high",
+     "priority": 3.0,
+     "profile": "bench"
+    },
+    {
+     "rule": "xcheck-backdrop-indeterminate",
+     "target": "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
+     "detail": "contrast under this text swings between 1.22:1 and 10.36:1 across 6 samples and does not vary monotonically -- the backdrop is patterned, so neither a single ratio nor a two-number summary describes it. Whether this text is legible is a question about what a reader sees, and it is UNVERIFIED",
+     "severity": "high",
+     "priority": 3.0,
+     "profile": "bench"
+    }
+   ],
+   "discharged": [],
+   "queue": [
+    {
+     "page": "contrast-on-pattern",
+     "reason": "xcheck-backdrop-indeterminate",
+     "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
+     "priority": 3.0,
+     "why_queued": "contrast under this text swings between 1.22:1 and 10.36:1 across 6 samples and does not vary monotonically -- the backdrop is patterned, so neither a single ratio nor a two-number summary describes it. Whether this text is legible is a question about what a reader sees, and it is UNVERIFIED",
+     "question": "Read the text in the marked region against what is actually behind it. The backdrop is patterned, so the contrast under this text alternates rather than ramping and no pair of numbers summarises it. Say whether a reader can read the whole string, and which part of it disappears.",
+     "dom_facts": {
+      "rect_css_px": {
+       "x": 56,
+       "y": 56,
+       "w": 1168,
+       "h": 28,
+       "right": 1224,
+       "bottom": 84
+      },
+      "color": "rgb(255, 255, 255)",
+      "font_size": "24px",
+      "font_weight": "700",
+      "background_color": "rgba(0, 0, 0, 0)",
+      "background_image": "none",
+      "text": "Tonight at Ophelia"
+     },
+     "crop": "queue/contrast-on-pattern--00.png",
+     "crop_zoom": 1.56,
+     "forbid": "Do not measure. Every distance, size and colour on this page is already known exactly and is given in dom_facts; a coordinate you estimate from this image is a guess competing with a fact."
+    },
+    {
+     "page": "contrast-on-pattern",
+     "reason": "xcheck-backdrop-indeterminate",
+     "target": "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
+     "priority": 3.0,
+     "why_queued": "contrast under this text swings between 1.22:1 and 10.36:1 across 6 samples and does not vary monotonically -- the backdrop is patterned, so neither a single ratio nor a two-number summary describes it. Whether this text is legible is a question about what a reader sees, and it is UNVERIFIED",
+     "question": "Read the text in the marked region against what is actually behind it. The backdrop is patterned, so the contrast under this text alternates rather than ramping and no pair of numbers summarises it. Say whether a reader can read the whole string, and which part of it disappears.",
+     "dom_facts": {
+      "rect_css_px": {
+       "x": 56,
+       "y": 92,
+       "w": 1168,
+       "h": 16,
+       "right": 1224,
+       "bottom": 108
+      },
+      "color": "rgb(255, 255, 255)",
+      "font_size": "14px",
+      "font_weight": "400",
+      "background_color": "rgba(0, 0, 0, 0)",
+      "background_image": "none",
+      "text": "Doors 22:00 \u00b7 14 tables held \u00b7 3 awaiting deposit"
+     },
+     "crop": "queue/contrast-on-pattern--01.png",
+     "crop_zoom": 1.56,
+     "forbid": "Do not measure. Every distance, size and colour on this page is already known exactly and is given in dom_facts; a coordinate you estimate from this image is a guess competing with a fact."
+    },
+    {
+     "page": "contrast-on-pattern",
+     "reason": "judgement",
+     "target": "(whole page)",
+     "priority": 1.0,
+     "why_queued": "no rule reaches hierarchy, attention or whether the page makes sense; this is the residue by construction, not a gap in the rules",
+     "question": "Look at this page as a first-time reader would in the first second. Does the element that is meant to be primary read as primary? Is anything visually heavier than its importance? Does the page make sense? These are judgements, not measurements -- do not report a number, and do not report anything a rule could have caught.",
+     "dom_facts": {},
+     "crop": "queue/contrast-on-pattern--page.png",
+     "crop_zoom": 1.56,
+     "forbid": "Do not measure. Every distance, size and colour on this page is already known exactly and is given in dom_facts; a coordinate you estimate from this image is a guess competing with a fact."
+    }
+   ],
+   "over_budget": 0
+  },
+  "contrast-plain": {
+   "decided": [
+    {
+     "rule": "contrast",
+     "target": "div.helper:nth-of-type(4)",
+     "detail": "2.54:1 against 4.5:1 required (#9CA3AF on #FFFFFF)",
+     "severity": "high",
+     "priority": 3.0,
+     "profile": "bench"
+    }
+   ],
+   "abstentions": [],
+   "discharged": [],
+   "queue": [
+    {
+     "page": "contrast-plain",
+     "reason": "judgement",
+     "target": "(whole page)",
+     "priority": 1.0,
+     "why_queued": "no rule reaches hierarchy, attention or whether the page makes sense; this is the residue by construction, not a gap in the rules",
+     "question": "Look at this page as a first-time reader would in the first second. Does the element that is meant to be primary read as primary? Is anything visually heavier than its importance? Does the page make sense? These are judgements, not measurements -- do not report a number, and do not report anything a rule could have caught.",
+     "dom_facts": {},
+     "crop": "queue/contrast-plain--page.png",
+     "crop_zoom": 1.56,
+     "forbid": "Do not measure. Every distance, size and colour on this page is already known exactly and is given in dom_facts; a coordinate you estimate from this image is a guess competing with a fact."
+    }
+   ],
+   "over_budget": 0
+  },
+  "grid-offgrid": {
+   "decided": [
+    {
+     "rule": "grid-violation",
+     "target": "div.section-title:nth-of-type(3)",
+     "detail": "margin-top is 13px, not a multiple of the 8px grid",
+     "severity": "low",
+     "priority": 1.0,
+     "profile": "bench"
+    }
+   ],
+   "abstentions": [],
+   "discharged": [],
+   "queue": [
+    {
+     "page": "grid-offgrid",
+     "reason": "judgement",
+     "target": "(whole page)",
+     "priority": 1.0,
+     "why_queued": "no rule reaches hierarchy, attention or whether the page makes sense; this is the residue by construction, not a gap in the rules",
+     "question": "Look at this page as a first-time reader would in the first second. Does the element that is meant to be primary read as primary? Is anything visually heavier than its importance? Does the page make sense? These are judgements, not measurements -- do not report a number, and do not report anything a rule could have caught.",
+     "dom_facts": {},
+     "crop": "queue/grid-offgrid--page.png",
+     "crop_zoom": 1.56,
+     "forbid": "Do not measure. Every distance, size and colour on this page is already known exactly and is given in dom_facts; a coordinate you estimate from this image is a guess competing with a fact."
+    }
+   ],
+   "over_budget": 0
+  },
+  "hierarchy-inversion": {
+   "decided": [
+    {
+     "rule": "contrast",
+     "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
+     "detail": "3.38:1 against 4.5:1 required (#3B82F6 on #EFF6FF)",
+     "severity": "high",
+     "priority": 3.0,
+     "profile": "bench"
+    },
+    {
+     "rule": "token-drift",
+     "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
+     "detail": "background-color #EFF6FF is 11.5 away from token #F9FAFB; almost certainly meant to be the token",
+     "severity": "low",
+     "priority": 1.0,
+     "profile": "bench"
+    }
+   ],
+   "abstentions": [],
+   "discharged": [],
+   "queue": [
+    {
+     "page": "hierarchy-inversion",
+     "reason": "judgement",
+     "target": "(whole page)",
+     "priority": 1.0,
+     "why_queued": "no rule reaches hierarchy, attention or whether the page makes sense; this is the residue by construction, not a gap in the rules",
+     "question": "Look at this page as a first-time reader would in the first second. Does the element that is meant to be primary read as primary? Is anything visually heavier than its importance? Does the page make sense? These are judgements, not measurements -- do not report a number, and do not report anything a rule could have caught.",
+     "dom_facts": {},
+     "crop": "queue/hierarchy-inversion--page.png",
+     "crop_zoom": 1.56,
+     "forbid": "Do not measure. Every distance, size and colour on this page is already known exactly and is given in dom_facts; a coordinate you estimate from this image is a guess competing with a fact."
+    }
+   ],
+   "over_budget": 0
+  },
+  "optical-centering": {
+   "decided": [
+    {
+     "rule": "xcheck-optical-centre",
+     "target": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
+     "detail": "'span.glyph' is centred by div.glyph-btn:nth-of-type(2), but its rendered ink sits 2.0px left and 0.2px down of that container's painted centre -- it will read as misaligned however symmetric the box model is",
+     "severity": "medium",
+     "priority": 2.0,
+     "profile": "bench"
+    }
+   ],
+   "abstentions": [],
+   "discharged": [],
+   "queue": [
+    {
+     "page": "optical-centering",
+     "reason": "judgement",
+     "target": "(whole page)",
+     "priority": 1.0,
+     "why_queued": "no rule reaches hierarchy, attention or whether the page makes sense; this is the residue by construction, not a gap in the rules",
+     "question": "Look at this page as a first-time reader would in the first second. Does the element that is meant to be primary read as primary? Is anything visually heavier than its importance? Does the page make sense? These are judgements, not measurements -- do not report a number, and do not report anything a rule could have caught.",
+     "dom_facts": {},
+     "crop": "queue/optical-centering--page.png",
+     "crop_zoom": 1.56,
+     "forbid": "Do not measure. Every distance, size and colour on this page is already known exactly and is given in dom_facts; a coordinate you estimate from this image is a guess competing with a fact."
+    }
+   ],
+   "over_budget": 0
+  },
+  "overflow-clip": {
+   "decided": [
+    {
+     "rule": "overflow",
+     "target": "div.panel:nth-of-type(5) > table > tbody > tr:nth-of-type(2) > td.cell-venue:nth-of-type(2)",
+     "detail": "content is 40px tall inside a 24px box with overflow hidden; text is clipped",
+     "severity": "high",
+     "priority": 3.0,
+     "profile": "bench"
+    },
+    {
+     "rule": "overflow",
+     "target": "div.panel:nth-of-type(5) > table > tbody > tr:nth-of-type(3) > td.cell-venue:nth-of-type(2)",
+     "detail": "content is 40px tall inside a 24px box with overflow hidden; text is clipped",
+     "severity": "high",
+     "priority": 3.0,
+     "profile": "bench"
+    },
+    {
+     "rule": "overflow",
+     "target": "div.panel:nth-of-type(5) > table > tbody > tr:nth-of-type(4) > td.cell-venue:nth-of-type(2)",
+     "detail": "content is 40px tall inside a 24px box with overflow hidden; text is clipped",
+     "severity": "high",
+     "priority": 3.0,
+     "profile": "bench"
+    }
+   ],
+   "abstentions": [],
+   "discharged": [],
+   "queue": [
+    {
+     "page": "overflow-clip",
+     "reason": "judgement",
+     "target": "(whole page)",
+     "priority": 1.0,
+     "why_queued": "no rule reaches hierarchy, attention or whether the page makes sense; this is the residue by construction, not a gap in the rules",
+     "question": "Look at this page as a first-time reader would in the first second. Does the element that is meant to be primary read as primary? Is anything visually heavier than its importance? Does the page make sense? These are judgements, not measurements -- do not report a number, and do not report anything a rule could have caught.",
+     "dom_facts": {},
+     "crop": "queue/overflow-clip--page.png",
+     "crop_zoom": 1.56,
+     "forbid": "Do not measure. Every distance, size and colour on this page is already known exactly and is given in dom_facts; a coordinate you estimate from this image is a guess competing with a fact."
+    }
+   ],
+   "over_budget": 0
+  },
+  "radius-drift": {
+   "decided": [
+    {
+     "rule": "token-drift",
+     "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(2)",
+     "detail": "border-radius 6px differs from the page's dominant 8px",
+     "severity": "low",
+     "priority": 1.0,
+     "profile": "bench"
+    }
+   ],
+   "abstentions": [],
+   "discharged": [],
+   "queue": [
+    {
+     "page": "radius-drift",
+     "reason": "judgement",
+     "target": "(whole page)",
+     "priority": 1.0,
+     "why_queued": "no rule reaches hierarchy, attention or whether the page makes sense; this is the residue by construction, not a gap in the rules",
+     "question": "Look at this page as a first-time reader would in the first second. Does the element that is meant to be primary read as primary? Is anything visually heavier than its importance? Does the page make sense? These are judgements, not measurements -- do not report a number, and do not report anything a rule could have caught.",
+     "dom_facts": {},
+     "crop": "queue/radius-drift--page.png",
+     "crop_zoom": 1.56,
+     "forbid": "Do not measure. Every distance, size and colour on this page is already known exactly and is given in dom_facts; a coordinate you estimate from this image is a guess competing with a fact."
+    }
+   ],
+   "over_budget": 0
+  },
+  "spacing-gap": {
+   "decided": [
+    {
+     "rule": "spacing-rhythm",
+     "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(3)",
+     "detail": "gap 39.0px breaks the 16.0px rhythm used by its siblings under div.kpi-row:nth-of-type(2)",
+     "severity": "medium",
+     "priority": 2.0,
+     "profile": "bench"
+    },
+    {
+     "rule": "grid-violation",
+     "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(3)",
+     "detail": "margin-left is 23px, not a multiple of the 8px grid",
+     "severity": "low",
+     "priority": 1.0,
+     "profile": "bench"
+    }
+   ],
+   "abstentions": [],
+   "discharged": [],
+   "queue": [
+    {
+     "page": "spacing-gap",
+     "reason": "judgement",
+     "target": "(whole page)",
+     "priority": 1.0,
+     "why_queued": "no rule reaches hierarchy, attention or whether the page makes sense; this is the residue by construction, not a gap in the rules",
+     "question": "Look at this page as a first-time reader would in the first second. Does the element that is meant to be primary read as primary? Is anything visually heavier than its importance? Does the page make sense? These are judgements, not measurements -- do not report a number, and do not report anything a rule could have caught.",
+     "dom_facts": {},
+     "crop": "queue/spacing-gap--page.png",
+     "crop_zoom": 1.56,
+     "forbid": "Do not measure. Every distance, size and colour on this page is already known exactly and is given in dom_facts; a coordinate you estimate from this image is a guess competing with a fact."
+    }
+   ],
+   "over_budget": 0
+  },
+  "token-color-drift": {
+   "decided": [
+    {
+     "rule": "token-drift",
+     "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-primary:nth-of-type(1)",
+     "detail": "background-color #1D4ED3 is 5.0 away from token #1D4ED8; almost certainly meant to be the token",
+     "severity": "low",
+     "priority": 1.0,
+     "profile": "bench"
+    }
+   ],
+   "abstentions": [],
+   "discharged": [],
+   "queue": [
+    {
+     "page": "token-color-drift",
+     "reason": "judgement",
+     "target": "(whole page)",
+     "priority": 1.0,
+     "why_queued": "no rule reaches hierarchy, attention or whether the page makes sense; this is the residue by construction, not a gap in the rules",
+     "question": "Look at this page as a first-time reader would in the first second. Does the element that is meant to be primary read as primary? Is anything visually heavier than its importance? Does the page make sense? These are judgements, not measurements -- do not report a number, and do not report anything a rule could have caught.",
+     "dom_facts": {},
+     "crop": "queue/token-color-drift--page.png",
+     "crop_zoom": 1.56,
+     "forbid": "Do not measure. Every distance, size and colour on this page is already known exactly and is given in dom_facts; a coordinate you estimate from this image is a guess competing with a fact."
+    }
+   ],
+   "over_budget": 0
+  },
+  "touch-target": {
+   "decided": [
+    {
+     "rule": "touch-target",
+     "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-secondary:nth-of-type(2)",
+     "detail": "182x29px is under the 44px minimum target",
+     "severity": "high",
+     "priority": 3.0,
+     "profile": "bench"
+    }
+   ],
+   "abstentions": [],
+   "discharged": [],
+   "queue": [
+    {
+     "page": "touch-target",
+     "reason": "judgement",
+     "target": "(whole page)",
+     "priority": 1.0,
+     "why_queued": "no rule reaches hierarchy, attention or whether the page makes sense; this is the residue by construction, not a gap in the rules",
+     "question": "Look at this page as a first-time reader would in the first second. Does the element that is meant to be primary read as primary? Is anything visually heavier than its importance? Does the page make sense? These are judgements, not measurements -- do not report a number, and do not report anything a rule could have caught.",
+     "dom_facts": {},
+     "crop": "queue/touch-target--page.png",
+     "crop_zoom": 1.56,
+     "forbid": "Do not measure. Every distance, size and colour on this page is already known exactly and is given in dom_facts; a coordinate you estimate from this image is a guess competing with a fact."
+    }
+   ],
+   "over_budget": 0
+  },
+  "type-scale": {
+   "decided": [
+    {
+     "rule": "type-scale",
+     "target": "div.kpi-row:nth-of-type(2) > div.kpi-card:nth-of-type(4) > div.kpi-label:nth-of-type(1)",
+     "detail": "font-size 17px is used once and sits off the page scale [12.0, 14.0, 16.0, 24.0]; nearest step is 16px",
+     "severity": "medium",
+     "priority": 2.0,
+     "profile": "bench"
+    }
+   ],
+   "abstentions": [],
+   "discharged": [],
+   "queue": [
+    {
+     "page": "type-scale",
+     "reason": "judgement",
+     "target": "(whole page)",
+     "priority": 1.0,
+     "why_queued": "no rule reaches hierarchy, attention or whether the page makes sense; this is the residue by construction, not a gap in the rules",
+     "question": "Look at this page as a first-time reader would in the first second. Does the element that is meant to be primary read as primary? Is anything visually heavier than its importance? Does the page make sense? These are judgements, not measurements -- do not report a number, and do not report anything a rule could have caught.",
+     "dom_facts": {},
+     "crop": "queue/type-scale--page.png",
+     "crop_zoom": 1.56,
+     "forbid": "Do not measure. Every distance, size and colour on this page is already known exactly and is given in dom_facts; a coordinate you estimate from this image is a guess competing with a fact."
+    }
+   ],
+   "over_budget": 0
+  }
+ }
+}

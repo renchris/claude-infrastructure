@@ -22,6 +22,20 @@
    "severity": "high"
   }
  ],
+ "contrast-on-pattern": [
+  {
+   "rule": "contrast-indeterminate",
+   "target": "div.hero:nth-of-type(1) > div.hero-title:nth-of-type(1)",
+   "detail": "cannot compute a ratio: backdrop is an image/gradient on div.hero:nth-of-type(1). Requirement 3.0:1 is UNVERIFIED for this text",
+   "severity": "high"
+  },
+  {
+   "rule": "contrast-indeterminate",
+   "target": "div.hero:nth-of-type(1) > div.hero-caption:nth-of-type(2)",
+   "detail": "cannot compute a ratio: backdrop is an image/gradient on div.hero:nth-of-type(1). Requirement 4.5:1 is UNVERIFIED for this text",
+   "severity": "high"
+  }
+ ],
  "contrast-plain": [
   {
    "rule": "contrast",
@@ -107,7 +121,7 @@
   {
    "rule": "touch-target",
    "target": "div.actions:nth-of-type(6) > div.action-group:nth-of-type(1) > button.btn-secondary:nth-of-type(2)",
-   "detail": "164x29px is under the 44px minimum target",
+   "detail": "182x29px is under the 44px minimum target",
    "severity": "high"
   }
  ],

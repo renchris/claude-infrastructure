@@ -184,10 +184,37 @@ DEFECTS: list[Defect] = [
         severity="high",
     ),
     Defect(
+        id="contrast-on-pattern",
+        klass="contrast",
+        summary=(
+            "Hero caption is white over a high-frequency stripe pattern, so it is "
+            "legible over half the pattern and invisible over the other half."
+        ),
+        css=(
+            ".hero { background: repeating-linear-gradient(45deg,#1E3A8A 0 14px,"
+            "#DBEAFE 14px 28px); } .hero-caption { color: #FFFFFF; }"
+        ),
+        target=".hero-caption",
+        detectable_by="pixels",
+        dom_blind_because=(
+            "Same blindness as the gradient case -- background-image, so no numeric "
+            "second operand -- but this one the CROSS-CHECK cannot settle either, and "
+            "that is why it is here. The gradient varies monotonically across the run, "
+            "so sampling the left and right thirds turns 'unrepresentable' into two "
+            "numbers and a verdict. A repeating pattern has IDENTICAL statistics in "
+            "every third: the two samples agree, the disagreement arm stays silent, "
+            "and the abstention is still the honest answer. This is the residue the "
+            "abstention router exists to route -- a legibility question with no number "
+            "in its answer, which is the one thing a reader has to look at."
+        ),
+        magnitude="ratio alternates between ~10:1 and ~1.2:1 every 14px",
+        severity="high",
+    ),
+    Defect(
         id="optical-centering",
         klass="optical-alignment",
         summary=(
-            "The play glyph loses its optical compensation, so it is geometrically "
+            "The play mark loses its optical compensation, so it is geometrically "
             "centred and reads left-heavy -- a triangle's ink mass sits behind its "
             "bounding-box centre."
         ),
@@ -197,11 +224,13 @@ DEFECTS: list[Defect] = [
         dom_blind_because=(
             "Every box-model number is symmetric: the flex container centres the glyph and "
             "getBoundingClientRect on the glyph is exactly centred within the button. The "
-            "asymmetry lives in the distribution of ink inside the glyph's own box, which no "
+            "asymmetry lives in the distribution of ink inside the mark's own box, which no "
             "DOM API exposes. Detecting it requires computing the centroid of the rendered "
-            "pixels and comparing it to the geometric centre."
+            "pixels and comparing it to the geometric centre -- and against the CONTAINER's "
+            "centre, because getBoundingClientRect returns the post-transform box, so the "
+            "mark's own box moves with the compensation and cannot witness it."
         ),
-        magnitude="ink centroid ~2px left of the geometric centre",
+        magnitude="ink centroid 2.33px left of the geometric centre",
         severity="medium",
     ),
     Defect(
@@ -213,7 +242,7 @@ DEFECTS: list[Defect] = [
         ),
         css=(
             ".btn-secondary { background: #111827; color: #FFFFFF; font-weight: 700; "
-            "border: none; font-size: 16px; padding: 12px 28px; line-height: 20px; } "
+            "border: none; padding: 12px 28px; line-height: 20px; } "
             ".btn-primary { background: #EFF6FF; color: #3B82F6; font-weight: 400; "
             "border: 1px solid #DBEAFE; font-size: 14px; }"
         ),
@@ -277,12 +306,17 @@ th {{ background: {TOKENS["gray50"]}; color: {TOKENS["gray600"]}; font-size: 12p
 tr + tr td {{ border-top: 1px solid {TOKENS["gray200"]}; }}
 
 .actions {{ display: flex; gap: {TOKENS["gap"]}; align-items: center; margin-top: 24px; }}
+/* Button labels are 16px, the same step as .section-title, so the 16px rung of
+   the 12/14/16/24 scale is carried by TWO real components. It used to rest on a
+   single decorative glyph's font-size, and when that glyph became a drawn shape
+   with no text the rung vanished and the scale rule fired on the control. A
+   scale step held up by one element that paints no text is not a step. */
 .btn-primary {{
-  background: {TOKENS["blue700"]}; color: #FFFFFF; font-weight: 600; font-size: 14px;
+  background: {TOKENS["blue700"]}; color: #FFFFFF; font-weight: 600; font-size: 16px;
   border: none; border-radius: 8px; padding: 16px 20px; line-height: 16px; cursor: pointer;
 }}
 .btn-secondary {{
-  background: #FFFFFF; color: {TOKENS["gray600"]}; font-weight: 400; font-size: 14px;
+  background: #FFFFFF; color: {TOKENS["gray600"]}; font-weight: 400; font-size: 16px;
   border: 1px solid {TOKENS["gray200"]}; border-radius: 8px; padding: 15px 20px;
   line-height: 16px; cursor: pointer;
 }}
@@ -290,11 +324,26 @@ tr + tr td {{ border-top: 1px solid {TOKENS["gray200"]}; }}
   width: 44px; height: 44px; border-radius: 22px; background: {TOKENS["blue700"]};
   display: flex; align-items: center; justify-content: center;
 }}
-.glyph {{ color: #FFFFFF; font-size: 16px; line-height: 1;
-         /* Optical compensation: a triangle's ink mass sits behind its
-            bounding-box centre, so geometric centring reads as left-heavy.
-            Measured offset on this glyph at this size: 2.2px left, 1.9px up. */
-         transform: translate(2px, 2px); }}
+.glyph {{
+  /* A DRAWN triangle, not a font glyph, and that is load-bearing. The corpus
+     promises a render reproducible across machines; a text glyph breaks that
+     promise for the one defect whose ground truth is ink GEOMETRY. `Helvetica`
+     exists on macOS and nowhere else, and the fallback's U+25B6 sits ~1.7px
+     BELOW its line box's centre where Helvetica's sits above it -- so a
+     compensation constant measured on one machine cancelled the bias there and
+     DOUBLED it here (measured 2026-09-04: ink 3.7px low on the "clean" control
+     under DejaVu Sans, i.e. the control was not clean).
+     Borders give an exact, font-free shape. Base on the left, apex on the
+     right: the ink centroid of a triangle is one third of its width from the
+     base, so it sits 14/6 = 2.33px LEFT of the bounding-box centre. That is
+     the number the compensation below cancels, and it is arithmetic rather
+     than a measurement. */
+  display: block; width: 0; height: 0;
+  border-top: 8px solid transparent;
+  border-bottom: 8px solid transparent;
+  border-left: 14px solid #FFFFFF;
+  transform: translateX(2.33px);
+}}
 """
 
 BODY_HTML = """
@@ -330,7 +379,7 @@ BODY_HTML = """
     <button class="btn-primary">Confirm all deposits</button>
     <button class="btn-secondary">Release held tables</button>
   </div>
-  <div class="glyph-btn"><span class="glyph">&#9654;</span></div>
+  <div class="glyph-btn"><span class="glyph"></span></div>
 </div>
 """
 

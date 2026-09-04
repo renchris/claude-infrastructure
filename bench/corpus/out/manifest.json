@@ -20,9 +20,9 @@
   },
   "control": "clean.html",
   "counts": {
-    "total_variants": 13,
+    "total_variants": 14,
     "dom_detectable": 9,
-    "pixels_only": 3
+    "pixels_only": 4
   },
   "scoring": {
     "true_positive": "names the right defect class AND points at the right target",
@@ -152,14 +152,26 @@
       "html_override": {}
     },
     {
+      "id": "contrast-on-pattern",
+      "klass": "contrast",
+      "summary": "Hero caption is white over a high-frequency stripe pattern, so it is legible over half the pattern and invisible over the other half.",
+      "css": ".hero { background: repeating-linear-gradient(45deg,#1E3A8A 0 14px,#DBEAFE 14px 28px); } .hero-caption { color: #FFFFFF; }",
+      "target": ".hero-caption",
+      "detectable_by": "pixels",
+      "magnitude": "ratio alternates between ~10:1 and ~1.2:1 every 14px",
+      "dom_blind_because": "Same blindness as the gradient case -- background-image, so no numeric second operand -- but this one the CROSS-CHECK cannot settle either, and that is why it is here. The gradient varies monotonically across the run, so sampling the left and right thirds turns 'unrepresentable' into two numbers and a verdict. A repeating pattern has IDENTICAL statistics in every third: the two samples agree, the disagreement arm stays silent, and the abstention is still the honest answer. This is the residue the abstention router exists to route -- a legibility question with no number in its answer, which is the one thing a reader has to look at.",
+      "severity": "high",
+      "html_override": {}
+    },
+    {
       "id": "optical-centering",
       "klass": "optical-alignment",
-      "summary": "The play glyph loses its optical compensation, so it is geometrically centred and reads left-heavy -- a triangle's ink mass sits behind its bounding-box centre.",
+      "summary": "The play mark loses its optical compensation, so it is geometrically centred and reads left-heavy -- a triangle's ink mass sits behind its bounding-box centre.",
       "css": ".glyph-btn .glyph { transform: none; }",
       "target": ".glyph-btn .glyph",
       "detectable_by": "pixels",
-      "magnitude": "ink centroid ~2px left of the geometric centre",
-      "dom_blind_because": "Every box-model number is symmetric: the flex container centres the glyph and getBoundingClientRect on the glyph is exactly centred within the button. The asymmetry lives in the distribution of ink inside the glyph's own box, which no DOM API exposes. Detecting it requires computing the centroid of the rendered pixels and comparing it to the geometric centre.",
+      "magnitude": "ink centroid 2.33px left of the geometric centre",
+      "dom_blind_because": "Every box-model number is symmetric: the flex container centres the glyph and getBoundingClientRect on the glyph is exactly centred within the button. The asymmetry lives in the distribution of ink inside the mark's own box, which no DOM API exposes. Detecting it requires computing the centroid of the rendered pixels and comparing it to the geometric centre -- and against the CONTAINER's centre, because getBoundingClientRect returns the post-transform box, so the mark's own box moves with the compensation and cannot witness it.",
       "severity": "medium",
       "html_override": {}
     },
@@ -167,7 +179,7 @@
       "id": "hierarchy-inversion",
       "klass": "visual-hierarchy",
       "summary": "The destructive secondary action is visually heavier than the primary action beside it, so the eye lands on the wrong button.",
-      "css": ".btn-secondary { background: #111827; color: #FFFFFF; font-weight: 700; border: none; font-size: 16px; padding: 12px 28px; line-height: 20px; } .btn-primary { background: #EFF6FF; color: #3B82F6; font-weight: 400; border: 1px solid #DBEAFE; font-size: 14px; }",
+      "css": ".btn-secondary { background: #111827; color: #FFFFFF; font-weight: 700; border: none; padding: 12px 28px; line-height: 20px; } .btn-primary { background: #EFF6FF; color: #3B82F6; font-weight: 400; border: 1px solid #DBEAFE; font-size: 14px; }",
       "target": ".actions",
       "detectable_by": "pixels",
       "magnitude": "secondary carries roughly 3x the visual weight of the primary",

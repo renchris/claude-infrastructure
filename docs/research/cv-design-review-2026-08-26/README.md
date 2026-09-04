@@ -33,6 +33,13 @@ Three measurements, all taken on this machine today, carry the argument:
 **The union of the first three is 11 of 11**, and each covers precisely what the others cannot. That
 complementarity *is* the architecture. The fourth row is why no local model is in it.
 
+📌 **Rows 1 and 2 were re-measured on 2026-09-04 and both moved — see §11.** The cross-check's
+gradient arm was silently reporting nothing off macOS (it sampled the text, not the backdrop), and its
+centroid arm was inverted. Repaired, the deterministic + cross-check pair now scores **9/9
+DOM-determined and 3/3 pixels-scored with 0 findings on the control**, over a corpus grown to 14 pages.
+The fourth pixels-only defect, `hierarchy-inversion`, remains reachable by no rule — that is row 3's
+territory and the reason the router has a judgement queue at all.
+
 ⚠️ **This table is a correction.** The first version scored three pixels-only defects and reported
 6 of 7. Building the cross-check exposed the reason: the `optical-centering` variant injected an
 *empty* CSS rule, so its render was **SHA-256 identical to the control**. It was a null test item, and
@@ -50,6 +57,8 @@ The corpus (`bench/corpus/build_corpus.py`) renders one realistic dashboard thir
 control plus twelve variants, each carrying exactly one injected defect at a known location with a
 known magnitude. Nine defects are fully determined by the DOM. Three are invisible to it *by
 construction* — the computed styles are correct and the rendering is still wrong.
+*(Fourteen ways since 2026-09-04: §11 adds `contrast-on-pattern`, the case neither the DOM nor the
+cross-check can settle, so that the abstention router has a genuine abstention to route.)*
 
 That split is the whole instrument. It is the same shape as **DiffSpot** (arXiv 2605.29615, May
 2026), which mutates one CSS property, re-renders, and asks what changed — and on which the best of
@@ -172,7 +181,7 @@ Sampling the backdrop separately in the left and right thirds turns "unrepresent
 numbers and a verdict — no VLM call, no abstention, zero findings on the control. **That moves
 contrast-over-a-gradient out of the vision layer's queue entirely.**
 
-🚨 **The centroid arm is PROVISIONAL and ships disabled** (`--x2` to enable), because trying to
+🚨 **The centroid arm shipped PROVISIONAL and disabled** (`--x2` to enable), because trying to
 validate it found two defects in it, and both are instances of the exact failure this document warns
 about — a plausible number nobody checked. (a) It compares ink to the element's **own** box, and
 `getBoundingClientRect` returns the *post*-transform box, so a `translate` moves box and ink together
@@ -181,6 +190,14 @@ background is the crop's modal colour, so on a round button the square crop's co
 background outside the circle — count as ink and swamp a 16px glyph. Both fixes are known (measure
 against the container; mask to the painted shape) and neither is done. Shipping it on would have
 handed the pipeline a confident number with no ground truth behind it.
+
+**✅ Both fixed, and the arm is now ON by default (`--no-x2` to disable) — 2026-09-04. See §11.** The
+inversion was worse than "unvalidated": measured before the fix, X2 reported **2 findings on the clean
+control and 0 on the optical-centering variant**, i.e. it was exactly backwards, and the `--x2` flag was
+the only thing standing between that and a pipeline acting on it. It now measures against the
+container's painted shape — reconstructed analytically from the rect and border-radius the DOM already
+reports exactly, and eroded past the antialiased rim — and scores 0 on the control, 1 on the defect,
+naming the mark.
 
 ---
 
@@ -351,9 +368,9 @@ step function — but SAM is not semantic, so it will happily return a pixel-per
 band.)
 
 **To add, in order:**
-1. **The abstention router.** (The cross-check in `bench/detect_xcheck.py` already removes the gradient case from this queue.) Deterministic pass first; its `INDETERMINATE` set plus the pages it
+1. ✅ **The abstention router.** — **built 2026-09-04, `bench/route.py`; see §11.** (The cross-check in `bench/detect_xcheck.py` already removes the gradient case from this queue.) Deterministic pass first; its `INDETERMINATE` set plus the pages it
    cannot reason about become the VLM's queue, cropped to the region in question.
-2. **A false-positive budget.** ~20% FP is where an AI reviewer loses credibility regardless of catch
+2. ✅ **A false-positive budget.** — **built 2026-09-04, `bench/fp_budget.py`; see §11.** ~20% FP is where an AI reviewer loses credibility regardless of catch
    rate. Our two zero-FP runs are the baseline to defend; every rule added must be re-run against the
    clean control before it ships.
 3. **Order-randomised comparison.** If we ever compare two designs, permute over 3–5 orderings —
@@ -370,6 +387,7 @@ band.)
 template) is largely a marketing-aesthetics problem; `reso-management-app` (Next 16, React 19,
 Tailwind 4) is mostly design-system conformance, where the deterministic layer does nearly all the
 work; `reso-web-app` (Next 13) sits between. One review harness, three different rule weightings.
+✅ **Built 2026-09-04, `bench/profiles.py`; see §11.**
 
 ---
 
@@ -407,3 +425,118 @@ instinct for any cut-off subagent — disk-truth audit every slot, re-run anythi
 complete, never accept a partial. Its *machinery* is not: it is built for a quota or login cliff and
 recovers by transcript transplant to another account. A mid-stream API stall has no reset to wait for
 and no account to move to. Audit with it; recover by re-firing.
+
+---
+
+## 11. Built — the perception pipeline (2026-09-04)
+
+§8's first two items, the X2 fix from §2, and the per-app weightings from §8 are on disk and
+measured. Four things were added or repaired; six things measuring them found are recorded below,
+because five of the six are the same failure this document is about — **a plausible number nobody
+checked** — and one of them was in the arm this document already flagged, pointing the wrong way.
+
+**⚠️ Every number in this section was measured on Linux/Chromium 1194 in a container, not on the
+M1 Max.** That difference is not incidental: it is what exposed finding 4.
+
+```bash
+cd bench && python3 -m venv .venv && .venv/bin/pip install numpy pillow playwright
+.venv/bin/python corpus/build_corpus.py corpus/out     # 14 pages
+.venv/bin/python capture.py corpus/out                 # shots + snapshots, one pass
+.venv/bin/python fp_budget.py corpus/out               # the gate; exits non-zero on a breach
+.venv/bin/python route.py corpus/out --profile reso-management
+```
+
+### What it does now
+
+| File | What it is |
+|---|---|
+| `bench/route.py` | **The abstention router.** Deterministic pass first; abstentions the cross-check can answer are *discharged* and never queued; what is left is cropped, enlarged and queued with the question and the DOM's own numbers. Calls no model. |
+| `bench/fp_budget.py` | **The false-positive gate.** Control findings (budget 0), off-target findings (budget 20%), and recall beside them so a silent detector cannot score well by finding nothing. Exits non-zero. |
+| `bench/profiles.py` | **Per-app rule weightings.** `reso-management` conformance-led, `reso-landing` marketing-led with the conformance rules off, `reso-web` between, `bench` unweighted so a weighting can never flatter the instrument. |
+| `bench/detect_xcheck.py` | X2 fixed and **on by default**; X3's backdrop sampling repaired twice (findings 2 and 3). |
+
+The run, under the unweighted `bench` profile:
+
+```
+CONTROL  clean.html -> 0 finding(s), budget 0
+OFF-TARGET  0/23 = 0.0%, budget 20%
+RECALL      dom    9/9
+RECALL      pixels 3/3
+RESIDUE     1 defect in a class no rule reaches -- the router's judgement queue, not a miss
+14 pages -> 17 decided deterministically · 2 abstentions discharged by the cross-check
+          · 2 left abstaining · 2 queued        [reso-management]
+```
+
+**Two queue entries across fourteen pages is the affordability claim, made concrete.** Everything
+else was either decided for free or answered by the cross-check.
+
+### Six things measuring found
+
+**1. X2 was not unvalidated, it was INVERTED.** Before the fix it reported **2 findings on the clean
+control and 0 on the optical-centering variant** — it fired where the compensation was present and
+stayed quiet where it had been removed. §2 called it "a real quantity nobody has validated"; the
+quantity was pointing backwards, and only the `--x2` default-off flag stood between that and a
+pipeline acting on it. Both known fixes were the cure: measure against the **container's** painted
+shape (upstream of the mark's own transform, so it can witness what the post-transform box cannot),
+and **mask** to that shape — rebuilt analytically from the rect and border-radius the DOM already
+reports exactly, eroded 1.5px past the antialiased rim. After: **0 on the control, 1 on the defect**,
+2.0px left against an injected 2.33px.
+
+**2. The modal colour is not a backdrop sample, and over a gradient it samples the TEXT.** X3 took
+the most common colour in each third as the backdrop. Over a smooth gradient no backdrop colour
+repeats — every column is its own colour — so the most common colour in the band was the antialiased
+white text, and the check compared white against white for **1.00:1**, reporting nothing. The
+gradient defect, the one arm §2 presents as validated, was silently unreported off macOS. Fixed by
+excluding pixels near the computed foreground and taking the **median** of the survivors. The
+endpoints now read 7.79:1 → 1.48:1, against §2's stated ~8.6:1 → ~1.2:1.
+
+**3. Two samples cannot tell a ramp from a stripe.** A repeating-stripe backdrop produces a swing as
+large as a gradient's, and X3 reported it as `contrast is 1.51:1 at the left edge and 10.36:1 at the
+right` — a monotonic left-to-right story that is simply false; the value alternates every 14px and
+neither endpoint describes what a reader meets. Fixed by sampling **six** bands and licensing the
+two-number summary only when the sequence is monotone *and* no band is internally bimodal
+(interquartile luminance ≤ 0.15; the gradient's bands measure ~0.06, the stripes' ~0.67). A patterned
+backdrop now emits `xcheck-backdrop-indeterminate`, an **abstention carrying its evidence** — which
+is what the router is for, and what puts the first real cropped entry in its queue.
+
+**4. The clean control was not clean off macOS, and the corpus said it would be.** `build_corpus.py`
+pinned `Helvetica` "so a render is reproducible across machines" — but Helvetica exists on macOS and
+nowhere else, and the corpus's optical compensation was a constant (`translate(2px, 2px)`) measured
+against *its* metrics. Under the DejaVu fallback the U+25B6 glyph sits ~1.7px **below** its line
+box's centre where Helvetica's sits above it, so the compensation cancelled the bias on one machine
+and **doubled** it on another: 3.7px of real ink offset on the "clean" page. The mark is now **drawn
+with borders instead of set in a font** — base left, apex right, so its ink centroid is 14/6 = 2.33px
+left of the box centre by arithmetic rather than by measurement, on every renderer. *A corpus whose
+ground truth is a font metric has ground truth only where that font is.*
+
+**5. A type-scale rung was resting on a decorative element.** Removing the glyph's text removed its
+`font-size: 16px`, which was the *second* use of 16px on the page — and `type-scale` fires on any
+size used once. The scale rule went off on the clean control. The base page now carries 16px on the
+button labels as well as the section heading, so the rung is held by two real components. *A scale
+step propped up by one element that paints no text is not a step.*
+
+**6. Scoring recall without the defect CLASS inflates it.** `hierarchy-inversion` scored a hit
+because two unrelated rules fire inside `.actions` — the injected CSS also drifts a colour token —
+and the recall column read 4/4 for a stack that cannot reach visual hierarchy at all. `fp_budget.py`
+now requires the finding's class to match the defect's, and reports a class no rule reaches as
+**RESIDUE** rather than as a miss. That single residue item is the judgement queue's entire
+justification, and it now appears as such in the run.
+
+### What the weightings cost, stated
+
+`reso-landing` turns `token-drift` and `grid-violation` **off**, not down, because on a purchased
+template they measure our convention against somebody else's deliberate design. The gate reports the
+bill: **dom recall 6/9 under that profile**, giving up `radius-drift`, `token-color-drift` and
+`grid-offgrid` by choice. `reso-management` keeps every rule, weights conformance highest, and turns
+the whole-page judgement queue **off** — an internal admin surface does not buy per-screen taste —
+which is why it queues 2 entries where `reso-landing` queues 16.
+
+### Still not built, and unchanged by this
+
+Order-randomised comparison (§8.3), motion via `getComputedTiming()` (§8.4), and saliency (§8.5,
+still blocked on the UMSI++ licence). The north-star taste yardstick from §7 is still absent.
+
+🚨 **No model is called anywhere in this pipeline, and no local VLM was added.** `route.py` prepares
+a queue and stops. The June 2026 decision — taste stays human, gates adjudicate correctness and
+coverage only — is unchanged and unreopened; `fp_budget.py` is a gate on the *detector's*
+correctness, which is the sanctioned kind.

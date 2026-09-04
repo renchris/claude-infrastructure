@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import sys
 import time
@@ -141,10 +142,23 @@ def capture(corpus: pathlib.Path, dprs: list[int]) -> None:
     shots.mkdir(exist_ok=True)
     snaps.mkdir(exist_ok=True)
 
+    # `channel="chromium"` needs a chromium *channel* install, which not every
+    # machine has -- a container that ships a pinned browser under
+    # PLAYWRIGHT_BROWSERS_PATH has the binary but no channel, and the launch dies
+    # with "Executable doesn't exist" naming a build the pin will never produce.
+    # An explicit executable takes precedence when one is offered.
+    exe = os.environ.get("BENCH_CHROMIUM") or ""
+    if not exe:
+        for cand in ("/opt/pw-browsers/chromium",):
+            if pathlib.Path(cand).exists():
+                exe = cand
+                break
+    launch_kw = {"executable_path": exe} if exe else {"channel": "chromium"}
+
     timings = []
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            channel="chromium",
+            **launch_kw,
             args=[
                 "--force-color-profile=srgb",
                 "--disable-lcd-text",
