@@ -126,10 +126,22 @@ def find(snap: dict, tokens: dict) -> list[dict]:
     els = pg.els
     out: list[dict] = []
 
-    def rep(rule, target, detail, severity="medium"):
-        out.append(
-            {"rule": rule, "target": target, "detail": detail, "severity": severity}
-        )
+    def rep(rule, target, detail, severity="medium", verdict="FAIL", route_to=None):
+        # Three-valued by construction (PIPELINE_SPEC §1.4): PASS is silence,
+        # FAIL is a measurement outside its band, INDETERMINATE is the absence of
+        # a measurement. The routing layer keys on this field and NEVER on the
+        # rule's name -- a new rule that abstains must reach the vision queue
+        # without anyone remembering to add it to a list somewhere.
+        f = {
+            "rule": rule,
+            "target": target,
+            "detail": detail,
+            "severity": severity,
+            "verdict": verdict,
+        }
+        if route_to:
+            f["routeTo"] = route_to
+        out.append(f)
 
     text_els = [e for e in els if e["text"]]
 
@@ -264,6 +276,8 @@ def find(snap: dict, tokens: dict) -> list[dict]:
                 f"cannot compute a ratio: {why}. Requirement {need}:1 is UNVERIFIED "
                 f"for this text",
                 "high",
+                verdict="INDETERMINATE",
+                route_to="readability",
             )
             continue
         ratio = contrast(fg, bg)
