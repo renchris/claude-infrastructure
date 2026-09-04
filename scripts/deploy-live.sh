@@ -1526,16 +1526,37 @@ _head_ts="$(g log -1 --format=%ct "$HEAD_SHA" 2>/dev/null || echo 0)"
 _now="$(date +%s 2>/dev/null || echo 0)"
 case "$_head_ts" in ''|*[!0-9]*) _head_ts=0 ;; esac
 case "$_now"     in ''|*[!0-9]*) _now=0 ;; esac
-LAG_HOURS=0
-[ "$_head_ts" -gt 0 ] && [ "$_now" -gt "$_head_ts" ] && LAG_HOURS=$(( (_now - _head_ts) / 3600 ))
+# THE AGE IS KEPT IN SECONDS AND THE PREDICATE READS THE SECONDS. The floored hours are a RENDERING
+# and are used only for display. Until 2026-09-04 one floored variable did both jobs, and flooring is
+# right for a display and wrong for a comparison: `[ $((age/3600)) -gt 6 ]` does not trip until age
+# reaches 7h, so this script ENFORCED 25200s while every line it prints — and its own header at :72 —
+# says the budget is 6h. Measured that day at age 24042s: this script said "inside the degrade budget
+# (25 / 6h)" while wrap-ledger said PAST on the same sha at the same moment. The gap is exactly 3600s
+# wide, once per cycle, and inside it the freeze below exits 0 as a healthy pause instead of paging.
+#   · THE PRECEDENT IS IN THIS TREE AND IT IS THE MIRROR IMAGE. bin/cc-blockers:673 reads the SAME
+#     env var and already compares SECONDS: `[ "$age_s" -gt "$((DEPLOY_MAX_LAG_HOURS * 3600))" ]`.
+#     Its scar (tests/cc-blockers.bats, "floor, not round") was the other half — a rendering that
+#     ROUNDED 20700s to "6h" and implied a leg that had not fired. Both halves are one rule: the
+#     number a human reads and the number the predicate reads must not be the same transform.
+#   · NOT THE REFUTED CLAIM. Backlog 42fbbf112209 / 704511ab7e90 (see below) and 5b1cb9415742 (quoted
+#     at bin/cc-blockers:580) were all closed REFUTED for asking that this AUTHORISATION agree with a
+#     REPORT. That argument stands and nothing here changes it. This is the narrower question of a
+#     program enforcing the number it prints; agreement with the reporters is a consequence, not the
+#     reason.
+LAG_AGE_S=0
+[ "$_head_ts" -gt 0 ] && [ "$_now" -gt "$_head_ts" ] && LAG_AGE_S=$(( _now - _head_ts ))
+LAG_HOURS=$(( LAG_AGE_S / 3600 ))
+# Rendered h+m, because a floored "6h" cannot state the verdict that "6h01m past a 6h budget" is: the
+# magnitude has to be able to distinguish the two sides of its own budget (:1851's scar, one level up).
+LAG_HM="$(printf '%dh%02dm' "$LAG_HOURS" "$(( (LAG_AGE_S % 3600) / 60 ))")"
 # LAG_TRIP carries the boolean AND the reason in one value: empty ⇒ inside the budget. A degraded
 # advance must be able to say WHICH clock authorised it, or the banner is an assertion with no
 # evidence attached to it.
 LAG_TRIP=""
 if [ "$LAG_COMMITS" -gt "$MAX_LAG_COMMITS" ]; then
   LAG_TRIP="$LAG_COMMITS commit(s) behind trunk (budget $MAX_LAG_COMMITS)"
-elif [ "$LAG_HOURS" -gt "$MAX_LAG_HOURS" ]; then
-  LAG_TRIP="${LAG_HOURS}h since the live commit was authored (budget ${MAX_LAG_HOURS}h)"
+elif [ "$LAG_AGE_S" -gt "$(( MAX_LAG_HOURS * 3600 ))" ]; then
+  LAG_TRIP="$LAG_HM since the live commit was authored (budget ${MAX_LAG_HOURS}h)"
 fi
 # DO NOT make this budget add-aware. Backlog 42fbbf112209 / 704511ab7e90 proposed exactly that —
 # adopt wrap-ledger's ADDS predicate here so "LIVE_ADDS > 0 breaches at a lag of 1" — on the premise
@@ -1827,7 +1848,7 @@ EOF
       *)
         if [ -z "$TARGET" ] && [ -z "$LAG_TRIP" ] && [ -n "$GREEN_SHA" ]; then
           [ "$AUTO" -eq 1 ] && damp_clear
-          asay "waiting — $RMSG; lag $LAG_COMMITS commit(s) / ${LAG_HOURS}h, inside the degrade budget ($MAX_LAG_COMMITS / ${MAX_LAG_HOURS}h) — no advance, and none is due yet"
+          asay "waiting — $RMSG; lag $LAG_COMMITS commit(s) / $LAG_HM, inside the degrade budget ($MAX_LAG_COMMITS / ${MAX_LAG_HOURS}h) — no advance, and none is due yet"
           exit 0
         fi
         ;;
@@ -1849,8 +1870,8 @@ EOF
         printf 'deploy-live BLOCKED: %s (tip %.12s)\n' "$RMSG" "$TIP_SHA"
         # The magnitude, on every refusal. A refusal that names only its reason cannot be told from
         # a healthy pause, which is how 534 of them read as normal for 33h.
-        printf 'lag: %s commit(s) / %sh · degrade budget %s commit(s) / %sh · CC_DEPLOY_DEGRADE=%s\n' \
-          "$LAG_COMMITS" "$LAG_HOURS" "$MAX_LAG_COMMITS" "$MAX_LAG_HOURS" "$DEGRADE"
+        printf 'lag: %s commit(s) / %s · degrade budget %s commit(s) / %sh · CC_DEPLOY_DEGRADE=%s\n' \
+          "$LAG_COMMITS" "$LAG_HM" "$MAX_LAG_COMMITS" "$MAX_LAG_HOURS" "$DEGRADE"
         printf 'the live layer is FROZEN until a tree verifies green. stamps=%s verifier=%s\n' "$STAMPS_DIR" "$POSTLAND_BIN"
       } > "$pf" 2>/dev/null || true
       say "wrote page $pf"

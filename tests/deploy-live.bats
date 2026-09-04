@@ -1314,8 +1314,30 @@ deadlock() { # the MEASURED live state: the only green is BEHIND live HEAD, and 
   run dlb 25 6
   [ "$status" -eq 0 ]
   [ "$(git -C "$SHARED" rev-parse HEAD)" = "$want" ]
-  [[ "$output" == *"h since the live commit was authored"* ]] || false
+  # The magnitude is pinned as h+m, not as a bare hours figure: a floored "6h" cannot state which
+  # side of a 6h budget it is on, which is the defect L3b below exists to catch.
+  [[ "$output" =~ [0-9]+h[0-9][0-9]m\ since\ the\ live\ commit\ was\ authored ]] || false
   [[ "$output" != *"commit(s) behind trunk"* ]] || false    # the COMMIT clock did not authorise it
+}
+
+@test "L3b the HOURS budget trips on SECONDS, not on floored hours (the 6h-7h dead hour)" {
+  # THE ARM THAT WAS MISSING. Until 2026-09-04 the predicate was `[ $((age/3600)) -gt MAX_LAG_HOURS ]`,
+  # so a layer 6h07m old floored to 6, `6 -gt 6` was false, and the script reported "inside the
+  # degrade budget (25 / 6h)" for a full hour past the budget it prints — while bin/cc-blockers:673,
+  # reading the SAME CC_DEPLOY_MAX_LAG_HOURS, and wrap-ledger both called it PAST. L3's 10h fixture
+  # cannot see this: every age it uses clears the floored form too. The discriminating fixture is an
+  # age INSIDE the dead hour, and 22000s (6h06m) is one — comfortably past 21600 and under 25200.
+  aged_push old 22000                            # live HEAD is 6h06m old: PAST a 6h budget by 400s
+  advance_origin b                               # trunk +1 — one commit, deep inside 25
+  want="$(git -C "$SHARED" rev-parse origin/main)"
+  run dlb 25 6
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$want" ]        # it ADVANCED — the hours clock authorised it
+  [[ "$output" =~ 6h0[0-9]m\ since\ the\ live\ commit\ was\ authored ]] || false
+  [[ "$output" != *"commit(s) behind trunk"* ]] || false    # the COMMIT clock did not authorise it
+  # And the benign in-budget wait must NOT be what happened: pre-fix this fixture took that exit,
+  # reporting a freeze as a healthy pause. Asserting its absence is what makes the arm two-sided.
+  [[ "$output" != *"none is due yet"* ]] || false
 }
 
 @test "L4 T2 walks BACK past a RED-stamped commit and takes the one below it" {
