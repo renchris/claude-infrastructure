@@ -109,21 +109,27 @@ EOF
   [ "$status" -eq 64 ]
 }
 
+# Tests 11-13 assert a SUCCESSFUL --dry-run, so each must pin the start-load floor OUT of the way.
+# Unpinned they read the box's live load1, and the floor (default 14) refuses with rc 4 above it —
+# so they are green on a quiet desk and RED inside postland-verify, whose own 534-suite corpus is
+# what pushes load1 past 14. Measured 2026-09-04: solo rc 0 at load1 11; rc 4 at load1 19.2, in the
+# foreground and under `taskpolicy -c background` alike (the QoS band is NOT the variable, load is).
+# The floor is pinned HIGH here, never to 0 — test 9 uses 0 precisely to FORCE the refusal.
 @test "11: --dry-run launches nothing and says so" {
-  run "$S" --dry-run --points "0 3 6"
+  CC_SLOPE_MAX_START_LOAD=99999 run "$S" --dry-run --points "0 3 6"
   [ "$status" -eq 0 ]
   [[ "$output" == *"DRY RUN"* ]] || false
   [[ "$output" == *"nothing launched"* ]]
 }
 
 @test "12: --dry-run is exempt from the settle floor (it measures nothing)" {
-  run "$S" --dry-run --settle 5 --points "0 3 6"
+  CC_SLOPE_MAX_START_LOAD=99999 run "$S" --dry-run --settle 5 --points "0 3 6"
   [ "$status" -eq 0 ]
   [[ "$output" == *"DRY RUN"* ]]
 }
 
 @test "13: it resolves a claude binary and names it, rather than assuming a path" {
-  run "$S" --dry-run --points "0 3 6"
+  CC_SLOPE_MAX_START_LOAD=99999 run "$S" --dry-run --points "0 3 6"
   [ "$status" -eq 0 ]
   [[ "$output" == *"binary   :"* ]]
 }
