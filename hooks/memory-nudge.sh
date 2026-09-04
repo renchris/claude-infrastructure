@@ -359,6 +359,32 @@ if [ -n "$WANT" ]; then
 else
   WHERE="the index lives at <config-dir>/projects/<slug>/memory/MEMORY.md — inside memory/, NOT one level up at the project root (an index outside memory/ is invisible to the cross-account mirror), and topic files beside it"
 fi
+
+# ── WHERE A DURABLE RULE IS MINTED, which is no longer the index ─────────────────────────────
+# The index is CAPPED (25,000 chars / 200 lines) and past either cap the loader silently drops
+# the NEWEST entries — so every rule minted there competes with every other for a fixed budget
+# and the newest one loses. A project `.claude/rules/*.md` file loads unprompted with no cap of
+# that size (measured: 60,089 chars / 358 lines — 2.4x the char cap — loaded head and tail
+# intact), so a rule written there is on the same always-loaded surface WITHOUT the forced pass.
+# That is why the guidance below sends a durable, generalizable RULE to the rules file while
+# MEMORY.md plus its topic file stay correct for everything else.
+#
+# 🚨 PROJECT-level, never USER-level. `~/.claude/rules/*.md` loads in an INTERACTIVE session and
+# does NOT load under `claude -p` — the variable is invocation mode, not the surface — while
+# `<project>/.claude/rules/*.md` loads in both. Naming the wrong one would send rules to a
+# surface that is dark for every headless run.
+#
+# This is PROSE, not enforcement, and it is sited here deliberately with its limits stated: this
+# hook fires at UserPromptSubmit, every Nth prompt, a full turn after any write, and its only
+# channel is additionalContext. It cannot gate a write and does not pretend to. The actuator for
+# a rule that is ALREADY in the index is cc-memory-rotate; this text is only about where the
+# NEXT one is written.
+RULES_HINT="the project's always-loaded rules file at <project>/.claude/rules/agent-operating-lessons.md (PROJECT-level — ~/.claude/rules/ is dark under \`claude -p\`)"
+if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+  RULES_HINT="$CLAUDE_PROJECT_DIR/.claude/rules/agent-operating-lessons.md (create it if missing)"
+elif RROOT=$(cd "$CWD" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null); then
+  [ -n "$RROOT" ] && RULES_HINT="$RROOT/.claude/rules/agent-operating-lessons.md (create it if missing)"
+fi
 # ORDER INVERTED 2026-09-03, and the order is load-bearing in two directions. This said "append
 # one index line to MEMORY.md and create the topic file" — index FIRST. But the index write is the
 # one that can be REFUSED (hooks/lib/memory-index-budget.sh denies a crossing write at PreToolUse),
@@ -368,7 +394,7 @@ fi
 # lesson, and the remedy is one-in-one-out on an index whose body already exists. It is also the
 # precondition for any gate that must READ a rule's topic file at the moment its index line is
 # written (routing on durability needs the frontmatter to exist).
-NUDGE="MEMORY CHECK (periodic): if this session surfaced a DURABLE, generalizable rule, a decision (+ its why), a confirmed constraint, or user feedback that is NOT already in MEMORY.md, persist it now — FIRST create the topic file with frontmatter, THEN append its one-line pointer to MEMORY.md (that order matters: the pointer can be refused when the index is full, and a rule whose body is already on disk survives that refusal); $WHERE. SKIP (do not encode as a permanent rule): transient errors, environment/worktree-specific one-offs, lucky paths, negative tool-claims (verify before encoding), anything already indexed. Nothing durable this session? Ignore this."
+NUDGE="MEMORY CHECK (periodic): if this session surfaced a DURABLE, generalizable rule, a decision (+ its why), a confirmed constraint, or user feedback that is NOT already in MEMORY.md, persist it now — FIRST create the topic file with frontmatter, THEN append its one-line pointer (that order matters: the pointer can be refused when the index is full, and a rule whose body is already on disk survives that refusal); $WHERE. WHERE THE POINTER GOES: a DURABLE, GENERALIZABLE RULE — one that should fire on any work here — belongs in $RULES_HINT, which is always loaded and has no 25,000-char/200-line cap, so it does not compete with the index and cannot be dropped from its tail; append it VERBATIM as a whole line and do not shorten it. Everything else — a project fact, a pointer to tooling, session-specific context — keeps the MEMORY.md bullet. SKIP (do not encode as a permanent rule): transient errors, environment/worktree-specific one-offs, lucky paths, negative tool-claims (verify before encoding), anything already indexed. Nothing durable this session? Ignore this."
 
 # Build with jq: the message interpolates measured values, and shell quoting is
 # not JSON quoting — a hand-rolled heredoc would be a quoting bug waiting to land.

@@ -393,8 +393,16 @@ fire() { jq -nc --arg cwd "$1" '{session_id:"s1",cwd:$cwd,tool_name:"Bash",tool_
   [ "$status" -eq 0 ]
   ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext // ""')"
   has "$ctx" "AUTO-ROTATED"
-  n=$(find "$memd/archive" -name 'MEMORY_ARCHIVE_*-COLD.md' | wc -l | tr -d ' ')
-  [ "$n" = "1" ]
+  # CONTRACT CHANGED 2026-09-04 — this asserted `find … MEMORY_ARCHIVE_*-COLD.md | wc -l` = 1.
+  # Ordinary rotation now ROUTES what route_veto permits to the project's always-loaded rules
+  # file and cold-records only the rest, and this hook passes `--rules-file`, so these
+  # `project`-typed entries land in the rules file and no cold record is written at all. The
+  # test's real subject — the whole-index arm ACTUATED in this same turn, rather than being
+  # left for the next prompt — is unchanged, so it is asserted at the new destination. Both
+  # halves are kept live: the index must have shrunk AND the moved lines must be somewhere.
+  before_lines=41
+  [ "$(grep -c '^- \[' "$memd/MEMORY.md")" -lt "$before_lines" ]
+  [ "$(grep -c '^- \[' "$proj/.claude/rules/agent-operating-lessons.md")" -gt 0 ]
 }
 
 @test "20 every failure surface exits 0 and emits nothing" {

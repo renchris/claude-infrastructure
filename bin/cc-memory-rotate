@@ -21,8 +21,21 @@
 # ── WHAT IT DOES ─────────────────────────────────────────────────────────────────────────────
 # Mechanizes the operator-approved cold split (2026-07-30, commands/compact-memory.md § the
 # two-tier hot/cold split): at/over ROTATE_AT, move ELIGIBLE `- [...](file.md) — hook` lines,
-# oldest-first by topic mtime, into archive/MEMORY_ARCHIVE_<YEAR>-H<half>-COLD.md until the
-# index is at/under TARGET. Lines move VERBATIM under a dated boundary comment; topic files
+# oldest-first by topic mtime, out of the index until it is at/under TARGET.
+#
+# 🚨 WHERE THEY GO CHANGED 2026-09-04. A selected line is now ROUTED to the project's
+# always-loaded rules file when route_veto permits, and COLD-recorded only when it does not.
+# Cold is a DEMOTION — archive/MEMORY_ARCHIVE_*-COLD.md does not auto-load, so holding the
+# loader cap used to cost the reader the rule. The rules file has no cap of that size and loads
+# unprompted, so a routed line is on a different SURFACE, not a colder one; the reader keeps it.
+# route_veto is unchanged and is not weakened by this: PINNED, the feedback-/reference-/user-
+# name convention and an operator-voice `type:` stamp still send a line to the cold record, so
+# on an index whose entries are nearly all `reference-` this routes NOTHING — the correct
+# outcome while "may the machine move a reference- lesson" remains an open operator decision.
+# With no destination resolvable (no --rules-file, no MEMORY_RULES_FILE, no CLAUDE_PROJECT_DIR)
+# every line takes the cold path exactly as before, and the verdict says `route=<reason>`.
+#
+# Either way lines move VERBATIM under a dated boundary comment; topic files
 # are never touched; restore = paste the line back. This is the reversible, budget-
 # authorized class — NOT the lossy PROPOSE-ONLY half of /compact-memory (shortening and
 # dedupe stay human-gated there).
@@ -110,9 +123,12 @@
 # Normal rotation is reached by a DIFFERENT code path that this mode never enters, so no threshold,
 # no ordering and no floor in the selection loop below changes behaviour because this exists.
 #
-# Usage: cc-memory-rotate <path-to-.../memory/MEMORY.md> [--dry-run] [--verbose]
+# Usage: cc-memory-rotate <index> [--rules-file <path>] [--dry-run] [--verbose]
 #        cc-memory-rotate <index> --drain-oversized [--rules-file <path>] [--dry-run] [--verbose]
-# Env:   MEMORY_ENTRY_LIMIT (300, drain mode only) · MEMORY_RULES_FILE (drain destination) ·
+# Env:   MEMORY_ENTRY_LIMIT (300, drain mode only) · MEMORY_RULES_FILE (routing destination for
+#        BOTH modes; also derived from CLAUDE_PROJECT_DIR) · MEMORY_RULES_HARD_CAP (4194304 — the
+#        loader's SILENT-SKIP size, encoded not measured, see its declaration) ·
+#        MEMORY_RULES_WARN_CAP (40000 — cosmetic, warns and writes) ·
 #        MEMORY_INDEX_LIMIT (25000, in loader chars) · MEMORY_ROTATE_AT (LIMIT-1500) · MEMORY_ROTATE_TARGET
 #        (LIMIT-4000) · MEMORY_INDEX_LINE_LIMIT (200) · MEMORY_ROTATE_AT_LINES (LINE_LIMIT-12) ·
 #        MEMORY_ROTATE_TARGET_LINES (LINE_LIMIT-32) · MEMORY_ROTATE_MIN_KEEP (40) · MEMORY_ROTATE_TAIL_GUARD (15) ·
@@ -195,7 +211,27 @@ TARGET_LINES="${MEMORY_ROTATE_TARGET_LINES:-$(( LINE_LIMIT - 32 ))}"
 MIN_KEEP="${MEMORY_ROTATE_MIN_KEEP:-40}"
 TAIL_GUARD="${MEMORY_ROTATE_TAIL_GUARD:-15}"
 MIN_AGE_DAYS="${MEMORY_ROTATE_MIN_AGE_DAYS:-7}"
-for v in "$ROTATE_AT" "$TARGET" "$ROTATE_AT_LINES" "$TARGET_LINES" "$MIN_KEEP" "$TAIL_GUARD" "$MIN_AGE_DAYS"; do
+# ── THE DESTINATION'S TWO CEILINGS, and why only ONE of them refuses ─────────────────────────
+# The routing destination is a `.claude/rules/*.md` file, which has no 25000-char cap — that is
+# the whole point of routing to it. It has two other ceilings and they are NOT the same kind of
+# thing, so conflating them would be the defect:
+#
+#   HARD (4 MiB): the loader SKIPS a rules file at/over this size — the file does not truncate,
+#   it VANISHES, so the failure is total and silent. A guard here fails closed.
+#
+#   WARN (40,000 chars): a COSMETIC startup warning. Nothing is truncated and nothing is
+#   dropped. It is the default tier budget to WARN on, never to refuse on.
+#
+# 🚨 THE 4 MiB NUMBER IS ENCODED HERE, NOT MEASURED HERE. The programme that specified this
+# guard recorded the binary carve that produced the constant and a 419 KB untruncated positive
+# control — about a tenth of it — but NO observation of a file at or over 4 MiB actually being
+# skipped. So the threshold is a named, overridable variable rather than a literal at its use
+# site: if the real ceiling is elsewhere, one env var moves the guard and no code changes.
+# Hardcoding an unmeasured constant and calling the result a guard is the shape
+# MEMORY.md reference-a-documented-kill-switch-is-a-claim records.
+RULES_HARD_CAP="${MEMORY_RULES_HARD_CAP:-4194304}"
+RULES_WARN_CAP="${MEMORY_RULES_WARN_CAP:-40000}"
+for v in "$ROTATE_AT" "$TARGET" "$ROTATE_AT_LINES" "$TARGET_LINES" "$MIN_KEEP" "$TAIL_GUARD" "$MIN_AGE_DAYS" "$RULES_HARD_CAP" "$RULES_WARN_CAP"; do
   case "$v" in ''|*[!0-9]*) printf 'verdict=error reason=non-numeric-config\n'; exit 2 ;; esac
 done
 if [ "$TARGET" -ge "$ROTATE_AT" ]; then
@@ -315,43 +351,206 @@ route_veto() {
   return 0
 }
 
-if [ "$DRAIN" -eq 1 ]; then
-  # ── Destination: resolved, asserted reachable and writable BEFORE anything is read ───────────
-  # Resolve the symlink explicitly. This destination is a `.claude/rules/` file, and a symlink
-  # into that directory is a sanctioned cross-repo lever — but `Edit` refuses to write through one
-  # ("Resolve the symlink and pass the real target path explicitly"), so a path that works for a
-  # `>>` and fails for the compliant tool is the worst possible asymmetry. Resolve it here once.
+# ── ROUTING: one destination resolver, one cap guard, one commit — shared by BOTH paths ──────
+#
+# `--drain-oversized` (the per-entry condition) and ordinary rotation (the whole-index caps) now
+# both MOVE lines to an always-loaded rules file instead of demoting them to the cold record, so
+# the resolve / cap-guard / create / append / verify step is written ONCE, here. A second copy
+# would be a second definition of "routed", and the two would drift on exactly the property that
+# makes the move non-lossy.
+
+# route_paths_of <topicfile> → the value the topic file VOLUNTEERS on a `paths:` line, or nothing.
+route_paths_of() {
+  awk 'NR<=12 && /^[[:space:]]*paths:[[:space:]]*[^[:space:]]/ {
+         sub(/^[[:space:]]*paths:[[:space:]]*/,""); print; exit }' "$DIR/$1" 2>/dev/null || true
+}
+
+# route_dest_for <topicfile> → the destination for ONE entry.
+#
+# 🚨 DEFAULT IS ALWAYS-LOADED, UNCONDITIONALLY. The only thing that can move an entry off it is
+# the entry's own author VOLUNTEERING a `paths:` list in the topic frontmatter. No glob is ever
+# inferred and nothing here classifies a rule's scope: measured 2026-09, 0 of 5,922 topic files
+# fleet-wide declare `paths:`, and the destination file's own header says these lessons are
+# "deliberately unscoped … they bear on any work here". Inventing a scope for a globally
+# applicable rule is SILENT SEVERANCE — the failure `.claude/rules/replicache.md` records having
+# suffered — and it is worse than not scoping at all, because a scoped file costs 0 tokens by
+# never loading. So this function is a no-op on every entry that exists today, and that is the
+# honest implementation of the item rather than a smaller version of it.
+route_dest_for() {
+  local f="$1"
+  if [ -z "$f" ] || [ ! -f "$DIR/$f" ]; then printf '%s' "$RULES_FILE"; return 0; fi
+  if [ -z "$(route_paths_of "$f")" ]; then printf '%s' "$RULES_FILE"; return 0; fi
+  # The scoped sibling is NAMED for its topic file, which is what lets route_flush recover the
+  # volunteered value at creation time without carrying it through the payload as a third field.
+  printf '%s/scoped-%s' "${RULES_FILE%/*}" "$f"
+}
+
+# rules_cap_reason <dest> <added-bytes> → echoes a refusal reason, or nothing. Warns on stderr.
+#
+# The projection, not the current size, is what is judged: a destination one byte under the hard
+# cap that this append would push over is exactly the case the guard exists for, and checking
+# only the current size would let the file cross into the silent-skip regime and report success.
+rules_cap_reason() {
+  local dest="$1" add="$2" cur=0 proj
+  if [ -f "$dest" ]; then cur=$(fsize "$dest"); fi
+  case "$cur" in ''|*[!0-9]*) cur=0 ;; esac
+  proj=$(( cur + add ))
+  if [ "$proj" -ge "$RULES_HARD_CAP" ]; then echo dest-over-hard-cap; return 0; fi
+  if [ "$proj" -ge "$RULES_WARN_CAP" ]; then
+    # WARN, NEVER REFUSE. This ceiling is cosmetic — the loader prints a startup warning and
+    # loads the file whole. Refusing here would re-create the very cap routing exists to escape.
+    printf 'warn=dest-over-warn-cap dest=%s projected=%s warn_cap=%s (cosmetic startup warning — nothing is truncated; this is the tier budget, not a limit)\n' \
+      "$dest" "$proj" "$RULES_WARN_CAP" >&2
+  fi
+  return 0
+}
+
+# resolve_rules_dest → 0 with RULES_FILE resolved to a real, writable path; else 1 with
+# RESOLVE_REASON set. Extracted verbatim from the drain path so ordinary rotation resolves its
+# destination through the same symlink and writability assertions rather than a second copy.
+#
+# The symlink resolution is load-bearing and is not tidiness: a symlink into `.claude/rules/` is
+# the sanctioned cross-repo lever, and `Edit` refuses to write through one ("Resolve the symlink
+# and pass the real target path explicitly"), so a path that works for a `>>` and fails for the
+# compliant tool is the worst possible asymmetry.
+resolve_rules_dest() {
+  # Reason tokens are QUOTED, not bare: shellcheck reads an unquoted `X=a-b` as arithmetic
+  # (SC2100) and the land gate runs it at default severity, not `-S error`.
+  local rbase rdir rdir_p rtgt
+  RESOLVE_REASON=""
   if [ -z "$RULES_FILE" ]; then RULES_FILE="${MEMORY_RULES_FILE:-}"; fi
   if [ -z "$RULES_FILE" ] && [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
     RULES_FILE="$CLAUDE_PROJECT_DIR/.claude/rules/agent-operating-lessons.md"
   fi
-  if [ -z "$RULES_FILE" ]; then
-    printf 'verdict=error reason=no-rules-destination hint=--rules-file|MEMORY_RULES_FILE|CLAUDE_PROJECT_DIR\n'; exit 2
-  fi
-  RBASE="${RULES_FILE##*/}"
-  RDIR="${RULES_FILE%/*}"
-  [ "$RDIR" != "$RULES_FILE" ] || RDIR="."
-  mkdir -p "$RDIR" 2>/dev/null || true
-  if [ ! -d "$RDIR" ]; then printf 'verdict=error reason=dest-dir-unreachable dest=%s\n' "$RULES_FILE"; exit 2; fi
-  RDIR_P=$(cd "$RDIR" 2>/dev/null && pwd -P) || RDIR_P=""
-  if [ -z "$RDIR_P" ]; then printf 'verdict=error reason=dest-dir-unreachable dest=%s\n' "$RULES_FILE"; exit 2; fi
-  RULES_FILE="$RDIR_P/$RBASE"
+  if [ -z "$RULES_FILE" ]; then RESOLVE_REASON='no-rules-destination'; return 1; fi
+  rbase="${RULES_FILE##*/}"
+  rdir="${RULES_FILE%/*}"
+  [ "$rdir" != "$RULES_FILE" ] || rdir="."
+  mkdir -p "$rdir" 2>/dev/null || true
+  if [ ! -d "$rdir" ]; then RESOLVE_REASON='dest-dir-unreachable'; return 1; fi
+  rdir_p=$(cd "$rdir" 2>/dev/null && pwd -P) || rdir_p=""
+  if [ -z "$rdir_p" ]; then RESOLVE_REASON='dest-dir-unreachable'; return 1; fi
+  RULES_FILE="$rdir_p/$rbase"
   if [ -L "$RULES_FILE" ]; then
-    RTGT=$(readlink -f "$RULES_FILE" 2>/dev/null) || RTGT=""
-    if [ -z "$RTGT" ]; then
-      RTGT=$(readlink "$RULES_FILE" 2>/dev/null) || RTGT=""
-      case "$RTGT" in ''|/*) : ;; *) RTGT="$RDIR_P/$RTGT" ;; esac
+    rtgt=$(readlink -f "$RULES_FILE" 2>/dev/null) || rtgt=""
+    if [ -z "$rtgt" ]; then
+      rtgt=$(readlink "$RULES_FILE" 2>/dev/null) || rtgt=""
+      case "$rtgt" in ''|/*) : ;; *) rtgt="$rdir_p/$rtgt" ;; esac
     fi
-    [ -n "$RTGT" ] && RULES_FILE="$RTGT"
+    [ -n "$rtgt" ] && RULES_FILE="$rtgt"
   fi
   if [ -e "$RULES_FILE" ]; then
     if [ ! -f "$RULES_FILE" ] || [ ! -w "$RULES_FILE" ]; then
-      printf 'verdict=error reason=dest-not-writable dest=%s\n' "$RULES_FILE"; exit 2
+      RESOLVE_REASON='dest-not-writable'; return 1
     fi
   elif [ ! -w "${RULES_FILE%/*}" ]; then
-    printf 'verdict=error reason=dest-not-writable dest=%s\n' "$RULES_FILE"; exit 2
+    RESOLVE_REASON='dest-not-writable'; return 1
   fi
-  case "$RULES_FILE" in "$INDEX") printf 'verdict=error reason=dest-is-the-index\n'; exit 2 ;; esac
+  case "$RULES_FILE" in "$INDEX") RESOLVE_REASON='dest-is-the-index'; return 1 ;; esac
+  return 0
+}
+
+# route_flush <payload> <provenance-comment> → 0, or 1 with ROUTE_ERR set. Sets ROUTE_DESTS.
+#
+# payload = one `<destination><TAB><index line>` row per routed entry, grouped here rather than
+# by the caller so a volunteered `paths:` scope needs no second commit path.
+#
+# ORDER AND FAILURE SHAPE. Every destination's cap is judged BEFORE the first byte is appended
+# anywhere, so a multi-destination flush cannot half-write and leave a line in a rules file AND
+# in the cold record. Then each destination is created if missing, appended once, and finally
+# EVERY routed line is verified present in its own destination — all of it before any caller
+# rewrites the index, so a crash leaves at worst a duplicate line in the destination, never a
+# lost one. Same invariant, same reason, as the cold write below.
+route_flush() {
+  local payload="$1" prov="$2" dests dest block d l cap base topic paths n
+  ROUTE_ERR=""; ROUTE_DESTS=""
+  [ -n "$payload" ] || return 0
+  dests=$(printf '%s\n' "$payload" | cut -f1 | sort -u | grep -v '^$' || true)
+  [ -n "$dests" ] || return 0
+
+  # Pass 1 — cap every destination first, on an over-estimate (the whole payload). Conservative
+  # in the one direction a guard may be conservative in: it can only refuse earlier, never later.
+  while IFS= read -r dest; do
+    [ -n "$dest" ] || continue
+    cap=$(rules_cap_reason "$dest" "${#payload}")
+    if [ -n "$cap" ]; then ROUTE_ERR="$cap"; return 1; fi
+  done <<EOF
+$dests
+EOF
+
+  # Pass 2 — build, create, append. Idempotent: a line already present is not duplicated.
+  while IFS= read -r dest; do
+    [ -n "$dest" ] || continue
+    block=$(printf '\n%s' "$prov")
+    n=0
+    while IFS="$TAB" read -r d l; do
+      [ -n "${l:-}" ] || continue
+      [ "$d" = "$dest" ] || continue
+      if [ -f "$dest" ] && grep -qxF -- "$l" "$dest"; then continue; fi
+      block="$block
+$l"
+      n=$(( n + 1 ))
+    done <<EOF
+$payload
+EOF
+    cap=$(rules_cap_reason "$dest" "${#block}")
+    if [ -n "$cap" ]; then ROUTE_ERR="$cap"; return 1; fi
+    if [ ! -e "$dest" ]; then
+      base="${dest##*/}"
+      case "$base" in
+        scoped-*)
+          topic="${base#scoped-}"
+          paths=$(route_paths_of "$topic")
+          if ! printf -- '---\npaths: %s\n---\n\n# Scoped project rules — routed by cc-memory-rotate\n' "$paths" >"$dest" 2>/dev/null; then
+            ROUTE_ERR='dest-create-failed'; return 1
+          fi ;;
+        *)
+          if ! printf '%s\n' "# Always-loaded project rules" "" >"$dest" 2>/dev/null; then
+            ROUTE_ERR='dest-create-failed'; return 1
+          fi ;;
+      esac
+    fi
+    if ! printf '%s\n' "$block" >>"$dest" 2>/dev/null; then
+      ROUTE_ERR='dest-append-failed'; return 1
+    fi
+    ROUTE_DESTS="${ROUTE_DESTS:+$ROUTE_DESTS,}$dest"
+  done <<EOF
+$dests
+EOF
+
+  # Pass 3 — verify, per line, in its own destination.
+  while IFS="$TAB" read -r d l; do
+    [ -n "${l:-}" ] || continue
+    if ! grep -qxF -- "$l" "$d"; then ROUTE_ERR='dest-verify-failed'; return 1; fi
+  done <<EOF
+$payload
+EOF
+  return 0
+}
+
+if [ "$DRAIN" -eq 1 ]; then
+  # ── Destination: resolved, asserted reachable and writable BEFORE anything is read ───────────
+  # The resolution itself now lives in resolve_rules_dest (above), shared with ordinary rotation.
+  # The two callers differ ONLY in what a failure means: here the whole mode is routing, so an
+  # unusable destination is a refusal; there, rotation still has the cold record and degrades.
+  if ! resolve_rules_dest; then
+    case "$RESOLVE_REASON" in
+      no-rules-destination)
+        printf 'verdict=error reason=no-rules-destination hint=--rules-file|MEMORY_RULES_FILE|CLAUDE_PROJECT_DIR\n' ;;
+      dest-is-the-index)
+        printf 'verdict=error reason=dest-is-the-index\n' ;;
+      *)
+        printf 'verdict=error reason=%s dest=%s\n' "$RESOLVE_REASON" "$RULES_FILE" ;;
+    esac
+    exit 2
+  fi
+  # Fail closed on the hard cap BEFORE reading the index. A destination already at/over the
+  # loader's silent-skip size cannot receive anything, and finding that out after the index has
+  # been rewritten would be the one failure this mode must not have.
+  D_CAP=$(rules_cap_reason "$RULES_FILE" 1)
+  if [ -n "$D_CAP" ]; then
+    printf 'verdict=error reason=%s dest=%s hard_cap=%s\n' "$D_CAP" "$RULES_FILE" "$RULES_HARD_CAP"; exit 2
+  fi
 
   ENTRY_LIMIT=""
   if command -v mim_entry_limit >/dev/null 2>&1; then ENTRY_LIMIT=$(mim_entry_limit) || ENTRY_LIMIT=""; fi
@@ -367,7 +566,7 @@ if [ "$DRAIN" -eq 1 ]; then
   D_OVER=$(mim_oversized_lines "$INDEX" "$ENTRY_LIMIT") || {
     printf 'verdict=error reason=measure-failed\n'; exit 2; }
 
-  D_MOVE=""; D_N=0; D_CAND=0; D_FILES=""
+  D_MOVE=""; D_N=0; D_CAND=0; D_FILES=""; D_PAY=""
   V_PIN=0; V_TYPE=0; V_PARSE=0; V_DANGLING=0
   while IFS="$TAB" read -r _lno _units; do
     [ -n "${_lno:-}" ] || continue
@@ -393,6 +592,8 @@ if [ "$DRAIN" -eq 1 ]; then
     fi
     D_MOVE="$D_MOVE $_lno"
     D_FILES="${D_FILES:+$D_FILES,}$_f"
+    D_PAY="$D_PAY$(route_dest_for "$_f")$TAB$_ln
+"
     D_N=$(( D_N + 1 ))
     vlog "drain move $_f (${_units} units)"
   done <<EOF
@@ -413,9 +614,12 @@ EOF
     exit 4
   fi
 
+  D_DESTS=$(printf '%s\n' "$D_PAY" | cut -f1 | sort -u | grep -v '^$' | tr '\n' ',' | sed 's/,$//')
+  [ -n "$D_DESTS" ] || D_DESTS="$RULES_FILE"
+
   if [ "$DRYRUN" -eq 1 ]; then
     printf 'verdict=dry-run mode=drain-oversized entry_limit=%s oversized=%s moved=%s files=%s dest=%s\n' \
-      "$ENTRY_LIMIT" "$D_CAND" "$D_N" "$D_FILES" "$RULES_FILE"
+      "$ENTRY_LIMIT" "$D_CAND" "$D_N" "$D_FILES" "$D_DESTS"
     exit 0
   fi
 
@@ -423,25 +627,12 @@ EOF
   # Same ordering and the same reason as the cold write below: a crash between the two leaves at
   # worst a duplicate line in the destination, never a lost one.
   D_SNAP=$(fstat "$INDEX")
-  if [ ! -e "$RULES_FILE" ]; then
-    if ! printf '%s\n' "# Always-loaded project rules" "" >"$RULES_FILE" 2>/dev/null; then
-      printf 'verdict=error reason=dest-create-failed dest=%s\n' "$RULES_FILE"; exit 2
-    fi
-  fi
-  D_BLOCK=$(printf '\n<!-- routed %s by cc-memory-rotate --drain-oversized: %s index line(s) over the %s-unit buffer cap, moved VERBATIM off %s. Both surfaces load unprompted, so nothing was demoted and nothing was shortened; restore = paste the line back. -->' \
+  D_PROV=$(printf '<!-- routed %s by cc-memory-rotate --drain-oversized: %s index line(s) over the %s-unit buffer cap, moved VERBATIM off %s. Both surfaces load unprompted, so nothing was demoted and nothing was shortened; restore = paste the line back. -->' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$D_N" "$ENTRY_LIMIT" "$INDEX")
-  for _lno in $D_MOVE; do
-    if ! grep -qxF -- "${D_LINES[$_lno]}" "$RULES_FILE"; then
-      D_BLOCK="$D_BLOCK
-${D_LINES[$_lno]}"
-    fi
-  done
-  printf '%s\n' "$D_BLOCK" >>"$RULES_FILE"
-  for _lno in $D_MOVE; do
-    if ! grep -qxF -- "${D_LINES[$_lno]}" "$RULES_FILE"; then
-      printf 'verdict=error reason=dest-verify-failed dest=%s\n' "$RULES_FILE"; exit 2
-    fi
-  done
+  if ! route_flush "$D_PAY" "$D_PROV"; then
+    printf 'verdict=error reason=%s dest=%s hard_cap=%s\n' "$ROUTE_ERR" "$D_DESTS" "$RULES_HARD_CAP"; exit 2
+  fi
+  [ -n "$ROUTE_DESTS" ] && D_DESTS="$ROUTE_DESTS"
 
   D_TMP=$(mktemp "$DIR/.MEMORY.md.drain.XXXXXX")
   {
@@ -467,10 +658,10 @@ ${D_LINES[$_lno]}"
   mv -f "$D_TMP" "$INDEX"
   D_NEWLINES=$(flines "$INDEX")
   printf 'verdict=drained mode=drain-oversized entry_limit=%s oversized=%s moved=%s files=%s before=%s after=%s lines_before=%s lines_after=%s dest=%s\n' \
-    "$ENTRY_LIMIT" "$D_CAND" "$D_N" "$D_FILES" "$SIZE" "$D_NEWSZ" "$NLINES" "$D_NEWLINES" "$RULES_FILE"
+    "$ENTRY_LIMIT" "$D_CAND" "$D_N" "$D_FILES" "$SIZE" "$D_NEWSZ" "$NLINES" "$D_NEWLINES" "$D_DESTS"
   mkdir -p "$DIR/archive" 2>/dev/null || true
   printf '%s verdict=drained moved=%s files=%s before=%s after=%s dest=%s\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$D_N" "$D_FILES" "$SIZE" "$D_NEWSZ" "$RULES_FILE" \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$D_N" "$D_FILES" "$SIZE" "$D_NEWSZ" "$D_DESTS" \
     >>"$DIR/archive/.rotate.log" 2>/dev/null || true
   exit 0
 fi
@@ -775,28 +966,105 @@ EOF
     exit 0
   fi
 
+  # ── ROUTE what may be routed; COLD is now the REMAINDER, not the destination ───────────────
+  #
+  # Rotation used to be a DEMOTION: every selected line went to archive/MEMORY_ARCHIVE_*-COLD.md,
+  # which does not auto-load, so holding the loader cap cost the reader the rule. Routing is a
+  # MOVE: the project rules file loads unprompted with no cap this size, so a line that goes
+  # there is on a different surface, not on a colder one. Nothing is shortened either way.
+  #
+  # 🚨 route_veto APPLIES UNCHANGED AND IS NOT WEAKENED HERE. It is the operator's voice —
+  # PINNED, the feedback-/reference-/user- name convention, a `type:` stamp of user/feedback/
+  # reference, and the report-never-touch rule for unparseable/dangling lines. A vetoed line
+  # still goes to the cold record exactly as before, which is what makes this change a strict
+  # improvement rather than a re-routing of protected material. On an index whose entries are
+  # nearly all `reference-` this partition therefore routes NOTHING, and that is the correct
+  # outcome, not a bug to tune away: whether the machine may move a `reference-` lesson onto
+  # another always-loaded surface is an operator decision that has not been given. A wave that
+  # loosened a protection so its own diff would have a visible effect is the failure this
+  # comment exists to prevent.
+  #
+  # Stage-2 (breach-pressure) selections are self-vetoing here by construction: the only entries
+  # stage 2 adds are the ones whose frontmatter `type:` yields under breach, and route_veto has
+  # no stages — so they take the cold path, which is the conservative direction.
+  ROUTE_LNOS=""; COLD_LNOS=""; ROUTED=0; COLD_N=0; R_PAY=""; R_DESTS="-"; ROUTE_NOTE=""
+  for li in $MOVE_LNOS; do
+    _rf=""
+    if [[ "${LINES[$li]}" =~ $ENTRY_RX ]]; then _rf="${BASH_REMATCH[1]}"; fi
+    if [ -n "$(route_veto "${LINES[$li]}" "$_rf")" ]; then
+      COLD_LNOS="$COLD_LNOS $li"; COLD_N=$(( COLD_N + 1 ))
+    else
+      ROUTE_LNOS="$ROUTE_LNOS $li"; ROUTED=$(( ROUTED + 1 ))
+    fi
+  done
+
+  # The destination is resolved LAZILY — only once something is actually routable — so ordinary
+  # rotation never creates a `.claude/rules/` directory in a project it had no reason to touch.
+  if [ "$ROUTED" -gt 0 ]; then
+    if resolve_rules_dest; then
+      for li in $ROUTE_LNOS; do
+        _rf=""
+        if [[ "${LINES[$li]}" =~ $ENTRY_RX ]]; then _rf="${BASH_REMATCH[1]}"; fi
+        R_PAY="$R_PAY$(route_dest_for "$_rf")$TAB${LINES[$li]}
+"
+      done
+      R_PROV=$(printf '<!-- routed %s by cc-memory-rotate: %s index line(s) moved VERBATIM off %s to hold its loader cap (index %s B, target %s). Both surfaces load unprompted, so nothing was demoted and nothing was shortened; restore = paste the line back. -->' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ROUTED" "$INDEX" "$SIZE" "$TARGET")
+      if route_flush "$R_PAY" "$R_PROV"; then
+        R_DESTS="$ROUTE_DESTS"
+      else
+        # 🚨 A DESTINATION FAILURE DEGRADES TO COLD; IT DOES NOT FAIL THE ROTATION. Rotation is
+        # the actuator that holds the loader cap, and the loader drops the NEWEST entries once
+        # the index is over — refusing to rotate because the rules file is full or unwritable
+        # would trade a recoverable surface change for live, silent data loss. The reason is
+        # PRINTED in the verdict (route=<reason>), never swallowed: a silent fallback here would
+        # be a demotion reported as a routing. Every destination's cap is judged before the
+        # first byte is written, so the common failure cannot half-write; a later one (create /
+        # append / verify) can leave a line in BOTH a rules file and the cold record, which is
+        # this file's standing invariant — at worst a duplicate, never a lost line.
+        ROUTE_NOTE="$ROUTE_ERR"
+        COLD_LNOS="$COLD_LNOS$ROUTE_LNOS"; COLD_N=$(( COLD_N + ROUTED ))
+        ROUTE_LNOS=""; ROUTED=0
+        vlog "route unavailable ($ROUTE_NOTE) — $COLD_N line(s) take the cold path"
+      fi
+    else
+      ROUTE_NOTE="$RESOLVE_REASON"
+      COLD_LNOS="$COLD_LNOS$ROUTE_LNOS"; COLD_N=$(( COLD_N + ROUTED ))
+      ROUTE_LNOS=""; ROUTED=0
+      vlog "no routing destination ($ROUTE_NOTE) — $COLD_N line(s) take the cold path"
+    fi
+  fi
+
+  # A pointer to a cold tier this rotation never wrote is a dangling pointer, written into the
+  # always-loaded index. Suppress it when everything was routed. The PROJECTION above already
+  # charged for it, so suppressing it only ever leaves the index SMALLER than projected — the
+  # safe direction, and the shrink guarantee below still holds.
+  if [ "$COLD_N" -eq 0 ]; then HAVE_PTR=1; fi
+
   # ── COLD first, verified, idempotent — then the index ──────────────────────────────────────
   YEAR=$(date +%Y); MON=$(date +%m)
   HALF=1; if [ "${MON#0}" -gt 6 ]; then HALF=2; fi
   COLD="$DIR/archive/MEMORY_ARCHIVE_${YEAR}-H${HALF}-COLD.md"
   mkdir -p "$DIR/archive"
-  [ -f "$COLD" ] || : >"$COLD"
+  if [ "$COLD_N" -gt 0 ]; then [ -f "$COLD" ] || : >"$COLD"; fi
   # Stage the block first, append once: the idempotency greps must read a COLD that this
   # same rotation is not concurrently appending to (SC2094's hazard class).
-  BLOCK=$(printf '\n<!-- auto-rotated %s by cc-memory-rotate: %s entries, oldest-eligible-first by topic mtime; index %s B (rotate_at %s, target %s) -->' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$MOVED" "$SIZE" "$ROTATE_AT" "$TARGET")
-  for li in $MOVE_LNOS; do
-    if ! grep -qxF -- "${LINES[$li]}" "$COLD"; then
-      BLOCK="$BLOCK
+  if [ "$COLD_N" -gt 0 ]; then
+    BLOCK=$(printf '\n<!-- auto-rotated %s by cc-memory-rotate: %s entries, oldest-eligible-first by topic mtime; index %s B (rotate_at %s, target %s) -->' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$COLD_N" "$SIZE" "$ROTATE_AT" "$TARGET")
+    for li in $COLD_LNOS; do
+      if ! grep -qxF -- "${LINES[$li]}" "$COLD"; then
+        BLOCK="$BLOCK
 ${LINES[$li]}"
-    fi
-  done
-  printf '%s\n' "$BLOCK" >>"$COLD"
-  for li in $MOVE_LNOS; do
-    if ! grep -qxF -- "${LINES[$li]}" "$COLD"; then
-      printf 'verdict=error reason=cold-verify-failed\n'; exit 2
-    fi
-  done
+      fi
+    done
+    printf '%s\n' "$BLOCK" >>"$COLD"
+    for li in $COLD_LNOS; do
+      if ! grep -qxF -- "${LINES[$li]}" "$COLD"; then
+        printf 'verdict=error reason=cold-verify-failed\n'; exit 2
+      fi
+    done
+  fi
 
   TMP=$(mktemp "$DIR/.MEMORY.md.rotate.XXXXXX")
   {
@@ -828,9 +1096,13 @@ ${LINES[$li]}"
   chmod 644 "$TMP"
   mv -f "$TMP" "$INDEX"
   NEWLINES=$(flines "$INDEX")
-  printf 'verdict=rotated moved=%s stage2=%s before=%s after=%s lines_before=%s lines_after=%s cold=%s\n' \
-    "$MOVED" "$STAGE2" "$SIZE" "$NEWSZ" "$NLINES" "$NEWLINES" "$COLD"
-  printf '%s verdict=rotated moved=%s stage2=%s before=%s after=%s attempt=%s\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$MOVED" "$STAGE2" "$SIZE" "$NEWSZ" "$ATTEMPT" >>"$DIR/archive/.rotate.log" 2>/dev/null || true
+  # `cold=` names a file, so it must name one that EXISTS: a fully-routed rotation writes no
+  # cold record, and printing its would-be path there sends the reader to a missing file.
+  COLD_DISP="-"; if [ "$COLD_N" -gt 0 ]; then COLD_DISP="$COLD"; fi
+  printf 'verdict=rotated moved=%s stage2=%s before=%s after=%s lines_before=%s lines_after=%s cold=%s routed=%s dest=%s%s\n' \
+    "$MOVED" "$STAGE2" "$SIZE" "$NEWSZ" "$NLINES" "$NEWLINES" "$COLD_DISP" "$ROUTED" "$R_DESTS" \
+    "${ROUTE_NOTE:+ route=$ROUTE_NOTE}"
+  printf '%s verdict=rotated moved=%s stage2=%s routed=%s before=%s after=%s attempt=%s\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$MOVED" "$STAGE2" "$ROUTED" "$SIZE" "$NEWSZ" "$ATTEMPT" >>"$DIR/archive/.rotate.log" 2>/dev/null || true
   exit 0
 done
