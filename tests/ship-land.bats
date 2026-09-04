@@ -3159,6 +3159,90 @@ STUB
   echo "$output" | grep -q 'rc=7'                # and names what the store actually said
 }
 
+# ── defect 2d: THE STORED PROBE'S PATH DIED WITH THE WORKTREE THAT WROTE IT ──────────────────────
+# The probe was `bash ${REPO_ROOT}/scripts/land-content-verify.sh <ref>`, and REPO_ROOT is the DYING
+# land's own checkout — usually `~/Development/.worktrees/<branch>`. Once reaped, the probe exits
+# 127, which cc-premise reads as "the probe never ran" and fails OPEN, so the row can never
+# self-retract. MEASURED 2026-09-04 on the live store: 47 of 48 probe-bearing live re-land rows
+# exited 127. The invariant these two tests pin is the one the fix enforces by CONSTRUCTION rather
+# than by luck: a candidate under /.worktrees/ is refused outright, whatever resolved it.
+
+@test "P4 inbox: the stored probe NEVER points into a .worktrees path (it outlives the land)" {
+  # The fixture puts the land's own checkout under `.worktrees/`, which is the exact shape that
+  # produced all 47 dead probes: land_root and REPO_ROOT both resolve there, so BOTH ranked
+  # candidates are ephemeral and only the deployed-layer copy is durable. HOME is sandboxed so the
+  # third candidate is the fixture's own file and not this machine's real ~/.claude (a fixture that
+  # reads real machine state cannot pin an invariant about which path was chosen).
+  export HOME="$BATS_TEST_TMPDIR/probe-home"
+  mkdir -p "$HOME/.claude/scripts"
+  cp "$REPO/scripts/land-content-verify.sh" "$HOME/.claude/scripts/land-content-verify.sh"
+  chmod +x "$HOME/.claude/scripts/land-content-verify.sh"
+
+  wt="$BATS_TEST_TMPDIR/.worktrees/wt-probe"
+  mkdir -p "$(dirname "$wt")"
+  git clone -q "$ORIGIN" "$wt"
+  cd "$wt" || return 1
+  git checkout -q -b feat/inbox-durable origin/main
+  # The dying worktree DOES carry the oracle — that is what makes it a candidate at all, and it is
+  # what distinguishes "this path is ephemeral, use the deployed copy" from "this checkout has no
+  # oracle, store nothing". The negative control for the second case is the EXACT re-land command
+  # test above, which must keep passing.
+  mkdir -p scripts
+  cp "$REPO/scripts/land-content-verify.sh" scripts/land-content-verify.sh
+  chmod +x scripts/land-content-verify.sh
+  printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > bad-durable.sh   # SC2164 → gate RED
+  git add -A && git -c user.email=tester@example.com -c user.name=tester commit -q -m "feat: bad-durable"
+
+  # CC_BACKLOG_BIN is named explicitly because ship-land:963 resolves it under $HOME by default and
+  # $HOME is the very thing this fixture sandboxes — leaving it implicit would test the resolver.
+  run env SHIP_LAND_FAILURE_INBOX=on CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl" \
+      CC_BACKLOG_BIN="$REPO/bin/cc-backlog" \
+      bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+
+  probe="$(jq -r 'select(.falsifier != null and .falsifier != "") | .falsifier' \
+           "$BATS_TEST_TMPDIR/backlog.jsonl" | tail -1)"
+  [ -n "$probe" ]                                        # a probe WAS stored, not merely not-a-bad-one
+  ! printf '%s' "$probe" | grep -q '/\.worktrees/' || false     # …and it is not the ephemeral one
+  printf '%s' "$probe" | grep -qF "$HOME/.claude/scripts/land-content-verify.sh"
+  printf '%s' "$probe" | grep -q -- '--no-fetch'         # unattended re-runner: never a network call
+  # and it still ANSWERS: at filing time the content is genuinely not on trunk.
+  run bash -c "$probe"
+  [ "$status" -eq 1 ]
+}
+
+@test "P4 inbox: a non-retracting attach REFUSAL still leaves a probe (--no-run), never a mute row" {
+  # The other half of 2d, and the one that made 14 of 63 live rows permanently mute: the frc≠0 arm
+  # printed a warning and stored NOTHING. Driven through a stub because the real cc-backlog's other
+  # refusals are unreachable from a fresh fixture ledger; the stub refuses the SCREENED attach and
+  # accepts the --no-run retry, which is exactly the split the fix relies on.
+  git checkout -q -b feat/inbox-norun main
+  mkdir -p scripts
+  printf '#!/usr/bin/env bash\nexit 1\n' > scripts/land-content-verify.sh
+  chmod +x scripts/land-content-verify.sh
+  printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > bad-norun.sh
+  git add -A && git -c user.email=tester@example.com -c user.name=tester commit -q -m "feat: bad-norun"
+
+  stub="$BATS_TEST_TMPDIR/cc-backlog-norun"
+  cat > "$stub" <<'STUB'
+#!/usr/bin/env bash
+case "${1:-}" in
+  needs) echo "stubidnorun01" ;;
+  falsify)
+    for a in "$@"; do [ "$a" = "--no-run" ] && { echo "stubidnorun01"; exit 0; }; done
+    echo "cc-backlog falsify: stubbed screened-attach failure" >&2; exit 7 ;;
+  *) exit 0 ;;
+esac
+STUB
+  chmod +x "$stub"
+
+  run env SHIP_LAND_FAILURE_INBOX=on CC_BACKLOG_BIN="$stub" bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  echo "$output" | grep -q 'stored UNSCREENED'           # the remedy fired…
+  echo "$output" | grep -q 'stubidnorun01'               # …naming the row it saved
+  ! echo "$output" | grep -q 'WITHOUT a falsifier' || false   # …and it is no longer a mute row
+}
+
 @test "P4 inbox: a SUCCESSFUL land files nothing (an inbox of every land is not an inbox)" {
   git checkout -q -b feat/inbox-green main
   printf '#!/usr/bin/env bash\necho ok\n' > good.sh
