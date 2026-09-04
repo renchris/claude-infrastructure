@@ -1618,6 +1618,10 @@ windows/week, carrying the fleet wall rate 1.72% → 2.20%.
 
 Wave 1 = **S1 + S2 + S3 only**. S4–S7 are unbuilt and unchanged; S5 still gates S6.
 
+**Wave 2 (2026-09-04) = S4 + S5 + S7.** S6 is the only unbuilt item in §5.2, and it is not deferred
+by preference — it is gated on a measurement that S5 now makes possible and that only the operator
+box can take. Record in §5.8 below; §5.7 is left as Wave 1's own record, unedited.
+
 #### S1 · data fixes — LANDED
 
 `bin/claude-accounts`: `_reset_key` / `_rolled` (:1877), `_util_tail(path, hours=48.0,
@@ -1787,3 +1791,195 @@ shortens that.
 
 ⚠️ `bash tests/run.sh …`, named in §5.4, **does not exist in this repo**. The suites are run with
 `bats tests/<name>.bats`; `scripts/ship-land.sh` selects and runs them at the land.
+
+---
+
+### §5.8 Wave 2 implementation record (2026-09-04) — S4 + S5 + S7, and why S6 is not here
+
+Wave 2 = **S4 + S5 + S7**. Every item in §5.2's change list is now built except **S6**, which is
+gated on a live measurement (below). Landed from a dispatched cloud VM, so nothing in this section
+carries a live-fleet reading: the operator box holds `~/.claude/logs/account-utilization.jsonl` and
+this venue has no copy of it. **Every figure here is either reproduced from §5.2's own published
+tables or measured on a synthetic fixture, and each is labelled as such.** The wave's live
+confirmation is itself the operator step §5.9 files.
+
+#### S4 · M4′ `burst_start_by` — LANDED (`c26be10d`)
+
+`bin/claude-accounts`: `burst_start_by(r, k)` + `fmt_start_by(sb)` + `pace_head(rows)`, constants
+`BURST_SPPH` / `P_WALL` / `MEAN_WALL_H` / `START_SOON_H` / `FULL_WINDOW_BURN_H`; K stamped in
+`apply_burn` as `wk_k` / `wk_k_src`. Suite `tests/claude-accounts-start-by.bats` (RP-21..RP-24c),
+**9/9 proven RED** against the pre-change binary, 9/9 green after.
+
+**Reproduction of §5.2 S4's live table, exactly**, on the three rows whose session inputs the table
+determines: next2 / next4 windows 6 / 6, freeze 6.20 / 6.20, t_needed 27.61 / 28.29, start-by
++69.59 / +90.91; next3 windows 1, freeze 1.033, t_needed 2.855, start-by **−0.65**, floor
+**2.83 pp**. (`next`'s row is not reproducible from the table alone — it publishes windows 3 and
+burn 11.69 without the `session_pct` that determines them.)
+
+**🚨 Deviation 1 — the spec's pseudocode is WRONG in the planner's own regime, and this is the
+finding of the wave.** §5.2 S4 nests the roll wait under `if avail > 0:`
+
+```
+if avail > 0:
+    ...
+    if rem > 0:
+        t = session_reset_h        # ← unreachable when avail == 0
+while rem > 0:
+    ...
+```
+
+so an **exhausted** 5h window (`session_pct = 100`, `avail = 0`) falls straight into the grid walk
+at `t = 0` and plans a burst that begins while the account is *walled*. That is not an exotic
+input: **`P_WALL = 0.625` says five of eight burst windows END walled**, so the regime the planner
+itself creates is the one the nesting mis-prices — by up to a full 5 h, in the **optimistic**
+direction, on the one metric whose entire job is to say *too late*. Shipped as `t = max(t, srh)`
+outside the guard: identical wherever the open window was usable (`burn_h` is already capped at
+`srh`, so `t ≤ srh` there by construction) and only the walled case moves. RP-23b is that case.
+
+**Deviation 2 — `pace_head` has THREE states, not §5.4's two.** §5.4's abstain text has a null K
+print `no strand figures this sweep`, but §5.7 S3 Deviation 1 already ruled that the strand does
+**not** gate on K (M3a is pure weekly-space arithmetic and consumes none). What a null K withdraws
+is therefore the **start-by** clause, not the strand. And the two nulls are different facts:
+`K unfitted` is `exchange_rate` *refusing* — the trailing fit left `K_SANE`, i.e. the plan or the
+meter moved, which is a measurement worth rendering — while *`apply_burn` never ran* is not a
+refusal at all, and spelling it as one reports an abstention no estimator issued. Fitted / refused
+/ never-computed render as three different headers (RP-24).
+
+**Deviation 3 — the start-by clause rides STRAND rows only.** A row with no strand has no deficit
+worth planning a burst for; a row whose strand is *unknown* has no loss to price the start time
+against. Either would render a confident number over an absent fact, which is the metric shape §3.2
+forbids. RP-24c pins both abstentions plus the control that a real strand row does carry it.
+
+**On probation, and the docstring says it.** `BURST_SPPH` / `P_WALL` / `MEAN_WALL_H` come from
+n = 8 burst windows — the entire evidence base — the threshold is sized on the burst denominator
+(5 of 8) and never the all-windows one (5 of 252), and `P_WALL` is a **lower bound**: a wall under
+~13 min is invisible to the detector that produced it.
+
+#### S5 · M3c `--strand-score` — LANDED (`518b273d`)
+
+`bin/claude-accounts`: `strand_score(samples, buckets)` + `render_strand_score(sc)` + a
+`--strand-score` branch in `main()` sited **before `load_cfg()`**, beside `--agents`, with
+`--hours N` and `--json`. Suite `tests/claude-accounts-strand-score.bats` (RP-28..RP-31b),
+**7/7 proven RED**, 7/7 green after.
+
+**It discriminates — measured on synthetic windows, which is the whole claim.** On a *decelerating*
+window (85 pp burned in the first three days, then flat) M3a at T−96h projects **0.0 pp** against a
+realised **15.0 pp**: bias −15, MAE 15, sign agreement **0%**. On a *linear* window of the same
+length it reads −0.05 at every bucket. Same code, same buckets, opposite verdicts, so the grade is
+a property of the data and not of the scorer. The refuted score it replaces evaluated the fire rule
+at each window's **last** sample, where the projection has already converged to `100 − weekly_pct`,
+and so agreed with the **identity function** on 8 of 8 windows.
+
+It also **measures** what §5.1 LB-2 could previously only assert: the estimator converges as the
+horizon closes — bias **−15.0 → −0.01 → 0.00** across T−96h → T−48h → T−24h on the same window.
+That is the property that makes it a good nowcaster and a bad forecaster, now with a number on it.
+
+**🚨 The trap, and it is silent.** `burn_wk_ewma_ph` selects on `now - e["_t"] <= LOOKBACK`; for a
+sample **after** `now` that value is negative and therefore **passes**. Handed the whole series the
+scorer fits on the future of the instant it is grading. Measured at T−96h on the decelerating
+fixture:
+
+| fit | EWMA | span | projected | realised | verdict |
+|---|---|---|---|---|---|
+| causal (`_t <= at`) | 1.1806 %/h | 48.0 h | **0.000** | 15.0 | bias −15.0 |
+| **peeking** (whole series) | 0.0003 %/h | 143.9 h | **14.973** | 15.0 | bias −0.03, MAE 0.03 |
+
+A 15 pp failure renders as a **flawless nowcaster** — no error, no warning, every number on the
+page internally consistent. The `_t <= at` slice is the entire causality guarantee, and RP-30 pins
+it by re-deriving both readings and asserting the shipped one equals the causal one and differs
+from the peeking one by more than 14 pp.
+
+**Both abstain arms fire on one fixture (RP-29),** which is why that fixture is the fixture: T−96h
+and T−48h have no candidate sample at all, and T−24h *has* one whose causal prefix is 6.0 h —
+below M3a's own 6.8 h span floor. A skipped cell contributes nothing to n, bias, MAE or the
+sign-agreement rate, and the bucket renders **NULL**, never `0.0`, which would read as *measured,
+and perfect*.
+
+**L3 exception, argued.** L3 governs the live-state surface; this renders **history**, reads only
+the series, and nothing routes on it. It ships as a **flag on this binary** rather than a
+`scripts/*.sh` so it rides the existing `~/.claude/bin/claude-accounts` symlink and goes live on
+the trunk fast-forward — a new file would land as an ADD the live layer cannot reach until the
+converger runs (the `LIVE_ADDS` trap).
+
+**Deviation — `--hours 0` is honoured as zero**, not promoted to the 60 d default via `or`. That is
+`_num_flag`'s own documented refusal: a bound the caller believes it set, and did not, is worse
+than no bound (RP-31b).
+
+#### S7 · M1 `burn_5h_ewma` — LANDED (`a9e7122b`)
+
+`bin/claude-accounts`: `burn_5h_ewma(samples_for_acct, now) → (value|None, span_h)` in **%/h**,
+constants `SU_EWMA_LOOKBACK_H` / `SU_EWMA_HL_H` / `SU_EWMA_MIN_SPAN_H` / `SU_EWMA_MAX_DT_H`;
+stamped in `apply_burn` as `burn_5h_ewma_ph` + `burn_5h_span_h`; consumed by `_su_projected`.
+Suite `tests/claude-accounts-5h-ewma.bats` (RP-32..RP-35), **7/7 proven RED**, 7/7 green after.
+
+Both of §5.2 S7's named hazards are implemented as specified and pinned by a case each:
+
+| hazard | shipped as | pinned by |
+|---|---|---|
+| **UNIT** — %/h into a fraction/h consumer saturates `min(1.0, su + b·ahead)` on every row | new key `burn_5h_ewma_ph`, `/100` at `_su_projected` | RP-34 (20% + 8 %/h over 1 h = **0.28**, not 1.0) + RP-34b control |
+| **ROLL SPELLING** — truncation fires the roll branch on 46.0% of pairs, MAE 0.0282 → 0.2110 | `_rolled` / `_reset_key` (minute-ROUNDED, S1a) | RP-33b (a flat unrolled window reads **0.0**, never `level/dt`) |
+
+**Deviation — one existing case updated in place, not rewritten.**
+`tests/claude-accounts-core.bats` asserted `"burn_5h_ewma_ph" not in r` with the comment *"S7 is a
+LATER wave and was not built here"*. That is a **wave marker, not an invariant**: the only way to
+satisfy it after S7 is to un-ship S7. What it was protecting is now asserted directly — the weekly
+and 5h rates are separate fields in separate units, and the whole S7 hazard is one being written
+into the other. (Same class as §5.7 S3 Deviation 6: a case that greps a *spelling* rather than its
+*invariant* becomes a tripwire on its own subject's next fix.)
+
+**A third abstain arm, beyond the spec's two.** §5.2 S7 names the 1.3 h raw-span floor and the
+2-pair minimum. Added: a pair wider than `SU_EWMA_MAX_DT_H` is a **gap** in the series, not a
+measurement, and is excluded from the span as well as the fit — otherwise a starved series clears
+the 1.3 h floor on hours it never observed. RP-32b's third fixture is that case.
+
+**The named blind spot ships in the docstring**, per §5.2: at `session_pct ≥ 40` the **incumbent is
+more accurate** (MAE 0.0617 vs 0.0797) and this over-projects by +3.6 pp. That is the burst regime
+— the one M4′ deliberately creates. Soften-only and therefore fail-safe for routing, but wrong
+there, and it must not be quoted as accurate. §5.6 Q3 names the measurement that would fix it.
+
+#### Acceptance status against §5.4, after Wave 2
+
+| command | status |
+|---|---|
+| the bats suites (roll-key · util-tail · strand · burst · core · **start-by · strand-score · 5h-ewma**) | **185 green** on the account surface; each of the 23 new cases shown RED against the pre-change binary |
+| `claude-accounts --strand-score` | **built and exercised end-to-end** on a synthetic series (§5.9 files the live run) |
+| `claude-accounts --readout` renders the start-by clause | **not verifiable here** — needs the live series and keychain; §5.9 |
+| regression | the account-suite failure set is **byte-identical to trunk's**: 26 pre-existing macOS-keychain / `ps` / argv-length reds on the Linux VM, **0 new** |
+
+⚠️ **The 26 reds are the VENUE, not the diff**, and the check that says so is the one that matters:
+the failure set was captured on the unmodified trunk binary and again on the changed one, and
+`comm` reports no line present in the second and absent from the first. A count alone would not
+have distinguished a fixed red from a new one.
+
+#### S6 · M3b `wk_strand_alarm` — NOT BUILT, and deliberately
+
+§5.2 S6 opens with *"Do not build this until S5 has run and been read. If the horizon-stratified
+bias at the 12 h bucket is not near zero, this alarm is not shippable at any parameter setting."*
+
+S5 is now built, so the measurement is finally **possible** — and it is not possible **here**. It
+reads `~/.claude/logs/account-utilization.jsonl`, which exists only on the operator box; this VM
+has no copy and no path to one. Building S6 against the synthetic fixtures in
+`tests/claude-accounts-strand-score.bats` would satisfy the letter of the gate and defeat it
+entirely: those fixtures were written by the same session that would be writing the alarm, so
+"the bias is near zero" would be a statement about the fixture, not about the fleet — the identical
+vacuity S5 exists to end.
+
+So S6 stays unbuilt and the row is parked on **one operator step**, filed in §5.9.
+
+### §5.9 The operator step this wave hands back
+
+▶ Run this:
+
+`claude-accounts --strand-score`
+
+Read the **T−12h** row's `bias` column.
+
+| reading | what it licenses |
+|---|---|
+| bias near zero at T−12h | S6 is shippable — build `wk_strand_alarm` at §5.2's parameters (`FLOOR = 4 pp`, `DWELL = 2 h`, `HORIZON_CAP = 12 h`), latched per (account, weekly window key) in the route-records store |
+| bias **not** near zero at T−12h | **S6 is not shippable at any parameter setting** — §5.2 S6 is literal about this. Record the reading and close M3b; do not re-propose it |
+
+Two secondary readings come free from the same output and are worth recording either way: **`n`**
+per bucket (the harness's real evidence base — §5.7 notes n = 8 completed windows growing ~3.7/week,
+so the T−96h bucket may still be thin) and the **shape of the bias across horizons**, which is the
+live counterpart of the −15.0 → −0.01 → 0.00 convergence measured on the synthetic window above.
