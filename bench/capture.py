@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
+import platform
 import sys
 import time
 
@@ -129,6 +131,34 @@ EXTRACT_JS = """
 """
 
 
+FONT_PROBE_JS = """
+() => {
+  // `getComputedStyle().fontFamily` returns the STACK the author wrote, not the
+  // face that rendered -- it reads 'Helvetica, ...' identically on a machine that
+  // has Helvetica and one that does not. The only portable way to ask is to
+  // measure: render the same string in the candidate and in a family that
+  // certainly does not exist, and see whether the widths agree. Equal widths mean
+  // the candidate fell back too.
+  const probe = (family) => {
+    const c = document.createElement('canvas').getContext('2d');
+    c.font = `16px ${family}`;
+    return c.measureText('Tonight at Ophelia \\u25B6 248 $61,400').width;
+  };
+  const missing = probe('__no_such_family__');
+  const stack = getComputedStyle(document.body).fontFamily;
+  const first = stack.split(',')[0].replace(/["']/g, '').trim();
+  // NOT "is Helvetica installed". fontconfig aliases unknown families to a
+  // substitute, so this came back true on a Linux box with no Helvetica at all:
+  // the alias target and the default family are simply two different faces.
+  // The honest signal is the WIDTH -- 239.15 px here, and whatever the other
+  // machine reports -- because two runs whose widths differ did not render the
+  // same page, whatever either of them calls the font.
+  return { stack, first, distinct_from_default_fallback: probe(first) !== missing,
+           width_px: +probe(first).toFixed(2) };
+}
+"""
+
+
 def capture(corpus: pathlib.Path, dprs: list[int]) -> None:
     manifest = json.loads((corpus / "manifest.json").read_text())
     vp = manifest["viewport"]
@@ -142,9 +172,18 @@ def capture(corpus: pathlib.Path, dprs: list[int]) -> None:
     snaps.mkdir(exist_ok=True)
 
     timings = []
+    font_probe = None
     with sync_playwright() as p:
+        # The instrument must be nameable. `channel="chromium"` resolves to whatever
+        # Playwright installed for its own version, which is right on a dev machine
+        # and wrong anywhere the browser was provisioned separately (CI images pin a
+        # build number; a version skew fails the launch outright, not the render). An
+        # explicit path is the escape hatch, and it is recorded in the run so a
+        # geometric finding can always name the binary that produced it.
+        exe = os.environ.get("BENCH_CHROMIUM")
+        launcher = {"executable_path": exe} if exe else {"channel": "chromium"}
         browser = p.chromium.launch(
-            channel="chromium",
+            **launcher,
             args=[
                 "--force-color-profile=srgb",
                 "--disable-lcd-text",
@@ -165,6 +204,9 @@ def capture(corpus: pathlib.Path, dprs: list[int]) -> None:
                 reduced_motion="reduce",
             )
             page = ctx.new_page()
+            if dpr == dprs[0]:
+                page.goto(pages[0].as_uri(), wait_until="load")
+                font_probe = page.evaluate(FONT_PROBE_JS)
             for html in pages:
                 t0 = time.perf_counter()
                 page.goto(html.as_uri(), wait_until="load")
@@ -182,6 +224,35 @@ def capture(corpus: pathlib.Path, dprs: list[int]) -> None:
                     (html.stem, dpr, round((time.perf_counter() - t0) * 1000))
                 )
             ctx.close()
+        # Provenance, written once per capture and read by every scorer.
+        #
+        # 🚨 Every pixel-derived number in this bench is a number about ONE
+        # render, and the render is not the same on two machines. Measured
+        # 2026-09-04: `findings_dom.json` came back byte-identical to the run
+        # committed from an M1 Max -- the DOM layer is machine-independent -- and
+        # the X3 contrast numbers moved from 4.81/1.57 to 6.15/1.76 on the same
+        # page, because Helvetica does not exist on Linux and the fallback face
+        # has different metrics and a different antialiasing rim. The verdict
+        # held; the number did not. Without this file the next person to see two
+        # different numbers has to re-derive which machine each came from, which
+        # is exactly the work this line of JSON deletes.
+        (corpus / "run.json").write_text(
+            json.dumps(
+                {
+                    "captured": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                    "platform": f"{platform.system()} {platform.machine()}",
+                    "browser": browser.version,
+                    "executable": exe or "playwright channel=chromium",
+                    "dprs": dprs,
+                    "viewport": vp,
+                    "pages": [p.stem for p in pages],
+                    # The one variable that moved every pixel number between the
+                    # two machines this corpus has run on.
+                    "font": font_probe,
+                },
+                indent=1,
+            )
+        )
         browser.close()
 
     per_dpr = {}
