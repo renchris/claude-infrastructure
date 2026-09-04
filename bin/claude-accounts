@@ -1915,7 +1915,17 @@ def _su_projected(r, R):
     su = (r.get("session_pct") or 0) / 100.0
     if not _term_on("CC_ROUTE_PROJ"):
         return su
-    b = r.get("burn_5h_ph")
+    # 🚨 THE UNIT IS THE HAZARD (S7). `burn_5h_ewma_ph` is %/h and `burn_5h_ph` is fraction/h,
+    # and the arithmetic below is `su + b * ahead` with su in [0,1] — so a %/h value read on the
+    # old key's terms saturates every row to 1.0 and renders as "the whole fleet is under 5h
+    # pressure", a 100x error wearing an entirely plausible face. The two keys therefore stay
+    # SEPARATE and the conversion happens here, at the one consumer, rather than the producer
+    # writing a fraction under a name that says percent.
+    b = r.get("burn_5h_ewma_ph")
+    if isinstance(b, (int, float)):
+        b = b / 100.0
+    else:
+        b = r.get("burn_5h_ph")     # the incumbent, still populated for one release
     if not isinstance(b, (int, float)) or b <= 0:
         return su
     ahead = _cliff_env("CC_ROUTE_PROJ_LOOKAHEAD_H", R.get("PROJ_LOOKAHEAD_H", PROJ_LOOKAHEAD_H))
@@ -2177,6 +2187,15 @@ def apply_burn(rows, cfg, samples=None):
                 d = (b["session_pct"] - a["session_pct"]) / 100.0
                 if d >= 0:
                     r["burn_5h_ph"] = d / dh
+        # S7/M1: the roll-aware form, under its OWN key and in %/h. `burn_5h_ph` stays populated
+        # for one release — it is a published field and a silent disappearance is worse than a
+        # duplicate — but `_su_projected` prefers this one. The span is stamped beside the value
+        # because it is the abstain's REASON, and a null that cannot say why reads as a missing
+        # measurement rather than as a refusal.
+        v5, span5 = burn_5h_ewma_ph(ss, now)
+        r["burn_5h_span_h"] = span5
+        if v5 is not None:
+            r["burn_5h_ewma_ph"] = v5
         wk = [e for e in ss
               if now - e["_t"] <= 48.0 * 3600 and e.get("weekly_pct") is not None]
         if len(wk) >= 2:
@@ -2521,6 +2540,64 @@ def wall_projection(r):
     if frac < MIN_ELAPSED_FRAC:
         return None, None
     return (wp / 100.0) / frac, wp / frac
+
+
+# ---- M1 — the 5h rate, roll-aware and available (USAGE_TELEMETRY_100P §5.2 S7) ----------------
+SU_EWMA_LOOKBACK_H = 6.0     # the trailing window: longer than the 5h meter's own, so a roll is
+                             # always inside it and the estimator is never blind across one
+SU_EWMA_HL_H = 1.0           # half-life; the 5h regime turns over in about an hour
+SU_EWMA_MIN_SPAN_H = 1.3     # below this a +-1 pp quantization step exceeds 25% of the 5h meter's
+                             # realised mean, so the number would be reading its own rounding
+SU_EWMA_MAX_DT_H = 1.0       # a longer gap is a sweep OUTAGE, not a measured interval
+
+
+def burn_5h_ewma_ph(samples_for_acct, now):
+    """Roll-aware EWMA of the 5h session meter, in %/h, as (value|None, measured_span_h).
+
+    WHAT IT FIXES, AND IT IS AVAILABILITY, NOT ACCURACY. The incumbent `burn_5h_ph` is the
+    newest adjacent pair inside 2 h: one interval, discarded outright when it straddles a window
+    roll (`d < 0` reads as unknown). So the rate vanishes exactly at the roll — the moment the
+    5h picture changes most — and a single quantization step is the entire measurement. Here a
+    roll is not a discard: post-roll accrual is reconstructed as a LOWER BOUND by taking the new
+    window's level as the increment, the same treatment `burn_wk_ewma_ph` gives the weekly meter.
+
+    ABSTAIN (L2) on the RAW MEASURED SPAN — the sum of dt over usable pairs, never the requested
+    lookback — below SU_EWMA_MIN_SPAN_H, and on fewer than 2 usable pairs. NEVER on a roll.
+
+    🚨 NAMED BLIND SPOT, and it must stay in this docstring because the metric is WRONG here and
+    fail-safe rather than right: at `session_pct >= 40` the INCUMBENT is more accurate (MAE
+    0.0617 against this estimator's 0.0797; the EWMA over-projects by +3.6 pp). That is the
+    BURST regime — the one the weekly planner deliberately creates. The over-projection direction
+    is soften-only through `_soft` (SF is floored at SF_FLOOR and can never exclude), so a wrong
+    number there costs ranking, not availability; it must not be quoted as accurate. §5.6 Q3
+    names the measurement that would fix it.
+
+    🚨 ROLL SPELLING is `_reset_key`'s ROUNDING, via `_rolled`, and that is load-bearing rather
+    than incidental. Under a truncation the roll branch fires on 46.0% of adjacent pairs and
+    injects an absolute LEVEL where a delta belongs: MAE degrades 0.0282 -> 0.2110, i.e. 5.4x
+    worse than the incumbent this replaces."""
+    ss = sorted((e for e in samples_for_acct or []
+                 if e.get("session_pct") is not None and e.get("_t") is not None
+                 and now - e["_t"] <= SU_EWMA_LOOKBACK_H * 3600.0),
+                key=lambda e: e["_t"])
+    num = den = span = 0.0
+    pairs = 0
+    for a, b in zip(ss, ss[1:]):
+        dt_h = (b["_t"] - a["_t"]) / 3600.0
+        if not (0 < dt_h <= SU_EWMA_MAX_DT_H):
+            continue
+        if _rolled(a, b, "session_reset_at", "session_pct"):
+            d = b["session_pct"]                      # the new window's level, a LOWER bound
+        else:
+            d = max(0.0, b["session_pct"] - a["session_pct"])
+        w = 2.0 ** (-((now - b["_t"]) / 3600.0) / SU_EWMA_HL_H)
+        num += w * d
+        den += w * dt_h
+        span += dt_h
+        pairs += 1
+    if pairs < 2 or span < SU_EWMA_MIN_SPAN_H or den <= 0:
+        return None, span
+    return num / den, span
 
 
 WK_EWMA_LOOKBACK_H = 48.0    # the pace the nowcast speaks for: "at the pace of the last 48 h"

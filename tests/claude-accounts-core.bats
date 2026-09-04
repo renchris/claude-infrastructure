@@ -1813,7 +1813,83 @@ assert 12.0 < r["burn_wk_ppd"] < 16.0, r          # ~14 %/day, i.e. the same rat
 assert "burn_wk_span_h" in r and r["burn_wk_span_h"] > 6.8, r
 assert "wk_strand_pp" in r, r
 assert 0.0 < r["wk_strand_pp"] < 5.0, r           # 40 + 0.583*100 = 98.3 -> ~1.7 pp die
-assert "burn_5h_ewma_ph" not in r, r              # S7 is a LATER wave and was not built here
+# UPDATED IN PLACE WITH S7 (was: `assert "burn_5h_ewma_ph" not in r` — "a LATER wave"). S7 has
+# landed, and this fixture holds session_pct FLAT at 10 for 24 h, which makes it a control worth
+# keeping rather than a line to delete: a session meter that never moves must read ZERO burn, not
+# abstain. An implementation that returns None on a flat series would look identical to one that
+# has no data, and _su_projected would silently fall back to the incumbent key.
+assert "burn_5h_ewma_ph" in r, r
+assert r["burn_5h_ewma_ph"] == 0.0, r
+assert r["burn_5h_span_h"] > 5.0, r               # the span is the abstain'"'"'s reason, stamped
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router M7 + S7: burn_5h_ewma_ph is %/h and survives a roll; _su_projected reads it at SCALE" {
+  # RP-27b + RP-28. TWO HAZARDS, and each of them produces a plausible wrong number rather than
+  # an error, which is why they are pinned rather than reasoned about.
+  #
+  #   UNIT. burn_5h_ph is fraction/h and this key is %/h. _su_projected computes `su + b * ahead`
+  #   with su in [0,1], so a %/h value consumed on the old key's terms saturates EVERY row to 1.0
+  #   and reads as "the whole fleet is under 5h pressure" — a 100x error. RP-28 is the only case
+  #   that catches a missing ÷100.
+  #
+  #   ROLL. The incumbent discards a pair that straddles a window roll, so it goes blind exactly
+  #   at the roll. This must not: `never abstain on a roll` is the availability claim S7 ships on.
+  run python3 -c "$LOAD"'
+import json, os
+from datetime import datetime, timezone, timedelta
+p = os.path.join(os.environ["BATS_TEST_TMPDIR"], "util-5h.jsonl")
+now = datetime.now(timezone.utc)
+# 3 h at 6 min cadence, session burning 60 %/h — so the 5h window FILLS and ROLLS at ~100 pp,
+# twice. A discard-on-roll estimator loses those pairs; this one takes the new level as a lower
+# bound and still reports ~60.
+sra = {}
+with open(p, "w") as f:
+    sp, win = 0.0, 0
+    for i in range(30, -1, -1):
+        if sp > 100.0:
+            sp, win = 6.0, win + 1
+        f.write(json.dumps({"ts": (now - timedelta(minutes=i * 6)).isoformat(),
+                            "acct": "next3", "session_pct": round(sp), "weekly_pct": 40,
+                            "session_reset_at": (now + timedelta(hours=5 * (win + 1))).isoformat(),
+                            "weekly_reset_at": (now + timedelta(hours=100)).isoformat()}) + "\n")
+        sp += 6.0
+rows = [row(acct="next3", weekly_pct=40, weekly_reset_h=100.0)]
+samples, _sp = ca._util_tail(path=p, hours=48.0)
+ca.apply_burn(rows, cfg, samples=samples)
+r = rows[0]
+assert "burn_5h_ewma_ph" in r, r                  # NOT absent: the series rolled twice
+assert 50.0 < r["burn_5h_ewma_ph"] < 72.0, r      # ~60 %/h — NOT 0.6, and NOT a level injected
+assert r["burn_5h_span_h"] > 2.5, r
+assert "burn_5h_ph" in r, r                       # the incumbent stays populated for one release
+# the abstain is on the RAW SPAN, and it is real: two samples 12 min apart is 0.2 h of evidence.
+thin = [e for e in samples if e["_t"] >= max(x["_t"] for x in samples) - 12 * 60]
+v, span = ca.burn_5h_ewma_ph(thin, max(x["_t"] for x in samples))
+assert v is None and span < 1.3, (v, span)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+  # RP-28 — the CONSUMER reads it at the right scale. 20% now + 60 %/h for 1 h = 80%, not 100%.
+  run python3 -c "$LOAD"'
+os.environ.pop("CC_ROUTE_PROJ", None)
+os.environ.pop("CC_ROUTE_PROJ_LOOKAHEAD_H", None)
+Rp = dict(R); Rp["PROJ_LOOKAHEAD_H"] = 1.0
+got = ca._su_projected(row(session_pct=20, session_reset_h=2.0, burn_5h_ewma_ph=60.0), Rp)
+assert abs(got - 0.80) < 1e-9, got                # a missing ÷100 gives exactly 1.0 here
+# the incumbent key is still honoured when the new one is absent — a fleet mid-rollout must not
+# lose the projection entirely.
+old = ca._su_projected(row(session_pct=20, session_reset_h=2.0, burn_5h_ph=0.6), Rp)
+assert abs(old - 0.80) < 1e-9, old
+# ...and the NEW key WINS when both are present, otherwise the rollout never actually happens.
+both = ca._su_projected(row(session_pct=20, session_reset_h=2.0,
+                            burn_5h_ewma_ph=60.0, burn_5h_ph=0.05), Rp)
+assert abs(both - 0.80) < 1e-9, both
+# the window reset still caps the lookahead, and the cap still bounds at 1.0
+assert abs(ca._su_projected(row(session_pct=20, session_reset_h=0.5,
+                                burn_5h_ewma_ph=60.0), Rp) - 0.50) < 1e-9
+assert ca._su_projected(row(session_pct=90, session_reset_h=2.0, burn_5h_ewma_ph=60.0), Rp) == 1.0
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
