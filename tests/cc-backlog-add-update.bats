@@ -129,3 +129,51 @@ n_lines() { grep -c '' "$CC_BACKLOG_FILE"; }
   [ "$first" != "$second" ]
   [ "$(bash "$CB" list --all --json | jq '[.[]|select(.condition!=null and (.condition|startswith("backlog-duplicate")))]|length')" -eq 1 ]
 }
+
+# ── ADD-TIME COVERAGE WARNING (backlog-zero W2a) ─────────────────────────────────────────────────
+# A row with no --falsifier, no --condition and no --dod-ref has no retraction path and no anchor:
+# nothing can ask whether it is still needed. Measured 2026-09-04, coverage is 14.4% live / 7.3%
+# working and the zero-coverage classes are the model-authored ones (free-hand 21/381, needs 1/148)
+# — docs/research/backlog-zero-2026-09-04/inflow.md §5.4. ADVISORY BY DESIGN: `cmd_needs` documents
+# why a fabricated probe is worse than none, so a refusal would buy coverage in invented falsifiers.
+
+@test "add with no falsifier, no condition and no dod-ref WARNS on stderr" {
+  run bash "$CB" add --project P --title "a bare row nothing can retract"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'cannot retract itself'
+  printf '%s' "$output" | grep -q 'FILED is the exception'
+}
+
+@test "CONTROL — the warned row is still FILED (advisory, never a refusal)" {
+  local id; id=$(bash "$CB" add --project P --title "a bare row nothing can retract")
+  [ -n "$id" ]
+  [ "$(n_items)" -eq 1 ]
+  [ "$(fld "$id" status)" = "open" ]
+}
+
+@test "CONTROL — ANY ONE of the three silences it (falsifier / condition / dod-ref)" {
+  run bash "$CB" add --project P --title "probed" --falsifier "true"
+  [ "$status" -eq 0 ]
+  if printf '%s' "$output" | grep -q 'cannot retract itself'; then echo "falsifier did not silence" >&2; false; fi
+
+  run bash "$CB" add --project P --title "keyed" --condition some-standing-state
+  [ "$status" -eq 0 ]
+  if printf '%s' "$output" | grep -q 'cannot retract itself'; then echo "condition did not silence" >&2; false; fi
+
+  run bash "$CB" add --project P --title "anchored" --dod-ref "docs/plans/X.md#phase-2"
+  [ "$status" -eq 0 ]
+  if printf '%s' "$output" | grep -q 'cannot retract itself'; then echo "dod-ref did not silence" >&2; false; fi
+}
+
+@test "CC_BACKLOG_COVERAGE_WARN=off is the fixture opt-out" {
+  CC_BACKLOG_COVERAGE_WARN=off run bash "$CB" add --project P --title "a bare row nothing can retract"
+  [ "$status" -eq 0 ]
+  if printf '%s' "$output" | grep -q 'cannot retract itself'; then echo "opt-out ignored" >&2; false; fi
+}
+
+@test "CONTROL — the needs path stays silent: its stdout IS the id, read off a merged stream" {
+  run bash "$CB" needs "authenticate motion-plus in /mcp" --project P
+  [ "$status" -eq 0 ]
+  # bats `run` folds stderr into $output, which is exactly how cc-backlog-needs.bats:58 reads the id
+  [[ "$output" =~ ^[0-9a-f]{12}$ ]]
+}

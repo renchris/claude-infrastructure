@@ -1399,6 +1399,27 @@ conf_dispatchable() {
   ' "$1" 2>/dev/null || true
 }
 
+# coverage_warn <falsifier> <condition> <dod> — stderr only, rc 0, never a refusal. A row carrying
+# none of the three has no retraction path and no anchor: nothing can ask whether it is still needed,
+# so it can only leave the pile by a human reading it. Measured 2026-09-04
+# (docs/research/backlog-zero-2026-09-04/inflow.md §5.4): falsifier coverage is 14.4% live / 7.3%
+# working, and the zero-coverage classes are exactly the model-authored ones — free-hand 21/381,
+# `needs` 1/148 — against p90 ages of 26.6 d (ad-hoc) and 31.8 d (`needs`).
+#
+# WHY WARN AND NOT REFUSE. `cmd_needs` already documents why a FABRICATED probe is worse than none
+# (it retracts a live row on a lie), and that reasoning holds here: a gate would buy coverage in
+# invented falsifiers. `backlog-ratchet.sh:26-30` declined to gate on this in 2026-08 because "no
+# generator emits one yet"; that premise is now stale (ship-land, postland-verify, deploy-live and
+# cc-discover all emit one), which is what makes the warning informative rather than noise.
+# CC_BACKLOG_COVERAGE_WARN=off is the opt-out for a caller filing into a fixture ledger.
+coverage_warn() {
+  [ "${CC_BACKLOG_COVERAGE_WARN:-on}" = off ] && return 0
+  [ -n "$1" ] || [ -n "$2" ] || [ -n "$3" ] || {
+    printf 'cc-backlog add: no --falsifier, no --condition and no --dod-ref — this row cannot retract itself (live coverage 14.4%%; p90 age 26.6 d ad-hoc / 31.8 d needs). FILED is the exception: say why THIS session could not do it, why it will still be true in a month (a --falsifier makes that self-retracting), and who it is for. If you cannot answer all three, drop it instead.\n' >&2
+  }
+  return 0
+}
+
 # project_dispatch_warn <project> — stderr only, never a status. Silent when it cannot know: no
 # readable conf validates NOTHING and says nothing (the dispatcher degrades the same way — narrower
 # coverage, never a louder guess), and CC_BACKLOG_PROJECT_WARN=off is the opt-out for a caller that
@@ -1478,6 +1499,7 @@ cmd_add() {
     esac
   done
   [ -n "$title" ] || { echo "cc-backlog add: --title is required" >&2; return 2; }
+  coverage_warn "$falsifier" "$condition" "$dod"
   # A malformed condition REFUSES the whole add rather than degrading to a title key. Falling back
   # would hand the caller the very per-event id it asked not to have, silently — and a caller that
   # passed --condition is one whose retry loop mints a fresh item every pass.
@@ -3120,6 +3142,15 @@ cmd_needs() {
   # ${falsifier:+--falsifier "$falsifier"} word-splits a probe with spaces back apart, and a probe is
   # a shell command line — spaces are the norm, not the exception.
   local id rc
+  # The add-time coverage warning is OFF on this path, deliberately. Two reasons, either sufficient:
+  # (1) `needs` puts the id on stdout and its callers read it off a merged stream (bats `run` folds
+  # stderr in), so a stderr note here corrupts the id contract — measured as a gate RED on
+  # tests/cc-backlog-needs.bats:58. (2) This command's own header already argues the case the warning
+  # would make: a FABRICATED probe on an operator gate is worse than none, because it retracts a live
+  # row on a lie. The lever for the `needs` class is completion-assert D1's gate sentence — file it
+  # only if you genuinely cannot — not a nag at the point of filing. A `needs --falsifier` is
+  # unaffected either way: it silences the warning by having one.
+  local CC_BACKLOG_COVERAGE_WARN=off
   local -a aargs
   aargs=(--title "$step" --source needs)
   [ -n "$project" ]   && aargs=(--project "$project" "${aargs[@]}")
