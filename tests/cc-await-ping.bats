@@ -1744,3 +1744,63 @@ await_gone() { # <pid> → 0 once the pid is gone; 1 after ~15s
   grep -qF 'ASSUME THE DANGEROUS READING' "$box" || false
   kill "$s" 2>/dev/null || true
 }
+
+# ════ --stand-down (2026-09-04 — the sanctioned stop for YOUR OWN watchers) ═══════════════════════
+# Sessions improvised `pkill -f "cc-await-ping"` to stop their watcher before a recycle, and on this
+# fleet that pattern selects every fired peer (their argv carries the --notify-back trailer). The
+# hook now denies it and names this flag; these tests pin what the flag promises: by pid, this inbox
+# only, rc 0 for the watcher, and no WAKE-PATH-DOWN mail for a stop the session chose.
+
+sd_none() {  # <path-prefix> → 0 iff NO file starts with it (a glob, so odd filenames still count)
+  local f
+  for f in "$1"*; do [ -e "$f" ] && return 1; done
+  return 0
+}
+sd_arm() {  # <uuid> <errfile> → SD_W = pid of a watcher armed on that inbox, once its claim file exists
+  # Sets a variable rather than printing the pid: a `$(...)` caller would fork the watcher in a
+  # subshell, and `wait` in the test can only reap its OWN children (rc 127 otherwise).
+  "$AWAIT" "$1" --interval 1 --timeout 60 2>"$2" &
+  SD_W=$!
+  local i
+  for i in $(seq 1 30); do ls "$CC_MAILBOX_DIR/.watchers/$1."* >/dev/null 2>&1 && break; sleep 0.2; done
+}
+
+@test "stand-down: stops THIS inbox's watcher by pid — rc 0, verdict=stood-down, no WAKE-PATH-DOWN" {
+  sd_arm "$UUID" "$BATS_TEST_TMPDIR/w.err"; local w=$SD_W
+  ls "$CC_MAILBOX_DIR/.watchers/$UUID."* >/dev/null 2>&1 || false      # armed: the claim exists
+  run "$AWAIT" "$UUID" --stand-down
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down n=1"* ]] || false
+  local rc=0; wait "$w" || rc=$?
+  [ "$rc" -eq 0 ]                                                        # NOT 143: the stop was chosen
+  grep -q 'verdict=stood-down' "$BATS_TEST_TMPDIR/w.err"
+  if grep -q 'WAKE-PATH-DOWN' "$MB" 2>/dev/null; then false; fi         # no alarm mail for a chosen stop
+  sd_none "$CC_MAILBOX_DIR/.watchers/$UUID."                             # claim cleared
+  sd_none "$CC_MAILBOX_DIR/.watchers/stand-down."                        # stamp consumed
+}
+
+@test "stand-down: with no watcher armed it is a no-op that still exits 0" {
+  run "$AWAIT" "$UUID" --stand-down
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down n=0"* ]] || false
+}
+
+@test "stand-down: never touches a watcher on ANOTHER inbox" {
+  local UUID2="BBBBBBBB-1111-2222-3333-444444444444"
+  sd_arm "$UUID2" "$BATS_TEST_TMPDIR/w2.err"; local w2=$SD_W
+  run "$AWAIT" "$UUID" --stand-down                                      # a DIFFERENT inbox
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"n=0"* ]] || false
+  kill -0 "$w2"                                                          # the other watcher lives
+  kill -TERM "$w2" 2>/dev/null || true
+  wait "$w2" 2>/dev/null || true
+}
+
+@test "stand-down CONTROL: a bare TERM with no stamp is still reported as an external kill" {
+  sd_arm "$UUID" "$BATS_TEST_TMPDIR/w.err"; local w=$SD_W
+  kill -TERM "$w"
+  local rc=0; wait "$w" || rc=$?
+  [ "$rc" -eq 143 ]
+  grep -q 'verdict=killed' "$BATS_TEST_TMPDIR/w.err"
+  grep -q 'WAKE-PATH-DOWN' "$MB"
+}

@@ -443,3 +443,119 @@ EOF
   [ "$(decision 'pkill -f "bats --tap ${PWD##*/}"')" = "PASS" ]
   [ "$(decision 'pkill -f "bats --tap .worktrees/wt-x"')" = "PASS" ]
 }
+
+# ════ SELECTION-keyed gate (2026-09-04 — the five husk panes) ═══════════════════════════════════
+# Every clause above is keyed on a SPELLING (three gate programs, a trailing flag). The mechanism —
+# a session's argv carries its brief, so a -f pattern matches siblings by TEXT — came back on
+# 2026-08-25 and 2026-09-04 under a spelling none of them named (`cc-await-ping`), and on 2026-09-04
+# it SIGTERMed five sessions in 30 s, stranding five panes at a bare shell. The gate under test asks
+# pgrep what the kill WOULD select and denies on a FOREIGN victim (hooks/lib/kill-selection.py).
+# Fixtures are REAL processes, because the selection is evaluated by the real pgrep: unique markers
+# per test, torn down below. A "session" is any process whose argv[0] reads `claude` (exec -a) —
+# that is what the classifier keys on — never a real claude, and nothing here is ever really killed
+# (the hook only decides).
+
+reason() {  # $1 = command → the permissionDecisionReason text ("" when no decision was emitted)
+  python3 -c 'import json,sys;print(json.dumps({"tool_input":{"command":sys.argv[1]}}))' "$1" \
+    | bash "$HOOK" 2>/dev/null \
+    | python3 -c 'import sys,json
+try: print(json.load(sys.stdin)["hookSpecificOutput"]["permissionDecisionReason"])
+except Exception: print("")'
+}
+sel_wait() {  # <marker> — block until pgrep can see it (bounded), so a probe never races the spawn
+  local _
+  for _ in $(seq 1 25); do pgrep -f "$1" >/dev/null 2>&1 && return 0; sleep 0.2; done
+  return 1
+}
+sel_spawn_session() {  # <marker> → a fake Claude session (argv[0]=claude) parenting a marker process
+  bash -c 'exec -a claude bash -c "bash -c \"sleep 60 & wait\" \"\$0\" & wait" "$0"' "$1" >/dev/null 2>&1 &
+  sel_wait "$1"
+}
+sel_spawn_own() {      # <marker> → a marker process directly under THIS test shell
+  bash -c 'sleep 60 & wait' "$1" >/dev/null 2>&1 &
+  sel_wait "$1"
+}
+teardown() {
+  local p
+  [ -n "${SEL_MARK:-}" ] || return 0
+  for p in $(pgrep -f "$SEL_MARK" 2>/dev/null); do kill -TERM "$p" 2>/dev/null || true; done
+  for p in $(pgrep -x "kfx${SEL_KFX:-none}" 2>/dev/null); do kill -TERM "$p" 2>/dev/null || true; done
+  return 0
+}
+
+@test "selection: the 2026-09-04 incident shape is DENIED — a sibling merely MENTIONS the pattern" {
+  SEL_MARK="cc-await-ping-fx-$BASHPID-$RANDOM"
+  sel_spawn_session "$SEL_MARK"
+  export CC_KILL_GATE_SELF_PID=$BASHPID
+  local cmd="pkill -f \"$SEL_MARK\" 2>/dev/null"     # the incident line, marker for the literal
+  [ "$(decision "$cmd")" = "DENY" ]
+  local why; why="$(reason "$cmd")"
+  [[ "$why" == *"LIVE Claude session"* ]] || false       # the victim is NAMED as a session
+  [[ "$why" == *"--stand-down"* ]] || false               # a cc-await-ping victim names the actuator
+}
+
+@test "selection: the SAME pattern over your OWN subtree passes untouched" {
+  SEL_MARK="cc-await-ping-fx-$BASHPID-$RANDOM"
+  sel_spawn_own "$SEL_MARK"
+  export CC_KILL_GATE_SELF_PID=$BASHPID
+  [ "$(decision "pkill -f \"$SEL_MARK\"")" = "PASS" ]
+}
+
+@test "selection: every actuator spelling is evaluated, not just pkill -f" {
+  SEL_MARK="sel-fx-$BASHPID-$RANDOM"
+  sel_spawn_session "$SEL_MARK"
+  export CC_KILL_GATE_SELF_PID=$BASHPID
+  [ "$(decision "kill \$(pgrep -f $SEL_MARK)")" = "DENY" ]
+  [ "$(decision "pgrep -f $SEL_MARK | xargs kill -9")" = "DENY" ]
+  # the compound lives in a variable: an `&&` inside the quoted fixture reads to the
+  # dead-assertion lint as an and-list absorbing the assertion (memory: `!` dead unless final)
+  local compound="cd /tmp && sudo pkill -KILL -f $SEL_MARK; echo done"
+  [ "$(decision "$compound")" = "DENY" ]
+  [ "$(decision "pkill -9f $SEL_MARK")" = "DENY" ]
+  # a non-cc-await-ping victim gets the by-pid remedy, not the watcher one
+  [[ "$(reason "pkill -f $SEL_MARK")" == *"Signal by pid"* ]] || false
+  # a read-only pgrep that feeds nothing is not a kill
+  [ "$(decision "pgrep -f $SEL_MARK")" = "PASS" ]
+}
+
+@test "selection: killall by NAME is evaluated through the same selection" {
+  SEL_KFX="$BASHPID"; SEL_MARK="kfx$BASHPID"
+  # A SYMLINK, not a copy: a copied platform binary is SIGKILLed by the code-signature check on
+  # Apple silicon (measured: `cp /bin/sleep` → "Killed: 9"), and a shebang script's p_comm is the
+  # interpreter's. execve names the process after the path it was given, so a symlink's basename is
+  # what `pgrep -x` / killall match — and it must fit p_comm's 16 characters.
+  ln -s /bin/sleep "$BATS_TEST_TMPDIR/kfx$BASHPID"
+  bash -c 'exec -a claude bash -c "\"\$0\" 60 & wait" "$0"' "$BATS_TEST_TMPDIR/kfx$BASHPID" >/dev/null 2>&1 &
+  for _ in $(seq 1 25); do pgrep -x "kfx$BASHPID" >/dev/null 2>&1 && break; sleep 0.2; done
+  pgrep -x "kfx$BASHPID" >/dev/null 2>&1 || false
+  export CC_KILL_GATE_SELF_PID=$BASHPID
+  [ "$(decision "killall kfx$BASHPID")" = "DENY" ]
+}
+
+@test "selection: text is not execution, and a DYNAMIC pattern abstains (documented limit)" {
+  SEL_MARK="cc-await-ping-fx-$BASHPID-$RANDOM"
+  sel_spawn_session "$SEL_MARK"
+  export CC_KILL_GATE_SELF_PID=$BASHPID
+  [ "$(decision "echo \"pkill -f $SEL_MARK\"")" = "PASS" ]
+  [ "$(decision "git commit -m \"fix: never pkill -f $SEL_MARK\"")" = "PASS" ]
+  export SEL_MARK_ENV="$SEL_MARK"
+  [ "$(decision 'pkill -f "$SEL_MARK_ENV"')" = "PASS" ]   # cannot be evaluated statically → abstain
+}
+
+@test "selection: CC_KILL_SELECTION_GATE=off is a real kill switch, and an UNOWNED victim is not its business" {
+  SEL_MARK="cc-await-ping-fx-$BASHPID-$RANDOM"
+  sel_spawn_session "$SEL_MARK"
+  export CC_KILL_GATE_SELF_PID=$BASHPID
+  [ "$(decision "pkill -f $SEL_MARK")" = "DENY" ]                       # armed: the control can fail
+  [ "$(CC_KILL_SELECTION_GATE=off decision "pkill -f $SEL_MARK")" = "PASS" ]
+  [ "$(decision 'killall Dock')" = "PASS" ]                             # under launchd, not a session
+}
+
+@test "selection: a denial is recorded, so the class is measurable after the fact" {
+  SEL_MARK="cc-await-ping-fx-$BASHPID-$RANDOM"
+  sel_spawn_session "$SEL_MARK"
+  export CC_KILL_GATE_SELF_PID=$BASHPID
+  [ "$(decision "pkill -f $SEL_MARK")" = "DENY" ]
+  [ -f "$HOME/.claude/logs/kill-selection-gate.jsonl" ]
+  python3 -c 'import json,sys; r=json.loads(open(sys.argv[1]).read().splitlines()[-1]); assert r["foreign"]>=1 and r["awaitping"]==1, r' "$HOME/.claude/logs/kill-selection-gate.jsonl"
+}

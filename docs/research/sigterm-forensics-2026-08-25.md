@@ -196,3 +196,14 @@ Note for whoever holds this: pane 49's debt was opened by `d075006b`, which is d
 **Capture `si_pid` in `cc-close-attrib`'s `_forward()` TERM trap and write it into the close record.** It is ~3 lines, it is the only place the fact is ever in scope, and it converts this class of incident from unsolvable-after-the-fact to solved-at-the-time. The 21:28 kill is named today for exactly one reason: `cc-await-ping` already does this.
 
 > 🚨 **REFUTED — 2026-08-26, drain recycle #231. DO NOT IMPLEMENT THIS PARAGRAPH.** Every sentence of it is wrong: bash traps cannot see `si_pid` at all, so there are no "~3 lines"; `_forward()` is not "the one place the fact is in scope" because the fact is in scope nowhere in a shell; and `cc-await-ping` does **not** "already do this" in any form this file could copy — it forks a python SA_SIGINFO side-car whose own source (`:467-471`) says it cannot see a single-process 143, which is what the 21:42:25Z kill was (§ line 84 of this document). Full refutation, and the fact that **was** recoverable and is now recorded as `sig_reached_wrapper`, in the CORRECTION box under § *Why no store could have held the answer*.
+
+---
+
+> **Recurred 2026-09-04, and this time it is ENFORCED.** The identical command — `pkill -f
+> "cc-await-ping"`, typed by a session standing down its own watcher before a recycle — SIGTERMed
+> **five** sessions in 30 s and left five panes at a bare shell, which the operator read as failed
+> self-recycles. The 2026-08-25 recommendation above was forensic (name the sender after the fact)
+> and was itself refuted; the guard in `hooks/validate-bash.sh` was keyed on gate-program spellings
+> and let this spelling through. Both are now replaced by a gate keyed on the kill's LIVE SELECTION
+> (`hooks/lib/kill-selection.py`) and a sanctioned actuator (`cc-await-ping --stand-down`). Chain,
+> refutations and the mechanism: `docs/research/husk-panes-pkill-selection-2026-09-04.md`.

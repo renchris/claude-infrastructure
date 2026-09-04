@@ -22,6 +22,9 @@
 #   --sid <id>      this session's Claude session id — the key of its turn-boundary beat
 #                   (~/.claude/cc-beats/<sid>.json). Required by --idle-scoped in practice;
 #                   omitted, the mode resolves it by pane and REFUSES if it cannot.
+#   --stand-down    stop THIS inbox's own watchers and exit 0 — by pid from their claim files,
+#                   never by pattern (§ STAND-DOWN). Composes with <uuid> / --role. The actuator
+#                   hooks/validate-bash.sh names when it denies a `pkill -f cc-await-ping`.
 #   --timeout <s>   give up after S seconds (default 1800; exit 2)
 #   --interval <s>  poll cadence in seconds (default 15)
 #   -h, --help
@@ -141,6 +144,7 @@ INTERVAL=15
 UUID=""
 ROLE=""
 IDLE_SCOPED=0
+STAND_DOWN=0
 SID=""
 _TIMEOUT_SET=0
 _INTERVAL_SET=0
@@ -153,6 +157,7 @@ while [ $# -gt 0 ]; do
     --timeout)      TIMEOUT="${2:?--timeout needs a value}"; _TIMEOUT_SET=1; shift 2 ;;
     --interval)     INTERVAL="${2:?--interval needs a value}"; _INTERVAL_SET=1; shift 2 ;;
     --idle-scoped)  IDLE_SCOPED=1; shift ;;
+    --stand-down)   STAND_DOWN=1; shift ;;
     --sid)          SID="${2:?--sid needs a value}"; shift 2 ;;
     -h|--help)      usage; exit 0 ;;
     --*)            echo "cc-await-ping: unknown option '$1'" >&2; usage >&2; exit 2 ;;
@@ -238,7 +243,7 @@ _banner="cc-await-ping: watching $CUR_UUID inbox ($([ "$_have_lib" = 1 ] && echo
 # Held back in idle-scoped mode until the arm gate has passed: announcing a watch that is then
 # REFUSED tells its reader the opposite of what happened, and this stderr is the one stream the
 # harness's task notification carries.
-[ "$IDLE_SCOPED" = 1 ] || echo "$_banner" >&2
+[ "$IDLE_SCOPED" = 1 ] || [ "$STAND_DOWN" = 1 ] || echo "$_banner" >&2
 
 # Wake-path HEARTBEAT (critique F5): touch <uuid>.watching each poll so cc-notify/cc-announce can tell a
 # live session that WILL be woken (a fresh watcher heartbeat) from a live-but-idle one that only drains on
@@ -287,6 +292,52 @@ BEAT_KEYS="$CUR_UUID"
 # marker its readers would already call dead, and a recycled pid cannot inherit a dead watcher's
 # claim. A sibling running a version with no claim file still survives via the pid guard.
 WATCH_CLAIM_DIR="$MAILBOX_DIR/.watchers"
+# ── § STAND-DOWN — the sanctioned way to stop YOUR OWN watchers (2026-09-04) ──────────────────────
+# A session that needed its watcher gone before a recycle had no tool for it and improvised
+# `pkill -f "cc-await-ping"`. On this fleet a session's argv carries its whole brief, and the
+# standard --notify-back trailer contains that literal string, so the pattern selected every fired
+# peer on the box: 2026-08-25 (1 session + 3 watchers) and 2026-09-04 (5 sessions in 30 s, five
+# panes stranded at a bare shell). hooks/validate-bash.sh now denies that shape by evaluating its
+# selection; this flag is the actuator the denial names. It signals ONLY the watcher pids recorded
+# for this inbox — the claim files `$WATCH_CLAIM_DIR/<key>.<pid>` written by _beat, plus the
+# legacy `.watching` owner — by pid, never by pattern, and stamps each one first so its TERM trap
+# reports `verdict=stood-down` (rc 0, no WAKE-PATH-DOWN mail) rather than an external kill.
+if [ "$STAND_DOWN" = 1 ]; then
+  _sd_n=0; _sd_keys="$(_keys)"
+  _sd_signal() {   # <pid> <key> — TERM a pid iff it is alive AND runs cc-await-ping; rc 0 = signalled
+    local p="$1" k="$2"
+    kill -0 "$p" 2>/dev/null || return 1
+    ps -o command= -p "$p" 2>/dev/null | grep -q 'cc-await-ping' || return 1
+    mkdir -p "$WATCH_CLAIM_DIR" 2>/dev/null || true
+    : > "$WATCH_CLAIM_DIR/stand-down.$p" 2>/dev/null || true
+    if kill -TERM "$p" 2>/dev/null; then
+      echo "cc-await-ping: stood down watcher pid $p on key [$k]" >&2; return 0
+    fi
+    rm -f "$WATCH_CLAIM_DIR/stand-down.$p" 2>/dev/null || true
+    return 1
+  }
+  for _k in $_sd_keys; do
+    for _c in "$WATCH_CLAIM_DIR/$_k".*; do
+      [ -e "$_c" ] || continue
+      _p="${_c##*.}"; case "$_p" in ''|*[!0-9]*) continue ;; esac
+      [ "$_p" = "$$" ] && continue
+      if _sd_signal "$_p" "$_k"; then _sd_n=$((_sd_n+1)); else rm -f "$_c" 2>/dev/null || true; fi
+    done
+    _o="$(sed -n 's/^pid=\([0-9][0-9]*\).*/\1/p' "$MAILBOX_DIR/$_k.watching" 2>/dev/null | head -n1)"
+    if [ -n "$_o" ] && [ "$_o" != "$$" ] && [ ! -e "$WATCH_CLAIM_DIR/stand-down.$_o" ]; then
+      if _sd_signal "$_o" "$_k"; then _sd_n=$((_sd_n+1)); fi
+    fi
+  done
+  # A stamp must not outlive its pid: a watcher SIGKILLed before its trap ran would leave one, and a
+  # recycled pid must never inherit a "deliberate" verdict it did not earn.
+  for _s in "$WATCH_CLAIM_DIR"/stand-down.*; do
+    [ -e "$_s" ] || continue
+    _p="${_s##*.}"; case "$_p" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$_p" 2>/dev/null || rm -f "$_s" 2>/dev/null || true
+  done
+  echo "cc-await-ping: verdict=stood-down n=$_sd_n uuid=${CUR_UUID} — $_sd_n watcher(s) of THIS inbox signalled by pid; no pattern used, no sibling touched. Re-arm before going idle (unless a /goal is live): cc-await-ping --timeout 14400 --interval 15" >&2
+  exit 0
+fi
 _claim_live() {   # <key> → print the pid of a LIVE OTHER watcher beating this key; rc 1 = none
   local k="$1" c p mt now
   now="$(date +%s 2>/dev/null || echo 0)"
@@ -903,6 +954,15 @@ _sig_verdict() {   # <signame> <signum>
   local sender
   trap - TERM HUP INT EXIT
   _unbeat
+  if [ -e "$WATCH_CLAIM_DIR/stand-down.$$" ]; then
+    # Stamped by THIS inbox's own `--stand-down` (§ STAND-DOWN) an instant before the TERM: a
+    # deliberate, by-pid stop, not the external kill the rest of this handler reports. No
+    # WAKE-PATH-DOWN mail (the session chose this) and rc 0 (the harness must not label it failed).
+    rm -f "$WATCH_CLAIM_DIR/stand-down.$$" 2>/dev/null || true
+    _sigrecord_disarm
+    echo "cc-await-ping: verdict=stood-down signal=SIG$1 $(_elapsed_f) budget=${TIMEOUT}s uuid=${CUR_UUID} — stood down by this inbox's own 'cc-await-ping --stand-down' (deliberate, by pid). No ping was consumed and no WAKE-PATH-DOWN was written. Re-arm before going idle, unless a /goal is live in this session." >&2
+    exit 0
+  fi
   if _term_expired; then
     # The DESIGNED end of a watch, reached a beat before the loop could say so. Same disarm and the
     # same re-arm advice as any other end of term — but no anomaly, no "terminated from outside", and

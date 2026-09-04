@@ -680,6 +680,52 @@ if printf '%s' "$CMD_NOQ" | sed 's/[&|()]/;/g' | tr ';' '\n' | sed 's/^[[:space:
   done <<<"$PK_OCCURRENCES"
 fi
 
+# ── SELECTION-KEYED kill gate (2026-09-04 — the five husk panes) ─────────────────────────────────
+# The clause above is keyed on the SPELLING of three gate programs, and a spelling-keyed guard can
+# only enumerate the incidents already paid for (MEMORY: denylist-enumerates-spellings-not-the-class).
+# The harm is a property of the SELECTION: on this fleet a Claude session's argv carries its whole
+# brief (6-10 KB), so `pkill -f X` matches every sibling whose PROMPT mentions X — measured
+# 2026-08-09 (`next dev`, 3 sessions), 2026-08-25 (`cc-await-ping`, 1 session + 3 watchers) and
+# 2026-09-04 (`cc-await-ping`, 5 sessions SIGTERMed in 30 s, five panes stranded at a bare shell
+# reading "Resume this session with:" — the strand the operator read as failed self-recycles).
+# hooks/lib/kill-selection.py asks the REAL pgrep what the kill would select and walks each victim's
+# ancestry: OWN (under this session) and UNOWNED (Dock, a hand-started server) pass untouched;
+# FOREIGN (another live Claude session, or a process inside one) is denied, with the victims named.
+# Dynamic patterns (`$VAR`, `$(…)`) cannot be evaluated statically and ABSTAIN, exactly as today.
+# Seams: CC_KILL_SELECTION_GATE=off (kill switch) · CC_KILL_GATE_SELF_PID (own-session root, else the
+# nearest `claude` ancestor of this hook) · CC_REGISTRY_DIR (victim → session name). Costs one
+# python3 fork, only on a command with pkill/killall/pgrep in command position. Evidence:
+# docs/research/husk-panes-pkill-selection-2026-09-04.md.
+if [[ "${CC_KILL_SELECTION_GATE:-on}" != off && -f "$LIB_DIR/kill-selection.py" ]] \
+   && command -v python3 >/dev/null 2>&1 \
+   && printf '%s' "$CMD_NOQ" | sed 's/[&|()`]/;/g' | tr ';' '\n' | sed 's/^[[:space:]]*//' \
+        | grep -qE '^(sudo[[:space:]]+)?(pkill|killall|pgrep)([[:space:]]|$)'; then
+  KS_SELF="${CC_KILL_GATE_SELF_PID:-}"
+  if [[ -z "$KS_SELF" ]]; then
+    _ksp=$$ _ksn=0
+    while [[ "$_ksp" -gt 1 && "$_ksn" -lt 12 ]]; do
+      _ksc=$(ps -o comm= -p "$_ksp" 2>/dev/null); _ksc=${_ksc##*/}
+      [[ "$_ksc" == claude || "$_ksc" == claude-* ]] && { KS_SELF=$_ksp; break; }
+      _ksp=$(ps -o ppid= -p "$_ksp" 2>/dev/null | tr -d ' '); _ksn=$((_ksn+1))
+      [[ -n "$_ksp" ]] || break
+    done
+    [[ -n "$KS_SELF" ]] || KS_SELF=$PPID
+  fi
+  KS_OUT=$(python3 "$LIB_DIR/kill-selection.py" "$CMD_NOHD" "$KS_SELF" "${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}" 2>/dev/null || true)
+  if [[ -n "$KS_OUT" ]]; then
+    IFS=$'\t' read -r _ksk KS_SEG KS_N KS_VICTIMS KS_AP <<<"${KS_OUT%%$'\n'*}"
+    if [[ "$_ksk" == FOREIGN ]]; then
+      if [[ "$KS_AP" == 1 ]]; then
+        KS_REMEDY="To stand down YOUR OWN inbox watcher run 'cc-await-ping --stand-down' — it signals only the watchers claimed on this pane's inbox, by pid, and never a sibling's (a sibling whose watcher dies is DEAF to peer mail until a human types at it)."
+      else
+        KS_REMEDY="Signal by pid instead ('kill <pid>' from a pgrep you have read), or scope to your own subtree with '-P <pid>' placed BEFORE the pattern."
+      fi
+      { [ -d "$HOME/.claude/logs" ] || mkdir -p "$HOME/.claude/logs"; printf '{"ts":"%s","sid":"%s","segment":"%s","foreign":%s,"awaitping":%s}\n' "${_P_TS:-}" "${_P_SID:-}" "$(json_escape "$KS_SEG")" "${KS_N:-0}" "${KS_AP:-0}" >> "$HOME/.claude/logs/kill-selection-gate.jsonl"; } 2>/dev/null || true
+      deny "Pattern kill blocked — evaluated LIVE, '$KS_SEG' would signal $KS_N process(es) that belong to OTHER Claude sessions: $KS_VICTIMS. On this box a session's argv carries its whole brief, so a -f pattern matches every sibling whose PROMPT mentions the text — measured 2026-08-09 ('next dev', 3 sessions), 2026-08-25 ('cc-await-ping', 1 session + 3 watchers) and 2026-09-04 ('cc-await-ping', 5 sessions SIGTERMed in 30 s, five panes left at a bare shell). $KS_REMEDY Preview any selection first by running the same line with pkill swapped for its read-only twin, pgrep. Kill switch: CC_KILL_SELECTION_GATE=off."
+    fi
+  fi
+fi
+
 # DDL via any mechanism (turso shell, sqlite3, echo|pipe, etc.) — only
 # blocked when in DATABASE-COMMAND context. This avoids false positives on
 # commit messages that discuss DDL ("fix: block DROP TABLE in migration").
