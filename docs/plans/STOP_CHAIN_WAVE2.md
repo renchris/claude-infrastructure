@@ -1,5 +1,5 @@
 ---
-status: done
+status: complete
 ---
 
 # STOP_CHAIN_WAVE2 — driving the six filed Stop-chain defects to completion
@@ -302,8 +302,19 @@ unreachable by name (measured: `context2`, 638 KB, and the four operator-cancell
 | W1 (session-continue half) | `61a3b40d8695` | `4993f2b55` | telemetry 12/12 |
 | W4 | `79e2b74796af` | `1416abc10` | completion-assert 121/121 |
 | W1 (goal-inert half) + W2 | `0f4147dcb20b` | `8be512f22` | goal-inert-watch 28/28 |
-| W6 | `d8147be371cd` | `efe703403` | docs only |
-| W5 | `a9ede190ee3b` | `5ecff6f14` | wrap-ledger 97/97 · memo 24/24 |
+| W6 | `d8147be371cd` | `ad4748584` | docs only |
+| W5 | `a9ede190ee3b` | `a7b6d51bd` | wrap-ledger 97/97 · memo 24/24 |
+
+⚠️ **W5 and W6's shas were corrected 2026-09-04 — as first written they resolved to nothing.** The
+table originally cited `efe703403` (W6) and `5ecff6f14` (W5); neither is an object in this
+repository at all, on any ref. Both changes ARE on trunk — verified by content, not by claim
+(`git grep 'cc-agent-harvest --session' origin/main -- skills/`, `git grep 'CUSTODY_SRC="pane"'
+origin/main -- scripts/wrap-ledger.sh`) — under `ad4748584` and `a7b6d51bd`, both asserted with
+`git merge-base --is-ancestor <sha> origin/main`. The other four rows' shas were correct as
+written. **The lesson is the one §W6 already teaches, applied to this table:** an evidence pointer
+nothing can resolve is indistinguishable from evidence that does not exist, and a reader checking
+this plan's DoD ("landed via the project-local `/ship`") would have found two of six waves
+unverifiable. Cite a sha only after it answers `git merge-base --is-ancestor`.
 
 ### Four things the plan did not anticipate, each of which changed the work
 
