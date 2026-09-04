@@ -85,6 +85,14 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
+# THE LANE STAMPS ITSELF. Recycle #300 measured cc-backlog's ps-walk lane derivation returning
+# EMPTY under load, so its own close counted as another lane's and the floor read UNMET; the
+# explicit declaration is what the goal's instrument reads, so the brief must carry it.
+@test "the brief exports CC_BACKLOG_LANE=local-drain in its setup" {
+  run bash "$SUBJECT" --num 300 --print
+  [ "$(printf '%s' "$output" | grep -c '^    export CC_BACKLOG_LANE=local-drain')" -eq 1 ]
+}
+
 @test "the shipped template is under the cap with room, and carries the claim/close loop" {
   t="$REPO/scripts/drain-brief.template.md"
   [ "$(wc -l < "$t" | tr -d ' ')" -le 150 ]
