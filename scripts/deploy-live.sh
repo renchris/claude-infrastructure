@@ -942,8 +942,16 @@ host_checks() { # <deployed-sha> — never blocks, never rolls back, never chang
   # probe's subject and the item's subject are the same thing; every wider set gets no falsifier,
   # which is the honest answer rather than a confident wrong one. fals_host strips the `(N)` failure
   # count that host_checks appends, since that is a measurement and not part of the path.
+  # THE COUNT IS A MEASUREMENT, NOT THE IDENTITY — and it was the last field in this title that
+  # still moved under one unresolved finding. `$red` arrives as ` <suite>(<n>)` per failing suite,
+  # so a suite that fails 2 tests today and 3 tomorrow re-keys project+title+source and mints a
+  # SECOND item for the same suite. That is the sha-in-the-title non-idempotency by its last door:
+  # the cut counter's `n` was taken out of its key for exactly this reason (see the cool-off test
+  # in tests/deploy-live.bats), and `fals_host_set` already strips these counts because they are
+  # not part of the path either. The magnitudes stay where they belong — the log line above and the
+  # page's `failing:` line, both of which are per-deploy and meant to move.
   [ -x "$BACKLOG_BIN" ] && "$BACKLOG_BIN" add \
-    --title "post-deploy HOST RED:$red" \
+    --title "post-deploy HOST RED:$(printf '%s' "$red" | sed 's/([0-9]*)//g')" \
     --falsifier "$(fals_host_set "$red")" \
     --project claude-infrastructure --source deploy-live >/dev/null
   return 0
