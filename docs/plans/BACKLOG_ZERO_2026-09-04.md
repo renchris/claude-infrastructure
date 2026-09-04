@@ -104,6 +104,28 @@ mints follow-ons the drains cannot keep up with. The telemetry that would have s
 
 ## §4 Status log (INTEGRATE-only; newest first)
 
+- **2026-09-04 16:40Z — the lanes close rows; the modal is a consent boundary, not a bug to sweep.**
+  Lane infra #300 landed `c5e2eb5a5` (row `07ac6d58d88d`, cc-pane's send verb) and closed five rows
+  stamped `lane=local-drain` by 16:31Z (one DOABLE, four MOOT on content); its closure report reads
+  `closed_pre=1` because the four MOOT rows belong to another project — the floor counts only the
+  lane's own project, as designed. Its `done` evidence also records a real defect: under load 20+
+  `ps` returns nothing, so `cc-backlog done` derived NO lane and the link had to re-stamp (three
+  `lane=none` dones since 15:00Z are that). Lane reso #1 has claimed six rows and committed one fix
+  on its branch. **The stall generator:** every fired session froze on `[settings] settings.json to
+  update hooks — Do you want to proceed?` (pile row `8ea3acef7d64`, open since 08-18). Measured: all
+  five account `settings.json` files were rewritten 13:50:44–13:51:31Z, ten seconds apart — the writer
+  could not be identified (no Write-tool backup, no script in scripts/bin/hooks writes a config-dir
+  settings.json, `claude-accounts`/deploy-live/settings-drift do not) — and the dialog also re-raises
+  after a pull that changes the tracked `.claude/settings.json` (`86e354262` did today). A sweeper
+  that auto-answers it was built, then **REVERTED before landing**: the auto-mode classifier refused
+  the keystroke twice, and the repo's own modal doctrine (`hooks/lib/pane-modal.sh`: trust and MCP
+  approval "may never be suppressed") applies — hooks execute code, so this prompt is a consent
+  boundary and the fix must be upstream: find the settings.json writer and stop it rewriting under
+  live sessions, and keep trunk edits to `.claude/settings.json` rare. Until then a fired session
+  can stall until a human answers; the operator's `▶` for this close is the sweep of panes 296–300.
+  W2a still landing (3 commits on `feat/backlog-zero-w2a`). Four research subagents stopped (their
+  reports were consumed at 12:00Z).
+
 - **2026-09-04 15:55Z — W2b and W3 RETURNED and are on trunk (content-verified by ancestry).**
   W2b (`c36876297` · `7e567755b` · `4c60e8943` · `39b409a72`): the re-land probe is stored at the
   durable path (rc-127 probes **47/48 → 0/45**), the premise pass's close cap 5 → 25 (a pass now runs
