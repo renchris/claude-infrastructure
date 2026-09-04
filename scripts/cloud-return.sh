@@ -666,6 +666,27 @@ handle() { # <row-json> → prints outcome lines
       return 0
     fi
 
+    # 🚨 THE MACHINE'S NON-VERDICTS TAKE THE SAME PATH, AND UNTIL 2026-09-04 THEY COULD NOT.
+    # ship-land's own header names two exits that say nothing about the branch: 9 GATE-KILLED (the
+    # gate itself was cut) and 75 LOCK-STARVED (it never got the landing lock). They are the same
+    # class of event as the bound above — the machine, not the diff — and they must not latch,
+    # because the refusal cache keys on the branch head and a retired VM never pushes again, so a
+    # cached refusal is PERMANENT. They were unreachable here for one reason: `cloud-reconcile.sh`
+    # collapsed every lander non-zero to 70, which its own header used to state as a property. It
+    # now propagates the rail's code (`lander_exit`), so this arm can exist at all.
+    #
+    # DELIBERATELY NOT AN OPEN-ENDED RETRY. Nothing is filed and nothing is woken, so the branch is
+    # simply re-examined on a later tick under the same cursor, limit and deadline as an un-examined
+    # row — exactly the standing a cut land already has. A branch that is genuinely lock-starved
+    # forever costs one bounded land attempt per rotation, and it stays VISIBLE as a ledger row
+    # rather than disappearing into a cache nothing re-asks (memory: filed-blocker-is-never-revalidated).
+    case "$land_rc" in
+      9|75)
+        say "? $id — the land could not be ATTEMPTED (ship rail exit $land_rc: $([ "$land_rc" = 9 ] && echo 'the gate was killed' || echo 'the landing lock was never granted')). A statement about this box, not about $branch: no artifact, no wake, no latch. The next pass resumes it."
+        ledger "$id" land-unattempted "$(jq -cn --arg b "$branch" --argjson rc "$land_rc" \
+          '{branch:$b, land_rc:$rc, note:"ship-land could not run the gate (9 GATE-KILLED / 75 LOCK-STARVED) — a machine non-verdict, never a gate refusal, so it is NOT cached against this branch head"}')"
+        return 0 ;;
+    esac
 
     # 🚨 NOTHING TO LAND IS NOT A REFUSAL, AND IT IS NOT A RETURN (CLOUD_OBSERVABILITY.md §16).
     # 66 is the lander saying the branch carries no content against trunk: the VM pushed its branch

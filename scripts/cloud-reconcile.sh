@@ -76,7 +76,8 @@
 #   it. A NON-VERDICT, deliberately not 0 and not 70: 0 would send `cloud-return.sh` on to verify a
 #   path set that cannot exist, and 70 would file a land-refused artifact and wake the originator
 #   with LAND REFUSED over a branch with nothing wrong with it. Distinct from the desk-land 66
-#   listed below, which this script never propagates (a lander non-zero is always reported as 70).
+#   listed below. 🚨 CORRECTED 2026-09-04: this line used to read "which this script never propagates
+#   (a lander non-zero is always reported as 70)". That collapse is gone — see `lander_exit()`.
 #   `--all` skips such a branch and does not count it as a failure. ·
 #   69 SENSOR FAILED (remote unreachable — never read as absence) · 70 at least one branch failed
 #   to land — which now includes "the range needed re-authoring and could not be re-authored", a
@@ -85,7 +86,12 @@
 #   a statement about ONE branch, and aborting the sweep on it would let one bad branch strand every
 #   other cloud result behind it. desk-land's own codes are surfaced verbatim per branch
 #   (0 landed · 2 dirty/preflight · 3 escalation-PARK · 5 rebase-conflict · 6 gate-red · 7 push
-#   non-ff · 8 verify-fail · 9 GATE-KILLED · 75 LOCK-STARVED · 64/65/66 desk-land preflight).
+#   non-ff · 8 verify-fail · 9 GATE-KILLED · 75 LOCK-STARVED · 64/65/66 desk-land preflight) —
+#   and, since 2026-09-04, IN THIS SCRIPT'S OWN EXIT CODE as well, not merely in its output. The
+#   exceptions are desk-land's 64/65/66, which collide with the meanings this script's own exits
+#   already carry above and therefore stay 70. Why it matters: `cloud-return.sh` caches a refusal on
+#   the branch head and never re-asks until that head moves, so a retired VM's machine non-verdict
+#   (9 GATE-KILLED, 75 LOCK-STARVED) latched exactly as hard as a real rebase conflict.
 #
 # Env seams: CLOUD_RECONCILE_REPO (local repo) · CLOUD_RECONCILE_REMOTE (origin) ·
 #   CLOUD_RECONCILE_LAND_BIN (the lander — the test seam) · CLOUD_RECONCILE_GIT_BIN ·
@@ -689,6 +695,36 @@ land_one() {  # <branch> — classify() must have run for it. → 0 landed, else
   return "$rc"
 }
 
+# lander_exit <lander-rc> → the code THIS script exits with for a per-branch land failure.
+#
+# ── WHY THE COLLAPSE HAD TO GO ──────────────────────────────────────────────────────────────────
+# This script used to report every lander non-zero as 70, and said so in its own header. The cost is
+# one level up: `cloud-return.sh` caches a refusal keyed on the branch head and never re-asks until
+# that head moves — and a retired VM never pushes again, so the latch is PERMANENT. Making every
+# failure look identical means a machine non-verdict latches exactly as hard as a real one. Measured
+# 2026-09-04 over the 64 on-disk `*.land-refused` artifacts, classified by their TRUE ship-rail exit
+# (`ship rail exited N`, not the cause words): 31 rebase conflicts (5), 6 GATE RED (6), 17 that never
+# reached the rail, 1 SIGTERM — and ship-land's own header already documents 9 GATE-KILLED and 75
+# LOCK-STARVED as machine non-verdicts that SHOULD be retried. None of that was reachable, because
+# all of it arrived as 70.
+#
+# ── AND WHY IT IS A MAP RATHER THAN A PASS-THROUGH ──────────────────────────────────────────────
+# This script's own exit space is not empty: 64 usage · 65 refusal · 66 NOTHING TO LAND · 69 SENSOR
+# FAILED · 70 a branch failed to land. desk-land reuses 64/65/66 for its own preflight, so a bare
+# pass-through would make `66` mean two different things — "the VM committed no work" and "desk-land
+# refused its preflight" — and a caller cannot tell which. Those three keep collapsing to 70, which
+# is honest (a terminal per-branch failure) and is what they already meant. Everything else — 5, 6,
+# 7, 8, 9, 75 and any future code — is surfaced verbatim, because the whole point is that a code
+# this script has never heard of must reach the caller rather than be flattened into the one it has
+# (memory: new-enum-member-falls-into-fail-closed-default).
+lander_exit() {
+  case "${1:-}" in
+    0)              printf '0' ;;
+    64|65|66|69|70) printf '70' ;;
+    *)              printf '%s' "$1" ;;
+  esac
+}
+
 # ── verbs ────────────────────────────────────────────────────────────────────────────────────
 CANDS="$(candidates)" || die 69 "SENSOR FAILED — could not read '$REMOTE' (git ls-remote). This is 'cannot look', NOT 'nothing to land': zero rows emitted deliberately. Re-run when the remote is reachable."
 
@@ -744,12 +780,15 @@ EOF
     [ "$DRY_RUN" = 1 ] || fill_paths "$C_ID"
     exit 0
   fi
+  # THE LANDER'S CODE IS THE VERDICT AND IT TRAVELS. `cloud-return.sh` needs a retryable 9/75 to be
+  # distinguishable from a terminal 5/6 before it caches a refusal against this branch head forever.
   echo "✗ $TARGET — lander exited $rc." >&2
-  exit 70
+  exit "$(lander_exit "$rc")"
 fi
 
 # ── --all ────────────────────────────────────────────────────────────────────────────────────
 SIZED=""
+FAILED_RC=""   # the shared lander verdict, if the failures agree on one (see the land loop below)
 while IFS= read -r b || [ -n "$b" ]; do
   [ -n "$b" ] || continue
   classify "$b"
@@ -810,11 +849,18 @@ while IFS= read -r row || [ -n "$row" ]; do
     # strand every remaining cloud result behind the first bad branch.
     echo "✗ $b — lander exited $rc; continuing with the remaining branches." >&2
     FAILED=$((FAILED + 1))
+    # ONE code can only speak for ONE branch. A sweep whose failures agree reports their shared
+    # verdict; a sweep whose failures disagree reports 70, because there is no single true answer
+    # and inventing one would tell the caller something no branch actually said.
+    _lrc="$(lander_exit "$rc")"
+    if [ -z "$FAILED_RC" ]; then FAILED_RC="$_lrc"
+    elif [ "$FAILED_RC" != "$_lrc" ]; then FAILED_RC=70
+    fi
   fi
 done <<EOF
 $ORDER
 EOF
 
 echo "cloud-reconcile: $LANDED_N ok, $FAILED failed."
-[ "$FAILED" -eq 0 ] || exit 70
+[ "$FAILED" -eq 0 ] || exit "${FAILED_RC:-70}"
 exit 0
