@@ -219,6 +219,16 @@
         ]
       },
       {
+        "matcher": "Bash|Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/memory-index-drain.sh",
+            "timeout": 10
+          }
+        ]
+      },
+      {
         "matcher": "TaskCreate|TaskUpdate",
         "hooks": [
           {

@@ -91,6 +91,41 @@ mim_line_limit() {
   printf '%s' "$v"
 }
 
+# mim_entry_limit → the PER-ENTRY cap, in the same loader unit as mim_limit. Not a loader limit:
+# the loader has no per-line rule. It is the buffer-line budget the drain path arms on, and it is
+# read from here rather than defined at each caller so the detector and the actuator can never
+# disagree about which line is oversized. 300 units per the plan's §4.1c derivation.
+mim_entry_limit() {
+  local v="${MEMORY_ENTRY_LIMIT:-300}"
+  case "$v" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$v"
+}
+
+# mim_oversized_lines <file> <cap> → one "<lineno><TAB><units>" record per line whose OWN unit
+# length exceeds <cap>, or nothing. Non-zero only when the file or jq is unusable.
+#
+# LINENO IS 0-BASED OVER THE RAW FILE, DELIBERATELY, and that is not an inconsistency with the
+# stripping the rest of this file does. The two strip steps remove WHOLE lines (a `--- … ---`
+# header, a block `<!-- … -->`), so they change which lines the loader counts but never the unit
+# length of a line that survives — and an entry line `- [x](y.md) — hook` can never sit inside
+# frontmatter or a block comment. Reporting raw indices is what lets bin/cc-memory-rotate, which
+# reads the raw file into an array, address the answer without a second coordinate system.
+#
+# One jq call for the whole file, not one per candidate: this runs on the PostToolUse path, which
+# fires on every tool call in the fleet.
+mim_oversized_lines() {
+  local f="$1" cap="$2"
+  [ -r "$f" ] || return 1
+  case "$cap" in ''|*[!0-9]*) return 1 ;; esac
+  command -v jq >/dev/null 2>&1 || return 1
+  jq -nr --rawfile c "$f" --argjson cap "$cap" "$MIM_JQ_DEFS"'
+    ($c | split("\n")) as $L
+    | range(0; $L | length) as $i
+    | ($L[$i] | mim_units) as $u
+    | select($u > $cap)
+    | "\($i)\t\($u)"' 2>/dev/null || return 1
+}
+
 # mim_measure_file <file> → "<units> <lines>" for the content the loader checks, or non-zero.
 mim_measure_file() {
   local out

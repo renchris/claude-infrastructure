@@ -83,8 +83,37 @@
 # first and require its keep-classes (tail/type/hub/young/marker) to match the live index's
 # verdict token exactly. If they differ, the copy is not the subject and no verdict from it counts.
 #
+# ── --drain-oversized: THE ROUTING MOVE, WHICH IS NOT AN EVICTION ────────────────────────────
+# A SECOND, NARROW mode that shares this file's commit machinery and NONE of its selection policy.
+# It moves index lines whose OWN unit length exceeds MEMORY_ENTRY_LIMIT (mim_entry_limit, 300) to
+# the project's ALWAYS-LOADED rules file, verbatim, whole lines. Nothing is shortened, nothing is
+# archived, and the destination still loads unprompted — so this is a change of surface, not a
+# demotion. Restore = paste the line back.
+#
+# 🚨 WHY THE TAIL GUARD DOES NOT BIND HERE, AND WHY THAT IS NOT A HOLE. TAIL_GUARD exists for ONE
+# reason: the loader drops the tail when the index is over, so a rotation that ate the newest
+# entries would delete exactly what the cap was already hiding. That argument is about the
+# DESTINATION being cold. Here it is not — the rules file is read on every session start with no
+# cap this size — so the guard is protecting the newest entry from a harm this path cannot do. It
+# has to yield, and not as a concession: a freshly written over-cap entry is ALWAYS inside the
+# guard (it is the newest line by construction), so a drain that honoured it could never fire on
+# the one case it exists for. The same reasoning retires `young`, `marker` and `hub` on this path:
+# every one of them means "keep this on the hot surface", and the destination is the hot surface.
+#
+# WHAT STILL BINDS, ABSOLUTELY (route_veto below): PINNED, the feedback-/reference-/user- NAME
+# convention, a frontmatter `type:` of user/feedback/reference, and unparseable/dangling lines.
+# Those are not hot-surface protections — they are the operator's voice and the report-never-touch
+# rule, and the plan carries the veto upstream to the routing gate on purpose. `reference-` is
+# kept here even though a later phase may let it yield at breach: that yield is gated on operator
+# ratification which has not been given, and the conservative direction is not to move it.
+#
+# Normal rotation is reached by a DIFFERENT code path that this mode never enters, so no threshold,
+# no ordering and no floor in the selection loop below changes behaviour because this exists.
+#
 # Usage: cc-memory-rotate <path-to-.../memory/MEMORY.md> [--dry-run] [--verbose]
-# Env:   MEMORY_INDEX_LIMIT (25000, in loader chars) · MEMORY_ROTATE_AT (LIMIT-1500) · MEMORY_ROTATE_TARGET
+#        cc-memory-rotate <index> --drain-oversized [--rules-file <path>] [--dry-run] [--verbose]
+# Env:   MEMORY_ENTRY_LIMIT (300, drain mode only) · MEMORY_RULES_FILE (drain destination) ·
+#        MEMORY_INDEX_LIMIT (25000, in loader chars) · MEMORY_ROTATE_AT (LIMIT-1500) · MEMORY_ROTATE_TARGET
 #        (LIMIT-4000) · MEMORY_INDEX_LINE_LIMIT (200) · MEMORY_ROTATE_AT_LINES (LINE_LIMIT-12) ·
 #        MEMORY_ROTATE_TARGET_LINES (LINE_LIMIT-32) · MEMORY_ROTATE_MIN_KEEP (40) · MEMORY_ROTATE_TAIL_GUARD (15) ·
 #        MEMORY_ROTATE_MIN_AGE_DAYS (7) · MEMORY_ROTATE_TEST_PRE_COMMIT (test seam, eval'd
@@ -94,14 +123,21 @@ set -euo pipefail
 export LC_ALL=C   # byte semantics everywhere: ${#s}, wc -c, sort — self-consistent accounting,
                   # reconciled to the loader's char limit by the threshold shift (see THE UNIT)
 
-VERBOSE=0; DRYRUN=0; INDEX=""
-for a in "$@"; do
-  case "$a" in
+VERBOSE=0; DRYRUN=0; INDEX=""; DRAIN=0; RULES_FILE=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
     --dry-run) DRYRUN=1 ;;
     --verbose) VERBOSE=1 ;;
-    -*) printf 'verdict=error reason=unknown-flag flag=%s\n' "$a"; exit 2 ;;
-    *)  INDEX="$a" ;;
+    --drain-oversized) DRAIN=1 ;;
+    --rules-file) shift; RULES_FILE="${1:-}"
+                  if [ -z "$RULES_FILE" ]; then
+                    printf 'verdict=error reason=rules-file-needs-a-value\n'; exit 2
+                  fi ;;
+    --rules-file=*) RULES_FILE="${1#--rules-file=}" ;;
+    -*) printf 'verdict=error reason=unknown-flag flag=%s\n' "$1"; exit 2 ;;
+    *)  INDEX="$1" ;;
   esac
+  shift
 done
 
 vlog() { if [ "$VERBOSE" -eq 1 ]; then printf '%s\n' "$*" >&2; fi; }
@@ -217,7 +253,10 @@ fi
 
 SIZE=$(fsize "$INDEX")
 NLINES=$(flines "$INDEX")
-if [ "$SIZE" -lt "$ROTATE_AT" ] && [ "$NLINES" -lt "$ROTATE_AT_LINES" ]; then
+# The drain path is armed by a PER-ENTRY condition, so the whole-index thresholds cannot gate it:
+# an index 8 KB under ROTATE_AT can still hold a 900-unit buffer line, which is exactly the write
+# this mode exists to route. Every other caller keeps the early exit unchanged.
+if [ "$DRAIN" -eq 0 ] && [ "$SIZE" -lt "$ROTATE_AT" ] && [ "$NLINES" -lt "$ROTATE_AT_LINES" ]; then
   printf 'verdict=noop size=%s rotate_at=%s lines=%s rotate_at_lines=%s\n' \
     "$SIZE" "$ROTATE_AT" "$NLINES" "$ROTATE_AT_LINES"; exit 0
 fi
@@ -241,6 +280,200 @@ trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
 TAB=$(printf '\t')
 NOW=$(date +%s)
 MIN_AGE_S=$(( MIN_AGE_DAYS * 86400 ))
+
+# The ONE definition of "an entry line", shared by the drain path and the rotation loop. Anchored,
+# first `](…)` group; the full derivation of why it is narrow and why it lives in a variable is at
+# its use site in the selection loop below.
+ENTRY_RX='^- \[[^]]*\]\(([A-Za-z0-9][A-Za-z0-9._-]*\.md)\)'
+
+# route_veto <line> <topicfile-or-empty> → a reason this line may NOT be routed, or nothing.
+#
+# DELIBERATELY NOT protect_reason WITH A THIRD STAGE. The two functions answer different questions:
+# protect_reason asks "may this leave the hot surface", route_veto asks "may this MOVE BETWEEN two
+# hot surfaces". Sharing one function would have meant a third `stage` value threading through
+# every branch of the eviction predicate, i.e. editing the code path this wave is required not to
+# alter. The overlap is four predicates, spelled identically in both.
+#
+# What is here and why: PINNED and the feedback-/reference-/user- name convention and the `type:`
+# stamp are the OPERATOR'S VOICE — the plan carries that veto upstream to the routing gate on
+# purpose, because a protection implemented downstream of the predicate that bypasses it is not a
+# protection. unparseable/dangling keep the report-never-touch rule: a line whose topic file cannot
+# be identified is not a line we know how to route.
+#
+# What is deliberately ABSENT: tail, young, marker, hub, MIN_KEEP. Every one of those means "keep
+# this on the hot surface" and the destination IS a hot surface. See the header for why the tail
+# guard in particular could not bind here without making the mode a permanent no-op.
+route_veto() {
+  local ln="$1" f="$2" nm t
+  if [ -z "$f" ]; then echo unparseable; return 0; fi
+  if [ ! -f "$DIR/$f" ]; then echo dangling; return 0; fi
+  case "$ln" in *PINNED*) echo pinned; return 0 ;; esac
+  nm="${f%.md}"
+  case "$nm" in feedback-*|reference-*|user-*) echo type; return 0 ;; esac
+  t=$(awk 'NR<=12 && /^[[:space:]]*type:[[:space:]]*/ {sub(/^[[:space:]]*type:[[:space:]]*/,""); print $1; exit}' "$DIR/$f" 2>/dev/null || true)
+  case "$t" in user|feedback|reference) echo type; return 0 ;; esac
+  return 0
+}
+
+if [ "$DRAIN" -eq 1 ]; then
+  # ── Destination: resolved, asserted reachable and writable BEFORE anything is read ───────────
+  # Resolve the symlink explicitly. This destination is a `.claude/rules/` file, and a symlink
+  # into that directory is a sanctioned cross-repo lever — but `Edit` refuses to write through one
+  # ("Resolve the symlink and pass the real target path explicitly"), so a path that works for a
+  # `>>` and fails for the compliant tool is the worst possible asymmetry. Resolve it here once.
+  if [ -z "$RULES_FILE" ]; then RULES_FILE="${MEMORY_RULES_FILE:-}"; fi
+  if [ -z "$RULES_FILE" ] && [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+    RULES_FILE="$CLAUDE_PROJECT_DIR/.claude/rules/agent-operating-lessons.md"
+  fi
+  if [ -z "$RULES_FILE" ]; then
+    printf 'verdict=error reason=no-rules-destination hint=--rules-file|MEMORY_RULES_FILE|CLAUDE_PROJECT_DIR\n'; exit 2
+  fi
+  RBASE="${RULES_FILE##*/}"
+  RDIR="${RULES_FILE%/*}"
+  [ "$RDIR" != "$RULES_FILE" ] || RDIR="."
+  mkdir -p "$RDIR" 2>/dev/null || true
+  if [ ! -d "$RDIR" ]; then printf 'verdict=error reason=dest-dir-unreachable dest=%s\n' "$RULES_FILE"; exit 2; fi
+  RDIR_P=$(cd "$RDIR" 2>/dev/null && pwd -P) || RDIR_P=""
+  if [ -z "$RDIR_P" ]; then printf 'verdict=error reason=dest-dir-unreachable dest=%s\n' "$RULES_FILE"; exit 2; fi
+  RULES_FILE="$RDIR_P/$RBASE"
+  if [ -L "$RULES_FILE" ]; then
+    RTGT=$(readlink -f "$RULES_FILE" 2>/dev/null) || RTGT=""
+    if [ -z "$RTGT" ]; then
+      RTGT=$(readlink "$RULES_FILE" 2>/dev/null) || RTGT=""
+      case "$RTGT" in ''|/*) : ;; *) RTGT="$RDIR_P/$RTGT" ;; esac
+    fi
+    [ -n "$RTGT" ] && RULES_FILE="$RTGT"
+  fi
+  if [ -e "$RULES_FILE" ]; then
+    if [ ! -f "$RULES_FILE" ] || [ ! -w "$RULES_FILE" ]; then
+      printf 'verdict=error reason=dest-not-writable dest=%s\n' "$RULES_FILE"; exit 2
+    fi
+  elif [ ! -w "${RULES_FILE%/*}" ]; then
+    printf 'verdict=error reason=dest-not-writable dest=%s\n' "$RULES_FILE"; exit 2
+  fi
+  case "$RULES_FILE" in "$INDEX") printf 'verdict=error reason=dest-is-the-index\n'; exit 2 ;; esac
+
+  ENTRY_LIMIT=""
+  if command -v mim_entry_limit >/dev/null 2>&1; then ENTRY_LIMIT=$(mim_entry_limit) || ENTRY_LIMIT=""; fi
+  if [ -z "$ENTRY_LIMIT" ] || ! command -v mim_oversized_lines >/dev/null 2>&1; then
+    # No measure, no verdict. Guessing a per-entry size in bytes here would name a DIFFERENT line
+    # than the loader's unit does on an index full of `—`/`⇒`/`·`.
+    printf 'verdict=error reason=no-measure\n'; exit 2
+  fi
+
+  D_LINES=(); D_NL=0
+  while IFS= read -r _l || [ -n "$_l" ]; do D_LINES[D_NL]="$_l"; D_NL=$(( D_NL + 1 )); done <"$INDEX"
+
+  D_OVER=$(mim_oversized_lines "$INDEX" "$ENTRY_LIMIT") || {
+    printf 'verdict=error reason=measure-failed\n'; exit 2; }
+
+  D_MOVE=""; D_N=0; D_CAND=0; D_FILES=""
+  V_PIN=0; V_TYPE=0; V_PARSE=0; V_DANGLING=0
+  while IFS="$TAB" read -r _lno _units; do
+    [ -n "${_lno:-}" ] || continue
+    case "$_lno" in ''|*[!0-9]*) continue ;; esac
+    [ "$_lno" -lt "$D_NL" ] || continue
+    _ln="${D_LINES[$_lno]}"
+    # Only an ENTRY line is routable. A long header sentence or a prose paragraph is over the
+    # per-entry cap by the same arithmetic and is not a rule with a home to move to.
+    case "$_ln" in "- ["*) : ;; *) continue ;; esac
+    D_CAND=$(( D_CAND + 1 ))
+    _f=""
+    if [[ "$_ln" =~ $ENTRY_RX ]]; then _f="${BASH_REMATCH[1]}"; fi
+    _v=$(route_veto "$_ln" "$_f")
+    if [ -n "$_v" ]; then
+      case "$_v" in
+        pinned) V_PIN=$(( V_PIN + 1 )) ;;
+        type) V_TYPE=$(( V_TYPE + 1 )) ;;
+        unparseable) V_PARSE=$(( V_PARSE + 1 )) ;;
+        dangling) V_DANGLING=$(( V_DANGLING + 1 )) ;;
+      esac
+      vlog "drain keep [$_v] ${_f:-<line $_lno>} (${_units} units)"
+      continue
+    fi
+    D_MOVE="$D_MOVE $_lno"
+    D_FILES="${D_FILES:+$D_FILES,}$_f"
+    D_N=$(( D_N + 1 ))
+    vlog "drain move $_f (${_units} units)"
+  done <<EOF
+$D_OVER
+EOF
+
+  if [ "$D_N" -eq 0 ]; then
+    if [ "$D_CAND" -eq 0 ]; then
+      printf 'verdict=noop mode=drain-oversized entry_limit=%s oversized=0 size=%s lines=%s\n' \
+        "$ENTRY_LIMIT" "$SIZE" "$NLINES"
+      exit 0
+    fi
+    # Over-cap entries exist and every one is vetoed. Name which veto, in the census shape the
+    # rotation path already uses: an actuator that says only "moved=0" sends its reader to the
+    # wrong line of code, which is precisely what W1 fixed on the other path.
+    printf 'verdict=exhausted mode=drain-oversized entry_limit=%s oversized=%s moved=0 vetoed: type=%s pinned=%s unparseable=%s dangling=%s\n' \
+      "$ENTRY_LIMIT" "$D_CAND" "$V_TYPE" "$V_PIN" "$V_PARSE" "$V_DANGLING"
+    exit 4
+  fi
+
+  if [ "$DRYRUN" -eq 1 ]; then
+    printf 'verdict=dry-run mode=drain-oversized entry_limit=%s oversized=%s moved=%s files=%s dest=%s\n' \
+      "$ENTRY_LIMIT" "$D_CAND" "$D_N" "$D_FILES" "$RULES_FILE"
+    exit 0
+  fi
+
+  # ── Destination first, verified, idempotent — then the index ────────────────────────────────
+  # Same ordering and the same reason as the cold write below: a crash between the two leaves at
+  # worst a duplicate line in the destination, never a lost one.
+  D_SNAP=$(fstat "$INDEX")
+  if [ ! -e "$RULES_FILE" ]; then
+    if ! printf '%s\n' "# Always-loaded project rules" "" >"$RULES_FILE" 2>/dev/null; then
+      printf 'verdict=error reason=dest-create-failed dest=%s\n' "$RULES_FILE"; exit 2
+    fi
+  fi
+  D_BLOCK=$(printf '\n<!-- routed %s by cc-memory-rotate --drain-oversized: %s index line(s) over the %s-unit buffer cap, moved VERBATIM off %s. Both surfaces load unprompted, so nothing was demoted and nothing was shortened; restore = paste the line back. -->' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$D_N" "$ENTRY_LIMIT" "$INDEX")
+  for _lno in $D_MOVE; do
+    if ! grep -qxF -- "${D_LINES[$_lno]}" "$RULES_FILE"; then
+      D_BLOCK="$D_BLOCK
+${D_LINES[$_lno]}"
+    fi
+  done
+  printf '%s\n' "$D_BLOCK" >>"$RULES_FILE"
+  for _lno in $D_MOVE; do
+    if ! grep -qxF -- "${D_LINES[$_lno]}" "$RULES_FILE"; then
+      printf 'verdict=error reason=dest-verify-failed dest=%s\n' "$RULES_FILE"; exit 2
+    fi
+  done
+
+  D_TMP=$(mktemp "$DIR/.MEMORY.md.drain.XXXXXX")
+  {
+    _i=0
+    while [ "$_i" -lt "$D_NL" ]; do
+      case " $D_MOVE " in
+        *" $_i "*) : ;;
+        *) printf '%s\n' "${D_LINES[$_i]}" ;;
+      esac
+      _i=$(( _i + 1 ))
+    done
+  } >"$D_TMP"
+
+  if [ -n "${MEMORY_ROTATE_TEST_PRE_COMMIT:-}" ]; then eval "$MEMORY_ROTATE_TEST_PRE_COMMIT"; fi
+  if [ "$(fstat "$INDEX")" != "$D_SNAP" ]; then
+    rm -f "$D_TMP"; printf 'verdict=contended mode=drain-oversized\n'; exit 3
+  fi
+  D_NEWSZ=$(fsize "$D_TMP")
+  if [ "$D_NEWSZ" -ge "$SIZE" ]; then
+    rm -f "$D_TMP"; printf 'verdict=error reason=would-not-shrink\n'; exit 2
+  fi
+  chmod 644 "$D_TMP"
+  mv -f "$D_TMP" "$INDEX"
+  D_NEWLINES=$(flines "$INDEX")
+  printf 'verdict=drained mode=drain-oversized entry_limit=%s oversized=%s moved=%s files=%s before=%s after=%s lines_before=%s lines_after=%s dest=%s\n' \
+    "$ENTRY_LIMIT" "$D_CAND" "$D_N" "$D_FILES" "$SIZE" "$D_NEWSZ" "$NLINES" "$D_NEWLINES" "$RULES_FILE"
+  mkdir -p "$DIR/archive" 2>/dev/null || true
+  printf '%s verdict=drained moved=%s files=%s before=%s after=%s dest=%s\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$D_N" "$D_FILES" "$SIZE" "$D_NEWSZ" "$RULES_FILE" \
+    >>"$DIR/archive/.rotate.log" 2>/dev/null || true
+  exit 0
+fi
 
 # protect_reason <ordinal> <line> <topicfile-or-empty> [stage] → echoes a reason, or nothing
 #
@@ -345,7 +578,8 @@ while :; do
   # every run — an actuator that could not act, reporting a protection reason for its own parse
   # bug. Measured on a 20-entry fixture: unparseable=19, tail=1, moved=0. An unquoted variable
   # expansion is the portable idiom (the pattern reaches the engine intact on every bash).
-  ENTRY_RX='^- \[[^]]*\]\(([A-Za-z0-9][A-Za-z0-9._-]*\.md)\)'
+  # ENTRY_RX is assigned ONCE, above the lock, so the drain path and this loop parse an entry line
+  # by the same rule — two spellings of this regex would be two definitions of "an entry".
   #
   # AND A SECOND, INDEPENDENT MECHANISM FOR THE SAME SYMPTOM (measured 2026-08-15). Written
   # inline and unquoted, its `\ ` (backslash-space) matches under bash 3.2 — the macOS system
