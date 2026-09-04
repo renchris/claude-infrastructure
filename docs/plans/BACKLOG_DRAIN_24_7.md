@@ -86,6 +86,71 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-04 — drain recycle #295: method 267 — WHEN ONE VERDICT IS COMPUTED FROM SEVERAL ARMS,
+  ASK WHAT EACH ARM IS DENOMINATED IN. TWO ARMS OF ONE LADDER CAN DISAGREE ABOUT WHOSE STATE THEY
+  DESCRIBE, AND THE READER IS SHOWN ONE SENTENCE.** ZERO rows closed, ZERO filed, ZERO reopened,
+  ZERO updated. ONE commit, ONE push. #294 established that a field's COMMENT and its CODE can name
+  different populations, and measured the LEFT operand of `LIVE_ADDS`: an ungated fast-forward of the
+  shared checkout empties the window and silences a true breach. This link measured the RIGHT one,
+  and it fails in the opposite direction from the opposite cause.
+  **THE FINDING.** `wrap-ledger.sh`'s added-file arm is
+  `git diff --diff-filter=A --name-only "$LIVE_SHA" "$HEAD_SHA"` at `:1143`, and `$HEAD_SHA` is
+  `:473`'s `git rev-parse HEAD` — **the SESSION's HEAD**. Its sibling arm in the same breach ladder,
+  `LIVE_LAG`, is `git -C "$LIVE_REPO" rev-list --count "HEAD..$TRUNK"` at `:1080` — the shared
+  CHECKOUT's distance to TRUNK, an expression in which no session appears at all. Two arms, one
+  ladder, one rendered sentence, and different denominators. So whether a landed-and-inert file is
+  visible to a machine-wide rung depends on whether THIS session happens to have pulled — and pulling
+  is an operation on a worktree that delivers nothing and cannot change what `~/.claude` carries.
+  **MEASURED, WITH AN INDEPENDENT SECOND COLUMN, WHICH IS WHAT MAKES IT A MEASUREMENT AND NOT A
+  READING OF THE CODE.** At **03:27:20Z**, worktree one commit below trunk: `LIVE_ADDS=2
+  LIVE_STALE=13`. At **03:32:34Z**, after `git merge --ff-only origin/main` **in the worktree and
+  nothing else**: `LIVE_ADDS=3 LIVE_STALE=14`. Across that window `deploy-parity-assert` read
+  **0 MISSING** at both moments and `deploy-link-parity` read
+  **`468 linked · 0 staged-pending · 10 live-extra · 55 unmapped · 2 actionable`** at both, each from
+  a SECOND call rather than inferred from the first — and the sanctioned converge ran between them
+  and **DECLINED** to advance (*"no GREEN tree is a DESCENDANT of live HEAD"*). **The live layer was
+  byte-identical on both sides of a change that moved two of the ledger's fields.** #294's converge
+  moved five files and the field read 0 before and after; mine moved nothing and the field moved by
+  one. **Population 0, effect 1 — the exact inverse of the cell #294 recorded.**
+  **AND THE MUTANT REFUSED MY FIRST TEST DESIGN, WHICH IS THE HALF WORTH STEALING.** The first pair
+  of arms asserted `LIVE_ADDS=0` in a fixture where the live layer sits AT the session's HEAD. A
+  mutant swapping the right operand for `TRUNK` produced **ZERO** reds against them, `rc 93`. The
+  cause is that in that configuration the added-file read is **NEVER REACHED**: the ancestry gate
+  above it, `merge-base --is-ancestor "$HEAD_SHA" "$LIVE_SHA"`, is ALSO denominated in the session's
+  HEAD and answers `LIVE_SRC=ok`. **There are TWO session-scoped blindnesses here, not one — a gate
+  that declines to ask the question and an operand of the question once asked — and one arm covering
+  both would have credited the wrong mechanism.** Split into three arms with two mutants, both
+  predictions then EXACT and each attributed to its own arm: M1 (operand → `TRUNK`) reds R2 alone,
+  M2 (gate → `TRUNK`) reds R1 alone, baseline `plan=100 not_ok=0` before each, `RESTORE=OK` by sha256
+  after each. `tests/wrap-ledger.bats` **97 → 100**.
+  **WHY THIS IS A COMMENT AND A TEST AND NOT A BEHAVIOUR CHANGE, MEASURED RATHER THAN REASONED
+  (method 213).** Re-denominating the arm on trunk reads **3** where the shipped form reads **2**,
+  and BOTH extra paths are ones the live layer will never carry — `docs/` and `tests/` are in no
+  linked top-level — i.e. precisely the false positive `4e6a51df2a84` already owns. It buys a stably
+  wrong answer in place of a variably wrong one, on the close-protocol arbiter every session runs.
+  **What survives the swap is CANDIDATE C**, whose last suppressor tests the live FILESYSTEM: run at
+  BOTH right operands it read **0 and 0**, while the shipped form read 2 and 3 and a
+  re-denominated-only form read **14 and 15**. **Being invariant to an ordinary `git pull` is a
+  property no arithmetic over two refs can have, and it is a stronger argument for that candidate
+  than the one it was chosen on.** `mint295.sh` is that harness — it also repairs `mint294.sh`, whose
+  `CANDIDATE 0 (SHIPPED)` label did not compute the shipped predicate, ending at trunk where the
+  field ends at the session's HEAD; they read 3 and 2 at the same moment.
+  **THE BOARD, at 03:55:47Z: 363 open / 244 blocked / 2,387 done / 6 claimed**, 3,000 rows, both
+  partitions asserted and `sort -c` clean on all five lists. The gap against #294's close ran
+  **34 m 38 s** and held **ZERO arrivals, ZERO departures, THREE transitions** — `70ed289c10fb`,
+  `9ce3c6350e2f` and `abf5e7509608`, every one `open → claimed`, every one
+  `claude-infrastructure`, and NONE of them mine: this link filed nothing and closed nothing.
+  Census at 03:55:30Z: postland RED pages **0** over a denominator of **2,874**; the other page store
+  **2,583 all / 72 `.page`**; inbox-guard **437**; stamps **556**, the same value #293 and #294 read
+  at every one of their moments. `master-operator-gated` read **2 / 168** against #294's 2 / 166.
+  All nineteen inherited artifacts were present at the first tool call, the fire pointer measured
+  **152 bytes**, the `qos-rewrite.sh` diff was rc 0 over 0 bytes, and all four kitty checks passed
+  with the id-keyed query returning exactly ONE object and a bogus-id control at 0.
+  **THE TRANSFERABLE SENTENCE: A SINGLE VERDICT ASSEMBLED FROM SEVERAL ARMS IS NOT A MEASUREMENT OF
+  ONE POPULATION UNTIL YOU HAVE ASKED EACH ARM WHAT IT IS DENOMINATED IN — AND THE ARM THAT NAMES THE
+  READER IS THE ONE THAT WILL BE MISTAKEN FOR A FACT ABOUT THE MACHINE.** The tell is cheap: two
+  fields printed side by side that cannot both be about the same subject. `LIVE_LAG=1` beside
+  `LIVE_ADDS=0` and a `✅` is that tell, and it is on the screen at every close.
 - **2026-09-04 — drain recycle #294: method 266 — A FIELD'S COMMENT AND A FIELD'S CODE CAN NAME
   DIFFERENT POPULATIONS, AND WHEN THEY DO, THE EVENT THAT COLLAPSES THE CODE'S WINDOW IS OFTEN THE
   ONE THAT CREATES THE HARM.** ZERO rows closed, ZERO filed, ZERO reopened, ONE row UPDATED. ONE
