@@ -104,6 +104,15 @@ mints follow-ons the drains cannot keep up with. The telemetry that would have s
 
 ## §4 Status log (INTEGRATE-only; newest first)
 
+- **2026-09-04 17:20Z — W5 PROVEN: the rebuilt chain recycled itself through the wrapper.** Lane infra
+  #300 fired #301 at 16:59Z (`handoffs.jsonl`: `goal_requested:true`, pane 299, account next) with the
+  generated `fire-drain-infra-recycle301.txt` — the first mechanically self-perpetuating link of the
+  new chain (the old chain's 125 fires all logged `goal_requested:false`). #300's entry (`e84ba11e3`)
+  reports `closed=7 closed_pre=1 … floor=UNMET` and names why the floor under-read: `cc-backlog`'s
+  lane derivation walks `ps`, which under load 20+ returns nothing, so a lane's own `done` carries no
+  lane (2,359 of 2,604 dones fleet-wide). The template now exports `CC_BACKLOG_LANE=local-drain` in
+  setup — the code's own "strictly better evidence" path — so every close a link makes is stamped.
+
 - **2026-09-04 17:10Z — the old chain is gone.** The operator ran the filed `cc-teardown 27 …`; verdict
   `ALREADY-GONE` (pid 99254 dead, pane 27 absent): recycle #301 ended itself — its own §2.1 entry
   called it "the last link of the pane-27 chain" and no `fire-pointer-302.txt` exists. Row

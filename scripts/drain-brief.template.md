@@ -18,10 +18,16 @@ stop until pre-existing rows are gone.
     export PATH="/opt/homebrew/bin:$HOME/.claude/bin:$PATH"
     cd {{WORKTREE}} && git fetch -q origin && git status --short | head -5 && git log --oneline -1
     ME="$(hostname -s)-$(ps -o ppid= -p $$ | tr -d ' ')"; echo "lease identity: $ME"
+    export CC_BACKLOG_LANE=local-drain   # in EVERY call that runs cc-backlog done — see below
     bash {{INFRA}}/scripts/drain-recycle-fire.sh --closure-report {{SINCE}} --min {{MIN}} --project {{PROJECT}}
 
 The drain scripts live in the claude-infrastructure checkout at `{{INFRA}}` (the lane's project may
 be another repo); the ledger is `~/.claude/autonomy/backlog.jsonl` on this box, shared by every lane.
+`CC_BACKLOG_LANE=local-drain` must be exported in every shell that runs `cc-backlog done`: the
+closure floor counts only closes stamped with this lane, and cc-backlog's fallback derivation walks
+`ps`, which under load 20+ returns nothing — recycle #300 measured its own first close landing in
+`closed_other` for that reason (2,359 of 2,604 `done` records fleet-wide carry no lane). The explicit
+declaration is the evidence the code itself calls strictly better than derivation.
 
 `$ME` is `<host>-<pid of THIS claude process>` — recompute it in every call (it is stable across calls
 and `cc-backlog` proves it live with `kill -0`). Never paste a pid from a previous link. If the tree is
