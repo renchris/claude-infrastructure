@@ -86,6 +86,14 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-04 — recycle #303 (lane infra):** closed 9547e1442a89, b4d67cf8691e, c4ae411cfdea ·
+  blocked none · released 26d4010f1b22, 4e6a51df2a84 · landed d93147bac, f30cab163 ·
+  two fixes, one moot: the HOST RED backlog title kept its `(N)` failure counts so one finding
+  re-keyed per observation, and k_work's two-level walk never reached the subagent transcripts its
+  own docstring calls burners (582 shallow vs 939 deeper). Both cited rows' second arms were
+  REFUTED on trunk and left untaken (`needs` has no `--condition`; KMAX 8→10 predates the
+  KMAX/KMAX_RESIDENT split) ·
+  `closed=12 closed_pre=3 closed_other=5 filed=5 net=7 blocked=5 min=3 lane=local-drain project=claude-infrastructure floor=MET`.
 - **2026-09-04 — recycle #302 (lane infra):** closed 11fdba2b3148, 3b1d4001407b, 564c488fd357 ·
   blocked none · released 8fd1919f7769, 4e6a51df2a84, 150c50055e1c, fa2aa0f5e535, 1c20dc1e92db,
   d73a772a8468, 71e164a86b59 · landed 7df9eec34 ·
