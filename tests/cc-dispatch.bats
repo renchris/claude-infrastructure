@@ -104,6 +104,56 @@ add_item()   { "$BACKLOG" add --title "$1" --project proj --source bats; }   # e
 status_of()  { "$BACKLOG" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)|.status'; }
 idl_action() { tail -1 "$C/idl.jsonl" | jq -r '.action'; }
 
+# ── THE PLAN-OPEN PREMISE GATE REACHES A CLAIMED ROW ─────────────────────────────────────────────
+# Until 2026-09-04 the gate scanned `dispatchable`, which is open-only, so a row could be retracted
+# only on a pass that was also about to dispatch it. Retracting and dispatching are different
+# questions: the second excludes a claimed row, the first does not care who holds it. The effect was
+# that a `plan-open` row whose plan had since been finished stayed live for exactly as long as
+# someone held a claim — and a stale premise is what CAUSES the claim, because a worker picks the
+# row up believing the plan is open. Live instance: a507762b0a0d (STOP_CHAIN_WAVE2.md).
+
+@test "premise gate: a CLAIMED plan-open row whose plan is terminal is retracted, not skipped" {
+  # THE ORDER IS THE FIXTURE, not a convenience. `cc-backlog claim` already refuses a plan-open row
+  # whose plan is terminal (cc-premise's derived falsifier, rc 4 verdict=premise-refuted), so the
+  # state under test is UNREACHABLE by claiming a finished row — which is precisely why it is the
+  # state that rots. It is reached the way a507762b0a0d reached it: claimed while the plan was open,
+  # and the plan finished afterwards, with no arm re-asking a row nobody could dispatch any more.
+  plan="$C/PLAN_TERMINAL.md"
+  printf -- '---\nstatus: open\n---\n# plan, still open at claim time\n' > "$plan"
+  id="$("$BACKLOG" add --title "claimed plan-open row" --project proj \
+        --source plan-open --dod-ref "$plan")"
+  [ -n "$id" ]
+  "$BACKLOG" claim "$id" --by bats-holder >/dev/null
+  [ "$(status_of "$id")" = claimed ]
+  printf -- '---\nstatus: complete\n---\n# …and finished while the claim was held\n' > "$plan"
+
+  run env CC_DISPATCH_FINDPLAN_BIN="$REPO/scripts/find-plan.sh" "$DISP" --once
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "retracted $id"
+  # THE TRANSITION, through the real fold — the stderr line alone would pass on a gate that merely
+  # printed. A claimed row that reaches `done` is the whole claim of this test.
+  # `done` is QUOTED for the same reason ship-land.sh:1045 and cc-dispatch:2080 quote the VERB:
+  # bare, shellcheck parses it as a loop keyword (SC1010) and the land's .bats gate goes red.
+  [ "$(status_of "$id")" = "done" ]
+  "$BACKLOG" list --all --json | jq -e --arg i "$id" \
+    '.[]|select(.id==$i)|.evidence|test("premise-retracted")' >/dev/null
+}
+
+@test "premise gate: a CLAIMED plan-open row whose plan is still OPEN is left alone" {
+  # The control, and it is not decoration: widening the population is only safe if the terminal
+  # frontmatter is what decides. Same row shape, same claim, one word of frontmatter different.
+  plan="$C/PLAN_OPEN.md"
+  printf -- '---\nstatus: open\n---\n# open plan\n' > "$plan"
+  id="$("$BACKLOG" add --title "claimed plan-open row, live plan" --project proj \
+        --source plan-open --dod-ref "$plan")"
+  "$BACKLOG" claim "$id" --by bats-holder >/dev/null
+
+  run env CC_DISPATCH_FINDPLAN_BIN="$REPO/scripts/find-plan.sh" "$DISP" --once
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -q "retracted $id" || false
+  [ "$(status_of "$id")" = claimed ]
+}
+
 @test "selftest passes and runs its full check set (a zero-check suite must not 'pass')" {
   run "$DISP" selftest
   [ "$status" -eq 0 ]

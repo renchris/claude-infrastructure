@@ -1847,6 +1847,36 @@ dispatch() { # <dry|run|decide>
   guarded="$(     printf '%s' "$open_items" | jq -c '[ .[] | select(.wasDone == true) ]')"
   dispatchable="$(printf '%s' "$open_items" | jq -c '[ .[] | select(.wasDone != true) ]')"
 
+  # THE PREMISE GATE'S POPULATION IS WIDER THAN THE DISPATCH POPULATION, and until 2026-09-04 it was
+  # the same list — so a row could only be retracted on the one pass that was also about to dispatch
+  # it. RETRACTING AND DISPATCHING ARE NOT THE SAME QUESTION: "may I hand this to a worker" excludes
+  # a row someone already claimed, while "is this row's stated premise still true" is a question
+  # about the WORLD and does not care who is holding the row. Scoping the second to the first meant
+  # a `plan-open` row whose plan had since been finished stayed live for as long as anyone held a
+  # claim on it — and a claim is exactly what a stale premise causes, because a worker picked it up
+  # believing the plan was open.
+  #
+  # MEASURED: `a507762b0a0d` (docs/plans/STOP_CHAIN_WAVE2.md, frontmatter terminal) has been
+  # status=claimed and unretractable; `c18e7ea9e6b1` is a second claimed plan-open row one plan-flip
+  # away from the same state. bin/cc-premise's twin arm (run_derived_plan_falsifier) is already
+  # per-entry and unscoped by status, so widening here makes the two gates agree rather than
+  # diverge, which is the property `_plan_dodref`'s header asks for by name.
+  #
+  # SAFE ON A CLAIMED ROW IN A WAY A STORED PROBE IS NOT, and that difference is why cc-premise's
+  # `--close-falsified` still SKIPS claimed rows while this does not. That skip guards against a
+  # SAMPLED probe racing a worker who is seconds from landing. This premise is not sampled: it is
+  # one read of the plan's own frontmatter, and a worker claiming a row whose entire justification
+  # was "this plan is open" is doing work that the plan itself says is finished. The retraction
+  # names the row in stderr and in the IDL record either way, so it is never silent.
+  #
+  # Dispatch itself is UNAFFECTED — `dispatchable` above is still open-only, and the fence below
+  # still subtracts stale ids from it. This list is read by the premise gate and by nothing else.
+  local premise_scan
+  premise_scan="$(printf '%s' "$items" \
+    | jq -c --argjson ps "$PROJECTS_JSON" '[ .[] | select((.status=="open" or .status=="claimed")
+                                                          and (.wasDone != true)
+                                                          and (.project as $x | $ps | index($x))) ]')"
+
   # 1a1. THE VENUE ADMISSION FILTER (CC_DISPATCH_VENUE_ONLY) — the migration lever.
   #
   # WHY IT HAD TO EXIST AT ALL. `CC_DISPATCH_VENUE_LABEL` decides what an item is LABELLED; nothing
@@ -2041,7 +2071,14 @@ dispatch() { # <dry|run|decide>
   # `--status` verb would read as an unknown NAME on the stale copy and the guard would silently
   # fail-open forever. `_self` resolves the symlink chain, so this holds for the deployed layer too.
   local stale='[]' scount=0 findplan staleids
-  if [ "${CC_DISPATCH_PREMISE_GATE:-on}" != off ] && [ "$count" -gt 0 ]; then
+  # THE CHEAP-EXIT GUARD IS OVER THE SCAN POPULATION, NOT THE DISPATCH ONE — the same confusion as
+  # the selector below, one line up. Keyed on `count` (dispatchable), a store holding ONLY claimed
+  # plan-open rows would skip this block entirely and retract nothing, so widening the population
+  # without widening its guard would have been a fix that cannot fire in the exact case it was
+  # written for. Reproduced in tests/cc-dispatch.bats: with the guard on `count` the claimed-row
+  # case is green on the selector and silent at run time.
+  local pcount; pcount="$(printf '%s' "$premise_scan" | jq 'length' 2>/dev/null || echo 0)"
+  if [ "${CC_DISPATCH_PREMISE_GATE:-on}" != off ] && [ "$pcount" -gt 0 ]; then
     findplan="$(resolve_bin "${CC_DISPATCH_FINDPLAN_BIN:-}" find-plan.sh \
                   "$(cd "$(dirname "$_self")/.." 2>/dev/null && pwd)/scripts/find-plan.sh" \
                   "$HOME/.claude/scripts/find-plan.sh")" || findplan=""
@@ -2053,12 +2090,12 @@ dispatch() { # <dry|run|decide>
         sst="$("$findplan" --status "$sdod" 2>/dev/null)" || continue   # exit 2 / unreadable ⇒ OPEN
         case "$sst" in complete|superseded) slist="$slist$sid	$sst	$(basename "$sdod")
 " ;; esac
-      done < <(printf '%s' "$dispatchable" \
+      done < <(printf '%s' "$premise_scan" \
                  | jq -r '.[] | select((.source // "") == "plan-open")
                               | "\(.id // "")\t\(.dodRef // "")"')
       if [ -n "$slist" ]; then
         staleids="$(printf '%s' "$slist" | cut -f1 | jq -R -s -c 'split("\n")|map(select(length>0))')"
-        stale="$(       printf '%s' "$dispatchable" | jq -c --argjson s "$staleids" '[ .[] | select((.id // "") as $i | $s | index($i))       ]')"
+        stale="$(       printf '%s' "$premise_scan"  | jq -c --argjson s "$staleids" '[ .[] | select((.id // "") as $i | $s | index($i))       ]')"
         dispatchable="$(printf '%s' "$dispatchable" | jq -c --argjson s "$staleids" '[ .[] | select((.id // "") as $i | $s | index($i) | not) ]')"
         scount="$(printf '%s' "$stale"        | jq 'length' 2>/dev/null || echo 0)"
         count="$( printf '%s' "$dispatchable" | jq 'length' 2>/dev/null || echo 0)"

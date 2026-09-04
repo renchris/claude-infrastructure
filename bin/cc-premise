@@ -2822,10 +2822,33 @@ def _close_falsified(candidates, idx, sha, cap):
             skipped += 1
             lines.append("  %s SKIPPED — already closed or gone under the sweep" % cid)
             continue
+        # THE CLAIMED SKIP IS ABOUT SAMPLING, NOT ABOUT OWNERSHIP — so it does not cover the one
+        # verdict that is not a sample. A STORED probe is a runtime reading taken at one instant,
+        # and closing a claimed row on one is how a sweep races a worker who is seconds from
+        # landing; that is what this guard was built for and it stays. The DERIVED plan falsifier
+        # is a different object: one read of the plan's own frontmatter, and a worker holding a row
+        # whose entire justification was "this plan is open" is holding a row the plan itself says
+        # is finished. Waiting for the claim to clear does not make that truer, it just keeps the
+        # row live for as long as the stale premise keeps someone working on it.
+        #
+        # The discriminator is STRUCTURAL, never the verdict's prose: the row must store no probe of
+        # its own AND be a plan-open row whose dodRef resolves (`_plan_dodref`), which is the same
+        # arbiter `run_derived_plan_falsifier` itself uses. `assess` consults the derived arm only
+        # when `run_falsifier` returned None, so those two conditions are exactly the case where the
+        # `falsified` above can only have come from the frontmatter read (bin/cc-premise's
+        # run_derived_plan_falsifier: "IT IS THE NO-STORED-PROBE FALLBACK, NEVER AN OVERRIDE").
+        # cc-dispatch's twin gate widened to claimed rows in the same diff, so the two agree.
         if st == "claimed":
-            skipped += 1
-            lines.append("  %s SKIPPED — CLAIMED; a worker is on it and may be about to land it" % cid)
-            continue
+            _ent = idx.get(cid) or {}
+            _derived_only = (not (_ent.get("falsifier") or "").strip()
+                             and _plan_dodref(_ent) is not None)
+            if not _derived_only:
+                skipped += 1
+                lines.append("  %s SKIPPED — CLAIMED; a worker is on it and may be about to land it"
+                             % cid)
+                continue
+            lines.append("  %s CLAIMED, closed anyway — its verdict is a read of its plan's "
+                         "frontmatter, not a sampled probe" % cid)
         # (1) re-ask, now, against a store folded seconds ago rather than at the top of the sweep.
         verdict, why = assess(cid, idx)
         if verdict != "falsified":
