@@ -155,10 +155,56 @@ setup() {
 # would hide. One shipped in this very file and surfaced as a FALSE alarm; these run 3.2 on purpose.
 # Every `[[ ]]` carries `|| false`: a non-final `[[ ]]` is errexit-EXEMPT under bats, i.e. dead.
 ccb() { /bin/bash "$C" "$@"; }
+
+# ── ago / ago_iso / ts_off — ONE relative clock, in BOTH date(1) dialects ─────────────────────────
+#
+# This suite is written on macOS, where `date -v-30H` is the spelling, and it is RUN on Linux by
+# every cloud lander and by the off-box hermetic lane — where GNU date rejects `-v`, the command
+# substitution comes back EMPTY, and `touch -t ''` fails inside the FIXTURE with no assertion ever
+# reached. Measured 2026-09-04 on this file: all 10 `green-starved` tests plus 3 others died that
+# way, every one of them reporting `date: invalid option -- 'v'` — i.e. the RED-PROOF for backlog
+# 01ab05685857's own cure had zero coverage on the one lane that could have run it. That is the
+# same failure the sibling helper in tests/autonomy-sweep.bats:227 was written for ("nine cases died
+# that way, and the reds were read twice as evidence about the code under test rather than about the
+# clock helper"), and this is that helper, extended to the M (minute) unit this file also uses.
+#
+# BSD FIRST, GNU as the fallback, and the order is NOT arbitrary: macOS `date -d` means "daylight
+# saving", not "date string", so a GNU-first probe would succeed there and mis-date every fixture.
+#
+# The unit letters are BSD's, not GNU's, and they do not read across: `M` is MINUTE and `m` is month.
+# The translation is explicit per unit rather than interpolated, so an unrecognised unit is a loud
+# rc 2 and never a silently-wrong clock — a fixture off by a factor of 60 passes a budget test for
+# the wrong reason, which is the failure mode a helper like this exists to make impossible.
+_gnu_span() { # <N><unit: M|H> → the GNU `date -d` phrase for the same span
+  local spec="$1" n="${1%[MH]}" unit="${1##*[0-9]}"
+  case "$unit" in
+    M) printf '%s minutes' "$n" ;;
+    H) printf '%s hours'   "$n" ;;
+    *) echo "_gnu_span: unknown unit in '$spec' (expected NM or NH)" >&2; return 2 ;;
+  esac
+}
+ago() { # <N><unit: M|H> → a `touch -t` stamp N units in the PAST
+  local gnu; gnu="$(_gnu_span "$1")" || return 2
+  date -v-"$1" +%Y%m%d%H%M 2>/dev/null || date -d "$gnu ago" +%Y%m%d%H%M
+}
+ago_iso() { # <N><unit: M|H> → the same instant as a git-acceptable ISO local timestamp
+  local gnu; gnu="$(_gnu_span "$1")" || return 2
+  date -v-"$1" +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -d "$gnu ago" +%Y-%m-%dT%H:%M:%S
+}
+ts_off() { # <±N><unit: M|H> <strftime format> → a UTC stamp offset in EITHER direction
+  # SIGNED offset is required and the sign is carried by the CALLER: bare `date -v 12H` SETS the hour
+  # to 12 instead of adding 12h. GNU's equivalent of `+47H` is "47 hours" and of `-24H` is
+  # "24 hours ago", so the sign is split off here rather than pasted into the phrase.
+  local off="$1" fmt="$2" sign="${1%%[0-9]*}" gnu
+  gnu="$(_gnu_span "${off#[-+]}")" || return 2
+  case "$sign" in -) gnu="$gnu ago" ;; esac
+  date -u -v"$off" "+$fmt" 2>/dev/null || date -u -d "$gnu" "+$fmt"
+}
+
 mkstamp() { # <name> <verdict> <age, signed relative — never a literal date>
   printf '{"tree":"%s","commit":"c%s","verdict":"%s","failing":["tests/x.bats"]}\n' "$1" "$1" "$2" \
     > "$CC_POSTLAND_DIR/stamps/$1.json"
-  touch -t "$(date -v-"$3" +%Y%m%d%H%M)" "$CC_POSTLAND_DIR/stamps/$1.json"
+  touch -t "$(ago "$3")" "$CC_POSTLAND_DIR/stamps/$1.json"
 }
 kinds() { ccb --json | jq -r '.[].kind' | sort | tr '\n' ' '; }
 
@@ -230,7 +276,7 @@ kinds() { ccb --json | jq -r '.[].kind' | sort | tr '\n' ' '; }
 
 @test "alarm verifier-inert/STALE does NOT fire on an idle box (stale stamp, no newer land)" {
   mkstamp t1 red 9H
-  : > "$CC_LAND_LOG"; touch -t "$(date -v-11H +%Y%m%d%H%M)" "$CC_LAND_LOG"   # land OLDER than stamp
+  : > "$CC_LAND_LOG"; touch -t "$(ago 11H)" "$CC_LAND_LOG"   # land OLDER than stamp
   run ccb --json
   [ "$(echo "$output" | jq 'length')" = 0 ]
 }
@@ -405,7 +451,7 @@ hold_run_lock() { # the verifier's OWN in-progress mark: run.lock.d/pid naming a
   # entirely — so 4 readable reds still fire, and the corrupt file does not change the state.
   for n in 1 2 3 4; do mkstamp "r$n" red "${n}M"; done
   printf 'this is not json\n' > "$CC_POSTLAND_DIR/stamps/broken.json"
-  touch -t "$(date -v-1M +%Y%m%d%H%M)" "$CC_POSTLAND_DIR/stamps/broken.json"
+  touch -t "$(ago 1M)" "$CC_POSTLAND_DIR/stamps/broken.json"
   : > "$CC_LAND_LOG"
   run ccb --json
   [ "$(echo "$output" | jq -r '[.[] | select(.kind=="trunk-red")] | .[0].state')" = "PERSISTENT-RED" ]
@@ -416,7 +462,7 @@ hold_run_lock() { # the verifier's OWN in-progress mark: run.lock.d/pid naming a
   # The paired negative. One real verdict plus one unreadable file is n=1, not n=2.
   mkstamp solo red 1M
   printf '{"no":"verdict"}\n' > "$CC_POSTLAND_DIR/stamps/broken.json"
-  touch -t "$(date -v-2M +%Y%m%d%H%M)" "$CC_POSTLAND_DIR/stamps/broken.json"
+  touch -t "$(ago 2M)" "$CC_POSTLAND_DIR/stamps/broken.json"
   : > "$CC_LAND_LOG"
   run ccb --json
   [ "$(echo "$output" | jq 'length')" = 0 ]
@@ -447,7 +493,7 @@ hold_run_lock() { # the verifier's OWN in-progress mark: run.lock.d/pid naming a
   # Same claim, moved to a window where never-green is genuinely the sharpest row: fresh stamps, but
   # the newest land is >24h old, so lands_24h is 0 and trunk-red has no premise.
   mkstamp r1 red 1M; mkstamp r2 red 2M; mkstamp h1 hung 3M; mkstamp r3 red 4M
-  : > "$CC_LAND_LOG"; touch -t "$(date -v-30H +%Y%m%d%H%M)" "$CC_LAND_LOG"
+  : > "$CC_LAND_LOG"; touch -t "$(ago 30H)" "$CC_LAND_LOG"
   run ccb --json
   [ "$status" -eq 0 ]
   [ "$(echo "$output" | jq -r '[.[] | select(.kind=="never-green")] | .[0].state')" = "NEVER-CERTIFIED" ]
@@ -471,7 +517,7 @@ hold_run_lock() { # the verifier's OWN in-progress mark: run.lock.d/pid naming a
   [ "$(git -C "$D/dr" rev-list --count 'HEAD..@{u}')" = 1 ]      # harness self-check
   export DEPLOY_REPO="$D/dr"
   mkstamp r1 red 1M; mkstamp h1 hung 2M
-  : > "$CC_LAND_LOG"; touch -t "$(date -v-30H +%Y%m%d%H%M)" "$CC_LAND_LOG"
+  : > "$CC_LAND_LOG"; touch -t "$(ago 30H)" "$CC_LAND_LOG"
   run ccb --json
   echo "$output" | jq -r '[.[] | select(.kind=="never-green")] | .[0].detail' | grep -q 'live layer 1 behind' || false
 }
@@ -479,7 +525,7 @@ hold_run_lock() { # the verifier's OWN in-progress mark: run.lock.d/pid naming a
 @test "never-green degrades honestly when the deploy lag is UNREADABLE (no upstream)" {
   # The paired fail-open: no @{u} ⇒ no number invented, and the row still ships with its cause.
   mkstamp r1 red 1M; mkstamp h1 hung 2M
-  : > "$CC_LAND_LOG"; touch -t "$(date -v-30H +%Y%m%d%H%M)" "$CC_LAND_LOG"
+  : > "$CC_LAND_LOG"; touch -t "$(ago 30H)" "$CC_LAND_LOG"
   run ccb --json
   echo "$output" | jq -r '[.[] | select(.kind=="never-green")] | .[0].detail' | grep -q 'deploy has no cursor' || false
 }
@@ -538,7 +584,7 @@ hold_run_lock() { # the verifier's OWN in-progress mark: run.lock.d/pid naming a
   # CHANGED 2026-07-29 (row 10, §4 M1): fixture moved to never-green's own window — a >24h-old land —
   # because the old one is now correctly claimed by trunk-red. The CLAIM under test is unchanged.
   mkstamp r1 red 1M; mkstamp h1 hung 2M
-  : > "$CC_LAND_LOG"; touch -t "$(date -v-30H +%Y%m%d%H%M)" "$CC_LAND_LOG"
+  : > "$CC_LAND_LOG"; touch -t "$(ago 30H)" "$CC_LAND_LOG"
   run ccb
   [ "$(echo "$output" | grep -c '^LAND-PIPELINE')" = 1 ]
   echo "$output" | grep -q 'never-green' || false
@@ -587,7 +633,7 @@ hold_run_lock() { # the verifier's OWN in-progress mark: run.lock.d/pid naming a
   # not moved certifies that trunk; the age alone is a property of the box's idleness. This is
   # verifier-inert/STALE's own idiom (`land > newest stamp`) pointed at the GREEN cursor instead.
   mkstamp r1 red 1M; mkstamp h1 hung 2M; mkstamp g green 30H
-  : > "$CC_LAND_LOG"; touch -t "$(date -v-40H +%Y%m%d%H%M)" "$CC_LAND_LOG"   # land OLDER than the green
+  : > "$CC_LAND_LOG"; touch -t "$(ago 40H)" "$CC_LAND_LOG"   # land OLDER than the green
   [ "$(kinds)" = "" ]
 }
 
@@ -626,7 +672,7 @@ hold_run_lock() { # the verifier's OWN in-progress mark: run.lock.d/pid naming a
 
 @test "alarm green-starved is disjoint from never-green by construction (no green EVER)" {
   mkstamp r1 red 1M; mkstamp h1 hung 2M                   # nothing has ever been green
-  : > "$CC_LAND_LOG"; touch -t "$(date -v-30H +%Y%m%d%H%M)" "$CC_LAND_LOG"
+  : > "$CC_LAND_LOG"; touch -t "$(ago 30H)" "$CC_LAND_LOG"
   [ "$(kinds)" = "never-green " ]
 }
 
@@ -685,7 +731,7 @@ hold_run_lock() { # the verifier's OWN in-progress mark: run.lock.d/pid naming a
   git -C "$D/repo" reset -q --hard "$behind"              # deployed HEAD sits behind the green
   export DEPLOY_REPO="$D/repo"
   printf '{"tree":"x","commit":"%s","verdict":"green"}\n' "$ahead" > "$CC_POSTLAND_DIR/stamps/x.json"
-  touch -t "$(date -v-4H +%Y%m%d%H%M)" "$CC_POSTLAND_DIR/stamps/x.json"
+  touch -t "$(ago 4H)" "$CC_POSTLAND_DIR/stamps/x.json"
   run ccb --json
   [ "$(echo "$output" | jq -r '[.[]|select(.kind=="deploy-lag")]|length')" = 1 ]
   [ "$(echo "$output" | jq -r '[.[]|select(.kind=="deploy-lag")][0].state')" = "LAGGING" ]
@@ -711,7 +757,7 @@ mkdeploy() { # <dir> <commits trunk is ahead> <age of the LIVE HEAD commit, eg 4
   # Exports DEPLOY_REPO and leaves three shas in scope: $PRIOR (an ancestor of the deployed HEAD, the
   # live green-BEHIND shape), $LIVE (the deployed HEAD), $TIP (trunk's tip).
   local r="$D/$1" n="$2" when i=0
-  when="$(date -v-"$3" +%Y-%m-%dT%H:%M:%S)"
+  when="$(ago_iso "$3")"
   git init -q -b main "$r"
   git -C "$r" config user.email t@t; git -C "$r" config user.name t
   GIT_AUTHOR_DATE="$when" GIT_COMMITTER_DATE="$when" git -C "$r" commit -q --allow-empty -m prior
@@ -742,7 +788,7 @@ mkdeploy() { # <dir> <commits trunk is ahead> <age of the LIVE HEAD commit, eg 4
   # which is strictly stronger than the equality it replaces.
   mkdeploy dr 30 40H                                        # 30 > CC_DEPLOY_MAX_LAG_COMMITS default 25
   printf '{"tree":"x","commit":"%s","verdict":"green"}\n' "$PRIOR" > "$CC_POSTLAND_DIR/stamps/g.json"
-  touch -t "$(date -v-4H +%Y%m%d%H%M)" "$CC_POSTLAND_DIR/stamps/g.json"
+  touch -t "$(ago 4H)" "$CC_POSTLAND_DIR/stamps/g.json"
   : > "$CC_POSTLAND_DIR/deploy.log"                          # the lane's own log exists → platter tails it
   [ "$(kinds)" = "deploy-stale deploy-wedged " ]
   run ccb --json
@@ -773,7 +819,7 @@ mkdeploy() { # <dir> <commits trunk is ahead> <age of the LIVE HEAD commit, eg 4
   # second stays true in states where the first is false, which is the entire point of the kind.
   mkdeploy dr 30 40H
   printf '{"tree":"x","commit":"%s","verdict":"green"}\n' "$TIP" > "$CC_POSTLAND_DIR/stamps/g.json"
-  touch -t "$(date -v-4H +%Y%m%d%H%M)" "$CC_POSTLAND_DIR/stamps/g.json"
+  touch -t "$(ago 4H)" "$CC_POSTLAND_DIR/stamps/g.json"
   [ "$(kinds)" = "deploy-lag deploy-stale " ]
 }
 
@@ -847,7 +893,7 @@ mkdeploy() { # <dir> <commits trunk is ahead> <age of the LIVE HEAD commit, eg 4
   # so the assertion goes through the real render path rather than stopping at the row.
   mkdeploy dr 30 40H
   printf '{"tree":"x","commit":"%s","verdict":"green"}\n' "$PRIOR" > "$CC_POSTLAND_DIR/stamps/g.json"
-  touch -t "$(date -v-4H +%Y%m%d%H%M)" "$CC_POSTLAND_DIR/stamps/g.json"
+  touch -t "$(ago 4H)" "$CC_POSTLAND_DIR/stamps/g.json"
   run ccb
   [ "$status" -eq 0 ]
   [ "$(echo "$output" | grep -c '^LAND-PIPELINE')" = 1 ]
@@ -870,7 +916,7 @@ mkdeploy() { # <dir> <commits trunk is ahead> <age of the LIVE HEAD commit, eg 4
   # and it fires ALONE, so it is carrying the signal rather than riding on a sibling that also tripped.
   mkdeploy dr 1 1H                                          # 1 of 25 commits, 1h of 6 — both UNDER budget
   printf '{"tree":"x","commit":"%s","verdict":"green"}\n' "$PRIOR" > "$CC_POSTLAND_DIR/stamps/g.json"
-  touch -t "$(date -v-4H +%Y%m%d%H%M)" "$CC_POSTLAND_DIR/stamps/g.json"
+  touch -t "$(ago 4H)" "$CC_POSTLAND_DIR/stamps/g.json"
   [ "$(kinds)" = "deploy-wedged " ]
   run ccb --json
   [ "$status" -eq 0 ]
@@ -892,7 +938,7 @@ mkdeploy() { # <dir> <commits trunk is ahead> <age of the LIVE HEAD commit, eg 4
   # no gap — the property that lets this row live inside alarm_rows() without an `emitted` gate.
   mkdeploy dr 1 1H
   printf '{"tree":"x","commit":"%s","verdict":"green"}\n' "$TIP" > "$CC_POSTLAND_DIR/stamps/g.json"
-  touch -t "$(date -v-4H +%Y%m%d%H%M)" "$CC_POSTLAND_DIR/stamps/g.json"
+  touch -t "$(ago 4H)" "$CC_POSTLAND_DIR/stamps/g.json"
   [ "$(kinds)" = "deploy-lag " ]
 }
 
@@ -903,7 +949,7 @@ mkdeploy() { # <dir> <commits trunk is ahead> <age of the LIVE HEAD commit, eg 4
   # reflexive so the guard on the line above already returns, and this pins that it stays that way.
   mkdeploy dr 1 1H
   printf '{"tree":"x","commit":"%s","verdict":"green"}\n' "$LIVE" > "$CC_POSTLAND_DIR/stamps/g.json"
-  touch -t "$(date -v-4H +%Y%m%d%H%M)" "$CC_POSTLAND_DIR/stamps/g.json"
+  touch -t "$(ago 4H)" "$CC_POSTLAND_DIR/stamps/g.json"
   [ "$(kinds)" = "" ]
 }
 
@@ -913,7 +959,7 @@ mkdeploy() { # <dir> <commits trunk is ahead> <age of the LIVE HEAD commit, eg 4
   # to the new kind. This is also the regression that would catch a future `emitted` gate added here.
   mkdeploy dr 30 40H
   printf '{"tree":"x","commit":"%s","verdict":"green"}\n' "$PRIOR" > "$CC_POSTLAND_DIR/stamps/g.json"
-  touch -t "$(date -v-4H +%Y%m%d%H%M)" "$CC_POSTLAND_DIR/stamps/g.json"
+  touch -t "$(ago 4H)" "$CC_POSTLAND_DIR/stamps/g.json"
   [ "$(kinds)" = "deploy-stale deploy-wedged " ]
 }
 
@@ -922,7 +968,7 @@ mkdeploy() { # <dir> <commits trunk is ahead> <age of the LIVE HEAD commit, eg 4
   # LAND_SEL rides the --json array and vanishes from the only surface the operator reads.
   mkdeploy dr 1 1H
   printf '{"tree":"x","commit":"%s","verdict":"green"}\n' "$PRIOR" > "$CC_POSTLAND_DIR/stamps/g.json"
-  touch -t "$(date -v-4H +%Y%m%d%H%M)" "$CC_POSTLAND_DIR/stamps/g.json"
+  touch -t "$(ago 4H)" "$CC_POSTLAND_DIR/stamps/g.json"
   run ccb
   [ "$status" -eq 0 ]
   [ "$(echo "$output" | grep -c '^LAND-PIPELINE')" = 1 ]
@@ -1316,9 +1362,10 @@ reg() { # <paneUUID> <session_id>
 # and never to now, so only their ORDER is load-bearing: later-than-deadline ⇒ dropped, equal or
 # earlier ⇒ kept. Seeding relative keeps that order fixed forever.
 #   ts_at   — the board's shape (…:49Z)              ts_acct — claude-accounts' shape (…:10.065000+00:00)
-# SIGNED offset is required: bare `date -v 12H` SETS the hour to 12 instead of adding 12h.
-ts_at()   { date -u -v"$1" +%Y-%m-%dT%H:%M:%SZ; }
-ts_acct() { date -u -v"$1" +%Y-%m-%dT%H:%M:%S.065000+00:00; }
+# SIGNED offset is required: bare `date -v 12H` SETS the hour to 12 instead of adding 12h. Both go
+# through ts_off so they carry the GNU fallback too — see the dialect note at the top of this file.
+ts_at()   { ts_off "$1" '%Y-%m-%dT%H:%M:%SZ'; }
+ts_acct() { ts_off "$1" '%Y-%m-%dT%H:%M:%S.065000+00:00'; }
 
 @test "STALE: a relogin row the account's live deadline has moved PAST is dropped" {
   sg "$(ts_at -24H)" "PANE9" "peer-9" "Fable 5" "safeguards flagged this" "cc-recover-safeguard PANE9"
@@ -1428,7 +1475,7 @@ _ccb_hold() {  # <age-flag for touch -t, e.g. 2H> → fixtures a lock dir holdin
   sleep 60 >/dev/null 2>&1 & _ccb_pid=$!
   echo "$_ccb_pid" > "$D/lock-scan/land-lock-fixture/lock.d/pid"
   ps -o lstart= -p "$_ccb_pid" > "$D/lock-scan/land-lock-fixture/lock.d/lstart"
-  touch -t "$(date -v-"$1" +%Y%m%d%H%M)" "$D/lock-scan/land-lock-fixture/lock.d"
+  touch -t "$(ago "$1")" "$D/lock-scan/land-lock-fixture/lock.d"
 }
 
 @test "land-lock-hung renders in the LAND-PIPELINE table, not only in --json" {
