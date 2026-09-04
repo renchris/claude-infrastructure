@@ -1,0 +1,68 @@
+07ac6d58d88d	1	
+0c22de0e3b1b	127	bash: /Users/chrisren/Development/.worktrees/deps-timeout/scripts/land-content-verify.sh: No such file or directory
+11fdba2b3148	4	
+137d46537375	1	
+159c2211b0f2	1	
+1614bb6a55d0	127	bash: /Users/chrisren/Development/.worktrees/foldfix-orphan/scripts/land-content-verify.sh: No such file or directory
+16aa6e102124	127	bash: /private/tmp/.desk-land-claude-fire-20260824T190814Z-11760-1-48732/scripts/land-content-verify.sh: No such file or directory
+170a3b38f8c9	1	
+19b8512354c5	127	bash: /Users/chrisren/Development/ci-wt-nightly/scripts/land-content-verify.sh: No such file or directory
+1f85fa508628	1	✗ land-content-verify: 1 of 5 path(s) hold content origin/main LACKS — NOT landed:   bin/cc-memory-rotate — 10 line(s) present only in the r
+1fd6084ecc53	127	bash: /Users/chrisren/Development/.worktrees/wakepath-notice/scripts/land-content-verify.sh: No such file or directory
+20dfe582a873	127	bash: /Users/chrisren/Development/.worktrees/drain-loop-w3/scripts/land-content-verify.sh: No such file or directory
+253aaa52412e	1	
+26d4010f1b22	1	
+2eb406966646	127	bash: /Users/chrisren/Development/.worktrees/resume-layout/scripts/land-content-verify.sh: No such file or directory
+2f525a0bccc0	1	✗ land-content-verify: 3 of 3 path(s) hold content origin/main LACKS — NOT landed:   hooks/config-mirror-assert.sh — 15 line(s) present only
+2fde9f01b817	127	bash: /Users/chrisren/Development/.worktrees/close-shape-v2/scripts/land-content-verify.sh: No such file or directory
+3264de637bb8	127	bash: /Users/chrisren/Development/.worktrees/cloud-notstarted/scripts/land-content-verify.sh: No such file or directory
+34fcf30da601	127	bash: /Users/chrisren/Development/.worktrees/wt-mem-sweep/scripts/land-content-verify.sh: No such file or directory
+3e2358f03e23	1	
+4a0e50459ad5	127	bash: /private/tmp/.desk-land-claude-fire-20260825T062518Z-57641-1-27191/scripts/land-content-verify.sh: No such file or directory
+4ba12dfcd30e	127	bash: /Users/chrisren/Development/.worktrees/blockbrake-rootcause/scripts/land-content-verify.sh: No such file or directory
+4dac1bf2d042	127	bash: /private/tmp/.desk-land-claude-fire-20260824T170931Z-33628-1-13391/scripts/land-content-verify.sh: No such file or directory
+4e6a51df2a84	1	
+5318d2fe2692	127	bash: /Users/chrisren/Development/.worktrees/wt-wake-notice/scripts/land-content-verify.sh: No such file or directory
+5b4a4809bcf5	127	bash: /Users/chrisren/Development/.worktrees/router-abstain/scripts/land-content-verify.sh: No such file or directory
+5bc548efd14d	1	
+5be5f55043c4	1	
+62456380ccab	1	✗ land-content-verify: 1 of 3 path(s) hold content origin/main LACKS — NOT landed:   tests/lid-toggle.bats — 8 line(s) present only in the r
+62599dd76a60	1	
+62fec5a1bcd4	127	bash: /private/tmp/.desk-land-claude-fire-20260823T105633Z-54020-1-9688/scripts/land-content-verify.sh: No such file or directory
+654cbb468f66	127	bash: /Users/chrisren/Development/wt-drain-lock/scripts/land-content-verify.sh: No such file or directory
+698b3c154763	127	bash: /private/tmp/.desk-land-claude-fire-20260824T112413Z-20577-1-31384/scripts/land-content-verify.sh: No such file or directory
+6a428f48fd2e	1	
+6becd3f79d75	127	bash: /Users/chrisren/Development/.worktrees/sigterm-forensics/scripts/land-content-verify.sh: No such file or directory
+7a5eb14ee6fa	127	bash: /Users/chrisren/Development/.worktrees/wt-recycle-100p/scripts/land-content-verify.sh: No such file or directory
+7b762bcbbe11	1	
+7f3c1ff4a3ad	127	bash: /private/tmp/.desk-land-claude-fire-20260823T133109Z-76670-1-19612/scripts/land-content-verify.sh: No such file or directory
+84b868dd94b7	127	bash: /Users/chrisren/Development/.worktrees/cloud-lane-100p/scripts/land-content-verify.sh: No such file or directory
+8900438590a2	127	bash: /Users/chrisren/Development/.worktrees/goalarm-readback/scripts/land-content-verify.sh: No such file or directory
+8a182940b7f0	127	bash: /Users/chrisren/Development/.worktrees/drain-telemetry-s1s3/scripts/land-content-verify.sh: No such file or directory
+8bd22004b068	127	bash: /private/tmp/.desk-land-claude-fire-20260820T100554Z-18146-1-75196/scripts/land-content-verify.sh: No such file or directory
+8fd1919f7769	1	
+96a4a9b75d65	127	bash: /private/tmp/.desk-land-claude-fire-20260824T175203Z-47701-1-52632/scripts/land-content-verify.sh: No such file or directory
+96fe7b1687a0	1	
+9ef51331816f	127	bash: /Users/chrisren/Development/wt-stop-chain/scripts/land-content-verify.sh: No such file or directory
+a08e5f60d881	127	bash: /Users/chrisren/Development/.worktrees/reply-chain/scripts/land-content-verify.sh: No such file or directory
+a2ddd2e052dd	127	bash: /private/tmp/.desk-land-claude-fire-20260819T163921Z-49568-1-78224/scripts/land-content-verify.sh: No such file or directory
+a31809074678	127	bash: /private/tmp/.desk-land-claude-fire-20260824T100743Z-17590-1-6037/scripts/land-content-verify.sh: No such file or directory
+ae5b585138db	127	bash: /Users/chrisren/Development/.worktrees/drain-w7-fixedcost/scripts/land-content-verify.sh: No such file or directory
+b262e41b26fb	1	✗ land-content-verify: 1 of 3 path(s) hold content origin/main LACKS — NOT landed:   docs/plans/BACKLOG_DRAIN_24_7.md — 1 line(s) present on
+b7252a3bb015	0	
+b72ab0dee516	127	bash: /private/tmp/.desk-land-claude-fire-20260820T072239Z-62612-1-1912/scripts/land-content-verify.sh: No such file or directory
+b8470a38dd1b	127	bash: /private/tmp/.desk-land-claude-fire-20260824T094905Z-7292-1-932/scripts/land-content-verify.sh: No such file or directory
+b8e70ba81bc6	127	bash: /Users/chrisren/Development/.worktrees/drain-deadline-w5/scripts/land-content-verify.sh: No such file or directory
+c2f2caca7730	127	bash: /private/tmp/.desk-land-claude-fire-20260824T093704Z-75835-1-62337/scripts/land-content-verify.sh: No such file or directory
+ca97c678b18b	1	
+caca0b4d0286	127	bash: /Users/chrisren/Development/.worktrees/drain-telemetry-w2/scripts/land-content-verify.sh: No such file or directory
+cfb7f4512de5	127	bash: /private/tmp/.desk-land-claude-fire-20260824T223846Z-78701-1-47430/scripts/land-content-verify.sh: No such file or directory
+d94a415e704c	127	bash: /Users/chrisren/Development/.worktrees/drain-localane-w4/scripts/land-content-verify.sh: No such file or directory
+e0bbb00c86da	127	bash: /private/tmp/.desk-land-claude-fire-20260831T212113Z-47401-1-29985/scripts/land-content-verify.sh: No such file or directory
+e3b8acbd4c90	127	bash: /private/tmp/.desk-land-claude-fire-20260824T222412Z-92302-1-56668/scripts/land-content-verify.sh: No such file or directory
+e8c9314024c9	127	bash: /private/tmp/.desk-land-claude-fire-20260901T035401Z-22411-1-78486/scripts/land-content-verify.sh: No such file or directory
+ec2614142185	127	bash: /Users/chrisren/Development/.worktrees/r3-land/scripts/land-content-verify.sh: No such file or directory
+ed20da9f2023	127	bash: /Users/chrisren/Development/.worktrees/backlog-telemetry/scripts/land-content-verify.sh: No such file or directory
+ee1ac85c6ff6	1	
+eed2530a4165	1	
+f46701ef3192	1	✗ land-content-verify: 2 of 3 path(s) hold content origin/main LACKS — NOT landed:   hooks/lib/memory-index-budget.sh — 1 line(s) present on
