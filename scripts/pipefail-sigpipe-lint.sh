@@ -776,6 +776,67 @@ function is_byteearly(s,   t) {
   if (t ~ /^read([ \t]|$)/ && t ~ /(^|[ \t])-[A-Za-z]*[nN][ \t]*[0-9]/) return 1
   return 0
 }
+# ── AN EIGHTEENTH CORRECTION, 2026-09-04: COUNT THE CONSUMERS OF THE QUOTE-BLIND MASK AND THERE ARE
+#    FIVE, AND THE FIFTH NEITHER COMPENSATED NOR ARGUED THAT IT NEED NOT ─────────────────────────
+# The \002/\003 gsub at the stage split runs BEFORE qmask(), deliberately, so that a || cannot be
+# split as two pipes. It is therefore quote-BLIND: an && or || inside a single-quoted awk program or
+# a regex becomes \003/\002 exactly like a shell operator. The seventeenth correction found ONE
+# consumer that trusted it and repaired that one. Counting them gives FIVE, and they pay differently:
+#   - toplevel_or()     re-walks the quotes itself, and says so at its own tail.
+#   - toplevel_amp()    re-walks them, since the seventeenth correction.
+#   - group_wraps_or()  re-walks them.
+#   - collect_caller()  does NOT, and states a bounded argument for why it need not: over-splitting
+#                       can only invent a command word, never hide one, so LOST is impossible there.
+#   - is_external()     did NEITHER. The read-past loop below consumed every ; and every \002/\003
+#                       by regex, so a separator inside a quoted ARGUMENT moved the producer word.
+#
+# MEASURED BEFORE THE REPAIR, by instrumenting the shipped program rather than by grepping it: the
+# blind loop and a quote-aware walk of the SAME segment printed side by side at every call, out of a
+# whole-file copy whose --census is asserted byte-identical to the shipped one. 475 calls, 471 agree,
+# 4 DISAGREE — scripts/find-plan.sh:47 and :62, scripts/deploy-migrations.sh:413 and
+# scripts/offbox-admission-lint.sh:153. On all four the blind word is a fragment of a sed or awk
+# PROGRAM and the quote-aware word is sed or awk itself.
+#
+# AND THE EFFECT IS ZERO, WHICH IS THE PART WORTH WRITING DOWN. is_external returns 1 for everything
+# that is not echo/printf/: with a literal argument or head/tail -1, so a garbage word and the real
+# word BOTH answer EXTERNAL and no verdict moved. Population 4, effect 0 — the right answer on every
+# one of the four, for a reason that does not hold. NOT A WIDENING IN EFFECT (method 213, measured
+# before the land): --census 123 -> 123 rows, 114 -> 114 keys, LOST 0, NEW 0, keyed on (path, TEXT),
+# the PRE arm extracted read-only from origin/main with git archive piped to tar and
+# CC_PIPEFAIL_ROOT pinned to the same tree on both arms; bare lint rc 0 on both. It changes what the
+# detector CAN see, not what it says about this tree today — the sixteenth correction, again.
+#
+# IT FAILS IN BOTH DIRECTIONS, so both are pinned rather than only the one this tree happens to hold:
+# r35 is the fail-OPEN half, where a quoted ; moves the word ONTO a bounded printf and exonerates a
+# line whose real producer is external, and g35 the fail-CLOSED half, where the same quoted ; moves
+# the word OFF a bounded printf and convicts a correct line. g36 is the discrimination cell: a ; at
+# TOP level must still be read past, which is the entire purpose of the loop, and a mutant making
+# past_seps a no-op turns g36 RED and nothing else.
+#
+# RESIDUAL, NAMED RATHER THAN WIDENED: seg[ci] can BEGIN mid-quote, because the split cuts wherever
+# a top-level pipe falls, so the state this walk starts in is not always the state of the LINE. That
+# is the same fragment case toplevel_or names at its own tail; it is not repaired here, and this walk
+# simply reads such a fragment the way the fragment reads.
+function past_seps(s,   i, c, q, cut) {
+  q = 0; cut = 0; i = 1
+  while (i <= length(s)) {
+    c = substr(s, i, 1)
+    if (q == 1) { if (c == "\047") q = 0; i++; continue }
+    if (q == 2) { if (c == "\134") { i += 2; continue } if (c == "\042") q = 0; i++; continue }
+    if (c == "\134") { i += 2; continue }
+    if (c == "\047") { q = 1; i++; continue }
+    if (c == "\042") { q = 2; i++; continue }
+    if (c == ";" || c == "\002" || c == "\003") {
+      i++
+      while (i <= length(s) && (substr(s, i, 1) == " " || substr(s, i, 1) == "\t")) i++
+      cut = i; continue
+    }
+    i++
+  }
+  if (cut == 0) return s
+  return substr(s, cut)
+}
+
 function is_external(s, cons,   t, p) {
   t = s
   # A pipeline nested in a command substitution has its OWN producer — take the innermost, or a
@@ -786,7 +847,9 @@ function is_external(s, cons,   t, p) {
   # `[ -n "$MSG" ] && printf … | grep -iqE …`. The producer is the LAST of them, so read past every
   # `;` and every &&/|| (already mapped to \003/\002); taking the first command word instead reads
   # `has_tell=0` / `[` and calls a printf builtin external, which is the commonest safe form here.
-  while (match(t, /[;\002\003][ \t]*/)) t = substr(t, RSTART + RLENGTH)
+  # QUOTE-AWARE since the eighteenth correction — see past_seps() above for what the old regex loop
+  # could not see, in which two directions, and why its effect on this tree measured zero.
+  t = past_seps(t)
   t = ltrim(t)
   if (!p) {
     sub(/^(if|elif|while|until)[ \t]+/, "", t)
@@ -1863,6 +1926,25 @@ v=\"\$(f)\""
   # assertions true in both states is the arm fault, not a subject fault.
   mk_noe g34 "f=\$(find . -name x | head -1); [ -n \"\$f\" ] && exit 0"
   expect g34 GREEN "a BARE ) and ; before the && — the && belongs to a later command (unchanged)"
+
+  # ── clause 3's read-past is QUOTE-AWARE (EIGHTEENTH CORRECTION 2026-09-04) ─────────────────────
+  # Counting the consumers of the quote-blind \002/\003 masking gives FIVE, not the one the
+  # seventeenth correction repaired: three re-walk the quotes, collect_caller states a bounded
+  # argument for not needing to, and is_external did neither — its read-past loop consumed every
+  # ; and every \002/\003 by regex, so one inside a quoted ARGUMENT moved the producer word.
+  # Measured at 4 disagreements in 475 calls with an effect of ZERO (see past_seps above): the right
+  # verdict on all four, for a reason that does not hold. Both directions are pinned anyway, because
+  # a clause that RENDERS a verdict has two ways to be wrong and only one of them exists today.
+  # r35 and g35 were both RED-PROVED against the unfixed detector; g36 is green in both states by
+  # design and is mutant-pinned instead.
+  mk r35 "foo 'a; printf x' | grep -q N"
+  expect r35 RED "a ; inside a quoted ARGUMENT moved the producer word onto a bounded printf — the fail-OPEN half"
+  mk g35 "printf 'a; foo' | grep -q N"
+  expect g35 GREEN "the same quoted ; moved the word OFF a bounded printf and convicted it — the fail-CLOSED half"
+  # g36 is the discrimination cell: reading past a TOP-LEVEL ; is the whole purpose of the loop, and
+  # a past_seps that never cuts would leave the word at `0;` and mint this correct line.
+  mk g36 "has_tell=0; printf 'lit' | grep -q N"
+  expect g36 GREEN "a ; at TOP level is still read past — a bounded literal printf stays exonerated"
 
   local total=$((pass+fail))
   if [ "$fail" -gt 0 ]; then
