@@ -447,7 +447,8 @@ stamp_verdict() { # <stamp-file> → green|red|hung|cut ("" when absent/unparsea
 }
 postland_green_starvation() {
   local stamps="$POSTLAND_DIR/stamps" offbox="$POSTLAND_DIR/offbox"
-  local sha tree ct oldest="" oldest_ct="" n=0 newest_v="" acquitted="" age
+  local notgreen="$POSTLAND_DIR/offbox/notgreen"
+  local sha tree ct oldest="" oldest_ct="" n=0 newest_v="" acquitted="" ran_notgreen="" ngc="" age
   [ -d "$stamps" ] || return 0                                   # net not adopted → abstain
   set -- "$stamps"/*.json
   [ -e "$1" ] || return 0                                        # never stamped → step 5's fact
@@ -467,6 +468,21 @@ postland_green_starvation() {
     # deploy-live.sh:is_offbox_green — a bare file drop must not launder a subset into an acquittal.
     [ -n "$acquitted" ] || { grep -q '"verdict":"green"' "$offbox/$tree.json" 2>/dev/null \
       && grep -q '"scope":"offbox-hermetic"' "$offbox/$tree.json" 2>/dev/null && acquitted="$sha"; }
+    # THE THIRD STATE, and the reason this row (`01ab05685857`) stayed open through its own cure.
+    # The field above is two-valued — acquitted, or "nothing anywhere has proven this span" — and
+    # that second reading was FALSE on this repo every day: the off-box lane re-proves trunk
+    # completely every few hours (537/537 suites, zero unreported, measured on `11f50d3408f0`) and
+    # simply had nowhere to put a non-green answer, so an answer of "nine suites red, by name" was
+    # indistinguishable from no answer at all. The producer now records those in `offbox/notgreen/`
+    # and this reads them, so the page can say WHICH of three states the span is in.
+    # It changes NO verdict — the `red` above is computed and returned identically — because a
+    # hermetic subset has no standing to convict a host-coupled corpus. Reporting is not convicting.
+    # Both fields, exactly as on the acquittal side: a bare file drop must not mint a not-green
+    # either, or the weaker claim starts arriving by accident from anything that can write a file.
+    [ -n "$ran_notgreen" ] || { grep -q '"verdict":"not-green"' "$notgreen/$tree.json" 2>/dev/null \
+      && grep -q '"scope":"offbox-hermetic"' "$notgreen/$tree.json" 2>/dev/null \
+      && { ran_notgreen="$sha"
+           ngc="$(sed -n 's/.*"conclusion":"\([a-z_]*\)".*/\1/p' "$notgreen/$tree.json" 2>/dev/null | head -1)"; }; }
   done <<EOF
 $(git -C "$REPO" log -n "$POSTLAND_GREEN_SCAN" --format='%H %T %ct' origin/main 2>/dev/null)
 EOF
@@ -474,7 +490,16 @@ EOF
   case "${oldest_ct:-}" in ''|*[!0-9]*) return 0 ;; esac         # unreadable clock → no verdict
   age=$(( $(now_epoch) - oldest_ct ))
   [ "$age" -gt "$POSTLAND_GREEN_MAX" ] || return 0
+  # THREE states, in precedence order. An acquittal outranks a not-green because the walk runs
+  # newest-first and a green found lower down still certifies the span from there; the not-green is
+  # the news only when nothing acquitted it. The old two-state field reported the third case as
+  # "nothing anywhere has proven this span", which is the single most misleading sentence this page
+  # could print over a span the off-box lane HAD judged — it sends the reader at the machine when
+  # the repair is in the code, which is the exact inversion the comment above says the field exists
+  # to prevent.
   local acq="none — nothing anywhere has proven this span"
+  [ -n "$ran_notgreen" ] && acq="$(printf 'no — off-box RAN this span and did not certify it (%.12s, verdict job %s); it judges a hermetic SUBSET, so this is a report and not a conviction — the failing suites are named in the hermetic workflow fold for that commit' \
+    "$ran_notgreen" "${ngc:-unknown}")"
   [ -n "$acquitted" ] && acq="$(printf 'yes, off-box hermetic green from %.12s down' "$acquitted")"
   printf 'postland net GREEN-STARVED: trunk has carried UNPROVEN content for %ss (max %ss) — %s commit(s) sit above the newest green, oldest %.12s; newest verdict over that span: %s; off-box acquittal: %s\n' \
     "$age" "$POSTLAND_GREEN_MAX" "$n" "$oldest" "${newest_v:-none (unstamped)}" \

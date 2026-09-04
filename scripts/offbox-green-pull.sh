@@ -40,11 +40,44 @@
 # a FIELD, this store's own producer, and the one consumer that refutes the claim above.
 # Census a store's consumers by the variable that RESOLVES it, never by its path.
 #
-# ── ONLY GREEN IS EVER WRITTEN ───────────────────────────────────────────────────────────────────
+# ── ONLY GREEN IS EVER WRITTEN *HERE* — AND "NOT GREEN" IS NO LONGER WRITTEN NOWHERE ─────────────
 # A subset that cannot see the machine-coupled suites can acquit what it ran and nothing else. It has
-# no standing to convict, so a non-green off-box run writes NOTHING — it does not produce a `red`,
-# and no consumer can ever read one here. The workflow's binary conclusion is the same rule stated on
-# the other side of the wire.
+# no standing to convict, so a non-green off-box run still writes NOTHING into `offbox/` — it does
+# not produce a `red`, and no consumer can ever read one there. The workflow's binary conclusion is
+# the same rule stated on the other side of the wire. That half is unchanged and is load-bearing.
+#
+# WHAT CHANGED, AND WHY (cc-backlog `01ab05685857`, 2026-09-04). The rule above was written as "may
+# acquit, may not convict" and IMPLEMENTED as "on a non-green, do nothing at all" — a `*) : ;;` arm
+# with no store behind it. Those are different rules, and the gap between them is the whole of the
+# row this change closes. Measured on trunk `11f50d3408f0` the same day, workflow run 431:
+#
+#     {"verdict":"red","suites":537,"expected":537,"green":527,"red":9,"nonverdict":1,
+#      "unreported":0,"run_s":6475,"failing":[…nine suites…]}
+#
+# A COMPLETE re-proof of trunk — 537 of 537 suites, zero unreported — finding nine suites red, and
+# NOTHING on this box could learn it. The run's own conclusion is `success` (the fold reports and
+# never convicts, deliberately); the `verdict` job is `skipped`; the puller wrote nothing. Meanwhile
+# `nightly-regression.sh`'s starvation page printed `off-box acquittal: none — nothing anywhere has
+# proven this span` over a span that HAD been proven, four hours earlier, and found red by name.
+# The row was filed as "postland-verify is INERT … this is how red suites went unnoticed"; the
+# on-box verifier's starvation is the famous half, and this is the half nobody was looking at — the
+# lane that is NOT starving, reporting completely, into a store with no room for the answer.
+#
+# So: a non-green now writes a record into `offbox/notgreen/`, a SIBLING directory, and the
+# not-convicting property is preserved STRUCTURALLY rather than by silence. Every consumer of the
+# acquittal store is path-keyed on `offbox/<tree>.json` — `deploy-live.sh:1746` and
+# `nightly-regression.sh:449` are the only two, verified by census — so a record one directory down
+# is unreachable to all of them and cannot become a deploy input by accident. It carries
+# `verdict:"not-green"`, a token no green predicate matches, and the same `scope:"offbox-hermetic"`
+# two-field discipline the acquittal record uses, so a bare file drop is not a claim here either.
+# REPORTING IS NOT CONVICTING: the deploy lane's behaviour is byte-identical, and the only thing
+# that changes is that the nightly can now say WHICH of three states the span is in.
+#
+# A NOT-GREEN TREE IS STILL RE-QUERIED EVERY TICK, and that is deliberate. Only `offbox/<tree>.json`
+# short-circuits the scan; the notgreen record never does. A run that is re-run and goes green must
+# still be able to acquit its tree — the property the `case` arm below already documents — and
+# suppressing the query to save an API call would silently trade it away. The cost is unchanged from
+# before this block existed, when a non-green tree was re-queried every tick and simply forgotten.
 #
 # ── FAIL-OPEN, ALWAYS ────────────────────────────────────────────────────────────────────────────
 # Every failure mode — no `gh`, no network, no auth, a locked keychain under launchd, a rate limit,
@@ -58,6 +91,11 @@ SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]
 REPO_DIR="${CC_OFFBOX_REPO:-$(cd "$(dirname "$SELF")/.." && pwd)}"
 POSTLAND_DIR="${CC_POSTLAND_DIR:-$HOME/.claude/autonomy/postland}"
 OFFBOX_DIR="${CC_OFFBOX_STAMPS:-$POSTLAND_DIR/offbox}"
+# A SUBDIRECTORY, never a suffix in the same directory. `offbox/<tree>.notgreen.json` would sit in
+# the same glob as the acquittals, and the one consumer that enumerates rather than path-resolves
+# (cmd_status's `find`) would have counted them as greens — which is how a "reporting" store becomes
+# an "acquitting" one without anybody editing a predicate.
+NOTGREEN_DIR="${CC_OFFBOX_NOTGREEN:-$OFFBOX_DIR/notgreen}"
 GH_BIN="${CC_OFFBOX_GH:-gh}"
 JOB_NAME="${CC_OFFBOX_JOB:-verdict}"
 # The ref to walk. `origin/main` is the only ref the deploy lane can ever deploy FROM, so it is the
@@ -112,7 +150,19 @@ check_conclusion() {
   # re-run that goes green is still a green for that tree.
   case "$out" in
     *completed:success*) printf 'success\n' ;;
-    *completed:*)        printf 'failure\n' ;;
+    *completed:*)
+      # NOT-GREEN, and WHICH not-green is the entire diagnostic value, so it is carried out of here
+      # rather than collapsed to one word as it was. `skipped` is the fold saying the partition was
+      # not clean — the common, informative case, since the `verdict` job's own
+      # `if: needs.fold.outputs.verdict == 'green'` simply did not fire. `failure`/`cancelled`/
+      # `timed_out` say the publisher itself broke and the tree was never judged at all. One is a
+      # code problem and the other is a lane problem, they take opposite repairs, and the old
+      # `failure` token could not tell them apart.
+      # Sanitised to the GitHub conclusion alphabet before it reaches a JSON record: this string is
+      # remote input, and it is about to be interpolated into a file a later reader parses.
+      local c
+      c="$(printf '%s\n' "$out" | sed -n 's/^completed:\(.*\)$/\1/p' | head -1 | tr -cd 'a-z_' | cut -c1-32)"
+      printf 'notgreen:%s\n' "${c:-unknown}" ;;
     *)                   printf 'pending\n' ;;
   esac
 }
@@ -132,6 +182,22 @@ write_stamp() {
   return 0
 }
 
+# The REPORTING record. Everything about it is chosen so that no existing consumer can read it as a
+# claim about deployability, and so that a reader who finds it can tell what it is without knowing
+# this file: a directory none of them resolve, a `verdict` token none of their predicates match, and
+# the same both-fields-or-neither discipline the acquittal carries (`tests/deploy-live.bats`'s
+# "a bare file drop under offbox/ is NOT an acquittal" pins that rule on the green side; the
+# starvation reader applies it here too, so a stray file cannot mint a not-green either).
+write_notgreen() {
+  local tree="$1" sha="$2" nwo="$3" conclusion="$4"
+  mkdir -p "$NOTGREEN_DIR" 2>/dev/null || return 1
+  local tmp="$NOTGREEN_DIR/.$tree.$$.tmp"
+  printf '{"tree":"%s","commit":"%s","verdict":"not-green","scope":"offbox-hermetic","conclusion":"%s","producer":"github-actions","workflow":"hermetic","job":"%s","repo":"%s","ts":"%s"}\n' \
+    "$tree" "$sha" "$conclusion" "$JOB_NAME" "$nwo" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp" 2>/dev/null || return 1
+  mv -f "$tmp" "$NOTGREEN_DIR/$tree.json" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+  return 0
+}
+
 cmd_pull() {
   local tmo; tmo="$(resolve_timeout)" || bail_open "no timeout(1) on PATH"
   command -v "$GH_BIN" >/dev/null 2>&1 || bail_open "no '$GH_BIN' on PATH"
@@ -140,7 +206,7 @@ cmd_pull() {
   g fetch -q origin "${REF#origin/}" 2>/dev/null || true
 
   local deadline=$(( $(date +%s) + TOTAL_BOUND_S ))
-  local n_new=0 n_seen=0 n_pending=0 sha tree verdict
+  local n_new=0 n_seen=0 n_pending=0 n_notgreen=0 sha tree verdict
 
   while IFS=' ' read -r sha tree; do
     [ -n "$sha" ] || continue
@@ -161,24 +227,46 @@ cmd_pull() {
         fi
         n_new=$((n_new + 1))
         ;;
+      notgreen:*)
+        # NOT an acquittal and NOT a conviction — a record that the lane RAN this tree and did not
+        # certify it. It goes to a store no deploy consumer resolves (see NOTGREEN_DIR), so the
+        # "may acquit, may not convict" contract is now enforced by where the record lives rather
+        # than by there being no record at all. Written once per tree; the tree itself keeps being
+        # re-queried above, so a later re-run that goes green still acquits it.
+        if [ -f "$NOTGREEN_DIR/$tree.json" ]; then
+          :
+        elif [ "$DRY" -eq 1 ]; then
+          say "WOULD record offbox not-green for ${sha:0:12} (tree ${tree:0:12}) — ${verdict#notgreen:}"
+          n_notgreen=$((n_notgreen + 1))
+        elif write_notgreen "$tree" "$sha" "$NWO" "${verdict#notgreen:}"; then
+          say "offbox NOT-GREEN ${sha:0:12} (tree ${tree:0:12}) — ${verdict#notgreen:}"
+          n_notgreen=$((n_notgreen + 1))
+        fi
+        ;;
       pending) n_pending=$((n_pending + 1)) ;;
-      *) : ;;   # failure ⇒ write NOTHING. This producer may acquit; it may not convict.
+      *) : ;;   # unreachable today; still writes NOTHING rather than guessing a verdict.
     esac
   done <<EOF
 $(g log --format='%H %T' -n "$LIMIT" "$REF" 2>/dev/null)
 EOF
 
-  say "scanned $n_seen commit(s): $n_new new green(s), $n_pending still running"
+  say "scanned $n_seen commit(s): $n_new new green(s), $n_notgreen new not-green(s), $n_pending still running"
   return 0
 }
 
 cmd_status() {
-  local n=0
-  [ -d "$OFFBOX_DIR" ] && n="$(find "$OFFBOX_DIR" -name '*.json' -type f 2>/dev/null | grep -c . || true)"
-  printf 'offbox store: %s\n' "$OFFBOX_DIR"
-  printf 'greens held:  %s\n' "$n"
+  local n=0 ng=0
+  # `-maxdepth 1` IS THE CORRECTNESS CLAUSE, not a tidy-up. Without it this walk descends into
+  # notgreen/ and reports records that are explicitly NOT acquittals under the heading "greens held"
+  # — the store's own status command laundering the weaker claim into the stronger one, which is the
+  # single failure this whole separation exists to prevent.
+  [ -d "$OFFBOX_DIR" ] && n="$(find "$OFFBOX_DIR" -maxdepth 1 -name '*.json' -type f 2>/dev/null | grep -c . || true)"
+  [ -d "$NOTGREEN_DIR" ] && ng="$(find "$NOTGREEN_DIR" -maxdepth 1 -name '*.json' -type f 2>/dev/null | grep -c . || true)"
+  printf 'offbox store:   %s\n' "$OFFBOX_DIR"
+  printf 'greens held:    %s\n' "$n"
+  printf 'not-greens:     %s   (%s — reported, never read by the deploy lane)\n' "$ng" "$NOTGREEN_DIR"
   if [ "$n" -gt 0 ]; then
-    printf 'newest:       %s\n' "$(find "$OFFBOX_DIR" -name '*.json' -type f -exec ls -t {} + 2>/dev/null | head -1)"
+    printf 'newest green:   %s\n' "$(find "$OFFBOX_DIR" -maxdepth 1 -name '*.json' -type f -exec ls -t {} + 2>/dev/null | head -1)"
   fi
 }
 
@@ -205,7 +293,12 @@ cmd_selftest() {
   mk_gh() { printf '#!/bin/bash\nprintf "%%s\\n" "%s"\n' "$1" > "$tmp/bin/gh"; chmod +x "$tmp/bin/gh"; }
   pull() { CC_OFFBOX_REPO="$tmp/repo" CC_OFFBOX_STAMPS="$tmp/store" CC_OFFBOX_GH="$tmp/bin/gh" \
            PATH="$tmp/bin:$PATH" bash "$SELF" "$@"; }
-  n_stamps() { find "$tmp/store" -name '*.json' -type f 2>/dev/null | grep -c . || true; }
+  # `-maxdepth 1`, for the reason cmd_status carries it: this counter is the oracle for every
+  # "writes NOTHING" control below, and a recursive walk would count a notgreen record as a green
+  # and turn each of those controls from an assertion into a tautology-in-the-wrong-direction.
+  n_stamps()   { find "$tmp/store" -maxdepth 1 -name '*.json' -type f 2>/dev/null | grep -c . || true; }
+  n_notgreen() { find "$tmp/store/notgreen" -maxdepth 1 -name '*.json' -type f 2>/dev/null | grep -c . || true; }
+  reset_store() { rm -rf "$tmp/store"; mkdir -p "$tmp/store"; }
 
   # P1 a completed:success writes exactly one green.
   mk_gh 'completed:success'
@@ -220,17 +313,63 @@ cmd_selftest() {
   case "$rec" in *'"producer":"github-actions"'*) printf 'ok   P1c the record names its producer\n' ;;
                  *) printf 'FAIL P1c producer missing: %s\n' "$rec" >&2; st_fail=1 ;; esac
 
-  # P2 A FAILURE WRITES NOTHING. The control for the whole "may acquit, may not convict" contract —
-  # without it the puller could quietly mint a `red` this store has no vocabulary for.
-  rm -f "$tmp"/store/*.json
+  # P2 A NON-GREEN WRITES NOTHING INTO THE ACQUITTAL STORE. The control for the whole "may acquit,
+  # may not convict" contract — without it the puller could quietly mint a `red` this store has no
+  # vocabulary for. The claim under test is UNCHANGED by the notgreen store below; what changed is
+  # that "writes nothing anywhere" is no longer how it is satisfied, so the assertion now names the
+  # store it is about instead of counting every file the script can produce.
+  reset_store
   mk_gh 'completed:failure'
   pull --quiet >/dev/null 2>&1
-  chk "P2 a failure writes NOTHING" 0 "$(n_stamps)"
+  chk "P2 a non-green writes NOTHING into the acquittal store" 0 "$(n_stamps)"
 
-  # P3 an in-flight run writes nothing and is not cached.
+  # P2b …AND IT IS NO LONGER SILENT. The row this closes (cc-backlog 01ab05685857) is a complete
+  # off-box re-proof of trunk that nothing on the box could read; the old `*) : ;;` arm is what made
+  # it unreadable, and an arm that does nothing leaves no trace to assert on. This is the positive
+  # control for the whole change: without a record here, the nightly cannot tell "nothing has proven
+  # this span" from "something proved it and the answer was not green".
+  chk "P2b a non-green IS recorded in the notgreen store" 1 "$(n_notgreen)"
+
+  local ngrec; ngrec="$(cat "$tmp"/store/notgreen/*.json 2>/dev/null)"
+  case "$ngrec" in *'"verdict":"not-green"'*) printf 'ok   P2c the record says not-green\n' ;;
+                   *) printf 'FAIL P2c verdict token missing: %s\n' "$ngrec" >&2; st_fail=1 ;; esac
+  # The scope field is what stops a future reader treating this as a full-corpus judgment, exactly
+  # as on the green side. Both fields or neither — the starvation reader demands both.
+  case "$ngrec" in *'"scope":"offbox-hermetic"'*) printf 'ok   P2d the record names its scope\n' ;;
+                   *) printf 'FAIL P2d scope missing: %s\n' "$ngrec" >&2; st_fail=1 ;; esac
+  # P2e THE DISCRIMINATOR SURVIVES THE WIRE. `skipped` (the fold was not clean — a code problem) and
+  # `failure` (the publisher broke — a lane problem) take opposite repairs, and the pre-change code
+  # collapsed both to one token. Asserting the word here is what keeps that bit from being dropped
+  # again by a future simplification of check_conclusion.
+  case "$ngrec" in *'"conclusion":"failure"'*) printf 'ok   P2e the record carries WHICH not-green\n' ;;
+                   *) printf 'FAIL P2e conclusion missing/wrong: %s\n' "$ngrec" >&2; st_fail=1 ;; esac
+
+  # P2f ANTI-LAUNDERING, STRUCTURAL. Every consumer of the acquittal store is path-keyed on
+  # `offbox/<tree>.json` (deploy-live.sh:1746, nightly-regression.sh:449). So the property that
+  # matters is not "the predicate rejects it" — it is that the record is NOT AT THAT PATH and no
+  # predicate is ever asked. Asserted by name rather than by count, so a future record whose tree
+  # happens to differ cannot pass this by accident.
+  local ngtree; ngtree="$(basename "$(find "$tmp/store/notgreen" -name '*.json' -type f | head -1)")"
+  if [ -n "$ngtree" ] && [ ! -e "$tmp/store/$ngtree" ]; then
+    printf 'ok   P2f the record is NOT at the acquittal path the deploy lane resolves\n'
+  else
+    printf 'FAIL P2f a not-green record is readable as an acquittal (%s)\n' "$ngtree" >&2; st_fail=1
+  fi
+
+  # P2g A NOT-GREEN TREE IS STILL RE-QUERIED — the property the skip guard could silently trade away
+  # for one saved API call. P7 proves a GREEN tree short-circuits; this proves a not-green one does
+  # not, so a re-run that goes green can still acquit the tree it already failed on.
+  mk_gh 'completed:success'
+  pull --quiet >/dev/null 2>&1
+  chk "P2g a not-green tree re-queries, and a later green acquits it" 1 "$(n_stamps)"
+
+  # P3 an in-flight run writes nothing and is not cached — in EITHER store. Pending is not a
+  # verdict, so it must not leave a not-green record behind that a re-query would then skip.
+  reset_store
   mk_gh 'in_progress:none'
   pull --quiet >/dev/null 2>&1
   chk "P3 a pending run writes nothing" 0 "$(n_stamps)"
+  chk "P3b a pending run records no not-green either" 0 "$(n_notgreen)"
 
   # P4 FAIL-OPEN: a `gh` that does not exist exits 0 and writes nothing.
   local rc
@@ -260,6 +399,23 @@ cmd_selftest() {
   printf '#!/bin/bash\nexit 9\n' > "$tmp/bin/gh"; chmod +x "$tmp/bin/gh"   # any query now fails
   pull --quiet >/dev/null 2>&1
   chk "P7 a stamped tree is not re-queried" "$first" "$(n_stamps)"
+
+  # P8 THE STATUS COMMAND DOES NOT LAUNDER. `status` is the one reader in this file that ENUMERATES
+  # the store instead of resolving a path, so it is the one place a not-green can be counted as a
+  # green — and it would be, silently, under the recursive walk this command used to do. The store
+  # here holds exactly one of each, so a `greens held: 2` is the laundering and nothing else.
+  reset_store
+  mk_gh 'completed:success'; pull --quiet >/dev/null 2>&1          # one real acquittal
+  mkdir -p "$tmp/store/notgreen"
+  printf '{"verdict":"not-green","scope":"offbox-hermetic","tree":"deadbeef"}\n' \
+    > "$tmp/store/notgreen/deadbeef.json"                          # one not-green beside it
+  local stat_out
+  stat_out="$(CC_OFFBOX_REPO="$tmp/repo" CC_OFFBOX_STAMPS="$tmp/store" CC_OFFBOX_GH="$tmp/bin/gh" \
+              bash "$SELF" status 2>/dev/null)"
+  chk "P8 status counts ONE green, not the not-green beside it" \
+      1 "$(printf '%s\n' "$stat_out" | sed -n 's/^greens held: *\([0-9]*\).*/\1/p')"
+  chk "P8b status reports the not-green separately" \
+      1 "$(printf '%s\n' "$stat_out" | sed -n 's/^not-greens: *\([0-9]*\).*/\1/p')"
 
   [ "$st_fail" -eq 0 ] || { printf '\noffbox-green-pull --selftest: FAILED\n' >&2; return 1; }
   printf '\noffbox-green-pull --selftest: all controls green\n'

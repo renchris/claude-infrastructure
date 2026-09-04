@@ -433,6 +433,73 @@ starved_trunk() { # a green 3d back, then two RED-stamped commits landed 2d ago
   grep -q "off-box acquittal: yes, off-box hermetic green from" "$PAGES/nightly-regression.page" || false
 }
 
+offbox_notgreen() { # <rev> [conclusion] — the off-box lane's THIRD answer: it ran, and did not certify
+  local tree; tree="$(git -C "$SHARED" rev-parse "$1^{tree}")"
+  mkdir -p "$BATS_TEST_TMPDIR/postland/offbox/notgreen"
+  printf '{"verdict":"not-green","scope":"offbox-hermetic","conclusion":"%s","tree":"%s"}\n' \
+    "${2:-skipped}" "$tree" > "$BATS_TEST_TMPDIR/postland/offbox/notgreen/$tree.json"
+}
+
+@test "nightly 5b: an off-box NOT-GREEN is reported as the third state, not as 'nothing has proven this'" {
+  # THE ROW'S OWN GAP (cc-backlog 01ab05685857). The field was two-valued, so a span the off-box lane
+  # had judged COMPLETELY — 537/537 suites, nine red, measured on trunk 11f50d3408f0 — printed
+  # identically to a span nothing had touched. The two readings send the operator in opposite
+  # directions: "nothing has proven this" is a starving machine, and "it was proven and came back
+  # not green" is code. Asserting the ABSENCE of the old sentence is the load-bearing half; without
+  # it an implementation that appends the new clause beside the old one still passes.
+  starved_trunk
+  offbox_notgreen origin/main
+  run nightly "$BATS_TEST_TMPDIR/postland"
+  [ "$status" -ne 0 ]
+  echo "$output" | grep -q "RED  postland-green-starvation" || false
+  grep -q "off-box acquittal: no — off-box RAN this span and did not certify it" "$PAGES/nightly-regression.page" || false
+  # `if …; then false; fi`, never `grep -q … && false`: the latter returns non-zero when the string
+  # is ABSENT, which under bats' errexit fails the test in exactly the case it is meant to pass.
+  if grep -q "off-box acquittal: none" "$PAGES/nightly-regression.page"; then false; fi
+  # WHICH not-green, carried through to the page: `skipped` is the fold refusing to certify (a code
+  # problem) and `failure` is the publisher breaking (a lane problem). They take opposite repairs.
+  grep -q "verdict job skipped" "$PAGES/nightly-regression.page" || false
+}
+
+@test "nightly 5b: a NOT-GREEN never becomes a conviction — the verdict is byte-identical" {
+  # The doctrine the separate store exists to protect: a hermetic SUBSET may report, never convict.
+  # So the check's own outcome must not move at all — same red, same counts, same span. Only the
+  # sentence changes. If a future edit lets this record raise or lower the verdict, this fails.
+  starved_trunk
+  offbox_notgreen origin/main
+  run nightly "$BATS_TEST_TMPDIR/postland"
+  [ "$status" -ne 0 ]
+  grep -q "postland net GREEN-STARVED" "$PAGES/nightly-regression.page" || false
+  grep -q "2 commit(s) sit above the newest green" "$PAGES/nightly-regression.page" || false
+  grep -q "newest verdict over that span: red" "$PAGES/nightly-regression.page" || false
+}
+
+@test "nightly 5b: an ACQUITTAL outranks a not-green record over the same span" {
+  # Both can be true at once — the walk is newest-first, so a green found lower down still certifies
+  # the span from there while an older commit carries a not-green. The acquittal is the stronger and
+  # more recent fact about deployability, so it wins the field. Without a stated precedence the two
+  # writers race on the sentence and the page becomes non-deterministic.
+  starved_trunk
+  offbox_notgreen origin/main
+  offbox_green origin/main
+  run nightly "$BATS_TEST_TMPDIR/postland"
+  grep -q "off-box acquittal: yes, off-box hermetic green from" "$PAGES/nightly-regression.page" || false
+}
+
+@test "nightly 5b: a bare drop under offbox/notgreen/ is NOT a not-green (both fields, or neither)" {
+  # The same anti-laundering rule the acquittal side carries, applied to the weaker claim, because
+  # the weaker claim is the one nobody guards. A record without its scope is not a statement about
+  # the hermetic partition, and reading it as one lets any process that can write a file steer this
+  # page's diagnosis of where the repair belongs.
+  starved_trunk
+  local tree; tree="$(git -C "$SHARED" rev-parse "origin/main^{tree}")"
+  mkdir -p "$BATS_TEST_TMPDIR/postland/offbox/notgreen"
+  printf '{"verdict":"not-green","tree":"%s"}\n' "$tree" \
+    > "$BATS_TEST_TMPDIR/postland/offbox/notgreen/$tree.json"
+  run nightly "$BATS_TEST_TMPDIR/postland"
+  grep -q "off-box acquittal: none" "$PAGES/nightly-regression.page" || false
+}
+
 @test "nightly 5b: a bare file drop under offbox/ is NOT an acquittal (both fields, or neither)" {
   starved_trunk
   local tree; tree="$(git -C "$SHARED" rev-parse "origin/main^{tree}")"
