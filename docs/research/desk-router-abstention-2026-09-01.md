@@ -141,7 +141,7 @@ feedback loop, and this doc does not claim otherwise.
 
 ---
 
-## Shipped this session
+## Shipped 2026-09-01 (the research session)
 
 | | change | commit |
 |---|---|---|
@@ -151,7 +151,36 @@ feedback loop, and this doc does not claim otherwise.
 Six tests added across the two suites, each with a mutant that reproduces the pre-fix blindness and
 goes red.
 
-## NOT shipped — filed, with the reason
+## Shipped 2026-09-04 — the §4 fix (cc-backlog `1f6208064577`)
+
+| | change | commit |
+|---|---|---|
+| 3 | `inherit_k` carries the previous sweep's pane census into a row whose live census came back unmeasured, so a starved `ps` stops excluding the whole fleet. Bounded by `cache_grace_s` (600 s) **against the original measurement** — `_prev_snapshot` now projects `k`/`k_as_of`/`k_stale`, and provenance is carried rather than re-dated, because `get_data` writes the inherited row back into the cache and `_prev_snapshot` reads it out again. `k_stale` reaches every consumer that must not read it as an observation: handoff-fire's Phase-1 relogin gate, `pool-floor.sh`, `record_utilization`, route-meta's `k_age_s`, and both renderers (one `k_cell()` derivation). | `c8824442` |
+
+`tests/account-census-inheritance.bats` — 9 cases, each negative assertion paired with a mutant
+asserted to FIRE — plus the fail-open case in `tests/handoff-fire-account-sweep.bats`.
+
+**What the fix did NOT do, deliberately.** It did not raise `timeout=10`, and it did not take
+`ProcessType Background` off the sweeper — the two alternatives §4 rejected, for the reasons
+recorded there. It also does not weaken the rotation half of the `None` contract: `heal()` gates on
+its `k_live` **argument** and the stamp lands in `collect()` *after* the probes return, so a starved
+census still hands that gate `None` and it still refuses. The one place a number would have failed
+open — handoff-fire's headless relogin, where `0` is the value that unlocks a token redeem — reads
+`k_stale` and takes the bridge line exactly as it did when `k` was null.
+
+**Still open after this fix:** the *cause* of the `ps` starvation (first bullet under Open, below).
+This closes the routing consequence, not the producer defect — a fleet routed on a 4-minute-old
+census up to ten minutes old is a degraded state, merely a much better one than every
+launch landing on `next`.
+
+## NOT shipped in the 2026-09-01 session — filed, with the reason
+
+*(The item below was shipped 2026-09-04 — see the section above. The reasoning is kept verbatim: it
+is the record of why the split was made, and both halves of it turned out to be load-bearing. The
+safety detail is what the fix implements, and the "needs its own mutant-proven suite" clause is what
+`tests/account-census-inheritance.bats` discharges. The `handoff-fire.sh` stale-marker awareness it
+predicted as necessary was necessary — without it, an inherited `k: 0` would have unlocked a
+headless token redeem.)*
 
 **Inherit the last sweep's `k`** (`bin/claude-accounts:3040-3042` add `"k"` to `_prev_snapshot`'s
 projection; `:1330` stamp the inherited value with a staleness marker, bounded by the existing 600 s
