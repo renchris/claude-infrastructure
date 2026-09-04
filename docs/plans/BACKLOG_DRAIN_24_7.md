@@ -86,6 +86,134 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-04 — drain recycle #296: method 268 — RESOLVE A STORE'S PATH FROM ITS PRODUCER. "THE
+  DIRECTORY EXISTS" CANNOT TELL YOU IT IS THE RIGHT DIRECTORY, AND THAT IS EXACTLY THE REPAIR THIS
+  CHAIN ALREADY BUILT FOR THIS CLASS.** ZERO rows closed, ZERO filed, ZERO reopened, ZERO updated.
+  #295 asked what each ARM of one ladder is denominated in. This link asks the question of an
+  INSTRUMENT rather than a ladder: what population does the thing I am counting actually live in,
+  and does my directory contain it at all.
+  **THE FINDING, AND IT IS THIS CHAIN'S OWN MOST-REPEATED MEASUREMENT.** Every per-recycle brief
+  opens with a post-land RED-page check spelled `find "$HOME/.claude/autonomy/postland" … -name
+  '*.page'`, and dozens of the entries below record its answer — **0**, with a denominator — as a
+  health signal. **`scripts/postland-verify.sh` writes no page there and never has.** `:100` is
+  `STATE="${CC_POSTLAND_DIR:-$HOME/.claude/autonomy/postland}"` — stamps, IDL and per-run cells —
+  while `:116` is `PAGES="${CC_PAGES_DIR:-$HOME/.claude/autonomy/pages}"`, and **all five emit sites
+  write under `$PAGES`**: `:2275` revert-inert · `:2570` revert · `:2678` red · `:2831` hung ·
+  `:3243` cut. Its own `--selftest` counts `$PAGES` at `:3459`. And
+  `git log -S 'autonomy/postland/pages' -- scripts/postland-verify.sh` returns **ZERO commits**, so
+  the store has been `autonomy/pages` since the file was born (`95438bbbb`). **The check was never
+  right, so its zero is STRUCTURAL — a count over a population that cannot contain the thing being
+  counted, which is why no amount of repetition was ever going to move it.**
+  **MEASURED, WITH THE MOMENT ATTACHED.** At **05:06:04Z**: `autonomy/postland` `.page` = **0**;
+  `autonomy/pages` `.page` = **71**, including **`postland-red-1fcb63efb7cf.page`** written at
+  **00:35:10Z** — *"NO VERDICT — the bisect convicted nothing (floor-not-green)"*, last-green
+  `24c598bac1c7`, failing `tests/compressor-sentinel.bats::panic reader` and three more. **That
+  store is live rather than a fossil: the same column read 70 at 05:10:59Z, four minutes later.**
+  **AND THE REPAIR BUILT FOR THIS CLASS DOES NOT COVER IT, WHICH IS THE TRANSFERABLE HALF.** #267
+  guessed `~/.claude/state/inbox-guard`, got `dir=ABSENT`, and added *"assert the directory EXISTS
+  before you print a count, so an absent store reads UNKNOWN and never 0"*. **That guard PASSES
+  here** — the wrong directory exists and holds 2,882 files. **An exists-check separates ABSENT from
+  PRESENT; it cannot separate the RIGHT store from a WRONG one. Only the producer can, and the
+  producer is one `grep` away.**
+  **THE DENOMINATOR PRINTED BESIDE THAT ZERO IS TWO POPULATIONS, AND THAT IS THE SECOND HALF.** The
+  2,882 is **588** files of store plus **2,294** files of a live git worktree. `:112` mints
+  `$WT_ROOT/wt-run-$$` and `:110` sets `WT_ROOT="$STATE"`, so **every verifier run checks a whole
+  repo out INSIDE the store it is being counted with.** `wt-run-74759` was registered in
+  `git worktree list`, detached at `9bdac2becb5b`, **2,294 files on disk against 2,285 tracked at
+  that sha** — a second, independent column. **THIS IS THE "5.1x–5.3x EPISODIC COLLAPSE IN BOTH
+  DIRECTIONS AND ON NO SCHEDULE" THIS FILE HAS RECORDED FROM #252 ONWARD:** 2,882 / 588 = **4.90**,
+  and the collapsed readings **558** and **579** are the store ALONE. **It is on a schedule after
+  all** — a verifier's lifetime, plus the 8 h `WT_STALE_S` reaper at `:974` and `:2578`. §4's own
+  2026-08-17 forensics already record this co-location breaking a DIFFERENT consumer: a
+  `case "$0" in "$_cc_cfg"/*` gate admitted the verifier's own harness because the worktrees are
+  minted under the config dir. **A count is the second consumer class the same co-location breaks.**
+  **THE SECOND COLUMN WAS ALREADY ON SCREEN, WHICH IS THE PART WORTH KEEPING.** `census<N>.sh` prints
+  `postland .page=0  DENOMINATOR(all files)=2882` and, **three lines below it**, `the OTHER page
+  store … pages all=2584 .page=70`. They are the same store measured in two places. **Eleven links
+  printed both and compared neither** — the failure mode is not that the second instrument was
+  missing, it is that it was labelled as being about something else.
+  **SCOPE, STATED RATHER THAN LEFT TO BE ASSUMED: SHIPPED CODE IS CLEAN ON BOTH HALVES, WHICH IS WHY
+  THE REPAIR LANDS IN §4.1 AND NOT IN `scripts/`.** Nine shipped scripts resolve
+  `${CC_PAGES_DIR:-…/autonomy/pages}` — `postland-verify`, `deploy-live`, `deploy-parity-assert`,
+  `autonomy-sweep`, `cc-gc`, `render-census`, `store-bounds-census`, `compressor-sentinel`,
+  `iterm2-perf-parity`. `bin/cc-premise:386` reads the LEDGER under `CC_POSTLAND_DIR` deliberately
+  and its own comment says why. `config/store-bounds.manifest` refuses recursive walks by design and
+  covers neither directory. **A finding whose blast radius is one's own instrument is still a
+  finding; pretending it reached the code would have been the easier and worse entry.**
+  **THREE INSTRUMENT FAULTS OF MY OWN, EVERY ONE IN A PROBE AND NONE IN A SUBJECT, EVERY ONE CAUGHT
+  BY READING RATHER THAN BY A HUNCH.** (1) My first RED-page probe was `find … -name '*RED*'` and it matched
+  **`KIMI_METE-RED_INTEGRATION.md`** — a bare substring inside a longer token, the shape this file
+  already names, arriving in a probe written by someone who had just read the warning. (2) I then
+  read **21 of 70** `.page` files as "unnotified", the post-land RED among them, and was one sentence
+  from calling it an unpaged alarm. **`postland-verify` writes ZERO `.notified` markers** — that
+  damping convention belongs to `lead-supervisor.sh:409` and the census family, and a REFUSED send
+  deliberately leaves no marker. **A lookup miss, not an absence.** (3) **And the third is the one
+  this file explicitly warns about, committed anyway, three paragraphs after I had read the warning:**
+  I read the inserter's idempotence control as `python3 insert296.py | tee … ; echo rc=$?` and it
+  printed **rc=0** over a body reading `rc9 already inserted` — **`tee` had succeeded.** Re-taken
+  through a file redirect the control's real exit code is **9**, which is what it should have been all
+  along. **A verdict and an exit code must not come down the same pipe**, and knowing that sentence is
+  demonstrably not the same as obeying it. All three were found by resolving the predicate from the
+  code, or the rc from the process, AFTER the number looked interesting — which is the only reason any
+  of them is countable rather than shipped.
+  **THE GATES.** All **13** cited `file:line` pairs asserted to still contain the text they are cited
+  for, with a **SEEDED WRONG PAIR** proving the arm fires rather than being mute. The §4.1 diff is
+  **50 insertions / 0 deletions in one file** — INTEGRATE, asserted in the commit gate, nothing
+  deleted. `pipefail-sigpipe-lint` bare **rc 0**. **DECLARED NOT-RUN rather than claimed:**
+  `shellcheck`, `bats-shellcheck-lint`, `bats-assert-liveness` and `alarm-polarity-lint` — this
+  link's diff is markdown only and none of them has a subject in it.
+  **THE LANE, AT STAMPED MOMENTS, AND THE CONVERGER OWES NOTHING ON MY ACCOUNT.** Open **05:03:16Z**:
+  `RUNG=🚀 LIVE_SRC=behind LIVE_SHA=7cc801e7ae0e LIVE_LAG=11 LIVE_ADDS=3 LIVE_STALE=14 LIVE_AGE=10177
+  LIVE_BREACH_WHY=adds GATE=stale`. `deploy-parity-assert` read **MISSING=0** and
+  `deploy-link-parity` read **`468 linked · 0 staged-pending · 10 live-extra · 55 unmapped ·
+  2 actionable`** at rc 1, its reference sentence reading **11** where #295 read 6 — the shared
+  checkout's distance to trunk, not a verdict about anything I did. **The `adds` breach is the known
+  false positive `4e6a51df2a84`** (`docs/` and `tests/` adds under top-levels the live layer does not
+  carry); `GATE=stale` is owned by `live-layer-stamp-lag` and `deploy-install-stale-deadlock`, both
+  OPEN, and I did not re-file either.
+  **THE CANDIDATE HARNESS, RUN AT TWO RIGHT OPERANDS AS THE STANDING LEAD ASKS, WITH ONE HONEST
+  CAVEAT.** My worktree sat AT trunk all link, so the DEFAULT operand pair (session HEAD,
+  `origin/main`) is **degenerate — the same sha** — and a run at it cannot see the axis it exists to
+  measure. Re-run at a genuinely distinct pair (`46e082ebf5ac`, `9bdac2becb5b`, five commits apart)
+  every candidate still read **FLAT**: `CAND0=3 CAND_A=15 CAND_B=7 CAND_C=0`, linked-top-level POS
+  control **11**, both auditors printed beside them at `MISSING=0` and `2 actionable`. **CANDIDATE C
+  read 0, agreeing with both shipped auditors as it has at every moment anyone has measured** — so no
+  drain was owed on that ground, and I ran none for it.
+  **THE BOARD, WITH ITS WINDOW.** Open **05:10:50Z**: **361 open / 247 blocked / 2,389 done /
+  3 claimed** (608 combined, 3,000 rows), both partitions asserted (`open + blocked == combined` AND
+  `allids == allrows`), all five id lists `sort -c`'d. Against #295's FLOOR at 04:58:10Z — a
+  **12 m 45 s** window — **ZERO arrivals, ZERO departures, ONE transition**: `abf5e7509608`
+  **claimed → blocked**, `claude-infrastructure`, which is one of the cloud cluster's WOULD-UNBLOCK
+  rows the actuator moves. **Not mine, and not hand-touched.** `master-convergence-deadlock` read
+  **12 / 6** where #295 read 12 / 5; `master-operator-gated` **2 / 168**, unchanged. **A window that
+  short is a statement about the window, and I add no point to the actuator series from it.**
+  **THE STORES, EACH WITH ITS DENOMINATOR AND ITS MOMENT, AND THE FIRST ONE IS NOW REPORTED IN THE
+  RIGHT PLACE.** At **05:06:04Z**: post-land RED pages **1** in `autonomy/pages` over **71** `.page`
+  files — *the first non-zero this check has ever produced, because it is the first time it was asked
+  in the store that holds the answer*. The old spelling read its usual **0** over a denominator of
+  **2,882**, of which **2,294 are a git worktree**. inbox-guard **438**, every file an `.escalated`
+  marker so it is one number and not a ratio. Stamps **557**. `decisions` 171, `custody` 28,
+  `cloud` 2,105.
+  **INHERITED AND VERIFIED BY EYE RATHER THAN ASSUMED.** All **nineteen** artifacts present at my
+  first tool call. `gap296.sh` read `294` **ZERO** times and `295` **5 lines / 6 occurrences** — the
+  same split ten links running — with `allids.295floor.txt` confirmed on disk. The qos diff was
+  **rc 0, 0 bytes**. All four kitty checks passed: `cc-in-kitty` rc 0, `KITTY_WINDOW_ID=27`, the
+  id-keyed `kitty @ ls` query run THROUGH A FILE at rc 0 / 0 stderr bytes / 133,919 json bytes
+  returning **exactly one** object with a bogus-id NEG control at **0**, and `cc-notify --self`
+  printing 27. `land-lock --status` read `holder: (free) waiters: 0`, and the argv-POSITION-anchored
+  `postland-verify` process check read none. `cc-roles list` returned the byte-identical
+  `desk UNVERIFIED 5 | docs-lead UNVERIFIED 450 | drain-lead UNVERIFIED 7 | orchestrator ABSENT
+  empty`. `~/.claude/mailbox/27.md` unchanged at **4,059 bytes, 1 line**, mtime 2026-08-25 — no new
+  mail.
+  **AND THE COUNT THIS ENTRY DELIBERATELY DOES NOT CONTAIN, WHICH IS #295's FINDING BEING APPLIED
+  RATHER THAN RESTATED.** #295 established that a commit/push count in a landed entry is
+  self-referential THROUGH ITS OWN REMEDY — every correction increments the quantity it corrects, so
+  the regress does not terminate — and that the resolving rule is #237's: a claim about an event that
+  has not happened when the entry is composed cannot be stamped at all. **This entry therefore states
+  the counts that are already true and closed — rows closed, rows filed, gates run, cites verified,
+  stores measured — and leaves the commit and push counts to the successor brief, which is written
+  after the last land and is never itself landed.** That is the intended terminal state, not an
+  omission.
 - **2026-09-04 — drain recycle #295: method 267 — WHEN ONE VERDICT IS COMPUTED FROM SEVERAL ARMS,
   ASK WHAT EACH ARM IS DENOMINATED IN. TWO ARMS OF ONE LADDER CAN DISAGREE ABOUT WHOSE STATE THEY
   DESCRIBE, AND THE READER IS SHOWN ONE SENTENCE.** ZERO rows closed, ZERO filed, ZERO reopened,
