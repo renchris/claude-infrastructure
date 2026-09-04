@@ -1514,3 +1514,66 @@ STUB
   [ ! -f "$CC_CLOUD_STATE/.prune.applied-once" ]
   [ "$(jq -r 'select(.disposition=="cloud-retire")|.branch_prune_rc' "$CC_IDL" | tail -1)" = "1" ]
 }
+
+@test "the thrash recovery arm runs ONLY from the deployed copy — it writes to the operator's backlog" {
+  # W3 F. `scripts/thrash-block-recover.sh` has had zero callers since it was written. It reverses
+  # reap rule-B blocks that were taken on a DISPATCHER SELF-RELEASE — the machine's own claim
+  # rollback recorded as evidence about the item — which removed 228 items, 64% of everything
+  # blocked, from the autonomous queue permanently (measured 2026-08-07).
+  #
+  # THE GATE IS THE SAME EXACT-PATH DISCRIMINATOR, because this WRITES TO THE BACKLOG: a verifier
+  # worktree running it would unblock the operator's live rows.
+  local cfg="$BATS_TEST_TMPDIR/cfg5"
+  local deployed="$cfg/scripts"
+  local verifier="$cfg/autonomy/postland/wt-run-77777/scripts"
+  mkdir -p "$deployed" "$verifier"
+  export CLAUDE_CONFIG_DIR="$cfg"
+  export CC_CLOUD_STATE="$BATS_TEST_TMPDIR/cloudstate5"; mkdir -p "$CC_CLOUD_STATE"
+
+  local marker="$BATS_TEST_TMPDIR/thrash-invocations"; : >"$marker"
+  local d t
+  for d in "$deployed" "$verifier"; do
+    cp "$SWEEP" "$d/autonomy-sweep.sh"; chmod +x "$d/autonomy-sweep.sh"
+    mkdir -p "$d/lib" && cp "$REPO"/scripts/lib/*.sh "$d/lib/" 2>/dev/null
+    for t in cloud-return cloud-refusal-route branch-prune-landed cloud-retire-terminal; do
+      printf '#!/bin/bash\nexit 0\n' >"$d/$t.sh"; chmod +x "$d/$t.sh"
+    done
+    cat >"$d/thrash-block-recover.sh" <<STUB
+#!/bin/bash
+echo "thrash from=$d args=\$*" >>"$marker"
+STUB
+    chmod +x "$d/thrash-block-recover.sh"
+  done
+
+  "${SWEEP_TO[@]}" bash "$verifier/autonomy-sweep.sh" >/dev/null 2>&1 || true
+  ! grep -q "from=$verifier" "$marker" || false
+
+  # THE POSITIVE CONTROL, one axis moved — the path. It is invoked with --apply: a dry run wired
+  # into a sweep is a tool that reports and never acts, which is the state this arm is ending.
+  "${SWEEP_TO[@]}" bash "$deployed/autonomy-sweep.sh" >/dev/null 2>&1 || true
+  grep -q "thrash from=$deployed args=--apply" "$marker" || false
+  [ "$(jq -r 'select(.disposition=="thrash-recover")|.thrash_recover_rc' "$CC_IDL" | tail -1)" = "0" ]
+}
+
+@test "a thrash pass that REFUSED its own max is journalled as a refusal, never as a quiet zero" {
+  # --max is a REFUSAL threshold, not a truncation: exceeding it means the tool declined to act on a
+  # set larger than a reader has checked. rc 3 must reach the journal as itself — collapsing it into
+  # 'the pass failed' is the enum-consumer defect this repo has paid for before
+  # (memory: new-enum-member-falls-into-fail-closed-default).
+  local cfg="$BATS_TEST_TMPDIR/cfg6"
+  local deployed="$cfg/scripts"
+  mkdir -p "$deployed"
+  export CLAUDE_CONFIG_DIR="$cfg"
+  export CC_CLOUD_STATE="$BATS_TEST_TMPDIR/cloudstate6"; mkdir -p "$CC_CLOUD_STATE"
+  cp "$SWEEP" "$deployed/autonomy-sweep.sh"; chmod +x "$deployed/autonomy-sweep.sh"
+  mkdir -p "$deployed/lib" && cp "$REPO"/scripts/lib/*.sh "$deployed/lib/" 2>/dev/null
+  local t
+  for t in cloud-return cloud-refusal-route branch-prune-landed cloud-retire-terminal; do
+    printf '#!/bin/bash\nexit 0\n' >"$deployed/$t.sh"; chmod +x "$deployed/$t.sh"
+  done
+  printf '#!/bin/bash\nexit 3\n' >"$deployed/thrash-block-recover.sh"
+  chmod +x "$deployed/thrash-block-recover.sh"
+
+  "${SWEEP_TO[@]}" bash "$deployed/autonomy-sweep.sh" >/dev/null 2>&1 || true
+  [ "$(jq -r 'select(.disposition=="thrash-recover")|.thrash_recover_rc' "$CC_IDL" | tail -1)" = "3" ]
+}
