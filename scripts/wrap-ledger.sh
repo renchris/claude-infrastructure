@@ -925,6 +925,42 @@ LIVE_BREACH_WHY=""
 # effect on the ledger ZERO. At lag 0 the range is empty, so LIVE_ADDS is identically 0 BY
 # CONSTRUCTION and cannot report an absent file at all.
 #
+# AND THE RIGHT OPERAND HAS ITS OWN GENERATOR, WHICH IS THE MIRROR OF THAT ONE (2026-09-04, recycle
+# #295). `$HEAD_SHA` is line 473's `git rev-parse HEAD` — the SESSION's HEAD. The sibling arm of the
+# same breach ladder, LIVE_LAG, is `git -C "$LIVE_REPO" rev-list --count "HEAD..$TRUNK"` at :1080:
+# the shared CHECKOUT's distance to TRUNK, an expression in which no session appears. Two arms, one
+# ladder, one rendered verdict, and different denominators — so a file that has LANDED and is absent
+# from the live layer is counted by this arm only once THIS session has pulled it. Pulling is an
+# operation on a worktree: it delivers nothing and cannot change what ~/.claude carries. Where the
+# left operand lets a remedy-shaped event silence a true breach, the right one lets an unrelated
+# local event create the appearance of one — the same field, driven in either direction, without
+# anything touching the thing it reports on.
+#
+# MEASURED, not argued, and the second column is what makes it a measurement. At 2026-09-04T03:27:20Z
+# with the worktree one commit below trunk this ledger read LIVE_ADDS=2 LIVE_STALE=13. At 03:32:34Z,
+# after `git merge --ff-only origin/main` IN THE WORKTREE and nothing else, it read LIVE_ADDS=3
+# LIVE_STALE=14. Across that window deploy-parity-assert read 0 MISSING at both moments and
+# deploy-link-parity read "468 linked · 0 staged-pending · 10 live-extra · 55 unmapped · 2
+# actionable" at both, and the sanctioned converge ran between them and DECLINED to advance (no GREEN
+# tree is a descendant of live HEAD). The live layer was byte-identical on both sides of a change
+# that moved two of this ledger's fields.
+#
+# LIVE_STALE has the same right operand (:1173, :1190) and its header says so in its own words —
+# "HEAD is ours by construction". This block did not, and the sentence at :1122 below still claims
+# the tree diff "IS the inertness question itself". It is that question asked about OUR tree; the
+# inertness question is asked about the LANDED one, and the two coincide only while the session sits
+# exactly at trunk.
+#
+# RE-DENOMINATING ON TRUNK IS NOT THE REPAIR, and that was measured rather than reasoned (method
+# 213). At the moment above, the trunk form reads 3 where the shipped form reads 2, and BOTH of the
+# extra paths are ones the live layer will never carry — docs/ and tests/ are in no linked top-level
+# — i.e. exactly the false positive backlog 4e6a51df2a84 already owns. It trades a variable wrong
+# answer for a stable one. What survives the swap is the candidate below whose LAST suppressor tests
+# the live FILESYSTEM: measured at both right operands it read 0 and 0, while the shipped form read
+# 2 and 3 and a re-denominated-only form read 14 and 15. Being invariant to an ordinary `git pull` is
+# a property no arithmetic over two refs can have, and it is the strongest argument for that
+# candidate that the harness has produced. tests/wrap-ledger.bats section 2c-R pins both states.
+#
 # FOR A FIXER, so the next reader need not re-derive it. The DENOMINATOR this field wants is not the
 # checkout's ref but the sha the converger last actually DELIVERED, and deploy-live.sh:2061 already
 # publishes it: "$POSTLAND_DIR/deploy-last-advance", one line, "<epoch> <sha>", OUR advances only.

@@ -468,6 +468,28 @@ advance_trunk_adding() {
   git -C "$WRAP_LIVE_REPO" fetch -q origin
 }
 
+# THE RIGHT OPERAND'S LEVER (2026-09-04, recycle #295). Every helper above advances trunk from THIS
+# repo and pushes, so the session's HEAD moves WITH trunk and the two are never apart — which is the
+# one configuration in which LIVE_ADDS's right operand cannot be observed at all. This lever lands $1
+# ("add" or "edit") on trunk and then rewinds the SESSION's branch, so trunk carries the change and
+# the session has NOT pulled it. That is not an exotic state: it is the ordinary condition of any
+# worktree a sibling has landed above, and on the real box it is where this chain's sessions sit for
+# most of a link. The live clone fetches and does not move its own HEAD, exactly as the levers above
+# leave it, so the LIVE LAYER is identical in both readings and the session's HEAD is the only thing
+# that differs.
+sibling_lands_unpulled() {
+  local kind="$1" base
+  base="$(git rev-parse HEAD)"
+  if [ "$kind" = add ]; then
+    echo sibling > sibling.txt; git add sibling.txt; git commit -q -m "sibling adds a file"
+  else
+    echo sibling >> base.txt; git add base.txt; git commit -q -m "sibling edits a file"
+  fi
+  git push -q origin main
+  git reset -q --hard "$base"     # the SESSION has not pulled; trunk is one commit ahead of it
+  git -C "${WRAP_LIVE_REPO:?live repo path required}" fetch -q origin
+}
+
 # commit + push with a COMMITTER date $1 seconds in the past — the TIME-budget lever, isolated from
 # the commit-count lever (one commit of lag is far under the 25-commit default) AND from the
 # added-file lever (it appends to a tracked file; a fresh aged.txt would have breached on the ADD
@@ -602,6 +624,116 @@ mk_failed_migration() {
   [ "$status" -eq 0 ]
   [ "$(field "$output" LIVE_LAG)" = "3" ]
   [ "$(field "$output" LIVE_ADDS)" = "1" ]
+  [ "$(field "$output" RUNG)" = "🚀" ]
+}
+
+# ── 2c-R. THE RIGHT OPERAND — one live layer, read by a session that HAS pulled and one that has NOT
+# (2026-09-04, recycle #295) ──
+# LIVE_ADDS is `git diff --diff-filter=A LIVE_SHA "$HEAD_SHA"` (wrap-ledger.sh:1143), and $HEAD_SHA is
+# `git rev-parse HEAD` (:473) — the SESSION's HEAD, never trunk. Its sibling arm in the same breach
+# ladder, LIVE_LAG, is `git -C "$LIVE_REPO" rev-list --count "HEAD..$TRUNK"` (:1080) — the shared
+# CHECKOUT's distance to TRUNK, an expression in which no session appears. So the two arms are
+# denominated differently, and only the added-file arm answers a question about the reader.
+#
+# The consequence is the one these arms pin: a file that has LANDED and is absent from the live layer
+# is counted only once THIS session has pulled it. Pulling is an operation on a worktree; it delivers
+# nothing, deploys nothing, and cannot change what ~/.claude carries. #294 found the mirror image on
+# the LEFT operand — an ungated fast-forward of the shared checkout EMPTIES the window and silences a
+# true breach. Both operands are refs that move for reasons unrelated to the live layer, so this
+# field can be driven in either direction without touching the thing it reports on.
+#
+# THERE ARE TWO DISTINCT SESSION-SCOPED BLINDNESSES HERE AND THE FIRST DRAFT OF THIS SECTION CONFLATED
+# THEM. A mutant that swapped the right operand for TRUNK produced ZERO reds against the arms as first
+# written, and the rc-93 refusal is what separated them: in the "live layer sits AT my HEAD"
+# configuration the added-file read is NEVER REACHED AT ALL, because the ancestry gate above it
+# (`merge-base --is-ancestor "$HEAD_SHA" "$LIVE_SHA"`) is ALSO denominated in the session's HEAD and
+# answers LIVE_SRC=ok. So arm R1 pins a gate that declines to ask the question, and arm R2 pins the
+# operand of the question once it IS asked. They need separate mutants because they are separate
+# mechanisms, and a single arm covering both would have credited the wrong one.
+#
+# MEASURED ON THE REAL BOX the day these arms were written, and the numbers are the whole argument.
+# 03:27:20Z, worktree one commit below trunk: LIVE_ADDS=2 LIVE_STALE=13. 03:32:34Z, after
+# `git merge --ff-only origin/main` IN THE WORKTREE AND NOTHING ELSE: LIVE_ADDS=3 LIVE_STALE=14.
+# Across that window deploy-parity-assert read 0 MISSING at both moments and deploy-link-parity read
+# `468 linked · 0 staged-pending · 10 live-extra · 55 unmapped · 2 actionable` at both, and the
+# sanctioned converge ran between them and DECLINED to advance (no green descendant of live HEAD).
+# The live layer did not move. Two of the rung's inputs did.
+#
+# THESE ARMS PIN THE PRESENT BEHAVIOUR AND DO NOT ENDORSE IT. Re-denominating on trunk alone is NOT
+# the repair and was measured rather than assumed: at the same moment it reads 3 where the shipped
+# form reads 2, and BOTH of those are paths the live layer will never carry (docs/, tests/), i.e. the
+# false positive backlog 4e6a51df2a84 already owns — so that change makes the field stably wrong
+# instead of variably wrong. The candidate that survives is the one whose last suppressor tests the
+# live FILESYSTEM (drop any path already present under $HOME/.claude): measured at both operands, it
+# read 0 and 0, while the shipped form read 2 and 3 and a re-denominated one read 14 and 15. If you
+# come here to change the operand, that is the change to make, and this arm going red is the note.
+# R1 — THE GATE THAT DECLINES TO ASK. The live layer sits exactly at the session's HEAD while trunk
+# carries a landed ADD. LIVE_SRC reads `ok` — "at/above HEAD" — the added-file read is skipped, and
+# the close is ✅ over a file that is on trunk and in no tree this box can reach. The lag arm, which
+# is denominated in the checkout and trunk, already carries the distance in the same output: LAG=1
+# beside ADDS=0 and a ✅ is the two denominators disagreeing on one line.
+@test "live layer AT my HEAD while trunk carries an ADD ⇒ LIVE_SRC=ok, the add read is never reached" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  sibling_lands_unpulled add
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_SRC)" = "ok" ]    # the gate is denominated in MY head, so it says ok…
+  [ "$(field "$output" LIVE_LAG)" = "1" ]     # …while the checkout arm in the same output says 1
+  [ "$(field "$output" LIVE_ADDS)" = "0" ]    # not "no adds" — the question was never asked
+  [ "$(field "$output" RUNG)" = "✅" ]
+}
+
+# R2 — THE RIGHT OPERAND ITSELF, in the configuration the real box is in for most of a link: the live
+# layer BELOW the session's HEAD (so the gate opens and the read does run) and trunk ABOVE it (so the
+# session is behind on a landing it has not pulled). Exactly one variable moves between the two
+# readings — `git merge --ff-only origin/main` in the worktree — and the live layer and trunk are
+# untouched by it. The count the readout quotes as "N NEW file(s) are absent from the live layer"
+# changes anyway, which is the real-box measurement above reproduced deterministically.
+@test "a landed ADD the session has not pulled is uncounted until it pulls — LIVE_ADDS 1 then 2" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  advance_trunk_adding 1        # MY add: pushed, so the session sits at trunk and the live lags 1
+  sibling_lands_unpulled add    # a SIBLING's add on top, which the session does not pull
+
+  # STATE A — two files have landed and neither is in the live layer. The field says one.
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_SRC)" = "behind" ]
+  [ "$(field "$output" LIVE_LAG)" = "2" ]     # the checkout arm counts both landings…
+  [ "$(field "$output" LIVE_ADDS)" = "1" ]    # …the add arm counts only the one I happen to hold
+  [ "$(field "$output" RUNG)" = "🚀" ]
+
+  # STATE B — the session pulls. Nothing is delivered; nothing about ~/.claude changes.
+  git merge -q --ff-only origin/main
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_LAG)" = "2" ]     # unchanged — this arm never depended on the session
+  [ "$(field "$output" LIVE_ADDS)" = "2" ]    # changed — this one did
+  [ "$(field "$output" RUNG)" = "🚀" ]
+}
+
+# R3 — THE DISCRIMINATION CONTROL, and its prediction is deliberately the OPPOSITE of R2's: the same
+# lever, the same pull, the same live layer, an EDIT instead of an ADD, and the count must NOT move.
+# Without it, R2 is compatible with "pulling moves the sensor", which is not the finding — the
+# finding is that pulling moves the ADD sensor specifically, because the session's HEAD is an operand
+# of that arm and of the gate above it, and of nothing else in the ladder.
+@test "the same pull with an EDIT moves nothing — the sensitivity is the ADD arm, not the pull" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  advance_trunk_adding 1
+  sibling_lands_unpulled edit
+
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_LAG)" = "2" ]
+  [ "$(field "$output" LIVE_ADDS)" = "1" ]
+
+  git merge -q --ff-only origin/main
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_LAG)" = "2" ]
+  [ "$(field "$output" LIVE_ADDS)" = "1" ]    # same pull, same live layer, NO movement
   [ "$(field "$output" RUNG)" = "🚀" ]
 }
 
