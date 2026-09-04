@@ -182,7 +182,7 @@ EOF
   [[ "$output" == *"argv[4]=<--branch>"* ]] || false
   [[ "$output" == *"argv[5]=<feat/ordinary>"* ]] || false
   [[ "$output" == *"argv[6]=<--model>"* ]] || false
-  [[ "$output" == *"argv[7]=<claude-fable-5>"* ]] || false
+  [[ "$output" == *"argv[7]=<claude-fable-5-1>"* ]] || false
   [[ "$output" == *"argv[8]=<--effort>"* ]] || false
   [[ "$output" == *"argv[9]=<high>"* ]] || false
   # the ingest prompt has spaces and must survive as ONE element
