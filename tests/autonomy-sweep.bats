@@ -1421,3 +1421,96 @@ STUB
   # fails here, which is precisely the two-copies defect this arm exists to catch.
   ! grep -q '^ran-to-completion$' "$marker" || false
 }
+
+@test "the branch pruner and the retire pass run ONLY from the deployed copy, and the FIRST tick is a dry run" {
+  # W3 A. `scripts/branch-prune-landed.sh` and the retire pass are what stop the cloud lane's
+  # working set growing monotonically (543 pending, +23.5/day, ~400-day drain horizon measured
+  # 2026-09-04). The pruner had ZERO CALLERS since it was written; wiring it here is the fix.
+  #
+  # TWO PROPERTIES, AND THE FIRST IS A SAFETY GATE WITH A WORSE BLAST RADIUS THAN THE ONE ABOVE.
+  # The pruner DELETES REMOTE BRANCHES. A postland verifier worktree lives UNDER the config dir, so
+  # it must be refused by the same EXACT-path discriminator `_cloudret_deployed` applies to the
+  # return rail — the prefix form that preceded it admitted its own harness.
+  local cfg="$BATS_TEST_TMPDIR/cfg3"
+  local deployed="$cfg/scripts"
+  local verifier="$cfg/autonomy/postland/wt-run-88888/scripts"
+  mkdir -p "$deployed" "$verifier"
+  export CLAUDE_CONFIG_DIR="$cfg"
+  export CC_CLOUD_STATE="$BATS_TEST_TMPDIR/cloudstate3"; mkdir -p "$CC_CLOUD_STATE"
+
+  local prunerepo="$BATS_TEST_TMPDIR/prunerepo"
+  git init --quiet "$prunerepo"
+  export CC_SWEEP_PRUNE_REPO="$prunerepo"
+
+  local marker="$BATS_TEST_TMPDIR/prune-invocations"; : >"$marker"
+  local d t
+  for d in "$deployed" "$verifier"; do
+    cp "$SWEEP" "$d/autonomy-sweep.sh"; chmod +x "$d/autonomy-sweep.sh"
+    mkdir -p "$d/lib" && cp "$REPO"/scripts/lib/*.sh "$d/lib/" 2>/dev/null
+    for t in cloud-return cloud-refusal-route; do
+      printf '#!/bin/bash\nexit 0\n' >"$d/$t.sh"; chmod +x "$d/$t.sh"
+    done
+    # the stubs stand where the two ACTING tools stand — one deletes remote refs, the other writes
+    # to the declaration store — so an invocation is RECORDED rather than performed.
+    cat >"$d/branch-prune-landed.sh" <<STUB
+#!/bin/bash
+echo "prune from=$d args=\$*" >>"$marker"
+STUB
+    cat >"$d/cloud-retire-terminal.sh" <<STUB
+#!/bin/bash
+echo "retire from=$d args=\$*" >>"$marker"
+STUB
+    chmod +x "$d/branch-prune-landed.sh" "$d/cloud-retire-terminal.sh"
+  done
+
+  # THE SUBJECT: a verifier copy under the config dir must delete nothing and retire nothing.
+  "${SWEEP_TO[@]}" bash "$verifier/autonomy-sweep.sh" >/dev/null 2>&1 || true
+  ! grep -q "from=$verifier" "$marker" || false
+
+  # THE POSITIVE CONTROL, one axis moved — the path. Without it a gate that refused EVERYTHING
+  # would pass the assertion above and silently disable the whole arm.
+  "${SWEEP_TO[@]}" bash "$deployed/autonomy-sweep.sh" >/dev/null 2>&1 || true
+  grep -q "prune from=$deployed args=--dry-run --manifest" "$marker" || false
+  grep -q "retire from=$deployed args=--max" "$marker" || false
+  # THE MANIFEST IS WRITTEN OUTSIDE THE CHECKOUT. The pruner's own default is
+  # `docs/research/branch-prune-manifest-<date>.tsv`, i.e. a daily untracked file in the SHARED
+  # checkout that every other session then has to reason about.
+  ! grep -q "manifest $prunerepo" "$marker" || false
+  [ -f "$CC_CLOUD_STATE/.prune.applied-once" ]
+
+  # SECOND TICK: the marker exists, so the pruner is now allowed to delete.
+  "${SWEEP_TO[@]}" bash "$deployed/autonomy-sweep.sh" >/dev/null 2>&1 || true
+  grep -q "prune from=$deployed args=--manifest" "$marker" || false
+
+  # AND IT IS JOURNALLED — both rcs, on every tick, so "the pruner did nothing" and "the pruner was
+  # never called" can never read the same.
+  [ "$(jq -r 'select(.disposition=="cloud-retire")|.branch_prune_rc' "$CC_IDL" | tail -1)" = "0" ]
+  [ "$(jq -r 'select(.disposition=="cloud-retire")|.cloud_retire_rc' "$CC_IDL" | tail -1)" = "0" ]
+}
+
+@test "a FIRST tick that did not complete does not promote itself to a deleting pass" {
+  # The marker is the licence to delete remote refs, so it must be earned by a dry run that
+  # FINISHED. A cut or failed first pass leaving it behind would make the very next tick delete on
+  # the strength of a pass that never produced a manifest (memory: claimed-outcome-vs-checked-outcome).
+  local cfg="$BATS_TEST_TMPDIR/cfg4"
+  local deployed="$cfg/scripts"
+  mkdir -p "$deployed"
+  export CLAUDE_CONFIG_DIR="$cfg"
+  export CC_CLOUD_STATE="$BATS_TEST_TMPDIR/cloudstate4"; mkdir -p "$CC_CLOUD_STATE"
+  local prunerepo="$BATS_TEST_TMPDIR/prunerepo4"
+  git init --quiet "$prunerepo"
+  export CC_SWEEP_PRUNE_REPO="$prunerepo"
+
+  cp "$SWEEP" "$deployed/autonomy-sweep.sh"; chmod +x "$deployed/autonomy-sweep.sh"
+  mkdir -p "$deployed/lib" && cp "$REPO"/scripts/lib/*.sh "$deployed/lib/" 2>/dev/null
+  local t
+  for t in cloud-return cloud-refusal-route cloud-retire-terminal; do
+    printf '#!/bin/bash\nexit 0\n' >"$deployed/$t.sh"; chmod +x "$deployed/$t.sh"
+  done
+  printf '#!/bin/bash\nexit 1\n' >"$deployed/branch-prune-landed.sh"
+  chmod +x "$deployed/branch-prune-landed.sh"
+
+  "${SWEEP_TO[@]}" bash "$deployed/autonomy-sweep.sh" >/dev/null 2>&1 || true
+  [ ! -f "$CC_CLOUD_STATE/.prune.applied-once" ]
+  [ "$(jq -r 'select(.disposition=="cloud-retire")|.branch_prune_rc' "$CC_IDL" | tail -1)" = "1" ]
+}
