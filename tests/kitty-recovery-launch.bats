@@ -366,6 +366,45 @@ load_spawn_gui() {
   gone_out 'KITTY:'
 }
 
+# ── boot-resume-launch.sh — SURVIVABILITY (item 737525ee6892) ─────────────────────────────────────
+# `kitty @ launch … -- prog` makes `prog` the window's ROOT process: there is no shell under it, so
+# kitty destroys the window the moment that program returns, and a later `--recycle` of the pane
+# strands (pane 32, docs/research/recycle-pane-survivability-2026-08-26.md). The 2026-09-04 audit
+# found this launcher SAFE — but only because of a contract in ANOTHER file, which nothing pinned.
+# THE INVARIANT: any pane an agent may later be asked to recycle must end its command with an
+# interactive shell.
+
+@test "boot-resume-launch: SURVIVABILITY — the kitty arm hands the program the pane's ROOT argv slot" {
+  in_kitty 31
+  run env CC_RESUME_ONE_BIN=/Users/x/.reso/bin/reso-resume-one \
+      bash "$BRL" --dry-run next4 /Users/x/wt sid-123
+  [ "$status" -eq 0 ]
+  # the shape the invariant is about: everything after `--` is argv, and its first word is the root
+  echo "$output" | grep -qE 'KITTY: .* -- .*reso-resume-one'
+}
+
+@test "boot-resume-launch: SURVIVABILITY — the default program ends the pane in an interactive shell" {
+  # The subject is the program this launcher runs by DEFAULT, so first pin that the default is still
+  # reso-resume-one; otherwise this case would certify a file the launcher no longer launches.
+  run grep -cE 'RESUME_ONE=.*reso-resume-one' "$BRL"
+  [ "$status" -eq 0 ]
+  prog="$REPO/bin/reso-resume-one"
+  [ -x "$prog" ]
+  run grep -Fc 'exec "${SHELL:-/bin/zsh}" -l -i' "$prog"
+  [ "$status" -eq 0 ]
+  [ "$output" -ge 1 ]
+}
+
+@test "boot-resume-launch: SURVIVABILITY CONTROL — the same check FAILS on a program that just exits" {
+  # Without this, the case above could pass over a predicate that cannot fail (the pre-fix shape of
+  # bin/reso-resume-one, and of every launcher argv that has not adopted the invariant, is exactly
+  # this fixture).
+  printf '#!/bin/bash\nexec expect -c "spawn claude --resume; interact"\n' > "$BATS_TEST_TMPDIR/no-shell"
+  chmod +x "$BATS_TEST_TMPDIR/no-shell"
+  run grep -Fc 'exec "${SHELL:-/bin/zsh}" -l -i' "$BATS_TEST_TMPDIR/no-shell"
+  [ "$status" -ne 0 ]
+}
+
 # ── render-census.sh — the pane column ────────────────────────────────────────────────────────────
 
 # A fast, deterministic `top` (the census bounds and parses the SECOND sample only).

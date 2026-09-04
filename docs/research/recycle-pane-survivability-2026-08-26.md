@@ -108,3 +108,41 @@ about the **present**. The recycle contract depends on a fact about the **future
 will still exist after the act. A precondition nobody states is not thereby satisfied — and when the
 act that violates it also destroys the instrument that would have measured it, the failure is silent
 by construction. Ask what the pane *is* before typing something that changes what it *will be*.
+
+## AUDIT 2026-09-04 — `scripts/boot-resume-launch.sh` is SAFE, by a contract in another file
+
+Item `737525ee6892` asked for the audit the "Two things this does not fix" list deferred. (Its title
+says `bin/boot-resume-launch.sh`; the file is at `scripts/`, and this doc's own bullet inherited the
+same wrong prefix — the mechanism exists and the premise held.)
+
+The shape is confirmed identical. Its kitty arm emits, verbatim from `--dry-run`:
+
+```
+KITTY: /opt/homebrew/bin/kitty @ launch --type=os-window -- /Users/x/.reso/bin/reso-resume-one next4 /Users/x/wt sid-123
+```
+
+So the window's ROOT process is that program, exactly as on pane 32 — there is no shell under it.
+**It survives anyway, and for one reason only:** the program it launches is `reso-resume-one`
+(`scripts/boot-resume-launch.sh:89`, `RESUME_ONE="${CC_RESUME_ONE_BIN:-$HOME/.reso/bin/reso-resume-one}"`),
+whose last line has been `exec "${SHELL:-/bin/zsh}" -l -i` since change 1 above. On this box
+`~/.reso/bin/reso-resume-one` is a symlink to this repo's `bin/reso-resume-one`, so the deployed
+default and the audited file are the same bytes. The `[ ! -t 0 ]` guard on that fall-through does not
+bite here: kitty gives the launched program a pty, so stdin IS a tty.
+
+The exposure was therefore never the argv shape on its own — it was that **the launcher's
+survivability depended on a file it does not read, and nothing pinned the dependency.** Repointing
+`CC_RESUME_ONE_BIN` at a program that merely exits would have re-opened pane 32's strand silently.
+`tests/kitty-recovery-launch.bats` now pins it in three cases: the argv shape, the default program's
+fall-through (with the default itself asserted, so the case cannot certify a file the launcher no
+longer launches), and a CONTROL proving the predicate fails on the pre-fix shape. Mutating the tail
+of `bin/reso-resume-one` back to `exit "$rr_rc"` reddens case 2 alone, 22/22 → 21/22.
+
+### The invariant, stated once
+
+> **Any pane an agent may later be asked to recycle must end its command with an interactive shell.**
+
+Three sites implement it and each now names it: `bin/cc-pane-runner:46` (split path),
+`bin/reso-resume-one` tail (resume path), and `scripts/boot-resume-launch.sh`'s kitty arm, which
+inherits it rather than implementing it and says so at the launch site. The `recycle_fire`
+survivability gate remains the runtime backstop for panes that violate it — a loud refusal instead of
+a strand — but a guard is not a guarantee, and this is the rule the guard is checking for.
