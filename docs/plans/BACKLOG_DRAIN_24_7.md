@@ -86,6 +86,112 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-04 — drain recycle #299: method 271 — A ROW'S RETRACTION PATH IS A PROPERTY OF WHO
+  FILED IT, NOT OF WHETHER ITS CLAIM IS TRUE. WHEN A CLASS HAS A MECHANISED FILER, A HAND-FILED
+  INSTANCE OF THAT SAME CLASS IS IMMORTAL.** #298 established that a census's population is what its
+  WALK can reach, and repaired the tree's exonerations with a symlink-following instrument. Its lead
+  for me was to re-ask every "nothing / nobody / nowhere" sentence with that instrument. I did, and
+  the sentences came back honest — but the FIRST question I asked of the repaired instrument was
+  what set its own three walked directories are, and the answer opened the link. **That is the
+  fifth consecutive link on which the predecessor's named target was not itself the defect and the
+  target's own INSTRUMENT was** — #297's *ask what its instrument cannot see*, #298's *ask what
+  POPULATION it walks*, and now: **ask who CHOSE the walk's roots, because a root set is a
+  population claim nobody derived.**
+  · **THE ROOT SET, DERIVED FROM THE REGISTRARS RATHER THAN FROM CONVENTION (11:20:01Z).** The
+  repaired instrument walks `~/.claude/{bin,scripts,hooks}` — 429 files — chosen by convention. What
+  actually executes is chosen by the REGISTRARS: `settings.json` (86 command-bearing objects) and 33
+  launchd plists. Of **71** registered paths, **68 INSIDE** that walk, **1 OUTSIDE**
+  (`~/.claude/statusline.sh`), 2 mis-classified by an instrument fault of mine. **Every INSIDE path
+  is returned by the walk (0 missed), so #298's repair is SOUND and its root choice is very nearly
+  complete.** My written prediction that the outside set would carry a signal-sender token was
+  **REFUSED at rc 93 — it carries none.** ⚠️ **A refusal that VALIDATES the thing you were trying to
+  extend is still a result, and it is the one nobody writes down.**
+  · 🚨 **BUT THE REGISTRAR QUESTION HAS A SECOND ANSWER, AND IT IS THE LINK.** This session runs with
+  `CLAUDE_CONFIG_DIR=/Users/chrisren/.claude-next`. That is **a fifth independent registrar**, and
+  the fleet has five: `~/.claude` · `.claude-next` · `.claude-secondary` · `.claude-tertiary` ·
+  `.claude-quaternary`, each carrying its OWN real `settings.json` (36,604 / 35,820 / 36,483 /
+  36,513 / 36,527 bytes — distinct files, not symlinks). **62 of `.claude-next`'s 64 program words
+  are ABSOLUTE paths into `~/.claude/hooks/`, so the FILES are shared and the REGISTRATIONS are
+  not.** Measured: **6 hooks are registered in `~/.claude/settings.json` and in no form in
+  `.claude-next`** — `cc-unattended-ask-guard.sh` · `coldcompile-admit.sh` · `pr-gate.sh` ·
+  `session-deregister.sh` · `desk-brief-inject.sh` · `handed-off-session-guard.sh` — and all six are
+  **deployed, linked, byte-current and returned by the live walk.** 🚨 **DEPLOYMENT AND REGISTRATION
+  ARE TWO POPULATIONS AND EVERY INSTRUMENT THIS CHAIN OWNS MEASURES THE FIRST:** `deploy-link-parity`
+  counts links, the ledger's `LIVE_*` counts commits and adds, and #298's walk counts files. **A file
+  can be 100% live and 0% wired, and nothing in that stack can tell the difference.** My prediction
+  that the drift would be worse at the (event, matcher, command) TUPLE level than at the program-word
+  level was **REFUSED (6 and 6)**: the drift is six WHOLE registrations, not a rewiring.
+  · ✅ **AND THE TREE ALREADY OWNS THE DETECTOR — method 213 paid again, and this is why the finding
+  is NOT "nobody checks this".** `scripts/settings-drift-assert.sh` (248 lines, READ-ONLY by its own
+  header) compares all five registries, normalises hook commands to basename+args so path spelling
+  cannot hide a match, exits **1** today with **exactly those six** lines, and its own `--selftest`
+  is **GREEN at 15/15**. It is registered in **0 of 5** `settings.json` — but it is NOT inert: it is
+  invoked every 300 s from `scripts/autonomy-sweep.sh:1199` under `com.chrisren.autonomy-sweep`,
+  which its own comment block explains was chosen because the nightly-regression plist is not loaded
+  and wiring it there *"would have moved it from one inert home to another while reading like a
+  fix."* **RUN THE REASON BEFORE YOU FILE A NO-CALLER CLAIM: mine would have been false.**
+  · 🚨 **THE FINDING IS THE PAIR, AND IT IS TWO ROWS OF ONE CLASS FILED TWELVE DAYS APART.**
+  `02e67ee88123` (OPEN) was filed BY that detector: condition key `settings-drift-across-config-dirs`,
+  and its **stored falsifier IS the detector**, so it retracts itself the moment the dirs agree. Its
+  `lastTs` is **2026-09-04T02:27:04Z** — alive and self-maintaining. `115ee778401a` (OPEN, filed
+  2026-08-23T10:02:28Z) asserts the SAME class by hand: *"wake path is unarmable in .claude-next:
+  session-beat.sh wired in 4/5 config dirs, missing in exactly one"*. **No condition key. No stored
+  falsifier. Empty evidence. `lastTs == firstTs` — never re-touched since the minute it was filed.**
+  With no condition key the mechanised filer will never recognise it as its own, and with no
+  falsifier nothing re-asks it. **Its premise died and no sensor on this box could observe that.**
+  · ✅ **MEASURED, BY READING THE FIVE REGISTRIES RATHER THAN ANY ROW (11:24:06Z): `session-beat.sh`
+  is wired TWICE in ALL FIVE dirs, total 10, ZERO dirs missing it** — and the two registrations are
+  **byte-identical in spelling** across them (`Stop | ~/.claude/hooks/session-beat.sh stop` and
+  `UserPromptSubmit | ~/.claude/hooks/session-beat.sh prompt`), which is a stronger refutation than
+  two counts agreeing. **CONTROLS: POS `completion-assert.sh` read 1 in each of the five (total 5);
+  NEG a bogus basename read 0 in all five.** The detector names `session-beat` **0** times.
+  · ✅ **THE MOVE — ONE ROW CLOSED, THE FIRST DELIBERATE CLOSE IN THIS CHAIN SINCE #216, AND IT IS
+  #201's RULE EXACTLY: A ROW IS CLOSED ONLY WHEN ITS SURVIVING TRUE CONTENT HAS ANOTHER OWNER.**
+  `115ee778401a` open → **done** at 11:27:15Z with content evidence (3,118 chars, stored span
+  compared CHARS TO CHARS and exact, 29 literals derived from the source with **zero** zeros, a seed
+  token that must be absent reading 0, matchcount 1 on `.id` with a bogus-id NEG control at 0). Its
+  surviving content has two live owners, both re-checked rather than assumed: the wake path is
+  `292dc8686c90` (BLOCKED, operator-gated — **and its claim STILL HOLDS**: `mailbox-wake-arm.sh` is
+  registered on SessionStart only, `asyncRewake` true, in all five dirs, never on Stop), and the
+  drift class is `02e67ee88123`. **Nothing was re-filed and nothing new was minted** — the class
+  already has an open, self-falsifying owner. ⚠️ **`02e67ee88123` is on this brief's NOT-A-DRAIN-
+  PICKUP list and was READ, not worked.**
+  · 🚨 **THE POPULATION, AND IT IS THE NUMBER TO CARRY (11:24:06Z): of 373 open rows, 246 carry
+  NEITHER a condition key NOR a stored falsifier, 14 carry BOTH, and 113 carry exactly one. The
+  partition sums to 373.** **Two thirds of the open board has no retraction path at all** — not
+  because those claims are wrong, but because nothing can ever ask them again. The oldest such row
+  dates to 2026-07-26. **The discriminator is one `jq` read of `.condition` and `.falsifier`, and it
+  is unspent everywhere.** ⚠️ **The honest bound: a missing falsifier is not evidence a row is
+  stale — it is evidence that staleness would be UNOBSERVABLE. I refuted exactly one premise, by
+  hand, and 245 remain unasked.**
+  · ⚠️ **FOUR INSTRUMENT FAULTS, ALL MINE, NONE IN A SUBJECT, AND THREE SURFACED AS A REFUSAL.**
+  (1) My registrar extractor field-split the `settings.json` arm and did NOT field-split the launchd
+  arm, so two `bash -lc` COMMAND STRINGS were classified `MISSING` — **the partition summed
+  perfectly (71 == 71) while one arm mislabelled every row it held.** Caught by READING the MISSING
+  list, never by a count; both named files that exist. **Two arms of one classifier must normalise
+  identically or they are answering different questions** — #241's second column, one link's shape
+  later. (2) The outside-set signal-sender prediction, refused. (3) The tuple-vs-word prediction,
+  refused. (4) A `sed` path typo in a display arm, caught by reading the script before running it.
+  · ✅ **AND #298's CONTRAST REPRODUCED INDEPENDENTLY, WHICH IS WHAT MAKES IT A MEASUREMENT: asking
+  the live layer for `postland-verify`, `grep -R` reaches 0 files and `find -L … -exec grep -l`
+  reaches 40, with a direct read of `postland-verify.sh` finding the needle 72 times.** **The null
+  from the recursive form is still not absence; it is still silence.**
+  · ✅ **THE LEAD-0 SCREEN ITSELF CAME BACK HONEST, WITH A CONTROL THAT FIRES** — nine absence
+  sentences in `scripts/ bin/ hooks/`, each read and each correctly scoped or correctly dated; and
+  two "zero callers" claims re-asked against the live layer both read **4**, in each case because
+  the sentence carries its measurement date and the world moved after it. **A screen that returns
+  nothing WITH a firing control is a result; the same nothing without one is not.**
+  · **BOARD at 11:14:12Z: 373 open / 241 blocked / 2,390 done / 5 claimed, 3,009 rows, both
+  partitions asserted.** Against #298's floor (11:09:48Z): ZERO arrivals, ZERO departures, **ONE
+  transition** — `a507762b0a0d` open → claimed, `claude-infrastructure`, **not mine**. **Lane at my
+  open: `RUNG=✅ LIVE_LAG=4 LIVE_ADDS=0 LIVE_STALE=1 LIVE_AGE=18740 LIVE_BREACH_WHY=` empty,
+  `GATE=stale`.** `deploy-link-parity` rc 1, **468 linked · 0 staged-pending · 10 live-extra · 55
+  unmapped · 2 actionable**, the same two standing strays, and its reference sentence read **4**
+  commits behind against #298's 15 → 4. **All four executing blobs I check read SAME on both sides,
+  including `wrap-ledger.sh`, which DIFFERED at #298's open** — the checkout caught up, not my diff.
+  **Post-land RED pages 3 over 65 `.page` at 11:14:27Z; STAMPS 559; inbox-guard 439; STATE dir
+  all=2,884 = 590 store + 2,294 in one live `wt-run-*`.** **qos diff rc 0, 0 bytes.** **Kitty pane 27,
+  exactly one object, cwd the worktree, bogus-id NEG control 0.**
 - **2026-09-04 — drain recycle #298: method 270 — A CENSUS'S POPULATION IS NOT ITS PATHSPEC, IT IS
   WHAT ITS WALK CAN REACH. AND A REPAIR TO AN INSTRUMENT IS ITSELF AN INSTRUMENT CLAIM THAT NOBODY
   RE-RUNS.** ZERO rows closed, ZERO filed, ZERO reopened, ZERO updated. #297 fixed the SPELLING a
