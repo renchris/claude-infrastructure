@@ -174,6 +174,19 @@ if [ "$IN_KITTY" = 1 ]; then
   # $cwd is passed to reso-resume-one ALWAYS (even empty, matching the AppleScript arm's shq ''),
   # but only becomes --cwd when it is a real directory: kitty refuses to launch on a bad --cwd, and
   # a resume that could have run in $HOME must not die over the working directory.
+  #
+  # ── SURVIVABILITY: THE PANE MUST OUTLIVE THE SESSION IN IT ─────────────────────────────────────
+  # The same "argv, not a typed command line" property makes this window's ROOT process the program
+  # below rather than a shell, and kitty destroys a window whose root has exited — which is how a
+  # later `--recycle` of such a pane becomes a silent strand (pane 32,
+  # docs/research/recycle-pane-survivability-2026-08-26.md).
+  # AUDITED 2026-09-04 (item 737525ee6892): this arm is SAFE, and only because the program it
+  # launches ends in `exec "${SHELL:-/bin/zsh}" -l -i` when the resumed session ends
+  # (bin/reso-resume-one, tail). That is a CROSS-FILE contract this file cannot see, so it is PINNED
+  # by tests/kitty-recovery-launch.bats ("SURVIVABILITY") rather than left to this comment.
+  # THE INVARIANT, once: any pane an agent may later be asked to recycle must end its command with an
+  # interactive shell — bin/cc-pane-runner:46 states it for the split path, bin/reso-resume-one's tail
+  # for the resume path. Repointing CC_RESUME_ONE_BIN at a program that merely exits re-opens it.
   KARGS=(launch --type=os-window)
   { [ -n "$cwd" ] && [ -d "$cwd" ]; } && KARGS+=(--cwd "$cwd")
   KARGS+=(-- "$RESUME_ONE" "$acct" "$cwd" "$sid")
