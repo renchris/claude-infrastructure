@@ -1046,6 +1046,14 @@ land_cost_of() { # <file> → the seconds field of a cost sidecar
 @test "THE PRICE SURVIVES THE KILL — a land cut mid-flight leaves a floor on disk, and the next pass reads it back" {
   declare_managed
   seen_at 1000
+  # 🚨 THE GLOBAL PRICE IS SEEDED, AND IT IS WHY THIS ARM STILL DEFERS. The floor written before a
+  # land used to be the whole remaining bound (~899 s here), which is what made a cut price the lane
+  # out of landing for six hours — see the capped-floor arm below. It is now capped at the GLOBAL
+  # observed price, so this arm has to say what that global is: 800 s, a real prior measurement (the
+  # live rail's smoke phase alone ran 1081 s this week). Without the seed the cap falls to the
+  # unmeasured stand-in (194 s) and the next pass would correctly START the land, which would be a
+  # different arm testing a different thing.
+  printf '%s 800\n' "$(date +%s)" >"$CC_CLOUD_STATE/.return.land_cost"
   # 🚨 THE PASS ITSELF MUST DIE, AND THE FIRST CUT OF THIS ARM DID NOT KILL IT. Running the fixture
   # under `timeout -k 2 6` looked faithful and was not: `timeout` signals the whole process GROUP
   # (docs/plans/DRAIN_CIRCUIT_2026-09-01.md §3e), so the lander died, the pass observed rc 143, took
@@ -1104,6 +1112,79 @@ land_cost_of() { # <file> → the seconds field of a cost sidecar
   # every later land at the whole bound and defer it forever.
   [ "$(land_cost_of "$CC_CLOUD_STATE/session_test.land-cost")" -lt 60 ]
   [ "$(land_cost_of "$CC_CLOUD_STATE/.return.land_cost")" -lt 60 ]
+}
+
+@test "a CUT land cannot price itself above the GLOBAL — the floor is capped, so one cut costs a tick, not six hours" {
+  declare_managed
+  seen_at 1000
+  # THE MEASURED DEFECT (docs/research/backlog-zero-2026-09-04/cloud-lane.md §2 #2). The pre-land
+  # floor was `BOUND_S - elapsed`, so a cut against a 720 s budget recorded ~652 s — and that figure
+  # was MAX-ed into the affordability test at the SAME 6 h TTL as a completed measurement. From the
+  # live ledger:
+  #   {"outcome":"land-deferred","elapsed_s":94,"budget_s":720,"land_reserve_s":652,
+  #    "land_cost_s":652,"fits_bound":true}
+  # A land refused at 94 s of a 720 s budget — 626 s left — because a cut had priced it at 652,
+  # while the global observed price was a healthy 194.
+  printf '%s 194\n' "$(date +%s)" >"$CC_CLOUD_STATE/.return.land_cost"
+  export MARK="$BATS_TEST_TMPDIR/landing2"
+  export LANDPID="$BATS_TEST_TMPDIR/landpid2"
+  printf '#!/usr/bin/env bash\necho $$ >"$LANDPID"\ntouch "$MARK"\nsleep 20\n' >"$STUBDIR/hang-reconcile2.sh"
+  chmod +x "$STUBDIR/hang-reconcile2.sh"
+
+  CC_RETURN_RECONCILE_BIN="$STUBDIR/hang-reconcile2.sh" CC_RETURN_BOUND_S=900 \
+    CC_RETURN_LAND_RESERVE_S=1 CC_RETURN_NOW=999999 \
+    bash "$SUT" --sweep --limit 5 >/dev/null 2>&1 &
+  victim=$!
+  for _ in $(seq 1 100); do [ -f "$MARK" ] && break; sleep 0.1; done
+  [ -f "$MARK" ] || skip "the land never started — this arm needs a pass to kill mid-land"
+  kill -9 "$victim" 2>/dev/null || true
+  wait "$victim" 2>/dev/null || true
+  kill -9 "$(cat "$LANDPID" 2>/dev/null)" 2>/dev/null || true
+
+  # (1) THE FLOOR IS STILL WRITTEN — the observation a killed process could never take afterwards.
+  [ -f "$CC_CLOUD_STATE/session_test.land-cost" ]
+  echo "C | after the cut, session_test.land-cost = $(cat "$CC_CLOUD_STATE/session_test.land-cost")" >&3
+  # (2) AND IT DOES NOT EXCEED THE GLOBAL. Pre-fix this read ~899; the whole remaining bound.
+  [ "$(land_cost_of "$CC_CLOUD_STATE/session_test.land-cost")" -le 194 ]
+  # (3) THE PROVENANCE IS ON THE RECORD, so the shorter shelf life is not a hidden rule: a bound
+  # written before the work is marked `floor`, a duration measured after it is not.
+  grep -q ' floor$' "$CC_CLOUD_STATE/session_test.land-cost"
+
+  # (4) THE OBSERVABLE CONSEQUENCE. The next tick, with 900 s of budget and a 194 s price, STARTS
+  # the land instead of refusing it — which is the 626-s-left refusal, undone.
+  rm -rf "$CC_CLOUD_STATE/.return.lock"
+  : >"$CALLS"
+  CC_RETURN_BOUND_S=900 CC_RETURN_LAND_RESERVE_S=1 CC_RETURN_NOW=999999 run bash "$SUT" --sweep --limit 5
+  [ "$status" -eq 0 ]
+  [ "$(reconcile_calls)" = "1" ]
+  [[ "$output" != *"NOT starting the land"* ]] || false
+}
+
+@test "a floor EXPIRES on its own short TTL — a lower bound on an unknown must not outlive a measurement" {
+  # COST_TTL_S is 6 h because a completed land measured 194 s BECAUSE a land took 194 s. A floor
+  # says "at least this much" about a land that never finished, and giving the two the same shelf
+  # life is half of what made one cut cost the lane a quarter of a day.
+  declare_managed
+  seen_at 1000
+  # A floor of 1400 s, written 20 minutes ago: past FLOOR_TTL_S (900) and far inside COST_TTL_S.
+  printf '%s 1400 floor\n' "$(( $(date +%s) - 1200 ))" >"$CC_CLOUD_STATE/session_test.land-cost"
+  CC_RETURN_BOUND_S=900 CC_RETURN_LAND_RESERVE_S=1 CC_RETURN_NOW=999999 run bash "$SUT" --sweep --limit 5
+  [ "$status" -eq 0 ]
+  [ "$(reconcile_calls)" = "1" ]
+  [[ "$output" != *"NOT starting the land"* ]] || false
+}
+
+@test "THE CONTROL for the floor TTL: the SAME value, same age, WITHOUT the floor mark, still binds" {
+  # One axis moved — the provenance field. If the expiry above came from the age alone rather than
+  # from the mark, this arm would also start the land and the shorter TTL would be testing nothing
+  # (memory: positive-control-the-denominator).
+  declare_managed
+  seen_at 1000
+  printf '%s 1400\n' "$(( $(date +%s) - 1200 ))" >"$CC_CLOUD_STATE/session_test.land-cost"
+  CC_RETURN_BOUND_S=900 CC_RETURN_LAND_RESERVE_S=1 CC_RETURN_NOW=999999 run bash "$SUT" --sweep --limit 5
+  [ "$status" -eq 0 ]
+  ! grep -q '^reconcile ' "$CALLS" || false
+  [[ "$output" == *"NOT starting the land"* ]] || false
 }
 
 @test "a LAND never enters the NON-LANDING price — the two populations are priced apart" {
