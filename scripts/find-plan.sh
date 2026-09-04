@@ -48,7 +48,14 @@ plan_status() {
   [[ -n "$val" ]] || { printf 'unknown\n'; return 0; }
   val=${val#*:}
   val=$(printf '%s' "$val" | tr -d ' \t"'\''`' | tr '[:upper:]' '[:lower:]')
-  case "$val" in in_progress) val=in-progress ;; completed) val=complete ;; esac
+  # `done` is an ALIAS, not a fifth state, and it is the one that has actually cost something.
+  # STOP_CHAIN_WAVE2.md closed itself with `status: done` on 2026-09-03; `done` fell through to
+  # `unknown`, so plan-phase-scan.sh's --falsify arm (a) never retracted and the finished plan's
+  # backlog row re-dispatched a cloud session on 2026-09-04 to re-derive work already on trunk.
+  # The silence is the defect: `unknown` fails toward "still open", which no consumer can see.
+  # This repo's own terminal vocabulary is `done` everywhere (`cc-backlog done`, "row done"), so
+  # the collision is structural rather than a typo — hence an alias, exactly as `completed` is.
+  case "$val" in in_progress) val=in-progress ;; done|completed) val=complete ;; esac
   case "$val" in
     open|in-progress|complete|superseded) printf '%s\n' "$val" ;;
     *) printf 'unknown\n' ;;

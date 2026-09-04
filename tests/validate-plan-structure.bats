@@ -39,6 +39,48 @@ drive() { printf '{"tool_input":{"file_path":"%s"}}' "$1" | bash "$HOOK" 2>&1; }
   [ "$status" -eq 2 ]
 }
 
+# ── status ALIASES: this hook and find-plan.sh's plan_status() must agree ──────────────────────
+# A disagreement means a plan is complained about here while being read as `unknown` there — the
+# split that let STOP_CHAIN_WAVE2.md close itself into a state no consumer could see (2026-09-03).
+#
+# These drive the file through a GIT-BACKED dir, and that is load-bearing rather than incidental.
+# `is_new_plan` answers from git when one is present and only otherwise reaches
+# `stat -f %m` — the BSD form. Under GNU stat that reads `%m` as a filesystem operand, fails, and
+# prints a multi-line report on STDOUT, so `mt` becomes text beginning `File:` and `$(( now - mt ))`
+# dies on `set -u` ("File: unbound variable", exit 1). On a Linux runner the whole gate is therefore
+# DEAD for a non-git plan dir, and an assertion made there would pass VACUOUSLY on both branches —
+# the silent-green trap §W5 of STOP_CHAIN_WAVE2 names by hand. Going through git keeps these honest
+# on either platform. (The stat portability defect is pre-existing on trunk and filed separately;
+# it is not what these tests are about.)
+
+alias_drive() {  # <status-value> → hook output for an UNTRACKED plan carrying that status
+  local v="$1" repo="${BATS_TEST_TMPDIR:?}/alias-$2"
+  mkdir -p "$repo/docs/plans"; git -C "$repo" init -q
+  local f="$repo/docs/plans/p.md"; printf -- '---\nstatus: %s\n---\n# Plan\n' "$v" > "$f"
+  drive "$f"
+}
+
+@test "negative control: an unrecognised status still complains (proves the assertion is live)" {
+  run alias_drive wibble neg
+  echo "$output" | grep -q 'PLAN STATUS'
+}
+
+@test "control: alias 'completed' draws no status complaint (green on both branches)" {
+  run alias_drive completed ctl
+  ! echo "$output" | grep -q 'PLAN STATUS'
+}
+
+@test "alias 'done' draws no status complaint, matching plan_status()'s normalization (the arm)" {
+  run alias_drive done arm
+  ! echo "$output" | grep -q 'PLAN STATUS'
+}
+
+@test "the schema NAMED to the author stays the canonical four — 'done' is accepted, not advertised" {
+  run alias_drive wibble adv
+  echo "$output" | grep -qE 'open\|in-progress\|complete\|superseded'
+  ! echo "$output" | grep -qE '\|done\|'
+}
+
 @test "pre-existing (git-tracked) plan lacking status → WARNS, exit 0 (no retro-break)" {
   # `git -C ""` is a NO-OP, not an error — an unset tmpdir would write this identity into the cwd repo.
   repo="${BATS_TEST_TMPDIR:?}/tracked"; mkdir -p "$repo/docs/plans"

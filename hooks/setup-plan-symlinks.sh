@@ -57,7 +57,7 @@ project_files() {
 # was this hook's entire 0.5s SessionStart cost. The grammar matches the plan_status
 # copies in find-plan.sh / validate-plan-structure.sh: first line must be `---`; the
 # first `status:` line (case-insensitive) before the closing `---` wins; strip
-# space/tab/quote/backtick, lowercase; `completed`→complete; only complete|superseded
+# space/tab/quote/backtick, lowercase; `completed`/`done`→complete; only complete|superseded
 # CLOSE a plan — everything else (open, in-progress, junk, no frontmatter, and a
 # 0-byte file awk never visits) stays OPEN, exactly as before (anti-FM1).
 PROJ_LIST="$(project_files)"
@@ -74,7 +74,7 @@ if [ -n "$PROJ_LIST" ]; then
         fm && st=="unknown" && tolower($0) ~ /^status:/ {
             v=$0; sub(/^[^:]*:/, "", v)
             gsub(/[[:space:]"]|'\''|`/, "", v); v=tolower(v)
-            if (v=="completed") v="complete"
+            if (v=="completed" || v=="done") v="complete"
             if (v=="complete" || v=="superseded") st=v
             nextfile
         }

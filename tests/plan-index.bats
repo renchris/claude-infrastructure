@@ -139,6 +139,39 @@ sym_ctx() {
   echo "$output" | grep -qE 'Plans: 1/3'          # 1 open of 3 total
 }
 
+# The awk counter here is the third copy of the status grammar (find-plan.sh's plan_status() and
+# validate-plan-structure.sh's has_valid_status() are the others), and the three must agree on the
+# ALIASES. A terminal plan the counter cannot recognise is counted as OPEN — the anti-FM1 default,
+# right in general and wrong here, because it reports standing work that does not exist.
+# `completed` is the control: aliased on both branches. `done` is the arm.
+
+@test "count: alias 'completed' is terminal (control — green on both branches)" {
+  proj="$BATS_TEST_TMPDIR/alias-ctl"; mkdir -p "$proj/docs/plans"
+  printf -- '---\nstatus: completed\n---\n# Done\n' > "$proj/docs/plans/a.md"
+  printf -- '---\nstatus: open\n---\n# Live\n'      > "$proj/docs/plans/b.md"
+  echo '{"version":1,"plans":{}}' > "$CC_PLAN_INDEX"
+  run sym_ctx "$proj"
+  echo "$output" | grep -qE 'Plans: 1/2'
+}
+
+@test "count: alias 'done' is terminal, not open work (the arm — was counted 2/2)" {
+  proj="$BATS_TEST_TMPDIR/alias-done"; mkdir -p "$proj/docs/plans"
+  printf -- '---\nstatus: done\n---\n# Done\n' > "$proj/docs/plans/a.md"
+  printf -- '---\nstatus: open\n---\n# Live\n' > "$proj/docs/plans/b.md"
+  echo '{"version":1,"plans":{}}' > "$CC_PLAN_INDEX"
+  run sym_ctx "$proj"
+  echo "$output" | grep -qE 'Plans: 1/2'
+}
+
+@test "count: the alias is terminal ONLY — 'donezo' still counts as open (anti-FM1 preserved)" {
+  proj="$BATS_TEST_TMPDIR/alias-neg"; mkdir -p "$proj/docs/plans"
+  printf -- '---\nstatus: donezo\n---\n# Junk\n' > "$proj/docs/plans/a.md"
+  printf -- '---\nstatus: open\n---\n# Live\n'   > "$proj/docs/plans/b.md"
+  echo '{"version":1,"plans":{}}' > "$CC_PLAN_INDEX"
+  run sym_ctx "$proj"
+  echo "$output" | grep -qE 'Plans: 2/2'
+}
+
 @test "count: all-projects total comes from the index" {
   proj="$BATS_TEST_TMPDIR/acc"; mkdir -p "$proj/docs/plans"
   echo "# P" > "$proj/docs/plans/p.md"

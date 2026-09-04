@@ -75,3 +75,36 @@ list_open() { bash "$FP" --list-open; }
   [ "$status" -eq 0 ]
   echo "$output" | grep -q '# Alpha'
 }
+
+# ── terminal-status ALIASES ───────────────────────────────────────────────────────────────────
+# A terminal plan spelled with an alias must read as terminal, not as UNKNOWN. `unknown` is not a
+# neutral answer here: it fails toward "still open", and nothing downstream can tell an unparseable
+# status from a live one. That is what happened to STOP_CHAIN_WAVE2.md — closed 2026-09-03 with
+# `status: done`, read as `unknown`, so plan-phase-scan.sh --falsify never retracted and the row
+# re-dispatched a cloud session to re-derive work already landed on trunk.
+#
+# `completed` is the CONTROL: aliased before this change and after, so it is green on both branches
+# and proves the test is wired to something. `done` is the ARM that moves.
+
+@test "control: 'completed' is terminal (green on both branches — proves the harness is wired)" {
+  printf -- '---\nstatus: completed\n---\n# CtlAlias\n' > "$PB/docs/plans/ctl-alias.md"
+  [ "$(bash "$FP" --status "$PB/docs/plans/ctl-alias.md")" = complete ]
+  run list_open
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -q 'ctl-alias\.md'
+}
+
+@test "'done' is terminal, not UNKNOWN (the arm: was 'unknown' and listed as open work)" {
+  printf -- '---\nstatus: done\n---\n# DoneAlias\n' > "$PB/docs/plans/done-alias.md"
+  [ "$(bash "$FP" --status "$PB/docs/plans/done-alias.md")" = complete ]
+  run list_open
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -q 'done-alias\.md'
+}
+
+@test "the alias is terminal ONLY: 'donezo' still reads UNKNOWN, never complete" {
+  printf -- '---\nstatus: donezo\n---\n# NotAnAlias\n' > "$PB/docs/plans/donezo.md"
+  [ "$(bash "$FP" --status "$PB/docs/plans/donezo.md")" = unknown ]
+  run list_open
+  echo "$output" | grep -qE 'UNKNOWN.*donezo\.md'
+}

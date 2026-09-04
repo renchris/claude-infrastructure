@@ -23,6 +23,12 @@ PLANS_DIR="${CC_PLANS_DIR:-$HOME/.claude/plans}"
 
 # has_valid_status <file> → 0 if frontmatter carries status: <one of the 4 values>.
 #
+# ACCEPTED here but deliberately NOT advertised in the messages below: the aliases `in_progress`,
+# `completed` and `done`, matching what find-plan.sh's plan_status() normalizes. The messages keep
+# naming the canonical four so authors write those; the alternation stays wider so a plan spelled
+# `done` is not simultaneously warned about by this hook AND read as `unknown` by the enumerator —
+# the split that let STOP_CHAIN_WAVE2.md close itself into a state no consumer could see (2026-09-03).
+#
 # THE GREP DRAINS (`grep -iE … >/dev/null`, not `grep -qiE …`) and that is load-bearing, not style.
 # This pipeline is the FINAL command of the function, so its status IS what `! has_valid_status` at
 # the bottom of this file reads — the ec9a43a9 scar moved one frame up. `-q` exits on the match, sed
@@ -34,7 +40,7 @@ has_valid_status() {
   local f="$1"
   head -1 "$f" 2>/dev/null | grep -qx -- '---' || return 1
   sed -n '2,/^---$/p' "$f" 2>/dev/null \
-    | grep -iE '^status:[[:space:]]*(open|in-progress|in_progress|complete|completed|superseded)([[:space:]]|$)' >/dev/null
+    | grep -iE '^status:[[:space:]]*(open|in-progress|in_progress|complete|completed|done|superseded)([[:space:]]|$)' >/dev/null
 }
 
 # is_new_plan <file> → 0 if the file is NEW (git-untracked, else mtime-fresh).
