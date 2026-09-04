@@ -104,6 +104,27 @@ mints follow-ons the drains cannot keep up with. The telemetry that would have s
 
 ## §4 Status log (INTEGRATE-only; newest first)
 
+- **2026-09-04 15:55Z — W2b and W3 RETURNED and are on trunk (content-verified by ancestry).**
+  W2b (`c36876297` · `7e567755b` · `4c60e8943` · `39b409a72`): the re-land probe is stored at the
+  durable path (rc-127 probes **47/48 → 0/45**), the premise pass's close cap 5 → 25 (a pass now runs
+  196 s, rc 0, at cap), the plan-open retractor reaches `claimed`, and `find-plan.sh` learned the
+  `done` status word; **24 rows closed, 8 unblocked** — two research candidates refuted in-session
+  (only 8 of the 31 "mis-filed" blocked rows were agent-runnable; `a507762b0a0d` was stuck on
+  `find-plan.sh`, not on its claim). W3 (`e39aa0be1` retire pass · `124c4da06` admission gate +
+  `CC_DISPATCH_CLOUD_PENDING_MAX` · `e467896cc` price floor · `8ce30f3ac` rc propagation ·
+  `11f50d340` thrash recovery wired): 431/431 across 21 touched files; **not live until the
+  postland stamp goes green** (its new `scripts/cloud-retire-terminal.sh` has no symlink, so the
+  sweep's `[ -x ]` guard skips it — `LIVE_ADDS=3`); once live, `pending_unlanded` 575 vs cap 50 makes
+  the first dispatch pass refuse ALL cloud fires, which is the designed arithmetic. One row filed:
+  `a3d2640f9792` (re-auth next3, `--run cc-relogin next3`).
+  **Telemetry at 15:53Z:** today filed 34 / closed 33; rolling 7-day filed 115 / closed 78 / net +37
+  (was +54 at 11:27Z); claim→done conversion 17.8% (was 8.6%); LIVE 597 (was 612; peak 617). Lane
+  attribution: `session` 103 (was 81 — W2b), `sweep` 14, `local-drain` still 65 — lane infra #300 has
+  held ONE row (`07ac6d58d88d`, the cc-pane send-verb fix) for 3 h without a close, and lane reso #1
+  has claimed nothing in 2.5 h (diagnosis in the next entry). W2a is still out (3 commits on its
+  branch, landing). The old chain's #301 landed an 8-line entry "in the convention
+  scripts/drain-brief.template.md:62" and calls itself "the last link of the pane-27 chain".
+
 - **2026-09-04 13:25Z** — Second-project lanes landed (`173a7ff34`): the brief takes its gate and
   landing rail per project (`{{GATE_CMD}}` / `{{LAND_CMD}}` / `{{ENTRY_STEP}}`), the drain scripts are
   called from `{{INFRA}}`, and `--first` cuts the worktree from the project's own checkout (`--repo`).
