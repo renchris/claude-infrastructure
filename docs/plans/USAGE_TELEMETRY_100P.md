@@ -1882,6 +1882,54 @@ the evaluation instant.
 routes nothing, which is the L3 exception argued in §5.2 S5 and the reason it is a flag on the same
 binary rather than a `scripts/*.sh` the live layer could not reach.
 
+#### S7 · M1 `burn_5h_ewma_ph` — correctness and availability — LANDED (wave 2, 2026-09-04)
+
+`bin/claude-accounts`: `burn_5h_ewma_ph(samples_for_acct, now)` beside its weekly twin, constants
+`SU_EWMA_LOOKBACK_H = 6.0` / `SU_EWMA_HL = 1.0` / `SU_EWMA_MIN_SPAN_H = 1.3` /
+`SU_EWMA_BLIND_PCT = 40.0`; produced in `apply_burn` beside the `burn_5h_ph` block (**not**
+replacing it); consumed by `_su_projected`, which prefers it and divides by 100.
+RP-27 **updated in place** and RP-28 added in `tests/claude-accounts-core.bats` — **2/2 RED**
+against the S5 binary, 90 cases green after.
+
+**Both named hazards are pinned as tests, because both produce a plausible wrong number rather
+than a failure.**
+
+*The UNIT.* RP-28 is the only place a missing `/100` is caught: `su + b * ahead` = `0.20 + 60 × 1.0`
+saturates through `min(1.0, …)` to **1.0 on every row**, and the router then reads *every account
+is under 5h pressure*. Every other case in the suite passes under that bug. The case asserts
+**0.80**, and separately that the EWMA WINS when both keys are stamped — a fallback that quietly
+outranked its replacement would make S7 a no-op nobody noticed.
+
+*The ROLL SPELLING.* `_rolled` keys on `_reset_key`, which **rounds**; under truncation the roll
+branch fires on 46.0% of adjacent pairs and injects an absolute level as a delta, degrading MAE
+0.0282 → **0.2110**, i.e. 5.4× worse than the incumbent it replaces. RP-27's fixture now rolls
+every 1.6 h with **both** witnesses agreeing (the meter goes backwards *and* the stamp jumps), so a
+one-witness implementation does not pass silently.
+
+**Deviation 1 — `burn_5h_ph` is kept, not replaced.** §5.2's heading says *replaces*; its own body
+says keep the old key populated for one release. Both are honoured: the incumbent still computes,
+`_su_projected` falls back to it when the EWMA abstains, and RP-28 pins that fallback so nothing
+goes blind on the day this lands.
+
+**Deviation 2 — RP-27's fixture is a 60 %/h ramp with rolls, not §5.3's 10→40 over 30 min.** A
+30-minute move cannot clear S7's own 1.3 h span abstain, so the sketch's fixture would have been
+testing the abstain, not the rate. The ramp asserts the same unit contrast the sketch is for —
+`burn_5h_ewma_ph` reads **60.0** (%/h) beside `burn_5h_ph` at **0.6** (fraction/h) on the same
+row — and additionally exercises the roll branch. It is also phase-shifted so the newest adjacent
+pair is mid-cycle: on a roll the incumbent reads `d < 0` and stays absent, which is its own
+documented blindness and not the thing under test here.
+
+**The blind spot ships in the docstring, as required.** At `session_pct ≥ 40` the incumbent is more
+accurate (MAE 0.0617 vs 0.0797) and this estimator over-projects by **+3.6 pp** — the burst regime,
+which is precisely the one M4′ exists to create. The direction is soften-only through `_soft`'s
+`SF` multiplier and therefore fail-safe for routing, but the number is wrong there and must not be
+quoted as accurate. §5.6 Q3 names the measurement that would fix it.
+
+**No regression in the consumers.** `account-cliff-routing` · `account-fact-derivation` ·
+`accounts-board` · `cc-wave-plan`: the set of failing cases is **bit-identical** before and after
+this diff (18 cases, all environment — this container is Linux and `/usr/bin/security` does not
+exist).
+
 #### Acceptance status against §5.4
 
 | command | status |

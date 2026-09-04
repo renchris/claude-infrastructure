@@ -1784,13 +1784,21 @@ print("OK")'
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
-@test "router M7 + S3: apply_burn attaches the new weekly keys under their OWN names, in %/h" {
+@test "router M7 + S3/S7: apply_burn attaches the new keys under their OWN names, in %/h" {
   # RP-27. THE UNIT IS THE HAZARD, and it is why this case exists separately from the assertions
   # on the incumbent keys above. burn_5h_ph is consumed by _su_projected as a FRACTION per hour
   # (su + b * ahead, su in [0,1]), so a %/h value written onto that key saturates the projection
   # to 1.0 on every row and reads as "every account is under 5h pressure" — a 100x error wearing
-  # a plausible face. The weekly EWMA therefore ships under its OWN key, in %/h, and the
-  # incumbent burn_wk_ppd stays populated beside it rather than being overwritten.
+  # a plausible face. Both EWMAs therefore ship under their OWN keys, in %/h, and the incumbents
+  # burn_wk_ppd / burn_5h_ph stay populated beside them rather than being overwritten.
+  #
+  # UPDATED IN PLACE for S7 (2026-09-04), not rewritten: the `burn_5h_ewma_ph not in r` line was
+  # a SCOPE MARKER for a later wave, not an invariant, and it is now that wave's assertion.
+  # The session meter also had to start MOVING — §5.3's sketch is a 10->40 move over 30 min, which
+  # cannot clear S7's own 1.3 h span abstain, so the fixture is a 60 %/h ramp that ROLLS every
+  # 1.6 h. That exercises the roll branch the sketch does not, and the roll spelling is the whole
+  # hazard: under truncation rather than _reset_key's rounding it fires on 46.0% of pairs and
+  # injects an absolute level as a delta, degrading MAE 0.0282 -> 0.2110.
   run python3 -c "$LOAD"'
 import json, os
 from datetime import datetime, timezone, timedelta
@@ -1799,9 +1807,17 @@ now = datetime.now(timezone.utc)
 wra = (now + timedelta(hours=100)).isoformat()
 with open(p, "w") as f:
     for i in range(240, -1, -1):                  # 24 h at 6 min, weekly 26 -> 40 = 0.583 %/h
-        f.write(json.dumps({"ts": (now - timedelta(minutes=i * 6)).isoformat(),
-                            "acct": "next3", "session_pct": 10, "weekly_pct": 26 + (240 - i) * 0.0583,
-                            "session_reset_at": None, "weekly_reset_at": wra}) + "\n")
+        j = 240 - i
+        t = now - timedelta(minutes=i * 6)
+        # session: +6 pp every 6 min = 60 %/h, rolling 96 -> 6. BOTH roll witnesses agree — the
+        # meter goes backwards AND the reset stamp jumps — so the case does not silently pass on
+        # a one-witness implementation.
+        m = (j + 5) % 16                          # phase-shifted so the NEWEST pair is mid-cycle:
+        sp = (m + 1) * 6                          # otherwise the incumbent straddles the roll,
+        sra = (t + timedelta(minutes=(16 - m) * 6)).isoformat()   # reads d < 0 and stays absent
+        f.write(json.dumps({"ts": t.isoformat(),
+                            "acct": "next3", "session_pct": sp, "weekly_pct": 26 + j * 0.0583,
+                            "session_reset_at": sra, "weekly_reset_at": wra}) + "\n")
 rows = [row(acct="next3", weekly_pct=40, weekly_reset_h=100.0)]
 samples, span = ca._util_tail(path=p, hours=48.0)
 ca.apply_burn(rows, cfg, samples=samples)
@@ -1813,7 +1829,46 @@ assert 12.0 < r["burn_wk_ppd"] < 16.0, r          # ~14 %/day, i.e. the same rat
 assert "burn_wk_span_h" in r and r["burn_wk_span_h"] > 6.8, r
 assert "wk_strand_pp" in r, r
 assert 0.0 < r["wk_strand_pp"] < 5.0, r           # 40 + 0.583*100 = 98.3 -> ~1.7 pp die
-assert "burn_5h_ewma_ph" not in r, r              # S7 is a LATER wave and was not built here
+# S7 — the 5h EWMA, in %/h. 59.99 < v < 60.01 is the whole unit assertion: 0.6 is fraction/h
+# (the incumbent key) and 6.0 would be a per-sample delta mistaken for a rate.
+assert "burn_5h_ewma_ph" in r, r
+assert 59.9 < r["burn_5h_ewma_ph"] < 60.1, r
+assert "burn_5h_span_h" in r and r["burn_5h_span_h"] >= 1.3, r
+assert "burn_5h_ph" in r, r                       # kept populated one more release, as the fallback
+assert r["burn_5h_ph"] < 1.0, r                   # ...and still in FRACTION/h, i.e. 0.6 not 60
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router M7 + S7: _su_projected consumes the EWMA at the right SCALE, and prefers it" {
+  # RP-28 — the /100 as a test, and the ONLY place a missing one is caught. burn_5h_ewma_ph is
+  # %/h; su is a fraction in [0,1]. Without the divide, `su + b * ahead` = 0.20 + 60 * 1.0
+  # saturates to 1.0 on EVERY row and the router reads "every account is under 5h pressure" — a
+  # 100x error that looks exactly like a real finding. Every other case in this suite passes
+  # under that bug, because min(1.0, ...) makes it a plausible number rather than a crash.
+  run python3 -c "$LOAD"'
+import os
+for v in ("CC_ROUTE_PROJ", "CC_ROUTE_PROJ_LOOKAHEAD_H"):
+    os.environ.pop(v, None)
+r = row(session_pct=20, session_reset_h=2.0, burn_5h_ewma_ph=60.0)
+su = ca._su_projected(r, dict(R, PROJ_LOOKAHEAD_H=1.0))
+assert abs(su - 0.80) < 1e-9, su                  # 0.20 + 0.60*1.0 — NOT 1.0, NOT 0.206
+# the EWMA WINS over the incumbent when both are stamped: same rate, different units, and
+# a fallback that quietly outranked the replacement would make S7 a no-op nobody noticed.
+both = ca._su_projected(row(session_pct=20, session_reset_h=2.0,
+                            burn_5h_ewma_ph=60.0, burn_5h_ph=0.05),
+                        dict(R, PROJ_LOOKAHEAD_H=1.0))
+assert abs(both - 0.80) < 1e-9, both              # 0.25 would mean the incumbent won
+# ...and the incumbent is still read when the EWMA abstained, so nothing goes blind on the day
+# this lands (burn_5h_ph stays populated for one release).
+only = ca._su_projected(row(session_pct=20, session_reset_h=2.0, burn_5h_ph=0.05),
+                        dict(R, PROJ_LOOKAHEAD_H=1.0))
+assert abs(only - 0.25) < 1e-9, only
+# soften-only survives the swap: the projection must never trip the 5h-cutoff exclusion
+assert ca._excluded(row(session_pct=50, session_reset_h=3.0, burn_5h_ewma_ph=500.0), R) is None
+os.environ["CC_ROUTE_PROJ"] = "off"
+assert ca._su_projected(r, dict(R, PROJ_LOOKAHEAD_H=1.0)) == 0.20
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }

@@ -1912,11 +1912,18 @@ def apply_assignments(rows, cfg):
 def _su_projected(r, R):
     """5h utilization the router scores: measured, plus what the account's own recent burn rate
     accrues over the lookahead — capped at the window reset, past which pressure vanishes.
-    Consumed only by _soft, so it is soften-only by construction."""
+    Consumed only by _soft, so it is soften-only by construction.
+
+    S7 · THE UNIT IS THE HAZARD. `burn_5h_ewma_ph` is in **%/h** and `burn_5h_ph` is in
+    **fraction/h**; `su` here is a fraction in [0,1]. Reusing the old key for the new value — or
+    forgetting the /100 — saturates `su + b * ahead` to 1.0 on every row and reads as "every
+    account is under 5h pressure", a 100x error wearing a plausible face. The two keys are
+    therefore never interchangeable and the EWMA is scaled at the point of consumption."""
     su = (r.get("session_pct") or 0) / 100.0
     if not _term_on("CC_ROUTE_PROJ"):
         return su
-    b = r.get("burn_5h_ph")
+    b = r.get("burn_5h_ewma_ph")
+    b = b / 100.0 if isinstance(b, (int, float)) else r.get("burn_5h_ph")
     if not isinstance(b, (int, float)) or b <= 0:
         return su
     ahead = _cliff_env("CC_ROUTE_PROJ_LOOKAHEAD_H", R.get("PROJ_LOOKAHEAD_H", PROJ_LOOKAHEAD_H))
@@ -2146,7 +2153,9 @@ def completed_weekly_windows(samples, now=None):
 def apply_burn(rows, cfg, samples=None):
     """Attach measured burn rates from the utilization series:
       burn_5h_ph  — 5h-window fraction/hour, newest adjacent pair ≤1.5h apart (older pairs
-                    straddle window rolls) — feeds _su_projected.
+                    straddle window rolls) — the S7 FALLBACK, kept populated one more release.
+      burn_5h_ewma_ph — the same rate as a roll-aware EWMA over 6h, in %/h (S7/M1). Supersedes
+                    burn_5h_ph in _su_projected. DIFFERENT UNIT — see that function.
       burn_wk_ppd — weekly %/day, widest pair inside 48h spanning ≥6h (short spans read desk
                     noise as pace) — feeds the pace line's 'recent' annotation.
     A negative delta is a window that ROLLED between samples — a reset crossing, not negative
@@ -2178,6 +2187,14 @@ def apply_burn(rows, cfg, samples=None):
                 d = (b["session_pct"] - a["session_pct"]) / 100.0
                 if d >= 0:
                     r["burn_5h_ph"] = d / dh
+        # S7/M1 — the EWMA that supersedes burn_5h_ph on the SURFACE. The old key stays populated
+        # for one release: it is the fallback inside _su_projected and anything reading it off a
+        # stamped row must not go silently blind on the day this lands. Its unit is fraction/h and
+        # this one's is %/h; the two are never interchangeable (see _su_projected).
+        v5, span5 = burn_5h_ewma_ph(ss, now)
+        r["burn_5h_span_h"] = span5
+        if v5 is not None:
+            r["burn_5h_ewma_ph"] = v5
         wk = [e for e in ss
               if now - e["_t"] <= 48.0 * 3600 and e.get("weekly_pct") is not None]
         if len(wk) >= 2:
@@ -2501,6 +2518,65 @@ def wall_projection(r):
     if frac < MIN_ELAPSED_FRAC:
         return None, None
     return (wp / 100.0) / frac, wp / frac
+
+
+SU_EWMA_LOOKBACK_H = 6.0     # the 5h meter's own scale, plus a window's worth of context
+SU_EWMA_HL = 1.0             # half-life, hours — fitted; ewma_hl1h beat every candidate at every H
+SU_EWMA_MIN_SPAN_H = 1.3     # below this a +-1 pp step exceeds 25% of the meter's realised mean
+SU_EWMA_BLIND_PCT = 40.0     # at or above this the INCUMBENT is more accurate — see the docstring
+
+
+def burn_5h_ewma_ph(samples_for_acct, now):
+    """Roll-aware EWMA of the 5h session meter, in **%/h**, as (value|None, measured_span_h).
+
+    WHAT IT REPLACES, AND WHY. `burn_5h_ph` takes the newest adjacent pair, median span 384 s. At
+    that span the +-1 pp quantization of the meter dominates the signal, and the measurement is
+    blunt: it reports exactly 0 on 77.2% of pairs and >= 9.40 %/h otherwise — a BOOLEAN wearing a
+    rate's clothes, with no abstain, so which of the two it reports is a sample lottery. Over
+    10,189 evaluations it ranked last or second-to-last at every horizon.
+
+    ROLL SPELLING IS LOAD-BEARING. `_rolled` keys on `_reset_key`, which ROUNDS. Under truncation
+    the roll branch fires on 46.0% of adjacent pairs and injects an absolute level as a delta:
+    MAE degrades 0.0282 -> 0.2110, i.e. 5.4x WORSE than the incumbent this replaces. A roll is
+    never an abstain — post-roll accrual is reconstructed by taking the new window's level as the
+    increment, exactly as the weekly twin does.
+
+    ABSTAIN (L2) on the RAW MEASURED SPAN — the sum of dt over usable pairs, never the requested
+    lookback — below SU_EWMA_MIN_SPAN_H, or on fewer than 2 usable pairs.
+
+    🚨 NAMED BLIND SPOT, and it must be read before this number is quoted: at
+    `session_pct >= SU_EWMA_BLIND_PCT` the INCUMBENT is more accurate (MAE 0.0617 vs 0.0797) and
+    this estimator OVER-projects by +3.6 pp. That is the burst regime — the one M4' deliberately
+    creates. The over-projection direction is soften-only through `_soft`'s SF multiplier and so
+    is fail-safe for routing, but the metric is WRONG there and must not be cited as accurate.
+    §5.6 Q3 names the measurement that would fix it.
+
+    WHERE IT ACTUALLY REACHES (the honest action line; the synthesis's was code-false): `_soft`'s
+    SF multiplier, score-ranking only and floored at `SF_FLOOR`, so it can never exclude; and the
+    desk lane's `DESK_5H_FLOOR` tier key. It does NOT reach `_excluded`, which reads the raw
+    meter."""
+    ss = sorted((e for e in samples_for_acct or []
+                 if e.get("session_pct") is not None and e.get("_t") is not None
+                 and now - e["_t"] <= SU_EWMA_LOOKBACK_H * 3600.0),
+                key=lambda e: e["_t"])
+    num = den = span = 0.0
+    pairs = 0
+    for a, b in zip(ss, ss[1:]):
+        dt_h = (b["_t"] - a["_t"]) / 3600.0
+        if not (0 < dt_h <= 1.0):
+            continue
+        if _rolled(a, b, "session_reset_at", "session_pct"):
+            d = b["session_pct"]                      # the new window's level, a LOWER bound
+        else:
+            d = max(0.0, b["session_pct"] - a["session_pct"])
+        w = 2.0 ** (-((now - b["_t"]) / 3600.0) / SU_EWMA_HL)
+        num += w * d
+        den += w * dt_h
+        span += dt_h
+        pairs += 1
+    if pairs < 2 or span < SU_EWMA_MIN_SPAN_H or den <= 0:
+        return None, span
+    return num / den, span
 
 
 WK_EWMA_LOOKBACK_H = 48.0    # the pace the nowcast speaks for: "at the pace of the last 48 h"
