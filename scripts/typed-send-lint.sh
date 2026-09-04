@@ -138,19 +138,20 @@ SANCT
 # blind function was deleted rather than left callable. Do not re-add the line; a new blind paste
 # helper is a new violation, not a returning grandfather.
 #
-# bin/cc-pane::drv_iterm2_send is the FIRST entry this lint did not ship with, and the reason it is
-# here rather than fixed is worth stating. It arrived on main 2026-08-07, independently of this
-# work, and it is the exact shape the backlog item predicted would slip through: *"nothing today
-# fails if someone adds a NEW surface that calls `session send` directly"*. The lint caught it on
-# its first exposure — which is the lint doing its job, not a false positive. It is grandfathered
-# rather than rewired because `cc-pane send <id> <text…>` is a GENERIC public verb whose payload is
-# caller-supplied: it may legitimately carry control characters, which need no verification, as well
-# as command lines, which do. Deciding that contract belongs to cc-pane's author, not to this
-# change, and it has no in-repo callers yet — so the cost of leaving it is bounded and visible,
-# while silently exempting it would defeat the whole point of the ratchet. Tracked in the backlog.
+# bin/cc-pane::drv_iterm2_send WAS the second entry and is GONE — the ratchet's downward half
+# turning a second time. It arrived on main 2026-08-07 as the exact shape the backlog item predicted
+# would slip through (*"nothing today fails if someone adds a NEW surface that calls `session send`
+# directly"*), and it sat here because the open question was a CONTRACT question this lint had no
+# standing to answer: `cc-pane send <id> <text…>` is a generic public verb whose caller-supplied
+# payload may be control characters, which need no verification, or a command line, which does.
+# cc-pane answered it on 2026-09-04 (backlog 07ac6d58d88d) and kept ONE verb: the payload now picks
+# the transport, on the SAME partition this lint's own ctrl_only() uses — control-only goes raw,
+# everything else routes through osa_type_verified. The surviving raw send carries a per-LINE
+# `typed-send-lint:allow` whose claim is discharged by the enclosing `if`, which is strictly
+# narrower than this entry was: a NEW raw send inside that same function is a violation again,
+# where a path::function row would have exempted it. Do not re-add the line.
 EMBEDDED_ALLOWLIST="$(cat <<'ALLOW'
 scripts/handoff-fire.sh::as_write
-bin/cc-pane::drv_iterm2_send
 ALLOW
 )"
 
