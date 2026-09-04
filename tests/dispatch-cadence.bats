@@ -30,6 +30,10 @@ setup() {
   # here because dispatchability is not this suite's subject; tests/cc-backlog-project-dispatch.bats
   # owns it, unfixtured, in both directions.
   export CC_BACKLOG_PROJECT_WARN=off
+  # Same reason, second advisory: `add` also WARNS when a row carries no --falsifier, --condition or
+  # --dod-ref, and this suite asserts that $output IS the bare id. Retraction coverage is not this
+  # suite's subject either; tests/cc-backlog-add-update.bats owns it in both directions.
+  export CC_BACKLOG_COVERAGE_WARN=off
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   ROOT="${CC_CADENCE_SUBJECT_ROOT:-$REPO}"
   BACKLOG_BIN="$ROOT/bin/cc-backlog"

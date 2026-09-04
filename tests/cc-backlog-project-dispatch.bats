@@ -44,6 +44,11 @@ EOF
   # assertion below vacuously green — a suite that cannot fail is the one shape this file must not
   # have, since it is the only place the validator is exercised at all.
   export CC_BACKLOG_PROJECT_WARN=on
+  # …but the OTHER add-time advisory is off: this suite's assertions are "stderr is EMPTY", which
+  # measures the whole channel, and `add` now also warns when a row carries no --falsifier,
+  # --condition or --dod-ref. That axis belongs to tests/cc-backlog-add-update.bats; a test that
+  # measures two arms at once measures neither.
+  export CC_BACKLOG_COVERAGE_WARN=off
   unset CC_DISPATCH_PROJECT
 }
 
