@@ -545,7 +545,7 @@ if [ -n "$TEAMMATE_ID" ] && [ -n "$MODEL" ]; then
   "hookSpecificOutput": {
     "hookEventName": "PreToolUse",
     "permissionDecision": "deny",
-    "permissionDecisionReason": "Teammate spawn rejected: model='$MODEL' is not on the Max-plan auto-mode allowlist (${ALLOWED_FLAT}). Use model='opus' (alias) or an allowlisted ID for all teammates. Off-allowlist models silent-demote to acceptEdits and break team parallelism. Frontier models (claude-fable-5) become teammate-eligible only after verification into the SSOT allowlist (~/.claude/model-config.yaml auto_mode_allowlist.non_firstParty_max) — verify with one test spawn on the eval track, then append it there; this hook follows the SSOT automatically. Rule: memory/feedback-agent-team-models.md."
+    "permissionDecisionReason": "Teammate spawn rejected: model='$MODEL' is not on the Max-plan auto-mode allowlist (${ALLOWED_FLAT}). Use model='opus' (alias) or an allowlisted ID for all teammates. Off-allowlist models silent-demote to acceptEdits and break team parallelism. Frontier models (the claude-fable-5* family) become teammate-eligible only after verification into the SSOT allowlist (~/.claude/model-config.yaml auto_mode_allowlist.non_firstParty_max) — verify with one test spawn on the eval track, then append it there; this hook follows the SSOT automatically. Rule: memory/feedback-agent-team-models.md."
   }
 }
 EOF

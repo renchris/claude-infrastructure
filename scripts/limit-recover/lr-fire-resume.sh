@@ -8,7 +8,8 @@
 #          [--summary] [--force-split]
 #
 # Account labels: next next2 next3 next4 (Opus@max) · fable fable2 fable3 fable4
-# (claude-fable-5@high). An absolute config-dir path is accepted as-is (Opus@max).
+# (the SSOT frontier model @high — claude-fable-5-1 since 2026-09-03; this comment names the id
+# only as of today, the code reads the SSOT). An absolute config-dir path is accepted as-is (Opus@max).
 # Run it in the terminal/pane that should own the resumed session.
 #
 #   --summary      Resume from a /compact SUMMARY instead of the full session. OPT-IN, and it
@@ -222,7 +223,7 @@ case "$ACCT" in
   *)
     if cc_acct_dir_for_name "$ACCT"; then
       cfg="$CC_ACCT_DIR"
-      [ "$CC_ACCT_IS_FABLE" = 1 ] && { model="claude-fable-5"; effort="high"; }
+      [ "$CC_ACCT_IS_FABLE" = 1 ] && { model="claude-fable-5-1"; effort="high"; }
     else
       echo "lr-fire-resume: unknown account '$ACCT'" >&2; exit 2
     fi

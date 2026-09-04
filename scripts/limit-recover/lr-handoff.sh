@@ -335,7 +335,7 @@ FIRE_ARGV=("$LR/lr-fire-resume.sh" "$TARGET" "${WT_TOP:-$CWD}" "$SID")
 [[ -n "$BRANCH" ]] && FIRE_ARGV+=(--branch "$BRANCH")
 case "$MODEL" in
   fable)
-    FIRE_ARGV+=(--model claude-fable-5 --effort "${EFFORT:-high}")
+    FIRE_ARGV+=(--model claude-fable-5-1 --effort "${EFFORT:-high}")
     ;;
   opus)
     # The opus path passes no --model ON PURPOSE: lr-fire-resume resolves it from the model-config

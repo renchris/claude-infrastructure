@@ -26,8 +26,16 @@ block="$(sed -n '/^frontier_access:/,/^[a-z_]/p' "$CFG" 2>/dev/null)"
 fmodel="$(printf '%s\n' "$block" | grep -m1 '  model:' | awk '{print $2}')"
 
 # Only gate frontier-tier requests (family alias or full id).
+# PREFIX on the family, not just equality against the SSOT's current id. `$fmodel` is whatever
+# frontier_access.model says TODAY (claude-fable-5-1); a spawn pinned to the still-Active PRIOR
+# id (claude-fable-5 — deliberately kept in auto_mode_allowlist so pinned sessions survive the
+# bump) matched neither arm and fell through `*) exit 0`, i.e. spent the frontier tier with NO
+# per-session spawn cap. This is the gate's whole job, so an unmatched frontier id is not a
+# no-op, it is a silent disarm. Same prefix shape as handoff-fire.sh's four detectors and
+# ~/.zshrc's cost warning; see the ⚠️ bump-models note there before adding hooks/ to
+# model-classification.json's `update` list.
 case "$req_model" in
-  fable|"$fmodel") ;;
+  fable|claude-fable-5*|"$fmodel") ;;
   *) exit 0 ;;
 esac
 

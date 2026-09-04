@@ -7478,9 +7478,22 @@ if [ "$RECYCLE" = 0 ] && [ "$FOLLOW" = 0 ] && [ "$SURFACE_EXPLICIT" = 1 ] && [ "
 fi
 
 # ---- model normalization -------------------------------------------------------------------
+# Family aliases resolve from the SSOT, never from a literal pinned here. Both arms were
+# hardcoded and BOTH had gone stale: `fable` still said claude-fable-5 after 5.1 shipped, and
+# `opus` still said claude-opus-4-8 although versions.opus_latest became claude-opus-5 on
+# 2026-07-24 — so `--model opus` had been quietly firing the PRIOR Opus. An alias whose target
+# is written here can only be right until the next bump; reading the SSOT is what makes it right
+# after one. The fallbacks are today's values and fire only if the awk finds nothing (missing or
+# malformed model-config.yaml), so a broken SSOT degrades instead of passing an empty --model.
+_ssot_scalar() { # <block> <key> → value, or empty. Same anchored awk the frontier_access gate
+                 # below uses: exactly-2-space indent = a DIRECT child of that block.
+  awk -v blk="^$1:" -v k="^  $2:[[:space:]]" \
+    '$0 ~ blk {f=1; next} f && $0 ~ k {print $2; exit} f && /^[^[:space:]#]/ {exit}' \
+    "$MODEL_CONFIG" 2>/dev/null
+}
 case "$MODEL" in
-  fable) MODEL="claude-fable-5" ;;
-  opus)  MODEL="claude-opus-4-8" ;;
+  fable) MODEL="$(_ssot_scalar frontier_access model)"; MODEL="${MODEL:-claude-fable-5-1}" ;;
+  opus)  MODEL="$(_ssot_scalar versions opus_latest)";  MODEL="${MODEL:-claude-opus-5}" ;;
 esac
 
 # ---- account maps + activity proxy ---------------------------------------------------------
@@ -7528,7 +7541,13 @@ recycle_repick() { # $1 = the pane's CURRENT account → replacement account on 
   # an entitlement fact, not headroom). Consulting the GENERAL lane for a frontier pane could hand
   # back an account whose Fable access the API then rejects — so a frontier recycle is left exactly
   # where it is. Widening this needs the fable lane, not a looser guard.
-  [ "${MODEL:-}" = "claude-fable-5" ] && return 0
+  # PREFIX, not equality: claude-fable-5-1 is NOT equal to claude-fable-5, so an `=` test here
+  # goes silently FALSE the moment the frontier tier bumps and a frontier pane becomes
+  # repick-eligible. The glob covers every member of the family, which is why ~/.zshrc's cost
+  # warning has always used one. ⚠️ Do NOT add scripts/ or bin/ to model-classification.json's
+  # `update` list without revisiting these four: claude-bump-models rewrites literal ids and
+  # would turn `claude-fable-5*` into `claude-fable-5-1*`, silently un-matching the base id.
+  case "${MODEL:-}" in claude-fable-5*) return 0 ;; esac
   # The rule pre_fire_account_sweep and the M7 --assign block already enforce: a hermetic suite that
   # reaches this must never poll the operator's real router nor append to their real ledger.
   if [ -n "${BATS_TEST_TMPDIR:-}" ] && [ "${CC_ACCOUNTS_BIN_EXPLICIT:-0}" != 1 ]; then return 0; fi
@@ -7756,7 +7775,7 @@ activity() { find "$(proj_dir "$1")" -name '*.jsonl' -mmin -300 2>/dev/null | wc
 # Output: line 1 = "# <source label>", then "account score" lines best-first.
 ranked_accounts() {
   local kind=general out rc
-  [ "$MODEL" = "claude-fable-5" ] && kind=fable
+  case "$MODEL" in claude-fable-5*) kind=fable ;; esac   # prefix — see the note at the recycle guard
   if command -v claude-accounts >/dev/null 2>&1; then
     out="$(claude-accounts --rank "$kind" 2>/tmp/handoff-rank-err.$$)"; rc=$?
     if [ "$rc" = 0 ] && [ -n "$out" ]; then
@@ -7881,7 +7900,9 @@ pre_trust() { # $1=launch dir  $2=config dir
 # passthrough the fired session gets: a session that will never call a tool loses nothing.
 probe_account() { # $1=account → 0 pass; prints rejection class on fail
   local dir out probe_model="claude-haiku-4-5"
-  [ "$MODEL" = "claude-fable-5" ] && probe_model="claude-fable-5"
+  # Probe the model we will ACTUALLY fire, not a re-pinned literal: hardcoding the id here meant
+  # a 5.1 fire was entitlement-probed with Fable 5, testing access to a model it never used.
+  case "$MODEL" in claude-fable-5*) probe_model="$MODEL" ;; esac
   # Point-of-use check, not a load-time one (see the BIN block above for why). A NAMED
   # class matters: without it an absent binary fails all four probes identically and
   # reads as "every account is dead" — the wrong diagnosis, and one that would send the
@@ -7971,7 +7992,10 @@ fi
 # $MODEL, so an explicit `--launcher claude-fable3` with no --model used to set FABLE_EFFECTIVE=1
 # while the probe still ran haiku. One predicate now, matching every other Fable test in the file.
 FABLE_EFFECTIVE=0
-[ "$MODEL" = "claude-fable-5" ] && FABLE_EFFECTIVE=1
+case "$MODEL" in claude-fable-5*) FABLE_EFFECTIVE=1 ;; esac   # prefix — the load-bearing one:
+# FABLE_EFFECTIVE is how this path knows it is spending the frontier meter at all. An `=` test
+# here after a tier bump yields a Fable session that nothing accounts as Fable — warned about
+# the cost by the zshrc glob, while every mechanical arm reads "not Fable".
 if [ "$FABLE_EFFECTIVE" = 1 ]; then
   # The ~2× cost note the deleted claude-fable launcher used to print at spawn. It has to live
   # wherever Fable is still SELECTED, and for a fired session that is here — the typed line is a
@@ -10262,7 +10286,7 @@ if [ "$DRY" = 1 ]; then
     esac
   fi
   if [ "$PROBE" = 1 ]; then
-    pm="claude-haiku-4-5"; [ "$FABLE_EFFECTIVE" = 1 ] && pm="claude-fable-5"
+    pm="claude-haiku-4-5"; [ "$FABLE_EFFECTIVE" = 1 ] && pm="$MODEL"
     if [ "$EXPLICIT_LAUNCHER" = 1 ]; then echo "probe:    SKIPPED (explicit --launcher gives no account to probe)"
     elif [ -n "$NAMES" ]; then echo "probe:    SKIPPED in dry-run (would probe $pm walking: $(printf '%s' "$NAMES" | tr '\n' ' '))"
     else echo "probe:    SKIPPED in dry-run (would probe $pm on $CHOSEN)"; fi

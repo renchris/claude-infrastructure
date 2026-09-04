@@ -346,10 +346,10 @@ case "$acct" in
   next2|claude-next2)   cfg=$HOME/.claude-secondary ;;
   next3|claude-next3)   cfg=$HOME/.claude-tertiary ;;
   next4|claude-next4)   cfg=$HOME/.claude-quaternary ;;
-  fable|claude-fable)   cfg=$HOME/.claude-next;       model=claude-fable-5 ;;
-  fable2|claude-fable2) cfg=$HOME/.claude-secondary;  model=claude-fable-5 ;;
-  fable3|claude-fable3) cfg=$HOME/.claude-tertiary;   model=claude-fable-5 ;;
-  fable4|claude-fable4) cfg=$HOME/.claude-quaternary; model=claude-fable-5 ;;
+  fable|claude-fable)   cfg=$HOME/.claude-next;       model=claude-fable-5-1 ;;
+  fable2|claude-fable2) cfg=$HOME/.claude-secondary;  model=claude-fable-5-1 ;;
+  fable3|claude-fable3) cfg=$HOME/.claude-tertiary;   model=claude-fable-5-1 ;;
+  fable4|claude-fable4) cfg=$HOME/.claude-quaternary; model=claude-fable-5-1 ;;
   *) printf '%s\n' "unknown account $acct"; exit 2 ;;
 esac
 # LAST, so it beats both the account default and CC_RESUME_EFFORT — an explicit flag is the caller
