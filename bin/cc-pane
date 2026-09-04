@@ -5,7 +5,7 @@
 #
 #   cc-pane spawn  [opts]        → mint a new agent surface; prints its ID on stdout
 #   cc-pane address [id]         → resolve an ID to canonical form (no arg = MY OWN id)
-#   cc-pane send   <id> <text…>  → deliver text to that id
+#   cc-pane send   <id> <text…>  → deliver text to that id (a command line is typed VERIFIED)
 #   cc-pane close  <id>          → reap that id
 #   cc-pane list                 → enumerate live ids, one per line
 #
@@ -156,9 +156,72 @@ drv_iterm2_spawn() {
   esac
 }
 
+# ── `send`: ONE verb, TWO transports, split on the payload (backlog 07ac6d58d88d) ──────────────
+# `send` is the seam's generic delivery verb and its payload is caller-supplied, so it carries two
+# genuinely different things. Which transport each one gets is the contract this file owed a
+# decision on, and the partition is NOT invented here — it is the same one scripts/typed-send-lint.sh
+# builds its whole rule on:
+#   · CONTROL CHARACTERS ONLY — a bare CR, a Ctrl-U scrub, an escape sequence. No command line
+#     exists, so there is no first word for `setopt CORRECT` to offer a correction for, and nothing
+#     is echoed to read back. Raw byte send: verification is impossible AND unnecessary.
+#   · ANYTHING ELSE — a command line by construction, because the payload lands on an interactive
+#     shell's input line and ZLE reads it. A raw send here is the silent-hang landmine: a paste that
+#     races ZLE parks the pane forever on `zsh: correct 'X' to 'Y' [nyae]?` while this
+#     function returns 0 and its caller reports success (observed 2026-07-26, a 6m40s wedge that
+#     lost a whole dispatched work item). It routes through osa_type_verified, which types the line,
+#     READS THE PANE BACK, and sends the Enter only on proof.
+#
+# WHY NOT A SECOND VERB. Splitting this into `send`(bytes) + `type`(command line) was the other
+# option on the backlog row, and it loses more than it buys. `send <id> <text…>` is the seam's ONE
+# cross-driver delivery verb (header line 8); bin/cc-pane-headless implements it as durable inbox
+# delivery, and a `type` verb has no meaning on a driver with no shell to type into — so the split
+# would mint a verb a driver must refuse, against this seam's own rule that a driver lacking a
+# capability stays USABLE rather than broken (header §CONTRACT). One verb whose transport follows
+# its payload keeps every driver answering the same question.
+
+# Every byte a control character? Judged under LC_ALL=C so the classification is byte-wise and a
+# multibyte payload cannot be read differently here than by the tr on some other box (memory:
+# c-locale-turns-character-ops-into-byte-ops — the fix direction is to PIN the locale, not to hope).
+# An EMPTY payload is not control-only: it types nothing, and letting it take the raw path would
+# turn a caller's mistake into a silent success.
+pane_ctrl_only() {  # <text…> → 0 = control characters only · 1 = carries a command line
+  local s="$*"
+  [ -n "$s" ] || return 1
+  [ -z "$(printf '%s' "$s" | LC_ALL=C tr -d '[:cntrl:]')" ]
+}
+
+# The VERIFIED transport. The helper is sourced LAZILY — only this one payload class needs it, and
+# every other verb must keep working on a box where scripts/lib is not deployed. Resolution ladder
+# is the house idiom (beside-script → CLAUDE_CONFIG_DIR → ~/.claude), identical to
+# scripts/boot-resume-launch.sh:77-80.
+pane_type_verified() {  # <id> <command> → RC_OK verified + submitted · RC_NO fail-loud
+  local id="$1" cmd="$2" lib
+  lib="$(dirname "$SELF")/../scripts/lib/cc-type-verified.sh"
+  [ -f "$lib" ] || lib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/cc-type-verified.sh"
+  [ -f "$lib" ] || lib="$HOME/.claude/scripts/lib/cc-type-verified.sh"
+  # FAIL LOUD — never degrade to the raw send. A missing helper is the ONE condition under which the
+  # old blind behaviour looks like a reasonable fallback, and reinstating it silently is exactly the
+  # defect this change removes: the caller would go back to being told "sent" over a parked pane.
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  if ! . "$lib" 2>/dev/null; then
+    printf 'cc-pane: send needs verified typing and cannot source %s\n' "$lib" >&2
+    return "$RC_NO"
+  fi
+  osa_type_verified "$id" "$cmd" || return "$RC_NO"
+}
+
 drv_iterm2_send() {
   local id="$1"; shift
-  "$(it2_bin)" session send -s "$id" "$*" >/dev/null 2>&1 || return "$RC_NO"
+  if pane_ctrl_only "$@"; then
+    # typed-send-lint:allow — the enclosing `if` has PROVEN this payload is control-characters-only,
+    # which is precisely the class the lint's own ctrl_only() exempts; it cannot see through "$*" to
+    # prove it statically. No command line can reach this line. The marker is per-LINE, so a NEW raw
+    # send anywhere in this function is still a violation — strictly narrower than the path::function
+    # ratchet entry it replaces.
+    "$(it2_bin)" session send -s "$id" "$*" >/dev/null 2>&1 || return "$RC_NO"
+    return "$RC_OK"
+  fi
+  pane_type_verified "$id" "$*"
 }
 
 drv_iterm2_close() {

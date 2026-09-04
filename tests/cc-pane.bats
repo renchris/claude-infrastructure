@@ -181,11 +181,64 @@ fake() {
   grep -q 'shim session close -f -s VICTIM-1' "$LOG" || false
 }
 
-@test "send delivers the text verbatim to the addressed id" {
-  fake 'exit 0'
-  run "$CP" send "w1t1p1:TARGET-9" hello there
-  [ "$status" -eq 0 ]
-  grep -q 'shim session send -s TARGET-9 hello there' "$LOG" || false
+# ── `send`: the transport follows the PAYLOAD (backlog 07ac6d58d88d) ──────────────────────
+# The three below are one contract, split by the only distinction that matters to a pane that
+# runs a shell. A control-only payload types no command line, so there is no first word for
+# `setopt CORRECT` to offer a correction for and nothing to echo-verify: it goes raw. Anything
+# else IS a command line the moment it lands on ZLE's input line, and a raw send of one is the
+# silent-hang landmine scripts/typed-send-lint.sh exists to stop — this file used to pin the
+# opposite, asserting that `send … hello there` reached `session send` verbatim.
+@test "send raw-transports a control-only payload verbatim" {
+  fake 'exit 0'; : > "$LOG"
+  local osa="$BATS_TEST_TMPDIR/osascript-unused" olog="$BATS_TEST_TMPDIR/osa-unused.log"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\nexit 0\n' "$olog" > "$osa"
+  chmod +x "$osa"; : > "$olog"
+  OSA_LOG="$olog" CC_OSASCRIPT_BIN="$osa" run "$CP" send "w1t1p1:TARGET-9" $'\r'
+  [ "$status" -eq 0 ] || { echo "control send failed: $output"; false; }
+  grep -q 'shim session send -s TARGET-9' "$LOG" || { echo "no raw send recorded"; cat "$LOG"; false; }
+  # The verified path costs three AppleEvents and a settle per line. A bare CR must not pay it.
+  [ ! -s "$olog" ] || { echo "a control payload went through verified typing"; cat "$olog"; false; }
+}
+
+@test "send routes a COMMAND LINE through verified typing, never the raw transport" {
+  fake 'exit 0'; : > "$LOG"
+  local stub="$BATS_TEST_TMPDIR/osascript" olog="$BATS_TEST_TMPDIR/osa.log"
+  cat > "$stub" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "${OSA_LOG:?}"
+case "$*" in
+  *"contents of s"*) for a in "$@"; do case "$a" in ": cctv-"*) printf '%s\n' "$a" ;; esac; done ;;
+esac
+exit 0
+STUB
+  chmod +x "$stub"; : > "$olog"
+  OSA_LOG="$olog" CC_OSASCRIPT_BIN="$stub" CC_NOCORRECT=0 CC_TYPE_ATTEMPTS=2 CC_TYPE_SETTLE=0 \
+    CC_TYPE_PRESETTLE=0 run "$CP" send "w1t1p1:TARGET-9" echo hi
+  [ "$status" -eq 0 ] || { echo "verified send failed: $output"; cat "$olog"; false; }
+  grep -q 'TARGET-9' "$olog" || { echo "the normalised id never reached the helper"; cat "$olog"; false; }
+  grep -q 'echo hi' "$olog" || { echo "the command was never typed"; cat "$olog"; false; }
+  # `write text "" newline yes` is the Enter. Its presence is the proof the line was read back
+  # first — the helper sends it only on a match, which tests/typed-send-shared-discipline.bats pins.
+  grep -q 'newline yes' "$olog" || { echo "typed but never submitted"; cat "$olog"; false; }
+  ! grep -q 'session send' "$LOG" || { echo "a command line took the RAW transport"; cat "$LOG"; false; }
+}
+
+@test "send FAILS LOUD when verified typing cannot be sourced — never a blind raw send" {
+  # The one condition under which the old blind behaviour looks like a reasonable fallback. It is
+  # not: a caller told "sent" over a pane parked on [nyae] is exactly the loss this replaced.
+  # $HOME is already the fixture, so the ladder's last rung is absent; CLAUDE_CONFIG_DIR is the
+  # middle one and must be pointed somewhere real-but-empty rather than left ambient.
+  fake 'exit 0'; : > "$LOG"
+  mkdir -p "$BATS_TEST_TMPDIR/isolated/bin" "$BATS_TEST_TMPDIR/isolated/cfg"
+  cp "$CP" "$BATS_TEST_TMPDIR/isolated/bin/cc-pane"
+  CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/isolated/cfg" \
+    run "$BATS_TEST_TMPDIR/isolated/bin/cc-pane" send "w1t1p1:TARGET-9" echo hi
+  [ "$status" -eq 1 ] || { echo "expected rc 1 (the driver said no), got $status: $output"; false; }
+  case "$output" in
+    *"needs verified typing and cannot source"*) ;;
+    *) echo "wrong failure, and a wrong failure here is indistinguishable from the bug: $output"; false ;;
+  esac
+  ! grep -q 'session send' "$LOG" || { echo "fell back to a blind raw send"; cat "$LOG"; false; }
 }
 
 @test "list returns the enumerated ids" {
