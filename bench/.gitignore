@@ -11,3 +11,7 @@ corpus/out/pages/
 corpus/out/shots/
 corpus/out/snapshots/
 corpus/out/blind/
+# `route.py` emits route-plan.json plus one cropped PNG per region call. Derived
+# from the findings files, which ARE committed, so the plan is reproducible from
+# what is tracked; the crops are pixels cut out of shots/ and belong with them.
+corpus/out/route/
