@@ -481,6 +481,12 @@ case "$1" in
   # keyed on the suite NAME and is therefore constant for all time, which cannot exercise a rule
   # about CONSECUTIVE outcomes — "a verdict clears the streak" needs the same suite to cut, then
   # pass. Default 124 (cut) so a test that never writes the control file still gets a cut.
+  # A suite whose FAILURE COUNT moves between ticks while the suite itself does not. Every branch
+  # above emits a constant number of failures, so none of them can exercise a rule about the count
+  # being absent from a KEY: one unresolved finding has to arrive twice with different magnitudes.
+  *host-rednum*) rn="${CC_REDN:-2}"; case "$rn" in ''|*[!0-9]*) rn=2 ;; esac
+                 ri=1; while [ "$ri" -le "$rn" ]; do printf 'not ok %s - boom\n' "$ri"; ri=$((ri+1)); done
+                 exit 1 ;;
   *host-flip*) fc="$(cat "$CC_FLIP_CTL" 2>/dev/null || true)"
                case "$fc" in ''|*[!0-9]*) fc=124 ;; esac
                case "$fc" in 0) printf 'ok 1 - fine\n' ;; 1) printf 'not ok 1 - boom\n' ;; esac
@@ -509,6 +515,7 @@ seed_host_suites() { # <manifest-body> — commit suites+manifest onto origin/ma
   printf '#!/usr/bin/env bats\n@test "x" { true; }\n' > "$SHARED/tests/host-trunc.bats"
   printf '#!/usr/bin/env bats\n@test "x" { true; }\n' > "$SHARED/tests/host-torn.bats"
   printf '#!/usr/bin/env bats\n@test "x" { false; }\n' > "$SHARED/tests/host-tsplice.bats"
+  printf '#!/usr/bin/env bats\n@test "x" { false; }\n' > "$SHARED/tests/host-rednum.bats"
   printf '#!/usr/bin/env bats\n@test "x" { true; }\n' > "$SHARED/tests/host-flip.bats"
   printf '%s\n' "$1" > "$SHARED/scripts/host-suites.manifest"
   git -C "$SHARED" add -A; git -C "$SHARED" commit -q -m host-suites
@@ -664,8 +671,27 @@ tests/absent.bats'
 
   # per-finding channel collapses: ONE distinct backlog call across both deploys, naming no sha
   [ "$(sort -u "$CC_BACKLOG_LOG" | wc -l | tr -d ' ')" -eq 1 ]
-  grep -q 'post-deploy HOST RED: tests/host-red.bats(2)' "$CC_BACKLOG_LOG"
+  grep -q 'post-deploy HOST RED: tests/host-red.bats' "$CC_BACKLOG_LOG"
   ! grep -qE "${first:0:12}|${second:0:12}" "$CC_BACKLOG_LOG"
+}
+
+# …and the LAST field in that title that could still move: the per-suite failure COUNT. The failing
+# SET is the finding; how many of a suite's tests were red when it was observed is a magnitude, and
+# a magnitude in a key mints a fresh item per observation for one unresolved condition — the same
+# non-idempotency the sha fix above removed and the cut counter's `n` was taken out of its key for.
+# FAILS PRE-FIX with two distinct lines, `…host-rednum.bats(2)` and `…(3)`.
+@test "host RED backlog key does not move with the per-suite FAILURE COUNT" {
+  auto_setup
+  seed_host_suites 'tests/host-rednum.bats'
+  tick t1 CC_REDN=2
+  tick t2 CC_REDN=3
+
+  # the spy really did see both magnitudes — without this the test could pass on a suite that never
+  # changed count, which is a vacuous green (memory: control-must-replay-the-real-artifact).
+  [ "$(grep -c 'tests/host-rednum.bats' "$CC_SPY_LOG")" -eq 2 ]
+  [ "$(sort -u "$CC_BACKLOG_LOG" | wc -l | tr -d ' ')" -eq 1 ]
+  grep -q 'post-deploy HOST RED: tests/host-rednum.bats' "$CC_BACKLOG_LOG"
+  ! grep -qE 'host-rednum\.bats\([0-9]+\)' "$CC_BACKLOG_LOG"
 }
 
 @test "host CUT is a NON-VERDICT (R6): named 0 tests ⇒ no page, no backlog, deploy still 0" {
