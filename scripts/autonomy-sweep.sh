@@ -463,6 +463,90 @@ log_idl cloud-refusal-route "$(jq -cn --arg c "$_cloudrfz_rc" \
   '{cloud_refusal_rc:$c,
     note:"0 = pass completed (per-refusal outcomes in the refusal-route ledger); 4 = another pass held the lock; 124 = the bound cut the pass, next tick resumes (a refusal is idempotent per artifact, so nothing is double-sent); skipped = tool absent (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never send off-box"}')"
 
+# ── the RETIREMENT ARM (W3 A) — the pile's terminal third, on the return cadence ──────────────────
+# The return sweep examines a WORKING SET, and the working set was never shrinking. Measured
+# 2026-09-04 (docs/research/backlog-zero-2026-09-04/cloud-lane.md §2, §3A): 547 managed declarations,
+# 543 pending, +23.5/day in against 1.3 returns/day out — a ~400-day drain horizon over a cursor
+# that rotates in ~1.4 days. But 183 of those rows have NO BRANCH ON ORIGIN AT ALL and a further
+# ~22% of the branches that do exist are already content-on-trunk: neither can ever produce a
+# return, and both were re-read on every rotation forever. `cc-cloud gc` cannot reach them (it
+# archives declarations that are ALREADY retired and retires none itself), and
+# `scripts/branch-prune-landed.sh` — which deletes exactly the landed branches — has had ZERO
+# CALLERS since it was written on 2026-08-19. Both tools existed; nothing ran them.
+#
+# 🚨 UNDER THE SAME DEPLOYED-COPY GATE, AND FOR THE STRICTER OF THE TWO REASONS. The pruner DELETES
+# REMOTE BRANCHES. A suite copy or a postland verifier worktree running this would delete the
+# operator's real refs — the 2026-08-11 incident (four concurrent `cloud-return --sweep` passes out
+# of `wt-run-54668`) with a worse blast radius. It shares `_cloudret_deployed`, which is an EXACT
+# path test for the reason recorded above: the prefix form it replaced admitted its own verifier.
+#
+# THE PRUNER IS SAFE BY CONSTRUCTION AND THE SWEEP DOES NOT WEAKEN IT. It deletes only branches
+# whose every commit is patch-equivalent on the trunk (`git cherry`, never ancestry), holds anything
+# younger than CC_PRUNE_MIN_AGE_H, and records every sha before deleting so each deletion is
+# restorable with one `git push`. The two things this caller adds are a manifest path OUTSIDE the
+# checkout (the default writes into `docs/research/`, and a daily untracked file in the shared
+# checkout is a dirty tree every other session then has to reason about) and a bound.
+#
+# DRY-RUN ON THE FIRST TICK, APPLY AFTERWARDS. The first pass on a box writes its manifest and
+# deletes nothing, so the very first thing that exists is the restore record for what the second
+# pass will do — a reviewable list before an irreversible batch, keyed on a marker in the cloud
+# state dir so a fresh store gets the same courtesy.
+_cloudprune_rc="skipped"
+_cloudretire_rc="skipped"
+_cloudstate_d="${CC_CLOUD_STATE:-$_cc_cfg/autonomy/cloud}"
+_prune="$_SWEEP_DIR/branch-prune-landed.sh"
+_retire="$_SWEEP_DIR/cloud-retire-terminal.sh"
+_prune_repo="${CC_SWEEP_PRUNE_REPO:-$HOME/Development/claude-infrastructure}"
+_prune_bound="${CC_SWEEP_PRUNE_BOUND_S:-240}"
+case "$_prune_bound" in ''|*[!0-9]*) _prune_bound=240 ;; esac
+if [ "$_cloudret_deployed" != 1 ]; then
+  _cloudprune_rc="skipped-not-deployed"; _cloudretire_rc="skipped-not-deployed"
+else
+  _prune_first="$_cloudstate_d/.prune.applied-once"
+  # An ARRAY, not an unquoted string: the "apply" mode is the ABSENCE of a flag, and an empty
+  # unquoted "$_prune_mode" only works by word-splitting — which shellcheck reads as a defect and
+  # a later `set -f` would silently turn into a literal empty argument the pruner rejects (exit 2).
+  _prune_flags=(--dry-run)
+  _prune_mode=dry
+  [ -f "$_prune_first" ] && { _prune_flags=(); _prune_mode=apply; }
+  if [ -x "$_prune" ] && [ -d "$_prune_repo/.git" ]; then
+    mkdir -p "$_cloudstate_d" 2>/dev/null
+    _prune_manifest="$_cloudstate_d/branch-prune-manifest-$(date -u +%Y-%m-%d).tsv"
+    if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then
+      ( cd "$_prune_repo" && "$_tmo" -k 10 "$_prune_bound" bash "$_prune" ${_prune_flags[@]+"${_prune_flags[@]}"} --manifest "$_prune_manifest" ) >/dev/null 2>&1
+    else
+      ( cd "$_prune_repo" && bash "$_prune" ${_prune_flags[@]+"${_prune_flags[@]}"} --manifest "$_prune_manifest" ) >/dev/null 2>&1
+    fi
+    _cloudprune_rc=$?
+    # THE MARKER IS WRITTEN ONLY BY A DRY RUN THAT COMPLETED. A cut or a failed first pass leaves it
+    # absent, so the next tick dry-runs again rather than promoting itself to a delete on the
+    # strength of a pass that never finished (memory: claimed-outcome-vs-checked-outcome).
+    if [ "$_prune_mode" = dry ] && [ "$_cloudprune_rc" = 0 ]; then
+      printf 'first_dry_run_at=%s\nmanifest=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$_prune_manifest" >"$_prune_first" 2>/dev/null || true
+    fi
+  elif [ ! -x "$_prune" ]; then _cloudprune_rc="skipped-absent"
+  else _cloudprune_rc="skipped-no-repo"
+  fi
+
+  # THE RETIRE PASS RUNS SECOND, and the order is load-bearing: the pruner fills each declaration's
+  # path set BEFORE it deletes a branch (bin/cc-cloud, ORDERING note), so a branch it removed this
+  # tick is already answerable as LANDED by the time this pass reads the head list and calls it
+  # `gone`. Reversed, the retire would run against branches the prune is about to delete and learn
+  # nothing new for another 300 s.
+  if [ -x "$_retire" ]; then
+    if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then
+      CLOUD_RETIRE_REPO="$_prune_repo" "$_tmo" -k 10 "${CC_SWEEP_RETIRE_BOUND_S:-180}" bash "$_retire" --max "${CC_SWEEP_RETIRE_MAX:-200}" >/dev/null 2>&1
+    else
+      CLOUD_RETIRE_REPO="$_prune_repo" bash "$_retire" --max "${CC_SWEEP_RETIRE_MAX:-200}" >/dev/null 2>&1
+    fi
+    _cloudretire_rc=$?
+  else _cloudretire_rc="skipped-absent"
+  fi
+fi
+log_idl cloud-retire "$(jq -cn --arg p "$_cloudprune_rc" --arg r "$_cloudretire_rc" \
+  '{branch_prune_rc:$p, cloud_retire_rc:$r,
+    note:"branch_prune_rc: 0 = pass completed (first tick is a DRY RUN that only writes the manifest; every later tick deletes, and only branches patch-equivalent on the trunk); 1 = at least one delete batch failed, see the manifest; 124/137 = the bound cut it, next tick resumes; skipped-absent = the tool is not deployed; skipped-no-repo = the pruner has no checkout to read; skipped-not-deployed = a checkout/suite copy, which may never delete a remote ref. cloud_retire_rc: 0 = pass completed; 69 = SENSOR FAILED (ls-remote unreadable, or a remote answering with ZERO heads) and NOTHING was retired — never read as an empty remote; 3 = cc-cloud or the repo is missing"}')"
+
 # ── 0b. D4 — AUTHOR-DEATH JOIN (was §0; §0a now precedes it — see the placement note there) ───────
 # The one class no push and no watcher covers: the detached watcher ITSELF dies (reboot, box kill —
 # detach() survives a group SIGKILL but not the machine). Nothing then closes the pane and nothing
