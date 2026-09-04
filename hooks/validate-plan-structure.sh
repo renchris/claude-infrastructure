@@ -30,11 +30,18 @@ PLANS_DIR="${CC_PLANS_DIR:-$HOME/.claude/plans}"
 # then REFUSE a plan whose status line is plainly present. Latent today only because a frontmatter
 # block fits the 64 KiB pipe buffer, and nothing announces that crossing.
 # (scripts/pipefail-sigpipe-lint.sh, THIRTEENTH CORRECTION — this is the one site it revealed.)
+#
+# `done` is an ACCEPTED ALIAS, deliberately not an ADVERTISED one — the two messages below still
+# name only the canonical four, exactly as `completed` and `in_progress` are accepted here and never
+# recommended. Accepting it WITHOUT teaching find-plan.sh's plan_status() the same word would be the
+# worst of both: this gate waves the plan through while the enumerator still reads `unknown`, which
+# is precisely how STOP_CHAIN_WAVE2.md declared itself finished and re-dispatched anyway. The three
+# copies (here, find-plan.sh, setup-plan-symlinks.sh's one-pass awk) move together or not at all.
 has_valid_status() {
   local f="$1"
   head -1 "$f" 2>/dev/null | grep -qx -- '---' || return 1
   sed -n '2,/^---$/p' "$f" 2>/dev/null \
-    | grep -iE '^status:[[:space:]]*(open|in-progress|in_progress|complete|completed|superseded)([[:space:]]|$)' >/dev/null
+    | grep -iE '^status:[[:space:]]*(open|in-progress|in_progress|complete|completed|done|superseded)([[:space:]]|$)' >/dev/null
 }
 
 # is_new_plan <file> → 0 if the file is NEW (git-untracked, else mtime-fresh).

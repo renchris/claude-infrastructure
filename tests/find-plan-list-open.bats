@@ -75,3 +75,33 @@ list_open() { bash "$FP" --list-open; }
   [ "$status" -eq 0 ]
   echo "$output" | grep -q '# Alpha'
 }
+
+# ── `done` is a TERMINAL synonym, and the control is what makes that a real assertion ────────────
+# A plan saying `status: done` used to read `unknown`, and unknown is never hidden — so a plan that
+# declared itself finished enumerated as open forever and its backlog row re-dispatched it
+# (STOP_CHAIN_WAVE2.md, one full cloud dispatch). The control below is the half that matters: an
+# invalid word must STILL be UNKNOWN, or this change would have bought terminality for every typo.
+
+@test "a plan saying 'done' is terminal — excluded from --list-open like 'complete'" {
+  printf -- '---\nstatus: done\n---\n# Finished\n' > "$PB/docs/plans/donesyn.md"
+  run list_open
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -q 'donesyn\.md'
+}
+
+@test "CONTROL: an unrecognised status word is STILL listed as UNKNOWN (never hidden)" {
+  printf -- '---\nstatus: wibble\n---\n# Junk\n' > "$PB/docs/plans/junk.md"
+  run list_open
+  echo "$output" | grep -qE 'UNKNOWN.*junk\.md'
+}
+
+@test "--status reports the canonical word for each accepted alias" {
+  for pair in "done:complete" "completed:complete" "complete:complete" \
+              "in_progress:in-progress" "open:open" "superseded:superseded" "wibble:unknown"; do
+    word="${pair%%:*}"; want="${pair##*:}"
+    f="$BATS_TEST_TMPDIR/alias-$word.md"
+    printf -- '---\nstatus: %s\n---\n# P\n' "$word" > "$f"
+    got="$(bash "$FP" --status "$f")"
+    [ "$got" = "$want" ] || { echo "status: $word → $got (want $want)"; return 1; }
+  done
+}

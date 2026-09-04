@@ -137,3 +137,45 @@ write_phase0_plan() {
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
+
+# ── `done` as an accepted alias, asserted on the TRACKED branch ──────────────────────────────────
+# Deliberately driven through the git-tracked (pre-existing) path, not the NEW path: the NEW path's
+# discriminator is exit 2 vs exit 0, and on the pre-existing path an unrecognised word emits the
+# status WARN while a recognised one falls through to the Phase 0 check. That warn is the clean
+# discriminator, and — unlike the NEW path — it never reaches is_new_plan's `stat`, whose BSD `-f %m`
+# spelling makes the NEW-path tests platform-dependent. A test that cannot fail proves nothing (the
+# vacuous-pass trap docs/plans/STOP_CHAIN_WAVE2.md §W5 recorded), so this one is anchored where the
+# arm actually moves.
+
+tracked_plan() {   # tracked_plan <status-line-or-empty> → path to a git-TRACKED plan carrying it
+  local body="$1" repo="${BATS_TEST_TMPDIR:?}/tr-$$-${BATS_TEST_NUMBER:-0}"
+  mkdir -p "$repo/docs/plans"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email t@t; git -C "$repo" config user.name t
+  local f="$repo/docs/plans/p.md"
+  if [ -n "$body" ]; then printf -- '---\nstatus: %s\n---\n# P\nbody\n' "$body" > "$f"
+  else printf -- '# P\nbody\n' > "$f"; fi
+  git -C "$repo" add -A; git -C "$repo" commit -qm init
+  printf '%s\n' "$f"
+}
+
+@test "tracked plan saying 'done' is accepted — no status WARN" {
+  f="$(tracked_plan "done")"
+  run drive "$f"
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -q 'PLAN STATUS'
+}
+
+@test "CONTROL: tracked plan with an unrecognised word STILL warns" {
+  f="$(tracked_plan "wibble")"
+  run drive "$f"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'PLAN STATUS'
+}
+
+@test "CONTROL: tracked plan saying 'complete' is accepted — no status WARN" {
+  f="$(tracked_plan "complete")"
+  run drive "$f"
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -q 'PLAN STATUS'
+}

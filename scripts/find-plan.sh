@@ -48,7 +48,17 @@ plan_status() {
   [[ -n "$val" ]] || { printf 'unknown\n'; return 0; }
   val=${val#*:}
   val=$(printf '%s' "$val" | tr -d ' \t"'\''`' | tr '[:upper:]' '[:lower:]')
-  case "$val" in in_progress) val=in-progress ;; completed) val=complete ;; esac
+  # ALIASES, not new states. `done` joins `completed` for one measured reason: it is the word this
+  # repo's own doctrine uses for finished everywhere ELSE — `cc-backlog done`, the DONE heading token
+  # plan-phase-scan.sh matches, and validate-plan-structure.sh's own warn text ("classify open vs.
+  # done") — so it is the synonym an author reaches for, and it was the only miss in the corpus
+  # (30 of 31 closed plans say `complete`; STOP_CHAIN_WAVE2.md said `done`). Unrecognised meant
+  # `unknown`, and unknown is NEVER hidden, so a plan that declared itself finished enumerated as
+  # open and its backlog row re-dispatched a completed plan. The canonical word stays `complete` —
+  # every message this repo prints still recommends it; this only stops the synonym from stranding
+  # a row. Kept in sync with the copies in hooks/validate-plan-structure.sh (has_valid_status) and
+  # hooks/setup-plan-symlinks.sh (the one-pass awk).
+  case "$val" in in_progress) val=in-progress ;; completed|done) val=complete ;; esac
   case "$val" in
     open|in-progress|complete|superseded) printf '%s\n' "$val" ;;
     *) printf 'unknown\n' ;;
