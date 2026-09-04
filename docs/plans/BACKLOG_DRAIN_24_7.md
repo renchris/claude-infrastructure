@@ -31747,6 +31747,56 @@ Brief body invariants (regenerate the specifics each recycle; never drop these):
        SHIP_LAND_SMOKE_BUDGET_S=420 bash scripts/ship-land.sh
        bash scripts/gate-select.sh --direct <parent>...HEAD    # the exact list, before or after
 
+9. 🚨 **RESOLVE A STORE'S PATH FROM ITS PRODUCER — "THE DIRECTORY EXISTS" CANNOT TELL YOU IT IS THE
+   RIGHT DIRECTORY** (#296). Every per-recycle brief opens with a post-land RED-page check spelled
+   `find "$HOME/.claude/autonomy/postland" … -name '*.page'`, and dozens of the §2.1 entries above
+   record its answer — **0**, with a denominator — as a health signal. **`scripts/postland-verify.sh`
+   writes no page there and never has:**
+
+       :100  STATE="${CC_POSTLAND_DIR:-$HOME/.claude/autonomy/postland}"   # stamps, IDL, run cells
+       :116  PAGES="${CC_PAGES_DIR:-$HOME/.claude/autonomy/pages}"         # every *.page it emits
+
+   All five emit sites write under `$PAGES` — `:2275` revert-inert · `:2570` revert · `:2678` red ·
+   `:2831` hung · `:3243` cut — its own `--selftest` counts `$PAGES` at `:3459`, and
+   `git log -S 'autonomy/postland/pages' -- scripts/postland-verify.sh` returns **ZERO commits**:
+   the store has been `autonomy/pages` since the file was born (`95438bbbb`). **The check was never
+   right, so its zero is STRUCTURAL — a count over a population that cannot contain the thing being
+   counted.** Measured 2026-09-04T05:06:04Z: `autonomy/postland` `.page` = **0**; `autonomy/pages`
+   `.page` = **71**, including `postland-red-1fcb63efb7cf.page` written at 00:35:10Z (*NO VERDICT —
+   the bisect convicted nothing, floor-not-green*; last-green `24c598bac1c7`; failing
+   `tests/compressor-sentinel.bats::panic reader` and three more). That store is live, not a
+   fossil: the same column read **70** at 05:10:59Z, four minutes later.
+   ⚠️ **AND THE REPAIR BUILT FOR THIS CLASS DOES NOT COVER IT.** #267 guessed
+   `~/.claude/state/inbox-guard`, got `dir=ABSENT`, and added *"assert the directory EXISTS before
+   you print a count, so an absent store reads UNKNOWN and never 0"*. **That guard PASSES here** —
+   the wrong directory exists and holds 2,882 files. **An exists-check separates ABSENT from
+   PRESENT; it cannot separate the RIGHT store from a WRONG one, and only the producer can.**
+   ⚠️ **THE DENOMINATOR BESIDE THAT ZERO IS TWO POPULATIONS, WHICH IS THE OTHER HALF.** The 2,882 is
+   **588** files of store plus **2,294** files of a live git worktree: `:112` mints
+   `$WT_ROOT/wt-run-$$` and `:110` sets `WT_ROOT="$STATE"`, so every verifier run checks a whole repo
+   out INSIDE the store it is being counted with. `wt-run-74759` was registered in
+   `git worktree list`, detached at `9bdac2becb5b`, **2,294 files on disk against 2,285 tracked at
+   that sha** (the second column). **This is the "5.1x–5.3x episodic collapse in both directions and
+   on no schedule" recorded from #252 onward: 2,882 / 588 = 4.90, and the collapsed readings 558 and
+   579 are the store ALONE.** It *is* on a schedule — a verifier's lifetime, plus the 8 h
+   `WT_STALE_S` reaper at `:974` / `:2578`. §4's own 2026-08-17 forensics already record this
+   co-location breaking a different consumer (a `case "$0" in "$_cc_cfg"/*` gate that admitted the
+   verifier's own harness); **a count is the second consumer class it breaks.**
+   ✅ **SHIPPED CODE IS CLEAN ON BOTH HALVES — the defect is in this chain's own instrument, which is
+   why the repair lands HERE and not in `scripts/`.** Nine shipped scripts resolve
+   `${CC_PAGES_DIR:-…/autonomy/pages}` (`postland-verify`, `deploy-live`, `deploy-parity-assert`,
+   `autonomy-sweep`, `cc-gc`, `render-census`, `store-bounds-census`, `compressor-sentinel`,
+   `iterm2-perf-parity`); `bin/cc-premise:386` reads the LEDGER under `CC_POSTLAND_DIR` on purpose
+   and its own comment says why; `config/store-bounds.manifest` refuses recursive walks by design and
+   covers neither directory.
+   ✅ **THE CHECK, CORRECTED. Print BOTH stores — printing them three lines apart is what should have
+   caught this, and `census<N>.sh` has been doing exactly that under the label "the OTHER page
+   store" for eleven links:**
+
+       find "$HOME/.claude/autonomy/pages" -type f -name 'postland-red-*.page' | wc -l  # the RED count
+       find "$HOME/.claude/autonomy/pages" -type f -name '*.page'              | wc -l  # its denominator
+       find "$HOME/.claude/autonomy/postland" -maxdepth 1 -type d -name 'wt-run-*'      # what contaminates a count there
+
 **Inflow control (the other half of "drain"):**
 - C1 re-land minter: pre-fix-branch-bytes leak — the retry executes the BRANCH's old
   ship-land.sh (`git checkout $BRANCH && bash scripts/ship-land.sh`); make the retry command
