@@ -89,7 +89,7 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 - **2026-09-04 — drain recycle #295: method 267 — WHEN ONE VERDICT IS COMPUTED FROM SEVERAL ARMS,
   ASK WHAT EACH ARM IS DENOMINATED IN. TWO ARMS OF ONE LADDER CAN DISAGREE ABOUT WHOSE STATE THEY
   DESCRIBE, AND THE READER IS SHOWN ONE SENTENCE.** ZERO rows closed, ZERO filed, ZERO reopened,
-  ZERO updated. ONE commit, ONE push. #294 established that a field's COMMENT and its CODE can name
+  ZERO updated. TWO commits, ONE push. #294 established that a field's COMMENT and its CODE can name
   different populations, and measured the LEFT operand of `LIVE_ADDS`: an ungated fast-forward of the
   shared checkout empties the window and silences a true breach. This link measured the RIGHT one,
   and it fails in the opposite direction from the opposite cause.
