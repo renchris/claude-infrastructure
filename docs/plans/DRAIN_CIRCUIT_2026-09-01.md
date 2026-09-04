@@ -795,6 +795,42 @@ so it resolves on its own; it just cannot be *driven* from this side. `deploy-li
   named: close attribution is at 7.7% coverage, which is why `lane=local-drain` still reads
   `lane-stalled` and why this arm is scoped fleet-wide rather than per-lane.
 
+- **2026-09-04 — W9 DONE: item (b) is closed, and its larger half was SIZING, not verdicts** (cloud
+  session, off-box; full record §3j). The half of (b) about false refusals was **already fixed by a
+  sibling** — `run_scoped_suite` returns `2 = KILLED`, a spent budget suppresses the exoneration
+  re-run that minted the false `not ok`, and the message says *"NOT a red and NOT evidence about your
+  tree."* The half still shipped was the flat **120s TOTAL for N suites**, which grants each suite
+  `120/N` — **so the wider the diff, the less of it was gated.** Measured first-hand: per-suite cost
+  in this corpus runs 6s → 350s (p50 ≈ 51s, `cc-relogin-poll` at 58s reproducing §3c's 58.35s desk
+  figure), while `gate-select --direct` returns **1·2·3·5·6·7·8·8·12** suites over eleven real
+  drain-circuit lands. On `3457755d7` — the W4 commit whose whole deliverable was
+  `scripts/cloud-return.sh` — the six direct suites cost 475s, `cc-reaper` (350s) ate the budget
+  four suites in, and **`tests/cloud-return.bats` was never started**: the gate did not run the test
+  of the file it was gating, and said `partial`. Now
+  `min(N × PER_SUITE(120), MAX(600))` — still ONE deadline computed once (the property `gate_bats`
+  forbids changing), N=1 a byte-identical no-op, the cap NAMED in the announce line, and
+  `smoke_budget_s`/`smoke_budget_src` in land.log so a `partial` can be told from a diff sized out of
+  its own gate. **Deliberately NOT sized from land.log's own `smoke_s/smoke_n`** — every row there
+  was truncated by the budget being sized, so it can only re-derive itself. 7 new cases, **8 mutants
+  RED-proved**; ship-land reds are an IDENTICAL 16-item set at `origin/main` and here (`comm` empty
+  both ways, 157 → 164 = the seven new cases), three sibling gate suites byte-identical to baseline,
+  shellcheck/self-path-lint/gate-select-lint clean.
+  ⚠️ **The cost is named, not buried**: a land now costs what its smoke actually costs, so an
+  expensive one can exceed cloud-return's 720s budget and be deferred `fits_bound:false` — visible,
+  attributed, with W4's own remedy, against a status quo where the land was cheap because it was
+  ungated. **Residual, named not built:** once the cap binds the budget is still spent in ALPHABETICAL
+  order, so one heavy suite starves the rest — W5's own admission-vs-processing defect one file over.
+  Ordering needs a per-suite cost store, and the censoring that makes the existing one unsafe for
+  SIZING is safe for ORDERING; §3j states the shape.
+
+- **Item (b) is therefore CLOSED. Of the four items open after 2026-09-01, (b) and (d) are done**
+  (d by W8). **(a)** the sweep's own runtime still needs a self-bound — note §3e narrowed it: the
+  `cloud-return` 137s were `timeout`'s own group-directed SIGKILL, so what remains under (a) is
+  specifically `cc-reaper`'s `orphan-bash` collection of `autonomy-sweep.sh` itself at ages
+  1362-2063s, which §3e did not touch and which needs live measurement this session could not take.
+  **(c)** the dispatcher re-fire predicate (`96e532227df8`) remains correctly gated on the lane
+  showing a non-zero drain rate.
+
 ---
 
 ## 3e. THE SIGKILL IS ATTRIBUTED — `timeout` kills itself (W6, 2026-09-03)
@@ -1359,3 +1395,134 @@ The ratio moved before this wave and not because of it; this arm measures, it do
 `lane=local-drain` still renders `lane-stalled` because close attribution sits at **7.7% coverage**
 (2,355 of 2,553 closes carry no `lane`) — the effort arm is scoped fleet-wide precisely so it does
 not inherit that gap, but the gap itself is untouched and is not this wave's.
+
+---
+
+## 3j. THE GATE'S COVERAGE WAS INVERSELY PROPORTIONAL TO THE RISK — the smoke budget (W9, 2026-09-04)
+
+The status log has carried item **(b)** since 2026-09-01: *"ship-land's smoke budget, a false-refusal
+generator sitting directly on the drain path, in a file no wave owns."* Two halves. **A sibling has
+already fixed the half that was about VERDICTS** — `run_scoped_suite` now returns `2 = KILLED`, a
+spent budget suppresses the exoneration re-run that used to mint a false `not ok`, and the message
+says in its own words *"It is NOT a red and NOT evidence about your tree."* §3c's and §3f's
+false-refusal shape cannot recur.
+
+**The half that was about SIZING was still shipped, and it is the larger one.** The budget was a flat
+`120s` TOTAL for however many suites the diff selected. That is one bound over two quantities that
+move independently, and the per-suite share it actually granted is `120/N` — **so the wider the diff,
+the less of it got gated.** A gate whose coverage falls as the risk it covers rises is failing in the
+one direction a gate may not.
+
+### Measured first-hand, off-box, on an IDLE Linux VM (a loaded box is strictly worse)
+
+Per-suite wall cost in this corpus: `backlog-telemetry` 6s · `cc-cloud` 8s · `cloud-reconcile` 10s ·
+`gate-select` 19s · `cloud-return` 51s · `cc-relogin-poll` 58s · `autonomy-sweep` 60s · `cc-notify`
+92s · **`cc-reaper` 350s**. p50 ≈ 51s. The 58s for `cc-relogin-poll` reproduces §3c's desk figure of
+58.35s to within a second, which is the cross-box control for the rest.
+
+And **N is not 1.** `gate-select --direct` over eleven real drain-circuit lands returned
+**1 · 2 · 3 · 5 · 6 · 7 · 8 · 8 · 12** suites. At N=8 the flat total granted **15s each** against a
+p50 of 51s.
+
+### The case that names it is this lane's own W4 commit
+
+`3457755d7` — whose entire deliverable was `scripts/cloud-return.sh` — selects six direct suites
+costing **475s**, run in the selector's alphabetical order:
+
+| # | suite | cost | outcome under the flat 120s |
+|---|---|---|---|
+| 1 | autonomy-sweep | 60s | runs |
+| 2 | backlog-pipeline-unwedge | 2s | runs |
+| 3 | backlog-telemetry | 6s | runs |
+| 4 | cc-reaper | 350s | **CUT** — consumes the remaining 52s |
+| 5 | cloud-refusal-route | 6s | never started |
+| 6 | **cloud-return** | 51s | **NEVER STARTED** |
+
+**The gate did not run the test of the file it was gating**, and attested `partial` — which says a
+verdict was not earned and cannot say that the bound was the reason. That is §1.5 one lane over: an
+instrument reading healthy over its own blindness. `tests/ship-land.bats` has carried the observation
+in a comment since the budget shipped (*"the 132s tests/cc-reaper.bats under a 120s TOTAL budget hits
+this every land"*), and `tests/cc-await-ping.bats:1353` carries it again independently — twice
+written down, never read as a SIZING defect.
+
+### What landed
+
+`budget = min(N × SHIP_LAND_SMOKE_PER_SUITE_S(120), SHIP_LAND_SMOKE_BUDGET_MAX_S(600))`.
+
+- **Still ONE absolute deadline for the whole phase, computed once before the loop.** That is the
+  property `gate_bats`' header forbids changing — a per-CALL budget is what multiplied `gate_admit`
+  into 21h of "bounded" waiting. Nothing here multiplies: N is fixed by the selector before the first
+  child starts, and the cap bounds the product unconditionally.
+- **The per-suite allowance is 120s, which makes N=1 a byte-identical no-op.** The old constant was
+  never wrong about its value, only about its unit. The change cannot move any land the old bound
+  actually fit, and widens only where it provably did not.
+- **The cap is the deliberate policy limit**, and past it the smoke CUTS honestly and the land
+  proceeds as `partial` — the contract at the top of the file, unchanged. The announce line NAMES the
+  cap and the figure the derivation asked for, because a capped phase is the one case where suite
+  ORDER decides who earns a verdict, and a capped phase that announced itself like an uncapped one
+  would be the same blindness one level up.
+- **`smoke_budget_s` + `smoke_budget_src` join land.log**, so "is the gate earning verdicts, or is it
+  sized out of them?" is answerable from the store rather than from a `partial` that cannot say why.
+
+**DELIBERATELY NOT sized from land.log's own `smoke_s`/`smoke_n`.** That store exists, and it looks
+exactly like the measured-price answer W4 used for lands. It is a trap here: **every row it holds was
+truncated by the very budget being sized**, so a budget derived from it can only re-derive itself —
+an estimate censored by the bound it sets. That is worse than a constant, which at least does not
+claim to have measured anything. (Note the contrast with W4, where the censoring runs the *other*
+way: a cut land's recorded price is a lower bound that is too LARGE, which defers work — safe.)
+
+🚨 **THE COST IS REAL AND IT LANDS ON THIS LANE — stated, not buried.** A land priced by W4's
+`.return.land_cost` now costs what its smoke ACTUALLY costs instead of a capped 120s, so an expensive
+land can exceed `cloud-return`'s 720s budget and be deferred with `fits_bound:false`. That is
+visible, attributed, and carries W4's own named remedy. What it replaces is a land that was cheap
+because it was not gated. No caller sets `SHIP_LAND_SMOKE_BUDGET_S` today (grepped), so a lane that
+wants the old behaviour has an explicit lever.
+
+### Proof
+
+Seven new cases in `tests/ship-land.bats`, **eight mutants RED-proved by anchored edits** (each
+asserting its anchor matched exactly once before writing, because a `sed` that matches nothing reads
+exactly like a surviving mutant — §3g's own lesson):
+
+| mutant | red |
+|---|---|
+| the derivation reverts to the flat constant | 5 of 7 — and **N=1 stays green**, which is what proves that case is a genuine no-op control rather than a duplicate |
+| the cap clamp deleted | the CAP case only |
+| the explicit override stops winning | the EXPLICIT case |
+| a garbage override falls back to the old literal 120 | the GARBAGE case **only** — the discrimination its comment claims |
+| the per-suite guard yields 0 (an unbounded phase) | the PER-SUITE case |
+| the re-exec seed read through the OVERRIDE's name | the SEED case |
+| the capped line stops naming the demand it could not meet | the CAP case |
+| `smoke_budget_src` frozen at `derived` | the EXPLICIT case |
+
+**The seed mutant is the interesting one.** `SHIP_LAND_SMOKE_BUDGET_USED_S` is deliberately not
+spelled `SHIP_LAND_SMOKE_BUDGET_S`. The locked child is handed the outer's facts so its land.log row
+can attest a smoke it did not itself run; had that handover reused the *override's* name, a DERIVED
+360 in the parent would arrive as an EXPLICIT 360 in the child and the child's own N would stop
+deciding anything — a derivation that silently latches to whatever the first process computed.
+
+**Regression control, run as a diff rather than a claim.** `tests/ship-land.bats` reds are
+**16 at `origin/main` and 16 in this tree, an identical set** (macOS-only assertions — `sysctl`,
+`uptime`, `/usr/sbin`, launchd — on a Linux VM); `comm` both ways is empty, and the total moves
+157 → 164, which is exactly the seven new cases. `land-gate-cas` 19/1, `land-gate-memo` 10/1,
+`gate-home-isolation` 8/15 and `gate-precheck` 13/0 are byte-identical to their trunk baselines.
+`shellcheck -S warning` 0 findings; `self-path-lint` clean (382 files); `gate-select lint` rc 0.
+
+### What is NOT claimed, and the residual
+
+**No land has been run through this on the desk.** The suites are stubbed, so nothing here measures
+TIME — every case reads the wall the gate *chose*, off its own announce line and out of land.log.
+That is deliberate (a fixture proving a budget by exceeding it would be pinning the shim's sleep),
+but it means the arithmetic is proved and the *duration* is inferred from the per-suite census above.
+
+**The residual is ORDER, and it is now the next binding term.** Once the cap binds, the budget is
+still spent in the selector's ALPHABETICAL order, so a single heavy suite starves the rest — which is
+precisely how `cc-reaper` starved `cloud-return` in the table above. It is the identical defect W5
+found in its own handle loop (*"newest-first governed ADMISSION but not PROCESSING … whoever starts
+first is who spends it"*), one file over. **It is named rather than built, for a reason:** ordering
+cheapest-first needs a per-suite cost estimate, the only available store is the censored one refused
+above, and the sort key's asymmetry is a real design question — a suite with NO observation is most
+likely the diff's own new suite, so unknown must sort FIRST, which is exactly the case that can
+starve the rest again. Censoring is *safe* for ordering (a cut suite's lower bound is too large, so
+it sorts last, which is correct) and unsafe for sizing, so the two uses cannot share one derivation.
+That is the shape the next wave should take.

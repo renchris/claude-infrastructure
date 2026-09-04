@@ -1760,6 +1760,144 @@ EOF
   grep -q '"smoke_n":1' "$LAND_LOG"                       # one suite attempted, honestly counted
 }
 
+# ════ THE BUDGET IS DERIVED FROM N — a constant total does not fit a variable population ════════
+# The budget above is a TOTAL, and that is right. It was also a flat CONSTANT, and that was not:
+# it granted each suite `120/N`, so the wider the diff the less of it got gated — a gate whose
+# coverage falls as the risk it covers rises. Measured on this corpus (idle box; a loaded one is
+# worse): p50 suite ≈ 51s, and `gate-select --direct` returns 1·2·3·5·6·7·8·8·12 suites over
+# eleven real drain-circuit lands. At N=8 the flat total granted 15s each.
+#
+# The case these tests exist for is `3457755d7`, whose whole deliverable was scripts/cloud-return.sh:
+# six direct suites costing 475s, run alphabetically, the flat 120s spent three suites in, the 350s
+# tests/cc-reaper.bats eating the remainder — and tests/cloud-return.bats NEVER STARTED. The gate
+# did not run the test of the code it was gating. The comment two tests above has named the 132s
+# cc-reaper case since the budget shipped without it being read as a SIZING defect; these pin it.
+#
+# The suites are stubbed (the shim returns instantly), so nothing here measures TIME — every case
+# reads the wall the gate CHOSE off its own announce line and out of land.log. That is deliberate:
+# a fixture that tried to prove the budget by exceeding it would be pinning the shim's sleep, and
+# the property under test is arithmetic over N, not duration.
+budget_fixture() {  # $1=N — seed N direct suites onto trunk and select all of them
+  scope_fixture
+  local i list=""
+  for (( i = 1; i <= ${1}; i++ )); do
+    printf '#!/usr/bin/env bats\n@test "s%s" { true; }\n' "$i" > "tests/s$i.bats"
+    list="${list}tests/s$i.bats"$'\n'
+    git add "tests/s$i.bats"
+  done
+  git commit -q -m "seed $1 suite(s)" && git push -q origin HEAD:main
+  git fetch -q origin main
+  stub_selector "" "${list%$'\n'}"
+}
+
+@test "smoke budget: N=1 derives the OLD flat 120s — the constant was never wrong about its value" {
+  # THE NO-OP CONTROL, and the reason the per-suite allowance is 120 and not a rounder number: the
+  # old constant was correct for exactly the population it fit, so this change must not move any
+  # land it actually fit. If this case ever reads anything but 120, the derivation has changed
+  # behaviour where there was no defect — which is the one direction a re-sizing must not fail in.
+  budget_fixture 1
+  landable feat/budget-n1 bn1.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '1 direct suite(s), ≤120s total (1×120s derived)'
+  grep -q '"smoke_budget_s":120' "$LAND_LOG"
+  grep -q '"smoke_budget_src":"derived"' "$LAND_LOG"
+}
+
+@test "smoke budget: N=3 gets 360s — the wall SCALES, so a wider diff is not gated LESS" {
+  # THE HEADLINE. Under the flat constant this same diff got 120s for three suites — 40s each,
+  # below the corpus p50 of 51s, so the third suite was structurally unreachable. The per-suite
+  # share is now invariant in N, which is what makes the gate's coverage independent of the diff's
+  # width instead of inversely proportional to it.
+  budget_fixture 3
+  landable feat/budget-n3 bn3.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '3 direct suite(s), ≤360s total (3×120s derived)'
+  grep -q '"smoke_budget_s":360' "$LAND_LOG"
+  [ "$(grep -c '^tests/s[0-9]*\.bats$' "$BATS_ARGV")" -eq 3 ]   # all three actually STARTED
+}
+
+@test "smoke budget: the CAP bounds the product, and SAYS the phase is smaller than its population" {
+  # A cap is what keeps a land bounded, and it is the one case where suite ORDER decides who earns
+  # a verdict — so it must not be silent. A capped phase that announced itself like an uncapped one
+  # is the §1.5 defect of DRAIN_CIRCUIT (an instrument reading healthy over its own blindness), so
+  # the line names both the cap and the figure the derivation actually asked for.
+  budget_fixture 3
+  landable feat/budget-cap bcap.sh
+
+  run env SHIP_LAND_SMOKE_BUDGET_MAX_S=200 bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '≤200s total (CAPPED'
+  echo "$output" | grep -q 'asked for 360s'                     # the unmet demand is NAMED
+  grep -q '"smoke_budget_s":200' "$LAND_LOG"
+  grep -q '"smoke_budget_src":"derived"' "$LAND_LOG"            # capped is still derived, not explicit
+}
+
+@test "smoke budget: an EXPLICIT override wins at any N, including BELOW the derivation" {
+  # Every cut/partial fixture in this file drives its path through SHIP_LAND_SMOKE_BUDGET_S=3, so
+  # the override has to beat a derivation that would hand this diff 360s. Pinned in the direction
+  # that a derivation could plausibly break: not "the override is respected" but "the override is
+  # respected even when it is much SMALLER than what N would have bought".
+  budget_fixture 3
+  landable feat/budget-explicit bex.sh
+
+  run env SHIP_LAND_SMOKE_BUDGET_S=7 bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '≤7s total (explicit SHIP_LAND_SMOKE_BUDGET_S)'
+  grep -q '"smoke_budget_s":7' "$LAND_LOG"
+  grep -q '"smoke_budget_src":"explicit"' "$LAND_LOG"
+}
+
+@test "smoke budget: a GARBAGE override falls back to the DERIVATION, never to the old constant" {
+  # The fallback's contract has always been "the default, never unbounded" — and the default is now
+  # derived. This is the case that pins the fallback's IDENTITY rather than merely its boundedness:
+  # a mutant that reverted the fallback to a literal 120 stays green on every other case in this
+  # block, because at N=1 the two answers are equal and no other case feeds it garbage.
+  budget_fixture 3
+  landable feat/budget-garbage bgar.sh
+
+  run env SHIP_LAND_SMOKE_BUDGET_S=twelve bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '≤360s total (3×120s derived)'
+  grep -q '"smoke_budget_s":360' "$LAND_LOG"
+  grep -q '"smoke_budget_src":"derived"' "$LAND_LOG"
+}
+
+@test "smoke budget: a bad PER-SUITE allowance falls back to 120, never to an unbounded phase" {
+  # Same law one knob over. A non-integer allowance that fell through as an empty string would make
+  # the product 0, and `budget -gt 0` then sets NO deadline at all — an unbounded smoke, which is
+  # the v1 hang this whole phase exists to have deleted. Reached through the derivation, so it
+  # cannot be caught by the override's own guard.
+  budget_fixture 2
+  landable feat/budget-perbad bpb.sh
+
+  run env SHIP_LAND_SMOKE_PER_SUITE_S=- bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '≤240s total (2×120s derived)'
+  grep -q '"smoke_budget_s":240' "$LAND_LOG"
+}
+
+@test "smoke budget: the re-exec SEED never shadows a smoke that actually ran" {
+  # SHIP_LAND_SMOKE_BUDGET_USED_S is deliberately NOT spelled SHIP_LAND_SMOKE_BUDGET_S. The locked
+  # child is handed the outer's facts so its land.log row can attest a smoke it did not run; if
+  # that handover reused the OVERRIDE's name, a DERIVED 360 in the parent would arrive as an
+  # EXPLICIT 360 in the child and the child's own N would stop deciding anything — a derivation
+  # that silently latches to whatever the first process computed. Here the seed is a value no
+  # derivation could produce, and the land that RUNS its smoke must attest its own arithmetic.
+  budget_fixture 2
+  landable feat/budget-seed bsd.sh
+
+  run env SHIP_LAND_SMOKE_BUDGET_USED_S=999 SHIP_LAND_SMOKE_BUDGET_SRC=explicit bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '≤240s total (2×120s derived)'
+  grep -q '"smoke_budget_s":240' "$LAND_LOG"
+  grep -q '"smoke_budget_src":"derived"' "$LAND_LOG"
+  [ "$(grep -c '"smoke_budget_s":999' "$LAND_LOG")" -eq 0 ]
+}
+
 # ════ LOAD SHEDDING — shed is a SKIP, never a wait (R7) ════════════════════════════════════════
 # gate_admit is DELETED, so its four tests (kill switch · fail-open · bounded wait · no-wait under
 # the lock) went with it. Three of those properties survive in load_above_ceiling, which is a pure

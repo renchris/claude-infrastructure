@@ -80,8 +80,14 @@
 # `gate-select.sh --direct` suites of THIS diff MINUS the HOST suites named in
 # scripts/host-suites.manifest (§4.2.2 — those assert the LIVE layer and are owned by the
 # post-deploy check; letting one back in through the smoke rebuilds the bootstrap circle one lane
-# over), one process per suite, under ONE TOTAL wall budget SHIP_LAND_SMOKE_BUDGET_S (default
-# 120s), `nice`d, each child bounded by `timeout -k 10` against the shared deadline. Three rules,
+# over), one process per suite, under ONE TOTAL wall budget — DERIVED as
+# `min(N × SHIP_LAND_SMOKE_PER_SUITE_S(120), SHIP_LAND_SMOKE_BUDGET_MAX_S(600))`, or handed in
+# verbatim via SHIP_LAND_SMOKE_BUDGET_S — `nice`d, each child bounded by `timeout -k 10` against
+# the shared deadline. That budget was a FLAT 120s total until it was measured: a constant total
+# grants each suite `120/N`, so the WIDER the diff the LESS of it got gated, and on this file's own
+# lane it meant the suite of the file being landed was never started. The derivation block in
+# run_smoke carries the measurements and the cost. Still ONE deadline for the whole phase, computed
+# once before the loop — a per-CALL budget is the thing gate_bats' header forbids. Three rules,
 # each paying for a named v1 failure:
 #   RED BLOCKS (exit 6)  a named `not ok` in a direct suite is a verdict about YOUR diff.
 #   CUT PROCEEDS         a cut / budget kill earned NO verdict, and a non-verdict must never
@@ -130,7 +136,10 @@
 # — it starts working the day something writes one — but nothing depends on it.
 #
 # land.log schema (growth is safe — the readers select by key): `gate_scope` carries the LANE
-# ("fast"|"v1"), plus smoke, smoke_n, smoke_s, and net:"live|inert|none". The verifier's liveness is
+# ("fast"|"v1"), plus smoke, smoke_n, smoke_s, smoke_budget_s + smoke_budget_src
+# ("derived"|"explicit"|"none" — the wall the smoke actually ran under, so a `partial` can be told
+# apart from a diff simply sized out of its own gate), and net:"live|inert|none". The verifier's
+# liveness is
 # ATTESTED, never a control-flow input: a land that cannot see a live net WARNS and lands anyway —
 # degrading to a corpus is precisely the fail-closed-amplifier class v2 exists to delete (R7).
 #
@@ -161,7 +170,10 @@
 # `fast`) — except the never-in-lock invariant, which binds in both. SHIP_LAND_GATE_SCOPE is
 # still parsed for back-compat but decides nothing in the fast lane.
 #
-# Env overrides (mostly for tests): SHIP_LAND_LANE · SHIP_LAND_SMOKE_BUDGET_S ·
+# Env overrides (mostly for tests): SHIP_LAND_LANE · SHIP_LAND_SMOKE_BUDGET_S (the TOTAL smoke
+# wall, verbatim — wins over the derivation, 0 ⇒ no wall) · SHIP_LAND_SMOKE_PER_SUITE_S (default
+# 120 — the derived default's per-suite allowance) · SHIP_LAND_SMOKE_BUDGET_MAX_S (default 600 —
+# the cap on the derived product) ·
 # SHIP_LAND_SMOKE_NICE · SHIP_LAND_TIMEOUT_BIN (set-but-EMPTY ⇒ unbounded children) ·
 # CC_GATE_MAX_LOAD (ABSOLUTE ceiling; 0|off ⇒ never shed; UNSET ⇒ derived, see below) ·
 # CC_GATE_MAX_LOAD_PER_CORE (default 8 — the derived default's factor) ·
@@ -316,6 +328,13 @@ gate_red() {  # $1=arm  [$2=subject: the file/suite it named] — raise GATE_RED
 SMOKE_STATE="${SHIP_LAND_SMOKE_STATE:-none}"
 SMOKE_N="${SHIP_LAND_SMOKE_N:-0}"              # direct suites the smoke actually RAN
 SMOKE_S="${SHIP_LAND_SMOKE_S:-0}"              # wall seconds the smoke spent
+# THE BUDGET THAT WALL WAS, and whether it was DERIVED or handed in. Attested for one reason: a
+# `partial` smoke says a verdict was not earned and cannot say whether the bound was the reason.
+# Without this, "is the gate earning verdicts, or is it sized out of them?" is unanswerable from
+# land.log — the §1.5 defect of DRAIN_CIRCUIT, one lane over (an instrument that reads healthy
+# over its own blindness). 0 = the smoke never set a wall on this run.
+SMOKE_BUDGET_S="${SHIP_LAND_SMOKE_BUDGET_USED_S:-0}"
+SMOKE_BUDGET_SRC="${SHIP_LAND_SMOKE_BUDGET_SRC:-none}"   # derived | explicit | none
 NET_STATE="${SHIP_LAND_NET_STATE:-none}"       # live | inert | none — ATTESTED, never enforced
 SMOKE_DEADLINE=""                              # non-empty ⇒ gate_bats bounds every child by it
 
@@ -717,11 +736,12 @@ attest_land() {  # $1=verify $2=sweep $3=esc $4=exit [$5=stage: land|round] — 
   # new-enum-member-falls-into-fail-closed-default).
   local stage="${5:-land}"
   local total_s=$(( $(date +%s) - LAND_T0 ))
-  printf '{"ts":"%s","tool":"ship-land","repo":"%s","branch":"%s","sid":"%s","verify":"%s","sweep":"%s","esc_scan":"%s","exit":%s,"stage":"%s","head":"%s","base":"%s","tree":"%s","gate_scope":"%s","selected_n":%s,"smoke":"%s","smoke_n":%s,"smoke_s":%s,"net":"%s","red":"%s","total_s":%s,"gate_rounds":%s,"gate_s":%s,"gate_arms_s":%s,"gate_statics_s":%s}\n' \
+  printf '{"ts":"%s","tool":"ship-land","repo":"%s","branch":"%s","sid":"%s","verify":"%s","sweep":"%s","esc_scan":"%s","exit":%s,"stage":"%s","head":"%s","base":"%s","tree":"%s","gate_scope":"%s","selected_n":%s,"smoke":"%s","smoke_n":%s,"smoke_s":%s,"smoke_budget_s":%s,"smoke_budget_src":"%s","net":"%s","red":"%s","total_s":%s,"gate_rounds":%s,"gate_s":%s,"gate_arms_s":%s,"gate_statics_s":%s}\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${REPO_ROOT}" "${BRANCH}" "${CLAUDE_CODE_SESSION_ID:-}" \
     "$1" "$2" "$3" "$4" "$stage" \
     "${ATTEST_HEAD:-?}" "${ATTEST_BASE:-?}" "${ATTEST_TREE:-?}" "${LANE}" "${SELECTED_N:--1}" \
-    "${SMOKE_STATE:-none}" "${SMOKE_N:-0}" "${SMOKE_S:-0}" "${NET_STATE:-none}" "${red}" \
+    "${SMOKE_STATE:-none}" "${SMOKE_N:-0}" "${SMOKE_S:-0}" \
+    "${SMOKE_BUDGET_S:-0}" "${SMOKE_BUDGET_SRC:-none}" "${NET_STATE:-none}" "${red}" \
     "$total_s" "${MEAS_ROUNDS:-0}" "${MEAS_GATE_S:-0}" "${MEAS_ARMS_S:-0}" "${MEAS_STATICS_S:-0}" \
     >> "$log" 2>/dev/null || true
   ATTESTED=1
@@ -1205,6 +1225,11 @@ post_state_write() {  # $1=landed_head — the locked child's entire handover
     printf 'SMOKE_STATE=%s\n'  "${SMOKE_STATE:-none}"
     printf 'SMOKE_N=%s\n'      "${SMOKE_N:-0}"
     printf 'SMOKE_S=%s\n'      "${SMOKE_S:-0}"
+    # Same reason as SMOKE_*: the fallback lane runs the smoke INSIDE the child, so the wall it
+    # actually used is the child's fact alone. An outer that re-derived it would attest a budget
+    # for an N it never selected.
+    printf 'SMOKE_BUDGET_S=%s\n'   "${SMOKE_BUDGET_S:-0}"
+    printf 'SMOKE_BUDGET_SRC=%s\n' "${SMOKE_BUDGET_SRC:-none}"
     printf 'NET_STATE=%s\n'    "${NET_STATE:-none}"
     printf 'GATE_RED=%s\n'     "${GATE_RED:-0}"
     printf 'GATE_RED_WHY=%s\n' "${GATE_RED_WHY:-}"
@@ -1233,6 +1258,8 @@ post_state_read() {  # $1=file — one explicit arm per key: no `eval`, so a cor
       SMOKE_STATE)  SMOKE_STATE="$v"  ;;
       SMOKE_N)      SMOKE_N="$v"      ;;
       SMOKE_S)      SMOKE_S="$v"      ;;
+      SMOKE_BUDGET_S)   SMOKE_BUDGET_S="$v"   ;;
+      SMOKE_BUDGET_SRC) SMOKE_BUDGET_SRC="$v" ;;
       NET_STATE)    NET_STATE="$v"    ;;
       GATE_RED)     GATE_RED="$v"     ;;
       GATE_RED_WHY) GATE_RED_WHY="$v" ;;
@@ -1807,6 +1834,7 @@ gate_bats() {  # run bats with the operator's lander tuning scrubbed; args pass 
   env -u SHIP_LAND_GATE_ROUNDS -u SHIP_LAND_VERIFY_RETRIES -u SHIP_LAND_GATE_SCOPE \
       -u LAND_LOCK_WAIT -u LAND_LOCK_TTL \
       -u SHIP_LAND_LANE -u SHIP_LAND_SMOKE_BUDGET_S -u SHIP_LAND_TIMEOUT_BIN \
+      -u SHIP_LAND_SMOKE_PER_SUITE_S -u SHIP_LAND_SMOKE_BUDGET_MAX_S \
       -u SHIP_LAND_T0 -u SHIP_LAND_MEAS_ROUNDS -u SHIP_LAND_MEAS_GATE_S \
       -u SHIP_LAND_MEAS_ARMS_S -u SHIP_LAND_MEAS_STATICS_S \
       CC_GATE_MAX_LOAD=0 ${homeenv[@]+"${homeenv[@]}"} bats "$@" </dev/null
@@ -2067,11 +2095,90 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
     return 0
   fi
 
-  budget="${SHIP_LAND_SMOKE_BUDGET_S:-120}"
-  case "$budget" in ''|*[!0-9]*) budget=120 ;; esac      # non-integer ⇒ the default, never unbounded
+  # ════ THE BUDGET IS DERIVED FROM N, BECAUSE A CONSTANT TOTAL DOES NOT FIT A VARIABLE POPULATION ══
+  # This shipped as a flat 120s TOTAL for however many suites the diff selected. That is one bound
+  # over two quantities that move independently, and the per-suite share it actually grants is
+  # `120/N` — so the wider the diff, the LESS of it gets gated. The gate's coverage was inversely
+  # proportional to the risk it exists to cover, which is the one direction a gate must never fail
+  # in. Measured first-hand on an IDLE box (a loaded one is worse), per-suite wall cost in this
+  # corpus: backlog-telemetry 6s · cc-cloud 8s · cloud-reconcile 10s · gate-select 19s ·
+  # cloud-return 51s · cc-relogin-poll 58s · autonomy-sweep 60s · cc-notify 92s · cc-reaper 350s.
+  # p50 ≈ 51s. And N is not 1: over eleven real drain-circuit lands `gate-select --direct` selected
+  # 1·2·3·5·6·7·8·8·12 suites. At N=8 the flat total granted 15s each against a p50 of 51s.
+  #
+  # THE CASE THAT NAMES IT, and it is this file's own lane. `3457755d7` — the W4 commit whose entire
+  # deliverable was `scripts/cloud-return.sh` — selects six direct suites costing 475s, run in the
+  # selector's alphabetical order: autonomy-sweep 60 · backlog-pipeline-unwedge 2 · backlog-telemetry
+  # 6 · cc-reaper 350 · cloud-refusal-route 6 · cloud-return 51. The flat 120s is spent three suites
+  # in; cc-reaper consumes the remainder and is CUT; and `tests/cloud-return.bats` — the suite of the
+  # file being landed — IS NEVER STARTED. The gate did not run the test of the code it was gating,
+  # and said `partial` rather than anything a reader would act on. tests/ship-land.bats has carried
+  # the observation in a comment since the budget shipped ("the 132s tests/cc-reaper.bats under a
+  # 120s TOTAL budget hits this every land") without it ever being read as a SIZING defect.
+  #
+  # THE DERIVATION, and what it preserves. `min(N × per-suite, cap)`. It is still ONE absolute
+  # deadline for the whole phase, computed ONCE before the loop — the property gate_bats' header
+  # calls out as the thing that must not change, since a per-CALL budget is what multiplied
+  # gate_admit into 21h of "bounded" waiting. Nothing here multiplies: N is fixed by the selector
+  # before the first child starts, and the cap bounds the product unconditionally. This is the same
+  # move `load_above_ceiling` already made in this file when its constant 8 turned out to be
+  # 0.8/core and shed 87% of all lands — a DERIVED default beside an explicit override.
+  #
+  # THE PER-SUITE ALLOWANCE IS 120s, WHICH MAKES N=1 A BYTE-IDENTICAL NO-OP. The old constant was
+  # never wrong; it was wrong about its own unit. Keeping its value as the per-suite allowance means
+  # this change cannot alter any land the old bound actually fit, and only widens where it provably
+  # did not. 120s is ~2.3× the measured p50, which is headroom for the loaded box, not a guess at it.
+  #
+  # THE CAP IS WHAT KEEPS A LAND BOUNDED, and it is 600s. It is a deliberate policy limit on the
+  # test phase, not a mis-sized bound: past it the smoke CUTS honestly and the land proceeds as
+  # `partial`, which is the contract at the top of this file. 600s admits the 475s case above and
+  # the 285s green smoke §3f measured on the desk when it re-ran at 900.
+  #
+  # 🚨 THE COST IS REAL AND IT LANDS ON THE CLOUD LANE — stated, not buried. A land priced by W4's
+  # `.return.land_cost` now costs what its smoke ACTUALLY costs instead of a capped 120s, so an
+  # expensive land can exceed cloud-return's 720s budget and be DEFERRED with `fits_bound:false`.
+  # That is visible, attributed, and has a named remedy in W4's own words; the status quo it
+  # replaces is a land that was cheap because it was not gated. A lane that wants the old behaviour
+  # sets SHIP_LAND_SMOKE_BUDGET_S explicitly — no caller does today (grepped).
+  #
+  # DELIBERATELY NOT SIZED FROM land.log's OWN smoke_s/smoke_n. That store exists and looks like the
+  # measured-price answer W4 used for lands, and it is a TRAP here: every row it holds was truncated
+  # by the very budget being sized, so a budget derived from it can only ever re-derive itself. An
+  # estimate censored by the bound it sets is worse than a constant — the constant at least does not
+  # claim to have measured anything.
+  local nsel per cap
+  nsel="$(printf '%s\n' "$direct" | grep -c .)"
+  per="${SHIP_LAND_SMOKE_PER_SUITE_S:-120}"
+  case "$per" in ''|*[!0-9]*) per=120 ;; esac             # non-integer ⇒ the default, never 0
+  cap="${SHIP_LAND_SMOKE_BUDGET_MAX_S:-600}"
+  case "$cap" in ''|*[!0-9]*) cap=600 ;; esac
+  budget=$(( nsel * per ))
+  [[ "$budget" -gt "$cap" ]] && budget="$cap"
+  SMOKE_BUDGET_SRC="derived"
+  # THE EXPLICIT OVERRIDE STILL WINS ABSOLUTELY, including a value SMALLER than the derivation and
+  # including 0 (= no wall at all). Every message in this phase names it as the override, and the
+  # fixtures in tests/ship-land.bats drive the cut paths through it at 3s.
+  # A GARBAGE override falls back to the DERIVATION, not to the old flat constant: the fallback's
+  # contract has always been "the default, never unbounded", and the default is now derived.
+  if [[ -n "${SHIP_LAND_SMOKE_BUDGET_S:-}" ]]; then
+    case "$SHIP_LAND_SMOKE_BUDGET_S" in
+      ''|*[!0-9]*) ;;
+      *) budget="$SHIP_LAND_SMOKE_BUDGET_S"; SMOKE_BUDGET_SRC="explicit" ;;
+    esac
+  fi
+  SMOKE_BUDGET_S="$budget"
   start="$(date +%s)"
   [[ "$budget" -gt 0 ]] && SMOKE_DEADLINE=$(( start + budget ))
-  echo "→ gate: smoke — $(printf '%s\n' "$direct" | grep -c .) direct suite(s), ≤${budget}s total, one process each" >&2
+  # The line NAMES the derivation, because a reader who sees a cut needs to know whether the wall
+  # was chosen for this diff or handed in — and, when the cap binds, that the phase is knowingly
+  # smaller than its own population (the one case where suite ORDER decides who earns a verdict).
+  if [[ "$SMOKE_BUDGET_SRC" = explicit ]]; then
+    echo "→ gate: smoke — ${nsel} direct suite(s), ≤${budget}s total (explicit SHIP_LAND_SMOKE_BUDGET_S), one process each" >&2
+  elif [[ $(( nsel * per )) -gt "$cap" ]]; then
+    echo "→ gate: smoke — ${nsel} direct suite(s), ≤${budget}s total (CAPPED at SHIP_LAND_SMOKE_BUDGET_MAX_S; ${nsel}×${per}s asked for $(( nsel * per ))s, so the later suites may not be reached), one process each" >&2
+  else
+    echo "→ gate: smoke — ${nsel} direct suite(s), ≤${budget}s total (${nsel}×${per}s derived), one process each" >&2
+  fi
   # ONE clone for the whole smoke (not one per suite): the direct suites are as non-hermetic as any
   # other, so they still get the isolated $HOME. Fail-open by contract — see gate_home_setup.
   gate_home_setup
@@ -4267,7 +4374,9 @@ main_outer() {
     export SHIP_LAND_GATE_EFFECTIVE_FULL="$GATE_EFFECTIVE_FULL" SHIP_LAND_SELECTED_N="$SELECTED_N" \
            SHIP_LAND_FIRST_BASE="$FIRST_BASE" \
            SHIP_LAND_SMOKE_STATE="$SMOKE_STATE" SHIP_LAND_SMOKE_N="$SMOKE_N" \
-           SHIP_LAND_SMOKE_S="$SMOKE_S" SHIP_LAND_NET_STATE="$NET_STATE"
+           SHIP_LAND_SMOKE_S="$SMOKE_S" SHIP_LAND_NET_STATE="$NET_STATE" \
+           SHIP_LAND_SMOKE_BUDGET_USED_S="$SMOKE_BUDGET_S" \
+           SHIP_LAND_SMOKE_BUDGET_SRC="$SMOKE_BUDGET_SRC"
     meas_export
     "$LAND_LOCK" -- "$SELF" __locked "$TRUNK" "$DRY_RUN" "$GATE_BASE" "$GATE_HEAD"
     rc=$?
