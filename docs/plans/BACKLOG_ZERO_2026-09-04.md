@@ -104,6 +104,11 @@ mints follow-ons the drains cannot keep up with. The telemetry that would have s
 
 ## §4 Status log (INTEGRATE-only; newest first)
 
+- **2026-09-04 17:10Z — the old chain is gone.** The operator ran the filed `cc-teardown 27 …`; verdict
+  `ALREADY-GONE` (pid 99254 dead, pane 27 absent): recycle #301 ended itself — its own §2.1 entry
+  called it "the last link of the pane-27 chain" and no `fire-pointer-302.txt` exists. Row
+  `0b4279107f2e` closed on that evidence. W2a still landing (its gate draw is on a second long suite).
+
 - **2026-09-04 16:50Z — the hooks-update dialog, per the Claude Code docs (claude-code-guide subagent,
   fetched official docs):** the `[settings] settings.json to update hooks — proceed?` dialog is **not
   documented** in the settings, permissions or hooks references; there is **no supported flag, key or
