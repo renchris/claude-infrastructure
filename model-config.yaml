@@ -139,10 +139,17 @@ versions:
 # THREE BREAKING CHANGES vs Fable 5 (docs: /models/fable-5-1/whats-new-fable-5-1):
 #  1. FORCED TOOL USE → 400. `tool_choice` of `{"type":"any"}` or `{"type":"tool",...}` is
 #     rejected (also on count_tokens); `auto` and `none` are unchanged. Thinking is always on
-#     and a forced call would skip it. ⚠️ CHECK AT ACTIVATION: our Dynamic Workflow `schema:`
-#     option forces a StructuredOutput tool call. If the binary implements that as forced
-#     tool_choice rather than strict tool use, every schema-bearing workflow agent pinned to
-#     Fable 5.1 400s. Probe one schema agent before routing any workflow slot to 5.1.
+#     and a forced call would skip it. ✅ CHECK DONE 2026-09-03 — THE CLIENT ALREADY HANDLES IT,
+#     so this never reaches our workflows. Read out of claude.exe 2.1.260:
+#         if ($M?.type === "tool" && thinkingActive)
+#           log("tool_choice {type:'tool', name:'…'} demoted to auto: extended thinking is active")
+#           $M = { type: "auto" }
+#     Thinking is always-on for 5.1, so the demotion always fires and the request is built with
+#     `auto`. Corroborating: the binary contains ZERO `"type":"any"` tool_choice constructions.
+#     ⚠️ What remains is a RELIABILITY delta, not a failure: `auto` does not COMPEL the
+#     StructuredOutput call, so a schema-bearing agent now depends on the Workflow layer's
+#     validate-and-retry rather than on a guaranteed first-call. Watch for retry-rate growth on
+#     schema slots; do not expect 400s.
 #  2. THINKING BLOCKS ARE MODEL-BOUND, one-directionally: 5.1 reads earlier models' blocks,
 #     no earlier model reads 5.1's. A conversation moving ONTO 5.1 keeps its reasoning; one
 #     moving OFF it (a refusal fallback to Opus 5 / Opus 4.8) loses it for those turns. Drops
@@ -566,7 +573,16 @@ roles:
                                             # /frontier-run (unknown-unknown discovery over the
                                             # project's docs/research/FRONTIER_HOLES.md ledger).
                                             # Stable-track leads ride auto mode (claude-opus-4-8).
-  frontier_discovery: claude-fable-5        # the ONLY default surface for Fable: /frontier-run
+  frontier_discovery: claude-fable-5-1      # FLIPPED 2026-09-03 with frontier_latest — these five
+                                            # role pins are EMITTERS in the SSOT's own body, and the
+                                            # 3b census swept scripts/ and bin/ but not this block,
+                                            # so the first flip left them naming Fable 5 while the
+                                            # config above said the frontier was 5.1: "the config
+                                            # reads adopted and the fleet is not", the exact class
+                                            # (ii) failure 3b defines. Every benchmark number in the
+                                            # comments below was measured on Fable 5 and is NOT
+                                            # re-attributed — routing claims move, measurements stay.
+                                            # the ONLY default surface for Fable: /frontier-run
                                             # baseline-blind derivation panels — AGENT-INITIATED
                                             # under the bounded-autonomy policy (CLAUDE.md
                                             # § Frontier Tier Routing + frontier_discovery_budget;
@@ -582,7 +598,7 @@ roles:
                                             # (verified 2026-06-09) — pin teammate_frontier
                                             # per-member where judgment density warrants 2×,
                                             # eval-track teams only (2.1.114 errors loudly).
-  teammate_frontier: claude-fable-5         # per-member for judgment-heavy eval-track teammates
+  teammate_frontier: claude-fable-5-1       # per-member for judgment-heavy eval-track teammates
                                             # (architecture, security, review-gates). While
                                             # frontier_access.active this is the DEFAULT for
                                             # judgment-dense HARD tasks (2026-06-11 routing
@@ -624,13 +640,29 @@ roles:
                                             # allowlisted) — those use research_worker (Opus 4.8). Intro $2/$10 → std
                                             # $3/$15 on 2026-08-31 (win holds at std). SSOT: ~/.claude/model-routing-freewin-probe.md.
   research_retrieval: claude-haiku-4-5      # Explore tier (25% slot, codebase/file:line lookups)
-  research_adversarial: claude-fable-5      # adversarial/red-team/judge/depth-coordination slots
+  research_adversarial: claude-fable-5-1    # adversarial/red-team/judge/depth-coordination slots
                                             # (10-15%); call-time Agent `model: "fable"` override,
-                                            # eval track + active window only; else fallback
-  workflow_judge: claude-fable-5            # Dynamic Workflow judge/synthesis agents — same
-                                            # conditionality as research_adversarial
+                                            # eval track + active window only; else fallback.
+                                            # The `fable` ALIAS is safe here: measured on 2.1.260,
+                                            # `--model fable` resolves to claude-fable-5-1.
+  workflow_judge: claude-fable-5-1          # Dynamic Workflow judge/synthesis agents — same
+                                            # conditionality as research_adversarial.
+                                            # ✅ THE `schema:` HAZARD IS CLEARED, and by the CLIENT
+                                            # not by us (§ Fable 5.1 breaking change 1 asked for this
+                                            # probe BEFORE routing any workflow slot to 5.1).
+                                            # claude.exe 2.1.260 carries:
+                                            #   if ($M?.type==="tool" && thinkingActive)
+                                            #     "tool_choice {type:'tool'} demoted to auto:
+                                            #      extended thinking is active"; $M={type:"auto"}
+                                            # Fable 5.1 has thinking ALWAYS ON, so a forced
+                                            # StructuredOutput choice is rewritten to `auto` before
+                                            # the request is built and never reaches the 400.
+                                            # ⚠️ The residue is RELIABILITY, not failure: `auto`
+                                            # means the schema call is no longer compelled, so a
+                                            # schema-bearing agent leans on the Workflow layer's
+                                            # validate-and-retry instead of a guaranteed first call.
   classifier: claude-sonnet-4-6             # hardcoded by Anthropic (not user-configurable)
-  eval_judge: claude-fable-5                # highest-quality judge during window; else fallback
+  eval_judge: claude-fable-5-1              # highest-quality judge during window; else fallback
 
 # Bounded-autonomy budget for frontier escalation (2026-06-09 policy: the human
 # NEVER model-switches or starts frontier sessions — the agent escalates itself,
