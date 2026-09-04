@@ -1566,6 +1566,35 @@ and the not-run result the same bytes) · **Route C and its AST-allowlisted pred
 no model finding is promotable by any route) · **S5's planning half** (B17) · **S4's five-trigger
 machinery at current volume** (B19).
 
+### 6.0b AS BUILT — 2026-09-04, and the three numbers above that moved
+
+Built against the corpus, all in `bench/`, none of it a model call: **B3** and **B4** already
+existed; **B19**'s 20-line S4 is `route.py`; the per-app half of **C11** is `profiles.py`; the ship
+gate of **C18** is `score.py`, which exits non-zero. `README.md` § 8.1 holds the full delta. Three
+rows of this document are now false as written and are corrected here rather than in place, because
+each was a *ruling* and its reasoning still stands:
+
+- **"X2 centroid ON by default" is off the Cut list.** It was cut for want of a control run, which is
+  the correct reason, and it has now had one: 0 findings on the control against the old arm's 2, the
+  injected defect at −2.00 px against a derived 1.25 px band, both DPRs agreeing. Its two documented
+  defects are fixed (container-relative measurement; a painted-shape mask). The Cut list's sibling
+  entry — *"X4/X5/X6 until each has its own control run"* — is untouched and is the rule that
+  admitted this one.
+- **"T1 on the corpus today is 0" (C7, B19) is now 12 crops over 13 pages.** X2's honest vertical
+  abstention — a text glyph's ink sits where its font's baseline puts it, and no artifact here
+  carries that — created a real queue where there was none. **The cut still stands**: twelve
+  questions of one class collapse and fold to one image each, and nothing is dropped. But the
+  premise it rested on is gone, and U3 now has something to histogram.
+- **X1's swamping bug (B19b) is fixed offline, and B19b is not thereby closed.** `inkmask.py` gets
+  the painted-shape mask from a flood fill over the stored PNG rather than from S1b's differential
+  re-render. The differential probe is strictly better — it assumes nothing about shape or backdrop —
+  and B19b's revival condition (*build it the first time X1 finds a true positive*) is unchanged,
+  because X1 still has no fixture and has never caught anything. `score.py` reports it NOT ADMITTED.
+
+One thing this build did NOT do, and it is the one that matters: **B0**. The false-positive claim is
+still a bound, not a measurement. `score.py --clean-set` is the socket, and the rate is withheld in
+code until n ≥ 16.
+
 ### 6.1 The scorecard this restructure produces
 
 | | Before the attack | After |
