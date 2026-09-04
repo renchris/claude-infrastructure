@@ -2479,6 +2479,115 @@ def wk_strand_pp(r):
     return max(0.0, 100.0 - (wp + b * wrh))
 
 
+# ---- M3c — the scoring harness that CAN fail (USAGE_TELEMETRY_100P §5.2 S5) --------------------
+STRAND_BUCKETS = (96.0, 48.0, 24.0, 12.0, 6.0)   # hours BEFORE the reset at which M3a is scored
+STRAND_SIGN_EPS = 0.5     # pp below which a projection is "no strand" — pace_line's own threshold
+
+
+def strand_score(samples, buckets=STRAND_BUCKETS):
+    """Score M3a's nowcast against what each completed weekly window ACTUALLY stranded, at fixed
+    distances from its reset. Returns {"windows", "cells", "buckets": [{...} per horizon]}.
+
+    WHY THIS EXISTS AND WHAT IT REPLACES. The synthesis's score evaluated the fire rule at the
+    window's LAST sample, where the projection has already converged to `100 - weekly_pct` — i.e.
+    to the true strand — so it agreed with the identity function on 8 of 8 windows and produced
+    EIGHT BINARY CELLS that could not come out wrong. This produces ~45 (window, horizon) cells at
+    fixed distances from the reset, where the projection is genuinely extrapolating and can be, and
+    will be, wrong. A harness that cannot fail is not a harness
+    (`verification-harness-vacuous-pass-traps.md`, `control-must-replay-the-real-artifact.md`).
+
+    THE ONE TRAP THAT MAKES A SCORER LIE, and it is silent: `burn_wk_ewma_ph` selects on
+    `now - e["_t"] <= LOOKBACK`, which for a sample AFTER `now` is negative and therefore passes.
+    Handed the whole series it would fit the EWMA on data from the future of the instant being
+    scored, and every bucket would report a bias near zero — a perfect grade earned by peeking.
+    The slice below (`_t <= at`) is the entire causality guarantee, and RP-30 is its proof.
+
+    ABSTAIN. A (window, bucket) cell with no sample at `weekly_reset_h >= H`, or whose M3a
+    abstains there, contributes NOTHING: it is counted in `skipped` and excluded from n, the bias,
+    the MAE and the sign-agreement rate. It is never imputed and never scored as a hit — an
+    unmeasurable cell counted as correct is how a bias converges to zero without any evidence.
+
+    NOTHING ROUTES ON THIS. It renders HISTORY, reads only the series, and is the prerequisite S6
+    is gated behind: if the bias at the 12 h bucket is not near zero, the rescue alarm is not
+    shippable at any parameter setting."""
+    wins = completed_weekly_windows(samples)
+    by_acct = {}
+    for e in samples or []:
+        if e.get("_t") is not None:
+            by_acct.setdefault(e.get("acct"), []).append(e)
+    for ss in by_acct.values():
+        ss.sort(key=lambda e: e["_t"])
+
+    cells = {h: [] for h in buckets}
+    skipped = {h: 0 for h in buckets}
+    for w in wins:
+        ss = by_acct.get(w["acct"]) or []
+        # completed_weekly_windows derives reset_t as `key * 60.0`, so the key is recoverable
+        # exactly rather than re-matched by proximity — the same rounded minute key everything
+        # else on this surface uses (_reset_key, S1a), so a sub-second stamp jitter cannot split
+        # one window into two.
+        key = int(round(w["reset_t"] / 60.0))
+        inwin = [e for e in ss if _reset_key(e.get("weekly_reset_at")) == key
+                 and e.get("weekly_pct") is not None]
+        for h in buckets:
+            cand = [e for e in inwin if (w["reset_t"] - e["_t"]) / 3600.0 >= h]
+            if not cand:
+                skipped[h] += 1
+                continue
+            at = max(cand, key=lambda e: e["_t"])
+            wrh = (w["reset_t"] - at["_t"]) / 3600.0
+            # CAUSAL SLICE — nothing after the instant being scored. See the docstring.
+            past = [e for e in ss if e["_t"] <= at["_t"]]
+            b, _span = burn_wk_ewma_ph(past, at["_t"], wrh)
+            proj = wk_strand_pp({"weekly_pct": at["weekly_pct"], "weekly_reset_h": wrh,
+                                 "burn_wk_ewma_ph": b})
+            if proj is None:
+                skipped[h] += 1
+                continue
+            cells[h].append({"acct": w["acct"], "reset_t": w["reset_t"], "at_h": wrh,
+                             "projected": proj, "realised": w["strand"],
+                             "err": proj - w["strand"]})
+
+    out = []
+    for h in buckets:
+        cs = cells[h]
+        n = len(cs)
+        if not n:
+            out.append({"h": h, "n": 0, "skipped": skipped[h], "bias": None,
+                        "mae": None, "sign_agree": None})
+            continue
+        errs = [c["err"] for c in cs]
+        agree = sum(1 for c in cs
+                    if (c["projected"] >= STRAND_SIGN_EPS) == (c["realised"] >= STRAND_SIGN_EPS))
+        out.append({"h": h, "n": n, "skipped": skipped[h],
+                    "bias": sum(errs) / n,
+                    "mae": sum(abs(e) for e in errs) / n,
+                    "sign_agree": agree / n,
+                    "cells": cs})
+    return {"windows": len(wins), "cells": sum(len(cells[h]) for h in buckets), "buckets": out}
+
+
+def render_strand_score(sc):
+    """The one rendering of strand_score. An abstained bucket prints its n=0 and WHY it is empty,
+    never a dash that reads as "measured, and fine"."""
+    lines = [f"M3a strand nowcast — scored on {sc['windows']} completed weekly window(s), "
+             f"{sc['cells']} (window, horizon) cell(s)",
+             f"  {'horizon':>8}  {'n':>3}  {'skip':>4}  {'bias pp':>8}  {'MAE pp':>7}  "
+             f"{'sign':>5}"]
+    for b in sc["buckets"]:
+        if not b["n"]:
+            lines.append(f"  {'T−' + format(b['h'], '.0f') + 'h':>8}  {0:>3}  "
+                         f"{b['skipped']:>4}  {'—':>8}  {'—':>7}  {'—':>5}   "
+                         f"no evaluable sample this far out")
+            continue
+        lines.append(f"  {'T−' + format(b['h'], '.0f') + 'h':>8}  {b['n']:>3}  "
+                     f"{b['skipped']:>4}  {b['bias']:>+8.2f}  {b['mae']:>7.2f}  "
+                     f"{100.0 * b['sign_agree']:>4.0f}%")
+    lines.append("  bias > 0 = the nowcast OVER-predicts the strand (cries loss that never came).")
+    lines.append("  S6's rescue alarm is gated on the T−12h bias: not near zero ⇒ not shippable.")
+    return lines
+
+
 # ---- M4' — the START-TIME constraint (USAGE_TELEMETRY_100P §5.2 S4) ----------------------------
 # Constants come from the burst table in §5.1, n = 8 burst windows. They are the ENTIRE evidence
 # base, which is why this metric ships on probation and why P_WALL is documented as a lower bound.
@@ -4856,6 +4965,33 @@ def main():
             print("no provider registry (~/.claude/providers.json) — Claude-only fleet")
             return
         print("\n".join(lines).lstrip("\n"))
+        return
+
+    # --strand-score: M3a's own scoring harness, and the SECOND branch that returns before
+    # load_cfg(), for the --agents reasons plus one of its own. It renders HISTORY — scored past
+    # weekly windows out of the utilization series — so it needs no keychain, no usage endpoint,
+    # no lock and no sweep, and demanding a live accounts.json to grade a past window would be a
+    # coupling, not a convenience (that is exactly how the provider branch was found to be
+    # mis-sited). It is also the reason this ships as a FLAG on this binary rather than a
+    # scripts/*.sh: the flag rides the existing ~/.claude/bin/claude-accounts symlink and goes
+    # live on the trunk fast-forward, where a new file would land as an ADD the live layer cannot
+    # reach until the converger runs (the LIVE_ADDS trap).
+    #
+    # L3 EXCEPTION, ARGUED. L3 governs the LIVE-STATE surface — there is one renderer of "what are
+    # the accounts doing now", and this touches none of it. Nothing routes on this output; it is
+    # the mutation test of the planner, not a second opinion about the fleet.
+    if "--strand-score" in args:
+        # `is None`, never `or` — an explicit `--hours 0` is a caller asking for nothing, and
+        # silently promoting it to the 60 d default is the confident-wrong-answer class _num_flag's
+        # own docstring exists to refuse.
+        hours = _num_flag(args, "--hours")
+        hours = 1440.0 if hours is None else hours          # 60 d ⇒ ~8 closed weekly windows
+        rows, _span = _util_tail(hours=hours)
+        sc = strand_score(rows)
+        if "--json" in args:
+            print(json.dumps(sc, indent=2, default=float))
+            return
+        print("\n".join(render_strand_score(sc)))
         return
 
     # --max-wait / --max-age are GLOBAL modifiers, parsed before load_cfg() because --max-wait 0
