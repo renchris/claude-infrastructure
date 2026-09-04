@@ -547,6 +547,47 @@ log_idl cloud-retire "$(jq -cn --arg p "$_cloudprune_rc" --arg r "$_cloudretire_
   '{branch_prune_rc:$p, cloud_retire_rc:$r,
     note:"branch_prune_rc: 0 = pass completed (first tick is a DRY RUN that only writes the manifest; every later tick deletes, and only branches patch-equivalent on the trunk); 1 = at least one delete batch failed, see the manifest; 124/137 = the bound cut it, next tick resumes; skipped-absent = the tool is not deployed; skipped-no-repo = the pruner has no checkout to read; skipped-not-deployed = a checkout/suite copy, which may never delete a remote ref. cloud_retire_rc: 0 = pass completed; 69 = SENSOR FAILED (ls-remote unreadable, or a remote answering with ZERO heads) and NOTHING was retired — never read as an empty remote; 3 = cc-cloud or the repo is missing"}')"
 
+# ── the THRASH RECOVERY ARM (W3 F) — the other built tool with zero callers ───────────────────────
+# cc-backlog's reap rule B blocks an item after MAX_THRASH fast claim→reopen pairs, and cc-dispatch
+# takes its claim BEFORE it fires and rolls it back whenever it cannot start — a refused fire, a
+# brief that would not compose, a worktree that could not be provisioned. Those write the identical
+# ledger shape while no worker has been anywhere near the item, so the machine's own self-release
+# was recorded as evidence about the ITEM. `blocked` is the OPERATOR-ONLY state and cc-dispatch
+# excludes it by construction, so every such block removed real work from the autonomous queue
+# permanently: 228 items, 64% of everything blocked, 182 of them never having held a claim for even
+# the 90 s window (measured 2026-08-07).
+#
+# `scripts/thrash-block-recover.sh` is the repair and has had ZERO CALLERS since it was written —
+# `grep -rn` finds only comments in bin/cc-backlog. Live churn over the seven days to 2026-09-04:
+# 251 block · 176 unblock · 228 claims over 23 distinct ids, a 7.5x reclaim per id.
+#
+# IT CONVERGES RATHER THAN OSCILLATING, which is why it can sit on a 300 s cadence. `cc-backlog`
+# now writes `reopen --self-release` on the dispatcher's own rollback and reap skips those pairs, so
+# the population this can act on is the HISTORICAL rows that cannot acquire the flag — a set that
+# only shrinks. It also only ever touches an item whose LATEST event is a rule-B block authored by
+# cc-backlog-reap: an operator block, a wedged-worker block and a done item are structurally out of
+# reach, and an item it unblocks has an unblock as its latest event, so it is not re-acted on.
+#
+# UNDER THE SAME DEPLOYED-COPY GATE: this WRITES TO THE OPERATOR'S BACKLOG. A verifier worktree
+# running it would unblock live rows, which is the 2026-08-11 incident in a different store.
+_thrash="$_SWEEP_DIR/thrash-block-recover.sh"
+_thrash_rc="skipped"
+if [ "$_cloudret_deployed" != 1 ]; then
+  _thrash_rc="skipped-not-deployed"
+elif [ -x "$_thrash" ]; then
+  if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then
+    "$_tmo" -k 10 "${CC_SWEEP_THRASH_BOUND_S:-180}" bash "$_thrash" --apply >/dev/null 2>&1
+  else
+    bash "$_thrash" --apply >/dev/null 2>&1
+  fi
+  _thrash_rc=$?
+else
+  _thrash_rc="skipped-absent"
+fi
+log_idl thrash-recover "$(jq -cn --arg c "$_thrash_rc" \
+  '{thrash_recover_rc:$c,
+    note:"0 = pass completed (per-item UNBLOCK lines in the pass output; a pass with nothing to recover is also 0); 1 = at least one unblock FAILED and the item is still blocked; 2 = the ledger is unreadable or cc-backlog is not executable; 3 = the RECOVER set exceeded --max, which is a REFUSAL and not a truncation — raise CC_RECOVER_MAX deliberately after reading the dry run; 124/137 = the bound cut it, next tick resumes; skipped-absent = the tool is not deployed; skipped-not-deployed = a checkout/suite copy, which may never write to the backlog"}')"
+
 # ── 0b. D4 — AUTHOR-DEATH JOIN (was §0; §0a now precedes it — see the placement note there) ───────
 # The one class no push and no watcher covers: the detached watcher ITSELF dies (reboot, box kill —
 # detach() survives a group SIGKILL but not the machine). Nothing then closes the pane and nothing
