@@ -104,6 +104,17 @@ mints follow-ons the drains cannot keep up with. The telemetry that would have s
 
 ## §4 Status log (INTEGRATE-only; newest first)
 
+- **2026-09-04 16:50Z — the hooks-update dialog, per the Claude Code docs (claude-code-guide subagent,
+  fetched official docs):** the `[settings] settings.json to update hooks — proceed?` dialog is **not
+  documented** in the settings, permissions or hooks references; there is **no supported flag, key or
+  env var** to pre-approve it (`--permission-mode auto` gates tools, not this); it is best read as a
+  hooks-changed approval gate that fires when hooks in `.claude/settings.json` or the user
+  settings.json change on disk. The one candidate workaround — keep project hooks in the gitignored
+  `.claude/settings.local.json` so a pull cannot change them — is an **untested inference**, not a
+  documented behaviour. Disposition: the fix is upstream and operator-owned (file the missing-docs /
+  automation-workaround question with Anthropic; test the settings.local.json placement on ONE
+  fired session before adopting it). Evidence lives on pile row `8ea3acef7d64` (dodRef → this entry).
+
 - **2026-09-04 16:40Z — the lanes close rows; the modal is a consent boundary, not a bug to sweep.**
   Lane infra #300 landed `c5e2eb5a5` (row `07ac6d58d88d`, cc-pane's send verb) and closed five rows
   stamped `lane=local-drain` by 16:31Z (one DOABLE, four MOOT on content); its closure report reads
