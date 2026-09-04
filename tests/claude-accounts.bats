@@ -140,6 +140,263 @@ PY
   [[ "$output" == *OK* ]]
 }
 
+# ---- unit: inherit_k (the CONCURRENCY inheritance) --------------------------------------------
+# Same shape as inherit_lastgood, different instrument. `concurrency()` returns None whenever
+# `ps -wwEo command=` blows its timeout, and that is fleet-wide by construction — one census for
+# all four accounts — so `_excluded` charged `concurrency-unmeasured` on every row at once and the
+# router abstained: 23 of 230 recorded desk decisions, and this is the largest reason inside them
+# (68 of their 92 exclusion records — docs/research/desk-router-abstention-2026-09-01.md §2, §4).
+# The launcher's answer to an abstention
+# is `_claude_pinned`, so a mechanism built to SPREAD load concentrated every launch on the
+# most-drained account. The census that could not be taken this sweep was taken 90s ago and is on
+# disk; these cases pin that it is inherited, stamped, bounded — and that `row["k"]` stays None,
+# which is the half that keeps heal() and handoff-fire's relogin gate refusing.
+
+@test "inherit_k: an unmeasurable ps inherits the last sweep's census, stamped, k untouched" {
+  run python3 - <<'PY'
+import importlib.machinery, importlib.util, os, time
+ca = importlib.util.module_from_spec(importlib.util.spec_from_loader(
+    "ca", importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"])))
+importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"]).exec_module(ca)
+ca.LOG_PATH = os.path.join(os.environ["BATS_TEST_TMPDIR"], "claude-accounts.log")
+
+now = time.time()
+prev = {"ts": now - 90, "rows": {"next3": {"k": 3, "weekly_pct": 22}}}
+row = {"acct": "next3", "k": None}
+assert ca.inherit_k(row, prev, now=now) is True
+assert row["k"] is None, "row['k'] was overwritten — heal()/handoff-fire read that field"
+assert row["k_stale"] == 3
+assert "T" in row["k_stale_as_of"]                 # provenance, not a bare bool
+assert ca.k_src(row) == "panes-stale"
+assert ca.k_panes(row) == 3 and ca.k_eff(row) == 3
+assert ca.k_shown(row) == "3*"                     # the operator sees the staleness
+assert 85 <= ca._k_stale_s(row, now=now) <= 95
+# a measured census is never overwritten by an older one
+live = {"acct": "next3", "k": 0}
+assert ca.inherit_k(live, prev, now=now) is False
+assert live == {"acct": "next3", "k": 0}
+assert ca.k_src(live) == "panes"
+print("OK")
+PY
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || false
+}
+
+@test "inherit_k: provenance is carried, so the grace expires from the MEASUREMENT" {
+  # The trap inherit_lastgood's quota_as_of block already documents, in its concurrency spelling:
+  # get_data writes the inherited row back into the cache and _prev_snapshot reads rows back out,
+  # so a permanently-starved `ps` re-inherits its OWN inherited count every sweep. Re-stamping the
+  # age each pass makes the 600s bound unreachable — the count would be carried forever.
+  run python3 - <<'PY'
+import importlib.machinery, importlib.util, os, time
+ca = importlib.util.module_from_spec(importlib.util.spec_from_loader(
+    "ca", importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"])))
+importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"]).exec_module(ca)
+ca.LOG_PATH = os.path.join(os.environ["BATS_TEST_TMPDIR"], "claude-accounts.log")
+
+now = time.time()
+measured_at = None
+row = {"acct": "next3", "k": None}
+assert ca.inherit_k(row, {"ts": now - 60, "rows": {"next3": {"k": 5}}}, now=now) is True
+measured_at = row["k_stale_as_of"]
+# five more sweeps, each 100s later, each re-inheriting the PREVIOUS (already stale) row
+for hop in range(1, 6):
+    t = now + 100 * hop
+    nxt = {"acct": "next3", "k": None}
+    got = ca.inherit_k(nxt, {"ts": t, "rows": {"next3": dict(row)}}, now=t)
+    age = 60 + 100 * hop
+    if age <= 600:
+        assert got is True, (hop, age)
+        assert nxt["k_stale"] == 5
+        assert nxt["k_stale_as_of"] == measured_at, "re-dated: the grace can never expire"
+        row = nxt
+    else:
+        assert got is False, (hop, age)          # past the grace ⇒ back to unmeasured
+        assert "k_stale" not in nxt
+        assert ca.k_src(nxt) == "unmeasured"
+print("OK")
+PY
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || false
+}
+
+@test "inherit_k: no prev, no census, past the grace, and clock skew all fail CLOSED" {
+  run python3 - <<'PY'
+import importlib.machinery, importlib.util, os, time
+ca = importlib.util.module_from_spec(importlib.util.spec_from_loader(
+    "ca", importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"])))
+importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"]).exec_module(ca)
+ca.LOG_PATH = os.path.join(os.environ["BATS_TEST_TMPDIR"], "claude-accounts.log")
+
+now = time.time()
+def fresh():
+    return {"acct": "next3", "k": None}
+cases = {
+    "no prev at all":        (None, None),
+    "prev has no such acct": ({"ts": now - 30, "rows": {"other": {"k": 4}}}, None),
+    "prev row never had k":  ({"ts": now - 30, "rows": {"next3": {"weekly_pct": 9}}}, None),
+    "past the 600s grace":   ({"ts": now - 601, "rows": {"next3": {"k": 4}}}, None),
+    "clock skew (future)":   ({"ts": now + 300, "rows": {"next3": {"k": 4}}}, None),
+    "stamp unparseable":     ({"ts": now, "rows": {"next3": {"k": None, "k_stale": 4,
+                                                             "k_stale_as_of": "not-a-date"}}}, None),
+}
+for name, (prev, _) in cases.items():
+    row = fresh()
+    assert ca.inherit_k(row, prev, now=now) is False, name
+    assert row == {"acct": "next3", "k": None}, (name, row)
+    assert ca.k_src(row) == "unmeasured", name
+    scored = dict(row, session_pct=5.0, session_reset_h=3.0)
+    assert ca._excluded(scored, {"S_CUT": 0.85, "EPS_H": 0.25, "KMAX": 8, "KMAX_RESIDENT": 40},
+                        cliff=False) == "concurrency-unmeasured", name
+
+# ...but SUB-SECOND negative is ROUNDING, not skew: the stamp is an ISO string with microsecond
+# resolution, so a freshly-written one can read a hair ahead of the clock that wrote it. A strict
+# `0 <=` floor made the refusal depend on the fractional part of time.time() — a 2-in-3 flake when
+# a sweep inherits within the same instant, which is precisely the re-inheritance case.
+edge = fresh()
+assert ca.inherit_k(edge, {"ts": now + 0.4, "rows": {"next3": {"k": 4}}}, now=now) is True
+assert edge["k_stale"] == 4
+assert ca.inherit_k(fresh(), {"ts": now + 5, "rows": {"next3": {"k": 4}}}, now=now) is False
+print("OK")
+PY
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || false
+}
+
+@test "collect: a fleet-wide ps failure routes on the inherited census, and heal still sees None" {
+  # The whole defect end to end: concurrency() None, a prev snapshot on disk, and the row must come
+  # out ROUTABLE. The second assertion is the safety one — heal()'s k_live argument is what decides
+  # whether a refresh token may be redeemed, and it must NEVER see the inherited number.
+  run python3 - <<'PY'
+import importlib.machinery, importlib.util, os, json, time
+ca = importlib.util.module_from_spec(importlib.util.spec_from_loader(
+    "ca", importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"])))
+importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"]).exec_module(ca)
+ca.LOG_PATH = os.path.join(os.environ["BATS_TEST_TMPDIR"], "claude-accounts.log")
+ca.LASTGOOD_PATH = os.environ["CA_LEDGER"]
+
+cfg = json.load(open(os.environ["CA_CFG"]))
+for a in cfg["accounts"]:
+    a["config_dir"] = os.path.expanduser(a["config_dir"])
+R = cfg["router"]; R.setdefault("KMAX_RESIDENT", 40)
+ca.read_creds = lambda cd, kc: ({"accessToken": "t",
+                                 "expiresAt": (time.time() + 3600) * 1000}, "present")
+ca.fetch_usage = lambda cfg, token, retries=2: (200, {"limits": [
+    {"kind": "session", "percent": 7}, {"kind": "weekly_all", "percent": 20}],
+    "extra_usage": {}})
+# heal() reads its k_live ARGUMENT, never the row, so the seam that keeps the rotation gate honest
+# is what collect PASSES the probe. Record it rather than stubbing heal: no fixture can then make
+# the gate look refused while the argument was in fact fabricated.
+seen_k_live, _probe = [], ca.probe_account
+def _spy(cfg, acct, kc, k_live, ledger, prev, no_heal):
+    seen_k_live.append(k_live)
+    return _probe(cfg, acct, kc, k_live, ledger, prev, no_heal)
+ca.probe_account = _spy
+
+# sweep 1: ps healthy, 2 live sessions
+ca.concurrency = lambda _cfg: {a["name"]: 2 for a in _cfg["accounts"]}
+rows1 = ca.collect(cfg, no_heal=True)
+assert rows1[0]["k"] == 2 and "k_stale" not in rows1[0]
+prev = {"ts": time.time() - 30, "rows": {r["acct"]: dict(r) for r in rows1}}
+
+# sweep 2: BOTH instruments starved — ps returns None and the transcript walk goes over budget.
+# That pairing is not a contrived worst case: it is the only shape the abstention has ever had
+# (17,059 utilization rows, 0 with `k is None` while k_work was measured — §4), because one
+# starved box is what fails both, and `k_src` reads 'work' whenever k_work survives.
+ca.concurrency = lambda _cfg: None
+ca.working_concurrency = lambda _cfg, **kw: None
+del seen_k_live[:]                                  # sweep 1's honest 2 is not the claim here
+rows2 = ca.collect(cfg, no_heal=True, prev=prev)
+r = rows2[0]
+assert r["k"] is None, "the measured field must stay unmeasured"
+assert r["k_stale"] == 2 and r["k_stale_as_of"]
+assert ca.k_src(r) == "panes-stale"
+assert ca._excluded(r, R, cliff=False) is None, \
+    "THE ABSTENTION IS BACK: a starved ps still excludes the whole fleet"
+assert ca.score_general(r, cfg, cliff=False)[0] is not None
+# the rotation-safety gate never sees the inherited number: heal(cfg, acct, rt, k_live) is called
+# with THIS, and `k_live is None` is its refusal (tests/account-fact-derivation.bats case 13).
+assert seen_k_live == [None], seen_k_live
+print("OK")
+PY
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || false
+}
+
+@test "MUTANT: a _prev_snapshot that drops the census cannot inherit — all four excluded again" {
+  # Control-can-fail, aimed at the exact projection line that carries the value. Without `k` in the
+  # snapshot there is nothing to inherit, and the suite above must go red rather than pass anyway.
+  mutant="$BATS_TEST_TMPDIR/mutant-prevsnap"
+  sed 's/^                                      "k", "k_stale", "k_stale_as_of")}$/                                      "k_stale_as_of")}/' "$CA_BIN" > "$mutant"
+  run bash -c "grep -c '\"k\", \"k_stale\", \"k_stale_as_of\")}' \"\$1\"" _ "$mutant"
+  [ "$output" = 0 ]                                # the projection really was mutated
+  CA_MUTANT="$mutant" run python3 - <<'PY'
+import importlib.machinery, importlib.util, os, json, time
+src = os.environ["CA_MUTANT"]
+ca = importlib.util.module_from_spec(importlib.util.spec_from_loader(
+    "ca", importlib.machinery.SourceFileLoader("ca", src)))
+importlib.machinery.SourceFileLoader("ca", src).exec_module(ca)
+ca.LOG_PATH = os.path.join(os.environ["BATS_TEST_TMPDIR"], "claude-accounts.log")
+ca.LASTGOOD_PATH = os.environ["CA_LEDGER"]
+
+cfg = json.load(open(os.environ["CA_CFG"]))
+cfg["cache_file"] = os.path.join(os.environ["BATS_TEST_TMPDIR"], "mutant-cache.json")
+for a in cfg["accounts"]:
+    a["config_dir"] = os.path.expanduser(a["config_dir"])
+R = cfg["router"]; R.setdefault("KMAX_RESIDENT", 40)
+ca.read_creds = lambda cd, kc: ({"accessToken": "t",
+                                 "expiresAt": (time.time() + 3600) * 1000}, "present")
+ca.fetch_usage = lambda cfg, token, retries=2: (200, {"limits": [
+    {"kind": "session", "percent": 7}, {"kind": "weekly_all", "percent": 20}],
+    "extra_usage": {}})
+ca.concurrency = lambda _cfg: {a["name"]: 2 for a in _cfg["accounts"]}
+rows1 = ca.collect(cfg, no_heal=True)
+ca.cache_write(cfg, {"ts": time.time(), "cfg_key": ca._cfg_key(cfg), "rows": rows1})
+
+ca.concurrency = lambda _cfg: None
+ca.working_concurrency = lambda _cfg, **kw: None
+rows2 = ca.collect(cfg, no_heal=True, prev=ca._prev_snapshot(cfg))
+r = rows2[0]
+assert "k_stale" not in r, "the mutant inherited anyway — the projection is not the seam"
+assert ca._excluded(r, R, cliff=False) == "concurrency-unmeasured"
+print("MUTANT-RED-AS-EXPECTED")
+PY
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *MUTANT-RED-AS-EXPECTED* ]] || false
+}
+
+@test "MUTANT: an inherit_k that re-stamps provenance carries a census forever" {
+  # The second seam: the bound is only real because the stamp is the MEASUREMENT's. A mutant that
+  # re-dates on every re-inheritance keeps a 10-hour-old census alive inside a 600s grace.
+  mutant="$BATS_TEST_TMPDIR/mutant-restamp"
+  sed 's/pr.get("k_stale"), pr.get("k_stale_as_of")/pr.get("k_stale"), datetime.fromtimestamp(prev["ts"], timezone.utc).isoformat()/' \
+    "$CA_BIN" > "$mutant"
+  run bash -c "grep -c 'pr.get(\"k_stale\"), datetime.fromtimestamp' \"\$1\"" _ "$mutant"
+  [ "$output" = 1 ]                                # the provenance line really was mutated
+  CA_MUTANT="$mutant" run python3 - <<'PY'
+import importlib.machinery, importlib.util, os, time
+src = os.environ["CA_MUTANT"]
+ca = importlib.util.module_from_spec(importlib.util.spec_from_loader(
+    "ca", importlib.machinery.SourceFileLoader("ca", src)))
+importlib.machinery.SourceFileLoader("ca", src).exec_module(ca)
+ca.LOG_PATH = os.path.join(os.environ["BATS_TEST_TMPDIR"], "claude-accounts.log")
+
+now = time.time()
+row = {"acct": "next3", "k": None}
+assert ca.inherit_k(row, {"ts": now - 60, "rows": {"next3": {"k": 5}}}, now=now) is True
+for hop in range(1, 40):                            # ~65 minutes of 100s sweeps
+    t = now + 100 * hop
+    nxt = {"acct": "next3", "k": None}
+    if not ca.inherit_k(nxt, {"ts": t, "rows": {"next3": dict(row)}}, now=t):
+        break
+    row = nxt
+else:
+    print("MUTANT-RED-AS-EXPECTED")                 # never expired: the bound was unreachable
+PY
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *MUTANT-RED-AS-EXPECTED* ]] || false
+}
+
 # ---- unit: capture on the good path (collect writes the ledger) ------------------------------
 
 @test "collect: a 200 sweep captures last-good (absolute resets + quota_as_of) to the ledger" {

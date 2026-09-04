@@ -151,7 +151,19 @@ feedback loop, and this doc does not claim otherwise.
 Six tests added across the two suites, each with a mutant that reproduces the pre-fix blindness and
 goes red.
 
-## NOT shipped — filed, with the reason
+## NOT shipped here — SHIPPED 2026-09-04 (backlog `1f6208064577`)
+
+> **Status update.** The item below landed as `inherit_k` + `k_panes` in `bin/claude-accounts`,
+> under its own mutant-proven suite, once the instrument named in §6 had been in place for three
+> days. Two things came out differently from the sketch and are worth carrying forward:
+> **(1)** the grace has to be checked TWICE — at write (inherit_k) and at charge (k_panes) —
+> because `--route` serves a cache up to `cache_grace_s` old and never runs the writer, so a
+> write-only bound charges an edge-of-grace census at twice its age; **(2)** the inherited count
+> lives in `k_stale`/`k_stale_as_of` and `row["k"]` stays None, which turned out to need no change
+> in `handoff-fire.sh:6020-6043` at all — its `(.k | type) == "number"` spelling already refuses,
+> and the sketch's "would need stale-marker awareness" was solved by not moving the field it reads.
+> `k_src` gained `panes-stale` and route-meta gained `k_stale_s=`, so the staleness each decision
+> accepted is on disk.
 
 **Inherit the last sweep's `k`** (`bin/claude-accounts:3040-3042` add `"k"` to `_prev_snapshot`'s
 projection; `:1330` stamp the inherited value with a staleness marker, bounded by the existing 600 s

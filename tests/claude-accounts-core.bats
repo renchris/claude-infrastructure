@@ -2244,6 +2244,68 @@ PY
   [[ "$output" != *desk_tier* ]] || { echo "$output"; false; }
 }
 
+@test "--route interactive: a starved ps routes on the INHERITED census, and says how stale it is" {
+  # The abstention this closes, end to end through the real binary (desk-router-abstention
+  # 2026-09-01 §4): `ps` unreadable ⇒ `k` null on every row ⇒ `concurrency-unmeasured` on all four
+  # ⇒ `--route` exits non-zero ⇒ `claude()` falls through to the PINNED account. With the last
+  # sweep's census inherited, the same fleet routes; and the decision carries the staleness it
+  # accepted, because a routing-eligibility change that nothing can evaluate is §6's error again.
+  _seed_starved() {   # <k_stale-or-empty> <age-s>
+    K_STALE="$1" K_AGE="$2" python3 - <<'PY'
+import json, os, time, importlib.machinery, importlib.util
+from datetime import datetime, timezone
+ca = importlib.util.module_from_spec(importlib.util.spec_from_loader(
+    "ca", importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"])))
+importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"]).exec_module(ca)
+ca.LOG_PATH = os.path.join(os.environ["BATS_TEST_TMPDIR"], "claude-accounts.log")
+cfg = json.load(open(os.environ["CA_CFG"]))
+ks, age = os.environ["K_STALE"], float(os.environ["K_AGE"])
+def r(n, wk, wrh):
+    # BOTH instruments blind — the only shape this abstention has ever had: one starved box
+    # fails the `ps` census and the transcript walk together (§4, 17,059 rows).
+    d = {"acct": n, "auth": "ok", "k": None, "k_work": None, "session_pct": 10,
+         "session_reset_h": 3.0, "weekly_pct": wk, "weekly_reset_h": wrh, "fable_pct": 10,
+         "fable_reset_h": 24.0, "credits_on": False}
+    if ks:
+        d["k_stale"] = int(ks)
+        d["k_stale_as_of"] = datetime.fromtimestamp(time.time() - age, timezone.utc).isoformat()
+    return d
+json.dump({"ts": time.time(), "cfg_key": ca._cfg_key(cfg), "no_heal": False,
+           "window": {"active": True, "end": "2099-12-31", "deadline": None, "permanent": True},
+           "prev": None, "rows": [r("roomy", 3, 159.0), r("expiring", 47, 86.0)]},
+          open(os.environ["CACHE"], "w"))
+PY
+  }
+
+  # 1. no inheritable census: the pre-fix behaviour, unchanged — nothing routable, DATA exit 3
+  _seed_starved "" 0
+  run bash -c "python3 '$CA_BIN' --route interactive 2>/dev/null"
+  [ "$status" -eq 3 ]                                  # DATA, not policy — callers may degrade
+  [ "$output" = none ]
+
+  # 2. the same fleet with the last sweep's census: routes, and to the same account it would have
+  #    picked with a live one — the inherited number changes eligibility, not the objective
+  _seed_starved 2 120
+  run bash -c "python3 '$CA_BIN' --route interactive 2>/dev/null"
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "expiring" ]
+  run bash -c "python3 '$CA_BIN' --route interactive 2>&1 >/dev/null"
+  [[ "$output" == *"k_src=panes-stale"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"k_stale_s=1"* ]] || { echo "$output"; false; }   # ~120s, whole seconds
+  [[ "$output" == *"k=-"* ]] || { echo "$output"; false; }           # the measured field: absent
+  [[ "$output" == *"k_eff=2"* ]] || { echo "$output"; false; }
+
+  # 3. past the grace the row is unmeasured again — the floor the grace band sits on. The cache
+  #    is the reader here, not the sweeper, so this is what proves the bound travels WITH the
+  #    value: nothing on this path ever calls inherit_k.
+  _seed_starved 2 4000
+  run bash -c "python3 '$CA_BIN' --route interactive 2>/dev/null"
+  [ "$status" -eq 3 ]
+  [ "$output" = none ]
+  run bash -c "python3 '$CA_BIN' --route interactive 2>&1 >/dev/null"
+  [[ "$output" == *concurrency-unmeasured* ]] || { echo "$output"; false; }
+}
+
 @test "--route interactive: the desk decision is RECORDED, with its runner-up, and only for --route" {
   # W2.6 — before this the desk lane wrote nothing. cc-route records every general/fable decision
   # into route.jsonl; the interactive lane's only footprint was one `--assign` row in a ledger it
