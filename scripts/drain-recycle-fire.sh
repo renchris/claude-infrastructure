@@ -56,11 +56,20 @@
 #                                     generate recycle N+1's brief + pointer, arm the goal, and
 #                                     --recycle THIS pane into it (the ordinary link-to-link fire)
 #   drain-recycle-fire.sh --num <N> --lane L --project P [--repo <P's checkout>] --first
+#                         [--worktree <existing abs path>] [--infra <checkout>] [--force]
 #                         [--split-right] [--account auto]
 #                                     open a NEW pane for a chain's first link (never recycles the
 #                                     caller); provisions the default lane worktree if absent, cut
 #                                     from --repo (defaulted for claude-infrastructure and
-#                                     reso-management-app)
+#                                     reso-management-app). ⚠ A repo with scripts/worktree-pool.sh
+#                                     (reso) makes handoff-fire cut the worktree at
+#                                     <wtroot>/wt-<branch-with-dashes>, not <wtroot>/<branch>, and
+#                                     then refuse the branch as "already exists" — measured on the
+#                                     first reso fire. Re-fire with --worktree <that path> --force.
+#                                     --infra names the claude-infrastructure checkout the brief calls
+#                                     scripts/ from; for a non-infra lane it must be a checkout that
+#                                     HAS these scripts (the shared checkout only after the live
+#                                     layer converges — a standing postland RED blocks that today).
 #   drain-recycle-fire.sh --num <N+1> --prompt-file <pointer> [handoff-fire args...]
 #                                     fire a caller-supplied brief verbatim (tests, a hand lane)
 #   drain-recycle-fire.sh --num <N+1> [--lane L --project P --min M] --print-goal
@@ -175,7 +184,7 @@ goal_condition() {
 
 # ── argv ────────────────────────────────────────────────────────────────────────────────────────
 NUM=""; PROMPT=""; MODE="fire"; SINCE=""; LANE="${CC_DRAIN_LANE:-infra}"; MIN="${CC_DRAIN_MIN_CLOSED:-3}"
-WORKTREE=""; FIRST=0; PROJ_REPO=""; INFRA="${CC_DRAIN_INFRA:-${HOME:-}/Development/claude-infrastructure}"
+WORKTREE=""; FIRST=0; FORCE=0; PROJ_REPO=""; INFRA="${CC_DRAIN_INFRA:-${HOME:-}/Development/claude-infrastructure}"
 PASS=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -188,6 +197,7 @@ while [ $# -gt 0 ]; do
     --repo)             PROJ_REPO="${2:?--repo needs the project repo path (for --first provisioning)}"; shift 2 ;;
     --infra)            INFRA="${2:?--infra needs the claude-infrastructure checkout path}"; shift 2 ;;
     --first)            FIRST=1; shift ;;
+    --force)            FORCE=1; shift ;;
     --print-goal)       MODE="print"; shift ;;
     --closure-report)   MODE="closure"; SINCE="${2:?--closure-report needs an ISO-8601 Z timestamp}"; shift 2 ;;
     --since)            SINCE="${2:?--since needs an ISO-8601 Z timestamp}"; shift 2 ;;
@@ -242,8 +252,13 @@ fi
 BRIEF_BIN="${CC_DRAIN_BRIEF_BIN:-$HERE/drain-brief.sh}"
 if [ -z "$PROMPT" ]; then
   [ -r "$BRIEF_BIN" ] || die "no drain-brief.sh at $BRIEF_BIN and no --prompt-file given"
+  # --force reaches the generator: a fire that failed AFTER the brief was written (handoff-fire
+  # refused a worktree, an account, a pane) leaves a brief on disk that the re-fire must be allowed
+  # to replace — measured on the first reso fire, where `fatal: a branch named 'drain/lane-reso'
+  # already exists` cost a hand-deleted pair of files before the re-fire could run.
+  BRIEF_FORCE=(); [ "$FORCE" -eq 1 ] && BRIEF_FORCE=(--force)
   PROMPT="$(bash "$BRIEF_BIN" --num "$NUM" --lane "$LANE" --project "$PROJECT" --worktree "$WORKTREE" \
-             --infra "$INFRA" --since "$SINCE" --min "$MIN")" || die "drain-brief.sh refused to generate recycle #$NUM (lane $LANE) — see its stderr; nothing fired"
+             --infra "$INFRA" --since "$SINCE" --min "$MIN" "${BRIEF_FORCE[@]+"${BRIEF_FORCE[@]}"}")" || die "drain-brief.sh refused to generate recycle #$NUM (lane $LANE) — see its stderr (an existing brief needs --force); nothing fired"
 fi
 [ -n "$PROMPT" ] || die "--prompt-file is required to fire (the pointer the brief lives behind)"
 [ -r "$PROMPT" ] || die "--prompt-file $PROMPT is not readable — refusing to fire a link with no brief"

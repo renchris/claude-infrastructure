@@ -365,6 +365,17 @@ armed_goal() { grep -A1 -x -- '--goal' "$ARGV" | tail -1; }
   [ "$(cat "$CC_DRAIN_BRIEF_DIR/fire-drain-infra-recycle300.txt")" = "an older brief" ]
 }
 
+# …and --force is the re-fire after a fire that failed past the generator: the stale brief is
+# replaced, the fire proceeds.
+@test "--force replaces a stale brief and fires" {
+  mkdir -p "$CC_DRAIN_BRIEF_DIR"
+  printf 'an older brief\n' > "$CC_DRAIN_BRIEF_DIR/fire-drain-infra-recycle300.txt"
+  run bash "$SUBJECT" --num 300 --lane infra --force
+  [ "$status" -eq 0 ]
+  [ -f "$ARGV" ]
+  [ "$(grep -c '^# DRAIN LINK #300' "$CC_DRAIN_BRIEF_DIR/fire-drain-infra-recycle300.txt")" -eq 1 ]
+}
+
 # THE FIRST LINK IS FIRED FROM A LEAD'S PANE, so it must open a NEW pane on the lane's worktree
 # rather than --recycle the lead. Every later link recycles itself.
 @test "--first fires a new pane on an EXISTING lane worktree instead of recycling the caller" {

@@ -104,6 +104,27 @@ mints follow-ons the drains cannot keep up with. The telemetry that would have s
 
 ## §4 Status log (INTEGRATE-only; newest first)
 
+- **2026-09-04 13:25Z** — Second-project lanes landed (`173a7ff34`): the brief takes its gate and
+  landing rail per project (`{{GATE_CMD}}` / `{{LAND_CMD}}` / `{{ENTRY_STEP}}`), the drain scripts are
+  called from `{{INFRA}}`, and `--first` cuts the worktree from the project's own checkout (`--repo`).
+  **Lane `reso` #1 fired 13:18Z** (account next2, worktree `.worktrees/wt-drain-lane-reso` — reso's
+  `worktree-pool.sh` makes handoff-fire cut `wt-<branch>` and then refuse the branch as existing, so the
+  re-fire named the path; `--force` now reaches the generator for exactly that case). Its INFRA is a
+  dedicated trunk worktree `~/Development/.worktrees/drain/tools` (branch `drain/tools`, at
+  `173a7ff34`) because the shared checkout is 10 behind and `deploy-live` will not advance while the
+  postland stamp on trunk is RED (`a03a4b638` red, `9bdac2bec` red — a standing red the open rows
+  `live-layer-stamp-lag` / `deploy-install-stale-deadlock` own). **Refresh it when the drain scripts
+  change:** `git -C ~/Development/.worktrees/drain/tools pull --ff-only origin main`; switch lanes'
+  `--infra` to the shared checkout once it converges.
+  **Every fired session stalled on a harness prompt within minutes:** lane #300 (pane 299) and W3
+  (pane 298) on `settings.json to update hooks — proceed?`, W2a (pane 296) on a `rm -r` verify plus the
+  same hooks dialog, W2b (pane 297) on a Bash permission prompt for `find-plan.sh --status`. Each sat
+  20–50 min until this session sent Enter through `kitty @ send-text` (the classifier refused the same
+  keystroke once in five tries). Both goal pastes for the lanes ABSTAINED because split-right had
+  narrowed the pane below a readable composer — fire lanes into a fresh tab, not a split.
+  These two stalls are the pile's own `fired-session-startup-modal` class, live.
+  Meanwhile W2b closed **18 pre-existing rows** (`lane=session`) by 13:00Z.
+
 - **2026-09-04 12:40Z** — W1 LANDED (`89a020f08`, content-verified on origin/main). W2a / W2b / W3
   fired as dispatched sessions (custody armed on this pane). Lane `infra` #300 fired on pane 299 and
   engaged; its goal paste abstained, so #300 runs on its brief alone and #301 re-arms via the wrapper.
