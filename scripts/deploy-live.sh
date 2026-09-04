@@ -86,11 +86,20 @@ set -uo pipefail
 DEPLOY_REPO="${DEPLOY_REPO:-$HOME/Development/claude-infrastructure}"
 POSTLAND_DIR="${CC_POSTLAND_DIR:-$HOME/.claude/autonomy/postland}"
 STAMPS_DIR="$POSTLAND_DIR/stamps"
-# The SECOND green producer's store, deliberately NOT $STAMPS_DIR (backlog b4f93c9fa73c). Every
-# consumer of stamps/ reads `.verdict` and nothing else — no producer field exists there and the
-# `suites` scope field is checked by nobody — so a hermetic-SUBSET green written into stamps/ would
-# be indistinguishable from a full-corpus one and would silently become a T1 target. Separate
-# directory, separate reader, separate tier: T1H below is the ONE place the weaker claim is spent.
+# The SECOND green producer's store, deliberately NOT $STAMPS_DIR (backlog b4f93c9fa73c). THE
+# DECISION IS RIGHT AND ITS STATED REASON WAS NOT — corrected 2026-09-04, measured. What holds it up
+# is THIS file: is_green()/is_red() read `.verdict` and nothing else, so a subset green dropped in
+# stamps/ would be deployed here as a full-corpus one. What does NOT hold it up is the old clause
+# "every consumer of stamps/ reads .verdict and nothing else — no producer field exists there".
+# scripts/cycle-time-census.sh:112-121 reads FOUR further fields (`ts`, `run_s`, `suites`, `env.cc`),
+# and `env.cc` IS a producer-attribution field: :136-137 partitions the store on it into the launchd
+# lane (cc=="unknown") and session-invoked diagnostics, and every number it reports — n, p50, p90,
+# censored fraction, and the WITHIN/BREACH verdict itself — is computed over the launchd arm ALONE.
+# Live at 2026-09-04T05:54:48Z: 415 scheduled / 142 session / 0 neither, of 557 records.
+# So the real hazard a stamps/ write carries is the OPPOSITE of "indistinguishable": a third
+# producer IS distinguishable, and lands in a two-arm partition that has no arm for it, silently
+# skewing the §8 cycle-time criterion instead of being invisible. Separate directory, separate
+# reader, separate tier: T1H below is the ONE place the weaker claim is spent.
 OFFBOX_DIR="${CC_OFFBOX_STAMPS:-$POSTLAND_DIR/offbox}"
 OFFBOX_PULL_BIN="${CC_OFFBOX_PULL_BIN:-$DEPLOY_REPO/scripts/offbox-green-pull.sh}"
 OFFBOX_PULL_BOUND_S="${CC_DEPLOY_OFFBOX_PULL_S:-60}"

@@ -12,14 +12,33 @@
 # top of every evaluation, and it is the whole reason this producer is real rather than advisory.
 #
 # ── IT WRITES TO offbox/, NEVER TO stamps/ — THE LOAD-BEARING DECISION ───────────────────────────
-# Measured before this was written: NO consumer of `~/.claude/autonomy/postland/stamps/` reads any
-# field but `.verdict` (deploy-live.sh:172-181), `.commit` and file mtime; there is NO producer
-# attribution field anywhere in the record; and although the record carries `suites`, NOTHING checks
-# it — `tests/deploy-live.bats:33` proves a two-field `{"verdict":"green","tree":…}` stamp is
-# accepted and deployed. So a hermetic-SUBSET green written into `stamps/` would be indistinguishable
-# from a full-corpus green and would silently become a T1 deploy target: R3's invariant weakened by a
-# file drop, with no code change and nothing to review. A separate directory is what keeps the two
-# claims separable, and `deploy-live.sh`'s T1H tier is the ONE place the weaker claim is spent.
+# THE DECISION STANDS; THE CENSUS UNDER IT WAS WRONG, AND IT WAS WRONG IN A WAY WORTH KEEPING.
+# What still holds the decision up needs only ONE consumer: `deploy-live.sh`'s is_green()/is_red()
+# read `.verdict` and nothing else, and `tests/deploy-live.bats:33` proves a two-field
+# `{"verdict":"green","tree":…}` stamp is accepted and deployed. A subset green in `stamps/` would
+# therefore become a T1 deploy target with no code change and nothing to review. That is sufficient,
+# and it is why the separate directory and `deploy-live.sh`'s T1H tier are the right shape.
+#
+# What was NOT true is the sentence this block used to open with — "Measured before this was written:
+# NO consumer of `~/.claude/autonomy/postland/stamps/` reads any field but `.verdict`
+# (deploy-live.sh:172-181), `.commit` and file mtime; there is NO producer attribution field anywhere
+# in the record; and although the record carries `suites`, NOTHING checks it." Re-measured
+# 2026-09-04 (recycle #297), clause by clause:
+#   · FALSE — `scripts/cycle-time-census.sh:112-121` reads `ts`, `run_s`, `suites` AND `env.cc`.
+#   · FALSE — `env.cc` IS the producer-attribution field. `cycle-time-census.sh:136-137` partitions
+#     the store on it (cc=="unknown" ⇒ the launchd lane; anything else ⇒ session-invoked) and its
+#     whole verdict is computed over the launchd arm alone. Live: 415/142/0 of 557 records.
+#   · TRUE, but only as stated: `suites` is READ by that one consumer and CHECKED by none. Read is
+#     not checked. (48 of 557 records do not carry it at all; `int(d.get('suites') or 0)` reads 0.)
+#   · `.commit` is named here as a field consumers read. NOTHING reads it: the only occurrence in
+#     the tree is write_stamp()'s own emit line, postland-verify.sh:2217.
+#
+# HOW A CAREFUL CENSUS MISSED FIVE OF SEVEN CONSUMERS, which is the transferable part: it was keyed
+# on the store's PATH. A path is spelled ONCE, at the assignment, and every read after it is a
+# VARIABLE. `git grep -l postland/stamps -- bin scripts hooks` returns 3 files; the assignment-keyed
+# census returns 7; the overlap is 2 — and the five it cannot see include every consumer that reads
+# a FIELD, this store's own producer, and the one consumer that refutes the claim above.
+# Census a store's consumers by the variable that RESOLVES it, never by its path.
 #
 # ── ONLY GREEN IS EVER WRITTEN ───────────────────────────────────────────────────────────────────
 # A subset that cannot see the machine-coupled suites can acquit what it ran and nothing else. It has
