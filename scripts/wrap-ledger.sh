@@ -902,9 +902,41 @@ LIVE_AGE=0
 # over the same number. Carried out of the ladder rather than re-derived by each renderer, so the
 # reason a reader is given cannot drift from the reason the rung was computed on.
 LIVE_BREACH_WHY=""
-# LIVE_ADDS = paths HEAD carries that the live layer's tree does not — the inert-new-file count.
-# `?` is its own state: the live sha could not be read HERE, so the question was asked and not
+# LIVE_ADDS = paths added between the live repo's checked-out HEAD and ours — the inert-new-file
+# count. `?` is its own state: the live sha could not be read HERE, so the question was asked and not
 # answered. 0 alongside LIVE_SRC=skip/n-a/unknown means "not counted", which those already say.
+#
+# THE SENTENCE ABOVE USED TO READ "paths HEAD carries that the LIVE LAYER'S TREE does not", AND THAT
+# NAMED A DIFFERENT POPULATION FROM THE ONE THE CODE MEASURES (2026-09-04, recycle #294). The
+# implementation is one `git diff --diff-filter=A LIVE_SHA HEAD` (below) — a diff of two REFS. It
+# never reads the live layer's filesystem. The two populations coincide only while the live tree
+# equals LIVE_SHA's tree, and LIVE_SHA is `git -C "$LIVE_REPO" rev-parse HEAD`: the shared
+# CHECKOUT's ref, which anything may fast-forward. So an ungated `git pull` of that checkout — the
+# state deploy-live.sh's own last_advance_hours() header calls "§2.E path B" — moves LIVE_SHA to
+# trunk, drives LIVE_LAG to 0 and EMPTIES this window, while creating no symlink for any file those
+# commits ADDED. The remedy-shaped event extinguishes the alarm without doing the remedy.
+#
+# MEASURED, not argued. At 2026-09-04T02:28:45Z this ledger read RUNG=✅ LIVE_LAG=0 LIVE_ADDS=0
+# while five tracked runtime files landed on trunk had NO live counterpart — bin/cc-lid,
+# commands/keep-laptop-alive.md, hooks/lib/memory-index-locate.sh, hooks/memory-index-drain.sh,
+# scripts/memory-fleet-sweep.sh — each one's add-commit an ANCESTOR of LIVE_SHA. Both shipped
+# auditors saw them (deploy-parity-assert: 5 MISSING; deploy-link-parity: 5 UNLINKED, rc 1). Running
+# the sanctioned converge made all five live; this field read 0 BEFORE and 0 AFTER. Population 5,
+# effect on the ledger ZERO. At lag 0 the range is empty, so LIVE_ADDS is identically 0 BY
+# CONSTRUCTION and cannot report an absent file at all.
+#
+# FOR A FIXER, so the next reader need not re-derive it. The DENOMINATOR this field wants is not the
+# checkout's ref but the sha the converger last actually DELIVERED, and deploy-live.sh:2061 already
+# publishes it: "$POSTLAND_DIR/deploy-last-advance", one line, "<epoch> <sha>", OUR advances only.
+# That is the half of backlog 4e6a51df2a84's blocked sub-problem which is now solved. Re-denominating
+# ALONE is NOT the fix, measured the same hour against the live state: adds(last-advance..trunk) = 13
+# and 7 of those survive a linked-top-level filter, both over a live layer with nothing missing —
+# false positives of exactly the class that row already complains about. The candidate that agreed
+# with BOTH auditors in BOTH states (0 converged, 5 at the moment above) additionally drops any path
+# already present under $HOME/.claude. Its residual is named: the top-level want-list has to come
+# from somewhere, and the only producer is deploy-parity-assert.sh, measured at 24.35/24.94/25.07s
+# against this whole script's 0.32s — 78x, on the path every session's close runs. That cost is why
+# this is a comment and not a diff.
 LIVE_ADDS=0
 # LIVE_STALE = of the paths this lag changes, how many are REACHED BY A LIVE LINK and are executing
 # bytes that differ from HEAD's. The lag's DOSE, beside LIVE_LAG's DISTANCE. Same `?` law as
