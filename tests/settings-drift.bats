@@ -32,9 +32,11 @@ mkcfg() { # <dir> <deny-json-array> <stop-cmd>
 #           vacuous-pass class this test is named for (memory: claimed-outcome-vs-checked-outcome).
 # The count is environment-stable: 6 unconditional okp/badp sites, each emitting exactly one line.
 @test "selftest passes, is non-vacuous (floor), and its tally matches what it rendered" {
-  floor=15                        # raise when checks are added; LOWERING it is a deliberate act
+  floor=17                        # raise when checks are added; LOWERING it is a deliberate act
                                   # 6 → 15 on 2026-08-11: the --file mode added 9 arms (backlog
                                   # 4ce34a4f703c). Raised deliberately so a DELETED --file check reds.
+                                  # 15 → 17 on 2026-09-04: the title now carries a PER-DIR count, so
+                                  # two arms pin the shape a flat union cannot express (#300).
   run "$S" --selftest
   [ "$status" -eq 0 ]
   # `|| true` normalizes grep's rc-1-on-zero-matches, which would otherwise abort the test HERE and
@@ -139,7 +141,12 @@ stub_backlog() { # → sets STUB (binary) and FILED (argv log)
   grep -qxF -- '--falsifier' "$FILED"
   # `--` before a leading-dash pattern: grep otherwise parses it as an option and dies usage-style,
   # which under `run` would read as a missing falsifier — a test bug wearing a subject bug's clothes.
-  grep -q 'MISSING in: c' "$FILED"
+  # `c(1)`, not a bare `c`: the title carries each divergent dir WITH the number of entries missing
+  # from it, heaviest first. An unanchored 'MISSING in: c' matches the old flat-union spelling too,
+  # so it asserted the dir was NAMED and never that the shape was right — and the shape is the whole
+  # content of this line. A flat union renders "5 entries missing in ONE dir plus 1 missing in four"
+  # identically to "6 entries missing in four dirs" (#300).
+  grep -qF 'MISSING in: c(1)' "$FILED"
 }
 
 @test "--file on a NON-VERDICT files nothing and does not report green" {

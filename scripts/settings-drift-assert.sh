@@ -172,8 +172,24 @@ selftest() {
   # wearing a subject bug's clothes.
   grep -qxF -- '--falsifier' "$log" \
     && okp "--file attaches the falsifier (the row self-closes)" || badp "--file filed with no falsifier"
-  grep -q 'MISSING in: z' "$log" \
-    && okp "--file names the divergent dir in the title" || badp "--file title does not name the dir"
+  # `z(1)`, not a bare `z`: an unanchored 'MISSING in: z' passes over BOTH the flat-union spelling
+  # and the weighted one, so it could never have caught the shape defect — a control pinned to a
+  # spelling that any correct fix leaves standing is not a second opinion.
+  grep -qF 'MISSING in: z(1)' "$log" \
+    && okp "--file names the divergent dir WITH its incidence" || badp "--file title lacks the per-dir count"
+
+  # (2b) TWO divergences with DIFFERENT missing-dir sets — the shape a flat union cannot express.
+  # m1 holds both denies, m2 lacks Q, m3 lacks both: so P is missing in ONE dir and Q in TWO, and
+  # the title must read m3(2) m2(1). The old union emitted the two dir names sorted alphabetically
+  # with no weights at all, which renders "5 hooks in one dir + 1 hook in four" identically to
+  # "6 hooks in four dirs". This arm is the one that reds on that code.
+  : > "$log"
+  mkcfg "$d/m1" '["Bash(P:*)","Bash(Q:*)"]'; mkcfg "$d/m2" '["Bash(P:*)"]'; mkcfg "$d/m3"
+  CC_DRIFT_DIRS="$d/m1 $d/m2 $d/m3" CC_BACKLOG_BIN="$stub" "$SELF" --file >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 1 ] && okp "--file on a two-shape drift → exit 1" || badp "two-shape drift exited $rc"
+  grep -qF 'MISSING in: m3(2) m2(1)' "$log" \
+    && okp "--file title carries per-dir weights, heaviest first" \
+    || badp "--file title flattened two different missing-dir sets into one union"
 
   # (3) NON-VERDICT → files nothing AND does not report green. Forced by an unwritable TMPDIR, which
   # makes the inner assert's mktemp fail (exit 3). This is the arm that keeps "the checker could not
@@ -227,9 +243,26 @@ file_mode() {
   }
 
   n="$(printf '%s\n' "$out" | grep -c '^DRIFT ' 2>/dev/null | tr -d ' ')"
-  # the divergent dirs, deduped — the operator's first question is always "which account runs looser"
-  dirs="$(printf '%s\n' "$out" | sed -n 's/.*missing in://p' | tr ' ' '\n' \
-          | grep -v '^$' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+  # The divergent dirs WITH their per-dir incidence, heaviest first.
+  #
+  # This used to `sort -u` every per-line dir list into one flat union, and the title then read
+  # "N guardrail(s) ... MISSING in: <every dir that appears anywhere>". That reads as a CROSS
+  # PRODUCT — N guardrails absent from all those dirs — and on the live fleet (2026-09-04) it is
+  # not: 5 of the 6 divergences are missing in .claude-next ALONE, and the 6th (pr-gate.sh) is
+  # missing in FOUR dirs, i.e. registered only in ~/.claude. The union renders those two opposite
+  # shapes identically, and the per-dir weight is exactly what answers the question the old
+  # comment here already asked — "which account runs looser".
+  #
+  # The verdict and the count were never wrong; only the SHAPE was, and the shape lives solely in
+  # the title, which is the one part of this row a human or a successor session ever reads.
+  # A row's numerals and a row's STRUCTURE rot independently, and a condition key protects the
+  # first and says nothing about the second (#300, method 272).
+  dirs="$(printf '%s\n' "$out" \
+          | awk -F'missing in:' '/^DRIFT /{n=split($2,a," ");
+                                           for(i=1;i<=n;i++) if(a[i]!="") c[a[i]]++}
+                                 END{for(k in c) printf "%d\t%s\n", c[k], k}' \
+          | sort -k1,1nr -k2,2 \
+          | awk '{printf "%s%s(%d)", (NR>1?" ":""), $2, $1}')"
 
   "$BACKLOG_BIN" add --project claude-infrastructure \
     --source settings-drift-assert \
