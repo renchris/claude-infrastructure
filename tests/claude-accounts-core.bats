@@ -1873,6 +1873,36 @@ ab = ca.pace_line([row(acct="next2", weekly_pct=13, weekly_reset_h=122.8, burn_w
 assert "next2 strand unknown (span 4.1h < 6.8h)" in ab, ab
 # no data ⇒ no block (a drain block over nothing would render at every error state)
 assert ca.pace_line([row(weekly_pct=None), row(weekly_reset_h=None)]) == ""
+# RP-25b, ADDED with S4 — the row now answers the goal'"'"'s THIRD question (when must the burst
+# start), and the header names the coefficient that answer converts with. Both are stamped by
+# apply_burn, which is the one place holding the rows AND the series; pace_line has no access to
+# the series and therefore cannot re-derive K the way it re-derives the strand.
+n3k = row(acct="next3", weekly_pct=92, weekly_reset_h=2.21, burn_wk_ewma_ph=1.140,
+          session_pct=13, session_reset_h=3.37, exchange_k=0.192, exchange_k_src="live",
+          burst_start=ca.burst_start_by({"weekly_pct": 92, "weekly_reset_h": 2.21,
+                                         "session_pct": 13, "session_reset_h": 3.37}, 0.192))
+k4 = row(acct="next4", weekly_pct=14, weekly_reset_h=119.2, burn_wk_ewma_ph=0.186,
+         session_pct=8, session_reset_h=0.54, exchange_k=0.192, exchange_k_src="live",
+         burst_start=ca.burst_start_by({"weekly_pct": 14, "weekly_reset_h": 119.2,
+                                        "session_pct": 8, "session_reset_h": 0.54}, 0.192))
+s4 = ca.pace_line([n3k, k4])
+assert s4.startswith("weekly drain — pp that DIE at reset (K=0.192 live · nowcast"), s4
+assert "⚠ LATE by 0.6h — 2.8pp already unrecoverable" in s4, s4
+assert "start by T−28h" in s4 and "slack)" in s4, s4
+# ...and the K clause is an ABSTAIN, not a default: with no stamp the header is the S3 one and
+# no row carries a start-by verdict. A literal substituted for a refused fit is the defect L2
+# exists to prevent — it would launder "the exchange rate could not be measured" into a number.
+nok = ca.pace_line([row(acct="next3", weekly_pct=92, weekly_reset_h=2.21, burn_wk_ewma_ph=1.140)])
+assert nok.startswith("weekly drain — pp that DIE at reset (nowcast"), nok
+assert "LATE" not in nok and "start by" not in nok, nok
+# a ZERO-STRAND row never carries a start time even when one is stamped: "when must you start
+# saving it" is not a question about pp that are not dying.
+zs = ca.pace_line([row(acct="next", weekly_pct=95, weekly_reset_h=20.0, burn_wk_ewma_ph=0.5,
+                       exchange_k=0.192, exchange_k_src="live",
+                       burst_start={"h": -3.0, "verdict": "LATE", "unrecoverable_pp": 4.0,
+                                    "windows": 1, "t_needed_h": 23.0, "freeze_h": 1.03,
+                                    "need_spp": 26.0, "deficit_pp": 5.0})])
+assert "next no strand" in zs and "LATE" not in zs, zs
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
