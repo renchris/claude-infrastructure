@@ -662,15 +662,28 @@ def working_concurrency(cfg, window_min=None, budget_s=None):
                 scanned += 1
                 if not slug.is_dir(follow_symlinks=False):
                     continue
+                # RECURSIVE, and the docstring above is why: it claims "active subagents append
+                # to their own .jsonl siblings and are burners too". They are not siblings. A
+                # subagent's transcript is written to
+                # projects/<slug>/<session-uuid>/subagents/agent-*.jsonl, one level BELOW the
+                # single-level scandir this replaced, so every one of them was invisible to the
+                # census that names them. Measured 2026-09-04 under ~/.claude/projects: 582 files
+                # at the shallow depth this walk used to see, 939 below it — the missed population
+                # was the LARGER one, and it is the one that burns quota concurrently with its
+                # parent. The deadline is still checked per directory AND per file, so the budget
+                # (5.0s against a 0.04-0.15s walk) governs a deeper tree exactly as before, and an
+                # over-budget walk still returns _kwork_unmeasured rather than a partial count.
                 try:
-                    with os.scandir(slug.path) as files:
-                        for fe in files:
+                    for wroot, _wdirs, wfiles in os.walk(slug.path, followlinks=False):
+                        if time.monotonic() > deadline:
+                            return _kwork_unmeasured(budget_s, scanned)
+                        for fname in wfiles:
                             if time.monotonic() > deadline:
                                 return _kwork_unmeasured(budget_s, scanned)
-                            if not fe.name.endswith(".jsonl"):
+                            if not fname.endswith(".jsonl"):
                                 continue
                             try:
-                                if now - fe.stat(follow_symlinks=False).st_mtime <= window_s:
+                                if now - os.lstat(os.path.join(wroot, fname)).st_mtime <= window_s:
                                     counts[name] += 1
                             except OSError:
                                 continue

@@ -87,6 +87,41 @@ def row(**kw):
     base.update(kw); return base
 '
 
+# ---- k_work: the POPULATION the census claims to count -----------------------------------------
+# working_concurrency's own docstring says "active subagents append to their own .jsonl siblings
+# and are burners too". They are not siblings: a subagent transcript is written to
+# projects/<slug>/<session-uuid>/subagents/agent-*.jsonl. The walk was a two-level scandir, so it
+# counted the parent and none of its burners — the router then scored an account k_work=0 while a
+# wave was appending to it. Measured on the live layer 2026-09-04: 582 .jsonl at the depth the old
+# walk reached, 939 below it. FAILS PRE-FIX at k_work 1, not 3.
+
+@test "k_work counts SUBAGENT transcripts, which live one level below the session file" {
+  run python3 -c "$LOAD"'
+import os, time
+P = os.path.join(os.environ["BATS_TEST_TMPDIR"], "kwork", "projects", "slug")
+sub = os.path.join(P, "679b6547-65ed-4a8d-9735-067e250f935b", "subagents")
+os.makedirs(sub)
+open(os.path.join(P, "sess.jsonl"), "w").close()                 # the parent session
+open(os.path.join(sub, "agent-aaa.jsonl"), "w").close()          # two burners under it
+open(os.path.join(sub, "agent-bbb.jsonl"), "w").close()
+open(os.path.join(sub, "notes.txt"), "w").close()                # and a non-transcript, never counted
+
+c = {"accounts": [{"name": "a", "config_dir": os.path.join(os.environ["BATS_TEST_TMPDIR"], "kwork")}]}
+got = ca.working_concurrency(c, window_min=10, budget_s=5.0)
+assert got == {"a": 3}, got
+
+# THE WINDOW STILL BINDS — a deep file older than the window is not counted, so the fix widened
+# the population and not the predicate.
+old = time.time() - 3600
+os.utime(os.path.join(sub, "agent-aaa.jsonl"), (old, old))
+got = ca.working_concurrency(c, window_min=10, budget_s=5.0)
+assert got == {"a": 2}, got
+print("OK")
+'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *OK* ]] || false
+}
+
 # ---- router: exclusion policy ----------------------------------------------------------------
 
 @test "router: _excluded pins every exclusion branch and the EPS_H rollover grace" {
