@@ -152,3 +152,89 @@ print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
+
+@test "RP-21: burst_start_by returns LATE for next3's live shape — and M4 returned REACHABLE" {
+  # THE CASE THAT RECORDS A DELETION. The synthesis's M4 (`wk_reach_pp`) asked a CAPACITY
+  # question — "can a burst still deliver the deficit?" — and on this exact row answered
+  #     reach = K * BURST_SPPH * weekly_reset_h = 0.192 * 22.87 * 2.21 = 9.70 pp   (the
+  #     synthesis published 16.9 pp against 8 needed: REACHABLE, 2.1x margin)
+  # on the account that in fact STRANDED. Capacity is nearly algebraically fixed, so that
+  # question can only come out one way. M4' asks a rate-and-freeze-against-the-clock question,
+  # which can come out either way, and reads LATE by 0.65 h with 2.83 pp already gone.
+  # Do not restore M4: it is deleted, and this comment is where an implementer reads why.
+  run python3 -c "$LOAD"'
+r = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+     "session_pct": 13, "session_reset_h": 3.37, "session_reset_at": "2026-08-25T13:10:00Z"}
+bs = ca.burst_start_by(r, 0.192)
+assert bs is not None, "abstained on a fully-populated row"
+assert -1.0 < bs["h"] < 0.0, bs                      # measured -0.65
+assert bs["verdict"] == "LATE", bs
+assert abs(bs["unrecoverable_pp"] - 2.83) < 0.05, bs # the floor a perfect burst cannot beat
+assert bs["windows"] == 1, bs
+assert "LATE by 0.6h" in ca.fmt_start_by(bs), ca.fmt_start_by(bs)
+assert "2.8pp already unrecoverable" in ca.fmt_start_by(bs), ca.fmt_start_by(bs)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-22 CONTROL: an account with days of runway returns SLACK, over SIX gridded windows" {
+  # Without this, RP-21 is satisfied by a function that returns LATE always -- which is exactly
+  # the degeneracy that killed M4, in the opposite direction. It also pins the 5h GRID: 432 session
+  # pp cannot be bought in one window at any burn rate, and the waits between windows are part of
+  # t_needed, not free time.
+  run python3 -c "$LOAD"'
+r = {"acct": "next2", "weekly_pct": 17, "weekly_reset_h": 97.2,
+     "session_pct": 8, "session_reset_h": 0.54, "session_reset_at": "2026-08-25T10:20:00Z"}
+bs = ca.burst_start_by(r, 0.192)
+assert bs["verdict"] == "SLACK", bs
+assert bs["h"] > 60.0, bs                            # measured +69.59
+assert bs["windows"] == 6, bs                        # the grid, not one long burn
+assert abs(bs["t_needed_h"] - 27.61) < 0.1, bs
+assert bs["unrecoverable_pp"] == 0.0, bs
+assert ca.fmt_start_by(bs) == "start by T−28h (70h slack)", ca.fmt_start_by(bs)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-23 CONTROL: the wall-FREEZE term is live, not decorative" {
+  # The mutant a purely arithmetic implementation survives: drop the freeze and every number
+  # still looks plausible, but the verdict on next3 flips from LATE to SLACK -- the freeze IS
+  # the finding (all 8 burst windows delivered their pp; the loss is the frozen tail after).
+  # The expected delta is the EXECUTED value, windows * P_WALL * MEAN_WALL_H = 1 * 0.625 * 1.653.
+  run python3 -c "$LOAD"'
+r = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+     "session_pct": 13, "session_reset_h": 3.37, "session_reset_at": "2026-08-25T13:10:00Z"}
+with_freeze = ca.burst_start_by(r, 0.192)
+ca.P_WALL = 0.0
+without = ca.burst_start_by(r, 0.192)
+assert abs((without["h"] - with_freeze["h"]) - 1.033) < 0.01, (with_freeze, without)
+assert without["verdict"] != "LATE", without         # the freeze is what makes it LATE
+assert without["unrecoverable_pp"] == 0.0, without   # ...and what books the unrecoverable pp
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "RP-24 CONTROL: no window open, or no K, is an ABSTAIN and never a zero" {
+  # A null session stamp means NO 5H WINDOW IS OPEN -- a distinct state, not a window sitting at
+  # 0%. Collapsing it to zero grants a full fresh window that does not exist, which turns a LATE
+  # into a SLACK on precisely the rows where the verdict matters. The K arm is S1c's abstain
+  # reaching its first consumer: outside K_SANE there is no weekly<->session rate to plan in.
+  run python3 -c "$LOAD"'
+base = {"acct": "next3", "weekly_pct": 92, "weekly_reset_h": 2.21,
+        "session_pct": 13, "session_reset_h": 3.37, "session_reset_at": "2026-08-25T13:10:00Z"}
+assert ca.burst_start_by(dict(base, session_reset_at=None, session_pct=None), 0.192) is None
+assert ca.burst_start_by(dict(base, session_pct=None), 0.192) is None
+assert ca.burst_start_by(base, None) is None                  # S1c abstained
+assert ca.burst_start_by(dict(base, weekly_pct=100), 0.192) is None   # nothing left to start
+assert ca.burst_start_by(dict(base, weekly_reset_h=0.0), 0.192) is None
+assert ca.burst_start_by(dict(base, weekly_reset_h=200.0), 0.192) is None
+assert ca.fmt_start_by(None) is None
+# ...and a window that IS open at 0% is NOT the same state: it plans.
+assert ca.burst_start_by(dict(base, session_pct=0), 0.192) is not None
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}

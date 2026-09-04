@@ -2205,6 +2205,18 @@ def apply_burn(rows, cfg, samples=None):
         if bp is not None:
             r["burst"] = bp
 
+    # S4/M4': K is the ONE fact on this surface that a row cannot carry on its own — it is fitted
+    # across the whole series, not derived from the account's own stamps — so unlike wk_strand_pp
+    # it has to be STAMPED rather than recomputed by the renderer. Same precedent as `burst`: this
+    # is the one place holding both the rows and the series, and pace_line still renders what is
+    # stamped, so L3's single renderer is intact. A None K is stamped too, as None with its source,
+    # because "the fit abstained" and "apply_burn never ran" must not render the same way.
+    k, k_sum_ds, k_src = exchange_rate(samples)
+    for r in rows:
+        r["exchange_k"] = k
+        r["exchange_k_src"] = k_src
+        r["exchange_k_sum_ds"] = k_sum_ds
+
     # M2 + M3a: the roll-aware weekly EWMA and the strand nowcast it feeds. The span is stamped
     # beside the value because it is the ABSTAIN's reason, and a null that cannot say why reads
     # as a missing measurement rather than as a refusal.
@@ -2323,6 +2335,100 @@ def fmt_burst(bp):
     if bp["never"]:
         return f"needs more than it has EVER burned in {bp['h']:.0f}h"
     return f"p{min(99.0, bp['pct']):.0f} of its own {bp['h']:.0f}h burns"
+
+
+# M4' constants, all three measured off the 8 burst windows in USAGE_TELEMETRY_100P §5.1.
+BURST_SPPH = 22.87        # session pp/h a real burst delivers (the observed burst mean)
+P_WALL = 0.625            # 5 of 8 burst windows hit the 5h wall — a LOWER bound, see below
+MEAN_WALL_H = 1.653       # mean frozen tail once a burst walls, in hours
+SESSION_WINDOW_H = 5.0    # the 5h grid: window N+1 cannot open before window N resets
+START_SOON_H = 12.0       # slack at or below which the verdict escalates from SLACK
+
+
+def burst_start_by(r, K):
+    """M4' — by WHEN must the endgame burst start for this account to finish its weekly window?
+    Returns a dict, or None when the question cannot be asked.
+
+    THE PRIMITIVE IS A START TIME, NOT A CAPACITY VERDICT, and that is the whole difference from
+    the M4 this replaces. All 8 measured burst windows delivered 13-20 weekly pp whether or not
+    they walled, so the wall is not loss WITHIN the window — the loss is the frozen tail that
+    follows it, plus the 5h grid you cannot open early. M4 asked "is the deficit reachable", which
+    is nearly algebraically fixed and answered REACHABLE with a 2.1x margin for next3 on the day
+    next3 in fact stranded. M4' asks "does the burn plus the expected freeze plus the grid still
+    FIT before the weekly reset", which can come out either way, and reads next3 as LATE by 0.65 h
+    with 2.83 pp already unrecoverable.
+
+    THE THRESHOLD IS SIZED ON THE BURST DENOMINATOR (5/8), NEVER THE ALL-WINDOWS ONE (5/252), and
+    P_WALL is a LOWER bound — walls shorter than ~13 min are invisible to the detector that
+    produced it. n = 8 is the entire evidence base, so this ships ON PROBATION: §5.5's monitoring
+    plan re-runs the burst-stratified wall rate on every completed weekly window.
+
+    ABSTAIN (L2), four ways, and the second is the one that must not collapse to a zero:
+      * K is None            — S1c's fit fell outside K_SANE; there is no weekly<->session rate.
+      * no window is OPEN    — a null session_pct/session_reset_at is a distinct STATE, not a
+                               window sitting at 0%. Treating it as 0 grants a full fresh window
+                               that does not exist and turns a LATE into a SLACK.
+      * deficit_wk <= 0      — the window is already full; there is nothing to start.
+      * weekly_reset_h outside (0, WEEK_H] — no honest horizon to place the start time in."""
+    if not isinstance(K, (int, float)) or K <= 0:
+        return None
+    wp, wrh = r.get("weekly_pct"), r.get("weekly_reset_h")
+    if wp is None or not isinstance(wrh, (int, float)) or not (0 < wrh <= WEEK_H):
+        return None
+    sp, srh = r.get("session_pct"), r.get("session_reset_h")
+    if sp is None or r.get("session_reset_at") is None:
+        return None
+    if not isinstance(srh, (int, float)) or srh < 0:
+        return None
+    deficit_wk = max(0.0, 100.0 - wp)
+    if deficit_wk <= 0:
+        return None
+
+    need_spp = deficit_wk / K                 # session pp that buys the weekly deficit
+    t = 0.0
+    rem = need_spp
+    windows = 0
+    avail = 100.0 - sp                        # the OPEN window's remaining headroom
+    if avail > 0:
+        burn_h = min(min(avail, rem) / BURST_SPPH, srh)   # the window may die before it fills
+        took = burn_h * BURST_SPPH
+        rem -= took
+        t += burn_h
+        if took > 0:
+            windows += 1
+        if rem > 0:
+            t = srh                           # wait out the roll before opening the next window
+    while rem > 0:
+        take = min(100.0, rem)
+        t += take / BURST_SPPH
+        rem -= take
+        windows += 1
+        if rem > 0:
+            t += SESSION_WINDOW_H - (100.0 / BURST_SPPH)   # the grid wait, not burn time
+
+    freeze = windows * P_WALL * MEAN_WALL_H
+    t_needed = t + freeze
+    h = wrh - t_needed
+    verdict = "LATE" if h <= 0 else ("START SOON" if h <= START_SOON_H else "SLACK")
+    # The floor a perfect burst starting THIS INSTANT still cannot save: the freeze eats the front
+    # of what remains, and only the rest converts at K x BURST_SPPH.
+    unrecoverable = max(0.0, deficit_wk - K * BURST_SPPH * max(0.0, wrh - freeze))
+    return {"h": h, "verdict": verdict, "unrecoverable_pp": unrecoverable,
+            "windows": windows, "freeze_h": freeze, "t_needed_h": t_needed}
+
+
+def fmt_start_by(bs):
+    """The one rendering of burst_start_by, for the same reason fmt_burst is the one rendering of
+    burst_percentile: three verdicts and an abstain cannot be allowed two spellings. LATE leads
+    with the loss that is already booked, because that is the only arm on which no action helps."""
+    if not bs:
+        return None
+    if bs["verdict"] == "LATE":
+        return (f"⚠ LATE by {-bs['h']:.1f}h — {bs['unrecoverable_pp']:.1f}pp "
+                "already unrecoverable")
+    if bs["verdict"] == "START SOON":
+        return f"⚠ START SOON — by T−{bs['t_needed_h']:.0f}h ({bs['h']:.1f}h slack)"
+    return f"start by T−{bs['t_needed_h']:.0f}h ({bs['h']:.0f}h slack)"
 
 
 WEEK_H = 168.0          # the weekly bucket's span; reset stamps are exactly 7 d apart
@@ -2472,6 +2578,29 @@ def wk_strand_pp(r):
 PACE_HEAD = "weekly drain — pp that DIE at reset (nowcast at the last 48h of pace):"
 
 
+def pace_head(rows):
+    """PACE_HEAD, plus the K clause S4 introduces. K is named on the header rather than on each
+    row because it is a FLEET fact — one fit over the whole series — and repeating it four times
+    would read as four measurements.
+
+    A NULL K DOES NOT SUPPRESS THE STRAND FIGURES, and the header says so in the words that are
+    true. §5.4's mock reads `no strand figures this sweep` for a null K; that text was written
+    before M3a existed and is wrong about its own arithmetic — the strand is pure weekly-space
+    and consumes no K at all. What a null K actually costs is the START-BY clause, which is the
+    first and only K consumer. Suppressing the strand on it would be a fabricated dependency."""
+    k, src = None, None
+    for r in rows:
+        if r.get("exchange_k_src") is not None:
+            k, src = r.get("exchange_k"), r.get("exchange_k_src")
+            break
+    if isinstance(k, (int, float)):
+        return PACE_HEAD.replace("(nowcast", f"(K={k:.3f} {src} · nowcast")
+    if any("exchange_k" in r for r in rows):
+        return PACE_HEAD.replace(
+            "(nowcast", "(K unfitted — no start-by figures this sweep · nowcast")
+    return PACE_HEAD
+
+
 def pace_line(rows):
     """The weekly-drain block: one row per account, SORTED BY pp AT RISK, descending.
     Returns a newline-joined string (the header plus one row per account), or "".
@@ -2537,8 +2666,14 @@ def pace_line(rows):
         b = fmt_burst(r.get("burst"))
         if b and s is not None and s >= 0.5:
             p += f" · {b}"
+        # S4/M4' — the third fact, and it rides the SAME gate as the burst clause. A row with no
+        # strand is on pace to fill its window; telling it when to start a rescue burst it does
+        # not need is noise on the one line that must stay scannable.
+        sb = fmt_start_by(burst_start_by(r, r.get("exchange_k")))
+        if sb and s is not None and s >= 0.5:
+            p += f" · {sb}"
         parts.append(f"  {p} · {left} left")
-    return "\n".join([PACE_HEAD] + parts) if parts else ""
+    return "\n".join([pace_head(rows)] + parts) if parts else ""
 
 
 def _excluded(r, R, cliff=True, k_of=None):

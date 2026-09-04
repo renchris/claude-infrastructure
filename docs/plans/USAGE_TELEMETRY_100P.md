@@ -1618,6 +1618,12 @@ windows/week, carrying the fleet wall rate 1.72% → 2.20%.
 
 Wave 1 = **S1 + S2 + S3 only**. S4–S7 are unbuilt and unchanged; S5 still gates S6.
 
+Wave 2 (2026-09-04) = **S4 + S5 + S7**. S6 is **not built and could not be**: its gate is *"S5 has
+run and been read"* against the operator's live series, and wave 2 ran in a remote container where
+`~/.claude/logs/account-utilization.jsonl` does not exist. Building it would have meant asserting
+the horizon-stratified bias is near zero without having measured it — the Q4 the §0 rule rejects.
+The gate is now runnable in one command; it is filed as the operator's step, not as agent work.
+
 #### S1 · data fixes — LANDED
 
 `bin/claude-accounts`: `_reset_key` / `_rolled` (:1877), `_util_tail(path, hours=48.0,
@@ -1775,6 +1781,56 @@ commit messages. §5.1 LB-2's four kills stand and the estimator is sold as what
 nowcaster precisely because it converges as the horizon closes, which is what makes it a bad
 forecaster. **S5 (`--strand-score`) is still the prerequisite for S6**, and nothing here
 shortens that.
+
+#### S4 · M4′ `burst_start_by` — the start-time constraint — LANDED (wave 2, 2026-09-04)
+
+`bin/claude-accounts`: constants `BURST_SPPH = 22.87` / `P_WALL = 0.625` / `MEAN_WALL_H = 1.653` /
+`SESSION_WINDOW_H = 5.0` / `START_SOON_H = 12.0`, then `burst_start_by(r, K)` and `fmt_start_by(bs)`
+beside `fmt_burst`; `apply_burn` stamps `exchange_k` / `exchange_k_src` / `exchange_k_sum_ds`;
+`pace_head(rows)` renders the header's K clause and `pace_line` appends the third clause.
+Cases RP-21..RP-24 in `tests/claude-accounts-burst.bats` and RP-29 in
+`tests/claude-accounts-core.bats` — **5/5 RED** against the S3 binary
+(`AttributeError: module 'ca' has no attribute 'burst_start_by'`), green after.
+
+**The spec's own live table reproduces exactly**, which is the arithmetic's acceptance: next3
+`t_needed 2.855 h` against `weekly_reset_h 2.21` ⇒ **−0.645 h, LATE, 2.83 pp unrecoverable**;
+next2 6 gridded windows, `t_needed 27.61 h` ⇒ **+69.59 h, SLACK**.
+
+**Deviation 1 — the return is a dict, not the bare float §5.3 RP-21 sketches**, for the same reason
+S2's was: `h`, `verdict` and `unrecoverable_pp` are three different facts and the floor is only
+meaningful on the LATE arm. A float carries one of them and the renderer would have to re-run the
+whole grid walk to recover the other two.
+
+**Deviation 2 — K is STAMPED by `apply_burn`, not recomputed by the renderer**, which inverts S3's
+Deviation 3 and does so deliberately. That rule exists because a renderer reading a stamp renders
+nothing when `apply_burn` has not run — a silent failure. It applies to `wk_strand_pp`, which is
+derivable from the row alone. K is not: it is a *fleet* fit over the whole series, and `pace_line`
+holds no series. The precedent is `burst`, stamped for exactly this reason. The three-state
+distinction is kept at the header instead: `K=0.192 live` · `K unfitted — no start-by figures this
+sweep` (the fit abstained) · the byte-identical pre-S4 header (`apply_burn` never ran). RP-29 pins
+all three.
+
+**Deviation 3 — a null K does NOT print `no strand figures this sweep`**, and §5.4's mock is wrong
+about its own arithmetic here. S3 Deviation 1 already established that M3a is pure weekly-space and
+consumes no K; the header now says what a null K actually costs, which is the start-by clause and
+nothing else. Gating the strand on a coefficient it does not use would be the fabricated dependency
+S3 refused.
+
+**Deviation 4 — the start-by clause rides the SAME gate as the burst clause** (`strand ≥ 0.5 pp`),
+so a zero-strand row carries no start time. §5.2's AFTER block already shows this — `next` renders
+`no strand — … wall trajectory` with no start-by — even though §5.4's table computes SLACK +99.42
+for it. An account on pace to fill its window does not need a rescue time, and the row has to stay
+scannable.
+
+**Deviation 5 — `⚠ LATE by 0.6h`, not the mock's `0.7h`.** `{0.6449:.1f}` is `0.6`; the mock rounded
+−0.65 half-up by hand. Structure, not the digit, is what §5.4 pins.
+
+**On probation, and the probation is the honest part.** `P_WALL = 0.625` is 5 of **8** burst
+windows — walls under ~13 min are invisible to the detector that produced it, so it is a LOWER
+bound — and the threshold is sized on that burst denominator, never the all-windows 5/252. RP-23
+is the case that keeps the term live: with `P_WALL = 0.0` next3's verdict flips LATE → SLACK and
+the unrecoverable floor goes to zero, so an implementation that quietly drops the freeze is caught
+rather than merely looking plausible.
 
 #### Acceptance status against §5.4
 

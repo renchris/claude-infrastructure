@@ -1878,6 +1878,52 @@ print("OK")'
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
+@test "router M7 + S4: the drain block names K on the header and start-by on the strand rows" {
+  # RP-29 — the third fact reaches the surface. The row now answers all three of the goal's
+  # questions: how much dies (M3a) · is the demand routine (M5) · by when must it start (M4').
+  #
+  # K IS ON THE HEADER, NOT ON THE ROW, because it is a FLEET fit — one number over the whole
+  # series — and repeating it per account would read as four measurements.
+  #
+  # A NULL K DOES NOT SUPPRESS THE STRAND. §5.4's mock says a null K prints `no strand figures
+  # this sweep`; that text predates M3a and is wrong about its own arithmetic — the strand is
+  # pure weekly-space and consumes no K. What a null K actually costs is the start-by clause,
+  # which is K's first and only consumer. The two arms are pinned separately below.
+  run python3 -c "$LOAD"'
+n3 = row(acct="next3", weekly_pct=92, weekly_reset_h=2.21, burn_wk_ewma_ph=1.140,
+         session_pct=13, session_reset_h=3.37, session_reset_at="2026-08-25T13:10:00Z",
+         exchange_k=0.192, exchange_k_src="live",
+         burst={"pct": 95.6, "h": 3.0, "n": 2576, "need_pph": 3.62, "never": False})
+n2 = row(acct="next2", weekly_pct=17, weekly_reset_h=97.2, burn_wk_ewma_ph=0.281,
+         session_pct=8, session_reset_h=0.54, session_reset_at="2026-08-25T10:20:00Z",
+         exchange_k=0.192, exchange_k_src="live")
+n1 = row(acct="next", weekly_pct=95, weekly_reset_h=20.0, burn_wk_ewma_ph=0.5,
+         session_pct=13, session_reset_h=3.37, session_reset_at="2026-08-25T13:10:00Z",
+         exchange_k=0.192, exchange_k_src="live")
+line = ca.pace_line([n3, n1, n2])
+assert "(K=0.192 live · nowcast at the last 48h of pace)" in line, line
+# the LATE arm leads with the loss that is already booked — no action recovers it
+assert "next3 strand ~5pp of 8 · p96 of its own 3h burns · ⚠ LATE by 0.6h" in line, line
+assert "2.8pp already unrecoverable" in line, line
+# the SLACK arm names the START TIME, not a capacity verdict
+assert "next2 strand ~56pp of 83 · start by T−28h (70h slack)" in line, line
+# a zero-strand row carries NO start-by: it is on pace to fill its window, and a rescue time it
+# does not need is noise on the one line that has to stay scannable.
+assert "next no strand" in line, line
+assert "start by" not in line.rstrip().split(chr(10))[-1], line
+# NULL K: the start-by clause goes, the strand STAYS, and the header says which one it lost.
+nk = ca.pace_line([dict(n3, exchange_k=None, exchange_k_src=None)])
+assert "K unfitted — no start-by figures this sweep" in nk, nk
+assert "next3 strand ~5pp of 8" in nk, nk                 # the strand does NOT gate on K
+assert "start by" not in nk and "LATE" not in nk, nk
+# apply_burn never ran ⇒ no exchange_k key at all ⇒ the header is byte-identical to pre-S4.
+assert ca.pace_line([row(acct="next3", weekly_pct=92, weekly_reset_h=2.21,
+                         burn_wk_ewma_ph=1.140)]).startswith(ca.PACE_HEAD)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
 @test "--assign CLI: appends one ledger row and never sweeps; unknown account exits 64" {
   local ledger="$BATS_TEST_TMPDIR/assign-cli.jsonl"
   # the fixture endpoint is unreachable — if --assign tried a sweep this would hang/fail loudly
