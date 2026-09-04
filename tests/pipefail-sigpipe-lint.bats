@@ -34,7 +34,7 @@ mkfile() { # $1=name $2=body  [$3=set line]
 }
 census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" --census 2>/dev/null; }
 
-@test "1: the lint's own --selftest passes (62/62, both directions)" {
+@test "1: the lint's own --selftest passes (65/65, both directions)" {
   # 32 -> 34 on 2026-09-02: clause 3's head/tail producer arm gained r16/r17, the FIRE controls for
   # the g11/g12 pair that had pinned only the GREEN direction. Updated deliberately, per the line
   # below, and the two new arms are attribution-proved: reverting the arm to its pre-fix `-?[1-9]`
@@ -176,9 +176,24 @@ census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" 
   # extracted read-only from origin/main), then 125 -> 123 once the two newly-visible fail-OPEN
   # sites were drained. The allowlist SHRANK 44 -> 42 rows, by --regen, and the diff is exactly the
   # two rows the correction stopped convicting.
+  #
+  # 62 -> 65, EIGHTEENTH CORRECTION 2026-09-04, updated deliberately as this assertion asks.
+  # Counting the consumers of that same quote-blind masking gives FIVE, not the one the seventeenth
+  # correction repaired: toplevel_or, toplevel_amp and group_wraps_or re-walk the quotes,
+  # collect_caller states a bounded argument for not needing to, and is_external did NEITHER — its
+  # read-past loop consumed every ; and every \002/\003 by regex, so one inside a quoted ARGUMENT
+  # moved the producer word. Measured on the shipped program before the repair: 475 is_external
+  # calls, 471 agree with a quote-aware walk, 4 DISAGREE (find-plan.sh:47 and :62,
+  # deploy-migrations.sh:413, offbox-admission-lint.sh:153) — and the EFFECT is ZERO, because
+  # is_external answers EXTERNAL for a garbage word and for the real word alike. Census 123 -> 123,
+  # LOST 0, NEW 0. r35 is the fail-OPEN half and g35 the fail-CLOSED half, both RED-PROVED against
+  # the unfixed detector (63/65 with exactly those two failing); g36 is green in BOTH states by
+  # design and is pinned by a mutant instead (64/65 with exactly g36 failing when past_seps never
+  # cuts) — because an arm that passes in both states is a test of something else until a mutant
+  # says otherwise.
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s' "$output" | grep '62/62' >/dev/null \
+  printf '%s' "$output" | grep '65/65' >/dev/null \
     || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 
