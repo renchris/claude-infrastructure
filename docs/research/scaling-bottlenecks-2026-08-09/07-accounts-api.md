@@ -207,10 +207,20 @@ restatement** of §C4's measured concurrency, not a second measurement, and the 
   UNVERIFIED to *verified-absent-from-docs* (absence of a documented cap ≠ absence of a cap —
   see 5c).
 - **Cache reads are exempt from ITPM.** "For most Claude models, only uncached input tokens count
-  toward your ITPM rate limits… `cache_read_input_tokens` ✗ **Do NOT count**." Same page. This is
+  toward your ITPM rate limits… `cache_read_input_tokens` ✗ **Do NOT count**." Same page. ~~This is
   why Claude Code sessions are rate-limit-cheap and quota-expensive: the 5h/weekly quota **does**
   bill cache reads (at 0.1×, and they are 68% of our cost), while the per-minute limiter ignores
-  them entirely.
+  them entirely.~~ 🚨 **STRUCK 2026-09-04 — the vendor quote stands; the inference from it does
+  not.** Two errors, and this bullet is the last unstruck statement of the premise §6.4a exists to
+  kill. (1) *"the 5h/weekly quota **does** bill cache reads (at 0.1×)"* asserts an **API-list price
+  ratio** (§2a's `$eq` weights) as a fact about the **weekly meter** — the two-meter conflation
+  §6.4a names as the whole defect. Fitted against the limit, Opus-5 cache-read is **0.000 pp/Mtok**
+  (p95 ≤ 0.0017 over ≥590 M tokens). (2) *"68% of our cost"* is §3's struck `$eq` composition,
+  restated with a possessive. **The direction inverts:** on the meter, Claude Code sessions are
+  rate-limit-cheap *and* quota-cheap **in cache-read**; what the weekly limit charges for is what a
+  session **emits** — output 1.282 pp/Mtok, cache-creation 0.105. The ITPM-exemption half of the
+  sentence is untouched and is what §7 finding 5 and §5b actually rest on. See §6.4a; sweep record
+  in `../scaling-bottlenecks-2026-08-09.md` **§2f**.
 - Start-tier Opus 5 reference limits: **1,000 RPM / 2,000,000 ITPM / 400,000 OTPM**. Opus 5 has its
   own bucket, separate from Opus 4.x. Fable 5 is much tighter (500K ITPM / 100K OTPM at Start).
 - Third-party figures ("Max 20x = 24-40 Opus hours/week") are **not comparable** to §2b's 164 h and

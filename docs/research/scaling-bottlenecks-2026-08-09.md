@@ -254,6 +254,59 @@ per §2d's rule, **plus** the producer sweep this section adds: `654`, `22\.7`, 
 `164`, `4\.6×`, `2\.4×`, `sustainable rate`. Every remaining hit is a strike, a footnoted audit
 record, or correction text.
 
+### 2f · COMPLETED 2026-09-04 — the sixth pass: the 2026-08-29 pass struck this clause's ECHO and left its SOURCE 219 lines above it, in the same file
+
+One live site repo-wide, and it is the **last** unstruck statement of the refuted premise:
+`scaling-bottlenecks-2026-08-09/07-accounts-api.md` **§5a**, third bullet — *"the 5h/weekly quota
+**does** bill cache reads (at 0.1×, and they are 68% of our cost)… Claude Code sessions are
+rate-limit-cheap and quota-expensive."* Struck there; the vendor's ITPM-exemption quote it hangs off
+is correct and is kept.
+
+**Two errors, and the second is the one every pass was hunting.** *"the weekly quota bills cache
+reads at 0.1×"* asserts an **API-list price ratio** (§2a's `$eq` weights) as a fact about the
+**weekly meter** — the two-meter conflation §6.4a already names as *the whole defect*, stated here
+as a bare fact rather than as an arithmetic step, 150 lines before §6.4 spends it. And *"68% of our
+cost"* is §3's struck composition. **A conclusion moves, in the same direction §2e's did:**
+`quota-expensive` inverts to quota-*cheap* in cache-read, since the limit charges what a session
+**emits** (output 1.282 pp/Mtok, cache-creation 0.105), not what it re-reads.
+
+**Why six passes missed it — and this is not §2c or §2d repeating.** §7 finding 5 (`:431`) is this
+bullet's own echo, and **the 2026-08-29 pass struck it there**, in this file, correctly and with a
+date: *"only because cache reads are ITPM-exempt while being ~~68% of quota cost~~ (STRUCK
+2026-08-29)."* So that pass demonstrably **read the claim and ruled on it** — and left the sentence
+it was echoing standing 219 lines above, in the file it was already editing. Every later pass then
+re-read a file that now *contains a dated strike of this very clause*, which is the strongest
+possible signal that the file is finished.
+
+The regex leak §2d diagnosed is also present and is the reason no automated pass recovered from it:
+§2d's published term was `68% of (quota )?(cost|spend)`, and the text reads **"68% of *our* cost"** —
+a possessive defeats it. Worse, the site is filed under a heading about **API rate limits**, a
+subject no *quota* sweep put in its candidate set; the bullet's own topic sentence is about ITPM,
+which is true.
+
+🚨 **THE RULE, and it is mechanical where §2c's was a discipline.** §2c said *re-read every file you
+edited*; that is the instruction that failed here five times, because re-reading 450 lines for a
+claim you believe you already struck is precisely when a reader confirms instead of checks. §2d said
+*grep the bare number*; a paraphrase with a possessive defeats it. Both are searches for a
+**wording**. The claim is not a wording — it is about a **thing**. So: **for every strike, grep the
+file you just edited for the claim's SUBJECT NOUN, and render a verdict on every hit.** Here that is
+one command — `grep -n 'cache.read' 07-accounts-api.md` returns 14 hits and `:212` is among them —
+and it is phrasing-, adjective-, hyphenation- and line-break-independent by construction, which no
+number-or-phrase pattern can be. Generalised: *a strike is a claim-level operation, but grep returns
+instance-level hits; the gap between them is where a claim survives its own correction.* Its tell is
+the one visible here — **an echo struck in place while its source stands**, which leaves the file
+looking more corrected than it is.
+
+**Sweep basis for this pass.** §2d's and §2e's terms re-run (all clean), **plus** the subject-noun
+sweep this section adds: `cache.read` and `0\.1[0×x]` read hit-by-hit through
+`07-accounts-api.md`, and `quota.expensive|bill cache read|68%.{0,40}cache.read|cache.read.{0,40}68%`
+over `docs/ hooks/ bin/ scripts/ commands/ skills/ CLAUDE.md .claude/`. `:212` was the only unstruck
+prescriptive hit; `:63` is correct as written (it declares the `$eq` list-price method, not a meter
+claim) and `:114` was relabelled on 08-29. **The live policy layer was already right and stays
+untouched** — `hooks/cache-expiry-warning.sh:18-19,47` tells sessions in so many words that
+`cache_read` is charged at ~nothing, that `cache_creation` is the paid class, and that *"shrinking
+the context does NOT save quota."* Only the docs were ever stale.
+
 ---
 
 **Felt lag, precisely (12):** turn-end lag is **3.7 s p50 / 7.7 s p90** and 92% of it is ONE call —
