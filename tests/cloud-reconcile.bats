@@ -85,7 +85,11 @@ b=""
 while [ $# -gt 0 ]; do
   case "$1" in --branch) b="${2:-}"; shift 2 ;; --branch=*) b="${1#--branch=}"; shift ;; *) shift ;; esac
 done
-case " ${LAND_STUB_FAIL:-} " in *" $b "*) exit 6 ;; esac
+# LAND_STUB_RC is the RAIL'S OWN CODE, and it is a variable because the whole point of the exit
+# arms below is that the rail's codes are no longer interchangeable: 5 rebase-conflict and 6 gate-red
+# are verdicts about the diff, 9 GATE-KILLED and 75 LOCK-STARVED are statements about the machine.
+case " ${LAND_STUB_FAIL2:-} " in *" $b "*) exit "${LAND_STUB_RC2:-5}" ;; esac
+case " ${LAND_STUB_FAIL:-} " in *" $b "*) exit "${LAND_STUB_RC:-6}" ;; esac
 # 🚨 THE STUB ADVANCES origin/main, because the REAL lander does. Without this it left the world in
 # a pre-land state, and every arm downstream graded a branch that was still ahead of trunk — which
 # is how a post-hoc `fill-paths` shipped green and then refused on the first live round trip, where
@@ -718,7 +722,14 @@ dead_pid() {
   decl cloud-good claude/good
 
   LAND_STUB_FAIL="claude/bad" CONFIRM=1 run cr --all
-  [ "$status" -eq 70 ]
+  # 🚨 6, NOT 70, SINCE 2026-09-04. This assertion used to read `-eq 70` and it was pinning the
+  # collapse rather than the isolation: every lander non-zero was reported as 70, so a machine
+  # non-verdict (9 GATE-KILLED, 75 LOCK-STARVED) reached `cloud-return.sh` indistinguishable from a
+  # real gate red — and that caller caches a refusal on the branch head and never re-asks. The
+  # property THIS arm is about is the ISOLATION (the survivor still ran), which is unchanged; the
+  # code is now the rail's own. The exit-code arms at the foot of this file own the mapping
+  # (memory: stale-assertion-becomes-an-inverted-guard).
+  [ "$status" -eq 6 ]
   echo "$output" | /usr/bin/grep -q 'claude/bad'
   echo "$output" | /usr/bin/grep -q '6'
   # The whole point: the survivor still ran.
@@ -901,4 +912,70 @@ dead_pid() {
   [ "$status" -eq 0 ]                       # the land itself succeeded and is not retracted …
   [[ "$output" == *"NOT filled"* ]] || false   # … but the non-verdict is NAMED
   grep -q '^paths=$' "$CC_CLOUD_STATE/nofill.decl"
+}
+
+# ── THE SHIP-RAIL EXIT CODE TRAVELS (W3 D) ───────────────────────────────────────────────────────
+# This script used to report every lander non-zero as 70 and documented that as a property. The cost
+# is one level up: `cloud-return.sh` caches a refusal keyed on the branch head and never re-asks
+# until the head moves, and a retired VM never pushes again — so a machine non-verdict latched
+# exactly as hard as a real one. Measured 2026-09-04 over the 64 on-disk `*.land-refused` artifacts
+# by their TRUE rail exit: 31 rebase conflicts (5), 6 GATE RED (6), 17 that never reached the rail.
+# ship-land's own header names 9 GATE-KILLED and 75 LOCK-STARVED as machine non-verdicts that should
+# be retried, and none of that was reachable because all of it arrived as 70.
+
+@test "--land: a LOCK-STARVED rail (75) surfaces as 75, not 70" {
+  push_branch claude/fire-lock 1
+  decl s-lock claude/fire-lock
+  LAND_STUB_FAIL="claude/fire-lock" LAND_STUB_RC=75 CONFIRM=1 run cr --land claude/fire-lock
+  [ "$status" -eq 75 ]
+  printf '%s' "$output" | grep -q 'lander exited 75'
+}
+
+@test "--land: a GATE-KILLED rail (9) surfaces as 9 — the other machine non-verdict" {
+  push_branch claude/fire-killed 1
+  decl s-killed claude/fire-killed
+  LAND_STUB_FAIL="claude/fire-killed" LAND_STUB_RC=9 CONFIRM=1 run cr --land claude/fire-killed
+  [ "$status" -eq 9 ]
+}
+
+@test "--land: a GATE-RED rail (6) surfaces as 6 too — a real verdict about the diff, and now legible" {
+  # The control on the CLAIM, not just on the mechanism: pre-fix this was 70 as well, so a caller
+  # could not tell a diff that failed a gate from a rail that never ran one.
+  push_branch claude/fire-red 1
+  decl s-red claude/fire-red
+  LAND_STUB_FAIL="claude/fire-red" LAND_STUB_RC=6 CONFIRM=1 run cr --land claude/fire-red
+  [ "$status" -eq 6 ]
+}
+
+@test "--land: a rail code COLLIDING with this script's own exit space stays 70" {
+  # 64 usage · 65 refusal · 66 NOTHING TO LAND · 69 SENSOR FAILED are this script's own meanings, and
+  # desk-land reuses 64/65/66 for its preflight. A bare pass-through would make 66 mean both "the VM
+  # committed no work" and "desk-land refused its preflight", and no caller could tell which. They
+  # collapse to 70, which is honest — a terminal per-branch failure — and is what they already meant.
+  push_branch claude/fire-collide 1
+  decl s-collide claude/fire-collide
+  LAND_STUB_FAIL="claude/fire-collide" LAND_STUB_RC=65 CONFIRM=1 run cr --land claude/fire-collide
+  [ "$status" -eq 70 ]
+}
+
+@test "--all: failures that AGREE report their shared code; failures that DISAGREE report 70" {
+  # One code can only speak for one branch. A sweep whose failures agree has a single true answer;
+  # inventing one for a mixed batch would tell the caller something no branch actually said.
+  push_branch claude/fire-a1 1
+  push_branch claude/fire-a2 1
+  decl s-a1 claude/fire-a1
+  decl s-a2 claude/fire-a2
+  LAND_STUB_FAIL="claude/fire-a1 claude/fire-a2" LAND_STUB_RC=75 CONFIRM=1 run cr --all
+  [ "$status" -eq 75 ]
+
+  # THE MIXED CASE, off the same fixture and one axis moved — the second branch fails with a
+  # DIFFERENT rail code (5 rebase-conflict against 75 lock-starved). Two true answers, so the sweep
+  # has none to report and says so with 70.
+  push_branch claude/fire-b1 1
+  push_branch claude/fire-b2 1
+  decl s-b1 claude/fire-b1
+  decl s-b2 claude/fire-b2
+  LAND_STUB_FAIL="claude/fire-b1" LAND_STUB_RC=75 \
+    LAND_STUB_FAIL2="claude/fire-b2" LAND_STUB_RC2=5 CONFIRM=1 run cr --all
+  [ "$status" -eq 70 ]
 }

@@ -571,6 +571,37 @@ park_entry_on_vm() { # <id> <branch-named-in-the-entry> <needs>
   grep -q 'HANDOFF-PING cloud/session_test: LAND REFUSED' "$CALLS" || false
 }
 
+@test "A MACHINE NON-VERDICT (9 GATE-KILLED / 75 LOCK-STARVED) is not a refusal and is never cached" {
+  # THE LATCH IS THE COST. The refusal cache keys on the branch head and never re-asks until it
+  # moves, and a retired VM never pushes again — so a cached refusal is PERMANENT. ship-land's own
+  # header names 9 (the gate was killed) and 75 (the landing lock was never granted) as statements
+  # about the box rather than the diff, and both were unreachable here until `cloud-reconcile.sh`
+  # stopped collapsing every lander non-zero to 70.
+  declare_managed --item deadbeef1234
+  seen_at 1000
+  LAND_RC=75 CC_RETURN_NOW=999999 run "$SUT" --sweep
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"could not be ATTEMPTED"* ]] || false
+  [[ "$output" != *"REFUSED"* ]] || false
+  [ ! -f "$CC_CLOUD_STATE/session_test.land-refused" ]
+  [ ! -f "$CC_CLOUD_STATE/session_test.returned" ]
+  ! grep -q 'HANDOFF-PING' "$CALLS" || false
+  # IT IS VISIBLE, not merely un-latched. A non-verdict that left no ledger row would be a silent
+  # skip, which is the shape this whole file exists to forbid.
+  run jq -sc '[.[] | select(.outcome=="land-unattempted")] | last' "$CC_CLOUD_STATE/return.jsonl"
+  [ "$(printf '%s' "$output" | jq -r '.land_rc')" = "75" ]
+
+  # 9 takes the same path — the other machine non-verdict.
+  LAND_RC=9 CC_RETURN_NOW=999999 run "$SUT" --sweep
+  [ ! -f "$CC_CLOUD_STATE/session_test.land-refused" ]
+
+  # POSITIVE CONTROL off the same fixture: a REAL gate red still files the artifact and wakes, so
+  # this arm is a statement about 9/75 and not about the fixture being unable to reach either path.
+  LAND_RC=6 CC_RETURN_NOW=999999 run "$SUT" --sweep
+  [ -f "$CC_CLOUD_STATE/session_test.land-refused" ]
+  grep -q 'HANDOFF-PING cloud/session_test: LAND REFUSED' "$CALLS" || false
+}
+
 @test "NOTHING TO LAND (66) is a non-verdict too — no artifact, no wake, no latch, row untouched" {
   # The absence contract (CLOUD_OBSERVABILITY.md §4.1/§16) moves a whole population ACROSS this
   # script's boundary. Before it, a VM that booted and committed nothing had no ref, read C1
