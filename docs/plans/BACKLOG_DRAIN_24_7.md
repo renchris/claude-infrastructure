@@ -86,6 +86,16 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-04 — recycle #302 (lane infra):** closed 11fdba2b3148, 3b1d4001407b, 564c488fd357 ·
+  blocked none · released 8fd1919f7769, 4e6a51df2a84, 150c50055e1c, fa2aa0f5e535, 1c20dc1e92db,
+  d73a772a8468, 71e164a86b59 · landed 7df9eec34 ·
+  `closed=9 closed_pre=3 closed_other=6 filed=0 net=9 blocked=7 min=3 lane=local-drain project=claude-infrastructure floor=MET`.
+  All three moot BY CONTENT: the Stop-keyed-recycle-rails row was refuted twice over — waiting-recycle
+  has been PostToolUse since a9e6c8c8e, and the binary removes only the GOAL's Stop hook; the other two
+  were stranded-value rows whose content is on trunk (20ac3254f supersedes 4e39debcf and cites it as its
+  own RED-proof control; the 6->12 dispatcher ceiling landed under a rewritten sha). Landed one cure:
+  smart-bash-allowlist shelled out to `dirname` (/usr/bin) and narrated a reduced PATH instead of
+  deferring silently — off-box red that reproduces ON-BOX, so deterministic, not machine-coupled.
 - **2026-09-04 — recycle #301 (lane infra):** closed 02d53c4b4078, c92cbba78fc2, 5bc548efd14d,
   737525ee6892 · blocked none · released none · landed 25862d6af ·
   `closed=14 closed_pre=3 closed_other=10 filed=8 net=6 blocked=9 min=3 lane=local-drain project=claude-infrastructure floor=MET`.
