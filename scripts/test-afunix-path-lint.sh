@@ -102,8 +102,18 @@ in_own() {  # $1=basename · $2=own-set text · $3=1 if an own-set was supplied 
   # the RIGHT ceiling to watch is the EMITTED one: this own-set is CHANGED PATHS, the whole .bats
   # corpus is 16,945 bytes of them, and the `sed 's:.*/::'` below reduces those to basenames, so
   # what reaches grep is smaller still. Measure it AFTER the sed. That ceiling still only grows.
-  # (backlog ca97c678b18b: pipefail-sigpipe-lint
-  # cannot SEE a function-final pipeline, so no ratchet would have caught this.)
+  # ⚠️ THE "NO RATCHET WOULD HAVE CAUGHT THIS" CLAUSE THIS COMMENT CARRIED IS NOW FALSE FOR THIS
+  # BODY AND STILL TRUE FOR ITS SIBLING TWO LINES BELOW, which is why it is corrected rather than
+  # struck. `ca97c678b18b` (pipefail-sigpipe-lint cannot SEE a function-final pipeline) was CURED by
+  # clause 4c — the FOURTEENTH CORRECTION in scripts/pipefail-sigpipe-lint.sh, which landed with its
+  # caller half. Re-measured 2026-09-04 against the SHIPPED
+  # detector, empty allowlist, one fixture per cell: a MULTI-LINE function-final
+  # `printf | sed | grep -qxF` whose caller reads the rc (`if in_own …`) — this exact shape — IS
+  # reported, beside an inline `if p | grep -q` FIRE control that also reports. The ONE-LINE
+  # spelling `f() { … | grep -qxF …; }` that `in_allowlist` uses is NOT: clause 4c reads
+  # function-final off the house shape `name() {` … `}` with the closing brace at column 0, which is
+  # that correction's own residual (b) and is not this row's. So the drain below is now BOTH drained
+  # and ratcheted; the drain two lines down is drained only.
   printf '%s\n' "$2" | sed 's:.*/::' | grep -xF "$1" >/dev/null
 }
 
