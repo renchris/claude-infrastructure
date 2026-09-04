@@ -90,6 +90,44 @@ refute_match() { [ "$(printf '%s' "$1" | grep -c "$2")" -eq 0 ]; }
   printf '%s' "$output" | grep -q "status: complete"
 }
 
+# ── D1b · the sweep's CLAIMED skip, and the one verdict it must not cover ────────────────────────
+# `--close-falsified` skips a CLAIMED row because a STORED probe is a runtime reading taken at one
+# instant, and closing on one races a worker seconds from landing. The derived plan verdict is not a
+# sample — it is one read of the plan's own frontmatter — and a row claimed on the premise "this
+# plan is open" over a plan that is finished is the exact row that rots: it cannot be dispatched, so
+# nothing re-asks it, and the stale premise is what keeps someone holding it. Live instance:
+# a507762b0a0d (STOP_CHAIN_WAVE2.md), claimed and unretractable.
+#
+# MUTATION CONTROL: delete the `_derived_only` branch (restore the unconditional claimed skip) and
+# the first test below goes RED with `closed_falsified: 0`; drop the `not (falsifier)` clause and
+# the second goes RED, because a claimed row with its OWN stored probe would then be closed too.
+
+@test "sweep: a CLAIMED plan-open row is closed on the DERIVED verdict (not a sampled probe)" {
+  p="$(plan claimed-finished complete '## S1 · something')"
+  id="$(add 'advance the claimed finished plan' plan-open "$p")"
+  "$BACKLOG_BIN" claim "$id" --by bats-holder --force >/dev/null 2>&1
+  [ "$("$BACKLOG_BIN" list --all --json | jq -r --arg i "$id" '.[]|select(.id==$i)|.status')" = claimed ]
+
+  run "$PREMISE" sweep --json --close-falsified 5
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.closed_falsified')" -ge 1 ]
+  # `done` QUOTED — bare, shellcheck reads it as the loop keyword (SC1010); the .bats gate blocks.
+  [ "$("$BACKLOG_BIN" list --all --json | jq -r --arg i "$id" '.[]|select(.id==$i)|.status')" = "done" ]
+}
+
+@test "sweep: a CLAIMED row carrying its OWN stored probe is still skipped (the sample guard holds)" {
+  # THE CONTROL, and it is the whole safety argument: the widening must be keyed on "this verdict
+  # came from the frontmatter", never on "this row is a plan-open row". A stored probe on a claimed
+  # row keeps the original guard, whatever its source field says.
+  p="$(plan claimed-probed complete '## S1 · something')"
+  id="$(add 'claimed row with its own probe' plan-open "$p" 'true')"
+  "$BACKLOG_BIN" claim "$id" --by bats-holder --force >/dev/null 2>&1
+
+  run "$PREMISE" sweep --json --close-falsified 5
+  [ "$status" -eq 0 ]
+  [ "$("$BACKLOG_BIN" list --all --json | jq -r --arg i "$id" '.[]|select(.id==$i)|.status')" = claimed ]
+}
+
 @test "plan-open + plan SUPERSEDED -> REFUSES with verdict=falsified" {
   p="$(plan replaced superseded '## S1 · something')"
   id="$(add 'advance the replaced plan' plan-open "$p")"
