@@ -1175,7 +1175,7 @@ point is that landed is not live (`docs/research/inertness-generator-2026-08-07.
 
 ---
 
-## 3g. THE ACCEPTANCE NUMBER IS OBSERVED — and it is a WEAKER test than we believed (2026-09-03)
+## 3h. THE ACCEPTANCE NUMBER IS OBSERVED — and it is a WEAKER test than we believed (2026-09-03)
 
 **`cloud_return_rc` of 0 is in the IDL.** Three of them, and the live layer does now run both fixes —
 `~/.claude/bin/cc-cloud` is byte-identical to trunk's and contains `dload`/`jesc_v`;
@@ -1228,6 +1228,47 @@ event.** A single rc 0 is satisfiable by a quiet box. The discriminating measure
 **Filed rather than built here:** add `load` and `elapsed_s` to the `cloud-return` IDL row, so the
 next person asking "did the fix work" can stratify instead of counting events. Until then the fixes
 stand on §3f's paired ratio and the suites, not on these three rows.
+
+### 3h.1 The two fields landed, were REVERTED WHOLE, and the defect was one bare binary name (2026-09-04)
+
+`2c6b8cdfa777` built the row above — `elapsed_s` + `load1`, both failing to empty so a not-run pass
+reads `null` and never `0`. It went **post-land RED** on its own verification pass
+(`tests/autonomy-sweep.bats::3h`, ARM A) and was reverted entire at `d1209750610a`, a plain
+`git revert` carrying no rationale. The revert also took the `3g → 3h` renumber with it, so trunk
+carried two `## 3g` headings again until this commit.
+
+**The defect was one line, and it is a class this repo has now hit three times.** The load was read
+with a bare `sysctl -n vm.loadavg`. `sysctl` lives in `/usr/sbin`, and
+`launchd/com.claude.postland-verify.plist` — the job that runs this corpus — exports
+`PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"`, with no `/usr/sbin`. The
+name therefore resolves from a terminal and in **no scheduled run**, `load1` came back `null`, and
+ARM A convicted the commit that had just been verified green by hand.
+`scripts/unattended-path-lint.sh` names the other two recurrences by name (postland-verify,
+qos-census — both remedied at `4c58eaf5`) and states the shape outright: *an unreadable instrument
+rendering as the HEALTHY value*.
+
+**A second, independent way to read empty was in the same line.** `vm.loadavg` is a BSD MIB and does
+not exist on Linux at all, so every dispatched cloud worker that gates a commit on this suite would
+have gone red too, for a different reason. Same class as `546ced2e` in the same file (the
+portable-stat idiom).
+
+**Cure:** the two-source ladder `scripts/capacity-marginal.sh read_load1` already uses —
+`/proc/loadavg` field 1, else `/usr/sbin/sysctl -n vm.loadavg` field 2 (the brace is `$1`) — with
+**no bare-name rung**, since those two cover every host in the fleet and a `command -v sysctl`
+fallback would only put this file back in the lint's finding set. Verified: the lint's output is
+byte-identical to trunk's, so this diff adds no finding.
+
+**Why the test now has four arms.** Each source arm is unreachable from the other platform, so a
+two-arm test lets the runner decide which half of the ladder gets proof — which is exactly how a
+Darwin-only spelling reached trunk green. ARM C forces the sysctl arm via `CC_SWEEP_SYSCTL_BIN`
+(the seam exists for that reason and no other, as `CC_MARG_PROC_LOADAVG` does next door) and pins
+the brace-skipping `$2`; ARM D is the shape the RED actually took — a pass that **ran** while its
+instrument could not be reached — which ARM B cannot see, because ARM B's fields are empty for the
+unrelated reason that nothing ran.
+
+Five mutants, each red on the arm that owns it: the original bare `sysctl` → ARM A `load1 is not a
+number: null`, the verbatim RED; a bare name at rung 2 and `awk '{print $1}'` → ARM C; `// 0` in the
+jq and a `0` not-run default → ARM B. `autonomy-sweep` 63/63; shellcheck 0, matching trunk's 0.
 
 ---
 

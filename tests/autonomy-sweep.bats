@@ -1421,3 +1421,93 @@ STUB
   # fails here, which is precisely the two-copies defect this arm exists to catch.
   ! grep -q '^ran-to-completion$' "$marker" || false
 }
+
+@test "3h: the cloud-return IDL row carries elapsed_s + load1, and a NOT-RUN pass is null not 0" {
+  # §3h. The acceptance number for the whole drain circuit was a `cloud_return_rc` of 0, chosen on
+  # the premise that a 0 could only happen once the pass was repaired. It could not carry that: an
+  # rc-0 was journalled on 2026-09-03 at 17:58Z on the PRE-fix bytes, while the box was quiet, and
+  # across that same window the load fell ~23 → ~8. rc alone therefore cannot tell "the fix worked"
+  # from "the box went quiet", and the row held nothing else to stratify by. These two fields are
+  # what make the next such question answerable by measurement instead of by argument.
+  #
+  # THE FAILURE MODE THIS PINS is the not-run path. `skipped` / `skipped-not-deployed` never invoke
+  # the pass at all, and a 0 there would read as "ran, instantly, on an idle box" — the single most
+  # misleading value either field could take, and exactly the confusion §3h exists to end. Empty
+  # must survive all the way to JSON `null` (memory: fail-safe-default-mimics-the-healthy-state).
+  #
+  # ── WHY THIS TEST EXISTS TWICE (post-land RED @ 2c6b8cdfa777, reverted at d1209750610a) ─────────
+  # Its first land read the load with a BARE `sysctl -n vm.loadavg`, and ARM A went red in the very
+  # postland pass that verified it. sysctl lives in /usr/sbin and com.claude.postland-verify.plist —
+  # the job that runs this corpus — exports a PATH ending /usr/bin:/bin, so the name that resolves
+  # from a terminal resolves in NO scheduled run. ARMS C and D below are why that cannot recur
+  # SILENTLY: they exercise each source arm from the platform that lacks it, so the box running this
+  # file no longer decides which half of the ladder gets proof.
+  local cfg="$BATS_TEST_TMPDIR/cfg3h" deployed
+  deployed="$cfg/scripts"; mkdir -p "$deployed"
+  export CLAUDE_CONFIG_DIR="$cfg"
+  export CC_CLOUD_STATE="$BATS_TEST_TMPDIR/cloudstate3h"; mkdir -p "$CC_CLOUD_STATE"
+  export CC_IDL="$BATS_TEST_TMPDIR/idl3h.jsonl"; : >"$CC_IDL"
+  cp "$SWEEP" "$deployed/autonomy-sweep.sh"; chmod +x "$deployed/autonomy-sweep.sh"
+  mkdir -p "$deployed/lib" && cp "$REPO"/scripts/lib/*.sh "$deployed/lib/" 2>/dev/null
+  printf '#!/bin/bash\nexit 0\n' >"$deployed/cloud-refusal-route.sh"
+  chmod +x "$deployed/cloud-refusal-route.sh"
+
+  # ── ARM A: the pass RUNS. Both fields must be numbers.
+  printf '#!/bin/bash\nexit 0\n' >"$deployed/cloud-return.sh"
+  chmod +x "$deployed/cloud-return.sh"
+  "${SWEEP_TO[@]}" bash "$deployed/autonomy-sweep.sh" >/dev/null 2>&1 || true
+  local row
+  row="$(grep 'cloud_return_rc' "$CC_IDL" | tail -1)"
+  [ -n "$row" ] || { echo "ARM A: no cloud-return IDL row was written at all"; false; }
+  printf '%s' "$row" | jq -e '.elapsed_s | type == "number"' >/dev/null \
+    || { echo "ARM A: elapsed_s is not a number: $(printf '%s' "$row" | jq -c '.elapsed_s')"; false; }
+  printf '%s' "$row" | jq -e '.load1 | type == "number"' >/dev/null \
+    || { echo "ARM A: load1 is not a number: $(printf '%s' "$row" | jq -c '.load1')"; false; }
+
+  # ── ARM B: the pass does NOT run — the tool is absent, so rc is `skipped`. This is the arm that
+  # can fail: a `0` default, or a bare `tonumber` without the `// null`, lands here.
+  : >"$CC_IDL"
+  rm -f "$deployed/cloud-return.sh"
+  "${SWEEP_TO[@]}" bash "$deployed/autonomy-sweep.sh" >/dev/null 2>&1 || true
+  row="$(grep 'cloud_return_rc' "$CC_IDL" | tail -1)"
+  [ -n "$row" ] || { echo "ARM B: no cloud-return IDL row was written at all"; false; }
+  printf '%s' "$row" | jq -e '.cloud_return_rc | startswith("skipped")' >/dev/null \
+    || { echo "ARM B fixture wrong — the pass RAN: $(printf '%s' "$row" | jq -c '.cloud_return_rc')"; false; }
+  printf '%s' "$row" | jq -e '.elapsed_s == null' >/dev/null \
+    || { echo "ARM B: a NOT-RUN pass reported elapsed_s=$(printf '%s' "$row" | jq -c '.elapsed_s') — must be null"; false; }
+  printf '%s' "$row" | jq -e '.load1 == null' >/dev/null \
+    || { echo "ARM B: a NOT-RUN pass reported load1=$(printf '%s' "$row" | jq -c '.load1') — must be null"; false; }
+
+  # ── ARM C: the DARWIN source, forced, so it is proven on a Linux box too. Without this arm the
+  # sysctl branch is UNREACHABLE off Darwin and the /proc branch is unreachable on Darwin, i.e.
+  # exactly one half of the ladder is ever executed and which half is a property of the runner.
+  # The brace-skipping `$2` is the whole Darwin-specific subtlety, and an unexercised parser inside
+  # an instrument is the defect scripts/capacity-marginal.sh names about its own CC_MARG_PROC_LOADAVG
+  # seam. The stub is resolved by ABSOLUTE PATH, never by a PATH entry — a stub found through PATH
+  # would be inert in precisely the scheduled environment that produced the RED.
+  : >"$CC_IDL"
+  printf '#!/bin/bash\nexit 0\n' >"$deployed/cloud-return.sh"
+  chmod +x "$deployed/cloud-return.sh"
+  local fakesysctl="$BATS_TEST_TMPDIR/fake-sysctl-3h"
+  printf '#!/bin/bash\nprintf "{ 3.21 4.00 5.00 }\\n"\n' >"$fakesysctl"; chmod +x "$fakesysctl"
+  CC_SWEEP_PROC_LOADAVG="$BATS_TEST_TMPDIR/no-such-loadavg" CC_SWEEP_SYSCTL_BIN="$fakesysctl" \
+    "${SWEEP_TO[@]}" bash "$deployed/autonomy-sweep.sh" >/dev/null 2>&1 || true
+  row="$(grep 'cloud_return_rc' "$CC_IDL" | tail -1)"
+  [ -n "$row" ] || { echo "ARM C: no cloud-return IDL row was written at all"; false; }
+  printf '%s' "$row" | jq -e '.load1 == 3.21' >/dev/null \
+    || { echo "ARM C: the sysctl arm parsed load1=$(printf '%s' "$row" | jq -c '.load1') from '{ 3.21 4.00 5.00 }' — must be 3.21 (the brace is \$1)"; false; }
+
+  # ── ARM D: the pass RAN and NEITHER source is reachable. This is the shape the RED actually took —
+  # a real invocation whose instrument could not be reached — and it is the one ARM B cannot see,
+  # because ARM B's fields are empty for the different reason that nothing ran. elapsed_s stays a
+  # number (the pass DID run and was timed); load1 must be null and never 0.
+  : >"$CC_IDL"
+  CC_SWEEP_PROC_LOADAVG="$BATS_TEST_TMPDIR/no-such-loadavg" CC_SWEEP_SYSCTL_BIN="$BATS_TEST_TMPDIR/no-such-sysctl" \
+    "${SWEEP_TO[@]}" bash "$deployed/autonomy-sweep.sh" >/dev/null 2>&1 || true
+  row="$(grep 'cloud_return_rc' "$CC_IDL" | tail -1)"
+  [ -n "$row" ] || { echo "ARM D: no cloud-return IDL row was written at all"; false; }
+  printf '%s' "$row" | jq -e '.elapsed_s | type == "number"' >/dev/null \
+    || { echo "ARM D: the pass RAN but elapsed_s is $(printf '%s' "$row" | jq -c '.elapsed_s')"; false; }
+  printf '%s' "$row" | jq -e '.load1 == null' >/dev/null \
+    || { echo "ARM D: an UNREADABLE load reported load1=$(printf '%s' "$row" | jq -c '.load1') — must be null, never 0"; false; }
+}

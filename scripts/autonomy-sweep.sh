@@ -58,6 +58,9 @@
 #   · CC_NOTIFY_BIN · CC_DECIDE_BIN · CC_BACKLOG_BIN
 #   · CC_SWEEP_OS_CHANNEL (auto|on|off) · CC_SWEEP_NOTIFY_TIMEOUT_S (default 25)
 #   · CC_SWEEP_LADDER (v2|legacy, default v2 — `legacy` is the D2 kill switch)
+#   · CC_SWEEP_PROC_LOADAVG (default /proc/loadavg) · CC_SWEEP_SYSCTL_BIN (default
+#     /usr/sbin/sysctl) — the two load1 sources, seams ONLY so each arm is reachable from the
+#     other platform's box; set-but-EMPTY is honored verbatim (that source does not exist)
 #   D4: CC_HANDOFF_ALARM_DIR · CC_EXPIRED_LEDGER · CC_HANDOFF_JOIN (1|0)
 #   · CC_HANDOFF_JOIN_DEADLINE_S (default 900) · CC_TEARDOWN_DIR · CC_CLOSE_ATTRIB_LOG · CC_IT2_BIN
 #   BSD+GNU portable, no eval, fail-loud.
@@ -368,6 +371,10 @@ _bounded() {
 # absent" are different facts, and neither is "the fleet is quiet".
 _cloudret="$_SWEEP_DIR/cloud-return.sh"
 _cloudret_rc="skipped"
+# Empty, never 0, on every not-run path: an absent measurement and "ran instantly on an idle box"
+# must not render as the same bytes (DRAIN_CIRCUIT_2026-09-01.md 3h).
+_cloudret_took=""
+_cloudret_load=""
 # THE ONE PLACE THIS NUMBER LIVES. It bounds the `timeout` below AND is exported to the child so it
 # can pace itself against the same figure; the child derives its single-flight lock TTL from it too.
 # It is deliberately NOT raised to make lands fit — this pass shares a 300 s launchd tick with the
@@ -410,10 +417,48 @@ elif [ -x "$_cloudret" ]; then
   # the child confidently pacing against a budget nobody applies any more.
   # The UNBOUNDED arm exports NOTHING. No `timeout` means no deadline, and a child pacing itself
   # against a killer that does not exist would defer real work for no reason.
+  _cloudret_t0="$(date +%s)"
   if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then
     CC_RETURN_BOUND_S="$_cloudret_bound" "$_tmo" -k 10 "$_cloudret_bound" bash "$_cloudret" --sweep --limit "${CC_SWEEP_RETURN_LIMIT:-25}" >/dev/null 2>&1
   else bash "$_cloudret" --sweep --limit "${CC_SWEEP_RETURN_LIMIT:-25}" >/dev/null 2>&1; fi
   _cloudret_rc=$?
+  _cloudret_took=$(( $(date +%s) - _cloudret_t0 ))
+  # ── 1-min load: read AFTER the pass, so it describes the box the pass actually ran on ──────────
+  # FAILS TO EMPTY, never to 0 — an unreadable load is unmeasured, and a 0 would read as a quiet
+  # box, which is precisely the reading this field exists to make impossible: an rc=0 on a quiet
+  # box and an rc=0 under load are different claims and the row could not previously tell them
+  # apart.
+  #
+  # TWO SOURCES, AND THE FIRST SPELLING OF THIS LINE HAD TWO SEPARATE WAYS TO READ EMPTY — both
+  # fired. It was a bare `sysctl -n vm.loadavg | awk '{print $2}'`:
+  #   · Darwin, SCHEDULED. sysctl lives in /usr/sbin, and com.claude.postland-verify.plist — the
+  #     job that runs this corpus — exports PATH="…:/usr/bin:/bin", with no /usr/sbin. So the bare
+  #     name resolved from a terminal and in NO scheduled run, and §3h ARM A went red in the very
+  #     postland pass that verified its own land (post-land RED @ 2c6b8cdfa777). The whole commit
+  #     was reverted at d1209750610a rather than repaired, which is why this block is back.
+  #     THIRD recurrence of that class: scripts/unattended-path-lint.sh names the other two
+  #     (postland-verify, qos-census — both remedied at 4c58eaf5) and states the shape outright,
+  #     "an unreadable instrument rendering as the HEALTHY value".
+  #   · Linux, EVERYWHERE. vm.loadavg is a BSD MIB and does not exist on Linux at all, so the
+  #     dispatched cloud workers that gate a commit on this suite could never green ARM A. Same
+  #     class as 546ced2e (the portable-stat idiom), in the same file.
+  # /proc/loadavg field 1 is the 1-min average; `sysctl -n vm.loadavg` prints "{ 8.06 9.02 10.45 }"
+  # so the brace is $1 and the 1-min average is $2. Same ladder, for the same reason, as
+  # scripts/capacity-marginal.sh read_load1.
+  #
+  # NO BARE-NAME RUNG, deliberately: /proc/loadavg is readable on every Linux and /usr/sbin/sysctl
+  # exists on every Darwin, so a `command -v sysctl` fallback would reach nothing these two miss —
+  # and it would put this file's name back in unattended-path-lint's finding set for a rung that
+  # buys nothing.
+  _cloudret_load=""
+  _sweep_loadavg="${CC_SWEEP_PROC_LOADAVG-/proc/loadavg}"
+  _sweep_sysctl="${CC_SWEEP_SYSCTL_BIN-/usr/sbin/sysctl}"
+  if [ -n "$_sweep_loadavg" ] && [ -r "$_sweep_loadavg" ]; then
+    _cloudret_load="$(awk '{print $1}' "$_sweep_loadavg" 2>/dev/null)"
+  elif [ -n "$_sweep_sysctl" ] && [ -x "$_sweep_sysctl" ]; then
+    _cloudret_load="$("$_sweep_sysctl" -n vm.loadavg 2>/dev/null | awk '{print $2}')"
+  fi
+  case "$_cloudret_load" in ''|*[!0-9.]*) _cloudret_load="" ;; esac
   # 🚨 THE KILLER CLEANS UP AFTER ITSELF. `timeout -k 10 900` escalates to SIGKILL, and the callee's
   # `trap … EXIT INT TERM` cannot run on one — so a cut pass leaves its single-flight lock directory
   # behind by construction. The callee now reaps a dead holder itself (pid liveness + a TTL sized to
@@ -431,8 +476,8 @@ elif [ -x "$_cloudret" ]; then
       ;;
   esac
 fi
-log_idl cloud-return "$(jq -cn --arg c "$_cloudret_rc" \
-  '{cloud_return_rc:$c,
+log_idl cloud-return "$(jq -cn --arg c "$_cloudret_rc" --arg e "$_cloudret_took" --arg l "$_cloudret_load" \
+  '{cloud_return_rc:$c, elapsed_s:($e|tonumber? // null), load1:($l|tonumber? // null),
     note:"0 = pass completed (per-session outcomes in the cloud return ledger; the pass-scope row records how many of the pending set it took and how many it deferred, and a `pass-deadline` row — a SEPARATE fact — records a pass that stopped starting work because this caller bound it in time, so an early stop can never read as full coverage); 4 = another pass held the lock; 124 = the bound cut the pass, next tick resumes (the return path itself abstains on a cut land rather than filing a refusal); 137/143 = the bound SIGKILLed it and this caller cleared the stranded single-flight lock; skipped = tool absent (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never land, mark done or spend quota"}')"
 
 # ── the REFUSAL LOOP (W3) — immediately after the return pass, and under ITS OWN guard ────────────
