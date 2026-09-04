@@ -1,0 +1,35 @@
+{
+ "captured": "2026-09-04T17:52:30+0000",
+ "platform": "Linux x86_64",
+ "browser": "141.0.7390.37",
+ "executable": "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
+ "dprs": [
+  1.0,
+  1.5
+ ],
+ "viewport": {
+  "width": 1280,
+  "height": 900
+ },
+ "pages": [
+  "align-1px",
+  "clean",
+  "contrast-on-gradient",
+  "contrast-plain",
+  "grid-offgrid",
+  "hierarchy-inversion",
+  "optical-centering",
+  "overflow-clip",
+  "radius-drift",
+  "spacing-gap",
+  "token-color-drift",
+  "touch-target",
+  "type-scale"
+ ],
+ "font": {
+  "stack": "Helvetica, \"Helvetica Neue\", Arial, sans-serif",
+  "first": "Helvetica",
+  "distinct_from_default_fallback": true,
+  "width_px": 239.15
+ }
+}

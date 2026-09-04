@@ -11,3 +11,7 @@ corpus/out/pages/
 corpus/out/shots/
 corpus/out/snapshots/
 corpus/out/blind/
+# `route.py --emit-crops` re-clips these from the masters above. Same argument:
+# the plan that names each crop IS committed (route-plan.json), so the decision
+# is reviewable in a diff while the pixels are one command away.
+corpus/out/crops/

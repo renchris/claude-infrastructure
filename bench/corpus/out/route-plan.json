@@ -1,0 +1,744 @@
+{
+ "app": "bench-corpus",
+ "intent": "instrument",
+ "route_order": [
+  "hierarchy",
+  "readability",
+  "optical-alignment",
+  "gestalt",
+  "content-fit",
+  "semantic-coherence"
+ ],
+ "xcheck": "up",
+ "xcheck_note": "",
+ "run": {
+  "platform": "Linux x86_64",
+  "browser": "141.0.7390.37",
+  "font": {
+   "stack": "Helvetica, \"Helvetica Neue\", Arial, sans-serif",
+   "first": "Helvetica",
+   "distinct_from_default_fallback": true,
+   "width_px": 239.15
+  }
+ },
+ "pages": {
+  "align-1px": [
+   {
+    "trigger": "T1",
+    "page": "align-1px",
+    "kind": "crop",
+    "deliverable": true,
+    "tokens_api": 16,
+    "never": "Name nothing with a number in it: no distance, gap, size, ratio, contrast value, token name, timing, bounding box, score or ranking. Those are measured elsewhere and are given to you as values, never as questions. This image is at eff 1.50, below 2.00: do not assert any 1-2px alignment, hairline-width or colour-drift finding from it. If you suspect one, name the region instead.",
+    "region": "region 00 \u2014 span.glyph \u2014 \u25b6",
+    "asks": "optical-alignment",
+    "because": "vertical ink offset is +3.23px, but this mark is a text glyph and its vertical ink position is set by the font's baseline metrics, which no artifact here carries. Vertical centring is UNVERIFIED",
+    "rect_css": {
+     "x": 385.2,
+     "y": 499.3,
+     "w": 60.3,
+     "h": 64
+    },
+    "eff_read": 1.5,
+    "eff_api": 1.5,
+    "values": {
+     "subject": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
+     "rule": "xcheck-optical-centre-v"
+    },
+    "master": "align-1px@1.5x.png",
+    "written": "align-1px-c00.png"
+   },
+   {
+    "trigger": "T2",
+    "page": "align-1px",
+    "kind": "gestalt",
+    "region": "region ** \u2014 the whole first fold",
+    "asks": [
+     "hierarchy",
+     "readability",
+     "optical-alignment",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence"
+    ],
+    "because": "no rule screens these classes; they are judgements about whether the page makes sense, not measurements",
+    "rect_css": {
+     "x": 0,
+     "y": 0,
+     "w": 1280,
+     "h": 900
+    },
+    "eff_read": 1.5,
+    "eff_api": 1.5,
+    "tokens_api": 3381,
+    "never": "Name nothing with a number in it: no distance, gap, size, ratio, contrast value, token name, timing, bounding box, score or ranking. Those are measured elsewhere and are given to you as values, never as questions. This image is at eff 1.50, below 2.00: do not assert any 1-2px alignment, hairline-width or colour-drift finding from it. If you suspect one, name the region instead.",
+    "blind": true,
+    "deliverable": true,
+    "focus": [],
+    "master": "align-1px@1.5x.png"
+   }
+  ],
+  "clean": [
+   {
+    "trigger": "T1",
+    "page": "clean",
+    "kind": "crop",
+    "deliverable": true,
+    "tokens_api": 16,
+    "never": "Name nothing with a number in it: no distance, gap, size, ratio, contrast value, token name, timing, bounding box, score or ranking. Those are measured elsewhere and are given to you as values, never as questions. This image is at eff 1.50, below 2.00: do not assert any 1-2px alignment, hairline-width or colour-drift finding from it. If you suspect one, name the region instead.",
+    "region": "region 00 \u2014 span.glyph \u2014 \u25b6",
+    "asks": "optical-alignment",
+    "because": "vertical ink offset is +3.23px, but this mark is a text glyph and its vertical ink position is set by the font's baseline metrics, which no artifact here carries. Vertical centring is UNVERIFIED",
+    "rect_css": {
+     "x": 385.2,
+     "y": 499.3,
+     "w": 60.3,
+     "h": 64
+    },
+    "eff_read": 1.5,
+    "eff_api": 1.5,
+    "values": {
+     "subject": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
+     "rule": "xcheck-optical-centre-v"
+    },
+    "master": "clean@1.5x.png",
+    "written": "clean-c00.png"
+   },
+   {
+    "trigger": "T2",
+    "page": "clean",
+    "kind": "gestalt",
+    "region": "region ** \u2014 the whole first fold",
+    "asks": [
+     "hierarchy",
+     "readability",
+     "optical-alignment",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence"
+    ],
+    "because": "no rule screens these classes; they are judgements about whether the page makes sense, not measurements",
+    "rect_css": {
+     "x": 0,
+     "y": 0,
+     "w": 1280,
+     "h": 900
+    },
+    "eff_read": 1.5,
+    "eff_api": 1.5,
+    "tokens_api": 3381,
+    "never": "Name nothing with a number in it: no distance, gap, size, ratio, contrast value, token name, timing, bounding box, score or ranking. Those are measured elsewhere and are given to you as values, never as questions. This image is at eff 1.50, below 2.00: do not assert any 1-2px alignment, hairline-width or colour-drift finding from it. If you suspect one, name the region instead.",
+    "blind": true,
+    "deliverable": true,
+    "focus": [],
+    "master": "clean@1.5x.png"
+   }
+  ],
+  "contrast-on-gradient": [
+   {
+    "trigger": "T1",
+    "page": "contrast-on-gradient",
+    "kind": "crop",
+    "deliverable": true,
+    "tokens_api": 16,
+    "never": "Name nothing with a number in it: no distance, gap, size, ratio, contrast value, token name, timing, bounding box, score or ranking. Those are measured elsewhere and are given to you as values, never as questions. This image is at eff 1.50, below 2.00: do not assert any 1-2px alignment, hairline-width or colour-drift finding from it. If you suspect one, name the region instead.",
+    "region": "region 00 \u2014 span.glyph \u2014 \u25b6",
+    "asks": "optical-alignment",
+    "because": "vertical ink offset is +3.23px, but this mark is a text glyph and its vertical ink position is set by the font's baseline metrics, which no artifact here carries. Vertical centring is UNVERIFIED",
+    "rect_css": {
+     "x": 385.2,
+     "y": 499.3,
+     "w": 60.3,
+     "h": 64
+    },
+    "eff_read": 1.5,
+    "eff_api": 1.5,
+    "values": {
+     "subject": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
+     "rule": "xcheck-optical-centre-v"
+    },
+    "master": "contrast-on-gradient@1.5x.png",
+    "written": "contrast-on-gradient-c00.png"
+   },
+   {
+    "trigger": "T2",
+    "page": "contrast-on-gradient",
+    "kind": "gestalt",
+    "region": "region ** \u2014 the whole first fold",
+    "asks": [
+     "hierarchy",
+     "readability",
+     "optical-alignment",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence"
+    ],
+    "because": "no rule screens these classes; they are judgements about whether the page makes sense, not measurements",
+    "rect_css": {
+     "x": 0,
+     "y": 0,
+     "w": 1280,
+     "h": 900
+    },
+    "eff_read": 1.5,
+    "eff_api": 1.5,
+    "tokens_api": 3381,
+    "never": "Name nothing with a number in it: no distance, gap, size, ratio, contrast value, token name, timing, bounding box, score or ranking. Those are measured elsewhere and are given to you as values, never as questions. This image is at eff 1.50, below 2.00: do not assert any 1-2px alignment, hairline-width or colour-drift finding from it. If you suspect one, name the region instead.",
+    "blind": true,
+    "deliverable": true,
+    "focus": [],
+    "master": "contrast-on-gradient@1.5x.png"
+   }
+  ],
+  "contrast-plain": [
+   {
+    "trigger": "T1",
+    "page": "contrast-plain",
+    "kind": "crop",
+    "deliverable": true,
+    "tokens_api": 16,
+    "never": "Name nothing with a number in it: no distance, gap, size, ratio, contrast value, token name, timing, bounding box, score or ranking. Those are measured elsewhere and are given to you as values, never as questions. This image is at eff 1.50, below 2.00: do not assert any 1-2px alignment, hairline-width or colour-drift finding from it. If you suspect one, name the region instead.",
+    "region": "region 00 \u2014 span.glyph \u2014 \u25b6",
+    "asks": "optical-alignment",
+    "because": "vertical ink offset is +3.23px, but this mark is a text glyph and its vertical ink position is set by the font's baseline metrics, which no artifact here carries. Vertical centring is UNVERIFIED",
+    "rect_css": {
+     "x": 385.2,
+     "y": 499.3,
+     "w": 60.3,
+     "h": 64
+    },
+    "eff_read": 1.5,
+    "eff_api": 1.5,
+    "values": {
+     "subject": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
+     "rule": "xcheck-optical-centre-v"
+    },
+    "master": "contrast-plain@1.5x.png",
+    "written": "contrast-plain-c00.png"
+   },
+   {
+    "trigger": "T2",
+    "page": "contrast-plain",
+    "kind": "gestalt",
+    "region": "region ** \u2014 the whole first fold",
+    "asks": [
+     "hierarchy",
+     "readability",
+     "optical-alignment",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence"
+    ],
+    "because": "no rule screens these classes; they are judgements about whether the page makes sense, not measurements",
+    "rect_css": {
+     "x": 0,
+     "y": 0,
+     "w": 1280,
+     "h": 900
+    },
+    "eff_read": 1.5,
+    "eff_api": 1.5,
+    "tokens_api": 3381,
+    "never": "Name nothing with a number in it: no distance, gap, size, ratio, contrast value, token name, timing, bounding box, score or ranking. Those are measured elsewhere and are given to you as values, never as questions. This image is at eff 1.50, below 2.00: do not assert any 1-2px alignment, hairline-width or colour-drift finding from it. If you suspect one, name the region instead.",
+    "blind": true,
+    "deliverable": true,
+    "focus": [],
+    "master": "contrast-plain@1.5x.png"
+   }
+  ],
+  "grid-offgrid": [
+   {
+    "trigger": "T1",
+    "page": "grid-offgrid",
+    "kind": "crop",
+    "deliverable": true,
+    "tokens_api": 16,
+    "never": "Name nothing with a number in it: no distance, gap, size, ratio, contrast value, token name, timing, bounding box, score or ranking. Those are measured elsewhere and are given to you as values, never as questions. This image is at eff 1.50, below 2.00: do not assert any 1-2px alignment, hairline-width or colour-drift finding from it. If you suspect one, name the region instead.",
+    "region": "region 00 \u2014 span.glyph \u2014 \u25b6",
+    "asks": "optical-alignment",
+    "because": "vertical ink offset is +3.23px, but this mark is a text glyph and its vertical ink position is set by the font's baseline metrics, which no artifact here carries. Vertical centring is UNVERIFIED",
+    "rect_css": {
+     "x": 385.2,
+     "y": 499.3,
+     "w": 60.3,
+     "h": 64
+    },
+    "eff_read": 1.5,
+    "eff_api": 1.5,
+    "values": {
+     "subject": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
+     "rule": "xcheck-optical-centre-v"
+    },
+    "master": "grid-offgrid@1.5x.png",
+    "written": "grid-offgrid-c00.png"
+   },
+   {
+    "trigger": "T2",
+    "page": "grid-offgrid",
+    "kind": "gestalt",
+    "region": "region ** \u2014 the whole first fold",
+    "asks": [
+     "hierarchy",
+     "readability",
+     "optical-alignment",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence"
+    ],
+    "because": "no rule screens these classes; they are judgements about whether the page makes sense, not measurements",
+    "rect_css": {
+     "x": 0,
+     "y": 0,
+     "w": 1280,
+     "h": 900
+    },
+    "eff_read": 1.5,
+    "eff_api": 1.5,
+    "tokens_api": 3381,
+    "never": "Name nothing with a number in it: no distance, gap, size, ratio, contrast value, token name, timing, bounding box, score or ranking. Those are measured elsewhere and are given to you as values, never as questions. This image is at eff 1.50, below 2.00: do not assert any 1-2px alignment, hairline-width or colour-drift finding from it. If you suspect one, name the region instead.",
+    "blind": true,
+    "deliverable": true,
+    "focus": [],
+    "master": "grid-offgrid@1.5x.png"
+   }
+  ],
+  "hierarchy-inversion": [
+   {
+    "trigger": "T1",
+    "page": "hierarchy-inversion",
+    "kind": "crop",
+    "deliverable": true,
+    "tokens_api": 16,
+    "never": "Name nothing with a number in it: no distance, gap, size, ratio, contrast value, token name, timing, bounding box, score or ranking. Those are measured elsewhere and are given to you as values, never as questions. This image is at eff 1.50, below 2.00: do not assert any 1-2px alignment, hairline-width or colour-drift finding from it. If you suspect one, name the region instead.",
+    "region": "region 00 \u2014 span.glyph \u2014 \u25b6",
+    "asks": "optical-alignment",
+    "because": "vertical ink offset is +2.23px, but this mark is a text glyph and its vertical ink position is set by the font's baseline metrics, which no artifact here carries. Vertical centring is UNVERIFIED",
+    "rect_css": {
+     "x": 415.1,
+     "y": 500,
+     "w": 60.3,
+     "h": 64
+    },
+    "eff_read": 1.5,
+    "eff_api": 1.5,
+    "values": {
+     "subject": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
+     "rule": "xcheck-optical-centre-v"
+    },
+    "master": "hierarchy-inversion@1.5x.png",
+    "written": "hierarchy-inversion-c00.png"
+   },
+   {
+    "trigger": "T2",
+    "page": "hierarchy-inversion",
+    "kind": "gestalt",
+    "region": "region ** \u2014 the whole first fold",
+    "asks": [
+     "hierarchy",
+     "readability",
+     "optical-alignment",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence"
+    ],
+    "because": "no rule screens these classes; they are judgements about whether the page makes sense, not measurements",
+    "rect_css": {
+     "x": 0,
+     "y": 0,
+     "w": 1280,
+     "h": 900
+    },
+    "eff_read": 1.5,
+    "eff_api": 1.5,
+    "tokens_api": 3381,
+    "never": "Name nothing with a number in it: no distance, gap, size, ratio, contrast value, token name, timing, bounding box, score or ranking. Those are measured elsewhere and are given to you as values, never as questions. This image is at eff 1.50, below 2.00: do not assert any 1-2px alignment, hairline-width or colour-drift finding from it. If you suspect one, name the region instead.",
+    "blind": true,
+    "deliverable": true,
+    "focus": [],
+    "master": "hierarchy-inversion@1.5x.png"
+   }
+  ],
+  "optical-centering": [
+   {
+    "trigger": "T2",
+    "page": "optical-centering",
+    "kind": "gestalt",
+    "region": "region ** \u2014 the whole first fold",
+    "asks": [
+     "hierarchy",
+     "readability",
+     "optical-alignment",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence"
+    ],
+    "because": "no rule screens these classes; they are judgements about whether the page makes sense, not measurements",
+    "rect_css": {
+     "x": 0,
+     "y": 0,
+     "w": 1280,
+     "h": 900
+    },
+    "eff_read": 1.5,
+    "eff_api": 1.5,
+    "tokens_api": 3381,
+    "never": "Name nothing with a number in it: no distance, gap, size, ratio, contrast value, token name, timing, bounding box, score or ranking. Those are measured elsewhere and are given to you as values, never as questions. This image is at eff 1.50, below 2.00: do not assert any 1-2px alignment, hairline-width or colour-drift finding from it. If you suspect one, name the region instead.",
+    "blind": true,
+    "deliverable": true,
+    "focus": [],
+    "master": "optical-centering@1.5x.png"
+   }
+  ],
+  "overflow-clip": [
+   {
+    "trigger": "T1",
+    "page": "overflow-clip",
+    "kind": "crop",
+    "deliverable": true,
+    "tokens_api": 16,
+    "never": "Name nothing with a number in it: no distance, gap, size, ratio, contrast value, token name, timing, bounding box, score or ranking. Those are measured elsewhere and are given to you as values, never as questions. This image is at eff 1.50, below 2.00: do not assert any 1-2px alignment, hairline-width or colour-drift finding from it. If you suspect one, name the region instead.",
+    "region": "region 00 \u2014 span.glyph \u2014 \u25b6",
+    "asks": "optical-alignment",
+    "because": "vertical ink offset is +3.23px, but this mark is a text glyph and its vertical ink position is set by the font's baseline metrics, which no artifact here carries. Vertical centring is UNVERIFIED",
+    "rect_css": {
+     "x": 385.2,
+     "y": 499.3,
+     "w": 60.3,
+     "h": 64
+    },
+    "eff_read": 1.5,
+    "eff_api": 1.5,
+    "values": {
+     "subject": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
+     "rule": "xcheck-optical-centre-v"
+    },
+    "master": "overflow-clip@1.5x.png",
+    "written": "overflow-clip-c00.png"
+   },
+   {
+    "trigger": "T2",
+    "page": "overflow-clip",
+    "kind": "gestalt",
+    "region": "region ** \u2014 the whole first fold",
+    "asks": [
+     "hierarchy",
+     "readability",
+     "optical-alignment",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence"
+    ],
+    "because": "no rule screens these classes; they are judgements about whether the page makes sense, not measurements",
+    "rect_css": {
+     "x": 0,
+     "y": 0,
+     "w": 1280,
+     "h": 900
+    },
+    "eff_read": 1.5,
+    "eff_api": 1.5,
+    "tokens_api": 3381,
+    "never": "Name nothing with a number in it: no distance, gap, size, ratio, contrast value, token name, timing, bounding box, score or ranking. Those are measured elsewhere and are given to you as values, never as questions. This image is at eff 1.50, below 2.00: do not assert any 1-2px alignment, hairline-width or colour-drift finding from it. If you suspect one, name the region instead.",
+    "blind": true,
+    "deliverable": true,
+    "focus": [],
+    "master": "overflow-clip@1.5x.png"
+   }
+  ],
+  "radius-drift": [
+   {
+    "trigger": "T1",
+    "page": "radius-drift",
+    "kind": "crop",
+    "deliverable": true,
+    "tokens_api": 16,
+    "never": "Name nothing with a number in it: no distance, gap, size, ratio, contrast value, token name, timing, bounding box, score or ranking. Those are measured elsewhere and are given to you as values, never as questions. This image is at eff 1.50, below 2.00: do not assert any 1-2px alignment, hairline-width or colour-drift finding from it. If you suspect one, name the region instead.",
+    "region": "region 00 \u2014 span.glyph \u2014 \u25b6",
+    "asks": "optical-alignment",
+    "because": "vertical ink offset is +3.23px, but this mark is a text glyph and its vertical ink position is set by the font's baseline metrics, which no artifact here carries. Vertical centring is UNVERIFIED",
+    "rect_css": {
+     "x": 385.2,
+     "y": 499.3,
+     "w": 60.3,
+     "h": 64
+    },
+    "eff_read": 1.5,
+    "eff_api": 1.5,
+    "values": {
+     "subject": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
+     "rule": "xcheck-optical-centre-v"
+    },
+    "master": "radius-drift@1.5x.png",
+    "written": "radius-drift-c00.png"
+   },
+   {
+    "trigger": "T2",
+    "page": "radius-drift",
+    "kind": "gestalt",
+    "region": "region ** \u2014 the whole first fold",
+    "asks": [
+     "hierarchy",
+     "readability",
+     "optical-alignment",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence"
+    ],
+    "because": "no rule screens these classes; they are judgements about whether the page makes sense, not measurements",
+    "rect_css": {
+     "x": 0,
+     "y": 0,
+     "w": 1280,
+     "h": 900
+    },
+    "eff_read": 1.5,
+    "eff_api": 1.5,
+    "tokens_api": 3381,
+    "never": "Name nothing with a number in it: no distance, gap, size, ratio, contrast value, token name, timing, bounding box, score or ranking. Those are measured elsewhere and are given to you as values, never as questions. This image is at eff 1.50, below 2.00: do not assert any 1-2px alignment, hairline-width or colour-drift finding from it. If you suspect one, name the region instead.",
+    "blind": true,
+    "deliverable": true,
+    "focus": [],
+    "master": "radius-drift@1.5x.png"
+   }
+  ],
+  "spacing-gap": [
+   {
+    "trigger": "T1",
+    "page": "spacing-gap",
+    "kind": "crop",
+    "deliverable": true,
+    "tokens_api": 16,
+    "never": "Name nothing with a number in it: no distance, gap, size, ratio, contrast value, token name, timing, bounding box, score or ranking. Those are measured elsewhere and are given to you as values, never as questions. This image is at eff 1.50, below 2.00: do not assert any 1-2px alignment, hairline-width or colour-drift finding from it. If you suspect one, name the region instead.",
+    "region": "region 00 \u2014 span.glyph \u2014 \u25b6",
+    "asks": "optical-alignment",
+    "because": "vertical ink offset is +3.23px, but this mark is a text glyph and its vertical ink position is set by the font's baseline metrics, which no artifact here carries. Vertical centring is UNVERIFIED",
+    "rect_css": {
+     "x": 385.2,
+     "y": 499.3,
+     "w": 60.3,
+     "h": 64
+    },
+    "eff_read": 1.5,
+    "eff_api": 1.5,
+    "values": {
+     "subject": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
+     "rule": "xcheck-optical-centre-v"
+    },
+    "master": "spacing-gap@1.5x.png",
+    "written": "spacing-gap-c00.png"
+   },
+   {
+    "trigger": "T2",
+    "page": "spacing-gap",
+    "kind": "gestalt",
+    "region": "region ** \u2014 the whole first fold",
+    "asks": [
+     "hierarchy",
+     "readability",
+     "optical-alignment",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence"
+    ],
+    "because": "no rule screens these classes; they are judgements about whether the page makes sense, not measurements",
+    "rect_css": {
+     "x": 0,
+     "y": 0,
+     "w": 1280,
+     "h": 900
+    },
+    "eff_read": 1.5,
+    "eff_api": 1.5,
+    "tokens_api": 3381,
+    "never": "Name nothing with a number in it: no distance, gap, size, ratio, contrast value, token name, timing, bounding box, score or ranking. Those are measured elsewhere and are given to you as values, never as questions. This image is at eff 1.50, below 2.00: do not assert any 1-2px alignment, hairline-width or colour-drift finding from it. If you suspect one, name the region instead.",
+    "blind": true,
+    "deliverable": true,
+    "focus": [],
+    "master": "spacing-gap@1.5x.png"
+   }
+  ],
+  "token-color-drift": [
+   {
+    "trigger": "T1",
+    "page": "token-color-drift",
+    "kind": "crop",
+    "deliverable": true,
+    "tokens_api": 16,
+    "never": "Name nothing with a number in it: no distance, gap, size, ratio, contrast value, token name, timing, bounding box, score or ranking. Those are measured elsewhere and are given to you as values, never as questions. This image is at eff 1.50, below 2.00: do not assert any 1-2px alignment, hairline-width or colour-drift finding from it. If you suspect one, name the region instead.",
+    "region": "region 00 \u2014 span.glyph \u2014 \u25b6",
+    "asks": "optical-alignment",
+    "because": "vertical ink offset is +3.23px, but this mark is a text glyph and its vertical ink position is set by the font's baseline metrics, which no artifact here carries. Vertical centring is UNVERIFIED",
+    "rect_css": {
+     "x": 385.2,
+     "y": 499.3,
+     "w": 60.3,
+     "h": 64
+    },
+    "eff_read": 1.5,
+    "eff_api": 1.5,
+    "values": {
+     "subject": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
+     "rule": "xcheck-optical-centre-v"
+    },
+    "master": "token-color-drift@1.5x.png",
+    "written": "token-color-drift-c00.png"
+   },
+   {
+    "trigger": "T2",
+    "page": "token-color-drift",
+    "kind": "gestalt",
+    "region": "region ** \u2014 the whole first fold",
+    "asks": [
+     "hierarchy",
+     "readability",
+     "optical-alignment",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence"
+    ],
+    "because": "no rule screens these classes; they are judgements about whether the page makes sense, not measurements",
+    "rect_css": {
+     "x": 0,
+     "y": 0,
+     "w": 1280,
+     "h": 900
+    },
+    "eff_read": 1.5,
+    "eff_api": 1.5,
+    "tokens_api": 3381,
+    "never": "Name nothing with a number in it: no distance, gap, size, ratio, contrast value, token name, timing, bounding box, score or ranking. Those are measured elsewhere and are given to you as values, never as questions. This image is at eff 1.50, below 2.00: do not assert any 1-2px alignment, hairline-width or colour-drift finding from it. If you suspect one, name the region instead.",
+    "blind": true,
+    "deliverable": true,
+    "focus": [],
+    "master": "token-color-drift@1.5x.png"
+   }
+  ],
+  "touch-target": [
+   {
+    "trigger": "T1",
+    "page": "touch-target",
+    "kind": "crop",
+    "deliverable": true,
+    "tokens_api": 16,
+    "never": "Name nothing with a number in it: no distance, gap, size, ratio, contrast value, token name, timing, bounding box, score or ranking. Those are measured elsewhere and are given to you as values, never as questions. This image is at eff 1.50, below 2.00: do not assert any 1-2px alignment, hairline-width or colour-drift finding from it. If you suspect one, name the region instead.",
+    "region": "region 00 \u2014 span.glyph \u2014 \u25b6",
+    "asks": "optical-alignment",
+    "because": "vertical ink offset is +3.23px, but this mark is a text glyph and its vertical ink position is set by the font's baseline metrics, which no artifact here carries. Vertical centring is UNVERIFIED",
+    "rect_css": {
+     "x": 385.2,
+     "y": 499.3,
+     "w": 60.3,
+     "h": 64
+    },
+    "eff_read": 1.5,
+    "eff_api": 1.5,
+    "values": {
+     "subject": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
+     "rule": "xcheck-optical-centre-v"
+    },
+    "master": "touch-target@1.5x.png",
+    "written": "touch-target-c00.png"
+   },
+   {
+    "trigger": "T2",
+    "page": "touch-target",
+    "kind": "gestalt",
+    "region": "region ** \u2014 the whole first fold",
+    "asks": [
+     "hierarchy",
+     "readability",
+     "optical-alignment",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence"
+    ],
+    "because": "no rule screens these classes; they are judgements about whether the page makes sense, not measurements",
+    "rect_css": {
+     "x": 0,
+     "y": 0,
+     "w": 1280,
+     "h": 900
+    },
+    "eff_read": 1.5,
+    "eff_api": 1.5,
+    "tokens_api": 3381,
+    "never": "Name nothing with a number in it: no distance, gap, size, ratio, contrast value, token name, timing, bounding box, score or ranking. Those are measured elsewhere and are given to you as values, never as questions. This image is at eff 1.50, below 2.00: do not assert any 1-2px alignment, hairline-width or colour-drift finding from it. If you suspect one, name the region instead.",
+    "blind": true,
+    "deliverable": true,
+    "focus": [],
+    "master": "touch-target@1.5x.png"
+   }
+  ],
+  "type-scale": [
+   {
+    "trigger": "T1",
+    "page": "type-scale",
+    "kind": "crop",
+    "deliverable": true,
+    "tokens_api": 16,
+    "never": "Name nothing with a number in it: no distance, gap, size, ratio, contrast value, token name, timing, bounding box, score or ranking. Those are measured elsewhere and are given to you as values, never as questions. This image is at eff 1.50, below 2.00: do not assert any 1-2px alignment, hairline-width or colour-drift finding from it. If you suspect one, name the region instead.",
+    "region": "region 00 \u2014 span.glyph \u2014 \u25b6",
+    "asks": "optical-alignment",
+    "because": "vertical ink offset is +2.23px, but this mark is a text glyph and its vertical ink position is set by the font's baseline metrics, which no artifact here carries. Vertical centring is UNVERIFIED",
+    "rect_css": {
+     "x": 385.2,
+     "y": 504.7,
+     "w": 60.3,
+     "h": 64
+    },
+    "eff_read": 1.5,
+    "eff_api": 1.5,
+    "values": {
+     "subject": "div.actions:nth-of-type(6) > div.glyph-btn:nth-of-type(2) > span.glyph",
+     "rule": "xcheck-optical-centre-v"
+    },
+    "master": "type-scale@1.5x.png",
+    "written": "type-scale-c00.png"
+   },
+   {
+    "trigger": "T2",
+    "page": "type-scale",
+    "kind": "gestalt",
+    "region": "region ** \u2014 the whole first fold",
+    "asks": [
+     "hierarchy",
+     "readability",
+     "optical-alignment",
+     "gestalt",
+     "content-fit",
+     "semantic-coherence"
+    ],
+    "because": "no rule screens these classes; they are judgements about whether the page makes sense, not measurements",
+    "rect_css": {
+     "x": 0,
+     "y": 0,
+     "w": 1280,
+     "h": 900
+    },
+    "eff_read": 1.5,
+    "eff_api": 1.5,
+    "tokens_api": 3381,
+    "never": "Name nothing with a number in it: no distance, gap, size, ratio, contrast value, token name, timing, bounding box, score or ranking. Those are measured elsewhere and are given to you as values, never as questions. This image is at eff 1.50, below 2.00: do not assert any 1-2px alignment, hairline-width or colour-drift finding from it. If you suspect one, name the region instead.",
+    "blind": true,
+    "deliverable": true,
+    "focus": [],
+    "master": "type-scale@1.5x.png"
+   }
+  ]
+ },
+ "coverage": {
+  "subjects": 31,
+  "jobs": 25,
+  "t1": 12,
+  "t2": 13,
+  "collapsed_into_a_class": 2,
+  "folded_into_t2": 0,
+  "unadjudicated_by_budget": 0,
+  "tokens_api": 44145,
+  "blocks": {
+   "deliverable": 25,
+   "per_request_ceiling": 8,
+   "written_undeliverable": 0
+  }
+ }
+}
