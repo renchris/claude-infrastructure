@@ -542,7 +542,8 @@ their convergence"* — treat as synthesis (use lower cap). The previous "500–
 - `Explore`: built-in, fast, read-only. **Cost is track-conditional — verify
   the running track before pricing a fan-out:** stable `claude-previous`/`cc-previous`
   (2.1.114 — these were `claude`/`cc` before the 2026-07-31 entrypoint consolidation)
-  → Haiku-tier (~70× cheaper); eval `claude`/`claude-next` (**≥2.1.198**) → Explore
+  → Haiku-tier (~70× cheaper); the live launcher `claude`/`cc` (**≥2.1.198**; the
+  `claude-next` name it used to be listed under is gone — consolidation v2) → Explore
   inherits the **LEAD model, capped at opus** (2.1.198 change), so a heavy
   Explore fan-out draws opus/lead-tier quota — the ~70× discount does NOT hold
   on the eval track. Use for terminal codebase lookups, file:line discovery,
@@ -556,15 +557,26 @@ their convergence"* — treat as synthesis (use lower cap). The previous "500–
   (≤500 token verdict) and as `deep-research` substitute when custom-agent
   registration is unavailable (new session before first restart).
 
-**Frontier tier (window-conditional)**: Fable 5 (`claude-fable-5`, $10/$50 —
-2× Opus 4.8, the most intelligent tier, ABOVE Opus) is available from plan
-usage 2026-06-09 → 2026-06-23, ONLY on the claude-next eval track (CC
-2.1.170+). SSOT: `~/.claude/model-config.yaml` → `frontier_access`. While
-`active: true` AND the session is on the eval track, route the
-adversarial/judge/depth-coordination slots to Fable 5 via the call-time
-Agent `model: "fable"` override — and the same for Dynamic Workflow
-judge/synthesis slots via `agent(prompt, {model: "fable"})`. On the stable
-2.1.114 track or after the window, those slots use the fallback (Opus 4.8).
+**Frontier tier**: the model is whatever `versions.frontier_latest` names —
+read the SSOT live, never a hardcoded model or date. SSOT:
+`~/.claude/model-config.yaml` → `frontier_access` + `versions`. While
+`frontier_access.active: true` (and today ≤ `end`), route the
+adversarial/judge/depth-coordination slots to it via the call-time Agent
+`model: "fable"` override — and the same for Dynamic Workflow
+judge/synthesis slots via `agent(prompt, {model: "fable"})`. Otherwise those
+slots use `frontier_access.fallback`.
+
+🚨 **This paragraph carried THREE dead conjuncts until 2026-09-04** — the same
+triple `436f3435` cut out of `commands/research.md`, and the reason this text
+now names KEYS instead of facts. It asserted (a) a usage window
+"2026-06-09 → 2026-06-23" that died two windows before it was read
+(`frontier_access.permanent: true` since 2026-07-20 — there is no window and no
+"after the window"), (b) "ONLY on the claude-next eval track", a track launcher
+consolidation v2 DELETED, so the routing condition was unsatisfiable by any
+session, and (c) a fallback and model id that had both since moved. A doc that
+restates a perishable fact has no path to learn the fact changed. The shipped
+enforcer `hooks/frontier-spawn-gate.sh` checks `active` + `end` and reads no
+track at all; `frontier_access.tracks` is a stale label with no code consumer.
 Agent-definition frontmatter stays `model: opus` so the definitions remain
 valid on both tracks — the override is always call-time. Agent TEAMS run on
 both tracks too; teammate models are gated by the auto-mode allowlist in
