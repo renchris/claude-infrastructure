@@ -15,3 +15,5 @@ corpus/out/blind/
 # the plan that names each crop IS committed (route-plan.json), so the decision
 # is reviewable in a diff while the pixels are one command away.
 corpus/out/crops/
+# One per app profile, re-rendered from the committed findings in one command.
+corpus/out/report-*.json
