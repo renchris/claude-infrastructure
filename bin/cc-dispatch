@@ -230,6 +230,12 @@
 #                                           census is not enough: `grep reserve` matches `preserved`
 #                                           and manufactured a false positive here on the first
 #                                           attempt at exactly this check.
+#   CC_DISPATCH_CLOUD_PENDING_MAX (default: 50) the OFF-BOX PILE cap. Above it, NO cloud fire is
+#                            admitted this pass — the lane owes more results than it can return, and
+#                            one more fire is strictly pile-additive. 0 disables cloud firing
+#                            outright; a very large value disables the gate.
+#   CC_DISPATCH_CLOUD_DECL_DIR (default: CC_CLOUD_STATE, else ~/.claude/autonomy/cloud)
+#                            the declaration store the two cloud gates read. Read-only, disk-only.
 #   CC_DISPATCH_CLOUD_CEILING (default: 6)  OFF-BOX ceiling, charged for venue=cloud claims. A
 #                                           separate resource (quota) from a separate bound — an
 #                                           off-box session costs this box no pane and no worktree.
@@ -421,6 +427,18 @@ CEILING="${CC_DISPATCH_CEILING:-12}"
 # this number's job is only to stop the cloud lane becoming unbounded now that it no longer draws
 # from CEILING. Raise it on evidence, never on optimism.
 CLOUD_CEILING="${CC_DISPATCH_CLOUD_CEILING:-6}"
+# THE OFF-BOX PILE, which is a different resource again from the off-box CONCURRENCY above. The
+# ceiling bounds how many cloud workers are RUNNING; nothing bounded how many results were owed.
+# Measured 2026-09-04: 543 pending declarations, +23.5/day in against 1.3 returns/day out, and 17
+# backlog ids owning 379 of 665 declarations — one id fired 37 times, and 70f0001c657b carried 24
+# declarations while being closed twice. Every one of those fires costs ~0.81x a local session that
+# would have closed the row. This is the number that makes firing stop being pile-additive; it is a
+# POLICY default like CLOUD_CEILING, not a measurement, and the pile it is compared against is
+# whatever the declaration store says right now.
+CLOUD_PENDING_MAX="${CC_DISPATCH_CLOUD_PENDING_MAX:-50}"
+# The declaration store, read-only and disk-only. It defaults through CC_CLOUD_STATE so this and
+# bin/cc-cloud can never disagree about which store they are talking about.
+CLOUD_DECL_DIR="${CC_DISPATCH_CLOUD_DECL_DIR:-${CC_CLOUD_STATE:-$HOME/.claude/autonomy/cloud}}"
 LANE="${CC_DISPATCH_LANE:-v2}"
 # The pass lock lives in the SAME state dir as the IDL rather than at a second independent $HOME
 # path: the production default is then byte-identical to ~/.claude/autonomy/dispatch.lock, AND every
@@ -484,6 +502,7 @@ is_on()   { case "${1:-}" in on|On|ON|1|true|True|TRUE|yes|Yes|YES) return 0 ;; 
 
 is_uint "$CEILING"          || die3 "CC_DISPATCH_CEILING must be a non-negative integer (got '$CEILING')"
 is_uint "$CLOUD_CEILING"    || die3 "CC_DISPATCH_CLOUD_CEILING must be a non-negative integer (got '$CLOUD_CEILING')"
+is_uint "$CLOUD_PENDING_MAX" || die3 "CC_DISPATCH_CLOUD_PENDING_MAX must be a non-negative integer (got '$CLOUD_PENDING_MAX')"
 case "$LANE" in v1|v2) ;; *) die3 "CC_DISPATCH_LANE must be v1 or v2 (got '$LANE')" ;; esac
 
 # resolve_bin <override> <name> [fallback-abspath...] → echoes an executable path, or "" (rc 1)
@@ -674,6 +693,44 @@ fire_log_keep() { # $1=item id $2=account $3=rc $4=captured-output file
   } >> "$_lf" 2>/dev/null || true
   chmod 600 "$_lf" 2>/dev/null || true
   return 0
+}
+
+# ---- THE OFF-BOX PILE, read from the declaration store itself ---------------------------------
+#
+# WHY THIS READ AND NOT A PROBE. The two cloud gates below need one fact — which items already have
+# a cloud session that has not come back — and the store already holds it, one file per declaration,
+# with an `item=` link the dispatcher writes at fire time and has never read since. So this is a
+# directory walk and nothing else: no `cc-cloud` fork per item (that is a 216 s unscoped fold on the
+# live store, measured 2026-09-01), no control-plane call, no network, nothing that can time out and
+# no third state to define. It is the same disk-only discipline as the DONE-GUARD one level down,
+# for the same reason its note gives: a gate that must fail OPEN whenever its sensor cannot answer
+# is not a gate, and under a bare launchd PATH the sensor failing is the common case.
+#
+# UNLANDED IS THE ABSENCE OF THE STORE'S OWN TWO TERMINAL MARKERS, never a positive judgment about
+# the branch. `<id>.returned` is written by cloud-return when a session's result has been settled;
+# `<id>.retired` by `cc-cloud retire`, which is what scripts/cloud-retire-terminal.sh drops on a
+# declaration that can never return. Anything with neither is owed. That is deliberately the widest
+# possible reading: a declaration this dispatcher cannot classify counts AGAINST firing, so a store
+# it cannot understand throttles the lane rather than opening it.
+#
+# Emits `<session-id><TAB><item-id>` per unlanded declaration, item possibly empty. The count of
+# lines IS pending_unlanded; the item column is the already-declared set. One walk answers both, so
+# the two gates can never be computed from two different readings of the same store.
+cloud_pending_scan() { # <decl-dir> → <session>\t<item> per UNLANDED declaration
+  local d="$1" f id line item
+  [ -d "$d" ] || return 0
+  for f in "$d"/*.decl; do
+    [ -f "$f" ] || continue
+    id="${f##*/}"; id="${id%.decl}"
+    [ -f "$d/$id.returned" ] && continue
+    [ -f "$d/$id.retired" ]  && continue
+    item=""
+    # read in-process: 500+ declarations x one fork each is the cost this walk exists to avoid.
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in item=*) item="${line#item=}"; break ;; esac
+    done < "$f"
+    printf '%s\t%s\n' "$id" "$item"
+  done
 }
 
 # ---- G5: THE VENUE, and the declare that makes an off-box session observable ------------------
@@ -1985,6 +2042,89 @@ dispatch() { # <dry|run|decide>
       _ra="$(printf '%s' "$dispatchable" | jq 'length' 2>/dev/null || echo 0)"
       if [ "$((_rb - _ra))" -gt 0 ]; then
         idl skipped "venue-refused: $((_rb - _ra)) of $_rb cloud item(s) were ALREADY refused off-box by the actuator and have not been touched since — they yield their slot to work that can run, and re-enter the queue the moment the row is re-labelled or otherwise updated"
+      fi
+    fi
+  fi
+
+  # 1a1b. THE CLOUD ADMISSION GATE — the arm that stops the lane refilling faster than it drains.
+  #
+  # FILED 2026-09-01 AS 96e532227df8 AND DELIBERATELY NOT BUILT THEN. Its precondition was that the
+  # lane show a non-zero drain rate first: applied over 466 pending declarations with no drain
+  # observed, the per-item arm would not de-duplicate cloud dispatch, it would HALT it for ~72 items
+  # and convert visible churn into a silent stall (DRAIN_CIRCUIT_2026-09-01.md §3c). The lane has
+  # since closed rows, and the pile has since reached 543 at +23.5/day, so the precondition is met
+  # and the cost of waiting is now the larger number.
+  #
+  # TWO GATES, MEASURING TWO DIFFERENT THINGS, AND ONLY ONE OF THEM IS ABOUT THIS ITEM.
+  #
+  #   (1) ALREADY-DECLARED — per item. `git log -S pending_unlanded` and `-S
+  #       CC_DISPATCH_CLOUD_PENDING_MAX` both return nothing: the dispatcher has never read the
+  #       decl store's `item=` link, though it is the dispatcher that writes it. Measured
+  #       2026-09-04: 17 backlog ids own 379 of 665 declarations (57%), worst 37 fires for ONE id,
+  #       and 70f0001c657b carried 24 declarations while being closed on 09-02 and again on 09-04.
+  #       An item with a cloud session still out there does not need a second one; it needs the
+  #       first one to come back.
+  #
+  #   (2) THE PILE CAP — lane-wide, and it is the one that changes the arithmetic. (1) alone
+  #       de-duplicates; it does not stop 500 DISTINCT items each adding a row to a queue returning
+  #       1.3/day. Above CC_DISPATCH_CLOUD_PENDING_MAX the lane owes more than it can ever return
+  #       within any horizon, so the next fire is strictly pile-additive at ~0.81x the price of a
+  #       local session that would have closed the row — and it costs the rows already out there
+  #       their place in a 25-slot rotation. The refusal is TOTAL for cloud and touches nothing
+  #       else: local dispatch is unaffected, which is the lane closing 65 rows to cloud's 3.
+  #
+  # 🚨 IT IS THE STORE THAT CLEARS THIS, NOT A TIMER. Both gates read the same walk, so both fall
+  # away exactly as declarations become terminal — a return settles one, and
+  # scripts/cloud-retire-terminal.sh settles the strata that can never return. There is no TTL to
+  # expire and no marker to sweep: a stale gate here would be a fourth immortal label, which is the
+  # class of defect this whole wave is reversing (memory: filed-blocker-is-never-revalidated).
+  #
+  # NEVER SILENT. The cap prints its own count to stderr and journals it; each already-declared item
+  # journals its own row naming the session that holds it, so "the cloud queue is empty" and "the
+  # cloud queue is held" can never read the same in the IDL — the exact collapse that made this
+  # lane's outage unreadable for three weeks.
+  local _cl_n
+  _cl_n="$(printf '%s' "$dispatchable" | jq '[ .[] | select((.venuePlan // "") == "cloud") ] | length' 2>/dev/null || echo 0)"
+  is_uint "$_cl_n" || _cl_n=0
+  if [ "$_cl_n" -gt 0 ]; then
+    local _cl_scan _cl_pending _cl_map _cl_before _cl_after
+    _cl_scan="$(cloud_pending_scan "$CLOUD_DECL_DIR")"
+    _cl_pending="$(printf '%s' "$_cl_scan" | grep -c . 2>/dev/null || true)"
+    is_uint "$_cl_pending" || _cl_pending=0
+
+    if [ "$_cl_pending" -gt "$CLOUD_PENDING_MAX" ]; then
+      echo "cc-dispatch: refusing ALL cloud fires — $_cl_pending unlanded cloud declaration(s) against a cap of $CLOUD_PENDING_MAX. The lane owes more results than it returns; one more fire is pile-additive. Raise CC_DISPATCH_CLOUD_PENDING_MAX, or let the return sweep and scripts/cloud-retire-terminal.sh drain it." >&2
+      while IFS= read -r _cid; do
+        [ -n "$_cid" ] || continue
+        idl skipped "$_cid: cloud-pending-cap — $_cl_pending unlanded cloud declaration(s) > CC_DISPATCH_CLOUD_PENDING_MAX=$CLOUD_PENDING_MAX; no cloud fire is admitted this pass"
+      done <<EOF
+$(printf '%s' "$dispatchable" | jq -r '.[] | select((.venuePlan // "") == "cloud") | .id // ""' 2>/dev/null)
+EOF
+      dispatchable="$(printf '%s' "$dispatchable" | jq -c '[ .[] | select((.venuePlan // "") != "cloud") ]' 2>/dev/null || printf '%s' "$dispatchable")"
+    else
+      # `item -> newest session holding it`. The tab is the field separator the walk emits, and jq
+      # does the split so an item id containing nothing surprising is still handled by one parser
+      # rather than by shell word-splitting (memory: ifs-whitespace-collapses-empty-fields).
+      _cl_map="$(printf '%s\n' "$_cl_scan" | jq -R -s -c '
+          [ split("\n")[] | select(length > 0) | split("\t")
+            | select(length == 2) | select(.[1] != "")
+            | {key: .[1], value: .[0]} ] | from_entries' 2>/dev/null || printf '{}')"
+      [ -n "$_cl_map" ] || _cl_map='{}'
+      _cl_before="$(printf '%s' "$dispatchable" | jq 'length' 2>/dev/null || echo 0)"
+      while IFS="$(printf '\t')" read -r _cid _csess; do
+        [ -n "$_cid" ] || continue
+        idl skipped "$_cid: already-declared $_csess — this item already has an unlanded cloud declaration; it needs that session's result returned, not a second session"
+      done <<EOF
+$(printf '%s' "$dispatchable" | jq -r --argjson m "$_cl_map" '
+    .[] | select((.venuePlan // "") == "cloud") | ($m[.id] // "") as $s
+        | select($s != "") | "\(.id // "")\t\($s)"' 2>/dev/null)
+EOF
+      dispatchable="$(printf '%s' "$dispatchable" | jq -c --argjson m "$_cl_map" '
+          [ .[] | select((.venuePlan // "") != "cloud" or ($m[.id] // "") == "") ]' 2>/dev/null \
+        || printf '%s' "$dispatchable")"
+      _cl_after="$(printf '%s' "$dispatchable" | jq 'length' 2>/dev/null || echo 0)"
+      if [ "$((_cl_before - _cl_after))" -gt 0 ]; then
+        idl skipped "cloud-already-declared: $((_cl_before - _cl_after)) of $_cl_n cloud item(s) already hold an unlanded declaration and are NOT re-fired; pending_unlanded=$_cl_pending of $CLOUD_PENDING_MAX"
       fi
     fi
   fi
@@ -3326,6 +3466,14 @@ STUB
          CC_DISPATCH_IDL="$tmp/idl.jsonl" CC_DISPATCH_PROJECT="/repo/a" CC_DISPATCH_MAX_SPAWN=2 \
          CC_DISPATCH_SID="selftest"         CC_DISPATCH_LOCK_DIR="$tmp/dispatch.lock" CC_DISPATCH_CEILING=6 CC_DISPATCH_LANE=v2 \
          CC_DISPATCH_DECIDE_ONLY=off
+  # 🚨 THE DECLARATION STORE IS FIXTURED, and its absence was caught by this suite the hour the
+  # cloud admission gate landed: unpinned it defaults through CC_CLOUD_STATE to the operator's LIVE
+  # ~/.claude/autonomy/cloud, where 520 unlanded declarations sit against a cap of 50 — so every
+  # cloud case in this file (c7's whole brief block) was refused by the real pile and read as a
+  # compose failure. Same law as CC_DISPATCH_FINDPLAN_BIN below: a selftest that resolves a live
+  # path grades a configuration it does not control.
+  export CC_DISPATCH_CLOUD_DECL_DIR="$tmp/cloud"
+  mkdir -p "$tmp/cloud"
   # the premise gate's helper is pinned to THIS checkout's copy, never resolved. Unpinned it would
   # fall through resolve_bin to ~/.claude/scripts/find-plan.sh — a symlink into the SHARED checkout —
   # so the suite would grade a different tree than the one it is testing, and would go green on a
