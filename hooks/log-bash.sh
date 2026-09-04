@@ -14,11 +14,36 @@
 # trailing newline that `$(cat)` strips, so strip it back off for byte-parity with the old value.
 IFS= read -r -d '' INPUT || true
 while [ "${INPUT%$'\n'}" != "${INPUT}" ]; do INPUT="${INPUT%$'\n'}"; done
+# D-3 RECURRENCE (2026-09-04, measured with a positive control inside one headless run). The D-3 fix
+# above renamed `.tool_result` → `.tool_response` and stopped there, but BOTH halves were still wrong:
+#   (a) There is no `exitCode` on `.tool_response` either. The real success payload is
+#       {stdout, stderr, interrupted, isImage, noOutputExpected} — so the `// 0` default kept winning.
+#   (b) A FAILING tool never reaches PostToolUse at all: the harness dispatches PostToolUseFailure
+#       INSTEAD of it (`echo control-ok` → PostToolUse; `false` → PostToolUseFailure and NO
+#       PostToolUse), and that payload carries `.error` ("Exit code 1") with no tool_response.
+# Consequence, measured on the live log: 37,319 `Exit:` fields over 9 days, every one of them `0`.
+# Line 2's "REAL exit code" had never once been true. So derive it from the EVENT, not a field:
+#   PostToolUse        ⇒ the tool succeeded by construction ⇒ 0
+#   PostToolUseFailure ⇒ parse `.error`; KEEP its text when it is not an exit code (interrupt,
+#                        timeout), because "Interrupted" is information a coerced 1 would destroy.
+# Registration is the other half: PostToolUseFailure must be wired alongside PostToolUse/Bash or this
+# branch is unreachable and the log stays a success-only sample. See settings-templates/.
 CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
-EXIT=$(printf '%s' "$INPUT" | jq -r '.tool_response.exitCode // 0' 2>/dev/null)
 SID=$(printf '%s' "$INPUT" | jq -r '.session_id // "-"' 2>/dev/null)
+EVT=$(printf '%s' "$INPUT" | jq -r '.hook_event_name // empty' 2>/dev/null)
+if [ "$EVT" = "PostToolUseFailure" ]; then
+  ERR=$(printf '%s' "$INPUT" | jq -r '.error // empty' 2>/dev/null)
+  ERR=${ERR//$'\n'/ }                            # the audit line must stay single-line
+  case "$ERR" in
+    'Exit code '*) EXIT="${ERR#Exit code }" ;;
+    '')            EXIT="fail" ;;                # failed, cause unstated — never launder this to 0
+    *)             EXIT="$ERR" ;;                # e.g. "Interrupted", a timeout, a tool-side error
+  esac
+else
+  EXIT=0
+fi
 [ -n "$SID" ] || SID="-"
-[ -n "$EXIT" ] || EXIT=0
+[ -n "$EXIT" ] || EXIT="fail"
 mkdir -p ~/.claude/logs
 echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [$SID] $CMD | Exit: $EXIT" >> ~/.claude/logs/bash-execution.log
 exit 0

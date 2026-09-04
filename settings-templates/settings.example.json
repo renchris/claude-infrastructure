@@ -1,6 +1,6 @@
 {
-  "_comment": "Reproducible Claude Code config template \u2014 the FULL live hook roster (G-P6-7). Captured from the primary ~/.claude/settings.json with PORTABLE ~/.claude paths (live uses some machine-absolute /Users/... paths; the template normalizes them). install.sh --wire-hooks merges .hooks/.permissions.deny/.permissions.ask additively; scripts/settings-drift-assert.sh asserts these arrays match across all 5 config dirs. The anti-premature-done Stop hooks (session-continue, anti-deference-nudge, teammate-checkpoint, boundary-handoff) MUST survive a settings reset \u2014 that is the whole point of this capture.",
-  "_comment_env": "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION / _AWAY_SUMMARY hard-pin the two grey-text UI features (input ghost-text suggestion; the 'recap:' line). Both are the FIRST branch of their gate fn (Kwo/vyr in 2.1.220), so a truthy value short-circuits the GrowthBook gate, the non-interactive check, and an accidental /config toggle-off \u2014 and re-wins on every settings reload. Load-bearing for suggestions: their gate tengu_chomp_inflection DEFAULTS FALSE, so they fail-to-OFF whenever GrowthBook is unreachable (telemetry off, cold cache, startup budget missed); the env var is what makes them deterministic. Neither var affects how OFTEN the features fire \u2014 that is trigger conditions (recap: terminal blurred + 3min idle + fresh prompt cache; suggestions: terminal focused + empty input + last turn under 10k tokens), which are not configurable. NOTE this comment sits OUTSIDE .env deliberately: every key inside .env is written into process.env and inherited by every child process.",
+  "_comment": "Reproducible Claude Code config template — the FULL live hook roster (G-P6-7). Captured from the primary ~/.claude/settings.json with PORTABLE ~/.claude paths (live uses some machine-absolute /Users/... paths; the template normalizes them). install.sh --wire-hooks merges .hooks/.permissions.deny/.permissions.ask additively; scripts/settings-drift-assert.sh asserts these arrays match across all 5 config dirs. The anti-premature-done Stop hooks (session-continue, anti-deference-nudge, teammate-checkpoint, boundary-handoff) MUST survive a settings reset — that is the whole point of this capture.",
+  "_comment_env": "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION / _AWAY_SUMMARY hard-pin the two grey-text UI features (input ghost-text suggestion; the 'recap:' line). Both are the FIRST branch of their gate fn (Kwo/vyr in 2.1.220), so a truthy value short-circuits the GrowthBook gate, the non-interactive check, and an accidental /config toggle-off — and re-wins on every settings reload. Load-bearing for suggestions: their gate tengu_chomp_inflection DEFAULTS FALSE, so they fail-to-OFF whenever GrowthBook is unreachable (telemetry off, cold cache, startup budget missed); the env var is what makes them deterministic. Neither var affects how OFTEN the features fire — that is trigger conditions (recap: terminal blurred + 3min idle + fresh prompt cache; suggestions: terminal focused + empty input + last turn under 10k tokens), which are not configurable. NOTE this comment sits OUTSIDE .env deliberately: every key inside .env is written into process.env and inherited by every child process.",
   "env": {
     "MCP_TIMEOUT": "30000",
     "MCP_TOOL_TIMEOUT": "60000",
@@ -13,7 +13,7 @@
   "teammateMode": "tmux",
   "autoCompactEnabled": false,
   "worktree": {
-    "_comment": "NEVER symlink node_modules (breaks pnpm's isolated layout + native bins \u2014 global CLAUDE.md rule). Only .cache.",
+    "_comment": "NEVER symlink node_modules (breaks pnpm's isolated layout + native bins — global CLAUDE.md rule). Only .cache.",
     "symlinkDirectories": [
       ".cache"
     ]
@@ -24,7 +24,7 @@
   },
   "permissions": {
     "defaultMode": "auto",
-    "_comment_allow": "allow[] is project-specific and long (~350 entries live); this template keeps only the DESK-CRITICAL entries. Extend per project \u2014 the drift-assert does NOT gate on allow[] (auto-mode permits anything not matching an ask-rule; only deny/ask/hooks are safety-load-bearing).",
+    "_comment_allow": "allow[] is project-specific and long (~350 entries live); this template keeps only the DESK-CRITICAL entries. Extend per project — the drift-assert does NOT gate on allow[] (auto-mode permits anything not matching an ask-rule; only deny/ask/hooks are safety-load-bearing).",
     "allow": [
       "Read",
       "Glob",
@@ -365,7 +365,7 @@
         ]
       },
       {
-        "_comment": "Desk role activation: injects the canonical desk brief (docs/templates/desk-boot-brief.md) IFF this pane holds ~/.claude/cc-roles/desk. Pairs with dod-persist.sh above \u2014 that carries the mutable frozen DoD keyed on cwd, this carries the durable ROLE keyed on the role file. Silent no-op in every non-desk session. Wired by docs/activation/pending-activation/06-desk-bootstrap-activate.sh.",
+        "_comment": "Desk role activation: injects the canonical desk brief (docs/templates/desk-boot-brief.md) IFF this pane holds ~/.claude/cc-roles/desk. Pairs with dod-persist.sh above — that carries the mutable frozen DoD keyed on cwd, this carries the durable ROLE keyed on the role file. Silent no-op in every non-desk session. Wired by docs/activation/pending-activation/06-desk-bootstrap-activate.sh.",
         "hooks": [
           {
             "type": "command",
@@ -375,7 +375,7 @@
         ]
       },
       {
-        "_comment": "The /accounts board at session start, at ZERO model tokens: it emits a TOP-LEVEL systemMessage (the only one of the three SessionStart channels that reaches the terminal without entering model context \u2014 hookSpecificOutput.systemMessage is silently ignored and additionalContext is billed; proven in docs/research/R5b-sessionstart-render-probe.py). It is a file read (~65ms), never a claude-accounts call: --readout measures 5.33s, over this timeout. The board is pre-rendered by the com.claude.accounts-keepwarm launchd job (claude-accounts --keepwarm), and the hook labels or withholds it by age.",
+        "_comment": "The /accounts board at session start, at ZERO model tokens: it emits a TOP-LEVEL systemMessage (the only one of the three SessionStart channels that reaches the terminal without entering model context — hookSpecificOutput.systemMessage is silently ignored and additionalContext is billed; proven in docs/research/R5b-sessionstart-render-probe.py). It is a file read (~65ms), never a claude-accounts call: --readout measures 5.33s, over this timeout. The board is pre-rendered by the com.claude.accounts-keepwarm launchd job (claude-accounts --keepwarm), and the hook labels or withholds it by age.",
         "hooks": [
           {
             "type": "command",
@@ -396,7 +396,7 @@
         ]
       },
       {
-        "_comment": "Registry deregistration: removes THIS pane's ~/.claude/cc-registry/<paneUUID>.json on a clean close. session-register.sh (SessionStart) wrote the row and session-deregister.sh was written to remove it, but the pair was never actually wired here \u2014 so every clean close and every `handoff-fire.sh self-close` leaked its row (82 stale rows found 2026-07-20), and the reaper read those ghosts as crashed sessions. Skips reason=clear by design (same pane re-registers immediately). Wired by docs/activation/pending-activation/08-session-deregister-activate.sh.",
+        "_comment": "Registry deregistration: removes THIS pane's ~/.claude/cc-registry/<paneUUID>.json on a clean close. session-register.sh (SessionStart) wrote the row and session-deregister.sh was written to remove it, but the pair was never actually wired here — so every clean close and every `handoff-fire.sh self-close` leaked its row (82 stale rows found 2026-07-20), and the reaper read those ghosts as crashed sessions. Skips reason=clear by design (same pane re-registers immediately). Wired by docs/activation/pending-activation/08-session-deregister-activate.sh.",
         "hooks": [
           {
             "type": "command",
@@ -444,7 +444,7 @@
     ],
     "Stop": [
       {
-        "_comment": "obj-1 \u2014 the anti-premature-done + notify chain (order matters). session-continue + anti-deference-nudge are the FM1 stack; they MUST be reproduced on every account.",
+        "_comment": "obj-1 — the anti-premature-done + notify chain (order matters). session-continue + anti-deference-nudge are the FM1 stack; they MUST be reproduced on every account.",
         "hooks": [
           {
             "type": "command",
@@ -489,7 +489,7 @@
         ]
       },
       {
-        "_comment": "obj-2 \u2014 boundary-handoff (state-preservation advisory at the context boundary). Live wires this only on ~/.claude via a machine-absolute path (G-P6-5b); the fix moves it here on ALL config dirs with a portable ~/.claude path.",
+        "_comment": "obj-2 — boundary-handoff (state-preservation advisory at the context boundary). Live wires this only on ~/.claude via a machine-absolute path (G-P6-5b); the fix moves it here on ALL config dirs with a portable ~/.claude path.",
         "hooks": [
           {
             "type": "command",
@@ -695,6 +695,26 @@
             "type": "command",
             "command": "~/.claude/hooks/dod-persist.sh",
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/log-bash.sh",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/mailbox-drain.sh post-tool"
           }
         ]
       }
