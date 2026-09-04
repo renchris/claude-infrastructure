@@ -86,6 +86,97 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-03 — drain recycle #292: method 264 — A DELIBERATE, DOCUMENTED IMPRECISION UPSTREAM IS A
+  DEBT EVERY CONSUMER PAYS SEPARATELY, SO ENUMERATE THE CONSUMERS AND FIND THE ONE THAT DID NOT
+  PAY.** ZERO rows closed, ZERO filed, ZERO reopened. TWO commits, ONE push. #291 attributed a
+  conjunction's ZERO to a conjunct. Its lead 0 pointed one clause over — clause 4's own gate,
+  `amp == 0 && !cap && cv != 1`, three conjuncts nobody had ever reported separately — and the
+  answer there is not about a zero at all. It is that the gate reads a masking pass which is
+  quote-BLIND **on purpose**, and two of its three consumers already compensate.
+  **THE ATTRIBUTION, TWO INDEPENDENT COLUMNS IN ONE OUTPUT.** A whole-file instrumented copy printed
+  all three conjuncts at every evaluation, plus the program's own mint as a separate record; its
+  `--census` was asserted BYTE-IDENTICAL to the shipped program (125 rows) and every replacement
+  reverted to prove head, middle and tail unchanged. Measured 2026-09-03T23:00:20Z at head
+  `bdb1d911f7b5`, loadavg 19: **471 lines REACH clause 4 · 125 are minted · 102 of those by `cv==1`
+  ALONE · 23 by `amp` ALONE · 0 by `cap` · ZERO overlap between the cells** — so every census row has
+  exactly ONE cause and no instrument had ever printed it. Drops partition **85 pend-armed + 261
+  plain, residual 0**. The derived mint and the program's own record agreed on every one of the 471,
+  **0 disagreements**. The 85 independently reproduces #291's 85 from a different instrument at a
+  different site.
+  **THE FINDING IS IN THE DISJUNCT THAT CONVICTS, NOT IN A ZERO.** `amp` was
+  `index(last, "\003")` guarded by `pre_amp ~ /[;)]/`. The `\002`/`\003` masking at the stage split
+  gsubs the RAW line BEFORE `qmask()` runs — deliberately, so a `||` cannot be split as two pipes —
+  so an `&&` inside a single-quoted awk program or a regex becomes `\003` exactly like a shell
+  operator, and the guard is a plain regex over unmasked text. **Of the 28 lines carrying an `&&` in
+  their last stage, 7 turn on a byte whose syntactic role the test cannot see, and it fails in BOTH
+  directions:** 2 fail-OPEN (a `)` inside a quoted regex zeroed a REAL `&&` —
+  `hooks/coldcompile-admit.sh:98`, `hooks/completion-assert.sh:855`), 2 fail-CLOSED and **LIVE in the
+  shipped census** (an `&&` inside a quoted awk program convicted a line with no shell `&&` at all —
+  `bin/cc-idl:172`, `bin/cc-reaper:2812`), and 3 where the guard reached the right verdict for a
+  reason that does not hold.
+  **AND THE FILE ALREADY CARRIED THE ANSWER, ONE CLAUSE AWAY.** `toplevel_or()` and
+  `group_wraps_or()` BOTH re-walk the quotes themselves, and `toplevel_or` says so in its own tail
+  comment. The masking is known-lossy and its consumers are supposed to pay for it; `amp` was the one
+  that did not. **The defect was never in the masking — it was in the single consumer that trusted
+  it, and counting the consumers is what finds that.**
+  **THE SIXTH SITE THAT PROVES THE POINT.** `hooks/completion-assert.sh:855` sits ONE LINE ABOVE a
+  2026-08-27 comment recording that this file's FIFTH site had been drained and its allowlist row of
+  5 finally matched what the detector could see. It did match — while a sixth site sat immediately
+  above that sentence, hidden by a SECOND and unrelated blind spot from the heredoc one the comment
+  describes. **Two independent blind spots over one file, and the count reconciled under both.**
+  **MEASURED BEFORE LANDING (method 213), PRE arm extracted read-only from `origin/main` with
+  `git archive | tar -x`, `CC_PIPEFAIL_ROOT` pinned to the SAME tree on both arms, keyed on (path,
+  TEXT): ROWS 125 -> 125, KEYS 116 -> 116, LOST 2, NEW 2** — a CORRECTION, not a widening. Draining
+  the two newly-visible fail-OPEN sites then took the census **125 -> 123**, and the allowlist SHRANK
+  **44 -> 42 rows** by `--regen`, its diff exactly the two rows the correction stopped convicting.
+  ⚠️ **AND THE RATCHET'S DOWNWARD ARM CANNOT TELL THE TWO CASES APART:** it printed *"a grandfathered
+  site was FIXED but its allowlist count was not lowered"* for `cc-idl` and `cc-reaper`, which were
+  never fixed and never violations — the DETECTOR stopped being wrong about them. Both read `now 0`.
+  That is #243's warning in a new costume, and the arm is still worth its keep: it attributed the
+  whole change per path, for free.
+  **THREE NEW ARMS, RED-PROVED AGAINST THE UNFIXED DETECTOR: 60/62, failing EXACTLY r32 and g33**,
+  with g34 green pre-fix because it PINS the guard rather than fixing it. `--selftest` 59/59 ->
+  62/62, and the suite's count pin was updated deliberately in the same diff. Attribution proved by
+  mutant: dropping the `seen` term makes **exactly g34** fail and nothing else, subject restored
+  byte-identically by sha256 in a `finally`.
+  **THREE INSTRUMENT FAULTS, ALL IN THE APPARATUS, EVERY ONE SURFACED AS A REFUSAL RATHER THAN A
+  WRONG NUMBER.** (1) My quote-state column asked *"is the FIRST `;` or `)` quoted"* where the guard
+  is `~ /[;)]/` and asks *"is there ANY"* — a line can carry a quoted `)` and a bare `;`, and the
+  first-match form convicts it. Caught by the column's own POSITIVE control, on the case where a `)`
+  closes a substitution INSIDE double quotes. **THE COLUMN MUST REPLICATE THE SUBJECT'S
+  QUANTIFIER, not merely its predicate.** (2) The first `g34` fixture wrapped its substitution in
+  double quotes, so `seg[n]` began mid-quote and its `&&` was skipped as an untrustworthy FRAGMENT —
+  `seen` was never consulted, the arm passed in BOTH states and pinned nothing. Only the mutant
+  refusing its prediction surfaced it; the repaired fixture balances its quotes inside the last
+  stage. **A fragment's quote state is not the line's, and `toplevel_or` states that policy
+  explicitly while the new function had been doing it silently — now commented.** (3) Two
+  apostrophes written into a comment INSIDE the single-quoted `DETECT_AWK` string truncated the
+  detector: it read **30/62 — every RED arm failing and every GREEN arm passing**, the exact
+  signature of a detector that matches nothing. `scan()`'s own parse gate does NOT catch this,
+  because the truncated program still PARSES. **`--selftest` is the only thing that catches it,
+  which is the argument for running it on every edit rather than at the end.**
+  **THE OPEN MOMENT, 2026-09-03T22:56:01Z.** qos-rewrite diff rc 0 / **0 bytes**. All four
+  kitty-aware checks passed: `cc-in-kitty` rc 0, `KITTY_WINDOW_ID` 27, the id-keyed `kitty @ ls`
+  query run THROUGH A FILE (rc 0, **0 stderr bytes**, 143,386 json bytes) returning EXACTLY ONE
+  object with a bogus-id NEG control at 0 and its `cwd` the worktree, `cc-notify --self` printing 27.
+  Ledger `RUNG=✅ LIVE_SRC=ok LIVE_LAG=3 LIVE_ADDS=0 LIVE_AGE=2177 GATE=stale`. Board at 22:57:01Z:
+  **363 open / 240 blocked / 2,381 done / 1 claimed**, 603 combined over 2,985 rows, both partitions
+  asserted. The gap from #291's floor was **4 m 54 s and held ZERO arrivals, ZERO departures and ONE
+  transition** — `70ed289c10fb` claimed -> open, a `claude-infrastructure` row already on the
+  do-not-touch list. Postland RED pages **0, denominator 2,869**; the other page store **2,542 all /
+  71 `.page`**; inbox-guard **436**; stamps **555**. Mailbox unchanged at 4,059 bytes / 1 line and
+  `cc-roles list` byte-identical again — both read at the open.
+  ⚠️ **THE STANDING RED IS STILL TWO ACTIONABLE AND ITS `linked` COLUMN MOVED FOR THE FIRST TIME IN
+  TEN LINKS: 462, where #282 through #291 all read 461.** The reference sentence read **3**, against
+  #291's 12 — it measures the shared checkout's distance behind trunk and moves with sibling lands.
+  The two survivors are unchanged and neither is mine to sweep. The executing blob still equals
+  trunk's on both sampled paths, a THIRTEENTH consecutive link.
+  🚨 **THE TRANSFERABLE SENTENCE, AND IT GOES UNDER #291's.** #291 asked which CONJUNCT produced a
+  zero. The rung under it is: **when an upstream pass is imprecise BY DESIGN and says so, that
+  imprecision is a debt every consumer must pay for itself. Count the consumers of the lossy
+  intermediate, read what each does about it, and the one that does nothing is the defect** — it
+  will fail in BOTH directions, because a clause that RENDERS a verdict has two ways to be wrong.
+  The tell is cheap: a masking or normalising pass whose own comment explains why it is approximate.
 - **2026-09-03 — drain recycle #291: method 263 — A CLAUSE THAT IS A CONJUNCTION RENDERS ONE VERDICT
   OVER SEVERAL QUESTIONS, AND ITS ZERO MUST BE ATTRIBUTED TO A CONJUNCT — BECAUSE ONE OF THEM MAY BE
   AN EXTRACTOR THAT CANNOT *NAME* THE POPULATION AT ALL.** ZERO rows closed, ZERO filed, ZERO
