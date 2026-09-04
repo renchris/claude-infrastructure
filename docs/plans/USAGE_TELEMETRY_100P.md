@@ -1832,6 +1832,56 @@ is the case that keeps the term live: with `P_WALL = 0.0` next3's verdict flips 
 the unrecoverable floor goes to zero, so an implementation that quietly drops the freeze is caught
 rather than merely looking plausible.
 
+#### S5 · M3c `--strand-score` — the instrument that CAN fail — LANDED (wave 2, 2026-09-04)
+
+`bin/claude-accounts`: `strand_score(samples, buckets, now)` + `render_strand_score(sc)` beside
+`wk_strand_pp`, constants `STRAND_SCORE_BUCKETS` / `STRAND_SCORE_LOOKBACK_H` /
+`STRAND_MATERIAL_PP`, and the `--strand-score` branch in `main()` **before `load_cfg()`**, sited
+exactly like `--agents`. Cases RP-30..RP-34 in `tests/claude-accounts-strand.bats` — **5/5 RED**
+against the S4 binary, 16/16 green after.
+
+**It fails, on a fixture built to make it fail, and the failure is the acceptance.** A window that
+burns 0.6 %/h for 110 h and slows to 0.4 %/h for its last 30 h closes at 78% — a 22 pp strand. The
+nowcast read at each horizon:
+
+| horizon | 96 h | 48 h | 24 h | 12 h | 6 h |
+|---|---|---|---|---|---|
+| bias (pp) | **−6.02** | **−6.02** | −2.89 | −0.52 | −0.06 |
+
+Monotone convergence, ~100× from the far horizon to the near one. That is §5.1 LB-2's claim — *a
+good nowcaster precisely because it is a bad forecaster* — **measured** for the first time rather
+than asserted, and it is exactly the shape a table of 0.00s could never have shown.
+
+**Deviation 1 — placement.** §5.2 says *beside `_util_tail`*; it ships beside `wk_strand_pp`, the
+thing it scores. Module-level order is irrelevant at runtime and the reader who needs it is reading
+M3a.
+
+**Deviation 2 — `sign_agree` grades MATERIALITY, not the sign of the error.** M3a clamps at 0, so
+both series are non-negative and a signed-sign agreement would be vacuously 1.0 — a second
+tautology inside the harness built to remove one. The rate reported is agreement on the binary
+claim `pace_line` actually makes: *will this window strand materially (≥ `STRAND_MATERIAL_PP`
+= 0.5 pp, the renderer's own gate)?* RP-33 pins that it can read **0%** — a window that burns
+0.8 %/h and then stalls projects "fills the window" at 96 h and closes 12 pp short.
+
+**Deviation 3 — `--hours N` and `--json` ride along.** The default tail is 672 h (4 weeks), wider
+than `BURST_LOOKBACK_H`, because the unit here is a *completed weekly window* and 14 days holds
+two. `--json` exists so the falsification at the next weekly reset can be diffed rather than
+eyeballed; without it the acceptance is a screenshot.
+
+**The control that carries the most weight is RP-31, and it is a REAL mutant, not a hypothetical.**
+`burn_wk_ewma_ph` filters on `now - e._t <= LOOKBACK`; for a sample in the FUTURE that difference
+is negative, so it passes the filter, and its weight `2**(-negative/hl)` is greater than 1 — a
+post-hoc sample does not merely leak into the estimate, it **dominates** it. Handing the whole
+series to the estimator scores a projection nothing ever rendered, with the answer in hand. Two
+series sharing their first 110 h and differing only in their last 30 h must give an identical 96 h
+projection; measured **16.00356 for both**, against a full-series implementation reading **33.78**
+for one and **10.64** for the other. `strand_score` passes only the causal prefix and sets `now` to
+the evaluation instant.
+
+**What this does NOT do.** It does not clear S6 — see the wave-2 note above. It scores history and
+routes nothing, which is the L3 exception argued in §5.2 S5 and the reason it is a flag on the same
+binary rather than a `scripts/*.sh` the live layer could not reach.
+
 #### Acceptance status against §5.4
 
 | command | status |
