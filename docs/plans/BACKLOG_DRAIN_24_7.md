@@ -86,6 +86,116 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-04 — drain recycle #297: method 269 — A STORE'S CONSUMERS ARE FOUND BY THE VARIABLE THAT
+  RESOLVES IT, NEVER BY ITS PATH. A PATH IS SPELLED ONCE, AT THE ASSIGNMENT; EVERY READ AFTER THAT IS
+  A VARIABLE.** ZERO rows closed, ZERO filed, ZERO reopened, ZERO updated. #296 asked what population
+  an instrument's count is taken over, and found a check pointed at a directory its producer never
+  writes to. This link took the single lead #296 named as cheapest and did not take — run method 268
+  over the chain's OTHER standing counts — and the answer to that question was boring in all five
+  cases and interesting in the instrument that asked it.
+  **THE FIVE STANDING COUNTS ARE ALL POINTED AT THE RIGHT STORE.** `inbox-guard`, the postland
+  `stamps`, `decisions`, `custody` and `cloud` were each resolved from their producer's own
+  `${CC_*_DIR:-…}` default: `bin/cc-inbox-guard:44`, `scripts/postland-verify.sh:603`,
+  `bin/cc-decide:68`, `bin/cc-custody:64`, `bin/cc-cloud:212`. All five agree with what
+  `census<N>.sh` counts. The positive control — #296's own RED-page store, known DIFFERENT —
+  read DIFFERENT, so the five SAMEs are a reading rather than a mute instrument.
+  **BUT THE PRODUCER CENSUS THAT ESTABLISHED THEM FOUND, FOR THE STAMPS STORE, THREE FILES OF WHICH
+  NOT ONE WAS THE PRODUCER.** `git grep -l -F 'postland/stamps' -- bin scripts hooks` returns
+  `deploy-parity-assert.sh`, `nightly-regression.sh` and `offbox-green-pull.sh`.
+  `scripts/postland-verify.sh` — which WRITES every stamp — is absent, because `:603` composes the
+  path as `STAMPS="$STATE/stamps"`. **A grep for a store's path can only ever find the line that
+  spells the path. That line is the assignment, and it occurs once per file.**
+  **RE-RUN AS AN ASSIGNMENT-KEYED CENSUS, THE POPULATION IS 7, THE OVERLAP IS 2, AND THE FIVE
+  INVISIBLE ONES ARE THE ONES THAT MATTER.** Assignment-keyed: `bin/cc-blockers:176` ·
+  `scripts/cycle-time-census.sh:65` · `scripts/deploy-live.sh:88` · `scripts/deploy-parity-assert.sh:367`
+  · `scripts/nightly-regression.sh:411` and `:449` · `scripts/postland-verify.sh:603` ·
+  `scripts/ship-land.sh:1395`. Path-keyed finds two of those seven. **The five it cannot see include
+  every consumer that reads a FIELD, the store's own producer, and the one consumer that refutes the
+  claim below.** POS control: the assignment census must find `scripts/deploy-live.sh`, the claim's
+  own cited consumer — it did. NEG control: a store that does not exist (`postland/stumps`)
+  returned 0.
+  **AND THE CLAIM IT REFUTES IS LANDED, LOAD-BEARING, AND IN TWO FILES.**
+  `scripts/offbox-green-pull.sh:15-19` reads *"Measured before this was written: NO consumer of
+  `~/.claude/autonomy/postland/stamps/` reads any field but `.verdict` (deploy-live.sh:172-181),
+  `.commit` and file mtime; there is NO producer attribution field anywhere in the record; and
+  although the record carries `suites`, NOTHING checks it"*, restated at `scripts/deploy-live.sh:89-90`.
+  It is the stated reason that script writes to `offbox/` and never to `stamps/`. Clause by clause:
+  · **FALSE** — `scripts/cycle-time-census.sh:112-121` reads FOUR further fields: `ts`, `run_s`,
+    `suites` and `env.cc`.
+  · **FALSE** — `env.cc` IS the producer-attribution field the sentence says does not exist, and it
+    is load-bearing where it is read: `cycle-time-census.sh:136-137` partitions the whole store on it
+    (`cc == "unknown"` is the launchd lane; anything else is a session-invoked diagnostic) and every
+    number it reports — n, p50, p90, censored fraction, and the WITHIN/BREACH/CENSORED verdict
+    itself — is computed over the launchd arm ALONE. That file's own header calls it *"the
+    discriminator"* in those words.
+  · **TRUE, and only as stated** — `suites` is READ by that one consumer and CHECKED by none. Read is
+    not checked, and the distinction is the whole clause.
+  · **A FOURTH, UNASKED** — `.commit` is named as a field consumers read. NOTHING reads it. The only
+    occurrence in the tree is `write_stamp()`'s own emit, `scripts/postland-verify.sh:2217`.
+  **THE DECISION THE CLAIM SUPPORTS IS STILL RIGHT, AND IT NEVER NEEDED THE CENSUS.** One consumer
+  is sufficient: `deploy-live.sh`'s own `is_green()`/`is_red()` read `.verdict` and nothing else, and
+  `tests/deploy-live.bats:33` proves a two-field stamp is accepted and deployed. **What the false
+  premise costs is the shape of the hazard.** The old sentence says a subset green in `stamps/` would
+  be INDISTINGUISHABLE; measured, it is the opposite — it is distinguishable, by a field a shipped
+  consumer already partitions on, and it would land in a two-arm partition that has no arm for a
+  third producer, skewing the §8 cycle-time criterion rather than being invisible. Both comments are
+  corrected in this link's diff to state what is measured, the correction naming what still holds
+  the decision up.
+  **THE THIRD PARTITION STATE IS REACHABLE BY CONSTRUCTION AND MEASURED EMPTY, WHICH IS A BOUND AND
+  NOT A DEFECT.** `sched_all` tests `cc == "unknown"` and `sess_all` tests `cc and cc != "unknown"`,
+  so a record carrying no `env` key at all is in NEITHER arm while still counted in the printed
+  `stamps_considered`. At 2026-09-04T05:54:48Z the live store read **415 scheduled / 142 session /
+  0 neither of 557 records**, partition asserted to sum, 0 unparseable, 0 dropped for a missing `ts`.
+  **48 of those 557 carry no `suites` field**, which costs nothing today precisely because nothing
+  checks it. Reporting the zero is the result; it is not evidence the arm cannot fire.
+  **THREE INSTRUMENT FAULTS, ALL MINE, NONE IN A SUBJECT, AND THE THIRD IS THE ONE TO KEEP.**
+  (1) A detector classifying stamp reads by FIELD NAME cannot separate a producer's WRITE from a
+  consumer's READ in the one file that is both — the emit and the read spell `"commit"` identically,
+  and the rc-93 gate refused the arm at predicted 0 / actual 1. (2) The write-exclusion added to fix
+  that still counted the emit, because the field names are on `:2217` and the redirection
+  `> "$STAMPS/$tree.json"` is on `:2218`, a BACKSLASH CONTINUATION — **a per-PHYSICAL-line classifier
+  cannot pair a construct's field names with its redirection target when the two sit on different
+  lines.** (3) The continuation-joining `sed` written to fix THAT is rejected by BSD sed (`ta` before
+  `}` — *"unexpected EOF (pending }'s)"*), **and the broken arm then read 0, which is exactly the
+  value I had predicted.** Only the positive control beside it — the same exclusion must not mute a
+  known `.verdict` reader, and it read 8 — separated a correct answer from a dead instrument.
+  **A CONTROL THAT AGREES WITH YOUR PREDICTION IS THE ONE CASE A REFUSING GATE CANNOT CATCH.**
+  Repaired with `awk`; all seven gated predictions then exact on one run.
+  **STATE THE PREDICATE.** The consumer-population claim is *"`git grep -n -E` for an assignment
+  whose right-hand side ends `/stamps`, over tracked `bin scripts hooks`, folded to files, against
+  `git grep -l -F 'postland/stamps'` over the same pathspec"*; the field claim is *"each assigner's
+  source read for `.get('<field>')` and `\"<field>\"` on LOGICAL lines with backslash continuations
+  joined, write lines excluded by a redirection into the store, with a POS control requiring a known
+  `.verdict` reader to survive the exclusion"*; the store partition is *"every `*.json` under
+  `${CC_POSTLAND_DIR:-…}/stamps` opened and parsed, bucketed by `(d.get('env') or {}).get('cc')`
+  exactly as `cycle-time-census.sh:136-137` buckets it, with the three arms asserted to sum to the
+  parsed total"*; the diff claim is *"`git diff -U0`, added lines, comment lines removed, count
+  0"*; the board counts are *"the row's `.status` folded on `.id`, both partitions asserted at every
+  moment"*.
+  **THE BOARD, STAMPED.** Open 2026-09-04T05:47:43Z: **361 open / 249 blocked / 2,389 done /
+  2 claimed** (610 combined, 3,001 rows), both partitions asserted. Against #296's own FLOOR
+  (05:43:18Z) across 4 m 25 s: ZERO arrivals, ZERO departures, ZERO transitions, from a FULL-SET
+  `comm` with `sort -c` on both sides and the direction NAMED rather than resolved by `mtime`.
+  **THE STORES, STAMPED, IN THE STORE THE PRODUCER WRITES TO.** At 05:47:58Z: `pages` RED=**1**
+  over **72** `.page` (the same `postland-red-1fcb63efb7cf.page` #296 found, 00:35:10Z,
+  *floor-not-green / NO VERDICT* — `675e9c81c884` OPEN owns that class and this link filed nothing).
+  The STATE dir read all=**2,888** = **588** store + **2,300** in one live `wt-run-*` checkout, so
+  #296's decomposition reproduces exactly: the store alone is unchanged at 588 and the whole
+  movement is the worktree. inbox-guard **438**, every file a `.escalated` marker — one number, not
+  a ratio. STAMPS **557**.
+  **THE LANE, AT ITS OPEN.** 05:46:21Z: `RUNG=🚀 LIVE_SRC=behind LIVE_SHA=7cc801e7ae0e LIVE_LAG=13
+  LIVE_ADDS=3 LIVE_STALE=14 LIVE_AGE=12762 LIVE_BREACH_WHY=adds GATE=stale`, taken from the
+  WORKTREE because the ledger keys on cwd. `deploy-link-parity` rc 1 with
+  `468 linked · 0 staged-pending · 10 live-extra · 55 unmapped · 2 actionable` and its reference
+  sentence reading **13** commits behind, from a second call rather than inferred from the first.
+  The `adds` breach is the known false positive `4e6a51df2a84` owns. Executing blobs: three of four
+  identical to trunk, `scripts/wrap-ledger.sh` DIFFER (live `0197960922a2` vs trunk `fe04ff27786f`)
+  — live-LINKED, an EDIT, one of `LIVE_STALE`'s 14.
+  **NO SUITES CLAIMED THAT WERE NOT RUN.** `shellcheck` rc 0 / 0 bytes and `bash -n` rc 0 on both
+  edited scripts; `pipefail-sigpipe-lint.sh` bare rc 0 *"clean (allowlist honoured)"* and
+  `--selftest` rc 0. `alarm-polarity-lint` DECLARED NOT-RUN: neither file is an alarm emitter and
+  that lint's POS control is a known mute (`e07dc5e09f83`, OPEN, not re-filed).
+  **THE QOS DIFF** was rc 0 with **0 bytes**, and that is all it claims.
 - **2026-09-04 — drain recycle #296: method 268 — RESOLVE A STORE'S PATH FROM ITS PRODUCER. "THE
   DIRECTORY EXISTS" CANNOT TELL YOU IT IS THE RIGHT DIRECTORY, AND THAT IS EXACTLY THE REPAIR THIS
   CHAIN ALREADY BUILT FOR THIS CLASS.** ZERO rows closed, ZERO filed, ZERO reopened, ZERO updated.
