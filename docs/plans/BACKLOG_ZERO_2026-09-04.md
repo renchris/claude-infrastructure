@@ -18,12 +18,13 @@ lead-inline):
 
 | Wave | Locus | What | Owns |
 |---|---|---|---|
-| W0 measurement | L + 4 read-only research subagents | the numbers in §1 (cloud lane · local lane · inflow generators · pile census) | `docs/research/backlog-zero-2026-09-04/` |
-| W1 local lane rebuild | **L** — the judgment about what a link should do IS the deliverable, below the cost of briefing a session | `scripts/drain-brief.sh`, `scripts/drain-brief.template.md`, `scripts/drain-pick.sh`, `scripts/drain-recycle-fire.sh`, their three suites | lead |
-| W2 inflow | S | each generator's "file or fix" change, per §1.3 | per the inflow findings |
-| W3 cloud lane | S | admission gate + return arm, per §1.1 | per the cloud findings |
-| W4 moot sweep | S or L (decided on the census count) | mechanical close of rows whose premise is gone, with the check as evidence | `scripts/backlog-moot-sweep.sh` |
-| W5 go-live | L | fire lane `infra` #300, verify its first closure-report reads floor=MET | lead |
+| W0 measurement | L + 4 read-only research subagents — ✅ DONE | the numbers in §1 (cloud lane · local lane · inflow generators · pile census) | `docs/research/backlog-zero-2026-09-04/` |
+| W1 local lane rebuild | **L** — the judgment about what a link should do IS the deliverable, below the cost of briefing a session — ✅ LANDED `89a020f08` | `scripts/drain-brief.sh`, `scripts/drain-brief.template.md`, `scripts/drain-pick.sh`, `scripts/drain-recycle-fire.sh`, their three suites (46 tests) | lead |
+| W2a inflow gates | S — fired 2026-09-04T12:15Z, pane 296, account next2, branch `feat/backlog-zero-w2a`, goal ARMED | DROP as a discharging remedy in `hooks/dispatch-assert.sh` (:191/:225 + a fifth `discharged_since` arm, `--source "$SID"` → `--condition`), D4's gate sentence in `completion-assert` D1, an add-time no-falsifier WARN in `bin/cc-backlog` | `hooks/dispatch-assert.sh`, `hooks/completion-assert.sh`, `bin/cc-backlog` |
+| W2b retraction + routing | S — fired 12:20Z, account next2, branch `feat/backlog-zero-w2b`, goal submitted, not verified | durable probe path in `ship-land.sh:1032`; re-point the 43 dead probes; close the 19 in `closable.jsonl` with re-run proof; `CC_PREMISE_CLOSE_CAP` 5→25; plan-open retractor reaches `claimed`; reopen the 31 mis-filed blocked rows | `scripts/ship-land.sh`, `scripts/autonomy-sweep.sh`, `bin/cc-dispatch`, `bin/cc-premise`, the store via verbs |
+| W3 cloud lane | S — fired 12:23Z, account next4, branch `feat/backlog-zero-w3`, goal submitted, not verified | retire/prune pass (A), dispatcher admission gate + pending cap (B), capped pre-land price floor (C), ship-rail rc propagation (D), `thrash-block-recover` wired (F); next3 re-auth filed (E) | `bin/cc-dispatch`, `scripts/cloud-return.sh`, `scripts/cloud-reconcile.sh`, `scripts/autonomy-sweep.sh` |
+| W4 moot sweep | folded into W2b (19 rows, each with its own re-runnable check) | — | — |
+| W5 go-live | L — ✅ FIRED 12:36Z: lane `infra` recycle #300, pane 299, account next2, worktree `.worktrees/drain/lane-infra`, window `2026-09-04T12:36:29Z`, floor min 3. The goal paste ABSTAINED (composer unreadable 30 s) — the link has its brief; #301's fire re-arms mechanically | lead |
 
 Lead context budget: recycle at ≤60%; succession point = any wave boundary; this plan + the ledger +
 the research dir are the whole disk state.
@@ -51,6 +52,15 @@ appended to §2.1 each link (38 entries say "ZERO rows closed" outright). All of
 carry `goal_requested:false` in `~/.claude/logs/handoffs.jsonl` — the closure-floor goal built on
 2026-08-31 (`scripts/drain-recycle-fire.sh`) was never used by the live chain, which fires through
 its own cloned `clone<N>.sh` → `handoff-fire.sh --recycle`.
+
+### §1.1a What the four measurements added (all in `docs/research/backlog-zero-2026-09-04/`)
+
+| axis | the number that decides it |
+|---|---|
+| local lane (`local-lane.md`) | #250–#298: **49 links, 7 rows closed, 105 filed**; 45 of 49 links closed zero; ~**$27 of quota per link** (recycle #298: 117 turns, 41.6 M cache-read tokens); the SSOT was never the source — `splice<N>.py` reads the PREDECESSOR'S brief, so no §4.1 edit since 2026-08-31 reached a link |
+| cloud lane (`cloud-lane.md`) | **29.9 fires/day → 1.3 returns/day → 0.7 closes/day**; pending 543 (+23.5/day, ~400-day horizon); **0 land successes in ~1,000 attempts** (rc 758×70 · 239×65); 17 ids own 57% of 665 declarations; `branch-prune-landed.sh` and `thrash-block-recover.sh` built with **zero callers**; next3's control-plane token expired (401 ×22) |
+| inflow (`inflow.md`) | outflow collapsed harder than inflow (week of 08-28: filed 118 / done 57 vs 891 / 718 three weeks earlier); the two mechanical close gates fired **226×/14 d** and offer no DROP; **43 of 48** live re-land probes exit 127 (dead worktree path, `ship-land.sh:1032`) so the retraction arm fails OPEN; working falsifier coverage **7.3%** |
+| pile (`pile-census.md`) | 619 live = 371 open · 242 blocked · 6 claimed; **(A) 19 mechanically closable · (B) 462 agent-workable · (C) 91 operator-only · (D) 47 decisions**; 70 rows in projects the dispatcher never dispatches; 87% of rows never claimed once — an ADMISSION problem, not throughput |
 
 ### §1.2 The cloud lane — fires that never come home
 
@@ -93,6 +103,14 @@ mints follow-ons the drains cannot keep up with. The telemetry that would have s
   `~/Development/.worktrees/drain/lane-infra`. Lane `a` keeps the legacy filenames for the detector.
 
 ## §4 Status log (INTEGRATE-only; newest first)
+
+- **2026-09-04 12:40Z** — W1 LANDED (`89a020f08`, content-verified on origin/main). W2a / W2b / W3
+  fired as dispatched sessions (custody armed on this pane). Lane `infra` #300 fired on pane 299 and
+  engaged; its goal paste abstained, so #300 runs on its brief alone and #301 re-arms via the wrapper.
+  `deploy-live` declined to advance (no GREEN descendant of live HEAD, lag 9 inside the 25 budget) — the
+  lane does not need the live layer (it runs `scripts/` from its own worktree off origin/main).
+  Old chain: #300 landed `ffca9df45` (method 272) and is still running on pane 27 — operator step
+  `0b4279107f2e` (`cc-teardown 27 …`) retires it; its falsifier retracts the row when pid 44550 dies.
 
 - **2026-09-04 12:15Z** — W1 code written and suites green; old chain's #300 (pane 27, pid 44550)
   could NOT be stopped from this session (the auto-mode classifier denies `kill`, `cc-teardown` and
