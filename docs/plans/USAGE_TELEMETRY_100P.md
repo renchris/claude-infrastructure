@@ -1941,3 +1941,41 @@ exist).
 
 ⚠️ `bash tests/run.sh …`, named in §5.4, **does not exist in this repo**. The suites are run with
 `bats tests/<name>.bats`; `scripts/ship-land.sh` selects and runs them at the land.
+
+#### Acceptance status after wave 2 (2026-09-04)
+
+| command | status |
+|---|---|
+| the bats suites (roll-key · util-tail · strand · burst · core) | **162 cases**, 7 red and all 7 pre-existing and environmental (see below); every wave-2 case shown RED at the commit before its fix (S4 5/5 · S5 5/5 · S7 2/2) |
+| `claude-accounts --strand-score` → non-zero `n` at 24/12/6 h and a bias that could be non-zero | **yes, on a fixture** — RP-34 asserts exactly this end-to-end. **Not yet run on the live series**, which is the operator step below |
+| `claude-accounts --readout` renders the drain block with all three facts | **verified on fixtures** (RP-29), not on the live fleet |
+| the consumers (`account-cliff-routing` · `account-fact-derivation` · `accounts-board` · `cc-wave-plan`) | **unregressed** — the failing set is bit-identical before and after wave 2's diff |
+
+🚨 **Wave 2 ran in a Linux container, so no figure here is a LIVE measurement.** Every wave-1 number
+in §5.7 came off the operator's own `~/.claude/logs/account-utilization.jsonl`; that file does not
+exist here, `/usr/bin/security` does not exist here, and 7 core cases plus 18 across the consumer
+suites fail for that reason alone (identically before and after the diff — that identity is what
+licenses reading them as environmental). The arithmetic is pinned against §5.1's own published live
+table, which it reproduces to the digit for next3 and next2, but **the live readout has not been
+seen since wave 1**. Reading `claude-accounts --readout` once on the operator's machine is the
+cheap confirmation, and `--strand-score` there is the S6 gate below.
+
+#### S6 · `wk_strand_alarm` — NOT BUILT, and the gate is one command
+
+§5.2 S6 is literal: *"Do not build this until S5 has run and been read. If the horizon-stratified
+bias at the 12 h bucket is not near zero, this alarm is not shippable at any parameter setting."*
+S5 now exists and its harness is proven to produce non-zero bias — but the reading that clears or
+kills S6 is a reading of the **real** series, and wave 2 had no access to one. Building the alarm
+anyway would have meant asserting an unmeasured iso-quality claim, which is §0's **Q4: REJECT until
+measured**.
+
+**The gate, in one command on the operator's machine:**
+
+```
+claude-accounts --strand-score
+```
+
+Read the **12 h** row. Near-zero bias ⇒ S6 is shippable at `FLOOR = 4 pp`, `DWELL = 2 h`,
+`HORIZON_CAP = 12 h` (the 504-config causal sweep's clean region, all 18 clean settings capping at
+≤ 12 h). A bias that is not near zero ⇒ **S6 does not ship at any parameter setting** and §5.6 Q1
+becomes the priority. Either reading is a result; the current state is that nobody has looked.
