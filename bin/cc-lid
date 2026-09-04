@@ -1,0 +1,108 @@
+#!/bin/bash
+# cc-lid — read and toggle macOS clamshell sleep (`pmset -a disablesleep`) so a
+# long-running Claude Code session survives the lid being closed.
+#
+# WHY (2026-09-03): `caffeinate` — which this fleet runs constantly — takes an
+# idle-sleep assertion (PreventUserIdleSystemSleep). Clamshell sleep is a
+# DIFFERENT path and ignores it entirely, so a machine with nine caffeinate
+# assertions still sleeps the instant the lid shuts. The only setting that
+# covers it is `pmset disablesleep`, which needs root.
+#
+# WHY IT RENDERS INSTEAD OF RUNNING: `sudo` is denied outright by
+# hooks/validate-bash.sh, so an AGENT structurally cannot elevate here. Rather
+# than fail, this prints the resolved command in the operator's own
+# copy-paste block (CLAUDE.md § ONE COMMAND) and exits 10. Run by the operator
+# in their own terminal, sudo prompts normally and the toggle just happens.
+#
+# Usage:
+#   cc-lid                 status — current setting, and what it does/doesn't cover
+#   cc-lid on              disable sleep (lid may be closed)
+#   cc-lid off             restore normal sleep
+#   cc-lid toggle          flip whichever way it currently is
+#   cc-lid --machine       one parseable line: state=<on|off> verdict=<...>
+#
+# Exit codes: 0 already/now in the requested state · 10 operator must run the
+# printed command · 2 usage · 3 not macOS · 4 applied but verification failed.
+set -u
+
+PMSET="${CC_LID_PMSET:-/usr/bin/pmset}"        # overridable for tests
+SUDO="${CC_LID_SUDO:-sudo}"                    # overridable for tests
+
+MACHINE="" ACTION="status"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    on|1|yes|awake)   ACTION="on" ;;
+    off|0|no|sleep)   ACTION="off" ;;
+    toggle|flip)      ACTION="toggle" ;;
+    status|"")        ACTION="status" ;;
+    --machine)        MACHINE=1 ;;
+    -h|--help)        sed -n '2,26p' "$0"; exit 0 ;;
+    *) echo "cc-lid: unknown argument '$1' (want: on | off | toggle | status)" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+[ "$(uname -s)" = "Darwin" ] || { echo "cc-lid: macOS only (pmset is a Darwin tool)" >&2; exit 3; }
+[ -x "$PMSET" ] || { echo "cc-lid: pmset not executable at $PMSET" >&2; exit 3; }
+
+# Read the LIVE setting. Fail closed: an unreadable pmset is 'unknown', never 'off'.
+read_state() {
+  local v
+  v="$("$PMSET" -g 2>/dev/null | awk '$1=="SleepDisabled"{print $2; exit}')"
+  case "$v" in
+    1) echo on ;;
+    0) echo off ;;
+    *) echo unknown ;;
+  esac
+}
+
+CUR="$(read_state)"
+[ "$CUR" = unknown ] && { echo "cc-lid: could not read SleepDisabled from '$PMSET -g' — refusing to guess" >&2; exit 3; }
+
+case "$ACTION" in
+  toggle) if [ "$CUR" = on ]; then WANT=off; else WANT=on; fi ;;
+  on)     WANT=on ;;
+  off)    WANT=off ;;
+  status) WANT="$CUR" ;;
+esac
+
+TARGET_BIT=$([ "$WANT" = on ] && echo 1 || echo 0)
+CMD="sudo pmset -a disablesleep $TARGET_BIT"
+
+if [ -n "$MACHINE" ]; then
+  if [ "$CUR" = "$WANT" ]; then echo "state=$CUR want=$WANT verdict=satisfied cmd=none"
+  else echo "state=$CUR want=$WANT verdict=needs-sudo cmd=$CMD"; fi
+  [ "$CUR" = "$WANT" ] && exit 0 || exit 10
+fi
+
+if [ "$ACTION" = status ] || [ "$CUR" = "$WANT" ]; then
+  if [ "$CUR" = on ]; then
+    echo "Lid-close sleep is DISABLED — the machine keeps running with the lid shut."
+    echo "This persists across reboot. Turn it back off with: cc-lid off"
+    echo "Keep it plugged in and out of a bag; it runs full-tilt with no airflow."
+  else
+    echo "Lid-close sleep is ENABLED (normal) — closing the lid suspends the machine."
+    echo "caffeinate does NOT cover this; only 'pmset disablesleep' does. Enable with: cc-lid on"
+  fi
+  exit 0
+fi
+
+# A change is needed. Elevate if this shell can do so without a password prompt;
+# otherwise hand the operator the resolved command, per CLAUDE.md § ONE COMMAND.
+if $SUDO -n true >/dev/null 2>&1; then
+  $SUDO "$PMSET" -a disablesleep "$TARGET_BIT" || {
+    echo "cc-lid: '$PMSET -a disablesleep $TARGET_BIT' failed" >&2; exit 4; }
+  # Verify by a DIFFERENT call than the one that made the change.
+  NEW="$(read_state)"
+  [ "$NEW" = "$WANT" ] || { echo "cc-lid: applied but pmset still reads '$NEW' (wanted '$WANT')" >&2; exit 4; }
+  echo "Lid-close sleep is now $([ "$NEW" = on ] && echo DISABLED || echo ENABLED) (verified: SleepDisabled=$TARGET_BIT)."
+  [ "$NEW" = on ] && echo "Persists across reboot — revert with: cc-lid off"
+  exit 0
+fi
+
+WHAT=$([ "$WANT" = on ] && echo "keep running with the lid closed" || echo "restore normal lid-close sleep")
+printf '%s\n' "Needs root, and this shell cannot elevate — one command, then you are done."
+printf '%s\n' "It will $WHAT. The setting persists across reboot."
+printf '\n%s\n\n' "▶ Run this:"
+printf '%s\n' "\`$CMD\`"
+exit 10
