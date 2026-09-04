@@ -17,6 +17,23 @@ headline for each inverts the initial hypothesis.
   86.2**. Deaths do not cluster at memory pressure.
 - **Not our own signal-senders.** `pkill`/`killall`/`kill -TERM` appear **nowhere** in the live
   `~/.claude/{hooks,bin,scripts}` tree (grep -R, symlink-following).
+  🚨 **THIS EVIDENCE IS REFUTED (recycle #298, 2026-09-04T10:38:50Z). `grep -R` IS NOT
+  SYMLINK-FOLLOWING.** Measured over those same three directories, `-R` reaches **9 of 429 files —
+  2.1%** — and all nine are *real* files (four `__pycache__/*.pyc`, `bin/it2`,
+  `bin/kitty-pane-menu-native`, and the two known strays), so it opened **not one** of the ~420
+  symlinked scripts this clause is actually about. Re-asked with an instrument that can see the
+  population, `find -L … -type f -exec grep -El 'pkill|killall|kill -TERM' {} +`, the same three
+  directories carry those tokens in **29** files today — `cc-teardown`, `cc-notify`,
+  `gate-cleanup.sh`, `handoff-fire.sh`, `ship-land.sh` and `postland-verify.sh` among them — and, at
+  the checkout as of this document's own date (`2a979c15158c`, 2026-07-26), in **12**, including
+  `hooks/teammate-auto-shutdown.sh` and `hooks/validate-bash.sh`. **The population was non-empty when
+  this bullet was written: the sentence was false then, not merely stale now.**
+  ⚠️ **What that does and does not overturn.** It removes the *evidence* for this bullet, not
+  automatically its *conclusion* — a file that contains `pkill` is not a file that killed these
+  sessions, and §1.2's end-to-end verified class is untouched. **Re-establish "not our own
+  signal-senders" from reachability — which sender actually ran, in the window — never from a
+  recursive grep's null over a tree it cannot walk.** Instrument + controls:
+  `~/.claude/autonomy/probe298-270d.sh`.
 - **Not the reaper.** `cc-reaper` sweeps in the window: `0 candidates 0 reaped`. `team-reaper`:
   `0 archived`. No `cc-teardown` invocation in `bash-execution.log`.
 

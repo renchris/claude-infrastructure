@@ -422,7 +422,20 @@ operator-visible sentinel file at all.**
 > classification route: 301 records → 141 closed, 35 null → 2 alive / 5 dead-pid / 28 no-row) ·
 > the zero-reader grep across the repo **and** the deployed `~/.claude` tree — *re-run with `grep -R`
 > after a verifier caught that plain `grep -r` does **not** follow the symlinks in `~/.claude/bin`, so
-> the first sweep was a false negative by method even though its conclusion held* · the husk log ·
+> the first sweep was a false negative by method even though its conclusion held* —
+> 🚨 **AND THAT REPAIR IS ITSELF REFUTED (recycle #298, 2026-09-04T10:38:50Z): BSD `grep -R` DOES NOT
+> FOLLOW A WALK-MET SYMLINK EITHER, so the re-run had the SAME blindness as the sweep it corrected.**
+> Measured over `~/.claude/{bin,scripts,hooks}`: `-R` reaches **9 of 429 files (2.1%)**, every one of
+> them a *real* file, i.e. **none** of the ~420 symlinked scripts. A one-variable fixture settles it:
+> with the symlink's target OUTSIDE the walked tree — the live layer's actual shape — `-r` and `-R`
+> return the SAME single real file and neither ever emits the link's own path, while
+> `find -L … -exec grep` returns both. **This is `corrected-instrument-can-lie-again`: the repair was
+> adopted on a verifier's word and never itself run, and it converted an unknowing false negative
+> into a believed-verified one at identical coverage.** `bin/cc-ctx-audit:242` already states the
+> fact correctly and built a symlink-following census because of it. **The zero-reader conclusion is
+> therefore UNSUPPORTED BY WHAT WAS RUN — not disproved, unsupported.** Re-establish it with
+> `find -L "$HOME/.claude/bin" -type f -exec grep -l … {} +`, whose coverage is 100% by construction
+> and which is positive-controlled in `~/.claude/autonomy/probe298-270b.sh` · the husk log ·
 > `DELIVERABLE`'s four files and 3-of-290 payloads · the slug-vs-registry-name namespace mismatch ·
 > both `ship.md` frontmatters · `KILL_RE` in `session-continue.sh` · `clear_fired_marker` in
 > `cc-reaper`. Anything not in that list is single-source and marked where it matters.
