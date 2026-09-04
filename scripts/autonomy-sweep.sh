@@ -1055,7 +1055,19 @@ if [ -x "$_premise" ] && command -v python3 >/dev/null 2>&1; then
     _prem_out="$(CC_SWEEP_BOUND_S="${CC_PREMISE_PASS_BOUND_S:-1500}" \
                  _bounded python3 "$_premise" sweep --json --record \
                    --limit "${CC_PREMISE_PASS_LIMIT:-150}" \
-                   --close-falsified "${CC_PREMISE_CLOSE_CAP:-5}" 2>/dev/null)"; _prem_rc=$?
+                   --close-falsified "${CC_PREMISE_CLOSE_CAP:-25}" 2>/dev/null)"; _prem_rc=$?
+    # THE CAP WAS THE RETIREMENT RATE, AND AT 5 IT WAS BELOW THE INFLOW. Measured over the full
+    # retained IDL window (2026-08-26 → 2026-09-04, 33 recorded ticks) this pass ran to completion
+    # exactly ONCE — `premise_rows_validated: 43, premise_rows_closed: 5` — and 5 is the cap, not a
+    # count: every completing pass closed everything it was allowed to and stopped. Net retirement
+    # was 5 rows in 9 days against a pile of 619 live rows, so the arm was structurally incapable of
+    # draining a store that grows by ~100 rows a week, however correct each individual verdict was.
+    # 25 is sized to the pass, not to a preference: the cap only ever binds on rows whose own probe
+    # RE-RAN and RE-ANSWERED "falsified" seconds earlier (bin/cc-premise:2829-2835 re-asks against a
+    # store folded in the same call, and SKIPS anything claimed or already closed), so raising it
+    # cannot close a row that a re-run would have spared — it can only stop discarding verdicts the
+    # pass already paid for. The close itself is ~0.1 s of `cc-backlog done`; the pass's cost is its
+    # 150 probes, which CC_PREMISE_PASS_LIMIT bounds and this does not touch.
     _prem_recorded="$(printf '%s' "$_prem_out" | jq -r '.validated_recorded // 0' 2>/dev/null)"
     _prem_closed="$(  printf '%s' "$_prem_out" | jq -r '.closed_falsified   // 0' 2>/dev/null)"
     _prem_note="$(    printf '%s' "$_prem_out" | jq -r '.validated_note     // "unparsed"' 2>/dev/null)"
