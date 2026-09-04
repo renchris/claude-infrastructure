@@ -1,16 +1,23 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
-# pr-pyramid-gate.sh — PreToolUse/Bash. Refuse a PR description that buries its answer.
+# pr-gate.sh — PreToolUse/Bash. Ask whether a PR should exist; refuse one that buries its answer.
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
 # WHY: the shipped /pr command used to prescribe "Summary of changes (bullet points)", which is
 #   the defect Minto names directly — a category where an idea belongs. "There are three changes"
 #   tells the reader the KIND and not the IDEA. /pr now teaches the opposite; this hook is what
 #   makes it hold when nobody types /pr, which is the common path.
 #
-# WHAT IT CHECKS — exactly two things, and the shortness of that list is deliberate.
+# WHAT IT CHECKS — three things, in the order that matters, and the shortness is deliberate.
+#   0. SHOULD THIS PR EXIST — a solo repo with no reviewer named gets ASKED, because a PR you
+#      open, approve and merge yourself reviews nothing. Existence outranks shape: polishing
+#      the description of a PR that should not have been opened is a local optimum, and this
+#      file was guilty of exactly that for its first day of life.
 #   1. LEADS WITH THE ANSWER — the first content line asserts something. Not a heading, not a
 #      bullet, not boilerplate ("Summary of changes", "This PR contains").
 #   2. IS CONCISE — body under CC_PR_MAX_WORDS (default 400).
+#
+# Checks 1 and 2 DENY (mechanical defects, no legitimate case). Check 0 ASKS (a judgement with
+# real exceptions the hook cannot observe). Matching the verdict to the certainty is the design.
 #
 # WHAT IT DELIBERATELY DOES NOT CHECK, and why refusing to was the whole design problem:
 #   No demanded sections. No Situation/Complication/Resolution headers. No "must contain a Risk
@@ -56,6 +63,56 @@ case "$CMD" in
   *"gh pr create"*|*"gh pr edit"*) ;;
   *) exit 0 ;;
 esac
+
+# ── CHECK 0: SHOULD THIS PR EXIST AT ALL? ─────────────────────────────────────────────────────
+# This runs FIRST because existence outranks shape. Polishing the description of a PR that
+# should not have been opened is a local optimum — measured, on this machine: a solo repo took
+# a change through a branch, a PR, a self-merge and a branch deletion, drew ZERO reviews, was
+# gated by NO branch protection, and burned 6 CI runs where a direct push takes 2. Every other
+# commit in that repo had gone straight to main, correctly.
+#
+# THE VERDICT IS "ask", NOT "deny", and the difference is the whole point. A body that opens
+# with a bullet is a defect with no legitimate case, so it is refused. Whether a PR is warranted
+# is a JUDGEMENT with real exceptions — a protected branch that requires one, an outside
+# reviewer, a public repo where the PR is the discussion. A hook cannot see branch protection
+# without a network call it has no business making on the PreToolUse path, so it must not
+# pretend to settle what it cannot observe. It raises the question and a human answers it.
+#
+# Kill switch for the whole file is CC_PR_PYRAMID=off; to answer just this one in advance,
+# name a reviewer: `--reviewer <who>` on the command, or PR_REVIEWER=<who> in the environment.
+# 🚨 A COMMAND-POSITION test, not a substring one. `*"gh pr create"*` also matches prose that
+# merely mentions it — `echo 'run gh pr create later'` — and this check has no shlex parse behind
+# it to catch that the way the body checks do (they exit when no --body is found). So: the phrase
+# must sit at the start of the string or immediately after a separator, optionally behind env
+# assignments. `echo "; gh pr create"` still slips through; that errs toward ASK, which is the
+# safe direction for a question a human answers anyway.
+if printf '%s' "$CMD" | grep -Eq '(^|[;&|]|&&|\|\|)[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)'; then
+    if [ -z "${PR_REVIEWER:-}" ] && ! printf '%s' "$CMD" | grep -Eq -- '(--reviewer|[[:space:]]-r)[[:space:]=]'; then
+      PR_CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // ""' 2>/dev/null)
+      [ -d "$PR_CWD" ] || PR_CWD=$PWD
+      # Local proxy for "is anyone else here": distinct author emails in recent history.
+      # Bounded at 500 commits so this stays cheap on a large repo.
+      AUTHORS=$(git -C "$PR_CWD" log -500 --format='%ae' 2>/dev/null | sort -u | grep -c . || echo 0)
+      if [ "$AUTHORS" = "1" ]; then
+        SOLO_MSG="every commit in this repo's recent history has ONE author, and no reviewer is \
+requested — so this PR would be opened, approved and merged by the same person. That is \
+ceremony, not review: it gates nothing a direct push does not, and it costs an extra branch, \
+merge, branch deletion and duplicate CI run.
+
+Push to the trunk instead. If a PR IS warranted here — a protected branch that requires one, \
+an outside reviewer, or a public repo where the PR is the discussion — say so by naming the \
+reviewer (\`--reviewer <who>\`, or PR_REVIEWER=<who>) and this will not ask again."
+        jq -nc --arg m "$SOLO_MSG" '{
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            permissionDecision: "ask",
+            permissionDecisionReason: ("PR necessity: " + $m)
+          }
+        }'
+        exit 0
+      fi
+    fi
+fi
 
 VERDICT=$(printf '%s' "$CMD" | CC_PR_MAX_WORDS="${CC_PR_MAX_WORDS:-400}" python3 -c '
 import os, re, shlex, sys

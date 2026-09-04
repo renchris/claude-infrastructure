@@ -1,4 +1,17 @@
-Open a PR whose first line is the answer.
+First decide whether this needs a PR at all. Usually it does not.
+
+A PR's only function is to gate a change on **another human's** review. If you will open it,
+approve it and merge it yourself, it reviews nothing — it just adds a branch, a merge, a branch
+deletion and a duplicate CI run to a commit that could have gone straight to trunk. Push to
+trunk and let the commit body carry the reasoning; `git show` reads it forever, offline, with
+no GitHub in the path.
+
+Open a PR when one of these is actually true: a **protected branch** requires it, someone else
+will **genuinely review** it, or the repo is **public** and the PR is where the discussion
+happens. `hooks/pr-gate.sh` asks when it sees a solo repo with no reviewer named — answer it by
+naming one (`--reviewer <who>` or `PR_REVIEWER=<who>`), or push to trunk instead.
+
+If a PR is warranted, then: **open one whose first line is the answer.**
 
 ## The body
 
@@ -18,7 +31,7 @@ Omit any section that would be empty. Do not restate the diff or list your commi
 reviewer has both, better rendered, one click away.
 
 **Cut, do not compress.** Reasoning, dead ends and measurements belong in the commit body
-(`git show <sha>`) or a linked doc. Over 400 words `hooks/pr-pyramid-gate.sh` refuses the
+(`git show <sha>`) or a linked doc. Over 400 words `hooks/pr-gate.sh` refuses the
 body — that is a signal to move detail out, never to squeeze sentences into fragments or
 arrow chains.
 
