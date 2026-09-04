@@ -54,6 +54,12 @@ Usage:
       the same rows as data. Three INDEPENDENT facts per backend — installed / authenticated /
       has a headless agent mode — because only the third decides routability, and a presence
       check silently skips it (an editor launcher on PATH is not an agent backend).
+  claude-accounts --strand-score [--hours N] [--json]  score the weekly-drain NOWCAST against
+      what each completed weekly window actually stranded, stratified by how far from the reset
+      the projection was made (96/48/24/12/6h). History only — reads the utilization series and
+      nothing else, so it needs no keychain, no sweep and no accounts.json. THE POINT IS THAT IT
+      CAN COME OUT BADLY: the score it replaces evaluated the projector at the horizon's close,
+      where the arithmetic has already converged to the truth, and duly scored 8/8.
   claude-accounts --route general|fable|interactive   best account name (bare, on stdout)
       general      dispatch lane: headroom/T**2, deadline-DOMINANT — spend quota before it strands.
       interactive  a HUMAN's long-lived desk: maximise runway (absolute weekly headroom x projected
@@ -2596,6 +2602,146 @@ def wk_strand_pp(r):
     return max(0.0, 100.0 - (wp + b * wrh))
 
 
+# ---- M3c — the scoring harness that CAN fail (USAGE_TELEMETRY_100P §5.2 S5) --------------------
+STRAND_SCORE_BUCKETS = (96.0, 48.0, 24.0, 12.0, 6.0)   # hours before the reset, coarse -> fine
+STRAND_SCORE_LOOKBACK_H = 1008.0                       # 6 weeks: ~4 completed windows per account
+STRAND_SCORE_FLOOR = 4.0    # S6's own proposed alarm FLOOR. The agreement column scores the
+                            # decision S5 exists to gate — "would the rescue alarm have been
+                            # right at this horizon" — not the arithmetic. pace_line's 0.5 pp
+                            # render threshold would have been useless here: essentially every
+                            # window strands more than half a point, so agreement at 0.5 is ~1.0
+                            # by construction and measures nothing.
+
+
+def strand_score(samples, buckets=STRAND_SCORE_BUCKETS, now=None):
+    """Score M3a's nowcast against what each completed weekly window actually stranded, stratified
+    by how far from the reset the projection was made. Returns
+    {"cells": [...], "buckets": [{"h", "n", "possible", "bias", "mae", "agree", "agree_n"}...],
+     "windows": int, "accts": int}.
+
+    WHY THIS EXISTS, AND WHY THE THING IT REPLACES WAS VACUOUS. The synthesis scored the alarm on
+    8 binary cells evaluated at the horizon's CLOSE — the instant at which `100 - (weekly_pct +
+    burn * weekly_reset_h)` has already converged to `100 - weekly_pct`, i.e. to the realised
+    strand itself. A projector cannot lose against the identity function at the moment it becomes
+    the identity function, and it duly scored 8/8. This evaluates the same estimator at FIXED
+    DISTANCES from the reset — ~45 (window, horizon) cells — where it can be, and will be, wrong.
+    That is the whole point: an instrument that cannot report a failure has not been validated,
+    it has been asserted. `control-must-replay-the-real-artifact.md`,
+    `verification-harness-vacuous-pass-traps.md`.
+
+    IT REPLAYS THE REAL ARTIFACT, which is the trap the same research names. Two properties do
+    that work, and dropping either turns this back into a tautology:
+
+      * CAUSAL. The EWMA at a cell is computed over `x._t <= e._t` only. A harness that hands
+        `burn_wk_ewma_ph` the whole series lets a sample from AFTER the projection instant into
+        the average, and the score then measures hindsight.
+      * THE ACCOUNT'S WHOLE SERIES, not the window's slice. `apply_burn` passes every sample the
+        account has and lets the estimator's own roll-awareness handle the reset crossing. A
+        harness that pre-filters to one weekly window is scoring a DIFFERENT function — a
+        strictly better-conditioned one — at exactly the early-window horizons (96h, 48h) where
+        the live instrument is thinnest.
+
+    ABSTAIN, and the abstain is the honest half of the number. A (window, bucket) cell with no
+    evaluable sample at `weekly_reset_h >= H`, or one where the EWMA itself abstains (span below
+    WK_EWMA_MIN_SPAN_H), is reported with `err = None` and EXCLUDED from its bucket's aggregate.
+    It is never imputed, and never counted as a hit — imputing a miss as zero error is how a
+    harness reports a bias of 0.0 in every cell and calls it agreement.
+
+    `agree` scores THE DECISION S5 EXISTS TO GATE, not the arithmetic: whether the projection and
+    the realised outcome fall on the same side of STRAND_SCORE_FLOOR — S6's own proposed 4 pp
+    alarm floor. So the column reads "would the rescue alarm have been right at this horizon",
+    which is the question S6 is blocked on. A bias of +3 pp on a window that stranded 40 is a
+    different kind of wrong from one that flips the alarm."""
+    now = time.time() if now is None else now
+    wins = completed_weekly_windows(samples, now=now)
+    by_win, by_acct = {}, {}
+    for e in samples or []:
+        if e.get("_t") is None or e.get("weekly_pct") is None:
+            continue
+        by_acct.setdefault(e.get("acct"), []).append(e)
+        key = _reset_key(e.get("weekly_reset_at"))
+        if key is not None:
+            by_win.setdefault((e.get("acct"), key), []).append(e)
+    for ss in by_acct.values():
+        ss.sort(key=lambda e: e["_t"])
+    cells = []
+    for w in wins:
+        key = round(w["reset_t"] / 60.0)
+        ss = sorted(by_win.get((w["acct"], key), []), key=lambda e: e["_t"])
+        acct_ss = by_acct.get(w["acct"], [])
+        for h in buckets:
+            cell = {"acct": w["acct"], "reset_t": w["reset_t"], "h": h, "at_t": None,
+                    "at_h": None, "realised": w["strand"], "projected": None, "err": None,
+                    "why": None}
+            usable = [e for e in ss if (w["reset_t"] - e["_t"]) / 3600.0 >= h]
+            if not usable:
+                cell["why"] = "no sample at that horizon"
+                cells.append(cell)
+                continue
+            e = usable[-1]
+            wrh = (w["reset_t"] - e["_t"]) / 3600.0
+            cell["at_t"], cell["at_h"] = e["_t"], wrh
+            v, span = burn_wk_ewma_ph([x for x in acct_ss if x["_t"] <= e["_t"]], e["_t"], wrh)
+            if v is None:
+                cell["why"] = f"ewma abstained (span {span:.1f}h)"
+                cells.append(cell)
+                continue
+            p = wk_strand_pp({"weekly_pct": e["weekly_pct"], "weekly_reset_h": wrh,
+                              "burn_wk_ewma_ph": v})
+            if p is None:
+                cell["why"] = "strand abstained"
+                cells.append(cell)
+                continue
+            cell["projected"] = p
+            cell["err"] = p - w["strand"]
+            cells.append(cell)
+    out = []
+    for h in buckets:
+        got = [c for c in cells if c["h"] == h and c["err"] is not None]
+        poss = sum(1 for c in cells if c["h"] == h)
+        if not got:
+            out.append({"h": h, "n": 0, "possible": poss, "bias": None, "mae": None,
+                        "agree": None, "agree_n": 0})
+            continue
+        agree = sum(1 for c in got
+                    if (c["projected"] >= STRAND_SCORE_FLOOR) == (c["realised"] >= STRAND_SCORE_FLOOR))
+        out.append({"h": h, "n": len(got), "possible": poss,
+                    "bias": sum(c["err"] for c in got) / len(got),
+                    "mae": sum(abs(c["err"]) for c in got) / len(got),
+                    "agree": agree / len(got), "agree_n": agree})
+    return {"cells": cells, "buckets": out, "windows": len(wins),
+            "accts": len({w["acct"] for w in wins})}
+
+
+def render_strand_score(sc, hours):
+    """The one rendering of strand_score. Lines, never printed here — main() owns stdout.
+
+    THE EXCLUSION IS PRINTED AS A RATIO (`n/possible`), not hidden behind a mean. §5.4's
+    acceptance is explicitly not "it is accurate": it is that the table carries non-zero n at the
+    24h, 12h and 6h buckets and reports a bias that COULD have been non-zero. A reader who cannot
+    see how many cells were dropped cannot tell an accurate instrument from an empty one."""
+    if not sc["windows"]:
+        return [f"strand nowcast — no weekly window CLOSED and was observed to its close inside "
+                f"the last {hours:.0f}h. Nothing to score.",
+                "  (a window counts only once its reset is in the past AND a sample lands within "
+                f"{WEEKLY_TAIL_GAP_H:.0f}h of it — completed_weekly_windows, S1d)"]
+    lines = [f"strand nowcast — horizon-stratified error over {sc['windows']} completed weekly "
+             f"window(s), {sc['accts']} account(s)",
+             "  signed error = projected − realised, in weekly pp. A cell with no evaluable "
+             "sample is EXCLUDED, never imputed.",
+             "",
+             "  horizon   cells      bias       MAE   alarm-agree"]
+    for b in sc["buckets"]:
+        if not b["n"]:
+            lines.append(f"  {b['h']:6.0f}h   0/{b['possible']:<3d}         —         —   "
+                         "(no evaluable cell)")
+            continue
+        lines.append(f"  {b['h']:6.0f}h   {b['n']}/{b['possible']:<3d}   "
+                     f"{b['bias']:+7.2f}   {b['mae']:7.2f}   "
+                     f"{b['agree_n']}/{b['n']} ({100.0 * b['agree']:.0f}%)")
+    return lines
+
+
 PACE_HEAD = "weekly drain — pp that DIE at reset (nowcast at the last 48h of pace):"
 PACE_HEAD_K = ("weekly drain — pp that DIE at reset "
                "(K={k:.3f} {src} · nowcast at the last 48h of pace):")
@@ -4851,6 +4997,30 @@ def main():
             print("no provider registry (~/.claude/providers.json) — Claude-only fleet")
             return
         print("\n".join(lines).lstrip("\n"))
+        return
+
+    # --strand-score: M3c, and it sits HERE — before load_cfg(), before the keychain, before the
+    # usage endpoint and before the lock — for the same reason --agents does. It scores HISTORY
+    # off the utilization series alone; it must never force a 4-account sweep, and it must answer
+    # on a box with no accounts.json at all (which is exactly how a hermetic test can run it).
+    #
+    # L3 EXCEPTION, ARGUED. L3 says there is ONE renderer of "what are the accounts doing now".
+    # This renders no live state: it renders scored PAST windows, nothing routes on it, and it is
+    # the mutation-test of the planner rather than a second opinion about the fleet.
+    #
+    # A FLAG, not a new scripts/*.sh, and that is deployment truth rather than taste:
+    # ~/.claude/bin/claude-accounts is an existing symlink into the checkout, so a flag is an EDIT
+    # that rides it and converges on the trunk fast-forward. A new file is an ADD with no symlink
+    # — absent from every path the live layer can reach until the converger runs.
+    if "--strand-score" in args:
+        hours = _num_flag(args, "--hours") or STRAND_SCORE_LOOKBACK_H
+        sam, _span = _util_tail(hours=hours)
+        sc = strand_score(sam)
+        if "--json" in args:
+            print(json.dumps({"hours": hours, "windows": sc["windows"], "accts": sc["accts"],
+                              "buckets": sc["buckets"], "cells": sc["cells"]}, indent=2))
+            return
+        print("\n".join(render_strand_score(sc, hours)))
         return
 
     # --max-wait / --max-age are GLOBAL modifiers, parsed before load_cfg() because --max-wait 0
