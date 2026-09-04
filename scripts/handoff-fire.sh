@@ -8869,7 +8869,35 @@ elif [ -n "$WORKTREE" ]; then
     # this path out of the typed command.
     WT_DEPS="$(mktemp "${TMPDIR:-/tmp}/handoff-deps-XXXXXX")"
     mv "$WT_DEPS" "$WT_DEPS.sh" && WT_DEPS="$WT_DEPS.sh"
-    { printf '#!/usr/bin/env bash\n'; printf '%s\n' "$WT_INSTALL"; } > "$WT_DEPS"
+    # TIME-BOUNDED, because `;` only covers a install that FAILS (2026-09-03). The `;`-not-`&&`
+    # note above buys exactly one guarantee: a package manager that EXITS NONZERO still launches
+    # the session. It buys nothing against one that never exits at all — and the pane's whole
+    # visible state until this script returns is the manager's own progress spinner, so a wedged
+    # install is indistinguishable from a working one. MEASURED: firing wt-mem-drain into this
+    # repo sat 4m17s on `npm ci` (0.83s CPU across the entire run, one ESTABLISHED socket,
+    # node_modules frozen at 11132 KB) while curl reached registry.npmjs.org in 0.15s from the same
+    # box — nothing was down, npm simply sat on the socket. The operator read the braille spinner
+    # as a hung SESSION and opened an investigation; the session had not started. Same outcome as
+    # the 2026-07-29 `go`→`god` park, reached through a hang instead of an exit code.
+    # WHY A CEILING AND NOT A CURE: the install is worth attempting (a warm cache finishes in
+    # seconds), so the bound is set well above a healthy run and well below an operator noticing.
+    # Neither `timeout` present ⇒ run unbounded, exactly as before: this may never make a fire
+    # worse than it is today. `-k` follows TERM with KILL so a manager that ignores TERM cannot
+    # outlive its own ceiling. Re-exec (not a subshell) keeps the chain written ONCE, so it cannot
+    # drift from the copy the sibling suites extract.
+    # Single quotes are the POINT, not an oversight: every expansion in this string must survive
+    # into the generated file and be evaluated when that file RUNS. Expanding them here would bake
+    # this process's (empty) values in and the re-entry guard would read blank forever.
+    # shellcheck disable=SC2016
+    WT_BOUND='if [ -z "${CC_DEPS_BOUNDED:-}" ]; then
+  for _to in timeout gtimeout; do
+    command -v "$_to" >/dev/null 2>&1 || continue
+    CC_DEPS_BOUNDED=1 "$_to" -k 10 "${CC_DEPS_TIMEOUT:-180}" bash "$0"
+    if [ $? -eq 124 ]; then echo "handoff: dep install exceeded ${CC_DEPS_TIMEOUT:-180}s - abandoned; launching anyway (a live session can self-heal its deps)"; fi
+    exit 0
+  done
+fi'
+    { printf '#!/usr/bin/env bash\n'; printf '%s\n' "$WT_BOUND"; printf '%s\n' "$WT_INSTALL"; } > "$WT_DEPS"
     chmod +x "$WT_DEPS"
     CMD="cd $(printf %q "$WT") && bash $(printf %q "$WT_DEPS") ; ${NC}${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
   else
