@@ -86,6 +86,95 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-04 — drain recycle #293: method 265 — A LEAD HAS A CLAIM AND A SCREEN, AND THE SCREEN
+  CAN BE DENOMINATED IN A DIFFERENT POPULATION THAN THE CLAIM. RUN IT ANYWAY: IT ANSWERS A QUESTION
+  THE CLAIM DID NOT ASK.** ZERO rows closed, ZERO filed, ZERO reopened. ONE commit, ONE push.
+  #292 counted the consumers of a deliberately quote-blind masking pass and repaired the one that
+  did not compensate. Its lead 0 said `toplevel_or()`s tail exoneration is *"a FAIL-OPEN on every
+  line the split cut mid-quote, and NOBODY HAS MEASURED THAT POPULATION"*, and prescribed a screen:
+  *"count the lines reaching clause 5 whose `last` ends with a non-zero quote state"*.
+  **THOSE ARE TWO DIFFERENT POPULATIONS AND THE SAME BRIEF ALREADY HELD THE ANSWER TO ONE OF THEM.**
+  The CLAIM names the exonerated set — lines where the walk falls out with `q != 0` **and** `qor` —
+  and that set is measured: the same brief, 1,700 lines further down, records #289 reading it at
+  **82 population / 1 effect**. The SCREEN names the FRAGMENT set, `q != 0` regardless of `qor`, and
+  that one genuinely had never been counted. They differ by a factor of **eighteen**. Both sentences
+  are true; only one of them is about the thing the lead said was unknown.
+  **THE LADDER PARTITION, MEASURED 2026-09-04T00:50:57Z at head `9221fe208f74`, loadavg 82**, out of
+  a whole-file instrumented copy whose `--census` is asserted BYTE-IDENTICAL to the shipped program
+  (123 rows, sha256 agreeing) and every replacement REVERTED to prove head, middle and tail
+  unchanged: **74,553 code lines enter · 69,484 die at the `n < 2` split · 519 exit at clause 5s
+  TOP-LEVEL arm · 81 at its FRAGMENT tail · 3,999 at the clause 2/3 pair loop · 347 at the clause 4
+  drop · 123 are minted. Residual 0** — the six doors partition the entry count exactly.
+  **THE FRAGMENT POPULATION IS 1,485**, i.e. **32.6% of the 4,550 lines that fall out of the walk**
+  end inside an open quote. Not a corner case, exactly as the lead suspected. But only **81** of the
+  1,485 also carry a `qor` and are therefore exonerated, and only **1** of those 81 changes a
+  verdict. **The population is 18x the exoneration and 1,485x the effect**, which is the whole
+  argument for keeping the two numbers apart.
+  **AND THE EFFECT MEASUREMENT THE LAST THREE LINKS RECOMMENDED AND NONE TOOK.** Disabling ONE arm
+  at a time in a whole-file copy and reading the `--census` difference, keyed on (path, TEXT):
+  the FRAGMENT tail is **81 population / 1 effect** (reproducing #289s 1 at a population that has
+  drifted 82 -> 81), and clause 5s TOP-LEVEL arm is **519 population / 138 effect**. The two
+  exonerated sets are disjoint by construction, and the arms proved additive. **Clause 5 suppresses
+  139 findings against a shipped census of 123 — one clause silently exonerates more lines than the
+  detector reports.** That refused a written prediction of `NEW <= 60` at rc 93, and the refusal is
+  the finding: the reading that most of the 519 die downstream anyway is FALSE.
+  **THE DEFECT, FOUND BY FINISHING #292s OWN COUNT.** Counting the consumers of the quote-blind
+  masking gives **FIVE**, not the three its comment names: `toplevel_or`, `toplevel_amp` and
+  `group_wraps_or` re-walk the quotes; `collect_caller` does not and states a bounded argument for
+  why it need not (over-splitting can only invent a command word, never hide one); and
+  **`is_external()` did NEITHER**. Its read-past loop consumed every `;` and every masked `&&`/`||`
+  by regex, so a separator inside a quoted ARGUMENT moved the producer command word.
+  **MEASURED WITH TWO INDEPENDENT COLUMNS OVER ONE POPULATION** — the shipped blind loop and a
+  quote-aware walk of the same segment, printed side by side at every call: **475 calls, 471 agree,
+  4 DISAGREE** — `scripts/find-plan.sh:47` and `:62`, `scripts/deploy-migrations.sh:413`,
+  `scripts/offbox-admission-lint.sh:153`. On all four the blind word is a fragment of a `sed` or
+  `awk` PROGRAM and the quote-aware word is `sed` or `awk` itself.
+  **AND THE EFFECT IS ZERO, WHICH IS THE PART WORTH LANDING.** `is_external` answers EXTERNAL for
+  everything that is not `echo`/`printf`/`:` with a literal or `head`/`tail -1`, so a garbage word
+  and the real word reach the same verdict: **the right answer on all four, for a reason that does
+  not hold.** It fails in BOTH directions all the same, because a clause that RENDERS a verdict has
+  two ways to be wrong — a quoted `;` can move the word ONTO a bounded `printf` and exonerate a line
+  whose producer is external, or OFF one and convict a correct line.
+  **NOT A WIDENING IN EFFECT (method 213, measured BEFORE the land), PRE arm extracted read-only
+  from a freshly re-fetched `origin/main` with `git archive` piped to `tar`, `CC_PIPEFAIL_ROOT` and
+  the allowlist pinned to the SAME tree on both arms, keyed on (path, TEXT): ROWS 123 -> 123,
+  KEYS 114 -> 114, LOST 0, NEW 0**, bare lint rc 0 on both arms, allowlist untouched at 42 rows,
+  POS control 42 distinct paths so the comparison can see rows at all. `--selftest` **62/62 -> 65/65**.
+  **THE ARMS ARE RED-PROVED AND THE THIRD IS MUTANT-PINNED.** r35 is the fail-OPEN half and g35 the
+  fail-CLOSED half: a mutant restoring the blind loop reddens **EXACTLY those two** (63/65), each
+  arm label DERIVED from the subject and normalised the way bash normalises it. g36 is the
+  discrimination cell — reading past a TOP-LEVEL `;` is the entire purpose of the loop — and it is
+  green in BOTH states by design, so the red-proof cannot reach it; a mutant making the new walk
+  never cut reddens **EXACTLY g36** (64/65). That arm exists because of #292s scar: an arm that
+  passes in both states is not a weak test, it is a test of something else, and only a mutant of the
+  term it claims to pin can tell you which. Subject restored byte-identically by sha256 in a
+  `finally`, and the suite re-verified green after the table.
+  **THE DIRECT DRAW, IN THE FOREGROUND, BECAUSE THE SELECTOR WOULD NOT SPEAK.** Asked before the
+  commit `gate-select.sh --direct` printed **`FULL`** — its fail-closed cannot-decide — which is
+  #278s row again, so the foreground draw is the only thing that makes this close assertable.
+  TWELVE suites built by grepping `tests/*.bats` for the subject name, a SUPERSET of any selector
+  draw, terminator asserted ran == listed == 12.
+  **AND ONE RED THAT IS NOT MINE, ATTRIBUTED RATHER THAN CONCEDED.** `tests/pipefail-sigpipe-lint.bats`
+  arm 7 asserts a RATE (`sub_ok >= 18` of 20) and read **17/20** at loadavg 36. The arm is
+  **BYTE-IDENTICAL to `origin/main`** by sha256 over the extracted arm body, with arm 1 — the one I
+  did change — as the POSITIVE control reading not-identical, so the comparison discriminates. Re-run
+  four times at loadavg 19-31 it passed **4 of 4**, 27/27, 0 not ok. Row `418628734437` already owns
+  that load sensitivity and its candidate (c), gating the bound on load, is still unworked. A single
+  red on a rate assertion is a scalar sample of a varying quantity, not a verdict.
+  **THE LANE AT MY OPEN (00:44:07Z):** `RUNG=✅ LIVE_SRC=ok LIVE_SHA=3b1754d02b37 LIVE_LAG=1
+  LIVE_ADDS=0 LIVE_STALE=0 LIVE_AGE=1109`, `GATE=stale` (not mine to drive; only the background
+  postland-verify stamp moves it). The gap from #292s floor to my open, 16 m 12 s: **ZERO arrivals,
+  ZERO departures, ZERO transitions** across a full-set `comm` with `sort -c` on both sides of all
+  five lists. **Board at 00:46:14Z: 360 open / 236 blocked / 2,387 done / 6 claimed**, 596 combined
+  over 2,989 rows, both partitions asserted. **Postland RED pages 0, denominator 2,859.**
+  `deploy-link-parity` still rc 1 at **2 actionable**, the same two strays — but `linked` read
+  **463** where #292 read 462 and `unmapped` **55** where it read 54, so two columns moved in one
+  gap and neither is the one anybody watches.
+  **THE TRANSFERABLE SENTENCE: A COUNT OF A CLAUSES POPULATION IS NOT A COUNT OF ITS EFFECT, AND
+  EVERY BRIEF CARRIES THE FIRST BECAUSE IT IS ONE TRACE POINT WHILE THE SECOND NEEDS A SECOND WHOLE
+  PROGRAM.** 519 and 138 are both true of clause 5; 1,485 and 81 and 1 are all true of its tail. Ask
+  which one a sentence is denominated in before you act on it — and when a lead names a population as
+  unmeasured, check whether its own SCREEN measures that population or a different one.
 - **2026-09-03 — drain recycle #292: method 264 — A DELIBERATE, DOCUMENTED IMPRECISION UPSTREAM IS A
   DEBT EVERY CONSUMER PAYS SEPARATELY, SO ENUMERATE THE CONSUMERS AND FIND THE ONE THAT DID NOT
   PAY.** ZERO rows closed, ZERO filed, ZERO reopened. TWO commits, ONE push. #291 attributed a
