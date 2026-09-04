@@ -32,8 +32,13 @@
 # STATES: GREEN · RED (a named, reproducible failure) · HUNG (the suite never returned AND the
 # suspect file wedges again ALONE on a pristine checkout — a proven property of the TREE: stamped,
 # paged at that file, fix = timeout-wrap the un-stubbed seam, never a bisect) · CUT (truncated by a
-# MACHINE event — a peer pkill, OOM, starvation: nothing was proven, never stamped green or red,
-# retried next sweep, honest page + cool-off at CUT_MAX). HUNG vs CUT is the load-bearing split:
+# MACHINE event — OUR OWN bound's -k escalation, a peer pkill, OOM, starvation: nothing was proven,
+# never stamped green or red, retried next sweep, honest page + cool-off at CUT_MAX). The sender of
+# a cut is NOT established by the rc: this runner arms `timeout -k 10` with no --foreground, so its
+# own escalation signals the whole process group and surfaces as 137 exactly like a peer pkill
+# (docs/research/sigkill-attribution-2026-09-03.md). Every cut stamp therefore carries `rc`,
+# `corpus_s` and `bound_s` so a later reader can stratify instead of guessing a sender.
+# HUNG vs CUT is the load-bearing split:
 # "retry when quieter" is the right answer to one and the one answer guaranteed never to clear the
 # other. Bounds: POSTLAND_SUITE_TIMEOUT_S (5400) · POSTLAND_FILE_TIMEOUT_S (300); unbounded, HUNG is
 # UNPROVABLE (nothing can return 124) so every hang candidate honestly degrades to a CUT.
@@ -1527,18 +1532,38 @@ retry_once() { # <file> <testname> <tmpdir> → rc of ONE re-run (124 = OUR boun
 #   · the 15-vs-9 split is not even known to be two senders: `timeout -k 10` re-raises the child's
 #     signal, so an external TERM manufactures an internal KILL 10s later, and TERM→wrapper,
 #     TERM→child, KILL→wrapper and KILL→child produce identical rc AND identical shell text (143/137).
-# What IS established: the signal came from outside this runner's tree (both stall sites set `cutby`
-# and force rc 124, and no `STALL:` line precedes any of the 14), and the parent survived every one —
-# which excludes anything signalling the process group, the launchd job, or the session.
+# 🚨 AND THE "OUTSIDE" HALF WAS ITSELF A GUESS — REFUTED 2026-09-03 (W6, DRAIN_CIRCUIT §3e).
+# This block used to close: *"What IS established: the signal came from outside this runner's tree
+# (both stall sites set `cutby` and force rc 124, and no `STALL:` line precedes any of the 14), and
+# the parent survived every one — which excludes anything signalling the process group."* Both legs
+# are non-sequiturs, and `docs/research/sigkill-attribution-2026-09-03.md` proves it by INTERVENTION:
+#   · The absent `STALL:` line excludes the STALL WATCHER. It does not exclude the OTHER bound this
+#     runner arms — `timeout -k 10 "$SUITE_TO"` — which fires when the corpus PROGRESSES steadily
+#     past the wall. The watcher never sets `cutby` on that path, so rc is never forced to 124.
+#   · The parent surviving is what the mechanism PREDICTS, not evidence against it. Invoked without
+#     `--foreground`, coreutils `timeout` puts ITSELF AND ITS CHILD in a NEW process group and
+#     delivers the `-k` escalation with `kill(0, SIGKILL)` — a scope that by construction cannot
+#     reach this script. `SIGKILL` is uncatchable, so coreutils' own anti-self-signal guard is a
+#     no-op and `timeout` dies before reaching `status = EXIT_TIMEDOUT`: the shell reports its direct
+#     child (the `timeout` pid) as `Killed: 9` and yields 137. Reproduced on demand, 5/5.
+# So 137 + a job-control line is the signature of OUR OWN BOUND *and* of a peer pkill, indistinguish-
+# ably. The research doc names that inheritance outright — "every downstream conclusion built on
+# '137 + a job-control line ⇒ an external sender' inherits that error" — and this was one.
 #
-# A GUESSED CAUSE IS WORSE THAN A NAMED UNKNOWN when it prescribes a remedy, and this one did: "the
-# box is busy" reads as "retry when quieter", which §R1 of LOAD_INSENSITIVE_VERIFY_V2 records as the
-# one response guaranteed never to clear it, on a box whose steady state is saturation. Say what is
-# known and mark what is not; the sender-identifying evidence (a child-process snapshot taken before
-# `wait` and written into the stamp) is filed, not guessed at here.
+# A GUESSED CAUSE IS WORSE THAN A NAMED UNKNOWN when it prescribes a remedy, and BOTH guesses did:
+# "the box is busy" reads as "retry when quieter", which §R1 of LOAD_INSENSITIVE_VERIFY_V2 records as
+# the one response guaranteed never to clear it on a box whose steady state is saturation; "a peer
+# killed us" sends the reader hunting a culprit that need not exist. Say what is known and mark what
+# is not — and this time SHIP THE AXES rather than filing them: every cut stamp now carries `rc`,
+# `corpus_s` and `bound_s` (write_stamp), so `corpus_s` against `bound_s` separates our own ceiling
+# from everything else on the evidence instead of on a sentence. Same shape as the sibling fix in
+# `scripts/autonomy-sweep.sh` — the `elapsed_s`/`load1` arm on the `cloud-return` IDL row, named by
+# subject rather than by section because DRAIN_CIRCUIT's numbering is contested on trunk right now:
+# a row that cannot be stratified cannot answer
+# "did the fix work", however confidently it is worded.
 rc_why() { # <rc> → why this rc says nothing about the tree
   if   [ "$1" -eq 124 ]; then printf 'our own bound cut the run'
-  elif [ "$1" -gt 128 ]; then printf 'the run was KILLED by signal %s from OUTSIDE this runner (sender unidentified) - not the tree' "$(( $1 - 128 ))"
+  elif [ "$1" -gt 128 ]; then printf 'the run was KILLED by signal %s - sender NOT established: this runner arms `timeout -k` without --foreground, whose own escalation signals its whole process group and surfaces identically to a peer pkill or the OOM killer (compare the stamp corpus_s against bound_s) - not the tree' "$(( $1 - 128 ))"
   elif [ "$1" -eq 126 ] || [ "$1" -eq 127 ]; then printf 'the run could not execute (rc %s)' "$1"
   # WORDING IS LOAD-BEARING: this says "ADMISSION DEFERRAL", never the bare token R-E-F-U-S-E-D.
   # permission-gate-lint treats that token as a guard-refusal VERB (`s ~ /REFUSED/`, substring,
@@ -2211,11 +2236,28 @@ do_bisect() { # <file> <good> <bad> → sets BISECT_CULPRIT (empty when undecida
   [ -n "${culprit:-}" ] || return 1
   BISECT_CULPRIT="$culprit"
 }
+# A NUMBER, OR JSON `null` — NEVER 0 FOR "UNMEASURED". The three fields below describe the corpus
+# run, and the corpus does not always run (a prelint red skips it outright). Rendering 0 there would
+# say "it ran, instantly, well inside its bound", which is the single most misleading value each of
+# them could take and the exact confusion these fields exist to end. Non-numeric input degrades to
+# `null` for the same reason, so no future caller can smuggle a bare word into the JSON either.
+num_or_null() { case "${1:-}" in ''|*[!0-9]*) printf 'null' ;; *) printf '%s' "$1" ;; esac; }
 write_stamp() { # <tree> <commit> <verdict> <run_s> <retries> <adv> [failing…]
   local tree="$1" commit="$2" verdict="$3" run_s="$4" retries="$5" adv="$6" gcd; shift 6
   mkdir -p "$STAMPS" 2>/dev/null || true
-  printf '{"tree":"%s","commit":"%s","verdict":"%s","failing":%s,"ts":"%s","run_s":%s,"retries":%s,"suites":%s,"checks":"bats+bash-n","shellcheck_advisory":%s,"env":%s}\n' \
-    "$tree" "$commit" "$verdict" "$(json_array "$@")" "$(now_iso)" "$run_s" "$retries" "${CORPUS_N:-0}" "$adv" "$ENV_FP" > "$STAMPS/$tree.json"
+  # `rc`/`corpus_s`/`bound_s` — THE AXES A CUT COULD NOT BE STRATIFIED ON (DRAIN_CIRCUIT §3e).
+  # A `cut` stamp said a machine event truncated the run and could say nothing more, so the operator
+  # question it exists to answer — "is this OUR OWN ceiling firing, or is something killing us?" —
+  # was answerable only by cross-reading runner.log, which rotates on a different schedule from the
+  # stamps it explains (the same argument `suites` was added under). rc names WHICH non-verdict;
+  # corpus_s against bound_s names WHOSE. Written on every verdict, not just cut: a green whose
+  # corpus_s is a hair under bound_s is a green that nearly wasn't, and that is worth seeing coming.
+  # Safe to add — scripts/offbox-green-pull.sh:23 records that no consumer of stamps/ reads any field
+  # but `.verdict`, so this is additive to every reader that exists.
+  printf '{"tree":"%s","commit":"%s","verdict":"%s","failing":%s,"ts":"%s","run_s":%s,"retries":%s,"suites":%s,"checks":"bats+bash-n","shellcheck_advisory":%s,"rc":%s,"corpus_s":%s,"bound_s":%s,"env":%s}\n' \
+    "$tree" "$commit" "$verdict" "$(json_array "$@")" "$(now_iso)" "$run_s" "$retries" "${CORPUS_N:-0}" "$adv" \
+    "$(num_or_null "${CORPUS_RC:-}")" "$(num_or_null "${CORPUS_S:-}")" "$(num_or_null "${CORPUS_BOUND_S:-}")" \
+    "$ENV_FP" > "$STAMPS/$tree.json"
   # ── GATE-GREEN SYNC (§4.2.5) ───────────────────────────────────────────────────────────────────
   # gate-green asserts "the FULL suite proved this tree". In v2 the land lane no longer runs a
   # corpus, so it can no longer make that claim and stops writing the marker — this is the ONLY
@@ -2834,7 +2876,7 @@ hung_actions() { # <sha> <tree> — page + backlog + notify, routed to the SEAM 
     printf 'suite:   %s (tree %s)\n' "$(sha12 "$sha")" "$(sha12 "$tree")"
     printf 'wedged:  %s at %s completed — %s\n' "$file" "$WEDGE_AT" "$DEATH_SIG"
     printf 'proof:   re-ran %s ALONE in this pristine detached worktree; wedged again: %s\n' "$file" "$REPRODUCED"
-    printf 'NOT a cut: no signal reached this run (a peer pkill shows rc>128 / a job-control line).\n'
+    printf 'NOT a cut: no signal reached this run (a signal death shows rc>128 / a job-control line — whose SENDER is not established by that alone: see rc_why).\n'
     printf 'FIX:     find the un-stubbed external seam and timeout-wrap it (or stub it in setup()).\n'
     printf 're-run:  git -C %s worktree add --detach /tmp/pv-repro %s && cd /tmp/pv-repro && %s %s\n' \
       "$REPO" "$(sha12 "$sha")" "${TIMEOUT_BIN:-timeout} $FILE_TO bats" "$file"
@@ -2852,7 +2894,7 @@ hung_actions() { # <sha> <tree> — page + backlog + notify, routed to the SEAM 
   # the SAME suite — one wedge, two rows, both dispatchable. The tree in the title keeps each hang
   # episode its own row; the condition is what tells guard (6) they are one piece of work.
   file_linked "$file" \
-    "post-land HUNG: $file wedged at $WEDGE_AT @ $(sha12 "$tree") — un-stubbed external seam, timeout-wrap it (NOT a peer pkill)" \
+    "post-land HUNG: $file wedged at $WEDGE_AT @ $(sha12 "$tree") — un-stubbed external seam, timeout-wrap it (NOT a signal death)" \
     "$(fals_red "$file" "$sha")"
   notify "Claude post-land HUNG" "$file wedges at $WEDGE_AT — un-stubbed seam, see $pf"
   sid="$(author_sid "$sha")"
@@ -2874,6 +2916,13 @@ run_target() { # <sha> — the whole check-set + verdict for ONE sha
   LADDER_FAILING=(); CONVICT_PENDING=0; CONVICT_PENDED=()                  # C29, same reset scope
   CUT_WHY='zero not-ok in a non-zero run - truncated'
   DEATH_SIG=""; WEDGE_AT=""; SUSPECT=""; REPRODUCED=false
+  # THE CUT'S OWN AXES. Empty, never 0, and that asymmetry is the whole design: the corpus is SKIPPED
+  # outright on a prelint red, and a `0` there would read as "the corpus ran, instantly, well inside
+  # its bound" — the single most misleading value any of the three could take, and precisely the
+  # reading this instrument exists to end. Empty survives to a JSON `null` in write_stamp
+  # (memory: fail-safe-default-mimics-the-healthy-state; same call the sibling arm in
+  # scripts/autonomy-sweep.sh makes for elapsed_s/load1).
+  CORPUS_RC=""; CORPUS_S=""; CORPUS_BOUND_S=""
   syntax_check
   tap="$RUN_TMP/bats.tap"; : > "$tap"; rc=0
   prelint_check                       # whole-tree meta-lints, standalone, BEFORE the corpus
@@ -2920,10 +2969,20 @@ EOF
     # wedges. POSTLAND_STALL_S=0 restores the plain wall bound (the kill switch).
     # exec, not `bounded`: the watcher must signal timeout(1) ITSELF (which kills its child's whole
     # process group) — TERMing a wrapper subshell would orphan the bats tree instead of ending it.
-    local stall poll cpid last ndone still grace preplan planned cutby
+    local stall poll cpid last ndone still grace preplan planned cutby ct0
     stall="${POSTLAND_STALL_S:-900}"; poll="${POSTLAND_STALL_POLL_S:-60}"
     case "$stall$poll" in *[!0-9]*) stall=900; poll=60 ;; esac
     grace="$(pre_plan_grace "$CORPUS_N")"     # see THE PRE-PLAN GRACE by FILE_TO for the arithmetic
+    # THE CORPUS'S OWN CLOCK, not the run's. `run_s` measures worktree prepare + syntax + prelints +
+    # corpus, so it is NOT comparable to the bound that governs the corpus alone — and the whole
+    # point of recording a bound beside an elapsed is that the two are commensurable. Stamped on BOTH
+    # branches: each arms `timeout -k 10 "$SUITE_TO"` (one through `bounded`, one exec'd for the
+    # watcher to signal), so both can end in the -k escalation this measurement exists to name.
+    # The bound is recorded only when one was actually ARMED: with no resolvable timeout(1), `bounded`
+    # runs the corpus bare (its own documented degradation) and NOTHING can cut it, so a `bound_s`
+    # there would describe a ceiling that does not exist — the same lie in the other direction.
+    ct0="$(now_epoch)"
+    { [ -n "$TIMEOUT_BIN" ] && [ -x "$TIMEOUT_BIN" ]; } && CORPUS_BOUND_S="$SUITE_TO"
     if [ "$stall" -eq 0 ] || [ -z "$TIMEOUT_BIN" ] || [ ! -x "$TIMEOUT_BIN" ]; then
       ( cd "$WORKTREE" && TMPDIR="$RUN_TMP" bounded "$SUITE_TO" "${QOS[@]}" "$BATS_BIN" "${bargs[@]}" ) </dev/null > "$tap" 2>&1; rc=$?
     else
@@ -2976,6 +3035,13 @@ EOF
       # the grace resets `still` while `preplan` stays at the limit). memory: make-the-actuator-the-arbiter.
       [ -n "$cutby" ] && rc=124
     fi
+    # ONE capture for BOTH branches, and it records the rc classify_failures is about to be HANDED —
+    # after the `cutby` normalisation, never the raw wait status. The stamp's `rc` and the log's
+    # CUT_WHY are then the same fact stated twice; a raw rc here would let a reader stratify on a
+    # number no message in this file was ever derived from. What the normalisation hides — that the
+    # stall watcher, not the ceiling, ended the run — is already in runner.log as its own `STALL:` /
+    # `PRE-PLAN STALL:` line, which is the actuator's own record and outranks a re-derivation.
+    CORPUS_RC="$rc"; CORPUS_S="$(( $(now_epoch) - ct0 ))"
   fi
   adv="$(sc_count)"
   [ "$rc" -eq 0 ] || classify_failures "$tap" "$rc"
@@ -3259,7 +3325,13 @@ cut_page() { # <sha> <tree> <n> — an HONEST page: names no test, asks for no b
       # lines, and a hint LOOSER than the predicate sends the reader grepping up a torn line the
       # cut deliberately did not count — then disbelieving a page that was right (C30).
       printf '         The suite emitted ZERO result lines matching %s, so NO test failed.\n' "$TAP_NOTOK_RE"
-      printf '         Each run was TRUNCATED before reaching a verdict (peer pkill / OOM / load).\n'
+      # NAMES THE POPULATION, NOT A CULPRIT. "peer pkill / OOM / load" read as a list of suspects
+      # and sent the reader hunting one; W6 proved this runner's OWN `timeout -k` escalation produces
+      # the identical rc and job-control line, so the sender is not knowable from the page. The
+      # stamp's corpus_s/bound_s are what decide it — say where to look, not who did it.
+      printf '         Each run was TRUNCATED before reaching a verdict (a MACHINE event: our own\n'
+      printf '         `timeout -k` ceiling, a peer pkill, OOM or starvation — indistinguishable by\n'
+      printf '         rc alone. Stratify with the stamp: corpus_s at bound_s ⇒ our own ceiling).\n'
       printf 'NOT a test failure — do not bisect. Re-run on a quiet box:\n'
     fi
     printf 're-run:  git -C %s worktree add --detach /tmp/pv-repro %s && cd /tmp/pv-repro && bats tests/\n' \

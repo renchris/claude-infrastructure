@@ -795,6 +795,22 @@ so it resolves on its own; it just cannot be *driven* from this side. `deploy-li
   named: close attribution is at 7.7% coverage, which is why `lane=local-drain` still reads
   `lane-stalled` and why this arm is scoped fleet-wide rather than per-lane.
 
+- **2026-09-04 — W9 DONE: §3e's flagged-not-fixed corollary, built** (cloud worker, full record §3j).
+  §3e closed by naming a risk it declined to act on: `postland-verify.sh` defines CUT as a machine
+  event and asserted, in shipped code, that an rc>128 came *"from OUTSIDE this runner"* — which W6's
+  own intervention refutes, since this runner arms `timeout -k 10` with no `--foreground` and
+  coreutils then SIGKILLs its own process group, surfacing as 137 for OUR OWN ceiling. §3e's stated
+  remainder was that *"establishing an actual misfire needs the per-run rc"*, and the stamp carried
+  none. Both halves are now closed: the message states the sender is **not established** and names
+  the discriminator, and every stamp carries `rc`, `corpus_s` (the CORPUS's own clock, not `run_s`)
+  and `bound_s` (the ceiling actually armed), each JSON `null` — never 0 — where the corpus did not
+  run or no bound existed. This is the `elapsed_s`/`load1` fix on the `cloud-return` IDL row applied
+  one layer down: the layer whose cut stamps are
+  what hold `last-green` behind live HEAD, i.e. the reason every fix in this plan has been landed and
+  inert. ⚠️ **It measures; it does not converge.** A stratified verdict needs cut stamps written by
+  the DEPLOYED runner, so the first usable reading is one converge cycle away — and this wave cannot
+  produce it, for the same reason §W5, §3f and §3g each recorded.
+
 ---
 
 ## 3e. THE SIGKILL IS ATTRIBUTED — `timeout` kills itself (W6, 2026-09-03)
@@ -1359,3 +1375,149 @@ The ratio moved before this wave and not because of it; this arm measures, it do
 `lane=local-drain` still renders `lane-stalled` because close attribution sits at **7.7% coverage**
 (2,355 of 2,553 closes carry no `lane`) — the effort arm is scoped fleet-wide precisely so it does
 not inherit that gap, but the gap itself is untouched and is not this wave's.
+
+---
+
+## 3j. A CUT COULD NOT SAY WHAT CUT IT — and the one thing it did say was refuted (W9, 2026-09-04)
+
+**§3e ended by flagging this and declining to act on it**, in its own words:
+
+> **Corollary, flagged not fixed.** `postland-verify.sh:34-35` defines CUT as a machine event and
+> `:2837` names its discriminator as *"a peer pkill shows rc>128 / a job-control line"* — exactly what
+> `timeout -k`'s own escalation produces… So CUT cannot distinguish an external pkill from our own
+> bound firing. That matters because CUT is what holds `last-green` behind live HEAD and blocks
+> `deploy-live` per §W5. Stated as a RISK… establishing an actual misfire needs the per-run rc.
+
+That is not a bookkeeping gap. **A cut stamp is the thing that keeps `last-green` behind live HEAD**,
+and `deploy-live` is fail-closed on it — so it is the mechanism by which W3, W5, W5b, W7 and W4 each
+landed a correct fix and then recorded, in five separate sections, that the fix was **not live**.
+The one question an operator asks a cut — *is this our own ceiling, or is something killing us?* —
+had no answer on disk at all.
+
+### The refuted claim was in SHIPPED CODE, in three places, and it prescribed a remedy
+
+`rc_why`'s rc>128 arm read:
+
+```
+the run was KILLED by signal N from OUTSIDE this runner (sender unidentified) - not the tree
+```
+
+and the block above it closed: *"What IS established: the signal came from outside this runner's
+tree (both stall sites set `cutby` and force rc 124, and no `STALL:` line precedes any of the 14),
+and the parent survived every one — which excludes anything signalling the process group."*
+**Both legs are non-sequiturs**, and `docs/research/sigkill-attribution-2026-09-03.md` — W6's own
+intervention, 5/5 on demand — settles each:
+
+| the claim | why it does not hold |
+|---|---|
+| no `STALL:` line ⇒ not us | It excludes the **stall watcher**. It says nothing about the OTHER bound this runner arms, `timeout -k 10 "$SUITE_TO"`, which fires when the corpus **progresses** steadily past the wall. On that path `cutby` is never set and rc is never forced to 124. |
+| the parent survived ⇒ not a group signal | That is what the mechanism **predicts**. Without `--foreground`, `timeout` puts *itself and its child* in a NEW process group and escalates with `kill(0, SIGKILL)` — a scope that by construction cannot reach this script. `SIGKILL` is uncatchable, so coreutils' anti-self-signal guard is a no-op, `timeout` dies before `status = EXIT_TIMEDOUT`, and the shell reports its direct child as `Killed: 9` ⇒ 137. |
+
+The research doc names the inheritance outright — *"every downstream conclusion built on '137 + a
+job-control line ⇒ an external sender' inherits that error"* — and these were three of them
+(`rc_why`, the hung page's `NOT a cut:` line, the HUNG backlog title). A guessed sender is not a
+harmless flourish: it prescribes *"go find the killer"*, which is a search for a process that need
+not exist, on the one path everything else in this plan is waiting behind.
+
+### What landed
+
+**The message stops asserting a sender**, and names the discriminator instead:
+
+```
+the run was KILLED by signal 9 - sender NOT established: this runner arms `timeout -k` without
+--foreground, whose own escalation signals its whole process group and surfaces identically to a
+peer pkill or the OOM killer (compare the stamp corpus_s against bound_s) - not the tree
+```
+
+**And the stamp carries the axes rather than filing them.** `rc` · `corpus_s` · `bound_s`, on every
+verdict:
+
+* **`rc`** — WHICH non-verdict. Recorded as the code `classify_failures` was **handed**, after the
+  `cutby` normalisation, so the stamp and the `CUT_WHY` beneath it are one fact stated twice. What
+  the normalisation hides — that the watcher, not the ceiling, ended the run — is already in
+  runner.log as its own `STALL:` line, which is the actuator's own record and outranks a
+  re-derivation (memory: `make-the-actuator-the-arbiter`).
+* **`corpus_s`** — WHOSE, the numerator. Deliberately **not `run_s`**, which also counts worktree
+  prepare, syntax and the prelints: comparing that to a corpus bound compares two populations, which
+  is this repo's own `bound-must-fit-the-band-not-the-bench` in the measurement rather than the bound.
+* **`bound_s`** — WHOSE, the denominator, and only when one was actually **armed**. With no
+  resolvable `timeout(1)`, `bounded` runs the corpus bare and nothing can cut it, so recording
+  `SUITE_TO` there would describe a ceiling that cannot fire.
+
+**All three render JSON `null`, never 0**, wherever the corpus did not run — the prelint-red path
+skips it outright, and `0` would say *"it ran, instantly, well inside its ceiling"*, the single most
+misleading value each field could take and precisely the reading they exist to end (memory:
+`fail-safe-default-mimics-the-healthy-state`). That is the same call the sibling arm in
+`autonomy-sweep.sh` makes for `elapsed_s`/`load1` on the `cloud-return` IDL row, one layer up — and,
+per that arm's own record, the exact half `d1209750610a` reverted whole there before `6438e39c` (a
+sibling cloud branch, unlanded as this is written) restored it. **Named by subject, not by section
+number, deliberately:** this file's numbering is contested on trunk at the moment of writing — the
+revert took a `3g → 3h` renumber with it, so two `## 3g` headings stand — and a cross-reference that
+resolves only under one resolution of that is a pointer with a half-life.
+
+Additive by construction: `scripts/offbox-green-pull.sh:23` records that **no consumer of `stamps/`
+reads any field but `.verdict`**, so nothing that exists today can be broken by a new key.
+
+### Proof
+
+`tests/postland-verify.bats` gains contract clause **C4c** and five cases, and **every one has a
+control that can fail in the opposite direction** — the property the C13h pair one screen up already
+demands of this file:
+
+| case | pins | the control that makes it mean something |
+|---|---|---|
+| C4c cut-axes | `rc` 137 · `corpus_s` a number · `bound_s` = the seam's own `4242` | pinning the SEAM's value, not "is a number", is what stops a hardcoded default passing |
+| C4c never-ran | all three `null` on a prelint red | the arm that refutes a `0` default, which would satisfy every "is a number" assertion while lying |
+| C4c no-bound | `bound_s` `null` under `CC_POSTLAND_TIMEOUT_BIN=`, **while `rc`/`corpus_s` stay numbers** | proves `bound_s` is read from what was armed, not printed from a constant — and that the null is scoped, not blanket |
+| C33c sender | runner.log says `sender NOT established`, keeps `KILLED by signal 9`, and does **not** say `from OUTSIDE this runner` | asserted with `run` + an explicit status test, never a bare `!` — bash exempts a negated command from errexit, so `! grep -q` is a DEAD assertion |
+| C33c rc 124 | `our own bound cut the run` is **unchanged**, and does not gain the hedge | the direction a blanket "we cannot know the sender" edit would break: 124 IS established, and trading a false certainty for a false doubt is not an improvement |
+
+Five mutants, each RED on the assertion that owns it and on no other: the `null` default rendered as
+`0` → never-ran · the armed-guard deleted → no-bound · the bound printed as a constant → cut-axes ·
+the original `from OUTSIDE this runner` string restored → C33c sender · the 124 arm given the hedge →
+C33c control.
+
+⚠️ **TWO OF THOSE FIVE SURVIVED THEIR FIRST RUN, AND THE FIXTURE WAS NOT THE REASON — THE MUTANT WAS.**
+The two bound mutants were applied with `perl -0pi -e 's/\Q…$SUITE_TO…\E/…/'`, and **`\Q` suppresses
+metacharacters, not interpolation**: perl expanded `$SUITE_TO` and `$TIMEOUT_BIN` to empty, the
+pattern matched nothing, and both "mutants" were the unmutated file passing its own tests. Re-run
+with the sigils escaped, both redden on their own assertion. Recorded because it is the same shape as
+§3i's F5 seen from the other side — there a control's two arms agreed, here a mutant never mutated —
+and both produce the identical artefact: **a green that asserts nothing, indistinguishable from a
+green that asserts everything.** The cheap guard is to make the mutation prove it landed (this run
+prints the mutated line) rather than to trust that a substitution fired.
+
+### Suite, stated with its host
+
+`bash -n` clean; `shellcheck -S warning` 0 findings on `scripts/postland-verify.sh`, matching
+`origin/main`'s baseline of 0. All five prelints this file gates itself on — walltime, hermeticity,
+git-identity, subshell-cleanup, afunix-path — clean. `unattended-path-lint` output identical to
+trunk's modulo line numbers, so this diff adds no finding.
+
+`tests/postland-verify.bats` on the cloud worker's Linux VM: **130 ok · 2 skip · 7 not ok**, and
+**all 7 reproduce byte-identically on `origin/main` with this diff stashed** — the `run.lock.d`
+identity cluster (C6, C6b ×3, C33 ×2, and the plain live/dead-holder pair), which reads `ps -o
+lstart` and is host-coupled; the 8th test in that same filter passes in both trees, so the
+attribution is not "everything reds here". Not this diff's, and named rather than swallowed. It also
+corroborates the entry this suite already carries in `scripts/offbox-excluded.manifest` — excluded
+on COST, and this run says the exclusion is now load-bearing for CORRECTNESS on Linux too, which is a
+finding that belongs to whoever owns that manifest and not to this wave.
+
+One further environment fact worth recording, because it wasted a cycle: an eighth failure
+(`C22b: the CUT says the LINT is broken`) was purely *"this VM has no git identity"* — `push_commit`
+died 128 inside the fixture. It goes green with `GIT_AUTHOR_*`/`GIT_COMMITTER_*` exported, and it too
+reproduces on stashed trunk. A suite whose fixtures commit needs an identity the off-box runner
+supplies and a bare container does not.
+
+### What is NOT claimed
+
+**No stratified verdict about any real cut, and none is reachable from here.** These fields are
+written by the DEPLOYED runner, which advances only through `deploy-live`'s GREEN stamp — the same
+convergence dependency §W5, §W5b, §3f and §3g each recorded, and the very circle this instrument
+exists to make legible. The first usable reading is one converge cycle away. Nor does this wave
+claim the 14 kills §C33b measured were our own ceiling: it claims only that **nothing established
+they were not**, and that the run after next will be able to say which on evidence rather than on a
+sentence.
+
+**And it does not touch the bound.** §3e's own closing line still governs — *"this licenses no bound
+change; the bound is not the defect, the reading of 137 was."*

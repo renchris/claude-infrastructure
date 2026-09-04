@@ -16,6 +16,17 @@
 #   C4b denom   `suites` is the COUNT handed to bats — the denominator of the population the
 #               verdict judged. 0 on every path where the corpus never ran (a prelint red skips
 #               it). Without it a green cannot be told from a green-by-collapsed-corpus.
+#   C4c axes    the stamp carries `rc`, `corpus_s` and `bound_s` — the three facts that make a CUT
+#               stratifiable instead of merely announced. `rc` is the code classify_failures was
+#               handed (WHICH non-verdict); `corpus_s` is the CORPUS's own elapsed, commensurable
+#               with `bound_s`, the ceiling actually armed for it (WHOSE). All three are JSON `null`
+#               — never 0 — on every path where the corpus did not run or no bound was armed: 0
+#               would read as "ran, instantly, well inside its ceiling", which is the exact reading
+#               these fields exist to make impossible. WHY IT MATTERS HERE and not as bookkeeping:
+#               a cut stamp is what holds `last-green` behind live HEAD, which is what `deploy-live`
+#               is fail-closed on, which is why landed fixes sit inert for days (DRAIN_CIRCUIT
+#               §W5/§3f/§3g). Without these axes the operator's only question about a cut — ours or
+#               theirs? — had no answer on disk at all.
 #   C9b render  `status` resolves last-green (a COMMIT sha) through to its TREE-keyed stamp and
 #               prints BOTH names plus the verdict READ OFF DISK. A stamp that is absent renders
 #               MISSING; a commit this checkout cannot resolve renders UNRESOLVABLE. Never a bare
@@ -3393,6 +3404,100 @@ exit 0"; }
   run jq -r '.suites' "$CC_POSTLAND_DIR/stamps/$tree.json"
   [ "$output" != "null" ]                       # PRE-FIX: the field does not exist at all
   [ "$output" -ge 1 ]                           # and it counts something real
+}
+
+# ── C4c: a CUT carries the axes it can be STRATIFIED on ───────────────────────────────────────────
+# THE DEFECT, AND IT IS A WRONG CLAIM RATHER THAN A MISSING ONE. A `cut` stamp asserted that a
+# MACHINE event truncated the run, and rc_why's rc>128 arm named the sender outright: "KILLED by
+# signal N from OUTSIDE this runner". W6 refuted that by intervention on 2026-09-03
+# (docs/research/sigkill-attribution-2026-09-03.md): this runner arms `timeout -k 10` with no
+# --foreground, coreutils then signals its OWN process group with kill(0, SIGKILL), and since SIGKILL
+# is uncatchable `timeout` dies before reaching EXIT_TIMEDOUT — so the shell reports 137 for OUR OWN
+# CEILING, byte-identical to a peer pkill. The stamp held nothing that could separate the two, and a
+# cut stamp is what holds `last-green` behind live HEAD, which `deploy-live` is fail-closed on.
+# These three pin the axes; the C33c pair below pins that the message stopped asserting a sender.
+@test "C4c: a CUT stamp carries rc, the CORPUS's elapsed and the bound actually armed" {
+  fake="$BATS_TEST_TMPDIR/bats-sigkill-axes"
+  # 137 with ZERO not-ok — the commonest truncation, and the shape W6 proved is ambiguous.
+  printf '#!/bin/bash\n[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }\nexit 137\n' > "$fake"
+  chmod +x "$fake"
+  tree="$(origin_tree)"
+  run env CC_POSTLAND_BATS="$fake" POSTLAND_SUITE_TIMEOUT_S=4242 bash "$SUT" --run-if-needed
+  s="$CC_POSTLAND_DIR/stamps/$tree.json"
+  run jq -r '.verdict' "$s"; [ "$output" = "cut" ]      # unchanged: the verdict was never the defect
+  # WHICH non-verdict. The rc recorded is the one classify_failures was HANDED, so the stamp and the
+  # runner.log message beneath it are the same fact twice rather than two numbers a reader must pair.
+  run jq -r '.rc' "$s"; [ "$output" = "137" ]           # PRE-FIX: the field does not exist at all
+  # WHOSE. corpus_s is the CORPUS's own clock, never run_s — run_s also counts worktree prepare,
+  # syntax and the prelints, so comparing IT to a corpus bound compares two different populations.
+  run jq -r '.corpus_s' "$s"
+  [ "$output" != "null" ]
+  [ "$output" -ge 0 ]
+  # …and the ceiling it is commensurable with, read back as the value THIS run armed. Pinning the
+  # seam's value rather than "is a number" is what stops a hardcoded default passing this case.
+  run jq -r '.bound_s' "$s"; [ "$output" = "4242" ]
+}
+
+@test "C4c control: a run whose corpus NEVER RAN renders null, never 0" {
+  # THE HALF THAT MAKES THE CASE ABOVE MEAN ANYTHING. Three fields defaulting to 0 would satisfy
+  # every "is a number" assertion while saying, of a corpus that never started, that it ran instantly
+  # and well inside its ceiling — the one reading these fields exist to make impossible
+  # (memory: fail-safe-default-mimics-the-healthy-state). A prelint red skips the corpus outright.
+  prelint_stub 'echo "  RATCHET stale entry"; exit 1'
+  tree="$(origin_tree)"
+  b="$(stub_pass)"
+  run env CC_POSTLAND_BATS="$b" bash "$SUT" --run-if-needed
+  s="$CC_POSTLAND_DIR/stamps/$tree.json"
+  run jq -r '.verdict' "$s"; [ "$output" = "red" ]      # the lint red, which skips the corpus
+  run jq -r '.rc' "$s";       [ "$output" = "null" ]
+  run jq -r '.corpus_s' "$s"; [ "$output" = "null" ]
+  run jq -r '.bound_s' "$s";  [ "$output" = "null" ]
+}
+
+@test "C4c: bound_s is null when NO bound was armed, while rc and corpus_s stay numbers" {
+  # bound_s names a ceiling that EXISTS. With no resolvable timeout(1), `bounded` runs the corpus
+  # bare — its own documented degradation — and nothing can cut it, so recording SUITE_TO there would
+  # describe a ceiling that cannot fire: the same lie as the 0 above, pointed the other way. This is
+  # also the arm that proves bound_s is read from what was armed rather than printed from a constant.
+  # CC_POSTLAND_TIMEOUT_BIN= (set but EMPTY) is the SUT's own documented "honored verbatim" disable.
+  fake="$BATS_TEST_TMPDIR/bats-nobound"
+  printf '#!/bin/bash\n[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }\nexit 137\n' > "$fake"
+  chmod +x "$fake"
+  tree="$(origin_tree)"
+  run env CC_POSTLAND_BATS="$fake" CC_POSTLAND_TIMEOUT_BIN= bash "$SUT" --run-if-needed
+  s="$CC_POSTLAND_DIR/stamps/$tree.json"
+  run jq -r '.verdict' "$s";  [ "$output" = "cut" ]
+  run jq -r '.bound_s' "$s";  [ "$output" = "null" ]   # nothing was armed ⇒ nothing to compare to
+  run jq -r '.rc' "$s";       [ "$output" = "137" ]    # the corpus still RAN, so these are measured
+  run jq -r '.corpus_s' "$s"; [ "$output" != "null" ]
+}
+
+# ── C33c: the rc>128 arm may not name a sender it cannot know ─────────────────────────────────────
+@test "C33c: a signal death states the sender is NOT established — never 'from OUTSIDE this runner'" {
+  fake="$BATS_TEST_TMPDIR/bats-sender"
+  printf '#!/bin/bash\n[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }\nexit 137\n' > "$fake"
+  chmod +x "$fake"
+  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed
+  grep -q 'KILLED by signal 9' "$CC_POSTLAND_DIR/runner.log"        # the fact, kept (C13h)
+  grep -q 'sender NOT established' "$CC_POSTLAND_DIR/runner.log"    # the guess, replaced
+  # `run` + an explicit status test, NOT a bare `!`: bash exempts a negated command from errexit, so
+  # `! grep -q …` can never fail a bats test and this assertion would be DEAD — the same trap C13h's
+  # own control documents one screen up.
+  run grep -q 'from OUTSIDE this runner' "$CC_POSTLAND_DIR/runner.log"
+  [ "$status" -ne 0 ]                    # W6 refuted it: our own -k escalation produces this exact rc
+}
+
+@test "C33c control: rc 124 still names OUR OWN bound outright — the fix must not blur what IS known" {
+  # THE OTHER DIRECTION, and it is the one a blanket "we cannot know the sender" edit would break.
+  # 124 is timeout(1) reporting its OWN ceiling through a child that died on TERM, and that IS
+  # established. Softening it too would trade a false certainty for a false doubt.
+  fake="$BATS_TEST_TMPDIR/bats-rc124"
+  printf '#!/bin/bash\n[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }\nexit 124\n' > "$fake"
+  chmod +x "$fake"
+  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed
+  grep -q 'our own bound cut the run' "$CC_POSTLAND_DIR/runner.log"
+  run grep -q 'sender NOT established' "$CC_POSTLAND_DIR/runner.log"
+  [ "$status" -ne 0 ]
 }
 
 # ── C9b: last-green is rendered WITH its tree-keyed stamp resolved ────────────────────────────────
