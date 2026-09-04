@@ -468,9 +468,20 @@ PROBE
 #
 # WHY A TEST AND NOT A COMMENT. scripts/pipefail-sigpipe-lint.sh's clause 4 asks whether anything
 # READS the pipeline's status, and a function-final pipeline's status is read by the CALLER, which
-# the clause cannot observe. Measured: its --census sees 0 of the three in_own sites and the
-# allowlist grandfathers none of them, so they are not exempt — they are INVISIBLE. (backlog
-# ca97c678b18b owns that detector gap; this pins the sites so a fix cannot regress while it waits.)
+# the clause could not observe. Measured then: its --census saw 0 of the three in_own sites and the
+# allowlist grandfathered none of them, so they were not exempt — they were INVISIBLE. That was
+# backlog ca97c678b18b, and IT IS CURED: clause 4c — the FOURTEENTH CORRECTION in
+# scripts/pipefail-sigpipe-lint.sh — collects same-file callers in a first pass, so a function-final
+# pipeline is judged by whoever reads its rc.
+#
+# ⚠️ THIS TEST DOES NOT RETIRE WITH THAT ROW, AND THE REASON IS A MEASUREMENT RATHER THAN CAUTION.
+# Re-measured 2026-09-04 against the SHIPPED detector on one fixture per cell, empty allowlist,
+# beside an inline `if p | grep -q` FIRE control that reports: the MULTI-LINE `in_own` shape is now
+# reported, and the ONE-LINE `in_allowlist() { … | grep -qxF …; }` shape is NOT. Clause 4c reads
+# function-final off the house shape `name() {` … `}` with the closing brace at column 0 — its own
+# residual (b) — so HALF the population the arm below sweeps is still invisible to the ratchet, and
+# the arm sweeps BOTH predicates by construction. It also pins the drained SPELLING, which no
+# detector fix makes redundant.
 #
 # THE REGIME IS MEASURED, NOT ASSUMED (2026-08-26, load ~13, 20 trials per size). The transition is
 # a RACE with a band, not a step, and it differs by pipeline SHAPE — so the single 64 KiB constant

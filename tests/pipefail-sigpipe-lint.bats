@@ -609,7 +609,11 @@ $(census | grep -c 'lr-reset-poller\.sh:' || true) hit(s), so arm 20 is vacuous"
   # judged — or the CLOSING line of one, whose tail is genuinely CODE and should be. A line-local
   # masker cannot tell those apart, because the discriminator is on a PREVIOUS line. So this is not
   # a contract worth flipping; it is the visible half of the missing continuation join, which
-  # ca97c678b18b owns and pipe258.py already implements.
+  # pipe258.py already implements and nobody has wired in.
+  # ⚠️ THIS LINE USED TO SAY ca97c678b18b OWNS THAT JOIN. It does not: that row is the FUNCTION-FINAL
+  # gap (condition `pipefail-lint-function-final-pipeline`), CURED by clause 4c — the FOURTEENTH
+  # CORRECTION in scripts/pipefail-sigpipe-lint.sh — and re-measured on the shipped detector
+  # 2026-09-04. The join has no row of its own — do not cite a cured id for it.
   #
   # The two fixtures differ in ONE variable — whether an unpartnered quote precedes the pipeline —
   # and the second is the FIRE control: it proves the detector DOES see this exact producer and

@@ -256,10 +256,19 @@ drv_iterm2_address() {
   # subject 2026-08-26T21:56Z, 20 trials per size, needle on line 1: at a 120,003-byte id feed the
   # answer is WRONG 20/20; at 4,014 bytes it is right 20/20. Two-stage bands: safe <=37,121 B, racy
   # at 55,721, always inverted from 87,122.
-  # THIS SITE HAS NO RATCHET. pipefail-sigpipe-lint's clause reads the LAST stage's own exit and
-  # cannot observe a caller, so a pipeline in `||` position is absent from `--census` and from
-  # `pipefail-sigpipe-allow.txt` alike (both measured 0 rows for this file at 21:52Z) — invisible,
-  # not exempt (backlog ca97c678b18b). That is why the guard for this line is a behavioural arm in
+  # THIS SITE STILL HAS NO RATCHET — AND THE REASON THIS COMMENT GAVE FOR THAT IS RETIRED, WHICH IS
+  # WORTH MORE THAN THE VERDICT. It said the clause "cannot observe a caller"; that was
+  # `ca97c678b18b`, and clause 4c CURED it (the FOURTEENTH CORRECTION in
+  # scripts/pipefail-sigpipe-lint.sh), so a function-final pipeline is now
+  # judged by whoever reads its rc. This line is invisible for a DIFFERENT clause: it is not
+  # function-final at all (a `printf` follows it), and clause 5 exonerates a top-level `||` outright
+  # — whose stated reason, that the fallback "swallows the 141 before anything reads it", is true of
+  # `|| true` and false of `|| return`. That correction measured the principled repair (exonerate
+  # only `|| true` / `|| :`) at NEW = 128, LOST = 0 — it more than doubles the census and wants its
+  # own drain campaign — and deliberately left it to its own row. Re-measured 2026-09-04 on the
+  # SHIPPED detector: a `p | grep -qxF … || return 1` inside a function, called from an `if`, is
+  # reported by neither `--census` nor `pipefail-sigpipe-allow.txt`, beside a FIRE control that is.
+  # Invisible, not exempt. That is why the guard for this line is a behavioural arm in
   # tests/cc-pane.bats and not an allowlist row.
   printf '%s\n' "$ids" | grep -xF "$id" >/dev/null || return "$RC_NO"
   printf '%s\n' "$id"
