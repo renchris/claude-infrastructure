@@ -163,6 +163,20 @@ versions:
 #     It binds our hand-built `messages` arrays, if we ever grow one — not our CC sessions.
 #
 # FIVE ADDITIVE (each behind its own beta header):
+# ✅ NONE OF THESE IS OURS TO ADOPT — MEASURED 2026-09-03. This note exists to stop a future session
+# filing adoption work for them. Every named beta header is already compiled into claude.exe 2.1.260
+# and sent by the client:
+#     mid-conversation-output-config-2026-07-01     1 hit
+#     mid-conversation-system-clear-at-2026-08-21   1 hit
+#     thinking-display-updates-2026-08-18           3 hits
+#     thinking-binding-controls-2026-08-01          1 hit
+# (`strings -a claude.exe | /usr/bin/grep -c` — the same instrument, with the same positive controls,
+# the binary gate used; a plain grep is blind on a Bun-compiled binary.) The client also drives one
+# of them itself: it sets `display:"updates"` when thinking is active. So read the list below as
+# CAPABILITY WE ALREADY HAVE, not as a backlog. What is NOT reachable from here is issuing a beta WE
+# pick — the CLI owns the header set, so a beta Anthropic ships that Claude Code does not send is
+# unavailable to this fleet whatever the API docs say. Re-measure at the next binary bump rather than
+# trusting this block: it is a fact about ONE build, exactly like the `fable` alias resolution above.
 #  - Per-message effort, `mid-conversation-output-config-2026-07-01` — change effort mid
 #    conversation WITHOUT invalidating the prompt cache. Also supported on Opus 5. This is the
 #    first lever that would let a lead raise effort for one hard step and drop back, instead of
