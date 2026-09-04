@@ -108,3 +108,37 @@ setup() {
   run bash "$SUBJECT" --num 3 --since yesterday --print;                  [ "$status" -eq 2 ]
   run bash "$SUBJECT" --num 3 --worktree relative/path --print;           [ "$status" -eq 2 ]
 }
+
+# ── a lane for ANOTHER project lands with THAT repo's rail ──────────────────────────────────────
+#
+# The drain scripts always come from the claude-infrastructure checkout ($INFRA); the project's own
+# gate and landing rail are substituted per project, because a landing cost is a fact only the repo
+# can state (global CLAUDE.md § Ship policy). reso's trunk CLAUDE.md § Deploy trigger says a push to
+# main ships nothing since 2026-08-02 and names scripts/land-status.sh as the live check.
+@test "a reso lane brief calls the infra scripts by absolute path and lands with reso's own rail" {
+  run bash "$SUBJECT" --num 1 --lane reso --project reso-management-app --infra /opt/infra --print
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | grep -c 'bash /opt/infra/scripts/drain-pick.sh --project reso-management-app')" -eq 1 ]
+  [ "$(printf '%s' "$output" | grep -c 'bash /opt/infra/scripts/drain-recycle-fire.sh --closure-report .* --project reso-management-app')" -ge 2 ]
+  [ "$(printf '%s' "$output" | grep -c 'bash /opt/infra/scripts/drain-recycle-fire.sh --num 2 --lane reso --project reso-management-app')" -eq 1 ]
+  [ "$(printf '%s' "$output" | grep -c 'land-status.sh')" -eq 1 ]
+  [ "$(printf '%s' "$output" | grep -c 'pnpm typecheck')" -eq 1 ]
+  [ "$(printf '%s' "$output" | grep -c 'ship-land.sh')" -eq 0 ]
+  [ "$(printf '%s' "$output" | grep -c 'no §2.1 entry to write')" -eq 1 ]
+  [ "$(printf '%s' "$output" | grep -c '{{')" -eq 0 ]
+}
+
+@test "the infra lane brief keeps ship-land and the §2.1 entry" {
+  run bash "$SUBJECT" --num 300 --lane infra --project claude-infrastructure --print
+  [ "$(printf '%s' "$output" | grep -c 'bash scripts/ship-land.sh')" -eq 1 ]
+  [ "$(printf '%s' "$output" | grep -c 'gate-select.sh --direct')" -eq 1 ]
+  [ "$(printf '%s' "$output" | grep -c 'BACKLOG_DRAIN_24_7.md')" -ge 1 ]
+  [ "$(printf '%s' "$output" | grep -c 'land-status.sh')" -eq 0 ]
+}
+
+@test "an unknown project gets the read-your-own-CLAUDE.md rail, never a guessed land command" {
+  run bash "$SUBJECT" --num 1 --lane docclf --project doc_classifier --print
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | grep -c 'read it first')" -eq 1 ]
+  [ "$(printf '%s' "$output" | grep -c 'ship-land.sh')" -eq 0 ]
+}
