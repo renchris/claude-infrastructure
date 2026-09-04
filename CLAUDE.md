@@ -317,6 +317,22 @@ Lowering effort does NOT fix it (effort governs *thinking*, not *output*), so it
 for. Source: Anthropic's "Prompting Claude Opus 5" guide; these are its levers with this operator's
 calibration.
 
+🚨 **THESE RULES ARE TUNED TO OPUS 5, AND FABLE 5.1 FAILS THE OPPOSITE WAY — so on a Fable session
+they correct a problem that is not there.** Anthropic's own 5.1 delta list (recorded in
+`model-config.yaml` § FABLE 5.1) has 5.1 already writing **denser prose** with **LESS formatting in
+chat**, and warns in terms naming this file's exact situation: *"anti-formatting rules written for
+older models now over-suppress."* Everything below stays in force on the default tier
+(`versions.opus_latest`); on a session running `frontier_access.model`, read the *intent* — one
+scannable answer — and let it use a table or a list where that is genuinely the clearest form. The
+5.1 failure is the mirror image: an answer compressed past readability, which Anthropic's own
+guidance already names — *"being readable and being concise are different things, and readable
+matters more."* Two further 5.1 deltas bind on mechanism rather than prose: **fewer progress updates
+during long tool runs, more pronounced at higher effort**, so a `fable51_capability_sensitive`
+(xhigh) pane goes quiet while genuinely working and quiet is what our stall/liveness surfaces read
+as stuck; and **whole-file rewrites for small edits**, which makes § File Update Rule
+(INTEGRATE-never-overwrite) and its `backup-before-write` OVERWRITE GUARD *more* load-bearing on
+5.1, not less.
+
 - **Chat.** Focused and brief. Spend the words on the answer; keep caveats and disclaimers short.
   High-level unless depth was asked for.
 - 🚨 **Brevity governs YOUR prose, never a rendered artifact.** When a tool has already rendered a
