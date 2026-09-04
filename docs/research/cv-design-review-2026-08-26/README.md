@@ -33,6 +33,12 @@ Three measurements, all taken on this machine today, carry the argument:
 **The union of the first three is 11 of 11**, and each covers precisely what the others cannot. That
 complementarity *is* the architecture. The fourth row is why no local model is in it.
 
+⚠️ **The cross-check row is now 2/2 rather than 1/2** (2026-09-04): with its centroid arm fixed it
+catches the optical-centering defect as well as the gradient one, still at 0 control false positives.
+The union is unchanged at 11 of 11 — the second detector reaching a defect the first already reached
+is not new recall, it is redundancy, and redundancy is worth exactly what it costs. § 8.1 has the
+build and the numbers that moved with it.
+
 ⚠️ **This table is a correction.** The first version scored three pixels-only defects and reported
 6 of 7. Building the cross-check exposed the reason: the `optical-centering` variant injected an
 *empty* CSS rule, so its render was **SHA-256 identical to the control**. It was a null test item, and
@@ -182,6 +188,15 @@ background outside the circle — count as ink and swamp a 16px glyph. Both fixe
 against the container; mask to the painted shape) and neither is done. Shipping it on would have
 handed the pipeline a confident number with no ground truth behind it.
 
+> ✅ **Both fixed 2026-09-04, and X2 now ships ON** — measured, not argued: 0 findings on the control
+> against the old arm's 2, and the defect caught at **−2.00 px** against the corpus's stated
+> magnitude of "~2px left", with a band of 1.25 px *derived* from the capture rather than chosen.
+> The old arm's artifact is the clearest possible statement of defect (a): it reported 1.2 px and
+> 2.2 px left, **identically on the control and on the defect page, on all thirteen pages**. See
+> § 8.1 As built. What the fix does *not* buy is the vertical axis — a glyph's ink sits where its
+> font's baseline puts it, measured **+3.23 px on the control** — so that axis abstains by name and
+> routes to the vision layer instead of reporting a true number that means nothing.
+
 ---
 
 ## 3. Local models: no
@@ -327,7 +342,12 @@ Nothing in this list is a model purchase.
 - `corpus/build_corpus.py` — 13-page ground-truth corpus, `detectable_by` split, clean control.
 - `capture.py` — screenshot + full layout/style snapshot in one browser pass, so a pixel finding and a
   DOM finding describe the same frame. sRGB pinned, LCD text off, reduced motion, fonts awaited.
+  Names the browser and writes `run.json`, because a pixel number from another machine is a different
+  number.
 - `detect_dom.py` — nine general design-lint rules with an explicit `INDETERMINATE` verdict.
+- `detect_xcheck.py` + `inkmask.py` — the DOM-vs-pixels comparator, all three arms working.
+- `route.py` — the abstention router (§ 8.1); `profiles.py` — per-app admission and order;
+  `score.py` — the false-positive gate and the rule-admission audit; `report.py` — the per-app view.
 - `bench_local_vlm.py` — the resolution/latency sweep.
 
 **How it reaches a session — a plain CLI, not an MCP server.** A11 checked the assumption and it was
@@ -370,6 +390,47 @@ band.)
 template) is largely a marketing-aesthetics problem; `reso-management-app` (Next 16, React 19,
 Tailwind 4) is mostly design-system conformance, where the deterministic layer does nearly all the
 work; `reso-web-app` (Next 13) sits between. One review harness, three different rule weightings.
+
+*(The stack facts in that sentence are the ones `PIPELINE_SPEC` § 2 C11 measured and found false in
+two of three rows. The weightings below carry the intent and none of the versions, on purpose.)*
+
+### 8.1 As built — 2026-09-04
+
+Items 1 and 2 of the list above are built, X2 is fixed and on, and the weightings exist. Run it with
+`bench/README.md`. What the build changed about this document's own numbers, because a research
+record that quietly inherits its predecessions is the failure § 7 is about:
+
+| | What this document said | What is true after the build |
+|---|---|---|
+| **X2 centroid** | provisional, off, two known defects, "neither is done" | fixed and ON. Control 0.00 px, defect −2.00 px, band 1.25 px derived from the capture. Its vertical axis abstains rather than reporting a font fact as a defect |
+| **X3 gradient contrast** | 4.81:1 left / 1.57:1 right | **the arm was silently dead on a second machine.** It sampled each band's *modal* colour, and a gradient repeats no colour, so 120 identical white glyph pixels outvoted 6,224 unique backdrop ones: it measured white against white and reported nothing. Now samples the median of the non-foreground pixels — 6.15:1 / 1.76:1 on this render, same verdict, and it works on both machines |
+| **T1, the abstention queue** | "**0** on the corpus today", which is what justified cutting S4 to ~20 lines | **12 crops over 13 pages.** Fixing X2 added one honest abstention per page. The cut still stands — twelve questions of one class are not twelve questions — but its premise does not, and the collapse and fold now have something real to hold |
+| **The false-positive claim** | a 37.5 % bound against a ~20 % cliff | a gate that exits non-zero, plus a rate that is **withheld by its denominator** until 16 clean pages exist. 11/11 screenable defects caught, 0 control findings, 0 population drift |
+| **Rule count** | 9 DOM rules + 3 cross-check arms | the same rules, each now carrying the § 1.4 admission declaration and audited against its own behaviour. One rule — `xcheck-zero-ink` — is reported NOT ADMITTED: no fixture, has never caught anything |
+
+Three decisions worth recording because each could have gone the other way:
+
+**A weighting is an admission and an order, never a multiplier.** The Cut list bans any score, grade,
+rank or rating, and a per-rule multiplier is the natural way to reintroduce one — multiply severity,
+sum over findings, and a page quality number exists that no measurement supports. So a profile may
+only decide whether a family runs (admit / abstain / exclude, with its reason carried into the
+report) and in what order a reader meets it.
+
+**The app whose review IS conformance is the app that cannot currently produce a conformance
+verdict.** C11 measured `reso-management-app`'s Tailwind half emitting utilities from no declared
+token map. Weighting the K family up there without that fact would have produced the most confident
+garbage in the programme, so the profile weights it first *and* forces it to abstain.
+
+**The router folds a question rather than buying an image, on a derived threshold.** A subject whose
+longest side is under 44 CSS px — the smallest thing our own rules say a person must be able to hit —
+cannot be resolved inside a 1280 px frame and earns its own 16-token crop; anything larger is named
+in the gestalt call's caption and costs no second block. That keeps the crop path honest without
+pre-judging U4, which is the probe that would actually settle whether crops help.
+
+Still unbuilt from the list above: order-randomised comparison (3), motion (4), saliency (5), and —
+the one that matters most — **B0, the mined clean corpus**, which is what would convert the
+false-positive claim from a bound into a measurement. `score.py --clean-set` is the socket it plugs
+into, and the rate unlocks itself at n ≥ 16 with no code change.
 
 ---
 
