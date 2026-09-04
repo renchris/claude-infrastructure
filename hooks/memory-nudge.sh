@@ -309,7 +309,26 @@ if [ "$MEASURE_OK" -eq 1 ] && [ -n "$MEM" ] && [ -f "$MEM" ]; then
       BUDGET_CTX="🚨 MEMORY INDEX OVER ITS LINE LIMIT — ${LINES} lines vs the ${LINE_LIMIT}-line loader limit (over by $(( LINES - LINE_LIMIT ))).${ROTATE_NOTE} The loader drops the TAIL silently: everything after line ${LINE_LIMIT} did not load this session and no reader can tell, and anything you append now is written into that invisible tail. This is the CARDINALITY cap, not the size one — the index is ${TOTAL}/${LIMIT} chars, so shortening hooks cannot reach it; only removing a line can. BEFORE appending anything new: archive under the DURABILITY criterion (run /compact-memory; its lossy half is PROPOSE-ONLY — show diffs, get approval). If you must record something now, apply ONE-IN-ONE-OUT: archive an entry in the same edit that adds one. ${FILING}"
     else
       HEADROOM=$(( LIMIT - TOTAL ))
+      # THE ADVERTISED BUDGET MAY NEVER EXCEED WHAT THE GATE WILL GRANT. HEADROOM answers "how much
+      # room is left in the INDEX"; the per-entry cap answers "how long may ONE LINE be", and
+      # hooks/lib/memory-index-budget.sh refuses on the second (dim=entry) whatever the first says.
+      # On a young index the two are far apart — 20000 chars of headroom against a 300-unit line —
+      # so the unclamped form told a writer to compose a hook the append-time gate then refused,
+      # with the advisory and the gate disagreeing about the same write. The smaller of the two is
+      # the only number that is true of both.
+      #
+      # Both terms carry the SAME prefix subtraction because LINE_BUDGET is a HOOK budget, not a
+      # line budget: the message spends it after "keep its hook <=", and a line costs PFX_AVG
+      # before a word of content. Clamping to the raw cap would still over-advertise by exactly
+      # that prefix. Read via mim_entry_limit rather than spelled here — one literal, three readers
+      # (tests/memory-nudge-budget.bats pins that no fourth spelling appears).
+      ENTRY_CAP=""
+      if [ "$MEASURE_OK" -eq 1 ]; then ENTRY_CAP=$(mim_entry_limit) || ENTRY_CAP=""; fi
       LINE_BUDGET=$(( HEADROOM - PFX_AVG ))
+      if [ -n "$ENTRY_CAP" ]; then
+        ENTRY_BUDGET=$(( ENTRY_CAP - PFX_AVG ))
+        [ "$ENTRY_BUDGET" -lt "$LINE_BUDGET" ] && LINE_BUDGET="$ENTRY_BUDGET"
+      fi
       [ "$LINE_BUDGET" -lt 0 ] && LINE_BUDGET=0
       SLOTS=$(( MAXN - N ))
       # RUNWAY vs CEILING. MAXN/SLOTS derive from HOOK_TARGET, so they answer
