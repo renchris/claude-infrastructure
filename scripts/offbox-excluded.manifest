@@ -287,3 +287,57 @@ tests/postland-verify-bisect-bound.bats
 # NOT a red — it named zero failing tests. It is here because a suite measured in TENS OF MINUTES
 # cannot be part of a per-commit second opinion, which is a statement about cost, not correctness.
 tests/postland-verify.bats
+
+# ── 2026-09-05: FIFTH SEEDING — and the triage says the LIST IS NOT THE BLOCKER ──────────────────
+# backlog 8fd1919f7769 ("T1H can never fire … triage per suite: machine-coupled vs genuinely
+# broken"). Every entry below carries TWO measurements, not one, because a single off-box red cannot
+# tell the two classes apart and this file's whole contract is that an entry is a measurement:
+#   (1) OFF-BOX, four consecutive folds — runs 33883119356 · 33921137472 · 33931675582 ·
+#       33944444105 (2026-09-04T14:20Z → 2026-09-05T04:24Z, 537-541 suites each).
+#   (2) ON THIS BOX, through the producer's OWN runner and therefore the producer's own environment
+#       axes (`scripts/offbox-run.sh suites <paths>`: empty $HOME, env -i, LC_ALL=C, TERM=dumb).
+#       That is the discriminator the admission lint's header names — it reproduces the ENVIRONMENT
+#       axes and not the MACHINE axes, so a suite that is red off-box and GREEN here has failed on
+#       an axis the runner has and this desk does not.
+#
+# 🚨 THE RESULT MATTERS MORE THAN THE FOUR ENTRIES, AND IT CONTRADICTS THE ROW THAT ASKED FOR THEM.
+# Nine suites were red in run 33944444105. Under (2), FIVE of them are red HERE too, deterministically
+# — typed-send-lint (3), validate-bash-differential (6), goal-inert-watch (1), bash-audit-attrib (3),
+# deploy-link-parity (2). They are not machine-coupled and they do not belong in this file; they are
+# real defects in the tree, and the reason nobody is looking at them is that the ON-BOX corpus (T1)
+# is starved, not that the off-box one is noisy. So adding the four lines below takes the fold from
+# 9 red + 1 non-verdict to 5 red, and T1H STILL cannot fire. Excluding the rest would be curating a
+# green, which is the one thing this file's header forbids. The remaining five are recorded, with
+# their reproductions, in docs/research/offbox-red-triage-2026-09-05.md.
+#
+# NOT ADDED, deliberately: tests/live-session-registry-atomic.bats — red in 2 of the 4 folds and
+# GREEN here at 15/15. It was DELISTED 2026-08-21 against a three-census bar; re-admitting a suite
+# on a 2-of-4 flake would undo that on weaker evidence than removed it. Its off-box failure emits
+# `not ok 8` and then `ok 8` with "Executed 16 instead of expected 15" — a bats job-control artifact
+# at `sleep 30 & … kill … wait`, not a claim about the code. Re-check it on a census, not on a fold.
+
+# HINT (not verified): reso-resume-one's argv layout is asserted against a live fleet's binaries.
+# off-box red 4/4 (notok=1, case 4 "layout: hands reso-resume-one <acct> <worktree> <sid>");
+# 2026-09-05 on this box through offbox-run.sh: GREEN 4/4 in 1s.
+tests/cc-resume-field-order.bats
+# MEASURED, and the cause is NAMED — this is not a hint. off-box red 4/4 (notok=1, case 26); on this
+# box GREEN 27/27 in 101s. The failing case asserts its inline defect prints exactly `FALSE`, and the
+# runner's output is `cat: stdout: Broken pipe` then `FALSE`: GNU coreutils' cat DIAGNOSES EPIPE on
+# stderr, BSD cat is silent. The verdict off-box is a claim about which cat the image ships, never
+# about our tree. Cure (a) — teach the case to tolerate the diagnostic — is preferred and is why this
+# entry names the mechanism rather than a hint: it is one line away from deletable.
+tests/pipefail-sigpipe-lint.bats
+# HINT (not verified): CF1/CF2/CF3/CF5 assert a Darwin coalition footprint reads `measured` and that
+# the per-process footprint parses as a number — the same machine surface its already-excluded
+# siblings capacity-alarm-launchd-path.bats and capacity-admit.bats sit here for.
+# off-box red 4/4 (notok=4). ⚠ THE LOCAL LEG IS A CUT, NOT A GREEN: on this box it reached 28 ok / 0
+# notok and was CUT at the 300s bound, so measurement (2) ABSTAINS here and the class placement is
+# the argument. Stated rather than rounded up, because a cut is not a green (offbox-run.sh R6).
+tests/capacity-alarm.bats
+# NON-VERDICT 4/4, never a red — it named zero failing tests in any of the four folds. Its TAP body
+# ends `bats: … Terminated: 15 | bats_test_count_validator` after ok 194: the suite SIGTERMs the
+# harness running it. That is the tests/pkill-scope.bats shape exactly (excluded, then cured by
+# ed095d4be giving the runner `trap '' TERM`, then delisted 2026-08-21), and it is excluded on the
+# same ground postland-verify.bats is: a suite that cannot produce a verdict cannot be part of a
+# per-commit second opinion. Delete this line when its own TAP body completes off-box.
+tests/cc-reaper.bats
