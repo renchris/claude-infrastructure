@@ -18,9 +18,14 @@ it, do not re-wrap the command, do not add a second command.
 
 - **exit 0** — the setting is already where it should be, or the script applied and
   verified it. Report the one line it printed and stop.
-- **exit 10** — root is required and this shell cannot elevate (`sudo` is denied by
-  `hooks/validate-bash.sh`, so an agent never can). The block it printed IS the
-  answer. Relay it as-is; never re-prompt the user for the command.
+- **exit 10** — root is required and this shell cannot elevate (`sudo` is denied to an
+  agent by `hooks/validate-bash.sh`, so you never can). The block it printed IS the
+  answer. Relay it as-is; never re-prompt the user for the command, and **never
+  substitute a `sudo …` line of your own** — with no TTY `sudo` cannot prompt at all
+  and dies on "a terminal is required to read the password", which is exactly what
+  happened on 2026-09-03 when the operator pasted one into the `!` surface. `cc-lid`
+  already picked the form that works where it ran; it printed `osascript … with
+  administrator privileges` for a reason.
 - **exit 3 / 4** — pmset was unreadable, or the change did not verify. Say which,
   and do not claim the state changed.
 
