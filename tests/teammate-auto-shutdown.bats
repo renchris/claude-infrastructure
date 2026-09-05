@@ -72,7 +72,33 @@ EOF
 # ── fixtures ─────────────────────────────────────────────────────────────────────────────────────
 iso() { TZ=UTC date -j -f %s "$((NOW-$1))" +%Y-%m-%dT%H:%M:%S 2>/dev/null; }   # <ago> → UTC iso (no Z)
 mkinput() { printf '{"teammate_name":"%s","team_name":"%s","session_id":"%s","cwd":"%s"}' "$1" "$2" "$3" "$4"; }
-hookrun()  { printf '%s' "$(mkinput "$1" "$2" "$3" "$4")" | "$H"; }            # pipe payload to the hook
+# Pipe the payload to the hook — and return only once the hook's DETACHED child has EXITED,
+# ordered on that child's own lifetime rather than on a clock.
+#
+# The hook emits its verdict, then does the real work (pane close, worktree remove) in
+# `( … ) >/dev/null 2>&1 &` and exits, so every artifact this suite asserts on is written by a
+# process that OUTLIVES the command the test just ran. The old remedy for that was a bounded poll
+# (`wait_for`, 60 × 0.05s = a 3-second ceiling), which is a wall-clock guess sized on an idle box —
+# the third load channel LOAD_INSENSITIVE_VERIFY_V2 §3 names, and §5 forbids curing by enlarging.
+#
+# fd 9 is the signal, and it needs no cooperation from the hook: a redirection is a real inherited
+# descriptor, so the detached subshell keeps a copy of the write end even though it sends its own
+# stdout and stderr to /dev/null. `cat` therefore sees EOF at exactly one moment — when the hook AND
+# every child it detached have closed it. There is no ceiling to breach under load; and a child that
+# never writes its artifact still ENDS the wait, so the assertion after the call fails for the right
+# reason instead of hanging. The negative assertions gain from the same order: `[ ! -e … ]` after a
+# hookrun now means "never spawned", not "not yet flushed".
+# The hook's rc travels on DISK, not in PIPESTATUS: bats installs a DEBUG trap, and a trap fires
+# between the pipeline and the next command, so ${PIPESTATUS[1]} reads EMPTY on the bare-call path
+# (`return: : numeric argument required`) while reading correctly under `run`. The `if` keeps
+# errexit off the failing arm, so a non-zero hook still records its own code.
+hookrun()  {
+  local _rcf="$D/.hookrun.rc"; rm -f "$_rcf"
+  printf '%s' "$(mkinput "$1" "$2" "$3" "$4")" \
+    | { if "$H" 9>&1; then printf 0 > "$_rcf"; else printf '%s' "$?" > "$_rcf"; fi; } \
+    | cat
+  return "$(cat "$_rcf" 2>/dev/null || printf 127)"
+}
 
 # a last assistant turn <ago>s before NOW into <sid> (overwrites the transcript)
 tx()  { printf '{"type":"assistant","timestamp":"%s.000Z","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}\n' "$(iso "$2")" > "$D/proj/slug/$1.jsonl"; }
@@ -85,7 +111,11 @@ reg() { printf '[{"name":"t","paneUUID":"%s","account":"next","cwd":"%s","pid":%
 teamcfg() { mkdir -p "$HOME/.claude/teams/$1"; printf '{"members":[{"name":"%s","tmuxPaneId":"%s"}]}' "$2" "$3" > "$HOME/.claude/teams/$1/config.json"; }
 # TSV member→worktree (so WORKTREE resolves); args: team member worktree
 worktreetsv() { mkdir -p "$HOME/.claude/teams/$1"; printf '%s\t%s\n' "$2" "$3" > "$HOME/.claude/teams/$1/worktrees.tsv"; }
-wait_for() { local i=0; while [ ! -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i=$((i+1)); done; [ -e "$1" ]; }
+# The artifact is already on disk: `hookrun` returns only after the detached child that writes it
+# has exited. So this is an ASSERTION, with no bound of its own to breach. It keeps its name because
+# ~30 call sites read as "the thing the detached close was supposed to produce", and the whole point
+# of the change is that not one of them needs a ceiling any more.
+wait_for() { [ -e "$1" ]; }
 
 # (i) unresolved WORKTREE → DEFER (no close), then SURFACE + page after MAX_DEFERS — never an ungated close
 # ⚠ THE Nth EVENT ACTS — it does not defer an Nth time and wait for an (N+1)th.
@@ -124,7 +154,6 @@ wait_for() { local i=0; while [ ! -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i
   [[ "$output" != *'"continue": false'* ]] || false # NOT closed (no turn-stop emitted)
   [ -e "$D/notify-calls.log" ]                       # surfaced to the desk
   grep -q "operator-adopted" "$LOGF"
-  sleep 0.3
   [ ! -e "$D/tmux-calls.log" ]                        # the detached close was never spawned
 }
 
@@ -157,7 +186,6 @@ wait_for() { local i=0; while [ ! -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i
   [[ "$output" != *'"continue": false'* ]] || false  # NOT closed
   [ -e "$D/notify-calls.log" ]                        # surfaced to the desk
   grep -q "UNREADABLE" "$LOGF"
-  sleep 0.3
   [ ! -e "$D/tmux-calls.log" ]                        # the detached close was never spawned
 }
 
@@ -186,7 +214,6 @@ _lib_absent_fixture() {  # <sid> <team> <member> <pane> → adopted-looking team
   [[ "$output" != *'"continue": false'* ]] || false  # the turn is NOT stopped
   grep -q "presence UNPROVABLE" "$LOGF"
   [ -e "$D/notify-calls.log" ]                       # surfaced to the desk
-  sleep 0.3
   [ ! -e "$D/tmux-calls.log" ]                       # the detached close was never spawned
 }
 
@@ -200,7 +227,6 @@ _lib_absent_fixture() {  # <sid> <team> <member> <pane> → adopted-looking team
   [ "$status" -eq 0 ]
   [[ "$output" != *'"continue": false'* ]] || false
   [ -e "$D/notify-calls.log" ]
-  sleep 0.3
   [ ! -e "$D/tmux-calls.log" ]
 }
 
@@ -291,7 +317,6 @@ _lib_absent_fixture() {  # <sid> <team> <member> <pane> → adopted-looking team
   run hookrun "$member" "$team" "$sid" "$wt"
   [ "$status" -eq 0 ]
   grep -q "operator-adopted" "$LOGF"
-  sleep 0.3
   TD="$HOME/.claude/watchdog/teardown"
   [ ! -e "$TD" ] || [ -z "$(ls -A "$TD" 2>/dev/null)" ]
 }
@@ -303,7 +328,6 @@ _lib_absent_fixture() {  # <sid> <team> <member> <pane> → adopted-looking team
   hookrun "$member" "$team" "$sid" /nonexistent-cwd >/dev/null   # defer
   hookrun "$member" "$team" "$sid" /nonexistent-cwd >/dev/null   # SURFACE + page, no close
   grep -q "SURFACE" "$LOGF"
-  sleep 0.3
   TD="$HOME/.claude/watchdog/teardown"
   [ ! -e "$TD" ] || [ -z "$(ls -A "$TD" 2>/dev/null)" ]
 }
@@ -313,7 +337,10 @@ _lib_absent_fixture() {  # <sid> <team> <member> <pane> → adopted-looking team
   # genuine crash of whatever session the reader next asks about — it must never be written.
   local team=teamP member=wkrNoSid pane=%57 wt="$D/wtP"
   mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
-  printf '{"teammate_name":"%s","team_name":"%s","cwd":"%s"}' "$member" "$team" "$wt" | "$H" >/dev/null
+  # the ONE payload `hookrun` cannot build (it omits session_id on purpose), so it carries the
+  # rendezvous inline: fd 9 into `cat` orders this on the detached child exactly as hookrun does.
+  printf '{"teammate_name":"%s","team_name":"%s","cwd":"%s"}' "$member" "$team" "$wt" \
+    | { "$H" 9>&1; } | cat >/dev/null
   wait_for "$D/tmux-calls.log"
   TD="$HOME/.claude/watchdog/teardown"
   wait_for "$TD/$pane.json"
@@ -397,10 +424,11 @@ txtoolresult() { printf '{"type":"user","timestamp":"%s.000Z","message":{"role":
 # It still fails for the right reason: a reap that never happens leaves the line unwritten, wait_log
 # returns non-zero, and the test is red before `gone` is ever reached.
 #
-# ⚠ wait_for (:88) STILL CARRIES THE SHAPE and is deliberately untouched, because no such signal
-# exists for it: it waits for a stub's call log to APPEAR, so the artifact IS the completion record
-# and there is nothing earlier to wait on. Removing its clock means making the hook's DETACHED child
-# waitable, which is its own change and is still open on the same backlog row.
+# wait_for carried the same shape until 2026-09-05 and is now clockless too. The blocker recorded
+# here was that the artifact IS the completion record with nothing earlier to wait on — true, and
+# beside the point: the DETACHED CHILD was made waitable instead, by handing it an inherited fd
+# whose EOF is the completion record the artifact could not be (see `hookrun`). Nothing in the hook
+# changed to allow it.
 gone() { [ ! -e "$1" ]; }
 # BOUNDED POLL FOR A LOG LINE — the same remedy 366dadddb gave the shared-cwd guard, now given to
 # the SHAPE rather than to one arm. `wait_gone` bounds the wait on the DIRECTORY disappearing, but
@@ -409,7 +437,31 @@ gone() { [ ! -e "$1" ]; }
 # On an idle desk that window is invisible; inside the land gate's smoke it is not — this suite went
 # RED there and GREEN on the exoneration re-run, which ship-land correctly refuses to call a flake.
 # The assertion is UNCHANGED and still required; only the guess about how long to wait is gone.
-wait_log() { local i=0; while [ "$i" -lt 100 ]; do if grep -qF "$1" "$LOGF"; then return 0; fi; sleep 0.1; i=$((i+1)); done; grep -qF "$1" "$LOGF"; }
+# Was a 100 x 0.1s poll for the flush: the reap writes this line AFTER unlinking the directory, so
+# a grep placed straight after the old `wait_gone` read a window in which the tree was already gone
+# and the line not yet written. `hookrun` now returns only once that whole child has EXITED, so the
+# window is closed by ORDER and the poll had nothing left to wait for. The assertion is unchanged
+# and still required: a reap that never happens leaves the line unwritten and this returns non-zero.
+wait_log() { grep -qF "$1" "$LOGF"; }
+
+# THE ORDER ITSELF, pinned — the control for `hookrun`'s rendezvous, and the case that is RED
+# without it. The former ceiling was 3s (60 × 0.05s), so a grace of 4 puts the detached child's
+# completion strictly beyond ANY constant the old poll could have carried: a bounded poll returns
+# non-zero and the assertion below fails, while an ordered wait cannot fail no matter how slow the
+# box gets. The 4 here is an INPUT to the subject, not a bound on an assertion — this test asserts
+# with no ceiling of its own, which is the property being pinned.
+@test "detached close is ordered, not timed: its artifact exists the instant hookrun returns" {
+  local sid=sidORD team=teamORD member=wkrOrdered pane=%77 wt="$D/wtORD"
+  mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
+  reg "$sid" PANE-ORD "$wt" 3600
+  tx "$sid" 9000
+  export TEAMMATE_CLOSE_GRACE_S=4                    # > the 3s ceiling the old poll carried
+  run hookrun "$member" "$team" "$sid" "$wt"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"continue": false'* ]] || false
+  [ -e "$D/tmux-calls.log" ]                         # NOT wait_for: no poll, no ceiling, no retry
+  grep -q "kill-pane -t %77" "$D/tmux-calls.log"
+}
 
 # (A) NAME leg — a worktree named for the member resolves from git itself, and IS removed.
 #     POSITIVE CONTROL for the ownership gate: proves it is not merely "never remove".
@@ -443,16 +495,11 @@ wait_log() { local i=0; while [ "$i" -lt 100 ]; do if grep -qF "$1" "$LOGF"; the
   [ "$status" -eq 0 ]
   grep -q "Auto-shutdown idle teammate: $member" "$LOGF"     # resolved: gates ran, reap proceeded
   grep -q "is SHARED by 2 members" "$LOGF"                   # and it was classified as shared
-  # BOUNDED POLL, not a fixed sleep — the only timing assumption in this suite, and it was load-
-  # sensitive. The reap writes this line asynchronously; `sleep 0.5` holds on an idle desk and fails
-  # inside the land gate's smoke, which runs 74 suites concurrently (observed 2026-08-15: RED here,
-  # then GREEN on the gate's own exoneration re-run — intermittence with no behaviour change, which
-  # ship-land correctly refuses to treat as a flake). Nothing is weakened: the assertions below are
-  # byte-identical and still REQUIRE the line: the poll only replaces a guess about how long to wait.
-  for ((_i = 0; _i < 100; _i++)); do
-    if grep -q "worktree kept (shared, not owned" "$LOGF"; then break; fi
-    sleep 0.1
-  done
+  # This line is written asynchronously by the reap, and reading it used to need a guess about how
+  # long to wait — first `sleep 0.5`, which held on an idle desk and went RED inside the land gate's
+  # 74-suite smoke (2026-08-15, GREEN on the gate's own exoneration re-run), then a 100 x 0.1s poll.
+  # Neither is needed now: `hookrun` returns only after the child that writes it has exited, so the
+  # assertions below read a settled log. They are byte-identical and still REQUIRE the line.
   [ -d "$shared" ]                                           # ← the guard: tree SURVIVES the reap
   grep -q "worktree kept (shared, not owned" "$LOGF" || false
   # `|| false` REVIVES the negation: bash exempts a `!`-inverted command from errexit, so without it
@@ -607,7 +654,6 @@ permitting_guard() {
   run hookrun "$member" "$team" sidsharedok "$shared"
   [ "$status" -eq 0 ]
   wait_for "$D/it2-calls.log"
-  sleep 0.3
   grep -q "✓ closed pane $pane" "$LOGF"
   grep -q "worktree kept (shared, not owned by $member)" "$LOGF"
   [ -d "$shared" ]
@@ -866,7 +912,6 @@ EOF
   _cik 0; _it2_says "PANE-Z" 0                # enumerator still lists it after a 'successful' close
   _close_run PANE-Z
   wait_for "$D/it2-calls.log"
-  sleep 0.3
   grep -q "STILL PRESENT" "$LOGF"
   run grep -c "✓ closed pane" "$LOGF"
   [ "$output" -eq 0 ]
@@ -876,7 +921,6 @@ EOF
   _cik 0; _it2_says "PANE-Z" 0
   _close_run PANE-Z
   wait_for "$D/it2-calls.log"
-  sleep 0.3
   [ ! -e "$HOME/.claude/watchdog/teardown/PANE-Z.json" ]
   [ ! -e "$HOME/.claude/watchdog/teardown/sidT.json" ]
 }
@@ -885,7 +929,6 @@ EOF
   _cik 0; _it2_says "PANE-Z" 1                # close returns rc 1 (the live iTerm2-connect failure)
   _close_run PANE-Z
   wait_for "$D/it2-calls.log"
-  sleep 0.3
   grep -q "pane close FAILED" "$LOGF"
   [ ! -e "$HOME/.claude/watchdog/teardown/PANE-Z.json" ]
 }
@@ -894,7 +937,6 @@ EOF
   _cik 0; _it2_says "SOME-OTHER-PANE" 0       # enumerator readable, our pane genuinely gone
   _close_run PANE-Z
   wait_for "$D/it2-calls.log"
-  sleep 0.3
   grep -q "✓ closed pane PANE-Z" "$LOGF"
   [ -e "$HOME/.claude/watchdog/teardown/PANE-Z.json" ]
 }
@@ -918,7 +960,6 @@ EOF
   _cik 0; _it2_says "PANE-Z" 1                # close returns rc 1: the actuator could not act
   _close_run PANE-Z
   wait_for "$D/it2-calls.log"
-  sleep 0.3
   grep -q "pane close FAILED" "$LOGF"
   [ -e "$D/notify-calls.log" ]
   # The FINGERPRINT is damping state and never reaches the wire — assert the operator-readable
@@ -932,7 +973,6 @@ EOF
   _cik 0; _it2_says "PANE-Z" 0                # enumerator still lists it after a 'successful' close
   _close_run PANE-Z
   wait_for "$D/it2-calls.log"
-  sleep 0.3
   grep -q "STILL PRESENT" "$LOGF"
   [ -e "$D/notify-calls.log" ]
   grep -q "SURVIVED a close that reported success" "$D/notify-calls.log"
@@ -944,7 +984,6 @@ EOF
   _cik 0; _it2_says "SOME-OTHER-PANE" 0       # the real success path
   _close_run PANE-Z
   wait_for "$D/it2-calls.log"
-  sleep 0.3
   grep -q "✓ closed pane PANE-Z" "$LOGF"
   [ ! -e "$D/notify-calls.log" ]
 }
@@ -953,7 +992,6 @@ EOF
   _cik 0; _it2_says "PANE-Z" 66
   _close_run PANE-Z
   wait_for "$D/it2-calls.log"
-  sleep 0.3
   grep -q "identity pin REFUSED" "$LOGF"
   [ ! -e "$D/notify-calls.log" ]
 }
@@ -1035,7 +1073,6 @@ tx_wrote_done() { # <sid> <written-path>
   [[ "$output" == *'"continue": false'* ]] || false             # the turn-stop that precedes the close
   grep -q "NOTHING this member wrote is" "$LOGF"
   wait_for "$D/it2-calls.log"
-  sleep 0.3
   grep -q "session close" "$D/it2-calls.log"
   grep -q "✓ closed pane $pane" "$LOGF"
   # PRISTINE-TREE PROOF: before this commit reap-guard's own record for this decision was a DEFER on
@@ -1056,7 +1093,6 @@ tx_wrote_done() { # <sid> <written-path>
   git -C "$wt" update-ref "refs/wip/$member/LAST" HEAD
   tx_wrote_done "$sid" "$wt/sibling.txt"                        # the dirty file IS this member's
   for _ in 1 2 3 4; do hookrun "$member" "$team" "$sid" "$wt" >/dev/null 2>&1 || true; done
-  sleep 0.3
   grep -q "own files are among the dirty ones" "$LOGF"
   # BEHAVIOUR ONLY — deliberately NO assertion on `dirty-tree-mine`, the reason_kind this commit
   # introduces. A control that keys on a string the fix invents can only fail before and pass after,
@@ -1075,7 +1111,6 @@ tx_wrote_done() { # <sid> <written-path>
   git -C "$wt" update-ref "refs/wip/$member/LAST" HEAD
   rm -f "$D/proj/slug/$sid.jsonl"                               # session_dirty_mine rc 2 ⇒ unknown
   for _ in 1 2 3 4; do hookrun "$member" "$team" "$sid" "$wt" >/dev/null 2>&1 || true; done
-  sleep 0.3
   if [ -s "$D/it2-calls.log" ]; then
     echo "an UNATTRIBUTABLE tree licensed a close:"; cat "$D/it2-calls.log"; false
   fi
@@ -1096,7 +1131,6 @@ tx_wrote_done() { # <sid> <written-path>
   run hookrun "$member" "$team" "$sid" "$wt"
   [ "$status" -eq 0 ]
   wait_for "$D/it2-calls.log"
-  sleep 0.3
   grep -q "✓ closed pane $pane" "$LOGF"
   rec="$(find "$D/reap-records" -name "reap-$member-*.json" | head -1)"
   [ "$(jq -r '.reason_kind' "$rec")" = "shared-no-refs" ]
@@ -1118,7 +1152,6 @@ tx_wrote_done() { # <sid> <written-path>
   run hookrun "$member" "$team" "$sid" "$wt"
   [ "$status" -eq 0 ]
   wait_for "$D/it2-calls.log"
-  sleep 0.3
   grep -q "✓ closed pane $pane" "$LOGF"
   # Pristine-tree behaviour was the inverse: the shutdown_request re-armed a 6h adoption hold against
   # the very close it requested. Assert the hold did NOT fire, on both belts.
@@ -1139,7 +1172,6 @@ tx_wrote_done() { # <sid> <written-path>
   run hookrun "$member" "$team" "$sid" "$wt"
   [ "$status" -eq 0 ]
   [[ "$output" != *'"continue": false'* ]] || false
-  sleep 0.3
   if [ -s "$D/it2-calls.log" ]; then
     echo "an ADOPTED pane was closed:"; cat "$D/it2-calls.log"; cat "$LOGF"; false
   fi
@@ -1194,7 +1226,6 @@ EOF
   chmod +x "$D/bin/it2"
   _close_run PANE-Z
   wait_for "$D/it2-calls.log"
-  sleep 0.3
   grep -q "identity pin REFUSED" "$LOGF"
   [ ! -e "$HOME/.claude/watchdog/teardown/PANE-Z.json" ]
   run grep -c "✓ closed pane" "$LOGF"
@@ -1216,7 +1247,6 @@ EOF
   chmod +x "$D/bin/it2"
   _close_run PANE-Z
   wait_for "$D/it2-calls.log"
-  sleep 0.3
   grep -q "✓ closed pane PANE-Z" "$LOGF"
   run grep -c "STILL PRESENT" "$LOGF"
   [ "$output" -eq 0 ]
