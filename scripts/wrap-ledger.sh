@@ -730,6 +730,44 @@ _resolve_decide_bin() {
 # The open/class predicate is cc-decide's (`list --open --class C --json`), not ours — this asks the
 # ONE question the packet cannot answer for itself: is it MINE?
 BLOCKED=0; BLOCKED_SRC="skip"; BLOCKED_WHAT=""
+# ── FILED, UNDRIVEN (2026-09-05, BACKLOG_ZERO §5 — the filing-vs-driving generator) ─────────────
+# FILED_MINE = OPEN backlog rows this session ADDED (`.filedBy == $SID`) that carry neither a
+# `whyNotNow` (the hand-off record) nor a `condition` (a mechanical, re-measured standing state).
+# CLOSED_MINE = rows this session closed (`.closedSession == $SID`) — a report term, never a rung.
+#
+# WHY THIS IS A RUNG. Until today the ONLY backlog term in this certificate was YOURS — rows this
+# session FILED as operator steps — and it resolves to 👤 "My side is done". A row filed as agent
+# work counted for nothing in either direction, and a row closed counted for nothing at all: the
+# ledger could reward a filing with a done-shaped rung and could never credit a close. Meanwhile
+# three Stop gates discharge on a WRITTEN ROW (completion-assert D1 `:774`, dispatch-assert
+# `discharged_since` arm 1) — so filing was the harness's compliance action and closing was
+# optional. Measured 2026-09-04: 92 sessions filed a `needs` row in 14 days; the drain lane itself
+# filed 105 and closed 7 across 49 links (BACKLOG_ZERO §1.1a). This term puts the filer's own rows
+# back into the filer's own certificate: an add with no stated reason you could not drive it IS
+# your loose end until you drive it, close it, or say why (`--why-not-now`, which folds onto the row).
+#
+# Fail-OPEN like YOURS: unresolvable session ⇒ none; unreadable store ⇒ error; both count 0 and
+# never manufacture a 🔧. Reads `list --all --json` through the same resolved binary (stubbable).
+FILED_MINE=0; FILED_SRC="skip"; CLOSED_MINE=0
+count_filed_undriven() {
+  if [ -z "$SID" ]; then FILED_MINE=0; FILED_SRC="none"; return 0; fi
+  local bin json f c
+  bin="$(_resolve_backlog_bin)" || { FILED_SRC="error"; return 0; }
+  command -v jq >/dev/null 2>&1 || { FILED_SRC="error"; return 0; }
+  json="$(_bounded "${WRAP_BACKLOG_TIMEOUT_S:-5}" "$bin" list --all --json 2>/dev/null)" \
+    || { FILED_SRC="error"; return 0; }
+  f="$(printf '%s' "$json" | jq -r --arg sid "$SID" \
+        '[ .[] | select(.status == "open" and (.filedBy // "") == $sid
+                        and (.whyNotNow // "") == "" and (.condition // "") == "") ] | length' 2>/dev/null)" \
+    || { FILED_SRC="error"; return 0; }
+  c="$(printf '%s' "$json" | jq -r --arg sid "$SID" \
+        '[ .[] | select(.status == "done" and (.closedSession // "") == $sid) ] | length' 2>/dev/null)" \
+    || c=0
+  case "$f" in ''|*[!0-9]*) FILED_SRC="error"; return 0 ;; esac
+  case "$c" in ''|*[!0-9]*) c=0 ;; esac
+  FILED_MINE="$f"; CLOSED_MINE="$c"; FILED_SRC="$SID_SRC"
+}
+
 count_blocking_decisions() {
   if [ -z "$SID" ]; then BLOCKED=0; BLOCKED_SRC="none"; return 0; fi
   local bin json line n what
@@ -1395,7 +1433,12 @@ else
     fi
   else
   if [ -n "$TRUNK" ]; then compute_live_layer; count_operator_steps; fi
-  if [ -z "$TRUNK" ]; then
+  count_filed_undriven
+  if [ "$FILED_MINE" -gt 0 ]; then
+    # Outranks 🚀 and 👤 (both assert "my side is done"): a row you filed and could not say why you
+    # did not drive is YOUR open work, whatever the tree says. Same rank as the custody 🔧 above.
+    RUNG="🔧"; READOUT="🔧 Loose ends — ${FILED_MINE} backlog row(s) you filed this session are still open with no reason you could not drive them (cc-backlog list --open --json | jq '.[]|select(.filedBy==\"${SID}\")'); drive each (then \`cc-backlog done <id> --evidence …\`), drop it (\`done --evidence \"dropped: <why>\"\`), or hand it off by re-running the same add with \`--why-not-now \"<reason>\"\`."
+  elif [ -z "$TRUNK" ]; then
     # No trunk resolved ⇒ UNLANDED=0 is a DEFAULT, not a measurement: nothing was ever compared, so
     # every arm below that says "landed" would be asserting a fact this run never read. This rung
     # used to sit BELOW the absent-DoD arm, whose readout opens "✅ Clean & landed" — so the abstain
@@ -1507,6 +1550,9 @@ emit_machine() {
   printf 'CUSTODY_UNK=%s\n' "$CUSTODY_UNK"
   printf 'YOURS=%s\n' "$YOURS"
   printf 'YOURS_SRC=%s\n' "$YOURS_SRC"
+  printf 'FILED_MINE=%s\n' "$FILED_MINE"
+  printf 'FILED_SRC=%s\n' "$FILED_SRC"
+  printf 'CLOSED_MINE=%s\n' "$CLOSED_MINE"
   printf 'BLOCKED=%s\n' "$BLOCKED"
   printf 'BLOCKED_SRC=%s\n' "$BLOCKED_SRC"
   printf 'GOAL_SRC=%s\n' "$GOAL_SRC"
@@ -1602,6 +1648,13 @@ emit_full() {
     *)     yours_disp="$( [ "$YOURS" -gt 0 ] && printf '%s operator-only step(s) filed this session, UNRUN — see the OPERATOR block' "$YOURS" || printf 'none filed this session' )" ;;
   esac
   printf 'Yours (operator): %s\n' "$yours_disp"
+  local filed_disp; case "$FILED_SRC" in
+    none)  filed_disp="unknown — session id unresolvable (not counted)" ;;
+    error) filed_disp="unknown — backlog unreadable (not counted)" ;;
+    skip)  filed_disp="not counted (a worse rung governs)" ;;
+    *)     filed_disp="filed-undriven ${FILED_MINE} · closed ${CLOSED_MINE} (this session's own net)" ;;
+  esac
+  printf 'Backlog (mine):   %s\n' "$filed_disp"
   # The top rung's own row. `skip` is unreachable here by construction (⛔ outranks everything, so
   # it is always computed) — the arm stays so an unreadable store can never render as "none open".
   local blocked_disp; case "$BLOCKED_SRC" in

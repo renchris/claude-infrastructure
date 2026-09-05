@@ -1827,3 +1827,27 @@ dbl_setup() { # <tag> → echoes the repo cwd, with both hooks pointed at one fi
        '$(mkfix "Done. All 12 tests pass, shellcheck clean. Landed at abc1234.")' '$w' | bash '$HOOK'"
   [ "$status" -eq 0 ]; fired "$output"
 }
+
+# ── FILED, UNDRIVEN (2026-09-05, BACKLOG_ZERO §5): a done-claim over rows THIS session filed as agent
+# work and never drove, closed, or handed off. Pre-fix the hook read no FILED_MINE field, so the
+# ledger's 🔧 arrived with no contradicting fact and a ✅ close over a bare `cc-backlog add` abstained
+# "ledger-clean". Stubbed through the same WRAP_LEDGER_BIN seam as the ⛔ cases above.
+@test "🔧 filed-undriven: a confident done over FILED_MINE=1 ⇒ FIRE, naming the three dispositions" {
+  WRAP_LEDGER_BIN="$(mkledger fu1 DIRTY=0 DIRTY_N=0 UNLANDED=0 AHEAD=0 REMAINDER=0 \
+                              TRUNK=origin/main BLOCKED=0 CUSTODY_OPEN=0 FILED_MINE=1 RUNG=🔧)"; export WRAP_LEDGER_BIN
+  run run_ca "$(mkfix "✅ Complete & live on trunk — landed, all green, nothing unsaved.")" \
+             "$BATS_TEST_TMPDIR" "fu-1"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | /usr/bin/grep -q '1 backlog row(s) YOU filed this session'
+  printf '%s' "$output" | /usr/bin/grep -q -- '--why-not-now'
+  printf '%s' "$output" | /usr/bin/grep -q 'a row is not a disposition'
+}
+
+@test "🔧 filed-undriven CONTROL: the SAME close over FILED_MINE=0 ⇒ ABSTAIN (ledger-clean)" {
+  WRAP_LEDGER_BIN="$(mkledger fu2 DIRTY=0 DIRTY_N=0 UNLANDED=0 AHEAD=0 REMAINDER=0 \
+                              TRUNK=origin/main BLOCKED=0 CUSTODY_OPEN=0 FILED_MINE=0 RUNG=✅)"; export WRAP_LEDGER_BIN
+  run run_ca "$(mkfix "✅ Complete & live on trunk — landed, all green, nothing unsaved.")" \
+             "$BATS_TEST_TMPDIR" "fu-2"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  /usr/bin/grep -q '"reason":"ledger-clean"' "$COMPLETION_IDL"
+}

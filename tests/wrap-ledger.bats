@@ -2173,3 +2173,86 @@ CPANE="CCCCCCCC-1111-2222-3333-444444444444"
   [ "$(field "$output" GOAL_SRC)" = "live" ]
   [ "$(field "$output" GOAL_EVALS)" = "0" ]
 }
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# FILED, UNDRIVEN — the filer's own rows in the filer's own certificate (2026-09-05, BACKLOG_ZERO §5)
+# Pre-fix the ledger had ONE backlog term (YOURS → 👤 "my side is done"); a row this session added
+# as agent work counted for nothing and could ride a ✅. Each case is red pre-fix: FILED_MINE is not
+# emitted at all, and the 👤/✅ rung stands over the filed row.
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+
+# a stub whose `list --all --json` prints $1 and whose `list --blocked --json` prints $2
+mk_backlog_stub2() {
+  local out="$BATS_TEST_TMPDIR/cc-backlog-stub2"
+  { printf '#!/usr/bin/env bash\n'
+    printf 'case "$*" in *--all*) printf "%%s\\\\n" '"'"'%s'"'"' ;; *) printf "%%s\\\\n" '"'"'%s'"'"' ;; esac\n' "$1" "$2"
+  } > "$out"
+  chmod +x "$out"; printf '%s' "$out"
+}
+open_by() {  # $1=filedBy  $2=whyNotNow  $3=condition
+  printf '[{"id":"A-1","project":"p","title":"agent work I filed","status":"open","filedBy":"%s"%s%s}]' \
+    "$1" "$( [ -n "$2" ] && printf ',"whyNotNow":"%s"' "$2" )" "$( [ -n "$3" ] && printf ',"condition":"%s"' "$3" )"
+}
+
+@test "✅-eligible + one OPEN row this session ADDED with no --why-not-now ⇒ RUNG=🔧, FILED_MINE=1" {
+  ok_state
+  export WRAP_SESSION_ID="$SID"
+  CC_BACKLOG_BIN="$(mk_backlog_stub2 "$(open_by "$SID" "" "")" '[]')"; export CC_BACKLOG_BIN
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "🔧" ]
+  [ "$(field "$output" FILED_MINE)" = "1" ]
+  printf '%s' "$output" | grep -q 'why-not-now'
+}
+
+@test "the same row WITH a --why-not-now (the hand-off record) ⇒ not counted, rung falls through to ✅" {
+  ok_state
+  export WRAP_SESSION_ID="$SID"
+  CC_BACKLOG_BIN="$(mk_backlog_stub2 "$(open_by "$SID" "needs the prod credential" "")" '[]')"; export CC_BACKLOG_BIN
+  run bash "$LEDGER" --machine
+  [ "$(field "$output" FILED_MINE)" = "0" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+}
+
+@test "a condition-keyed row (mechanical, re-measured) is never the filer's loose end" {
+  ok_state
+  export WRAP_SESSION_ID="$SID"
+  CC_BACKLOG_BIN="$(mk_backlog_stub2 "$(open_by "$SID" "" "some-standing-state")" '[]')"; export CC_BACKLOG_BIN
+  run bash "$LEDGER" --machine
+  [ "$(field "$output" FILED_MINE)" = "0" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+}
+
+@test "a row ANOTHER session filed is not mine; a row I CLOSED is reported as CLOSED_MINE" {
+  ok_state
+  export WRAP_SESSION_ID="$SID"
+  all="$(printf '[{"id":"A-1","status":"open","filedBy":"sess-someone-else"},{"id":"A-2","status":"done","closedSession":"%s"}]' "$SID")"
+  CC_BACKLOG_BIN="$(mk_backlog_stub2 "$all" '[]')"; export CC_BACKLOG_BIN
+  run bash "$LEDGER" --machine
+  [ "$(field "$output" FILED_MINE)" = "0" ]
+  [ "$(field "$output" CLOSED_MINE)" = "1" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+}
+
+@test "filed-undriven OUTRANKS 👤: my open add beside my filed operator step ⇒ 🔧, not 'my side is done'" {
+  ok_state
+  export WRAP_SESSION_ID="$SID"
+  CC_BACKLOG_BIN="$(mk_backlog_stub2 "$(open_by "$SID" "" "")" "$(blocked_json "$SID")")"; export CC_BACKLOG_BIN
+  run bash "$LEDGER" --machine
+  [ "$(field "$output" RUNG)" = "🔧" ]
+  [ "$(field "$output" YOURS)" = "1" ]
+}
+
+@test "FAIL-OPEN: unresolvable session ⇒ FILED_SRC=none; unreadable store ⇒ FILED_SRC=error; neither is a 🔧" {
+  ok_state
+  unset WRAP_SESSION_ID CLAUDE_SESSION_ID
+  CC_BACKLOG_BIN="$(mk_backlog_stub2 "$(open_by "$SID" "" "")" '[]')"; export CC_BACKLOG_BIN
+  run bash "$LEDGER" --machine --session ""
+  [ "$(field "$output" FILED_SRC)" = "none" ]
+  [ "$(field "$output" FILED_MINE)" = "0" ]
+  export WRAP_SESSION_ID="$SID"
+  export CC_BACKLOG_BIN="$BATS_TEST_TMPDIR/absent-cc-backlog"
+  run bash "$LEDGER" --machine
+  [ "$(field "$output" FILED_SRC)" = "error" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+}
