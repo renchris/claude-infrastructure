@@ -86,6 +86,15 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+
+- **2026-09-05 — recycle #305 (lane infra):** closed 26d4010f1b22 · 62e0b88a58b5 · 418628734437 ·
+  blocked none · released 4e6a51df2a84 (too big — LIVE_ADDS candidate C is a change to the close
+  path with a cost debate), 5be5f55043c4 (first step landed, close needs a green postland stamp I do
+  not control), fa2aa0f5e535 (untouched) · landed 18a4b2901 (teammate-auto-shutdown: the detached
+  child is made waitable via an inherited fd, so wait_for/wait_log and 23 sleeps carry no clock) and
+  73bd0f798 (deathwatch-watchfile: the red-proof mangled the whitespace axis 33c462990 had just made
+  tolerant; it now moves the YEAR) · `closed=8 closed_pre=3 closed_other=0 filed=0 net=8 blocked=3
+  min=3 lane=local-drain project=claude-infrastructure floor=MET`.
 - **2026-09-04 — recycle #304 (lane infra):** closed 2181cc952005, 03718bc95795, 2bcc6b4d8468,
   8bd8f9b5a16d · blocked none · released 26d4010f1b22, fa475126f710 · landed 4df511fa0, 3a7c2f883,
   b2a393268 · `closed=7 closed_pre=4 closed_other=2 filed=2 net=5 blocked=3 min=3 lane=local-drain
