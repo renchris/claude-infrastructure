@@ -120,6 +120,9 @@
 #                                                                 exactly as `reopen` is
 #                                                                 (see RE-OPEN EFFECT)
 #   needs   "<step>" [--run C] [--project P] [--session S]       → file it ALREADY blocked; echoes the id.
+#           add … [--why-not-now "<reason>"] [--session S]        → the hand-off record: WHY this session could
+#                                                                  not drive it. A session-stamped add WITHOUT
+#                                                                  one is that session's own 🔧 (wrap-ledger).
 #                                                                  BRAKED: a step already filed as a
 #                                                                  LIVE row (same prose, same subject
 #                                                                  modulo digits — key 4) re-files
@@ -1170,6 +1173,11 @@ fold() { # [--strict] [--as-of <iso>] — handed to valid_records; pipefail carr
         # consumer can still tell "no command" from "an empty command".
         run:      ($r.run      // $p.run      // ""),
         session:  ($r.session  // $p.session  // ""),
+        # filedBy / whyNotNow ride the `add` (and an `update` for whyNotNow); closedSession rides
+        # `done`. Whitelisted for the same reason run/session are: the fold drops the unnamed.
+        filedBy:       ($r.filedBy       // $p.filedBy       // ""),
+        whyNotNow:     ($r.whyNotNow     // $p.whyNotNow     // ""),
+        closedSession: ($r.closedSession // $p.closedSession // ""),
         # VENUE — where the CURRENT holder runs, which decides which liveness oracles can see it
         # (see VENUE in the header). Note the shape: unlike every sibling above, a `claim` RESETS
         # it rather than carrying forward. `$r.venue // $p.venue` would be wrong in a way that
@@ -1481,7 +1489,7 @@ EOF
 }
 
 cmd_add() {
-  local project="" title="" dod="" source="" condition="" falsifier=""
+  local project="" title="" dod="" source="" condition="" falsifier="" why_not_now="" session=""
   while [ $# -gt 0 ]; do
     local key="$1"; shift
     case "$key" in
@@ -1490,6 +1498,16 @@ cmd_add() {
       --dod-ref)   dod="${1:-}";       [ $# -gt 0 ] && shift ;;
       --source)    source="${1:-}";    [ $# -gt 0 ] && shift ;;
       --condition) condition="${1:-}"; [ $# -gt 0 ] && shift ;;
+      # ── THE TRANSFER RECORD (2026-09-05, BACKLOG_ZERO §5) ──────────────────────────────────────
+      # `--why-not-now` is the FILED test's first answer ("why could THIS session not do it") made
+      # into a field instead of a sentence in a close. Without it, an `add` from a session is a
+      # loose end of THAT session in its own close ledger (scripts/wrap-ledger.sh FILED_MINE → 🔧):
+      # the filer either drives the row, closes it, or states the reason and hands it off. NOT
+      # part of the id hash, like the falsifier — it describes the hand-off, not WHICH item.
+      --why-not-now) why_not_now="${1:-}"; [ $# -gt 0 ] && shift ;;
+      # `--session` mirrors `needs`: an explicit flag beats the ambient env, for filing on another
+      # session's behalf. The env resolution below is byte-identical to cmd_needs (:3057-3059).
+      --session)   session="${1:-}";   [ $# -gt 0 ] && shift ;;
       # NOT part of the id hash, on purpose. The falsifier is HOW you ask whether this item is
       # still needed; it is not WHICH item this is. Hashing it would re-mint a row every time
       # someone improved the probe — precisely the per-measurement re-keying that --condition
@@ -1706,28 +1724,43 @@ cmd_add() {
     #     Writing the falsifier from here would be a second door into that store with the guard
     #     missing — so `add --falsifier` on a known id stays exactly the no-op cmd_falsify's header
     #     documents, and `cc-backlog falsify` remains the only way in.
-    local up_title="" up_dod="" up_source=""
+    local up_title="" up_dod="" up_source="" up_why=""
     [ -n "$title" ]  && [ "$title"  != "$(printf '%s' "$ex" | jq -r '.title  // ""')" ] && up_title="$title"
     [ -n "$dod" ]    && [ "$dod"    != "$(printf '%s' "$ex" | jq -r '.dodRef // ""')" ] && up_dod="$dod"
     [ -n "$source" ] && [ "$source" != "$(printf '%s' "$ex" | jq -r '.source // ""')" ] && up_source="$source"
+    # A re-run of the same add carrying `--why-not-now` is how an already-filed bare row is handed
+    # off: it folds onto the row as an update, and the ledger stops counting it as the filer's own.
+    [ -n "$why_not_now" ] && [ "$why_not_now" != "$(printf '%s' "$ex" | jq -r '.whyNotNow // ""')" ] && up_why="$why_not_now"
     if [ "$(printf '%s' "$ex" | jq -r '.status // ""' 2>/dev/null)" != "done" ] &&
-       { [ -n "$up_title" ] || [ -n "$up_dod" ] || [ -n "$up_source" ]; }; then
+       { [ -n "$up_title" ] || [ -n "$up_dod" ] || [ -n "$up_source" ] || [ -n "$up_why" ]; }; then
       jq -nc --arg id "$id" --arg ts "$(now_iso)" \
-         --arg title "$up_title" --arg dod "$up_dod" --arg source "$up_source" \
+         --arg title "$up_title" --arg dod "$up_dod" --arg source "$up_source" --arg why "$up_why" \
          '{id:$id, ts:$ts, event:"update"}
           + (if $title  == "" then {} else {title:$title}   end)
           + (if $dod    == "" then {} else {dodRef:$dod}    end)
-          + (if $source == "" then {} else {source:$source} end)' \
+          + (if $source == "" then {} else {source:$source} end)
+          + (if $why    == "" then {} else {whyNotNow:$why} end)' \
          >> "$BACKLOG"
     fi
     echo "$id"; return 0
   fi
+  # FILING IS ATTRIBUTED (2026-09-05). Before this, an `add` recorded no author at all — `by` was
+  # null on every one of the 108 adds in the 7 days to 2026-09-04 (inflow.md §7.6) — while `needs`
+  # stamped its session and `done` its lane. So the store could say who FILED an operator step and
+  # who CLOSED a row, but never which session filed agent work; and a per-session net (filed vs
+  # closed) — the one number that would hold a filer to its own rows — was uncomputable. Same
+  # resolution order and same monotone fail direction as cmd_needs: none set ⇒ "" ⇒ no field.
+  [ -n "$session" ] || session="${CLAUDE_SESSION_ID:-}"
+  [ -n "$session" ] || session="${CLAUDE_CODE_SESSION_ID:-}"
+  [ -n "$session" ] || session="${CC_SESSION_ID:-}"
   jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg project "$project" \
      --arg title "$title" --arg dod "$dod" --arg source "$source" --arg condition "$condition" \
-     --arg falsifier "$falsifier" \
+     --arg falsifier "$falsifier" --arg why "$why_not_now" --arg filedby "$session" \
      '{id:$id, ts:$ts, event:"add", project:$project, title:$title, dodRef:$dod, source:$source}
       + (if $condition == "" then {} else {condition:$condition} end)
-      + (if $falsifier == "" then {} else {falsifier:$falsifier} end)' \
+      + (if $falsifier == "" then {} else {falsifier:$falsifier} end)
+      + (if $why       == "" then {} else {whyNotNow:$why}       end)
+      + (if $filedby   == "" then {} else {filedBy:$filedby}     end)' \
      >> "$BACKLOG"
   echo "$id"
 }
@@ -2674,7 +2707,7 @@ cmd_transition() {
   # unevidenced-close warning below argues for, and it matters more here — the unattended closers
   # (reap, cloud-return, ship-land's auto-retraction) have no human to unwedge them, and a row they
   # can neither close nor hand back is a strictly worse outcome than a row with no lane on it.
-  local lane="" closedby=""
+  local lane="" closedby="" closedsess=""
   if [ "$event" = "done" ]; then
     # 🚨 STDERR IS **NOT** SUPPRESSED HERE, and it was in the first draft. `2>/dev/null` on this call
     # site DELETED the only message the derivation can ever emit — the out-of-set CC_BACKLOG_LANE
@@ -2688,15 +2721,23 @@ cmd_transition() {
     # An explicit --by is BETTER evidence than a derivation and wins outright; it is copied rather
     # than moved, so `by` keeps meaning exactly what every guard in this file already reads it to mean.
     if [ -n "$by" ]; then closedby="$by"; else closedby="$(_bl_derive_closed_by || true)"; fi
+    # closedSession — the SESSION that closed the row, beside the host-unit `closedBy` and the lane.
+    # This is the other half of the per-session net (filedBy on `add`): without it a session's own
+    # closes were as anonymous as its adds, so the ledger could count what it filed and never what
+    # it closed. Same env resolution as the filing side; unset ⇒ no field, exactly as before.
+    [ -n "$closedsess" ] || closedsess="${CLAUDE_SESSION_ID:-}"
+    [ -n "$closedsess" ] || closedsess="${CLAUDE_CODE_SESSION_ID:-}"
+    [ -n "$closedsess" ] || closedsess="${CC_SESSION_ID:-}"
   fi
   jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg event "$event" \
      --arg by "$by" --arg evidence "$evidence" --arg needs "$needs" \
      --arg run "$run" --arg session "$session" --arg venue "$venue" --argjson force "$force" \
      --arg selfrel "$selfrel" --arg role "$role" \
-     --arg lane "$lane" --arg closedby "$closedby" \
+     --arg lane "$lane" --arg closedby "$closedby" --arg closedsess "$closedsess" \
      '{id:$id, ts:$ts, event:$event}
       + (if $lane != ""     then {lane:$lane}         else {} end)
       + (if $closedby != "" then {closedBy:$closedby} else {} end)
+      + (if $closedsess != "" then {closedSession:$closedsess} else {} end)
       + (if $by != ""       then {by:$by}             else {} end)
       + (if $evidence != "" then {evidence:$evidence} else {} end)
       + (if $needs != ""    then {needs:$needs}       else {} end)
@@ -4211,6 +4252,9 @@ cmd_list() {
            | select($proj == "" or .project == $proj)
            | (if (.run     // "") == "" then del(.run)     else . end)
            | (if (.session // "") == "" then del(.session) else . end)
+           | (if (.filedBy // "") == "" then del(.filedBy) else . end)
+           | (if (.whyNotNow // "") == "" then del(.whyNotNow) else . end)
+           | (if (.closedSession // "") == "" then del(.closedSession) else . end)
            | (if (.condition // "") == "" then del(.condition) else . end)
            # OMITTED WHEN EMPTY, and this one is not cosmetic like its siblings. The canonical
            # coverage question is `select(.falsifier)`, and in jq the EMPTY STRING IS TRUTHY — so a

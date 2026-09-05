@@ -177,3 +177,52 @@ n_lines() { grep -c '' "$CC_BACKLOG_FILE"; }
   # bats `run` folds stderr into $output, which is exactly how cc-backlog-needs.bats:58 reads the id
   [[ "$output" =~ ^[0-9a-f]{12}$ ]]
 }
+
+# ── FILING IS ATTRIBUTED, AND THE HAND-OFF IS A FIELD (2026-09-05, BACKLOG_ZERO §5) ──────────────
+# Pre-fix an `add` recorded no author (108/108 adds by:null, inflow.md §7.6) and no `--why-not-now`
+# existed, so `filedBy`/`whyNotNow` were absent from every record and every fold — each case below
+# is red on the pre-fix binary because the field it reads is simply not there.
+
+@test "add stamps filedBy from CLAUDE_CODE_SESSION_ID; --session overrides it; unset ⇒ no field" {
+  a=$(CLAUDE_CODE_SESSION_ID=sess-A bash "$CB" add --project P --title "attrib one" --source s)
+  [ "$(fld "$a" filedBy)" = "sess-A" ]
+  b=$(CLAUDE_CODE_SESSION_ID=sess-A bash "$CB" add --project P --title "attrib two" --source s --session sess-Z)
+  [ "$(fld "$b" filedBy)" = "sess-Z" ]
+  c=$(env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_SESSION_ID -u CC_SESSION_ID bash "$CB" add --project P --title "attrib three" --source s)
+  [ "$(fld "$c" filedBy)" = "" ]
+  refute_match "$(grep '"attrib three"' "$CC_BACKLOG_FILE")" 'filedBy'
+}
+
+@test "--why-not-now is stored on the add and survives the fold into list --json" {
+  a=$(bash "$CB" add --project P --title "handed off" --source s --why-not-now "needs the prod credential")
+  [ "$(fld "$a" whyNotNow)" = "needs the prod credential" ]
+  bash "$CB" list --all --json | jq -e --arg i "$a" '.[]|select(.id==$i)|.whyNotNow=="needs the prod credential"' >/dev/null
+}
+
+@test "re-running the same add WITH --why-not-now folds onto the live row as an update (the hand-off of a bare row)" {
+  a=$(bash "$CB" add --project P --title "bare then handed" --source s)
+  [ "$(fld "$a" whyNotNow)" = "" ]
+  b=$(bash "$CB" add --project P --title "bare then handed" --source s --why-not-now "operator-only deploy")
+  [ "$a" = "$b" ]
+  [ "$(n_items)" -eq 1 ]
+  [ "$(grep -c '"event":"add"' "$CC_BACKLOG_FILE")" -eq 1 ]
+  [ "$(grep -c '"event":"update"' "$CC_BACKLOG_FILE")" -eq 1 ]
+  [ "$(fld "$a" whyNotNow)" = "operator-only deploy" ]
+  [ "$(fld "$a" status)" = "open" ]
+}
+
+@test "CONTROL — the same add re-run with an UNCHANGED --why-not-now writes nothing" {
+  a=$(bash "$CB" add --project P --title "idem" --source s --why-not-now "same")
+  bash "$CB" add --project P --title "idem" --source s --why-not-now "same"
+  [ "$(n_lines)" -eq 1 ]
+}
+
+@test "done stamps closedSession from the closing session's env; unset ⇒ no field" {
+  a=$(CLAUDE_CODE_SESSION_ID=sess-A bash "$CB" add --project P --title "to close" --source s)
+  CLAUDE_CODE_SESSION_ID=sess-B bash "$CB" "done" "$a" --evidence "closed in a test"
+  [ "$(fld "$a" closedSession)" = "sess-B" ]
+  [ "$(fld "$a" filedBy)" = "sess-A" ]            # the two halves of the per-session net coexist
+  b=$(bash "$CB" add --project P --title "to close anon" --source s)
+  env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_SESSION_ID -u CC_SESSION_ID bash "$CB" "done" "$b" --evidence "anon"
+  refute_match "$(grep "\"id\":\"$b\"" "$CC_BACKLOG_FILE" | grep '"done"')" 'closedSession'
+}
