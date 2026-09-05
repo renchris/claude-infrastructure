@@ -114,6 +114,35 @@ fi
 # === WRITE / MULTIEDIT TOOL: backup + warn ===
 
 BACKUP_DIR="$HOME/.claude/backups"
+
+# === IDENTITY-CLASS SOURCES NEVER ENTER THE SHARED STORE (backlog 2bcc6b4d8468) ===
+# ~/.claude/backups is a REAL dir that every other config dir reaches through a symlink, so a
+# backup written here by ANY account lands in the layer all four read. That is harmless for the
+# work files this store exists for -- and it was an auth leak for the identity family: five
+# `.claude.json.backup.*` carrying `oauthAccount` for three DIFFERENT accounts were found sitting
+# in the shared dir (ACCOUNT_AGNOSTIC_AGENT_STATE.md, "what the completeness critic found"). It is
+# the exact inverse of the defect that plan repaired: `.claude.json` is isolated at the config-dir
+# root, and the same bytes then walk into the shared layer under a path no isolate entry covers.
+#
+# THE SPLIT IS BY CONTENT CLASS, NOT BY STORE. Isolating `backups` wholesale would have been the
+# mis-classification this repo already measured and reverted once: lib/config-mirror.zsh's `tasks`
+# note ("a task board is WORK state, not ACCOUNT state ... splitting four ways along an axis the
+# operator does not think in is pure loss") applies verbatim to the 145 repo-file backups in here,
+# which are work state and SHOULD stay reachable from every account. Only the identity family is
+# account state, so only the identity family is routed out.
+#
+# The destination is the account's OWN config dir, and `backups-identity` is in every isolate set
+# in lib/config-mirror.zsh -- without that entry the mirror auto-shares any new ~/.claude subdir
+# into all four accounts and would re-create this leak the first time account 1 wrote one.
+#
+# The auto-prune below keys on $BACKUP_DIR, so the private store inherits keep-10-per-source and
+# cannot grow without bound. scripts/prune-backups.sh's 30-day arm does NOT reach it: deleting
+# auth material on a clock is a purge, and this row holds purges for an operator call.
+case "$BASENAME" in
+  .claude.json|.claude.json.*|.credentials.json|.credentials.json.*|mcp-needs-auth-cache.json)
+    BACKUP_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/backups-identity" ;;
+esac
+
 mkdir -p "$BACKUP_DIR" 2>/dev/null || true
 
 # Nanosecond timestamp prevents race conditions with parallel agent teams
