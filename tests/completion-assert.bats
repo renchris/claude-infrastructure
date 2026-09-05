@@ -1851,3 +1851,22 @@ dbl_setup() { # <tag> → echoes the repo cwd, with both hooks pointed at one fi
   [ "$status" -eq 0 ]; [ -z "$output" ]
   /usr/bin/grep -q '"reason":"ledger-clean"' "$COMPLETION_IDL"
 }
+
+@test "🔧 drain floor: a confident done over CLOSE_FLOOR=1 (backlog scope, closed nothing) ⇒ FIRE, naming the pick" {
+  WRAP_LEDGER_BIN="$(mkledger df1 DIRTY=0 DIRTY_N=0 UNLANDED=0 AHEAD=0 REMAINDER=0 \
+                              TRUNK=origin/main BLOCKED=0 CUSTODY_OPEN=0 FILED_MINE=0 CLOSE_FLOOR=1 RUNG=🔧)"; export WRAP_LEDGER_BIN
+  run run_ca "$(mkfix "✅ Complete & live on trunk — the drain machinery is landed and green.")" \
+             "$BATS_TEST_TMPDIR" "df-1"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | /usr/bin/grep -q 'closed NO row'
+  printf '%s' "$output" | /usr/bin/grep -q 'drain-pick.sh'
+}
+
+@test "🔧 drain floor CONTROL: the SAME close over CLOSE_FLOOR=0 ⇒ ABSTAIN (ledger-clean)" {
+  WRAP_LEDGER_BIN="$(mkledger df2 DIRTY=0 DIRTY_N=0 UNLANDED=0 AHEAD=0 REMAINDER=0 \
+                              TRUNK=origin/main BLOCKED=0 CUSTODY_OPEN=0 FILED_MINE=0 CLOSE_FLOOR=0 RUNG=✅)"; export WRAP_LEDGER_BIN
+  run run_ca "$(mkfix "✅ Complete & live on trunk — the drain machinery is landed and green.")" \
+             "$BATS_TEST_TMPDIR" "df-2"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  /usr/bin/grep -q '"reason":"ledger-clean"' "$COMPLETION_IDL"
+}

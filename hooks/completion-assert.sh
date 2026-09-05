@@ -572,6 +572,15 @@ CUSTODY="$(lfield CUSTODY_OPEN)"; case "$CUSTODY" in ''|*[!0-9]*) CUSTODY=0 ;; e
 FILEDM="$(lfield FILED_MINE)"; case "$FILEDM" in ''|*[!0-9]*) FILEDM=0 ;; esac
 [ "$FILEDM" -gt 0 ] && { contra=1; facts="${facts}${FILEDM} backlog row(s) YOU filed this session are still open with no stated reason you could not drive them (cc-backlog list --open --json | jq '.[]|select(.filedBy==\"${SID}\")') — drive each and \`cc-backlog done <id> --evidence …\`, drop it (\`done --evidence \"dropped: <why>\"\`), or hand it off by re-running the same add with \`--why-not-now \"<reason>\"\`; a row is not a disposition; "; }
 
+# THE DRAIN FLOOR (2026-09-05, BACKLOG_ZERO §5.5) — the other half of the term above. A done-claim
+# from a session whose frozen scope is ABOUT the backlog, that closed NO row itself. FILED_MINE let a
+# filing contradict a close; nothing let "closed nothing" contradict one, so every session sent to
+# fix the backlog certified on commits and closed 0 (W1, W2a, W3, §5's own session). The ledger owns
+# the predicate (scope match · attributable session · a binary that stamps closedSession — each
+# fail-OPEN, CLOSE_FLOOR_SRC says which); this only consumes CLOSE_FLOOR=1.
+CLOSEF="$(lfield CLOSE_FLOOR)"; case "$CLOSEF" in ''|*[!0-9]*) CLOSEF=0 ;; esac
+[ "$CLOSEF" -gt 0 ] && { contra=1; facts="${facts}your frozen scope is about the backlog and this session has closed NO row (CLOSED_MINE=0) — machinery is not a close: pick one (\`\$HOME/.claude/scripts/drain-pick.sh --project <project>\`), drive or adjudicate it, then \`cc-backlog done <id> --evidence …\`; "; }
+
 # ── LANDED ≠ LIVE — the 🚀 rung this guard could not see (2026-08-07) ────────────────────────────
 # Face 4 landed the rung in scripts/wrap-ledger.sh, but this hook was never taught it, and every
 # term above reads a fact about a GIT REF. So a close saying "✅ Complete & live on trunk" passed
