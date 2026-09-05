@@ -104,6 +104,15 @@ mints follow-ons the drains cannot keep up with. The telemetry that would have s
 
 ## §4 Status log (INTEGRATE-only; newest first)
 
+- **2026-09-04 19:33Z** — W2a LANDED (`718fa8fda` dispatch-assert DROP remedy + drop-discharge arm
+  + `--condition` template; `2f518d75b` completion-assert D1 do-it-yourself gate; `d3cafafc6`
+  cc-backlog add-time WARN) — all three content-verified on origin/main and ancestors of it; custody
+  discharged by the peer's own self-close (`cc-custody list --open` = `[]`). It took 3 land attempts:
+  attempts 1-2 red, attempt 3 GATE RED on a suite the log itself called a budget kill. Two adjacent
+  defects it hit and did NOT file: a bats suite leaks `user.email=t@t` into the enclosing worktree
+  (blocking every later commit at the identity hook), and `tests/postland-verify.bats` (132 tests,
+  ~20s per cc-backlog fold) eats the smoke budget on every land.
+
 - **2026-09-04 17:20Z — W5 PROVEN: the rebuilt chain recycled itself through the wrapper.** Lane infra
   #300 fired #301 at 16:59Z (`handoffs.jsonl`: `goal_requested:true`, pane 299, account next) with the
   generated `fire-drain-infra-recycle301.txt` — the first mechanically self-perpetuating link of the
