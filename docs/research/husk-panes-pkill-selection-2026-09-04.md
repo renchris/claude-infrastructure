@@ -80,6 +80,20 @@ improvised spelling was the only one available.
    dynamic abstention, kill switch, the audit row) and `tests/cc-await-ping.bats` § --stand-down (by
    pid, this inbox only, rc 0, no alarm mail, plus a bare-TERM control that still reads as a kill).
 
+4. **`bin/cc-husk-sweep`** — the recovery half, for the next time this class (or any external
+   kill) leaves panes at a bare shell. It enumerates every pane whose shell has no claude beneath
+   it, resolves the dead session three ways in order (the surviving `cc-registry` row, which is
+   present exactly when SessionEnd did not run; the pane's scrollback, honouring that a resume
+   line can be CUT OFF mid-print, as pane 144's was; the newest transcript for the pane's cwd
+   across the four account stores), classifies the death from the crash log and the work left
+   open from git and the session's own last "Good to close:", and with `--resume` types the
+   PINNED launcher (`claude3 --resume <sid>`, never the pane's printed default-account
+   `claude --resume`, which cannot see another store's transcript) echo-verified into each pane.
+   Measured on the live box after the operator had hand-resumed four of the five: the one
+   remaining husk (pane 144) resolved to `ae76ad98` / `claude3` / DONE via the transcript path.
+   `tests/cc-husk-sweep.bats` (7) pins the resolution order, the account mapping, the verdicts and
+   the never-default-account rule.
+
 ## Not changed, and why
 
 - **The husk panes themselves are not closed by anything.** A pane holding `Resume this session with:`

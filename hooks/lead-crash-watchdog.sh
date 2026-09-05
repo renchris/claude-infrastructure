@@ -894,7 +894,7 @@ death_page_line() {
     jetsam-oom)       what="was KILLED by the OOM killer (jetsam)" ;;
     *)                what="died abruptly (cause: $cause${ec:+, exit $ec}${sig:+, signal $sig})" ;;
   esac
-  printf 'SESSION DEATH — %s %s. Lost: /goal=%s, in-flight workflow dir(s)=%s. Its pane is still open at a live shell and looks EXACTLY like a clean /exit, so nothing on screen says this happened. Evidence: ~/.claude/logs/claude-crashes.jsonl (pid %s) + ~/.claude/logs/close-records/%s-*.json\n' \
+  printf 'SESSION DEATH — %s %s. Lost: /goal=%s, in-flight workflow dir(s)=%s. Its pane is still open at a live shell and looks EXACTLY like a clean /exit, so nothing on screen says this happened. Recover with cc-husk-sweep --resume (it resolves the session AND its account; the pane'"'"'s own printed claude --resume line uses the default account and cannot see another store'"'"'s transcript). Evidence: ~/.claude/logs/claude-crashes.jsonl (pid %s) + ~/.claude/logs/close-records/%s-*.json\n' \
     "$sid" "$what" "$goal" "$wf" "$pid" "$pid"
 }
 
