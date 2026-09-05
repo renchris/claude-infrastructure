@@ -42,6 +42,8 @@ read-only tasks. The user expects 9/10 implementation sessions to use Agent Team
 Phase 0 MUST include **Agent Team Orchestration**:
 - **Execution locus per wave** — WHERE each wave runs (table below). FIRST field: it decides whose
   context pays for the wave, which every other field then assumes.
+- **Task SIZE per unit** — the band each unit's brief is written to (table below). SECOND field, and
+  measured to be worth **14× more than the locus**.
 - Team size and roles (which agents, what each does)
 - Task dependency graph (`blockedBy` relationships)
 - Worktree assignments (branch names, isolation strategy)
@@ -49,6 +51,34 @@ Phase 0 MUST include **Agent Team Orchestration**:
 - **Lead context budget + succession point** (below)
 
 This ensures parallel work is architected before implementation begins.
+
+**Task size — declare a BAND, and it outranks the locus by 14×.**
+
+A plan declares WHERE a unit runs and never HOW BIG it is, and size is the larger lever by an order
+of magnitude. Measured over 1,664 units (`docs/research/workflows-vs-teams-2026-08-20.md` §3d):
+
+| unit output | n | out/pp | med lifetime | med turns | med files |
+|---|---:|---:|---:|---:|---:|
+| 0–2K | 172 | 2,250 | 11 min | 26 | 1 |
+| 20–40K | 304 | 49,986 | 17 min | 36 | 2 |
+| **40–80K** | 567 | **61,168** | **32 min** | **60** | **3** |
+| **80–150K** | 557 | **58,454** | **73 min** | **107** | **6** |
+| >300K | 64 | 32,341 | 773 min | 310 | 15 |
+
+**Spread across size bands: 27×. Spread across vehicles at matched size: 1.9×.** So the rule that
+decides a wave's efficiency is not *"teammates, not workflows"* — it is **one task per unit,
+40–150K output tokens wide, never below 20K, split above 300K or 10 files.**
+
+Write the band into Phase 0 as a target a brief can be checked against: **40–150K output ≈ 30–75 min
+≈ 60–110 turns ≈ 3–6 files.** Teammates today sit at a median of **36,848** output tokens — under
+the peak band, so re-sizing existing briefs into it is **~+19% quota efficiency at zero risk and no
+rule change**. Under-sizing is the common error, not over-sizing: the 0–2K band returns 2,250
+out/pp against the peak's 61,168, a 27× loss on units that look cheap because each one is small.
+
+⚠️ The band is a SIZING target, not a licence to widen scope. It sits beside — and never overrides —
+the brief-discipline caps the **agent-teams** skill owns (≤150-line brief body, reading list ≤5
+files, split any deliverable >500 LOC). A unit reaches the band by carrying ONE task that is
+genuinely that large, never by bundling two.
 
 **Execution locus — the DEFAULT is a dispatched SESSION, not a teammate.**
 
