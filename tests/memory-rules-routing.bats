@@ -154,7 +154,17 @@ mkover() {
 
 @test "6 a frontmatter type: entry that stage 2 evicts is still VETOED from routing" {
   # At breach the unprefixed `type: feedback` stamp yields to EVICTION (two-stage pressure), and
-  # route_veto has no stages — so those lines take the cold path and the rules file is untouched.
+  # route_veto has no stages — so those lines take the COLD path and the entry itself never
+  # reaches the rules file.
+  #
+  # ASSERTION NARROWED 2026-09-05, and the narrowing is the point. This used to end `[ ! -f
+  # "$dest" ]` — "nothing at all is written there" — which is STRICTLY STRONGER than the invariant
+  # named above and than route_veto itself. Phase 5 item 5 now writes a one-line DEMOTION POINTER
+  # naming each cold topic file, because a routed line keeps its reader and a cold one does not,
+  # and the entries this veto sends cold are exactly the operator-voice ones that would otherwise
+  # vanish silently into a record no session loads. A pointer is not a move: the rule stays where
+  # the veto put it and the topic file is untouched. So the test now pins what the veto actually
+  # forbids — the ENTRY LINE in the destination — and asserts the pointer is only a pointer.
   d="$(mkmem veto1)"; dest="$(dest_path)"
   local i
   for i in $(seq -w 1 25); do addentry "$d" "lesson$i.md" feedback old "$(pad 120)"; done
@@ -168,7 +178,9 @@ mkover() {
   has "$output" 'routed=0'
   cold="$(ls "$d"/archive/MEMORY_ARCHIVE_*-COLD.md)"
   grep -qF -- '(lesson01.md)' "$cold"
-  [ ! -f "$dest" ]
+  hasnt "$(cat "$dest")" '- [lesson01](lesson01.md)'   # the ENTRY is never routed…
+  grep -qF 'demotion pointers written' "$dest"         # …only a pointer saying it went cold
+  grep -qF 'lesson01.md' "$dest"                       # …which NAMES the topic file
 }
 
 @test "7 CONTROL — the SAME fixture with a project type routes, so the veto is what bound test 6" {

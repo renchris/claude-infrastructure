@@ -77,6 +77,20 @@ minus the autonomous fork.
    alone passed 4 entries whose hooks are all live prohibitions — `Never re-add corpus`,
    `sharing needs the same ID *and* a shared dir`, `tolerate PARTIALS`, and a pane-keyed-marker
    design rule. All 4 must be KEPT; a spec without this criterion archives all 4.
+
+   **`superseded_by:` — how to DECLARE an entry spent, for the rotor as well as for a reader**
+   (2026-09-05, Phase 5 item 4). `bin/cc-memory-rotate` now orders eviction by durability rather
+   than age, and one of its three ranks is this frontmatter key: a topic file carrying
+   `superseded_by: <name>` in its first 12 lines is the first thing demoted, ahead of every
+   ordinary entry regardless of dates. Write it when a lesson has a genuine heir; the value names
+   the successor so a reader who finds the demoted pointer knows where to go.
+   🚨 **Do NOT expect a prose banner to do this.** `SUPERSEDED` / `CORRECTED` / `REFUTED` in the
+   body are deliberately NOT matched, and the reason is measured: 26 of claude-infrastructure's
+   388 topic files carry one and **zero of the 26 mark the FILE as dead** — every one marks a
+   passage that the same file then corrects, so the marker means the entry is MORE current. A rank
+   keyed on the prose would evict the most-corrected entries first. The frontmatter key is the
+   only unambiguous signal, and it exists precisely so the judgment is yours rather than a
+   classifier's.
 2. Move each such entry VERBATIM (tombstone intact — keep its SHA + date) into
    `memory/archive/MEMORY_ARCHIVE_<YEAR>-H<half>.md` (create dir/file if absent; **append**, never overwrite).
 3. Remove ONLY those moved index lines from `MEMORY.md`. Topic `.md` files are NEVER deleted.
