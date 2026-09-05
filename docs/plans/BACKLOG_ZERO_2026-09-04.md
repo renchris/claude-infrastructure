@@ -310,3 +310,80 @@ close that pre-fix would have certified ✅ over its own filing; (2) `cc-do ran:
 worktree, not the fix · pruning the 50 `wt-*` worktrees and unblocking the 3 rows blocked on
 "pre-existing worktree" — destructive on trees other sessions may hold.
 
+### §5.5 The same brief, fired twice — and what the second session found (2026-09-05T06:31Z, frontier session `filing-vs-driving`, pane 321)
+
+**This section exists because the generator caught its own remedy.** The brief above was fired twice
+from the same `/tmp/fire-filing-vs-driving.txt`: by session 317 at 03:39:57Z (`handoffs.jsonl`
+`self-retire-peer` → pane 319, which pinged 317's inbox `DONE — LANDED c46af65b7` at 05:31:55Z,
+`~/.claude/mailbox/317.md`) and again by session 280 at 06:32:21Z (→ pane 321, this one). Two frontier
+sessions, one brief, the second fired an hour after the first returned DONE to a different address.
+Dropped, not filed: the reason 280 re-fired lives in a repo this session may not touch, and a fire-time
+idempotency guard is machinery with no way to verify it against that reason.
+
+**§5's fix is landed and executing nowhere yet.** All five enforcing files differ from the live layer
+(`git hash-object ~/.claude/{bin/cc-backlog,bin/cc-do,scripts/wrap-ledger.sh,hooks/completion-assert.sh,hooks/dispatch-assert.sh}`
+vs `origin/main:` — five DIFFERENT); live HEAD `570c20375` (02:52Z), lag 9. `deploy-live --dry-run`:
+*"no GREEN tree is a DESCENDANT of live HEAD … inside the degrade budget (25 / 6h) — no advance"*. The
+stamp store has produced **no GREEN since `24c598bac` at 2026-09-03T16:23Z**; every stamp since is
+`red` or `cut`, and the cause is retries under load, not test growth: `run_s` 2,923 → 29,931, `retries`
+2 → 14, `suites` 559 → 570, `env.load` 18.4 → 19.4, failing suites different each run
+(`deathwatch-watchfile`, `cc-reaper`, `compressor-sentinel`). T2 DEGRADED (`deploy-live.sh:34`) will carry
+§5's commits at the 6 h mark, ~11:19Z, unverified. **Until then every §5.4 figure reads 0 for that
+reason** — the next reader must not take those zeros as "wrong layer" (read at 06:40Z: filedBy 0 ·
+whyNotNow 0 · closedSession 0 · `cc-do ran:` 0 · FILED_MINE fires 0).
+
+**The ledger could not see its own session — fixed.** `scripts/wrap-ledger.sh:583` resolved the session
+from `$CLAUDE_SESSION_ID`, which a tool-call shell never carries; the store's own comment at
+`bin/cc-backlog:3072` had already measured that and named the ledger as the place the bug lives. Read
+from this session's shell: `FILED_SRC=none` — so YOURS, FILED_MINE and CLOSED_MINE were all 0 from an
+agent's own `/wrap`, and only the Stop hook (which feeds `--session`) ever computed them. The ledger now
+falls through to `$CLAUDE_CODE_SESSION_ID`, the same uuid the hook feeds (verified equal on this session).
+
+**The other half of the certificate — landed: the DRAIN FLOOR.** §5 made a FILING visible to the
+certificate; nothing made a CLOSE worth anything to it, so every session sent to fix the backlog
+certified on what it could see (commits) and closed nothing: W1 0 rows · W2a 0 · W3 0 (1 filed) · the
+§5 session 0 (§4 entries above). The one wave that closed rows (W2b, 24) had rows IN its scope; and the
+one mechanism that moved the local lane from 7 closes in 49 links to **90 closes in 18 h**
+(`lane=local-drain` dones since 2026-09-04T12:36Z) was a floor on rows closed. That floor now applies to
+every session whose CURRENT CONTRACT names the backlog:
+
+| | file:line | what |
+|---|---|---|
+| `DOD_SCOPE` / `DRAIN_SCOPE` | `scripts/wrap-ledger.sh` DoD loop | the newest lineage-filtered `Scope (frozen):` line (the same line `dod-persist.sh:210` injects as THE CURRENT CONTRACT); `backlog\|drain` ⇒ DRAIN_SCOPE=1 |
+| `CLOSE_FLOOR` | `compute_close_floor()` after `count_filed_undriven()` | DRAIN_SCOPE=1 ∧ CLOSED_MINE=0 ⇒ 🔧, same rank as FILED_MINE (outranks 🚀/👤). Fail-OPEN four ways, each named in `CLOSE_FLOOR_SRC`: `n-a` (scope not backlog-shaped) · `none` (no session) · `error` (store) · `binary-old` (the `cc-backlog` this session TYPES does not stamp `closedSession` — an unattributed close must never read as "closed nothing") |
+| consumer | `hooks/completion-assert.sh` after the FILED_MINE term | `CLOSE_FLOOR=1` contradicts a done-claim; remedy names `drain-pick.sh` |
+| tests | `tests/wrap-ledger.bats` (+5) · `tests/completion-assert.bats` (+2) | 6 of 7 red on the pre-fix files (the CA control passes by design); 111/111 and 127/127 green after |
+
+**What the gate is, stated once:** a backlog-scoped session's done is *machinery landed AND one row
+closed by you, with the real tool, on the real pile*. It is gameable by closing a trivial row — and that
+is the point: the trivial close forces contact with the pile, which every 0-row wave above never had.
+
+**Failure mode (b) has a producer at file:line.** `scripts/ship-land.sh:1001` files a `needs` row
+"re-land <branch>: ship-land could not complete…" on every failed land — **167 all-time (118 done · 48
+blocked · 1 open)** — with a falsifier keyed on the FAILED ref (`land-content-verify.sh refs/land/failed/…`).
+A later re-land that amends anything therefore never retracts it: `f0c419a56091` (the §5 session's own
+land) stayed blocked over a two-line quoting delta in `tests/cc-backlog-add-update.bats` while all four
+commits sat on trunk. Measured over the 49 not-done rows by patch-id (`git cherry origin/main <ref>`):
+**2 fully on trunk** (`bf0c634ee43f` W2a, `ff9ef26281e1`) — closed this session with that evidence · **45
+carry genuinely unlanded commits** (the CLOSE_INTEGRITY stranded-content population — real, not moot) ·
+2 refs gone. So (b) is small here: the rail's rows are mostly TRUE, and their remedy is landing, not
+closing. Dropped, not filed: re-keying that falsifier on the branch's patch-ids — three rows in 167 is
+not worth a rail change this session; the plan now says where it lives.
+
+**Closed this session (the first `closedSession`-stamped dones in the store):** `f0c419a56091`,
+`bf0c634ee43f`, `ff9ef26281e1` — each MOOT by content, evidence on the row.
+
+**Measurement for the floor (baseline 2026-09-05T07:00Z):**
+
+| figure | now | reads it back |
+|---|---|---|
+| dones carrying `closedSession` | **3** (were 0) | `grep -c closedSession ~/.claude/autonomy/backlog.jsonl` |
+| CLOSE_FLOOR fires | 0 (not live until the T2 advance) | `jq -c 'select(.hook=="completion-assert" and ((.facts//"")\|test("closed NO row")))' ~/.claude/autonomy/idl.jsonl \| wc -l` |
+| backlog-scoped contracts in the DoD store | 36 of 238 `Scope (frozen)` lines | `grep -h 'Scope (frozen)' ~/.claude/autonomy/dod/*.md \| grep -ci 'backlog\|drain'` |
+| not-done (open + blocked), brief → §5 baseline → now | 504 → 518 → **504** (`NOW open=264 blocked=240 claimed=3 LIVE=504` at 07:02Z, after the three closes; 06:40Z read 260/247/507 — the lanes move rows between the two statuses concurrently) | `backlog-telemetry.sh` NOW line |
+| GREEN stamps since 2026-09-03T16:23Z | **0** | `jq -r 'select(.verdict=="green")\|.ts' ~/.claude/autonomy/postland/stamps/*.json \| sort \| tail -1` |
+
+**Movement vs noise:** the floor's signal is a backlog-scoped session whose close carries CLOSED_MINE ≥ 1
+where the §4 waves carried 0 — read it per session (`closedSession` grouped by sid), never from LIVE,
+which the lanes move by ±50 a day. The first honest read is after the live layer carries this commit.
+
