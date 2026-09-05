@@ -480,6 +480,24 @@ refusal_culprit() { # <class> → "<culprit> <green-depth|->"
     no-stamps-dir) printf 'verifier-inert -';  return 0 ;;
     dirty-tree)    printf 'peer-wip-wedge -';  return 0 ;;
     trunk-red)     printf 'trunk-red -';       return 0 ;;
+    # EVERY class that ends the lane names its own culprit here. A class with no arm falls into the
+    # ladder below, whose terminal answer is `verifier-famine` — a POSITIVE claim about green
+    # production — so an advance blocked by the checkout itself used to escalate (when it escalated
+    # at all) as "no green is being produced", pointing the operator at the one subsystem that was
+    # working (repo memory: new-enum-member-falls-into-fail-closed-default).
+    untracked-collision)  printf 'peer-wip-wedge -';   return 0 ;;
+    ancestor-inverted)    printf 'live-ahead-of-target -'; return 0 ;;
+    diverged-superseded|diverged-unlanded) printf 'checkout-diverged -'; return 0 ;;
+    merge-blocked)
+      # Split on the one question that changes the remedy: is the shared checkout still a WORKING
+      # TREE? A checkout carrying core.bare=true answers every working-tree git op with "fatal:
+      # this operation must be run in a work tree", so the ff dies of a cause no pre-flight above
+      # models, and the repair is a config unset that has nothing to do with greens.
+      if [ "$(git -C "$DEPLOY_REPO" rev-parse --is-inside-work-tree 2>/dev/null)" = true ]
+        then printf 'merge-blocked-unknown -'
+        else printf 'checkout-not-a-worktree -'
+      fi
+      return 0 ;;
   esac
   local prc=0
   depth="$(blind_green_depth)" || prc=$?
@@ -530,6 +548,18 @@ refusal_escalate() { # <class> <msg> <n> <first-epoch> <now>
       run="bash $DEPLOY_REPO/scripts/deploy-live.sh --dry-run --offline" ;;
     probe-unreadable)
       title="deploy lane refusing on repeat: the green scan could not run, so the culprit is UNKNOWN — not famine"
+      run="bash $DEPLOY_REPO/scripts/deploy-live.sh --dry-run --offline" ;;
+    checkout-not-a-worktree)
+      title="deploy lane refusing on repeat: the shared checkout is not a working tree, so nothing can advance the live layer"
+      run="git -C $DEPLOY_REPO config --unset core.bare && bash $DEPLOY_REPO/scripts/deploy-live.sh --auto" ;;
+    merge-blocked-unknown)
+      title="deploy lane refusing on repeat: the fast-forward is refused by a cause this lane does not model"
+      run="git -C $DEPLOY_REPO status --porcelain" ;;
+    checkout-diverged)
+      title="deploy lane refusing on repeat: the shared checkout carries commits that are not on the target"
+      run="git -C $DEPLOY_REPO log --oneline origin/main..HEAD" ;;
+    live-ahead-of-target)
+      title="deploy lane refusing on repeat: live HEAD is AHEAD of every deployable target"
       run="bash $DEPLOY_REPO/scripts/deploy-live.sh --dry-run --offline" ;;
     *)
       title="deploy lane refusing on repeat: no GREEN tree is being produced fast enough to deploy (verifier famine)"
@@ -2083,6 +2113,14 @@ if ! MERGE_ERR="$(g merge --ff-only "$TARGET" 2>&1 >/dev/null)"; then
   case "$AHEAD" in ''|*[!0-9]*) AHEAD=0 ;; esac
   [ "$AHEAD" -gt 0 ] && die "DIVERGED — the live checkout carries $AHEAD commit(s) that are not on origin/main, so it cannot fast-forward to ${TARGET:0:12}. This lane never rebases or resets a shared checkout; land or drop those commits by hand."
   MERGE_ERR="$(printf '%s' "$MERGE_ERR" | tr '\n' ' ' | sed 's/  */ /g; s/ *$//')"
+  # R7 REACHES THIS ARM. It did not, and this is the arm where it matters most: the three causes
+  # above are the ones the lane MODELS, so anything landing here is by construction a cause nobody
+  # anticipated — and a `die` with no refusal_bump is a STANDING STATE that generates no news.
+  # Measured 2026-09-05: 34 consecutive identical refusals over ~11.5h, live layer frozen 9 commits
+  # behind trunk, zero escalations, because the streak counter was never told (repo memory:
+  # detector-with-no-owner-is-not-an-actuator, fail-loud-into-a-log-nobody-reads-is-silent). The
+  # bump precedes the die so the exit code and the message are unchanged.
+  refusal_bump merge-blocked "git merge --ff-only ${TARGET:0:12} FAILED in $DEPLOY_REPO — GIT SAID: ${MERGE_ERR:-<git printed nothing>}"
   die "git merge --ff-only ${TARGET:0:12} FAILED in $DEPLOY_REPO with all THREE named causes ruled out (no dirty tracked path inside the advance's own path set; no untracked collision; HEAD carries no commit missing from trunk) — GIT SAID: ${MERGE_ERR:-<git printed nothing>}"
 fi
 say "deployed ${HEAD_SHA:0:12} → ${TARGET:0:12}: $(g log -1 --pretty=%s "$TARGET" 2>/dev/null)"

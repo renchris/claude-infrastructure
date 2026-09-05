@@ -2701,3 +2701,88 @@ orphan() { # <live-relative> — a DANGLING link into the fixture repo; returns 
   [[ "$output" != *"orphan-prune"* ]] || false          # `|| false`: a mid-test [[ ]] is dead otherwise
   [[ "$output" != *"would prune"* ]]
 }
+
+# ── R7 coverage over the FF arm (2026-09-05 incident) ────────────────────────────────────────────
+# THE HOLE R7 HAD. refusal_bump was wired into every refusal the lane DECIDES (no stamps, no green,
+# dirty tree, untracked collision, diverged, ancestor-inverted) and into none of the ones it MEETS —
+# the terminal `die` after `git merge --ff-only` returns non-zero for a cause no pre-flight models.
+# That is exactly the arm where an operator is most needed, because by construction nobody
+# anticipated the cause. Measured on the live host 2026-09-05: the shared checkout carried
+# core.bare=true, so every working-tree git op answered "fatal: this operation must be run in a work
+# tree", the ff died 34 consecutive times over ~11.5h into deploy.log, the live ~/.claude layer sat
+# frozen 9 commits behind trunk — and R7 escalated ZERO times, because the streak counter was never
+# told (repo memory: detector-with-no-owner-is-not-an-actuator).
+#
+# THE SECOND HALF IS THE ATTRIBUTION. Counting alone would have escalated under refusal_culprit's
+# terminal `*)` arm, whose answer is `verifier-famine` — a POSITIVE claim that no green is being
+# produced. Both halves of that are wrong here (a green exists; the checkout is what refuses), so
+# the page would have pointed the operator at the one subsystem that was working (repo memory:
+# new-enum-member-falls-into-fail-closed-default). The culprit must name the checkout, and its
+# `run` must be the repair.
+r7_ffblocked() { # a deployable green above the live layer, and a checkout that cannot take it
+  advance_origin b
+  stamp origin/main
+  git -C "$SHARED" config core.bare true
+}
+
+@test "R7 THE DEFECT: the ff refusal COUNTS — a checkout that cannot advance escalates as itself" {
+  # PRE-FIX THIS IS RED at the FIRST escalation assertion: the ff arm died without bumping, so the
+  # streak never moved and no tick ever reached REFUSE_MAX.
+  r7_setup; r7_ffblocked
+  run dlr; [ "$status" -eq 1 ]
+  [[ "$output" == *"must be run in a work tree"* ]] || false   # git's own reason still surfaces
+  [[ "$output" != *"ESCALATED"* ]] || false                    # once is not repetition
+  run dlr; [ "$status" -eq 1 ]
+  run dlr; [ "$status" -eq 1 ]                                 # tick 3 == REFUSE_MAX
+  [[ "$output" == *"ESCALATED verdict=escalated"* ]] || false
+  [[ "$output" == *"culprit=checkout-not-a-worktree"* ]] || false
+  [[ "$output" == *"class=merge-blocked"* ]] || false
+  # ...and it names the checkout, never green production, and carries the one repair command.
+  grep -q "is not a working tree" "$CC_BACKLOG_LOG" || false
+  ! grep -q "verifier famine" "$CC_BACKLOG_LOG" || false
+  grep -q -- "--unset core.bare" "$CC_BACKLOG_LOG" || false
+}
+
+@test "R7 ff arm CONTROL: strip the bump and the same 3 ticks escalate NOTHING" {
+  # Arm 2 of the red-proof, built by sed over the WORKING TREE (never a ref — moving-ref-control-lint
+  # refuses that shape). Deleting the one line this fix adds must restore the measured live
+  # behaviour exactly: loud every tick, escalation never.
+  r7_setup; r7_ffblocked
+  local m="$BATS_TEST_TMPDIR/dl-nobump.sh"
+  [ "$(grep -c 'refusal_bump merge-blocked' "$DL")" -eq 1 ] || false      # anchor before
+  sed '/refusal_bump merge-blocked/d' "$DL" > "$m"
+  [ "$(grep -c 'refusal_bump merge-blocked' "$m")" -eq 0 ] || false       # anchor after
+  for _ in 1 2 3 4; do
+    run env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" CC_PAGES_DIR="$PAGES" \
+        CC_DEPLOY_BATS_BIN="$SPY" CC_BACKLOG_BIN="$BLSPY" CC_DEPLOY_TIMEOUT_BIN= \
+        CC_DEPLOY_MAX_LAG_COMMITS=999 CC_DEPLOY_MAX_LAG_HOURS=999 \
+        CC_DEPLOY_REFUSE_MAX=3 CC_DEPLOY_REFUSE_COOLOFF=21600 \
+        /bin/bash "$m" --auto
+    [ "$status" -eq 1 ]
+    [[ "$output" != *"ESCALATED"* ]] || false
+  done
+  [ -z "$(find "$PAGES" -name 'deploy-refusal-escalation-*' 2>/dev/null)" ] || false
+}
+
+@test "R7 ff arm ATTRIBUTION control: without its culprit arm the SAME escalation blames verifier famine" {
+  # One mutant per SITE (repo memory: per-site-mutation-attributes-coverage). The test above would
+  # still escalate with the culprit arm gone — it would just escalate WRONG — so counting and naming
+  # need separate controls. Divert only the case label; the ladder below then answers famine.
+  r7_setup; r7_ffblocked
+  local m="$BATS_TEST_TMPDIR/dl-noculprit.sh"
+  [ "$(grep -c '^    merge-blocked)$' "$DL")" -eq 1 ] || false
+  sed 's/^    merge-blocked)$/    merge-blocked-NEVER)/' "$DL" > "$m"
+  [ "$(grep -c '^    merge-blocked)$' "$m")" -eq 0 ] || false
+  for _ in 1 2 3; do
+    run env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" CC_PAGES_DIR="$PAGES" \
+        CC_DEPLOY_BATS_BIN="$SPY" CC_BACKLOG_BIN="$BLSPY" CC_DEPLOY_TIMEOUT_BIN= \
+        CC_DEPLOY_MAX_LAG_COMMITS=999 CC_DEPLOY_MAX_LAG_HOURS=999 \
+        CC_DEPLOY_REFUSE_MAX=3 CC_DEPLOY_REFUSE_COOLOFF=21600 \
+        /bin/bash "$m" --auto
+    [ "$status" -eq 1 ]
+  done
+  [[ "$output" == *"ESCALATED verdict=escalated"* ]] || false      # it still escalates…
+  [[ "$output" != *"culprit=checkout-not-a-worktree"* ]] || false  # …under the wrong culprit
+  [[ "$output" == *"culprit=verifier-"* ]] || false                 # …one of the green-production ones
+  ! grep -q "is not a working tree" "$CC_BACKLOG_LOG" || false      # …so the repair never reaches the operator
+}
