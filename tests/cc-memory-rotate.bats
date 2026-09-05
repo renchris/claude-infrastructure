@@ -37,6 +37,12 @@ setup() {
   export MEMORY_ROTATE_MIN_KEEP=2
   export MEMORY_ROTATE_TAIL_GUARD=1
   export MEMORY_ROTATE_MIN_AGE_DAYS=7
+  # HERMETICITY PIN (2026-09-05). Two of the subject's readers key on CLAUDE_PROJECT_DIR — the
+  # widened hub scan and now the durability citation scan — so an inherited value makes every
+  # fixture below a function of whichever repo the developer happens to be sitting in. Under
+  # launchd it is unset and the suite is green and latent; run from a live session it ranks
+  # fixture names against the real tree. Tests needing a project dir build their OWN and export it.
+  unset CLAUDE_PROJECT_DIR
   # The unit fixture below used to measure itself with `wc -m`, which counts codepoints only
   # under a multibyte LC_CTYPE and degrades to BYTES under C/POSIX — so the one test whose
   # entire subject is the unit distinction was the one that could not survive
@@ -443,5 +449,190 @@ mkterse() {
   MEMORY_ROTATE_AT_LINES=8 MEMORY_ROTATE_TARGET_LINES=8 run "$SCRIPT" "$d/MEMORY.md"
   [ "$status" -eq 2 ]
   has "$output" 'line-target-not-below-rotate-at'
+}
+
+# ── DURABILITY ORDER: rank first, age only as the tiebreak (Phase 5 item 4) ──────────────────
+#
+# Measured 2026-09-04 on the live claude-infrastructure index: of the 25 entries age-ordering
+# would have taken at the next breach, 24 are cited BY NAME in shipped executable code. Age there
+# records when a lesson was LEARNED, and the oldest lessons are the most deeply wired in, so a
+# 37.9-day spread makes age look like signal while pointing the wrong way. These fixtures make
+# the two orders DISAGREE — under age alone the wired entry is the first thing out, under the
+# shipped order it is the last — so a green here cannot be produced by either policy alone.
+
+# mkproject <name> → a project dir whose bin/ cites the topic files named in argv[2..]
+mkproject() {
+  local p="$BATS_TEST_TMPDIR/$1" f
+  shift
+  mkdir -p "$p/bin"
+  : >"$p/bin/consumer.sh"
+  for f in "$@"; do
+    printf '# see %s for why this branch exists\n' "$f" >>"$p/bin/consumer.sh"
+  done
+  printf '%s' "$p"
+}
+
+# The mutant used by both controls: the rotor with the durability key removed from BOTH selection
+# sorts, i.e. exactly the age-ordered rotor that shipped until 2026-09-05.
+mkageonly() {
+  [ "$(grep -c -- '-k1,1n -k2,2n -k3,3nr -k5,5' "$SCRIPT")" -eq 2 ]   # anchor: stage 1 and stage 2
+  local mut="$BATS_TEST_TMPDIR/mut-ageonly"
+  sed 's/-k1,1n -k2,2n -k3,3nr -k5,5/-k2,2n -k3,3nr -k5,5/' "$SCRIPT" >"$mut"
+  chmod +x "$mut"
+  bash -n "$mut"                                  # a malformed mutant proves nothing
+  printf '%s' "$mut"
+}
+
+@test "durability: a lesson cited by shipped code is demoted LAST, not first for being oldest" {
+  CLAUDE_PROJECT_DIR="$(mkproject proj1 wired.md)"; export CLAUDE_PROJECT_DIR
+  d="$(mkmem dur1)"
+  addentry "$d" wired.md project old "a rule the tooling depends on $(pad 100)"
+  addentry "$d" orphan.md project old "a rule nothing cites $(pad 100)"
+  touch -t 202512011200 "$d/wired.md" "$d/orphan.md"   # the two OLDEST ⇒ age would take both first
+  mkbulk "$d"
+  run "$SCRIPT" "$d/MEMORY.md"
+  [ "$status" -eq 0 ]
+  has "$output" 'verdict=rotated'
+  has "$output" 'durability=ok'
+  has "$output" 'live=0'                          # no live rule had to be demoted
+  grep -qF -- '(wired.md)' "$d/MEMORY.md"         # cited ⇒ ranked last ⇒ still hot
+  if grep -qF -- '(orphan.md)' "$d/MEMORY.md"; then return 1; fi   # uncited, same age ⇒ gone
+}
+
+@test "mutation control: the age-ordered rotor eats the cited rule for being oldest" {
+  mut="$(mkageonly)"
+  CLAUDE_PROJECT_DIR="$(mkproject proj2 wired.md)"; export CLAUDE_PROJECT_DIR
+  d="$(mkmem dur2)"
+  addentry "$d" wired.md project old "a rule the tooling depends on $(pad 100)"
+  addentry "$d" orphan.md project old "a rule nothing cites $(pad 100)"
+  touch -t 202512011200 "$d/wired.md" "$d/orphan.md"
+  mkbulk "$d"
+  run "$mut" "$d/MEMORY.md"
+  has "$output" 'verdict=rotated'
+  if grep -qF -- '(wired.md)' "$d/MEMORY.md"; then return 1; fi     # the defect this phase fixes
+}
+
+@test "durability: a superseded_by: entry is demoted FIRST despite being the newest eligible" {
+  d="$(mkmem dur3)"
+  mkbulk "$d"
+  addentry "$d" dead.md project old "a verdict its own heir replaced $(pad 100)"
+  # NEWER than every bulk entry and outside the 1-line tail guard, so age ordering puts it LAST
+  # in the eligible pool and a partial drain would leave it hot.
+  touch -t 202602011200 "$d/dead.md"
+  addentry "$d" tailpad.md project old "keeps dead.md out of the tail guard $(pad 100)"
+  printf -- '---\nname: dead\nsuperseded_by: heir-rule\ndescription: d\nmetadata:\n  type: project\n---\nbody\n' >"$d/dead.md"
+  touch -t 202602011200 "$d/dead.md"
+  run "$SCRIPT" "$d/MEMORY.md"
+  [ "$status" -eq 0 ]
+  has "$output" 'verdict=rotated'
+  if grep -qF -- '(dead.md)' "$d/MEMORY.md"; then return 1; fi      # rank 0 ⇒ first out
+  grep -qF -- '(a09.md)' "$d/MEMORY.md"           # an OLDER ordinary entry outlived it
+}
+
+@test "mutation control: the age-ordered rotor keeps the superseded entry and eats the older one" {
+  mut="$(mkageonly)"
+  d="$(mkmem dur4)"
+  mkbulk "$d"
+  addentry "$d" dead.md project old "a verdict its own heir replaced $(pad 100)"
+  touch -t 202602011200 "$d/dead.md"
+  addentry "$d" tailpad.md project old "keeps dead.md out of the tail guard $(pad 100)"
+  printf -- '---\nname: dead\nsuperseded_by: heir-rule\ndescription: d\nmetadata:\n  type: project\n---\nbody\n' >"$d/dead.md"
+  touch -t 202602011200 "$d/dead.md"
+  run "$mut" "$d/MEMORY.md"
+  has "$output" 'verdict=rotated'
+  # The discriminator is the dead entry alone: age puts the newest-eligible LAST, so a partial
+  # drain never reaches it and the one entry the author declared replaceable is the one kept.
+  # (Which OTHER entries the age-ordered mutant spends is not asserted — the drain stops at
+  # TARGET, so naming a specific survivor would pin fixture arithmetic, not the policy.)
+  grep -qF -- '(dead.md)' "$d/MEMORY.md"
+}
+
+@test "durability: the prose markers a correction leaves behind do NOT rank an entry dead" {
+  # 26 of this store's topic files carry SUPERSEDED/CORRECTED/REFUTED and ZERO of them mark the
+  # FILE as dead — every one marks a passage the same file then corrects, so matching the prose
+  # would evict the most-corrected entries first. This pins that the rank ignores them.
+  d="$(mkmem dur5)"
+  mkbulk "$d"
+  addentry "$d" corrected.md project old "a rule this file itself CORRECTED $(pad 100)"
+  touch -t 202602011200 "$d/corrected.md"
+  addentry "$d" tailpad.md project old "keeps corrected.md out of the tail guard $(pad 100)"
+  printf -- '---\nname: corrected\ndescription: d\nmetadata:\n  type: project\n---\n**CORRECTED 2026-09-01 — the paragraph above is SUPERSEDED and REFUTED.**\n' >"$d/corrected.md"
+  touch -t 202602011200 "$d/corrected.md"
+  run "$SCRIPT" "$d/MEMORY.md"
+  has "$output" 'verdict=rotated'
+  grep -qF -- '(corrected.md)' "$d/MEMORY.md"     # newest eligible, rank 1 ⇒ survives the drain
+}
+
+@test "durability: with no project dir the rank degrades to age and SAYS so" {
+  d="$(mkmem dur6)"; mkbulk "$d"
+  run "$SCRIPT" "$d/MEMORY.md"
+  [ "$status" -eq 0 ]
+  has "$output" 'verdict=rotated'
+  has "$output" 'durability=unavailable'          # never implies a ranking that did not run
+  if grep -qF -- '(a01.md)' "$d/MEMORY.md"; then return 1; fi       # oldest-first, exactly as before
+}
+
+# ── CITATION ON DEMOTION (Phase 5 item 5) ────────────────────────────────────────────────────
+#
+# A routed line keeps its reader because both surfaces auto-load. A COLD one does not, so the
+# demotion leaves a one-line pointer naming the topic file on the always-loaded rules file.
+# Measured payoff 11x: cited demotions are re-read 30% of the time at 1.23 reads/file against
+# 3% and 0.11 for archive-only. The fixture must reach the COLD path, which after routing shipped
+# means a stage-2 breach: the entries stage 2 frees are type-stamped, so route_veto sends them to
+# the cold record rather than to the rules file.
+
+# 24 entries, not 20: at 20 this fixture measures 3041 raw bytes and the LIMIT it must exceed is
+# shifted UP by mim_overhead (the loader strips frontmatter and block comments), so the breach it
+# is built to create did not happen and the rotor correctly returned exhausted. Sized with margin
+# and asserted below rather than assumed.
+mkbreach() {
+  local d="$1" i
+  for i in $(seq -w 1 24); do addentry "$d" "lesson$i.md" feedback old "$(pad 120)"; done
+  [ "$(eff "$d/MEMORY.md")" -ge 3000 ]
+}
+
+@test "citation on demotion: the rules file gains a pointer naming each demoted topic file" {
+  d="$(mkmem cite1)"; mkbreach "$d"
+  rules="$BATS_TEST_TMPDIR/rules/agent-operating-lessons.md"
+  run "$SCRIPT" --rules-file "$rules" "$d/MEMORY.md"
+  [ "$status" -eq 0 ]
+  has "$output" 'verdict=rotated'
+  hasnt "$output" 'cited=0'
+  hasnt "$output" ' cite='                        # no degradation reason ⇒ the pointers were written
+  grep -qF 'demotion pointers written' "$rules"
+  grep -qF 'lesson01.md' "$rules"                 # the topic file is NAMED
+  grep -qF 'demoted' "$rules"
+  # …and it is a POINTER, not the entry: the index line itself went to the cold record.
+  cold="$(ls "$d"/archive/MEMORY_ARCHIVE_*-COLD.md)"
+  grep -qF -- '(lesson01.md)' "$cold"
+  if grep -qF -- '- [lesson01](lesson01.md)' "$rules"; then return 1; fi
+  [ -f "$d/lesson01.md" ]                         # topic files are never touched
+}
+
+@test "citation on demotion: a second rotation does not duplicate an existing pointer" {
+  d="$(mkmem cite2)"; mkbreach "$d"
+  rules="$BATS_TEST_TMPDIR/rules2/agent-operating-lessons.md"
+  run "$SCRIPT" --rules-file "$rules" "$d/MEMORY.md"
+  has "$output" 'verdict=rotated'
+  line="$(grep -F 'lesson01.md' "$rules" | head -1)"
+  local i
+  for i in $(seq -w 21 40); do addentry "$d" "lesson$i.md" feedback old "$(pad 120)"; done
+  printf '%s\n' "$(grep -F -- '(lesson01.md)' "$d"/archive/MEMORY_ARCHIVE_*-COLD.md | head -1)" >>"$d/MEMORY.md"
+  run "$SCRIPT" --rules-file "$rules" "$d/MEMORY.md"
+  has "$output" 'verdict=rotated'
+  [ "$(grep -cxF -- "$line" "$rules")" -eq 1 ]
+}
+
+@test "citation on demotion: no destination degrades the pointer, never the rotation" {
+  d="$(mkmem cite3)"; mkbreach "$d"
+  cp "$d/MEMORY.md" "$BATS_TEST_TMPDIR/cite3.before"
+  run "$SCRIPT" "$d/MEMORY.md"                    # no --rules-file, no CLAUDE_PROJECT_DIR
+  [ "$status" -eq 0 ]
+  has "$output" 'verdict=rotated'                 # the loader cap is still held
+  has "$output" 'cite=no-rules-destination'       # and the reason is PRINTED, not swallowed
+  has "$output" 'cited=0'
+  cold="$(ls "$d"/archive/MEMORY_ARCHIVE_*-COLD.md)"
+  grep -qF -- '(lesson01.md)' "$cold"
+  if cmp -s "$d/MEMORY.md" "$BATS_TEST_TMPDIR/cite3.before"; then return 1; fi
 }
 

@@ -20,8 +20,8 @@
 #
 # ── WHAT IT DOES ─────────────────────────────────────────────────────────────────────────────
 # Mechanizes the operator-approved cold split (2026-07-30, commands/compact-memory.md § the
-# two-tier hot/cold split): at/over ROTATE_AT, move ELIGIBLE `- [...](file.md) — hook` lines,
-# oldest-first by topic mtime, out of the index until it is at/under TARGET.
+# two-tier hot/cold split): at/over ROTATE_AT, move ELIGIBLE `- [...](file.md) — hook` lines out
+# of the index until it is at/under TARGET, LEAST-DURABLE FIRST (see DURABILITY ORDER below).
 #
 # 🚨 WHERE THEY GO CHANGED 2026-09-04. A selected line is now ROUTED to the project's
 # always-loaded rules file when route_veto permits, and COLD-recorded only when it does not.
@@ -67,6 +67,42 @@
 #   young: topic mtime < MIN_AGE_DAYS        — mtime, not birthtime: corrections bump mtime,
 #                                              so an old-but-ACTIVE rule stays hot
 #   MIN_KEEP floor on the remaining count
+#
+# ── DURABILITY ORDER — WHY AGE IS A TIEBREAK AND NEVER A SELECTOR (2026-09-05) ────────────────
+# Until today the eviction order was topic mtime, oldest first. On the claude-infrastructure index
+# that is not merely uninformative, it is ANTI-correlated with durability. Measured 2026-09-04 on
+# the exact 25-entry set age-ordering would have taken at the next breach: 24 of them are cited BY
+# NAME in shipped executable code — migrations/0015, scripts/deploy-live.sh, scripts/ship-land.sh,
+# scripts/test-hermeticity-lint.sh, bin/cc-backlog and others. Only one was not. Age here records
+# WHEN A LESSON WAS LEARNED, and the oldest lessons are the ones most deeply wired into the
+# tooling, so a 37.9-day spread makes age LOOK like a real signal while it points the wrong way.
+# (reso is the other failure shape and reaches the same verdict: its eligible pool spans 2.9 days,
+# after which sort tie-breaks on FILENAME — eviction by coin-flip.) The shipped budget gate already
+# forbids this in words — "Pick an entry to demote using the DURABILITY criterion … NEVER a live
+# rule" (memory-index-budget.sh:176) — and nothing implemented it.
+#
+# So selection is ordered by durability_rank() first, mtime second:
+#   rank 0  the author DECLARED it dead: `superseded_by: <name>` in the topic frontmatter
+#   rank 1  no executable consumer found
+#   rank 2  cited BY NAME in shipped code or an always-loaded rules file — a LIVE OPERATING RULE
+# Rank is a PREFERENCE, not a veto: if the pool must drain to reach TARGET, rank-2 entries still
+# move — but last, and the verdict prints `live=<n>` so demoting one is visible rather than silent.
+#
+# 🚨 THE PROSE MARKERS ARE DELIBERATELY NOT MATCHED, AND THAT IS THE WHOLE DESIGN OF rank 0.
+# `SUPERSEDED` / `CORRECTED` / `REFUTED` / `RETRACTED` appear in 26 of this store's 388 topic files
+# (39.2% corpus-wide), and every one of the 26 was read: ZERO mark the FILE as dead. All 26 mark a
+# passage INSIDE a file that the same file then corrects — so the marker means the entry is MORE
+# current, not less, and matching it would evict the most-corrected files FIRST. That is the same
+# defect as age-ordering wearing a different coat. Frontmatter `superseded_by:` cannot be produced
+# by prose and names the heir, so it is the only unambiguous signal, and it is inert on today's
+# corpus by construction — which is correct: it is the sanctioned way to MARK an entry dead, not a
+# classifier guessing which ones are.
+#
+# ⚠️ NOT IMPLEMENTED, AND NAMED RATHER THAN FAKED: the plan's fourth criterion, "zero net reads AND
+# not HOT". No read ledger exists — nothing in this repo records which memory files a session read,
+# and the only trace is per-session transcript Read records across four account stores, which a
+# per-prompt actuator cannot compute. A rank derived from a store that does not exist would be
+# arithmetic standing in for a measurement.
 #
 # ── SAFETY SHAPE ─────────────────────────────────────────────────────────────────────────────
 # COLD is written idempotently (a line already present is not duplicated) and VERIFIED
@@ -738,6 +774,74 @@ $_r"
   return 0
 }
 
+# ── DURABILITY (Phase 5 item 4) ──────────────────────────────────────────────────────────────
+#
+# build_cited_set <newline-separated topic filenames> → sets CITED_LIST and CITE_SCAN.
+#
+# ONE grep pass for the whole candidate set, not one per entry: `grep -F -f` is Aho-Corasick, so
+# 143 names over this repo's 504 executable files costs the same as one name. Per-entry scanning
+# would have been O(entries x corpus) inside a hook that fires on every prompt fleet-wide.
+#
+# WHAT COUNTS AS A CONSUMER, AND WHAT DOES NOT. The question this rank asks is "does executable
+# code depend on this rule", so the scan covers the surfaces that EXECUTE (bin, hooks, scripts,
+# migrations, commands) plus `.claude/rules`, which loads unprompted. It deliberately excludes:
+#   docs/  — prose ADVISES; a citation there is not a dependency (the enforcing-store distinction
+#            this repo already draws elsewhere), and docs/ carries whole research corpora that
+#            name nearly every lesson, which would rank the entire index 2 and make this inert.
+#   tests/ — a fixture NAME is not a consumer. tests/cc-memory-rotate.bats literally contains
+#            `real-target.md`, one of its own fixtures; counting it would have this function
+#            protect a file that exists only inside a test tmpdir.
+#
+# DEGRADES TO TODAY'S BEHAVIOUR, LOUDLY. With no CLAUDE_PROJECT_DIR (or none of those dirs
+# present) every candidate ranks 1, the sort falls back to mtime exactly as before, and the
+# verdict prints `durability=unavailable` rather than implying a ranking that never ran.
+CITED_LIST=""
+CITE_SCAN=unavailable
+build_cited_set() {
+  local names="$1" root d dirs pat
+  CITED_LIST=""; CITE_SCAN=unavailable
+  root="${CLAUDE_PROJECT_DIR:-}"
+  [ -n "$root" ] || return 0
+  [ -d "$root" ] || return 0
+  dirs=""
+  for d in bin hooks scripts migrations commands .claude/rules; do
+    if [ -d "$root/$d" ]; then dirs="$dirs $root/$d"; fi
+  done
+  [ -n "$dirs" ] || return 0
+  # An EMPTY pattern line matches every line, so a blank in this file would mark the whole index
+  # cited and silently disable the rank. Strip blanks, then refuse an empty file outright.
+  pat=$(mktemp "$DIR/.rotate.cited.XXXXXX") || return 0
+  printf '%s\n' "$names" | grep -v '^[[:space:]]*$' >"$pat" 2>/dev/null || true
+  if [ ! -s "$pat" ]; then rm -f "$pat"; return 0; fi
+  # -o prints each MATCH, so the output is the set of names that occur, never the matching lines.
+  # shellcheck disable=SC2086  # $dirs is a deliberately word-split list of directories
+  CITED_LIST=$(grep -rhoF -f "$pat" $dirs 2>/dev/null | sort -u || true)
+  rm -f "$pat"
+  CITE_SCAN=ok
+  return 0
+}
+
+# durability_rank <topicfile> → 0 (declared dead) | 1 (no consumer) | 2 (live operating rule)
+durability_rank() {
+  local f="$1" sb
+  if [ -z "$f" ]; then echo 1; return 0; fi
+  if [ -f "$DIR/$f" ]; then
+    # awk on the file, never `head | grep -q`: under pipefail a -q that matches early SIGPIPEs its
+    # producer and the 141 is promoted to the `if` (scripts/pipefail-sigpipe-lint.sh).
+    sb=$(awk 'NR<=12 && /^[[:space:]]*superseded_by:[[:space:]]*[^[:space:]]/ {print "y"; exit}' \
+         "$DIR/$f" 2>/dev/null || true)
+    if [ "$sb" = y ]; then echo 0; return 0; fi
+  fi
+  case "
+$CITED_LIST
+" in
+    *"
+$f
+"*) echo 2; return 0 ;;
+  esac
+  echo 1
+}
+
 ATTEMPT=0
 while :; do
   ATTEMPT=$(( ATTEMPT + 1 ))
@@ -801,6 +905,11 @@ while :; do
   TAIL_FROM=$(( NENT - TAIL_GUARD ))
   if [ "$TAIL_FROM" -lt 0 ]; then TAIL_FROM=0; fi
 
+  # One citation scan per attempt, over EVERY entry file — not just the stage-1 eligible pool,
+  # because stage 2 re-judges entries this loop classified as kept and must rank them by the same
+  # measurement rather than a second, later one.
+  build_cited_set "$(printf '%s' "$ENTRY_FILES" | tr "$TAB" '\n')"
+
   # Does the header already point at the cold tier? (PROTECTED section of compact-memory.md:
   # archived topics must stay discoverable from the auto-loaded surface.)
   HAVE_PTR=0
@@ -832,7 +941,7 @@ while :; do
         dangling) K_DANGLING=$((K_DANGLING+1));; pinned) K_PIN=$((K_PIN+1));;
         type) K_TYPE=$((K_TYPE+1))
               mt=$(fmtime "$DIR/$f"); [ -n "$mt" ] || mt=$NOW
-              TYPEKEPT="$TYPEKEPT$mt$TAB$j$TAB$li$TAB$f
+              TYPEKEPT="$TYPEKEPT$(durability_rank "$f")$TAB$mt$TAB$j$TAB$li$TAB$f
 ";;
         marker) K_MARK=$((K_MARK+1));;
         young) K_YOUNG=$((K_YOUNG+1));; hub) K_HUB=$((K_HUB+1));;
@@ -840,7 +949,7 @@ while :; do
       vlog "keep [$r] ${f:-<line $li>}"
     else
       mt=$(fmtime "$DIR/$f"); [ -n "$mt" ] || mt=$NOW
-      ELIG="$ELIG$mt$TAB${#LINES[$li]}$TAB$li$TAB$f
+      ELIG="$ELIG$(durability_rank "$f")$TAB$mt$TAB${#LINES[$li]}$TAB$li$TAB$f
 "
     fi
     j=$(( j + 1 ))
@@ -859,18 +968,21 @@ while :; do
   # Why the selection loop stopped: `floor` = it hit MIN_KEEP, `pool` = it ran out of eligible
   # entries. That distinction is the whole diagnostic value of the exhausted census — see BOUND.
   STOP_REASON=pool
-  # SIZE TERM ADDED 2026-09-03 (record is now mtime<TAB>size<TAB>lineno<TAB>file). Oldest-first
-  # stays the PRIMARY key — that is the ratified eviction policy and this is not the phase that
-  # changes it — but the tiebreak is now size DESCENDING rather than filename. Nothing anywhere
-  # ordered by size, while the loop below decrements the projection by whatever each line happens
-  # to weigh, so on a skewed index it drained cheap entries first and left the heavy ones. Filename
-  # remains the final tiebreak, so the order is still total and deterministic.
+  # RECORD = rank<TAB>mtime<TAB>size<TAB>lineno<TAB>file, and the key order IS the policy:
+  #   -k1,1n   DURABILITY first (2026-09-05) — least durable leaves first. See DURABILITY ORDER
+  #            in the header for why age was not merely uninformative here but anti-correlated.
+  #   -k2,2n   mtime, oldest first — now a TIEBREAK WITHIN a rank, never a selector across ranks.
+  #   -k3,3nr  size DESCENDING (2026-09-03). The loop below decrements the projection by whatever
+  #            each line weighs, so on a skewed index a cheap-first order drained many small
+  #            entries and never reached TARGET.
+  #   -k5,5    filename, so the order is total and deterministic at every remaining tie.
   if [ -n "$ELIG" ]; then
-    SORTED=$(printf '%s' "$ELIG" | sort -t "$TAB" -k1,1n -k2,2nr -k4,4)
+    SORTED=$(printf '%s' "$ELIG" | sort -t "$TAB" -k1,1n -k2,2n -k3,3nr -k5,5)
   else
     SORTED=""
   fi
-  while IFS="$TAB" read -r _mt _sz li f; do
+  MOVED_LIVE=0
+  while IFS="$TAB" read -r _rk _mt _sz li f; do
     if [ -z "${li:-}" ]; then continue; fi
     if [ "$PROJ" -le "$TARGET" ] && [ "$PROJ_L" -le "$TARGET_LINES" ]; then break; fi
     if [ "$REMAIN" -le "$MIN_KEEP" ]; then STOP_REASON=floor; break; fi
@@ -878,7 +990,8 @@ while :; do
     PROJ_L=$(( PROJ_L - 1 ))
     MOVE_LNOS="$MOVE_LNOS $li"
     MOVED=$(( MOVED + 1 )); REMAIN=$(( REMAIN - 1 ))
-    vlog "move $f (mtime $_mt)"
+    if [ "${_rk:-1}" = 2 ]; then MOVED_LIVE=$(( MOVED_LIVE + 1 )); fi
+    vlog "move $f (rank $_rk, mtime $_mt)"
   done <<EOF
 $SORTED
 EOF
@@ -897,19 +1010,21 @@ EOF
   if [ "$PROJ" -gt "$TARGET" ] || [ "$PROJ_L" -gt "$TARGET_LINES" ]; then SHORT=1; fi
   if [ "$SHORT" -eq 1 ] && [ "$BREACHED" -eq 1 ] && [ -n "$TYPEKEPT" ]; then
     ELIG2=""
-    while IFS="$TAB" read -r mt j2 li f; do
+    while IFS="$TAB" read -r rk mt j2 li f; do
       if [ -z "${li:-}" ]; then continue; fi
       r2=$(protect_reason "$j2" "${LINES[$li]}" "$f" 2)
       if [ -z "$r2" ]; then
-        ELIG2="$ELIG2$mt$TAB${#LINES[$li]}$TAB$li$TAB$f
+        ELIG2="$ELIG2$rk$TAB$mt$TAB${#LINES[$li]}$TAB$li$TAB$f
 "
       fi
     done <<EOF
 $TYPEKEPT
 EOF
     if [ -n "$ELIG2" ]; then
-      SORTED2=$(printf '%s' "$ELIG2" | sort -t "$TAB" -k1,1n -k2,2nr -k4,4)
-      while IFS="$TAB" read -r _mt _sz li f; do
+      # Same key order as stage 1 — one policy, spelled once per loop rather than two orders that
+      # would drift on exactly the property this phase exists to fix.
+      SORTED2=$(printf '%s' "$ELIG2" | sort -t "$TAB" -k1,1n -k2,2n -k3,3nr -k5,5)
+      while IFS="$TAB" read -r _rk _mt _sz li f; do
         if [ -z "${li:-}" ]; then continue; fi
         if [ "$PROJ" -le "$TARGET" ] && [ "$PROJ_L" -le "$TARGET_LINES" ]; then break; fi
         if [ "$REMAIN" -le "$MIN_KEEP" ]; then STOP_REASON=floor; break; fi
@@ -917,7 +1032,8 @@ EOF
         PROJ_L=$(( PROJ_L - 1 ))
         MOVE_LNOS="$MOVE_LNOS $li"
         MOVED=$(( MOVED + 1 )); STAGE2=$(( STAGE2 + 1 )); REMAIN=$(( REMAIN - 1 ))
-        vlog "move [stage2] $f (mtime $_mt)"
+        if [ "${_rk:-1}" = 2 ]; then MOVED_LIVE=$(( MOVED_LIVE + 1 )); fi
+        vlog "move [stage2] $f (rank $_rk, mtime $_mt)"
       done <<EOF
 $SORTED2
 EOF
@@ -1050,7 +1166,7 @@ EOF
   # Stage the block first, append once: the idempotency greps must read a COLD that this
   # same rotation is not concurrently appending to (SC2094's hazard class).
   if [ "$COLD_N" -gt 0 ]; then
-    BLOCK=$(printf '\n<!-- auto-rotated %s by cc-memory-rotate: %s entries, oldest-eligible-first by topic mtime; index %s B (rotate_at %s, target %s) -->' \
+    BLOCK=$(printf '\n<!-- auto-rotated %s by cc-memory-rotate: %s entries, least-durable-first (rank, then oldest mtime); index %s B (rotate_at %s, target %s) -->' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$COLD_N" "$SIZE" "$ROTATE_AT" "$TARGET")
     for li in $COLD_LNOS; do
       if ! grep -qxF -- "${LINES[$li]}" "$COLD"; then
@@ -1064,6 +1180,60 @@ ${LINES[$li]}"
         printf 'verdict=error reason=cold-verify-failed\n'; exit 2
       fi
     done
+  fi
+
+  # ── CITATION ON DEMOTION (Phase 5 item 5) ──────────────────────────────────────────────────
+  #
+  # A routed line keeps its reader; a COLD one loses him, because archive/…-COLD.md does not
+  # auto-load. So every demotion leaves a one-line pointer NAMING the topic file on the
+  # always-loaded rules file. Measured payoff 11x: a cited demotion is re-read 30% of the time at
+  # 1.23 reads/file, against 3% and 0.11 reads/file for archive-only.
+  #
+  # 🚨 A POINTER IS NOT A MOVE, SO route_veto IS NOT INVOLVED AND IS NOT WEAKENED. Every line
+  # reaching here was already vetoed FROM routing — that is what made it cold — and it still goes
+  # cold, verbatim, in the block above. What is added is a breadcrumb: the rule itself stays where
+  # the veto put it, the topic file is untouched, and restore is still "paste the index line back".
+  # Writing the index line itself here would be the defect, because a verbatim line in the rules
+  # file is exactly what a ROUTED entry looks like — the pointer has to say the rule went cold.
+  #
+  # ORDER: before the index rewrite, like every other write in this file. A crash between them
+  # leaves at worst a pointer to a line still present in the index, never a demotion with no trace.
+  # FAILURE: degrades. A rotation that refused to hold the loader cap because a rules file was
+  # full would trade a cosmetic loss for live, silent tail-dropping; the reason is PRINTED
+  # (`cite=<reason>`), never swallowed.
+  CITED_N=0; CITE_NOTE=""
+  if [ "$COLD_N" -gt 0 ]; then
+    if resolve_rules_dest; then
+      C_PAY=""
+      for li in $COLD_LNOS; do
+        _cf=""
+        if [[ "${LINES[$li]}" =~ $ENTRY_RX ]]; then _cf="${BASH_REMATCH[1]}"; fi
+        [ -n "$_cf" ] || continue
+        # The hook is what makes a pointer worth following; a bare filename is a name, not a
+        # reason to read. Em-dash split, with the whole-line fallback suppressed rather than
+        # silently emitting the link twice.
+        case "${LINES[$li]}" in
+          *"— "*) _ch="${LINES[$li]#*— }" ;;
+          *)      _ch="" ;;
+        esac
+        C_PAY="$C_PAY$(route_dest_for "$_cf")$TAB- demoted $(date -u +%Y-%m-%d) from MEMORY.md to ${COLD##*/}; the rule itself is unchanged at \`$DIR/$_cf\`${_ch:+ — $_ch}
+"
+        CITED_N=$(( CITED_N + 1 ))
+      done
+      if [ "$CITED_N" -gt 0 ]; then
+        C_PROV=$(printf '<!-- demotion pointers written %s by cc-memory-rotate: %s index line(s) left the always-loaded MEMORY.md for %s, which does NOT auto-load. These one-line pointers are the only always-loaded trace those rules keep; the topic files themselves are unchanged and still readable at the paths named. Restore = paste the original index line back into MEMORY.md. -->' \
+          "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$CITED_N" "$COLD")
+        if route_flush "$C_PAY" "$C_PROV"; then
+          vlog "cited $CITED_N demotion(s) into $ROUTE_DESTS"
+        else
+          CITE_NOTE="$ROUTE_ERR"; CITED_N=0
+          vlog "demotion citation unavailable ($CITE_NOTE) — the cold record is the only trace"
+        fi
+      fi
+    else
+      CITE_NOTE="$RESOLVE_REASON"
+      vlog "no citation destination ($CITE_NOTE) — the cold record is the only trace"
+    fi
   fi
 
   TMP=$(mktemp "$DIR/.MEMORY.md.rotate.XXXXXX")
@@ -1099,9 +1269,13 @@ ${LINES[$li]}"
   # `cold=` names a file, so it must name one that EXISTS: a fully-routed rotation writes no
   # cold record, and printing its would-be path there sends the reader to a missing file.
   COLD_DISP="-"; if [ "$COLD_N" -gt 0 ]; then COLD_DISP="$COLD"; fi
-  printf 'verdict=rotated moved=%s stage2=%s before=%s after=%s lines_before=%s lines_after=%s cold=%s routed=%s dest=%s%s\n' \
+  # `live=` is the alarm this rotation can raise, so its quiet value must be 0: it counts entries
+  # that shipped code cites BY NAME and that had to be demoted anyway because nothing cheaper
+  # reached TARGET. A `live=0` says the ordering did its job; any other value names a real cost.
+  printf 'verdict=rotated moved=%s stage2=%s before=%s after=%s lines_before=%s lines_after=%s cold=%s routed=%s dest=%s durability=%s live=%s cited=%s%s%s\n' \
     "$MOVED" "$STAGE2" "$SIZE" "$NEWSZ" "$NLINES" "$NEWLINES" "$COLD_DISP" "$ROUTED" "$R_DESTS" \
-    "${ROUTE_NOTE:+ route=$ROUTE_NOTE}"
+    "$CITE_SCAN" "${MOVED_LIVE:-0}" "${CITED_N:-0}" \
+    "${ROUTE_NOTE:+ route=$ROUTE_NOTE}" "${CITE_NOTE:+ cite=$CITE_NOTE}"
   printf '%s verdict=rotated moved=%s stage2=%s routed=%s before=%s after=%s attempt=%s\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$MOVED" "$STAGE2" "$ROUTED" "$SIZE" "$NEWSZ" "$ATTEMPT" >>"$DIR/archive/.rotate.log" 2>/dev/null || true
   exit 0
