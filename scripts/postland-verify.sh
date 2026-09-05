@@ -562,6 +562,23 @@ LINT_TO="${CC_POSTLAND_LINT_TIMEOUT_S:-600}"
 # sensor that ships blindness, and this one exists precisely because the proof was running nowhere.
 PRELINT_SELFTEST="${CC_POSTLAND_PRELINT_SELFTEST:-on}"
 PRELINT_UNPROVEN=0     # a lint whose own bound fired: nothing proven ⇒ never a red, never a green
+# ── THE PRELINT DENOMINATOR (backlog 786ac458be00) ───────────────────────────────────────────────
+# `suites` already exists for exactly this reason (see THE STAMP'S DENOMINATOR at the corpus call):
+# a verdict without the size of the population it judged is not auditable. The prelints had no such
+# field, and they need one MORE than the corpus does, because their population is not the tree — it
+# is the CC_POSTLAND_PRELINTS seam. Measured on the real block: unset ⇒ 5 entries, set-but-EMPTY ⇒ 0,
+# a one-element override ⇒ 1. An empty list returns early from prelint_check with PRELINT_UNPROVEN=0,
+# so a GREEN is claimable having run ZERO whole-tree lints, and nothing in the stamp could say so.
+# runner.log records each disposition but is rotated/GC'd on a different schedule from the stamps.
+#
+# TWO NUMBERS, NOT ONE, because "listed" and "judged" are different facts and only their difference
+# is diagnostic. A lint absent from the tree is SKIPPED (an older sha predates it), and one whose
+# --selftest proves it no longer discriminates has its scan SKIPPED too — both are correct refusals
+# that leave `listed` untouched while `ran` falls. prelints_ran counts only a completed SCAN VERDICT
+# (exit 0 clean, or exit 1 red); every non-verdict code already routes to PRELINT_UNPROVEN and is
+# deliberately NOT counted here, so `ran` can never overstate what was proven.
+PRELINT_N=0            # entries the EFFECTIVE prelint list holds this run (the seam, not the tree)
+PRELINT_RAN=0          # of those, how many produced a scan VERDICT (exit 0 or exit 1) — never a non-verdict
 LADDER_UNPROVEN=0      # a RETRY whose own bound fired: same rule — a cut, never a red (C23)
 # Most backlog items ONE red run may file (red_actions files every failing entry, not just the
 # first). 25 is ~2.5x the worst run observed across 69 REDs in runner.log (10 entries), so it is a
@@ -1049,7 +1066,9 @@ prelint_check() { # whole-tree meta-lints, standalone, BEFORE the corpus. Append
   # — which is the point, a deterministic named violation must never be filed as "nothing proven").
   local s rc out first why sout src has
   PRELINT_UNPROVEN=0                        # reset BEFORE the early return — the requeue loop
-  [ "${#PRELINTS[@]}" -eq 0 ] && return 0   # calls run_target twice in one process
+  PRELINT_N="${#PRELINTS[@]}"               # calls run_target twice in one process, and the
+  PRELINT_RAN=0                             # set-but-EMPTY seam must stamp 0/0, not last pass's
+  [ "$PRELINT_N" -eq 0 ] && return 0
   for s in "${PRELINTS[@]}"; do
     [ -n "$s" ] || continue
     # ABSENT from this tree ⇒ skipped, never red: a tree cannot be judged by a check it does not
@@ -1108,7 +1127,7 @@ prelint_check() { # whole-tree meta-lints, standalone, BEFORE the corpus. Append
     # 490 files, clean. The other two are unchanged by this: verified exit 0 both with and without it.
     prelint_invoke "$s" "$out"
     rc=$?
-    [ "$rc" -eq 0 ] && { log "prelint: $s clean (whole-tree strict)"; continue; }
+    [ "$rc" -eq 0 ] && { PRELINT_RAN=$((PRELINT_RAN + 1)); log "prelint: $s clean (whole-tree strict)"; continue; }
     # THE VERDICT / NON-VERDICT SPLIT — exit 1 is the ONLY code that says anything about the tree.
     # Both lints publish the same contract (`0 clean · 1 violation · 2 unusable, LOUD`), so every
     # other code means the check could not be MADE: 2 = a predicate that would not run (the
@@ -1134,6 +1153,7 @@ prelint_check() { # whole-tree meta-lints, standalone, BEFORE the corpus. Append
       esac
       continue
     fi
+    PRELINT_RAN=$((PRELINT_RAN + 1))                     # exit 1 IS a verdict about the tree
     FAILING+=("$s")
     first="$(grep -aE '^[[:space:]]*(RATCHET|LEAK|⛔|✗)' "$out" 2>/dev/null | head -1 | cut -c1-120)"
     [ -n "$first" ] || first="$(sed -n '1p' "$out" 2>/dev/null | cut -c1-120)"
@@ -2214,8 +2234,12 @@ do_bisect() { # <file> <good> <bad> → sets BISECT_CULPRIT (empty when undecida
 write_stamp() { # <tree> <commit> <verdict> <run_s> <retries> <adv> [failing…]
   local tree="$1" commit="$2" verdict="$3" run_s="$4" retries="$5" adv="$6" gcd; shift 6
   mkdir -p "$STAMPS" 2>/dev/null || true
-  printf '{"tree":"%s","commit":"%s","verdict":"%s","failing":%s,"ts":"%s","run_s":%s,"retries":%s,"suites":%s,"checks":"bats+bash-n","shellcheck_advisory":%s,"env":%s}\n' \
-    "$tree" "$commit" "$verdict" "$(json_array "$@")" "$(now_iso)" "$run_s" "$retries" "${CORPUS_N:-0}" "$adv" "$ENV_FP" > "$STAMPS/$tree.json"
+  # `prelints` / `prelints_ran` are the prelint half of the denominator `suites` provides for the
+  # corpus (backlog 786ac458be00). Appended after `suites`, never inserted among the existing keys:
+  # the stamp is read by scripts/offbox-admission-lint.sh and two suites, and a JSON object's keys
+  # are unordered to every one of them, so this is additive by construction.
+  printf '{"tree":"%s","commit":"%s","verdict":"%s","failing":%s,"ts":"%s","run_s":%s,"retries":%s,"suites":%s,"prelints":%s,"prelints_ran":%s,"checks":"bats+bash-n","shellcheck_advisory":%s,"env":%s}\n' \
+    "$tree" "$commit" "$verdict" "$(json_array "$@")" "$(now_iso)" "$run_s" "$retries" "${CORPUS_N:-0}" "${PRELINT_N:-0}" "${PRELINT_RAN:-0}" "$adv" "$ENV_FP" > "$STAMPS/$tree.json"
   # ── GATE-GREEN SYNC (§4.2.5) ───────────────────────────────────────────────────────────────────
   # gate-green asserts "the FULL suite proved this tree". In v2 the land lane no longer runs a
   # corpus, so it can no longer make that claim and stops writing the marker — this is the ONLY
@@ -3608,6 +3632,32 @@ selftest() {
   tree="$(git -C "$d/src" rev-parse 'origin/main^{tree}')"
   grep -q '"verdict":"green"' "$d/state/stamps/$tree.json" 2>/dev/null \
     && okp "prelint: a clean lint lets the corpus decide (control)" || badp "prelint: clean lint still red"
+  # ── THE PRELINT DENOMINATOR (backlog 786ac458be00) ─────────────────────────────────────────────
+  # `suites` has stated the corpus population since 2026-07-31; the prelints had no such field, and
+  # they need one MORE than the corpus does because their population is the CC_POSTLAND_PRELINTS
+  # SEAM rather than the tree. The stamp asserted green immediately above was produced with the
+  # DEFAULT five-entry list, of which this fixture tree carries exactly one — the other four are
+  # absent and correctly skipped — so the two numbers must read 5 and 1. The GAP is the fact the
+  # stamp could not state before: five lints in scope, one actually judged.
+  grep -q '"prelints":5,"prelints_ran":1' "$d/state/stamps/$tree.json" 2>/dev/null \
+    && okp "prelint denominator: the green STATES 5 listed / 1 judged" \
+    || badp "prelint denominator: stamp does not carry prelints:5,prelints_ran:1"
+  # THE SET-BUT-EMPTY SEAM, which is the whole reason this field exists. `CC_POSTLAND_PRELINTS=`
+  # makes the effective list ZERO (the set-but-EMPTY branch at the PRELINTS block), prelint_check
+  # returns early with PRELINT_UNPROVEN=0, and a GREEN is claimable having run no whole-tree lint at
+  # all. That green stays legitimate and this asserts it is UNCHANGED — the defect was never the
+  # verdict, it was that nothing in the stamp could distinguish it from the 5/1 green above.
+  printf '# empty-seam pass\n' >> "$d/src/scripts/host-suites.manifest"
+  ( export CC_POSTLAND_PRELINTS=''
+    fixture_land "a tree verified with an EMPTY prelint seam"
+    run_fixture --run-if-needed ) >/dev/null 2>&1
+  tree="$(git -C "$d/src" rev-parse 'origin/main^{tree}')"
+  grep -q '"verdict":"green"' "$d/state/stamps/$tree.json" 2>/dev/null \
+    && okp "prelint denominator: an EMPTY seam still yields a green (verdict unchanged)" \
+    || badp "prelint denominator: the empty seam changed the verdict"
+  grep -q '"prelints":0,"prelints_ran":0' "$d/state/stamps/$tree.json" 2>/dev/null \
+    && okp "prelint denominator: that green SAYS it ran zero prelints (0/0)" \
+    || badp "prelint denominator: a zero-prelint green cannot say so"
   # ── §4.2.3 NO ADMISSION SLEEPING — asserted structurally, because its absence IS the feature ────
   # (the pattern is anchored to CODE — the block comment above deliberately still names the deleted
   # function, and a bare-name grep would read its own tombstone as the thing being forbidden)
