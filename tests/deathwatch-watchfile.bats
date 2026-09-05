@@ -110,16 +110,25 @@ reg() { # <paneUUID> <pid> [name] [cwd]
   spawn; local p="$SPAWNED"
   reg 701 "$p" rt-701
   run bash "$PROD"; [ "$status" -eq 0 ]
-  # Perturb the start cell's WHITESPACE ONLY, leaving every other cell intact.
+  # Perturb the start cell's VALUE, leaving every other cell — and its whitespace — intact.
   #
-  # ⚠️ The direction is deliberate, and it is the second version of this test. The obvious mangle is
-  # `tr -s ' '` — collapse runs — because that is literally what proc_lstart does. But `ps -o lstart=`
-  # only PADS on a single-digit day-of-month, so on the 12th (and 20 other days a month) collapsing
-  # is a NO-OP: the file is unchanged, the helper agrees with itself, and the case skips. A control
-  # that is inert on 2/3 of dates is a control that mostly proves nothing, and it skipped on the very
-  # run that introduced it. INSERTING a space is equivalent in what it proves — the guard is
-  # whitespace-EXACT — and it discriminates every day of the month.
-  awk -F'\t' 'BEGIN{OFS="\t"}{sub(/ /,"  ",$2); print}' "$CC_DEATHWATCH_WATCHFILE" \
+  # ⚠️ THIRD VERSION, and each rewrite moved the mangle onto an axis the guard actually still
+  # discriminates. v1 collapsed runs with `tr -s ' '`, which `ps -o lstart=` only pads on a
+  # single-digit day-of-month, so on 20 days a month the mangle was a NO-OP and the case proved
+  # nothing. v2 INSERTED a space, on the stated premise that "the guard is whitespace-EXACT".
+  # 33c462990 then made it deliberately whitespace-TOLERANT: `start_is_same` opens with
+  # `" ".join(recorded.split())`, because the same instant renders as `Fri Aug 21 15:45:00 2026`
+  # canonically and `Fri 21 Aug 08:45:00 2026` under the ambient locale, and an exact compare
+  # against one dialect reports a LIVE process as recycled. So from that commit on, v2 asked the
+  # guard to convict on the ONE axis it had just been fixed to forgive — a control pinning behaviour
+  # the subject removed on purpose, which is red against correct code (memory:
+  # stale-assertion-becomes-an-inverted-guard).
+  #
+  # The YEAR is the axis that survives every dialect: TZ and LC_TIME reorder and re-spell the day
+  # and month and shift the clock, but no rendering of THIS pid's start instant says 1999. So a
+  # guard that has stopped discriminating start instants at all — the vacuity this pair exists to
+  # catch — is still the only thing that can make this green when it should be red.
+  awk -F'\t' 'BEGIN{OFS="\t"}{sub(/[0-9][0-9][0-9][0-9]$/,"1999",$2); print}' "$CC_DEATHWATCH_WATCHFILE" \
     > "$CC_DEATHWATCH_WATCHFILE.mangled"
   # Non-vacuity: the mangle must actually have changed something, or "convicted" means nothing.
   ! cmp -s "$CC_DEATHWATCH_WATCHFILE" "$CC_DEATHWATCH_WATCHFILE.mangled" || false
