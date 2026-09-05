@@ -17,7 +17,9 @@
 #
 # ── RUNNABLE vs JUDGMENT ── the split IS the design. `deploy` and `activation` are RUNNABLE: a
 #   machine step with one correct outcome. `decision` and `backlog --blocked` are JUDGMENT: they wait
-#   on a human ruling, so cc-do NEVER runs them — it prints the exact command that resolves them and
+#   on a human ruling, so cc-do NEVER runs them from the board — it prints the exact command that
+#   resolves them and (2026-09-05) `cc-do <backlog-id>` runs ONE row's recorded command after a typed
+#   `yes` and closes the row on exit 0, so an operator-run step has an observer at last — and
 #   stops. Judgment classes collapse to ONE COUNTED line in the default view (191 blocked items is
 #   the wall we are removing, not a list to reprint); `--list`/`--json` still itemize every one, so
 #   nothing is lost, it is only moved one keystroke away.
@@ -366,8 +368,77 @@ run_steps() {
   return 0
 }
 
+# ── run_backlog_row (2026-09-05, BACKLOG_ZERO §5 — "done has no observer") ───────────────────────
+# `cc-do <id>` where <id> is ONE blocked backlog row carrying a `--run` command: print the step and
+# the RESOLVED command, take a typed `yes` (never bulk, never the Enter that runs activations), run
+# it, and on exit 0 CLOSE THE ROW. The JUDGMENT doctrine above is unchanged — the board never runs
+# these and `--run` never reaches them; this path exists because the alternative was measured:
+# 677 `needs --run` rows filed all-time, 118 live today, and the operator running one BY HAND
+# closed nothing — a row whose command he had already run and passed sat open until a session
+# found it by accident (sevenrooms-bridge, 2026-09-04). A typed yes over a printed command is the
+# consent the blast-radius rule asks for; a paste into a shell buys the same consent and loses the
+# close. Refuses a command with a placeholder (✎ SUPPLY) or a slash command (not a shell command).
+run_backlog_row() { # $1=id → 0 ran+closed · 1 ran and FAILED (row untouched) · 2 not runnable · 3 no confirm channel
+  local id="$1" blg="${CC_BACKLOG_BIN:-}" row needs cmd title rc ans
+  if [ -z "$blg" ]; then
+    for c in "$SCRIPT_DIR/cc-backlog" "$CFG/bin/cc-backlog" "$HOME/.claude/bin/cc-backlog"; do
+      [ -x "$c" ] && { blg="$c"; break; }
+    done
+  fi
+  [ -n "$blg" ] && [ -f "$BLG_FILE" ] || return 2
+  row="$("$blg" list --blocked --json 2>/dev/null | jq -c --arg i "$id" '.[]? | select(.id == $i)' 2>/dev/null | head -1)"
+  [ -n "$row" ] || return 2
+  cmd="$(printf '%s' "$row" | jq -r '.run // ""')"
+  needs="$(printf '%s' "$row" | jq -r '.needs // ""')"
+  title="$(printf '%s' "$row" | jq -r '.title // ""')"
+  if [ -z "$cmd" ]; then
+    printf 'cc-do: %s is a blocked backlog row with NO recorded command — it is judgment, not a step.\n' "$id" >&2
+    printf 'cc-do:   needs: %s\n' "$needs" >&2
+    return 2
+  fi
+  case "$cmd" in /*) 
+    printf 'cc-do: %s records a slash command (%s), which is not a shell command; run it in the session.\n' "$id" "$cmd" >&2
+    return 2 ;;
+  esac
+  if [ -n "$CC_PLACEHOLDER_RE" ] && printf '%s' "$cmd" | grep -E "$CC_PLACEHOLDER_RE" >/dev/null; then
+    printf 'cc-do: %s still needs a value — its command carries a placeholder: %s\n' "$id" "$cmd" >&2
+    return 2
+  fi
+  printf 'backlog %s — %s\n' "$id" "${title:0:80}"
+  printf '  needs: %s\n' "$needs"
+  printf '  will run, then close the row on exit 0:\n'
+  printf '    %s\n' "$cmd"
+  if [ "${CC_DO_ASSUME_YES:-0}" != 1 ]; then
+    if [ ! -t 0 ]; then
+      printf 'cc-do: NOTHING RAN — stdin is not a terminal, so the typed confirm cannot be asked.\n' >&2
+      return 3
+    fi
+    printf 'Run it and close %s? type yes: ' "$id"
+    read -r ans || ans=""
+    [ "$ans" = yes ] || { printf 'cc-do: nothing run; row %s untouched.\n' "$id"; return 0; }
+  fi
+  bash -c "$cmd" </dev/null; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'cc-do: FAILED — %s (exit %s); row %s is untouched (still blocked).\n' "$cmd" "$rc" "$id" >&2
+    return 1
+  fi
+  if "$blg" "done" "$id" --evidence "cc-do ran: $cmd (exit 0)" >/dev/null; then
+    printf '  ✓ ran and closed %s\n' "$id"
+    return 0
+  fi
+  printf 'cc-do: ran OK but could not close %s — close it: cc-backlog done %s --evidence "ran: %s"\n' "$id" "$id" "$cmd" >&2
+  return 1
+}
+
 run_stem() { # $1=stem → exactly one pending activation, or exit 2
-  local stem="$1" f b matches="" n=0 hit="" hitb="" pre=""
+  local stem="$1" f b matches="" n=0 hit="" hitb="" pre="" rc=0
+  # A 12-hex stem is a backlog id before it is an activation stem (activations are `NN-name`).
+  case "$stem" in
+    [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
+      run_backlog_row "$stem"; rc=$?
+      [ "$rc" -eq 2 ] || return "$rc"     # 2 = not a runnable row; fall through to activations
+      ;;
+  esac
   for f in "$ACT_DIR"/*.sh; do
     [ -f "$f" ] || continue
     [ -f "$f.done" ] && continue
