@@ -86,6 +86,17 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-09-04 — recycle #304 (lane infra):** closed 2181cc952005, 03718bc95795, 2bcc6b4d8468,
+  8bd8f9b5a16d · blocked none · released 26d4010f1b22, fa475126f710 · landed 4df511fa0, 3a7c2f883,
+  b2a393268 · `closed=7 closed_pre=4 closed_other=2 filed=2 net=5 blocked=3 min=3 lane=local-drain
+  project=claude-infrastructure floor=MET`. Two fixes, two moot. The shared `~/.claude/backups` is
+  reached by a symlink from all four config dirs, so identity-class sources now route to
+  `${CLAUDE_CONFIG_DIR}/backups-identity` while work-file backups stay shared — split by CONTENT
+  class, because isolating the store wholesale is the `tasks` mis-classification this repo already
+  reverted once. The isolate-set stopped being a denylist of spellings: a name is isolated when
+  stripping dot-suffixes reaches a name that dir already isolates, so `.claude.json.tmp.<pid>.<hash>`
+  follows `.claude.json` without anyone editing a list. `todos/` stays on the row — a fresh
+  classification with live blast radius, not a spelling.
 - **2026-09-04 — recycle #303 (lane infra):** closed 9547e1442a89, b4d67cf8691e, c4ae411cfdea ·
   blocked none · released 26d4010f1b22, 4e6a51df2a84 · landed d93147bac, f30cab163 ·
   two fixes, one moot: the HOST RED backlog title kept its `(N)` failure counts so one finding
