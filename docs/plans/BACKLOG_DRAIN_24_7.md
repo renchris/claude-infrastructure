@@ -87,6 +87,16 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-05 — recycle #308 (lane infra):** closed 44f6b579248d (MOOT — "cloud creates but never
+  runs the brief" is refuted at scale: `cc-cloud list | grep 'claude/fire-'` = 664 total, 309 with a
+  pushed ref, 209 never polled; the residual NOT-START rate is open row 42ab9ce1a2e7) · d73a772a8468
+  (MOOT — READINESS W1 landed by CONTENT: `CC_DISPATCH_READY_GATE` ×3 and `readyAt` ×10 in
+  origin/main's bin/cc-dispatch, `paths` ×14 in bin/cc-venue, 5ac7990d9 an ancestor) · fa2aa0f5e535
+  (DOABLE — landed 360d9cc82: postgresql@14 declared in launchd/fleet.manifest, so cc-fleet reports
+  S4 FAILING on the 10s retry loop that hid for 8 days) · released 8fd1919f7769 (TOO BIG — its
+  triage landed as 9613e17af; 5 of its 9 reds are REAL, not machine-coupled) · closed=7 closed_pre=3
+  closed_other=12 filed=20 net=-13 blocked=15 min=3 lane=local-drain project=claude-infrastructure floor=MET.
+
 - **2026-09-05 — recycle #307 (lane infra):** closed 0052d5105b00 (MOOT — the `--deepen` probe
   gated an unlock delivered by `--unshallow`; `--deepen` is refused by design on trunk) ·
   617d071cef41 (MOOT — the HOST CUT now earns a verdict: `bats tests/test-hermeticity-lint.bats`
