@@ -1,0 +1,211 @@
+#!/bin/bash
+# cc-husk-sweep — find every pane sitting at a bare shell over a DEAD Claude session (a "husk"),
+# say who lived there, how it died, whether it left work open, and resume the ones that did.
+#
+# THE INCIDENT THIS ANSWERS (2026-09-04, docs/research/husk-panes-pkill-selection-2026-09-04.md):
+# a sibling's `pkill -f "cc-await-ping"` SIGTERMed five sessions in 30 s. Each printed Claude Code's
+# ordinary "Resume this session with:" line and dropped to its shell — pixel-identical to a clean
+# /exit — and the operator read five panes as failed self-recycles. Recovery was five hand-typed
+# resumes, and the pane's own printed line is the WRONG command: it says `claude --resume <sid>`,
+# which uses the default account and cannot find a transcript that lives under another account's
+# store. This tool resolves the session AND its account, and types the pinned launcher instead.
+#
+#   cc-husk-sweep                 list husks (default): PANE · SID · LAUNCHER · DEATH · CLOSE · VERDICT
+#   cc-husk-sweep --resume        resume every husk whose VERDICT is RESUME (work left open)
+#   cc-husk-sweep --resume --all  …and the DONE ones too (they will just close cleanly)
+#   cc-husk-sweep --json          the same rows as JSON lines
+#   --yes                         skip the typed-yes gate (each resume spends that account's quota)
+#   --pane <id>                   restrict to one pane
+#
+# HOW A HUSK IS RESOLVED, in order (the first that answers wins, and the source is printed):
+#   registry    ~/.claude/cc-registry/<pane>.json — survives exactly when SessionEnd did NOT run
+#               (a SIGKILL, a cut-off SIGTERM), which is the common husk; carries sid + account + cwd
+#   scrollback  the pane's last "claude --resume <sid>" line + the launcher of the last typed
+#               launch line (claude / claude2 / claude3 / claude4) — the id line can be CUT OFF
+#               when the session was killed mid-print (pane 144, 2026-09-04)
+#   transcript  the newest *.jsonl for the pane's cwd across the four account stores — the
+#               store names the account
+# VERDICT: RESUME when the session's last close said "Good to close: no", or its cwd holds
+# uncommitted / unlanded work; DONE when it said "yes" and the cwd is clean and landed; UNKNOWN
+# otherwise (and UNKNOWN is resumed with --resume, because a session that cannot be shown done is
+# not done — memory: lookup-miss-is-not-absence).
+#
+# Seams (tests): CC_HUSK_PANES_JSON (file, the `it2 session list --json` shape) · CC_HUSK_PS_FILE
+# (`ps -axo pid=,ppid=,command=` capture) · CC_REGISTRY_DIR · CC_HUSK_STORES (colon-separated
+# account config dirs) · CC_HUSK_CRASH_LOG · CC_HUSK_IT2 (the it2 binary) · CC_HUSK_LOG.
+set -u
+IT2="${CC_HUSK_IT2:-$HOME/.claude/bin/it2}"
+REG="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
+CRASH="${CC_HUSK_CRASH_LOG:-$HOME/.claude/logs/claude-crashes.jsonl}"
+LOG="${CC_HUSK_LOG:-$HOME/.claude/logs/husk-sweep.jsonl}"
+STORES="${CC_HUSK_STORES:-$HOME/.claude-next:$HOME/.claude-secondary:$HOME/.claude-tertiary:$HOME/.claude-quaternary:$HOME/.claude}"
+MODE=list; ALL=0; YES=0; JSON=0; ONLY=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --list) MODE=list ;; --resume) MODE=resume ;; --all) ALL=1 ;; --yes) YES=1 ;; --json) JSON=1 ;;
+    --pane) ONLY="${2:?--pane needs an id}"; shift ;;
+    -h|--help) sed -n '2,/^# Seams/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "cc-husk-sweep: unknown argument '$1'" >&2; exit 2 ;;
+  esac; shift
+done
+command -v jq >/dev/null 2>&1 || { echo "cc-husk-sweep: jq is required" >&2; exit 2; }
+
+launcher_for_dir() {  # <config dir or account label> → launcher name
+  case "${1##*/}" in
+    .claude-secondary|claude-secondary|next2) echo claude2 ;;
+    .claude-tertiary|claude-tertiary|next3)   echo claude3 ;;
+    .claude-quaternary|claude-quaternary|next4) echo claude4 ;;
+    *) echo claude ;;
+  esac
+}
+panes_json() {
+  if [ -n "${CC_HUSK_PANES_JSON:-}" ]; then cat "$CC_HUSK_PANES_JSON"; else "$IT2" session list --json 2>/dev/null; fi
+}
+PS_TABLE="$( if [ -n "${CC_HUSK_PS_FILE:-}" ]; then cat "$CC_HUSK_PS_FILE"; else ps -axo pid=,ppid=,command=; fi )"
+has_claude_under() {  # <pid> → 0 iff a claude runs somewhere under this pid (4 generations: login→zsh→cc-close-attrib→claude)
+  local root="$1" kids next p
+  kids="$root"
+  for _ in 1 2 3 4; do
+    next=""
+    for p in $kids; do
+      while read -r cpid cppid ccmd; do
+        [ "$cppid" = "$p" ] || continue
+        case "$ccmd" in *claude*) return 0 ;; esac
+        next="$next $cpid"
+      done <<<"$PS_TABLE"
+    done
+    kids="$next"; [ -n "$kids" ] || break
+  done
+  return 1
+}
+slug() { printf '%s' "$1" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g'; }
+
+resolve() {  # <pane> <cwd> → sets R_SID R_LAUNCHER R_CWD R_SRC (empty sid = unresolved)
+  local pane="$1" cwd="$2" row sb store d f
+  R_SID=""; R_LAUNCHER=""; R_CWD="$cwd"; R_SRC=""
+  row="$REG/$pane.json"
+  if [ -f "$row" ]; then
+    R_SID="$(jq -r '.session_id // .sessionId // empty' "$row" 2>/dev/null)"
+    if [ -n "$R_SID" ]; then
+      R_LAUNCHER="$(launcher_for_dir "$(jq -r '.account // empty' "$row")")"
+      d="$(jq -r '.cwd // empty' "$row")"; [ -n "$d" ] && R_CWD="$d"
+      R_SRC=registry; return 0
+    fi
+  fi
+  if [ -z "${CC_HUSK_PANES_JSON:-}" ]; then
+    sb="$("$IT2" session read -s "$pane" -n 600 2>/dev/null || true)"
+    # The LAST resume line is only the dead session's if no launch was typed AFTER it: a session
+    # killed mid-print leaves "Resume this session with:" with the id CUT OFF (pane 144,
+    # 2026-09-04), and the previous tenant's intact line would otherwise be resumed instead.
+    local ri li
+    ri="$(printf '%s\n' "$sb" | LC_ALL=C /usr/bin/grep -n 'claude --resume [0-9a-f-]\{36\}' | tail -1 | cut -d: -f1)"
+    li="$(printf '%s\n' "$sb" | LC_ALL=C /usr/bin/grep -n '[[:space:]]claude[0-9]\{0,1\} --strict-mcp-config' | tail -1 | cut -d: -f1)"
+    R_SID=""
+    if [ -n "$ri" ] && [ "${ri:-0}" -gt "${li:-0}" ]; then
+      R_SID="$(printf '%s\n' "$sb" | LC_ALL=C sed -n 's/.*claude --resume \([0-9a-f-]\{36\}\).*/\1/p' | tail -1)"
+    fi
+    if [ -n "$R_SID" ]; then
+      R_LAUNCHER="$(printf '%s\n' "$sb" | LC_ALL=C sed -n 's/.*[[:space:]]\(claude[0-9]\{0,1\}\) --strict-mcp-config.*/\1/p' | tail -1)"
+      [ -n "$R_LAUNCHER" ] || R_LAUNCHER=claude
+      R_SRC=scrollback; return 0
+    fi
+  fi
+  [ -n "$cwd" ] || return 1
+  local best="" bestm=0 m
+  for store in $(printf '%s' "$STORES" | tr ':' ' '); do
+    d="$store/projects/$(slug "$cwd")"; [ -d "$d" ] || continue
+    for f in "$d"/*.jsonl; do
+      [ -f "$f" ] || continue
+      m="$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)"
+      if [ "$m" -gt "$bestm" ]; then bestm="$m"; best="$f"; fi
+    done
+  done
+  [ -n "$best" ] || return 1
+  R_SID="$(basename "$best" .jsonl)"
+  store="${best%/projects/*}"; R_LAUNCHER="$(launcher_for_dir "$store")"; R_SRC=transcript
+  return 0
+}
+transcript_for() {  # <sid> → path or empty
+  local store d f
+  for store in $(printf '%s' "$STORES" | tr ':' ' '); do
+    for d in "$store"/projects/*/; do f="$d$1.jsonl"; [ -f "$f" ] && { echo "$f"; return 0; }; done
+  done
+  return 1
+}
+death_of() {  # <sid> → "<cause>" from the crash log, or "-"
+  [ -f "$CRASH" ] || { echo "-"; return; }
+  local c; c="$(jq -r --arg s "$1" 'select(.sid==$s) | .cause' "$CRASH" 2>/dev/null | tail -1)"
+  echo "${c:--}"
+}
+close_of() {  # <transcript> → yes | no | -   (the last "Good to close:" the session wrote)
+  [ -f "$1" ] || { echo "-"; return; }
+  local c; c="$(LC_ALL=C /usr/bin/grep -o 'Good to close: [a-z]*' "$1" 2>/dev/null | tail -1 | awk '{print $4}')"
+  echo "${c:--}"
+}
+work_of() {  # <cwd> → clean | dirty | unlanded:N | -   (git facts, never the session's word)
+  local cwd="$1" dirty ahead
+  [ -d "$cwd" ] && git -C "$cwd" rev-parse --git-dir >/dev/null 2>&1 || { echo "-"; return; }
+  dirty="$(git -C "$cwd" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$dirty" = 0 ] || { echo "dirty"; return; }
+  ahead="$(git -C "$cwd" rev-list --count origin/main..HEAD 2>/dev/null || echo "")"
+  case "$ahead" in ''|*[!0-9]*) echo "clean" ;; 0) echo "clean" ;; *) echo "unlanded:$ahead" ;; esac
+}
+verdict_of() {  # <close> <work> → RESUME | DONE | UNKNOWN
+  case "$2" in dirty|unlanded:*) echo RESUME; return ;; esac
+  case "$1" in no) echo RESUME ;; yes) [ "$2" = clean ] && echo DONE || echo UNKNOWN ;; *) echo UNKNOWN ;; esac
+}
+type_line() {  # <pane> <line> — echo-verified type + submit (handoff-fire's shape)
+  local pane="$1" line="$2" nonce wire want reread
+  nonce="hs-$$-$RANDOM"; wire=": $nonce; $line"; want="$(printf '%s' "$wire" | tr -d '[:space:]')"
+  "$IT2" session send -s "$pane" $'\x15' >/dev/null 2>&1 || true; sleep 0.2
+  "$IT2" session send -s "$pane" "$wire" >/dev/null 2>&1 || return 1; sleep 0.6
+  reread="$("$IT2" session read -s "$pane" -n 200 2>/dev/null | tr -d '[:space:]')"
+  printf '%s' "$reread" | LC_ALL=C /usr/bin/grep -qF -- "$want" || return 1
+  "$IT2" session send -s "$pane" $'\r' >/dev/null 2>&1
+}
+
+rows=""
+while IFS=$'\t' read -r pane pid cwd; do
+  [ -n "$pane" ] || continue
+  [ -z "$ONLY" ] || [ "$pane" = "$ONLY" ] || continue
+  has_claude_under "$pid" && continue
+  resolve "$pane" "$cwd" || { rows="$rows$pane"$'\t'"-"$'\t'"-"$'\t'"-"$'\t'"-"$'\t'"-"$'\t'"UNKNOWN"$'\t'"$cwd"$'\t'"unresolved"$'\n'; continue; }
+  tp="$(transcript_for "$R_SID" || true)"
+  death="$(death_of "$R_SID")"; close="$(close_of "$tp")"; work="$(work_of "$R_CWD")"
+  v="$(verdict_of "$close" "$work")"
+  rows="$rows$pane"$'\t'"$R_SID"$'\t'"$R_LAUNCHER"$'\t'"$death"$'\t'"$close"$'\t'"$work"$'\t'"$v"$'\t'"$R_CWD"$'\t'"$R_SRC"$'\n'
+done < <(panes_json | jq -r '.[] | [(.id // .uuid // ""), (.pid // 0), (.cwd // "")] | @tsv')
+
+if [ -z "$rows" ]; then echo "cc-husk-sweep: no husk panes — every pane holds a claude, or none is enumerable"; exit 0; fi
+if [ "$JSON" = 1 ]; then
+  printf '%s' "$rows" | jq -R -c 'split("\t") | {pane:.[0],sid:.[1],launcher:.[2],death:.[3],close:.[4],work:.[5],verdict:.[6],cwd:.[7],source:.[8]}'
+else
+  printf 'PANE\tSID\tLAUNCHER\tDEATH\tCLOSE\tWORK\tVERDICT\tSOURCE\tCWD\n'
+  printf '%s' "$rows" | awk -F'\t' '{printf "%s\t%.8s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",$1,$2,$3,$4,$5,$6,$7,$9,$8}'
+fi
+[ "$MODE" = resume ] || exit 0
+
+plan=""
+while IFS=$'\t' read -r pane sid launcher death close work v cwd _; do
+  [ -n "$pane" ] && [ "$sid" != "-" ] || continue
+  if [ "$ALL" = 1 ] || [ "$v" != DONE ]; then plan="$plan$pane"$'\t'"$sid"$'\t'"$launcher"$'\t'"$cwd"$'\n'; fi
+done <<<"$rows"
+[ -n "$plan" ] || { echo "cc-husk-sweep: nothing to resume (every resolved husk is DONE; --all resumes those too)"; exit 0; }
+echo; echo "Will type into each pane:  nocorrect CC_ACCOUNT_PINNED=1 <launcher> --resume <sid>"
+printf '%s' "$plan" | awk -F'\t' '{printf "  pane %s → %s --resume %s   (cwd %s)\n",$1,$3,$2,$4}'
+if [ "$YES" != 1 ]; then
+  echo "Each resume spends that account's quota. Type yes to proceed (or re-run with --yes):"
+  read -r ans </dev/tty 2>/dev/null || ans=""
+  [ "$ans" = yes ] || { echo "cc-husk-sweep: aborted, nothing typed"; exit 3; }
+fi
+rc=0
+while IFS=$'\t' read -r pane sid launcher cwd; do
+  [ -n "$pane" ] || continue
+  type_line "$pane" 'unsetopt correct correct_all 2>/dev/null || true' >/dev/null 2>&1 || true
+  if type_line "$pane" "nocorrect CC_ACCOUNT_PINNED=1 $launcher --resume $sid"; then
+    up=0; for _ in 1 2 3 4 5 6 7 8; do sleep 1; PS_TABLE="$(ps -axo pid=,ppid=,command=)"; pid="$(panes_json | jq -r --arg p "$pane" '.[]|select((.id//.uuid)==$p)|.pid')"; [ -n "$pid" ] && has_claude_under "$pid" && { up=1; break; }; done
+    if [ "$up" = 1 ]; then echo "pane $pane: $sid resumed ($launcher)"; verdict=resumed; else echo "pane $pane: typed, but no claude appeared within 8 s — look at the pane"; verdict=typed-unconfirmed; rc=1; fi
+  else echo "pane $pane: the echo-verified type FAILED — nothing submitted"; verdict=type-failed; rc=1; fi
+  mkdir -p "$(dirname "$LOG")" 2>/dev/null; printf '{"ts":"%s","pane":"%s","sid":"%s","launcher":"%s","verdict":"%s"}\n' "$(date -u +%FT%TZ)" "$pane" "$sid" "$launcher" "$verdict" >> "$LOG" 2>/dev/null || true
+done <<<"$plan"
+exit $rc
