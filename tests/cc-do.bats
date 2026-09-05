@@ -558,3 +558,59 @@ mklag() {  # a shared checkout that is BEHIND its origin, with a deploy script o
   [ ! -f "$BATS_TEST_TMPDIR/deploy-ran" ]                 # held ⇒ the refusing command never ran
   [ -f "$BATS_TEST_TMPDIR/ran" ]                          # …and nothing behind it was starved
 }
+
+# ── `cc-do <backlog-id>`: an operator-run step gets an OBSERVER (2026-09-05, BACKLOG_ZERO §5) ─────
+# Pre-fix a blocked row's `--run` was printed and never executed or closed by anything: 677 such
+# rows filed all-time, 0 closed by the command that discharged them. Red pre-fix: a 12-hex stem
+# fell into run_stem's activation search and exited 2 ("no pending activation starts with").
+
+mkrow() {  # $1=run-cmd → echoes the id of ONE blocked row carrying it
+  bash "$BACKLOG" needs "operator step under test" --run "$1" --project P 2>/dev/null
+}
+row_status() { bash "$BACKLOG" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)|.status'; }
+
+@test "cc-do <id> runs the row's command and CLOSES the row on exit 0 (CC_DO_ASSUME_YES stands in for the typed yes)" {
+  id=$(mkrow "touch '$SENT'")
+  [ "$(row_status "$id")" = "blocked" ]
+  CC_DO_ASSUME_YES=1 run "$DO" "$id" </dev/null
+  [ "$status" -eq 0 ]
+  [ -e "$SENT" ]
+  [ "$(row_status "$id")" = "done" ]
+  grep -q 'cc-do ran' "$CC_BACKLOG_FILE"
+}
+
+@test "a FAILING command leaves the row blocked and exits 1 — no close on a red run" {
+  id=$(mkrow "touch '$SENT'; exit 7")
+  CC_DO_ASSUME_YES=1 run "$DO" "$id" </dev/null
+  [ "$status" -eq 1 ]
+  [ -e "$SENT" ]                                   # it ran…
+  [ "$(row_status "$id")" = "blocked" ]            # …and closed nothing
+  echo "$output" | grep -q 'untouched' || false
+}
+
+@test "no confirm channel ⇒ NOTHING RAN, exit 3, row untouched (a non-TTY cannot type yes)" {
+  id=$(mkrow "touch '$SENT'")
+  run "$DO" "$id" </dev/null
+  [ "$status" -eq 3 ]
+  [ ! -e "$SENT" ]
+  [ "$(row_status "$id")" = "blocked" ]
+}
+
+@test "a placeholder-carrying command and a slash command are REFUSED (exit 2), never run" {
+  id=$(mkrow "cc-relogin <your-account>")
+  CC_DO_ASSUME_YES=1 run "$DO" "$id" </dev/null
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -qi 'placeholder' || false
+  id2=$(mkrow "/ship")
+  CC_DO_ASSUME_YES=1 run "$DO" "$id2" </dev/null
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q 'slash command' || false
+  [ "$(row_status "$id")" = "blocked" ]; [ "$(row_status "$id2")" = "blocked" ]
+}
+
+@test "CONTROL — the BOARD still never runs a blocked row: --run with a runnable row on the board executes nothing of it" {
+  id=$(mkrow "touch '$SENT'")
+  run "$DO" --run </dev/null
+  [ ! -e "$SENT" ]
+  [ "$(row_status "$id")" = "blocked" ]
+}
