@@ -355,3 +355,35 @@ com.chrisren.screenshot-clipboard  | run    | 0    | auto | 12 | 18-fleet-activa
 com.chrisren.verify-2114-archive   | run    | 0    | auto | 12 | 18-fleet-activate.sh
 com.chrisren.watch-claude-code-2118-hold | run | 0 | auto | 7 | 18-fleet-activate.sh
 com.claude.accounts-keepwarm        | staged | 180  | ~/.claude/logs/accounts-keepwarm.out.log | -  | 36-start-latency-router-activate.sh
+
+# ── A THIRD LABEL FAMILY: a brew-managed dependency this box's work depends on ───────────────────
+# 2026-09-05, backlog fa2aa0f5e535. postgresql@14 was silently DOWN 2026-08-05 -> 2026-08-13: eight
+# days, zero starts in its own log, launchd retrying every 10 s invisibly, self-healed on a reboot
+# rather than on anyone noticing (docs/research/wedge-2026-08-13.md §6.2 asks for exactly this —
+# "instrument the supervisor's retry so a dead service surfaces within a day, not never").
+#
+# The reason nothing said so is this file, and it is the same reason com.chrisren.cc-reaper was
+# invisible until 2026-07-29: cc-fleet's unit of coverage is A LINE HERE, so an undeclared label is
+# not merely unalarmed, it is unreachable by every leg of the tool. The fix is therefore one row,
+# not new machinery — which is what the header means by "coverage is total by construction".
+#
+# WHY IT IS ADMISSIBLE HERE despite not being a job this repo AUTHORS. The com.chrisren.* family
+# above already establishes the scope: restic-claude-archive, screenshot-clipboard and
+# verify-2114-archive are the operator's jobs, declared because the box depends on them, not because
+# this repo wrote them. A brew-managed label is the same case one step further out. The coverage
+# loop in tests/cc-fleet.bats runs plist -> manifest over launchd/*.plist only, so a row with no
+# committed plist adds no obligation in that direction and breaks nothing.
+#
+# FIELD CHOICES, both of which are the difference between a sensor and a false alarm:
+#   evidence = `-`   NOT `auto`. postgres writes to /opt/homebrew/var/log/postgresql@14.log on start
+#                    and on error, never on a per-run cadence, so `auto` would resolve to a file
+#                    whose mtime stops moving on a perfectly healthy database and S5 would claim
+#                    STALLED after a day. With `-`, S5 is NEVER claimed (R8) and launchd's own
+#                    counters alone decide S3/S4 — which is precisely what the incident needed:
+#                    a retry loop pins `last exit code` non-zero, so it lands on S4 FAILING with
+#                    detail "last exit code N after M runs" within one cc-fleet tick.
+#   interval_s = 0   KeepAlive, not StartInterval. Only reachable by S5, which `-` already disables.
+# Verified at land (launchctl print gui/<uid>/homebrew.mxcl.postgresql@14): state = running,
+# runs = 1, last exit code = (never exited) ⇒ P_EXIT parses empty ⇒ S4 cannot fire ⇒ S6 HEALTHY,
+# no row. The row appears only when the service actually breaks, which is the whole contract.
+homebrew.mxcl.postgresql@14        | run    | 0    | -    | 12 | 42-postgresql14-activate.sh

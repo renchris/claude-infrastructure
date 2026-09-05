@@ -613,8 +613,16 @@ STUB
   # 244 at the time, from the very wedge the new plist exists to catch. So the one land most likely
   # to add a plist was also the one least able to test it. That is an argument for the §4.4 chokepoint
   # lint, not for deriving `n` from disk, which the block above has already ruled out twice.
-  if [ "$n" != 32 ]; then
-    echo "manifest declares $n labels, expected 32 — if a plist was legitimately added or retired,"
+  # 33 since 2026-09-05: homebrew.mxcl.postgresql@14 (backlog fa2aa0f5e535) — the FIRST row with no
+  # plist in this repo at all, and the first outside the com.claude.* / com.chrisren.* families. It
+  # is declared because postgresql@14 was silently DOWN for eight days (2026-08-05 -> 08-13, zero
+  # starts in its own log, launchd retrying every 10s) and this manifest is the only thing that can
+  # make a launchd label visible to cc-fleet. Note which leg had to move and which could not: the
+  # coverage loop below walks launchd/*.plist -> manifest, so a label whose plist is brew's can only
+  # ever be noticed by THIS count — the same argument the relogin and cc-gc entries above make for
+  # launchd/staged/, one step further out. The count moves WITH the addition, as every entry above.
+  if [ "$n" != 33 ]; then
+    echo "manifest declares $n labels, expected 33 — if a plist was legitimately added or retired,"
     echo "move this count and say why (see the block above); if not, a row is missing. Declared:"
     grep -vE '^[[:space:]]*(#|$)' "$M" | cut -d'|' -f1 | sed 's/[[:space:]]//g; s/^/  /'
     return 1
@@ -713,4 +721,45 @@ STUB
   manifest 'com.claude.ev1 | run | 300 | auto | 1 | 14-land-pipeline-v2-activate.sh'
   [ "$(rows)" = 1 ]
   [ "$(states)" = STALLED ]
+}
+
+# ── the brew-managed dependency (backlog fa2aa0f5e535) ───────────────────────────────────────────
+# postgresql@14 was silently DOWN 2026-08-05 -> 2026-08-13 because it carried no manifest row, and
+# cc-fleet's unit of coverage IS a manifest row. The row is the whole fix, so the two field choices
+# that make it a sensor rather than a false alarm are pinned here — both are exactly the kind of
+# thing a later tidy "normalises" back into breakage.
+@test "postgresql@14 is declared run, and its evidence is '-' so S5 can never claim STALLED" {
+  have_subject
+  M="$ROOT/launchd/fleet.manifest"
+  row="$(grep '^homebrew\.mxcl\.postgresql@14 *|' "$M")"
+  [ -n "$row" ] || { echo "homebrew.mxcl.postgresql@14 is not declared in the fleet manifest"; false; }
+  expect="$(printf '%s' "$row" | awk -F'|' '{gsub(/[[:space:]]/,"",$2); print $2}')"
+  [ "$expect" = run ] || { echo "expect is '$expect', not run — a staged label emits one UNDECIDED row and is never evaluated"; false; }
+  # `-`, never `auto`: postgres writes its log on start and on error, never per-run, so `auto` would
+  # resolve to a file whose mtime stops moving on a HEALTHY database and S5 would claim STALLED
+  # after one quiet day. With `-` the launchd counters alone decide S3/S4, which is the leg the
+  # incident actually needed (a 10s retry loop pins `last exit code` non-zero ⇒ S4 FAILING).
+  evidence="$(printf '%s' "$row" | awk -F'|' '{gsub(/[[:space:]]/,"",$4); print $4}')"
+  [ "$evidence" = - ] || { echo "evidence is '$evidence', not '-' — see the manifest comment"; false; }
+}
+
+@test "postgresql@14: a retrying-every-10s service ROWS as FAILING, and a healthy one does not" {
+  have_subject
+  L=homebrew.mxcl.postgresql@14
+  plist "$L" "$D/pg.log"
+  # THE INCIDENT SHAPE: launchd relaunching a dead service, which is what an every-10s retry looks
+  # like in `launchctl print`. This is the state that produced eight silent days.
+  printfix "$L" '	state = not running' '	runs = 4211' '	last exit code = 2'
+  manifest "$L | run | 0 | - | 12 | 42-postgresql14-activate.sh"
+  run fleet --json
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -q '"state":"FAILING"' || { echo "no FAILING row for a retrying service: $output"; false; }
+  printf '%s\n' "$output" | grep -q "\"subject\":\"$L\"" || { echo "the row does not name the label: $output"; false; }
+  # CONTROL — the live shape at the time this row landed (state = running, one run, never exited).
+  # `last exit code = (never exited)` parses to an EMPTY P_EXIT, so S4 must not fire on it; if this
+  # half ever goes red the row becomes a permanent false alarm on a healthy database.
+  printfix "$L" '	state = running' '	runs = 1' '	last exit code = (never exited)'
+  run fleet --json
+  [ "$status" -eq 0 ]
+  ! printf '%s\n' "$output" | grep -q "\"subject\":\"$L\"" || { echo "a HEALTHY postgres emitted a row: $output"; false; }
 }
