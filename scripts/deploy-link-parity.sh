@@ -520,6 +520,13 @@ sweep_strays() {  # $1 = live-relative directory
 # --- the per-file symlink surfaces install.sh deploys (install.sh is the map of record) --------
 for f in "$REPO"/hooks/*.sh;      do check_one "hooks/$(basename "$f")"     "$CFG/hooks/$(basename "$f")"; done
 for f in "$REPO"/hooks/lib/*.sh;  do check_one "hooks/lib/$(basename "$f")" "$CFG/hooks/lib/$(basename "$f")"; done
+# .py IS a per-file class here, and it arrived AFTER this walk was written. 69ac630ff taught
+# install.sh to link hooks/lib/*.py (validate-bash.sh resolves its Python helper through its own
+# real path, so the helper has to exist in the live layer), and extended the deployer without
+# extending the auditor — so from that commit until this one a .py helper that failed to link was
+# reported by NOTHING on the forward leg. The orphan and stray legs below are keyed on the
+# DIRECTORY, so they already covered it; only the per-file existence check was blind.
+for f in "$REPO"/hooks/lib/*.py;  do check_one "hooks/lib/$(basename "$f")" "$CFG/hooks/lib/$(basename "$f")"; done
 for f in "$REPO"/commands/*.md;   do check_one "commands/$(basename "$f")"  "$CFG/commands/$(basename "$f")"; done
 for f in "$REPO"/scripts/*.sh;    do check_one "scripts/$(basename "$f")"   "$CFG/scripts/$(basename "$f")"; done
 for f in "$REPO"/scripts/limit-recover/*; do
