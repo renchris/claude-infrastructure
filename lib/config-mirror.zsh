@@ -36,10 +36,10 @@
 # additive and never modifies a source, so the order is enforceable and re-runnable.
 
 typeset -gA _CC_ISOLATE
-_CC_ISOLATE[$HOME/.claude-next]='.claude.json .claude.json.backup'
-_CC_ISOLATE[$HOME/.claude-secondary]='.claude.json .claude.json.backup .credentials.json projects sessions session-env shell-snapshots history.jsonl session-index.db session-index.db-shm session-index.db-wal session-index.lock session-index.lock.d stats-cache.json statsig telemetry watchdog teams logs file-history run ide state debug plan-history plan-versions drafts mcp-needs-auth-cache.json .last-session .last-interaction .last-search-results.json'
-_CC_ISOLATE[$HOME/.claude-tertiary]='.claude.json .claude.json.backup .credentials.json projects sessions session-env shell-snapshots history.jsonl session-index.db session-index.db-shm session-index.db-wal session-index.lock session-index.lock.d stats-cache.json statsig telemetry watchdog teams logs file-history run ide state debug plan-history plan-versions drafts mcp-needs-auth-cache.json .last-session .last-interaction .last-search-results.json'
-_CC_ISOLATE[$HOME/.claude-quaternary]='.claude.json .claude.json.backup .credentials.json projects sessions session-env shell-snapshots history.jsonl session-index.db session-index.db-shm session-index.db-wal session-index.lock session-index.lock.d stats-cache.json statsig telemetry watchdog teams logs file-history run ide state debug plan-history plan-versions drafts mcp-needs-auth-cache.json .last-session .last-interaction .last-search-results.json'
+_CC_ISOLATE[$HOME/.claude-next]='.claude.json .claude.json.backup backups-identity'
+_CC_ISOLATE[$HOME/.claude-secondary]='.claude.json .claude.json.backup backups-identity .credentials.json projects sessions session-env shell-snapshots history.jsonl session-index.db session-index.db-shm session-index.db-wal session-index.lock session-index.lock.d stats-cache.json statsig telemetry watchdog teams logs file-history run ide state debug plan-history plan-versions drafts mcp-needs-auth-cache.json .last-session .last-interaction .last-search-results.json'
+_CC_ISOLATE[$HOME/.claude-tertiary]='.claude.json .claude.json.backup backups-identity .credentials.json projects sessions session-env shell-snapshots history.jsonl session-index.db session-index.db-shm session-index.db-wal session-index.lock session-index.lock.d stats-cache.json statsig telemetry watchdog teams logs file-history run ide state debug plan-history plan-versions drafts mcp-needs-auth-cache.json .last-session .last-interaction .last-search-results.json'
+_CC_ISOLATE[$HOME/.claude-quaternary]='.claude.json .claude.json.backup backups-identity .credentials.json projects sessions session-env shell-snapshots history.jsonl session-index.db session-index.db-shm session-index.db-wal session-index.lock session-index.lock.d stats-cache.json statsig telemetry watchdog teams logs file-history run ide state debug plan-history plan-versions drafts mcp-needs-auth-cache.json .last-session .last-interaction .last-search-results.json'
 
 # ── fork-free symlink-target read ──────────────────────────────────────────────────────────────
 # `$(readlink X)` costs a FORK PLUS A SUBSHELL per call, and the mirror calls it once per mirrored
@@ -84,7 +84,7 @@ _cc_sync_config_mirror() {
   [[ "$dst" == "$HOME/.claude-"* && "$dst" != "$src" ]] || { print -u2 "config-mirror: refusing target $dst"; return 1; }
   mkdir -p "$dst" || return 1
   local -A keep; local k
-  for k in ${(s: :)${_CC_ISOLATE[$dst]:-.claude.json .claude.json.backup}}; do keep[$k]=1; done
+  for k in ${(s: :)${_CC_ISOLATE[$dst]:-.claude.json .claude.json.backup backups-identity}}; do keep[$k]=1; done
   local e name
   for e in "$src"/*(ND); do
     name="${e:t}"
