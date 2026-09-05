@@ -36,10 +36,10 @@
 # additive and never modifies a source, so the order is enforceable and re-runnable.
 
 typeset -gA _CC_ISOLATE
-_CC_ISOLATE[$HOME/.claude-next]='.claude.json .claude.json.backup backups-identity'
-_CC_ISOLATE[$HOME/.claude-secondary]='.claude.json .claude.json.backup backups-identity .credentials.json projects sessions session-env shell-snapshots history.jsonl session-index.db session-index.db-shm session-index.db-wal session-index.lock session-index.lock.d stats-cache.json statsig telemetry watchdog teams logs file-history run ide state debug plan-history plan-versions drafts mcp-needs-auth-cache.json .last-session .last-interaction .last-search-results.json'
-_CC_ISOLATE[$HOME/.claude-tertiary]='.claude.json .claude.json.backup backups-identity .credentials.json projects sessions session-env shell-snapshots history.jsonl session-index.db session-index.db-shm session-index.db-wal session-index.lock session-index.lock.d stats-cache.json statsig telemetry watchdog teams logs file-history run ide state debug plan-history plan-versions drafts mcp-needs-auth-cache.json .last-session .last-interaction .last-search-results.json'
-_CC_ISOLATE[$HOME/.claude-quaternary]='.claude.json .claude.json.backup backups-identity .credentials.json projects sessions session-env shell-snapshots history.jsonl session-index.db session-index.db-shm session-index.db-wal session-index.lock session-index.lock.d stats-cache.json statsig telemetry watchdog teams logs file-history run ide state debug plan-history plan-versions drafts mcp-needs-auth-cache.json .last-session .last-interaction .last-search-results.json'
+_CC_ISOLATE[$HOME/.claude-next]='.claude.json .claude.json.backup backups-identity daemon jobs'
+_CC_ISOLATE[$HOME/.claude-secondary]='.claude.json .claude.json.backup backups-identity daemon jobs .credentials.json projects sessions session-env shell-snapshots history.jsonl session-index.db session-index.db-shm session-index.db-wal session-index.lock session-index.lock.d stats-cache.json statsig telemetry watchdog teams logs file-history run ide state debug plan-history plan-versions drafts mcp-needs-auth-cache.json .last-session .last-interaction .last-search-results.json'
+_CC_ISOLATE[$HOME/.claude-tertiary]='.claude.json .claude.json.backup backups-identity daemon jobs .credentials.json projects sessions session-env shell-snapshots history.jsonl session-index.db session-index.db-shm session-index.db-wal session-index.lock session-index.lock.d stats-cache.json statsig telemetry watchdog teams logs file-history run ide state debug plan-history plan-versions drafts mcp-needs-auth-cache.json .last-session .last-interaction .last-search-results.json'
+_CC_ISOLATE[$HOME/.claude-quaternary]='.claude.json .claude.json.backup backups-identity daemon jobs .credentials.json projects sessions session-env shell-snapshots history.jsonl session-index.db session-index.db-shm session-index.db-wal session-index.lock session-index.lock.d stats-cache.json statsig telemetry watchdog teams logs file-history run ide state debug plan-history plan-versions drafts mcp-needs-auth-cache.json .last-session .last-interaction .last-search-results.json'
 
 # ── fork-free symlink-target read ──────────────────────────────────────────────────────────────
 # `$(readlink X)` costs a FORK PLUS A SUBSHELL per call, and the mirror calls it once per mirrored
@@ -84,10 +84,38 @@ _cc_sync_config_mirror() {
   [[ "$dst" == "$HOME/.claude-"* && "$dst" != "$src" ]] || { print -u2 "config-mirror: refusing target $dst"; return 1; }
   mkdir -p "$dst" || return 1
   local -A keep; local k
-  for k in ${(s: :)${_CC_ISOLATE[$dst]:-.claude.json .claude.json.backup backups-identity}}; do keep[$k]=1; done
+  for k in ${(s: :)${_CC_ISOLATE[$dst]:-.claude.json .claude.json.backup backups-identity daemon jobs}}; do keep[$k]=1; done
   local e name
   for e in "$src"/*(ND); do
     name="${e:t}"
+    # A DERIVATIVE OF AN ISOLATED NAME IS ISOLATED (backlog fa475126f710). The isolate lists are
+    # SPELLINGS, and the identity family has many: measured on this box, ~/.claude-quaternary holds
+    # 28 `.claude.json*` entries (25 of them `.claude.json.tmp.<pid>.<hash>`, full identity
+    # snapshots) and ~/.claude-next holds 8 including `.claude.json.bak-ms365-restore` — against
+    # exactly two listed spellings. This is the same failure the transient arm below already
+    # records in its own comment: "the per-dir isolate lists already carried session-index.lock and
+    # STILL missed .oauth_refresh.lock when the vendor added it."
+    #
+    # It is latent rather than live only because the share loop walks $src, and ~/.claude currently
+    # holds just the two listed names. The moment it acquires one — an ms365 restore, or CC's own
+    # `.claude.json.tmp.<pid>.<hash>` caught mid-write — the loop shares it into all four accounts;
+    # under --convert that means `mv -f` an account's real identity file to .premirror-bak and
+    # symlink another account's in its place, and for the .tmp spelling it means a DANGLING link
+    # the instant the vendor renames it.
+    #
+    # DERIVED FROM THE DECLARED POLICY, NOT A NEW ONE: a name is isolated when stripping dot-suffixes
+    # reaches a name this dir already isolates. So `.claude.json.bak-ms365-restore` and
+    # `.claude.json.tmp.9.a` follow `.claude.json` in EVERY dir, `.credentials.json.*` follows
+    # `.credentials.json` only in the dirs that isolate it (accounts 2-4, never .claude-next, which
+    # shares account 1's credentials by design), and `settings.json.bak-*` stays SHARED because
+    # `settings.json` is not isolated anywhere. Adding a spelling to a list is no longer required.
+    if [[ -z "$keep[$name]" ]]; then
+      local _b="$name"
+      while [[ "$_b" == ?*.* ]]; do
+        _b="${_b%.*}"
+        [[ -n "$keep[$_b]" ]] && { keep[$name]=1; break; }
+      done
+    fi
     [[ -n "$keep[$name]" ]] && continue                                   # isolated → leave dst's own
     # NEVER share a runtime lock/pid/socket. These are TRANSIENT: the mirror can catch one during
     # the instant it exists in ~/.claude, and once the real file is released every account dir is
