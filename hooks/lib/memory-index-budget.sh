@@ -319,8 +319,19 @@ EOFDELTA
       fi
     fi
     # The rotor's ENTRY_RX, so "the topic file" names the same file both sides would name.
+    #
+    # 🚨 IN A VARIABLE, NOT INLINE — and this file learned it the same way cc-memory-rotate did.
+    # Written inline, the `\ ` (backslash-space) is accepted by bash 3.2 (the macOS system bash
+    # this was authored against) and REJECTED by 5.x, which reports `[[: invalid regular
+    # expression … parentheses not balanced` on stderr the caller never sees and evaluates false.
+    # Measured 2026-09-05 on 3.2.57 vs 5.3.15 with the identical pattern: inline matched `alpha.md`
+    # on 3.2 and matched NOTHING on 5.3, while the hoisted form matched on both. The failure is
+    # silent and degrades the operator's deny text to a `<the entry's topic>.md` placeholder — it
+    # cannot name the file the writer must edit, on every host whose bash is not 3.2, which is
+    # every Linux box in the fleet including the cloud session containers.
+    entry_rx='^- \[[^]]*\]\(([A-Za-z0-9][A-Za-z0-9._-]*\.md)\)'
     efile=""
-    if [[ "$eline" =~ ^-\ \[[^]]*\]\(([A-Za-z0-9][A-Za-z0-9._-]*\.md)\) ]]; then
+    if [[ "$eline" =~ $entry_rx ]]; then
       efile="${file%/*}/${BASH_REMATCH[1]}"
     else
       efile="${file%/*}/<the entry's topic>.md"
