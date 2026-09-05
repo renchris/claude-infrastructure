@@ -283,7 +283,11 @@ for hook in "$REPO_DIR"/hooks/*.py; do
   [[ -f "$hook" ]] || continue
   link_file "$hook" "$CONFIG_DIR/hooks/$(basename "$hook")"
 done
-for lib in "$REPO_DIR"/hooks/lib/*.sh; do
+# *.py too (2026-09-04): hooks/lib/kill-selection.py landed, deploy-live ran install.sh, and the
+# live layer still had no link — this glob said `*.sh`, so a new .py helper was ADDED to trunk and
+# ABSENT from ~/.claude, and the hook that guards on `[ -f "$LIB_DIR/kill-selection.py" ]` was
+# silently inert on the very box it shipped for (CLAUDE.md § "an ADD gets no budget").
+for lib in "$REPO_DIR"/hooks/lib/*.sh "$REPO_DIR"/hooks/lib/*.py; do
   [[ -f "$lib" ]] || continue
   link_file "$lib" "$CONFIG_DIR/hooks/lib/$(basename "$lib")"
 done

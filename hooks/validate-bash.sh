@@ -696,7 +696,20 @@ fi
 # nearest `claude` ancestor of this hook) · CC_REGISTRY_DIR (victim → session name). Costs one
 # python3 fork, only on a command with pkill/killall/pgrep in command position. Evidence:
 # docs/research/husk-panes-pkill-selection-2026-09-04.md.
-if [[ "${CC_KILL_SELECTION_GATE:-on}" != off && -f "$LIB_DIR/kill-selection.py" ]] \
+# The helper is looked up through the symlinked lib dir first and then through the hook's REAL
+# path (the checkout), the way smart-bash-allowlist.sh finds its own .py core: on the day this
+# landed, install.sh linked only hooks/lib/*.sh, so the live layer had the hook and not its
+# helper, and the gate was inert exactly where it was needed. install.sh now links *.py too;
+# this fallback is what makes the gate live even across that skew.
+KS_PY="$LIB_DIR/kill-selection.py"
+if [[ ! -f "$KS_PY" ]]; then
+  _ks_real="${BASH_SOURCE[0]}"
+  while [[ -L "$_ks_real" ]]; do
+    _ks_l=$(readlink "$_ks_real"); [[ "$_ks_l" == /* ]] || _ks_l="$(dirname "$_ks_real")/$_ks_l"; _ks_real="$_ks_l"
+  done
+  KS_PY="$(cd -P -- "$(dirname -- "$_ks_real")" 2>/dev/null && pwd)/lib/kill-selection.py"
+fi
+if [[ "${CC_KILL_SELECTION_GATE:-on}" != off && -f "$KS_PY" ]] \
    && command -v python3 >/dev/null 2>&1 \
    && printf '%s' "$CMD_NOQ" | sed 's/[&|()`]/;/g' | tr ';' '\n' | sed 's/^[[:space:]]*//' \
         | grep -qE '^(sudo[[:space:]]+)?(pkill|killall|pgrep)([[:space:]]|$)'; then
@@ -711,7 +724,7 @@ if [[ "${CC_KILL_SELECTION_GATE:-on}" != off && -f "$LIB_DIR/kill-selection.py" 
     done
     [[ -n "$KS_SELF" ]] || KS_SELF=$PPID
   fi
-  KS_OUT=$(python3 "$LIB_DIR/kill-selection.py" "$CMD_NOHD" "$KS_SELF" "${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}" 2>/dev/null || true)
+  KS_OUT=$(python3 "$KS_PY" "$CMD_NOHD" "$KS_SELF" "${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}" 2>/dev/null || true)
   if [[ -n "$KS_OUT" ]]; then
     IFS=$'\t' read -r _ksk KS_SEG KS_N KS_VICTIMS KS_AP <<<"${KS_OUT%%$'\n'*}"
     if [[ "$_ksk" == FOREIGN ]]; then
