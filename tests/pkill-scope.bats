@@ -559,3 +559,18 @@ teardown() {
   [ -f "$HOME/.claude/logs/kill-selection-gate.jsonl" ]
   python3 -c 'import json,sys; r=json.loads(open(sys.argv[1]).read().splitlines()[-1]); assert r["foreign"]>=1 and r["awaitping"]==1, r' "$HOME/.claude/logs/kill-selection-gate.jsonl"
 }
+
+@test "selection: the gate is LIVE through a symlinked hook whose lib dir lacks the .py helper" {
+  # The deploy shape: ~/.claude/hooks/validate-bash.sh → checkout, ~/.claude/hooks/lib/ holds only
+  # *.sh links. Measured 2026-09-04: install.sh's `*.sh` glob left kill-selection.py unlinked and
+  # the gate inert on the live layer. The hook must find its helper through its REAL path.
+  local live="$BATS_TEST_TMPDIR/live/hooks"; mkdir -p "$live/lib"
+  ln -s "$HOOK" "$live/validate-bash.sh"
+  ln -s "$REPO/hooks/lib/is-true-flag.sh" "$live/lib/is-true-flag.sh"
+  SEL_MARK="cc-await-ping-fx-$BASHPID-$RANDOM"
+  sel_spawn_session "$SEL_MARK"
+  export CC_KILL_GATE_SELF_PID=$BASHPID
+  local out
+  out="$(python3 -c 'import json,sys;print(json.dumps({"tool_input":{"command":sys.argv[1]}}))' "pkill -f $SEL_MARK" | bash "$live/validate-bash.sh" 2>/dev/null)"
+  [[ "$out" == *'"deny"'* ]] || false
+}
