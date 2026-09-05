@@ -87,6 +87,15 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-05 — recycle #307 (lane infra):** closed 0052d5105b00 (MOOT — the `--deepen` probe
+  gated an unlock delivered by `--unshallow`; `--deepen` is refused by design on trunk) ·
+  617d071cef41 (MOOT — the HOST CUT now earns a verdict: `bats tests/test-hermeticity-lint.bats`
+  rc=0, 1..82, 0 not-ok) · 65e7b6542009 (DOABLE — re-landed the auto-reverted 2c6b8cdfa777 after
+  every autonomy-sweep flakes.jsonl row read `cut-not-red`; 1..67 green) · blocked 1c20dc1e92db
+  (routing-policy fork the code already rules the other way) · released 4e6a51df2a84 (LIVE_ADDS
+  candidate C still wants its own link) · landed 1f5385f9b · closed=3 closed_pre=3 closed_other=2
+  filed=1 net=2 blocked=3 min=3 lane=local-drain project=claude-infrastructure floor=MET.
+
 - **2026-09-05 — recycle #306 (lane infra):** closed fa475126f710 · 289f2f73093c · ee743fad3674 ·
   b38279c10c55 · b82a4060b00f (all MOOT, each on a content read of origin/main or a suite run) ·
   786ac458be00 (DOABLE — the postland stamp now states its PRELINT denominator alongside `suites`) ·
