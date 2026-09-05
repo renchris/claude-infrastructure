@@ -43,6 +43,15 @@ EOF
 exec "$@"
 EOF
   chmod +x "$D/sudo-can"
+  # PROMPTS: refuses -n (a password IS required) but succeeds when driven with a tty.
+  cat > "$D/sudo-prompts" <<'EOF'
+#!/bin/bash
+[ "${1:-}" = "-n" ] && exit 1
+exec "$@"
+EOF
+  chmod +x "$D/sudo-prompts"
+  # CANCELS: refuses -n, and the operator dismisses the prompt (sudo exits nonzero).
+  printf '#!/bin/bash\nexit 1\n' > "$D/sudo-cancels"; chmod +x "$D/sudo-cancels"
 
   export CC_LID_PMSET="$D/pmset" CC_LID_SUDO="$D/sudo-cannot"
 }
@@ -60,19 +69,52 @@ EOF
 }
 
 @test "toggle from off renders the operator block for bit 1 and exits 10" {
-  run "$LID" toggle
+  CC_LID_TTY=0 run "$LID" toggle
   [ "$status" -eq 10 ]
   [[ "$output" == *"▶ Run this:"* ]] || false
-  [[ "$output" == *'`sudo pmset -a disablesleep 1`'* ]] || false
+  [[ "$output" == *"/usr/bin/pmset -a disablesleep 1"* ]] || false
   # It must not have moved the setting behind the block it just printed.
   [ "$(cat "$D/state")" = 0 ]
 }
 
 @test "toggle from on renders bit 0" {
   echo 1 > "$D/state"
-  run "$LID" toggle
+  CC_LID_TTY=0 run "$LID" toggle
   [ "$status" -eq 10 ]
-  [[ "$output" == *'`sudo pmset -a disablesleep 0`'* ]]
+  [[ "$output" == *"/usr/bin/pmset -a disablesleep 0"* ]]
+}
+
+# THE REGRESSION THIS SECTION EXISTS FOR (2026-09-03). The first shipped version always
+# printed the sudo form. The operator pasted it into Claude Code's `!` surface, which has
+# no tty, and sudo died on 'a terminal is required to read the password' before running
+# anything — a hand-off that cannot execute in the surface it was handed to. With no tty
+# the only form that works is osascript's GUI dialog, so that is what the block must carry.
+@test "CONTROL: with no TTY the block is the GUI form, never the sudo form" {
+  CC_LID_TTY=0 run "$LID" on
+  [ "$status" -eq 10 ]
+  [[ "$output" == *"with administrator privileges"* ]] || false
+  [[ "$output" == *"/usr/bin/pmset -a disablesleep 1"* ]] || false
+  [[ "$output" != *'`sudo '* ]]
+}
+
+@test "with a TTY it DRIVES sudo rather than printing a command" {
+  CC_LID_TTY=1 CC_LID_SUDO="$D/sudo-prompts" run "$LID" on
+  [ "$status" -eq 0 ]
+  [ "$(cat "$D/state")" = 1 ]
+  [[ "$output" == *"sudo will ask for your password"* ]] || false
+  [[ "$output" != *"▶ Run this:"* ]]
+}
+
+# THE SECOND-ORDER FORM OF THE SAME DEFECT, caught by this test on the first cut of the
+# fix: the block was still built from the SURFACE, so a tty whose sudo had just FAILED
+# got handed back the very sudo line that had failed a moment earlier. The block is only
+# ever reached once sudo is ruled out, so it is always the GUI form — never $SUDO_CMD.
+@test "CONTROL: a TTY sudo the operator cancels falls back to GUI, not back to sudo" {
+  CC_LID_TTY=1 CC_LID_SUDO="$D/sudo-cancels" run "$LID" on
+  [ "$status" -eq 10 ]
+  [ "$(cat "$D/state")" = 0 ]
+  [[ "$output" == *"with administrator privileges"* ]] || false
+  [[ "$output" != *'`sudo '* ]]
 }
 
 @test "already in the requested state is exit 0 with no command block" {
@@ -104,9 +146,13 @@ EOF
 }
 
 @test "--machine emits one parseable line carrying the resolved command" {
-  run "$LID" on --machine
+  CC_LID_TTY=1 run "$LID" on --machine
   [ "$status" -eq 10 ]
   [[ "$output" == "state=off want=on verdict=needs-sudo cmd=sudo pmset -a disablesleep 1" ]] || false
+  # ...and the machine line must carry the form that WORKS on the caller's surface.
+  CC_LID_TTY=0 run "$LID" on --machine
+  [ "$status" -eq 10 ]
+  [[ "$output" == *"cmd=osascript"* ]] || false
   run "$LID" off --machine
   [ "$status" -eq 0 ]
   [[ "$output" == *"verdict=satisfied"* ]]
