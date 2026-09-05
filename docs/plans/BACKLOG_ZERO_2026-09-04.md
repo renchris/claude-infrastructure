@@ -104,6 +104,13 @@ mints follow-ons the drains cannot keep up with. The telemetry that would have s
 
 ## §4 Status log (INTEGRATE-only; newest first)
 
+- **2026-09-05 04:30Z — the filing-vs-driving generator named and countered (§5).** Frontier session
+  `filing-vs-driving`: the close protocol certified on git and discharged on ROWS — filing was the
+  harness's compliance action, closing was nobody's, and the store could not even attribute an add.
+  Landed: attributed `add` + `--why-not-now` + `closedSession`; the FILED_MINE 🔧 rung in
+  `wrap-ledger.sh` consumed by `completion-assert`; `cc-do <backlog-id>` run-and-close. Detail + the
+  measurement baseline in §5.
+
 - **2026-09-04 19:33Z** — W2a LANDED (`718fa8fda` dispatch-assert DROP remedy + drop-discharge arm
   + `--condition` template; `2f518d75b` completion-assert D1 do-it-yourself gate; `d3cafafc6`
   cc-backlog add-time WARN) — all three content-verified on origin/main and ancestors of it; custody
@@ -214,3 +221,92 @@ mints follow-ons the drains cannot keep up with. The telemetry that would have s
   could NOT be stopped from this session (the auto-mode classifier denies `kill`, `cc-teardown` and
   a stand-down `cc-notify` to a live session) → operator step filed. New lane uses distinct
   filenames so the two cannot collide on a number.
+
+## §5 Filing-vs-driving — the generator, named (2026-09-05, frontier session `filing-vs-driving`)
+
+**Mandate (operator, verbatim):** *"rather than filing for backlog which we have a crux of filing as many
+tickets as we complete never truly draining to zero and just churning."*
+
+### §5.1 The claim, adjudicated
+
+The **aggregate is draining** — 83% of 3,040 ids closed, four negative weeks, and at 03:47Z today
+`backlog-telemetry.sh` reads rolling-7-day filed 137 / closed 205 / net **−68**, LIVE 518 down from the
+617 peak. "Never draining to zero" is false of the pile. It is **true of the two things the operator
+actually feels**, and they are different populations:
+
+1. **The hard core churns by MACHINERY, not by people.** Of 1,930 `reopen` events, 295 are by
+   `cc-backlog-reap` and 551 carry `spawn-fail` / `worktree-fail`. The 55-times row `62599dd76a60`
+   (the postland TAP fix) was claimed and released **within one minute, all 55 times** — it was never
+   once worked — while its fix has sat COMMITTED in `~/Development/.worktrees/wt-62599dd76a60` since
+   2026-07-31 (`946bdd8dc`, `merge-base --is-ancestor origin/main` → NO), and since 08-18 the row is
+   `block`ed on that same worktree's stray staged assets. A reopen count measures spawn failures, not
+   attention. (Same shape: `ee1ac85c6ff6`, 54×.)
+2. **The 1:1 is per SESSION, and the store could not compute it.** `add` recorded no author
+   (`bin/cc-backlog:1728` pre-fix — `by` null on 108/108 adds, inflow.md §7.6); `done` recorded a
+   host-unit `closedBy` and a lane, never a session. 92 distinct sessions filed a `needs` row in 14
+   days; how many of them also closed a row is **uncomputable** (`done.by` null on 574 of 578).
+
+### §5.2 The mechanism — filing is the harness's compliance action; closing is nobody's
+
+| | file:line | what it does |
+|---|---|---|
+| M1 | `hooks/completion-assert.sh:774` (`:1078` remedy) | D1 discharges on `any(.session == $SID)` over blocked rows — ONE filed row makes a handoff-prose close legal, and the remedy text hands over `cc-backlog needs` |
+| M2 | `hooks/dispatch-assert.sh:150-156` (`:203` tell, `:22` header) | discharge arm 1 is ANY backlog event; the tell fires on "for a later session"; the header says it: *"gaming the hook IS compliance"* |
+| M3 | `scripts/wrap-ledger.sh:695-712` (pre-fix) | the certificate's ONLY backlog term was YOURS = rows this session FILED, resolving to 👤 *"My side is done"*. No term for rows closed — and none was possible (M-data above). A filing earned a done-shaped rung; a close earned nothing |
+| M4 | `bin/cc-do:231-236` | a blocked row's `--run` is JUDGMENT: printed, never executed, never closed. **677** `needs --run` rows filed all-time; **118 of 250** live blocked rows carry one; the operator pastes by hand and no observer closes (sevenrooms-bridge, 09-04: a row whose command he had run and passed sat open) |
+| M5 | `CLAUDE.md` § Three dispositions | the FILED test is asked about the WHOLE item, so any item with an operator-only tail answers all three honestly. Ground truth: `e794e0a5a1f1`, `49c1f972abc6` — drivable prefixes, filed at the first blocker seen, by a session with the rule in context |
+
+**Why every fix became machinery.** A drain-building session is a session under M1–M3: its DoD
+("build the drain") is git-certifiable ✅, and its close names follow-ons (M2) → rows. The local drain
+lane itself **filed 105 and closed 7 across 49 links** (§1.1a) because each link was such a session.
+Machinery is what the certificate could see; a closed row was what it could not. W2a (today) fixed the
+remedy TEXTS; nothing until now changed what the certificate COUNTS.
+
+### §5.3 What landed (this session; all edits of existing scripts, no new machinery)
+
+- **`bin/cc-backlog`** — `add` stamps `filedBy` (same env resolution as `needs`) and takes
+  `--why-not-now "<reason>"`: the FILED test's answer (a) as a FIELD; re-running the same add with it
+  folds onto a bare row as an `update` (the hand-off of an already-filed row). `done` stamps
+  `closedSession`. All three ride the fold and `list --json`.
+- **`scripts/wrap-ledger.sh`** — `FILED_MINE` (open rows this session added with no `whyNotNow` and no
+  `condition`) and `CLOSED_MINE`; `FILED_MINE > 0` ⇒ **🔧**, outranking 🚀/👤; fail-open like YOURS.
+- **`hooks/completion-assert.sh`** — consumes `FILED_MINE` as a contradicting fact: a ✅ close over a
+  bare `cc-backlog add` now FIRES. D4's remedy and both `dispatch-assert` remedies name `--why-not-now`.
+- **`bin/cc-do <backlog-id>`** — runs ONE blocked row's recorded command after a typed `yes`, closes
+  the row on exit 0 (evidence `cc-do ran: …`), leaves it blocked on failure, refuses placeholders and
+  slash commands; the board still never runs a row.
+- **Tests** — +5 `cc-backlog-add-update`, +6 `wrap-ledger`, +5 `cc-do`, +2 `completion-assert`;
+  **15 of 16 red on the pre-fix files** (the board control passes by design); 172 + 150 pre-existing
+  cases green.
+- **`CLAUDE.md`** § Three dispositions FILED row: answer (a) is a field, and `cc-do <id>` is how an
+  operator's run closes a `needs` row.
+
+**What the gate is now instead of three written answers:** record-answered and session-scoped. A row
+you filed is YOUR loose end — in your own certificate — until you drive it, close it, or hand it off
+with a stored reason that the drain link picking it up can read. The three questions still stand;
+only (a) is now a field the ledger can see, which is the half that lets a well-behaved agent be
+caught.
+
+### §5.4 Measurement (baseline 2026-09-05T04:25Z, pre-land — every new field reads 0)
+
+| figure | baseline | reads it back |
+|---|---|---|
+| adds carrying `filedBy` / `whyNotNow` | 0 / 0 | `jq -c 'select(.event=="add" and (.filedBy//"")!="")' ~/.claude/autonomy/backlog.jsonl \| wc -l` (and `grep -c whyNotNow`) |
+| dones carrying `closedSession` | 0 | `grep -c closedSession ~/.claude/autonomy/backlog.jsonl` |
+| rows closed by `cc-do <id>` | 0 | `grep -c '"cc-do ran:' ~/.claude/autonomy/backlog.jsonl` |
+| live blocked rows with a `--run` (M4 population) | **118 of 250** | `cc-backlog list --blocked --json \| jq '[.[]\|select((.run//"")!="")]\|length'` |
+| FILED_MINE fires (sessions that would have closed ✅ over their own filing) | 0 | `jq -c 'select(.hook=="completion-assert" and ((.facts//"")\|test("YOU filed")))' ~/.claude/autonomy/idl.jsonl \| wc -l` (IDL rotates ~11 h — read daily) |
+| per-session net, 14 d | uncomputable | sessions with a `filedBy` add vs sessions with a `closedSession` done — `comm -12` on the two `sort -u` lists |
+| adds 14 d / of which `needs` | 487 / 207 | `backlog-telemetry.sh` |
+| LIVE / open / blocked | 518 / 268 / 250 | `backlog-telemetry.sh` |
+
+**Movement vs noise:** the daily filed/closed series already swings by ±70 a day (W2b/W3 closed 24 +
+19 today), so LIVE alone cannot show this change. The signal is (1) FILED_MINE fires > 0 — each is a
+close that pre-fix would have certified ✅ over its own filing; (2) `cc-do ran:` closes > 0 and the
+118 falling; (3) the per-session net, which is the operator's 1:1 measured for the first time.
+
+**Dropped, not filed** (one line each): landing `946bdd8dc` — a five-week-stale patch against the
+132-test `postland-verify.bats` W2a named as the smoke-budget killer, and the row's block is the stale
+worktree, not the fix · pruning the 50 `wt-*` worktrees and unblocking the 3 rows blocked on
+"pre-existing worktree" — destructive on trees other sessions may hold.
+
