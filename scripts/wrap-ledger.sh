@@ -555,9 +555,21 @@ else
   _WL_DOD_SOURCES=""; [ -f "$DOD_FILE" ] && _WL_DOD_SOURCES="$DOD_FILE"
 fi
 DOD="absent"; REMAINDER=0
+# DOD_SCOPE = the CURRENT CONTRACT — the newest `Scope (frozen):` line of this wave's lineage-filtered
+# captures (the same line hooks/dod-persist.sh:210 injects as "THE CURRENT CONTRACT"). DRAIN_SCOPE=1
+# when that contract is ABOUT THE BACKLOG (backlog|drain, case-insensitive) — the population the
+# drain floor below applies to. Read from the same filtered stream as REMAINDER so the two cannot
+# disagree about whose contract this is.
+DOD_SCOPE=""; DRAIN_SCOPE=0
 while IFS= read -r _wl_df; do
   [ -n "$_wl_df" ] && [ -f "$_wl_df" ] || continue
   DOD="present"
+  if command -v dod_filter_for >/dev/null 2>&1; then
+    _wl_s="$(dod_filter_for "$PWD" "$_wl_df" | grep 'Scope (frozen):' 2>/dev/null | tail -1 || true)"
+  else
+    _wl_s="$(grep 'Scope (frozen):' "$_wl_df" 2>/dev/null | tail -1 || true)"
+  fi
+  [ -n "$_wl_s" ] && DOD_SCOPE="$_wl_s"
   # LINEAGE-FILTERED (row 4de3d0f9c0e1). The repo key is shared by every worktree of the repo, so
   # an unfiltered count summed a CONCURRENT wave's unchecked boxes into this wave's REMAINDER and
   # red-runged a close over items belonging to someone else. dod_filter_for keeps this wave's
@@ -574,13 +586,20 @@ while IFS= read -r _wl_df; do
 done <<WLDOD
 $_WL_DOD_SOURCES
 WLDOD
+case "$DOD_SCOPE" in *[Bb][Aa][Cc][Kk][Ll][Oo][Gg]*|*[Dd][Rr][Aa][Ii][Nn]*) DRAIN_SCOPE=1 ;; esac
 
 # ── Operator-only steps THIS SESSION filed (the 👤 rung) ──
-# Session id, in order: --session > $WRAP_SESSION_ID > $CLAUDE_SESSION_ID > unresolvable ("").
+# Session id, in order: --session > $WRAP_SESSION_ID > $CLAUDE_SESSION_ID > $CLAUDE_CODE_SESSION_ID
+# > unresolvable (""). The fourth arm (2026-09-05): $CLAUDE_CODE_SESSION_ID is the variable a
+# tool-call shell actually carries (bin/cc-backlog:3072 measured it; :583 here read only the one
+# that is never set), and it is the SAME uuid the Stop hook feeds as --session — so without this arm
+# an agent's own `/wrap` computed every session-scoped term (YOURS, FILED_MINE, CLOSED_MINE, the
+# floor below) as unresolvable, and only the hook ever saw them. Store and ledger now resolve alike.
 SID="$SESSION_FLAG"
 SID_SRC="flag"
 [ -n "$SID" ] || { SID="${WRAP_SESSION_ID:-}"; SID_SRC="WRAP_SESSION_ID"; }
 [ -n "$SID" ] || { SID="${CLAUDE_SESSION_ID:-}"; SID_SRC="CLAUDE_SESSION_ID"; }
+[ -n "$SID" ] || { SID="${CLAUDE_CODE_SESSION_ID:-}"; SID_SRC="CLAUDE_CODE_SESSION_ID"; }
 [ -n "$SID" ] || SID_SRC=""
 
 # ── ◎ GOAL LIVENESS — is the armed /goal being EVALUATED? (E5; §9 B5) ───────────────────────────
@@ -766,6 +785,37 @@ count_filed_undriven() {
   case "$f" in ''|*[!0-9]*) FILED_SRC="error"; return 0 ;; esac
   case "$c" in ''|*[!0-9]*) c=0 ;; esac
   FILED_MINE="$f"; CLOSED_MINE="$c"; FILED_SRC="$SID_SRC"
+}
+
+# ── THE DRAIN FLOOR (2026-09-05, BACKLOG_ZERO §5.5 — the generator's other half) ─────────────────
+# CLOSE_FLOOR=1 ⇒ this session's CURRENT CONTRACT is about the backlog (DRAIN_SCOPE) and it has
+# closed NO row (CLOSED_MINE=0) — so the ✅-shaped certificate is withheld and the rung is 🔧.
+#
+# WHY. FILED_MINE (above) made a FILING visible to the certificate; nothing yet made a CLOSE worth
+# anything to it. Every session sent to fix the backlog therefore certified on what the certificate
+# could see — commits — and closed nothing: W1 0 rows, W3 0 rows (1 filed), W2a 0, the §5 session
+# itself 0 (BACKLOG_ZERO §4). The ONE wave that closed rows (W2b, 24) had rows IN its scope, and
+# the ONE mechanism that turned the local lane from 7 closes in 49 links into 90 closes in 18 h
+# (backlog.jsonl, lane=local-drain since 2026-09-04T12:36Z) was a floor on rows closed
+# (drain-recycle-fire.sh's `closed_pre >= min`). This is that floor applied to every session whose
+# frozen scope names the backlog: you were sent to drain, so ONE row you closed yourself — with the
+# real tool, on the real pile — is part of done, and machinery alone is not.
+#
+# Fail-OPEN, four ways, each named in CLOSE_FLOOR_SRC: scope not backlog-shaped ⇒ n-a; session
+# unresolvable ⇒ none; store unreadable ⇒ error; the cc-backlog THIS SESSION types (PATH's, or
+# CC_BACKLOG_BIN under test) does not stamp closedSession ⇒ binary-old — a close made with an
+# older binary is unattributed, and an unattributed close must never read as "closed nothing".
+CLOSE_FLOOR=0; CLOSE_FLOOR_SRC="n-a"
+compute_close_floor() {
+  [ "${DRAIN_SCOPE:-0}" -eq 1 ] || { CLOSE_FLOOR_SRC="n-a"; return 0; }
+  if [ -z "$SID" ]; then CLOSE_FLOOR_SRC="none"; return 0; fi
+  case "$FILED_SRC" in error|skip|none) CLOSE_FLOOR_SRC="error"; return 0 ;; esac
+  local typed
+  typed="${CC_BACKLOG_BIN:-$(command -v cc-backlog 2>/dev/null || true)}"
+  [ -n "$typed" ] && [ -f "$typed" ] && grep -q 'closedSession' "$typed" 2>/dev/null \
+    || { CLOSE_FLOOR_SRC="binary-old"; return 0; }
+  if [ "$CLOSED_MINE" -eq 0 ]; then CLOSE_FLOOR=1; fi
+  CLOSE_FLOOR_SRC="$SID_SRC"
 }
 
 count_blocking_decisions() {
@@ -1434,10 +1484,15 @@ else
   else
   if [ -n "$TRUNK" ]; then compute_live_layer; count_operator_steps; fi
   count_filed_undriven
+  compute_close_floor
   if [ "$FILED_MINE" -gt 0 ]; then
     # Outranks 🚀 and 👤 (both assert "my side is done"): a row you filed and could not say why you
     # did not drive is YOUR open work, whatever the tree says. Same rank as the custody 🔧 above.
     RUNG="🔧"; READOUT="🔧 Loose ends — ${FILED_MINE} backlog row(s) you filed this session are still open with no reason you could not drive them (cc-backlog list --open --json | jq '.[]|select(.filedBy==\"${SID}\")'); drive each (then \`cc-backlog done <id> --evidence …\`), drop it (\`done --evidence \"dropped: <why>\"\`), or hand it off by re-running the same add with \`--why-not-now \"<reason>\"\`."
+  elif [ "$CLOSE_FLOOR" -eq 1 ]; then
+    # Same rank as filed-undriven, for the same reason: a backlog-scoped session that closed no row
+    # has not done the thing it was sent to do, whatever it landed. Machinery is not a close.
+    RUNG="🔧"; READOUT="🔧 Loose ends — your frozen scope is about the backlog and this session has closed NO row (CLOSED_MINE=0); machinery is not a close. Pick one: \`$HOME/.claude/scripts/drain-pick.sh --project <this project>\`, drive or adjudicate it (MOOT · DOABLE · OPERATOR-ONLY), then \`cc-backlog done <id> --evidence …\` — or close honestly on 'Good to close: no'."
   elif [ -z "$TRUNK" ]; then
     # No trunk resolved ⇒ UNLANDED=0 is a DEFAULT, not a measurement: nothing was ever compared, so
     # every arm below that says "landed" would be asserting a fact this run never read. This rung
@@ -1553,6 +1608,9 @@ emit_machine() {
   printf 'FILED_MINE=%s\n' "$FILED_MINE"
   printf 'FILED_SRC=%s\n' "$FILED_SRC"
   printf 'CLOSED_MINE=%s\n' "$CLOSED_MINE"
+  printf 'DRAIN_SCOPE=%s\n' "$DRAIN_SCOPE"
+  printf 'CLOSE_FLOOR=%s\n' "$CLOSE_FLOOR"
+  printf 'CLOSE_FLOOR_SRC=%s\n' "$CLOSE_FLOOR_SRC"
   printf 'BLOCKED=%s\n' "$BLOCKED"
   printf 'BLOCKED_SRC=%s\n' "$BLOCKED_SRC"
   printf 'GOAL_SRC=%s\n' "$GOAL_SRC"

@@ -29,7 +29,7 @@ setup() {
   export WRAP_TRUNK="origin/main"
   # 👤 rung: keep the suite hermetic. No inherited session id, and a cc-backlog that cannot
   # resolve — so no test forks the REAL backlog (a peer edits it live) unless it opts in.
-  unset WRAP_SESSION_ID CLAUDE_SESSION_ID
+  unset WRAP_SESSION_ID CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID
   export CC_BACKLOG_BIN="$BATS_TEST_TMPDIR/absent-cc-backlog"
   SID="sess-11111111-2222-3333-4444-555555555555"   # the 👤 cases' fixture session id
   # 🚀 rung: same hermetic discipline. An ABSENT live repo reads LIVE_SRC=unknown, which leaves the
@@ -2245,7 +2245,7 @@ open_by() {  # $1=filedBy  $2=whyNotNow  $3=condition
 
 @test "FAIL-OPEN: unresolvable session ⇒ FILED_SRC=none; unreadable store ⇒ FILED_SRC=error; neither is a 🔧" {
   ok_state
-  unset WRAP_SESSION_ID CLAUDE_SESSION_ID
+  unset WRAP_SESSION_ID CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID
   CC_BACKLOG_BIN="$(mk_backlog_stub2 "$(open_by "$SID" "" "")" '[]')"; export CC_BACKLOG_BIN
   run bash "$LEDGER" --machine --session ""
   [ "$(field "$output" FILED_SRC)" = "none" ]
@@ -2255,4 +2255,77 @@ open_by() {  # $1=filedBy  $2=whyNotNow  $3=condition
   run bash "$LEDGER" --machine
   [ "$(field "$output" FILED_SRC)" = "error" ]
   [ "$(field "$output" RUNG)" = "✅" ]
+}
+
+# ── THE DRAIN FLOOR (BACKLOG_ZERO §5.5): a backlog-scoped session that closed NO row is 🔧 ──
+# drain_state = ok_state whose frozen scope names the backlog. mk_backlog_stub3 = stub2 whose bytes
+# carry the closedSession marker the floor probes for (a binary that CAN attribute a close).
+drain_state() {
+  local dod="$BATS_TEST_TMPDIR/dod-drain.md"
+  printf -- 'Scope (frozen): drive the cc-backlog pile for this project toward zero\n- [x] item one\n' > "$dod"
+  export WRAP_DOD_FILE="$dod"
+  git rev-parse HEAD > "$(git rev-parse --git-common-dir)/gate-green"
+}
+mk_backlog_stub3() { local s; s="$(mk_backlog_stub2 "$1" "$2")"; printf '# closedSession\n' >> "$s"; printf '%s' "$s"; }
+
+@test "drain floor: backlog-shaped scope + CLOSED_MINE=0 + an attributing binary ⇒ RUNG=🔧, CLOSE_FLOOR=1" {
+  drain_state
+  export WRAP_SESSION_ID="$SID"
+  CC_BACKLOG_BIN="$(mk_backlog_stub3 '[{"id":"A-9","status":"open","filedBy":"someone-else"}]' '[]')"; export CC_BACKLOG_BIN
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" DRAIN_SCOPE)" = "1" ]
+  [ "$(field "$output" CLOSED_MINE)" = "0" ]
+  [ "$(field "$output" CLOSE_FLOOR)" = "1" ]
+  [ "$(field "$output" RUNG)" = "🔧" ]
+  printf '%s' "$output" | grep -q 'closed NO row'
+  printf '%s' "$output" | grep -q 'drain-pick.sh'
+}
+
+@test "drain floor CONTROL: the same session with ONE row it closed ⇒ CLOSE_FLOOR=0, rung falls through to ✅" {
+  drain_state
+  export WRAP_SESSION_ID="$SID"
+  CC_BACKLOG_BIN="$(mk_backlog_stub3 "$(printf '[{"id":"A-2","status":"done","closedSession":"%s"}]' "$SID")" '[]')"; export CC_BACKLOG_BIN
+  run bash "$LEDGER" --machine
+  [ "$(field "$output" CLOSED_MINE)" = "1" ]
+  [ "$(field "$output" CLOSE_FLOOR)" = "0" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+}
+
+@test "drain floor is SCOPED: a scope that does not name the backlog ⇒ CLOSE_FLOOR_SRC=n-a, ✅ (never a standing gate)" {
+  ok_state   # scope-less DoD: checked boxes only
+  export WRAP_SESSION_ID="$SID"
+  CC_BACKLOG_BIN="$(mk_backlog_stub3 '[]' '[]')"; export CC_BACKLOG_BIN
+  run bash "$LEDGER" --machine
+  [ "$(field "$output" DRAIN_SCOPE)" = "0" ]
+  [ "$(field "$output" CLOSE_FLOOR)" = "0" ]
+  [ "$(field "$output" CLOSE_FLOOR_SRC)" = "n-a" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+}
+
+@test "drain floor FAIL-OPEN: a cc-backlog that cannot stamp closedSession ⇒ CLOSE_FLOOR_SRC=binary-old, ✅; unresolvable session ⇒ none" {
+  drain_state
+  export WRAP_SESSION_ID="$SID"
+  CC_BACKLOG_BIN="$(mk_backlog_stub2 '[]' '[]')"; export CC_BACKLOG_BIN     # stub2: no marker
+  run bash "$LEDGER" --machine
+  [ "$(field "$output" DRAIN_SCOPE)" = "1" ]
+  [ "$(field "$output" CLOSE_FLOOR)" = "0" ]
+  [ "$(field "$output" CLOSE_FLOOR_SRC)" = "binary-old" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+  unset WRAP_SESSION_ID
+  CC_BACKLOG_BIN="$(mk_backlog_stub3 '[]' '[]')"; export CC_BACKLOG_BIN
+  run bash "$LEDGER" --machine --session ""
+  [ "$(field "$output" CLOSE_FLOOR)" = "0" ]
+  [ "$(field "$output" CLOSE_FLOOR_SRC)" = "none" ]
+}
+
+@test "session id: \$CLAUDE_CODE_SESSION_ID (the variable a tool-call shell carries) resolves when the others are unset" {
+  ok_state
+  unset WRAP_SESSION_ID CLAUDE_SESSION_ID
+  export CLAUDE_CODE_SESSION_ID="$SID"
+  CC_BACKLOG_BIN="$(mk_backlog_stub2 "$(open_by "$SID" "" "")" '[]')"; export CC_BACKLOG_BIN
+  run bash "$LEDGER" --machine
+  [ "$(field "$output" FILED_SRC)" = "CLAUDE_CODE_SESSION_ID" ]
+  [ "$(field "$output" FILED_MINE)" = "1" ]
+  [ "$(field "$output" RUNG)" = "🔧" ]
 }
