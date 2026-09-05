@@ -92,8 +92,9 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   786ac458be00 (DOABLE — the postland stamp now states its PRELINT denominator alongside `suites`) ·
   blocked none · released 4e6a51df2a84 and 8fd1919f7769 (both want a dedicated link: candidate C
   conflicts with ~15 pinned LIVE_ADDS assertions; the off-box red is a 12-suite triage) ·
-  landed 2444306e1 · closed=6 closed_pre=6 filed=0 net=6 blocked=0 min=3 lane=local-drain
-  project=claude-infrastructure floor=MET.
+  landed 2444306e1 (trunk 0b94c3159) · this link filed nothing · `closed=16 closed_pre=7
+  closed_other=0 filed=4 net=12 blocked=9 min=3 lane=local-drain project=claude-infrastructure
+  floor=MET` — six of those seven closed_pre are this link's; the rest are concurrent lane siblings.
 
 - **2026-09-05 — recycle #305 (lane infra):** closed 26d4010f1b22 · 62e0b88a58b5 · 418628734437 ·
   blocked none · released 4e6a51df2a84 (too big — LIVE_ADDS candidate C is a change to the close
