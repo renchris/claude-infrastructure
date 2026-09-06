@@ -322,3 +322,78 @@ records". The 0 replicates and is right; the control does not — those `rate_li
 the CC binary's own error enum being dumped by agents reading its strings, i.e. meta too. **The
 scan's proof that it could find anything was itself an artifact.** Use
 `cache_read_input_tokens` (present in 6,497 of 6,749 transcripts) as the control instead.
+
+---
+
+## §9 UPDATE 2026-09-06 — the answer flipped, and the meter started lying
+
+§2's headline (*"the fleet reset at a mean 94.6% used — under-use is **not** the current defect"*)
+was true of the 8 windows it covered and is **false of the fleet today**. Re-run over the same
+store, now 20,334 samples spanning 2026-08-10 → 2026-09-06, 14 completed windows:
+
+| acct | window closed (UTC) | used | stranded | |
+|---|---|---:|---:|---|
+| next3 | 08-11 12:00 | 100% | 0 pp | |
+| next2 | 08-15 11:00 | 92% | 8 pp | |
+| next | 08-16 04:00 | 91% | 9 pp | |
+| next4 | 08-16 09:00 | 85% | 15 pp | |
+| next3 | 08-18 12:00 | 98% | 2 pp | |
+| next2 | 08-22 11:00 | 100% | 0 pp | |
+| next | 08-23 04:00 | 99% | 1 pp | |
+| next4 | 08-23 09:00 | 92% | 8 pp | |
+| next3 | 08-25 12:00 | 94% | 6 pp | |
+| next2 | 08-29 11:00 | 100% | 0 pp | |
+| next | 08-30 04:00 | 100% | 0 pp | |
+| next4 | 08-30 09:00 | 84% | 16 pp | ← last window of the saturating regime |
+| **next3** | **09-01 12:00** | **64%** | **36 pp** | |
+| **next2** | **09-05 11:00** | **73%** | **27 pp** | meter read 22%; zeroed mid-window |
+
+The first twelve average **5.4 pp** stranded. The two since 2026-09-01 average **31.5 pp**, and the
+two windows closing on 09-06 are worse still: `next` sat at **56%** with 1.3 h left, `next4` at
+**32%** with 6.3 h. Across the four accounts this cycle strands **≈175 pp — 1.75 account-weeks of
+Max quota**, against ~0.1 in each August cycle. **Under-use is now the primary defect**, which is
+what §1 of USAGE_TELEMETRY_100P said before its own §1 retracted it. The retraction was right then.
+
+### §9.1 The meter now zeroes MID-window, and this is new
+
+Seven times between 2026-09-01 and 09-05, on all four accounts, `weekly_pct` fell to 0 while
+`weekly_reset_at` kept pointing at the unchanged close — then climbed again from zero. `next` and
+`next2` did it in the **same sweep** (2026-09-04T20:07:34), so it is one server-side event, not four
+coincidences. At a genuine rollover the endpoint publishes **no** close at all (`weekly_reset_at`
+null for minutes to hours, next4 held null for 9 h); at a mid-window zeroing the close stays live.
+That is the discriminator, and it is the only one available in this store.
+
+Consequences, in order of how much they cost:
+
+1. **The live `/accounts` weekly column understates consumption.** `next` reads 22% and has spent
+   **≥56%** of this window. Any decision taken off the raw column — "we have 78% left, ramp hard" —
+   is taken off a number the meter forgot.
+2. **`weekly_pct` is no longer monotone within a window**, which §2 measured as 0/8 and every
+   downstream reader assumed. `desk-strand-replay.py` detected resets by the drop alone and read
+   these as six extra resets, publishing e.g. `next2 … 22% used → 78pp stranded` for a window that
+   really used 73%. Fixed the same day it was found (this commit's parent + this one); the reader
+   now requires the window's close to move, and adds the forgotten segments back.
+3. **Why it is happening is UNKNOWN.** Not observed once before 2026-09-01. `pick()` reads
+   `limits[]` `kind: weekly_all` and would return `(None, None)`, not 0, on a schema rename — so
+   this is the server sending 0, not our parser losing the field. §8.1's dropped-field gap is the
+   place to look: `limits[].severity` and the `seven_day_*` sub-caps are returned and unread.
+
+### §9.2 What still has no owner
+
+§5.3 ("nothing alarms on the retrospective") is unchanged and is now the expensive item. Three
+independent silences held through the worst week the series has recorded:
+
+- the retrospective reader is **hand-run**, and it **crashed** from 2026-08-30 to 2026-09-05 on two
+  quota-blank samples — a hand-run reader that crashes is indistinguishable from one nobody ran;
+- the mid-week projection went **deliberately silent below the day-6 mark** on 2026-09-01
+  (§6, `MIN_ELAPSED_FRAC` 0.05 → 6/7). That widening is correct on its own evidence — the linear
+  forecast was wrong by a mean 46 pp at day 3 — but it removed the only mid-week line, on the same
+  day the collapse began. Nothing replaced it: `wk_strand_pp` is a nowcast that must be looked at;
+- the autonomous dispatcher has been **cloud-only since 2026-08-11**
+  (`CC_DISPATCH_VENUE_ONLY=cloud`, parking 86% of the queue), and whether cloud sessions bill the
+  same weekly meter is still **open** (§5.4, task #175). If they do not, the pipeline built to
+  consume this quota structurally cannot.
+
+The local drain chain is what actually spends it, and it is **two serial lanes** (infra #311, reso
+#18 as of 2026-09-06). Two lanes filled the window in August only because a person was also working
+on the same accounts.
