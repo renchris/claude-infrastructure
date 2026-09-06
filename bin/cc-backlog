@@ -15,6 +15,11 @@
 #
 # Verbs:
 #   add     --title T [--project P] [--dod-ref R] [--source S] [--condition SLUG]  → echoes the id
+#           [--run C]  the EXACT runnable command for an OPEN row (2026-09-06): the same `run` field
+#                      `needs --run` stores, carried by the fold to `list --json`, so a machine producer
+#                      can file agent work as OPEN and still hand the drain link the command. Before
+#                      this, `run` rode ONLY the block record — the one verb that could carry a command
+#                      was the one that parked the row where no lane reads (BACKLOG_ZERO §6).
 #                                                                  An EXPLICIT --project is checked
 #                                                                  against scripts/dispatch-projects
 #                                                                  .conf and WARNS (stderr, rc 0,
@@ -1507,7 +1512,7 @@ EOF
 }
 
 cmd_add() {
-  local project="" title="" dod="" source="" condition="" falsifier="" why_not_now="" session=""
+  local project="" title="" dod="" source="" condition="" falsifier="" why_not_now="" session="" run=""
   while [ $# -gt 0 ]; do
     local key="$1"; shift
     case "$key" in
@@ -1523,6 +1528,7 @@ cmd_add() {
       # the filer either drives the row, closes it, or states the reason and hands it off. NOT
       # part of the id hash, like the falsifier — it describes the hand-off, not WHICH item.
       --why-not-now) why_not_now="${1:-}"; [ $# -gt 0 ] && shift ;;
+      --run)       run="${1:-}";       [ $# -gt 0 ] && shift ;;
       # `--session` mirrors `needs`: an explicit flag beats the ambient env, for filing on another
       # session's behalf. The env resolution below is byte-identical to cmd_needs (:3057-3059).
       --session)   session="${1:-}";   [ $# -gt 0 ] && shift ;;
@@ -1742,22 +1748,24 @@ cmd_add() {
     #     Writing the falsifier from here would be a second door into that store with the guard
     #     missing — so `add --falsifier` on a known id stays exactly the no-op cmd_falsify's header
     #     documents, and `cc-backlog falsify` remains the only way in.
-    local up_title="" up_dod="" up_source="" up_why=""
+    local up_title="" up_dod="" up_source="" up_why="" up_run=""
     [ -n "$title" ]  && [ "$title"  != "$(printf '%s' "$ex" | jq -r '.title  // ""')" ] && up_title="$title"
     [ -n "$dod" ]    && [ "$dod"    != "$(printf '%s' "$ex" | jq -r '.dodRef // ""')" ] && up_dod="$dod"
     [ -n "$source" ] && [ "$source" != "$(printf '%s' "$ex" | jq -r '.source // ""')" ] && up_source="$source"
     # A re-run of the same add carrying `--why-not-now` is how an already-filed bare row is handed
     # off: it folds onto the row as an update, and the ledger stops counting it as the filer's own.
     [ -n "$why_not_now" ] && [ "$why_not_now" != "$(printf '%s' "$ex" | jq -r '.whyNotNow // ""')" ] && up_why="$why_not_now"
+    [ -n "$run" ]         && [ "$run"         != "$(printf '%s' "$ex" | jq -r '.run // ""')" ]       && up_run="$run"
     if [ "$(printf '%s' "$ex" | jq -r '.status // ""' 2>/dev/null)" != "done" ] &&
-       { [ -n "$up_title" ] || [ -n "$up_dod" ] || [ -n "$up_source" ] || [ -n "$up_why" ]; }; then
+       { [ -n "$up_title" ] || [ -n "$up_dod" ] || [ -n "$up_source" ] || [ -n "$up_why" ] || [ -n "$up_run" ]; }; then
       jq -nc --arg id "$id" --arg ts "$(now_iso)" \
-         --arg title "$up_title" --arg dod "$up_dod" --arg source "$up_source" --arg why "$up_why" \
+         --arg title "$up_title" --arg dod "$up_dod" --arg source "$up_source" --arg why "$up_why" --arg run "$up_run" \
          '{id:$id, ts:$ts, event:"update"}
           + (if $title  == "" then {} else {title:$title}   end)
           + (if $dod    == "" then {} else {dodRef:$dod}    end)
           + (if $source == "" then {} else {source:$source} end)
-          + (if $why    == "" then {} else {whyNotNow:$why} end)' \
+          + (if $why    == "" then {} else {whyNotNow:$why} end)
+          + (if $run    == "" then {} else {run:$run}       end)' \
          >> "$BACKLOG"
     fi
     echo "$id"; return 0
@@ -1773,12 +1781,13 @@ cmd_add() {
   [ -n "$session" ] || session="${CC_SESSION_ID:-}"
   jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg project "$project" \
      --arg title "$title" --arg dod "$dod" --arg source "$source" --arg condition "$condition" \
-     --arg falsifier "$falsifier" --arg why "$why_not_now" --arg filedby "$session" \
+     --arg falsifier "$falsifier" --arg why "$why_not_now" --arg filedby "$session" --arg run "$run" \
      '{id:$id, ts:$ts, event:"add", project:$project, title:$title, dodRef:$dod, source:$source}
       + (if $condition == "" then {} else {condition:$condition} end)
       + (if $falsifier == "" then {} else {falsifier:$falsifier} end)
       + (if $why       == "" then {} else {whyNotNow:$why}       end)
-      + (if $filedby   == "" then {} else {filedBy:$filedby}     end)' \
+      + (if $filedby   == "" then {} else {filedBy:$filedby}     end)
+      + (if $run       == "" then {} else {run:$run}             end)' \
      >> "$BACKLOG"
   echo "$id"
 }
