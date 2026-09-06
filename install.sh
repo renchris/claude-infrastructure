@@ -227,9 +227,55 @@ copy_file() {
   installed=$((installed + 1))
 }
 
+# True IFF $dir is a symlink that RESOLVES to the corresponding entry under $HOME/.claude — i.e.
+# the whole-directory mirror link lib/config-mirror.zsh creates so a secondary config dir shares
+# the global surface instead of forking a private copy of it.
+#
+# Both sides are resolved with `pwd -P` rather than compared as strings: the link may be relative,
+# and on macOS $HOME/$TMPDIR routinely contain symlinks of their own (/tmp → /private/tmp), so a
+# readlink-vs-path comparison reports a fork where there is none.
+#
+# Deliberately FALSE in three cases, each of which must keep the old repair:
+#   - $CONFIG_DIR IS the global dir  → there is nothing to mirror, and a self-referential link
+#                                      there is a genuine fork, not the mirror state.
+#   - the link dangles               → `-d` fails, so it resolves to nothing to share.
+#   - no global counterpart exists   → likewise nothing to share.
+is_global_mirror_link() {
+  local dir="$1"
+  if $IS_GLOBAL; then return 1; fi
+  local rel="${dir#"$CONFIG_DIR"/}"
+  [[ "$rel" != "$dir" ]] || return 1          # not under $CONFIG_DIR — not a mirror path at all
+  local want="$HOME/.claude/$rel"
+  [[ -d "$dir" && -d "$want" ]] || return 1
+  local have_p want_p
+  have_p="$(cd -P "$dir"  2>/dev/null && pwd -P)"  || return 1
+  want_p="$(cd -P "$want" 2>/dev/null && pwd -P)"  || return 1
+  [[ -n "$have_p" && "$have_p" == "$want_p" ]]
+}
+
+# Guarantee $dir is somewhere link_file can deposit per-file symlinks — WITHOUT re-forking a
+# config dir that is deliberately mirroring the global one.
+#
+# This used to `rm` every directory symlink unconditionally, and that was the generator behind
+# ~/.claude-next/commands sitting frozen at 2026-07-18 for seven weeks: config-mirror.zsh creates
+# the whole-directory link, install.sh destroyed it and rebuilt per-file links, and since
+# deploy-live.sh runs install.sh on every advance, install.sh always won. The two mechanisms
+# fought silently and the loser was the one with no alarm — so the config dir kept whatever
+# per-file links existed the day it was last re-forked, and never saw an addition again.
+# Backlog 72f21be2bb05; evidence in docs/research/activation-queue-audit-2026-09-04.md
+# § "The generator".
+#
+# A mirror link is therefore ALREADY CORRECT and is preserved. Every other symlink — one pointing
+# somewhere other than the matching ~/.claude entry, or a dangling one — is still a fork, and is
+# still moved aside and rebuilt exactly as before.
 ensure_real_dir() {
   local dir="$1"
   if [[ -L "$dir" ]]; then
+    if is_global_mirror_link "$dir"; then
+      echo "  ✓ $dir → \$HOME/.claude/${dir#"$CONFIG_DIR"/} (mirror symlink, preserved)"
+      skipped=$((skipped + 1))
+      return
+    fi
     echo "  ⚠ $dir is a directory symlink — replacing with real directory"
     run rm "$dir"
   fi
