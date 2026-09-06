@@ -911,6 +911,51 @@ def pick(u, kind, scope_name=None):
     return None, None
 
 
+# ---- usage-schema drift ------------------------------------------------------------------------
+# `pick()` answers (None, None) for a kind the payload does not carry, and that answer is
+# byte-identical to "this account genuinely has no such cap". Five of the endpoint's ~40 fields are
+# read here, so a RENAMED kind — or a per-model sub-cap switched on under a name we do not model —
+# lands as a clean exclusion: `_excluded` says "no-session-data", which names the SYMPTOM and says
+# nothing about the cause, and a new sub-cap says nothing at all. These two lists make the cause
+# legible. Neither of them moves anyone's eligibility; see `limits_drift`.
+KNOWN_LIMIT_KINDS = frozenset(("session", "weekly_all", "weekly_scoped"))
+# Only `session` is load-bearing for the error: `weekly_scoped` is legitimately absent for an
+# account with no frontier scope, and `weekly_all` is recorded but left routable on purpose — see
+# `limits_drift`.
+REQUIRED_LIMIT_KINDS = ("session", "weekly_all")
+
+
+def limits_drift(row, u, name=""):
+    """Record which limit kinds the payload actually carried, against the ones we model.
+
+    The error is set ONLY where the row was already unroutable for the SAME reason: a missing
+    `session` limit is `_excluded`'s "no-session-data" either way (and `reason_class` keeps it
+    'data' because `"error" in row`), so this changes the WORDS and never the eligibility set. A
+    missing `weekly_all`, or an unmodeled kind, is recorded and left routable on purpose — if the
+    endpoint renames weekly on all four accounts, erroring here would empty the fleet, which is a
+    far worse failure than the silence it replaces.
+
+    The log line fires only for an UNMODELED kind, which is the half no row field is rendered for
+    and the half that changes what the fleet may spend. A missing kind is already visible in
+    --json and (for `session`) in the table's error column, and gating the line this way keeps a
+    fixture that simply omits a kind from writing into the real log (LOG_PATH resolves at import;
+    only some suites redirect it)."""
+    kinds = [lm.get("kind") for lm in (u.get("limits") or []) if isinstance(lm, dict)]
+    unmodeled = sorted({str(k) for k in kinds if k not in KNOWN_LIMIT_KINDS})
+    missing = [k for k in REQUIRED_LIMIT_KINDS if k not in kinds]
+    if not (unmodeled or missing):
+        return
+    row["limits_unmodeled"] = unmodeled
+    row["limits_missing"] = missing
+    seen = ",".join(str(k) for k in kinds) or "none"
+    if unmodeled:
+        log_event(f"probe {name}: usage-schema drift — unmodeled limit kind(s) "
+                  f"{','.join(unmodeled)} (payload kinds: {seen}). Routing is UNCHANGED; a new "
+                  f"per-model sub-cap is not read by pick() until it is modeled here.")
+    if "session" in missing and "error" not in row:
+        row["error"] = f"usage schema drift: no session limit (kinds: {seen})"
+
+
 # ---- last-good quota ledger (durable stale-quota visibility; NEVER influences routing) --------
 # The oauth/usage endpoint yields quota ONLY on a 200. Every other outcome — logged-out /
 # token-invalid / keychain-error / expired-stale-401 / no-data / 429 poll-throttle — leaves the
@@ -1278,6 +1323,7 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
     sp, sr = pick(u, "session")
     wp, wr = pick(u, "weekly_all")
     fp, fr = pick(u, "weekly_scoped", cfg["frontier"]["scoped_display_name"])
+    limits_drift(row, u, name)
     eu = u.get("extra_usage") or {}
     row.update({
         # session_reset_at is emitted alongside the *_reset_h countdown for the SAME reason
