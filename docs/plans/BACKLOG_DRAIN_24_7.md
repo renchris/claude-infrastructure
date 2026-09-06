@@ -87,6 +87,15 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-05 — recycle #309 (lane infra):** closed `a91e678ba369` (MOOT — the validate-bash fork
+  removal landed 6644273f3, 17 d BEFORE the row was filed), `56ca4670784b` (limits_drift: a renamed
+  usage-limit kind is now an error naming the kinds seen, eligibility unmoved; 4 red-proof bats
+  cases), `0bea8eb97794` (README §6 carries the four lag findings and names off-box) · blocked none ·
+  released `8fd1919f7769` (5 real off-box reds remain — #308's triage doc holds the list) and
+  `23255fbb8792` (its prime suspect REFUTED — that bats case only LINTS its probe — and the lint is
+  clean on a fresh CC_GITID_MEMO=off scan of 861 files; remainder written to the leak doc) · landed
+  `cc5a21540`, `187b10e05` · `closed=14 closed_pre=3 closed_other=4 filed=6 net=8 blocked=12 min=3 lane=local-drain project=claude-infrastructure floor=MET`.
+
 - **2026-09-05 — recycle #308 (lane infra):** closed 44f6b579248d (MOOT — "cloud creates but never
   runs the brief" is refuted at scale: `cc-cloud list | grep 'claude/fire-'` = 664 total, 309 with a
   pushed ref, 209 never polled; the residual NOT-START rate is open row 42ab9ce1a2e7) · d73a772a8468
