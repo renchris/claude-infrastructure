@@ -22,6 +22,26 @@
 # (HANDOFF_COMPLETION_PUSH_TIMEOUT_S) and require the subject to return on its OWN, with the outer
 # `timeout` present only as a backstop whose firing is a FAILURE (the mutation control inverts exactly
 # this, and is the only test here that may legitimately hit it).
+#
+# ── SIZING THOSE BACKSTOPS FOR THE BAND, NOT THE BENCH (2026-09-06) ──────────────────────────────────
+# The backstops above were sized on a quiet box, and at corpus load they stop being backstops and
+# become the verdict — which is the one thing the block above says they must never be. Measured with
+# `bats -T` at loadavg 18.67: the `timeout 6` harness wrappers cost ~1.2s, and the two seam tests cost
+# 3.3s and 6.4s against `timeout 20`. The TERM-ignoring case is the tight one by construction — it
+# must wait out the 2s seam AND the `-k` SIGKILL escalation before it can return — so 6.4s of a 20s
+# bound is only 3.1x. postland-verify stamps its own loadavg, and the 2026-09-06T11:14:42Z stamp that
+# convicted this file records load 51.28, i.e. 2.7x the box these numbers came from; that projects the
+# 6.4s case to ~17s and puts it through a 20s bound.
+# Raising a backstop cannot weaken anything here: every pass condition is unchanged, and `status -ne
+# 124` still asserts the subject returned ON ITS OWN — a genuinely unbounded subject fails exactly as
+# before, just later. The mutation control's `timeout 5` is deliberately NOT raised: its firing is the
+# expected observation, so it is the one bound that is a subject rather than a backstop. The wall-clock
+# assertion stays strictly under the hang stub's 30s sleep, so it still discriminates "the 2s bound
+# fired" from "the stub ran to completion" — that is a verdict, and it keeps its teeth.
+# NOT a reproduction: this suite is green on seven axes here (whole-file and per-test-alone, at
+# foreground/background/utility QoS, under the verifier's launchd PATH, a postland-shaped TMPDIR, and a
+# fresh origin/main tree), so the sizing is inferred from the measured durations above and the load the
+# stamp itself recorded (backlog d702ccc9b321).
 
 setup() {
   # M11 (MACHINE_CAPACITY_V2 §11.3) — a test's environment is PINNED, not ambient. handoff-fire.sh's
@@ -75,14 +95,14 @@ setup() {
 }
 
 @test "--terminal (real) → completion-push CALLED with --role desk and the terminal event" {
-  ( cd "$WORK" && CC_COMPLETION_PUSH_BIN="$STUB" timeout 6 bash "$HF" self-close --terminal --session-id "fake:BBBB-2222" ) >/dev/null 2>&1 || true
+  ( cd "$WORK" && CC_COMPLETION_PUSH_BIN="$STUB" timeout 60 bash "$HF" self-close --terminal --session-id "fake:BBBB-2222" ) >/dev/null 2>&1 || true
   grep -q 'CALLED fire --role desk' "$MARK"
   grep -q -- '--from handoff-fire' "$MARK"
   grep -q -- 'self-closed (--terminal' "$MARK"
 }
 
 @test "--terminal + push FAILS (exit 5) → LOUD 'did NOT verify', close is NOT aborted by it" {
-  run bash -c "cd '$WORK' && CC_COMPLETION_PUSH_BIN='$STUB' STUB_RC=5 timeout 6 bash '$HF' self-close --terminal --session-id 'fake:CCCC-3333' 2>&1"
+  run bash -c "cd '$WORK' && CC_COMPLETION_PUSH_BIN='$STUB' STUB_RC=5 timeout 60 bash '$HF' self-close --terminal --session-id 'fake:CCCC-3333' 2>&1"
   [[ "$output" == *"did NOT verify"* ]] || false
   [[ "$output" == *"proceeding with the close"* ]] || false
   grep -q 'CALLED' "$MARK"     # the push WAS attempted (recorded LOUD, never silent)
@@ -128,7 +148,7 @@ setup() {
   ( cd "$WORK" && \
     CC_NOTIFY_BIN="$ccn" CC_ROLES_DIR="$roles" CC_COMPLETION_RECORDS_DIR="$recs" \
     CC_ANNOUNCE_ALARM_DIR="$BATS_TEST_TMPDIR/al" CC_ANNOUNCE_RETRY_SLEEP=0 \
-    timeout 6 bash "$HF" self-close --terminal --session-id "fake:EEEE-5555" ) >/dev/null 2>&1 || true
+    timeout 60 bash "$HF" self-close --terminal --session-id "fake:EEEE-5555" ) >/dev/null 2>&1 || true
   local rec; rec="$(find "$recs" -name 'push-*.json' 2>/dev/null | head -1)"
   [ -n "$rec" ]
   [ "$(jq -r '.verdict' "$rec")" = "verified" ]
@@ -149,7 +169,7 @@ mk_ignterm_stub() { printf '#!/bin/bash\ntrap "" TERM\nwhile :; do sleep 1; done
   # `timeout 20` is a BACKSTOP, not the mechanism: status 124 here would mean the subject never
   # returned, which is the defect. The pass condition is that handoff-fire ends on its own.
   run bash -c "cd '$WORK' && CC_COMPLETION_PUSH_BIN='$hang' HANDOFF_COMPLETION_PUSH_TIMEOUT_S=2 \
-      timeout 20 bash '$HF' self-close --terminal --session-id 'fake:BBBB-2222' 2>&1"
+      timeout 60 bash '$HF' self-close --terminal --session-id 'fake:BBBB-2222' 2>&1"
   t1="$(date +%s)"
   [ "$status" -ne 124 ]                                   # the subject returned; the backstop did NOT fire
   [[ "$output" == *"TIMED OUT (bound 2s"* ]] || false
@@ -159,7 +179,7 @@ mk_ignterm_stub() { printf '#!/bin/bash\ntrap "" TERM\nwhile :; do sleep 1; done
   # well have landed (capture-before-notify wrote the record first). Claiming "did NOT verify" here
   # would assert a delivery FACT this path cannot possibly hold.
   [[ "$output" != *"did NOT verify"* ]] || false
-  [ $(( t1 - t0 )) -lt 15 ]                               # bounded at 2s, nowhere near the stub's 30s
+  [ $(( t1 - t0 )) -lt 25 ]                               # bounded at 2s, nowhere near the stub's 30s
 }
 
 @test "BOUND mutation control: with the seam DISABLED the same hang DOES suspend the close" {
@@ -180,7 +200,7 @@ mk_ignterm_stub() { printf '#!/bin/bash\ntrap "" TERM\nwhile :; do sleep 1; done
   # failure rather than one that never answered.
   local ign="$BATS_TEST_TMPDIR/ignterm.sh"; mk_ignterm_stub "$ign"
   run bash -c "cd '$WORK' && CC_COMPLETION_PUSH_BIN='$ign' HANDOFF_COMPLETION_PUSH_TIMEOUT_S=2 \
-      timeout 20 bash '$HF' self-close --terminal --session-id 'fake:BBBB-2222' 2>&1"
+      timeout 60 bash '$HF' self-close --terminal --session-id 'fake:BBBB-2222' 2>&1"
   [ "$status" -ne 124 ]
   [[ "$output" == *"TIMED OUT (bound 2s"* ]] || false
   [[ "$output" == *"rc=137"* ]] || false
@@ -197,7 +217,7 @@ mk_ignterm_stub() { printf '#!/bin/bash\ntrap "" TERM\nwhile :; do sleep 1; done
     printf 'printf "%%s\\n" "CALLED $*" >> "%s"\n' "$MARK"; printf 'exit 0\n'; } > "$slow"
   chmod +x "$slow"
   run bash -c "cd '$WORK' && CC_COMPLETION_PUSH_BIN='$slow' HANDOFF_COMPLETION_PUSH_TIMEOUT_S=15 \
-      timeout 20 bash '$HF' self-close --terminal --session-id 'fake:BBBB-2222' 2>&1"
+      timeout 60 bash '$HF' self-close --terminal --session-id 'fake:BBBB-2222' 2>&1"
   [[ "$output" == *"terminal completion pushed to the 'desk' role"* ]] || false
   [[ "$output" != *"TIMED OUT"* ]] || false
   grep -q 'CALLED fire --role desk' "$MARK"               # it really ran to completion, not skipped
