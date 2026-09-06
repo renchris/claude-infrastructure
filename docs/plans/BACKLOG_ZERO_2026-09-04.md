@@ -543,3 +543,19 @@ named here and left for a session with that mandate; the recurrence brake lives 
   since the live commit's author time — 04:23Z ⇒ **10:23Z at the latest**). The session stays up to run it and prove
   `git hash-object ~/.claude/<f> == git rev-parse origin/main:<f>` for both files; the proof lines are appended below
   when they exist, never asserted before.
+
+- **10:24Z — the degrade window opened and the converger was REFUSED by the shared checkout itself.**
+  `deploy-live.sh`: *"DEGRADED deploy — … taking the newest NOT-RED commit instead, authorised by 6h02m since
+  the live commit was authored (budget 6h)"* → *"REFUSED — git merge --ff-only 16cf74b19c1e FAILED in
+  /Users/chrisren/Development/claude-infrastructure with all THREE named causes ruled out … GIT SAID: fatal:
+  this operation must be run in a work tree"*. `core.bare` on the shared checkout reads **true** (`.git/config`
+  mtime 08:43Z; `git worktree list` annotates the toplevel `(bare)`), the state memory
+  `worktree-ops-can-bare-the-shared-checkout` records as a `git worktree add/remove` side effect (GH #34645 /
+  #48927). The last store event before the flip is the OLD live `ship-land.sh` re-blocking re-land row
+  `e3ce43bead25` at 08:39Z during a sibling's land — the very worktree cycle the re-land command runs in the
+  shared checkout. `deploy-live.sh:554` ships the remedy as an operator `--run` for culprit
+  `checkout-not-a-worktree`; this session's attempt to run it was refused by the auto-mode classifier
+  (a config write on the shared checkout), so it is the operator's one command:
+  `git -C /Users/chrisren/Development/claude-infrastructure config --unset core.bare && bash /Users/chrisren/Development/claude-infrastructure/scripts/deploy-live.sh --auto`.
+  Until it runs, the live layer executes the pre-fix `cc-backlog` and `ship-land.sh` (both symlinks resolve
+  into that checkout at 0c4bdedb4), and the old producer keeps filing born-blocked re-land rows.
