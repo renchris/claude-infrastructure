@@ -387,9 +387,71 @@ printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l\033[?1015l'
 # Values reach expect as ENVIRONMENT, and the program below is single-quoted so bash expands none of
 # it. The previous form interpolated $cfg/$bin/$model/$sid into a double-quoted Tcl program — every
 # one of them a path or an id that only has to contain a quote or a bracket to rewrite the program.
+# ── THE TWO OTHER STARTUP MODALS A RESUMED PANE CAN STALL AT (item 762b510b52b4) ─────────────────
+# The resume dialog is not the only question the binary can raise. A resumed session lands in $wt
+# under a CLAUDE_CONFIG_DIR that may never have opened that directory, so two more dialogs are
+# reachable and this script has a matcher for NEITHER. A pane stopped at one of them is alive, its
+# process is alive, no hook fires and the brief is never read — the silent shape documented in
+# scripts/lib/mcp-noinherit.sh, which is also where the remedy already lives.
+#
+#   1. WORKSPACE TRUST — "Do you trust the files in this folder?", for a $wt this account has not
+#      opened before. Answered by writing hasTrustDialogAccepted for the RESOLVED path, exactly as
+#      handoff-fire.sh's pre_trust does. Copied rather than sourced: that file is a launcher, not a
+#      library, and sourcing it would run it.
+#   2. PROJECT .mcp.json APPROVAL — "N new MCP servers found in this project". This script passes no
+#      --strict-mcp-config, so those servers DO load; the polarity is therefore `on` (approve), never
+#      a fixed rejection, which would silently hide from the resumed session a server it was already
+#      using. cc_mcp_project_decision_args composes it as `--settings=<per-launch file>`, so nothing
+#      durable is written and no other account or later session inherits the decision.
+#
+# Both are best-effort and NEVER a refusal: absent jq, an unreadable config or a missing library
+# leaves the modal exactly where it was, which is this file's behaviour before today. Kill switch
+# CC_RESUME_NO_MODAL_ANSWER (and CC_MCP_DECIDE=off for the MCP half alone).
+rr_pre_trust() { # $1=launch dir  $2=config dir
+  local dir="$1" cfgj="$2/.claude.json" tmp rdir
+  [ -n "$dir" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  [ -f "$cfgj" ] || return 0
+  # Claude Code keys trust by the RESOLVED physical path (node process.cwd()), so a worktree under
+  # a symlinked parent must be trusted by the path the binary will actually report.
+  rdir="$(cd "$dir" 2>/dev/null && pwd -P)" && [ -n "$rdir" ] && dir="$rdir"
+  [ "$(jq -r --arg d "$dir" '.projects[$d].hasTrustDialogAccepted // false' "$cfgj" 2>/dev/null)" = "true" ] && return 0
+  tmp="$cfgj.rro-trust.$$"
+  if jq --arg d "$dir" '.projects[$d] = ((.projects[$d] // {}) + {hasTrustDialogAccepted:true, hasCompletedProjectOnboarding:true})' \
+        "$cfgj" > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+    mv -f "$tmp" "$cfgj" 2>/dev/null || rm -f "$tmp"
+    printf '%s\n' "reso-resume-one: pre-trusted $dir in $(basename "$2") — the resumed pane skips the workspace-trust dialog"
+  else
+    rm -f "$tmp" 2>/dev/null
+  fi
+}
+
+CC_RR_MCP_ARGS=""
+if [ -z "${CC_RESUME_NO_MODAL_ANSWER:-}" ]; then
+  rr_pre_trust "$wt" "$cfg"
+  _RRO_MNI=""
+  for _rro_m in "$(dirname "$0")/../scripts/lib/mcp-noinherit.sh" \
+                "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/mcp-noinherit.sh" \
+                "${HOME:-}/.claude/scripts/lib/mcp-noinherit.sh"; do
+    [ -f "$_rro_m" ] && { _RRO_MNI="$_rro_m"; break; }
+  done
+  if [ -n "$_RRO_MNI" ]; then
+    # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+    . "$_RRO_MNI" 2>/dev/null || _RRO_MNI=""
+  fi
+  if [ -n "$_RRO_MNI" ] && command -v cc_mcp_project_decision_args >/dev/null 2>&1; then
+    cc_mcp_project_decision_args "$wt" on
+    CC_RR_MCP_ARGS="${CC_MCP_DECISION_ARGS:-}"
+    [ -n "$CC_RR_MCP_ARGS" ] && printf '%s\n' "reso-resume-one: ${CC_MCP_DECISION_REASON}"
+  else
+    printf '%s\n' "reso-resume-one: mcp-noinherit.sh unreadable — project .mcp.json approval left to the modal (a resumed pane may stall)"
+  fi
+fi
+
 export CC_RR_CFG="$cfg" CC_RR_BIN="$bin" CC_RR_MODEL="$model" CC_RR_EFFORT="$effort" CC_RR_SID="$sid"
 export CC_RR_NO_INTERACT="${CC_RESUME_NO_INTERACT:-}"
 export CC_RR_THRESHOLD="$RESUME_THRESHOLD"
+export CC_RR_MCP_ARGS
 # ── THE PANE MUST OUTLIVE THE SESSION IN IT (2026-08-26) ─────────────────────────────────────────
 # This used to be `exec expect`, which made expect(1) the pane's TERMINAL process: nothing under it,
 # nothing after it. Every way a resumed CC can end — a crash, a usage limit, and above all the
@@ -426,6 +488,7 @@ expect -c '
   set effort $env(CC_RR_EFFORT)
   set sid    $env(CC_RR_SID)
   set thr    $env(CC_RR_THRESHOLD)
+  set mcpdec $env(CC_RR_MCP_ARGS)
   set answered 0
   # The env prefix is a LIST so the suppression variable can be absent rather than empty. Passing
   # NAME= with no value is not the same thing: Rue() reads "" as NaN and falls back to the default
@@ -436,7 +499,12 @@ expect -c '
   # one apostrophe in a Tcl comment closes it and the rest of the file stops being expect at all.
   set envpfx [list DISABLE_AUTOUPDATER=1 CLAUDE_CONFIG_DIR=$cfg]
   if {$thr ne ""} { lappend envpfx CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=$thr }
-  spawn -noecho env {*}$envpfx $bin --permission-mode auto --model $model --effort $effort --resume $sid
+  # A LIST again, and for the second reason this file already gives: an absent decision must pass
+  # NO argument, not an empty one, and appending the value as a single element keeps a path with a
+  # space in it one argument rather than two.
+  set mcplist [list]
+  if {$mcpdec ne ""} { lappend mcplist $mcpdec }
+  spawn -noecho env {*}$envpfx $bin --permission-mode auto --model $model --effort $effort {*}$mcplist --resume $sid
   # keep the claude UI responsive: propagate iTerm2 pane resizes (SIGWINCH) to the spawned pty.
   # interact does NOT forward window-size changes, so without this the Ink UI stays frozen at the
   # spawn-time width (verified 2026-07-05).
