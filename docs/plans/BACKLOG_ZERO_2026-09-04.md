@@ -387,3 +387,132 @@ not worth a rail change this session; the plan now says where it lives.
 where the §4 waves carried 0 — read it per session (`closedSession` grouped by sid), never from LIVE,
 which the lanes move by ±50 a day. The first honest read is after the live layer carries this commit.
 
+## §6 The blocked floor — a parking state with a cheap entrance and no scheduled exit (2026-09-06, frontier session `blocked-floor`, pane 338)
+
+**Mandate:** the local lane drains the OPEN half and not the BLOCKED half — `backlog-telemetry.sh` read open
+299 → 239 while blocked went 248 → 253 (09-04 → 09-06), 252 of 491 LIVE, flat. This section names what
+holds a row in `blocked`, what was changed at the producer, and the number that moved.
+
+### §6.1 What leaves `blocked`, measured — and the three candidates discarded
+
+`blocked` is a state no lane reads, by construction: cc-dispatch excludes it (`bin/cc-backlog:767`),
+`scripts/drain-pick.sh:80` selects `status == "open"` only (`:103` prints the rule), and the drain brief
+tells a link *"If it is already blocked, do not touch it"* (`scripts/drain-brief.template.md:54`). A row
+leaves only by `unblock`, by `done`, or by a passing falsifier. Folding the store sequentially, 180 rows
+went blocked → done in the 14 days to 09-06: **64 `lane=land`** (ship-land's own *auto-retracted at
+filing* — rows dead on arrival), **62 `lane=session`** (hand adjudication), 21 `local-drain`, **7
+`sweep`**, 26 unattributed. So the one AUTOMATED exit is `cc-premise sweep --close-falsified 25`
+(`scripts/autonomy-sweep.sh:1193-1196`, every 6 h at `taskpolicy -c utility`), and:
+
+- it returned **rc 124 `bound-exceeded` on 5 of its last 7 runs** (IDL: 09-04 06:55Z and 14:20Z, 09-05
+  01:57Z, 14:55Z, 22:07Z) and closed **5 rows since 09-03**; the stamp is touched BEFORE the pass
+  (`:1192`), so a cut pass also postpones the next one by 6 h;
+- it could not have moved the floor anyway: **194 of 252** blocked rows carry no probe of any arm
+  (`cc-premise coverage`: probeable 231 · covered 39), and of the **54** blocked rows stamped in
+  `backlog-validated.json`, 50 read `clear`, 4 `suspect`, **0 `falsified`** — where a premise IS re-checked
+  it holds. *"The blocker premise is never re-checked"* is true and is not the lever.
+
+Discarded with evidence: **reap churn** — 305 reap blocks / 311 reap unblocks in 14 d are the cloud lane's
+*"a LIVE off-box worker (cc-cloud reads ALIVE) still holds…"* cycle (283 of 305) and net to zero; **0 of
+the 252** live blocked rows were last blocked by the reap — all 252 by external callers. **Close
+attribution 15.1%** — an all-time figure: the `lane` field first appears on a `done` at
+2026-08-23T09:23Z, and **234 of 247** dones since 09-03 carry one. Not a live defect.
+
+### §6.2 The generator: `needs` is the quiet door, and a machine walked agent work through it
+
+Inflow into `blocked` in the same 14 days: **213 born-blocked adds** (`source=needs`) — **113 from ONE
+call site, `scripts/ship-land.sh:1000`** (`land_failure_inbox`, the *"re-land <branch>: ship-land could not
+complete and its author's pane may be gone"* row), against **100 from every session combined**. On the
+live store: **48 of the 252** blocked rows were re-land rows, **47 with commits genuinely absent from
+trunk** (`git cherry origin/main <ref>` prints `+`), all 48 keyed into `master-operator-gated` at filing
+(`bin/cc-backlog:909`); **37 rc=6** (gate RED — author-fixable, `ship-land.sh:47`), 8 rc=5 (rebase
+conflict), 3 SIGTERM. For **22** the branch was gone locally AND on origin, so the stored
+`git checkout <branch>` failed at its first token; 5 sat in a live worktree. `MASTER_OPERATOR_GATED.md` O1
+had adjudicated this exact class as `master-stranded-work` on 2026-08-17 — for two rows, by hand, and
+*"named the retry storm, not diagnosed"* — while the producer kept minting; its DoD was met at 26 members
+and the group held 176 today.
+
+**Why that verb, and what selected for it.** `add` kicks `cc-dispatch --decide` (`bin/cc-backlog:6336` →
+`dispatch_kick` `:6313`, a possible spawn); `needs` does not (`:778`). `add` could not carry a command —
+`run` rode ONLY the block record (`:1174` fold, `:2744` writer). And a `needs` row never counts against its
+filer: the ledger's FILED_MINE exempts any row with a `condition` (`scripts/wrap-ledger.sh:780`) and every
+`needs` row is auto-keyed into the operator group at filing. The cheapest verb for the filer was the most
+expensive for the pile, and a producer inside a failing land — the box loaded, the fire gate refusing —
+reaches for the door that neither spawns nor haunts it. The hooks point sessions at the same door
+(`hooks/completion-assert.sh:1096`, `drain-brief.template.md:54`). Same shape elsewhere on this box: reap
+rule B (a load spike → `blocked`, 64% of the pile in August, `bin/cc-backlog:296-306`) and a venue label
+outliving its rule (`cc-venue run`, zero callers until 08-24) — each a parking state with a cheap
+entrance and no scheduled exit.
+
+### §6.3 Why `cc-do <backlog-id>` closed zero
+
+No surface renders it for a backlog row. `hooks/operator-readout.sh:1093` renders the class command as
+`cc-backlog list --blocked` — a LISTING — and the 4+ arm (`:1118`) collapses the pile to one counted line
+and never prints the `▶ <run>` rows it built at `:712`; `bin/cc-do` keeps `backlog --blocked` JUDGMENT by
+design (its header), so only the typed `cc-do <id>` runs one, and nothing names it. The operator never
+runs `cc-backlog`: of 687 `unblock` events all-time, 331 are sessions, 311 the reap, 0 by hand. And 48 of
+the 118 `--run` rows were the machine's, not the operator's — 22 of those could not run at all.
+
+### §6.4 Found on the way: the fold is a bash loop, and it is where the premise pass's bound went
+
+`cc-backlog list --all --json` = **22.85 s** on the 17,005-line store (load avg 132). `valid_records`
+(`bin/cc-backlog:1072`) tagged every line in ONE jq (0.09 s) and then walked the tagged stream in a bash
+`while read` — **17.5 s**. Every verb folds at least once; the premise pass folds per candidate `done`
+(60 s timeout each) and per `validated --batch` — which is how a 1,500 s bound at utility QoS ran out.
+Rewritten as two jq passes (records to stdout; a census — line count + malformed line NUMBERS — to
+stderr), every pinned message intact (`tests/cc-backlog.bats` P5/malformed 6/6): **2.50 s**. A whole-store
+dry `cc-premise sweep --json` at `taskpolicy -c utility` on that fold: **877.7 s real / 185.9 s user** —
+inside the bound the scheduled pass had breached five times running.
+
+### §6.5 What landed — every edit to an existing script, no new machinery
+
+- **`bin/cc-backlog`** — `add --run "<cmd>"` (on the add record; on a known live member, an `update`
+  carrying `run` when it differs; the fold already carried `run` from any record). `valid_records`:
+  bash read-loop → two jq passes (§6.4).
+- **`scripts/ship-land.sh` `land_failure_inbox`** — the re-land row is filed **OPEN** (`add --title …
+  --source needs --run … --why-not-now …`), never through `needs`; `--source needs` is KEPT because it is
+  half the id and the id is the dedupe (a new source would mint a sibling beside every row already in the
+  store on the branch's next attempt); `CC_BACKLOG_KICK=off` so a worker is never fired onto a branch its
+  author is still retrying — the drain lane picks the row on its own cadence (tier 0 falsifier, oldest
+  first). The stored command now survives a deleted branch (`git checkout -q <branch> || git checkout -q
+  -B <branch> <pinned ref>`). A cc-backlog that predates `add --run` (exit 2, empty id — the LIVE binary on
+  this change's first day) falls back to the legacy `needs` form, so a failed land is never unrecorded.
+- **The live rows, re-keyed through the verbs** (append-only, `--by blocked-floor-1a78a148`): **49
+  unblocked** (47 from the snapshot + 2 the still-live old producer filed at 03:43Z and 03:52Z while this
+  session worked) → `link --condition master-stranded-work --force` → `add … --run "<fixed>" --why-not-now`
+  (folds as an `update`); **1 closed MOOT** by content (`git cherry` empty). The fold reads all 49 as
+  `status=open · condition=master-stranded-work · run fixed · whyNotNow set`.
+- **Tests** — `tests/cc-backlog-add-update.bats` +3 (`--run` stored / update on change / no-op when
+  unchanged); `tests/ship-land.bats` +2 (re-land from the pinned ref after `branch -D`; legacy-binary
+  fallback), the first P4 case now asserts *no block record, `run` and `whyNotNow` on the add, source
+  kept*, the N-sandboxes case counts records per id (an open row's second attempt is an `update`, not a
+  second title), and the suite's `setup()` pins `CC_BACKLOG_BIN` to THIS tree's binary — unset, every P4
+  case executed the LIVE `cc-backlog` and ten went red for a reason no diff here could reach (memory:
+  unfixtured-sensor-executes-the-deployed-subject). Green: add-update 21/21 · needs 25/25 · cc-backlog
+  P5/malformed 6/6 · ship-land `P4 inbox` 16/16. Red-proof on the pre-fix `bin/cc-backlog` +
+  `scripts/ship-land.sh` (scratch copy, new tests): **5 of 7 red** — the two that pass pre-fix are controls
+  by design (the legacy fallback IS the old path; the one-row identity was never the change).
+
+### §6.6 Measurement (baseline 2026-09-06T03:32Z; after 03:57Z — all from `backlog-telemetry.sh` NOW)
+
+| figure | before → after | reads it back |
+|---|---|---|
+| **blocked** | **252 → 204** | `backlog-telemetry.sh` NOW line |
+| open / LIVE | 237 → 284 / 489 → 488 | same |
+| re-land rows in `blocked` | 48 → 0 | `cc-backlog list --blocked --json \| jq '[.[]\|select((.needs//"")\|startswith("re-land "))]\|length'` |
+| `drain-pick.sh` top 8 | all re-land, tier 0, 13–19 d old | `bash scripts/drain-pick.sh` |
+| one fold | 22.85 s → 2.50 s | `time cc-backlog list --all --json >/dev/null` |
+| dry premise pass, whole store, utility QoS | (bound-exceeded ×5) → 877.7 s | IDL `premise_pass_note` on the next scheduled pass after deploy |
+| re-land rows born OPEN since the deploy | 0 (pre-deploy) | `jq -c 'select(.event=="add" and .source=="needs" and (.title\|startswith("re-land ")) and (.run//"")!="")' ~/.claude/autonomy/backlog.jsonl \| wc -l` |
+| closes on the 49 re-keyed ids | 0 at 04:10Z | `jq -r 'select(.event=="done")\|.id' ~/.claude/autonomy/backlog.jsonl \| grep -cFf <(cut -f1 <the migrate table>)` — the drain lane's next links |
+
+**Movement vs noise:** the 48-row drop is a RE-CLASSIFICATION and says so; the productive signal is (1)
+`blocked` no longer re-filling from `ship-land.sh` (the first row above), (2) `done` events on the 49 ids
+by `lane=local-drain` — the picker ranks them 1–8 today, so the next links will hit them first — and (3)
+the next scheduled premise pass reading `ok`. LIVE alone cannot show any of it (±70/day).
+
+**Dropped, not filed** (one line each): the other 156 blocked rows (100 session-filed in 14 d) — each is a
+hand adjudication and where a probe exists the premise holds; a `cc-do --backlog` batch for the ~70
+operator-runnable rows (O2's residue) — an operator surface whose number moves only when he acts, so it is
+named here and left for a session with that mandate; the recurrence brake lives only in `needs`
+(`bin/cc-backlog:3147`) — `add` dedupes by identity, which the stable title already guarantees.
