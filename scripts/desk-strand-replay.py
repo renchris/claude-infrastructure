@@ -111,15 +111,35 @@ def to_row(d, now):
 def resets(sweeps, drop=5):
     """(acct, ts, pct_before) per observed weekly reset. Detected by the quota DROP: weekly_reset_at
     drifts by minutes on every sweep, so an advance in that stamp is not a reset and reading it as
-    one reports ~1,200 phantom resets."""
-    prev, out = {}, []
+    one reports ~1,200 phantom resets.
+
+    A sample can carry `weekly_pct: null` — the sweep reached the account and could not READ its
+    weekly meter (logged out, a token refusal, a shape the reader did not parse). That is an
+    ABSENT observation, not a value, and it used to crash this whole tool on the subtraction
+    below: two such rows out of 20,306 made the replay the item's own next step names unrunnable.
+    Neither obvious repair is safe, so the direction is chosen explicitly:
+
+      · treating null as 0 would mint a phantom reset at every hole — the exact failure the drop
+        detector exists to avoid;
+      · clearing `prev` would DROP a real reset that happens to straddle the hole, because the
+        next readable sample would have nothing to be compared against.
+
+    So a hole is SKIPPED and `prev` is carried across it: the comparison resumes at the next
+    readable sample, against the last one that was actually observed. The count is returned and
+    printed, because a replay over a series with silent holes is precisely the absence-of-evidence
+    reading this file's standing CAVEAT warns about."""
+    prev, out, holes = {}, [], 0
     for ts, accts in sweeps:
         for a, d in accts.items():
+            cur = d.get("weekly_pct")
+            if not isinstance(cur, (int, float)):
+                holes += 1
+                continue  # unreadable ⇒ no observation; prev is deliberately NOT touched
             p = prev.get(a)
-            if p is not None and p - d["weekly_pct"] >= drop:
+            if p is not None and p - cur >= drop:
                 out.append((a, ts, p))
-            prev[a] = d["weekly_pct"]
-    return out
+            prev[a] = cur
+    return out, holes
 
 
 def measure(sweeps, events, hours=12.0):
@@ -141,12 +161,46 @@ def measure(sweeps, events, hours=12.0):
                 continue
             pick = max(scored, key=lambda x: x[0])[1]
             tot += 1
-            if pick["acct"] == acct and (100 - pick["weekly_pct"]) > 1:
+            # Same hole, second site: a picked row with no readable weekly meter can be scored
+            # (score_interactive has its own handling) but cannot be judged on headroom. It counts
+            # in the denominator, as a sweep the desk did spend, and toward NEITHER term — an
+            # unreadable meter is not evidence of on-target and not evidence of exposure.
+            head = pick["weekly_pct"]
+            head = 100 - head if isinstance(head, (int, float)) else None
+            if head is None:
+                continue
+            if pick["acct"] == acct and head > 1:
                 on += 1
             T = pick["weekly_reset_h"]
-            if (100 - pick["weekly_pct"]) < 2 and isinstance(T, (int, float)) and T > 5:
+            if head < 2 and isinstance(T, (int, float)) and T > 5:
                 exposure += 1
     return on, tot, exposure
+
+
+def attribute(sweeps, events, hours=12.0):
+    """Per account, why the desk lane did NOT name it inside each reset's endgame window.
+
+    THE GAP THIS FILLS (item 51a7a9114c78). The measure above scores the WINNER, so a strand is
+    visible as a number and never as a cause: the item recording next4's 15pp could not say
+    whether the desk lane skipped that account because it scored lower (a TIER, which the W2
+    horizon-ramp reaches) or because it was refused outright (an EXCLUSION, which the ramp cannot
+    reach at all, since an excluded account is never scored). `score_interactive` already returns
+    the reason as its second value and this file was discarding it as `_why`.
+
+    Counted per SWEEP inside the window, so the unit is desk-time — the same unit as on-target."""
+    per = collections.defaultdict(collections.Counter)
+    for acct, rts, _pct in events:
+        end = datetime.fromisoformat(rts)
+        start = end - timedelta(hours=hours)
+        for ts, accts in sweeps:
+            t = datetime.fromisoformat(ts)
+            if not (start <= t <= end) or acct not in accts:
+                continue
+            for d in accts.values():
+                r = to_row(d, t)
+                sc, why = ca.score_interactive(r, CFG)
+                per[r["acct"]][("scored" if sc else (why or "excluded:?"))] += 1
+    return per
 
 
 def main():
@@ -167,14 +221,24 @@ def main():
         default=12.0,
         help="endgame window per reset (default 12)",
     )
+    ap.add_argument(
+        "--attribute",
+        action="store_true",
+        help="per-account census of WHY the desk lane skipped an account in each endgame window",
+    )
     ap.add_argument("--util", default=UTIL, help="utilization series path")
     a = ap.parse_args()
 
     sweeps = load_sweeps(a.util)
     if not sweeps:
         sys.exit(f"desk-strand-replay: no sweeps in {a.util}")
-    events = resets(sweeps)
+    events, holes = resets(sweeps)
     print(f"{len(sweeps)} sweeps  {sweeps[0][0][:16]} -> {sweeps[-1][0][:16]}")
+    if holes:
+        print(
+            f"⚠ {holes} sample(s) carry no readable weekly meter — skipped as ABSENT, with the "
+            f"prior observation carried across the hole (never read as a drop to zero)"
+        )
     seen = [d for _ts, accts in sweeps for d in accts.values()]
     legacy = sum(1 for d in seen if "k_src" not in d)
     if legacy:
@@ -196,6 +260,18 @@ def main():
             f"{label:>22s} | on-target {on:4d}/{tot:<5d} = {pct:5.1f}% | wall-exposure {exp:4d}"
         )
         return pct
+
+    if a.attribute:
+        per = attribute(sweeps, events, a.hours)
+        print("endgame windows, per account — sweeps by desk-lane verdict:")
+        for acct in sorted(per):
+            tot = sum(per[acct].values())
+            parts = "  ".join(
+                f"{k} {v} ({v / tot * 100:.0f}%)" for k, v in per[acct].most_common()
+            )
+            print(f"    {acct:7s} {tot:5d} sweeps | {parts}")
+        print()
+        return
 
     print(f"{'policy':>22s} | {'desk-time on an expiring account':>32s} | guard")
     print("-" * 74)
