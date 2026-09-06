@@ -202,7 +202,43 @@ if [ "$MEASURE_OK" -eq 1 ] && [ -n "$MEM" ] && [ -f "$MEM" ]; then
       done
     fi
     PRE_TOTAL="$TOTAL"
-    if [ -n "$RB" ] && [ -x "$RB" ]; then
+    # LATCH. Rotation is deterministic in its inputs: given the same index bytes and the same topic
+    # corpus, a rotor that answered `exhausted` answers `exhausted` again. Re-running it on EVERY
+    # prompt therefore buys nothing and costs the hook its whole budget — measured 2026-09-05 at
+    # 118s against a forced breach with CLAUDE_PROJECT_DIR set, versus the 5s this hook declares, so
+    # the harness killed the hook and DISCARDED an additionalContext it had already computed.
+    # Attempt it once per index STATE per DAY: the state component re-arms the moment the index
+    # actually changes, and the date component bounds the worst case (a corpus change the index
+    # cannot see) at one day. Stamp construction mirrors hooks/memory-index-drain.sh:108-119 — the
+    # length guard is load-bearing on bash 3.2, where `${k: -120}` on a shorter string yields "".
+    #
+    # A WALL-CLOCK BOUND ON THE ROTOR IS DELIBERATELY *NOT* HERE, and that is the whole finding:
+    # a real rotation of a 20-entry fixture needs more than 3s under load, so every bound small
+    # enough to fit the 5s budget also cuts legitimate rotations (measured — at 3s,
+    # memory-nudge-budget.bats 27/28 fail with "Auto-rotation was DEFERRED"; the same shape at 8s
+    # broke memory-index-drain.bats 19). The rotor has to get cheaper before it can be bounded;
+    # until then this latch cuts how OFTEN the expensive path runs rather than cutting it mid-flight.
+    _mn_stat() {
+      local v
+      v=$(stat -f '%m %z' -- "$1" 2>/dev/null) || v=""
+      case "$v" in *[!0-9\ ]*|'') v="" ;; esac
+      if [ -n "$v" ]; then printf '%s' "$v"; return 0; fi
+      stat -c '%Y %s' -- "$1" 2>/dev/null
+    }
+    MN_LATCHED=0
+    MN_KEY="${MEM//\//-}"
+    if [ "${#MN_KEY}" -gt 120 ]; then MN_KEY="${MN_KEY: -120}"; fi
+    MN_STAMP="$STATE_DIR/memrotate-${#MEM}-${MN_KEY}.stat"
+    MN_NOWSTAT="$(_mn_stat "$MEM") $(date +%Y-%m-%d)"
+    case "$MN_NOWSTAT" in ' '*) MN_NOWSTAT="" ;; esac
+    if [ -n "$MN_NOWSTAT" ] && [ "$MN_NOWSTAT" = "$(cat "$MN_STAMP" 2>/dev/null)" ]; then
+      MN_LATCHED=1
+    fi
+    if [ -n "$RB" ] && [ -x "$RB" ] && [ "$MN_LATCHED" -eq 0 ]; then
+      # Record BEFORE acting, per memory-index-drain.sh:126-128: if the rotor dies, the next real
+      # index write changes the stat and re-arms this anyway, whereas recording after would let a
+      # killed rotor re-run the actuator on the identical file every single prompt.
+      if [ -n "$MN_NOWSTAT" ]; then printf '%s' "$MN_NOWSTAT" >"$MN_STAMP" 2>/dev/null || true; fi
       RV=$("$RB" "$MEM" 2>/dev/null) || RV="${RV:-verdict=error}"
       case "$RV" in
         verdict=rotated*|verdict=noop*)
