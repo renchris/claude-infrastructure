@@ -546,3 +546,69 @@ mk_reaped_worktree() { # <repo-name> <branch> <wtpath>
   [ "$(stub_path)" = "suppressed" ] \
     || { echo "the control did not suppress — the token is not what the two cases differ on: $(stub_path)"; false; }
 }
+
+# ── 6. the two OTHER startup modals a resumed pane can stall at (item 762b510b52b4) ───────────────
+#
+# The resume dialog was never the only question. `claude --resume` in a directory this account has
+# not opened can also raise the WORKSPACE-TRUST dialog and the project `.mcp.json` APPROVAL dialog,
+# and this engine had a matcher for neither — a pane stopped at one is alive, its process is alive,
+# no hook fires, and the brief is never read. Every case below asserts the binary's OWN argv or the
+# config on disk, never the announcement line: composing a decision and passing it are separate
+# claims, and the header above already records which one moves a session.
+decision_file() { spawn_argv | tr ' ' '\n' | sed -n 's/^--settings=//p'; }
+
+@test "a worktree declaring MCP servers is APPROVED on the launch line, never at the modal" {
+  printf '%s\n' '{"mcpServers":{"alpha":{"command":"x"},"beta":{"command":"y"}}}' > "$WT/.mcp.json"
+  run env TMPDIR="$BATS_TEST_TMPDIR" CC_RR_STUB_COLS=80 timeout 90 "$RRO" next "$WT" SID-MCP
+  [ "$status" -eq 0 ]
+  [[ "$(spawn_argv)" == *"--settings="* ]] || { echo "no decision on the launch line: $(spawn_argv)"; false; }
+  f="$(decision_file)"
+  [ -s "$f" ] || { echo "the flag names a file that is not there: $f"; false; }
+  # POLARITY. This engine passes no --strict-mcp-config, so those servers DO load; a rejection would
+  # silence the modal by hiding a server the resumed session was already using. Both directions are
+  # pinned, because only one of them is the bug.
+  [ "$(jq -r '.enabledMcpjsonServers | sort | join(",")' "$f")" = "alpha,beta" ] \
+    || { echo "not approved for the declared servers: $(cat "$f")"; false; }
+  [ "$(jq -r 'has("disabledMcpjsonServers")' "$f")" = "false" ] \
+    || { echo "REJECTED the servers it was launched to use: $(cat "$f")"; false; }
+}
+
+@test "a worktree with no .mcp.json is asked nothing, so it costs no flag" {
+  # The other direction. A decision flag emitted where there is no question is not free: it is a
+  # settings source on every resume, and it would make the case above pass for the wrong reason.
+  [ ! -f "$WT/.mcp.json" ]
+  run env TMPDIR="$BATS_TEST_TMPDIR" CC_RR_STUB_COLS=80 timeout 90 "$RRO" next "$WT" SID-NOMCP
+  [ "$status" -eq 0 ]
+  [[ "$(spawn_argv)" != *"--settings="* ]] || { echo "flagged with no question to answer: $(spawn_argv)"; false; }
+}
+
+@test "an untrusted worktree is pre-trusted for the RESOLVED path, not the one it was handed" {
+  # Trust is keyed by node's process.cwd(), i.e. the physical path. $BATS_TEST_TMPDIR lives under
+  # /var/folders on macOS, itself reached through a symlink, so trusting the raw string would write
+  # an entry the binary never looks at — green here and a dialog in the pane.
+  cfg="$HOME/.claude-next"; mkdir -p "$cfg"; printf '%s\n' '{"projects":{}}' > "$cfg/.claude.json"
+  run env TMPDIR="$BATS_TEST_TMPDIR" CC_RR_STUB_COLS=80 timeout 90 "$RRO" next "$WT" SID-TRUST
+  [ "$status" -eq 0 ]
+  rwt="$(cd "$WT" && pwd -P)"
+  [ "$(jq -r --arg d "$rwt" '.projects[$d].hasTrustDialogAccepted' "$cfg/.claude.json")" = "true" ] \
+    || { echo "resolved path untrusted: $(jq -c .projects "$cfg/.claude.json")"; false; }
+  [ "$(jq -r --arg d "$rwt" '.projects[$d].hasCompletedProjectOnboarding' "$cfg/.claude.json")" = "true" ] \
+    || { echo "onboarding still pending — a second dialog"; false; }
+}
+
+@test "CC_RESUME_NO_MODAL_ANSWER turns BOTH answers off, and a knob that turns nothing off is nothing" {
+  printf '%s\n' '{"mcpServers":{"alpha":{"command":"x"}}}' > "$WT/.mcp.json"
+  cfg="$HOME/.claude-next"; mkdir -p "$cfg"; printf '%s\n' '{"projects":{}}' > "$cfg/.claude.json"
+  run env CC_RESUME_NO_MODAL_ANSWER=1 TMPDIR="$BATS_TEST_TMPDIR" CC_RR_STUB_COLS=80 timeout 90 "$RRO" next "$WT" SID-OFF
+  [ "$status" -eq 0 ]
+  [[ "$(spawn_argv)" != *"--settings="* ]] || { echo "the kill switch did not reach the MCP half"; false; }
+  rwt="$(cd "$WT" && pwd -P)"
+  [ "$(jq -r --arg d "$rwt" '.projects[$d].hasTrustDialogAccepted // "absent"' "$cfg/.claude.json")" = "absent" ] \
+    || { echo "the kill switch did not reach the trust half"; false; }
+  # CONTROL — the same run without the knob must do both, or this case is pinning an engine that
+  # was never going to answer anything and the knob is proving nothing.
+  run env TMPDIR="$BATS_TEST_TMPDIR" CC_RR_STUB_COLS=80 timeout 90 "$RRO" next "$WT" SID-OFF-CTL
+  [[ "$(spawn_argv)" == *"--settings="* ]] || { echo "the control did not answer the MCP question"; false; }
+  [ "$(jq -r --arg d "$rwt" '.projects[$d].hasTrustDialogAccepted' "$cfg/.claude.json")" = "true" ] \
+    || { echo "the control did not trust the dir"; false; }
+}
