@@ -17,8 +17,18 @@ deadness is a function of BLOCK POSITION, not of the line in isolation.
 
 Why `[ ]` survives where `[[ ]]` dies: `[` is a builtin — an ordinary simple command,
 fully subject to errexit. `[[` and `((` are shell keywords/compound commands, which
-bash 3.2 (the macOS system bash this suite runs under) exempts. See the empirical
-grid in docs/research/BATS_DEAD_ASSERTIONS_2026-07-25.md.
+bash 3.2 exempts. See the empirical grid in docs/research/BATS_DEAD_ASSERTIONS_2026-07-25.md.
+
+CLASSES 1 AND 2 ARE BASH-VERSION-SCOPED, and this analyzer is calibrated to the OLDEST
+bash a suite may meet, not to the one that happens to run it. Measured 2026-09-06:
+`set -e; [[ 1 -eq 2 ]]; echo tail` reaches the tail under /bin/bash 3.2 and does not under
+bash 5.3, so those two classes are dead only under 3.2 while class 3 and the `&&` class are
+dead under both. bats re-execs each test body through `env bash`, so on a box with Homebrew
+bash first on PATH the bodies run 5.3 and these two classes are live THERE — which is
+exactly why the report stays: `|| false` is correct under every version, and a suite that
+was only ever green under 5.3 breaks the day it is run on a stock macOS box. Reporting them
+is the safe direction; the test suite pins BOTH arms of the grid rather than inheriting
+whichever bash the runner happened to resolve.
 
 Finality is judged CONSERVATIVELY, in the safe direction: an occurrence is treated as
 live only when it is provably the last meaningful statement at the top level of its
