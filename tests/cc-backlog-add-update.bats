@@ -194,27 +194,69 @@ n_lines() { grep -c '' "$CC_BACKLOG_FILE"; }
 }
 
 @test "--why-not-now is stored on the add and survives the fold into list --json" {
-  a=$(bash "$CB" add --project P --title "handed off" --source s --why-not-now "needs the prod credential")
-  [ "$(fld "$a" whyNotNow)" = "needs the prod credential" ]
-  bash "$CB" list --all --json | jq -e --arg i "$a" '.[]|select(.id==$i)|.whyNotNow=="needs the prod credential"' >/dev/null
+  a=$(bash "$CB" add --project P --title "handed off" --source s --why-not-now "needs-credential: the prod credential")
+  [ "$(fld "$a" whyNotNow)" = "needs-credential: the prod credential" ]
+  bash "$CB" list --all --json | jq -e --arg i "$a" '.[]|select(.id==$i)|.whyNotNow=="needs-credential: the prod credential"' >/dev/null
 }
 
 @test "re-running the same add WITH --why-not-now folds onto the live row as an update (the hand-off of a bare row)" {
   a=$(bash "$CB" add --project P --title "bare then handed" --source s)
   [ "$(fld "$a" whyNotNow)" = "" ]
-  b=$(bash "$CB" add --project P --title "bare then handed" --source s --why-not-now "operator-only deploy")
+  b=$(bash "$CB" add --project P --title "bare then handed" --source s --why-not-now "needs-human: operator-only deploy")
   [ "$a" = "$b" ]
   [ "$(n_items)" -eq 1 ]
   [ "$(grep -c '"event":"add"' "$CC_BACKLOG_FILE")" -eq 1 ]
   [ "$(grep -c '"event":"update"' "$CC_BACKLOG_FILE")" -eq 1 ]
-  [ "$(fld "$a" whyNotNow)" = "operator-only deploy" ]
+  [ "$(fld "$a" whyNotNow)" = "needs-human: operator-only deploy" ]
   [ "$(fld "$a" status)" = "open" ]
 }
 
 @test "CONTROL — the same add re-run with an UNCHANGED --why-not-now writes nothing" {
-  a=$(bash "$CB" add --project P --title "idem" --source s --why-not-now "same")
-  bash "$CB" add --project P --title "idem" --source s --why-not-now "same"
+  a=$(bash "$CB" add --project P --title "idem" --source s --why-not-now "no-capacity: same")
+  bash "$CB" add --project P --title "idem" --source s --why-not-now "no-capacity: same"
   [ "$(n_lines)" -eq 1 ]
+}
+
+# ── THE IMPOSSIBILITY CLASS (2026-09-05, .claude-plans/WORK_ON_NOT_FILE.md) ──────────────────────
+# Pre-fix `--why-not-now` took any string, so every arm that enforced the FILED test discharged on a
+# sentence. The first case replays the ACTUAL trigger incident's reason verbatim; it is red pre-fix
+# because the row was minted and rc was 0. The controls bound the gate in the other direction — it
+# must not reject a real class, and it must not reject the absent flag (bare adds are how every
+# generator files, and an omitted why-not-now is already the filer's 🔧 via wrap-ledger FILED_MINE).
+
+@test "a free-text reason is REFUSED (rc 2) and writes no row — the trigger incident's own words" {
+  run bash "$CB" add --project P --title "48 schema discrepancies" --source s \
+        --why-not-now "the operator said don't start new work, and remediation is the operator's"
+  [ "$status" -eq 2 ]
+  printf '%s' "$output" | grep -q 'names no impossibility class'
+  printf '%s' "$output" | grep -q 'needs-credential'
+  [ "$(n_items)" -eq 0 ]
+}
+
+@test "each of the four classes is accepted, bare and with a ': <detail>' tail" {
+  i=0
+  for c in needs-credential needs-human not-yet-true no-capacity; do
+    i=$((i+1))
+    run bash "$CB" add --project P --title "bare $c" --source s --why-not-now "$c"
+    [ "$status" -eq 0 ]
+    run bash "$CB" add --project P --title "tail $c" --source s --why-not-now "$c: because $i"
+    [ "$status" -eq 0 ]
+  done
+  [ "$(n_items)" -eq 8 ]
+}
+
+@test "the class must OPEN the value — a sentence that merely CONTAINS one is still prose" {
+  run bash "$CB" add --project P --title "buried" --source s \
+        --why-not-now "we have no-capacity to look at this right now"
+  [ "$status" -eq 2 ]
+  [ "$(n_items)" -eq 0 ]
+}
+
+@test "CONTROL — an add with NO --why-not-now is unaffected; the gate is on the value, not presence" {
+  run bash "$CB" add --project P --title "bare generator row" --source s
+  [ "$status" -eq 0 ]
+  [ "$(n_items)" -eq 1 ]
+  [ "$(fld "$(bash "$CB" list --all --json | jq -r '.[0].id')" whyNotNow)" = "" ]
 }
 
 @test "done stamps closedSession from the closing session's env; unset ⇒ no field" {
