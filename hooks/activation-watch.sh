@@ -45,6 +45,22 @@
 # BASH_SOURCE and every leg exited 0 vacuously (backlog 816015ecb30b). An unresolvable mirror is
 # therefore REPORTED, never silently skipped — a parity check that cannot run must say so.
 set -uo pipefail
+# ── activation marker predicate (hooks/lib/activation-marker.sh) ─────────────────────────────────
+# Resolution mirrors completion-assert.sh's four tiers, for the reason its comment gives: a
+# BRAND-NEW hooks/lib file has no ~/.claude/hooks/lib symlink until install.sh runs, so $0's own
+# symlink into the checkout is tried FIRST. Fails SAFE — if the lib cannot be sourced we fall back
+# to the historical bare `.done` test, so this surface degrades to its old behaviour and never
+# goes inert.
+_amd="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+_amlib="$_amd/lib/activation-marker.sh"
+[ -f "$_amlib" ] || { _amt="$0"; [ -L "$_amt" ] && _amt="$(readlink "$_amt")"
+  _amlib="$(cd "$(dirname "$_amt")" 2>/dev/null && pwd)/lib/activation-marker.sh"; }
+[ -f "$_amlib" ] || _amlib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/activation-marker.sh"
+[ -f "$_amlib" ] || _amlib="$HOME/.claude/hooks/lib/activation-marker.sh"
+# shellcheck source=lib/activation-marker.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+. "$_amlib" 2>/dev/null || activation_settled() { [ -f "${1:?}.done" ]; }
+
 
 DIR="${CC_ACTIVATION_DIR:-$HOME/.claude/autonomy/pending-activation}"
 MAX_AGE_H="${CC_ACTIVATION_MAX_AGE_H:-24}"
@@ -140,7 +156,7 @@ age_axis() { # → the QUEUE finding (axis 1), empty only when the queue is genu
   now="$(date +%s)"
   for f in "$DIR"/*.sh; do
     [ -f "$f" ] || continue
-    [ -f "$f.done" ] && continue                 # already run (operator touched the marker)
+    activation_settled "$f" && continue          # settled: ran, superseded, or declared local
     pending+=("$f")
   done
   # ONE stat for the whole queue — this used to fork a stat per file, which at ~46 scripts was
@@ -198,7 +214,9 @@ EOF
 }
 
 inert_axis() { # → axis 3: a `.done` marker whose EFFECT never landed (empty when every claim holds)
-  # WHY THIS EXISTS (2026-07-29): axis 1 trusts the marker absolutely — `[ -f "$f.done" ] && continue`.
+  # WHY THIS EXISTS (2026-07-29): axis 1 trusts the marker absolutely — `activation_settled "$f"`.
+  # (Was a bare `[ -f "$f.done" ]` until 2026-09-04; the predicate now also honours .superseded and
+  # .local, and lives in hooks/lib/activation-marker.sh so the rule has ONE home.)
   # But every launchd activation script here gates its real work behind CONFIRM=1 and otherwise only
   # ECHOES the commands. Run one bare, read the printout, `touch` the marker, and the alarm is silenced
   # FOREVER while nothing was ever loaded. That is exactly what happened to the auto-drive spine:
@@ -235,7 +253,7 @@ inert_axis() { # → axis 3: a `.done` marker whose EFFECT never landed (empty w
   case "${uid:-}" in ''|*[!0-9]*) disabled_db="" ;; *) disabled_db="$("$lc" print-disabled "gui/$uid" 2>/dev/null || true)" ;; esac
   for f in "$DIR"/*.sh; do
     [ -f "$f" ] || continue
-    [ -f "$f.done" ] || continue                 # axis 1 already owns the un-run case
+    activation_settled "$f" || continue          # axis 1 already owns the un-settled case
     cands+=("$f")
   done
   [ "${#cands[@]}" -eq 0 ] && return 0
@@ -303,7 +321,7 @@ envarm_axis() { # → axis 4: a `.done` ENV-VAR arm whose value never reached th
   [ -n "$cands" ] || return 0
   while IFS= read -r f; do
     { [ -n "$f" ] && [ -f "$f" ]; } || continue
-    [ -f "$f.done" ] || continue                 # axis 1 already owns the un-run case
+    activation_settled "$f" || continue          # axis 1 already owns the un-settled case
     # The CLASS is "the script ASSIGNS an env-file path", never "the script says export". That
     # distinction is load-bearing and was measured against the real queue: four sibling scripts
     # carry a bare `export VAR=` in prose (a kill switch, a PATH line, two echo'd instructions) and

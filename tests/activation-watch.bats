@@ -500,3 +500,40 @@ arm() {
   printf '%s' "$ctx" | grep -q 'ACTIVATION QUEUE'
   printf '%s' "$ctx" | grep -q 'ARMED BUT NOT IN EFFECT'
 }
+
+# ── the .superseded state (2026-09-04) ────────────────────────────────────────────────────────────
+# `.done` was carrying two facts that came apart: did the SCRIPT RUN, and is the WIRING COMPLETE.
+# An eleven-agent audit found TEN of eleven pending activations already in effect and pending only
+# on an absent marker — and cc-do was listing all ten as RUNNABLE, two of which cause real harm.
+# Touching `.done` would record a false provenance; leaving them kept the hazard. Hence a third
+# state, mirroring the `.local` exemption this hook already ships.
+
+@test "SUPERSEDED: a .superseded marker settles a script, exactly as .done does" {
+  printf '#!/bin/bash\n' > "$Q/sup-activate.sh"; touch -t "$OLD" "$Q/sup-activate.sh"
+  touch "$Q/sup-activate.sh.superseded"
+  run env CC_ACTIVATION_DIR="$Q" bash "$H"
+  [ "$status" -eq 0 ]
+  n_named="$(printf '%s\n' "$output" | grep -c 'sup-activate' || true)"
+  [ "${n_named:-0}" -eq 0 ] || {
+    echo "a .superseded script was still reported pending" >&2; return 1; }
+}
+
+@test "SUPERSEDED non-vacuity: the SAME fixture without the marker IS reported" {
+  printf '#!/bin/bash\n' > "$Q/sup2-activate.sh"; touch -t "$OLD" "$Q/sup2-activate.sh"
+  run env CC_ACTIVATION_DIR="$Q" bash "$H"
+  [ "$status" -eq 0 ]
+  n_named="$(printf '%s\n' "$output" | grep -c 'sup2-activate' || true)"
+  [ "${n_named:-0}" -ge 1 ] || {
+    echo "control failed: an UNMARKED script was not reported, so the test above proves nothing" >&2
+    return 1; }
+}
+
+@test "SUPERSEDED: the predicate lives in ONE place, not open-coded per call site" {
+  # Six copies of `[ -f \$f.done ]` drifted across three files; the next state added would have to
+  # find all six again, and a missed one reads as 'still pending' in exactly one surface.
+  for s in "$REPO/hooks/activation-watch.sh" "$REPO/hooks/operator-readout.sh" "$REPO/bin/cc-do"; do
+    n_bare="$(grep -cE '^[^#]*\[ -f "\$f\.done" \] *(&&|\|\|) *continue' "$s" || true)"
+    [ "${n_bare:-0}" -eq 0 ] || {
+      echo "$s open-codes the bare .done gate; use activation_settled" >&2; return 1; }
+  done
+}

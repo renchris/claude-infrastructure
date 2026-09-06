@@ -179,6 +179,22 @@
 #   CC_SHARED_CHECKOUT · CC_IDL · CC_CONTINUE_SENTINEL · CC_OPREADOUT_CLASSBUDGET · CC_DEPLOY_SCRIPT ·
 #   CC_DO_BIN (unset ⇒ search · path/name ⇒ verbatim · `none` ⇒ absent, forces the I11 degradation)
 set -uo pipefail
+# ── activation marker predicate (hooks/lib/activation-marker.sh) ─────────────────────────────────
+# Resolution mirrors completion-assert.sh's four tiers, for the reason its comment gives: a
+# BRAND-NEW hooks/lib file has no ~/.claude/hooks/lib symlink until install.sh runs, so $0's own
+# symlink into the checkout is tried FIRST. Fails SAFE — if the lib cannot be sourced we fall back
+# to the historical bare `.done` test, so this surface degrades to its old behaviour and never
+# goes inert.
+_amd="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+_amlib="$_amd/lib/activation-marker.sh"
+[ -f "$_amlib" ] || { _amt="$0"; [ -L "$_amt" ] && _amt="$(readlink "$_amt")"
+  _amlib="$(cd "$(dirname "$_amt")" 2>/dev/null && pwd)/lib/activation-marker.sh"; }
+[ -f "$_amlib" ] || _amlib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/activation-marker.sh"
+[ -f "$_amlib" ] || _amlib="$HOME/.claude/hooks/lib/activation-marker.sh"
+# shellcheck source=lib/activation-marker.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+. "$_amlib" 2>/dev/null || activation_settled() { [ -f "${1:?}.done" ]; }
+
 
 CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 STATE_DIR="${CC_OPREADOUT_STATE_DIR:-$CFG/state/operator-readout}"
@@ -544,7 +560,7 @@ render_block() {
   if [ -d "$ACT_DIR" ]; then
     for f in "$ACT_DIR"/*.sh; do
       [ -f "$f" ] || continue
-      [ -f "$f.done" ] && continue
+      activation_settled "$f" && continue
       disp="$(tildify "$f")"; pre=""
       stem="$(basename "$f" .sh)"
       grep -q 'CONFIRM' "$f" 2>/dev/null && pre="CONFIRM=1 "
@@ -1140,7 +1156,7 @@ render_block() {
     # OPERATOR's shell when they paste the line, which is the whole point of a platter.
     case "$1" in
       deploy)     rtot="$c_deploy";     rcmd="" ;;
-      activation) rtot="$c_activation"; rcmd='for f in ~/.claude/autonomy/pending-activation/*.sh; do [ -f "$f.done" ] || echo "$f"; done' ;;
+      activation) rtot="$c_activation"; rcmd='for f in ~/.claude/autonomy/pending-activation/*.sh; do [ -f "$f.done" ] || [ -f "$f.superseded" ] || [ -f "$f.local" ] || echo "$f"; done' ;;
       # NOT `--class C`: this leg also admits a class-B packet that carries neither a default nor a
       # deadline (a hard block wearing the wrong label — see the decisions leg above), and a
       # `--class C` filter would hide exactly those rows from the operator who followed this

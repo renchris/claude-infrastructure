@@ -60,6 +60,22 @@
 #   (see NON-INTERACTIVE SAFETY). bash 3.2 (macOS) clean — no associative arrays, no mapfile, no
 #   ${x^^}.
 set -uo pipefail
+# ── activation marker predicate (hooks/lib/activation-marker.sh) ─────────────────────────────────
+# Resolution mirrors completion-assert.sh's four tiers, for the reason its comment gives: a
+# BRAND-NEW hooks/lib file has no ~/.claude/hooks/lib symlink until install.sh runs, so $0's own
+# symlink into the checkout is tried FIRST. Fails SAFE — if the lib cannot be sourced we fall back
+# to the historical bare `.done` test, so this surface degrades to its old behaviour and never
+# goes inert.
+_amd="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+_amlib="$_amd/lib/activation-marker.sh"
+[ -f "$_amlib" ] || { _amt="$0"; [ -L "$_amt" ] && _amt="$(readlink "$_amt")"
+  _amlib="$(cd "$(dirname "$_amt")" 2>/dev/null && pwd)/lib/activation-marker.sh"; }
+[ -f "$_amlib" ] || _amlib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/activation-marker.sh"
+[ -f "$_amlib" ] || _amlib="$HOME/.claude/hooks/lib/activation-marker.sh"
+# shellcheck source=lib/activation-marker.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+. "$_amlib" 2>/dev/null || activation_settled() { [ -f "${1:?}.done" ]; }
+
 
 CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 ACT_DIR="${CC_ACTIVATION_DIR:-$HOME/.claude/autonomy/pending-activation}"
@@ -183,7 +199,7 @@ collect() {
   if [ -d "$ACT_DIR" ]; then
     for f in "$ACT_DIR"/*.sh; do
       [ -f "$f" ] || continue
-      [ -f "$f.done" ] && continue
+      activation_settled "$f" && continue
       b="$(basename "$f" .sh)"
       if grep -q 'CONFIRM' "$f" 2>/dev/null; then
         act_c="${act_c}activation${TABC}▶${TABC}${b}${TABC}CONFIRM=1 bash $(tildify "$f")${TABC}activation${TABC}${f}"$'\n'
@@ -441,7 +457,7 @@ run_stem() { # $1=stem → exactly one pending activation, or exit 2
   esac
   for f in "$ACT_DIR"/*.sh; do
     [ -f "$f" ] || continue
-    [ -f "$f.done" ] && continue
+    activation_settled "$f" && continue
     b="$(basename "$f" .sh)"
     # "$stem" quoted so the STEM cannot act as a glob — only the trailing * is a wildcard
     case "$b" in "$stem"*) matches="${matches}  $b"$'\n'; n=$((n + 1)); hit="$f"; hitb="$b" ;; esac
