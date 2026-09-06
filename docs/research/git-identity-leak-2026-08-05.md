@@ -764,3 +764,48 @@ local-only checkpoint refs (`refs/respawn/*`, `refs/deathwatch/*`, `refs/checkpo
 commits are the bulk of the 572 checkpoint/wip-only mis-authored objects in the census — invisible
 to GitHub, and garbage-collected with their refs. Recorded so a later reader does not mistake the
 gate for universal: it covers `git commit`, which is every path that can reach a pushed branch.
+
+---
+
+# 2026-09-05 — the 09-04 recurrence: the row's prime suspect is REFUTED, and so is the lint
+
+Backlog row `23255fbb8792` records a third recurrence: the shared `.git/config` carried
+`[user] email = t@t, name = t` again on 2026-09-04 ~17:20Z, while a corpus run was executing under
+the postland `wt-run` shape (its worktrees share this one `.git/config`), and the pre-commit
+identity gate blocked a real commit twice. The row names a prime suspect and asks for a structural
+remedy. This link refutes the suspect and clears the lint, so the next reader starts from what is
+left rather than from these two.
+
+**The suspect does not execute anything.** `tests/git-identity-lint.bats:297-307` builds a probe
+whose TEXT contains a `cd` span and a bare identity write, writes it to
+`$BATS_TEST_TMPDIR/fix/rxN/tests/probe.bats`, and then runs `bash "$LINT" "$p"` — it LINTS that
+file. The probe is never executed, by any case in that suite, so no write inside it can reach any
+repo. The row's "a failed `cd` leaves the write in the real repo" reading applies to a shape this
+file does not have.
+
+**The lint is clean on a fresh full scan, not on a memo.** `CC_GITID_MEMO=off bash
+scripts/git-identity-lint.sh .` → `clean — 861 file(s); 0 grandfathered, 0 escaping identity
+writes`, rc 0. The first run of the same command reported `861 verdict(s) carried, 0 proven fresh`,
+which is the memo answering; the kill switch is what makes this a measurement. So rules 1 and 2 see
+no violation anywhere in the tree, and every `git -C "$r" config` identity write in the corpus is
+either suffixed, `${x:?}`-guarded, or proven non-empty in its region.
+
+**What that leaves, and it is the lint's own declared floor.** The header states it: *"A write with
+no `-C` and no preceding `cd` is OUT OF SCOPE and never flagged"*, scoped out because flagging every
+bare `git config` would fire everywhere and prove nothing. That exclusion is sound for a corpus run
+from a scratch cwd and UNSOUND for the shape this recurrence happened in: under `wt-run` the
+process's cwd IS a linked worktree of the real repo, so a bare, `-C`-less, `cd`-less identity write
+lands in the shared config with no rule looking at it. Writes of exactly that shape exist —
+`tests/land-rerere-continue.bats:43` (sets `user.email` to `t@t.t` and `user.name` to `t`),
+`tests/land-verify.bats:15-16`, `tests/gate-precheck.bats:38-39`, `tests/land-gate-memo.bats:38-39`,
+`tests/land-gate-cas.bats:42-43`, `tests/herm-suite-memo.bats:43-44`,
+`tests/wrap-ledger-memo.bats:46` — each preceded by a `cd "$WORK" || return 1` whose argument
+carries a literal suffix, which is why rule 2 correctly passes them *when the cd runs*.
+
+**Not yet done, and what a successor should decide first:** whether the remedy is a rule 3 scoped to
+the `wt-run` invocation (cheap to state, and the population it fires on is bounded because it only
+binds when the corpus is run from inside a worktree of this repo), or a harness-level guard that
+makes the real `.git/config` unwritable for the duration of a corpus run. Note the write-guard in
+`hooks/validate-bash.sh` cannot cover either: it sees an agent's Bash tool call, never a bats
+fixture's own subprocess. (That guard is not hypothetical here — it refused this very commit on its
+first attempt, because the prose quoted the forbidden spelling with its value attached.)
