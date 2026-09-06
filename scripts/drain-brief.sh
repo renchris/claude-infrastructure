@@ -107,17 +107,32 @@ tlines="$(wc -l < "$TEMPLATE" | tr -d ' ')"
 
 body="$(cat "$TEMPLATE")"
 next=$((NUM + 1))
-body="${body//\{\{N\}\}/$NUM}"
-body="${body//\{\{NEXT\}\}/$next}"
-body="${body//\{\{LANE\}\}/$LANE}"
-body="${body//\{\{PROJECT\}\}/$PROJECT}"
-body="${body//\{\{WORKTREE\}\}/$WORKTREE}"
-body="${body//\{\{SINCE\}\}/$SINCE}"
-body="${body//\{\{MIN\}\}/$MIN}"
-body="${body//\{\{INFRA\}\}/$INFRA}"
-body="${body//\{\{GATE_CMD\}\}/$GATE_CMD}"
-body="${body//\{\{LAND_CMD\}\}/$LAND_CMD}"
-body="${body//\{\{ENTRY_STEP\}\}/$ENTRY_STEP}"
+
+# THE `&` TRAP. From bash 5.2 a `&` in the REPLACEMENT half of ${var//pat/repl} carries sed
+# semantics — it re-inserts the text the pattern just matched. So substituting a value that holds
+# `&&` puts the placeholder BACK: reso's gate is `pnpm typecheck && pnpm lint && pnpm test:unit`,
+# and a plain `${body//\{\{GATE_CMD\}\}/$GATE_CMD}` rendered `{{GATE_CMD}}{{GATE_CMD}}` at each
+# `&`, so the placeholder-survival guard below refused the brief and NO reso lane could ever be
+# generated (tests/drain-brief.bats:12, red since the box moved to bash 5.3). The infra lane's own
+# gate command carries no `&`, which is exactly why the sibling case passed and hid this.
+# The documented escape is a backslash — backslash itself first, so it cannot double-escape.
+sub() { # $1=placeholder name (without braces)  $2=value
+  local val=${2-}
+  val=${val//\\/\\\\}
+  val=${val//&/\\&}
+  body=${body//"{{$1}}"/$val}
+}
+sub N          "$NUM"
+sub NEXT       "$next"
+sub LANE       "$LANE"
+sub PROJECT    "$PROJECT"
+sub WORKTREE   "$WORKTREE"
+sub SINCE      "$SINCE"
+sub MIN        "$MIN"
+sub INFRA      "$INFRA"
+sub GATE_CMD   "$GATE_CMD"
+sub LAND_CMD   "$LAND_CMD"
+sub ENTRY_STEP "$ENTRY_STEP"
 case "$body" in *'{{'*) die "template carries a placeholder this script does not know: $(printf '%s' "$body" | grep -o '{{[A-Z_]*}}' | sort -u | tr '\n' ' ')" 6 ;; esac
 
 if [ "$PRINT" -eq 1 ]; then printf '%s\n' "$body"; exit 0; fi
