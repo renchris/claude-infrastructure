@@ -105,6 +105,26 @@ esac
 tlines="$(wc -l < "$TEMPLATE" | tr -d ' ')"
 [ "$tlines" -le "$MAX_LINES" ] || die "template is $tlines lines; the cap is $MAX_LINES (CC_DRAIN_BRIEF_MAX_LINES). A brief that grows is the defect this script exists to stop — cut it, do not raise the cap." 5
 
+# 🚨 `&` IN A REPLACEMENT MEANS "THE MATCHED TEXT" ON BASH 5.2+, AND THAT SILENTLY UNDID THIS
+# WHOLE FUNCTION. `${body//\{\{GATE_CMD\}\}/$GATE_CMD}` with the reso lane's gate — `pnpm
+# typecheck && pnpm lint && pnpm test:unit` — put `{{GATE_CMD}}` back TWICE, once per `&`, so the
+# unknown-placeholder guard below fired naming the very placeholder that had just been substituted.
+# The infra lane's gate command has no `&`, so lane reso could not fire while lane infra could:
+# a break that looks like a lane-specific config error and is actually the shell.
+#
+# PROBED, never a version table — ask THIS bash what it does rather than trusting BASH_VERSINFO,
+# because the behaviour is what matters and a table goes stale on the next box.
+__amp='x'; __amp="${__amp//x/&}"
+if [ "$__amp" = 'x' ]; then
+  # `&` expanded to the match ⇒ escape every `&` in the values below as `\&`, the documented
+  # literal-ampersand form on exactly the shells that have this behaviour.
+  GATE_CMD="${GATE_CMD//&/\\&}"
+  LAND_CMD="${LAND_CMD//&/\\&}"
+  ENTRY_STEP="${ENTRY_STEP//&/\\&}"
+  INFRA="${INFRA//&/\\&}"
+  WORKTREE="${WORKTREE//&/\\&}"
+fi
+
 body="$(cat "$TEMPLATE")"
 next=$((NUM + 1))
 
