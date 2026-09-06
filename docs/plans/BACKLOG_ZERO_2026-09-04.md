@@ -516,3 +516,30 @@ hand adjudication and where a probe exists the premise holds; a `cc-do --backlog
 operator-runnable rows (O2's residue) — an operator surface whose number moves only when he acts, so it is
 named here and left for a session with that mandate; the recurrence brake lives only in `needs`
 (`bin/cc-backlog:3147`) — `add` dedupes by identity, which the stable title already guarantees.
+
+### §6.7 First live read (2026-09-06T05:20Z, before the deploy)
+
+- **The drain lane is eating the former floor.** 7 of the 49 re-keyed ids closed within 100 minutes of
+  the re-key — 6 by `lane=local-drain` links between 05:08Z and 05:15Z (`ec2614142185`, `5318d2fe2692`,
+  `ed20da9f2023`, `7a5eb14ee6fa`, `1614bb6a55d0`, `4ba12dfcd30e`), each adjudicated MOOT by content
+  ("main is a strict SUPERSET of the ref …"), and 1 by a session. Before the re-key the drain had closed
+  **0** of these rows in 19 days, because the picker could not see them.
+- **The old producer kept minting until the deploy** — 3 more born-blocked re-land rows at 04:18Z,
+  04:41Z and 05:04Z (the LIVE `ship-land.sh` still called `needs`), re-keyed by the same script
+  (52 unblocked in all; a 53rd — this session's own gate-red attempt, `406d69cfdad8` — closed by content once the branch landed). One of the three was this session's own gate-red land attempt, filed through
+  the NEW producer's legacy fallback because the LIVE `cc-backlog` refused `add --run` — the fallback
+  path proven on the real store the same hour its test was written.
+- `backlog-telemetry.sh` NOW at 05:19Z: **open=278 blocked=206 LIVE=484** (03:32Z: 237 / 252 / 489).
+
+- **LANDED, NOT LIVE (06:04Z).** `ship-land.sh` landed the four commits as **`3c2d73c4c`** on origin/main (rebased twice
+  under sibling lands; statics + ratchets green; smoke cut at its 900 s budget after 49 of the 136 direct suites — the
+  post-land verifier is the net; 5 paths content-verified; stranded-sweep clean). `bash scripts/deploy-live.sh` then
+  REFUSED, verbatim: *"waiting — no GREEN tree is a DESCENDANT of live HEAD 0c4bdedb4fef (the newest one, 24c598bac1c7,
+  is BEHIND it — deploying that would report a deploy that never happened); lag 12 commit(s) / 1h39m, inside the degrade
+  budget (25 / 6h) — no advance, and none is due yet"*. Every post-land stamp since 09-03 is `red` (the five newest:
+  run_s 11,152–11,595, retries 18–26 — flakes under load, not this diff), so the enforcing store still runs the OLD
+  `cc-backlog` and `ship-land.sh`: the old producer keeps filing born-blocked re-land rows until the converger's
+  DEGRADED advance (`deploy-live.sh:1820`, "the newest NOT-RED commit, authorised by" 25 commits behind trunk or 6 h
+  since the live commit's author time — 04:23Z ⇒ **10:23Z at the latest**). The session stays up to run it and prove
+  `git hash-object ~/.claude/<f> == git rev-parse origin/main:<f>` for both files; the proof lines are appended below
+  when they exist, never asserted before.
