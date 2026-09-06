@@ -50,7 +50,14 @@ refute_grep() {
 # how you end up testing your own escaping instead of bash's word-splitting.
 probe() {
   printf '#!/bin/bash\n%s\n' "$1" > "$C/probe.sh"
-  run bash "$C/probe.sh"
+  chmod +x "$C/probe.sh"
+  # EXECUTE it, so the shebang two lines up is what chooses the interpreter. `run bash "$file"`
+  # names the interpreter a SECOND time and PATH wins that argument: on a box with Homebrew bash
+  # first (5.3.15 here, /bin/bash is 3.2.57) every case below silently re-targeted, and case 3 —
+  # whose whole subject is a bash-3.2 internal, CTLESC on \001 — went red reporting "x||y", which
+  # is 5.3 splitting on \001 correctly. The suite states its subject in the shebang; honouring it
+  # is what keeps the verdict about bash 3.2 rather than about this machine's PATH.
+  run "$C/probe.sh"
 }
 
 # ─── §1 · the mechanism ────────────────────────────────────────────────────────────────────────
