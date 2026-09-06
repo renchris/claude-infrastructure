@@ -954,7 +954,14 @@ land_failure_inbox() {  # $1=exit code $2=cause word
   # shellcheck disable=SC2016  # the single quotes are the POINT — $_tw/$_rc must survive unexpanded
   # into the stored command and be evaluated by the shell that RUNS it, not by this one. Expanding
   # them here would bake this trap handler's own (empty) values into an operator's re-land step.
-  cmd="cd ${land_root} && git checkout ${BRANCH} && "'_tw="$(mktemp -d)/trunk" && git fetch origin --quiet && git worktree add --detach "$_tw" origin/main >/dev/null && bash "$_tw/scripts/ship-land.sh"; _rc=$?; [ -n "${_tw:-}" ] && git worktree remove --force "$_tw" >/dev/null 2>&1; exit $_rc'
+  # THE CHECKOUT MUST SURVIVE A DELETED BRANCH (2026-09-06, BACKLOG_ZERO §6). The row pins the
+  # failed head at `$ref` precisely because the author's pane — and with it the branch — may be gone
+  # by the time anyone re-lands: measured on the live store, 22 of the 48 open re-land rows had NO
+  # local and NO remote branch left, so the stored `git checkout ${BRANCH}` failed at its first
+  # token and the command that was the row's whole reason to exist was unrunnable for nearly half
+  # of them. `checkout -B <branch> <ref>` recreates the branch from the pinned head; the plain
+  # checkout is tried first so a branch that still exists (possibly ahead of the pin) is what lands.
+  cmd="cd ${land_root} && git fetch origin --quiet && { git checkout -q ${BRANCH} 2>/dev/null || git checkout -q -B ${BRANCH} ${ref:-${BRANCH}}; } && "'_tw="$(mktemp -d)/trunk" && git worktree add --detach "$_tw" origin/main >/dev/null && bash "$_tw/scripts/ship-land.sh"; _rc=$?; [ -n "${_tw:-}" ] && git worktree remove --force "$_tw" >/dev/null 2>&1; exit $_rc'
   # A FIXTURE pipeline must never file into the operator's live ledger — tests/ship-land.bats
   # drives ~50 of them, several deliberately non-zero. Same discipline as gate_home_setup's
   # bats detection, and `on` forces it so the suite can prove the real thing against its own
@@ -998,18 +1005,51 @@ land_failure_inbox() {  # $1=exit code $2=cause word
   # repo with no conf row still files; see EXPLICIT --project VALIDATION in cc-backlog.
   land_proj="$(basename "$land_root" 2>/dev/null || true)"
   local -a nargs
-  # The title stays ALONE on its own line: tests/ship-land.bats reads this call site structurally
-  # (it cannot call a trap handler without a full failing land) and asserts the emitted title's
-  # SHAPE — no sandbox path, no exit code, the branch present.
-  nargs=(needs
-    "re-land ${BRANCH}: ship-land could not complete and its author's pane may be gone"
-    --run "$cmd   # last attempt: rc=${rc} (${cause}), head pinned at ${ref:-<unrecorded>}"
+  # 🚨 THIS ROW IS AGENT WORK, SO IT IS FILED OPEN — `add`, NOT `needs` (2026-09-06, BACKLOG_ZERO §6).
+  # `needs` files a row BORN `blocked`: the operator-only state, which cc-dispatch, drain-pick.sh and
+  # the drain brief ("if it is already blocked, do not touch it") all exclude BY CONSTRUCTION, and
+  # which only a human `unblock` or a passing falsifier can leave. A re-land is not an operator step:
+  # under this repo's standing-land authorization a land is the agent's own closing act, and O1 of
+  # MASTER_OPERATOR_GATED.md had already adjudicated exactly this class as `master-stranded-work`
+  # (2026-08-17) — but demoted two rows by hand and left this producer minting more. Measured on the
+  # live store the day this changed: 113 of the 213 born-blocked rows of the prior 14 days came from
+  # THIS call site — more than every session's `needs` combined — and 48 sat live in the operator
+  # gate, 47 of them with commits genuinely absent from trunk. No lane could reach them; the operator
+  # never runs `cc-backlog`; the blocked count sat flat at ~250 while the open half drained. The
+  # verb was chosen here because `needs` is the quiet door — it neither spawns a dispatcher nor
+  # counts against the filer's own certificate — which is exactly why it must not carry work.
+  #
+  # `--source needs` IS KEPT ON PURPOSE. The id is sha256(project ⑟ title ⑟ source) and that id is
+  # the whole dedupe: every retry of one stuck branch must fold onto ONE row (the identity fix
+  # above), and the rows already in the store were filed through `needs` with this source. A new
+  # source would mint a sibling beside each of them on the next failed attempt — one branch, two
+  # rows — the exact defect the stable title was built to end. `source` is an identity component
+  # here, not provenance; provenance is `filedBy`/`--session`.
+  #
+  # NO DISPATCH KICK. `add` normally kicks `cc-dispatch --decide`, which may fire a worker at once.
+  # The author's own retry runs first (the same branch re-fails within minutes on a red gate), and a
+  # worker fired onto the branch in that window would race it on one ref. The drain lane picks OPEN
+  # rows on its own cadence — tier 0 (falsifier) and oldest first, so a stranded land is exactly
+  # what it reaches for — which is the backstop this row exists for once the author's pane is gone.
+  local rtitle rrun
+  rtitle="re-land ${BRANCH}: ship-land could not complete and its author's pane may be gone"
+  rrun="$cmd   # last attempt: rc=${rc} (${cause}), head pinned at ${ref:-<unrecorded>}"
+  nargs=(add --title "$rtitle" --source needs --run "$rrun"
+    --why-not-now "ship-land exited ${rc} (${cause}) on ${BRANCH}; the author's own retry runs first, and the drain lane re-lands it if that pane is gone — agent work under the standing-land authorization, not an operator step"
     --session "${CLAUDE_CODE_SESSION_ID:-}")
   case "$land_proj" in
     ""|.*) : ;;                                  # unresolvable, or a sandbox — do not file a lie
     *) nargs=("${nargs[@]}" --project "$land_proj") ;;
   esac
-  id="$("$bl" "${nargs[@]}" 2>/dev/null || true)"
+  id="$(CC_BACKLOG_KICK=off "$bl" "${nargs[@]}" 2>/dev/null || true)"
+  if [[ -z "$id" ]]; then
+    # A cc-backlog that predates `add --run` refuses the call (exit 2, no id). A failed land that
+    # files NOTHING is the silent form of the defect this inbox ends, so fall back to the legacy
+    # born-blocked form: the row still exists, and the next re-key sweep can move it.
+    nargs=(needs "$rtitle" --run "$rrun" --session "${CLAUDE_CODE_SESSION_ID:-}")
+    case "$land_proj" in ""|.*) : ;; *) nargs=("${nargs[@]}" --project "$land_proj") ;; esac
+    id="$("$bl" "${nargs[@]}" 2>/dev/null || true)"
+  fi
   # THE FALSIFIER — the half that was missing, and the reason this population rotted. A row filed
   # here measures ONE thing: that ship-land exited non-zero. It never re-asks, so it is a PREDICTION
   # about content, and the prediction is usually wrong within a day: censused 2026-08-12, 24 of the

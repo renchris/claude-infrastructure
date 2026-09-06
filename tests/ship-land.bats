@@ -26,6 +26,12 @@ setup() {
   export SHIP_LAND_DECISIONS_DIR="$BATS_TEST_TMPDIR/decisions"
   export SHIP_LAND_SHARED_CHECKOUT="$BATS_TEST_TMPDIR/nope"   # never matches the work repo
   export CLAUDE_CODE_SESSION_ID="test-sid-123"
+  # THE SUITE TESTS THIS TREE'S cc-backlog, NEVER THE DEPLOYED ONE (2026-09-06). ship-land resolves
+  # `${CC_BACKLOG_BIN:-$HOME/.claude/bin/cc-backlog}`; unset, every P4 inbox case executed whatever
+  # the LIVE layer carried and adopted its verdict — the day `add --run` landed here, the live
+  # binary still refused it and ten cases went red for a reason no diff in this tree could reach
+  # (memory: unfixtured-sensor-executes-the-deployed-subject).
+  export CC_BACKLOG_BIN="$REPO/bin/cc-backlog"
   export POSTLAND_DIR="$BATS_TEST_TMPDIR/postland"            # flakes.jsonl + queue, sandboxed
   export POSTLAND_VERIFY=off                                  # never spawn a real post-land child
   # env-bleed immunity: when THIS suite runs inside an outer ship-land gate, the outer
@@ -2923,6 +2929,14 @@ iso_home_fixture() {  # force REAL $HOME isolation, cheaply — the spy needs th
   [ -s "$BATS_TEST_TMPDIR/backlog.jsonl" ]
   grep -q 're-land feat/inbox-row' "$BATS_TEST_TMPDIR/backlog.jsonl"
   grep -q 'ship-land.sh' "$BATS_TEST_TMPDIR/backlog.jsonl"      # the runnable command, not a name
+  # THE ROW IS OPEN AGENT WORK, NOT AN OPERATOR STEP (2026-09-06, BACKLOG_ZERO §6). A re-land filed
+  # through `needs` was born `blocked` — the one state no drain lane reads — and 48 such rows sat
+  # live in the operator gate with unlanded commits. RED pre-fix: the store held a `block` record
+  # and no `run` on the add.
+  [ "$(jq -r 'select(.event=="block") | .id' "$BATS_TEST_TMPDIR/backlog.jsonl" | wc -l | tr -d ' ')" -eq 0 ]
+  [ "$(jq -r 'select(.event=="add") | .run // ""' "$BATS_TEST_TMPDIR/backlog.jsonl" | grep -c 'ship-land.sh')" -eq 1 ]
+  [ "$(jq -r 'select(.event=="add") | .whyNotNow // ""' "$BATS_TEST_TMPDIR/backlog.jsonl" | grep -c 'drain lane')" -eq 1 ]
+  [ "$(jq -r 'select(.event=="add") | .source' "$BATS_TEST_TMPDIR/backlog.jsonl")" = "needs" ]   # identity component kept
   # NEGATIVE CONTROL for the falsifier below: this fixture has no scripts/land-content-verify.sh,
   # and a row is still filed — WITHOUT a probe. A probe that cannot answer is worse than none.
   ! grep -q '"falsifier"' "$BATS_TEST_TMPDIR/backlog.jsonl"
@@ -2971,6 +2985,58 @@ _reland_run_of() { # <backlog-store> → the filed row's --run command
   run bash -c "$cmd"
   printf '%s' "$output" | grep -q 'RAN-TRUNK-BYTES'
   ! printf '%s' "$output" | grep -q 'RAN-BRANCH-BYTES'
+}
+
+# ── the stored command must survive a DELETED branch (2026-09-06, BACKLOG_ZERO §6) ──────────────
+# 22 of the 48 live re-land rows named a branch that no longer existed locally or on origin; the
+# pinned `refs/land/failed/…` head was the only thing holding their commits, and the stored
+# `git checkout <branch>` failed at its first token. RED pre-fix: the command below exits non-zero
+# and prints nothing.
+@test "P4 inbox: the re-land command still lands from the pinned ref after the branch is DELETED" {
+  git checkout -q main
+  mkdir -p scripts
+  printf '#!/usr/bin/env bash\necho RAN-TRUNK-BYTES\n' > scripts/ship-land.sh
+  chmod +x scripts/ship-land.sh
+  git add -A && git commit -q -m "chore: trunk pipeline"
+  git push -q origin main
+
+  git checkout -q -b feat/reland-gone main
+  printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > bad5.sh     # SC2164 → the land fails, rc 6
+  git add -A && git commit -q -m "feat: bad5"
+
+  run env SHIP_LAND_FAILURE_INBOX=on CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl" \
+      bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  cmd="$(_reland_run_of "$BATS_TEST_TMPDIR/backlog.jsonl")"
+  [ -n "$cmd" ] && [ "$cmd" != null ] || false
+
+  git checkout -q main
+  git branch -q -D feat/reland-gone                       # the author's pane is gone, and so is the branch
+  ! git rev-parse -q --verify feat/reland-gone >/dev/null || false
+
+  run bash -c "$cmd"
+  printf '%s' "$output" | grep -q 'RAN-TRUNK-BYTES'
+  git rev-parse -q --verify feat/reland-gone >/dev/null    # recreated from the pinned ref
+}
+
+# ── a cc-backlog that predates `add --run` must still get the row (2026-09-06) ────────────────────
+# The producer's first day: this tree's ship-land ran against a LIVE cc-backlog that refused
+# `add --run` (exit 2, no id) — and a failed land that files nothing is the silent version of the
+# defect this inbox exists to end. On an empty id the call site falls back to the legacy `needs`
+# form, so the row is filed either way; only its state differs.
+@test "P4 inbox: a LEGACY cc-backlog (no add --run) still gets the row, via the needs fallback" {
+  git checkout -q -b feat/inbox-legacy main
+  printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > bad6.sh
+  git add bad6.sh && git commit -q -m "feat: bad6"
+  legacy="$BATS_TEST_TMPDIR/cc-backlog-legacy"
+  printf '#!/usr/bin/env bash\ncase "${1:-}" in add) echo "cc-backlog add: unknown arg --run" >&2; exit 2 ;; esac\nexec "%s" "$@"\n' "$REPO/bin/cc-backlog" > "$legacy"
+  chmod +x "$legacy"
+  run env SHIP_LAND_FAILURE_INBOX=on CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl" CC_BACKLOG_BIN="$legacy" \
+      bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  [ -s "$BATS_TEST_TMPDIR/backlog.jsonl" ]
+  grep -q 're-land feat/inbox-legacy' "$BATS_TEST_TMPDIR/backlog.jsonl"
+  [ "$(jq -r 'select(.event=="block") | .run // ""' "$BATS_TEST_TMPDIR/backlog.jsonl" | grep -c 'ship-land.sh')" -eq 1 ]
 }
 
 @test "P4 inbox: the retry leaves no worktree behind (its trunk checkout is throwaway)" {
@@ -3059,8 +3125,12 @@ _dup_ids() { # <store> → the distinct ids of the filed `needs` rows, one per l
 
   # Both attempts filed — otherwise "one id" would be vacuously true of a store holding one row
   # that a broken fixture happened to write once (memory: positive-control-the-denominator).
-  [ "$(grep -c 're-land feat/dup-rows' "$store")" -ge 2 ]
+  # Two attempts, ONE id: the first files the row (`add`), the second folds onto it as an `update`
+  # carrying the new attempt's command. Counting title lines (the old assertion) assumed the
+  # add+block pair of a born-blocked row; an OPEN row records the second attempt without a title.
   [ "$(_dup_ids "$store" | wc -l | tr -d ' ')" -eq 1 ]
+  dup_id="$(_dup_ids "$store")"
+  [ "$(grep -c "\"id\":\"$dup_id\"" "$store")" -ge 2 ]
 }
 
 @test "P4 inbox identity: the row's project is the DURABLE checkout, never the sandbox" {
