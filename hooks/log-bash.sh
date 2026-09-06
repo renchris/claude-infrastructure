@@ -14,11 +14,43 @@
 # trailing newline that `$(cat)` strips, so strip it back off for byte-parity with the old value.
 IFS= read -r -d '' INPUT || true
 while [ "${INPUT%$'\n'}" != "${INPUT}" ]; do INPUT="${INPUT%$'\n'}"; done
+# D-3 RECURRENCE (2026-09-05). D-3 renamed `.tool_result` → `.tool_response` and stopped, but the
+# promise on line 2 still was not true: measured across the whole live log, 37,319 `Exit:` fields
+# over 9 days (2026-08-26 → 09-04), every one of them `0`. Two independent causes:
+#   (a) The REAL PostToolUse payload has no `exitCode` anywhere. Captured from a 2.1.220 run:
+#       tool_response = {stdout, stderr, interrupted, isImage, noOutputExpected}. So `// 0` won.
+#   (b) A FAILING tool never reaches PostToolUse. The harness dispatches PostToolUseFailure
+#       INSTEAD (positive control in one run: `echo ok` → PostToolUse; `false` → PostToolUseFailure
+#       and NO PostToolUse). That payload carries `.error` ("Exit code 1") and no tool_response.
+#
+# 🚨 THE FIRST ATTEMPT AT THIS FIX WAS AUTO-REVERTED, and the reason is worth keeping. It deleted
+# the `.tool_response.exitCode` read outright, which broke tests/bash-audit-attrib.bats — a suite
+# whose `post_payload` fixture SYNTHESISES `tool_response.exitCode`. That fixture does not match
+# any payload the harness sends, which is exactly why the bug survived: a green test certified
+# exit-code recording while every logged line said 0. The fixture is unreal, but the CONTRACT it
+# encodes ("if a payload carries an exitCode, honour it") is still worth keeping — some other
+# binary version may yet send one. So this reads the field WHEN PRESENT and derives it otherwise,
+# which satisfies both the sibling suite and reality instead of trading one for the other.
 CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
-EXIT=$(printf '%s' "$INPUT" | jq -r '.tool_response.exitCode // 0' 2>/dev/null)
 SID=$(printf '%s' "$INPUT" | jq -r '.session_id // "-"' 2>/dev/null)
+EVT=$(printf '%s' "$INPUT" | jq -r '.hook_event_name // empty' 2>/dev/null)
+# `// empty` (never `// 0`): absent must be distinguishable from a real 0, or the default wins again.
+EXIT=$(printf '%s' "$INPUT" | jq -r '.tool_response.exitCode // empty' 2>/dev/null)
+if [ -z "$EXIT" ]; then
+  if [ "$EVT" = "PostToolUseFailure" ]; then
+    ERR=$(printf '%s' "$INPUT" | jq -r '.error // empty' 2>/dev/null)
+    ERR=${ERR//$'\n'/ }                          # the audit line must stay single-line
+    case "$ERR" in
+      'Exit code '*) EXIT="${ERR#Exit code }" ;;
+      '')            EXIT="fail" ;;              # failed, cause unstated — never launder this to 0
+      *)             EXIT="$ERR" ;;              # e.g. "Interrupted", a timeout, a tool-side error
+    esac
+  else
+    EXIT=0                                       # reached PostToolUse ⇒ the tool succeeded
+  fi
+fi
 [ -n "$SID" ] || SID="-"
-[ -n "$EXIT" ] || EXIT=0
+[ -n "$EXIT" ] || EXIT="fail"
 mkdir -p ~/.claude/logs
 echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [$SID] $CMD | Exit: $EXIT" >> ~/.claude/logs/bash-execution.log
 exit 0
