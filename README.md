@@ -607,6 +607,19 @@ flowchart TB
 
 </details>
 
+#### And four later findings say the *machine* half is a leak and an underived constant — the answer is off-box
+
+The refutations above closed the memory theory. Three waves through 2026-08 then took the remaining lag apart, and none of what they found is a capacity shortage:
+
+| Finding | Reading |
+|---|---|
+| **`claude.exe` is 4.7% of what the gate measures** | `CC_FIRE_MAX_LOAD_PER_CORE` keys on load average, and Darwin's load average counts *runnable threads*, never CPU time. A per-thread census attributes **1.075 of 22.95 runnable threads** to every live `claude.exe` together — replicated under an independently written parser (finder: 0.950/19.27 = 4.9%). Deleting **100%** of Claude's runnable threads removes ~5% of the number that refuses sessions, and `corr(load1, census) = 0.181` |
+| **The wall itself was never derived** | `CC_HW_DEFAULT_MAX_LOAD_PER_CORE = 2.0` ([`scripts/lib/capacity-admit.sh`](scripts/lib/capacity-admit.sh)) cites a section that falsifies itself; the origin commit measured 2.72/core and picked 2.0 with no stated rule. It cannot separate the fatal 2026-08-05 reading (**2.53/core**) from 13 consecutive *survived* samples at **2.92–5.98/core** — and 47% of gated fires already run with the gate off |
+| **All four published marginal-load values are refuted** | Not four estimates of one quantity to be averaged: `2.5–5` is an aggregate ÷ N, and the delta-marginal of the same cited pair is **1.89**. The archive cannot supply the number, so the wave shipped the sampler instead — [`scripts/capacity-marginal.sh`](scripts/capacity-marginal.sh) + `tests/capacity-marginal.bats` — and the quantity stays **unmeasured** rather than published wrong |
+| **The progressive part is residue, and residue is per-machine** | Measured live 2026-08-27: **788 of 1,147 processes orphaned to PID 1** with the fleet near-idle at load 21.82. Each orphaned `ps` walk slows every other through shared kernel **proc-table contention**, and `cc-reaper` — the relief — bound-fires at 90 s under exactly that load. It compounds, which is why it presents as a slope rather than a wall |
+
+**So more cores is the wrong purchase, and it is the wrong purchase in the same direction the interface section already argues.** `ncpu × 2.0` admits *more* sessions into a box that already feels bad, and more cores means more contenders on one proc-table lock — a 2× machine reaches the same state in 2× the time, which is the signature of a leak rather than a capacity shortage. **The unit worth adding is an independent kernel, and the cheapest one is off-box and already built:** the claim that "zero off-box sessions have ever executed" was 18 days stale when it was re-measured — **239 remote heads, 236 of them `claude/fire-*`** — and the cloud lane prices at **≈0.81× local**, with zero local CPU, RAM or fork traffic. Saturating that lane dominates every hardware purchase below it. Full waves: [`gc-cpu-vs-session-ceiling-2026-08-18.md`](docs/research/gc-cpu-vs-session-ceiling-2026-08-18.md), [`marginal-load-per-active-session-2026-08-19.md`](docs/research/marginal-load-per-active-session-2026-08-19.md), [`hardware-procurement-2026-08-28.md`](docs/research/hardware-procurement-2026-08-28.md).
+
 ### The interface is
 
 | Measurement | Reading |
