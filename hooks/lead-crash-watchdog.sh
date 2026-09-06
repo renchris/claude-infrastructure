@@ -326,7 +326,11 @@ classify_death() {
   #      mtime <30 min. Jetsam (above) still outranks — a kill mid-teardown is still a kill.
   local tdir="${CC_TEARDOWN_DIR:-$HOME/.claude/watchdog/teardown}"
   local reg_dir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
-  local reg_hit pane
+  # Both start EMPTY, never merely declared: arm 1.6 below reads "$pane" on the path where the
+  # registry lookup found nothing, and a bare `local pane` leaves it UNSET, which is a fatal
+  # unbound-variable under this script's `set -u`. That aborted classify_death for every death
+  # whose sid the registry cannot resolve — the ordinary case, and the one arm 1.6 exists to serve.
+  local reg_hit="" pane=""
   if find "$tdir" -maxdepth 1 -name "$sid.json" -mmin -30 2>/dev/null | grep -q .; then
     printf 'RECYCLE\tdeliberate-teardown\t%s\t%s' "${kb:-0}" "${recs:-0}"; return 0
   fi
