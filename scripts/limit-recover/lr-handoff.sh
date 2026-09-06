@@ -496,17 +496,26 @@ OSA
       NEW_PANE="$NEWPANE"
     fi
   fi
+  # THE FALLBACK IS A PANE'S OWN COMMAND, NOT A COMMAND TO RUN (cc-backlog c6089dc2efe6). The
+  # launcher ends in `exec expect … spawn … claude --resume`, so the resumed TUI is a child of
+  # whatever PTY ran it and dies the moment that command returns. Every automated path here hands it
+  # to a NEW pane as that pane's argv or typed command line, which is why they work — and a human or
+  # an agent who instead runs the printed path from an existing shell (a Claude Bash call, a `-c`)
+  # gets a session that comes up, ingests, thinks, and dies with the command. Measured 2026-09-05 on
+  # session 2de07510, twice. So the fallback is printed WITH its constraint; a path with no usage is
+  # how a fallback that provably cannot work gets handed out looking like a working one.
+  _LRH_FB="run it as a NEW pane's own command (open a pane, then: exec /bin/bash $LAUNCHER) — running it from an existing shell kills the resumed session when that command returns"
   if [[ "$FIRED" == "split" ]]; then
-    echo "lr-handoff: fired split pane (right of invoking pane) on '$TARGET' (manual fallback: $LAUNCHER)" >&2
+    echo "lr-handoff: fired split pane (right of invoking pane) on '$TARGET' (manual fallback: $_LRH_FB)" >&2
   elif [[ $IN_KITTY -eq 1 ]]; then
     command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn os-window kitty "" "${PWD:-}" "lr-handoff fallback os-window"
     if KID="$(lrh_kitty launch --type=os-window --cwd=current -- /bin/bash "$LAUNCHER" 2>/dev/null)"; then
       KID="$(printf '%s' "$KID" | tr -d '[:space:]')"
       case "$KID" in ''|*[!0-9]*) ;; *) NEW_PANE="$KID" ;; esac
     else
-      echo "lr-handoff: kitty launch failed — run manually: $LAUNCHER" >&2
+      echo "lr-handoff: kitty launch failed — $_LRH_FB" >&2
     fi
-    echo "lr-handoff: no invoking pane / split failed — fired new kitty window on '$TARGET' (manual fallback: $LAUNCHER)" >&2
+    echo "lr-handoff: no invoking pane / split failed — fired new kitty window on '$TARGET' (manual fallback: $_LRH_FB)" >&2
   else
     command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn window iterm2 "" "${PWD:-}" "lr-handoff fallback create-window"
     # CREATE ONLY, then type through osa_type_verified (same reason as the split arm above).
@@ -521,9 +530,9 @@ OSA
     WINPANE="$(printf '%s' "$WINPANE" | tr -d '[:space:]')"
     if [[ -n "$WINPANE" ]] && osa_type_verified "$WINPANE" "exec /bin/bash $LAUNCHER"; then
       NEW_PANE="$WINPANE"      # verified branch only — same reason as the split arm above
-      echo "lr-handoff: no invoking pane / split failed — fired new iTerm2 window on '$TARGET' (manual fallback: $LAUNCHER)" >&2
+      echo "lr-handoff: no invoking pane / split failed — fired new iTerm2 window on '$TARGET' (manual fallback: $_LRH_FB)" >&2
     else
-      echo "lr-handoff: iTerm2 launch failed — run manually: $LAUNCHER" >&2
+      echo "lr-handoff: iTerm2 launch failed — $_LRH_FB" >&2
     fi
   fi
 else
