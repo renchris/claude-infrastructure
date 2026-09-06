@@ -18,6 +18,16 @@ setup() {
   # tests/handoff-fire-capacity-gate.bats is the ONE place the gate runs ON, against synthetic inputs.
   export CC_FIRE_CAPACITY_GATE=off
   export CC_FIRE_HEADROOM_GATE=off
+  # Same rule, third ambient gate. hf_occupancy_gate runs `cc-notify --list` — a live probe of the
+  # operator's REAL session table — against $WT, which is a fresh dir and so not exempt the way the
+  # shared checkout is. Measured on this box it costs ~27s of the fire's ~27s total, which is past
+  # this file's `timeout 25`, so EVERY test here returned 124 and not one of them ever reached the
+  # assertion it names. Eight red tests, one ambient cause, and the lint under test was correct
+  # throughout — `payload-lint.sh` returns RED and the dry preview prints WOULD BLOCK exactly as
+  # asserted, once the fire is allowed to get that far.
+  # Off here for the same reason the two above are: this suite's subject is the F3 back-channel
+  # lint, not occupancy. tests/occupancy-probe.bats is the ONE place that gate runs ON.
+  export CC_FIRE_OCCUPANCY=off
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"
   WT="$BATS_TEST_TMPDIR/wt"; mkdir -p "$WT"
