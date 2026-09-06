@@ -347,7 +347,22 @@ if ! mkdir "$LOCK" 2>/dev/null; then
     printf 'verdict=locked\n'; exit 3
   fi
 fi
-trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
+# The citation scan's pattern file is removed on the normal path, but a hook that hits its budget
+# kills this process mid-scan and that `rm -f` never runs — 22 stranded `.rotate.cited.*` files
+# measured in the live memory dir on 2026-09-05, arriving about one every six minutes. Cleanup
+# belongs on the trap, not only on the happy path. TERM/INT/HUP are trapped EXPLICITLY because a
+# non-interactive bash killed by a signal does not otherwise run its EXIT trap; each re-raises
+# the conventional 128+n so callers still see "killed", not a clean exit.
+CITE_TMP=""
+_ccmr_cleanup() {
+  rmdir "$LOCK" 2>/dev/null || true
+  [ -n "$CITE_TMP" ] && rm -f "$CITE_TMP" 2>/dev/null
+  return 0
+}
+trap '_ccmr_cleanup' EXIT
+trap '_ccmr_cleanup; exit 143' TERM
+trap '_ccmr_cleanup; exit 130' INT
+trap '_ccmr_cleanup; exit 129' HUP
 
 TAB=$(printf '\t')
 NOW=$(date +%s)
@@ -811,12 +826,13 @@ build_cited_set() {
   # An EMPTY pattern line matches every line, so a blank in this file would mark the whole index
   # cited and silently disable the rank. Strip blanks, then refuse an empty file outright.
   pat=$(mktemp "$DIR/.rotate.cited.XXXXXX") || return 0
+  CITE_TMP="$pat"
   printf '%s\n' "$names" | grep -v '^[[:space:]]*$' >"$pat" 2>/dev/null || true
-  if [ ! -s "$pat" ]; then rm -f "$pat"; return 0; fi
+  if [ ! -s "$pat" ]; then rm -f "$pat"; CITE_TMP=""; return 0; fi
   # -o prints each MATCH, so the output is the set of names that occur, never the matching lines.
   # shellcheck disable=SC2086  # $dirs is a deliberately word-split list of directories
   CITED_LIST=$(grep -rhoF -f "$pat" $dirs 2>/dev/null | sort -u || true)
-  rm -f "$pat"
+  rm -f "$pat"; CITE_TMP=""
   CITE_SCAN=ok
   return 0
 }
