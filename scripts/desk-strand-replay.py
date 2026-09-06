@@ -108,10 +108,36 @@ def to_row(d, now):
     }
 
 
-def resets(sweeps, drop=5):
-    """(acct, ts, pct_before) per observed weekly reset. Detected by the quota DROP: weekly_reset_at
-    drifts by minutes on every sweep, so an advance in that stamp is not a reset and reading it as
-    one reports ~1,200 phantom resets.
+def resets(sweeps, drop=5, roll_s=3600):
+    """(acct, ts, pct_before, pct_used) per observed weekly reset — a quota DROP whose WINDOW also
+    moved. The drop alone was the whole test until 2026-09-06, on the evidence that `weekly_pct`
+    never decreased inside a window (0/8, weekly-reset-utilization-2026-08-25 §2).
+
+    THAT PREMISE DIED ON 2026-09-01. The endpoint began zeroing the meter MID-window on all four
+    accounts — seven times in five days — leaving the window's close exactly where it was. `next2`
+    fell 49 -> 0 on 09-04 and still closed that same window at 73% cumulative. Read as a reset,
+    that window reports "22% used -> 78pp stranded": a 51 pp overstatement, in the one number the
+    operator reads to decide how hard to run the fleet. The shape is visible in the predecessor's
+    own output — it reported 20 resets of which "8 share two instants, which is not what four
+    independent weekly resets look like", and worked around it by scoring only the solo instants.
+    They are not resets at all.
+
+    So require the other half: the window's CLOSE must move ~7 days. Two traps make that harder
+    than reading the field.
+      · At a zeroing of EITHER kind the endpoint stops publishing a close — `weekly_reset_at` goes
+        null and stays null for minutes to hours (next4 held null for 9 h on 2026-09-01). So the
+        comparison is against the next NON-NULL stamp, forward-filled. Judging on the null itself
+        admits every mid-window zeroing: that is how next4's 09-01 event read as a reset stranding
+        90 pp while its window was simply still running.
+      · The stamp jitters sub-second between sweeps, so this is a tolerance and not an equality —
+        equality mints thousands of phantom rollovers (§1, trap 1). An hour sits far above the
+        jitter and far below a real advance.
+
+    A mid-window zeroing is therefore not a reset, and the percentage it discards is not stranded
+    quota — it is quota already spent that the meter forgot. `pct_used` adds those segments back;
+    it equals `pct_before` where no zeroing happened, so the two differ only where the meter is
+    known to understate. WHAT the zeroing is remains open: the vendor was never observed doing it
+    before 2026-09-01 and this store cannot say why.
 
     A sample can carry `weekly_pct: null` — the sweep reached the account and could not READ its
     weekly meter (logged out, a token refusal, a shape the reader did not parse). That is an
@@ -128,24 +154,56 @@ def resets(sweeps, drop=5):
     readable sample, against the last one that was actually observed. The count is returned and
     printed, because a replay over a series with silent holes is precisely the absence-of-evidence
     reading this file's standing CAVEAT warns about."""
-    prev, out, holes = {}, [], 0
+    seq = collections.defaultdict(list)
     for ts, accts in sweeps:
         for a, d in accts.items():
+            seq[a].append((ts, d))
+    out, holes = [], 0
+    for a, rows in seq.items():
+        # Each sample's next KNOWN close, forward-filled, so a run of nulls decides nothing.
+        nxt, carry = [None] * len(rows), None
+        for i in range(len(rows) - 1, -1, -1):
+            carry = rows[i][1].get("weekly_reset_at") or carry
+            nxt[i] = carry
+        # `whole` = has this account's window been watched from its own start? The ledger opens
+        # mid-window and its first samples flap (58% then lower then higher, 2026-08-10); summing
+        # those segments publishes 158% used. A window we did not see begin is reported off the
+        # meter alone.
+        prev, segs, whole = None, [0], False
+        for i, (ts, d) in enumerate(rows):
             cur = d.get("weekly_pct")
             if not isinstance(cur, (int, float)):
                 holes += 1
                 continue  # unreadable ⇒ no observation; prev is deliberately NOT touched
-            p = prev.get(a)
-            if p is not None and p - cur >= drop:
-                out.append((a, ts, p))
-            prev[a] = cur
+            if prev is not None and prev[0] - cur >= drop and _rolled(prev[1], nxt[i], roll_s):
+                out.append((a, ts, prev[0], sum(segs) if whole else prev[0]))
+                segs, whole = [0], True
+            elif cur < segs[-1] - 1:
+                segs.append(cur)      # a zeroing INSIDE the window: the meter restarts, usage does not
+            else:
+                segs[-1] = max(segs[-1], cur)
+            prev = (cur, d.get("weekly_reset_at"))
+    out.sort(key=lambda e: e[1])
     return out, holes
+
+
+def _rolled(before, after, roll_s):
+    """Did the weekly WINDOW advance across this drop? Unknown on either side answers False — an
+    unmeasurable rollover is not an observed one, and admitting it restores the drop-only rule."""
+    if not before or not after:
+        return False
+    try:
+        b = datetime.fromisoformat(before)
+        aft = datetime.fromisoformat(after)
+    except (TypeError, ValueError):
+        return False
+    return (aft - b).total_seconds() > roll_s
 
 
 def measure(sweeps, events, hours=12.0):
     """(on_target, total, exposure) over each event's final `hours`."""
     on = tot = exposure = 0
-    for acct, rts, _pct in events:
+    for acct, rts, _pct, *_ in events:
         end = datetime.fromisoformat(rts)
         start = end - timedelta(hours=hours)
         for ts, accts in sweeps:
@@ -189,7 +247,7 @@ def attribute(sweeps, events, hours=12.0):
 
     Counted per SWEEP inside the window, so the unit is desk-time — the same unit as on-target."""
     per = collections.defaultdict(collections.Counter)
-    for acct, rts, _pct in events:
+    for acct, rts, _pct, *_ in events:
         end = datetime.fromisoformat(rts)
         start = end - timedelta(hours=hours)
         for ts, accts in sweeps:
@@ -247,9 +305,15 @@ def main():
             f"(the strict cap), so any kmax exclusion below is an UPPER BOUND, not an attribution"
         )
     print(f"{len(events)} weekly resets observed:")
-    for acct, ts, pct in events:
+    for acct, ts, pct, used in events:
+        # `pct` is the meter's last reading; `used` adds back any segment the meter forgot when it
+        # zeroed mid-window. They differ only there, and there the meter UNDERSTATES what was
+        # spent — so the strand is reported off `used`, and the row says why, rather than
+        # publishing a loss the account did not take.
+        note = "" if used == pct else f"   (meter read {pct}%; zeroed mid-window, so >= {used}%)"
         print(
-            f"    {acct:7s} {ts[:16]}  reset at {pct:3d}% used  -> {100 - pct:2d}pp stranded"
+            f"    {acct:7s} {ts[:16]}  reset at {used:3d}% used  -> {max(0, 100 - used):2d}pp "
+            f"stranded{note}"
         )
     print()
 
