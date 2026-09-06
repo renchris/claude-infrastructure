@@ -87,6 +87,16 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-06 — recycle #310 (lane infra):** closed `15f2e8125671` (the 5-RED bats-liveness suite
+  failed at its ORACLE, not its analyzer: `[[ ]]`/`(( ))` are errexit-exempt under /bin/bash 3.2 and
+  NOT under bash 5.3, and bats re-execs bodies through `env bash` — the oracle now names its bash and
+  both arms are pinned; 37 ok / 0 not ok, was 31/5), `762b510b52b4` (reso-resume-one answered neither
+  the workspace-trust nor the project `.mcp.json` modal; both now ride the launch, 4 red-proof tests),
+  `51a7a9114c78` (its own next step crashed on 2 null weekly meters of 20,306 — fixed, and `--attribute`
+  now reads next4 at scored 87% / kmax-concurrency 3%, refuting the deferred cap raise), `fd99d2d64685`
+  (settled decision, trunk already carries R6 at 5 sites) · blocked none · released none · landed
+  `451696db8` `b8fce78f0` `d8a3c1f62` · `closed=6 closed_pre=4 closed_other=0 filed=0 net=6 blocked=0 min=3 lane=local-drain project=claude-infrastructure floor=MET`.
+
 - **2026-09-05 — recycle #309 (lane infra):** closed `a91e678ba369` (MOOT — the validate-bash fork
   removal landed 6644273f3, 17 d BEFORE the row was filed), `56ca4670784b` (limits_drift: a renamed
   usage-limit kind is now an error naming the kinds seen, eligibility unmoved; 4 red-proof bats
