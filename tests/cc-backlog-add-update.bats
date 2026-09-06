@@ -226,3 +226,35 @@ n_lines() { grep -c '' "$CC_BACKLOG_FILE"; }
   env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_SESSION_ID -u CC_SESSION_ID bash "$CB" "done" "$b" --evidence "anon"
   refute_match "$(grep "\"id\":\"$b\"" "$CC_BACKLOG_FILE" | grep '"done"')" 'closedSession'
 }
+
+# ── add --run (2026-09-06, BACKLOG_ZERO §6) ──────────────────────────────────────────────────────
+# `run` used to ride ONLY the block record, so the one verb that could carry a runnable command was
+# the one that parked the row in `blocked` — the state no lane reads. A machine producer filing agent
+# work (ship-land's re-land row) needs the command on an OPEN row; the fold already carries `run`
+# from any record, so this is the writer half. RED-proved on the pre-fix binary: `add --run` was
+# `unknown arg`, exit 2, and no record was written.
+
+@test "add --run stores the command on the add record and it survives the fold to list --open --json" {
+  id=$(bash "$CB" add --title "re-land feat/x" --project P --source needs --run "cd /repo && bash scripts/ship-land.sh")
+  [ "$(jq -r 'select(.event=="add") | .run' "$CC_BACKLOG_FILE")" = "cd /repo && bash scripts/ship-land.sh" ]
+  [ "$(bash "$CB" list --open --json | jq -r --arg i "$id" '.[] | select(.id==$i) | .run')" = "cd /repo && bash scripts/ship-land.sh" ]
+  [ "$(bash "$CB" list --open --json | jq -r --arg i "$id" '.[] | select(.id==$i) | .status')" = "open" ]
+}
+
+@test "re-running the same add with a DIFFERENT --run folds onto the live row as an update carrying run" {
+  id=$(bash "$CB" add --title "re-land feat/y" --project P --source needs --run "old cmd")
+  before=$(n_lines)
+  id2=$(bash "$CB" add --title "re-land feat/y" --project P --source needs --run "new cmd")
+  [ "$id2" = "$id" ]
+  [ "$(n_lines)" -eq $((before + 1)) ]
+  [ "$(tail -1 "$CC_BACKLOG_FILE" | jq -r '.event')" = "update" ]
+  [ "$(tail -1 "$CC_BACKLOG_FILE" | jq -r '.run')" = "new cmd" ]
+  [ "$(bash "$CB" list --open --json | jq -r --arg i "$id" '.[] | select(.id==$i) | .run')" = "new cmd" ]
+}
+
+@test "CONTROL — the same add re-run with an UNCHANGED --run writes nothing" {
+  bash "$CB" add --title "re-land feat/z" --project P --source needs --run "same cmd" >/dev/null
+  before=$(n_lines)
+  bash "$CB" add --title "re-land feat/z" --project P --source needs --run "same cmd" >/dev/null
+  [ "$(n_lines)" -eq "$before" ]
+}
