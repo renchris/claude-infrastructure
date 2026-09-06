@@ -1083,17 +1083,35 @@ valid_records() { # [--strict] → rc 1 on a short read (default: warn on stderr
   # newlines CONSUMED — a final line with no trailing newline would share its predecessor's number.
   # One tag per input record (E/G/B) keeps the count exact and keeps a blank line "skipped", never
   # "malformed", exactly as the per-line loop did.
-  local tagged n=0 bad=0 want
-  while IFS= read -r tagged; do
-    n=$((n + 1))
-    case "$tagged" in
-      G*) printf '%s\n' "${tagged#G}" ;;
-      E*) : ;;                       # blank line — skipped silently, still counted (as before)
-      *)  printf 'cc-backlog: malformed line %d skipped (still in file)\n' "$n" >&2; bad=$((bad + 1)) ;;
-    esac
-  done < <(jq -Rr 'if . == "" then "E"
-                   elif (try (fromjson | (has("id") and has("event"))) catch false) then "G" + .
-                   else "B" end' "$BACKLOG")
+  # TWO jq PASSES, NO BASH LOOP (2026-09-06, BACKLOG_ZERO §6). This used to tag every line in one jq
+  # and then walk the tagged stream in a bash `while read` — one printf and one `case` per record.
+  # Measured on the live store (17,005 lines, load ~130): the tagging jq took 0.09 s and the bash walk
+  # 17.5 s of a 22.9 s fold. Every verb folds at least once, so that loop WAS the cost of `cc-backlog`:
+  # cc-premise's 6-hourly pass (one `list`, then `done` per falsified row, then `validated --batch`)
+  # spent its 1,500 s bound in folds and returned rc 124 on 5 of its last 7 runs, closing 5 rows in
+  # three days — and a migration of 48 rows × 3 verbs priced out at hours. Pass 1 streams the good
+  # records; pass 2 is the census (line count, malformed line NUMBERS) — kept as a separate pass so a
+  # short read still trips the INCOMPLETE guard below exactly as before, and so stdout carries only
+  # records. The P5 fork bound (tests/cc-backlog.bats) still holds: two forks, not one per record.
+  local n=0 bad=0 want census
+  jq -Rr 'if . == "" then empty
+          elif (try (fromjson | (has("id") and has("event"))) catch false) then .
+          else empty end' "$BACKLOG" 2>/dev/null || true
+  census="$(jq -Rrn '[inputs] as $l
+                     | [ $l | to_entries[]
+                         | select(.value != "" and ((.value | try (fromjson | (has("id") and has("event"))) catch false) | not))
+                         | .key + 1 ] as $bad
+                     | (($l | length | tostring) + " " + ($bad | length | tostring)), ($bad[] | tostring)' \
+            "$BACKLOG" 2>/dev/null)" || census=""
+  if [ -n "$census" ]; then
+    n="${census%%[ $'\n']*}"
+    bad="$(printf '%s\n' "$census" | sed -n '1s/^[0-9]* //p')"
+    printf '%s\n' "$census" | sed '1d' | while IFS= read -r _ln; do
+      [ -n "$_ln" ] && printf 'cc-backlog: malformed line %d skipped (still in file)\n' "$_ln" >&2
+    done
+  fi
+  case "$n"   in ''|*[!0-9]*) n=0 ;;   esac
+  case "$bad" in ''|*[!0-9]*) bad=0 ;; esac
   # Fail LOUD on a short read. One jq covering the whole file means a jq failure would otherwise
   # report an EMPTY ledger — a silent "nothing to reap" instead of an error. Per-line forking could
   # not fail this way, so the check is what buys back that safety.
