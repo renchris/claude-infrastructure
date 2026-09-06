@@ -49,6 +49,7 @@ setup() {
         SHIP_LAND_SELECTED_N POSTLAND_STALENESS_GUARD \
         SHIP_LAND_GATE_ROUNDS SHIP_LAND_VERIFY_RETRIES \
         SHIP_LAND_LANE SHIP_LAND_SMOKE_BUDGET_S SHIP_LAND_SMOKE_NICE SHIP_LAND_TIMEOUT_BIN \
+        SHIP_LAND_SMOKE_PER_SUITE_S SHIP_LAND_SMOKE_BUDGET_CAP_S \
         SHIP_LAND_SMOKE_STATE SHIP_LAND_SMOKE_N SHIP_LAND_SMOKE_S SHIP_LAND_NET_STATE \
         SHIP_LAND_BACKUP_REF SHIP_BACKUP_REAP \
         SHIP_LAND_T0 SHIP_LAND_MEAS_ROUNDS SHIP_LAND_MEAS_GATE_S \
@@ -1758,6 +1759,50 @@ EOF
   [ "$(grep -cx 'tests/b.bats' "$BATS_ARGV")" -eq 0 ]     # never STARTED — the total really is total
   grep -q '"smoke":"partial"' "$LAND_LOG"
   grep -q '"smoke_n":1' "$LAND_LOG"                       # one suite attempted, honestly counted
+}
+
+@test "smoke: an UNSET budget is DERIVED from the direct-suite count, not a flat constant" {
+  # A flat 120s TOTAL was the same allowance for 1 suite and for 9, so the wider the diff the more
+  # certainly the phase ended in a cut — and a cut earns no verdict, so the land's only test work
+  # gated nothing. Measured on the drain lane 2026-09-01: tests/cc-relogin-poll.bats (64/64 rc 0 in
+  # 58.35s standalone at load 35.7) was killed mid-smoke, and tests/cc-reaper.bats (132s standalone,
+  # green) exceeds the flat total BY ITSELF. Two direct suites x 7s must announce 14s, not 120.
+  scope_fixture
+  stub_selector "" "$(printf 'tests/a.bats\ntests/b.bats')"
+  landable feat/budget-derived bd.sh
+
+  run env SHIP_LAND_SMOKE_PER_SUITE_S=7 bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '2 direct suite(s), ≤14s total'
+  [ "$(echo "$output" | grep -c '≤120s total')" -eq 0 ]   # the constant is gone, not merely raised
+}
+
+@test "smoke: the DERIVED budget is CAPPED — a wide diff may not buy an unbounded gate" {
+  # The direction this must never fail in. Sizing a total to the suite set is only safe while the
+  # product itself is bounded: a 40-suite land at 180s/suite would otherwise buy two hours of gate,
+  # which is the per-call-budget multiplication the TOTAL exists to prevent, re-entered through the
+  # default. 2 x 7s = 14, capped at 9.
+  scope_fixture
+  stub_selector "" "$(printf 'tests/a.bats\ntests/b.bats')"
+  landable feat/budget-cap bc.sh
+
+  run env SHIP_LAND_SMOKE_PER_SUITE_S=7 SHIP_LAND_SMOKE_BUDGET_CAP_S=9 bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '2 direct suite(s), ≤9s total'
+}
+
+@test "smoke CONTROL: an EXPLICIT budget stays an ABSOLUTE total, unchanged by the derivation" {
+  # Backward compatible BY CONSTRUCTION — the same guarantee the DERIVED load ceiling makes one
+  # phase over. Every existing caller (the drain brief's 420, cloud-return, the 1s/3s fixture
+  # probes) sets this explicitly and must keep its exact meaning; only the UNSET default moved.
+  # 5 wins over 2 x 7 = 14.
+  scope_fixture
+  stub_selector "" "$(printf 'tests/a.bats\ntests/b.bats')"
+  landable feat/budget-explicit be.sh
+
+  run env SHIP_LAND_SMOKE_BUDGET_S=5 SHIP_LAND_SMOKE_PER_SUITE_S=7 bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '2 direct suite(s), ≤5s total'
 }
 
 # ════ LOAD SHEDDING — shed is a SKIP, never a wait (R7) ════════════════════════════════════════

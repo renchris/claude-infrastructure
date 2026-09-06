@@ -81,7 +81,10 @@
 # scripts/host-suites.manifest (§4.2.2 — those assert the LIVE layer and are owned by the
 # post-deploy check; letting one back in through the smoke rebuilds the bootstrap circle one lane
 # over), one process per suite, under ONE TOTAL wall budget SHIP_LAND_SMOKE_BUDGET_S (default
-# 120s), `nice`d, each child bounded by `timeout -k 10` against the shared deadline. Three rules,
+# DERIVED: direct-suite count x SHIP_LAND_SMOKE_PER_SUITE_S (180), capped at
+# SHIP_LAND_SMOKE_BUDGET_CAP_S (900) — a flat 120s total was the same allowance for 1 suite and
+# for 9, so the wider the diff the more certainly the phase ended in a cut it could not gate on),
+# `nice`d, each child bounded by `timeout -k 10` against the shared deadline. Three rules,
 # each paying for a named v1 failure:
 #   RED BLOCKS (exit 6)  a named `not ok` in a direct suite is a verdict about YOUR diff.
 #   CUT PROCEEDS         a cut / budget kill earned NO verdict, and a non-verdict must never
@@ -161,7 +164,8 @@
 # `fast`) — except the never-in-lock invariant, which binds in both. SHIP_LAND_GATE_SCOPE is
 # still parsed for back-compat but decides nothing in the fast lane.
 #
-# Env overrides (mostly for tests): SHIP_LAND_LANE · SHIP_LAND_SMOKE_BUDGET_S ·
+# Env overrides (mostly for tests): SHIP_LAND_LANE · SHIP_LAND_SMOKE_BUDGET_S (absolute total;
+# unset ⇒ derived from SHIP_LAND_SMOKE_PER_SUITE_S x suites, capped by SHIP_LAND_SMOKE_BUDGET_CAP_S) ·
 # SHIP_LAND_SMOKE_NICE · SHIP_LAND_TIMEOUT_BIN (set-but-EMPTY ⇒ unbounded children) ·
 # CC_GATE_MAX_LOAD (ABSOLUTE ceiling; 0|off ⇒ never shed; UNSET ⇒ derived, see below) ·
 # CC_GATE_MAX_LOAD_PER_CORE (default 8 — the derived default's factor) ·
@@ -1778,7 +1782,10 @@ gate_home_setup() {     # NEVER returns non-zero — isolation is best-effort BY
 # run on — a test verdict decided by `uptime`, which is the same class of defect as the rest of
 # this paragraph. Only LANDER tuning is scrubbed — a test that wants any of these (including a
 # deliberate shed) sets it itself, per-test, which is unaffected.
-# SHIP_LAND_LANE and SHIP_LAND_SMOKE_BUDGET_S join the scrub list for exactly the same reason, and
+# SHIP_LAND_LANE and SHIP_LAND_SMOKE_BUDGET_S join the scrub list for exactly the same reason (as
+# do the two knobs that DERIVE the budget when it is unset — SHIP_LAND_SMOKE_PER_SUITE_S and
+# SHIP_LAND_SMOKE_BUDGET_CAP_S: leaving them inherited would let an operator's tuning decide a
+# nested fixture's bound, which is the same defect one level down), and
 # the lane is the sharpest case yet: tests/ship-land.bats asserts fast-lane semantics, so an
 # operator landing with the kill switch on (SHIP_LAND_LANE=v1) would bleed `v1` into all ~50
 # fixture pipelines in that suite and red a tree that is fine — the ROUNDS=0 defect verbatim, on
@@ -1876,6 +1883,7 @@ gate_bats() {  # run bats with the operator's lander tuning scrubbed; args pass 
   env -u SHIP_LAND_GATE_ROUNDS -u SHIP_LAND_VERIFY_RETRIES -u SHIP_LAND_GATE_SCOPE \
       -u LAND_LOCK_WAIT -u LAND_LOCK_TTL \
       -u SHIP_LAND_LANE -u SHIP_LAND_SMOKE_BUDGET_S -u SHIP_LAND_TIMEOUT_BIN \
+      -u SHIP_LAND_SMOKE_PER_SUITE_S -u SHIP_LAND_SMOKE_BUDGET_CAP_S \
       -u SHIP_LAND_T0 -u SHIP_LAND_MEAS_ROUNDS -u SHIP_LAND_MEAS_GATE_S \
       -u SHIP_LAND_MEAS_ARMS_S -u SHIP_LAND_MEAS_STATICS_S \
       CC_GATE_MAX_LOAD=0 ${homeenv[@]+"${homeenv[@]}"} bats "$@" </dev/null
@@ -1977,6 +1985,7 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
   # behind us will re-prove the tree, and turning "the box was busy" into a failed land is exactly
   # the kill→"RED"→re-block→retry runaway (f8e40b4c577d). It becomes smoke:"partial" and lands.
   local range="$1" direct own budget start f n=0 red=0 cut=0 srv own_red=0 sel_rc=0 own_rc=0
+  local ndirect per cap
   local -a redf=()          # the direct suites that named a failure — attested, not just counted
   # ---- P0 §3: `none` WAS FIVE CAUSES WEARING ONE TOKEN ------------------------------------------
   # (§2.B.) 83% of lands execute no test of their own diff, and until now the ledger could not say
@@ -2136,11 +2145,37 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
     return 0
   fi
 
-  budget="${SHIP_LAND_SMOKE_BUDGET_S:-120}"
-  case "$budget" in ''|*[!0-9]*) budget=120 ;; esac      # non-integer ⇒ the default, never unbounded
+  ndirect="$(printf '%s\n' "$direct" | grep -c .)"
+  # THE DEFAULT IS DERIVED FROM THE SUITE SET, not a flat constant — same shape as the DERIVED
+  # load ceiling above, and for the same reason. ONE total budget is right (a per-suite budget is
+  # what multiplied gate_admit into 21h of "bounded" waiting), but sizing that total to a constant
+  # 120s made it a function of nothing: it is the whole allowance for 1 suite and for 9, so the
+  # wider the diff the more certainly it ends in a cut. Measured on the drain lane 2026-09-01:
+  # tests/cc-relogin-poll.bats is 64/64 rc 0 in 58.35s standalone at load 35.7 and was still killed
+  # mid-smoke, and tests/cc-reaper.bats (88 tests, 132s standalone, green) exceeds the flat total
+  # BY ITSELF. Every such kill is a non-verdict, so the phase attests smoke:"partial" and gates
+  # nothing — the budget was small enough to convert the land's only test work into noise, which is
+  # why the drain brief and cloud-return callers had all grown their own overrides.
+  # BOUNDED STILL, two ways: an absolute CAP on the product (a 40-suite diff may not buy 80min of
+  # gate), and the per-suite figure is an ALLOWANCE against the shared deadline, never a per-child
+  # bound — gate_bats keeps recomputing every child's timeout from SMOKE_DEADLINE, so a single slow
+  # suite still cannot spend more than what is left.
+  # BACKWARD COMPATIBLE BY CONSTRUCTION: an EXPLICIT SHIP_LAND_SMOKE_BUDGET_S is still an ABSOLUTE
+  # total, so every existing caller keeps its exact meaning (0 ⇒ unbounded, the fixture probes'
+  # 1s/3s). Only the UNSET default changed.
+  budget="${SHIP_LAND_SMOKE_BUDGET_S:-}"
+  case "$budget" in ''|*[!0-9]*) budget="" ;; esac       # non-integer ⇒ the default, never unbounded
+  if [[ -z "$budget" ]]; then
+    per="${SHIP_LAND_SMOKE_PER_SUITE_S:-180}"
+    case "$per" in ''|*[!0-9]*) per=180 ;; esac
+    cap="${SHIP_LAND_SMOKE_BUDGET_CAP_S:-900}"
+    case "$cap" in ''|*[!0-9]*) cap=900 ;; esac
+    budget=$(( ndirect * per ))
+    [[ "$budget" -gt "$cap" ]] && budget="$cap"
+  fi
   start="$(date +%s)"
   [[ "$budget" -gt 0 ]] && SMOKE_DEADLINE=$(( start + budget ))
-  echo "→ gate: smoke — $(printf '%s\n' "$direct" | grep -c .) direct suite(s), ≤${budget}s total, one process each" >&2
+  echo "→ gate: smoke — ${ndirect} direct suite(s), ≤${budget}s total, one process each" >&2
   # ONE clone for the whole smoke (not one per suite): the direct suites are as non-hermetic as any
   # other, so they still get the isolated $HOME. Fail-open by contract — see gate_home_setup.
   gate_home_setup
