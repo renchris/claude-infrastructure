@@ -397,3 +397,100 @@ independent silences held through the worst week the series has recorded:
 The local drain chain is what actually spends it, and it is **two serial lanes** (infra #311, reso
 #18 as of 2026-09-06). Two lanes filled the window in August only because a person was also working
 on the same accounts.
+
+---
+
+## §10 The lane question, answered — 2026-09-06 (10-axis wave)
+
+**The recommendation this wave was run to test — "ramp local drain lanes on weekly headroom" — is
+REFUTED, and by its own arithmetic.** Filling four windows needs ~20.5 M output tokens/day; at
+September's ~34k output tokens per session-hour that is **22.5 concurrent sessions**, against a
+measured admission ceiling of **8 mid-turn**. The lever cannot reach the target. What actually
+changed is upstream of lane count.
+
+### §10.1 The unit is stable — the strand is real
+
+The first thing to rule out was that the meter re-denominated (§9.1's zeroing raised it). It did not:
+
+| | Aug 18-28 | Sep 1-6 | change |
+|---|---:|---:|---:|
+| output tokens/day (4 transcript roots) | 21.2 M | 10.1 M | **−52%** |
+| fleet weekly pp burned/day | ~55 | ~31 | −44% |
+| **pp per M output token** | **2.79** | **3.93** | **+41% — dearer, not cheaper** |
+| distinct token-emitting sessions/day | 309 | 165 | **−47%** |
+| output tokens per session | 68.6 k | 61.2 k | −11% |
+| commits/day | 172 | 156 | −9% |
+| backlog closures/day | 52.3 | 43.0 | −18% |
+| **closures per token-emitting session** | **0.169** | **0.261** | **+54%** |
+| reopen ratio | 40% | 40% | flat |
+
+The exchange rate held (if anything it got dearer), so the stranded points are real points. And the
+shortfall is **work VOLUME, not per-unit productivity** — each unit is doing more per point, not
+less.
+
+🚨 **The concurrency proxy says the opposite of all of this, and it is wrong.** `k`/`k_work` from the
+sweep ROSE over the same period (fleet mean ~10 → ~12.3), which reads as "more lanes, less output"
+and refutes the ramp. Two independent agents built their central argument on it. The control that
+breaks the tie is the count of sessions that actually **emitted billable tokens** (309 → 165): the
+proxy counts residency, the control counts the act. `strong-instrument-overruled-by-weak-proxies`,
+and it nearly inverted this entire finding.
+
+### §10.2 Where the volume went: two valves shut, neither of them "lane count"
+
+- **The cloud lane stopped dead on 2026-09-04T19:38Z.** 682 cloud sessions ran 2026-08-08 → 09-04
+  (≥430 provably executed); since then, zero. `cc-dispatch` refuses every pass: *"332 unlanded cloud
+  declaration(s) against a cap of 50"* (`CC_DISPATCH_CLOUD_PENDING_MAX`, added by `124c4da06` on
+  2026-09-04). **And cloud BILLS this meter** — Anthropic's own cloud-sessions page says web usage
+  "shares rate limits with all other Claude and Claude Code usage within your account", and the
+  fleet's own telemetry gives a natural experiment at **p = 1.23e-08**: over intervals where an
+  account had zero local sessions, the weekly meter rose 11 times in 207 intervals containing a
+  cloud create and **0 times in 856 without one**, all within 15 min of the create. So one valve
+  closing removed ~25 billing sessions/day, on the exact date the strand deepened.
+  ⚠️ Corollary for §8.2: every token↔pp coefficient fitted over the cloud era is **biased high** —
+  cloud puts tokens on the pp side with no local transcript on the token side.
+- **The local venue has been parked since 2026-08-11** (`CC_DISPATCH_VENUE_ONLY=cloud`), holding
+  ~236 local-eligible rows. With cloud now capped, **the dispatcher fires nothing in either venue.**
+- **The routing instrument is rotting.** `working_concurrency`'s 5 s walk budget was sized when the
+  corpus was ~826 transcripts; it is now ~1,959 project dirs / ~7,900 files. Share of sweeps NOT
+  charging working sessions — falling back to the PANE census, which counts idle desks as burn —
+  went **22% (08-20) → 52-63% (09-05/06)**, and `concurrency-unmeasured` is the single largest
+  exclusion reason in `~/.claude/route/route.jsonl` (86 of 124). `bound-must-fit-the-band`.
+  **Calibrate the claim:** whole-day routing failure is still rare (0-7% of decisions until 09-05).
+  This is a degrading instrument, not yet an outage.
+
+### §10.3 Caps, if the valves are reopened
+
+- **~8 concurrent ACTIVE (mid-turn) sessions**, inside a resident envelope of **≥54** — panes are
+  nearly free, mid-turn sessions are not. `pool-floor.sh`'s current answer of 14 is a rotation
+  artifact (its healthy predicate needs `swap_used_mb <= 0`, and swap LATCHES); the same algorithm
+  over the rotated archive returns 54 across 29,813 samples.
+- **~12 live fleet / 6-8 autonomous lanes**, bounded not by attention or quota but by `cc-reaper`'s
+  load-dependent fail-closed rate: **0.8% at k 0-4 → 31.6% at k 10-14 → 53.4% at k 20-24**. Median
+  fleet concurrency today is already 14, i.e. inside the 30%-abstention band.
+- August saturated four windows at ~10 fleet-k and ~309 work-units/day. **That is the target
+  shape, and it is reachable** — 7.4 concurrent sessions at August's per-session productivity.
+
+### §10.4 What survives from the adversarial pass
+
+The red-team's dated failure modes stand and bound any ramp: the 2026-08-11 incident (189 panes in a
+day, box over its load ceiling, dispatcher refusing the operator's own fire); load manufacturing
+false postland reds that auto-revert correct commits; and the OAuth **refresh herd** — one refresh
+instant per ~37 sessions, where a losing racer produces an *account-wide* logout and `heal()` cannot
+run while sessions are live. That last one is the real account risk; genuine 429s do not appear in
+the logs at all.
+
+The devil's advocate named a concession condition — *closures per lane flat or rising while non-no-op
+closure share does not fall*. **The measurement in §10.1 meets it**: closures per work-unit +54%,
+reopen ratio flat at 40%.
+
+### §10.5 The verdict
+
+Do not adopt a headroom-driven lane ramp. In priority order: **drain the 332-deep cloud pile** so the
+lane that provably bills this meter can fire again; **un-park the local venue**; **re-size the
+`k_work` walk budget** to the corpus it now walks. Only then is lane count worth setting, and the
+number is **4-6 local lanes**, not one-per-25-pp.
+
+⚠️ **And it may be moot within the week.** The backlog is draining for the first time since it was
+built: open+claimed went 337 (09-03) → 216 (09-06), ~−40/day, so it empties in ~5 days. A policy that
+makes the machine hungry to fill a meter arrives exactly as the queue empties. **The binding
+constraint on this fleet is demand, not lanes.**
