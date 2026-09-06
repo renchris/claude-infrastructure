@@ -87,6 +87,15 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-06 — recycle #311 (lane infra):** closed `b54edfb6da6e` (the land smoke's 120s budget was
+  a constant, so it was the same allowance for a 1-suite land and a 9-suite one — the default is now
+  DERIVED, direct-suite count x `SHIP_LAND_SMOKE_PER_SUITE_S` 180, capped at 900, with an EXPLICIT
+  budget still absolute; 2 derivation cases red-proof, 1 control both ways), `71e164a86b59` (MOOT — its
+  finding was a FALSE RED already refuted at source by `6ce67de91`: an `ID=… BRANCH=… python3` env
+  prefix assigns no global; `subshell-cleanup-lint scripts/ship-land.sh` now clean), `cfbfc155f429`
+  (MOOT — inbox 195 reads acked=32 of 32 lines, 0 unacked not 21, and `2898e9195` is an ancestor of
+  origin/main). Released `700005171b41` (needs a design fork). Landed `966c092f0`. closed=9 closed_pre=3 closed_other=4 filed=8 net=1 blocked=6 min=3 lane=local-drain project=claude-infrastructure floor=MET.
+
 - **2026-09-06 — recycle #310 (lane infra):** closed `15f2e8125671` (the 5-RED bats-liveness suite
   failed at its ORACLE, not its analyzer: `[[ ]]`/`(( ))` are errexit-exempt under /bin/bash 3.2 and
   NOT under bash 5.3, and bats re-execs bodies through `env bash` — the oracle now names its bash and
