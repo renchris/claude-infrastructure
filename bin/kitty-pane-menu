@@ -30,10 +30,18 @@ WHAT THE MENU OFFERS (and where it routes)
                                  this replaces, so nothing is lost by adding the rest.
     Move to New Window           kitty @ detach-window (no --target-tab -> new OS window; this is
                                  kitty's own documented behaviour for an unspecified target).
-    Move to Window N — desc     kitty @ detach-window --target-tab id:<repr-window-of-that-tab>
-                                 for every OTHER os-window's active tab. --match on `id:` falls
+    <what it is> — N panes,     kitty @ detach-window --target-tab id:<repr-window-of-that-tab>
+      <desktops left|right>      for every OTHER os-window's active tab. --match on `id:` falls
                                  back from tab to the window's OWNING tab (kitty docs), so a
                                  representative window id is enough to name the tab.
+                                 The ROW WORDING is the subject of describe_os_window() below and
+                                 was rebuilt 2026-09-05 on an operator report that the old
+                                 `Move to Window 36 — sevenrooms-bridge (claude) +4` was
+                                 unpickable: `(claude)` was the tag on 17 of 18 live panes,
+                                 `claude-infrastructure` was the cwd of three OS windows at once,
+                                 and `+N` counted an arbitrary tab. Nothing in the row identified
+                                 the window. It now leads with the string macOS itself paints on
+                                 the Mission Control tile and ends with the swipe to reach it.
     Close Pane                   shells out to kitty-confirm-close (same busy-check + native
                                  dialog as ⌘W — this menu must not open a SECOND, weaker close
                                  path next to the one that already protects live Claude sessions).
@@ -61,11 +69,14 @@ from __future__ import annotations
 import glob
 import json
 import os
+import plistlib
 import re
 import stat
 import subprocess
 import sys
 import time
+import unicodedata
+from collections import Counter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 KITTY_ICON = "/Applications/kitty.app/Contents/Resources/kitty.icns"
@@ -249,113 +260,300 @@ def owning_os_window_id(tree: list, wid: int) -> int | None:
     return None
 
 
-def describe_window(w: dict) -> str:
-    cwd = w.get("cwd") or ""
-    base = os.path.basename(cwd.rstrip("/")) or cwd
-    procs = []
-    for p in w.get("foreground_processes", []):
-        cmd = p.get("cmdline") or []
-        tokens = [t for el in cmd for t in str(el).split()]
-        for tok in tokens:
-            if tok.startswith("-"):
-                continue
-            nm = os.path.basename(tok)
-            if nm and nm not in ("bash", "sh", "zsh", "env", "tee") and not nm.startswith("cc-"):
-                procs.append(nm)
-                break
-    tag = procs[-1] if procs else ""
-    return f"{base} ({tag})" if tag else base
+# ── IDENTITY: what a window IS, in the words the operator is already reading ─────────────────────
+# The row's job is to match a string ALREADY in the operator's visual field. On this box that
+# string is the OS-window title: macOS paints it on the Mission Control tile, and kitty paints it
+# in the tab bar. The old label used neither — it used basename(cwd) + the foreground process, and
+# `claude` is the process tag on 17 of 18 live panes while `claude-infrastructure` is the cwd of
+# three OS windows at once, so most rows rendered the same two tokens. That is the operator's
+# complaint (2026-09-05) reduced to its cause: the row carried almost no bits.
+#
+# `+N` is deleted rather than fixed. It counted "panes in tabs[0] minus one", and the tab it picked
+# was arbitrary: `tab.is_focused` is False for EVERY tab in a `kitty @ ls` tree unless that OS
+# window is the frontmost one, so the `next(... is_focused ...)` selector fell through to tabs[0]
+# on 100% of targets. Absolute panes across all tabs replaces it.
+
+_SPINNER = re.compile(r"^(?:[^\x00-\x7F\w]\s*)+")
+# Claude Code's own busy/idle glyphs. Matched by SHAPE, never by an enumerated ✳ ◐ ◑ list — that
+# set belongs to Claude Code and a hardcoded list rots on its next frame. Stripping matters for
+# more than looks: `◐ X` and `◑ X` are ONE pane sampled seconds apart, so an unstripped title
+# manufactures spurious distinct strings and defeats the collision check below. The pattern
+# deliberately does not eat a leading `~` or `/`, which the path test still needs to see.
+_DEGEN = {"claude code", "claude", ""}
+_IDENT_BUDGET = 34
 
 
-def window_screen_positions() -> dict[str, tuple[float, float]]:
-    """title -> (x, y) on-screen, for every kitty OS window, via System Events (JXA — the ObjC
-    bridge that `choose_native`'s ancestor NSMenu attempt needed is NOT required here; plain
-    Application()/System Events access works fine). {} on ANY failure, most commonly the
-    Accessibility permission not being granted (kitty-setup.sh step 6, optional, GUI-only to
-    grant) — this must degrade silently, never block the menu over a cosmetic feature."""
-    script = (
-        'var se = Application("System Events");\n'
-        'var wins = se.processes["kitty"].windows();\n'
-        'var out = [];\n'
-        'for (var i = 0; i < wins.length; i++) {\n'
-        '  try {\n'
-        '    var w = wins[i];\n'
-        '    var pos = w.position();\n'
-        '    out.push(w.name() + "\\t" + pos[0] + "\\t" + pos[1]);\n'
-        '  } catch (e) {}\n'
-        '}\n'
-        'out.join("\\n");\n'
-    )
+def _title_body(raw: str) -> str:
+    """Title with control characters dropped, the spinner run stripped, whitespace collapsed."""
+    s = "".join(c for c in (raw or "") if unicodedata.category(c)[0] != "C")
+    return re.sub(r"\s+", " ", _SPINNER.sub("", s)).strip()
+
+
+def _usable_title(raw: str, cwd: str = "") -> str:
+    """'' when the title carries no bits, else the cleaned title.
+
+    Three exclusions, all exact rather than heuristic: the degenerate values Claude Code shows
+    before it has a task, a path-shaped title (what shell integration writes when no command is
+    running), and a title that merely restates its own directory — the last one stops a row from
+    saying the same thing twice. A real command title (`pnpm test`) is kept; it is information."""
+    b = _title_body(raw)
+    if b.casefold() in _DEGEN or b.startswith(("/", "~", ".")):
+        return ""
+    stem = (cwd or "").rstrip("/")
+    if b == stem or b == os.path.basename(stem):
+        return ""
+    return b
+
+
+def _clip(s: str, n: int = _IDENT_BUDGET) -> str:
+    """Word-aware clip, ellipsis charged against the budget. Tail-truncated because these are
+    natural-language task summaries whose FIRST words carry the topic."""
+    if len(s) <= n:
+        return s
+    cut = s[: n - 1]
+    sp = cut.rfind(" ")
+    if sp >= n // 2:
+        cut = cut[:sp]
+    return cut.rstrip(" /,.;:-—·") + "…"
+
+
+def _true_cwd(w: dict) -> str:
+    """The CLAUDE process's cwd, not the shell's. They diverge in worktree panes — kitty reports
+    the directory the pane was launched in, the registry reports where the session actually is."""
     try:
-        r = subprocess.run(
-            ["osascript", "-l", "JavaScript", "-e", script],
-            capture_output=True, text=True, timeout=5,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return {}
-    if r.returncode != 0:
-        return {}
-    out: dict[str, tuple[float, float]] = {}
-    for line in r.stdout.splitlines():
-        parts = line.split("\t")
-        if len(parts) != 3:
+        reg = os.path.expanduser(f"~/.claude/cc-registry/{w['id']}.json")
+        with open(reg) as fh:
+            return json.load(fh).get("cwd") or ""
+    except Exception:
+        return w.get("cwd") or ""
+
+
+def _dir_set(panes: list, limit: int = 2) -> list[str]:
+    """Unique directory basenames in the window, oldest pane first."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for w in sorted(panes, key=lambda w: w.get("created_at") or 0):
+        b = os.path.basename((_true_cwd(w) or "").rstrip("/"))
+        if b and b not in seen:
+            seen.add(b)
+            out.append(b)
+    return out[:limit]
+
+
+def describe_os_window(osw: dict, mc_name: str) -> tuple[str, str]:
+    """(ident, source). The ladder, in order, every rung verified against the live tree:
+
+    1. The Mission Control name — kCGWindowName for this window, exactly what macOS paints on the
+       tile. Usually byte-identical to kitty's own title, but NOT always: bin/cc-resume-layout.sh
+       launches crash-recovery windows with --os-window-title, which overrides the app permanently,
+       and for those macOS says `CC-RESUME-W1` where kitty still says the app's stale task summary.
+       The tile is what the operator looked at, so the tile wins.
+    2. No probe (SPI gone, timeout, crash) — the active pane's own kitty title. Same string in the
+       normal case, and it costs nothing because the tree is already loaded.
+    3. Degenerate title — the OLDEST pane that has a usable one. Oldest, not active, because the
+       first pane in a window is the one whose task the operator named the window after; the newest
+       is whatever they just split off. This is the rung that separates two windows both showing
+       `Claude Code`, which is the exact case being guessed at today.
+    4. Nothing usable anywhere — the SET of directories in the window, oldest first, capped at two.
+       Last content-bearing discriminator, and safe as a fallback precisely because there is no
+       directory column for it to duplicate.
+    5. Nothing at all — the literal `new session`, which is true and says so.
+    """
+    panes = [w for t in osw.get("tabs", []) for w in t.get("windows", [])]
+
+    u = _usable_title(mc_name)
+    if u:
+        return _clip(u), "kCGWindowName"
+    for w in sorted(panes, key=lambda w: w.get("created_at") or 0):
+        u = _usable_title(w.get("title") or "", w.get("cwd") or "")
+        if u:
+            return _clip(u), f"oldest-usable pane {w['id']}"
+    dirs = _dir_set(panes)
+    if dirs:
+        return _clip(" / ".join(dirs)), "dir set"
+    return "new session", "literal"
+
+
+# ── WHERE: the swipe, in desktops, relative to the pane you right-clicked ────────────────────────
+# Deliberately NOT an absolute `Desktop N`. Two measurements killed that: the one Mission Control
+# tile actually captioned `Desktop` on this box holds no kitty window (six of seven Spaces are
+# type=4 fullscreen tiles captioned with the window title), so `Desktop 4` would name a tile
+# captioned something else entirely; and macOS INSERTS new fullscreen Spaces mid-array rather than
+# appending, which renumbered three of five windows inside 40 minutes untouched. A relative
+# direction needs no caption to exist and is recomputed at pop time, so it is correct at the only
+# instant that matters — the click.
+
+
+_PROBE_MARKER = b"KPM-WINDOWS-MODE-V1"
+
+
+def native_supports_windows() -> bool:
+    """True when the COMPILED helper on disk has --windows.
+
+    Not a nicety. This file is a symlink into the checkout and goes live the instant a land
+    fast-forwards; the helper beside it is a build artifact that only moves when
+    scripts/kitty-setup.sh recompiles it. In that gap a new caller handing `--windows` to an old
+    binary would get a one-item NSMenu reading "--windows" popped at the cursor on every
+    right-click — the binary has no such mode and treats argv as titles. Grepping the marker out
+    of the Mach-O costs one 57 KB read, needs no subprocess, and cannot be fooled by timing."""
+    try:
+        with open(NATIVE_BIN, "rb") as fh:
+            return _PROBE_MARKER in fh.read()
+    except OSError:
+        return False
+
+
+def reap_probe(proc) -> tuple[dict[int, tuple[int, int]], dict[int, str], str]:
+    """Collect the Popen started before the tree fetch. (places, names, source). Bounded and
+    fail-quiet: a cosmetic label may never hold the menu open, and a wrong SPI signature would
+    segfault the CHILD — which arrives here as a non-zero exit and a dropped label, never a dead
+    menu. That containment is the reason the probe is a subprocess at all."""
+    if proc is None:
+        return {}, {}, "none"
+    try:
+        out, _err = proc.communicate(timeout=0.4)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        return {}, {}, "none"
+    except OSError:
+        return {}, {}, "none"
+    if proc.returncode != 0:
+        return {}, {}, "none"  # 2 = DLSYM-MISS: a future macOS dropped the SPI. Checkable.
+    places: dict[int, tuple[int, int]] = {}
+    names: dict[int, str] = {}
+    for line in (out or "").splitlines():
+        parts = line.split("\t", 4)
+        if len(parts) < 5:
             continue
-        title, x, y = parts
         try:
-            out[title] = (float(x), float(y))
+            pwid = int(parts[0])
         except ValueError:
             continue
+        names[pwid] = parts[4]
+        # A window with no Space is still NAMED — the two facts fail independently, and the name
+        # is the one carrying the identification.
+        if parts[2] != "-":
+            try:
+                places[pwid] = (int(parts[1]), int(parts[2]))
+            except ValueError:
+                pass
+    return places, names, "cgs" if places else "none"
+
+
+def space_probe_plist() -> dict[int, tuple[int, int]]:
+    """Same map, from ~/Library/Preferences/com.apple.spaces.plist. In-process, 0.7 ms, no
+    subprocess and no SPI — but it is a CACHE, not the live layout: measured 42 minutes stale, with
+    three of five ordinals wrong against the live truth. Insertions preserve relative ORDER though,
+    so every SIGN still matched. Hence the caller renders a direction word and never a count off
+    this source. Monitors are enumerated separately: this box reports 14 monitor entries, and a
+    flattened index would hand two windows the same ordinal the moment a second one holds Spaces."""
+    try:
+        path = os.path.expanduser("~/Library/Preferences/com.apple.spaces.plist")
+        with open(path, "rb") as fh:
+            data = plistlib.load(fh)
+        monitors = data["SpacesDisplayConfiguration"]["Management Data"]["Monitors"]
+    except Exception:
+        return {}
+    out: dict[int, tuple[int, int]] = {}
+    for di, mon in enumerate(monitors, 1):
+        for si, space in enumerate(mon.get("Spaces") or [], 1):
+            tiles = (space.get("TileLayoutManager") or {}).get("TileSpaces") or []
+            for tile in tiles:
+                wid = tile.get("TileWindowID")
+                if isinstance(wid, int):
+                    out[wid] = (di, si)
     return out
 
 
-def _ordinal(n: int) -> str:
-    return {1: "1st", 2: "2nd", 3: "3rd"}.get(n, f"{n}th")
+def vector(target: tuple[int, int] | None, own: tuple[int, int] | None, exact: bool) -> str:
+    """The direction clause. '' means 'say nothing', which the caller then applies to EVERY row —
+    a half-numbered menu is a wrong swipe, and a wrong swipe is the failure being fixed."""
+    if target is None or own is None or target[0] != own[0]:
+        return ""  # different display: the ordinals are per-display and not comparable
+    d = target[1] - own[1]
+    if d == 0:
+        return "here"
+    side = "right" if d > 0 else "left"
+    if not exact:
+        return f"to the {side}"  # plist source: the sign survives staleness, the count does not
+    n = abs(d)
+    return f"{n} desktop{'' if n == 1 else 's'} {side}"
 
 
-def position_labels(candidates: list[tuple[int, str]]) -> dict[int, str]:
-    """candidates: [(window_id, title), ...] -> {window_id: "2nd from left"}, using each
-    window's REAL on-screen coordinates so the label answers "which physical window is this"
-    without the operator memorizing abstract titles. Sorts along whichever axis (x or y) has
-    the wider spread among the CANDIDATES ACTUALLY OFFERED — a vertical monitor stack gets
-    top/bottom, a horizontal one gets left/right, and a 2-D grid picks whichever axis dominates
-    rather than guessing. Returns {} (no labels) with fewer than 2 positioned candidates, or
-    when window_screen_positions() itself came back empty (permission not granted)."""
-    positions = window_screen_positions()
-    pts = [(wid, positions[title]) for wid, title in candidates if title in positions]
-    if len(pts) < 2:
-        return {}
-    xs = [p[1][0] for p in pts]
-    ys = [p[1][1] for p in pts]
-    horizontal = (max(xs) - min(xs)) >= (max(ys) - min(ys))
-    axis, low_word = (0, "left") if horizontal else (1, "top")
-    ordered = sorted(pts, key=lambda p: p[1][axis])
-    return {wid: f"{_ordinal(i + 1)} from {low_word}" for i, (wid, _pt) in enumerate(ordered)}
+def other_targets(tree: list, self_osw_id: int, places: dict, mc_names: dict, exact: bool) -> list[tuple[int, str, str]]:
+    """One row per OTHER os-window: (representative window id, label, ident source).
 
+    The label is `<what it is> — <N panes>[, <direction>]`. There is no `Move to ` verb and no
+    `Window N` head: both were 100% identical ink on every target row, and deleting them moves the
+    first recognisable word to character 0, where the eye lands. The fixed items above still say
+    `Move to New Window`, so the menu still reads as a move.
 
-def other_targets(tree: list, self_osw_id: int) -> list[tuple[int, str]]:
-    """One entry per OTHER os-window, naming a representative window id in its active tab."""
-    raw: list[tuple[int, dict, int]] = []  # (osw_id, repr_window, extra_pane_count)
+    ROUTE AND LABEL ARE SEPARATE and stay that way — the label describes the destination window,
+    the route names the tab the pane actually lands in.
+    """
+    raw: list[tuple[int, dict, dict]] = []  # (osw_id, representative window, os-window)
     for osw in tree:
         if osw["id"] == self_osw_id:
             continue
         tabs = osw.get("tabs", [])
-        tab = next((t for t in tabs if t.get("is_focused")), tabs[0] if tabs else None)
+        # is_active before is_focused: `is_focused` is True only inside the frontmost OS window, so
+        # on every OTHER window — i.e. every window this menu offers — the old is_focused-first
+        # selector fell through to tabs[0] unconditionally. Verified against a live tree: all five
+        # target tabs read focused=False.
+        tab = next(
+            (t for t in tabs if t.get("is_active")),
+            next((t for t in tabs if t.get("is_focused")), tabs[0] if tabs else None),
+        )
         if not tab or not tab.get("windows"):
             continue
         wins = tab["windows"]
         repr_w = next((w for w in wins if w.get("is_focused") or w.get("is_active")), wins[0])
-        raw.append((osw["id"], repr_w, len(wins) - 1))
+        raw.append((osw["id"], repr_w, osw))
 
-    pos = position_labels([(osw_id, repr_w.get("title") or "") for osw_id, repr_w, _extra in raw])
+    own_place = places.get(next((o.get("platform_window_id") for o in tree
+                                 if o["id"] == self_osw_id), None))
 
-    out: list[tuple[int, str]] = []
-    for osw_id, repr_w, extra in raw:
-        label = describe_window(repr_w)
-        if extra > 0:
-            label += f" +{extra}"
-        where = f" ({pos[osw_id]})" if osw_id in pos else ""
-        out.append((repr_w["id"], f"Move to Window {osw_id}{where} — {label}"))
-    return out
+    rows: list[list] = []  # [osw_id, repr_wid, ident, panes clause, vector, source, panes]
+    for osw_id, repr_w, osw in raw:
+        panes = [w for t in osw.get("tabs", []) for w in t.get("windows", [])]
+        ntabs = len(osw.get("tabs", []))
+        ident, source = describe_os_window(osw, mc_names.get(osw.get("platform_window_id"), ""))
+        clause = f"{len(panes)} pane" + ("" if len(panes) == 1 else "s")
+        # `detach-window --target-tab` RAISES the destination tab, so a multi-tab destination
+        # changes shape on arrival and the row has to say so. Latent while every window holds one.
+        if ntabs > 1:
+            clause += f" in {ntabs} tabs"
+        rows.append([osw_id, repr_w["id"], ident, clause,
+                     vector(places.get(osw.get("platform_window_id")), own_place, exact),
+                     source, panes])
+
+    # If ANY offered row could not be placed, the direction clause comes off ALL of them. A menu
+    # where some rows carry a swipe and some do not reads as "the unmarked ones are here", which is
+    # a wrong swipe — the failure this whole change exists to prevent.
+    if any(not r[4] for r in rows):
+        for r in rows:
+            r[4] = ""
+
+    def render(r: list) -> str:
+        return f"{r[2]} — {r[3]}" + (f", {r[4]}" if r[4] else "")
+
+    # Dispatch is exact-string first-match, so two identical labels are not a cosmetic problem —
+    # they are a silent move to the wrong window. Two mechanical stages, both AFTER truncation, so
+    # a clip can never create a misroute.
+    counts = Counter(render(r) for r in rows)
+    for r in rows:
+        # Never when the ident already IS the directory set, or the row renders the same
+        # directory twice.
+        if counts[render(r)] > 1 and r[5] != "dir set":
+            d = _dir_set(r[6], 1)
+            if d and d[0] not in r[2]:
+                r[2] = f"{r[2]} · {d[0]}"
+    counts = Counter(render(r) for r in rows)
+    for r in rows:
+        if counts[render(r)] > 1:
+            r[2] = f"{r[2]} · w{r[0]}"
+
+    return [(r[1], render(r), r[5]) for r in rows]
 
 
 def choose_native(items: list[str]):
@@ -415,6 +613,18 @@ def main() -> int:
         print(f"listen_on : {listen_on_template()}")
         print(f"address   : {ADDRESS}")
 
+    # Fired BEFORE the tree fetch and reaped after it: the probe's 60-80 ms and `kitty @ ls`'s
+    # 72-95 ms overlap almost entirely, so the marginal cost of the whole labelling change on the
+    # menu's pop latency is far below either number on its own.
+    probe = None
+    if os.path.isfile(NATIVE_BIN) and os.access(NATIVE_BIN, os.X_OK) and native_supports_windows():
+        try:
+            probe = subprocess.Popen(
+                [NATIVE_BIN, "--windows"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            )
+        except OSError:
+            probe = None
+
     tree = load()
     if not tree:
         print(f"kitty-pane-menu: no reply from kitty (address={ADDRESS})", file=sys.stderr)
@@ -425,15 +635,31 @@ def main() -> int:
         print("kitty-pane-menu: no focused window — refusing to guess", file=sys.stderr)
         return 0
 
-    self_osw = owning_os_window_id(tree, wid)
-    targets = other_targets(tree, self_osw) if self_osw is not None else []
+    places, mc_names, place_src = reap_probe(probe)
+    if not places:
+        # The plist is a stale CACHE of the same layout: insertions preserve relative ORDER but not
+        # the counts, so this source yields a direction word and never a number.
+        places = space_probe_plist()
+        place_src = "plist" if places else "none"
 
-    items = ["Paste", "Move to New Window"] + [label for _, label in targets] + ["Close Pane"]
+    self_osw = owning_os_window_id(tree, wid)
+    targets = (
+        other_targets(tree, self_osw, places, mc_names, place_src == "cgs")
+        if self_osw is not None
+        else []
+    )
+
+    items = ["Paste", "Move to New Window"] + [label for _, label, _ in targets] + ["Close Pane"]
 
     if check:
         print(f"window    : {wid}")
+        print(
+            f"desktops  : {place_src} ({len(places)} window(s) placed)"
+            + ("" if native_supports_windows() else "  [helper predates --windows; run kitty-setup.sh --apply]")
+        )
+        srcs = {label: src for _, label, src in targets}
         for item in items:
-            print(f"item      : {item}")
+            print(f"item      : {item}" + (f"   [ident: {srcs[item]}]" if item in srcs else ""))
         return 0
 
     choice = choose_native(items)
@@ -453,9 +679,19 @@ def main() -> int:
     elif choice == "Close Pane":
         subprocess.run([os.path.join(HERE, "kitty-confirm-close"), "window"])
     else:
-        for target_wid, label in targets:
+        for target_wid, label, _src in targets:
             if label == choice:
-                kitty("detach-window", "--match", f"id:{wid}", "--target-tab", f"id:{target_wid}")
+                # The return code was discarded here. A destination that died between the pop and
+                # the pick is real — the window population churns — and kitty reports it as
+                # `No matching tabs for expression: id:N`, rc 1, which rendered as a pane that
+                # simply did not move and no reason anywhere.
+                r = kitty("detach-window", "--match", f"id:{wid}", "--target-tab", f"id:{target_wid}")
+                if r.returncode != 0:
+                    print(
+                        f"kitty-pane-menu: move failed (rc {r.returncode}): "
+                        f"{(r.stderr or '').strip() or 'no message'}",
+                        file=sys.stderr,
+                    )
                 break
 
     refocus()
