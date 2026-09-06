@@ -37,21 +37,6 @@ REPO="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/.."
 KCONF_DIR="${CC_KITTY_CONFIG_DIR:-$HOME/.config/kitty}"
 BIN_DIR="${CC_KITTY_BIN_DIR:-$HOME/.claude/bin}"
 
-# ── BOUNDED osascript ────────────────────────────────────────────────────────────────────────────
-# §6's Accessibility probe is an AppleEvent into System Events, and an AppleEvent has no timeout of
-# its own (the full argument is in hooks/lib/osa.sh). That probe's target is the worst case for it:
-# an UNGRANTED System Events is exactly the process that can sit on TCC's own permission modal
-# rather than return, and --check is run unattended by install.sh and by the postland corpus, where
-# a hang is not a slow answer but a stuck gate. The probe is advisory (`info`, never `no`), so a CUT
-# costs one optional label line — the asymmetry that makes bounding it obviously right. $REPO above
-# already followed $0's symlink chain, which is what keeps the lib reachable when this script is
-# invoked through a per-file symlink.
-# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
-if   [ -r "$REPO/hooks/lib/osa.sh" ];         then . "$REPO/hooks/lib/osa.sh"
-elif [ -r "$HOME/.claude/hooks/lib/osa.sh" ]; then . "$HOME/.claude/hooks/lib/osa.sh"
-else osa_bounded() { timeout "${CC_OSA_TIMEOUT_S:-10}" "$@"; }
-fi
-
 # ── NON-CANONICAL-TREE GUARD ─────────────────────────────────────────────────────────────────────
 # REPO above is derived from $0, so this script links the live layer at WHATEVER TREE IT WAS RUN
 # FROM. postland-verify runs the corpus (and install.sh, which calls this script) inside a
@@ -565,22 +550,44 @@ else
   info "not running inside kitty — cannot judge live state from here"
 fi
 
-# ── 6. Accessibility permission — optional, for the move-menu's physical-position labels ──────────
-# kitty-pane-menu's "Move to Window N" items are plain text (title + cwd) — no visual cue for WHICH
-# physical window that is on screen. bin/kitty-pane-menu-native can add a relative position label
-# ("leftmost" / "rightmost" of the offered candidates, from real window coordinates via System
-# Events), but System Events refuses `position of window` for kitty until the OPERATOR grants
-# Accessibility access — a GUI-only grant (System Settings → Privacy & Security → Accessibility →
-# add kitty), which nothing here can do for the user; a fresh git-clone install has zero reason to
-# have it, so this surfaces the gap at SETUP time instead of the first time someone squints at an
-# unlabeled "Move to Window 4" and can't tell which monitor that is (operator report, 2026-08-05).
-# Advisory only (`info`, never `no`): the menu is fully functional without this, just less legible.
-hdr "6. Accessibility permission (optional — physical window-position labels in the move menu)"
-if osa_bounded osascript -e 'tell application "System Events" to tell process "kitty" to get position of window 1' >/dev/null 2>&1; then
-  ok "Accessibility granted — move-menu items show which physical window/display each is on"
+# ── 6. Desktop labels in the move menu — the SPI probe, not the Accessibility grant ──────────────
+# WHAT THIS USED TO CHECK, AND WHY IT WAS A FALSE GREEN. Until 2026-09-05 this step ran
+#     osascript -e 'tell app "System Events" to tell process "kitty" to get position of window 1'
+# and, on success, printed "Accessibility granted — move-menu items show which physical
+# window/display each is on". Both halves were measured wrong on the same day: the grant is
+# ALREADY present (the system TCC db carries kTCCServiceAccessibility|net.kovidgoyal.kitty|2) and
+# that probe returns 0,0 with rc 0 right now — so this step printed a green for a feature that had
+# never rendered a single label. The position code it advertised was structurally dead: System
+# Events only reports windows on the CURRENT Space, so with one kitty window per fullscreen Space
+# the old position_labels() saw fewer than two candidates and returned {} every time, forever. A
+# check whose healthy output is indistinguishable from its broken one is this repo's own
+# fail-safe-default-mimics-the-healthy-state rule, live in the setup script.
+#
+# WHAT IT CHECKS NOW. The capability that actually ships: the native helper's --windows mode, which
+# reads window→Space membership through CGSCopySpacesForWindows (resolved by dlsym, so its removal
+# in a future macOS is a checkable exit 2 rather than a link error). Accessibility is irrelevant to
+# it and is deliberately no longer mentioned — telling the operator to grant a permission that buys
+# nothing is a manual step that costs them time and returns none.
+hdr "6. Desktop labels in the move menu (kitty-pane-menu-native --windows)"
+if [ ! -x "$BIN_DIR/kitty-pane-menu-native" ]; then
+  info "native helper not built — run --apply; the menu still works, without desktop directions"
+elif ! grep -q KPM-WINDOWS-MODE-V1 "$BIN_DIR/kitty-pane-menu-native" 2>/dev/null; then
+  # An older build has no --windows mode and would read the flag as a MENU ITEM, popping a
+  # one-item NSMenu at the cursor. Never run the probe against a binary that predates it.
+  info "native helper predates --windows — run --apply to recompile; menu works, no directions"
 else
-  info "not granted — move-menu items work, just without a position label"
-  info "  to enable: System Settings -> Privacy & Security -> Accessibility -> add kitty"
+  probe_out="$("$BIN_DIR/kitty-pane-menu-native" --windows 2>/tmp/kitty-setup-probe.err)"; probe_rc=$?
+  placed=$(printf '%s\n' "$probe_out" | awk -F'\t' 'NF>=5 && $3!="-"' | grep -c . || true)
+  if [ "$probe_rc" -ne 0 ] && grep -q DLSYM-MISS /tmp/kitty-setup-probe.err 2>/dev/null; then
+    info "the Spaces SPI is gone on this macOS — rows keep their name and pane count, no direction"
+  elif [ "$probe_rc" -ne 0 ]; then
+    info "probe failed (rc $probe_rc) — rows keep their name and pane count, no direction"
+  elif [ "${placed:-0}" -ge 1 ]; then
+    ok "desktop directions live — $placed kitty window(s) placed on a Space"
+  else
+    info "probe ran but placed no window — rows keep their name and pane count, no direction"
+  fi
+  rm -f /tmp/kitty-setup-probe.err
 fi
 
 printf '\n\033[1m%d ok, %d missing\033[0m\n' "$pass" "$miss"
