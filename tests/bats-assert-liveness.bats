@@ -1,9 +1,19 @@
 #!/usr/bin/env bats
 # bats-assert-liveness.py — the block-position analyzer for DEAD bats assertions, plus its
 # companion fixer. A dead assertion is one whose failure cannot reach the test's exit status:
-# bats runs bodies under `set -eET`, but bash exempts `[[ ]]`, `(( ))`, `! cmd`, and every
-# NON-LAST element of an `&&` list from errexit — so in any position but last, those
-# assertions are evaluated and then silently discarded.
+# bats runs bodies under `set -eET`, but bash exempts `! cmd` and every NON-LAST element of
+# an `&&` list from errexit — and bash 3.2 additionally exempts `[[ ]]` and `(( ))` — so in
+# any position but last, those assertions are evaluated and then silently discarded.
+#
+# THE GRID IS BASH-VERSION-DEPENDENT, and forgetting that is what made this suite 5-RED.
+# Measured on this box: `set -e; [[ 1 -eq 2 ]]; echo tail` reaches the tail under
+# /bin/bash 3.2 (dead) and does NOT under bash 5.3 (live); `(( 0 ))` behaves the same way.
+# `! cmd` and the `&&` left-hand class are exempt under BOTH. bats re-execs every test body
+# through `env bash`, so the interpreter is whatever PATH resolves — Homebrew bash 5.3 here,
+# the system 3.2 on a stock box. The oracle below therefore names the bash it runs under
+# instead of inheriting one: a deadness claim is only true of the bash that was measured.
+# The ANALYZER stays calibrated to 3.2 deliberately — it must keep an assertion live under
+# the WEAKEST bash a suite may meet, and `|| false` is correct under every version.
 #
 # ShellCheck is NOT a substitute: it does not flag `[[ ]]`/`(( ))` deadness at all. Deadness
 # is a property of BLOCK POSITION, which is why this analyzer exists.
@@ -20,6 +30,9 @@ setup() {
   FIX="$REPO/scripts/bats-assert-liveness-fix.py"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"   # hermetic: never touch the live ~/
   D="$BATS_TEST_TMPDIR"
+  BATS_BIN="${BATS_BIN:-$(command -v bats)}"
+  LEGACY_BASH=/bin/bash                  # macOS system bash 3.2 — the OLDEST bash a suite may meet
+  MODERN_BASH="${BASH:-$(command -v bash)}"
 }
 
 # Write $2.. as lines of a bats file at $1.
@@ -46,6 +59,19 @@ findings() { python3 "$AN" --format count "$1"; }
 # Does bats PASS the fixture? 0 = passed (⇒ assertion discarded ⇒ dead).
 bats_passes() { bats "$1" >/dev/null 2>&1; }
 
+# The same question asked of a NAMED bash. bats re-execs each test body through `env bash`,
+# so the interpreter comes from PATH — never from how bats itself was invoked, which is why
+# `/bin/bash $(command -v bats) file` does NOT run the body under 3.2.
+# PREPEND, never replace: bats resolves its own symlink and helpers through PATH, so a
+# stripped PATH makes the nested run die 127 — a could-not-run that reads exactly like
+# "the fixture failed", i.e. like the LIVE verdict, silently inverting every claim here.
+bats_passes_under() {
+  local bashbin="$1" file="$2"
+  PATH="$(dirname "$bashbin"):$PATH" "$BATS_BIN" "$file" >/dev/null 2>&1
+}
+
+bash_major() { "$1" -c 'echo "${BASH_VERSINFO[0]}"'; }
+
 # ── controls: the oracle itself must be trustworthy ─────────────────────────────
 @test "CONTROL positive — a plainly false body FAILS under bats" {
   mkbats "$D/c.bats" '@test "x" {' '  false' '}'
@@ -61,17 +87,30 @@ bats_passes() { bats "$1" >/dev/null 2>&1; }
 }
 
 # ── the dead classes, each cross-checked against the bats oracle ────────────────
-@test "non-final [[ ]] is dead — bats passes it, analyzer flags it" {
+@test "CONTROL — the two bashes this grid is defined over are the versions it names" {
+  # Every deadness claim below is version-scoped, so a run whose bashes are not the pair the
+  # grid was measured on proves nothing. Assert the pair rather than assuming it: a box that
+  # ships a different /bin/bash fails HERE, loudly, instead of inverting a claim downstream.
+  [ "$(bash_major "$LEGACY_BASH")" -lt 4 ] || { echo "legacy bash is major $(bash_major "$LEGACY_BASH"), not 3.x"; false; }
+  [ "$(bash_major "$MODERN_BASH")" -ge 4 ] || { echo "modern bash is major $(bash_major "$MODERN_BASH"), not >=4"; false; }
+  [ "$LEGACY_BASH" != "$MODERN_BASH" ]
+}
+
+@test "non-final [[ ]] is dead under bash 3.2 and LIVE under bash 5 — flagged for the weaker" {
   mkblock "$D/t.bats" '[[ 1 -eq 2 ]]' nonfinal
-  run bats_passes "$D/t.bats"
-  [ "$status" -eq 0 ]                    # passed despite a false assertion ⇒ dead
+  run bats_passes_under "$LEGACY_BASH" "$D/t.bats"
+  [ "$status" -eq 0 ]                    # 3.2 exempts [[ ]] ⇒ evaluated, discarded ⇒ dead
+  run bats_passes_under "$MODERN_BASH" "$D/t.bats"
+  [ "$status" -ne 0 ]                    # 5.x honours it under errexit ⇒ live THERE, only there
   [ "$(findings "$D/t.bats")" -eq 1 ]
 }
 
-@test "non-final (( )) is dead — bats passes it, analyzer flags it" {
+@test "non-final (( )) is dead under bash 3.2 and LIVE under bash 5 — flagged for the weaker" {
   mkblock "$D/t.bats" '(( 0 ))' nonfinal
-  run bats_passes "$D/t.bats"
+  run bats_passes_under "$LEGACY_BASH" "$D/t.bats"
   [ "$status" -eq 0 ]
+  run bats_passes_under "$MODERN_BASH" "$D/t.bats"
+  [ "$status" -ne 0 ]
   [ "$(findings "$D/t.bats")" -eq 1 ]
 }
 
@@ -170,7 +209,7 @@ bats_passes() { bats "$1" >/dev/null 2>&1; }
   # …and the plain bare form, cross-checked against the bats oracle: it asserts something
   # false, bats passes it anyway ⇒ discarded ⇒ dead, and the analyzer must say so.
   mkblock "$D/b.bats" '(( 1 == 2 ))' nonfinal
-  run bats_passes "$D/b.bats"
+  run bats_passes_under "$LEGACY_BASH" "$D/b.bats"
   [ "$status" -eq 0 ]
   [ "$(findings "$D/b.bats")" -eq 1 ]
 }
@@ -231,13 +270,15 @@ bats_passes() { bats "$1" >/dev/null 2>&1; }
 # ── the fixer ──────────────────────────────────────────────────────────────────
 @test "fixer revives a dead assertion — the test then FAILS as intended" {
   mkblock "$D/t.bats" '[[ 1 -eq 2 ]]' nonfinal
-  run bats_passes "$D/t.bats"
-  [ "$status" -eq 0 ]                    # dead before
+  run bats_passes_under "$LEGACY_BASH" "$D/t.bats"
+  [ "$status" -eq 0 ]                    # dead before, in the bash the analyzer is calibrated to
   run python3 "$FIX" "$D/t.bats"
   [ "$status" -eq 0 ]
   grep -q '\[\[ 1 -eq 2 \]\] || false' "$D/t.bats"
+  run bats_passes_under "$LEGACY_BASH" "$D/t.bats"
+  [ "$status" -ne 0 ]                    # live after, in the very bash that had discarded it
   run bats_passes "$D/t.bats"
-  [ "$status" -ne 0 ]                    # live after
+  [ "$status" -ne 0 ]                    # …and still live under the modern one
   [ "$(findings "$D/t.bats")" -eq 0 ]
 }
 
@@ -470,14 +511,14 @@ bats_passes() { bats "$1" >/dev/null 2>&1; }
   for pair in '  [[ 1 -eq 1 ]] \|      && [[ 1 -eq 2 ]]' \
               '  [[ 1 -eq 1 ]] &&|      [[ 1 -eq 2 ]]'; do
     mkbats "$D/t.bats" '@test "x" {' "${pair%%|*}" "${pair##*|}" '  echo tail' '}'
-    run bats_passes "$D/t.bats"
+    run bats_passes_under "$LEGACY_BASH" "$D/t.bats"
     [ "$status" -eq 0 ] || { echo "not dead BEFORE: $pair"; false; }
     [ "$(findings "$D/t.bats")" -eq 1 ] || { echo "not reported: $pair"; false; }
     run python3 "$FIX" "$D/t.bats"
     [ "$status" -eq 0 ] || { echo "fixer rc=$status on: $pair"; false; }
     grep -qF '[[ 1 -eq 2 ]] || false' "$D/t.bats" || { echo "not on the last line: $(cat "$D/t.bats")"; false; }
     [ "$(grep -c '\\ || false' "$D/t.bats")" -eq 0 ] || { echo "appended AFTER a continuation"; false; }
-    run bats_passes "$D/t.bats"
+    run bats_passes_under "$LEGACY_BASH" "$D/t.bats"
     [ "$status" -ne 0 ] || { echo "still dead AFTER: $pair"; false; }
     [ "$(findings "$D/t.bats")" -eq 0 ] || { echo "still reported: $pair"; false; }
     before="$(cat "$D/t.bats")"
