@@ -7430,6 +7430,63 @@ hf_freshness_gate() {
   return 0
 }
 
+# ---- FIRE-TIME OCCUPANCY: never put a SECOND session in a tree someone is already working in ----
+# hf_occupancy_gate <dir> <mode: worktree|cwd> → 0 proceed · 1 REFUSE (caller exits 1)
+#
+# THE DEFECT THIS CLOSES (cc-backlog 6cb991f4d1f9). A re-fire is decided from the BRANCH — "the
+# predecessor died, the branch carries zero commits, you are alone in there" — and zero-commits +
+# clean-tree is ALSO exactly what a healthy mid-flight session looks like an hour into its first
+# task. Measured: W-MEASURE was re-fired into fp-measure while pane 459 was working in it. Two
+# sessions, one worktree, one paid task done twice. This file already KNEW and said so in prose, in
+# the never-engaged branch below — "re-firing while it is alive puts a SECOND session in that
+# worktree, and nothing downstream refuses that" — so the remedy is to run the sensor that answers
+# "is anyone IN there" BEFORE the fire, rather than to describe it after one has already failed.
+#
+# THE SENSOR IS THE SESSION LIST, NOT THE TREE. A commit count is a proxy for occupancy and a
+# terrible one; `cc-notify --list` is the live-session registry every hook and peer address is
+# already keyed on, and it carries CWD, so this is a direct read of the thing being claimed. Rows
+# are matched on the PHYSICALLY resolved directory (/private on this box), and THIS session is
+# excluded by pane uuid — a lead firing a peer into its own cwd is not a collision.
+#
+# MODE, the same split hf_freshness_gate makes and for the same reason. `worktree` is a tree THIS
+# TOOL provisions or claims (existing / pool), so a second session in it is never right and a
+# refusal is safe. `cwd` is also the warm re-fire of a peer into a live worktree, so that arm may
+# only WARN; refusing there would be the guard-refusal-fires-on-its-own-harness shape.
+#
+# FAIL-OPEN ON EVERY UNREADABLE PROBE, like every other sensor in this file: no cc-notify on PATH,
+# an empty list, an unresolvable directory all PROCEED. Starving the fire queue on a blind sensor is
+# the worse error — a chain with no successor is the one failure this pipeline cannot survive. The
+# SHARED CHECKOUT is exempt by construction: many sessions legitimately sit in it (8 of 15 measured,
+# scripts/deploy-parity-assert.sh:912), so occupancy there carries no information at all.
+# Kill switch: CC_FIRE_OCCUPANCY=off restores the pre-gate behaviour exactly.
+hf_occupancy_gate() {
+  local d="$1" mode="$2" real self rows n
+  HF_WT_OCCUPANTS=""
+  if [ "${CC_FIRE_OCCUPANCY:-on}" = off ]; then return 0; fi
+  if [ ! -d "$d" ]; then return 0; fi
+  if hf_is_shared_checkout "$d"; then return 0; fi
+  if ! command -v cc-notify >/dev/null 2>&1; then return 0; fi
+  real="$(cd "$d" 2>/dev/null && pwd -P)" || return 0
+  if [ -z "$real" ]; then return 0; fi
+  self="${ITERM_SESSION_ID:-}"; self="${self##*:}"
+  rows="$(cc-notify --list 2>/dev/null \
+          | awk -v want="$real" -v self="$self" 'NR>1 && NF>=5 {
+              c=$NF; sub(/^\/private/,"",c);
+              w=want;  sub(/^\/private/,"",w);
+              if (c==w && $2!=self) printf "%s(%s) ", $1, $2 }')" || return 0
+  if [ -z "$rows" ]; then return 0; fi
+  n="$(printf '%s' "$rows" | wc -w | tr -d ' ')"
+  HF_WT_OCCUPANTS="$rows"
+  echo "⚠ occupancy: $n live session(s) are ALREADY cwd'd in $d — $HF_WT_OCCUPANTS" >&2
+  if [ "$mode" = worktree ]; then
+    echo "!! Refusing to fire a second session into an OCCUPIED worktree. A branch with zero commits and a clean tree is ALSO what a healthy mid-flight session looks like, so the branch could never have told you this (cc-backlog 6cb991f4d1f9: W-MEASURE re-fired over a live pane 459)." >&2
+    echo "   Remedy: message the occupant (cc-notify <uuid> \"…\") or retire that pane, then re-fire. Override for one fire: CC_FIRE_OCCUPANCY=off" >&2
+    return 1
+  fi
+  echo "   Firing anyway — --cwd is also the warm re-fire of a peer into a live worktree, so this arm only warns. If a second session there was not your intent, stop and read the occupant above." >&2
+  return 0
+}
+
 # $REPO is the repo a fire TARGETS: the `git worktree add` for a cold --worktree, the .env.local it
 # copies in, the worktree pool it may claim a slot from, and the dir a self-routing fire lands in.
 # It was hardcoded to $DEFAULT_REPO (reso) unless --repo was passed, so EVERY --worktree fire from
@@ -8858,6 +8915,11 @@ elif [ -n "$WORKTREE" ]; then
   case "$WT_SETUP" in
     existing|pool) hf_freshness_gate "$WT" worktree || exit 1 ;;
   esac
+  # OCCUPANCY (6cb991f4d1f9). Same population as the freshness gate above and for the same
+  # reason — only a REUSED tree can already hold someone. A `cold` tree is created two lines down.
+  case "$WT_SETUP" in
+    existing|pool) hf_occupancy_gate "$WT" worktree || exit 1 ;;
+  esac
   if [ "$WT_SETUP" = "cold" ] && [ "$DRY" = 0 ]; then
     git -C "$REPO" fetch origin -q || echo "⚠ fetch failed — basing off last-fetched $BASE" >&2
     ( cd "$REPO" && git worktree add "$WT" -b "$WORKTREE" "$BASE" >/dev/null )
@@ -8931,6 +8993,7 @@ elif [ -n "$CWD" ]; then
   # WARN-ONLY here, by design (see hf_freshness_gate's MODE paragraph): --cwd is also the warm
   # re-fire of a peer into its OWN live worktree, which is divergent and dirty on purpose.
   hf_freshness_gate "$CWD" cwd || true
+  hf_occupancy_gate "$CWD" cwd || true
   CMD="cd $(printf %q "$CWD") && ${NC}${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
 else
   # Land in the repo root and let the launcher self-route (_cc_route_check auto-creates a fresh
