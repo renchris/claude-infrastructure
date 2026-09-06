@@ -524,12 +524,20 @@ teardown() {
   # Apple silicon (measured: `cp /bin/sleep` → "Killed: 9"), and a shebang script's p_comm is the
   # interpreter's. execve names the process after the path it was given, so a symlink's basename is
   # what `pgrep -x` / killall match — and it must fit p_comm's 16 characters.
-  ln -s /bin/sleep "$BATS_TEST_TMPDIR/kfx$BASHPID"
-  bash -c 'exec -a claude bash -c "\"\$0\" 60 & wait" "$0"' "$BATS_TEST_TMPDIR/kfx$BASHPID" >/dev/null 2>&1 &
-  for _ in $(seq 1 25); do pgrep -x "kfx$BASHPID" >/dev/null 2>&1 && break; sleep 0.2; done
-  pgrep -x "kfx$BASHPID" >/dev/null 2>&1 || false
-  export CC_KILL_GATE_SELF_PID=$BASHPID
-  [ "$(decision "killall kfx$BASHPID")" = "DENY" ]
+  # $SEL_MARK, never a re-expanded $BASHPID — that is what SEL_MARK is captured for one line above.
+  # $BASHPID is the CURRENT shell's pid, so it does not survive either boundary this test crosses:
+  # in an asynchronous (`&`) command bash forks first and expands in the CHILD, and inside `$( )` it
+  # is the substitution subshell's. So the symlink was created as kfx<test-pid> while the background
+  # job exec'd kfx<child-pid> ("No such file or directory", measured), nothing ever spawned, and the
+  # liveness gate below could only fail — and the final assertion then asked the kill gate about
+  # kfx<subshell-pid>, a third name again. One captured name fixes all three; the subject of the
+  # test — that `killall <name>` is routed through the same selection — is untouched.
+  ln -s /bin/sleep "$BATS_TEST_TMPDIR/$SEL_MARK"
+  bash -c 'exec -a claude bash -c "\"\$0\" 60 & wait" "$0"' "$BATS_TEST_TMPDIR/$SEL_MARK" >/dev/null 2>&1 &
+  for _ in $(seq 1 25); do pgrep -x "$SEL_MARK" >/dev/null 2>&1 && break; sleep 0.2; done
+  pgrep -x "$SEL_MARK" >/dev/null 2>&1 || false
+  export CC_KILL_GATE_SELF_PID=$SEL_KFX
+  [ "$(decision "killall $SEL_MARK")" = "DENY" ]
 }
 
 @test "selection: text is not execution, and a DYNAMIC pattern abstains (documented limit)" {
