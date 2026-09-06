@@ -23,6 +23,23 @@ setup() {
 }
 
 # literal PostToolUse payload: `tool_response`, NOT `tool_result`
+#
+# 🚨 THIS FIXTURE IS HYPOTHETICAL, NOT MEASURED — read this before trusting a green run here.
+# It synthesises `tool_response.exitCode`. Captured from a real 2.1.220 session on 2026-09-05, the
+# harness sends NO such field: tool_response = {stdout, stderr, interrupted, isImage,
+# noOutputExpected}. And a FAILING tool never reaches PostToolUse at all — the harness dispatches
+# PostToolUseFailure instead, carrying `.error` ("Exit code 1") and no tool_response.
+#
+# So this suite passing has never meant the live log records exit codes. Measured the same day:
+# 37,319 `Exit:` fields over 9 days, every one `0`, while these tests were green the whole time.
+# That is the shape to recognise — a suite that proves a script works on a payload nobody sends
+# proves nothing about production, and here it actively concealed the defect for months.
+#
+# The fixture is KEPT rather than corrected, deliberately: the contract it encodes ("if a payload
+# carries an exitCode, honour it") is worth defending against a future binary that does send one,
+# and hooks/log-bash.sh satisfies it by reading the field WHEN PRESENT. The measured shapes are
+# pinned separately in tests/log-bash-exit-code.bats, which also asserts the precedence between
+# the two. Change either file and run BOTH.
 post_payload() { # <command> <exitCode> <session_id>
   jq -nc --arg c "$1" --argjson e "$2" --arg s "$3" \
     '{session_id:$s,hook_event_name:"PostToolUse",tool_name:"Bash",
