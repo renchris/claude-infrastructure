@@ -559,3 +559,24 @@ named here and left for a session with that mandate; the recurrence brake lives 
   `git -C /Users/chrisren/Development/claude-infrastructure config --unset core.bare && bash /Users/chrisren/Development/claude-infrastructure/scripts/deploy-live.sh --auto`.
   Until it runs, the live layer executes the pre-fix `cc-backlog` and `ship-land.sh` (both symlinks resolve
   into that checkout at 0c4bdedb4), and the old producer keeps filing born-blocked re-land rows.
+
+- **LIVE — proven 2026-09-06T23:33Z.** The shared checkout was a work tree again when this pane thawed (its
+  `core.bare` repaired by another actor between 10:26Z and 23:31Z — this session's own attempt was refused by
+  the auto-mode classifier), and `deploy-live.sh` reads *"at trunk tip 8a40cd3fa667 — nothing above the live
+  layer to deploy"*. Byte proof (`git hash-object ~/.claude/<f>` vs `git rev-parse origin/main:<f>`), verbatim:
+
+  ```
+  bin/cc-backlog         live=cd276bc355426866dfe8affdd6510a0120f9c2d1 trunk=cd276bc355426866dfe8affdd6510a0120f9c2d1 MATCH
+  scripts/ship-land.sh   live=72c578625489d8b27357e72c449ebccbbfe9991d trunk=72c578625489d8b27357e72c449ebccbbfe9991d MATCH
+  ```
+
+  `backlog-telemetry.sh` NOW at 23:45Z: **open=290 blocked=216 claimed=0 LIVE=506** (baseline 03:32Z:
+  237 / 252 / 489). **Re-land rows in `blocked`: 0** (48 at baseline). Closes on the re-keyed ids since the
+  re-key: **8** (6 `lane=local-drain`, 2 `session`). Born-OPEN re-land rows on the live bytes: 0 so far — no
+  land has failed on the new producer yet, which is the right zero. **Residual, named:** sessions run
+  `scripts/ship-land.sh` from their OWN worktree's copy, so a worktree cut before `3c2d73c4c` keeps the old
+  producer until it is recreated from trunk — one such row (`89e87a2f4450`, 23:43Z, session `cd80e372`) was
+  filed in the old add+block shape and re-keyed here; drain links are fresh worktrees off origin/main each
+  recycle and carry the fix. The blocked count itself drifted 204 → 216 across the day from session
+  `needs` and re-blocks by stale worktrees, which is the population this section leaves to hand
+  adjudication; the class this session owned reads 0.
