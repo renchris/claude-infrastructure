@@ -413,7 +413,14 @@ mk4() { # the live shape, scaled down: N activations + N class-C decisions + N b
 @test "CLASS BUDGET: each starved class rolls up with its OWN exact listing command (I5)" {
   mk4 6
   CC_OPREADOUT_CLASSBUDGET=on run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
-  echo "$output" | grep -qF '↳ for f in ~/.claude/autonomy/pending-activation/*.sh; do [ -f "$f.done" ] || echo "$f"; done' || false
+  # The `.superseded` / `.local` clauses are NOT padding and are not optional here. What this test
+  # pins is that a starved class's rollup command REPRODUCES the rows it summarises, and the count
+  # it summarises comes from activation_settled(), which treats all three markers as settled. A
+  # `.done`-only listing would print rows the count excludes — the exact divergence the sibling
+  # assertion below was rewritten to prevent. This literal was left behind when the renderer gained
+  # the two extra markers, so it pinned a command the renderer can no longer emit and could never
+  # pass again; it is widened to the renderer's current exact string, not loosened.
+  echo "$output" | grep -qF '↳ for f in ~/.claude/autonomy/pending-activation/*.sh; do [ -f "$f.done" ] || [ -f "$f.superseded" ] || [ -f "$f.local" ] || echo "$f"; done' || false
   # Was `cc-decide list --open --class C`. The decisions leg now also renders a class-B packet that
   # carries neither a default nor a deadline (a hard block wearing the wrong label — six live
   # `shipland-esc-*` packets are exactly that), so a `--class C` filter would hide precisely the rows
