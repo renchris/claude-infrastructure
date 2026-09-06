@@ -398,7 +398,16 @@ exec expect -c '
   # menu is several KB of text and cursor-move chrome. A width-invariant pattern that cannot fit in
   # the match buffer is not width-invariant at all.
   match_max 200000
-  spawn -noecho env DISABLE_AUTOUPDATER=1 CLAUDE_CONFIG_DIR=$cfg $bin --permission-mode auto --model $model --effort $effort --resume $sid
+  # THE SPAWN ENV IS A WHITELIST-BY-OVERRIDE, AND EVERYTHING ELSE LEAKS. This line names only the
+  # two variables it means to SET, so every other variable of whoever invoked the script rides into
+  # the recovered session. One of them is load-bearing: CLAUDE_CODE_CHILD_SESSION=1 is exported by
+  # any Claude session, and it turns transcript saving OFF in the child — so a recovery fired from
+  # an agent pane comes up, works, and writes NOTHING, which is the one outcome limit-recovery
+  # exists to prevent. Measured 2026-09-05 on session 2de07510: two runs, and the transplanted
+  # transcript stayed byte-identical at 3521401b across both (cc-backlog c6089dc2efe6). `-u` UNSETS
+  # rather than blanking: an empty string is a value, and a consumer testing presence rather than
+  # truthiness would still read it as set.
+  spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION DISABLE_AUTOUPDATER=1 CLAUDE_CONFIG_DIR=$cfg $bin --permission-mode auto --model $model --effort $effort --resume $sid
 
   # Move the selector to option $steps+1 and CONFIRM it landed there before committing. Returns 1
   # when confirmed and the CR was sent, 0 when it could not be confirmed — in which case NOTHING is
