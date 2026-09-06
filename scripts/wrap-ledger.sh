@@ -1488,7 +1488,7 @@ else
   if [ "$FILED_MINE" -gt 0 ]; then
     # Outranks 🚀 and 👤 (both assert "my side is done"): a row you filed and could not say why you
     # did not drive is YOUR open work, whatever the tree says. Same rank as the custody 🔧 above.
-    RUNG="🔧"; READOUT="🔧 Loose ends — ${FILED_MINE} backlog row(s) you filed this session are still open with no reason you could not drive them (cc-backlog list --open --json | jq '.[]|select(.filedBy==\"${SID}\")'); drive each (then \`cc-backlog done <id> --evidence …\`), drop it (\`done --evidence \"dropped: <why>\"\`), or hand it off by re-running the same add with \`--why-not-now \"<reason>\"\`."
+    RUNG="🔧"; READOUT="🔧 Loose ends — ${FILED_MINE} backlog row(s) you filed this session are still open with no reason you could not drive them (cc-backlog list --open --json | jq '.[]|select(.filedBy==\"${SID}\")'); drive each (then \`cc-backlog done <id> --evidence …\`), drop it (\`done --evidence \"dropped: <why>\"\`), or hand it off by re-running the same add with \`--why-not-now \"needs-credential|needs-human|not-yet-true|no-capacity: <detail>\"\`."
   elif [ "$CLOSE_FLOOR" -eq 1 ]; then
     # Same rank as filed-undriven, for the same reason: a backlog-scoped session that closed no row
     # has not done the thing it was sent to do, whatever it landed. Machinery is not a close.

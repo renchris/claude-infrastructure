@@ -125,9 +125,14 @@
 #                                                                 exactly as `reopen` is
 #                                                                 (see RE-OPEN EFFECT)
 #   needs   "<step>" [--run C] [--project P] [--session S]       → file it ALREADY blocked; echoes the id.
-#           add … [--why-not-now "<reason>"] [--session S]        → the hand-off record: WHY this session could
-#                                                                  not drive it. A session-stamped add WITHOUT
-#                                                                  one is that session's own 🔧 (wrap-ledger).
+#           add … [--why-not-now "<class>: <detail>"] [--session S] → the hand-off record: WHY this session
+#                                                                  COULD NOT drive it. The class is one of
+#                                                                  needs-credential | needs-human |
+#                                                                  not-yet-true | no-capacity; anything else
+#                                                                  is refused (rc 2) because it is a reason,
+#                                                                  not an impossibility. A session-stamped
+#                                                                  add WITHOUT one is that session's own 🔧
+#                                                                  (wrap-ledger FILED_MINE).
 #                                                                  BRAKED: a step already filed as a
 #                                                                  LIVE row (same prose, same subject
 #                                                                  modulo digits — key 4) re-files
@@ -999,6 +1004,20 @@ valid_condition() {
   return 0
 }
 
+# valid_why_not_now <value> — rc 0 iff the value OPENS with one of the four impossibility classes,
+# bare or followed by ":". Called only from cmd_add, which owns the refusal message and the full
+# rationale (search THE IMPOSSIBILITY CLASS). The match is anchored at the start on purpose: a
+# sentence that merely CONTAINS "no-capacity" somewhere is prose, and prose is what this replaces.
+# The trailing-":" form is what carries the detail, so `not-yet-true: the deploy has not run` passes
+# and `the deploy has not run` does not — the class is the part a later reader can act on.
+valid_why_not_now() {
+  case "$1" in
+    needs-credential|needs-human|not-yet-true|no-capacity) return 0 ;;
+    needs-credential:*|needs-human:*|not-yet-true:*|no-capacity:*) return 0 ;;
+  esac
+  return 1
+}
+
 ensure_file() {
   mkdir -p "$(dirname "$BACKLOG")" 2>/dev/null || true
   [ -f "$BACKLOG" ] || : > "$BACKLOG"
@@ -1542,6 +1561,43 @@ cmd_add() {
   done
   [ -n "$title" ] || { echo "cc-backlog add: --title is required" >&2; return 2; }
   coverage_warn "$falsifier" "$condition" "$dod"
+  # ── THE IMPOSSIBILITY CLASS (2026-09-05, .claude-plans/WORK_ON_NOT_FILE.md) ────────────────────
+  # A malformed `--why-not-now` REFUSES the add, exactly like `--condition` below. The FILED test
+  # already demanded "why THIS session could not do it"; every arm that enforced it — wrap-ledger
+  # FILED_MINE (:778-780), completion-assert D4 (:573), dispatch-assert (:224) — discharges on a
+  # NON-EMPTY STRING, so the bar was cleared by writing a sentence. Measured in the trigger
+  # incident: a session filed a production tenant's 48 schema discrepancies because "the operator
+  # said don't start new work" and "remediation is the operator's" — two true sentences, neither an
+  # impossibility, both naming work it could have driven. This gate asks for the CLASS instead.
+  #
+  # WHY REFUSE HERE WHEN coverage_warn ONLY WARNS. That decision (:1417-1421) is specific to the
+  # falsifier and does not transfer: a FABRICATED probe is worse than none because it retracts a
+  # live row on a lie. A fabricated why-not-now is inert — it records a claim and retracts nothing —
+  # so the failure mode that made a falsifier gate harmful does not exist on this field.
+  #
+  # Scoped to the VALUE, never to PRESENCE. Requiring the flag would break every generator that
+  # files a bare row (ship-land, postland-verify, deploy-live, cc-discover), and an omitted
+  # why-not-now is ALREADY the filer's own 🔧 via FILED_MINE. The two arms compose and leave no
+  # third door: omit it and your close is 🔧; supply it and it must name a class.
+  # shellcheck disable=SC2016  # the backticks below are MARKDOWN code spans in an operator-facing
+  #                              message, not command substitutions — single quotes are exactly what
+  #                              keeps them literal (same reason as drain-brief.sh:86).
+  if [ -n "$why_not_now" ] && ! valid_why_not_now "$why_not_now"; then
+    { printf 'cc-backlog add: --why-not-now "%s" names no impossibility class.\n' "$why_not_now"
+      printf '  FILED is the exception, and it wants an IMPOSSIBILITY, not a reason. Open the value\n'
+      printf '  with one of these four, optionally followed by ": <detail>":\n'
+      printf '    needs-credential  a secret or login this agent does not hold\n'
+      printf '    needs-human       sudo, physical, GUI-only, or a value call that is the operator'"'"'s\n'
+      printf '    not-yet-true      an external precondition has not happened yet (pair --falsifier)\n'
+      printf '    no-capacity       MEASURED: `claude-accounts --rank general` routes nowhere AND\n'
+      printf '                      the machine admission gate refuses the spawn\n'
+      printf '  Anything else means you could have driven it — here, or by firing a session with\n'
+      printf '  scripts/handoff-fire.sh. Drive it, or drop it. "Out of scope", "I was told not to\n'
+      printf '  start new work", "that half is the operator'"'"'s" and "it needs more investigation" are\n'
+      printf '  reasons; each one names work you could have done.\n'
+    } >&2
+    return 2
+  fi
   # A malformed condition REFUSES the whole add rather than degrading to a title key. Falling back
   # would hand the caller the very per-event id it asked not to have, silently — and a caller that
   # passed --condition is one whose retry loop mints a fresh item every pass.
