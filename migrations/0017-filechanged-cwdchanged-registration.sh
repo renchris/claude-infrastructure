@@ -80,6 +80,44 @@ if [ ! -x "$HOOK_FILE" ]; then
   exit 1
 fi
 
+# 🚨 AND `-x` IS NOT ENOUGH HERE, WHICH IS THE WHOLE POINT OF THIS MIGRATION EXISTING SEPARATELY.
+# `-x` asserts the file EXISTS AND RUNS. It says nothing about it being the VERSION whose
+# behaviour this registration depends on — and the pre-fix handler, the one that emits nothing on
+# a CwdChanged payload, is perfectly executable. Measured 2026-09-07: `~/.claude/hooks/
+# file-changed.sh` is a SYMLINK into the shared checkout, which sat 9 commits behind origin/main,
+# so it resolved to exactly that pre-fix copy. This migration would have passed its own guard and
+# registered a re-arm against a handler that cannot re-arm — the registered no-op that reads GREEN
+# this file's header spends forty lines warning about, committed by the file itself.
+#
+# The land is not the deploy. `landed ≠ live`, and a per-file symlink layer makes the live copy an
+# INDEPENDENT question from the trunk copy, so no amount of git-side verification answers it.
+#
+# So the precondition is a BEHAVIOUR PROBE against the copy that will actually run: feed the live
+# handler a CwdChanged payload with a throwaway watchlist and require the re-arm on stdout. It
+# tests the capability rather than a marker string or a version number, so it cannot be satisfied
+# by a file that merely looks recent, and it stays true if the emit is ever reimplemented.
+# Side-effect free: both the watchlist and the log dir are redirected into a mktemp -d that is
+# removed on the way out, so the probe cannot write a row into the operator's real log.
+probe_dir=$(mktemp -d "${TMPDIR:-/tmp}/0017-probe.XXXXXX") || {
+  printf '0017: could not create a probe sandbox; not registering\n' >&2; exit 1; }
+printf '/0017/probe/marker\n' > "$probe_dir/watchlist"
+probe_out=$(printf '%s' '{"session_id":"0017-probe","hook_event_name":"CwdChanged","cwd":"/","new_cwd":"/tmp"}' \
+  | CC_FILECHANGED_WATCHLIST="$probe_dir/watchlist" CC_FILECHANGED_LOG_DIR="$probe_dir/logs" \
+    "$HOOK_FILE" 2>/dev/null) || probe_out=""
+rm -rf "$probe_dir"
+
+if ! printf '%s' "$probe_out" | jq -e '.hookSpecificOutput.hookEventName == "CwdChanged"
+                                       and (.hookSpecificOutput.watchPaths | index("/0017/probe/marker") != null)' \
+     >/dev/null 2>&1; then
+  printf '0017: NOT registered — the LIVE %s does not re-arm on a CwdChanged payload.\n' "$HOOK_FILE" >&2
+  printf '      It emitted: %s\n' "${probe_out:-<nothing>}" >&2
+  printf '      That is the PRE-FIX handler (its file_path guard sits above the watchPaths emit).\n' >&2
+  printf '      Registering part 3 against it would wire a re-arm that cannot re-arm, and it would\n' >&2
+  printf '      read GREEN. The live layer is BEHIND trunk: converge it first —\n' >&2
+  printf '        bash ~/Development/claude-infrastructure/scripts/deploy-live.sh\n' >&2
+  exit 1
+fi
+
 # ── ASSERT OUR OWN MATCHERS BEFORE WRITING THEM ─────────────────────────────────────────────────
 # The silent no-op this whole migration exists to avoid lives in the REGISTRATION, so no runtime
 # behaviour of the hook can ever detect it — by the time the hook would notice, it has already
