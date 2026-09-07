@@ -236,3 +236,52 @@ cc_cloud_create() { # $1=cfgdir $2=cwd $3=prompt → "<outcome>\t<id>\t<msg>"; b
 # is unique per fire, so — unlike `--branch main`, where trunk's background traffic reads as a
 # heartbeat forever — nothing but this session can advance it. O2 becomes a real signal.
 cc_cloud_branch_name() { printf 'claude/fire-%s-%s' "$(date -u +%Y%m%dT%H%M%SZ)" "$$"; }
+
+# ── THE RETURN + BOOT CONTRACT — the executable form of CLOUD_OBSERVABILITY.md §4.1 ─────────────
+#
+# §4.1 states the absence contract in prose: the fire declares a branch and a boot budget, and the
+# session's brief requires its FIRST ACT to be pushing that branch — an empty commit is enough.
+# That sentence is the sole basis on which §4.3's C1 NOT-STARTED is readable as "never booted".
+#
+# WITHOUT IT, "no ref" is a four-way conflation — never started · died at boot · refused
+# entitlement · booted fine and still working — and there is no inbound channel to a cloud VM to
+# break it. C1 fires past boot_s (default 900 s, bin/cc-cloud) on all four; three are the verdict
+# it claims and the fourth is a LIVE, HEALTHY session convicted as never-started, whose
+# recover_cmd tells the operator to re-fire it and spend a second account's quota on work already
+# in flight. The arm is not silent, it is confidently wrong on the healthy case.
+#
+# ONE PRODUCER, TWO LANES. The CLI lane (handoff-fire.sh CLOUD_PAYLOAD) and the API lane
+# (cc-offload cmd_up_api → cc-notify --cloud) reach the VM by different transports, and the API
+# lane carried NO push instruction of any kind: `--branch` in the create body AUTHORISES the
+# branch, it does not instruct a push. The text lives here so a second copy cannot drift.
+#
+# `switch -c … || switch …`, not a bare `switch -c`: the API lane names the branch in the create
+# body's outcomes.git_info.branches, so the platform may have provisioned it before the VM boots
+# and a bare `switch -c` would die on "already exists" — a first act that errors is not a first
+# act.
+cc_cloud_return_contract() { # $1 = declared branch → the payload preamble, on stdout
+  local br="$1"
+  cat <<CC_CLOUD_CONTRACT
+── FIRST ACT — RUN THESE THREE LINES BEFORE ANYTHING ELSE (this session runs off-box) ──
+You are running in an Anthropic-managed VM. Nothing on the operator's machine can see your
+filesystem, your processes or your terminal, and you cannot run this repo's /ship. Your ONLY
+channel back is a git push, and it must go to exactly this branch: $br
+
+Do this NOW — before you plan, before you read a file, before you write a line:
+
+    git switch -c $br 2>/dev/null || git switch $br
+    git commit --allow-empty -m 'chore: cloud session boot'
+    git push -u origin HEAD
+
+WHY IT IS THE FIRST ACT AND NOT THE LAST. The firing side watches exactly one thing: whether that
+branch appears on the remote. It has no other channel to you, so it cannot tell a session that
+never booted from one that booted and has not written anything yet — both are "no ref". The empty
+commit is what separates them. Push it immediately and your absence becomes informative; delay it
+and a healthy session reads as NOT-STARTED past the boot budget and is re-fired underneath you.
+
+Then do the work on that same branch and push as you go — push whatever you have before you
+finish, even if it is incomplete. A push to any other branch is invisible and your work will
+strand. A local reconciler (scripts/cloud-reconcile.sh) discovers this branch and lands it.
+── END OF THE BOOT CONTRACT — YOUR TASK FOLLOWS ──
+CC_CLOUD_CONTRACT
+}

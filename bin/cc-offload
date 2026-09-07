@@ -86,6 +86,28 @@ REPO="${CC_OFFLOAD_REPO:-$ROOT}"
 # scripts/lib/cloud-create.sh rather than a second opinion about which binary can fire.
 CLOUD_CLAUDE="${CC_CLOUD_CREATE_BIN:-$HOME/.claude-220/node_modules/.bin/claude}"
 
+# The boot contract's text has ONE producer (scripts/lib/cloud-create.sh) so the two fire lanes
+# cannot drift on it. FAIL-OPEN: an unreadable lib must never stop a fire, so a minimal fallback
+# is defined instead — a session that boots with a terser contract is strictly better than no
+# session at all.
+for _CC_CCD in "$ROOT/scripts/lib/cloud-create.sh" "$HOME/.claude/scripts/lib/cloud-create.sh"; do
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  [ -r "$_CC_CCD" ] && { . "$_CC_CCD"; break; }
+done
+unset _CC_CCD
+if ! command -v cc_cloud_return_contract >/dev/null 2>&1; then
+  cc_cloud_return_contract() {
+    printf '%s\n' "── FIRST ACT — RUN THESE THREE LINES BEFORE ANYTHING ELSE (this session runs off-box) ──" \
+      "Your only channel back is a git push to exactly this branch: $1" "" \
+      "    git switch -c $1 2>/dev/null || git switch $1" \
+      "    git commit --allow-empty -m 'chore: cloud session boot'" \
+      "    git push -u origin HEAD" "" \
+      "Push it BEFORE any other work: until that branch exists the firing side cannot tell a" \
+      "session that never booted from one that is working, and re-fires you underneath." \
+      "── END OF THE BOOT CONTRACT — YOUR TASK FOLLOWS ──"
+  }
+fi
+
 # ── colour: explicit truecolor only. NEVER SGR-2 — it collapses to invisible on dark themes, and
 #    this output is data the operator is hunting through (claude-accounts:1424, cc-where:48). ─────
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${CC_OFFLOAD_NOCOLOR:-0}" = 0 ]; then
@@ -696,13 +718,24 @@ cmd_up_api() {
         || note "cc-offload: custody could not be opened for $sid — the close-integrity arm is NOT armed for it."
     fi
 
-    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$(cat "$pf")" >/dev/null 2>&1
+    # THE BOOT BEACON IS PREPENDED, NOT APPENDED (backlog 4a0e50459ad5 / be2331814849). This is
+    # the API lane's only opportunity to instruct the VM, and until now it sent the brief and
+    # nothing else — no beacon and no push instruction at all, so C1 NOT-STARTED fired over
+    # sessions that were running fine. "First act" is the whole property being bought: a brief
+    # that ends in "and by the way, push first" is a brief whose first act is the task.
+    # The composed payload goes to a FILE so the retry hint below can name it: a hint that
+    # re-sends `$(cat "$pf")` would re-deliver the brief WITHOUT the beacon, i.e. hand the
+    # operator a command that reproduces the exact defect this block closes.
+    local payf; payf="$(mktemp "${TMPDIR:-/tmp}/cc-offload-payload.XXXXXX")"
+    { cc_cloud_return_contract "$br"; printf '\n'; cat "$pf"; } >"$payf"
+    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$(cat "$payf")" >/dev/null 2>&1
     local drc=$?
     if [ "$drc" != 0 ]; then
       note "cc-offload: $sid created+declared but the brief did NOT queue (cc-notify exit $drc)."
-      note "  Retry just the delivery: cc-notify --cloud $sid \"\$(cat $pf)\""
+      note "  Retry just the delivery: cc-notify --cloud $sid \"\$(cat $payf)\""
       rc=11; break
     fi
+    rm -f "$payf"
     fired=$((fired+1))
     printf '%s✓%s %s on %s — anthropic_cloud VM, repo ATTACHED, branch %s\n' "$C_OK" "$C_OFF" "$sid" "$account" "$br"
     printf '  view   : https://claude.ai/code/%s\n  observe: cc-offload ls\n  land   : cc-offload land\n' "$sid"
