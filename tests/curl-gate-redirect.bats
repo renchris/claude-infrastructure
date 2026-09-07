@@ -123,7 +123,12 @@ PY
 
   # NEGATIVE CONTROL FIRST: the original must reach the IMDS URL, or this box cannot show the gap
   # and a pass below would be meaningless.
-  local before; before="$(eval "$original -o /dev/null -w '%{url_effective}'" 2>/dev/null)"
+  # The `|| true` is load-bearing for the same reason spelled out below: reaching the IMDS URL is
+  # the SUCCESS of this control, and curl still exits non-zero doing it (28 when 169.254.169.254
+  # blackholes, 7 when it refuses). Unguarded, the ERR trap aborts the test before the `case` can
+  # read the value curl DID print, so the control convicts the gate on every box that is not a
+  # cloud VM. Measured 2026-09-07: rc=28, url_effective=http://169.254.169.254/latest/meta-data/.
+  local before; before="$(eval "$original -o /dev/null -w '%{url_effective}'" 2>/dev/null || true)"
   case "$before" in
     *169.254.169.254*) : ;;
     *) kill $srv 2>/dev/null || true; wait $srv 2>/dev/null || true; skip "no pivot here to close" ;;
@@ -138,7 +143,13 @@ PY
   kill $srv 2>/dev/null || true; wait $srv 2>/dev/null || true
 
   [ "$rc" -ne 0 ] || { echo "hardened curl still succeeded: $out"; false; }
-  echo "$out" | grep -qi 'not supported or disabled'
+  # The WORDING drifts across curl releases and the assertion must not: 8.5.0 (the version this
+  # suite was authored against) says `Protocol "http" not supported or disabled in libcurl`, while
+  # 8.7.1 says `Protocol "http" disabled (in redirect)`. Grepping the 8.5.0 string verbatim can
+  # only produce a FALSE RED on a newer curl — measured 2026-09-07 on 8.7.1, where the pivot WAS
+  # refused (rc 1) and this line still failed. Match the invariant instead: the protocol, named,
+  # and the refusal verb in either spelling.
+  echo "$out" | grep -qiE 'protocol "?http"?.*(not supported|disabled)'
 }
 
 # ── the negative controls: an always-rewrite bug must go RED on every one of these ────────────────
