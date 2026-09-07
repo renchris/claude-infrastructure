@@ -69,10 +69,70 @@ the plan wins and the task list gets corrected — never the reverse.
 | `settings-templates/settings.example.json` | carries `PostToolUseFailure`; also already carried `SubagentStop`, which the live file had never picked up |
 | `hooks/file-changed.sh` + `tests/file-changed.bats` | **LANDED** (`fdd119751`) — handler + 21-test suite. NOT registered; see W3-B below |
 | `hooks/instructions-loaded.sh` + `tests/instructions-loaded.bats` | **LANDED** (`fdd119751`) — handler + 15-test suite. NOT registered; see W3-B below |
-| Everything else in § 3 | **measured, not yet adopted** — W1/W2 complete, W3 not started |
+| `hooks/stop-failure-marker.sh` + suite | **LANDED** (`53edbbcf3`, content-verified on trunk — W3-A). NOT registered: no settings file was touched, per § 4 |
+| `hooks/subagent-stop.sh` v1 → v2 + suite | **LANDED** (`53edbbcf3`, same commit, content-verified). Still registered NOWHERE — the script was already on disk and unwired before this |
+| Everything else in § 3 | **measured, not yet adopted** — W1/W2 complete, W3 in progress (**A** `StopFailure`/`SubagentStop` and **B** `FileChanged`/`InstructionsLoaded` landed; **C** `PostToolBatch` outstanding). Nothing from either wave is REGISTERED — that is one c10 migration the desk composes after all three land |
 
-**Net capability change so far: one repair.** Nothing else has been adopted — measurement is not
-adoption, and § 3's WIRE rows are still only recommendations. **W3 is the whole remaining value.**
+**Net capability change so far: one repair, plus FOUR handlers written and landed across W3-A and
+W3-B — every one of them NOT YET REGISTERED, and therefore inert.** § 3's other WIRE rows are still
+only recommendations. The gap between "landed" and "wired" is deliberate and is closed in exactly
+one place: the desk's c10 migration, composed once, after W3-C lands too.
+
+### W3-A — `StopFailure` + `SubagentStop` (landed `53edbbcf3`, 2026-09-06)
+
+**Both are scripts + tests only. Neither is registered, and that is the deliverable's shape, not an
+omission** (§ 4): one malformed entry silently disables all 90 registrations in `~/.claude/settings.json`
+with zero log output, so the desk composes ONE registration as a c10 migration after all three W3
+sessions land. Until it does, both handlers are inert — landed is not wired, and wired is not live.
+
+| | `StopFailure` → `hooks/stop-failure-marker.sh` (new) | `SubagentStop` → `hooks/subagent-stop.sh` (v1 → v2) |
+|---|---|---|
+| What it does | writes a MARKER keyed on the CAUSE — `error` × account — never on the session | indexes a subagent's report as a POINTER, never a copy |
+| The constraint it had to satisfy | ~30 sessions die together on one cap; a page-per-death is 30 pages for one fact | Stop-family: a blocking response extends the turn and increments the harness's block counter (cap 8) |
+| How it satisfies it | the collapse is done in the KEY, so N deaths write N lines into ONE file and the operator-visible fact is the file. Paging stays with the reader; the hook notifies nobody | writes NOTHING to stdout on any path, always exits 0 — pinned by test now, not by intent |
+
+**Three findings from doing the work, each of which changed the code:**
+
+1. **The v1 `SubagentStop` hook was quieter than it looked, and had been since it was written.** Its
+   header says the schema was undocumented — it was, then. W1 measured it, and v1's guessed chain for
+   the report body does not contain `last_assistant_message`, which is the real key. So `FINAL` was
+   **always** `""` and every pointer line it ever wrote recorded `final_chars:0`: a harvest index that
+   existed, ran, logged a plausible record, and pointed at nothing. This is the same shape as the
+   `log-bash.sh` defect W1 already fixed — a real-looking record whose payload-derived field is always
+   the default — which makes it a *class* in this repo, not a coincidence. `agent_id` was not read at
+   all, and it is the only field that tells two concurrent agents of the same `agent_type` apart.
+   Measured keys now lead each chain; v1's guesses stay behind them, so a future rename degrades to a
+   wrong-but-present label rather than to blank.
+2. **`wc -l < "$f" 2>/dev/null` does not suppress an absent file.** A failed input *redirection* is
+   reported by the shell before `wc` ever runs, so the first death of every cause printed to stderr —
+   on the death path, which is the one place a stray byte is least affordable. Caught by smoke-testing
+   the real payload, not by review.
+3. **The land gate caught a defect in this wave's own control, and the catch is the reusable part.**
+   The pre-fix control replayed `git show HEAD:hooks/subagent-stop.sh` — a MOVING ref, which becomes
+   the *fixed* file the moment the fix lands, so the control would have compared the fix to itself and
+   passed vacuously forever. `scripts/moving-ref-control-lint.sh` refused the land (exit 6) and named
+   both halves of the fix: pin a LITERAL sha (`8c591f8`, the commit that added v1 and an ancestor of
+   trunk), **and** assert a marker the fix introduced is ABSENT from the replay, since the pin alone
+   re-goes-vacuous if the sha is ever re-pointed. Markers used (`AGENT_ID`, `last_assistant_message`)
+   were derived from the two artifacts' measured diff — 0 occurrences pre, 4 post — not from the
+   post-fix file's own explanatory comments, which is the trap the lint's own message warns about.
+
+**Test discipline, so a later session can tell what these suites do and do not prove.** 27 cases, both
+suites hermetic (fixtured `$HOME`; `CLAUDE_CONFIG_DIR` unset, since on this box it points at a live
+account dir the subject reads to name the account). Payloads are verbatim 2.1.220 captures
+(`/tmp/hs/log/{stopfail,sub3}.tsv`) — a suite proving a script works on a payload nobody sends proves
+nothing about production. Each suite carries a control that can actually fail, and both were checked
+against an emptied subject: **12 and 9 cases go red**, so neither is vacuous.
+`CONTROL session_keyed_is_red` mutates the cause-key line to a session-keyed one and requires
+"30 deaths ⇒ 1 marker" to go RED (it produces 30); an ANCHOR case asserts that line still exists, so
+the control cannot rot into a comment. The collapse is proven under **real 30-way concurrency** — 1
+file, 30 lines, 0 bytes of stderr, every line parseable — which is why the marker is append-only
+rather than a counter the hook increments: a read-modify-write from 30 concurrent processes loses
+writes and needs a lock on the one path where a lock is least affordable.
+
+**What is NOT proven, stated rather than implied:** neither hook has run under a real dispatch, because
+neither is registered. Both suites test the handlers against captured payloads; the registration, and
+the first live fire, belong to the desk's c10 migration.
 
 ### W3-B — `FileChanged` + `InstructionsLoaded` handlers (2026-09-06)
 
