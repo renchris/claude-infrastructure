@@ -1154,8 +1154,31 @@ else:
     kt close-window --match "id:$SESSION" || exit 1
     ;;
 
-  focus)  [ -n "$SESSION" ] && kt focus-window --match "id:$SESSION" || exit 1 ;;
-  read)   [ -n "$SESSION" ] && kt get-text    --match "id:$SESSION" || exit 1 ;;
+  # ── A MISSING -s IS A USAGE ERROR, NOT AN UNREADABLE PANE (cc-backlog bd1086f74866) ──────────
+  # Both arms used to read `[ -n "$SESSION" ] && kt … || exit 1`, so omitting -s produced a bare
+  # rc 1 with NOTHING on stderr — byte-identical to the answer kitty gives for a pane that is gone
+  # or occluded. That collision is what the row measured: `it2 session read 330` (bare positional,
+  # which this shim has never accepted — every caller in the tree passes `-s`, e.g.
+  # hooks/composer-guard callers at it2-kitty-composer-guard.bats) was read as PROOF that the read
+  # PATH was broken, and the composer guards that fail closed on an unreadable pane were blamed for
+  # it. Measured 2026-09-07 on this box: `it2 session read -s 330` returns 563 bytes rc 0 and
+  # `-s 354` 818 bytes rc 0, while the bare-positional form exits 1 silently for every pane.
+  # So the read path was never the fault; an unsayable usage error was. Exit 64 is this file's
+  # existing usage code (see the `unsupported command` and `unsupported subcommand` arms), which
+  # keeps rc 1 meaning exactly one thing: kitty was asked and kitty could not answer.
+  focus|read)
+    if [ -z "$SESSION" ]; then
+      err "session $verb: no pane id. This shim takes it as a FLAG, never as a positional:"
+      err "  it2 session $verb -s <pane-id>     (got: ${ARGS[*]:-<nothing>})"
+      err "A bare rc 1 here would be indistinguishable from a pane that is genuinely unreadable,"
+      err "which is how cc-backlog bd1086f74866 came to blame the read path for a usage error."
+      exit 64
+    fi
+    case "$verb" in
+      focus) kt focus-window --match "id:$SESSION" || exit 1 ;;
+      read)  kt get-text     --match "id:$SESSION" || exit 1 ;;
+    esac
+    ;;
 
   *) err "unsupported subcommand: session $verb"; exit 64 ;;
 esac
