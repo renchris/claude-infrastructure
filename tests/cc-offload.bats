@@ -617,6 +617,45 @@ EOF
   [[ "$output" == *"close-integrity arm is NOT armed"* ]] || false   # … but it is never silent
 }
 
+@test "the API lane PREPENDS the boot contract, naming the branch the declare used" {
+  # backlog 4a0e50459ad5 / be2331814849. Until this, cmd_up_api delivered `$(cat "$pf")` and
+  # nothing else — no beacon and no push instruction of any kind — while the CLI lane carried one.
+  # CLOUD_OBSERVABILITY.md 4.1 is the sole basis on which C1 NOT-STARTED means "never booted", so
+  # a lane with no boot instruction makes C1 confidently wrong on a healthy session and re-fires
+  # it. The assertion is POSITIONAL, because "first act" is the entire property being bought.
+  #
+  # COUNT, never `grep -q`: under pipefail a matching -q SIGPIPEs its producer and the pipeline
+  # reports failure on the very input it matched.
+  _api_fixture
+  run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+
+  n_first="$(grep -c 'FIRST ACT' "$CALLS" || true)"
+  [ "${n_first:-0}" -ge 1 ] || { echo "the delivered payload carries no boot contract" >&2; false; }
+
+  # The branch NAMED in the contract must be the one the declaration keyed on — a contract that
+  # names a different branch is a beacon pointing at a ref nothing watches.
+  br="$(sed -n 's/.*cc-cloud declare .*--branch \([^ ]*\).*/\1/p' "$CALLS" | head -1)"
+  [ -n "$br" ] || { echo "no declared branch in the recorded calls" >&2; false; }
+  n_br="$(grep -c -- "git switch -c $br" "$CALLS" || true)"
+  [ "${n_br:-0}" -ge 1 ] || { echo "contract does not name the declared branch $br" >&2; false; }
+
+  # And it LEADS: the brief's own text must appear after the contract, not before it.
+  l_first="$(grep -n 'FIRST ACT' "$CALLS" | head -1 | cut -d: -f1)"
+  l_brief="$(grep -n '^brief$' "$CALLS" | head -1 | cut -d: -f1)"
+  [ -n "$l_brief" ] || { echo "the brief itself never reached cc-notify" >&2; false; }
+  [ "$l_first" -lt "$l_brief" ] || { echo "the contract does not precede the brief" >&2; false; }
+}
+
+@test "the delivery-failure hint re-sends the COMPOSED payload, never the bare brief" {
+  # A retry hint naming "$pf" would re-deliver the brief with no beacon — a printed command that
+  # reproduces the defect the block above closes.
+  _api_fixture
+  NOTIFY_RC=4 run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [[ "$output" == *"Retry just the delivery"* ]] || false
+  [[ "$output" == *cc-offload-payload* ]] || { echo "hint names the bare brief, not the payload" >&2; false; }
+}
+
 @test "up --via api --dry-run says WOULD, never created" {
   echo x >"$BATS_TEST_TMPDIR/t.txt"
   mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
