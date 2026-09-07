@@ -1396,3 +1396,112 @@ join -j1 <(cc-eligible sweep --json | jq -r '.eligible[].id' | sort) \
 
 Not a hunch about the predicate's precision (§A2b's closing parenthetical) and not a loosening —
 this is the one direction that class of change is allowed to go.
+
+## A9 · THE HARVEST WAS A 65-MINUTE UNIT INSIDE A 12-MINUTE ARM — the generator, named (2026-09-06, frontier session `cloud-drain-floor`)
+
+**Mandate (operator, verbatim):** *"check on our 24/7 cloud cc-backlog drain-to-zero pipeline … if it
+hasn't made meaningful improvements and true productivity towards drain to zero instead of about a
+flat churn … investigate and improve the productivity … research, investigate, resolve, and deploy live."*
+
+### A9.1 The claim, adjudicated — it fires and it does not harvest
+
+`cc-cloud list` at 2026-09-06T11:00Z, 682 declarations: **350 RETIRED · 23 never polled · 309 holding a
+pushed sha uncollected** (94 for 8 d, 41 for 11 d, 25 for 10 d, 22 for 12 d, 36 for 1 d). Fires per day
+from `declared_at`: 42-57 on 08-24→08-28, 10-36 since. Distinct backlog items the lane has ever closed:
+**37** (`return.jsonl`, `marked <id> done`). Returned sessions per day since 08-18: 0·0·0·0·0·1·0·5·0·…·7·1·16·3·1.
+The local lane, same store, same days: LIVE 617 → 491, claim→done 70.4%. **"Flat churn" is exactly right**,
+and it is not slowness: 211 of the 309 pushed branches already `git merge-tree` CONFLICT with trunk
+(93 clean, 5 zero-ahead), so two thirds of the pile is dead work wearing a live row.
+
+### A9.2 The mechanism, with its evidence
+
+| | file:line | what it does |
+|---|---|---|
+| M1 | `scripts/autonomy-sweep.sh:380` (pre-fix) · `scripts/cloud-return.sh:170` | the collector ran INSIDE the 300 s autonomy sweep under a 900 s bound (`_cloudret_bound`, "deliberately NOT raised to make lands fit — a longer bound makes it a worse neighbour"); the pass budgets 80% of that = **720 s** |
+| M2 | `~/.claude/land.log`, cloud branches since 09-01 | the unit that pass must complete is one `ship-land` gate: **36 of 40 attempted lands exit 143** (cut by that bound at `gate_s` 441-715); the 4 that completed ran **974 · 1,783 · 3,063 · 3,856 s**. Predecessor's foreground control on 09-06: one clean branch, utility band, **3,892 s** end to end (`abe57be1f e3987a675 f67a9089f 5cd095457`) |
+| M3 | `scripts/cloud-return.sh:669` (`fits_bound`) · `~/.claude/autonomy/cloud/.return.land_cost` = `3873` | one completed land priced the lane out: `land_reserve_s=3873 > budget_s=720 → fits_bound=false — "no tick can ever start it"` for the price's 6 h TTL. 09-06 ledger: **57 land-deferred · 0 land-refused · 1 returned** |
+| M4 | IDL `cloud-return` rows: 20/day (09-04, 09-05), gaps 3,259-15,318 s | the sweep WAITED on that pass, so its whole tick took ~60 min: every other block (pages, alarms, custody, config-parity) ran hourly; `cc-reaper.log` TERMed the sweep as `orphan-bash` 36-61×/day (08-25→09-03); `ps` PRI **4** (`ProcessType Background` = darwinbg task role, one-way floor, `migrations/0010`) |
+| M5 | `scripts/autonomy-sweep.sh:548` (pre-fix) | the retire pass — the only thing that settles dead rows — ran in the same tick under a **180 s** bound, `rc 124` on every tick since 09-05T02:29Z: **zero retirements for 24 h** over a pile that was 297/332 terminal; its summary went to `/dev/null` |
+| M6 | `bin/cc-dispatch:2096` | `CC_DISPATCH_CLOUD_PENDING_MAX=50` read the 332 and refused ALL cloud fires (7,196 `cloud-pending-cap` rows since 09-03; 0 fires 09-05/06) — correct backpressure, on a pile the harvester could not reduce: **both halves stalled** |
+| M7 | `.decl` census: `notify_back=5` on 368 of 380; `cc-roles/desk` read `5` from 08-25 until 09-05 | the wake went to a pane gone since August (954 of 1,012 refusal rows: "no notify-back target"; 27 + 21: `no-such-target target=5/10`); rc 3 collapsed to rc 1 ⇒ never latched ⇒ 41 sessions re-returned every pass (one 18×) |
+| M8 | `bin/cc-cloud:990` (pre-fix) — `.retired` held only `retired_at` | 350 RETIRED and not one could say harvested (`landed`) vs abandoned (`gone`/`superseded`/`conflict`) — the ledger structurally could not tell the two apart |
+
+**Why THIS mechanism survived five competent fixes.** §6 chose the sweep as the collector's host for a
+true reason — *"the poller cannot be the originator"* (a goal-armed session may hold no watcher) and the
+sweep was the only periodic non-session actor — and then every later session accepted the locus and
+tuned inside it: bound 240→900 (08-11), reorder-first (09-01), `--limit` + cursor (09-01), inventory
+scoping (09-03), cost pacing (09-03), cut-floor cap (09-04). The code names the remedy and declines it
+(`cloud-return.sh:662-666`: *"move the land off the sweep tick, which the caller deliberately declines
+to do"*). What selected for it: the harvester's cost was measured on a quiet box (p50 194 s) and the
+bound was sized to that bench, while the unit runs in the darwinbg band on a box at load 100-160 with
+postland-verify's full corpus alongside (memory: bound-must-fit-the-band-not-the-bench). The same shape
+sat beside it three times: the retire pass (180 s, M5), the refusal router (180 s, `Killed: 9` in
+`autonomy-sweep.err.log`), the pruner (rc 2 since the shared checkout went `core.bare=true`).
+
+**The consequence chain is the generator.** Harvest latency (days) ≫ trunk churn (395 commits in 10 d,
+40-80/day) ⇒ branches conflict before collection (0-2 d: 26/58 already conflict; 3-5 d: 20/22;
+6-9 d: 89/109) ⇒ dead work ⇒ the item is re-fired (17 ids own 379 declarations; one id 37 fires) ⇒ a
+new VM redoes it ⇒ waits days ⇒ conflicts. Filing-equivalent: every fire is a *declaration*, and a
+declaration had no completion obligation any actor could feel — custody was opened against the
+dispatcher's cwd `/` (466 open cloud debts, no reader), and the wake against a dead pane.
+
+### A9.3 What landed (this session)
+
+- **`scripts/cloud-return-lane.sh` — NEW: the cloud lane's own tick.** Return pass under
+  `CC_LANE_RETURN_BOUND_S` (**5,400 s** = worst completed land × 1.4), then retire pass under
+  `CC_LANE_RETIRE_BOUND_S` (900 s); single-flight lane lock (pid + TTL, dead-holder reap); reaps the
+  return pass's stranded lock on 137/143; journals its own `cloud-return` / `cloud-retire` IDL rows
+  (`tool: cloud-return-lane`) with rc, `elapsed_s`, `load1`, and the retire pass's census line
+  (previously `/dev/null`). Whitelisted by `cc-reaper` by name (`cloud-return` in argv).
+- **`scripts/autonomy-sweep.sh` §0a** — spawns the lane DETACHED in a **new session**
+  (`/usr/bin/perl POSIX::setsid`, because launchd kills a job's leftover process group), fds closed,
+  waits ≤20 s grace, journals `detached` only if the lane outlives the grace; the retire invocation
+  is removed from the tick (its row reads `lane`). The sweep no longer waits on any land, so its own
+  cadence returns toward the 300 s it was declared at.
+- **`bin/cc-cloud`** — the rescued one-`ls-remote`-per-verb snapshot, with its bug fixed:
+  `rc="$(snap_take …)"` ran in a subshell and lost `SNAP_FILE`, so EVERY branch read no-ref (11 red
+  cases; memory: assignment-inside-command-substitution-never-escapes). `retire --verdict <word>`
+  writes `verdict=` into the marker; `list` renders `RETIRED (<verdict>)` / `retired_verdict`.
+- **`scripts/cloud-retire-terminal.sh`** — the rescued `superseded` (item folds to `done`; one
+  `cc-backlog list --all --json` per pass, fail-OPEN) and `conflict` (`git merge-tree --write-tree`)
+  verdicts, custody settled (`landed` returns it, the rest abandon it), verdict written to the marker.
+  Measured dry-run from this checkout, foreground, **39 s**: `examined=332 gone=23 landed=9
+  superseded=141 conflict=124 kept=35` — **the collectable pile is 35 branches**, not 332.
+- **`scripts/cloud-return.sh`** — rescued: superseded short-circuit, merge-tree precheck before the
+  lander (rc 5 costs a second, not minutes), rc 3 latches as no-target. New: the wake **falls back to
+  `--role desk`** when the stamped pane is unresolvable (resolved at SEND time, so the desk of the day
+  is reached), and a target spelled `role:<name>` goes straight to `--role`.
+- **`scripts/cloud-refusal-route.sh`** — rescued: rc 3 latches; artifacts of retired/returned
+  declarations are skipped (41 of 76 were).
+- **Tests** — `tests/cloud-return-lane.bats` (7, new) · `cloud-retire-terminal` +4 · `cloud-return`
+  +6 · `cc-cloud` +1 · `autonomy-sweep` 2 cases rewritten to the detached contract. All green with
+  the pre-existing corpus (cc-cloud 43 · retire 13 · return 63 · lane 7).
+
+**Deliberately NOT done here, and why.** The darwinbg task role on the sweep's plist is the ×30-80
+tax on every cloud land (`bin/cc-bats` header: `-c background` is an ~84-89× tax on a long batch job;
+`ps` PRI 4 on the live sweep). The lane inherits it. The only lift is the plist — drop `ProcessType
+Background`, exec via `taskpolicy -c utility` — which `migrations/README.md` classes **c10**
+(bootout + bootstrap of a live job is the operator's). It is landed as SSOT + migration `0016` in the
+next commit; until the operator runs it, the lane lands at PRI 4 and one land takes ~1 h, which the
+5,400 s bound now fits. A c10 filed by the converger is the mechanism's own registration, not this
+session discharging a finding.
+
+### A9.4 Measurement (baseline 2026-09-06T11:00Z, pre-land — the next session compares against THESE)
+
+| figure | today | reads it back |
+|---|---|---|
+| declarations holding a sha uncollected / never polled / RETIRED | **309 / 23 / 350** of 682 | `cc-cloud list \| grep -cE '[0-9a-f]{7} for'` · `grep -c 'never polled$'` · `grep -c 'RETIRED'` |
+| RETIRED **with a verdict** | **0** | `grep -l '^verdict=' ~/.claude/autonomy/cloud/*.retired \| wc -l` |
+| pending managed (the pile the cap reads) | **328** (`pass-scope.pending_total`) | `jq -c 'select(.outcome=="pass-scope")' ~/.claude/autonomy/cloud/return.jsonl \| tail -1` |
+| cloud fires admitted / refused by the pile cap (last 24 h) | **0 / 7,196 rows since 09-03** | `grep -c cloud-pending-cap ~/.claude/autonomy/idl.jsonl` |
+| lands attempted → completed (cloud branches, land.log since 09-01) | **91 → 4** (36 cut, 38 conflict) | `jq -r 'select(.branch\|startswith("claude/")) \| .exit' ~/.claude/land.log \| sort \| uniq -c` |
+| `cloud-return` IDL rows per day (sweep ticks that reached the pass) | **20** | `jq -r 'select(.disposition=="cloud-return") \| .ts[0:10]' ~/.claude/autonomy/idl.jsonl \| uniq -c` |
+| lane rows (`tool: cloud-return-lane`) | **0** (did not exist) | `jq -c 'select(.tool=="cloud-return-lane")' ~/.claude/autonomy/idl.jsonl \| tail -3` |
+| distinct items closed by the lane, all-time | **37** | `jq -r 'select(.outcome=="returned")\|.backlog' return.jsonl \| grep -oE 'marked [0-9a-f]{12}' \| sort -u \| wc -l` |
+| wake delivered to a live target (returned rows, last 7 d) | **0 of 21** | `jq -r 'select(.outcome=="returned")\|.wake' return.jsonl \| grep -c delivered` |
+
+**Movement, not noise, looks like:** `retired_verdict` non-empty on the 297 terminal rows within one
+lane tick; `pending_total` 328 → ~35; the pile cap opening (`fired ≥ 1` in a `cc-dispatch summary`
+row); lane `cloud-return` rows with `cloud_return_rc: "0"` and `elapsed_s` 1,000-4,000 rather than
+137/900; `returned` rows carrying `wake: … --role desk … delivered`; and `land.log` cloud exits
+shifting from 143 to 0.

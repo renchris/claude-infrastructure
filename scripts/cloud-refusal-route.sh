@@ -323,6 +323,12 @@ send_home() { # <notify-back> <message> → 0 sent · 1 not · 3 no target
   [ -n "$NOTIFY_BIN" ] || { SEND_DETAIL="cc-notify not found on this box"; return 1; }
   out="$("$NOTIFY_BIN" "$target" "$msg" 2>&1)"; rc=$?
   SEND_DETAIL="$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-240)"
+  # cc-notify rc 3 = `verdict=unresolvable`: the registry is readable and holds no such session. That
+  # is the "no target" fact, not a transient — a pane that is gone does not come back by asking on
+  # the next tick. Collapsing it into rc 1 left every originator-bound refusal UNRECORDED and re-sent
+  # every pass: 150 `routed-originator` rows in two days (2026-09-04/05), all to `target=5`, the
+  # single stale byte in ~/.claude/cc-roles/desk. Same repair as cloud-return's `wake()`.
+  [ "$rc" -eq 3 ] && return 3
   [ "$rc" -eq 0 ] || return 1
   return 0
 }
@@ -612,9 +618,13 @@ fi
 N=0
 for F in "$STATE"/*.land-refused; do
   [ -f "$F" ] || continue
-  B="${F##*/}"
+  B="${F##*/}"; SID="${B%.land-refused}"
+  # A refusal on a declaration the store has already answered (retired by the retire pass, or
+  # returned) is moot: there is no VM to route to and no originator waiting. 41 of 76 artifacts on
+  # this box were in that state 2026-09-05, each costing a classify + a send attempt per tick.
+  if [ -f "$STATE/$SID.retired" ] || [ -f "$STATE/$SID.returned" ]; then continue; fi
   N=$((N + 1))
-  handle "${B%.land-refused}"
+  handle "$SID"
 done
 if [ "$N" -eq 0 ]; then say "(no refusal artifacts — nothing to route)"; fi
 say "cloud-refusal-route: $N refusal artifact(s) examined."

@@ -1261,3 +1261,107 @@ land_cost_of() { # <file> → the seconds field of a cost sidecar
   [[ "$output" == *"1 managed session(s) examined"* ]] || false
   [[ "$output" == *"stopped starting new work"* ]] || false
 }
+
+# ── the pile was 49 items wearing 332 rows (2026-09-05/06) ────────────────────────────────────────
+backlog_says() { # <json array of {id,status}> — the ONE read per pass the superseded arm consumes
+  printf '#!/bin/bash\necho "cc-backlog $*" >>"%s"\nprintf %%s %q\n' "$CALLS" "$1" >"$STUBDIR/cc-backlog"
+  chmod +x "$STUBDIR/cc-backlog"
+}
+
+@test "SUPERSEDED: a session whose backlog item is already DONE is never landed — declaration retired with the verdict, custody abandoned, branch untouched" {
+  declare_managed --item abcdef012345
+  seen_at 1000
+  backlog_says '[{"id":"abcdef012345","status":"done"}]'
+  run bash "$SUT" --sweep
+  [ "$status" -eq 0 ]
+  ! grep -q '^reconcile' "$CALLS" || false
+  grep -q 'cc-custody abandon session_test' "$CALLS"
+  [ "$(grep -c 'cc-backlog list --all --json' "$CALLS")" -eq 1 ]
+  grep -q '^outcome=superseded$' "$CC_CLOUD_STATE/session_test.returned"
+  grep -q '^verdict=superseded$' "$CC_CLOUD_STATE/session_test.retired"
+  jq -e 'select(.outcome=="superseded" and .item=="abcdef012345")' "$CC_CLOUD_STATE/return.jsonl" | grep -q .
+  git -C "$WORK" ls-remote --heads "$REMOTE" claude/vm | grep -q claude/vm
+}
+
+@test "SUPERSEDED fails OPEN: an unreadable backlog store lands the branch exactly as before" {
+  declare_managed --item abcdef012345
+  seen_at 1000
+  export CC_RETURN_BACKLOG_BIN="$STUBDIR/does-not-exist"
+  run bash "$SUT" --sweep
+  [ "$status" -eq 0 ]
+  grep -q '^reconcile' "$CALLS"
+  [ ! -f "$CC_CLOUD_STATE/session_test.retired" ]
+}
+
+@test "LAND-CONFLICT: a branch that cannot rebase onto the trunk is not handed to the lander — no artifact, no wake, no latch" {
+  git -C "$WORK" merge-tree --write-tree trunkref trunkref >/dev/null 2>&1 || skip "git merge-tree --write-tree needs git >= 2.38"
+  declare_managed
+  seen_at 1000
+  # trunk moves the same file the VM wrote, differently
+  git -C "$WORK" checkout -q trunkref
+  mkdir -p "$WORK/docs" && printf 'from the trunk\n' >"$WORK/docs/vm.md"
+  git -C "$WORK" add -A && git -C "$WORK" -c user.email=t@t -c user.name=t commit -q -m "trunk edits vm.md"
+  git -C "$WORK" checkout -q "$SEED" 2>/dev/null || git -C "$WORK" checkout -q --detach "$SEED"
+  run bash "$SUT" --sweep
+  [ "$status" -eq 0 ]
+  ! grep -q '^reconcile' "$CALLS" || false
+  ! grep -q '^cc-notify' "$CALLS" || false
+  [ ! -f "$CC_CLOUD_STATE/session_test.land-refused" ]
+  [ ! -f "$CC_CLOUD_STATE/session_test.returned" ]
+  jq -e 'select(.outcome=="land-conflict" and .branch=="claude/vm")' "$CC_CLOUD_STATE/return.jsonl" | grep -q .
+  # the precheck fetched into its PRIVATE namespace, never a tracking ref
+  git -C "$WORK" rev-parse --verify --quiet refs/cc-cloud/precheck/claude/vm >/dev/null
+}
+
+@test "the wake falls back to the DESK ROLE when the stamped pane is unresolvable, and a role target is sent as --role" {
+  # 368 of 380 stamped notify_back values on the live box were the single byte `5` — a pane gone
+  # since August — while cc-notify could resolve `--role desk` at send time the whole while.
+  cat >"$STUBDIR/cc-notify" <<'EOF'
+echo "cc-notify $*" >>"$CALLS"
+case "$1" in --role) echo "wake-path armed" >&2; exit 0 ;; esac
+echo "cc-notify: verdict=unresolvable enqueued=0 uuid= reason=no-such-target target=$1" >&2; exit 3
+EOF
+  chmod +x "$STUBDIR/cc-notify"
+  declare_managed --notify-back 5
+  seen_at 1000
+  run bash "$SUT" --sweep
+  [ "$status" -eq 0 ]
+  grep -q '^cc-notify 5 ' "$CALLS"
+  grep -q '^cc-notify --role desk ' "$CALLS"
+  # the fallback DELIVERED, so the round trip latches
+  grep -q '^outcome=returned$' "$CC_CLOUD_STATE/session_test.returned"
+  jq -e 'select(.outcome=="returned") | .wake | test("retried as --role desk")' "$CC_CLOUD_STATE/return.jsonl" | grep -q .
+
+}
+
+@test "a target spelled role:<name> is sent as --role <name>, with no pane attempt at all" {
+  # re-declaring the same session would read BOOTING (the branch pre-exists at fire time and
+  # progress is a move OFF that sha), so this is its own round trip.
+  cat >"$STUBDIR/cc-notify" <<'EOF'
+echo "cc-notify $*" >>"$CALLS"
+case "$1" in --role) echo "wake-path armed" >&2; exit 0 ;; esac
+exit 3
+EOF
+  chmod +x "$STUBDIR/cc-notify"
+  declare_managed --notify-back role:desk
+  seen_at 1000
+  run bash "$SUT" --sweep
+  [ "$status" -eq 0 ]
+  grep -q '^cc-notify --role desk ' "$CALLS"
+  ! grep -q '^cc-notify role:desk' "$CALLS" || false
+  grep -q '^outcome=returned$' "$CC_CLOUD_STATE/session_test.returned"
+}
+
+@test "the wake fallback is bounded: an unresolvable pane with the fallback DISABLED latches no-target exactly as before" {
+  cat >"$STUBDIR/cc-notify" <<'EOF'
+echo "cc-notify $*" >>"$CALLS"
+exit 3
+EOF
+  chmod +x "$STUBDIR/cc-notify"
+  declare_managed --notify-back 5
+  seen_at 1000
+  CC_RETURN_WAKE_ROLE='' run bash "$SUT" --sweep
+  [ "$(grep -c '^cc-notify' "$CALLS")" -eq 1 ]
+  grep -q '^outcome=returned$' "$CC_CLOUD_STATE/session_test.returned"
+  grep -q 'note=no-target' "$CC_CLOUD_STATE/session_test.woken"
+}

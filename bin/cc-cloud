@@ -414,9 +414,65 @@ ids_for_branch() { # <branch> → echoes every declaration id naming it, rc 0; r
 NET_BOUND=""
 if command -v timeout >/dev/null 2>&1; then NET_BOUND="timeout"
 elif command -v gtimeout >/dev/null 2>&1; then NET_BOUND="gtimeout"; fi
+
+# ── ONE `ls-remote` PER VERB, NOT ONE PER DECLARATION ────────────────────────────────────────────
+# `poll` and `list --state` each asked the remote once PER branch, and each ask is bounded at
+# NET_TIMEOUT (20 s). That is a fixed cost of O(2 × working set × 20 s) under starvation — and the
+# caller that matters, `scripts/cloud-return.sh --sweep`, runs in the autonomy sweep's launchd job,
+# which is `ProcessType Background`: Darwin's darwinbg task role, PRI 4, E-core confined, on a box
+# measured at load 115-143 on 10 cores (2026-09-05). Measured that day: a 25-session pass wrote its
+# `pass-scope` row at 01:34:28 and was SIGKILLed at 01:48:50 having handled ZERO sessions — the
+# 50 per-branch probes had not finished inside the pass's whole 900 s bound. The same 50 probes
+# from a foreground shell cost 0.4 s each; in the band they run in, each was hitting its own 20 s
+# ceiling. Five of six return passes that day died the same way (`cloud_return_rc` 137 ×5, 0 ×1).
+#
+# `git ls-remote --heads <remote>` with NO refspec returns every head in ONE round trip — 425 heads
+# in 0.36 s measured — and it is the very call `preflight` and `scripts/cloud-retire-terminal.sh`
+# already make. So a verb takes ONE snapshot per (repo, remote) pair and answers every branch out
+# of it. The per-branch semantics are preserved exactly: snapshot rc≠0 ⇒ rc 2 for every branch
+# (SENSOR FAILED, never absence); snapshot rc 0 and the branch absent from it ⇒ rc 0 + empty
+# (absent), the same two answers the per-branch probe gave. A snapshot lives for ONE verb — the
+# dispatcher opens it and closes it — so `--selftest`, which drives verbs in-process across pushes
+# to the same fixture remote, and `declare`'s fire-time baseline probe, never read a stale head.
+# CC_CLOUD_SNAPSHOT=0 restores the per-branch probe (the control, and the escape hatch).
+SNAP_DIR=""
+snap_begin() {
+  [ "${CC_CLOUD_SNAPSHOT:-1}" = 0 ] && return 0
+  SNAP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/cc-cloud-snap.XXXXXX" 2>/dev/null)" || SNAP_DIR=""
+}
+snap_end() { [ -n "$SNAP_DIR" ] && rm -rf "$SNAP_DIR" 2>/dev/null; SNAP_DIR=""; return 0; }
+snap_key() { printf '%s|%s' "$1" "$2" | cksum | cut -d' ' -f1; }   # BSD + GNU, bash 3.2-safe
+# Fills the snapshot for one (repo, remote) if not yet taken. Sets TWO globals — SNAP_FILE and
+# SNAP_RC — and prints NOTHING, so it can be called directly. 🚨 It must never be called inside a
+# command substitution: `rc="$(snap_take …)"` forks a subshell, every global it sets dies there, and
+# the caller reads a stale SNAP_FILE — which is exactly how the first cut of this read EVERY branch as
+# no-ref (11 red cases in tests/cc-cloud.bats; memory: assignment-inside-command-substitution-never-escapes).
+snap_take() { # <repo-or-empty> <remote> → sets SNAP_FILE + SNAP_RC
+  local repo="$1" remote="$2" key
+  local -a cmd=()
+  key="$(snap_key "$repo" "$remote")"; SNAP_FILE="$SNAP_DIR/$key"
+  if [ ! -f "$SNAP_FILE.rc" ]; then
+    [ -n "$NET_BOUND" ] && cmd=("$NET_BOUND" "$NET_TIMEOUT")
+    if [ -n "$repo" ] && [ -d "$repo" ]; then cmd+=("$GIT_BIN" -C "$repo" ls-remote --heads "$remote")
+    else cmd+=("$GIT_BIN" ls-remote --heads "$remote"); fi
+    GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/usr/bin/true "${cmd[@]}" >"$SNAP_FILE" 2>/dev/null; SNAP_RC=$?
+    printf '%s\n' "$SNAP_RC" >"$SNAP_FILE.rc"
+  else
+    SNAP_RC="$(cat "$SNAP_FILE.rc" 2>/dev/null)"; case "$SNAP_RC" in ''|*[!0-9]*) SNAP_RC=1 ;; esac
+  fi
+  return 0
+}
+SNAP_FILE=""; SNAP_RC=1
 remote_sha() { # <repo-path-or-empty> <remote> <branch>
   local repo="$1" remote="$2" branch="$3" out rc
   local -a cmd=()
+  if [ -n "$SNAP_DIR" ]; then
+    snap_take "$repo" "$remote"
+    [ "$SNAP_RC" = 0 ] || return 2
+    out="$(awk -v r="refs/heads/$branch" '$2 == r { print $1; exit }' "$SNAP_FILE" 2>/dev/null)"
+    printf '%s' "$out"
+    return 0
+  fi
   [ -n "$NET_BOUND" ] && cmd=("$NET_BOUND" "$NET_TIMEOUT")
   if [ -n "$repo" ] && [ -d "$repo" ]; then
     cmd+=("$GIT_BIN" -C "$repo" ls-remote --heads "$remote" "refs/heads/$branch")
@@ -633,6 +689,7 @@ EOF
 # in 2.1.220 (default on, emitted for web and Remote Control sessions) and does NOT exist in the
 # pinned 2.1.114. A design that hardcoded "the trailer is available" would be wrong on the very
 # binary the launcher runs.
+# shellcheck disable=SC2329  # version-gated probe kept for the trailer arm (header, "VERSION-GATED"); not yet wired
 trailer_supported() { # <claude-binary> → 0 yes, 1 no, 2 cannot tell
   local bin="${1:-}"
   [ -n "$bin" ] && [ -f "$bin" ] || return 2
@@ -927,18 +984,30 @@ cmd_declare() {
   fi
 }
 
+# `--verdict <word>` records WHY the declaration is terminal. Without it the marker held only
+# `retired_at`, so the ledger could not tell HARVESTED from ABANDONED: measured 2026-09-06, 350 of
+# 682 declarations read `RETIRED` and not one said whether its work reached trunk (`landed`), was
+# never pushed (`gone`), was closed by a sibling (`superseded`) or could not rebase (`conflict`).
+# A verdict is one word, no whitespace, so the marker stays one key per line. Optional — a bare
+# `retire --id` still works — and it is never an ORDER: what is retired is decided by the caller.
 cmd_retire() {
-  local id=""
+  local id="" verdict=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --id) id="${2:-}"; shift 2 ;;
+      --verdict) verdict="${2:-}"; shift 2 ;;
+      --verdict=*) verdict="${1#--verdict=}"; shift ;;
       *) echo "cc-cloud retire: unknown arg $1" >&2; return 2 ;;
     esac
   done
   [ -n "$id" ] || { echo "cc-cloud retire: --id is required" >&2; return 2; }
+  case "$verdict" in *[[:space:]]*) echo "cc-cloud retire: --verdict is one word (no whitespace)" >&2; return 2 ;; esac
   [ -f "$STATE/$id.decl" ] || { echo "cc-cloud retire: no such declaration: $id" >&2; return 1; }
-  printf 'retired_at=%s\n' "$(now)" > "$STATE/$id.retired" || return 1
-  printf 'retired %s\n' "$id"
+  # `[ -z … ] ||`, not `[ -n … ] &&`: the group's status is its LAST command's, and a false
+  # `-n` on a bare retire would have turned a correct write into `return 1` (caught by the suite).
+  { printf 'retired_at=%s\n' "$(now)"
+    [ -z "$verdict" ] || printf 'verdict=%s\n' "$verdict"; } > "$STATE/$id.retired" || return 1
+  printf 'retired %s%s\n' "$id" "${verdict:+ ($verdict)}"
 }
 
 # The ONLY mutator of the heartbeat sidecar. A stall verdict needs history and history needs a
@@ -1200,7 +1269,7 @@ cmd_list() {
   local D_repo='' D_trunk='' S_sha='' S_since=''
   local E_id='' E_branch='' E_remote='' E_item='' E_dat='' E_account='' E_paths='' E_nb=''
   local E_goal='' E_gp='' E_cust='' E_itemid='' E_repo='' E_trunk='' E_base='' E_lsha=''
-  local E_lsince='' E_url='' E_state='' E_detail='' E_rcmd='' E_ret=''
+  local E_lsince='' E_url='' E_state='' E_detail='' E_rcmd='' E_ret='' E_rv=''
   ONLY_SET=""
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1275,10 +1344,14 @@ cmd_list() {
           "$E_state" "$E_detail" "$E_rcmd"
       fi
       if [ -f "$STATE/$id.retired" ]; then E_ret=true; else E_ret=false; fi
-      printf '"retired":%s}\n' "$E_ret"
+      # The verdict rides the projection too (empty when the marker predates it), so a reader can
+      # fold harvested-vs-abandoned without opening the marker itself.
+      jesc_v E_rv "$(dfield "$STATE/$id.retired" verdict)"
+      printf '"retired":%s,"retired_verdict":"%s"}\n' "$E_ret" "$E_rv"
     else
-      local obs
-      if [ -f "$STATE/$id.retired" ]; then obs="RETIRED"
+      local obs rv
+      if [ -f "$STATE/$id.retired" ]; then
+        rv="$(dfield "$STATE/$id.retired" verdict)"; obs="RETIRED${rv:+ ($rv)}"
       elif [ -n "$lsha" ] && is_num "$lsince"; then obs="$(printf '%.7s for %s' "$lsha" "$(dur $((n - lsince)))")"
       elif [ "$bprobe" = ok ] && [ -n "$base" ]; then obs="$(printf 'never polled (pre-fire %.7s)' "$base")"
       else obs="never polled"; fi
@@ -1477,11 +1550,11 @@ case "${1:-}" in
   declare)    shift; cmd_declare "$@"; exit $? ;;
   fill-paths) shift; cmd_fill_paths "$@"; exit $? ;;
   retire)     shift; cmd_retire "$@"; exit $? ;;
-  poll)       shift; cmd_poll "$@"; exit $? ;;
+  poll)       shift; snap_begin; cmd_poll "$@"; _rc=$?; snap_end; exit $_rc ;;
   gc)         shift; cmd_gc "$@"; exit $? ;;
   is-offbox)  shift; cmd_is_offbox "${1:-}"; exit $? ;;
   show)       shift; cmd_show "$@"; exit $? ;;
-  list)       shift; cmd_list "$@"; exit $? ;;
+  list)       shift; snap_begin; cmd_list "$@"; _rc=$?; snap_end; exit $_rc ;;
   # inbox — the lane's RETURN channel: what the cloud sessions have been ASKING.
   #
   # Every state this tool otherwise reports is derived from the git ref, which answers "did the VM
@@ -1515,8 +1588,11 @@ if [ "$RECONCILE" = "off" ]; then
   exit 0
 fi
 
+snap_begin
 case "$1" in
-  --json)  emit_rows ;;
-  --table) emit_table ;;
-  --check) do_check; exit $? ;;
+  --json)  emit_rows; _rc=$? ;;
+  --table) emit_table; _rc=$? ;;
+  --check) do_check; _rc=$? ;;
 esac
+snap_end
+exit "${_rc:-0}"

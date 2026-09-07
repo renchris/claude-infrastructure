@@ -366,19 +366,10 @@ _bounded() {
 # follow the deployed symlink back into the checkout and erase the only difference there is.
 # A skipped call is LOGGED with its reason, never silent: "not the deployed copy" and "the tool is
 # absent" are different facts, and neither is "the fleet is quiet".
-_cloudret="$_SWEEP_DIR/cloud-return.sh"
 _cloudret_rc="skipped"
-# Empty, never 0, on every not-run path: an absent measurement and "ran instantly on an idle box"
-# must not render as the same bytes (DRAIN_CIRCUIT_2026-09-01.md 3h).
-_cloudret_took=""
-_cloudret_load=""
-# THE ONE PLACE THIS NUMBER LIVES. It bounds the `timeout` below AND is exported to the child so it
-# can pace itself against the same figure; the child derives its single-flight lock TTL from it too.
-# It is deliberately NOT raised to make lands fit — this pass shares a 300 s launchd tick with the
-# rest of the sweep, so a longer bound makes it a worse neighbour. The repair is the child stopping
-# in time, not the caller waiting longer.
-_cloudret_bound="${CC_SWEEP_RETURN_BOUND_S:-900}"
-case "$_cloudret_bound" in ''|*[!0-9]*) _cloudret_bound=900 ;; esac
+# The bound this block used to own (CC_SWEEP_RETURN_BOUND_S, 900 s, "deliberately NOT raised to
+# make lands fit") is gone with the pass it bounded: the lane sizes its own (CC_LANE_RETURN_BOUND_S)
+# to the unit, which is the whole point of the move — see the block below.
 _cc_cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; _cc_cfg="${_cc_cfg%/}"
 # 🚨 EXACT PATH, NOT A PREFIX — and the prefix form was defeated by the very harness it was written
 # to exclude. Caught in the act 2026-08-17T07:56Z:
@@ -400,53 +391,58 @@ _cc_cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; _cc_cfg="${_cc_cfg%/}"
 # difference there is.
 _cloudret_deployed=0
 [ "$0" = "$_cc_cfg/scripts/autonomy-sweep.sh" ] && _cloudret_deployed=1
+# 🚨 THE LAND LEFT THIS TICK (2026-09-06). This block used to RUN cloud-return.sh here, under a
+# 900 s bound it deliberately would not raise, and wait for it. The unit that pass must complete —
+# one `ship-land` gate — costs 700-3,900 s on this box, so the bound CUT 36 of 40 attempted cloud
+# lands since 09-01 (land.log exit 143), one completed land priced every later pass out of landing
+# for 6 h (`fits_bound=false`), and this sweep's own tick stretched to ~60 min waiting, so every
+# block below ran hourly and cc-reaper TERMed the sweep as orphan-bash at ≥600 s. The return pass
+# and the retire pass now live in scripts/cloud-return-lane.sh — the cloud lane's OWN tick, with a
+# bound sized to its unit — and this block only SPAWNS it, DETACHED, and records that it did.
+#
+# DETACHED MEANS A NEW SESSION, not `&`. launchd kills whatever is left in a job's process group
+# when the job exits (AbandonProcessGroup defaults to false), so a backgrounded child would die
+# with this sweep a few minutes later — a 5,400 s land could never finish. perl's POSIX::setsid
+# puts the lane in its own session and group; /usr/bin/perl ships with macOS, and a box without
+# it journals `skipped-no-detach` rather than spawning a lane that would be killed. Every fd is
+# redirected (stdin from /dev/null, out+err to the lane's log) so the launchd job's own pipes close
+# with the job (the hooks' bg-fd-inherit class, same mechanism). cc-reaper exempts the lane by
+# argv (`cloud-return` is on its whitelist), and the lane is single-flight by its own lock.
+#
+# THE ROW CONTRACT. The lane journals its own `cloud-return` / `cloud-retire` rows (tool:
+# cloud-return-lane) with rc, elapsed_s and load1 — the fields this block's row used to carry.
+# This block journals a row ONLY when the lane is still running after the grace window
+# (`cloud_return_rc: detached`, fields null — the lane will write the real ones) or when it was
+# not spawned at all (`skipped*`, fields null). A lane that finished inside the grace has already
+# written the tick's row, and a second row here would be the same fact from a blinder observer.
+# Grace is short (CC_SWEEP_LANE_GRACE_S, 20 s): long enough for a quiet store or a stubbed suite
+# to finish inline, far too short to stall this tick on a real land.
+_lane="$_SWEEP_DIR/cloud-return-lane.sh"
+_lane_pid=""
 if [ "$_cloudret_deployed" != 1 ]; then
   _cloudret_rc="skipped-not-deployed"
-elif [ -x "$_cloudret" ]; then
-  # 🚨 THE BOUND IS A VALUE THIS CALLER OWNS, AND THE CHILD IS TOLD IT.
-  # `--limit` is a COUNT; this `timeout` is a DEADLINE. W3 landed the count, it went live, and the
-  # pass was STILL SIGKILLed on every tick afterwards (`cloud_return_rc`: 137 at 02:40, 03:17,
-  # 04:12, 05:11 and 05:51 on 2026-09-02) — because no count reconciles with a deadline when one
-  # taken session can fall through to a full `ship-land` gate measured in minutes. The child now
-  # enforces the deadline itself, stopping before it STARTS a unit it cannot afford, which needs it
-  # to know the number. Exporting it is the whole point: hardcoding 900 on both sides would put one
-  # fact in two places that cannot check each other, and the first change to this bound would leave
-  # the child confidently pacing against a budget nobody applies any more.
-  # The UNBOUNDED arm exports NOTHING. No `timeout` means no deadline, and a child pacing itself
-  # against a killer that does not exist would defer real work for no reason.
-  _cloudret_t0="$(date +%s)"
-  if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then
-    CC_RETURN_BOUND_S="$_cloudret_bound" "$_tmo" -k 10 "$_cloudret_bound" bash "$_cloudret" --sweep --limit "${CC_SWEEP_RETURN_LIMIT:-25}" >/dev/null 2>&1
-  else bash "$_cloudret" --sweep --limit "${CC_SWEEP_RETURN_LIMIT:-25}" >/dev/null 2>&1; fi
-  _cloudret_rc=$?
-  _cloudret_took=$(( $(date +%s) - _cloudret_t0 ))
-  # 1-min load, bare. `sysctl -n vm.loadavg` prints "{ 8.06 9.02 10.45 }". Read AFTER the pass so
-  # it describes the box the pass actually ran on. FAILS TO EMPTY, never to 0 — an unreadable load
-  # is unmeasured, and a 0 would read as a quiet box, which is precisely the reading this field
-  # exists to make impossible: an rc=0 on a quiet box and an rc=0 under load are different claims
-  # and the row could not previously tell them apart.
-  _cloudret_load="$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')"
-  case "$_cloudret_load" in ''|*[!0-9.]*) _cloudret_load="" ;; esac
-  # 🚨 THE KILLER CLEANS UP AFTER ITSELF. `timeout -k 10 900` escalates to SIGKILL, and the callee's
-  # `trap … EXIT INT TERM` cannot run on one — so a cut pass leaves its single-flight lock directory
-  # behind by construction. The callee now reaps a dead holder itself (pid liveness + a TTL sized to
-  # this bound), and that is the primary repair; this is the second, independent one, and it belongs
-  # HERE because this is the only party that KNOWS a kill happened. rc 137/143 is exactly that
-  # knowledge — the caller observing its own child's death signal — and acting on it costs the next
-  # tick nothing instead of making it re-derive the fact from a timestamp.
-  # It is deliberately narrow: only on 137/143, only the lock this call's child could have held.
-  # A lock reaped on any other rc — including 124, where the `-k` grace may still be running the
-  # child's own trap — would be a caller stealing from a pass that is still alive.
-  case "$_cloudret_rc" in
-    137|143)
-      _retlock="${CC_CLOUD_STATE:-$_cc_cfg/autonomy/cloud}/.return.lock"
-      [ -d "$_retlock" ] && rm -rf "$_retlock" 2>/dev/null
-      ;;
-  esac
+elif [ ! -x "$_lane" ]; then
+  _cloudret_rc="skipped"
+elif [ ! -x /usr/bin/perl ]; then
+  _cloudret_rc="skipped-no-detach"
+else
+  _lane_log="$_cc_cfg/logs/cloud-return-lane.log"
+  mkdir -p "$(dirname "$_lane_log")" 2>/dev/null
+  /usr/bin/perl -e 'use POSIX; POSIX::setsid() or die "setsid: $!"; exec @ARGV or die "exec: $!"' -- \
+    /bin/bash "$_lane" </dev/null >>"$_lane_log" 2>&1 &
+  _lane_pid=$!
+  disown "$_lane_pid" 2>/dev/null || true
+  _g=0
+  while [ "$_g" -lt "${CC_SWEEP_LANE_GRACE_S:-20}" ] && kill -0 "$_lane_pid" 2>/dev/null; do
+    sleep 1; _g=$((_g + 1))
+  done
+  if kill -0 "$_lane_pid" 2>/dev/null; then _cloudret_rc="detached"; else _cloudret_rc="lane-done"; fi
 fi
-log_idl cloud-return "$(jq -cn --arg c "$_cloudret_rc" --arg e "$_cloudret_took" --arg l "$_cloudret_load" \
-  '{cloud_return_rc:$c, elapsed_s:($e|tonumber? // null), load1:($l|tonumber? // null),
-    note:"0 = pass completed (per-session outcomes in the cloud return ledger; the pass-scope row records how many of the pending set it took and how many it deferred, and a `pass-deadline` row — a SEPARATE fact — records a pass that stopped starting work because this caller bound it in time, so an early stop can never read as full coverage); 4 = another pass held the lock; 124 = the bound cut the pass, next tick resumes (the return path itself abstains on a cut land rather than filing a refusal); 137/143 = the bound SIGKILLed it and this caller cleared the stranded single-flight lock; skipped = tool absent (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never land, mark done or spend quota"}')"
+if [ "$_cloudret_rc" != "lane-done" ]; then
+  log_idl cloud-return "$(jq -cn --arg c "$_cloudret_rc" --arg p "$_lane_pid" \
+    '{cloud_return_rc:$c, elapsed_s:null, load1:null, lane_pid:($p|tonumber? // null),
+      note:"detached = the cloud lane (scripts/cloud-return-lane.sh: return pass, then retire pass) is running in its own session past this tick; it journals its own cloud-return / cloud-retire rows (tool: cloud-return-lane) with rc, elapsed_s and load1. skipped = the lane script is absent from the deployed tree (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never land, mark done or spend quota; skipped-no-detach = /usr/bin/perl is missing, so a lane could not be put in its own session and was not spawned"}')"
+fi
 
 # ── the REFUSAL LOOP (W3) — immediately after the return pass, and under ITS OWN guard ────────────
 # The return pass above is what WRITES `<id>.land-refused`, so routing in the same tick closes the
@@ -541,20 +537,15 @@ else
   else _cloudprune_rc="skipped-no-repo"
   fi
 
-  # THE RETIRE PASS RUNS SECOND, and the order is load-bearing: the pruner fills each declaration's
-  # path set BEFORE it deletes a branch (bin/cc-cloud, ORDERING note), so a branch it removed this
-  # tick is already answerable as LANDED by the time this pass reads the head list and calls it
-  # `gone`. Reversed, the retire would run against branches the prune is about to delete and learn
-  # nothing new for another 300 s.
-  if [ -x "$_retire" ]; then
-    if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then
-      CLOUD_RETIRE_REPO="$_prune_repo" "$_tmo" -k 10 "${CC_SWEEP_RETIRE_BOUND_S:-180}" bash "$_retire" --max "${CC_SWEEP_RETIRE_MAX:-200}" >/dev/null 2>&1
-    else
-      CLOUD_RETIRE_REPO="$_prune_repo" bash "$_retire" --max "${CC_SWEEP_RETIRE_MAX:-200}" >/dev/null 2>&1
-    fi
-    _cloudretire_rc=$?
-  else _cloudretire_rc="skipped-absent"
-  fi
+  # THE RETIRE PASS NO LONGER RUNS HERE (2026-09-06). It runs SECOND inside the detached lane
+  # (scripts/cloud-return-lane.sh), after the return pass, under its own bound — here it was
+  # bounded at 180 s inside a PRI-4 tick and had exited 124 on every tick since 2026-09-05T02:29Z,
+  # i.e. ZERO retirements for a day while 297 of 332 pending declarations were terminal. The
+  # ordering argument that put it after the pruner still holds and is honoured by the lane's own
+  # order (return, then retire): a branch the return pass just landed is `landed` by the time the
+  # retire pass reads the head list. The row below keeps its key so readers stay whole; `lane` says
+  # where the real rc now lives (tool: cloud-return-lane, disposition: cloud-retire).
+  if [ -x "$_retire" ]; then _cloudretire_rc="lane"; else _cloudretire_rc="skipped-absent"; fi
 fi
 log_idl cloud-retire "$(jq -cn --arg p "$_cloudprune_rc" --arg r "$_cloudretire_rc" \
   '{branch_prune_rc:$p, cloud_retire_rc:$r,

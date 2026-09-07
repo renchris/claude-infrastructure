@@ -728,10 +728,14 @@ $(desk_tail 6)"
   # Ordering is the whole value of routing in the same tick: the return pass files
   # `<id>.land-refused`, so a router placed above it would always be reading the PREVIOUS tick's
   # refusals and every routed verdict would reach the VM 300 s late.
+  # Since 2026-09-06 the return pass runs inside the DETACHED lane the sweep spawns
+  # (scripts/cloud-return-lane.sh), so the anchor is the spawn: the router still follows it, and a
+  # refusal the lane files reaches the router on the next sweep tick — minutes, where the old
+  # in-tick pass made every block, this one included, wait an hour.
   local sweep="${BATS_TEST_DIRNAME}/../scripts/autonomy-sweep.sh"
   [ -f "$sweep" ] || skip "autonomy-sweep.sh absent"
   local ret_line rfz_line
-  ret_line="$(grep -n '_cloudret" --sweep' "$sweep" | head -1 | cut -d: -f1)"
+  ret_line="$(grep -n '/bin/bash "$_lane" </dev/null' "$sweep" | head -1 | cut -d: -f1)"
   rfz_line="$(grep -n '_cloudrfz" --sweep' "$sweep" | head -1 | cut -d: -f1)"
   [ -n "$ret_line" ] && [ -n "$rfz_line" ] || false
   [ "$ret_line" -lt "$rfz_line" ]

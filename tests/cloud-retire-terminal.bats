@@ -155,3 +155,96 @@ push_landed_branch() { # <branch>
   echo "$output" | grep -q 'gone=3'
   echo "$output" | grep -q 'retired=1'
 }
+
+# ── the two strata that made the pile a fiction (2026-09-05/06) ──────────────────────────────────
+# 332 pending declarations were 49 backlog items; 27 of those items were already DONE and held 137
+# declarations, and 128 of the 180 open-item branches could not rebase onto trunk. Neither stratum
+# had a verdict, so the lane's "pile" read as live work and the dispatcher's pile cap closed the
+# lane on it. Both verdicts are terminal, both leave the branch on origin, and both are written
+# INTO the marker so the ledger can tell harvested from abandoned.
+decl_item() { # <id> <branch> <12-hex item> <age_h>
+  local at; at=$(( $(date +%s) - ${4:-48} * 3600 ))
+  printf 'id=%s\nbranch=%s\nremote=origin\nrepo=%s\npaths=\nitem=%s\ndeclared_at=%s\ncustody=%s\n' \
+    "$1" "$2" "$CLOUD_RETIRE_REPO" "$3" "$at" "$1" > "$CC_CLOUD_STATE/$1.decl"
+}
+push_work_branch() { # <branch> <file> <content>
+  git -C "$WORK" checkout -q -b "$1" main
+  printf '%s\n' "$3" > "$WORK/$2"
+  git -C "$WORK" add -A
+  git -C "$WORK" commit -qm "feat: $1"
+  git -C "$WORK" push -q origin "$1"
+  git -C "$WORK" checkout -q main
+}
+stub_backlog() { # <json array of {id,status}>
+  mkdir -p "$BATS_TEST_TMPDIR/stubs"
+  printf '#!/bin/bash\necho "cc-backlog $*" >>"%s"\nprintf %%s %q\n' "$BATS_TEST_TMPDIR/calls" "$1" > "$BATS_TEST_TMPDIR/stubs/cc-backlog"
+  chmod +x "$BATS_TEST_TMPDIR/stubs/cc-backlog"
+  export CLOUD_RETIRE_BACKLOG_BIN="$BATS_TEST_TMPDIR/stubs/cc-backlog"
+}
+stub_custody() {
+  mkdir -p "$BATS_TEST_TMPDIR/stubs"
+  printf '#!/bin/bash\necho "cc-custody $*" >>"%s"\n' "$BATS_TEST_TMPDIR/calls" > "$BATS_TEST_TMPDIR/stubs/cc-custody"
+  chmod +x "$BATS_TEST_TMPDIR/stubs/cc-custody"
+  export CLOUD_RETIRE_CUSTODY_BIN="$BATS_TEST_TMPDIR/stubs/cc-custody"
+}
+
+@test "SUPERSEDED: a live branch whose backlog item is already DONE is retired with that verdict, custody abandoned, branch untouched" {
+  push_work_branch claude/fire-dup dup.txt "a second implementation"
+  decl_item s-dup claude/fire-dup abcdef012345 48
+  stub_backlog '[{"id":"abcdef012345","status":"done"},{"id":"0123456789ab","status":"open"}]'
+  stub_custody
+  run bash "$SUBJ"
+  [ "$status" -eq 0 ]
+  retired s-dup
+  grep -q '^verdict=superseded$' "$CC_CLOUD_STATE/s-dup.retired"
+  echo "$output" | grep -q 'superseded=1'
+  grep -q 'cc-custody abandon s-dup' "$BATS_TEST_TMPDIR/calls"
+  # the branch is NEVER deleted — origin keeps it for forensics
+  git -C "$WORK" ls-remote --heads origin claude/fire-dup | grep -q claude/fire-dup
+  # ONE backlog read per pass, never one per row
+  [ "$(grep -c 'cc-backlog list --all --json' "$BATS_TEST_TMPDIR/calls")" -eq 1 ]
+}
+
+@test "SUPERSEDED fails OPEN: an unreadable backlog store yields no superseded verdict, and the branch is KEPT" {
+  push_work_branch claude/fire-dup2 dup2.txt "work"
+  decl_item s-dup2 claude/fire-dup2 abcdef012345 48
+  export CLOUD_RETIRE_BACKLOG_BIN="$BATS_TEST_TMPDIR/does-not-exist"
+  run bash "$SUBJ"
+  [ "$status" -eq 0 ]
+  ! retired s-dup2 || false
+  echo "$output" | grep -q 'kept=1'
+  echo "$output" | grep -q 'superseded=0'
+}
+
+@test "CONFLICT: a branch that cannot rebase onto the trunk is retired with that verdict; a CLEAN one is kept" {
+  git -C "$WORK" merge-tree --write-tree main main >/dev/null 2>&1 || skip "git merge-tree --write-tree needs git >= 2.38"
+  # the conflicting branch edits base.txt; so does trunk, differently
+  push_work_branch claude/fire-conflict base.txt "the vm's version"
+  push_work_branch claude/fire-clean clean.txt "no overlap"
+  printf 'trunk moved\n' > "$WORK/base.txt"
+  git -C "$WORK" add -A; git -C "$WORK" commit -qm "feat: trunk moved base.txt"; git -C "$WORK" push -q origin main
+  decl_item s-conf  claude/fire-conflict 0123456789ab 48
+  decl_item s-clean claude/fire-clean    0123456789ab 48
+  stub_backlog '[{"id":"0123456789ab","status":"open"}]'
+  stub_custody
+  run bash "$SUBJ"
+  [ "$status" -eq 0 ]
+  retired s-conf
+  grep -q '^verdict=conflict$' "$CC_CLOUD_STATE/s-conf.retired"
+  ! retired s-clean || false
+  echo "$output" | grep -q 'conflict=1'
+  echo "$output" | grep -q 'kept=1'
+  grep -q 'cc-custody abandon s-conf' "$BATS_TEST_TMPDIR/calls"
+  ! grep -q 'cc-custody abandon s-clean' "$BATS_TEST_TMPDIR/calls" || false
+}
+
+@test "LANDED outranks SUPERSEDED, and only LANDED RETURNS custody — the others abandon it" {
+  push_landed_branch claude/fire-landed2
+  decl_item s-l2 claude/fire-landed2 abcdef012345 48
+  stub_backlog '[{"id":"abcdef012345","status":"done"}]'
+  stub_custody
+  run bash "$SUBJ"
+  [ "$status" -eq 0 ]
+  grep -q '^verdict=landed$' "$CC_CLOUD_STATE/s-l2.retired"
+  grep -q 'cc-custody return s-l2' "$BATS_TEST_TMPDIR/calls"
+}

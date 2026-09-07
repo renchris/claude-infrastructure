@@ -73,6 +73,7 @@ verdict() {
     skipped-not-deployed)
                    printf 'NOT-DEPLOYED\tThe last row is skipped-not-deployed with the paths AGREEING now, so the copy that ran was a checkout or verifier copy, not the deployed one.\n' ;;
     skipped)       printf 'NOT-DEPLOYED\tThe last row is a bare skipped: cloud-return.sh is ABSENT from the deployed tree (NOT clean — the live layer has not converged).\n' ;;
+    detached)      printf 'RUNNING\tThe sweep spawned the cloud lane (scripts/cloud-return-lane.sh) in its own session and it was still running past the grace window — the lane journals its own cloud-return row (tool: cloud-return-lane) with the real rc when it ends; read the newest such row, not this one.\n' ;;
     0)             printf 'RUNNING\tThe last pass completed. This arm is not the fault: rc 0 means the PASS ran — read the return ledger (§D) for what it did per session.\n' ;;
     4)             printf 'RUNNING\tThe last pass found the lock held by another pass. Normal under contention; only a persistent 4 is a jam.\n' ;;
     124)           printf 'RUNNING\tThe last pass was cut by its wall-clock bound; the next tick resumes. Only a persistent 124 means the pass cannot finish inside 900 s.\n' ;;
