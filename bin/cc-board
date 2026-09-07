@@ -203,8 +203,15 @@ if [ -n "$CCVAL_JSON" ]; then
        + " + \(.tasks)t  ·  spend ~\(.spend_pct)% (\(.active_sessions) active · \($w)h)"
        + (if .ratio!=null then "  ·  v/spend \(.ratio)" else "" end)
        + (if .churn then "   ⚠ FLEET CHURN — spend, 0 landed ──" else " ──" end)),
-    ( [ .accounts[] | "\(.acct) +\(.commits)c/\(.session_pct // "?")%" + (if .churn then "⚠" else "" end) ] as $pa
-      | if ($pa|length)>0 then "   by acct  " + ($pa | join("  ·  ")) else empty end),
+    ( [ .accounts[] | "\(.acct) "
+        # `?c`, never `+0c`, when cc-value.attribution abstains (USAGE_TELEMETRY_100P M7): the
+        # per-account commit count is NULL there because NOTHING can be attributed, and a zero in
+        # this row reads as "this account landed nothing" — a claim the empty join cannot support.
+        + (if .commits == null then "?c" else "+\(.commits)c" end)
+        + "/\(.session_pct // "?")%" + (if .churn then "⚠" else "" end) ] as $pa
+      | if ($pa|length)>0 then "   by acct  " + ($pa | join("  ·  "))
+          + (if (.attribution.verdict // "OK") == "ABSTAIN" then "   (attribution: none joins)" else "" end)
+        else empty end),
     ( [ .accounts[] | select(.churn) | "\(.acct) \(.session_pct // "?")%" ] as $ch
       | if ($ch|length)>0 then "   ⚠ net-negative: " + ($ch|join(" · ")) + " — spending, 0 landed" else empty end)
   ' 2>/dev/null
