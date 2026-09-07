@@ -91,6 +91,7 @@ T="${CC_SUP_T:-73}"                                    # past-threshold (used_pc
 STALL_S="${CC_SUP_STALL_S:-1800}"                      # telemetry age past which a live pid is a STALL? candidate
 DEADLINE_S="${CC_SUP_PAGE_DEADLINE_S:-900}"            # page deadline before the re-observe (15m default)
 TRUNK="${CC_SUP_TRUNK:-origin/main}"                   # trunk for the clean-completion landed-check (cf. cc-classify CC_CLASSIFY_TRUNK)
+RECOVERY_S="${CC_SUP_RECOVERY_S:-3600}"                # sustained-OK dwell before a page's notify-damping marker is RE-ARMED (see clear_page_recovered). Default 2x STALL_S.
 GC_S="${CC_SUP_GC_S:-21600}"                           # telemetry age past which a LIVE-OWNER row is GC'd — a hung/pid-recycled owner would STALL?-escalate every sweep forever (item fdc101e8b0c7). reaper-horizon-lint bounds this ≥ SUPERVISOR_SWEEP_MAX_S×10; default 6h = 12× STALL_S.
 OWNER_PAT="${CC_SUP_OWNER_PAT:-claude}"               # a live pid OWNS its telemetry row only if its process command matches this — kill -0 alone reads a RECYCLED pid as the original session (the STALL? zombie)
 TEL_DIR="${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}"
@@ -407,6 +408,7 @@ heartbeat(){ # $1=n_swept $2=n_findings $3=n_gc(optional)
 page(){ # $1=sid $2=state $3=detail
   _ensure
   local pf="$PAGEDIR/$1.page" nf="$PAGEDIR/$1.notified"
+  rm -f "$PAGEDIR/$1.ok" 2>/dev/null || true               # any page BREAKS the sustained-OK streak (clear_page_recovered)
   [ -f "$pf" ] || printf '%s\n' "$(now)" > "$pf"           # stamp the deadline clock on first page only
   idl page "\"sid\":\"$1\",\"state\":\"$2\",\"detail\":\"$3\""
   # composer damping: ONE notify per sid per STATE — a re-sweep of an already-notified state stays
@@ -427,7 +429,53 @@ page(){ # $1=sid $2=state $3=detail
     printf '%s\n' "$2" > "$nf"                             # recorded only on a cc-notify-CONFIRMED enqueue
   fi                                                       # (rc 0). No channel wired (1) or a refused send
 }                                                          # (2) leaves the marker off ⇒ the next sweep retries.
-clear_page(){ rm -f "$PAGEDIR/$1.page" "$PAGEDIR/$1.notified" 2>/dev/null || true; }
+clear_page(){ rm -f "$PAGEDIR/$1.page" "$PAGEDIR/$1.notified" "$PAGEDIR/$1.ok" 2>/dev/null || true; }
+# ── OK-branch recovery with HYSTERESIS — the 2026-09-07 page-storm fix (desk wake-noise). ──
+# assess()'s OK branch used to call clear_page() outright, treating ONE fresh sweep as a genuine
+# recovery and RE-ARMING the notify alarm. For a session that FLAPS — a permission-blocked or
+# idle-but-occasionally-touched pane whose transcript goes warm for one sweep and stale again —
+# that re-arm is what defeated both damping layers above: `.notified` was deleted before it could
+# ever suppress anything, so the STALL?→ESCALATED pair re-fired on every cycle, forever. Measured
+# on the desk's own mailbox (~/.claude/mailbox/330.md, 2026-09-07): 490 SUPERVISOR PAGE lines over
+# 34 distinct sids — 456 of them (93%) repeats of a sid+state already paged, one sid alone paged 31
+# times over two days, alternating STALL?/ESCALATED hourly. Proof it was THIS path and not the
+# others: `pid_alive_owner` is true on the STALL? branch, so reap_clean (dead pid) and gc_stale
+# (6h horizon, drops the telemetry row) cannot be the clearer — assess()'s OK branch is the only
+# caller that can reach a live, still-flapping sid. The disk agreed: that sid had NO .page and NO
+# .notified file at all while its pages kept arriving.
+#
+# The deadline clock (.page) still resets immediately — a void is cheap and resolve_page owns it.
+# Only the notify-damping marker (.notified) is held, until the session has been continuously OK
+# for RECOVERY_S. A REAL recovery still re-arms (it just has to hold still for an hour first), so
+# a later genuine stall pages again; a FLAP no longer does. This is hysteresis, not suppression:
+# no page is dropped that a changed state would not have sent anyway.
+clear_page_recovered(){ # $1=sid — assess()'s OK branch ONLY; terminal recoveries use clear_page
+  local sid="$1" first
+  # SEPARATE local, and shellcheck SC2318 is the gate that keeps it that way (ship-land lints the
+  # shell files in a land's diff). `local a=$1 b=…$a…` expands EVERY argument before the command
+  # runs, so $a is not yet assigned. Here that is LATENT rather than live: bash is dynamically
+  # scoped, so the one-line form resolves $sid to assess()'s own `local sid` — the same value — and
+  # measured both ways it writes the identical per-sid path. It is written this way so the next
+  # caller (or an assess() that renames its local) cannot silently collapse every session onto one
+  # shared "$PAGEDIR/.ok" streak file, where one session's recovery would re-arm another's alarm.
+  local okf="$PAGEDIR/$sid.ok"
+  rm -f "$PAGEDIR/$sid.page" 2>/dev/null || true            # deadline clock always resets
+  # Nothing armed ⇒ nothing to hold. Drop any stale streak file and leave.
+  if [ ! -f "$PAGEDIR/$sid.notified" ]; then
+    rm -f "$okf" 2>/dev/null || true
+    return 0
+  fi
+  first="$(head -n1 "$okf" 2>/dev/null | tr -dc '0-9')"
+  case "$first" in ''|*[!0-9]*) first="" ;; esac
+  if [ -z "$first" ]; then                                   # first OK sweep since the last page
+    printf '%s\n' "$(now)" > "$okf" 2>/dev/null || rm -f "$PAGEDIR/$sid.notified" 2>/dev/null || true
+    return 0                                                 # unwritable streak file ⇒ fail OPEN (today's behaviour)
+  fi
+  if [ "$(( $(now) - first ))" -ge "$RECOVERY_S" ] 2>/dev/null; then
+    idl page_rearm "\"sid\":\"$sid\",\"ok_for_s\":$(( $(now) - first )),\"recovery_s\":$RECOVERY_S,\"why\":\"sustained-OK dwell met — notify damping re-armed; a later stall pages again\""
+    rm -f "$PAGEDIR/$sid.notified" "$okf" 2>/dev/null || true
+  fi
+}
 # ── void a page WITHOUT resetting the notify-damping marker (item 1c324d9fcc32). ──
 # A VOID means "alive + working, no escalation" — NOT "incident cleared, re-arm the alarm". The
 # telemetry-staleness that raised the STALL? still persists, so the very next sweep re-pages the SAME
@@ -732,8 +780,9 @@ assess(){ # $1=telemetry-json-file → prints 1 if it produced a finding, else 0
     page "$sid" PAST-THRESHOLD "used ${used}% ≥ ${T}% and still running (not Stopping) — the boundary hook is blind here; advise /handoff"
     echo 1; return
   fi
-  # OK — clear any stale page (fresh + below threshold + alive).
-  clear_page "$sid"; echo 0
+  # OK — clear any stale page (fresh + below threshold + alive). The notify-damping marker is held
+  # until the session has been OK for RECOVERY_S: a single fresh sweep is a FLAP, not a recovery.
+  clear_page_recovered "$sid"; echo 0
 }
 
 # ── a human-legible one-liner for the blocked command, from the harness-authored tool_input ──

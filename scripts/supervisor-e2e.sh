@@ -662,6 +662,64 @@ grep -q 'digest POSTED' "$CC_SUPERVISOR_LOG" 2>/dev/null \
   || no "no digest record in the supervisor log"
 rm -rf "$OSBIN"                                                   # never leave the stub on PATH
 
+echo "T33 FLAP RE-ARM — a one-sweep OK does NOT re-arm the notify alarm (the 2026-09-07 desk wake-noise storm)"
+# THE BUG: assess()'s OK branch called clear_page(), which deletes .notified — treating a SINGLE fresh
+# sweep as a genuine recovery. A session that FLAPS (permission-blocked / idle-but-touched: its transcript
+# goes warm for one sweep, stale the next) therefore had its damping marker deleted before it could ever
+# suppress anything, so the STALL?→ESCALATED pair re-fired every cycle FOREVER. Measured on the desk's own
+# mailbox 2026-09-07: 490 SUPERVISOR PAGE lines / 34 sids, 456 (93%) repeats of an already-paged sid+state.
+# The fix is HYSTERESIS (clear_page_recovered): hold .notified until the session has been OK for
+# RECOVERY_S. Checks 2-3 are the RED proof (pre-fix they read 2 notifies); check 4 proves the hold is a
+# dwell and not a permanent mute — a REAL recovery still re-arms, so a later genuine stall pages again.
+reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json "$SBX/notify.log"
+rm -f "$CC_SUPERVISOR_PAGEDIR"/flap.notified "$CC_SUPERVISOR_PAGEDIR"/flap.ok
+FCFG="$SBX/flapcfg"; FSLUG="$(slug "$REPO")"; mkdir -p "$FCFG/projects/$FSLUG"
+FTR="$FCFG/projects/$FSLUG/flap.jsonl"; : > "$FTR"
+# T33 isolates LAYER 1 — the per-sid `.notified` marker and its recovery hysteresis. The independent
+# LAYER 2 (page-damp.sh's send-side TTL, default 1800s) would otherwise suppress the post-re-arm page
+# for half an hour and read as "page LOST" here; its own contract is owned by tests/page-damp.bats, so
+# it is switched fully INERT (TTL=0 ⇒ never suppresses) rather than left to shadow the layer under test
+# (a cost gate must be strictly weaker than the predicate it fronts — memory cost-gate-must-be-strictly-weaker).
+# TTL=0 and not 1: at 1s the whole flap ran INSIDE one TTL window on a fast box, so the storm assertion
+# below passed against the pre-fix mutant — a vacuous green that measured sweep latency, not damping
+# (memory verification-harness-vacuous-pass-traps: a control must be able to FAIL).
+flapsweep(){ CC_NOTIFY_CAPTURE="$SBX/notify.log" CC_PAGE_TO_FILE="$SBX/desk-role" CC_PAGE_DAMP_TTL_S=0 \
+             CC_NOTIFY_BIN="$SBX/bin/cc-notify" bash "$SUP" --once >/dev/null 2>&1; }
+nlog(){ wc -l < "$SBX/notify.log" | tr -d ' '; }
+mktel flap 40 100 "$ALIVE" "$REPO" "$FCFG"                        # live pid, telemetry 100s stale
+touch -t 202001010000 "$FTR"                                      # transcript STALE ⇒ STALL? candidate
+flapsweep
+[ "$(nlog)" -eq 1 ] && ok "flap sweep 1: STALL? ⇒ exactly one notify" \
+                    || no "flap sweep 1 did not notify once (lines=$(nlog))"
+# sweep 2 — transcript goes WARM for one sweep: the warm-transcript exemption drops it to the OK branch.
+# That is a FLAP, not a recovery, so the damping marker must SURVIVE it.
+touch "$FTR"; mktel flap 40 100 "$ALIVE" "$REPO" "$FCFG"
+flapsweep
+[ -f "$CC_SUPERVISOR_PAGEDIR/flap.notified" ] \
+  && ok "a one-sweep OK KEEPS the notify-damping marker (no premature re-arm)" \
+  || no "one OK sweep deleted .notified — the alarm re-armed on a flap (the storm's root cause)"
+# sweep 3 — stale again ⇒ STALL? re-raised. The retained marker must keep it composer-quiet.
+touch -t 202001010000 "$FTR"; mktel flap 40 100 "$ALIVE" "$REPO" "$FCFG"
+flapsweep
+[ "$(nlog)" -eq 1 ] && ok "re-STALL? after a flap ⇒ NO re-notify (the 93%-repeat storm is damped)" \
+                    || no "flap re-notified ⇒ storm intact (lines=$(nlog))"
+# sweep 4 — a GENUINE recovery: sustained OK past RECOVERY_S re-arms, so a LATER stall still pages.
+# Without this the fix would be a permanent mute, which loses a real page rather than damping a repeat.
+touch "$FTR"; mktel flap 40 100 "$ALIVE" "$REPO" "$FCFG"
+CC_SUP_RECOVERY_S=1 flapsweep                                     # first OK sweep: stamps the streak
+sleep 2
+touch "$FTR"; mktel flap 40 100 "$ALIVE" "$REPO" "$FCFG"
+CC_SUP_RECOVERY_S=1 flapsweep                                     # dwell met ⇒ marker re-armed
+if [ -f "$CC_SUPERVISOR_PAGEDIR/flap.notified" ]; then
+  no "sustained OK past RECOVERY_S did NOT re-arm — hysteresis became a permanent mute"
+else
+  ok "sustained OK past RECOVERY_S RE-ARMS the alarm (hysteresis, not a mute)"
+fi
+touch -t 202001010000 "$FTR"; mktel flap 40 100 "$ALIVE" "$REPO" "$FCFG"
+CC_SUP_RECOVERY_S=1 flapsweep
+[ "$(nlog)" -eq 2 ] && ok "…and a genuine LATER stall pages again after that re-arm" \
+                    || no "a real stall after a real recovery was swallowed (lines=$(nlog)) — page LOST"
+
 echo ""
 echo "supervisor-e2e: $P passed, $F failed"
 [ "$F" -eq 0 ] || exit 1

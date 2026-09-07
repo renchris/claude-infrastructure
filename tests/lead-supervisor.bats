@@ -38,8 +38,8 @@ setup() {
   # T30's 9 checks need a real timeout(1); where the box has none it SKIPs wholesale, so the floor drops
   # by exactly those 9 for that case only. Deriving the floor from the skip line (rather than pinning the
   # lower number everywhere) keeps the ratchet at full strength on every box that can actually run them.
-  floor=97
-  if echo "$output" | grep -q 'SKIP T30'; then floor=88; fi
+  floor=104
+  if echo "$output" | grep -q 'SKIP T30'; then floor=95; fi
   n_pass="$(echo "$output" | sed -nE 's/.*supervisor-e2e: ([0-9]+) passed.*/\1/p')"
   [ "${n_pass:-0}" -ge "$floor" ]
 }
@@ -49,6 +49,14 @@ setup() {
   echo "$output" | grep -q 'T11 CLEAN COMPLETION'
   echo "$output" | grep -q 'T12 STRANDED (dirty)'
   echo "$output" | grep -q 'T13 STRANDED (unlanded)'
+}
+
+@test "flap re-arm — a one-sweep OK does not re-arm the notify alarm (2026-09-07 wake-noise storm)" {
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'T33 FLAP RE-ARM'
+  # both halves: the flap is damped, AND a genuine recovery still re-arms (never a permanent mute)
+  echo "$output" | grep -q 'KEEPS the notify-damping marker'
+  echo "$output" | grep -q 'RE-ARMS the alarm'
 }
 
 @test "PermissionRequest beacon sweep — page/threshold/reap/damping all exercised (item 08d514250031)" {
