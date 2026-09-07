@@ -25,6 +25,18 @@ setup() {
   # Per-test damp dir: damping must never make one test's fire suppress another's.
   export CC_PAGE_DAMP_DIR="$D/damp"
   if ! command -v jq >/dev/null 2>&1; then skip "jq not installed"; fi
+  # THE MUTANTS NEED A SIBLING lib/, AND WITHOUT IT THIS WHOLE BLOCK IS THEATRE. Every mutation
+  # below runs a COPY of the hook out of $D, and the hook resolves lib/goal-state.sh beside its own
+  # BASH_SOURCE first, falling back to ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib. $HOME here is
+  # a bats temp dir with no such tree, so in a hermetic environment (env -i — CI, and the off-box
+  # producer's runner) every mutant abstained at `no-goal-state-lib` before reaching the mutated
+  # line: M1 and M3 assert SILENCE and passed vacuously, M2 asserts a FIRE and was the only one
+  # that went red. The suite was green on this desk solely because an ambient CLAUDE_CONFIG_DIR
+  # pointed the fallback at a real installed layer — an environment axis, never a property of the
+  # tree. Symlinking lib/ next to the copies satisfies the hook's FIRST resolution rung, which is
+  # the same one the real file gets.
+  ln -sfn "$REPO/hooks/lib" "$D/lib"
+  [ -r "$D/lib/goal-state.sh" ]   # fixture integrity: no mutation below is meaningful without it
 }
 
 # ── fixtures ──────────────────────────────────────────────────────────────────────────────────────
@@ -252,6 +264,13 @@ EOF
   # the mutation must actually have applied — a no-op sed would pass this test vacuously
   grep -q '"local_bash"' "$m"
   ! grep -q '"shell","subagent"' "$m" || false
+  # POSITIVE CONTROL ON THE MUTANT ITSELF: a silent copy proves nothing unless that copy can still
+  # speak. The mutation leaves "subagent" matching, so the same fixture with a subagent task MUST
+  # still fire; if it does not, the silence below is an abstain (a missing lib, an unreadable
+  # fixture) wearing the mutation's clothes.
+  export CC_PAGE_DAMP_DIR="$D/damp-m1c"
+  run bash -c "printf '%s' '$(payload "$t" '[{"id":"x","type":"subagent","status":"running","description":"research"}]' "m1-alive")' | '$m'"
+  [ -n "$output" ]
   export CC_PAGE_DAMP_DIR="$D/damp-m1"
   run bash -c "printf '%s' '$(payload "$t" "$SHELL_TASK" "m1")' | '$m'"
   [ "$status" -eq 0 ]
@@ -304,6 +323,11 @@ EOF
   sed 's/^GI_ARM=named$/GI_ARM=named; [ -n "$DEFERRERS" ] || _gi_abstain/' "$H" > "$m"
   chmod +x "$m"
   grep -q 'GI_ARM=named; \[ -n "$DEFERRERS" \]' "$m"   # the mutation really applied
+  # POSITIVE CONTROL ON THE MUTANT ITSELF (see M1): the mutation only abstains on an EMPTY task
+  # list, so the same copy on the same fixture with a task named must still fire.
+  export CC_PAGE_DAMP_DIR="$D/damp-m3a"
+  run bash -c "printf '%s' '$(payload "$t" "$SHELL_TASK" "m3-alive")' | '$m'"
+  [ -n "$output" ]
   export CC_PAGE_DAMP_DIR="$D/damp-m3m"
   run bash -c "printf '%s' '$(payload "$t" '[]' "m3-mutant")' | '$m'"
   [ "$status" -eq 0 ]
