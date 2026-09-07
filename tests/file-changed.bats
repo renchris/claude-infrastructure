@@ -19,7 +19,14 @@
 # defect lives in the REGISTRATION, so it is unreachable from any runtime behaviour of the script;
 # `--check-matcher` is where it becomes catchable, and "the absolute-path matcher is rejected" is
 # the assertion this file exists for. Delete that arm from hooks/file-changed.sh and this suite
-# must go red — that is the red-proof, and it is exercised by `control:` below.
+# must go red — that is the red-proof.
+#
+# 🚨 AND THE GUARD MUST FAIL IN BOTH DIRECTIONS, WHICH IT ORIGINALLY DID NOT. The first version
+# rejected every absolute matcher outright. § 3e — landed by a sibling wave while this one was in
+# flight — shows ARMING and DISPATCH are separate mechanisms and that the correct wiring REQUIRES an
+# absolute matcher as its arming half. So the too-strict direction was live: the guard would have
+# refused the plan's own prescription. Both directions are now pinned below (arm accepts absolute /
+# rejects relative; dispatch rejects absolute / accepts `*` / notices a bare basename).
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -52,11 +59,44 @@ feed() { # <file_path> <event> <session_id>  → writes $PAYLOAD
 
 # ── the negative arm: the matcher shape measured never to fire ────────────────────────────────
 
-@test "an absolute-path matcher is REJECTED — it is the measured silent no-op" {
+@test "an absolute-path matcher never DISPATCHES — the measured silent no-op" {
   run "$HOOK" --check-matcher /private/tmp/hs/fc/abs.txt
   [ "$status" -eq 1 ]
   echo "$output" | grep -q "absolute path"
-  echo "$output" | grep -q "0 changes"
+  echo "$output" | grep -q "never DISPATCH"
+}
+
+@test "...but that rejection names the ARMING role, so it cannot block the § 3e pair" {
+  # THE ARM THAT KEEPS THIS GUARD HONEST. § 3e (landed by a sibling wave, corroborated here at
+  # 220:430421 where the dispatch query is built from basename(n.file_path)) shows arming and
+  # dispatch are DIFFERENT mechanisms: an absolute matcher ARMS durably and survives a cd, and
+  # only the dispatch half needs a `*`. A guard that rejected absolutes unconditionally would
+  # refuse the very registration the plan prescribes — a proxy failing in the other direction.
+  run "$HOOK" --check-matcher /private/tmp/hs/fc/abs.txt
+  echo "$output" | grep -q "ARMING"
+  echo "$output" | grep -q "CwdChanged"
+}
+
+@test "an absolute matcher is ACCEPTED in the arming role" {
+  run "$HOOK" --check-matcher /private/tmp/hs/fc/dyn.txt --role arm
+  [ "$status" -eq 0 ]
+}
+
+@test "a RELATIVE matcher is REJECTED in the arming role — a cd re-bases it" {
+  # Measured in § 3e: after a cd, the probe3.txt matcher fired for a DIFFERENT file of that name
+  # while the originally-armed path produced zero rows. A relative arm is worse than no arm,
+  # because it keeps firing and looks healthy.
+  run "$HOOK" --check-matcher probe.txt --role arm
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "re-bases"
+}
+
+@test "a bare basename DISPATCHES but carries the cd re-target notice" {
+  # It must not be silently blessed: this is the shape that keeps firing for the wrong file.
+  run "$HOOK" --check-matcher probe.txt
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "NOTICE"
+  echo "$output" | grep -q "RE-BASES"
 }
 
 @test "an absolute path is rejected even when hidden inside an alternation" {
@@ -67,22 +107,20 @@ feed() { # <file_path> <event> <session_id>  → writes $PAYLOAD
   echo "$output" | grep -q "/etc/hosts"
 }
 
-@test "a relative path with a separator is rejected, and labelled as DERIVED not measured" {
+@test "a relative path with a separator is dead in BOTH roles" {
+  # It can neither arm durably (not absolute) nor match a basename (has a separator).
   run "$HOOK" --check-matcher 'sub/probe.txt'
   [ "$status" -eq 1 ]
-  echo "$output" | grep -q "path separator"
-  # Provenance must survive in the message: only the absolute case was measured. A future reader
-  # who inherits this rejection as a measurement would be over-claiming.
-  echo "$output" | grep -q "not measured"
+  echo "$output" | grep -q "dead in both roles"
 }
 
-@test "an empty matcher is rejected — it watches nothing and can never fire" {
+@test "an empty matcher is rejected — it names nothing, so it decides nothing" {
   run "$HOOK" --check-matcher ""
   [ "$status" -eq 1 ]
-  echo "$output" | grep -q "never fire"
+  echo "$output" | grep -q "decides nothing"
 }
 
-@test "a rejection names the SUPPORTED route to a path outside cwd" {
+@test "a rejection names the remedy, not just the refusal" {
   # Without this, the check is a refusal with no remedy, and the next person just deletes it.
   run "$HOOK" --check-matcher /private/tmp/hs/fc/abs.txt
   [ "$status" -eq 1 ]

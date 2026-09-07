@@ -20,6 +20,20 @@
 # abs.txt change, so the file was genuinely being written — the absolute matcher alone was blind.
 # tests/file-changed.bats pins that negative arm; it is the only arm that can see this bug.
 #
+# 🚨 BUT THAT MEASUREMENT IS ABOUT **DISPATCH ONLY**, AND § 3e OF THE PLAN CORRECTS THE ADVICE THIS
+# SCRIPT ORIGINALLY DERIVED FROM IT. Arming and dispatch are two different mechanisms, and 0 rows
+# can only ever observe the second:
+#   · ARMING   — the watcher resolves `isAbsolute(x)?x:join(cwd,x)`, so an ABSOLUTE matcher arms
+#                durably and SURVIVES a `cd`; a relative one silently re-bases onto the new cwd.
+#   · DISPATCH — the matcher is regex-tested against `basename(n.file_path)` (corroborated at
+#                220:430421), so an absolute path can never match and never runs the hook.
+# So the correct wiring is a PAIR: an absolute matcher to ARM, a `*` sibling to DISPATCH, and a
+# `CwdChanged` hook re-emitting `watchPaths` (its handler OVERWRITES the dynamic list wholesale, so
+# with no CwdChanged registration the list is empty after the first `cd`). A bare basename alone is
+# the actively dangerous case — it keeps firing, for a DIFFERENT file.
+# `--check-matcher` therefore judges by ROLE and refuses to reject a correct arming registration:
+# an unconditional absolute-path refusal would block the very wiring § 3e prescribes.
+#
 # 🚨 SECOND CONSEQUENCE OF "in the current directory": the watch list is resolved RELATIVE TO CWD,
 # so a `cd` silently disarms it. `CwdChanged` is the only re-arm point, which is why that event is
 # a keep rather than a drop (§ 3, disposition change). A handler must never assume a stable arm
@@ -56,35 +70,42 @@ WATCHLIST="${CC_FILECHANGED_WATCHLIST:-$HOME/.claude/file-watch-paths}"
 # with the reason on stderr. Only the exact literal `--check-matcher` takes this path; any other
 # argument falls through to the observer, which must stay fail-open whatever it is handed.
 if [ "${1:-}" = "--check-matcher" ]; then
-  M="${2-}"
+  M=""; ROLE="dispatch"
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --role) ROLE="${2-}"; shift 2 || shift ;;
+      *)      [ -n "$M" ] || M="$1"; shift ;;
+    esac
+  done
+
   if [ -z "$M" ]; then
-    echo "file-changed: empty matcher — no filenames are watched, the hook can never fire" >&2
+    echo "file-changed: empty matcher — nothing is named, so this registration decides nothing" >&2
     exit 1
   fi
+
   RC=0
-  # Alternation-separated, per the binary's own example ".envrc|.env". Every element must be a
-  # filename in the current directory; one bad element is enough to make that element dead.
   OLDIFS="$IFS"; IFS='|'
   for ELEM in $M; do
-    case "$ELEM" in
-      /*)
-        # MEASURED, not derived: three simultaneous registrations in ONE 2.1.220 run, absolute
-        # `/private/tmp/hs/fc/abs.txt` → 0 rows while `*` → 3 rows saw that same file change.
-        echo "file-changed: '$ELEM' is an absolute path — measured to match 0 changes (silent no-op); the matcher takes filenames in cwd" >&2
-        RC=1
-        ;;
-      */*)
-        # DERIVED from the binary's description ("filenames to watch in the current directory"),
-        # not measured. Stated as derived so a future reader does not inherit it as a measurement.
-        echo "file-changed: '$ELEM' contains a path separator — the matcher takes filenames in cwd, so this is expected never to match (derived from the binary's description, not measured)" >&2
-        RC=1
-        ;;
+    case "$ROLE:$ELEM" in
+      arm:/*)
+        : ;;                                   # correct: an absolute path arms durably across a cd
+      arm:*)
+        echo "file-changed: '$ELEM' is RELATIVE, so it re-bases onto the new cwd on the first cd and stops watching the file it was wired for — an arming matcher must be absolute (§ 3e)" >&2
+        RC=1 ;;
+      dispatch:/*)
+        echo "file-changed: '$ELEM' is an absolute path — it will never DISPATCH (the matcher is tested against basename(file_path), measured 0 rows against '*''s 3). This is correct ONLY as the § 3e ARMING half; pair it with a '*' registration to dispatch and a CwdChanged hook re-emitting watchPaths, or this hook never runs" >&2
+        RC=1 ;;
+      dispatch:*/*)
+        echo "file-changed: '$ELEM' contains a path separator but is not absolute — it can neither arm durably nor match a basename, so it is dead in both roles" >&2
+        RC=1 ;;
+      dispatch:'*')
+        : ;;                                   # the dispatch half of the pair
+      dispatch:*)
+        echo "file-changed: NOTICE '$ELEM' is a bare basename — it dispatches, but a cd RE-BASES it onto the new cwd, so it silently starts matching a same-named file elsewhere (§ 3e, measured). Prefer the pair: an absolute arm + a '*' dispatch + a CwdChanged re-arm" >&2 ;;
     esac
   done
   IFS="$OLDIFS"
-  if [ "$RC" -ne 0 ]; then
-    echo "file-changed: to watch a path outside cwd, emit hookSpecificOutput.watchPaths from the hook instead (see $WATCHLIST)" >&2
-  fi
   exit "$RC"
 fi
 
