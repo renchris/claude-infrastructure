@@ -75,8 +75,9 @@ the plan wins and the task list gets corrected — never the reverse.
 | `hooks/permission-denied.sh` + `tests/permission-denied.bats` | **LANDED** (`426d5da66`, content-verified on trunk — W3-D). Handler + 15-test suite. NOT registered; the suite has an arm that FAILS if any settings file in this repo names it |
 | `hooks/post-compact.sh` + `tests/post-compact.bats` | **LANDED** (`426d5da66`, same commit — W3-D). Handler + 19-test suite. Records `trigger` + a bounded digest of the ~21.8 KB `compact_summary`, never the body. NOT registered |
 | `hooks/config-change.sh` + `tests/config-change.bats` | **LANDED** (`426d5da66`, same commit — W3-D). Handler + 20-test suite. Decision-class: empty stdout on every path. Records whether a changed settings file still PARSES. NOT registered |
+| `hooks/cwd-changed.sh` + `tests/cwd-changed.bats` | **LANDED** (`e48db8be5`, content-verified on trunk — W3-E). Handler + 24-test suite, 14-site red-proof, 0-red unmutated baseline. § 3e's **part 3**, which until now had no dedicated handler — and the reason `migrations/0019` had to exclude `FileChanged`. Re-emits `watchPaths` on a `CwdChanged` payload from the SAME watchlist and env seam as `hooks/file-changed.sh` (`CC_FILECHANGED_WATCHLIST`), and writes the **receipt** that handler deliberately cannot: one row per transition carrying the COUNT re-armed, including the count-0 case. NOT registered; the suite has an arm that FAILS if any settings file in this repo names it |
 | Everything else in § 3 | **measured, not yet adopted** — W1/W2 complete, W3's waves ALL LANDED (**A** `StopFailure`/`SubagentStop`, **B** `FileChanged`/`InstructionsLoaded`, **C** `PostToolBatch`, **D** `PermissionDenied`/`PostCompact`/`ConfigChange`). D was a fourth wave, added after W4 promoted its three rows |
-| `migrations/0019-hook-surface-registration.sh` + the § 4 assertion in `hooks/config-mirror-assert.sh` | **WRITTEN and STAGED (c10 — waits for a human), 2026-09-07.** The registration half W3 was missing. Registers `StopFailure`, `InstructionsLoaded` (matcher `session_start`) and `PostToolBatch` across the five fleet config dirs — idempotent, JSON-validated and content-verified before it replaces any file, per-file backup, and it re-asserts that `Stop` and `PreToolUse` survived the edit. Operator ruling `ab82a67e2c37` chose `settings.json` after § 4's separate-file rule was measured unsatisfiable. **Deliberately NOT in it:** `SubagentStop` (migration 0014 already stages exactly this), `FileChanged`+`CwdChanged` (need § 3e's three-part wiring, and `hooks/cwd-changed.sh` does not exist — wiring FileChanged without its re-arm partner yields a watcher that silently empties on the first `cd`, which is worse than not wiring it), and `PermissionDenied`/`PostCompact`/`ConfigChange` (promoted to WIRE by the W4 pass AFTER the W3 waves were briefed, so they had no handlers when 0019 was written — **corrected 2026-09-07: W3-D landed all three (`426d5da66`), so the exclusion now rests on REGISTRATION scope alone, not on their absence. A follow-on migration is the right and only place to wire them; 0019 itself is unchanged**). Gate: `shellcheck` clean · `bash -n` clean · **10/10** related suites green with `RAN==TOTAL` · idempotence guard verified on a sandbox copy (90→91 registrations, `Stop` intact) · the drift assertion carries BOTH controls — silent when whole, names the event when one is removed |
+| `migrations/0019-hook-surface-registration.sh` + the § 4 assertion in `hooks/config-mirror-assert.sh` | **WRITTEN and STAGED (c10 — waits for a human), 2026-09-07.** The registration half W3 was missing. Registers `StopFailure`, `InstructionsLoaded` (matcher `session_start`) and `PostToolBatch` across the five fleet config dirs — idempotent, JSON-validated and content-verified before it replaces any file, per-file backup, and it re-asserts that `Stop` and `PreToolUse` survived the edit. Operator ruling `ab82a67e2c37` chose `settings.json` after § 4's separate-file rule was measured unsatisfiable. **Deliberately NOT in it:** `SubagentStop` (migration 0014 already stages exactly this), `FileChanged`+`CwdChanged` (need § 3e's three-part wiring, and `hooks/cwd-changed.sh` does not exist — wiring FileChanged without its re-arm partner yields a watcher that silently empties on the first `cd`, which is worse than not wiring it — **corrected 2026-09-07: W3-E landed `hooks/cwd-changed.sh` (`e48db8be5`), so this exclusion too now rests on REGISTRATION scope alone. The three-part wiring finally has all three parts on disk; `migrations/0017-filechanged-cwdchanged-registration.sh` is where they get wired, and 0019 itself is unchanged**), and `PermissionDenied`/`PostCompact`/`ConfigChange` (promoted to WIRE by the W4 pass AFTER the W3 waves were briefed, so they had no handlers when 0019 was written — **corrected 2026-09-07: W3-D landed all three (`426d5da66`), so the exclusion now rests on REGISTRATION scope alone, not on their absence. A follow-on migration is the right and only place to wire them; 0019 itself is unchanged**). Gate: `shellcheck` clean · `bash -n` clean · **10/10** related suites green with `RAN==TOTAL` · idempotence guard verified on a sandbox copy (90→91 registrations, `Stop` intact) · the drift assertion carries BOTH controls — silent when whole, names the event when one is removed |
 
 **Net capability change so far: one repair, plus EIGHT handlers written and landed across W3-A, W3-B,
 W3-C and W3-D — every one of them NOT YET REGISTERED, and therefore inert.** § 3's other WIRE rows are
@@ -173,6 +174,92 @@ requires every match to be invoked by a named case there with a `--check-anchors
 self-check mode. Landing a fourth-plus harness without that wiring turns that suite red for every
 future lander. W3-C recorded its sweep in this section rather than as a file for the same reason;
 the shape is the precedent, not an omission.
+
+### W3-E — `CwdChanged`, the re-arm partner (landed `e48db8be5`, 2026-09-07)
+
+**Handler + suite only. Nothing is registered**, per § 4 — same shape as W3-A/B/C/D. This closes the
+last missing PART rather than the last missing EVENT: § 3e prescribes a three-part wiring for
+`FileChanged` and part 3 had no dedicated handler, which is the reason `migrations/0019` had to
+exclude `FileChanged` outright ("wiring FileChanged without its re-arm partner yields a watcher that
+silently empties on the first `cd`, which is worse than not wiring it"). All three parts are now on
+disk.
+
+**What it adds over `hooks/file-changed.sh`, which already re-emits `watchPaths` on a CwdChanged
+payload — the RECEIPT.** That handler deliberately writes NO log row for a CwdChanged payload: the
+payload names no file, so a row could attribute nothing. The consequence is that a re-arm leaves no
+trace, and § 3e-FINDING is exactly the failure class of a registered no-op that reads GREEN — the
+command string is present, the file is executable, it exits 0. Without a row, **"the registration
+fired and rebuilt an EMPTY list" and "the registration never fired" are the same observation**, and
+the first is the bug the wiring exists to prevent. `hooks/cwd-changed.sh` writes one row per
+transition carrying the COUNT it re-armed — `TS·SID·old_cwd·new_cwd·N` — on EVERY valid transition
+including `N=0`, because a receipt that only appeared once the feature was working could not witness
+the failure it exists for.
+
+**One watchlist, one SSOT, enforced mechanically.** It reads the same file and the same env seam as
+its sibling (`CC_FILECHANGED_WATCHLIST`, default `~/.claude/file-watch-paths`). The two readers are
+separate code, so the guarantee is an ARM rather than a structure: one watchlist is fed to BOTH
+handlers and the emitted `watchPaths` arrays must be identical. Change either reader without the
+other and it goes red (memory `sibling-auditors-must-share-the-state-model`).
+
+**It never reads `new_cwd` for anything but the log row**, which is what makes it safe under § 3e's
+REVERT hazard without having to decide whether that hazard applies: the emitted paths are the
+watchlist's own absolute entries, verbatim, and a relative entry is DROPPED rather than resolved —
+resolving it would re-create the cwd dependency this event exists to escape.
+
+| | |
+|---|---|
+| Landed | `e48db8be5`, an ancestor of `origin/main`, content-verified: `git ls-tree origin/main --` shows both paths and `git diff origin/main -- <paths>` is empty. ⚠️ The pre-land sha was `d42900ecd` — `ship-land.sh` rebases onto the freshest trunk before pushing, so only post-land shas are citable (W3-B's lesson, and it recurred here exactly as recorded) |
+| Gate | **24 tests green**, `RAN == TOTAL` · `shellcheck` clean · `bash -n` clean · related-suite sweep **14/14 suites, 300 tests, `RAN == TOTAL == 14`, 0 skips, 0 red** (this suite, the seven sibling hook-surface suites, and the six fleet lints every new `.sh`/`.bats` becomes subject to) |
+| Red-proof | **14 sites, one mutation each, 0-red unmutated baseline, 11 reddened a named arm, 3 SHADOWED and named as such** |
+| Registered | **nothing** — no settings file was touched, and the suite has an arm that fails if one is |
+
+**THE ARM THE SUITE EXISTS FOR, and why it is not the obvious one.** A happy-path suite over this
+handler — feed it a CwdChanged payload, see JSON come out — is vacuous against the failure it was
+written to prevent, because that failure is not in the emit's SHAPE, it is in the LIFECYCLE. The
+acceptance arm therefore models the two mechanisms § 3e measured and ONLY those two (arm the list
+from the FileChanged handler's own emit; `onCwdChanged` overwrites it with what the CwdChanged hooks
+return; a `*` matcher dispatches for any path IN the list), then asserts the originally-armed path is
+still watched on the far side of the transition **and that the same-named file under the new cwd is
+not** — the measured § 3e trap, where after a `cd` the relative matcher fired for a DIFFERENT file of
+that name while the originally-armed path produced zero rows. It is a model of the documented
+lifecycle, not a re-probe of the binary; § 3e's measurement is done and a second, weaker instrument
+would only muddy it. It is falsifiable in the way that matters: the emit mutant kills it, because the
+modelled list is rebuilt from the handler's real stdout on a real payload. A second arm runs the same
+model with the CwdChanged hook removed — the state of the world before this file — and requires the
+list to be EMPTY, so the acceptance arm cannot pass on an assertion that was never true.
+
+**THE TWO GREEN MUTANTS THAT WERE REAL COVERAGE GAPS, fixed rather than excused.** Both are shapes
+that pass review:
+1. **Every fixture had `old_cwd` and `cwd` agreeing**, so a handler reading `.cwd` alone passed all
+   of them and the `.old_cwd // .cwd` preference was untested. Only a payload where the two DIVERGE
+   can tell a preference from a fallback. A row that took the generic `cwd` would have recorded
+   whichever directory the harness happened to hold and silently misnamed the origin of the one
+   transition it is the sole record of.
+2. **The "print nothing, not an empty array" contract was being held by a PIPELINE EXIT STATUS**, not
+   by the guard written to hold it. `pipefail` is set, so a `grep` matching nothing failed the whole
+   pipeline and left the paths variable empty rather than `[]` — which meant a mutant of the `N > 0`
+   guard could not redden anything. This is memory `grep-q-under-pipefail-inverts-the-verdict` in its
+   *benign* direction, and benign is what makes it dangerous: the code was correct, so nothing was
+   going to look at it. Normalising the empty case to a real empty array puts the contract back where
+   it is readable and testable. **Generalisable: a contract accidentally held by a side effect is
+   indistinguishable from one held on purpose, until you mutate the guard and nothing goes red.**
+
+**THREE SITES ARE SHADOWED BY CONSTRUCTION AND ARE NAMED, not left looking untested** — a site whose
+mutant is green is a claim about the site, and the claim has to be written down or the next reader
+re-derives it: the **empty-stdin guard** (jq on empty input yields nothing, so the guard's outcome is
+the no-guard outcome), the **comment strip** (every comment shape it removes also fails the `^/`
+filter beside it — memory `sibling-guard-makes-the-fixture-vacuous`), and the **empty-list
+normalisation** (behaviourally subsumed by `pipefail`, per the paragraph above; it is what makes the
+`N > 0` guard falsifiable, not a behaviour of its own).
+
+**And one guard was DELETED for being un-falsifiable: `command -v jq`.** Without jq the call below it
+is a not-found whose stderr is already redirected, so the handler exits 0 having emitted and written
+nothing — byte-for-byte what the guard produced. That is the same dead code the W3-C sweep removed
+from `post-tool-batch.sh`. The empty-stdin guard was KEPT despite being equally un-falsifiable, and
+the distinction is the honest one: once behaviour is identical, COST is all that is left to decide on
+— the empty-stdin guard avoids spawning a real jq process on a path that runs at every `cd`, and the
+jq guard would have avoided only a failed exec. Verified by running the handler under a PATH with no
+jq: exit 0, no stdout, no log directory created.
 
 ### W3-C — `PostToolBatch` (landed `647048376`, 2026-09-06)
 
@@ -439,7 +526,7 @@ the binary and invocation mode that produced the verdict. Commands: § 3a, keyed
 | 25 | `WorktreeCreate` | ✓ / ✓ | **HOSTILE** | 220 · provider contract read + fleet incident | **PROHIBITION** |
 | 26 | `WorktreeRemove` | ✓ / ✓ | FIRES | 220 · headless `-p`, `ExitWorktree` in a /tmp repo | **DROP** |
 | 27 | `InstructionsLoaded` | ✓ / ✓ | FIRES, and it NAMES the file | 114 + 220 · headless `-p` | **WIRE** |
-| 28 | `CwdChanged` | ✓ / ✓ | FIRES | 114 + 220 · headless `-p` | **WIRE** — mandatory if 29 is wired |
+| 28 | `CwdChanged` | ✓ / ✓ | FIRES | 114 + 220 · headless `-p` | **WIRE** — mandatory if 29 is wired · handler `hooks/cwd-changed.sh` landed W3-E (`e48db8be5`) |
 | 29 | `FileChanged` | ✓ / ✓ | FIRES | 114 + 220 · headless `-p` | **WIRE** — but only as the PAIR in § 3e |
 | 30 | `DirectoryAdded` | ✗ / ✓ | FIRES (220) · NOT-APPLICABLE (114, absent from enum) | 220 · headless, `register_repo_root` control request | **DROP** |
 | 31 | `MessageDisplay` | ✗ / ✓ | FIRES (220) · NOT-APPLICABLE (114, absent from enum) | 220 · headless `-p` **and** interactive TUI | **DROP** |
