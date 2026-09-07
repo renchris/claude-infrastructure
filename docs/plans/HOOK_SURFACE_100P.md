@@ -72,14 +72,107 @@ the plan wins and the task list gets corrected — never the reverse.
 | `hooks/stop-failure-marker.sh` + suite | **LANDED** (`53edbbcf3`, content-verified on trunk — W3-A). NOT registered: no settings file was touched, per § 4 |
 | `hooks/subagent-stop.sh` v1 → v2 + suite | **LANDED** (`53edbbcf3`, same commit, content-verified). Still registered NOWHERE — the script was already on disk and unwired before this |
 | `hooks/post-tool-batch.sh` + `tests/post-tool-batch.bats` | **LANDED** (`647048376`, content-verified on trunk — W3-C). Handler + 15-test suite, 9-mutant red-proof, 0-red baseline. NOT registered, per § 4 |
-| Everything else in § 3 | **measured, not yet adopted** — W1/W2 complete, W3's three waves ALL LANDED (**A** `StopFailure`/`SubagentStop`, **B** `FileChanged`/`InstructionsLoaded`, **C** `PostToolBatch`) |
-| `migrations/0019-hook-surface-registration.sh` + the § 4 assertion in `hooks/config-mirror-assert.sh` | **WRITTEN and STAGED (c10 — waits for a human), 2026-09-07.** The registration half W3 was missing. Registers `StopFailure`, `InstructionsLoaded` (matcher `session_start`) and `PostToolBatch` across the five fleet config dirs — idempotent, JSON-validated and content-verified before it replaces any file, per-file backup, and it re-asserts that `Stop` and `PreToolUse` survived the edit. Operator ruling `ab82a67e2c37` chose `settings.json` after § 4's separate-file rule was measured unsatisfiable. **Deliberately NOT in it:** `SubagentStop` (migration 0014 already stages exactly this), `FileChanged`+`CwdChanged` (need § 3e's three-part wiring, and `hooks/cwd-changed.sh` does not exist — wiring FileChanged without its re-arm partner yields a watcher that silently empties on the first `cd`, which is worse than not wiring it), and `PermissionDenied`/`PostCompact`/`ConfigChange` (promoted to WIRE by the W4 pass AFTER the W3 waves were briefed, so they have no handlers yet). Gate: `shellcheck` clean · `bash -n` clean · **10/10** related suites green with `RAN==TOTAL` · idempotence guard verified on a sandbox copy (90→91 registrations, `Stop` intact) · the drift assertion carries BOTH controls — silent when whole, names the event when one is removed |
+| `hooks/permission-denied.sh` + `tests/permission-denied.bats` | **LANDED** (`426d5da66`, content-verified on trunk — W3-D). Handler + 15-test suite. NOT registered; the suite has an arm that FAILS if any settings file in this repo names it |
+| `hooks/post-compact.sh` + `tests/post-compact.bats` | **LANDED** (`426d5da66`, same commit — W3-D). Handler + 19-test suite. Records `trigger` + a bounded digest of the ~21.8 KB `compact_summary`, never the body. NOT registered |
+| `hooks/config-change.sh` + `tests/config-change.bats` | **LANDED** (`426d5da66`, same commit — W3-D). Handler + 20-test suite. Decision-class: empty stdout on every path. Records whether a changed settings file still PARSES. NOT registered |
+| Everything else in § 3 | **measured, not yet adopted** — W1/W2 complete, W3's waves ALL LANDED (**A** `StopFailure`/`SubagentStop`, **B** `FileChanged`/`InstructionsLoaded`, **C** `PostToolBatch`, **D** `PermissionDenied`/`PostCompact`/`ConfigChange`). D was a fourth wave, added after W4 promoted its three rows |
+| `migrations/0019-hook-surface-registration.sh` + the § 4 assertion in `hooks/config-mirror-assert.sh` | **WRITTEN and STAGED (c10 — waits for a human), 2026-09-07.** The registration half W3 was missing. Registers `StopFailure`, `InstructionsLoaded` (matcher `session_start`) and `PostToolBatch` across the five fleet config dirs — idempotent, JSON-validated and content-verified before it replaces any file, per-file backup, and it re-asserts that `Stop` and `PreToolUse` survived the edit. Operator ruling `ab82a67e2c37` chose `settings.json` after § 4's separate-file rule was measured unsatisfiable. **Deliberately NOT in it:** `SubagentStop` (migration 0014 already stages exactly this), `FileChanged`+`CwdChanged` (need § 3e's three-part wiring, and `hooks/cwd-changed.sh` does not exist — wiring FileChanged without its re-arm partner yields a watcher that silently empties on the first `cd`, which is worse than not wiring it), and `PermissionDenied`/`PostCompact`/`ConfigChange` (promoted to WIRE by the W4 pass AFTER the W3 waves were briefed, so they had no handlers when 0019 was written — **corrected 2026-09-07: W3-D landed all three (`426d5da66`), so the exclusion now rests on REGISTRATION scope alone, not on their absence. A follow-on migration is the right and only place to wire them; 0019 itself is unchanged**). Gate: `shellcheck` clean · `bash -n` clean · **10/10** related suites green with `RAN==TOTAL` · idempotence guard verified on a sandbox copy (90→91 registrations, `Stop` intact) · the drift assertion carries BOTH controls — silent when whole, names the event when one is removed |
 
-**Net capability change so far: one repair, plus FIVE handlers written and landed across W3-A, W3-B
-and W3-C — every one of them NOT YET REGISTERED, and therefore inert.** § 3's other WIRE rows are
+**Net capability change so far: one repair, plus EIGHT handlers written and landed across W3-A, W3-B,
+W3-C and W3-D — every one of them NOT YET REGISTERED, and therefore inert.** § 3's other WIRE rows are
 still only recommendations. The gap between "landed" and "wired" is deliberate and is closed in
 exactly one place: the desk's c10 migration, composed once — and its precondition, all three W3
 sessions landed, is now met.
+
+### W3-D — `PermissionDenied` + `PostCompact` + `ConfigChange` (landed `426d5da66`, 2026-09-07)
+
+**Handlers + suites only. Nothing is registered**, per § 4 — same shape as W3-A/B/C. These three
+were the ONLY WIRE rows in § 3 with no handler at all: the W4 pass promoted them AFTER the W3-A/B/C
+briefs were written, which is why `migrations/0019` names them as deliberately excluded. That
+exclusion clause is now stale in one word only — they have handlers; they still have no
+registration, and the migration is still the right and only place for one.
+
+**Each suite carries an arm asserting the handler's own name appears in NO settings file in this
+repo.** That is the § 4 precondition made mechanical rather than remembered: a future session
+cannot wire one of these from inside the wave's own deliverable without going red.
+
+| | `PermissionDenied` → `hooks/permission-denied.sh` | `PostCompact` → `hooks/post-compact.sh` | `ConfigChange` → `hooks/config-change.sh` |
+|---|---|---|---|
+| What it writes | one JSONL row per DENIAL: tool, `reason`, `tool_use_id`, mode | one bounded row per compaction: `trigger`, summary length + sha256 + 160-char head | one row per config write: `source`, `file_path`, path-derived `kind`, and `json_ok` |
+| The constraint that shapes it | `{hookEventName, retry:boolean}` — **`retry:true` RE-OFFERS the denied call** | `compact_summary` measured **21,834** and **5,989** chars — never echo or store stdin whole | **decision-class** — a non-empty stdout freezes config/skill hot-reload for the session |
+| How it satisfies it | there is NO writer to stdout anywhere in the file, and the suite asserts empty stdout per payload class | the body is bounded (`.[0:$hc]`) before it can reach the row; the 21,834-char fixture yields a <1 KB log | same: no writer, asserted per class |
+
+**Why no `exec 1>/dev/null` guard, on any of the three.** It was written and then deleted: with no
+writer to stdout it is un-falsifiable — no mutant can make it matter — which is exactly the
+`type == "array"` dead code the W3-C sweep removed from `post-tool-batch.sh`. Two mechanisms
+producing one outcome means no test can credit either. The contract is held instead by per-path
+assertions that CAN go red, and a mutant that appends a `retry:true` line to the fired path reddens
+three of them.
+
+**The `PermissionDenied` event gate is load-bearing in a way `PostToolBatch`'s was not.** W3-C found
+its event gate initially had no arm, because a shape gate refused the fixture first. Here no shape
+gate is possible: a `PreToolUse` payload carries `tool_name`, `tool_input` **and** `tool_use_id`, so
+it is field-for-field indistinguishable from a denial except by `hook_event_name`. Without the gate,
+a mis-registration would record every tool call in the fleet as a refusal — not noisy, but the
+opposite of the truth. The `PreToolUse` and `PostToolUse` arms are what pin it.
+
+🚨 **A § 3a CORRECTION, recorded here rather than applied there** (§ 3's rows are not this wave's to
+edit). The row-24 writeup gives `ConfigChange`'s `source` as `"local_settings"`. The capture holds
+**two** values: `local_settings` for `.claude/settings.local.json` and **`skills`** for
+`.claude/commands/hsprobe.md` (both in `/tmp/hs/log/session.tsv`, same run). Nobody has read this
+event's value list out of the binary's hook metadata — unlike `InstructionsLoaded`, whose
+`matcherMetadata` literal W3-B used as a bounded instrument — so the enum is **unbounded as far as
+any of us knows**. The handler therefore classifies on the FILE PATH, which is measured and
+self-describing, and records `source` verbatim as data. A tripwire keyed on an unmeasured enum stops
+covering its case the first time a value is added, silently. This is the same shape as W3-B's
+`load_reason` correction one level down: the writeup was right that `local_settings` occurs and
+wrong that it is the whole list, and the correct half lent credibility to the unchecked half.
+
+**`PostCompact`'s case is narrower than it looks, and the header says so.** `SessionStart
+source=compact` already fires ~1.3 s earlier and is already wired fleet-wide, so the OCCURRENCE of a
+compaction is free today and **counting alone does not justify this hook**. Only the two fields do.
+`trigger` is the field `CONTEXT_ECONOMY_V2` derives by scraping transcripts, and its 39/39-manual /
+0-auto finding rests entirely on that scraper; an observed field is a different class of evidence.
+Both captures read `manual`, so the suite fixtures the `auto` SCHEMA value — a handler hardcoding
+`"manual"` would pass every observation made to date.
+
+**What `json_ok` is, and its one false-positive mode.** For a settings file the handler re-reads the
+named path and records whether it still parses — the plan's own "one malformed entry silently
+disables all 90 registrations with zero log output" hazard, made observable at the moment it
+happens. But the hook fires ON the write, so a read can land MID-WRITE on a truncated file that is
+valid milliseconds later (memory `peer-worktree-read-midwrite-parses-as-a-code-defect`). So a
+FAILING first parse — and only a failing one — is re-checked once after a bounded sleep, and the row
+carries `rechecked` so a reader can tell a settled verdict from a single sample. The suite
+reproduces that window **deterministically**, with a `jq` stub that fails the first file-parse and
+delegates everything else, rather than racing a real writer and shipping a flake.
+
+| | |
+|---|---|
+| Gate | **54 tests green** (15 + 19 + 20), `RAN == TOTAL` on every suite · `shellcheck` clean · `bash -n` clean · related-suite sweep `14/14 related suites, 271 tests, `RAN == TOTAL == 14`, 0 skips, 0 red (the three new suites, the five sibling hook-surface suites, and the six fleet lints every new `.sh`/`.bats` becomes subject to)` |
+| Red-proof | **33 mutants, one per site, 0-red unmutated baseline, every mutant reddened ≥1 named test, 0 sites unproven** |
+| Registered | **nothing** — no settings file was touched, and each suite has an arm that fails if one is |
+
+**The 33 sites, and what each mutant killed:**
+
+| Subject | Site | Red |
+|---|---|---|
+| `permission-denied` | kill-switch · empty-stdin · no-jq abstain · event-name gate · `reason` field · `tool_name` field · `tool_input` truncation · malformed-JSON abstain · rotation · stdout silence | 1 · 2 · 1 · 2 · 2 · 2 · 1 · 1 · 1 · 3 |
+| `post-compact` | kill-switch · empty-stdin · no-jq abstain · event-name gate · malformed-JSON abstain · `trigger` field · `summary_chars` · sha-over-whole-body · head truncation · rotation | 1 · 2 · 1 · 2 · 1 · 2 · 3 · 2 · 1 · 1 |
+| `config-change` | kill-switch · empty-stdin · no-jq abstain · event-name gate · malformed-JSON abstain · `@sh` emitter · `eval` reader · classify-on-path · parse verdict · absent-file verdict · mid-write re-check · parse size cap · rotation | 1 · 2 · 1 · 1 · 1 · 11 · 10 · 1 · 2 · 1 · 1 · 1 · 1 |
+
+The two `config-change` field-extraction sites are the emitter (`@sh`) and its reader (`eval`), and
+they are counted separately because each is independently mutable — but the historical defect they
+defend against is only expressible in BOTH halves at once (`@tsv` + `read`, where a tab is IFS
+whitespace so an absent leading field shifts every later one LEFT; measured on `hooks/file-changed.sh`,
+memory `ifs-whitespace-collapses-empty-fields`). Either half alone is a garbled shape rather than
+that bug, which is why each reddens ~half the suite instead of one arm.
+
+**One thing worth carrying forward.** The red-proof harness is a scratch artifact, deliberately not
+checked in: `tests/anti-vacuity-contract.bats` globs `tests/*redproof* scripts/*redproof*` and
+requires every match to be invoked by a named case there with a `--check-anchors`/`--check-cases`
+self-check mode. Landing a fourth-plus harness without that wiring turns that suite red for every
+future lander. W3-C recorded its sweep in this section rather than as a file for the same reason;
+the shape is the precedent, not an omission.
 
 ### W3-C — `PostToolBatch` (landed `647048376`, 2026-09-06)
 
