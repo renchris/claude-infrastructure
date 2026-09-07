@@ -87,6 +87,18 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-07 — recycle #314 (lane infra):** closed 19b8512354c5 2b0289019fb9 5b4a4809bcf5
+  62456380ccab 8900438590a2 9ef51331816f d94a415e704c e0bbb00c86da e3b8acbd4c90 · blocked none ·
+  released none · landed d79eaa486 d5a8d931f 9fc58fa40. #313's third reading held on 6 of 9, and a
+  FOURTH appeared: the ref can be the pre-fix form of a defect main already CURED — 9ef51331816f's
+  residual was `jq -r … | tail -1`, the exact kill-switch bug main replaced with `jq -c` + isMeta,
+  and d94a415e704c's was this script's own retired floor. Re-landing either regresses trunk, so
+  `N line(s) present only in the ref` needs a direction check, not just a supersession check. Two
+  were genuine: e3b8acbd4c90 (resolve the superseded half to main verbatim, land only the half main
+  lacks) and 2b0289019fb9, whose own new cases went RED here because both platform stubs resolved
+  their VALUE through a hardcoded GNU `stat -c` — a suite written to remove one platform's blindness
+  ran only on the platform it impersonated. `closed=9 closed_pre=9 closed_other=0 filed=0 net=9 blocked=2 min=3 lane=local-drain project=claude-infrastructure floor=MET`.
+
 - **2026-09-07 — recycle #313 (lane infra):** closed 10 pre-existing `re-land` rows. #312's split
   holds, and a THIRD reading appeared: `N line(s) present only in the ref` was supersession in 5 of
   5, and in 3 of those the ref was the WEAKER form — dropping `|| false` from `! grep -q` and bare
