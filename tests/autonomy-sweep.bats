@@ -1359,6 +1359,9 @@ echo "invoked=$t from=$d \$*" >>"$marker"
 STUB
       chmod +x "$d/$t.sh"
     done
+    # the return pass is invoked by the LANE the sweep spawns (only from the deployed copy), and the
+    # lane resolves its siblings from its own directory — so the real lane sits beside the stubs
+    cp "$REPO/scripts/cloud-return-lane.sh" "$d/cloud-return-lane.sh"; chmod +x "$d/cloud-return-lane.sh"
   done
 
   # THE SUBJECT: a verifier copy, living under the config dir, must skip — both tools.
@@ -1411,7 +1414,12 @@ STUB
   printf '#!/bin/bash\nexit 0\n' >"$deployed/cloud-refusal-route.sh"
   chmod +x "$deployed/cloud-refusal-route.sh"
 
-  CC_SWEEP_RETURN_BOUND_S=1 "${SWEEP_TO[@]}" bash "$deployed/autonomy-sweep.sh" >/dev/null 2>&1 || true
+  # Since 2026-09-06 the bound is the LANE's (CC_LANE_RETURN_BOUND_S), not the sweep's: the lane
+  # arms the timeout and tells the child the same number. The sweep only spawns the lane and waits
+  # up to its grace for a short one — long enough here for the 1 s bound to cut the stub.
+  cp "$REPO/scripts/cloud-return-lane.sh" "$deployed/cloud-return-lane.sh"; chmod +x "$deployed/cloud-return-lane.sh"
+
+  CC_LANE_RETURN_BOUND_S=1 "${SWEEP_TO[@]}" bash "$deployed/autonomy-sweep.sh" >/dev/null 2>&1 || true
 
   # (1) THE CHILD WAS TOLD THE BOUND, and told the one this run actually used — not a literal.
   grep -q '^told=1$' "$marker" || false

@@ -73,7 +73,9 @@ LOCK_TTL=$(( RETURN_BOUND + RETIRE_BOUND + 120 ))
 now() { if [ -n "${CC_LANE_NOW:-}" ]; then printf '%s' "$CC_LANE_NOW"; else date +%s; fi; }
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 say() { printf '%s %s\n' "$(now_iso)" "$*"; }
-load1() { local l; l="$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')"; case "$l" in ''|*[!0-9.]*) l="" ;; esac; printf '%s' "$l"; }
+# /usr/sbin/sysctl by absolute path: the first live tick ran under a PATH without /usr/sbin and
+# journalled load1=null for a pass that ran 4,103 s — the unattended-path class, met on day one.
+load1() { local l; l="$(/usr/sbin/sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')"; case "$l" in ''|*[!0-9.]*) l="" ;; esac; printf '%s' "$l"; }
 
 command -v jq >/dev/null 2>&1 || { echo "cloud-return-lane: jq required" >&2; exit 3; }
 
@@ -117,7 +119,16 @@ lock_acquire() {
 # shellcheck disable=SC2329  # invoked through the EXIT/INT/TERM trap below
 lock_release() { [ "$(head -1 "$LOCK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LOCK" 2>/dev/null; return 0; }
 
-lock_acquire || { say "another lane tick holds $LOCK — exiting 4 (single-flight by design)"; exit 4; }
+# A contended tick still JOURNALS. Measured on the first live day: the sweep spawned the lane at
+# 06:37Z and 07:03Z while a hand-run tick held the lock, both exited 4 here, and neither left a row
+# anywhere — the sweep writes nothing for a lane that finished inside its grace, so a lock-held tick
+# read exactly like a tick that never happened (memory: alarm-must-key-on-the-store-not-the-sensor).
+if ! lock_acquire; then
+  say "another lane tick holds $LOCK — exiting 4 (single-flight by design)"
+  log_idl cloud-return "$(jq -cn --arg h "$(head -1 "$LOCK/pid" 2>/dev/null)" \
+    '{cloud_return_rc:"4", elapsed_s:null, load1:null, holder_pid:($h|tonumber? // null), note:"another lane tick holds the lane lock — single-flight; nothing ran, the holder journals its own rows"}')"
+  exit 4
+fi
 trap 'lock_release' EXIT INT TERM
 
 # ── 1. RETURN: land what has come back ─────────────────────────────────────────────────────────

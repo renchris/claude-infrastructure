@@ -1551,3 +1551,36 @@ and .disposition=="cloud-return")' ~/.claude/autonomy/idl.jsonl | tail -3` — `
 means `/usr/bin/perl` is gone, `skipped` means the symlink for the lane is missing, `detached` with no
 lane row after 90 min means the lane died without journaling (its log is
 `~/.claude/logs/cloud-return-lane.log`).
+
+### A9.6 · The first lane tick, measured (2026-09-07T06:38-07:27Z)
+
+One tick of the deployed lane, run by hand from the live layer while the last old-code sweep tick
+drained (foreground band, load ~100; the sweep's own spawns hit the lane lock at 06:37Z and 07:03Z —
+`another lane tick holds …/.lane.lock — exiting 4` in `~/.claude/logs/cloud-return-lane.log` — which is
+the spawn path observed live):
+
+```
+return pass rc=0 took=4103s · retire pass rc=0 took=5s (examined=33 superseded=3 conflict=1 kept=25 retired=4)
+```
+
+| what one tick did | count | evidence |
+|---|---|---|
+| cloud branches **landed + content-verified on origin/main** | **3** | `return.jsonl` `returned` rows 06:39Z / 06:54Z / 07:26Z; `land.log` exits 0 at 07:21Z and 07:26Z (1,935 s, gate 1,637 s) |
+| backlog items **closed by the lane** | **2** (`70ed289c10fb`, `ca97c678b18b`) + 1 park (`9ce3c6350e2f`, the item's own cloud-park verdict) | the same rows' `backlog:` field |
+| custody discharged | 2 | `custody: discharged …` |
+| wakes delivered to the live desk | **3 of 3** (each: pane `5` unresolvable → `--role desk` delivered) | `wake:` fields, `verdict=delivered` ×3 |
+| conflicts settled in seconds instead of a lander run | 3 | `land-conflict` rows 07:26:56-07:27:01Z |
+| lands deferred to the next tick (priced 1,937 s against 4,320 s budget) | 12 | `land-deferred`, `fits_bound=true` |
+| control plane unreadable (account `next`, HTTP 401 — the pre-existing abstain class, not the lane's) | 5 | `abstain` rows |
+
+Against A9.4's baseline: uncollected-sha **309 → 25**, never polled **23 → 4** (all four are fires
+younger than the boot budget), RETIRED with a verdict **0 → 303**, and — the loop closing — the
+dispatcher's pile cap stopped firing at 05:56Z and **four cloud fires went out at 06:24-06:37Z**
+(`2b0888bc8832` `64c150ba2a8e` `badb132df232` `c18e7ea9e6b1`, stamped `notify_back=330`, the live
+desk). Two defects the first tick surfaced, fixed in the same commit as this note: the lane read
+`sysctl` by bare name and journalled `load1=null` under a PATH without `/usr/sbin`; a lock-contended
+tick journalled nothing at all (the sweep writes no row for a lane that finished inside its grace,
+and the lane exited before its own row) — it now writes `cloud_return_rc: "4"` with the holder's pid.
+
+**Still the operator's, and still the ×30-80:** `41d05eae511c` — the sweep (and so the lane it
+spawns) runs at PRI 4 until `43-autonomy-sweep-band-activate.sh` reloads the job.

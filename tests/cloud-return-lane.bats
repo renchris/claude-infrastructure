@@ -66,8 +66,11 @@ row() { jq -c "select(.disposition==\"$1\")" "$CC_IDL" | tail -1; }
   printf '%s\n' "$$" >"$CC_CLOUD_STATE/.lane.lock/pid"; date +%s >"$CC_CLOUD_STATE/.lane.lock/at"
   run bash "$LANE"
   [ "$status" -eq 4 ]
-  [ ! -s "$CC_IDL" ]
+  # nothing RAN, but the tick still journals: rc 4 with null fields, naming the holder
   [ ! -s "$CALLS" ]
+  r="$(row cloud-return)"; [ -n "$r" ]
+  [ "$(printf '%s' "$r" | jq -r '.cloud_return_rc')" = "4" ]
+  printf '%s' "$r" | jq -e ".holder_pid == $$ and .elapsed_s == null" >/dev/null
   # a DEAD holder (a pid nothing runs under): reaped, and the tick runs
   printf '%s\n' 2147483000 >"$CC_CLOUD_STATE/.lane.lock/pid"
   run bash "$LANE"
