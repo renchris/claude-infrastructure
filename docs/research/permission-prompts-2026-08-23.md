@@ -119,6 +119,61 @@ classifier is blind to its own working directory, and refuses things it would ot
 (`~/.claude`, `-next`, `-secondary`, `-tertiary`, `-quaternary`). The config mirror does not heal it
 (task #70). Any settings change must be applied to all five or it silently applies to one account.
 
+## 4b. RESOLVED 2026-08-24 — the redirect gap (`d1d51881cca1`)
+
+The item filed off §2: `decide()` checks `is_internal_host()` on the URL **as written**, then curl
+follows redirects with no further gate, so a public host answering `302 http://169.254.169.254/`
+walks the SSRF arm past it. `-L` in 1,453 of 1,741 safe-method public reads; `--max-filesize` in
+none of the 3,098 rows. Pre-existing — identical for the ~16 allowlisted `READ_HOSTS` before — but
+`d8b517b28` widened the open-read allow to every public host, so it widened the gap's REACH.
+
+**Reproduced, then measured against curl 8.5.0 with local servers** (all of this is in
+`tests/curl-gate-redirect.bats`, and test 3 executes the last of it rather than asserting a string):
+
+| probe | result |
+|---|---|
+| `curl -L` into a `302`→IMDS | `%{url_effective}` = the IMDS URL. **The pivot is real.** |
+| `curl -L --proto-redir =https` into the same 302 | `curl: (1) Protocol "http" not supported or disabled` |
+| `curl -L --proto-redir =https` into a `302`→https | still follows — the common upgrade redirect is untouched |
+| `curl -L` + `Authorization: Bearer SECRET` across a redirect | target saw `AUTH=None` — **curl strips it itself** |
+| `curl --location-trusted`, same shape | target saw `AUTH=Bearer SECRET` |
+| `curl --help all` for any target-address filter | **nothing.** There is no `--no-redirect-to-private`, at any spelling |
+
+**Can curl be constrained at all? Partly — and the obvious lever is not the useful one.**
+`--max-redirs` bounds the CHAIN, not the TARGET, and one hop reaches IMDS, so it buys loop
+protection and nothing against SSRF. `--proto-redir =https` is the lever that works for the case
+that matters: every cloud metadata service (AWS/GCP/Azure/OpenStack link-local `169.254.169.254`) is
+**HTTP-only**, so refusing a redirect into plaintext refuses the canonical target — and it closes
+the scheme-pivot family (`file`/`gopher`/`dict`/`ftp`/`smb` on redirect) at the same time.
+
+**Applied as a rewrite, not a prompt.** Asking on `-L` would re-prompt 1,453 of 1,741 reads — it
+recreates the exact storm `d8b517b28` removed, against zero instances in 3,098 audited rows. So an
+`allow` carrying `-L` is rewritten via `updatedInput` (probe-confirmed live, `MACHINE_CAPACITY_V2.md`
+§11.2) to add `--proto-redir =https --max-redirs 10`. Zero round-trips. Seams:
+`CC_CURL_REDIR_HARDEN=off` · `CC_CURL_PROTO_REDIR` · `CC_CURL_MAX_REDIRS` · `CC_CURL_MAX_FILESIZE`
+(**opt-in, off by default** — the census fact is real, but a default size bound turns a legitimate
+large download into a hard failure for no security arm).
+
+**A second, sharper defect found while measuring, and closed outright.** `--location-trusted` was
+invisible to the gate. It forwards the credential to the redirect target, and *no host allowlist can
+reach past a 302* — so `curl --location-trusted -H 'Authorization: token ghp_…'
+https://api.github.com/…` was an **allow** (allowlisted host) while the token landed wherever
+GitHub's 302 pointed. Now a **deny**, and only when a credential is present: without one it is
+merely `-L`, which the open-read rule already governs. Plain `-L` is *not* an exfil arm — curl strips
+the header on a cross-host redirect by itself, measured above.
+
+🚨 **The residual is explicit and accepted: a redirect to `https://10.0.0.5/` is still followed.**
+Closing it needs curl to stop resolving, which no flag offers. The remaining defence is the
+`is_internal_host()` check on the URL as written, plus the fact that reaching this needs a host the
+model itself chose to fetch to be hostile.
+
+**Three PreToolUse hooks now emit `updatedInput`, and two doing so for one call has no documented
+resolution** (`hooks/coldcompile-admit.sh:34`). `curl-gate` therefore rewrites only a **single simple
+command whose first token is `curl`** — which `coldcompile-admit` declines by construction (it
+declines every simple command with no leading `VAR=`) — and additionally declines any command
+carrying a `config/qos-batch.patterns` word. `tests/curl-gate-redirect.bats:17` pins it by running
+all three shipped hooks over a corpus; `:18` pins the duplicated token list against the shipped table.
+
 ## 5. Method notes worth reusing
 
 - **Two self-inflicted bugs in the credential guard were caught by the corpus and the controls, not by

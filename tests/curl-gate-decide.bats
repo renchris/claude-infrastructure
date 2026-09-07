@@ -40,7 +40,10 @@ setup() {
 
 # decision <command> → prints allow | ask | deny.
 # An empty stdout is the gate's implicit allow (main() exits 0 silently on allow), so it is mapped
-# here rather than left to look like a crash.
+# here rather than left to look like a crash. So is an envelope carrying ONLY `updatedInput`: the
+# redirect-hardening rewrite is emitted in the no-decision form deliberately (it constrains the
+# command without taking the permission flow over from the hooks that own it), and reading that as
+# anything but an allow is what a `["permissionDecision"]` KeyError would have made it look like.
 decision() {
   CMD="$1" CWD="$ROOT" python3 -c '
 import json,os,subprocess,sys
@@ -49,7 +52,7 @@ pay=json.dumps({"session_id":"t","cwd":os.environ["CWD"],"hook_event_name":"PreT
 p=subprocess.run([sys.executable,sys.argv[1]],input=pay,capture_output=True,text=True)
 out=p.stdout.strip()
 if not out: print("allow"); sys.exit(0)
-print(json.loads(out)["hookSpecificOutput"]["permissionDecision"])
+print(json.loads(out)["hookSpecificOutput"].get("permissionDecision","allow"))
 ' "$GATE"
 }
 
