@@ -548,6 +548,17 @@ link, in no tree the box can reach, and every consumer guard on it (`[ -f x ] &&
 OK, and all twenty instrumented call sites did nothing. `LIVE_ADDS` > 0 therefore breaches at a lag
 of **1**. Read it the way the mechanism reads: *a land that adds a file is not live until the
 converger runs*, whatever the commit count says.
+⚠️ **…and it breaches at a lag of ZERO too, because the lag is the wrong denominator for an add**
+(2026-09-07, backlog `4e6a51df2a84`). `LIVE_LAG` measures the shared checkout against trunk, and
+**any** fast-forward of that checkout drives it to 0 while creating no symlink — deploy-live's own
+§2.E path B, which advances FILES and delivers nothing. Measured 2026-09-04: the ledger read
+`✅ LIVE_SRC=ok LIVE_LAG=0 LIVE_ADDS=0` while five landed runtime files had no live counterpart and
+both shipped auditors saw all five. `LIVE_ADDS` is now measured from the sha the converger last
+actually **delivered** (`deploy-live.sh`'s `deploy-last-advance`) up to **trunk**, and counts only
+paths that are absent under the live root and under a top-level the live layer actually deploys —
+so `docs/`, `tests/` and `migrations/` adds no longer manufacture a `🚀` no converge can clear.
+`LIVE_ADDS_BASE` says which denominator was used. The residual it cannot see is a genuinely NEW
+deployed top-level; `scripts/deploy-parity-assert.sh` remains the auditor of record for that.
 `👤` vs `✅` is the second one (*mine done ≠ yours done*), added 2026-08-01 after a close read
 `✅ Complete & live on trunk` at line 1 and revealed "two things remain yours" in its second-to-last
 paragraph. The operator had already decided to close at line 1. **`👤` counts only steps THIS SESSION

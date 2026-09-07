@@ -113,7 +113,10 @@
 #   number printed beside it, so a reader takes the commit distance as the amount of the box that is
 #   stale. It is not: measured at lag 10, exactly 2 of 513 links were stale. LIVE_STALE is that
 #   second number — see its own block below. It breaches nothing and changes no rung.
-#   So LIVE_ADDS > 0 breaches at lag ≥ 1, with no budget. It does NOT become an always-fires alarm:
+#   So LIVE_ADDS > 0 breaches at lag ≥ 1, with no budget — and at lag 0 as well (2026-09-07, backlog
+#   4e6a51df2a84): the lag measures the shared CHECKOUT against trunk and any fast-forward drives it
+#   to 0 while delivering nothing, so the added-file window is denominated on the converger's own
+#   last-advance record instead. It does NOT become an always-fires alarm:
 #   28.5% of the last 200 trunk commits add a file (measured), the breach lasts only until the live
 #   layer carries them, and CLAUDE.md's own 🚀 disposition has the AGENT run the converger and
 #   re-read — so a healthy box self-clears it within one close. It persists exactly as long as a
@@ -940,6 +943,11 @@ LIVE_ROOT="${WRAP_LIVE_ROOT:-$HOME/.claude}"
 # The stale scan is O(paths the lag changes), not O(the live tree) — but a pathological range would
 # still put a per-path readlink+hash on a Stop-hook path. Past the cap the answer is `?`, never 0.
 LIVE_STALE_MAX="${WRAP_LIVE_STALE_MAX:-200}"
+# The added-file scan stats one path under $LIVE_ROOT per added path, so it needs the same cap
+# LIVE_STALE has and for the same reason: a pathological window must go `?` rather than run an
+# unbounded loop inside a close. Larger than the stale cap because its window is now denominated
+# on the converger's last advance, which on a stalled converger is legitimately weeks of adds.
+LIVE_ADDS_MAX="${WRAP_LIVE_ADDS_MAX:-600}"
 LIVE_BUDGET_COMMITS="${WRAP_LIVE_BUDGET_COMMITS:-25}"
 # 360 MINUTES = CC_DEPLOY_MAX_LAG_HOURS (2026-08-26, recycle #235). This was 60, calibrated for the
 # clock this arm used to read — THIS session's HEAD, where "my landing is an hour old and still not
@@ -1059,9 +1067,26 @@ LIVE_BREACH_WHY=""
 # with BOTH auditors in BOTH states (0 converged, 5 at the moment above) additionally drops any path
 # already present under $HOME/.claude. Its residual is named: the top-level want-list has to come
 # from somewhere, and the only producer is deploy-parity-assert.sh, measured at 24.35/24.94/25.07s
-# against this whole script's 0.32s — 78x, on the path every session's close runs. That cost is why
-# this is a comment and not a diff.
+# against this whole script's 0.32s — 78x, on the path every session's close runs.
+#
+# THAT CANDIDATE IS NOW THE IMPLEMENTATION (2026-09-07, backlog 4e6a51df2a84 — the row is closed by
+# this). The cost objection turned out to bound only the RESIDUAL, not the candidate: the want-list
+# is derived from the live layer's OWN links, so nothing here calls deploy-parity-assert and nothing
+# here writes down a second model of the deployed surface. What the fix is, in one line each — the
+# denominator is the sha the converger last DELIVERED (deploy-last-advance), the right operand is
+# TRUNK rather than the session's HEAD, the read is no longer nested under the `behind` arm so the
+# session-denominated gate cannot decline to ask it, and two suppressors that FAIL OPEN drop paths
+# under an undeployed top-level and paths the live layer already carries. The residual survives and
+# is stated where the code is: a genuinely NEW deployed top-level has no link yet and its adds are
+# wrongly exonerated, which deploy-parity-assert remains the auditor of record for. Controls in both
+# directions: tests/wrap-ledger.bats section 2c-C.
 LIVE_ADDS=0
+# LIVE_ADDS_BASE = WHICH denominator the added-file window was measured from: `advance` (the sha
+# deploy-live last actually delivered — the correct one), `live-head` (the shared checkout's ref,
+# the fallback when no postland record is readable, and the operand an ungated fast-forward can
+# move), `none` (not computed), `?` (an operand did not resolve). Emitted because the two answer
+# different questions and a reader given only the count cannot tell which one it got.
+LIVE_ADDS_BASE="none"
 # LIVE_STALE = of the paths this lag changes, how many are REACHED BY A LIVE LINK and are executing
 # bytes that differ from HEAD's. The lag's DOSE, beside LIVE_LAG's DISTANCE. Same `?` law as
 # LIVE_ADDS, and here the law is load-bearing twice over: 0 is the HEALTHY value (nothing you run is
@@ -1123,8 +1148,51 @@ _count_failed_migrations() {
 
 # Sets LIVE / LIVE_SRC / LIVE_SHA / LIVE_LAG / LIVE_DIVERGED / MIG_FAILED / LIVE_BREACH. Called ONLY on the
 # ✅-eligible path with a resolved trunk (see the rung block) — a worse rung cannot be changed by it.
+# Does the live layer DEPLOY paths under this one's top-level at all? Answered from the live
+# layer's OWN links, never from a list typed here — that is what keeps this from being a second model
+# of the deployed surface beside deploy-parity-assert.sh's (the objection the old header raised
+# against any path filter). A top-level counts as deployed when $LIVE_ROOT/<tl> is itself a symlink
+# into the live checkout, or is a directory holding at least one depth-1 symlink into it — the two
+# shapes install.sh actually produces (a dir-link like vendor/, and per-file links like hooks/).
+#
+# A ROOT-LEVEL path (no slash) asks the question of $LIVE_ROOT itself, so a new top-level FILE is
+# judged by whether the root carries link-deployed files at all — the root SSOT class (statusline.sh,
+# CLAUDE.md). Judging it by its own absence would suppress every new root file silently, which is the
+# false negative this whole change exists to remove.
+#
+# Memoized in $_tl_yes / $_tl_no because a window can carry many paths under one top-level and each
+# miss costs a find. Both are set by the caller before the loop; unset, this degrades to correct but
+# repeated work, never to a wrong answer.
+_live_tl_deployed() {
+  local path="$1" tl probe l tgt
+  case "$path" in
+    */*) tl="${path%%/*}"; probe="$LIVE_ROOT/$tl" ;;
+    *)   tl="."          ; probe="$LIVE_ROOT" ;;
+  esac
+  # `-` defaults, not bare expansions: this runs under `set -u` and the memo vars are the CALLER's
+  # to set. Unset means "no memo", which costs a repeated find and can never give a wrong answer.
+  case "${_tl_yes-}" in *" $tl "*) return 0 ;; esac
+  case "${_tl_no-}"  in *" $tl "*) return 1 ;; esac
+  if [ -L "$probe" ]; then
+    tgt="$(readlink "$probe" 2>/dev/null)"
+    case "$tgt" in "$LIVE_REPO"/*) _tl_yes="${_tl_yes-}$tl "; return 0 ;; esac
+  fi
+  if [ -d "$probe" ]; then
+    while IFS= read -r l; do
+      [ -n "$l" ] || continue
+      tgt="$(readlink "$l" 2>/dev/null)"
+      case "$tgt" in "$LIVE_REPO"/*) _tl_yes="${_tl_yes-}$tl "; return 0 ;; esac
+    done <<TL_LINKS
+$(find "$probe" -maxdepth 1 -type l 2>/dev/null)
+TL_LINKS
+  fi
+  _tl_no="${_tl_no-}$tl "
+  return 1
+}
+
 compute_live_layer() {
   local my_origin live_origin sha lag lag_rc now ct ct_rc age_s _adds _arc _ahead _hrc
+  local _abase _advf _advsha _aright _adds_n _acount _ap
 
   # `git config --get remote.origin.url` is the cheapest probe that answers "same repo?" and it
   # touches no network. It is compared BYTE-EQUAL on purpose: a fuzzy match (ssh-vs-https, .git
@@ -1205,40 +1273,6 @@ compute_live_layer() {
       case "$_ahead" in ''|*[!0-9]*) _ahead=0 ;; esac
       LIVE_DIVERGED="$_ahead"
     fi
-    # ── ADDED FILES: the lag no budget may excuse (see the header). ──
-    # A TREE diff, not a commit walk: --diff-filter=A between the live layer's tree and HEAD's tree
-    # IS the question "which paths does HEAD have that the live layer does not", which is the
-    # inertness question itself. It needs no second stat against the live worktree, and a path the
-    # live layer already acquired by another route (rebase, cherry-pick, a branch that landed first)
-    # is correctly NOT listed — a commit walk over the range would have counted it anyway.
-    # NO PATH FILTER, deliberately. Restricting to the linked runtime dirs would raise the signal —
-    # a new docs/ page is never "run" — but it is a SECOND model of the deployed surface beside
-    # deploy-parity-assert.sh's, and a filter is a strictly-stronger suppressor: getting it wrong
-    # SILENCES a real breach (MEMORY.md cost-gate-must-be-strictly-weaker). Erring loud is the
-    # direction this rung is for, and LIVE_ADDS is emitted so a consumer can refine without a fork.
-    # Run in THIS repo: HEAD is ours by construction, whereas the live repo may never have fetched
-    # it (the same reason --is-ancestor is asked of the live side and not of ours). A linked worktree
-    # shares the object store and a separate clone holds any sha at/below trunk, so the live sha is
-    # readable here in both topologies; when it is not, say `?` and change NOTHING — an unresolvable
-    # sensor never manufactures a rung, exactly as LIVE_SRC=unknown does one branch up.
-    if git cat-file -e "${LIVE_SHA}^{commit}" 2>/dev/null; then
-      # CAPTURE THE BOUND'S OWN rc (2026-08-21, backlog 4fe8d531ce68). This was `|| true`, which
-      # swallowed it — and a swallowed failure is INDISTINGUISHABLE HERE from a clean read of zero
-      # adds: `_adds` is empty either way, `grep -c .` answers 0, and 0 means "no added file", the
-      # one converge lag that gets NO budget. So a timed-out sensor manufactured the ✅ the comment
-      # four lines above forbids it from manufacturing. The `?` arm already existed but was
-      # reachable ONLY through the cat-file miss, never through the bound.
-      _adds="$(_bounded "${WRAP_LIVE_TIMEOUT_S:-5}" git diff --diff-filter=A --name-only "$LIVE_SHA" "$HEAD_SHA" 2>/dev/null)"
-      _arc=$?
-      if [ "$_arc" -ne 0 ]; then
-        LIVE_ADDS="?"
-      else
-        LIVE_ADDS="$(printf '%s' "$_adds" | grep -c . 2>/dev/null || echo 0)"
-        case "$LIVE_ADDS" in ''|*[!0-9]*) LIVE_ADDS=0 ;; esac
-      fi
-    else
-      LIVE_ADDS="?"
-    fi
     # ── STALE EXECUTING FILES: the lag's DOSE (see LIVE_STALE's header note). ──
     # The scan is over the paths the lag CHANGES, not over the live tree: at lag 10 that was 11
     # paths against 513 links, so the cost is a readlink and a hash per changed path, and the cap
@@ -1286,6 +1320,105 @@ STALE_PATHS
       fi
     else
       LIVE_STALE="?"
+    fi
+  fi
+
+  # ── ADDED FILES: the lag no budget may excuse (see the header). ──
+  # OUTSIDE THE ok/behind FORK, DELIBERATELY (2026-09-07, backlog 4e6a51df2a84). This block used to
+  # sit inside the `behind` arm, so the gate above — `merge-base --is-ancestor "$HEAD_SHA"
+  # "$LIVE_SHA"`, denominated in the SESSION's HEAD — decided whether the question was asked at all.
+  # That is the exact configuration the row's headline measurement was taken in: 2026-09-04T02:28:45Z
+  # read RUNG=✅ LIVE_SRC=ok LIVE_LAG=0 LIVE_ADDS=0 while five tracked runtime files landed on trunk
+  # had no live counterpart. A session at or below the live layer is the NORMAL state, so the arm
+  # that reports an absent file was skipped precisely when it was needed. LIVE_SRC is unchanged — it
+  # still describes commit ancestry — and only the reachability of this read moved.
+  #
+  # THE DENOMINATOR IS THE SHA THE CONVERGER LAST DELIVERED, NOT THE CHECKOUT'S REF. `LIVE_SHA` is
+  # `git -C "$LIVE_REPO" rev-parse HEAD`, which ANY fast-forward of the shared checkout moves —
+  # deploy-live.sh's own §2.E path B, which advances FILES and creates NO symlinks. That event
+  # emptied this window and silenced the breach without doing the remedy. `deploy-last-advance`
+  # (deploy-live.sh:196, "<epoch> <sha>") records OUR advances only, so it cannot be moved by
+  # anything but a converge that actually ran. Unreadable ⇒ fall back to LIVE_SHA, which is the
+  # pre-2026-09-07 denominator: a narrower window, never a wider one, and never a manufactured `?`
+  # in a topology that has no postland dir at all. LIVE_ADDS_BASE says which was used.
+  #
+  # THE RIGHT OPERAND IS TRUNK, NOT THE SESSION'S HEAD (recycle #295's finding, now fixed). With
+  # `$HEAD_SHA` there, `git merge --ff-only origin/main` IN A WORKTREE moved this count 2→3 while
+  # the live layer was byte-identical on both sides and both shipped auditors read the same numbers.
+  # Pulling is an operation on a worktree: it delivers nothing and cannot change what the box runs.
+  #
+  # TWO SUPPRESSORS, AND THEY MAY NOT SUPPRESS WHAT THEY CANNOT SEE. The header's old note refused a
+  # path filter because a filter is a strictly-stronger suppressor and getting it wrong SILENCES a
+  # real breach (MEMORY.md cost-gate-must-be-strictly-weaker). That objection is answered by making
+  # the filter a read of the LIVE LAYER'S OWN LINKS rather than a typed list — no second model of the
+  # deployed surface is written down here — and by falling through to the UNSUPPRESSED count whenever
+  # $LIVE_ROOT cannot be read. (a) the path's top-level must be one the live layer actually deploys,
+  # derived by _live_tl_deployed from the links present; (b) the path must be ABSENT under
+  # $LIVE_ROOT, the test that makes this count invariant to which ref either operand happens to be
+  # on. Measured on the real box 2026-09-07T21:2xZ at lag 19: the shipped form read 9 and breached,
+  # and six of those nine were docs/, tests/ and migrations/ paths — top-levels that do not exist
+  # under ~/.claude at all, migrations being RUN from the checkout (deploy-live.sh:1477) and never
+  # linked. This form reads 3, and the 3 are hooks/config-change.sh, hooks/permission-denied.sh and
+  # hooks/post-compact.sh: landed, under a deployed top-level, and in no tree the box can reach.
+  #
+  # THE RESIDUAL, NAMED SO IT IS NOT DISCOVERED LATER. Deriving the want-list from the live layer's
+  # own links means a genuinely NEW deployed top-level has no link yet and its adds are wrongly
+  # exonerated. The only producer of a checkout-side want-list is scripts/deploy-parity-assert.sh,
+  # measured at 24.35/24.94/25.07s against this whole script's 0.32s — 78x, on the path every
+  # session's close runs — so it is not callable from here. A new top-level is a rare, deliberate
+  # act that goes through install.sh; a landed file under an existing one is the daily event, and
+  # this covers that. deploy-parity-assert remains the auditor of record for the other case.
+  LIVE_ADDS_BASE="none"
+  if [ "$LIVE_SRC" = "ok" ] || [ "$LIVE_SRC" = "behind" ]; then
+    _abase=""
+    _advf="${CC_POSTLAND_DIR:-$HOME/.claude/autonomy/postland}/deploy-last-advance"
+    if [ -r "$_advf" ]; then
+      _advsha="$(awk 'NR==1{print $2}' "$_advf" 2>/dev/null || true)"
+      if [ -n "$_advsha" ] && git cat-file -e "${_advsha}^{commit}" 2>/dev/null; then
+        _abase="$_advsha"; LIVE_ADDS_BASE="advance"
+      fi
+    fi
+    if [ -z "$_abase" ] && [ -n "$LIVE_SHA" ] && git cat-file -e "${LIVE_SHA}^{commit}" 2>/dev/null; then
+      _abase="$LIVE_SHA"; LIVE_ADDS_BASE="live-head"
+    fi
+    _aright=""
+    if [ -n "$TRUNK" ] && git rev-parse --verify -q "$TRUNK" >/dev/null 2>&1; then
+      _aright="$TRUNK"
+    elif [ -n "$HEAD_SHA" ]; then
+      _aright="$HEAD_SHA"
+    fi
+    if [ -z "$_abase" ] || [ -z "$_aright" ]; then
+      # `?`, never 0 — the same law the header states for every arm here: a read that did not happen
+      # may not breach and may not CLEAR either. 0 is the healthy value, so a swallowed failure would
+      # be indistinguishable from a fully-converged box.
+      LIVE_ADDS="?"; LIVE_ADDS_BASE="?"
+    else
+      # CAPTURE THE BOUND'S OWN rc (2026-08-21, backlog 4fe8d531ce68). `|| true` swallowed it, and an
+      # empty `_adds` answers 0 either way — a timed-out sensor manufacturing the ✅ this arm exists
+      # to forbid. The `?` arm existed but was reachable ONLY through the cat-file miss.
+      _adds="$(_bounded "${WRAP_LIVE_TIMEOUT_S:-5}" git diff --diff-filter=A --name-only "$_abase" "$_aright" 2>/dev/null)"
+      _arc=$?
+      _adds_n="$(printf '%s' "$_adds" | grep -c . 2>/dev/null || echo 0)"
+      case "$_adds_n" in ''|*[!0-9]*) _adds_n=0 ;; esac
+      if [ "$_arc" -ne 0 ] || [ "$_adds_n" -gt "$LIVE_ADDS_MAX" ]; then
+        LIVE_ADDS="?"
+      elif [ ! -d "$LIVE_ROOT" ]; then
+        LIVE_ADDS="$_adds_n"
+      else
+        # NOT A SUBSHELL — `printf … | while read` discards every increment at the `done` and leaves
+        # a confident 0, the healthy value (MEMORY.md assignment-inside-command-substitution-never-escapes).
+        _acount=0
+        _tl_yes=" "; _tl_no=" "
+        while IFS= read -r _ap; do
+          [ -n "$_ap" ] || continue
+          [ -e "$LIVE_ROOT/$_ap" ] && continue
+          _live_tl_deployed "$_ap" || continue
+          _acount=$((_acount + 1))
+        done <<ADD_PATHS
+$_adds
+ADD_PATHS
+        LIVE_ADDS="$_acount"
+      fi
     fi
   fi
 
@@ -1357,17 +1490,24 @@ STALE_PATHS
 
   if [ "$MIG_FAILED" -gt 0 ]; then
     LIVE_BREACH=1; LIVE_BREACH_WHY="migration"
+  # A DIVERGENCE gets NO budget either, and it is tested FIRST because it OUTRANKS the added file:
+  # an absent file is cured by the next converge tick, whereas a divergence is what stops every
+  # converge tick — it is the CAUSE the added-file count is a symptom of. `?` may not breach, on
+  # the same law as the arms below. Behind-only: divergence is a statement about the live layer
+  # running AHEAD, which the ok arm has already excluded.
+  elif [ "$LIVE_SRC" = "behind" ] && [ "$LIVE_DIVERGED" != "?" ] && [ "$LIVE_DIVERGED" -gt 0 ]; then
+    LIVE_BREACH=1; LIVE_BREACH_WHY="diverged"
+  # An ADD gets NO budget (header). `?` is not a number and must never breach — it falls through
+  # to the budget arms, leaving the pre-2026-08-09 verdict exactly as it was.
+  #
+  # NOT NESTED UNDER `behind` ANY MORE (2026-09-07, backlog 4e6a51df2a84). The added-file question is
+  # asked of TRUNK against the sha the converger last delivered, and neither of those is the session's
+  # HEAD — so `LIVE_SRC=ok`, which only says the live layer is at or above THIS SESSION, has no
+  # bearing on whether a landed file reached the box. Nesting it here is what made the row's headline
+  # measurement possible: RUNG=✅ over five landed files that were in no tree the box could reach.
+  elif [ "$LIVE_ADDS" != "?" ] && [ "$LIVE_ADDS" -gt 0 ]; then
+    LIVE_BREACH=1; LIVE_BREACH_WHY="adds"
   elif [ "$LIVE_SRC" = "behind" ]; then
-    # A DIVERGENCE gets NO budget either, and it is tested FIRST because it OUTRANKS the added file:
-    # an absent file is cured by the next converge tick, whereas a divergence is what stops every
-    # converge tick — it is the CAUSE the added-file count is a symptom of. `?` may not breach, on
-    # the same law as the two arms below.
-    if [ "$LIVE_DIVERGED" != "?" ] && [ "$LIVE_DIVERGED" -gt 0 ]; then
-      LIVE_BREACH=1; LIVE_BREACH_WHY="diverged"
-    # An ADD gets NO budget (header). `?` is not a number and must never breach — it falls through
-    # to the budget arms, leaving the pre-2026-08-09 verdict exactly as it was.
-    elif [ "$LIVE_ADDS" != "?" ] && [ "$LIVE_ADDS" -gt 0 ]; then
-      LIVE_BREACH=1; LIVE_BREACH_WHY="adds"
     # THE TWO BUDGET ARMS — whichever trips FIRST, each guarded by its own sensor's `?`.
     #
     # BOTH GUARDS EXIST FOR THE SAME REASON AND NEITHER COVERS FOR THE OTHER (2026-08-26, recycle
@@ -1381,7 +1521,7 @@ STALE_PATHS
     #
     # Split into two tested branches rather than one `||`: the ladder is the only place that knows
     # WHICH arm decided, and every renderer below was printing the other arm's units for want of it.
-    elif [ "$LIVE_LAG" != "?" ] && [ "$LIVE_LAG" -gt "$LIVE_BUDGET_COMMITS" ]; then
+    if [ "$LIVE_LAG" != "?" ] && [ "$LIVE_LAG" -gt "$LIVE_BUDGET_COMMITS" ]; then
       LIVE_BREACH=1; LIVE_BREACH_WHY="commits"
     elif [ "$LIVE_AGE" != "?" ] && [ "$LIVE_AGE" -gt "$((LIVE_BUDGET_MIN * 60))" ]; then
       LIVE_BREACH=1; LIVE_BREACH_WHY="time"
@@ -1587,6 +1727,7 @@ emit_machine() {
   printf 'LIVE_SHA=%s\n' "$LIVE_SHA"
   printf 'LIVE_LAG=%s\n' "$LIVE_LAG"
   printf 'LIVE_ADDS=%s\n' "$LIVE_ADDS"
+  printf 'LIVE_ADDS_BASE=%s\n' "$LIVE_ADDS_BASE"
   printf 'LIVE_STALE=%s\n' "$LIVE_STALE"
   printf 'LIVE_DIVERGED=%s\n' "$LIVE_DIVERGED"
   printf 'LIVE_AGE=%s\n' "$LIVE_AGE"
@@ -1672,8 +1813,18 @@ emit_full() {
       *)       behind_why="PAST budget" ;;
     esac
   fi
+  # THE ok ARM CARRIES THE ADDED-FILE CLAUSE TOO (2026-09-07, backlog 4e6a51df2a84). The added-file
+  # read is no longer nested under `behind`, so a 🚀 can now be decided while LIVE_SRC=ok — and this
+  # row would then have printed a bare "at/above HEAD", contradicting the rung in the same output.
+  # `at/above HEAD` is a statement about the CHECKOUT's ancestry over this session; whether a landed
+  # file reached the box is a different question, and the row has to answer the one the rung was
+  # computed on. Composed rather than replaced: the ancestry fact is still true and still printed.
+  local ok_adds=""
+  if [ "$LIVE_ADDS" = "?" ]; then ok_adds=" · added-file check UNRESOLVED"
+  elif [ "$LIVE_ADDS" -gt 0 ]; then ok_adds=" · ${LIVE_ADDS} NEW file(s) ABSENT — no budget covers an add"
+  fi
   local live_disp; case "$LIVE_SRC" in
-    ok)      live_disp="at/above HEAD ($(printf '%s' "$LIVE_SHA" | cut -c1-8))" ;;
+    ok)      live_disp="at/above HEAD ($(printf '%s' "$LIVE_SHA" | cut -c1-8))${ok_adds}" ;;
     behind)  live_disp="BEHIND — ${LIVE_LAG} commit(s), ${behind_why}" ;;
     n-a)     live_disp="n/a (this repo is not the live layer's source)" ;;
     unknown) live_disp="unknown (live repo unreadable — not counted)" ;;
