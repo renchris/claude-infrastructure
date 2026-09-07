@@ -45,6 +45,23 @@
   25, visual 16, deep-history 15, offbox-lane 10). Raising the migrated share means changing what
   the VM can reach, never loosening the predicate — a wrong answer in a venue nobody can SEE is the
   anti-goal CLOUD_BACKLOG_PIPELINE.md §5 names.
+  ✅ UN-PARKED 2026-09-07 (operator ran scripts-side /tmp/dispatcher-unpark-local.sh --yes). The
+  CC_DISPATCH_VENUE_ONLY=cloud export is GONE from ProgramArguments; both venues are admitted again.
+  Everything above this line is kept as the historical record of WHY it was set — do not read it as
+  the current state.
+  WHAT DECIDED IT, measured: with the filter the dispatcher had 1-2 dispatchable rows; without it,
+  186-188. The lane it was routing everything to had ALSO stopped — cloud fires were refused from
+  2026-09-04T19:38Z on "332 unlanded cloud declaration(s) against a cap of 50" — so between
+  2026-09-04 and 09-07 the dispatcher fired in NEITHER venue and nothing alarmed. Over that window
+  the fleet stranded ~175 pp of weekly Max quota per cycle against ~5 pp through August
+  (docs/research/weekly-reset-utilization-2026-08-25.md §9-§10). Cloud DOES bill the same weekly
+  meter — Anthropic's cloud-sessions page says web usage shares account rate limits, and this
+  fleet's own telemetry gives p = 1.23e-08 — so neither venue was a free lunch; both were simply off.
+  WHAT NOW BOUNDS THE 2026-08-11 RISK, which is otherwise restored verbatim: CC_DISPATCH_CEILING=12,
+  MAX_SPAWN=2 per pass, and the capacity-admit gate at 8 mid-turn sessions (MACHINE_CAPACITY_V2
+  §12.1), none of which existed in that form when 189 panes fired in one day.
+  ROLLBACK is unchanged and is the line below.
+
   ROLLBACK is a config change, not a code change: CC_DISPATCH_VENUE_ONLY=local restores the old
   behaviour for the local queue; deleting the export restores both venues.
 
@@ -95,7 +112,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; export CC_DISPATCH_PROJECT="claude-infrastructure"; export CC_FIRE_CLOUD=on; export CC_DISPATCH_VENUE_ONLY=cloud; exec "$HOME/.claude/bin/cc-dispatch" --once</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; export CC_DISPATCH_PROJECT="claude-infrastructure"; export CC_FIRE_CLOUD=on; exec "$HOME/.claude/bin/cc-dispatch" --once</string>
     </array>
 
     <key>StartInterval</key>
