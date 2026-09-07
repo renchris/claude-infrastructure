@@ -1163,8 +1163,18 @@ mkresetcounter() { # <name> <boot-faults-line> <mtime-YYYYMMDDhhmm>
   touch -t "$3" "$D/rc/$1"
 }
 
-BOOTS=1786686149          # 2026-08-14T05:42:29Z — tonight's real boot
-BOOTSTAMP=202608132242    # the same instant, in touch's format
+BOOTS=1786686149          # 2026-08-14T05:42:29Z — a real boot, from this box's own ledger
+# DERIVED FROM $BOOTS, never written out a second time as a literal. `touch -t` takes LOCAL
+# wall-clock while $BOOTS is an absolute epoch, so a hand-written companion stamp is "the same
+# instant" ONLY in the timezone it was authored in — and this pair was authored at -0700. The box
+# now runs -0500, which placed every ResetCounter fixture 7,229 s BEFORE the boot epoch, i.e.
+# outside freeze_boot_faults' 120 s floor (compressor-sentinel.sh:1107). The reader then found no
+# ResetCounter at all and four cases silently fell back to kern.shutdownreason — including the two
+# whose whole subject is that the ResetCounter OUTRANKS it. Deriving the stamp makes the two the
+# same instant BY CONSTRUCTION, in any zone, so the suite cannot rot when the machine moves.
+# The `%M` truncation drops $BOOTS' :29 seconds, leaving the file 29 s before the boot — deliberate
+# and well inside the 120 s slack, exactly as the original pair intended.
+BOOTSTAMP="$(date -r "$BOOTS" '+%Y%m%d%H%M')"
 
 @test "freeze reader: a forced power-off with no panic is RECORDED as a freeze" {
   mkfreezestubs "$BOOTS" "btn_rst,finger_reset force_off ap_panic"
