@@ -87,6 +87,17 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-07 — recycle #316 (lane infra):** closed 0c22de0e3b1b 42e249980af5 9e5e74b389bd
+  bbd05ddf8687 bd1086f74866 d702ccc9b321 · blocked none · released 5be5f55043c4 99dbf659930c
+  ed54373d639b fb9476ab945c · landed d7b85c39c (it2-kitty: a missing `-s` was a silent rc 1,
+  indistinguishable from an unreadable pane — the read path was never broken) a9f5313e9
+  (cc-reaper: a TOTAL empty classification is not a gap, and it named cc-sessions instead of
+  cc-classify) · three MOOTs were premise-refutations, not landed fixes: a stranded land ref was
+  the PRE-FIX form of trunk, a sibling had landed half of another and trunk REFUTES its other
+  half by measurement, and an `&` cannot reach _rm_expand_token because its producer's char class
+  truncates there first · `closed=27 closed_pre=6 closed_other=1 filed=5 net=22 blocked=8 min=3
+  lane=local-drain project=claude-infrastructure floor=MET`.
+
 - **2026-09-07 — recycle #315 (lane infra):** closed 10edf02e0368 12fe3c8e76d8 1d97c097191a
   1f85fa508628 2846cb4d8a2a 2f525a0bccc0 2f53f844b597 46581523b7fc 4a0e50459ad5 5054d901c153
   556d4747eb88 7f3c1ff4a3ad 87a1fde23e2e be2331814849 e3ce43bead25 efcd903c5adf f46701ef3192 ·
