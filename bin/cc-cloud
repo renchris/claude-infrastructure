@@ -103,7 +103,10 @@
 #   U0 UNKNOWN      a sensor could not run (ls-remote rc!=0, unreadable declaration, no git),
 #                   or the ref VANISHED after a push and landedness is not assertable (see below).
 #                   NO row, `--table` says UNKNOWN, `--check` FAILS. Never a vacuous pass.
-#   C1 NOT-STARTED  no ref AND no evidence of one, past declared_at+boot_s                    ROW
+#   C1 NOT-STARTED  no ref AND no evidence of one, past declared_at+boot_s, INSIDE life_s   ROW
+#      …past life_s the same observation is C6 ABANDONED: a session that finished without
+#      pushing leaves exactly what one that never booted leaves, so NOT-STARTED stops being
+#      a claim this function can support. `cc-cloud inbox` is the reader that can tell them apart.
 #                   (or the ref exists but is STILL at its fire-time sha — see BASELINE)
 #   C2 BOOTING      same, still inside the boot budget — expected, not a fault              no row
 #   C3 LANDED       every declared path is content-present on the trunk ref                 no row
@@ -704,6 +707,7 @@ classify() { # <id>
   local id="$1" f="$STATE/$1.decl" seen="$STATE/$1.seen"
   local branch remote repo paths trunk url dat boot stall life
   local sha rc n age url_cmd first_seen sha_age base_sha base_probe seen_sha paths_src pushed
+  local item ask_cmd
 
   branch="$(dfield "$f" branch)"
   remote="$(dfield "$f" remote)"
@@ -740,8 +744,33 @@ classify() { # <id>
 
   # C1/C2 require BOTH: no ref now AND no evidence there ever was one. Reaching this arm on
   # evidence-of-push alone is the defect below.
+  #
+  # ── AND C1 EXPIRES. NOT-STARTED IS AN ASSERTION, AND IT OUTLIVES ITS EVIDENCE ────────────────────
+  # A cloud session that RAN, worked, and finished WITHOUT ever pushing leaves exactly what a
+  # session that never booted leaves: no ref, and no sidecar. From here the two are one observation,
+  # so NOT-STARTED is a claim this function cannot support — and it never withdrew it, because
+  # nothing in the arm above reads the clock past `boot`. The verdict simply hardened as the session
+  # aged, which is the wrong direction: an absent ref is WEAKER evidence of never-starting the
+  # longer it has had to be a finished session instead (MEMORY.md lookup-miss-is-not-absence).
+  #
+  # Inside the LIFE budget NOT-STARTED stays, and it earns its keep: `cc-backlog`'s reap reads it to
+  # RETURN a venue=cloud row to the queue rather than blocking it, and a session 20 minutes past a
+  # 15-minute boot budget with nothing on the remote usually did fail to start. Past `life_s` it is
+  # a different fact — the session is over either way — so the verdict becomes C6 ABANDONED, which
+  # says only what is true (past its lifetime, nothing landed) and rows and fails --check exactly as
+  # the pushed-but-unlanded C6 does. It is NOT U0 UNKNOWN: U0 means the sensor could not run and
+  # therefore emits no row (see the `--check` header), and here the sensor ran and answered.
+  #
+  # The recover command is the one reader that CAN tell the two apart — `cc-cloud inbox` probes the
+  # control plane, which knows whether the VM ever existed. classify() deliberately does not: it is
+  # disk + ls-remote, and adding a network control-plane read to the board's hot loop is a different
+  # change from refusing to overclaim in this one.
   if [ -z "$sha" ] && [ "$pushed" -eq 0 ]; then
-    if [ "$age" -gt "$boot" ]; then
+    if [ "$age" -gt "$life" ]; then
+      item="$(dfield "$f" item)"
+      if [ -n "$item" ]; then ask_cmd="cc-cloud inbox --item $item"; else ask_cmd="cc-cloud inbox --all"; fi
+      printf 'ABANDONED\tno ref, no push evidence, past %s\t%s\n' "$(dur "$life")" "$ask_cmd"
+    elif [ "$age" -gt "$boot" ]; then
       printf 'NOT-STARTED\tno ref after %s (boot budget %s)\t%s\n' "$(dur "$age")" "$(dur "$boot")" "$url_cmd"
     else
       printf 'BOOTING\tno ref yet, %s into a %s budget\t-\n' "$(dur "$age")" "$(dur "$boot")"
@@ -1405,6 +1434,10 @@ do_selftest() {
 
   CC_CLOUD_NOW=$((2000000000 + 5000))
   _st_expect "absent ref past the boot budget is NOT-STARTED" NOT-STARTED boot
+  # Same declaration, same absent ref, ONLY the clock moves — so the pair is a control, not two
+  # fixtures. Past the life budget NOT-STARTED is no longer a claim this function can support.
+  CC_CLOUD_NOW=$((2000000000 + 30000))
+  _st_expect "past the LIFE budget that same absent ref is ABANDONED, not NOT-STARTED" ABANDONED boot
   CC_CLOUD_NOW=2000000000
 
   cmd_declare --id gone --branch feat/y --remote "$_ST_D/nonexistent.git" --repo "" >/dev/null

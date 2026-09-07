@@ -1012,3 +1012,31 @@ setup() {
   run cloud retire --id bare --verdict "two words"
   [ "$status" -eq 2 ]
 }
+
+@test "C1 EXPIRES: past the life budget an absent ref with no push evidence is ABANDONED, not NOT-STARTED" {
+  have_subject
+  # A cloud session that RAN and finished WITHOUT pushing leaves exactly what one that never booted
+  # leaves — no ref, no sidecar. C1 asserted never-started over that observation and never withdrew
+  # it, so the claim only hardened as the session aged. Past its lifetime the honest verdict is the
+  # one that says only what is true: over, nothing landed.
+  r="$(bare remexp)"
+  cloud declare --id expired --branch feat/a --remote "$r" --repo "" --boot 900 --life 21600 --item ab12cd34
+
+  # CONTROL, on the SAME declaration with only the clock moved: inside the life budget the
+  # pre-existing verdict is unchanged, so this pins the EXPIRY and not C1 as a whole. cc-backlog's
+  # reap reads NOT-STARTED to return a venue=cloud row to the queue; that path must not shift.
+  export CC_CLOUD_NOW=$((T0 + 5000))
+  [ "$(tstate expired)" = "NOT-STARTED" ]
+
+  export CC_CLOUD_NOW=$((T0 + 21601))
+  [ "$(tstate expired)" = "ABANDONED" ]
+  # It must still ROW. The fix has to make the board RIGHTER, not quieter — U0 UNKNOWN would have
+  # made it quieter, which is why this is C6 and not U0.
+  [ "$(rows)" -eq 1 ]
+  [ "$(states)" = "ABANDONED" ]
+  # and it hands over the one reader that CAN separate the two causes: the control plane.
+  "$CLOUD" --json | grep -q 'cc-cloud inbox --item ab12cd34'
+  # --check still fails on it, exactly as it did on NOT-STARTED
+  run "$CLOUD" --check
+  [ "$status" -ne 0 ]
+}
