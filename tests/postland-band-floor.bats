@@ -181,3 +181,15 @@ _descendant_pris() {
   run grep -q 'taskpolicy -c utility' "$plist"
   [ "$status" -eq 0 ] || false                             # and an explicit demotion present
 }
+
+@test "(vii) the autonomy-sweep plist SSOT declares no darwinbg ProcessType, and does demote explicitly" {
+  # The same invariant as (vi), on the job that now SPAWNS the cloud lane (scripts/cloud-return-lane.sh):
+  # a child inherits the task role, so a re-added `ProcessType Background` here would silently put
+  # every cloud land back on the E-cores at PRI 4 (CLOUD_BACKLOG_PIPELINE.md §A9, migrations/0016).
+  local plist="$REPO/launchd/com.chrisren.autonomy-sweep.plist"
+  [ -f "$plist" ] || false
+  run grep -qE '<string>Background</string>' "$plist"
+  [ "$status" -ne 0 ] || false                             # the task role must be absent
+  run grep -q 'taskpolicy -c utility' "$plist"
+  [ "$status" -eq 0 ] || false                             # and an explicit demotion present
+}
