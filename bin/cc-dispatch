@@ -2944,6 +2944,45 @@ EOF
       # the 5 oldest open items in the ledger, so under the S7 key it is the FIRST thing this change
       # dispatches. A brief that names a nonexistent landing command sends a worker to invent one.
       irepo="$(project_repo "$iproj")"
+      # ── THE DoD LINE IS RENDERED AS A TRUNK PATHSPEC, AND THE STORE IS LEFT ALONE (F4) ──────
+      # MASTER_FIRE_GATE.md § F4: "every `dodRef` in the store is an absolute path into the SHARED
+      # CHECKOUT, which trails trunk", so a worker reads its specification from bytes older than the
+      # fix it is being asked to build on. Measured again 2026-09-07, and the harm is now WORSE than
+      # staleness: the shared checkout was 1 behind trunk with 23 DIRTY files, so a worker that cats
+      # the absolute path can read a sibling's half-written file (memory:
+      # peer-worktree-read-midwrite-parses-as-a-code-defect). The worker's OWN worktree is
+      # freshness-gated by `warm_worktree`; an absolute path routes around that guard entirely.
+      #
+      # WHY NOT THE FIX THE PLAN PRESCRIBES. § F4 says "make that the rule for every producer" —
+      # i.e. store `origin/main:<path>`. That is a TRAP, and it is measured rather than argued: two
+      # arms downstream resolve a dodRef as a FILESYSTEM path and BOTH fail silently on that
+      # spelling. `cc-eligible._dod_path` asks `os.path.isabs("origin/main:docs/…")`, gets False,
+      # joins it onto the repo and finds nothing; `cc-premise._plan_dodref` requires
+      # `os.path.isfile(dod)` and returns None — which fails OPEN and deletes the derived plan-open
+      # falsifier, the ONLY falsifier 18 of this store's rows have. Rewriting the store would blind
+      # both arms for every plan-open row at once. The 3 rows already carrying a trunk ref are
+      # already invisible to them; at n=3 nobody noticed.
+      #
+      # So the staleness is cured where it actually bites — in the BYTES THE WORKER READS — and the
+      # stored absolute path stays exactly as the filesystem arms expect it. The resolution is
+      # `cc-venue dodspec`, which is question 1b's existing predicate (`dod_trunk_state`) exposed as
+      # a rendering, so the composer and the cloud-eligibility gate can never disagree about where
+      # an item's specification lives (memory: make-the-actuator-the-arbiter).
+      #
+      # FAIL-OPEN BY CONSTRUCTION: only exit 0 WITH a line replaces anything. `n/a` (not a path
+      # claim), `absent` (exit 3) and `could not ask` (exit 4) all leave `dod_render` on the stored
+      # value, which is today's behaviour. This verb may make a brief better; it may never make one
+      # worse — so a broken or missing cc-venue costs nothing.
+      local dod_render="$dod" vdbin dspec
+      if [ -n "$dod" ]; then
+        vdbin="${CC_DISPATCH_VENUE_BIN:-$(cd "$(dirname "$_self")" 2>/dev/null && pwd)/cc-venue}"
+        [ -x "$vdbin" ] || vdbin="$(resolve_bin "" cc-venue "$HOME/.claude/bin/cc-venue")" || vdbin=""
+        if [ -n "$vdbin" ] && [ -x "$vdbin" ]; then
+          if dspec="$("$vdbin" dodspec "$id" --repo "$irepo" 2>/dev/null)" && [ -n "$dspec" ]; then
+            dod_render="$dspec"
+          fi
+        fi
+      fi
       # ── AND A CLOUD WORKER CANNOT LAND AT ALL, SO THE /ship RAIL IS NOT MERELY IRRELEVANT ────
       # It is the OPPOSITE of what the pipeline needs. `scripts/cloud-return.sh` requires the branch
       # PUSHED AND UNLANDED: it derives the path set from the VM's own commits, hands the branch to
@@ -3119,7 +3158,7 @@ EOF
       fi
       if ! printf '%s\n' \
         "TASK — ${title:-backlog item $id} — cc-backlog item $id (project $iproj, repo $irepo)." \
-        "DoD ref: ${dod:-none}. Scope (frozen): drive this ONE item to finished-verified-landed." \
+        "DoD ref: ${dod_render:-none}. Scope (frozen): drive this ONE item to finished-verified-landed." \
         ${boot_rail:+"$boot_rail"} \
         ${pcontract:+"$pcontract"} \
         "$staleness_rail" \

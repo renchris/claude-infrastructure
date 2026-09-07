@@ -73,6 +73,12 @@ Verbs:
   paths <id> [--json]     the item's USABLE CITED PATH SET — the invalidation basis for
                           cc-dispatch's readiness verdict. exit 0 = answered (zero lines is a
                           REAL answer: this item cites nothing usable); exit 4 = COULD NOT ASK.
+  dodspec <id> [--repo R] [--ref REF]
+                          the item's dodRef AS A TRUNK PATHSPEC (`origin/main:docs/plans/x.md`),
+                          for the BRIEF COMPOSER — question 1b's answer reused as a rendering.
+                          exit 0 + one line = resolved; exit 0 + NO line = not a path claim, render
+                          the stored value verbatim; exit 3 = the DoD is on no trunk commit;
+                          exit 4 = COULD NOT ASK. Reads only; the STORED dodRef is never rewritten.
 
 Env:
   CC_VENUE_BACKLOG_BIN / CC_VENUE_ELIGIBLE_BIN / CC_VENUE_PREMISE_BIN — sibling resolution overrides
@@ -92,6 +98,21 @@ HERE = os.path.dirname(os.path.realpath(__file__))
 
 def _resolve(env, name):
     return os.environ.get(env) or os.path.join(HERE, name)
+
+
+def _opt_value(argv, flag):
+    """The value following `flag` in argv, or "" — absent flag and valueless flag are both "".
+
+    A flag given with no value must not consume the NEXT flag as its value; that is how a
+    `--repo --ref origin/main` typo silently sets repo to "--ref".
+    """
+    try:
+        i = argv.index(flag)
+    except ValueError:
+        return ""
+    if i + 1 >= len(argv) or argv[i + 1].startswith("-"):
+        return ""
+    return argv[i + 1]
 
 
 def _load_eligible():
@@ -291,10 +312,50 @@ def _dod_candidates(dod):
     p = dod.split("#", 1)[0].strip().rstrip(".,;:)")
     if not p or not _looks_like_path(p):
         return []
+    # A `<ref>:<path>` PATHSPEC IS ALREADY THE ANSWER THIS FUNCTION COMPUTES, and reading it as a
+    # relative path is a FALSE `absent`: `git cat-file -e origin/main:origin/main:docs/x.md` can
+    # only miss. Measured on this tree — `origin/main:docs/plans/MASTER_FIRE_GATE.md` returned
+    # `absent` while the same file under both other spellings returned `ok`.
+    #
+    # WHY IT IS WORTH HANDLING FOR THREE ROWS. It is not for them; it is for what happens if anyone
+    # follows MASTER_FIRE_GATE.md § F4's literal prescription ("make every producer write
+    # `origin/main:<path>`"). That would mint this spelling at scale, and question 1b would then
+    # refuse the newly-correct rows off-box with "your DoD is on no trunk commit" — the remedy
+    # penalising exactly the rows that adopted it. Today all three such rows refuse earlier at
+    # question 1, so this is LATENT, not a live misroute; it is fixed because it is on the path of
+    # the only cure anyone is likely to attempt.
+    #
+    # THE STRIP IS GUARDED SO A LINE SUFFIX SURVIVES. `docs/plans/x.md:12` splits to a prefix that
+    # ends in a file extension, and stripping there would leave the candidate `12`. A ref never
+    # carries an extension, so that is the discriminator.
+    if ":" in p and not p.startswith("/"):
+        pre, rest = p.split(":", 1)
+        if (pre and rest and not rest.startswith("/")
+                and not re.search(r"\.[A-Za-z0-9]{1,6}$", pre)
+                and re.match(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$", pre)
+                and _looks_like_path(rest)):
+            p = rest
     if not p.startswith("/"):
         return [p]
     segs = [s for s in p.split("/") if s]
-    return ["/".join(segs[i:]) for i in range(len(segs))][:_MAX_DOD_CANDIDATES]
+    cands = ["/".join(segs[i:]) for i in range(len(segs))]
+    # TRUNCATE FROM THE LONG END, NEVER THE SHORT ONE. The list is longest-first because the most
+    # specific match must win (a shorter suffix resolving to some OTHER file of the same name is the
+    # false ACQUIT this file is careful about). But `[:12]` then keeps the twelve candidates that
+    # still carry the filing box's MOUNT PREFIX — which no `git cat-file` can ever resolve — and
+    # discards the repo-relative tail, which is the only part that can. On a deep enough path the
+    # answer is thrown away and the verdict comes back `absent` for a file that is plainly on trunk.
+    #
+    # MEASURED, and it is why this is a real defect and not a test accommodation: a production
+    # dodRef is 7 segments (`/Users/<u>/Development/<repo>/docs/plans/X.md`) and fits either way,
+    # but the off-box runner nests its sandbox two directories deeper than the on-box one, and the
+    # SAME suite that passed on-box returned `absent` off-box while `git cat-file -e
+    # origin/main:docs/plans/PLAN.md` in the very same repo exited 0.
+    #
+    # Keeping the SHORTEST bound-many preserves the ordering semantics exactly — longest-first among
+    # what is kept, so the most specific candidate still wins — and drops only candidates that were
+    # unresolvable by construction.
+    return cands[-_MAX_DOD_CANDIDATES:] if len(cands) > _MAX_DOD_CANDIDATES else cands
 
 
 def dod_trunk_state(dod, repo, ref):
@@ -561,6 +622,52 @@ def cmd_paths(item_id, as_json):
     sys.exit(0)
 
 
+def cmd_dodspec(item_id, repo, ref):
+    """The item's dodRef rendered as a TRUNK PATHSPEC, for the brief composer. Never writes.
+
+    WHY THE RENDERING LIVES HERE AND THE STORE IS LEFT ALONE. The obvious cure for the stale brief
+    is the one MASTER_FIRE_GATE.md § F4 actually prescribes — "make every producer write
+    `origin/main:<path>`" — and it is a TRAP, measured rather than argued. Two arms downstream
+    resolve a dodRef as a FILESYSTEM path and both fail silently on a trunk-ref spelling:
+    `cc-eligible._dod_path` calls `os.path.isabs("origin/main:docs/…")`, gets False, joins it onto
+    the repo and finds nothing; `cc-premise._plan_dodref` requires `os.path.isfile(dod)` and returns
+    None, which fails OPEN and quietly deletes the derived plan-open falsifier — the only falsifier
+    18 of this store's rows have. Rewriting the store would blind both arms for every plan-open row
+    at once. The 3 rows already carrying a trunk ref are already invisible to them, and at n=3
+    nobody noticed.
+
+    So the fix is applied where the staleness actually bites — at COMPOSE time, to the bytes the
+    worker reads — and the stored absolute path stays exactly as the filesystem arms expect it.
+    One predicate answers both questions: `dod_trunk_state` is question 1b, already the thing that
+    decides whether a cloud VM could read this item's specification at all.
+
+    THREE ANSWERS, THREE EXIT CODES, for the reason `paths` gives one verb over: a caller that
+    cannot tell "not a path claim" from "could not ask" would render a guess. Only `ok` returns a
+    pathspec; everything else leaves the caller on its incumbent behaviour, which is to render the
+    stored value verbatim. This verb may make a brief BETTER and must never make one worse.
+    """
+    dod = dodref_of(item_id)
+    if dod is None:
+        sys.stderr.write("cc-venue dodspec: the ledger could not be re-read for %s — UNKNOWN, "
+                         "not an absent dodRef\n" % item_id)
+        sys.exit(4)
+    if not dod.strip():
+        sys.exit(0)                      # no dodRef at all: nothing to render, and that is an answer
+    state, spec = dod_trunk_state(dod, repo, ref)
+    if state == "n/a":
+        sys.exit(0)                      # `decision:5f0a…`, a bare word: not a file claim
+    if state == "ok":
+        sys.stdout.write("%s:%s\n" % (ref, spec))
+        sys.exit(0)
+    if state == "absent":
+        sys.stderr.write("cc-venue dodspec: %s is on no commit reachable from %s in %s\n"
+                         % (dod, ref, repo or "(no repo)"))
+        sys.exit(3)
+    sys.stderr.write("cc-venue dodspec: %s could not be resolved against %s in %s — UNKNOWN\n"
+                     % (dod, ref, repo or "(no repo)"))
+    sys.exit(4)
+
+
 def cmd_run(argv):
     apply_ = "--apply" in argv
     as_json = "--json" in argv
@@ -701,6 +808,14 @@ def main():
             sys.stderr.write("cc-venue paths: <id> is required\n")
             sys.exit(2)
         cmd_paths(rest[0], "--json" in rest)
+    elif verb == "dodspec":
+        if not rest:
+            sys.stderr.write("cc-venue dodspec: <id> is required\n")
+            sys.exit(2)
+        _repo = _opt_value(rest, "--repo") or os.environ.get("CC_PREMISE_REPO") \
+            or os.environ.get("CC_ELIGIBLE_REPO") or ""
+        _ref = _opt_value(rest, "--ref") or os.environ.get("CC_VENUE_TRUNK_REF") or "origin/main"
+        cmd_dodspec(rest[0], _repo, _ref)
     elif verb == "run":
         cmd_run(rest)
     else:
