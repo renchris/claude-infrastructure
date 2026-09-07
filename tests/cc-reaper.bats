@@ -79,6 +79,10 @@ setup() {
 #!/bin/bash
 echo "TD \$*" >> "$D/order"
 printf '%s\n' "\$*" >> "$D/td-calls"
+# The terminal-addressing env cc-reaper hands DOWN. cc-teardown's pane leg runs through
+# \$HOME/.claude/bin/it2, whose divert gate is an ancestry check the launchd job cannot satisfy,
+# so this is the only place a test can observe whether the pane half was addressable at all.
+printf 'CC_TERM=%s CC_TERM_KITTY_TO=%s\n' "\${CC_TERM:-}" "\${CC_TERM_KITTY_TO:-}" >> "$D/td-env"
 exit \${TEARDOWN_RC:-0}
 EOF
   # mock checkpoint: record it ran (+ ordering)
@@ -88,6 +92,10 @@ cat >> "$D/ckpt-payloads"; echo "CKPT" >> "$D/order"
 EOF
   chmod +x "$D/bin/teardown" "$D/bin/checkpoint"
   export CC_REAPER_TEARDOWN_BIN="$D/bin/teardown"
+  # cc-kitty-socket resolves the LIVE kitty socket from ANY context — including this suite. An
+  # ABSENT path is the right default: the resolver arm exports nothing, so every pre-existing test
+  # runs with the terminal-addressing block inert, exactly as it did before the block existed.
+  export CC_REAPER_KITTY_SOCKET_BIN="$D/absent-cc-kitty-socket"
   export CC_REAPER_CHECKPOINT_BIN="$D/bin/checkpoint"
   export CC_REAPER_SETTLE_S=100
   export CC_REAPER_TRUNK=origin/main
@@ -3404,4 +3412,64 @@ use_real_classify() { # <enumerator body> — the REAL cc-classify with its enum
   [ "$status" -eq 0 ]
   [ "$(grep 'EMPTY-BUT-POPULATED' "$CC_REAPER_LOG" | grep -c 'evidence=PRODUCER-SELF-REPORT')" -eq 1 ]
   [ "$(grep -c 'evidence=EMPTY-CLASSIFICATION' "$CC_REAPER_LOG")" -eq 0 ]
+}
+
+# ── TERMINAL ADDRESSING UNDER launchd (2026-09-07) ────────────────────────────────────────────────
+# The reap decision and the KILL leg never needed a terminal; the pane leg is the only half that
+# does, and under the standing launchd loop it had no way to reach one. `/bin/zsh -lc "... cc-reaper
+# sweep --reap"` has no kitty ancestor and no KITTY_LISTEN_ON, so bin/it2-wrapper's ancestry gate
+# forwarded every pane call to the real iTerm2 CLI. Measured on pane 354 at 2026-09-07T13:54:02Z:
+# close_rc=1 and an unreadable pane list ⇒ cc-teardown exit 6 INDETERMINATE — the session killed, the
+# pane left alive holding `Resume this session with: …`, a residue indistinguishable by inspection
+# from abandoned work, a half-finished self-close, or an operator who forgot to close a pane.
+# These assert on what reaches cc-teardown, because that is the process that makes the pane call.
+
+# The discriminator. RED against the pre-fix subject: nothing exported CC_TERM_KITTY_TO at all.
+@test "launchd shape (no kitty env) + a live socket → cc-teardown inherits the kitty address" {
+  cat > "$D/bin/ksock" <<'EOS'
+#!/bin/bash
+echo "unix:/tmp/kitty-fixture-9999"
+EOS
+  chmod +x "$D/bin/ksock"; export CC_REAPER_KITTY_SOCKET_BIN="$D/bin/ksock"
+  unset CC_TERM CC_TERM_KITTY_TO KITTY_LISTEN_ON
+  mock_classify_handoff "$D/clean" 999 yes PANE-A
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  td_called
+  grep -q 'CC_TERM=kitty CC_TERM_KITTY_TO=unix:/tmp/kitty-fixture-9999' "$D/td-env"
+}
+
+# The control that keeps the arm honest in the other direction: a box with NO live kitty (the
+# resolver's rc 4) must export nothing, so a genuine iTerm2 machine keeps its pre-existing path.
+# This is what would fail if the fix ever fabricated an address instead of resolving one.
+@test "no live kitty socket → nothing is exported, the pre-existing path is untouched" {
+  cat > "$D/bin/ksock" <<'EOS'
+#!/bin/bash
+exit 4
+EOS
+  chmod +x "$D/bin/ksock"; export CC_REAPER_KITTY_SOCKET_BIN="$D/bin/ksock"
+  unset CC_TERM CC_TERM_KITTY_TO KITTY_LISTEN_ON
+  mock_classify_handoff "$D/clean" 999 yes PANE-A
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  td_called
+  grep -q 'CC_TERM= CC_TERM_KITTY_TO=$' "$D/td-env"
+}
+
+# An operator-set address is an explicit choice (it2-kitty's documented intent channel) and the
+# resolver must never overwrite it — nor even run.
+@test "an operator-set CC_TERM_KITTY_TO wins and the resolver is never called" {
+  cat > "$D/bin/ksock" <<EOF
+#!/bin/bash
+echo called >> "$D/ksock-calls"
+echo "unix:/tmp/kitty-fixture-WRONG"
+EOF
+  chmod +x "$D/bin/ksock"; export CC_REAPER_KITTY_SOCKET_BIN="$D/bin/ksock"
+  unset CC_TERM KITTY_LISTEN_ON
+  export CC_TERM_KITTY_TO="unix:/tmp/kitty-operator-chose"
+  mock_classify_handoff "$D/clean" 999 yes PANE-A
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  grep -q 'CC_TERM_KITTY_TO=unix:/tmp/kitty-operator-chose' "$D/td-env"
+  [ ! -f "$D/ksock-calls" ]
 }
