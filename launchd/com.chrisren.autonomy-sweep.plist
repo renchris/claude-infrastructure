@@ -3,16 +3,28 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>            <string>com.chrisren.autonomy-sweep</string>
+  <!--
+      NO `ProcessType Background` (2026-09-06, docs/plans/CLOUD_BACKLOG_PIPELINE.md §A9 · the
+      same defect migrations/0010 fixed on com.claude.postland-verify). That key applies Darwin's
+      darwinbg TASK ROLE — a ONE-WAY floor: every descendant sits at PRI 4, E-core confined, and
+      `taskpolicy -c utility` from inside still reads 4 (tests/postland-band-floor.bats iii).
+      Measured live: the sweep at PRI 4 while postland's corpus ran at 20 and a shell at 31; a
+      cloud land spawned from this job cost 700-3,900 s against a 194 s quiet-box median, and
+      `bin/cc-bats` puts the background-band tax on a long batch job at ~84-89×. The cloud lane
+      (scripts/cloud-return-lane.sh) is spawned from THIS job and inherits its role, so this key
+      was the ×30-80 on every cloud land. The sweep is still demoted — `taskpolicy -c utility` is
+      below interactive and P-core eligible, the band every other actuator here runs in — it is
+      simply no longer confined to the E-cores. Fail-open: no taskpolicy(8) ⇒ exec directly.
+      Applying this is a bootout + bootstrap of a live job: c10, migrations/0016.
+  -->
   <key>ProgramArguments</key>
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>export PATH="$HOME/.claude/bin:$PATH"; export CC_FIRE_CLOUD=on; ~/.claude/scripts/autonomy-sweep.sh</string>
+    <string>export PATH="$HOME/.claude/bin:$PATH"; export CC_FIRE_CLOUD=on; if [ -x /usr/sbin/taskpolicy ]; then exec /usr/sbin/taskpolicy -c utility ~/.claude/scripts/autonomy-sweep.sh; fi; exec ~/.claude/scripts/autonomy-sweep.sh</string>
   </array>
   <key>StartInterval</key>    <integer>300</integer>
   <key>RunAtLoad</key>        <false/>
-  <key>ProcessType</key>      <string>Background</string>
-  <key>Nice</key>             <integer>5</integer>
   <key>StandardOutPath</key>  <string>/Users/chrisren/.claude/logs/autonomy-sweep.out.log</string>
   <key>StandardErrorPath</key><string>/Users/chrisren/.claude/logs/autonomy-sweep.err.log</string>
 </dict>
