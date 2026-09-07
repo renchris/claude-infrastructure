@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "ts": "2026-08-23T13:43:55Z",
+  "id": "354c73ebd400",
+  "verb": "done",
+  "evidence": "6ce67de910d6e46f825a7eae0db28b741964f5de + 66857bc2ef210003b34b0889c23dc3191777b881",
+  "needs": "",
+  "project": "claude-infrastructure",
+  "note": "cure landed 2026-08-16/17; re-confirmed on trunk 58816c74 (subshell-cleanup-lint clean rc 0, --selftest PASS 30, both shas ancestors of origin/main after fetch --deepen 400). Third dispatch.",
+  "origin": "offbox",
+  "session": "c0396ec2-8207-5ef8-ab3f-fd4257befd19"
+}
