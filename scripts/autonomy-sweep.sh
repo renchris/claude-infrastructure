@@ -276,6 +276,55 @@ _bounded() {
   fi
 }
 
+# ── THE SELF-BOUND: this sweep ENDS ITSELF, before the reaper ends it ─────────────────────────────
+# cc-reaper is this job's ONLY watchdog and that is deliberate: launchd does not stack a second
+# instance, so the TERM at ~1400 s is what lets the NEXT tick start at all. Whitelisting the sweep in
+# the reaper would convert a periodic job into a permanently wedged one — do not do it. But being
+# KILLED is a bad way to end. The kill lands wherever the sweep happens to be, and the order here is
+# fixed rather than rotating, so the arms below the cut never run on ANY tick; and every kill mints
+# an `orphan-bash` row, which made this job the reaper's single largest subject (719 TERM rows at
+# ages 1362-2063 s).
+#
+# The checkpoints sit BETWEEN phases, never inside one. A phase cut mid-way is what the per-phase
+# bounds (`_bounded`, `sweep_bounded`) already own; this bound governs whether the NEXT phase
+# STARTS, not whether the current one finishes.
+#
+# THE ARITHMETIC, and it is why the default is 400 rather than the 540 that "before 600" suggests.
+# The reaper's floor is 600 s (bin/cc-reaper: a launchd-parented bash older than 600 s is
+# orphan-bash). A checkpoint can only fire between phases, so the worst case is a phase that starts
+# one second under the bound and then spends its own full allowance: 400 + CC_SWEEP_BOUND_S (180)
+# = 580 < 600. A 540 s bound puts that same worst case at 720 and is killed by the very floor it was
+# sized against (MEMORY.md exoneration-bound-must-fit-what-it-bounds).
+#
+# Yielding is a NORMAL end, not a fault: every arm below a checkpoint is idempotent and re-runs on
+# the next tick — the same contract the per-phase rc-124 cuts already carry. It is logged under its
+# own disposition so a chronically-truncated sweep is a fact somebody can read, rather than
+# something inferred from the reaper's kill log.
+# Seam: CC_SWEEP_SELF_BOUND_S (0 disables the bound entirely).
+# CC_SWEEP_T0 pins the start instant. It is a TEST seam and nothing else: the corpus cannot wait
+# 400 real seconds to see a checkpoint fire, and a suite that instead reached in and called
+# sweep_yield directly would be testing the function rather than the CHECKPOINTS, which is the half
+# that can silently be in the wrong place (inside a subshell, where `exit 0` returns from nothing).
+SWEEP_T0="${CC_SWEEP_T0:-$(date +%s 2>/dev/null || printf 0)}"
+SWEEP_SELF_BOUND_S="${CC_SWEEP_SELF_BOUND_S:-400}"
+case "$SWEEP_SELF_BOUND_S" in ''|*[!0-9]*) SWEEP_SELF_BOUND_S=400 ;; esac
+case "$SWEEP_T0" in ''|*[!0-9]*) SWEEP_T0=0 ;; esac
+sweep_yield() { # <label of the phase that would run next> — exits 0 rather than starting it
+  local now el
+  [ "$SWEEP_SELF_BOUND_S" -gt 0 ] || return 0
+  [ "$SWEEP_T0" -gt 0 ] || return 0
+  now="$(date +%s 2>/dev/null || printf 0)"
+  case "$now" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$now" -gt 0 ] || return 0
+  el=$(( now - SWEEP_T0 ))
+  [ "$el" -ge "$SWEEP_SELF_BOUND_S" ] || return 0
+  log_idl self-bound "$(jq -cn --arg p "$1" --argjson el "$el" --argjson b "$SWEEP_SELF_BOUND_S" \
+    '{stopped_before:$p, elapsed_s:$el, bound_s:$b,
+      note:"NOT a fault and NOT a cut. The sweep ended ITSELF before cc-reaper 600s orphan-bash floor, so this tick leaves no TERM row and the next tick starts on schedule. Every arm at or below stopped_before is idempotent and runs next tick. If stopped_before is ALWAYS the same phase, the arms above it now cost more than the bound: re-measure those, do not raise this past 600 minus CC_SWEEP_BOUND_S, because a bound that does not fit the floor it was sized against can only be killed by it."}')"
+  exit 0
+}
+
+
 # ── 0a. CLOUD RETURN — FIRST, because a block this sweep never REACHES does nothing ──────────────
 # 🚨 WHY THIS IS THE FIRST THING THE SWEEP DOES, AND IT IS A MEASUREMENT, NOT A PREFERENCE.
 # This block was §2d — after the D4 join, the page/alarm collection, the expire-sweep actuator, the
@@ -592,6 +641,8 @@ log_idl thrash-recover "$(jq -cn --arg c "$_thrash_rc" \
   '{thrash_recover_rc:$c,
     note:"0 = pass completed (per-item UNBLOCK lines in the pass output; a pass with nothing to recover is also 0); 1 = at least one unblock FAILED and the item is still blocked; 2 = the ledger is unreadable or cc-backlog is not executable; 3 = the RECOVER set exceeded --max, which is a REFUSAL and not a truncation — raise CC_RECOVER_MAX deliberately after reading the dry run; 124/137 = the bound cut it, next tick resumes; skipped-absent = the tool is not deployed; skipped-not-deployed = a checkout/suite copy, which may never write to the backlog"}')"
 
+sweep_yield 0b-author-death-join
+
 # ── 0b. D4 — AUTHOR-DEATH JOIN (was §0; §0a now precedes it — see the placement note there) ───────
 # The one class no push and no watcher covers: the detached watcher ITSELF dies (reboot, box kill —
 # detach() survives a group SIGKILL but not the machine). Nothing then closes the pane and nothing
@@ -709,6 +760,8 @@ run_handoff_join() {
 }
 run_handoff_join
 
+sweep_yield 1-collect-pages-alarms
+
 # ── 1. collect NEW pages / alarms ──────────────────────────────────────────────
 for f in "$PAGES_DIR"/*.page; do
   [ -e "$f" ] || continue
@@ -737,6 +790,8 @@ for f in "$HANDOFF_ALARM_DIR"/*.json; do
   ha_classes="${ha_classes}${hacls:-unknown}
 "
 done
+
+sweep_yield 2-expire-sweep
 
 # ── 2. expire-sweep = the class-B default ACTUATOR (append to backlog, never act inline) ──
 if [ -n "$DECIDE" ]; then
@@ -869,6 +924,8 @@ if [ -d "$INBOX_GUARD_DIR" ]; then
     rm -f "$mk" 2>/dev/null || true
   done < <(find "$INBOX_GUARD_DIR" -maxdepth 1 -type f -name '*.escalated' -mtime +"$EVENT_TTL" 2>/dev/null)
 fi
+
+sweep_yield 2b-backlog-health
 
 # ── 2b. BACKLOG HEALTH — measured EVERY sweep, deliberately ABOVE the nothing-new early exit ──────
 # The two backlog-health tools landed inert: a7bf7068 gave items a falsifier and 596b39a7 gave the
@@ -1091,6 +1148,8 @@ if [ -x "$_cc_venue" ] && command -v python3 >/dev/null 2>&1; then
   fi
 fi
 
+sweep_yield 2b-ii-grouping-sweep
+
 # ── 2b-ii. THE GROUPING SWEEP (W2, backlog ce1e9d1adab8) — the SEMANTIC half of the same question ──
 # The fold above answers "are these rows the same SENTENCE about the same subject", which is narrow by
 # design and must stay narrow: its own largest sha-keyed cluster of 14 was nine different stranded
@@ -1219,6 +1278,8 @@ if [ -x "$_premise" ] && command -v python3 >/dev/null 2>&1; then
   fi
 fi
 
+sweep_yield 2b-iv-ratchet-consumer
+
 # ── 2b-iv. THE RATCHET'S CONSUMER (W1 item 6) ─────────────────────────────────────────────────────
 # `ratchet_rc` has been journalled since the ratchet was wired and read RED on every recorded run,
 # and the only consequence was a JSON field. An alarm whose sole effect is to be written down is not
@@ -1261,6 +1322,8 @@ if [ "$_rat_rc" = "1" ] && [ -n "$BACKLOG" ] && [ -x "$BACKLOG" ]; then
        >/dev/null 2>&1
   then _rat_filed="filed"; else _rat_filed="file-failed"; fi
 fi
+
+sweep_yield 2b-v-drain-chain-liveness
 
 # ── 2b-v. THE DRAIN-CHAIN LIVENESS CHECK (BACKLOG_DRAIN_24_7 §6) ──────────────────────────────────
 # THE INVARIANT THIS ACTUATES IS THE PLAN'S OWN ROOT CAUSE. §1.2, measured: the local drain ran nine
@@ -1312,6 +1375,8 @@ log_idl backlog-health "$(jq -cn --arg t "$_trig_rc" --arg r "$_rat_rc" \
     venue_write_failed:($vwf|tonumber),
     note:"rc 0 = healthy or filed; 1 = ratchet saw coverage FALL; skipped = tool absent (not clean). consolidation_trigger_rc and ratchet_rc 2 = COULD NOT MEASURE, the engine (jq) is absent — those two guards were fail-OPEN until backlog 2366f99e04a7, the same defect the grouping sweep carried for its whole deployed life, and for the ratchet the fail-open was worse than a misreport: its --assert is the stored falsifier of the row it files at :803, and cc-premise reads exit 0 as THE CONDITION IS GONE, so an absent engine RETRACTED the coverage alarm rather than failing to measure it. The rc-1 consumer below is an exact match on 1 and so cannot launder a 2 into a coverage regression; the trigger files its own condition-keyed, send-damped row (backlog-consolidation-engine-absent) from --file, while the ratchet deliberately files nothing because its scheduled mode IS a probe. drain_chain_rc is the BACKLOG_DRAIN_24_7 §6 liveness check and its rc says only whether the CHECK ran (0 = it answered and filed if dead; skipped = no drain-chain-assert.sh on this box) — the VERDICT is never inferred from it, because the check is fail-open by construction and reports alive on an unreadable store, on zero live rows (the success state), and on any live lease. Read the verdict from `drain-chain-assert.sh --json` or from whether row condition=local-drain-chain-dead is open. ratchet_filed is the ratchet rc CONSUMER: a red assert now files ONE condition-keyed, self-falsifying row instead of only being written down here. The fold APPLIES, gated on its own dry verdict: fold_applied is skipped unless fold_conservation read ok this same sweep, so a FAILED or unknown key disarms the writer without anyone remembering to. grouping_sweep_rc 0 = under the ungrouped floor or filed; 2 = COULD NOT MEASURE, the engine (python3 / scripts/backlog-consolidation/group.py) is absent — that guard was fail-OPEN until backlog 70cc9f44040f, so this field read 0 on every tick of the entire deployed life of that mechanism while it folded nothing, and the sweep now files its own condition-keyed row (backlog-grouping-engine-absent, send-damped) rather than leaving the evidence in an rc nobody screens. A non-zero here has never aborted this sweep: no set -e, and the rc is captured rather than propagated. backfill_* is the CONDITION-LEASE family key (cc-backlog backfill), and it is a DRY RUN on purpose: it proposes joins a scorer found over a living corpus, and a wrong join feeds claim guard (6) and REFUSES a live worker onto work that is not duplicated. backfill_proposed is the depth of that review queue, backfill_ambiguous the rows that matched two groups and were deliberately not joined, and backfill_note no-verdict means the probe did not answer this sweep — never that the store is clean. Flip to --apply when proposed is small and stable across a run of sweeps and its named proposals were spot-checked. premise_pass_* is the CURRENCY pass and runs on its OWN cadence (CC_PREMISE_PASS_EVERY_S, default 6h) because it costs 265.81 s measured at utility over 141 probes (2026-08-16) while this sweep fires every 300 s: note not-due = the interval gate held it, bound-exceeded = rc 124 and the 1500 s bound needs re-measuring in the band, read-failed:<why> = the pass aborted fail-open on an unreadable store and SAID SO rather than exiting 0 with an unparseable body, ok = every live row carries a probe verdict against premise_pass sha. premise_rows_closed retires rows a probe just proved dead, which before had no exit at all: falsified refuses every claim and nothing closed them. premise_rows_deferred/premise_shard_pending are the SHARD (--limit, default 150): deferred is what this pass held back and shard_pending what the cycle still owes after it, so a pending count that never reaches 0 means the cycle is longer than the store\u0027s churn and the LIMIT wants raising — not the bound. Deferred rows are deliberately NOT folded into the sweep\u0027s unprobed count, which stays the coverage ratchet\u0027s input and means only \u0027no arm can speak for this row\u0027. venue_pass_* is the VENUE RE-DERIVATION (cc-venue run --apply) and it exists because a venue label could outlive the rule that made it: 460211b83 landed the cross-repo eligibility arm on 2026-08-23T21:30Z and the six oldest venuePlan=cloud rows had been labelled 08-11..08-21, so they held all six cloud slots against a gate that refuses them and the seven genuinely eligible rows were admitted ZERO times in a day. W1 wired cc-venue\u0027s WRITE-PATH and ADMISSION-REPAIR callers, both keyed on a row being NEW or NEXT; nothing re-decided a settled label until this arm, and `cc-venue run` had zero callers of any kind (grep over scripts/ hooks/ LaunchAgents, 2026-08-24). It APPLIES unattended, unlike the backfill arm beside it, because the producer already fails CLOSED in the expensive direction: a wrong `local` costs nothing (the item claims locally, untouched) while a `cloud` label may only be written from a positive certification cc-venue itself refuses to issue without an ok history horizon, so a second gate here could only disagree with the first. It runs on the currency pass\u0027s cadence (CC_VENUE_PASS_EVERY_S, default 6h) because decide() re-runs cc-premise per item: 21 s measured for the dry decision over 318 open rows on 2026-08-24, with the per-row `cc-backlog venue` writes dominating beyond that. venue_pass_note bound-exceeded = rc 124, which is SAFE and NOT a failure -- every row is decided and written independently, so a truncated pass leaves a prefix re-derived and the next pass finishes what it did not reach; no-verdict = the body did not parse, which is never the same as a clean store; write-failed = at least one label could not be written, and venue_write_failed carries the count."}')"
 
+sweep_yield 2c-config-dir-guardrail-parity
+
 # ── 2c. CONFIG-DIR GUARDRAIL PARITY — same placement, same reason, a third inert tool ─────────────
 # scripts/settings-drift-assert.sh has compared the 5 config dirs correctly since the day it landed
 # and had ZERO callers for its entire life (measured 2026-08-11, backlog 4ce34a4f703c): absent from
@@ -1342,6 +1407,8 @@ log_idl config-parity "$(jq -cn --arg d "$_drift_rc" \
   '{settings_drift_rc:$d,
     note:"rc 0 = the 5 config dirs agree; 1 = drift, ONE condition-keyed item filed; 3 = could not compare (NOT clean); skipped = tool absent"}')"
 
+sweep_yield 2e-custody-deathwatch
+
 # ── 2e. CUSTODY DEATHWATCH — the arm that runs when NOBODY IS HOME ────────────────────────────────
 # The cloud return + refusal blocks (now §0a, hoisted to the top of the pass) only ever speak to an
 # address the FIRE recorded. Measured 2026-08-23: 1055 of
@@ -1370,6 +1437,8 @@ fi
 log_idl custody-deathwatch "$(jq -cn --arg c "$_custdw_rc" \
   '{custody_deathwatch_rc:$c,
     note:"0 = pass completed (per-peer verdicts in ~/.claude/autonomy/custody-deathwatch/deathwatch.jsonl, which also records whether each oracle could run); 124 = the bound cut the pass, next tick resumes (the pass is latched per marker, so nothing is double-reported); skipped = tool absent (NOT clean). A checkout copy self-reports skipped-not-deployed in its own ledger rather than here."}')"
+
+sweep_yield 2f-unfired-briefs
 
 # ── 2f. UNFIRED BRIEFS — a succession that was WRITTEN and never FIRED ────────────────────────────
 # backlog 4a11a0ac850a: a lead announced a recycle, wrote the successor brief, and died before
@@ -1422,6 +1491,8 @@ if [ "$total_new" -eq 0 ]; then
   log_idl abstained '{"reason":"nothing-new"}'
   exit 0
 fi
+
+sweep_yield 3-summary-and-notify
 
 # ── 3. build a compact summary + notify the desk ROLE (resolved at send-time) ──
 summary="[desk-sweep] NEW:"
