@@ -87,6 +87,25 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-07 — recycle #313 (lane infra):** closed 10 pre-existing `re-land` rows. #312's split
+  holds, and a THIRD reading appeared: `N line(s) present only in the ref` was supersession in 5 of
+  5, and in 3 of those the ref was the WEAKER form — dropping `|| false` from `! grep -q` and bare
+  `[[ ]]` assertions, which under `set -e` (and `/bin/bash` 3.2, which bats re-execs bodies through)
+  do not stop a failing test at all. Two rows were duplicate LANDINGS of the same fix under a rival
+  shape (`cfb7f4512de5` vs the M7 attribution arm I landed; `e8c9314024c9` vs trunk's own S4/S5/S7).
+  `ABSENT from origin/main` was real: `a2ddd2e052dd` (two cluster oracles asserting absence with the
+  vacuous `grep -qv`), `a31809074678` (`cc-quota-price` + the `?c`-never-`+0c` null column, 7-way
+  union merge), `16aa6e102124` (curl `-L` walked the SSRF arm past the host check — its live pivot
+  test also convicted the working gate twice on this box: an unguarded negative control and curl
+  8.7.1's reworded refusal), `4dac1bf2d042` (cc-eligible's subject-foreign arm, 7 conflicts against
+  five later trunk commits, all unions, park arm intact). closed `16aa6e102124` `4dac1bf2d042`
+  `654cbb468f66` `6becd3f79d75` `a2ddd2e052dd` `a31809074678` `b262e41b26fb` `c769037870db`
+  `cfb7f4512de5` `e8c9314024c9` · blocked none · released `4a0e50459ad5` `be2331814849` (both
+  rewrite `scripts/handoff-fire.sh`, off-limits to this lane; `be2331814849`'s separable half is
+  already on trunk — `env -u ITERM_SESSION_ID bash cc-offload up` reaches "no pane to wake", no
+  unbound-variable death) · landed `bf63fac37` `a4504a914` `0e015c3ff` `20eaa676a` ·
+  `closed=10 closed_pre=10 closed_other=3 filed=0 net=10 blocked=0 min=3 lane=local-drain project=claude-infrastructure floor=MET`.
+
 - **2026-09-07 — recycle #312 (lane infra):** closed 16 pre-existing `re-land` rows. THE FAMILY
   SPLITS TWO WAYS, and only the falsifier's own wording tells them apart: `N line(s) present only in
   the ref` was SUPERSESSION in 13 of 13 cases — main is the wider form, and four would have REGRESSED
