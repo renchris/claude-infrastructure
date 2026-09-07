@@ -3349,3 +3349,59 @@ use_real_classify() { # <enumerator body> — the REAL cc-classify with its enum
   [ "$(grep -c 'evidence=REGISTRY-ARITHMETIC' "$D/notify-calls")" -eq 0 ]
   [ "$(grep -c 'evidence=PRODUCER-SELF-REPORT' "$D/notify-calls")" -eq 0 ]
 }
+
+@test "R5g: a TOTAL zero over a populated registry is UNATTRIBUTED, and names cc-classify not cc-sessions" {
+  # THE INCIDENT (cc-backlog bbd05ddf8687, 2026-09-05 23:04): 27 live panes, 0 enumerated, and this
+  # file reported `cause=ENUMERATION … the enumerator is the subject`. "The enumerator" was read as
+  # cc-sessions, which was then exonerated twice — 23 rows rc 0 interactively AND under env -i with
+  # a launchd-like PATH — while the thing that actually returned nothing was cc-classify. A zero is
+  # not a gap: the producer returned NOTHING while the registry says everything was there to
+  # return, and R5f already proved a failed enumerator and a truthful [] are byte-identical on
+  # stdout and rc. So the arm must refuse to name a component.
+  set_desk; set_live 4
+  use_real_classify 'printf "[]\n"'
+  set_registry 4                                    # registry HAS the rows ⇒ unreg=0, enum=0
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  [ "$(grep 'EMPTY-BUT-POPULATED' "$CC_REAPER_LOG" | grep -c 'cause=UNATTRIBUTED evidence=EMPTY-CLASSIFICATION')" -eq 1 ]
+  [ "$(grep 'EMPTY-BUT-POPULATED' "$CC_REAPER_LOG" | grep -c 'the enumerator is the subject')" -eq 0 ]
+  [ "$(grep 'EMPTY-BUT-POPULATED' "$CC_REAPER_LOG" | grep -c 'cc-classify returned ZERO rows')" -eq 1 ]
+}
+
+@test "R5g CONTROL: a PARTIAL gap over a populated registry still names the enumerator" {
+  # The narrowness is the whole care. R5e's production case — some rows came back, some did not —
+  # is a measurement of a producer that ran, and the registry partition genuinely attributes it.
+  # If this went UNATTRIBUTED the fix would have replaced one wrong word with silence.
+  set_desk; set_live 4
+  mock_classify active "$D/clean" 10 no PANE-1      # 1 enumerated, 4 live, 4 registered
+  set_registry 4
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'cause=ENUMERATION evidence=REGISTRY-ARITHMETIC' "$D/notify-calls")" -eq 1 ]
+  [ "$(grep -c 'evidence=EMPTY-CLASSIFICATION' "$D/notify-calls")" -eq 0 ]
+}
+
+@test "R5g CONTROL: enum=0 with an EMPTY registry is still REGISTRATION, not UNATTRIBUTED" {
+  # The other direction. reg=0 over 4 live panes is an attribution the numbers support — the
+  # registry independently says nobody registered — so R5f's landed control must survive verbatim.
+  set_desk; set_live 4
+  use_real_classify 'printf "[]\n"'
+  set_registry 0
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  [ "$(grep 'EMPTY-BUT-POPULATED' "$CC_REAPER_LOG" | grep -c 'cause=REGISTRATION')" -eq 1 ]
+  [ "$(grep -c 'evidence=EMPTY-CLASSIFICATION' "$CC_REAPER_LOG")" -eq 0 ]
+}
+
+@test "R5g CONTROL: a self-reporting producer still outranks the new arm" {
+  # PRODUCER-SELF-REPORT is checked before the arithmetic and must stay first: when the producer
+  # says its own enumerator failed, that is an attribution, and burying it under UNATTRIBUTED would
+  # discard the one authoritative diagnostic R5f was built to recover.
+  set_desk; set_live 4
+  use_real_classify 'exit 3'
+  set_registry 4
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  [ "$(grep 'EMPTY-BUT-POPULATED' "$CC_REAPER_LOG" | grep -c 'evidence=PRODUCER-SELF-REPORT')" -eq 1 ]
+  [ "$(grep -c 'evidence=EMPTY-CLASSIFICATION' "$CC_REAPER_LOG")" -eq 0 ]
+}

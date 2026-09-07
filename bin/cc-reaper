@@ -1052,7 +1052,34 @@ blindspot_cause() { # <live> <enum> <delta> → one clause naming the cause(s) t
   fi
   unreg=$(( live - reg )); [ "$unreg" -lt 0 ] && unreg=0; [ "$unreg" -gt "$delta" ] && unreg="$delta"
   unenum=$(( delta - unreg ))
-  if [ "$unreg" = 0 ]; then
+  if [ "$unreg" = 0 ] && [ "$enum" = 0 ]; then
+    # ── TOTAL BLACKOUT vs A GAP (cc-backlog bbd05ddf8687, measured 2026-09-05 23:04) ─────────────
+    # `enum=0` over a FULLY populated registry is not the same observation as `enum=21 of 27`, and
+    # the arm below said it in words that sent the reader to the wrong subject. It reported
+    # `cause=ENUMERATION … the enumerator is the subject` over 27 live panes and 0 enumerated, and
+    # "the enumerator" was read as cc-sessions — which was then checked and exonerated twice:
+    # `cc-sessions --json` returned 23 rows rc 0 interactively AND under `env -i` with a
+    # launchd-like PATH=/usr/bin:/bin:/usr/sbin:/sbin, refuting the launchd-environment hypothesis
+    # the wording invited. But this file's `enum` is not cc-sessions' output; self_check:1609 defines
+    # it as what CC-CLASSIFY saw this sweep, and cc-classify --all --json returned 21 rows for the
+    # same operator at 23:00 under the same load. The arithmetic was right and its NOUN was wrong.
+    #
+    # WHY A TOTAL ZERO GETS ITS OWN ARM RATHER THAN BETTER PROSE IN THAT ONE. A partial gap is a
+    # measurement of a producer that ran: some rows came back, some did not, and the registry
+    # partition tells you which. A zero is the producer returning NOTHING while the registry says
+    # everything was there to return — and this file has already proved it cannot tell that from a
+    # truthful empty (R5f: an enumerator exiting 3 and one returning [] are byte-identical on stdout
+    # and rc). The producer's own stderr is the discriminator and it is checked FIRST, above; when it
+    # says nothing, the honest word for a total zero is that the cause is not attributed, not that a
+    # named component is the subject. Fails LOUD instead of resolving to an attribution.
+    #
+    # THE EXISTING CONTROL IS DELIBERATELY UNTOUCHED: reg=0 over 4 live panes still yields
+    # cause=REGISTRATION, because there the registry independently says nobody registered — that is
+    # an attribution the numbers support. This arm needs unreg=0, i.e. a registry that HAS the rows.
+    # EMPTY-CLASSIFICATION is a substring of neither REGISTRY-ARITHMETIC, PRODUCER-SELF-REPORT nor
+    # UNREADABLE-STORE, in either direction (control 11).
+    printf 'cause=UNATTRIBUTED evidence=EMPTY-CLASSIFICATION — cc-classify returned ZERO rows while cc-registry holds %d row(s) for %d live pane(s), so the classification is TOTAL, not a gap, and it did not self-report a failure. A producer that returns nothing over a populated registry cannot be told from one that truthfully saw nothing, so no component is named: check %s --all --json by hand this sweep. NOTE the subject is cc-classify, NOT the cc-sessions enumerator underneath it' "$reg" "$live" "$CLASSIFY_BIN"
+  elif [ "$unreg" = 0 ]; then
     printf 'cause=ENUMERATION evidence=REGISTRY-ARITHMETIC — cc-registry holds %d row(s) for %d live pane(s), so all %d unseen are registered-but-unenumerated; the enumerator is the subject, NOT a spawn mode failing to register' "$reg" "$live" "$unenum"
   elif [ "$unenum" = 0 ]; then
     printf 'cause=REGISTRATION evidence=REGISTRY-ARITHMETIC — cc-registry holds %d row(s) for %d live pane(s), so all %d unseen are unregistered; a spawn mode is not registering' "$reg" "$live" "$unreg"
