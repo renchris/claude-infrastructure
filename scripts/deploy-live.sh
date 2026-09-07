@@ -238,6 +238,34 @@ HOST_CUT_COOLOFF="${CC_DEPLOY_HOST_CUT_COOLOFF:-1800}"           # ...and before
 case "$HOST_CUT_MAX"     in ''|*[!0-9]*) HOST_CUT_MAX=3 ;; esac
 case "$HOST_CUT_COOLOFF" in ''|*[!0-9]*) HOST_CUT_COOLOFF=1800 ;; esac
 
+# ── HOST_GREEN — the ledger of the CURE, which this script produced 24 times and never recorded ──
+# THE GAP IT CLOSES, measured 2026-09-07 on backlog 92b2e22da7d0. host_checks files a
+# `post-deploy HOST RED` row from a failing suite and then, on every later tick, PROVES that suite
+# green again — and returns at `[ -n "$red" ] || return 0` before touching any store. The finding
+# had a producer; its cure had no recorder. That row was filed 2026-09-05 from the deploy of
+# 488742fcb66a, read `ok` in the 24 consecutive post-deploy checks that followed, stayed open for
+# two days and consumed a dispatched worker slot — because the ONE thing that could have retired it
+# is a probe, and --falsify-host had nothing green to read. Its own header said so in as many words:
+# "There is no host-green ledger to read — if one is ever written, THAT is the probe." This is it.
+#
+# ROWS: "<suite> <epoch> <sha>", at most one per suite, LAST VERDICT WINS. The three write rules are
+# each load-bearing and they are NOT symmetric:
+#   ok   → write/replace the suite's row.        The cure, recorded.
+#   RED  → DELETE the suite's row.               Without this a green from BEFORE the red would sit
+#                                                in the ledger and retract the fresh finding — a
+#                                                stale measurement laundered into a retraction, the
+#                                                exact defect the --falsify-host header refuses.
+#   CUT  → leave the row EXACTLY as it is.       A non-verdict changes nothing, in either direction.
+# A suite the tick never reached (cool-off, absent from the deployed tree, manifest change) keeps
+# its row for the same reason: nothing was measured, so nothing is claimed. That is why this file is
+# MERGED rather than rebuilt from the tick — the opposite of HOST_CUTS beside it, whose rows are a
+# streak counter and must prune themselves. Two ledgers, two lifetimes, one directory.
+#
+# ABSENCE IS NEVER A RETRACTION. "no row" is reachable from never-measured, from a red, and from a
+# pruned file, so it reads as exit 1 like every other could-not-say. Only an explicit green row is
+# load-bearing, which keeps this probe's single success state single.
+HOST_GREEN="$POSTLAND_DIR/host-green"                            # rows: "<suite> <epoch> <sha>"
+
 # ── --falsify-host <suite> — THE STORED FALSIFIER this script hands to its own items ─────────────
 # Handled FIRST, before the arg loop and before anything fetches, merges, deploys or writes: it is a
 # pure read that cc-premise re-runs on every claim of a `post-deploy HOST RED` / `HOST CUT` item this
@@ -245,9 +273,16 @@ case "$HOST_CUT_COOLOFF" in ''|*[!0-9]*) HOST_CUT_COOLOFF=1800 ;; esac
 # is GONE and the claim is refused, every non-zero means "still live", advisory only — so exit 0 is
 # the only load-bearing answer and it is placed where nothing else in this file can produce one.
 #
-# EXACTLY ONE SUCCESS STATE, and a deliberately NARROW one: the live layer no longer runs this suite
-# at all — it left the manifest, or it is absent from the deployed tree. host_checks skips both, so
-# the finding cannot recur; that is one meaning reached two ways, not two meanings.
+# EXACTLY ONE SUCCESS STATE: the live layer is no longer failing this suite. It is reached three
+# ways, and the three are one meaning, not three meanings — the suite left the manifest, or it is
+# absent from the deployed tree (host_checks skips both, so the finding cannot recur), or the live
+# layer's OWN most recent verdict on it is green (HOST_GREEN, declared above).
+#
+# THE THIRD LEG IS THE COMMON CURE and it was missing for the whole deployed life of this verb. A
+# host RED is normally fixed — the drift converges, the flake stops, the fix lands — and the suite
+# simply passes again. Both of the original legs answer "did the suite STOP BEING RUN", which is the
+# rare cure; neither could see the ordinary one. Measured on backlog 92b2e22da7d0: 24 consecutive
+# greens after the red, and the row it filed was still open two days later.
 #
 # WHY NOT THE OBVIOUS PROBE — re-run the suite, call a green a retraction. It does not fit the bound:
 # cc-premise gives a probe 20s and a host suite is bounded here at CC_DEPLOY_HOST_TIMEOUT_S (3600s
@@ -260,7 +295,9 @@ case "$HOST_CUT_COOLOFF" in ''|*[!0-9]*) HOST_CUT_COOLOFF=1800 ;; esac
 # from "it passed", "no deploy has run since" and "the file was pruned to nothing" — three states,
 # one reading, and the middle one is a FALSE retraction. An ambiguous falsifier is worse than none
 # because it reports done; this verb answers the narrow question it can answer instead of guessing
-# the wide one. There is no host-green ledger to read — if one is ever written, THAT is the probe.
+# the wide one. HOST_CUTS is still not that ledger and never will be. HOST_GREEN now is: it records
+# only what a verdict actually said, a red DELETES rather than merely fails to write, and a missing
+# row stays non-zero — so none of the three ambiguities above survive into it.
 if [ "${1:-}" = "--falsify-host" ]; then
   _fh_suite="${2:-}"
   [ -n "$_fh_suite" ] || exit 2                       # nothing named ⇒ could not ask
@@ -280,6 +317,13 @@ if [ "${1:-}" = "--falsify-host" ]; then
   done < "$MANIFEST"
   [ "$_fh_in" -eq 0 ] || exit 0                       # left the manifest ⇒ the live layer stopped running it
   [ -f "$DEPLOY_REPO/$_fh_suite" ] || exit 0          # absent in the deployed tree ⇒ host_checks skips it
+  # Still run, and still present. The remaining question is what the live layer last SAID about it.
+  # Quoted case pattern = literal match: the suite is a path and `*` in one must not glob a row.
+  if [ -f "$HOST_GREEN" ]; then
+    while IFS= read -r _fh_row || [ -n "${_fh_row:-}" ]; do
+      case "${_fh_row%% *}" in "$_fh_suite") exit 0 ;; esac
+    done < "$HOST_GREEN"
+  fi
   exit 1                                              # still in the population ⇒ the finding can still be live
 fi
 
@@ -835,6 +879,11 @@ host_cut_page() { # <suite> <n> <deployed-sha> — an HONEST page: names no test
 }
 host_checks() { # <deployed-sha> — never blocks, never rolls back, never changes the exit code
   local sha="$1" line s tap rc notok n=0 red="" cut="" pf iscut row cn newcuts=""
+  # THE VERDICT SETS, kept as bare space-delimited suite paths (`$red` carries a `(N)` count and is
+  # therefore not usable as a key). greenset is what gets a HOST_GREEN row; redset is what has its
+  # row DELETED. A suite reaches neither set when this tick produced no verdict about it, and that
+  # is exactly the case whose prior row must survive untouched.
+  local greenset="" redset="" newgreen="" gp gts gsha
   [ -r "$MANIFEST" ] || return 0
   # Build a list (bash 3.2: no mapfile). Suite paths are repo-relative and space-free by contract.
   local SUITES; SUITES=()
@@ -909,9 +958,12 @@ host_checks() { # <deployed-sha> — never blocks, never rolls back, never chang
         then say "  CUT  $s — bound ${HOST_TIMEOUT_S}s fired after $notok named failure(s) (truncated: no verdict)"
         else say "  CUT  $s — bound ${HOST_TIMEOUT_S}s fired (no verdict)"
       fi
-    elif [ "$notok" -gt 0 ]; then    red="$red $s($notok)"; say "  RED  $s — $notok failing"
+    elif [ "$notok" -gt 0 ]; then    red="$red $s($notok)"; redset="$redset $s"; say "  RED  $s — $notok failing"
     elif [ "$rc" -ne 0 ];    then    cut="$cut $s"; iscut=1; say "  CUT  $s — rc=$rc naming 0 tests (no verdict)"
-    else                                                    say "  ok   $s"
+    else                             greenset="$greenset $s"
+                                     newgreen="$newgreen$s $(date +%s) $sha
+"
+                                                            say "  ok   $s"
     fi
     # A VERDICT CLEARS THE STREAK — and clearing is spelled "write no row", never "write 0". Both
     # RED and ok land here, because the streak counts NON-VERDICTS and a red is a verdict: a suite
@@ -940,6 +992,34 @@ host_checks() { # <deployed-sha> — never blocks, never rolls back, never chang
     rm -f "$HOST_CUTS" 2>/dev/null || true
   fi
   [ -n "$cut" ] && say "host-checks: non-verdict (cut) suites —$cut"
+
+  # ── HOST_GREEN: MERGE, never rebuild (contract at the declaration) ──────────────────────────────
+  # Placement is the same argument as the HOST_CUTS write directly above: ABOVE the `[ -n "$red" ]`
+  # early return, because the common tick has no red at all and that return would drop every green
+  # this loop just proved — which is precisely the omission this ledger exists to end.
+  # Carry forward every prior row the tick said NOTHING about; drop the ones it reddened; append the
+  # ones it greened. Write via a temp + mv so a killed deploy (this runs at nice 19 under a bound)
+  # cannot leave a half-written ledger that reads as a retraction for whatever survived truncation.
+  # Every path is `|| true`: a ledger that could break the deploy would be a worse defect than the
+  # unclosable rows it repairs.
+  if [ -n "$greenset$redset" ] || [ -f "$HOST_GREEN" ]; then
+    mkdir -p "${HOST_GREEN%/*}" 2>/dev/null || true
+    {
+      if [ -f "$HOST_GREEN" ]; then
+        while read -r gp gts gsha || [ -n "${gp:-}" ]; do
+          [ -n "${gp:-}" ] || continue
+          case "$greenset$redset " in *" $gp "*) continue ;; esac
+          case "${gts:-}" in ''|*[!0-9]*) gts=0 ;; esac
+          printf '%s %s %s\n' "$gp" "$gts" "${gsha:-}"
+        done < "$HOST_GREEN"
+      fi
+      printf '%s' "$newgreen"
+    } > "$HOST_GREEN.tmp" 2>/dev/null || true
+    if [ -s "$HOST_GREEN.tmp" ]; then mv -f "$HOST_GREEN.tmp" "$HOST_GREEN" 2>/dev/null || true
+    else rm -f "$HOST_GREEN.tmp" "$HOST_GREEN" 2>/dev/null || true
+    fi
+  fi
+
   [ -n "$red" ] || return 0
 
   # A live-layer finding, not a deploy blocker: page + backlog, sha-keyed so a repeat tick of the
