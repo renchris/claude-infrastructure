@@ -149,10 +149,27 @@ lw_bin() {
 
 @test "D3 CONTROL: retire is NOT called before the work is verified on trunk" {
   # Retiring early tells reap a still-working VM is dead and invites a duplicate peer onto live
-  # work. Every retire call site must sit under a landed_ok==0 branch.
-  run bash -c 'awk "/retire --id/{print NR}" "$1" | while read -r n; do
-                 sed -n "1,${n}p" "$1" | grep -q "landed_ok\" -eq 0" || { echo "UNGUARDED at $n"; exit 1; }
-               done' _ "$REPO/scripts/cloud-return.sh"
+  # work. Every retire call site must sit under a TERMINAL-VERDICT guard. There are two, and both
+  # discharge that hazard:
+  #   landed_ok" -eq 0  — this session's work is content-verified on trunk, so the VM is finished.
+  #   item_is_done      — the row was closed by someone else, so this session has NO work to verify
+  #                       and none to strand: the branch is left on origin and custody is ABANDONED.
+  #
+  # THE RULE USED TO BE A PROXY, NOT THE INVARIANT: "`landed_ok" -eq 0` appears ANYWHERE in the
+  # file above the call". `landed_ok` is first assigned at cloud-return.sh:859, so that proxy failed
+  # the SUPERSEDED path at :540 purely for being EARLIER IN THE FILE than an unrelated assignment —
+  # and, in the other direction, would have passed a genuinely unguarded retire added anywhere after
+  # :859. It was weak and strict in the wrong places at once. This names the invariant and bounds
+  # the search to the enclosing branch: 40 lines, against a widest real guard→call gap of 19
+  # (:1040→:1059), so a retire dropped in without a guard still goes red — verified by mutation.
+  run bash -c '
+    rc=0
+    for n in $(awk "/retire --id/{print NR}" "$1"); do
+      lo=$(( n - 40 )); [ "$lo" -lt 1 ] && lo=1
+      sed -n "${lo},${n}p" "$1" | grep -qE "landed_ok\" -eq 0|item_is_done" \
+        || { echo "UNGUARDED at $n"; rc=1; }
+    done
+    exit $rc' _ "$REPO/scripts/cloud-return.sh"
   [ "$status" -eq 0 ]
   [[ "$output" != *UNGUARDED* ]]
 }
