@@ -237,6 +237,17 @@ which get no converge budget — an added file is absent rather than stale, so e
 it is a silent skip. Expect `🚀`, not `✅`, until an operator clears `core.bare` and the converger
 runs.
 
+> **✅ DISCHARGED 2026-09-07 (W3-registration).** `core.bare` was repaired and `deploy-live`
+> converged that morning. All FIVE W3 handlers — `stop-failure-marker.sh`, `subagent-stop.sh`,
+> `file-changed.sh`, `instructions-loaded.sh`, `post-tool-batch.sh` — are now **live-exec in
+> `~/.claude/hooks`** (per-file symlinks into the checkout, re-verified on disk). The paragraph
+> above is kept as the historical record of why the `🚀` rung was correct at the time; the
+> condition it named no longer holds. What has NOT changed is that landing ≠ registering: measured
+> the same morning, `~/.claude/settings.json` carried exactly **90** registrations across 13 event
+> keys and `StopFailure` / `PostToolBatch` / `InstructionsLoaded` / `FileChanged` / `CwdChanged`
+> were absent from **all five** config dirs. Live-exec and unregistered is still unreachable code
+> — it just fails at a different layer than this paragraph predicted.
+
 **What W3 should wire, in descending order of earned value** (each already has its verdict + payload):
 
 1. **`StopFailure`** — fires at the instant of death with `error:"authentication_failed"` and
@@ -244,6 +255,10 @@ runs.
    sessions hit one cap together.
 2. **`SubagentStop`** — `agent_id` + `agent_transcript_path` + `agent_type`; closes task #192. Must
    stay non-blocking.
+   → **Already covered by `migrations/0014-subagent-stop-registration.sh`** (staged, unrun), which
+   predates this wave. The 2026-09-07 registration migrations therefore do **not** touch this event:
+   0014's append is idempotent only against its OWN command string, so a second migration on the
+   same key would create a duplicate row rather than detect one. 0014 remains the single owner.
 3. **`FileChanged` + `CwdChanged` as ONE unit** — unblocks tasks #58/#74. 🚨 **Wire it per § 3e, not
    per the obvious reading:** an absolute matcher to ARM, a `*`/no-matcher sibling to DISPATCH, and a
    `CwdChanged` hook re-emitting `watchPaths`. A bare-basename matcher alone silently re-targets on the
@@ -615,6 +630,50 @@ sanctioned way to watch outside cwd, and it is what makes the three-part wiring 
 pattern rather than a workaround. The landed `hooks/file-changed.sh` emits it from an opt-in watchlist
 file, defaulting to silent observation so a registration cannot be surprised by output it did not
 ask for.
+
+### 3e-FINDING (2026-09-07, W3-registration) — part 3 had NO WORKING IMPLEMENTATION, and its registration would have read GREEN
+
+**The three parts above are a specification, and one of them was unimplemented in the handler that
+was supposed to satisfy it.** `hooks/file-changed.sh` guarded on `file_path` with an early
+`exit 0` (`:138`) sitting **ABOVE** the `watchPaths` emit (`:153-158`). A `CwdChanged` payload
+carries no `file_path` — so the guard fired first and the handler emitted **nothing** on precisely
+the event part 3 exists for. Measured on both arms with `CC_FILECHANGED_WATCHLIST` set:
+
+    CwdChanged payload  → stdout EMPTY                                    (cannot re-arm)
+    FileChanged payload → {"hookSpecificOutput":{"hookEventName":"FileChanged","watchPaths":[…]}}
+
+**Why this is worth a finding rather than a bug line.** Every sensor available to a registration
+would have called it healthy. The command string is in `settings.json` either way; the hook is
+executable; it exits 0; the FileChanged arm emits correctly. The failure is visible only by
+feeding the handler the *other* event it is registered on — which is a test nobody writes unless
+the two-event registration is already understood as ONE unit. It is the § 5 shape ("a green test
+can certify a bug") applied to a registration instead of a test: **a registered no-op reads GREEN,
+and part 3's no-op would have been silent in exactly the way the empty watch list it was meant to
+prevent is silent.**
+
+**THIS IS WHY THE REGISTRATION SPLITS INTO TWO MIGRATIONS** rather than the single one § 2
+anticipated:
+- `migrations/0016-w3-hook-registration.sh` — the three READY events (`StopFailure`,
+  `PostToolBatch`, `InstructionsLoaded`/`session_start`), which needed no handler change.
+- `migrations/0017-filechanged-cwdchanged-registration.sh` — `FileChanged` + `CwdChanged` as the
+  one three-part unit, staged only AFTER the handler fix, and asserting its own matchers through
+  `hooks/file-changed.sh --check-matcher <m> [--role arm]` before it writes them.
+
+**The fix, and the direction it must not overshoot in.** The guard is now scoped to the LOGGING
+path alone: a `CwdChanged` payload still writes **no log row** (it names no file, so no later query
+could attribute one) but it **does** re-arm. `hookEventName` is read from the payload rather than
+hard-coded, so a re-arm is labelled with the event that actually fired it.
+`tests/file-changed.bats` pins both directions (arms 26-29).
+
+**A second defect fell out of writing 0017, and it is the more transferable one.**
+`--check-matcher` splits its argument on `|` with an **unquoted** expansion, which is also subject
+to **pathname expansion** — so the single most important matcher it judges, `*`, globbed to the
+caller's cwd and the checker judged 36 filenames instead. It still exited 0, because bare basenames
+are accepted, **so the suite's own "the star matcher is ACCEPTED" arm had been passing for entirely
+the wrong reason and could never have rejected a bad `*`.** Found only because 0017 asserts its own
+dispatch matcher and printed 36 NOTICE lines naming this repo's files. Fixed with `set -f` around
+the split; pinned by arm 30. *Generalisable: a checker that must not glob is one unquoted expansion
+away from checking something else entirely, and it fails in the passing direction.*
 
 One over-generalisation also did not survive: the hazard "new_cwd can permanently misname the
 session's directory" is conditional on the REVERT path, i.e. an out-of-scope `cd`. An in-scope `cd`
