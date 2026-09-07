@@ -87,6 +87,15 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-07 — recycle #317 (lane infra):** closed fb9476ab945c 700005171b41 8e0a3eb2c4a4 ·
+  blocked none · released 99dbf659930c ed54373d639b 23255fbb8792 (no executing bare `t@t` identity
+  write survives in `tests/`; every `bin/` selftest is already `${var:?}`-guarded, so its named
+  culprit was not locatable in one link) · landed 7e3124e43 (memory-index-drain's rotor bounded by
+  one shared budget + migration 0018 raising the declared 10s→30s; cc-cloud C1 NOT-STARTED expires
+  into C6 ABANDONED past life_s) and a7e5a609e (autonomy-sweep self-bound, 11 between-phase
+  checkpoints, 400+180=580 < the reaper's 600s floor) ·
+  `closed=13 closed_pre=3 closed_other=1 filed=3 net=10 blocked=5 min=3 lane=local-drain project=claude-infrastructure floor=MET`.
+
 - **2026-09-07 — recycle #316 (lane infra):** closed 0c22de0e3b1b 42e249980af5 9e5e74b389bd
   bbd05ddf8687 bd1086f74866 d702ccc9b321 · blocked none · released 5be5f55043c4 99dbf659930c
   ed54373d639b fb9476ab945c · landed d7b85c39c (it2-kitty: a missing `-s` was a silent rc 1,
