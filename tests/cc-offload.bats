@@ -582,6 +582,26 @@ EOF
   [[ "$output" == *UNMANAGED* ]] || false
 }
 
+@test "a fire with NO iTerm still fires — the unset default is fire-and-forget, not an abort" {
+  # REGRESSION, measured 2026-08-20. `UP_NOTIFY_BACK="${ITERM_SESSION_ID##*:}"` under `set -u`
+  # aborted on an unset variable — three lines ABOVE the `elif [ -z "$UP_NOTIFY_BACK" ]` branch
+  # written to handle precisely that case, which therefore was unreachable code. The desk never saw
+  # it because an iTerm shell always exports the variable; every OTHER caller (a VM, cron/launchd, a
+  # kitty pane, this suite) died `unbound variable` rc 1 with no fire and no diagnosis.
+  #
+  # This is the [[alarm-polarity]] shape in the launch path: the one configuration the code claims
+  # to support in prose was the only one it could not execute. So the assertion is not "it prints a
+  # note" — it is that the FIRE HAPPENS, with the note as the positive control on the degrade.
+  _api_fixture
+  unset ITERM_SESSION_ID
+  run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"unbound variable"* ]] || false
+  grep -q 'cc-cloud declare' "$CALLS" || false          # it really fired …
+  ! grep -q 'declare .*--notify-back' "$CALLS" || false  # … with no wake target, as the note says
+  [[ "$output" == *FIRE-AND-FORGET* ]] || false
+}
+
 @test "a custody failure is SURFACED and never silently downgrades the fire to fire-and-forget" {
   _api_fixture
   CUSTODY_RC=3 ITERM_SESSION_ID="w0t0p9:PANE-UUID" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
@@ -601,6 +621,123 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == *WOULD* ]] || false
   ! grep -q 'cc-cloud declare' "$CALLS"
+}
+
+# ══ up — THE FOREIGN-REPO GATE ═══════════════════════════════════════════════════════════════════
+# The class these pin cost seven cloud dispatches over six items in six days (docs/research/
+# venue-foreign-*.md, cloud-venue-project-repo-mismatch-2026-08-16.md): a session gets exactly ONE
+# repo, `up` picks it from the FIRING checkout, and nothing compared it to the item's own subject.
+# Every one of those workers arrived unable to read the thing it was sent to fix.
+#
+# The suite's standing rule applies with unusual force here, because a REFUSAL is the behaviour
+# under test and a gate that refuses everything would pass a naive suite trivially: every refusal
+# below is paired with a POSITIVE CONTROL that fires off the same fixture with one field changed.
+# The named cost of a false refusal is a starved cloud tap, so the fail-open arms are not
+# housekeeping — they are the ones that bound the blast radius.
+_ledger_fixture() { # a real cc-backlog store + a dispatch conf, both hermetic
+  export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl"; : >"$CC_BACKLOG_FILE"
+  export CC_OFFLOAD_BACKLOG_BIN="${BATS_TEST_DIRNAME}/../bin/cc-backlog"
+  export CC_OFFLOAD_DISPATCH_CONF="$BATS_TEST_TMPDIR/dispatch-projects.conf"
+  cat >"$CC_OFFLOAD_DISPATCH_CONF" <<'EOF'
+# a comment naming reso-management-app must never be scanned as an item's subject
+claude-infrastructure  repo=~/Development/claude-infrastructure
+doc_classifier         repo=~/Development/doc_classifier
+reso-management-app    repo=~/Development/reso-management-app
+reso-qa-runner   skip=no open items — a skip row is not a dispatchable tree
+EOF
+}
+_file_item() { # $1=project $2=title [$3=dodRef] → echoes the id
+  local args=(add --title "$2" --project "$1" --source "bats")
+  [ -n "${3:-}" ] && args+=(--dod-ref "$3")
+  "$CC_OFFLOAD_BACKLOG_BIN" "${args[@]}" 2>/dev/null | tail -1
+}
+
+@test "up REFUSES a label-foreign item — the fire that burned seven cloud sessions" {
+  # The real shape of 64f1d37dc4b3: project reso-management-app, fired at a VM whose one attached
+  # repo is claude-infrastructure. The assertion that matters is `! grep cc-cloud declare` — a gate
+  # that printed a warning and fired anyway would have cost exactly what the unguarded version did.
+  _api_fixture; _ledger_fixture
+  local id; id="$(_file_item reso-management-app 'lib/generated/bottle-audit.ts is stale vs its inputs')"
+  ITERM_SESSION_ID="w0t0p9:P" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3 --item "$id"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *ineligible-foreign-repo* ]] || false
+  [[ "$output" == *reso-management-app* && "$output" == *claude-infrastructure* ]] || false
+  ! grep -q 'cc-cloud declare' "$CALLS" || false
+  ! grep -q 'cc-custody open' "$CALLS" || false   # no custody debt for a fire that never happened
+}
+
+@test "up FIRES the same item once its project IS the attached repo" {
+  # POSITIVE CONTROL for the arm above — same fixture, same brief, one field different. Without
+  # this, a gate hardcoded to `return 3` would pass the test above.
+  _api_fixture; _ledger_fixture
+  local id; id="$(_file_item claude-infrastructure 'lib/generated/bottle-audit.ts is stale vs its inputs')"
+  ITERM_SESSION_ID="w0t0p9:P" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3 --item "$id"
+  [ "$status" -eq 0 ]
+  grep -q 'cc-cloud declare' "$CALLS" || false
+}
+
+@test "up REFUSES a subject-foreign item — the label is ACCURATE and the work is elsewhere" {
+  # 9333991e4544: project claude-infrastructure (correct — the row really is filed here), subject
+  # doc_classifier's nightly. A pair comparison (item.project vs attached_repo) matches on every
+  # term and cannot see this row, which is why the label arm alone is not the fix.
+  _api_fixture; _ledger_fixture
+  local id; id="$(_file_item claude-infrastructure 'doc_classifier nightly scale-run is 100% failure 15/15')"
+  ITERM_SESSION_ID="w0t0p9:P" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3 --item "$id"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *subject-foreign* ]] || false
+  ! grep -q 'cc-cloud declare' "$CALLS" || false
+}
+
+@test "up REFUSES a cross-repo master whose foreign trees are named only in its DoD-ref plan" {
+  # 8f59467c92b0, the row BOTH filed remedies pass: its label is accurate and its title ('MASTER:
+  # product repos') names nothing. It was misrouted on 08-15, disproved in its own plan file, and
+  # misrouted AGAIN on 08-17 — the demonstration that a conclusion reaching only prose parks
+  # nothing. Its work spans TWO trees, so it can never be routed, only parked or split.
+  _api_fixture; _ledger_fixture
+  mkdir -p "$CC_OFFLOAD_REPO/docs/plans"
+  printf 'R1 edits ~/Development/reso-management-app and R2 edits ~/Development/doc_classifier\n' \
+    >"$CC_OFFLOAD_REPO/docs/plans/MASTER_PRODUCT_REPOS.md"
+  local id; id="$(_file_item claude-infrastructure 'MASTER: product repos' 'docs/plans/MASTER_PRODUCT_REPOS.md')"
+  ITERM_SESSION_ID="w0t0p9:P" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3 --item "$id"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *subject-foreign* ]] || false
+  ! grep -q 'cc-cloud declare' "$CALLS" || false
+}
+
+@test "a plan that merely MENTIONS another project in prose still fires" {
+  # POSITIVE CONTROL for the arm above, and the entire false-positive budget of the body scan. Half
+  # the plans in docs/plans/ mention reso somewhere; refusing on a bare mention would starve the
+  # cloud tap, which is the one cost that is unbounded. The body arm therefore requires the label
+  # PATH-SHAPED — an edited tree — while a bare label stays sufficient on the row's own short fields.
+  _api_fixture; _ledger_fixture
+  mkdir -p "$CC_OFFLOAD_REPO/docs/plans"
+  printf 'The ship-policy table used to name reso-management-app; that fact perished.\n' \
+    >"$CC_OFFLOAD_REPO/docs/plans/SHIP.md"
+  local id; id="$(_file_item claude-infrastructure 'ship policy row delegates to the project CLAUDE.md' 'docs/plans/SHIP.md')"
+  ITERM_SESSION_ID="w0t0p9:P" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3 --item "$id"
+  [ "$status" -eq 0 ]
+  grep -q 'cc-cloud declare' "$CALLS" || false
+}
+
+@test "the gate FAILS OPEN on an id no ledger knows — an instrument outage never starves the tap" {
+  # cc-eligible's founding rule, and the reason this gate can be trusted in the fire path at all:
+  # "cannot READ" and "read fine, and it is foreign" are different, and only the second may refuse.
+  # An unknown id here also covers the no-store case a fresh box presents.
+  _api_fixture; _ledger_fixture
+  ITERM_SESSION_ID="w0t0p9:P" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3 --item deadbeefcafe
+  [ "$status" -eq 0 ]
+  grep -q 'cc-cloud declare' "$CALLS" || false
+}
+
+@test "CC_OFFLOAD_FOREIGN_GATE=off is a real off-switch, not decoration" {
+  # Every gate this repo lands in a spend path carries one, because the operator must be able to
+  # fire a row the gate is wrong about without editing a binary at 2am.
+  _api_fixture; _ledger_fixture
+  local id; id="$(_file_item reso-management-app 'lib/generated/bottle-audit.ts is stale vs its inputs')"
+  CC_OFFLOAD_FOREIGN_GATE=off ITERM_SESSION_ID="w0t0p9:P" \
+    run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3 --item "$id"
+  [ "$status" -eq 0 ]
+  grep -q 'cc-cloud declare' "$CALLS" || false
 }
 
 @test "an unknown verb refuses with usage rather than doing something adjacent" {
