@@ -740,6 +740,17 @@ called reviewed. It should not need to re-measure anything.
 - **Experimental events go in a SEPARATE settings file**, never `~/.claude/settings.json`. One malformed
   entry silently disables all 90 registrations there, including every fact-bound Stop gate and the land
   gate, with no log line.
+  🚨 **MEASURED 2026-09-07: this precondition is NOT SATISFIABLE AS WRITTEN, and that is why nothing is
+  registered yet.** The obvious separate file — the user config dir's `settings.local.json` — **is not
+  read as a hook source.** Two zero-quota `--init-only` runs, each with an in-run control:
+  control `settings.json` → 1 row, target user-level `settings.local.json` → **0 rows**; a second run
+  adding the project level gave `<cfgdir>/settings.json` → 1, `<project>/.claude/settings.json` → 1,
+  `<project>/.claude/settings.local.json` → 1. So hooks load from a PROJECT's settings files but not
+  from the user-level local one. Registering there would yield a hook that is registered and never
+  fires — **precisely the silent no-op of § 5's unknown-event-name hazard**, and indistinguishable
+  from success. The five ready handlers are fleet-wide consumers, so a project-scoped file cannot
+  carry them. **Decision filed: `ab82a67e2c37`** (settings.json + count assertion · project-local ·
+  launcher `--settings`), default = HOLD, handlers stay inert on disk, which is safe.
 - **Assert the expected registration count at SessionStart** — `hooks/config-mirror-assert.sh` is the
   natural home.
 - **Never wire an event whose `hookSpecificOutput` schema you have not read.** `WorktreeCreate` is the
