@@ -3,7 +3,7 @@
 # migration-step: the autonomy sweep's launchd job still carries ProcessType Background, which pins it and the cloud lane it spawns at PRI 4 (E-core confined, one land ~1 h) — applying the fixed plist needs a launchctl bootout+bootstrap, which is yours
 # migration-run: CONFIRM=1 bash ~/Development/claude-infrastructure/docs/activation/pending-activation/43-autonomy-sweep-band-activate.sh
 # migration-subject: ~/Library/LaunchAgents/com.chrisren.autonomy-sweep.plist
-# migration-verify: ! plutil -p ~/Library/LaunchAgents/com.chrisren.autonomy-sweep.plist | grep '"ProcessType"' >/dev/null && grep -q 'taskpolicy -c utility' ~/Library/LaunchAgents/com.chrisren.autonomy-sweep.plist
+# migration-verify: launchctl print gui/$(id -u)/com.chrisren.autonomy-sweep 2>/dev/null | grep 'taskpolicy -c utility' >/dev/null && ! plutil -p ~/Library/LaunchAgents/com.chrisren.autonomy-sweep.plist | grep '"ProcessType"' >/dev/null
 #
 # WHAT LANDED IN THIS DIFF, AND WHAT IS LEFT (docs/plans/CLOUD_BACKLOG_PIPELINE.md §A9)
 # ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -67,13 +67,20 @@ if ! grep -q 'taskpolicy -c utility' "$SRC"; then
 fi
 
 # ---- step 2: is it already applied? then this migration is a no-op --------------------------------
-# `grep '…' >/dev/null`, never `grep -q`, on the PIPED read: under pipefail an early-exiting consumer
-# SIGPIPEs plutil and the pipeline reads FALSE on a MATCH — this test would then declare the job
-# already-applied while the task role was still live, and silently retire its own operator step.
-if [ -f "$LIVE" ] \
+# 🚨 THE EFFECT IS THE LOADED JOB, NOT THE FILE (measured 2026-09-07, minutes after this landed).
+# `install.sh` copies launchd/ plists into ~/Library/LaunchAgents at every converge, so the live FILE
+# read exactly like the SSOT — no ProcessType, `taskpolicy -c utility` present — while
+# `launchctl print` still showed the OLD arguments and the running sweep still sat at PRI 4. A
+# verifier that read the file would have retired this step with the task role still live: the
+# paperwork changed, the effect did not (migrations/README.md: "Verify the EFFECT, not the
+# paperwork"). So the applied test reads the JOB's arguments; the file checks remain as the
+# secondary half. `grep '…' >/dev/null`, never `grep -q`, on the PIPED plutil read: under pipefail
+# an early-exiting consumer SIGPIPEs plutil and the pipeline reads FALSE on a MATCH.
+if launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null | grep 'taskpolicy -c utility' >/dev/null \
+   && [ -f "$LIVE" ] \
    && ! /usr/bin/plutil -p "$LIVE" 2>/dev/null | grep '"ProcessType"' >/dev/null \
    && grep -q 'taskpolicy -c utility' "$LIVE"; then
-  echo "0016: $LABEL already carries the utility band live — nothing to file, recording as applied"
+  echo "0016: $LABEL already runs in the utility band (loaded job execs via taskpolicy) — nothing to file, recording as applied"
   exit 0
 fi
 
