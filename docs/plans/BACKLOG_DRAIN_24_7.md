@@ -87,6 +87,20 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-07 — recycle #312 (lane infra):** closed 16 pre-existing `re-land` rows. THE FAMILY
+  SPLITS TWO WAYS, and only the falsifier's own wording tells them apart: `N line(s) present only in
+  the ref` was SUPERSESSION in 13 of 13 cases — main is the wider form, and four would have REGRESSED
+  a landed fix (`grep -qxF` back into `_pane_gone`; a swapped session-id/worktree TSV column;
+  `mkrepo`'s unguarded `git -C "$d"`; the constant 120s land-smoke budget #311 made derived). `ABSENT
+  from origin/main` was real stranded work: `b72ab0dee516` (cc-offload's foreign-repo gate, 7 cloud
+  sessions unable to read their own subject), `62fec5a1bcd4` (plan-venue census), `698b3c154763` (the
+  per-unit segment meter — whose `watch` emitted NO JSON under /bin/bash 3.2, its own shebang's
+  interpreter, plus two clock-racing fixtures now driven by reads). closed `1614bb6a55d0`
+  `2eb406966646` `2fde9f01b817` `3264de637bb8` `4ba12dfcd30e` `5318d2fe2692` `62fec5a1bcd4`
+  `698b3c154763` `7a5eb14ee6fa` `84b868dd94b7` `8bd22004b068` `b72ab0dee516` `b8470a38dd1b`
+  `c2f2caca7730` `ec2614142185` `ed20da9f2023` · blocked none · released none · landed `113d944c8`
+  `2d98fe4ae` `7dcf3f7b4` `902ac519f` · `closed=35 closed_pre=16 closed_other=12 filed=34 net=1 blocked=23 min=3 lane=local-drain project=claude-infrastructure floor=MET`.
+
 - **2026-09-06 — recycle #311 (lane infra):** closed `b54edfb6da6e` (the land smoke's 120s budget was
   a constant, so it was the same allowance for a 1-suite land and a 9-suite one — the default is now
   DERIVED, direct-suite count x `SHIP_LAND_SMOKE_PER_SUITE_S` 180, capped at 900, with an EXPLICIT
