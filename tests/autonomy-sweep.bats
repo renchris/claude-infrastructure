@@ -1658,3 +1658,55 @@ STUB
   printf '%s' "$row" | jq -e '.elapsed_s == null and .load1 == null' >/dev/null \
     || { echo "ARM B': a NOT-SPAWNED lane reported numbers: $(printf '%s' "$row" | jq -c '{elapsed_s, load1}')"; false; }
 }
+
+# ── THE SELF-BOUND (backlog 8e0a3eb2c4a4) ────────────────────────────────────────────────────────
+# cc-reaper is this job's only watchdog and must stay so — launchd does not stack a second instance,
+# so the TERM is what lets the next tick start. The repair is therefore not an exemption but a self
+# bound: the sweep ends itself between phases, before the reaper's 600 s orphan-bash floor, leaving
+# no TERM row. These cases pin the three things that can silently be wrong: that a checkpoint fires
+# at all, that it fires from TOP LEVEL (an `exit 0` inside a subshell returns from nothing and the
+# sweep would run on regardless), and that the bound stays OFF on an ordinary tick.
+
+@test "self-bound: past the bound the sweep ENDS ITSELF between phases, and says so" {
+  # An alarm the sweep would otherwise notify on: it proves the run was cut SHORT rather than merely
+  # having nothing to do, because §3 (summary + notify) sits below every checkpoint.
+  echo '{"kind":"alarm","detail":"never-stuck gate red"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
+  run env CC_SWEEP_T0=$(( $(date +%s) - 5000 )) CC_SWEEP_SELF_BOUND_S=400 "${SWEEP_TO[@]}" bash "$SWEEP"
+  # yielding is a NORMAL end, not a fault
+  [ "$status" -eq 0 ]
+  grep -q '"disposition":"self-bound"' "$CC_IDL"
+  # it names the phase it declined to start, so a chronically-truncated sweep is legible
+  [ -n "$(jq -r 'select(.disposition=="self-bound")|.stopped_before' "$CC_IDL" | tail -1)" ]
+  # THE TOP-LEVEL PROOF: §3 never ran. An `exit 0` from inside a subshell would have returned into
+  # the parent and let the notify happen anyway, which is the one way these checkpoints can be in
+  # the wrong place and still look installed.
+  [ "$(notify_count)" -eq 0 ]
+  ! grep -q '"disposition":"fired"' "$CC_IDL" || false
+}
+
+@test "self-bound CONTROL: an ordinary tick is UNBOUNDED by it and still reaches §3" {
+  # Same fixture, same alarm, only the clock differs — so the case above is a property of the BOUND
+  # and not of the fixture. Without this, a self-bound that fired on every tick would pass it.
+  echo '{"kind":"alarm","detail":"never-stuck gate red"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  ! grep -q '"disposition":"self-bound"' "$CC_IDL" || false
+  [ "$(notify_count)" -eq 1 ]
+  grep -q '"disposition":"fired"' "$CC_IDL"
+}
+
+@test "self-bound: CC_SWEEP_SELF_BOUND_S=0 disables it, and a junk value falls back to the default" {
+  echo '{"kind":"alarm","detail":"never-stuck gate red"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
+  # 0 = off, even with an elapsed far past any bound
+  run env CC_SWEEP_T0=$(( $(date +%s) - 5000 )) CC_SWEEP_SELF_BOUND_S=0 "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  ! grep -q '"disposition":"self-bound"' "$CC_IDL" || false
+  [ "$(notify_count)" -eq 1 ]
+  # a junk value must not read as 0 — an unparseable bound that silently disabled the guard is the
+  # failure direction that leaves the reaper as the only stop again
+  rm -f "$CC_IDL"; : > "$CC_NOTIFY_BIN.log"
+  echo '{"kind":"alarm","detail":"a second one"}' > "$CC_ANNOUNCE_ALARM_DIR/a2.json"
+  run env CC_SWEEP_T0=$(( $(date +%s) - 5000 )) CC_SWEEP_SELF_BOUND_S=abc "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  grep -q '"disposition":"self-bound"' "$CC_IDL"
+}
