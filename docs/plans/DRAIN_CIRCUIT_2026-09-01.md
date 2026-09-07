@@ -795,6 +795,64 @@ so it resolves on its own; it just cannot be *driven* from this side. `deploy-li
   named: close attribution is at 7.7% coverage, which is why `lane=local-drain` still reads
   `lane-stalled` and why this arm is scoped fleet-wide rather than per-lane.
 
+- **2026-09-07 — W9 (cloud VM, off-box): the "still open after tonight" list above is STALE, the lane
+  is FIRING again, and the drain that reopened it was a DISCARD.** Full record, with every figure
+  derived from `origin`'s refs rather than the live store:
+  `docs/research/drain-circuit-collection-vs-retirement-2026-09-07.md`.
+  **(1) All four open items are cured on trunk**, each asserted with `git merge-base --is-ancestor`:
+  (a) `7d72371c` (the harvest leaves the sweep tick — `scripts/cloud-return-lane.sh`, 5,400 s bound)
+  + `a7390066` (the sweep leaves the `darwinbg` task role); (b) `966c092f` (the smoke budget is
+  derived from the suite set, no longer a flat 120 s); (c) built at `bin/cc-dispatch:2051-2127`
+  (per-item `already-declared` skip + the `CLOUD_PENDING_MAX` cap); (d) W8/§3i. **§3h's "filed rather
+  than built"** — `load`/`elapsed_s` on the `cloud-return` row — is also landed (`1f5385f9`, a re-land
+  after `d1209750` reverted it on a `cut-not-red` non-verdict), so §3h's closing sentence is false on
+  trunk today. This session was dispatched *by* the stale list and spent its first hour re-deriving
+  landed cures; that is the cost of a plan heading outliving its work.
+  **(2) The lane was SHUT for 58 h 45 m and reopened 19 minutes after the retire pass landed.**
+  Nothing in this pipeline deletes a branch (`cloud-return.sh:529`, `cloud-retire-terminal.sh:55`), so
+  `origin`'s 425 `claude/fire-*` refs are the COMPLETE fire population and an absent date means no
+  fire happened. By fire-date: 09-03 **23** · 09-04 **26** · 09-05 **0** · 09-06 **0** · 09-07 **4**.
+  Boundary `fire-20260904T193754Z` → `fire-20260907T062332Z`, the largest gap in the series;
+  `77184bc0` (pile 331 → 32, under the cap of 50) landed at 06:04:19Z, first fire 06:23:32Z, and THIS
+  SESSION is fire #4 at 06:37:02Z. **`CLOUD_BACKLOG_PIPELINE.md` §A9.5's own prediction, observed from
+  a source the desk has never queried.**
+  **(3) …but 97.3 % of that drain was a discard, and the cap cannot see it.** The census reads
+  `examined=331 landed=8 superseded=142 conflict=126 gone=23 kept=32 retired=299`: **8 of 299
+  retirements were lands.** A retirement settles a DECLARATION, never a branch — so measured by
+  `git cherry` (patch-id) against `origin/main`, **337 refs still carry 492 genuinely-new commits**
+  while the pile the cap reads fell 331 → 32. That is **§1.5's defect in a new costume**: §1.5 counted
+  commits where the question was closure; the cap counts pile SIZE where the question is pile
+  DISPOSITION, and both drains move `pending_total` identically. (Whether those 492 are worth
+  recovering stays task **#174**'s — `superseded`/`conflict` are plausibly correct verdicts for most,
+  per §3b's set-cover. The claim here is about the INSTRUMENT, not the pile.)
+  **(4) Built — the census stops being a string.** `scripts/cloud-return-lane.sh` journalled the
+  census as one opaque `summary`, so every figure in (3) had to be scraped out of prose by hand. The
+  `cloud-retire` IDL row now carries a typed `census` object **beside** the untouched `summary` (W2's
+  add-don't-redefine principle), plus `load1` to match the return row. Parsed as a **class**
+  (`key=<int>`), never an enumeration of today's strata — the `denylist-enumerates-spellings-not-the-class`
+  lesson that cost `cc-reaper` its whitelist twice (`1ca324beb`, then `9f9a64bb4`), in this same plan.
+  **Absent is `null`, never a zeroed census**: a retire pass CUT by its bound prints nothing, and
+  zeros would read as "ran, settled nothing" — a verdict where the truth is a machine event, the same
+  `cut-not-red` shape that stranded §3h's fix for three days.
+  **Proof:** cloud-return-lane 7 → **11/11**; four mutants RED-proved on the assertion each should hit
+  (M1 no census field → 7, 9 · M2 `{}` not null → 8, 10 · M3 enumeration → 7, 9 via `young-held` ·
+  M4 no load1 → 7). Siblings green: cloud-return 63/63 · cc-cloud 44/44 · kill-guard-lint 35/35 ·
+  shim-parity-lint 28/28. ⚠️ **NOT shellcheck-verified** — shellcheck is absent on the VM and all 28
+  cases `skip`; the desk's land gate owns that. **Not mine, attributed against a detached worktree at
+  `origin/main` carrying none of this diff:** `bats-assert-liveness` 6/37 red and `autonomy-sweep`
+  61/62/67 red **identically on clean trunk** — both need macOS (`sysctl vm.loadavg`) or bash 3.2,
+  neither of which this Linux VM has.
+  **The prediction, stated to be falsifiable:** headroom is 18 slots (32 of 50) against ~25 fires/day,
+  and retirement is repeatable, so the steady state is not a second deadlock but **fire ~25/day,
+  retire ~25/day, land ~1/day** — a circuit that no longer stalls and still discards what it produces.
+  **Falsifier:** if over any 7-day window after 2026-09-07 `sum(census.landed)/sum(census.retired)`
+  exceeds 25 %, retract this characterisation. (4) is what makes that expression runnable.
+  ⚠️ **Dispatcher vintage:** the brief that fired this session came from `bin/cc-dispatch` blob
+  `646b8a65…`, against `origin/main`'s `98ab38f5…` — **DIFFERENT**, so the dispatcher that fired it is
+  behind trunk. A convergence fact about the deploy layer, not a defect in anything read here; every
+  cure in (1) was asserted against `origin/main`, and (2) is read from refs the live dispatcher itself
+  created.
+
 ---
 
 ## 3e. THE SIGKILL IS ATTRIBUTED — `timeout` kills itself (W6, 2026-09-03)
@@ -1228,6 +1286,18 @@ event.** A single rc 0 is satisfiable by a quiet box. The discriminating measure
 **Filed rather than built here:** add `load` and `elapsed_s` to the `cloud-return` IDL row, so the
 next person asking "did the fix work" can stratify instead of counting events. Until then the fixes
 stand on §3f's paired ratio and the suites, not on these three rows.
+
+> ✅ **NO LONGER FILED — built and landed (`1f5385f9`, verified an ancestor of `origin/main`
+> 2026-09-07).** The two sentences above are false on trunk today: the row carries both fields, and
+> `tests/autonomy-sweep.bats` case 67 pins them (*"3h: the cloud-return IDL row carries elapsed_s +
+> load1, and a NOT-RUN pass is null not 0"*). Worth keeping the history, because the path was not
+> straight: it first landed as `2c6b8cdf`, was reverted as `d1209750` by the post-land veto on a
+> `cut-not-red` **non-verdict** (the suite was KILLED at loadavg 22.76/23.42 with `notok=0`), and sat
+> reverted until `1f5385f9` re-landed it — *"nothing re-landed it, so trunk has carried the pre-fix
+> bytes since."* A machine event convicted a green change, which is §3c's smoke-budget generator and
+> §3h's own load confound, recurring a third time. The retire row's `census`/`load1` fields (W9,
+> 2026-09-07) were written against this precedent: absent is `null`, never a zero that reads like a
+> verdict.
 
 ---
 

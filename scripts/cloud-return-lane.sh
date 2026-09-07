@@ -186,8 +186,35 @@ if [ -x "$RETIRE_SH" ]; then
   rm -f "$out_f" 2>/dev/null
   say "retire pass rc=$rrc took=${rtook}s ${summary:+— $summary}"
 fi
-log_idl cloud-retire "$(jq -cn --arg c "$rrc" --arg e "$rtook" --argjson b "$RETIRE_BOUND" --arg s "$summary" \
-  '{cloud_retire_rc:$c, elapsed_s:($e|tonumber? // null), bound_s:$b, summary:$s}')"
+# THE CENSUS IS THE DISPOSITION, AND A STRING CANNOT BE SUMMED (2026-09-07, DRAIN_CIRCUIT).
+# `summary` keeps the pass's own words and no reader can do arithmetic on them, so the one question
+# the pile cap cannot answer stays unanswerable: a pile that drained because the work LANDED and a
+# pile that drained because the work was DISCARDED move `pending_total` by exactly the same amount.
+# Measured on the first deployed pass (CLOUD_BACKLOG_PIPELINE §A9.5): `examined=331 landed=8
+# superseded=142 conflict=126 gone=23 kept=32 retired=299` — the cap opened on 299 retirements of
+# which 8 were lands, and 337 branches carrying 492 patch-id-novel commits stayed on origin
+# untouched (nothing retires a branch, only a declaration). That is §1.5's defect in a new costume:
+# the unit counts pile SIZE, not pile DISPOSITION. Typed fields turn a regex scrape into a sum.
+#
+# Parsed as a CLASS (every `key=<int>` token), never as an enumeration of the strata we know today —
+# this repo's own `denylist-enumerates-spellings-not-the-class` lesson, which cost it the cc-reaper
+# whitelist twice. A stratum added to cloud-retire-terminal.sh appears here with no edit.
+# ABSENT IS null, NEVER 0, and here that is the load-bearing direction: a retire pass CUT by its
+# bound prints no census, and a zeroed census would read as "ran, settled nothing" — the exact
+# non-verdict-read-as-verdict this lane was built to stop.
+census="null"
+if [ -n "$summary" ]; then
+  census="$(printf '%s' "$summary" | jq -Rc '
+    split(" ")
+    | map(select(test("^[A-Za-z][A-Za-z0-9_-]*=[0-9]+$")) | split("=") | {(.[0]): (.[1]|tonumber)})
+    | add // null' 2>/dev/null)" || census="null"
+  case "$census" in ''|'{}') census="null" ;; esac
+fi
+# Same rule as the return row above: load1 only if the pass actually ran. Without it the elapsed is
+# unstratifiable, which is precisely what §3h had to retrofit onto the return row after the fact.
+rl1=""; [ -n "$rtook" ] && rl1="$(load1)"
+log_idl cloud-retire "$(jq -cn --arg c "$rrc" --arg e "$rtook" --arg l "$rl1" --argjson b "$RETIRE_BOUND" --arg s "$summary" --argjson cen "$census" \
+  '{cloud_retire_rc:$c, elapsed_s:($e|tonumber? // null), load1:($l|tonumber? // null), bound_s:$b, summary:$s, census:$cen}')"
 
 # ── 3. ANSWER: route what is still ASKING ───────────────────────────────────────────────────────
 # The return pass collects sessions that PUSHED and went quiet. It has nothing to say about a
