@@ -67,8 +67,8 @@ the plan wins and the task list gets corrected — never the reverse.
 | `hooks/log-bash.sh` real exit codes | **LANDED** (`2d003a521`, content-verified on trunk). Live layer converges on its own — 13 behind, inside the 25/6h budget |
 | `PostToolUseFailure` registration | **WIRED** in `~/.claude/settings.json`, 90 registrations, binary validator accepts |
 | `settings-templates/settings.example.json` | carries `PostToolUseFailure`; also already carried `SubagentStop`, which the live file had never picked up |
-| `hooks/file-changed.sh` + `tests/file-changed.bats` | **LANDED** (`fdd119751`) — handler + 21-test suite. NOT registered; see W3-B below |
-| `hooks/instructions-loaded.sh` + `tests/instructions-loaded.bats` | **LANDED** (`fdd119751`) — handler + 15-test suite. NOT registered; see W3-B below |
+| `hooks/file-changed.sh` + `tests/file-changed.bats` | **LANDED** (`5ab90b02c`) — handler + 21-test suite. NOT registered; see W3-B below |
+| `hooks/instructions-loaded.sh` + `tests/instructions-loaded.bats` | **LANDED** (`5ab90b02c`) — handler + 15-test suite. NOT registered; see W3-B below |
 | `hooks/stop-failure-marker.sh` + suite | **LANDED** (`53edbbcf3`, content-verified on trunk — W3-A). NOT registered: no settings file was touched, per § 4 |
 | `hooks/subagent-stop.sh` v1 → v2 + suite | **LANDED** (`53edbbcf3`, same commit, content-verified). Still registered NOWHERE — the script was already on disk and unwired before this |
 | Everything else in § 3 | **measured, not yet adopted** — W1/W2 complete, W3 in progress (**A** `StopFailure`/`SubagentStop` and **B** `FileChanged`/`InstructionsLoaded` landed; **C** `PostToolBatch` outstanding). Nothing from either wave is REGISTERED — that is one c10 migration the desk composes after all three land |
@@ -142,7 +142,7 @@ the intended state and not a loose end.
 
 | | |
 |---|---|
-| Landed | `fdd119751` on `main`, content-verified (`git ls-tree origin/main -- <the four paths>`) |
+| Landed | `5ab90b02c` (handlers + suites) and `3932ae120` (the § 2 record), both ancestors of `origin/main`, content-verified: `git ls-tree origin/main` shows all four paths and `git diff HEAD origin/main -- <paths>` is empty. ⚠️ The pre-land shas were `fdd119751`/`44692e480`. `ship-land.sh` rebases onto the freshest trunk before pushing, so ANY sha written into a doc before the land is rewritten by it — and the stale one still resolves in the author's own checkout, which is what makes the defect invisible to the author and total to everyone else. Cite only post-land shas, each checked with `git merge-base --is-ancestor <sha> origin/main` |
 | Gate | 36 tests green · `shellcheck` clean · `bats-shellcheck-lint` clean · `bats-assert-liveness` 0 dead |
 | Red-proof | one mutation per site; each killed exactly its own arm (below) |
 
