@@ -44,6 +44,12 @@ setup() {
   # absent root = no path is linked = a counted, hermetic 0.
   export WRAP_LIVE_ROOT="$BATS_TEST_TMPDIR/no-live-root"
   export CC_MIGRATIONS_STATE="$BATS_TEST_TMPDIR/migrations"
+  # …AND THE THIRD HALF. LIVE_ADDS is now denominated on the sha the converger last DELIVERED,
+  # which it reads from $CC_POSTLAND_DIR/deploy-last-advance — defaulting to the OPERATOR's real
+  # one. Unfixtured, every add arm here would read a sha from the live box (harmless only because
+  # a fixture repo cannot resolve it, which is luck, not hermeticity — the suite-is-a-function-of-
+  # who-runs-it class this setup names four times now). Absent dir ⇒ the live-head fallback.
+  export CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland"
   unset WRAP_LIVE_BUDGET_COMMITS WRAP_LIVE_BUDGET_MIN
   # ⛔ rung: the same hermetic discipline, and it matters MORE here — ⛔ is computed
   # UNCONDITIONALLY (it outranks every rung, so it cannot ride the ✅-eligible path), and this
@@ -530,6 +536,25 @@ live_at_aged() {
 # far end carry the live layer's (older) bytes by construction rather than by a copy someone staged.
 # Called with NO arguments it builds a root that links nothing — the honest fixture for "the lag
 # changed files, and none of them is one this box runs".
+# Adds under a REAL top-level directory, pushed — the session sits at trunk. The root-level
+# `advance_trunk_adding` above cannot exercise the top-level filter at all, because a root-level
+# path's "top-level" is the file itself.
+advance_trunk_adding_in() {
+  local dir="$1" n="$2" i=1
+  mkdir -p "$dir"
+  while [ "$i" -le "$n" ]; do
+    echo "new$i" > "$dir/newfile$i.sh"; git add "$dir/newfile$i.sh"
+    git commit -q -m "add $dir/newfile$i.sh"
+    i=$((i + 1))
+  done
+  git push -q origin main
+  git -C "$WRAP_LIVE_REPO" fetch -q origin
+}
+# The converger's own record of what it last DELIVERED (deploy-live.sh:196, "<epoch> <sha>").
+set_last_advance() {
+  mkdir -p "$CC_POSTLAND_DIR"
+  printf '%s %s\n' "$(date +%s)" "$1" > "$CC_POSTLAND_DIR/deploy-last-advance"
+}
 mk_live_root() {
   local root="$BATS_TEST_TMPDIR/liveroot" p
   mkdir -p "$root"
@@ -659,7 +684,13 @@ mk_failed_migration() {
 # sanctioned converge ran between them and DECLINED to advance (no green descendant of live HEAD).
 # The live layer did not move. Two of the rung's inputs did.
 #
-# THESE ARMS PIN THE PRESENT BEHAVIOUR AND DO NOT ENDORSE IT. Re-denominating on trunk alone is NOT
+# FIXED 2026-09-07 (backlog 4e6a51df2a84), AND THESE ARMS NOW PIN THE CURE RATHER THAN THE DEFECT.
+# R1 read ✅/ADDS=0 and now reads 🚀/ADDS=1; R2 read "1 then 2" and now reads "2 then 2". The change
+# is the one the paragraph below prescribed: the right operand is TRUNK, the left is the sha the
+# converger last delivered, and the last suppressor tests the live FILESYSTEM. Section 2c-C carries
+# the two-direction controls (a false positive that must vanish, a false negative that must appear).
+#
+# THE PARAGRAPH THAT PRESCRIBED IT, KEPT VERBATIM. Re-denominating on trunk alone is NOT
 # the repair and was measured rather than assumed: at the same moment it reads 3 where the shipped
 # form reads 2, and BOTH of those are paths the live layer will never carry (docs/, tests/), i.e. the
 # false positive backlog 4e6a51df2a84 already owns — so that change makes the field stably wrong
@@ -672,16 +703,17 @@ mk_failed_migration() {
 # the close is ✅ over a file that is on trunk and in no tree this box can reach. The lag arm, which
 # is denominated in the checkout and trunk, already carries the distance in the same output: LAG=1
 # beside ADDS=0 and a ✅ is the two denominators disagreeing on one line.
-@test "live layer AT my HEAD while trunk carries an ADD ⇒ LIVE_SRC=ok, the add read is never reached" {
+@test "live layer AT my HEAD while trunk carries an ADD ⇒ the read still happens, RUNG=🚀" {
   ok_state
   WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
   sibling_lands_unpulled add
   run bash "$LEDGER" --machine
   [ "$status" -eq 0 ]
-  [ "$(field "$output" LIVE_SRC)" = "ok" ]    # the gate is denominated in MY head, so it says ok…
-  [ "$(field "$output" LIVE_LAG)" = "1" ]     # …while the checkout arm in the same output says 1
-  [ "$(field "$output" LIVE_ADDS)" = "0" ]    # not "no adds" — the question was never asked
-  [ "$(field "$output" RUNG)" = "✅" ]
+  [ "$(field "$output" LIVE_SRC)" = "ok" ]    # the GATE is still denominated in my head — unchanged…
+  [ "$(field "$output" LIVE_LAG)" = "1" ]
+  [ "$(field "$output" LIVE_ADDS)" = "1" ]    # …but it no longer decides whether the add read runs
+  [ "$(field "$output" LIVE_BREACH_WHY)" = "adds" ]
+  [ "$(field "$output" RUNG)" = "🚀" ]        # pre-fix: ✅ over a landed file in no reachable tree
 }
 
 # R2 — THE RIGHT OPERAND ITSELF, in the configuration the real box is in for most of a link: the live
@@ -690,7 +722,7 @@ mk_failed_migration() {
 # readings — `git merge --ff-only origin/main` in the worktree — and the live layer and trunk are
 # untouched by it. The count the readout quotes as "N NEW file(s) are absent from the live layer"
 # changes anyway, which is the real-box measurement above reproduced deterministically.
-@test "a landed ADD the session has not pulled is uncounted until it pulls — LIVE_ADDS 1 then 2" {
+@test "a landed ADD the session has not pulled is counted anyway, and a pull moves NOTHING" {
   ok_state
   WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
   advance_trunk_adding 1        # MY add: pushed, so the session sits at trunk and the live lags 1
@@ -701,7 +733,7 @@ mk_failed_migration() {
   [ "$status" -eq 0 ]
   [ "$(field "$output" LIVE_SRC)" = "behind" ]
   [ "$(field "$output" LIVE_LAG)" = "2" ]     # the checkout arm counts both landings…
-  [ "$(field "$output" LIVE_ADDS)" = "1" ]    # …the add arm counts only the one I happen to hold
+  [ "$(field "$output" LIVE_ADDS)" = "2" ]    # …and so does the add arm now: the operand is TRUNK
   [ "$(field "$output" RUNG)" = "🚀" ]
 
   # STATE B — the session pulls. Nothing is delivered; nothing about ~/.claude changes.
@@ -709,7 +741,7 @@ mk_failed_migration() {
   run bash "$LEDGER" --machine
   [ "$status" -eq 0 ]
   [ "$(field "$output" LIVE_LAG)" = "2" ]     # unchanged — this arm never depended on the session
-  [ "$(field "$output" LIVE_ADDS)" = "2" ]    # changed — this one did
+  [ "$(field "$output" LIVE_ADDS)" = "2" ]    # unchanged too — pre-fix this read 1 then 2
   [ "$(field "$output" RUNG)" = "🚀" ]
 }
 
@@ -735,6 +767,165 @@ mk_failed_migration() {
   [ "$(field "$output" LIVE_LAG)" = "2" ]
   [ "$(field "$output" LIVE_ADDS)" = "1" ]    # same pull, same live layer, NO movement
   [ "$(field "$output" RUNG)" = "🚀" ]
+}
+
+# ── 2c-C. THE TWO SUPPRESSORS AND THE DENOMINATOR — controls in BOTH directions (2026-09-07,
+# backlog 4e6a51df2a84) ──
+# The row this closes is one defect with two faces, and a fix for either alone is a fix for neither:
+# the field counted paths the live layer can NEVER carry (a 🚀 no converge can clear), and it was
+# identically 0 whenever the shared checkout had been fast-forwarded (a ✅ over files that are in no
+# tree the box can reach). C1/C2 are the false-positive pair, one variable apart. C3 is the false
+# negative, in the exact configuration of the row's headline measurement. C4 pins that a suppressor
+# which cannot be evaluated may not suppress, and C5 that a path the live layer already carries by
+# some other route is not an absence.
+#
+# MEASURED ON THE REAL BOX 2026-09-07 at lag 19 before any of this landed: the shipped field read 9
+# and breached, and six of the nine were docs/, tests/ and migrations/ paths — top-levels that do not
+# exist under ~/.claude at all (migrations are RUN from the checkout, deploy-live.sh:1477, never
+# linked). The cured form reads 3, and those 3 are hooks/config-change.sh, hooks/permission-denied.sh
+# and hooks/post-compact.sh — landed, under a deployed top-level, absent from the box.
+
+# C1 — THE FALSE POSITIVE. An add under a top-level the live layer does not deploy is not an absence
+# it can ever cure, so it may not breach. Pre-fix this arm reads ADDS=1 and RUNG=🚀 — a rung whose
+# only prescribed action (run the converger) provably changes nothing.
+@test "an ADD under a top-level the live layer does NOT deploy ⇒ not counted, no 🚀" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  WRAP_LIVE_ROOT="$(mk_live_root hooks/base.txt)"; export WRAP_LIVE_ROOT   # `hooks` deployed, `docs` not
+  advance_trunk_adding_in docs 1
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_SRC)" = "behind" ]
+  [ "$(field "$output" LIVE_LAG)" = "1" ]     # the distance is real…
+  [ "$(field "$output" LIVE_ADDS)" = "0" ]    # …and no file the box could run is missing
+  [ "$(field "$output" RUNG)" = "✅" ]        # pre-fix: 🚀 on `adds`
+}
+
+# C2 — THE DISCRIMINATION CONTROL, and its prediction is the OPPOSITE of C1's. Same live root, same
+# lag of one, same kind of commit — the ONLY variable is which top-level the file lands under. Without
+# it C1 is compatible with "the suppressor swallows everything", which is the failure mode the header
+# note warned about when it refused a path filter (MEMORY.md cost-gate-must-be-strictly-weaker).
+# GREEN ON THE PRE-FIX TREE BY DESIGN, and saying so is what stops it being read later as a positive
+# control: the shipped form had no filter, so it counted this add too. C1 is the arm that selects the
+# fix (it goes 1→0); this one pins that C1 did not get there by suppressing everything.
+@test "the same ADD under a DEPLOYED top-level ⇒ counted, RUNG=🚀 — one variable apart from C1" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  WRAP_LIVE_ROOT="$(mk_live_root hooks/base.txt)"; export WRAP_LIVE_ROOT
+  advance_trunk_adding_in hooks 1
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_LAG)" = "1" ]     # identical distance to C1…
+  [ "$(field "$output" LIVE_ADDS)" = "1" ]    # …and this one IS an absence the converger can cure
+  [ "$(field "$output" LIVE_BREACH_WHY)" = "adds" ]
+  [ "$(field "$output" RUNG)" = "🚀" ]
+}
+
+# C3 — THE FALSE NEGATIVE, in the row's headline configuration: the shared checkout has been
+# fast-forwarded to trunk (deploy-live's own §2.E path B — it advances FILES and creates NO symlinks),
+# so LIVE_SRC=ok and LIVE_LAG=0 and the shipped window is EMPTY BY CONSTRUCTION. The converger's own
+# record says it last delivered one commit earlier, and the file added since is under a deployed
+# top-level and absent from the live root. Measured on the real box at 2026-09-04T02:28:45Z as
+# RUNG=✅ LIVE_SRC=ok LIVE_LAG=0 LIVE_ADDS=0 over FIVE such files, with both shipped auditors seeing
+# all five (deploy-parity-assert 5 MISSING; deploy-link-parity 5 UNLINKED).
+@test "checkout fast-forwarded past the last converge ⇒ the absent file is STILL counted" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  WRAP_LIVE_ROOT="$(mk_live_root hooks/base.txt)"; export WRAP_LIVE_ROOT
+  set_last_advance "$(git rev-parse HEAD)"          # what the converger actually delivered
+  advance_trunk_adding_in hooks 1
+  git -C "$WRAP_LIVE_REPO" merge -q --ff-only origin/main   # the ungated ff: files move, no links
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_SRC)" = "ok" ]          # the checkout is at trunk…
+  [ "$(field "$output" LIVE_LAG)" = "0" ]           # …and its lag is zero…
+  [ "$(field "$output" LIVE_ADDS_BASE)" = "advance" ]
+  [ "$(field "$output" LIVE_ADDS)" = "1" ]          # …and the file still is not on the box
+  [ "$(field "$output" RUNG)" = "🚀" ]              # pre-fix: ✅, over exactly this state
+  # …and the rendered rows must not contradict the rung they were computed with. The Live-layer row
+  # says "at/above HEAD" on this path, which is TRUE about ancestry and silent about the file.
+  run bash "$LEDGER" --full
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q "at/above HEAD"
+  printf '%s' "$output" | grep -q "ABSENT"
+  run bash "$LEDGER"
+  printf '%s' "$output" | grep -qi "NEW file"
+}
+
+# C4 — A SUPPRESSOR THAT CANNOT BE EVALUATED MAY NOT SUPPRESS. With no readable live root there is no
+# way to ask either question, so the count falls through UNSUPPRESSED — the pre-2026-09-07 loudness,
+# preserved deliberately. Erring loud is the direction this rung is for; a filter that silently
+# swallowed a real breach whenever $HOME/.claude was unreadable would be the strictly-stronger
+# suppressor the header note refused. GREEN ON THE PRE-FIX TREE BY DESIGN — the shipped form counted
+# this too, having no suppressor to fail open. What it pins is that the NEW suppressor cannot silence
+# a breach on a box it cannot see, which is a claim about this diff even though the number is the old
+# one; verified by mutation, not by the arm going red.
+@test "no readable live root ⇒ the suppressors fail OPEN, the undeployed add still counts" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  # WRAP_LIVE_ROOT is setup()'s absent dir — the same fixture C1 passes with a real one
+  advance_trunk_adding_in docs 1
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_ADDS)" = "1" ]    # C1's fixture, minus the ability to see the box
+  [ "$(field "$output" RUNG)" = "🚀" ]
+}
+
+# C5 — PRESENT IS NOT ABSENT. A path the live layer already carries — by a rebase, a cherry-pick, a
+# branch that landed first, or a converge that ran between the two reads — is not an inert file, and
+# it is this test against the live FILESYSTEM that makes the count invariant to which ref either
+# operand happens to sit on. One variable from C2: the file exists under the live root. This arm DOES
+# go red pre-fix (the shipped form counts it), so it selects the fix; its partner C5b below does not,
+# and C5b says why in its own note.
+@test "an added path the live layer ALREADY carries is not counted — one variable from C2" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  WRAP_LIVE_ROOT="$(mk_live_root hooks/base.txt)"; export WRAP_LIVE_ROOT
+  advance_trunk_adding_in hooks 1
+  # what a per-file link refresh does: the blob is materialised in the live checkout and linked,
+  # WITHOUT the checkout's HEAD moving — so the lag is untouched and only this path is delivered.
+  git -C "$WRAP_LIVE_REPO" checkout -q origin/main -- hooks/newfile1.sh
+  ln -sf "$WRAP_LIVE_REPO/hooks/newfile1.sh" "$WRAP_LIVE_ROOT/hooks/newfile1.sh"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_LAG)" = "1" ]     # still behind…
+  [ "$(field "$output" LIVE_ADDS)" = "0" ]    # …but nothing is missing
+  [ "$(field "$output" RUNG)" = "✅" ]
+}
+
+# C5b — AND A DANGLING LINK IS NOT A DELIVERY. One variable from C5: the symlink is created but its
+# target was never materialised in the live checkout, which is the shape a half-run converge leaves.
+# `-e` follows the link, so this still counts — correctly: the question this field answers is whether
+# the box can reach the file, and a link to nothing is not a reachable file. Pinned because the first
+# draft of C5 built exactly this fixture by accident and read it as "already carried". GREEN ON THE
+# PRE-FIX TREE BY DESIGN — the old form counted every add, so it agrees here for the wrong reason.
+# The pair C5/C5b is what carries the finding: same top-level, same lag, and the only difference is
+# whether the link RESOLVES, which no arithmetic over two refs can distinguish.
+@test "a DANGLING live link for an added path is still an absence — one variable from C5" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  WRAP_LIVE_ROOT="$(mk_live_root hooks/base.txt)"; export WRAP_LIVE_ROOT
+  advance_trunk_adding_in hooks 1
+  ln -sf "$WRAP_LIVE_REPO/hooks/newfile1.sh" "$WRAP_LIVE_ROOT/hooks/newfile1.sh"   # target absent
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_ADDS)" = "1" ]
+  [ "$(field "$output" RUNG)" = "🚀" ]
+}
+
+# C6 — THE DENOMINATOR IS NAMED, so a reader given the count can tell which question it answers. An
+# unreadable postland record falls back to the live checkout's ref — the pre-2026-09-07 operand, a
+# narrower window and never a wider one — rather than to `?`, which would put every topology with no
+# postland dir into a permanent non-verdict.
+@test "no postland record ⇒ LIVE_ADDS_BASE=live-head, and the count is still made" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  WRAP_LIVE_ROOT="$(mk_live_root hooks/base.txt)"; export WRAP_LIVE_ROOT
+  advance_trunk_adding_in hooks 1             # setup()'s CC_POSTLAND_DIR does not exist
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_ADDS_BASE)" = "live-head" ]
+  [ "$(field "$output" LIVE_ADDS)" = "1" ]
 }
 
 # ── 2e-2j. LIVE_STALE — the lag's DOSE, beside LIVE_LAG's DISTANCE (2026-08-31, recycle #271) ──

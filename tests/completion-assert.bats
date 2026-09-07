@@ -17,6 +17,13 @@ setup() {
   export COMPLETION_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
   export COMPLETION_MAX=3
   export WRAP_TRUNK="origin/main"
+  # HERMETIC #0 — THE LIVE LAYER'S TWO ROOTS. This suite drives wrap-ledger through the hook, and
+  # wrap-ledger walks $WRAP_LIVE_ROOT (default: the OPERATOR's ~/.claude) and reads the converge
+  # record under $CC_POSTLAND_DIR. Unfixtured, the added-file arms below would be judged against the
+  # real box's links — the same suite-is-a-function-of-who-runs-it class HERMETIC #2 names. Absent
+  # dirs: the add suppressors fail OPEN, which is the disposition every arm here was written against.
+  export WRAP_LIVE_ROOT="$BATS_TEST_TMPDIR/no-live-root"
+  export CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland"
   # HERMETIC: wrap-ledger resolves the 👤-rung session as --session > $WRAP_SESSION_ID >
   # $CLAUDE_SESSION_ID. An ambient value from the running session would give it a second way to
   # resolve a sid, so the flag under test would no longer be the only path.

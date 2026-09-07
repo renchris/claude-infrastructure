@@ -51,7 +51,11 @@ a tuning problem, so the verdict moved off the land path instead.
   file your diff ADDS has no link and is absent from every tree the box can reach — each
   `[ -f x ] && . x` / `command -v fn` guard on it silently skips, so the feature is a no-op, not a
   stale one. `LIVE_ADDS` > 0 therefore breaches at a lag of **1**, with no budget (2026-08-09,
-  backlog `99b715f31a98`). If your land adds a file, expect `🚀` and converge it.
+  backlog `99b715f31a98`) — and at a lag of **0** as well, since the count is measured from the sha
+  the converger last DELIVERED up to trunk, not from the shared checkout's ref, which any
+  fast-forward moves without deploying anything (2026-09-07, backlog `4e6a51df2a84`). If your land
+  adds a file under a deployed top-level, expect `🚀` and converge it; an add under `docs/`,
+  `tests/` or `migrations/` is not deployed at all and no longer breaches.
   This repo IS the live layer's source, so it is the one repo where "landed" and "running" can
   diverge for weeks (measured: 104 commits, eight correct analyses that changed nothing). Re-read
   the ledger after the land rather than asserting `✅ Complete & live on trunk` from the push.

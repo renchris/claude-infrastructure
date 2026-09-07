@@ -32,6 +32,13 @@ setup() {
   export WRAP_DOD_DIR="$D/dod"
   export WRAP_TRUNK="origin/main"
   export WRAP_LIVE_REPO="$D/no-live-layer"
+  # …and the live layer's OTHER two roots, which this file was inheriting from the operator's box
+  # (the suite-is-a-function-of-who-runs-it class the sibling suite names five times). Absent for
+  # the same reason: LIVE_STALE walks $WRAP_LIVE_ROOT and the added-file window is denominated on
+  # $CC_POSTLAND_DIR/deploy-last-advance, so unfixtured, both would read the real ~/.claude and the
+  # real converge record. Absent root ⇒ the add suppressors fail OPEN, which is what §5.4 asserts.
+  export WRAP_LIVE_ROOT="$D/no-live-root"
+  export CC_POSTLAND_DIR="$D/postland"
   export CC_MIGRATIONS_STATE="$D/migrations"
   export CC_BACKLOG_BIN="$D/absent-cc-backlog"
   export CC_DECIDE_BIN="$D/absent-cc-decide"
