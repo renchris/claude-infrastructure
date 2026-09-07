@@ -67,10 +67,80 @@ the plan wins and the task list gets corrected — never the reverse.
 | `hooks/log-bash.sh` real exit codes | **LANDED** (`2d003a521`, content-verified on trunk). Live layer converges on its own — 13 behind, inside the 25/6h budget |
 | `PostToolUseFailure` registration | **WIRED** in `~/.claude/settings.json`, 90 registrations, binary validator accepts |
 | `settings-templates/settings.example.json` | carries `PostToolUseFailure`; also already carried `SubagentStop`, which the live file had never picked up |
+| `hooks/file-changed.sh` + `tests/file-changed.bats` | **LANDED** (`fdd119751`) — handler + 21-test suite. NOT registered; see W3-B below |
+| `hooks/instructions-loaded.sh` + `tests/instructions-loaded.bats` | **LANDED** (`fdd119751`) — handler + 15-test suite. NOT registered; see W3-B below |
 | Everything else in § 3 | **measured, not yet adopted** — W1/W2 complete, W3 not started |
 
 **Net capability change so far: one repair.** Nothing else has been adopted — measurement is not
 adoption, and § 3's WIRE rows are still only recommendations. **W3 is the whole remaining value.**
+
+### W3-B — `FileChanged` + `InstructionsLoaded` handlers (2026-09-06)
+
+Scripts and suites only. **Nothing is registered**, per § 4: the desk composes ONE registration as a
+c10 migration after all three W3 sessions land. Until then both handlers are inert on disk, which is
+the intended state and not a loose end.
+
+| | |
+|---|---|
+| Landed | `fdd119751` on `main`, content-verified (`git ls-tree origin/main -- <the four paths>`) |
+| Gate | 36 tests green · `shellcheck` clean · `bats-shellcheck-lint` clean · `bats-assert-liveness` 0 dead |
+| Red-proof | one mutation per site; each killed exactly its own arm (below) |
+
+**🚨 A § 3 CORRECTION, recorded here rather than applied there** (§ 3's ledger rows are not this
+wave's to edit). The `InstructionsLoaded consider → WIRE` note gives the five `load_reason` values as
+`session_start`, `nested_traversal`, `at_mention`, `skill_load`, `slash_command`. **Three of those do
+not exist.** The binary's own hook-metadata literal reads:
+
+    matcherMetadata:{fieldToMatch:"load_reason",
+                     values:["session_start","nested_traversal","path_glob_match","include","compact"]}
+
+That is a bounded instrument — the array's brackets end it, so a sixth value would be visible. The
+real remaining three are `path_glob_match`, `include`, `compact`. The `fieldToMatch:"load_reason"`
+half of § 3's claim is **confirmed** by the same read; only the value list was wrong. Worth noting
+for W4: § 3d records that this event's matcher claim was already corrected once by the adversarial
+pass ("its matcher being inert" → it is the `load_reason`). The correction was right about the FIELD
+and wrong about its VALUES, and nothing re-checked the second half.
+
+**The same read settles `FileChanged`'s matcher mechanism**, which § 3 had only as a measurement:
+
+    "The matcher field specifies filenames to watch in the current directory (e.g. \".envrc|.env\")."
+    "Hook output can include hookSpecificOutput.watchPaths (array of absolute paths) to
+     dynamically update the watch list."
+
+So the measured absolute-path no-op now has its cause, not just its symptom: an absolute path is not
+a filename in cwd, so it cannot match — and the same sentence is why `CwdChanged` is the only re-arm
+point. The second line is new to this plan and matters: **`watchPaths` is the supported route to a
+path outside cwd**, so the matcher's cwd-locality is a limitation with a documented escape rather
+than a hard ceiling. `hooks/file-changed.sh` emits it from an opt-in watchlist file; the default
+posture is silent observation, so a registration cannot be surprised by output it did not ask for.
+
+**Matcher recommendations for the desk's migration** (the registration is the desk's call; these are
+the values this wave's evidence supports):
+- `InstructionsLoaded` → **`session_start`**. It answers the question the event was adopted for and
+  is BOUNDED at 2–4 rows/session (all 16 measured rows carry it). `path_glob_match` is the one to
+  avoid: it fires per file Claude touches, is unbounded within a session, and answers a different
+  question. Rationale for all five is in the handler's header.
+- `FileChanged` → **a bare filename or alternation, never a path**. `hooks/file-changed.sh
+  --check-matcher <matcher>` exits 1 with the reason on any shape measured or documented never to
+  fire, so the migration can assert its own matcher before writing it.
+
+**Two defects the suites caught while being written, both kept as regression arms** — recorded
+because each is a shape that passes review:
+1. **`run` on the right of a pipe.** bats runs a pipeline's last element in a SUBSHELL, so `$status`
+   and `$output` come back empty and every assertion on them passes vacuously. The first draft of
+   `tests/file-changed.bats` was green and meaningless. Payloads now reach the hooks by redirection.
+2. **The field shift** (memory `ifs-whitespace-collapses-empty-fields`). Both handlers first
+   extracted with `@tsv` + `read`; a tab IS an IFS whitespace character, so `read` strips a LEADING
+   empty field and shifts every later field left. A payload with no `file_path` logged a row naming
+   a file called `change` / `User` rather than skipping it. Both now use `@sh` + `eval`. Notable
+   that the citation was already in one handler's comments while the defence was not — a cited
+   memory is not an applied one.
+
+**What W3-B does NOT claim.** These files are on trunk, not live: the shared checkout carries
+`core.bare=true` (filed `b20eb0842304`), so `~/.claude` cannot converge, and both files are ADDs,
+which get no converge budget — an added file is absent rather than stale, so every consumer guard on
+it is a silent skip. Expect `🚀`, not `✅`, until an operator clears `core.bare` and the converger
+runs.
 
 **What W3 should wire, in descending order of earned value** (each already has its verdict + payload):
 
