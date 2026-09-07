@@ -20,6 +20,17 @@ setup() {
   # the suite would still look green but would no longer test what its names claim. The arm has its
   # own tests, which enable it explicitly and assert the reason.
   export CC_BOUNDARY_T_FREEWIN=0
+  # THE FIXTURE'S RUNG MUST BE A FUNCTION OF THE FIXTURE REPO, NOT OF THE OPERATOR'S LIVE QUEUES
+  # (2026-09-06). wrap-ledger resolves a session id from WRAP_SESSION_ID > CLAUDE_SESSION_ID >
+  # CLAUDE_CODE_SESSION_ID (:598-602) and derives TWO rungs from stores keyed on it: ⛔ from open
+  # class-C decision packets filed by THAT session, and 👤 from its operator steps. A bats subprocess
+  # inherits the ambient id, so the PREMISE below was reading whoever ran the suite: it was observed
+  # computing 👤 ("1 step(s) need you") and later ⛔, with the READOUT quoting a live decision packet
+  # verbatim — a test about context percentages failing because of an unrelated open decision on the
+  # box. Unresolvable is the documented fail-open (:65, :603): no id ⇒ neither rung fires ⇒ the
+  # premise reads the repo's own git state, which is the only thing it ever claimed to assert.
+  # This STRENGTHENS the assertion — it removes contamination; it does not relax what is checked.
+  unset WRAP_SESSION_ID CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID
   mkdir -p "$CC_TELEMETRY_DIR"
   # A committed repo standing in for the session's cwd, marked gate-green at HEAD — AND GIVEN A REAL
   # UPSTREAM TRUNK, which is load-bearing rather than tidy.
