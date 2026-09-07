@@ -71,12 +71,47 @@ the plan wins and the task list gets corrected — never the reverse.
 | `hooks/instructions-loaded.sh` + `tests/instructions-loaded.bats` | **LANDED** (`5ab90b02c`) — handler + 15-test suite. NOT registered; see W3-B below |
 | `hooks/stop-failure-marker.sh` + suite | **LANDED** (`53edbbcf3`, content-verified on trunk — W3-A). NOT registered: no settings file was touched, per § 4 |
 | `hooks/subagent-stop.sh` v1 → v2 + suite | **LANDED** (`53edbbcf3`, same commit, content-verified). Still registered NOWHERE — the script was already on disk and unwired before this |
-| Everything else in § 3 | **measured, not yet adopted** — W1/W2 complete, W3 in progress (**A** `StopFailure`/`SubagentStop` and **B** `FileChanged`/`InstructionsLoaded` landed; **C** `PostToolBatch` outstanding). Nothing from either wave is REGISTERED — that is one c10 migration the desk composes after all three land |
+| `hooks/post-tool-batch.sh` + `tests/post-tool-batch.bats` | **LANDED** (`647048376`, content-verified on trunk — W3-C). Handler + 15-test suite, 9-mutant red-proof, 0-red baseline. NOT registered, per § 4 |
+| Everything else in § 3 | **measured, not yet adopted** — W1/W2 complete, W3's three waves ALL LANDED (**A** `StopFailure`/`SubagentStop`, **B** `FileChanged`/`InstructionsLoaded`, **C** `PostToolBatch`). Nothing from any wave is REGISTERED — that is the one c10 migration the desk composes now that all three have landed |
 
-**Net capability change so far: one repair, plus FOUR handlers written and landed across W3-A and
-W3-B — every one of them NOT YET REGISTERED, and therefore inert.** § 3's other WIRE rows are still
-only recommendations. The gap between "landed" and "wired" is deliberate and is closed in exactly
-one place: the desk's c10 migration, composed once, after W3-C lands too.
+**Net capability change so far: one repair, plus FIVE handlers written and landed across W3-A, W3-B
+and W3-C — every one of them NOT YET REGISTERED, and therefore inert.** § 3's other WIRE rows are
+still only recommendations. The gap between "landed" and "wired" is deliberate and is closed in
+exactly one place: the desk's c10 migration, composed once — and its precondition, all three W3
+sessions landed, is now met.
+
+### W3-C — `PostToolBatch` (landed `647048376`, 2026-09-06)
+
+**Script + tests only; not registered** (§ 4), same shape as W3-A/B. `hooks/post-tool-batch.sh`
+writes the ALL-TOOL-CALL CENSUS — one JSONL line per BATCH into `~/.claude/logs/tool-batch-census.jsonl`,
+carrying `n` (the batch size, i.e. the per-call chain's amplification for that batch), the tool-name
+breakdown, `permission_mode` and `effort`.
+
+**What it discharges.** The original HOLD on this row was `HOOK_CHAIN_COST.md` R-7
+(`f6cc5c79885b`): no all-tool-call census exists, so no match-all hook's cost can be stated per-hour
+— `bash-execution.log` covers Bash and nothing else. § 3 discharges the HOLD by observing the ratio
+is directly measurable; the handler implements the **discharged** version, in which the event IS the
+census rather than something that had to wait for one.
+
+**The 114 arm is measured, not assumed.** `"PostToolBatch"` occurs **0×** in the installed 2.1.114
+binary and **7×** in 2.1.220, asserted in the suite with the 2.1.220 positive control run FIRST —
+without it an absence proves only that the pattern was wrong. Two further binary-independent arms
+cover the operational hazard, and they are separate because the two gates producing inertness are
+independent: a real `PostToolUse` payload is refused by the SHAPE gate (it has no `tool_calls`),
+and a synthetic non-batch payload that DOES carry `tool_calls` is refused by the EVENT-NAME gate.
+
+**Two findings the mutation sweep produced, both real.** (1) The event-name gate initially had no
+arm that exercised it — deleting it left the suite green, because the shape gate refused the fixture
+first. (2) A `type == "array"` guard was unfalsifiable dead code and was deleted from the subject:
+`null|length` is 0, and every non-array surviving `length` makes the following `map` raise, which
+empties the row by the same path. Two gates producing one outcome means no test can credit either.
+Final sweep: **9 mutants, one per site, 0-red unmutated baseline, every mutant reddened ≥1 test.**
+
+**One thing the land surfaced for the fleet, not just this wave.** The `.bats` shellcheck arm
+(`bats-shellcheck-lint`) blocks on SC2181 — `[ "$?" -eq 0 ]` — and this suite was the first `.bats`
+file it had ever linted. The fix is bats' `run`/`$status`; the trap on the way there is that piping
+a producer into a helper that wraps `run` puts `run` in a SUBSHELL, so `$status` arrives EMPTY and
+fails as `[: : integer expected` — a harness error, not a wrong value.
 
 ### W3-A — `StopFailure` + `SubagentStop` (landed `53edbbcf3`, 2026-09-06)
 
