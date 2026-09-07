@@ -138,6 +138,77 @@ if [ -z "$ROTOR" ]; then
 fi
 [ -n "$ROTOR" ] && [ -x "$ROTOR" ] || exit 0
 
+# ── THE ROTOR IS BOUNDED, AND THE BOUND IS ONE SHARED BUDGET ─────────────────────────────────────
+# This hook fires on PostToolUse Bash|Write|Edit|MultiEdit — the hottest matcher in the config — and
+# it called the rotor UNBOUNDED at both sites below. The rotor is not fast in the case that matters:
+# measured 118s under a forced breach, because the hub scan forks one grep per topic file per
+# candidate. Past the timeout DECLARED for this hook the harness kills it, and a killed hook renders
+# NO additionalContext at all — so the operator learns nothing in precisely the turn the index
+# needed attention most. An unbounded call under a declared timeout is a bound owned by the wrong
+# party: the deadline exists, it just belongs to something that cannot say why it fired.
+#
+# The budget is TOTAL across both call sites, not per-call, because it is sized against ONE number —
+# the timeout declared in settings.json. Per-call bounds MULTIPLY across the sites that spend them
+# (MEMORY.md exoneration-bound-must-fit-what-it-bounds), so two 7s calls under a 10s declaration is
+# still a kill. The default is deliberately safe under the UNRAISED declaration of 10: correct
+# before migration 0018 runs, and roomier after it raises the declaration to 30 and sets
+# MID_DEADLINE_S alongside it in the same settings.json edit, so the two can never drift apart.
+#
+# No timeout(1) ⇒ run unbounded rather than lose the actuator entirely — the same trade every other
+# bounded call in this tree makes (hooks/waiting-recycle.sh, hooks/lib/osa.sh). Resolved by ABSOLUTE
+# path as well as PATH: hooks run without Homebrew on PATH, and that is where coreutils installs it.
+# Seams: MID_DEADLINE_S · MID_TIMEOUT_BIN (set-but-EMPTY disables the bound verbatim).
+MID_DEADLINE_S="${MID_DEADLINE_S:-7}"
+case "$MID_DEADLINE_S" in ''|*[!0-9]*) MID_DEADLINE_S=7 ;; esac
+if [ -n "${MID_TIMEOUT_BIN+set}" ]; then
+  MID_TB="${MID_TIMEOUT_BIN}"
+else
+  MID_TB=""
+  for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+            /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+            /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { MID_TB="$_c"; break; }
+  done
+fi
+MID_LEFT="$MID_DEADLINE_S"
+
+# mid_rotor <args…> — runs the rotor under whatever is LEFT of the shared budget.
+# rc 124 (timeout's own) or 137 (the -k KILL that follows) is a CUT; rc 125 here means the budget
+# was already spent and the rotor was never invoked. Every caller must keep those three apart from a
+# rotor that RAN and declined: a cut has no verdict, and reporting one would be a claim about work
+# that never finished (MEMORY.md claimed-outcome-vs-checked-outcome).
+# MID_CAP caps ONE call below the remaining budget. It exists because a purely first-come budget
+# starves whichever site runs second, and the sites are not equally consequential: the per-entry
+# drain answers "one line is too fat", the whole-index arm answers "the loader is already dropping
+# your NEWEST entries". A slow drain must not be able to spend the deadline that belonged to the
+# breach. So site 1 is capped at half and site 2 takes whatever is left, which is at least the other
+# half — the total still fits the declaration, and neither site can be silently zeroed by the other.
+MID_CAP=""
+mid_rotor() {
+  local b
+  if [ -z "$MID_TB" ] || [ ! -x "$MID_TB" ]; then "$ROTOR" "$@"; return $?; fi
+  b="$MID_LEFT"
+  if [ -n "$MID_CAP" ] && [ "$MID_CAP" -lt "$b" ]; then b="$MID_CAP"; fi
+  [ "$b" -gt 0 ] || return 125
+  "$MID_TB" -k 2 "$b" "$ROTOR" "$@"
+}
+
+# mid_charge <epoch-seconds-taken-before-the-call> — debits what that call actually spent.
+# 🚨 IT MUST RUN IN THE PARENT SHELL, immediately after the command substitution, and NOT inside
+# mid_rotor. Every call site captures the rotor's stdout, so mid_rotor executes in a SUBSHELL and
+# every assignment it makes is discarded at the closing paren
+# (MEMORY.md assignment-inside-command-substitution-never-escapes). That is not hypothetical here:
+# charging inside mid_rotor measured 6s against a 3s budget, because the second site opened with a
+# full fresh MID_LEFT — two per-call bounds wearing the name of one shared one, which is the exact
+# multiplication this budget exists to prevent.
+mid_charge() {
+  local now
+  case "${1:-}" in ''|*[!0-9]*) MID_LEFT=0; return 0 ;; esac
+  now=$(date +%s 2>/dev/null) || { MID_LEFT=0; return 0; }
+  MID_LEFT=$(( MID_LEFT - ( now - $1 ) ))
+  [ "$MID_LEFT" -ge 0 ] || MID_LEFT=0
+}
+
 # ── The destination, and why its root is resolved DIFFERENTLY from the index's ───────────────────
 # The index is keyed on the MAIN worktree (mil_locate resolves through the git COMMON dir, because
 # that is what the harness slugifies). The rules file is not: `.claude/rules/` is loaded from the
@@ -160,10 +231,21 @@ if [ -z "$RULES" ] && [ -n "$PROJ" ]; then
 fi
 [ -n "$RULES" ] || exit 0
 
-DV=$("$ROTOR" "$MEM" --drain-oversized --rules-file "$RULES" 2>/dev/null) || true
+MID_CAP=$(( (MID_DEADLINE_S + 1) / 2 ))
+MID_T0=$(date +%s 2>/dev/null) || MID_T0=""
+DV=$(mid_rotor "$MEM" --drain-oversized --rules-file "$RULES" 2>/dev/null); DRC=$?
+mid_charge "$MID_T0"
 [ -n "${DV:-}" ] || DV=""
 
 CTX=""
+# A CUT is REPORTED, never swallowed. The whole reason this hook actuates rather than warns is that
+# a silent non-event is worth zero here; a cut that renders nothing is that same non-event with
+# extra steps, and it is the failure the declared-timeout kill produced before the bound existed.
+case "$DRC" in
+  124|137)
+    CTX="MEMORY INDEX DRAIN WAS CUT at its share of the ${MID_DEADLINE_S}s rotor budget and did NOT reach a verdict — an over-cap entry may still be sitting in the auto-loaded index. Nothing was moved and nothing was lost. Run it by hand to see what it would do: cc-memory-rotate <index> --drain-oversized --rules-file ${RULES}"
+    ;;
+esac
 case "$DV" in
   verdict=drained*)
     FILES=$(printf '%s' "$DV" | sed -n 's/.* files=\([^ ]*\).*/\1/p')
@@ -192,13 +274,24 @@ if [ -n "$M" ]; then
       # without this the whole-index remedy would still be a pure demotion on the one path that
       # already knows where this project's rules file is. The rotor degrades to the cold record on
       # its own if the destination is unusable, so passing it can only add the routing option.
-      RV=$("$ROTOR" "$MEM" --rules-file "$RULES" 2>/dev/null) || true
+      MID_CAP=""
+      MID_T0=$(date +%s 2>/dev/null) || MID_T0=""
+      RV=$(mid_rotor "$MEM" --rules-file "$RULES" 2>/dev/null); RRC=$?
+      mid_charge "$MID_T0"
+      # Three not-a-verdict outcomes, kept apart from each other and from a rotor that declined.
+      RCUT=""
+      case "$RRC" in
+        124|137) RV=""; RCUT="was CUT at its share of the ${MID_DEADLINE_S}s rotor budget and did NOT reach a verdict" ;;
+        125)     RV=""; RCUT="did NOT run — the ${MID_DEADLINE_S}s rotor budget was already spent by the per-entry drain above" ;;
+      esac
       case "${RV:-}" in
         verdict=rotated*)
           CTX="${CTX:+$CTX }MEMORY INDEX WAS OVER ITS LOADER CAP (${U}/${LIM} chars, ${L}/${LLIM} lines) and was AUTO-ROTATED in this turn: ${RV#verdict=rotated }. Moved lines are VERBATIM in the cold record — restore = paste the line back."
           ;;
         *)
-          CTX="${CTX:+$CTX }🚨 MEMORY INDEX IS OVER ITS LOADER CAP — ${U}/${LIM} chars, ${L}/${LLIM} lines. Past either cap the loader SILENTLY DROPS THE TAIL, the NEWEST entries, so anything you append now is written into the invisible tail. Auto-rotation ran and could NOT clear it (${RV:-no verdict}). Route a durable rule to ${RULES} instead, or apply ONE-IN-ONE-OUT before appending anything else."
+          WHY="ran and could NOT clear it (${RV:-no verdict})"
+          [ -n "$RCUT" ] && WHY="$RCUT"
+          CTX="${CTX:+$CTX }🚨 MEMORY INDEX IS OVER ITS LOADER CAP — ${U}/${LIM} chars, ${L}/${LLIM} lines. Past either cap the loader SILENTLY DROPS THE TAIL, the NEWEST entries, so anything you append now is written into the invisible tail. Auto-rotation ${WHY}. Route a durable rule to ${RULES} instead, or apply ONE-IN-ONE-OUT before appending anything else."
           ;;
       esac
     fi

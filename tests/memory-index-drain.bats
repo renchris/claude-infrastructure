@@ -423,3 +423,85 @@ fire() { jq -nc --arg cwd "$1" '{session_id:"s1",cwd:$cwd,tool_name:"Bash",tool_
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
+
+# ── The rotor bound: a deadline that belongs to this hook, and can say why it fired ──────────────
+# PRE-FIX BEHAVIOUR these three pin: the two `"$ROTOR" …` calls were unbounded under a DECLARED
+# PostToolUse timeout of 10s, against an actuator measured at 118s on a forced breach. The harness
+# kill is silent — stdout is discarded — so the operator got nothing in the one turn the index
+# needed attention. Each case fails on the pre-fix hook: 21 on both the elapsed bound and the
+# message, 22 on elapsed (two per-call bounds would multiply), 23 on the migration not existing.
+
+@test "21 a slow rotor is CUT at the shared budget, and the cut is REPORTED not swallowed" {
+  p="$(mkproj p21)"; proj="${p%|*}"; memd="${p#*|}"
+  topic "$memd" "big.md" project
+  stub="$T/slowrotor"; printf '#!/bin/bash\nsleep 60\n' >"$stub"; chmod +x "$stub"
+  run fire "$proj"                      # baseline turn: record the stat
+  [ "$status" -eq 0 ]
+  ( cd "$memd" && printf -- '- [Big](big.md) — %s\n' "$(pad 700)" >>MEMORY.md )
+  t0=$SECONDS
+  run env MEMORY_ROTATE_BIN="$stub" MID_DEADLINE_S=2 \
+      bash -c 'jq -nc --arg cwd "$1" "{session_id:\"s1\",cwd:\$cwd,tool_name:\"Bash\",tool_input:{command:\"true\"},tool_response:{exitCode:0}}" | bash "$2"' _ "$proj" "$HOOK"
+  el=$(( SECONDS - t0 ))
+  [ "$status" -eq 0 ]
+  # the bound HELD: nowhere near the 60s the stub would have taken, and inside the declared timeout
+  [ "$el" -lt 10 ]
+  # and the operator is told, which is the half a harness kill can never do
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext // ""')"
+  has "$ctx" "MEMORY INDEX DRAIN WAS CUT"
+  hasnt "$ctx" "MEMORY INDEX DRAINED"
+}
+
+@test "22 the budget is SHARED across both call sites, so two slow calls cannot multiply it" {
+  p="$(mkproj p22)"; proj="${p%|*}"; memd="${p#*|}"
+  i=1
+  while [ "$i" -le 40 ]; do add_entry "$memd" "e$i.md" 60; i=$(( i + 1 )); done
+  run fire "$proj"
+  [ "$status" -eq 0 ]
+  # an over-cap entry (arms call site 1) on an index already past its LINE cap (arms call site 2)
+  ( cd "$memd" && printf -- '- [Big](big.md) — %s\n' "$(pad 700)" >>MEMORY.md )
+  stub="$T/slowrotor2"; printf '#!/bin/bash\nsleep 60\n' >"$stub"; chmod +x "$stub"
+  t0=$SECONDS
+  run env MEMORY_ROTATE_BIN="$stub" MID_DEADLINE_S=3 MEMORY_INDEX_LINE_LIMIT=20 \
+      bash -c 'jq -nc --arg cwd "$1" "{session_id:\"s1\",cwd:\$cwd,tool_name:\"Bash\",tool_input:{command:\"true\"},tool_response:{exitCode:0}}" | bash "$2"' _ "$proj" "$HOOK"
+  el=$(( SECONDS - t0 ))
+  [ "$status" -eq 0 ]
+  # NON-VACUOUS: both arms genuinely fired — the whole-index arm reports its own not-a-verdict,
+  # so this is not a run in which only one call site was reached.
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext // ""')"
+  has "$ctx" "MEMORY INDEX DRAIN WAS CUT"
+  has "$ctx" "OVER ITS LOADER CAP"
+  # NON-STARVATION: the whole-index arm RAN and was cut on its own share — it was not silently
+  # zeroed by a slow first call, which a purely first-come budget would have done.
+  has "$ctx" "Auto-rotation was CUT at its share"
+  hasnt "$ctx" "did NOT run"
+  # TOTAL, not per-call: two per-call bounds of 3s would put this at ~6s plus overhead.
+  [ "$el" -lt 6 ]
+}
+
+@test "23 migration 0018 refuses to raise the declaration over an UNBOUNDED live hook" {
+  MIG="$REPO/migrations/0018-memory-index-drain-rotor-budget.sh"
+  [ -x "$MIG" ]
+  live="$T/live0018"; mkdir -p "$live/hooks"
+  # a live layer still holding a pre-fix copy: executable, and with no budget to spend
+  printf '#!/bin/bash\nexit 0\n' >"$live/hooks/memory-index-drain.sh"
+  chmod +x "$live/hooks/memory-index-drain.sh"
+  cfg="$live/settings.json"
+  jq -n '{hooks:{PostToolUse:[{matcher:"Bash|Write|Edit|MultiEdit",hooks:[{type:"command",command:"~/.claude/hooks/memory-index-drain.sh",timeout:10}]}]}}' >"$cfg"
+  run env HOME="$live" CC_CLAUDE_DIR="$live" bash "$MIG"
+  [ "$status" -ne 0 ]
+  # the declaration is UNTOUCHED — raising it over an unbounded call would triple the stall
+  run jq -r '.hooks.PostToolUse[0].hooks[0].timeout' "$cfg"
+  [ "$output" = "10" ]
+  # now the live copy carries the bound, and the same migration applies and self-verifies
+  cp "$REPO/hooks/memory-index-drain.sh" "$live/hooks/memory-index-drain.sh"
+  chmod +x "$live/hooks/memory-index-drain.sh"
+  run env HOME="$live" CC_CLAUDE_DIR="$live" bash "$MIG"
+  [ "$status" -eq 0 ]
+  run jq -r '.hooks.PostToolUse[0].hooks[0].timeout' "$cfg"
+  [ "$output" = "30" ]
+  run jq -r '.env.MID_DEADLINE_S' "$cfg"
+  [ "$output" = "24" ]
+  # the budget must FIT the declaration it is spent under — that is the whole point of one edit
+  run jq -e '(.env.MID_DEADLINE_S|tonumber) < .hooks.PostToolUse[0].hooks[0].timeout' "$cfg"
+  [ "$status" -eq 0 ]
+}
