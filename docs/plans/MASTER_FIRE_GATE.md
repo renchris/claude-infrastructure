@@ -105,6 +105,44 @@ demonstrated by one full local round trip and one full cloud round trip carrying
 ## Status log
 - **2026-08-12 — created by W2 of `BACKLOG_SELF_DRAINING_2026-08-12.md`.** 57 rows on this condition
   (21 pre-existing from the 2026-08-09 triage, 7 by its verdict replay, the rest semantic).
+- **2026-09-07 — the wave ADJUDICATED against trunk; F4 fixed at the consumer.** Full record with
+  every measurement: `docs/research/w4-fire-gate-adjudication-2026-09-07.md`. Three of the four
+  conditions this plan states are refuted on today's tree, and two of its own claims were already
+  false when it was written:
+  - **F1 REFUTED on the number.** 248 → 147 unlabelled, of which **144 are blocked and 3 open**; a
+    blocked row's `venuePlan` is read by nothing (`cc-dispatch:1859`, pinned at `:3507`), so the
+    dispatch-relevant population is **4**. The cure — `venue_label_new` at write time plus
+    `ready_relabel` at admission — landed in **`5ac7990d9` on 2026-08-11, the day BEFORE this
+    document was authored**; § F1 restated a 2026-08-09 measurement that was already cured.
+    `cc-venue run` is indeed still open-only (`bin/cc-venue:587`), so that clause is literally
+    unmet and materially irrelevant. 🚨 **This section's own anti-remedy was in force the whole
+    time:** `CC_DISPATCH_VENUE_ONLY=cloud` entered the dispatcher plist in `9d2e50e34` (2026-08-11)
+    and was removed **today at 17:37:06Z**, parking ~95% of the local queue (`venue-only=cloud
+    parked 184 of 192`) — which is why the repair never drained the local rows. Residual: 4 rows
+    that reach neither admission nor the truncated sweep pass.
+  - **F2 REFUTED.** `.retired` is **666 across 687 declarations**, not 0 across 41; 79 `.returned`,
+    74 of them retired within 0–2 s. Boot budget, the cloud-blind freshness gate and concurrent
+    lands are all discharged (`a48ab4594`, `e39aa0be1`, `0efcc073d`, `8454c5778`, `land-lock.sh`).
+    Residual: no per-BRANCH interlock, costing minutes on an operator-invoked path.
+  - **F3 MITIGATED, and adjudicated 2026-08-21** (`BACKLOG_DRAIN_24_7.md`:24177-24297). The four
+    paths still do not claim, but three cwd-keyed PreToolUse gates cover them; two of the four fire
+    into a cloud VM, not a dispatch worktree, so they are outside this section's own title. "20
+    sessions sharing one worktree" is not reproducible — 3 dispatch worktrees occupied, 1 session
+    each.
+  - **F4 — claim refuted, defect real, and THIS SECTION'S PRESCRIBED REMEDY IS A TRAP.** Not
+    "every dodRef": 3 trunk-ref, 23 absolute, 57 other — and all 18 shared-checkout paths come from
+    ONE producer line (`bin/cc-discover:273`). Do **not** "make that the rule for every producer":
+    `cc-eligible._dod_path` and `cc-premise._plan_dodref` both resolve a dodRef as a FILESYSTEM
+    path, and the second FAILS OPEN on a trunk-ref spelling — silently deleting the derived
+    plan-open falsifier that those same 18 rows depend on. A third arm, `dod_trunk_state`, was
+    already mis-answering that spelling as `absent`, so adopting the remedy at scale would have
+    made question 1b refuse the newly-correct rows off-box. **Fixed at the CONSUMER instead**: new
+    read-only verb `cc-venue dodspec` renders the DoD line as a trunk pathspec at compose time
+    while the stored path stays as the filesystem arms expect it, fail-open so a missing resolver
+    costs nothing. 20 tests, 15/15 red-proved. Harm re-measured: the shared checkout was 1 behind
+    trunk **with 23 dirty files**, so the risk was a sibling's half-written file, not merely stale
+    bytes.
+
 - **2026-08-13 — F5 landed (`61e39ef3`).** Both terms in the gate, 21-case suite
   (`tests/capacity-admit-active.bats`) green and red-proved 0/21 against pristine trunk. Its
   dependency on F1 turned out to be nominal: F5 is a *machine*-capacity term and never reads a
