@@ -102,10 +102,12 @@ if grep -q 'taskpolicy -c utility' "$DST"; then
 else
   echo "43-autonomy-sweep-band: VERIFY FAILED — live plist carries no explicit utility demotion" >&2; fail=1
 fi
-if launchctl print "gui/$UID_N/$LABEL" >/dev/null 2>&1; then
-  echo "43-autonomy-sweep-band: verified — $LABEL is loaded"
+# The EFFECT is the loaded job's argv, not the file: install.sh already copies the SSOT file into
+# place at every converge, so the file matched the whole time the running job kept the old role.
+if launchctl print "gui/$UID_N/$LABEL" 2>/dev/null | grep 'taskpolicy -c utility' >/dev/null; then
+  echo "43-autonomy-sweep-band: verified — $LABEL is loaded AND its argv execs via 'taskpolicy -c utility'"
 else
-  echo "43-autonomy-sweep-band: VERIFY FAILED — $LABEL is not loaded after bootstrap" >&2; fail=1
+  echo "43-autonomy-sweep-band: VERIFY FAILED — $LABEL is not loaded with the utility exec after bootstrap" >&2; fail=1
 fi
 [ "$fail" -eq 0 ] || die "one or more post-conditions failed (see above); the backup is beside $DST"
 
