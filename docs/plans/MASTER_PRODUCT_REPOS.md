@@ -1,5 +1,6 @@
 ---
 status: open
+targets: reso-management-app, doc_classifier
 ---
 
 # MASTER: product repos — the operator's actual products, one wave per repo
