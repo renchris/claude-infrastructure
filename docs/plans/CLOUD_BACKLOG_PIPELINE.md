@@ -1505,3 +1505,49 @@ lane tick; `pending_total` 328 → ~35; the pile cap opening (`fired ≥ 1` in a
 row); lane `cloud-return` rows with `cloud_return_rc: "0"` and `elapsed_s` 1,000-4,000 rather than
 137/900; `returned` rows carrying `wake: … --role desk … delivered`; and `land.log` cloud exits
 shifting from 143 to 0.
+
+### A9.5 · Landed, deployed, first live readings (2026-09-07T05:30-06:20Z)
+
+Landed `a7390066b` (the lane + the plist SSOT/c10) and `ee6740491` (the migration verifies the LOADED
+job); `scripts/deploy-live.sh --auto` converged the live layer `8a40cd3fa → a7390066b` (DEGRADED mode:
+no GREEN stamp among the newest 200, newest NOT-RED taken under the 6 h budget) after the shared
+checkout's `core.bare=true` was unset — deploy-live's own `checkout-not-a-worktree` remedy; the
+checkout had been bare since ~09-06T08:43Z, which is also why the pruner read rc 2 on every tick. Every
+symlinked path hashes equal to `origin/main` (`git hash-object ~/.claude/<path>` = `git rev-parse
+origin/main:<path>` for bin/cc-cloud, scripts/{autonomy-sweep,cloud-return,cloud-return-lane,
+cloud-retire-terminal,cloud-refusal-route,cloud-land-arm-diagnose}.sh); the checkout-only paths
+(docs, tests, launchd, migrations) hash equal in the source checkout at `a7390066b`.
+
+**The first deployed retire pass, run by hand from the live layer (94 s, foreground):**
+
+```
+cloud-retire-terminal: examined=331 gone=23 landed=8 superseded=142 conflict=126 young-held=0 kept=32 retired=299
+```
+
+| figure | before (A9.4) | after that one pass | reads it back |
+|---|---|---|---|
+| declarations holding a sha uncollected | **309** | **32** | `cc-cloud list \| grep -cE '[0-9a-f]{7} for'` |
+| never polled | **23** | **0** | `cc-cloud list \| grep -c 'never polled$'` |
+| RETIRED / with a verdict | **350 / 0** | **650 / 299** (conflict 126 · superseded 142 · gone 23 · landed 8) | `cc-cloud list \| grep -c 'RETIRED ('` |
+| open cloud custody debts | **466** | **181** | `cat ~/.claude/autonomy/custody/*.jsonl \| jq -r 'select(.marker\|startswith("session_"))\|[.marker,.kind]\|@tsv'` folded last-state=open |
+| the collectable pile the lane must land | **35** (dry run) | **32** | the retire pass's `kept=` |
+| the c10 step, filed by the converger (never by hand) | — | `41d05eae511c`, `--run` = `CONFIRM=1 bash …/43-autonomy-sweep-band-activate.sh` | `cc-backlog list --blocked --json \| jq '.[]\|select(.id=="41d05eae511c")'` |
+
+**One trap found at deploy and closed the same hour.** `install.sh` copies `launchd/*.plist` into
+`~/Library/LaunchAgents` at every converge, so minutes after the land the live plist FILE already
+read like the SSOT (no `ProcessType`, `taskpolicy -c utility` present) while `launchctl print` still
+showed the old argv and the running sweep still sat at PRI 4. Migration 0016's verifier and its
+already-applied arm both read the file — they would have retired the operator step with the task
+role still live. Both now read the loaded job's argv (`ee6740491`; memory:
+gate-on-presence-is-cleared-by-any-string, in a new costume).
+
+**What the next session should see, and when.** The last old-code sweep tick was still running at
+06:20Z (pid 51906, PRI 4, ~30 min in); the first new-code tick spawns the lane at its start, and the
+lane's first `cloud-return` row (`tool: cloud-return-lane`) lands when its return pass ends — at PRI 4
+that is one land, ~1 h. The dispatcher's next pass reads the pile at 32 < 50 and admits cloud fires
+again (`cc-dispatch summary` with `fired ≥ 1`; the `cloud-pending-cap` rows stop). If the lane's
+rows never appear, the fault is upstream of the lane: read `jq -c 'select(.tool=="autonomy-sweep"
+and .disposition=="cloud-return")' ~/.claude/autonomy/idl.jsonl | tail -3` — `skipped-no-detach`
+means `/usr/bin/perl` is gone, `skipped` means the symlink for the lane is missing, `detached` with no
+lane row after 90 min means the lane died without journaling (its log is
+`~/.claude/logs/cloud-return-lane.log`).
