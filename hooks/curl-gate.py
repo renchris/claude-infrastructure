@@ -11,11 +11,15 @@ Decision matrix:
   - file:// scheme: deny
   - Internal-network targets (169.254.169.254 / RFC1918): deny
   - --insecure / -k: deny
+  - --location-trusted carrying a credential: deny (it forwards it past the host check)
   - Output to sensitive paths (.env, .ssh, .claude, .aws, /etc, /usr, /var): deny
   - @file upload of sensitive files: deny
   - HEAD/GET to allowlisted hosts: allow
   - POST to per-method allowlist (Grafana, Slack, reso.gl /api/logs): allow
   - Default: ask
+
+On an ALLOW carrying -L/--location, a single simple curl is rewritten via `updatedInput` to add
+--proto-redir/--max-redirs (see redirect_hardening) — the redirect gap, closed without a prompt.
 
 Fail-closed: any unhandled exception emits deny.
 
@@ -176,6 +180,12 @@ def emit(
         "tool_use_id": tool_use_id,
         "cwd": cwd,
     }
+    rewrite = parsed_meta.get("rewrite")
+    if rewrite:
+        # Logged so the rewrite is OBSERVABLE. It has to be: the probe (MACHINE_CAPACITY_V2 §11.2)
+        # found the transcript keeps the agent's ORIGINAL command while the rewritten one executes,
+        # so without this line the audit trail would disagree with what actually ran.
+        log_record["rewrite"] = redact(rewrite)
     try:
         AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
         with AUDIT_LOG.open("a", encoding="utf-8") as f:
@@ -184,7 +194,21 @@ def emit(
         pass  # never fail the gate on log error
 
     if decision == "allow":
-        # Empty stdout = implicit allow (let downstream hooks decide too)
+        # Empty stdout = implicit allow (let downstream hooks decide too). A redirect-hardening
+        # rewrite is emitted in the NO-DECISION form — updatedInput alone, no permissionDecision —
+        # which is the shape the §11.2 probe confirmed leaves the permission flow entirely to the
+        # hooks that own it. So this stays an implicit allow; it just runs a constrained curl.
+        if rewrite:
+            print(
+                json.dumps(
+                    {
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "updatedInput": {"command": rewrite},
+                        }
+                    }
+                )
+            )
         sys.exit(0)
 
     payload = {
@@ -434,6 +458,12 @@ def parse_argv(tokens: list[str], cmd: str) -> dict:
     config_file: bool = False  # -K
     cred_flags: list[str] = []
     headers: list[str] = []
+    # Redirect posture — see redirect_hardening() and the --location-trusted deny arm in decide().
+    has_location = False
+    has_location_trusted = False
+    has_max_redirs = False
+    has_proto_redir = False
+    has_max_filesize = False
 
     i = 1
     while i < len(tokens):
@@ -460,6 +490,29 @@ def parse_argv(tokens: list[str], cmd: str) -> dict:
                 headers.append(t[2:])  # attached form: -H"Authorization: …"
             elif set(short_cluster_flags(t[1:])) & _CRED_SHORT_CHARS:
                 cred_flags.append(t)
+
+        # Redirect census — a SECOND non-exclusive pre-pass, deliberately independent of the
+        # credential one above (a token can be neither, either, or both). Arity-blind for the same
+        # reason that one is: it observes, it never consumes. The one false positive it can produce
+        # is a bare `-L` appearing as some other flag's VALUE (`--data-raw -L`), which costs a
+        # redirect constraint added to a command that follows no redirects — a no-op, not a defect.
+        if t in ("-L", "--location"):
+            has_location = True
+        elif t == "--location-trusted":
+            has_location_trusted = True
+        elif (
+            t.startswith("-")
+            and not t.startswith("--")
+            and len(t) > 1
+            and "L" in short_cluster_flags(t[1:])
+        ):
+            has_location = True  # a cluster: -sSL, -Lo out.html, -sSLo out.html
+        elif t == "--max-redirs" or t.startswith("--max-redirs="):
+            has_max_redirs = True
+        elif t == "--proto-redir" or t.startswith("--proto-redir="):
+            has_proto_redir = True
+        elif t == "--max-filesize" or t.startswith("--max-filesize="):
+            has_max_filesize = True
 
         if t in ("-X", "--request"):
             if i + 1 < len(tokens):
@@ -573,6 +626,11 @@ def parse_argv(tokens: list[str], cmd: str) -> dict:
         "output_path": output_path,
         "data_file_arg": data_file_arg,
         "config_file": config_file,
+        "has_location": has_location,
+        "has_location_trusted": has_location_trusted,
+        "has_max_redirs": has_max_redirs,
+        "has_proto_redir": has_proto_redir,
+        "has_max_filesize": has_max_filesize,
     }
 
 
@@ -731,6 +789,23 @@ def decide(parsed: dict) -> tuple[str, str]:
     if parsed["has_insecure"]:
         return "deny", "--insecure disables TLS verification"
 
+    # --location-trusted + a credential is the ONE redirect shape that defeats the exfiltration arm
+    # outright, and it is a different defect from the SSRF one this gate was filed for (backlog
+    # d1d51881cca1). MEASURED against curl 8.5.0, two servers, one 302 between them:
+    #     curl -L                -H 'Authorization: Bearer SECRET' …  → target sees AUTH=None
+    #     curl --location-trusted -H 'Authorization: Bearer SECRET' …  → target sees AUTH=Bearer SECRET
+    # So plain -L is NOT a credential-exfil arm: curl strips the header on a cross-host redirect all
+    # by itself. --location-trusted turns that off, which means outbound_credentials() below can be
+    # satisfied by an ALLOWLISTED host (api.github.com carrying a ghp_ token is an allow) while the
+    # token actually lands wherever that host's 302 points. No allowlist can reach past a redirect,
+    # so the flag itself is the thing to refuse — and only when a credential is present, because
+    # without one it is merely -L and the open-read rule already governs it.
+    if parsed.get("has_location_trusted") and outbound_credentials(parsed):
+        return (
+            "deny",
+            "--location-trusted forwards credentials to the redirect target (host allowlist cannot reach past a 302)",
+        )
+
     if parsed["config_file"]:
         return "deny", "-K/--config indirect URL source not parseable"
 
@@ -857,6 +932,123 @@ def curl_invocations(cmd: str) -> list[list[str]] | None:
     return [s for s in segments if s and (s[0] == "curl" or s[0].endswith("/curl"))]
 
 
+# ── Redirect hardening: the part of `-L` that CAN be constrained, applied without a prompt ───────
+#
+# THE GAP (backlog d1d51881cca1, census 2026-08-23 over ~/.reso/curl-audit.jsonl, 3,098 rows).
+# decide() checks is_internal_host() on the URL AS WRITTEN and then curl follows redirects with no
+# further gate, so a public host answering `302 http://169.254.169.254/` walks the SSRF arm straight
+# past it. `-L` was present in 1,453 of 1,741 safe-method public reads. Reproduced on curl 8.5.0
+# against a local 302-to-IMDS server: `%{url_effective}` came back as the IMDS URL.
+#
+# CAN CURL BE CONSTRAINED AT ALL? Partly, and the honest answer is worth writing down because the
+# obvious lever is not the useful one:
+#   · --max-redirs N   bounds the CHAIN, not the TARGET. One hop is enough to reach IMDS, so this
+#                      buys loop/amplification protection and nothing at all against the SSRF arm.
+#   · --proto-redir    is the lever that works, for the case that matters. `=https` refuses a
+#                      redirect into plaintext, and every cloud metadata service (AWS/GCP/Azure/
+#                      OpenStack link-local 169.254.169.254) is HTTP-ONLY — it has no TLS listener.
+#                      Measured: `curl -L --proto-redir =https` against the same 302 dies with
+#                      `curl: (1) Protocol "http" not supported or disabled in libcurl`, and the
+#                      overwhelmingly common legitimate redirect, http→https, still follows.
+#                      It also closes the scheme-pivot family (file/gopher/dict/ftp/smb on redirect).
+#   · THERE IS NO --no-redirect-to-private, and no option of any spelling that filters a redirect
+#                      target by address (checked against `curl --help all`, curl 8.5.0). So the
+#                      RESIDUAL is explicit and accepted: a redirect to `https://10.0.0.5/` is still
+#                      followed. Closing that needs curl to stop resolving, which no flag offers.
+#
+# WHY A REWRITE AND NOT A PROMPT. Asking on `-L` would re-prompt 1,453 of 1,741 reads — it recreates
+# the exact prompt storm d8b517b28 removed, to defend against zero instances in 3,098 audited rows.
+# `updatedInput` on PreToolUse is probe-confirmed live in this fleet (MACHINE_CAPACITY_V2.md §11.2:
+# the rewrite applies WITH permissionDecision:"allow" and with no decision at all, permission flow
+# untouched), and two hooks already ship on it. So the constraint costs zero round-trips.
+#
+# DISJOINTNESS IS A HARD CONTRACT, not a probability. Two PreToolUse hooks both emitting
+# `updatedInput` for one call have no documented resolution (coldcompile-admit.sh:34). This hook is
+# the third emitter, so it declines everything the other two can touch:
+#   · coldcompile-admit.sh declines every SIMPLE command with no leading `VAR=` — which is exactly
+#     the only shape accepted here — so it is disjoint BY CONSTRUCTION, not by table comparison.
+#   · qos-rewrite.sh fires only on a SIMPLE command matching config/qos-batch.patterns; _QOS_TOKENS
+#     below is a conservative SUPERSET of that table. Declining more is always safe: no output means
+#     the command runs verbatim, which is this hook's incumbent behaviour on an allow.
+#   tests/curl-gate-redirect.bats pins the contract by RUNNING all three shipped hooks over a corpus
+#   and requiring that at most one ever emits — an observation of the artifacts, not a re-derivation.
+#
+# FAIL-OPEN, like every hook here. Any parse doubt, any malformed seam value, any command shape that
+# is not a single simple curl ⇒ return None and change nothing.
+#
+# Seams: CC_CURL_REDIR_HARDEN=off kills the whole rewrite · CC_CURL_PROTO_REDIR (default `=https`,
+# set-but-empty skips that flag) · CC_CURL_MAX_REDIRS (default `10`, set-but-empty skips) ·
+# CC_CURL_MAX_FILESIZE (OPT-IN, unset by default). The census also found no row anywhere carrying
+# --max-filesize, but a default bound would convert a legitimate large download into a hard failure
+# for no security arm — a capped response is a context nuisance, not a breach — so the lever ships
+# available and off rather than guessing a number on the operator's behalf.
+_QOS_TOKENS = ("bats", "pytest", "shellcheck", "npm install", "npm ci", "du -s")
+
+# The leading `curl` word of a simple command, so the flags are inserted TEXTUALLY. Re-joining the
+# lexer's tokens would be cleaner code and a real bug: shlex posix mode has already stripped the
+# quotes, so `"$CHUNK"` would come back as `'$CHUNK'` and stop expanding — and this gate's own
+# localhost arm exists because the model writes `http://localhost:3000$CHUNK`.
+_CURL_HEAD_RE = re.compile(r"^\s*(?:[^\s;|&<>()'\"]*/)?curl(?=\s|$)")
+_PROTO_REDIR_RE = re.compile(r"^[=+-]?[a-z][a-z0-9,+\-]*$")
+
+
+def _seam(name: str, default: str) -> str:
+    """Single-dash semantics: unset ⇒ default, set-but-EMPTY ⇒ empty (i.e. the caller skips it)."""
+    return os.environ.get(name, default)
+
+
+def single_simple_curl(cmd: str) -> bool:
+    """True only for one statement, whose first token is curl, with no shell separator anywhere."""
+    try:
+        lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return False
+    if not tokens or not (tokens[0] == "curl" or tokens[0].endswith("/curl")):
+        return False
+    if any(t in _STATEMENT_SEPS for t in tokens):
+        return False
+    return sum(1 for t in tokens if t == "curl" or t.endswith("/curl")) == 1
+
+
+def redirect_hardening(cmd: str, parsed: dict) -> str | None:
+    """The rewritten command with redirect constraints added, or None to leave it verbatim."""
+    if os.environ.get("CC_CURL_REDIR_HARDEN") == "off":
+        return None
+    if not (parsed.get("has_location") or parsed.get("has_location_trusted")):
+        return None
+    if not single_simple_curl(cmd):
+        return None
+    low = cmd.lower()
+    if any(tok in low for tok in _QOS_TOKENS):
+        return None  # a shape qos-rewrite.sh could also claim — see DISJOINTNESS above
+
+    add: list[str] = []
+    proto = _seam("CC_CURL_PROTO_REDIR", "=https")
+    if proto and not parsed.get("has_proto_redir"):
+        if not _PROTO_REDIR_RE.match(proto):
+            return None  # a malformed seam must never ship a broken command
+        add += ["--proto-redir", proto]
+    redirs = _seam("CC_CURL_MAX_REDIRS", "10")
+    if redirs and not parsed.get("has_max_redirs"):
+        if not redirs.isdigit():
+            return None
+        add += ["--max-redirs", redirs]
+    size = _seam("CC_CURL_MAX_FILESIZE", "")
+    if size and not parsed.get("has_max_filesize"):
+        if not size.isdigit():
+            return None
+        add += ["--max-filesize", size]
+    if not add:
+        return None
+
+    m = _CURL_HEAD_RE.match(cmd)
+    if not m:
+        return None  # the token walk found a curl the text scan cannot locate ⇒ change nothing
+    return cmd[: m.end()] + " " + " ".join(add) + cmd[m.end() :]
+
+
 def decide_command(cmd: str) -> tuple[str, str, dict]:
     """Judge EVERY curl in the command; the strictest verdict wins (deny > ask > allow)."""
     invocations = curl_invocations(cmd)
@@ -870,15 +1062,20 @@ def decide_command(cmd: str) -> tuple[str, str, dict]:
     for argv in invocations:
         parsed = parse_argv(argv, cmd)
         decision, reason = decide(parsed)
+        # The rewrite rides in `meta` rather than widening this signature — every caller already
+        # threads meta through to emit(), and single_simple_curl() means there is only ever one
+        # invocation to compute it for.
+        if meta.get("rewrite") is None:
+            meta["rewrite"] = redirect_hardening(cmd, parsed)
         if meta["host"] is None:
+            # UPDATED IN PLACE, never rebound: this used to assign a fresh dict, which silently
+            # dropped any other key the loop had already put in meta (the rewrite is one).
             first = (parsed.get("urls") or [None])[0]
+            meta["method"] = parsed.get("method")
             try:
-                meta = {
-                    "host": urlparse(first).hostname if first else None,
-                    "method": parsed.get("method"),
-                }
+                meta["host"] = urlparse(first).hostname if first else None
             except ValueError:
-                meta = {"host": None, "method": parsed.get("method")}
+                meta["host"] = None
         verdicts.append((decision, reason))
 
     for want in ("deny", "ask"):
