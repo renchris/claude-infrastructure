@@ -259,6 +259,8 @@ hooks/completion-assert.sh:timeout
 hooks/lead-crash-watchdog.sh:cc-teardown
 hooks/lead-crash-watchdog.sh:gtimeout
 hooks/lead-crash-watchdog.sh:timeout
+hooks/memory-index-drain.sh:gtimeout
+hooks/memory-index-drain.sh:timeout
 hooks/teammate-auto-shutdown.sh:it2
 hooks/notify.sh:gtimeout
 hooks/notify.sh:timeout
