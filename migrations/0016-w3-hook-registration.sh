@@ -80,6 +80,16 @@ rc=0
 # discovery-critic-premise-goes-stale). If a handler is not executable on the LIVE layer, the
 # registration names a path that does not run — a registered no-op, and a registered no-op reads
 # GREEN on every verifier that only asks whether the string is present.
+#
+# WHY `-x` IS SUFFICIENT HERE AND NOT IN 0017 — the distinction is deliberate, not an oversight.
+# `-x` asserts the file EXISTS AND RUNS, never that it is the VERSION whose behaviour a
+# registration depends on. That gap is real and 0017 pays for it: its value depends on a CwdChanged
+# re-arm added by a specific commit, and the pre-fix handler is perfectly executable, so 0017
+# guards with a BEHAVIOUR PROBE instead. These three subjects depend on no post-landing behaviour
+# change — each was landed whole and its registration is worth exactly what the handler was worth
+# on the day it landed — and all three were verified live-exec AND byte-identical to trunk on
+# 2026-09-07, with none of the then-unconverged commits touching them. If a future change makes any
+# of these three depend on behaviour added after its landing, this guard must become a probe too.
 for h in stop-failure-marker.sh post-tool-batch.sh instructions-loaded.sh; do
   if [ ! -x "$CLAUDE_HOOKS/$h" ]; then
     printf '0016: NOT registered — %s/%s is missing or not executable.\n' "$CLAUDE_HOOKS" "$h" >&2
