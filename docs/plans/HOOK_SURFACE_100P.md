@@ -349,9 +349,27 @@ the binary and invocation mode that produced the verdict. Commands: § 3a, keyed
 - **`InstructionsLoaded` consider → WIRE.** Its condition was "only non-redundant if it names the files
   loaded — unverified". It names them: `file_path` + `memory_type` + `load_reason`. Nothing we own
   reports which memory files a session actually loaded. 🚨 **Its `matcher` is the `load_reason`**, not a
-  tool name, and it is NOT inert — five values exist (`session_start`, `nested_traversal`, `at_mention`,
-  `skill_load`, `slash_command`) and only two were exercised, so any per-session rate from these logs is
-  a **floor**, not a rate.
+  tool name, and it is NOT inert. ⚠️ **CORRECTED 2026-09-06 — the value list first recorded here was
+  wrong in three of five places.** The binary's own hook-metadata literal is the bounded instrument
+  (the array's brackets end it, so a sixth value would be visible):
+
+      matcherMetadata:{fieldToMatch:"load_reason",
+                       values:["session_start","nested_traversal","path_glob_match","include","compact"]}
+
+  `at_mention`, `skill_load` and `slash_command` **do not exist**; the real remaining three are
+  `path_glob_match`, `include`, `compact`. Only two values were exercised, so any per-session rate from
+  these logs is a **floor**, not a rate. **Matcher to use: `session_start`** — it answers the question
+  the event was adopted for and is bounded at 2–4 rows/session (all 16 measured rows carry it). **The
+  one to avoid is `path_glob_match`:** it fires per file Claude touches, is unbounded within a session,
+  and answers a different question.
+
+  🚨 **Why this correction is worth more than the fact it fixes.** The `load_reason` finding came from
+  the adversarial pass, which was **right about the FIELD** (it is `load_reason`, not a tool name) and
+  **wrong about its VALUES** — and the lead propagated both halves because the first half was correct
+  and well argued. Nothing re-checked the second half; a sibling W3 session caught it against the
+  binary. *A partly-correct correction is harder to catch than a wrong one*, because the verified half
+  lends its credibility to the unverified half. Verify a reviewer's claims severally, exactly as § 5
+  requires of an instrument.
 - **`CwdChanged` DROP → keep.** The inherited reason ("`cwd` is already in all 31 payloads") is true but
   not the point: `FileChanged`'s watch list is resolved **relative to cwd**, so a `cd` silently disarms
   it, and `CwdChanged` is the only re-arm point. Dropping it would quietly break the event above it.
@@ -586,6 +604,18 @@ the inherited ledger's dispositions (WIRE FileChanged, DROP CwdChanged) were inc
 other without noticing.** Source: `Mf8`/`oC5` (matcher filter, 114:140260 and 220:430421) and
 `HJ1()`/`Sx_()` (the wipe-and-rebuild, 114:135528 and 220:171001+).
 
+**The CAUSE behind the measurement, from the binary's own hook documentation** (found by the W3-B
+session; § 2 carries the full quote). The matcher field "specifies filenames to watch **in the current
+directory**" — so an absolute path is not a filename in cwd and cannot match, which is why the
+measured absolute-matcher no-op happens and why `CwdChanged` is the only re-arm point. The second
+documented sentence is the part that changes the design: hook output may carry
+`hookSpecificOutput.watchPaths`, an **array of absolute paths**, to update the watch list dynamically.
+**So cwd-locality is a limitation with a supported escape, not a hard ceiling** — `watchPaths` is the
+sanctioned way to watch outside cwd, and it is what makes the three-part wiring above a documented
+pattern rather than a workaround. The landed `hooks/file-changed.sh` emits it from an opt-in watchlist
+file, defaulting to silent observation so a registration cannot be surprised by output it did not
+ask for.
+
 One over-generalisation also did not survive: the hazard "new_cwd can permanently misname the
 session's directory" is conditional on the REVERT path, i.e. an out-of-scope `cd`. An in-scope `cd`
 into a strict subdirectory was measured with no revert at all — `new_cwd` was accurate and the session
@@ -722,6 +752,15 @@ called reviewed. It should not need to re-measure anything.
   silently RE-BASED onto the new cwd and starts watching a different file. The correct wiring is a
   pair plus a `CwdChanged` re-arm — § 3e. **The generalizable half: when one field feeds two
   mechanisms, an A/B that measures only the second yields advice that is confidently backwards.**
+- 🚨 **A PARTLY-CORRECT correction is harder to catch than a wrong one — verify a reviewer severally.**
+  The adversarial pass's `InstructionsLoaded` finding had two halves: the matcher is `load_reason` (not
+  a tool name), and its five values are `session_start, nested_traversal, at_mention, skill_load,
+  slash_command`. The first half was right and well argued; **three of the five values do not exist**
+  (the real ones are `path_glob_match`, `include`, `compact`). The lead folded in both halves because
+  the verified half lent its credibility to the unverified one, and it took a sibling session reading
+  the binary's own `matcherMetadata` literal to catch it. § 5 already demands that an *instrument* be
+  controlled; this is the same demand applied to a **reviewer**. Check each claim against its own
+  evidence, not against the reviewer's batting average.
 - 🚨 **A zero-process snapshot is not death, and I made that error about my own instrument.** The
   15-agent workflow was declared dead after a `ps` showed no `claude.exe` and its agent files had been
   idle 16–33 minutes. It was still running; it completed later and its refutation overturned two
