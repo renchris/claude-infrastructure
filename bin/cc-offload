@@ -539,11 +539,18 @@ cmd_up() {
   # showed on the desk because the operator's shell always exports it; it took a caller with no
   # iTerm (a VM, cron/launchd, a kitty pane, the test suite) to reach the line at all.
   if [ "$UP_UNMANAGED" = 0 ] && [ -z "$UP_NOTIFY_BACK" ]; then
-    UP_NOTIFY_BACK="${ITERM_SESSION_ID:-}"; UP_NOTIFY_BACK="${UP_NOTIFY_BACK##*:}"
+    # CC_PANE_ID FIRST — the same resolution order bin/cc-pane:78 defines and bin/cc-notify:578
+    # already uses. CC_PANE_ID is a SUPERSET of $ITERM_SESSION_ID (bare id or the wNtNpN: form), so
+    # putting it in front of the untouched `##*:` strip cannot change an iTerm2 caller's answer —
+    # and it is the ONLY id a headless or kitty pane has (bin/cc-pane-headless:218 exports
+    # CC_PANE_ID and UNSETS ITERM_SESSION_ID). Without it those callers read empty and every `up`
+    # from them silently degraded to FIRE-AND-FORGET, which is the one outcome the branch below
+    # exists to make loud.
+    UP_NOTIFY_BACK="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; UP_NOTIFY_BACK="${UP_NOTIFY_BACK##*:}"
   fi
   if [ "$UP_UNMANAGED" = 1 ]; then UP_NOTIFY_BACK=''
   elif [ -z "$UP_NOTIFY_BACK" ]; then
-    note "cc-offload: no pane to wake (ITERM_SESSION_ID is unset) — this fire is FIRE-AND-FORGET."
+    note "cc-offload: no pane to wake (neither CC_PANE_ID nor ITERM_SESSION_ID is set) — this fire is FIRE-AND-FORGET."
     note "  Pass --notify-back <pane-uuid|role> to get a completion ping, or --unmanaged to mean it."
   fi
   case "$via" in api|cli) ;; *) die "up: --via must be 'api' or 'cli', got '$via'" ;; esac
