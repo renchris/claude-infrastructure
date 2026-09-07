@@ -38,6 +38,14 @@ setup() {
   # handoff-fire's capacity_gate() refuses a net-new fire above 2.0/core and this box lives well
   # above that, so an unpinned suite would go red BY LOAD rather than by its subject.
   export CC_FIRE_CAPACITY_GATE=off
+  # The ledger fixture below drives a real `cc-backlog add`, and add ends in dispatch_kick():
+  # kick_bin() resolves CC_BACKLOG_KICK_BIN -> `command -v cc-dispatch` -> $HOME/.claude/bin, and
+  # the PATH leg wins BEFORE $HOME, so the fixtured HOME above does NOT close it — the suite would
+  # spawn the operator's DEPLOYED dispatcher and journal test decisions into the production
+  # idl.jsonl. Pin all three (tests/cc-backlog-needs.bats:38-40 is the reference).
+  export CC_BACKLOG_KICK=off
+  export CC_BACKLOG_KICK_MARKER="$BATS_TEST_TMPDIR/.dispatch-kick"
+  export CC_BACKLOG_KICK_BIN="$BATS_TEST_TMPDIR/no-such-dispatch"
 
   export STUBDIR="$BATS_TEST_TMPDIR/stubs"
   export CALLS="$BATS_TEST_TMPDIR/calls"
