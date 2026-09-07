@@ -990,3 +990,25 @@ setup() {
   after="$(printf '%s\n' "$output" | jq -c 'select(.id=="after")')"
   [ "$(printf '%s' "$after" | jq -r '.account')" = "next2" ]
 }
+
+@test "retire --verdict records WHY a declaration is terminal, and list carries it; a bare retire still works" {
+  # 350 of 682 declarations on the live box read RETIRED with no verdict (2026-09-06): the ledger
+  # could not tell harvested (`landed`) from abandoned (`gone`/`superseded`/`conflict`). The verdict
+  # is one word on the marker, exposed by list in both projections, and strictly optional.
+  local r; r="$(bare rem)"
+  cloud declare --id verdicted --branch feat/a --remote "$r" --repo "" >/dev/null
+  cloud declare --id bare      --branch feat/b --remote "$r" --repo "" >/dev/null
+  cloud retire --id verdicted --verdict superseded >/dev/null
+  cloud retire --id bare >/dev/null
+  grep -q '^verdict=superseded$' "$CC_CLOUD_STATE/verdicted.retired"
+  ! grep -q '^verdict=' "$CC_CLOUD_STATE/bare.retired" || false
+  run cloud list --json
+  printf '%s\n' "$output" | jq -se 'map(select(.id=="verdicted"))[0] | .retired == true and .retired_verdict == "superseded"' >/dev/null
+  printf '%s\n' "$output" | jq -se 'map(select(.id=="bare"))[0] | .retired == true and .retired_verdict == ""' >/dev/null
+  run cloud list
+  printf '%s' "$output" | grep -q 'verdicted.*RETIRED (superseded)'
+  printf '%s' "$output" | grep -qE 'bare .*RETIRED$'
+  # a verdict is ONE word — whitespace would break the one-key-per-line marker
+  run cloud retire --id bare --verdict "two words"
+  [ "$status" -eq 2 ]
+}

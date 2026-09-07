@@ -1450,6 +1450,10 @@ STUB
     for t in cloud-return cloud-refusal-route; do
       printf '#!/bin/bash\nexit 0\n' >"$d/$t.sh"; chmod +x "$d/$t.sh"
     done
+    # the retire pass now runs INSIDE the lane (scripts/cloud-return-lane.sh), which the sweep spawns
+    # detached and only from the deployed copy — so the REAL lane sits beside the stubs and resolves
+    # them from its own directory. A verifier copy never spawns it, which is the arm under test.
+    cp "$REPO/scripts/cloud-return-lane.sh" "$d/cloud-return-lane.sh"; chmod +x "$d/cloud-return-lane.sh"
     # the stubs stand where the two ACTING tools stand — one deletes remote refs, the other writes
     # to the declaration store — so an invocation is RECORDED rather than performed.
     cat >"$d/branch-prune-landed.sh" <<STUB
@@ -1483,9 +1487,11 @@ STUB
   grep -q "prune from=$deployed args=--manifest" "$marker" || false
 
   # AND IT IS JOURNALLED — both rcs, on every tick, so "the pruner did nothing" and "the pruner was
-  # never called" can never read the same.
-  [ "$(jq -r 'select(.disposition=="cloud-retire")|.branch_prune_rc' "$CC_IDL" | tail -1)" = "0" ]
-  [ "$(jq -r 'select(.disposition=="cloud-retire")|.cloud_retire_rc' "$CC_IDL" | tail -1)" = "0" ]
+  # never called" can never read the same. The prune rc is the sweep's row; the retire rc is the
+  # LANE's row (tool: cloud-return-lane), and the sweep's own row points there with `lane`.
+  [ "$(jq -r 'select(.disposition=="cloud-retire" and .tool=="autonomy-sweep")|.branch_prune_rc' "$CC_IDL" | tail -1)" = "0" ]
+  [ "$(jq -r 'select(.disposition=="cloud-retire" and .tool=="autonomy-sweep")|.cloud_retire_rc' "$CC_IDL" | tail -1)" = "lane" ]
+  [ "$(jq -r 'select(.disposition=="cloud-retire" and .tool=="cloud-return-lane")|.cloud_retire_rc' "$CC_IDL" | tail -1)" = "0" ]
 }
 
 @test "a FIRST tick that did not complete does not promote itself to a deleting pass" {
@@ -1599,6 +1605,11 @@ STUB
   mkdir -p "$deployed/lib" && cp "$REPO"/scripts/lib/*.sh "$deployed/lib/" 2>/dev/null
   printf '#!/bin/bash\nexit 0\n' >"$deployed/cloud-refusal-route.sh"
   chmod +x "$deployed/cloud-refusal-route.sh"
+  # The pass now runs inside the detached lane; a stubbed pass finishes inside the sweep's grace
+  # window, so the tick's `cloud-return` row is the LANE's (tool: cloud-return-lane) and carries
+  # the same two fields with the same contract. The sweep writes its own row only when the lane is
+  # still running past the grace (`detached`) or was never spawned (`skipped*`).
+  cp "$REPO/scripts/cloud-return-lane.sh" "$deployed/cloud-return-lane.sh"; chmod +x "$deployed/cloud-return-lane.sh"
 
   # ── ARM A: the pass RUNS. Both fields must be numbers.
   printf '#!/bin/bash\nexit 0\n' >"$deployed/cloud-return.sh"
@@ -1613,7 +1624,9 @@ STUB
     || { echo "ARM A: load1 is not a number: $(printf '%s' "$row" | jq -c '.load1')"; false; }
 
   # ── ARM B: the pass does NOT run — the tool is absent, so rc is `skipped`. This is the arm that
-  # can fail: a `0` default, or a bare `tonumber` without the `// null`, lands here.
+  # can fail: a `0` default, or a bare `tonumber` without the `// null`, lands here. With the lane
+  # present and the pass absent, the LANE journals the skip; with the lane itself absent, the sweep
+  # does. Both spellings must carry nulls, so both are exercised.
   : >"$CC_IDL"
   rm -f "$deployed/cloud-return.sh"
   "${SWEEP_TO[@]}" bash "$deployed/autonomy-sweep.sh" >/dev/null 2>&1 || true
@@ -1625,4 +1638,15 @@ STUB
     || { echo "ARM B: a NOT-RUN pass reported elapsed_s=$(printf '%s' "$row" | jq -c '.elapsed_s') — must be null"; false; }
   printf '%s' "$row" | jq -e '.load1 == null' >/dev/null \
     || { echo "ARM B: a NOT-RUN pass reported load1=$(printf '%s' "$row" | jq -c '.load1') — must be null"; false; }
+
+  # ── ARM B': the LANE is absent, so the sweep itself journals the skip — nulls, never numbers.
+  : >"$CC_IDL"
+  rm -f "$deployed/cloud-return-lane.sh"
+  "${SWEEP_TO[@]}" bash "$deployed/autonomy-sweep.sh" >/dev/null 2>&1 || true
+  row="$(grep 'cloud_return_rc' "$CC_IDL" | tail -1)"
+  [ -n "$row" ] || { echo "ARM B': no cloud-return IDL row was written at all"; false; }
+  printf '%s' "$row" | jq -e '.tool == "autonomy-sweep" and (.cloud_return_rc | startswith("skipped"))' >/dev/null \
+    || { echo "ARM B' fixture wrong: $(printf '%s' "$row" | jq -c '{tool, cloud_return_rc}')"; false; }
+  printf '%s' "$row" | jq -e '.elapsed_s == null and .load1 == null' >/dev/null \
+    || { echo "ARM B': a NOT-SPAWNED lane reported numbers: $(printf '%s' "$row" | jq -c '{elapsed_s, load1}')"; false; }
 }

@@ -419,15 +419,80 @@ goal_verdict() { # <repo> <goal-probe> <landed:0|1> → 0 MET · 1 NOT MET · 2 
 # target is gone) are three different outcomes and an originator that never woke deserves to be
 # distinguishable afterwards from one that woke late.
 WAKE_DETAIL=""
-wake() { # <notify-back-uuid> <message> → 0 sent · 1 not sent · 3 no target
+# THE TARGET IS A ROLE, NOT A PANE, AND THE FALLBACK SAYS SO. Every dispatcher fire stamps
+# `notify_back` from ~/.claude/cc-roles/desk AT FIRE TIME — a pane number — and a cloud session
+# returns days later. Measured 2026-09-06: 368 of 380 stamped targets were the single byte `5`,
+# a pane that had been gone since August, and 954 of 1,012 refusal rows on the ledger said
+# "names no notify-back target" while the other 48 said `no-such-target target=5`. The desk of the
+# DAY was reachable the whole time: cc-notify resolves `--role desk` at SEND time from the same
+# file the dispatcher read once. So a target spelled `role:<name>` is sent as `--role <name>`, and a
+# pane target that cc-notify reports UNRESOLVABLE (rc 3) is retried ONCE as the desk role before
+# it is recorded as no-target — the reader the fire meant, addressed the way it can still be found.
+# CC_RETURN_WAKE_ROLE names the fallback role (default desk; empty disables the retry).
+notify_send() { # <target> <message> → cc-notify's rc; sets WAKE_DETAIL
   local target="$1" msg="$2" out rc
+  case "$target" in
+    role:*) out="$("$NOTIFY_BIN" --role "${target#role:}" "$msg" 2>&1)"; rc=$? ;;
+    *)      out="$("$NOTIFY_BIN" "$target" "$msg" 2>&1)"; rc=$? ;;
+  esac
+  WAKE_DETAIL="$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-240)"
+  return "$rc"
+}
+wake() { # <notify-back-uuid> <message> → 0 sent · 1 not sent · 3 no target
+  local target="$1" msg="$2" rc first_detail
   WAKE_DETAIL=""
   [ -n "$target" ] || { WAKE_DETAIL="the declaration names no notify-back target — nothing to wake"; return 3; }
   [ -n "$NOTIFY_BIN" ] || { WAKE_DETAIL="cc-notify not found on this box"; return 1; }
-  out="$("$NOTIFY_BIN" "$target" "$msg" 2>&1)"; rc=$?
-  WAKE_DETAIL="$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-240)"
+  notify_send "$target" "$msg"; rc=$?
+  if [ "$rc" -eq 3 ] && [ -n "${CC_RETURN_WAKE_ROLE-desk}" ]; then
+    case "$target" in
+      role:*) ;;   # a role that does not resolve has no further fallback
+      *)
+        first_detail="$WAKE_DETAIL"
+        notify_send "role:${CC_RETURN_WAKE_ROLE-desk}" "$msg"; rc=$?
+        WAKE_DETAIL="pane '$target' unresolvable → retried as --role ${CC_RETURN_WAKE_ROLE-desk}: $WAKE_DETAIL (first: $(printf '%s' "$first_detail" | cut -c1-80))"
+        ;;
+    esac
+  fi
+  # 🚨 A TARGET THAT DOES NOT RESOLVE IS "NO TARGET", NOT "TRY AGAIN" (2026-09-05). cc-notify's
+  # rc 3 is `verdict=unresolvable` — the registry is readable and holds no such session — and this
+  # function collapsed it into rc 1 ("not sent"), which the caller treats as transient and leaves
+  # UNLATCHED so the next pass retries. Every dispatcher fire on this box stamps notify_back from
+  # ~/.claude/cc-roles/desk, which has read the single byte `5` since 2026-08-25; pane 5 is gone.
+  # Measured: 41 sessions carried more than one `returned` ledger row — one carried 18 — each a
+  # perfect round trip (content-verified, item done, custody discharged) re-run every pass forever,
+  # because the wake to a pane that no longer exists could never succeed. A dead address does not
+  # come back by asking again; the honest disposition is the one the empty-target arm already
+  # takes: record `note=no-target` and latch. rc 1 is kept for the genuinely transient case (the
+  # tool absent, a mailbox write that failed), which a later pass can still repair.
+  [ "$rc" -eq 3 ] && return 3
   [ "$rc" -eq 0 ] || return 1
   return 0
+}
+
+# ── the backlog status map: ONE read per pass, so step 0 costs a grep per row ─────────────────────
+# `cc-backlog list --all --json` measured 21.6 s on the live store under load 115; per row that would
+# be the whole budget, once per pass it is noise. Fail-OPEN by construction: an unreadable store
+# leaves the map empty, `item_is_done` answers no, and every row takes the path it took before this
+# arm existed — a wrong "done" would retire live work, a wrong "not done" costs one land attempt.
+ITEM_STATUS_F=""
+load_item_status() {
+  ITEM_STATUS_F="$(mktemp -t ccret-status.XXXXXX 2>/dev/null || printf '/tmp/ccret-status.%s' "$$")"
+  : >"$ITEM_STATUS_F"
+  [ -n "$BACKLOG_BIN" ] || return 0
+  "$BACKLOG_BIN" list --all --json 2>/dev/null \
+    | jq -r '.[]? | select((.id // "") != "") | [.id, (.status // "")] | @tsv' >"$ITEM_STATUS_F" 2>/dev/null \
+    || : >"$ITEM_STATUS_F"
+  return 0
+}
+item_is_done() { # <item-id> → 0 iff the store folds it to `done`
+  local item="$1"
+  case "$item" in
+    [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+    *) return 1 ;;
+  esac
+  [ -n "$ITEM_STATUS_F" ] && [ -s "$ITEM_STATUS_F" ] || return 1
+  [ "$(awk -F'\t' -v i="$item" '$1 == i { print $2; exit }' "$ITEM_STATUS_F" 2>/dev/null)" = "done" ]
 }
 
 # ── one session ──────────────────────────────────────────────────────────────────────────────────
@@ -454,6 +519,28 @@ handle() { # <row-json> → prints outcome lines
   # already collected is an alarm that always fires, which carries the same zero bits as one that
   # never does (memory: alarm-polarity-and-attention-budget).
   if [ -f "$STATE/$id.returned" ]; then say "· $id — already returned ($(sed -n 's/^outcome=//p' "$STATE/$id.returned" | head -1))"; return 0; fi
+
+  # 0. IS THE ITEM ALREADY DONE? Then this branch is not work waiting to be collected — it is a
+  # duplicate of work that already closed the row, and landing it would put a SECOND implementation
+  # of the same fix on trunk. Measured 2026-09-05: 332 pending declarations resolved to 49 backlog
+  # items, 27 of them already `done`, holding 137 declarations between them (one closed row still
+  # owned 31 branches). Nothing in this rail or the retire pass had a verdict for that state, so the
+  # pile held them as live work and the dispatcher's pile cap counted them against the lane. The
+  # disposition is terminal and SAFE in both directions: the branch is never deleted (origin keeps
+  # it for forensics; `cc-cloud gc` archives the declaration after 14 days), the row is already
+  # closed by someone, and custody is ABANDONED rather than returned — nothing from this session
+  # reached trunk, so "returned" would be a lie the certificate could read.
+  # Read from the pass-level map, never re-derived per row — one `cc-backlog list --all` per pass.
+  if item_is_done "$item"; then
+    say "· $id — SUPERSEDED: backlog item $item is already done (closed by a sibling or a local session); this branch will not be landed over it. Retiring the declaration."
+    if [ -n "$custody" ] && [ -n "$CUSTODY_BIN" ]; then
+      "$CUSTODY_BIN" abandon "$custody" --why "cloud session superseded — item $item already done" >/dev/null 2>&1 || true
+    fi
+    { printf 'outcome=superseded\nat=%s\nitem=%s\nnote=item already done; branch left on origin\n' "$(now)" "$item"; } >"$STATE/$id.returned" 2>/dev/null
+    [ -n "$CLOUD_BIN" ] && "$CLOUD_BIN" retire --id "$id" --verdict superseded >/dev/null 2>&1 || true
+    ledger "$id" superseded "$(jq -cn --arg b "$branch" --arg i "$item" '{branch:$b, item:$i, note:"item already done elsewhere — declaration retired, custody abandoned, branch untouched"}')"
+    return 0
+  fi
 
   # 1. HAS IT PUSHED? cc-cloud's verdict, adopted verbatim.
   case "$state" in
@@ -544,6 +631,35 @@ handle() { # <row-json> → prints outcome lines
       ledger "$id" land-refused-cached "$(jq -cn --arg b "$branch" --arg rc "${prior_rc:-}" --arg s "$seen_sha" \
         '{branch:$b, prior_rc:$rc, seen_sha:$s, note:"verdict already earned on this head — skipped, not re-run"}')"
       return 0
+    fi
+  fi
+
+  # 3b'. A BRANCH THAT CANNOT REBASE IS NOT ASKED TO. The lander's rc 5 (rebase conflict) is a
+  # fact about the branch × trunk pair that `git merge-tree` answers in about a second without a
+  # worktree, a lock, a fetch of the whole remote or a gate — and the lander spends 4-15 minutes of
+  # the pass's 900 s bound reaching the same verdict (preflight, identity re-author, rebase). Measured
+  # 2026-09-05 over the 180 open-item branches on origin: 128 conflict, 52 clean; 5 of the 6 lands
+  # the sweep attempted that day were rc 5, ~4 min each, and the deferrals that followed them read
+  # "573 s of 720 spent". This is ORDERING, not a new gate: the ship rail still judges every branch
+  # it is handed; it is simply no longer handed a branch whose rebase is already known to fail.
+  # No artifact, no wake, no latch — a conflict is terminal for a retired VM, and the retire pass
+  # (`scripts/cloud-retire-terminal.sh`, verdict `conflict`) is what settles it and frees the row.
+  # Fail-open: no repo, no branch ref, or a git without `merge-tree --write-tree` (< 2.38) ⇒ the
+  # lander decides, exactly as before.
+  # The branch is fetched into a PRIVATE ref namespace (`refs/cc-cloud/precheck/…`), never into
+  # `refs/remotes/`: the precheck must not move a tracking ref anything else reads, and the
+  # declaration's `remote` may be a bare path rather than a named remote (as it is in the suite).
+  local _mt_remote; _mt_remote="$(printf '%s' "$row" | jq -r '.remote // "origin"')"; [ -n "$_mt_remote" ] || _mt_remote=origin
+  if [ "$state" != LANDED ] && [ -n "$repo" ] && [ -d "$repo" ] && [ -n "$branch" ]; then
+    local _mt_rc=0 _mt_ref="refs/cc-cloud/precheck/$branch"
+    "$GIT_BIN" -C "$repo" fetch --quiet "$_mt_remote" "+refs/heads/$branch:$_mt_ref" >/dev/null 2>&1 || true
+    if "$GIT_BIN" -C "$repo" rev-parse --verify --quiet "$_mt_ref" >/dev/null 2>&1; then
+      "$GIT_BIN" -C "$repo" merge-tree --write-tree "$trunk" "$_mt_ref" >/dev/null 2>&1; _mt_rc=$?
+      if [ "$_mt_rc" -eq 1 ]; then
+        say "· $id — $branch CONFLICTS with $trunk (git merge-tree); the lander would refuse it with rc 5 after minutes of work, so it is not asked. The retire pass settles conflicting branches of a finished VM."
+        ledger "$id" land-conflict "$(jq -cn --arg b "$branch" --arg t "$trunk" '{branch:$b, trunk:$t, note:"merge-tree conflict — the land was not attempted; no artifact, no wake, no latch; cloud-retire-terminal retires it as `conflict`"}')"
+        return 0
+      fi
     fi
   fi
 
@@ -964,7 +1080,7 @@ handle() { # <row-json> → prints outcome lines
 # into an unfinishable one. Deciding on disk that there is nothing to do costs one directory read.
 lock_acquire || { warn "another pass holds the lock — skipping (this is single-flight by design)"; exit 4; }
 printf '%s\n' "$(now)" >"$LOCK/at" 2>/dev/null
-trap 'lock_release' EXIT INT TERM
+trap 'lock_release; [ -n "${ITEM_STATUS_F:-}" ] && rm -f "$ITEM_STATUS_F" 2>/dev/null' EXIT INT TERM
 
 INVENTORY="$("$CLOUD_BIN" list --json 2>/dev/null)"
 if [ -z "$INVENTORY" ]; then
@@ -1068,6 +1184,7 @@ fi
 # second pass of the same shape, ~675 s of a 900 s budget consumed before the first land. `--only`
 # makes both O(the working set), which is bounded by construction.
 SCOPE="$(printf '%s\n' "$WANT" | jq -r '.id' 2>/dev/null | tr '\n' ',')"
+load_item_status
 "$CLOUD_BIN" poll --only "$SCOPE" >/dev/null 2>&1 || warn "cc-cloud poll did not complete; quiet windows may read as unmeasured"
 
 ROWS="$("$CLOUD_BIN" list --json --state --only "$SCOPE" 2>/dev/null)"
