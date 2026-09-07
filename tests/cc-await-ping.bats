@@ -1804,3 +1804,68 @@ sd_arm() {  # <uuid> <errfile> → SD_W = pid of a watcher armed on that inbox, 
   grep -q 'verdict=killed' "$BATS_TEST_TMPDIR/w.err"
   grep -q 'WAKE-PATH-DOWN' "$MB"
 }
+
+# ── CLASS FILTER (2026-09-07 desk wake-noise) ────────────────────────────────────────────────────
+# The desk's inbox measured 80% pages whose own text says no automation may act on them, against
+# 2.4% HANDOFF-PING. The filter is OPT-IN and, crucially, DELIVERS every line it declines to wake on.
+SUPLINE='2026-09-07T10:00:00-0500 [claude] ⚠️ SUPERVISOR PAGE — session abc is STALL?: telemetry stale (operator/delegated-live-session recovers; supervisor never auto-acts)'
+PINGLINE='2026-09-07T10:00:01-0500 [peer] HANDOFF-PING fire-x: landed'
+
+@test "class filter: a damped-class line does NOT wake (times out instead of firing)" {
+  printf '%s\n' "$SUPLINE" >> "$MB"
+  run "$AWAIT" "$UUID" --interval 1 --timeout 3 --except-class SUPERVISOR-PAGE
+  [ "$status" -eq 2 ]                      # timed out — the benign page never woke us
+  [[ "$output" != *"SUPERVISOR PAGE"* ]]
+}
+
+@test "class filter: an UNFILTERED line still wakes (default behaviour is not broken)" {
+  printf '%s\n' "$SUPLINE" >> "$MB"
+  run "$AWAIT" "$UUID" --interval 1 --timeout 5
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"SUPERVISOR PAGE"* ]]
+}
+
+@test "class filter: --only-class wakes on the named class and not on the others" {
+  printf '%s\n' "$SUPLINE" >> "$MB"
+  run "$AWAIT" "$UUID" --interval 1 --timeout 3 --only-class HANDOFF-PING
+  [ "$status" -eq 2 ]
+  printf '%s\n' "$PINGLINE" >> "$MB"
+  run "$AWAIT" "$UUID" --interval 1 --timeout 5 --only-class HANDOFF-PING
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"HANDOFF-PING fire-x: landed"* ]]
+}
+
+# THE NO-DROP INVARIANT — the one property that makes a filter safe. A damped line must still be
+# delivered when a waking line arrives; if the cursor were advanced over it (mailbox_take_from writes
+# .seen = the WHOLE box, not = its `from`) the page would be consumed unread, which is strictly worse
+# than the extra wake this flag removes.
+#
+# 🚨 It MUST be one long-lived watcher — the production shape (a watcher armed for hours sees the page,
+# then the ping). Two separate invocations CANNOT prove this: the damped cursor is per-process
+# (WOKE_MAP, in memory) and a second process re-seeds from `.seen`, so it prints from 0 and the page
+# reappears no matter what the first process did. Measured against a cursor-advancing mutant: the
+# two-invocation shape passed it (vacuous), this one catches it (heldpage=0, the page dropped).
+@test "class filter: a damped line is DELIVERED with the next waking line, never dropped" {
+  : > "$MB"
+  # `3>&-` is MANDATORY, not hygiene (same reason as session-register-reclaim.bats:64): cc-await-ping
+  # detaches its own parent-poller child, and a background process that inherits bats' TAP fd 3 keeps
+  # it open — bats then blocks on that fd forever and the whole suite hangs rather than fails.
+  "$AWAIT" "$UUID" --interval 1 --timeout 20 --except-class SUPERVISOR-PAGE \
+      > "$BATS_TEST_TMPDIR/out" 2>/dev/null </dev/null 3>&- &
+  local w=$!
+  sleep 3; printf '%s\n' "$SUPLINE"  >> "$MB"      # damped: held, must NOT wake
+  sleep 4; printf '%s\n' "$PINGLINE" >> "$MB"      # waking: fires, and must carry the held line
+  wait "$w"; local rc=$?
+  local out; out="$(cat "$BATS_TEST_TMPDIR/out")"
+  [ "$rc" -eq 0 ]
+  [[ "$out" == *"HANDOFF-PING fire-x: landed"* ]] || false
+  [[ "$out" == *"SUPERVISOR PAGE"* ]] || false     # ← the held page rode along; nothing was lost
+  # …and it was never consumed behind our back while it was merely held.
+  [[ "$out" == *"STALL?"* ]]
+}
+
+@test "class filter: --only-class and --except-class are mutually exclusive" {
+  run "$AWAIT" "$UUID" --only-class HANDOFF-PING --except-class SUPERVISOR-PAGE
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"mutually exclusive"* ]]
+}

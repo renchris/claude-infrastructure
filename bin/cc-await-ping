@@ -22,6 +22,16 @@
 #   --sid <id>      this session's Claude session id — the key of its turn-boundary beat
 #                   (~/.claude/cc-beats/<sid>.json). Required by --idle-scoped in practice;
 #                   omitted, the mode resolves it by pane and REFUSES if it cannot.
+#   --only-class <list>    wake ONLY on these classes; --except-class <list> wakes on everything
+#   --except-class <list>  BUT these. Comma-separated, case-insensitive. Classes: SUPERVISOR-PAGE ·
+#                   REAPER-SURFACE · PERMISSION-PENDING · HANDOFF-PING · WAKE-PATH · DESK-SWEEP ·
+#                   OTHER. Mutually exclusive; unset ⇒ every line wakes (the default, unchanged).
+#                   A FILTER NEVER DROPS A LINE — it only declines to WAKE. Damped lines stay
+#                   pending for the boundary drain AND print with the next waking line, because the
+#                   cursor is not advanced over them. Losing a page is far worse than an extra wake.
+#                   Measured 2026-09-07: 80% of the desk's inbox was pages whose own text says no
+#                   automation may act on them, against 2.4% HANDOFF-PING — the class this exists for.
+#                     cc-await-ping --role desk --only-class HANDOFF-PING,PERMISSION-PENDING
 #   --stand-down    stop THIS inbox's own watchers and exit 0 — by pid from their claim files,
 #                   never by pattern (§ STAND-DOWN). Composes with <uuid> / --role. The actuator
 #                   hooks/validate-bash.sh names when it denies a `pkill -f cc-await-ping`.
@@ -148,6 +158,7 @@ STAND_DOWN=0
 SID=""
 _TIMEOUT_SET=0
 _INTERVAL_SET=0
+ONLY_CLASS=""; EXCEPT_CLASS=""
 
 usage() { sed -n '2,/^# Watches EVERY key/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
 
@@ -158,6 +169,8 @@ while [ $# -gt 0 ]; do
     --interval)     INTERVAL="${2:?--interval needs a value}"; _INTERVAL_SET=1; shift 2 ;;
     --idle-scoped)  IDLE_SCOPED=1; shift ;;
     --stand-down)   STAND_DOWN=1; shift ;;
+    --only-class)   ONLY_CLASS="${2:?--only-class needs a value}"; shift 2 ;;
+    --except-class) EXCEPT_CLASS="${2:?--except-class needs a value}"; shift 2 ;;
     --sid)          SID="${2:?--sid needs a value}"; shift 2 ;;
     -h|--help)      usage; exit 0 ;;
     --*)            echo "cc-await-ping: unknown option '$1'" >&2; usage >&2; exit 2 ;;
@@ -167,6 +180,9 @@ done
 
 if [ -n "$ROLE" ] && [ -n "$UUID" ]; then
   echo "cc-await-ping: --role and <uuid> are mutually exclusive" >&2; exit 2
+fi
+if [ -n "$ONLY_CLASS" ] && [ -n "$EXCEPT_CLASS" ]; then
+  echo "cc-await-ping: --only-class and --except-class are mutually exclusive" >&2; exit 2
 fi
 
 # C5: the mode's own defaults, applied ONLY where the caller did not state one. 3600 rather than the
@@ -1231,6 +1247,69 @@ _own_wake_down_line() {   # <line> → 0 iff this is a wake-path control line ar
   done
   return 1
 }
+# ── CLASS FILTER (opt-in) — decline to WAKE on a class, NEVER drop a line. ───────────────────────
+# Measured on the desk's own inbox 2026-09-07: of 669 lines, 536 (80%) were SUPERVISOR PAGE / REAPER
+# SURFACE pages that say IN THEIR OWN TEXT that no automation may act on them ("supervisor never
+# auto-acts", "cc-reaper never auto-acts on this"), against 16 HANDOFF-PING lines — the class this
+# wake path exists to catch. Undifferentiated, every benign page spent a full model turn and a real
+# land-completion ping was indistinguishable in the stream (six wakes in ~25 minutes, all benign).
+#
+# THE INVARIANT, and it is the whole design: a filtered line is still DELIVERED. Losing a page is far
+# worse than an extra wake, so this never advances a cursor over a damped line and never touches
+# `.seen`. Two consequences, both deliberate:
+#   * the boundary drain (hooks/mailbox-drain.sh) still delivers it at the next turn — the operator
+#     reads every page, just without a wake per page;
+#   * when a WAKING line finally lands, the take window still opens at the ORIGINAL cursor, so the
+#     damped lines print WITH it. They are deferred into the next real wake, never consumed unread.
+# That last point is why the cursor is left alone rather than advanced past a damped line the way the
+# WAKE-PATH-DOWN skip does: mailbox_take_from writes `.seen` = the whole box (not = its `from`), so
+# advancing past an unprinted line would mark it consumed and the drain would never show it. The
+# control-line skip can afford that only because those lines are our OWN corpse notices.
+_line_class() {   # <line> → one CLASS token, always exactly one word
+  case "$1" in
+    *"SUPERVISOR PAGE"*)     printf 'SUPERVISOR-PAGE' ;;
+    *"REAPER SURFACE"*)      printf 'REAPER-SURFACE' ;;
+    *"PERMISSION-PENDING"*)  printf 'PERMISSION-PENDING' ;;
+    *"HANDOFF-PING"*)        printf 'HANDOFF-PING' ;;
+    *"WAKE-PATH"*)           printf 'WAKE-PATH' ;;
+    *"desk-sweep"*)          printf 'DESK-SWEEP' ;;
+    *)                       printf 'OTHER' ;;
+  esac
+}
+# Comma/space separated, case-insensitive membership. Bash 3.2-safe (no associative arrays).
+_class_in() {   # <class> <list> → 0 iff <class> is a member of <list>
+  local c t
+  c="$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
+  for t in $(printf '%s' "$2" | tr ',' ' ' | tr '[:lower:]' '[:upper:]'); do
+    [ "$t" = "$c" ] && return 0
+  done
+  return 1
+}
+_line_wakes() {   # <line> → 0 iff this line should WAKE the session
+  local c
+  # No filter configured ⇒ every line wakes. This is the default and the pre-existing behaviour.
+  [ -n "$ONLY_CLASS" ] || [ -n "$EXCEPT_CLASS" ] || return 0
+  c="$(_line_class "$1")"
+  if [ -n "$ONLY_CLASS" ]; then
+    _class_in "$c" "$ONLY_CLASS" && return 0
+    return 1
+  fi
+  _class_in "$c" "$EXCEPT_CLASS" && return 1
+  return 0
+}
+_window_wakes() {   # <key> <from> → 0 iff the window holds >=1 line that WAKES us
+  local _f _line
+  # No filter ⇒ identical to _real_mail_after, so the unfiltered path keeps exactly one predicate.
+  if [ -z "$ONLY_CLASS" ] && [ -z "$EXCEPT_CLASS" ]; then _real_mail_after "$1" "$2"; return $?; fi
+  _f="$(mailbox_file "$1" 2>/dev/null)" || return 0
+  [ -n "$_f" ] && [ -f "$_f" ] || return 0
+  while IFS= read -r _line || [ -n "$_line" ]; do
+    _own_wake_down_line "$_line" && continue          # our own corpse notice is never a wake
+    _line_wakes "$_line" && return 0
+  done < <(tail -n "+$(( $2 + 1 ))" "$_f" 2>/dev/null)
+  return 1
+}
+
 _real_mail_after() {   # <key> <from> → 0 iff the window holds >=1 line that is NOT our own control line
   local _f _line _n=0
   _f="$(mailbox_file "$1" 2>/dev/null)" || return 0
@@ -1277,9 +1356,22 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
         # PRIVATE cursor past it (so we do not re-test it every poll) and keep watching. `.seen` is
         # deliberately untouched: the notice stays pending for hooks/mailbox-drain.sh, which is the
         # reader it was written for.
-        if _real_mail_after "$_k" "$_w"; then _HIT="$_k"; _FROM="$_w"; break; fi
-        _woke_set "$_k" "$(mailbox_lines "$_k")"
-        echo "cc-await-ping: skipped $(( $(mailbox_lines "$_k") - _w )) WAKE-PATH-DOWN control line(s) of our own on [$_k] — not a ping, still watching (they stay unseen for the boundary drain)" >&2
+        if _window_wakes "$_k" "$_w"; then _HIT="$_k"; _FROM="$_w"; break; fi
+        if _real_mail_after "$_k" "$_w"; then
+          # There IS real mail, but every line of it is a class this watcher does not wake on.
+          # Leave the PRIVATE cursor exactly where it is: `.seen` is untouched so the boundary drain
+          # still delivers these, and the next WAKING line takes from this same cursor so they print
+          # with it. Deferred into the next wake, never dropped. The note is emitted only when the
+          # damped count CHANGES — a per-poll line would rebuild the noise this flag exists to remove.
+          _cd_n="$(mailbox_lines "$_k")"
+          if [ "$_cd_n" != "$(_woke_get "damped:$_k" 2>/dev/null || echo '')" ]; then
+            _woke_set "damped:$_k" "$_cd_n"
+            echo "cc-await-ping: holding $(( _cd_n - _w )) line(s) on [$_k] — no waking class among them (${ONLY_CLASS:+--only-class $ONLY_CLASS}${EXCEPT_CLASS:+--except-class $EXCEPT_CLASS}); still watching. They are NOT dropped: your boundary drain delivers them, and they print with the next waking line." >&2
+          fi
+        else
+          _woke_set "$_k" "$(mailbox_lines "$_k")"
+          echo "cc-await-ping: skipped $(( $(mailbox_lines "$_k") - _w )) WAKE-PATH-DOWN control line(s) of our own on [$_k] — not a ping, still watching (they stay unseen for the boundary drain)" >&2
+        fi
       fi
     done
     if [ -n "$_HIT" ]; then
