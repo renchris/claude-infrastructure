@@ -118,6 +118,81 @@ row() { jq -c "select(.disposition==\"$1\")" "$CC_IDL" | tail -1; }
   [ "$(row cloud-retire | jq -r '.cloud_retire_rc')" = skipped ]
 }
 
+@test "the retire census is TYPED, so a pile that drained by LANDING is separable from one that was DISCARDED" {
+  run bash "$LANE"
+  [ "$status" -eq 0 ]
+  t="$(row cloud-retire)"
+  # the pass's own words are KEPT — the typed fields are added beside them, never instead of them
+  printf '%s' "$t" | jq -e '.summary | test("examined=3")' >/dev/null
+  # …and now they can be summed. This is the whole point: `landed` and the discard strata move
+  # `pending_total` identically, so only a typed field can tell the two drains apart.
+  [ "$(printf '%s' "$t" | jq -r '.census.examined')"   = 3 ]
+  [ "$(printf '%s' "$t" | jq -r '.census.landed')"     = 1 ]
+  [ "$(printf '%s' "$t" | jq -r '.census.superseded')" = 1 ]
+  [ "$(printf '%s' "$t" | jq -r '.census.gone')"       = 1 ]
+  [ "$(printf '%s' "$t" | jq -r '.census.conflict')"   = 0 ]
+  # the hyphenated stratum survives the split
+  [ "$(printf '%s' "$t" | jq -r '.census["young-held"]')" = 0 ]
+  # numbers, not strings — a reader must be able to add them without coercing
+  printf '%s' "$t" | jq -e '.census | to_entries | all(.value | type == "number")' >/dev/null
+  # the discard rate is now one expression over the row
+  [ "$(printf '%s' "$t" | jq -r '.census | .superseded + .conflict')" = 1 ]
+  # and load1 rides the retire row too, so its elapsed is stratifiable (the §3h retrofit, not
+  # repeated). Asserted as the INVARIANT, not as a value: load1() reads `sysctl vm.loadavg`, which
+  # exists on the box this runs on and not on every box this suite runs on, so a `type=="number"`
+  # here would be a test of the platform. What must hold is that the retire row now carries the
+  # field at all and obeys the same ran/not-ran rule as the return row beside it.
+  printf '%s' "$t" | jq -e 'has("load1")' >/dev/null
+  printf '%s' "$t" | jq -e '.load1 == null or (.load1 | type == "number")' >/dev/null
+  [ "$(printf '%s' "$t" | jq -r '.load1 | type')" = "$(row cloud-return | jq -r '.load1 | type')" ]
+}
+
+@test "a retire pass that printed NO census journals null — never a zeroed census that reads as settled-nothing" {
+  # a pass CUT by its bound is the real shape of this: it dies mid-walk with nothing on stdout.
+  cat >"$D/cloud-retire-terminal.sh" <<'EOF'
+#!/bin/bash
+echo "retire repo=${CLOUD_RETIRE_REPO:-UNSET} $*" >>"$CALLS"
+exit 143
+EOF
+  chmod +x "$D/cloud-retire-terminal.sh"
+  run bash "$LANE"
+  [ "$status" -eq 0 ]
+  t="$(row cloud-retire)"
+  [ "$(printf '%s' "$t" | jq -r '.cloud_retire_rc')" = 143 ]
+  printf '%s' "$t" | jq -e '.census == null' >/dev/null
+  # the trap it must not fall into: a census of zeros is indistinguishable from a completed pass
+  # that found nothing terminal, and one of those is a verdict while the other is a machine event.
+  printf '%s' "$t" | jq -e '.census.examined == null' >/dev/null
+}
+
+@test "a stratum the parser was never told about still lands — the census is a CLASS, not an enumeration" {
+  cat >"$D/cloud-retire-terminal.sh" <<'EOF'
+#!/bin/bash
+echo "retire repo=${CLOUD_RETIRE_REPO:-UNSET} $*" >>"$CALLS"
+echo "cloud-retire-terminal: examined=5 gone=0 landed=2 superseded=0 conflict=0 young-held=0 kept=3 retired=2 failed=0 dry_run=0 abandoned=1"
+exit 0
+EOF
+  chmod +x "$D/cloud-retire-terminal.sh"
+  run bash "$LANE"
+  [ "$status" -eq 0 ]
+  t="$(row cloud-retire)"
+  # `abandoned` exists in no list in this file; enumerating the strata is what cost the cc-reaper
+  # whitelist twice, so the parser matches the SHAPE `key=<int>` instead.
+  [ "$(printf '%s' "$t" | jq -r '.census.abandoned')" = 1 ]
+  [ "$(printf '%s' "$t" | jq -r '.census.landed')"    = 2 ]
+  # and a non-numeric token in the same line is not coerced into the object
+  printf '%s' "$t" | jq -e '.census | has("cloud-retire-terminal:") | not' >/dev/null
+}
+
+@test "an absent retire sibling journals a null census and a null load1, not an empty object" {
+  rm -f "$D/cloud-retire-terminal.sh"
+  run bash "$LANE"
+  [ "$status" -eq 0 ]
+  t="$(row cloud-retire)"
+  [ "$(printf '%s' "$t" | jq -r '.cloud_retire_rc')" = skipped ]
+  printf '%s' "$t" | jq -e '.census == null and .load1 == null and .elapsed_s == null' >/dev/null
+}
+
 @test "--status reads the lock without taking it" {
   run bash "$LANE" --status
   [ "$status" -eq 0 ]
