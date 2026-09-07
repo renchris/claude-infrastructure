@@ -342,6 +342,51 @@ assert_state() { # <label> <premise: FALSE|TRUE|UNKNOWN> <rc>
   assert_state "manifest unreadable" UNKNOWN "$status"
 }
 
+# THE THIRD LEG, and the one that covers the ORDINARY cure. The two legs above answer "did the live
+# layer STOP RUNNING this suite" — a rare exit. A host RED is normally fixed and the suite simply
+# passes again, and until HOST_GREEN existed nothing recorded that: measured on backlog 92b2e22da7d0,
+# 24 consecutive post-deploy greens after the red, and the row it filed was still open two days later
+# because its stored probe had nothing green to read. The state table below is the whole point — a
+# ledger that could say "green" from a state other than "a verdict said green" would report DONE over
+# live work, which is the defect §2 exists to refuse.
+@test "deploy-live --falsify-host: a GREEN host verdict retracts, and NOTHING else does" {
+  export DEPLOY_REPO="$BATS_TEST_TMPDIR/dg"
+  mkdir -p "$DEPLOY_REPO/tests" "$DEPLOY_REPO/scripts"
+  export CC_HOST_MANIFEST="$DEPLOY_REPO/scripts/host-suites.manifest"
+  printf 'tests/live.bats\ntests/other.bats\n' > "$CC_HOST_MANIFEST"
+  printf 'ok\n' > "$DEPLOY_REPO/tests/live.bats"
+  printf 'ok\n' > "$DEPLOY_REPO/tests/other.bats"
+  G="$CC_POSTLAND_DIR/host-green"
+
+  run bash "$DEPLOY" --falsify-host tests/live.bats
+  assert_state "no ledger at all — nothing was ever measured" TRUE "$status"
+
+  # ABSENCE IS THREE STATES WEARING ONE FACE — never measured, measured RED (host_checks deletes the
+  # row), and a pruned file. Collapsing them into a retraction is exactly the HOST_CUTS trap the
+  # --falsify-host header refuses by name, so every one of them stays non-zero.
+  printf 'tests/other.bats 1788800000 abc123\n' > "$G"
+  run bash "$DEPLOY" --falsify-host tests/live.bats
+  assert_state "a ledger that names only a DIFFERENT suite" TRUE "$status"
+
+  printf 'tests/other.bats 1788800000 abc123\ntests/live.bats 1788800100 def456\n' > "$G"
+  run bash "$DEPLOY" --falsify-host tests/live.bats
+  assert_state "the live layer's latest verdict on THIS suite is green" FALSE "$status"
+
+  # THE KEY IS THE WHOLE FIRST FIELD. A prefix match would retract a finding about tests/live.bats on
+  # evidence about a different file whose name merely starts with it — the same class of wrong-subject
+  # retraction that keeps a multi-suite failing set unfalsifiable at fals_host_set.
+  printf 'tests/live.bats.disabled 1788800100 def456\n' > "$G"
+  run bash "$DEPLOY" --falsify-host tests/live.bats
+  assert_state "a row whose suite merely STARTS with this one" TRUE "$status"
+
+  # …and the ledger never overrides the earlier legs' UNKNOWN: a green row cannot answer a question
+  # the manifest read could not even put.
+  printf 'tests/live.bats 1788800100 def456\n' > "$G"
+  rm -f "$CC_HOST_MANIFEST"
+  run bash "$DEPLOY" --falsify-host tests/live.bats
+  assert_state "manifest unreadable, green row present" UNKNOWN "$status"
+}
+
 @test "plan-phase-scan --falsify: exit 0 only where the plan holds no work to advance" {
   d="$BATS_TEST_TMPDIR/p"; mkdir -p "$d"
   fp() { printf -- '---\nstatus: %s\n---\n\n# T\n\n%s\n' "$1" "$2" > "$d/$3"; }

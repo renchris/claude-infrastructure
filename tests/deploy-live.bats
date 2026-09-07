@@ -856,6 +856,39 @@ tests/host-ok.bats'
   grep -q 'post-deploy HOST RED' "$CC_BACKLOG_LOG"
 }
 
+# ── HOST_GREEN: the ledger of the CURE ───────────────────────────────────────────────────────────
+# host_checks has always had a producer for the FINDING and none for its cure: on an all-green tick
+# it returns at `[ -n "$red" ] || return 0` before touching any store, so a `post-deploy HOST RED`
+# row could only ever be closed by hand. Measured on backlog 92b2e22da7d0 — filed 2026-09-05, green
+# in the 24 consecutive post-deploy checks that followed, still open two days later and dispatched to
+# a worker. The three write rules below are NOT symmetric and each one is a separate way to get this
+# wrong: a green must be written, a red must DELETE (not merely fail to write, or a stale green would
+# retract a fresh finding), and a non-verdict must change nothing in either direction.
+@test "HOST_GREEN: ok WRITES a row, a RED DELETES it, a CUT leaves it, an unrun suite keeps it" {
+  auto_setup
+  seed_host_suites 'tests/host-ok.bats
+tests/host-flip.bats'
+  G="$BATS_TEST_TMPDIR/postland/host-green"
+
+  printf '1\n' > "$CC_FLIP_CTL"; tick t1            # flip RED, ok green
+  grep -q '^tests/host-ok.bats ' "$G"
+  ! grep -q '^tests/host-flip.bats ' "$G" || false   # a red suite has NO green row to be read back
+
+  printf '0\n' > "$CC_FLIP_CTL"; tick t2            # THE CURE, recorded
+  grep -q '^tests/host-flip.bats ' "$G"
+  # The row carries the epoch and the deployed sha, so a human reading the ledger by hand can tell
+  # WHEN and against WHAT the live layer last passed — the two facts the log line has and no store did.
+  grep -qE '^tests/host-flip\.bats [0-9]+ [0-9a-f]+$' "$G"
+
+  printf '124\n' > "$CC_FLIP_CTL"; tick t3          # a NON-verdict claims nothing, in either direction
+  grep -q '^tests/host-flip.bats ' "$G"
+  grep -q '^tests/host-ok.bats ' "$G"                # …and the neighbour it said nothing about survives
+
+  printf '1\n' > "$CC_FLIP_CTL"; tick t4            # a fresh RED deletes the now-STALE green
+  ! grep -q '^tests/host-flip.bats ' "$G" || false
+  grep -q '^tests/host-ok.bats ' "$G"                # per SUITE, exactly like the cut counter beside it
+}
+
 # CUT_MAX and the COOL-OFF are one mechanism, not two. The cool-off is this lane's only damping —
 # its RED page is sha-keyed and so is naturally per-deploy, but a cut page keyed on the suite would
 # otherwise be rewritten every 600s tick forever, which is the 570-near-duplicate-pages defect
