@@ -160,8 +160,21 @@ tracebacking; `build_working_writer` selects its sink from `blob_account_url`, n
 
 **Falsifier:**
 ```
-cd ~/Development/doc_classifier && git fetch -q origin && git show origin/main:reviewapp/api/routers/run.py | grep -q require_role && git show origin/main:pipeline/backbone/port/build.py | sed -n '116,140p' | grep -q -- --require-hashes && git show origin/main:reviewapp/api/auth.py | grep -qv 'jwt.PyJWKClient(settings.jwks_url, cache_keys=True).get_signing_key_from_jwt'
+cd ~/Development/doc_classifier && git fetch -q origin && git show origin/main:reviewapp/api/routers/run.py | grep -q require_role && git show origin/main:pipeline/backbone/port/build.py | sed -n '116,140p' | grep -q -- --require-hashes && ! git show origin/main:reviewapp/api/auth.py | grep -q 'jwt.PyJWKClient(settings.jwks_url, cache_keys=True).get_signing_key_from_jwt'
 ```
+
+⚠️ **The third conjunct was `| grep -qv '<construct>'` until 2026-08-19 and was VACUOUS — it passed
+on the unfixed file.** `grep -qv PAT` exits 0 as soon as ANY ONE input line fails to match, so over a
+whole file it can only fail if *every* line contains the construct; the correct shape for "this
+construct is absent" is `! … | grep -q PAT`. This repo had already measured and pinned that exact
+rule (`docs/research/codex-probe-screen-2026-08-10/screen-mailbox-forward.md:9`,
+`tests/postland-verify.bats:1168-1170`) before this file was written. Consequence while it stood:
+this cluster's oracle carried **no test of `ce7651b02a17` at all** — the whole chain resolved on the
+`run.py` and `build.py` conjuncts alone and would report GO over an `auth.py` that still constructs
+`PyJWKClient` per request. A false-fixed of the same shape as `LEDGER.md`'s lesson 5, and worse than
+an omitted check because it reads as covered. Corrected in place; nothing else in the falsifier
+changed. *(Found by the 2026-08-19 cloud VM that could not reach this repo's subject — see
+`docs/research/venue-foreign-repo-recurrence-2026-08-17.md` § SEVENTH DISPATCH.)*
 
 **First move:** do `1a9f3323e4d7` **first and out of order** — it is a pre-land gate on an unlanded
 branch, so it must be resolved either just before or as part of M-P-1's merge of `1ae05b9b`;
