@@ -209,15 +209,41 @@ runs.
    sessions hit one cap together.
 2. **`SubagentStop`** — `agent_id` + `agent_transcript_path` + `agent_type`; closes task #192. Must
    stay non-blocking.
-3. **`FileChanged`** — unblocks tasks #58/#74. **Precondition, or it is a silent no-op:** the matcher
-   must be a bare relative path (absolute → 0 rows, measured), and it re-arms only via `CwdChanged`.
+3. **`FileChanged` + `CwdChanged` as ONE unit** — unblocks tasks #58/#74. 🚨 **Wire it per § 3e, not
+   per the obvious reading:** an absolute matcher to ARM, a `*`/no-matcher sibling to DISPATCH, and a
+   `CwdChanged` hook re-emitting `watchPaths`. A bare-basename matcher alone silently re-targets on the
+   first `cd`; omitting `CwdChanged` empties the watch list entirely.
 4. **`PostToolBatch`** — one invocation per batch instead of N, with every `tool_response`. ⚠️ 220-only.
 5. **`InstructionsLoaded`** — the only report of which memory files a session actually loaded. Pick the
    `load_reason` matcher deliberately; it is not inert.
+6. **`PermissionDenied`** — the ONLY hook that observes a refusal: `PreToolUse` sees the same call and
+   cannot see the outcome, and `PostToolUse`/`PostToolUseFailure` never fire on a denial. **105 real
+   classifier denials sit in the transcript corpus that no hook of ours has ever seen.** Fires on BOTH
+   binaries. ⚠️ Its output schema is `{hookEventName, retry:boolean}` and **`retry:true` re-offers the
+   denied call** — the handler must emit EMPTY stdout or it can silently re-drive refused work.
+7. **`PostCompact`** — `trigger` (`manual`|`auto`) and `compact_summary` exist nowhere else, and
+   `trigger` is exactly the field `CONTEXT_ECONOMY_V2` derives today by scraping transcripts. Note
+   `SessionStart source=compact` already fires ~1.3 s earlier, so counting alone does not justify it —
+   the fields do. Handler must never echo or store the ~21.8 KB stdin whole.
+8. **`ConfigChange`** — the only in-session signal that a settings file changed out-of-band, and it
+   names the file: a direct tripwire for this plan's own "one malformed entry silently kills 90
+   registrations" hazard. ⚠️ **Decision-class** — the handler must exit 0 with empty stdout or it
+   silently freezes config/skill hot-reload for the session.
 
 **Do NOT wire:** `MessageDisplay` (redundant with the transcript, and a `displayContent` return blanks
 later text blocks), `WorktreeCreate` / `Elicitation` / `ElicitationResult` (provider- and
-decision-class — PROHIBITION), `Setup`, `TaskCreated`, `DirectoryAdded`, `WorktreeRemove`.
+decision-class — PROHIBITION), `Setup`, `TaskCreated`, `DirectoryAdded`, `WorktreeRemove`,
+`UserPromptExpansion` (`UserPromptSubmit` is already wired fleet-wide and carries the same `prompt_id`
+plus the literal `/hsprobe`, so command name and args are already derivable; the only new field is
+`command_source`, and it is 220-only — wiring it splits fleet behaviour for one attribution field).
+
+🚨 **A live defect found while measuring, not part of W3 but worth more than most of it.**
+`PermissionRequest`'s `tool_use_id` is **always the empty string** — in the live payload captured here
+and in **0 of 3,641** archived records. `hooks/cc-permission-beacon.sh` builds its grant-vs-deny
+attribution on matching that field, so **that attribution can never succeed and is silently inert
+today**; it only looks healthy because resolution falls through to `PostToolUse`'s cleared-tool path.
+This is a real bug in a hook we already run fleet-wide, and it is exactly the class the § 5 learning
+"a green test can certify a bug" describes. It needs its own fix, separate from any new wiring.
 
 ## 3. THE LEDGER — every event, and what it still owes
 
@@ -248,7 +274,7 @@ the binary and invocation mode that produced the verdict. Commands: § 3a, keyed
 | 4 | `PostToolBatch` | ✗ / ✓ | FIRES (220) · NOT-APPLICABLE (114, absent from enum) | 220 · headless `-p` | **WIRE** |
 | 5 | `Notification` | ✓ / ✓ | FIRES | 220 · headless `-p` | *wired* |
 | 6 | `UserPromptSubmit` | ✓ / ✓ | FIRES | 114 + 220 · headless `-p` | *wired* |
-| 7 | `UserPromptExpansion` | ✗ / ✓ | FIRES (220) · NOT-APPLICABLE (114, absent from enum) | 220 · headless `-p` | consider |
+| 7 | `UserPromptExpansion` | ✗ / ✓ | FIRES (220) · NOT-APPLICABLE (114, absent from enum) | 220 · headless `-p` | **DROP** |
 | 8 | `SessionStart` | ✓ / ✓ | FIRES | 114 + 220 · headless `-p` **and** `--init-only` | *wired* |
 | 9 | `SessionEnd` | ✓ / ✓ | FIRES | 114 + 220 · headless `-p` **and** `--init-only` | *wired* |
 | 10 | `Stop` | ✓ / ✓ | FIRES | 114 + 220 · headless `-p` | *wired* |
@@ -256,21 +282,21 @@ the binary and invocation mode that produced the verdict. Commands: § 3a, keyed
 | 12 | `SubagentStart` | ✓ / ✓ | FIRES | 220 · headless `-p` | consider |
 | 13 | `SubagentStop` | ✓ / ✓ | FIRES | 220 · headless `-p` | **WIRE** |
 | 14 | `PreCompact` | ✓ / ✓ | FIRES | 114 · headless `-p` (`/compact`) | *wired* |
-| 15 | `PostCompact` | ✓ / ✓ | FIRES | 114 + 220 · headless `-p` (`--resume` + `/compact`) | consider |
+| 15 | `PostCompact` | ✓ / ✓ | FIRES | 114 + 220 · headless `-p` (`--resume` + `/compact`) | **WIRE** |
 | 16 | `PermissionRequest` | ✓ / ✓ | FIRES (interactive) · NOT-APPLICABLE (headless — no dialog without a TTY) | 220 · interactive TUI, production | *wired* |
-| 17 | `PermissionDenied` | ✓ / ✓ | FIRES | 220 · headless `-p`, `--permission-mode auto` | consider |
+| 17 | `PermissionDenied` | ✓ / ✓ | FIRES | **114 + 220** · headless `-p`, `--permission-mode auto` | **WIRE** |
 | 18 | `Setup` | ✓ / ✓ | FIRES | 114 + 220 · `--init-only` (no model call) | **DROP** |
 | 19 | `TeammateIdle` | ✓ / ✓ | FIRES | 220 · interactive, production (27,986 dispatches) | *wired* |
 | 20 | `TaskCreated` | ✓ / ✓ | FIRES | 220 · headless `-p` (`TaskCreate` tool) | **DROP** |
 | 21 | `TaskCompleted` | ✓ / ✓ | FIRES | 220 · headless `-p` (`TaskUpdate` tool) | *wired* |
 | 22 | `Elicitation` | ✓ / ✓ | FIRES | 220 · headless `-p`, purpose-built MCP server | **PROHIBITION** (decision-class) |
 | 23 | `ElicitationResult` | ✓ / ✓ | FIRES | 220 · headless `-p`, same run | **PROHIBITION** (decision-class) |
-| 24 | `ConfigChange` | ✓ / ✓ | FIRES | 114 + 220 · headless `-p` | consider |
+| 24 | `ConfigChange` | ✓ / ✓ | FIRES | 114 + 220 · headless `-p` | **WIRE** (decision-class — empty stdout) |
 | 25 | `WorktreeCreate` | ✓ / ✓ | **HOSTILE** | 220 · provider contract read + fleet incident | **PROHIBITION** |
 | 26 | `WorktreeRemove` | ✓ / ✓ | FIRES | 220 · headless `-p`, `ExitWorktree` in a /tmp repo | **DROP** |
 | 27 | `InstructionsLoaded` | ✓ / ✓ | FIRES, and it NAMES the file | 114 + 220 · headless `-p` | **WIRE** |
-| 28 | `CwdChanged` | ✓ / ✓ | FIRES | 114 + 220 · headless `-p` | **keep** (see below) |
-| 29 | `FileChanged` | ✓ / ✓ | FIRES | 114 + 220 · headless `-p` | **WIRE** (matcher precondition) |
+| 28 | `CwdChanged` | ✓ / ✓ | FIRES | 114 + 220 · headless `-p` | **WIRE** — mandatory if 29 is wired |
+| 29 | `FileChanged` | ✓ / ✓ | FIRES | 114 + 220 · headless `-p` | **WIRE** — but only as the PAIR in § 3e |
 | 30 | `DirectoryAdded` | ✗ / ✓ | FIRES (220) · NOT-APPLICABLE (114, absent from enum) | 220 · headless, `register_repo_root` control request | **DROP** |
 | 31 | `MessageDisplay` | ✗ / ✓ | FIRES (220) · NOT-APPLICABLE (114, absent from enum) | 220 · headless `-p` **and** interactive TUI | **DROP** |
 
@@ -490,6 +516,46 @@ decided; none of them can change a disposition:
 | `MessageDisplay` TUI rate on a SECOND sample | n=1 interactive message | The disposition is DROP on redundancy, so the rate no longer gates anything |
 | Provider N-hook resolution order | settling it means registering a second observer on a live provider | That is the prohibition itself — read it from source |
 
+## 3e. 🚨 `FileChanged` + `CwdChanged` are ONE wiring, and the obvious prescription is BACKWARDS
+
+**This section exists because the first version of this ledger shipped the wrong instruction.** It
+said "the matcher must be a bare relative path; absolute → 0 rows". The dispatch half of that is true
+and the *advice* derived from it is inverted. Refuted by an independent verifier that reproduced the
+original result twice and then ran the A/B that breaks it.
+
+**Two different mechanisms, and the naive reading collapses them:**
+
+| | ARMING (does the watcher watch this path?) | DISPATCH (does the hook run?) |
+|---|---|---|
+| absolute matcher | **works, and survives a `cd`** — `isAbsolute(x)?x:join(t,x)` passes absolutes through untouched | **never fires** — the matcher is regex-tested against a bare BASENAME, so an absolute path cannot match |
+| bare basename | armed relative to the CURRENT cwd | fires — but see below |
+| `*` / no matcher | — | fires for every watched path |
+
+**The trap:** a `cd` inside any Bash tool call **wipes the dynamic watch list and re-bases every
+RELATIVE matcher onto the new cwd.** So a bare-basename registration silently stops watching the file
+it was wired for and starts watching a same-named file somewhere else. Measured: after a `cd`, the
+`probe3.txt` matcher fired for `/private/tmp/hs/fc3/sub/probe3.txt` — a *different file* — while the
+originally-armed `dyn.txt` produced **zero** rows.
+
+**Therefore the correct wiring is a PAIR plus a re-arm, and none of the three parts is optional:**
+
+1. an **absolute-path** matcher registration — to ARM the watch durably across `cd`;
+2. a **`*` / no-matcher** sibling registration — to actually DISPATCH;
+3. a **`CwdChanged`** hook that re-emits `watchPaths` — because `onCwdChanged` **overwrites** the
+   dynamic list wholesale with whatever the CwdChanged hooks return (`r = A.watchPaths`). With no
+   CwdChanged registration that list becomes **empty on the first `cd`**, and every dynamically-armed
+   path is lost silently.
+
+**So `CwdChanged` cannot be DROPped while `FileChanged` is wired — they are mutually dependent, and
+the inherited ledger's dispositions (WIRE FileChanged, DROP CwdChanged) were incompatible with each
+other without noticing.** Source: `Mf8`/`oC5` (matcher filter, 114:140260 and 220:430421) and
+`HJ1()`/`Sx_()` (the wipe-and-rebuild, 114:135528 and 220:171001+).
+
+One over-generalisation also did not survive: the hazard "new_cwd can permanently misname the
+session's directory" is conditional on the REVERT path, i.e. an out-of-scope `cd`. An in-scope `cd`
+into a strict subdirectory was measured with no revert at all — `new_cwd` was accurate and the session
+genuinely followed.
+
 ## 3c. Both HOLDs are discharged — the two numbers that were missing
 
 | | measured | consequence |
@@ -515,12 +581,22 @@ was three *prescriptions* — `FileChanged`'s wiring advice (backwards), `CwdCha
 FileChanged's only re-arm point), and `InstructionsLoaded`'s matcher being inert (it is the
 `load_reason`, and it selects which loads you observe). All three corrections are folded into § 3.
 
-🚨 **The gap, stated plainly: the `permission`, `provider` and `session` groups have NO independent
-refutation pass.** The 15-agent workflow died after 8 of 15 returns — every agent process was gone with
-three still owing results. Their measurements survive because they are *data, not prose*: the raw
-payload logs under `/tmp/hs/log/*.tsv` outlived the agents, and **every verdict from those three groups
-in § 3 was read by the lead directly out of those payloads**, not taken from an agent's summary. Two
-checks were run in place of the missing refuters:
+⚠️ **CORRECTED 2026-09-06 — an earlier revision of this section was wrong about its own scope.** It
+said the workflow "died after 8 of 15 returns" and that THREE groups lacked refutation. The run had
+not died; it was still executing and completed later (13 agents, 11 returned, **2 stalled**). The
+lead read a zero-process snapshot as death — the same absence-is-not-evidence error this plan is
+about, made about its own instrument. What is actually true:
+
+- **`fs`, `display` and `session` DID get an independent refutation pass**, and it changed the ledger
+  (§ 3e, and the disposition list above).
+- **`permission` and `provider` are the two that stalled** (their `pipeline[0]`/`pipeline[1]` agents
+  made no progress across all 6 attempts). Those two groups — `PermissionRequest`, `PermissionDenied`,
+  `Elicitation`, `ElicitationResult`, `WorktreeRemove` — have **no adversarial pass**.
+
+Their measurements survive because they are *data, not prose*: the raw payload logs under
+`/tmp/hs/log/*.tsv` outlived the agents, and **every verdict from those groups in § 3 was read by the
+lead directly out of those payloads**, not taken from an agent's summary. Two checks were run in place
+of the missing refuters:
 
 1. **Fabrication check.** Three payloads carried hand-shaped session ids
    (`11111111-2222-…`, `33333333-4444-…`), which is what a synthesized payload would look like. They
@@ -604,9 +680,20 @@ called reviewed. It should not need to re-measure anything.
   that was writing this very section. Data in a heredoc is not code, but the arm text-matches the whole
   command string. Cosmetic here, and deliberately NOT "fixed" — widening or narrowing that arm is what
   memory `denylist-enumerates-spellings-not-the-class` warns against. Work around it with the Write tool.
-- **The FileChanged absolute-path matcher is a silent no-op** — measured by a three-way A/B in ONE run
-  (absolute → 0 rows, `*` → 3, bare basename → 1), not inferred. And its watch list resolves relative to
-  **cwd**, which is why `CwdChanged` cannot be dropped: it is the only re-arm point.
+- **The FileChanged absolute-path matcher never DISPATCHES** — measured by a three-way A/B in ONE run
+  (absolute → 0 rows, `*` → 3, bare basename → 1), not inferred. ⚠️ **But do not derive the obvious
+  prescription from it, which is what this plan did and shipped.** Arming and dispatch are different
+  mechanisms: the absolute matcher is the only `cd`-durable way to ARM, while a bare basename is
+  silently RE-BASED onto the new cwd and starts watching a different file. The correct wiring is a
+  pair plus a `CwdChanged` re-arm — § 3e. **The generalizable half: when one field feeds two
+  mechanisms, an A/B that measures only the second yields advice that is confidently backwards.**
+- 🚨 **A zero-process snapshot is not death, and I made that error about my own instrument.** The
+  15-agent workflow was declared dead after a `ps` showed no `claude.exe` and its agent files had been
+  idle 16–33 minutes. It was still running; it completed later and its refutation overturned two
+  dispositions in this very ledger (§ 3e). Idleness is not termination, and the harness's own
+  completion notification is the only authority on whether a run finished. This is the same
+  absence-is-not-evidence failure the whole plan documents, committed by the plan's own author against
+  the tool measuring it — which is why it is recorded here rather than quietly fixed.
 
 ## 6. Self-management protocol for the driving session
 
@@ -622,6 +709,22 @@ called reviewed. It should not need to re-measure anything.
 
 ## Status log
 
+- **2026-09-06 (later)** — **W4 partially landed, and it overturned two of this ledger's own
+  dispositions.** The workflow declared dead in the entry below had not died; it completed (13 agents,
+  11 returned, 2 stalled) and its refutation pass arrived afterwards. Corrections applied:
+  **`FileChanged`'s wiring prescription was BACKWARDS and is rewritten as § 3e** (arming and dispatch
+  are different mechanisms; the fix is an absolute matcher + a `*` sibling + a `CwdChanged` re-arm);
+  **`CwdChanged` DROP → WIRE**, since `onCwdChanged` overwrites the watch list wholesale and is the
+  only re-arm point, making the inherited pair of dispositions self-contradictory; **`PermissionDenied`
+  also FIRES on 114** and rises to WIRE (the only observer of a refusal — 105 classifier denials in the
+  corpus no hook has seen; `retry:true` in its output schema makes empty stdout mandatory);
+  **`PostCompact` and `ConfigChange` → WIRE** (unique fields, and ConfigChange is decision-class);
+  **`UserPromptExpansion` → DROP** (redundant with the already-wired `UserPromptSubmit`).
+  Also recorded: `PermissionRequest`'s `tool_use_id` is always `""` (0 of 3,641 archived records), so
+  `cc-permission-beacon.sh`'s grant-vs-deny attribution is **silently inert today** — a live defect,
+  not a plan item. Refutation still missing for `permission` and `provider` only (§ 3d), not three
+  groups as previously stated. Method lesson added to § 5: a zero-process snapshot is not death, and
+  that error was made by this plan's author about the plan's own instrument.
 - **2026-09-06** — **W1 + W2 DONE. The measurement is complete: 31/31 events on 220 and 27/27 on 114
   carry a verdict from a command that was run** (§ 3 table, § 3a commands). The two provisional
   non-verdict states are gone from this file entirely. Method: a 15-agent ultracode Workflow
