@@ -264,3 +264,91 @@ feed() { # <file_path> <event> <session_id>  → writes $PAYLOAD
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
+
+# ── § 3e PART 3: the CwdChanged re-arm, which had NO working implementation until 2026-09-07 ────
+#
+# 🚨 THESE ARE THE ARMS THAT FAIL AGAINST THE PRE-FIX HANDLER. § 3e mandates a THREE-part wiring
+# and part 3 is a CwdChanged hook re-emitting `watchPaths`, because `onCwdChanged` OVERWRITES the
+# dynamic watch list wholesale with whatever the CwdChanged hooks return — so with no re-emit the
+# list is EMPTY after the first `cd` and every dynamically-armed path is lost silently.
+#
+# The handler could not do it. Its `[ -n "${FILE_PATH:-}" ] || exit 0` guard sat ABOVE the
+# watchPaths emit, and a CwdChanged payload carries no file_path, so the early exit fired first:
+#   CwdChanged  → stdout EMPTY        FileChanged → {"hookSpecificOutput":{…}}
+# measured on both arms with CC_FILECHANGED_WATCHLIST set. A registration on CwdChanged would have
+# read GREEN over a hook that could not perform the one job it was registered for — which is why
+# 0017 waits for this fix rather than shipping alongside 0016.
+#
+# One mutant per SITE, so a green run credits each: arm 1 pins the guard's PLACEMENT (restore the
+# early exit and it goes red), arm 2 pins the hookEventName's SOURCE (hard-code the constant back
+# and it goes red), arm 3 pins the direction the fix must NOT overshoot in — narrowing the guard to
+# the logging path must not start writing unattributable rows.
+
+cwd_payload() { # <old_cwd> <new_cwd> <session_id>
+  jq -nc --arg o "$1" --arg n "$2" --arg s "$3" \
+    '{session_id:$s,transcript_path:"/tmp/t.jsonl",cwd:$o,
+      hook_event_name:"CwdChanged",new_cwd:$n}'
+}
+
+@test "a CwdChanged payload EMITS watchPaths — § 3e part 3, the re-arm" {
+  export CC_FILECHANGED_WATCHLIST="$BATS_TEST_TMPDIR/watch-cwd"
+  printf '/Users/x/mailbox.md\n/Users/x/other.md\n' > "$CC_FILECHANGED_WATCHLIST"
+  cwd_payload /private/tmp/hs/fc /private/tmp/hs/cwdtarget sid-cwd > "$BATS_TEST_TMPDIR/cwd.json"
+  run "$HOOK" < "$BATS_TEST_TMPDIR/cwd.json"
+  [ "$status" -eq 0 ]
+  # the pre-fix handler exits before this line ever runs, so $output is empty and this fails
+  echo "$output" | grep -q "watchPaths"
+  echo "$output" | jq -e '.hookSpecificOutput.watchPaths | length == 2' > /dev/null
+  echo "$output" | grep -q "/Users/x/mailbox.md"
+}
+
+@test "the emitted hookEventName names the event being HANDLED, not a constant" {
+  # Hard-coded "FileChanged" would label a CwdChanged re-arm with an event that did not fire it.
+  export CC_FILECHANGED_WATCHLIST="$BATS_TEST_TMPDIR/watch-name"
+  printf '/Users/x/mailbox.md\n' > "$CC_FILECHANGED_WATCHLIST"
+  cwd_payload /tmp/a /tmp/b sid-name > "$BATS_TEST_TMPDIR/cwd2.json"
+  run "$HOOK" < "$BATS_TEST_TMPDIR/cwd2.json"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.hookSpecificOutput.hookEventName == "CwdChanged"' > /dev/null
+  # and the FileChanged arm still says FileChanged — a name read from the payload, not swapped
+  feed /private/tmp/hs/fc/probe.txt change sid-name2
+  run "$HOOK" < "$PAYLOAD"
+  echo "$output" | jq -e '.hookSpecificOutput.hookEventName == "FileChanged"' > /dev/null
+}
+
+@test "a CwdChanged payload still writes NO log row — the guard was narrowed, not deleted" {
+  # The over-wide fix. A CwdChanged payload has no file_path, so a row for it would name no file
+  # and no later query could attribute it; narrowing the guard to the logging path must preserve
+  # exactly the behaviour the no-file_path arm above pins.
+  export CC_FILECHANGED_WATCHLIST="$BATS_TEST_TMPDIR/watch-nolog"
+  printf '/Users/x/mailbox.md\n' > "$CC_FILECHANGED_WATCHLIST"
+  cwd_payload /tmp/a /tmp/b sid-nolog > "$BATS_TEST_TMPDIR/cwd3.json"
+  run "$HOOK" < "$BATS_TEST_TMPDIR/cwd3.json"
+  [ "$status" -eq 0 ]
+  [ ! -f "$LOG" ]
+  # it did emit, so the absent log is the guard working rather than the handler exiting early
+  echo "$output" | grep -q "watchPaths"
+}
+
+@test "a CwdChanged payload with NO watchlist prints nothing — the default stays silent" {
+  cwd_payload /tmp/a /tmp/b sid-quiet > "$BATS_TEST_TMPDIR/cwd4.json"
+  run "$HOOK" < "$BATS_TEST_TMPDIR/cwd4.json"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "the '*' matcher is judged as ITSELF, not pathname-expanded to the cwd" {
+  # 🚨 THE VACUOUS PASS. `--check-matcher` splits on `|` with an UNQUOTED expansion, which is also
+  # subject to pathname expansion — so `*` globbed to whatever files sat in the caller's cwd and
+  # the checker judged THOSE. It exited 0 (bare basenames are accepted), so the star arm above
+  # passed for entirely the wrong reason and could never have rejected a bad `*`. Measured
+  # 2026-09-07: migrations/0017 asserting its own dispatch matcher printed 36 NOTICE lines naming
+  # this repo's own files. The star is the dispatch half of the § 3e pair, so a checker blind to it
+  # is blind to the half that decides whether the hook ever runs.
+  cd "$BATS_TEST_TMPDIR"
+  touch alpha.txt beta.txt
+  run "$HOOK" --check-matcher '*'
+  [ "$status" -eq 0 ]
+  # pre-fix this printed a NOTICE per file in cwd; a correctly-judged `*` says nothing at all
+  [ -z "$output" ]
+}
