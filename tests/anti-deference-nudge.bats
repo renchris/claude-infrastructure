@@ -379,3 +379,56 @@ fired()  { echo "$1" | grep -q '"decision":"block"'; }   # hook stdout ⇒ did i
   [ "$status" -eq 0 ]
   jq -e 'select(.reason=="category-not-idea")' "$ANTIDEF_IDL" >/dev/null
 }
+
+@test "opaque-identifier: fires on two or more unexpanded 12-hex ids" {
+  local msgs=(
+    "Nothing is open on my side. Your queue is 0aa3febf3143 and b1614375d051."
+    "Waiting on you: answer 0aa3febf3143, then b1614375d051, then deploy."
+    "Blocked on 408427e74888 plus 02ba4e52389a."
+  )
+  for m in "${msgs[@]}"; do
+    local tx; tx="$(mkfix "$m")"
+    run runhook "$tx"
+    [ "$status" -eq 0 ]
+    if ! fired "$output"; then echo "DID NOT FIRE (should have): $m" >&2; false; fi
+  done
+}
+
+@test "opaque-identifier: SILENT once ONE id is glossed, in either order" {
+  # (b) is the shape this hook's own nudge text recommends — firing on compliance would be a defect.
+  local msgs=(
+    "Your queue is 0aa3febf3143 (the store-version timing) and b1614375d051."
+    "May the sync endpoint read permissions inside the transaction it guards? (b1614375d051) And the store version (0aa3febf3143)?"
+    "Two calls: 0aa3febf3143 — when to ship the store version; and b1614375d051."
+  )
+  for m in "${msgs[@]}"; do
+    local tx; tx="$(mkfix "$m")"
+    run runhook "$tx"
+    [ "$status" -eq 0 ]
+    if fired "$output"; then echo "FIRED (should be silent): $m" >&2; false; fi
+  done
+}
+
+@test "opaque-identifier: SILENT on commit shas and on a single id" {
+  # Naming a sha is what the EVIDENCE slot asks for; it must never be punished.
+  local msgs=(
+    "Landed 90e1c70c2 through c34475d1, all ancestors of origin/main; 828264453 verified."
+    "Filed as 2130e8a40cc2 so it survives the pane."
+  )
+  for m in "${msgs[@]}"; do
+    local tx; tx="$(mkfix "$m")"
+    run runhook "$tx"
+    [ "$status" -eq 0 ]
+    if fired "$output"; then echo "FIRED (should be silent): $m" >&2; false; fi
+  done
+}
+
+@test "opaque-identifier: the block reason carries the expansion corrective, not the Minto one" {
+  local tx; tx="$(mkfix "Nothing is open on my side. Your queue is 0aa3febf3143 and b1614375d051.")"
+  run runhook "$tx"
+  [ "$status" -eq 0 ]
+  fired "$output"
+  echo "$output" | grep -q "Opaque-identifier"
+  echo "$output" | grep -q "expanded at first use"
+  ! echo "$output" | grep -q "tells the kind, not the idea"
+}

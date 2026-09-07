@@ -172,7 +172,36 @@ CATEGORY_TELLS='(^|[^a-z])(one|two|three|four|a few|some|several|[0-9]{1,3}) (it
 has_tell=0; printf '%s' "$MSG" | grep -iqE "$TELLS"      && has_tell=1
 has_done=0; printf '%s' "$MSG" | grep -iqE "$DONE_TELLS" && has_done=1
 has_cat=0;  printf '%s' "$MSG" | grep -iqE "$CATEGORY_TELLS" && has_cat=1
-{ [ "$has_tell" -eq 1 ] || [ "$has_done" -eq 1 ] || [ "$has_cat" -eq 1 ]; } || abstain "no-tell"
+
+# ── OPAQUE-IDENTIFIER (2026-09-07) ──────────────────────────────────────────────────────────────
+# THE SAME GENERATOR AS category-not-idea, on the rule with the LARGER measured effect. CLAUDE.md
+# § Session Close: "Every identifier is expanded at first use in that same message" — ≥2 opaque hex
+# ids measured at 49.2% vs 33.6% operator-reply failure (+15.5pp, p=0.0001), ~10x the predictive
+# power of length. It cites its own worked example: a close whose blocking question was "G-A is the
+# one thing I need from you", answered by the operator with "What is G-A, how do I give it to you".
+# That rule had NO chokepoint while its weaker sibling above had this hook — and a lead duly shipped
+# ~10 consecutive closes citing bare 12-hex decision ids, until the operator said "I have ZERO idea
+# what 0aa3febf3143 and b1614375d051 mean".
+# NARROW BY CONSTRUCTION, bias to false-negative:
+#   * ONLY the 12-hex cc-decide/cc-backlog id shape. Commit shas (7-9 hex) are legitimate evidence
+#     and must never fire this — naming a sha is what the EVIDENCE slot asks for.
+#   * Needs TWO OR MORE distinct ids (CLAUDE.md's own measured threshold), and
+#   * fires ONLY if NOT ONE of them is glossed. A single "abc123abc123 (the store-version timing)"
+#     anywhere in the message → silent. Name one and this never fires.
+OPAQUE_ID_RE='(^|[^0-9a-f])[0-9a-f]{12}([^0-9a-f]|$)'
+# glossed = id followed by '(' or an em/en dash or ':' introducing words — i.e. it is explained here
+# Two glossed shapes, BOTH silent — the second is the one this hook's own nudge text recommends,
+# so failing to allow it would fire on compliance: (a) id THEN the explanation
+# ("abc123abc123 — the store-version timing"), and (b) the explanation THEN the id in brackets
+# ("may the endpoint read permissions inside its transaction? (abc123abc123)").
+_bt="$(printf '\140')"   # backtick, built not literal: a literal one trips SC2016 here
+OPAQUE_GLOSS_RE="([0-9a-f]{12}${_bt}?[[:space:]]*[(:—–-][[:space:]]*[${_bt}\"'(a-z]|[([]${_bt}?[0-9a-f]{12})"
+n_ids=$(printf '%s' "$MSG" | grep -oE "$OPAQUE_ID_RE" 2>/dev/null | tr -cd '0-9a-f\n' | sort -u | grep -c . || true)
+n_gloss=$(printf '%s' "$MSG" | grep -coE "$OPAQUE_GLOSS_RE" 2>/dev/null || true)
+case "$n_ids"   in ''|*[!0-9]*) n_ids=0 ;;   esac
+case "$n_gloss" in ''|*[!0-9]*) n_gloss=0 ;; esac
+has_id=0; { [ "$n_ids" -ge 2 ] && [ "$n_gloss" -eq 0 ]; } && has_id=1
+{ [ "$has_tell" -eq 1 ] || [ "$has_done" -eq 1 ] || [ "$has_cat" -eq 1 ] || [ "$has_id" -eq 1 ]; } || abstain "no-tell"
 
 # ── DEFERRING TO A LEAD IS NOT THE DEFERENCE DEFECT (2026-08-02) ────────────────────────────────
 # This hook's premise is one session ↔ one human: its reason text says "the operator cannot act on
@@ -276,6 +305,11 @@ elif [ "$has_cat" -eq 1 ]; then
   # phrasing defect whether or not the ledger agrees. The HARD_CORE genuine carve-out above still
   # suppresses it (bias stays toward false-negative: never nag a real blocker).
   FIRE_KIND="category-not-idea"
+elif [ "$has_id" -eq 1 ]; then
+  # Ledger-INDEPENDENT, like category-not-idea: citing an unexpanded id is a phrasing defect whether
+  # or not the ledger agrees. Placed after the three established kinds so it only fires on a message
+  # nothing else caught.
+  FIRE_KIND="opaque-identifier"
 elif [ "$has_done" -eq 1 ]; then
   # An HONEST done-assertion over a clean ledger, carrying no category handover → still silent
   # (unchanged behaviour; this arm exists so the has_cat check above is REACHABLE for a message
@@ -309,6 +343,8 @@ if [ "$FIRE_KIND" = "false-done" ]; then
   TRIGGER="$(printf '%s' "$MSG" | grep -ioE "$DONE_TELLS" 2>/dev/null | head -1 | tr -d '\n')"
 elif [ "$FIRE_KIND" = "category-not-idea" ]; then
   TRIGGER="$(printf '%s' "$MSG" | grep -ioE "$CATEGORY_TELLS" 2>/dev/null | head -1 | tr -d '\n')"
+elif [ "$FIRE_KIND" = "opaque-identifier" ]; then
+  TRIGGER="$(printf '%s' "$MSG" | grep -oE "$OPAQUE_ID_RE" 2>/dev/null | tr -cd '0-9a-f\n' | sort -u | head -2 | tr '\n' ' ' | sed 's/ $//')"
 else
   TRIGGER="$(printf '%s' "$MSG" | grep -ioE "$TELLS" 2>/dev/null | head -1 | tr -d '\n')"
 fi
@@ -316,7 +352,9 @@ log_idl fired "$FIRE_KIND" \
   "$(jq -cn --arg tell "$TRIGGER" --argjson count "$((N+1))" --argjson max "$MAX" \
       '{tell:$tell,count:$count,max:$max}')"
 
-if [ "$FIRE_KIND" = "category-not-idea" ]; then
+if [ "$FIRE_KIND" = "opaque-identifier" ]; then
+  reason="Opaque-identifier: you handed the operator ${n_ids} bare hex ids and expanded NONE of them (${TRIGGER}). CLAUDE.md § Session Close: 'Every identifier is expanded at first use in that same message' — ≥2 unexpanded ids measured at 49.2% vs 33.6% reply-failure (+15.5pp, p=0.0001), ~10x the effect of length. An id is a filing key, not a fact: the operator cannot answer '0aa3febf3143' without a round-trip asking what it IS, and you already know. Re-close with the QUESTION as the subject and the id in parentheses after it — not 'answer b1614375d051' but 'may the sync endpoint read permissions inside the transaction it guards? (b1614375d051)'. Gloss ONE id anywhere and this never fires. (opaque-identifier nudge $((N+1))/${MAX})"
+elif [ "$FIRE_KIND" = "category-not-idea" ]; then
   reason="Category-not-idea: you handed work over by COUNT, not by CONTENT (matched: \"${TRIGGER}\"). That is the blank assertion CLAUDE.md § Session Close bans, citing Minto Ch 7 p. 94 — \"'There are three problems' tells the kind, not the idea\". The operator cannot act on a count; they have to spend a round-trip asking \"which one?\". You almost certainly already know the answer — say it. Re-close with line 1 naming the THING: not \"one item is yours\" but \"the Fly deploy trigger still points at main, so every /ship deploys\". Name it after a ':' or a dash and this never fires. (category-not-idea nudge $((N+1))/${MAX})"
 else
   detail=""
