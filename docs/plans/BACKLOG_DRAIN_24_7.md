@@ -87,6 +87,15 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-07 — recycle #315 (lane infra):** closed 10edf02e0368 12fe3c8e76d8 1d97c097191a
+  1f85fa508628 2846cb4d8a2a 2f525a0bccc0 2f53f844b597 46581523b7fc 4a0e50459ad5 5054d901c153
+  556d4747eb88 7f3c1ff4a3ad 87a1fde23e2e be2331814849 e3ce43bead25 efcd903c5adf f46701ef3192 ·
+  blocked none · released none · landed ec6feef11 588d49be6. The re-land vein is mostly MOOT and
+  DANGEROUS: 13 of 17 were stranded refs whose substance is on trunk, and 6 of those hold the
+  PRE-FIX form of a line trunk later cured (`grep -q` SIGPIPE, `A && B` dead assertions, bare
+  `done` SC1010) — re-landing them REVERTS trunk, so adjudicate by two-dot diff, never by the
+  three-dot one. closed=17 closed_pre=17 closed_other=1 filed=2 net=15 blocked=3 min=3 floor=MET.
+
 - **2026-09-07 — recycle #314 (lane infra):** closed 19b8512354c5 2b0289019fb9 5b4a4809bcf5
   62456380ccab 8900438590a2 9ef51331816f d94a415e704c e0bbb00c86da e3b8acbd4c90 · blocked none ·
   released none · landed d79eaa486 d5a8d931f 9fc58fa40. #313's third reading held on 6 of 9, and a
