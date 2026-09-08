@@ -431,10 +431,23 @@ green_tree_shas() {
   return 0
 }
 
-# → the 1-based DEPTH in origin/main of the newest commit whose tree carries a green stamp, within
-# BLIND_SCAN commits; empty when there is none. `> SCAN_N` is the structural-blindness verdict.
-# ONE git process + one awk, both bounded by -n: this runs only at escalation time, but a probe that
-# could hang would still be a probe that can wedge a 600s job.
+# → "<1-based DEPTH in origin/main> <commit sha>" for the newest commit whose tree carries a green
+# stamp, within BLIND_SCAN commits; empty when there is none. `> SCAN_N` says the ladder could not
+# SEE that green — which is only half of a diagnosis, so the SHA comes back with the depth.
+# ONE git process + one awk, both bounded by -n: this runs at escalation time and on the in-budget
+# wait, but a probe that could hang would still be a probe that can wedge a 600s job.
+#
+# 🚨 THE SHA IS NOT DECORATION — VISIBILITY IS NOT THE BINDING PREDICATE, DESCENDANCY IS (2026-09-07).
+# This probe used to return a depth alone, and every caller then reasoned as if "a green exists that
+# the ladder cannot see" implied "widening the scan surfaces something deployable". It does not. T1's
+# test is `merge-base --is-ancestor HEAD <green>` with the STRICT half — a green at or BELOW live HEAD
+# is history, and widening the window can only ever surface more of it. Measured on the live host that
+# day: the newest green sat at depth 278 against SCAN_N=200 while live HEAD sat at depth 16, so the
+# escalation named `scan-window-blind`, prescribed `CC_DEPLOY_SCAN=328`, and that command changed the
+# refusal's WORDING and nothing else — every clause of the page was true and its conclusion was false
+# (memory: wrong-cause-corroborated-by-true-metric). The sha is what lets the caller ask the question
+# the gate actually asks. Testing only the NEWEST green is sufficient because a green ABOVE live HEAD
+# is newer than every green at or below it, so it is the first one this walk meets.
 #
 # 🚨 THE LIST ARRIVES AS A FILE, NEVER AS `awk -v`, AND THAT IS AN INTERPRETER FACT, NOT A STYLE
 # CHOICE (measured 2026-08-10 on this box, in the replay that dispatched this comment). macOS
@@ -446,16 +459,18 @@ green_tree_shas() {
 # because that PATH resolves a homebrew awk that accepts it. A test that never pins the interpreter
 # cannot see this class of bug at all (memory: hermetic-in-stubs-not-in-interpreter), which is why
 # the blindness test now runs with PATH=/usr/bin:/bin.
-blind_green_depth() {
+blind_green_probe() {
   local shas
   shas="$(green_tree_shas)" || return 3       # the store could not be scanned — do not guess for it
   [ -n "$shas" ] || return 0
   # Two-file awk: FNR==NR loads the green set from the first input, then FNR on the second IS the
   # depth. Portable to BWK awk, gawk and mawk alike, and it never puts data in the program text.
+  # The second input is now `%H %T` rather than `%T` alone, so the matched line carries its own
+  # commit sha and the caller never has to re-walk the log to find out WHICH commit answered.
   local out
   local rc=0
-  out="$(g log --format=%T -n "$BLIND_SCAN" origin/main 2>/dev/null \
-         | awk 'FNR==NR { if ($0 != "") m[$0]=1; next } m[$0] { print FNR; exit }' \
+  out="$(g log --format='%H %T' -n "$BLIND_SCAN" origin/main 2>/dev/null \
+         | awk 'FNR==NR { if ($0 != "") m[$0]=1; next } ($2 in m) { print FNR, $1; exit }' \
                <(printf '%s\n' "$shas") - 2>/dev/null)" || rc=$?
   # 🚨 OUTPUT OUTRANKS rc, AND THE ORDER IS THE ENTIRE GUARD — THE OBVIOUS SPELLING IS INVERTED.
   # awk exits the instant it matches, so on the SUCCESS path git is SIGPIPEd and this pipeline
@@ -469,6 +484,22 @@ blind_green_depth() {
   if [ -n "$out" ]; then printf '%s' "$out"; return 0; fi
   [ "$rc" -eq 0 ] || return 3                 # empty AND the pipeline broke ⇒ no answer was given
   return 0                                    # empty at rc 0 ⇒ a real "no green in the window"
+}
+
+# → true when <sha> is a STRICT descendant of the live layer, i.e. exactly the tree T1 would have
+# been allowed to select had the window reached it. This is the whole discriminator between the two
+# no-green states, and it is the gate's own predicate rather than a proxy for it:
+#   · TRUE  ⇒ raising CC_DEPLOY_SCAN surfaces a DEPLOYABLE green (`scan-window-blind`).
+#   · FALSE ⇒ the green is at or below the layer, so widening is a NO-OP by construction — every
+#             wider window returns more ancestors and the gate refuses each for the same reason
+#             (`no-green-descendant`).
+# `merge-base --is-ancestor X X` is TRUE, so the sha≠HEAD test is not decoration: without it a green
+# sitting exactly ON the live layer reads as deployable, which is the same non-strict-ancestry slip
+# T1 itself made at :1779 and had to be fixed for.
+green_above_head() { # <sha>
+  [ -n "${1:-}" ] || return 1
+  [ "$1" != "$HEAD_SHA" ] || return 1
+  g merge-base --is-ancestor "$HEAD_SHA" "$1" >/dev/null 2>&1
 }
 
 # → "<hours>" since our last sanctioned advance, or the literal "unknown". UNKNOWN IS REPORTED, NEVER
@@ -490,8 +521,12 @@ last_advance_hours() {
 
 # The CULPRIT, which is the whole reason this is not just a louder page. "The lane refuses" is a
 # symptom shared by five different machines being broken; the escalation names WHICH.
-#   scan-window-blind  a green EXISTS on trunk but sits deeper than SCAN_N — the ladder cannot see
-#                      it. NOT a verifier problem at all; the verifier did its job.
+#   scan-window-blind  a green EXISTS on trunk, sits deeper than SCAN_N, and is a STRICT DESCENDANT
+#                      of the live layer — the ladder cannot see a tree it would have deployed. NOT a
+#                      verifier problem at all; the verifier did its job.
+#   no-green-descendant  greens are visible to the wider probe but EVERY one of them is at or below
+#                      live HEAD. Same refusal, opposite remedy: widening the scan is a no-op by
+#                      construction, and what is missing is a green stamped ABOVE the live layer.
 #   trunk-red          the verifier judged every candidate RED. Honest evidence, honestly acted on.
 #   verifier-lag       a green exists and the ladder SAW it, but it is at/below the live layer and
 #                      nothing ABOVE has verified. The producer is alive and behind.
@@ -518,49 +553,60 @@ last_advance_hours() {
 # probe's ABSENCE of a match and the ladder's OWN evidence are different instruments; where they
 # disagree the escalation must not pick the blinder one (memory: wrong-cause-corroborated-by-true-
 # metric).
-refusal_culprit() { # <class> → "<culprit> <green-depth|->"
+# The third field is the green's own SHA (or `-`): the prose has to be able to say whether the green
+# it is refusing to deploy IS the live layer or sits below it, and those are different sentences.
+refusal_culprit() { # <class> → "<culprit> <green-depth|-> <green-sha|->"
   local class="$1" depth=""
   case "$class" in
-    no-stamps-dir) printf 'verifier-inert -';  return 0 ;;
-    dirty-tree)    printf 'peer-wip-wedge -';  return 0 ;;
-    trunk-red)     printf 'trunk-red -';       return 0 ;;
+    no-stamps-dir) printf 'verifier-inert - -';  return 0 ;;
+    dirty-tree)    printf 'peer-wip-wedge - -';  return 0 ;;
+    trunk-red)     printf 'trunk-red - -';       return 0 ;;
     # EVERY class that ends the lane names its own culprit here. A class with no arm falls into the
     # ladder below, whose terminal answer is `verifier-famine` — a POSITIVE claim about green
     # production — so an advance blocked by the checkout itself used to escalate (when it escalated
     # at all) as "no green is being produced", pointing the operator at the one subsystem that was
     # working (repo memory: new-enum-member-falls-into-fail-closed-default).
-    untracked-collision)  printf 'peer-wip-wedge -';   return 0 ;;
-    ancestor-inverted)    printf 'live-ahead-of-target -'; return 0 ;;
-    diverged-superseded|diverged-unlanded) printf 'checkout-diverged -'; return 0 ;;
+    untracked-collision)  printf 'peer-wip-wedge - -';   return 0 ;;
+    ancestor-inverted)    printf 'live-ahead-of-target - -'; return 0 ;;
+    diverged-superseded|diverged-unlanded) printf 'checkout-diverged - -'; return 0 ;;
     merge-blocked)
       # Split on the one question that changes the remedy: is the shared checkout still a WORKING
       # TREE? A checkout carrying core.bare=true answers every working-tree git op with "fatal:
       # this operation must be run in a work tree", so the ff dies of a cause no pre-flight above
       # models, and the repair is a config unset that has nothing to do with greens.
       if [ "$(git -C "$DEPLOY_REPO" rev-parse --is-inside-work-tree 2>/dev/null)" = true ]
-        then printf 'merge-blocked-unknown -'
-        else printf 'checkout-not-a-worktree -'
+        then printf 'merge-blocked-unknown - -'
+        else printf 'checkout-not-a-worktree - -'
       fi
       return 0 ;;
   esac
-  local prc=0
-  depth="$(blind_green_depth)" || prc=$?
-  case "${depth:-}" in ''|*[!0-9]*) depth="" ;; esac
+  local prc=0 probe="" dsha=""
+  probe="$(blind_green_probe)" || prc=$?
+  depth="${probe%% *}"; dsha="${probe##* }"
+  case "${depth:-}" in ''|*[!0-9]*) depth=""; dsha="" ;; esac
   if [ -n "$depth" ] && [ "$depth" -gt "$SCAN_N" ]; then
-    printf 'scan-window-blind %s' "$depth"; return 0
+    # DESCENDANCY IS TESTED BEFORE THE WINDOW IS BLAMED (2026-09-07). "A green exists that the ladder
+    # cannot see" is TRUE in both states below and decides neither of them; the binding predicate is
+    # the one T1 uses. Blaming the window without asking it produced six repeats of a page whose every
+    # clause was true, whose prescribed `CC_DEPLOY_SCAN=<depth+50>` provably could not change the
+    # refusal, and which cost a full investigation each time it was believed.
+    if green_above_head "$dsha"; then
+      printf 'scan-window-blind %s %s' "$depth" "$dsha"; return 0
+    fi
+    printf 'no-green-descendant %s %s' "$depth" "$dsha"; return 0
   fi
   # THE LADDER'S OWN EVIDENCE OUTRANKS THE PROBE'S SILENCE. green-at-head / green-behind ARE the
   # ladder saying it found a green and could not deploy it, so a green demonstrably exists whatever
   # the probe returns — that is verifier-lag, never famine. Only `no-green` (T1 walked $SCAN_N and
   # saw none) may be read as famine, and then only when the wider probe agrees.
   case "$class" in
-    green-at-head|green-behind) printf 'verifier-lag %s' "${depth:--}" ;;
+    green-at-head|green-behind) printf 'verifier-lag %s %s' "${depth:--}" "${dsha:--}" ;;
     # ORDER IS LOAD-BEARING. A depth beats everything (the probe answered, so it cannot be
     # unreadable); a failed probe beats famine (famine is a POSITIVE claim about BLIND_SCAN commits
     # that an unrun scan has earned no right to make); famine is what is left, and only then.
-    *) if   [ -n "$depth" ];  then printf 'verifier-lag %s' "$depth"
-       elif [ "$prc" -ne 0 ]; then printf 'probe-unreadable -'
-       else                        printf 'verifier-famine -'; fi ;;
+    *) if   [ -n "$depth" ];  then printf 'verifier-lag %s %s' "$depth" "${dsha:--}"
+       elif [ "$prc" -ne 0 ]; then printf 'probe-unreadable - -'
+       else                        printf 'verifier-famine - -'; fi ;;
   esac
 }
 
@@ -570,14 +616,23 @@ refusal_culprit() { # <class> → "<culprit> <green-depth|->"
 # 2026-08-05, recorded at host_cut_page above. The magnitudes go in the page and the log token.
 refusal_escalate() { # <class> <msg> <n> <first-epoch> <now>
   local class="$1" msg="$2" n="$3" first="$4" now="$5"
-  local cw culprit depth title run pf streak_h adv_h id=""
-  cw="$(refusal_culprit "$class")"; culprit="${cw%% *}"; depth="${cw##* }"
+  local cw culprit depth dsha _rest title run pf streak_h adv_h id=""
+  cw="$(refusal_culprit "$class")"
+  culprit="${cw%% *}"; _rest="${cw#* }"; depth="${_rest%% *}"; dsha="${_rest##* }"
   streak_h=$(( (now - first) / 3600 ))
   adv_h="$(last_advance_hours)"
   case "$culprit" in
     scan-window-blind)
       title="deploy lane refusing on repeat: the newest GREEN on trunk is OUTSIDE the scan window (structural blindness, not a red verifier)"
       run="CC_DEPLOY_SCAN=$(( depth + 50 )) bash $DEPLOY_REPO/scripts/deploy-live.sh --dry-run --offline" ;;
+    no-green-descendant)
+      title="deploy lane refusing on repeat: every GREEN on trunk is BEHIND the live layer — nothing has verified since it last advanced"
+      # DELIBERATELY NO COMMAND, and the empty string is load-bearing rather than an omission. There
+      # is no invocation of anything on this box that mints a green above the live layer; the one
+      # this culprit was previously filed under (`CC_DEPLOY_SCAN=<depth+50>`) runs, succeeds, and
+      # returns the identical refusal, which is strictly worse than handing over nothing — it costs
+      # an investigation and teaches the reader the page was wrong rather than that the state is.
+      run="" ;;
     trunk-red)
       title="deploy lane refusing on repeat: trunk is RED all the way down above the live layer"
       run="bash $DEPLOY_REPO/scripts/postland-verify.sh --help" ;;
@@ -623,6 +678,19 @@ refusal_escalate() { # <class> <msg> <n> <first-epoch> <now>
         printf 'and the ladder only ever looks at the newest CC_DEPLOY_SCAN=%s commits — so it cannot\n' "$SCAN_N"
         printf 'see a green that is really there. Raising the scan does NOT loosen the gate (a green\n'
         printf 'stamp is still required); it only lets the gate see the evidence that already exists.\n' ;;
+      no-green-descendant)
+        printf 'WIDENING THE SCAN CANNOT HELP HERE, and that is the whole difference from the\n'
+        printf 'structural-blindness page. A GREEN tree DOES exist on origin/main (depth %s) and the\n' "$depth"
+        printf 'ladder cannot see it — both true, and both irrelevant: %s\n' \
+          "$(if [ "$dsha" = "$HEAD_SHA" ]
+               then printf 'that green IS live HEAD %s, so the' "${HEAD_SHA:0:12}"
+               else printf 'that green is an ANCESTOR of live HEAD %s, so the' "${HEAD_SHA:0:12}"; fi)"
+        printf 'gate has nothing ABOVE the layer to advance to. It refuses to deploy an ancestor\n'
+        printf 'because doing so would move the layer BACKWARDS and report a deploy that never\n'
+        printf 'happened, and a wider window can only ever surface MORE of them. Nothing to run here.\n'
+        printf 'What is actually missing is upstream and it is one fact: NO tree above the live layer\n'
+        printf 'has been stamped green since it last advanced. Until the verifier produces one, this\n'
+        printf 'lane is correct to wait, and it degrades on its own once the lag budget trips.\n' ;;
       trunk-red)
         printf 'The verifier HAS judged, and its verdict is red on every candidate. This is the gate\n'
         printf 'working: the thing to fix is trunk, not this lane. Do not bypass with --force.\n' ;;
@@ -648,13 +716,21 @@ refusal_escalate() { # <class> <msg> <n> <first-epoch> <now>
         printf 'stashes or discards it — commit or stash it there and the next tick advances.\n' ;;
     esac
     printf 'this escalation re-asserts at most once per %ss while the condition holds.\n' "$REFUSE_COOLOFF"
-    printf 'next: %s\n' "$run"
+    # A `next:` line is a RUN VERDICT, so it appears only where a command can change the state. An
+    # always-present field forced every culprit to nominate something, and the culprit with no
+    # remedy nominated one that cannot work.
+    [ -n "$run" ] && printf 'next: %s\n' "$run"
   } > "$pf" 2>/dev/null || true
 
   # The store that OUTLIVES the run and that the operator block actually renders. stderr is not
   # swallowed: cc-backlog's DONE-GUARD announces a re-file of an already-closed key there.
   if [ -x "$BACKLOG_BIN" ]; then
-    id="$("$BACKLOG_BIN" needs "$title" --run "$run" --project claude-infrastructure 2>/dev/null || true)"
+    # …and the row is filed WITHOUT --run when there is none, rather than with a placeholder: an
+    # operator-facing row whose command cannot help is what `cc-do` would offer to run for them.
+    if [ -n "$run" ]
+      then id="$("$BACKLOG_BIN" needs "$title" --run "$run" --project claude-infrastructure 2>/dev/null || true)"
+      else id="$("$BACKLOG_BIN" needs "$title" --project claude-infrastructure 2>/dev/null || true)"
+    fi
     id="$(printf '%s' "$id" | tr -d '[:space:]')"
   fi
 
@@ -2017,12 +2093,52 @@ EOF
     #     below to prove the producer works, "wait for the budget" is waiting for nothing.
     #     `$GREEN_SHA` is precisely the discriminator, being set by T1's walk on the first green it
     #     sees whether or not that green was deployable.
+    #
+    # …AND `$GREEN_SHA` IS A WINDOW-SCOPED READING OF "THE NET IS ALIVE" (2026-09-07). Everything the
+    # clause above argues is right; what it got wrong is the INSTRUMENT. $GREEN_SHA is set by T1's
+    # walk, which stops at SCAN_N, so the discriminator between "this is a wait" and "this is the
+    # alarm" was whether the newest green happened to fall inside a diagnostic window — and the same
+    # world therefore produced two opposite verdicts depending on one env var. Measured on the live
+    # host that day, with live HEAD 16 commits behind trunk and the newest green at depth 278:
+    #   CC_DEPLOY_SCAN=200 → REFUSED, exit 1, a page reading "the live layer is FROZEN", and — six
+    #                        times over — an ESCALATION naming a culprit and a command that could not
+    #                        change it.
+    #   CC_DEPLOY_SCAN=328 → "waiting … inside the degrade budget (25 / 6h) — no advance, and none is
+    #                        due yet", exit 0, silent.
+    # One state, one lag, one budget. An escalation means the machine needs a human, and this lane
+    # was paging over a condition its own verdict called normal (memory: alarm-polarity-and-attention
+    # -budget). So the aliveness question is now asked of the WIDER probe, which is the instrument
+    # that can actually answer it.
+    #
+    # WHAT THIS DOES NOT DO: it advances nothing. Both sides of the branch leave the tree exactly
+    # where it was; the only difference is whether a normal wait is spelled as a refusal. The three
+    # carve-outs above are untouched — past the budget it is still the loud refusal, DEGRADE=off is
+    # still the strict green-only gate, and NO green anywhere in BLIND_SCAN is still the alarm. The
+    # fourth is new and is the point: a green the wider probe finds ABOVE the live layer is a green
+    # this ladder was BLIND to, not a green it is waiting for, so that state keeps refusing loudly
+    # and keeps its `scan-window-blind` escalation — the one case where widening the scan deploys.
+    WAIT_DEEP=""
     case "$DEGRADE" in
       off|OFF|0|no|NO|false|FALSE) : ;;
       *)
-        if [ -z "$TARGET" ] && [ -z "$LAG_TRIP" ] && [ -n "$GREEN_SHA" ]; then
+        if [ -z "$TARGET" ] && [ -z "$LAG_TRIP" ] && [ -z "$GREEN_SHA" ]; then
+          _wprc=0; _wp="$(blind_green_probe)" || _wprc=$?
+          _wd="${_wp%% *}"; _ws="${_wp##* }"
+          case "${_wd:-}" in ''|*[!0-9]*) _wd=""; _ws="" ;; esac
+          # rc 0 IS PART OF THE CONDITION. A probe that could not run is silent in exactly the way a
+          # probe that found nothing is silent, and only one of those two is a licence to stop paging
+          # (memory: lookup-miss-is-not-absence) — so an unreadable store keeps the loud path and its
+          # `probe-unreadable` escalation.
+          if [ "$_wprc" -eq 0 ] && [ -n "$_wd" ] && ! green_above_head "$_ws"; then
+            if [ "$_ws" = "$HEAD_SHA" ]
+              then WAIT_DEEP="the newest green on trunk IS live HEAD, at depth $_wd — the layer runs proven bytes and nothing above it has verified yet"
+              else WAIT_DEEP="the newest green on trunk is deeper still, at depth $_wd (${_ws:0:12}), and is an ANCESTOR of live HEAD — widening the scan would only surface it, never deploy it"
+            fi
+          fi
+        fi
+        if [ -z "$TARGET" ] && [ -z "$LAG_TRIP" ] && { [ -n "$GREEN_SHA" ] || [ -n "$WAIT_DEEP" ]; }; then
           [ "$AUTO" -eq 1 ] && damp_clear
-          asay "waiting — $RMSG; lag $LAG_COMMITS commit(s) / $LAG_HM, inside the degrade budget ($MAX_LAG_COMMITS / ${MAX_LAG_HOURS}h) — no advance, and none is due yet"
+          asay "waiting — $RMSG${WAIT_DEEP:+ ($WAIT_DEEP)}; lag $LAG_COMMITS commit(s) / $LAG_HM, inside the degrade budget ($MAX_LAG_COMMITS / ${MAX_LAG_HOURS}h) — no advance, and none is due yet"
           exit 0
         fi
         ;;
