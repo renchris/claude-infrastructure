@@ -341,3 +341,29 @@ tests/capacity-alarm.bats
 # same ground postland-verify.bats is: a suite that cannot produce a verdict cannot be part of a
 # per-commit second opinion. Delete this line when its own TAP body completes off-box.
 tests/cc-reaper.bats
+
+# ── SIXTH SEEDING, 2026-09-08 — measured over 23 folds, not one window ───────────────────────────
+# MEASURED, and the cause is NAMED by the suite itself — this is not a hint. Off-box red in 13 of
+# 13 consecutive folds since 2026-09-06T05:56Z (34015200580 onward) and GREEN in the 10 folds
+# before it, a step change with a landed cause: 451696db8 (2026-09-05T18:47) made the deadness
+# oracle NAME the bash it measures instead of inheriting one. Its new CONTROL (case 3) asserts the
+# grid's two interpreters really are the pair it was measured on, and off-box it prints
+# `modern bash is major 3, not >=4` — because `MODERN_BASH="${BASH:-$(command -v bash)}"` under
+# `env -i` resolves to /bin/bash 3.2, the SAME binary as LEGACY_BASH. Cases 4 and 5 then fail as
+# the control predicted they would: their deadness claims are version-scoped and this runner has
+# only one version. On this box, GREEN 37/37 in 18s.
+#
+# So the verdict off-box is a claim about the image's package set, never about our tree — the
+# gate-precheck/shellcheck shape the workflow header already records, and the suite is behaving
+# exactly as designed ("a box that ships a different /bin/bash fails HERE, loudly").
+#
+# THE PREFERRED CURE IS NOT THIS LINE, and it is named so the next editor does not have to
+# re-derive it: give the runner a bash >= 4, the way `brew install shellcheck` was the cure for
+# gate-precheck rather than an exclusion. It is parked rather than done because its blast radius is
+# the whole corpus and cannot be measured before it lands — Homebrew's bin is ahead of /bin on the
+# runner's PATH, so installing bash re-points EVERY `#!/usr/bin/env bash` shebang and every bats
+# body across ~550 suites from 3.2 to 5.x in one step. That divergence is itself worth fixing (the
+# off-box producer currently acquits the tree under a different interpreter than the operator's box
+# runs), but it is a measured change of its own, not a side effect of curing one suite. An env seam
+# on the suite (an explicit CC_MODERN_BASH the workflow sets) is the narrow half of it.
+tests/bats-assert-liveness.bats
