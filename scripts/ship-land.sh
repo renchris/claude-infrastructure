@@ -2324,6 +2324,18 @@ tap_plan() {  # $1=log → the TAP plan count bats printed (`1..N`), or "" if it
   sed -n 's/^1\.\.\([0-9][0-9]*\).*$/\1/p' "$1" 2>/dev/null | head -1
 }
 
+tap_shortfall() {  # $1=log → "<executed>/<planned>" when bats reported it did not cover its own
+                   # plan, else "". SAME SPELLING as scripts/postland-verify.sh's tap_shortfall and
+                   # scripts/deploy-live.sh's inline read, pinned equal by
+                   # tests/bats-shortfall-nonverdict.bats — for the reason
+                   # tests/tap-grammar-parity.bats states about its own grammar: a shared lib is a
+                   # NEW file, absent from the per-file-symlinked live layer until deploy-live
+                   # converges, and the `[ -f lib ] && . lib` guard every consumer would need turns
+                   # that absence into a SILENT fall-back on exactly the boxes that run a land.
+  grep -aoE '^# bats warning: Executed [0-9]+ instead of expected [0-9]+ tests$' "$1" 2>/dev/null \
+    | head -1 | sed -n 's/^# bats warning: Executed \([0-9][0-9]*\) instead of expected \([0-9][0-9]*\) tests$/\1\/\2/p'
+}
+
 tap_named_failures() {  # $1=log $2=known test count ("" or 0 ⇒ unknown) $3=suite file (for the
                         # message) → the `not ok` lines that are VERDICTS ABOUT THE SUITE, with
                         # bats' own harness artifacts discarded.
@@ -2364,7 +2376,7 @@ tap_named_failures() {  # $1=log $2=known test count ("" or 0 ⇒ unknown) $3=su
   # grammar on exactly the boxes that run a land. The `sig=` line in run_scoped_suite stays loose on
   # purpose: it is a human-readable signature for the flake ledger, never a discriminator, and a
   # torn line is honest evidence there.
-  local log="$1" known="${2:-0}" f="${3:-the suite}" n plan
+  local log="$1" known="${2:-0}" f="${3:-the suite}" n plan short
   n="$(grep -acE '^not ok [0-9]+' "$log" 2>/dev/null || true)"; n="${n:-0}"
   [[ "$n" -eq 0 ]] && { printf '0\n'; return 0; }
   # LEG A — THE COLLECTOR NAMING ITSELF. Exact upstream literal, and gated on being the SOLE
@@ -2386,6 +2398,35 @@ tap_named_failures() {  # $1=log $2=known test count ("" or 0 ⇒ unknown) $3=su
   plan="$(tap_plan "$log")"
   if [[ -n "$plan" && "$known" -gt 0 && "$plan" -lt "$known" ]]; then
     echo "⚠ gate: $f — discarding $n 'not ok': this run planned $plan test(s) for a file just proven to hold $known. A plan that contradicts the file's own size proves the harness never gathered it; nothing it printed is a verdict." >&2
+    printf '0\n'; return 0
+  fi
+  # LEG C — THE HARNESS SAYS IT DID NOT FINISH (backlog da839cd0d89e). Legs A and B both infer a
+  # broken run from something OTHER than the run; bats states it outright. Its validator
+  # (lib/bats-core/validator.bash:30) counts the results it forwarded against the `1..N` it forwarded
+  # first, prints `# bats warning: Executed <A> instead of expected <B> tests` on a mismatch, and
+  # returns 1 — which under bats:517-524's pipefail IS the run's exit code. So a truncated run and a
+  # genuinely failing one are indistinguishable by rc, and this line was the only thing separating
+  # them. Nothing in this repo read it before now.
+  #
+  # The generator is losing $BATS_RUN_TMPDIR under a live run — a tmp reaper, a full disk, a peer's
+  # cleanup. Reproduced 2026-09-07, 6 planned tests, run-dir removed 1.5s in: rc 1, `1..6`, `ok 1`,
+  # `not ok 2 a2`, `not ok 5 teardown_file failed`, `# bats warning: Executed 3 instead of expected 6
+  # tests`. BOTH `not ok` lines are artifacts of the vanished directory, and `not ok 2` even carries
+  # a well-formed `# (in test file …)` diagnostic — so legs 0, A and B all pass it through and the
+  # gate reads two failing tests in a file where none failed. Field instance, three orders up:
+  # `Executed 1328 instead of expected 2789`, i.e. 1461 tests unexecuted rendered as three ordinary
+  # `not ok` lines.
+  #
+  # DISCARDING HERE CANNOT SOFTEN A REAL RED, and that is the property that makes this leg safe in
+  # the one direction this split must never fail in. `not ok` → 0 routes into run_scoped_suite's CUT
+  # arm, which is not a verdict but an exoneration RE-RUN in a fresh TMPDIR — the environment change
+  # that removes the truncation. A tree that is genuinely broken names its failures there and the
+  # caller returns 1 (RED) exactly as before; a second truncated run earns rc 2 (GATE-KILLED, no
+  # verdict), which is the honest answer and is retried. What is removed is only the ability to
+  # convict on lines a self-declared incomplete run printed.
+  short="$(tap_shortfall "$log")"
+  if [[ -n "$short" ]]; then
+    echo "⚠ gate: $f — discarding $n 'not ok': bats reports it executed ${short%/*} of the ${short#*/} tests it planned, so $(( ${short#*/} - ${short%/*} )) never ran. A run that did not cover its own plan was truncated (commonly its \$BATS_RUN_TMPDIR vanished); nothing it printed is a verdict." >&2
     printf '0\n'; return 0
   fi
   printf '%s\n' "$n"

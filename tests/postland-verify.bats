@@ -1218,6 +1218,71 @@ PS
 # runner's own stderr file carried `Killed: 9` twelve times — an EXTERNAL signal death, which is the
 # opposite finding from our own bound firing, and the log could not tell them apart. Diagnosing it
 # required an lsof against a live run. These two pin the discrimination, not the wording.
+# ── C36 — the harness's OWN shortfall (backlog da839cd0d89e) ─────────────────────────────────────
+# The truncation C13 covers announces itself by emitting NOTHING attributable: zero `not ok`, so the
+# cut path is reached before any ladder. THIS one is the opposite and is the reason C13's rule needed
+# an instrument rather than a reader's judgement — bats emits ORDINARY `not ok` lines, some carrying
+# well-formed `# (in test file …)` diagnostics, and only says the run was incomplete in a TAP COMMENT
+# that nothing on this box read: `# bats warning: Executed <A> instead of expected <B> tests`
+# (lib/bats-core/validator.bash:30, returning 1, which under bats' pipefail IS the run's exit code).
+# Both fakes below reproduce a real one, reproduced 2026-09-07 by removing $BATS_RUN_TMPDIR under a
+# live 6-test run: rc 1, a correct plan, two artifact `not ok` lines, half the corpus never executed.
+# The field instance was `Executed 1328 instead of expected 2789`.
+stub_bats_short() {  # $1 = name, $2 = what every RE-RUN does (the ladder's second environment)
+  # DISCRIMINATES BY CALL ORDER, not by argv shape. The corpus invocation and the ladder's per-file
+  # re-run can carry the SAME argv shape (a fixture repo holding one suite hands bats exactly one
+  # .bats path either way), so an argv test would make the corpus run take the re-run branch and the
+  # test would assert nothing — measured here, and it is why the counter is baked in rather than
+  # inferred. `--count` and `--version` are answered without advancing it: both are PARSES, not runs
+  # (suite_file_at at :1490, env_fingerprint at :839), and counting them would shift every branch.
+  local calls="$BATS_TEST_TMPDIR/bats-$1.calls"
+  stub_bats "$1" 'case "$1" in --count) echo 1; exit 0 ;; esac
+n="'"$calls"'"
+c=$(cat "$n" 2>/dev/null || echo 0); c=$((c+1)); printf "%s" "$c" > "$n"
+if [ "$c" -gt 1 ]; then
+  '"$2"'
+fi
+echo "1..6"
+echo "ok 1 first"
+echo "not ok 2 artifact of the vanished run dir"
+echo "# (in test file tests/ok.bats, line 2)"
+echo "# bats warning: Executed 2 instead of expected 6 tests"
+exit 1'
+}
+
+@test "C36: a run bats itself calls SHORT is a CUT, never a RED — twice over" {
+  # THE CONVICTING DIRECTION. The re-runs see the same truncation, so pre-C34 the ladder corroborated
+  # its own artifact and window 2 stamped RED, naming tests/ok.bats — a file in which nothing failed.
+  # Two windows deliberately: one window is a cut for EVERY attributable failure (C29), so a
+  # single-window assertion could not tell this fix from that floor.
+  fake="$(stub_bats_short cut-short 'echo "1..1"; echo "not ok 1 still truncated"; echo "# (in test file tests/ok.bats, line 2)"; echo "# bats warning: Executed 1 instead of expected 4 tests"; exit 1')"
+  calls="$BATS_TEST_TMPDIR/bats-cut-short.calls"       # derived from the NAME: a global assigned
+  tree="$(origin_tree)"                                # inside $( ) would never escape the subshell
+  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed
+  s="$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ -f "$s" ]
+  run jq -r '.verdict' "$s"; [ "$output" = "cut" ]
+  rm -f "$calls"                                       # window 2's CORPUS run is a corpus run again
+  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed     # the window that used to convict
+  run jq -r '.verdict' "$s"; [ "$output" = "cut" ]
+  [ "$(pages_n)" = "0" ]                                           # and it pages nobody
+}
+
+@test "C36: a shortfall whose re-runs PASS is a CUT, not the GREEN it used to stamp" {
+  # THE EXONERATING DIRECTION, and the one the row was filed about: it is the LIKELY branch, because
+  # the cause is environmental and the ladder's fresh TMPDIR removes it. Pre-C34 the re-runs cleared
+  # every attributed file, FAILING emptied, and the run was stamped GREEN — asserting a corpus passed
+  # while most of it never executed. A green stamp advances last-green and is what deploy-live.sh
+  # reads to decide an advance, so this is the expensive direction, not the loud one.
+  fake="$(stub_bats_short green-short 'echo "1..1"; echo "ok 1 passes in a fresh tmpdir"; exit 0')"
+  tree="$(origin_tree)"
+  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed
+  s="$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ -f "$s" ]
+  run jq -r '.verdict' "$s"; [ "$output" = "cut" ]                 # pre-fix: "green"
+  [ ! -f "$CC_POSTLAND_DIR/last-green" ]                           # …and it earns nothing
+}
+
 @test "C13h: a SIGNAL-KILLED run (rc 137, ZERO not-ok) names the signal — still cut, never red" {
   fake="$BATS_TEST_TMPDIR/bats-sigkill"
   # rc 137 = 128+9: what bash reports when SIGKILL reaps the corpus (a peer, the OOM killer — not us).
