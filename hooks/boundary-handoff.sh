@@ -433,7 +433,50 @@ gitdir="$(git -C "$cwd" rev-parse --git-common-dir 2>/dev/null || true)"
 case "$gitdir" in /*) ;; *) gitdir="$cwd/$gitdir" ;; esac
 
 # ── (a) committed + no live teammates. gate-green is REPORTED, never gating — see below ──
-[ -z "$(git -C "$cwd" status --porcelain 2>/dev/null)" ] || abstain "dirty-tree"
+#
+# THE DIRTY TERM IS ATTRIBUTED, NOT ABSOLUTE (2026-09-08, backlog 8945d8e750ba). This line read
+# `[ -z "$(git status --porcelain)" ] || abstain "dirty-tree"` — an unattributed veto, in a checkout
+# that is shared by construction (this repo IS the ~/.claude symlink source, and every linked
+# worktree resolves the same common gitdir). So ANY byte anyone left in the tree silenced this rail
+# for THIS session, permanently, on a fact about somebody else.
+#
+# Measured over the IDL: the absolute-occupancy arm voted to fire on ALL 52 dirty-tree abstains, and
+# session c25160c2 was vetoed 10 consecutive times from 744k to 913k tokens over 3h58m by 22
+# UNTRACKED files whose mtimes predated the session by 11 days. Above 850k tokens this hook has
+# fired zero times, ever. `hooks/completion-assert.sh` exonerated that identical tree two seconds
+# later on the same Stop, through `session_dirty_mine` — the SSOT oracle four hooks already use
+# (completion-assert, session-continue's mechanical 🔧 and ship floor, teammate-auto-shutdown, and
+# operator-readout's turn-scoped twin). That fix landed there as 80a3179fb on 2026-08-11, the same
+# day 57d8c4ddb demoted gate-green HERE; this line was touched by neither.
+#
+# The gate-green demotion above is the same shape and its reasoning transfers verbatim: a session
+# cannot clear a condition it does not own, so gating on one only ever silences eligible work.
+# What survives is the half that genuinely protects a handoff — MY OWN uncommitted work must never
+# be cut — and rc 2 (cannot tell) keeps the old absolute veto, because a lookup that fails can only
+# MISS and a miss is not an absence (MEMORY.md lookup-miss-is-not-absence). Not-mine dirt is
+# REPORTED into the advisory and onto the IDL row rather than silently waved through.
+dirty_state="clean"
+if [ -n "$(git -C "$cwd" status --porcelain 2>/dev/null)" ]; then
+  # Same resolution ladder as every other consumer, including the readlink tier: a brand-new
+  # hooks/lib file has no ~/.claude/hooks/lib symlink until install.sh runs, and when this hook
+  # executes from ~/.claude/hooks/ the CFG and $HOME tiers resolve to that same missing path.
+  _bh_swl="${SESSION_WRITES_LIB:-$_bscd/lib/session-writes.sh}"
+  [ -f "$_bh_swl" ] || { _bh_swt="$0"; [ -L "$_bh_swt" ] && _bh_swt="$(readlink "$_bh_swt")"
+    _bh_swl="$(cd "$(dirname "$_bh_swt")" 2>/dev/null && pwd)/lib/session-writes.sh"; }
+  [ -f "$_bh_swl" ] || _bh_swl="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/session-writes.sh"
+  [ -f "$_bh_swl" ] || _bh_swl="$HOME/.claude/hooks/lib/session-writes.sh"
+  _bh_dm=2
+  # shellcheck source=lib/session-writes.sh
+  # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+  if [ -f "$_bh_swl" ] && . "$_bh_swl" 2>/dev/null; then
+    session_dirty_mine "$tp" "$cwd" >/dev/null 2>&1; _bh_dm=$?
+  fi
+  case "$_bh_dm" in
+    0) abstain "dirty-tree:mine" ;;
+    1) dirty_state="not-mine" ;;
+    *) abstain "dirty-tree:unattributable" ;;
+  esac
+fi
 # gate-green DEMOTED to a reported field 2026-08-11. Only the background postland-verify daemon can
 # advance that marker; the land path structurally cannot. Abstaining on it made this rail UNFIREABLE:
 # measured over the IDL, 1,341 evaluations across 296 sessions produced ZERO fires, and nothing
@@ -447,9 +490,11 @@ case "$gitdir" in /*) ;; *) gitdir="$cwd/$gitdir" ;; esac
 # hang". That fix landed the same day the free-win arm landed HERE, into the copy that kept the
 # abstain. This is the same fix, applied to the copy that was missed.
 #
-# What still gates is `dirty-tree` above: locally verifiable, and the half that actually protects a
-# handoff. The gate's real state rides the fired IDL row and the advisory text, so a not-green tree is
-# REPORTED to the model rather than silently suppressing the advice.
+# What still gates is `dirty-tree` above — but only the attributed half of it (2026-09-08): dirt this
+# session WROTE is locally verifiable and is the part that actually protects a handoff, while dirt it
+# did not write is another session's fact and now only reports. The gate's real state rides the fired
+# IDL row and the advisory text, so a not-green tree is REPORTED to the model rather than silently
+# suppressing the advice.
 green="$(cat "$gitdir/gate-green" 2>/dev/null || true)"
 if   [ -z "$green" ];        then gate_state="absent"
 elif [ "$green" = "$head" ]; then gate_state="green"
@@ -545,12 +590,12 @@ log_idl fired "past-boundary" \
       --argjson osz "$over_size" --argjson orss "$over_rss" --argjson sf "$size_fired" \
       --argjson otok "$over_tok" --argjson tf "$tok_fired" --argjson tk "$tok_k" --argjson tkt "$TOK_K" \
       --argjson fw "$freewin" --arg fwr "$FREEWIN_RUNG" \
-      --arg gate "$gate_state" \
+      --arg gate "$gate_state" --arg dirty "$dirty_state" \
       --arg sok "${stale_ok:-}" \
       '{used_pct:$used,threshold:$threshold,head:$head,burn_x100:$burn,forecast_min:$fc,early:($early==1),conv_age_s:$conv,
         stale_ok:$sok,
         over_size:($osz==1),over_rss:($orss==1),over_tok:($otok==1),tok_k:$tk,tok_k_t:$tkt,
-        gate_green:$gate,freewin:($fw==1),freewin_rung:$fwr,
+        gate_green:$gate,dirty:$dirty,freewin:($fw==1),freewin_rung:$fwr,
         axis:(if $sf==1 then "size" elif $tf==1 then "tokens" elif $early==1 then "forecast" elif $fw==1 then "freewin" else "fill" end)}')"
 if [ "$size_fired" = 1 ]; then
   if [ "$over_size" = 1 ] && [ "$over_rss" = 1 ]; then why="this session is OVERSIZE on both axes — transcript ${tx_mb}MB (≥ ${SIZE_MB}MB) and process RSS ${rss_mb}MB (≥ ${RSS_MB}MB) — at only ${used}% context"
@@ -569,16 +614,20 @@ elif [ "$freewin" = 1 ]; then
 else
   why="context ${used}% ≥ ${T}%"
 fi
+# Reported, never suppressing (the gate-green precedent, one term over). Empty when the tree is
+# clean: a note that renders at every fire carries as few bits as one that never renders.
+dirty_note=""
+[ "$dirty_state" = "not-mine" ] && dirty_note=", dirty tree — but nothing in it was written by this session"
 if [ "$size_fired" = 1 ]; then
-  reason="⚑ Boundary reached — ${why} at a committed boundary (HEAD ${head:0:8}, gate-green: ${gate_state}). Neither compaction nor waiting fixes this: only a NEW SESSION resets a transcript or a process. Run the /handoff rails now. (Advisory: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill or +${SIZE_REARM_MB}MB transcript growth.)"
+  reason="⚑ Boundary reached — ${why} at a committed boundary (HEAD ${head:0:8}, gate-green: ${gate_state}${dirty_note}). Neither compaction nor waiting fixes this: only a NEW SESSION resets a transcript or a process. Run the /handoff rails now. (Advisory: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill or +${SIZE_REARM_MB}MB transcript growth.)"
 elif [ "$freewin" = 1 ]; then
   # The FREE-WIN wording, deliberately not the forced-drain wording. Nothing here is urgent and nothing
   # is at risk — that is the whole point, and a drain framing ("before auto-compaction") would both
   # misstate the cause and read as alarming at 40% fill. It names the ONE command, per CLAUDE.md's
   # ♻️ Recycle row: same pane, fresh context, because everything of value is already on disk.
-  reason="⟳ FREE WIN — ${why} (HEAD ${head:0:8}, gate-green: ${gate_state}). Nothing is in hand, so a successor loses nothing and you stop carrying a rotting context: recycle now with \`handoff-fire.sh --recycle\`. (Advisory, not urgent: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill.)"
+  reason="⟳ FREE WIN — ${why} (HEAD ${head:0:8}, gate-green: ${gate_state}${dirty_note}). Nothing is in hand, so a successor loses nothing and you stop carrying a rotting context: recycle now with \`handoff-fire.sh --recycle\`. (Advisory, not urgent: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill.)"
 else
-  reason="⚑ Boundary reached — ${why} at a committed boundary (HEAD ${head:0:8}, gate-green: ${gate_state}). Run the /handoff rails now to preserve state into a successor before auto-compaction. (Advisory: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill.)"
+  reason="⚑ Boundary reached — ${why} at a committed boundary (HEAD ${head:0:8}, gate-green: ${gate_state}${dirty_note}). Run the /handoff rails now to preserve state into a successor before auto-compaction. (Advisory: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill.)"
 fi
 if [ -n "$conv_age" ] && [ "$conv_age" -lt "$CONV_S" ] 2>/dev/null; then
   reason="${reason}
