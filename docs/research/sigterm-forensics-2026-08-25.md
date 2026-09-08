@@ -57,6 +57,51 @@ Live `claude` processes fall into two populations: **fired peers** (argv 5.9–9
 
 This also closes an open backlog row filed three minutes later under `wake-path-sigterm`, which recorded an unattributable `si_pid=13097` that *"binds to no session beat."* That pid is this `pkill`.
 
+### Recount — the sweep took **eight** watchers, not three (2026-09-08, backlog `f4863408f038`)
+
+This document says "three watchers" at § line 84 and `husk-panes-pkill-selection-2026-09-04.md` carries
+the same figure forward as "1 session + 3 watchers". **The store holds eight**, and the paragraph
+directly above predicts eight rather than three: if the pattern "selects the entire fired-peer fleet",
+the blast radius is the size of the fleet, not a handful.
+
+Census over the whole mailbox store, originals only (forwarded copies excluded by `grep -v '\[forwarded:'`),
+keyed on the `armed for [<inbox>]` field rather than on line count:
+
+| inbox | elapsed at kill |
+|---|---|
+| 48 | 31 s |
+| 46 | 755 s |
+| 39 | 1370 s |
+| 47 | 1446 s |
+| 45 | 3311 s |
+| 41 | 3835 s |
+| 25 | 4951 s |
+| 2 | 6560 s |
+
+All eight land in **10 seconds**, 2026-08-25T14:28:25→14:28:35-0700 (= 21:28:25→35Z), every one
+carrying `si_pid=13097`. Controls: a bogus `si_pid=999999` returns **0** lines from the same command,
+and the store holds **9027** `WAKE-PATH-DOWN` lines overall, so the instrument can both find and fail
+to find. There is one mailbox store, not four — `~/.claude-next/mailbox` and `~/.claude-tertiary/mailbox`
+are symlinks to `~/.claude/mailbox` — so this is a whole-population count, not one account's slice.
+
+**Why the undercount matters more than the number.** The eight elapsed values span **31 s to 6560 s**,
+a factor of 212, from ONE sender in ONE sweep. Backlog row `f4863408f038` was opened on the premise
+that a watcher killed at 6560 s must be a *different sender class* from the 7–17 s deaths task #173 is
+named after ("either these are two different senders wearing one task, or the real discriminator is not
+elapsed time at all"). This census settles it in favour of the second clause: **elapsed-at-death records
+when the victim happened to be armed, not who killed it**, so it cannot separate sender classes at all.
+A pattern kill takes whatever is running, at whatever age it has reached. Splitting the wake-path rows
+into "fast" and "slow" populations was an artifact of that reading.
+
+That row's prescribed next step — *"stop trying to identify the sender after the fact … read `ps -o args= -p`
+inside the handler before it exits"* — is **already built and was already running when its own evidence was
+captured**: `_sigrecord_sender` (`bin/cc-await-ping`) does exactly that `ps` read inside the trap-only
+`_sig_verdict`, and the string the row quotes as its finding, *"(sender already gone, no argv)"*, is that
+function's own `else` branch. A `pkill` is a transient utility that exits in milliseconds and holds no
+session beat, so it defeats both the argv read and the beat binding by construction — which is precisely
+the `verdict=UNDETERMINED reason=sender-binds-to-no-session-beat` the classifier returned. Nothing about
+that outcome needed a new forensic mechanism; it needed the selection guard, which landed in `736632a95`.
+
 **Why it cannot explain 21:42:25Z**: `d075006b` was a *recycled* pane, so its argv was the 132–181 B form. No brief-text pattern can reach it. The two kills are genuinely different events.
 
 ## Deliverable 1b — 21:42:25Z: NOT DETERMINABLE, and here is what was exhausted
@@ -81,7 +126,7 @@ It is also **attribution-silent by construction**: the record names the victim a
 | `scripts/gate-cleanup.sh:188` | Last real invocation 04:02Z. Also `never_signal` (`:119`) excludes any command line containing `/node_modules/.bin/claude`, which covers both the binary and the wrapper. |
 | `scripts/capacity-ramp.sh:170` | **Never invoked all day** (only this session's own reads appear in `bash-execution.log`), and its pidfile `/tmp/cc-ramp-pids.txt` does not exist. |
 | `handoff-fire.sh` | Never signals a claude. It types `/exit` (⇒ exit 0, not 143) and kills only its own detached watcher, seconds after arming — no pid-reuse window. |
-| A pattern or process-group kill | Exit **143** is a signal to the process alone; `cc-await-ping:606` records that a group TERM measures **144** here. And there were **no co-victims**: 50399 is the only claude entering an exit handler in 21:42:20–35, unlike the 21:28 `pkill`, which took three watchers with it. |
+| A pattern or process-group kill | Exit **143** is a signal to the process alone; `cc-await-ping:606` records that a group TERM measures **144** here. And there were **no co-victims**: 50399 is the only claude entering an exit handler in 21:42:20–35, unlike the 21:28 `pkill`, which took ~~three~~ **eight** watchers with it (re-censused 2026-09-08 — see § *Recount*; the contrast this row draws is unaffected and strengthened). |
 | Any agent Bash-tool kill | `bash-execution.log` and `bash-commands.log` 21:40–21:43 contain no `kill`/`pkill`/`teardown`/`gate-cleanup` from any session. |
 | Memory / jetsam | `mem_free_pct 90`, headroom 28–34 GB, `swap_used_mb 0.00`, compressor at 0.55 % of limit, **zero jetsam kills in 2.9 M unified-log lines**. macOS pressure sends SIGKILL (9) regardless. |
 | An operator keystroke | `cc-beats` last `operatorT` = 21:39:31, before the `/goal` was armed. |
