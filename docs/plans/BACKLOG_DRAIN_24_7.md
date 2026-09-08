@@ -87,6 +87,18 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-08 — recycle #324 (lane infra):** closed 501824eda094, 6539012db611, and the twelve
+  `re-land *` rows bef2768edfa8 a69b79fc5b75 662110222212 957301ae6045 05a749edc8ae 020cac3e27f7
+  cd9c4cc3b41e 4f196d52605e c625eb6f6800 cb02757a7df2 73f901ab6a26 7963a6f14dbd (each one's own
+  `land-content-verify.sh <ref> --no-fetch` printed ✓ all paths on origin/main) · blocked
+  e924e89f8dd1, ebe84950e98a · released none · landed b553b8649 · `closed=14 closed_pre=14
+  closed_other=18 filed=9 net=5 blocked=10 min=3 lane=local-drain project=claude-infrastructure
+  floor=MET`. #323 released 501824eda094 as `hooks/`-off-limits; I read the escape clause as
+  satisfied (its falsifier names the file) and drove it — overrule me by re-releasing. TWO
+  falsifiers were INVERTED (exit 0 = premise STILL TRUE), so `claim` refused with
+  verdict=falsified over a live defect: e924e89f8dd1's is fixed, 501824eda094's is left on the
+  done row because `falsify` refuses an exit-0 probe.
+
 - **2026-09-08 — recycle #323 (lane infra):** closed aaa017055c69, 5c646048e05e, a0d1c69368af ·
   blocked none · released 501824eda094 (its remedy lives in `hooks/`, off-limits to this brief) ·
   landed 2e64d2cb8, 09c0a7b1a, 0fd5dc64f. capacity-alarm's exit code is a VERDICT channel
