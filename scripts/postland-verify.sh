@@ -37,6 +37,10 @@
 # "retry when quieter" is the right answer to one and the one answer guaranteed never to clear the
 # other. Bounds: POSTLAND_SUITE_TIMEOUT_S (5400) · POSTLAND_FILE_TIMEOUT_S (300); unbounded, HUNG is
 # UNPROVABLE (nothing can return 124) so every hang candidate honestly degrades to a CUT.
+# EVIDENCE ON A NON-GREEN VERDICT: the corpus TAP is copied to $STATE/tap/<tree>.tap and quoted by
+# the page, because it is the ONLY artifact naming WHICH tests failed and at which line — the stamp
+# records files, the page records one test per file (see keep_tap). Bounded to the newest
+# CC_POSTLAND_TAP_KEEP (20); a tree's TAP is dropped when that same tree later stamps green.
 # Verbs: --run-if-needed (launchd) · --run <sha> · bisect <file> <good> <bad> · is-green <sha> ·
 #        status · --selftest.   Kill switches: POSTLAND_VERIFY=off (runtime-read ⇒ instantly inert) ·
 #        POSTLAND_AUTOREVERT=off (verify + page, never push a revert).
@@ -626,6 +630,8 @@ QUEUE="$STATE/queue"
 CUTS="$STATE/cuts"                                     # "<tree> <consecutive-n> <epoch>"
 CUT_MAX="${CC_POSTLAND_CUT_MAX:-3}"                    # consecutive cuts on one tree before paging
 CUT_COOLOFF="${CC_POSTLAND_CUT_COOLOFF:-1800}"         # ...and before the box is fed another suite
+TAPDIR="$STATE/tap"                                    # kept corpus TAPs, <tree>.tap (see keep_tap)
+TAP_KEEP="${CC_POSTLAND_TAP_KEEP:-20}"                 # newest N retained; a TAP is ~160KB
 # ── C29 CROSS-WINDOW CORROBORATION — the ladder's three runs are ONE experiment ───────────────────
 # classify_failures re-runs a failing test twice more BACK TO BACK: seconds apart, on the same box,
 # inside the same run. Its three observations therefore sample ONE LOAD WINDOW, so ">=2/3 agreed"
@@ -705,6 +711,7 @@ load1() { # 1-min loadavg on stdout, or EMPTY when the instrument cannot be read
 }
 
 FAILING=(); SYNTAX_BAD=(); RETRIES=0; NFLAKE=0; FAILTEST=""; RUN_TMP=""; IDL_DONE=0; ENV_FP='{}'; CUT=0
+TAP_KEPT=""          # path of THIS run's retained TAP ("" = none) — the pages quote it
 RETRY_BOUND_S=""   # retry_once's out-parameter: WHICH of the two bounds that call ran under
 # INDEX-ALIGNED with FAILING: the failing TEST name for FAILING[i], so every filed item is
 # actionable and not just the first. FAILTEST (one name, the first) is unchanged and still what the
@@ -2469,6 +2476,57 @@ do_bisect() { # <file> <good> <bad> → sets BISECT_CULPRIT (empty when undecida
   [ -n "${culprit:-}" ] || return 1
   BISECT_CULPRIT="$culprit"
 }
+# ════ TAP RETENTION — the only artifact that names WHICH tests failed ═════════════════════════════
+# $RUN_TMP is `rm -rf`'d on every exit path (release_lock, and the tail of run_target), so the corpus
+# TAP died with the run it was there to diagnose. Everything that SURVIVED names strictly less: the
+# stamp records FILES, and the page records ONE test — classify_failures dedupes its (file,test)
+# pairs by file (`!seen[$1]++`), so a file with N failures reports only its FIRST. Root-causing the
+# six consecutive reds on tests/postland-verify.bats needed the TAP, and it was recoverable only by
+# LUCK: a leaked /var/folders/*/postland-run.*/bats.tap from a run whose trap never fired. It named
+# THREE failures (lines 164/267/923) where the page named one. One `cp` converts "which test?" from
+# an archaeology exercise into a read.
+#
+# WHY ITS OWN DIR AND NOT $STAMPS. ship-land.sh:postland_net_live dates the net's liveness clock by
+# scanning the stamps dir with `find -type f` — every file, not `*.json` — and greping each one's
+# CONTENT for "verdict":"green". A TAP is test OUTPUT, and bats prints $output on a failed
+# assertion, so THIS suite's own TAP quotes stamp JSON verbatim: parked in $STAMPS it could read as
+# the newest green stamp and date a dead verifier as live. A separate dir also puts the retention
+# sweep below structurally out of reach of a verdict.
+keep_tap() { # <tree> <tapfile> — retain it and set TAP_KEPT to the path ("" = nothing kept)
+  TAP_KEPT=""
+  [ -n "${1:-}" ] || return 0
+  # An EMPTY TAP is kept as nothing, deliberately: the prelint fail-fast path SKIPS the corpus, so
+  # its `tap` is the zero-byte file run_target created with `: > "$tap"`. Retaining that would hand
+  # the operator an artifact reading "no test failed" for a tree the lint already convicted.
+  [ -s "${2:-}" ] || return 0
+  mkdir -p "$TAPDIR" 2>/dev/null || return 0
+  cp "$2" "$TAPDIR/$1.tap" 2>/dev/null || return 0
+  TAP_KEPT="$TAPDIR/$1.tap"
+  tap_gc
+  return 0
+}
+drop_tap() { # <tree> — this tree now has a GREEN verdict; a red TAP beside it is a contradiction.
+  # Scoped to the ONE tree, not the dir: a TAP is evidence about its own tree, never standing state,
+  # so another tree's red TAP still diagnoses that tree (unlike the pages, which green clears wholesale).
+  [ -n "${1:-}" ] && rm -f "$TAPDIR/$1.tap" 2>/dev/null
+  return 0
+}
+tap_gc() { # keep the newest $TAP_KEEP — a BOUND, not an archive. Unbounded this is the one piece of
+  # state that grows with trunk VELOCITY rather than with tree count (~160KB a run, ~43 lands/day).
+  # STATED, not hidden: past $TAP_KEEP non-green trees the oldest page's `tap:` line goes dangling.
+  # That is the honest direction — the file is gone and says so — and pages are cleared on green,
+  # so it takes 20 unresolved non-green trees to reach. Raise CC_POSTLAND_TAP_KEEP if that lands.
+  local keep n=0 f
+  keep="$(int_or_zero "$TAP_KEEP")"; [ "$keep" -ge 1 ] || keep=20
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    n=$(( n + 1 ))
+    [ "$n" -gt "$keep" ] && rm -f "$f" 2>/dev/null
+  done <<EOF
+$(find "$TAPDIR" -name '*.tap' -type f -exec stat -f '%m %N' {} + 2>/dev/null | sort -rn | cut -d' ' -f2-)
+EOF
+  return 0
+}
 write_stamp() { # <tree> <commit> <verdict> <run_s> <retries> <adv> [failing…]
   local tree="$1" commit="$2" verdict="$3" run_s="$4" retries="$5" adv="$6" gcd; shift 6
   mkdir -p "$STAMPS" 2>/dev/null || true
@@ -2997,6 +3055,9 @@ red_actions() { # <sha> <file> — bisect, page, backlog, notify, auto-revert. S
     [ "${#FAILING[@]}" -gt 1 ] && printf 'all failing: %s\n' "${FAILING[*]}"
     printf 're-run:  git -C %s worktree add --detach /tmp/pv-repro %s && cd /tmp/pv-repro && bats %s\n' \
       "$REPO" "$c12" "$file"
+    # `failing:` above names ONE test per file by construction (classify_failures dedupes its
+    # (file,test) pairs by file). The TAP is the only artifact that names them ALL, with file:line.
+    [ -n "$TAP_KEPT" ] && printf 'tap:     %s   (grep -n "^not ok" — every failure + its file:line; the line above names only the FIRST per file)\n' "$TAP_KEPT"
     printf 'env:     %s\n' "$ENV_FP"
   } > "$pf" 2>/dev/null || true
   # ── FILE EVERY FAILING ENTRY, ONE CONDITION-KEYED ITEM EACH (2026-08-07) ──────────────────────
@@ -3134,6 +3195,9 @@ hung_actions() { # <sha> <tree> — page + backlog + notify, routed to the SEAM 
     printf 'FIX:     find the un-stubbed external seam and timeout-wrap it (or stub it in setup()).\n'
     printf 're-run:  git -C %s worktree add --detach /tmp/pv-repro %s && cd /tmp/pv-repro && %s %s\n' \
       "$REPO" "$(sha12 "$sha")" "${TIMEOUT_BIN:-timeout} $FILE_TO bats" "$file"
+    # The TAP is where the wedge is VISIBLE: the last `ok` line is the test before it, and what
+    # follows the plan tells you how much of the corpus never ran.
+    [ -n "$TAP_KEPT" ] && printf 'tap:     %s   (tail -5 — the last completed test is the one before the wedge)\n' "$TAP_KEPT"
     printf 'env:     %s\n' "$ENV_FP"
   } > "$pf" 2>/dev/null || true
   # THE PROBE TAKES $sha, THE COMMIT — never the $tree in the title. --falsify-red compares against
@@ -3166,7 +3230,7 @@ run_target() { # <sha> — the whole check-set + verdict for ONE sha
   prepare_worktree "$sha" || { log "worktree prepare FAILED for $(sha12 "$sha")"; return 1; }
   t0="$(now_epoch)"; env_fingerprint            # captured at run START — a green is env-relative
   RUN_TMP="$(mktemp -d "$TMPBASE/$RUN_TMPL")" || return 1   # do_bisect probes under this very string
-  FAILING=(); FAILNAME=(); FAILTEST=""; RETRIES=0; NFLAKE=0; CUT=0; LADDER_UNPROVEN=0; CORPUS_N=0   # reset per requeue pass
+  FAILING=(); FAILNAME=(); FAILTEST=""; RETRIES=0; NFLAKE=0; CUT=0; LADDER_UNPROVEN=0; CORPUS_N=0; TAP_KEPT=""  # reset per requeue pass
   LADDER_FAILING=(); CONVICT_PENDING=0; CONVICT_PENDED=()                  # C29, same reset scope
   FLOOR_SPENT=0; FLOOR_EXONERATED=()                                       # C30, same reset scope
   CUT_WHY='zero not-ok in a non-zero run - truncated'
@@ -3322,7 +3386,8 @@ EOF
     # ...spent EXCEPT the ones this verdict never adjudicated. A hang is a verdict about a wedged
     # SUSPECT; it exonerates no pended file, so those keep their candidacy (see conviction_clear).
     cut_clear; conviction_clear "${CONVICT_PENDED[@]+"${CONVICT_PENDED[@]}"}" "${CONVICT_CORROBORATED[@]+"${CONVICT_CORROBORATED[@]}"}"
-    log "HUNG $(sha12 "$sha") tree=$(sha12 "$tree") suspect=${SUSPECT:-?} wedge_at=$WEDGE_AT sig=$DEATH_SIG reproduced=$REPRODUCED run_s=$run_s"
+    keep_tap "$tree" "$tap"                     # BEFORE hung_actions — the page quotes TAP_KEPT
+    log "HUNG $(sha12 "$sha") tree=$(sha12 "$tree") suspect=${SUSPECT:-?} wedge_at=$WEDGE_AT sig=$DEATH_SIG reproduced=$REPRODUCED run_s=$run_s tap=${TAP_KEPT:-none}"
     hung_actions "$sha" "$tree"
     echo "postland-verify: HUNG $(sha12 "$sha") — ${SUSPECT:-tests/} wedged at $WEDGE_AT ($DEATH_SIG)"
   elif [ "$CUT" = "1" ] && [ "${#FAILING[@]}" -eq 0 ]; then
@@ -3331,9 +3396,11 @@ EOF
     # so C5's abstain does not fire and the NEXT sweep retries it. No bisect, no page — you
     # cannot bisect a machine event, and paging on one trains the operator to ignore pages.
     write_stamp "$tree" "$sha" cut "$run_s" "$RETRIES" "$adv"
+    keep_tap "$tree" "$tap"                     # BEFORE cut_page — the page quotes TAP_KEPT
     n="$(cut_bump "$tree")"
     [ "$n" -ge "$CUT_MAX" ] && cut_page "$sha" "$tree" "$n"
-    log "CUT $(sha12 "$sha") tree=$(sha12 "$tree") run_s=$run_s retries=$RETRIES sc_adv=$adv consecutive=$n ($CUT_WHY; will retry)"
+    # A cut under CUT_MAX writes NO page, so this log line is the only pointer at the TAP it kept.
+    log "CUT $(sha12 "$sha") tree=$(sha12 "$tree") run_s=$run_s retries=$RETRIES sc_adv=$adv consecutive=$n tap=${TAP_KEPT:-none} ($CUT_WHY; will retry)"
     # $CUT_WHY, not a fixed "run truncated": the two cut populations need OPPOSITE things said about
     # them. A truncation means NO test failed; a C29 pending means a test DID fail and is one load
     # window short of proof. The log line one above already reads CUT_WHY — this one asserted the
@@ -3346,6 +3413,7 @@ EOF
     # passed, so every candidate really is exonerated. This is the one branch conviction_clear's
     # original argument was written about, and its behaviour is unchanged.
     cut_clear; conviction_clear                 # a verdict was reached: streak over, candidates spent
+    drop_tap "$tree"                            # a red TAP beside a green stamp for the SAME tree lies
     # A now-passing state clears every standing page. postland-revert-* belongs in that set and was
     # the one class missing from it: a FAILED auto-revert's page asserts "trunk is STILL RED" and
     # hands the operator a `do:` line to land the revert BY HAND, and neither claim survives a
@@ -3368,7 +3436,8 @@ EOF
     # adds the convicted half for the same reason: a RED confirms those files, and spending their
     # rows is what made a chronic suite red only every OTHER sweep (the period-2 oscillation).
     cut_clear; conviction_clear "${CONVICT_PENDED[@]+"${CONVICT_PENDED[@]}"}" "${CONVICT_CORROBORATED[@]+"${CONVICT_CORROBORATED[@]}"}"
-    log "RED $(sha12 "$sha") failing=${FAILING[*]} run_s=$run_s retries=$RETRIES flakes=$NFLAKE sc_adv=$adv"
+    keep_tap "$tree" "$tap"                     # BEFORE red_actions — the page quotes TAP_KEPT
+    log "RED $(sha12 "$sha") failing=${FAILING[*]} run_s=$run_s retries=$RETRIES flakes=$NFLAKE sc_adv=$adv tap=${TAP_KEPT:-none}"
     red_actions "$sha" "${FAILING[0]}"
     echo "postland-verify: RED $(sha12 "$sha") — ${FAILING[*]}"
   fi
@@ -3607,6 +3676,9 @@ cut_page() { # <sha> <tree> <n> — an HONEST page: names no test, asks for no b
     fi
     printf 're-run:  git -C %s worktree add --detach /tmp/pv-repro %s && cd /tmp/pv-repro && bats tests/\n' \
       "$REPO" "$(sha12 "$1")"
+    # Kept so the CLAIM ("zero not ok") is checkable rather than trusted, and so the truncation
+    # point — how far the corpus got before it was killed — is a read instead of a re-run.
+    [ -n "$TAP_KEPT" ] && printf 'tap:     %s   (grep -c "^not ok" == 0 is the cut claim; tail -1 is where it stopped)\n' "$TAP_KEPT"
     printf 'env:     %s\n' "$ENV_FP"
   } > "$pf" 2>/dev/null || true
 }
@@ -3794,6 +3866,10 @@ verb_status() {
     "$STATE" "$WORKTREE" "$(render_lastgreen)"
   printf '  reverts    : %s total · %s INERT (landed-or-budget-spent)\n' \
     "$(find "$REVERTS" -type f 2>/dev/null | wc -l | tr -d ' ')" "$(reverts_inert_n)"
+  # The kept TAPs are the only artifact naming WHICH tests failed — surfaced here so a CUT under
+  # CUT_MAX (which writes no page) is still discoverable without grepping runner.log.
+  printf '  taps       : %s in %s (newest %s kept)\n' \
+    "$(find "$TAPDIR" -name '*.tap' -type f 2>/dev/null | wc -l | tr -d ' ')" "$TAPDIR" "$TAP_KEEP"
   printf '  stamps     : %s\n  queue      : %s\n  lock       : %s\n  flakes     : %s\n  pages      : %s\n  last run   : %s\n' \
     "$(find "$STAMPS" -name '*.json' 2>/dev/null | wc -l | tr -d ' ')" \
     "$(cat "$QUEUE" 2>/dev/null || echo '(empty)')" \
@@ -3968,6 +4044,12 @@ selftest() {
     | grep -qE '^[0-9]+$' && okp "red: page line 1 is an epoch" || badp "red: page line 1 not an epoch"
   find "$d/pages" -name "postland-red-$(sha12 "$red_sha").page" 2>/dev/null | grep -q . \
     && okp "red: page keyed to the bisected culprit sha" || badp "red: page not culprit-keyed"
+  # The TAP is the ONLY artifact naming WHICH tests failed — $RUN_TMP is gone by now, so its
+  # existence here is the whole claim (it must have been copied BEFORE the run's cleanup).
+  [ -s "$d/state/tap/$tree.tap" ] \
+    && okp "red: the corpus TAP outlived \$RUN_TMP" || badp "red: TAP discarded with \$RUN_TMP"
+  find "$d/pages" -name 'postland-red-*.page' 2>/dev/null | head -1 | xargs grep -l '^tap:' 2>/dev/null \
+    | grep -q . && okp "red: the page points at the kept TAP" || badp "red: page never names the TAP"
 
   # ── §4.2.2 PARTITION: a suite named in the manifest is NOT part of the tree verdict ─────────────
   # Behavioural, against the real producer: the tree still carries the red bad.bats from the block
@@ -4050,6 +4132,12 @@ selftest() {
   tree="$(git -C "$d/src" rev-parse 'origin/main^{tree}')"
   grep -q '"verdict":"red"' "$d/state/stamps/$tree.json" 2>/dev/null \
     && okp "prelint: a whole-tree lint red is a RED verdict" || badp "prelint: lint red not stamped red"
+  # ...and it keeps NO TAP: a prelint red SKIPS the corpus, so the only `tap` is the zero-byte file
+  # run_target created. Retaining that would hand the operator "no test failed" for a convicted
+  # tree. Control-paired with the red-path assertion above, which proved retention live on this
+  # same fixture — so this cannot pass by the mechanism simply being absent.
+  [ ! -e "$d/state/tap/$tree.tap" ] \
+    && okp "prelint: no corpus ran ⇒ no TAP kept" || badp "prelint: kept an EMPTY TAP"
   grep -q 'test-walltime-lint' "$d/state/stamps/$tree.json" 2>/dev/null \
     && okp "prelint: the stamp NAMES the failing lint" || badp "prelint: stamp does not name the lint"
   grep -q 'corpus SKIPPED' "$d/state/runner.log" 2>/dev/null \
