@@ -28,6 +28,12 @@ setup() {
   PANE="8B90BC66-9853-4F63-9C1C-39B161174221"
   export ITERM_SESSION_ID="w2t0p3:$PANE"
   unset SESSION_ID
+  # SEAM 5b: the kitty-ancestry predicate is a BARE NAME the subject EXECUTES, so an unpinned
+  # $CC_IN_KITTY_BIN would run the operator's deployed cc-in-kitty and let this suite's verdicts
+  # depend on which terminal the box happens to be running. Pinned to an ABSENT path, which is the
+  # right default here: derived_is_kitty_window fails closed on a missing predicate, so the
+  # non-kitty cases assert the iTerm2 behaviour they mean to. The kitty cases override it per test.
+  export CC_IN_KITTY_BIN="$BATS_TEST_TMPDIR/no-such-cc-in-kitty"
 }
 role_file() { cat "$CC_ROLES_DIR/${1:-desk}" 2>/dev/null; }
 
@@ -60,7 +66,12 @@ role_file() { cat "$CC_ROLES_DIR/${1:-desk}" 2>/dev/null; }
   export ITERM_SESSION_ID="garbage-no-colon"
   run "$DR"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"did not yield a pane UUID"* ]] || false
+  # The refusal wording moved from "a pane UUID" to "a pane id for THIS terminal" when the check
+  # learned kitty's id space (9002948eb52c) — one check, two id spaces, so "UUID" stopped being the
+  # whole story. The assertion follows the wording rather than pinning a string the subject
+  # deliberately changed, and keeps the ECHO of the offending value so it cannot go vacuous.
+  [[ "$output" == *"did not yield a pane id"* ]] || false
+  [[ "$output" == *"garbage-no-colon"* ]] || false
   [ ! -f "$CC_ROLES_DIR/desk" ]        # the whole point: no garbage role file
 }
 
@@ -168,4 +179,69 @@ role_file() { cat "$CC_ROLES_DIR/${1:-desk}" 2>/dev/null; }
   [ "$status" -eq 0 ]
   [ "$(role_file)" = "$PANE" ]
   [ "$(find "$CC_MAILBOX_DIR" -name '*.forward' 2>/dev/null | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+# ── THE KITTY ID SPACE (backlog 9002948eb52c, 2026-09-08) ────────────────────────────────────────
+# The shape check knew only iTerm2's id space, so on the terminal this fleet actually runs it
+# refused EVERY hand-started desk: scripts/kitty-setup.sh:290 exports a synthetic
+# ITERM_SESSION_ID="w0t0p0:$KITTY_WINDOW_ID", `${itsid##*:}` yields a bare integer, and the UUID case
+# never matched. Reproduced pre-fix: `ITERM_SESSION_ID=w0t0p0:618 desk-register` → exit 1, "did not
+# yield a pane UUID (got '618')", nothing written — while the live cc-roles/ files written by
+# handoff-fire's write_role held exactly that form (desk=330, docs-lead=450, drain-lead=7).
+#
+# The accept is NOT "digits are fine". A bare integer here has three possible origins and only one is
+# us, so both terms must hold: cc-in-kitty (ancestry, fail-closed) AND pair agreement with
+# $KITTY_WINDOW_ID. The last two cases pin each term by making the OTHER one pass — a case that let
+# both fail together would go green on a fix that implemented neither.
+#
+# cc-in-kitty is stubbed through $CC_IN_KITTY_BIN rather than $PATH: the suite runs inside a real
+# kitty window, so an unstubbed predicate would answer from the MACHINE and the refusal cases could
+# not be expressed at all.
+kitty_stub() { # <exit-code> → path to a cc-in-kitty stub that always answers <exit-code>
+  local rc="$1"
+  local p="$BATS_TEST_TMPDIR/cc-in-kitty-$rc"   # own `local`: $rc is not in scope inside the one above
+  printf '#!/bin/sh\nexit %s\n' "$rc" > "$p"; chmod +x "$p"; printf '%s' "$p"
+}
+
+@test "kitty: \$ITERM_SESSION_ID='w0t0p0:<KITTY_WINDOW_ID>' registers the integer window id" {
+  export ITERM_SESSION_ID="w0t0p0:618"
+  export KITTY_WINDOW_ID=618
+  CC_IN_KITTY_BIN="$(kitty_stub 0)"
+  export CC_IN_KITTY_BIN
+  run "$DR"
+  [ "$status" -eq 0 ]
+  [[ "$output" == "registered desk → 618" ]] || false
+  [ "$(role_file)" = "618" ]
+}
+
+@test "kitty: the integer is REFUSED when ancestry says we are not in kitty (polluted iTerm2 env)" {
+  export ITERM_SESSION_ID="w0t0p0:618"
+  export KITTY_WINDOW_ID=618          # pair agreement HOLDS — only the ancestry term refuses
+  CC_IN_KITTY_BIN="$(kitty_stub 1)"
+  export CC_IN_KITTY_BIN
+  run "$DR"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"did not yield a pane id for THIS terminal"* ]] || false
+  [ ! -f "$CC_ROLES_DIR/desk" ]
+}
+
+@test "kitty: the integer is REFUSED when it disagrees with \$KITTY_WINDOW_ID (stale inherited id)" {
+  export ITERM_SESSION_ID="w0t0p0:330"
+  export KITTY_WINDOW_ID=618          # ancestry HOLDS — only the pair-agreement term refuses
+  CC_IN_KITTY_BIN="$(kitty_stub 0)"
+  export CC_IN_KITTY_BIN
+  run "$DR"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"did not yield a pane id for THIS terminal"* ]] || false
+  [ ! -f "$CC_ROLES_DIR/desk" ]
+}
+
+@test "kitty: an integer with NO \$KITTY_WINDOW_ID at all is still refused (iTerm2 unaffected)" {
+  export ITERM_SESSION_ID="w0t0p0:618"
+  unset KITTY_WINDOW_ID
+  CC_IN_KITTY_BIN="$(kitty_stub 0)"
+  export CC_IN_KITTY_BIN
+  run "$DR"
+  [ "$status" -eq 1 ]
+  [ ! -f "$CC_ROLES_DIR/desk" ]
 }
