@@ -1575,6 +1575,48 @@ superseded_ahead() { # <head> <target> — rc 0 iff EVERY commit in <target>..<h
 
 g rev-parse --git-dir >/dev/null 2>&1 || die "DEPLOY_REPO is not a git checkout: $DEPLOY_REPO"
 
+# ── core.bare=true ON A CHECKOUT THAT HAS A WORKING TREE: HEALED HERE, NOT PAGED ─────────────────
+# `git worktree add|remove` run against the SHARED checkout can leave core.bare=true on it — it
+# happened on 2026-09-04 and took the whole fleet's live layer down with it, because every
+# working-tree git op then answers "fatal: this operation must be run in a work tree". The ff dies
+# of a cause no pre-flight below models, so the lane refuses on a state it cannot describe, and the
+# live layer stays frozen until a human runs one `git config --unset`.
+#
+# refusal_culprit() ALREADY names that state (checkout-not-a-worktree, :540) and already prints the
+# exact repair — i.e. the condition was detected, classified and printed, and still waited on a
+# person. That is the detector-with-no-owner shape (repo memory:
+# detector-with-no-owner-is-not-an-actuator): a verdict nobody actuates is an outage with good
+# paperwork. core.bare has exactly one correct value on a checkout that has a working tree, so this
+# lane sets it rather than asking. The escalation arm stays: it is what speaks when the repair below
+# does NOT restore a work tree, which is a different and unmodelled fault.
+#
+# THE DISCRIMINATOR IS THE LAYOUT, NEVER THE FLAG. A genuinely bare repository holds its objects at
+# the top level and has no `.git` entry; a non-bare checkout always has one (a directory, or a file
+# for a linked worktree). So the unset fires only where `$DEPLOY_REPO/.git` exists — point
+# DEPLOY_REPO at a real bare repo and nothing is repaired and nothing is written, which is the
+# control the test pins. --dry-run/--offline never mutate: they report the condition and the repair.
+#
+# KILL SWITCH, and it is why the R7 escalation arm below is untouched: CC_DEPLOY_BARE_REPAIR=off
+# restores the pre-repair behaviour exactly (the ff meets the bare state, refusal_bump counts it,
+# and the operator gets the page). The arm is not dead code either — a repair that does NOT restore
+# a work tree falls THROUGH to it rather than dying here, so an uncurable bare state still escalates
+# as checkout-not-a-worktree with the unset as its `run`.
+if [ "${CC_DEPLOY_BARE_REPAIR:-on}" != off ] \
+   && [ "$(g rev-parse --is-inside-work-tree 2>/dev/null)" != true ] \
+   && [ -e "$DEPLOY_REPO/.git" ] \
+   && [ "$(g config --bool --get core.bare 2>/dev/null)" = true ]; then
+  if [ "$DRY_RUN" -eq 1 ]; then
+    say "core.bare=true on $DEPLOY_REPO, which HAS a working tree — WOULD unset it; nothing mutated"
+  else
+    g config --unset core.bare 2>/dev/null || true
+    if [ "$(g rev-parse --is-inside-work-tree 2>/dev/null)" = true ]; then
+      say "REPAIRED core.bare=true on $DEPLOY_REPO (a worktree add/remove flips it; every working-tree git op was failing) — advance continues"
+    else
+      say "core.bare=true on $DEPLOY_REPO and the unset did NOT restore a working tree — leaving it to the ff arm, which counts and escalates it"
+    fi
+  fi
+fi
+
 # ── migration converge (face 3 of inertness-generator-2026-08-07 §3) ────────────────────────────
 # Registration state is no longer a script in a folder someone is supposed to visit: it is a
 # migration that landed in the same diff as its subject, and the converger runs it. Two phases —
