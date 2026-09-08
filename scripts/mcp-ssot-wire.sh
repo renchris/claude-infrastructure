@@ -70,7 +70,20 @@ case "${1:-}" in
   *)       echo "usage: $(basename "$0") [--check|--audit]" >&2; exit 2 ;;
 esac
 
-_repo_root() { cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd; }
+# Resolve $0 through its symlinks BEFORE deriving the root. ~/.claude/scripts/ is per-file symlinks
+# into the checkout, so an unresolved `dirname "$0"/..` yields ~/.claude — no mcp-servers.json in the
+# checkout, no accounts.json fallback, and the failure is invisible from a worktree because it only
+# happens on the live path. No `readlink -f`: that is GNU-only and this box is BSD. Canonical loop:
+# _resolve_self() in scripts/ship-land.sh.
+_repo_root() {
+  local p="${BASH_SOURCE[0]}" d
+  while [ -L "$p" ]; do
+    d="$(cd "$(dirname "$p")" && pwd)"
+    p="$(readlink "$p")"
+    case "$p" in /*) ;; *) p="$d/$p" ;; esac
+  done
+  cd "$(dirname "$p")/.." && pwd
+}
 REPO_ROOT="$(_repo_root)"
 
 _ssot() {
@@ -106,7 +119,7 @@ _ensure_installed() {
 # file gives ".claude.json" for both, and `basename` on the dir gives the HOME name for the first.
 _label() {
   local f="$1"
-  [[ "$f" == "$HOME/.claude.json" ]] && { echo "~/.claude.json (CLAUDE_CONFIG_DIR unset)"; return; }
+  [[ "$f" == "$HOME/.claude.json" ]] && { echo "${HOME}/.claude.json (CLAUDE_CONFIG_DIR unset)"; return; }
   basename "$(dirname "$f")"
 }
 
