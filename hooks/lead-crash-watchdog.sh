@@ -212,6 +212,56 @@ marker_owns_sid() {
   [[ -z "$got" || "$got" == "$want" ]]
 }
 
+# retired_by_desk <sid> <pid> → 0 iff this death is a SANCTIONED cc-teardown retirement.
+#
+# THE DEFECT THIS CLOSES (backlog 6f4573454230, measured 2026-09-07). cc-teardown collects a peer —
+# work landed and content-verified, custody returned — then kills it: `kill -TERM`, and `kill -KILL`
+# when the binary outlives TERM_GRACE_S. The SIGKILL leg makes the close-record read exit 137, and
+# arm 0 below maps 137 to `killed-oom-or-force` and RETURNS, three arms above the deliberate-teardown
+# marker that would have exonerated it. Live: pane 499 printed `verdict=TEARDOWN reason_kind=done
+# exit=0` at 04:57:21Z and its own watchdog paged `killed-oom-or-force, exit 137, signal 9` at
+# 04:57:51Z — over a marker naming that exact sid, written 30 s earlier.
+#
+# Two harms, and the second is why an exit-code-only fix is not enough: the page prescribes
+# `cc-husk-sweep --resume`, which would RESTART a session whose work is already on trunk; and every
+# desk teardown inflates the `killed-oom-or-force` population in claude-crashes.jsonl — the dataset
+# 24d1208e8 rebuilt hours earlier to make causes trustworthy. Four panes were retired on 2026-09-07
+# alone.
+#
+# WHY THIS READS THE TEARDOWN MARKER AND NOT THE CLOSE-RECORD. The close-record is written by the
+# VICTIM's own launcher wrapper (bin/cc-close-attrib), which overwrites that exact path at its exit;
+# a killer writing its intent there would either be clobbered by the wrapper's closed record or
+# clobber it, and it would conflate two provenances — one process's OBSERVATION of a signal
+# (`sig_reached_wrapper`, the wrapper's own trap) with another process's DECLARATION of intent. The
+# teardown-marker store is already the "a killer declared this" store: contract v1, a 30-min
+# freshness window, a documented reader (this file), and a GC. So cc-teardown gained a third KEY in
+# that same store — its pid — and nothing else moved.
+#
+# THREE GUARDS keep this from absolving a real kill. (1) `mode":"teardown"` — only cc-teardown ever
+# writes it (bin/cc-teardown:253); handoff-fire's own modes are untouched and still classify exactly
+# as they did. (2) marker_owns_sid — a marker naming a DIFFERENT session is not evidence about this
+# one, which is also what makes the pid key safe against pid reuse. (3) the 30-min freshness window,
+# shared with arms 1.5/1.6.
+#
+# The pid key is preferred and the sid key is accepted: they are written by the same statement, and
+# accepting the sid key means this fix attributes correctly for retirements whose marker predates the
+# converge of the new cc-teardown — including the incident above, whose sid-keyed marker is on disk.
+retired_by_desk() {
+  local sid="$1" pid="${2:-}" tdir key f
+  tdir="${CC_TEARDOWN_DIR:-$HOME/.claude/watchdog/teardown}"
+  for key in "$pid" "$sid"; do
+    [[ -n "$key" ]] || continue
+    f="$tdir/$key.json"
+    # `grep . >/dev/null`, never `grep -q .`: under pipefail an early-exiting consumer SIGPIPEs its
+    # producer, so the pipeline can read FALSE on the very input it matched (arm 1.6 carries the same note).
+    find "$tdir" -maxdepth 1 -name "$key.json" -mmin -30 2>/dev/null | grep . >/dev/null || continue
+    grep -q '"mode":"teardown"' "$f" 2>/dev/null || continue
+    marker_owns_sid "$f" "$sid" || continue
+    return 0
+  done
+  return 1
+}
+
 # EXIT<TAB>SIGNAL<TAB>RECORD_PATH<TAB>VERSION for a pid's newest close-record (empty if none).
 # Used by handle_crash to enrich the crash row AND by the --close-fields test entrypoint.
 close_record_summary() {
@@ -228,6 +278,12 @@ close_record_summary() {
 
 # exit code → CLASS<TAB>CAUSE (ground truth). Non-numeric/absent ⇒ return 1 (no override).
 #   0/130/143 (SIGINT/SIGTERM) = clean-exit · 137 (SIGKILL) = killed-oom-or-force ·
+# 137 IS STILL MAPPED HERE, and deliberately: this function answers "what does the exit code alone
+# say", and 137 alone says SIGKILL/OOM. Whether a sanctioned retirement EXPLAINS that SIGKILL is a
+# different question, asked by the CALLER (classify_death arm 0, via retired_by_desk) against
+# evidence this function is not given. Moving 137 out of the map the way 143 was moved would have
+# been the wrong shape: it would make every un-retired force-kill fall through to the ladder and
+# land as `abrupt-unknown`, losing the real signal the brief requires be preserved.
 #   139 (SIGSEGV) = binary-crash · any other nonzero = error-exit.
 # 143 (SIGTERM) is DELIBERATELY not here. It used to sit in the clean-exit arm beside 0 and 130,
 # which made every externally-killed session self-certify as a voluntary one — the incident of
@@ -360,6 +416,16 @@ classify_death() {
     if [[ -n "$cr" ]]; then
       ec=$(close_record_field "$cr" exit_code)
       if cls=$(map_exit_class "$ec"); then
+        # …but a CRASH class here is a claim about a SIGNAL, and a signal cannot tell a deliberate
+        # retirement from an OOM kill. cc-teardown's SIGKILL leg produced exit 137 for a session that
+        # was collected, landed and returned — see retired_by_desk for the incident. A sanctioned
+        # retirement therefore OVERRIDES the exit-code map, and only for the classes that would page:
+        # a retired session that exited 0 is already `clean-exit`, which is both true and silent.
+        # JETSAM STILL OUTRANKS IT, exactly as it outranks arms 1.5/1.6 — "a kill mid-teardown is
+        # still a kill" — so a real OOM that beats the retirement to the process keeps its own name.
+        if [[ "$cls" == CRASH* ]] && ! jetsam_near_death "$death" && retired_by_desk "$sid" "$pid"; then
+          cls=$'RECYCLE\tretired-by-desk'
+        fi
         t=$(find_transcript "$sid" 2>/dev/null || true)
         if [[ -n "$t" ]]; then
           kb=$(( $(stat -f%z "$t" 2>/dev/null || echo 0) / 1024 ))
@@ -966,13 +1032,31 @@ death_page_line() {
   case "$cause" in
     external-sigterm) what="was KILLED by an external SIGTERM (exit ${ec:-143}, signal ${sig:-15}) — it did NOT exit" ;;
     jetsam-oom)       what="was KILLED by the OOM killer (jetsam)" ;;
+    # NOT a crash: cc-teardown collected this session and then killed it. The page exists only so a
+    # reader who reaches this line by another route is told that, and told not to resume it.
+    retired-by-desk)  what="was RETIRED deliberately by cc-teardown after its work was collected — this is NOT a crash" ;;
     # The one thing this cause DOES say is that the launcher wrapper was alive and was destroyed
     # with it, so the exit status was never written — which is why no exit code appears here.
     killed-before-report) what="was DESTROYED before its launcher could record an exit status (its close-record is still open) — it did NOT exit" ;;
     *)                what="died abruptly (cause: $cause${ec:+, exit $ec}${sig:+, signal $sig})" ;;
   esac
-  printf 'SESSION DEATH — %s %s. Lost: /goal=%s, in-flight workflow dir(s)=%s. Its pane is still open at a live shell and looks EXACTLY like a clean /exit, so nothing on screen says this happened. Recover with cc-husk-sweep --resume (it resolves the session AND its account; the pane'"'"'s own printed claude --resume line uses the default account and cannot see another store'"'"'s transcript). Evidence: ~/.claude/logs/claude-crashes.jsonl (pid %s) + ~/.claude/logs/close-records/%s-*.json\n' \
-    "$sid" "$what" "$goal" "$wf" "$pid" "$pid"
+  # THE RECOVERY CLAUSE IS PER-CAUSE, because for one cause it is ACTIVELY WRONG. A `retired-by-desk`
+  # death is a cc-teardown retirement: its work was landed and content-verified and its custody row
+  # returned BEFORE the kill, so `cc-husk-sweep --resume` would restart a finished session in a
+  # worktree and duplicate completed work. A page that prescribes a harmful action is worse than
+  # silence, so this cause names no recovery command at all.
+  #
+  # A retirement is also classified RECYCLE (classify_death arm 0), and surface_death pages only
+  # CRASH — so on the live path this line is never even built. It is written anyway because
+  # death_page_line is reachable independently (the --surface-death entrypoint, and any future
+  # caller), and a page shape that CAN emit `--resume` for a retired session is a loaded gun whether
+  # or not today's single caller pulls it.
+  local recover="Its pane is still open at a live shell and looks EXACTLY like a clean /exit, so nothing on screen says this happened. Recover with cc-husk-sweep --resume (it resolves the session AND its account; the pane's own printed claude --resume line uses the default account and cannot see another store's transcript)."
+  case "$cause" in
+    retired-by-desk) recover="Its pane was closed by that retirement and its work was landed before the kill — there is NOTHING to recover here and it must NOT be resumed." ;;
+  esac
+  printf 'SESSION DEATH — %s %s. Lost: /goal=%s, in-flight workflow dir(s)=%s. %s Evidence: ~/.claude/logs/claude-crashes.jsonl (pid %s) + ~/.claude/logs/close-records/%s-*.json\n' \
+    "$sid" "$what" "$goal" "$wf" "$recover" "$pid" "$pid"
 }
 
 # ── surface_death <sid> <pid> <class> <cause> [transcript] ──────────────────────────────────────

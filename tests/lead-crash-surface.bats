@@ -174,3 +174,44 @@ surface_with() { # $1=hook-path $2=sid $3=pid $4=class $5=cause $6=exit $7=sig $
   ! echo "$output" | grep -q 'SESSION DEATH' || false
   [ ! -s "$PAGED" ] || { echo "pre-fix hook paged something: $(cat "$PAGED")"; false; }
 }
+
+# ── retired-by-desk: the one cause whose recovery prescription would be HARMFUL ───────────────────
+# Backlog 6f4573454230. `cc-husk-sweep --resume` on a session cc-teardown retired would restart work
+# already landed and content-verified on origin/main, in a worktree, duplicating it. The page for
+# this cause therefore names no recovery command at all. On the live path it is never even built —
+# classify_death calls a retirement RECYCLE and surface_death pages only CRASH — but death_page_line
+# is reachable independently (this very entrypoint), so the shape is pinned here rather than assumed.
+
+@test "retired-by-desk pages NO recovery command — a retired session must never be resumed" {
+  tx="$(mk_tx s_ret live)"; mk_wf s_ret 1
+  run surface_with "$HOOK" s_ret 42202 CRASH retired-by-desk 137 9 "$tx"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'SESSION DEATH'
+  ! echo "$output" | grep -q 'cc-husk-sweep' || false
+  ! echo "$output" | grep -q -- '--resume' || false
+  ! echo "$output" | grep -qi 'Recover with' || false
+  echo "$output" | grep -q 'must NOT be resumed'
+  echo "$output" | grep -q 'RETIRED deliberately by cc-teardown'
+}
+
+@test "control: every OTHER cause still carries the recovery command (no blanket suppression)" {
+  # The fix must not be a general muting of exit-137 pages. A force-killed session nobody retired
+  # keeps the same page, recovery clause included — this is the assertion that goes red if the
+  # clause is deleted rather than made per-cause.
+  tx="$(mk_tx s_force live)"; mk_wf s_force 1
+  run surface_with "$HOOK" s_force 50399 CRASH killed-oom-or-force 137 9 "$tx"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'cc-husk-sweep --resume'
+  echo "$output" | grep -q 'died abruptly (cause: killed-oom-or-force, exit 137, signal 9)'
+  [ -s "$PAGED" ]
+}
+
+@test "POLARITY: a retirement is classified RECYCLE, and a RECYCLE is never paged" {
+  # The two halves join here: the classifier's verdict (tests/lead-crash-watchdog.bats) and this
+  # file's polarity gate. Together they are why a desk teardown reaches the operator as nothing at
+  # all rather than as a crash page carrying a harmful command.
+  tx="$(mk_tx s_ret_pol live)"
+  run surface_with "$HOOK" s_ret_pol 42202 RECYCLE retired-by-desk 137 9 "$tx"
+  [ "$status" -eq 0 ]
+  [ ! -s "$PAGED" ] || { echo "a retirement was paged: $(cat "$PAGED")"; false; }
+}

@@ -485,3 +485,122 @@ lw_harness() { # $1=lead-liveness rc (1=gone, 0=alive) ; sets CALLED file
   [ ! -f "$CALLED" ]                                  # never invent a crash for a living session
   printf '%s' "$output" | grep -q "lead still alive"
 }
+
+# ── SIGKILL (137): a sanctioned RETIREMENT vs a genuine force-kill ────────────────────────────────
+# Backlog 6f4573454230. cc-teardown collects a peer (work landed + content-verified, custody
+# returned) and then kills it — TERM, then KILL when the binary outlives TERM_GRACE_S. The KILL leg
+# writes exit 137 into the close-record, and arm 0 mapped 137 to `killed-oom-or-force` and RETURNED,
+# three arms above the teardown marker that already sat on disk naming that exact session. Measured
+# 2026-09-07: pane 499 printed `verdict=TEARDOWN reason_kind=done exit=0` at 04:57:21Z; its watchdog
+# paged `killed-oom-or-force, exit 137, signal 9` 30 s later and prescribed `cc-husk-sweep --resume`
+# over work already on trunk.
+# BOTH DIRECTIONS ARE ASSERTED, because a fix that only exonerates is a fix that hides real OOM
+# kills: the marker-less 137 must keep its name, and the guards (foreign sid · staleness · mode ·
+# jetsam) must each still refuse.
+
+@test "SIGKILL (137) with NO teardown marker → CRASH / killed-oom-or-force (the real signal)" {
+  export CC_CLOSE_RECORDS_DIR="$BATS_TEST_TMPDIR/close-records"; mkdir -p "$CC_CLOSE_RECORDS_DIR"
+  printf '{"pid":9137,"exit_code":137,"signal":"9","stderr_tail":"","version":"2.1.260"}\n' \
+    > "$CC_CLOSE_RECORDS_DIR/9137-100.json"
+  mk_tx s_kill "ordinary work, no recycle language anywhere in this tail" 1
+  run bash "$HOOK" --classify s_kill 9137
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | cut -f1)" = "CRASH" ]
+  [ "$(printf '%s' "$output" | cut -f2)" = "killed-oom-or-force" ]
+}
+
+@test "SIGKILL (137) WITH a fresh sid-keyed teardown marker → RECYCLE / retired-by-desk" {
+  # RED pre-fix: killed-oom-or-force. This is the live incident's exact shape — the sid-keyed marker
+  # cc-teardown has always written, plus the 137 its own KILL leg produces.
+  export CC_CLOSE_RECORDS_DIR="$BATS_TEST_TMPDIR/close-records"; mkdir -p "$CC_CLOSE_RECORDS_DIR"
+  printf '{"pid":9145,"exit_code":137,"signal":"9","stderr_tail":"","version":"2.1.260"}\n' \
+    > "$CC_CLOSE_RECORDS_DIR/9145-100.json"
+  mk_tx s_retired "ordinary work, no recycle language anywhere in this tail" 1
+  printf '{"key_kind":"sid","pane":"499","sid":"s_retired","mode":"teardown","ts":"now"}\n' \
+    > "$CC_TEARDOWN_DIR/s_retired.json"
+  run bash "$HOOK" --classify s_retired 9145
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | cut -f1)" = "RECYCLE" ]
+  [ "$(printf '%s' "$output" | cut -f2)" = "retired-by-desk" ]
+}
+
+@test "SIGKILL (137) with ONLY the PID-keyed marker → retired-by-desk (the reader's own key)" {
+  # RED pre-fix twice over: the key did not exist and the arm did not read it. This is the residual
+  # the sid key cannot cover — cc-teardown may fail to resolve the target's session id, and then the
+  # sid marker is never written at all, while the pid it is about to signal is always in hand.
+  export CC_CLOSE_RECORDS_DIR="$BATS_TEST_TMPDIR/close-records"; mkdir -p "$CC_CLOSE_RECORDS_DIR"
+  printf '{"pid":9146,"exit_code":137,"signal":"9","stderr_tail":"","version":"2.1.260"}\n' \
+    > "$CC_CLOSE_RECORDS_DIR/9146-100.json"
+  mk_tx s_pidkey "ordinary work, no recycle language anywhere in this tail" 1
+  printf '{"key_kind":"pid","pane":"499","sid":"s_pidkey","pid":"9146","mode":"teardown","ts":"now"}\n' \
+    > "$CC_TEARDOWN_DIR/9146.json"
+  run bash "$HOOK" --classify s_pidkey 9146
+  [ "$(printf '%s' "$output" | cut -f2)" = "retired-by-desk" ]
+}
+
+@test "a pid-keyed marker naming ANOTHER session never exonerates this 137 (pid reuse)" {
+  # A pid is reusable; a session id is not. marker_owns_sid is what makes the pid key safe, and this
+  # is the assertion that keeps it wired in.
+  export CC_CLOSE_RECORDS_DIR="$BATS_TEST_TMPDIR/close-records"; mkdir -p "$CC_CLOSE_RECORDS_DIR"
+  printf '{"pid":9147,"exit_code":137,"signal":"9","stderr_tail":"","version":"2.1.260"}\n' \
+    > "$CC_CLOSE_RECORDS_DIR/9147-100.json"
+  mk_tx s_mine "ordinary work, no recycle language anywhere in this tail" 1
+  printf '{"key_kind":"pid","pane":"499","sid":"s_someone_else","pid":"9147","mode":"teardown","ts":"now"}\n' \
+    > "$CC_TEARDOWN_DIR/9147.json"
+  run bash "$HOOK" --classify s_mine 9147
+  [ "$(printf '%s' "$output" | cut -f2)" = "killed-oom-or-force" ]
+}
+
+@test "a STALE (>30 min) teardown marker never exonerates a 137" {
+  export CC_CLOSE_RECORDS_DIR="$BATS_TEST_TMPDIR/close-records"; mkdir -p "$CC_CLOSE_RECORDS_DIR"
+  printf '{"pid":9148,"exit_code":137,"signal":"9","stderr_tail":"","version":"2.1.260"}\n' \
+    > "$CC_CLOSE_RECORDS_DIR/9148-100.json"
+  mk_tx s_stale "ordinary work, no recycle language anywhere in this tail" 1
+  printf '{"key_kind":"sid","pane":"499","sid":"s_stale","mode":"teardown","ts":"old"}\n' \
+    > "$CC_TEARDOWN_DIR/s_stale.json"
+  set_mtime "$CC_TEARDOWN_DIR/s_stale.json" "$(( $(date +%s) - 3600 ))"
+  run bash "$HOOK" --classify s_stale 9148
+  [ "$(printf '%s' "$output" | cut -f2)" = "killed-oom-or-force" ]
+}
+
+@test "a marker whose mode is NOT teardown does not mint retired-by-desk" {
+  # Only cc-teardown writes mode=teardown (bin/cc-teardown:253). handoff-fire's own modes classify
+  # exactly as they did before this arm existed — the fix claims one writer's intent, not all of them.
+  export CC_CLOSE_RECORDS_DIR="$BATS_TEST_TMPDIR/close-records"; mkdir -p "$CC_CLOSE_RECORDS_DIR"
+  printf '{"pid":9149,"exit_code":137,"signal":"9","stderr_tail":"","version":"2.1.260"}\n' \
+    > "$CC_CLOSE_RECORDS_DIR/9149-100.json"
+  mk_tx s_mode "ordinary work, no recycle language anywhere in this tail" 1
+  printf '{"key_kind":"sid","pane":"499","sid":"s_mode","mode":"terminal","ts":"now"}\n' \
+    > "$CC_TEARDOWN_DIR/s_mode.json"
+  run bash "$HOOK" --classify s_mode 9149
+  [ "$(printf '%s' "$output" | cut -f2)" = "killed-oom-or-force" ]
+}
+
+@test "jetsam OUTRANKS the retirement marker — a real OOM keeps its own name" {
+  # This file's standing doctrine for arms 1.5/1.6: a kill mid-teardown is still a kill. The new arm
+  # inherits it, so a retirement that the OOM killer beat to the process cannot be laundered into a
+  # RECYCLE by the marker its killer had already written.
+  export CC_CLOSE_RECORDS_DIR="$BATS_TEST_TMPDIR/close-records"; mkdir -p "$CC_CLOSE_RECORDS_DIR"
+  printf '{"pid":9150,"exit_code":137,"signal":"9","stderr_tail":"","version":"2.1.260"}\n' \
+    > "$CC_CLOSE_RECORDS_DIR/9150-100.json"
+  mk_tx s_oomrace "ordinary work, no recycle language anywhere in this tail" 1
+  printf '{"key_kind":"sid","pane":"499","sid":"s_oomrace","mode":"teardown","ts":"now"}\n' \
+    > "$CC_TEARDOWN_DIR/s_oomrace.json"
+  mk_jetsam atdeath "$(date +%s)"
+  run bash "$HOOK" --classify s_oomrace 9150
+  [ "$(printf '%s' "$output" | cut -f1)" = "CRASH" ]
+  [ "$(printf '%s' "$output" | cut -f2)" != "retired-by-desk" ]
+}
+
+@test "a retired session that exited 0 is still clean-exit, not retired-by-desk" {
+  # The override is scoped to the CRASH classes — the ones that page. A clean exit needs no
+  # exoneration, and re-labelling it would churn the ledger's largest population for no fact gained.
+  export CC_CLOSE_RECORDS_DIR="$BATS_TEST_TMPDIR/close-records"; mkdir -p "$CC_CLOSE_RECORDS_DIR"
+  printf '{"pid":9151,"exit_code":0,"signal":"","stderr_tail":"","version":"2.1.260"}\n' \
+    > "$CC_CLOSE_RECORDS_DIR/9151-100.json"
+  mk_tx s_clean "ordinary work, no recycle language anywhere in this tail" 1
+  printf '{"key_kind":"sid","pane":"499","sid":"s_clean","mode":"teardown","ts":"now"}\n' \
+    > "$CC_TEARDOWN_DIR/s_clean.json"
+  run bash "$HOOK" --classify s_clean 9151
+  [ "$(printf '%s' "$output" | cut -f2)" = "clean-exit" ]
+}
