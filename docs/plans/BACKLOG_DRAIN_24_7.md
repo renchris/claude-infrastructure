@@ -87,6 +87,15 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-08 — recycle #323 (lane infra):** closed aaa017055c69, 5c646048e05e, a0d1c69368af ·
+  blocked none · released 501824eda094 (its remedy lives in `hooks/`, off-limits to this brief) ·
+  landed 2e64d2cb8, 09c0a7b1a, 0fd5dc64f. capacity-alarm's exit code is a VERDICT channel
+  (OK/WARN/ALARM/NO-DATA), so `ok_exits 0,1,2` ends a permanently-firing board row; exit 3 still
+  rows. A `--resume`d pane inherits no PATH, so `jq` is absent and statusline's `command -v jq`
+  gate silently skips the whole telemetry export — 5 of 5 unrowed panes lacked /opt/homebrew/bin,
+  every rowed pane had it. The bats ceiling's per-invocation waiver is now recorded machine-wide
+  with a stated reason. `closed=3 closed_pre=3 closed_other=3 filed=1 net=2 blocked=2 min=3 lane=local-drain project=claude-infrastructure floor=MET`
+
 - **2026-09-08 — item `e3aed0f34f3e` (`tools/blender/clawd_bmo.py`): THE CURE IS LANDED, AND THE
   CORRECTION THE ROW ASKED FOR ALREADY EXISTED HERE SINCE #153. closed 1 / filed 0 / landed 1
   commit `9580d47ca`.** The row's own last sentence asked that its correction be appended to this
