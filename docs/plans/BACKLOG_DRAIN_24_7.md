@@ -87,6 +87,15 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-08 — recycle #325 (lane infra):** closed 9a14bbf30587, baf8b76db360, d240e4dae8d3,
+  e4a727fba9c0 · blocked none · released 763522029afd, a6843865a2ec, c9d5053a92c0, e99533512a95,
+  1b03a569436d · landed 5000db426, eddfc01fa (both `--is-ancestor origin/main` OK; `git diff
+  origin/main` empty on all 8 paths) · recovered the §6 adds-vs-closes alarm from a 20-day-stranded
+  branch and re-triaged all 41 HOLD-stranded branches by CONTENT — 26 landed, 1 superseded, 6
+  genuinely stranded, 6 abandoned with reasons; the land gate caught 3 dead assertions the stranded
+  suite shipped · `closed=4 closed_pre=4 closed_other=1 filed=2 net=2 blocked=2 min=3
+  lane=local-drain project=claude-infrastructure floor=MET` (filed/blocked are other sessions').
+
 - **2026-09-08 — recycle #324 (lane infra):** closed 501824eda094, 6539012db611, and the twelve
   `re-land *` rows bef2768edfa8 a69b79fc5b75 662110222212 957301ae6045 05a749edc8ae 020cac3e27f7
   cd9c4cc3b41e 4f196d52605e c625eb6f6800 cb02757a7df2 73f901ab6a26 7963a6f14dbd (each one's own
