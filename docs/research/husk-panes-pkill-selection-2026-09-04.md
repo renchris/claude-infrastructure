@@ -13,7 +13,9 @@ Each victim printed Claude Code's ordinary `Resume this session with:` line and 
 which is pixel-identical to a clean `/exit`.
 
 The same mechanism had already fired twice — 2026-08-09 (`pkill -f "next dev" -P $$`, 3 sessions)
-and 2026-08-25 (`pkill -f "cc-await-ping"`, 1 session + 3 watchers) — and each time the remedy was
+and 2026-08-25 (`pkill -f "cc-await-ping"`, 1 session + **8** watchers — recounted 2026-09-08 from the
+whole mailbox store, correcting the "3" this line carried; `sigterm-forensics-2026-08-25.md` § *Recount*)
+— and each time the remedy was
 keyed on the **spelling** (a gate-program clause, a trailing-flag clause, a forensic si_pid
 recommendation later refuted). This time the fix is keyed on the **selection**.
 
