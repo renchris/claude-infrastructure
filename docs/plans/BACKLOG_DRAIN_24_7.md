@@ -87,6 +87,15 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-07 — recycle #319 (lane infra):** closed `5207d553dce2` (cc-backlog's claim lease was
+  non-atomic — two claimers inside one second both won; now a per-item mutex over the fold→append
+  section, refusing rc 4 `verdict=claim-contended`), `1f323187c1e9` · `6f203a844f53` ·
+  `de4f1c0135bb` (all MOOT/superseded, each with a same-moment probe) · blocked `5be5f55043c4`
+  (postland has no green stamp at/above live HEAD; both suites its red named pass clean today, so
+  the red is load-induced — it needs one quiet ~3h window) · released `ed54373d639b` `99dbf659930c`
+  · landed `8e42b1e36` (with #318's five stranded commits, re-authored off the t@t committer leak).
+  `closed=4 closed_pre=4 closed_other=4 filed=8 net=-4 blocked=7 min=3 lane=local-drain project=claude-infrastructure floor=MET`.
+
 - **2026-09-07 — recycle #318 (lane infra):** closed 64d2592ada06 (wrap-ledger already filters
   custody on `originatorPane`, landed under sibling a9ede190ee3b) 3ba9f281b364 (cloud authorship
   DECIDED+shipped: `reauthor_branch` at cloud-reconcile.sh:504/787/835, 129 landed cloud commits all
