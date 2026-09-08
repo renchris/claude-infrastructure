@@ -618,23 +618,29 @@ fi
 # free: on an empty read `set -- $cs` leaves $1 unset, so `${1:-x}` = x != 0 and the rung goes RED.
 # Backlog c4383f1c9172 (memory: positive-control-the-denominator).
 census() { # → "<trees> <exe_trees> <bin_trees>" | empty + rc 1 when the process table is unreadable
-  ps -eo pid=,ppid=,args= 2>/dev/null | awk '
-    {
-      rows++
-      cmd = $3; f = ""
-      if      (cmd ~ /claude-code\/bin\/claude\.exe$/) f = "exe"
-      else if (cmd ~ /node_modules\/\.bin\/claude$/)   f = "bin"
-      if (f != "") { fam[$1] = f; par[$1] = $2 }
-    }
-    END {
-      if (rows + 0 == 0) exit 1
-      exe = 0; bin = 0
-      for (p in fam) {
-        if (par[p] in fam) continue        # child of an already-counted tree
-        if (fam[p] == "exe") exe++; else bin++
-      }
-      printf "%d %d %d\n", exe + bin, exe, bin
-    }'
+  # ONE CENSUS, TWO CONSUMERS (backlog c4383f1c9172). This used to be a second copy of the awk that
+  # scripts/lib/spawn-presence.sh already carried, and the copies DIVERGED exactly as the comment
+  # above describes: the `rows` positive control was added there and not here, so under a `ps` that
+  # produced nothing the twin correctly returned rc 1 while this one returned a well-formed
+  # "0 0 0" that every consumer read as an idle box. Delegating is what makes that unrepeatable —
+  # the next correction cannot land in one copy, because there is only one.
+  #
+  # NO INLINE FALLBACK, deliberately. A fallback copy of the body would re-create the divergence
+  # this change removes, and silently: the fallback is the path that never runs in review and never
+  # gets the next fix. An unreadable lib is a REFUSAL (empty + rc 1), which every caller below
+  # already handles as "no measurement" — the same disposition as an unreadable process table.
+  #
+  # NOT cc_sp_trees: that reads CC_SP_TREES_OVERRIDE, a spawn-gate test seam. This rung must report
+  # what `ps` says, so it charges the census directly and the override cannot reach it.
+  [ -n "${_CA_SP_LIB_LOADED:-}" ] || {
+    _ca_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/spawn-presence.sh"
+    [ -r "$_ca_lib" ] || return 1
+    # shellcheck source=/dev/null
+    . "$_ca_lib" 2>/dev/null || return 1
+    _CA_SP_LIB_LOADED=1
+  }
+  command -v cc_sp_census >/dev/null 2>&1 || return 1
+  cc_sp_census
 }
 
 CENSUS="$(census || true)"
