@@ -130,13 +130,33 @@ setup() {
   # — naming the misclassification as the intent. Exit 3 is now reserved for a resolver that ANSWERED and
   # said the pane is not there; a resolver that never answered exits 7 and says so. The suite that pins
   # the split itself is tests/handoff-selfclose.bats § RESOLVER CANNOT TELL.
-  local failf="$BATS_TEST_TMPDIR/ttyfail"; printf '4\n' > "$failf"
+  # SEVEN failures, not four (2026-09-08). The successor query is not the only caller of the
+  # retrying resolver: on the iTerm2 transport, verify_self_pane → pane_ownership → as_tty probes the
+  # CLOSING pane first, and that probe honours the same seam. With a budget of 4 it consumed 3, the
+  # successor query consumed the last one and then fell through to the REAL terminal API, which
+  # answered "absent" — exit 3, seam at 0, and this case red in three consecutive land gates while
+  # every reproduction from a kitty pane (where pane_ownership takes the kitty branch and never
+  # touches the seam) was green. That is a transport dependency, not the load flake the header
+  # blames. 7 = 3 (self probe, iTerm2 branch only) + 3 (successor) + 1 that must remain, so the
+  # assertion below can prove the successor query never reached the real API on EITHER transport.
+  local failf="$BATS_TEST_TMPDIR/ttyfail"; printf '7\n' > "$failf"
   run env CC_COMPLETION_PUSH_BIN="$STUB" \
       HANDOFF_TTY_FAIL_FILE="$failf" HANDOFF_TTY_RETRIES=3 HANDOFF_TTY_RETRY_SLEEP_S=0 \
       bash "$HF" self-close --successor "NOPANE-5150" --session-id "fake:FFFF-5150"
+  # On a miss, say WHAT came back: the assertion below names the expected code only, and a gate-only
+  # failure (2026-09-08: red in three consecutive lands, green in every reproduction outside the
+  # gate) was undiagnosable from the bare `[ "$status" -eq 7 ]` line.
+  if [ "$status" -ne 7 ]; then
+    echo "# status=$status (expected 7); ttyfail left=$(cat "$failf" 2>/dev/null); output tail:" >&3
+    printf '%s\n' "$output" | tail -n 25 | sed 's/^/#   /' >&3
+  fi
   [ "$status" -eq 7 ]                       # NOT a leaked osascript code — the flake this fixes
   [ ! -f "$MARK" ]                          # still aborts BEFORE any completion push
-  [ "$(cat "$failf")" -eq 1 ]              # seam consumed on all 3 retries (4→1) — proves the query was retried
+  # kitty transport: only the successor query consumes the seam (7→4); iTerm2 transport: the self
+  # probe too (7→1). Either way the seam was never exhausted, so the exit 7 above came from three
+  # FAILED queries and not from the real API — that is the property, on both transports.
+  local left; left="$(cat "$failf")"
+  [ "$left" -ge 1 ] && [ "$left" -le 4 ]    # 3 retries consumed by the successor query, seam never exhausted
 }
 
 @test "real completion-push (default bin resolution) → a completion-push RECORD, verdict verified" {
