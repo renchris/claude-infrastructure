@@ -546,11 +546,11 @@ the binary and invocation mode that produced the verdict. Commands: § 3a, keyed
 | 19 | `TeammateIdle` | ✓ / ✓ | FIRES | 220 · interactive, production (27,986 dispatches) | *wired* |
 | 20 | `TaskCreated` | ✓ / ✓ | FIRES | 220 · headless `-p` (`TaskCreate` tool) | **DROP** |
 | 21 | `TaskCompleted` | ✓ / ✓ | FIRES | 220 · headless `-p` (`TaskUpdate` tool) | *wired* |
-| 22 | `Elicitation` | ✓ / ✓ | FIRES | 220 · headless `-p`, purpose-built MCP server | **PROHIBITION** (decision-class) |
-| 23 | `ElicitationResult` | ✓ / ✓ | FIRES | 220 · headless `-p`, same run | **PROHIBITION** (decision-class) |
+| 22 | `Elicitation` | ✓ / ✓ | FIRES | **114 + 220** · headless `-p`, purpose-built MCP server | **PROHIBITION** (decider only — an observer is mechanically inert, `H$o` @237818083) |
+| 23 | `ElicitationResult` | ✓ / ✓ | FIRES | **114 + 220** · headless `-p`, same runs | **PROHIBITION** (decider only — same three guards) |
 | 24 | `ConfigChange` | ✓ / ✓ | FIRES | 114 + 220 · headless `-p` | **WIRE** (decision-class — empty stdout) |
-| 25 | `WorktreeCreate` | ✓ / ✓ | **HOSTILE** | 220 · provider contract read + fleet incident | **PROHIBITION** |
-| 26 | `WorktreeRemove` | ✓ / ✓ | FIRES | 220 · headless `-p`, `ExitWorktree` in a /tmp repo | **DROP** |
+| 25 | `WorktreeCreate` | ✓ / ✓ | **HOSTILE** | **114 + 220 · source read: the `Lke()` registration gate (220 @230483203 / 114 `bPH` @82719518) + `LPt` resolution @237764276** | **PROHIBITION** |
+| 26 | `WorktreeRemove` | ✓ / ✓ | FIRES · **hostile on the session-exit path, UNPROBED** | 220 · headless `-p`, `ExitWorktree` in a /tmp repo — and that is the ONE path the hazard does not reach | **PROHIBITION** (was DROP — see § 3d) |
 | 27 | `InstructionsLoaded` | ✓ / ✓ | FIRES, and it NAMES the file | 114 + 220 · headless `-p` | **WIRE** |
 | 28 | `CwdChanged` | ✓ / ✓ | FIRES | 114 + 220 · headless `-p` | **WIRE** — mandatory if 29 is wired · handler `hooks/cwd-changed.sh` landed W3-E (`e48db8be5`) |
 | 29 | `FileChanged` | ✓ / ✓ | FIRES | 114 + 220 · headless `-p` | **WIRE** — but only as the PAIR in § 3e |
@@ -979,6 +979,15 @@ called reviewed. It should not need to re-measure anything. *(The word "three" s
 2026-09-07; it is a leftover from the pre-correction text that the paragraph above already fixed —
 the same stale-count shape this plan keeps finding elsewhere.)*
 
+✅ **BOTH RAN, 2026-09-07/08 — W4 IS NOW COMPLETE, and it was worth running.** The two subsections
+below are those passes. Across them: **no FIRES verdict was refuted**, one **disposition was wrong**
+(row 26 `WorktreeRemove`, DROP → PROHIBITION), three rows' **evidence lines did not reach the claim
+they were offered for**, two rows **under-reported their own binary coverage**, several claims moved
+from inference to a source offset, and two live defects surfaced that were nobody's plan item — the
+beacon's dead attribution and its orphaned append mutex. The one thing still owed is a **probe**, not
+a review: `Wlt()`, the `claude -w` session-exit worktree-removal path, named at the end of the
+provider subsection.
+
 ### `permission` group — REFUTED 2026-09-07. No FIRES verdict fell; two of this section's own
 ### sentences did.
 
@@ -1023,6 +1032,73 @@ better-supported one (a hand-fed hook does not mint a consistent canonical `tran
 six distinct events for one sid, and the real model-written `compact_summary` leg is untouched), but
 it now rests on the path SHAPE, not on a file anyone can open. Evidence that lives in `/tmp` has a
 half-life; a claim naming a file has to date itself.
+
+### `provider` group — REFUTED 2026-09-07/08. One disposition was WRONG, and it is the dangerous kind.
+
+Run by an independent refuter against the binaries and `/tmp/hs/log`; full write-up with every offset
+at `/tmp/hs/refute-provider.md`. **7 SURVIVES · 3 REFUTED-as-stated · 1 UNDECIDABLE.** Every offset
+cited below was re-read verbatim out of the 2.1.220 bundle by the lead before adoption, because a
+subagent's source quote is a claim until someone opens the file.
+
+**🚨 Row 26 `WorktreeRemove` was DROP and is now PROHIBITION.** The plan justified DROP from the
+payload — `{"hook_event_name":"WorktreeRemove","worktree_path":"…"}`, "observer-class". The payload is
+indeed thin, but the payload is not what the harness consumes: the hook's **exit status** is. `Xor`
+(220 @237765220) sets its return to `true` if *any* registered hook merely succeeded, and both callers
+read that boolean as *"the hook has already removed the worktree"* —
+`Wlt()` session-exit cleanup @230515947 runs the built-in `git worktree remove` fallback (`Kor`) ONLY
+when it is false, and the agent-worktree path @230525697 returns `outcome:"removed"` and emits removal
+telemetry. So a bare observer that exits 0 — exactly what row 26's own probe registered — turns
+worktree removal into a **no-op that logs `Removed hook-based worktree at: …`**. On this machine
+`WorktreeCreate → worktree-setup.sh` is live and `WorktreeRemove` is not, so every agent worktree is
+`hookBased` and this path is reachable in production.
+
+*Why UNDECIDABLE rather than REFUTED, which is the honest part:* the probe does not exhibit the leak.
+All three probe worktrees are gone and no stale registration survives. The `wtr` run reached `Xor`
+through the **`ExitWorktree` tool**, a third path that removes regardless of the boolean; `Wlt()` — the
+`claude -w` session-exit path this fleet actually uses — was never exercised. The hazard is proven in
+source on a path the probe never touched and disproven on the one path it did. The one safe probe is a
+`/tmp` repo entered with `claude -w` and exited by **session end**, not by the tool. Until that runs,
+do not register here. *(Shape worth naming: the disposition was read off the PAYLOAD, and the payload
+is not the interface. For every provider-class event the return channel — stdout, or the exit status —
+is the thing to read.)*
+
+**Row 25 `WorktreeCreate` — the verdict SURVIVES and its evidence line is REFUTED.** Neither cited
+piece supports HOSTILE. Read in full, the contract error (`"hook succeeded but returned no worktree
+path"`) is unreachable unless NO hook returned a path: `LPt` @237764276 does
+`.filter(succeeded).map(lastNonBlankLine).find(len>0)`, so alongside a real provider a silent observer
+contributes `""`, `.find()` skips it, and the provider wins — that proves *provider-class*, not
+hostile. And the fleet incident is one provider hook doing its normal job (`worktree-setup.sh:187`
+computes the path, and `wtr.tsv`'s payload carries that hook's own spelling
+`/Users/chrisren/Development/.worktrees/wtrepo-probewt` from a session cwd'd in `/private/tmp/hs/wtrepo`);
+it is evidence for *"a /tmp subject is not isolation while `--settings` merges"*, which § 3a already
+draws, and for nothing else.
+
+What actually makes it HOSTILE is a third mechanism the plan never names: **`Lke()` (220 @230483203,
+114 `bPH` @82719518) fires on MERE REGISTRATION** — no matcher, no type check, no content check — and
+all three `LPt` call sites are gated on it. So on a machine with no provider hook, registering one pure
+observer makes `Lke()` true, **bypasses native git worktree creation**, routes to `LPt`, finds no path,
+and throws. `--worktree` / `EnterWorktree` hard-fails. That is the ledger's own HOSTILE definition, it
+is a strictly stronger argument than either cited evidence, and it holds on both binaries by presence.
+
+**Rows 22/23 under-reported their own evidence.** Two runs exist, not one: `provstat` (session
+`e1a88779…`, transcript `"version":"2.1.220"`) and `prov114` (session `b14f7a3d…`, transcript
+`"version":"2.1.114"`, corroborated by `/tmp/hs/log/mcp-elicit.log` line 1's `clientInfo`). Each
+carries exactly one `Elicitation` and one `ElicitationResult`, so both rows are **measured on 114 and
+220**, not merely present in both enums. Payload drift worth a footnote: the 220 payloads carry
+`prompt_id`, the 114 ones do not.
+
+**PROHIBITION was collapsing two opposite hazards, and the tokens now distinguish them.** Row 25 breaks
+the host on registration alone. Rows 22/23 do not: a silent observer is inert behind three independent
+guards in `H$o` @237818083 — `if(!e.output.trim())return{}` · `if(!r.startsWith("{"))return{}` ·
+`if(!o.action)return{}` — so even a *chatty* observer printing non-JSON is inert, and Elicitation is an
+ordinary decision-class event, the same class as `PreToolUse` and `PermissionRequest`, both of which
+this ledger wires. The prescription ("an observer must stay exit-0-with-empty-stdout") is unchanged and
+is now proven rather than asserted.
+
+**Claim (b) held, and its caveat was too conservative.** The `watchPaths` `flatMap` union in
+registration order followed by a wholesale replace is present on **114** as well (`FU7`), so the
+220-only hedge can go. The genuinely-owed half — the non-`watchPaths` per-provider arms — is what § 2.1
+and § 2.4 above now answer.
 
 **A live defect found by the same pass, now FIXED (`4b823c181`).** The archive's append mutex had
 been an orphan since **2026-08-07 17:35**: an empty `.append.lock` directory with no owner and no age
