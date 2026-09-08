@@ -8039,18 +8039,36 @@ probe_account() { # $1=account → 0 pass; prints rejection class on fail
   # operator re-logging in to fix a missing install.
   [ -x "$BIN" ] || { echo "probe-binary-missing ($BIN — set CC_EVAL_BIN)"; return 1; }
   dir="$(cfg_dir "$1")"
-  if out="$(cd /tmp && CLAUDE_CONFIG_DIR="$dir" DISABLE_AUTOUPDATER=1 \
+  # The VERDICT is read off the result JSON, never off the exit status (2026-09-08). Measured on
+  # 2.1.260: four consecutive Fable 5.1 probes, one per account, each returned a result carrying
+  # "stop_reason":"end_turn", "result":"ok" and ~1 USD of cache creation — the account had plainly
+  # reached the model — and every one was rejected as `unknown`, so a fully routable wave halted with
+  # "all 4 ranked accounts failed the probe". The probe's own transcript shows why: a Stop hook (the
+  # wake-floor arm of session-continue.sh) BLOCKED the headless session's first stop and forced a
+  # second turn past --max-turns 1, so the CLI exited non-zero AFTER it had printed a successful
+  # result, and the old `$(…) && grep` conjunction let that exit status veto the content. What this
+  # probe asks is "can this account reach this model?", and a completed end_turn answers yes whatever
+  # the process then does on its way out. So: pass on the success marker OR on a completed turn;
+  # classify a failure from the text; stdin from /dev/null so the CLI never spends 3s waiting for
+  # piped input it will not get; and carry the exit status plus the JSON's own verdict fields in the
+  # rejection — `head -c 200` of a result whose type/subtype/is_error keys sit at the END of the
+  # object showed none of them, which is how a successful probe read as an unexplained failure.
+  local rc=0 verdict
+  out="$(cd /tmp && CLAUDE_CONFIG_DIR="$dir" DISABLE_AUTOUPDATER=1 \
       perl -e 'alarm 90; exec @ARGV' "$BIN" -p 'Reply with exactly: ok' \
       --strict-mcp-config \
-      --model "$probe_model" --max-turns 1 --output-format json 2>&1)" \
-     && printf '%s' "$out" | grep -q '"is_error":false'; then
-    return 0
-  fi
+      --model "$probe_model" --max-turns 1 --output-format json 2>&1 </dev/null)" || rc=$?
+  # A shell pattern match, not `printf | grep -q`: under pipefail an early-exiting consumer can
+  # read FALSE on a MATCH (the repo's pipefail-SIGPIPE gate), and $out is already captured.
+  case "$out" in
+    *'"is_error":false'*|*'"stop_reason":"end_turn"'*) return 0 ;;
+  esac
+  verdict="$(printf '%s' "$out" | grep -oE '"(subtype|is_error|api_error_status|result)":("[^"]{0,80}"|[^,}]{0,40})' | tr '\n' ' ')"
   case "$out" in
     *"usage limit"*)                    echo "rate-limited" ;;
     *"may not exist"*|*"have access"*)  echo "model-unavailable ($probe_model)" ;;
     *"login"*|*"authent"*|*"OAuth"*)    echo "auth-expired (needs /login)" ;;
-    *)                                  echo "unknown: $(printf '%s' "$out" | head -c 200)" ;;
+    *)                                  echo "unknown (rc=$rc${verdict:+; $verdict}): $(printf '%s' "$out" | head -c 200)" ;;
   esac
   return 1
 }
