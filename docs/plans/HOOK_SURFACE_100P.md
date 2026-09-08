@@ -476,6 +476,32 @@ today**; it only looks healthy because resolution falls through to `PostToolUse`
 This is a real bug in a hook we already run fleet-wide, and it is exactly the class the § 5 learning
 "a green test can certify a bug" describes. It needs its own fix, separate from any new wiring.
 
+**FIXED 2026-09-07.** The blast radius was bigger than the paragraph above states: with the id rule
+structurally unreachable, `bin/cc-permission-audit` fell through to the tool-NAME path its own
+docstring rejects and reported **`approved 0 · denied/abandoned 26 · cleared-by-other 378 ·
+unknown 3359`** over 3,763 real prompts. That zero was an artifact of the instrument — the archive
+the classifier exists to be tuned on had no interpretable grant in five weeks of collection.
+
+The replacement is the **invocation signature**: sha256 over the canonical (recursively key-sorted)
+`{tool_name, tool_input}`, recorded as `tool_sig` (prompt side) and `cleared_tool_sig` (clearing
+side). Both events populate those fields, and the grounding measurement is that the `tool_input`
+this beacon archives from `PermissionRequest` is key-for-key identical to the transcript's own
+`tool_use.input`, which is what `PostToolUse` carries — checked against five archived prompts and
+their sessions' transcripts. The id rule is kept ABOVE the signature rule, so a binary that starts
+populating the field upgrades the proof automatically. Two properties worth keeping in mind if this
+is touched again: a canonical form is emitted **only when `tool_name` is non-empty**, because
+`printf '' | shasum` yields a perfectly good digest of the empty string and two unparseable payloads
+would otherwise match and manufacture an approval; and the residual false-approval path needs a
+second invocation with the same tool AND byte-identical input clearing the beacon in the same turn,
+which a re-prompt-and-overwrite makes narrow. Every other failure lands on `collateral`/`unknown`.
+
+Rows archived before this change carry neither an id nor a signature and stay `unknown` forever —
+the audit now says that in words, because "unknown" over a gap in the RECORD is not a denial.
+Red-proof: 8 new bats arms across `tests/cc-permission-beacon.bats` and
+`tests/cc-permission-audit.bats` go RED against the pre-fix handler and classifier (staged from
+`HEAD` with the new tests, verified before landing); the ninth is labelled in its own name as a
+precedence-preservation control that is green both ways by design.
+
 ## 3. THE LEDGER — every event, and what it still owes
 
 **Verdict vocabulary — exactly four tokens, and every row carries one:**

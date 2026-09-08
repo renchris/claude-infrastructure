@@ -258,6 +258,50 @@ print(json.dumps({'session_id':sys.argv[1],'ts':int(time.time())-int(sys.argv[4]
   [[ "$output" == *"approved 1"* ]] || false
 }
 
+# ── THE INVOCATION SIGNATURE — what the D1 pair above could never actually exercise ──────────────
+# D1 and its positive control both hand-write `tool_use_id` values the harness never sends. In
+# production that field is "" on the PermissionRequest side in 0 of 3,641 rows, so the id branch
+# never fired and every real row fell to the tool-NAME branch: `approved 0 · unknown 3359` over
+# 3,763 prompts. These arms use the SHAPE the harness actually produces — empty ids, populated
+# signatures — and are RED against the pre-fix classifier, which reads no signature and answers
+# `unknown` to both.
+@test "SIG: matching signatures PROVE a grant when the harness sent no tool_use_id" {
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"; mkdir -p "$CC_PERMARCHIVE_DIR"
+  printf '%s\n' '{"session_id":"g1","ts":1,"resolved_ts":2000000000,"waited_s":9,"resolved_by":"PostToolUse","cleared_tool":"Bash","tool_name":"Bash","tool_use_id":"","cleared_tool_use_id":"toolu_C","tool_sig":"abc123abc123abcd","cleared_tool_sig":"abc123abc123abcd","tool_input":{"command":"git push origin main"}}' > "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
+  mk "ls -l"; run python3 "$AUDIT"
+  [[ "$output" == *"approved 1"* ]] || false
+  [[ "$output" == *"unknown 0"* ]] || false
+}
+
+@test "SIG: differing signatures on the SAME tool name are cleared-by-other, not approved" {
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"; mkdir -p "$CC_PERMARCHIVE_DIR"
+  printf '%s\n' '{"session_id":"g2","ts":1,"resolved_ts":2000000000,"waited_s":9,"resolved_by":"PostToolUse","cleared_tool":"Bash","tool_name":"Bash","tool_use_id":"","cleared_tool_use_id":"","tool_sig":"aaaaaaaaaaaaaaaa","cleared_tool_sig":"bbbbbbbbbbbbbbbb","tool_input":{"command":"git push --force"}}' > "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
+  mk "ls -l"; run python3 "$AUDIT"
+  [[ "$output" == *"approved 0"* ]] || false
+  [[ "$output" == *"cleared-by-other 1"* ]] || false
+}
+
+@test "SIG PRECEDENCE (green both ways BY DESIGN): tool_use_id still OUTRANKS the signature" {
+  # NOT part of the red-proof set, and labelled so nobody later reads it as evidence: the pre-fix
+  # classifier reaches the same verdict by the id rule alone, so this arm cannot go red against it.
+  # Its job is the opposite — to stop a future edit REORDERING the rules. If a later binary starts
+  # populating PermissionRequest.tool_use_id, proof by id is strictly stronger and must keep
+  # winning. Ids disagree, signatures agree ⇒ collateral, not approved.
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"; mkdir -p "$CC_PERMARCHIVE_DIR"
+  printf '%s\n' '{"session_id":"g3","ts":1,"resolved_ts":2000000000,"waited_s":9,"resolved_by":"PostToolUse","cleared_tool":"Bash","tool_name":"Bash","tool_use_id":"toolu_A","cleared_tool_use_id":"toolu_B","tool_sig":"same","cleared_tool_sig":"same","tool_input":{"command":"rm -rf /tmp/x"}}' > "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
+  mk "ls -l"; run python3 "$AUDIT"
+  [[ "$output" == *"approved 0"* ]] || false
+  [[ "$output" == *"cleared-by-other 1"* ]] || false
+}
+
+@test "SIG: a pre-signature row stays UNKNOWN and says so — a gap in the record, not a denial" {
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"; mkdir -p "$CC_PERMARCHIVE_DIR"
+  printf '%s\n' '{"session_id":"g4","ts":1,"resolved_ts":2000000000,"waited_s":9,"resolved_by":"PostToolUse","cleared_tool":"Bash","tool_name":"Bash","tool_use_id":"","cleared_tool_use_id":"toolu_C","tool_input":{"command":"ls"}}' > "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
+  mk "ls -l"; run python3 "$AUDIT"
+  [[ "$output" == *"unknown 1"* ]] || false
+  [[ "$output" == *"gap in the RECORD"* ]] || false
+}
+
 @test "D3: an UNREADABLE archive FILE is BLIND, never an all-clear" {
   # UID-INDEPENDENT BY CONSTRUCTION (2026-08-30). This arm used to `chmod 000` the archive dir,
   # and mode bits do not apply to uid 0 — under root the dir reads fine, glob returns the file,

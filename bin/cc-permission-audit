@@ -161,12 +161,24 @@ def _read_rows(cutoff):
 def _classify(r):
     """approved | refused | collateral | unknown — and a grant is PROVEN, never inferred.
 
-    The only evidence that a prompt was GRANTED is that the very invocation it gated is the
-    one whose PostToolUse cleared it: tool_use_id must match. Matching tool NAMES was the
-    previous rule and it is a guess that fails in the unsafe direction — this tool's traffic
-    is overwhelmingly Bash, so a DENIED `git push --force` followed by any other Bash command
-    in the same turn gave cleared_tool == tool_name == "Bash" and the refusal was counted as
-    an approval. Without the ids, the honest answer is `unknown`.
+    The only evidence that a prompt was GRANTED is that the very invocation it gated is the one
+    whose PostToolUse cleared it. Matching tool NAMES was the first rule and it is a guess that
+    fails in the unsafe direction — this tool's traffic is overwhelmingly Bash, so a DENIED
+    `git push --force` followed by any other Bash command in the same turn gave
+    cleared_tool == tool_name == "Bash" and the refusal was counted as an approval.
+
+    Identifying the invocation by `tool_use_id` was the second rule, and it could never fire:
+    PermissionRequest ships that field as the empty string in 0 of 3,641 archived records and in
+    the live payload (HOOK_SURFACE_100P.md § 3a row 16), so `tid and cid` was never true and every
+    row fell through to the tool-NAME branch this docstring rejects. The measured result was
+    `approved 0 · unknown 3359` over 3,763 real prompts — a zero produced by the instrument.
+
+    The rule that actually decides is the INVOCATION SIGNATURE the beacon now records: a digest
+    over the canonical {tool_name, tool_input} of the prompted call (`tool_sig`) and of the call
+    that cleared it (`cleared_tool_sig`). Both events carry those fields, and the prompt-side
+    input is byte-identical to the transcript's own `tool_use.input`. The id rule is kept ABOVE
+    it, unchanged, so a binary that starts populating the field silently upgrades this to proof by
+    id. Without either, the honest answer is still `unknown`.
     """
     ev = r.get("resolved_by") or "unknown"
     if ev in ("Stop", "SessionEnd"):
@@ -176,10 +188,13 @@ def _classify(r):
     tid, cid = r.get("tool_use_id") or "", r.get("cleared_tool_use_id") or ""
     if tid and cid:
         return "approved" if tid == cid else "collateral"
+    sig, csig = r.get("tool_sig") or "", r.get("cleared_tool_sig") or ""
+    if sig and csig:
+        return "approved" if sig == csig else "collateral"
     ct, tn = r.get("cleared_tool") or "", r.get("tool_name") or ""
     if ct and tn and ct != tn:
         return "collateral"          # provably a different tool ⇒ provably not this grant
-    return "unknown"                 # same name, or no ids: not evidence of anything
+    return "unknown"                 # same name, or no ids/signatures: not evidence of anything
 
 
 def archive_report():
@@ -250,8 +265,10 @@ def archive_report():
     print(f"  approved {approved}  ·  denied/abandoned {refused}  ·  "
           f"cleared-by-other {collateral}  ·  unknown {unknown}   (= {len(rows)})")
     if approved == 0 and unknown:
-        print("  NOTE: no grant could be PROVEN (a grant needs the clearing tool_use_id to match")
-        print("        the prompted one). 'unknown' is not 'denied' — see _classify().")
+        print("  NOTE: no grant could be PROVEN (a grant needs the clearing invocation to match")
+        print("        the prompted one, by id or by signature). Rows archived before the beacon")
+        print("        recorded signatures carry neither and stay 'unknown' forever — that is a")
+        print("        gap in the RECORD, not a denial. See _classify().")
 
     waits = sorted(r.get("waited_s") for r in rows
                    if isinstance(r.get("waited_s"), (int, float)))
