@@ -326,3 +326,64 @@ addpath() {
   printf '%s' "$output" | grep -q "src/app/page.tsx"
   refute_match "$output" "in no sibling checkout either"
 }
+
+# ── the third state this arm was missing: a citation that is not a REPO path at all ───────────────
+#
+# RE_PATH cannot begin a match at `~` or `/` (its `\b` needs a word character), so an item citing
+# `~/.claude/projects/<enc>/memory/archive/x.py` hands the loop the fragment
+# `claude/projects/<enc>/memory/archive/x.py`. That fragment has a `/`, so it sails past the
+# bare-basename acquittal and into the arm that asserts "not at that location on origin/main" — a
+# sentence about a tree the path never claimed to be in.
+#
+# MEASURED ON THE LIVE STORE (2026-09-08, backlog 1a857fe4265a): the dispatched brief told its
+# worker the cited implementation was "moved, renamed, or never landed … and in no sibling checkout
+# either". The file was exactly where the item said. That is the costliest false positive this file
+# can mint, because the CONTRACT header immediately above it tells the worker THE DISPROOF IS THE
+# DELIVERABLE — i.e. it invites closing the item on a refutation the checker manufactured.
+#
+# Three arms, and the third is the one that keeps the fix honest: an ordinary repo-relative miss
+# must still convict, or this stopped being an acquittal and became "never report a cited path".
+
+@test "a HOME-ROOTED citation that EXISTS on this box is silent and stays clear" {
+  here="$(mkrepo here)"
+  export CC_PREMISE_REPO="$here"
+  mkdir -p "$HOME/.claude/projects/enc/memory/archive"
+  printf 'x\n' > "$HOME/.claude/projects/enc/memory/archive/dropped-token-audit.py"
+
+  add aaaa9999aaaa "working implementation at ~/.claude/projects/enc/memory/archive/dropped-token-audit.py"
+  run "$CP" check aaaa9999aaaa
+  [ "$status" -eq 0 ]
+  [ "$(verdict "$output")" = clear ]
+  refute_match "$output" "CITED PATH"
+}
+
+@test "a HOME-ROOTED citation that is ABSENT says so as a FILESYSTEM fact, not an origin/main one" {
+  here="$(mkrepo here)"
+  export CC_PREMISE_REPO="$here"
+
+  add bbbb9999bbbb "working implementation at ~/.claude/projects/enc/memory/archive/nowhere.py"
+  run "$CP" check bbbb9999bbbb
+  [ "$status" -eq 0 ]
+  # Verdict-neutral, exactly like the bare-name channel: "I was not told where this lives" and
+  # "it is not on this box" are both reports, neither is proof the premise died.
+  [ "$(verdict "$output")" = clear ]
+  printf '%s' "$output" | grep -q "absent on THIS box"
+  # The tilde is LITERAL and must stay unexpanded: the assertion is that cc-premise echoed the
+  # path back in the item's own spelling, `~`-rooted, rather than the mangled repo-relative
+  # fragment RE_PATH carved out of it. $HOME here would assert the opposite of the subject.
+  # shellcheck disable=SC2088
+  printf '%s' "$output" | grep -q "~/.claude/projects/enc/memory/archive/nowhere.py"
+  refute_match "$output" "not at that location on origin/main"
+}
+
+@test "CONTROL: an ordinary repo-relative miss still CONVICTS — the fix is not a blanket silence" {
+  here="$(mkrepo here)"
+  export CC_PREMISE_REPO="$here"
+  export CC_DISPATCH_PROJECTS_CONF=
+
+  add cccc9999cccc "the fix belongs in src/app/page.tsx and nowhere else"
+  run "$CP" check cccc9999cccc
+  [ "$status" -eq 0 ]
+  [ "$(verdict "$output")" = suspect ]
+  printf '%s' "$output" | grep -q "not at that location on origin/main"
+}
