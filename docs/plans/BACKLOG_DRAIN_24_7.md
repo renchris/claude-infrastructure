@@ -87,6 +87,15 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-08 — recycle #326 (lane infra):** closed 1b03a569436d, 6f4573454230, bf398aa7b0e9 ·
+  blocked none · released 763522029afd, a6843865a2ec, c9d5053a92c0 · landed 42d611d38 (`git diff
+  origin/main` empty on install.sh + templates/model-classification.json) and this entry · ended the
+  model-classification.json live fork (an unversioned real file at ~/.claude while only templates/
+  was tracked) and repaired its review entry, which named .claude/rules/research-subagents.md — a
+  file that does not exist · re-triaged the 6th RECOVER-PENDING branch to LANDED-BY-CONTENT (main
+  line 855 carries the word-bounded kill token) and MEASURED the residue of the other four, which
+  all rewrite ONE file from divergent bases · closed=3 closed_pre=3 net=2 min=3 floor=MET.
+
 - **2026-09-08 — recycle #325 (lane infra):** closed 9a14bbf30587, baf8b76db360, d240e4dae8d3,
   e4a727fba9c0 · blocked none · released 763522029afd, a6843865a2ec, c9d5053a92c0, e99533512a95,
   1b03a569436d · landed 5000db426, eddfc01fa (both `--is-ancestor origin/main` OK; `git diff
