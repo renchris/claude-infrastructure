@@ -973,9 +973,65 @@ of the missing refuters:
 2. **Command recovery.** The three dead agents never wrote their prose files, so their commands were
    recovered from their own transcripts and are quoted verbatim in § 3a.
 
-**W4 is therefore NOT complete.** A successor should run the refutation pass for those three groups
+**W4 is therefore NOT complete.** A successor should run the refutation pass for those **two** groups
 against `/tmp/hs/log/*.tsv` (and re-run the triggers, which are all in § 3a) before this ledger is
-called reviewed. It should not need to re-measure anything.
+called reviewed. It should not need to re-measure anything. *(The word "three" stood here until
+2026-09-07; it is a leftover from the pre-correction text that the paragraph above already fixed —
+the same stale-count shape this plan keeps finding elsewhere.)*
+
+### `permission` group — REFUTED 2026-09-07. No FIRES verdict fell; two of this section's own
+### sentences did.
+
+Run by the lead, serially, after the machine capacity gate refused the subagent spawn (12 sessions
+mid-turn against an active ceiling of 8). Full write-up with every command: `/tmp/hs/refute-permission.md`.
+Method note worth keeping: the first attempt used `grep -aoE '.{160}PermissionDenied.{240}'` against
+a 205 MB bundle and had not finished after three minutes — a wide-window regex over a binary is an
+instrument failure, not a slow finding. A byte-search finishes in seconds.
+
+**Survived.** Rows 16 and 17's enum presence, re-derived with a positive control (`PreToolUse`
+157/133) and a negative one (`ZZNoSuchEventNameZZ` 0/0): `PermissionRequest` 207 (114) / 139 (220),
+`PermissionDenied` 62 / 54. And `PermissionRequest.tool_use_id` is still empty in **0 of 3,769** rows
+— the archive grew from the 3,641 quoted above, and the count did not move.
+
+**Two claims strengthened from inference to source.** The 2.1.114 bundle carries the literal schema
+at offset 76,581,990 — `y.object({hookEventName:y.literal("PermissionDenied"),retry:y.boolean().optional()})`
+— and 2.1.220 carries the operator-facing contract at 218,854,189 telling a handler to return
+`{"hookSpecificOutput":{"hookEventName":"PermissionDenied","retry":true}}`. Note `retry` is
+**optional**: "empty stdout is mandatory" is our safety choice, a correct one, but it is not the
+schema's requirement and this plan states it as though it were. Separately, § 3a's claim that this
+event needs an **auto-mode classifier** denial rather than a rule-engine one is now read from the
+dispatch site itself — `if(p.decisionReason?.type==="classifier" && p.decisionReason.classifier==="auto-mode")`
+at 80,167,357 — instead of resting on a probe that happened to work.
+
+**REFUTED — the sentence above about where these verdicts came from.** A per-event census of every
+file under `/tmp/hs/log/` gives `PermissionRequest` **rows=0, files=NONE** (control: `SessionStart`
+59, `PreToolUse` 55, `Stop` 24, so the census instrument works). `PermissionDenied` has 8 rows in two
+files; `WorktreeCreate` also has 0. So "every verdict from those groups in § 3 was read by the lead
+directly out of those payloads" is false for row 16: its evidence is the production
+`permission-archive`, which is what its evidence column already says. The justification over-claims,
+not the ledger.
+
+**UNDECIDABLE NOW — the fabrication check's transcript half.** There are **three** hand-shaped sids,
+not the two the parenthetical lists: `11111111-2222-4333-8444-555555555555`,
+`22222222-3333-4444-8555-666666666666`, `33333333-4444-4555-8666-777777777777`. Each does carry a
+`SessionStart` row from the same id, so that leg stands. Each payload also carries a
+`transcript_path` of the harness's canonical shape under a real config dir
+(`~/.claude-quaternary/projects/-Users-chrisren-Development-wt-ptuf2/<sid>.jsonl`) — but **none of
+those files exists any more**, checked across 11 payload rows spanning six event types. The probes
+ran in a throwaway config dir that has since been cleaned. The conclusion is still the
+better-supported one (a hand-fed hook does not mint a consistent canonical `transcript_path` across
+six distinct events for one sid, and the real model-written `compact_summary` leg is untouched), but
+it now rests on the path SHAPE, not on a file anyone can open. Evidence that lives in `/tmp` has a
+half-life; a claim naming a file has to date itself.
+
+**A live defect found by the same pass, now FIXED (`4b823c181`).** The archive's append mutex had
+been an orphan since **2026-08-07 17:35**: an empty `.append.lock` directory with no owner and no age
+bound, left by a process killed between its `mkdir` and its `rmdir`. Every resolution since lost the
+lock and took the per-process sidecar fallback — **546 rows in the two month files against 3,223 rows
+across 3,221 sidecars**, with no `2026-09.jsonl` in existence. Nothing was lost, and that is exactly
+why it stayed invisible for a month: the consumer globs `*.jsonl`, so every report stayed correct
+while the mechanism those reports' atomicity argument depends on was dead. It surfaced only because
+this pass counted files and rows separately and the two numbers disagreed.
 
 ## 4. Adoption preconditions (non-negotiable)
 
