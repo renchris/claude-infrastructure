@@ -527,7 +527,7 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
   #   delivers, with both partitions asserted to SUM. No outage was repaired: all nine literal sources
   #   partition 3 CLAIMED / 6 DECLARED / 0 default with 0 stranded, and both root SSOTs were read live
   #   and healthy at 2026-09-01T05:56Z.
-  if ! _tracked="$(git -C "$REPO" ls-files -- hooks commands scripts bin skills agents lib vendor model-config.yaml providers.json 2>/dev/null)"; then
+  if ! _tracked="$(git -C "$REPO" ls-files -- hooks commands scripts bin skills agents lib vendor model-config.yaml providers.json mcp-servers.json 2>/dev/null)"; then
     report "NOVERDICT" "(existence)" "git ls-files failed in $REPO — the tracked set is unknown"
     noverdict=1
     _tracked=""
@@ -641,7 +641,15 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       # is deliberately ABSENT: install.sh:428 links it, but it is gitignored (it holds real email
       # addresses), so it can never appear in a tracked-file listing and asserting it here would
       # demand a link over a file this leg cannot see.
-      model-config.yaml|providers.json) want=1; cls='root SSOT (link)' ;;
+      # mcp-servers.json joined them 2026-09-08 (35284465e, the MCP SSOT): install.sh:616 links it
+      # into $CONFIG_DIR by the SAME link_file call shape, and its own comment there says it is
+      # "Symlinked for the same reason as providers.json above" — tracked, no secrets, edits must
+      # land in the repo. It arrived CLAIMED by nothing, so it fell to the reasonless `*) want=0`
+      # and reddened tests/deploy-parity.bats's LITERAL INSTALL COVERAGE arm on trunk, which then
+      # refused every unrelated land touching scripts/. Claiming it needs BOTH halves — the arm
+      # here and the ls-files pathspec above — because the WALK INPUT COVERAGE arm asserts that
+      # every source this table claims is one the pathspec actually delivers.
+      model-config.yaml|providers.json|mcp-servers.json) want=1; cls='root SSOT (link)' ;;
       # vendor/ is a DIRECTORY-link class, deliberately not per-file (install.sh:546 — a per-file
       # loop "would silently fail to link every BRAND-NEW file on the next re-vendor"). Handled by
       # its own loop below; per-file demands here would contradict install.sh outright.
