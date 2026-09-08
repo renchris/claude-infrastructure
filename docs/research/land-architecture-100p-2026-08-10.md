@@ -1046,3 +1046,86 @@ side-car would also break this item's own constraint — that the instrument fai
 — by giving a bug in it the power to refuse a land. What P0 does give it is the instrument it was
 missing: `red:"<arm>"` attribution plus the exit histogram make the conflation COUNTABLE, so the
 next session can size it from a re-run instead of a re-derivation.
+
+### §5.P5 — the umbrella closed: two arms landed the day it was filed, the third is a value call
+
+*(Outcome measurement, 2026-09-08, backlog `f495d5374c01`. INTEGRATE-only: the P5 row above is
+unchanged, because what it states is the contract this section grades against.)*
+
+**The row's success measure was never re-read after filing.** P5 named three bars — verifier
+p50 <2h · ≥1 green/day · deploy T1 advances without hand-pulls — and 28 days passed with no
+measurement against them, while the item sat open describing work that had largely already landed.
+Re-measured today on the live store (581 stamps, 2026-07-26 → 2026-09-08):
+
+| bar | at filing (2026-08-10) | today | |
+|---|---|---|---|
+| verifier p50 < 2h | 3.13h, `verdict=BREACH` | **0.88h, `verdict=WITHIN`** | MET |
+| ≥1 green/day | 2-3% green, 0.31/day | **18.5% green, 2.79/day** | MET |
+| deploy T1 advances without hand-pulls | 601 refusals, last advance 9h back | **last sanctioned advance 0.8h back** | MET |
+
+Split at the lever's landing date rather than pooled, which is the only split that adjudicates it:
+scheduled p50 **3.11h → 0.82h**, green rate **3.5% → 18.5%**, greens/day **0.31 → 2.79**.
+
+**The band-gap falsifier is answered, and answering it required fixing the instrument.**
+`cycle-time-census.sh` prints, under `--all`, "if this ratio stays ~3x over stamps written after the
+operator applies it, the diagnosis is WRONG". It then computed that ratio over the **whole store** —
+pooled across the very intervention it was meant to adjudicate — and the flag set offered only
+`--window N`, a COUNT, which cannot express "after 2026-08-11" without already knowing how many
+stamps landed since. So the one number the falsifier turns on was the one number the census could
+not produce. `--since YYYY-MM-DD` closes that (this commit; `tests/cycle-time-census.bats`, 4 cases,
+the fourth a control whose pooled and post-date ratios disagree). Read over its own stated
+population: **3.18x before, 1.31x after**. The diagnosis held and the lever worked. A pooled run now
+says in-band that it cannot answer its own falsifier, rather than printing a number that looks like
+an answer.
+
+**Arm by arm.**
+
+1. **`70dff02dcf4a` (QoS band + launchd envelope) — DONE 2026-08-11, `20bc7a5e`.** Its own evidence
+   line records the asymmetry: *"plist was the lever; corpus band lever proved a no-op"* — the
+   envelope carried the gain, the band clamp inside `postland-verify.sh` never set the corpus's
+   band in either population because `cc-bats` re-clamps to `utility`.
+2. **R7 escalate-on-repetition — LANDED `863089e5a`, the same day this row was filed**, ~10h after
+   it. 13 dedicated cases in `tests/deploy-live.bats` including both polarities (the quiet half
+   below threshold, the disabling knob, streak-clearing on a healthy advance, culprit-change
+   restart, and a hostile-backlog-binary case proving the side-car cannot break the lane). **It has
+   also FIRED in production, seven times across five distinct culprits**, and the proof is the
+   arm's own checked token rather than the page beside it. `deploy.log` carries seven
+   `verdict=escalated` lines — `verifier-lag`, `peer-wip-wedge` (x2), `checkout-not-a-worktree`,
+   `scan-window-blind` (x3) — and **every one ends `item=<id>`, never `item=none`**, which is the
+   half that is read back from cc-backlog rather than claimed. The four rows exist, all
+   `source:"needs"`, all titled *"deploy lane refusing on repeat: ..."*: `8e17ab75a613` (DONE),
+   `ef2bcecfbc1b` (DONE), `6dee50cd65db` (BLOCKED), `3fe2c31b6fb5` (BLOCKED). Repeat escalations for
+   one culprit re-use that culprit's row instead of minting a second, so the cool-off holds at the
+   store as well as at the page. The escalation reached the enforcing store, which was the point.
+
+   *(Attribution correction made while writing this section, and it is the reusable part. The first
+   draft cited `d49917bc4e9e` / `b20eb0842304` / `05f59b405882` as the escalation's output because
+   they carry the same condition — core.bare on the shared checkout — as the page sitting next to
+   them. They are not: all three were filed by three DIFFERENT interactive sessions between 04:46Z
+   and 06:48Z, while the page was written at 11:33Z, so they precede the thing they were offered as
+   evidence for. Sharing a condition with an escalation is not being produced by one; the `item=`
+   token is, and it names `3fe2c31b6fb5` for that culprit. Memory: `synthesis-loses-provenance`.)*
+3. **auto-revert reliability past C26 — NOT complete, and deliberately not driven here.** C26
+   (2026-08-07) bounded the never-twice marker; the residual is a *newer* defect than this umbrella
+   and is already filed against it. `docs/research/postland-c29-alternation-2026-09-07.md` shows the
+   convicted population alternating A/B/A/B — 53 of 175 consecutive red pairs disjoint (30.3%),
+   grown since C29 shipped, not shrunk — so ~30% of convictions name a commit that is green at its
+   own tree, and on 2026-09-05 only a merge conflict (`rc=90`) stopped a revert of an innocent
+   commit reaching trunk. That is **`32d4d093f78a`**, blocked `needs-human` on 2026-09-08: every
+   remedy trades against a shipped invariant (`postland-verify.sh:3707` forbids branching on
+   recorded load; the alternative lever is candidate-spending at `:3211`), so which one to give up
+   is a value call about how aggressively trunk may be auto-mutated. The population question is
+   **`56b39811eddc`**, open. Neither is re-filed here; minting a third row over the same condition
+   is the duplicate this ledger's condition keys exist to prevent.
+
+**Why the umbrella closes on two of three.** P5's bars are its success measure, and all three are
+met. The arm that remains is not P5's original scope — it is a defect discovered 27 days later in
+the actuator P5 merely listed, it has its own condition key, its own adjudication document, and an
+operator decision pending. Holding this row open would re-describe two landed commits and one
+blocked decision under a fourth id.
+
+**One caveat this section will not launder.** Greens have been **0 for the last five days**
+(2026-09-04 → 09-08, all red). The lane is *fast* — that is what P5 bought and it is real — but it
+is currently *red*, from the disjoint-RED fingerprint `56b39811eddc` owns, not from the machine
+share P5 was about. A reader taking "≥1 green/day: MET" from the table above without this paragraph
+would be reading a 29-day average over a five-day famine.

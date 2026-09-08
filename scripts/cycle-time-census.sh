@@ -46,8 +46,19 @@
 #
 # READ-ONLY. Parses the stamp store and prints; writes nothing, runs no suite, spawns no daemon.
 #
-# Usage: cycle-time-census.sh [--window N] [--threshold-h H] [--all] [--json]
+# Usage: cycle-time-census.sh [--window N] [--since D] [--threshold-h H] [--all] [--json]
 #   --window N       consider only the newest N stamps (default: every stamp in the store)
+#   --since D        consider only stamps written on or after D (YYYY-MM-DD), applied BEFORE
+#                    --window. A COUNT AND A DATE ARE NOT INTERCHANGEABLE, and that is why this
+#                    exists: the band-gap falsifier printed under --all names its population by
+#                    DATE ("stamps written after the operator applies it"), and --window can only
+#                    express "the newest N" — you would have to already know how many stamps
+#                    landed since the change to ask the question the tool itself poses. Until
+#                    2026-09-08 the ratio was therefore always computed over the WHOLE store, i.e.
+#                    pooled across the very intervention it was meant to adjudicate, so the one
+#                    number the falsifier turns on was the one number the census could not produce.
+#                    Measured that day on the live store: pooled 1.15x, but 3.18x before
+#                    2026-08-11 and 1.31x after — same store, opposite readings of "did it work".
 #   --threshold-h H  the §8 trigger, in hours (default 2)
 #   --all            also print the SESSION-invoked population, for the band comparison
 #   --json           one JSON object instead of the human table
@@ -67,6 +78,7 @@ MIN_N="${CENSUS_MIN_N:-8}"
 SUITE_TO="${POSTLAND_SUITE_TIMEOUT_S:-10800}"
 
 WINDOW=0
+SINCE=""
 THRESHOLD_H=2
 SHOW_ALL=0
 AS_JSON=0
@@ -74,6 +86,7 @@ AS_JSON=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --window)       WINDOW="${2:-0}"; shift 2 ;;
+    --since)        SINCE="${2:-}"; shift 2 ;;
     --threshold-h)  THRESHOLD_H="${2:-2}"; shift 2 ;;
     --all)          SHOW_ALL=1; shift ;;
     --json)         AS_JSON=1; shift ;;
@@ -82,17 +95,24 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+case "$SINCE" in
+  '') : ;;
+  [0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]) : ;;
+  *) printf 'cycle-time-census: --since wants YYYY-MM-DD, got: %s\n' "$SINCE" >&2; exit 2 ;;
+esac
+
 if [ ! -d "$STAMPS" ]; then
   printf 'verdict=NO-VERDICT reason=no-stamp-store path=%s\n' "$STAMPS"
   exit 3
 fi
 
-STAMPS="$STAMPS" WINDOW="$WINDOW" THRESHOLD_H="$THRESHOLD_H" MIN_N="$MIN_N" \
+STAMPS="$STAMPS" WINDOW="$WINDOW" SINCE="$SINCE" THRESHOLD_H="$THRESHOLD_H" MIN_N="$MIN_N" \
 SUITE_TO="$SUITE_TO" SHOW_ALL="$SHOW_ALL" AS_JSON="$AS_JSON" python3 - <<'PY'
 import json, os, glob, math, sys
 
 stamps    = os.environ['STAMPS']
 window    = int(os.environ['WINDOW'] or 0)
+since     = os.environ.get('SINCE') or ''
 thresh_h  = float(os.environ['THRESHOLD_H'])
 min_n     = int(os.environ['MIN_N'])
 suite_to  = int(os.environ['SUITE_TO'])
@@ -121,6 +141,13 @@ for f in glob.glob(os.path.join(stamps, '*.json')):
         'cc':      env.get('cc'),
     })
 rows.sort(key=lambda r: r['ts'])
+# The two restrictions COMMUTE and the order below is legibility, not mechanism: rows are sorted
+# ascending by ts, so `since` keeps a suffix and `window` keeps the last N, and either order lands
+# on the newest min(N, |suffix|) rows. Stated because the tempting comment here — "date first or
+# you silently get fewer than N" — is FALSE, and a false rationale in a comment outlives the line
+# it defends.
+if since:
+    rows = [r for r in rows if r['ts'][:10] >= since]
 if window > 0:
     rows = rows[-window:]
 
@@ -169,11 +196,13 @@ if as_json:
         'session_completed_n': len(sess),
         'session_p50_s': None if not sess else round(pct([r['run_s'] for r in sess], 50)),
         'stamps_considered': len(rows),
+        'since': since or None,
     }, sort_keys=True))
     sys.exit(code)
 
 print('CYCLE-TIME CENSUS — LAND_PIPELINE_V2 §8 revisit trigger (>%.2gh sustained)' % thresh_h)
-print('  store: %s   stamps considered: %d' % (stamps, len(rows)))
+print('  store: %s   stamps considered: %d%s'
+      % (stamps, len(rows), ('   since: %s' % since) if since else ''))
 print('')
 print('  SCHEDULED lane (launchd; env.cc="unknown") — THIS is the criterion\'s subject')
 if n:
@@ -206,6 +235,14 @@ if show_all and sess:
         print('      FALSIFIER: that key was removed 2026-08-11. If this ratio stays ~3x over')
         print('      stamps written after the operator applies it, the diagnosis is WRONG —')
         print('      re-derive rather than re-explain (LAND_PIPELINE_V2.md §8).')
+        if not since:
+            print('      ⚠ THIS RATIO IS POOLED ACROSS THAT DATE and cannot answer the falsifier')
+            print('        above: re-run with --since 2026-08-11 to read the population it names.')
+        # ANSWERED 2026-09-08 (backlog f495d5374c01, the P5 umbrella). Live store, same run:
+        # pooled 1.15x, but --since 2026-08-11 reads 1.31x against 3.18x for the stamps before
+        # it. The diagnosis held and the lever worked. The pooled figure is not WRONG, it is
+        # about a different population -- which is why the restriction had to become a flag
+        # rather than a paragraph: a falsifier nothing can evaluate is prose, not a falsifier.
 print('')
 print('verdict=%s' % verdict)
 if verdict == 'BREACH':

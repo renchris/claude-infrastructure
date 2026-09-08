@@ -151,3 +151,65 @@ stamp() {
   run "$CENSUS" --nope
   [ "$status" -eq 2 ]
 }
+
+# ── --since: the band-gap falsifier names a population by DATE (backlog f495d5374c01) ────────────
+# `--window` is a COUNT, so the falsifier printed under --all ("if this ratio stays ~3x over stamps
+# written after the operator applies it") could not be evaluated by the census that prints it — you
+# would have to already know how many stamps landed after the change. Test (4) is the control that
+# carries this group: it builds a store whose POOLED ratio and whose POST-DATE ratio disagree about
+# whether the intervention worked, which is the exact reading the live store produced on 2026-09-08.
+
+# stamp_on <YYYY-MM-DD> <verdict> <run_s> <cc> — same shape as stamp(), with the date pinned.
+stamp_on() {
+  SEQ=$((SEQ + 1))
+  printf '{"tree":"t%03d","commit":"c%03d","verdict":"%s","failing":[],"ts":"%sT%02d:00:00Z","run_s":%s,"retries":0,"suites":300,"checks":"bats+bash-n","shellcheck_advisory":0,"env":{"bats":"1.13.0","cc":"%s","load":"9.0"}}\n' \
+    "$SEQ" "$SEQ" "$2" "$1" "$(( SEQ % 24 ))" "$3" "$4" > "$STAMPS/t$(printf '%03d' $SEQ).json"
+}
+
+@test "--since restricts the population by DATE, which --window cannot express" {
+  for _ in 1 2 3 4 5 6 7 8 9 10; do stamp_on 2026-02-01 red 11300 unknown; done
+  for _ in 1 2 3 4 5 6 7 8 9 10; do stamp_on 2026-03-01 red 4000  unknown; done
+  run "$CENSUS" --json
+  [ "$status" -eq 1 ]                                    # pooled p50 sits over the threshold
+  run "$CENSUS" --json --since 2026-03-01
+  [ "$status" -eq 0 ]                                    # the post-date population is WITHIN
+  [[ "$output" == *'"stamps_considered": 10'* ]] || false
+  [[ "$output" == *'"since": "2026-03-01"'* ]] || false
+}
+
+@test "--since boundary is INCLUSIVE — 'on or after', as the flag says" {
+  for _ in 1 2 3 4 5 6 7 8 9 10; do stamp_on 2026-02-01 red 4000 unknown; done
+  run "$CENSUS" --json --since 2026-02-01
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"stamps_considered": 10'* ]] || false
+  run "$CENSUS" --json --since 2026-02-02
+  [ "$status" -eq 3 ]                                    # nothing on or after ⇒ cannot judge
+}
+
+@test "--since with a malformed date is REFUSED, not ignored" {
+  for _ in 1 2 3 4 5 6 7 8 9 10; do stamp_on 2026-02-01 red 4000 unknown; done
+  run "$CENSUS" --since 2026-2-1
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"YYYY-MM-DD"* ]] || false
+  # A silently-ignored cut is the worst outcome: it answers a DIFFERENT question at full confidence.
+  [[ "$output" != *"verdict=WITHIN"* ]] || false
+}
+
+@test "CONTROL: the pooled ratio contradicts the post-date ratio, and the pooled run SAYS SO" {
+  # Before the intervention the scheduled lane runs 3x the session lane; after it, ~1x. Pooling the
+  # two eras reports a ratio that describes neither. This is the live 2026-09-08 shape in miniature.
+  for _ in 1 2 3 4 5 6 7 8 9 10; do stamp_on 2026-02-01 red 9000 unknown; done
+  for _ in 1 2 3 4 5 6 7 8 9 10; do stamp_on 2026-02-01 red 3000 session; done
+  for _ in 1 2 3 4 5 6 7 8 9 10; do stamp_on 2026-03-01 red 3100 unknown; done
+  for _ in 1 2 3 4 5 6 7 8 9 10; do stamp_on 2026-03-01 red 3000 session; done
+
+  run "$CENSUS" --all
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ratio: 2.02x"* ]] || false           # pooled: describes neither era
+  [[ "$output" == *"POOLED ACROSS THAT DATE"* ]] || false # ...and it admits it cannot adjudicate
+
+  run "$CENSUS" --all --since 2026-03-01
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ratio: 1.03x"* ]] || false           # the population the falsifier names
+  [[ "$output" != *"POOLED ACROSS THAT DATE"* ]] || false # a restricted run makes no such excuse
+}
