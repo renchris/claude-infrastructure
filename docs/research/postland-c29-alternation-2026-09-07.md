@@ -261,3 +261,119 @@ PASSES at its own per-file floor and fails at the tip still REDs. Kill switch `C
 **Still open, and unchanged by this:** `56b39811eddc` still owns the population question. C31 makes the
 gate reach a verdict about the tree in the presence of chronically load-flaky suites; it does not make
 them less flaky, and `flakes.jsonl` remains the queue for fixing them.
+---
+
+## Addendum — the revert arm, and the one tree nobody re-ran (2026-09-08, item `32d4d093f78a`, C32)
+
+C30 above settles what may become a **RED**. This addendum settles what may be **reverted**, which is
+a different question with a different answer, and it was reached by asking the one the item posed:
+*disarm `AUTO-REVERT` while the population is unstable, or keep it armed and accept that ~30% of
+convictions name a commit green at its own tree?* Neither. The premise the revert stands on was
+simply never re-measured, and re-measuring it is cheap.
+
+### `git revert` is the only thing in this file that writes to trunk
+
+Its premise is one sentence: **the failing test fails at the culprit.** Every other end of the
+argument had already been made re-measurable, and was:
+
+| end of the argument | re-measured by | landed |
+|---|---|---|
+| the tip `bad` is red | tip confirmation | `937c6fc5` |
+| the floor `good` is green | `bisect_floor_ok` | `4348ddc2` |
+| the tip's parent `bad^` is green | `bisect_tip_differential_ok` | 2026-09-04 |
+| the corpus verdict itself | C29 two windows + C30 floor probe | `d4b07a9ea` |
+| **the culprit's own tree** | **nothing** | — |
+
+The exemption was documented, not accidental: *"an INTERIOR culprit was genuinely executed and
+returned BAD while its parent returned GOOD — a real measured differential that needs nothing
+added."* That is C29's premise inverted. C29 exists because one probe in one load window is one
+experiment and not a verdict; **a walk step is one probe in one load window.** Both sentences cannot
+be true, and the one governing the write to trunk was the weaker.
+
+### Measured on this box
+
+Three `AUTO-REVERT`s in the four days to 2026-09-08, each naming a culprit, each stopped **only** by
+`git revert` hitting a merge conflict:
+
+```
+2026-09-05T21:05:56Z AUTOREVERT verdict=FAILED(step=revert rc=90) culprit=e39aa0be1546
+2026-09-07T14:44:56Z AUTOREVERT verdict=FAILED(step=revert rc=90) culprit=7d72371caa2d
+2026-09-08T07:29:07Z AUTOREVERT verdict=FAILED(step=revert rc=90) culprit=39221545584e
+```
+
+`rc=90` is `revert=none` — nothing applied. A culprit whose lines have not moved reverts *cleanly*
+and the land lane pushes it, which is the `f323b427` shape. The 09-08 walk logged its own regime
+beside its verdict — `bisect verdict=39221545584e steps=8 elapsed=260s load=20.49` — and the line
+before it names the shape exactly: `bisect floor CONFIRMED green at 24c598bac1c7 — 39221545584e is
+its first child, so the walk itself had no green to stand on`. The floor end was re-run. The culprit
+end was not.
+
+Over the whole history the arm has **8 landed reverts**. My own first pass adjudicated them by
+looking for re-land commits and found two refuted — `12549d8b` (culprit `e80c85aa2e47`, a correct
+`/sbin`-PATH fix) and `1f5385f9b`, *"re-land the cloud-return stratifiers the auto-revert took on a
+CUT"* (culprit `2c6b8cdfa777`) — plus `b3f728858a6f`, a `docs(research):` commit. **That method is
+weaker than the one C37 ran the same day and its numbers are superseded by it** (see below): a
+re-land is evidence a revert was wrong, but its ABSENCE is not evidence a revert was right — the
+content may simply have been abandoned.
+
+### The precision is 5 true / 3 false, and it was measured with BOTH arms (C37, `be095eba2`)
+
+`docs/research/autorevert-precision-2026-09-08.md` executed each convicted suite at the culprit's
+tree **and at the culprit's parent**, which is the control a re-land search does not have:
+
+| verdict | culprits |
+|---|---|
+| **FALSE** — the suite passes at the culprit's own tree | `2c6b8cdfa777` · `b3f728858a6f` · `e80c85aa2e47` |
+| **TRUE** — green at the parent, red at the culprit | `438883e365ec` · `a53632ae102d` · `e6de2e15a444` · `ee05adc63737` · `ee2e3a0d6a84` |
+
+So the arm is **~62% precise, and it catches real regressions** — which settles the item's first
+option: `AUTO-REVERT` must not be disarmed. C37 also records the correction that produced the table,
+and it is the more portable finding: its own first pass ran only the culprit arm, read five
+unattributable failures as noise, and concluded *"zero true positives, disarm"*. The parent control
+inverted all five. **A one-armed test cannot attribute, and its silence gets read in the direction
+the analysis already leans** — which is the error my re-land search was one step away from making.
+
+### That table is C32's validation set, and it separates 8 of 8
+
+C37 concludes *"there is no cheap discriminator to add, since `2c6b8cdfa777` was bisect-named over 7
+steps"*. That rules out the bisect's **metadata** — step count does not separate true from false —
+and it is correct. It does not rule out a **re-run**, and the table's own two rows are defined by
+exactly the predicate C32 probes:
+
+- every FALSE culprit is one the suite **passes at**, so C31 refuses it;
+- every TRUE culprit is one the suite is **red at**, so C32 lets it stand.
+
+Applied to the eight landed reverts, C32 withholds the three wrong ones and permits the five right
+ones. It costs one bats file run per non-tip culprit.
+
+The two changes are complementary and neither substitutes for the other. **C37 makes a wrong revert
+that was APPLIED audible** — it was, measurably, the quietest event in the system: 8 landed reverts,
+zero pages. **C32 stops the wrong revert from being applied.** Prevention that fails is why C37's
+page must exist; a page nobody can act on before the fact is why C32 must.
+
+### C32 — confirm the culprit's own tree before naming it
+
+`bisect_culprit_confirm_ok` re-runs the failing test at the culprit whenever the walk named something
+other than the tip, and requires a **definite** red:
+
+| probe at the culprit | meaning | verdict |
+|---|---|---|
+| rc 1 | the failure reproduces where it was attributed | culprit **stands**, unchanged |
+| rc 0 | the walk step that convicted it was a flake | undecidable, **no culprit named** |
+| 124 / 125 / unresolvable / checkout did not land | a statement about the instrument | undecidable, **no culprit named** |
+
+Scoped to `culprit != bad`, so it partitions against the tip confirmation rather than duplicating it
+— the same cost rule `bisect_tip_differential_ok` already follows against `bisect_floor_ok`. It can
+only ever **withhold** a revert, never cause one, and abstaining costs a page: `red_actions` still
+files and pages the RED, it just names nobody. It never reads load, so R1 holds and the lever guard
+passes unchanged.
+
+Red-proof run as a control, not asserted: `B29` (a non-tip culprit green at its own tree is
+undecidable), `B30` (control — a genuine interior regression is still named, and the confirmation was
+*seen* to probe it red), `B31` (the guard stands aside on the tip path — one probe, not two), `B32`
+(with `CC_POSTLAND_CULPRIT_CONFIRM=off` the identical fixture names the innocent sha again, which is
+the pre-fix behaviour reproduced from inside the suite).
+
+**What this does not fix:** the population. `56b39811eddc` still owns that, and a chronically
+load-flaky suite is still chronically load-flaky — now recorded rather than acted on. What changes is
+that its flakiness can no longer reach trunk through the revert arm.

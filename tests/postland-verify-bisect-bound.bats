@@ -33,6 +33,10 @@
 #                 tip is red proves ONE end; C20 acts on "did the tip MAKE it red", so a tip whose
 #                 PARENT is red too is undecidable. Scoped to `below > 1` so it never duplicates the
 #                 floor probe. Own block below.
+#   B29-B32       a SEVENTH clause — THE CULPRIT'S OWN TREE. B10-B12 re-measure the revert's premise
+#                 ("the failing test fails AT the culprit") when the walk lands on the TIP; anywhere
+#                 else it rested on a single walk step and was never re-run. Scoped to
+#                 `culprit != bad` so the two arms partition rather than overlap. Own block below.
 #   B19-B24       a FIFTH clause — REACHABILITY — and the first decided from the TREE rather than
 #                 from a probe: a commit whose diff cannot touch the failing subject is not a
 #                 candidate, and the walk's steps/elapsed/load are recorded beside every verdict so
@@ -636,7 +640,7 @@ teardown() {
   # ...and the exempted runner is EXECUTED only under a bound. The non-executing mentions are named
   # individually rather than pattern-guessed, so a genuinely new call site cannot hide among them.
   exec_sites="$(/usr/bin/grep -n '"\$runner"' "$joined" \
-      | /usr/bin/grep -v 'rm -f\|chmod\|> "\$runner"\|bisect_floor_ok \|bisect_tip_differential_ok ' || true)"
+      | /usr/bin/grep -v 'rm -f\|chmod\|> "\$runner"\|bisect_floor_ok \|bisect_tip_differential_ok \|bisect_culprit_confirm_ok ' || true)"
   # FLOOR, deliberately not an exact tally (an exact count reds on legitimate GROWTH and catches no
   # regression): >=3 only so a renamed variable cannot make the emptiness below read as green.
   [ "$(printf '%s' "$exec_sites" | /usr/bin/grep -c .)" -ge 3 ]
@@ -974,4 +978,140 @@ STUBEOF
   ! grep -q "TIP PARENT UNPROVEN" "$RUNLOG" || false
   # ...and `good` was measured exactly ONCE, by floor_ok — never twice.
   [ "$(grep -c "^$GOOD " "$CC_STUB_CALLS")" -eq 1 ]
+}
+
+# ════ B29-B32 · THE CULPRIT'S OWN TREE (C32) ══════════════════════════════════════════════════════
+# THE CLAUSE. C20 reverts what a bisect names, so the revert's whole premise is "the failing test
+# fails AT the culprit". B10-B12 re-measure that premise when the walk lands on the TIP. When it
+# lands anywhere else it was measured once, by a single walk step, and never again — which is C29's
+# own premise ("one probe in one load window is one experiment, not a verdict") applied everywhere
+# except the one measurement that writes to trunk.
+#
+# THE INCIDENT (item 32d4d093f78a). Three AUTO-REVERTs in the four days to 2026-09-08 —
+# e39aa0be1546, 7d72371caa2d, 39221545584e — each named a culprit and each was stopped ONLY by
+# `git revert` hitting a merge conflict (rc 90, revert=none). A culprit whose lines have not moved
+# reverts cleanly and the land lane pushes it. tests/autonomy-sweep.bats, convicted at e39aa0be1546,
+# passes 1..67 rc=0 at e7a10f4fa5a4 — the exact tree stamped red — and on trunk. The 09-08 walk
+# logged its regime beside its verdict: `steps=8 elapsed=260s load=20.49`.
+#
+# The fixture is that shape, not a re-enactment: RED at the marker while the walk is in progress,
+# GREEN once it is over, keyed on the cell's own bisect state rather than on a step count.
+
+# RED at the BAD marker while the WALK runs, GREEN everywhere after it — a walk step that convicted
+# on a flake. Every call is logged with its sha AND its phase, so a test can prove the walk really
+# converged and that the post-walk probe really ran.
+stub_bats_walk_marker_then_green() {
+  cat > "$STUB/bats-stub" <<'STUBEOF'
+#!/bin/bash
+case "${1:-}" in --version) echo "Bats 1.0.0"; exit 0;; esac
+bl="$(git rev-parse --git-path BISECT_LOG 2>/dev/null || true)"
+if [ -n "$bl" ] && [ -f "$bl" ]; then
+  if [ -f BAD ]; then printf '%s walk red\n' "$(git rev-parse HEAD 2>/dev/null)" >> "$CC_STUB_CALLS"; exit 1; fi
+  printf '%s walk green\n' "$(git rev-parse HEAD 2>/dev/null)" >> "$CC_STUB_CALLS"; exit 0
+fi
+printf '%s post green\n' "$(git rev-parse HEAD 2>/dev/null)" >> "$CC_STUB_CALLS"; exit 0
+STUBEOF
+  chmod +x "$STUB/bats-stub"
+  export CC_POSTLAND_BATS="$STUB/bats-stub"
+  export CC_STUB_CALLS="$BATS_TEST_TMPDIR/stub-calls"
+  : > "$CC_STUB_CALLS"
+}
+
+# The B5 shape — red exactly where the BAD marker is, in every phase — with each call logged at its
+# sha AND phase, so a control can prove the confirmation PROBED rather than was skipped.
+stub_bats_marker_phase() {
+  cat > "$STUB/bats-stub" <<'STUBEOF'
+#!/bin/bash
+case "${1:-}" in --version) echo "Bats 1.0.0"; exit 0;; esac
+bl="$(git rev-parse --git-path BISECT_LOG 2>/dev/null || true)"
+ph=post
+if [ -n "$bl" ] && [ -f "$bl" ]; then ph=walk; fi
+if [ -f BAD ]; then printf '%s %s red\n' "$(git rev-parse HEAD 2>/dev/null)" "$ph" >> "$CC_STUB_CALLS"; exit 1; fi
+printf '%s %s green\n' "$(git rev-parse HEAD 2>/dev/null)" "$ph" >> "$CC_STUB_CALLS"; exit 0
+STUBEOF
+  chmod +x "$STUB/bats-stub"
+  export CC_POSTLAND_BATS="$STUB/bats-stub"
+  export CC_STUB_CALLS="$BATS_TEST_TMPDIR/stub-calls"
+  : > "$CC_STUB_CALLS"
+}
+
+@test "B29: a NON-TIP culprit that is GREEN at its own tree is UNDECIDABLE — the walk step was a flake" {
+  mk_history 5 3                  # first-bad at c3: interior (not the tip), and 2 commits above good
+  stub_bats_walk_marker_then_green
+
+  TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"bisect undecidable"* ]] || false
+  # THE clause: C20 reverts what a bisect names, and this commit is green at its own tree.
+  ! [[ "$output" =~ [0-9a-f]{7,40}\ is\ the\ first\ bad\ commit ]] || false
+  ! [[ "$output" =~ ^[0-9a-f]{7,40}$ ]] || false
+  [[ "$output" != *"$FIRSTBAD"* ]] || false
+  [[ "$output" == *"culprit-unconfirmed"* ]] || false
+
+  # ...and the abstention came from THIS guard, not from a bound and not from an earlier one.
+  grep -q "bisect CULPRIT NOT RED AT ITS OWN TREE" "$RUNLOG"
+  ! grep -q "bisect UNCONFIRMED: the walk named the TIP" "$RUNLOG" || false
+  ! grep -q "bisect FLOOR NOT GREEN" "$RUNLOG" || false
+  ! grep -q "bisect CUT" "$RUNLOG" || false
+
+  # NON-VACUITY: the walk must actually have converged on the interior commit before the guard could
+  # refute it — a fixture where nothing was named would satisfy every assertion above.
+  [ "$(grep -c ' walk red$' "$CC_STUB_CALLS")" -ge 1 ]
+  [ "$(grep -c ' post green$' "$CC_STUB_CALLS")" -ge 1 ]
+  # ...and the post-walk probe ran at the CULPRIT, which is the commit this clause is about.
+  [ "$(grep ' post ' "$CC_STUB_CALLS" | sed -n '1p' | cut -d' ' -f1)" = "$FIRSTBAD" ]
+  # ...and the culprit really was NOT the tip, or B10-B12 owned this and the fixture proves nothing.
+  [ "$FIRSTBAD" != "$BAD" ]
+}
+
+@test "B30: CONTROL — a GENUINE interior regression is still named, and the culprit was PROBED to prove it" {
+  mk_history 5 3                  # first-bad at c3, and genuinely red there in every phase
+  stub_bats_marker_phase
+
+  TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == "$FIRSTBAD" ]] || false
+  ! grep -q "bisect CULPRIT NOT RED AT ITS OWN TREE" "$RUNLOG" || false
+  ! grep -q "bisect CULPRIT UNCONFIRMED" "$RUNLOG" || false
+
+  # The guard must have RUN and passed, not been skipped: there is a post-walk measurement, it sat
+  # at the culprit, and it answered red. Without this the test passes on a guard that never fires.
+  [ "$(grep -c ' post ' "$CC_STUB_CALLS")" -ge 1 ]
+  [ "$(grep ' post ' "$CC_STUB_CALLS" | sed -n '1p')" = "$FIRSTBAD post red" ]
+}
+
+@test "B31: the guard STANDS ASIDE when the culprit IS the tip — B10's confirmation owns that, and pays once" {
+  # The two arms partition `culprit` exactly — tip or not-tip. Probing here as well would buy a
+  # second identical bats run at the same commit and no bit, so the scoping is a cost clause and
+  # this pins it (the same rule B28 pins between the tip differential and the floor).
+  mk_history_tip_bad 5
+  stub_bats_marker_phase
+
+  TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == "$BAD" ]] || false
+  # C32 never spoke, on either arm...
+  ! grep -q "bisect CULPRIT NOT RED AT ITS OWN TREE" "$RUNLOG" || false
+  ! grep -q "bisect CULPRIT UNCONFIRMED" "$RUNLOG" || false
+  # ...and the culprit's tree was measured post-walk exactly ONCE, by the tip confirmation.
+  [ "$(grep -c "^$BAD post " "$CC_STUB_CALLS")" -eq 1 ]
+}
+
+@test "B32: RED-PROOF — with CC_POSTLAND_CULPRIT_CONFIRM=off the B29 fixture names the innocent sha again" {
+  # The pre-fix behaviour, reproduced from inside the suite rather than asserted about. A guard whose
+  # absence has never been SEEN to convict is a guard nobody has shown to do anything.
+  mk_history 5 3
+  stub_bats_walk_marker_then_green
+
+  CC_POSTLAND_CULPRIT_CONFIRM=off TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == "$FIRSTBAD" ]] || false
+  ! grep -q "bisect CULPRIT NOT RED AT ITS OWN TREE" "$RUNLOG" || false
+  # ...and it is the SAME fixture B29 refutes: the walk convicted, and nothing re-ran the culprit.
+  [ "$(grep -c ' walk red$' "$CC_STUB_CALLS")" -ge 1 ]
+  [ "$(grep -c ' post ' "$CC_STUB_CALLS")" -eq 0 ]
 }
