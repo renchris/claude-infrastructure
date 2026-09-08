@@ -1163,6 +1163,57 @@ _count_failed_migrations() {
 # Memoized in $_tl_yes / $_tl_no because a window can carry many paths under one top-level and each
 # miss costs a find. Both are set by the caller before the loop; unset, this degrades to correct but
 # repeated work, never to a wrong answer.
+# ── _live_class_deployed <path> — DOES install.sh ACTUALLY DEPLOY THIS PATH? ────────────────────
+# _live_tl_deployed below answers a WEAKER question — "is this path's TOP-LEVEL a deployed tree?" —
+# and for an add that is a proxy, not the predicate. The live layer is per-file symlinks created by
+# install.sh's globs, and those globs are per-CLASS, not per-top-level: `lib/*.{sh,zsh}` is deployed
+# while `lib/*/*` is deliberately NOT. So a file added under a SUBDIRECTORY of a deployed top-level
+# is absent from the live layer BY DESIGN, forever, and scoring it as an undelivered add manufactures
+# a 🚀 rung that no converge can ever clear — the ledger demanding delivery of something the deployer
+# was never asked to deliver.
+#
+# MEASURED 2026-09-08 on lib/cc-upgrade-gate/check15_depth_effect.sh: the ledger read
+# `🚀 … 1 NEW file(s) are absent from the live layer`, deploy-live.sh ran and correctly declined
+# (no green stamp in 200 commits), and the rung survived the converge — because the file is not in
+# any deployed class. deploy-parity-assert.sh has scored that exact path want=0 the whole time, and
+# its comment on the leg names this very directory: "Subdirs (lib/cc-upgrade-gate/) are NOT globbed
+# and must not be demanded." Two sibling auditors over ONE population, only one modelling
+# "unlinked BY DESIGN" (MEMORY.md sibling-auditors-must-share-the-state-model).
+#
+# THE TABLE IS NOT COPIED HERE, IT IS EXTRACTED AND RUN. deploy-parity-assert.sh mirrors install.sh
+# 1:1 and its own header records what a restated copy costs — "A rule stated as a permanent fact
+# about another file rots the moment that file changes" — and that file has already been bitten
+# three times by exactly that drift (hooks/*.py, scripts/lib/*.py, scripts/backlog-consolidation).
+# A fourth copy in this file would be a fourth thing to keep in sync. So we ask the arbiter itself
+# (MEMORY.md make-the-actuator-the-arbiter), using the same extract-the-subject idiom the repo
+# already uses in tests/backlog-pipeline-unwedge.bats (_lw_src). The block depends on `$rel` and
+# nothing else — verified — so it evaluates standalone.
+#
+# FAIL DIRECTION IS DELIBERATELY *OPEN*, i.e. it keeps the pre-existing answer. If the arbiter is
+# unreadable this is a NARROWING filter that simply does not narrow, so an unreadable table can only
+# ever restore today's louder behaviour. It can never silence a real add — silence is the one
+# direction this rung must not fail in.
+_LIVE_CLS_SRC=""; _LIVE_CLS_READ=0
+_live_class_deployed() { # <repo-rel path> → 0 deployed by install.sh · 1 not a deployed class
+  local path="$1" want
+  if [ "$_LIVE_CLS_READ" -eq 0 ]; then
+    _LIVE_CLS_READ=1
+    # shellcheck disable=SC2016  # $rel is AWK's own text, not a shell expansion: the pattern must
+    # match the literal string `case "$rel" in` in deploy-parity-assert.sh, so single quotes are REQUIRED.
+    _LIVE_CLS_SRC="$(_bounded "${WRAP_LIVE_TIMEOUT_S:-5}" awk '
+      /^[[:space:]]*case "\$rel" in[[:space:]]*$/ {inb=1}
+      inb {print}
+      inb && /^[[:space:]]*esac[[:space:]]*$/ {exit}
+    ' "$LIVE_REPO/scripts/deploy-parity-assert.sh" 2>/dev/null)" || _LIVE_CLS_SRC=""
+    case "$_LIVE_CLS_SRC" in *esac*) : ;; *) _LIVE_CLS_SRC="" ;; esac
+  fi
+  [ -n "$_LIVE_CLS_SRC" ] || return 0          # arbiter unreadable ⇒ do not narrow
+  want="$(rel="$path" bash -c 'want=0; cls=""
+'"$_LIVE_CLS_SRC"'
+printf %s "$want"' 2>/dev/null)" || return 0
+  [ "$want" = "1" ]
+}
+
 _live_tl_deployed() {
   local path="$1" tl probe l tgt
   case "$path" in
@@ -1413,6 +1464,9 @@ STALE_PATHS
           [ -n "$_ap" ] || continue
           [ -e "$LIVE_ROOT/$_ap" ] && continue
           _live_tl_deployed "$_ap" || continue
+          # …and the path must be in a class install.sh actually GLOBS. See _live_class_deployed:
+          # a top-level match is a proxy, and `lib/*/*` is the live counter-example.
+          _live_class_deployed "$_ap" || continue
           _acount=$((_acount + 1))
         done <<ADD_PATHS
 $_adds

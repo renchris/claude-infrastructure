@@ -2520,3 +2520,60 @@ mk_backlog_stub3() { local s; s="$(mk_backlog_stub2 "$1" "$2")"; printf '# close
   [ "$(field "$output" FILED_MINE)" = "1" ]
   [ "$(field "$output" RUNG)" = "🔧" ]
 }
+
+# ── LIVE_ADDS must ask the DEPLOYER's class table, not the path's top-level ──────────────────────
+# A top-level match is a PROXY for "install.sh deploys this path", and the two come apart the moment
+# a deployed top-level has an undeployed subdirectory. install.sh globs `lib/*.{sh,zsh}` and NOT
+# `lib/*/*`, and deploy-parity-assert.sh has scored that exact split want=0/want=1 the whole time —
+# its comment on the leg names the very directory: "Subdirs (lib/cc-upgrade-gate/) are NOT globbed
+# and must not be demanded."
+#
+# MEASURED 2026-09-08 on lib/cc-upgrade-gate/check15_depth_effect.sh: this ledger read
+# `🚀 … 1 NEW file(s) are absent from the live layer`, scripts/deploy-live.sh then ran and correctly
+# declined to advance, and the rung SURVIVED the converge — because no converge can deliver a file
+# the deployer was never asked to deliver. An unclearable rung blocks every close in this repo, and
+# it is the exact shape the docs/tests/migrations exclusion was already added to prevent; that
+# exclusion was one level too shallow. Two sibling auditors over ONE population, only one of them
+# modelling "unlinked BY DESIGN" (MEMORY.md sibling-auditors-must-share-the-state-model).
+#
+# THE FIXTURE COPIES THE REAL ARBITER into the live repo on purpose. The classifier NARROWS only
+# when it can read deploy-parity-assert.sh and fails OPEN otherwise, so a fixture without it would
+# pass this pair for the wrong reason — the vacuous-pass trap this repo names by name. Copying the
+# shipped table is also what makes the pair a live check on the two files AGREEING: re-classify
+# lib/*/* as deployed over there and this case goes red over here.
+mk_live_with_arbiter() {
+  local dir; dir="$(mk_live)"
+  mkdir -p "$dir/scripts"
+  cp "$REPO/scripts/deploy-parity-assert.sh" "$dir/scripts/deploy-parity-assert.sh"
+  printf '%s' "$dir"
+}
+# land ONE adding commit at an arbitrary repo-relative path
+advance_trunk_adding_at() {
+  mkdir -p "$(dirname "$1")"; echo new > "$1"; git add "$1"; git commit -q -m "add $1"
+  git push -q origin main
+  git -C "$WRAP_LIVE_REPO" fetch -q origin
+}
+
+@test "LIVE_ADDS: an add under an UNDEPLOYED subdir of a deployed top-level is NOT a 🚀 (no converge can clear it)" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live_with_arbiter)"; export WRAP_LIVE_REPO
+  WRAP_LIVE_ROOT="$(mk_live_root lib/base.txt)"; export WRAP_LIVE_ROOT   # `lib` IS a deployed tree…
+  advance_trunk_adding_at lib/cc-upgrade-gate/check99_probe.sh          # …but `lib/*/*` is want=0
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_SRC)" = "behind" ]
+  [ "$(field "$output" LIVE_LAG)" = "1" ]      # the lag is real; it is an EDIT's budget and covers it
+  [ "$(field "$output" LIVE_ADDS)" = "0" ]     # pre-fix this read 1 — the top-level proxy said yes
+  [ "$(field "$output" RUNG)" != "🚀" ]
+}
+
+@test "LIVE_ADDS CONTROL: an add in the DEPLOYED class of that same top-level still raises 🚀" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live_with_arbiter)"; export WRAP_LIVE_REPO
+  WRAP_LIVE_ROOT="$(mk_live_root lib/base.txt)"; export WRAP_LIVE_ROOT
+  advance_trunk_adding_at lib/newprobe.sh                               # lib/*.sh is want=1
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_ADDS)" = "1" ]     # the narrowing must not make the rung inert
+  [ "$(field "$output" RUNG)" = "🚀" ]
+}
