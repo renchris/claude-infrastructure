@@ -87,6 +87,14 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-08 — recycle #321 (lane infra):** closed 23255fbb8792, 96e532227df8, bf6c9db48120,
+  c4383f1c9172 · blocked none · released ed54373d639b, 99dbf659930c, 693ee60c0885 · landed a48e9024d,
+  c9e7ba640 · `closed=4 closed_pre=4 closed_other=5 filed=0(mine) net=+4(mine) blocked=0(mine) min=3
+  lane=local-drain project=claude-infrastructure floor=MET`. Three released rather than half-done: two
+  are deliberate design forks (write-attribution failure direction; cc-memory-rotate equivalence proof),
+  and the deploy-live core.bare pre-flight was REVERTED after it broke the R7 escalation arm — an early
+  `die` preempts the operator page instead of adding one, so it was a net negative, not a fix.
+
 - **2026-09-08 — recycle #320 (lane infra):** closed `b3a3f5b694e6` `90edf1c1a39a` `14a04b3c6989`
   `6da4339bd9d0` `f06533be5eb8` `0ee5454e7d7d` `bd1dd8a2c30f` `d17f04043596` (eight auto-filed
   post-land REDs, each named bats case green 3/3 on trunk `3d55a6508`), `0831275cb96d`, `658aa829e265`
