@@ -66,7 +66,10 @@
 # ── Caller contract ──────────────────────────────────────────────────────────────────────────────
 #   . scripts/lib/spawn-presence.sh
 #   cc_sp_ready                        → 0 iff every symbol below is defined (one predicate, like cc_hw_ready)
-#   cc_sp_trees                        → live session TREE count on stdout; empty + rc 1 when unreadable
+#   cc_sp_census                       → "<trees> <exe_trees> <bin_trees>" — THE one census; empty +
+#                                        rc 1 when the process table is unreadable
+#   cc_sp_trees                        → live session TREE count on stdout (field 1 of the census,
+#                                        or CC_SP_TREES_OVERRIDE); empty + rc 1 when unreadable
 #   cc_sp_active                       → live MID-TURN session count (the ACTIVE population, which is
 #                                        what the box binds on — see § THE ACTIVE POPULATION); empty
 #                                        + rc 1 when unmeasurable
@@ -116,6 +119,7 @@ CC_SP_DEFAULT_WINDOW_END=5
 
 cc_sp_ready() {
   [ -n "${CC_SP_DEFAULT_CEILING:-}" ] || return 1
+  command -v cc_sp_census             >/dev/null 2>&1 || return 1
   command -v cc_sp_trees              >/dev/null 2>&1 || return 1
   command -v cc_sp_active             >/dev/null 2>&1 || return 1
   command -v cc_sp_operator_state     >/dev/null 2>&1 || return 1
@@ -150,21 +154,29 @@ cc_sp_is_int() { case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac; return 0; }
 # Until then tests/spawn-presence.bats case P1 runs BOTH implementations against ONE stubbed `ps`
 # fixture and asserts identical counts — a behavioural parity control over the shape that actually
 # broke three times, not a diff of two literals.
-cc_sp_trees() { # → live session tree count | empty + rc 1
-  if [ -n "${CC_SP_TREES_OVERRIDE:-}" ]; then
-    cc_sp_is_int "$CC_SP_TREES_OVERRIDE" || return 1
-    printf '%s' "$CC_SP_TREES_OVERRIDE"; return 0
-  fi
+cc_sp_census() { # → "<trees> <exe_trees> <bin_trees>" | empty + rc 1 when the process table is unreadable
+  # THE ONE CENSUS. This awk was duplicated in scripts/capacity-alarm.sh census() for months, and the
+  # copies DIVERGED in the way divergence always goes: the `rows` guard below was added here and not
+  # there, so under a `ps` that produced nothing this function correctly returned rc 1 while the twin
+  # returned a well-formed "0 0 0" that every consumer read as an idle box. Both callers now share
+  # this body, so a correction cannot land in one copy again (backlog c4383f1c9172).
+  #
+  # TREES, NOT PROCESSES. What a consumer is counting is a session tree, so a proc whose parent is
+  # itself in-family is a child of an already-counted tree and must not be counted twice. Measured,
+  # that subtraction currently removes 0 (background subagents are in-process) — it is kept because
+  # it is the CORRECT reduction, so a future binary that does fork an in-family child cannot silently
+  # double the count.
+  #
   # POSITIVE CONTROL ON THE DENOMINATOR, and it is load-bearing rather than fastidious. Without the
-  # `rows` guard this function returns "0" when `ps` produces NOTHING — a dead probe, an exec-deny, a
-  # sandbox — because the awk END block prints a well-formed zero over an empty stream. That is the
-  # exact defect the header's item (1) is about, arriving from the other side: not a pattern that
-  # cannot match, but an instrument that stopped answering, reading back as an EMPTY FLEET and
-  # therefore as infinite headroom. A gate charged on it would admit everything, forever, and look
-  # healthy (memory positive-control-the-denominator; sensor-default-off-makes-blindness-the-shipping-
-  # path). A live box always has processes, so zero input lines is never a measurement of zero
-  # sessions — it is the absence of a measurement, and it must reach the caller as rc 1 so the gate
-  # can file a VISIBLE fail-open. tests/spawn-presence.bats case 18 pins it; it found this bug.
+  # `rows` guard this returns zeros when `ps` produces NOTHING — a dead probe, an exec-deny, a
+  # sandbox — because the awk END block prints a well-formed zero over an empty stream. That is not a
+  # measurement of zero sessions, it is the ABSENCE of a measurement, and a live box always has
+  # processes. A gate charged on it would admit everything, forever, and look healthy (memory
+  # positive-control-the-denominator). It must reach the caller as rc 1 so the gate can file a
+  # VISIBLE fail-open. tests/spawn-presence.bats case 18 pins it; it found this bug.
+  #
+  # `comm` was rejected as the matching field: measured, a `.bin/claude` session reports COMMAND
+  # `node` to top(1), so the resolved executable name loses the very distinction being counted.
   local out
   out="$(ps -eo pid=,ppid=,args= 2>/dev/null | awk '
     { rows++
@@ -175,12 +187,28 @@ cc_sp_trees() { # → live session tree count | empty + rc 1
     }
     END {
       if (rows + 0 == 0) exit 1
-      n = 0
-      for (p in fam) { if (par[p] in fam) continue; n++ }
-      printf "%d", n
+      exe = 0; bin = 0
+      for (p in fam) {
+        if (par[p] in fam) continue        # child of an already-counted tree
+        if (fam[p] == "exe") exe++; else bin++
+      }
+      printf "%d %d %d", exe + bin, exe, bin
     }' 2>/dev/null)" || return 1
-  cc_sp_is_int "$out" || return 1
+  [ -n "$out" ] || return 1
   printf '%s' "$out"
+}
+
+cc_sp_trees() { # → live session tree count | empty + rc 1
+  if [ -n "${CC_SP_TREES_OVERRIDE:-}" ]; then
+    cc_sp_is_int "$CC_SP_TREES_OVERRIDE" || return 1
+    printf '%s' "$CC_SP_TREES_OVERRIDE"; return 0
+  fi
+  local cs
+  cs="$(cc_sp_census)" || return 1
+  # shellcheck disable=SC2086  # deliberate word-split of the 3-field census output
+  set -- $cs
+  cc_sp_is_int "${1:-}" || return 1
+  printf '%s' "$1"
 }
 
 # ── the beat, resolved the way its two teardown consumers resolve it ─────────────────────────────
