@@ -1401,6 +1401,54 @@ tap_notok() { # <tap> → completed tests that FAILED. Same grammar as tap_done,
   # count a SUBSET of what tap_done counts — that implication is the whole point (C30).
   int_or_zero "$(grep -acE "$TAP_NOTOK_RE" "$1" 2>/dev/null | head -1 | tr -d '\n')"
 }
+# ── THE HARNESS'S OWN SHORTFALL — the one state bats reports and nothing here read (C36) ─────────
+# bats VALIDATES its own run: lib/bats-core/validator.bash:30 counts the `ok`/`not ok` lines it
+# forwarded, compares them against the `1..N` header it forwarded first, and on a mismatch prints
+#
+#     # bats warning: Executed <A> instead of expected <B> tests
+#
+# then returns 1 — which, under bats:517-524's pipefail, is the whole run's exit code. So a run that
+# covered HALF its plan and one whose tests genuinely failed arrive here with the SAME rc 1, and
+# until this reader existed the only difference between them was a line no reader on this box read:
+# `git grep -n 'bats warning'` over scripts/ bin/ hooks/ matched NOTHING (2026-09-07).
+#
+# WHY THAT IS A VERDICT DEFECT AND NOT A COSMETIC ONE. The commonest way to lose the plan is to lose
+# $BATS_RUN_TMPDIR underneath a live run — a tmp reaper, a full disk, a peer's cleanup — and bats
+# does not fail loudly when that happens. Reproduced on this box 2026-09-07, 6 planned tests with
+# the run-dir removed 1.5s in: rc 1, `1..6`, `ok 1`, `not ok 2 a2`, `not ok 5 teardown_file failed`,
+# `# bats warning: Executed 3 instead of expected 6 tests`. THREE of six tests never ran, and BOTH
+# `not ok` lines are artifacts of the vanished directory rather than statements about any test —
+# `not ok 2` carries a `# (in test file …a.bats, line 2)` diagnostic, so it attributes cleanly to an
+# innocent file and walks straight into the retry ladder. The measured field instance is the same
+# shape three orders up: `Executed 1328 instead of expected 2789` — 1461 tests unexecuted, presented
+# as three ordinary `not ok` lines (backlog da839cd0d89e, recycle #196).
+#
+# Either outcome of the ladder is then WRONG in a way nothing downstream can see. If the re-runs
+# convict, the stamp is RED and names files whose tests were never the problem. If they exonerate —
+# which is the LIKELY branch, because the cause was environmental and the fresh TMPDIR removes it —
+# FAILING empties and the run is stamped GREEN, asserting a corpus passed when 52% of it never
+# executed. A green stamp is what deploy-live.sh and ship-land.sh:postland_net_live read.
+#
+# The remedy is the standing rule this file already applies everywhere else, finally given an
+# INSTRUMENT: a run that did not cover its plan proves nothing, so it is a CUT. Not red (no test of
+# ours failed), not green (most of them never ran) — cut, retried next sweep, and paged by the
+# existing CUT_MAX ladder if the tree keeps doing it. `1..0` needs no special case: bats forwards
+# zero results for it, 0 == 0, and no warning is emitted — the empty-corpus non-verdict keeps the
+# separate handling it already has at the retry site.
+#
+# ANCHORED ON THE FULL UPSTREAM LITERAL, not on `Executed`: this stream is captured 2>&1, so a
+# TEST'S OWN output can contain any words at all — and this repo runs suites that print about bats.
+# The `# ` prefix is bats' (a TAP comment), the digits are what make it a measurement, and both
+# numbers are captured so the cut can say how far the run actually got.
+# `-a` for the same reason every grammar reader above takes it: ugrep 7.5.0 is on the operator's
+# interactive PATH and reads a NUL-carrying TAP as EMPTY without it.
+# SPELLED IDENTICALLY in scripts/ship-land.sh and scripts/deploy-live.sh, and pinned equal by
+# tests/bats-shortfall-nonverdict.bats — the same argument tests/tap-grammar-parity.bats makes for
+# the not-ok grammar, and the same reason it is a test rather than a shared library.
+tap_shortfall() { # <tap> → "<executed>/<planned>" when bats reported a mismatch, else ""
+  grep -aoE '^# bats warning: Executed [0-9]+ instead of expected [0-9]+ tests$' "$1" 2>/dev/null \
+    | head -1 | sed -n 's/^# bats warning: Executed \([0-9][0-9]*\) instead of expected \([0-9][0-9]*\) tests$/\1\/\2/p'
+}
 tap_failtest() { # <tap> → the <desc> off the FIRST failing result line ("" when there is none).
   # Derived from TAP_NOTOK_RE rather than re-spelled: the old `s/^not ok [0-9]* //` matched ZERO
   # digits too, i.e. it was a THIRD spelling of the grammar and the loosest of the three.
@@ -2947,7 +2995,7 @@ hung_actions() { # <sha> <tree> — page + backlog + notify, routed to the SEAM 
   return 0
 }
 run_target() { # <sha> — the whole check-set + verdict for ONE sha
-  local sha="$1" tree tap rc adv t0 run_s n sf
+  local sha="$1" tree tap rc adv t0 run_s n sf SHORTFALL
   local -a bargs
   CUR_SHA="$sha"
   tree="$(tree_of "$sha")"
@@ -3064,7 +3112,25 @@ EOF
     fi
   fi
   adv="$(sc_count)"
-  [ "$rc" -eq 0 ] || classify_failures "$tap" "$rc"
+  # THE SHORTFALL GATE — read BEFORE classify_failures, because its input is what the shortfall
+  # invalidates. See tap_shortfall's header for the mechanism and the measurement. A run that did
+  # not cover its plan is a NON-VERDICT: its `not ok` lines are artifacts of whatever truncated it,
+  # and the tests it never reached said nothing at all. classify_failures is skipped outright rather
+  # than run-then-discarded — the retry ladder it would enter costs up to two bounded re-runs PER
+  # attributed file to answer a question this line has already settled, and its likeliest answer
+  # (exonerate, because the cause was environmental) is the false GREEN this gate exists to prevent.
+  #
+  # SYNTAX_BAD still splices in below and can still carry this run to RED. That is deliberate and is
+  # not an exception to the rule: the prelint is a DETERMINISTIC parse of the tree that never touched
+  # the corpus run, so a truncation says nothing about it either way.
+  SHORTFALL="$(tap_shortfall "$tap")"
+  if [ -n "$SHORTFALL" ]; then
+    CUT=1
+    CUT_WHY="corpus TRUNCATED — bats executed ${SHORTFALL%/*} of the ${SHORTFALL#*/} tests it planned (its own count), so $(( ${SHORTFALL#*/} - ${SHORTFALL%/*} )) never ran; nothing it printed is a verdict about this tree"
+    log "corpus SHORT — executed ${SHORTFALL%/*}/${SHORTFALL#*/} planned (rc $rc); the harness itself reported the mismatch (cut, not red, and NOT green)"
+  else
+    [ "$rc" -eq 0 ] || classify_failures "$tap" "$rc"
+  fi
   # C29 — BEFORE the SYNTAX_BAD splice, for two reasons: those findings are DETERMINISTIC and must
   # never be delayed by a corroboration round they cannot fail, and this is the last point at which
   # FAILING and FAILNAME are still index-aligned 1:1 (the splice pads no names, by design).

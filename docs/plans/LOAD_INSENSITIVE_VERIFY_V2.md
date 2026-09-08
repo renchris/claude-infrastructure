@@ -717,3 +717,81 @@ TERM→child, KILL→wrapper and KILL→child all produce identical rc *and* ide
 
 The evidence that would actually name the sender — a `pgrep -P "$cpid"` + `ps` snapshot taken before
 `wait` and written into the stamp on `rc>128` — is **filed, not guessed at here**.
+
+---
+
+## 11 · C36 — a run that did not cover its own plan was read as a verdict about the tree
+
+*(Landed 2026-09-08 from backlog `da839cd0d89e`, split out of `5a07814271ed`/recycle #196 — that
+row's FIRST defect, the `tests/handoff-fire-argv-launch.bats` wedge, was fixed and landed by
+`ae2f3585`; this is the second, and it is the one that survives the fix.)*
+
+### 11.1 The state nothing read
+
+bats validates its own run. `lib/bats-core/validator.bash:30` counts the `ok`/`not ok` lines it
+forwarded, compares them against the `1..N` header it forwarded first, and on a mismatch prints
+
+    # bats warning: Executed <A> instead of expected <B> tests
+
+then returns 1 — which under `bats:517-524`'s pipefail **is the run's exit code**. So a run whose
+corpus half-executed and a run whose tests genuinely failed reach every consumer with the SAME rc 1,
+and that warning line was the only thing separating them. `git grep -n 'bats warning'` over
+`scripts/ bin/ hooks/` matched **NOTHING** on 2026-09-07: three readers derived CUT-vs-RED from a
+bats TAP and none of them read bats' own statement that the TAP was incomplete.
+
+### 11.2 The generator, reproduced
+
+Losing `$BATS_RUN_TMPDIR` under a live run — a tmp reaper, a full disk, a peer's cleanup. bats does
+not fail loudly for it. Measured on this box 2026-09-07, 6 planned tests with the run dir removed
+1.5 s in: `rc 1`, `1..6`, `ok 1`, `not ok 2 a2`, `not ok 5 teardown_file failed`,
+`test_list_file.txt: No such file or directory`, `# bats warning: Executed 3 instead of expected 6
+tests`. **Three of six tests never ran, and BOTH `not ok` lines are artifacts of the vanished
+directory** — `not ok 2` even carries a well-formed `# (in test file …a.bats, line 2)` diagnostic,
+which is what walks it into the attribution ladder as a statement about an innocent file. The field
+instance is the same shape three orders up: `Executed 1328 instead of expected 2789`, i.e. 1461 tests
+unexecuted, presented as three ordinary `not ok` lines.
+
+### 11.3 Why each consumer got it wrong, and in which direction
+
+| Reader | Pre-C36 outcome on a truncated run |
+|---|---|
+| `postland-verify.sh` (the corpus belt) | Both directions are wrong, and the LIKELY one is worse. Convict ⇒ a RED stamp naming files whose tests were never the problem. Exonerate — the likely branch, since the cause was environmental and the ladder's fresh TMPDIR removes it — ⇒ FAILING empties and the run is stamped **GREEN over a corpus 52% of which never executed**. A green stamp is what `deploy-live.sh` and `ship-land.sh:postland_net_live` read. |
+| `ship-land.sh` (`tap_named_failures`) | Legs 0, A and B all pass the artifacts through: the grammar is well-formed, the collector is not named, and the plan does NOT contradict the file's size (the plan is CORRECT; it is the execution that fell short). ⇒ a land refused for a suite in which nothing failed. |
+| `deploy-live.sh` (host-suite belt) | The widest blast radius: a RED writes `$s($notok)` into a page **and** into cc-backlog, whose event key is project+title+source — so the failing SET, a function of where the truncation landed, becomes part of the key and a NEW work item is minted every time load moves that point. The file already records that exact non-idempotency for the rc-124 case `cb9980e4b0e5` fixed; a shortfall reaches it by the door that fix cannot cover, because bats exits **1**, not 124. |
+
+### 11.4 The fix
+
+One reader, `tap_shortfall`, spelled identically in all three files (`grep -aoE` on the full upstream
+literal, anchored at column 0 with both digit groups, `-a` for the same ugrep reason every grammar
+reader here takes it). Repeated rather than shared for the reason `tests/tap-grammar-parity.bats`
+already states about the not-ok grammar: `~/.claude` is reached by PER-FILE symlinks, so a new lib
+file is ABSENT from the live layer until `deploy-live` converges it, and the `[ -f lib ] && . lib`
+guard every consumer would need turns that absence into a SILENT fall-back — on exactly the boxes
+that run a land. `tests/bats-shortfall-nonverdict.bats` keeps the three spellings equal.
+
+Each consumer then routes the shortfall to the non-verdict it already has: postland-verify sets
+`CUT`/`CUT_WHY` **before** `classify_failures` and skips the ladder outright (its likeliest answer is
+the false green this gate exists to prevent); ship-land discards the count as LEG C, which lands in
+`run_scoped_suite`'s CUT arm — an exoneration RE-RUN in a fresh TMPDIR, so **a genuinely broken tree
+still names its failures there and still returns RED**; deploy-live gains a `short` arm tested BEFORE
+`notok -gt 0`, the same ordering rule `cb9980e4b0e5` established for rc 124 and for the same reason.
+
+`1..0` needs no special case: bats forwards zero results for it, 0 == 0, no warning is emitted, and
+the empty-corpus non-verdict keeps the separate handling it already has at the retry site.
+
+### 11.5 Fail direction, and the controls that pin it
+
+Leg C DISCARDS `not ok` lines, so its failure mode is **over-firing** — eating a real red and
+softening it to "retry when quieter", the one direction this split must never fail in. Three things
+bound that. (1) A discard is not a verdict: every consumer routes into a re-run or a retry, never
+into a green. (2) The needle is bats' full line at column 0, so a TEST'S OWN output mentioning the
+warning — including an indented verbatim copy of it — cannot disarm anything. (3) Both halves are
+tested: the truncation tests fail pre-fix (6 of 14 against trunk's scripts), and the CONTROLS —
+a genuine red with no warning, the near-miss output shapes, deploy-live's red arm and its green arm —
+pass in BOTH trees, which is exactly what a guard against over-firing must do.
+
+The suite makes its artifact with the REAL bats at test time (a 6-test corpus whose second test
+removes its own run dir — deterministic, no sleep race) rather than checking in a fixture, which
+would pin a third-party tool's wording and rot silently on the next Homebrew bump. Its first test is
+a positive control asserting bats still emits the warning at all, so an upstream that stopped would
+turn this file red rather than vacuously green.

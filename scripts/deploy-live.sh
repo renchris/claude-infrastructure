@@ -954,7 +954,7 @@ host_cut_page() { # <suite> <n> <deployed-sha> — an HONEST page: names no test
   return 0
 }
 host_checks() { # <deployed-sha> — never blocks, never rolls back, never changes the exit code
-  local sha="$1" line s tap rc notok n=0 red="" cut="" pf iscut row cn newcuts=""
+  local sha="$1" line s tap rc notok short reached n=0 red="" cut="" pf iscut row cn newcuts=""
   # THE VERDICT SETS, kept as bare space-delimited suite paths (`$red` carries a `(N)` count and is
   # therefore not usable as a key). greenset is what gets a HOST_GREEN row; redset is what has its
   # row DELETED. A suite reaches neither set when this tick produced no verdict about it, and that
@@ -1013,6 +1013,25 @@ host_checks() { # <deployed-sha> — never blocks, never rolls back, never chang
     # tests/tap-grammar-parity.bats. `-a` so the count cannot change with which grep is on PATH.
     notok="$(printf '%s\n' "$tap" | grep -acE '^not ok [0-9]+' 2>/dev/null || true)"
     case "$notok" in ''|*[!0-9]*) notok=0 ;; esac
+    # THE HARNESS'S OWN SHORTFALL — the second way a run is truncated, and the one our bound cannot
+    # see (backlog da839cd0d89e). The rc-124 arm below covers a truncation WE caused; this covers
+    # one caused underneath us, and its commonest generator is losing $BATS_RUN_TMPDIR mid-run to a
+    # tmp reaper or a full disk. bats validates its own run (lib/bats-core/validator.bash:30):
+    # it counts the results it forwarded against the `1..N` it forwarded first, prints
+    # `# bats warning: Executed <A> instead of expected <B> tests` on a mismatch, and returns 1 —
+    # so the run arrives here as rc 1 with `not ok` lines, byte-indistinguishable from a suite whose
+    # tests failed. Reproduced 2026-09-07: 6 planned, run dir removed 1.5s in, rc 1, TWO `not ok`
+    # lines, three tests never executed.
+    #
+    # THE SAME ORDERING RULE cb9980e4b0e5 established for rc 124, for the same reason and with more
+    # at stake: the failing SET is a function of where the truncation landed, so `$s($notok)` in the
+    # RED line below — which is cc-backlog's event key (project+title+source) — mints a NEW item
+    # every time load moves that point. A non-verdict that pages and files is the expensive shape.
+    # Same literal as scripts/postland-verify.sh and scripts/ship-land.sh, pinned equal by
+    # tests/bats-shortfall-nonverdict.bats for the reason tests/tap-grammar-parity.bats states about
+    # its own grammar: a shared lib is a NEW file, absent from the per-file-symlinked live layer
+    # until this very script converges it.
+    short="$(printf '%s\n' "$tap" | grep -aoE '^# bats warning: Executed [0-9]+ instead of expected [0-9]+ tests$' 2>/dev/null | head -1 | sed -n 's/^# bats warning: Executed \([0-9][0-9]*\) instead of expected \([0-9][0-9]*\) tests$/\1\/\2/p')"
     # R6: a NAMED failure is the only red. rc alone is blind — bats masks a load-kill behind its
     # own pipefail'd pipeline and exits non-zero naming zero tests. That is CUT: a non-verdict
     # about the machine, never a claim about the tree, and it must never page as a failure.
@@ -1034,6 +1053,13 @@ host_checks() { # <deployed-sha> — never blocks, never rolls back, never chang
         then say "  CUT  $s — bound ${HOST_TIMEOUT_S}s fired after $notok named failure(s) (truncated: no verdict)"
         else say "  CUT  $s — bound ${HOST_TIMEOUT_S}s fired (no verdict)"
       fi
+    elif [ -n "$short" ]; then
+      # `:+` would expand on a literal 0 (notok is always SET), so the discarded-count clause is
+      # built explicitly — a CUT line reading "0 reached failure(s) discarded" is noise that makes
+      # the useful case harder to spot.
+      cut="$cut $s"; iscut=1; reached=""
+      [ "$notok" -gt 0 ] && reached=", $notok reached failure(s) discarded"
+      say "  CUT  $s — bats executed ${short%/*} of the ${short#*/} tests it planned, so $(( ${short#*/} - ${short%/*} )) never ran (truncated: no verdict$reached)"
     elif [ "$notok" -gt 0 ]; then    red="$red $s($notok)"; redset="$redset $s"; say "  RED  $s — $notok failing"
     elif [ "$rc" -ne 0 ];    then    cut="$cut $s"; iscut=1; say "  CUT  $s — rc=$rc naming 0 tests (no verdict)"
     else                             greenset="$greenset $s"
