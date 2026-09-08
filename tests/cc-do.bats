@@ -180,7 +180,7 @@ mkact_confirm() {  # $1=name  $2=sentinel path
   # the packet carries a staged artifact — the strongest possible probe: if cc-do ever ran a
   # decision's command, this sentinel would exist.
   printf '#!/bin/bash\ntouch "%s"\n' "$SENT" > "$BATS_TEST_TMPDIR/staged.sh"
-  "$DECIDE" open --class C --what "Choose the reboot posture. Long tail." \
+  "$DECIDE" open --class C --conviction 40 --receipt "probe => result" --option "a::outcome a" --option "b::outcome b" --what "Choose the reboot posture. Long tail." \
     --staged-artifact "$BATS_TEST_TMPDIR/staged.sh" >/dev/null
   run "$DO" --run </dev/null
   [ "$status" -eq 0 ]
@@ -195,7 +195,7 @@ mkact_confirm() {  # $1=name  $2=sentinel path
 }
 
 @test "the default view COUNTS decisions; --list itemizes them; --json exposes every one" {
-  "$DECIDE" open --class C --what "Choose the reboot posture. Tail." >/dev/null
+  "$DECIDE" open --class C --conviction 40 --receipt "probe => result" --option "a::outcome a" --option "b::outcome b" --what "Choose the reboot posture. Tail." >/dev/null
   run "$DO" </dev/null
   [ "$status" -eq 0 ]
   run bash -c 'echo "$1" | grep -c "Choose the reboot posture"' _ "$output"
@@ -210,7 +210,7 @@ mkact_confirm() {  # $1=name  $2=sentinel path
 }
 
 @test "class-A and a well-formed class-B are excluded; class-C in the same store is not" {
-  "$DECIDE" open --class C --what "Ruling required here. Tail." >/dev/null
+  "$DECIDE" open --class C --conviction 40 --receipt "probe => result" --option "a::outcome a" --option "b::outcome b" --what "Ruling required here. Tail." >/dev/null
   "$DECIDE" open --class A --what "Auto-decided audit trail. Never operator-facing." >/dev/null
   "$DECIDE" open --class B --what "Auto-fires unless vetoed. Tail." \
     --default "proceed" --deadline "2099-01-01T00:00:00Z" >/dev/null
@@ -240,7 +240,7 @@ mkact_confirm() {  # $1=name  $2=sentinel path
   # would then swallow every packet BEHIND it, and a later-sorting fixture could not tell the two
   # apart (the survivor would render either way).
   printf 'this is not json at all {{{\n' > "$CC_DECISIONS_DIR/0000-broken.json"
-  "$DECIDE" open --class C --what "Survivor packet renders. Tail." >/dev/null
+  "$DECIDE" open --class C --conviction 40 --receipt "probe => result" --option "a::outcome a" --option "b::outcome b" --what "Survivor packet renders. Tail." >/dev/null
   run "$DO" --list </dev/null
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'Survivor packet renders' || false      # POSITIVE CONTROL
@@ -433,7 +433,7 @@ mkact_confirm() {  # $1=name  $2=sentinel path
 
 @test "--json emits exactly the four contracted keys, one object per step" {
   mkact 05-alpha "$SENT"
-  "$DECIDE" open --class C --what "A ruling. Tail." >/dev/null
+  "$DECIDE" open --class C --conviction 40 --receipt "probe => result" --option "a::outcome a" --option "b::outcome b" --what "A ruling. Tail." >/dev/null
   run "$DO" --json </dev/null
   [ "$status" -eq 0 ]
   json="$output"        # `run` CLOBBERS $output — every derived assertion reads this copy

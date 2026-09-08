@@ -572,6 +572,17 @@ CUSTODY="$(lfield CUSTODY_OPEN)"; case "$CUSTODY" in ''|*[!0-9]*) CUSTODY=0 ;; e
 FILEDM="$(lfield FILED_MINE)"; case "$FILEDM" in ''|*[!0-9]*) FILEDM=0 ;; esac
 [ "$FILEDM" -gt 0 ] && { contra=1; facts="${facts}${FILEDM} backlog row(s) YOU filed this session are still open with no stated reason you could not drive them (cc-backlog list --open --json | jq '.[]|select(.filedBy==\"${SID}\")') — drive each and \`cc-backlog done <id> --evidence …\`, drop it (\`done --evidence \"dropped: <why>\"\`), or hand it off by re-running the same add with \`--why-not-now \"needs-credential|needs-human|not-yet-true|no-capacity: <detail>\"\`; a row is not a disposition; "; }
 
+# UNCONVICTED (2026-09-08, THE CONVICTION PROTOCOL — docs/research/conviction-close-2026-09-08.md) —
+# a done-claim over an ask of the operator that carries no NUMBER and no RECEIPT: a needs-human row
+# or a class-C packet THIS session filed without `--conviction N --receipt PATH`. The incident close
+# read "✅ … follow-on: ae75073ef319 (your policy call)" over a fully drivable investigation, and
+# every arm here read it as clean — the row carried a why-not-now (so FILED_MINE excused it), sat
+# `open` (so YOURS never saw it) and was not a packet (so BLOCKED never saw it). The class gate had
+# been cleared by a true sentence about the wrong object. CONSUME the ledger's count, never re-derive:
+# wrap-ledger folds those asks into the filer's own 🔧, and this arm says so at the done-claim.
+UNCONV="$(lfield UNCONVICTED_MINE)"; case "$UNCONV" in ''|*[!0-9]*) UNCONV=0 ;; esac
+[ "$UNCONV" -gt 0 ] && { contra=1; facts="${facts}${UNCONV} item(s) YOU filed this session as the operator's carry no stated conviction and no research receipt (a needs-human row: cc-backlog list --blocked --json | jq '.[]|select(.filedBy==\"${SID}\")'; a class-C packet: cc-decide list --open --class C --json | jq '.[]|select(.session_sid==\"${SID}\")') — the protocol: research until conviction clears 90% and IMPLEMENT it; only if it is still below, re-file with \`--conviction N --receipt PATH|\"<cmd> => <output>\"\` and the measured options. A question nobody researched is not the operator's, it is yours; "; }
+
 # THE DRAIN FLOOR (2026-09-05, BACKLOG_ZERO §5.5) — the other half of the term above. A done-claim
 # from a session whose frozen scope is ABOUT the backlog, that closed NO row itself. FILED_MINE let a
 # filing contradict a close; nothing let "closed nothing" contradict one, so every session sent to

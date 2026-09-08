@@ -1877,3 +1877,29 @@ dbl_setup() { # <tag> → echoes the repo cwd, with both hooks pointed at one fi
   [ "$status" -eq 0 ]; [ -z "$output" ]
   /usr/bin/grep -q '"reason":"ledger-clean"' "$COMPLETION_IDL"
 }
+
+# ── 🔧 UNCONVICTED (2026-09-08, THE CONVICTION PROTOCOL — docs/research/conviction-close-2026-09-08.md)
+# The incident close read "✅ … follow-on: ae75073ef319 (fseventsd saturation, your policy call)" over
+# a needs-human row filed with no conviction and no receipt, and every arm here read it as clean: the
+# row carried a why-not-now (FILED_MINE excused it), sat open (D1's blocked-set never saw it), and was
+# not a packet (⛔ never saw it). wrap-ledger now folds such an ask into UNCONVICTED_MINE; this pins
+# that the hook CONSUMES it. Same WRAP_LEDGER_BIN stub seam as the ⛔ and filed-undriven cases.
+@test "🔧 unconvicted: a confident done over UNCONVICTED_MINE=1 ⇒ FIRE, naming the number and the receipt" {
+  WRAP_LEDGER_BIN="$(mkledger uc1 DIRTY=0 DIRTY_N=0 UNLANDED=0 AHEAD=0 REMAINDER=0 \
+                              TRUNK=origin/main BLOCKED=0 CUSTODY_OPEN=0 FILED_MINE=0 UNCONVICTED_MINE=1 RUNG=🔧)"; export WRAP_LEDGER_BIN
+  run run_ca "$(mkfix "✅ Complete & live on trunk — landed; follow-on: ae75073ef319 (fseventsd saturation, your policy call).")" \
+             "$BATS_TEST_TMPDIR" "uc-1"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | /usr/bin/grep -q '1 item(s) YOU filed this session as the operator'
+  printf '%s' "$output" | /usr/bin/grep -q -- '--conviction N --receipt'
+  printf '%s' "$output" | /usr/bin/grep -q 'not the operator'
+}
+
+@test "🔧 unconvicted CONTROL: the SAME close over UNCONVICTED_MINE=0 ⇒ ABSTAIN (ledger-clean)" {
+  WRAP_LEDGER_BIN="$(mkledger uc2 DIRTY=0 DIRTY_N=0 UNLANDED=0 AHEAD=0 REMAINDER=0 \
+                              TRUNK=origin/main BLOCKED=0 CUSTODY_OPEN=0 FILED_MINE=0 UNCONVICTED_MINE=0 RUNG=✅)"; export WRAP_LEDGER_BIN
+  run run_ca "$(mkfix "✅ Complete & live on trunk — landed, all green, nothing unsaved.")" \
+             "$BATS_TEST_TMPDIR" "uc-2"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  /usr/bin/grep -q '"reason":"ledger-clean"' "$COMPLETION_IDL"
+}

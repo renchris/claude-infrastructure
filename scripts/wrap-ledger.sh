@@ -725,8 +725,14 @@ count_operator_steps() {
   command -v jq >/dev/null 2>&1 || { YOURS=0; YOURS_SRC="error"; return 0; }
   json="$(_bounded "${WRAP_BACKLOG_TIMEOUT_S:-5}" "$bin" list --blocked --json 2>/dev/null)" \
     || { YOURS=0; YOURS_SRC="error"; return 0; }
-  n="$(printf '%s' "$json" | jq -r --arg sid "$SID" \
-        '[ .[] | select((.session // "") == $sid) ] | length' 2>/dev/null)" \
+  # A needs-human row that carries no conviction/receipt (post-epoch) is NOT an operator step yet —
+  # it is UNCONVICTED (counted by count_filed_undriven, the filer's own 🔧) and must not be credited
+  # here as "my side is done". Everything else in the blocked set is yours as before.
+  n="$(printf '%s' "$json" | jq -r --arg sid "$SID" --arg epoch "$CONVICTION_EPOCH" \
+        '[ .[] | select((.session // "") == $sid)
+               | select( ((.whyNotNow // "") | startswith("needs-human") | not)
+                         or ((.conviction != null) and ((.receipt // "") != ""))
+                         or ((.ts // "") < $epoch) ) ] | length' 2>/dev/null)" \
     || { YOURS=0; YOURS_SRC="error"; return 0; }
   case "$n" in ''|*[!0-9]*) YOURS=0; YOURS_SRC="error"; return 0 ;; esac
   YOURS="$n"; YOURS_SRC="$SID_SRC"
@@ -752,6 +758,34 @@ _resolve_decide_bin() {
 # The open/class predicate is cc-decide's (`list --open --class C --json`), not ours — this asks the
 # ONE question the packet cannot answer for itself: is it MINE?
 BLOCKED=0; BLOCKED_SRC="skip"; BLOCKED_WHAT=""
+# ── UNCONVICTED — an ask of the operator carrying no number and no receipt (2026-09-08) ──────────
+# docs/research/conviction-close-2026-09-08.md. The incident: a session filed
+# `needs-human: the fleet's headless spawn rate is the operator's policy call` (ae75073ef319) over
+# a fully drivable investigation and closed "✅ … follow-on: ae75073ef319 (your policy call)". Every
+# term in this ledger read that close as clean: FILED_MINE excuses a row that carries a why-not-now;
+# YOURS counts only `blocked` rows and a needs-human add sat `open`; BLOCKED counts only class-C
+# packets. A third door — and the operator's reply was "is it net-positive? if so, why is this not
+# proactively done and instead idling for the user to ask what it is and proceed?". The rule, in
+# their words: "if conviction of a decision is not >90% then research exhaustively, and then
+# implement if now >90% or then ask the user if below." Made mechanical at the producers (a
+# needs-human add and a class-C open now REFUSE without `--conviction N --receipt R`, and refuse
+# above the threshold), and here at the consumer: this term counts the asks THIS SESSION filed that
+# carry neither field —
+#   UNCONVICTED_ROWS  needs-human rows (`.whyNotNow` opens with needs-human) with `.filedBy == $SID`,
+#                     open or blocked, `.conviction == null` or `.receipt == ""`, `.ts >= epoch`;
+#   UNCONVICTED_PKTS  open class-C packets with `.session_sid == $SID` lacking either field,
+#                     `.created >= epoch`, and NOT written by a mechanical producer (`.producer`
+#                     set — ship-land's landing-range escalation is a gate refusing, not a session
+#                     asking, and it keeps ⛔).
+# GRANDFATHERED by the epoch: a row or packet filed before the protocol landed was filed under the
+# old rules and is judged by them (CC_CONVICTION_EPOCH, default the landing hour; `ts` on a row is
+# the add's stamp, first-wins — bin/cc-backlog's fold). Ladder: an unconvicted ask is the filer's
+# own 🔧 — same rank as FILED_MINE, outranking 🚀 and 👤 — never 👤 (it is not the operator's yet)
+# and never ⛔ (it is not a decision yet; it is a question nobody researched). The two convicted
+# populations keep their rungs: a convicted needs-human row IS an operator step (YOURS → 👤), a
+# convicted class-C packet IS a decision (BLOCKED → ⛔). Fail-OPEN like every sibling.
+CONVICTION_EPOCH="${CC_CONVICTION_EPOCH:-2026-09-08T17:00:00Z}"
+UNCONVICTED_MINE=0; UNCONVICTED_ROWS=0; UNCONVICTED_PKTS=0; UNCONVICTED_SRC="skip"
 # ── FILED, UNDRIVEN (2026-09-05, BACKLOG_ZERO §5 — the filing-vs-driving generator) ─────────────
 # FILED_MINE = OPEN backlog rows this session ADDED (`.filedBy == $SID`) that carry neither a
 # `whyNotNow` (the hand-off record) nor a `condition` (a mechanical, re-measured standing state).
@@ -785,9 +819,34 @@ count_filed_undriven() {
   c="$(printf '%s' "$json" | jq -r --arg sid "$SID" \
         '[ .[] | select(.status == "done" and (.closedSession // "") == $sid) ] | length' 2>/dev/null)" \
     || c=0
+  # UNCONVICTED_ROWS (§ UNCONVICTED above) — the same fetch, one more question: which needs-human
+  # rows of mine carry no number or no receipt. Open OR blocked: a legacy-binary add leaves the row
+  # open, the current binary blocks it at birth, and neither shape is the operator's without the
+  # fields. Fail toward 0 like CLOSED_MINE — this term must never manufacture a 🔧 from a read error.
+  local u
+  u="$(printf '%s' "$json" | jq -r --arg sid "$SID" --arg epoch "$CONVICTION_EPOCH" \
+        '[ .[] | select((.status == "open" or .status == "blocked") and (.filedBy // "") == $sid
+                        and ((.whyNotNow // "") | startswith("needs-human"))
+                        and ((.ts // "") >= $epoch)
+                        and ((.conviction == null) or ((.receipt // "") == ""))) ] | length' 2>/dev/null)" \
+    || u=0
   case "$f" in ''|*[!0-9]*) FILED_SRC="error"; return 0 ;; esac
   case "$c" in ''|*[!0-9]*) c=0 ;; esac
+  case "$u" in ''|*[!0-9]*) u=0 ;; esac
   FILED_MINE="$f"; CLOSED_MINE="$c"; FILED_SRC="$SID_SRC"
+  UNCONVICTED_ROWS="$u"
+}
+# The sum the ladder and the emitter read. UNCONVICTED_SRC follows the two reads it depends on:
+# `skip` until either ran, the session source once one did, `error` only when BOTH failed (a packet
+# count from a readable decision store is still a fact when the backlog was unreadable).
+sum_unconvicted() {
+  UNCONVICTED_MINE=$((UNCONVICTED_ROWS + UNCONVICTED_PKTS))
+  case "$FILED_SRC:$BLOCKED_SRC" in
+    skip:skip) UNCONVICTED_SRC="skip" ;;
+    none:*|*:none) UNCONVICTED_SRC="none" ;;
+    error:error) UNCONVICTED_SRC="error" ;;
+    *) UNCONVICTED_SRC="$SID_SRC" ;;
+  esac
 }
 
 # ── THE DRAIN FLOOR (2026-09-05, BACKLOG_ZERO §5.5 — the generator's other half) ─────────────────
@@ -833,16 +892,26 @@ count_blocking_decisions() {
   # Count FIRST, free text LAST — nothing an operator typed into a decision can shift the field the
   # rung branches on (docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md), and the gsub keeps a prose
   # newline from turning the one-line readout into two.
-  line="$(printf '%s' "$json" | jq -r --arg sid "$SID" '
+  # THE CONVICTION SPLIT (§ UNCONVICTED above): of the packets that are mine, only those that carry
+  # a conviction AND a receipt — or predate the epoch, or were written by a mechanical producer —
+  # are decisions and count here; the rest are UNCONVICTED_PKTS. Two counts precede the free text,
+  # and both are always non-empty digits, so the one collapsible cell is the last one.
+  line="$(printf '%s' "$json" | jq -r --arg sid "$SID" --arg epoch "$CONVICTION_EPOCH" '
       [ .[] | select((.session_sid // "") == $sid) ] as $mine
-      | [ ($mine | length | tostring),
-          (if ($mine | length) == 1
-           then ($mine[0].what_plain // "" | tostring | gsub("[\\t\\r\\n]"; " "))
+      | ($mine | map(select( ((.producer // "") != "")
+                             or ((.created // "") < $epoch)
+                             or ((.conviction != null) and ((.receipt // "") != "")) ))) as $ask
+      | [ ($ask | length | tostring),
+          ((($mine | length) - ($ask | length)) | tostring),
+          (if ($ask | length) == 1
+           then ($ask[0].what_plain // "" | tostring | gsub("[\\t\\r\\n]"; " "))
            else "" end) ] | @tsv' 2>/dev/null)" \
     || { BLOCKED=0; BLOCKED_SRC="error"; return 0; }
-  IFS=$'\t' read -r n what <<< "$line"
+  local u
+  IFS=$'\t' read -r n u what <<< "$line"
   case "${n:-}" in ''|*[!0-9]*) BLOCKED=0; BLOCKED_SRC="error"; return 0 ;; esac
-  BLOCKED="$n"; BLOCKED_SRC="$SID_SRC"
+  case "${u:-}" in ''|*[!0-9]*) u=0 ;; esac
+  BLOCKED="$n"; BLOCKED_SRC="$SID_SRC"; UNCONVICTED_PKTS="$u"
   # BLOCKED_WHAT is set ONLY in the single-decision case — that is the only case where naming one
   # decision is the right answer; N>1 gets the command that lists them, and a stale "what" leaking
   # into that line would name one fork while claiming to describe several. A hand-written packet can
@@ -1679,10 +1748,15 @@ else
   if [ -n "$TRUNK" ]; then compute_live_layer; count_operator_steps; fi
   count_filed_undriven
   compute_close_floor
+  sum_unconvicted
   if [ "$FILED_MINE" -gt 0 ]; then
     # Outranks 🚀 and 👤 (both assert "my side is done"): a row you filed and could not say why you
     # did not drive is YOUR open work, whatever the tree says. Same rank as the custody 🔧 above.
     RUNG="🔧"; READOUT="🔧 Loose ends — ${FILED_MINE} backlog row(s) you filed this session are still open with no reason you could not drive them (cc-backlog list --open --json | jq '.[]|select(.filedBy==\"${SID}\")'); drive each (then \`cc-backlog done <id> --evidence …\`), drop it (\`done --evidence \"dropped: <why>\"\`), or hand it off by re-running the same add with \`--why-not-now \"needs-credential|needs-human|not-yet-true|no-capacity: <detail>\"\`."
+  elif [ "$UNCONVICTED_MINE" -gt 0 ]; then
+    # Same rank as filed-undriven (§ UNCONVICTED): an ask of the operator with no number and no
+    # receipt is a question nobody researched, and that is the filer's work — not 👤, not ⛔.
+    RUNG="🔧"; READOUT="🔧 Loose ends — ${UNCONVICTED_MINE} item(s) you filed this session as the operator's carry no stated conviction and no research receipt (${UNCONVICTED_ROWS} needs-human row(s): cc-backlog list --blocked --json | jq '.[]|select(.filedBy==\"${SID}\")' · ${UNCONVICTED_PKTS} class-C packet(s): cc-decide list --open --class C --json | jq '.[]|select(.session_sid==\"${SID}\")'). The protocol: research until conviction clears 90% and IMPLEMENT it; only if it is still below, re-file with \`--conviction N --receipt PATH|\"<cmd> => <output>\"\` and the measured options (a row: re-run the same add; a packet: veto it and open it again). A question nobody researched is not the operator's — it is yours."
   elif [ "$CLOSE_FLOOR" -eq 1 ]; then
     # Same rank as filed-undriven, for the same reason: a backlog-scoped session that closed no row
     # has not done the thing it was sent to do, whatever it landed. Machinery is not a close.
@@ -1802,6 +1876,12 @@ emit_machine() {
   printf 'YOURS_SRC=%s\n' "$YOURS_SRC"
   printf 'FILED_MINE=%s\n' "$FILED_MINE"
   printf 'FILED_SRC=%s\n' "$FILED_SRC"
+  # § UNCONVICTED — the sum and its two halves, so a consumer can name which store to cure.
+  sum_unconvicted
+  printf 'UNCONVICTED_MINE=%s\n' "$UNCONVICTED_MINE"
+  printf 'UNCONVICTED_ROWS=%s\n' "$UNCONVICTED_ROWS"
+  printf 'UNCONVICTED_PKTS=%s\n' "$UNCONVICTED_PKTS"
+  printf 'UNCONVICTED_SRC=%s\n' "$UNCONVICTED_SRC"
   printf 'CLOSED_MINE=%s\n' "$CLOSED_MINE"
   printf 'DRAIN_SCOPE=%s\n' "$DRAIN_SCOPE"
   printf 'CLOSE_FLOOR=%s\n' "$CLOSE_FLOOR"
@@ -1918,6 +1998,20 @@ emit_full() {
     *)     filed_disp="filed-undriven ${FILED_MINE} · closed ${CLOSED_MINE} (this session's own net)" ;;
   esac
   printf 'Backlog (mine):   %s\n' "$filed_disp"
+  # § UNCONVICTED — asks of the operator this session filed without the number and the receipt.
+  sum_unconvicted
+  local unconv_disp; case "$UNCONVICTED_SRC" in
+    none)  unconv_disp="unknown — session id unresolvable (not counted)" ;;
+    error) unconv_disp="unknown — both stores unreadable (not counted)" ;;
+    skip)  unconv_disp="not counted (a worse rung governs)" ;;
+    *)     if [ "$UNCONVICTED_MINE" -gt 0 ]; then unconv_disp="${UNCONVICTED_MINE} (${UNCONVICTED_ROWS} needs-human row(s) · ${UNCONVICTED_PKTS} class-C packet(s)) filed as the operator's with NO conviction/receipt — research to 90% and implement, or re-file with --conviction/--receipt"
+           # The rows half is read only on the ✅-eligible path; on a worse rung it was SKIPPED, and
+           # "none" over an unread store would be the healthy sentence over an unmeasured fact
+           # (MEMORY.md fail-safe-default-mimics-the-healthy-state). Say which half was counted.
+           elif [ "$FILED_SRC" = "skip" ] || [ "$FILED_SRC" = "error" ]; then unconv_disp="none among my decision packets (needs-human rows NOT counted — $([ "$FILED_SRC" = "error" ] && printf 'backlog unreadable' || printf 'a worse rung governs'))"
+           else unconv_disp="none — every ask of mine carries a conviction and a receipt"; fi ;;
+  esac
+  printf 'Unconvicted asks: %s\n' "$unconv_disp"
   # The top rung's own row. `skip` is unreachable here by construction (⛔ outranks everything, so
   # it is always computed) — the arm stays so an unreadable store can never render as "none open".
   local blocked_disp; case "$BLOCKED_SRC" in

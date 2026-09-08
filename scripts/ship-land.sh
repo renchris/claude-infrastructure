@@ -648,6 +648,13 @@ pkt = {
     "route_around_taken": "",
     "status": "open",
     "session_sid": os.environ.get("SID", ""),
+    # PRODUCER (2026-09-08, THE CONVICTION PROTOCOL). scripts/wrap-ledger.sh folds an open class-C
+    # packet that carries no `conviction`/`receipt` into the filer's own 🔧 instead of ⛔ — the
+    # right verdict for a SESSION that asked a question it never researched, and the wrong one for
+    # a GATE that refused a land: this packet is not an ask, it is a refusal, and the operator must
+    # still rule on it. A non-empty producer is how the ledger tells the two apart (classify by the
+    # producer's literal emission, never by shape).
+    "producer": "ship-land",
     "matched": [ln for ln in os.environ["HITS"].strip().splitlines() if ln][:20],
 }
 with open(sys.argv[1], "w") as f:

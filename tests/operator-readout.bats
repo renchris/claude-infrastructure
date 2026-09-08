@@ -234,7 +234,7 @@ mkrepo_unlanded() {
 }
 
 @test "open class-C decision with staged artifact renders '▶ bash <staged>' (real cc-decide packet)" {
-  "$DECIDE" open --class C --what "Wire the widget. Full detail here." \
+  "$DECIDE" open --class C --conviction 40 --receipt "probe => result" --option "a::outcome a" --option "b::outcome b" --what "Wire the widget. Full detail here." \
     --staged-artifact "$BATS_TEST_TMPDIR/staged-fix.sh" >/dev/null
   run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
   echo "$output" | grep -q "▶ bash $BATS_TEST_TMPDIR/staged-fix.sh   \[decision C "
@@ -242,7 +242,7 @@ mkrepo_unlanded() {
 }
 
 @test "open class-C without command degrades to ◆ first-sentence; class-A never renders" {
-  "$DECIDE" open --class C --what "Choose the reboot posture. Long tail of context that must not appear." >/dev/null
+  "$DECIDE" open --class C --conviction 40 --receipt "probe => result" --option "a::outcome a" --option "b::outcome b" --what "Choose the reboot posture. Long tail of context that must not appear." >/dev/null
   "$DECIDE" open --class A --what "Auto-decided audit trail entry. Never operator-facing." >/dev/null
   run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
   echo "$output" | grep -q '◆ \[decision C .*\] Choose the reboot posture'
@@ -301,7 +301,7 @@ _legacy_pkt() {  # $1=id  [$2=extra jq object]
 }
 
 @test "actioned/vetoed class-C packets stop rendering (status is honored)" {
-  id="$("$DECIDE" open --class C --what "Transient gate. Done soon.")"
+  id="$("$DECIDE" open --class C --conviction 40 --receipt "probe => result" --option "a::outcome a" --option "b::outcome b" --what "Transient gate. Done soon.")"
   run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
   echo "$output" | grep -q 'Transient gate'
   "$DECIDE" action "$id" --evidence t >/dev/null
@@ -391,7 +391,7 @@ mk4() { # the live shape, scaled down: N activations + N class-C decisions + N b
   # the fixture silently.
   local n="${1:-6}" i id
   for i in $(seq 1 "$n"); do printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/3$i-a-activate.sh"; done
-  for i in $(seq 1 "$n"); do "$DECIDE" open --class C --what "Decision $i. Detail." >/dev/null; done
+  for i in $(seq 1 "$n"); do "$DECIDE" open --class C --conviction 40 --receipt "probe => result" --option "a::outcome a" --option "b::outcome b" --what "Decision $i. Detail." >/dev/null; done
   for i in $(seq 1 "$n"); do
     id="$("$BACKLOG" add --title "Blocked item $i" --project infra)"
     "$BACKLOG" block "$id" --needs "operator step $i" >/dev/null
@@ -638,7 +638,7 @@ mk4() { # the live shape, scaled down: N activations + N class-C decisions + N b
 
 @test "malformed decision JSON is skipped, never crashes the render (fail-open per file)" {
   printf 'NOT JSON{{{' > "$CC_DECISIONS_DIR/broken.json"
-  "$DECIDE" open --class C --what "Still renders. Yes." >/dev/null
+  "$DECIDE" open --class C --conviction 40 --receipt "probe => result" --option "a::outcome a" --option "b::outcome b" --what "Still renders. Yes." >/dev/null
   run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'Still renders'

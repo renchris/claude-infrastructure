@@ -23,8 +23,16 @@
 #         [--option "label::outcome" ...] [--recommendation r] [--default d] [--deadline ISO]
 #         [--project subject-project] [--default-effect change|no-change]
 #         [--session-sid s] [--session-pane u] [--staged-artifact p] [--route-around r] [--id id]
+#         [--conviction N] [--receipt R]
 #           → fail-closed: B needs default+deadline; C must NOT carry a default (nor a
 #             --default-effect, having no default to describe); what_plain required.
+#             C ALSO REQUIRES --conviction, --receipt and ≥2 --option (THE CONVICTION PROTOCOL,
+#             2026-09-08): N = integer 0..100, how sure the filer is of its own course — above
+#             CC_CONVICTION_ASK_MAX (90) the open is REFUSED (implement it; a class-A packet
+#             records a decision you made); R = an existing file (a docs/research path) or
+#             "<cmd> => <output>", the research that could not lift it past the threshold.
+#             Optional on A/B, validated when present. Stored as `conviction` (number|null) and
+#             `receipt` (string, "" when absent); neither is part of the id.
 #             Echoes the id.
 #   veto   <id> [--by who]                 open → vetoed   (operator killed the default)
 #   action <id> [--evidence ref]           open → actioned (the decision was carried out)
@@ -77,6 +85,36 @@ mk_id() { printf '%s\037%s\037%s' "$1" "$2" "$3" | shasum -a 256 | cut -c1-12; }
 
 ensure_dir() { mkdir -p "$DECISIONS_DIR" 2>/dev/null || true; }
 
+# ── THE CONVICTION PROTOCOL (2026-09-08, docs/research/conviction-close-2026-09-08.md) ──────────
+# A class-C packet is the ⛔ rung: it ends a session's turn holding work and hands the operator a
+# question. Measured over the live store on 2026-09-08: 20 open B/C packets in 30 days, 5 with zero
+# options, 0 citing a research path, 0 stating how sure the filer was. The operator's rule, verbatim:
+# "if conviction of a decision is not >90% then research exhaustively, and then implement if now
+# >90% or then ask the user if below." So a class-C open carries the NUMBER, the RECEIPT of the
+# research that could not lift it, and the MEASURED OPTIONS in operator terms — or it is refused.
+# These three helpers are byte-identical to bin/cc-backlog's (a needs-human hand-off is the same
+# ask in the other store); scripts/wrap-ledger.sh reads the two fields and folds an unconvicted
+# class-C packet into the filer's own 🔧 instead of ⛔. Never RUN the receipt: it is evidence.
+valid_conviction() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; [ "$1" -le 100 ]; }
+conviction_ask_max() {
+  local m="${CC_CONVICTION_ASK_MAX:-90}"
+  case "$m" in ''|*[!0-9]*) m=90 ;; esac
+  printf '%s' "$m"
+}
+valid_receipt() {
+  local r="$1" l o
+  [ -n "$r" ] || return 1
+  [ -f "$r" ] && return 0
+  case "$r" in
+    *" => "*)
+      l="${r%% => *}"; o="${r#* => }"
+      l="${l#"${l%%[![:space:]]*}"}"; l="${l%"${l##*[![:space:]]}"}"
+      o="${o#"${o%%[![:space:]]*}"}"; o="${o%"${o##*[![:space:]]}"}"
+      [ -n "$l" ] && [ -n "$o" ] && return 0 ;;
+  esac
+  return 1
+}
+
 # ── TSV field-collapse guard — docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md ──────────────────
 # Tab is IFS-*whitespace*, so `IFS=$'\t' read` collapses a RUN of tabs: ANY empty cell shifts every
 # later field one position LEFT, silently and with a zero exit status. Padding at the `@tsv`
@@ -110,12 +148,14 @@ log_idl() { # <verb> <id> <class> <status>
 
 cmd_open() {
   local class="" what="" rec="" def="" deadline="" sid="" pane="" staged="" route="" id=""
-  local project="" deffect=""
+  local project="" deffect="" conviction="" receipt=""
   local options=()
   while [ $# -gt 0 ]; do
     local key="$1"; shift
     case "$key" in
       --class)           class="${1:-}";    [ $# -gt 0 ] && shift ;;
+      --conviction)      conviction="${1:-}"; [ $# -gt 0 ] && shift ;;
+      --receipt)         receipt="${1:-}";    [ $# -gt 0 ] && shift ;;
       --what)            what="${1:-}";      [ $# -gt 0 ] && shift ;;
       --option)          options+=("${1:-}"); [ $# -gt 0 ] && shift ;;
       --recommendation)  rec="${1:-}";       [ $# -gt 0 ] && shift ;;
@@ -157,6 +197,37 @@ cmd_open() {
       change|no-change) : ;;
       *) echo "cc-decide open: --default-effect must be change|no-change (got '${deffect}')" >&2; return 2 ;;
     esac
+  fi
+  # ── THE CONVICTION PROTOCOL — the number, the receipt, the options (see the helpers above) ────
+  # Same asymmetry as the class-B gate: a malformed packet is REFUSED, never half-written. The two
+  # fields are validated on ANY class that passes them (a stored lie is worse than an absent field)
+  # and REQUIRED, with ≥2 options, on class C — the one class whose packet is a question the
+  # operator must answer before the session may close. Above the threshold there is no question.
+  local ask_max; ask_max="$(conviction_ask_max)"
+  if [ -n "$conviction" ] && ! valid_conviction "$conviction"; then
+    echo "cc-decide open: --conviction '${conviction}' is not an integer 0..100 (a percent, e.g. 60)" >&2; return 2
+  fi
+  if [ -n "$conviction" ] && [ "$conviction" -gt "$ask_max" ]; then
+    { echo "cc-decide open: conviction ${conviction} is past the ${ask_max}% threshold — implement it, do not ask; a class-A packet records a decision you made."
+      echo "  Above the threshold there is no decision to hand over: drive it in this session, or fire one (scripts/handoff-fire.sh)."
+    } >&2
+    return 2
+  fi
+  if [ -n "$receipt" ] && ! valid_receipt "$receipt"; then
+    { echo "cc-decide open: --receipt '${receipt}' is neither an existing file nor \"<command> => <output>\"."
+      echo "  A receipt is the research that could not lift conviction past ${ask_max}%: a docs/research path that exists, or the measurement you ran and what it printed, joined by \" => \"."
+    } >&2
+    return 2
+  fi
+  if [ "$class" = "C" ] && { [ -z "$conviction" ] || [ -z "$receipt" ] || [ "${#options[@]}" -lt 2 ]; }; then
+    { echo "cc-decide open: a class-C packet hands the operator a decision, and it carries three things — missing: $([ -z "$conviction" ] && printf -- '--conviction ')$([ -z "$receipt" ] && printf -- '--receipt ')$([ "${#options[@]}" -lt 2 ] && printf -- '--option ×2')"
+      echo "  The protocol (operator ruling 2026-09-08): if conviction of a decision is not >${ask_max}%, research exhaustively; if it then"
+      echo "  clears ${ask_max}%, IMPLEMENT it (and file class A as the trail); only if it is still below, ask — with the number"
+      echo "  (--conviction N), the receipt of that research (--receipt PATH|\"<cmd> => <output>\"), and at least two measured"
+      echo "  options in operator terms (--option \"label::what happens\"). Cannot state a number or name the research? Then the"
+      echo "  investigation is still yours: drive it."
+    } >&2
+    return 2
   fi
 
   # ── SESSION ATTRIBUTION LADDER — a CONTRACT, and the reason it needs a third rung ─────────────
@@ -217,10 +288,12 @@ cmd_open() {
         --argjson options "$opts_json" --arg rec "$rec" --arg def "$def" \
         --arg deadline "$deadline" --arg staged "$staged" --arg route "$route" \
         --arg project "$project" --arg deffect "$deffect" \
+        --argjson conviction "${conviction:-null}" --arg receipt "$receipt" \
     '{id:$id, created:$created, class:$class, session_sid:$sid, session_pane_uuid:$pane,
       what_plain:$what, subject_project:$project, options:$options, recommendation:$rec,
       default_if_no_veto:$def, default_effect:$deffect, veto_deadline:$deadline,
-      staged_artifact_path:$staged, route_around_taken:$route, status:"open"}' \
+      staged_artifact_path:$staged, route_around_taken:$route, status:"open",
+      conviction:$conviction, receipt:$receipt}' \
     > "$tmp" 2>/dev/null && mv "$tmp" "$file"; then :; else
     rm -f "$tmp" 2>/dev/null || true; echo "cc-decide open: write failed" >&2; return 2
   fi
