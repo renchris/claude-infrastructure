@@ -158,6 +158,12 @@ type_line() {  # <pane> <line> — echo-verified type + submit (handoff-fire's s
   local pane="$1" line="$2" nonce wire want reread
   nonce="hs-$$-$RANDOM"; wire=": $nonce; $line"; want="$(printf '%s' "$wire" | tr -d '[:space:]')"
   "$IT2" session send -s "$pane" $'\x15' >/dev/null 2>&1 || true; sleep 0.2
+  # typed-send-lint:allow — the TWO LINES BELOW are this send's echo-verification, and they are
+  # why this function's own header calls it "echo-verified type + submit (handoff-fire's shape)":
+  # the pane is read back and the nonce-tagged wire must be found in it, or the function returns 1
+  # WITHOUT ever sending the CR. No command line can be submitted unverified. Per-LINE, not a
+  # sanctioned-name entry: `type_line` is too generic a name to exempt fleet-wide, and a NEW raw
+  # send elsewhere in this function must stay a violation.
   "$IT2" session send -s "$pane" "$wire" >/dev/null 2>&1 || return 1; sleep 0.6
   reread="$("$IT2" session read -s "$pane" -n 200 2>/dev/null | tr -d '[:space:]')"
   printf '%s' "$reread" | LC_ALL=C /usr/bin/grep -qF -- "$want" || return 1

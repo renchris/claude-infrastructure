@@ -5743,6 +5743,14 @@ if [ "${1:-}" = "__recycle" ]; then
           hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;;
         retype)
           if [ "$waited" = 60 ]; then
+            # typed-send-lint:allow — the THREE LINES BELOW are this send's echo-verification, in
+            # the order the lint's own doctrine demands: type, read the composer back, submit the
+            # CR only if it reads back exactly the line that was typed. A mangled or dropped send
+            # leaves `nc` unequal to "/exit" and the CR is withheld, so no command line can be
+            # submitted unverified — the same discharge a sanctioned helper gives, written inline
+            # because it2_type_verified would also bring its 4-attempt retry to an arm that
+            # deliberately retypes ONCE, at the 60s checkpoint only. Per-LINE, so a NEW raw send
+            # anywhere else in this watcher is a violation again.
             hf_bounded "$IT2" session send -s "$RSID" "/exit" >/dev/null 2>&1 || true
             sleep 1
             nc="$(composer_content "$IT2" "$RSID")" || nc=""
