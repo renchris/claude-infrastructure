@@ -2821,6 +2821,61 @@ verify_engagement() { # $1=projects $2=marker $3=regdir $4=pane $5=it2-bin $6=re
   return 1
 }
 
+# ---- THE CONSEQUENCE TABLE for verify_engagement's exit codes (2026-09-07) --------------------
+# The MESSAGES above branch on all five codes. Until now the two CONSEQUENCES did not: both the
+# custody debt (:10715) and the /goal arm (:10723) sat inside `if [ "$ENGAGE_RC" = 0 ]`, so every
+# non-zero code — including the NON-VERDICT this function's own contract header forbids treating as
+# a no — fell into one fail-closed else and the fired session lost BOTH. Measured that night on two
+# live panes (502 death-attrib, 529 memory-compact): each was confirmed ALIVE by its own transcript
+# — 529's held the brief verbatim as its FIRST user message and grew 122→183 records WHILE the fire
+# printed "the pane is live but TASK-LESS" — and each ended up with no custody row (so the
+# originator had no mechanical obligation to collect it, and its ✅ certificate was reachable over a
+# strand) and no armed goal (so nothing re-judged its stop). The desk hand-opened 529's row; that
+# hand-repair is the bug's fingerprint.
+#
+# THE ASYMMETRY THAT DECIDES EVERY ROW BELOW. Opening custody over a session that turns out DEAD is
+# cheap and REVERSIBLE — `cc-custody abandon <marker|slug> --why …`, one appended line, a routine
+# desk act. NOT opening it over a session that is ALIVE is a silent strand with no owner and no
+# alarm. Same polarity for the goal: an arm into a dead pane costs one refused paste (arm_goal only
+# ever pastes into a PROVEN-EMPTY composer and reports its own verdict), while a missing arm over a
+# live worker means nothing observes it stopping short. So a NON-VERDICT fails OPEN here, and only
+# here — the operator-facing messages keep their current, correct caution, which is the whole point
+# of separating the two.
+#
+# NOT A TIMEOUT FIX, deliberately. The window already scales with load (fire_engage_window) and
+# still produced 529's false negative at 354s. A bigger number moves the boundary and keeps the
+# defect; this changes what a NON-ANSWER licenses.
+#
+# Per-code, one row each, so a NEW member cannot inherit a default silently
+# (memory: new-enum-member-falls-into-fail-closed-default — a code that is merely "not success"
+# lands in the `*)` arm and nothing goes red). The unknown arm therefore fails OPEN and SAYS SO on
+# stderr: silence is what let the last new member ride an unread default.
+engage_rc_consequence() { # $1=rc $2=custody|goal → 0 = DO IT, 1 = do not
+  case "${1:-}:${2:-}" in
+    # 0 ENGAGED — proven by the session's own transcript. The original behaviour, unchanged.
+    0:custody|0:goal)  return 0 ;;
+    # 1 NEVER INGESTED — a DEFINITE negative: every read succeeded and found nothing, so no session
+    #   ever took the brief. The printed remedy is retire-then-re-fire, i.e. this pane is about to
+    #   be destroyed; a debt keyed on it would be owed by a pane that no longer exists.
+    1:custody|1:goal)  return 1 ;;
+    # 2 PANE PARKED — the launcher never ran, so there is no session AT ALL, only a shell. Nothing
+    #   can hold a brief, answer a goal, or ping a custody return. Definite, and about the pane.
+    2:custody|2:goal)  return 1 ;;
+    # 4 WEDGED — the session DEMONSTRABLY EXISTS: it booted, it is alive, and it stopped on a
+    #   startup dialog. The verdict's own message says "do NOT clear the pane or re-fire" — a pane
+    #   we are telling the operator to keep is a pane whose work is still owed back. The goal arm is
+    #   safe here by construction: it2_paste_submit_verified pastes only into a PROVEN-EMPTY
+    #   composer, so a modal screen makes it abstain rather than answer the dialog with its bytes.
+    4:custody|4:goal)  return 0 ;;
+    # 5 CANNOT TELL — the NON-VERDICT. The contract header says it means "the question was not
+    #   answered, NOT that the answer was no". Both live false negatives landed here. Fail OPEN.
+    5:custody|5:goal)  return 0 ;;
+    *)
+      echo "⚠ engage_rc_consequence: UNDOCUMENTED verify_engagement rc='${1:-}' for '${2:-}' — failing OPEN (a debt is reversible; a silent strand is not). Teach this code a row in the table, and teach bin/cc-spawn-verify the same member." >&2
+      return 0 ;;
+  esac
+}
+
 # Self-close SUCCESSOR-engagement predicate. Reuses the spawn-path engagement check (engagement_seen
 # path b: cc-registry row → .session_id → the <sid>.jsonl transcript → assistant_turn_in) — a fired
 # successor is registered by ensure_registration, so its row resolves the transcript. The successor's
@@ -4623,13 +4678,23 @@ inherit_recycle_goal() { # $1=predecessor-sid → always 0
 }
 
 # MESSAGE 2. Never fails the fire — see FAIL-CLOSED above. Always 0.
-arm_goal() { # $1=it2-bin $2=pane $3=condition → always 0; prints a parseable verdict
-  local it2="${1:-}" pane="${2:-}" cond="${3:-}" t=0 arm_rc=0
+# $4 PROVENANCE (2026-09-07) — WHAT THE CALLER KNEW WHEN IT DECIDED TO ARM. Empty on the proven
+# path; on a NON-VERDICT arm (engage_rc_consequence rows 4 and 5) it names the code, and EVERY
+# verdict this function prints and emits then carries it. Without this an arm taken over an
+# unproven engagement prints the identical `verdict=set` as one taken over a transcript-proven
+# session, i.e. it claims a proof it does not have — and a later reader of the ledger, or of the
+# pane, has no way to tell the two apart (memory: claimed-outcome-vs-checked-outcome).
+arm_goal() { # $1=it2-bin $2=pane $3=condition [$4=provenance] → always 0; prints a parseable verdict
+  local it2="${1:-}" pane="${2:-}" cond="${3:-}" prov="${4:-}" t=0 arm_rc=0 psfx="" ppfx=""
   local timeout="${FIRE_GOAL_VERIFY_TIMEOUT:-45}" interval="${FIRE_GOAL_VERIFY_INTERVAL:-3}"
   [ -n "$cond" ] || return 0
+  if [ -n "$prov" ]; then
+    psfx=" provenance=$prov"
+    ppfx="[$prov] "
+  fi
   if [ -z "$it2" ] || [ -z "$pane" ]; then
-    echo "⚠ goal NOT armed — no pane/it2 to paste into; the session has its brief and is working. goal-arm verdict=abstained reason=no-pane" >&2
-    emit_goal_event abstained "no pane/it2 binding for the arming paste" || true
+    echo "⚠ goal NOT armed — no pane/it2 to paste into; the session has its brief and is working. goal-arm verdict=abstained reason=no-pane${psfx}" >&2
+    emit_goal_event abstained "${ppfx}no pane/it2 binding for the arming paste" || true
     return 0
   fi
   # VERIFIED paste (recycle-100p 2026-08-22): the old call here was it2_paste_submit — ownership-
@@ -4645,32 +4710,32 @@ arm_goal() { # $1=it2-bin $2=pane $3=condition → always 0; prints a parseable 
   case "$arm_rc" in
     0) : ;;
     3)
-      echo "⚠ goal NOT armed — pane $pane's composer stayed occupied through the pre-paste wait (an unsubmitted draft; pasting would have appended to it). The session HAS its brief and is working. Re-arm by typing '/goal $cond' into it once the composer is clear. goal-arm verdict=held reason=composer-occupied" >&2
-      emit_goal_event held "composer occupied through pre-paste wait for pane $pane; saw: ${FIRE_PASTE_LAST_READBACK:-<unrecorded>}" || true
+      echo "⚠ goal NOT armed — pane $pane's composer stayed occupied through the pre-paste wait (an unsubmitted draft; pasting would have appended to it). The session HAS its brief and is working. Re-arm by typing '/goal $cond' into it once the composer is clear. goal-arm verdict=held reason=composer-occupied${psfx}" >&2
+      emit_goal_event held "${ppfx}composer occupied through pre-paste wait for pane $pane; saw: ${FIRE_PASTE_LAST_READBACK:-<unrecorded>}" || true
       command -v cc-notify >/dev/null 2>&1 && cc-notify "$pane" "GOAL-ARM DEFERRED: your composer held unsubmitted text, so the Stop-hook goal was NOT armed (nothing was typed over it). When the composer is clear, arm it yourself by submitting exactly: /goal $cond" >/dev/null 2>&1 || true
       return 0 ;;
     4)
-      echo "⚠ goal NOT armed — post-paste read-back did not match, CR NOT sent; the /goal text sits UNSUBMITTED in pane $pane's composer. goal-arm verdict=mangled reason=readback-mismatch" >&2
-      emit_goal_event mangled "post-paste read-back mismatch for pane $pane; CR withheld, paste left unsubmitted; saw: ${FIRE_PASTE_LAST_READBACK:-<unrecorded>}" || true
+      echo "⚠ goal NOT armed — post-paste read-back did not match, CR NOT sent; the /goal text sits UNSUBMITTED in pane $pane's composer. goal-arm verdict=mangled reason=readback-mismatch${psfx}" >&2
+      emit_goal_event mangled "${ppfx}post-paste read-back mismatch for pane $pane; CR withheld, paste left unsubmitted; saw: ${FIRE_PASTE_LAST_READBACK:-<unrecorded>}" || true
       command -v cc-notify >/dev/null 2>&1 && cc-notify "$pane" "GOAL-ARM MANGLED (no harm done): a /goal paste landed in your composer but the read-back did not match, so it was NOT submitted. If the composer shows only the /goal line, press Enter to arm it; otherwise clear the composer and submit exactly: /goal $cond" >/dev/null 2>&1 || true
       return 0 ;;
     *)
-      echo "⚠ goal NOT armed — the arming paste abstained or failed to send. The session HAS its brief and is working; only the Stop-hook goal is missing. Re-arm by typing '/goal $cond' into pane $pane. goal-arm verdict=abstained reason=paste-refused" >&2
-      emit_goal_event abstained "arming paste refused/abstained for pane $pane (rc=$arm_rc)" || true
+      echo "⚠ goal NOT armed — the arming paste abstained or failed to send. The session HAS its brief and is working; only the Stop-hook goal is missing. Re-arm by typing '/goal $cond' into pane $pane. goal-arm verdict=abstained reason=paste-refused${psfx}" >&2
+      emit_goal_event abstained "${ppfx}arming paste refused/abstained for pane $pane (rc=$arm_rc)" || true
       return 0 ;;
   esac
   while [ "$t" -lt "$timeout" ]; do
     if goal_armed_for_pane "$pane" "$cond"; then
-      echo "→ goal ARMED + VERIFIED on pane $pane (read back from the session's own transcript, ${#cond} chars). goal-arm verdict=set" >&2
-      emit_goal_event set "pane $pane; condition ${#cond} chars" || true
+      echo "→ goal ARMED + VERIFIED on pane $pane (read back from the session's own transcript, ${#cond} chars). goal-arm verdict=set${psfx}" >&2
+      emit_goal_event set "${ppfx}pane $pane; condition ${#cond} chars" || true
       return 0
     fi
     /bin/sleep "$interval"; t=$((t + interval))
   done
   # Submitted but not READ BACK. Never call this "armed": an over-cap or gate-refused /goal replies
   # in TEXT and sets nothing, and that reply is indistinguishable from success at the pane.
-  echo "⚠ goal SUBMITTED but NOT VERIFIED after ${timeout}s — no goal_status attachment with this condition in the session's transcript. The harness may have refused it (trusted-workspace gate, restricted hooks, or an over-cap condition), and a submitted /goal that was refused looks exactly like one that worked. The session HAS its brief and is working. goal-arm verdict=unverified" >&2
-  emit_goal_event unverified "pane $pane; submitted, no goal_status read back within ${timeout}s" || true
+  echo "⚠ goal SUBMITTED but NOT VERIFIED after ${timeout}s — no goal_status attachment with this condition in the session's transcript. The harness may have refused it (trusted-workspace gate, restricted hooks, or an over-cap condition), and a submitted /goal that was refused looks exactly like one that worked. The session HAS its brief and is working. goal-arm verdict=unverified${psfx}" >&2
+  emit_goal_event unverified "${ppfx}pane $pane; submitted, no goal_status read back within ${timeout}s" || true
   return 0
 }
 
@@ -10652,6 +10717,54 @@ else
       fi
     fi
   }
+  # THE CONSEQUENCE ARM — one code path for all five verdicts, so custody and the goal can never
+  # again be decided by an `= 0` that the message layer already knows better than. The TABLE
+  # (engage_rc_consequence, beside verify_engagement) is the sole arbiter; this function only
+  # carries the globals it needs and stamps the provenance both consequences must record.
+  engage_apply_consequences() { # $1=rc $2=goal_unreachable branch name → always 0
+    local rc="${1:-}" branch="${2:-unknown}" prov="proven"
+    [ "$rc" = 0 ] || prov="unproven-rc$rc"
+    # W2 CUSTODY (CLOSE_INTEGRITY): a fire that armed a back-channel OWES a return — record the
+    # debt where the ORIGINATOR's ledger can count it (keyed on the FIRING cwd, not the target
+    # worktree). This is the term that makes a dispatched wave a ledger fact instead of an
+    # invisible in-flight state (generator G1; the census's wave-abandonment signature).
+    #
+    # SELF-RETIRE RESTRICTION LIFTED (custody v1.1, item d29b73103189). This used to add
+    # `[ "$WANT_SELF_RETIRE" = 1 ]`, because a --no-self-retire peer writes no fired-peer stamp ⇒
+    # carries no marker ⇒ can never reach the self-close discharge, and review #5 chose "not
+    # recorded" over "recorded unretirably". hooks/mailbox-drain.sh now discharges on the
+    # HANDOFF-PING itself, keyed on the SLUG — and the slug is armed by exactly the same
+    # condition as the debt: NB_ARMED_TARGET is non-empty iff the back-channel trailer was
+    # written, and that trailer is what hands the peer `HANDOFF-PING <NB_SLUG>: …`. So every row
+    # this opens names a key its own peer was told to send back, whether or not it self-retires.
+    # The remaining test is therefore just "was a return owed", which is what NB_ARMED_TARGET means.
+    #
+    # ENGAGE_VERIFY=0 fires never reach here, and that is CORRECT rather than a residual gap —
+    # see the disproof recorded in docs/plans/CLOSE_INTEGRITY_2026-08-10.md § custody v1.1.
+    # ENGAGE_VERIFY is 0 iff RECYCLE or DRY. A dry run fires nothing, and --recycle is "same pane
+    # by definition" — net-zero panes, no dispatched peer — so a row opened there would key the
+    # firing session's own cwd against its own pane: self-custody that no peer exists to
+    # discharge, blocking the originator's ✅ until it abandoned a debt it owed itself.
+    if [ -n "${NB_ARMED_TARGET:-}" ] && [ -n "${SPAWNED_PANE:-}" ] && engage_rc_consequence "$rc" custody; then
+      _hf_custody open --cwd "$PWD" --target "$SPAWNED_PANE" \
+        --marker "${FIRE_MARKER:-}" --slug "${NB_SLUG:-}" \
+        --notify-back "$NB_ARMED_TARGET" --originator-pane "${FIRING_SID:-}" \
+        --provenance "$prov"
+      # Say it on a NON-VERDICT, because the surrounding message reads as a failure and the row is
+      # the one thing about this fire that is deliberately NOT treated as one. Silence here would
+      # make the fail-open invisible to the operator reading the very verdict it contradicts.
+      [ "$rc" = 0 ] || echo "   custody debt OPENED anyway (provenance=$prov) — engagement was not DISPROVEN, and an unreturned live wave is a silent strand; discharge with: cc-custody abandon ${FIRE_MARKER:-<marker>} --why '<why>'" >&2
+    fi
+    # MESSAGE 2. On rc 0 this is strictly after engagement was PROVEN — that ordering is the whole
+    # design, and it was already instrumented (P0-11), so it adds no new liveness assumption. It
+    # never gates the fire: the brief has landed and the session is working whatever happens here.
+    if engage_rc_consequence "$rc" goal; then
+      arm_goal "$REAL_IT2" "$SPAWNED_PANE" "$FIRE_GOAL" "$([ "$rc" = 0 ] || printf 'engagement-%s' "$prov")"
+    else
+      goal_unreachable "$branch" || true
+    fi
+    return 0
+  }
   if [ "$ENGAGE_VERIFY" = 1 ]; then
     PROJ_DIR="$(config_dir_for_launcher "$LAUNCHER")/projects"
     # Capture the rc rather than testing it inline: verify_engagement has FIVE outcomes and an
@@ -10684,44 +10797,9 @@ else
       if [ "$WANT_SELF_RETIRE" = 1 ]; then
         mark_fired_peer "$FIRED_DIR" "$SPAWNED_PANE" "$LAUNCH_DIR" "$FIRING_SID" "$PROMPT_FILE"
       fi
-      # W2 CUSTODY (CLOSE_INTEGRITY): a fire that armed a back-channel OWES a return — record the
-      # debt where the ORIGINATOR's ledger can count it (keyed on the FIRING cwd, not the target
-      # worktree). This is the term that makes a dispatched wave a ledger fact instead of an
-      # invisible in-flight state (generator G1; the census's wave-abandonment signature).
-      #
-      # SELF-RETIRE RESTRICTION LIFTED (custody v1.1, item d29b73103189). This used to add
-      # `[ "$WANT_SELF_RETIRE" = 1 ]`, because a --no-self-retire peer writes no fired-peer stamp ⇒
-      # carries no marker ⇒ can never reach the self-close discharge, and review #5 chose "not
-      # recorded" over "recorded unretirably". hooks/mailbox-drain.sh now discharges on the
-      # HANDOFF-PING itself, keyed on the SLUG — and the slug is armed by exactly the same
-      # condition as the debt: NB_ARMED_TARGET is non-empty iff the back-channel trailer was
-      # written (:7038), and that trailer is what hands the peer `HANDOFF-PING <NB_SLUG>: …`
-      # (:7100). So every row this opens now names a key its own peer was told to send back,
-      # whether or not it self-retires. The remaining test is therefore just "was a return owed",
-      # which is what NB_ARMED_TARGET means.
-      #
-      # ENGAGE_VERIFY=0 fires still skip this, and that is CORRECT rather than a residual gap —
-      # see the disproof recorded in docs/plans/CLOSE_INTEGRITY_2026-08-10.md § custody v1.1.
-      # ENGAGE_VERIFY is 0 iff RECYCLE or DRY (:7028). A dry run fires nothing, and --recycle is
-      # "same pane by definition" (:6386) — net-zero panes, no dispatched peer — so a row opened
-      # there would key the firing session's own cwd against its own pane: self-custody that no
-      # peer exists to discharge, blocking the originator's ✅ until it abandoned a debt it owed
-      # itself. Recording it would manufacture the always-alarm this ledger is built to avoid.
-      # A recycle takes no back-channel by default (notify-back.bats pins the auto-exclusion), and
-      # the one spelling that still arms one — an EXPLICIT --recycle --notify-back <third-party> —
-      # is worse, not better: the ping goes somewhere that is not the originator, so even the new
-      # drain-side discharge could never run in the session holding the row.
-      if [ -n "${NB_ARMED_TARGET:-}" ] && [ -n "${SPAWNED_PANE:-}" ]; then
-        _hf_custody open --cwd "$PWD" --target "$SPAWNED_PANE" \
-          --marker "${FIRE_MARKER:-}" --slug "${NB_SLUG:-}" \
-          --notify-back "$NB_ARMED_TARGET" --originator-pane "${FIRING_SID:-}"
-      fi
       # P0-15: publish the fired pane under its role so role-addressed pings reach it.
       if [ -n "$AS_ROLE" ] && [ -n "$SPAWNED_PANE" ]; then write_role "$CC_ROLES_DIR" "$AS_ROLE" "$SPAWNED_PANE"; fi
-      # MESSAGE 2. Strictly after engagement was PROVEN — that ordering is the whole design, and it
-      # was already instrumented (P0-11), so this adds no new liveness assumption. Never gates the
-      # fire: the brief has landed and the session is working whatever happens here.
-      arm_goal "$REAL_IT2" "$SPAWNED_PANE" "$FIRE_GOAL"
+      engage_apply_consequences 0 engaged
     elif [ "$ENGAGE_RC" = 2 ]; then
       # The launcher NEVER RAN: the pane is still a shell and that shell refused or is blocking on
       # the launch command. Distinct message because the remedy is distinct — there is no session to
@@ -10737,7 +10815,7 @@ else
       echo "   The launch command was: $CMD" >&2
       echo "   No session exists to recover (a re-send would run the brief as shell commands). Clear the pane, then re-fire; if the stuck word is the launcher itself, check that '$LAUNCHER' is defined in the operator's interactive zsh (the launchers are aliases/functions — 'command -v' cannot see them from a script)." >&2
       emit_handoff_telemetry 0 || true
-      goal_unreachable pane-parked || true
+      engage_apply_consequences 2 pane-parked
       exit 1
     elif [ "$ENGAGE_RC" = 4 ]; then
       # The INVERSE of the branch above, and the distinction is the whole point of the verdict: the
@@ -10749,7 +10827,7 @@ else
       echo "   $(pane_modal_remedy "$ENGAGE_WEDGED")" >&2
       echo "   The session is LIVE — do NOT clear the pane or re-fire; answer the dialog, then re-check engagement. ps reports it healthy, which is why nothing else flagged it." >&2
       emit_handoff_telemetry 0 || true
-      goal_unreachable pane-wedged || true
+      engage_apply_consequences 4 pane-wedged
       exit 1
     elif [ "$ENGAGE_RC" = 5 ]; then
       # NOT A FAILURE VERDICT — the absence of a non-verdict is what this whole item was filed about
@@ -10771,7 +10849,7 @@ else
       fi
       echo "   Check it directly: the pane is registered and its worktree is kept." >&2
       emit_handoff_telemetry 0 || true
-      goal_unreachable engagement-unproven || true
+      engage_apply_consequences 5 engagement-unproven
       exit 6
     else
       # THE RECOVERY MUST RETIRE THE PANE FIRST (cc-backlog 87626e1593c3). This branch is reached
@@ -10795,7 +10873,7 @@ else
       # Record the FAILED engagement (symmetry with the engaged=1 path) so "did this handoff engage"
       # is answerable in one grep. Guarded so a telemetry hiccup can never preempt the exit 1.
       emit_handoff_telemetry 0 || true
-      goal_unreachable never-engaged || true
+      engage_apply_consequences 1 never-engaged
       exit 1
     fi
   fi

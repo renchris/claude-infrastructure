@@ -842,3 +842,196 @@ _few_load_window() {   # sources the hardware terms + the subject, both as the f
   [ "$status" -eq 1 ]                        # straight to the expiry path, no poll at all
   [ ! -s "$POLLED" ]
 }
+
+# ---- THE CONSEQUENCE CORPUS: custody + goal PER exit code (2026-09-07) -------------------------
+#
+# The CONTRACT cases above pin that verify_engagement's five codes are DOCUMENTED. They cannot see
+# what the caller DOES with them, and that is exactly where the defect lived: the messaging branched
+# on all five while both consequences — the custody debt and the /goal arm — sat inside
+# `if [ "$ENGAGE_RC" = 0 ]`. Every non-zero code, including the NON-VERDICT the contract header
+# forbids reading as a no, fell into one fail-closed else. Measured 2026-09-07 on two panes that
+# were ALIVE by their own transcripts (502 death-attrib; 529 memory-compact, whose transcript held
+# the brief verbatim as its FIRST user message and grew 122→183 records while the fire printed "the
+# pane is live but TASK-LESS"): each lost its custody row (no mechanical obligation to collect it,
+# and the originator's ✅ reachable over the strand) and its goal (nothing re-judging its stop).
+#
+# So this corpus asserts the CONSEQUENCE, per code — the thing the contract test structurally
+# cannot. Two observables, both machine-read from disk rather than from prose:
+#   custody · an OPEN row in this test's isolated store (HOME is temp'd, and CC_CUSTODY_DIR is
+#             pinned under it so the assertion side reads the same store the fire wrote).
+#   goal    · the goal-arm ledger row. `verdict=unreachable` is goal_unreachable, i.e. the arming
+#             point was NEVER REACHED; any other verdict means an arm was ATTEMPTED. In this
+#             fixture composer_owned can never be proven (as_tty resolves to nothing through the
+#             stub), so an attempted arm always lands on `abstained` — deterministic, and still the
+#             distinction that matters: attempted-and-refused ≠ never-attempted.
+#
+# NOT A TIMEOUT TEST. Every case pins FIRE_ENGAGE_TIMEOUT to seconds precisely so the verdict is a
+# function of the FIXTURE and never of the box (M11) — the same reason the sizer cases below pin
+# theirs. The defect was never that the window was too short: 529's false negative came at 354s.
+
+# The custody store and the goal ledger both live under $HOME, which setup() already temps. Pinning
+# CC_CUSTODY_DIR as well is what lets the ASSERTION side (which runs with the real $HOME) read the
+# store the fire wrote — without it, `cc-custody count` would answer over the operator's live ledger.
+cq_env() { # → the env pairs every consequence case shares
+  printf '%s\n' \
+    "CC_CUSTODY_DIR=$HOMEDIR/.claude/autonomy/custody" \
+    "HOME=$HOMEDIR" "TMPDIR=$BATS_TEST_TMPDIR" \
+    "FIRE_ENGAGE_TIMEOUT=2" "FIRE_ENGAGE_RETRY=2" "FIRE_ENGAGE_INTERVAL=1" "FIRE_REG_TIMEOUT=0" \
+    "FIRE_PASTE_PREWAIT=1" "FIRE_PASTE_PREIVL=1" \
+    "FIRE_GOAL_VERIFY_TIMEOUT=1" "FIRE_GOAL_VERIFY_INTERVAL=1"
+}
+cq_custody_open() { # → the number of OPEN custody rows this fire left
+  local n
+  n="$(CC_CUSTODY_DIR="$HOMEDIR/.claude/autonomy/custody" "$REPO/bin/cc-custody" count --open 2>/dev/null || printf 0)"
+  printf '%s' "${n:-0}"
+}
+cq_goal_verdicts() { # → every goal-arm verdict this fire emitted, one per line
+  jq -r 'select(.class == "goal-arm") | .verdict' "$HOMEDIR/.claude/logs/handoffs.jsonl" 2>/dev/null || true
+}
+# A goal arm was ATTEMPTED iff a goal-arm row exists whose verdict is not `unreachable`.
+cq_goal_armed() { local v; v="$(cq_goal_verdicts)"; [ -n "$v" ] && ! printf '%s\n' "$v" | grep -qx 'unreachable'; }
+
+# The modal twin of parked_it2_stub — same delivery-keyed mechanism (so the echo-verify still passes
+# BEFORE the screen flips), a screen only pane_modal_reason can match, and nothing pane_parked_reason
+# can. Both anchored at column 0, which is what the modal oracle requires.
+wedged_it2_stub() { # $1=path
+  cat > "$1" <<STUB
+#!/bin/bash
+LAST="$BATS_TEST_TMPDIR/it2-last-send2"
+DELIVERED="$BATS_TEST_TMPDIR/cmd-delivered"
+case "\$1 \$2" in
+  "session send"|"session run")
+    txt="\${!#}"
+    if [ "\$txt" = \$'\r' ]; then : > "\$DELIVERED"; else printf '%s' "\$txt" > "\$LAST"; fi ;;
+esac
+case "\$*" in
+  *"session split"*) echo "Created new pane: $PANE" ;;
+  *"session read"*)
+    if [ -f "\$DELIVERED" ]; then
+      printf 'Accessing workspace: %s\n' "$BATS_TEST_TMPDIR"
+      printf '1. Yes, I trust this folder\n'
+      printf '2. No, continue without these permissions\n'
+    fi
+    cat "\$LAST" 2>/dev/null ;;
+  *) : ;;
+esac
+STUB
+  chmod +x "$1"
+  cp "$1" "$HOMEDIR/.claude/bin/it2"
+}
+
+# rc 0 — ENGAGED. The unchanged case, and the corpus's positive control: without it, a mutation that
+# simply stopped opening custody everywhere would still pass every other case in this block.
+@test "CONSEQUENCE rc0 (engaged): custody OPENED and the goal ARMED" {
+  mkdir -p "$PROJ/proj"
+  { printf '{"type":"user","message":{"role":"user","content":"the brief SEEN-MARKER ok"}}\n'
+    printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}\n'
+  } > "$PROJ/proj/s.jsonl"
+  # shellcheck disable=SC2046  # cq_env() emits one env pair per line and the SPLIT is the point — quoting it would hand `env` a single argument.
+  run env $(cq_env) IT2_BIN="$BIN/it2" FIRE_ENGAGE_MARKER=SEEN-MARKER \
+    bash "$HF" --prompt-file "$PF" --launcher claude-test --split-right \
+      --session-id FIRING-0000 --cwd "$BATS_TEST_TMPDIR" --no-self-retire \
+      --notify-back DEADBEEF-0000-0000-0000-000000000002 --goal 'consequence probe — one line'
+  [ "$status" -eq 0 ]
+  [ "$(cq_custody_open)" -ge 1 ]
+  cq_goal_armed
+  # …and a PROVEN arm must NOT be stamped with a non-verdict provenance.
+  ! printf '%s\n' "$output" | grep -q 'provenance=engagement-unproven' || false
+}
+
+# rc 1 — NEVER INGESTED. A definite negative whose own remedy is "retire that pane, then re-fire":
+# a debt keyed on a pane about to be destroyed is owed by nothing. Stays closed, deliberately.
+@test "CONSEQUENCE rc1 (never engaged): NO custody row and NO goal arm" {
+  # shellcheck disable=SC2046  # cq_env() emits one env pair per line and the SPLIT is the point — quoting it would hand `env` a single argument.
+  run env $(cq_env) IT2_BIN="$BIN/it2" FIRE_ENGAGE_MARKER=NEVER-SEEN-MARKER \
+    bash "$HF" --prompt-file "$PF" --launcher claude-test --split-right \
+      --session-id FIRING-0000 --cwd "$BATS_TEST_TMPDIR" --no-self-retire \
+      --notify-back DEADBEEF-0000-0000-0000-000000000002 --goal 'consequence probe — one line'
+  [ "$status" -ne 0 ]
+  printf '%s\n' "$output" | grep -q 'FIRE FAILED — never engaged'
+  [ "$(cq_custody_open)" -eq 0 ]
+  ! cq_goal_armed || false
+  printf '%s\n' "$(cq_goal_verdicts)" | grep -qx 'unreachable'
+}
+
+# rc 2 — PANE PARKED. There is no session at all, only a shell: nothing can hold a brief, answer a
+# goal, or ping a return. The one non-zero code where the fail-closed answer is the RIGHT one.
+@test "CONSEQUENCE rc2 (pane parked): NO custody row and NO goal arm" {
+  local BIN2="$BATS_TEST_TMPDIR/binq2"; mkdir -p "$BIN2"
+  parked_it2_stub "$BIN2/it2" "zsh: command not found: claude-test"
+  # shellcheck disable=SC2046  # cq_env() emits one env pair per line and the SPLIT is the point — quoting it would hand `env` a single argument.
+  run env -u CC_PANE_CMD $(cq_env) IT2_BIN="$BIN2/it2" FIRE_NOCORRECT=0 FIRE_ARGV_LAUNCH=0 \
+    FIRE_ENGAGE_MARKER=NEVER-SEEN-MARKER \
+    bash "$HF" --prompt-file "$PF" --launcher claude-test --split-right \
+      --session-id FIRING-0000 --cwd "$BATS_TEST_TMPDIR" --no-self-retire \
+      --notify-back DEADBEEF-0000-0000-0000-000000000002 --goal 'consequence probe — one line'
+  [ "$status" -ne 0 ]
+  printf '%s\n' "$output" | grep -q 'pane PARKED, launcher never ran'
+  [ "$(cq_custody_open)" -eq 0 ]
+  ! cq_goal_armed || false
+}
+
+# rc 4 — WEDGED. The session DEMONSTRABLY EXISTS; the verdict's own text tells the operator not to
+# clear the pane. A pane we are keeping is a pane whose work is still owed back, so both
+# consequences fail OPEN — and the goal arm is safe by construction, because
+# it2_paste_submit_verified only ever pastes into a PROVEN-EMPTY composer.
+@test "CONSEQUENCE rc4 (wedged, session ALIVE): custody OPENED fail-open and the goal ARMED" {
+  local BIN2="$BATS_TEST_TMPDIR/binq4"; mkdir -p "$BIN2"
+  wedged_it2_stub "$BIN2/it2"
+  # shellcheck disable=SC2046  # cq_env() emits one env pair per line and the SPLIT is the point — quoting it would hand `env` a single argument.
+  run env -u CC_PANE_CMD $(cq_env) IT2_BIN="$BIN2/it2" FIRE_NOCORRECT=0 FIRE_ARGV_LAUNCH=0 \
+    FIRE_ENGAGE_MARKER=NEVER-SEEN-MARKER \
+    bash "$HF" --prompt-file "$PF" --launcher claude-test --split-right \
+      --session-id FIRING-0000 --cwd "$BATS_TEST_TMPDIR" --no-self-retire \
+      --notify-back DEADBEEF-0000-0000-0000-000000000002 --goal 'consequence probe — one line'
+  [ "$status" -ne 0 ]
+  printf '%s\n' "$output" | grep -q 'pane WEDGED, session alive but INERT'
+  [ "$(cq_custody_open)" -ge 1 ]
+  cq_goal_armed
+  # PROVENANCE, both halves — the row and the printed verdict must each say the arm was taken over
+  # an unproven engagement rather than claim a proof it does not have.
+  CC_CUSTODY_DIR="$HOMEDIR/.claude/autonomy/custody" "$REPO/bin/cc-custody" list --open --json \
+    | jq -e 'map(select(.provenance == "unproven-rc4")) | length >= 1' >/dev/null
+  printf '%s\n' "$output" | grep -q 'provenance=engagement-unproven-rc4'
+}
+
+# rc 5 — THE NON-VERDICT, and the code both live false negatives landed on. The transcript holds the
+# brief as a USER record with no assistant turn yet: on a loaded box that is a slow start, and the
+# contract header says this member means "the question was not answered, NOT that the answer was no".
+@test "CONSEQUENCE rc5 (cannot tell): custody OPENED fail-open and the goal ARMED" {
+  mkdir -p "$PROJ/proj"
+  printf '{"type":"user","message":{"role":"user","content":"the brief SLOW-MARKER body"}}\n' > "$PROJ/proj/s.jsonl"
+  # shellcheck disable=SC2046  # cq_env() emits one env pair per line and the SPLIT is the point — quoting it would hand `env` a single argument.
+  run env $(cq_env) IT2_BIN="$BIN/it2" FIRE_ENGAGE_MARKER=SLOW-MARKER \
+    bash "$HF" --prompt-file "$PF" --launcher claude-test --split-right \
+      --session-id FIRING-0000 --cwd "$BATS_TEST_TMPDIR" --no-self-retire \
+      --notify-back DEADBEEF-0000-0000-0000-000000000002 --goal 'consequence probe — one line'
+  [ "$status" -eq 6 ]
+  printf '%s\n' "$output" | grep -q 'ENGAGEMENT UNPROVEN'
+  [ "$(cq_custody_open)" -ge 1 ]
+  cq_goal_armed
+  CC_CUSTODY_DIR="$HOMEDIR/.claude/autonomy/custody" "$REPO/bin/cc-custody" list --open --json \
+    | jq -e 'map(select(.provenance == "unproven-rc5")) | length >= 1' >/dev/null
+  printf '%s\n' "$output" | grep -q 'provenance=engagement-unproven-rc5'
+  # …and it must STILL not tell the operator to re-fire — the fail-open must not have relaxed the
+  # caution the contract header requires of this member's MESSAGE.
+  ! printf '%s\n' "$output" | grep -q 'FIRE FAILED — never engaged' || false
+}
+
+# THE TABLE ITSELF, unit-level. The E2E cases above prove the wiring; this proves the arbiter, and
+# it is what makes a NEW member's row a deliberate act rather than an inherited default.
+@test "CONSEQUENCE TABLE: engage_rc_consequence answers per code, and an UNKNOWN code fails OPEN loudly" {
+  eval "$(sed -n '/^engage_rc_consequence() {/,/^}/p' "$HF")"
+  for what in custody goal; do
+    run engage_rc_consequence 0 "$what"; [ "$status" -eq 0 ]
+    run engage_rc_consequence 1 "$what"; [ "$status" -eq 1 ]
+    run engage_rc_consequence 2 "$what"; [ "$status" -eq 1 ]
+    run engage_rc_consequence 4 "$what"; [ "$status" -eq 0 ]
+    run engage_rc_consequence 5 "$what"; [ "$status" -eq 0 ]
+  done
+  # A member nobody taught this table: admitted (the asymmetry says a reversible debt beats a silent
+  # strand) but never SILENTLY — the silence is what let the last new member ride an unread default.
+  run engage_rc_consequence 7 custody
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -q 'UNDOCUMENTED verify_engagement rc'
+}
