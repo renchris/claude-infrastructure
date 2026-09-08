@@ -182,6 +182,10 @@ skipped=0
 # further down can COUNT a refused activation instead of swallowing it. Nothing between here and
 # there read it before.
 warnings=0
+# A FAILED resident reload is not a warning, it is a DAEMON THAT IS NOW DOWN — counted separately
+# because it is the ONLY condition in this script that must change the EXIT CODE. See the exit at
+# the foot of the file for why a warning cannot carry it.
+resident_reload_failures=0
 
 run() {
   if $DRY_RUN; then
@@ -1042,6 +1046,7 @@ if $IS_GLOBAL; then
             if ! "$LAUNCHCTL_BIN" bootstrap "gui/$uid" "$HOME/Library/LaunchAgents/$name" 2>/dev/null; then
               echo "  ⚠ $label — resident reload FAILED; the daemon is NOT running"
               warnings=$((warnings + 1))
+              resident_reload_failures=$((resident_reload_failures + 1))
             fi
           fi
         fi
@@ -1302,4 +1307,39 @@ echo ""
 echo "Done: $installed installed, $skipped already up-to-date"
 if [[ $warnings -gt 0 ]]; then
   echo "     $warnings warning(s)"
+fi
+
+# ── A DOWNED RESIDENT DAEMON IS THE ONE OUTCOME THAT MUST CHANGE THE EXIT CODE ───────────────────
+# master 84394a44f133, condition C4 of the repaired CC_INSTALL_RESIDENT_RELOAD arming criterion.
+#
+# Every other finding here is reported as a counted warning and this script still exits 0. That is
+# right for a warning and CATASTROPHIC for this one, because of where the reload runs: with the flag
+# at 1 the bounce happens on the AUTONOMOUS path, and `scripts/deploy-live.sh:2233` invokes this
+# script as `"$DEPLOY_REPO/install.sh" >/dev/null 2>&1`. Every line above — the ⚠ included — goes to
+# /dev/null there. So a `bootstrap` that failed over com.claude.compressor-sentinel, the only guard
+# against the kernel-panic class that killed five machines in eleven days, would leave it DOWN with
+# no line anywhere on the machine. Detection that cannot be read is not detection.
+#
+# NOTHING NEW IS BUILT FOR THIS. deploy-live.sh already answers a non-zero exit here with
+# `|| die "merged … but install.sh FAILED — re-run … by hand"`, and `die` writes to stderr and exits
+# 1, which the launchd job's own log captures and the lane's refusal path already escalates. Reusing
+# that channel is strictly better than minting a second one that must be kept in agreement with it.
+#
+# NARROW BY CONSTRUCTION, and its blast radius on today's fleet is exactly ZERO: this counter is
+# incremented at exactly one site, inside the `CC_INSTALL_RESIDENT_RELOAD=1` branch, and that flag
+# defaults to 0. It arms only for the flip it is a precondition of — it does not make any other
+# warning fatal, and it cannot fire on any path that runs today.
+# gate_bounded: ONE-SHOT PER RUN, AND IT PAGES ON THE FIRST OCCURRENCE — no clock is needed, and a
+# clock here would be strictly weaker. The 545-refusal scar this lint exists for was a STANDING state
+# that generated no event; this is the opposite shape. It can only be reached AFTER a `bootstrap` was
+# actually attempted and returned non-zero, it fires at most once per install run, and it withholds
+# nothing — it converts a failure the caller was reading as success into a loud `die` at
+# scripts/deploy-live.sh:2233. Budget expiry is not the escalation because the FIRST occurrence
+# already is it (the same argument scripts/deploy-live.sh states at its --offline gate: a gate that
+# pages immediately is strictly stronger than one that pages when a budget runs out). Its own escape
+# hatch is the flag: with CC_INSTALL_RESIDENT_RELOAD unset or 0 — today's default — the branch that
+# increments this counter is unreachable, so the gate cannot fire at all.
+if [[ $resident_reload_failures -gt 0 ]]; then
+  echo "  ✗ $resident_reload_failures resident daemon(s) FAILED to reload and are NOT running — exiting non-zero so an unattended caller cannot read this as success" >&2
+  exit 1
 fi

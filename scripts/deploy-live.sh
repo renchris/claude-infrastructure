@@ -1528,6 +1528,60 @@ STATE_MIGRATIONS="${CC_MIGRATIONS_STATE:-$HOME/.claude/autonomy/migrations}"
 # scripts/lib/cc-common.sh was created to end. Its resident_image_stale() is the "read the RUNNING
 # image, not the symlink" primitive — TZ=UTC *and* LC_ALL=C on both sides, `stat -L` to follow the
 # live-layer symlink to the checkout, each operand validated separately, fail-closed to NOT-stale.
+# ── THE VERDICT MUST SURVIVE --auto, OR THE ARMING CRITERION CAN NEVER ACCUMULATE ────────────────
+# master 84394a44f133. The row blamed a FROZEN live layer for the fact that "flip the reload default
+# after one observation cycle" had gathered zero data. That diagnosis is refuted: measured
+# 2026-09-07 the shared checkout is 12 behind trunk (not 65 at 9709c99d3) and BOTH files carry the
+# code — install.sh greps 3 for CC_INSTALL_RESIDENT_RELOAD, this file 4 for resident_image_stale.
+# The count was still zero, because the criterion's two observation channels are silent BY
+# CONSTRUCTION on the only path that runs unattended:
+#
+#   1. install.sh's counted warning is discarded — deploy-live.sh runs it `>/dev/null 2>&1` (the
+#      call below at the advance step), so its ⚠ resident-stale line reaches no log at all.
+#   2. residency_report spoke through asay(), and asay is a NO-OP under --auto — which is the ONLY
+#      way the converger is ever invoked unattended (launchd/com.claude.deploy-live.plist: `exec
+#      "$D" --auto`).
+#
+# So the layer thawing changed nothing: a criterion whose evidence is written to /dev/null cannot
+# clear however long it soaks. Same family as b69b1d957cec's npm-tenure soak bar — a gate never once
+# observed to open — and as memory alarm-polarity-and-attention-budget: an alarm that CANNOT fire
+# carries exactly as much information as one that fires every tick.
+#
+# STALENESS IS A FINDING, NOT THE STEADY STATE, so it takes say() like copy-drift does, and is damped
+# the same way for the same reason: this runs every 600s, and 144 identical lines/day would break the
+# --auto silence contract asay() states. Damped on a DEDICATED signature marker, deliberately NOT
+# damp_ok() — that helper keeps ONE key in a shared file, so a persistent condition parked in it
+# would suppress the dirty-tree and untracked-collision pages sharing the slot.
+#
+# DAMPED ONLY UNDER --auto. An operator or a session running `--dry-run --offline` on demand must get
+# the verdict on EVERY run, or the repaired criterion ("N observations from a command a session can
+# RUN") would be defeated by its own noise control — the second run inside the TTL would read as
+# silence and silence is what this whole block exists to end.
+#
+# NO PAGE IS WRITTEN, deliberately. copy_drift_notice pages because its remedy is operator-only and
+# unlanded content can be DESTROYED; a stale resident image is a convergence fact whose remedy is one
+# bounce, and minting an operator page every day would grow the standing ◆ pile that
+# hooks/operator-readout.sh counts. The log line is what the criterion needs and what makes N
+# countable; the pile is not.
+RESIDENCY_TTL_S="${CC_DEPLOY_RESIDENCY_TTL_S:-86400}"
+residency_emit() { # <signature> <message> — never fails, never changes the exit code, never mutates
+  local sig="$1" msg="$2" marker prev
+  if [ "$AUTO" -ne 1 ]; then say "$msg"; return 0; fi
+  marker="$POSTLAND_DIR/deploy-residency.sig"
+  prev="$(cat "$marker" 2>/dev/null || true)"
+  if [ "$prev" = "$sig" ] && [ -f "$marker" ] \
+     && [ -z "$(find "$marker" -mmin "+$((RESIDENCY_TTL_S / 60))" 2>/dev/null)" ]; then
+    return 0
+  fi
+  say "$msg"
+  mkdir -p "$POSTLAND_DIR" 2>/dev/null || true
+  printf '%s\n' "$sig" > "$marker" 2>/dev/null || true
+  return 0
+}
+# A healthy verdict re-arms the channel, so recovery→re-failure is loud on the very next tick rather
+# than swallowed by a window opened while the fault was standing.
+residency_rearm() { rm -f "$POSTLAND_DIR/deploy-residency.sig" 2>/dev/null || true; }
+
 RESIDENCY_LAUNCHCTL="${CC_DEPLOY_LAUNCHCTL_BIN:-launchctl}"
 
 residency_report() { # never fails, never changes the exit code, never mutates anything
@@ -1537,7 +1591,7 @@ residency_report() { # never fails, never changes the exit code, never mutates a
   done
   [ "$any" -eq 1 ] || return 0
   if [ ! -r "$DEPLOY_REPO/scripts/lib/cc-common.sh" ]; then
-    asay "residency: NO VERDICT — $DEPLOY_REPO/scripts/lib/cc-common.sh is unreadable, so no running image was read"
+    residency_emit "noverdict:unreadable" "residency: NO VERDICT — $DEPLOY_REPO/scripts/lib/cc-common.sh is unreadable, so no running image was read"
     return 0
   fi
   # shellcheck source=scripts/lib/cc-common.sh
@@ -1556,7 +1610,7 @@ residency_report() { # never fails, never changes the exit code, never mutates a
   # lines up — NOT as an inference about whether the source happened.)
   for _probe in plist_is_resident resident_pid resident_program resident_image_stale; do
     if ! command -v "$_probe" >/dev/null 2>&1; then
-      asay "residency: NO VERDICT — $DEPLOY_REPO/scripts/lib/cc-common.sh predates the resident probes (no $_probe), so no running image was read"
+      residency_emit "noverdict:predates:$_probe" "residency: NO VERDICT — $DEPLOY_REPO/scripts/lib/cc-common.sh predates the resident probes (no $_probe), so no running image was read"
       return 0
     fi
   done
@@ -1578,10 +1632,12 @@ residency_report() { # never fails, never changes the exit code, never mutates a
   done
   if [ "$exempt" -gt 0 ]; then xtra=" · $exempt exempt (argv names no file on disk)"; fi
   if [ "$stale" -gt 0 ]; then
-    asay "residency: $stale of $checked executing resident daemon(s) are running STALE bytes — $names — so the live layer has NOT reached them (install.sh reloads a resident daemon only on an advance, and only with CC_INSTALL_RESIDENT_RELOAD=1)$xtra"
+    residency_emit "stale:$stale/$checked:$names" "residency: $stale of $checked executing resident daemon(s) are running STALE bytes — $names — so the live layer has NOT reached them (install.sh reloads a resident daemon only on an advance, and only with CC_INSTALL_RESIDENT_RELOAD=1)$xtra"
   elif [ "$checked" -gt 0 ]; then
+    residency_rearm
     asay "residency: $checked of $checked executing resident daemon(s) are running current bytes$xtra"
   else
+    residency_rearm
     asay "residency: no resident daemon is executing$xtra"
   fi
   return 0

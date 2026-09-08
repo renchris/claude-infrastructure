@@ -27909,6 +27909,103 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   git ref and symlinks, never about the running processes. Not bundled: deploy-live is
   high-blast-radius with its own suite family and needs a stubbable launchctl seam.
 
+  ---
+
+  **2026-09-07 ADDENDUM — the criterion is REPAIRED, and the row's own diagnosis of why it could not
+  clear is REFUTED (`84394a44f133`, dispatched worker).**
+
+  **THE ROW BLAMED THE WRONG THING.** Its claim was that the live layer is *"FROZEN at `9709c99d3`,
+  65 behind origin/main"*, so the live copies carry *"NEITHER the actuator nor the reporter"* and the
+  cycle accumulated zero. Measured today against the real shared checkout
+  (`$HOME/Development/claude-infrastructure`, which IS `DEPLOY_REPO`): HEAD is **`269b04a80`, 12
+  behind trunk** — not 65 at `9709c99d3` — and both files carry the code, `install.sh` grepping
+  **3** for `CC_INSTALL_RESIDENT_RELOAD` and `scripts/deploy-live.sh` **4** for
+  `resident_image_stale`. The row's third measurement, `grep -c … = 0` on `~/.claude/install.sh`,
+  was a **wrong-path zero**: that file does not exist at all (recycle #150 caught this half at
+  `:18816`; the freeze half is refuted here).
+
+  **AND THE COUNT WAS STILL ZERO AFTER THE LAYER THAWED — which is the actual finding.** Both of the
+  criterion's observation channels are silent BY CONSTRUCTION on the only path that runs unattended,
+  so no amount of convergence could ever have made them accumulate:
+
+  1. `install.sh`'s counted ⚠ warning is **discarded** — `deploy-live.sh:2233` runs it
+     `>/dev/null 2>&1`.
+  2. `residency_report` spoke through `asay()`, which is **a no-op under `--auto`** — and `--auto` is
+     the only way launchd ever invokes the converger
+     (`launchd/com.claude.deploy-live.plist:38`, `exec "$D" --auto`).
+
+  A criterion whose evidence is written to `/dev/null` cannot clear however long it soaks. Same
+  family as `b69b1d957cec`'s npm-tenure soak bar — *a gate never once observed to open* — and the
+  generalisable half is sharper than the row's: **the freeze was a plausible cause sitting next to
+  the real one, and it thawed without moving the number.** Fixing an instrument's blindness delivers
+  you into the next one (memory `corrected-instrument-can-lie-again`).
+
+  **WHAT LANDED.** `residency_report`'s STALE and NO-VERDICT branches now emit through `say()` —
+  which survives `--auto` — damped on a dedicated signature marker
+  (`$POSTLAND_DIR/deploy-residency.sig`, TTL `CC_DEPLOY_RESIDENCY_TTL_S`, default 86400s), mirroring
+  `copy_drift_notice` and deliberately NOT `damp_ok()` (one shared key would let this persistent
+  condition suppress the dirty-tree and untracked-collision pages sharing that slot). The healthy
+  branches keep `asay` **and re-arm the marker**, so recovery→re-failure is loud on the next tick.
+  Damping applies **only under `--auto`**: a session running the probe on demand gets the verdict on
+  every run, or the repaired criterion would be defeated by its own noise control. No `.page` is
+  written — the remedy is one bounce, and minting a daily operator page would grow the standing `◆`
+  pile for a convergence fact.
+
+  🚨 **THE REPAIRED ARMING CRITERION.** Replace *"flip the reload default after one observation
+  cycle"* — a passive wait on a channel that could not speak — with **controls from a command a
+  session can RUN**:
+
+  ```
+  DEPLOY_REPO=<a worktree at origin/main> bash scripts/deploy-live.sh --dry-run --offline 2>&1 | grep residency
+  ```
+
+  Four conditions, and **a count of days is deliberately not one of them** — a soak bar is the very
+  instrument this row was filed against:
+
+  - **C1 · the reporter emits a VERDICT, not a NO VERDICT.** ✅ met.
+  - **C2 · the detector is not a CONSTANT — both arms observed on real daemons, across occasions.**
+    ✅ met. Datum 1 (2026-08-20, recycle #61): `compressor-sentinel` pid 80076 STALE and
+    `lead-supervisor` pid 82511 STALE. Datum 2 (2026-09-07, this session): `compressor-sentinel`
+    pid **14094 CURRENT**, `lead-supervisor` pid **14965 STALE**, `caffeinate-floor` EXEMPT. Both
+    daemons re-exec'd in the window and the detector split them — one flipped to CURRENT, one did
+    not. That is a positive and a negative arm over one population, which no repetition of a single
+    sample could give.
+  - **C3 · the veto is exercised both ways.** ✅ met in `tests/install-resident-reload.bats:225`
+    (case 6, sentinel NOT bounced while it owes a SIGCONT, with reload ENABLED).
+    `CC_SENTINEL_FROZEN_DB` is env-overridable, so this needs no waiting.
+  - **C4 · a real bounce is observed to RECOVER the daemon, and a FAILED one cannot be silent.**
+    ✅ met, both arms, and the failure arm had to be BUILT this session. The recovery arm already
+    existed: the sentinel's operator bounce (`e0e8ed19ec56`) produced a running, CURRENT daemon —
+    that is datum 2's `pid 14094 CURRENT`. The failure arm did not, and the gap was severe:
+    `install.sh` answered a failed `bootstrap` with a counted ⚠ and **exited 0**, while that output
+    is the very stream `deploy-live.sh:2233` sends to `/dev/null`. With the flag at 1, a reload that
+    failed over the compressor sentinel — the only guard against the kernel-panic class that killed
+    5 machines in 11 days — would have left it **down, with the caller reading success**. Now a
+    downed resident daemon is the one condition in `install.sh` that changes the EXIT CODE, so
+    `deploy-live.sh:2233`'s existing `|| die` fires and the refusal reaches stderr and the lane's
+    escalation path. No new channel was minted; the one that already answers a failing `install.sh`
+    is reused. Scoped to exactly that condition (case 15 pins that an ordinary warning still exits
+    0), and its blast radius on today's fleet is **zero** — the counter's only increment site is
+    inside the `CC_INSTALL_RESIDENT_RELOAD=1` branch, which no path enters while the flag is 0.
+
+  **THEREFORE ALL FOUR CONTROLS ARE MET AND THE FLAG IS STILL NOT FLIPPED — and the reason is not a
+  missing measurement.** Nothing further can be observed that would change the answer, so this is not
+  parked pending evidence and must not be re-dispatched as though it were. What remains is a value
+  judgment about a capability boundary, and it is the operator's alone:
+
+  🚨 **Flipping this default grants the AUTONOMOUS path a verb the operator's own Claude Code
+  auto-mode classifier refuses to a SESSION.** `launchctl bootout`/`bootstrap` is precisely what
+  recycle #61 had to hand over as operator-only (`e0e8ed19ec56`) because no session may issue it.
+  The question the flip actually asks is therefore not "is the detector sound" — it is *should
+  unattended `install.sh`, running every 600s from launchd, hold a capability the operator withholds
+  from every agent session*. That is a boundary the operator drew deliberately, and no control on
+  this side can clear it. The population is the lead supervisor and the kernel-panic guard.
+
+  **THE WHOLE CHANGE IS ONE LINE**, `install.sh` at the `elif` guarding the mutation:
+  `"${CC_INSTALL_RESIDENT_RELOAD:-0}"` → `"${CC_INSTALL_RESIDENT_RELOAD:-1}"`. Everything a flip
+  needs is now in place around it: detection reaches the log under `--auto`, the veto protects the
+  one bounce that can lose something, and a failed bounce can no longer read as success.
+
   **TESTS:** 13 cases, new suite. Red-proof **pinned to sha `85a3aadf3`, not `origin/main`** (which
   now carries the work — a control on a moving ref skips rather than fails): predictions written in
   the suite header BEFORE the run and matched exactly — `not ok 1 4 6 7 8 · ok 2 3 5 9 10 11 12 13`,

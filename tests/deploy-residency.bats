@@ -142,6 +142,15 @@ dl() { # drive the real subject against the fixture, with the stubs first on PAT
       /bin/bash "$DL" --dry-run --offline 2>&1
 }
 
+dla() { # the SAME subject on the ONLY path launchd ever uses: --auto (com.claude.deploy-live.plist)
+  env DEPLOY_REPO="$SHARED" \
+      CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" CC_PAGES_DIR="$BATS_TEST_TMPDIR/pages" \
+      CC_DEPLOY_LAUNCHCTL_BIN="$STUB/launchctl" \
+      FX_STALE="$BATS_TEST_TMPDIR/stale-prog.sh" FX_CURRENT="$BATS_TEST_TMPDIR/current-prog.sh" \
+      PSLOG="$PSLOG" LCLOG="$LCLOG" PATH="$STUB:$PATH" \
+      /bin/bash "$DL" --auto --dry-run --offline 2>&1
+}
+
 @test "1 a resident daemon executing an image NEWER than its start is reported STALE" {
   assert_probes_present
   mk_plist com.claude.fixture-stale
@@ -223,4 +232,108 @@ dl() { # drive the real subject against the fixture, with the stubs first on PAT
   run dl; local out="$output"
   local last; last="$(printf '%s\n' "$out" | tail -1)"
   case "$last" in *residency:*) false ;; esac
+}
+
+
+# ── 9-15 · THE VERDICT UNDER --auto (master 84394a44f133) ───────────────────────────────────────
+# Cases 1-8 all drive `--dry-run --offline`. NOTHING above this line runs the subject the way launchd
+# actually runs it — `exec "$D" --auto` — and that gap is the whole defect: residency_report spoke
+# through asay(), which is a NO-OP under --auto, so the "one observation cycle" that was supposed to
+# arm CC_INSTALL_RESIDENT_RELOAD wrote its evidence to nowhere and could never accumulate.
+#
+# PRE-FIX CONTROL FOR THIS BLOCK IS a48e9024d (origin/main immediately before the fix), NOT the
+# 0889cdb9f pinned above — that sha predates residency_report entirely, so every case here would go
+# red against it for the wrong reason and prove nothing about --auto. Same A/B rig as the header
+# states: `git worktree add --detach <tmp> a48e9024d`, copy ONLY this file into its tests/, run there.
+#
+# PREDICTED PRE-FIX SPLIT, recorded before the run:
+#   RED   — 9, 12, 14, 15   ·   GREEN — 10, 11, 13
+# MEASURED PRE-FIX SPLIT against a48e9024d, and it did NOT match — recorded as measured, not as
+# predicted:
+#   RED   — 9, 11, 12, 14, 15
+#   GREEN — 10, 13
+# 11 WAS PREDICTED GREEN AND CAME BACK RED, and the reason is worth keeping: it is not a pure
+# silence assertion. It asserts PRESENCE on the first tick and absence on the second, so pre-fix it
+# fails on its first line for exactly the reason 9 does. Its red is therefore DEPENDENT on 9's and
+# is not independent evidence that damping is absent — nothing here demonstrates the damp pre-fix,
+# because pre-fix there is no line to damp. Stated so a later reader does not count five independent
+# reds where there are four.
+#   GREEN 10 and 13 are green PRE-FIX BY CONSTRUCTION and that is stated rather than hidden: 10
+#   asserts SILENCE on the healthy path, 13 asserts the NON-auto path still speaks. They pin the
+#   fix's blast radius rather than demonstrate the defect — and 10 is the case that fails a naive
+#   asay→say sweep, which is the obvious wrong fix here.
+
+@test "9 under --auto a STALE resident daemon IS reported (pre-fix: written to nowhere, forever)" {
+  assert_probes_present
+  mk_plist com.claude.fixture-stale
+  mk_prog "$BATS_TEST_TMPDIR/stale-prog.sh" 202608200000
+  run dla; local out="$output"
+  assert_launchctl_hit; assert_ps_hit
+  [ "$(cnt 'residency: 1 of 1 executing resident daemon(s) are running STALE bytes' "$out")" -eq 1 ] || false
+}
+
+@test "10 under --auto a CURRENT resident daemon stays SILENT (the --auto silence contract holds)" {
+  assert_probes_present
+  mk_plist com.claude.fixture-current
+  mk_prog "$BATS_TEST_TMPDIR/current-prog.sh" 202608100000
+  run dla; local out="$output"
+  assert_launchctl_hit; assert_ps_hit
+  [ "$(cnt 'residency:' "$out")" -eq 0 ] || false
+}
+
+@test "11 under --auto an unchanged STALE set is DAMPED on the next tick (not 144 lines/day)" {
+  assert_probes_present
+  mk_plist com.claude.fixture-stale
+  mk_prog "$BATS_TEST_TMPDIR/stale-prog.sh" 202608200000
+  run dla; local first="$output"
+  [ "$(cnt 'are running STALE bytes' "$first")" -eq 1 ] || false
+  run dla; local second="$output"
+  [ "$(cnt 'residency:' "$second")" -eq 0 ] || false
+}
+
+@test "12 under --auto a CHANGED stale set re-emits immediately (signature-keyed, not a blind window)" {
+  assert_probes_present
+  mk_plist com.claude.fixture-stale
+  mk_prog "$BATS_TEST_TMPDIR/stale-prog.sh" 202608200000
+  run dla; local first="$output"
+  [ "$(cnt 'residency: 1 of 1 executing resident daemon(s) are running STALE bytes' "$first")" -eq 1 ] || false
+  # a SECOND daemon goes stale — the set changed, so the damp must not swallow it
+  mk_plist com.claude.fixture-current
+  mk_prog "$BATS_TEST_TMPDIR/current-prog.sh" 202608200000
+  run dla; local second="$output"
+  [ "$(cnt 'residency: 2 of 2 executing resident daemon(s) are running STALE bytes' "$second")" -eq 1 ] || false
+}
+
+@test "13 WITHOUT --auto the verdict is emitted on EVERY run — a session's probe is never damped" {
+  assert_probes_present
+  mk_plist com.claude.fixture-stale
+  mk_prog "$BATS_TEST_TMPDIR/stale-prog.sh" 202608200000
+  run dl; local first="$output"
+  [ "$(cnt 'are running STALE bytes' "$first")" -eq 1 ] || false
+  run dl; local second="$output"
+  [ "$(cnt 'are running STALE bytes' "$second")" -eq 1 ] || false
+}
+
+@test "14 recovery RE-ARMS: stale → current (silent) → stale again re-emits on the very next tick" {
+  assert_probes_present
+  mk_plist com.claude.fixture-stale
+  mk_prog "$BATS_TEST_TMPDIR/stale-prog.sh" 202608200000
+  run dla; local a="$output"
+  [ "$(cnt 'are running STALE bytes' "$a")" -eq 1 ] || false
+  # the daemon converges: its image is now OLDER than its start
+  mk_prog "$BATS_TEST_TMPDIR/stale-prog.sh" 202608100000
+  run dla; local b="$output"
+  [ "$(cnt 'residency:' "$b")" -eq 0 ] || false
+  # and goes stale AGAIN — a window opened while the fault stood must not swallow this
+  mk_prog "$BATS_TEST_TMPDIR/stale-prog.sh" 202608200000
+  run dla; local c="$output"
+  [ "$(cnt 'are running STALE bytes' "$c")" -eq 1 ] || false
+}
+
+@test "15 under --auto a NO VERDICT is reported — a non-verdict must never read as silence" {
+  mk_plist com.claude.fixture-stale
+  mk_prog "$BATS_TEST_TMPDIR/stale-prog.sh" 202608200000
+  rm -f "$SHARED/scripts/lib/cc-common.sh"
+  run dla; local out="$output"
+  [ "$(cnt 'residency: NO VERDICT' "$out")" -eq 1 ] || false
 }

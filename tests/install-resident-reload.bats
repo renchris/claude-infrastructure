@@ -89,6 +89,10 @@ EOF
   cat > "$STUB/launchctl" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$LOG"
+# FX_BOOTSTRAP_FAIL is additive and defaults OFF, so every case written before it is unperturbed.
+# Real `launchctl bootstrap` fails routinely (EIO on a disabled label, a bad plist, an already-
+# bootstrapped domain); without this knob the stub could never model the one outcome that matters.
+if [ "$1" = bootstrap ] && [ -n "${FX_BOOTSTRAP_FAIL:-}" ]; then exit 5; fi
 if [ "$1" = list ]; then
   case " ${FX_LOADED:-} " in *" $2 "*) ;; *) exit 1 ;; esac
   case " ${FX_RUNNING:-} " in
@@ -116,6 +120,7 @@ EOF
   export CC_INSTALL_LAUNCHCTL_BIN="$STUB/launchctl"
   export FX_LOADED="" FX_RUNNING="" FX_DISABLED="" FX_PID=4242
   export FX_PS_COMMAND="" FX_PS_LSTART=""
+  export FX_BOOTSTRAP_FAIL=""
   # Point the sentinel veto at a fixture path so it can never read the operator's real ledger.
   export CC_SENTINEL_FROZEN_DB="$TDIR/frozen.tsv"
   unset CC_INSTALL_RESIDENT_RELOAD
@@ -336,4 +341,44 @@ EOF
   [ "${n:-0}" -eq 0 ] || false
   run grep -cF "bootout gui/" "$LOG"
   [ "$output" -eq 0 ] || false
+}
+
+# ── 14-15 · A FAILED RELOAD MUST NOT READ AS SUCCESS (master 84394a44f133, criterion C4) ─────────
+# Case 4 above proves the bounce is ISSUED. Nothing proved what happens when it FAILS — and that is
+# the only outcome that matters, because deploy-live.sh:2233 runs this script `>/dev/null 2>&1` on
+# the autonomous path, so the ⚠ line the failure branch emits reaches no reader at all. A daemon
+# left DOWN while the caller reads exit 0 is the hazard that keeps CC_INSTALL_RESIDENT_RELOAD at 0.
+#
+# PRE-FIX CONTROL: origin/main immediately before this fix. PREDICTED SPLIT, written before the run:
+#   RED   — 14   (pre-fix install.sh exits 0 on a failed bootstrap: the counter does not exist)
+#   GREEN — 15   (an ordinary warning must STILL exit 0 — green pre-fix by construction, and here to
+#                 pin the blast radius: it is the case that fails if the exit is ever widened from
+#                 "a downed daemon" to "any warning".)
+
+@test "14 a resident reload whose bootstrap FAILS exits NON-ZERO (an unattended caller reads rc, not stdout)" {
+  stale_daemon
+  export CC_INSTALL_RESIDENT_RELOAD=1
+  export FX_BOOTSTRAP_FAIL=1
+  install_run
+  [ "$status" -eq 0 ] || { echo "seed install failed: $output"; false; }
+  : > "$LOG"
+  install_run
+  # ANTI-VACUITY: the bounce really was attempted, so this case cannot pass without entering the
+  # branch under test.
+  run grep -cF "bootstrap gui/" "$LOG"
+  [ "$output" -ge 1 ] || false
+  install_run
+  [ "$status" -ne 0 ] || false
+  n="$(out_count "resident daemon(s) FAILED to reload and are NOT running")"
+  [ "${n:-0}" -ge 1 ] || false
+}
+
+@test "15 an ordinary warning still exits ZERO — the non-zero exit is scoped to a DOWNED daemon" {
+  # An UNDECLARED plist is the cheapest ordinary warning this script emits. It must not become fatal:
+  # widening the exit to "any warning" would fail every advance over a cosmetic finding.
+  mk_plist com.claude.fx-undeclared keepalive
+  install_run
+  [ "$status" -eq 0 ] || false
+  n="$(out_count "com.claude.fx-undeclared — UNDECLARED")"
+  [ "${n:-0}" -ge 1 ] || false
 }
