@@ -1,5 +1,5 @@
 ---
-status: open
+status: complete
 ---
 
 # MS365 / Microsoft Graph MCP — always-on across all 4 accounts
@@ -122,9 +122,13 @@ each account config dir SHARES vs owns — that is the durability mechanism.
       → **N/A, resolved not skipped:** the token cache is valid (`verify-login` succeeds for
       `ren.chris@outlook.com`), so there is no interactive step and no script to hand over.
 
-**Not closed by this work (named, not hidden):** newly *fired* peer sessions still lack ms365 until
-the shared checkout fast-forwards — see the KNOWN REMAINING GAP in the status log. Desk sessions on
-all four launchers, which is what the DoD asks for, are verified working.
+**Not closed by this work (named, not hidden) — TRUE ON 2026-08-15, CLOSED ON 2026-09-08:** newly
+*fired* peer sessions still lack ms365 until the shared checkout fast-forwards — see the KNOWN
+REMAINING GAP in the status log. Desk sessions on all four launchers, which is what the DoD asks
+for, are verified working. → **This residue is now discharged**: the shared checkout converged
+(backlog `d8bf32ab63ef`, the operator's reset call, is `done`), both files are live symlinks, and a
+*fired peer session* under `--strict-mcp-config` called Graph successfully. Evidence in the
+2026-09-08 status-log entry below.
 
 ## Status log
 
@@ -272,3 +276,74 @@ all four launchers, which is what the DoD asks for, are verified working.
   `install.sh` runs against a converged checkout — an added file gets no converge budget, it is
   simply absent. Nothing further is available from this session without touching the shared
   checkout, which the brief forbids.
+
+- **2026-09-08 — GAP CLOSED; plan terminal. The blocking premise was refuted by re-measurement, not
+  by new work.** The 2026-08-15 entry left exactly one residue: the fired-session half was landed
+  but not live, because `~/.claude/scripts/lib/mcp-noinherit.sh` symlinks into a SHARED checkout
+  that was then `ahead 1, behind 59`. That wall was a fact about a moment, and it is gone.
+
+  **What changed, read live:**
+
+  | Claim as of 2026-08-15 | Measured 2026-09-08 |
+  |---|---|
+  | shared checkout `ahead 1, behind 59` of `origin/main` | on `main`, **0 ahead / 12 behind**; the operator's reset (backlog `d8bf32ab63ef`) is `done` |
+  | allowlist landed, not live | `~/.claude/scripts/lib/mcp-noinherit.sh` → live symlink, `CC_MCP_USERSCOPE_STDIO_ALLOW` at line 100 |
+  | `scripts/ms365-mcp-wire.sh` an ADD with no symlink | `~/.claude/scripts/ms365-mcp-wire.sh` → live symlink (Aug 15) |
+  | newly fired peers still blind | **refuted — this very session is the counter-example** |
+
+  The residual 12-commit lag touches **none** of the ms365 files
+  (`git log HEAD..origin/main -- scripts/lib/mcp-noinherit.sh scripts/ms365-mcp-wire.sh install.sh
+  tests/mcp-no-inherit.bats` is empty), so it cannot bear on this plan.
+
+  **The fired-session half, proven from inside the failure mode.** This closing session was itself
+  dispatched by `handoff-fire.sh` onto `next3`, and its own argv carries the flag that caused the
+  original bug:
+
+  ```
+  claude ... --strict-mcp-config --mcp-config=/var/folders/.../T//cc-mcp-userscope-.claude-tertiary.json
+  ```
+
+  Its generated passthrough carries ms365 — i.e. the allowlist ran on the **armed** path, not the
+  fail-open (the brief contains no `mcp__`-prefixed token, so `mcp-noinherit.sh:69` did not disarm),
+  and the entry is the direct binary, not `npx -y @latest`:
+
+  ```json
+  "ms365": { "type": "stdio",
+             "command": "/Users/chrisren/Library/Application Support/fnm/aliases/default/bin/ms-365-mcp-server",
+             "args": [], "env": {} }
+  ```
+
+  Live Graph calls from that fired session:
+
+  ```
+  mcp__ms365__verify-login     → {"success":true,"userPrincipalName":"ren.chris@outlook.com"}
+  mcp__ms365__list-mail-folders → _ToReview-2026-05-21, Archive, Conversation History,
+                                  Deleted Items, DJ Bookings, … (paged)
+  ```
+
+  **All four accounts, both halves.** Desk half — `scripts/ms365-mcp-wire.sh --check` reports
+  `✓ ms365 already correct` for all five dirs (`.claude-next`, `.claude-secondary`,
+  `.claude-tertiary`, `.claude-quaternary`, `.claude`). Fired half — every account's live
+  passthrough carries ms365 on the direct binary:
+
+  ```
+  cc-mcp-userscope-.claude-next.json         ms365=YES  [motion, motion-plus, ms365]
+  cc-mcp-userscope-.claude-secondary.json    ms365=YES  [motion, motion-plus, ms365]
+  cc-mcp-userscope-.claude-tertiary.json     ms365=YES  [motion, motion-plus, ms365]
+  cc-mcp-userscope-.claude-quaternary.json   ms365=YES  [motion, motion-plus, ms365]
+  cc-mcp-userscope-.claude-fixture.json      ms365=NO   — a TEST FIXTURE, not an account
+                                                          (absent from accounts.json); correct
+  ```
+
+  `install.sh:618-628` still runs the wire script on every install, so the 1-of-4 drift cannot
+  silently return.
+
+  **Frontmatter flipped `open` → `complete`.** This is the whole of this entry's diff besides the
+  record itself. Every DoD box was already `[x]` on 2026-08-15; the plan stayed `open` only because
+  of the residue above, and an open plan keeps minting dispatch rows from its H1 (`8079d6039639`
+  was one — the title named work that had finished three weeks earlier). `complete` is the terminal
+  value `plan-phase-scan.sh --falsify` clause (a) reads, so the plan now retracts its own row
+  instead of re-minting it.
+
+  **Nothing was re-derived.** No code changed in this session; the cure was already on trunk and
+  already live. The deliverable is the measurement that says so.
