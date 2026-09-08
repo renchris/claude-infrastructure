@@ -598,6 +598,16 @@ if $IS_GLOBAL; then
   echo "Model-config SSOT → $CONFIG_DIR/model-config.yaml"
   link_file "$REPO_DIR/model-config.yaml" "$CONFIG_DIR/model-config.yaml"
 
+  # Model-CLASSIFICATION SSOT — the update/preserve/review partition claude-bump-models and
+  # claude-lint-models read at every model release. It had the SAME divergence shape the block
+  # above was built to end, one layer down and unnoticed: templates/model-classification.json was
+  # tracked while ~/.claude/model-classification.json was a REAL unversioned file, so a template
+  # edit reached no consumer and a live edit reached no history. Both readers are read-only
+  # (`readonly CLASSIFICATION=...`, jq reads only — no writer exists), so a symlink is safe and
+  # link_file backs up any divergent real file before replacing it.
+  echo "Model-classification SSOT → $CONFIG_DIR/model-classification.json"
+  link_file "$REPO_DIR/templates/model-classification.json" "$CONFIG_DIR/model-classification.json"
+
   # Provider registry — the NON-Claude agent backends behind `claude-accounts --agents`.
   # Symlinked for the same reason as the two above, and TRACKED in git (unlike accounts.json,
   # which is gitignored because it holds real email addresses): this file holds no secrets, only

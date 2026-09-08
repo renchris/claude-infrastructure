@@ -21,7 +21,7 @@
   ],
   "review": [
     ".claude/model-config.yaml",
-    ".claude/rules/research-subagents.md",
+    ".claude/skills/research-subagents/SKILL.md",
     ".claude/commands/research.md",
     ".claude/agents/deep-research.md",
     ".claude/agents/deep-research-sonnet.md",
