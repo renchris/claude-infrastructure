@@ -752,7 +752,42 @@ notify() { # <title> <msg> — OS-level, API-independent
   command -v osascript >/dev/null 2>&1 && \
     plv_osa osascript -e "display notification \"${2//\"/}\" with title \"${1//\"/}\"" >/dev/null 2>&1 || true
 }
-json_array() { local out="" i; for i in "$@"; do out="$out,\"$i\""; done; printf '[%s]' "${out#,}"; }
+# ── JSON STRING VALUES, ESCAPED (backlog 4cec179c6ba5) ───────────────────────────────────────────
+# Everything this file writes into a stamp used to be interpolated RAW, which was survivable only
+# because every value written so far was a sha, a number, or a `tests/*.bats` path. `cut_why` breaks
+# that: it carries lint stdout, a TAP test description and rc_why prose, any of which may hold a
+# double quote, a backslash, or an ANSI escape byte from a coloured lint. One of those emits INVALID
+# JSON into $STAMPS — the one store deploy-live reads to decide an advance — and an unparseable
+# stamp is not a degraded verdict, it is NO verdict, for every reader at once.
+#
+# Folded, not dropped, on the whitespace controls: a newline inside a reason is layout, and a reason
+# that survives as one line is still readable. Every other C0 byte IS deleted — it carries no
+# meaning a reader of this field can use, and JSON forbids it raw. Backslash is replaced FIRST, or
+# the escape this function just inserted would be escaped again by the quote pass.
+#
+# THE ESCAPING ALSO CARRIES A SAFETY PROPERTY THAT IS NOT OBVIOUS, and it is why sanitising the
+# value further is unnecessary. deploy-live.sh and deploy-parity-assert.sh both read `.verdict` with
+# python3 and fall back, when python3 is absent, to `grep -qE '"verdict"[[:space:]]*:[[:space:]]*"green"'`
+# over the whole one-line file. A prose field carrying arbitrary lint stdout could therefore FORGE a
+# green on that fallback path — offbox-green-pull.sh's own header comment contains the literal
+# `{"verdict":"green",…}`, so a lint echoing an offending source line is not a hypothetical. It
+# cannot: every embedded quote leaves here as `\"`, so the on-disk bytes read `\"verdict\":\"green\"`,
+# and that regex needs a bare quote immediately after `verdict`. Escaping is the mitigation; do not
+# replace it with a substring blacklist, which would fail in both directions (memory
+# denylist-enumerates-spellings-not-the-class).
+json_str() { # <text> → a complete JSON string VALUE, quotes included
+  local s="${1-}"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/ }"; s="${s//$'\r'/ }"; s="${s//$'\t'/ }"
+  s="$(printf '%s' "$s" | LC_ALL=C tr -d '\001-\037')"
+  printf '"%s"' "$s"
+}
+# ...and the array of failing entries goes through the same escaper, for the same store's sake. It
+# has never been observed to carry a metacharacter — the entries are suite paths — but an escaped
+# field printed beside an unescaped one in the SAME printf is a trap for the next person to add a
+# value here, and the cost of closing it is this one call.
+json_array() { local out="" i; for i in "$@"; do out="$out,$(json_str "$i")"; done; printf '[%s]' "${out#,}"; }
 sha12() { printf '%s' "$1" | cut -c1-12; }
 # cond_slug <failing-entry> → a cc-backlog `--condition` key naming the RECURRING STATE
 # "this suite is red on trunk", so re-filing it next sweep is idempotent instead of minting a
@@ -2238,8 +2273,29 @@ write_stamp() { # <tree> <commit> <verdict> <run_s> <retries> <adv> [failing…]
   # corpus (backlog 786ac458be00). Appended after `suites`, never inserted among the existing keys:
   # the stamp is read by scripts/offbox-admission-lint.sh and two suites, and a JSON object's keys
   # are unordered to every one of them, so this is additive by construction.
-  printf '{"tree":"%s","commit":"%s","verdict":"%s","failing":%s,"ts":"%s","run_s":%s,"retries":%s,"suites":%s,"prelints":%s,"prelints_ran":%s,"checks":"bats+bash-n","shellcheck_advisory":%s,"env":%s}\n' \
-    "$tree" "$commit" "$verdict" "$(json_array "$@")" "$(now_iso)" "$run_s" "$retries" "${CORPUS_N:-0}" "${PRELINT_N:-0}" "${PRELINT_RAN:-0}" "$adv" "$ENV_FP" > "$STAMPS/$tree.json"
+  # ── WHICH CUT (backlog 4cec179c6ba5) ───────────────────────────────────────────────────────────
+  # `cut` is not one population, it is two that need OPPOSITE things said about them — the comment
+  # at the CUT branch has said so since 2026-08-17, and CUT_WHY has carried the distinction into
+  # the LOG and the PAGE ever since. Neither is durable: the log rotates, a page is cleared by the
+  # next green. The STAMP is the only durable store, and it could not tell them apart, so the whole
+  # cut population read as one undifferentiated pile — measured 2026-08-24, 232 of 423 stamps, and
+  # twice (recycles #192, #195) a reader concluded from it that "the time bound is too small". That
+  # diagnosis was refuted the same day: green and cut run_s are indistinguishable (medians 2564s vs
+  # 2580s). The evidence that would have settled it existed, in this variable, and was thrown away.
+  #
+  # Scoped to `cut` deliberately. CUT_WHY is reset to the truncation default at the top of every
+  # run_target pass, so on a green or a red it holds a sentence about a truncation that never
+  # happened — stamping it there would be the alarm-polarity defect this file already carries a
+  # comment about. A hung verdict is carved OUT of the cut population on purpose and states its own
+  # evidence (suspect/wedge_at/sig), so it is not this field's subject either. Every stamp carries
+  # the key so the schema is stable for a reader; only a cut carries a sentence.
+  local why=""
+  [ "$verdict" = "cut" ] && why="${CUT_WHY:-}"
+  # `cut_why` is APPENDED after the last existing key, never inserted among them — the stamp is read
+  # by scripts/offbox-admission-lint.sh and by suites that treat it as an unordered JSON object, so
+  # this is additive by construction, exactly as `prelints` was (786ac458be00).
+  printf '{"tree":"%s","commit":"%s","verdict":"%s","failing":%s,"ts":"%s","run_s":%s,"retries":%s,"suites":%s,"prelints":%s,"prelints_ran":%s,"checks":"bats+bash-n","shellcheck_advisory":%s,"env":%s,"cut_why":%s}\n' \
+    "$tree" "$commit" "$verdict" "$(json_array "$@")" "$(now_iso)" "$run_s" "$retries" "${CORPUS_N:-0}" "${PRELINT_N:-0}" "${PRELINT_RAN:-0}" "$adv" "$ENV_FP" "$(json_str "$why")" > "$STAMPS/$tree.json"
   # ── GATE-GREEN SYNC (§4.2.5) ───────────────────────────────────────────────────────────────────
   # gate-green asserts "the FULL suite proved this tree". In v2 the land lane no longer runs a
   # corpus, so it can no longer make that claim and stops writing the marker — this is the ONLY
@@ -3515,7 +3571,7 @@ okp()  { printf '  ok   %-52s\n' "$1"; PASS=$((PASS+1)); }
 badp() { printf '  FAIL %-52s\n' "$1"; FAIL=$((FAIL+1)); }
 # shellcheck disable=SC2317
 selftest() {
-  local d rc tree green_sha red_sha pl pl_f pl_missing
+  local d rc tree green_sha red_sha pl pl_f pl_missing esc_bad esc_f esc_why
   d="$(mktemp -d "$TMPBASE/postland-selftest.XXXXXX")" || { echo mktemp failed; exit 1; }
   # shellcheck disable=SC2064
   trap "rm -rf '$d'" EXIT
@@ -3585,6 +3641,61 @@ selftest() {
   grep -q '"verdict":"cut"' "$d/state/stamps/$tree.json" 2>/dev/null \
     && okp "C29: one window convicts nothing — the first sweep stamps cut" \
     || badp "C29: a SINGLE window produced a verdict (a same-window 2/3 is one experiment)"
+  # ── WHICH CUT — the stamp NAMES it (backlog 4cec179c6ba5) ──────────────────────────────────────
+  # The stamp asserted `cut` one line above is the C29 population: a test DID fail and is one load
+  # window short of proof. The other cut population is a TRUNCATION, where no test failed at all.
+  # Both stamped the identical five characters, so the only durable store could not tell them apart
+  # — measured 232 of 423 stamps, and twice read as "the bound is too small", a diagnosis the run_s
+  # medians refute (2564s green vs 2580s cut). This asserts the stamp now carries the sentence the
+  # log and the page have carried since 2026-08-17, and asserts it is the C29 one SPECIFICALLY:
+  # matching the truncation default here would pass while describing this cut wrongly.
+  json_ok()  { jq -e . "$1" >/dev/null 2>&1 || python3 -c 'import json,sys;json.load(open(sys.argv[1]))' "$1" >/dev/null 2>&1; }
+  json_get() { jq -r ".$2 // empty" "$1" 2>/dev/null \
+                 || python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get(sys.argv[2],""))' "$1" "$2" 2>/dev/null; }
+  command -v jq >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1 \
+    || badp "cut_why: NO JSON parser on this box — the read-back assertions below cannot be made"
+  esc_why="$(json_get "$d/state/stamps/$tree.json" cut_why)"
+  case "$esc_why" in
+    ''|*'zero not-ok'*) badp "cut_why: the cut reads as a TRUNCATION — the two populations are still one" ;;
+    *C29*)              okp "cut_why: the C29 cut STATES it is awaiting a second window" ;;
+    *)                  badp "cut_why: the cut names neither population ($esc_why)" ;;
+  esac
+  # POLARITY. CUT_WHY is reset to the truncation default at the top of every pass, so a field
+  # stamped unconditionally would assert a truncation on greens and reds that never had one — the
+  # alarm that fires always. The green from the block above is the control: same writer, same run,
+  # empty field.
+  [ -z "$(json_get "$d/state/stamps/$(git -C "$d/src" rev-parse "$green_sha^{tree}").json" cut_why)" ] \
+    && okp "cut_why: a GREEN stamps an empty reason (it was not cut)" \
+    || badp "cut_why: a green asserts a cut reason it never had"
+  # THE ESCAPING TEST, named because the field is the first in this stamp whose value is arbitrary
+  # text: CUT_WHY interpolates lint stdout, a TAP test description and rc_why prose. A raw double
+  # quote would emit INVALID JSON into the one store deploy-live reads to decide an advance, and an
+  # unparseable stamp is not a degraded verdict but NO verdict, for every reader at once. Driven
+  # through the real writer, with the three bytes that break it: a quote, a backslash, and the ESC
+  # of a coloured lint. Round-trip, not merely parse — an escaper that dropped the quote would also
+  # produce valid JSON while destroying the sentence.
+  ( STAMPS="$d/state/esc-stamps"; mkdir -p "$STAMPS"
+    CUT_WHY=$'the LINT is broken: "sub\\dir" \\ said \x1b[31mno\x1b[0m'
+    write_stamp deadbeefdeadbeef cafebabecafebabe cut 12 0 0 'tests/a"b.bats' ) >/dev/null 2>&1
+  if json_ok "$d/state/esc-stamps/deadbeefdeadbeef.json"; then
+    okp "cut_why: a reason carrying a quote and a backslash is still valid JSON"
+  else
+    badp "cut_why: a quote in the reason emits INVALID JSON into the stamp store"
+  fi
+  case "$(json_get "$d/state/esc-stamps/deadbeefdeadbeef.json" cut_why)" in
+    *'"sub\dir"'*) okp "cut_why: the quote and backslash SURVIVE the round-trip through jq" ;;
+    *)             badp "cut_why: the reason does not round-trip (escaped away, not escaped)" ;;
+  esac
+  # ...and the whole store, not one file: the item this closes asked for exactly this sweep, because
+  # a single valid stamp says nothing about the writer's other call sites.
+  esc_bad=0
+  for esc_f in "$d"/state/stamps/*.json "$d"/state/esc-stamps/*.json; do
+    [ -f "$esc_f" ] || continue
+    json_ok "$esc_f" || esc_bad=$((esc_bad + 1))
+  done
+  [ "$esc_bad" -eq 0 ] \
+    && okp "cut_why: every stamp this selftest wrote parses as JSON" \
+    || badp "cut_why: $esc_bad stamp(s) written by this selftest are not valid JSON"
   CC_POSTLAND_CONVICT_SPREAD_S=0 run_fixture --run-if-needed >/dev/null 2>&1; rc=$?   # ── window 2
   [ "$rc" -eq 0 ] && okp "red: exit 0 (the net pages, it does not fail launchd)" || badp "red: exit $rc"
   grep -q '"verdict":"red"' "$d/state/stamps/$tree.json" 2>/dev/null && okp "red: stamp verdict red" || badp "red: stamp not red"

@@ -1127,6 +1127,16 @@ PS
   run jq -r '.verdict' "$s"; [ "$output" = "cut" ]               # NOT "red"
   [ ! -f "$CC_POSTLAND_DIR/last-green" ]                          # a cut earns nothing
   [ "$(find "$CC_PAGES_DIR" -name 'postland-red-*' | wc -l | tr -d ' ')" = "0" ]
+  # ...and the stamp says WHICH cut this is (backlog 4cec179c6ba5). `cut` is two populations that
+  # need opposite things said about them — this one, where NO test failed, and the C29 pending,
+  # where a test DID fail and is one load window short of proof. Both stamped the same five
+  # characters until now, so the only durable store showed 232 of 423 undifferentiated cuts and was
+  # twice read as "the time bound is too small" — a diagnosis the run_s medians refute. The C29 arm
+  # is asserted in the producer's own --selftest; this is the TRUNCATION arm, and the second clause
+  # is what makes it an arm rather than a presence check.
+  run jq -r '.cut_why' "$s"
+  [ "${output#*zero not-ok}" != "$output" ]
+  [ "${output#*C29}" = "$output" ]
 }
 
 @test "C13 control: a run with a REAL not-ok still stamps RED (the cut path must not swallow it)" {
