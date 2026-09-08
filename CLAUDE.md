@@ -228,9 +228,16 @@ Teams; teammates write code, subagents never do. No parallelism cap;
 decomposition determines count, not the reverse. Default N=12 for typical
 complex research; sensitivity table in the **research-subagents** skill. Use the custom
 `deep-research` subagent (`~/.claude/agents/deep-research.md`) when depth is
-warranted (BUT: nested fan-out is not operational in stock Claude Code as of
-May 2026 — recursion permission is aspirational; see Regression notes in
-`deep-research.md`). Use `Explore` for fast terminal codebase lookups.
+warranted (BUT: nested fan-out is off — and **WE** hold it off, deliberately.
+`~/.zshrc:484` exports `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`, which is the
+documented switch that disables nesting; measured on 2.1.260 the spawn gate is
+`if (de >= be) throw … subagent_depth_cap` with a 0-based root, so a level-1
+subagent is refused. Keep it: 2.1.224 removed the 200-per-session cap, so depth
+is the ONLY runaway bound left. This corrects the prior "not operational in stock
+Claude Code / recursion permission is aspirational" — a product attribution that
+was written when depth 1 was still the product DEFAULT and could not tell "cannot"
+from "configured not to". Full record: Regression notes in `deep-research.md`).
+Use `Explore` for fast terminal codebase lookups.
 
 Per-subagent depth target: **150-250K tokens, hard ceiling 500K** (the prior
 "500-800K" range landed in empirically-degraded context). See
