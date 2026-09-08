@@ -87,6 +87,18 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-08 — recycle #327 (lane infra):** closed 7cdf4ea8f10e, ce5e5310c457, 8fd1919f7769,
+  b11fb41134fc, 8910aa0636c3, 3b95e3e8ec9e · blocked none · released 763522029afd, a6843865a2ec,
+  93019ed4b7f7, c9d5053a92c0, 19ca2b91425c, f8b71a8e0ff0, 2d91af430c60, ac13c22fe291, 0e0c5a875dc0 ·
+  landed f3402d860 (migration 0022 wires the MITL permission decider in shadow, class c10 so arming
+  stays operator-owned) + b9fd82569 + this entry · `git diff origin/main` empty on both paths.
+  FINDING worth a successor's time, recorded as R-1′ in `docs/plans/GUARDRAIL_HOOKS_V2.md`:
+  autonomy-sweep's `sweep_yield` stopped before `1-collect-pages-alarms` in 24 of 28 self-bound
+  events over 23 h, so every phase from `2b` down has run ZERO times — `settings_drift_rc` and
+  `premise_pass_rc` both last emitted 2026-09-07T21:1xZ, starving both the guardrail parity checker
+  and 2d91af430c60's §4 proof-1 producer.
+  `closed=6 closed_pre=6 closed_other=7 filed=10 net=-4 blocked=6 min=3 lane=local-drain project=claude-infrastructure floor=MET`
+
 - **2026-09-08 — recycle #326 (lane infra):** closed 1b03a569436d, 6f4573454230, bf398aa7b0e9 ·
   blocked none · released 763522029afd, a6843865a2ec, c9d5053a92c0 · landed 42d611d38 (`git diff
   origin/main` empty on install.sh + templates/model-classification.json) and this entry · ended the
