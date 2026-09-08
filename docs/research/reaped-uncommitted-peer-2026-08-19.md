@@ -152,3 +152,71 @@ but the exact one is **`span must equal its subject`**: the guard's span (`finis
 was narrower than its subject (*the dispatched peer*), and nothing in the suite could see the gap
 because **every** B/C/G fixture entered through the belted door. A suite that only ever builds
 fixtures on one branch of a two-branch gate cannot discover the other branch is unguarded.
+
+## POSTSCRIPT 2026-09-08 — the residual closed on the channel this document already recorded
+
+*(Recycle #64, backlog `4c77cd023abd`. Leg 5 landed in `bin/cc-reaper` with tests W1-W9.)*
+
+After the 2026-08-20 widening the belt's four legs ran for promoted peers too, but the legs
+themselves were unchanged, so the honest limit stated above survived onto the larger population: a
+fired peer with **0 commits AND no back-channel armed AND no in-flight subagent AND no goal record**
+reached the reap with every belt quiet. Measured 2026-09-08: `~/.claude/cc-fired` holds 623 stamps
+and 512 (82%) carry no `notifyBack`, so leg 2 is structurally silent over the large majority of
+fired peers, and leg 4 was re-measured at ~1% of that hole.
+
+**The discriminating channel was in this document's own first paragraph and nothing read it.** The
+victim's final transcript record is a `queue-operation` *enqueuing* a `<task-notification>` for
+background Bash task `bn8c8kjam` — the harness telling the session its background work FINISHED and
+it is about to be woken to consume the output. Reaping in that window destroys the wake: the task
+ran, its output sits in a reboot-ephemeral `/tmp` store, and the session that asked for it never
+reads a byte.
+
+**This is not the `CC_TASKS_ROOT` remedy this document rejected, and the difference is the store.**
+The rejected one read `/private/tmp/claude-501/<slug>/<sid>/tasks/*.output`, which is
+reboot-ephemeral and records no started/finished status. The transcript is durable, is already
+resolved by `find_transcript` for legs 3 and 4, and *does* carry the status — the enqueue is the
+completion event and the matching `remove` is the consumption event. One `tail -1` on a file the
+belt already opens; no new seam, no new env root.
+
+**Why the leg is reachable at all**, which is the fact that makes it work rather than a nice idea:
+`cc-classify` computes `idle_s` from the last **assistant** record and says so at its own head
+("NEVER file mtime alone"), so a `queue-operation` enqueue does **not** reset idle. The two clocks
+are independent — a peer can be idle past `SETTLE_S` on the assistant clock while its transcript's
+final write is seconds old. That is exactly the log quoted at the top of this document: `idle 473s <
+settle 600s` one sweep, `REAP` the next, with the final transcript write in the reap's own minute.
+
+**Measured, over all five account transcript roots (2,272 transcripts), 2026-09-08:**
+
+| quantity | value |
+|---|---:|
+| transcripts whose FINAL record is an unconsumed enqueue | 165 (7.3%) |
+| …of those, that are `<task-notification>` enqueues | 165 (100%) |
+| `<task-notification>` enqueues in the corpus | 8,418 |
+| …consumed by a later record | 8,246 |
+| consumption latency p50 / p90 / p99 | 1 s / 23 s / 601 s |
+| median age of the 165 unconsumed | 14.6 days |
+| …under 15 minutes | **1** |
+
+So the channel reads **both ways** (8,246 consumed vs 165 pending), and the cap is what makes it a
+signal rather than a tax: uncapped it would refuse all 165 corpses forever; capped at 900 s
+(~1.5× p99, covering 99.05% of real consumptions) exactly **one** of 2,272 qualified at the moment
+of measurement — and that one was a live dispatched peer, `wt-95fcadde830e`, holding an unconsumed
+notification for background task `b8j9w74aw`. That is the existence evidence that the leg can fire
+on the live fleet without firing on the 82%.
+
+**Two candidate remedies were measured and rejected before this one**, recorded so they are not
+re-derived:
+
+- **The backlog row as the peer's contract.** A dispatched peer's cwd is `wt-<row-id>` (409 of 737
+  stamps; all 383 distinct ids resolve to a real row), so "the row it was fired against is still
+  open" looked like a higher-coverage analogue of leg 4's goal. It is an alarm that cannot fire: of
+  the 87 panes the reaper has actually torn down, 10 were dispatched against a row and **all 10 had
+  a `done` row at teardown time**.
+- **A live descendant process as in-flight evidence.** Rejected on derivation: stdio MCP servers are
+  child processes of the session, so the predicate is true of essentially every session and would
+  fire on the whole fleet.
+
+**The residual that remains after leg 5**, stated so nobody later mistakes this for the whole
+problem: a background task that is **still running** produces no transcript record at all (the
+completion enqueue is the only event), so leg 5 covers the wake window, not the whole waiting
+period. Answering the running case needs the ephemeral tasks store this document already ruled out.
