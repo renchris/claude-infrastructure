@@ -571,3 +571,72 @@ rotate_env() {  # small, hand-countable budgets for the actuation tests
   has "$ctxt" "NOT one level up"
   hasnt "$ctxt" "append one index line to MEMORY.md and create the topic file with frontmatter. SKIP"
 }
+
+# ── THE UNIT LEGEND, AND THE PHANTOM-BREACH WINDOW ────────────────────────────
+#
+# The defect these pin is not in the arithmetic — every figure this hook prints was already
+# correct. It is that the hook printed correct LOADER UNITS under the word "chars", and a reader
+# who re-measured "chars" reached for `wc -c`, got BYTES, and compared them to a unit cap. Filed
+# as a breach four times: cc-backlog 150c50055e1c, 7c266e16fc94, 0b3d53bcd1fd, and a re-mint of
+# the first at 2026-09-08T05:54:58Z that reverted a correction made six hours earlier and cost a
+# dispatched worker session. Prose saying "never wc -c" existed in three files throughout and
+# stopped none of them, so the remedy is to PRINT the number `wc -c` will return, next to the
+# instruction that asks for a size — a claim the reader can refute in one command, rather than an
+# instruction they must believe.
+
+@test "advisory names the wc -c byte reading, and names it as the wrong unit" {
+  idx="$(mkindex 40 250)"; out=""
+  [ "$(eff "$idx")" -lt "$LIMIT" ]                      # healthy branch: the one that was re-mint
+  for _ in $(seq 1 12); do out="$(fire s-units "$idx" || true)"; done
+  ctxout="$(printf '%s' "$out" | ctx)"
+  has "$ctxout" 'LOADER UNIT'
+  has "$ctxout" 'never `wc -c`'
+  # DERIVED, never a literal: the figure must be this file's real byte count, so a hook that
+  # printed a constant — or re-printed the unit count under a byte label — fails here.
+  has "$ctxout" "reads $(wc -c <"$idx" | tr -d ' ') bytes"
+  has "$ctxout" "a gap of $(( $(wc -c <"$idx" | tr -d ' ') - $(eff "$idx") )) against the $(eff "$idx") that count"
+}
+
+@test "the byte figure is the file's own, not the unit count relabelled" {
+  idx="$(mkindex 40 250)"; out=""
+  raw="$(wc -c <"$idx" | tr -d ' ')"; units="$(eff "$idx")"
+  [ "$raw" -gt "$units" ]                               # fixture really does have a gap to report
+  for _ in $(seq 1 12); do out="$(fire s-gap "$idx" || true)"; done
+  ctxout="$(printf '%s' "$out" | ctx)"
+  has "$ctxout" "reads $raw bytes, a gap of $(( raw - units )) against the $units"
+}
+
+@test "PHANTOM-BREACH WINDOW fires when bytes are over the cap but units are under" {
+  # Hand-built so the two instruments straddle the cap: pad with em-dashes, which cost 3 bytes
+  # and 1 unit each, until `wc -c` is over 25000 while the unit count is still under it.
+  d="$BATS_TEST_TMPDIR/win"; mkdir -p "$d"; f="$d/MEMORY.md"
+  : >"$f"
+  for ((i=0; i<150; i++)); do
+    printf -- '- [T%s](t%s.md) — %s\n' "$i" "$i" \
+      "$(head -c 55 /dev/zero | tr '\0' x)$(for _ in $(seq 1 40); do printf -- '—'; done)" >>"$f"
+  done
+  raw="$(wc -c <"$f" | tr -d ' ')"; units="$(eff "$f")"
+  [ "$raw" -gt "$LIMIT" ]                               # bytes say OVER
+  [ "$units" -le "$LIMIT" ]                             # units say UNDER — the trap
+  out=""; for _ in $(seq 1 12); do out="$(fire s-win "$f" || true)"; done
+  ctxout="$(printf '%s' "$out" | ctx)"
+  has "$ctxout" 'PHANTOM-BREACH WINDOW'
+  has "$ctxout" 'THIS INDEX IS NOT OVER BUDGET'
+  # NOT the bare id: this suite runs from a worktree that may itself be NAMED for that row, and the
+  # advisory prints its absolute path — so `has "$ctxout" '150c50055e1c'` passes PRE-FIX on nothing
+  # but the cwd. Assert a phrase only this clause can produce.
+  has "$ctxout" 'known false positive'
+  hasnt "$ctxout" '🚨 MEMORY INDEX OVER ITS READ LIMIT'   # and the real alarm stays silent
+}
+
+@test "polarity: outside the trap window the escalation stays silent" {
+  # A healthy index whose bytes are ALSO under the cap has no opposite-verdict trap to warn
+  # about. The legend still rides along; the 🚨 escalation must not, or it would fire on every
+  # index in the fleet and carry no bits in the one state that matters.
+  idx="$(mkindex 40 250)"; out=""
+  [ "$(wc -c <"$idx" | tr -d ' ')" -lt "$LIMIT" ]       # bytes under too: no straddle
+  for _ in $(seq 1 12); do out="$(fire s-pol "$idx" || true)"; done
+  ctxout="$(printf '%s' "$out" | ctx)"
+  has "$ctxout" 'LOADER UNIT'                           # legend present
+  hasnt "$ctxout" 'PHANTOM-BREACH WINDOW'               # escalation absent
+}

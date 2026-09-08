@@ -287,6 +287,49 @@ if [ "$MEASURE_OK" -eq 1 ] && [ -n "$MEM" ] && [ -f "$MEM" ]; then
     # 0fc2ae0d0140 claimed 21:34:01Z). Hand over the condition-keyed form in BOTH branches: those
     # mints happened at 20.5 KB and 22.5 KB — under this limit, off the harness's own product-side
     # "approaching the limit" reminder — so a form that only spoke when breached would miss most.
+    # ── RAW BYTES, CARRIED ONLY TO BE CONTRADICTED ───────────────────────────────────────────
+    # Every size this hook prints is a LOADER UNIT (UTF-16 code units over the stripped, trimmed
+    # index). `wc -c` on the same file reads BYTES, and on an index dense with `—`/`⇒`/`·` the two
+    # differ by mim_overhead — 1,332 on the live claude-infrastructure index, 2026-09-08. That gap
+    # has been filed as a breach FOUR times (cc-backlog 150c50055e1c, 7c266e16fc94, 0b3d53bcd1fd,
+    # and a re-mint of the first at 2026-09-08T05:54:58Z that reverted a correction made six hours
+    # earlier and cost a dispatched worker session). The path is identical every time: the reader
+    # sees this hook say "chars", reaches for the instrument that measures chars, gets bytes, and
+    # compares them against a unit cap.
+    #
+    # Three files already say "never wc -c" in prose — memory-index-measure.sh's header,
+    # compact-memory.md:28, and this index's own line 4 — and all three failed, because prose
+    # cannot reach someone who does not believe they are guessing. So do not instruct: PRE-EMPT.
+    # Print the number `wc -c` is about to return, immediately before the line that asks for a
+    # size. A reader who runs it then lands on a figure this hook has already named as the wrong
+    # unit, and cannot file it as an overage without contradicting a line they just read.
+    #
+    # Computed HERE, after the rotor above may have rewritten the index, so it describes the file
+    # as it now stands. Unreadable or non-numeric leaves the clause omitted rather than guessed at,
+    # and a file whose bytes equal its units (pure ASCII, no frontmatter) says nothing at all —
+    # there is no trap to warn about and a clause that always fires carries no bits.
+    RAW=$(wc -c <"$MEM" 2>/dev/null | tr -d ' ')
+    case "${RAW:-x}" in ''|*[!0-9]*) RAW="" ;; esac
+    UNIT_NOTE=""
+    if [ -n "$RAW" ] && [ -n "$TOTAL" ] && [ "$RAW" -gt "$TOTAL" ] 2>/dev/null; then
+      UNIT_NOTE="UNITS — READ BEFORE QUOTING A SIZE: every figure above is a LOADER UNIT (UTF-16 code units, counted AFTER YAML frontmatter and block HTML comments are stripped and the result trimmed), not a byte. \`wc -c\` on this file reads ${RAW} bytes, a gap of $(( RAW - TOTAL )) against the ${TOTAL} that count. Measure with hooks/lib/memory-index-measure.sh (\`mim_measure_file\`), never \`wc -c\`."
+      # TWO TOKENS THIS CLAUSE MAY NOT USE, both learned by a RED land gate rather than by review.
+      # `more than the` is tests/memory-nudge-budget.bats:115's NEGATIVE discriminator for a
+      # different diagnosis branch ("recovers ~N chars — more than the M needed"), so a legend
+      # riding EVERY branch that spelled it convicted the branch that must not say it. And `🚨` is
+      # this hook's alarm marker — seven `hasnt … '🚨'` assertions use it to mean "no breach was
+      # reported", and the hook's own OVERFLOW test matches it at string START. Wearing it here
+      # would be self-contradictory anyway: this clause exists to say the index is NOT over budget.
+      # THE TRAP WINDOW, and the only place this escalates. When the byte reading is over the cap
+      # while the unit reading is under it, the two instruments return OPPOSITE VERDICTS on the
+      # same healthy file — that is not a units footnote any more, it is a breach report waiting to
+      # be written, and it is exactly the state that produced all four filings. Outside this window
+      # the legend above is enough: a gap that cannot flip the verdict cannot manufacture an
+      # overage, and a warning that shouted at every index would carry no bits when it mattered.
+      if [ "$RAW" -gt "$LIMIT" ] && [ "$TOTAL" -le "$LIMIT" ] 2>/dev/null; then
+        UNIT_NOTE="$UNIT_NOTE PHANTOM-BREACH WINDOW: \`wc -c\` (${RAW}) is OVER the ${LIMIT} cap while the unit count (${TOTAL}) is UNDER it by $(( LIMIT - TOTAL )). THIS INDEX IS NOT OVER BUDGET and nothing is being dropped. Filing it as an overage is a known false positive — cc-backlog 150c50055e1c, 7c266e16fc94 and 0b3d53bcd1fd were all closed as exactly this error. Do not file one; if a row already claims it, the disproof is the deliverable."
+      fi
+    fi
     FILING="FILING: if you file this as work it is ONE standing condition, not a new item per measurement — \`cc-backlog add --condition memory-index-over-budget --project <project> --title \"<the live size>\"\`. The size belongs in the title; putting it in the key is what minted 21 items for this one condition."
     if [ "$TOTAL" -ge "$LIMIT" ]; then
       OVER=$(( TOTAL - LIMIT ))
@@ -335,14 +378,14 @@ if [ "$MEASURE_OK" -eq 1 ] && [ -n "$MEM" ] && [ -f "$MEM" ]; then
       else
         LEVER="hooks are already at ${HOOK_AVG} chars (at/under the ${EFF_TARGET} char allowance this index affords), so shortening CANNOT reach the limit — this is CARDINALITY: the index holds $N entries against a ceiling of ~${MAXN}. Archiving under the DURABILITY criterion is the only non-lossy lever."
       fi
-      BUDGET_CTX="🚨 MEMORY INDEX OVER ITS READ LIMIT — ${TOTAL} chars vs the ${LIMIT} char loader limit (over by ${OVER}).${ROTATE_NOTE} The loader drops the TAIL silently: the NEWEST ${DROPPED} entries begin past the limit, so they did not load this session and no reader can tell. Anything you append now is written into the invisible tail. ${LEVER} BEFORE appending anything new: archive or shorten to get under ${LIMIT} chars (run /compact-memory; its lossy half is PROPOSE-ONLY — show diffs, get approval). If you must record something now, apply ONE-IN-ONE-OUT: archive an entry in the same edit that adds one. ${FILING}"
+      BUDGET_CTX="🚨 MEMORY INDEX OVER ITS READ LIMIT — ${TOTAL} chars vs the ${LIMIT} char loader limit (over by ${OVER}).${ROTATE_NOTE} The loader drops the TAIL silently: the NEWEST ${DROPPED} entries begin past the limit, so they did not load this session and no reader can tell. Anything you append now is written into the invisible tail. ${LEVER} BEFORE appending anything new: archive or shorten to get under ${LIMIT} chars (run /compact-memory; its lossy half is PROPOSE-ONLY — show diffs, get approval). If you must record something now, apply ONE-IN-ONE-OUT: archive an entry in the same edit that adds one. ${UNIT_NOTE} ${FILING}"
     elif [ "$LINES" -gt "$LINE_LIMIT" ]; then
       # THE OTHER CAP. The loader truncates on (chars > LIMIT) OR (lines > LINE_LIMIT), and on an
       # index of one-line entries the LINE cap binds FIRST — an index can sit comfortably inside
       # its char budget with its newest entries already invisible. Nothing here measured this
       # before 2026-08-15, so this breach had no sensor at all. Only removing a LINE clears it;
       # shortening hooks moves the char figure and nothing else.
-      BUDGET_CTX="🚨 MEMORY INDEX OVER ITS LINE LIMIT — ${LINES} lines vs the ${LINE_LIMIT}-line loader limit (over by $(( LINES - LINE_LIMIT ))).${ROTATE_NOTE} The loader drops the TAIL silently: everything after line ${LINE_LIMIT} did not load this session and no reader can tell, and anything you append now is written into that invisible tail. This is the CARDINALITY cap, not the size one — the index is ${TOTAL}/${LIMIT} chars, so shortening hooks cannot reach it; only removing a line can. BEFORE appending anything new: archive under the DURABILITY criterion (run /compact-memory; its lossy half is PROPOSE-ONLY — show diffs, get approval). If you must record something now, apply ONE-IN-ONE-OUT: archive an entry in the same edit that adds one. ${FILING}"
+      BUDGET_CTX="🚨 MEMORY INDEX OVER ITS LINE LIMIT — ${LINES} lines vs the ${LINE_LIMIT}-line loader limit (over by $(( LINES - LINE_LIMIT ))).${ROTATE_NOTE} The loader drops the TAIL silently: everything after line ${LINE_LIMIT} did not load this session and no reader can tell, and anything you append now is written into that invisible tail. This is the CARDINALITY cap, not the size one — the index is ${TOTAL}/${LIMIT} chars, so shortening hooks cannot reach it; only removing a line can. BEFORE appending anything new: archive under the DURABILITY criterion (run /compact-memory; its lossy half is PROPOSE-ONLY — show diffs, get approval). If you must record something now, apply ONE-IN-ONE-OUT: archive an entry in the same edit that adds one. ${UNIT_NOTE} ${FILING}"
     else
       HEADROOM=$(( LIMIT - TOTAL ))
       # THE ADVERTISED BUDGET MAY NEVER EXCEED WHAT THE GATE WILL GRANT. HEADROOM answers "how much
@@ -384,7 +427,7 @@ if [ "$MEASURE_OK" -eq 1 ] && [ -n "$MEM" ] && [ -f "$MEM" ]; then
       [ "$LINE_SLOTS" -lt 0 ] && LINE_SLOTS=0
       BOUND=chars
       if [ "$LINE_SLOTS" -lt "$FITS" ]; then FITS="$LINE_SLOTS"; BOUND=lines; fi
-      BUDGET_CTX="MEMORY INDEX BUDGET (live): ${TOTAL}/${LIMIT} chars and ${LINES}/${LINE_LIMIT} lines across $N entries — ~${FITS} entry slots left, bound by ${BOUND} (${HEADROOM} chars of headroom at the ${LINE_COST} chars/line this index is ACTUALLY written at; ${SLOTS} char-slots only if every existing entry were first rewritten to the ${HOOK_TARGET} char target — that is a rewrite, not runway). A new index line costs ~${PFX_AVG} chars of prefix before a word of content, so keep its hook <= ${HOOK_TARGET} chars (hard cap this append: ${LINE_BUDGET}). Past either cap the loader drops the NEWEST entries silently.${ROTATE_NOTE} ${FILING}"
+      BUDGET_CTX="MEMORY INDEX BUDGET (live): ${TOTAL}/${LIMIT} chars and ${LINES}/${LINE_LIMIT} lines across $N entries — ~${FITS} entry slots left, bound by ${BOUND} (${HEADROOM} chars of headroom at the ${LINE_COST} chars/line this index is ACTUALLY written at; ${SLOTS} char-slots only if every existing entry were first rewritten to the ${HOOK_TARGET} char target — that is a rewrite, not runway). A new index line costs ~${PFX_AVG} chars of prefix before a word of content, so keep its hook <= ${HOOK_TARGET} chars (hard cap this append: ${LINE_BUDGET}). Past either cap the loader drops the NEWEST entries silently.${ROTATE_NOTE} ${UNIT_NOTE} ${FILING}"
     fi
   fi
 fi
