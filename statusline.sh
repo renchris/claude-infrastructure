@@ -40,6 +40,25 @@ RESERVED_TOKENS=97000
 INPUT=$(cat)
 OUTPUT=""
 
+# --- jq resolution (backlog 5c646048e05e) -----------------------------------------
+# Every block below is gated on `command -v jq`, and a RESUMED session does not inherit the
+# launching shell's PATH. Measured 2026-09-08 with a clean control: five live `--resume` panes ran
+# with PATH=/usr/bin:/bin:/usr/sbin:/sbin (plus a kitty or aftman prefix) and had NO telemetry row,
+# while every pane whose PATH carried /opt/homebrew/bin — where jq lives — had one.
+# No jq ⇒ the telemetry export below never runs ⇒ no /tmp/cc-telemetry/<sid>.json ⇒ every pager
+# path that iterates that directory (lead-supervisor's DEAD, STALL?, PAST-THRESHOLD, and the
+# permission beacon) is blind to the pane: a stall or a death there pages nobody. The failure is
+# silent BY CONSTRUCTION — the gate is a `command -v`, so a missing jq renders a perfectly normal
+# statusline that simply publishes nothing, which is indistinguishable on screen from a healthy one.
+# Repaired ONCE here, by PATH, rather than at five gates and six call sites: a box that already has
+# jq takes the `command -v` fast path and this costs nothing, and no call site changes.
+if ! command -v jq &>/dev/null; then
+    for _jqd in /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin" /opt/local/bin; do
+        if [ -x "$_jqd/jq" ]; then PATH="$_jqd:$PATH"; export PATH; break; fi
+    done
+    unset _jqd
+fi
+
 # --- ONE payload read (audit 06 §5.2) ---------------------------------------------
 # This script rendered at 0.15-0.37 Hz *per pane* and spent 109 ms of CPU each time, of
 # which the dominant term was **eight separate `echo "$INPUT" | jq` pipelines** — sixteen
