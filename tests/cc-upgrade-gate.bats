@@ -134,3 +134,61 @@ _stub_bin_registers() {
   [ "$status" -eq 1 ]
   grep -q '"verdict": "RED"' "$JSON"
 }
+
+# ── #15 spawn-depth EFFECT: the one character that separates containment from GH #84974 ───────────
+# #6 proves SPAWN_DEPTH=1 is DELIVERED. It cannot prove the binary then contains anything: on
+# 2.1.225 delivery was correct and nesting ran one level deeper than configured anyway (#84974).
+# These four cases pin the effect side. The FAIL case is the red-proof — it is the literal pre-fix
+# shape, and it must go red or the probe is decoration.
+_g15_run() {  # $1 = fixture path → prints "STATUS :: evidence"
+  bash -c '
+    export GATE_BIN="$1"
+    emit_result(){ echo "$3 :: $4"; }
+    . "$2/lib/cc-upgrade-gate/check15_depth_effect.sh"
+    check_15
+  ' _ "$1" "$REPO"
+}
+
+@test "check15: EXCLUSIVE '>' guard is GH #84974 → FAIL (red-proof, the pre-fix shape)" {
+  F="$BATS_TEST_TMPDIR/gt.bin"
+  printf 'let de=0,be=1;if(de>be)throw p("subagent_launch","subagent_depth_cap"),new E("Subagent nesting limit reached");' > "$F"
+  run _g15_run "$F"
+  [ "$status" -eq 0 ]
+  [[ "$output" == FAIL* ]] || false
+  [[ "$output" == *"#84974"* ]]
+}
+
+@test "check15: INCLUSIVE '>=' guard contains nesting → PASS" {
+  F="$BATS_TEST_TMPDIR/ge.bin"
+  printf 'let de=0,be=1;if(de>=be)throw p("subagent_launch","subagent_depth_cap"),new E("Subagent nesting limit reached");' > "$F"
+  run _g15_run "$F"
+  [ "$status" -eq 0 ]
+  [[ "$output" == PASS* ]]
+}
+
+@test "check15: no depth-cap marker → SKIP, never a false green" {
+  F="$BATS_TEST_TMPDIR/none.bin"; printf 'nothing to see here' > "$F"
+  run _g15_run "$F"
+  [ "$status" -eq 0 ]
+  [[ "$output" == SKIP* ]]
+}
+
+@test "check15: marker present but comparison unreadable → FAIL (an unread guard is not a guard)" {
+  # anchor with no comparison anywhere in the preceding window ⇒ containment UNVERIFIED, fail-closed
+  F="$BATS_TEST_TMPDIR/unk.bin"
+  printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa subagent_depth_cap' > "$F"
+  run _g15_run "$F"
+  [ "$status" -eq 0 ]
+  [[ "$output" == FAIL* ]] || false
+  [[ "$output" == *UNVERIFIED* ]]
+}
+
+@test "check15: the string table alone must not decide — a healthy SEA has many anchor copies" {
+  # regression pin: scanning only the FIRST anchor reads the constant pool and reports UNKNOWN on a
+  # healthy build. Measured against real 2.1.260 while building this probe. Pool copies first, code last.
+  F="$BATS_TEST_TMPDIR/pool.bin"
+  printf 'subagent_depth_cap\0subagent_depth_cap\0PAD;if(de>=be)throw p("subagent_launch","subagent_depth_cap")' > "$F"
+  run _g15_run "$F"
+  [ "$status" -eq 0 ]
+  [[ "$output" == PASS* ]]
+}
