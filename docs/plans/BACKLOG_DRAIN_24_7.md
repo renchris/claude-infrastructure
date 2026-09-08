@@ -87,6 +87,18 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-08 — recycle #322 (lane infra):** closed 082867ad0f4a, 465331d6ca2a, 5ba77ac42d81,
+  693ee60c0885, 7000e1a81125, bc971e0ea6a7 · blocked 32d4d093f78a, 42091c92b93e · released
+  2d91af430c60 · landed e99dcdf82 (deploy-live repairs a curable core.bare instead of paging for it;
+  its R7 arm keeps its coverage on the new kill switch), f66f78152 (cc-eligible refuses ship/backup-*
+  and refs/checkpoints as branch banking — measured 66 hits / 30 tokens, all ref names) ·
+  `closed=6 closed_pre=6 closed_other=33 filed=0(mine) net=+6(mine) blocked=2(mine) min=3
+  lane=local-drain project=claude-infrastructure floor=MET`. 2d91af430c60 released on a NEGATIVE
+  re-verify, not for want of time: its proof 1 is measurably false — over the last 24h of idl.jsonl
+  every backlog-health beat reads `premise_pass_rc` skipped/not-due (16) or 124/bound-exceeded (2),
+  so the currency pass never completes in the background band and no beat can carry
+  premise_rows_validated>0.
+
 - **2026-09-08 — recycle #321 (lane infra):** closed 23255fbb8792, 96e532227df8, bf6c9db48120,
   c4383f1c9172 · blocked none · released ed54373d639b, 99dbf659930c, 693ee60c0885 · landed a48e9024d,
   c9e7ba640 · `closed=4 closed_pre=4 closed_other=5 filed=0(mine) net=+4(mine) blocked=0(mine) min=3
