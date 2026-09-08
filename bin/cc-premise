@@ -2485,6 +2485,38 @@ def assess(item_id, idx, out=None, run_probes=True):
                     )
 
         gone, unlocatable, present = [], [], []
+        offbox_present, offbox_absent = [], []
+
+        def _rooted_token(text, frag):
+            """The FULL token `frag` was carved out of, when that token is rooted at `/` or `~/`.
+
+            RE_PATH cannot start a match at `~` or `/` — its `\b` needs a word character — so an
+            item citing `~/.claude/projects/<enc>/memory/archive/x.py` hands this loop the fragment
+            `claude/projects/<enc>/memory/archive/x.py`. That fragment is not a repo path and was
+            never even what the item wrote, yet it has a `/`, so it walks straight past the bare-
+            basename acquittal into the arm that asserts `not at that location on origin/main`.
+
+            MEASURED ON THIS ARM'S OWN OUTPUT (2026-09-08, backlog 1a857fe4265a): the dispatched
+            brief for that item told its worker the cited implementation was "moved, renamed, or
+            never landed … and in no sibling checkout either". The file was exactly where the item
+            said, and had been all along. That is the costliest possible false positive here —
+            THE DISPROOF IS THE DELIVERABLE contract two blocks down invites the worker to close
+            the item on a refutation the checker manufactured.
+
+            Same family as the bare-basename and MEMORY.md acquittals above (backlog a431c71076e6):
+            a miss is not absence when git was never told where to look, and here it was told to
+            look somewhere the path does not claim to be."""
+            i = text.find(frag)
+            while i != -1:
+                j = i
+                while j > 0 and (text[j - 1].isalnum() or text[j - 1] in "_./@~-"):
+                    j -= 1
+                tok = text[j:i + len(frag)]
+                if tok.startswith("~/") or tok.startswith("/"):
+                    return tok
+                i = text.find(frag, i + 1)
+            return None
+
 
         def note_present(path):
             # One file can be cited twice under two spellings — `statusline.sh` beside
@@ -2497,6 +2529,17 @@ def assess(item_id, idx, out=None, run_probes=True):
         for p in cited_paths(text):
             if _git(["cat-file", "-e", "origin/main:" + p]) is not None:
                 note_present(p)  # a usable pathspec — the evidence-age arm below reads these
+                continue
+            # AN ABSOLUTE OR HOME-ROOTED CITATION IS A FILESYSTEM QUESTION, NOT A TRUNK ONE, and
+            # asking git about it can only ever convict. Resolve it where it actually claims to
+            # live, and answer in its own words — verdict-neutral either way, exactly like the
+            # bare-name channel: present ⇒ nothing to say; absent ⇒ say it is absent ON THIS BOX,
+            # never that it is missing from origin/main.
+            _rooted = _rooted_token(text, p)
+            if _rooted is not None:
+                if os.path.exists(os.path.expanduser(_rooted)):
+                    continue
+                offbox_absent.append(_rooted)
                 continue
             # A BARE BASENAME IS NOT A PATH. `deploy-live.sh` lives at `scripts/deploy-live.sh`, so
             # resolving it as a repo-root path fails and reports a live file as missing — which is
@@ -2576,6 +2619,14 @@ def assess(item_id, idx, out=None, run_probes=True):
                     "could not be asked, so it may resolve there. Confirm before acting."
                     % (p, ", ".join(un))
                 )
+        if offbox_absent:
+            lines.append(
+                "CITED PATH(S) OUTSIDE ANY REPO, absent on THIS box: %s — these are filesystem "
+                "paths (home- or root-rooted), so origin/main says nothing about them either way. "
+                "Absent here may mean a different machine, a different config dir, or genuinely "
+                "gone; resolve it on disk before reading this as evidence."
+                % ", ".join(offbox_absent[:6])
+            )
         if unlocatable:
             lines.append(
                 "CITED NAME(S) with no directory component and no carrier on origin/main: %s — this "
