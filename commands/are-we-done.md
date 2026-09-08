@@ -1,7 +1,7 @@
 ---
 description: The three close questions — current steps/decisions · working or idling · 100% complete and safe to close
 disable-model-invocation: false
-allowed-tools: Bash(scripts/wrap-ledger.sh*), Bash(*/wrap-ledger.sh*), Bash(hooks/operator-readout.sh*), Bash(*/operator-readout.sh*), Bash(cc-custody*), Bash(*/cc-custody*), Bash(cc-sessions*), Bash(*/cc-sessions*), Read
+allowed-tools: Bash(scripts/wrap-ledger.sh*), Bash(*/wrap-ledger.sh*), Bash(hooks/operator-readout.sh*), Bash(*/operator-readout.sh*), Bash(cc-custody*), Bash(*/cc-custody*), Bash(cc-sessions*), Bash(*/cc-sessions*), Bash(git fetch*), Bash(git status*), Bash(git ls-tree*), Bash(git diff*), Bash(git merge-base*), Bash(git log*), Read
 ---
 
 The operator's standing close question, saved verbatim:
@@ -26,32 +26,62 @@ exactly the false close the custody ledger exists to catch.
 Also check YOUR OWN in-flight work before answering part 2 — background Bash tasks, spawned
 agents, an armed `session-continue.sh` step. Those are yours and they are not on disk.
 
-## Answer, in this order
+## Answer — the VERDICT FIRST, then its two supports
 
-**1 — Current steps / decisions.** Relay the `OPERATOR ▸` block VERBATIM (silver-platter rule:
-never paraphrase a rendered block back into prose). Then name, in plain English, anything THIS
-session created that no store holds yet — and file it (`cc-backlog needs "<step>"` /
-`cc-decide open --class C --what "<plain English>"`) rather than prosing it, so the next reader
-gets it from the renderer instead of from scrollback.
+🚨 **The three questions are answered in ONE order and it is not the order they were asked in.**
+The operator asks *steps · working · done*; you answer **done · working · steps**. Their question
+is a checklist of what they want covered, never a running order — and a verdict that arrives after
+two paragraphs of process has already cost the round-trip this command exists to prevent.
 
-**2 — Working or idling.** One word, then its cause. You are **WORKING** if any of: a background
-task or agent is running · a `/goal` is live · `cc-custody list --open` returns a row · the rung
-is `🔧` and the fix is inside your own diff. You are **IDLING** if none of those hold and the
-turn ended anyway — and idling with an open rung is a defect, not a status: drive it (§ Session
-Close, "🔧 never yields"), or say who owns the part that is not yours.
-
-**3 — Safe to close.** Answer the question, do not hedge it:
+Emit exactly this shape. Nothing above line 1, no preamble, no restatement of the question:
 
 ```
+<rung glyph> <state clause> — <one clause naming what the work WAS>
 Good to close: yes — nothing of mine is open; follow-on: <filed ids | none>
-Good to close: no  — <what remains + who owns it>
+▶ Run this:                          ← ONLY if a command is genuinely theirs to run
+
+Working | Idling — <cause, one clause>
+Mine this session: <what THIS session filed or created, named | nothing unfiled>
 ```
+
+**Report the verdict, NOT the audit trail.** You run every check below; you SHOW a check only when
+it FAILS or reads UNKNOWN. `DIRTY=0 · AHEAD=0 · REMAINDER=0`, an `ls-tree` that returned blobs, a
+custody marker that did not match, a port you stopped — those are how you know, and the operator
+asked what you know. A green check is worth zero words.
 
 `yes` requires ALL of: the rung is `✅` (or `👤` with every step FILED, not prosed) · clean tree ·
 landed verified **by content** (`git ls-tree origin/main -- <your paths>`, never by a commit
 count — a sibling's rebase reads 0 and proves nothing) · your diff's gates ran green THIS turn ·
-frozen-DoD remainder 0 · custody empty. Any one unknown ⇒ `no`, and say which one.
+frozen-DoD remainder 0 · custody carries no row with YOUR marker. Any one unknown ⇒
+`Good to close: no — <which check, and who owns it>`. Never hedge a `yes` with a trailing caveat:
+if something is parked or theirs, that IS the rung, and it belongs on line 1.
 
-Then close on the six-slot shape (§ Session Close Protocol): rung glyph on line 1, the
-`Good to close:` verdict on line **2** — never last, that position is what makes the operator
-re-ask — and the one `▶ Run this:` command on line 3 if there is one.
+### On `yes`, RETIRE THE PANE — do not offer to
+
+🚨 **"I'll close on your word" is the defect this section exists to delete.** The operator asked
+whether the work is exhaustively done; if it is, the pane retiring is the rest of that same
+sentence, not a follow-up they should have to type. Answer, then act:
+
+| This pane is | On `yes`, do this |
+|---|---|
+| a **fired peer** (a handoff-engagement marker in its prompt) whose work is landed and collected | Announce (`cc-notify <originator> "…"`), then **self-close yourself**: `$HOME/.claude/scripts/handoff-fire.sh self-close --terminal`. No `▶ Run this:` line — there is nothing for them to run. |
+| the **operator's own pane** (no engagement marker) | Say plainly that it is exhaustively done and safe to close, and stop. Retiring their pane is theirs; do NOT self-close, and do not leave a command they did not ask for. |
+
+Either way say the word **exhaustively** only when it is literally true — landed by content, gates
+green this turn, DoD remainder 0, custody clean, nothing filed against this session. It is the
+operator's own word for the state they are asking about, and it must not degrade into a pleasantry.
+
+### Two things NOT to print
+
+- **The `OPERATOR ▸` block.** `operator-readout.sh` renders it at Stop on this very turn, so
+  relaying it here puts the same ten lines on screen twice. Read it, act on anything of yours in
+  it, and let the Stop hook be the one renderer. (The silver-platter rule bans *paraphrasing* a
+  rendered block — it never asked for a second copy. If you must point at it, one clause: "the
+  standing pile below is not from this session.")
+- **The derivation.** How you established the verdict — which command you ran, what it printed,
+  what you compared it against — belongs in the tool calls the operator can already see, not in
+  the answer.
+
+**Acceptance:** the whole reply fits well inside one 24-row pane, and its first two lines answer
+the question on their own. If the operator can read line 1 and line 2 and know both the state and
+whether to close, the rest is optional by construction — which is the only test that matters here.
