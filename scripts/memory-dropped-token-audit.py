@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+"""DROPPED-TOKEN AUDIT — the only check that can prove a /compact-memory pass was non-lossy.
+
+/compact-memory already prescribes an audit, and it runs in ONE direction: over the lines that
+SURVIVE, proving each still has backing in its topic file. That instrument is structurally blind to
+the failure it is meant to catch, because the irreversible act of a compaction pass is what the
+rewrite DELETED — a fact that never appears in the finished file cannot be re-audited from it.
+
+This is the other direction. It diffs each entry's ORIGINAL hook against its NEW hook, takes the
+hard tokens the original carried and the new one does not, and checks every one against the linked
+topic file. A token absent there existed ONLY on the index surface and has now been destroyed.
+
+  memory-dropped-token-audit.py --old <pre-compaction index> --new <post-compaction index>
+                                [--memory-dir DIR] [--pointer-scan FILE ...] [--json]
+
+  exit 0  clean          — every dropped hard fact still lives in its topic file
+  exit 1  findings       — at least one blocking finding (see BLOCKING below)
+  exit 2  NON-VERDICT    — the audit could not run or could not trust its own parse
+
+EXIT 2 IS NOT A PASS AND NOT A FAILURE. It is this tool saying it made no claim about the tree —
+the same three-code contract every ratchet lint in scripts/ answers with, so ship-land's
+arm_nonverdict path can tell "your pass was lossy" from "I never rendered a verdict".
+
+BLOCKING vs ADVISORY — an alarm that always fires says as little as one that cannot fire.
+Measured on the reso 2026-08-07 pass (23,671 -> 17,037 B, 36/36 entries kept): 0 unbacked code /
+SHA / number spans and 35 residual flags, every one of them an English connective, plus 1 emphasis
+variant already cleared by the case-insensitive pass. So the classes are split by what they can
+prove: code spans, 7-40 hex SHAs, numbers and ALL-CAPS terms BLOCK; ordinary content words are
+reported as ADVISORY and do not fail the run. Raise a word to blocking only with --strict-words.
+
+TWO ARMS THE 2026-08-07 PROTOTYPE DID NOT HAVE, both landed on trunk after it was written:
+
+  809d308eb (2026-08-22) — `[^]]*` stops at the first `]` inside a hook, so a bullet quoting a
+    regex or an array index loses its link. Measured on reso: 33 harvested links against 34
+    entries. So the target is matched as the LAST `(….md)` group, and the harvest is RECONCILED
+    against the link-shaped bullet count before any verdict is believed. A mismatch is exit 2, not
+    a quiet under-read — an under-read here would exonerate exactly the entries it failed to parse.
+
+  65edba440 (2026-09-05) — cc-memory-rotate now evicts by durability and leaves a one-line pointer
+    naming the topic file wherever a demotion used to leave nothing. An entry that left the index
+    through the rotor is therefore NOT a destroyed entry, and a tool that reported it as one would
+    fire on every rotation. An absent entry is cleared when its filename is still named on a
+    scanned surface (the new index itself, the memory dir's archive tiers, or any --pointer-scan
+    path) and blocks only when nothing names it.
+"""
+
+import argparse
+import json
+import os
+import re
+import sys
+
+STOP = set("""about above after again against because been before being below between both during
+each from have here into itself more most other over same some such than that their them then
+there these they this those through under until very were what when where which while with would
+your only also will more when than there their they them been have this that from into over""".split())
+
+# ANCHORS COPIED FROM TRUNK, not re-invented (commands/compact-memory.md, landed 809d308eb).
+# `^- \*{0,2}\[` so a BOLD bullet is not under-read — the sibling of the same defect. A bullet
+# shaped like an entry is one this audit must be able to parse; a bullet with no bracket is prose
+# (a rotor demotion pointer, a note) and is not an entry.
+BULLET = re.compile(r"^- \*{0,2}\[")
+# Greedy, taking the LAST `(….md)`: "a bullet has exactly one link target and it terminates the
+# line". NOT `[^]]*`, which stops at the first `]` inside a title quoting a regex or an array index
+# and drops the line from the harvest entirely. RESIDUAL, stated because it is trunk's rule and not
+# a defect this audit may quietly diverge from: a hook carrying a literal `](x.md)` markdown link
+# would take THAT target. It fails loudly — the stolen target resolves to no topic file and the run
+# blocks as `dangling` — never silently, and tests/…bats arm 9b holds it there.
+ENTRY = re.compile(r"^- \*{0,2}\[(.*)\]\(([^()]*\.md)\)(.*)$")
+
+
+def stem(w):
+    for s in ("ing", "ed", "es", "s"):
+        if w.endswith(s) and len(w) - len(s) >= 4:
+            return w[: -len(s)]
+    return w
+
+
+def read(path):
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        return fh.read()
+
+
+def entries(path):
+    """-> (dict target -> hook text, number of link-shaped bullets seen)."""
+    d, bullets = {}, 0
+    for line in read(path).splitlines():
+        if BULLET.match(line):
+            bullets += 1
+        m = ENTRY.match(line)
+        if m:
+            d[m.group(2)] = m.group(1) + " " + m.group(3)
+    return d, bullets
+
+
+def toks(hook):
+    """The hard tokens a hook carries, each tagged with the class that decides if it blocks."""
+    out = set()
+    for m in re.finditer(r"`([^`]+)`", hook):
+        for w in re.findall(r"[A-Za-z0-9_\-\./:$@{}]{3,}", m.group(1)):
+            out.add(("code", w))
+    for m in re.finditer(r"\b([0-9a-f]{7,40})\b", hook):
+        out.add(("sha", m.group(1)))
+    for m in re.finditer(r"\b(\d[\d,\.]*)\b", hook):
+        if not re.fullmatch(r"20\d\d", m.group(1)):
+            out.add(("num", m.group(1)))
+    for m in re.finditer(r"\b([A-Z][A-Z0-9_\-]{2,})\b", hook):
+        out.add(("caps", m.group(1)))
+    for m in re.finditer(r"\b([A-Za-z][A-Za-z\-]{4,})\b", hook):
+        if m.group(1).lower() not in STOP:
+            out.add(("word", m.group(1)))
+    return out
+
+
+def present(t, body, bn, bs):
+    """Case-insensitive, punctuation-insensitive, stemmed. This is what separates a genuine
+    absence from an emphasis-only variant (`DELETES` vs "deleted") — without it the 2026-07-29
+    pass drowned 2 real findings under 36 false ones."""
+    if t.lower() in body.lower():
+        return True
+    n = re.sub(r"[^a-z0-9]+", "", t.lower())
+    if n and n in bn:
+        return True
+    if stem(t.lower()) in bs:
+        return True
+    if re.fullmatch(r"[\d,\.]+", t):
+        return t.replace(",", "").replace(".", "") in bn
+    return False
+
+
+def nonverdict(msg):
+    print("verdict=non-verdict", flush=True)
+    print(f"!! COULD NOT RUN: {msg}", file=sys.stderr)
+    print("   Nothing above is a claim about your pass — this audit never reached a verdict.",
+          file=sys.stderr)
+    sys.exit(2)
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("--old", required=True, help="pre-compaction index snapshot (archive/…)")
+    ap.add_argument("--new", required=True, help="the finished index")
+    ap.add_argument("--memory-dir", help="where topic files live (default: dirname of --new)")
+    ap.add_argument("--pointer-scan", action="append", default=[],
+                    help="extra surface that may carry a rotor demotion pointer; repeatable")
+    ap.add_argument("--strict-words", action="store_true",
+                    help="raise ordinary content words from advisory to blocking")
+    ap.add_argument("--json", action="store_true")
+    a = ap.parse_args()
+
+    for p in (a.old, a.new):
+        if not os.path.isfile(p):
+            nonverdict(f"no such file: {p}")
+    mem = a.memory_dir or os.path.dirname(os.path.abspath(a.new))
+    if not os.path.isdir(mem):
+        nonverdict(f"memory dir is not a directory: {mem}")
+
+    old, old_bullets = entries(a.old)
+    new, new_bullets = entries(a.new)
+    # RECONCILE BEFORE BELIEVING (809d308eb). An under-read exonerates the entries it failed to
+    # parse, so a harvest that does not account for every link-shaped bullet renders no verdict.
+    if len(old) != old_bullets:
+        nonverdict(f"--old: {old_bullets} link-shaped bullet(s) but {len(old)} harvested link(s)")
+    if len(new) != new_bullets:
+        nonverdict(f"--new: {new_bullets} link-shaped bullet(s) but {len(new)} harvested link(s)")
+
+    # Surfaces a rotor demotion/routing pointer can live on (65edba440).
+    surfaces = [read(a.new)]
+    for fn in sorted(os.listdir(mem)):
+        if fn.endswith(".md") and re.match(r"MEMORY[-_]ARCHIVE", fn, re.I):
+            surfaces.append(read(os.path.join(mem, fn)))
+    for p in a.pointer_scan:
+        if not os.path.isfile(p):
+            nonverdict(f"--pointer-scan path does not exist: {p}")
+        surfaces.append(read(p))
+    pointed = "\n".join(surfaces)
+
+    blocking, advisory = [], []
+
+    for fn in sorted(set(old) - set(new)):
+        if fn in pointed:
+            continue
+        blocking.append({"entry": fn, "kind": "entry-removed", "class": "entry", "token": fn})
+
+    for fn in sorted(old):
+        if fn not in new:
+            continue
+        p = os.path.join(mem, fn)
+        if not os.path.isfile(p):
+            blocking.append({"entry": fn, "kind": "dangling", "class": "entry", "token": fn})
+            continue
+        body = read(p)
+        bn = re.sub(r"[^a-z0-9]+", "", body.lower())
+        bs = set(stem(w) for w in re.findall(r"[a-z0-9]+", body.lower()))
+        for cls, t in sorted(toks(old[fn]) - toks(new[fn])):
+            if present(t, body, bn, bs):
+                continue
+            row = {"entry": fn, "kind": "dropped-token", "class": cls, "token": t}
+            (blocking if (cls != "word" or a.strict_words) else advisory).append(row)
+
+    verdict = "lossy" if blocking else "clean"
+    if a.json:
+        print(json.dumps({"verdict": verdict, "old_entries": len(old), "new_entries": len(new),
+                          "blocking": blocking, "advisory": advisory}, indent=2))
+    else:
+        print(f"old entries={len(old)}  new entries={len(new)}")
+        for label, rows in (("BLOCKING", blocking), ("ADVISORY (content words)", advisory)):
+            if not rows:
+                continue
+            print(f"\n### {label} — {len(rows)}")
+            for r in rows:
+                print(f"    {r['entry']}  [{r['class']}] {r['token']}  ({r['kind']})")
+        print(f"\n==== {len(blocking)} blocking · {len(advisory)} advisory ====")
+        print("clean ⇒ every hard fact the rewrite removed still lives in the linked topic file.")
+        print(f"verdict={verdict}")
+    sys.exit(1 if blocking else 0)
+
+
+if __name__ == "__main__":
+    main()
