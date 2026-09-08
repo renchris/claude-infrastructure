@@ -254,6 +254,39 @@ the landed SHA `828816d`, an entire 3rd-instance root-cause finding (`c3edb2d`),
 `P2-P4 BUILT / LAND-BLOCKED` build status. Also snapshot the pre-compaction index verbatim into
 `archive/` so any hook can be restored word-for-word.
 
+🚨 **AND THE AUDIT ABOVE RUNS IN THE WRONG DIRECTION TO CLOSE THIS, SO IT IS NOT THE GATE.** Both
+detectors re-run "against the finished file … to prove no surviving line outran its topic file" —
+over the lines that SURVIVE. A fact the rewrite DELETED appears in no surviving line, so it is
+unreachable from the finished file, and every check this command prescribed was structurally blind
+to the one act a pass cannot take back. The precondition also fires per line, before the rewrite
+exists, which makes skipping it invisible.
+
+**So the pass is not finished until this exits 0**, on the archived snapshot against the finished
+index — a whole-pass, after-the-fact check that cannot be skipped per line:
+
+```
+scripts/memory-dropped-token-audit.py \
+  --old <memory>/archive/MEMORY_INDEX_PRE-COMPACT_<date>.md --new <memory>/MEMORY.md
+```
+
+It diffs each entry's ORIGINAL hook against its NEW one and checks every hard token the rewrite
+removed against the linked topic file. **`verdict=clean` is the report; a `verdict=lossy` names the
+destroyed fact — INTEGRATE it into the topic file (Edit, never Write) and re-run.** Three exit
+codes, same contract as every ratchet lint in `scripts/`: `0` clean · `1` findings · **`2` a
+NON-VERDICT — it could not run, or could not trust its own parse, and made no claim about the pass.
+Never read a 2 as a pass.**
+
+Two things it does that the 2026-08-07 prototype could not, both because they landed after it:
+**code spans, SHAs, numbers and ALL-CAPS block while ordinary content words are ADVISORY** (that
+pass produced 35 word flags, every one an English connective — a gate blocking on those gets
+switched off on its first run; `--strict-words` raises them), and **an entry the rotor demoted is
+cleared by the pointer `cc-memory-rotate` now leaves** (65edba440), so it does not alarm on every
+rotation — measured live on reso, the prototype alarms on 35 rotor-demoted entries that this one
+correctly clears against `MEMORY-ARCHIVE.md`. The harvest anchors are copied from the `809d308eb`
+fix above rather than re-invented, and the harvest is reconciled against the bullet count before
+any verdict is believed. Suite: `tests/memory-dropped-token-audit.bats` (15 arms, each red-proved
+by mutation).
+
 **Use TWO overlapping detectors, and a case-insensitive second pass.** Token-matching alone both
 over- and under-reports. (a) Hard tokens — backticks, 7-hex SHAs, numbers, ALL-CAPS. (b) Clause
 coverage — split the hook on `;`/`—`/`→` and flag any clause whose content words are largely
