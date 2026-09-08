@@ -1062,6 +1062,30 @@ do not register here. *(Shape worth naming: the disposition was read off the PAY
 is not the interface. For every provider-class event the return channel — stdout, or the exit status —
 is the thing to read.)*
 
+**🚨 That probe RAN on 2026-09-08, and its DISCRIMINATOR IS DEAD — row 26 stays PROHIBITION, but
+this adds no behavioural support and licenses no move back to DROP.** A throwaway `/tmp` repo was
+entered with `claude -w wltp -p 'DONE'` (2.1.260) and exited by session end, with a
+nothing-printing exit-0 `WorktreeRemove` observer injected via `--settings`; the control was the
+same shape with no hook registered. **The worktree SURVIVED IN BOTH ARMS** — `r2-wltp` with the
+observer, `r3-wltp` without it — so the observer is not shown to cause anything. A third arm with
+an *instrumented* hook explains why: `/tmp/wltprobe/hook.log` was never created, i.e. the event was
+**never dispatched**, so `Xor` was never reached from this path either and the reducer the
+PROHIBITION rests on was never exercised. The source claim is unchanged on the fleet's own build —
+`WorktreeRemove` ×26 and `Removed hook-based worktree at` ×2 in the 2.1.260 bundle.
+
+*Why this is not a refutation:* **a control that never removes cannot detect suppression.** The
+probe bounds only the headless `-p` path, and removal now looks like an **interactive-exit** path —
+so the brief's own prescription ("exited by session end, not by the tool") was necessary but not
+sufficient: `-p` is a session end that skips the teardown. **The next probe must exit an
+interactive TUI session (`/exit` in a pty), never `-p`.** Two side findings worth keeping: an
+abnormal exit (an unauthenticated first attempt) left the worktree registered AND `locked` holding
+the dead session's pid — a leak independent of any hook; and a throwaway `CLAUDE_CONFIG_DIR` is
+unauthenticated, so the session dies before any teardown and cannot host this probe at all, which
+is why the observer had to be injected with `--settings` over an authenticated config dir instead.
+*(Shape worth naming, and it is the sibling of the one above: the prior entry corrected reading a
+disposition off the PAYLOAD; this one corrects reading an EXIT PATH off the word "exit". Both times
+the instrument never reached the subject, and both times the null looked like an answer.)*
+
 **Row 25 `WorktreeCreate` — the verdict SURVIVES and its evidence line is REFUTED.** Neither cited
 piece supports HOSTILE. Read in full, the contract error (`"hook succeeded but returned no worktree
 path"`) is unreachable unless NO hook returned a path: `LPt` @237764276 does
