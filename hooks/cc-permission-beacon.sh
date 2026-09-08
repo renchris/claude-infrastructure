@@ -180,6 +180,28 @@ sig_of() { # $1 = a canonical line (possibly empty) → 16 hex chars, or nothing
   printf '%s' "${h:0:16}"
 }
 
+# Break an ORPHANED append lock — see the long note at the lock itself for why this exists.
+# Returns 0 only when it actually removed a lock it proved stale. Deliberately conservative: every
+# uncertain path returns non-zero and the caller falls back to its sidecar, which is lossless.
+break_stale_lock() { # $1 = lock dir, $2 = staleness bound in seconds
+  local lock="$1" bound="$2" owner mtime now
+  [[ -d "$lock" ]] || return 1
+  owner="$(cat "$lock/owner" 2>/dev/null || true)"
+  # A LIVE owner is never stale, no matter how long it has held the lock. `kill -0` on our own uid
+  # answers existence without signalling. A non-numeric owner file is treated as no owner.
+  case "$owner" in ''|*[!0-9]*) owner="" ;; esac
+  [[ -n "$owner" ]] && kill -0 "$owner" 2>/dev/null && return 1
+  # BSD stat first (this fleet is macOS), GNU second, so the bound is never silently skipped.
+  mtime="$(stat -f %m "$lock" 2>/dev/null || stat -c %Y "$lock" 2>/dev/null || true)"
+  case "$mtime" in ''|*[!0-9]*) return 1 ;; esac      # cannot date it ⇒ do not break it
+  now="$(date +%s 2>/dev/null || true)"
+  case "$now" in ''|*[!0-9]*) return 1 ;; esac
+  (( now - mtime >= bound )) || return 1
+  rm -f "$lock/owner" 2>/dev/null || true
+  rmdir "$lock" 2>/dev/null || return 1
+  return 0
+}
+
 archive() { # $1 = the CLAIMED beacon, already moved aside so no second clear can archive it too
   local claimed="$1" rts mon line
   mkdir -p "$ARCHDIR" 2>/dev/null || return 0
@@ -252,13 +274,46 @@ archive() { # $1 = the CLAIMED beacon, already moved aside so no second clear ca
   # the threshold is offset-dependent rather than a flat size rule, so no cap can be trusted to
   # avoid it. mkdir is atomic on every POSIX filesystem and macOS ships no flock(1), so it is the
   # mutex. This costs forks ONLY on a real resolution, never on the PostToolUse hot path.
+  #
+  # 🚨 …AND THE MUTEX HAD NO WAY OUT OF ITS OWN FAILURE, so it stopped being a mutex on
+  # 2026-08-07 17:35 and nobody noticed for a month. `mkdir` is atomic, but a process killed
+  # between the mkdir and the rmdir leaves the directory behind with no owner and no age bound —
+  # and from that instant EVERY later resolution loses the lock, waits out all 50 retries, and
+  # takes the per-process sidecar fallback. Measured 2026-09-07 on the live archive:
+  # `.append.lock` was an EMPTY directory dated 2026-08-07 17:35, the first sidecar appeared at
+  # 17:57 that same day, and the split since is **546 rows in the two month files against 3,223
+  # rows across 3,221 sidecars** — 85% of every archived resolution on the failure path, with no
+  # `2026-09.jsonl` existing at all. Nothing was LOST (the consumer globs `*.jsonl`, so every row
+  # is still counted) which is exactly why it stayed invisible: the fallback was good enough to
+  # hide that the thing it falls back FROM was dead.
+  #
+  # So the lock now breaks a stale holder, under two conditions that must BOTH hold, because a
+  # breaker that is wrong re-introduces the torn line this whole block exists to prevent:
+  #   • the recorded owner pid is not alive — a live holder is never stale, however long it holds;
+  #   • AND the lock is older than CC_PERMARCHIVE_LOCK_STALE_S (default 60s) — an archive() call
+  #     takes milliseconds, so a lock that old is not a slow writer. The age bound is what covers
+  #     the window between `mkdir` and the owner file being written, where a lock legitimately has
+  #     no owner recorded yet; without it, a racing breaker could delete a lock taken microseconds
+  #     ago. It is also what lets us break the ORPHAN THAT IS THERE NOW, which predates the owner
+  #     file and can therefore never name a dead pid.
+  # Breaking is not exclusive and does not need to be: two breakers may both rmdir and both
+  # mkdir, but only ONE mkdir can succeed, and the loser simply takes the sidecar as before.
   local lock="$ARCHDIR/.append.lock" got=0 i=0
+  local stale_s="${CC_PERMARCHIVE_LOCK_STALE_S:-60}"
+  claim_lock() { mkdir "$lock" 2>/dev/null && { printf '%s' "$$" > "$lock/owner" 2>/dev/null || true; return 0; }; return 1; }
   while (( i < 50 )); do
-    if mkdir "$lock" 2>/dev/null; then got=1; break; fi
+    if claim_lock; then got=1; break; fi
     sleep 0.02; i=$(( i + 1 ))
   done
+  if (( ! got )) && break_stale_lock "$lock" "$stale_s"; then
+    claim_lock && got=1
+  fi
   if (( got )); then
     printf '%s\n' "$line" >> "$ARCHDIR/$mon.jsonl" 2>/dev/null || got=2
+    # RELEASE COMPLETELY. `rmdir` refuses a non-empty directory, and the lock now holds an owner
+    # file — so releasing with a bare rmdir would leave the lock standing forever and re-create,
+    # by hand, the exact orphan this block was just written to cure.
+    rm -f "$lock/owner" 2>/dev/null || true
     rmdir "$lock" 2>/dev/null || true
   fi
   # NEVER LOSE THE RECORD. The caller rm's the claim unconditionally, so a failed append used to
