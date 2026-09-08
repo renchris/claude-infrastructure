@@ -148,7 +148,7 @@ C_OK=(--conviction 40 --receipt "probe => result" --option "a::outcome a" --opti
 # ── inv7: no age-deletion of an OPEN packet ────────────────────────────────────
 @test "inv7: expire-sweep never DELETES a packet file — open packets remain on disk" {
   idb=$(bash "$CD" open --class B --what "past" --default "d" --deadline "2000-01-01T00:00:00Z")
-  idc=$(bash "$CD" open --class C --what "waits" --staged-artifact /tmp/y.sh)
+  idc=$(bash "$CD" open --class C "${C_OK[@]}" --what "waits" --staged-artifact /tmp/y.sh)
   bash "$CD" expire-sweep >/dev/null
   [ -f "$CC_DECISIONS_DIR/$idb.json" ]   # transitioned, NOT deleted
   [ -f "$CC_DECISIONS_DIR/$idc.json" ]   # untouched open, NOT deleted
@@ -391,7 +391,7 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
 # arbiter of "open" stays here and a consumer never mints a second definition of the board.
 
 @test "list --json emits a parseable ARRAY carrying session_sid (the field the table drops)" {
-  bash "$CD" open --class C --what "activate the plist" --session-sid SID-A >/dev/null
+  bash "$CD" open --class C "${C_OK[@]}" --what "activate the plist" --session-sid SID-A >/dev/null
   run bash "$CD" list --open --json
   [ "$status" -eq 0 ]
   echo "$output" | jq -e 'type == "array" and length == 1' >/dev/null
@@ -413,7 +413,7 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
 
 @test "open with NO --session-sid attributes the packet to the calling session" {
   export CLAUDE_CODE_SESSION_ID="SID-ENV-CCS"
-  run bash "$CD" open --class C --what "a hard block nobody can see"
+  run bash "$CD" open --class C "${C_OK[@]}" --what "a hard block nobody can see"
   [ "$status" -eq 0 ]
   run jq -r '.session_sid' "$CC_DECISIONS_DIR/$output.json"
   [ "$output" = "SID-ENV-CCS" ]
@@ -423,7 +423,7 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
   # Guards the exact no-op the obvious fix would have shipped: defaulting only to
   # CLAUDE_SESSION_ID leaves sid "" at every real call site, because CC does not export it there.
   export CLAUDE_CODE_SESSION_ID="SID-ONLY-CCS"
-  run bash "$CD" open --class C --what "reachable from the shell that files it"
+  run bash "$CD" open --class C "${C_OK[@]}" --what "reachable from the shell that files it"
   [ "$status" -eq 0 ]
   run jq -r '.session_sid' "$CC_DECISIONS_DIR/$output.json"
   [ "$output" = "SID-ONLY-CCS" ]
@@ -443,7 +443,7 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
 @test "CLAUDE_SESSION_ID is the FIRST env rung — it outranks CLAUDE_CODE_SESSION_ID" {
   export CLAUDE_SESSION_ID="SID-FIRST"
   export CLAUDE_CODE_SESSION_ID="SID-SECOND"
-  run bash "$CD" open --class C --what "ladder order"
+  run bash "$CD" open --class C "${C_OK[@]}" --what "ladder order"
   [ "$status" -eq 0 ]
   run jq -r '.session_sid' "$CC_DECISIONS_DIR/$output.json"
   [ "$output" = "SID-FIRST" ]
@@ -453,7 +453,7 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
   # Without this the third rung would be uncovered, and a green suite would credit no site
   # (MEMORY.md per-site-mutation-attributes-coverage).
   export CC_SESSION_ID="SID-LAST"
-  run bash "$CD" open --class C --what "third rung"
+  run bash "$CD" open --class C "${C_OK[@]}" --what "third rung"
   [ "$status" -eq 0 ]
   run jq -r '.session_sid' "$CC_DECISIONS_DIR/$output.json"
   [ "$output" = "SID-LAST" ]
@@ -462,7 +462,7 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
 @test "with NO session in the environment the sid stays empty — the fix is monotone" {
   # The fail direction that makes this safe: unresolvable ⇒ byte-identical to the old behaviour,
   # never a wrong attribution. setup() already unset all three.
-  run bash "$CD" open --class C --what "nothing to resolve"
+  run bash "$CD" open --class C "${C_OK[@]}" --what "nothing to resolve"
   [ "$status" -eq 0 ]
   run jq -r '.session_sid' "$CC_DECISIONS_DIR/$output.json"
   [ "$output" = "" ]
@@ -470,8 +470,8 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
 
 @test "re-open within ONE session is still idempotent — same sid, same id, one packet" {
   export CLAUDE_CODE_SESSION_ID="SID-SAME"
-  a=$(bash "$CD" open --class C --what "same decision twice")
-  b=$(bash "$CD" open --class C --what "same decision twice")
+  a=$(bash "$CD" open --class C "${C_OK[@]}" --what "same decision twice")
+  b=$(bash "$CD" open --class C "${C_OK[@]}" --what "same decision twice")
   [ "$a" = "$b" ]
   run bash -c "find '$CC_DECISIONS_DIR' -maxdepth 1 -name '*.json' | wc -l | tr -d ' '"
   [ "$output" = "1" ]
@@ -483,7 +483,7 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
   run bash "$CD" list --open --json                 # store dir does not exist yet at all
   [ "$status" -eq 0 ]
   [ "$output" = "[]" ]
-  bash "$CD" open --class C --what "only packet" >/dev/null   # store now exists, but 0 match
+  bash "$CD" open --class C "${C_OK[@]}" --what "only packet" >/dev/null   # store now exists, but 0 match
   run bash "$CD" list --open --class B --json
   [ "$status" -eq 0 ]
   [ "$output" = "[]" ]
@@ -492,7 +492,7 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
 
 @test "list --json honours --open/--all/--class — the SAME predicate as the table" {
   ida=$(bash "$CD" open --class A --what "a-item")
-  idc=$(bash "$CD" open --class C --what "c-item")
+  idc=$(bash "$CD" open --class C "${C_OK[@]}" --what "c-item")
   bash "$CD" action "$ida" >/dev/null                # A is now terminal
   ids_json() { bash "$CD" list "$@" --json | jq -r '.[].id' | sort | tr '\n' ' '; }
   [ "$(ids_json --open)"          = "$idc " ]        # the actioned A is gone
@@ -504,7 +504,7 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
 
 @test "list --json --expiring matches the table's expiring predicate exactly" {
   idb=$(bash "$CD" open --class B --what "expires" --default d --deadline "2099-01-01T00:00:00Z")
-  bash "$CD" open --class C --what "waits forever" >/dev/null      # C has no deadline ⇒ never expiring
+  bash "$CD" open --class C "${C_OK[@]}" --what "waits forever" >/dev/null      # C has no deadline ⇒ never expiring
   run bash -c "bash '$CD' list --expiring --json | jq -r '.[].id'"
   [ "$output" = "$idb" ]
 }
@@ -525,7 +525,7 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
 @test "list --json does NOT change the non-JSON output (byte-identical without the flag)" {
   # The flag is additive. This is the control that keeps it so: every consumer of the table — and
   # operator-readout, cc-digest and the autonomy sweep all parse this shape — must be unaffected.
-  bash "$CD" open --class C --what "c-item" --session-sid SID-A >/dev/null
+  bash "$CD" open --class C "${C_OK[@]}" --what "c-item" --session-sid SID-A >/dev/null
   bash "$CD" open --class B --what "b-item" --default d --deadline "2099-01-01T00:00:00Z" >/dev/null
   _raw_pkt legacy-tbl C
   local mode
