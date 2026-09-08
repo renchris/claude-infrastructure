@@ -38,7 +38,17 @@ lint_file() {
     echo "  RED  S-3b  disposition on the same line as a silence trigger — a '<silence> -> <dispose>' shortcut; would kill a healthy long turn"
     fail=1
   fi
-  if ! printf '%s\n' "$code" | grep -qiE "${REREAD}"; then
+  # DRAINED, never `grep -q` — the same law its sibling above already follows, and this line is why
+  # the law exists. `set -o pipefail` is on and `grep -q` EXITS AT THE FIRST MATCH; the REREAD token
+  # first appears ~30 code lines into a 550+ line supervisor, so grep closes the pipe while printf
+  # still has ~520 lines to write, printf takes SIGPIPE (141), pipefail promotes that to the
+  # pipeline's status, and `!` inverts a SUCCESSFUL MATCH into a RED. The verdict is therefore
+  # decided by a scheduling race: measured 2026-09-08 on an unmodified trunk supervisor, 1/10
+  # concurrent runs printed "no re-observe gate present" for a file that has one 30 lines in.
+  # A false RED here fails a land for a property the file demonstrably satisfies.
+  # Dropping -q makes grep read to EOF (output discarded), so the producer is never signalled
+  # (memory grep-q-under-pipefail-inverts-the-verdict).
+  if ! printf '%s\n' "$code" | grep -iE "${REREAD}" >/dev/null; then
     echo "  RED  S-3b  no re-observe / effects-dark re-read gate present — the disposition has nothing to gate on but silence"
     fail=1
   fi
@@ -76,8 +86,19 @@ GOOD
   # has no direct form, but "did it succeed" does — and shellcheck blocks the land on the difference.
   lint_file "$d/correct.sh" >/dev/null 2>&1 || { echo "SELFTEST FAIL: correct (re-observe) did not go GREEN"; fails=1; }
   lint_file "$d/absent.sh"  >/dev/null 2>&1; [ "$?" -eq 2 ] || { echo "SELFTEST FAIL: missing file did not exit 2 (LOUD)"; fails=1; }
+  # SIGPIPE ARM (2026-09-08). The race above is probabilistic in the wild (~1/10) and so cannot be
+  # asserted by repetition. It is made DETERMINISTIC by maximising the window the bug needs: the
+  # REREAD token sits on line 1 — so `grep -q` would exit immediately — followed by ~200k lines the
+  # producer must still write. Under the pre-fix `grep -q`, printf is signalled essentially every
+  # time and the file goes RED; drained, it is GREEN. Filler is inert to the OTHER arm's pattern
+  # (no silence-word within 40 chars of a disposition word), so this case can only move on this bug.
+  # shellcheck disable=SC2016  # single quotes are DELIBERATE: this is fixture SOURCE TEXT, not an expansion
+  { echo 'effects="$(reobserve_effects "$1")"   # the re-read gate, on line 1'
+    awk 'BEGIN{for(i=0;i<200000;i++) print "x=1"}'; } > "$d/wide.sh"
+  lint_file "$d/wide.sh" >/dev/null 2>&1 \
+    || { echo "SELFTEST FAIL: a file WITH a re-observe gate went RED — the producer was SIGPIPEd (grep -q under pipefail)"; fails=1; }
   if [ "$fails" -eq 0 ]; then
-    echo "s3b-lint --selftest: 3/3 — RED on the silence-reaps straw, GREEN on re-observe, LOUD on missing."
+    echo "s3b-lint --selftest: 4/4 — RED on the silence-reaps straw, GREEN on re-observe, LOUD on missing, GREEN on a wide file (no SIGPIPE false-RED)."
     exit 0
   fi
   echo "s3b-lint --selftest: FAILED — the assertion does not discriminate (do not trust S-3b)."
