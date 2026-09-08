@@ -5,6 +5,18 @@
 # launchd WatchPaths agent (com.chrisren.screenshot-clipboard) on the Screenshots dir. macOS only.
 set -u
 DIR="/Users/chrisren/Screenshots"
+
+# FALLBACK ONLY: defer to Hammerspoon whenever it is running. hammerspoon-config's init.lua copies
+# every new screenshot to the clipboard itself (PNG + TIFF, verified write, thumbnail, Pop sound)
+# within ~100 ms of the file landing. This agent doing the same job in parallel made it a SECOND,
+# slower, uncoordinated clipboard writer: 0.5 s plus an osascript that takes seconds on a loaded
+# box, writing PNG only, over whatever Hammerspoon had already put there. Two screenshots taken
+# inside that window end with the OLDER one on the clipboard — the run for shot A fires late, reads
+# "newest" while A is still newest, and lands after Hammerspoon has already copied B. Found 2026-09-08
+# (hammerspoon-config: "control alt 4 screenshot isn't reliably on the clipboard"). The agent now
+# acts only when Hammerspoon is NOT running, where a slow PNG-only copy still beats none at all.
+pgrep -xq Hammerspoon && exit 0
+
 newest="$(ls -t "$DIR"/*.png 2>/dev/null | head -1)"
 [ -n "$newest" ] || exit 0
 
