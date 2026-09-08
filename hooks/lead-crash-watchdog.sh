@@ -548,11 +548,17 @@ classify_death() {
 # via the session registry, its pane-keyed alias. Never call elsewhere: a stale marker is
 # harmless (30-min freshness window), but deleting one mid-recycle could unmask a real crash.
 gc_teardown_marker() {
-  local sid="$1"
+  local sid="$1" pid="${2:-}"
   local tdir="${CC_TEARDOWN_DIR:-$HOME/.claude/watchdog/teardown}"
   local reg_dir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
   local reg_hit pane
   rm -f "$tdir/$sid.json" 2>/dev/null || true
+  # …and the pid-keyed marker cc-teardown now writes (bin/cc-teardown write_teardown_marker). It is
+  # collected here rather than left to the freshness window for the same reason as the two above:
+  # this store has no sweeper, and a key that is only ever written accumulates one file per
+  # retirement forever. The pid is the one this death was handled FOR, so this can never reach a
+  # marker written for a live session that later reused the number.
+  if [[ -n "$pid" ]]; then rm -f "$tdir/$pid.json" 2>/dev/null || true; fi
   reg_hit=$(grep -lE "\"session_id\":[[:space:]]*\"$sid\"" "$reg_dir"/*.json 2>/dev/null | head -1) || true
   [[ -n "$reg_hit" ]] || return 0
   pane=$(basename "$reg_hit" .json)
@@ -1443,7 +1449,7 @@ trap '' HUP
       # a live session (frontier finding: 125 proven cross-incarnation disarms).
       if [[ "$(cat "$WATCHDOG_DIR/$sid.pid" 2>/dev/null)" == "$pid" ]]; then
         rm -f "$WATCHDOG_DIR/$sid.pid" "$WATCHDOG_DIR/$sid.id" "$WATCHDOG_DIR/$sid.daemon"
-        gc_teardown_marker "$sid" || true
+        gc_teardown_marker "$sid" "$pid" || true
       fi
       rmdir "$claim" 2>/dev/null || true      # release the death-claim (never leave a dir per death)
       return 0
@@ -1467,7 +1473,7 @@ trap '' HUP
     # rm-race guard (see above): never delete a pidfile a successor incarnation now owns.
     if [[ "$(cat "$WATCHDOG_DIR/$sid.pid" 2>/dev/null)" == "$pid" ]]; then
       rm -f "$WATCHDOG_DIR/$sid.pid" "$WATCHDOG_DIR/$sid.id" "$WATCHDOG_DIR/$sid.daemon"
-      gc_teardown_marker "$sid" || true
+      gc_teardown_marker "$sid" "$pid" || true
     fi
     rmdir "$claim" 2>/dev/null || true        # release the death-claim (never leave a dir per death)
   }
