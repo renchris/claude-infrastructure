@@ -124,3 +124,77 @@ suppress convictions while the box is loaded — would have suppressed *this* co
 correct, reproducible on a loaded box, and named the right suite four times running. Alternation
 is evidence about the *scheduler*, not about the truth of any member. Set membership is not a
 verdict; the only thing that settles a member is executing it at its own tree.
+
+## Addendum — the remedy this file declined to prescribe, found: probe the FLOOR, never the load
+
+**2026-09-08.** Backlog `799ec26e3a74`. Shipped as **C30** in `scripts/postland-verify.sh`.
+
+This file left the remedy open because both candidate levers were forbidden: suppressing convictions
+while the box is loaded recreates `gate_admit` (R1), and the addendum above shows it would have
+suppressed the `lead-crash-watchdog` conviction, which was *true*. The lever it did not consider is
+the one its own last sentence names — *"the only thing that settles a member is executing it at its
+own tree."* Generalised: execute it at a tree we already **certified**.
+
+### The state the wedge had reached
+
+The alternation did not stay at halved-and-alternating. By 2026-09-08 it was total: **20 consecutive
+sweeps — 18 RED, 2 CUT, 0 GREEN**, `last-green` frozen at `24c598bac1c7` since 2026-09-03 and now
+past `SCAN_N=200`, so `deploy-live --dry-run` reports `no GREEN stamp among the newest 200 commits`.
+Not "trunk is broken" — the green it needs scrolled off the window. The A/B alternation of §3 with
+its period intact, read off the C29 log lines:
+
+```
+11:22 handoff-fire CORROBORATED (RED) · idle-slope PENDING
+14:44 backlog-pipeline, cc-pane, cc-reaper, goal-inert, idle-slope CORROBORATED (RED)
+17:54 backlog-pipeline PENDING → CUT
+21:03 compressor, handoff-fire CORROBORATED (RED) · cc-reaper, goal-inert, idle-slope PENDING
+00:28 cc-reaper, idle-slope CORROBORATED (RED) · compressor, handoff-fire PENDING
+```
+
+`conviction_observe`'s awk matches **`$2==f` — the file alone**, no tree and no sha. So window 1 on
+tree A corroborates window 2 on tree B, and `conviction_clear` preserving exactly the *pended* set
+guarantees the next sweep inherits it in-TTL. Two windows, one experiment.
+
+### The evidence was already being computed — 19 minutes too late
+
+The same 00:28 run that stamped RED on `cc-reaper` logged, afterwards:
+
+```
+bisect FLOOR NOT GREEN: … tests/cc-reaper.bats is not green at 24c598bac1c7 either (runner rc=1)
+```
+
+`24c598bac1c7` is `last-green` — the commit whose tree **this verifier stamped GREEN**, i.e. one on
+which every suite passed. A suite failing there *now* is proven non-deterministic by our own prior
+verdict, so its failure says nothing about the tree under test. `bisect_floor_ok` knew and discarded
+it as `undecidable, no culprit named`, because it runs after `write_stamp` and only ever needed to
+name a culprit. C30 asks the same question one step earlier, where the answer can still change the
+verdict.
+
+### Why this is not the forbidden lever
+
+It never reads load — the `if|while|until … (loadavg|load1)` guard at the C29 selftest passes
+unchanged. It branches on a **test result at a different commit**, which is how it gets
+load-insensitivity without a quiet box (R1: "any design whose success requires load to fall is
+already failed"). And it is strictly weakening in one direction:
+
+| floor probe | meaning | verdict |
+|---|---|---|
+| rc 1 | the failure predates the window | not differential ⇒ flake, recorded |
+| rc 0 | the floor really is green | differential ⇒ **RED stands, unchanged** |
+| 124 / >128 / 126 / 127 / unresolvable / unreachable / file absent at floor / cell not restored / renamed test | no verdict | **RED stands, unchanged** |
+
+Absence of evidence never exonerates; only a positive reproduction does. So it settles the two cases
+this file proved must be told apart, and settles them the right way round: set B (`autonomy-sweep` et
+al., green on a quiet box) reproduces at the floor and is dropped; `lead-crash-watchdog` **passed**
+at the floor — the `set -u` defect postdates it — so its conviction is differential and survives.
+Bounded by `FLOOR_BUDGET` (6 probes/run, each under `FILE_TO` in the retry band); files past the
+budget keep their conviction **unprobed**, so a run where the whole corpus is flaking cannot
+exonerate its way to an unearned green.
+
+Red-proof, run as a control rather than asserted: `CC_POSTLAND_FLOOR_EXONERATE=off` reproduces the
+pre-fix RED on the identical fixture (`--selftest`, 66 passed / 0 failed).
+
+**Still open:** `56b39811eddc` owns the population question, and C30 does not answer it — a suite
+that is chronically load-flaky is still chronically load-flaky, now recorded as
+`"outcome":"floor-not-differential"` in `flakes.jsonl` instead of blocking every deploy. That ledger
+is the queue for fixing them.
