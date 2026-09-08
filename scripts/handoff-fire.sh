@@ -8053,9 +8053,20 @@ probe_account() { # $1=account → 0 pass; prints rejection class on fail
   # piped input it will not get; and carry the exit status plus the JSON's own verdict fields in the
   # rejection — `head -c 200` of a result whose type/subtype/is_error keys sit at the END of the
   # object showed none of them, which is how a successful probe read as an unexplained failure.
-  local rc=0 verdict
+  # The alarm scales with load exactly as the engagement window does (same helper, probe-sized
+  # bounds: base 90s, cap 360s). A probe is a full CLI start-up plus one API turn — measured
+  # 2026-09-08 at 3.7 load/core as ~30s end to end (13s start-up, 13-16s turn) — so a fixed 90
+  # stops being a bound once the box runs at the 22/core this file's engagement window already
+  # scales for (load 223 on 10 cores, measured the same day), and an alarm that fires after the
+  # result was printed is precisely the "successful probe read as a failure" the verdict above was
+  # rewritten to survive. Same fail-safe as the window: any unreadable input yields the base.
+  local rc=0 verdict alarm_s=90
+  if command -v fire_engage_window >/dev/null 2>&1; then
+    alarm_s="$(FIRE_ENGAGE_TIMEOUT_BASE=90 FIRE_ENGAGE_TIMEOUT_MAX=360 fire_engage_window 2>/dev/null)" || alarm_s=90
+    case "$alarm_s" in ''|*[!0-9]*) alarm_s=90 ;; esac
+  fi
   out="$(cd /tmp && CLAUDE_CONFIG_DIR="$dir" DISABLE_AUTOUPDATER=1 \
-      perl -e 'alarm 90; exec @ARGV' "$BIN" -p 'Reply with exactly: ok' \
+      perl -e "alarm $alarm_s; exec @ARGV" "$BIN" -p 'Reply with exactly: ok' \
       --strict-mcp-config \
       --model "$probe_model" --max-turns 1 --output-format json 2>&1 </dev/null)" || rc=$?
   # A shell pattern match, not `printf | grep -q`: under pipefail an early-exiting consumer can
