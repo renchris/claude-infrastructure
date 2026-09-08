@@ -721,6 +721,11 @@ CONVICT_PENDING=0    # a ladder conviction seen in ONE window only: nothing prov
 # ...and WHICH files those are, not merely that there were some. The flag alone decides the CUT
 # branch; the names are what a RED/HUNG verdict must NOT spend, since it adjudicated none of them.
 CONVICT_PENDED=()
+# ...and, SYMMETRICALLY, which files it CONVICTED. Same rule read the other way round: a RED
+# adjudicated these, and what it said about them is GUILTY. Spending their rows is the C29c defect —
+# the run destroys, at its own verdict site, the evidence its own loop generated seconds earlier, so
+# a file that keeps failing can never hold two consecutive windows and reds only every OTHER sweep.
+CONVICT_CORROBORATED=()
 # Suites actually handed to bats. 0 is not a filler default — it is the honest value on every path
 # where the corpus never ran (a prelint red SKIPS it), and the stamp should say so.
 CORPUS_N=0
@@ -1841,6 +1846,7 @@ corroborate_convictions() { # <tree> — rebuild FAILING, keeping only CROSS-WIN
     esac
     if conviction_observe "$f" "$tree" "${CUR_SHA:-}"; then
       keep+=("$f"); keepname+=("${FAILNAME[$i]:-}")
+      CONVICT_CORROBORATED+=("$f")
       log "C29 CORROBORATED $f — convicted again in a SECOND window (>=${CONVICT_SPREAD}s apart): RED"
     else
       CONVICT_PENDING=1; CONVICT_PENDED+=("$f"); n=$(( n + 1 ))
@@ -3086,7 +3092,7 @@ EOF
     write_stamp "$tree" "$sha" hung "$run_s" "$RETRIES" "$adv" "${SUSPECT:-tests/}"
     # ...spent EXCEPT the ones this verdict never adjudicated. A hang is a verdict about a wedged
     # SUSPECT; it exonerates no pended file, so those keep their candidacy (see conviction_clear).
-    cut_clear; conviction_clear "${CONVICT_PENDED[@]+"${CONVICT_PENDED[@]}"}"
+    cut_clear; conviction_clear "${CONVICT_PENDED[@]+"${CONVICT_PENDED[@]}"}" "${CONVICT_CORROBORATED[@]+"${CONVICT_CORROBORATED[@]}"}"
     log "HUNG $(sha12 "$sha") tree=$(sha12 "$tree") suspect=${SUSPECT:-?} wedge_at=$WEDGE_AT sig=$DEATH_SIG reproduced=$REPRODUCED run_s=$run_s"
     hung_actions "$sha" "$tree"
     echo "postland-verify: HUNG $(sha12 "$sha") — ${SUSPECT:-tests/} wedged at $WEDGE_AT ($DEATH_SIG)"
@@ -3126,11 +3132,13 @@ EOF
     echo "postland-verify: GREEN $(sha12 "$sha") (${run_s}s, flakes=$NFLAKE)"
   else
     write_stamp "$tree" "$sha" red "$run_s" "$RETRIES" "$adv" "${FAILING[@]}"
-    # ...spent EXCEPT the ones this verdict never adjudicated. THE SHARPEST CASE IN THE FILE: when one
-    # file corroborates and another pends in the same corroborate_convictions loop, FAILING is
-    # non-empty, so control arrives HERE — and the unscoped wipe deleted the pending row written
-    # seconds earlier by the same loop. Measured 7 times (see conviction_clear).
-    cut_clear; conviction_clear "${CONVICT_PENDED[@]+"${CONVICT_PENDED[@]}"}"
+    # ...spent EXCEPT the ones this verdict OBSERVED — pended AND convicted alike. THE SHARPEST CASE
+    # IN THE FILE: when one file corroborates and another pends in the same corroborate_convictions
+    # loop, FAILING is non-empty, so control arrives HERE — and the unscoped wipe deleted the pending
+    # row written seconds earlier by the same loop. Measured 7 times (see conviction_clear). C29c
+    # adds the convicted half for the same reason: a RED confirms those files, and spending their
+    # rows is what made a chronic suite red only every OTHER sweep (the period-2 oscillation).
+    cut_clear; conviction_clear "${CONVICT_PENDED[@]+"${CONVICT_PENDED[@]}"}" "${CONVICT_CORROBORATED[@]+"${CONVICT_CORROBORATED[@]}"}"
     log "RED $(sha12 "$sha") failing=${FAILING[*]} run_s=$run_s retries=$RETRIES flakes=$NFLAKE sc_adv=$adv"
     red_actions "$sha" "${FAILING[0]}"
     echo "postland-verify: RED $(sha12 "$sha") — ${FAILING[*]}"
@@ -3289,9 +3297,35 @@ cut_clear() { rm -f "$CUTS" 2>/dev/null || true; }
 # never moved, only the evidence being thrown away.
 #
 # So the clear is SCOPED BY ARGUMENT: no arguments ⇒ wipe whole (the green path, byte-identical
-# behaviour); arguments ⇒ preserve exactly those files' rows and spend every other. Callers pass the
-# files this verdict did NOT adjudicate, which is precisely CONVICT_PENDED — the names the run has
-# already logged as awaiting a second window. Nothing new is recorded and no run is scheduled.
+# behaviour); arguments ⇒ preserve exactly those files' rows and spend every other. Nothing new is
+# recorded and no run is scheduled.
+#
+# ── C29c: …AND THE CONVICTED ROWS ARE PRESERVED TOO (2026-09-07, item 56b39811eddc) ───────────────
+# C29b passed CONVICT_PENDED alone, reading its own sentence as being about file B. But "a RED
+# exonerates nothing" covers file A with equal force: a RED does not exonerate A, it CONFIRMS A. The
+# run appended A's row in conviction_observe and then deleted it at the verdict site, seconds later,
+# in the same call chain — destroying the freshest evidence in the store about a file it had just
+# proven guilty.
+#
+# THE COST IS A PERIOD-2 OSCILLATION, and it is why the RED population looked unstable. A file that
+# keeps failing can never hold two consecutive windows: corroborate ⇒ RED ⇒ row spent ⇒ next sweep it
+# starts from zero and PENDS ⇒ the sweep after that it corroborates again. So a chronic suite reds
+# every OTHER sweep, and the reds alternate between two halves of ONE stable population. MEASURED on
+# this host's own stamps, 21 consecutive RED pairs 2026-09-04 → 09-08: lag-1 overlap 0.00 in ALL 21;
+# lag-2 Jaccard up to 1.00 (09-05T13:37 vs 20:55 identical, 09-05T10:23 vs 17:46 at 0.90). The same
+# file flips in the log: tests/cc-reaper.bats PENDING 21:03 → CORROBORATED 00:28 → PENDING 04:01,
+# with tests/compressor-sentinel.bats in exact antiphase. Item 56b39811eddc read that as "membership
+# rerolls each run, so per-suite fixes chase samples" — the population is stable; the REPORTING
+# alternates. Its own falsifier ("two consecutive REDs sharing >50%") was UNSATISFIABLE by
+# construction: a ladder file red at sweep N is structurally barred from being red at N+1.
+#
+# WHY THIS DOES NOT RE-OPEN THE STALE-ROW TRAP the first paragraph exists to prevent. Spending the
+# CONVICTED row was never what closed it — the "not in the keep list ⇒ spent" property is, and that
+# property is untouched here. A file that gets fixed stops failing, so it is neither pended nor
+# corroborated on the next verdict, and its rows are spent at that very site exactly as before. The
+# only rows this preserves belong to files the run OBSERVED FAILING seconds earlier, which is the
+# opposite of stale. A convicted file therefore now carries precisely the exposure a pended file has
+# carried since C29b — no new class — and CONVICT_TTL still bounds every row at 24h.
 conviction_clear() { # [<file>…] — files to PRESERVE; no args ⇒ wipe whole (green: a real exoneration)
   local tmp
   [ "$#" -gt 0 ] && [ -f "$CONVICTIONS" ] || { rm -f "$CONVICTIONS" 2>/dev/null || true; return 0; }

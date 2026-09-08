@@ -980,9 +980,14 @@ PS
   # the fixture's entire job: it is what makes run 2 corroborate A while B is still on its first.
   c="$BATS_TEST_TMPDIR/late-counter"
   add_stateful_test latebad "$(printf '#!/bin/bash\nC="%s"\nn=$(cat "$C" 2>/dev/null || echo 0)\nn=$((n+1))\necho "$n" > "$C"\n[ "$n" -le 1 ] && exit 0\nexit 1\n' "$c")"
-  push_commit "two suites, one failing a window ahead of the other"
+  # C — the MIRROR of B, and the control for C29c: it fails in window 1 (earning a row) and passes
+  # from window 2 on, so the window-2 RED observes it neither as pending nor as convicted. Its row is
+  # the one a correctly-scoped clear must still spend.
+  e="$BATS_TEST_TMPDIR/early-counter"
+  add_stateful_test earlybad "$(printf '#!/bin/bash\nC="%s"\nn=$(cat "$C" 2>/dev/null || echo 0)\nn=$((n+1))\necho "$n" > "$C"\n[ "$n" -le 1 ] && exit 1\nexit 0\n' "$e")"
+  push_commit "three suites: one failing throughout, one a window behind, one a window ahead"
   tree="$(origin_tree)"
-  run bash "$SUT" --run-if-needed                  # window 1: A fails (pends), B passes
+  run bash "$SUT" --run-if-needed                  # window 1: A and C fail (pend), B passes
   run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
   [ "$output" = "cut" ]                            # precondition, asserted not assumed
   second_window                                    # window 2: A corroborates => RED, B pends
@@ -999,10 +1004,19 @@ PS
   # — the LHS is dead. Caught by the land's own dead-assertion ratchet on this very diff.
   [ "$status" -eq 0 ]
   [ "$output" -ge 1 ]                              # B's candidacy SURVIVES the red
-  # ...and the other half of "only what it adjudicated": A was convicted, so A's rows ARE spent.
-  # Without this the test would also pass if the fix simply stopped clearing anything, which is the
-  # stale-row trap conviction_clear's first paragraph exists to prevent.
+  # C29c INVERTS THE OTHER HALF, and the inversion is the point. This read `= 0` until 2026-09-07:
+  # A was convicted, so A's rows were spent. That assertion PINNED the defect — a chronic suite whose
+  # row is spent at its own verdict restarts from zero and can only red every OTHER sweep, which is
+  # the period-2 oscillation item 56b39811eddc measured (lag-1 overlap 0.00 across 21 consecutive RED
+  # pairs, lag-2 up to 1.00). A RED does not exonerate A; it CONFIRMS A. So A's row survives too.
   run grep -c 'tests/alwaysbad.bats' "$led"
+  [ "$status" -eq 0 ]
+  [ "$output" -ge 1 ]                              # A's row SURVIVES its own conviction (C29c)
+  # ...and the guard the old `= 0` was really buying — that the fix did not simply stop clearing
+  # anything — is now carried by its correct subject: a file this run did NOT observe. C fails in
+  # window 1 only, so at THIS verdict it is neither pended nor convicted, and its row must be spent.
+  # That "unobserved ⇒ spent" property, not the convicted spend, is what closes the stale-row trap.
+  run grep -c 'tests/earlybad.bats' "$led"
   [ "$output" = "0" ]
 }
 
@@ -1032,6 +1046,41 @@ PS
   [ "$output" = "red" ]                            # unscoped-wipe answer here is `cut`: B re-pends
   run jq -r '.failing | join(",")' "$CC_POSTLAND_DIR/stamps/$t2.json"
   [ "${output#*latebad}" != "$output" ]            # ...and it is B that reds, off the preserved row
+}
+
+@test "C29c: a chronic suite reds in CONSECUTIVE sweeps (the period-2 oscillation)" {
+  # THE FALSIFIER ITEM 56b39811eddc PROPOSED, MADE EXECUTABLE — and the reason it could never fire in
+  # production. That item read three consecutive full-corpus REDs with pairwise-disjoint failing sets
+  # and concluded the population "rerolls each run", so per-suite fixes were chasing samples. The
+  # population is stable; the REPORTING alternated. Measured on this host's stamps over 21 consecutive
+  # RED pairs (2026-09-04 → 09-08): lag-1 overlap 0.00 in ALL 21, lag-2 Jaccard up to 1.00 — a period-2
+  # oscillation, which is a signature, not noise. Cause: the RED spent the convicted file's row at its
+  # own verdict site, so the file restarted from zero and could only re-pend on the next sweep.
+  #
+  # So "two consecutive REDs sharing >50%" was UNSATISFIABLE BY CONSTRUCTION: a ladder-convicted file
+  # red at sweep N was structurally barred from being red at N+1, however broken it was. This test is
+  # that falsifier as an assertion — ONE file, failing from the first window on, must red TWICE RUNNING.
+  printf '@test "f" { false; }\n' > "$R/tests/alwaysbad.bats"
+  push_commit "one suite failing from the first window on"
+  # Pinned for the reason the CONVERGES test above pins it: this fixture takes three sweeps, and a
+  # cool-off refusal on an unrelated constant would red it for a reason unrelated to corroboration.
+  export CC_POSTLAND_CUT_MAX=99
+  t1="$(origin_tree)"
+  run bash "$SUT" --run-if-needed                  # window 1: pends
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$t1.json"
+  [ "$output" = "cut" ]                            # precondition, asserted not assumed
+  second_window                                    # window 2: corroborates => RED
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$t1.json"
+  [ "$output" = "red" ]                            # precondition
+  printf '# retarget\n' >> "$R/tests/alwaysbad.bats"
+  push_commit "a new tree, the same suite still failing"
+  t2="$(origin_tree)"
+  run bash "$SUT" --run-if-needed                  # THE VERY NEXT SWEEP
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$t2.json"
+  # PRE-FIX THIS IS `cut`: the RED above spent A's row, so A starts from zero and merely re-pends.
+  [ "$output" = "red" ]
+  run jq -r '.failing | join(",")' "$CC_POSTLAND_DIR/stamps/$t2.json"
+  [ "${output#*alwaysbad}" != "$output" ]          # ...and it is the SAME file, two sweeps running
 }
 
 @test "C29b CONTROL: a GREEN still spends the ledger WHOLE (green on both arms, by design)" {
@@ -1068,6 +1117,11 @@ PS
   [ "$output" = "2" ]                              # the two that adjudicate nothing about a pending
   run grep -c 'cut_clear; conviction_clear  ' "$SUT"
   [ "$output" = "1" ]                              # ...and exactly one bare call: the green
+  # C29c: both non-green sites must also pass the CONVICTED names. Without this the census would
+  # stay green if a later edit dropped that second argument, restoring the period-2 oscillation
+  # while every count above still read 3/2/1.
+  run grep -c 'conviction_clear "\${CONVICT_PENDED\[@\].*\${CONVICT_CORROBORATED\[@\]' "$SUT"
+  [ "$output" = "2" ]
 }
 
 @test "C29: a DETERMINISTIC red is never delayed — bash -n convicts in ONE window" {
