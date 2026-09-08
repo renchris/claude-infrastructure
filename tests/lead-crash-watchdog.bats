@@ -274,19 +274,34 @@ mk_jetsam() { # $1=name-suffix $2=epoch its report was written
   [ "$(cause s_live)" = "jetsam-oom" ]
 }
 
-@test "auto: the death epoch resolves from the CLOSE-RECORD (exact exit instant, not a proxy)" {
-  # <pid>-<epoch>.json is named at the moment the binary exits. An unmappable exit_code falls through
-  # to the ladder, so the jetsam leg is reached and must use that exact epoch — here an hour ago,
-  # while the only report is fresh ⇒ no attribution.
-  local died; died=$(( $(date +%s) - 3600 ))
+@test "auto: the death epoch is the record's ended_at, NOT the epoch in its file name" {
+  # CORRECTED 2026-09-08. This arm used to assert that `<pid>-<epoch>.json` is "named at the moment
+  # the binary exits", and pinned that epoch as the anchor. It is the session's START: bin/cc-close-
+  # attrib builds the name from START_EPOCH, taken before the binary is even exec'd. Measured over
+  # the 1,831 live records carrying both stamps, the median session lives 43.5 min and 87.7% outlive
+  # the ±6-min jetsam window this anchor feeds — so the old contract judged the large majority of
+  # backfilled deaths against their BIRTH. The record's own `ended_at` is the death instant.
+  #
+  # The fixture pins BOTH other anchors a full day away from `ended_at`, so neither the file name nor
+  # the transcript-mtime fallback can produce the verdict by accident.
+  local died born died_iso
+  died=$(( $(date +%s) - 3600 ))
+  born=$(( died - 86400 ))
+  died_iso=$(TZ=UTC date -j -f %s "$died" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$died" +%Y-%m-%dT%H:%M:%SZ)
   export CC_CLOSE_RECORDS_DIR="$BATS_TEST_TMPDIR/close"; mkdir -p "$CC_CLOSE_RECORDS_DIR"
-  printf '{"exit_code":"weird","signal":""}\n' > "$CC_CLOSE_RECORDS_DIR/4242-$died.json"
+  printf '{"exit_code":"weird","signal":"","ended_at":"%s"}\n' "$died_iso" \
+    > "$CC_CLOSE_RECORDS_DIR/4242-$born.json"
   mk_tx s_auto1 "DISPOSITION: CLOSE — this pane becomes the successor"
+  set_mtime "$CC_ACCOUNT_BASES/projects/proj/s_auto1.jsonl" "$born"
   mk_jetsam recent2 "$(date +%s)"
-  [ "$(cls_at s_auto1 4242 auto)" = "RECYCLE" ]
-  # ...and a report near the recorded exit instant DOES attribute, proving the epoch was actually read
+  [ "$(cls_at s_auto1 4242 auto)" = "RECYCLE" ]        # a fresh report is nowhere near the death
+  # a report AT the recorded ended_at attributes, proving the stamp was actually read
   rm -f "$CC_JETSAM_DIRS"/*.ips; mk_jetsam athand2 "$(( died + 30 ))"
   [ "$(cause_at s_auto1 4242 auto)" = "jetsam-oom" ]
+  # …and one at the FILE NAME's epoch — the old contract's answer, and the transcript mtime too —
+  # does not. This is the half that goes red if the anchor ever slips back.
+  rm -f "$CC_JETSAM_DIRS"/*.ips; mk_jetsam atborn2 "$(( born + 30 ))"
+  [ "$(cause_at s_auto1 4242 auto)" != "jetsam-oom" ]
 }
 
 @test "auto: with no close-record the TRANSCRIPT MTIME anchors the death (backfill's usual case)" {

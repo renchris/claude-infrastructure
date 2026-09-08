@@ -141,12 +141,53 @@ find_close_record() {
 }
 
 # Read one scalar field from a close-record without requiring jq (matches "key":123 or "key":"v").
+#
+# ON THE MISSING-KEY PATH, which two of this file's newer callers now take (`record_state` is absent
+# from all 1,831 records written before 2026-09-08, and `ended_at` from every hand-written fixture):
+# the grep exits 1, pipefail promotes it, and `v=$(…)` therefore carries rc 1 under this file's
+# `set -e`. That is deliberately NOT guarded with `|| true`. Measured 2026-09-08 by removing the
+# guard and re-running the whole suite: every call site here reaches this helper from either an `if`
+# CONDITION (record_is_orphaned) or a command substitution feeding an assignment
+# (resolve_death_epoch), and `set -e` is suspended in both — the abort has no reachable call site, so
+# a guard against it would be defensive code with no control that can fail. A future BARE-STATEMENT
+# call would be the one shape that aborts; add the guard then, with a test that goes red without it.
 close_record_field() {
   local f="$1" key="$2" v
   [[ -f "$f" ]] || return 0
   v=$(grep -oE "\"$key\":(\"[^\"]*\"|[0-9]+)" "$f" 2>/dev/null | head -1)
   v=${v#*:}; v=${v#\"}; v=${v%\"}
   printf '%s' "$v"
+}
+
+# record_is_orphaned <record-path> → 0 iff the record is OPEN and the wrapper that owns it is GONE.
+#
+# bin/cc-close-attrib now pre-registers its record as `"record_state":"open"` the moment the child
+# pid is known and overwrites it `"closed"` on its exit path. An `open` record that outlives its
+# wrapper is therefore a POSITIVE fact — the wrapper was running and was destroyed before it could
+# reach write_record — and that is the whole content of the claim. It says nothing about WHAT killed
+# it, deliberately: a guessed cause is worse than the catch-all, which at least advertises that it
+# does not know.
+#
+# The liveness half is what keeps it a fact instead of a race. The wrapper writes its record BEFORE
+# it exits, so "wrapper gone" implies "write_record already ran, or was prevented from running".
+# While the wrapper is still alive we are inside the millisecond window between the child's death
+# and the record's close, so we ABSTAIN and the ladder falls through exactly as before — a false
+# CRASH pages, and this arm must never manufacture one. `ppid` in the record is the wrapper's own
+# $$; a reused pid reads ALIVE and also abstains, which is the safe direction.
+#
+# Residual, stated rather than hidden: if write_record itself failed (a full disk, a printf error)
+# the record stays open and this reads `killed-before-report` for a session that in fact exited.
+# Every step in that writer is tmp+mv guarded, so the case is vanishingly rare, and the claim it
+# produces — "no exit status was ever recorded" — is still true of it.
+record_is_orphaned() {
+  local f="$1" st wp
+  [[ -f "$f" ]] || return 1
+  st=$(close_record_field "$f" record_state)
+  [[ "$st" == "open" ]] || return 1
+  wp=$(close_record_field "$f" ppid)
+  case "$wp" in ''|*[!0-9]*) return 1 ;; esac    # unreadable owner ⇒ never claim
+  if kill -0 "$wp" 2>/dev/null; then return 1; fi
+  return 0
 }
 
 # marker_owns_sid <marker-file> <sid> → 0 iff this teardown marker is evidence about THIS session.
@@ -257,8 +298,9 @@ jetsam_near_death() { # $1=death epoch → 0 iff a JetsamEvent report lies withi
 # backfill into a silent no-op that still printed a confident summary.
 #
 # Disk evidence instead, most precise first:
-#   1. the close-record epoch — the launcher's exec-wrapper names it <pid>-<epoch>.json at the moment the
-#      binary exits. This is the exact death instant, not a proxy.
+#   1. the close-record's `ended_at` — written by the exec-wrapper at the moment it reaped the binary.
+#      This is the exact death instant, not a proxy. (NOT the epoch in the FILE NAME: that is the
+#      session's START — see the block below, which this line used to get wrong.)
 #   2. the transcript mtime — its last write is the last thing the session did before dying. Available
 #      for essentially every historical death, which is what backfill needs.
 #   3. now — the LIVE daemon's answer. It detects within one 30s poll, far inside a ±6-min window, and
@@ -266,13 +308,30 @@ jetsam_near_death() { # $1=death epoch → 0 iff a JetsamEvent report lies withi
 #      an old transcript but died just now, and anchoring to the mtime would MISS its real jetsam report.
 # So the live path (no argument) keeps using now, and backfill asks for `auto` to walk 1→2→3.
 resolve_death_epoch() { # $1=sid  $2=pid  → epoch on stdout
-  local sid="$1" pid="${2:-}" cr base ep t mt
+  local sid="$1" pid="${2:-}" cr ep t mt
   if [[ -n "$pid" ]]; then
     cr=$(find_close_record "$pid") || cr=""
     if [[ -n "$cr" ]]; then
-      base=$(basename "$cr" .json); ep="${base#*-}"          # <pid>-<epoch>.json; pid holds no dash
-      case "$ep" in ''|*[!0-9]*) ep="" ;; esac
-      [[ -n "$ep" ]] && { printf '%s' "$ep"; return 0; }
+      # 🚨 THE FILENAME EPOCH IS THE SESSION'S **START**, NOT ITS DEATH (corrected 2026-09-08).
+      # This block used to read `<pid>-<epoch>.json` and call it "the exact death instant, not a
+      # proxy". bin/cc-close-attrib names the file `${rpid}-${START_EPOCH}.json` — START_EPOCH is
+      # taken before the binary is even exec'd — so the anchor was the session's BIRTH. Measured
+      # over the 1,831 live close-records carrying both stamps, the median session lives 43.5 min
+      # and 87.7% live longer than the ±6-min jetsam window this epoch feeds, so the anchor missed
+      # its window for the large majority of backfilled deaths. (One sample: pid 5148, filename
+      # epoch 2026-09-08T00:04:10Z, actual death 02:02:57Z — off by 1h58m.)
+      # The record's own `ended_at` IS the death instant, so read that instead. An OPEN record has
+      # no `ended_at` by construction — we genuinely do not know when it ended — and correctly falls
+      # through to the transcript mtime below rather than asserting its start time as its death.
+      ep=$(close_record_field "$cr" ended_at)
+      if [[ -n "$ep" ]]; then
+        # BSD date first (this fleet is Darwin), GNU as the portable fallback; TZ pinned because
+        # both parse the naked stamp in LOCAL time otherwise and the stamp is UTC.
+        ep=$(TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%SZ' "$ep" +%s 2>/dev/null \
+             || date -u -d "$ep" +%s 2>/dev/null || true)
+        case "$ep" in ''|*[!0-9]*) ep="" ;; esac
+        [[ -n "$ep" ]] && { printf '%s' "$ep"; return 0; }
+      fi
     fi
   fi
   t=$(find_transcript "$sid" 2>/dev/null || true)
@@ -289,7 +348,7 @@ classify_death() {
   # $3 = when this session died, for jetsam attribution: an EPOCH, the literal `auto` (derive from disk —
   # what cc-crash-report --backfill passes, since its deaths are historical), or omitted ⇒ NOW, which is
   # correct for the live daemon and is what every pre-existing caller gets unchanged.
-  local sid="$1" pid="${2:-}" death="${3:-}" t body kb=0 recs=0 ec=""
+  local sid="$1" pid="${2:-}" death="${3:-}" t body kb=0 recs=0 ec="" cr_open=""
   if [[ "$death" == "auto" ]]; then death=$(resolve_death_epoch "$sid" "$pid"); fi
   case "$death" in ''|*[!0-9]*) death=$(date +%s) ;; esac
   # 0) CLOSE-RECORD FIRST — per-pid ground truth OUTRANKS every heuristic below (incl. jetsam:
@@ -308,6 +367,11 @@ classify_death() {
         fi
         printf '%s\t%s\t%s' "$cls" "${kb:-0}" "${recs:-0}"; return 0
       fi
+      # No usable exit code. If the record is OPEN and its wrapper is gone, remember that — arm 3
+      # turns it into an attributed cause. It is NOT decided here: an open record must not outrank
+      # jetsam or a deliberate teardown (a kill that lands mid-recycle is still a recycle's ending,
+      # and a false CRASH pages), so it only ever refines what would otherwise be the catch-all.
+      if record_is_orphaned "$cr"; then cr_open="$cr"; fi
     fi
   fi
   t=$(find_transcript "$sid") || { printf 'CRASH\tno-transcript\t0\t0'; return 0; }
@@ -403,6 +467,12 @@ classify_death() {
   # left no teardown marker. Naming it is what makes the row actionable — `abrupt-unknown` reads as
   # "we have no idea", while external-sigterm says WHICH question to ask (who sent it).
   [[ "$ec" == "143" ]] && cause="external-sigterm"
+  # …and an ORPHANED OPEN RECORD outranks both guesses above, because it is not a guess. `abrupt-
+  # unknown` and `suspected-oom-large-context` are both inferences from what is MISSING (no record;
+  # a big transcript); this one is read off a file the wrapper wrote while it was alive. It answers
+  # a different question from `external-sigterm` — that arm needs an exit code, which an open record
+  # by construction does not have — so the two can never contend.
+  [[ -n "$cr_open" ]] && cause="killed-before-report"
   printf 'CRASH\t%s\t%s\t%s' "$cause" "${kb:-0}" "${recs:-0}"
 }
 
@@ -896,6 +966,9 @@ death_page_line() {
   case "$cause" in
     external-sigterm) what="was KILLED by an external SIGTERM (exit ${ec:-143}, signal ${sig:-15}) — it did NOT exit" ;;
     jetsam-oom)       what="was KILLED by the OOM killer (jetsam)" ;;
+    # The one thing this cause DOES say is that the launcher wrapper was alive and was destroyed
+    # with it, so the exit status was never written — which is why no exit code appears here.
+    killed-before-report) what="was DESTROYED before its launcher could record an exit status (its close-record is still open) — it did NOT exit" ;;
     *)                what="died abruptly (cause: $cause${ec:+, exit $ec}${sig:+, signal $sig})" ;;
   esac
   printf 'SESSION DEATH — %s %s. Lost: /goal=%s, in-flight workflow dir(s)=%s. Its pane is still open at a live shell and looks EXACTLY like a clean /exit, so nothing on screen says this happened. Recover with cc-husk-sweep --resume (it resolves the session AND its account; the pane'"'"'s own printed claude --resume line uses the default account and cannot see another store'"'"'s transcript). Evidence: ~/.claude/logs/claude-crashes.jsonl (pid %s) + ~/.claude/logs/close-records/%s-*.json\n' \

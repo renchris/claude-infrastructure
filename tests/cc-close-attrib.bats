@@ -323,8 +323,126 @@ rec() { ls -1t "$CC_CLOSE_RECORDS_DIR"/*.json 2>/dev/null | head -1; }
   wait "$wpid" 2>/dev/null || true
 
   grep -q "FATAL-HEAP-OOM-EVIDENCE" "$sterr"      # the evidence outlived the whole group
-  # shellcheck disable=SC2012
-  [ -z "$(ls -1 "$CC_CLOSE_RECORDS_DIR"/*.json 2>/dev/null || true)" ]   # and there IS no record
+
+  # (x) …AND THE RECORD SURVIVES TOO, OPEN. Until 2026-09-08 this line asserted the opposite —
+  # `there IS no record` — because write_record only ever ran on the exit path. That absence was
+  # the entire attribution gap: in September, 151 of 151 `abrupt-unknown` crashes carried no
+  # close-record and every crash that carried one was attributed. The wrapper now pre-registers the
+  # record open, so a group SIGKILL leaves a PARTIAL record instead of none.
+  local r; r="$(rec)"
+  [ -n "$r" ]
+  grep -q '"record_state":"open"' "$r"
+  grep -q '"ended_at":""' "$r"                    # we do not know when it ended — and do not guess
+  grep -q '"exit_code":null' "$r"                 # a bare JSON null: reads as ABSENT to every consumer
+  grep -q "\"stderr_log\":\"$sterr\"" "$r"        # …and it carries the pointer to the evidence above
+}
+
+@test "(x) an open record's null exit_code reads as ABSENT to the field reader" {
+  # The open record must be invisible to every pre-existing consumer, or the new state would change
+  # how already-attributed deaths classify. `null` is not "key":"…" and not "key":<digits>, so
+  # close_record_field misses it — the same empty string it returns when there is no file at all.
+  mkdir -p "$CC_CLOSE_RECORDS_DIR"
+  printf '{"pid":8100,"ppid":8101,"ended_at":"","exit_code":null,"signal":"","record_state":"open"}\n' \
+    > "$CC_CLOSE_RECORDS_DIR/8100-100.json"
+  run bash "$HOOK" --close-fields 8100
+  [ "$status" -eq 0 ]
+  # EXIT<TAB>SIGNAL<TAB>PATH<TAB>VERSION — the exit field must be empty, not "null"
+  [ "$(printf '%s' "$output" | cut -f1)" = "" ]
+}
+
+@test "(x) a clean exit overwrites the open record with a CLOSED one" {
+  # The open phase must not survive its own session: a stale `open` record would read as a kill.
+  local stub="$BATS_TEST_TMPDIR/stub"
+  mk_stub "$stub" 'exit 0'
+  run bash "$WRAP" "$stub"
+  [ "$status" -eq 0 ]
+  local r; r="$(rec)"
+  grep -q '"record_state":"closed"' "$r"
+  ! grep -q '"record_state":"open"' "$r" || false
+  grep -q '"exit_code":0' "$r"
+  # shellcheck disable=SC2012  # our own fixed pattern in a sandboxed dir; the COUNT is the assertion
+  [ "$(ls -1 "$CC_CLOSE_RECORDS_DIR"/*.json | wc -l | tr -d ' ')" -eq 1 ]   # ONE file, overwritten
+}
+
+@test "(x) watchdog names an orphaned OPEN record killed-before-report" {
+  mkdir -p "$CC_CLOSE_RECORDS_DIR" "$CC_ACCOUNT_BASES/projects/proj"
+  : > "$CC_ACCOUNT_BASES/projects/proj/sessOPEN.jsonl"
+  # ppid 2 = launchd's helper: a pid that exists but is NOT ours would read alive, so use a pid we
+  # can prove is gone. $$ + a large offset is unreliable; spawn and reap one instead.
+  local dead; dead=$( bash -c 'echo $$' ); while kill -0 "$dead" 2>/dev/null; do sleep 0.05; done
+  printf '{"pid":8110,"ppid":%s,"ended_at":"","exit_code":null,"record_state":"open"}\n' "$dead" \
+    > "$CC_CLOSE_RECORDS_DIR/8110-100.json"
+  run bash "$HOOK" --classify sessOPEN 8110
+  [ "$status" -eq 0 ]
+  [[ "$output" == CRASH*killed-before-report* ]]
+}
+
+@test "(x) an OPEN record whose wrapper is STILL ALIVE is never called a kill" {
+  # The abstain half. Between the child's death and the record's close the wrapper is alive and the
+  # record is legitimately open; claiming a kill there would manufacture a false CRASH, which pages.
+  mkdir -p "$CC_CLOSE_RECORDS_DIR" "$CC_ACCOUNT_BASES/projects/proj"
+  : > "$CC_ACCOUNT_BASES/projects/proj/sessLIVE.jsonl"
+  printf '{"pid":8111,"ppid":%s,"ended_at":"","exit_code":null,"record_state":"open"}\n' "$$" \
+    > "$CC_CLOSE_RECORDS_DIR/8111-100.json"
+  run bash "$HOOK" --classify sessLIVE 8111
+  [ "$status" -eq 0 ]
+  [[ "$output" == *abrupt-unknown* ]] || false
+  [[ "$output" != *killed-before-report* ]]
+}
+
+@test "(x) killed-before-report outranks the suspected-oom SIZE guess" {
+  # `suspected-oom-large-context` is an inference from a big transcript; this is a fact read off a
+  # file the wrapper wrote. The fact wins.
+  mkdir -p "$CC_CLOSE_RECORDS_DIR" "$CC_ACCOUNT_BASES/projects/proj"
+  local t="$CC_ACCOUNT_BASES/projects/proj/sessBIG.jsonl"
+  dd if=/dev/zero of="$t" bs=1024 count=5000 2>/dev/null    # >4096 KB ⇒ the size guess would fire
+  local dead; dead=$( bash -c 'echo $$' ); while kill -0 "$dead" 2>/dev/null; do sleep 0.05; done
+  printf '{"pid":8112,"ppid":%s,"ended_at":"","exit_code":null,"record_state":"open"}\n' "$dead" \
+    > "$CC_CLOSE_RECORDS_DIR/8112-100.json"
+  run bash "$HOOK" --classify sessBIG 8112
+  [ "$status" -eq 0 ]
+  [[ "$output" == *killed-before-report* ]] || false
+  [[ "$output" != *suspected-oom-large-context* ]]
+}
+
+@test "(x) a LEGACY record missing the new keys still classifies, and prints something" {
+  # A REGRESSION PIN, not a control — it is green on both sides of this change and says so. The two
+  # new field reads (`record_state`, `ended_at`) ask legacy records for keys they have never carried,
+  # and a miss exits 1 under `set -euo pipefail`. Removing close_record_field's guard and re-running
+  # the suite left all 28 arms green, because every call site reaches it from an `if` condition or a
+  # command substitution, where set -e is suspended. This arm pins the outcome that matters — the
+  # 1,831-record legacy store keeps classifying, and a silent abort would print nothing at all.
+  mkdir -p "$CC_CLOSE_RECORDS_DIR" "$CC_ACCOUNT_BASES/projects/proj"
+  local t="$CC_ACCOUNT_BASES/projects/proj/sessLEG.jsonl"; : > "$t"
+  printf '{"pid":8113,"ppid":1,"exit_code":143,"signal":"15","version":"2.1.9"}\n' \
+    > "$CC_CLOSE_RECORDS_DIR/8113-100.json"
+  run bash "$HOOK" --classify sessLEG 8113 auto    # `auto` is what forces the ended_at read
+  [ "$status" -eq 0 ]
+  [ -n "$output" ]                                 # a silent abort prints nothing at all
+  [[ "$output" == CRASH*external-sigterm* ]]       # …and the pre-existing verdict is unchanged
+}
+
+@test "(x) the death anchor is the record's ended_at, not the START epoch in its name" {
+  # The filename epoch is START_EPOCH — the moment BEFORE the binary was exec'd. 87.7% of the 1,831
+  # live records outlive the ±6-min jetsam window this epoch feeds, so anchoring there missed the
+  # window for the large majority of backfilled deaths.
+  #
+  # THE FIXTURE PINS EVERY OTHER ANCHOR AWAY FROM NOW. resolve_death_epoch walks record → transcript
+  # mtime → now, so a fresh transcript would let the FALLBACK land on the jetsam event too and the
+  # test would pass with the bug in place (it did, until this line was added). Both the file name
+  # and the transcript mtime are therefore put 24 h in the past; only `ended_at` says "now".
+  mkdir -p "$CC_CLOSE_RECORDS_DIR" "$CC_ACCOUNT_BASES/projects/proj"
+  local t="$CC_ACCOUNT_BASES/projects/proj/sessANCH.jsonl"; : > "$t"
+  touch -t "$(date -v-1d +%Y%m%d%H%M 2>/dev/null || date -d '1 day ago' +%Y%m%d%H%M)" "$t"
+  export CC_JETSAM_DIRS="$BATS_TEST_TMPDIR/jetsam"; mkdir -p "$CC_JETSAM_DIRS"
+  local now death_iso; now=$(date -u +%s)
+  death_iso=$(TZ=UTC date -j -f %s "$now" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$now" +%Y-%m-%dT%H:%M:%SZ)
+  : > "$CC_JETSAM_DIRS/JetsamEvent-2099-01-01-000000.ips"   # mtime = now = the recorded ended_at
+  printf '{"pid":8114,"ppid":1,"started_at":"x","ended_at":"%s","exit_code":null,"record_state":"closed"}\n' \
+    "$death_iso" > "$CC_CLOSE_RECORDS_DIR/8114-$((now - 86400)).json"
+  run bash "$HOOK" --classify sessANCH 8114 auto
+  [ "$status" -eq 0 ]
+  [[ "$output" == CRASH*jetsam-oom* ]]
 }
 
 @test "a clean run that wrote no stderr leaves no log behind" {
