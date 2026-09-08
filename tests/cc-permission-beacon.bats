@@ -312,6 +312,79 @@ arch_rows() { cat "$CC_PERMARCHIVE_DIR"/*.jsonl 2>/dev/null; }
   [ "$(printf '%s' "$row" | jq -r '.cleared_tool_use_id')" = toolu_C ]
 }
 
+# ── THE INVOCATION SIGNATURE — the discriminator that is actually populated ──────────────────────
+# WHY: the D1 arm above pins that tool_use_id is CAPTURED from both sides, and it passed for five
+# weeks over a field the harness never populates. PermissionRequest ships tool_use_id as "" in 0 of
+# 3,641 archived records, so the id rule the consumer prefers could never once fire and every real
+# row fell through to the tool-NAME path the code explicitly rejects (`approved 0 · unknown 3359`
+# over 3,763 prompts). These arms pin the replacement, and each one is RED against the pre-fix
+# handler, which emits no signature at all. Every payload below therefore carries tool_use_id:""
+# EXACTLY as the live harness sends it — the point is a verdict reached without that field.
+@test "SIG: a grant is provable with NO tool_use_id — identical invocation ⇒ matching signatures" {
+  jq -nc '{session_id:"s-sig1",tool_name:"Bash",tool_input:{command:"git push --force"},cwd:"/w",tool_use_id:""}' | "$H" write
+  jq -nc '{session_id:"s-sig1",hook_event_name:"PostToolUse",tool_name:"Bash",tool_input:{command:"git push --force"},tool_use_id:"toolu_C"}' | "$H" clear
+  row="$(arch_rows | jq -c 'select(.session_id=="s-sig1")')"
+  [ -n "$row" ]
+  [ "$(printf '%s' "$row" | jq -r '.tool_use_id')" = "" ]        # the field the old rule needed
+  sb="$(printf '%s' "$row" | jq -r '.tool_sig')"
+  sc="$(printf '%s' "$row" | jq -r '.cleared_tool_sig')"
+  [ -n "$sb" ] && [ "$sb" != null ] || false
+  [ "$sb" = "$sc" ]
+}
+
+@test "SIG: a COLLATERAL clear by the same tool with a different command does NOT match" {
+  # The exact unsafe case: Bash→Bash is ~all this fleet's traffic, so tool NAMES agree here and
+  # only the invocation separates a denied `git push --force` from a later `git status`.
+  jq -nc '{session_id:"s-sig2",tool_name:"Bash",tool_input:{command:"git push --force"},cwd:"/w",tool_use_id:""}' | "$H" write
+  jq -nc '{session_id:"s-sig2",hook_event_name:"PostToolUse",tool_name:"Bash",tool_input:{command:"git status"},tool_use_id:"toolu_C"}' | "$H" clear
+  row="$(arch_rows | jq -c 'select(.session_id=="s-sig2")')"
+  [ "$(printf '%s' "$row" | jq -r '.tool_name')" = "$(printf '%s' "$row" | jq -r '.cleared_tool')" ]
+  sb="$(printf '%s' "$row" | jq -r '.tool_sig')"
+  sc="$(printf '%s' "$row" | jq -r '.cleared_tool_sig')"
+  [ -n "$sb" ] && [ -n "$sc" ] || false
+  [ "$sb" != "$sc" ]
+}
+
+@test "SIG: key ORDER in tool_input is not a difference (the canonical form sorts recursively)" {
+  # The harness has no key-order guarantee across two events. If it did not sort, an identical
+  # invocation would digest differently and a real grant would be recorded as collateral —
+  # failure in the SAFE direction, but a permanently unusable dataset all the same.
+  jq -nc '{session_id:"s-sig3",tool_name:"Write",tool_input:{file_path:"/x.ts",content:"z",opts:{b:1,a:2}},cwd:"/w",tool_use_id:""}' | "$H" write
+  jq -nc '{session_id:"s-sig3",hook_event_name:"PostToolUse",tool_name:"Write",tool_input:{opts:{a:2,b:1},content:"z",file_path:"/x.ts"},tool_use_id:""}' | "$H" clear
+  row="$(arch_rows | jq -c 'select(.session_id=="s-sig3")')"
+  sb="$(printf '%s' "$row" | jq -r '.tool_sig')"
+  # NON-VACUITY, and it is not decoration: an equality between two ABSENT fields is `null = null`,
+  # which passed against the pre-fix handler that emits no signature at all. Pinning the value
+  # present is what makes this arm test the canonicalisation instead of the absence.
+  [ -n "$sb" ] && [ "$sb" != null ] || false
+  [ "$sb" = "$(printf '%s' "$row" | jq -r '.cleared_tool_sig')" ]
+}
+
+@test "SIG: two UNREADABLE sides never digest to the same value (no grant made of two errors)" {
+  # The trap in the naive form: `printf '' | shasum` yields a perfectly good digest of the empty
+  # string, so a payload the hook could not parse would match another payload it could not parse
+  # and manufacture an approval. A canonical form is emitted only when tool_name is non-empty.
+  jq -nc '{session_id:"s-sig4",tool_input:{command:"x"},cwd:"/w"}' | "$H" write      # no tool_name
+  jq -nc '{session_id:"s-sig4",hook_event_name:"PostToolUse"}' | "$H" clear           # no tool_name
+  row="$(arch_rows | jq -c 'select(.session_id=="s-sig4")')"
+  [ -n "$row" ]                                            # the row is still archived, not dropped
+  [ "$(printf '%s' "$row" | jq -r '.tool_sig')" = "" ]
+  [ "$(printf '%s' "$row" | jq -r '.cleared_tool_sig')" = "" ]
+}
+
+@test "SIG: an over-long payload keeps its signatures — truncation drops INPUT, never attribution" {
+  # The truncated fallback used to drop cleared_tool and cleared_tool_use_id outright, so an
+  # over-cap prompt was unattributable by construction. Attribution is 32 bytes and always fits.
+  big="$(python3 -c 'print("x"*4000)')"
+  jq -nc --arg c "$big" '{session_id:"s-sig5",tool_name:"Bash",tool_input:{command:$c},cwd:"/w",tool_use_id:""}' | "$H" write
+  jq -nc --arg c "$big" '{session_id:"s-sig5",hook_event_name:"PostToolUse",tool_name:"Bash",tool_input:{command:$c},tool_use_id:""}' | "$H" clear
+  row="$(arch_rows | jq -c 'select(.session_id=="s-sig5")')"
+  [ "$(printf '%s' "$row" | jq -r '.tool_input_truncated')" = true ]
+  sb="$(printf '%s' "$row" | jq -r '.tool_sig')"
+  [ -n "$sb" ] && [ "$sb" != null ] || false
+  [ "$sb" = "$(printf '%s' "$row" | jq -r '.cleared_tool_sig')" ]
+}
+
 @test "D5: the archive gets its own heartbeat, so dir-exists means the archiver RAN" {
   # Without this, ARCHDIR was created only by an append, so a running archiver with nothing to
   # record left no evidence and the consumer's three-state split was mapped the wrong way round.

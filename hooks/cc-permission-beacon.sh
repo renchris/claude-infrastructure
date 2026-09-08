@@ -112,27 +112,74 @@ arch_beat() {
 #   • The classifier therefore can never be tuned on real data, which is Step 3's named guardrail.
 # So the record is appended to a durable append-only JSONL before it is removed.
 #
-# `resolved_by` + `tool_use_id`/`cleared_tool_use_id` are the load-bearing fields for that tuning.
-# The tempting shortcut — "PostToolUse only fires on the grant path, so PostToolUse means approved"
-# — is FALSE: PostToolUse fires for every tool, not only the prompted one, so after a DENIAL the
-# turn can continue, run some other tool, and have THAT tool's PostToolUse clear this still-pending
-# beacon, archiving the refusal as an approval. Comparing tool NAMES does not rescue it either:
-# this fleet's traffic is overwhelmingly Bash, so a denied `git push --force` cleared by a later
-# `git status` matches on name and is still wrong. Only the INVOCATION id can prove a grant; see
-# `archive`. None of these fields is recoverable from anywhere else after the fact.
+# `resolved_by` + the INVOCATION SIGNATURE (`tool_sig`/`cleared_tool_sig`) are the load-bearing
+# fields for that tuning. The tempting shortcut — "PostToolUse only fires on the grant path, so
+# PostToolUse means approved" — is FALSE: PostToolUse fires for every tool, not only the prompted
+# one, so after a DENIAL the turn can continue, run some other tool, and have THAT tool's
+# PostToolUse clear this still-pending beacon, archiving the refusal as an approval. Comparing tool
+# NAMES does not rescue it either: this fleet's traffic is overwhelmingly Bash, so a denied
+# `git push --force` cleared by a later `git status` matches on name and is still wrong. Only the
+# specific INVOCATION can prove a grant; see `archive`. None of these fields is recoverable from
+# anywhere else after the fact.
 #
 # ATOMICITY: many sessions append to one file concurrently. A single small write(2) under O_APPEND
 # does not interleave, so the record is length-BOUNDED (ARCH_MAXLEN, default 3500 B — comfortably
 # inside the 4 KiB atomic-append regime) and over-long payloads degrade to a truncated summary
 # rather than risking a torn line. Truncation is RECORDED (`tool_input_truncated`), never silent.
 #
-# TOOL_USE_ID, not the tool NAME, is what can prove a grant. Name-matching was the first cut and it
-# is a guess that fails in the unsafe direction: the dominant traffic here is Bash→Bash, so a DENIED
-# `git push --force` followed by any other Bash command in the same turn yields
-# cleared_tool == tool_name == "Bash", and the refusal is recorded as an approval. tool_use_id names
-# the specific INVOCATION (hooks/curl-gate.py:403 reads it from a live payload), so an exact match is
-# evidence and nothing else is. Absence is reported as UNKNOWN, never approved — a split that is
-# honestly empty beats one that is confidently wrong.
+# THE INVOCATION, not the tool NAME, is what can prove a grant. Name-matching was the first cut and
+# it is a guess that fails in the unsafe direction: the dominant traffic here is Bash→Bash, so a
+# DENIED `git push --force` followed by any other Bash command in the same turn yields
+# cleared_tool == tool_name == "Bash", and the refusal is recorded as an approval.
+#
+# 🚨 THE SECOND CUT — `tool_use_id` — WAS DEAD ON ARRIVAL, and it looked healthy for five weeks.
+# It reads the id of the prompted invocation off the PermissionRequest payload and matches it
+# against PostToolUse's. PostToolUse's half is populated (3,650 of 3,757 archived rows). The
+# PermissionRequest half is ALWAYS the empty string — 0 of 3,641 archived records and 0 in the live
+# payload captured 2026-09-06 (docs/plans/HOOK_SURFACE_100P.md § 3a row 16). `tid and cid` therefore
+# never held, the rule never once fired, and the consumer silently fell through to the tool-NAME
+# path this comment block exists to reject: bin/cc-permission-audit read `approved 0 · unknown 3359`
+# over 3,763 real prompts and that zero was an artifact of the instrument, not a fact about grants.
+# The id exists in the world — the transcript's own `tool_use` block carries `toolu_…`, and
+# PreToolUse/PostToolUse both ship it — it is simply absent from THIS event.
+#
+# What IS populated on both events is the invocation itself: `tool_name` + `tool_input`. Measured
+# 2026-09-07 against five archived prompts and their sessions' transcripts, the `tool_input` this
+# beacon stores from PermissionRequest is key-for-key and value-for-value the same object as the
+# transcript's `tool_use.input`, which is what PostToolUse also carries. So the discriminator is the
+# SIGNATURE of the invocation — sha256 over the canonical (recursively key-sorted) form of
+# {tool_name, tool_input}, stored as `tool_sig` (prompt side) and `cleared_tool_sig` (clearing side).
+# Equal signatures mean the very invocation that was gated is the one that ran.
+#
+# RESIDUAL, stated rather than hidden: a signature is not an id, so a false approval is conceivable
+# — it needs a SECOND invocation with the same tool AND byte-identical input to clear the beacon in
+# the same turn. A denied command re-run identically re-prompts, which overwrites the beacon, so
+# the surviving record is the newer prompt; that is what makes the path narrow rather than routine.
+# Every other way it can fail lands on `collateral`/`unknown`, i.e. the safe direction. A signature
+# is emitted only when `tool_name` is non-empty, so two unparseable payloads can never digest to the
+# same empty canonical form and read as a match — the failure mode a naive `printf | shasum` has.
+# `tool_use_id`/`cleared_tool_use_id` are still recorded and the consumer still PREFERS an id match
+# when both are present: if a later binary starts populating the field, the stronger rule takes over
+# with no change here, and until then the archive is the standing evidence that it does not.
+# Absence of both is reported as UNKNOWN, never approved — a split that is honestly empty beats one
+# that is confidently wrong.
+# The canonical form of an invocation, identical on both events. `jq -S` sorts object keys
+# RECURSIVELY on output, so two payloads that differ only in key order digest the same. The guard
+# is the load-bearing half: `empty` when tool_name is absent means an unparseable or non-tool
+# payload produces NO canonical form at all, so it can never be digested into a value that matches
+# another unparseable payload. Without it, two failures would both hash the empty string and be
+# read as proof of a grant — a false approval manufactured out of two errors.
+CANON='if (.tool_name // "") == "" then empty else {n:.tool_name, i:(.tool_input // {})} end'
+
+sig_of() { # $1 = a canonical line (possibly empty) → 16 hex chars, or nothing at all
+  local canon="$1" h
+  [[ -z "$canon" ]] && return 0
+  h="$(printf '%s' "$canon" | shasum -a 256 2>/dev/null)" || return 0
+  h="${h%% *}"
+  [[ "$h" =~ ^[0-9a-f]{64}$ ]] || return 0        # a truncated/failed digest is NOT a signature
+  printf '%s' "${h:0:16}"
+}
+
 archive() { # $1 = the CLAIMED beacon, already moved aside so no second clear can archive it too
   local claimed="$1" rts mon line
   mkdir -p "$ARCHDIR" 2>/dev/null || return 0
@@ -149,10 +196,19 @@ archive() { # $1 = the CLAIMED beacon, already moved aside so no second clear ca
   _bi="$(printf '%s' "$INPUT" | jq -r '[(.hook_event_name // ""), (.tool_name // ""), (.tool_use_id // "")] | join("\u001f")' 2>/dev/null || true)"
   IFS=$'\x1f' read -r by ct cid <<<"$_bi" || true
 
+  # The two signatures. Costs two jq + two shasum forks, but ONLY on a real resolution — the `mv`
+  # claim above has already failed and exited for every PostToolUse with nothing pending, so the hot
+  # path never reaches here. Measured traffic: ~3.8k resolutions in five weeks.
+  local sig_b sig_c
+  sig_b="$(sig_of "$(jq -Sc "$CANON" "$claimed" 2>/dev/null || true)")"
+  sig_c="$(sig_of "$(printf '%s' "$INPUT" | jq -Sc "$CANON" 2>/dev/null || true)")"
+
   line="$(jq -c --arg sid "$SID" --arg by "${by:-unknown}" --arg ct "$ct" --arg cid "$cid" \
+      --arg sb "$sig_b" --arg sc "$sig_c" \
       --argjson rts "$rts" \
       '{session_id:$sid, ts:(.ts//$rts), resolved_ts:$rts, waited_s:($rts - (.ts//$rts)),
         resolved_by:$by, cleared_tool:$ct, cleared_tool_use_id:$cid,
+        tool_sig:$sb, cleared_tool_sig:$sc,
         tool_use_id:(.tool_use_id//""), tool_name:(.tool_name//""),
         tool_input:(.tool_input//{}), cwd:(.cwd//"")}' "$claimed" 2>/dev/null)" || return 0
   [[ -z "$line" ]] && return 0
@@ -163,9 +219,11 @@ archive() { # $1 = the CLAIMED beacon, already moved aside so no second clear ca
   local nbytes; nbytes="$(LC_ALL=C; printf %s "$line" | wc -c)"; nbytes="${nbytes// /}"
   if (( nbytes > ARCH_MAXLEN )); then
     line="$(jq -c --arg sid "$SID" --arg by "${by:-unknown}" --argjson rts "$rts" \
+        --arg sb "$sig_b" --arg sc "$sig_c" \
         --argjson cap "$((ARCH_MAXLEN / 2))" \
         '{session_id:$sid, ts:(.ts//$rts), resolved_ts:$rts, waited_s:($rts - (.ts//$rts)),
           resolved_by:$by, tool_name:(.tool_name//""), cwd:(.cwd//""),
+          tool_sig:$sb, cleared_tool_sig:$sc,
           tool_input_truncated:true,
           tool_input_summary:((.tool_input//{}|tostring)[0:$cap])}' "$claimed" 2>/dev/null)" || return 0
     [[ -z "$line" ]] && return 0
@@ -176,9 +234,11 @@ archive() { # $1 = the CLAIMED beacon, already moved aside so no second clear ca
     nbytes="$(LC_ALL=C; printf %s "$line" | wc -c)"; nbytes="${nbytes// /}"
     if (( nbytes > ARCH_MAXLEN )); then
       line="$(jq -c --arg sid "$SID" --arg by "${by:-unknown}" --arg ct "$ct" --arg cid "$cid" \
+          --arg sb "$sig_b" --arg sc "$sig_c" \
           --argjson rts "$rts" \
           '{session_id:$sid, ts:(.ts//$rts), resolved_ts:$rts, waited_s:($rts - (.ts//$rts)),
             resolved_by:$by, cleared_tool:$ct, cleared_tool_use_id:$cid,
+            tool_sig:$sb, cleared_tool_sig:$sc,
             tool_use_id:(.tool_use_id//""), tool_name:(.tool_name//""), cwd:(.cwd//""),
             tool_input_truncated:true, tool_input_summary:"<omitted: over byte cap>"}' \
           "$claimed" 2>/dev/null)" || return 1
