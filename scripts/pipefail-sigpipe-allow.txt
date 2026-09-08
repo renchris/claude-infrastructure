@@ -34,7 +34,7 @@ scripts/deathwatch-watchfile.sh	1
 scripts/desk-invariant.sh	1
 scripts/gate-manifest.sh	1
 scripts/handoff-disposition.sh	1
-scripts/handoff-fire.sh	5
+scripts/handoff-fire.sh	4
 scripts/offbox-partition.sh	1
 scripts/pane-spawn-coverage-lint.sh	1
 scripts/reap-guard.sh	1
