@@ -302,3 +302,79 @@ entries() { find "$ROOTS" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l | tr -d ' 
 # wait loop on load, no gate_admit, no sleep in the shim) rather than the substring proxy it used to
 # assert. M2 in MACHINE_CAPACITY_V2 says it in terms — *"extend it to the new shim rather than
 # duplicating policy"* — and two copies of one policy is how they drift apart.
+
+# ── the recorded waiver (backlog a0d1c69368af, 2026-09-08) ───────────────────────────────────────
+# THE DEFECT. The ceiling above is machine-wide by construction — ROOTS_DIR is one registry every
+# session on this box shares — but the switch that DISABLES it was per-invocation and silent, so a
+# limit that exists to stagger every participant could be individually opted out of by each of them.
+# Measured 2026-09-08: 20 concurrent real ship-land runs drove a 10-core box to load 323/243/154,
+# one pane confirmed it had taken the override twice, and nothing anywhere recorded that it had.
+#
+# The switch STAYS (the shim header states why an escape hatch that does not fully escape is worse
+# than none, and the nesting path needs it). What these cases pin is that taking it now COSTS
+# something: an attributed line in a machine-wide log, a stated reason, and a notice on stderr.
+#
+# The two CONTROLS are the load-bearing half. Without them a green suite could equally mean "the
+# waiver is recorded" or "this fixture logs on everything", and the second is the alarm-polarity
+# failure — a log that fires on every invocation carries as little as one that never fires.
+
+@test "waiver: taking the kill switch on a REAL run records it machine-wide, with the pid and cwd" {
+    local log="$BATS_TEST_TMPDIR/wv.jsonl"
+    run env BATS_TEST_NAME= CC_BATS_WAIVER_LOG="$log" CC_BATS_MAX_ROOTS=0 CC_BATS_REAL=/bin/echo bash "$SHIM" some.bats
+    [ -f "$log" ]
+    run grep -c '"switch":"CC_BATS_MAX_ROOTS"' "$log"
+    [ "$output" = "1" ]
+    grep -q "\"cwd\":\"$PWD\"" "$log"
+    grep -q '"argv1":"some.bats"' "$log"
+}
+
+@test "waiver: the notice reaches stderr and names the switch, so it is never silent" {
+    local log="$BATS_TEST_TMPDIR/wv.jsonl"
+    run env BATS_TEST_NAME= CC_BATS_WAIVER_LOG="$log" CC_BATS_MAX_ROOTS=0 CC_BATS_REAL=/bin/echo bash "$SHIM" some.bats
+    [[ "$output" == *"WAIVER"* ]] || false
+    [[ "$output" == *"CC_BATS_MAX_ROOTS"* ]]
+}
+
+@test "waiver: a stated reason is carried into the record verbatim" {
+    local log="$BATS_TEST_TMPDIR/wv.jsonl"
+    run env BATS_TEST_NAME= CC_BATS_WAIVER_LOG="$log" CC_BATS_WAIVER_REASON="nested corpus build" \
+        CC_BATS_MAX_ROOTS=0 CC_BATS_REAL=/bin/echo bash "$SHIM" some.bats
+    grep -q '"reason":"nested corpus build"' "$log"
+}
+
+@test "waiver: an unstated reason still records, as UNSTATED — it never refuses the run" {
+    local log="$BATS_TEST_TMPDIR/wv.jsonl"
+    run env BATS_TEST_NAME= CC_BATS_WAIVER_LOG="$log" CC_BATS_MAX_ROOTS=0 CC_BATS_REAL=/bin/echo bash "$SHIM" some.bats
+    [ "$status" -eq 0 ]
+    grep -q '"reason":"UNSTATED"' "$log"
+}
+
+@test "waiver: an unwritable log NEVER blocks the run — every arm here fails OPEN" {
+    run env BATS_TEST_NAME= CC_BATS_WAIVER_LOG=/proc/nonexistent/nope.jsonl \
+        CC_BATS_MAX_ROOTS=0 CC_BATS_REAL=/bin/echo bash "$SHIM" some.bats
+    [ "$status" -eq 0 ]
+}
+
+# CONTROL 1 — the population. A metadata call executes nothing and was never subject to the
+# ceiling, so waiving it is not an event. If this reddens, the record fires on non-events.
+@test "CONTROL: a non-executing call under the kill switch records NOTHING" {
+    local log="$BATS_TEST_TMPDIR/wv.jsonl"
+    run env BATS_TEST_NAME= CC_BATS_WAIVER_LOG="$log" CC_BATS_MAX_ROOTS=0 CC_BATS_REAL=/bin/echo bash "$SHIM" --version
+    [ ! -f "$log" ]
+}
+
+# CONTROL 2 — the ordinary path. A run that leaves the ceiling in force is the overwhelming
+# majority, and it must stay both silent and unlogged.
+@test "CONTROL: a run with the ceiling IN FORCE writes no record and no notice" {
+    local log="$BATS_TEST_TMPDIR/wv.jsonl"
+    run env BATS_TEST_NAME= CC_BATS_WAIVER_LOG="$log" CC_BATS_ROOTS_DIR="$ROOTS" CC_BATS_REAL=/bin/echo bash "$SHIM" some.bats
+    [ ! -f "$log" ]
+    [[ "$output" != *"WAIVER"* ]]
+}
+
+@test "waiver: the refusal no longer offers the bypass as a bare peer of the deferral" {
+    run grep -c 'override for this run: CC_BATS_MAX_ROOTS=0' "$SHIM"
+    [ "$output" = "0" ]
+    run grep -c "CC_BATS_WAIVER_REASON=" "$SHIM"
+    [ "$output" -ge 1 ]
+}
