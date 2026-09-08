@@ -161,6 +161,23 @@ conviction-adjusted change list, the itemized operator decisions (answer-first),
 
 _(pending W0)_
 
+## Session events
+
+- 2026-09-08T23:09Z — account `next2` (`.claude-secondary`) hit its 5-hour session cap while W0's
+  critic and synthesis agents were running; both died as `api_error[session]` (NULL slots
+  `a87f663f54e8fe8f1`, `ad180a81f6eb8c9ef`). All 12 axis reports and 12 skeptics had completed. A
+  `/limit-recover` driver (session `b8fcf245`) transplanted this lead to `.claude-tertiary` (`next3`),
+  same uuid, Fable 5.1 @ max preserved, source tombstoned (`.jsonl.handed-off`), lock
+  `~/.reso/limit-recover/locks/b418b97a-….lock`. Ingest verified 23:35Z; the run was resumed from the
+  tertiary store so only the two NULL slots re-execute (iron rules 2–3: null is absence of execution,
+  never "found nothing"). The transplant carried the lead's context at ~53% — the succession point is
+  right after the synthesis is harvested and the waves are fired (`handoff-fire.sh --recycle`, same
+  pane, same worktree).
+- The transplanted transcript still carries the old session's `goal_status` arm marker, so every
+  transcript-reading goal predicate (`goal-state.sh`) reports the `/goal` as LIVE while the binary's
+  in-memory registry may not hold it — a transplant/resume makes "is a goal live?" unanswerable from
+  the transcript alone (relevant to W0 A04's finding that `/goal` cannot be the drive lever).
+
 ## Decisions log
 
 - 2026-09-08 — Research locus = Dynamic Workflow, not teammates: the operator's goal names Workflows as
