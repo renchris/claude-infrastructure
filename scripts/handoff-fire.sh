@@ -636,9 +636,16 @@ emit_fire_event() { # $1=class $2=reason|basis $3=detail [$4=verdict] [$5=gate] 
 # mapped becomes its own gate name, so a new refusal can never be silently absorbed into the
 # capacity denominator and deflate its admit ratio. It can only ever be missing from it — and the
 # ENUM guard in tests/handoff-fire-capacity-gate.bats goes RED when a new reason appears unmapped,
-# so "missing" is loud rather than permanent. capacity+headroom are the two TERMS of the single
-# capacity_gate(): a fire must clear BOTH, so they share one gate name and stay distinguishable
-# by refuse_reason.
+# so "missing" is loud rather than permanent. capacity, headroom, segments and active are the FOUR
+# TERMS of the single capacity_gate() — enumerated in the case arm below, which is the census; a fire
+# must clear every ENABLED one, so they share one gate name and stay distinguishable by refuse_reason.
+# There is exactly ONE bypass, CC_FIRE_CAPACITY_GATE=off, and it is whole-function (capacity_gate()
+# returns before any term is evaluated). The PER-TERM switches are named inconsistently —
+# CC_FIRE_LOAD_TERM (default off; it gates the `capacity` reason), CC_FIRE_HEADROOM_GATE,
+# CC_FIRE_SEGMENT_TERM, CC_FIRE_ACTIVE_TERM — so a grep for CC_FIRE_[A-Z_]*GATE finds two of the four
+# and is not a census. This comment said "the two TERMS" until 2026-09-08 and contradicted the arm
+# eight lines below; a filer read it as two independent off-switches and minted cc-backlog row
+# dd76e48db6b2 on that reading, which recycle #176 then had to refute.
 _fire_gate_of() { # $1=refusal reason → gate name
   case "${1:-}" in
     # `segments` and `active` joined the pair in Wave E (task #170) when the load term was defaulted
