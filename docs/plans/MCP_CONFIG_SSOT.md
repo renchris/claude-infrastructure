@@ -397,3 +397,50 @@ is named in the table above as deferred. Everything else stands unchanged.
 
   **Status stays `open`. Nothing in Wave 1 was run** — this was a recovery of the artifact, not
   progress on the work. The next action is unchanged: run the Wave 1 research fan-out.
+
+- **2026-09-08 — WAVE 1 RUN, WAVE 2 BUILT AND LANDED; one live write remains, and it is the
+  operator's.** Full research in § Wave 1 — research findings above; the short version is that the
+  plan's own identified mechanism was **disqualified by measurement** and the replacement was
+  already half-built inside the plan it was racing.
+  - **The design fork is settled: RENDER, not inject.** `--mcp-config` merges and works, but
+    `claude mcp list` is structurally blind to it (with both scopes empty: "No MCP servers
+    configured" from `mcp list`, while the same invocation demonstrably STARTS the server). Both MCP
+    sensors on this machine read exactly that command, so flag-injection would have made the
+    session-start banner report 0 servers forever and made upgrade-gate check #13's PASS condition
+    unreachable. `--strict-mcp-config` is separately disqualified: it kills project `.mcp.json`,
+    which the frozen scope forbids.
+  - **Wave 1 item 5 answered: this plan SUBSUMES `MS365_MCP_ALL_ACCOUNTS.md`.** That plan built the
+    one-server form of exactly the mechanism this one needed. `scripts/ms365-mcp-wire.sh` is now
+    `scripts/mcp-ssot-wire.sh`, generalised to a tracked `mcp-servers.json`, with every property
+    that made it correct preserved (merge-not-write, temp + rename, idempotence, `--check`,
+    fail-open, the noinherit allowlist assertion). Row `8079d6039639` should close against this.
+  - 🚨 **The bug the research found, and it is why divergence #1 outlived its own checker.** The
+    predecessor's population was `accounts.json` dirs + `~/.claude`, on the comment *"the default dir
+    a bare `claude` uses when `CLAUDE_CONFIG_DIR` is unset"*. **Measured false on 2.1.260:** unset
+    reads **`$HOME/.claude.json`**, never `$HOME/.claude/.claude.json`. The file that comment aimed
+    at was never in the loop, so `--check` printed **5/5 green** while the sixth carried `npx
+    …@latest`. Both files are now in the population and treated as distinct; two bats cases fail
+    against the predecessor for precisely this reason.
+  - **DoD #7 shipped as `--audit`**, the divergence direction a merge-only renderer cannot fix
+    (present in a config dir, absent from the SSOT). `install.sh` deliberately runs `--check` and not
+    `--audit`, so one intentionally-unmanaged server cannot wedge every install.
+  - **Live state at the end of this session:** `--check` reports **five dirs already byte-identical
+    to the SSOT and ONE `✗` — `~/.claude.json`, `drift: ms365`.** So today's *divergence* is a single
+    file; the *mechanism* — six hand-maintained copies behind a checker whose denominator excluded
+    one of them — is what the SSOT plus the audit kill, and that is the argument § Why this exists
+    already makes.
+  - **The one remaining step is operator-only and filed, not prosed.** Rendering into the live
+    configs is an auth-adjacent write that auto mode's classifier blocks, correctly. Driver:
+    `/tmp/mcp-ssot-render.sh` — shows the diff, gates on a typed `yes`, applies, re-checks with a
+    *different* read than the one that made the change, then proves the server set per account with
+    a fresh paneless `mcp list` on all five. Pre-change copies of all six files are under
+    `~/.claude/backups/mcp-ssot-20260908T083238/`.
+  - **Known residual, stated rather than hidden.** (a) A live session rewrites its own `.claude.json`
+    from a copy read at session start, so a session already running when the render lands can write
+    the old value back — which is why re-assertion (`install.sh`) and detection (`--audit`) are the
+    design rather than a one-shot migration. (b) `~/Development/personal/.mcp.json` still defines
+    `ms365` with a third endpoint; per the measured precedence (`--mcp-config` > project > user), the
+    project copy still wins inside that repo, so the `[Conflicting scopes]` warning is cured from the
+    user-scope side only. That is deferred by the go/no-go table above, not forgotten. (c) 2.1.260
+    adds a plugin/marketplace MCP scope that no SSOT or `--check` observes.
+
