@@ -23,6 +23,7 @@ setup() {
   # M11 — the environment is PINNED, not ambient. The patterns are env seams, so an inherited value
   # would silently replace the subject with itself.
   unset CC_MODAL_MCP_HEADER CC_MODAL_MCP_OPTION CC_MODAL_TRUST_HEADER CC_MODAL_TRUST_OPTION
+  unset CC_MODAL_PERM_HEADER CC_MODAL_PERM_OPTION
   # The anti-rot arm at the bottom is the ONE thing here that reads outside the fixture, and it must:
   # its entire subject is whether the vendor binary INSTALLED ON THIS BOX still contains the strings
   # we match. Captured explicitly before $HOME is fixtured, so the reach is named rather than
@@ -57,6 +58,47 @@ trust_screen() {
 │ 1. Yes, I trust this folder                                  │
 │ 2. No, continue without these permissions                    │
 │ 3. No, exit                                                  │
+╰──────────────────────────────────────────────────────────────╯
+EOF
+}
+
+# The tool-permission dialog in its two measured forms (backlog 8ea3acef7d64, and
+# docs/plans/BACKLOG_ZERO_2026-09-04.md §4 16:40Z, which recorded both on live fired panes).
+# HOOK FORM — a PreToolUse hook returned permissionDecision:"ask". The two lines above the question
+# are the binary's reasonString and configString; they are rendered here because that is what the
+# operator actually saw, and NOT matched, because both carry a variable prefix that the column-0
+# anchor refuses and neither is a contiguous literal the anti-rot arm could pin.
+hook_ask_screen() {
+  cat <<'EOF'
+╭──────────────────────────────────────────────────────────────╮
+│ Bash command                                                 │
+│                                                              │
+│ rm -rf /Users/chrisren/Development/.worktrees/wt-drain-3     │
+│                                                              │
+│ Hook PreToolUse:Bash requires confirmation for this command  │
+│ [settings]                                                   │
+│ settings.json to update hooks                                │
+│                                                              │
+│ Do you want to proceed?                                      │
+│ 1. Yes                                                       │
+│ 2. No, and tell Claude what to do differently (esc)          │
+╰──────────────────────────────────────────────────────────────╯
+EOF
+}
+
+# ALLOWLIST FORM — no hook involved, so no configString line at all. Pane 297 sat 20-50 min on
+# exactly this for `find-plan.sh --status`. Same inertness, same INC-4 hazard, same class.
+perm_ask_screen() {
+  cat <<'EOF'
+╭──────────────────────────────────────────────────────────────╮
+│ Bash command                                                 │
+│                                                              │
+│ scripts/find-plan.sh --status                                │
+│                                                              │
+│ Do you want to proceed?                                      │
+│ 1. Yes                                                       │
+│ 2. Yes, and don't ask again for find-plan.sh commands        │
+│ 3. No, and tell Claude what to do differently (esc)          │
 ╰──────────────────────────────────────────────────────────────╯
 EOF
 }
@@ -171,6 +213,77 @@ Use this MCP server"
   [ "$status" -eq 1 ] || false
 }
 
+# ---- THE THIRD CLASS: the tool-permission prompt (backlog 8ea3acef7d64) ------------------------
+#
+# RED-PROOF. Both arms fail against the pre-fix lib, which enumerated only the MCP and workspace
+# -trust dialogs: `pane_modal_reason` returned 1, `pane_wedge_reason` therefore returned 1, and
+# `verify_engagement` fell through its WEDGED gate into the INC-4 recovery — pasting the whole brief
+# into a pane whose dialog eats the paste's bytes as single-key answers. That is the duplicate
+# session the row was filed about, so these two cases ARE the row's falsifier.
+
+@test "the hook-raised tool-permission dialog is named" {
+  run classify "$(hook_ask_screen)"
+  [ "$status" -eq 0 ] || false
+  [ "$output" = "tool-permission-modal" ] || false
+}
+
+@test "the plain allowlist permission dialog is named — no hook line required" {
+  # The class is the DIALOG, not the hook. Requiring the `settings.json to update hooks` line would
+  # have gone inert on pane 297's stall, which carried no hook at all.
+  run classify "$(perm_ask_screen)"
+  [ "$status" -eq 0 ] || false
+  [ "$output" = "tool-permission-modal" ] || false
+}
+
+@test "REGRESSION: prose quoting the permission question alone is NOT wedged" {
+  # The likeliest false positive by a wide margin: this repo's own plan docs quote the question, and
+  # an agent reading them puts it on screen at column 0.
+  run classify "Every fired session stalled on Do you want to proceed and sat 20-50 min
+until this session sent Enter through kitty @ send-text"
+  [ "$status" -eq 1 ] || false
+}
+
+@test "REGRESSION: prose quoting the refusal OPTION alone is NOT wedged" {
+  run classify "the operator chose No, and tell Claude what to do differently rather than approving"
+  [ "$status" -eq 1 ] || false
+}
+
+@test "RED-PROOF: prose carrying BOTH halves mid-line is still not a modal" {
+  # The same anchor argument the MCP class already pays for, re-run on this class rather than
+  # assumed to carry over — the two classes have different option lists and different prose habits.
+  run classify "§4 measured that panes hang on Do you want to proceed forever
+and the operator chose No, and tell Claude what to do differently to clear it"
+  [ "$status" -eq 1 ] || false
+}
+
+@test "a permission dialog rendered WITHOUT its question is not this class" {
+  # Arm 2 of the conjunction, and it is the realistic shape: an options list quoted in a changelog.
+  run classify "1. Yes
+2. No, and tell Claude what to do differently (esc)"
+  [ "$status" -eq 1 ] || false
+}
+
+@test "SPECIFIC BEFORE GENERIC: an MCP dialog is still mcp-trust-modal, not tool-permission-modal" {
+  # The ordering claim in the lib, made falsifiable. This screen satisfies BOTH conjunctions, and
+  # the specific class must win — otherwise adding this class would have silently reclassified
+  # every MCP stall and handed the operator the wrong remedy.
+  run classify "New MCP server found in this project: ms365
+1. Use this MCP server
+Do you want to proceed?
+2. No, and tell Claude what to do differently (esc)"
+  [ "$status" -eq 0 ] || false
+  [ "$output" = "mcp-trust-modal" ] || false
+}
+
+@test "the permission class carries a remedy that names OUR fix site, not an upstream one" {
+  # The row was filed as upstream-and-operator-owned. The remedy line is where that refutation has
+  # to land, because it is the only part of this a reader sees at 3am.
+  run pane_modal_remedy tool-permission-modal
+  [ "$status" -eq 0 ] || false
+  echo "$output" | grep -q 'validate-bash.sh' || false
+  echo "$output" | grep -q 'permissionDecision:ask' || false
+}
+
 # ---- THE PATTERNS ARE SEAMS (a wording change is a one-line override, not a redeploy) ----------
 
 @test "an env override replaces a pattern rather than adding to it" {
@@ -239,10 +352,19 @@ claude_binary() {
 }
 
 # Every alternative of every pattern, one per line.
+#
+# DERIVED, NOT LISTED (2026-09-08). This used to name the four variables literally, which quietly
+# contradicted the header's own promise that "a class added tomorrow is pinned tomorrow without
+# anyone remembering to extend this file": a fifth variable would have been matched by the lib and
+# audited by nothing. `compgen -v` over the CC_MODAL_ prefix reads whatever the sourced lib actually
+# defines, so the anchor's population now comes from the subject rather than from a copy of it
+# (memory: checker-population-rests-on-an-untested-belief). The `_HEADER|_OPTION` suffix filter
+# keeps the enumeration to matchable text and would exclude a future non-pattern knob.
 modal_fragments() {
-  printf '%s\n%s\n%s\n%s\n' \
-    "$CC_MODAL_MCP_HEADER" "$CC_MODAL_MCP_OPTION" \
-    "$CC_MODAL_TRUST_HEADER" "$CC_MODAL_TRUST_OPTION" | tr '|' '\n'
+  local v
+  for v in $(compgen -v | grep -E '^CC_MODAL_.*_(HEADER|OPTION)$' | sort); do
+    printf '%s\n' "${!v}"
+  done | tr '|' '\n'
 }
 
 @test "ANTI-ROT: every enumerated fragment is present in the shipping claude binary" {

@@ -104,6 +104,44 @@ mints follow-ons the drains cannot keep up with. The telemetry that would have s
 
 ## §4 Status log (INTEGRATE-only; newest first)
 
+- **2026-09-08 — the "hooks-update approval modal" does not exist; the dialog is OUR OWN HOOK, and
+  the 16:50Z disposition below is REFUTED.** Row `8ea3acef7d64` was filed as an undocumented dialog
+  with no supported pre-approval whose fix was upstream and operator-owned (file the missing-docs
+  question with Anthropic; test a `settings.local.json` placement). Read out of the shipping binary
+  (`mHr` in 2.1.220, `Re` in 2.1.260) the observed screen is the ORDINARY tool-permission prompt
+  raised by a PreToolUse hook that returned `permissionDecision:"ask"`, in three parts:
+  reasonString `` Hook ${hookName} requires confirmation for this ${toolType} ${dim("[settings]")} ``,
+  configString `` ${lBS(hookSource)} to update hooks `` (`lBS`: `plugin*`→`plugin hooks.json`,
+  `skill*`→`SKILL.md`, else `settings.json`), and `AW`'s default question `Do you want to proceed?`.
+  So `settings.json to update hooks` is the binary naming WHERE THE HOOK IS DECLARED — a pointer at
+  this repo — not an approval of a settings change, and the emitters are ours: four `warn` sites in
+  `hooks/validate-bash.sh` (`git reset --hard`, `git clean -x/-X`, two `rm -r`) and seven `ask`
+  returns in `hooks/curl-gate.py`. The 16:40Z entry's own measurement corroborates it rather than the
+  filed cause: W2a stalled on "a `rm -r` verify plus the same hooks dialog" — one emitter, one
+  dialog. The five account `settings.json` rewrites at 13:50:44–13:51:31Z are a true metric beside a
+  wrong cause (memory: `wrong-cause-corroborated-by-true-metric`); nothing in this dialog reads a
+  settings file's mtime. **Not acted on, because it is the refuted half:** no upstream report, no
+  `settings.local.json` test.
+  **What that leaves, and what landed.** The symptom stands and is live. The harm the row names —
+  the engagement detector reading a stalled pane as never-engaged, and INC-4 then minting a
+  duplicate — was a GAP IN OUR OWN ENUMERATION: `hooks/lib/pane-modal.sh` listed only the MCP and
+  workspace-trust dialogs, so `pane_wedge_reason` returned 1, `verify_engagement` fell past its
+  WEDGED gate, and the INC-4 recovery pasted the whole brief into a pane whose dialog consumes those
+  bytes as single-key answers. A third class `tool-permission-modal` now names it, so the fire
+  returns 4 instead of 1: the resend is skipped, custody stays open and the goal is armed
+  (`engage_rc_consequence` 4:custody / 4:goal), and the operator gets a remedy pointing at
+  `validate-bash.sh` rather than at Anthropic. The fragments are the question and the refusal option,
+  not the reasonString or configString, because those two carry a variable prefix the column-0 anchor
+  refuses and are not contiguous literals the anti-rot arm could pin. **Still a REPORTER** — nothing
+  answers the prompt; the reverted keystroke sweeper stays reverted. The suite's `modal_fragments`
+  now derives from `compgen -v` over `CC_MODAL_*_{HEADER,OPTION}` instead of naming four variables,
+  which is what its own header always promised (memory:
+  `checker-population-rests-on-an-untested-belief`).
+  **Open, and deliberately not driven here:** an `ask` is unanswerable by a fired peer, so those
+  eleven emitters still hang an unattended session until a human presses Enter. Whether they should
+  return `deny` (stricter, and it unblocks) for an unattended peer is a policy fork, not a defect —
+  decision packet filed rather than guessed.
+
 - **2026-09-05 04:30Z — the filing-vs-driving generator named and countered (§5).** Frontier session
   `filing-vs-driving`: the close protocol certified on git and discharged on ROWS — filing was the
   harness's compliance action, closing was nobody's, and the store could not even attribute an add.

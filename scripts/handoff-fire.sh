@@ -2781,10 +2781,13 @@ verify_engagement() { # $1=projects $2=marker $3=regdir $4=pane $5=it2-bin $6=re
   # self-insert per character anyway, so even the flood guarantee does not hold.
   ENGAGE_PARKED="$(pane_parked_reason "$it2" "$pane" || true)"
   [ -n "$ENGAGE_PARKED" ] && return 2
-  # …and for the same reason, abstain on a MODAL. A startup dialog is a single-key prompt, so the
-  # paste below does not merely fail to help — its own bytes become ANSWERS to a workspace-trust or
-  # MCP-approval question. This gate is what makes the fourth state worth having rather than a nicer
-  # label on an unchanged failure.
+  # …and for the same reason, abstain on a MODAL. A dialog is a single-key prompt, so the paste
+  # below does not merely fail to help — its own bytes become ANSWERS to a workspace-trust, an
+  # MCP-approval, or (since 2026-09-08, backlog 8ea3acef7d64) an ordinary tool-permission question.
+  # That third class is not a STARTUP dialog and is what made this gate load-bearing in practice:
+  # four fired sessions reached it on 2026-09-04 and each got the brief pasted into the prompt.
+  # This gate is what makes the fourth state worth having rather than a nicer label on an
+  # unchanged failure.
   ENGAGE_WEDGED="$(pane_wedge_reason "$it2" "$pane" || true)"
   [ -n "$ENGAGE_WEDGED" ] && return 4
   echo "⚠ fired session not engaged after ${timeout}s — re-typing the prompt once (INC-4 recovery)" >&2
@@ -10867,7 +10870,7 @@ else
       # do not re-fire — both destroy a live session whose only problem is one unanswered keystroke.
       # No re-send was attempted (verify_engagement abstains on 4), so nothing has been typed at the
       # dialog and the operator's answer is still their own.
-      echo "!! FIRE FAILED — pane WEDGED, session alive but INERT: ${SPAWNED_PANE:-<pane?>} booted and is blocked on a startup dialog — $ENGAGE_WEDGED" >&2
+      echo "!! FIRE FAILED — pane WEDGED, session alive but INERT: ${SPAWNED_PANE:-<pane?>} booted and is blocked on a dialog — $ENGAGE_WEDGED" >&2
       echo "   $(pane_modal_remedy "$ENGAGE_WEDGED")" >&2
       echo "   The session is LIVE — do NOT clear the pane or re-fire; answer the dialog, then re-check engagement. ps reports it healthy, which is why nothing else flagged it." >&2
       emit_handoff_telemetry 0 || true

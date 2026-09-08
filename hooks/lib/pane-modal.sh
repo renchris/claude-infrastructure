@@ -74,6 +74,8 @@
 # blocking spawns after every suppressible dialog has been configured away. The cosmetic class
 # (fullscreen upsell, theme picker) is already shut by `tui:"default"` in every account home and is
 # actively being deleted — enumerating a moving target the repo is removing buys nothing.
+# A THIRD class joined them on 2026-09-08 — the ordinary tool-permission prompt — on the same
+# durability argument rather than as an exception to it; its own block below carries the derivation.
 #
 # Fragments are kept SHORT ON PURPOSE. Screen text wraps at the pane's width, and a split pane can
 # be narrow; `New MCP server found in this project` is 36 characters and would break across a wrap,
@@ -92,6 +94,52 @@ CC_MODAL_MCP_HEADER="${CC_MODAL_MCP_HEADER:-New MCP server found}"
 CC_MODAL_MCP_OPTION="${CC_MODAL_MCP_OPTION:-Use this MCP server|Use this and all future MCP servers|Continue without using this MCP server}"
 CC_MODAL_TRUST_HEADER="${CC_MODAL_TRUST_HEADER:-Accessing workspace:|Quick safety check:}"
 CC_MODAL_TRUST_OPTION="${CC_MODAL_TRUST_OPTION:-Yes, I trust this folder|No, continue without these permissions}"
+
+# ── THE THIRD CLASS: the ordinary TOOL-PERMISSION dialog (backlog 8ea3acef7d64) ──────────────────
+# Added 2026-09-08 after the row's filed premise was read out of the binary and REFUTED. The row
+# said fired sessions stall at "a settings.json hooks-update approval modal", filed as an
+# undocumented dialog with no supported pre-approval whose fix was upstream and operator-owned.
+# There is no such dialog. Read from claude.exe (2.1.220 `mHr`, 2.1.260 `Re`), the observed screen
+# decomposes into three parts of the ORDINARY tool-permission prompt raised by a PreToolUse hook
+# that returned permissionDecision:"ask":
+#
+#   reasonString  `Hook ${hookName} requires confirmation for this ${toolType} ${dim("[settings]")}`
+#   configString  `${lBS(hookSource)} to update hooks`   — lBS: plugin*→"plugin hooks.json",
+#                                                          skill*→"SKILL.md", else "settings.json"
+#   question      `Do you want to proceed?`               — AW's default
+#
+# So "settings.json to update hooks" is the binary telling the operator WHERE THE HOOK IS DECLARED,
+# not an approval of a settings change; and the asking hook is OURS. The four `warn` sites in
+# hooks/validate-bash.sh and the seven in hooks/curl-gate.py are the emitters. The correlated
+# rewrite of five account settings.json files 13:50:44-13:51:31Z that the filing leaned on is a true
+# metric beside a wrong cause (memory: wrong-cause-corroborated-by-true-metric).
+#
+# WHY IT BELONGS IN AN ENUMERATION SCOPED TO "MUST REACH THE OPERATOR". That scope was a DURABILITY
+# argument about which dialogs will still be blocking spawns after every suppressible one is
+# configured away — not a rule that a suppressible dialog may not be REPORTED. This one satisfies
+# the argument on its own terms: an `ask` is unanswerable by anything but a human, so for a fired
+# peer with no human watching it is exactly as permanent as workspace trust. Measured
+# 2026-09-04 (docs/plans/BACKLOG_ZERO_2026-09-04.md §4, 16:40Z): four fired sessions sat 20-50 min
+# each on this dialog — two on the hook form, one on a `rm -r` verify, one on a plain Bash
+# permission ask for `find-plan.sh --status`.
+#
+# AND IT IS THE ROW'S OWN HARM. Unenumerated, verify_engagement fell past its WEDGED gate to the
+# INC-4 recovery, which PASTES THE WHOLE BRIEF into a pane whose dialog consumes the paste's bytes
+# as single-key answers — the duplicate-session generator the row names. Naming the class returns 4
+# instead of 1, which skips the resend, keeps custody open and arms the goal (handoff-fire's
+# engage_rc_consequence 4:custody / 4:goal). REPORTING, still: nothing here answers the prompt. A
+# sweeper that auto-answered it was built and reverted on that doctrine, and this does not revive it.
+#
+# THE FRAGMENTS ARE THE QUESTION AND THE REFUSAL OPTION, deliberately, because neither the
+# reasonString nor the configString can be matched by this file's rules: both are rendered with a
+# variable PREFIX (`Hook …`, `settings.json …`), so the column-0 anchor refuses them, and neither is
+# a contiguous literal in the binary, so the anti-rot arm could not pin them. The question and the
+# options are both — verified present in 2.1.220 and 2.1.260.
+#
+# `?` IS OMITTED FROM THE HEADER ON PURPOSE: these are EREs, and `proceed?` would make the `d`
+# optional. The rendered line is `Do you want to proceed?`; the fragment is its prefix.
+CC_MODAL_PERM_HEADER="${CC_MODAL_PERM_HEADER:-Do you want to proceed}"
+CC_MODAL_PERM_OPTION="${CC_MODAL_PERM_OPTION:-No, and tell Claude what to do differently|Deny, and tell Claude what to do differently}"
 
 # ANCHORED TO COLUMN 0 MODULO BOX CHROME — the TUI translation of the shell states' `^` anchor, and
 # the thing that makes the conjunction above actually bite. `[^[:alnum:]]*` eats a leading `│`, a
@@ -134,6 +182,11 @@ pane_modal_reason() {
     && { printf 'mcp-trust-modal'; return 0; }
   _pane_modal_both "$txt" "$CC_MODAL_TRUST_HEADER" "$CC_MODAL_TRUST_OPTION" \
     && { printf 'workspace-trust-modal'; return 0; }
+  # LAST, and that ordering is load-bearing rather than incidental: this class's option list is the
+  # generic one every dialog in the binary can render, so testing it first would let it claim a
+  # screen the two specific classes describe better. Specific-before-generic, one direction only.
+  _pane_modal_both "$txt" "$CC_MODAL_PERM_HEADER" "$CC_MODAL_PERM_OPTION" \
+    && { printf 'tool-permission-modal'; return 0; }
   return 1
 }
 
@@ -146,6 +199,12 @@ pane_modal_remedy() {
       printf 'answer the prompt in that pane; the durable fix is enabledMcpjsonServers in the PROJECT .claude/settings.json (never a hand-edit of .claude.json, which every running session rewrites)' ;;
     workspace-trust-modal)
       printf 'answer the prompt in that pane; trust is a security boundary and is deliberately not pre-seedable except for a realpath this box itself created' ;;
+    tool-permission-modal)
+      # Names OUR OWN code as the fix site, because it is. The dialog prints its own pointer on the
+      # line above the question: `settings.json to update hooks` means a PreToolUse hook returned
+      # `ask` (hooks/validate-bash.sh warn(), hooks/curl-gate.py), and its absence means an ordinary
+      # allowlist ask. Both are ours to change; neither is an upstream consent boundary.
+      printf 'answer the prompt in that pane; this is an ordinary TOOL-PERMISSION ask, not an upstream consent boundary — if the dialog also shows "settings.json to update hooks" the durable fix is the PreToolUse hook that returned permissionDecision:ask (hooks/validate-bash.sh warn(), hooks/curl-gate.py), otherwise a permissions.allow entry; never a keystroke sweeper' ;;
     *)
       printf 'answer the prompt in that pane' ;;
   esac
