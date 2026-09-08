@@ -2646,6 +2646,10 @@ case "\$(cat "$MODE_DIR/\$b" 2>/dev/null)" in
   red-once) if [ ! -f "$BATS_TEST_TMPDIR/ps-red-\$b" ]; then       # NAMES a failure, then passes
               : > "$BATS_TEST_TMPDIR/ps-red-\$b"; echo "1..1"; echo "not ok 1 intermittent"; exit 1
             fi ;;
+  red-then-cut) if [ ! -f "$BATS_TEST_TMPDIR/ps-rtc-\$b" ]; then   # NAMES a failure, then is KILLED
+                  : > "$BATS_TEST_TMPDIR/ps-rtc-\$b"; echo "1..1"; echo "not ok 1 boom"; exit 1
+                fi
+                echo "1..3"; echo "ok 1 alpha"; exit 137 ;;
 esac
 echo "1..1"; echo "ok 1 fine"; exit 0
 EOF
@@ -2740,6 +2744,29 @@ EOF
   [ "$(echo "$output" | grep -c "GATE-KILLED")" -eq 0 ]    # a verdict is never softened into one
   git fetch -q origin main
   [ -z "$(git ls-tree origin/main -- psr.sh)" ]
+}
+
+@test "v1 lane: RED-then-CUT is reported as failed ONCE with a cut re-run, never as 'failed twice'" {
+  # THE ATTRIBUTION FIX (backlog 3063fbccbf18). run_scoped_suite's RED branch used to be taken on
+  # `notok1 > 0 || notok2 > 0` and print one string, so a suite that named a failure ONCE and whose
+  # exoneration re-run produced NO VERDICT read identically to one that failed twice. The verdict is
+  # right either way and is asserted unchanged here (exit 6, GATE RED, nothing landed); what this
+  # pins is that the MESSAGE says which twice. Its control is the positive-control test above, whose
+  # fixture fails in BOTH runs and must keep saying "failed twice" — without that pair, deleting the
+  # phrase everywhere would pass this test.
+  persuite_fixture
+  echo red-then-cut > "$MODE_DIR/a.bats"
+  landable feat/ps-red-cut psrc.sh
+
+  run env SHIP_LAND_LANE=v1 bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]                                        # VERDICT UNCHANGED: run 1 named it
+  echo "$output" | grep -q "GATE RED"
+  echo "$output" | grep -q "failed once"
+  echo "$output" | grep -q "re-run was CUT"
+  [ "$(echo "$output" | grep -c "failed twice")" -eq 0 ]     # the mislabel this closes
+  [ "$(echo "$output" | grep -c "GATE-KILLED")" -eq 0 ]      # …and never softened into a non-verdict
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- psrc.sh)" ]             # fail-closed, exactly as before
 }
 
 @test "v1 lane: one suite CUT + another RED ⇒ exit 6 — a verdict outranks a non-verdict" {
