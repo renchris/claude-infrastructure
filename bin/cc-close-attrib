@@ -125,10 +125,37 @@ _json_escape() {
 
 # ── write the close-record atomically (tmp+mv). Fully guarded — returns 0 no matter what so
 #    it can never affect the session's exit path. ──────────────────────────────────────────
+#
+# TWO-PHASE, AND THE OPEN PHASE IS THE POINT (2026-09-08, backlog b33d837c8a86). This used to be
+# called once, from the exit path only — so a kill that reached the WRAPPER left no record at all,
+# and the watchdog's ladder fell through to `abrupt-unknown`. Measured over ~/.claude/logs/
+# claude-crashes.jsonl: in September, 151 of 151 `abrupt-unknown` crashes carry no close-record,
+# and EVERY crash that carries one is attributed. Absence of the record IS the coverage gap.
+#
+# So the record is now written TWICE to the SAME path (the name is keyed on $START_EPOCH, not the
+# death instant, so it does not move): once as `"record_state":"open"` the moment $child is known,
+# and once as `"record_state":"closed"` on the exit path, overwriting it. An abrupt death therefore
+# leaves a PARTIAL record instead of none — the watchdog reads `open` + a dead `ppid` (this
+# wrapper) and names the death `killed-before-report`: a positive fact ("the wrapper was alive and
+# was destroyed before it could report"), never a guess at WHAT killed it. A guessed cause would be
+# worse than the catch-all, which at least advertises that it does not know.
+#
+# The open record's exit_code is the JSON literal `null`, deliberately: close_record_field matches
+# only "key":"…" or "key":<digits>, so an open record reads as an ABSENT exit code and every
+# existing consumer (map_exit_class, the `ec == 143` arm, the crash row's exit_code field) behaves
+# exactly as it did when there was no file — the new arm is purely additive.
+#
+# `record_state` is appended LAST for the same additive contract as stderr_log and
+# sig_reached_wrapper, and its name deliberately shares no substring with an existing key (
+# close_record_field greps an UNANCHORED "<key>": and takes head -1, so an overlapping key would
+# silently shadow). No new liveness field is needed: `ppid` already carries this wrapper's own $$.
 write_record() {
-  local rpid="$1" rcode="$2"
+  local rpid="$1" rcode="$2" rstate="${3:-closed}"
   local rsig=""
   [[ "$rcode" =~ ^[0-9]+$ && "$rcode" -gt 128 ]] && rsig=$(( rcode - 128 ))
+  # exit_code must stay a bare JSON scalar: a number when we have one, `null` when we do not.
+  local rcode_json="null"
+  [[ "$rcode" =~ ^[0-9]+$ ]] && rcode_json="$rcode"
 
   local rver=""
   if [[ -s "$VER_CACHE" ]]; then
@@ -152,8 +179,13 @@ write_record() {
 
   # stderr_log — the durable, untruncated companion to stderr_tail. Appended LAST: every
   # reader is name-keyed (close_record_field), so a new trailing field is additive.
+  # On the OPEN phase the log is legitimately still 0 bytes (nothing has been written to fd2 yet),
+  # so the `-s` test is skipped there — the pointer is exactly what an abruptly-killed session
+  # needs to carry, and it is the case where the durable log is most likely to hold evidence.
   local log_json=""
-  [[ -n "$STDERR_LOG" && -s "$STDERR_LOG" ]] && log_json="$(printf '%s' "$STDERR_LOG" | _json_escape)"
+  if [[ -n "$STDERR_LOG" ]] && { [[ "$rstate" == "open" ]] || [[ -s "$STDERR_LOG" ]]; }; then
+    log_json="$(printf '%s' "$STDERR_LOG" | _json_escape)"
+  fi
 
   # sig_reached_wrapper — see the _forward() block for what this answers and why si_pid is NOT
   # obtainable here. Appended after stderr_log, same additive contract. The value is one of our
@@ -162,8 +194,8 @@ write_record() {
   # UNANCHORED "<key>": and takes head -1, so an overlapping key would silently shadow.
   local out="$RECORDS_DIR/${rpid:-0}-${START_EPOCH}.json"
   local tmp="$out.tmp.$$"
-  if printf '{"pid":%s,"ppid":%s,"argv":["%s","%s","%s"],"started_at":"%s","ended_at":"%s","exit_code":%s,"signal":"%s","stderr_tail":"%s","version":"%s","stderr_log":"%s","sig_reached_wrapper":"%s"}\n' \
-    "${rpid:-0}" "$$" "$a0" "$a1" "$a2" "$STARTED_AT" "$ENDED_AT" "${rcode:-0}" "$rsig" "$tail_json" "$rver" "$log_json" "${SIG_TO_WRAPPER:-}" \
+  if printf '{"pid":%s,"ppid":%s,"argv":["%s","%s","%s"],"started_at":"%s","ended_at":"%s","exit_code":%s,"signal":"%s","stderr_tail":"%s","version":"%s","stderr_log":"%s","sig_reached_wrapper":"%s","record_state":"%s"}\n' \
+    "${rpid:-0}" "$$" "$a0" "$a1" "$a2" "$STARTED_AT" "${ENDED_AT:-}" "$rcode_json" "$rsig" "$tail_json" "$rver" "$log_json" "${SIG_TO_WRAPPER:-}" "$rstate" \
     > "$tmp" 2>/dev/null; then
     mv -f "$tmp" "$out" 2>/dev/null || rm -f "$tmp" 2>/dev/null
   else
@@ -300,6 +332,11 @@ if mkdir -p "$STDERR_DIR" 2>/dev/null; then
   fi
 fi
 
+# ── PRE-REGISTER the record, open. See write_record's header for why. This is off the session's
+#    critical path — the child has already been exec'd and is running — and it is guarded exactly
+#    like every other step here, so its worst case is the pre-existing "no record" behaviour. ────
+write_record "$child" "" open || true
+
 code=0
 # WAIT FIRST, THEN TEST LIVENESS — never the reverse. bash reaps a background child as soon as it
 # handles SIGCHLD, and a reaped pid is gone from the process table, so `kill -0` reads FALSE for a
@@ -320,7 +357,7 @@ trap - INT TERM HUP
 
 ENDED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
 
-write_record "$child" "$code" || true
+write_record "$child" "$code" closed || true
 
 # ── dispose of the capture. The temp NAME always goes (the record now carries the secret-safe
 #    tail); the durable per-pid link survives only if it holds actual evidence — an empty log
