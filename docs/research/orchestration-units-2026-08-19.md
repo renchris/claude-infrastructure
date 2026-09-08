@@ -43,7 +43,22 @@ Three facts carry it:
    artefact of n=18.** The residual **15.5% of unnamed calls that DO coincide with a pane split is
    unexplained** — the standing hypothesis is temporal coincidence with a sibling teammate wave in
    the same session, and the probe that would settle it (attribute those 47 rows by `sessionId`) is
-   filed in §8. Until it is settled, price L1 as *"1 pane → ~0.15 panes"*, not *"1 pane → 0"*.
+   filed in §8. ~~Until it is settled, price L1 as *"1 pane → ~0.15 panes"*, not *"1 pane → 0"*.~~
+   🚨 **SETTLED 2026-09-08 — the coincidence is SPURIOUS, and L1 prices at 1 pane → 0.** The §8
+   probe was run: the join was extended to carry `sessionId` and the pane's `cwd`, over the same
+   12-day window. **0 of 18** still-attributable unnamed coincidences sat on a pane whose `cwd`
+   maps to the *calling session's own* project, against a named control of **259 of 340 (76%)** in
+   the same run — those panes were split by OTHER sessions, in other worktrees. The standing
+   hypothesis is refuted on its own terms too: **0 of 18** unnamed hits are in a session that
+   itself made a named call within 180 s (named control **340/340**). A rate arm agrees
+   independently — over the whole store today the unnamed offset-0 hit rate is **4.1%**, inside its
+   own offset controls (**3.5%** at ±900 s, **5.0%** at ±7200 s), i.e. fleet background; named runs
+   **89.7%** against that same ~5% floor. `deep-research` unnamed is now a clean **0/182**, the
+   highest-volume unnamed type. **HONEST LIMIT:** only 18 of the original 47 rows remain
+   attributable. The pane log is intact (566 rows today vs 565 published) but ~36% of that window's
+   transcripts have been pruned from the four account stores (601 calls vs 937), so this rests on a
+   surviving subsample whose own hit rate (**8.1%**) is half the published 15.5% — the direction is
+   carried by the controls, not by the subsample's size.
 3. **"Dynamic Workflows run 50–200 agents fine" is a COUNT read as a CONCURRENCY.** MEASURED across
    **231 workflow tool calls in 158 run dirs, four account stores: not one ever exceeded 8
    simultaneous.** The largest run ever attempted here is 229 agents over 7.2 h; its true simultaneous
